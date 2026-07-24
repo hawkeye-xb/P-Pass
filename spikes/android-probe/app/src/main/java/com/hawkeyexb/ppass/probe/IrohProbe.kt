@@ -5,8 +5,8 @@ import computer.iroh.BiStream
 import computer.iroh.Connection
 import computer.iroh.Endpoint
 import computer.iroh.EndpointAddr
-import computer.iroh.EndpointId
 import computer.iroh.EndpointOptions
+import computer.iroh.EndpointTicket
 import computer.iroh.presetN0
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,7 +18,7 @@ import kotlinx.coroutines.withContext
  * S-03: Minimal iroh probe for Android — bind, listen, dial, throughput test.
  *
  * Wire protocol: ALPN = "ppass-probe"
- * - Listener: accept → read 100MB → send ACK "OK"
+ * - Listener: accept → read up to 200MB → send ACK "OK"
  * - Dialer: connect → send 100MB → read ACK "OK"
  *
  * Results match the S-01 CLI JSON format.
@@ -42,8 +42,10 @@ class IrohProbe {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var endpoint: Endpoint? = null
 
-    fun nodeId(): String? = endpoint?.addr()?.id?.toString()
-    fun ticket(): String? = endpoint?.addr()?.toTicketHex()
+    fun nodeId(): String? = endpoint?.addr()?.id()?.toString()
+    fun ticket(): String? = endpoint?.addr()?.let {
+        EndpointTicket.fromAddr(it).toString()
+    }
 
     /** Bind the endpoint. Safe to call multiple times. */
     suspend fun bind(): Result<String> = withContext(Dispatchers.IO) {
@@ -56,8 +58,9 @@ class IrohProbe {
                 )
             )
             endpoint = ep
-            val t = ep.addr().toTicketHex()
-            Log.i(TAG, "Bound: ${ep.addr().id}")
+            val nodeId = ep.addr().id().toString()
+            Log.i(TAG, "Bound: $nodeId")
+            val t = EndpointTicket.fromAddr(ep.addr()).toString()
             Result.success(t)
         } catch (e: Throwable) {
             Log.e(TAG, "Bind failed", e)
@@ -72,7 +75,7 @@ class IrohProbe {
             var attempt = 0
             try {
                 while (true) {
-                    val incoming = ep.`acceptNext`() ?: break
+                    val incoming = ep.acceptNext() ?: break
                     attempt++
                     try {
                         val accepting = incoming.accept()
@@ -101,11 +104,11 @@ class IrohProbe {
         val startTime = System.currentTimeMillis()
 
         try {
-            val addr = EndpointAddr.fromTicketHex(ticketHex)
-            val conn = ep.`connect`(addr, ALPN.toByteArray())
+            val addr = EndpointTicket.fromString(ticketHex).endpointAddr()
+            val conn = ep.connect(addr, ALPN.toByteArray())
             val connectMs = System.currentTimeMillis() - startTime
 
-            val bi = conn.`openBi`()
+            val bi = conn.openBi()
             val send = bi.send()
             val recv = bi.recv()
 
@@ -114,16 +117,16 @@ class IrohProbe {
             kotlin.random.Random.nextBytes(payload)
 
             val txStart = System.nanoTime()
-            send.`writeAll`(payload)
-            send.`finish`()
+            send.writeAll(payload)
+            send.finish()
             val txDone = System.nanoTime()
             val txMs = (txDone - txStart) / 1_000_000.0
 
             // Read ACK (2 bytes "OK")
-            val ack = recv.`readExact`(2u)
+            val ack = recv.readExact(2u)
 
             // Path info from connection stats
-            val paths = conn.`paths`()
+            val paths = conn.paths()
             val pathKind = when {
                 paths.any { it.isIp && !it.isRelay } -> {
                     val p = paths.first { it.isIp }
@@ -136,7 +139,7 @@ class IrohProbe {
 
             val throughputMbps = (payloadMegaBytes * 8).toDouble() / (txMs / 1000.0)
 
-            conn.`close`(0u, "".toByteArray())
+            conn.close(0u, "".toByteArray())
             ProbeResult(-1, pathKind, ipver, connectMs, throughputMbps)
         } catch (e: Throwable) {
             Log.e(TAG, "Dial failed", e)
@@ -155,16 +158,16 @@ class IrohProbe {
 
         val startTime = System.nanoTime()
         // Read payload until end-of-stream (capped at 200MB)
-        val data = recv.`readToEnd`(200_000_000u)
+        val data = recv.readToEnd(200_000_000u)
         val durationNs = System.nanoTime() - startTime
         val total = data.size.toLong()
         val throughputMbps = (total * 8.0) / (durationNs.toDouble() / 1_000_000_000.0) / 1_000_000.0
 
         // ACK
-        send.`writeAll`("OK".toByteArray())
-        send.`finish`()
+        send.writeAll("OK".toByteArray())
+        send.finish()
 
-        val paths = conn.`paths`()
+        val paths = conn.paths()
         val pathKind = when {
             paths.any { it.isIp && !it.isRelay } -> {
                 val p = paths.first { it.isIp }
@@ -176,7 +179,7 @@ class IrohProbe {
         val ipver = if (paths.any { it.remoteAddr.contains(":") }) "v6" else "v4"
 
         // Wait for the peer to close — keep connection alive for ACK delivery
-        conn.`closed`()
+        conn.closed()
 
         onResult(
             ProbeResult(
@@ -190,8 +193,12 @@ class IrohProbe {
         )
     }
 
-    fun close() {
-        endpoint?.`shutdown`()
+    suspend fun shutdown() {
+        endpoint?.shutdown()
         endpoint = null
+    }
+
+    private fun closeScoped() {
+        scope.launch { shutdown() }
     }
 }
