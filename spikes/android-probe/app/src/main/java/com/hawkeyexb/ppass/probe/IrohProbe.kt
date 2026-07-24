@@ -193,12 +193,10 @@ class IrohProbe {
         )
     }
 
-    suspend fun shutdown() {
-        endpoint?.shutdown()
-        endpoint = null
-    }
-
-    private fun closeScoped() {
-        scope.launch { shutdown() }
+    fun shutdown() {
+        scope.launch {
+            endpoint?.shutdown()
+            endpoint = null
+        }
     }
 }

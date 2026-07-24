@@ -71,5 +71,5 @@ class ProbeViewModel : ViewModel() {
 
     override fun onCleared() {
         super.onCleared()
-        probe.closeScoped()
+        probe.shutdown()
     }
