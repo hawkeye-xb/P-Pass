@@ -52,7 +52,7 @@ class IrohProbe {
             val ep = Endpoint.bind(
                 EndpointOptions(
                     preset = presetN0(),
-                    alpns = listOf(ALPN),
+                    alpns = listOf(ALPN.toByteArray()),
                 )
             )
             endpoint = ep
@@ -72,14 +72,14 @@ class IrohProbe {
             var attempt = 0
             try {
                 while (true) {
-                    val incoming = ep.acceptNext() ?: break
+                    val incoming = ep.`acceptNext`() ?: break
                     attempt++
                     try {
-                        val accepting = incoming.accept()
-                        val alpn = accepting.alpn()
+                        val accepting = incoming.`accept`()
+                        val alpn = accepting.`alpn`()
                         if (alpn?.let { String(it) } != ALPN) continue
-                        val conn = accepting.connect()
-                        val bi = conn.acceptBi()
+                        val conn = accepting.`connect`()
+                        val bi = conn.`acceptBi`()
                         handleIncoming(attempt, conn, bi, onResult)
                     } catch (e: Throwable) {
                         Log.w(TAG, "Accept #$attempt threw: ${e.message}")
@@ -102,28 +102,28 @@ class IrohProbe {
 
         try {
             val addr = EndpointAddr.fromTicketHex(ticketHex)
-            val conn = ep.connect(addr, ALPN)
+            val conn = ep.`connect`(addr, ALPN.toByteArray())
             val connectMs = System.currentTimeMillis() - startTime
 
-            val (send, recv) = conn.openBi()
+            val bi = conn.`openBi`()
+            val send = bi.send()
+            val recv = bi.recv()
 
             // Generate random payload and send
             val payload = ByteArray(payloadMegaBytes * 1_000_000)
             kotlin.random.Random.nextBytes(payload)
 
             val txStart = System.nanoTime()
-            send.write(payload)
-            send.finish()
+            send.`writeAll`(payload)
+            send.`finish`()
             val txDone = System.nanoTime()
             val txMs = (txDone - txStart) / 1_000_000.0
 
-            // Read ACK
-            val ack = ByteArray(2)
-            recv.read(ack)
-            recv.finish()
+            // Read ACK (2 bytes "OK")
+            val ack = recv.`readExact`(2u)
 
             // Path info from connection stats
-            val paths = conn.paths()
+            val paths = conn.`paths`()
             val pathKind = when {
                 paths.any { it.isIp && !it.isRelay } -> {
                     val p = paths.first { it.isIp }
@@ -136,7 +136,7 @@ class IrohProbe {
 
             val throughputMbps = (payloadMegaBytes * 8).toDouble() / (txMs / 1000.0)
 
-            conn.close()
+            conn.`close`(0u, "".toByteArray())
             ProbeResult(-1, pathKind, ipver, connectMs, throughputMbps)
         } catch (e: Throwable) {
             Log.e(TAG, "Dial failed", e)
@@ -150,25 +150,21 @@ class IrohProbe {
         bi: BiStream,
         onResult: (ProbeResult) -> Unit,
     ) {
-        val (send, recv) = bi
+        val send = bi.send()
+        val recv = bi.recv()
 
         val startTime = System.nanoTime()
-        var total = 0L
-        val buf = ByteArray(65536)
-        while (true) {
-            val n = recv.read(buf)
-            if (n <= 0) break
-            total += n
-        }
+        // Read payload until end-of-stream (capped at 200MB)
+        val data = recv.`readToEnd`(200_000_000u)
         val durationNs = System.nanoTime() - startTime
-        val durationMs = durationNs / 1_000_000.0
+        val total = data.size.toLong()
         val throughputMbps = (total * 8.0) / (durationNs.toDouble() / 1_000_000_000.0) / 1_000_000.0
 
         // ACK
-        send.write("OK".toByteArray())
-        send.finish()
+        send.`writeAll`("OK".toByteArray())
+        send.`finish`()
 
-        val paths = conn.paths()
+        val paths = conn.`paths`()
         val pathKind = when {
             paths.any { it.isIp && !it.isRelay } -> {
                 val p = paths.first { it.isIp }
@@ -179,8 +175,8 @@ class IrohProbe {
         }
         val ipver = if (paths.any { it.remoteAddr.contains(":") }) "v6" else "v4"
 
-        // Don't close; let the dialer close
-        conn.closed().await()
+        // Wait for the peer to close — keep connection alive for ACK delivery
+        conn.`closed`()
 
         onResult(
             ProbeResult(
@@ -195,7 +191,7 @@ class IrohProbe {
     }
 
     fun close() {
-        endpoint?.close()
+        endpoint?.`shutdown`()
         endpoint = null
     }
 }
