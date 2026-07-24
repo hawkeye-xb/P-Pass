@@ -73,3 +73,4 @@ class ProbeViewModel : ViewModel() {
         super.onCleared()
         probe.shutdown()
     }
+}
