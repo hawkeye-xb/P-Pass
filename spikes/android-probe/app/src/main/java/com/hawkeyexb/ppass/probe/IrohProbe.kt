@@ -75,11 +75,11 @@ class IrohProbe {
                     val incoming = ep.`acceptNext`() ?: break
                     attempt++
                     try {
-                        val accepting = incoming.`accept`()
-                        val alpn = accepting.`alpn`()
-                        if (alpn?.let { String(it) } != ALPN) continue
-                        val conn = accepting.`connect`()
-                        val bi = conn.`acceptBi`()
+                        val accepting = incoming.accept()
+                        val alpnBytes = accepting.alpn()
+                        if (!alpnBytes.contentEquals(ALPN.toByteArray())) continue
+                        val conn = accepting.connect()
+                        val bi = conn.acceptBi()
                         handleIncoming(attempt, conn, bi, onResult)
                     } catch (e: Throwable) {
                         Log.w(TAG, "Accept #$attempt threw: ${e.message}")
@@ -127,7 +127,7 @@ class IrohProbe {
             val pathKind = when {
                 paths.any { it.isIp && !it.isRelay } -> {
                     val p = paths.first { it.isIp }
-                    if (p.rttMs < 5) "lan" else "direct"
+                    if (p.rttMs.toLong() < 5) "lan" else "direct"
                 }
                 paths.any { it.isRelay } -> "relay"
                 else -> "unknown"
@@ -168,7 +168,7 @@ class IrohProbe {
         val pathKind = when {
             paths.any { it.isIp && !it.isRelay } -> {
                 val p = paths.first { it.isIp }
-                if (p.rttMs < 5) "lan" else "direct"
+                if (p.rttMs.toLong() < 5) "lan" else "direct"
             }
             paths.any { it.isRelay } -> "relay"
             else -> "unknown"
