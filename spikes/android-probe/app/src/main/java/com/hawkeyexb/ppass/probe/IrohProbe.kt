@@ -139,7 +139,7 @@ class IrohProbe {
 
             val throughputMbps = (payloadMegaBytes * 8).toDouble() / (txMs / 1000.0)
 
-            conn.close(0u, "".toByteArray())
+            conn.`close`(0L, "".toByteArray())
             ProbeResult(-1, pathKind, ipver, connectMs, throughputMbps)
         } catch (e: Throwable) {
             Log.e(TAG, "Dial failed", e)
