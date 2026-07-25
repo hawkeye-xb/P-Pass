@@ -59,8 +59,9 @@ fun ProbeScreen(vm: ProbeViewModel = viewModel()) {
             Button(
                 onClick = { vm.bind() },
                 modifier = Modifier.fillMaxWidth(),
+                enabled = state.status != "Binding...",
             ) {
-                Text("Bind Endpoint")
+                Text(if (state.status == "Binding...") "Binding..." else "Bind Endpoint")
             }
         } else {
             // Node info
@@ -120,10 +121,12 @@ fun ProbeScreen(vm: ProbeViewModel = viewModel()) {
                     Text("Dial")
                 }
             }
+        }
 
-            // Status
-            Text("Status: ${state.status}", style = MaterialTheme.typography.bodyMedium)
+        // Status (always visible)
+        Text("Status: ${state.status}", style = MaterialTheme.typography.bodyMedium)
 
+        if (state.isBound) {
             Divider()
 
             // Results section
