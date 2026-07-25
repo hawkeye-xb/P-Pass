@@ -1,0 +1,9 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "token": "abcd1234abcd1234abcd1234abcd1234",
+  "device_name": "Mom's Phone",
+  "role": "member"
+}

@@ -1,0 +1,7 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "ticket": "blob:abcd1234"
+}

@@ -1,0 +1,8 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "hash": "b4f8e9c2d1a00000000000000000000000000000000000000000000000000000",
+  "size": "1024"
+}

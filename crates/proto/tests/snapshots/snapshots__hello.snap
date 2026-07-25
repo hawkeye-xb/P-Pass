@@ -1,0 +1,12 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "proto_ver": 1,
+  "capabilities": [
+    "thumbnail.v1",
+    "video.range.v1"
+  ],
+  "device_name": "Salamira's Phone"
+}

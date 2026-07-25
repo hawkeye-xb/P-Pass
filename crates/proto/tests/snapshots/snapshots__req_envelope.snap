@@ -1,0 +1,13 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "method": "timeline.page",
+  "params": {
+    "cursor": null,
+    "limit": 200
+  },
+  "min_ver": 1
+}

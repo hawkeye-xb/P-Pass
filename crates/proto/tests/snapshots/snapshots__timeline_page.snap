@@ -1,0 +1,25 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "items": [
+    {
+      "hash": "b4f8e9c2d1a00000000000000000000000000000000000000000000000000000",
+      "taken_at": 1690000000,
+      "media_type": "photo",
+      "width": 4032,
+      "height": 3024,
+      "bytes": 3500000
+    },
+    {
+      "hash": "c3d2e1f0a0000000000000000000000000000000000000000000000000000000",
+      "taken_at": 1690003600,
+      "media_type": "video",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 50000000
+    }
+  ],
+  "next": "next-cursor-002"
+}

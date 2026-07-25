@@ -1,0 +1,8 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "state": "ONLINE_DIRECT",
+  "detail": "last_seen: 2026-07-25T23:11:03Z"
+}

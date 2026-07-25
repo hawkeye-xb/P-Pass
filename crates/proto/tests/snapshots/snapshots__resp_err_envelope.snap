@@ -1,0 +1,12 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "ok": false,
+  "error": {
+    "code": "NOT_FOUND",
+    "msg_key": "err.not_found"
+  }
+}

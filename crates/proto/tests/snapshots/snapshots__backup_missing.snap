@@ -1,0 +1,9 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "hashes": [
+    "ccc22222222222222222222222222222222222222222222222222222222222222"
+  ]
+}

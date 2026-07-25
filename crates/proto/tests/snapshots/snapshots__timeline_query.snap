@@ -1,0 +1,8 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "cursor": "opaque-cursor-001",
+  "limit": 200
+}
