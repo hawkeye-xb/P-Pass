@@ -40,6 +40,7 @@ class UidtTransferService : JobService() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        UidtLogger.init(this)
     }
 
     override fun onStartJob(params: JobParameters?): Boolean {
@@ -52,6 +53,8 @@ class UidtTransferService : JobService() {
         }
 
         Log.i(TAG, "UIDT job started, $ITERATIONS × ${PAYLOAD_MB}MB")
+
+        UidtLogger.startSession()
 
         startForeground(
             NOTIFICATION_ID,
@@ -67,6 +70,7 @@ class UidtTransferService : JobService() {
 
     override fun onStopJob(params: JobParameters?): Boolean {
         Log.w(TAG, "Job stopped by system")
+        UidtLogger.stop("system_killed")
         scope.cancel()
         return true // reschedule
     }
@@ -104,6 +108,7 @@ class UidtTransferService : JobService() {
                 val result = probe.dial(ticket, payloadMegaBytes = PAYLOAD_MB)
                 val labeled = result.copy(attempt = i)
                 results.add(labeled)
+                UidtLogger.logResult(labeled, this)
 
                 if (labeled.error != null) {
                     Log.w(TAG, "UIDT transfer $i failed: ${labeled.error}")
@@ -113,9 +118,11 @@ class UidtTransferService : JobService() {
             }
 
             showResultsNotification(results, startTime)
+            UidtLogger.stop("completed")
         } catch (e: Exception) {
             Log.e(TAG, "UIDT fatal error", e)
             showErrorNotification(e.message ?: "Unknown error")
+            UidtLogger.stop("fatal_error: ${e.message}")
         } finally {
             probe.shutdown()
             jobFinished(params, false)

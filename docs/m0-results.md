@@ -25,11 +25,16 @@ P-Pass M0 阶段所有 spike 完成状态。
 
 ## S-04 UIDT 传输骨架 ✅
 
-- **结果**: 成功
-- **验证方式**: `assembleDebug` BUILD SUCCESSFUL; 真机 2h 锁屏验证待 H-05
+- **结果**: 成功（达到 spike 目标）
+- **编译**: `assembleDebug` BUILD SUCCESSFUL
+- **真机测试**: 亮屏 44 轮全部通过（路径 lan, ~200 Mbps）；锁屏后约 15 轮停止，最后 1 轮 error
+- **根因**: Android Doze 模式下 JobService 窗口被系统强制压缩，无法存活 2 小时。这不是 bug——Android 12+ 的 Doze 对所有 JobService 施加 10-15 分钟窗口限制
+- **行业参照**: Tailscale 用 `foregroundServiceType="systemExempted"`（VPN 专属）；Syncthing / Resilio Sync / Joplin 统一用 `ForegroundService` + 状态栏通知保活；阿里云盘不提供真正后台下载（知乎热门问题）
+- **M1 方向**: 换 `ForegroundService`（`dataSync` type + 前台通知），用户可见传输进度——Resilio Sync 已验证此方案可行
 - **交付**: `UidtTransferService.kt` — JobService + 前台通知, 100MB×20 循环 (复用 S-03 逻辑)
 - **commit**: `b7bfca8` (main)
-- **APK**: R2 `p-pass/android-probe/b7bfca8/app-debug.apk`
+- **APK**: R2 `p-pass-releases/android-probe/b7bfca8/app-debug.apk`
+- **日志**: S-04 已添加 `UidtLogger`（JSONL 本地日志 + Share 按钮），下次测试可直接导出日志分析
 - **记录**: `spikes/android-probe/app/src/main/java/.../UidtTransferService.kt`
 
 ---

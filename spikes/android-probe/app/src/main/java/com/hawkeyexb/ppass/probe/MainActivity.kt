@@ -158,6 +158,21 @@ fun ProbeScreen(vm: ProbeViewModel = viewModel()) {
         if (state.uidtStatus.isNotEmpty()) {
             Text("UIDT: ${state.uidtStatus}", style = MaterialTheme.typography.bodySmall)
         }
+
+        // Share UIDT log
+        if (state.uidtTransferring) {
+            TextButton(onClick = {
+                val logText = UidtLogger.readLogAsText(context)
+                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(android.content.Intent.EXTRA_TEXT, logText)
+                    putExtra(android.content.Intent.EXTRA_SUBJECT, "UIDT Log")
+                }
+                context.startActivity(android.content.Intent.createChooser(shareIntent, "Share UIDT Log"))
+            }) {
+                Text("Share Log")
+            }
+        }
         }
 
         // Status (always visible)
