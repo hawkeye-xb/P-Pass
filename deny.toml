@@ -1,0 +1,29 @@
+# cargo-deny configuration for P-Pass
+# Run: cargo deny check
+
+[graph]
+all-features = false
+
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+ignore = []
+
+[licenses]
+unlicensed = "deny"
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "MPL-2.0",
+  "ISC",
+  "Unicode-3.0",
+]
+copyleft = "deny"
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "warn"
+deny = []

@@ -1,0 +1,35 @@
+# P-Pass .gitignore
+
+# Rust
+/target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+*.dmg
+*.msi
+*.apk
+*.aab
+
+# Wrangler
+.wrangler/
+node_modules/
+
+# Dev data
+dev.db
+dev.db-journal
+dev.db-wal

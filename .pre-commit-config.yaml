@@ -1,0 +1,9 @@
+repos:
+  - name: default
+    hooks:
+      - id: gitleaks
+        name: gitleaks
+        entry: gitleaks protect --staged --verbose
+        language: system
+        pass_filenames: false
+        always_run: true
