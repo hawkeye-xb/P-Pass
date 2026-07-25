@@ -1,0 +1,11 @@
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/iroh_dns-5bf2a7b5c5acc709.d: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/attrs.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/dns.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/endpoint_info.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/pkarr.rs
+
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/libiroh_dns-5bf2a7b5c5acc709.rlib: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/attrs.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/dns.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/endpoint_info.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/pkarr.rs
+
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/libiroh_dns-5bf2a7b5c5acc709.rmeta: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/attrs.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/dns.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/endpoint_info.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/pkarr.rs
+
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/lib.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/attrs.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/dns.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/endpoint_info.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-dns-1.0.3/src/pkarr.rs:

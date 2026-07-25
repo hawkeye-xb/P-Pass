@@ -1,0 +1,14 @@
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/thiserror-36f0af920da0ba40.d: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/aserror.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/display.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/var.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/private.rs /Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/build/thiserror-6a46f856bc2b5de2/out/private.rs
+
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/libthiserror-36f0af920da0ba40.rlib: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/aserror.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/display.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/var.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/private.rs /Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/build/thiserror-6a46f856bc2b5de2/out/private.rs
+
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/libthiserror-36f0af920da0ba40.rmeta: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/aserror.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/display.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/var.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/private.rs /Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/build/thiserror-6a46f856bc2b5de2/out/private.rs
+
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/lib.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/aserror.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/display.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/var.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.19/src/private.rs:
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/build/thiserror-6a46f856bc2b5de2/out/private.rs:
+
+# env-dep:OUT_DIR=/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/build/thiserror-6a46f856bc2b5de2/out

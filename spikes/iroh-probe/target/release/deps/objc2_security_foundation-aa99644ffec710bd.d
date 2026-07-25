@@ -1,0 +1,9 @@
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/objc2_security_foundation-aa99644ffec710bd.d: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/generated/mod.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/generated/SFAuthorization.rs
+
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/libobjc2_security_foundation-aa99644ffec710bd.rlib: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/generated/mod.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/generated/SFAuthorization.rs
+
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/libobjc2_security_foundation-aa99644ffec710bd.rmeta: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/generated/mod.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/generated/SFAuthorization.rs
+
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/lib.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/generated/mod.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/objc2-security-foundation-0.3.2/src/generated/SFAuthorization.rs:

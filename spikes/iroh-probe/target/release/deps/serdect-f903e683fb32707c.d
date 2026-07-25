@@ -1,0 +1,11 @@
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/serdect-f903e683fb32707c.d: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/array.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/common.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/slice.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/../README.md
+
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/libserdect-f903e683fb32707c.rlib: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/array.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/common.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/slice.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/../README.md
+
+/Users/salamira/workspace/P-Pass/spikes/iroh-probe/target/release/deps/libserdect-f903e683fb32707c.rmeta: /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/lib.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/array.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/common.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/slice.rs /Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/../README.md
+
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/lib.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/array.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/common.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/slice.rs:
+/Users/salamira/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serdect-0.4.3/src/../README.md:
