@@ -14,6 +14,9 @@ data class ProbeUiState(
     val results: List<ProbeResult> = emptyList(),
     val dialInput: String = "",
     val isBound: Boolean = false,
+    // S-04: UIDT mode
+    val uidtStatus: String = "",
+    val uidtTransferring: Boolean = false,
 )
 
 class ProbeViewModel : ViewModel() {
@@ -67,6 +70,14 @@ class ProbeViewModel : ViewModel() {
                 results = current,
             )
         }
+    }
+
+    /** S-04: Mark UIDT transfer as started (the real work is in the JobService). */
+    fun markUidtStarted() {
+        _uiState.value = _uiState.value.copy(
+            uidtStatus = "Job scheduled",
+            uidtTransferring = true,
+        )
     }
 
     override fun onCleared() {

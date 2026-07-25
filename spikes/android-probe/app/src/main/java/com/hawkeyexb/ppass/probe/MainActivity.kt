@@ -1,15 +1,16 @@
 package com.hawkeyexb.ppass.probe
 
+import android.app.job.JobInfo
+import android.app.job.JobScheduler
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ComponentName
 import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
@@ -121,6 +122,42 @@ fun ProbeScreen(vm: ProbeViewModel = viewModel()) {
                     Text("Dial")
                 }
             }
+
+        // S-04: UIDT stress test (background transfer)
+        Divider()
+        Text("UIDT Stress Test", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "100 MB × 20 loops in background via JobService.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = state.dialInput,
+                onValueChange = { vm.updateDialInput(it) },
+                label = { Text("Remote ticket") },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+            )
+            Button(
+                onClick = {
+                    scheduleUidtTransfer(context, state.dialInput.trim())
+                    vm.markUidtStarted()
+                },
+                enabled = state.dialInput.isNotBlank() && !state.uidtTransferring,
+            ) {
+                Text(if (state.uidtTransferring) "Running…" else "Start UIDT")
+            }
+        }
+
+        // UIDT status
+        if (state.uidtStatus.isNotEmpty()) {
+            Text("UIDT: ${state.uidtStatus}", style = MaterialTheme.typography.bodySmall)
+        }
         }
 
         // Status (always visible)
@@ -203,4 +240,20 @@ fun ResultsTable(results: List<ProbeResult>) {
 fun copyToClipboard(context: Context, text: String) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     clipboard.setPrimaryClip(ClipData.newPlainText("iroh-probe", text))
+}
+
+/** S-04: Schedule the UIDT background transfer job. */
+fun scheduleUidtTransfer(context: Context, ticket: String) {
+    val js = context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
+    val component = ComponentName(context, UidtTransferService::class.java)
+
+    val jobInfo = JobInfo.Builder(1, component)
+        .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+        .setExtras(android.os.PersistableBundle().apply {
+            putString(UidtTransferService.EXTRA_TICKET, ticket)
+        })
+        .build()
+
+    js.schedule(jobInfo)
+    Toast.makeText(context, "UIDT transfer scheduled", Toast.LENGTH_SHORT).show()
 }
