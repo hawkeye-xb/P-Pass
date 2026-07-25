@@ -31,6 +31,7 @@ data class ProbeResult(
     val connectMs: Long,
     val throughputMbps: Double,
     val error: String? = null,
+    val timestampMs: Long = System.currentTimeMillis(),
 )
 
 class IrohProbe {
