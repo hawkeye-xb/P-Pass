@@ -1,0 +1,17 @@
+[package]
+name = "thumb-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+image = "0.25"  # JPEG decode/encode + resize, no default features → only JPEG
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+walkdir = "2"
+
+[profile.release]
+opt-level = 2
+lto = false
