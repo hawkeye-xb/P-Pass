@@ -32,7 +32,7 @@ P-Pass M0 阶段所有 spike 完成状态。
 - **行业参照**: Tailscale 用 `foregroundServiceType="systemExempted"`（VPN 专属）；Syncthing / Resilio Sync / Joplin 统一用 `ForegroundService` + 状态栏通知保活；阿里云盘不提供真正后台下载（知乎热门问题）
 - **M1 方向**: 换 `ForegroundService`（`dataSync` type + 前台通知），用户可见传输进度——Resilio Sync 已验证此方案可行
 - **交付**: `UidtTransferService.kt` — JobService + 前台通知, 100MB×20 循环 (复用 S-03 逻辑)
-- **commit**: `b7bfca8` (main)
+- **commit**: `3c50147` (main，历史清理后哈希)
 - **APK**: R2 `p-pass-releases/android-probe/b7bfca8/app-debug.apk`
 - **日志**: S-04 已添加 `UidtLogger`（JSONL 本地日志 + Share 按钮），下次测试可直接导出日志分析
 - **记录**: `spikes/android-probe/app/src/main/java/.../UidtTransferService.kt`
