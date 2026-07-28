@@ -1,0 +1,26 @@
+# P-Pass daemon 配置示例。复制为 config.toml 使用；所有字段可省略，
+# 省略即用编译内置默认值（官方端点见 endpoints.default.toml）。
+# 每个字段也可用环境变量覆盖（优先级最高）：前缀 PPF_，见各字段注释。
+
+# 照片库根目录。未设置时由平台适配层给出系统惯例目录（T-040）。
+# env: PPF_DATA_DIR
+#data_dir = "/path/to/library"
+
+# 中继端点覆盖（自建者指向自己的 relay）。
+# env: PPF_RELAY_URLS（逗号分隔）
+#relay_urls = ["https://relay.example.com"]
+
+# 配对短码会合服务。
+# env: PPF_RENDEZVOUS_URL
+#rendezvous_url = "https://rendezvous.example.com"
+
+# 日志级别：trace | debug | info | warn | error
+# env: PPF_LOG_LEVEL
+#log_level = "info"
+
+#[telemetry]
+# 匿名遥测开关（一键关闭，隐私说明见文档）。
+# env: PPF_TELEMETRY_ENABLED
+#enabled = true
+# env: PPF_TELEMETRY_URL
+#url = "https://telemetry.example.com"

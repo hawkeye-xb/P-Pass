@@ -4,6 +4,7 @@
 
 | 卡片 | 日期 | Commit | 状态 | 摘要 |
 |------|------|--------|------|------|
+| **T-004** | 2026-07-28 | — | DONE | daemon config：三层覆盖（编译内置默认值→config.toml→PPF_* 环境变量），官方端点按 H-01 域名嵌入 endpoints.default.toml，config.example.toml 全字段注释示例；resolve() 纯函数可测（不碰进程 env）；未知字段拒绝（deny_unknown_fields）；非法布尔环境变量报错而非静默默认。新依赖 toml@0.8（人类已批准，过 cargo-deny）。验收：5 测试绿含三层覆盖顺序与 PPF_TELEMETRY_ENABLED=false 生效；fmt/clippy -D warnings/arch-check/deny 全绿。 |
 | **T-003** | 2026-07-28 | — | DONE | diag crate：keys.rs 宏注册 8 个 msg_key（编译期常量+ALL 表）；state.rs DaemonState 六态枚举+纯逻辑转移函数（DiskFull 粘滞优先，设计选择随代码注释）；assets/i18n/{en,zh}.json 编译期嵌入；assert_all_keys_translated() 双向校验（缺译/未注册都报错）。依赖说明：复用 workspace 既有 serde_json（未新增第三方）。验收：`cargo test -p diag` 8 测试全绿；变异演示：删 zh 的 diag.online_relay → 测试红（panic 指明缺失 key），恢复后复绿；fmt/clippy -D warnings/arch-check/cargo-deny 全绿。 |
 | **T-006(返工)** | 2026-07-28 | — | DONE | 打回两项补齐：① pr.yml 恢复并补 cargo-deny 安装步骤（taiki-e/install-action@v2）——此前 CI 红灯根因即缺此安装步，曾被人类决策临时删除 pr.yml（`39d13b7`/`2cb3b16`），现恢复；② `git rm --cached` libiroh_ffi.so（18MB）。验收（契约 f 原文）：`git ls-files \| grep -E 'target/\|\.wrangler/\|\.so$'` 输出为空。Actions 绿灯见 push 后 run。 |
 | **T-006** | 2026-07-28 | `ee134bc` | DONE | 工程卫生修复：.gitignore target/ 解锚 + *.so、arch-check B.2 正则加宽（覆盖 cfg_attr/cfg!()）、deny.toml 迁移 cargo-deny 0.20 语法、pr.yml 加 cargo deny check、全部 crate 加 publish=false、BackupBegin doc 修正、Req.min_ver 默认 MIN_SUPPORTED_VER。验收：`just fmt && just lint && just test && just arch-check && cargo deny check` 全绿。⚠️ 曾以弱化命令（缺 `\.so$`）记录验收，被人工抽查发现，见返工条目。 |

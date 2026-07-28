@@ -1,0 +1,15 @@
+# Official endpoint defaults — compiled into the daemon binary.
+# 隔离方案 §2：官方端点是公开常量，不是秘密；自建者在 config.toml 或
+# PPF_* 环境变量里覆盖这三类端点即可指向自己的基础设施。
+# 域名按 H-01 决策（p-pass.hawkeye-xb.com）展开；上线前由 H-07 部署兑现。
+
+relay_urls = [
+  "https://relay-us.p-pass.hawkeye-xb.com",
+  "https://relay-eu.p-pass.hawkeye-xb.com",
+  "https://relay-ap.p-pass.hawkeye-xb.com",
+]
+rendezvous_url = "https://rendezvous.p-pass.hawkeye-xb.com"
+
+[telemetry]
+enabled = true
+url = "https://telemetry.p-pass.hawkeye-xb.com"

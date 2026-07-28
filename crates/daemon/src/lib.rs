@@ -2,16 +2,6 @@
 //!
 //! No `unwrap`/`expect` allowed in production code (CI-enforced).
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod config;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn placeholder() {
-        assert_eq!(add(2, 2), 4);
-    }
-}
+pub use config::{Config, TelemetryConfig};
