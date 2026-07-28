@@ -29,9 +29,9 @@ lint:
 
 # ── Test ────────────────────────────────────────────
 
-# Run all tests with nextest
+# Run all tests (nextest if available, fallback to cargo test)
 test:
-  cargo nextest run --all-features
+  cargo nextest run --all-features 2>/dev/null || cargo test --all-features
 
 # ── Code Generation ─────────────────────────────────
 

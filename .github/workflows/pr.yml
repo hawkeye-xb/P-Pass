@@ -47,3 +47,6 @@ jobs:
 
       - name: Architecture enforcement
         run: bash tools/arch-check.sh
+
+      - name: License and dependency audit
+        run: cargo deny check advisories licenses bans

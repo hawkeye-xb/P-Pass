@@ -5,13 +5,10 @@
 all-features = false
 
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
 yanked = "deny"
 ignore = []
 
 [licenses]
-unlicensed = "deny"
 allow = [
   "MIT",
   "Apache-2.0",
@@ -21,8 +18,8 @@ allow = [
   "ISC",
   "Unicode-3.0",
 ]
-copyleft = "deny"
 confidence-threshold = 0.8
+private = { ignore = true }
 
 [bans]
 multiple-versions = "warn"

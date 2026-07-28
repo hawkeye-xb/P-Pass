@@ -23,4 +23,4 @@ pub mod version;
 
 pub use error::{codes, RespError};
 pub use msgs::*;
-pub use version::PROTO_VER;
+pub use version::{MIN_SUPPORTED_VER, PROTO_VER};

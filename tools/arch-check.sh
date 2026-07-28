@@ -2,8 +2,9 @@
 # Architecture enforcement script for P-Pass
 # Rules:
 #   B.1 — `iroh` only in crates/transport/
-#   B.2 — `#[cfg(windows)]` / `#[cfg(target_os = "macos")]` only in crates/platform/
-
+#   B.2 — `cfg` with `windows` or `target_os` only in crates/platform/
+#         Covers #[cfg(...)], #[cfg_attr(...)], and cfg!(...) forms.
+#         Err on the side of false positives; platform crate is exempt.
 set -euo pipefail
 
 FAIL=0
@@ -46,17 +47,20 @@ fi
 
 # ── B.2: platform cfg isolation ─────────────────────
 
-echo "==> B.2: platform #[cfg] isolation (platform crate only)"
+echo "==> B.2: platform #[cfg] / cfg_attr / cfg!() isolation (platform crate only)"
 
-# Find #[cfg(windows)] or #[cfg(target_os = "macos")] outside platform crate
+# Catch three forms of cfg targeting windows or target_os outside platform crate:
+#   #[cfg(windows)] / #[cfg(target_os = "...")]
+#   #[cfg_attr(..., cfg(windows))] / #[cfg_attr(..., cfg(target_os = "..."))]
+#   cfg!(windows) / cfg!(target_os = "...")
 VIOLATIONS_B2=$(grep -rn --include='*.rs' \
-  -E '#\[cfg\((windows|target_os\s*=\s*"macos")\)' \
+  -E '\bcfg\b.*\b(windows|target_os)\b' \
   "$ROOT/crates" \
   | grep -v 'crates/platform/' \
   || true)
 
 if [ -n "$VIOLATIONS_B2" ]; then
-  echo "❌ B.2 VIOLATION: platform #[cfg] found outside crates/platform/:"
+  echo "❌ B.2 VIOLATION: platform cfg found outside crates/platform/:"
   echo "$VIOLATIONS_B2"
   FAIL=1
 else

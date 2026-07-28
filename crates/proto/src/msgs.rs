@@ -26,6 +26,7 @@ pub struct Req {
     /// Method-specific parameters as a JSON value.
     pub params: Value,
     /// Minimum protocol version the sender expects in the response.
+    /// Defaults to `MIN_SUPPORTED_VER` (most conservative: assume oldest peer).
     pub min_ver: u16,
 }
 
@@ -36,7 +37,7 @@ impl Default for Req {
             id: String::new(),
             method: String::new(),
             params: Value::Null,
-            min_ver: super::PROTO_VER,
+            min_ver: super::MIN_SUPPORTED_VER,
         }
     }
 }
@@ -191,15 +192,35 @@ pub struct AssetMeta {
 // ── Thumbnail ───────────────────────────────────────
 
 /// Preset thumbnail sizes.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// Serialised as a u32 integer (e.g. 256, 1024) — not a string.
+/// This is the final wire format; chosen before any peer implementation exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThumbSize {
     /// 256 px thumbnail for grid display.
-    #[serde(rename = "256")]
     #[default]
     S256 = 256,
     /// 1024 px preview for detail view.
-    #[serde(rename = "1024")]
     S1024 = 1024,
+}
+
+impl serde::Serialize for ThumbSize {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (*self as u32).serialize(serializer)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ThumbSize {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let val = u32::deserialize(deserializer)?;
+        match val {
+            256 => Ok(ThumbSize::S256),
+            1024 => Ok(ThumbSize::S1024),
+            other => Err(serde::de::Error::custom(format!(
+                "unknown ThumbSize: {} (expected 256 or 1024)",
+                other
+            ))),
+        }
+    }
 }
 
 /// Request a thumbnail for a given asset.
@@ -232,8 +253,9 @@ pub struct BlobTicketResponse {
 
 // ── Backup pipeline ─────────────────────────────────
 
-/// Initiate a backup session. No parameters needed; the storage
-/// side returns the current manifest.
+/// Initiate a backup session. The client signals begin, then sends a
+/// manifest of candidate hashes; the storage side responds with the list
+/// of hashes it does not yet have (BackupMissing).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct BackupBegin {}
@@ -468,7 +490,7 @@ mod tests {
         // Extra unknown fields in JSON should NOT cause deserialisation errors.
         let json = r#"{
             "hash": "abc123",
-            "size": "256",
+            "size": 256,
             "extra_thing": 42,
             "future_field": "value"
         }"#;
@@ -513,17 +535,16 @@ mod tests {
         assert_eq!(req.id, "");
         assert_eq!(req.method, "");
         assert_eq!(req.params, Value::Null);
-        assert_eq!(req.min_ver, super::super::PROTO_VER);
+        assert_eq!(req.min_ver, super::super::MIN_SUPPORTED_VER);
     }
 
     #[test]
     fn thumb_size_serialisation() {
-        assert_eq!(serde_json::to_string(&ThumbSize::S256).unwrap(), r#""256""#);
-        assert_eq!(
-            serde_json::to_string(&ThumbSize::S1024).unwrap(),
-            r#""1024""#
-        );
-        let s: ThumbSize = serde_json::from_str(r#""256""#).unwrap();
+        assert_eq!(serde_json::to_string(&ThumbSize::S256).unwrap(), "256");
+        assert_eq!(serde_json::to_string(&ThumbSize::S1024).unwrap(), "1024");
+        let s: ThumbSize = serde_json::from_str("256").unwrap();
         assert_eq!(s, ThumbSize::S256);
+        let s1024: ThumbSize = serde_json::from_str("1024").unwrap();
+        assert_eq!(s1024, ThumbSize::S1024);
     }
 }

@@ -1,7 +1,7 @@
 # P-Pass .gitignore
 
 # Rust
-/target/
+target/
 **/*.rs.bk
 
 # IDE
@@ -24,6 +24,7 @@ Thumbs.db
 *.msi
 *.apk
 *.aab
+*.so
 
 # Wrangler
 .wrangler/
