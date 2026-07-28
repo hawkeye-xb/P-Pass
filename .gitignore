@@ -34,3 +34,6 @@ node_modules/
 dev.db
 dev.db-journal
 dev.db-wal
+
+# iroh-probe 持久化私钥（秘密，不进仓库）
+iroh-probe.key

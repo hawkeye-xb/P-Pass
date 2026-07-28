@@ -21,7 +21,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Start listener: prints NodeId + ticket, waits for dial connections
-    Listen,
+    Listen {
+        /// File to persist the secret key — keeps NodeId (and ticket) stable across restarts.
+        #[arg(long, default_value = "iroh-probe.key")]
+        key_file: PathBuf,
+    },
     /// Dial a listener: connect N times, measure each
     Dial {
         /// Ticket (EndpointAddr postcard hex-encoded) from the listener
@@ -55,7 +59,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.cmd {
-        Cmd::Listen => do_listen().await,
+        Cmd::Listen { key_file } => do_listen(&key_file).await,
         Cmd::Dial {
             ticket,
             count,
@@ -65,8 +69,29 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-async fn do_listen() -> anyhow::Result<()> {
+/// Load the secret key from `path`, or generate one and persist it there.
+fn load_or_create_key(path: &std::path::Path) -> anyhow::Result<iroh::SecretKey> {
+    if path.exists() {
+        let hex_str = std::fs::read_to_string(path)?;
+        let bytes: [u8; 32] = hex::decode(hex_str.trim())?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("key file must contain 32 hex-encoded bytes"))?;
+        Ok(iroh::SecretKey::from_bytes(&bytes))
+    } else {
+        let key = iroh::SecretKey::generate();
+        std::fs::write(path, hex::encode(key.to_bytes()))?;
+        eprintln!("New key generated and saved to {}", path.display());
+        Ok(key)
+    }
+}
+
+async fn do_listen(key_file: &std::path::Path) -> anyhow::Result<()> {
+    let secret = load_or_create_key(key_file)?;
     let ep = Endpoint::builder(presets::N0)
+        .secret_key(secret)
+        // Fixed UDP port so the ticket's direct addr survives restarts.
+        .bind_addr("0.0.0.0:41145")
+        .map_err(|e| anyhow::anyhow!("bind_addr: {e}"))?
         .alpns(vec![ALPN.to_vec()])
         .bind()
         .await?;
