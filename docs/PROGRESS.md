@@ -14,8 +14,14 @@
 | **S-02** | 2026-07-24 | `852941e` | DONE | 网络矩阵汇总工具：summarize.py JSONL → Markdown 表格，含 path/rtt/throughput 统计。 |
 | **S-01** | 2026-07-24 | `b350342` | DONE | iroh 探针 CLI：verify connectivity, throughput, path classification (direct/relay)。 |
 
+## 决策记录
+
+- **[2026-07-28] 狗粮机改为 Mac mini（macOS 存储端），人类裁决。** 理由：ADR-011 双平台首发下 macOS 存储端是一等公民；狗粮机核心要求"安静常开"与用户 Windows 机（吵、常关）冲突；Mac mini 已是家庭常驻服务器。长借的 Windows 机改任【平台适配开发（T-040）+ 签名调试 + 每周冒烟】，用时开机。手册 §1.1 机器分工按此调整，M1 狗粮启动时间点不变。
+
 ## 发现的问题
 
 - **[2026-07-28] S-03 验收盲区：Android App 与 S-01 CLI 从未真正互通。** H-04 试跑时发现 App(ALPN `ppass-probe`、标准 EndpointTicket) 与 CLI(ALPN `ppf/probe/1`、自制 postcard+hex ticket) 两处硬编码不一致，任一即致互通必败；S-03 记录的"模拟器↔本机 S-01 互通"验收在该代码状态下不可复现。已修复（`0c05255`，CLI 适配 App）。教训：跨端互通验收必须两端真实对跑，不能各自回环。
 - **[2026-07-28] T-001 workspace 曾破坏 spike 独立构建**（缺 workspace.exclude），h04-case-list 中的构建命令因此失效。已修复（`040ce43`）。
 - **[2026-07-28] 网络环境记录：** 办公网（10.1.150.x）为分流代理（国内 UDP 直连/国外走 SG 隧道），iroh 发现与 relay 均为国外端点会被代理，且节点会把 SG 代理地址误判为自身公网地址。该环境下的连接数据只能记为"代理路由器环境"附加场景，不可作为家宽基线。手机(5G)→Mac 实测：可经 relay 建连，但 100MB 传输中途停滞超时。
+- **[2026-07-28] Android Probe App 四处缺陷（spike 级，下次重打 APK 一并修）：** ① UidtLogger 把 error 统一写成空串 `""`（应为 null/真实错误信息），失败原因无法从日志判读；② Share Log 按钮可见性绑在"传输中"状态上，任务结束/界面刷新后无法导出（数据在 `files/uidt_log.jsonl` 持久化未丢，靠重新 Start 一次才能召出按钮）；③ Activity 重建即丢 endpoint 与结果列表（切后台回来要重新 Bind）；④ App 生成自身 ticket 不等待 relay 就绪，ticket 可能仅含内网地址（与 CLI 已修复的同款问题，影响 App 作为监听端被跨网拨入，如场景 3）。
+- **[2026-07-28] H-04 场景 2/7 正式数据入档**（docs/h04-logs/）：场景 7=20/20 direct(v6) 16.9Mbps；场景 2=0/20 direct、relay 兜底 20/20 完成 11.3Mbps（判红暂缓，见矩阵表复测清单——家侧监听端在 VM 内 + 双端代理，归因未分离）。IPv6 有无 = direct/relay 的对照实验入档。
