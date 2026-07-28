@@ -9,7 +9,8 @@ use clap::{Parser, Subcommand};
 use iroh::{Endpoint, EndpointAddr, endpoint::presets};
 use serde::Serialize;
 
-const ALPN: &[u8] = b"ppf/probe/1";
+// Must match the Android probe app's ALPN (IrohProbe.ALPN) for interop.
+const ALPN: &[u8] = b"ppass-probe";
 
 #[derive(Parser)]
 struct Cli {
@@ -70,15 +71,29 @@ async fn do_listen() -> anyhow::Result<()> {
         .bind()
         .await?;
 
+    // Wait for the relay connection so the ticket contains a relay URL —
+    // a ticket generated before that only carries LAN addresses and is
+    // unreachable from cellular/off-LAN dialers.
+    let deadline = Instant::now() + std::time::Duration::from_secs(15);
+    while ep.addr().relay_urls().next().is_none() && Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+
     let addr = ep.addr();
     eprintln!("NodeId:  {}", addr.id);
     let relays: Vec<_> = addr.relay_urls().cloned().collect();
     eprintln!("Relays:  {:?}", relays);
+    if relays.is_empty() {
+        eprintln!("WARN: no relay attached after 15s — ticket is LAN-only");
+    }
 
-    // Serialize EndpointAddr as ticket (postcard + hex)
+    // Standard iroh ticket — the Android app parses this via EndpointTicket.fromString().
+    let std_ticket = iroh_tickets::endpoint::EndpointTicket::new(addr.clone());
+    eprintln!("Ticket:  {std_ticket}");
+    // Legacy postcard+hex ticket, kept for CLI↔CLI use.
     let ticket_bytes = postcard::to_stdvec(&addr)?;
     let ticket = hex::encode(&ticket_bytes);
-    eprintln!("Ticket:  {ticket}");
+    eprintln!("Ticket(hex, CLI-only):  {ticket}");
     eprintln!("Listening for connections...");
 
     loop {
@@ -133,8 +148,14 @@ async fn do_dial(
     payload_mb: u32,
     out: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    let ticket_bytes = hex::decode(ticket_hex)?;
-    let addr: EndpointAddr = postcard::from_bytes(&ticket_bytes)?;
+    // Accept both the standard iroh ticket string and the legacy postcard+hex form.
+    let addr: EndpointAddr = match ticket_hex.parse::<iroh_tickets::endpoint::EndpointTicket>() {
+        Ok(t) => t.endpoint_addr().clone(),
+        Err(_) => {
+            let ticket_bytes = hex::decode(ticket_hex)?;
+            postcard::from_bytes(&ticket_bytes)?
+        }
+    };
     eprintln!("Dialing NodeId: {}", addr.id);
     eprintln!("Count: {count}, Payload: {payload_mb}MB");
 
