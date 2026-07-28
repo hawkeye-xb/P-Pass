@@ -9,12 +9,12 @@
 | # | 场景 | 手机网络 | 桌面网络 | NAT 类型（手机/桌面） | 预期 | 直连率 | 平均 RTT | 平均吞吐 |
 |---|------|---------|---------|---------------------|------|--------|---------|---------|
 | 1 | 同 WiFi | WiFi（家庭） | WiFi（家庭） | Full Cone / Full Cone | Lan 直连 | /20 | | |
-| 2 | 家宽→4G | 4G/5G 蜂窝 | WiFi（家庭） | Symmetric / Full Cone | Direct 或 Relay | /20 | | |
+| 2 | 家宽→4G | 4G/5G 蜂窝 | WiFi（家庭） | Symmetric / Full Cone | Direct 或 Relay | 0/3（进行中） | connect 420~1259ms | relay 8~13 Mbps |
 | 3 | 4G→家宽（反向） | WiFi（家庭） | 4G 热点 | Full Cone / Symmetric | Direct 或 Relay | /20 | | |
 | 4 | 双运营商 4G | 4G（运营商 A） | 4G 热点（运营商 B） | Symmetric / Symmetric | Relay（大概率） | /20 | | |
 | 5 | 同运营商 4G | 4G（运营商 A） | 4G 热点（运营商 A） | Symmetric / Symmetric | Relay 或 Direct | /20 | | |
 | 6 | 咖啡店/酒店 WiFi | 公共 WiFi | WiFi（家庭） | Restricted / Full Cone | Relay 或 Direct | /20 | | |
-| 7 | 公司 VPN/企业网 | 公司 WiFi（VPN） | WiFi（家庭） | Enterprise NAT | Relay（大概率） | /20 | | |
+| 7 | 公司 VPN/企业网 | 公司 WiFi（VPN） | WiFi（家庭） | Enterprise NAT | Relay（大概率） | **20/20** ✅ | connect P50 23ms | 16.9 Mbps (P50) |
 | 8 | IPv6-only（如有） | 5G IPv6 | WiFi IPv6 | — | Direct（IPv6打洞更易） | /20 | | |
 
 ## 测试步骤（每场景）
@@ -54,3 +54,16 @@
 **结论：** ① App↔CLI 互通链路成立（修复 `0c05255` 后）；② 企业网跨 VLAN 直连可达（本环境未开客户端隔离）；
 ③ 蜂窝→代理网路径不可用，主因是代理污染桌面节点的公网地址判定 + n0 SG relay 从国内蜂窝的传输质量——
 实证 D2（国内自建 relay/发现端点必要性）。正式场景 1/2 数据待干净家宽环境。
+
+## 正式实测记录（2026-07-28，对端=家宽 Mac mini，原始日志见 h04-logs/）
+
+**环境说明：** 家宽侧国外出口有代理（LA 数据中心 IP → iroh 分配 usw1 relay）；办公侧同前述分流代理。
+**双端代理只污染 relay 兜底路径的质量（多绕 1~2 跳），direct 打洞走真实物理路径，数据可信。**
+
+- **场景 7（Samsung S24 · 公司 WiFi → 家宽）：20/20 direct，全 IPv6，0 失败。**
+  connect P50=23ms（首轮 1272ms 含发现），吞吐 P50=16.9 Mbps（16.6~17.0 极稳）。第 16 轮灭屏完成（短锁屏不触发 Doze）。
+- **场景 2（鸿蒙 · 5G → 家宽，前 3 轮）：0/3 direct，relay 兜底全部完成**，connect 420~1259ms，8~13 Mbps。
+  蜂窝 v6 有状态防火墙阻碍打洞（预期内困难模式）；relay（usw1）质量可用——与下午 SG relay 停滞形成对比。
+- **IPv6 对照实验（同时刻、同目标）：** 办公 Mac（网段无全局 v6，v4 公网地址被代理污染）→ 家宽：
+  **3/3 relay**，5~6.7 Mbps；而同楼手机网段（有全局 v6）→ 同一目标 **20/20 direct** 17 Mbps。
+  唯一变量是全局 IPv6 → **IPv6 是国内直连率的决定性因素**（实证 D2"IPv6 红利"与 D9 直连率工程重心）。
