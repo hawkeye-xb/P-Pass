@@ -159,19 +159,18 @@ fun ProbeScreen(vm: ProbeViewModel = viewModel()) {
             Text("UIDT: ${state.uidtStatus}", style = MaterialTheme.typography.bodySmall)
         }
 
-        // Share UIDT log
-        if (state.uidtTransferring) {
-            TextButton(onClick = {
-                val logText = UidtLogger.readLogAsText(context)
-                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(android.content.Intent.EXTRA_TEXT, logText)
-                    putExtra(android.content.Intent.EXTRA_SUBJECT, "UIDT Log")
-                }
-                context.startActivity(android.content.Intent.createChooser(shareIntent, "Share UIDT Log"))
-            }) {
-                Text("Share Log")
+        // Share UIDT log — always available: the log file is persistent, and
+        // hiding this behind "transferring" made finished runs unexportable (fix #2).
+        TextButton(onClick = {
+            val logText = UidtLogger.readLogAsText(context)
+            val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(android.content.Intent.EXTRA_TEXT, logText)
+                putExtra(android.content.Intent.EXTRA_SUBJECT, "UIDT Log")
             }
+            context.startActivity(android.content.Intent.createChooser(shareIntent, "Share UIDT Log"))
+        }) {
+            Text("Share Log")
         }
         }
 

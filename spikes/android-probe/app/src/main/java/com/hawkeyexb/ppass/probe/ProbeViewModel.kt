@@ -20,11 +20,19 @@ data class ProbeUiState(
 )
 
 class ProbeViewModel : ViewModel() {
-    private val probe = IrohProbe()
-    private val _uiState = MutableStateFlow(ProbeUiState())
+    companion object {
+        // Process-lifetime singletons: the endpoint and UI state survive
+        // Activity/ViewModel recreation (back press, task switch) — fix #3.
+        // Spike-level choice: the endpoint lives until the process dies.
+        private val probe = IrohProbe()
+        private val _uiState = MutableStateFlow(ProbeUiState())
+    }
+
     val uiState: StateFlow<ProbeUiState> = _uiState.asStateFlow()
 
     fun bind() {
+        // Already bound in this process (e.g. after Activity recreation) — no-op.
+        if (_uiState.value.isBound) return
         viewModelScope.launch {
             _uiState.value = _uiState.value.copy(status = "Binding...")
             probe.bind().onSuccess { ticket ->
@@ -80,8 +88,6 @@ class ProbeViewModel : ViewModel() {
         )
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        probe.shutdown()
-    }
+    // No onCleared shutdown: the endpoint intentionally outlives the
+    // ViewModel so listener/results survive Activity recreation (fix #3).
 }

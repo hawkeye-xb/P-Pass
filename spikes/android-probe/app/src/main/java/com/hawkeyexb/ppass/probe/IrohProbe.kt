@@ -61,6 +61,17 @@ class IrohProbe {
             endpoint = ep
             val nodeId = ep.addr().id().toString()
             Log.i(TAG, "Bound: $nodeId")
+            // Wait for the relay to attach so the ticket is reachable off-LAN;
+            // an early ticket only carries private addresses (fix #4).
+            val deadline = System.currentTimeMillis() + 15_000
+            while (ep.addr().relayUrl().isNullOrEmpty() &&
+                System.currentTimeMillis() < deadline
+            ) {
+                kotlinx.coroutines.delay(200)
+            }
+            if (ep.addr().relayUrl().isNullOrEmpty()) {
+                Log.w(TAG, "No relay after 15s — ticket is LAN-only")
+            }
             val t = EndpointTicket.fromAddr(ep.addr()).toString()
             Result.success(t)
         } catch (e: Throwable) {
@@ -144,7 +155,8 @@ class IrohProbe {
             ProbeResult(-1, pathKind, ipver, connectMs, throughputMbps)
         } catch (e: Throwable) {
             Log.e(TAG, "Dial failed", e)
-            ProbeResult(-1, "error", "?", 0, 0.0, e.message)
+            // e.message is often null for FFI exceptions — keep the class name (fix #1)
+            ProbeResult(-1, "error", "?", 0, 0.0, e.toString())
         }
     }
 

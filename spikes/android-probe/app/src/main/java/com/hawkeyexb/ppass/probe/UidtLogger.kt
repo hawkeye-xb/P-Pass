@@ -46,7 +46,8 @@ object UidtLogger {
             "ipver" to result.ipver,
             "connect_ms" to result.connectMs,
             "throughput_mbps" to result.throughputMbps,
-            "error" to (result.error ?: ""),
+            // null = success; a failure carries the real exception text (fix #1)
+            "error" to result.error,
             "elapsed_s" to ((System.currentTimeMillis() - startSystemMs) / 1000),
             "timestamp" to isoNow(),
         ) + deviceState(ctx))
