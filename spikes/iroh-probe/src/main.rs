@@ -28,7 +28,7 @@ enum Cmd {
     },
     /// Dial a listener: connect N times, measure each
     Dial {
-        /// Ticket (EndpointAddr postcard hex-encoded) from the listener
+        /// Ticket (standard iroh EndpointTicket string) from the listener
         ticket: String,
         /// Number of connection attempts
         #[arg(long, default_value = "5")]
@@ -115,10 +115,6 @@ async fn do_listen(key_file: &std::path::Path) -> anyhow::Result<()> {
     // Standard iroh ticket — the Android app parses this via EndpointTicket.fromString().
     let std_ticket = iroh_tickets::endpoint::EndpointTicket::new(addr.clone());
     eprintln!("Ticket:  {std_ticket}");
-    // Legacy postcard+hex ticket, kept for CLI↔CLI use.
-    let ticket_bytes = postcard::to_stdvec(&addr)?;
-    let ticket = hex::encode(&ticket_bytes);
-    eprintln!("Ticket(hex, CLI-only):  {ticket}");
     eprintln!("Listening for connections...");
 
     loop {
@@ -173,14 +169,10 @@ async fn do_dial(
     payload_mb: u32,
     out: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    // Accept both the standard iroh ticket string and the legacy postcard+hex form.
-    let addr: EndpointAddr = match ticket_hex.parse::<iroh_tickets::endpoint::EndpointTicket>() {
-        Ok(t) => t.endpoint_addr().clone(),
-        Err(_) => {
-            let ticket_bytes = hex::decode(ticket_hex)?;
-            postcard::from_bytes(&ticket_bytes)?
-        }
-    };
+    let addr: EndpointAddr = ticket_hex
+        .parse::<iroh_tickets::endpoint::EndpointTicket>()
+        .map(|t| t.endpoint_addr().clone())
+        .map_err(|e| anyhow::anyhow!("invalid ticket: {e}"))?;
     eprintln!("Dialing NodeId: {}", addr.id);
     eprintln!("Count: {count}, Payload: {payload_mb}MB");
 
