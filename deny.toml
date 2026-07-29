@@ -6,7 +6,12 @@ all-features = false
 
 [advisories]
 yanked = "deny"
-ignore = []
+ignore = [
+  # `paste` is unmaintained (informational, no vulnerability). Pulled in via
+  # iroh → netwatch → netlink-packet-core (T-020); no safe upgrade exists
+  # upstream. Re-check when bumping iroh.
+  "RUSTSEC-2024-0436",
+]
 
 [licenses]
 allow = [
@@ -17,6 +22,10 @@ allow = [
   "MPL-2.0",
   "ISC",
   "Unicode-3.0",
+  # Added with iroh (T-020) — all permissive, AGPL-3.0-compatible:
+  "Unlicense",           # async_io_stream, pharos (public domain equivalent)
+  "Zlib",                # foldhash
+  "CDLA-Permissive-2.0", # webpki-roots (Mozilla CA certificate data)
 ]
 confidence-threshold = 0.8
 private = { ignore = true }

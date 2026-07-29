@@ -6,3 +6,15 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# ADR-001 / §B.1: iroh is allowed in this crate ONLY. Declared here (not in
+# workspace.dependencies) to keep the isolation visible at a glance.
+iroh = "1"
+tokio.workspace = true
+futures-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proto = { path = "../proto" }
+serde_json.workspace = true
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros"] }
