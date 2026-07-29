@@ -21,8 +21,10 @@
 
 数据明细、判定依据、复测清单 → [h04-network-matrix.md](h04-network-matrix.md)；原始 JSONL → [h04-logs/](h04-logs/)。
 
-**对照实验（计划中）**：阿里云公网 IP 跑 iroh-probe listen，鸿蒙 5G 拨入——分离"蜂窝防火墙"变量；
-另计划阿里云自建 relay 做国内/SG relay 质量 A/B（H-07 试点）。
+**对照实验（2026-07-29 已完成）**：✅ C1 鸿蒙 5G→阿里云公网 IP **20/20 direct/v4**（蜂窝侧无限制，
+场景 2 归因收敛到家侧）；✅ C2 三星公司 WiFi→阿里云 **20/20 direct/v4** P50 24ms/16.9Mbps（分流代理
+不影响对国内公网 v4 的直连）。数据见 h04-network-matrix.md C1/C2 节。
+剩余计划：阿里云自建 relay 做国内/SG relay 质量 A/B（H-07 试点）。
 
 ---
 

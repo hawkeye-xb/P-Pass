@@ -30,6 +30,11 @@
 - **[2026-07-28] T-001 workspace 曾破坏 spike 独立构建**（缺 workspace.exclude），h04-case-list 中的构建命令因此失效。已修复（`040ce43`）。
 - **[2026-07-28] 网络环境记录：** 办公网（10.1.150.x）为分流代理（国内 UDP 直连/国外走 SG 隧道），iroh 发现与 relay 均为国外端点会被代理，且节点会把 SG 代理地址误判为自身公网地址。该环境下的连接数据只能记为"代理路由器环境"附加场景，不可作为家宽基线。手机(5G)→Mac 实测：可经 relay 建连，但 100MB 传输中途停滞超时。
 - **[2026-07-28] Android Probe App 四处缺陷（spike 级，下次重打 APK 一并修）：** ① UidtLogger 把 error 统一写成空串 `""`（应为 null/真实错误信息），失败原因无法从日志判读；② Share Log 按钮可见性绑在"传输中"状态上，任务结束/界面刷新后无法导出（数据在 `files/uidt_log.jsonl` 持久化未丢，靠重新 Start 一次才能召出按钮）；③ Activity 重建即丢 endpoint 与结果列表（切后台回来要重新 Bind）；④ App 生成自身 ticket 不等待 relay 就绪，ticket 可能仅含内网地址（与 CLI 已修复的同款问题，影响 App 作为监听端被跨网拨入，如场景 3）。
+- **[2026-07-29] C1/C2 对照完成（阿里云公网 IP 监听端）：蜂窝侧嫌疑排除。** 鸿蒙 5G→阿里云 20/20 direct/v4
+  （18~48 Mbps）；三星公司 WiFi→阿里云 20/20 direct/v4（P50 24ms/16.9Mbps，含 5 轮灭屏无损）。
+  场景 2 的 0/20 direct 归因收敛到家侧（双层 NAT/Clash TUN/UPnP 关），R1（宿主机+关代理）成为决定性复测。
+  附带：阿里云→n0 海外 relay 不稳（usw1 超时切 euc1），H-07 国内自建 relay 再添实证。APK v3 双机验证通过
+  （ipver/remote 字段正确）。数据见 h04-network-matrix.md C1/C2 节。
 - **[2026-07-29] Android Probe App 第五缺陷（数据级，比前四个严重）：ipver 分类器恒判 v6。**
   `remoteAddr.contains(":")` 判 v6，但 `ip:port` 必含冒号 → v1/v2 所有日志的 ipver 字段不可信。
   由家侧网络画像的矛盾（VM 无全局 v6 却记录"20/20 v6 直连"）触发排查，经 ticket 解码证实。
