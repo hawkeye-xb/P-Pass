@@ -31,8 +31,18 @@ data class ProbeResult(
     val connectMs: Long,
     val throughputMbps: Double,
     val error: String? = null,
+    val remote: String? = null, // selected path's remote addr, for post-hoc diagnosis
     val timestampMs: Long = System.currentTimeMillis(),
 )
+
+// "ip:port" always contains ':' — strip the port first; v6 iff the host part still has one
+// (handles both "[2408::1]:443" and bare "2408::1:443").
+internal fun ipVersionOf(addr: String?): String =
+    when {
+        addr == null -> "?"
+        addr.substringBeforeLast(":").contains(":") -> "v6"
+        else -> "v4"
+    }
 
 class IrohProbe {
     companion object {
@@ -139,20 +149,19 @@ class IrohProbe {
 
             // Path info from connection stats
             val paths = conn.paths()
+            val ipPath = paths.firstOrNull { it.isIp && !it.isRelay }
             val pathKind = when {
-                paths.any { it.isIp && !it.isRelay } -> {
-                    val p = paths.first { it.isIp }
-                    if (p.rttMs.toLong() < 5) "lan" else "direct"
-                }
+                ipPath != null -> if (ipPath.rttMs.toLong() < 5) "lan" else "direct"
                 paths.any { it.isRelay } -> "relay"
                 else -> "unknown"
             }
-            val ipver = if (paths.any { it.remoteAddr.contains(":") }) "v6" else "v4"
+            val remote = (ipPath ?: paths.firstOrNull())?.remoteAddr
+            val ipver = ipVersionOf(remote)
 
             val throughputMbps = (payloadMegaBytes * 8).toDouble() / (txMs / 1000.0)
 
             conn.`close`(0L, "".toByteArray())
-            ProbeResult(-1, pathKind, ipver, connectMs, throughputMbps)
+            ProbeResult(-1, pathKind, ipver, connectMs, throughputMbps, remote = remote)
         } catch (e: Throwable) {
             Log.e(TAG, "Dial failed", e)
             // e.message is often null for FFI exceptions — keep the class name (fix #1)
@@ -181,15 +190,14 @@ class IrohProbe {
         send.finish()
 
         val paths = conn.paths()
+        val ipPath = paths.firstOrNull { it.isIp && !it.isRelay }
         val pathKind = when {
-            paths.any { it.isIp && !it.isRelay } -> {
-                val p = paths.first { it.isIp }
-                if (p.rttMs.toLong() < 5) "lan" else "direct"
-            }
+            ipPath != null -> if (ipPath.rttMs.toLong() < 5) "lan" else "direct"
             paths.any { it.isRelay } -> "relay"
             else -> "unknown"
         }
-        val ipver = if (paths.any { it.remoteAddr.contains(":") }) "v6" else "v4"
+        val remote = (ipPath ?: paths.firstOrNull())?.remoteAddr
+        val ipver = ipVersionOf(remote)
 
         // Wait for the peer to close — keep connection alive for ACK delivery
         conn.closed()
@@ -202,6 +210,7 @@ class IrohProbe {
                 connectMs = 0,  // server side, no connect ms
                 throughputMbps = throughputMbps,
                 error = null,
+                remote = remote,
             )
         )
     }

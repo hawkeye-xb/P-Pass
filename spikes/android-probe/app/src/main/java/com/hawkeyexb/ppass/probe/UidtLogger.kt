@@ -44,6 +44,7 @@ object UidtLogger {
             "attempt" to result.attempt,
             "path" to result.path,
             "ipver" to result.ipver,
+            "remote" to result.remote,
             "connect_ms" to result.connectMs,
             "throughput_mbps" to result.throughputMbps,
             // null = success; a failure carries the real exception text (fix #1)

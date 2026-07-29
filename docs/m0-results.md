@@ -97,7 +97,7 @@ P-Pass M0 阶段所有 spike 完成状态。
 
 | 输入 | 结论 | 依据 |
 |------|------|------|
-| ① 直连率 | 🟢 有条件通过 | 场景 7（公司网→家宽）20/20 direct(IPv6) 16.9Mbps；场景 2（5G→家宽）relay 兜底 20/20 完成 11.3Mbps（direct 0/20 归因未分离：家侧 VM+双端代理，复测清单在 h04-network-matrix.md）；IPv6 有无=direct/relay 对照实验成立 |
+| ① 直连率 | 🟢 有条件通过 | 场景 7（公司网→家宽）20/20 direct **v4 打洞穿双层 NAT** 16.9Mbps（原记录"IPv6"系 App 分类器缺陷，2026-07-29 修正）；场景 2（5G→家宽）relay 兜底 20/20 完成 11.3Mbps（direct 0/20，嫌疑收敛至蜂窝 CGNAT×家侧双层 NAT/Clash TUN，复测矩阵在 h04-network-matrix.md 归因修正节）；~~IPv6 决定性因素~~ 已作废，降级为待验证假设 |
 | ② UIDT | 🟡 方案更替 | JobService 真机 Doze 下失败（S-04），M1 改向 ForegroundService(dataSync)+常驻通知（Syncthing/Resilio 同路线）；Android 15 的 6h 限制需在 T-054 以分段会话+断点续传应对 |
 | ③ 缩略图 | 🟢 通过 | S-05：200/200 零失败，峰值内存 26MB，1 万张外推 ~20 分钟（远优于预估） |
 

@@ -30,4 +30,11 @@
 - **[2026-07-28] T-001 workspace 曾破坏 spike 独立构建**（缺 workspace.exclude），h04-case-list 中的构建命令因此失效。已修复（`040ce43`）。
 - **[2026-07-28] 网络环境记录：** 办公网（10.1.150.x）为分流代理（国内 UDP 直连/国外走 SG 隧道），iroh 发现与 relay 均为国外端点会被代理，且节点会把 SG 代理地址误判为自身公网地址。该环境下的连接数据只能记为"代理路由器环境"附加场景，不可作为家宽基线。手机(5G)→Mac 实测：可经 relay 建连，但 100MB 传输中途停滞超时。
 - **[2026-07-28] Android Probe App 四处缺陷（spike 级，下次重打 APK 一并修）：** ① UidtLogger 把 error 统一写成空串 `""`（应为 null/真实错误信息），失败原因无法从日志判读；② Share Log 按钮可见性绑在"传输中"状态上，任务结束/界面刷新后无法导出（数据在 `files/uidt_log.jsonl` 持久化未丢，靠重新 Start 一次才能召出按钮）；③ Activity 重建即丢 endpoint 与结果列表（切后台回来要重新 Bind）；④ App 生成自身 ticket 不等待 relay 就绪，ticket 可能仅含内网地址（与 CLI 已修复的同款问题，影响 App 作为监听端被跨网拨入，如场景 3）。
+- **[2026-07-29] Android Probe App 第五缺陷（数据级，比前四个严重）：ipver 分类器恒判 v6。**
+  `remoteAddr.contains(":")` 判 v6，但 `ip:port` 必含冒号 → v1/v2 所有日志的 ipver 字段不可信。
+  由家侧网络画像的矛盾（VM 无全局 v6 却记录"20/20 v6 直连"）触发排查，经 ticket 解码证实。
+  连锁修正：场景 7 实为 **v4 打洞穿双层 NAT** 成功；"IPv6 决定性因素"结论作废降级为假设；
+  场景 2 归因收敛至蜂窝 CGNAT×家侧双层 NAT/Clash TUN（家侧 v4 地址判定其实干净）。
+  v3 APK 已修复并新增 remote 字段。详见 h04-network-matrix.md 归因修正节。
+  **教训：spike 数据字段也要有最小校验（一个恒真条件让整列数据作废）；结论要与网络事实交叉验证。**
 - **[2026-07-28] H-04 场景 2/7 正式数据入档**（docs/h04-logs/）：场景 7=20/20 direct(v6) 16.9Mbps；场景 2=0/20 direct、relay 兜底 20/20 完成 11.3Mbps（判红暂缓，见矩阵表复测清单——家侧监听端在 VM 内 + 双端代理，归因未分离）。IPv6 有无 = direct/relay 的对照实验入档。
