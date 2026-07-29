@@ -137,6 +137,12 @@ v3 已修复（剥离端口后按 host 判断），并新增 `remote` 字段记�
   其中 #12~#16 五轮灭屏完成、速度无损（短锁屏不触发 Doze，佐证 S-04 结论边界）。
   **附带结论：办公分流代理只污染"对海外端点的地址判定/relay 路径"，对国内公网 v4 端点的直连无影响。**
   原始日志：h04-logs/c2-samsung-officewifi-aliyun-20260729.jsonl。
+- **C3（鸿蒙 · 5G → Vultr 新加坡 207.148.71.217，公网 v4 无 NAT）：建连成功，但 100MB 传输中途停滞 → 超时，完成 0 笔。**
+  服务器日志：`Client error: connection lost / timed out`（12:18，无一笔完整接收）。
+  **结论：国内蜂窝 → SG 的裸 UDP（QUIC）小包握手可过、大流量被掐**（出境 UDP QoS），与昨天"经 SG relay 中转时
+  由手机→relay 段停滞"现象同源。对照昨天场景 2 relay 路径 20/20 完成（11.3 Mbps）——**iroh relay 协议走 TCP(443)**，
+  出境 TCP 存活良好。**架构推论：海外自建 relay（TCP）依然可行，"与海外对端 UDP 直连"不可行（产品场景中也不存在）。**
+  H-07 A/B 的对象是"自建 SG relay(TCP、不绕路) vs n0 anycast relay(绕 LA/法兰克福)"。
 - **运维观察**：阿里云→n0 海外 relay 连接不稳（usw1 ping 超时切换 euc1）——自建 relay（H-07）再添一证。
   （产品边界：不在国内运营服务端点，自建 relay 部署海外、钉死近国内的区域如 SG，避免 n0 anycast 漂到 usw1/euc1。）
 - 边界说明：C1/C2 的对端无 NAT，不涉及打洞；蜂窝→家宽（有 NAT）能否直连仍由 R1~R4 回答。
