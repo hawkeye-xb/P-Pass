@@ -1,15 +1,32 @@
-//! Storage — SQLite (sqlx), migrations, file layout, thumbnail LRU.
+//! Storage — SQLite index over the photo library (T-010).
+//!
+//! The index is *derived data*: original files under `originals/` are the
+//! truth; this database can be rebuilt from them at any time (ADR-006).
+//! Schema: 架构文档 §5 v1.1 — see `migrations/0001_init.sql`.
+//!
+//! All timestamps are unix epoch milliseconds.
 
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+mod asset_repo;
+mod audit_repo;
+mod db;
+mod device_repo;
+
+pub use asset_repo::{Asset, TimelinePage};
+pub use audit_repo::{AuditEntry, AuditRecord};
+pub use db::Db;
+pub use device_repo::{Device, Role};
+
+/// Storage-layer errors.
+#[derive(Debug, thiserror::Error)]
+pub enum StorageError {
+    #[error("database: {0}")]
+    Db(#[from] sqlx::Error),
+
+    #[error("migration: {0}")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
+
+    #[error("invalid timeline cursor")]
+    InvalidCursor,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn placeholder() {
-        assert_eq!(add(2, 2), 4);
-    }
-}
+pub type Result<T> = std::result::Result<T, StorageError>;

@@ -6,3 +6,15 @@ license.workspace = true
 publish = false
 
 [dependencies]
+sqlx = { version = "0.8", default-features = false, features = [
+  "runtime-tokio",
+  "sqlite",
+  "migrate",
+  "macros",
+] }
+base64 = "0.22"
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
