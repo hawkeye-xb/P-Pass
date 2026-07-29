@@ -4,7 +4,7 @@
 
 | 卡片 | 日期 | Commit | 状态 | 摘要 |
 |------|------|--------|------|------|
-| **T-010** | 2026-07-29 | — | DONE | storage crate：`migrations/0001_init.sql` 按架构 §5 **v1.1** 建五表（asset/device/backup_watermark/diag_event/**audit_log**——审计表系人类当日裁决新增，见决策记录）；sqlx 连接池封装（`Db::open` WAL 模式 / `open_in_memory` 单连接防多库陷阱）；repo 方法契约齐全：insert_asset/get_asset/timeline_page + upsert_device/list_devices/revoke/set_watermark/get_watermark + append_audit/list_audit；游标=(taken_at,hash) 复合键 base64url(8B BE+32B)，keyset 分页，NULL taken_at 按 0 排序，同秒并列按 hash 破序保证全序。细节：upsert_device 不会静默解除吊销（revoke 单向，有测试钉住）；audit 外部变动 actor=NULL 如实记"检测"不冒充归因。**新依赖**：sqlx@0.8（人类已批）、base64@0.22（游标编码，契约指名 base64，待追认）。验收：9 测试绿含迁移从零执行、**100 条翻页无重无漏**（7/页×15 页,含 NULL 与同刻并列）、吊销后 list 反映、非法游标报错不 panic；`just ci` + `cargo deny check` 全绿。 |
+| **T-010** | 2026-07-29 | — | DONE | storage crate：`migrations/0001_init.sql` 按架构 §5 **v1.1** 建五表（asset/device/backup_watermark/diag_event/**audit_log**——审计表系人类当日裁决新增，见决策记录）；sqlx 连接池封装（`Db::open` WAL 模式 / `open_in_memory` 单连接防多库陷阱）；repo 方法契约齐全：insert_asset/get_asset/timeline_page + upsert_device/list_devices/revoke/set_watermark/get_watermark + append_audit/list_audit；游标=(taken_at,hash) 复合键 base64url(8B BE+32B)，keyset 分页，NULL taken_at 按 0 排序，同秒并列按 hash 破序保证全序。细节：upsert_device 不会静默解除吊销（revoke 单向，有测试钉住）；audit 外部变动 actor=NULL 如实记"检测"不冒充归因。**新依赖**：sqlx@0.8（人类已批）、base64@0.22（游标编码，契约指名 base64，人类已批"标准件不自研"）。验收：9 测试绿含迁移从零执行、**100 条翻页无重无漏**（7/页×15 页,含 NULL 与同刻并列）、吊销后 list 反映、非法游标报错不 panic；`just ci` + `cargo deny check` 全绿。 |
 | **T-020** | 2026-07-29 | — | DONE | transport crate：§3.1 trait 签名逐字实现（listen/connect/conn_info）+ iroh 1.0 实现 + ALPN 常量 `ppf/ctrl/1`/`ppf/blobs/1`；ConnInfo 分类为纯函数（conninfo.rs，8 单测——吸取 probe ipver 缺陷教训：分类器必须有独立测试），Lan 判定按地址性质（私网/回环/链路本地）而非 RTT 启发式；`TransportConfig::loopback()` 全离线（无 relay/无发现），CI 无需外网；`ConnInfo.path: Option<PathKind>`（None=无活连接，设计选择随代码注释）；BiStream 帧收发与 proto::codec 共享 4B LE 长度前缀线格式。**新依赖待人类追认**：iroh@1（ADR-001 卡片钦定）、tokio@1、futures-core@0.3；deny.toml 放行 Unlicense/Zlib/CDLA-Permissive-2.0（均宽松，iroh 传递依赖）+ ignore RUSTSEC-2024-0436（paste 停维护，信息级，无升级路径）。验收：回环集成测试两 endpoint 经 ctrl ALPN 收发 **1000 条 proto 消息**（id 关联+payload 回显逐条校验）0.31s 全过，`ConnInfo.path==Lan`；transport 13 测试绿；`just ci`（fmt/clippy -D warnings/test/arch-check）+ `cargo deny check` 全绿；proto 25 快照原样未动。 |
 | **T-005** | 2026-07-28 | — | DONE | testclient 骨架：pair/backup/browse/revoke-check 四子命令占位（clap derive），连接 daemon 失败输出人话错误（含下一步指引），真实逻辑随 P3 各卡实装。新依赖 clap@4（生态标准 CLI 解析，**待人类追认**，过 cargo-deny）。验收：`testclient --help` 列出四子命令；`cargo build` 绿；2 单测（子命令齐全 + clap 定义自检）；全套门禁绿。 |
 | **T-004** | 2026-07-28 | — | DONE | daemon config：三层覆盖（编译内置默认值→config.toml→PPF_* 环境变量），官方端点按 H-01 域名嵌入 endpoints.default.toml，config.example.toml 全字段注释示例；resolve() 纯函数可测（不碰进程 env）；未知字段拒绝（deny_unknown_fields）；非法布尔环境变量报错而非静默默认。新依赖 toml@0.8（人类已批准，过 cargo-deny）。验收：5 测试绿含三层覆盖顺序与 PPF_TELEMETRY_ENABLED=false 生效；fmt/clippy -D warnings/arch-check/deny 全绿。 |
@@ -28,7 +28,7 @@
   不存在"）。行为实现落 T-011/T-012/daemon 各卡；表结构随 T-010 落地。架构文档 §5 已升 v1.1。
 - **[2026-07-29] 依赖追认（人类批准）：** clap@4（T-005）、iroh@1/tokio@1/futures-core@0.3（T-020）；
   deny.toml 放行 Unlicense/Zlib/CDLA-Permissive-2.0（iroh 传递依赖，均宽松）+ ignore
-  RUSTSEC-2024-0436（paste 停维护，信息级）。至此依赖账单清零。
+  RUSTSEC-2024-0436（paste 停维护，信息级）。至此依赖账单清零。base64@0.22（T-010）同日追认。
 - **[2026-07-28] H-01 已定：产品名 P-Pass，域名 p-pass.hawkeye-xb.com**（relay 域名、证书主体、T-060+ 按此展开）。
 - **[2026-07-28] H-02 进展：** macOS 侧签名/构建能力已就绪（人类自备）；Windows 签名计划走微软托管签名（Azure Trusted Signing 类），P7 前启动，当前不阻塞。
 
