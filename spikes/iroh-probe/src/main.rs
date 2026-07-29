@@ -145,8 +145,11 @@ async fn do_listen(key_file: &std::path::Path) -> anyhow::Result<()> {
 
 async fn handle_incoming(accepting: iroh::endpoint::Accepting) -> anyhow::Result<()> {
     let conn = accepting.await?;
+    // The listener authenticates the dialer too — log WHO, not just "client".
+    let remote_id = conn.remote_id();
     let (mut send, mut recv) = conn.accept_bi().await.context("accept bi")?;
 
+    let t0 = Instant::now();
     let mut buf = vec![0u8; 64 * 1024];
     let mut total = 0u64;
     loop {
@@ -157,9 +160,57 @@ async fn handle_incoming(accepting: iroh::endpoint::Accepting) -> anyhow::Result
     }
     send.write_all(b"OK").await?;
     send.finish()?;
-    eprintln!("Received {:.1}MB from client", total as f64 / 1_000_000.0);
+
+    let secs = t0.elapsed().as_secs_f64();
+    let mbps = if secs > 0.0 {
+        total as f64 * 8.0 / 1_000_000.0 / secs
+    } else {
+        0.0
+    };
+    // Path facts are symmetric — the accept side classifies independently.
+    let (path, ipver) = classify_connection(&conn);
+    let remote_addr = conn
+        .paths()
+        .iter()
+        .filter(|p| p.is_ip())
+        .find_map(|p| match p.remote_addr() {
+            iroh::TransportAddr::Ip(a) => Some(a.to_string()),
+            _ => None,
+        });
+    let remote_short = &remote_id.to_string()[..10];
+    eprintln!(
+        "Received {:.1}MB from {remote_short} ({path}/{ipver} {}) {mbps:.1} Mbps",
+        total as f64 / 1_000_000.0,
+        remote_addr.as_deref().unwrap_or("relay-only"),
+    );
+    // Listener-side JSONL so tests are analyzable without the dialer's log.
+    let line = serde_json::json!({
+        "ts_ms": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        "remote_id": remote_id.to_string(),
+        "path": path,
+        "ipver": ipver,
+        "remote_addr": remote_addr,
+        "mb": total as f64 / 1_000_000.0,
+        "mbps": mbps,
+    });
+    if let Err(e) = append_jsonl("listen-log.jsonl", &line) {
+        eprintln!("WARN: listen-log.jsonl write failed: {e}");
+    }
     // Wait for the client to close so the ACK propagates
     let _ = conn.closed().await;
+    Ok(())
+}
+
+fn append_jsonl(path: &str, line: &serde_json::Value) -> anyhow::Result<()> {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    writeln!(f, "{line}")?;
     Ok(())
 }
 
