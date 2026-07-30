@@ -211,6 +211,7 @@ mod tests {
             enabled = true
         "#;
         let e = env(&[
+            ("PPF_BIND_ADDR", "0.0.0.0:41145"),
             ("PPF_TELEMETRY_ENABLED", "false"),
             ("PPF_LOG_LEVEL", "warn"),
             ("PPF_RELAY_URLS", "https://a.example, https://b.example"),
@@ -227,6 +228,11 @@ mod tests {
             vec!["https://a.example", "https://b.example"]
         );
         assert_eq!(cfg.data_dir, Some(PathBuf::from("/env/dir")));
+        assert_eq!(
+            cfg.bind_addr,
+            Some("0.0.0.0:41145".parse().unwrap()),
+            "PPF_BIND_ADDR 必须生效"
+        );
     }
 
     #[test]
