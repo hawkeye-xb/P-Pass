@@ -140,6 +140,39 @@ async fn owner_decline_writes_nothing() {
     assert!(db.get_device(&ctp.node_id().0).await.unwrap().is_none());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn revoked_device_rejoins_with_fresh_token() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    // Pair, then the owner removes the device.
+    let qr = pairing.start([0x50; 32], now());
+    assert!(
+        send_pair(&ctp, dtp.node_id(), &token_of(&qr), "家人手机")
+            .await
+            .ok
+    );
+    assert!(db.revoke(&ctp.node_id().0).await.unwrap());
+
+    // A fresh owner-issued token lets the SAME identity rejoin…
+    let qr2 = pairing.start([0x51; 32], now());
+    let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr2), "家人手机").await;
+    assert!(
+        resp.ok,
+        "mistakenly removed devices must be able to rejoin: {resp:?}"
+    );
+    let d = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    assert!(!d.revoked, "owner confirmation reinstates the device");
+
+    // …and the audit trail says it was a rejoin.
+    let audit = db.list_audit(10).await.unwrap();
+    assert!(audit
+        .iter()
+        .any(|r| r.entry.detail.as_deref().unwrap_or("").contains("rejoined")));
+}
+
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

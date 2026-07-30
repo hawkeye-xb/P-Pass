@@ -107,6 +107,17 @@ impl Db {
         }))
     }
 
+    /// Explicitly reinstate a revoked device — ONLY the pairing flow may
+    /// call this (owner confirmation = renewed trust). `upsert_device`
+    /// intentionally never clears the flag (防误触, T-010 test).
+    pub async fn unrevoke(&self, node_id: &[u8]) -> Result<bool> {
+        let res = sqlx::query("UPDATE device SET revoked = 0 WHERE node_id = ?")
+            .bind(node_id)
+            .execute(self.pool())
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Mark a device revoked. Returns whether a row was affected.
     pub async fn revoke(&self, node_id: &[u8]) -> Result<bool> {
         let res = sqlx::query("UPDATE device SET revoked = 1 WHERE node_id = ?")

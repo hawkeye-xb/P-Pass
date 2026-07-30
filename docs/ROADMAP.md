@@ -62,7 +62,9 @@ Real-world validation / 真机验证
 P4 desktop shell / 桌面壳
 - [x] T-040 platform trait + windows/macos impls (macOS smoke ALL GREEN;
       Windows cross-checked in CI, live smoke → H-09)
-- [ ] T-041 Tauri tray shell (pairing QR, devices, status)
+- [x] T-041 Tauri tray shell (pairing QR, devices, status) — human
+      walkthrough passed; 4 real issues found & fixed incl. the
+      revoked-device-can-never-rejoin product bug
 - [ ] T-042 first-run wizard (folder + power settings)
 - [ ] `just verify-m1`: full scenario + dual-platform build
 

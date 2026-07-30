@@ -1,6 +1,7 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
-  import { open as openDialog } from "@tauri-apps/plugin-dialog";
+  import { open as openDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
 
@@ -51,7 +52,11 @@
   }
 
   async function revoke(nodeId, name) {
-    if (!confirm(`确定移除设备「${name}」？它将立刻失去访问权限。`)) return;
+    const yes = await confirmDialog(`确定移除设备「${name}」？它将立刻失去访问权限。`, {
+      title: "移除设备",
+      kind: "warning",
+    });
+    if (!yes) return;
     try {
       await call("device.revoke", { node_id: nodeId });
       message = `已移除「${name}」`;
@@ -66,7 +71,7 @@
     if (!dir) return;
     try {
       await call("folder.set", { path: dir });
-      message = "库文件夹已保存，重启后台服务后生效。";
+      message = `库文件夹已保存为 ${dir}，重启后台服务后生效。`;
     } catch (e) {
       message = `保存失败：${e}`;
     }
@@ -75,7 +80,10 @@
   async function exportLogs() {
     try {
       const r = await call("logs.export");
-      message = `诊断包已导出（路径已脱敏，可放心外发）：${r.zip}`;
+      message = `诊断包已导出（内容已脱敏，可放心外发）：${r.zip}`;
+      try {
+        await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示
+      } catch (_) {}
     } catch (e) {
       message = `导出失败：${e}`;
     }

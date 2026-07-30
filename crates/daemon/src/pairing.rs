@@ -165,10 +165,19 @@ impl Pairing {
             last_seen: Some(now_ms),
             revoked: false,
         };
+        let rejoining = matches!(
+            self.db.get_device(&peer.0).await,
+            Ok(Some(d)) if d.revoked
+        );
         self.db
             .upsert_device(&device)
             .await
             .map_err(|_| PairRejection::OwnerDeclined)?;
+        if rejoining {
+            // Owner confirmation = renewed trust; upsert never clears the
+            // flag by design, so reinstate explicitly.
+            let _ = self.db.unrevoke(&peer.0).await;
+        }
         let _ = self
             .db
             .append_audit(&storage::AuditEntry {
@@ -176,7 +185,11 @@ impl Pairing {
                 actor: Some(peer.0.to_vec()),
                 action: "pair.accepted".into(),
                 target_hash: None,
-                detail: Some(device.name.clone()),
+                detail: Some(if rejoining {
+                    format!("{} (rejoined after revoke)", device.name)
+                } else {
+                    device.name.clone()
+                }),
             })
             .await;
         Ok(())

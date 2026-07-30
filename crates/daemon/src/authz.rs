@@ -58,10 +58,18 @@ pub fn check(device: Option<&Device>, method: &str) -> Decision {
                 }
             }
         }
-        // 吊销即拒连 (§2.2): a revoked device gets nothing, not even hello.
-        Some(d) if d.revoked => Decision::Deny {
-            msg_key: diag::keys::ERR_NOT_AUTHORIZED,
-        },
+        // 吊销即拒连 (§2.2)……除了重新配对这一扇门：误移除的家人设备
+        // 必须能重新加入。它没有新令牌就过不了配对（令牌在 owner 手里
+        // = owner 授权），其余方法一律拒绝（走查实测抓到的产品 bug）。
+        Some(d) if d.revoked => {
+            if method == methods::PAIR_REQUEST {
+                Decision::Allow
+            } else {
+                Decision::Deny {
+                    msg_key: diag::keys::ERR_NOT_AUTHORIZED,
+                }
+            }
+        }
         Some(d) => {
             if role_allows(d.role, method) {
                 Decision::Allow

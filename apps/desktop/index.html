@@ -7,6 +7,17 @@
   </head>
   <body>
     <div id="app"></div>
+    <script>
+      // 白屏保险：任何未捕获错误直接显示在窗口里，而不是哑掉。
+      function showFatal(msg) {
+        var pre = document.createElement("pre");
+        pre.style.cssText = "color:#a11212;padding:16px;white-space:pre-wrap;font-size:12px";
+        pre.textContent = "前端错误：" + msg;
+        document.body.appendChild(pre);
+      }
+      window.addEventListener("error", function (e) { showFatal(e.message + "\n" + (e.filename||"") + ":" + (e.lineno||"")); });
+      window.addEventListener("unhandledrejection", function (e) { showFatal(String(e.reason)); });
+    </script>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

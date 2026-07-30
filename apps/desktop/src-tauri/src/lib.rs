@@ -26,6 +26,7 @@ fn daemon_online() -> bool {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![daemon_call, daemon_online])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "打开 P-Pass", true, None::<&str>)?;
