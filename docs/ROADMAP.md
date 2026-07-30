@@ -54,8 +54,10 @@ Real-world validation / 真机验证
       bugs found & fixed; agent-runnable scenario script
 - [x] **Cross-internet two-machine run**: Aliyun daemon × office Mac,
       full scenario green (200 files in 5.9 s, NAT hole-punch pull)
-- [ ] Mac mini (the real dogfood box) deployment — runbook ready
-      (`docs/dogfood-deploy.md`)
+- [x] Home-Mac dogfood deployment (self-contained bundle, zero deps):
+      local smoke ALL GREEN + **cross-internet office→home full scenario**
+      (pairing, 149-blob backup with cross-device dedup, browse, revoke;
+      path = relay fallback exactly as the H-04 matrix predicted)
 
 P4 desktop shell / 桌面壳
 - [ ] T-040 platform trait + windows/macos impls

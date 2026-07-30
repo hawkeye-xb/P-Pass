@@ -147,10 +147,17 @@ async fn browse(limit: u32, node: &str, identity: &str) -> anyhow::Result<String
         thumb_note = format!("抽查缩略图 {} … OK", &hash[..8]);
     }
 
+    use transport::Transport as _;
+    let conn = tp.conn_info(daemon);
+    let path_note = match conn.path {
+        Some(p) => format!("连接路径 {:?}，RTT {}ms", p, conn.rtt_ms),
+        None => "无活跃连接".to_string(),
+    };
     Ok(format!(
-        "✅ 浏览完成：时间线共 {} 项，分页无重复；{}",
+        "✅ 浏览完成：时间线共 {} 项，分页无重复；{}；{}",
         seen.len(),
-        thumb_note
+        thumb_note,
+        path_note
     ))
 }
 
