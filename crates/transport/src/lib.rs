@@ -6,9 +6,11 @@
 //! (ADR-001); the Phase-2 WebRTC read-only subset hangs off the same
 //! interface, at which point these concrete types become enums.
 
+mod blobs;
 mod conninfo;
 mod iroh_impl;
 
+pub use blobs::Blobs;
 pub use conninfo::{ConnInfo, PathKind};
 pub use iroh_impl::{BiStream, Incoming, IrohTransport, PeerAddr, TransportConfig};
 

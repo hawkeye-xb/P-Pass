@@ -13,8 +13,15 @@ tokio.workspace = true
 futures-core.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }
 
 [dev-dependencies]
 proto = { path = "../proto" }
 serde_json.workspace = true
-tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["sync", "rt-multi-thread", "macros", "time"] }
+blake3 = "1"
+tempfile = "3"
+# Deterministic partial-blob seeding in the T-021 resume test (same
+# version as iroh-blobs' own bao-tree — the encodings must agree).
+bao-tree = "0.16"
+iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }

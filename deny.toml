@@ -11,6 +11,12 @@ ignore = [
   # iroh → netwatch → netlink-packet-core (T-020); no safe upgrade exists
   # upstream. Re-check when bumping iroh.
   "RUSTSEC-2024-0436",
+  # Unmaintained (informational, no vulnerability), both via iroh-blobs
+  # (T-021): atomic-polyfill ← postcard, proc-macro-error ← genawaiter ←
+  # bao-tree. No safe upgrade exists upstream. Re-check when bumping
+  # iroh-blobs.
+  "RUSTSEC-2023-0089",
+  "RUSTSEC-2024-0370",
 ]
 
 [licenses]
@@ -26,6 +32,9 @@ allow = [
   "Unlicense",           # async_io_stream, pharos (public domain equivalent)
   "Zlib",                # foldhash
   "CDLA-Permissive-2.0", # webpki-roots (Mozilla CA certificate data)
+  # Added with libheif (T-013) — permissive Apache variant on a build-time
+  # dep (system-deps → cfg-expr → target-lexicon):
+  "Apache-2.0 WITH LLVM-exception",
 ]
 confidence-threshold = 0.8
 private = { ignore = true }

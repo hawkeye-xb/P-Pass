@@ -145,6 +145,11 @@ impl IrohTransport {
     pub async fn close(&self) {
         self.ep.close().await;
     }
+
+    /// Crate-internal endpoint access (blobs.rs shares the endpoint).
+    pub(crate) fn endpoint(&self) -> &Endpoint {
+        &self.ep
+    }
 }
 
 impl Transport for IrohTransport {

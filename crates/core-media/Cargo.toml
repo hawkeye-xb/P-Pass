@@ -6,3 +6,11 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# EXIF parsing (详细设计 §4.3 指名 kamadak-exif). Moved here from
+# core-index at T-013 — ingest now consumes this crate's reader.
+kamadak-exif = "0.6"
+# Calendar math: EXIF wall clock → unix ms.
+time = "0.3"
+
+[dev-dependencies]
+tempfile = "3"

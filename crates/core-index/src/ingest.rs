@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use storage::{Asset, AuditEntry, Db};
-use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time};
+use time::OffsetDateTime;
 
 use crate::{dedup, IndexError, Result};
 
@@ -167,11 +167,12 @@ impl Ingestor {
     }
 }
 
-/// EXIF `DateTimeOriginal` (fallback `DateTime`) as unix ms; if the file
-/// has no usable EXIF, the file's mtime. EXIF wall clock carries no zone —
-/// it is interpreted as UTC so the key is stable across machines.
+/// EXIF `DateTimeOriginal` (fallback `DateTime`) as unix ms — read via
+/// core-media (T-013) — with the file's mtime as last resort. EXIF wall
+/// clock carries no zone; core-media interprets it as UTC so the key is
+/// stable across machines.
 pub(crate) fn taken_at_ms(path: &Path) -> Result<i64> {
-    if let Some(ms) = exif_taken_at_ms(path) {
+    if let Some(ms) = core_media::read_meta(path).taken_at_ms {
         return Ok(ms);
     }
     let io_err = |source| IndexError::Io {
@@ -183,30 +184,6 @@ pub(crate) fn taken_at_ms(path: &Path) -> Result<i64> {
         .modified()
         .map_err(io_err)?;
     Ok(system_time_ms(mtime))
-}
-
-fn exif_taken_at_ms(path: &Path) -> Option<i64> {
-    let file = fs::File::open(path).ok()?;
-    let mut reader = std::io::BufReader::new(file);
-    let meta = exif::Reader::new().read_from_container(&mut reader).ok()?;
-    let field = meta
-        .get_field(exif::Tag::DateTimeOriginal, exif::In::PRIMARY)
-        .or_else(|| meta.get_field(exif::Tag::DateTime, exif::In::PRIMARY))?;
-    let raw = match &field.value {
-        exif::Value::Ascii(v) => v.first()?,
-        _ => return None,
-    };
-    let dt = exif::DateTime::from_ascii(raw).ok()?;
-    let date =
-        Date::from_calendar_date(i32::from(dt.year), Month::try_from(dt.month).ok()?, dt.day)
-            .ok()?;
-    let tod = Time::from_hms(dt.hour, dt.minute, dt.second).ok()?;
-    Some(
-        PrimitiveDateTime::new(date, tod)
-            .assume_utc()
-            .unix_timestamp()
-            * 1000,
-    )
 }
 
 /// Layout dir for a device: the full NodeId as hex (§4.2 `<deviceId>`).
