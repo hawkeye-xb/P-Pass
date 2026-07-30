@@ -21,10 +21,12 @@ toml = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 futures-core = { workspace = true }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
 # OS randomness for one-time pairing tokens (T-031). Already in the tree
 # via iroh; declared directly because tokens are a security surface.
 getrandom = "0.3"
+interprocess = { version = "2", features = ["tokio"] }
+zip = { version = "5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"

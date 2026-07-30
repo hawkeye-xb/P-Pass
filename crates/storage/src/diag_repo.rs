@@ -28,6 +28,16 @@ impl Db {
         Ok(())
     }
 
+    /// Drop diag events older than `before_ts` — the 30-day ring (§5).
+    /// Returns how many rows were pruned.
+    pub async fn prune_diag(&self, before_ts: i64) -> Result<u64> {
+        let done = sqlx::query("DELETE FROM diag_event WHERE ts < ?")
+            .bind(before_ts)
+            .execute(self.pool())
+            .await?;
+        Ok(done.rows_affected())
+    }
+
     /// Newest-first diag events.
     pub async fn list_diag(&self, limit: u32) -> Result<Vec<DiagEvent>> {
         let rows = sqlx::query(

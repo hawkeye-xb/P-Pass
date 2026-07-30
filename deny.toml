@@ -35,6 +35,9 @@ allow = [
   # Added with libheif (T-013) — permissive Apache variant on a build-time
   # dep (system-deps → cfg-expr → target-lexicon):
   "Apache-2.0 WITH LLVM-exception",
+  # Added with interprocess (T-034) — zero-clause BSD, maximally
+  # permissive (doctest-file, recvmsg):
+  "0BSD",
 ]
 confidence-threshold = 0.8
 private = { ignore = true }
