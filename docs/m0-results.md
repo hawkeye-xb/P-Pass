@@ -2,26 +2,29 @@
 
 P-Pass M0 阶段所有 spike 完成状态。
 
-## S-01 单文件传输 ✅
+## S-01 iroh 回环与直连验证 CLI ✅
 
 - **结果**: 成功
-- **验证方式**: iroh CLI 两端传输, 真实文件
-- **关键发现**: iroh 1.0 P2P 已可用, NAT traversal 在多数场景工作
+- **任务卡契约**: `listen`（打印 NodeId + ticket）/ `dial <ticket> --count N --payload-mb M`，每次连接输出一行 JSONL（path/ipver/connect_ms/throughput/error），`--out` 落盘
+- **验证方式**: 本机双进程回环 3/3 成功，~700 Mbps，<1ms，v4/lan；后续作为 H-04 网络矩阵的桌面端实测工具
+- **后续加固**: 监听端稳定身份（持久化密钥 + 固定端口）；废弃自制 postcard+hex ticket，改用标准 EndpointTicket；修复与 Android App 的互通盲区（见 PROGRESS「发现的问题」）
 - **记录**: `spikes/iroh-probe/`
 
-## S-02 文件列表同步 ✅
-
-- **结果**: 成功 (5/10)
-- **验证方式**: 双向同步测试套件
-- **关键发现**: iroh 的 collection/directory sync API 仍需工程设计层封装; 5 个核心场景通过, 5 个边界场景需在 M1 处理
-- **记录**: `spikes/iroh-probe/`
-
-## S-03 大文件传输基准 ✅
+## S-02 网络矩阵汇总工具 ✅
 
 - **结果**: 成功
-- **验证方式**: 100MB × 20 (总 2GB) 循环传输, `assembleDebug` 无崩溃
-- **关键发现**: iroh 分块 + P2P 直连, 2GB 传输在可靠 WiFi 下 <15 分钟; ART 内存压力 OK; 需进度回调 API 封装
-- **记录**: `spikes/android-probe/` (ProbeViewModel kt)
+- **任务卡契约**: 读多个 results.jsonl → 输出 Markdown 表（场景 × 直连率 × P50 连接 ms × P50 吞吐 × N）
+- **验证方式**: 样例 fixtures 数值人工核对通过；H-04 场景 2/7 正式数据经此工具入档（docs/h04-network-matrix.md）
+- **记录**: `spikes/iroh-probe/summarize.py`
+
+## S-03 Android iroh-ffi 收发 Demo ✅
+
+- **结果**: 成功（含已知缺陷，见下）
+- **任务卡契约**: 最小 Android 工程：Listen（显示 ticket）/ Dial（输入 ticket，传 100MB），结果以 S-01 同款 JSONL 显示并可分享导出
+- **验证方式**: 真机直连打洞成功——同 Wi-Fi 223ms/119Mbps，跨网 500ms/21Mbps（≈2.6MB/s）；`assembleDebug` 通过；自行交叉编译 libiroh_ffi.so（arm64-v8a）
+- **教训**: 与 S-01 CLI 的互通验收曾存在盲区（两端 ALPN 与 ticket 格式各自硬编码，"互通通过"在该代码状态下不可复现），H-04 试跑发现并修复——跨端验收必须两端真实对跑
+- **已知缺陷（spike 级，4 项，下次重打 APK 一并修）**: UidtLogger error 字段写成空串；Share Log 按钮可见性绑定错误；Activity 重建丢 endpoint 与结果；App 作监听端时 ticket 可能不含 relay 地址。详见 PROGRESS「发现的问题」
+- **记录**: `spikes/android-probe/`
 
 ## S-04 UIDT 传输骨架 ✅
 
