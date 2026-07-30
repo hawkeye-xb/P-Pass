@@ -24,11 +24,12 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
 
     let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
-    let transport = transport::IrohTransport::bind(transport::TransportConfig::from_endpoints(
+    let mut transport_cfg = transport::TransportConfig::from_endpoints(
         config.relay_urls.clone(),
         vec![transport::ALPN_CTRL.into(), transport::ALPN_BLOBS.into()],
-    ))
-    .await?;
+    );
+    transport_cfg.bind_addr = config.bind_addr;
+    let transport = transport::IrohTransport::bind(transport_cfg).await?;
 
     println!("P-Pass daemon 已启动");
     println!("NodeId: {}", transport.node_id());

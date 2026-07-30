@@ -23,6 +23,9 @@ pub struct Config {
     /// Library root. `None` = let the platform adapter pick the
     /// OS-conventional data dir (T-040).
     pub data_dir: Option<PathBuf>,
+    /// UDP bind address, e.g. `0.0.0.0:41145`. `None` = OS-assigned port.
+    /// Cloud/dogfood deployments pin this to the firewall-allowed port.
+    pub bind_addr: Option<std::net::SocketAddr>,
     pub relay_urls: Vec<String>,
     pub rendezvous_url: String,
     pub telemetry: TelemetryConfig,
@@ -61,6 +64,7 @@ impl Config {
         let telemetry = overlay.telemetry.unwrap_or_default();
         Ok(Config {
             data_dir: None,
+            bind_addr: None,
             relay_urls: overlay.relay_urls.unwrap_or_default(),
             rendezvous_url: overlay.rendezvous_url.unwrap_or_default(),
             telemetry: TelemetryConfig {
@@ -120,6 +124,12 @@ impl Config {
         // Layer 3: PPF_* environment variables (highest precedence).
         if let Some(v) = env.get("PPF_DATA_DIR") {
             cfg.data_dir = Some(PathBuf::from(v));
+        }
+        if let Some(v) = env.get("PPF_BIND_ADDR") {
+            cfg.bind_addr =
+                Some(v.parse().map_err(|e| {
+                    anyhow::anyhow!("PPF_BIND_ADDR 不是合法的 IP:端口（{v}）：{e}")
+                })?);
         }
         if let Some(v) = env.get("PPF_RELAY_URLS") {
             cfg.relay_urls = v
