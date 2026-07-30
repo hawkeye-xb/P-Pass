@@ -13,8 +13,10 @@ core-media = { path = "../core-media" }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "rayon"] }
 # HEIC via libheif (详细设计 §4.3 指名). System library for dev/CI
 # (brew libheif / apt libheif-dev); static bundling is a release-pipeline
-# concern (T-071) — the Rust API is identical either way.
-libheif-rs = "2"
+# concern (T-071) — the Rust API is identical either way. Feature pinned
+# to the 1.17 API floor: ubuntu-latest ships libheif 1.17.6 and basic
+# decode needs nothing newer.
+libheif-rs = { version = "2", default-features = false, features = ["v1_17"] }
 # Thumbnail workers run below normal priority (契约: 索引期间不抢机器).
 # Cross-platform crate so no platform #[cfg] leaks into this crate (B.2).
 thread-priority = "3"
