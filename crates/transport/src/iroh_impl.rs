@@ -4,6 +4,7 @@
 //! only opaque wrappers ([`PeerAddr`], [`Incoming`], [`BiStream`]).
 
 use std::collections::HashMap;
+use std::fmt;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -70,6 +71,36 @@ pub struct PeerAddr(EndpointAddr);
 impl PeerAddr {
     pub fn node_id(&self) -> NodeId {
         NodeId(*self.0.id.as_bytes())
+    }
+}
+
+/// Compact URL-safe token (base64url over the serialized address) — what
+/// pairing QR codes carry so a scan connects without any discovery
+/// service (the serialization T-020 predicted T-031 would need; landed
+/// during the dogfood smoke that proved discovery can't be relied on).
+impl fmt::Display for PeerAddr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use base64::Engine as _;
+        let json = serde_json::to_vec(&self.0).map_err(|_| fmt::Error)?;
+        write!(
+            f,
+            "{}",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json)
+        )
+    }
+}
+
+impl std::str::FromStr for PeerAddr {
+    type Err = TransportError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(s.trim())
+            .map_err(|_| TransportError::InvalidNodeId)?;
+        let addr: EndpointAddr =
+            serde_json::from_slice(&bytes).map_err(|_| TransportError::InvalidNodeId)?;
+        Ok(PeerAddr(addr))
     }
 }
 
@@ -223,7 +254,10 @@ impl Transport for IrohTransport {
                         .iter()
                         .map(|p| p.remote_addr().clone())
                         .collect();
-                    if !addrs.is_empty() {
+                    if addrs.is_empty() {
+                        tracing::debug!("inbound {peer:?}: no observable addresses to register");
+                    } else {
+                        tracing::debug!("inbound {peer:?}: registering {addrs:?}");
                         let ep_addr = EndpointAddr {
                             id: conn.remote_id(),
                             addrs,

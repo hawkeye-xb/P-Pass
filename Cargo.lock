@@ -908,6 +908,7 @@ dependencies = [
  "tokio",
  "toml 0.8.23",
  "tracing",
+ "tracing-subscriber",
  "transport",
  "zip",
 ]
@@ -5142,6 +5143,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "clap",
+ "getrandom 0.3.4",
  "proto",
  "serde_json",
  "tempfile",
@@ -5559,6 +5561,7 @@ name = "transport"
 version = "0.1.0"
 dependencies = [
  "bao-tree",
+ "base64",
  "blake3",
  "futures-core",
  "iroh",

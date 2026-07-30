@@ -7,12 +7,21 @@ use daemon::{Config, Router};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Log to stderr; level via RUST_LOG (default info). 狗粮机排障的眼睛.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
     let config = Config::load(None)?;
     let data_dir = config
         .data_dir
         .clone()
         .ok_or_else(|| anyhow::anyhow!("data_dir 未配置：请在 config.toml 设置 data_dir"))?;
-    std::fs::create_dir_all(&data_dir)?;
+    std::fs::create_dir_all(data_dir.join(".ppf"))?;
 
     let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
     let transport = transport::IrohTransport::bind(transport::TransportConfig::from_endpoints(
@@ -28,7 +37,11 @@ async fn main() -> anyhow::Result<()> {
     // Pairing (T-031): issue one QR token at startup. Owner confirmation
     // is owned by the IPC layer (T-034) — tray UI and the interim console
     // prompt below both act through it. 绝不默认放行 (§2.2).
-    let (pairing, pending_rx) = daemon::Pairing::new(db.clone(), transport.node_id());
+    let (pairing, pending_rx) = daemon::Pairing::new(
+        db.clone(),
+        transport.node_id(),
+        Some(transport.local_addr().to_string()),
+    );
     let qr = pairing.start(rand_token()?, unix_ms_now());
     println!("配对二维码内容（10 分钟内有效）: {qr}");
 
@@ -56,19 +69,25 @@ async fn main() -> anyhow::Result<()> {
         }
     });
     // Interim console confirmer (until the tray, T-041): y = 允许队首.
+    // stdin EOF（后台运行）⇒ 退出这个循环，确认只走 IPC——绝不把
+    // "没有输入" 当成任何决定（狗粮冒烟抓到的真 bug：EOF 曾被当 n 秒拒）.
     tokio::spawn({
         let ipc = std::sync::Arc::clone(&ipc);
         async move {
             loop {
                 let line = tokio::task::spawn_blocking(|| {
                     let mut line = String::new();
-                    std::io::stdin().read_line(&mut line).ok();
-                    line
+                    let n = std::io::stdin().read_line(&mut line).unwrap_or(0);
+                    (n, line)
                 })
                 .await
-                .unwrap_or_default();
-                let pending = ipc.pending_names();
-                if pending.is_empty() {
+                .unwrap_or((0, String::new()));
+                let (bytes_read, line) = line;
+                if bytes_read == 0 {
+                    tracing::info!("stdin closed — pairing confirmation is IPC-only from here");
+                    return;
+                }
+                if ipc.pending_names().is_empty() {
                     continue;
                 }
                 let accept = line.trim().eq_ignore_ascii_case("y");

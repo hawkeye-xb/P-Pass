@@ -181,6 +181,7 @@ fn snapshot_backup() {
             file_name: "IMG_0042.HEIC".into(),
             media_type: "image/heic".into(),
         }],
+        provider: None,
     };
     assert_roundtrip(&bm2);
     snapshot_message("backup_manifest_with_items", &bm2);

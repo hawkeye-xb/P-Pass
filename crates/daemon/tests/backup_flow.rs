@@ -84,6 +84,7 @@ impl Client {
         let manifest = BackupManifest {
             hashes: vec![],
             items: files.values().map(|(_, item)| item.clone()).collect(),
+            provider: Some(self.tp.local_addr().to_string()),
         };
         let resp = self
             .call("backup.manifest", serde_json::to_value(&manifest).unwrap())
@@ -269,6 +270,7 @@ async fn interrupted_commit_rerun_converges_and_survives_rebuild() {
     let manifest = BackupManifest {
         hashes: vec![],
         items: files.values().map(|(_, i)| i.clone()).collect(),
+        provider: Some(client.tp.local_addr().to_string()),
     };
     let resp = client
         .call("backup.manifest", serde_json::to_value(&manifest).unwrap())

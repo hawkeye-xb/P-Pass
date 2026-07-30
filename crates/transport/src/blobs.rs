@@ -165,6 +165,13 @@ impl Blobs {
         Ok(())
     }
 
+    /// Register a peer's self-declared address token (see
+    /// [`crate::PeerAddr`]'s Display) so later fetches dial it directly.
+    pub fn register_peer(&self, addr_token: &str) -> Result<crate::NodeId> {
+        let addr: crate::PeerAddr = addr_token.parse()?;
+        Ok(self.transport.add_peer(addr))
+    }
+
     /// Bytes of this blob already present locally (0 = nothing yet).
     /// Diagnostics + the resume test's evidence that a restart kept data.
     pub async fn local_bytes(&self, hash: [u8; 32]) -> Result<u64> {

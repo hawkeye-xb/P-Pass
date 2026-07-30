@@ -63,20 +63,28 @@ struct Inner {
 pub struct Pairing {
     db: Db,
     node_id: transport::NodeId,
+    /// Serialized dialable address, appended to QR strings as `&a=` so a
+    /// scan connects without discovery services (真机冒烟教训: 办公网屏蔽
+    /// n0 发现,纯 NodeId 拨号失败).
+    addr_token: Option<String>,
     inner: Arc<Mutex<Inner>>,
 }
 
 impl Pairing {
     /// Returns the engine plus the receiver the owner UI listens on.
+    /// `addr_token` is `transport.local_addr().to_string()` in production
+    /// (None keeps QR strings short in unit tests).
     pub fn new(
         db: Db,
         node_id: transport::NodeId,
+        addr_token: Option<String>,
     ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<PendingPair>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         (
             Self {
                 db,
                 node_id,
+                addr_token,
                 inner: Arc::new(Mutex::new(Inner {
                     tokens: HashMap::new(),
                     pending_tx: tx,
@@ -96,7 +104,12 @@ impl Pairing {
                 used: false,
             },
         );
-        format!("ppf://pair?node={}&t={}", self.node_id, hex(&token))
+        let mut qr = format!("ppf://pair?node={}&t={}", self.node_id, hex(&token));
+        if let Some(addr) = &self.addr_token {
+            qr.push_str("&a=");
+            qr.push_str(addr);
+        }
+        qr
     }
 
     /// Handle one inbound PairRequest. Consumes the token, parks the
@@ -218,7 +231,7 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             let db = Db::open_in_memory().await.unwrap();
-            let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]));
+            let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None);
             let qr = pairing.start([0x11; 32], 1_000);
             assert_eq!(
                 qr,

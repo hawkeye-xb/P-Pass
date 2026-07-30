@@ -28,6 +28,8 @@ use transport::Blobs;
 struct Session {
     /// hash hex → metadata needed for ingest.
     items: HashMap<String, BackupItem>,
+    /// Self-declared dialable address of the uploading device.
+    provider: Option<String>,
 }
 
 /// The storage-side backup engine. Cloneable; the router holds one.
@@ -117,6 +119,9 @@ impl BackupEngine {
         for item in &m.items {
             session.items.insert(item.hash.clone(), item.clone());
         }
+        if m.provider.is_some() {
+            session.provider = m.provider.clone();
+        }
         Ok(BackupMissing { hashes: missing })
     }
 
@@ -128,13 +133,20 @@ impl BackupEngine {
         peer: transport::NodeId,
         generation: Option<i64>,
     ) -> Result<CommitOutcome, BackupError> {
-        let items: Vec<BackupItem> = {
+        let (items, provider): (Vec<BackupItem>, Option<String>) = {
             let sessions = self.sessions.lock().expect("sessions lock");
             sessions
                 .get(&peer)
-                .map(|s| s.items.values().cloned().collect())
+                .map(|s| (s.items.values().cloned().collect(), s.provider.clone()))
                 .unwrap_or_default()
         };
+        // Self-declared address beats observation — register it so every
+        // fetch below dials the uploader directly.
+        if let Some(addr) = &provider {
+            if let Err(e) = self.blobs.register_peer(addr) {
+                tracing::warn!("bad provider address from {peer:?}: {e}");
+            }
+        }
 
         std::fs::create_dir_all(&self.staging).ok();
         let mut outcome = CommitOutcome {

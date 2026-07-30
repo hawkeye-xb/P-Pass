@@ -16,7 +16,7 @@ async fn endpoint() -> IrohTransport {
 async fn start_daemon(db: Db, accept: bool) -> (IrohTransport, transport::PeerAddr, Pairing) {
     let tp = endpoint().await;
     let addr = tp.local_addr();
-    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id());
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             req.decide(accept);

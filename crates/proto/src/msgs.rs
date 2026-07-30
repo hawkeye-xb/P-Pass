@@ -280,6 +280,12 @@ pub struct BackupManifest {
     /// byte-identical (protocol evolution, not a breaking change).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub items: Vec<BackupItem>,
+    /// The uploader's dialable address token (transport::PeerAddr string).
+    /// The storage side pulls missing blobs from here — self-declared, so
+    /// the transfer never depends on address observation or discovery
+    /// services (真机冒烟教训). Optional for wire compatibility.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
 }
 
 /// One file the client offers in a backup manifest (T-032).
@@ -500,6 +506,7 @@ mod tests {
                 file_name: "IMG_1.jpg".into(),
                 media_type: "image/jpeg".into(),
             }],
+            provider: Some("addr-token".into()),
         }
     );
 

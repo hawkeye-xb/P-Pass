@@ -23,6 +23,9 @@ enum Cmd {
         /// 报给存储端看的设备名
         #[arg(long, default_value = "testclient")]
         name: String,
+        /// 身份密钥文件（不存在则生成；配对后 backup/browse 用同一身份）
+        #[arg(long, default_value = "testclient.key")]
+        identity: String,
     },
     /// 备份剧本：推送 N 个文件走 manifest→missing→接收→commit（T-032 实装）
     Backup {
@@ -32,6 +35,9 @@ enum Cmd {
         /// 存储端 NodeId（64 位 hex，daemon 启动时打印）
         #[arg(long)]
         node: String,
+        /// 身份密钥文件
+        #[arg(long, default_value = "testclient.key")]
+        identity: String,
     },
     /// 浏览剧本：分页遍历时间线 + 拉取缩略图校验（T-033 实装）
     Browse {
@@ -41,12 +47,18 @@ enum Cmd {
         /// 存储端 NodeId（64 位 hex，daemon 启动时打印）
         #[arg(long)]
         node: String,
+        /// 身份密钥文件
+        #[arg(long, default_value = "testclient.key")]
+        identity: String,
     },
     /// 吊销验证：以未配对/已吊销身份连接，期望 not_authorized（T-030 实装）
     RevokeCheck {
         /// 存储端 NodeId（64 位 hex，daemon 启动时打印）
         #[arg(long)]
         node: String,
+        /// 身份密钥文件
+        #[arg(long, default_value = "testclient.key")]
+        identity: String,
     },
 }
 
@@ -56,24 +68,34 @@ fn main() {
         Cmd::Pair {
             token: Some(qr),
             name,
-        } => run_async(pair(&qr, &name)),
+            identity,
+        } => run_async(pair(&qr, &name, &identity)),
         Cmd::Pair { token: None, .. } => {
             eprintln!("缺少 --token：把 daemon 启动时打印的 ppf://pair?... 串传进来。");
             1
         }
-        Cmd::Backup { files, node } => run_async(backup(files, &node)),
-        Cmd::Browse { limit, node } => run_async(browse(limit, &node)),
-        Cmd::RevokeCheck { node } => run_async(revoke_check(&node)),
+        Cmd::Backup {
+            files,
+            node,
+            identity,
+        } => run_async(backup(files, &node, &identity)),
+        Cmd::Browse {
+            limit,
+            node,
+            identity,
+        } => run_async(browse(limit, &node, &identity)),
+        Cmd::RevokeCheck { node, identity } => run_async(revoke_check(&node, &identity)),
     };
     std::process::exit(code);
 }
 
 /// T-033 剧本：分页遍历时间线（校验无重漏）+ 抽查缩略图可解码。
-async fn browse(limit: u32, node: &str) -> anyhow::Result<String> {
+async fn browse(limit: u32, node: &str, identity: &str) -> anyhow::Result<String> {
     let daemon: transport::NodeId = node
         .parse()
         .map_err(|_| anyhow::anyhow!("--node 不是合法的 64 位 hex NodeId：{node}"))?;
-    let tp = bind_endpoint().await?;
+    let tp = bind_endpoint(identity).await?;
+    load_daemon_addr(identity, &tp, daemon);
 
     let call = |method: &str, params: serde_json::Value| {
         let tp = tp.clone();
@@ -154,18 +176,29 @@ fn run_async(fut: impl std::future::Future<Output = anyhow::Result<String>>) -> 
 }
 
 /// T-031 剧本：解析 QR 串 → 连接存储端 → PairRequest → 等 owner 确认。
-async fn pair(qr: &str, name: &str) -> anyhow::Result<String> {
+async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
     let rest = qr
         .strip_prefix("ppf://pair?node=")
         .ok_or_else(|| anyhow::anyhow!("配对串必须以 ppf://pair?node= 开头：{qr}"))?;
-    let (node_hex, token) = rest
+    let (node_hex, rest) = rest
         .split_once("&t=")
         .ok_or_else(|| anyhow::anyhow!("配对串缺少 &t=<token> 段：{qr}"))?;
+    let (token, addr_token) = match rest.split_once("&a=") {
+        Some((t, a)) => (t, Some(a)),
+        None => (rest, None),
+    };
     let daemon: transport::NodeId = node_hex
         .parse()
         .map_err(|_| anyhow::anyhow!("配对串里的 NodeId 不合法：{node_hex}"))?;
 
-    let tp = bind_endpoint().await?;
+    let tp = bind_endpoint(identity).await?;
+    if let Some(a) = addr_token {
+        // QR 自带地址：扫码即连，不依赖任何发现服务。
+        let addr: transport::PeerAddr = a
+            .parse()
+            .map_err(|_| anyhow::anyhow!("配对串里的地址段(&a=)无法解析"))?;
+        tp.add_peer(addr);
+    }
     let mut stream = connect_ctrl(&tp, daemon).await?;
     let req = proto::Req {
         id: "pair".into(),
@@ -183,6 +216,10 @@ async fn pair(qr: &str, name: &str) -> anyhow::Result<String> {
         None => {
             let accepted: proto::PairAccepted =
                 serde_json::from_value(resp.result.unwrap_or_default())?;
+            // 存储端地址存进 sidecar——backup/browse 等后续命令免发现服务.
+            if let Some(a) = addr_token {
+                let _ = std::fs::write(format!("{identity}.daemon"), format!("{node_hex}\n{a}\n"));
+            }
             Ok(format!(
                 "✅ 配对成功：已加入「{}」。本机 NodeId: {}",
                 accepted.storage_device_name,
@@ -199,13 +236,14 @@ async fn pair(qr: &str, name: &str) -> anyhow::Result<String> {
 
 /// T-032 剧本：生成 N 个混合文件（每 10 个 1 个重复内容），本机作为
 /// blobs 提供方，走 begin → manifest → missing → commit 全链。
-async fn backup(files: u32, node: &str) -> anyhow::Result<String> {
+async fn backup(files: u32, node: &str, identity: &str) -> anyhow::Result<String> {
     let daemon: transport::NodeId = node
         .parse()
         .map_err(|_| anyhow::anyhow!("--node 不是合法的 64 位 hex NodeId：{node}"))?;
     let dir = tempfile::tempdir()?;
 
-    let tp = bind_endpoint().await?;
+    let tp = bind_endpoint(identity).await?;
+    load_daemon_addr(identity, &tp, daemon);
     let mut blobs = transport::Blobs::open(&tp, &dir.path().join("blobs")).await?;
     blobs.serve();
 
@@ -260,6 +298,7 @@ async fn backup(files: u32, node: &str) -> anyhow::Result<String> {
     let manifest = proto::BackupManifest {
         hashes: vec![],
         items,
+        provider: Some(tp.local_addr().to_string()),
     };
     let resp = call("backup.manifest", serde_json::to_value(&manifest)?).await?;
     anyhow::ensure!(resp.ok, "backup.manifest 失败：{:?}", resp.error);
@@ -290,13 +329,52 @@ async fn backup(files: u32, node: &str) -> anyhow::Result<String> {
     }
 }
 
-async fn bind_endpoint() -> anyhow::Result<transport::IrohTransport> {
-    transport::IrohTransport::bind(transport::TransportConfig::from_endpoints(
+/// 配对时存下的存储端地址（`<identity>.daemon`）——加载后 connect
+/// 不依赖任何发现服务。
+fn load_daemon_addr(identity: &str, tp: &transport::IrohTransport, node: transport::NodeId) {
+    let Ok(content) = std::fs::read_to_string(format!("{identity}.daemon")) else {
+        return;
+    };
+    let mut lines = content.lines();
+    let (Some(saved_node), Some(addr)) = (lines.next(), lines.next()) else {
+        return;
+    };
+    if saved_node.trim() != node.to_string() {
+        return; // 不是同一台存储端，别乱加
+    }
+    if let Ok(a) = saved_node.trim().parse::<transport::NodeId>() {
+        let _ = a; // node 合法性顺带校验
+    }
+    if let Ok(peer) = addr.trim().parse::<transport::PeerAddr>() {
+        tp.add_peer(peer);
+    }
+}
+
+/// 持久身份：密钥文件存在则复用，否则生成并写入——配对得到的授权
+/// 属于这个身份，backup/browse 必须用同一把钥匙。
+async fn bind_endpoint(identity: &str) -> anyhow::Result<transport::IrohTransport> {
+    let key: [u8; 32] = match std::fs::read(identity) {
+        Ok(bytes) if bytes.len() == 32 => {
+            let mut k = [0u8; 32];
+            k.copy_from_slice(&bytes);
+            k
+        }
+        _ => {
+            let mut k = [0u8; 32];
+            getrandom::fill(&mut k).map_err(|e| anyhow::anyhow!("系统随机数不可用：{e}"))?;
+            std::fs::write(identity, k)?;
+            println!("已生成新身份密钥：{identity}");
+            k
+        }
+    };
+    let mut cfg = transport::TransportConfig::from_endpoints(
         Vec::new(),
-        vec![transport::ALPN_CTRL.into()],
-    ))
-    .await
-    .map_err(|e| anyhow::anyhow!("绑定本机端点失败：{e}"))
+        vec![transport::ALPN_CTRL.into(), transport::ALPN_BLOBS.into()],
+    );
+    cfg.secret_key = Some(key);
+    transport::IrohTransport::bind(cfg)
+        .await
+        .map_err(|e| anyhow::anyhow!("绑定本机端点失败：{e}"))
 }
 
 async fn connect_ctrl(
@@ -328,12 +406,13 @@ async fn roundtrip(
     Ok(proto::codec::decode(&frame)?)
 }
 
-async fn revoke_check(node: &str) -> anyhow::Result<String> {
+async fn revoke_check(node: &str, identity: &str) -> anyhow::Result<String> {
     let daemon: transport::NodeId = node
         .parse()
         .map_err(|_| anyhow::anyhow!("--node 不是合法的 64 位 hex NodeId：{node}"))?;
 
-    let tp = bind_endpoint().await?;
+    let tp = bind_endpoint(identity).await?;
+    load_daemon_addr(identity, &tp, daemon);
     let mut stream = connect_ctrl(&tp, daemon).await?;
     let req = proto::Req {
         id: "revoke-check".into(),

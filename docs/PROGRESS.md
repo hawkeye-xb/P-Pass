@@ -41,7 +41,16 @@
   原 BackupManifest 只有 hashes，而 ingest 契约需要 file_name/media_type；水位推进需要
   generation。新增字段均 `skip_serializing_if` + `serde(default)`——**旧帧字节完全不变**
   （快照测试证明：原有快照文件零改动，新增两个快照覆盖新形态）。
-- **[2026-07-30] 依赖追认（待人类批）：** image@0.25（无默认 feature）+ libheif-rs@2 +
+- **[2026-07-30] 接口的 agent 可驱动性 = 一等公民（人类方向裁决）。** 原话："我们可以通过
+  agent 去验证狗粮机的功能接口。现在这个时代，肯定是需要给 agent 留出空间的，甚至更多。"
+  落地含义：testclient CLI（四剧本）+ IPC 行式 JSON 协议是长期承诺的机器可驱动接口，不是
+  测试脚手架；后续每张卡的功能必须可经 CLI/IPC 无人化验证，GUI（T-041 托盘）只是其上的
+  人类皮肤。狗粮机验收方式：agent 跑接口剧本。
+- **[2026-07-30] 依赖追认（人类批准，2026-07-30 原话"批准了"）：** image@0.25 +
+  libheif-rs@2 + thread-priority@3 + tempfile@3（T-013）、iroh-blobs@0.103 + bao-tree@0.16
+  （T-021）、getrandom@0.3（T-031）、interprocess@2 + zip@5（T-034）、reqwest@0.12（T-035）。
+  依赖账单再次清零。
+- **[2026-07-30] 依赖追认（原始账单，见上一条批准记录）：** image@0.25（无默认 feature）+ libheif-rs@2 +
   thread-priority@3 + tempfile@3（T-013）；iroh-blobs@0.103 + dev bao-tree@0.16（T-021）。
   均标准件。deny.toml 同批变更：放行 Apache-2.0 WITH LLVM-exception；ignore
   RUSTSEC-2023-0089（atomic-polyfill）/RUSTSEC-2024-0370（proc-macro-error），皆 iroh-blobs
