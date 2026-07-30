@@ -34,7 +34,11 @@ enum Cmd {
         limit: u32,
     },
     /// 吊销验证：以未配对/已吊销身份连接，期望 not_authorized（T-030 实装）
-    RevokeCheck,
+    RevokeCheck {
+        /// 存储端 NodeId（64 位 hex，daemon 启动时打印）
+        #[arg(long)]
+        node: String,
+    },
 }
 
 fn main() {
@@ -43,7 +47,9 @@ fn main() {
         Cmd::Pair { .. } => "pair",
         Cmd::Backup { .. } => "backup",
         Cmd::Browse { .. } => "browse",
-        Cmd::RevokeCheck => "revoke-check",
+        Cmd::RevokeCheck { node } => {
+            std::process::exit(run_revoke_check(node));
+        }
     };
 
     // Skeleton behaviour: every subcommand first needs a daemon connection,
@@ -57,6 +63,80 @@ fn main() {
             eprintln!("{e}");
             std::process::exit(1);
         }
+    }
+}
+
+/// T-030 验收剧本：以本机（未配对或已吊销）的身份连上存储端，发一个
+/// 浏览请求，期待被授权检查点拒绝。拒绝 = 检查点在岗 = exit 0。
+fn run_revoke_check(node: &str) -> i32 {
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("无法启动异步运行时：{e}");
+            return 1;
+        }
+    };
+    match rt.block_on(revoke_check(node)) {
+        Ok(msg) => {
+            println!("{msg}");
+            0
+        }
+        Err(e) => {
+            eprintln!("revoke-check 失败：{e:#}");
+            1
+        }
+    }
+}
+
+async fn revoke_check(node: &str) -> anyhow::Result<String> {
+    let daemon: transport::NodeId = node
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--node 不是合法的 64 位 hex NodeId：{node}"))?;
+
+    let tp = transport::IrohTransport::bind(transport::TransportConfig::from_endpoints(
+        Vec::new(),
+        vec![transport::ALPN_CTRL.into()],
+    ))
+    .await
+    .map_err(|e| anyhow::anyhow!("绑定本机端点失败：{e}"))?;
+
+    use transport::Transport as _;
+    let mut stream = tp
+        .connect(daemon, transport::ALPN_CTRL)
+        .await
+        .map_err(|e| anyhow::anyhow!("连接存储端失败（它在线吗？）：{e}"))?;
+
+    let req = proto::Req {
+        id: "revoke-check".into(),
+        method: "timeline.page".into(),
+        params: serde_json::Value::Null,
+        ..Default::default()
+    };
+    let frame = proto::codec::encode(&req)?;
+    stream
+        .send_frame(&frame)
+        .await
+        .map_err(|e| anyhow::anyhow!("发送请求失败：{e}"))?;
+    stream.finish().ok();
+
+    let frame = stream
+        .recv_frame()
+        .await
+        .map_err(|e| anyhow::anyhow!("等待响应失败：{e}"))?
+        .ok_or_else(|| anyhow::anyhow!("存储端没有回应就关闭了流"))?;
+    let resp: proto::Resp = proto::codec::decode(&frame)?;
+
+    match resp.error {
+        Some(err) if err.code == proto::codes::NOT_AUTHORIZED => Ok(format!(
+            "✅ 授权检查点在岗：本机被正确拒绝（{}）。吊销/未配对语义生效。",
+            err.msg_key
+        )),
+        Some(err) => anyhow::bail!(
+            "收到了错误但不是 NOT_AUTHORIZED：{} / {}",
+            err.code,
+            err.msg_key
+        ),
+        None => anyhow::bail!("存储端竟然放行了未授权设备的浏览请求——检查点失守！"),
     }
 }
 

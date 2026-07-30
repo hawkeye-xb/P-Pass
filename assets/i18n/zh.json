@@ -6,5 +6,6 @@
   "diag.online_relay": "经中继连接——速度可能受限",
   "diag.storage_offline": "存储电脑离线了，最后在线时间：{last_seen}。",
   "diag.indexing": "正在整理照片库… {progress}%",
-  "diag.pairing": "等待存储电脑上确认…"
+  "diag.pairing": "等待存储电脑上确认…",
+  "err.unsupported": "存储电脑不认识这个请求，可能有一端需要更新版本。"
 }

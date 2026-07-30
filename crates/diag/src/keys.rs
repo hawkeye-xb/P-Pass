@@ -22,6 +22,9 @@ msg_keys! {
     ERR_NOT_PAIRED => "err.not_paired",
     /// Storage-side disk has no room for further ingest.
     ERR_DISK_FULL => "err.disk_full",
+    /// Method exists in no shipped version, or is not implemented yet
+    /// (a newer client talking to an older storage daemon).
+    ERR_UNSUPPORTED => "err.unsupported",
     /// Connected to the storage daemon over a direct (or LAN) path.
     DIAG_ONLINE_DIRECT => "diag.online_direct",
     /// Connected, but through a relay — bandwidth may be limited.
@@ -44,6 +47,7 @@ mod tests {
             ERR_NOT_AUTHORIZED,
             ERR_NOT_PAIRED,
             ERR_DISK_FULL,
+            ERR_UNSUPPORTED,
             DIAG_ONLINE_DIRECT,
             DIAG_ONLINE_RELAY,
             DIAG_STORAGE_OFFLINE,
@@ -52,7 +56,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 8);
+        assert_eq!(ALL.len(), 9);
     }
 
     #[test]

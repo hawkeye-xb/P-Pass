@@ -88,6 +88,25 @@ impl Db {
             .collect())
     }
 
+    /// One device by NodeId — the authz checkpoint's lookup (T-030).
+    pub async fn get_device(&self, node_id: &[u8]) -> Result<Option<Device>> {
+        let row = sqlx::query(
+            "SELECT node_id, name, role, paired_at, last_seen, revoked
+             FROM device WHERE node_id = ?",
+        )
+        .bind(node_id)
+        .fetch_optional(self.pool())
+        .await?;
+        Ok(row.map(|r| Device {
+            node_id: r.get("node_id"),
+            name: r.get("name"),
+            role: Role::from_db(r.get("role")),
+            paired_at: r.get("paired_at"),
+            last_seen: r.get("last_seen"),
+            revoked: r.get::<i64, _>("revoked") != 0,
+        }))
+    }
+
     /// Mark a device revoked. Returns whether a row was affected.
     pub async fn revoke(&self, node_id: &[u8]) -> Result<bool> {
         let res = sqlx::query("UPDATE device SET revoked = 1 WHERE node_id = ?")

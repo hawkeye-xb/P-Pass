@@ -886,8 +886,17 @@ name = "daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "diag",
+ "futures-core",
+ "proto",
  "serde",
+ "serde_json",
+ "storage",
+ "tempfile",
+ "tokio",
  "toml 0.8.23",
+ "tracing",
+ "transport",
 ]
 
 [[package]]
@@ -4985,6 +4994,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "proto",
+ "serde_json",
+ "tokio",
+ "transport",
 ]
 
 [[package]]

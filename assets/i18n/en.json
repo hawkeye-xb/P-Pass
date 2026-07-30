@@ -6,5 +6,6 @@
   "diag.online_relay": "Connected via relay — speed may be limited",
   "diag.storage_offline": "The storage computer is offline. Last seen {last_seen}.",
   "diag.indexing": "Indexing the library… {progress}%",
-  "diag.pairing": "Waiting for confirmation on the storage computer…"
+  "diag.pairing": "Waiting for confirmation on the storage computer…",
+  "err.unsupported": "The storage computer doesn't understand this request. One side may need an update."
 }

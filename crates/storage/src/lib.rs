@@ -10,11 +10,13 @@ mod asset_repo;
 mod audit_repo;
 mod db;
 mod device_repo;
+mod diag_repo;
 
 pub use asset_repo::{Asset, TimelinePage};
 pub use audit_repo::{AuditEntry, AuditRecord};
 pub use db::Db;
 pub use device_repo::{Device, Role};
+pub use diag_repo::DiagEvent;
 
 /// Storage-layer errors.
 #[derive(Debug, thiserror::Error)]
