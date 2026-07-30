@@ -25,6 +25,9 @@ msg_keys! {
     /// Method exists in no shipped version, or is not implemented yet
     /// (a newer client talking to an older storage daemon).
     ERR_UNSUPPORTED => "err.unsupported",
+    /// A backup batch could not be completed (transfer or ingest failed);
+    /// the client retries — the pipeline is idempotent.
+    ERR_BACKUP_FAILED => "err.backup_failed",
     /// Connected to the storage daemon over a direct (or LAN) path.
     DIAG_ONLINE_DIRECT => "diag.online_direct",
     /// Connected, but through a relay — bandwidth may be limited.
@@ -48,6 +51,7 @@ mod tests {
             ERR_NOT_PAIRED,
             ERR_DISK_FULL,
             ERR_UNSUPPORTED,
+            ERR_BACKUP_FAILED,
             DIAG_ONLINE_DIRECT,
             DIAG_ONLINE_RELAY,
             DIAG_STORAGE_OFFLINE,
@@ -56,7 +60,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 9);
+        assert_eq!(ALL.len(), 10);
     }
 
     #[test]

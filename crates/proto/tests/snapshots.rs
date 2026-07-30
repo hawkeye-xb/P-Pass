@@ -167,9 +167,23 @@ fn snapshot_backup() {
             "bbb11111111111111111111111111111111111111111111111111111111111111".into(),
             "ccc22222222222222222222222222222222222222222222222222222222222222".into(),
         ],
+        ..Default::default()
     };
     assert_roundtrip(&bm);
+    // items is empty here, so the frame must be byte-identical to the
+    // pre-T-032 snapshot — that IS the compatibility guarantee.
     snapshot_message("backup_manifest", &bm);
+
+    let bm2 = BackupManifest {
+        hashes: vec![],
+        items: vec![BackupItem {
+            hash: "ddd3333333333333333333333333333333333333333333333333333333333333".into(),
+            file_name: "IMG_0042.HEIC".into(),
+            media_type: "image/heic".into(),
+        }],
+    };
+    assert_roundtrip(&bm2);
+    snapshot_message("backup_manifest_with_items", &bm2);
 
     let bmiss = BackupMissing {
         hashes: vec!["ccc22222222222222222222222222222222222222222222222222222222222222".into()],
@@ -177,9 +191,16 @@ fn snapshot_backup() {
     assert_roundtrip(&bmiss);
     snapshot_message("backup_missing", &bmiss);
 
-    let bc = BackupCommit {};
+    let bc = BackupCommit::default();
     assert_roundtrip(&bc);
+    // generation is None here → byte-identical to the pre-T-032 snapshot.
     snapshot_message("backup_commit", &bc);
+
+    let bc2 = BackupCommit {
+        generation: Some(31337),
+    };
+    assert_roundtrip(&bc2);
+    snapshot_message("backup_commit_with_generation", &bc2);
 }
 
 // ── Diagnostics ─────────────────────────────────────

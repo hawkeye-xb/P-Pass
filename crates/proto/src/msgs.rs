@@ -266,6 +266,23 @@ pub struct BackupBegin {}
 pub struct BackupManifest {
     /// Candidate BLAKE3 hashes the client wants to upload.
     pub hashes: Vec<String>,
+    /// Per-file metadata (T-032) — ingest needs a file name and MIME type
+    /// per hash. Optional and skipped when empty so pre-T-032 frames are
+    /// byte-identical (protocol evolution, not a breaking change).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<BackupItem>,
+}
+
+/// One file the client offers in a backup manifest (T-032).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct BackupItem {
+    /// BLAKE3 content hash, 64 hex chars.
+    pub hash: String,
+    /// Uploader-side file name, e.g. `IMG_1234.HEIC`.
+    pub file_name: String,
+    /// MIME type, e.g. `image/heic`.
+    pub media_type: String,
 }
 
 /// Response: which hashes the storage side does NOT yet have.
@@ -276,10 +293,16 @@ pub struct BackupMissing {
 }
 
 /// Commit a backup batch — the client confirms that all missing
-/// blobs from this batch have been transferred.
+/// blobs from this batch are available for transfer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
-pub struct BackupCommit {}
+pub struct BackupCommit {
+    /// Client-side incremental-scan watermark to persist on success
+    /// (MediaStore generation on Android). Skipped when absent so
+    /// pre-T-032 frames are byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub generation: Option<i64>,
+}
 
 // ── Diagnostics ─────────────────────────────────────
 
@@ -463,6 +486,11 @@ mod tests {
         BackupManifest,
         BackupManifest {
             hashes: vec!["hash1".into(), "hash2".into()],
+            items: vec![BackupItem {
+                hash: "hash1".into(),
+                file_name: "IMG_1.jpg".into(),
+                media_type: "image/jpeg".into(),
+            }],
         }
     );
 

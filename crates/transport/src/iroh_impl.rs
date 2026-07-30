@@ -150,6 +150,28 @@ impl IrohTransport {
     pub(crate) fn endpoint(&self) -> &Endpoint {
         &self.ep
     }
+
+    /// Crate-internal: raw connection to a peer (blobs.rs fetches over
+    /// its own ALPN). Uses the address book — which includes addresses
+    /// observed from inbound connections — falling back to id-only.
+    pub(crate) async fn connect_raw(
+        &self,
+        peer: NodeId,
+        alpn: &str,
+    ) -> Result<iroh::endpoint::Connection> {
+        let known = self.peers.lock().expect("peers lock").get(&peer).cloned();
+        let addr = match known {
+            Some(a) => a,
+            None => EndpointAddr::from(endpoint_id(peer)?),
+        };
+        self.ep
+            .connect(addr, alpn.as_bytes())
+            .await
+            .map_err(|e| TransportError::Connect {
+                peer,
+                reason: e.to_string(),
+            })
+    }
 }
 
 impl Transport for IrohTransport {
@@ -160,6 +182,7 @@ impl Transport for IrohTransport {
         let ep = self.ep.clone();
         let conns = Arc::clone(&self.conns);
 
+        let peers = Arc::clone(&self.peers);
         tokio::spawn(async move {
             while let Some(incoming) = ep.accept().await {
                 let Ok(mut accepting) = incoming.accept() else {
@@ -167,6 +190,7 @@ impl Transport for IrohTransport {
                 };
                 let tx = tx.clone();
                 let conns = Arc::clone(&conns);
+                let peers = Arc::clone(&peers);
                 // Finish each handshake off the accept loop so one slow
                 // client cannot stall the others.
                 tokio::spawn(async move {
@@ -178,6 +202,21 @@ impl Transport for IrohTransport {
                     };
                     let peer = NodeId(*conn.remote_id().as_bytes());
                     conns.lock().expect("conns lock").insert(peer, conn.clone());
+                    // Register the dialer's observed addresses so this side
+                    // can dial BACK (e.g. blobs pull during backup, T-032) —
+                    // inbound peers are reachable without discovery services.
+                    let addrs: std::collections::BTreeSet<TransportAddr> = conn
+                        .paths()
+                        .iter()
+                        .map(|p| p.remote_addr().clone())
+                        .collect();
+                    if !addrs.is_empty() {
+                        let ep_addr = EndpointAddr {
+                            id: conn.remote_id(),
+                            addrs,
+                        };
+                        peers.lock().expect("peers lock").insert(peer, ep_addr);
+                    }
                     let alpn = String::from_utf8_lossy(&alpn).into_owned();
                     let _ = tx.send(Incoming { peer, alpn, conn }).await;
                 });

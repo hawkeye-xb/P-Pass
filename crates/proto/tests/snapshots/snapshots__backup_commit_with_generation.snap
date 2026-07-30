@@ -1,0 +1,8 @@
+---
+source: crates/proto/tests/snapshots.rs
+assertion_line: 21
+expression: json
+---
+{
+  "generation": 31337
+}

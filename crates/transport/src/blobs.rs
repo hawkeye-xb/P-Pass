@@ -107,6 +107,52 @@ impl Blobs {
         Ok(*hash.as_bytes())
     }
 
+    /// Fetch one blob straight from a known peer (no ticket): the backup
+    /// receive path (T-032) — the storage side pulls exactly the hashes
+    /// it decided are missing, from the device that announced them.
+    /// Inbound peers are dialable because the transport registers their
+    /// observed addresses on accept.
+    pub async fn fetch_from(&self, peer: crate::NodeId, hash: [u8; 32]) -> Result<()> {
+        let conn = self
+            .transport
+            .connect_raw(peer, crate::ALPN_BLOBS)
+            .await
+            .map_err(|e| TransportError::Io(format!("connect for fetch: {e}")))?;
+        self.store
+            .remote()
+            .fetch(conn, Hash::from_bytes(hash))
+            .await
+            .map_err(|e| TransportError::Io(format!("fetch from {peer:?}: {e}")))?;
+        Ok(())
+    }
+
+    /// Export a (complete) blob from the store to a file.
+    pub async fn export_to(&self, hash: [u8; 32], dest: &Path) -> Result<()> {
+        self.store
+            .blobs()
+            .export(Hash::from_bytes(hash), dest)
+            .await
+            .map_err(|e| TransportError::Io(format!("export to {dest:?}: {e}")))?;
+        Ok(())
+    }
+
+    /// Import a file into the store so peers can fetch it (backup client
+    /// side). Returns an error if the content hash does not match.
+    pub async fn import(&self, hash: [u8; 32], path: &Path) -> Result<()> {
+        let tag = self
+            .store
+            .blobs()
+            .add_path(path)
+            .await
+            .map_err(|e| TransportError::Io(format!("import {path:?}: {e}")))?;
+        if tag.hash != Hash::from_bytes(hash) {
+            return Err(TransportError::Io(format!(
+                "content of {path:?} does not match its declared hash"
+            )));
+        }
+        Ok(())
+    }
+
     /// Bytes of this blob already present locally (0 = nothing yet).
     /// Diagnostics + the resume test's evidence that a restart kept data.
     pub async fn local_bytes(&self, hash: [u8; 32]) -> Result<u64> {

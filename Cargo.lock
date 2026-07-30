@@ -886,6 +886,8 @@ name = "daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
+ "core-index",
  "diag",
  "futures-core",
  "getrandom 0.3.4",
@@ -894,6 +896,7 @@ dependencies = [
  "serde_json",
  "storage",
  "tempfile",
+ "thiserror 2.0.19",
  "tokio",
  "toml 0.8.23",
  "tracing",
@@ -4994,9 +4997,11 @@ name = "testclient"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
  "proto",
  "serde_json",
+ "tempfile",
  "tokio",
  "transport",
 ]

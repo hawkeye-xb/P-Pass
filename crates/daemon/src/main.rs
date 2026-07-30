@@ -57,8 +57,13 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Backup receive pipeline (T-032): blobs store beside the index.
+    let blobs = transport::Blobs::open(&transport, &data_dir.join(".ppf/blobs")).await?;
+    let backup = daemon::BackupEngine::new(db.clone(), blobs, &data_dir);
+
     Router::new(db, "P-Pass 存储端")
         .with_pairing(pairing)
+        .with_backup(backup)
         .serve(&transport)
         .await;
     Ok(())

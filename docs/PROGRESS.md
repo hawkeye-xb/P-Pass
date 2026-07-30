@@ -4,6 +4,7 @@
 
 | 卡片 | 日期 | Commit | 状态 | 摘要 |
 |------|------|--------|------|------|
+| **T-032** | 2026-07-30 | — | DONE | 备份接收管道（§5.1 服务端半边）：`backup.rs` BackupEngine——begin（重置会话，幂等）→ manifest（对 items 逐个查索引回 missing，**重复/乱序 manifest 安全：missing 永远按当前索引现算**；纯 hashes 无元数据也回查重答案但不可拉取）→ commit（对已声明且仍缺失的 hash **逐个从该设备拉取** → export 到 `.ppf/staging/` → ingest 走 T-011 全链含审计 → 全部成功后推水位 set_watermark(generation)）。**幂等收敛**：崩溃/断连后重跑 commit——已入库的直接跳过、部分拉取的 blob 断点续传（iroh-blobs）、staging+create_new 保证 originals 永无半成品。**两项施工裁决**（见决策记录）：①传输方向用"存储端拉取"实现"客户端推送"语义；②proto 扩展 BackupItem/generation（旧帧字节不变）。router 接 backup.\*，失败统一 INTERNAL/err.backup_failed（新 msg_key 双语："这一批备份没有完成——会自动重试，已传的数据不会丢"）。transport 配套：入站连接自动登记对端观察地址（反向拨号不依赖发现服务，有专门测试钉住）+ `Blobs::fetch_from/export_to/import`。main.rs wiring；testclient `backup --files N --node <hex>` 实装。**已知债**（注释+此处记录）：blob store 与 originals 双份磁盘占用，GC 归硬化卡。验收：**500 混合文件（jpg/mp4，每 10 个 1 个重复内容）端到端**——首跑 missing=450=去重数、**asset 计数=去重后数** ✓、水位=generation ✓、二跑 missing=0 无变化 ✓（3.0s）；**中断重跑最终一致**——客户端只提供一半文件模拟中途死亡，commit 失败留下部分入库，恢复后重跑只补余量，且**删库 rebuild 后索引与 originals 逐字段一致（T-012 守护测试兼任备份管道的一致性 oracle）** ✓（1.2s）；全仓 **146 测试绿**；just ci + cargo deny 绿。 |
 | **T-031** | 2026-07-30 | — | DONE | 配对流（§2.2）：`pairing.rs`——`start(token, now)` 记 32B 一次性令牌（TTL 600s）出 QR 串 `ppf://pair?node=<hex64>&t=<hex64>`；入站 PairRequest 校验令牌（**第一次使用即消耗，无论后续成败——重放在 owner 还没点确认时也拒**；过期拒；坏格式拒）→ 挂起进 owner 确认队列（mpsc channel，UI 后接 T-034/T-041）→ 确认后写 device 表 + 审计 `pair.accepted`（actor=设备）。安全细节：网络侧永远给不出 owner 角色（只认 member/viewer，其余一律降为 member）；设备名消毒（控制字符剥离、64 字符上限、空名兜底）；所有拒绝对外同一张脸 NOT_AUTHORIZED（探测者学不到失败在哪一步）。router 接 `pair.request` dispatch；`main.rs` 启动即出一张 QR（getrandom 系统熵），**控制台 y/N 确认——绝不默认放行**（托盘 UI T-041 前的过渡）。testclient `pair --token <ppf串>` 实装。**新依赖待人类追认**：getrandom@0.3（令牌熵，iroh 树上已有）。验收（卡面三点全中）：**全流程绿**（QR→请求→确认→device 行 role=member→PairAccepted 带存储端名→审计落表）、**过期令牌拒绝绿**（发行时间倒拨 11 分钟）、**重放拒绝绿**（第二台设备同令牌被拒且不入白名单）+ owner 拒绝不写表测试；全仓 **142 测试绿**；just ci + cargo deny 绿。 |
 | **T-030** | 2026-07-30 | — | DONE | daemon ALPN 路由 + 白名单检查点（§2.3"没有其他任何认证机制——简单性即安全性"）：`authz.rs` 纯函数检查点——未配对 NodeId 只许 hello/pair.request（配对之门），**吊销即拒连连 hello 都不给**；权限表 viewer=浏览+诊断（timeline/asset.meta/thumb/blob_ticket/diag）、member +backup.\*、owner 全部；拒绝一律 `Resp{NOT_AUTHORIZED}`，msg_key 区分 err.not_paired（没配过对）/err.not_authorized（吊销或越权），**发响应→关流→记 diag_event(authz.denied)** 三连。`router.rs` 接入循环：每流一请求，hello 实装（回 proto_ver+capabilities+设备名，能力协商从第一版存在），已授权但未实装的方法回 INVALID_REQUEST/err.unsupported（新注册 msg_key 含中英文案）。`main.rs` 生产 wiring（config→Db→IrohTransport→Router.serve）。**testclient revoke-check 实装**：`--node <hex>` 拨号存储端发 timeline.page，收到 NOT_AUTHORIZED = 检查点在岗 = exit 0（CLI 走 n0 发现的路径未真机冒烟——办公网出网受限，逻辑与离线集成测试同源，T-031 配对冒烟时一并验）。配套最小 API：storage `get_device(node_id)` + diag_repo（append_diag/list_diag，环形清理归 T-034）。**无新第三方依赖**。验收：**4 个真实 iroh 回环连接上的授权集成测试**（未配对拒+diag 落表、未配对 hello 放行、viewer 越权拒/浏览到达 dispatch、吊销后立即拒）+ 6 authz 矩阵单测 + diag_repo 测试，全仓 **135 测试绿**；daemon 覆盖率 84.49% 行；just ci + cargo deny 绿。 |
 | **T-021** | 2026-07-30 | — | DONE | transport blobs.rs：iroh-blobs 0.103 封装——`push(hash, path)`（入库并出 ticket；哈希与 core-index 索引哈希不符=文件被改动，报错不静默换键）/`pull(ticket, dest)`（fetch 只取缺失区间=断点续传透传，BLAKE3 逐块验证，export 落盘）/`local_bytes`（诊断+断点证据）/`serve`（Router 挂 `ppf/blobs/1`；daemon T-030 时 ctrl 面并入同一 Router——一个 endpoint 只有一个 accept 队列，随代码注释）。**断连注入双测试**（一次真 kill 的两个可分离命题分开钉死）：① 崩溃安全——50MB 传输中 abort 接收任务（无任何告别），新 endpoint 重开同一 store，pull 补完且逐位一致（崩溃留下多少持久字节是 store 批处理的时序自由度，只记录不断言）；② 续传确实生效——确定性播种 8MiB 已验证 bao 前缀（复刻 iroh-blobs 自家测试工法 create_n0_bao），断言 local_bytes 恰为 8MiB 后 pull 只补缺失并校验。**新依赖待人类追认**：iroh-blobs@0.103（卡片钦定）；dev: bao-tree@0.16（播种用，与 iroh-blobs 同版本保证编码一致）；deny 放行 Apache-2.0 WITH LLVM-exception（构建期传递依赖）+ ignore RUSTSEC-2023-0089/2024-0370（iroh-blobs 传递,unmaintained 信息级,无升级路径）。验收：`nextest -p transport --retries 0 --test-threads 1` **连跑 5 次 16/16 全绿零 flake**；50MB kill→重启→续传→BLAKE3 一致 ✓。 |
@@ -27,6 +28,16 @@
 
 ## 决策记录
 
+- **[2026-07-30] T-032 备份传输方向：存储端拉取实现"客户端推送"语义（施工裁决）。**
+  设计 §5.1 写"未有则 blobs 推送"。iroh-blobs 的 push 请求在 provider 侧**默认 Disabled**，
+  开启需自建事件回调机制，且 blobs ALPN 上没有我们的 authz 检查点——任何知道 NodeId 者皆可写入。
+  改为：manifest（ctrl 面，authz 已把关 member+）声明文件 → 存储端只对自己判定缺失的 hash
+  主动回连该设备拉取。数据流向不变（内容从手机到电脑），每一次写入都由存储端主导。
+  配套：transport 在接受入站连接时登记对端观察地址，反向拨号不依赖任何发现服务。
+- **[2026-07-30] proto v1 协议演进：BackupManifest.items + BackupCommit.generation（施工裁决）。**
+  原 BackupManifest 只有 hashes，而 ingest 契约需要 file_name/media_type；水位推进需要
+  generation。新增字段均 `skip_serializing_if` + `serde(default)`——**旧帧字节完全不变**
+  （快照测试证明：原有快照文件零改动，新增两个快照覆盖新形态）。
 - **[2026-07-30] 依赖追认（待人类批）：** image@0.25（无默认 feature）+ libheif-rs@2 +
   thread-priority@3 + tempfile@3（T-013）；iroh-blobs@0.103 + dev bao-tree@0.16（T-021）。
   均标准件。deny.toml 同批变更：放行 Apache-2.0 WITH LLVM-exception；ignore

@@ -224,3 +224,71 @@ fn dir_bytes(dir: &Path) -> u64 {
     }
     total
 }
+
+/// T-032 precondition: after an inbound ctrl connection, the LISTENER can
+/// dial back to the dialer (address observed on accept) and pull a blob —
+/// the backup receive path's transport shape.
+#[tokio::test(flavor = "multi_thread")]
+async fn listener_can_dial_back_and_fetch() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // "Storage side": listens on ctrl + blobs.
+    let storage_tp = IrohTransport::bind(TransportConfig::loopback(vec![
+        transport::ALPN_CTRL.into(),
+        transport::ALPN_BLOBS.into(),
+    ]))
+    .await
+    .unwrap();
+    let storage_blobs = Blobs::open(&storage_tp, &dir.path().join("storage-store"))
+        .await
+        .unwrap();
+    use transport::Transport as _;
+    let incoming = storage_tp.listen().await;
+    tokio::pin!(incoming);
+
+    // "Phone": serves a blob, dials the storage side over ctrl.
+    let phone_tp = IrohTransport::bind(TransportConfig::loopback(vec![
+        transport::ALPN_CTRL.into(),
+        transport::ALPN_BLOBS.into(),
+    ]))
+    .await
+    .unwrap();
+    let content = b"a photo, allegedly".to_vec();
+    let src = dir.path().join("photo.jpg");
+    fs::write(&src, &content).unwrap();
+    let hash = *blake3::hash(&content).as_bytes();
+    let mut phone_blobs = Blobs::open(&phone_tp, &dir.path().join("phone-store"))
+        .await
+        .unwrap();
+    phone_blobs.serve();
+    phone_blobs.import(hash, &src).await.unwrap();
+
+    phone_tp.add_peer(storage_tp.local_addr());
+    let mut stream = phone_tp
+        .connect(storage_tp.node_id(), transport::ALPN_CTRL)
+        .await
+        .unwrap();
+    stream
+        .send_frame(
+            &5u32
+                .to_le_bytes()
+                .iter()
+                .chain(b"hello")
+                .copied()
+                .collect::<Vec<_>>(),
+        )
+        .await
+        .unwrap();
+
+    // Storage side accepts, then dials BACK for the blob — no ticket, no
+    // discovery, only the address observed on accept.
+    use futures_core::Stream as _;
+    let conn = std::future::poll_fn(|cx| incoming.as_mut().poll_next(cx))
+        .await
+        .expect("inbound ctrl connection");
+    let phone_id = conn.peer();
+    storage_blobs.fetch_from(phone_id, hash).await.unwrap();
+    let dest = dir.path().join("landed.jpg");
+    storage_blobs.export_to(hash, &dest).await.unwrap();
+    assert_eq!(fs::read(&dest).unwrap(), content);
+}

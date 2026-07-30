@@ -25,3 +25,4 @@ tempfile = "3"
 # version as iroh-blobs' own bao-tree — the encodings must agree).
 bao-tree = "0.16"
 iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }
+futures-core.workspace = true

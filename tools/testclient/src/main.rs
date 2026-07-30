@@ -24,11 +24,14 @@ enum Cmd {
         #[arg(long, default_value = "testclient")]
         name: String,
     },
-    /// 备份剧本：推送 N 个文件走 manifest→missing→push→commit（T-032 实装）
+    /// 备份剧本：推送 N 个文件走 manifest→missing→接收→commit（T-032 实装）
     Backup {
         /// 模拟推送的文件数
         #[arg(long, default_value = "500")]
         files: u32,
+        /// 存储端 NodeId（64 位 hex，daemon 启动时打印）
+        #[arg(long)]
+        node: String,
     },
     /// 浏览剧本：分页遍历时间线 + 拉取缩略图校验（T-033 实装）
     Browse {
@@ -57,7 +60,10 @@ fn main() {
             eprintln!("缺少 --token：把 daemon 启动时打印的 ppf://pair?... 串传进来。");
             std::process::exit(1);
         }
-        Cmd::Backup { .. } => "backup",
+        Cmd::Backup { files, node } => {
+            let (files, node) = (*files, node.clone());
+            std::process::exit(run_async(backup(files, &node)));
+        }
         Cmd::Browse { .. } => "browse",
         Cmd::RevokeCheck { node } => {
             std::process::exit(run_async(revoke_check(node)));
@@ -137,6 +143,99 @@ async fn pair(qr: &str, name: &str) -> anyhow::Result<String> {
         }
         Some(err) => anyhow::bail!(
             "配对被拒绝（{} / {}）——令牌过期、已用过，或 owner 拒绝了。",
+            err.code,
+            err.msg_key
+        ),
+    }
+}
+
+/// T-032 剧本：生成 N 个混合文件（每 10 个 1 个重复内容），本机作为
+/// blobs 提供方，走 begin → manifest → missing → commit 全链。
+async fn backup(files: u32, node: &str) -> anyhow::Result<String> {
+    let daemon: transport::NodeId = node
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--node 不是合法的 64 位 hex NodeId：{node}"))?;
+    let dir = tempfile::tempdir()?;
+
+    let tp = bind_endpoint().await?;
+    let mut blobs = transport::Blobs::open(&tp, &dir.path().join("blobs")).await?;
+    blobs.serve();
+
+    // 生成语料：确定性伪随机内容，每 10 个复用前一个的内容（去重演示）。
+    let mut items = Vec::new();
+    let mut s: u64 = 0x5EED_2026_0730_0005;
+    let mut prev: Vec<u8> = Vec::new();
+    for i in 0..files {
+        let content = if i > 0 && i % 10 == 0 {
+            prev.clone()
+        } else {
+            let mut v = i.to_le_bytes().to_vec();
+            for _ in 0..256 {
+                s ^= s << 13;
+                s ^= s >> 7;
+                s ^= s << 17;
+                v.extend_from_slice(&s.to_le_bytes());
+            }
+            v
+        };
+        let hash = *blake3::hash(&content).as_bytes();
+        let hash_hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
+        let name = format!("IMG_{i:04}.jpg");
+        let path = dir.path().join(&name);
+        std::fs::write(&path, &content)?;
+        blobs.import(hash, &path).await?;
+        items.push(proto::BackupItem {
+            hash: hash_hex,
+            file_name: name,
+            media_type: "image/jpeg".into(),
+        });
+        prev = content;
+    }
+
+    let call = |method: &str, params: serde_json::Value| {
+        let tp = tp.clone();
+        let method = method.to_string();
+        async move {
+            let mut stream = connect_ctrl(&tp, daemon).await?;
+            let req = proto::Req {
+                id: method.clone(),
+                method,
+                params,
+                ..Default::default()
+            };
+            roundtrip(&mut stream, &req).await
+        }
+    };
+
+    let resp = call("backup.begin", serde_json::Value::Null).await?;
+    anyhow::ensure!(resp.ok, "backup.begin 被拒：{:?}", resp.error);
+    let manifest = proto::BackupManifest {
+        hashes: vec![],
+        items,
+    };
+    let resp = call("backup.manifest", serde_json::to_value(&manifest)?).await?;
+    anyhow::ensure!(resp.ok, "backup.manifest 失败：{:?}", resp.error);
+    let missing: proto::BackupMissing = serde_json::from_value(resp.result.unwrap_or_default())?;
+    println!(
+        "清单 {} 个文件，存储端缺 {} 个，开始传输……",
+        files,
+        missing.hashes.len()
+    );
+    let resp = call(
+        "backup.commit",
+        serde_json::to_value(&proto::BackupCommit {
+            generation: Some(files as i64),
+        })?,
+    )
+    .await?;
+    match resp.error {
+        None => Ok(format!(
+            "✅ 备份完成：{} 个文件（含重复内容），存储端实收 {} 个新 blob，水位已推进。",
+            files,
+            missing.hashes.len()
+        )),
+        Some(err) => anyhow::bail!(
+            "commit 失败（{} / {}），重跑即可续传。",
             err.code,
             err.msg_key
         ),

@@ -1,0 +1,15 @@
+---
+source: crates/proto/tests/snapshots.rs
+assertion_line: 21
+expression: json
+---
+{
+  "hashes": [],
+  "items": [
+    {
+      "hash": "ddd3333333333333333333333333333333333333333333333333333333333333",
+      "file_name": "IMG_0042.HEIC",
+      "media_type": "image/heic"
+    }
+  ]
+}

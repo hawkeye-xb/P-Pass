@@ -25,6 +25,7 @@ pub struct Router {
     db: Db,
     device_name: String,
     pairing: Option<crate::pairing::Pairing>,
+    backup: Option<crate::backup::BackupEngine>,
 }
 
 impl Router {
@@ -33,6 +34,7 @@ impl Router {
             db,
             device_name: device_name.into(),
             pairing: None,
+            backup: None,
         }
     }
 
@@ -40,6 +42,13 @@ impl Router {
     /// answers `err.unsupported`.
     pub fn with_pairing(mut self, pairing: crate::pairing::Pairing) -> Self {
         self.pairing = Some(pairing);
+        self
+    }
+
+    /// Attach the backup engine (T-032). Without it, `backup.*` answers
+    /// `err.unsupported`.
+    pub fn with_backup(mut self, backup: crate::backup::BackupEngine) -> Self {
+        self.backup = Some(backup);
         self
     }
 
@@ -126,6 +135,9 @@ impl Router {
     async fn dispatch(&self, peer: transport::NodeId, req: &Req) -> Resp {
         match req.method.as_str() {
             methods::PAIR_REQUEST => self.handle_pair(peer, req).await,
+            methods::BACKUP_BEGIN | methods::BACKUP_MANIFEST | methods::BACKUP_COMMIT => {
+                self.handle_backup(peer, req).await
+            }
             methods::HELLO => {
                 let ours = Hello {
                     proto_ver: PROTO_VER,
@@ -145,6 +157,68 @@ impl Router {
                 req.id.clone(),
                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
             ),
+        }
+    }
+
+    /// `backup.*` (T-032): manifest 查重回 missing → 拉取+ingest → commit
+    /// 更新水位. Failures answer INTERNAL/err.backup_failed — the client
+    /// retries and the pipeline converges (idempotent).
+    async fn handle_backup(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        let Some(backup) = &self.backup else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let internal_err = |id: &str| {
+            Resp::err(
+                id.to_string(),
+                RespError::new(codes::INTERNAL, diag::keys::ERR_BACKUP_FAILED),
+            )
+        };
+        match req.method.as_str() {
+            methods::BACKUP_BEGIN => {
+                backup.begin(peer);
+                Resp::ok(req.id.clone(), serde_json::Value::Null)
+            }
+            methods::BACKUP_MANIFEST => {
+                let Ok(m) = serde_json::from_value::<proto::BackupManifest>(req.params.clone())
+                else {
+                    return Resp::err(
+                        req.id.clone(),
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                match backup.manifest(peer, &m).await {
+                    Ok(missing) => match serde_json::to_value(&missing) {
+                        Ok(v) => Resp::ok(req.id.clone(), v),
+                        Err(_) => internal_err(&req.id),
+                    },
+                    Err(e) => {
+                        tracing::warn!("backup.manifest from {peer:?} failed: {e}");
+                        internal_err(&req.id)
+                    }
+                }
+            }
+            _ => {
+                let generation = serde_json::from_value::<proto::BackupCommit>(req.params.clone())
+                    .map(|c| c.generation)
+                    .unwrap_or(None);
+                match backup.commit(peer, generation).await {
+                    Ok(outcome) => {
+                        tracing::info!(
+                            "backup.commit from {peer:?}: +{} ({} dup)",
+                            outcome.ingested,
+                            outcome.duplicates
+                        );
+                        Resp::ok(req.id.clone(), serde_json::Value::Null)
+                    }
+                    Err(e) => {
+                        tracing::warn!("backup.commit from {peer:?} failed: {e}");
+                        internal_err(&req.id)
+                    }
+                }
+            }
         }
     }
 
