@@ -35,6 +35,15 @@
 
 ## 决策记录
 
+- **[2026-07-30] H-07 relay 托管定案：维持 Vultr SG $6/月（人类拍板）。** 委托调研了
+  Cloudflare 全家桶（Workers/DO 无法监听自定义 TCP/UDP、Spectrum 需企业版且 $1/GB、
+  Calls TURN 协议不兼容 iroh——全灭）与按需/免费平台（Fly.io 算上 IPv4+流量与 $6 打平
+  还多 UDP 绑定 hack；Railway/Render/Koyeb 无公网 UDP 只能降级 WSS 拉低打洞率=负优化；
+  Oracle 免费层 $0 但 7 天低利用率即回收——**兜底中继常态低流量，恰好触发**，且免费额度
+  有缩水先例）。结论：付费选项无一显著优于已验证的 $6 基准，免费选项带回收尾部风险，
+  基础设施不建在"可能被收走"的地基上。全文见 docs/relay-hosting-research.md。
+  下一步 H-07：Vultr SG 部署 iroh-relay + relay-ap 域名 DNS + Let's Encrypt。
+
 - **[2026-07-30] T-032 备份传输方向：存储端拉取实现"客户端推送"语义（施工裁决）。**
   设计 §5.1 写"未有则 blobs 推送"。iroh-blobs 的 push 请求在 provider 侧**默认 Disabled**，
   开启需自建事件回调机制，且 blobs ALPN 上没有我们的 authz 检查点——任何知道 NodeId 者皆可写入。

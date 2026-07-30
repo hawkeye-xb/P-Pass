@@ -1,0 +1,26 @@
+# Standalone workspace on purpose: the tray shell has ZERO business
+# logic (ADR-012) — it speaks the daemon's local IPC protocol only, so
+# it depends on no internal crate, and the huge Tauri tree stays out of
+# the main workspace's build/CI.
+[workspace]
+
+[package]
+name = "p-pass-desktop"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+interprocess = "2"
+
+[lib]
+name = "p_pass_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]

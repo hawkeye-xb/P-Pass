@@ -61,3 +61,7 @@ ci: fmt lint test arch-check
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
 platform-smoke:
     cargo run -p platform --example smoke
+
+# T-041 桌面壳开发模式（Tauri dev = 前端热更 + 托盘）
+dev-desktop:
+    cd apps/desktop && npx tauri dev
