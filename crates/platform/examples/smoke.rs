@@ -2,8 +2,15 @@
 //! 自启注册→查询→注销；防睡眠断言可见→释放后消失；Keychain/DPAPI 往返。
 //! Exits non-zero on any failed step. H-09 runs this on both platforms.
 
+#[cfg(not(any(target_os = "macos", windows)))]
+fn main() {
+    eprintln!("platform smoke is only meaningful on macOS/Windows");
+}
+
+#[cfg(any(target_os = "macos", windows))]
 use platform::{PlatformAdapter, PowerHint};
 
+#[cfg(any(target_os = "macos", windows))]
 fn main() {
     let a = platform::adapter();
     let mut failures = 0;
@@ -104,6 +111,7 @@ fn main() {
 }
 
 /// How many of our-style awake assertions the OS reports right now.
+#[cfg(any(target_os = "macos", windows))]
 fn awake_assertion_count() -> usize {
     if cfg!(target_os = "macos") {
         let out = std::process::Command::new("pmset")
