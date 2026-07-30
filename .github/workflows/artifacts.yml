@@ -12,6 +12,46 @@ on:
   workflow_dispatch:
 
 jobs:
+  macos-arm64-bin:
+    runs-on: macos-14 # Apple Silicon
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: macos-arm64-artifacts-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: System codecs (libheif via brew)
+        run: brew install libheif
+
+      - name: Build release binaries
+        run: cargo build --release -p daemon -p testclient
+
+      - name: Push to bin-macos-arm64 orphan branch
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/bin
+          cp target/release/daemon target/release/testclient /tmp/bin/
+          cp tools/dogfood-smoke.sh /tmp/bin/ || true
+          cd /tmp/bin
+          shasum -a 256 daemon testclient > SHA256SUMS
+          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
+          git init -q -b bin-macos-arm64
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -q -m "macos arm64 binaries @ ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-macos-arm64
+
   linux-bin:
     runs-on: ubuntu-latest
     timeout-minutes: 30
