@@ -59,6 +59,15 @@ impl Db {
         Ok(())
     }
 
+    /// Wipe every asset row. Only the index rebuild (T-012, ADR-006) may
+    /// call this — the table is derived data, re-scannable from `originals/`.
+    pub async fn clear_assets(&self) -> Result<u64> {
+        let done = sqlx::query("DELETE FROM asset")
+            .execute(self.pool())
+            .await?;
+        Ok(done.rows_affected())
+    }
+
     pub async fn get_asset(&self, hash: &[u8]) -> Result<Option<Asset>> {
         let row = sqlx::query(
             "SELECT hash, rel_path, media_type, bytes, taken_at, width, height,

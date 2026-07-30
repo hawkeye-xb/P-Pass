@@ -170,7 +170,7 @@ impl Ingestor {
 /// EXIF `DateTimeOriginal` (fallback `DateTime`) as unix ms; if the file
 /// has no usable EXIF, the file's mtime. EXIF wall clock carries no zone —
 /// it is interpreted as UTC so the key is stable across machines.
-fn taken_at_ms(path: &Path) -> Result<i64> {
+pub(crate) fn taken_at_ms(path: &Path) -> Result<i64> {
     if let Some(ms) = exif_taken_at_ms(path) {
         return Ok(ms);
     }
@@ -209,14 +209,11 @@ fn exif_taken_at_ms(path: &Path) -> Option<i64> {
     )
 }
 
-/// Layout dir for a device: first 8 bytes of the NodeId as hex — short
-/// enough to read in a file manager, unambiguous within a family.
-fn device_dir(node_id: &[u8]) -> String {
-    node_id
-        .iter()
-        .take(8)
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>()
+/// Layout dir for a device: the full NodeId as hex (§4.2 `<deviceId>`).
+/// The tree alone must reproduce every index field on rebuild (ADR-006) —
+/// a truncated prefix would lose `src_device` when the index is wiped.
+pub(crate) fn device_dir(node_id: &[u8]) -> String {
+    node_id.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn year_month(unix_ms: i64) -> (i32, u8) {
@@ -313,8 +310,9 @@ mod tests {
     }
 
     #[test]
-    fn device_dir_is_16_hex_chars() {
+    fn device_dir_is_full_node_id_hex() {
         let d = device_dir(&[0xab; 32]);
-        assert_eq!(d, "abababababababab");
+        assert_eq!(d.len(), 64);
+        assert_eq!(d, "ab".repeat(32));
     }
 }
