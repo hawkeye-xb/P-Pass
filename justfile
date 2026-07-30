@@ -57,3 +57,7 @@ dev-daemon:
 # Full CI pipeline (same as GitHub Actions pr.yml)
 ci: fmt lint test arch-check
   @echo "==> CI pipeline: all green ✅"
+
+# T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
+platform-smoke:
+    cargo run -p platform --example smoke

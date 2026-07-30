@@ -60,7 +60,8 @@ Real-world validation / 真机验证
       path = relay fallback exactly as the H-04 matrix predicted)
 
 P4 desktop shell / 桌面壳
-- [ ] T-040 platform trait + windows/macos impls
+- [x] T-040 platform trait + windows/macos impls (macOS smoke ALL GREEN;
+      Windows cross-checked in CI, live smoke → H-09)
 - [ ] T-041 Tauri tray shell (pairing QR, devices, status)
 - [ ] T-042 first-run wizard (folder + power settings)
 - [ ] `just verify-m1`: full scenario + dual-platform build

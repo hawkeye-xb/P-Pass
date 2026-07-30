@@ -6,3 +6,14 @@ license.workspace = true
 publish = false
 
 [dependencies]
+thiserror.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# HKCU Run key (user-level autostart, §4).
+winreg = "0.55"
+# SetThreadExecutionState + DPAPI.
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_Power",
+  "Win32_Security_Cryptography",
+] }

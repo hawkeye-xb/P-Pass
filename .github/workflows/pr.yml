@@ -56,6 +56,9 @@ jobs:
       - name: Test (nextest)
         run: cargo nextest run --all-features
 
+      - name: Windows cross-check (platform crate compiles for msvc)
+        run: rustup target add x86_64-pc-windows-msvc && cargo check -p platform --target x86_64-pc-windows-msvc
+
       - name: Architecture enforcement
         run: bash tools/arch-check.sh
 
