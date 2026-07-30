@@ -10,6 +10,7 @@ pub mod ipc;
 pub mod pairing;
 pub mod query;
 pub mod router;
+pub mod telemetry;
 
 pub use authz::Decision;
 pub use backup::{BackupEngine, CommitOutcome};
@@ -19,3 +20,4 @@ pub use ipc::IpcServer;
 pub use pairing::{PairRejection, Pairing, PendingPair};
 pub use query::QueryEngine;
 pub use router::Router;
+pub use telemetry::{Event as TelemetryEvent, Telemetry};

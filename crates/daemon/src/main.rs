@@ -89,6 +89,29 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
+    // Telemetry (T-035): opt-out respected at the root — with the switch
+    // off the client never mints an id, never spawns a timer.
+    let telemetry = daemon::Telemetry::new(
+        config.telemetry.enabled,
+        config.telemetry.url.clone(),
+        &data_dir,
+    );
+    if telemetry.enabled() {
+        tokio::spawn(telemetry.clone().run());
+        let heartbeat = telemetry.clone();
+        let started = std::time::Instant::now();
+        tokio::spawn(async move {
+            loop {
+                heartbeat.record(daemon::TelemetryEvent::DaemonAlive {
+                    uptime_h: started.elapsed().as_secs() / 3600,
+                    os: std::env::consts::OS.to_string(),
+                    ver: env!("CARGO_PKG_VERSION").to_string(),
+                });
+                tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
+            }
+        });
+    }
+
     // One blob store handle, shared by backup (pulls) and query
     // (tickets); also serves fetches through the listen loop (T-033).
     let blobs = std::sync::Arc::new(
