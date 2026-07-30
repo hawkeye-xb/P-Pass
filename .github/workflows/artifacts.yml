@@ -1,0 +1,53 @@
+name: Linux Artifacts
+
+# Push-to-main builds the Linux x86_64 daemon + testclient and force-pushes
+# them to the orphan branch `bin-linux-x64` — pure-git distribution for
+# cloud/dogfood machines (they `git fetch` instead of compiling for 40min
+# on a 2-core box). The branch is overwritten every time: no history, no
+# repo bloat on main.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  linux-bin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: ${{ runner.os }}-artifacts-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: System codecs (libheif + HEVC plugin, ffmpeg)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg
+
+      - name: Build release binaries
+        run: cargo build --release -p daemon -p testclient
+
+      - name: Push to bin-linux-x64 orphan branch
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/bin
+          cp target/release/daemon target/release/testclient /tmp/bin/
+          cp tools/dogfood-smoke.sh /tmp/bin/ || true
+          cd /tmp/bin
+          sha256sum daemon testclient > SHA256SUMS
+          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
+          git init -q -b bin-linux-x64
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -q -m "linux x86_64 binaries @ ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-linux-x64
