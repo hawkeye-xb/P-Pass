@@ -1,0 +1,148 @@
+//! T-031 acceptance: full pairing flow over a real loopback connection,
+//! expired-token rejection, and one-time token replay rejection.
+
+use daemon::{Pairing, Router};
+use proto::{codes, PairRequest, Req, Resp};
+use storage::{Db, Role};
+use transport::{IrohTransport, Transport, TransportConfig};
+
+async fn endpoint() -> IrohTransport {
+    IrohTransport::bind(TransportConfig::loopback(vec![transport::ALPN_CTRL.into()]))
+        .await
+        .unwrap()
+}
+
+/// Daemon with pairing attached; owner decisions scripted by `accept`.
+async fn start_daemon(db: Db, accept: bool) -> (IrohTransport, transport::PeerAddr, Pairing) {
+    let tp = endpoint().await;
+    let addr = tp.local_addr();
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id());
+    tokio::spawn(async move {
+        while let Some(req) = pending.recv().await {
+            req.decide(accept);
+        }
+    });
+    let router = Router::new(db, "客厅的电脑").with_pairing(pairing.clone());
+    let tp2 = tp.clone();
+    tokio::spawn(async move { router.serve(&tp2).await });
+    (tp, addr, pairing)
+}
+
+async fn send_pair(
+    ctp: &IrohTransport,
+    daemon: transport::NodeId,
+    token: &str,
+    name: &str,
+) -> Resp {
+    let mut stream = ctp.connect(daemon, transport::ALPN_CTRL).await.unwrap();
+    let req = Req {
+        id: "pair-1".into(),
+        method: "pair.request".into(),
+        params: serde_json::to_value(PairRequest {
+            token: token.into(),
+            device_name: name.into(),
+            role: "member".into(),
+        })
+        .unwrap(),
+        ..Default::default()
+    };
+    stream
+        .send_frame(&proto::codec::encode(&req).unwrap())
+        .await
+        .unwrap();
+    stream.finish().unwrap();
+    let frame = stream.recv_frame().await.unwrap().expect("a response");
+    proto::codec::decode::<Resp>(&frame).unwrap()
+}
+
+fn token_of(qr: &str) -> String {
+    qr.rsplit("&t=").next().unwrap().to_string()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn full_flow_pairs_the_device() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    let qr = pairing.start([0x42; 32], now());
+    assert!(qr.starts_with(&format!("ppf://pair?node={}", dtp.node_id())));
+
+    let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "妈妈的手机").await;
+    assert!(resp.ok, "pairing must succeed: {resp:?}");
+    let accepted: proto::PairAccepted = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(accepted.storage_device_name, "客厅的电脑");
+
+    // The whitelist row is real — the same client is now authorized.
+    let device = db
+        .get_device(&ctp.node_id().0)
+        .await
+        .unwrap()
+        .expect("device row written");
+    assert_eq!(device.name, "妈妈的手机");
+    assert_eq!(device.role, Role::Member);
+    assert!(!device.revoked);
+
+    // And the audit trail names the pairing (审计裁决).
+    let audit = db.list_audit(10).await.unwrap();
+    assert!(audit.iter().any(|r| r.entry.action == "pair.accepted"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn expired_token_is_rejected() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    // Issued 11 minutes in the past — beyond the 600 s TTL.
+    let qr = pairing.start([0x43; 32], now() - 11 * 60 * 1000);
+    let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "过期设备").await;
+    let err = resp.error.expect("expired token must be rejected");
+    assert_eq!(err.code, codes::NOT_AUTHORIZED);
+    assert!(db.get_device(&ctp.node_id().0).await.unwrap().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn token_replay_is_rejected() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
+    let first = endpoint().await;
+    first.add_peer(daddr.clone());
+    let second = endpoint().await;
+    second.add_peer(daddr);
+
+    let qr = pairing.start([0x44; 32], now());
+    let token = token_of(&qr);
+
+    let resp = send_pair(&first, dtp.node_id(), &token, "第一台").await;
+    assert!(resp.ok, "first use must pass: {resp:?}");
+
+    // Same token again from a different device: one-time means one time.
+    let resp = send_pair(&second, dtp.node_id(), &token, "重放攻击者").await;
+    let err = resp.error.expect("replay must be rejected");
+    assert_eq!(err.code, codes::NOT_AUTHORIZED);
+    assert!(db.get_device(&second.node_id().0).await.unwrap().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_decline_writes_nothing() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), false).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    let qr = pairing.start([0x45; 32], now());
+    let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "被拒绝的设备").await;
+    let err = resp.error.expect("owner said no");
+    assert_eq!(err.code, codes::NOT_AUTHORIZED);
+    assert!(db.get_device(&ctp.node_id().0).await.unwrap().is_none());
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}

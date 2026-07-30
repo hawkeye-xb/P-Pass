@@ -24,6 +24,7 @@ pub const SERVER_CAPABILITIES: &[&str] = &["thumbnail.v1"];
 pub struct Router {
     db: Db,
     device_name: String,
+    pairing: Option<crate::pairing::Pairing>,
 }
 
 impl Router {
@@ -31,7 +32,15 @@ impl Router {
         Self {
             db,
             device_name: device_name.into(),
+            pairing: None,
         }
+    }
+
+    /// Attach the pairing engine (T-031). Without it, `pair.request`
+    /// answers `err.unsupported`.
+    pub fn with_pairing(mut self, pairing: crate::pairing::Pairing) -> Self {
+        self.pairing = Some(pairing);
+        self
     }
 
     /// Accept-loop over inbound connections. Runs until the transport
@@ -105,17 +114,18 @@ impl Router {
                 false // 关流 (§2.3: deny closes the connection)
             }
             Decision::Allow => {
-                let resp = self.dispatch(&req).await;
+                let resp = self.dispatch(peer, &req).await;
                 let _ = self.send(stream, &resp).await;
                 true
             }
         }
     }
 
-    /// Method dispatch for authorized requests. T-030 ships `hello`;
-    /// every later card plugs its handler in here.
-    async fn dispatch(&self, req: &Req) -> Resp {
+    /// Method dispatch for authorized requests. T-030 ships `hello`,
+    /// T-031 adds `pair.request`; every later card plugs in here.
+    async fn dispatch(&self, peer: transport::NodeId, req: &Req) -> Resp {
         match req.method.as_str() {
+            methods::PAIR_REQUEST => self.handle_pair(peer, req).await,
             methods::HELLO => {
                 let ours = Hello {
                     proto_ver: PROTO_VER,
@@ -135,6 +145,46 @@ impl Router {
                 req.id.clone(),
                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
             ),
+        }
+    }
+
+    /// `pair.request` (T-031): token check → owner confirmation → device
+    /// row → PairAccepted. Every rejection is the same NOT_AUTHORIZED —
+    /// a prober learns nothing about which part failed.
+    async fn handle_pair(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        let Some(pairing) = &self.pairing else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let Ok(pair_req) = serde_json::from_value::<proto::PairRequest>(req.params.clone()) else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        match pairing.handle_request(peer, &pair_req, unix_ms_now()).await {
+            Ok(()) => {
+                let accepted = proto::PairAccepted {
+                    storage_device_name: self.device_name.clone(),
+                };
+                match serde_json::to_value(&accepted) {
+                    Ok(v) => Resp::ok(req.id.clone(), v),
+                    Err(_) => Resp::err(
+                        req.id.clone(),
+                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+                    ),
+                }
+            }
+            Err(_) => {
+                self.record_denial(peer, methods::PAIR_REQUEST, diag::keys::ERR_NOT_AUTHORIZED)
+                    .await;
+                Resp::err(
+                    req.id.clone(),
+                    RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
+                )
+            }
         }
     }
 

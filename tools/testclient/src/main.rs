@@ -17,9 +17,12 @@ struct Cli {
 enum Cmd {
     /// 配对流程测试：扫码令牌 → PairRequest → 等待确认（T-031 实装）
     Pair {
-        /// ppf://pair?... 配对串
+        /// ppf://pair?node=<hex>&t=<token> 配对串（daemon 启动时打印）
         #[arg(long)]
         token: Option<String>,
+        /// 报给存储端看的设备名
+        #[arg(long, default_value = "testclient")]
+        name: String,
     },
     /// 备份剧本：推送 N 个文件走 manifest→missing→push→commit（T-032 实装）
     Backup {
@@ -44,11 +47,20 @@ enum Cmd {
 fn main() {
     let cli = Cli::parse();
     let cmd_name = match &cli.cmd {
-        Cmd::Pair { .. } => "pair",
+        Cmd::Pair {
+            token: Some(qr),
+            name,
+        } => {
+            std::process::exit(run_async(pair(qr, name)));
+        }
+        Cmd::Pair { token: None, .. } => {
+            eprintln!("缺少 --token：把 daemon 启动时打印的 ppf://pair?... 串传进来。");
+            std::process::exit(1);
+        }
         Cmd::Backup { .. } => "backup",
         Cmd::Browse { .. } => "browse",
         Cmd::RevokeCheck { node } => {
-            std::process::exit(run_revoke_check(node));
+            std::process::exit(run_async(revoke_check(node)));
         }
     };
 
@@ -66,9 +78,8 @@ fn main() {
     }
 }
 
-/// T-030 验收剧本：以本机（未配对或已吊销）的身份连上存储端，发一个
-/// 浏览请求，期待被授权检查点拒绝。拒绝 = 检查点在岗 = exit 0。
-fn run_revoke_check(node: &str) -> i32 {
+/// Run one async scenario to completion; success message on stdout.
+fn run_async(fut: impl std::future::Future<Output = anyhow::Result<String>>) -> i32 {
     let rt = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -76,16 +87,98 @@ fn run_revoke_check(node: &str) -> i32 {
             return 1;
         }
     };
-    match rt.block_on(revoke_check(node)) {
+    match rt.block_on(fut) {
         Ok(msg) => {
             println!("{msg}");
             0
         }
         Err(e) => {
-            eprintln!("revoke-check 失败：{e:#}");
+            eprintln!("失败：{e:#}");
             1
         }
     }
+}
+
+/// T-031 剧本：解析 QR 串 → 连接存储端 → PairRequest → 等 owner 确认。
+async fn pair(qr: &str, name: &str) -> anyhow::Result<String> {
+    let rest = qr
+        .strip_prefix("ppf://pair?node=")
+        .ok_or_else(|| anyhow::anyhow!("配对串必须以 ppf://pair?node= 开头：{qr}"))?;
+    let (node_hex, token) = rest
+        .split_once("&t=")
+        .ok_or_else(|| anyhow::anyhow!("配对串缺少 &t=<token> 段：{qr}"))?;
+    let daemon: transport::NodeId = node_hex
+        .parse()
+        .map_err(|_| anyhow::anyhow!("配对串里的 NodeId 不合法：{node_hex}"))?;
+
+    let tp = bind_endpoint().await?;
+    let mut stream = connect_ctrl(&tp, daemon).await?;
+    let req = proto::Req {
+        id: "pair".into(),
+        method: "pair.request".into(),
+        params: serde_json::to_value(proto::PairRequest {
+            token: token.trim().into(),
+            device_name: name.into(),
+            role: "member".into(),
+        })?,
+        ..Default::default()
+    };
+    println!("已发送配对请求，等待存储端上的确认……");
+    let resp = roundtrip(&mut stream, &req).await?;
+    match resp.error {
+        None => {
+            let accepted: proto::PairAccepted =
+                serde_json::from_value(resp.result.unwrap_or_default())?;
+            Ok(format!(
+                "✅ 配对成功：已加入「{}」。本机 NodeId: {}",
+                accepted.storage_device_name,
+                tp.node_id()
+            ))
+        }
+        Some(err) => anyhow::bail!(
+            "配对被拒绝（{} / {}）——令牌过期、已用过，或 owner 拒绝了。",
+            err.code,
+            err.msg_key
+        ),
+    }
+}
+
+async fn bind_endpoint() -> anyhow::Result<transport::IrohTransport> {
+    transport::IrohTransport::bind(transport::TransportConfig::from_endpoints(
+        Vec::new(),
+        vec![transport::ALPN_CTRL.into()],
+    ))
+    .await
+    .map_err(|e| anyhow::anyhow!("绑定本机端点失败：{e}"))
+}
+
+async fn connect_ctrl(
+    tp: &transport::IrohTransport,
+    daemon: transport::NodeId,
+) -> anyhow::Result<transport::BiStream> {
+    use transport::Transport as _;
+    tp.connect(daemon, transport::ALPN_CTRL)
+        .await
+        .map_err(|e| anyhow::anyhow!("连接存储端失败（它在线吗？）：{e}"))
+}
+
+/// Send one request, half-close, read the one response.
+async fn roundtrip(
+    stream: &mut transport::BiStream,
+    req: &proto::Req,
+) -> anyhow::Result<proto::Resp> {
+    let frame = proto::codec::encode(req)?;
+    stream
+        .send_frame(&frame)
+        .await
+        .map_err(|e| anyhow::anyhow!("发送请求失败：{e}"))?;
+    stream.finish().ok();
+    let frame = stream
+        .recv_frame()
+        .await
+        .map_err(|e| anyhow::anyhow!("等待响应失败：{e}"))?
+        .ok_or_else(|| anyhow::anyhow!("存储端没有回应就关闭了流"))?;
+    Ok(proto::codec::decode(&frame)?)
 }
 
 async fn revoke_check(node: &str) -> anyhow::Result<String> {
@@ -93,38 +186,15 @@ async fn revoke_check(node: &str) -> anyhow::Result<String> {
         .parse()
         .map_err(|_| anyhow::anyhow!("--node 不是合法的 64 位 hex NodeId：{node}"))?;
 
-    let tp = transport::IrohTransport::bind(transport::TransportConfig::from_endpoints(
-        Vec::new(),
-        vec![transport::ALPN_CTRL.into()],
-    ))
-    .await
-    .map_err(|e| anyhow::anyhow!("绑定本机端点失败：{e}"))?;
-
-    use transport::Transport as _;
-    let mut stream = tp
-        .connect(daemon, transport::ALPN_CTRL)
-        .await
-        .map_err(|e| anyhow::anyhow!("连接存储端失败（它在线吗？）：{e}"))?;
-
+    let tp = bind_endpoint().await?;
+    let mut stream = connect_ctrl(&tp, daemon).await?;
     let req = proto::Req {
         id: "revoke-check".into(),
         method: "timeline.page".into(),
         params: serde_json::Value::Null,
         ..Default::default()
     };
-    let frame = proto::codec::encode(&req)?;
-    stream
-        .send_frame(&frame)
-        .await
-        .map_err(|e| anyhow::anyhow!("发送请求失败：{e}"))?;
-    stream.finish().ok();
-
-    let frame = stream
-        .recv_frame()
-        .await
-        .map_err(|e| anyhow::anyhow!("等待响应失败：{e}"))?
-        .ok_or_else(|| anyhow::anyhow!("存储端没有回应就关闭了流"))?;
-    let resp: proto::Resp = proto::codec::decode(&frame)?;
+    let resp = roundtrip(&mut stream, &req).await?;
 
     match resp.error {
         Some(err) if err.code == proto::codes::NOT_AUTHORIZED => Ok(format!(

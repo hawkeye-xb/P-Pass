@@ -888,6 +888,7 @@ dependencies = [
  "anyhow",
  "diag",
  "futures-core",
+ "getrandom 0.3.4",
  "proto",
  "serde",
  "serde_json",
