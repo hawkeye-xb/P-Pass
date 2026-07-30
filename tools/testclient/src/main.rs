@@ -38,6 +38,9 @@ enum Cmd {
         /// 每页条数
         #[arg(long, default_value = "200")]
         limit: u32,
+        /// 存储端 NodeId（64 位 hex，daemon 启动时打印）
+        #[arg(long)]
+        node: String,
     },
     /// 吊销验证：以未配对/已吊销身份连接，期望 not_authorized（T-030 实装）
     RevokeCheck {
@@ -49,39 +52,84 @@ enum Cmd {
 
 fn main() {
     let cli = Cli::parse();
-    let cmd_name = match &cli.cmd {
+    let code = match cli.cmd {
         Cmd::Pair {
             token: Some(qr),
             name,
-        } => {
-            std::process::exit(run_async(pair(qr, name)));
-        }
+        } => run_async(pair(&qr, &name)),
         Cmd::Pair { token: None, .. } => {
             eprintln!("缺少 --token：把 daemon 启动时打印的 ppf://pair?... 串传进来。");
-            std::process::exit(1);
+            1
         }
-        Cmd::Backup { files, node } => {
-            let (files, node) = (*files, node.clone());
-            std::process::exit(run_async(backup(files, &node)));
-        }
-        Cmd::Browse { .. } => "browse",
-        Cmd::RevokeCheck { node } => {
-            std::process::exit(run_async(revoke_check(node)));
+        Cmd::Backup { files, node } => run_async(backup(files, &node)),
+        Cmd::Browse { limit, node } => run_async(browse(limit, &node)),
+        Cmd::RevokeCheck { node } => run_async(revoke_check(&node)),
+    };
+    std::process::exit(code);
+}
+
+/// T-033 剧本：分页遍历时间线（校验无重漏）+ 抽查缩略图可解码。
+async fn browse(limit: u32, node: &str) -> anyhow::Result<String> {
+    let daemon: transport::NodeId = node
+        .parse()
+        .map_err(|_| anyhow::anyhow!("--node 不是合法的 64 位 hex NodeId：{node}"))?;
+    let tp = bind_endpoint().await?;
+
+    let call = |method: &str, params: serde_json::Value| {
+        let tp = tp.clone();
+        let method = method.to_string();
+        async move {
+            let mut stream = connect_ctrl(&tp, daemon).await?;
+            let req = proto::Req {
+                id: method.clone(),
+                method,
+                params,
+                ..Default::default()
+            };
+            roundtrip(&mut stream, &req).await
         }
     };
 
-    // Skeleton behaviour: every subcommand first needs a daemon connection,
-    // and none exists yet — fail with a human-readable message (契约).
-    match connect_daemon() {
-        Ok(()) => {
-            eprintln!("`{cmd_name}` 的真实逻辑随 P3 任务卡实装，当前为骨架。");
-            std::process::exit(2);
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor: Option<String> = None;
+    let mut first_hash: Option<String> = None;
+    loop {
+        let q = proto::TimelineQuery { cursor, limit };
+        let resp = call("timeline.page", serde_json::to_value(&q)?).await?;
+        anyhow::ensure!(resp.ok, "timeline.page 被拒：{:?}", resp.error);
+        let page: proto::TimelinePage = serde_json::from_value(resp.result.unwrap_or_default())?;
+        for item in &page.items {
+            anyhow::ensure!(
+                seen.insert(item.hash.clone()),
+                "分页出现重复：{}",
+                item.hash
+            );
+            first_hash.get_or_insert_with(|| item.hash.clone());
         }
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
+        match page.next {
+            Some(c) => cursor = Some(c),
+            None => break,
         }
     }
+
+    let mut thumb_note = "（库为空，未抽查缩略图）".to_string();
+    if let Some(hash) = first_hash {
+        let t = proto::ThumbGet {
+            hash: hash.clone(),
+            size: proto::ThumbSize::S256,
+        };
+        let resp = call("thumb.get", serde_json::to_value(&t)?).await?;
+        anyhow::ensure!(resp.ok, "thumb.get 失败：{:?}", resp.error);
+        let data: proto::ThumbData = serde_json::from_value(resp.result.unwrap_or_default())?;
+        anyhow::ensure!(!data.jpeg_base64.is_empty(), "缩略图为空");
+        thumb_note = format!("抽查缩略图 {} … OK", &hash[..8]);
+    }
+
+    Ok(format!(
+        "✅ 浏览完成：时间线共 {} 项，分页无重复；{}",
+        seen.len(),
+        thumb_note
+    ))
 }
 
 /// Run one async scenario to completion; success message on stdout.
@@ -307,17 +355,6 @@ async fn revoke_check(node: &str) -> anyhow::Result<String> {
         ),
         None => anyhow::bail!("存储端竟然放行了未授权设备的浏览请求——检查点失守！"),
     }
-}
-
-/// Placeholder daemon connection. The real IPC (local socket + token)
-/// arrives with T-034; until then this always fails — with a message a
-/// human can act on, not a stack trace.
-fn connect_daemon() -> anyhow::Result<()> {
-    anyhow::bail!(
-        "无法连接到 P-Pass daemon：它可能还没有运行。\n\
-         请先启动 daemon（`just dev-daemon`）后重试；\n\
-         若已启动仍失败，检查数据目录下的 IPC 令牌是否可读。"
-    )
 }
 
 #[cfg(test)]

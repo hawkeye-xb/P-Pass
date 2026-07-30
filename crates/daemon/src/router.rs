@@ -26,6 +26,7 @@ pub struct Router {
     device_name: String,
     pairing: Option<crate::pairing::Pairing>,
     backup: Option<crate::backup::BackupEngine>,
+    query: Option<crate::query::QueryEngine>,
 }
 
 impl Router {
@@ -35,6 +36,7 @@ impl Router {
             device_name: device_name.into(),
             pairing: None,
             backup: None,
+            query: None,
         }
     }
 
@@ -49,6 +51,13 @@ impl Router {
     /// `err.unsupported`.
     pub fn with_backup(mut self, backup: crate::backup::BackupEngine) -> Self {
         self.backup = Some(backup);
+        self
+    }
+
+    /// Attach the query engine (T-033). Without it, browse methods
+    /// answer `err.unsupported`.
+    pub fn with_query(mut self, query: crate::query::QueryEngine) -> Self {
+        self.query = Some(query);
         self
     }
 
@@ -138,6 +147,10 @@ impl Router {
             methods::BACKUP_BEGIN | methods::BACKUP_MANIFEST | methods::BACKUP_COMMIT => {
                 self.handle_backup(peer, req).await
             }
+            methods::TIMELINE_PAGE
+            | methods::ASSET_META
+            | methods::THUMB_GET
+            | methods::ASSET_BLOB_TICKET => self.handle_query(req).await,
             methods::HELLO => {
                 let ours = Hello {
                     proto_ver: PROTO_VER,
@@ -157,6 +170,81 @@ impl Router {
                 req.id.clone(),
                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
             ),
+        }
+    }
+
+    /// Browse methods (T-033): timeline pages, per-asset metadata,
+    /// thumbnails (base64 JPEG in-frame), blob tickets for originals.
+    async fn handle_query(&self, req: &Req) -> Resp {
+        let Some(query) = &self.query else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let bad_request = || {
+            Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            )
+        };
+        let not_found = || {
+            Resp::err(
+                req.id.clone(),
+                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
+            )
+        };
+        let ok_or = |id: &str, v: Result<serde_json::Value, serde_json::Error>| match v {
+            Ok(v) => Resp::ok(id.to_string(), v),
+            Err(_) => Resp::err(
+                id.to_string(),
+                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+            ),
+        };
+        match req.method.as_str() {
+            methods::TIMELINE_PAGE => {
+                let Ok(q) = serde_json::from_value::<proto::TimelineQuery>(req.params.clone())
+                else {
+                    return bad_request();
+                };
+                match query.timeline(&q).await {
+                    Ok(page) => ok_or(&req.id, serde_json::to_value(&page)),
+                    Err(_) => not_found(),
+                }
+            }
+            methods::ASSET_META => {
+                let Some(hash) = req.params.get("hash").and_then(|v| v.as_str()) else {
+                    return bad_request();
+                };
+                match query.asset_meta(hash).await {
+                    Ok(meta) => ok_or(&req.id, serde_json::to_value(&meta)),
+                    Err(_) => not_found(),
+                }
+            }
+            methods::THUMB_GET => {
+                let Ok(t) = serde_json::from_value::<proto::ThumbGet>(req.params.clone()) else {
+                    return bad_request();
+                };
+                match query.thumb(&t).await {
+                    Ok(bytes) => {
+                        use base64::Engine as _;
+                        let data = proto::ThumbData {
+                            jpeg_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+                        };
+                        ok_or(&req.id, serde_json::to_value(&data))
+                    }
+                    Err(_) => not_found(),
+                }
+            }
+            _ => {
+                let Some(hash) = req.params.get("hash").and_then(|v| v.as_str()) else {
+                    return bad_request();
+                };
+                match query.blob_ticket(hash).await {
+                    Ok(ticket) => ok_or(&req.id, serde_json::to_value(&ticket)),
+                    Err(_) => not_found(),
+                }
+            }
         }
     }
 

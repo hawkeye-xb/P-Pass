@@ -14,7 +14,9 @@ mod thumb;
 pub use decode::decode_image;
 pub use ffmpeg::{extract_frame, ffmpeg_path};
 pub use pool::ThumbPool;
-pub use thumb::{make_thumbs, thumb_paths, ThumbOutcome, ThumbPaths, ThumbResult, THUMB_SIZES};
+pub use thumb::{
+    make_thumbs, placeholder_jpeg, thumb_paths, ThumbOutcome, ThumbPaths, ThumbResult, THUMB_SIZES,
+};
 
 /// Codec-layer errors. Like core-index, every I/O failure names its path —
 /// these become human-readable diagnostics (msg_key 体系).

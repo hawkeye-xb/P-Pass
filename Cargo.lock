@@ -886,11 +886,14 @@ name = "daemon"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "blake3",
  "core-index",
  "diag",
  "futures-core",
  "getrandom 0.3.4",
+ "image",
+ "media-codec",
  "proto",
  "serde",
  "serde_json",

@@ -59,13 +59,15 @@ pub enum BackupError {
 
 impl BackupEngine {
     /// `library_root` is the same root core-index lands originals under;
-    /// staging lives beside the index in `.ppf/staging`.
-    pub fn new(db: Db, blobs: Blobs, library_root: impl Into<PathBuf>) -> Self {
+    /// staging lives beside the index in `.ppf/staging`. `blobs` is the
+    /// daemon's ONE store handle — shared with the query engine (two
+    /// handles on one store dir would fight over the redb lock).
+    pub fn new(db: Db, blobs: Arc<Blobs>, library_root: impl Into<PathBuf>) -> Self {
         let root = library_root.into();
         Self {
             ingestor: Ingestor::new(db.clone(), &root),
             db,
-            blobs: Arc::new(blobs),
+            blobs,
             staging: root.join(".ppf/staging"),
             sessions: Arc::default(),
         }

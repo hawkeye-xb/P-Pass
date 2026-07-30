@@ -233,6 +233,15 @@ pub struct ThumbGet {
     pub size: ThumbSize,
 }
 
+/// Thumbnail response payload (T-033): the JPEG, base64-encoded inside
+/// the ctrl-plane JSON frame. Thumbs are tens of KB — far under the
+/// 16 MiB frame cap; originals go over blobs instead.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct ThumbData {
+    pub jpeg_base64: String,
+}
+
 // ── Blob transfer ───────────────────────────────────
 
 /// Request a blob transfer ticket (i.e. a BLAKE3 hash).

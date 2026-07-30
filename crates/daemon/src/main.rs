@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
     let transport = transport::IrohTransport::bind(transport::TransportConfig::from_endpoints(
         config.relay_urls.clone(),
-        vec![transport::ALPN_CTRL.into()],
+        vec![transport::ALPN_CTRL.into(), transport::ALPN_BLOBS.into()],
     ))
     .await?;
 
@@ -57,13 +57,19 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Backup receive pipeline (T-032): blobs store beside the index.
-    let blobs = transport::Blobs::open(&transport, &data_dir.join(".ppf/blobs")).await?;
-    let backup = daemon::BackupEngine::new(db.clone(), blobs, &data_dir);
+    // One blob store handle, shared by backup (pulls) and query
+    // (tickets); also serves fetches through the listen loop (T-033).
+    let blobs = std::sync::Arc::new(
+        transport::Blobs::open(&transport, &data_dir.join(".ppf/blobs")).await?,
+    );
+    blobs.attach_to_listener();
+    let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir);
+    let query = daemon::QueryEngine::new(db.clone(), blobs, &data_dir);
 
     Router::new(db, "P-Pass 存储端")
         .with_pairing(pairing)
         .with_backup(backup)
+        .with_query(query)
         .serve(&transport)
         .await;
     Ok(())

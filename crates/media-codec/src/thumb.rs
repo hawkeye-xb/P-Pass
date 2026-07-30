@@ -144,6 +144,19 @@ fn placeholder_image(size: u32) -> image::RgbImage {
     img
 }
 
+/// The built-in placeholder as encoded JPEG bytes — what `thumb.get`
+/// answers when generation can't finish in time (T-033's 5 s budget).
+pub fn placeholder_jpeg(size: u32) -> Vec<u8> {
+    let img = placeholder_image(size);
+    let mut out = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY);
+    // Encoding an in-memory RGB image into a Vec cannot fail for the
+    // sizes we use; a hypothetical failure yields an empty (still
+    // harmless) payload rather than a panic.
+    let _ = enc.encode_image(&img);
+    out
+}
+
 fn write_jpeg_atomic(img: &image::RgbImage, dest: &Path) -> Result<()> {
     let dir = dest.parent().unwrap_or(Path::new("."));
     let io_err = |source| CodecError::Io {

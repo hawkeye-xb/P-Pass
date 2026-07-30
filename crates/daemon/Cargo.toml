@@ -10,7 +10,10 @@ proto = { path = "../proto" }
 transport = { path = "../transport" }
 storage = { path = "../storage" }
 core-index = { path = "../core-index" }
+media-codec = { path = "../media-codec" }
 diag = { path = "../diag" }
+# base64 for in-frame thumbnail bytes (already in tree via storage).
+base64 = "0.22"
 thiserror.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -26,3 +29,4 @@ getrandom = "0.3"
 [dev-dependencies]
 tempfile = "3"
 blake3 = "1"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

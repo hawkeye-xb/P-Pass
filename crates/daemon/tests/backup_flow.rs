@@ -33,7 +33,7 @@ struct StorageSide {
 async fn start_daemon(dir: &Path) -> StorageSide {
     let db = Db::open(&dir.join("index.sqlite")).await.unwrap();
     let tp = endpoint().await;
-    let blobs = Blobs::open(&tp, &dir.join("daemon-blobs")).await.unwrap();
+    let blobs = std::sync::Arc::new(Blobs::open(&tp, &dir.join("daemon-blobs")).await.unwrap());
     let backup = BackupEngine::new(db.clone(), blobs, dir.join("library"));
     let router = Router::new(db.clone(), "storage").with_backup(backup);
     let tp2 = tp.clone();

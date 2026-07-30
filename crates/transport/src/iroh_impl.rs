@@ -82,6 +82,10 @@ pub struct IrohTransport {
     peers: Arc<Mutex<HashMap<NodeId, EndpointAddr>>>,
     /// Live connections per peer — latest wins. Sole consumer: `conn_info`.
     conns: Arc<Mutex<HashMap<NodeId, Connection>>>,
+    /// Optional blobs handler: `listen` routes `ALPN_BLOBS` connections
+    /// here instead of the ctrl stream (one endpoint = one accept queue;
+    /// a daemon serving both planes shares the loop, T-033).
+    blobs_handler: Arc<Mutex<Option<iroh_blobs::BlobsProtocol>>>,
 }
 
 impl IrohTransport {
@@ -121,6 +125,7 @@ impl IrohTransport {
             ep,
             peers: Arc::default(),
             conns: Arc::default(),
+            blobs_handler: Arc::default(),
         })
     }
 
@@ -149,6 +154,12 @@ impl IrohTransport {
     /// Crate-internal endpoint access (blobs.rs shares the endpoint).
     pub(crate) fn endpoint(&self) -> &Endpoint {
         &self.ep
+    }
+
+    /// Crate-internal: register the blobs handler the `listen` loop
+    /// dispatches `ALPN_BLOBS` connections to.
+    pub(crate) fn set_blobs_handler(&self, handler: iroh_blobs::BlobsProtocol) {
+        *self.blobs_handler.lock().expect("blobs handler lock") = Some(handler);
     }
 
     /// Crate-internal: raw connection to a peer (blobs.rs fetches over
@@ -183,6 +194,7 @@ impl Transport for IrohTransport {
         let conns = Arc::clone(&self.conns);
 
         let peers = Arc::clone(&self.peers);
+        let blobs_handler = Arc::clone(&self.blobs_handler);
         tokio::spawn(async move {
             while let Some(incoming) = ep.accept().await {
                 let Ok(mut accepting) = incoming.accept() else {
@@ -191,6 +203,7 @@ impl Transport for IrohTransport {
                 let tx = tx.clone();
                 let conns = Arc::clone(&conns);
                 let peers = Arc::clone(&peers);
+                let blobs_handler = Arc::clone(&blobs_handler);
                 // Finish each handshake off the accept loop so one slow
                 // client cannot stall the others.
                 tokio::spawn(async move {
@@ -218,6 +231,16 @@ impl Transport for IrohTransport {
                         peers.lock().expect("peers lock").insert(peer, ep_addr);
                     }
                     let alpn = String::from_utf8_lossy(&alpn).into_owned();
+                    // Data-plane connections go straight to the blobs
+                    // handler; only ctrl-plane connections reach the app.
+                    if alpn == crate::ALPN_BLOBS {
+                        let handler = blobs_handler.lock().expect("blobs handler lock").clone();
+                        if let Some(h) = handler {
+                            use iroh::protocol::ProtocolHandler;
+                            let _ = h.accept(conn).await;
+                        }
+                        return;
+                    }
                     let _ = tx.send(Incoming { peer, alpn, conn }).await;
                 });
             }

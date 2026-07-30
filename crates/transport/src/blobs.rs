@@ -46,7 +46,11 @@ impl Blobs {
         })
     }
 
-    /// Start answering fetch requests on [`crate::ALPN_BLOBS`].
+    /// Start answering fetch requests on [`crate::ALPN_BLOBS`], as the
+    /// endpoint's ONLY accept consumer (pure provider — e.g. the phone
+    /// side of a backup). A process that also runs [`Transport::listen`]
+    /// must use [`Self::attach_to_listener`] instead: one endpoint has
+    /// one accept queue.
     pub fn serve(&mut self) {
         if self.router.is_some() {
             return;
@@ -56,6 +60,14 @@ impl Blobs {
             .accept(crate::ALPN_BLOBS.as_bytes(), proto)
             .spawn();
         self.router = Some(router);
+    }
+
+    /// Serve fetch requests through the transport's own `listen` loop —
+    /// the daemon shape (ctrl + blobs on one endpoint, T-033). The
+    /// transport dispatches `ALPN_BLOBS` connections to this store.
+    pub fn attach_to_listener(&self) {
+        self.transport
+            .set_blobs_handler(BlobsProtocol::new(&self.store, None));
     }
 
     /// Import `path` into the store and return a ticket a peer can pull

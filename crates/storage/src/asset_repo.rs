@@ -68,6 +68,17 @@ impl Db {
         Ok(done.rows_affected())
     }
 
+    /// Record the thumbnail pipeline's verdict for one asset
+    /// (0 pending / 1 done / 2 failed-placeholder, T-013/T-033).
+    pub async fn set_thumb_state(&self, hash: &[u8], state: i64) -> Result<()> {
+        sqlx::query("UPDATE asset SET thumb_state = ? WHERE hash = ?")
+            .bind(state)
+            .bind(hash)
+            .execute(self.pool())
+            .await?;
+        Ok(())
+    }
+
     pub async fn get_asset(&self, hash: &[u8]) -> Result<Option<Asset>> {
         let row = sqlx::query(
             "SELECT hash, rel_path, media_type, bytes, taken_at, width, height,
