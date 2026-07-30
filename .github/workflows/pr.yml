@@ -31,8 +31,11 @@ jobs:
             target/
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: System codecs (libheif for HEIC, ffmpeg for video thumbs)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev ffmpeg
+      - name: System codecs (libheif + HEVC plugin for HEIC, ffmpeg for video thumbs)
+        # libheif-plugin-libde265 is the HEVC decode plugin — without it
+        # libheif opens HEIC containers but cannot decode the pixels
+        # ("Unsupported codec"), verified in a clean noble container.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
