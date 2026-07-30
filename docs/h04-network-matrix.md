@@ -8,7 +8,7 @@
 
 | # | 场景 | 手机网络 | 桌面网络 | NAT 类型（手机/桌面） | 预期 | 直连率 | 平均 RTT | 平均吞吐 |
 |---|------|---------|---------|---------------------|------|--------|---------|---------|
-| 1 | 同 WiFi | WiFi（家庭） | WiFi（家庭） | Full Cone / Full Cone | Lan 直连 | /20 | | |
+| 1 | 同 WiFi | WiFi（家庭） | WiFi（家庭） | Full Cone / Full Cone | Lan 直连 | **20/20** ✅ | — | 43.9 Mbps (均值) |
 | 2 | 家宽→4G | 4G/5G 蜂窝 | WiFi（家庭） | Symmetric / Full Cone | Direct 或 Relay | 0/20（见备注*） | connect P50 405ms | relay 11.3 Mbps (P50) |
 | 3 | 4G→家宽（反向） | WiFi（家庭） | 4G 热点 | Full Cone / Symmetric | Direct 或 Relay | /20 | | |
 | 4 | 双运营商 4G | 4G（运营商 A） | 4G 热点（运营商 B） | Symmetric / Symmetric | Relay（大概率） | /20 | | |
@@ -197,3 +197,16 @@ LAN 192.168.1.73:41145、**两个全局 IPv6（2408:8207:5455:ef60::/64）**；r
 - **工装升级（listener v2）**：监听端每笔接收自记 JSONL（对端 NodeId/path/ipver/addr/吞吐），
   回应"接收端为何不能判断"的合理质疑——iroh 双端对称可观测，此前纯属 spike 监听器偷懒。
   自此所有场景不再依赖手机导出日志。分发：仓库孤儿分支 home-test-bundle（jsDelivr CDN，用后删除）。
+
+### ✅ 场景 1 定案（OPPO · 家 WiFi → 家中 M 系 Mac，v2 监听端自记，2026-07-29 晚）
+
+- **20/20 direct，零 relay，零失败**。100MB×20，吞吐 29.3~50.8 Mbps（均值 43.9）。
+  拨号端=家人 OPPO（APK v3，NodeId 083e4ecff5），原始记录：h04-logs/s1-oppo-homewifi-home-20260729.log。
+- **Gate 判定标准"同 WiFi 直连率 100%"达成**（绿）。
+- 两个诚实注记：
+  1. **path 标签是 direct 不是 lan，但流量确未出局域网**——对端地址为 192.168.1.35（LAN v4）
+     和家宽同一 /64 前缀的 v6 地址。分类器把 lan 定义为 selected 路径 RTT<500µs，WiFi 空口 RTT
+     毫秒级永远到不了该阈值，属工装阈值问题非路径问题（正式版 transport::conninfo 用地址判 Lan，无此毛病）。
+  2. **同 WiFi 下 iroh 也偏好 v6**：18/20 轮走 v6 GUA（含手机隐私地址轮换出的两个后缀），仅 2 轮 v4 LAN。
+     v6 就近路由不出网关，速率与 v4 轮无差别（45.1/40.0 vs 均值 43.9）。
+- 速率比场景 2 蜂窝 v6（52~68 Mbps）低，瓶颈在手机 WiFi 空口/频段，非 iroh——同一监听端同一晚。

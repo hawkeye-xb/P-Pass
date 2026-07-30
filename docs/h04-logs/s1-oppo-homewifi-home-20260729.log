@@ -1,0 +1,24 @@
+# 场景 1（同 WiFi）· OPPO（家人手机,APK v3,NodeId 083e4ecff5）→ 家中 M 系 Mac 监听端 v2
+# 2026-07-29 晚。20×100MB,零失败零 relay。用户从监听端 stderr 转录（listen-log.jsonl 同源）。
+# 注:path=direct 而非 lan 是分类器 RTT<500µs 阈值到不了（WiFi RTT 毫秒级）;
+#    对端地址(192.168.1.35 / 同一 2408:8207:5455:ef60::/64 前缀)证明流量未出局域网。
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 29.3 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:53dd:56e4:4402:1ec5]:43424) 38.3 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:53dd:56e4:4402:1ec5]:43424) 49.4 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 50.8 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:53dd:56e4:4402:1ec5]:43424) 46.2 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:53dd:56e4:4402:1ec5]:43424) 39.5 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 47.3 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:53dd:56e4:4402:1ec5]:43424) 45.2 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 43.5 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 44.9 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 42.1 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v4 192.168.1.35:49431) 45.1 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 43.0 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:53dd:56e4:4402:1ec5]:43424) 42.9 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v4 192.168.1.35:49431) 40.0 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:53dd:56e4:4402:1ec5]:43424) 48.0 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 44.6 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 43.2 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 45.3 Mbps
+Received 100.0MB from 083e4ecff5 (direct/v6 [2408:8207:5455:ef60:d47a:7c7a:66:2eec]:43424) 49.0 Mbps
