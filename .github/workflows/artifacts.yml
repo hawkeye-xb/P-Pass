@@ -36,14 +36,15 @@ jobs:
       - name: Build release binaries
         run: cargo build --release -p daemon -p testclient
 
+      - name: Bundle self-contained (dylibs + rpath rewrite)
+        run: tools/bundle-macos.sh /tmp/bin target/release/daemon target/release/testclient
+
       - name: Push to bin-macos-arm64 orphan branch
         run: |
           set -euo pipefail
-          mkdir -p /tmp/bin
-          cp target/release/daemon target/release/testclient /tmp/bin/
           cp tools/dogfood-smoke.sh /tmp/bin/ || true
           cd /tmp/bin
-          shasum -a 256 daemon testclient > SHA256SUMS
+          shasum -a 256 daemon testclient lib/*.dylib > SHA256SUMS
           echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
           git init -q -b bin-macos-arm64
           git config user.name "github-actions"

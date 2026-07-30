@@ -10,14 +10,21 @@ agent 可执行。2026-07-30 已跨公网双机验证全绿（阿里云×办公 
 
 ## 0. Prerequisites / 前置
 
-**macOS (Apple Silicon)** — no Rust, no compiling needed / 无需 Rust、无需编译:
+**macOS (Apple Silicon)** — **zero dependencies** / **零依赖**：the
+`bin-macos-arm64` branch ships a self-contained bundle (binaries +
+bundled dylibs). No Homebrew, no Xcode, no Rust needed. `git` is
+optional too — download over HTTPS if the box lacks it:
+产物分支是自包含包（二进制+捆绑动态库），无需 Homebrew/Xcode/Rust；
+没有 git 的机器可直接 HTTPS 下载：
 
 ```bash
-# git comes with Xcode CLT (first `git` run prompts install)
-# Homebrew: https://brew.sh (if missing)
-brew install libheif        # HEIC decoding (hard requirement / 硬依赖)
-brew install ffmpeg         # video thumbnails (optional / 可选,缺则视频给占位图)
+# with git:
+git clone --depth 1 -b bin-macos-arm64 https://github.com/hawkeye-xb/P-Pass.git ppf-bin
+# without git (e.g. restricted sandboxes):
+curl -L https://github.com/hawkeye-xb/P-Pass/archive/refs/heads/bin-macos-arm64.tar.gz | tar xz && mv P-Pass-bin-macos-arm64 ppf-bin && chmod +x ppf-bin/daemon ppf-bin/testclient ppf-bin/dogfood-smoke.sh
 ```
+
+Optional / 可选: `brew install ffmpeg`（缺则视频缩略图给占位图，照片不受影响）。
 
 **Linux (x86_64)**:
 
