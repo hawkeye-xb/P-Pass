@@ -6,3 +6,17 @@ license.workspace = true
 publish = false
 
 [dependencies]
+storage = { path = "../storage" }
+# BLAKE3 content hash — same domain as iroh-blobs (架构 §4.2).
+blake3 = "1"
+# EXIF DateTimeOriginal for taken_at (详细设计 §4.3). Full EXIF parsing
+# lands in core-media at T-013; this crate only reads the timeline key.
+kamadak-exif = "0.6"
+# Calendar math: EXIF wall clock → unix ms, taken_at → <yyyy>/<mm> dirs.
+time = "0.3"
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+proptest = "1"
+tempfile = "3"

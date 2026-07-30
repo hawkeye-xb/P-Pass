@@ -4,6 +4,7 @@
 
 | 卡片 | 日期 | Commit | 状态 | 摘要 |
 |------|------|--------|------|------|
+| **T-011** | 2026-07-30 | — | DONE | core-index crate：`ingest(IncomingFile) -> IngestOutcome{New(rel_path)\|Duplicate}` 全链——流式 BLAKE3（64KiB 块恒定内存）→查重→落 `originals/<设备前8字节hex>/<yyyy>/<mm>/`（同名冲突 `-1`/`-2` 后缀，create_new 原子占名防并发撞名）→写 asset 行(thumb_state=0)→**审计到设备粒度**（ingest.new/ingest.duplicate，落审计裁决）。taken_at=EXIF DateTimeOriginal（缺失回退 DateTime，再回退 mtime；EXIF 无时区按 UTC 解释保跨机稳定）。防御：file_name 只取末段（路径穿越进不了库外）；insert 撞唯一键=并发同内容竞态→回滚已落文件返回 Duplicate（索引与 originals 永不失联）；I/O 错误一律带路径（人话报错裁决）。timeline.rs 为 storage 分页的领域门面。**EXIF 解析注**：本卡仅内联读时间线键（kamadak-exif），完整 EXIF（宽高等）按计划归 T-013 core-media，届时 ingest 换用之。**新依赖待人类追认**：blake3@1（契约指名）、kamadak-exif@0.6（详细设计 §4.3 指名）、time@0.3（日历换算）；dev: proptest@1（契约指名性质测试）、tempfile@3。验收：nextest **18 测试全绿**（含契约点名的 2 个 proptest：同内容任意两次 ingest 必 Duplicate 且仅 1 行；时间线游标严格单调无重无漏，含 taken_at 重值/NULL 平局）；EXIF 用测试内手工构造的最小 JPEG-APP1/TIFF 验证（2024:05:06 → 落 2024/05 目录且 taken_at 精确）；覆盖率 `cargo llvm-cov` **85.08% 行**（≥80% ✓）；`just ci` + `cargo deny check` 全绿。 |
 | **T-010** | 2026-07-29 | — | DONE | storage crate：`migrations/0001_init.sql` 按架构 §5 **v1.1** 建五表（asset/device/backup_watermark/diag_event/**audit_log**——审计表系人类当日裁决新增，见决策记录）；sqlx 连接池封装（`Db::open` WAL 模式 / `open_in_memory` 单连接防多库陷阱）；repo 方法契约齐全：insert_asset/get_asset/timeline_page + upsert_device/list_devices/revoke/set_watermark/get_watermark + append_audit/list_audit；游标=(taken_at,hash) 复合键 base64url(8B BE+32B)，keyset 分页，NULL taken_at 按 0 排序，同秒并列按 hash 破序保证全序。细节：upsert_device 不会静默解除吊销（revoke 单向，有测试钉住）；audit 外部变动 actor=NULL 如实记"检测"不冒充归因。**新依赖**：sqlx@0.8（人类已批）、base64@0.22（游标编码，契约指名 base64，人类已批"标准件不自研"）。验收：9 测试绿含迁移从零执行、**100 条翻页无重无漏**（7/页×15 页,含 NULL 与同刻并列）、吊销后 list 反映、非法游标报错不 panic；`just ci` + `cargo deny check` 全绿。 |
 | **T-020** | 2026-07-29 | — | DONE | transport crate：§3.1 trait 签名逐字实现（listen/connect/conn_info）+ iroh 1.0 实现 + ALPN 常量 `ppf/ctrl/1`/`ppf/blobs/1`；ConnInfo 分类为纯函数（conninfo.rs，8 单测——吸取 probe ipver 缺陷教训：分类器必须有独立测试），Lan 判定按地址性质（私网/回环/链路本地）而非 RTT 启发式；`TransportConfig::loopback()` 全离线（无 relay/无发现），CI 无需外网；`ConnInfo.path: Option<PathKind>`（None=无活连接，设计选择随代码注释）；BiStream 帧收发与 proto::codec 共享 4B LE 长度前缀线格式。**新依赖待人类追认**：iroh@1（ADR-001 卡片钦定）、tokio@1、futures-core@0.3；deny.toml 放行 Unlicense/Zlib/CDLA-Permissive-2.0（均宽松，iroh 传递依赖）+ ignore RUSTSEC-2024-0436（paste 停维护，信息级，无升级路径）。验收：回环集成测试两 endpoint 经 ctrl ALPN 收发 **1000 条 proto 消息**（id 关联+payload 回显逐条校验）0.31s 全过，`ConnInfo.path==Lan`；transport 13 测试绿；`just ci`（fmt/clippy -D warnings/test/arch-check）+ `cargo deny check` 全绿；proto 25 快照原样未动。 |
 | **T-005** | 2026-07-28 | — | DONE | testclient 骨架：pair/backup/browse/revoke-check 四子命令占位（clap derive），连接 daemon 失败输出人话错误（含下一步指引），真实逻辑随 P3 各卡实装。新依赖 clap@4（生态标准 CLI 解析，**待人类追认**，过 cargo-deny）。验收：`testclient --help` 列出四子命令；`cargo build` 绿；2 单测（子命令齐全 + clap 定义自检）；全套门禁绿。 |
@@ -21,6 +22,12 @@
 
 ## 决策记录
 
+- **[2026-07-30] M0 Gate 人类签字放行（正式）。** 三项输入：直连率 🟢 通过 / UIDT 🟡 方案更替
+  (ForegroundService) / 缩略图 🟢 通过 → **放行进 M1，不触发 ADR-003 回退**。跟踪条件 a（场景 1 同
+  WiFi 100%）已闭环；b（relay 自建 H-07）、c（详细设计 v1.1 修订）转 M1 事项。Rust 效率自评空栏待
+  人类后补一句。同日派单 T-011。
+- **[2026-07-30] 依赖追认（待人类批）：** blake3@1 + kamadak-exif@0.6 + time@0.3（T-011 运行时）、
+  proptest@1 + tempfile@3（T-011 测试）。均为标准件（哈希/EXIF/日历），licenses 过 cargo-deny 无新增放行。
 - **[2026-07-29] schema v1.1：审计"麻雀虽小五脏俱全"（人类裁决）。** 新增 `audit_log` 表（长期保留，
   不受 diag_event 30 天环形限制）：凡经产品路径的操作记录到设备粒度；目录外部变动（用户直接增删文件）
   由运行时目录监听 + **每次 daemon 启动 diff 对账**检测后入表，actor=NULL（文件系统无法归因"谁"，
