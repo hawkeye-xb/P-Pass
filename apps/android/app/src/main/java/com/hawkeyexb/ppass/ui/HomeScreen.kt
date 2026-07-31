@@ -4,6 +4,7 @@
 package com.hawkeyexb.ppass.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,6 +44,7 @@ fun HomeScreen(
     storageName: String,
     state: BackupUiState,
     onBackupNow: () -> Unit,
+    onReconnect: () -> Unit = {},
 ) {
     val (dot, pillBg, pillText, pillTextZh) = when (state) {
         is BackupUiState.Idle ->
@@ -133,7 +135,16 @@ fun HomeScreen(
             fontSize = 14.sp, lineHeight = 22.sp, color = PPColor.Ink40,
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Scan a new code 重新扫码连接",
+            fontSize = 15.sp, color = PPColor.Ink60,
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .clickable(onClick = onReconnect)
+                .padding(10.dp),
+        )
+        Spacer(Modifier.height(6.dp))
     }
 }
 

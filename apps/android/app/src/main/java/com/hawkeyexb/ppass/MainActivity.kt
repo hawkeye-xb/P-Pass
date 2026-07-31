@@ -164,6 +164,12 @@ fun PPassApp() {
                     HomeScreen(
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
+                        onReconnect = {
+                            // New daemon identity / new computer: drop the
+                            // stored pairing and scan fresh.
+                            pairings.clear()
+                            screen = Screen.Scan
+                        },
                         onBackupNow = {
                             val needed = requiredMediaPermissions().filter {
                                 ContextCompat.checkSelfPermission(context, it) !=

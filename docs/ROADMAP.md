@@ -101,7 +101,11 @@ P4 desktop shell / 桌面壳
       WiFi, 4h) + catch-up run on every app open, dataSync FGS while a
       batch runs; real-device proof — 3 photos adb-pushed into the
       gallery arrived on the Mac with no button pressed (15→18)
-- [ ] T-055 backup status page + timeline browsing
+- [x] T-055 core: two-tab shell (Photos/Backup), timeline grid +
+      1024 viewer over timeline.page/thumb.get, reconnect entry;
+      **real-device grid PASS** (Samsung shows the Mac library, 20
+      items). Polish pass pending: single-language UI (user ruling),
+      month sections, width/height in ingest, entry styling
 - [ ] T-056 video playback DataSource
 - [ ] **Gate: one week of real family dogfood, 100 % backup completion**
 

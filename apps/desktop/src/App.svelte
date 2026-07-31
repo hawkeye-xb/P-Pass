@@ -116,11 +116,16 @@
   }
 
   async function chooseFolder() {
-    const dir = await openDialog({ directory: true, title: "选择照片库文件夹" });
+    const dir = await openDialog({ directory: true, title: "选择照片库的新位置" });
     if (!dir) return;
+    const yes = await confirmDialog(
+      `照片库位置将改为：${dir}\n\n注意：已备份的照片不会自动搬过去——新位置会从零开始，家人手机会把照片重新备份到这里。确定更改？`,
+      { title: "更改照片库位置", kind: "warning" }
+    );
+    if (!yes) return;
     try {
       await call("folder.set", { path: dir });
-      message = `库文件夹已保存为 ${dir}，重启后台服务后生效。`;
+      message = `照片库位置已保存为 ${dir}，重启后台服务后生效（旧照片仍在原位置）。`;
     } catch (e) {
       message = `保存失败：${e}`;
     }
@@ -235,8 +240,8 @@
     <section>
       <h2>设置</h2>
       <div class="row">
-        <button class="primary" onclick={openLibrary}>打开照片文件夹</button>
-        <button onclick={chooseFolder}>更改库文件夹…</button>
+        <button class="primary" onclick={openLibrary}>打开照片库</button>
+        <button onclick={chooseFolder}>更改照片库位置…</button>
         <button onclick={exportLogs}>导出诊断包</button>
       </div>
       <p class="hint">诊断包会自动抹去用户名等隐私路径，可安全提供给支持人员。</p>

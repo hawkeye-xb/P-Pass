@@ -4,10 +4,12 @@
 // Allow on the computer (or the daemon times the request out).
 package com.hawkeyexb.ppass.transport
 
+import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.PairAccepted
 import com.hawkeyexb.ppass.proto.PairRequest
 import com.hawkeyexb.ppass.proto.ProtoJson
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.coroutines.withTimeout
 
 sealed class PairOutcome {
@@ -34,6 +36,34 @@ suspend fun pairWithQr(
     }
     val addr = parsed.addr
         ?: return PairOutcome.Failed("配对码缺少地址信息，请在电脑上重新生成")
+
+    // Already a member on this storage (same phone, the computer's
+    // identity/address changed)? Then no pair.request is needed — and
+    // it would be REFUSED (members can't re-apply). backup.begin is
+    // member-gated: an ok means we're recognised; just re-save.
+    try {
+        val probe = withTimeout(20_000) {
+            client.call(addr, Methods.BACKUP_BEGIN, buildJsonObject {})
+        }
+        if (probe.ok) {
+            val hello = withTimeout(20_000) {
+                client.call(addr, Methods.HELLO, buildJsonObject {})
+            }
+            val name = if (hello.ok) {
+                ProtoJson.decodeFromJsonElement(Hello.serializer(), hello.result!!).deviceName
+            } else "P-Pass 存储端"
+            val raw = qr.substringAfter("&a=", "")
+            return PairOutcome.Joined(
+                Pairing(
+                    daemonNodeId = parsed.nodeIdHex,
+                    daemonAddrToken = raw,
+                    storageDeviceName = name,
+                )
+            )
+        }
+    } catch (_: Exception) {
+        // Not reachable or not recognised — fall through to pairing.
+    }
 
     return try {
         val resp = withTimeout(waitMs) {

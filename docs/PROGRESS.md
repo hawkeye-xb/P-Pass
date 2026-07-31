@@ -318,3 +318,21 @@ stdout/stderr 重定向（没有它这次排查会盲飞——install_autostart
 
 **产品决策（用户裁决）**：UI 不再中英双语同显，按系统语言单语显示
 （T-055 落实，i18n 资源已备）。
+
+## 2026-07-31 — T-055 核心真机通过 ✅（三星时间线显示 Mac 照片库）
+
+三星「Family photos · 20」网格全显 + 1024 大图查看器——缩略图/大图
+全部从 Mac daemon 实时拉取（timeline.page + thumb.get base64）。
+双 tab（Photos/Backup）+「重新扫码连接」入口。
+
+**顺手修的产品语义 bug**：已是成员的手机重新扫码被拒
+（err.not_authorized——member 不许 pair.request）→ PairFlow 先
+backup.begin 试探，已被认识则直接更新本地配对（重连≠重配对，
+不需要 owner 再点允许）。
+
+**桌面 UX**：「照片库」文案统一（原「库文件夹/照片文件夹」双名
+混淆，用户当场蒙了）；更改库位置加警告（旧照片不搬家）。
+
+**T-055 打磨账**：单语显示（用户裁决：不双语同显，按系统语言）；
+大图 0×0（ingest 未提取 width/height）；月份分组；重连入口做成
+正经按钮；库位置迁移流程（用户改到 Desktop/NAS 未生效待决策）。
