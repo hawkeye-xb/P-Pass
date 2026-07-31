@@ -75,3 +75,7 @@ verify-m1:
 # Android unit tests (proto golden drift check included)
 android-test:
     cd apps/android && JAVA_HOME=$(brew --prefix openjdk 2>/dev/null || echo "$JAVA_HOME") ./gradlew -q :app:testDebugUnitTest
+
+# T-051 live check: Kotlin iroh-ffi client speaks hello to a real daemon
+android-hello:
+    tools/android-hello.sh

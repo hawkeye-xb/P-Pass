@@ -55,6 +55,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
+    // Desktop JNA for JVM unit tests — the @aar above only carries
+    // Android natives; the iroh jar ships darwin/linux dylibs that JNA
+    // loads when tests run on the host (live-daemon hello test).
+    testImplementation("net.java.dev.jna:jna:5.15.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
