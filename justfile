@@ -83,3 +83,7 @@ android-hello:
 # T-052 live check: full pairing flow (Kotlin phone + IPC owner confirm)
 android-pair:
     tools/android-pair.sh
+
+# T-054 live check: full phone backup pipeline vs a real daemon
+android-backup:
+    tools/android-backup.sh

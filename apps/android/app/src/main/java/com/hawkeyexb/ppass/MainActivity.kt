@@ -24,6 +24,10 @@ import com.hawkeyexb.ppass.transport.PairOutcome
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.pairWithQr
+import com.hawkeyexb.ppass.backup.BackupRunner
+import com.hawkeyexb.ppass.backup.BackupUiStateHolder
+import com.hawkeyexb.ppass.ui.BackupUiState
+import com.hawkeyexb.ppass.ui.HomeScreen
 import com.hawkeyexb.ppass.ui.JoinedScreen
 import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.ScanScreen
@@ -120,14 +124,36 @@ fun PPassApp() {
             action = "Scan again 重新扫码" to { screen = Screen.Scan },
         )
 
-        is Screen.Home -> PairStatusScreen(
-            title = "Connected to ${s.pairing.storageDeviceName}.",
-            titleZh = "已连接「${s.pairing.storageDeviceName}」",
-            body = "Backup starts with the next milestone (T-053/54).\n备份功能随下一里程碑到来。",
-            action = null,
-        )
+        is Screen.Home -> {
+            val holder = remember { BackupUiStateHolder(context, client, identity, s.pairing) }
+            val mediaPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { grants -> if (grants.values.any { it }) holder.backupNow() }
+            HomeScreen(
+                storageName = s.pairing.storageDeviceName,
+                state = holder.state.value,
+                onBackupNow = {
+                    val needed = requiredMediaPermissions().filter {
+                        ContextCompat.checkSelfPermission(context, it) !=
+                            PackageManager.PERMISSION_GRANTED
+                    }
+                    if (needed.isEmpty()) holder.backupNow()
+                    else mediaPermission.launch(needed.toTypedArray())
+                },
+            )
+        }
     }
 }
+
+private fun requiredMediaPermissions(): List<String> =
+    if (Build.VERSION.SDK_INT >= 33) {
+        listOf(
+            Manifest.permission.READ_MEDIA_IMAGES,
+            Manifest.permission.READ_MEDIA_VIDEO,
+        )
+    } else {
+        listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+    }
 
 private fun deviceName(): String {
     val m = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android"

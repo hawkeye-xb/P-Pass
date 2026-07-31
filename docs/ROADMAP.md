@@ -91,7 +91,11 @@ P4 desktop shell / 桌面壳
 - [x] T-053 MediaStore enumeration + generation watermark (API 30+
       GENERATION_MODIFIED, DATE_ADDED fallback); BLAKE3 in Kotlin
       pinned bit-for-bit to Rust vectors (tests/blake3-vectors.json)
-- [ ] T-054 upload executor (WorkManager + FGS segmented migration)
+- [x] T-054 upload pipeline: authz-gated push plane (ppf/upload/1),
+      BackupRunner scan→hash→manifest→push→commit→watermark; live
+      BACKUP OK 12/12 + idempotent rerun 0 pushed (`just
+      android-backup`); manual trigger UI shipped — WorkManager/FGS
+      auto-scheduling follows as T-054b
 - [ ] T-055 backup status page + timeline browsing
 - [ ] T-056 video playback DataSource
 - [ ] **Gate: one week of real family dogfood, 100 % backup completion**

@@ -93,6 +93,7 @@ class GoldenDriftTest {
     @Test fun backupCommitGen() =
         check("snapshots__backup_commit_with_generation", BackupCommit.serializer())
     @Test fun diagStatus() = check("snapshots__diag_status", DiagStatus.serializer())
+    @Test fun uploadHeader() = check("snapshots__upload_header", UploadHeader.serializer())
 
     /** Every JSON-shaped snapshot must be covered — a new Rust message
      *  without a Kotlin mirror fails here, not in the field. */
@@ -110,7 +111,7 @@ class GoldenDriftTest {
             "snapshots__backup_begin", "snapshots__backup_manifest",
             "snapshots__backup_manifest_with_items", "snapshots__backup_missing",
             "snapshots__backup_commit", "snapshots__backup_commit_with_generation",
-            "snapshots__diag_status",
+            "snapshots__diag_status", "snapshots__upload_header",
         )
         val onDisk = snapshotsDir.listFiles()!!
             .map { it.name.removeSuffix(".snap") }

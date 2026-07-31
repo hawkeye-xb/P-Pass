@@ -238,3 +238,21 @@ blob store）。T-032 拉模型裁决反对的是 iroh-blobs 内置 push **绕�
 authz**；本方案每个入站流都过 checkpoint（member+ 才许 upload），
 安全性质不变。方向上手机拨入=H-04 实测成功率最高的方向（C4/C5/C6、
 场景 2 均为客户端拨入监听端）。桌面 testclient 的拉模型路径保留不动。
+
+## 2026-07-31 — T-054 上传管线（wire 层 live 全绿 + 真机手动触发 UI）
+
+- **daemon 侧**（c903452）：ppf/upload/1 授权推送面——每流过 authz
+  （backup.upload=backup.* 前缀，member+）、字节流式落盘验 BLAKE3、
+  谎报即拒；commit 本地优先（已推送的 blob 零反拨，T-032 拉路径为
+  桌面 testclient 保留）；commit 响应带 {ingested,duplicates}。
+  3 个集成测试：无 provider 全链入库比特级一致/谎报 hash 拒收/陌生人
+  NOT_AUTHORIZED。170 Rust 测试绿。
+- **手机侧**：BackupRunner（scan→hash→begin/manifest→push each→
+  commit→水位仅在成功后推进）；`just android-backup` live 验收
+  **BACKUP OK: pushed=12 ingested=12; rerun pushed=0 dup=12**（幂等
+  收敛实证）。Home 屏=设计稿状态胶囊（Idle/找照片/读取/传回家/都存
+  好了/需重试）+「立即备份」+ READ_MEDIA 权限流。
+- 拆卡：WorkManager+FGS 自动调度归 T-054b（充电+WiFi 自动跑），
+  手动触发先行以尽快真机验证核心链路。
+- 教训：改 Rust 响应后忘了重建 release 二进制，live 测试连到旧
+  daemon 空转一轮——凡 live 剧本前必须重建两端产物。

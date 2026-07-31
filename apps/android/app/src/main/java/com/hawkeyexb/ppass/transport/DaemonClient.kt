@@ -97,6 +97,19 @@ class DaemonClient {
             }
         }
 
+    /** Open a raw connection on any ALPN (upload plane reuses it for
+     *  many streams — one per file). Caller closes. */
+    suspend fun connectRaw(peer: PeerAddrParts, alpn: String): computer.iroh.Connection =
+        withContext(Dispatchers.IO) {
+            val ep = endpoint ?: error("bind() first")
+            val addr = EndpointAddr(
+                EndpointId.fromString(peer.idHex),
+                peer.relayUrl,
+                peer.directAddresses,
+            )
+            ep.connect(addr, alpn.toByteArray())
+        }
+
     suspend fun close(): Unit = withContext(Dispatchers.IO) {
         endpoint?.close()
         endpoint = null

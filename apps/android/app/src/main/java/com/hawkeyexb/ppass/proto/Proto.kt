@@ -179,6 +179,14 @@ data class BackupCommit(
     val generation: Long? = null,
 )
 
+/** Upload plane (T-054): header frame before one file's raw bytes. */
+@Serializable
+data class UploadHeader(
+    val hash: String = "",
+    val bytes: Long = 0,
+    @SerialName("file_name") val fileName: String = "",
+)
+
 // ── Diagnostics ─────────────────────────────────────
 
 @Serializable
@@ -203,6 +211,7 @@ object Methods {
     const val BACKUP_MANIFEST = "backup.manifest"
     const val BACKUP_COMMIT = "backup.commit"
     const val DIAG_STATUS = "diag.status"
+    const val BACKUP_UPLOAD = "backup.upload"
 }
 
 object Codes {
