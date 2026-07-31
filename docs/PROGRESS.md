@@ -300,3 +300,21 @@ tools/device-backup.sh。三星→阿里云 PROBE HELLO OK 300ms；全链剧本
 - 验证基建教训：cmd jobscheduler run 需 -n androidx.work.systemjobscheduler
   命名空间；periodic+约束的强制触发不可靠，改验 app-open catch-up
   路径（同一 Worker）。
+
+## 2026-07-31 — P0：daemon 身份持久化（真机逼出的三层连环）
+
+三星时间线显示空库 → 排查发现**常驻 daemon 每次重启换 NodeId**，
+所有已配对手机瞬间变孤儿（配对绑的就是 NodeId）——M1 漏项，真机
+把它逼了出来。三层修复：
+1. 身份持久化：.ppf/identity.key（0600，与 ipc.token 同信任域）；
+2. **Keychain 方案被现实否决**：ad-hoc 签名的服务每次重启触发钥匙
+   串授权弹窗（daemon 卡死等一个没人点的对话框）——无人值守服务
+   在拿到正式签名前不能用 Keychain（T-071 迁移）；
+3. 身份固定 → IPC socket 名固定 → 残留 socket 文件让新进程
+   EADDRINUSE，IPC 面静默死亡 → bind 前 unlink（launchd 保证单例）。
+验证：kickstart ×3，身份唯一、IPC 全通。LaunchAgent plist 补
+stdout/stderr 重定向（没有它这次排查会盲飞——install_autostart
+生成的 plist 也该加，挂账）。
+
+**产品决策（用户裁决）**：UI 不再中英双语同显，按系统语言单语显示
+（T-055 落实，i18n 资源已备）。

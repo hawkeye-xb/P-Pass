@@ -30,6 +30,10 @@ import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
+import com.hawkeyexb.ppass.ui.PhotosScreen
+import com.hawkeyexb.ppass.ui.TimelineLoader
+import com.hawkeyexb.ppass.ui.TwoTabs
+import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.JoinedScreen
 import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.ScanScreen
@@ -97,7 +101,7 @@ fun PPassApp() {
                 title = "Asking the computer…",
                 titleZh = "正在请求加入",
                 body = "On the computer, click Allow when it asks.\n回到电脑，在弹出的请求上点「允许」。",
-                action = null,
+                action = "Cancel 取消" to { screen = Screen.Welcome },
             )
             LaunchedEffect(s.qr) {
                 // Catch Throwable, not Exception: a missing native lib
@@ -109,6 +113,9 @@ fun PPassApp() {
                 } catch (t: Throwable) {
                     PairOutcome.Failed(t.toString())
                 }
+                // The user may have cancelled while we waited — a stale
+                // result must not yank them out of another screen.
+                if (screen != s) return@LaunchedEffect
                 screen = when (outcome) {
                     is PairOutcome.Joined -> {
                         pairings.save(outcome.pairing)
@@ -139,19 +146,33 @@ fun PPassApp() {
 
         is Screen.Home -> {
             val holder = remember { BackupUiStateHolder(context, client, identity, s.pairing) }
+            val loader = remember {
+                TimelineLoader(client, parsePeerAddrToken(s.pairing.daemonAddrToken)) {
+                    client.bind(identity.secretKey())
+                }
+            }
+            var tab by remember { mutableStateOf(0) } // 0=Photos 1=Backup
+            LaunchedEffect(Unit) { client.bind(identity.secretKey()) }
             val mediaPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
             ) { grants -> if (grants.values.any { it }) holder.backupNow() }
-            HomeScreen(
-                storageName = s.pairing.storageDeviceName,
-                state = holder.state.value,
-                onBackupNow = {
-                    val needed = requiredMediaPermissions().filter {
-                        ContextCompat.checkSelfPermission(context, it) !=
-                            PackageManager.PERMISSION_GRANTED
-                    }
-                    if (needed.isEmpty()) holder.backupNow()
-                    else mediaPermission.launch(needed.toTypedArray())
+            TwoTabs(
+                tab = tab,
+                onTab = { tab = it },
+                photos = { PhotosScreen(loader) },
+                backup = {
+                    HomeScreen(
+                        storageName = s.pairing.storageDeviceName,
+                        state = holder.state.value,
+                        onBackupNow = {
+                            val needed = requiredMediaPermissions().filter {
+                                ContextCompat.checkSelfPermission(context, it) !=
+                                    PackageManager.PERMISSION_GRANTED
+                            }
+                            if (needed.isEmpty()) holder.backupNow()
+                            else mediaPermission.launch(needed.toTypedArray())
+                        },
+                    )
                 },
             )
         }

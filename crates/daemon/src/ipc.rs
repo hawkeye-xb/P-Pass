@@ -71,6 +71,14 @@ impl IpcServer {
             format!("{socket_name}\n{token_hex}\n"),
         )?;
 
+        // The socket name is stable now (derived from the persistent
+        // NodeId) — clear a stale file left by a killed predecessor or
+        // bind fails with EADDRINUSE and the whole IPC plane dies
+        // (launchd guarantees single instance, so unlink is safe).
+        #[cfg(unix)]
+        {
+            let _ = std::fs::remove_file(format!("/tmp/{socket_name}"));
+        }
         let name = socket_name.to_ns_name::<GenericNamespaced>()?;
         let listener = ListenerOptions::new().name(name).create_tokio()?;
         loop {

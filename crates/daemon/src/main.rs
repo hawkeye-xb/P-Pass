@@ -29,6 +29,12 @@ async fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
 
     let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
+    // ── Persistent daemon identity (真机 P0: 每次重启换 NodeId 会把
+    // 所有已配对手机变成孤儿——配对绑的就是 NodeId). Keychain/DPAPI
+    // first; headless platforms fall back to a 0600 file in the data
+    // dir (same trust domain as ipc.token).
+    let secret = load_or_mint_identity(&data_dir)?;
+
     let mut transport_cfg = transport::TransportConfig::from_endpoints(
         config.relay_urls.clone(),
         vec![
@@ -38,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
         ],
     );
     transport_cfg.bind_addr = config.bind_addr;
+    transport_cfg.secret_key = Some(secret);
     let transport = transport::IrohTransport::bind(transport_cfg).await?;
     // Wait for the home relay before announcing anything: a QR issued
     // in the first seconds otherwise carries a bare LAN address and
@@ -171,6 +178,32 @@ async fn main() -> anyhow::Result<()> {
         .serve(&transport)
         .await;
     Ok(())
+}
+
+/// The daemon's stable identity key, in a 0600 file beside the index —
+/// same trust domain as ipc.token. NOT the OS keychain for now: an
+/// ad-hoc-signed binary re-triggers the Keychain authorization dialog
+/// on every restart (live finding — an unattended service cannot answer
+/// dialogs). Keychain migration lands with real release signing (T-071).
+fn load_or_mint_identity(data_dir: &std::path::Path) -> anyhow::Result<[u8; 32]> {
+    let key_file = data_dir.join(".ppf/identity.key");
+    if let Ok(bytes) = std::fs::read(&key_file) {
+        if bytes.len() == 32 {
+            let mut k = [0u8; 32];
+            k.copy_from_slice(&bytes);
+            return Ok(k);
+        }
+    }
+    let k = rand_token()?;
+    std::fs::create_dir_all(data_dir.join(".ppf"))?;
+    std::fs::write(&key_file, k)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600));
+    }
+    println!("身份密钥已铸造: {}", key_file.display());
+    Ok(k)
 }
 
 /// 32 random bytes from the OS (via std's RandomState hashing entropy is
