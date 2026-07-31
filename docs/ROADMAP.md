@@ -79,7 +79,10 @@ P4 desktop shell / 桌面壳
 - [x] T-050 Gradle skeleton + proto Kotlin mirror, drift-checked against
       the same insta snapshots the Rust suite asserts (24 JVM tests +
       debug APK in CI)
-- [ ] T-051 iroh-ffi transport wrapper
+- [x] T-051 iroh-ffi transport wrapper: DaemonClient (ctrl-plane call
+      per bi-stream), frame codec + PeerAddr/QR parsing drift-checked
+      vs Rust snapshots; **live hello vs a real daemon green on the
+      desktop natives** (`just android-hello`)
 - [ ] T-052 pairing by camera scan
 - [ ] T-053 MediaStore enumeration + generation watermark
 - [ ] T-054 upload executor (WorkManager + FGS segmented migration)

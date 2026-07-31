@@ -180,3 +180,16 @@ bundle 三连全绿。**M1 正式收官。**
   项目，暖纸/墨黑/三含义色，Android T-055 从同一 JSON 生成 Compose 常量）。
 - 附带：CI 挂死防护（kill 轮询循环 120s deadline + nextest
   terminate-after 全局强杀）。
+
+## 2026-07-31 — T-051 iroh-ffi 传输包装（live hello 全通）
+
+- Kotlin 侧三件套：Frames.kt（u32 LE+JSON 帧，_hex 金样本逐字节
+  drift 测试）、PeerAddrToken.kt（QR/a= token 解析）、DaemonClient.kt
+  （每请求一个 bi-stream，与 testclient call 同构）。
+- **验收=真实往返**：iroh-ffi jar 自带桌面 natives（darwin/linux），
+  JVM 单测直接绑真端点连真 daemon——`HELLO OK: P-Pass 存储端
+  caps=[thumbnail.v1]`。`just android-hello` 一条命令重现。
+- live 抓到两个真问题：① `jna@aar` 只带 Android natives，JVM 测试
+  需另加桌面 jna（testImplementation）；② ffi 的 relayUrl 空串会
+  "Failed to parse relay URL"，必须传 null（参数本身可空）。
+- 34 JVM 单测（golden 24 + frame 5 + token 5）+ live hello；APK 正常出包。
