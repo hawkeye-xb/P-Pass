@@ -31,14 +31,19 @@ const val ALPN_CTRL = "ppf/ctrl/1"
 class DaemonClient {
     private var endpoint: Endpoint? = null
 
-    suspend fun bind(): Unit = withContext(Dispatchers.IO) {
+    /**
+     * Bind the endpoint. Pass the device's persistent 32-byte secret so
+     * the phone keeps ONE identity across restarts — pairing is bound to
+     * the NodeId, a fresh key would demote us to a stranger.
+     */
+    suspend fun bind(secretKey: ByteArray? = null): Unit = withContext(Dispatchers.IO) {
         if (endpoint != null) return@withContext
-        endpoint = Endpoint.bind(
-            EndpointOptions(
-                preset = presetN0(),
-                alpns = listOf(ALPN_CTRL.toByteArray()),
-            )
+        val opts = EndpointOptions(
+            preset = presetN0(),
+            alpns = listOf(ALPN_CTRL.toByteArray()),
         )
+        if (secretKey != null) opts.secretKey = secretKey
+        endpoint = Endpoint.bind(opts)
     }
 
     fun nodeIdHex(): String? = endpoint?.addr()?.id()?.toString()

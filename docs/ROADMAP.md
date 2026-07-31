@@ -83,7 +83,11 @@ P4 desktop shell / 桌面壳
       per bi-stream), frame codec + PeerAddr/QR parsing drift-checked
       vs Rust snapshots; **live hello vs a real daemon green on the
       desktop natives** (`just android-hello`)
-- [ ] T-052 pairing by camera scan
+- [x] T-052 pairing by camera scan: CameraX+ZXing (GMS-free, HarmonyOS
+      compatible), persistent device identity, design-system onboarding
+      (welcome/scan/joined); wire-level pairing proven live against a
+      real daemon (`just android-pair` → PAIR OK); real-device walkthrough
+      pending user test
 - [ ] T-053 MediaStore enumeration + generation watermark
 - [ ] T-054 upload executor (WorkManager + FGS segmented migration)
 - [ ] T-055 backup status page + timeline browsing

@@ -43,6 +43,14 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
 
+    // T-052 camera scan: CameraX preview/analysis + ZXing core decode.
+    // ZXing is pure Java — no Google Play Services, works on HarmonyOS
+    // compatibility layers (卓易通) where GMS is absent.
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-view:1.4.1")
+    implementation("com.google.zxing:core:3.5.3")
+
     // Wire types mirror crates/proto (JSON over iroh streams).
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 

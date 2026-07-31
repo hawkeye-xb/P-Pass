@@ -193,3 +193,19 @@ bundle 三连全绿。**M1 正式收官。**
   需另加桌面 jna（testImplementation）；② ffi 的 relayUrl 空串会
   "Failed to parse relay URL"，必须传 null（参数本身可空）。
 - 34 JVM 单测（golden 24 + frame 5 + token 5）+ live hello；APK 正常出包。
+
+## 2026-07-31 — T-052 扫码配对（wire 层 live 全绿，待真机走查）
+
+- **身份**：32B secret 首启铸造、write-then-rename 持久化（filesDir，
+  Android Keystore 加密记 M3 硬化账）；DaemonClient.bind(secretKey)
+  ——手机重启不换身份，配对绑 NodeId 不失效。
+- **配对流程** PairFlow.pairWithQr：QR 解析→pair.request（阻塞等 owner
+  允许）→PairAccepted→持久化 Pairing（daemon 地址 token 存下，重连
+  不依赖发现服务）。Joined/Refused/Failed 三态，文案含大白话。
+- **live 验收**（agent 自验）：`just android-pair`——Kotlin 扮手机、
+  IPC 扮 owner 点允许，真 daemon 全流程 **PAIR OK: joined 'P-Pass
+  存储端'**。
+- **UI**：设计稿三屏（欢迎/扫码/已加入）+ Tokens.kt（Compose 常量，
+  源=assets/design/tokens.json）；扫码=CameraX 分析流+ZXing 纯 Java
+  解码（零 GMS 依赖，鸿蒙卓易通可用）；暗底+唯一绿框+自动识别。
+- APK 出包 ~/Downloads/p-pass-t052.apk（28MB），待用户真机走查。

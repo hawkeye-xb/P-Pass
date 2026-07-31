@@ -79,3 +79,7 @@ android-test:
 # T-051 live check: Kotlin iroh-ffi client speaks hello to a real daemon
 android-hello:
     tools/android-hello.sh
+
+# T-052 live check: full pairing flow (Kotlin phone + IPC owner confirm)
+android-pair:
+    tools/android-pair.sh
