@@ -327,7 +327,6 @@ impl IpcServer {
         Ok(())
     }
 
-
     /// Export diagnostics as a zip beside the data dir. Every path-like
     /// string is sanitised: the user's home directory becomes `<DATA>` —
     /// a shared log must never leak a username (契约).
