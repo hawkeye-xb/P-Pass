@@ -1,0 +1,10 @@
+---
+source: crates/proto/tests/snapshots.rs
+assertion_line: 21
+expression: json
+---
+{
+  "hash": "eee4444444444444444444444444444444444444444444444444444444444444",
+  "bytes": 3500000,
+  "file_name": "IMG_0099.HEIC"
+}

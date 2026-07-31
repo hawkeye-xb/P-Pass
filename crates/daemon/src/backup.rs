@@ -161,21 +161,26 @@ impl BackupEngine {
                 outcome.duplicates += 1;
                 continue; // already in the library — idempotent re-run
             }
-            self.blobs
-                .fetch_from(peer, hash)
-                .await
-                .map_err(|e| BackupError::Fetch {
-                    hash: item.hash.clone(),
-                    msg: e.to_string(),
-                })?;
             let staged = self.staging.join(&item.hash);
-            self.blobs
-                .export_to(hash, &staged)
-                .await
-                .map_err(|e| BackupError::Fetch {
-                    hash: item.hash.clone(),
-                    msg: e.to_string(),
-                })?;
+            // Local-first: a phone that pushed over the upload plane
+            // (T-054) already put the blob in the store — export straight
+            // from disk, zero reverse dials. Fall back to the T-032 pull.
+            if self.blobs.export_to(hash, &staged).await.is_err() {
+                self.blobs
+                    .fetch_from(peer, hash)
+                    .await
+                    .map_err(|e| BackupError::Fetch {
+                        hash: item.hash.clone(),
+                        msg: e.to_string(),
+                    })?;
+                self.blobs
+                    .export_to(hash, &staged)
+                    .await
+                    .map_err(|e| BackupError::Fetch {
+                        hash: item.hash.clone(),
+                        msg: e.to_string(),
+                    })?;
+            }
             let incoming = IncomingFile {
                 src_path: staged.clone(),
                 file_name: item.file_name.clone(),

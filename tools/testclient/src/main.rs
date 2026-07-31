@@ -330,18 +330,29 @@ async fn backup(files: u32, node: &str, identity: &str) -> anyhow::Result<String
                     "✅ 备份完成：{} 个文件（含重复内容），存储端实收 {} 个新 blob，水位已推进。{}",
                     files,
                     missing.hashes.len(),
-                    if attempt > 1 { format!("（第 {attempt} 次尝试成功）") } else { String::new() }
+                    if attempt > 1 {
+                        format!("（第 {attempt} 次尝试成功）")
+                    } else {
+                        String::new()
+                    }
                 ));
             }
             Some(err) => {
-                println!("传输第 {attempt} 次未完成（{}），自动重试续传……", err.msg_key);
+                println!(
+                    "传输第 {attempt} 次未完成（{}），自动重试续传……",
+                    err.msg_key
+                );
                 last_err = Some(err);
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         }
     }
     let err = last_err.expect("loop ran at least once");
-    anyhow::bail!("备份多次未完成（{} / {}），请检查网络后重试。", err.code, err.msg_key)
+    anyhow::bail!(
+        "备份多次未完成（{} / {}），请检查网络后重试。",
+        err.code,
+        err.msg_key
+    )
 }
 
 /// 配对时存下的存储端地址（`<identity>.daemon`）——加载后 connect

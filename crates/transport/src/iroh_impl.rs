@@ -463,6 +463,20 @@ impl BiStream {
         Ok(Some(frame))
     }
 
+    /// Read the next chunk of raw (unframed) bytes — the upload plane's
+    /// payload after its header frame. `Ok(None)` = sender finished.
+    pub async fn recv_chunk(&mut self, max: usize) -> Result<Option<Vec<u8>>> {
+        let mut buf = vec![0u8; max];
+        match self.recv.read(&mut buf).await {
+            Ok(Some(n)) => {
+                buf.truncate(n);
+                Ok(Some(buf))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(TransportError::Io(e.to_string())),
+        }
+    }
+
     /// Finish the send side (graceful half-close). The peer's
     /// `recv_frame` then returns `Ok(None)`.
     pub fn finish(&mut self) -> Result<()> {

@@ -202,6 +202,14 @@ fn snapshot_backup() {
     };
     assert_roundtrip(&bc2);
     snapshot_message("backup_commit_with_generation", &bc2);
+
+    let uh = UploadHeader {
+        hash: "eee4444444444444444444444444444444444444444444444444444444444444".into(),
+        bytes: 3_500_000,
+        file_name: "IMG_0099.HEIC".into(),
+    };
+    assert_roundtrip(&uh);
+    snapshot_message("upload_header", &uh);
 }
 
 // ── Diagnostics ─────────────────────────────────────

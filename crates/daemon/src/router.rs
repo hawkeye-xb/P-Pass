@@ -27,6 +27,7 @@ pub struct Router {
     pairing: Option<crate::pairing::Pairing>,
     backup: Option<crate::backup::BackupEngine>,
     query: Option<crate::query::QueryEngine>,
+    upload: Option<crate::upload::UploadPlane>,
 }
 
 impl Router {
@@ -37,7 +38,15 @@ impl Router {
             pairing: None,
             backup: None,
             query: None,
+            upload: None,
         }
+    }
+
+    /// Attach the upload plane (T-054). Without it, `ppf/upload/1`
+    /// connections are dropped.
+    pub fn with_upload(mut self, upload: crate::upload::UploadPlane) -> Self {
+        self.upload = Some(upload);
+        self
     }
 
     /// Attach the pairing engine (T-031). Without it, `pair.request`
@@ -75,6 +84,13 @@ impl Router {
     /// Serve one connection: streams arrive sequentially; each stream is
     /// one request/response exchange (MVP framing).
     pub async fn serve_conn(&self, conn: Incoming) {
+        // Data-plane dispatch: upload connections never speak ctrl.
+        if conn.alpn() == transport::ALPN_UPLOAD {
+            if let Some(upload) = &self.upload {
+                upload.serve_conn(conn).await;
+            }
+            return;
+        }
         let peer = conn.peer();
         loop {
             let Ok(mut stream) = conn.accept_bi().await else {
@@ -299,7 +315,13 @@ impl Router {
                             outcome.ingested,
                             outcome.duplicates
                         );
-                        Resp::ok(req.id.clone(), serde_json::Value::Null)
+                        Resp::ok(
+                            req.id.clone(),
+                            serde_json::json!({
+                                "ingested": outcome.ingested,
+                                "duplicates": outcome.duplicates,
+                            }),
+                        )
                     }
                     Err(e) => {
                         tracing::warn!("backup.commit from {peer:?} failed: {e}");

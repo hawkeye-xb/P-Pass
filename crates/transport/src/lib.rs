@@ -27,6 +27,12 @@ pub const ALPN_CTRL: &str = "ppf/ctrl/1";
 /// ALPN for the data plane: photo/video content via iroh-blobs (T-021).
 pub const ALPN_BLOBS: &str = "ppf/blobs/1";
 
+/// ALPN for the phone-push upload plane (T-054): one file per stream —
+/// an UploadHeader frame, then raw bytes. Gated by the same authz
+/// checkpoint as every ctrl method (the T-032 ruling rejected UNGATED
+/// push; this one is gated).
+pub const ALPN_UPLOAD: &str = "ppf/upload/1";
+
 /// Device identity: the 32-byte ed25519 public key of an endpoint (ADR-004,
 /// no account system). Displayed as 64 lowercase hex characters.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

@@ -11,6 +11,7 @@ pub mod pairing;
 pub mod query;
 pub mod router;
 pub mod telemetry;
+pub mod upload;
 
 pub use authz::Decision;
 pub use backup::{BackupEngine, CommitOutcome};

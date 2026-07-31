@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 proto = { path = "../proto" }
+blake3 = "1"
 transport = { path = "../transport" }
 storage = { path = "../storage" }
 core-index = { path = "../core-index" }
