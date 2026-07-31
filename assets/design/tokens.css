@@ -1,0 +1,47 @@
+/* P-Pass design tokens — generated from tokens.json (edit that first).
+ * Source design: claude.ai project 7d3f667e (P-Pass Mobile/Desktop.dc.html).
+ * Warm paper, ink text, one green that means safe. 为 60 岁的家人设计。 */
+:root {
+  /* surfaces */
+  --pp-paper: #FBF8F2;
+  --pp-canvas: #EFE9DF;
+  --pp-linen: #F1ECE3;
+  --pp-surface-dark: #211E1A;
+
+  /* ink */
+  --pp-ink: #171512;
+  --pp-ink-hover: #2A2621;
+  --pp-ink-60: #4A453E;
+  --pp-ink-40: #6B655C;
+  --pp-hairline: #E0D8CB;
+
+  /* the three meaning colours (+ neutral idle) */
+  --pp-safe: #2E6B4F;
+  --pp-safe-bg: #E4F1E8;
+  --pp-waiting: #C9761E;
+  --pp-waiting-bg: #F7EBDA;
+  --pp-act: #B5341F;
+  --pp-act-bg: #F7E2DE;
+  --pp-idle: #8A857C;
+  --pp-idle-bg: #EDE8DF;
+
+  /* lines */
+  --pp-border: rgba(23, 21, 18, 0.12);
+  --pp-border-strong: rgba(23, 21, 18, 0.24);
+  --pp-divider: rgba(23, 21, 18, 0.10);
+
+  /* type */
+  --pp-font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --pp-font-sans: 'Manrope', 'Noto Sans SC', -apple-system, 'PingFang SC',
+    'Segoe UI', ui-sans-serif, system-ui, sans-serif;
+
+  /* desktop scale (mouse): body >=16px, controls >=44px */
+  --pp-body-min: 16px;
+  --pp-tap-min: 44px;
+
+  /* radii */
+  --pp-radius-card: 20px;
+  --pp-radius-control: 14px;
+  --pp-radius-control-sm: 12px;
+  --pp-radius-pill: 999px;
+}

@@ -232,16 +232,20 @@
 </main>
 
 <style>
+  /* All colours/typography come from assets/design/tokens.css (single
+     source of truth). Meaning colours: green=safe, amber=waiting,
+     red=act — nothing else carries meaning. */
   :global(body) {
     margin: 0;
-    font-family: -apple-system, "PingFang SC", "Segoe UI", sans-serif;
-    background: #f4f6f9;
-    color: #1c2733;
+    font-family: var(--pp-font-sans);
+    background: var(--pp-canvas);
+    color: var(--pp-ink);
+    font-size: var(--pp-body-min);
   }
   main {
-    max-width: 640px;
+    max-width: 680px;
     margin: 0 auto;
-    padding: 20px;
+    padding: 24px;
   }
   header {
     display: flex;
@@ -249,68 +253,90 @@
     gap: 12px;
   }
   h1 {
-    font-size: 22px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
     margin: 0;
   }
   h2 {
-    font-size: 15px;
-    margin: 0 0 8px;
+    font-family: var(--pp-font-serif);
+    font-size: 22px;
+    font-weight: 400;
+    margin: 0 0 10px;
   }
   section {
-    background: #fff;
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-top: 14px;
-    box-shadow: 0 1px 3px rgba(16, 33, 60, 0.08);
+    background: var(--pp-paper);
+    border: 1px solid var(--pp-border);
+    border-radius: var(--pp-radius-card);
+    padding: 20px 22px;
+    margin-top: 16px;
   }
   .badge {
-    font-size: 12px;
-    padding: 3px 10px;
-    border-radius: 999px;
-    background: #d7dde5;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 6px 14px;
+    border-radius: var(--pp-radius-pill);
+    background: var(--pp-idle-bg);
+    color: var(--pp-ink-60);
   }
   .badge.ok {
-    background: #d9f2e2;
-    color: #14683a;
+    background: var(--pp-safe-bg);
+    color: var(--pp-safe);
   }
   .badge.bad {
-    background: #fbe1e1;
-    color: #8f1d1d;
+    background: var(--pp-act-bg);
+    color: var(--pp-act);
   }
   .row {
     display: flex;
     gap: 10px;
   }
   button {
-    border: 1px solid #c4ccd6;
-    background: #fff;
-    border-radius: 8px;
-    padding: 7px 14px;
+    min-height: var(--pp-tap-min);
+    border: 1.5px solid var(--pp-border-strong);
+    background: transparent;
+    border-radius: var(--pp-radius-control);
+    padding: 0 18px;
     cursor: pointer;
-    font-size: 13px;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--pp-ink-60);
+  }
+  button:hover {
+    background: var(--pp-linen);
   }
   button.primary {
-    background: #12408f;
-    border-color: #12408f;
-    color: #fff;
+    background: var(--pp-ink);
+    border-color: var(--pp-ink);
+    color: var(--pp-paper);
+    font-weight: 700;
+  }
+  button.primary:hover {
+    background: var(--pp-ink-hover);
   }
   button.danger {
-    color: #a11212;
-    border-color: #e2b3b3;
+    color: var(--pp-act);
+    border-color: var(--pp-border-strong);
+  }
+  button.danger:hover {
+    border-color: var(--pp-act);
+    background: var(--pp-act-bg);
   }
   .qr {
     display: block;
     margin: 12px 0 4px;
-    border: 1px solid #e2e7ee;
-    border-radius: 8px;
+    border: 1px solid var(--pp-border);
+    border-radius: var(--pp-radius-card);
   }
   .qrtext {
     display: block;
     word-break: break-all;
-    font-size: 11px;
-    background: #f0f3f7;
-    padding: 8px;
-    border-radius: 6px;
+    font-size: 12px;
+    background: var(--pp-linen);
+    padding: 10px;
+    border-radius: var(--pp-radius-control-sm);
     margin-top: 6px;
   }
   .devices {
@@ -322,30 +348,31 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 8px 0;
-    border-bottom: 1px solid #eef1f5;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--pp-divider);
   }
   .devices li:last-child {
     border-bottom: none;
   }
   .devices small {
-    color: #6b7684;
+    color: var(--pp-ink-40);
     margin-left: 8px;
   }
   .revoked {
-    color: #9aa4b0;
+    color: var(--pp-ink-40);
     text-decoration: line-through;
   }
   .hint {
-    color: #6b7684;
-    font-size: 12px;
-    margin: 8px 0 0;
+    color: var(--pp-ink-40);
+    font-size: 14px;
+    margin: 10px 0 0;
+    line-height: 1.55;
   }
   .message {
-    background: #fff8e1;
-    border: 1px solid #eadfa3;
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 13px;
+    background: var(--pp-waiting-bg);
+    border: 1px solid var(--pp-waiting);
+    border-radius: var(--pp-radius-control);
+    padding: 10px 14px;
+    font-size: 15px;
   }
 </style>

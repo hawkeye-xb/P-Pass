@@ -136,102 +136,121 @@
 </div>
 
 <style>
+  /* Colours/typography from assets/design/tokens.css. */
   .wizard {
-    background: #fff;
-    border-radius: 10px;
-    padding: 20px;
-    margin-top: 14px;
-    box-shadow: 0 1px 3px rgba(16, 33, 60, 0.08);
+    background: var(--pp-paper);
+    border: 1px solid var(--pp-border);
+    border-radius: var(--pp-radius-card);
+    padding: 24px;
+    margin-top: 16px;
   }
   .steps {
     display: flex;
-    gap: 14px;
-    margin-bottom: 16px;
+    gap: 16px;
+    margin-bottom: 18px;
   }
   .step {
-    font-size: 12px;
-    color: #9aa4b0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--pp-ink-40);
   }
   .step.active {
-    color: #12408f;
-    font-weight: 600;
+    color: var(--pp-ink);
   }
   .step.done {
-    color: #14683a;
+    color: var(--pp-safe);
   }
   h2 {
-    font-size: 17px;
-    margin: 0 0 8px;
+    font-family: var(--pp-font-serif);
+    font-size: 26px;
+    font-weight: 400;
+    margin: 0 0 10px;
   }
   .hint {
-    color: #6b7684;
-    font-size: 13px;
+    color: var(--pp-ink-40);
+    font-size: 14px;
+    line-height: 1.55;
   }
   .chosen {
-    font-size: 13px;
+    font-size: 15px;
   }
   .row {
     display: flex;
     gap: 10px;
-    margin: 10px 0;
+    margin: 12px 0;
   }
   .nav {
     display: flex;
     justify-content: flex-end;
     gap: 10px;
-    margin-top: 18px;
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--pp-divider);
   }
   button {
-    border: 1px solid #c4ccd6;
-    background: #fff;
-    border-radius: 8px;
-    padding: 7px 14px;
+    min-height: var(--pp-tap-min);
+    border: 1.5px solid var(--pp-border-strong);
+    background: transparent;
+    border-radius: var(--pp-radius-control);
+    padding: 0 18px;
     cursor: pointer;
-    font-size: 13px;
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--pp-ink-60);
+  }
+  button:hover {
+    background: var(--pp-linen);
   }
   button.primary {
-    background: #12408f;
-    border-color: #12408f;
-    color: #fff;
+    background: var(--pp-ink);
+    border-color: var(--pp-ink);
+    color: var(--pp-paper);
+    font-weight: 700;
+  }
+  button.primary:hover {
+    background: var(--pp-ink-hover);
   }
   button:disabled {
     opacity: 0.5;
     cursor: default;
   }
   .ok-box {
-    background: #d9f2e2;
-    color: #14683a;
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-size: 13px;
+    background: var(--pp-safe-bg);
+    color: var(--pp-safe);
+    border-radius: var(--pp-radius-control);
+    padding: 12px 14px;
+    font-size: 15px;
+    line-height: 1.5;
   }
   .warn-box {
-    background: #fff3d6;
-    color: #7a5b12;
-    border-radius: 8px;
-    padding: 10px 12px;
-    font-size: 13px;
+    background: var(--pp-waiting-bg);
+    color: var(--pp-ink-60);
+    border-radius: var(--pp-radius-control);
+    padding: 12px 14px;
+    font-size: 15px;
+    line-height: 1.55;
   }
   .error {
-    background: #fbe1e1;
-    color: #8f1d1d;
-    border-radius: 8px;
-    padding: 8px 12px;
-    font-size: 13px;
+    background: var(--pp-act-bg);
+    color: var(--pp-act);
+    border-radius: var(--pp-radius-control);
+    padding: 10px 14px;
+    font-size: 15px;
   }
   .qr {
     display: block;
     margin: 12px 0 4px;
-    border: 1px solid #e2e7ee;
-    border-radius: 8px;
+    border: 1px solid var(--pp-border);
+    border-radius: var(--pp-radius-card);
   }
   .qrtext {
     display: block;
     word-break: break-all;
-    font-size: 11px;
-    background: #f0f3f7;
-    padding: 8px;
-    border-radius: 6px;
+    font-size: 12px;
+    background: var(--pp-linen);
+    padding: 10px;
+    border-radius: var(--pp-radius-control-sm);
     margin-top: 6px;
   }
 </style>
