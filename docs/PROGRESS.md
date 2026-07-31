@@ -122,3 +122,41 @@
   v3 APK 已修复并新增 remote 字段。详见 h04-network-matrix.md 归因修正节。
   **教训：spike 数据字段也要有最小校验（一个恒真条件让整列数据作废）；结论要与网络事实交叉验证。**
 - **[2026-07-28] H-04 场景 2/7 正式数据入档**（docs/h04-logs/）：场景 7=20/20 direct(v6) 16.9Mbps；场景 2=0/20 direct、relay 兜底 20/20 完成 11.3Mbps（判红暂缓，见矩阵表复测清单——家侧监听端在 VM 内 + 双端代理，归因未分离）。IPv6 有无 = direct/relay 的对照实验入档。
+
+## 2026-07-31 — T-042 收尾 + verify-m1 → M1 收官
+
+**T-042 常驻语义**（用户质问"基础服务还需要手动启动吗？还会停吗"）：
+向导第 2 步改为注册 LaunchAgent（RunAtLoad+KeepAlive），失败回退裸
+spawn。用户实测：pkill 后 3 秒 launchd 复活新 pid。随后用户点破对称
+缺口——"用户真想退出怎么办"：新增托盘「停止后台服务」/设置页按钮，
+先 uninstall_autostart 再停进程（顺序关键，否则 KeepAlive 秒复活）。
+关窗=隐藏、退 App≠停服务，停服务必须显式操作。
+
+**verify-m1 战役**（一场三层的排查）：
+1. 假象一"Tailscale 路由劫持"——用户退出 Tailscale 仍红，判断被推翻。
+2. 日志实证：`connecting relay_url=None ip_addresses=[10.1.150.82]`——
+   provider（testclient）绑定后立即自报地址，relay 尚未就绪，存储端
+   反拨无兜底；同机打洞又被 7 个残留 utun（Tailscale 系统扩展"等重启
+   卸载"状态）干扰 → 超时。用户重启清掉 utun 后同机打洞恢复。
+3. 三项产品级修复全部落地：
+   - transport::local_addr 过滤 CGNAT 100.64/10 段（Tailscale 地址
+     只在其 overlay 内可达，通告出去毒害路径选择）；
+   - transport::wait_online + testclient 备份前等 relay 就绪（iroh
+     文档原话：online() 返回后 holepunching 才 work as expected）；
+   - backup.commit 自动重试 ×4（commit 幂等=续传语义，弱网/打洞偶发
+     不再甩给用户手动重跑；T-054 Android 执行器继承此语义）。
+4. 冒烟脚本自身两个陷阱一并修掉：`tee | grep -q` 在 pipefail 下
+   SIGPIPE 静默炸；`$DISK（` 全角括号在非 UTF-8 locale 下切进变量名。
+
+**附带**：CI 抓到 daemon 在 Linux 上编译失败（platform::adapter() 无
+Linux 实现）——阿里云部署同样会炸；补 HeadlessAdapter（XDG data dir、
+诚实报 unsupported）。教训：跨平台改动推送后必须等 CI 结果再叠加。
+
+**verify-m1 终局**：167 tests + DOGFOOD SMOKE ALL GREEN + P-Pass.app
+bundle 三连全绿。**M1 正式收官。**
+
+**决策记录**：
+- 同机冒烟不因环境残留降级验收——修到真绿为止（三层根因全部定位）。
+- "能优雅退出"与"崩溃自动恢复"必须并存（用户裁决）。
+- 产品铁律再获实锤：存储端不与全局 VPN/TUN 共存（Clash、Tailscale
+  两案并档）。

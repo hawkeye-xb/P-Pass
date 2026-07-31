@@ -4,9 +4,9 @@
 > 里程碑状态的唯一权威来源，每张卡完成即更新。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
-**Now / 当前位置**: M1 core complete & validated cross-internet → next
-is the desktop shell (P4) and the Android app (P5) toward family dogfood.
-M1 核心完工并通过跨公网双机验证 → 下一步桌面壳（P4）与 Android（P5），
+**Now / 当前位置**: **M1 closed** (verify-m1: 167 tests + dogfood
+ALL GREEN + desktop bundle, 2026-07-31) → next is M2 Android toward
+family dogfood. **M1 已收官**（总验收三连全绿）→ 下一步 M2 手机端，
 直奔自家狗粮。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
@@ -21,7 +21,7 @@ M1 核心完工并通过跨公网双机验证 → 下一步桌面壳（P4）与 
       overseas return path verified
 - [x] **Gate: pass into M1, no ADR-003 fallback** (human-signed)
 
-## M1 — Storage daemon / 存储端 🔨 (core ✅, shell pending)
+## M1 — Storage daemon / 存储端 ✅ (closed 2026-07-31)
 
 P0 foundations / 地基
 - [x] T-001 workspace + CI + arch-check
@@ -65,8 +65,14 @@ P4 desktop shell / 桌面壳
 - [x] T-041 Tauri tray shell (pairing QR, devices, status) — human
       walkthrough passed; 4 real issues found & fixed incl. the
       revoked-device-can-never-rejoin product bug
-- [ ] T-042 first-run wizard (folder + power settings)
-- [ ] `just verify-m1`: full scenario + dual-platform build
+- [x] T-042 first-run wizard (folder + power check + resident service);
+      user-verified: pkill → launchd revives in 3 s. Follow-up from user
+      review: graceful stop (tray '停止后台服务' unregisters autostart
+      first — resident AND stoppable)
+- [x] `just verify-m1`: 167 tests + dogfood ALL GREEN + P-Pass.app
+      bundle. Found & fixed on the way: CGNAT (Tailscale) address
+      pollution filtered from announcements, provider waits online
+      before announcing, backup.commit auto-retries (idempotent resume)
 
 ## M2 — Android app / 手机端 ⬜
 
