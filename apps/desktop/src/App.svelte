@@ -99,6 +99,22 @@
     }
   }
 
+  async function openLibrary() {
+    try {
+      const s = await call("status");
+      const dir = s.library_dir;
+      if (!dir) throw new Error("后台服务还没报告库位置");
+      // originals/ 是照片所在；库刚建还没照片时打开库根目录。
+      try {
+        await revealItemInDir(`${dir}/originals`);
+      } catch (_) {
+        await revealItemInDir(dir);
+      }
+    } catch (e) {
+      message = `打开失败：${e}`;
+    }
+  }
+
   async function chooseFolder() {
     const dir = await openDialog({ directory: true, title: "选择照片库文件夹" });
     if (!dir) return;
@@ -219,6 +235,7 @@
     <section>
       <h2>设置</h2>
       <div class="row">
+        <button class="primary" onclick={openLibrary}>打开照片文件夹</button>
         <button onclick={chooseFolder}>更改库文件夹…</button>
         <button onclick={exportLogs}>导出诊断包</button>
       </div>

@@ -28,10 +28,20 @@ fn daemon_online() -> bool {
 fn wizard_state() -> Value {
     use platform::PlatformAdapter as _;
     let dir = platform::adapter().data_dir();
+    // Photos must land somewhere a person can FIND (real walkthrough:
+    // "传到哪儿了" had no answer while the library hid in ~/Library).
+    let pictures = dirs_pictures().join("P-Pass 家庭照片库");
     json!({
         "configured": dir.join("config.toml").exists(),
-        "default_dir": dir.to_string_lossy(),
+        "default_dir": pictures.to_string_lossy(),
     })
+}
+
+fn dirs_pictures() -> std::path::PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".into());
+    std::path::PathBuf::from(home).join("Pictures")
 }
 
 /// Current sleep policy, humanized for the wizard.

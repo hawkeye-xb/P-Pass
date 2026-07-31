@@ -295,6 +295,10 @@ impl IpcServer {
             "devices": devices.len(),
             "revoked": devices.iter().filter(|d| d.revoked).count(),
             "pending_pairs": pending,
+            // Where the photos physically live — the UI's "open the
+            // photo folder" needs an answer to "传到哪儿了" (real
+            // walkthrough question, 2026-07-31).
+            "library_dir": self.data_dir.display().to_string(),
         }))
     }
 
