@@ -4,6 +4,25 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
+  import Wizard from "./Wizard.svelte";
+
+  let wizard = $state(null); // null=检测中, {configured, default_dir}
+  let starting = $state(false);
+
+  async function checkWizard() {
+    wizard = await invoke("wizard_state");
+  }
+
+  async function startDaemonNow() {
+    starting = true;
+    try {
+      await invoke("start_daemon");
+    } catch (e) {
+      message = `启动失败：${e}`;
+    } finally {
+      setTimeout(() => (starting = false), 3000);
+    }
+  }
 
   let online = $state(false);
   let status = $state(null);
@@ -91,6 +110,7 @@
 
   let timer;
   onMount(() => {
+    checkWizard();
     refresh();
     timer = setInterval(refresh, 3000); // 契约: 状态 3s 轮询
   });
@@ -120,9 +140,15 @@
     <p class="message">{message}</p>
   {/if}
 
-  {#if !online}
+  {#if wizard && !wizard.configured && !online}
+    <Wizard defaultDir={wizard.default_dir} onDone={() => { checkWizard(); refresh(); }} />
+  {:else if !online}
     <section>
-      <p>没有找到运行中的后台服务。请先启动 daemon（详见部署手册），本窗口每 3 秒自动重试。</p>
+      <p>后台服务没有在运行。</p>
+      <button class="primary" disabled={starting} onclick={startDaemonNow}>
+        {starting ? "正在启动…" : "启动后台服务"}
+      </button>
+      <p class="hint">启动后本窗口每 3 秒自动刷新。</p>
     </section>
   {:else}
     <section>

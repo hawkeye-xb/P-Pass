@@ -65,3 +65,9 @@ platform-smoke:
 # T-041 桌面壳开发模式（Tauri dev = 前端热更 + 托盘）
 dev-desktop:
     cd apps/desktop && npx tauri dev
+
+# M1 总验收（手册 E 表）：全仓测试 + 接口全剧本 + 桌面产物
+verify-m1:
+    cargo nextest run
+    tools/dogfood-smoke.sh /tmp/ppf-verify-m1
+    cd apps/desktop && npx tauri build --bundles app

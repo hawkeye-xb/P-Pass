@@ -28,20 +28,32 @@ pub struct DaemonHandle {
 }
 
 impl DaemonHandle {
-    /// Find a running daemon via its token file.
+    /// Find a RUNNING daemon: candidates are probed with a live status
+    /// call — a stale token file from a dead daemon must never hijack
+    /// discovery (real-world bug: leftover dogfood token).
     pub fn discover() -> Result<Self, String> {
+        let mut last_err = "找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".to_string();
         for path in token_candidates() {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let mut lines = content.lines();
-                if let (Some(name), Some(token)) = (lines.next(), lines.next()) {
-                    return Ok(Self {
-                        socket_name: name.trim().to_string(),
-                        token: token.trim().to_string(),
-                    });
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let mut lines = content.lines();
+            let (Some(name), Some(token)) = (lines.next(), lines.next()) else {
+                continue;
+            };
+            let handle = Self {
+                socket_name: name.trim().to_string(),
+                token: token.trim().to_string(),
+            };
+            match handle.call("status", serde_json::json!({})) {
+                Ok(_) => return Ok(handle),
+                Err(e) => {
+                    // Stale token (dead daemon) — try the next candidate.
+                    last_err = format!("{} 指向的服务无响应：{e}", path.display());
                 }
             }
         }
-        Err("找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".into())
+        Err(last_err)
     }
 
     /// One request/response round trip.

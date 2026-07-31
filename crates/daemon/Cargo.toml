@@ -10,6 +10,7 @@ proto = { path = "../proto" }
 transport = { path = "../transport" }
 storage = { path = "../storage" }
 core-index = { path = "../core-index" }
+platform = { path = "../platform" }
 media-codec = { path = "../media-codec" }
 diag = { path = "../diag" }
 # base64 for in-frame thumbnail bytes (already in tree via storage).

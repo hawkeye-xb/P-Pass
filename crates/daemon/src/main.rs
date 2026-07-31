@@ -16,11 +16,16 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let config = Config::load(None)?;
-    let data_dir = config
-        .data_dir
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("data_dir 未配置：请在 config.toml 设置 data_dir"))?;
+    // Default config file + data dir follow the platform convention
+    // (~/Library/Application Support/P-Pass on macOS) — a first launch
+    // with zero configuration must just work (T-042).
+    let platform_dir = {
+        use platform::PlatformAdapter as _;
+        platform::adapter().data_dir()
+    };
+    let default_config = platform_dir.join("config.toml");
+    let config = Config::load(Some(&default_config))?;
+    let data_dir = config.data_dir.clone().unwrap_or(platform_dir);
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
 
     let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
