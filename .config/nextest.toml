@@ -1,0 +1,5 @@
+# A test that hangs must die with a name and a backtrace, not ride the
+# CI job into its global timeout (learned 2026-07-31: kill_mid_transfer
+# spun 10 minutes on a runner and the whole job was cancelled nameless).
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 5 }

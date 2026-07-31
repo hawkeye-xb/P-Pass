@@ -79,7 +79,16 @@ async fn kill_mid_transfer_then_resume_verifies() {
         let dest = dir.path().join("never-finished.bin");
         let pull = tokio::spawn(async move { blobs.pull(&ticket, &dest).await });
 
+        // Deadline: if the pull never even starts moving bytes (slow CI
+        // runner, transient bind failure), fail fast with a diagnosis
+        // instead of spinning until the CI job's global timeout kills us.
+        let started = std::time::Instant::now();
         while !pull.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(120),
+                "pull moved no bytes in 120 s — transfer never started                  (store bytes: {})",
+                dir_bytes(&receiver_store)
+            );
             tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         }
         pull.abort(); // kill: no graceful anything
