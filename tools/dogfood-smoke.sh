@@ -55,14 +55,18 @@ echo "── 2. backup 50 个混合文件"
 "$TC" backup --files 50 --node "$NODE"
 
 echo "── 3. 幂等重跑（期望缺 0）"
-"$TC" backup --files 50 --node "$NODE" | tee /dev/stderr | grep -q '缺 0 个'
+# 注意不能 `tee | grep -q`：-q 命中即关管道，tee 吃 SIGPIPE，
+# pipefail 下整个脚本静默退出（重试改动加长输出后必现的竞态）。
+RERUN=$("$TC" backup --files 50 --node "$NODE")
+echo "$RERUN"
+echo "$RERUN" | grep -q '缺 0 个'
 
 echo "── 4. browse（分页无重复 + 缩略图）"
 "$TC" browse --limit 7 --node "$NODE"
 
 echo "── 5. 索引与磁盘一致"
 DISK=$(find library/originals -type f | wc -l | tr -d ' ')
-echo "磁盘文件数: $DISK（46 = 50 去重后）"
+echo "磁盘文件数: ${DISK}（46 = 50 去重后）"
 [ "$DISK" = "46" ]
 
 echo "── 6. IPC 吊销 → 门卫验证"
