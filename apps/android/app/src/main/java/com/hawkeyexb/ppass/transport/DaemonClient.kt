@@ -110,6 +110,65 @@ class DaemonClient {
             ep.connect(addr, alpn.toByteArray())
         }
 
+    /**
+     * Download an asset's original bytes to [dest] over ppf/download/1.
+     * Returns total bytes. [onProgress] gets (received, total).
+     */
+    suspend fun downloadAsset(
+        peer: PeerAddrParts,
+        hash: String,
+        dest: java.io.File,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+    ): Long = withContext(Dispatchers.IO) {
+        val conn = connectRaw(peer, "ppf/download/1")
+        try {
+            val bi = conn.openBi()
+            val send = bi.send()
+            val recv = bi.recv()
+            val req = Req(
+                id = java.util.UUID.randomUUID().toString(),
+                method = "asset.download",
+                params = kotlinx.serialization.json.buildJsonObject {
+                    put("hash", kotlinx.serialization.json.JsonPrimitive(hash))
+                },
+            )
+            send.writeAll(com.hawkeyexb.ppass.proto.encodeFrame(Req.serializer(), req))
+            send.finish()
+
+            val header = recv.readExact(4u)
+            val len = com.hawkeyexb.ppass.proto.frameLen(header)
+            val resp = com.hawkeyexb.ppass.proto.decodePayload(
+                Resp.serializer(), recv.readExact(len.toUInt())
+            )
+            check(resp.ok) { "download $hash: ${resp.error?.msgKey}" }
+            val total = (resp.result as? kotlinx.serialization.json.JsonObject)
+                ?.get("bytes")?.let {
+                    (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()
+                } ?: -1L
+
+            var received = 0L
+            dest.outputStream().use { out ->
+                while (received < total || total < 0) {
+                    val want = if (total > 0) {
+                        minOf(256L * 1024, total - received).toUInt()
+                    } else 256u * 1024u
+                    val chunk = try {
+                        recv.readExact(want)
+                    } catch (_: Throwable) {
+                        break // sender finished early
+                    }
+                    if (chunk.isEmpty()) break
+                    out.write(chunk)
+                    received += chunk.size
+                    onProgress(received, total)
+                }
+            }
+            received
+        } finally {
+            conn.close(0L, ByteArray(0))
+        }
+    }
+
     suspend fun close(): Unit = withContext(Dispatchers.IO) {
         endpoint?.close()
         endpoint = null

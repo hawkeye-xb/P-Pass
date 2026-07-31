@@ -26,24 +26,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
 
 @Composable
-private fun PrimaryButton(text: String, textZh: String, onClick: () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Button(
-            onClick = onClick,
-            modifier = Modifier.fillMaxWidth().height(64.dp),
-            shape = RoundedCornerShape(PPSize.RadiusControl),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = PPColor.Ink, contentColor = PPColor.Paper
-            ),
-        ) {
-            Text(text, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.height(10.dp))
-        Text(textZh, fontSize = PPSize.BodyMin, color = PPColor.Ink60)
+private fun PrimaryButton(text: String, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(64.dp),
+        shape = RoundedCornerShape(PPSize.RadiusControl),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = PPColor.Ink, contentColor = PPColor.Paper
+        ),
+    ) {
+        Text(text, fontSize = 19.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -60,22 +58,17 @@ fun WelcomeScreen(onScan: () -> Unit) {
         )
         Spacer(Modifier.weight(1f))
         Text(
-            "Your photos, kept at home.",
-            fontSize = 40.sp, lineHeight = 46.sp,
+            stringResource(R.string.welcome_headline),
+            fontSize = 36.sp, lineHeight = 44.sp,
             fontFamily = FontFamily.Serif, color = PPColor.Ink,
         )
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(12.dp))
         Text(
-            "照片自动存回自己家的电脑。",
-            fontSize = 23.sp, color = PPColor.Ink60, fontWeight = FontWeight.Medium,
-        )
-        Spacer(Modifier.height(10.dp))
-        Text(
-            "No account, no password, no monthly fee.\n不用注册、不用密码、不花钱。",
+            stringResource(R.string.welcome_sub),
             fontSize = PPSize.BodyMin, lineHeight = 26.sp, color = PPColor.Ink40,
         )
         Spacer(Modifier.height(40.dp))
-        PrimaryButton("Scan the code on the computer", "扫描电脑上的二维码", onScan)
+        PrimaryButton(stringResource(R.string.welcome_scan), onScan)
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -96,15 +89,13 @@ fun JoinedScreen(storageName: String, onDone: () -> Unit) {
         }
         Spacer(Modifier.height(24.dp))
         Text(
-            "This phone has joined.",
+            stringResource(R.string.joined_title),
             fontSize = PPSize.Headline, fontFamily = FontFamily.Serif,
             color = PPColor.Ink, textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(8.dp))
-        Text("这台手机已加入。", fontSize = PPSize.BodyZh, color = PPColor.Ink60)
         Spacer(Modifier.height(14.dp))
         Text(
-            "Connected to $storageName.\nBacking up starts now — on Wi-Fi, while charging. You can close the app.\n现在开始备份：连 Wi-Fi、充电时自动进行。可以关掉 App。",
+            stringResource(R.string.joined_body, storageName),
             fontSize = PPSize.BodyMin, lineHeight = 26.sp,
             color = PPColor.Ink40, textAlign = TextAlign.Center,
         )
@@ -116,13 +107,13 @@ fun JoinedScreen(storageName: String, onDone: () -> Unit) {
             colors = ButtonDefaults.buttonColors(
                 containerColor = PPColor.Ink, contentColor = PPColor.Paper
             ),
-        ) { Text("Done 好的", fontSize = 19.sp, fontWeight = FontWeight.Bold) }
+        ) { Text(stringResource(R.string.done), fontSize = 19.sp, fontWeight = FontWeight.Bold) }
     }
 }
 
 /** Pairing in flight / refused / failed states share one screen. */
 @Composable
-fun PairStatusScreen(title: String, titleZh: String, body: String, action: Pair<String, () -> Unit>?) {
+fun PairStatusScreen(title: String, body: String, action: Pair<String, () -> Unit>?) {
     Column(
         Modifier.fillMaxSize().background(PPColor.Paper).padding(34.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -132,8 +123,6 @@ fun PairStatusScreen(title: String, titleZh: String, body: String, action: Pair<
             title, fontSize = 30.sp, fontFamily = FontFamily.Serif,
             color = PPColor.Ink, textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(10.dp))
-        Text(titleZh, fontSize = PPSize.BodyZh, color = PPColor.Ink60, textAlign = TextAlign.Center)
         Spacer(Modifier.height(14.dp))
         Text(
             body, fontSize = PPSize.BodyMin, lineHeight = 26.sp,

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,7 +40,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.proto.AssetMeta
 import com.hawkeyexb.ppass.proto.Methods
@@ -73,6 +76,15 @@ class TimelineLoader(
         )
         check(resp.ok) { "timeline: ${resp.error?.msgKey}" }
         return ProtoJson.decodeFromJsonElement(TimelinePage.serializer(), resp.result!!)
+    }
+
+    suspend fun download(
+        hash: String,
+        dest: java.io.File,
+        onProgress: (Long, Long) -> Unit,
+    ): Long {
+        ensureBound()
+        return client.downloadAsset(daemon, hash, dest, onProgress)
     }
 
     suspend fun thumb(hash: String, size: ThumbSize): Bitmap? {
@@ -114,7 +126,11 @@ fun PhotosScreen(loader: TimelineLoader) {
 
     val current = opened
     if (current != null) {
-        PhotoViewer(loader, current) { opened = null }
+        if (current.mediaType.startsWith("video/")) {
+            VideoScreen(loader, current) { opened = null }
+        } else {
+            PhotoViewer(loader, current) { opened = null }
+        }
         return
     }
 
@@ -125,27 +141,43 @@ fun PhotosScreen(loader: TimelineLoader) {
             verticalAlignment = Alignment.Bottom,
         ) {
             Text(
-                "Family photos", fontSize = 30.sp,
+                stringResource(R.string.photos_title), fontSize = 30.sp,
                 fontFamily = FontFamily.Serif, color = PPColor.Ink,
             )
-            Text("全家的照片 · ${items.size}", fontSize = 16.sp, color = PPColor.Ink40)
+            Text(
+                stringResource(R.string.photos_count, items.size),
+                fontSize = 16.sp, color = PPColor.Ink40,
+            )
         }
 
         when {
-            loading -> Center("Loading… 正在读取家里的照片")
-            error != null -> Center("Could not reach the computer.\n没能连上电脑。\n(${error?.take(100)})")
-            items.isEmpty() -> Center("No photos in the library yet.\n照片库还是空的——先备份一批吧。")
+            loading -> Center(stringResource(R.string.photos_loading))
+            error != null -> Center(
+                stringResource(R.string.photos_unreachable) + "\n(${error?.take(100)})"
+            )
+            items.isEmpty() -> Center(stringResource(R.string.photos_empty))
             else -> LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                items(items, key = { it.hash }) { asset ->
-                    ThumbCell(loader, asset) { opened = asset }
+                // Month sections: the design's timeline shape.
+                for ((month, group) in groupByMonth(items)) {
+                    item(key = "hdr-$month", span = { GridItemSpan(3) }) {
+                        Text(
+                            month,
+                            fontSize = 18.sp, fontFamily = FontFamily.Serif,
+                            color = PPColor.Ink,
+                            modifier = Modifier.padding(8.dp, 16.dp, 8.dp, 6.dp),
+                        )
+                    }
+                    items(group, key = { it.hash }) { asset ->
+                        ThumbCell(loader, asset) { opened = asset }
+                    }
                 }
                 if (next != null) {
-                    item {
+                    item(key = "pager") {
                         LaunchedEffect(next) {
                             try {
                                 val page = loader.page(next)
@@ -160,6 +192,13 @@ fun PhotosScreen(loader: TimelineLoader) {
             }
         }
     }
+}
+
+/** taken_at (ms) → "2026年7月"-style month label using the device locale. */
+private fun groupByMonth(items: List<AssetMeta>): List<Pair<String, List<AssetMeta>>> {
+    val fmt = java.text.SimpleDateFormat("yyyy.MM", java.util.Locale.getDefault())
+    return items.groupBy { fmt.format(java.util.Date(it.takenAt * 1000)) }
+        .entries.map { it.key to it.value }
 }
 
 @Composable
@@ -191,7 +230,7 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
     Column(Modifier.fillMaxSize().background(PPColor.SurfaceDark).padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
-                "Back 返回", fontSize = 17.sp, color = PPColor.Paper,
+                stringResource(R.string.back), fontSize = 17.sp, color = PPColor.Paper,
                 modifier = Modifier.clickable(onClick = onClose).padding(10.dp),
             )
             Text(
@@ -208,7 +247,7 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
                     modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
                 )
             } else {
-                Text("Loading… 加载中", color = PPColor.PaperDim, fontSize = 16.sp)
+                Text(stringResource(R.string.photos_loading), color = PPColor.PaperDim, fontSize = 16.sp)
             }
         }
     }

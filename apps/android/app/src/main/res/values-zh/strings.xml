@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">P-Pass</string>
+
+    <string name="welcome_headline">照片自动存回自己家的电脑。</string>
+    <string name="welcome_sub">不用注册、不用密码、不花钱。</string>
+    <string name="welcome_scan">扫描电脑上的二维码</string>
+
+    <string name="scan_title">对准电脑屏幕上的二维码</string>
+    <string name="scan_hint">拿稳就行，会自动识别。</string>
+    <string name="cancel">取消</string>
+
+    <string name="pair_waiting_title">正在请求加入</string>
+    <string name="pair_waiting_body">回到电脑，在弹出的请求上点「允许」。</string>
+    <string name="pair_refused_title">电脑拒绝了这次加入</string>
+    <string name="pair_refused_body">请管理员重新生成二维码后再试一次。</string>
+    <string name="pair_failed_title">没能连上电脑</string>
+    <string name="pair_failed_body">确认电脑开着、两边都能上网，然后重新扫码。</string>
+    <string name="scan_again">重新扫码</string>
+    <string name="joined_title">这台手机已加入。</string>
+    <string name="joined_body">已连接「%1$s」。\n现在开始备份：连 Wi-Fi、充电时自动进行。可以关掉 App。</string>
+    <string name="done">好的</string>
+    <string name="not_a_code">这不是 P-Pass 配对码。</string>
+    <string name="code_missing_addr">配对码缺少地址信息，请在电脑上重新生成。</string>
+
+    <string name="state_ready">随时可以备份</string>
+    <string name="state_scanning">正在找照片… %1$d</string>
+    <string name="state_hashing">正在读取 %1$d/%2$d</string>
+    <string name="state_sending">正在传回家 %1$d/%2$d</string>
+    <string name="state_safe">照片都存好了</string>
+    <string name="state_trouble">需要再试一次</string>
+    <string name="connected_to">已连接</string>
+    <string name="safe_detail">新存 %1$d 张。</string>
+    <string name="safe_detail_dup">新存 %1$d 张，%2$d 张原本就在。</string>
+    <string name="backup_now">立即备份</string>
+    <string name="backing_up">备份中…</string>
+    <string name="no_cloud">照片直接传回自己家的电脑，不经过任何云端。</string>
+    <string name="reconnect">重新扫码连接</string>
+    <string name="run_failed">这次没传完——已存回家的照片是安全的；再点一次会从断点继续。</string>
+
+    <string name="photos_title">全家的照片</string>
+    <string name="photos_count">%1$d 张</string>
+    <string name="photos_loading">正在读取家里的照片…</string>
+    <string name="photos_unreachable">没能连上电脑。</string>
+    <string name="photos_empty">照片库还是空的——先备份一批吧。</string>
+    <string name="back">返回</string>
+    <string name="video_loading">正在从家里取视频… %1$d%%</string>
+    <string name="video_failed">视频没取到，请再试一次。</string>
+
+    <string name="tab_photos">照片</string>
+    <string name="tab_backup">备份</string>
+</resources>

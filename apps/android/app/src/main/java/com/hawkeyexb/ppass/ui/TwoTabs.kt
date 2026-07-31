@@ -18,7 +18,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
 
 @Composable
@@ -37,8 +39,8 @@ fun TwoTabs(
                 .padding(16.dp, 10.dp, 16.dp, 24.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            TabButton("Photos", "照片", tab == 0, Modifier.weight(1f)) { onTab(0) }
-            TabButton("Backup", "备份", tab == 1, Modifier.weight(1f)) { onTab(1) }
+            TabButton(stringResource(R.string.tab_photos), tab == 0, Modifier.weight(1f)) { onTab(0) }
+            TabButton(stringResource(R.string.tab_backup), tab == 1, Modifier.weight(1f)) { onTab(1) }
         }
     }
 }
@@ -46,23 +48,19 @@ fun TwoTabs(
 @Composable
 private fun TabButton(
     label: String,
-    labelZh: String,
     selected: Boolean,
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
     Button(
         onClick = onClick,
-        modifier = modifier.height(62.dp),
+        modifier = modifier.height(58.dp),
         shape = RoundedCornerShape(18.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (selected) PPColor.Ink else PPColor.Linen,
             contentColor = if (selected) PPColor.Paper else PPColor.Ink60,
         ),
     ) {
-        Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
-            Text(label, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            Text(labelZh, fontSize = 13.sp)
-        }
+        Text(label, fontSize = 17.sp, fontWeight = FontWeight.Bold)
     }
 }

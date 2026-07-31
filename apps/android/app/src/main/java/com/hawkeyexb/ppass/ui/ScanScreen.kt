@@ -33,7 +33,9 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -76,11 +78,9 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
 
     Column(Modifier.fillMaxSize().background(PPColor.SurfaceDark).padding(24.dp)) {
         Text(
-            "Point at the computer screen.",
+            stringResource(R.string.scan_title),
             fontSize = 30.sp, fontFamily = FontFamily.Serif, color = PPColor.Paper,
         )
-        Spacer(Modifier.height(6.dp))
-        Text("对准电脑屏幕上的二维码", fontSize = 19.sp, color = PPColor.PaperDim)
         Spacer(Modifier.height(20.dp))
 
         Box(
@@ -121,7 +121,7 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
             // The one green frame — the only meaning colour on screen.
             Box(Modifier.size(236.dp).border(3.dp, PPColor.Safe, RoundedCornerShape(24.dp)))
             Text(
-                "Hold steady — it reads by itself.\n拿稳就行，会自动识别。",
+                stringResource(R.string.scan_hint),
                 modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 26.dp),
                 fontSize = PPSize.BodyMin, lineHeight = 25.sp,
                 color = PPColor.PaperDim, textAlign = TextAlign.Center,
@@ -134,7 +134,7 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
             modifier = Modifier.fillMaxWidth().height(58.dp),
             shape = RoundedCornerShape(PPSize.RadiusControl),
             border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.PaperDim),
-        ) { Text("Cancel 取消", fontSize = 18.sp, color = PPColor.Paper) }
+        ) { Text(stringResource(R.string.cancel), fontSize = 18.sp, color = PPColor.Paper) }
         Spacer(Modifier.height(14.dp))
     }
 }

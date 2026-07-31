@@ -26,7 +26,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
 
 /** What the user sees: exactly one of the design's meaning states. */
@@ -46,19 +48,19 @@ fun HomeScreen(
     onBackupNow: () -> Unit,
     onReconnect: () -> Unit = {},
 ) {
-    val (dot, pillBg, pillText, pillTextZh) = when (state) {
-        is BackupUiState.Idle ->
-            Quad(PPColor.Idle, PPColor.IdleBg, "Ready", "随时可以备份")
-        is BackupUiState.Scanning ->
-            Quad(PPColor.Waiting, PPColor.WaitingBg, "Looking for photos… ${state.found}", "正在找照片")
-        is BackupUiState.Hashing ->
-            Quad(PPColor.Waiting, PPColor.WaitingBg, "Reading ${state.done}/${state.total}", "正在读取照片")
-        is BackupUiState.Sending ->
-            Quad(PPColor.Waiting, PPColor.WaitingBg, "Sending ${state.done}/${state.total} home", "正在传回家")
-        is BackupUiState.AllSafe ->
-            Quad(PPColor.Safe, PPColor.SafeBg, "All photos are backed up", "照片都存好了")
-        is BackupUiState.Trouble ->
-            Quad(PPColor.Act, PPColor.ActBg, "Needs another try", "需要再试一次")
+    val (dot, pillBg) = when (state) {
+        is BackupUiState.Idle -> PPColor.Idle to PPColor.IdleBg
+        is BackupUiState.AllSafe -> PPColor.Safe to PPColor.SafeBg
+        is BackupUiState.Trouble -> PPColor.Act to PPColor.ActBg
+        else -> PPColor.Waiting to PPColor.WaitingBg
+    }
+    val pillText = when (state) {
+        is BackupUiState.Idle -> stringResource(R.string.state_ready)
+        is BackupUiState.Scanning -> stringResource(R.string.state_scanning, state.found)
+        is BackupUiState.Hashing -> stringResource(R.string.state_hashing, state.done, state.total)
+        is BackupUiState.Sending -> stringResource(R.string.state_sending, state.done, state.total)
+        is BackupUiState.AllSafe -> stringResource(R.string.state_safe)
+        is BackupUiState.Trouble -> stringResource(R.string.state_trouble)
     }
 
     Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(28.dp)) {
@@ -77,15 +79,12 @@ fun HomeScreen(
                 Modifier.size(12.dp).background(dot, CircleShape)
             )
             Spacer(Modifier.width(12.dp))
-            Column {
-                Text(pillText, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink)
-                Text(pillTextZh, fontSize = 15.sp, color = PPColor.Ink60)
-            }
+            Text(pillText, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink)
         }
 
         Spacer(Modifier.height(26.dp))
         Text(
-            "Connected to", fontSize = 15.sp, color = PPColor.Ink40,
+            stringResource(R.string.connected_to), fontSize = 15.sp, color = PPColor.Ink40,
         )
         Text(
             storageName, fontSize = 26.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
@@ -95,10 +94,11 @@ fun HomeScreen(
             is BackupUiState.AllSafe -> {
                 Spacer(Modifier.height(14.dp))
                 Text(
-                    "${state.ingested} new photos arrived home" +
-                        (if (state.duplicates > 0) ", ${state.duplicates} were already there" else "") + ".\n" +
-                        "新存 ${state.ingested} 张" +
-                        (if (state.duplicates > 0) "，${state.duplicates} 张原本就在" else "") + "。",
+                    if (state.duplicates > 0) {
+                        stringResource(R.string.safe_detail_dup, state.ingested, state.duplicates)
+                    } else {
+                        stringResource(R.string.safe_detail, state.ingested)
+                    },
                     fontSize = PPSize.BodyMin, lineHeight = 26.sp, color = PPColor.Ink60,
                 )
             }
@@ -125,27 +125,25 @@ fun HomeScreen(
             ),
         ) {
             Text(
-                if (busy) "Backing up… 备份中" else "Back up now 立即备份",
+                if (busy) stringResource(R.string.backing_up) else stringResource(R.string.backup_now),
                 fontSize = 19.sp, fontWeight = FontWeight.Bold,
             )
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            "Photos go straight to your own computer. Nothing is uploaded to a cloud.\n照片直接传回自己家的电脑，不经过任何云端。",
+            stringResource(R.string.no_cloud),
             fontSize = 14.sp, lineHeight = 22.sp, color = PPColor.Ink40,
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(10.dp))
-        Text(
-            "Scan a new code 重新扫码连接",
-            fontSize = 15.sp, color = PPColor.Ink60,
-            modifier = Modifier
-                .align(Alignment.CenterHorizontally)
-                .clickable(onClick = onReconnect)
-                .padding(10.dp),
-        )
+        androidx.compose.material3.OutlinedButton(
+            onClick = onReconnect,
+            modifier = Modifier.fillMaxWidth().height(52.dp),
+            shape = RoundedCornerShape(PPSize.RadiusControl),
+            border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
+        ) {
+            Text(stringResource(R.string.reconnect), fontSize = 16.sp, color = PPColor.Ink60)
+        }
         Spacer(Modifier.height(6.dp))
     }
 }
-
-private data class Quad(val dot: Color, val bg: Color, val en: String, val zh: String)

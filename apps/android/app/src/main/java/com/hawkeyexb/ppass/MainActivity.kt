@@ -44,7 +44,7 @@ private sealed class Screen {
     data object Scan : Screen()
     data class Waiting(val qr: String) : Screen()
     data class Joined(val pairing: Pairing) : Screen()
-    data class Trouble(val title: String, val titleZh: String, val body: String) : Screen()
+    data class Trouble(val titleRes: Int, val bodyRes: Int, val detail: String = "") : Screen()
     data class Home(val pairing: Pairing) : Screen()
 }
 
@@ -98,10 +98,10 @@ fun PPassApp() {
 
         is Screen.Waiting -> {
             PairStatusScreen(
-                title = "Asking the computer…",
-                titleZh = "正在请求加入",
-                body = "On the computer, click Allow when it asks.\n回到电脑，在弹出的请求上点「允许」。",
-                action = "Cancel 取消" to { screen = Screen.Welcome },
+                title = androidx.compose.ui.res.stringResource(R.string.pair_waiting_title),
+                body = androidx.compose.ui.res.stringResource(R.string.pair_waiting_body),
+                action = androidx.compose.ui.res.stringResource(R.string.cancel) to
+                    { screen = Screen.Welcome },
             )
             LaunchedEffect(s.qr) {
                 // Catch Throwable, not Exception: a missing native lib
@@ -123,12 +123,11 @@ fun PPassApp() {
                         Screen.Joined(outcome.pairing)
                     }
                     is PairOutcome.Refused -> Screen.Trouble(
-                        "The computer said no.", "电脑拒绝了这次加入",
-                        "Ask the family owner to generate a fresh code and try again.\n请管理员重新生成二维码后再试一次。",
+                        R.string.pair_refused_title, R.string.pair_refused_body,
                     )
                     is PairOutcome.Failed -> Screen.Trouble(
-                        "Could not reach the computer.", "没能连上电脑",
-                        "Make sure the computer is on and both devices have internet, then scan again.\n确认电脑开着、两边都能上网，然后重新扫码。\n(${outcome.reason.take(120)})",
+                        R.string.pair_failed_title, R.string.pair_failed_body,
+                        "(${outcome.reason.take(160)})",
                     )
                 }
             }
@@ -140,8 +139,11 @@ fun PPassApp() {
         )
 
         is Screen.Trouble -> PairStatusScreen(
-            title = s.title, titleZh = s.titleZh, body = s.body,
-            action = "Scan again 重新扫码" to { screen = Screen.Scan },
+            title = androidx.compose.ui.res.stringResource(s.titleRes),
+            body = androidx.compose.ui.res.stringResource(s.bodyRes) +
+                if (s.detail.isNotEmpty()) "\n${s.detail}" else "",
+            action = androidx.compose.ui.res.stringResource(R.string.scan_again) to
+                { screen = Screen.Scan },
         )
 
         is Screen.Home -> {

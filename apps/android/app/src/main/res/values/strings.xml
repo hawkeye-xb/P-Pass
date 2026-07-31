@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">P-Pass</string>
+
+    <!-- Welcome -->
+    <string name="welcome_headline">Your photos, kept at home.</string>
+    <string name="welcome_sub">No account, no password, no monthly fee.</string>
+    <string name="welcome_scan">Scan the code on the computer</string>
+
+    <!-- Scan -->
+    <string name="scan_title">Point at the computer screen.</string>
+    <string name="scan_hint">Hold steady — it reads by itself.</string>
+    <string name="cancel">Cancel</string>
+
+    <!-- Pairing -->
+    <string name="pair_waiting_title">Asking the computer…</string>
+    <string name="pair_waiting_body">On the computer, click Allow when it asks.</string>
+    <string name="pair_refused_title">The computer said no.</string>
+    <string name="pair_refused_body">Ask the family owner to generate a fresh code and try again.</string>
+    <string name="pair_failed_title">Could not reach the computer.</string>
+    <string name="pair_failed_body">Make sure the computer is on and both devices have internet, then scan again.</string>
+    <string name="scan_again">Scan again</string>
+    <string name="joined_title">This phone has joined.</string>
+    <string name="joined_body">Connected to %1$s.\nBacking up starts now — on Wi-Fi, while charging. You can close the app.</string>
+    <string name="done">Done</string>
+    <string name="not_a_code">This is not a P-Pass pairing code.</string>
+    <string name="code_missing_addr">The code has no address — generate a fresh one on the computer.</string>
+
+    <!-- Home / backup -->
+    <string name="state_ready">Ready</string>
+    <string name="state_scanning">Looking for photos… %1$d</string>
+    <string name="state_hashing">Reading %1$d/%2$d</string>
+    <string name="state_sending">Sending %1$d/%2$d home</string>
+    <string name="state_safe">All photos are backed up</string>
+    <string name="state_trouble">Needs another try</string>
+    <string name="connected_to">Connected to</string>
+    <string name="safe_detail">%1$d new photos arrived home.</string>
+    <string name="safe_detail_dup">%1$d new photos arrived home, %2$d were already there.</string>
+    <string name="backup_now">Back up now</string>
+    <string name="backing_up">Backing up…</string>
+    <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
+    <string name="reconnect">Scan a new code</string>
+    <string name="run_failed">Could not finish this run — photos already home are safe; try again and it picks up where it left off.</string>
+
+    <!-- Photos -->
+    <string name="photos_title">Family photos</string>
+    <string name="photos_count">%1$d photos</string>
+    <string name="photos_loading">Loading the family library…</string>
+    <string name="photos_unreachable">Could not reach the computer.</string>
+    <string name="photos_empty">No photos in the library yet — back up a batch first.</string>
+    <string name="back">Back</string>
+    <string name="video_loading">Fetching the video from home… %1$d%%</string>
+    <string name="video_failed">Could not fetch the video. Try again.</string>
+
+    <!-- Tabs -->
+    <string name="tab_photos">Photos</string>
+    <string name="tab_backup">Backup</string>
+</resources>
