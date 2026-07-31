@@ -97,7 +97,10 @@ P4 desktop shell / 桌面壳
       android-backup`); **real-device PASS 2026-07-31**: Samsung S24 UI
       flow scan→pair→Back-up-now, 15 real photos landed on the Mac
       (screen: "All photos are backed up / 新存 15 张"); HarmonyOS phone
-      paired too. WorkManager/FGS auto-scheduling follows as T-054b
+      paired too. **T-054b auto-backup PASS**: periodic work (charging+
+      WiFi, 4h) + catch-up run on every app open, dataSync FGS while a
+      batch runs; real-device proof — 3 photos adb-pushed into the
+      gallery arrived on the Mac with no button pressed (15→18)
 - [ ] T-055 backup status page + timeline browsing
 - [ ] T-056 video playback DataSource
 - [ ] **Gate: one week of real family dogfood, 100 % backup completion**

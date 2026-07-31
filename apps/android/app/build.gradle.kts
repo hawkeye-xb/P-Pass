@@ -77,6 +77,11 @@ dependencies {
     implementation("net.java.dev.jna:jna:5.15.0@aar")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
+    // T-054b background scheduling: periodic work under charging+WiFi
+    // constraints, promoted to a dataSync FGS while a batch runs (S-04
+    // verdict: FGS segmented sessions survive Doze).
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")

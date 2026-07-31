@@ -25,6 +25,8 @@ import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.backup.BackupRunner
+import com.hawkeyexb.ppass.backup.backupOnceNow
+import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
@@ -58,6 +60,16 @@ fun PPassApp() {
 
     var screen by remember {
         mutableStateOf<Screen>(pairings.load()?.let { Screen.Home(it) } ?: Screen.Welcome)
+    }
+    // Paired phones: periodic backup stays scheduled (idempotent KEEP)
+    // and every app-open triggers one catch-up run — the phone backs
+    // itself up without anyone finding a button.
+    remember {
+        if (pairings.load() != null) {
+            scheduleAutoBackup(context)
+            backupOnceNow(context)
+        }
+        true
     }
 
     val cameraPermission = rememberLauncherForActivityResult(
@@ -100,6 +112,7 @@ fun PPassApp() {
                 screen = when (outcome) {
                     is PairOutcome.Joined -> {
                         pairings.save(outcome.pairing)
+                        scheduleAutoBackup(context)
                         Screen.Joined(outcome.pairing)
                     }
                     is PairOutcome.Refused -> Screen.Trouble(

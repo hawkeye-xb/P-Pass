@@ -284,3 +284,19 @@ authz**；本方案每个入站流都过 checkpoint（member+ 才许 upload）�
 DeviceBackupTest（instrumented 全链，QR 由 runner 参数注入）+
 tools/device-backup.sh。三星→阿里云 PROBE HELLO OK 300ms；全链剧本
 因 owner 循环/一次性 token 问题未走完，收尾归 T-054b 一起。
+
+## 2026-07-31 — T-054b 自动备份真机通过 ✅（无人点按钮，照片自动到家）
+
+- BackupWorker（CoroutineWorker）：与按钮同一条幂等管线，只决定
+  WHEN——Periodic 4h（充电+unmetered WiFi 约束）+ App 每次打开
+  catch-up 一次（家人不需要找按钮）；批次运行期升级 dataSync FGS
+  （S-04 结论），失败 Result.retry() 幂等收敛。
+- 真机验证：adb 推 3 张 PNG 进三星相册 → 重启 App → 零操作 →
+  `auto backup: offered=3 pushed=3 ingested=3`，Mac 库 15→18。
+  首次尝试失败自动重试成功，重试路径顺带实证。
+- 真机崩溃修复：Android 14 要求 WorkManager 的
+  SystemForegroundService 在 Manifest 声明 foregroundServiceType=
+  dataSync，否则 setForeground 即崩（tools:node=merge 覆盖）。
+- 验证基建教训：cmd jobscheduler run 需 -n androidx.work.systemjobscheduler
+  命名空间；periodic+约束的强制触发不可靠，改验 app-open catch-up
+  路径（同一 Worker）。
