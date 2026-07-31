@@ -105,6 +105,73 @@ pub fn adapter() -> impl PlatformAdapter {
 pub fn adapter() -> impl PlatformAdapter {
     WindowsAdapter::new()
 }
+/// Headless/server platforms (Linux cloud boxes run the daemon too):
+/// data dir follows XDG; desktop-only capabilities answer honestly.
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn adapter() -> impl PlatformAdapter {
+    HeadlessAdapter
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+pub struct HeadlessAdapter;
+
+#[cfg(not(any(target_os = "macos", windows)))]
+impl PlatformAdapter for HeadlessAdapter {
+    fn install_autostart(&self, _exec: &std::path::Path) -> Result<()> {
+        Err(PlatformError::Failed {
+            action: "autostart",
+            detail: "unsupported on this platform (use systemd)".into(),
+        })
+    }
+    fn autostart_installed(&self) -> Result<bool> {
+        Ok(false)
+    }
+    fn uninstall_autostart(&self) -> Result<()> {
+        Ok(())
+    }
+    fn service_mode(&self) -> ServiceMode {
+        ServiceMode::UserAutostart
+    }
+    fn key_store(&self) -> Box<dyn KeyStore> {
+        Box::new(NoKeyStore)
+    }
+    fn assert_awake(&self) -> Result<AwakeGuard> {
+        // Servers don't idle-sleep; a no-op guard keeps callers simple.
+        Ok(AwakeGuard { inner: () })
+    }
+    fn power_hint(&self) -> PowerHint {
+        PowerHint::NeverSleeps
+    }
+    fn notify(&self, _title: &str, _body: &str) {}
+    fn data_dir(&self) -> PathBuf {
+        let base = std::env::var("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+                    .join(".local/share")
+            });
+        base.join("p-pass")
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+struct NoKeyStore;
+
+#[cfg(not(any(target_os = "macos", windows)))]
+impl KeyStore for NoKeyStore {
+    fn store(&self, _name: &str, _secret: &[u8]) -> Result<()> {
+        Err(PlatformError::Failed {
+            action: "key store",
+            detail: "no secure store on this platform".into(),
+        })
+    }
+    fn load(&self, _name: &str) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+    fn delete(&self, _name: &str) -> Result<()> {
+        Ok(())
+    }
+}
 
 // ── Pure parsers (unit-tested on every platform) ─────────────────────
 

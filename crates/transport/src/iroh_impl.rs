@@ -164,9 +164,18 @@ impl IrohTransport {
         NodeId(*self.ep.id().as_bytes())
     }
 
-    /// Our address bundle, for handing to a peer.
+    /// Our address bundle, for handing to a peer. CGNAT-range addresses
+    /// (100.64.0.0/10 — Tailscale & carrier NAT) are filtered out: they
+    /// are only reachable inside that overlay and poison path selection
+    /// for everyone else (real-world bug: a Tailscale install made the
+    /// same-machine backup pull time out).
     pub fn local_addr(&self) -> PeerAddr {
-        PeerAddr(self.ep.addr())
+        let mut addr = self.ep.addr();
+        addr.addrs.retain(|a| match a {
+            TransportAddr::Ip(sa) => !is_cgnat(&sa.ip()),
+            _ => true,
+        });
+        PeerAddr(addr)
     }
 
     /// Register a peer's address bundle; returns its [`NodeId`] for use
@@ -334,6 +343,17 @@ impl Transport for IrohTransport {
             })
             .collect();
         classify(&facts)
+    }
+}
+
+/// 100.64.0.0/10 — RFC 6598 carrier-grade NAT, also used by Tailscale.
+fn is_cgnat(ip: &std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            o[0] == 100 && (64..128).contains(&o[1])
+        }
+        std::net::IpAddr::V6(_) => false,
     }
 }
 
