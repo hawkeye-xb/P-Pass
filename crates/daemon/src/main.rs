@@ -39,6 +39,15 @@ async fn main() -> anyhow::Result<()> {
     );
     transport_cfg.bind_addr = config.bind_addr;
     let transport = transport::IrohTransport::bind(transport_cfg).await?;
+    // Wait for the home relay before announcing anything: a QR issued
+    // in the first seconds otherwise carries a bare LAN address and
+    // cross-network phones can never reach us (真机教训 T-054).
+    if !transport
+        .wait_online(std::time::Duration::from_secs(10))
+        .await
+    {
+        println!("提示：中继未在 10 秒内就绪，二维码将只含直连地址。");
+    }
 
     println!("P-Pass daemon 已启动");
     println!("NodeId: {}", transport.node_id());
@@ -50,7 +59,10 @@ async fn main() -> anyhow::Result<()> {
     let (pairing, pending_rx) = daemon::Pairing::new(
         db.clone(),
         transport.node_id(),
-        Some(transport.local_addr().to_string()),
+        Some(std::sync::Arc::new({
+            let tp = transport.clone();
+            move || tp.local_addr().to_string()
+        })),
     );
     let qr = pairing.start(rand_token()?, unix_ms_now());
     println!("配对二维码内容（10 分钟内有效）: {qr}");

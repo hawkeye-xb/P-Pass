@@ -63,28 +63,31 @@ struct Inner {
 pub struct Pairing {
     db: Db,
     node_id: transport::NodeId,
-    /// Serialized dialable address, appended to QR strings as `&a=` so a
-    /// scan connects without discovery services (真机冒烟教训: 办公网屏蔽
-    /// n0 发现,纯 NodeId 拨号失败).
-    addr_token: Option<String>,
+    /// Live dialable-address provider, appended to QR strings as `&a=`
+    /// so a scan connects without discovery services (真机冒烟教训: 办公
+    /// 网屏蔽 n0 发现,纯 NodeId 拨号失败). A PROVIDER, not a cached
+    /// string: the relay attaches seconds after bind and addresses drift
+    /// over a daemon's weeks-long life — a QR must carry NOW's address
+    /// (真机教训: 常驻 20 分钟的 daemon 发着启动瞬间的裸内网地址).
+    addr_provider: Option<Arc<dyn Fn() -> String + Send + Sync>>,
     inner: Arc<Mutex<Inner>>,
 }
 
 impl Pairing {
     /// Returns the engine plus the receiver the owner UI listens on.
-    /// `addr_token` is `transport.local_addr().to_string()` in production
-    /// (None keeps QR strings short in unit tests).
+    /// `addr_provider` returns `transport.local_addr().to_string()` in
+    /// production (None keeps QR strings short in unit tests).
     pub fn new(
         db: Db,
         node_id: transport::NodeId,
-        addr_token: Option<String>,
+        addr_provider: Option<Arc<dyn Fn() -> String + Send + Sync>>,
     ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<PendingPair>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         (
             Self {
                 db,
                 node_id,
-                addr_token,
+                addr_provider,
                 inner: Arc::new(Mutex::new(Inner {
                     tokens: HashMap::new(),
                     pending_tx: tx,
@@ -105,9 +108,9 @@ impl Pairing {
             },
         );
         let mut qr = format!("ppf://pair?node={}&t={}", self.node_id, hex(&token));
-        if let Some(addr) = &self.addr_token {
+        if let Some(provider) = &self.addr_provider {
             qr.push_str("&a=");
-            qr.push_str(addr);
+            qr.push_str(&provider());
         }
         qr
     }

@@ -256,3 +256,31 @@ authz**；本方案每个入站流都过 checkpoint（member+ 才许 upload）�
   手动触发先行以尽快真机验证核心链路。
 - 教训：改 Rust 响应后忘了重建 release 二进制，live 测试连到旧
   daemon 空转一轮——凡 live 剧本前必须重建两端产物。
+
+## 2026-07-31 — T-054 真机验收通过 ✅（三星 UI 全流程 + 15 张真照片落库）
+
+三星 S24 走产品 UI：扫码配对→「立即备份」→绿色「照片都存好了/新存
+15 张」；Mac 侧 originals 15 个 jpg 对账一致。鸿蒙（ALN-AL00）同日
+也配对成功。设备表三条记录全部健康。
+
+**过程中修掉的真 bug**：
+- 常驻 daemon 是旧二进制（不含 upload ALPN）→ 手机报"协议不支持"
+  （error 120）。教训：**协议演进后必须同步更新所有常驻端**（本机
+  LaunchAgent、家侧 Mac、阿里云），挂账做 daemon 版本自检/自更新。
+- daemon 的 QR 地址=启动瞬间缓存（relay 未就绪→只有裸内网 IP，跨网
+  必死）→ 修为 main 启动 wait_online + Pairing 持地址提供者闭包
+  （每次 start 实时取址，防常驻数周后地址漂移）。
+- 测试基建教训一筐：ssh 里 pkill -f daemon 自杀；Linux IPC=抽象命名
+  空间不是 /tmp 路径；一次性配对 token 不可复用于重跑剧本。
+
+**真机 UX 账（T-055 处理）**：
+- 「照片传到哪了」无答案：缺「打开照片文件夹」按钮（设计稿本有）；
+  默认库位置在 ~/Library/Application Support 深处，普通用户找不到
+  → 默认改 ~/Pictures/P-Pass 家庭照片库 或同等可见位置；
+- 更改库文件夹后需重启服务的提示链路；
+- 配对等待允许阶段无法取消/返回（T-052 遗留）。
+
+**无人化测试基建半成品**：NetProbeTest（真机 UDP/iroh 分层探测）+
+DeviceBackupTest（instrumented 全链，QR 由 runner 参数注入）+
+tools/device-backup.sh。三星→阿里云 PROBE HELLO OK 300ms；全链剧本
+因 owner 循环/一次性 token 问题未走完，收尾归 T-054b 一起。

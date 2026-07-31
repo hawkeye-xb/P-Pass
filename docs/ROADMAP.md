@@ -94,8 +94,10 @@ P4 desktop shell / 桌面壳
 - [x] T-054 upload pipeline: authz-gated push plane (ppf/upload/1),
       BackupRunner scan→hash→manifest→push→commit→watermark; live
       BACKUP OK 12/12 + idempotent rerun 0 pushed (`just
-      android-backup`); manual trigger UI shipped — WorkManager/FGS
-      auto-scheduling follows as T-054b
+      android-backup`); **real-device PASS 2026-07-31**: Samsung S24 UI
+      flow scan→pair→Back-up-now, 15 real photos landed on the Mac
+      (screen: "All photos are backed up / 新存 15 张"); HarmonyOS phone
+      paired too. WorkManager/FGS auto-scheduling follows as T-054b
 - [ ] T-055 backup status page + timeline browsing
 - [ ] T-056 video playback DataSource
 - [ ] **Gate: one week of real family dogfood, 100 % backup completion**
