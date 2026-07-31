@@ -64,6 +64,10 @@ dependencies {
     // Wire types mirror crates/proto (JSON over iroh streams).
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
+    // T-053 content hashing — pure-Java BLAKE3, cross-checked against
+    // Rust-generated vectors (tests/blake3-vectors.json) in unit tests.
+    implementation("io.github.rctcwyvrn:blake3:1.3")
+
     // iroh-ffi Kotlin bindings — same artifact the S-03 spike proved
     // on-device (T-051 wires it up).
     implementation("computer.iroh:iroh:1.1.0") {

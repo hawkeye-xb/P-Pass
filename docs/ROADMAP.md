@@ -88,7 +88,9 @@ P4 desktop shell / 桌面壳
       (welcome/scan/joined); wire-level pairing proven live against a
       real daemon (`just android-pair` → PAIR OK); real-device walkthrough
       pending user test
-- [ ] T-053 MediaStore enumeration + generation watermark
+- [x] T-053 MediaStore enumeration + generation watermark (API 30+
+      GENERATION_MODIFIED, DATE_ADDED fallback); BLAKE3 in Kotlin
+      pinned bit-for-bit to Rust vectors (tests/blake3-vectors.json)
 - [ ] T-054 upload executor (WorkManager + FGS segmented migration)
 - [ ] T-055 backup status page + timeline browsing
 - [ ] T-056 video playback DataSource

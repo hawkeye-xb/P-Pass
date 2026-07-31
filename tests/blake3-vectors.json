@@ -1,0 +1,5 @@
+[
+  {"name": "empty", "len": 0, "blake3_hex": "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"},
+  {"name": "hello", "len": 5, "blake3_hex": "ea8f163db38682925e4491c5e58d4bb3506ef8c14eb78a86e908c5624a67200f"},
+  {"name": "photo_bytes_1MiB_xorshift_5EED202607310053", "len": 1048576, "blake3_hex": "5db27c0a3e23d39b35606241e0d72e7cf345c6db918a16dbf115cf29a6c828c3"}
+]

@@ -209,3 +209,32 @@ bundle 三连全绿。**M1 正式收官。**
   源=assets/design/tokens.json）；扫码=CameraX 分析流+ZXing 纯 Java
   解码（零 GMS 依赖，鸿蒙卓易通可用）；暗底+唯一绿框+自动识别。
 - APK 出包 ~/Downloads/p-pass-t052.apk（28MB），待用户真机走查。
+
+
+## 2026-07-31 — T-052 真机走查通过 ✅
+
+用户鸿蒙手机（卓易通）实测：扫码→电脑允许→「这台手机已加入」全流程
+通过。修复的真机 bug：APK 缺 Android 版 libiroh_ffi.so（Maven jar 只带
+桌面 natives）→ 闪退；已补 so+防线（底层错误上屏不闪退）+APK 剔除桌面
+库。**交互打磨账（不阻塞）**：等待允许阶段无法取消/返回重扫；配对被
+拒后的重试路径待顺。归 T-055 UI 卡一并处理。
+
+## 2026-07-31 — T-053 相册枚举 + 水位（含跨语言哈希钉死）
+
+- MediaScanner：MediaStore Images+Video 双集合，增量=generation >
+  watermark（API 30+ GENERATION_MODIFIED；低版本 DATE_ADDED 秒级回退，
+  重复 offer 由服务端去重收敛，无害）。水位在 commit 成功后才持久化
+  （BackupCommit.generation 语义），crash-safe write-then-rename。
+- **BLAKE3 跨语言一致性**：hash 是照片的跨设备身份（去重/落盘路径/
+  传输全靠它）。Rust 侧 gen_blake3_vectors 产出金样本（empty 向量=
+  BLAKE3 官方已知值，双重确认），Kotlin（io.github.rctcwyvrn:blake3
+  纯 Java）逐字节断言含 1MiB 流式。41 JVM 测试绿。
+
+**决策记录（T-054 传输方向，对 T-032 拉模型的修正）**：iroh-ffi 1.1.0
+只暴露 endpoint/流，无 blobs API——手机无法做 iroh-blobs provider。
+T-054 上传改为**经授权门卫的自定义推送流**（新 ALPN ppf/upload/1：
+手机主动连 daemon，逐文件推 header+字节流，daemon 验 BLAKE3 后入
+blob store）。T-032 拉模型裁决反对的是 iroh-blobs 内置 push **绕过
+authz**；本方案每个入站流都过 checkpoint（member+ 才许 upload），
+安全性质不变。方向上手机拨入=H-04 实测成功率最高的方向（C4/C5/C6、
+场景 2 均为客户端拨入监听端）。桌面 testclient 的拉模型路径保留不动。
