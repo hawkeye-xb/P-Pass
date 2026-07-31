@@ -84,9 +84,16 @@ fun PPassApp() {
                 action = null,
             )
             LaunchedEffect(s.qr) {
-                client.bind(identity.secretKey())
-                val name = deviceName()
-                screen = when (val outcome = pairWithQr(client, s.qr, name)) {
+                // Catch Throwable, not Exception: a missing native lib
+                // (UnsatisfiedLinkError) must land on the trouble screen,
+                // never crash the app (real-phone T-052 lesson).
+                val outcome = try {
+                    client.bind(identity.secretKey())
+                    pairWithQr(client, s.qr, deviceName())
+                } catch (t: Throwable) {
+                    PairOutcome.Failed(t.toString())
+                }
+                screen = when (outcome) {
                     is PairOutcome.Joined -> {
                         pairings.save(outcome.pairing)
                         Screen.Joined(outcome.pairing)

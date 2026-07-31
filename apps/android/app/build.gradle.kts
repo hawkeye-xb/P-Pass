@@ -21,6 +21,16 @@ android {
         compose = true
     }
 
+    packaging {
+        // The iroh Maven jar bundles DESKTOP natives (darwin/linux/win)
+        // for JVM use; Android gets libiroh_ffi.so from jniLibs. Strip
+        // the desktop copies — 50MB of dead weight, and their absence
+        // on-device was the T-052 real-phone crash (UnsatisfiedLinkError).
+        resources.excludes += listOf(
+            "darwin-aarch64/*", "linux-aarch64/*", "linux-x86-64/*", "win32-x86-64/*",
+        )
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
