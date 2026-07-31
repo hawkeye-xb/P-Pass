@@ -312,18 +312,21 @@ impl IpcServer {
 
     fn write_folder_config(&self, path: &str) -> anyhow::Result<()> {
         let config_path = self.data_dir.join("config.toml");
-        let mut doc = std::fs::read_to_string(&config_path).unwrap_or_default();
-        // Minimal, format-preserving-enough edit: drop any existing
-        // data_dir line, append the new one.
-        doc = doc
+        let doc = std::fs::read_to_string(&config_path).unwrap_or_default();
+        // Top-level TOML keys MUST sit before the first [section] header —
+        // a bare append lands inside [telemetry] and the daemon refuses
+        // to start (real crash-loop, 2026-07-31). Rebuild: strip any old
+        // data_dir line, then insert the new one at the very top.
+        let body: String = doc
             .lines()
             .filter(|l| !l.trim_start().starts_with("data_dir"))
             .collect::<Vec<_>>()
             .join("\n");
-        doc.push_str(&format!("\ndata_dir = {:?}\n", path));
-        std::fs::write(&config_path, doc)?;
+        let updated = format!("data_dir = {path:?}\n{body}\n");
+        std::fs::write(&config_path, updated)?;
         Ok(())
     }
+
 
     /// Export diagnostics as a zip beside the data dir. Every path-like
     /// string is sanitised: the user's home directory becomes `<DATA>` —

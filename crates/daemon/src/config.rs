@@ -43,6 +43,7 @@ pub struct TelemetryConfig {
 #[serde(deny_unknown_fields)]
 struct Overlay {
     data_dir: Option<PathBuf>,
+    bind_addr: Option<std::net::SocketAddr>,
     relay_urls: Option<Vec<String>>,
     rendezvous_url: Option<String>,
     telemetry: Option<TelemetryOverlay>,
@@ -101,6 +102,9 @@ impl Config {
             let overlay: Overlay = toml::from_str(raw).context("parsing config.toml")?;
             if let Some(v) = overlay.data_dir {
                 cfg.data_dir = Some(v);
+            }
+            if let Some(v) = overlay.bind_addr {
+                cfg.bind_addr = Some(v);
             }
             if let Some(v) = overlay.relay_urls {
                 cfg.relay_urls = v;

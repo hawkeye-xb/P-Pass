@@ -85,6 +85,9 @@ fn write_config(library_dir: String) -> Result<(), String> {
     let config = format!(
         "data_dir = {:?}
 
+# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。
+bind_addr = \"0.0.0.0:41145\"
+
 # H-07 部署前必须为空（内置官方 relay 域名尚未上线）
 relay_urls = []
 

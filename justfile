@@ -87,3 +87,12 @@ android-pair:
 # T-054 live check: full phone backup pipeline vs a real daemon
 android-backup:
     tools/android-backup.sh
+
+# M2 total acceptance: Rust suite + Android suite + APK build +
+# live wire scripts (hello/pair/backup) against a throwaway daemon
+verify-m2:
+    cargo nextest run
+    cd apps/android && JAVA_HOME=$(brew --prefix openjdk) ./gradlew -q :app:testDebugUnitTest :app:assembleDebug
+    tools/android-hello.sh
+    tools/android-pair.sh
+    tools/android-backup.sh
