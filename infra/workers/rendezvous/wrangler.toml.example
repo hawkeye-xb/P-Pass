@@ -1,0 +1,19 @@
+# Template for a real deployment config. Copy to wrangler.toml (or keep the
+# committed placeholder — dev and tests don't need a real account).
+# Real prod deployment config lives in the private ops repo
+# (ppf-ops/deploy/workers.prod.toml), per the isolation plan §2.
+
+name = "ppass-rendezvous"
+main = "src/index.ts"
+compatibility_date = "2026-07-31"
+
+# account_id = "<your-account-id>"   # needed only for `wrangler deploy`
+# workers_dev = false                # put it behind your own route/domain
+
+[[durable_objects.bindings]]
+name = "CODE_STORE"
+class_name = "CodeStore"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["CodeStore"]

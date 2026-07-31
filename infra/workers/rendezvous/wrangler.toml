@@ -1,0 +1,18 @@
+# Local dev / test configuration (T-060).
+#
+# This file is safe to commit: `account_id` is a placeholder — `wrangler dev`
+# and vitest never need a real account. Production deploy config (real
+# account_id, routes, staging vs prod) lives in the private ops repo
+# (`ppf-ops/deploy/workers.prod.toml`), per the isolation plan §2.
+
+name = "ppass-rendezvous"
+main = "src/index.ts"
+compatibility_date = "2026-07-31"
+
+[[durable_objects.bindings]]
+name = "CODE_STORE"
+class_name = "CodeStore"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["CodeStore"]
