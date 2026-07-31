@@ -106,7 +106,9 @@ P4 desktop shell / 桌面壳
       **real-device grid PASS** (Samsung shows the Mac library, 20
       items). Polish pass pending: single-language UI (user ruling),
       month sections, width/height in ingest, entry styling
-- [ ] T-056 video playback DataSource
+- [x] T-056 video playback: download plane (ppf/download/1, viewer+,
+      bit-identical round-trip tested) → cache → VideoView; timeline
+      routes video/* taps to the player. Streaming DataSource → M3
 - [ ] **Gate: one week of real family dogfood, 100 % backup completion**
 
 ## M3 — Hardening / 硬化 ⬜
