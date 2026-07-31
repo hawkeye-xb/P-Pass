@@ -13,6 +13,20 @@
     wizard = await invoke("wizard_state");
   }
 
+  async function stopService() {
+    const yes = await confirmDialog(
+      "停止后会取消开机自启并暂停所有备份，家人手机将无法连接，直到你重新启用。确定停止？",
+      { title: "停止后台服务", kind: "warning" }
+    );
+    if (!yes) return;
+    try {
+      await invoke("stop_daemon");
+      message = "后台服务已停止，开机不再自动运行。";
+    } catch (e) {
+      message = `停止失败：${e}`;
+    }
+  }
+
   async function startDaemonNow() {
     starting = true;
     try {
@@ -209,6 +223,10 @@
         <button onclick={exportLogs}>导出诊断包</button>
       </div>
       <p class="hint">诊断包会自动抹去用户名等隐私路径，可安全提供给支持人员。</p>
+      <div class="row" style="margin-top:12px">
+        <button class="danger" onclick={stopService}>停止后台服务</button>
+      </div>
+      <p class="hint">停止后开机不再自动运行、备份暂停；重新打开本 App 可再次启用。</p>
     </section>
   {/if}
 </main>

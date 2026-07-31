@@ -118,6 +118,33 @@ fn start_daemon() -> Result<String, String> {
     }
 }
 
+/// Stop the resident service the way a user means it: unregister the
+/// autostart entry FIRST (so launchd won't respawn it), then ask the
+/// running daemon to shut down. "能优雅退出"与"崩溃自动恢复"必须并存
+/// (用户裁决 2026-07-31).
+#[tauri::command]
+fn stop_daemon() -> Result<(), String> {
+    use platform::PlatformAdapter as _;
+    // 1) Unregister first — otherwise KeepAlive revives it immediately.
+    let _ = platform::adapter().uninstall_autostart();
+    // 2) Best-effort: kill the bundled daemon process. launchctl bootout
+    //    (inside uninstall_autostart) already stopped the managed one;
+    //    this also covers a one-shot fallback spawn.
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", "ppf-daemon"])
+            .output();
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "ppf-daemon.exe"])
+            .output();
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -130,12 +157,14 @@ pub fn run() {
             power_hint,
             open_power_settings,
             write_config,
-            start_daemon
+            start_daemon,
+            stop_daemon
         ])
         .setup(|app| {
             let show = MenuItem::with_id(app, "show", "打开 P-Pass", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let stop = MenuItem::with_id(app, "stop", "停止后台服务", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出 App", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show, &stop, &quit])?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
@@ -147,6 +176,11 @@ pub fn run() {
                             let _ = win.set_focus();
                         }
                     }
+                    "stop" => {
+                        let _ = stop_daemon();
+                    }
+                    // Closing the App window只是隐藏；退出 App 不停后台服务
+                    // （备份继续）——停服务要显式点"停止后台服务".
                     "quit" => app.exit(0),
                     _ => {}
                 })
