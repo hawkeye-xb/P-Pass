@@ -28,6 +28,7 @@ pub struct Router {
     backup: Option<crate::backup::BackupEngine>,
     query: Option<crate::query::QueryEngine>,
     upload: Option<crate::upload::UploadPlane>,
+    download: Option<crate::download::DownloadPlane>,
 }
 
 impl Router {
@@ -39,7 +40,14 @@ impl Router {
             backup: None,
             query: None,
             upload: None,
+            download: None,
         }
+    }
+
+    /// Attach the download plane (T-056).
+    pub fn with_download(mut self, download: crate::download::DownloadPlane) -> Self {
+        self.download = Some(download);
+        self
     }
 
     /// Attach the upload plane (T-054). Without it, `ppf/upload/1`
@@ -88,6 +96,12 @@ impl Router {
         if conn.alpn() == transport::ALPN_UPLOAD {
             if let Some(upload) = &self.upload {
                 upload.serve_conn(conn).await;
+            }
+            return;
+        }
+        if conn.alpn() == transport::ALPN_DOWNLOAD {
+            if let Some(download) = &self.download {
+                download.serve_conn(conn).await;
             }
             return;
         }

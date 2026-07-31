@@ -371,6 +371,8 @@ pub mod methods {
     /// Pseudo-method for the upload plane's authz check — role table
     /// grants it via the `backup.` prefix (member+).
     pub const BACKUP_UPLOAD: &str = "backup.upload";
+    /// Download plane (T-056): original bytes for playback/export.
+    pub const ASSET_DOWNLOAD: &str = "asset.download";
 }
 
 #[cfg(test)]

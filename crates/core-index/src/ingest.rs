@@ -76,6 +76,12 @@ impl Ingestor {
             })?
             .len() as i64;
         let taken_at = taken_at_ms(&f.src_path)?;
+        // Header-only probe; videos and exotic codecs are honest None
+        // (the timeline shows them without dimensions).
+        let (width, height) = match image::image_dimensions(&f.src_path) {
+            Ok((w, h)) => (Some(w as i64), Some(h as i64)),
+            Err(_) => (None, None),
+        };
         let rel_path = self.place(f, taken_at)?;
 
         let asset = Asset {
@@ -84,8 +90,8 @@ impl Ingestor {
             media_type: f.media_type.clone(),
             bytes,
             taken_at: Some(taken_at),
-            width: None,
-            height: None,
+            width,
+            height,
             src_device: f.src_device.clone(),
             added_at: now_ms,
             thumb_state: 0,

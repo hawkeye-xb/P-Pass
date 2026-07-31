@@ -712,6 +712,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "core-media",
+ "image",
  "proptest",
  "storage",
  "tempfile",

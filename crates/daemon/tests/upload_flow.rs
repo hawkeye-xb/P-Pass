@@ -84,6 +84,7 @@ async fn fixture() -> Fixture {
         transport::ALPN_CTRL.into(),
         transport::ALPN_BLOBS.into(),
         transport::ALPN_UPLOAD.into(),
+        transport::ALPN_DOWNLOAD.into(),
     ])
     .await;
     let blobs = std::sync::Arc::new(
@@ -94,9 +95,11 @@ async fn fixture() -> Fixture {
     blobs.attach_to_listener();
     let backup = BackupEngine::new(db.clone(), blobs.clone(), library.path());
     let upload = UploadPlane::new(db.clone(), blobs, library.path().join(".ppf/staging"));
+    let download = daemon::download::DownloadPlane::new(db.clone(), library.path().to_path_buf());
     let router = Router::new(db.clone(), "test-daemon")
         .with_backup(backup)
-        .with_upload(upload);
+        .with_upload(upload)
+        .with_download(download);
     let tp2 = daemon_tp.clone();
     tokio::spawn(async move { router.serve(&tp2).await });
 
@@ -232,4 +235,109 @@ fn parse_hash(hex: &str) -> [u8; 32] {
         out[i] = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap();
     }
     out
+}
+
+/// T-056: what goes up must come down — download returns bit-identical
+/// original bytes, and a viewer (browse-only role) may download too.
+#[tokio::test(flavor = "multi_thread")]
+async fn download_returns_bit_identical_bytes() {
+    let f = fixture().await;
+    let daemon_id = f.daemon_tp.node_id();
+
+    let data: Vec<u8> = (0..500_000u32).flat_map(|i| i.to_le_bytes()).collect();
+    let hash = blake3::hash(&data).to_hex().to_string();
+
+    // Upload + commit so the asset is indexed on disk.
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    let manifest = BackupManifest {
+        hashes: vec![hash.clone()],
+        items: vec![BackupItem {
+            hash: hash.clone(),
+            file_name: "VID_0001.mp4".into(),
+            media_type: "video/mp4".into(),
+        }],
+        provider: None,
+    };
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(&manifest).unwrap(),
+    )
+    .await;
+    assert!(upload(&f.phone_tp, daemon_id, &hash, &data).await.ok);
+    assert!(
+        call(
+            &f.phone_tp,
+            daemon_id,
+            methods::BACKUP_COMMIT,
+            serde_json::json!({})
+        )
+        .await
+        .ok
+    );
+
+    // Download over the download plane.
+    let mut stream = f
+        .phone_tp
+        .connect(daemon_id, transport::ALPN_DOWNLOAD)
+        .await
+        .unwrap();
+    let req = Req {
+        id: "dl".into(),
+        method: methods::ASSET_DOWNLOAD.into(),
+        params: serde_json::json!({ "hash": hash }),
+        ..Default::default()
+    };
+    stream
+        .send_frame(&proto::codec::encode(&req).unwrap())
+        .await
+        .unwrap();
+    stream.finish().unwrap();
+
+    let head = stream.recv_frame().await.unwrap().expect("header resp");
+    let head: Resp = proto::codec::decode(&head).unwrap();
+    assert!(head.ok, "{:?}", head.error);
+    assert_eq!(head.result.unwrap()["bytes"], data.len() as u64);
+
+    let mut got = Vec::new();
+    while let Some(chunk) = stream.recv_chunk(256 * 1024).await.unwrap() {
+        got.extend_from_slice(&chunk);
+    }
+    assert_eq!(got.len(), data.len());
+    assert_eq!(got, data, "bit-identical original");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stranger_cannot_download() {
+    let f = fixture().await;
+    let daemon_id = f.daemon_tp.node_id();
+
+    let stranger = bind(vec![transport::ALPN_CTRL.into()]).await;
+    stranger.add_peer(f.daemon_tp.local_addr());
+    let mut stream = stranger
+        .connect(daemon_id, transport::ALPN_DOWNLOAD)
+        .await
+        .unwrap();
+    let req = Req {
+        id: "dl".into(),
+        method: methods::ASSET_DOWNLOAD.into(),
+        params: serde_json::json!({ "hash": "ab".repeat(32) }),
+        ..Default::default()
+    };
+    stream
+        .send_frame(&proto::codec::encode(&req).unwrap())
+        .await
+        .unwrap();
+    stream.finish().unwrap();
+    let head = stream.recv_frame().await.unwrap().expect("resp");
+    let head: Resp = proto::codec::decode(&head).unwrap();
+    assert!(!head.ok);
+    assert_eq!(head.error.unwrap().code, proto::codes::NOT_AUTHORIZED);
 }

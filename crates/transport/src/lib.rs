@@ -33,6 +33,10 @@ pub const ALPN_BLOBS: &str = "ppf/blobs/1";
 /// push; this one is gated).
 pub const ALPN_UPLOAD: &str = "ppf/upload/1";
 
+/// ALPN for the download plane (T-056): original-file bytes for video
+/// playback — one asset per stream, authz-gated like everything else.
+pub const ALPN_DOWNLOAD: &str = "ppf/download/1";
+
 /// Device identity: the 32-byte ed25519 public key of an endpoint (ADR-004,
 /// no account system). Displayed as 64 lowercase hex characters.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]

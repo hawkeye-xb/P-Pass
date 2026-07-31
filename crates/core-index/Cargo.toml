@@ -11,6 +11,8 @@ storage = { path = "../storage" }
 core-media = { path = "../core-media" }
 # BLAKE3 content hash — same domain as iroh-blobs (架构 §4.2).
 blake3 = "1"
+# Cheap header-only dimension probe for the timeline (T-055: 0x0 fix).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 # Calendar math: taken_at → <yyyy>/<mm> dirs.
 time = "0.3"
 thiserror.workspace = true

@@ -6,6 +6,7 @@ pub mod authz;
 pub mod backup;
 pub mod config;
 pub mod diag_agg;
+pub mod download;
 pub mod ipc;
 pub mod pairing;
 pub mod query;

@@ -41,6 +41,7 @@ async fn main() -> anyhow::Result<()> {
             transport::ALPN_CTRL.into(),
             transport::ALPN_BLOBS.into(),
             transport::ALPN_UPLOAD.into(),
+            transport::ALPN_DOWNLOAD.into(),
         ],
     );
     transport_cfg.bind_addr = config.bind_addr;
@@ -169,12 +170,14 @@ async fn main() -> anyhow::Result<()> {
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir);
     let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir);
     let upload = daemon::upload::UploadPlane::new(db.clone(), blobs, data_dir.join(".ppf/staging"));
+    let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
     Router::new(db, "P-Pass 存储端")
         .with_pairing(pairing)
         .with_backup(backup)
         .with_query(query)
         .with_upload(upload)
+        .with_download(download)
         .serve(&transport)
         .await;
     Ok(())
