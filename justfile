@@ -71,3 +71,7 @@ verify-m1:
     cargo nextest run
     tools/dogfood-smoke.sh /tmp/ppf-verify-m1
     cd apps/desktop && npx tauri build --bundles app
+
+# Android unit tests (proto golden drift check included)
+android-test:
+    cd apps/android && JAVA_HOME=$(brew --prefix openjdk 2>/dev/null || echo "$JAVA_HOME") ./gradlew -q :app:testDebugUnitTest

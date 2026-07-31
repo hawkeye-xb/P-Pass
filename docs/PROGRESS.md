@@ -160,3 +160,23 @@ bundle 三连全绿。**M1 正式收官。**
 - "能优雅退出"与"崩溃自动恢复"必须并存（用户裁决）。
 - 产品铁律再获实锤：存储端不与全局 VPN/TUN 共存（Clash、Tailscale
   两案并档）。
+
+## 2026-07-31 — M2 开工：T-050 Android 骨架 + proto Kotlin（防漂移）
+
+- apps/android 正式工程：Gradle 8.7.3 / Kotlin 2.2.20 / Compose（版本
+  组合直接沿用 S-03 spike 真机验证过的）；iroh-ffi Maven 依赖就位
+  （T-051 接线）；Manifest 预声明 T-052/053/054 所需权限。
+- **proto 映射决策：Kotlin 手写 kotlinx.serialization 类型 + 直接消费
+  Rust 侧同一批 insta 金样本做 drift 测试**（比代码生成器简单可靠；
+  两侧任何一边改变消息形状，同一 commit 上必有一套测试变红）。
+  serde 行为逐条对齐：`#[serde(default)]`→全字段默认值、未知字段容忍
+  →ignoreUnknownKeys、`skip_serializing_if`→explicitNulls=false。
+  覆盖强制测试：snapshots 目录出现新 JSON 金样本而 Kotlin 未覆盖时
+  everySnapshotIsCovered 直接红。
+- 验收：24 JVM 单测绿 + assembleDebug 出 23MB APK；CI 加 android job
+  （setup-java + gradle action，Actions 容器原生支持）。
+- 附带：design token 落地（assets/design/tokens.json 单一事实来源 +
+  tokens.css，桌面壳全量换用 var(--pp-*)；来源=用户的 Claude Design
+  项目，暖纸/墨黑/三含义色，Android T-055 从同一 JSON 生成 Compose 常量）。
+- 附带：CI 挂死防护（kill 轮询循环 120s deadline + nextest
+  terminate-after 全局强杀）。

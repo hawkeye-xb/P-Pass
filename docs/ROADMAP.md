@@ -76,7 +76,9 @@ P4 desktop shell / 桌面壳
 
 ## M2 — Android app / 手机端 ⬜
 
-- [ ] T-050 Gradle skeleton + proto Kotlin generation (drift-checked)
+- [x] T-050 Gradle skeleton + proto Kotlin mirror, drift-checked against
+      the same insta snapshots the Rust suite asserts (24 JVM tests +
+      debug APK in CI)
 - [ ] T-051 iroh-ffi transport wrapper
 - [ ] T-052 pairing by camera scan
 - [ ] T-053 MediaStore enumeration + generation watermark
