@@ -186,6 +186,21 @@ impl IrohTransport {
         id
     }
 
+    /// Wait until address discovery is far enough that hole-punching works
+    /// — a relay home is assigned and the endpoint's advertised address
+    /// carries it. Bounded by `timeout`; returns whether it became ready.
+    ///
+    /// The backup provider MUST await this before announcing its address,
+    /// or a same-network peer that can't直连 has no relay to fall back to
+    /// (real bug: fresh endpoint announces a bare IP, reverse-dial times
+    /// out). iroh's own docs: "After online() returns…holepunching should
+    /// work as expected."
+    pub async fn wait_online(&self, timeout: std::time::Duration) -> bool {
+        tokio::time::timeout(timeout, self.ep.online())
+            .await
+            .is_ok()
+    }
+
     /// Gracefully close the endpoint (flushes connection close frames).
     pub async fn close(&self) {
         self.ep.close().await;
