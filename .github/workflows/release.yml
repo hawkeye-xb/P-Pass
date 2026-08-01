@@ -210,8 +210,13 @@ jobs:
 
       - name: Compose notes
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          [ -n "$TAG" ] || TAG="${{ inputs.tag }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          [ -n "$TAG" ] || { echo "TAG 缺失（dispatch 需 tag 输入）"; exit 1; }
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
           : > NOTES.md
           echo "## P-Pass ${TAG#v}" >> NOTES.md
           echo "" >> NOTES.md
@@ -253,8 +258,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          [ -n "$TAG" ] || TAG="${{ inputs.tag }}"
           cd artifacts
           find . -type f ! -name SHA256SUMS ! -name BUILD_INFO -print0 | xargs -0 \
             gh release create "$TAG" --draft --title "P-Pass ${TAG#v}" --notes-file ../NOTES.md
