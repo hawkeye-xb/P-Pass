@@ -8,9 +8,10 @@ import java.util.Locale
  * T-072: resolves diag msg_keys (registry: crates/diag/src/keys.rs) to
  * localized human text.
  *
- * The dictionary is the single source of truth at repo `assets/i18n/*.json`,
- * bundled into app assets; drift against the repo source is enforced by
- * [I18nDriftTest] (JVM unit test). Placeholders use `{name}` syntax.
+ * The dictionary is the single source of truth at repo `assets/i18n/`
+ * (en.json + zh.json), bundled into app assets; drift against the repo
+ * source is enforced by [I18nDriftTest] (JVM unit test). Placeholders use
+ * `{name}` syntax.
  */
 object DiagText {
 
