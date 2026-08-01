@@ -22,24 +22,20 @@ TMPFS="$WORK/fs"
 rm -rf "$WORK" && mkdir -p "$TMPFS"
 cleanup() {
   kill "$DAEMON_PID" 2>/dev/null || true
+  wait "$DAEMON_PID" 2>/dev/null || true
   sudo umount "$TMPFS" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-echo "── 0. 挂 6MB tmpfs（全部数据目录都放这里）"
-sudo mount -t tmpfs -o size=6m tmpfs "$TMPFS"
-mkdir -p "$TMPFS/library"
-df -h "$TMPFS" | tail -1
-
-echo "── 1. 起 daemon（data_dir 在 tmpfs 上）"
-cd "$WORK"
-PPF_DATA_DIR="$TMPFS/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
-  "$DAEMON" > daemon.log 2> daemon.err &
-DAEMON_PID=$!
-for _ in $(seq 1 50); do grep -q 'ppf://pair' daemon.log 2>/dev/null && break; sleep 0.2; done
-QR=$(grep -o 'ppf://pair[^ ]*' daemon.log)
-NODE=$(grep -o 'NodeId: .*' daemon.log | awk '{print $2}')
-SOCK=$(sed -n 1p "$TMPFS/library/ipc.token"); TOKEN=$(sed -n 2p "$TMPFS/library/ipc.token")
+start_daemon() {
+  PPF_DATA_DIR="$TMPFS/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
+    "$DAEMON" > daemon.log 2> daemon.err &
+  DAEMON_PID=$!
+  for _ in $(seq 1 50); do grep -q 'ppf://pair' daemon.log 2>/dev/null && break; sleep 0.2; done
+  QR=$(grep -o 'ppf://pair[^ ]*' daemon.log)
+  NODE=$(grep -o 'NodeId: .*' daemon.log | awk '{print $2}')
+  SOCK=$(sed -n 1p "$TMPFS/library/ipc.token"); TOKEN=$(sed -n 2p "$TMPFS/library/ipc.token")
+}
 
 ipc() { # ipc <method> [params-json]
   local params="${2:-}"; [ -z "$params" ] && params='{}'
@@ -56,6 +52,15 @@ resp = json.loads(f.readline())
 print(json.dumps(resp, ensure_ascii=False)); sys.exit(0 if resp.get("ok") else 1)
 PYEOF
 }
+
+echo "── 0. 挂 6MB tmpfs（全部数据目录都放这里）"
+sudo mount -t tmpfs -o size=6m tmpfs "$TMPFS"
+mkdir -p "$TMPFS/library"
+df -h "$TMPFS" | tail -1
+
+echo "── 1. 起 daemon（data_dir 在 tmpfs 上）"
+cd "$WORK"
+start_daemon
 
 echo "── 2. 配对"
 "$TC" pair --token "$QR" --name "磁盘满剧本" > pair.log 2>&1 &
@@ -78,13 +83,13 @@ echo "── 5. IPC 仍响应（status）"
 ipc status > /dev/null || { echo "FAIL: daemon 存活但 IPC 已僵死"; exit 1; }
 echo "   ✅ IPC 正常"
 
-echo "── 6. 清理 tmpfs 后重跑 → 收敛"
-sudo umount "$TMPFS"
+echo "── 6. 磁盘恢复：停 daemon 释放句柄 → 卸载 → 换 64m 重挂 → 同路径干净重启"
+kill "$DAEMON_PID" 2>/dev/null || true
+wait "$DAEMON_PID" 2>/dev/null || true
+sudo umount "$TMPFS" && echo "   ✅ 卸载成功（句柄已释放）"
 sudo mount -t tmpfs -o size=64m tmpfs "$TMPFS"
-mkdir -p "$TMPFS/library" 2>/dev/null || true
-echo "   （注意：tmpfs 卸载即清空——本剧本验证的是『磁盘满时的优雅失败』，"
-echo "     库恢复语义由 crash_recovery.sh 覆盖。daemon 需在恢复后能正常服务）"
-kill -0 "$DAEMON_PID" 2>/dev/null || { echo "FAIL: daemon 崩溃"; exit 1; }
-ipc status > /dev/null && echo "   ✅ 磁盘恢复后 daemon 仍服务"
+mkdir -p "$TMPFS/library"
+start_daemon
+ipc status > /dev/null && echo "   ✅ 磁盘恢复后 daemon 干净重启并服务"
 
 echo "DISK FULL SCENARIO: ALL GREEN"
