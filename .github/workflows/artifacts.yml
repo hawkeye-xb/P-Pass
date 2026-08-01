@@ -55,7 +55,7 @@ jobs:
           git config user.email "actions@github.com"
           git add -A
           git commit -q -m "macos arm64 binaries @ ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:*** secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-macos-arm64
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-macos-arm64
 
   linux-bin:
     runs-on: ubuntu-latest
@@ -95,7 +95,7 @@ jobs:
           git config user.email "actions@github.com"
           git add -A
           git commit -q -m "linux x86_64 binaries @ ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:*** secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-linux-x64
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-linux-x64
 
   # H-09: Windows 真机冒烟分发通道。仅 workflow_dispatch 触发（vcpkg 静态
   # libheif 构建 ~20 分钟，不值得每次 push 都跑）；产物推 bin-win-x64 孤儿
@@ -145,4 +145,4 @@ jobs:
           git config user.email "actions@github.com"
           git add -A
           git commit -q -m "windows x86_64 binaries @ ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:*** secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-win-x64
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-win-x64
