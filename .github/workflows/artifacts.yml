@@ -5,6 +5,10 @@ name: Linux Artifacts
 # cloud/dogfood machines (they `git fetch` instead of compiling for 40min
 # on a 2-core box). The branch is overwritten every time: no history, no
 # repo bloat on main.
+#
+# macOS arm64 → bin-macos-arm64 (push-to-main); Windows x64 → bin-win-x64
+# (workflow_dispatch only — vcpkg static libheif is ~20min, not worth every
+# push; H-09 Windows smoke machine fetches it the same pure-git way).
 
 on:
   push:
@@ -51,7 +55,7 @@ jobs:
           git config user.email "actions@github.com"
           git add -A
           git commit -q -m "macos arm64 binaries @ ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-macos-arm64
+          git push -f "https://x-access-token:*** secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-macos-arm64
 
   linux-bin:
     runs-on: ubuntu-latest
@@ -91,4 +95,54 @@ jobs:
           git config user.email "actions@github.com"
           git add -A
           git commit -q -m "linux x86_64 binaries @ ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-linux-x64
+          git push -f "https://x-access-token:*** secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-linux-x64
+
+  # H-09: Windows 真机冒烟分发通道。仅 workflow_dispatch 触发（vcpkg 静态
+  # libheif 构建 ~20 分钟，不值得每次 push 都跑）；产物推 bin-win-x64 孤儿
+  # 分支，Win 测试机器 git fetch 即得（公开仓免认证）。
+  windows-x64-bin:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: win-x64-artifacts-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install libheif (vcpkg, static)
+        shell: bash
+        run: |
+          /c/vcpkg/vcpkg.exe install "libheif:x64-windows-static-md" --clean-after-build
+
+      - name: Build release binaries
+        shell: bash
+        env:
+          VCPKG_ROOT: "C:\\vcpkg"
+        run: cargo build --release -p daemon -p testclient
+
+      - name: Push to bin-win-x64 orphan branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/bin
+          cp target/release/daemon.exe target/release/testclient.exe /tmp/bin/
+          cp tools/win-smoke.ps1 /tmp/bin/ || true
+          cd /tmp/bin
+          sha256sum daemon.exe testclient.exe > SHA256SUMS
+          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
+          git init -q -b bin-win-x64
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add -A
+          git commit -q -m "windows x86_64 binaries @ ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:*** secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-win-x64
