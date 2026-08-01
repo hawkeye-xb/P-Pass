@@ -1,0 +1,42 @@
+#cloud-config
+# P-Pass official relay — VPS 初始化模板（T-064，占位符）
+# 用法：Hetzner/Vultr 创建服务器时粘贴本文件（或手动执行 runcmd）。
+# 真实域名/IP 由 H-07 填写；本模板只用 example 占位。
+#
+# ⚠️ 占位符清单（替换后再用）：
+#   RELAY_REGION   → us / eu / ap
+#   RELAY_DOMAIN   → relay-{region}.p-pass.hawkeye-xb.com
+
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+
+runcmd:
+  - systemctl enable --now docker
+  - git clone --depth 1 https://github.com/hawkeye-xb/P-Pass.git /opt/ppass
+  - cd /opt/ppass/infra/selfhost
+  - cp relay-config.example.toml relay-config.toml
+  # 替换占位域名（真实值由 H-07 注入）
+  - sed -i 's/relay.example.com/RELAY_DOMAIN/g' relay-config.toml
+  - sed -i 's/relay.example.com/RELAY_DOMAIN/g' .env.example > /dev/null 2>&1 || true
+  # 本模板只起 relay（rendezvous/caddy 由官方 CF Workers 承担，见隔离方案）
+  - docker compose up -d relay
+  - docker compose ps
+
+# 防火墙：仅 SSH + relay 端口
+write_files:
+  - path: /etc/ufw/applications.d/ppass-relay
+    content: |
+      [P-Pass Relay]
+      title=P-Pass Relay
+      description=iroh-relay (HTTPS 8443 + QUIC 7842/udp)
+      ports=8443/tcp|7842/udp
+  - path: /etc/ufw/applications.d/ppass-caddy
+    content: |
+      [P-Pass Web]
+      title=P-Pass Web
+      description=caddy http(s)
+      ports=80/tcp|443/tcp
+
+final_message: "relay bootstrap done — verify: curl -sI https://RELAY_DOMAIN:8443"
