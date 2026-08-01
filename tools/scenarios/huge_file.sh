@@ -35,8 +35,12 @@ SOCK=$(sed -n 1p library/ipc.token); TOKEN=$(sed -n 2p library/ipc.token)
 ipc() { # ipc <method> [params-json]
   local params="${2:-}"; [ -z "$params" ] && params='{}'
   python3 - "$SOCK" "$TOKEN" "$1" "$params" <<'PYEOF'
-import socket, json, sys
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect("/tmp/" + sys.argv[1])
+import socket, json, sys, platform
+p = sys.argv[1]
+# Linux: daemon 的 IPC socket 在抽象命名空间（\0 前缀，非 /tmp 文件）；
+# macOS: /tmp 下文件。按平台选连接路径（双机验证时记账的坑）。
+p = ("\0" if platform.system() == "Linux" else "/tmp/") + p
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(p)
 f = s.makefile("rw"); f.write(sys.argv[2] + "\n"); f.flush()
 f.write(json.dumps({"id": "x", "method": sys.argv[3], "params": json.loads(sys.argv[4])}) + "\n"); f.flush()
 resp = json.loads(f.readline())
