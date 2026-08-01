@@ -1,0 +1,46 @@
+# Uptime Kuma 探针配置模板（T-064，占位符）
+# 导入：Kuma → Add New Monitor → HTTP(s) 类型。真实域名由 H-07 替换。
+# 告警 webhook 配置在私有仓 ppf-ops/monitoring/。
+
+monitors:
+  # --- 官方 relay 三区域 ---
+  - name: "relay US"
+    type: http
+    url: "https://relay-us.p-pass.hawkeye-xb.com:8443"
+    interval: 60
+    retryInterval: 60
+    maxretries: 3
+  - name: "relay EU"
+    type: http
+    url: "https://relay-eu.p-pass.hawkeye-xb.com:8443"
+    interval: 60
+    retryInterval: 60
+    maxretries: 3
+  - name: "relay AP"
+    type: http
+    url: "https://relay-ap.p-pass.hawkeye-xb.com:8443"
+    interval: 60
+    retryInterval: 60
+    maxretries: 3
+
+  # --- 官方云端服务 ---
+  - name: "rendezvous"
+    type: http
+    url: "https://rendezvous.p-pass.hawkeye-xb.com/"
+    expectedBody: '"ok":true'
+    interval: 60
+    retryInterval: 60
+    maxretries: 3
+  - name: "telemetry"
+    type: http
+    url: "https://telemetry.p-pass.hawkeye-xb.com/"
+    expectedBody: '"ok":true'
+    interval: 300
+    retryInterval: 60
+    maxretries: 3
+  - name: "update-manifest"
+    type: http
+    url: "https://update.p-pass.hawkeye-xb.com/manifest.json"
+    interval: 300
+    retryInterval: 60
+    maxretries: 3
