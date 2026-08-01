@@ -1,13 +1,17 @@
 # Official endpoint defaults — compiled into the daemon binary.
 # 隔离方案 §2：官方端点是公开常量，不是秘密；自建者在 config.toml 或
 # PPF_* 环境变量里覆盖这三类端点即可指向自己的基础设施。
-# 域名按 H-01 决策（p-pass.hawkeye-xb.com）展开；上线前由 H-07 部署兑现。
+# 域名按 H-01 决策（p-pass.hawkeye-xb.com）展开。
+#
+# ⚠️ relay_urls 默认空列表（2026-07-31 用户裁决）：
+# H-07 尚未部署，这三个域名解析不到会毒害路径协商（iroh 尝试连接超时拖慢
+# 连线，dogfood 冒烟实证——此前靠 PPF_RELAY_URLS="" 手动缓解）。
+# H-07 上线后恢复为三区域列表：
+#   "https://relay-us.p-pass.hawkeye-xb.com"
+#   "https://relay-eu.p-pass.hawkeye-xb.com"
+#   "https://relay-ap.p-pass.hawkeye-xb.com"
 
-relay_urls = [
-  "https://relay-us.p-pass.hawkeye-xb.com",
-  "https://relay-eu.p-pass.hawkeye-xb.com",
-  "https://relay-ap.p-pass.hawkeye-xb.com",
-]
+relay_urls = []
 rendezvous_url = "https://rendezvous.p-pass.hawkeye-xb.com"
 
 [telemetry]
