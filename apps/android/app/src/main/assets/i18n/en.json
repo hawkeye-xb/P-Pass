@@ -1,0 +1,12 @@
+{
+  "err.not_authorized": "This device isn't allowed to access the library. Ask the owner to pair it.",
+  "err.not_paired": "This device isn't paired with the storage computer yet.",
+  "err.disk_full": "The storage computer's disk is full — backups are paused.",
+  "diag.online_direct": "Connected directly",
+  "diag.online_relay": "Connected via relay — speed may be limited",
+  "diag.storage_offline": "The storage computer is offline. Last seen {last_seen}.",
+  "diag.indexing": "Indexing the library… {progress}%",
+  "diag.pairing": "Waiting for confirmation on the storage computer…",
+  "err.unsupported": "The storage computer doesn't understand this request. One side may need an update.",
+  "err.backup_failed": "Backing up hit a snag — it will retry automatically; nothing was lost."
+}

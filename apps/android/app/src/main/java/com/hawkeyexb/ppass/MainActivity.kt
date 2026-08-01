@@ -18,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import com.hawkeyexb.ppass.i18n.DiagText
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairOutcome
@@ -123,7 +124,11 @@ fun PPassApp() {
                         Screen.Joined(outcome.pairing)
                     }
                     is PairOutcome.Refused -> Screen.Trouble(
-                        R.string.pair_refused_title, R.string.pair_refused_body,
+                        R.string.pair_refused_title,
+                        // T-072: 具体拒绝原因走 diag 字典（msg_key → 双语人话）；
+                        // 未知 key 回退通用文案，绝不因新服务端 key 崩溃。
+                        DiagText.resolve(context, outcome.msgKey)
+                            ?: context.getString(R.string.pair_refused_body),
                     )
                     is PairOutcome.Failed -> Screen.Trouble(
                         R.string.pair_failed_title, R.string.pair_failed_body,

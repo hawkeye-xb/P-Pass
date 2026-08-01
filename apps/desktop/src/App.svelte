@@ -5,6 +5,27 @@
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
+  // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
+  // assets/i18n/*.json，Rust 测试保证双语文案齐全）。直接从仓库根引用，
+  // 零副本零漂移；按系统语言选语言表（UI 单语显示的既定决策）。
+  import enDict from "../../../assets/i18n/en.json";
+  import zhDict from "../../../assets/i18n/zh.json";
+
+  const dict = (navigator.language || "zh").toLowerCase().startsWith("zh") ? zhDict : enDict;
+  const t = (key, vars = {}) => {
+    let s = dict[key] ?? key;
+    for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
+    return s;
+  };
+  // diag 状态码 → 字典 msg_key（见 crates/diag/src/keys.rs）
+  const STATE_KEYS = {
+    ONLINE_DIRECT: "diag.online_direct",
+    ONLINE_RELAY: "diag.online_relay",
+    PAIRING: "diag.pairing",
+    DISK_FULL: "err.disk_full",
+    INDEXING: "diag.indexing",
+    STORAGE_OFFLINE: "diag.storage_offline",
+  };
 
   let wizard = $state(null); // null=检测中, {configured, default_dir}
   let starting = $state(false);
@@ -154,14 +175,7 @@
   const stateLabel = $derived(
     !online
       ? "后台服务未运行"
-      : {
-          ONLINE_DIRECT: "运行中",
-          ONLINE_RELAY: "运行中（经中继）",
-          PAIRING: "等待配对确认",
-          DISK_FULL: "磁盘已满",
-          INDEXING: "正在整理照片库",
-          STORAGE_OFFLINE: "离线",
-        }[status?.state] ?? status?.state
+      : t(STATE_KEYS[status?.state] ?? status?.state)
   );
 </script>
 
