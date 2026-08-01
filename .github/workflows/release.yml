@@ -158,11 +158,14 @@ jobs:
           key: win-x64-release-${{ hashFiles('**/Cargo.lock') }}
 
       # libheif via vcpkg（Windows 规范路径；windows-latest 预装 C:\vcpkg）。
-      # 首次会从源码编 libheif+依赖（libde265 等），10-20 分钟，故 timeout 45。
+      # triplet x64-windows-static-md 与 vcpkg crate 默认一致（实测 x64-windows
+      # 动态版不匹配：报 "not installed for triplet x64-windows-static-md"）。
+      # 静态链接 → 自包含 exe，发布无需带 DLL。首次从源码编 libheif+依赖
+      # （libde265 等），10-20 分钟，故 timeout 45。
       - name: Install libheif (vcpkg)
         shell: bash
         run: |
-          /c/vcpkg/vcpkg.exe install libheif:x64-windows --clean-after-build
+          /c/vcpkg/vcpkg.exe install "libheif:x64-windows-static-md" --clean-after-build
 
       - name: Build release binaries
         shell: bash
