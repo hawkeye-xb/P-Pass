@@ -131,6 +131,7 @@ jobs:
   windows-x64:
     name: "Windows x64 (未签名)"
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -146,9 +147,18 @@ jobs:
             target/
           key: win-x64-release-${{ hashFiles('**/Cargo.lock') }}
 
-      # libheif 走 media-codec 的 vendored 特性（源码内嵌，无 vcpkg 依赖）
+      # libheif via vcpkg（Windows 规范路径；windows-latest 预装 C:\vcpkg）。
+      # 首次会从源码编 libheif+依赖（libde265 等），10-20 分钟，故 timeout 45。
+      - name: Install libheif (vcpkg)
+        shell: bash
+        run: |
+          /c/vcpkg/vcpkg.exe install libheif:x64-windows --clean-after-build
+
       - name: Build release binaries
-        run: cargo build --release -p daemon -p testclient --features media-codec/vendored
+        shell: bash
+        env:
+          VCPKG_ROOT: "C:\\vcpkg"
+        run: cargo build --release -p daemon -p testclient
 
       - name: SHA256 + notes
         shell: bash
