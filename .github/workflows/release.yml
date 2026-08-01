@@ -40,6 +40,11 @@ jobs:
       APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
       APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+      # 公证凭据二选一：API key（--key/--key-id/--issuer）或
+      # Apple ID + App-Specific Password + Team ID（Xisper 先例，.env.build 变量同名）
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     outputs:
       signed: ${{ steps.signtag.outputs.signed }}
     steps:
@@ -92,14 +97,19 @@ jobs:
           echo "signed=yes" >> "$GITHUB_OUTPUT"
 
       - name: Notarize + staple (gated)
-        if: env.APPLE_CERT_P12 != '' && env.APPLE_NOTARY_KEY != ''
+        if: env.APPLE_CERT_P12 != '' && (env.APPLE_NOTARY_KEY != '' || env.APPLE_ID != '')
         run: |
           set -euo pipefail
+          # 双路径：API key（CI 标准）或 Apple ID + App-Specific Password（Xisper 先例）
+          NOTARY_ARGS=""
+          if [ -n "${APPLE_NOTARY_KEY:-}" ]; then
+            NOTARY_ARGS="--key $APPLE_NOTARY_KEY --key-id $APPLE_NOTARY_KEY_ID --issuer $APPLE_NOTARY_ISSUER"
+          else
+            NOTARY_ARGS="--apple-id $APPLE_ID --password $APPLE_APP_SPECIFIC_PASSWORD --team-id $APPLE_TEAM_ID"
+          fi
           for bin in /tmp/rel/daemon /tmp/rel/testclient; do
             ditto -c -k --keepParent "$bin" "$bin.zip"
-            xcrun notarytool submit "$bin.zip" --key "$APPLE_NOTARY_KEY" \
-              --key-id "$APPLE_NOTARY_KEY_ID" --issuer "$APPLE_NOTARY_ISSUER" \
-              --wait --timeout 15m
+            xcrun notarytool submit "$bin.zip" $NOTARY_ARGS --wait --timeout 15m
             xcrun stapler staple "$bin"
             rm -f "$bin.zip"
           done
@@ -148,11 +158,14 @@ jobs:
           key: win-x64-release-${{ hashFiles('**/Cargo.lock') }}
 
       # libheif via vcpkg（Windows 规范路径；windows-latest 预装 C:\vcpkg）。
-      # 首次会从源码编 libheif+依赖（libde265 等），10-20 分钟，故 timeout 45。
+      # triplet x64-windows-static-md 与 vcpkg crate 默认一致（实测 x64-windows
+      # 动态版不匹配：报 "not installed for triplet x64-windows-static-md"）。
+      # 静态链接 → 自包含 exe，发布无需带 DLL。首次从源码编 libheif+依赖
+      # （libde265 等），10-20 分钟，故 timeout 45。
       - name: Install libheif (vcpkg)
         shell: bash
         run: |
-          /c/vcpkg/vcpkg.exe install libheif:x64-windows --clean-after-build
+          /c/vcpkg/vcpkg.exe install "libheif:x64-windows-static-md" --clean-after-build
 
       - name: Build release binaries
         shell: bash
