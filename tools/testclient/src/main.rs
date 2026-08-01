@@ -38,6 +38,10 @@ enum Cmd {
         /// 身份密钥文件
         #[arg(long, default_value = "testclient.key")]
         identity: String,
+        /// 每个文件的字节数（T-070 大文件剧本）：生成稀疏文件（全零，
+        /// seek 定位零实际磁盘占用），流式哈希，跨运行 hash 确定 → 幂等保留
+        #[arg(long)]
+        file_size: Option<u64>,
     },
     /// 浏览剧本：分页遍历时间线 + 拉取缩略图校验（T-033 实装）
     Browse {
@@ -78,7 +82,8 @@ fn main() {
             files,
             node,
             identity,
-        } => run_async(backup(files, &node, &identity)),
+            file_size,
+        } => run_async(backup(files, &node, &identity, file_size)),
         Cmd::Browse {
             limit,
             node,
@@ -243,7 +248,12 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
 
 /// T-032 剧本：生成 N 个混合文件（每 10 个 1 个重复内容），本机作为
 /// blobs 提供方，走 begin → manifest → missing → commit 全链。
-async fn backup(files: u32, node: &str, identity: &str) -> anyhow::Result<String> {
+async fn backup(
+    files: u32,
+    node: &str,
+    identity: &str,
+    file_size: Option<u64>,
+) -> anyhow::Result<String> {
     let daemon: transport::NodeId = node
         .parse()
         .map_err(|_| anyhow::anyhow!("--node 不是合法的 64 位 hex NodeId：{node}"))?;
@@ -255,34 +265,50 @@ async fn backup(files: u32, node: &str, identity: &str) -> anyhow::Result<String
     blobs.serve();
 
     // 生成语料：确定性伪随机内容，每 10 个复用前一个的内容（去重演示）。
+    // `--file-size` 时（T-070 大文件剧本）：稀疏文件（seek 定位，零实际磁盘
+    // 占用），全零内容 → 跨运行 hash 确定 → 幂等去重语义保留；流式哈希不整读入内存。
     let mut items = Vec::new();
     let mut s: u64 = 0x5EED_2026_0730_0005;
     let mut prev: Vec<u8> = Vec::new();
     for i in 0..files {
-        let content = if i > 0 && i % 10 == 0 {
-            prev.clone()
-        } else {
-            let mut v = i.to_le_bytes().to_vec();
-            for _ in 0..256 {
-                s ^= s << 13;
-                s ^= s >> 7;
-                s ^= s << 17;
-                v.extend_from_slice(&s.to_le_bytes());
-            }
-            v
-        };
-        let hash = *blake3::hash(&content).as_bytes();
+        let (hash, name, path): ([u8; 32], String, std::path::PathBuf) =
+            if let Some(size) = file_size {
+                let name = format!("BIG_{i:04}.bin");
+                let path = dir.path().join(&name);
+                let f = std::fs::File::create(&path)?;
+                f.set_len(size)?; // 稀疏：文件逻辑大小 size，实际磁盘 ~0
+                let mut f = std::fs::File::open(&path)?;
+                let mut hasher = blake3::Hasher::new();
+                hasher.update_reader(&mut f)?;
+                let hash = *hasher.finalize().as_bytes();
+                (hash, name, path)
+            } else {
+                let content = if i > 0 && i % 10 == 0 {
+                    prev.clone()
+                } else {
+                    let mut v = i.to_le_bytes().to_vec();
+                    for _ in 0..256 {
+                        s ^= s << 13;
+                        s ^= s >> 7;
+                        s ^= s << 17;
+                        v.extend_from_slice(&s.to_le_bytes());
+                    }
+                    v
+                };
+                let hash = *blake3::hash(&content).as_bytes();
+                let name = format!("IMG_{i:04}.jpg");
+                let path = dir.path().join(&name);
+                std::fs::write(&path, &content)?;
+                (hash, name, path)
+            };
         let hash_hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
-        let name = format!("IMG_{i:04}.jpg");
-        let path = dir.path().join(&name);
-        std::fs::write(&path, &content)?;
         blobs.import(hash, &path).await?;
         items.push(proto::BackupItem {
             hash: hash_hex,
             file_name: name,
             media_type: "image/jpeg".into(),
         });
-        prev = content;
+        prev = std::fs::read(&path).unwrap_or_default();
     }
 
     let call = |method: &str, params: serde_json::Value| {

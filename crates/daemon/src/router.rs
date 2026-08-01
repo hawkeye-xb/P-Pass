@@ -29,6 +29,9 @@ pub struct Router {
     query: Option<crate::query::QueryEngine>,
     upload: Option<crate::upload::UploadPlane>,
     download: Option<crate::download::DownloadPlane>,
+    /// Clock seam (T-070 时钟前跳剧本): production uses the wall clock;
+    /// integration scenarios inject a controllable clock.
+    now: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>,
 }
 
 impl Router {
@@ -41,7 +44,15 @@ impl Router {
             query: None,
             upload: None,
             download: None,
+            now: std::sync::Arc::new(unix_ms_now),
         }
+    }
+
+    /// Override the clock (T-070): lets integration scenarios simulate a
+    /// wall-clock jump without touching the system clock.
+    pub fn with_clock(mut self, now: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        self.now = std::sync::Arc::new(now);
+        self
     }
 
     /// Attach the download plane (T-056).
@@ -362,7 +373,7 @@ impl Router {
                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
             );
         };
-        match pairing.handle_request(peer, &pair_req, unix_ms_now()).await {
+        match pairing.handle_request(peer, &pair_req, (self.now)()).await {
             Ok(()) => {
                 let accepted = proto::PairAccepted {
                     storage_device_name: self.device_name.clone(),

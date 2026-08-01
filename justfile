@@ -33,6 +33,13 @@ lint:
 test:
   cargo nextest run --all-features 2>/dev/null || cargo test --all-features
 
+# T-070 故障剧本（进程级三件套：4GB 大文件 / 崩溃恢复 / 磁盘满）
+# 需要 release 二进制: cargo build --release -p daemon -p testclient
+scenarios:
+  bash tools/scenarios/huge_file.sh
+  bash tools/scenarios/crash_recovery.sh
+  bash tools/scenarios/disk_full.sh
+
 # ── Code Generation ─────────────────────────────────
 
 # Generate code: proto → Kotlin types + schema snapshot
