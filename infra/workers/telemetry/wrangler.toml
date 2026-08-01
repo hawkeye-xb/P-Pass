@@ -1,0 +1,13 @@
+# Local dev / test configuration (T-061).
+#
+# Safe to commit: no real credentials. Production deploy config (account_id,
+# routes, real dataset names) lives in the private ops repo
+# (`ppf-ops/deploy/workers.prod.toml`), per the isolation plan §2.
+
+name = "ppass-telemetry"
+main = "src/index.ts"
+compatibility_date = "2026-07-31"
+
+[[analytics_engine_datasets]]
+binding = "TELEMETRY"
+dataset = "ppass_telemetry"

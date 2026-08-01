@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "notes": "Example manifest — replace with real release notes.",
+  "pub_date": "2026-07-31T00:00:00Z",
+  "platforms": {
+    "macos-arm64": {
+      "url": "https://releases.example.com/P-Pass-0.2.0-aarch64.dmg",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "signature": "BASE64_ED25519_SIGNATURE_OVER_ARTIFACT_BYTES"
+    },
+    "macos-x64": {
+      "url": "https://releases.example.com/P-Pass-0.2.0-x86_64.dmg",
+      "sha256": "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210",
+      "signature": "BASE64_ED25519_SIGNATURE_OVER_ARTIFACT_BYTES"
+    },
+    "windows-x64": {
+      "url": "https://releases.example.com/P-Pass-0.2.0-x86_64.msi",
+      "sha256": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+      "signature": "BASE64_ED25519_SIGNATURE_OVER_ARTIFACT_BYTES"
+    }
+  }
+}
