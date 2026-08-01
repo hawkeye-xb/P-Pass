@@ -125,10 +125,10 @@ fun PPassApp() {
                     }
                     is PairOutcome.Refused -> Screen.Trouble(
                         R.string.pair_refused_title,
-                        // T-072: 具体拒绝原因走 diag 字典（msg_key → 双语人话）；
-                        // 未知 key 回退通用文案，绝不因新服务端 key 崩溃。
-                        DiagText.resolve(context, outcome.msgKey)
-                            ?: context.getString(R.string.pair_refused_body),
+                        R.string.pair_refused_body,
+                        // T-072: 具体拒绝原因走 diag 字典（msg_key → 双语人话）
+                        // 渲染在通用文案下方；未知 key 显示空详情，绝不崩溃。
+                        DiagText.resolve(context, outcome.msgKey) ?: "",
                     )
                     is PairOutcome.Failed -> Screen.Trouble(
                         R.string.pair_failed_title, R.string.pair_failed_body,
