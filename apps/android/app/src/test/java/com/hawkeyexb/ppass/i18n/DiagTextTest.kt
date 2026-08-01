@@ -31,14 +31,20 @@ class DiagTextTest {
     private fun dict(lang: String): String =
         File(repoRoot(), "assets/i18n/$lang.json").readText()
 
+    /** Key list via names()——Android 框架的 org.json 是老版本：没有 keySet()，
+     *  keys() 返回的 Iterator 的 toList() 扩展在此 stdlib 配置下不解析。 */
+    private fun keysOf(dictJson: String): List<String> {
+        val arr = org.json.JSONObject(dictJson).names() ?: org.json.JSONArray()
+        return (0 until arr.length()).map { arr.getString(it) }
+    }
+
     @Test
     fun every_diag_key_resolves_in_both_languages() {
-        val en = org.json.JSONObject(dict("en"))
-        val zh = org.json.JSONObject(dict("zh"))
-        // keySet()（org.json 各版本签名稳定）而非 keys()（Iterator，版本间歧义）
-        assertEquals("en/zh 字典 key 集必须一致", en.keySet().sorted(), zh.keySet().sorted())
+        val enKeys = keysOf(dict("en"))
+        val zhKeys = keysOf(dict("zh"))
+        assertEquals("en/zh 字典 key 集必须一致", enKeys.sorted(), zhKeys.sorted())
 
-        for (key in en.keySet()) {
+        for (key in enKeys) {
             val enText = DiagText.resolveFromJson(dict("en"), key)
             val zhText = DiagText.resolveFromJson(dict("zh"), key)
             assertFalse("en 翻译缺失或为空: $key", enText.isNullOrBlank())
