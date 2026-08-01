@@ -27,6 +27,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # OS randomness for one-time pairing tokens (T-031). Already in the tree
 # via iroh; declared directly because tokens are a security surface.
 getrandom = "0.3"
+# Update manifest (T-062): semver compare + Ed25519 verify. Both already in
+# the tree via iroh; declared directly because they are a security surface.
+semver = "1"
+ed25519-dalek = "3"
 interprocess = { version = "2", features = ["tokio"] }
 zip = { version = "5", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
