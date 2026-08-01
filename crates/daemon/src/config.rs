@@ -181,8 +181,10 @@ mod tests {
     #[test]
     fn layer1_defaults_have_official_endpoints() {
         let cfg = Config::resolve(None, &env(&[])).unwrap();
-        assert_eq!(cfg.relay_urls.len(), 3);
-        assert!(cfg.relay_urls[0].contains("p-pass.hawkeye-xb.com"));
+        // relay_urls 默认空（2026-07-31 用户裁决）：H-07 部署前官方 relay 域名
+        // 不存在，会毒害路径协商（dogfood 实证）；H-07 上线后恢复三区域列表
+        // （见 config/endpoints.default.toml 注释）。
+        assert!(cfg.relay_urls.is_empty());
         assert!(cfg.rendezvous_url.contains("rendezvous"));
         assert!(cfg.telemetry.enabled);
         assert_eq!(cfg.log_level, "info");
