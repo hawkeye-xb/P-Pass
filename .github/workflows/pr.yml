@@ -81,3 +81,29 @@ jobs:
       - name: Assemble debug APK
         working-directory: apps/android
         run: ./gradlew :app:assembleDebug
+
+  scenarios:
+    name: T-070 failure scenarios (process-level)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: System codecs
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+      - name: Build release binaries
+        run: cargo build --release -p daemon -p testclient
+      - name: Run scenarios (huge file / crash recovery / disk full)
+        run: |
+          bash tools/scenarios/huge_file.sh
+          bash tools/scenarios/crash_recovery.sh
+          bash tools/scenarios/disk_full.sh
