@@ -1,6 +1,7 @@
 package com.hawkeyexb.ppass.i18n
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.File
@@ -34,16 +35,14 @@ class DiagTextTest {
     fun every_diag_key_resolves_in_both_languages() {
         val en = org.json.JSONObject(dict("en"))
         val zh = org.json.JSONObject(dict("zh"))
-        assertEquals("en/zh 字典 key 集必须一致", en.keys().toList().sorted(), zh.keys().toList().sorted())
+        // keySet()（org.json 各版本签名稳定）而非 keys()（Iterator，版本间歧义）
+        assertEquals("en/zh 字典 key 集必须一致", en.keySet().sorted(), zh.keySet().sorted())
 
-        for (key in en.keys()) {
+        for (key in en.keySet()) {
             val enText = DiagText.resolveFromJson(dict("en"), key)
             val zhText = DiagText.resolveFromJson(dict("zh"), key)
-            assertEquals("en 缺失翻译: $key", key, enText?.let { if (it.isBlank()) null else key })
-            assertEquals("zh 缺失翻译: $key", key, zhText?.let { if (it.isBlank()) null else key })
-            // 校验非空（上面 let 已挡空串，这里显式断言值非空）
-            assertEquals("en 翻译为空: $key", key, if (enText.isNullOrBlank()) null else key)
-            assertEquals("zh 翻译为空: $key", key, if (zhText.isNullOrBlank()) null else key)
+            assertFalse("en 翻译缺失或为空: $key", enText.isNullOrBlank())
+            assertFalse("zh 翻译缺失或为空: $key", zhText.isNullOrBlank())
         }
     }
 
