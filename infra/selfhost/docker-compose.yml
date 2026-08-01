@@ -1,0 +1,71 @@
+# P-Pass 自建全套（T-063）— docker compose
+#
+# 用法（详见 SELFHOST.md）：
+#   cp .env.example .env          # 编辑域名
+#   cp relay-config.example.toml relay-config.toml   # 编辑 relay hostname
+#   docker compose up -d --build
+#
+# 组件：
+#   relay      — iroh-relay 官方镜像（中继兜底，TLS=内置 LetsEncrypt，QUIC 7842）
+#   rendezvous — 配对会合 Worker（Miniflare/workerd 内核本地运行时，DO 语义与 CF 一致）
+#   caddy      — TLS 反代（rendezvous 域名 → 8787）
+#   pkarr      — Phase 2 自建发现，profile 提供，默认不开（当前客户端 QR 自带地址，零发现依赖）
+#
+# 端口布局（单 VPS 共存）：80/443 → caddy；8443 → relay HTTPS；7842/udp → relay QUIC。
+# relay URL 因此是 https://<relay 域名>:8443 —— 客户端 relay_urls 里写全。
+
+name: ppass-selfhost
+
+services:
+  relay:
+    image: n0computer/iroh-relay:v1.0.3
+    restart: unless-stopped
+    ports:
+      - "8443:443"      # HTTPS relay endpoint（客户端 relay_urls 用 :8443）
+      - "7842:7842/udp" # QUIC address discovery
+      - "8080:80"       # captive portal（健康检查用，可注释）
+      # - "9090:9090"   # metrics（可选，Kuma/prometheus 抓取）
+    volumes:
+      - ./relay-config.toml:/etc/iroh-relay/config.toml:ro
+      - relay-certs:/etc/iroh-relay/certs   # LetsEncrypt 证书持久化
+    command: ["--config-path", "/etc/iroh-relay/config.toml"]
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/", ">", "/dev/null"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+  rendezvous:
+    build:
+      context: ../..           # 仓库根——Dockerfile 引用 infra/workers/rendezvous
+      dockerfile: infra/selfhost/rendezvous/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8787"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      RENDEZVOUS_DOMAIN: ${RENDEZVOUS_DOMAIN:?set RENDEZVOUS_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+  # Phase 2: 自建发现（pkarr）。当前客户端用 n0 官方 DNS 发现 + QR 地址段，
+  # 不依赖自建发现也能全流程跑通；iroh 支持自定义 discovery 后再启用。
+  # pkarr:
+  #   image: ghcr.io/n0-computer/pkarr-relay:latest
+  #   restart: unless-stopped
+  #   ports:
+  #     - "53:53/udp"
+  #   profiles: ["discovery"]
+
+volumes:
+  relay-certs:
+  caddy-data:
+  caddy-config:

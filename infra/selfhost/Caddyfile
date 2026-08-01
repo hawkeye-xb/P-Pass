@@ -1,0 +1,9 @@
+# P-Pass self-host reverse proxy (T-063).
+#
+# 单个 VPS 上：80/443 归 caddy；relay 的 HTTPS 走 8443（见 docker-compose.yml）。
+# 域名在 .env 的 RENDEZVOUS_DOMAIN 里设置，caddy 自动申请 LetsEncrypt 证书。
+
+{$RENDEZVOUS_DOMAIN} {
+	encode gzip
+	reverse_proxy rendezvous:8787
+}

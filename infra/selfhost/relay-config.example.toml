@@ -1,0 +1,20 @@
+# iroh-relay 配置示例（T-063）。cp relay-config.example.toml relay-config.toml 后编辑。
+#
+# 字段说明见 n0-computer/iroh iroh-relay/src/main.rs 的 Config 结构。
+# 本仓库默认开放（access = "everyone"）——家庭自建场景客户端无认证字段；
+# shared_token 等客户端支持 auth token 后再启用。
+
+# 开放中继（默认）
+access = "everyone"
+
+# 或共享令牌（客户端支持后启用；IROH_RELAY_ACCESS_TOKEN 环境变量可覆盖单值）：
+# access.shared_token = ["CHANGE_ME"]
+
+http_bind_addr = "[::]:80"
+enable_quic_addr_discovery = true
+
+[tls]
+# LetsEncrypt 自动证书；hostname 必须与客户端使用的 relay URL 域名一致
+hostname = ["relay.example.com"]
+cert_mode = "LetsEncrypt"
+cert_dir = "/etc/iroh-relay/certs"
