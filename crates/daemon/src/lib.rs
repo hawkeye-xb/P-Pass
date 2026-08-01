@@ -12,6 +12,7 @@ pub mod pairing;
 pub mod query;
 pub mod router;
 pub mod telemetry;
+pub mod update;
 pub mod upload;
 
 pub use authz::Decision;

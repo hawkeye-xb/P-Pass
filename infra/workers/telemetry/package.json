@@ -1,0 +1,24 @@
+{
+  "name": "ppass-telemetry",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "P-Pass telemetry intake (T-061): zod schema validation per handbook §8 → Analytics Engine",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.20.1",
+    "@cloudflare/workers-types": "^5.20260731.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.118.0"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  }
+}
