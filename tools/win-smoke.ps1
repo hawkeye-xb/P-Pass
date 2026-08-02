@@ -1,4 +1,4 @@
-# H-09 Windows 真机冒烟（win-smoke.ps1）—— 与 dogfood-smoke.sh 同剧本：
+﻿# H-09 Windows 真机冒烟（win-smoke.ps1）—— 与 dogfood-smoke.sh 同剧本：
 # 起 daemon → 配对(QR+IPC确认) → backup 50 → 幂等重跑 → browse →
 # IPC 吊销 → revoke-check → logs.export。全部通过输出
 # "WIN SMOKE: ALL GREEN"，任一步失败退出非零。
@@ -6,12 +6,16 @@
 # 用法（在拉取了 bin-win-x64 分支的机器上）:
 #   powershell -ExecutionPolicy Bypass -File win-smoke.ps1 [-WorkDir <dir>]
 #
-# 已知待实证项（上报给开发侧）:
-#   - interprocess GenericNamespaced 在 Windows 的 socket 实际路径
-#     （本脚本探测候选路径，第一个连通的胜出并打印）
-#   - daemon 控制台行为 / Defender 是否拦未签名 exe（blocked-by-av 文档）
-#   - 中文输出编码（testclient 的"配对成功"在 GBK 控制台可能乱码，
-#     以退出码为准，字符串校验做辅助）
+# 已知实证结论（2026-08-02 H-09 首跑，Win x64 / PS 5.1）:
+#   - interprocess GenericNamespaced 在 Windows 的落点 = 命名管道
+#     \\.\pipe\ppf-<NodeId前8hex>（不是 AF_UNIX 文件 socket）
+#   - ipc.token 两行：行1 = socket 名，行2 = 32B 令牌 hex
+#   - IPC 协议契约（crates/daemon/src/ipc.rs）: 客户端第一行发原始令牌，
+#     随后 newline-delimited JSON（每行一个 Req 对应一行 Resp）,
+#     Req.id 是字符串；方法: status / pairing.start / pairing.confirm /
+#     devices.list / device.revoke / folder.set / logs.export（无 pairing.revoke）
+#   - 本脚本必须以 UTF-8 BOM 保存（PS 5.1 无 BOM 按 GBK 解析中文引号会
+#     ParserError）。写文件/合入时务必保留 BOM。
 
 param([string]$WorkDir = "")
 
@@ -54,37 +58,35 @@ if (-not $node) { Write-Error "日志中未找到 NodeId"; exit 1 }
 
 $ipcToken = Join-Path $env:PPF_DATA_DIR "ipc.token"
 if (-not (Test-Path $ipcToken)) { Write-Error "ipc.token 未生成"; exit 1 }
-$sockName = (Get-Content $ipcToken -TotalCount 1).Trim()
+$tokenLines = Get-Content $ipcToken
+$sockName = $tokenLines[0].Trim()
+$token = $tokenLines[1].Trim()
+if (-not $token) { Write-Error "ipc.token 缺少令牌行（行2 应为 32B hex）"; exit 1 }
 Write-Host "daemon up: $node (ipc: $sockName)"
 
-# ── IPC 客户端（AF_UNIX；候选路径探测）─────────────────────────────
+# ── IPC 客户端（Windows 命名管道 + 令牌认证 + newline-delimited JSON）──
+# 契约见 crates/daemon/src/ipc.rs 顶部注释。每次调用新建连接：
+#   连接 \\.\pipe\$sockName → 第一行发原始令牌 → 每行一个 Req（id 为字符串）
+#   → 读一行 Resp。无超时选项会永久挂起，故 Connect 带 5s 超时。
 function Invoke-Ipc([string]$method, [string]$paramsJson) {
-    $payload = '{"jsonrpc":"2.0","id":1,"method":"' + $method + '","params":' + $paramsJson + '}'
-    $candidates = @(
-        $sockName,
-        (Join-Path $env:TEMP $sockName),
-        (Join-Path $env:TEMP ("interprocess\" + $sockName)),
-        (Join-Path $env:TEMP ("interprocess\local_socket\" + $sockName)),
-        ("C:\tmp\" + $sockName),
-        (Join-Path $env:PPF_DATA_DIR $sockName)
-    ) | Select-Object -Unique
-    $lastErr = $null
-    foreach ($p in $candidates) {
-        $client = [System.Net.Sockets.Socket]::new([System.Net.Sockets.AddressFamily]::Unix, [System.Net.Sockets.SocketType]::Stream, [System.Net.Sockets.ProtocolType]::IP)
-        try {
-            $ep = [System.Net.Sockets.UnixDomainSocketEndPoint]::new($p)
-            $client.Connect($ep)
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
-            $client.Send($bytes)
-            $buf = New-Object byte[] 65536
-            $n = $client.Receive($buf)
-            $resp = [System.Text.Encoding]::UTF8.GetString($buf, 0, $n)
-            Write-Host "    (ipc socket 路径: $p)"
-            return $resp
-        } catch { $lastErr = $_.Exception.Message }
-        finally { $client.Dispose() }
+    $payload = '{"id":"smoke","method":"' + $method + '","params":' + $paramsJson + '}'
+    $pipePath = "\\.\pipe\$sockName"
+    $client = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipePath, [System.IO.Pipes.PipeDirection]::InOut)
+    try {
+        $client.Connect(5000)   # PS 5.1 无超时则永久挂起——必须显式
+        $writer = New-Object System.IO.StreamWriter($client)
+        $writer.AutoFlush = $true
+        $writer.WriteLine($token)      # 第一行：原始令牌（缺了会被静默断连）
+        $writer.WriteLine($payload)    # 之后每行：Req（newline-delimited）
+        $reader = New-Object System.IO.StreamReader($client)
+        $resp = $reader.ReadLine()     # 一行 Resp
+        Write-Host "    (ipc 端点: $pipePath)"
+        return $resp
+    } catch {
+        throw "IPC 调用失败（$method @ $pipePath）: $($_.Exception.Message)"
+    } finally {
+        $client.Dispose()
     }
-    throw "IPC 连接全部失败（socket=$sockName）: $lastErr"
 }
 
 Write-Host "── 1. 配对（QR + IPC owner 确认）"
@@ -92,8 +94,9 @@ $pairLog = Join-Path $Work "pair.log"
 $pair = Start-Process -FilePath $TC -ArgumentList @("pair", "--token", $qr, "--name", "win-agent") -RedirectStandardOutput $pairLog -RedirectStandardError (Join-Path $Work "pair.err") -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 3
 $null = Invoke-Ipc "pairing.confirm" '{"accept": true}'
-$pair.WaitForExit(15000) | Out-Null
-$ok = $pair.ExitCode -eq 0
+$null = $pair.WaitForExit(15000)
+$pair.Refresh()          # 重定向流 + WaitForExit(ms) 后 ExitCode 可能为 null——Refresh 修复
+$ok = $pair.HasExited -and ($pair.ExitCode -eq 0)
 $grep = Select-String -Path $pairLog -Pattern "配对成功" -ErrorAction SilentlyContinue
 if (-not $ok) { Write-Error "配对失败（exit=$($pair.ExitCode)），日志: $(Get-Content $pairLog -ErrorAction SilentlyContinue | Select-Object -Last 3)"; exit 1 }
 Write-Host "    配对成功（exit=0）"
@@ -113,10 +116,17 @@ if ($LASTEXITCODE -ne 0) { Write-Error "browse 失败 exit=$LASTEXITCODE"; exit 
 Write-Host "    browse 输出行数: $((($br -split "`n") | Where-Object { $_ }).Count)"
 
 Write-Host "── 5. IPC 吊销 + revoke-check"
-$null = Invoke-Ipc "pairing.revoke" ("{`"node`":`"$node`"}")
+# 吊销目标 = 配对设备（testclient 本机）的 NodeId，从 pair.log 提取；
+# 方法真名 device.revoke（不存在 pairing.revoke），params 用 node_id。
+$dm = Select-String -Path $pairLog -Pattern "本机 NodeId: ([0-9a-fA-F]{64})" | Select-Object -First 1
+$deviceNode = if ($dm) { $dm.Matches[0].Groups[1].Value } else { $null }
+if (-not $deviceNode) { Write-Error "pair.log 未找到配对设备 NodeId，无法吊销"; exit 1 }
+$null = Invoke-Ipc "device.revoke" ("{`"node_id`":`"$deviceNode`"}")
+# revoke-check 复用配对身份（默认 testclient.key，cwd 一致）连 daemon，
+# 期望 NOT_AUTHORIZED —— 吊销后仍放行 = 检查点失守。
 $rv = & $TC revoke-check --node $node 2>&1 | Out-String
 Write-Host "    revoke-check: $($rv.Trim())"
-if ($rv -match "revoked|已吊销|拒") { Write-Host "    吊销生效" } else { Write-Host "    吊销输出需人工核对" }
+if ($rv -match "拒绝|not_authorized|NOT_AUTHORIZED") { Write-Host "    吊销生效" } else { Write-Host "    吊销输出需人工核对" }
 
 Write-Host "── 6. logs.export 脱敏抽查"
 $null = Invoke-Ipc "logs.export" '{}'
