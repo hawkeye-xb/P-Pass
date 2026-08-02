@@ -49,14 +49,15 @@ powershell -ExecutionPolicy Bypass -File win-smoke.ps1
 - 异常/疑问: <如有>
 ```
 
-## 5. 已知待实证项（脚本会打印，务必回报）
+## 5. 实证结论（2026-08-02 H-09 首跑，Win x64 / PS 5.1）
 
-| 项 | 说明 |
+| 项 | 结论 |
 |---|---|
-| IPC socket 路径 | interprocess GenericNamespaced 在 Windows 的落点未知，脚本探测 6 个候选路径，打印第一个连通的 |
-| 中文编码 | testclient 的"配对成功"在 GBK 控制台可能乱码——配对以退出码为准（脚本已如此处理） |
-| Defender 拦截 | 未签名 exe 首次运行可能被拦——按 blocked-by-av 处理并注明 |
-| daemon 控制台行为 | 无窗口启动（脚本用 Hidden），日志在 `%TEMP%\ppf-win-dogfood\daemon.log` |
+| IPC socket 路径 | **Windows 命名管道 `\\.\pipe\ppf-<NodeId前8hex>`**（不是 AF_UNIX 文件 socket）。ipc.token 两行：行1 = socket 名（如 `ppf-e4863927`），行2 = 32B 令牌 hex |
+| IPC 协议契约 | 客户端**第一行发原始令牌**，随后 newline-delimited JSON（每行一个 Req 对应一行 Resp）；`Req.id` 是**字符串**；方法有 `status/pairing.start/pairing.confirm/devices.list/device.revoke/folder.set/logs.export`（**没有** `pairing.revoke`） |
+| 中文编码 | **必须 UTF-8 BOM 保存**——PS 5.1 无 BOM 按 GBK 解析中文引号直接 ParserError；修复版脚本已带 BOM（合入/编辑时勿丢失） |
+| Defender 拦截 | 实时保护开启但威胁记录 0，未拦截；daemon.exe 未签名（NotSigned）正常执行 |
+| daemon 控制台行为 | 无窗口启动（脚本用 Hidden）；stdout 打启动横幅（NodeId → QR 10 分钟有效 → IPC 行）；stderr 走 tracing（UTC+ANSI+模块 target），含 `stdin closed — pairing confirmation is IPC-only from here` |
 
 ## 6. 如果 FAIL —— 把这三样东西原文回报
 
