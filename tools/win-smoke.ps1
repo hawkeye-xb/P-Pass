@@ -20,6 +20,8 @@
 param([string]$WorkDir = "")
 
 $ErrorActionPreference = "Stop"
+# PS 5.1 控制台默认 GBK——设 UTF-8 输出编码，避免中文文案匹配（step 3 幂等）乱码
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $script:Work = if ($WorkDir) { $WorkDir } else { Join-Path $env:TEMP "ppf-win-dogfood" }
 $script:Bin = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DAEMON = Join-Path $Bin "daemon.exe"
@@ -68,9 +70,11 @@ Write-Host "daemon up: $node (ipc: $sockName)"
 # 契约见 crates/daemon/src/ipc.rs 顶部注释。每次调用新建连接：
 #   连接 \\.\pipe\$sockName → 第一行发原始令牌 → 每行一个 Req（id 为字符串）
 #   → 读一行 Resp。无超时选项会永久挂起，故 Connect 带 5s 超时。
+#   ⚠️ PS 5.1 硬坑（实测）：NamedPipeClientStream 必须用裸名 $sockName，
+#   全路径 \\.\pipe\ 前缀会导致 Connect(5000) 超时抛异常。
 function Invoke-Ipc([string]$method, [string]$paramsJson) {
     $payload = '{"id":"smoke","method":"' + $method + '","params":' + $paramsJson + '}'
-    $pipePath = "\\.\pipe\$sockName"
+    $pipePath = $sockName   # 裸名！.NET Framework 下带 \\.\pipe\ 前缀 Connect 超时
     $client = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipePath, [System.IO.Pipes.PipeDirection]::InOut)
     try {
         $client.Connect(5000)   # PS 5.1 无超时则永久挂起——必须显式
@@ -95,9 +99,11 @@ $pair = Start-Process -FilePath $TC -ArgumentList @("pair", "--token", $qr, "--n
 Start-Sleep -Seconds 3
 $null = Invoke-Ipc "pairing.confirm" '{"accept": true}'
 $null = $pair.WaitForExit(15000)
-$pair.Refresh()          # 重定向流 + WaitForExit(ms) 后 ExitCode 可能为 null——Refresh 修复
-$ok = $pair.HasExited -and ($pair.ExitCode -eq 0)
-$grep = Select-String -Path $pairLog -Pattern "配对成功" -ErrorAction SilentlyContinue
+# ⚠️ PS 5.1 硬坑（实测）：Start-Process -PassThru + 重定向输出时，
+# $pair.ExitCode 恒为 null（HasExited=True 也没用，Refresh/WaitForExit() 无参也一样）。
+# 成功判据必须用 pair.log 文案（显式 UTF-8 读取），退出码仅作展示。
+$pairText = if (Test-Path $pairLog) { [System.IO.File]::ReadAllText($pairLog, [System.Text.Encoding]::UTF8) } else { "" }
+$ok = $pairText -match "配对成功"
 if (-not $ok) { Write-Error "配对失败（exit=$($pair.ExitCode)），日志: $(Get-Content $pairLog -ErrorAction SilentlyContinue | Select-Object -Last 3)"; exit 1 }
 Write-Host "    配对成功（exit=0）"
 
