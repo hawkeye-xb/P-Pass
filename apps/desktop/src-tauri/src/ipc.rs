@@ -19,6 +19,28 @@ pub fn token_candidates() -> Vec<PathBuf> {
     }
     v.push(home.join("ppf-library/ipc.token"));
     v.push(home.join("Library/Application Support/P-Pass/ipc.token"));
+    // The wizard writes the user-picked library dir into config.toml's
+    // data_dir, and the daemon puts ipc.token *there* — the fixed
+    // candidates above miss it. Parse the live config so a daemon
+    // launched via the wizard is actually discoverable (T-042 实测:
+    // "点了没反应" = daemon 起来了但 token 找不到).
+    if let Ok(raw) =
+        std::fs::read_to_string(home.join("Library/Application Support/P-Pass/config.toml"))
+    {
+        for line in raw.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("data_dir") {
+                let rest = rest.trim_start();
+                if let Some(val) = rest.strip_prefix('=') {
+                    let val = val.trim().trim_matches('"').trim();
+                    if !val.is_empty() {
+                        v.push(PathBuf::from(val).join("ipc.token"));
+                    }
+                }
+                break;
+            }
+        }
+    }
     v
 }
 
@@ -67,7 +89,7 @@ impl DaemonHandle {
         let mut reader = BufReader::new(conn);
 
         let req = json!({ "id": method, "method": method, "params": params });
-        let payload = format!("{}\n{}\n", self.token, req);
+        let payload = format!("{token}\n{req}\n", token = self.token);
         reader
             .get_mut()
             .write_all(payload.as_bytes())
@@ -86,6 +108,39 @@ impl DaemonHandle {
                 .as_str()
                 .unwrap_or("err.unsupported")
                 .to_string())
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wizard writes the user-picked library dir into config.toml's
+    /// data_dir, and the daemon puts ipc.token there. token_candidates
+    /// must include that path or a wizard-launched daemon is invisible
+    /// (T-042 实测: "点了没反应" = daemon 起来了但 token 找不到).
+    #[test]
+    fn candidates_include_config_data_dir() {
+        let home = std::env::var("HOME").unwrap();
+        let cfg_dir = PathBuf::from(&home).join("Library/Application Support/P-Pass");
+        let cfg = cfg_dir.join("config.toml");
+        let _ = std::fs::create_dir_all(&cfg_dir);
+        let original = std::fs::read_to_string(&cfg).ok();
+        std::fs::write(&cfg, "data_dir = \"/tmp/ppf-wizard-lib\"\n").unwrap();
+
+        let candidates = token_candidates();
+        assert!(
+            candidates.contains(&PathBuf::from("/tmp/ppf-wizard-lib/ipc.token")),
+            "candidates must include the config data_dir: {candidates:?}"
+        );
+
+        match original {
+            Some(s) => std::fs::write(&cfg, s).unwrap(),
+            None => {
+                let _ = std::fs::remove_file(&cfg);
+                let _ = std::fs::remove_dir(&cfg_dir);
+            }
         }
     }
 }

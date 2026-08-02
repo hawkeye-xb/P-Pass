@@ -23,7 +23,10 @@ fn daemon_online() -> bool {
 }
 
 /// First-run wizard state (T-042): configured = a config.toml exists in
-/// the platform data dir.
+/// the platform data dir; installed = the daemon has been registered as
+/// a resident service. A config without an installed service means the
+/// wizard was abandoned mid-way — route back into the wizard instead of
+/// dumping the user on a bare "start the service" screen (xixi 实测反馈 3).
 #[tauri::command]
 fn wizard_state() -> Value {
     use platform::PlatformAdapter as _;
@@ -31,8 +34,10 @@ fn wizard_state() -> Value {
     // Photos must land somewhere a person can FIND (real walkthrough:
     // "传到哪儿了" had no answer while the library hid in ~/Library).
     let pictures = dirs_pictures().join("P-Pass 家庭照片库");
+    let installed = platform::adapter().autostart_installed().unwrap_or(false);
     json!({
         "configured": dir.join("config.toml").exists(),
+        "installed": installed,
         "default_dir": pictures.to_string_lossy(),
     })
 }

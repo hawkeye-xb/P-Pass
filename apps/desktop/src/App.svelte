@@ -182,22 +182,28 @@
 <main>
   <header>
     <h1>P-Pass</h1>
-    <span class="badge" class:ok={online} class:bad={!online}>{stateLabel}</span>
+    {#if !(wizard && (!wizard.configured || !wizard.installed) && !online)}
+      <span class="badge" class:ok={online} class:bad={!online}>{stateLabel}</span>
+    {/if}
   </header>
 
   {#if message}
     <p class="message">{message}</p>
   {/if}
 
-  {#if wizard && !wizard.configured && !online}
+  {#if wizard && (!wizard.configured || !wizard.installed) && !online}
+    <!-- T-042: onboarding 进行中不展示"后台服务未运行"终态——服务本来
+         就要在这一步才被拉起，提前暴露只有困惑（xixi 实测反馈 1）。
+         配置写了但服务没注册 = wizard 中途退出，重进继续走 wizard
+         （xixi 实测反馈 3），而不是丢到"启动后台服务"裸界面。 -->
     <Wizard defaultDir={wizard.default_dir} onDone={() => { checkWizard(); refresh(); }} />
   {:else if !online}
     <section>
-      <p>后台服务没有在运行。</p>
+      <p>后台服务没有在运行。点下面的按钮启动它，启动后备份和配对就能用了。</p>
       <button class="primary" disabled={starting} onclick={startDaemonNow}>
         {starting ? "正在启动…" : "启动后台服务"}
       </button>
-      <p class="hint">启动后本窗口每 3 秒自动刷新。</p>
+      <p class="hint">启动后本窗口每 3 秒自动刷新；如果一直没反应，关闭 App 重新打开再点一次。</p>
     </section>
   {:else}
     <section>
