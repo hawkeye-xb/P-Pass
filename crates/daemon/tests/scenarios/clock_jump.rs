@@ -12,7 +12,9 @@ use storage::{Db, Device, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
 const T0: i64 = 1_800_000_000_000;
-const TOKEN_TTL_MS: i64 = 600_000;
+// 剧本断言生产常量本身（T-070b）：本地副本等于自己永远是恒真。若 TTL 变化，
+// 这里直接编译失败/断言失败，剧本不会悄悄失效。
+const TOKEN_TTL_MS: i64 = daemon::pairing::TOKEN_TTL_MS;
 
 async fn endpoint() -> IrohTransport {
     IrohTransport::bind(TransportConfig::loopback(vec![transport::ALPN_CTRL.into()]))
@@ -108,7 +110,13 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
     let mut token = [0u8; 32];
     token[0] = 7;
     let qr = pairing.start(token, T0);
-    let token_hex = qr.rsplit("&t=").next().unwrap().to_string();
+    // 解析 QR 里的 `t=` 参数——不能用 rsplit("&t=")（若 QR 未来带 `&a=` 地址
+    // 段，取末段会拿到地址而不是令牌，静默坏掉）。按查询参数语义解析。
+    let token_hex = qr
+        .split('&')
+        .find_map(|seg| seg.strip_prefix("t="))
+        .expect("QR must carry a t= token param")
+        .to_string();
 
     // 墙钟前跳 11 分钟（> TTL 600s）→ 令牌即时过期，配对被拒。
     clock.store(T0 + 11 * 60_000, Ordering::Relaxed);
@@ -126,6 +134,12 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
 
     // 钟恢复正常 → 过期在请求时评估（pairing.rs:140）：同一令牌当时只是
     // 被拒、未被消耗，现在重新有效——走通全链（自动确认 → 设备落表 → 审计）。
+    //
+    // ⚠️ 这是已知、故意的权衡（T-070b 注记）：令牌"过期在请求时评估"意味着
+    // NTP 回拨（系统时钟被拨回）会让已过期的 QR 复活。产品决策记录在案：
+    // 保留此语义（对合法用户友好——网络抖动/时钟误差不惩罚配对），不改为
+    // "过期即消耗"（那会让时钟误差直接杀掉一次配对尝试）。若未来要提高
+    // 安全性，选项是 pairing.rs 消费时检查过期并销毁令牌。
     clock.store(T0, Ordering::Relaxed);
     let resp = send_pair(&phone, dtp.node_id(), &token_hex, "跳钟设备重试").await;
     assert!(resp.ok, "expiry is evaluated per-request; a never-consumed token revives after the clock normalizes: {resp:?}");
