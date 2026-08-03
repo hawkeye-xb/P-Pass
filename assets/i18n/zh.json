@@ -57,5 +57,7 @@
   "ui.change_saved": "照片库位置已保存为 {dir}，重启后台服务后生效（旧照片仍在原位置）。",
   "ui.save_failed": "保存失败：{err}",
   "ui.logs_exported": "诊断包已导出（内容已脱敏，可放心外发）：{path}",
-  "ui.export_failed": "导出失败：{err}"
+  "ui.export_failed": "导出失败：{err}",
+  "ui.status": "状态",
+  "ui.library_dir_unknown": "后台服务还没报告库位置"
 }
