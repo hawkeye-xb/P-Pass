@@ -121,9 +121,43 @@ Options:
 2. **BUILD_INFO 确认**：`built from ea3bbf491252f9b1212533c51e8c1b253ed1ced7 on 2026-08-03T11:47:51Z` —— 构建源 commit 与 tag 所指向的 main HEAD 一致。
 3. **测试残留**：验证用 daemon 进程已 kill，无残留；验证全程用 `PPF_DATA_DIR=/tmp/ppf-daemon-verify` 隔离目录，**未触碰**真实库目录（`~/Library/Application Support/P-Pass`），无任何污染。
 
+## 复验（2026-08-03 21:5x，卡 4 pending 项闭环）
+
+审核文档 `docs/NEXT.md`（commit `cace31a`）标记「③ zip 自包含实测 ⏳ pending，需登录态下载 draft 资产」。
+**此 pending 由 Salamira 用本地 gh CLI 登录态（PAT: repo+workflow+read:org）直接闭环，无需人类补证：**
+
+```bash
+# draft release 对登录态 gh CLI 可见——资产清单即为结构化证据（等价截图）
+$ gh release view v0.2.0-test.3 --repo hawkeye-xb/P-Pass --json name,isDraft,assets \
+    --jq '{name, isDraft, assets: [.assets[].name]}'
+{"name":"P-Pass 0.2.0-test.3","isDraft":true,"assets":[
+ "BUILD_INFO-windows-x64","daemon.exe","ppass-macos-arm64.zip",
+ "SHA256SUMS-macos-arm64","SHA256SUMS-windows-x64","testclient.exe"]}
+
+# 下载 + 解压 + 结构检查
+$ gh release download v0.2.0-test.3 --repo hawkeye-xb/P-Pass -p ppass-macos-arm64.zip -p SHA256SUMS-macos-arm64
+$ unzip -q ppass-macos-arm64.zip && ls P-Pass/lib/          # 6 dylib ✓
+# libaom libde265 libheif libsharpyuv libvmaf libx265
+
+# sha256 与 release 资产 SUMS 逐字节一致
+$ shasum -a 256 P-Pass/daemon P-Pass/testclient
+244ac998d3a031b3b9ba29c02eb67178b0455f8185487237fe011572e427b3ac  P-Pass/daemon
+c97b1b6e60682c3b43b68106099566d8ce559045fdbffd505dfcb2d79eb41d4b  P-Pass/testclient
+# （与 SHA256SUMS-macos-arm64 完全一致）
+
+# daemon 自包含实测：隔离目录后台启动，观察就绪输出后 kill
+$ PPF_DATA_DIR=/tmp/rel-test3-check/ppf-home ./daemon
+身份密钥已铸造: /tmp/rel-test3-check/ppf-home/.ppf/identity.key
+INFO endpoint{id=b4e1cc5574}:relay-actor: home is now relay https://euc1-1.relay.n0.iroh.link./, was None
+# 进程 kill 后无残留
+```
+
+**同时执行了 NEXT.md 三-3（Linux Artifacts 手动触发同步 H-09b win-smoke.ps1）：**
+`gh workflow run 323546703` → run https://github.com/hawkeye-xb/P-Pass/actions/runs/30820666021（Windows job ~20min，完成后 bin-win-x64 分支的 win-smoke.ps1 即同步为 main 的 H-09b 修复版）。
+
 ## 结论
 
-**REL-test3 三验收项全部 PASS。** 发布流水线在 T-071b 修复（SHA-pin + per-platform 资产命名）后端到端全链绿，草稿资产 6 件齐整，产物自包含可运行。test.2→test.3 两轮连续全绿，flaky 疑云基本排除。
+**REL-test3 三验收项全部 PASS。** 发布流水线在 T-071b 修复（SHA-pin + per-platform 资产命名）后端到端全链绿，草稿资产 6 件齐整，产物自包含可运行。test.2→test.3 两轮连续全绿，flaky 疑云基本排除。**卡 4 pending 项已闭环（2026-08-03 21:5x，Salamira 复验）。**
 
 ---
 
