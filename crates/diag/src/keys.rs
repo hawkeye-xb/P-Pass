@@ -105,6 +105,8 @@ msg_keys! {
     UI_SAVE_FAILED => "ui.save_failed",
     UI_LOGS_EXPORTED => "ui.logs_exported",
     UI_EXPORT_FAILED => "ui.export_failed",
+    UI_STATUS => "ui.status",
+    UI_LIBRARY_DIR_UNKNOWN => "ui.library_dir_unknown",
 }
 
 #[cfg(test)]
@@ -173,10 +175,12 @@ mod tests {
             UI_SAVE_FAILED,
             UI_LOGS_EXPORTED,
             UI_EXPORT_FAILED,
+            UI_STATUS,
+            UI_LIBRARY_DIR_UNKNOWN,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 59);
+        assert_eq!(ALL.len(), 61);
     }
 
     #[test]

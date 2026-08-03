@@ -62,10 +62,6 @@ jobs:
       - name: Architecture enforcement
         run: bash tools/arch-check.sh
 
-      - name: Desktop shell src-tauri tests (T-042b, previously never ran in CI)
-        working-directory: apps/desktop/src-tauri
-        run: cargo test --lib
-
       - name: License and dependency audit
         run: cargo deny check advisories licenses bans
 
@@ -111,3 +107,41 @@ jobs:
           bash tools/scenarios/huge_file.sh
           bash tools/scenarios/crash_recovery.sh
           bash tools/scenarios/disk_full.sh
+
+  # T-042b: src-tauri tests get their own job — the desktop workspace's
+  # dependency tree is deliberately kept out of the main rust job
+  # (T-041 decision), and compiling tauri v2 on Linux needs webkit/gtk
+  # system packages the lean job doesn't install.
+  desktop:
+    name: desktop (src-tauri tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo (desktop workspace)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            apps/desktop/src-tauri/target/
+          key: ${{ runner.os }}-cargo-desktop-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+      - name: System deps (tauri v2 on Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      # tauri-build wants the sidecar file to exist; the lib tests never
+      # spawn it, so an empty stub is enough.
+      - name: Stub sidecar
+        working-directory: apps/desktop/src-tauri
+        run: |
+          mkdir -p binaries
+          touch binaries/ppf-daemon-x86_64-unknown-linux-gnu
+          chmod +x binaries/ppf-daemon-x86_64-unknown-linux-gnu
+      - name: src-tauri lib tests
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --lib

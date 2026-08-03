@@ -57,5 +57,7 @@
   "ui.change_saved": "Library location saved as {dir}; takes effect after the service restarts (old photos stay in place).",
   "ui.save_failed": "Failed to save: {err}",
   "ui.logs_exported": "Diagnostics exported (sanitized, safe to share): {path}",
-  "ui.export_failed": "Failed to export: {err}"
+  "ui.export_failed": "Failed to export: {err}",
+  "ui.status": "Status",
+  "ui.library_dir_unknown": "The background service has not reported the library location yet"
 }

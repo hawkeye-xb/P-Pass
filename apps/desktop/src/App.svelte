@@ -129,7 +129,7 @@
     try {
       const s = await call("status");
       const dir = s.library_dir;
-      if (!dir) throw new Error("后台服务还没报告库位置");
+      if (!dir) throw new Error(t("ui.library_dir_unknown"));
       // originals/ 是照片所在；库刚建还没照片时打开库根目录。
       try {
         await revealItemInDir(`${dir}/originals`);
@@ -216,7 +216,7 @@
     </section>
   {:else}
     <section>
-      <h2>状态</h2>
+      <h2>{t("ui.status")}</h2>
       <p>
         {t("ui.paired_count", { n: status.devices - status.revoked })}
         {#if status.revoked > 0}{t("ui.revoked_count", { n: status.revoked })}{/if}
