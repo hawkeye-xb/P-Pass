@@ -146,7 +146,9 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       regressions split to **T-042b**
 - [ ] T-062b update artifact verification + pinned pubkey (blocks any
       runtime update wiring)
-- [ ] H-09 Windows smoke — kit landed, assertions soft (**H-09b**),
+- [~] H-09 Windows smoke — kit landed; **H-09b code DONE 2026-08-03**
+      (tautology idempotency check fixed, revoke hard-fails, IPC Resp
+      asserted, try/finally daemon cleanup, ExitCode handle cache);
       real-box re-run pending
 - [ ] H-10 naive-user onboarding line (quickstart docs → cold-start
       walkthrough → human-grade release assets)
