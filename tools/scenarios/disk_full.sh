@@ -69,13 +69,23 @@ if [ "$BC" -eq 0 ]; then
   tail -5 backup.log
   exit 1
 fi
-# 硬证据：daemon 侧必须记录 ENOSPC（No space left）。
-if ! grep -qi "no space left" daemon.err; then
-  echo "FAIL: daemon.err 无 ENOSPC 证据（No space left）——故障未命中"
+# 硬证据两件套（CI 实测修正：iroh-blobs 的 fs store 把底层 ENOSPC 包装成
+# "Entity actor inbox is closed" / "local failure"，日志里不出现字面
+# "No space left"——错误文案不可依赖，物理证据才硬）：
+# ① 物理证据：tmpfs 使用率真的打满（备份残留的 staging/blob 还在盘上）。
+USEPCT=$(df "$TMPFS" | awk 'NR==2 {gsub("%","",$5); print $5}')
+if [ "${USEPCT:-0}" -lt 90 ]; then
+  echo "FAIL: tmpfs 使用率仅 ${USEPCT}%——磁盘没有真的被填满，故障未命中"
+  df "$TMPFS"
+  exit 1
+fi
+# ② 存储层失败签名：ENOSPC 原文（可能出现）或 iroh-blobs 的写失败包装。
+if ! grep -qiE "no space left|entity actor inbox is closed|local failure" daemon.err; then
+  echo "FAIL: daemon.err 无任何写失败证据（ENOSPC/entity actor/local failure 均无）"
   tail -5 daemon.err
   exit 1
 fi
-echo "   ✅ ENOSPC 已触发（daemon.err 有 No space left）"
+echo "   ✅ 磁盘满故障已实证（tmpfs ${USEPCT}% + daemon.err 写失败签名）"
 
 echo "── 4. daemon 必须还活着"
 kill -0 "$DAEMON_PID" 2>/dev/null || { echo "FAIL: daemon 在磁盘满时崩溃了"; tail -5 daemon.err; exit 1; }
