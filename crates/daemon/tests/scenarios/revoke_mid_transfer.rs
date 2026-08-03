@@ -1,6 +1,12 @@
-//! T-070 吊销中断传输剧本：owner 在备份会话进行中（manifest 已提交、
+//! T-070 吊销中断会话剧本：owner 在备份会话进行中（manifest 已提交、
 //! commit 尚未执行）吊销设备——传输在门禁处被切断：
 //! commit 拒 NOT_AUTHORIZED、水位不推进、零入库；后续任何请求全拒；daemon 健康。
+//!
+//! ⚠️ 命名诚实（T-070b）：本剧本实际覆盖的是 **revoke_before_commit**——
+//! 当前实现里 manifest→commit 之间没有字节在途（commit 由存储端拉取），
+//! "mid-transfer revoke" 的传输中字节场景尚无真实载体。卡面措辞保持
+//! revoke_before_commit，不夸大。若未来 upload 管线引入长传输，再扩展
+//! 为真正的 mid-upload 吊销。
 //!
 //! 架构语义（backup.rs:131 注释）：commit 一旦分发就跑到完、无二次鉴权——
 //! 所以"中断"发生在门禁：吊销落在 commit 分发前，整场传输被切且零残留。
@@ -102,7 +108,7 @@ fn item(hash_hex: &str, name: &str) -> BackupItem {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn revoke_cuts_inflight_session_at_the_gate() {
+async fn revoke_before_commit_cuts_session_at_the_gate() {
     let dir = tempfile::tempdir().unwrap();
     let (dtp, _daddr, db) = start_daemon(dir.path()).await;
     let client = Client::new(&dtp, dtp.node_id()).await;
