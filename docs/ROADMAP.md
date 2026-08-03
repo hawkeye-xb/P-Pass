@@ -148,8 +148,11 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       runtime update wiring)
 - [ ] H-09 Windows smoke — kit landed, assertions soft (**H-09b**),
       real-box re-run pending
-- [ ] H-10 naive-user onboarding line (quickstart docs → cold-start
-      walkthrough → human-grade release assets)
+- [~] H-10 naive-user onboarding line — **H-10a quickstart DONE
+      2026-08-03** (README en+zh "Get started in 10 minutes": download →
+      open → wizard → phone scan → first backup, AV links, screenshot
+      placeholders); H-10b cold-start + H-10c release assets pending
+      (after T-071b)
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
