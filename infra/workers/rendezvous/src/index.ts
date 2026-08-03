@@ -2,7 +2,7 @@
  * P-Pass rendezvous Worker (T-060) — short-code one-time envelope exchange.
  *
  * Routes:
- *   POST /code          body {code_hash, sealed} → 201 | 400 | 429
+ *   POST /code          body {code_hash, sealed} → 201 | 400 | 409 (hash already live) | 429
  *   GET  /code/:hash    → 200 {sealed} (read-once) | 404 | 410 | 400 | 429
  *   GET  /              health check
  *
