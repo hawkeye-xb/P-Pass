@@ -1,30 +1,54 @@
 #cloud-config
-# P-Pass official relay — VPS 初始化模板（T-064，占位符）
+# P-Pass official relay — VPS 初始化模板（T-064 / T-063b，占位符）
 # 用法：Hetzner/Vultr 创建服务器时粘贴本文件（或手动执行 runcmd）。
 # 真实域名/IP 由 H-07 填写；本模板只用 example 占位。
 #
-# ⚠️ 占位符清单（替换后再用）：
+# ⚠️ 占位符清单（替换后再用，替换后即含真实域名——**不要**提交到公开仓库）：
 #   RELAY_REGION   → us / eu / ap
 #   RELAY_DOMAIN   → relay-{region}.p-pass.hawkeye-xb.com
+#   RENDEZVOUS_DOMAIN → rendezvous.p-pass.hawkeye-xb.com（或自建域名）
+#
+# T-063b 实测修正：
+#   1. 建 .env：旧模板从不创建 .env，compose 解析 ${VAR:?} 直接崩。现在 cp + sed 双占位符。
+#   2. sed 重定向修正：旧模板 `sed -i ... > /dev/null` 把 -i 的编辑输出重定向掉且
+#      .env.example 里的占位符根本没被替换——现在 sed -i 就地编辑 .env。
+#   3. ufw 真正生效：旧模板只写 profiles 文件从不 allow/enable（"SSH+relay only"
+#      是空话）。现在显式 ufw allow + enable，且 enable 前先 allow ssh（防锁死）。
+#   4. 证书：certbot standalone 签 Manual 证书（relay 内置 LetsEncrypt 在 80/443
+#      被占时签不出，见 relay-config.example.toml 注释）。
+#   5. rendezvous Dockerfile 已换 glibc base（node:22-slim）——alpine 上 workerd
+#      spawn ENOENT（2026-08-03 VPS 实测）。
 
 package_update: true
 packages:
   - docker.io
   - docker-compose-v2
+  - certbot
 
 runcmd:
   - systemctl enable --now docker
   - git clone --depth 1 https://github.com/hawkeye-xb/P-Pass.git /opt/ppass
   - cd /opt/ppass/infra/selfhost
+  - cp .env.example .env
+  # 替换占位域名（真实值由 H-07 注入；.env 与 relay-config.toml 都要替换）
+  - sed -i 's/rendezvous.example.com/RENDEZVOUS_DOMAIN/g' .env
+  - sed -i 's/relay.example.com/RELAY_DOMAIN/g' .env
   - cp relay-config.example.toml relay-config.toml
-  # 替换占位域名（真实值由 H-07 注入）
   - sed -i 's/relay.example.com/RELAY_DOMAIN/g' relay-config.toml
-  - sed -i 's/relay.example.com/RELAY_DOMAIN/g' .env.example > /dev/null 2>&1 || true
-  # 本模板只起 relay（rendezvous/caddy 由官方 CF Workers 承担，见隔离方案）
+  # 证书：standalone 用 80（caddy 未起、80 空闲期签；caddy 起后续期走 webroot 或 DNS-01）
+  - certbot certonly --standalone --non-interactive --agree-tos -m ops@example.com -d RELAY_DOMAIN || true
+  # 本模板只起 relay（rendezvous/caddy 由官方 CF Workers 承担，见隔离方案）；
+  # 想全套自建就 `docker compose up -d --build`（rendezvous 需 glibc Dockerfile）
   - docker compose up -d relay
   - docker compose ps
+  # 防火墙：仅 SSH + relay 端口（T-063b：之前只写 profiles 从不 enable，现在真正生效）
+  - ufw allow ssh
+  - ufw allow 'P-Pass Relay'
+  - ufw allow 'P-Pass Web'
+  - ufw --force enable
+  - ufw status verbose
 
-# 防火墙：仅 SSH + relay 端口
+# 防火墙 profiles（给上面的 ufw allow 用）
 write_files:
   - path: /etc/ufw/applications.d/ppass-relay
     content: |
@@ -39,4 +63,4 @@ write_files:
       description=caddy http(s)
       ports=80/tcp|443/tcp
 
-final_message: "relay bootstrap done — verify: curl -sI https://RELAY_DOMAIN:8443"
+final_message: "relay bootstrap done — verify: curl -sI https://RELAY_DOMAIN:8443/healthz"

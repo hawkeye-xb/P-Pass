@@ -1,18 +1,23 @@
-# P-Pass 自建全套（T-063）— docker compose
+# P-Pass 自建全套（T-063 / T-063b）— docker compose
 #
 # 用法（详见 SELFHOST.md）：
-#   cp .env.example .env          # 编辑域名
-#   cp relay-config.example.toml relay-config.toml   # 编辑 relay hostname
+#   cp .env.example .env          # 编辑域名（可选：不建 .env 也能 up，见下）
+#   cp relay-config.example.toml relay-config.toml   # 编辑 relay 域名
 #   docker compose up -d --build
 #
 # 组件：
-#   relay      — iroh-relay 官方镜像（中继兜底，TLS=内置 LetsEncrypt，QUIC 7842）
+#   relay      — iroh-relay 官方镜像（中继兜底，TLS=Manual 证书，QUIC 7842）
 #   rendezvous — 配对会合 Worker（Miniflare/workerd 内核本地运行时，DO 语义与 CF 一致）
 #   caddy      — TLS 反代（rendezvous 域名 → 8787）
 #   pkarr      — Phase 2 自建发现，profile 提供，默认不开（当前客户端 QR 自带地址，零发现依赖）
 #
 # 端口布局（单 VPS 共存）：80/443 → caddy；8443 → relay HTTPS；7842/udp → relay QUIC。
 # relay URL 因此是 https://<relay 域名>:8443 —— 客户端 relay_urls 里写全。
+#
+# ⚠️ 证书（T-063b 实测修正）：relay 内置 LetsEncrypt 需要 80/443 做 ACME 挑战，
+# 而这两个端口被 caddy（或本机其他服务）占用，签不出证书。正确路径 = certbot
+# 单独签 Manual 证书（见 SELFHOST.md 第 5 步），relay 只读证书文件，不自己签发。
+# 默认配置已按 Manual 模式写好，照着 SELFHOST.md 走即可。
 
 name: ppass-selfhost
 
@@ -21,19 +26,22 @@ services:
     image: n0computer/iroh-relay:v1.0.3
     restart: unless-stopped
     ports:
-      - "8443:443"      # HTTPS relay endpoint（客户端 relay_urls 用 :8443）
+      - "8443:443"      # HTTPS relay endpoint（客户端 relay_urls 用 :8443；容器内 443 = config https_bind_addr）
       - "7842:7842/udp" # QUIC address discovery
-      - "8080:80"       # captive portal（健康检查用，可注释）
+      - "8080:80"       # captive portal（健康检查备用，可注释）
       # - "9090:9090"   # metrics（可选，Kuma/prometheus 抓取）
     volumes:
       - ./relay-config.toml:/etc/iroh-relay/config.toml:ro
-      - relay-certs:/etc/iroh-relay/certs   # LetsEncrypt 证书持久化
+      - /etc/letsencrypt:/etc/iroh-relay/certs:ro   # certbot 证书（Manual 模式）
     command: ["--config-path", "/etc/iroh-relay/config.toml"]
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:80/", ">", "/dev/null"]
+      # T-063b：CMD-SHELL（exec 数组会把 > /dev/null 当 wget URL）；
+      # 健康端点是 /healthz（/ 在 HTTP 上 404）；容器内 https 端口是 443。
+      test: ["CMD-SHELL", "wget -qO- --no-check-certificate https://127.0.0.1:443/healthz >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 3s
       retries: 3
+      start_period: 10s
 
   rendezvous:
     build:
@@ -50,7 +58,9 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      RENDEZVOUS_DOMAIN: ${RENDEZVOUS_DOMAIN:?set RENDEZVOUS_DOMAIN in .env}
+      # T-063b：给默认值——不建 .env 时 compose 也能解析（relay 单独部署不需要 caddy，
+      # 但 ${VAR:?} 会让整个文件解析失败）。真正跑 caddy 前必须设成真实域名。
+      RENDEZVOUS_DOMAIN: ${RENDEZVOUS_DOMAIN:-rendezvous.example.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -66,6 +76,5 @@ services:
   #   profiles: ["discovery"]
 
 volumes:
-  relay-certs:
   caddy-data:
   caddy-config:
