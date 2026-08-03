@@ -111,15 +111,33 @@ P4 desktop shell / 桌面壳
       routes video/* taps to the player. Streaming DataSource → M3
 - [ ] **Gate: one week of real family dogfood, 100 % backup completion**
 
-## M3 — Hardening / 硬化 ⬜
+## M3 — Hardening / 硬化 🔶 (code landed 2026-08-01~02; acceptance
+gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
-- [ ] T-070 failure scenarios automated (disk-full, 4 GB file, clock
-      jump, crash recovery, revoke mid-transfer)
-- [ ] T-060..T-064 cloud workers + self-host compose + relay scripts
+- [~] T-070 failure scenarios automated — code landed, acceptance
+      pending **T-070b** (disk-full never proves ENOSPC fired,
+      crash-recovery races a sleep, TTL guard asserts a local copy of
+      itself)
+- [~] T-060..T-064 cloud workers + self-host compose + relay scripts —
+      workers landed (rendezvous pending **T-060b**: alarm starvation,
+      duplicate-POST overwrite, overstated security claim); selfhost/
+      relay templates pending **T-063b**: reproduced doc-path failures,
+      must close the loop on a real VPS
 - [ ] H-07 self-hosted relay A/B (**priority raised** — unshipped relay
-      domains proven harmful in dogfood smoke)
-- [ ] T-071 release workflow + attestation
-- [ ] T-072 i18n completeness + AV-block guide
+      domains proven harmful in dogfood smoke); merge T-063b into this
+- [~] T-071 release workflow + attestation — pipeline runs end-to-end
+      (draft v0.2.0-test.1), acceptance pending **T-071b** supply-chain
+      hardening (job-level signing secrets + unpinned actions); no
+      user-facing release before T-071b
+- [~] T-072 i18n completeness + AV-block guide — landed; small fixes
+      in **T-072b** (doc drift, zh-only docs); desktop badge
+      regressions split to **T-042b**
+- [ ] T-062b update artifact verification + pinned pubkey (blocks any
+      runtime update wiring)
+- [ ] H-09 Windows smoke — kit landed, assertions soft (**H-09b**),
+      real-box re-run pending
+- [ ] H-10 naive-user onboarding line (quickstart docs → cold-start
+      walkthrough → human-grade release assets)
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
