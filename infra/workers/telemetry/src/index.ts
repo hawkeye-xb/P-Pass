@@ -1,13 +1,14 @@
 /**
- * P-Pass telemetry intake Worker (T-061).
+ * P-Pass telemetry intake Worker (T-061 / T-061b).
  *
- * POST  /  body: JSON array of telemetry events (client wire format,
- *              crates/daemon/src/telemetry.rs) → 200 {accepted} | 400 | 413
+ * POST  /ingest  body: JSON array of telemetry events (client wire format,
+ *              crates/daemon/src/telemetry.rs) → 200 {accepted} | 400 | 404 | 413
  * GET   /  health check
  *
  * Strict zod validation per 手册 §8 dictionary; unknown event types or fields
- * are rejected (400). Oversized bodies are rejected (413). Valid batches are
- * written to Analytics Engine (`TELEMETRY` binding), indexed by event type.
+ * are rejected (400). Only the fixed /ingest path accepts POSTs (T-061b).
+ * Oversized bodies are rejected (413). Valid batches are written to Analytics
+ * Engine (`TELEMETRY` binding), indexed by event type.
  */
 
 import { AnalyticsEngineDataset } from "@cloudflare/workers-types";
@@ -34,6 +35,12 @@ export default {
 
     if (request.method !== "POST") {
       return json({ error: "method_not_allowed" }, 405);
+    }
+
+    // T-061b: only the fixed /ingest path accepts batches — any other path
+    // (including /) must not silently swallow events on a typo'd URL.
+    if (url.pathname !== "/ingest") {
+      return json({ error: "not_found" }, 404);
     }
 
     // Size gate first: never buffer an unbounded body.
