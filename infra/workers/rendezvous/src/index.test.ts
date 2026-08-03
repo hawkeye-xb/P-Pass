@@ -1,4 +1,6 @@
-import { SELF } from "cloudflare:test";
+import { SELF, env, runInDurableObject } from "cloudflare:test";
+import { CodeStore } from "./code-store";
+import type { Env } from "./code-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 // T-060 acceptance: 存取 / 过期 / 5 次销毁 三用例 + 单测绿。
@@ -81,6 +83,23 @@ describe("rendezvous worker (T-060)", () => {
     restore();
   });
 
+  it("5次销毁: wrong-window rollover recovers the IP", async () => {
+    const restore = fakeNow(180); // fresh windows
+    await postCode();
+    for (let i = 0; i < 5; i++) {
+      const r = await SELF.fetch(`https://rendezvous.local/code/${WRONG}`);
+      expect(r.status).toBe(404);
+    }
+    const blocked = await SELF.fetch(`https://rendezvous.local/code/${HASH_A}`);
+    expect(blocked.status).toBe(429);
+    // Next 60 s window: counters reset, the IP is usable again.
+    fakeNow(240); // 180 + 60 → rolls into the next window
+    const recovered = await SELF.fetch(`https://rendezvous.local/code/${HASH_A}`);
+    expect(recovered.status).toBe(200);
+    expect(await recovered.json()).toEqual({ sealed: SEALED });
+    restore();
+  });
+
   it("限频: POST is limited to 10/min per IP", async () => {
     const restore = fakeNow(240); // fresh rate windows
     for (let i = 0; i < 10; i++) {
@@ -90,6 +109,85 @@ describe("rendezvous worker (T-060)", () => {
     const eleventh = await postCode(`e`.repeat(64));
     expect(eleventh.status).toBe(429);
     restore();
+  });
+
+  it("限频: GET is limited to 30/min per IP", async () => {
+    const restore = fakeNow(300); // fresh rate windows
+    await postCode();
+    for (let i = 0; i < 30; i++) {
+      // Alternate reads: 1×200 then 29×410 (read-once) — all count toward the
+      // GET budget, none are "wrong" lookups.
+      const r = await SELF.fetch(`https://rendezvous.local/code/${HASH_A}`);
+      expect([200, 410]).toContain(r.status);
+    }
+    const thirtyFirst = await SELF.fetch(`https://rendezvous.local/code/${HASH_A}`);
+    expect(thirtyFirst.status).toBe(429);
+    restore();
+  });
+
+  it("重复 POST: live unconsumed hash → 409, consumed/expired may be reused", async () => {
+    const restore = fakeNow(360); // fresh rate windows
+    // First POST lands.
+    const first = await postCode(HASH_A, SEALED);
+    expect(first.status).toBe(201);
+    // Duplicate POST of the same live hash must NOT silently overwrite
+    // (cross-family envelope swap hazard) → 409, original preserved.
+    const dup = await postCode(HASH_A, "c2Vjb25kLWVudmVsb3Bl");
+    expect(dup.status).toBe(409);
+    const got = await SELF.fetch(`https://rendezvous.local/code/${HASH_A}`);
+    expect(got.status).toBe(200);
+    expect(await got.json()).toEqual({ sealed: SEALED });
+    // Consumed (opened) → hash is free to reuse.
+    const again = await SELF.fetch(`https://rendezvous.local/code/${HASH_A}`);
+    expect(again.status).toBe(410);
+    const reopen = await postCode(HASH_A, "c2Vjb25kLWVudmVsb3Bl");
+    expect(reopen.status).toBe(201);
+    const reopened = await SELF.fetch(`https://rendezvous.local/code/${HASH_A}`);
+    expect(reopened.status).toBe(200);
+    expect(await reopened.json()).toEqual({ sealed: "c2Vjb25kLWVudmVsb3Bl" });
+    // Expired (never consumed) → hash is free to reuse as well.
+    const HASH_F = "f".repeat(64);
+    const stale = await postCode(HASH_F, SEALED);
+    expect(stale.status).toBe(201);
+    fakeNow(360 + 601); // past the 600 s TTL, fresh rate window too
+    const replace = await postCode(HASH_F, "dGhpcmQtZW52ZWxvcGU");
+    expect(replace.status).toBe(201);
+    const replaced = await SELF.fetch(`https://rendezvous.local/code/${HASH_F}`);
+    expect(replaced.status).toBe(200);
+    expect(await replaced.json()).toEqual({ sealed: "dGhpcmQtZW52ZWxvcGU" });
+    restore();
+  });
+
+  it("alarm sweep: expired codes are swept and the alarm is re-armed", async () => {
+    const store = (env as unknown as Env).CODE_STORE.get(
+      (env as unknown as Env).CODE_STORE.idFromName("global"),
+    );
+    // Directly seed two records with known expiries — no fake-clock coupling
+    // (vitest fake timers don't reliably forward into the DO under full-suite
+    // runs; seeding + injecting nowSec makes the sweep test deterministic).
+    await runInDurableObject(store, async (instance, state) => {
+      const now = Math.floor(Date.now() / 1000);
+      await state.storage.put(`code:${HASH_A}`, {
+        sealed: SEALED,
+        expiresAt: now - 1, // already expired
+        opened: false,
+      });
+      await state.storage.put(`code:${HASH_B}`, {
+        sealed: "c2Vjb25kLWVudmVsb3Bl",
+        expiresAt: now + 300, // still live
+        opened: false,
+      });
+      // Drive the sweep as the runtime would (alarm fires at the earliest
+      // expiry). Clock injected explicitly — same seam as the Rust with_clock.
+      const inst = instance as unknown as CodeStore;
+      await inst.sweep(now);
+      const keys = [...(await state.storage.list({ prefix: "code:" })).keys()];
+      expect(keys).toContain(`code:${HASH_B}`);
+      expect(keys).not.toContain(`code:${HASH_A}`);
+      // Re-armed at B's expiry +1s — not pushed forward forever.
+      const alarmMs = await state.storage.getAlarm();
+      expect(alarmMs).toBe((now + 300 + 1) * 1000);
+    });
   });
 
   it("validation: malformed payloads are rejected with 400", async () => {
