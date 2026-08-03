@@ -92,13 +92,41 @@ export interface DataPoint {
   blobs?: string[];
 }
 
-/** Lossless, queryable mapping: full event as blob + numerics as doubles. */
+/**
+ * Lossless, queryable mapping: full event as blob + numerics as doubles.
+ *
+ * T-061b: doubles use a FIXED per-event-type column layout. The old
+ * implementation iterated `Object.entries(event)` in client field order, so
+ * an absent optional field shifted every subsequent column (e.g. `conn`
+ * without `fail_stage` landed in a different double position) — `double2`
+ * had no stable meaning and queries broke silently. Now each event type maps
+ * to a fixed double array with zero-padding for absent optional fields:
+ *
+ *   conn          → [ts, ms]
+ *   backup_session→ [ts, files, bytes, dur_s]
+ *   first_byte    → [ts, ms]
+ *   daemon_alive  → [ts, uptime_h]
+ *
+ * Column semantics are therefore stable: double1=ts, double2=ms|files|uptime_h,
+ * double3=bytes, double4=dur_s. Add new numeric fields at the END of a type's
+ * array only.
+ */
 export function toDataPoint(event: ParsedEvent): DataPoint {
-  const doubles: number[] = [];
-  for (const [k, v] of Object.entries(event)) {
-    if (typeof v === "number") {
-      doubles.push(v); // ts + ms/files/bytes/dur_s/uptime_h
-    }
+  const t = event.ts;
+  let doubles: number[];
+  switch (event.event) {
+    case "conn":
+      doubles = [t, event.ms];
+      break;
+    case "backup_session":
+      doubles = [t, event.files, event.bytes, event.dur_s];
+      break;
+    case "first_byte":
+      doubles = [t, event.ms];
+      break;
+    case "daemon_alive":
+      doubles = [t, event.uptime_h];
+      break;
   }
   return {
     indexes: [event.event],
