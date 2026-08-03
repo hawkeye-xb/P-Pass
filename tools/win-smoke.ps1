@@ -62,11 +62,13 @@ function Stop-Daemon {
 # 契约见 crates/daemon/src/ipc.rs 顶部注释。每次调用新建连接：
 #   连接 \\.\pipe\$sockName → 第一行发原始令牌 → 每行一个 Req（id 为字符串）
 #   → 读一行 Resp。无超时选项会永久挂起，故 Connect 带 5s 超时。
-#   ⚠️ PS 5.1 硬坑（实测）：NamedPipeClientStream 必须用裸名 $sockName，
-#   全路径 \\.\pipe\ 前缀会导致 Connect(5000) 超时抛异常。
+#   ⚠️ NamedPipeClientStream 的 pipeName 参数只传裸名 $sockName：构造函数
+#   自动拼 \\.\pipe\ 前缀（.NET 管道 API 既有契约，非 PS 5.1 bug）；把
+#   全路径当 pipeName 传入会让 .NET Framework 解析出错误的管道，
+#   Connect(5000) 超时抛异常（H-09b 实测）。
 function Invoke-Ipc([string]$method, [string]$paramsJson) {
     $payload = '{"id":"smoke","method":"' + $method + '","params":' + $paramsJson + '}'
-    $pipePath = $sockName   # 裸名！.NET Framework 下带 \\.\pipe\ 前缀 Connect 超时
+    $pipePath = $sockName   # 裸名！pipeName 参数不带 \\.\pipe\ 前缀（构造函数自动拼；见上注释）
     $client = New-Object System.IO.Pipes.NamedPipeClientStream(".", $pipePath, [System.IO.Pipes.PipeDirection]::InOut)
     try {
         $client.Connect(5000)   # PS 5.1 无超时则永久挂起——必须显式
