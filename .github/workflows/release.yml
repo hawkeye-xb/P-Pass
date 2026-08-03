@@ -102,8 +102,10 @@ jobs:
           security unlock-keychain -p pp "$KEYCHAIN"
           security import "$CERT_P12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -s -k pp "$KEYCHAIN" >/dev/null
+          # find-identity -v 第 1 行是身份（"1) <hash> \"...\""），第 2 行是
+          # "N valid identities found" 汇总——取 NR==1 才是证书哈希。
           /usr/bin/codesign --force --options runtime --timestamp \
-            --sign "$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==2{print $2}')" \
+            --sign "$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')" \
             /tmp/rel/daemon /tmp/rel/testclient
           echo "signed=yes" >> "$GITHUB_OUTPUT"
 
@@ -149,19 +151,35 @@ jobs:
       - name: SHA256 + notes
         run: |
           cd /tmp/rel
-          shasum -a 256 daemon testclient > SHA256SUMS
-          cat SHA256SUMS
+          shasum -a 256 daemon testclient > SHA256SUMS-macos-arm64
+          cat SHA256SUMS-macos-arm64
 
       - name: SLSA attestation
         uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
         with:
           subject-path: /tmp/rel/daemon, /tmp/rel/testclient
 
+      # 整包 zip：daemon 的 rpath 已被 bundle-macos.sh 改写到
+      # @executable_path/lib——裸二进制离开 lib/ 跑不起来，release 资产
+      # 必须是带 lib/ 的自包含包（review 抓到的功能回退）。zip 同时解决
+      # 双平台 SHA256SUMS/BUILD_INFO 资产 basename 冲突（gh 上传 422）。
+      - name: Pack self-contained zip
+        run: |
+          set -euo pipefail
+          cd /tmp && rm -rf P-Pass && cp -R rel P-Pass
+          ditto -c -k --keepParent P-Pass ppass-macos-arm64.zip
+          # zip 挪进 rel/：让 upload-artifact 的两个 path 共享同一根目录，
+          # 下载解包后是平铺的 macos-arm64/<file>（否则公共祖先是 /tmp，
+          # SHA256SUMS 会带上 rel/ 前缀，release 上传步路径对不上）。
+          mv ppass-macos-arm64.zip rel/
+
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-arm64
-          path: /tmp/rel
+          path: |
+            /tmp/rel/ppass-macos-arm64.zip
+            /tmp/rel/SHA256SUMS-macos-arm64
 
   windows-x64:
     name: "Windows x64 (未签名)"
@@ -206,9 +224,9 @@ jobs:
         shell: bash
         run: |
           cd target/release
-          sha256sum daemon.exe testclient.exe > SHA256SUMS
-          cat SHA256SUMS
-          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
+          sha256sum daemon.exe testclient.exe > SHA256SUMS-windows-x64
+          cat SHA256SUMS-windows-x64
+          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO-windows-x64
 
       - name: SLSA attestation
         uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
@@ -222,8 +240,8 @@ jobs:
           path: |
             target/release/daemon.exe
             target/release/testclient.exe
-            target/release/SHA256SUMS
-            target/release/BUILD_INFO
+            target/release/SHA256SUMS-windows-x64
+            target/release/BUILD_INFO-windows-x64
 
   release:
     name: "Release 草稿"
@@ -232,7 +250,9 @@ jobs:
     permissions:
       contents: write
     env:
-      VT_API_KEY: ${{ secrets.VT_API_KEY }}
+      # 只放布尔（不含 secret 值）：job 级 env 会暴露给本 job 每个第三方
+      # action 的进程环境——secret 本体下沉到 VT step（Apple secrets 同款模式）。
+      HAS_VT: ${{ secrets.VT_API_KEY != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -258,16 +278,23 @@ jobs:
           **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（无凭据路径跳过）/ Windows=no（Authenticode 证书 H-02 范畴）
 
           ### 验证（被拦截/不信任时先做这三步）
-          - 下载每平台附带的 SHA256SUMS 资产（certutil/shasum 对照）
-          - Release 页的 Provenance 面板（SLSA attestation）
+          - 下载每平台的 SHA256SUMS-\<platform\> 资产（certutil/shasum 对照）
+          - \`gh attestation verify <下载的文件> -R ${GITHUB_REPOSITORY}\`
+            （SLSA provenance，macOS 对 zip 解出的 daemon/testclient 执行）
           - 源码可查：构建流程 .github/workflows/release.yml
+
+          macOS 包为自包含 zip（含 lib/ 依赖库）——解压后整个 P-Pass
+          目录一起用，勿单独拷出二进制。
 
           被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md
           EOF
 
       - name: VirusTotal 提交（gated，卡面 VT 步——支持 blocked-by-av 信誉建设）
-        if: env.VT_API_KEY != ''
+        if: env.HAS_VT == 'true'
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
         run: |
+          set -euo pipefail
           EXE="artifacts/windows-x64/daemon.exe"
           [ -f "$EXE" ] || exit 0
           ID=$(curl -sf -X POST -H "x-apikey: $VT_API_KEY" \
@@ -289,6 +316,7 @@ jobs:
         run: |
           cd artifacts
           gh release upload "$TAG" \
-            macos-arm64/daemon macos-arm64/testclient macos-arm64/SHA256SUMS macos-arm64/BUILD_INFO \
-            windows-x64/daemon.exe windows-x64/testclient.exe windows-x64/SHA256SUMS windows-x64/BUILD_INFO
+            macos-arm64/ppass-macos-arm64.zip macos-arm64/SHA256SUMS-macos-arm64 \
+            windows-x64/daemon.exe windows-x64/testclient.exe \
+            windows-x64/SHA256SUMS-windows-x64 windows-x64/BUILD_INFO-windows-x64
           echo "assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
