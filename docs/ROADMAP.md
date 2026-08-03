@@ -169,8 +169,12 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       constant + existence test; tamper test rewritten; manifest example
       covers all 5 platforms; 19/19 tests green — review PASS, two
       non-blocking notes on the T-071 real-key follow-up)
-- [ ] H-09 Windows smoke — kit landed, assertions soft (**H-09b**),
-      real-box re-run pending
+- [~] H-09 Windows smoke — kit landed; **H-09b code DONE 2026-08-03**
+      (tautology idempotency check fixed, revoke hard-fails, IPC Resp
+      asserted, try/finally daemon cleanup, ExitCode handle cache;
+      attribution corrected: bare pipe name = .NET ctor contract) —
+      real-box re-run pending (**H-09b-verify**, with fault-inversion
+      proof)
 - [ ] H-10 naive-user onboarding line (quickstart docs → cold-start
       walkthrough → human-grade release assets)
 - [ ] **Gate: 5–10 household private beta, 2 weeks**

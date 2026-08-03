@@ -55,8 +55,8 @@ powershell -ExecutionPolicy Bypass -File win-smoke.ps1
 |---|---|
 | IPC socket 路径 | **Windows 命名管道 `\\.\pipe\ppf-<NodeId前8hex>`**（不是 AF_UNIX 文件 socket）。ipc.token 两行：行1 = socket 名（如 `ppf-e4863927`），行2 = 32B 令牌 hex |
 | IPC 协议契约 | 客户端**第一行发原始令牌**，随后 newline-delimited JSON（每行一个 Req 对应一行 Resp）；`Req.id` 是**字符串**；方法有 `status/pairing.start/pairing.confirm/devices.list/device.revoke/folder.set/logs.export`（**没有** `pairing.revoke`） |
-| PS 5.1 硬坑 ① | **NamedPipeClientStream 必须用裸名** `$sockName`——带 `\\.\pipe\` 全路径前缀会 Connect(5000) 超时抛异常（实测：裸名秒连并拿真实响应） |
-| PS 5.1 硬坑 ② | `Start-Process -PassThru` + 重定向输出时 `$pair.ExitCode` **恒为 null**（HasExited=True 也没用，Refresh/WaitForExit() 无参一样）——成功判据必须用 pair.log 文案（显式 UTF-8 读取），退出码仅展示 |
+| NamedPipeClientStream 连接（.NET 构造函数契约，非 PS bug） | `NamedPipeClientStream(serverName, pipeName, …)` 的 `pipeName` 参数**只传裸名** `$sockName`——构造函数自动拼 `\\.\pipe\` 前缀（这是 .NET 管道 API 的既有契约，不是 PS 5.1 特有的行为）。若把 `\\.\pipe\` 全路径当 `pipeName` 传入，.NET Framework 会把它解析成错误的管道路径，`Connect(5000)` 超时抛异常（实测：裸名秒连并拿真实响应） |
+| 子进程 ExitCode（handle-cache 方案） | `Start-Process -PassThru` + 重定向输出时 `$pair.ExitCode` 若直接读会拿不到可靠值；标准修法是在 `WaitForExit` 前先 `$null = $proc.Handle` 缓存句柄，之后 `ExitCode` 可读（win-smoke.ps1 已按此实现；不再匹配 pair.log 中文文案） |
 | 中文编码 | **必须 UTF-8 BOM 保存**——PS 5.1 无 BOM 按 GBK 解析中文引号直接 ParserError；修复版脚本已带 BOM（合入/编辑时勿丢失） |
 | Defender 拦截 | 实时保护开启但威胁记录 0，未拦截；daemon.exe 未签名（NotSigned）正常执行 |
 | daemon 控制台行为 | 无窗口启动（脚本用 Hidden）；stdout 打启动横幅（NodeId → QR 10 分钟有效 → IPC 行）；stderr 走 tracing（UTC+ANSI+模块 target），含 `stdin closed — pairing confirmation is IPC-only from here` |
