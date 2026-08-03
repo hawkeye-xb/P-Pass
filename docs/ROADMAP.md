@@ -163,8 +163,12 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       temp dir + wired into CI, StringsSymmetryTest real XML parser) —
       vite build + src-tauri 2/2 + diag 8/8 + Android strings green;
       three-state walkthrough pending user pass
-- [ ] T-062b update artifact verification + pinned pubkey (blocks any
-      runtime update wiring)
+- [x] T-062b update artifact verification + pinned pubkey — **DONE
+      2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
+      parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY
+      constant + existence test; tamper test rewritten; manifest example
+      covers all 5 platforms; 19/19 tests green — review PASS, two
+      non-blocking notes on the T-071 real-key follow-up)
 - [ ] H-09 Windows smoke — kit landed, assertions soft (**H-09b**),
       real-box re-run pending
 - [ ] H-10 naive-user onboarding line (quickstart docs → cold-start
