@@ -10,6 +10,77 @@ any time.
 
 **Roadmap & status: [docs/ROADMAP.md](docs/ROADMAP.md)**
 
+## Get started in 10 minutes (no technical knowledge needed)
+
+> **Who this is for**: you are not a developer, you don't care about any of
+> the engineering below — you just want your phone photos to back up to
+> your home computer. Follow these steps in order and you're done.
+
+> 写给谁：你不是开发者，下面的工程细节一概不用看——你只想让手机照片
+> 自动备份到家里的电脑。按顺序照做即可。
+
+### 1. Download & install on your computer / 电脑上装
+
+1. Go to the latest [release page](https://github.com/hawkeye-xb/P-Pass/releases)
+   and download the file for your computer (macOS: the `.dmg`; Windows: the
+   `.zip`). If a security popup blocks you, follow
+   [Blocked by AV / SmartScreen](docs/troubleshooting/blocked-by-av.md) — it
+   tells you exactly how to verify the file and let it run.
+   打开最新 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)，
+   下载对应你电脑的文件（macOS 选 `.dmg`，Windows 选 `.zip`）。如果安全
+   弹窗拦截，按[被拦截了怎么办](docs/troubleshooting/blocked-by-av.md)
+   处理——里面有验证和放行的具体步骤。
+2. Open the downloaded file and drag **P-Pass** into your Applications
+   folder (macOS), or unzip and run the installer (Windows).
+   打开下载的文件，把 **P-Pass** 拖进「应用程序」文件夹（macOS），或
+   解压后运行安装程序（Windows）。
+3. Double-click **P-Pass** to open it. macOS first time: right-click the
+   app → Open (one-time; see the AV guide above if Gatekeeper complains).
+   双击 **P-Pass** 打开。macOS 首次：右键点 App → 打开（一次性；Gatekeeper
+   拦截见上面的拦截指南）。
+
+[截图: 应用打开后的主界面（含配对二维码）]
+
+### 2. Follow the 3-step wizard / 三步向导
+
+The app walks you through it — just click through:
+
+1. Choose where your photos will live on this computer (the folder P-Pass
+   will keep them in). / 选择照片要存放的文件夹
+2. It starts the background service (your computer will keep P-Pass
+   running quietly). / 启动后台服务
+3. A QR code appears on screen. / 屏幕上出现配对二维码
+
+[截图: 向导三步的界面（选文件夹 → 启动服务 → 显示二维码）]
+
+### 3. Install the app on your phone and scan / 手机装 App 并扫码
+
+1. On the same [release page](https://github.com/hawkeye-xb/P-Pass/releases),
+   download the phone app (Android: the `.apk`). Android may warn about
+   installing from an unknown source — that's normal for a direct download;
+   allow it. (iPhone version is coming later.)
+   在同一个 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)
+   下载手机 App（Android 选 `.apk`）。Android 会提示"未知来源安装"——直接
+   下载的正常提示，允许即可。（iPhone 版后续推出。）
+2. Open the P-Pass app on your phone and scan the QR code on your computer
+   screen. Your computer will ask you to approve the pairing — tap
+   **Allow**. / 打开手机上的 P-Pass，扫电脑屏幕上的二维码。电脑会弹出配对
+   确认——点**允许**。
+3. Done — your phone now backs up automatically (when charging and on
+   Wi-Fi). Open the app any time to browse the family photo timeline.
+   完成——手机从此自动备份（充电 + Wi-Fi 时）。随时打开 App 就能浏览全家
+   照片时间线。
+
+[截图: 手机扫码配对成功的界面（时间线视图）]
+
+> **Trouble?** Most first-run issues are the security popups — see
+> [Blocked by AV / SmartScreen](docs/troubleshooting/blocked-by-av.md).
+> Everything else: open an issue on GitHub.
+> 遇到问题？多数是安全弹窗——见[被拦截了怎么办](docs/troubleshooting/blocked-by-av.md)。
+> 其他问题到 GitHub 提 issue。
+
+---
+
 ## Monorepo layout (every client lives in this one repo)
 
 ```
