@@ -41,16 +41,18 @@ loop + release pipeline land with T-071.
   version with strict SemVer rules (pre-releases sort below releases).
 - `platforms` — keys are `{os}-{arch}` with the canonical arch names
   `arm64` / `x64` (map from Rust's `aarch64` / `x86_64`).
-- `sha256` — hex SHA-256 of the artifact; verified after download.
+- `sha256` — hex SHA-256 of the artifact; validated at parse time (exactly
+  64 hex chars) and verified after download.
 - `signature` (per artifact) — base64 Ed25519 signature over the artifact
-  bytes, Tauri-updater style. Optional at this stage (filled by T-071 release
-  pipeline), but the schema reserves it.
+  bytes, Tauri-updater style. **Required** (T-062b): a missing or empty
+  signature is a hard parse error — nothing is installable unsigned.
 
 `version` 为 SemVer，客户端按严格 SemVer 规则比较（预发布低于正式版）。
 `platforms` 键为 `{os}-{arch}`，架构名统一 `arm64`/`x64`（对应 Rust 的
-`aarch64`/`x86_64`）。`sha256` 为产物十六进制 SHA-256，下载后校验。
-`signature`（每个产物）为产物字节的 base64 Ed25519 签名，Tauri-updater 风格；
-当前阶段可选（由 T-071 发布管线填充），schema 预留。
+`aarch64`/`x86_64`）。`sha256` 为产物十六进制 SHA-256，解析期校验（恰 64 位
+hex）且下载后校验。`signature`（每个产物）为产物字节的 base64 Ed25519 签名，
+Tauri-updater 风格；**必填**（T-062b）——缺失或空签名是硬解析错误，未签名
+产物不可安装。
 
 ## Signing convention / 签名约定
 
@@ -92,10 +94,13 @@ client poll interval). Production config lives in the private ops repo.
 - `Manifest::parse(bytes)` — strict parse, unknown fields rejected
 - `is_newer(current, candidate)` — strict SemVer comparison
 - `verify_manifest(bytes, sig, pubkey)` — Ed25519 verify (strict)
+- `verify_artifact(bytes, artifact, pubkey)` — SHA-256 digest + per-artifact
+  Ed25519 signature, both enforced (T-062b)
 - `check_update(manifest, sig, pubkey, current, os, arch)` — verify → parse →
   newer? → platform artifact, returns `UpdateInfo` or `None`
 
 `crates/daemon/src/update.rs` 提供（纯函数，单测覆盖）：`Manifest::parse`（严格
 解析，未知字段拒绝）、`is_newer`（严格 SemVer 比较）、`verify_manifest`
-（Ed25519 严格验签）、`check_update`（验签→解析→比较→平台产物，返回
+（Ed25519 严格验签）、`verify_artifact`（SHA-256 摘要 + 逐工件 Ed25519 签名，
+双强制，T-062b）、`check_update`（验签→解析→比较→平台产物，返回
 `UpdateInfo` 或 `None`）。
