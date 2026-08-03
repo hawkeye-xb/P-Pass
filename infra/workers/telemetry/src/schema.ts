@@ -1,5 +1,5 @@
 /**
- * Telemetry schema + ingestion (T-061).
+ * Telemetry schema + ingestion (T-061 / T-061b).
  *
  * Wire format comes from the Rust client (crates/daemon/src/telemetry.rs,
  * T-035): a JSON ARRAY of flat event objects. Every object carries the common
@@ -11,7 +11,9 @@
  *
  * Analytics Engine mapping (documented, queryable):
  * - indexes: [event]            → GROUP BY event type
- * - doubles: ts + every numeric field (ms/files/bytes/dur_s/uptime_h)
+ * - doubles: FIXED per-event-type columns (T-061b) — double1=ts, then
+ *   ms|files|uptime_h, bytes, dur_s; absent optional fields are zero-padded
+ *   so columns never shift. See toDataPoint.
  * - blobs:   the full event JSON (self-describing, lossless)
  */
 
@@ -93,7 +95,17 @@ export interface DataPoint {
 }
 
 /**
- * Lossless, queryable mapping: full event as blob + numerics as doubles.
+ * Exhaustiveness guard (T-061b-fix): the switch in toDataPoint must cover
+ * every event type in batchSchema. If someone adds a new event schema to the
+ * discriminated union but forgets the toDataPoint case, `event.event` in the
+ * default branch stops being `never` and this call fails to compile — a loud
+ * type error instead of a silent `doubles = undefined` in production.
+ */
+function assertNever(value: never): never {
+  throw new Error(`unhandled telemetry event type: ${String(value)}`);
+}
+
+/** Lossless, queryable mapping: full event as blob + numerics as doubles.
  *
  * T-061b: doubles use a FIXED per-event-type column layout. The old
  * implementation iterated `Object.entries(event)` in client field order, so
@@ -127,6 +139,8 @@ export function toDataPoint(event: ParsedEvent): DataPoint {
     case "daemon_alive":
       doubles = [t, event.uptime_h];
       break;
+    default:
+      return assertNever(event);
   }
   return {
     indexes: [event.event],
