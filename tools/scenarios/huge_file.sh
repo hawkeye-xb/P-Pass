@@ -25,6 +25,7 @@ cleanup() { kill "$DAEMON_PID" 2>/dev/null || true; }
 trap cleanup EXIT
 
 PPF_DATA_DIR="$WORK/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
+  PPF_BIND_ADDR="0.0.0.0:0" \
   "$DAEMON" > daemon.log 2> daemon.err &
 DAEMON_PID=$!
 for _ in $(seq 1 50); do grep -q 'ppf://pair' daemon.log 2>/dev/null && break; sleep 0.2; done

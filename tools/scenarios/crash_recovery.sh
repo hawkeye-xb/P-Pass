@@ -21,13 +21,17 @@ esac
 rm -rf "$WORK" && mkdir -p "$WORK/library" && cd "$WORK"
 
 cleanup() {
-  kill "$DAEMON_PID" 2>/dev/null || true
-  wait "$DAEMON_PID" 2>/dev/null || true
+  # ${VAR:-}: trap 可能在 DAEMON_PID 赋值前触发（set -u 下裸引用会二次报错）
+  kill "${DAEMON_PID:-}" 2>/dev/null || true
+  wait "${DAEMON_PID:-}" 2>/dev/null || true
 }
 trap cleanup EXIT
 
 start_daemon() {
+  # PPF_BIND_ADDR=0.0.0.0:0：开发机上用户 config 固定 41145，临时 daemon
+  # 不显式覆盖会与常驻 daemon 撞端口（bind 失败），CI 无用户配置不炸。
   PPF_DATA_DIR="$WORK/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
+    PPF_BIND_ADDR="0.0.0.0:0" \
     "$DAEMON" > daemon.log 2> daemon.err &
   DAEMON_PID=$!
   for _ in $(seq 1 50); do grep -q 'ppf://pair' daemon.log 2>/dev/null && break; sleep 0.2; done
@@ -47,25 +51,34 @@ PAIR_PID=$!; sleep 3; ipc pairing.confirm '{"accept": true}'; wait "$PAIR_PID" &
 echo "── 2. 启动 ${SIZE} 备份，进行中 SIGKILL daemon"
 "$TC" backup --files 1 --file-size "$BYTES" --node "$NODE" > backup1.log 2>&1 &
 BACKUP_PID=$!
-# 轮询等待 blob 真正落盘（daemon-blobs 目录出现内容）再 kill——不再 sleep 赌
-# 时序（T-070b：sleep 2 在慢机器/调度抖动下可能 kill 时传输还没开始，剧本
-# 变成"无故障 kill"，判据失效）。
-for _ in $(seq 1 100); do
-  [ -n "$(ls -A library/daemon-blobs/ 2>/dev/null | head -1)" ] && break
+# 轮询等待传输真正开始再 kill——不再 sleep 赌时序（T-070b review 两连修：
+# ① sleep 2 在慢机器上可能 kill 时传输没开始、在回环上 512M 又常常已经
+#   commit 完，双向 flaky；② 首版轮询盯的 library/daemon-blobs/ 是进程内
+#   测试 harness 的目录，生产 daemon 的 blob 目录是 data_dir/.ppf/blobs
+#   （main.rs），且 FsStore 启动即建 blobs.db/data/temp——"目录非空"在
+#   传输前就为真。正确信号 = .ppf/blobs 的字节数较配对后的基线显著增长。
+BLOBS_DIR="library/.ppf/blobs"
+BASE=$(du -sk "$BLOBS_DIR" 2>/dev/null | awk '{print $1}'); BASE=${BASE:-0}
+GROWN=""
+for _ in $(seq 1 150); do
+  CUR=$(du -sk "$BLOBS_DIR" 2>/dev/null | awk '{print $1}'); CUR=${CUR:-0}
+  if [ $(( CUR - BASE )) -ge 1024 ]; then GROWN=1; break; fi   # ≥1MB 增长
   sleep 0.2
 done
-if [ -z "$(ls -A library/daemon-blobs/ 2>/dev/null | head -1)" ]; then
-  echo "FAIL: 10s 内 blob 未落盘——传输未开始就 kill 会让剧本失去意义"
+if [ -z "$GROWN" ]; then
+  echo "FAIL: 30s 内 $BLOBS_DIR 无明显增长（基线 ${BASE}K）——传输未开始就 kill 会让剧本失去意义"
   tail -5 backup1.log
   exit 1
 fi
-echo "   ✅ blob 已落盘（传输进行中）"
+echo "   ✅ blob 数据增长中（基线 ${BASE}K → ${CUR}K，传输进行中）"
 kill -9 "$DAEMON_PID" 2>/dev/null || true
 set +e
 wait "$BACKUP_PID"
 BC=$?
 set -e
-echo "   daemon 已 SIGKILL（backup1 退出码 $BC）"
+# ${BC} 必须带花括号：macOS bash 3.2 下 $VAR 紧跟全角字符会误并入变量名
+# （dogfood-smoke 的 ${DISK} 同款教训）。
+echo "   daemon 已 SIGKILL（backup1 退出码 ${BC}）"
 
 echo "── 3. 同 data_dir 重启"
 start_daemon   # 同一 library 目录 → 同一索引
