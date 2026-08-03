@@ -22,18 +22,27 @@ official instance is free-tier CF; self-hosters run their own via
   zero-padded). **Cross-language contract**: Kotlin and Rust clients must hash
   exactly this way.
 - `sealed` — opaque base64url envelope (≤ 2048 bytes). The server stores and
-  returns it verbatim and never parses it: the NodeId inside is protected
-  client-side (envelope encrypted with a key derived from the code).
+  returns it verbatim and never parses it: the NodeId inside is encrypted
+  client-side with a key derived from the code.
 - TTL 600 s. Read-once (second read → 410). Wrong-lookup gate: 5 failed lookups
   from one IP per minute block that IP (429) until the window rolls over.
   Rate limits: POST 10/min/IP, GET 30/min/IP.
+- **Honest threat model (T-060b)**: the code space is only 10^6, so the server
+  *operator* can dictionary-reverse `code_hash` in milliseconds and decrypt any
+  envelope. This design protects the envelope from **outsiders** (network
+  observers, API clients), not from the operator. Read-once is an anti-replay
+  property, not unlinkability — the operator sees every request. Do not claim
+  otherwise in docs or client code.
 
 `code_hash` 为 6 位短码字符串（UTF-8，前置补零）的 SHA-256 十六进制（64 字符）。
 **跨语言契约**：Kotlin 与 Rust 客户端必须按此方式哈希。`sealed` 为不透明 base64url
 信封（≤2048 字节），服务器原样存取、从不解析——信封内的 NodeId 由客户端保护
 （用短码派生密钥加密）。TTL 600 秒；一次性读取（二次读 → 410）；错误查询闸门：
 同一 IP 一分钟内 5 次失败查询即封禁该 IP 至窗口翻转（429）。限频：POST 10/min/IP，
-GET 30/min/IP。
+GET 30/min/IP。**诚实的威胁模型（T-060b）**：短码空间仅 10^6，服务器**运营方**
+可在毫秒级对 `code_hash` 做字典反查并解密任意信封——本设计保护的是**外部人员**
+（网络观察者、API 客户端），不防运营方。一次性读取是防重放属性，不是不可关联性
+——运营方可见每一次请求。文档与客户端代码不得声称更高的保证。
 
 ## Client flow (remote pairing)
 
@@ -42,14 +51,15 @@ GET 30/min/IP。
 2. The remote phone receives the code out-of-band (voice/SMS), hashes it, and
    `GET /code/<hash>` → gets the envelope → decrypts → NodeId → proceeds with
    the normal `pair.request` flow.
-3. The server can never link the envelope to a pairing attempt (read-once) nor
-   read the NodeId (client-side encryption); TTL + rate limits bound brute force
-   over the 10^6 code space.
+3. The server never parses the envelope, and read-once blocks replay; TTL +
+   rate limits bound brute force over the 10^6 code space. These protect
+   against outsiders — **not** against the operator (see threat model above).
 
 客户端流程（异地配对）：桌面端生成 6 位短码 → 用短码派生密钥把 NodeId 加密成信封 →
 `POST /code`；异地家人通过语音/短信拿到短码 → 哈希 → `GET /code/<hash>` 取信封 →
-解密得 NodeId → 走常规 `pair.request` 配对。服务器既无法把信封关联到某次配对
-（一次性读取），也无法读取 NodeId（客户端加密）；TTL + 限频封住 10^6 空间的爆破。
+解密得 NodeId → 走常规 `pair.request` 配对。服务器从不解析信封，一次性读取防重放；
+TTL + 限频封住 10^6 空间的爆破。以上保护对象是**外部人员**——不防运营方
+（威胁模型见上文）。
 
 ## Local dev & test
 
