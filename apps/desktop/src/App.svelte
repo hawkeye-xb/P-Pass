@@ -17,14 +17,17 @@
     for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
     return s;
   };
-  // diag 状态码 → 字典 msg_key（见 crates/diag/src/keys.rs）
+  // diag 状态码 → 字典 msg_key。桌面壳是存储端本身，用桌面视角变体
+  // （T-042b：手机视角的 "存储电脑离线了" 显示在存储电脑上自相矛盾；
+  // 变体无 {progress}/{last_seen} 占位符——status 载荷不带这两个值，
+  // 带占位符会渲染出字面 "{progress}"）。
   const STATE_KEYS = {
     ONLINE_DIRECT: "diag.online_direct",
     ONLINE_RELAY: "diag.online_relay",
-    PAIRING: "diag.pairing",
-    DISK_FULL: "err.disk_full",
-    INDEXING: "diag.indexing",
-    STORAGE_OFFLINE: "diag.storage_offline",
+    PAIRING: "diag.desktop.pairing",
+    DISK_FULL: "diag.desktop.disk_full",
+    INDEXING: "diag.desktop.indexing",
+    STORAGE_OFFLINE: "diag.desktop.storage_offline",
   };
 
   let wizard = $state(null); // null=检测中, {configured, default_dir}
@@ -35,16 +38,16 @@
   }
 
   async function stopService() {
-    const yes = await confirmDialog(
-      "停止后会取消开机自启并暂停所有备份，家人手机将无法连接，直到你重新启用。确定停止？",
-      { title: "停止后台服务", kind: "warning" }
-    );
+    const yes = await confirmDialog(t("ui.stop_confirm_body"), {
+      title: t("ui.stop_confirm_title"),
+      kind: "warning",
+    });
     if (!yes) return;
     try {
       await invoke("stop_daemon");
-      message = "后台服务已停止，开机不再自动运行。";
+      message = t("ui.service_stopped");
     } catch (e) {
-      message = `停止失败：${e}`;
+      message = t("ui.stop_failed", { err: String(e) });
     }
   }
 
@@ -53,7 +56,7 @@
     try {
       await invoke("start_daemon");
     } catch (e) {
-      message = `启动失败：${e}`;
+      message = t("ui.start_failed", { err: String(e) });
     } finally {
       setTimeout(() => (starting = false), 3000);
     }
@@ -91,32 +94,34 @@
       qrText = r.qr;
       qrDataUrl = await QRCode.toDataURL(r.qr, { width: 260, margin: 1 });
     } catch (e) {
-      message = `发起配对失败：${e}`;
+      message = t("ui.pair_failed", { err: String(e) });
     }
   }
 
   async function confirmPair(accept) {
     try {
       const r = await call("pairing.confirm", { accept });
-      message = accept ? `已允许「${r.device}」加入` : `已拒绝「${r.device}」`;
+      message = accept
+        ? t("ui.pair_allowed", { name: r.device })
+        : t("ui.pair_denied", { name: r.device });
       await refresh();
     } catch (e) {
-      message = `确认失败：${e}`;
+      message = t("ui.confirm_failed", { err: String(e) });
     }
   }
 
   async function revoke(nodeId, name) {
-    const yes = await confirmDialog(`确定移除设备「${name}」？它将立刻失去访问权限。`, {
-      title: "移除设备",
+    const yes = await confirmDialog(t("ui.revoke_confirm_body", { name }), {
+      title: t("ui.revoke_confirm_title"),
       kind: "warning",
     });
     if (!yes) return;
     try {
       await call("device.revoke", { node_id: nodeId });
-      message = `已移除「${name}」`;
+      message = t("ui.revoked", { name });
       await refresh();
     } catch (e) {
-      message = `移除失败：${e}`;
+      message = t("ui.revoke_failed", { err: String(e) });
     }
   }
 
@@ -132,35 +137,35 @@
         await revealItemInDir(dir);
       }
     } catch (e) {
-      message = `打开失败：${e}`;
+      message = t("ui.open_failed", { err: String(e) });
     }
   }
 
   async function chooseFolder() {
-    const dir = await openDialog({ directory: true, title: "选择照片库的新位置" });
+    const dir = await openDialog({ directory: true, title: t("ui.change_title") });
     if (!dir) return;
-    const yes = await confirmDialog(
-      `照片库位置将改为：${dir}\n\n注意：已备份的照片不会自动搬过去——新位置会从零开始，家人手机会把照片重新备份到这里。确定更改？`,
-      { title: "更改照片库位置", kind: "warning" }
-    );
+    const yes = await confirmDialog(t("ui.change_body", { dir }), {
+      title: t("ui.change_title"),
+      kind: "warning",
+    });
     if (!yes) return;
     try {
       await call("folder.set", { path: dir });
-      message = `照片库位置已保存为 ${dir}，重启后台服务后生效（旧照片仍在原位置）。`;
+      message = t("ui.change_saved", { dir });
     } catch (e) {
-      message = `保存失败：${e}`;
+      message = t("ui.save_failed", { err: String(e) });
     }
   }
 
   async function exportLogs() {
     try {
       const r = await call("logs.export");
-      message = `诊断包已导出（内容已脱敏，可放心外发）：${r.zip}`;
+      message = t("ui.logs_exported", { path: r.zip });
       try {
         await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示
       } catch (_) {}
     } catch (e) {
-      message = `导出失败：${e}`;
+      message = t("ui.export_failed", { err: String(e) });
     }
   }
 
@@ -174,7 +179,7 @@
 
   const stateLabel = $derived(
     !online
-      ? "后台服务未运行"
+      ? t("ui.offline_banner")
       : t(STATE_KEYS[status?.state] ?? status?.state)
   );
 </script>
@@ -196,60 +201,64 @@
          就要在这一步才被拉起，提前暴露只有困惑（xixi 实测反馈 1）。
          配置写了但服务没注册 = wizard 中途退出，重进继续走 wizard
          （xixi 实测反馈 3），而不是丢到"启动后台服务"裸界面。 -->
-    <Wizard defaultDir={wizard.default_dir} onDone={() => { checkWizard(); refresh(); }} />
+    <Wizard
+      defaultDir={wizard.default_dir}
+      configuredLibraryDir={wizard.configured_library_dir}
+      onDone={() => { checkWizard(); refresh(); }}
+    />
   {:else if !online}
     <section>
-      <p>后台服务没有在运行。点下面的按钮启动它，启动后备份和配对就能用了。</p>
+      <p>{t("ui.offline_action")}</p>
       <button class="primary" disabled={starting} onclick={startDaemonNow}>
-        {starting ? "正在启动…" : "启动后台服务"}
+        {starting ? t("ui.starting") : t("ui.start_service")}
       </button>
-      <p class="hint">启动后本窗口每 3 秒自动刷新；如果一直没反应，关闭 App 重新打开再点一次。</p>
+      <p class="hint">{t("ui.refresh_hint")}</p>
     </section>
   {:else}
     <section>
       <h2>状态</h2>
       <p>
-        已配对设备 {status.devices - status.revoked} 台
-        {#if status.revoked > 0}（另有 {status.revoked} 台已移除）{/if}
-        {#if pendingCount > 0}<strong>· {pendingCount} 个配对请求待确认</strong>{/if}
+        {t("ui.paired_count", { n: status.devices - status.revoked })}
+        {#if status.revoked > 0}{t("ui.revoked_count", { n: status.revoked })}{/if}
+        {#if pendingCount > 0}<strong>· {t("ui.pending_pairs", { n: pendingCount })}</strong>{/if}
       </p>
       {#if pendingCount > 0}
         <div class="row">
-          <button class="primary" onclick={() => confirmPair(true)}>允许加入</button>
-          <button onclick={() => confirmPair(false)}>拒绝</button>
+          <button class="primary" onclick={() => confirmPair(true)}>{t("ui.allow")}</button>
+          <button onclick={() => confirmPair(false)}>{t("ui.deny")}</button>
         </div>
       {/if}
     </section>
 
     <section>
-      <h2>添加设备</h2>
+      <h2>{t("ui.add_device")}</h2>
       <div class="row">
-        <button class="primary" onclick={startPairing}>生成配对二维码</button>
+        <button class="primary" onclick={startPairing}>{t("ui.generate_qr")}</button>
       </div>
       {#if qrDataUrl}
-        <img class="qr" src={qrDataUrl} alt="配对二维码" />
+        <img class="qr" src={qrDataUrl} alt={t("ui.generate_qr")} />
         <details>
-          <summary>无法扫码？复制配对串</summary>
+          <summary>{t("ui.qr_fallback")}</summary>
           <code class="qrtext">{qrText}</code>
         </details>
-        <p class="hint">二维码 10 分钟内有效；扫码后回到本窗口点「允许加入」。</p>
+        <p class="hint">{t("ui.qr_hint")}</p>
       {/if}
     </section>
 
     <section>
-      <h2>设备</h2>
+      <h2>{t("ui.devices")}</h2>
       {#if devices.length === 0}
-        <p class="hint">还没有配对的设备。</p>
+        <p class="hint">{t("ui.no_devices")}</p>
       {:else}
         <ul class="devices">
           {#each devices as d}
             <li>
               <span class:revoked={d.revoked}>
                 {d.name}
-                <small>{d.role}{d.revoked ? " · 已移除" : ""}</small>
+                <small>{d.role}{d.revoked ? t("ui.revoked_tag") : ""}</small>
               </span>
               {#if !d.revoked}
-                <button class="danger" onclick={() => revoke(d.node_id, d.name)}>移除</button>
+                <button class="danger" onclick={() => revoke(d.node_id, d.name)}>{t("ui.remove")}</button>
               {/if}
             </li>
           {/each}
@@ -258,17 +267,17 @@
     </section>
 
     <section>
-      <h2>设置</h2>
+      <h2>{t("ui.settings")}</h2>
       <div class="row">
-        <button class="primary" onclick={openLibrary}>打开照片库</button>
-        <button onclick={chooseFolder}>更改照片库位置…</button>
-        <button onclick={exportLogs}>导出诊断包</button>
+        <button class="primary" onclick={openLibrary}>{t("ui.open_library")}</button>
+        <button onclick={chooseFolder}>{t("ui.change_library")}</button>
+        <button onclick={exportLogs}>{t("ui.export_logs")}</button>
       </div>
-      <p class="hint">诊断包会自动抹去用户名等隐私路径，可安全提供给支持人员。</p>
+      <p class="hint">{t("ui.logs_hint")}</p>
       <div class="row" style="margin-top:12px">
-        <button class="danger" onclick={stopService}>停止后台服务</button>
+        <button class="danger" onclick={stopService}>{t("ui.stop_service")}</button>
       </div>
-      <p class="hint">停止后开机不再自动运行、备份暂停；重新打开本 App 可再次启用。</p>
+      <p class="hint">{t("ui.stop_hint")}</p>
     </section>
   {/if}
 </main>

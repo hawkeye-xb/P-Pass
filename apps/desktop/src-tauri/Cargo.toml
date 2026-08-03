@@ -27,3 +27,6 @@ platform = { path = "../../../crates/platform" }
 [lib]
 name = "p_pass_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dev-dependencies]
+tempfile = "3"
