@@ -144,6 +144,9 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [~] T-072 i18n completeness + AV-block guide — landed; small fixes
       in **T-072b** (doc drift, zh-only docs); desktop badge
       regressions split to **T-042b**
+- [x] T-061b telemetry fixes — **DONE 2026-08-03** (doubles fixed
+      per-event columns so double2 has stable meaning; only POST /ingest
+      accepts batches; 14/14 vitest)
 - [ ] T-062b update artifact verification + pinned pubkey (blocks any
       runtime update wiring)
 - [ ] H-09 Windows smoke — kit landed, assertions soft (**H-09b**),
