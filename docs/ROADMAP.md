@@ -155,14 +155,17 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       signed=yes reflects notarization, actionlint in pr.yml) —
       actionlint green locally; tag-build end-to-end acceptance pending
       (CI); no user-facing release before T-071b green
-- [~] T-072 i18n completeness + AV-block guide — landed; small fixes
-      in **T-072b** (doc drift, zh-only docs); **T-042b code landed
-      2026-08-03** (desktop-perspective diag keys, placeholder-free
-      badge, full-screen i18n, wizard prefills existing config, token
-      discovery via platform data_dir for Windows, src-tauri tests in
-      temp dir + wired into CI, StringsSymmetryTest real XML parser) —
-      vite build + src-tauri 2/2 + diag 8/8 + Android strings green;
-      three-state walkthrough pending user pass
+- [~] T-072 i18n completeness + AV-block guide — landed; **T-072b
+      docs DONE 2026-08-03** (blocked-by-av + windows-smoke now bilingual
+      en-primary, phantom exe ref removed, executable `gh attestation
+      verify` step added; relay README drift already fixed in T-063b —
+      merged 2026-08-03); desktop badge regressions landed in
+      **T-042b 2026-08-03** (desktop-perspective diag keys,
+      placeholder-free badge, full-screen i18n, wizard prefills existing
+      config, token discovery via platform data_dir for Windows,
+      src-tauri tests in temp dir + wired into CI, StringsSymmetryTest
+      real XML parser — vite build + src-tauri 2/2 + diag 8/8 + Android
+      strings green; three-state walkthrough pending user pass)
 - [x] T-062b update artifact verification + pinned pubkey — **DONE
       2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
       parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY
