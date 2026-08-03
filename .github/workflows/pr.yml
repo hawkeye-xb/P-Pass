@@ -20,12 +20,17 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # 直接下载官方 release + sha256 钉死（CI 实测：pin 的 install-action
+      # SHA 不认识 actionlint，回退 cargo-binstall 又找不到同名 crate——
+      # actionlint 是 Go 工具不是 crate，exit 76）。版本升级时同步换校验和。
       - name: Actionlint (workflow lint)
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
-        with:
-          tool: actionlint
-      - name: Run actionlint on all workflows
-        run: actionlint -color
+        run: |
+          set -euo pipefail
+          curl -sfL -o /tmp/actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz"
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          /tmp/actionlint -color
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
