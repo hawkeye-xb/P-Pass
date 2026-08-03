@@ -120,9 +120,11 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       itself)
 - [~] T-060..T-064 cloud workers + self-host compose + relay scripts —
       workers landed (rendezvous pending **T-060b**: alarm starvation,
-      duplicate-POST overwrite, overstated security claim); selfhost/
-      relay templates pending **T-063b**: reproduced doc-path failures,
-      must close the loop on a real VPS
+      duplicate-POST overwrite, overstated security claim); **T-063b
+      DONE 2026-08-03** (real VPS closed loop: .env bootstrap, Manual
+      certs via certbot, CMD-SHELL healthcheck on /healthz, glibc relay
+      image — official musl image panics on QUIC; ufw actually enabled;
+      dogfood-smoke green via self-hosted relay)
 - [ ] H-07 self-hosted relay A/B (**priority raised** — unshipped relay
       domains proven harmful in dogfood smoke); merge T-063b into this
 - [~] T-071 release workflow + attestation — pipeline runs end-to-end
