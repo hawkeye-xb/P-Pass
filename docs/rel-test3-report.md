@@ -50,37 +50,76 @@ testclient.exe           (19,195,392 B)
 ## ③ 下载 zip 解压自包含验证（macOS）
 
 ```bash
-$ gh release download v0.2.0-test.3 --repo hawkeye-xb/P-Pass --pattern 'ppass-macos-arm64.zip'
-$ unzip -o ppass-macos-arm64.zip
-# P-Pass/lib 目录存在 ✓（libheif/libde265/libx265/libaom/libvmaf/libsharpyuv 8 个 dylib）
-$ ls P-Pass/
+$ gh release download v0.2.0-test.3 --repo hawkeye-xb/P-Pass --pattern 'ppass-macos-arm64.zip' --pattern 'SHA256SUMS-macos-arm64'
+$ unzip -q ppass-macos-arm64.zip -d extracted
+# P-Pass/lib 目录存在 ✓（实测 6 个 dylib：libaom/libde265/libheif/libsharpyuv/libvmaf/libx265）
+$ ls extracted/P-Pass/
 BUILD_INFO  SHA256SUMS-macos-arm64  daemon  dogfood-smoke.sh  lib  testclient
 ```
 
-**daemon 启动验证**（`--help` 无 clap 解析、等效于启动 daemon 本体）：
+**SHA256 完整性校验**（三重核对，全部通过）：
+
+```bash
+# ① zip 内自带 SHA256SUMS 与 release 资产的 SHA256SUMS 必须逐字节一致
+$ diff <(cat extracted/P-Pass/SHA256SUMS-macos-arm64) SHA256SUMS-macos-arm64
+IDENTICAL ✓
+# ② 解压后对 zip 内清单做 shasum -c
+$ cd extracted/P-Pass && shasum -a 256 -c SHA256SUMS-macos-arm64
+daemon: OK
+testclient: OK
+# ③ BUILD_INFO 指向与 tag 一致的构建源
+$ cat BUILD_INFO
+built from ea3bbf491252f9b1212533c51e8c1b253ed1ced7 on 2026-08-03T11:47:51Z
+```
+
+**二进制属性验证**（file + codesign，隔离目录 `/tmp/ppf-daemon-verify` 实测）：
+
+```bash
+$ file daemon testclient
+daemon:     Mach-O 64-bit executable arm64
+testclient: Mach-O 64-bit executable arm64
+$ codesign -dv daemon
+Identifier=daemon-55554944662b1ee3ead0305382cfd2b28e3b2064
+Signature=adhoc        # ← 无凭据路径预期：adhoc 签名，非 Developer ID
+$ spctl -a -vv daemon  # rejected —— 与 notes「macOS=no」一致，符合未签名预期
+```
+
+**daemon 启动验证**（`--help` 无 clap 解析、等效于启动 daemon 本体；用 `PPF_DATA_DIR=/tmp/ppf-daemon-verify` 隔离，不写真实库目录）：
 
 ```
-INFO endpoint{id=fefc994562}:relay-actor: home is now relay https://usw1-1.relay.n0.iroh.link./, was None
+INFO endpoint{id=9dcd62421c}:relay-actor: home is now relay https://usw1-1.relay.n0.iroh.link./, was None
 P-Pass daemon 已启动
-NodeId: fefc994562e48448bfa30b8abfdb16c0ecb8f396e6c7b9f167c40ba8ff963a47
-库目录: /Users/salamira/Library/Application Support/P-Pass
-配对二维码内容（10 分钟内有效）: ppf://pair?node=fefc9945...
-IPC: ppf-fefc9945（令牌在 /Users/salamira/Library/Application Support/P-Pass/ipc.token）
+NodeId: 9dcd62421c71dd3b392ade63b832c530fc224895c641c2d50e60b0574b4b5d1e
+库目录: /tmp/ppf-daemon-verify
+配对二维码内容（10 分钟内有效）: ppf://pair?node=9dcd6242...
+IPC: ppf-9dcd6242（令牌在 /tmp/ppf-daemon-verify/ipc.token）
 ```
 
 - daemon 正常启动：NodeId 生成 ✓、IPC token 写出 ✓、relay 连接 ✓、lib/ 内 dylib 全部正确加载（无 dyld 缺失报错）——**自包含验证通过**。
-- **SHA256 完整性校验**（对 release 的 SHA256SUMS-macos-arm64）：
+- **testclient --help 实测**（clap 正常）：
 
 ```
-daemon: OK
-testclient: OK
+P-Pass daemon 集成测试客户端
+
+Usage: testclient <COMMAND>
+
+Commands:
+  pair          配对流程测试：扫码令牌 → PairRequest → 等待确认（T-031 实装）
+  backup        备份剧本：推送 N 个文件走 manifest→missing→接收→commit（T-032 实装）
+  browse        浏览剧本：分页遍历时间线 + 拉取缩略图校验（T-033 实装）
+  revoke-check  吊销验证：以未配对/已吊销身份连接，期望 not_authorized（T-030 实装）
+  help          Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help     Print help
+  -V, --version  Print version
 ```
 
 ## 备注 / 观察项
 
 1. **`--help` 行为**：daemon 无 clap 参数解析，`--help` 被忽略直接启动服务。卡面写「`./P-Pass/daemon --help` 能起」，实测行为为「直接启动成功」——符合验收意图（能起）。若希望 `--help` 打印用法，需后续给 daemon 加 cli 参数层（非本卡范围，记录待议）。
 2. **BUILD_INFO 确认**：`built from ea3bbf491252f9b1212533c51e8c1b253ed1ced7 on 2026-08-03T11:47:51Z` —— 构建源 commit 与 tag 所指向的 main HEAD 一致。
-3. **测试残留**：验证用 daemon 进程已 kill，无残留；其写入的 `~/Library/Application Support/P-Pass/ipc.token` 由后续正常 daemon 启动自行覆盖，无破坏。
+3. **测试残留**：验证用 daemon 进程已 kill，无残留；验证全程用 `PPF_DATA_DIR=/tmp/ppf-daemon-verify` 隔离目录，**未触碰**真实库目录（`~/Library/Application Support/P-Pass`），无任何污染。
 
 ## 结论
 
