@@ -153,8 +153,13 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       actionlint green locally; tag-build end-to-end acceptance pending
       (CI); no user-facing release before T-071b green
 - [~] T-072 i18n completeness + AV-block guide — landed; small fixes
-      in **T-072b** (doc drift, zh-only docs); desktop badge
-      regressions split to **T-042b**
+      in **T-072b** (doc drift, zh-only docs); **T-042b code landed
+      2026-08-03** (desktop-perspective diag keys, placeholder-free
+      badge, full-screen i18n, wizard prefills existing config, token
+      discovery via platform data_dir for Windows, src-tauri tests in
+      temp dir + wired into CI, StringsSymmetryTest real XML parser) —
+      vite build + src-tauri 2/2 + diag 8/8 + Android strings green;
+      three-state walkthrough pending user pass
 - [ ] T-062b update artifact verification + pinned pubkey (blocks any
       runtime update wiring)
 - [ ] H-09 Windows smoke — kit landed, assertions soft (**H-09b**),

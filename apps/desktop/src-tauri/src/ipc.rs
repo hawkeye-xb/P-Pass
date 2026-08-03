@@ -4,42 +4,60 @@
 //! stateless, plenty for a 3 s poll cadence.
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use serde_json::{json, Value};
 
+/// Read the `data_dir` value out of a config.toml, if any. Shared by the
+/// desktop IPC token discovery and the wizard prefill (one config parser).
+pub fn read_config_data_dir(dir: &Path) -> Option<String> {
+    let raw = std::fs::read_to_string(dir.join("config.toml")).ok()?;
+    for line in raw.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("data_dir") {
+            let rest = rest.trim_start();
+            if let Some(val) = rest.strip_prefix('=') {
+                let val = val.trim().trim_matches('"').trim();
+                if !val.is_empty() {
+                    return Some(val.to_string());
+                }
+            }
+            break;
+        }
+    }
+    None
+}
+
 /// Where to look for a daemon's ipc.token, in order.
+///
+/// T-042b: the platform data dir comes from `platform::adapter().data_dir()`
+/// (macOS: ~/Library/Application Support/P-Pass; Windows: %APPDATA%\P-Pass)
+/// instead of a hardcoded macOS-only path — the token discovery fix must
+/// work on Windows too.
 pub fn token_candidates() -> Vec<PathBuf> {
+    use platform::PlatformAdapter as _;
+    let data_dir = platform::adapter().data_dir();
+    token_candidates_from(&data_dir)
+}
+
+/// Testable core: same order, but the platform data dir is injected.
+pub fn token_candidates_from(data_dir: &Path) -> Vec<PathBuf> {
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
     let mut v = Vec::new();
     if let Ok(dir) = std::env::var("PPF_DATA_DIR") {
         v.push(PathBuf::from(dir).join("ipc.token"));
     }
     v.push(home.join("ppf-library/ipc.token"));
-    v.push(home.join("Library/Application Support/P-Pass/ipc.token"));
+    v.push(data_dir.join("ipc.token"));
     // The wizard writes the user-picked library dir into config.toml's
     // data_dir, and the daemon puts ipc.token *there* — the fixed
     // candidates above miss it. Parse the live config so a daemon
     // launched via the wizard is actually discoverable (T-042 实测:
     // "点了没反应" = daemon 起来了但 token 找不到).
-    if let Ok(raw) =
-        std::fs::read_to_string(home.join("Library/Application Support/P-Pass/config.toml"))
-    {
-        for line in raw.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("data_dir") {
-                let rest = rest.trim_start();
-                if let Some(val) = rest.strip_prefix('=') {
-                    let val = val.trim().trim_matches('"').trim();
-                    if !val.is_empty() {
-                        v.push(PathBuf::from(val).join("ipc.token"));
-                    }
-                }
-                break;
-            }
-        }
+    if let Some(val) = read_config_data_dir(data_dir) {
+        v.push(PathBuf::from(val).join("ipc.token"));
     }
     v
 }
@@ -120,27 +138,41 @@ mod tests {
     /// data_dir, and the daemon puts ipc.token there. token_candidates
     /// must include that path or a wizard-launched daemon is invisible
     /// (T-042 实测: "点了没反应" = daemon 起来了但 token 找不到).
+    /// T-042b: rewritten against a TEMP dir — the old test wrote the
+    /// developer's REAL ~/Library/Application Support/P-Pass/config.toml
+    /// and a panic skipped the restore (never touch a real config).
     #[test]
     fn candidates_include_config_data_dir() {
-        let home = std::env::var("HOME").unwrap();
-        let cfg_dir = PathBuf::from(&home).join("Library/Application Support/P-Pass");
-        let cfg = cfg_dir.join("config.toml");
-        let _ = std::fs::create_dir_all(&cfg_dir);
-        let original = std::fs::read_to_string(&cfg).ok();
-        std::fs::write(&cfg, "data_dir = \"/tmp/ppf-wizard-lib\"\n").unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg_dir = tmp.path().join("cfg");
+        std::fs::create_dir_all(&cfg_dir).unwrap();
+        std::fs::write(cfg_dir.join("config.toml"), "data_dir = \"/tmp/ppf-wizard-lib\"\n")
+            .unwrap();
 
-        let candidates = token_candidates();
+        let candidates = token_candidates_from(&cfg_dir);
         assert!(
             candidates.contains(&PathBuf::from("/tmp/ppf-wizard-lib/ipc.token")),
             "candidates must include the config data_dir: {candidates:?}"
         );
+        // The platform data dir itself is a candidate (bundled installs).
+        assert!(
+            candidates.contains(&cfg_dir.join("ipc.token")),
+            "candidates must include the platform data dir: {candidates:?}"
+        );
+    }
 
-        match original {
-            Some(s) => std::fs::write(&cfg, s).unwrap(),
-            None => {
-                let _ = std::fs::remove_file(&cfg);
-                let _ = std::fs::remove_dir(&cfg_dir);
-            }
-        }
+    /// T-042b: parse must tolerate a quoted value and ignore other keys.
+    #[test]
+    fn read_config_data_dir_parses_quoted_value() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            "bind_addr = \"0.0.0.0:41145\"\n\ndata_dir = \"/tmp/ppf-lib\"\n\nrelay_urls = []\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_config_data_dir(tmp.path()),
+            Some("/tmp/ppf-lib".to_string())
+        );
     }
 }

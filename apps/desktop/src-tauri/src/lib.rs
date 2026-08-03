@@ -27,6 +27,11 @@ fn daemon_online() -> bool {
 /// a resident service. A config without an installed service means the
 /// wizard was abandoned mid-way — route back into the wizard instead of
 /// dumping the user on a bare "start the service" screen (xixi 实测反馈 3).
+/// T-042b: `configured_library_dir` prefills the wizard's folder step from
+/// the existing config, so a oneshot-degraded user (autostart registration
+/// failed → fallback spawn; lib.rs start_daemon Err branch) who bounces back
+/// into the wizard does NOT re-point the library to a fresh empty folder
+/// (orphaned-library risk) — the wizard shows what's already configured.
 #[tauri::command]
 fn wizard_state() -> Value {
     use platform::PlatformAdapter as _;
@@ -35,10 +40,15 @@ fn wizard_state() -> Value {
     // "传到哪儿了" had no answer while the library hid in ~/Library).
     let pictures = dirs_pictures().join("P-Pass 家庭照片库");
     let installed = platform::adapter().autostart_installed().unwrap_or(false);
+    let configured_dir = ipc::read_config_data_dir(&dir);
     json!({
         "configured": dir.join("config.toml").exists(),
         "installed": installed,
         "default_dir": pictures.to_string_lossy(),
+        // Some of the library, if the config already points somewhere —
+        // the wizard prefills this so re-running it never orphans the
+        // existing library (T-042b).
+        "configured_library_dir": configured_dir,
     })
 }
 
