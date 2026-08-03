@@ -408,8 +408,8 @@ mod tests {
     }
 
     // ── T-062b: artifact verification + parse-time hardening ──────────────
-
-    use base64::Engine as _;
+    // base64::Engine (for `.encode`) comes in via `use super::*` — the
+    // module-level import at the top of the file.
 
     /// Build a manifest whose artifact digest/signature match the given bytes.
     fn signed_artifact_manifest(signing: &SigningKey, artifact_bytes: &[u8]) -> (Vec<u8>, Vec<u8>) {
