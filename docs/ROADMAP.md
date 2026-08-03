@@ -127,9 +127,13 @@ P4 desktop shell / 桌面壳
 gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 - [~] T-070 failure scenarios automated — code landed, acceptance
-      pending **T-070b** (disk-full never proves ENOSPC fired,
-      crash-recovery races a sleep, TTL guard asserts a local copy of
-      itself)
+      pending **T-070b**; **T-070b code landed 2026-08-03** (disk_full
+      proves ENOSPC + payload > tmpfs, crash_recovery polls blob
+      landing instead of sleep + cleanup trap, clock_jump asserts the
+      production TOKEN_TTL_MS + param-safe QR parse, revoke renamed
+      revoke_before_commit, testclient prev-read scoped to small-file
+      branch, shared tools/ipc-lib.sh) — 2 in-process scenarios green
+      locally; disk_full CI green + fault-inversion proof pending
 - [~] T-060..T-064 cloud workers + self-host compose + relay scripts —
       workers landed; **T-060b code landed 2026-08-03** (alarm
       starvation fixed via getAlarm check + re-arm, duplicate live-hash
