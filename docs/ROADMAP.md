@@ -108,7 +108,19 @@ P4 desktop shell / 桌面壳
       month sections, width/height in ingest, entry styling
 - [x] T-056 video playback: download plane (ppf/download/1, viewer+,
       bit-identical round-trip tested) → cache → VideoView; timeline
-      routes video/* taps to the player. Streaming DataSource → M3
+      routes video taps to the player. Streaming DataSource → M3.
+      **Real-device PASS 2026-08-03**: the tap-to-play last mile caught
+      a real routing bug (wire media_type is normalized "video"/"photo",
+      Kotlin matched "video/" — every video opened the photo viewer);
+      fixed, Samsung now plays the user's own 7/31 recording pulled
+      from the Mac library. Known debt: video thumbs fail on the daemon
+      (thumb_state=2 → gray placeholder tiles)
+- [x] `just verify-m2` ALL GREEN 2026-08-03: 185 Rust tests + Android
+      unit suite + debug APK + live hello/pair/backup scripts
+      (BACKUP OK 12/12, idempotent rerun 0). Fixed on the way: the
+      throwaway-daemon scripts inherited the user config's fixed port
+      41145 and collided with the resident daemon — scripts now pin
+      PPF_BIND_ADDR=0.0.0.0:0
 - [ ] **Gate: one week of real family dogfood, 100 % backup completion**
 
 ## M3 — Hardening / 硬化 🔶 (code landed 2026-08-01~02; acceptance
