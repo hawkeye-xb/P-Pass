@@ -17,6 +17,16 @@
       "url": "https://releases.example.com/P-Pass-0.2.0-x86_64.msi",
       "sha256": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
       "signature": "BASE64_ED25519_SIGNATURE_OVER_ARTIFACT_BYTES"
+    },
+    "linux-x64": {
+      "url": "https://releases.example.com/P-Pass-0.2.0-x86_64.AppImage",
+      "sha256": "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00",
+      "signature": "BASE64_ED25519_SIGNATURE_OVER_ARTIFACT_BYTES"
+    },
+    "linux-arm64": {
+      "url": "https://releases.example.com/P-Pass-0.2.0-aarch64.AppImage",
+      "sha256": "2233445566778899aabbccddeeff00112233445566778899aabbccddeeff0011",
+      "signature": "BASE64_ED25519_SIGNATURE_OVER_ARTIFACT_BYTES"
     }
   }
 }
