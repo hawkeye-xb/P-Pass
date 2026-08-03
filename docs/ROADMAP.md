@@ -119,10 +119,12 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       crash-recovery races a sleep, TTL guard asserts a local copy of
       itself)
 - [~] T-060..T-064 cloud workers + self-host compose + relay scripts —
-      workers landed (rendezvous pending **T-060b**: alarm starvation,
-      duplicate-POST overwrite, overstated security claim); selfhost/
-      relay templates pending **T-063b**: reproduced doc-path failures,
-      must close the loop on a real VPS
+      workers landed; **T-060b code landed 2026-08-03** (alarm
+      starvation fixed via getAlarm check + re-arm, duplicate live-hash
+      POST → 409, honest threat model in README/comments, 4 new tests —
+      11/11 vitest + typecheck green); selfhost/relay templates pending
+      **T-063b**: reproduced doc-path failures, must close the loop on
+      a real VPS
 - [ ] H-07 self-hosted relay A/B (**priority raised** — unshipped relay
       domains proven harmful in dogfood smoke); merge T-063b into this
 - [~] T-071 release workflow + attestation — pipeline runs end-to-end
