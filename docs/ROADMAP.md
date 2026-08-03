@@ -189,7 +189,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       byte-identical). Follow-up: bin-win-x64 branch re-syncs
       win-smoke.ps1 on next artifacts run
 - [ ] H-10 naive-user onboarding line (quickstart docs → cold-start
-      walkthrough → human-grade release assets)
+      walkthrough → human-grade release assets) — **H-10a quickstart
+      landed 2026-08-03 (PR #26)**; **H-10c human-facing release assets
+      in progress (branch feat/h10c-human-assets)**: P-Pass-macos-arm64.dmg
+      (.app + self-contained daemon sidecar + lib/) via
+      tools/bundle-desktop-macos.sh + app-release-unsigned.apk
+      (assembleRelease; signed version T-071 follow-up), both added to
+      Release draft assets; H-10b naive-user test pending tag-build
+      acceptance
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
