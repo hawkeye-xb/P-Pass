@@ -190,9 +190,7 @@ mod tests {
                 "msg_key must be lowercase dotted snake_case: {key}"
             );
             assert!(
-                key.starts_with("err.")
-                    || key.starts_with("diag.")
-                    || key.starts_with("ui."),
+                key.starts_with("err.") || key.starts_with("diag.") || key.starts_with("ui."),
                 "msg_key must live under err.*, diag.* or ui.*: {key}"
             );
         }
