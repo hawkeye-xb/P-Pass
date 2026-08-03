@@ -127,8 +127,13 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       domains proven harmful in dogfood smoke); merge T-063b into this
 - [~] T-071 release workflow + attestation — pipeline runs end-to-end
       (draft v0.2.0-test.1), acceptance pending **T-071b** supply-chain
-      hardening (job-level signing secrets + unpinned actions); no
-      user-facing release before T-071b
+      hardening; **T-071b code landed 2026-08-03** (job-scope secrets
+      dropped to the two signing steps, every action SHA-pinned,
+      per-job minimal permissions, VT gate hoisted to job env, release
+      assets via create-then-upload with SHA256SUMS as asset,
+      signed=yes reflects notarization, actionlint in pr.yml) —
+      actionlint green locally; tag-build end-to-end acceptance pending
+      (CI); no user-facing release before T-071b green
 - [~] T-072 i18n completeness + AV-block guide — landed; small fixes
       in **T-072b** (doc drift, zh-only docs); desktop badge
       regressions split to **T-042b**
