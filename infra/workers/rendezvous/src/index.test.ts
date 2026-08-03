@@ -145,6 +145,16 @@ describe("rendezvous worker (T-060)", () => {
     const reopened = await SELF.fetch(`https://rendezvous.local/code/${HASH_A}`);
     expect(reopened.status).toBe(200);
     expect(await reopened.json()).toEqual({ sealed: "c2Vjb25kLWVudmVsb3Bl" });
+    // Expired (never consumed) → hash is free to reuse as well.
+    const HASH_F = "f".repeat(64);
+    const stale = await postCode(HASH_F, SEALED);
+    expect(stale.status).toBe(201);
+    fakeNow(360 + 601); // past the 600 s TTL, fresh rate window too
+    const replace = await postCode(HASH_F, "dGhpcmQtZW52ZWxvcGU");
+    expect(replace.status).toBe(201);
+    const replaced = await SELF.fetch(`https://rendezvous.local/code/${HASH_F}`);
+    expect(replaced.status).toBe(200);
+    expect(await replaced.json()).toEqual({ sealed: "dGhpcmQtZW52ZWxvcGU" });
     restore();
   });
 
