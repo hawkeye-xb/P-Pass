@@ -3,10 +3,12 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import QRCode from "qrcode";
 
-  let { defaultDir, onDone } = $props();
+  let { defaultDir, configuredLibraryDir, onDone } = $props();
 
   let step = $state(1);
-  let libraryDir = $state("");
+  // T-042b: 若 config 已指向某库（oneshot 降级/中途退出回 wizard），预填它——
+  // 用户直接"下一步"不会把库改到新空目录（孤儿库风险）。
+  let libraryDir = $state(configuredLibraryDir ?? "");
   let power = $state(null); // {kind, minutes}
   let qrDataUrl = $state("");
   let qrText = $state("");

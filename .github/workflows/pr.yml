@@ -62,6 +62,10 @@ jobs:
       - name: Architecture enforcement
         run: bash tools/arch-check.sh
 
+      - name: Desktop shell src-tauri tests (T-042b, previously never ran in CI)
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --lib
+
       - name: License and dependency audit
         run: cargo deny check advisories licenses bans
 
