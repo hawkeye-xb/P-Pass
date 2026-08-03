@@ -14,7 +14,7 @@ official instance is free-tier CF; self-hosters run their own via
 
 | Route | Method | Body / param | Responses |
 |---|---|---|---|
-| `/code` | POST | `{code_hash, sealed}` | 201 created · 400 bad payload · 429 rate limited |
+| `/code` | POST | `{code_hash, sealed}` | 201 created · 400 bad payload · 409 hash already live (unconsumed & unexpired — client picks a new code) · 429 rate limited |
 | `/code/:hash` | GET | — | 200 `{sealed}` (read-once) · 404 never existed · 410 already consumed / expired · 400 · 429 |
 | `/` | GET | — | 200 health `{ok, service}` |
 
@@ -51,13 +51,16 @@ GET 30/min/IP。**诚实的威胁模型（T-060b）**：短码空间仅 10^6，�
 2. The remote phone receives the code out-of-band (voice/SMS), hashes it, and
    `GET /code/<hash>` → gets the envelope → decrypts → NodeId → proceeds with
    the normal `pair.request` flow.
-3. The server never parses the envelope, and read-once blocks replay; TTL +
+3. On `409` (hash already live) the desktop MUST pick a fresh code and
+   re-POST — never treat 409 as success.
+4. The server never parses the envelope, and read-once blocks replay; TTL +
    rate limits bound brute force over the 10^6 code space. These protect
    against outsiders — **not** against the operator (see threat model above).
 
 客户端流程（异地配对）：桌面端生成 6 位短码 → 用短码派生密钥把 NodeId 加密成信封 →
 `POST /code`；异地家人通过语音/短信拿到短码 → 哈希 → `GET /code/<hash>` 取信封 →
-解密得 NodeId → 走常规 `pair.request` 配对。服务器从不解析信封，一次性读取防重放；
+解密得 NodeId → 走常规 `pair.request` 配对。桌面端收到 `409`（短码撞车且对方信封
+仍存活）必须换新码重发，绝不能当成功处理。服务器从不解析信封，一次性读取防重放；
 TTL + 限频封住 10^6 空间的爆破。以上保护对象是**外部人员**——不防运营方
 （威胁模型见上文）。
 
