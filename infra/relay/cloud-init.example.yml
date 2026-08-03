@@ -35,11 +35,17 @@ runcmd:
   - sed -i 's/relay.example.com/RELAY_DOMAIN/g' .env
   - cp relay-config.example.toml relay-config.toml
   - sed -i 's/relay.example.com/RELAY_DOMAIN/g' relay-config.toml
-  # 证书：standalone 用 80（caddy 未起、80 空闲期签；caddy 起后续期走 webroot 或 DNS-01）
-  - certbot certonly --standalone --non-interactive --agree-tos -m ops@example.com -d RELAY_DOMAIN || true
+  # 证书：standalone 用 80（caddy 未起、80 空闲期签；caddy 起后续期见 SELFHOST.md）。
+  # 失败必须响亮（T-063b review：|| true 静默吞错 → relay 因 manual_cert_path
+  # 缺失进入重启循环，运维找不到因）。签发失败仍继续引导，但留下显式告警。
+  - certbot certonly --standalone --non-interactive --agree-tos -m ops@example.com -d RELAY_DOMAIN
+      || echo "!!!! CERTBOT FAILED — relay 起不来（manual_cert_path 缺失会重启循环）。检查 DNS 解析与 80 端口后手动重试：certbot certonly --standalone -d RELAY_DOMAIN !!!!"
   # 本模板只起 relay（rendezvous/caddy 由官方 CF Workers 承担，见隔离方案）；
-  # 想全套自建就 `docker compose up -d --build`（rendezvous 需 glibc Dockerfile）
-  - docker compose up -d relay
+  # 想全套自建就 `docker compose up -d --build`（rendezvous 需 glibc Dockerfile）。
+  # --build：relay 镜像在构建期自下载官方 glibc 二进制并校验 sha256
+  # （T-063b review：旧 Dockerfile COPY 的本地二进制被 .gitignore 排除，
+  # 全新 VPS 无此文件，本模板此前必失败）。
+  - docker compose up -d --build relay
   - docker compose ps
   # 防火墙：仅 SSH + relay 端口（T-063b：之前只写 profiles 从不 enable，现在真正生效）
   - ufw allow ssh

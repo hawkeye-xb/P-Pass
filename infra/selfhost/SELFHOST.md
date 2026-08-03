@@ -63,7 +63,7 @@ certbot certonly --standalone --non-interactive --agree-tos -m you@example.com -
 ```
 证书落在 `/etc/letsencrypt/live/relay.example.com/`，relay 容器只读挂载。
 续期：`certbot renew` 默认定时器已装（`certbot.timer`），但 standalone 续期时
-80 必须空闲——若 caddy 常驻，改 webroot 或 DNS-01（见下「运维」）。
+80 必须空闲——若 caddy 常驻，首签后切换到 webroot（见下「运维·证书」，一条命令）。
 
 **6. 起服务**：
 ```bash
@@ -99,13 +99,22 @@ relay 探针 URL 填 `https://<relay 域名>:8443/healthz`，期望 200。
   ufw allow 8443/tcp && ufw allow 7842/udp && ufw --force enable
   ```
 - **证书**：relay 用 certbot Manual 证书（`/etc/letsencrypt`），自动续期走
-  `certbot.timer`。⚠️ standalone 续期要求 80 空闲——caddy 常驻时用：
-  ```bash
-  # 方案 A：webroot（caddy 代理 /.well-known/acme-challenge/ 到 /var/www/certbot）
-  # 方案 B：DNS-01（推荐，不占端口）
-  certbot certonly --manual --preferred-challenges dns -d relay.example.com
-  ```
-  续期成功 = 新证书落盘 → `docker compose restart relay`（或 systemd 服务）生效。
+  `certbot.timer`。续期路径按部署形态二选一（T-063b review 修正：旧文档的
+  webroot 路由并不存在、manual DNS 又无法自动续期，两条都跑不通）：
+  - **只跑 relay**（80 空闲，cloud-init 默认形态）：首签就是 standalone，
+    `certbot renew` 自动复用同一方式，零额外配置。
+  - **全套自建**（caddy 占 80）：首签后执行一次
+    ```bash
+    mkdir -p /var/www/certbot
+    certbot certonly --webroot -w /var/www/certbot -d relay.example.com
+    ```
+    把该域名的续期方式切换为 webroot——Caddyfile 已配 `http://{$RELAY_DOMAIN}`
+    的 challenge 应答、compose 已给 caddy 挂 `/var/www/certbot:ro`，此后
+    `certbot.timer` 自动续期不再占 80。
+  - 续期成功 = 新证书落盘 → relay 需要重启生效，推荐挂 deploy-hook 全自动：
+    ```bash
+    certbot renew --deploy-hook 'docker compose -f /opt/ppass/infra/selfhost/docker-compose.yml restart relay'
+    ```
 - **升级**：`git pull && docker compose up -d --build`。
 - **监控**：Kuma 探针模板见 `infra/relay/`（T-064）；relay metrics 开 9090 端口
   可给 prometheus 抓（compose 里注释着）。

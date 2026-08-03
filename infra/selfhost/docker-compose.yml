@@ -65,10 +65,14 @@ services:
       # T-063b：给默认值——不建 .env 时 compose 也能解析（relay 单独部署不需要 caddy，
       # 但 ${VAR:?} 会让整个文件解析失败）。真正跑 caddy 前必须设成真实域名。
       RENDEZVOUS_DOMAIN: ${RENDEZVOUS_DOMAIN:-rendezvous.example.com}
+      RELAY_DOMAIN: ${RELAY_DOMAIN:-relay.example.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+      # relay 域名 HTTP-01 续期的 webroot（certbot 在宿主机写，caddy 只读应答；
+      # 见 SELFHOST.md「证书」节与 Caddyfile 的 http://{$RELAY_DOMAIN} 块）
+      - /var/www/certbot:/var/www/certbot:ro
 
   # Phase 2: 自建发现（pkarr）。当前客户端用 n0 官方 DNS 发现 + QR 地址段，
   # 不依赖自建发现也能全流程跑通；iroh 支持自定义 discovery 后再启用。
