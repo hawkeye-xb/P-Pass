@@ -13,10 +13,20 @@
 
 | 组件 | 镜像/来源 | 端口 | 作用 |
 |---|---|---|---|
-| iroh-relay | `n0computer/iroh-relay:v1.0.3`（官方） | 8443 TCP + 7842 UDP | 中继兜底（NAT 打洞失败时转发加密流量） |
+| iroh-relay | **自建 glibc 镜像**（`infra/selfhost/relay/Dockerfile`，debian + 官方 GitHub release 二进制） | 8443 TCP + 7842 UDP | 中继兜底（NAT 打洞失败时转发加密流量） |
 | rendezvous | 本仓库 Dockerfile（Miniflare/workerd，**glibc base**） | 8787（caddy 反代到 443） | 配对会合（短码信封交换，T-060） |
 | caddy | `caddy:2-alpine` | 80/443 | 自动 TLS 反代 |
 | pkarr | （Phase 2，profile 未开） | — | 自建发现——当前客户端 QR 自带地址，暂不需要 |
+
+> ⚠️ **relay 不用官方镜像**（T-063b 实测）：`n0computer/iroh-relay:v1.0.3`
+> 是 musl 构建，noq-udp 的 cmsg 对齐断言在 musl 上 panic（QUIC 一跑 SIGSEGV，
+> 容器 Restarting (139)）。官方 GitHub release 的 glibc 二进制无此问题。
+> 构建自建镜像前先下载二进制：
+> ```bash
+> cd infra/selfhost/relay
+> wget https://github.com/n0-computer/iroh/releases/download/v1.0.3/iroh-relay-v1.0.3-x86_64-unknown-linux-gnu.tar.gz
+> tar xzf iroh-relay-v1.0.3-*.tar.gz && cp iroh-relay .
+> ```
 
 ## 从零步骤 / From zero
 
@@ -38,6 +48,9 @@ git clone https://github.com/hawkeye-xb/P-Pass.git
 cd P-Pass/infra/selfhost
 cp .env.example .env                     # 编辑 RENDEZVOUS_DOMAIN
 cp relay-config.example.toml relay-config.toml   # 编辑 tls.hostname
+# relay glibc 二进制（官方镜像 musl 有 panic，见上）：
+cd relay && wget https://github.com/n0-computer/iroh/releases/download/v1.0.3/iroh-relay-v1.0.3-x86_64-unknown-linux-gnu.tar.gz \
+  && tar xzf iroh-relay-v1.0.3-*.tar.gz && cp iroh-relay . && cd ..
 ```
 
 **5. 签 relay 证书（T-063b 修正：不用内置 LetsEncrypt）**：
