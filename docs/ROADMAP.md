@@ -144,8 +144,11 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [~] T-072 i18n completeness + AV-block guide — landed; small fixes
       in **T-072b** (doc drift, zh-only docs); desktop badge
       regressions split to **T-042b**
-- [ ] T-062b update artifact verification + pinned pubkey (blocks any
-      runtime update wiring)
+- [x] T-062b update artifact verification + pinned pubkey — **DONE
+      2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
+      parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY
+      constant + existence test; tamper test rewritten; manifest example
+      covers all 5 platforms; 19/19 tests green)
 - [ ] H-09 Windows smoke — kit landed, assertions soft (**H-09b**),
       real-box re-run pending
 - [ ] H-10 naive-user onboarding line (quickstart docs → cold-start
