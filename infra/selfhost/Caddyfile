@@ -7,3 +7,17 @@
 	encode gzip
 	reverse_proxy rendezvous:8787
 }
+
+# relay 域名的 HTTP-01 续期通道（T-063b review：文档许诺的 webroot 路由此前
+# 并不存在——relay 域名的 challenge 打到 caddy 只会 404）。certbot 在宿主机以
+# `--webroot -w /var/www/certbot` 写 challenge 文件，caddy 在 80 上只读应答；
+# 其余 http 请求一律 308 到 relay 的 HTTPS 端口。RELAY_DOMAIN 由 compose 注入。
+http://{$RELAY_DOMAIN} {
+	handle /.well-known/acme-challenge/* {
+		root * /var/www/certbot
+		file_server
+	}
+	handle {
+		redir https://{$RELAY_DOMAIN}:8443{uri} 308
+	}
+}

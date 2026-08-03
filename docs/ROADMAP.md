@@ -138,9 +138,12 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       workers landed; **T-060b code landed 2026-08-03** (alarm
       starvation fixed via getAlarm check + re-arm, duplicate live-hash
       POST → 409, honest threat model in README/comments, 4 new tests —
-      11/11 vitest + typecheck green); selfhost/relay templates pending
-      **T-063b**: reproduced doc-path failures, must close the loop on
-      a real VPS
+      11/11 vitest + typecheck green); **T-063b DONE 2026-08-03** (real
+      VPS closed loop: .env bootstrap, Manual certs via certbot,
+      CMD-SHELL healthcheck on /healthz, glibc relay image — official
+      musl image panics on QUIC, now fetched+sha256-pinned at build
+      time; ufw actually enabled; dogfood-smoke green via self-hosted
+      relay)
 - [ ] H-07 self-hosted relay A/B (**priority raised** — unshipped relay
       domains proven harmful in dogfood smoke); merge T-063b into this
 - [~] T-071 release workflow + attestation — pipeline runs end-to-end
