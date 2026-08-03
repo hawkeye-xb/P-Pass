@@ -187,6 +187,14 @@ mod tests {
         assert!(cfg.relay_urls.is_empty());
         assert!(cfg.rendezvous_url.contains("rendezvous"));
         assert!(cfg.telemetry.enabled);
+        // T-061b-fix: the telemetry Worker only accepts POSTs on /ingest —
+        // the compiled-in default URL must carry the suffix or a stock
+        // daemon 404s every batch silently.
+        assert!(
+            cfg.telemetry.url.ends_with("/ingest"),
+            "默认 telemetry url 必须带 /ingest，实际: {}",
+            cfg.telemetry.url
+        );
         assert_eq!(cfg.log_level, "info");
         assert_eq!(cfg.data_dir, None);
     }

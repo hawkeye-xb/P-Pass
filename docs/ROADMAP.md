@@ -166,18 +166,28 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       src-tauri tests in temp dir + wired into CI, StringsSymmetryTest
       real XML parser — vite build + src-tauri 2/2 + diag 8/8 + Android
       strings green; three-state walkthrough pending user pass)
+- [x] T-061b telemetry fixes — **DONE 2026-08-03** (doubles fixed
+      per-event columns so double2 has stable meaning; only POST /ingest
+      accepts batches; 14/14 vitest) — **T-061b-fix** closes the
+      deployment gap: compiled-in default telemetry URL now carries
+      `/ingest` (asserted in config tests), toDataPoint switch is
+      exhaustiveness-guarded with assertNever (negative-tested), stale
+      header comment fixed — review PASS (claims independently re-run)
 - [x] T-062b update artifact verification + pinned pubkey — **DONE
       2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
       parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY
       constant + existence test; tamper test rewritten; manifest example
       covers all 5 platforms; 19/19 tests green — review PASS, two
       non-blocking notes on the T-071 real-key follow-up)
-- [~] H-09 Windows smoke — kit landed; **H-09b code DONE 2026-08-03**
-      (tautology idempotency check fixed, revoke hard-fails, IPC Resp
-      asserted, try/finally daemon cleanup, ExitCode handle cache;
-      attribution corrected: bare pipe name = .NET ctor contract) —
-      real-box re-run pending (**H-09b-verify**, with fault-inversion
-      proof)
+- [x] H-09 Windows smoke — **DONE 2026-08-03**: H-09b code (tautology
+      idempotency check fixed, revoke hard-fails, IPC Resp asserted,
+      try/finally daemon cleanup, ExitCode handle cache; attribution
+      corrected: bare pipe name = .NET ctor contract) + **H-09b-verify
+      real-box PASS** (Win10 22H2 / PS 5.1: full run ALL GREEN, then
+      two fault-inversions both red — idempotency pattern falsified →
+      step 3 red, revoke call removed → step 5 red — restored
+      byte-identical). Follow-up: bin-win-x64 branch re-syncs
+      win-smoke.ps1 on next artifacts run
 - [ ] H-10 naive-user onboarding line (quickstart docs → cold-start
       walkthrough → human-grade release assets)
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
