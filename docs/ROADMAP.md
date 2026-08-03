@@ -146,7 +146,11 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       regressions split to **T-042b**
 - [x] T-061b telemetry fixes — **DONE 2026-08-03** (doubles fixed
       per-event columns so double2 has stable meaning; only POST /ingest
-      accepts batches; 14/14 vitest)
+      accepts batches; 14/14 vitest) — **T-061b-fix** closes the
+      deployment gap: compiled-in default telemetry URL now carries
+      `/ingest` (asserted in config tests), toDataPoint switch is
+      exhaustiveness-guarded with assertNever (negative-tested), stale
+      header comment fixed
 - [ ] T-062b update artifact verification + pinned pubkey (blocks any
       runtime update wiring)
 - [ ] H-09 Windows smoke — kit landed, assertions soft (**H-09b**),
