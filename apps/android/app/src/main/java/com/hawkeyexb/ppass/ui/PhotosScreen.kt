@@ -126,7 +126,10 @@ fun PhotosScreen(loader: TimelineLoader) {
 
     val current = opened
     if (current != null) {
-        if (current.mediaType.startsWith("video/")) {
+        // Wire format is the normalized "video"/"photo" (golden snapshot),
+        // not a MIME type — keep the prefix check so a raw "video/mp4" from
+        // an older daemon routes correctly too.
+        if (current.mediaType.startsWith("video")) {
             VideoScreen(loader, current) { opened = null }
         } else {
             PhotoViewer(loader, current) { opened = null }
