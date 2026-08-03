@@ -1,5 +1,18 @@
-# Release pipeline (T-071) — tag v* → 双平台构建 → SHA256 → 签名门控 →
-# SLSA attestation → Release 草稿。
+# Release pipeline (T-071 + T-071b supply-chain hardening) — tag v* →
+# 双平台构建 → SHA256 → 签名门控 → SLSA attestation → Release 草稿。
+#
+# T-071b 加固点（2026-08-03）：
+#   - Apple 签名 secret 只出现在 codesign / notarize 两个 step 的 env，
+#     job 级 env 不再暴露给任何第三方 action 的进程环境。
+#   - 所有第三方 action pin 到 commit SHA（供应链攻击面归零；升级时
+#     用 git ls-remote 查新 tag 的 SHA 替换）。
+#   - 每 job 最小 permissions：build job 不拿 contents:write，release
+#     job 不拿 id-token/attestations。
+#   - 草稿 release 先 create 再 upload（xargs 拆分 = 二次 create 必败），
+#     SHA256SUMS 作为资产上传而非仅 notes。
+#   - signed=yes 必须同时反映公证状态（只签名未公证仍会被 Gatekeeper 拦）。
+#   - VirusTotal 步 gate 提到 job env（step env 在 if 求值时不可见，
+#     原条件恒假）；notes 追加写工作区根（原 ../NOTES.md 落到工作区外）。
 #
 # 凭据策略（无凭据路径 = 卡面验收）：
 #   - macOS 签名/公证：APPLE_CERT_P12 / APPLE_CERT_PASSWORD /
@@ -11,7 +24,7 @@
 #     未配置保护规则时自动通过，不阻塞无凭据路径。
 #
 # 测试验收：打一个测试 tag（如 v0.2.0-test.1）→ workflow 走通到"签名前"全链
-# → 生成带 SHA256SUMS 的 Release 草稿（无凭据时签名步跳过）。
+# → 生成带 SHA256SUMS 资产的 Release 草稿（无凭据时签名步跳过）。
 
 name: Release
 
@@ -25,36 +38,32 @@ on:
         required: false
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   macos-arm64:
     name: "macOS arm64 (签名门控)"
     runs-on: macos-14
     environment: release-signing
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     env:
-      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
-      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-      APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
-      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-      APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
-      # 公证凭据二选一：API key（--key/--key-id/--issuer）或
-      # Apple ID + App-Specific Password + Team ID（Xisper 先例，.env.build 变量同名）
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # 非 secret 门控布尔（job env 可引用 secrets，但值本身不落 job env；
+      # signing secret 只在 codesign / notarize 两个 step env 出现）
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERT_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.APPLE_NOTARY_KEY != '' || secrets.APPLE_ID != '' }}
     outputs:
       signed: ${{ steps.signtag.outputs.signed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/
@@ -76,11 +85,13 @@ jobs:
           cp tools/dogfood-smoke.sh /tmp/rel/ || true
           echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > /tmp/rel/BUILD_INFO
 
-      # ── 签名门控：无凭据 → 跳过（卡面验收路径） ─────────────────
+      # ── 签名门控：无凭据 → 跳过（卡面验收路径）。secret 只在此 step env ──
       - name: Codesign (gated)
         id: codesign
-        if: env.APPLE_CERT_P12 != ''
+        if: env.HAS_APPLE_CERT == 'true'
         env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
           CERT_P12: ${{ runner.temp }}/cert.p12
         run: |
           set -euo pipefail
@@ -97,10 +108,20 @@ jobs:
           echo "signed=yes" >> "$GITHUB_OUTPUT"
 
       - name: Notarize + staple (gated)
-        if: env.APPLE_CERT_P12 != '' && (env.APPLE_NOTARY_KEY != '' || env.APPLE_ID != '')
+        id: notarize
+        if: env.HAS_APPLE_CERT == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          # 公证凭据二选一：API key（--key/--key-id/--issuer）或
+          # Apple ID + App-Specific Password + Team ID（Xisper 先例，.env.build 变量同名）
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          # 双路径：API key（CI 标准）或 Apple ID + App-Specific Password（Xisper 先例）
+          # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
           NOTARY_ARGS=""
           if [ -n "${APPLE_NOTARY_KEY:-}" ]; then
             NOTARY_ARGS="--key $APPLE_NOTARY_KEY --key-id $APPLE_NOTARY_KEY_ID --issuer $APPLE_NOTARY_ISSUER"
@@ -109,16 +130,20 @@ jobs:
           fi
           for bin in /tmp/rel/daemon /tmp/rel/testclient; do
             ditto -c -k --keepParent "$bin" "$bin.zip"
+            # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
             xcrun notarytool submit "$bin.zip" $NOTARY_ARGS --wait --timeout 15m
             xcrun stapler staple "$bin"
             rm -f "$bin.zip"
           done
+          echo "notarized=yes" >> "$GITHUB_OUTPUT"
 
       - name: Signing status tag
         id: signtag
         run: |
           SIG="no"
-          if [ "${{ steps.codesign.outputs.signed }}" = "yes" ]; then SIG="yes"; fi
+          if [ "${{ steps.codesign.outputs.signed }}" = "yes" ] && [ "${{ steps.notarize.outputs.notarized }}" = "yes" ]; then
+            SIG="yes"
+          fi
           echo "signed=$SIG" >> "$GITHUB_OUTPUT"
 
       - name: SHA256 + notes
@@ -128,12 +153,12 @@ jobs:
           cat SHA256SUMS
 
       - name: SLSA attestation
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
         with:
           subject-path: /tmp/rel/daemon, /tmp/rel/testclient
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-arm64
           path: /tmp/rel
@@ -142,14 +167,18 @@ jobs:
     name: "Windows x64 (未签名)"
     runs-on: windows-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/
@@ -182,12 +211,12 @@ jobs:
           echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
 
       - name: SLSA attestation
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
         with:
           subject-path: target/release/daemon.exe, target/release/testclient.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-x64
           path: |
@@ -200,11 +229,15 @@ jobs:
     name: "Release 草稿"
     needs: [macos-arm64, windows-x64]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VT_API_KEY: ${{ secrets.VT_API_KEY }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -217,48 +250,45 @@ jobs:
           fi
           [ -n "$TAG" ] || { echo "TAG 缺失（dispatch 需 tag 输入）"; exit 1; }
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-          : > NOTES.md
-          echo "## P-Pass ${TAG#v}" >> NOTES.md
-          echo "" >> NOTES.md
-          echo "构建自 \`${GITHUB_SHA::7}\` · $(date -u +%FT%TZ)Z" >> NOTES.md
-          echo "" >> NOTES.md
-          echo "**签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（无凭据路径跳过）/ Windows=no（Authenticode 证书 H-02 范畴）" >> NOTES.md
-          echo "" >> NOTES.md
-          echo "### SHA-256" >> NOTES.md
-          for plat in macos-arm64 windows-x64; do
-            if [ -f "artifacts/$plat/SHA256SUMS" ]; then
-              echo "" >> NOTES.md
-              echo "**$plat**" >> NOTES.md
-              echo '```' >> NOTES.md
-              cat "artifacts/$plat/SHA256SUMS" >> NOTES.md
-              echo '```' >> NOTES.md
-            fi
-          done
-          echo "" >> NOTES.md
-          echo "### 验证（被拦截/不信任时先做这三步）" >> NOTES.md
-          echo "- 对照上方 SHA-256（certutil/shasum）" >> NOTES.md
-          echo "- Release 页的 Provenance 面板（SLSA attestation）" >> NOTES.md
-          echo "- 源码可查：构建流程 .github/workflows/release.yml" >> NOTES.md
-          echo "" >> NOTES.md
-          echo "被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md" >> NOTES.md
+          cat > NOTES.md <<EOF
+          ## P-Pass ${TAG#v}
+
+          构建自 \`${GITHUB_SHA::7}\` · $(date -u +%FT%TZ)
+
+          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（无凭据路径跳过）/ Windows=no（Authenticode 证书 H-02 范畴）
+
+          ### 验证（被拦截/不信任时先做这三步）
+          - 下载每平台附带的 SHA256SUMS 资产（certutil/shasum 对照）
+          - Release 页的 Provenance 面板（SLSA attestation）
+          - 源码可查：构建流程 .github/workflows/release.yml
+
+          被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md
+          EOF
 
       - name: VirusTotal 提交（gated，卡面 VT 步——支持 blocked-by-av 信誉建设）
         if: env.VT_API_KEY != ''
-        env:
-          VT_API_KEY: ${{ secrets.VT_API_KEY }}
         run: |
           EXE="artifacts/windows-x64/daemon.exe"
           [ -f "$EXE" ] || exit 0
           ID=$(curl -sf -X POST -H "x-apikey: $VT_API_KEY" \
             -F "file=@$EXE" https://www.virustotal.com/api/v3/files \
             | jq -r .data.id)
-          echo "VirusTotal 分析 ID: $ID（草稿发布后见扫描结果链接）" >> ../NOTES.md
+          echo "VirusTotal 分析 ID: $ID（草稿发布后见扫描结果链接）" >> NOTES.md
 
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd artifacts
-          find . -type f ! -name SHA256SUMS ! -name BUILD_INFO -print0 | xargs -0 \
-            gh release create "$TAG" --draft --title "P-Pass ${TAG#v}" --notes-file ../NOTES.md
+          gh release create "$TAG" --draft --title "P-Pass ${TAG#v}" --notes-file ../NOTES.md
           echo "草稿: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          gh release upload "$TAG" \
+            macos-arm64/daemon macos-arm64/testclient macos-arm64/SHA256SUMS macos-arm64/BUILD_INFO \
+            windows-x64/daemon.exe windows-x64/testclient.exe windows-x64/SHA256SUMS windows-x64/BUILD_INFO
+          echo "assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
