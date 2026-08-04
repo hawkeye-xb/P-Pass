@@ -4,15 +4,17 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 D=$(mktemp -d /tmp/ppf-android-pair.XXXX)
-trap 'pkill -f "$D" 2>/dev/null || true; rm -rf "$D"' EXIT
+# 失败时保留 daemon 日志尾部；kill $DPID 精确杀（pkill -f 匹配不到环境变量）
+trap 'rc=$?; kill "$DPID" 2>/dev/null || true; if [ "$rc" -ne 0 ] && [ -f "$D/d.log" ]; then echo "=== daemon log (exit $rc) ==="; tail -30 "$D/d.log" || true; fi; rm -rf "$D"' EXIT
 mkdir -p "$D/library"
 PPF_DATA_DIR="$D/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
   PPF_BIND_ADDR="127.0.0.1:0" \
   "$ROOT/target/release/daemon" > "$D/d.log" 2>&1 &
+DPID=$!
 for _ in $(seq 1 50); do grep -q 'ppf://pair' "$D/d.log" 2>/dev/null && break; sleep 0.2; done
 QR=$(grep -o 'ppf://pair[^ ]*' "$D/d.log")
 cd "$ROOT/apps/android"
 JAVA_HOME="${JAVA_HOME:-$(brew --prefix openjdk)}" \
   PPF_DAEMON_QR="$QR" PPF_DAEMON_IPC="$D/library/ipc.token" \
-  ./gradlew -q :app:testDebugUnitTest --tests '*DaemonPairTest' --rerun
+  ./gradlew :app:testDebugUnitTest --tests '*DaemonPairTest' --rerun
 grep -o "PAIR OK[^<]*" app/build/test-results/testDebugUnitTest/TEST-*DaemonPairTest.xml
