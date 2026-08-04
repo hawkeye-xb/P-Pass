@@ -40,6 +40,29 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    // H-10c: release 签名（Android 拒绝安装未签名 APK——"允许未知来源"
+    // 只管非 Play 商店安装，管不了 APK 没签名）。keystore 经 CI secrets
+    // 注入（base64 解码到文件 + 密码 + alias）；无凭据路径（env 未设置）
+    // 保持 unsigned 行为不变。
+    signingConfigs {
+        if (!System.getenv("ANDROID_KEYSTORE_BASE64").isNullOrEmpty()) {
+            create("release") {
+                storeFile = file(System.getenv("ANDROID_KEYSTORE_FILE") ?: "release.keystore")
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEYSTORE_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (signingConfigs.findByName("release") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
 }
 
 dependencies {

@@ -1,0 +1,6 @@
+# pnpm 11: strictDepBuilds 默认开启，native 模块（esbuild）的 build script
+# 必须显式放行，否则 pnpm install 报 ERR_PNPM_IGNORED_BUILDS 且 .bin 链接缺失。
+# 2026-08-02 实测：package.json 的 pnpm.onlyBuiltDependencies 已废弃不生效；
+# 唯一生效位置是 pnpm-workspace.yaml 顶层的 allowBuilds map。
+allowBuilds:
+  esbuild: true
