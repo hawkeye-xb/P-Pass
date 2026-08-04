@@ -7,7 +7,7 @@ D=$(mktemp -d /tmp/ppf-android-hello.XXXX)
 trap 'pkill -f "$D" 2>/dev/null || true; rm -rf "$D"' EXIT
 mkdir -p "$D/library"
 PPF_DATA_DIR="$D/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
-  PPF_BIND_ADDR="0.0.0.0:0" \
+  PPF_BIND_ADDR="127.0.0.1:0" \
   "$ROOT/target/release/daemon" > "$D/d.log" 2>&1 &
 for _ in $(seq 1 50); do grep -q 'ppf://pair' "$D/d.log" 2>/dev/null && break; sleep 0.2; done
 QR=$(grep -o 'ppf://pair[^ ]*' "$D/d.log")
