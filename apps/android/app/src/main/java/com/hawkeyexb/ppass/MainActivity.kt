@@ -28,7 +28,6 @@ import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.work.WorkManager
-import kotlinx.coroutines.launch
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
 import com.hawkeyexb.ppass.battery.openBatteryOptimizationSettings
 import com.hawkeyexb.ppass.i18n.DiagText
