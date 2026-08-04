@@ -1,24 +1,25 @@
-# Uptime Kuma 探针配置模板（T-064，占位符）
+# Uptime Kuma 探针配置模板（T-064 / T-063b，占位符）
 # 导入：Kuma → Add New Monitor → HTTP(s) 类型。真实域名由 H-07 替换。
 # 告警 webhook 配置在私有仓 ppf-ops/monitoring/。
+# T-063b：relay 探针 URL 用 /healthz（真机实测 200 端点）。
 
 monitors:
   # --- 官方 relay 三区域 ---
   - name: "relay US"
     type: http
-    url: "https://relay-us.p-pass.hawkeye-xb.com:8443"
+    url: "https://relay-us.p-pass.hawkeye-xb.com:8443/healthz"
     interval: 60
     retryInterval: 60
     maxretries: 3
   - name: "relay EU"
     type: http
-    url: "https://relay-eu.p-pass.hawkeye-xb.com:8443"
+    url: "https://relay-eu.p-pass.hawkeye-xb.com:8443/healthz"
     interval: 60
     retryInterval: 60
     maxretries: 3
   - name: "relay AP"
     type: http
-    url: "https://relay-ap.p-pass.hawkeye-xb.com:8443"
+    url: "https://relay-ap.p-pass.hawkeye-xb.com:8443/healthz"
     interval: 60
     retryInterval: 60
     maxretries: 3

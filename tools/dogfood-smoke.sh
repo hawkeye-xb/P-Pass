@@ -15,12 +15,19 @@ TC="$ROOT/target/release/testclient"
 [ -x "$DAEMON" ] || { echo "先构建: cargo build --release -p daemon -p testclient"; exit 1; }
 
 rm -rf "$WORK" && mkdir -p "$WORK/library" && cd "$WORK"
-cleanup() { kill "$DAEMON_PID" 2>/dev/null || true; }
+# UX-07: --ephemeral + FIFO 控制 stdin——脚本收尾时关闭 FIFO 写端（EOF）
+# daemon 自己 3 秒内退出，不再需要 kill（杜绝 A 类孤儿）。
+mkfifo "$WORK/daemon-ctl"
+cleanup() {
+  exec 3>&- 2>/dev/null || true   # 关 FIFO 写端 → daemon EOF 自退
+  wait "$DAEMON_PID" 2>/dev/null || true
+}
 trap cleanup EXIT
 
 PPF_DATA_DIR="$WORK/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="${PPF_RELAY_URLS:-}" \
-  "$DAEMON" > daemon.log 2> daemon.err &
+  "$DAEMON" --ephemeral < "$WORK/daemon-ctl" > daemon.log 2> daemon.err &
 DAEMON_PID=$!
+exec 3>"$WORK/daemon-ctl"   # 保持写端打开——daemon 不会立即 EOF
 
 for _ in $(seq 1 50); do grep -q 'ppf://pair' daemon.log 2>/dev/null && break; sleep 0.2; done
 QR=$(grep -o 'ppf://pair[^ ]*' daemon.log)
@@ -28,24 +35,8 @@ NODE=$(grep -o 'NodeId: .*' daemon.log | awk '{print $2}')
 SOCK=$(sed -n 1p library/ipc.token)
 TOKEN=$(sed -n 2p library/ipc.token)
 echo "daemon up: $NODE (ipc: $SOCK)"
-
-ipc() { # ipc <method> [params-json]
-  local params="${2:-}"
-  [ -z "$params" ] && params='{}'
-  python3 - "$SOCK" "$TOKEN" "$1" "$params" <<'PYEOF'
-import socket, json, sys, platform
-p = sys.argv[1]
-# Linux: daemon 的 IPC socket 在抽象命名空间（\0 前缀，非 /tmp 文件）；
-# macOS: /tmp 下文件。按平台选连接路径（双机验证时记账的坑）。
-p = ("\0" if platform.system() == "Linux" else "/tmp/") + p
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(p)
-f = s.makefile("rw"); f.write(sys.argv[2] + "\n"); f.flush()
-f.write(json.dumps({"id": "x", "method": sys.argv[3], "params": json.loads(sys.argv[4])}) + "\n"); f.flush()
-resp = json.loads(f.readline())
-print(json.dumps(resp, ensure_ascii=False))
-sys.exit(0 if resp.get("ok") else 1)
-PYEOF
-}
+# shellcheck source=./ipc-lib.sh
+source "$ROOT/tools/ipc-lib.sh"
 
 echo "── 1. 配对（QR + IPC owner 确认）"
 "$TC" pair --token "$QR" --name "冒烟agent" > pair.log 2>&1 &

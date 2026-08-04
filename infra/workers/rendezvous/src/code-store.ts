@@ -3,15 +3,29 @@ import { DurableObject } from "cloudflare:workers";
 /**
  * CodeStore — Durable Object holding short-code → sealed-envelope pairs (T-060).
  *
- * Security model (from the design doc §2.2 / §6):
+ * Security model (from the design doc §2.2 / §6) — honest claims (T-060b):
  * - The server stores only `code_hash` (SHA-256 hex of the 6-digit code) and an
  *   opaque `sealed` envelope. It never sees the plaintext code and never parses
- *   the envelope — the NodeId inside is protected client-side by an envelope
- *   encrypted with a key derived from the code ("服务器不可读 NodeId").
- * - Read-once: a successful GET returns the envelope and deletes it; a second
- *   GET for the same hash is 410.
+ *   the envelope.
+ * - **Threat boundary**: this protects the envelope from OUTSIDERS (anyone who
+ *   can reach the API or observe transit) — it does NOT protect the envelope
+ *   from the operator. The short-code space is only 10^6, so the operator can
+ *   dictionary-reverse `code_hash` in milliseconds (precompute a rainbow table
+ *   over all 10^6 codes), recover the code, derive the envelope key, and
+ *   decrypt. "Server cannot read NodeId" would be false — we do not claim it.
+ * - Read-once: a successful GET returns the envelope and deletes it (record
+ *   kept as `opened` until the alarm sweep so "read before" is distinguishable
+ *   from "never existed"); a second GET for the same hash is 410. Read-once is
+ *   an anti-replay property, NOT unlinkability — the operator sees every
+ *   request.
+ * - Duplicate POST of a live, unconsumed hash → 409. Overwriting an
+ *   unconsumed envelope would be decryptable cross-family swap (the envelope
+ *   key derives from the code alone, so two families unluckily sharing a code
+ *   would swap envelopes); 409 forces the loser to retry with a fresh code.
  * - TTL: 600 s (matching the card's `TTL600s`). Expired codes are rejected with
- *   410 and lazily deleted; a per-code alarm sweeps the store for hygiene.
+ *   410 and lazily deleted; an alarm sweep cleans up for hygiene. The alarm is
+ *   only (re)set when none exists or the existing one is later than the next
+ *   expiry — never pushed forward, so steady traffic cannot starve the sweep.
  * - Abuse ("错 5 次销毁"): per-IP rate limits (POST 10/min, GET 30/min) plus a
  *   wrong-lookup counter — 5 failed lookups from one IP within a minute block
  *   that IP until the window rolls over. Counters are in-memory: the "global"
@@ -99,10 +113,24 @@ export class CodeStore extends DurableObject<Env> {
     if (!this.bump(ip, "post", nowSec)) {
       return json({ error: "rate_limited" }, 429);
     }
+    // Duplicate POST of a live, unconsumed hash is a cross-family swap hazard
+    // (the envelope key derives from the code alone) → refuse loudly instead of
+    // silently overwriting. Consumed (opened) or expired records are free to
+    // reuse — they hold no value to anyone.
+    const existing = await this.ctx.storage.get<StoredCode>(`code:${hash}`);
+    if (existing && !existing.opened && existing.expiresAt > nowSec) {
+      return json({ error: "duplicate" }, 409);
+    }
     const code: StoredCode = { sealed, expiresAt: nowSec + TTL_SECONDS, opened: false };
     await this.ctx.storage.put(`code:${hash}`, code);
-    // Hygiene: sweep expired codes shortly after this one would expire.
-    await this.ctx.storage.setAlarm((nowSec + TTL_SECONDS + 1) * 1000);
+    // Hygiene sweep for this code's expiry — but never push an existing alarm
+    // later than it already is (steady traffic would keep postponing the sweep
+    // and consumed envelopes would linger forever).
+    const nextAlarmMs = (nowSec + TTL_SECONDS + 1) * 1000;
+    const pending = await this.ctx.storage.getAlarm();
+    if (pending === null || pending > nextAlarmMs) {
+      await this.ctx.storage.setAlarm(nextAlarmMs);
+    }
     return json({ ok: true }, 201);
   }
 
@@ -135,14 +163,34 @@ export class CodeStore extends DurableObject<Env> {
     return json({ sealed: code.sealed });
   }
 
-  /** Alarm: sweep expired codes (best-effort hygiene; reads already check TTL). */
+  /**
+   * Alarm: sweep expired codes and re-arm at the next earliest expiry.
+   * Framework hook — the runtime calls `alarm()` with no useful arg; the
+   * clock is read from the wall by default.
+   */
   async alarm(): Promise<void> {
-    const nowSec = Math.floor(Date.now() / 1000);
+    await this.sweep(Math.floor(Date.now() / 1000));
+  }
+
+  /**
+   * Sweep implementation. `nowSec` is injectable for tests (vitest's
+   * runInDurableObject does not forward fake timers to the DO, so the sweep
+   * test pins the clock explicitly — same seam as the Rust `with_clock`).
+   */
+  async sweep(nowSec: number): Promise<void> {
     const list = await this.ctx.storage.list<StoredCode>({ prefix: "code:" });
+    let nextExpiryMs: number | null = null;
     for (const [key, value] of list) {
       if (value.expiresAt <= nowSec) {
         await this.ctx.storage.delete(key);
+      } else if (nextExpiryMs === null || value.expiresAt * 1000 < nextExpiryMs) {
+        nextExpiryMs = value.expiresAt * 1000;
       }
+    }
+    // Re-arm at the next earliest expiry so later codes don't linger forever
+    // (a sweep consumed only the earliest; the rest need a future pass).
+    if (nextExpiryMs !== null) {
+      await this.ctx.storage.setAlarm(nextExpiryMs + 1000);
     }
   }
 }

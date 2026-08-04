@@ -13,13 +13,15 @@ android {
         applicationId = "com.hawkeyexb.ppass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures {
         compose = true
+        // UPD-01: 更新检查拿当前版本（BuildConfig.VERSION_NAME）
+        buildConfig = true
     }
 
     packaging {
@@ -40,6 +42,29 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    // H-10c: release 签名（Android 拒绝安装未签名 APK——"允许未知来源"
+    // 只管非 Play 商店安装，管不了 APK 没签名）。keystore 经 CI secrets
+    // 注入（base64 解码到文件 + 密码 + alias）；无凭据路径（env 未设置）
+    // 保持 unsigned 行为不变。
+    signingConfigs {
+        if (!System.getenv("ANDROID_KEYSTORE_BASE64").isNullOrEmpty()) {
+            create("release") {
+                storeFile = file(System.getenv("ANDROID_KEYSTORE_FILE") ?: "release.keystore")
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEYSTORE_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (signingConfigs.findByName("release") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
 }
 
 dependencies {
@@ -50,6 +75,8 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    // DOG-02: LocalLifecycleOwner (ON_RESUME 电池白名单刷新)
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")

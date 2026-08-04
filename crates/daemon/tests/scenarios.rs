@@ -7,5 +7,5 @@
 
 #[path = "scenarios/clock_jump.rs"]
 mod clock_jump;
-#[path = "scenarios/revoke_mid_transfer.rs"]
-mod revoke_mid_transfer;
+#[path = "scenarios/revoke_before_commit.rs"]
+mod revoke_before_commit;

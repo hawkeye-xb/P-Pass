@@ -1,5 +1,18 @@
-# Release pipeline (T-071) — tag v* → 双平台构建 → SHA256 → 签名门控 →
-# SLSA attestation → Release 草稿。
+# Release pipeline (T-071 + T-071b supply-chain hardening) — tag v* →
+# 双平台构建 → SHA256 → 签名门控 → SLSA attestation → Release 草稿。
+#
+# T-071b 加固点（2026-08-03）：
+#   - Apple 签名 secret 只出现在 codesign / notarize 两个 step 的 env，
+#     job 级 env 不再暴露给任何第三方 action 的进程环境。
+#   - 所有第三方 action pin 到 commit SHA（供应链攻击面归零；升级时
+#     用 git ls-remote 查新 tag 的 SHA 替换）。
+#   - 每 job 最小 permissions：build job 不拿 contents:write，release
+#     job 不拿 id-token/attestations。
+#   - 草稿 release 先 create 再 upload（xargs 拆分 = 二次 create 必败），
+#     SHA256SUMS 作为资产上传而非仅 notes。
+#   - signed=yes 必须同时反映公证状态（只签名未公证仍会被 Gatekeeper 拦）。
+#   - VirusTotal 步 gate 提到 job env（step env 在 if 求值时不可见，
+#     原条件恒假）；notes 追加写工作区根（原 ../NOTES.md 落到工作区外）。
 #
 # 凭据策略（无凭据路径 = 卡面验收）：
 #   - macOS 签名/公证：APPLE_CERT_P12 / APPLE_CERT_PASSWORD /
@@ -11,7 +24,7 @@
 #     未配置保护规则时自动通过，不阻塞无凭据路径。
 #
 # 测试验收：打一个测试 tag（如 v0.2.0-test.1）→ workflow 走通到"签名前"全链
-# → 生成带 SHA256SUMS 的 Release 草稿（无凭据时签名步跳过）。
+# → 生成带 SHA256SUMS 资产的 Release 草稿（无凭据时签名步跳过）。
 
 name: Release
 
@@ -25,36 +38,32 @@ on:
         required: false
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   macos-arm64:
     name: "macOS arm64 (签名门控)"
     runs-on: macos-14
     environment: release-signing
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     env:
-      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
-      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-      APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
-      APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-      APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
-      # 公证凭据二选一：API key（--key/--key-id/--issuer）或
-      # Apple ID + App-Specific Password + Team ID（Xisper 先例，.env.build 变量同名）
-      APPLE_ID: ${{ secrets.APPLE_ID }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # 非 secret 门控布尔（job env 可引用 secrets，但值本身不落 job env；
+      # signing secret 只在 codesign / notarize 两个 step env 出现）
+      HAS_APPLE_CERT: ${{ secrets.APPLE_CERT_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.APPLE_NOTARY_KEY != '' || secrets.APPLE_ID != '' }}
     outputs:
       signed: ${{ steps.signtag.outputs.signed }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/
@@ -62,10 +71,24 @@ jobs:
             target/
           key: macos-arm64-release-${{ hashFiles('**/Cargo.lock') }}
 
+      # H-10c: desktop shell is a standalone workspace — cache its target too
+      # (Tauri dep tree ~5min cold compile; key on the desktop Cargo.lock).
+      - name: Cache desktop target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: apps/desktop/src-tauri/target/
+          key: macos-arm64-desktop-release-${{ hashFiles('apps/desktop/Cargo.lock') }}
+
       - name: System codecs (libheif via brew)
         run: brew install libheif
 
       - name: Build release binaries
+        env:
+          # DAE-01b blocker②: bake the FULL tag into the daemon
+          # (CARGO_PKG_VERSION has no -test.N suffix; test.8 must be able
+          # to take over from test.7 during dogfood week). Empty on
+          # non-tag runs — build.rs then falls back to CARGO_PKG_VERSION.
+          PPF_BUILD_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
         run: cargo build --release -p daemon -p testclient
 
       - name: Bundle self-contained (dylibs + rpath rewrite)
@@ -76,11 +99,13 @@ jobs:
           cp tools/dogfood-smoke.sh /tmp/rel/ || true
           echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > /tmp/rel/BUILD_INFO
 
-      # ── 签名门控：无凭据 → 跳过（卡面验收路径） ─────────────────
+      # ── 签名门控：无凭据 → 跳过（卡面验收路径）。secret 只在此 step env ──
       - name: Codesign (gated)
         id: codesign
-        if: env.APPLE_CERT_P12 != ''
+        if: env.HAS_APPLE_CERT == 'true'
         env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
           CERT_P12: ${{ runner.temp }}/cert.p12
         run: |
           set -euo pipefail
@@ -91,16 +116,28 @@ jobs:
           security unlock-keychain -p pp "$KEYCHAIN"
           security import "$CERT_P12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -s -k pp "$KEYCHAIN" >/dev/null
+          # find-identity -v 第 1 行是身份（"1) <hash> \"...\""），第 2 行是
+          # "N valid identities found" 汇总——取 NR==1 才是证书哈希。
           /usr/bin/codesign --force --options runtime --timestamp \
-            --sign "$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==2{print $2}')" \
+            --sign "$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')" \
             /tmp/rel/daemon /tmp/rel/testclient
           echo "signed=yes" >> "$GITHUB_OUTPUT"
 
       - name: Notarize + staple (gated)
-        if: env.APPLE_CERT_P12 != '' && (env.APPLE_NOTARY_KEY != '' || env.APPLE_ID != '')
+        id: notarize
+        if: env.HAS_APPLE_CERT == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          # 公证凭据二选一：API key（--key/--key-id/--issuer）或
+          # Apple ID + App-Specific Password + Team ID（Xisper 先例，.env.build 变量同名）
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          # 双路径：API key（CI 标准）或 Apple ID + App-Specific Password（Xisper 先例）
+          # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
           NOTARY_ARGS=""
           if [ -n "${APPLE_NOTARY_KEY:-}" ]; then
             NOTARY_ARGS="--key $APPLE_NOTARY_KEY --key-id $APPLE_NOTARY_KEY_ID --issuer $APPLE_NOTARY_ISSUER"
@@ -109,47 +146,106 @@ jobs:
           fi
           for bin in /tmp/rel/daemon /tmp/rel/testclient; do
             ditto -c -k --keepParent "$bin" "$bin.zip"
+            # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
             xcrun notarytool submit "$bin.zip" $NOTARY_ARGS --wait --timeout 15m
             xcrun stapler staple "$bin"
             rm -f "$bin.zip"
           done
+          echo "notarized=yes" >> "$GITHUB_OUTPUT"
 
       - name: Signing status tag
         id: signtag
         run: |
           SIG="no"
-          if [ "${{ steps.codesign.outputs.signed }}" = "yes" ]; then SIG="yes"; fi
+          if [ "${{ steps.codesign.outputs.signed }}" = "yes" ] && [ "${{ steps.notarize.outputs.notarized }}" = "yes" ]; then
+            SIG="yes"
+          fi
           echo "signed=$SIG" >> "$GITHUB_OUTPUT"
 
       - name: SHA256 + notes
         run: |
           cd /tmp/rel
-          shasum -a 256 daemon testclient > SHA256SUMS
-          cat SHA256SUMS
+          shasum -a 256 daemon testclient > SHA256SUMS-macos-arm64
+          cat SHA256SUMS-macos-arm64
 
       - name: SLSA attestation
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
         with:
           subject-path: /tmp/rel/daemon, /tmp/rel/testclient
 
+      # 整包 zip：daemon 的 rpath 已被 bundle-macos.sh 改写到
+      # @executable_path/lib——裸二进制离开 lib/ 跑不起来，release 资产
+      # 必须是带 lib/ 的自包含包（review 抓到的功能回退）。zip 同时解决
+      # 双平台 SHA256SUMS/BUILD_INFO 资产 basename 冲突（gh 上传 422）。
+      - name: Pack self-contained zip
+        run: |
+          set -euo pipefail
+          cd /tmp && rm -rf P-Pass && cp -R rel P-Pass
+          ditto -c -k --keepParent P-Pass ppass-macos-arm64.zip
+          # zip 挪进 rel/：让 upload-artifact 的两个 path 共享同一根目录，
+          # 下载解包后是平铺的 macos-arm64/<file>（否则公共祖先是 /tmp，
+          # SHA256SUMS 会带上 rel/ 前缀，release 上传步路径对不上）。
+          mv ppass-macos-arm64.zip rel/
+
+      # ── H-10c: 面向人类的 .app + dmg（复用 /tmp/rel 的自包含 daemon）──
+      # sidecar = bundle 后 daemon（rpath @executable_path/lib），lib/ 必须
+      # 一起进 .app/Contents/MacOS/lib。无凭据路径 ad-hoc 重签（与 zip 资产
+      # 一致）；凭据到位后此步的 codesign identity 由门控环境提供。
+      - name: Install Node + pnpm (desktop build)
+        run: |
+          set -euo pipefail
+          # macos-14 runner 自带 node；pnpm 11（allowBuilds 机制所在版本，
+          # 见 apps/desktop/pnpm-workspace.yaml）。corepack 无 packageManager
+          # 字段不可用，直接 npm 全局装。
+          npm install -g pnpm@11
+          pnpm --version
+
+      - name: Bundle desktop .app + dmg (H-10c)
+        # UPD-01: createUpdaterArtifacts 强制签名——tauri bundle 需要
+        # TAURI_SIGNING_PRIVATE_KEY（UPDATE_SIGNING_KEY，rsign 格式，空密码）。
+        # secret 只进本 step env（T-071b 模式）。
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: |
+          set -euo pipefail
+          # ⚠️ dmg 输出到 /tmp/rel/：upload-artifact@v4 按多个 path 的公共
+          # 祖先目录存储，若 dmg 放 /tmp/dmg/ 会让 artifact 内出现 rel/、
+          # dmg/ 前缀（T-071 只传 /tmp/rel 时是根级平铺），release job 的
+          # artifacts/macos-arm64/<file> 引用会全挂。zip 打包步骤在此之前
+          # 已完成，dmg 落入 /tmp/rel 不会被收进 zip。
+          # 无凭据路径：ad-hoc（-）；有 APPLE_CERT 时门控传 identity。
+          # （公证整个 .app 属 H-02 凭据路径范畴，本步只做 ad-hoc 重签。）
+          tools/bundle-desktop-macos.sh /tmp/rel /tmp/rel
+          # ⚠️ 不追加 dmg 到 SHA256SUMS-macos-arm64：zip 内 SUMS 与 release
+          # 资产 SUMS 必须逐字节一致（T-071 三重核对①）。dmg 的 sha256
+          # 由 release job 下载后计算写进 notes。
+
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-arm64
-          path: /tmp/rel
+          path: |
+            /tmp/rel/ppass-macos-arm64.zip
+            /tmp/rel/SHA256SUMS-macos-arm64
+            /tmp/rel/P-Pass-macos-arm64.dmg
 
   windows-x64:
     name: "Windows x64 (未签名)"
     runs-on: windows-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/
@@ -171,40 +267,125 @@ jobs:
         shell: bash
         env:
           VCPKG_ROOT: "C:\\vcpkg"
+          # DAE-01b blocker②: same tag injection as the macOS job.
+          PPF_BUILD_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
         run: cargo build --release -p daemon -p testclient
 
       - name: SHA256 + notes
         shell: bash
         run: |
           cd target/release
-          sha256sum daemon.exe testclient.exe > SHA256SUMS
-          cat SHA256SUMS
-          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
+          sha256sum daemon.exe testclient.exe > SHA256SUMS-windows-x64
+          cat SHA256SUMS-windows-x64
+          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO-windows-x64
 
       - name: SLSA attestation
-        uses: actions/attest-build-provenance@v1
+        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
         with:
           subject-path: target/release/daemon.exe, target/release/testclient.exe
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-x64
           path: |
             target/release/daemon.exe
             target/release/testclient.exe
-            target/release/SHA256SUMS
-            target/release/BUILD_INFO
+            target/release/SHA256SUMS-windows-x64
+            target/release/BUILD_INFO-windows-x64
+
+  # H-10c: Android release APK（人类可装）。keystore secrets 注入 → 已签名
+  # app-release.apk；无凭据路径（secrets 未设置）→ app-release-unsigned.apk。
+  # lintVital 用 JDK 17 跑（AGP 8.7.3 内置 Kotlin 编译器不认识 JDK 26——
+  # 本机实测 IllegalArgumentException）。
+  android:
+    name: "Android (signed APK)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      # 只放布尔（secret 值不进 job env——T-071b 模式）
+      HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    outputs:
+      signed: ${{ steps.signdetect.outputs.signed }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4
+
+      - name: Decode release keystore (gated)
+        if: env.HAS_ANDROID_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          # 不打印 keystore 内容；只确认解码后是有效 PKCS12（非空 + 头部魔数）
+          head -c 4 "$RUNNER_TEMP/release.keystore" | od -c | head -1
+
+      - name: Assemble release APK
+        working-directory: apps/android
+        env:
+          # 有凭据时注入签名参数；无凭据时留空 → gradle 走 unsigned
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+        run: ./gradlew :app:assembleRelease
+
+      # Packaging-completeness guard (same as pr.yml): a release APK without
+      # the native lib installs fine and crashes at first pairing — assert
+      # the .so is IN whichever APK was produced.
+      - name: Assert APK contains libiroh_ffi.so
+        working-directory: apps/android
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/release -name 'app-release*.apk' | head -1)
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libiroh_ffi.so"
+
+      - name: Detect signing
+        id: signdetect
+        working-directory: apps/android
+        run: |
+          set -euo pipefail
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            echo "signed=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android
+          # 有凭据 → app-release.apk；无凭据 → 只有 unsigned。缺失文件忽略。
+          if-no-files-found: ignore
+          path: |
+            apps/android/app/build/outputs/apk/release/app-release.apk
+            apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
 
   release:
     name: "Release 草稿"
-    needs: [macos-arm64, windows-x64]
+    needs: [macos-arm64, windows-x64, android]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      # 只放布尔（不含 secret 值）：job 级 env 会暴露给本 job 每个第三方
+      # action 的进程环境——secret 本体下沉到 VT step（Apple secrets 同款模式）。
+      HAS_VT: ${{ secrets.VT_API_KEY != '' }}
+      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
 
@@ -217,48 +398,122 @@ jobs:
           fi
           [ -n "$TAG" ] || { echo "TAG 缺失（dispatch 需 tag 输入）"; exit 1; }
           echo "TAG=$TAG" >> "$GITHUB_ENV"
-          : > NOTES.md
-          echo "## P-Pass ${TAG#v}" >> NOTES.md
-          echo "" >> NOTES.md
-          echo "构建自 \`${GITHUB_SHA::7}\` · $(date -u +%FT%TZ)Z" >> NOTES.md
-          echo "" >> NOTES.md
-          echo "**签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（无凭据路径跳过）/ Windows=no（Authenticode 证书 H-02 范畴）" >> NOTES.md
-          echo "" >> NOTES.md
-          echo "### SHA-256" >> NOTES.md
-          for plat in macos-arm64 windows-x64; do
-            if [ -f "artifacts/$plat/SHA256SUMS" ]; then
-              echo "" >> NOTES.md
-              echo "**$plat**" >> NOTES.md
-              echo '```' >> NOTES.md
-              cat "artifacts/$plat/SHA256SUMS" >> NOTES.md
-              echo '```' >> NOTES.md
-            fi
-          done
-          echo "" >> NOTES.md
-          echo "### 验证（被拦截/不信任时先做这三步）" >> NOTES.md
-          echo "- 对照上方 SHA-256（certutil/shasum）" >> NOTES.md
-          echo "- Release 页的 Provenance 面板（SLSA attestation）" >> NOTES.md
-          echo "- 源码可查：构建流程 .github/workflows/release.yml" >> NOTES.md
-          echo "" >> NOTES.md
-          echo "被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md" >> NOTES.md
+          cat > NOTES.md <<EOF
+          ## P-Pass ${TAG#v}
+
+          构建自 \`${GITHUB_SHA::7}\` · $(date -u +%FT%TZ)
+
+          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（无凭据路径跳过）/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || 'yes' }}（keystore 签名）
+          **更新 manifest**：UPDATE_SIGNING_KEY 未设置 → manifest.json 未签名（signature 空，客户端系统签名校验兜底——Android PackageInstaller 强制同签名）
+
+          ### 面向人类的资产（H-10c）
+          - **P-Pass-macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
+          - **app-release.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
+          - daemon 层自包含 zip（ppass-macos-arm64.zip）继续提供，向后兼容
+
+          ### 验证（被拦截/不信任时先做这三步）
+          - 下载每平台的 SHA256SUMS-\<platform\> 资产（certutil/shasum 对照）
+          - \`gh attestation verify <下载的文件> -R ${GITHUB_REPOSITORY}\`
+            （SLSA provenance，macOS 对 zip 解出的 daemon/testclient 执行）
+          - 源码可查：构建流程 .github/workflows/release.yml
+
+          macOS 包为自包含 zip（含 lib/ 依赖库）——解压后整个 P-Pass
+          目录一起用，勿单独拷出二进制。
+
+          被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md
+          EOF
+
+      # H-10c: dmg/apk 的 sha256（不进平台 SUMS——保持 zip 内 SUMS 与 release
+      # 资产逐字节一致，T-071 三重核对①；人类资产哈希单独列在 notes）
+      - name: H-10c assets sha256 → notes
+        run: |
+          set -euo pipefail
+          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
+          {
+            echo ""
+            echo "### H-10c 资产 SHA-256"
+            sha256sum artifacts/macos-arm64/P-Pass-macos-arm64.dmg \
+              "artifacts/android/$APK"
+          } >> NOTES.md
 
       - name: VirusTotal 提交（gated，卡面 VT 步——支持 blocked-by-av 信誉建设）
-        if: env.VT_API_KEY != ''
+        if: env.HAS_VT == 'true'
         env:
           VT_API_KEY: ${{ secrets.VT_API_KEY }}
         run: |
+          set -euo pipefail
           EXE="artifacts/windows-x64/daemon.exe"
           [ -f "$EXE" ] || exit 0
           ID=$(curl -sf -X POST -H "x-apikey: $VT_API_KEY" \
             -F "file=@$EXE" https://www.virustotal.com/api/v3/files \
             | jq -r .data.id)
-          echo "VirusTotal 分析 ID: $ID（草稿发布后见扫描结果链接）" >> ../NOTES.md
+          echo "VirusTotal 分析 ID: $ID（草稿发布后见扫描结果链接）" >> NOTES.md
+
+      # ── UPD-01: tauri-style update manifest (compose → optional sign) ──
+      # 客户端（desktop updater / android 自研流）读 release 资产直链
+      # manifest.json；UPDATE_SIGNING_KEY 到位后签名（tauri signer,
+      # minisign hashed 格式），无凭据路径 signature 留空 + notes 标注。
+      # 本卡只出 android-arm64 条目——darwin 需 .app.tar.gz（H-10c 衔接：
+      # createUpdaterArtifacts 的 tar.gz 须在塞 lib/ 后产出，挂账）；windows
+      # 桌面壳待建。签名密钥由用户生成（已 2026-08-04 完成）。
+      - name: Compose update manifest (UPD-01)
+        run: |
+          set -euo pipefail
+          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
+          node tools/make-update-manifest.mjs \
+            --tag "$TAG" --notes NOTES.md \
+            --asset android-arm64="artifacts/android/$APK"
+          mv manifest.json artifacts/manifest.json
+
+      - name: Sign update manifest (UPD-01, gated)
+        if: env.HAS_UPDATE_KEY == 'true'
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          # rsign 私钥（base64 文本，tauri signer 格式）还原成文件；CI
+          # 非交互 → 空密码。签名走 tauri 官方 signer（minisign 格式，
+          # 与 tauri-plugin-updater 验证端同源）。
+          # ⚠️ echo 会追加尾换行，tauri signer 的 base64 解码不 trim →
+          #   Invalid symbol 10 at offset N（N=key 字节数）；必须 printf '%s'
+          #   逐字节还原（v0.2.1-test.1 实测踩坑）。
+          printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
+          chmod 600 /tmp/ppass-update.key
+          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
+          # UPD-01 返工：pin 版本（与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4
+          # 一致）——裸 npx @tauri-apps/cli 每次拉最新，signer 格式漂移会静默
+          # 产出坏签名。
+          npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" \
+            "artifacts/android/$APK"
+          mkdir -p /tmp/sigs
+          cp artifacts/android/*.sig /tmp/sigs/
+          node tools/make-update-manifest.mjs \
+            --sign artifacts/manifest.json --sig-dir /tmp/sigs
 
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd artifacts
-          find . -type f ! -name SHA256SUMS ! -name BUILD_INFO -print0 | xargs -0 \
-            gh release create "$TAG" --draft --title "P-Pass ${TAG#v}" --notes-file ../NOTES.md
+          gh release create "$TAG" --draft --title "P-Pass ${TAG#v}" --notes-file ../NOTES.md
           echo "草稿: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          ASSETS="macos-arm64/ppass-macos-arm64.zip macos-arm64/SHA256SUMS-macos-arm64 \
+            macos-arm64/P-Pass-macos-arm64.dmg \
+            windows-x64/daemon.exe windows-x64/testclient.exe \
+            windows-x64/SHA256SUMS-windows-x64 windows-x64/BUILD_INFO-windows-x64 \
+            manifest.json"
+          # 无凭据路径只产出 unsigned；有凭据路径产出 signed（unsigned 无）。
+          if [ -f android/app-release.apk ]; then
+            ASSETS="$ASSETS android/app-release.apk"
+          elif [ -f android/app-release-unsigned.apk ]; then
+            ASSETS="$ASSETS android/app-release-unsigned.apk"
+          fi
+          # shellcheck disable=SC2086 # ASSETS 是刻意拆分
+          gh release upload "$TAG" $ASSETS
+          echo "assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

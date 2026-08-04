@@ -287,7 +287,10 @@ async fn backup(
                     prev.clone()
                 } else {
                     let mut v = i.to_le_bytes().to_vec();
-                    for _ in 0..256 {
+                    // ~16KB/文件（2048×8B）：dogfood 50 文件 ≈ 800KB 无感，
+                    // 但 disk_full 剧本 500 文件 ≈ 8MB > 6MB tmpfs——故障必然触发
+                    // （T-070b：判据不再依赖"恰好放不下"的巧合）。
+                    for _ in 0..2048 {
                         s ^= s << 13;
                         s ^= s >> 7;
                         s ^= s << 17;
@@ -299,6 +302,10 @@ async fn backup(
                 let name = format!("IMG_{i:04}.jpg");
                 let path = dir.path().join(&name);
                 std::fs::write(&path, &content)?;
+                // prev 只在小文件分支维护（供第 10 个文件去重）。大文件分支
+                // 绝不能把 2-4GB 稀疏文件读进内存（T-070b：streaming-hash 设计
+                // 被这行 `std::fs::read` 推翻）。失败直接传播，不 unwrap_or_default。
+                prev = std::fs::read(&path)?;
                 (hash, name, path)
             };
         let hash_hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
@@ -308,7 +315,6 @@ async fn backup(
             file_name: name,
             media_type: "image/jpeg".into(),
         });
-        prev = std::fs::read(&path).unwrap_or_default();
     }
 
     let call = |method: &str, params: serde_json::Value| {

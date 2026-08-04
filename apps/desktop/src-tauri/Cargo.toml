@@ -17,6 +17,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
 tauri-plugin-dialog = "2"
+# UPD-01: desktop self-update via the official updater plugin (manifest
+# served as release asset; pubkey in tauri.conf.json, minisign format)
+tauri-plugin-updater = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -27,3 +30,6 @@ platform = { path = "../../../crates/platform" }
 [lib]
 name = "p_pass_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dev-dependencies]
+tempfile = "3"

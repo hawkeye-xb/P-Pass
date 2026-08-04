@@ -25,6 +25,10 @@ Thumbs.db
 *.apk
 *.aab
 *.so
+# …but Android jniLibs MUST ship in the repo: the global *.so silently
+# swallowed libiroh_ffi.so — every clone (CI, other machines) built APKs
+# with no native lib, crashing on-device (UnsatisfiedLinkError, twice).
+!apps/android/app/src/main/jniLibs/**/*.so
 
 # Wrangler
 .wrangler/

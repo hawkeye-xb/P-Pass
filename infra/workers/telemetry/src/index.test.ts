@@ -25,8 +25,8 @@ function recordingAE(): { ae: AnalyticsEngineLike; calls: unknown[] } {
   return { ae, calls };
 }
 
-async function postBatch(batch: unknown): Promise<Response> {
-  return SELF.fetch("https://telemetry.local/", {
+async function postBatch(batch: unknown, path = "/ingest"): Promise<Response> {
+  return SELF.fetch(`https://telemetry.local${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(batch),
@@ -53,14 +53,52 @@ describe("schema + ingest (unit)", () => {
     }
   });
 
-  it("toDataPoint: doubles carry ts + numeric fields only", () => {
+  it("toDataPoint: doubles use FIXED per-event columns (T-061b)", () => {
+    // full backup_session: [ts, files, bytes, dur_s]
     const { ae, calls } = recordingAE();
-    ingest(ae, [VALID_BATCH[0]]);
-    const doubles = (calls[0] as { doubles?: number[] }).doubles ?? [];
-    expect(doubles).toContain(COMMON.ts);
-    expect(doubles).toContain(462);
+    ingest(ae, [VALID_BATCH[1]]);
+    expect((calls[0] as { doubles?: number[] }).doubles).toEqual([
+      COMMON.ts,
+      12,
+      34_567_890,
+      45,
+    ]);
+    // conn: [ts, ms]
+    const { ae: ae2, calls: calls2 } = recordingAE();
+    ingest(ae2, [VALID_BATCH[0]]);
+    expect((calls2[0] as { doubles?: number[] }).doubles).toEqual([
+      COMMON.ts,
+      462,
+    ]);
+    // daemon_alive: [ts, uptime_h]
+    const { ae: ae3, calls: calls3 } = recordingAE();
+    ingest(ae3, [VALID_BATCH[3]]);
+    expect((calls3[0] as { doubles?: number[] }).doubles).toEqual([
+      COMMON.ts,
+      72,
+    ]);
     // strings/bools must NOT leak into doubles
-    expect(doubles.some((d) => typeof d !== "number")).toBe(false);
+    for (const c of [...calls, ...calls2, ...calls3]) {
+      expect((c as { doubles?: number[] }).doubles?.every((d) => typeof d === "number")).toBe(true);
+    }
+  });
+
+  it("toDataPoint: absent optional fields do NOT shift columns (T-061b)", () => {
+    // conn WITHOUT fail_stage/country/isp_hash (all optional) must still be
+    // [ts, ms] — old Object.entries order would drop columns on absence.
+    const sparse = {
+      event: "conn",
+      path: "lan",
+      ipver: "v6",
+      ms: 99,
+      ...COMMON,
+    };
+    const { ae, calls } = recordingAE();
+    ingest(ae, [sparse]);
+    expect((calls[0] as { doubles?: number[] }).doubles).toEqual([
+      COMMON.ts,
+      99,
+    ]);
   });
 
   it("unknown event type is rejected", () => {
@@ -111,7 +149,7 @@ describe("HTTP layer (integration via SELF)", () => {
   });
 
   it("non-JSON body → 400", async () => {
-    const r = await SELF.fetch("https://telemetry.local/", {
+    const r = await SELF.fetch("https://telemetry.local/ingest", {
       method: "POST",
       body: "this is not json",
     });
@@ -120,11 +158,18 @@ describe("HTTP layer (integration via SELF)", () => {
 
   it("oversized body → 413", async () => {
     const big = "x".repeat(MAX_BATCH_BYTES + 1);
-    const r = await SELF.fetch("https://telemetry.local/", {
+    const r = await SELF.fetch("https://telemetry.local/ingest", {
       method: "POST",
       body: JSON.stringify({ filler: big }),
     });
     expect(r.status).toBe(413);
+  });
+
+  it("POST to non-/ingest path → 404 (T-061b)", async () => {
+    // old behaviour: any path accepted the batch; a typo'd URL silently
+    // swallowed events. Now only /ingest accepts POSTs.
+    expect((await postBatch(VALID_BATCH, "/")).status).toBe(404);
+    expect((await postBatch(VALID_BATCH, "/other")).status).toBe(404);
   });
 
   it("GET / → health", async () => {
