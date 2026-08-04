@@ -23,6 +23,35 @@ fn socket_name(tag: &str) -> String {
     format!("ppf-dae-{}-{}", std::process::id(), tag)
 }
 
+// ── 版本相对推导（TAG-01 事故回归）────────────────────────────────
+// 在位实例的 status 自报 CARGO_PKG_VERSION，测试里的“更新/相同/更旧”
+// 必须相对它推导——此前写死 "0.2.0"/"0.1.0" 字面量，bump 0.1.0→0.2.1
+// 后“newer”反而比在位旧，main 直接红（每次版本 bump 必炸的脆性）。
+
+/// 与在位实例相同的版本（= 本 crate 编译时版本）。
+fn same_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
+/// 严格大于在位实例的版本（patch +1）。
+fn newer_version() -> String {
+    let mut parts: Vec<u64> = env!("CARGO_PKG_VERSION")
+        .split('.')
+        .map(|p| p.parse().expect("CARGO_PKG_VERSION 是纯数字三段"))
+        .collect();
+    *parts.last_mut().expect("非空") += 1;
+    parts
+        .iter()
+        .map(u64::to_string)
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// 严格小于任何真实发布版本。
+fn older_version() -> String {
+    "0.0.1".to_string()
+}
+
 fn hex(t: &[u8; 32]) -> String {
     t.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -68,7 +97,7 @@ async fn newer_claimant_takes_over_older_steps_down() {
         new_token, old_token,
         "two instances must have independent tokens"
     );
-    let claim = newer.claim_single_instance(&sock, "0.2.0").await;
+    let claim = newer.claim_single_instance(&sock, &newer_version()).await;
     assert_eq!(claim, Claim::TookOver, "newer must take over");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
@@ -100,10 +129,10 @@ async fn equal_or_older_claimant_stands_down() {
 
     let (late, _) = mk_server(&dir).await;
     // 同版本 → 后来者让位（先来者留，避免 launchd 重拉循环）。
-    let claim_eq = late.claim_single_instance(&sock, "0.1.0").await;
+    let claim_eq = late.claim_single_instance(&sock, &same_version()).await;
     assert_eq!(claim_eq, Claim::StandDown, "same version must stand down");
     // 低版本 → 让位。
-    let claim_old = late.claim_single_instance(&sock, "0.0.9").await;
+    let claim_old = late.claim_single_instance(&sock, &older_version()).await;
     assert_eq!(claim_old, Claim::StandDown, "older must stand down");
 
     incumbent_task.abort();
@@ -118,7 +147,7 @@ async fn dead_socket_is_cleaned_and_claimed() {
 
     // 无人在岗 → 直接 proceed。
     let (fresh, _) = mk_server(&dir).await;
-    let claim = fresh.claim_single_instance(&sock, "0.1.0").await;
+    let claim = fresh.claim_single_instance(&sock, &same_version()).await;
     assert_eq!(claim, Claim::Proceed, "no peer → proceed");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -154,7 +183,7 @@ async fn wrong_token_never_grabs_a_live_socket() {
     .unwrap();
 
     let (late, _) = mk_server(&dir).await;
-    let claim = late.claim_single_instance(&sock, "0.2.0").await;
+    let claim = late.claim_single_instance(&sock, &newer_version()).await;
     assert_eq!(
         claim,
         Claim::StandDown,
@@ -172,7 +201,7 @@ async fn wrong_token_never_grabs_a_live_socket() {
         format!("{sock}\n{}\n", hex(&incumbent_token)),
     )
     .unwrap();
-    let claim2 = late.claim_single_instance(&sock, "0.2.0").await;
+    let claim2 = late.claim_single_instance(&sock, &newer_version()).await;
     assert_eq!(
         claim2,
         Claim::TookOver,
