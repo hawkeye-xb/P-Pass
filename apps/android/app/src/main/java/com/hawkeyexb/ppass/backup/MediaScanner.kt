@@ -82,6 +82,24 @@ class MediaScanner(private val resolver: ContentResolver) {
         items.sortBy { it.generation }
         return ScanResult(items, maxGen)
     }
+
+    /**
+     * 当前扫描范围的全量 count（无 generation 过滤）——DOG-01b 三元组
+     * 的分母 N。MediaStore COUNT 查询，便宜，不需要重 hash。口径常量
+     * 一处定义（范围选择是另一张卡，改范围只动这里）。
+     */
+    fun countAll(): Long {
+        var total = 0L
+        for (collection in listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+        )) {
+            resolver.query(collection, arrayOf("COUNT(*)"), null, null, null)?.use { cur ->
+                if (cur.moveToFirst()) total += cur.getLong(0)
+            }
+        }
+        return total
+    }
 }
 
 /** The committed watermark, one long, crash-safe on disk. */

@@ -46,6 +46,9 @@ data class BackupReport(
     val pushed: Int,
     val ingested: Int,
     val duplicates: Int,
+    /** DOG-01b: manifest 回 missing 的 hash 集合（校准确认缓存用——
+     *  只查不传语义的产物，非新协议动词）。 */
+    val missing: Set<String>,
 )
 
 class BackupRunner(private val client: DaemonClient) {
@@ -107,6 +110,7 @@ class BackupRunner(private val client: DaemonClient) {
             pushed = toPush.size,
             ingested = ingested,
             duplicates = duplicates,
+            missing = missing,
         )
     }
 
