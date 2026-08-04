@@ -217,7 +217,18 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       now silent (check errors never surface; only install errors
       show), npx @tauri-apps/cli pinned to 2.11.4, RELEASING.md §3.5
       documents update channel + darwin/windows gaps, ROADMAP wording
-      updated. Tests: UpdateCheckerTest 6/6 + android suite green
+      updated. Tests: UpdateCheckerTest 6/6 + android suite green.
+      **UPD-01c rework 2026-08-05** (i18n registration blocker): the
+      ui.update_* keys were in all four dictionaries but never
+      registered in crates/diag/src/keys.rs — diag test panicked
+      "unregistered key". Registered UI_UPDATE_AVAILABLE /
+      UI_UPDATE_INSTALLED / UI_UPDATE_FAILED into ALL (len 61→64);
+      all four jsons (root en/zh + android copies) now match ALL
+      byte-for-byte. Counterproof: deleting ui.update_failed from
+      en.json → all_keys_translated_in_en_and_zh FAILED (lib.rs:32),
+      restored → green. diag 8/8, android 55/55, workspace 200/200.
+      Branch CI green (pr.yml all jobs) after push. Drive-by: same
+      ipc_flow.rs harness race fix as DOG-01c (flake on main's tree).
 - [ ] E2E-01 android live scenarios in CI — **code landed 2026-08-04
       (PR #28)**: .github/workflows/e2e.yml — nightly cron (03:30 UTC) +
       release tag 时并行跑（**2026-08-04 用户裁决：自动化测试不前置**——
