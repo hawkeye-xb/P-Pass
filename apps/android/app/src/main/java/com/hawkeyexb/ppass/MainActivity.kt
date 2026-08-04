@@ -19,11 +19,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.work.WorkManager
+import kotlinx.coroutines.launch
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
 import com.hawkeyexb.ppass.battery.openBatteryOptimizationSettings
 import com.hawkeyexb.ppass.i18n.DiagText
@@ -34,8 +38,13 @@ import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.backup.BackupRunner
+import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.backupOnceNow
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
+import com.hawkeyexb.ppass.backup.pauseAutoBackup
+import com.hawkeyexb.ppass.backup.resumeAutoBackup
+import com.hawkeyexb.ppass.backup.BACKUP_WORK_NAME
+import com.hawkeyexb.ppass.backup.WatermarkStore
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
@@ -76,9 +85,10 @@ fun PPassApp() {
     }
     // Paired phones: periodic backup stays scheduled (idempotent KEEP)
     // and every app-open triggers one catch-up run — the phone backs
-    // itself up without anyone finding a button.
+    // itself up without anyone finding a button. UX-06: 全局暂停态下
+    // 两者都不跑（重开 App 不自动恢复，直到用户恢复开关）。
     remember {
-        if (pairings.load() != null) {
+        if (pairings.load() != null && !AutoBackupPrefs(context.filesDir).paused()) {
             scheduleAutoBackup(context)
             backupOnceNow(context)
         }
@@ -181,6 +191,15 @@ fun PPassApp() {
                 }
             }
             var tab by remember { mutableStateOf(0) } // 0=Photos 1=Backup
+            // UX-06: 暂停态持久化——重开 App 保持用户选择；恢复时重新排周期任务。
+            val prefs = remember { AutoBackupPrefs(context.filesDir) }
+            var autoBackupPaused by remember { mutableStateOf(prefs.paused()) }
+            // UX-06: 断开连接警示页（产品档案 §二移动端 1 告知清单）——确认后
+            // ①daemon 撤销本设备（device.unpair，验收「断开后 hello 被拒」）
+            // ②清 pairing/watermark ③回 Welcome（重扫可重建）。
+            var showDisconnectDialog by remember { mutableStateOf(false) }
+            var disconnectError by remember { mutableStateOf<String?>(null) }
+            val scope = rememberCoroutineScope()
             LaunchedEffect(Unit) { client.bind(identity.secretKey()) }
             val mediaPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
@@ -197,12 +216,13 @@ fun PPassApp() {
                         onOpenBatterySettings = {
                             openBatteryOptimizationSettings(context)
                         },
-                        onReconnect = {
-                            // New daemon identity / new computer: drop the
-                            // stored pairing and scan fresh.
-                            pairings.clear()
-                            screen = Screen.Scan
+                        autoBackupPaused = autoBackupPaused,
+                        onToggleAutoBackup = { paused ->
+                            autoBackupPaused = paused
+                            if (paused) pauseAutoBackup(context)
+                            else resumeAutoBackup(context)
                         },
+                        onDisconnect = { showDisconnectDialog = true },
                         onBackupNow = {
                             val needed = requiredMediaPermissions().filter {
                                 ContextCompat.checkSelfPermission(context, it) !=
@@ -214,6 +234,59 @@ fun PPassApp() {
                     )
                 },
             )
+            if (showDisconnectDialog) {
+                AlertDialog(
+                    onDismissRequest = { showDisconnectDialog = false },
+                    title = { Text(stringResource(R.string.disconnect_confirm_title)) },
+                    text = { Text(stringResource(R.string.disconnect_confirm_body)) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            showDisconnectDialog = false
+                            disconnectError = null
+                            scope.launch {
+                                val peer = try {
+                                    parsePeerAddrToken(s.pairing.daemonAddrToken)
+                                } catch (t: Throwable) {
+                                    null
+                                }
+                                val unpaired = peer != null && runCatching {
+                                    client.unpair(peer)
+                                }.getOrDefault(false)
+                                if (unpaired || peer == null) {
+                                    // 单方停止：本地状态清空（pairing/watermark），
+                                    // daemon 端已撤销（unpaired）或不可达（peer 解析
+                                    // 失败——本地照清，重扫用新 token 走 rejoin 门）。
+                                    pairings.clear()
+                                    WatermarkStore(context.filesDir).save(0)
+                                    AutoBackupPrefs(context.filesDir).setPaused(false)
+                                    WorkManager.getInstance(context)
+                                        .cancelUniqueWork(BACKUP_WORK_NAME)
+                                    screen = Screen.Welcome
+                                } else {
+                                    disconnectError = context.getString(R.string.disconnect_failed)
+                                }
+                            }
+                        }) { Text(stringResource(R.string.disconnect_confirm_ok)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDisconnectDialog = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    },
+                )
+            }
+            disconnectError?.let { err ->
+                AlertDialog(
+                    onDismissRequest = { disconnectError = null },
+                    title = { Text(stringResource(R.string.disconnect_failed_title)) },
+                    text = { Text(err) },
+                    confirmButton = {
+                        TextButton(onClick = { disconnectError = null }) {
+                            Text(stringResource(R.string.ok))
+                        }
+                    },
+                )
+            }
         }
     }
 }

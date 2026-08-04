@@ -57,6 +57,18 @@ fun scheduleAutoBackup(context: Context) {
     )
 }
 
+// UX-06: 全局暂停开关——取消周期任务并落盘暂停态；恢复时重新调度。
+// scheduleAutoBackup 在暂停态下不排（重开 App 不自动恢复）。
+fun pauseAutoBackup(context: Context) {
+    WorkManager.getInstance(context).cancelUniqueWork(BACKUP_WORK_NAME)
+    AutoBackupPrefs(context.filesDir).setPaused(true)
+}
+
+fun resumeAutoBackup(context: Context) {
+    AutoBackupPrefs(context.filesDir).setPaused(false)
+    scheduleAutoBackup(context)
+}
+
 class BackupWorker(
     context: Context,
     params: WorkerParameters,

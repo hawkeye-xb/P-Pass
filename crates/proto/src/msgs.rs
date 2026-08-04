@@ -373,6 +373,11 @@ pub mod methods {
     pub const BACKUP_UPLOAD: &str = "backup.upload";
     /// Download plane (T-056): original bytes for playback/export.
     pub const ASSET_DOWNLOAD: &str = "asset.download";
+    /// UX-06: a paired device revokes ITSELF (unilateral stop, product
+    /// file §二双端共通「任一端可单方停止」). The daemon marks the
+    /// caller revoked; hello is then denied, and a fresh owner-issued
+    /// token can rejoin (same rejoin door as owner revoke, T-041).
+    pub const DEVICE_UNPAIR: &str = "device.unpair";
 }
 
 #[cfg(test)]
