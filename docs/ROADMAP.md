@@ -276,7 +276,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       ppass.backup.failed; strings en/zh symmetric. android 49/49.
       Device acceptance (mock failure → notification appears; all-success
       → zero notifications via dumpsys) pending real phone.
-- [ ] UX-03 后台规则一行+极简设置 — **code landed 2026-08-05 (PR 待建)**:
+- [ ] UX-03 后台规则一行+极简设置 — **code landed 2026-08-05 (PR #37)**:
       backup page gets one rule line ("插电+WiFi 时自动备份，无需打开
       App") + two switches (仅充电 / 仅 WiFi). BackupSettings persists
       to filesDir JSON (tmp+rename, corrupt→defaults, JVM-tested);
