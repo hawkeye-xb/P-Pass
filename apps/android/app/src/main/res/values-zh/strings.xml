@@ -38,6 +38,10 @@
     <!-- DOG-01: 恒真三元组 -->
     <string name="dog_triplet_line">手机 %1$d 张 · 已备份 %2$d · 待备份 %3$d</string>
     <string name="dog_last_success">最后成功：%1$s</string>
+    <!-- DOG-02: 电池白名单引导卡片 -->
+    <string name="dog_battery_title">后台保护未开启</string>
+    <string name="dog_battery_body">本机可能阻止 P-Pass 在后台备份。请为 P-Pass 关闭电池优化，备份才能持续运行。</string>
+    <string name="dog_battery_action">去开启</string>
     <string name="reconnect">重新扫码连接</string>
     <string name="run_failed">这次没传完——已存回家的照片是安全的；再点一次会从断点继续。</string>
 

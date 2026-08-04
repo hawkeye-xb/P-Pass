@@ -42,6 +42,10 @@
     <!-- DOG-01: 恒真三元组 -->
     <string name="dog_triplet_line">%1$d photos · %2$d backed up · %3$d to go</string>
     <string name="dog_last_success">Last success: %1$s</string>
+    <!-- DOG-02: 电池白名单引导卡片 -->
+    <string name="dog_battery_title">Background protection off</string>
+    <string name="dog_battery_body">This phone may stop P-Pass from backing up in the background. Turn off battery optimization for P-Pass to keep backups running.</string>
+    <string name="dog_battery_action">Open settings</string>
     <string name="reconnect">Scan a new code</string>
     <string name="run_failed">Could not finish this run — photos already home are safe; try again and it picks up where it left off.</string>
 
