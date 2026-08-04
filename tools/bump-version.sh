@@ -46,7 +46,9 @@ if [ "$NEW" = "$CUR" ] \
 fi
 
 # 改 Cargo.toml（workspace 级第一处 version）
-sed -i '' "s/^version = \"$CUR\"/version = \"$NEW\"/" Cargo.toml
+# ⚠️ 便携 sed：`-i ''` 是 macOS（BSD）专属，Linux（GNU）必炸——统一用
+# `-i.bak … && rm …bak`（GNU/BSD 均接受带后缀的 -i）。
+sed -i.bak "s/^version = \"$CUR\"/version = \"$NEW\"/" Cargo.toml && rm Cargo.toml.bak
 # 改 Android versionName + versionCode（versionCode 单调 +1，Android 强制）
 # ⚠️ BSD awk 把行首缩进当第一个分隔符，-F'[= ]+' 下 $2 是 "versionCode"——
 # 用 gsub 去掉 "= " 前缀拿纯数字
@@ -56,8 +58,8 @@ if [ -z "$VCODE" ]; then
   exit 1
 fi
 NCODE=$((VCODE + 1))
-sed -i '' "s/versionCode = $VCODE/versionCode = $NCODE/" apps/android/app/build.gradle.kts
-sed -i '' "s/versionName = \"$CUR\"/versionName = \"$NEW\"/" apps/android/app/build.gradle.kts
+sed -i.bak "s/versionCode = $VCODE/versionCode = $NCODE/" apps/android/app/build.gradle.kts && rm apps/android/app/build.gradle.kts.bak
+sed -i.bak "s/versionName = \"$CUR\"/versionName = \"$NEW\"/" apps/android/app/build.gradle.kts && rm apps/android/app/build.gradle.kts.bak
 
 echo "bumped: $CUR -> $NEW (android versionCode $VCODE -> $NCODE)"
 echo "--- git diff（应只含版本号行）---"
