@@ -39,6 +39,14 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 
 **✅ TAG-01 已完成（2026-08-06 凌晨出包轮，Salamira）——工程侧就绪，真机验收和狗粮周可开跑。**
 
+### 07:47 巡检轮（验收人）
+
+| 交付 | 裁决 |
+|---|---|
+| H-10a(+fix) quickstart | ✅ **已合并**：资产名与 v0.2.1-test.2 实物逐字对上（dmg/apk）、排障链接存在、Windows 只有 CLI 与 draft 不可见两处限制写得诚实、en+zh 齐。README 里的 [截图: …] 占位符等真机验收时顺手补图 |
+| BUMP-01 | ❌ **返工（一行）**：干净树断言用 `git status --porcelain` 把**未跟踪文件**也算脏——验收人机器上永远有 `?? .claude/`，实测 DIRTY=[.claude/]，bump 必误炸。改 `--porcelain -uno`（只看已跟踪改动，未跟踪本来就不会被显式 add 带进 commit）。`cargo update -w` 部分是对的，保留 |
+| main CI | ✅ 转绿实锤（cb34e2b PR Checks success，dae_flow 版本推导修复生效）|
+
 ### 05:47 巡检轮补充（验收人）：TAG-01 连带事故与收尾
 
 - **main 曾红两个 commit**（756332b/9fb339f 的 PR Checks 均 failure）：
