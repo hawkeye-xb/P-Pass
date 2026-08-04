@@ -256,6 +256,17 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] r/selfhosted post, open-source announcement
 - [ ] **Kill line: no exponential signal in 3 months → stop** (pre-agreed)
 
+## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
+
+- [ ] UX-05 folder.set 诚实化 — **code landed 2026-08-05 (PR #39)**:
+      change-library-location confirmation now states both facts:
+      takes effect after the service restarts + existing photos won't
+      migrate (new location starts empty; phones back up there from now
+      on). Previously "restart" only appeared in the post-save toast.
+      ui.change_body reworded en/zh, all four dicts byte-identical
+      (zero-drift tests cover). diag 8/8, android 49/49, vite build
+      green. Screenshot acceptance pending human.
+
 ## Standing debts / 挂账
 
 - [ ] PPF_ADVERTISE_ADDR (QR carries LAN IP at boot on cloud boxes)
