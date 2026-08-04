@@ -456,12 +456,21 @@ jobs:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/uassets
-          cp artifacts/macos-arm64/P-Pass-macos-arm64.dmg /tmp/uassets/
+          # rsign 私钥（base64 文本，tauri signer 格式）还原成文件；CI
+          # 非交互 → 空密码。签名走 tauri 官方 signer（minisign 格式，
+          # 与 tauri-plugin-updater 验证端同源）。
+          echo "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
+          chmod 600 /tmp/ppass-update.key
           APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
-          cp "artifacts/android/$APK" /tmp/uassets/
+          npx -y @tauri-apps/cli signer sign -f /tmp/ppass-update.key -p "" \
+            artifacts/macos-arm64/P-Pass-macos-arm64.dmg
+          npx -y @tauri-apps/cli signer sign -f /tmp/ppass-update.key -p "" \
+            "artifacts/android/$APK"
+          mkdir -p /tmp/sigs
+          cp artifacts/macos-arm64/*.sig /tmp/sigs/
+          cp artifacts/android/*.sig /tmp/sigs/
           node tools/make-update-manifest.mjs \
-            --sign artifacts/manifest.json --asset-dir /tmp/uassets
+            --sign artifacts/manifest.json --sig-dir /tmp/sigs
 
       - name: Create draft release
         env:

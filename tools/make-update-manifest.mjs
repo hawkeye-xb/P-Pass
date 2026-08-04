@@ -4,17 +4,17 @@
 // Modes:
 //   compose (default): scan --asset <target>=<path> pairs, emit manifest.json
 //     with sha256 per platform and empty signatures (untrusted until signed).
-//   sign:   --sign manifest.json --asset-dir <dir>  — for each platform entry,
-//     find the asset file by basename inside <dir>, Ed25519-sign its bytes
-//     with UPDATE_SIGNING_KEY (base64 secret key, 32-byte seed), write the
-//     base64 signature back into the manifest. Refuses to run without the key.
+//   sign:   --sign manifest.json --sig-dir <dir>  — for each platform entry,
+//     read <dir>/<basename>.sig (produced by `tauri signer sign`), fill the
+//     base64 signature into the manifest. Signing itself stays in the tauri
+//     signer (minisign/rsign format); this script only wires files in.
 //
 // Manifest shape (tauri-plugin-updater compatible):
 //   { version, notes, pub_date, platforms: { <target>: { url, signature } } }
 //   url points at the GitHub release asset download link for TAG.
 //
 // Output: manifest.json in CWD (compose) or in place (sign).
-import { createHash, sign as ed25519Sign, createPrivateKey } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
 
@@ -27,27 +27,17 @@ function need(name) {
 }
 
 if (args[0] === "--sign") {
-  // ── sign mode: fill signature fields for existing manifest.json ──
+  // ── sign mode: fill signature fields from tauri signer .sig files ──
   const manifestPath = need("--sign");
-  const assetDir = need("--asset-dir");
-  const keyB64 = process.env.UPDATE_SIGNING_KEY;
-  if (!keyB64) throw new Error("UPDATE_SIGNING_KEY not set — refusing to sign");
-  const key = Buffer.from(keyB64, "base64");
-  if (key.length !== 32) throw new Error(`key must be 32 bytes, got ${key.length}`);
-  // 32-byte ed25519 seed → PKCS8 DER (RFC 8410) → KeyObject.
-  // Node cannot sign with a bare seed buffer ("Invalid digest"); the DER
-  // prefix is the standard wrapper (also what @tauri-apps/cli signer uses).
-  const der = Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), key]);
-  const privateKey = createPrivateKey({ key: der, format: "der", type: "pkcs8" });
+  const sigDir = need("--sig-dir");
 
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   for (const [target, entry] of Object.entries(manifest.platforms)) {
-    const file = join(assetDir, basename(new URL(entry.url).pathname));
-    if (!existsSync(file)) throw new Error(`asset not found for ${target}: ${file}`);
-    const data = readFileSync(file);
-    const sig = ed25519Sign(null, data, privateKey);
-    entry.signature = sig.toString("base64");
-    console.log(`signed ${target} (${data.length} bytes) <- ${basename(file)}`);
+    const name = basename(new URL(entry.url).pathname);
+    const sigFile = join(sigDir, `${name}.sig`);
+    if (!existsSync(sigFile)) throw new Error(`signature missing for ${target}: ${sigFile}`);
+    entry.signature = readFileSync(sigFile, "utf8").trim();
+    console.log(`filled ${target} <- ${name}.sig`);
   }
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
   console.log(`manifest signed: ${manifestPath}`);
