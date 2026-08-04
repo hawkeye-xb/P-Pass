@@ -226,6 +226,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       versions, invalid SemVer) — five-state test PASS: bump 0.3.0 ok
       (diff touches version lines only), v0.2.0-test.7 rejected, 0.3.0
       equal rejected, 0.1.0 downgrade rejected, "1.2" rejected
+- [ ] DOG-02 battery-whitelist onboarding — **code landed 2026-08-04 (PR #31)**:
+      PowerManager.isIgnoringBatteryOptimizations detect + backup-tab
+      guidance card (disappears once whitelisted, ON_RESUME refresh) +
+      vendor intent fallback chain (REQUEST dialog → Samsung Smart
+      Manager → Huawei phone manager → generic list). strings en/zh
+      symmetric (StringsSymmetryTest enforced), 49/49 unit tests green.
+      Device-side acceptance (dumpsys whitelist before/after + adb
+      whitelist-removal counterproof) pending real phone
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜

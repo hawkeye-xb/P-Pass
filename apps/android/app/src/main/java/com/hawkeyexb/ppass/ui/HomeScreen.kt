@@ -47,6 +47,9 @@ fun HomeScreen(
     state: BackupUiState,
     onBackupNow: () -> Unit,
     onReconnect: () -> Unit = {},
+    // DOG-02: 电池白名单引导卡片（未加白时显示，加白后消失）
+    batteryWhitelisted: Boolean = true,
+    onOpenBatterySettings: () -> Unit = {},
 ) {
     val (dot, pillBg) = when (state) {
         is BackupUiState.Idle -> PPColor.Idle to PPColor.IdleBg
@@ -83,6 +86,40 @@ fun HomeScreen(
         }
 
         Spacer(Modifier.height(26.dp))
+
+        // DOG-02: ROM 杀后台防护引导卡片（鸿蒙/三星已知咬点）——加白后消失
+        if (!batteryWhitelisted) {
+            Spacer(Modifier.height(4.dp))
+            androidx.compose.material3.Surface(
+                color = PPColor.WaitingBg,
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.dog_battery_title),
+                        fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.dog_battery_body),
+                        fontSize = 13.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = onOpenBatterySettings,
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(PPSize.RadiusControl),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                        ),
+                    ) {
+                        Text(stringResource(R.string.dog_battery_action), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
         Text(
             stringResource(R.string.connected_to), fontSize = 15.sp, color = PPColor.Ink40,
         )
