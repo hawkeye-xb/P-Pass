@@ -2,7 +2,15 @@
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
-## 一、H-10c：✅ 端到端 PASS（v0.2.0-test.6，run 30873612775）
+## 〇、重要更新（2026-08-04 午后）：test.6 的 APK 是残包，用 test.7
+
+test.6 的签名 APK 缺 libiroh_ffi.so（根 .gitignore 全局 *.so 把它挡在 git 外，
+只有验收人本机工作区有此文件——任何干净克隆构建的 APK 都装上即崩）。
+修复 44225c1：.so 入库 + pr.yml/release.yml 各加打包完整性断言
+（unzip -l 确认 .so 在 APK 里，缺失即红）。**v0.2.0-test.7 全绿且断言
+step success——下载 APK 请用 test.7**，与残包同签名可直接覆盖安装。
+
+## 一、H-10c：✅ 端到端 PASS（v0.2.0-test.7，run 30877876487）
 
 迭代记录：test.4 ❌（bundle-desktop-macos.sh 缺执行位）→ test.5 ❌（dmg 不在
 artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（5020136、2464dcd）。
@@ -15,7 +23,7 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 
 ## 二、立即可做：H-10b 用户实测（无脑用户走查）
 
-1. GitHub Releases → `v0.2.0-test.6`（draft，需登录）→ 下载 dmg 和 apk
+1. GitHub Releases → `v0.2.0-test.7`（draft，需登录）→ 下载 dmg 和 apk
 2. Mac：装 dmg → 首次打开右键→打开（Gatekeeper）→ 三步向导 → 出配对 QR
 3. 手机：装 apk（允许"未知来源"）→ 扫码 → 首次备份
 4. **每个卡点/看不懂的提示记下来**，丢回主会话，逐条立卡——这就是 H-10b 的产出
