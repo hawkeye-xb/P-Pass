@@ -54,6 +54,16 @@
     <string name="dog_battery_body">This phone may stop P-Pass from backing up in the background. Turn off battery optimization for P-Pass to keep backups running.</string>
     <string name="dog_battery_action">Open settings</string>
     <string name="reconnect">Scan a new code</string>
+    <!-- UX-06: 暂停自动备份 + 断开连接 -->
+    <string name="auto_backup_pause">Auto backup</string>
+    <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>
+    <string name="disconnect">Disconnect from this computer</string>
+    <string name="disconnect_confirm_title">Disconnect?</string>
+    <string name="disconnect_confirm_body">Backup progress on this phone will be reset and the family album will switch to a new storage computer. Photos on this phone stay put; photos on the old computer stay there too.</string>
+    <string name="disconnect_confirm_ok">Disconnect</string>
+    <string name="disconnect_failed_title">Could not disconnect</string>
+    <string name="disconnect_failed">Could not reach the storage computer. Check that it is on, then try again.</string>
+    <string name="ok">OK</string>
     <string name="run_failed">Could not finish this run — photos already home are safe; try again and it picks up where it left off.</string>
 
     <!-- Photos -->

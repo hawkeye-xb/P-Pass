@@ -20,6 +20,7 @@ import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.buildJsonObject
 
 const val ALPN_CTRL = "ppf/ctrl/1"
 
@@ -96,6 +97,14 @@ class DaemonClient {
                 conn.close(0L, ByteArray(0))
             }
         }
+
+    /** UX-06: unilateral stop — ask the daemon to revoke THIS device.
+     *  Success means hello is denied from now on; a fresh owner-issued
+     *  token can rejoin. Returns true when the daemon confirmed. */
+    suspend fun unpair(peer: PeerAddrParts): Boolean = withContext(Dispatchers.IO) {
+        val resp = call(peer, "device.unpair", buildJsonObject {})
+        resp.ok
+    }
 
     /** Open a raw connection on any ALPN (upload plane reuses it for
      *  many streams — one per file). Caller closes. */

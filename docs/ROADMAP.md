@@ -342,7 +342,6 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       ppass.backup.failed; strings en/zh symmetric. android 49/49.
       Device acceptance (mock failure → notification appears; all-success
       → zero notifications via dumpsys) pending real phone.
-- [ ] UX-06 移动端「暂停自动备份」+「断开连接」（未开工）
 - [ ] UX-07 daemon ephemeral 模式（未开工）
 - [ ] UX-03 后台规则一行+极简设置 — **code landed 2026-08-05 (PR #37)**:
       backup page gets one rule line ("插电+WiFi 时自动备份，无需打开
@@ -370,6 +369,19 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       ui.change_body reworded en/zh, all four dicts byte-identical
       (zero-drift tests cover). diag 8/8, android 49/49, vite build
       green. Screenshot acceptance pending human.
+- [ ] UX-06 暂停自动备份 + 断开连接 — **code landed 2026-08-05 (PR #40)**:
+      pause switch cancels the periodic WorkManager job + persists the
+      pause (AutoBackupPrefs JSON, tmp+rename, corrupt→defaults);
+      app-start schedule/catch-up respects it; manual backup
+      unaffected. Disconnect: warning dialog (progress resets, album
+      switches storage computer, local photos stay, old computer photos
+      stay) → device revokes ITSELF via new wire method device.unpair
+      (authz: any paired role, unpaired/revoked denied; router marks
+      caller revoked + audit device.unpaired) → hello denied → fresh
+      token rejoins (T-041 door) → clear pairing/watermark → Welcome.
+      Workspace 202/202, android 55/55, clippy/fmt clean. Device
+      acceptance (re-pair after disconnect, jobscheduler pause) pending
+      real phone.
 
 ## Standing debts / 挂账
 
