@@ -37,13 +37,33 @@
     <string name="safe_detail">%1$d new photos arrived home.</string>
     <string name="safe_detail_dup">%1$d new photos arrived home, %2$d were already there.</string>
     <string name="backup_now">Back up now</string>
-    <string name="backing_up">Backing up…</string>
+    <string name="backup_pause">Pause</string>
+    <!-- UX-02: 失败通知（成功保持沉默） -->
+    <string name="notif_backup_failed_title">Backup didn\'t finish</string>
+    <string name="notif_backup_failed_body">%1$d photos didn\'t make it home — open to see</string>
     <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
+    <!-- DOG-01: 恒真三元组 -->
+    <string name="dog_triplet_line">%1$d photos · %2$d backed up · %3$d to go</string>
+    <string name="dog_last_success">Last success: %1$s</string>
+    <!-- UX-03: 后台规则一行 + 极简设置 -->
+    <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
+    <string name="setting_charge_only">Only while charging</string>
+    <string name="setting_wifi_only">Only on WiFi</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">Background protection off</string>
     <string name="dog_battery_body">This phone may stop P-Pass from backing up in the background. Turn off battery optimization for P-Pass to keep backups running.</string>
     <string name="dog_battery_action">Open settings</string>
     <string name="reconnect">Scan a new code</string>
+    <!-- UX-06: 暂停自动备份 + 断开连接 -->
+    <string name="auto_backup_pause">Auto backup</string>
+    <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>
+    <string name="disconnect">Disconnect from this computer</string>
+    <string name="disconnect_confirm_title">Disconnect?</string>
+    <string name="disconnect_confirm_body">Backup progress on this phone will be reset and the family album will switch to a new storage computer. Photos on this phone stay put; photos on the old computer stay there too.</string>
+    <string name="disconnect_confirm_ok">Disconnect</string>
+    <string name="disconnect_failed_title">Could not disconnect</string>
+    <string name="disconnect_failed">Could not reach the storage computer. Check that it is on, then try again.</string>
+    <string name="ok">OK</string>
     <string name="run_failed">Could not finish this run — photos already home are safe; try again and it picks up where it left off.</string>
 
     <!-- Photos -->

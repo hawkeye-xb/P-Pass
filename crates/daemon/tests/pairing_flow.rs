@@ -2,7 +2,7 @@
 //! expired-token rejection, and one-time token replay rejection.
 
 use daemon::{Pairing, Router};
-use proto::{codes, PairRequest, Req, Resp};
+use proto::{codes, methods, PairRequest, Req, Resp};
 use storage::{Db, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
@@ -171,6 +171,103 @@ async fn revoked_device_rejoins_with_fresh_token() {
     assert!(audit
         .iter()
         .any(|r| r.entry.detail.as_deref().unwrap_or("").contains("rejoined")));
+}
+
+// ── UX-06: device.unpair — unilateral stop ────────────────
+
+async fn send_method(
+    ctp: &IrohTransport,
+    daemon: transport::NodeId,
+    method: &str,
+    params: serde_json::Value,
+) -> Resp {
+    let mut stream = ctp.connect(daemon, transport::ALPN_CTRL).await.unwrap();
+    let req = Req {
+        id: format!("m-{method}"),
+        method: method.into(),
+        params,
+        ..Default::default()
+    };
+    stream
+        .send_frame(&proto::codec::encode(&req).unwrap())
+        .await
+        .unwrap();
+    stream.finish().unwrap();
+    let frame = stream.recv_frame().await.unwrap().expect("a response");
+    proto::codec::decode::<Resp>(&frame).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    // Pair normally.
+    let qr = pairing.start([0x60; 32], now());
+    assert!(
+        send_pair(&ctp, dtp.node_id(), &token_of(&qr), "要断开的手机")
+            .await
+            .ok
+    );
+    assert!(
+        !db.get_device(&ctp.node_id().0)
+            .await
+            .unwrap()
+            .unwrap()
+            .revoked
+    );
+
+    // Unilateral stop: the device revokes itself — no owner action.
+    let resp = send_method(
+        &ctp,
+        dtp.node_id(),
+        methods::DEVICE_UNPAIR,
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(resp.ok, "self-unpair must succeed: {resp:?}");
+    let d = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    assert!(d.revoked, "device row must be revoked after unpair");
+
+    // hello is now denied (revoked ⇒ not even hello).
+    let hello = send_method(&ctp, dtp.node_id(), methods::HELLO, serde_json::json!({})).await;
+    assert!(!hello.ok, "revoked device must not reach hello");
+    assert_eq!(hello.error.unwrap().code, codes::NOT_AUTHORIZED);
+
+    // …but a fresh owner-issued token lets the SAME identity rejoin.
+    let qr2 = pairing.start([0x61; 32], now());
+    let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr2), "要断开的手机").await;
+    assert!(
+        resp.ok,
+        "unpaired device must rejoin with fresh token: {resp:?}"
+    );
+    let d = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    assert!(!d.revoked);
+
+    // Audit names the self-revocation.
+    let audit = db.list_audit(20).await.unwrap();
+    assert!(audit.iter().any(|r| r.entry.action == "device.unpaired"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unpair_by_unpaired_device_is_denied() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, _pairing) = start_daemon(db.clone(), true).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    // Never paired: device.unpair is outside the pairing door.
+    let resp = send_method(
+        &ctp,
+        dtp.node_id(),
+        methods::DEVICE_UNPAIR,
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(!resp.ok, "unpaired device must not unpair");
+    assert_eq!(resp.error.unwrap().code, codes::NOT_AUTHORIZED);
 }
 
 fn now() -> i64 {

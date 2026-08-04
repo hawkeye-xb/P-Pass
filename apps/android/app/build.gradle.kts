@@ -20,6 +20,8 @@ android {
 
     buildFeatures {
         compose = true
+        // UPD-01: 更新检查拿当前版本（BuildConfig.VERSION_NAME）
+        buildConfig = true
     }
 
     packaging {
