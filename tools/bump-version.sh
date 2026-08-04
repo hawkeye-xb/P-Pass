@@ -65,3 +65,21 @@ echo "bumped: $CUR -> $NEW (android versionCode $VCODE -> $NCODE)"
 echo "--- git diff（应只含版本号行）---"
 git diff --stat Cargo.toml apps/android/app/build.gradle.kts
 git diff Cargo.toml apps/android/app/build.gradle.kts | grep -E "^[+-]" | grep -vE "^(\+\+\+|---)" || true
+
+# BUMP-01 (2026-08-06): sync workspace-member versions into Cargo.lock.
+# bump-version.sh only edits Cargo.toml, so the first build after a bump
+# used to dirty the lock (TAG-01 0.2.1, fixed by hand in 6bb3239) — this
+# makes it automatic: `cargo update -w` refreshes just the workspace
+# members, leaving their dependency tree untouched.
+cargo update -w -q
+
+# BUMP-01: assert the tree is clean except the version files themselves.
+# Anything else dirty (stray build artifacts, accidental edits) fails the
+# bump instead of silently riding along into the commit. The script itself
+# is whitelisted: a developer may run it while it has uncommitted edits.
+DIRTY=$(git status --porcelain | sed 's/^...//' | grep -v -E '^(Cargo\.toml|apps/android/app/build\.gradle\.kts|Cargo\.lock|tools/bump-version\.sh)$' || true)
+if [ -n "$DIRTY" ]; then
+  echo "error: unexpected dirty files after bump: $DIRTY" >&2
+  exit 1
+fi
+echo "ok: Cargo.lock workspace members synced; tree clean (version files only)"
