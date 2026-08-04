@@ -28,51 +28,30 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 3. 手机：装 apk（允许"未知来源"）→ 扫码 → 首次备份
 4. **每个卡点/看不懂的提示记下来**，丢回主会话，逐条立卡——这就是 H-10b 的产出
 
-## 三、这一轮交付的 review 状态（2026-08-06 01:47 巡检轮，第四批 8 交付已审）
+## 三、这一轮交付的 review 状态（2026-08-06 03:47 巡检轮）
 
 | 交付 | 裁决 |
 |---|---|
-| DOG-01c 返工 | ✅ **已合并**（20ffe17）：recordRun add-only（commit 成功=候选全确认）、漂移校准解耦为只查不传 existCheck（begin+manifest 不 push 不 commit，daemon 会话幂等无残留）、回归测试走生产链（首次 100 → M=100）。本地 android 56/56 + nextest 200/200。真机项挂验收人 |
-| UPD-01c 返工 | ✅ **已合并**（823e1b3）：keys.rs 注册三键 ALL=64、四份字典同步（diag 8/8 + android 55/55 本地实证）。UPD-01 整卡收口；桌面实际收更新还差用户的 minisign 密钥对（等用户 §六）|
-| UX-01 暂停 | ✅ 已合并：协程取消点在文件边界、不 commit 水位不动、幂等续传 |
-| UX-02 失败通知 | ✅ 已合并：独立 channel、成功零通知；合并时修正 scan 作用域（batchSize 带出 try）+ 扫描前失败不发「0 张」 |
-| UX-03 极简设置 | ✅ 已合并：仅充电/仅 WiFi 持久化（崩溃安全）+ REPLACE 重建 WorkManager 约束 |
-| UX-04 徽章降级 | ✅ 已合并：徽章只报服务态，「直连」假话下架；keys ALL=65（与 UPD-01c 键合流）|
-| UX-05 folder.set 诚实化 | ✅ 已合并：确认文案如实说「重启生效+不迁移」，四份字典只改值 |
-| UX-06 暂停+断开 | ✅ 已合并：新协议动词 device.unpair（自撤销，authz 限已配对角色+反证测试、审计入账、T-041 重配对门）。**已知缺口→UX-06b 卡**：断开没清 DOG-01 确认缓存（分支基点早于 DOG-01c，当时 ConfirmedStore 不存在）|
-| 合并后全量 | **android 71/71 + nextest 206/206 全绿**（跨分支冲突手解：BackupWorker/HomeScreen/MainActivity/keys.rs/App.svelte）|
-| H-10a-fix | ❌ 未交付，卡仍挂 |
+| UX-06b 清缓存 | ✅ **已合并**：生产函数与测试共用、只删本 remote、反证测试（不删则 count>0）在案 |
+| UX-07 ephemeral | ✅ **已合并**：验收硬指标本地实测——关 stdin 后 **2.26s** 退出（<3s，exit 0）；endpoint close 2s 上限；生产/launchd 路径不变；smoke 脚本改 FIFO 控制、cleanup 不再 kill |
+| 合并后全量 | Rust 206/206 + Android 73/73 绿；顺手清了 UX-06 合并遗留的重复 import |
+| H-10a-fix | ❌ 未交付，卡仍挂（不阻塞出包）|
 
-### UX-06b 微卡（L0，断开清缓存收尾）
+**队列只剩 TAG-01（出包卡，全文见下）——做完它，工程侧就绪，真机验收和狗粮周开跑。**
 
-```
-## UX-06b 断开连接时清确认缓存  级别 L0
-背景：UX-06 断开清了 pairing/watermark，但 DOG-01 的确认缓存
-  （filesDir/backup-state/<daemonNodeId>/）没清——重配对到同一台
-  电脑后 M 沿用旧缓存，若期间电脑端删过库，M 虚高（下次漂移校准
-  会修正，但首屏是错的）。
-修法：MainActivity 断开确认分支里，pairings.clear() 旁边加
-  File(context.filesDir, "backup-state/${s.pairing.daemonNodeId}")
-  .deleteRecursively()（只删该 remote 目录，不动别的）。
-验收：单测——写入缓存 → 模拟断开清理 → ConfirmedStore.count()==0；
-  android 全测绿。
-反证：注释掉删除行 → 断开后 count() 仍>0（贴输出后还原）。
-收尾：走 PR 等 review。
-```
-
-### TAG-01 出包卡（L1，狗粮周阻塞全清后的收尾）
+### TAG-01 出包卡（L1）
 
 ```
 ## TAG-01 打狗粮周 test tag  级别 L1
-前置：main 已含 DOG-01/02/03、DAE-01、UPD-01、UX-01..06（本轮全合）。
-  建议把 UX-06b、UX-07 也收进来再打（都是小卡）。
+前置：已满足——main 已含 DOG-01/02/03、DAE-01、UPD-01、UX-01..07、
+  UX-06b（Rust 206/206 + Android 73/73 绿）。
 步骤（照 RELEASING.md）：①tools/bump-version.sh 0.2.1（DAE-01 的
   版本接管需要严格递增；versionCode 随之 +1）→ 单独 commit 进 main；
   ②打 tag v0.2.1-test.1 推送；③盯 release run 到全绿，逐条确认：
   APK 完整性断言 step success、macOS zip/dmg/app 齐、SHA256SUMS 两平台、
   manifest.json 在资产里；④run 链接和资产清单写回本卡验收记录。
 反证：故意不 bump 直接打 tag → bump-version.sh 已拦（已 tag 版本拒绝），
-  不必实测，引用 REL-01 五态测试在案即可。
+  引用 REL-01 五态测试在案即可，不必实测。
 收尾：NEXT.md 第五节勾掉「打 tag」，验收人接手真机批量验收。
 ```
 
