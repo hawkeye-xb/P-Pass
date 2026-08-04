@@ -3,18 +3,20 @@
 # jar 内，无需模拟器），连一个临时 release daemon，断言
 # HELLO OK / PAIR OK / BACKUP OK 三行（12/12 指标见剧本脚本输出）。
 #
-# 运行时机（E2E-01 卡面规定）：
-#   - 必须跑：nightly 定时（schedule）+ 每个 release tag 的产物构建前门禁
-#     （被 release.yml 以 reusable workflow 调用，构建 job needs 本 workflow）
+# 运行时机（2026-08-04 用户裁决：自动化测试不前置）：
+#   - nightly 定时（schedule）
+#   - release tag 时并行跑（不阻塞 release 构建——tag 触发与 release.yml
+#     并行，产物照出，e2e 结果供发布前人工核对）
 #   - 选择性：PR 打 e2e label，或手动 dispatch
 #   - 每 commit 不跑（PR 常规 push 不触发本 workflow）
 
 name: E2E live scenarios
 
 on:
-  workflow_call:
   schedule:
     - cron: "30 3 * * *"
+  push:
+    tags: ["v*"]
   pull_request:
     branches: [main]
     types: [labeled, unlabeled]

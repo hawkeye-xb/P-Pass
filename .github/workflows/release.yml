@@ -41,17 +41,10 @@ permissions:
   contents: read
 
 jobs:
-  # E2E-01: release tag 的产物构建前门禁——reusable workflow 调用 e2e.yml，
-  # 三平台构建 job 等它绿才开跑。nightly/label/dispatch 触发走 e2e.yml 独立事件。
-  e2e:
-    name: "E2E gate (android live scenarios)"
-    uses: ./.github/workflows/e2e.yml
-
   macos-arm64:
     name: "macOS arm64 (签名门控)"
     runs-on: macos-14
     environment: release-signing
-    needs: [e2e]
     permissions:
       contents: read
       id-token: write
@@ -229,7 +222,6 @@ jobs:
     name: "Windows x64 (未签名)"
     runs-on: windows-latest
     timeout-minutes: 45
-    needs: [e2e]
     permissions:
       contents: read
       id-token: write
@@ -296,7 +288,6 @@ jobs:
     name: "Android (signed APK)"
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [e2e]
     permissions:
       contents: read
     env:

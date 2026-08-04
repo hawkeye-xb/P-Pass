@@ -199,10 +199,11 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       acceptance
 - [ ] E2E-01 android live scenarios in CI — **code landed 2026-08-04
       (PR #28)**: .github/workflows/e2e.yml — nightly cron (03:30 UTC) +
-      release-tag pre-build gate (reusable call from release.yml, the
-      three build jobs `needs: [e2e]`) + PR e2e label / manual
-      dispatch; every-commit never triggers. android hello/pair/backup
-      scripts tightened to PPF_BIND_ADDR=127.0.0.1:0; iroh Maven jar
+      release tag 时并行跑（**2026-08-04 用户裁决：自动化测试不前置**——
+      原 release 构建前门禁撤掉，tag 触发与 release.yml 并行、产物照出，
+      e2e 结果供发布前人工核对）+ PR e2e label / manual dispatch;
+      every-commit never triggers. android hello/pair/backup scripts
+      tightened to PPF_BIND_ADDR=127.0.0.1:0; iroh Maven jar
       confirmed to carry linux-x86-64 natives (JVM tests need no
       simulator). **acceptance PASS 2026-08-04**: run 30886819356
       all-green — HELLO OK / PAIR OK / BACKUP OK (pushed=12 ingested=12
