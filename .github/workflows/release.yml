@@ -197,10 +197,14 @@ jobs:
       - name: Bundle desktop .app + dmg (H-10c)
         run: |
           set -euo pipefail
-          mkdir -p /tmp/dmg
+          # ⚠️ dmg 输出到 /tmp/rel/：upload-artifact@v4 按多个 path 的公共
+          # 祖先目录存储，若 dmg 放 /tmp/dmg/ 会让 artifact 内出现 rel/、
+          # dmg/ 前缀（T-071 只传 /tmp/rel 时是根级平铺），release job 的
+          # artifacts/macos-arm64/<file> 引用会全挂。zip 打包步骤在此之前
+          # 已完成，dmg 落入 /tmp/rel 不会被收进 zip。
           # 无凭据路径：ad-hoc（-）；有 APPLE_CERT 时门控传 identity。
           # （公证整个 .app 属 H-02 凭据路径范畴，本步只做 ad-hoc 重签。）
-          tools/bundle-desktop-macos.sh /tmp/rel /tmp/dmg
+          tools/bundle-desktop-macos.sh /tmp/rel /tmp/rel
           # ⚠️ 不追加 dmg 到 SHA256SUMS-macos-arm64：zip 内 SUMS 与 release
           # 资产 SUMS 必须逐字节一致（T-071 三重核对①）。dmg 的 sha256
           # 由 release job 下载后计算写进 notes。
@@ -212,7 +216,7 @@ jobs:
           path: |
             /tmp/rel/ppass-macos-arm64.zip
             /tmp/rel/SHA256SUMS-macos-arm64
-            /tmp/dmg/P-Pass-macos-arm64.dmg
+            /tmp/rel/P-Pass-macos-arm64.dmg
 
   windows-x64:
     name: "Windows x64 (未签名)"
