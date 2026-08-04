@@ -222,7 +222,19 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       from device+backup_watermark+asset.src_device). Tests: storage 2 +
       TripletStore 6 (incl. counterproof all-missing → K=N), android
       55/55, workspace 195/195. Device-side acceptance (Samsung kill+reopen,
-      offline reopen, dumpsys-style sqlite cross-check) pending real phone
+      offline reopen, dumpsys-style sqlite cross-check) pending real phone.
+      **DOG-01b rework 2026-08-05** (incremental-as-total blocker): N/M no
+      longer come from the single-run report — ConfirmedStore state cache
+      key=(hash, remote_id) in per-remote dir (backup-state/<nodeId>/,
+      crash-safe, survives app kill), M = confirmed count, N =
+      MediaScanner.countAll() (MediaStore COUNT(*) over the scan scope,
+      scope constant in one place), K = N-M clamp; manifest-missing
+      calibration (BackupReport.missing) removes drifted hashes from the
+      cache, confirmed candidates added — wired in both manual and
+      WorkManager paths. Regression test: full 100 → incremental 5 two-run
+      sequence ⇒ N=105 M=105 (not N=5); counterproof cleared-cache all-
+      missing ⇒ M=0 K=N. android 55/55, storage 12/12 (watermarks
+      retained-item re-verified)
 - [ ] REL-01 versioning & release norms — **code landed 2026-08-04
       (PR #29)**: docs/RELEASING.md (en primary + zh; trunk-based:
       main always releasable, tag=SemVer release, hotfix-only

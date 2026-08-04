@@ -23,6 +23,7 @@ import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 const val BACKUP_WORK_NAME = "ppass-auto-backup"
@@ -75,6 +76,11 @@ class BackupWorker(
         val scan = MediaScanner(ctx.contentResolver).scanSince(watermarks.load())
         if (scan.items.isEmpty()) return Result.success()
 
+        // DOG-01b: 自动备份也同步确认缓存（M 口径一致，不能只靠手动备份）。
+        val confirmedStore = ConfirmedStore(
+            File(ctx.filesDir, "backup-state/${pairing.daemonNodeId}")
+        )
+
         val client = DaemonClient()
         return try {
             client.bind(IdentityStore(ctx.filesDir).secretKey())
@@ -97,6 +103,13 @@ class BackupWorker(
                 scan.nextWatermark,
             )
             watermarks.save(scan.nextWatermark)
+            // DOG-01b: manifest missing → 移除缓存（漂移校准），其余加入。
+            val allHashes = candidates.map { it.hash }.toSet()
+            confirmedStore.recordRun(
+                confirmed = allHashes - report.missing,
+                missing = report.missing,
+                lastSuccessAt = System.currentTimeMillis(),
+            )
             android.util.Log.i(
                 "PPassBackup",
                 "auto backup: offered=${report.offered} pushed=${report.pushed} ingested=${report.ingested}",
