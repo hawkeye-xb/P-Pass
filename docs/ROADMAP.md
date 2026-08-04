@@ -190,13 +190,16 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       win-smoke.ps1 on next artifacts run
 - [ ] H-10 naive-user onboarding line (quickstart docs → cold-start
       walkthrough → human-grade release assets) — **H-10a quickstart
-      landed 2026-08-03 (PR #26)**; **H-10c human-facing release assets
-      in progress (PR #27)**: P-Pass-macos-arm64.dmg
-      (.app + self-contained daemon sidecar + lib/) via
-      tools/bundle-desktop-macos.sh + app-release-unsigned.apk
-      (assembleRelease; signed version T-071 follow-up), both added to
-      Release draft assets; H-10b naive-user test pending tag-build
-      acceptance
+      reworked 2026-08-06 (PR #26)**: README en+zh "Get started in 10
+      minutes" now references real v0.2.1-test.2 assets by name
+      (P-Pass-macos-arm64.dmg / app-release.apk), Windows section honestly
+      states GUI is in development (CLI-only exes today), draft-release
+      visibility caveat added — no promises about things that don't exist;
+      **H-10c human-facing release assets DONE 2026-08-04 (PR #27)**:
+      P-Pass-macos-arm64.dmg (.app + self-contained daemon sidecar +
+      lib/) via tools/bundle-desktop-macos.sh + signed app-release.apk
+      (CN=HawkeyeXbOrg), both added to Release draft assets; H-10b
+      naive-user test pending tag-build acceptance
 - [ ] UPD-01 self-update channel — **code landed 2026-08-04 (PR #30),
       rework 2026-08-05**: release.yml emits tauri-style manifest.json
       (compose via tools/make-update-manifest.mjs — sha256 + Ed25519
