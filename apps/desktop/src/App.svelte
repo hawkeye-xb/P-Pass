@@ -18,18 +18,9 @@
     for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
     return s;
   };
-  // diag 状态码 → 字典 msg_key。桌面壳是存储端本身，用桌面视角变体
-  // （T-042b：手机视角的 "存储电脑离线了" 显示在存储电脑上自相矛盾；
-  // 变体无 {progress}/{last_seen} 占位符——status 载荷不带这两个值，
-  // 带占位符会渲染出字面 "{progress}"）。
-  const STATE_KEYS = {
-    ONLINE_DIRECT: "diag.online_direct",
-    ONLINE_RELAY: "diag.online_relay",
-    PAIRING: "diag.desktop.pairing",
-    DISK_FULL: "diag.desktop.disk_full",
-    INDEXING: "diag.desktop.indexing",
-    STORAGE_OFFLINE: "diag.desktop.storage_offline",
-  };
+  // UX-04: 顶部徽章只说服务态（运行中/已停止）——连接状态（直连/中继）
+  // 不再上徽章：OnlineDirect 是状态机默认值，当徽章文案是假话；连接状态
+  // 归属未来设备行（届时恢复 STATE_KEYS 映射）。
 
   let wizard = $state(null); // null=检测中, {configured, default_dir}
   let starting = $state(false);
@@ -207,10 +198,11 @@
     }
   }
 
+  // UX-04: 徽章 = 服务态二元（运行中 / 后台服务未运行），不再展示连接
+  // 状态（直连/中继是连接路径事实，不属于服务态；现状 ONLINE_DIRECT 是
+  // 状态机默认值，当作徽章文案是假话）。
   const stateLabel = $derived(
-    !online
-      ? t("ui.offline_banner")
-      : t(STATE_KEYS[status?.state] ?? status?.state)
+    !online ? t("ui.offline_banner") : t("ui.service_running")
   );
 </script>
 

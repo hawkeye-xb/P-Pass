@@ -87,6 +87,8 @@ msg_keys! {
     UI_STOP_HINT => "ui.stop_hint",
     UI_STOP_CONFIRM_TITLE => "ui.stop_confirm_title",
     UI_STOP_CONFIRM_BODY => "ui.stop_confirm_body",
+    // UX-04: 桌面顶部徽章的服务态（运行中）——连接状态不再上徽章。
+    UI_SERVICE_RUNNING => "ui.service_running",
     UI_SERVICE_STOPPED => "ui.service_stopped",
     UI_STOP_FAILED => "ui.stop_failed",
     UI_START_FAILED => "ui.start_failed",
@@ -161,6 +163,7 @@ mod tests {
             UI_STOP_HINT,
             UI_STOP_CONFIRM_TITLE,
             UI_STOP_CONFIRM_BODY,
+            UI_SERVICE_RUNNING,
             UI_SERVICE_STOPPED,
             UI_STOP_FAILED,
             UI_START_FAILED,
@@ -187,7 +190,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 64);
+        assert_eq!(ALL.len(), 65);
     }
 
     #[test]

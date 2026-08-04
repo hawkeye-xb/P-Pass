@@ -44,6 +44,7 @@
   "ui.stop_confirm_title": "停止后台服务",
   "ui.stop_confirm_body": "停止后会取消开机自启并暂停所有备份，家人手机将无法连接，直到你重新启用。确定停止？",
   "ui.service_stopped": "后台服务已停止，开机不再自动运行。",
+  "ui.service_running": "运行中",
   "ui.stop_failed": "停止失败：{err}",
   "ui.start_failed": "启动失败：{err}",
   "ui.pair_failed": "发起配对失败：{err}",

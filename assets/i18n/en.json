@@ -44,6 +44,7 @@
   "ui.stop_confirm_title": "Stop background service",
   "ui.stop_confirm_body": "Stopping cancels auto-start and pauses all backups; family phones can't connect until you re-enable it. Stop anyway?",
   "ui.service_stopped": "Background service stopped; it won't auto-start on boot.",
+  "ui.service_running": "Running",
   "ui.stop_failed": "Failed to stop: {err}",
   "ui.start_failed": "Failed to start: {err}",
   "ui.pair_failed": "Failed to start pairing: {err}",
