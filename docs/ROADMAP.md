@@ -267,7 +267,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       (backing_up → backup_pause). android 49/49. Device acceptance
       (Samsung pause→resume converges to 0 missing; counterproof: sqlite
       has no half-written asset rows — guaranteed by ingest-at-commit)
-      pending real phone. PR 待建。
+      pending real phone. PR #35。
 - [ ] UX-02 失败通知，成功沉默（未开工）
 - [ ] UX-03 后台规则一行+极简设置（未开工）
 - [ ] UX-04 「已直连」徽章降级（未开工）
