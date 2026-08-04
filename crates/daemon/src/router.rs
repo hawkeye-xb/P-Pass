@@ -185,6 +185,7 @@ impl Router {
     async fn dispatch(&self, peer: transport::NodeId, req: &Req) -> Resp {
         match req.method.as_str() {
             methods::PAIR_REQUEST => self.handle_pair(peer, req).await,
+            methods::DEVICE_UNPAIR => self.handle_unpair(peer, req).await,
             methods::BACKUP_BEGIN | methods::BACKUP_MANIFEST | methods::BACKUP_COMMIT => {
                 self.handle_backup(peer, req).await
             }
@@ -394,6 +395,32 @@ impl Router {
                     RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
                 )
             }
+        }
+    }
+
+    /// `device.unpair` (UX-06): the caller revokes ITSELF. Unilateral
+    /// stop — no owner action needed (product file §二双端共通). The
+    /// device row is marked revoked; hello is denied from then on, and
+    /// a fresh owner-issued token can rejoin (T-041 rejoin door).
+    async fn handle_unpair(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        match self.db.revoke(&peer.0).await {
+            Ok(_) => {
+                let _ = self
+                    .db
+                    .append_audit(&storage::AuditEntry {
+                        ts: unix_ms_now(),
+                        actor: Some(peer.0.to_vec()), // 设备自我撤销（UX-06）
+                        action: "device.unpaired".into(),
+                        target_hash: None,
+                        detail: None,
+                    })
+                    .await;
+                Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": true }))
+            }
+            Err(_) => Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+            ),
         }
     }
 
