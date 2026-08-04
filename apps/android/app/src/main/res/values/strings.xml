@@ -39,6 +39,9 @@
     <string name="backup_now">Back up now</string>
     <string name="backing_up">Backing up…</string>
     <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
+    <!-- DOG-01: 恒真三元组 -->
+    <string name="dog_triplet_line">%1$d photos · %2$d backed up · %3$d to go</string>
+    <string name="dog_last_success">Last success: %1$s</string>
     <string name="reconnect">Scan a new code</string>
     <string name="run_failed">Could not finish this run — photos already home are safe; try again and it picks up where it left off.</string>
 
