@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -47,7 +48,6 @@ fun HomeScreen(
     storageName: String,
     state: BackupUiState,
     onBackupNow: () -> Unit,
-    onReconnect: () -> Unit = {},
     // DOG-02: 电池白名单引导卡片（未加白时显示，加白后消失）
     batteryWhitelisted: Boolean = true,
     onOpenBatterySettings: () -> Unit = {},
@@ -58,6 +58,10 @@ fun HomeScreen(
     onChargeOnlyChange: (Boolean) -> Unit = {},
     wifiOnly: Boolean = true,
     onWifiOnlyChange: (Boolean) -> Unit = {},
+    // UX-06: 全局暂停自动备份开关 + 断开连接（警示页确认在 MainActivity）
+    autoBackupPaused: Boolean = false,
+    onToggleAutoBackup: (Boolean) -> Unit = {},
+    onDisconnect: () -> Unit = {},
 ) {
     val (dot, pillBg) = when (state) {
         is BackupUiState.Idle -> PPColor.Idle to PPColor.IdleBg
@@ -219,13 +223,35 @@ fun HomeScreen(
         )
 
         Spacer(Modifier.height(10.dp))
+        // UX-06: 设置行——全局暂停自动备份开关 + 断开连接。
+        // 开关只控制周期任务（WorkManager），手动「立即备份」不受影响。
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.auto_backup_pause),
+                    fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                )
+                Text(
+                    stringResource(R.string.auto_backup_pause_hint),
+                    fontSize = 12.sp, lineHeight = 17.sp, color = PPColor.Ink40,
+                )
+            }
+            Switch(
+                checked = !autoBackupPaused,
+                onCheckedChange = { on -> onToggleAutoBackup(!on) },
+            )
+        }
         androidx.compose.material3.OutlinedButton(
-            onClick = onReconnect,
+            onClick = onDisconnect,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(PPSize.RadiusControl),
             border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
         ) {
-            Text(stringResource(R.string.reconnect), fontSize = 16.sp, color = PPColor.Ink60)
+            Text(stringResource(R.string.disconnect), fontSize = 16.sp, color = PPColor.Ink60)
         }
         Spacer(Modifier.height(6.dp))
     }
