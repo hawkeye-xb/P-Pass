@@ -58,6 +58,15 @@ fun tripletOf(n: Long, confirmedCount: Long, lastSuccessAt: Long): BackupTriplet
 fun confirmedAfterCommit(candidates: List<Candidate>, report: BackupReport): Set<String> =
     candidates.mapTo(mutableSetOf()) { it.hash }
 
+/** UX-06b: 断开连接时清空该 remote 的确认缓存目录
+ * （`filesDir/backup-state/<remoteId>/`）——重配对到同一台电脑后 M 从
+ * 0 重新计数，绝不沿用旧缓存（电脑端删过库时 M 虚高，首屏是错的；
+ * 漂移校准虽会修正但时机滞后）。只删该 remote 目录，不动别的 remote。
+ * MainActivity 断开确认分支调用（与测试共用同一生产函数）。 */
+fun clearConfirmedCacheForRemote(filesDir: File, daemonNodeId: String) {
+    File(filesDir, "backup-state/$daemonNodeId").deleteRecursively()
+}
+
 /** 一个 remote 的确认状态（崩溃安全持久化，tmp + rename）。 */
 @Serializable
 data class ConfirmedState(

@@ -159,4 +159,44 @@ class ConfirmedStoreTest {
         assertTrue("K 不为负", t.k >= 0)
         assertEquals(0L, t.k)
     }
+
+    @Test
+    fun disconnect_clears_confirmed_cache_for_that_remote_only() {
+        // UX-06b 验收：写入缓存 → 模拟断开清理（生产函数
+        // clearConfirmedCacheForRemote，MainActivity 断开分支同款）→
+        // 该 remote ConfirmedStore.count()==0；别的 remote 目录不动。
+        val root = tempDir("ux06b-disconnect")
+        val remoteA = File(root, "backup-state/aaaa")
+        val remoteB = File(root, "backup-state/bbbb")
+        ConfirmedStore(remoteA).recordRun(confirmed = hashes(10), lastSuccessAt = 100)
+        ConfirmedStore(remoteB).recordRun(confirmed = hashes(3), lastSuccessAt = 200)
+        assertEquals(10, ConfirmedStore(remoteA).count())
+        assertEquals(3, ConfirmedStore(remoteB).count())
+
+        // 断开 remote A（生产调用链：filesDir + daemonNodeId）。
+        clearConfirmedCacheForRemote(root, "aaaa")
+
+        assertEquals("断开的 remote 确认缓存必须清零", 0, ConfirmedStore(remoteA).count())
+        assertEquals(
+            "别的 remote 确认缓存必须原样保留",
+            3, ConfirmedStore(remoteB).count(),
+        )
+        root.deleteRecursively()
+    }
+
+    @Test
+    fun counterproof_disconnect_without_delete_keeps_count_above_zero() {
+        // UX-06b 反证：注释掉删除行（模拟回归）→ 断开后 count() 仍 > 0。
+        // 正演 = 调生产函数后 count()==0（上一测试）；反演 = 只写缓存不删，
+        // 缓存必须还在（证明测试真在测"删除"这个行为，而非恒真断言）。
+        val root = tempDir("ux06b-counterproof")
+        val remote = File(root, "backup-state/cccc")
+        ConfirmedStore(remote).recordRun(confirmed = hashes(5), lastSuccessAt = 1)
+        // 不调 clearConfirmedCacheForRemote（模拟删除行被注释）。
+        assertEquals(
+            "删除行缺失时断开不清缓存 → count() 仍 > 0",
+            5, ConfirmedStore(remote).count(),
+        )
+        root.deleteRecursively()
+    }
 }
