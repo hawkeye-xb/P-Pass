@@ -325,6 +325,16 @@ jobs:
           ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
         run: ./gradlew :app:assembleRelease
 
+      # Packaging-completeness guard (same as pr.yml): a release APK without
+      # the native lib installs fine and crashes at first pairing — assert
+      # the .so is IN whichever APK was produced.
+      - name: Assert APK contains libiroh_ffi.so
+        working-directory: apps/android
+        run: |
+          set -euo pipefail
+          APK=$(find app/build/outputs/apk/release -name 'app-release*.apk' | head -1)
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libiroh_ffi.so"
+
       - name: Detect signing
         id: signdetect
         working-directory: apps/android

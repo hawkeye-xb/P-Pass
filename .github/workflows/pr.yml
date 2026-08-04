@@ -98,6 +98,14 @@ jobs:
         working-directory: apps/android
         run: ./gradlew :app:assembleDebug
 
+      # Packaging-completeness guard: gradle silently packages "whatever is
+      # there" — a missing jniLibs .so builds green and crashes on-device
+      # (UnsatisfiedLinkError, happened twice). Assert the native lib is IN
+      # the APK, not merely that the build succeeded.
+      - name: Assert APK contains libiroh_ffi.so
+        working-directory: apps/android
+        run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q "lib/arm64-v8a/libiroh_ffi.so"
+
   scenarios:
     name: T-070 failure scenarios (process-level)
     runs-on: ubuntu-latest
