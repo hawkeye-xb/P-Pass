@@ -324,7 +324,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
 
-- [ ] UX-01 备份中可暂停 — **code landed 2026-08-05**: backup
+- [ ] UX-01 备份中可暂停 — **code landed 2026-08-05 (PR #35)**: backup
       button becomes 暂停 while busy and stays clickable — tap cancels the
       current batch (BackupUiStateHolder tracks the job; BackupRunner push
       loop got a cooperative ensureActive() cancel point). Idempotent
@@ -333,8 +333,15 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       (backing_up → backup_pause). android 49/49. Device acceptance
       (Samsung pause→resume converges to 0 missing; counterproof: sqlite
       has no half-written asset rows — guaranteed by ingest-at-commit)
-      pending real phone. PR #35。
-- [ ] UX-02 失败通知，成功沉默（未开工）
+      pending real phone.
+- [ ] UX-02 失败通知，成功沉默 — **code landed 2026-08-05 (PR #36)**:
+      auto backup (BackupWorker) posts a system notification only when a
+      batch fails ("N 张照片没备份成功，打开看看", N = batch offered
+      count, tap opens MainActivity); success stays silent (FGS
+      notification auto-dismissed on completion). Dedicated channel
+      ppass.backup.failed; strings en/zh symmetric. android 49/49.
+      Device acceptance (mock failure → notification appears; all-success
+      → zero notifications via dumpsys) pending real phone.
 - [ ] UX-03 后台规则一行+极简设置（未开工）
 - [ ] UX-04 「已直连」徽章降级（未开工）
 - [ ] UX-05 folder.set 诚实化（未开工）
