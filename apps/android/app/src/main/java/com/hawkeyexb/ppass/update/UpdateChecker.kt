@@ -84,29 +84,35 @@ suspend fun fetchUpdate(currentVersion: String): UpdateInfo? = withContext(Dispa
     }
 }
 
-/** 下载 APK → FileProvider → 系统安装器（PackageInstaller 强制同签名校验兜底）。 */
-fun downloadAndInstall(context: Context, url: String): Boolean {
-    return try {
-        val apk = File(context.cacheDir, "ppass-update.apk")
-        val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-        conn.connectTimeout = 15_000
-        conn.readTimeout = 30_000
-        conn.inputStream.use { input ->
-            apk.outputStream().use { output -> input.copyTo(output) }
+/**
+ * 下载 APK → FileProvider → 系统安装器（PackageInstaller 强制同签名校验
+ * 兜底）。UPD-01 返工：原实现是普通 fun 在主线程同步下载——Android 直接
+ * 抛 NetworkOnMainThreadException，异常被 catch 吞掉，「下载安装」点了
+ * 没反应。改为 suspend + Dispatchers.IO。
+ */
+suspend fun downloadAndInstall(context: Context, url: String): Boolean =
+    withContext(Dispatchers.IO) {
+        try {
+            val apk = File(context.cacheDir, "ppass-update.apk")
+            val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 30_000
+            conn.inputStream.use { input ->
+                apk.outputStream().use { output -> input.copyTo(output) }
+            }
+            val uri: Uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                apk,
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+            true
+        } catch (_: Exception) {
+            false
         }
-        val uri: Uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            apk,
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        context.startActivity(intent)
-        true
-    } catch (_: Exception) {
-        false
     }
-}

@@ -42,6 +42,27 @@
    E2E live scenarios result if the tag ran one), then
    `gh release edit <tag> --draft=false`.
 
+## 3.5 Update channel (UPD-01) — current scope & known gaps
+
+- Every release emits **`manifest.json`** as a release asset
+  (`tools/make-update-manifest.mjs`; tauri-plugin-updater style, sha256
+  per platform + Ed25519 signature gated on `UPDATE_SIGNING_KEY`).
+  Clients resolve it via `releases/latest/download/manifest.json`.
+- **404 semantics**: while the latest release is a *draft* (or none
+  exists), that URL 404s — clients must treat it as "no update",
+  **silently** (no error banner; a test tag you forgot to publish must
+  never alarm users).
+- **Current manifest scope: `android-arm64` only.** Desktop auto-update
+  is wired (tauri-plugin-updater + pubkey) but has no artifact yet:
+  - **darwin 挂账 (H-10c 衔接)**: the macOS updater artifact is a
+    `.app.tar.gz` (not the dmg), and it must include `lib/` (daemon
+    dylibs) — `createUpdaterArtifacts` alone does not; producing the
+    tar.gz from the bundle output is still open.
+  - **windows 挂账**: desktop shell on Windows pending (H-09 lane).
+- Signing: `UPDATE_SIGNING_KEY` (tauri signer, minisign hashed format).
+  Without it the manifest ships with empty signatures and the release
+  notes say "unsigned".
+
 ## 4. Release flow (pipeline acceptance / test tags)
 
 - Acceptance tags: `v<X.Y.Z>-test.N` (increment N, never reuse).
