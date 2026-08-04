@@ -342,7 +342,6 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       ppass.backup.failed; strings en/zh symmetric. android 49/49.
       Device acceptance (mock failure → notification appears; all-success
       → zero notifications via dumpsys) pending real phone.
-- [ ] UX-04 「已直连」徽章降级（未开工）
 - [ ] UX-05 folder.set 诚实化（未开工）
 - [ ] UX-06 移动端「暂停自动备份」+「断开连接」（未开工）
 - [ ] UX-07 daemon ephemeral 模式（未开工）
@@ -354,6 +353,16 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       switch saves + rescheduleAutoBackup (REPLACE — KEEP never updates
       existing constraints). android 52/52. Device acceptance (dumpsys
       jobscheduler constraints follow the switches) pending real phone.
+- [ ] UX-04 「已直连」徽章降级 — **code landed 2026-08-05 (PR #38)**:
+      desktop header badge now shows service state only (运行中 /
+      后台服务未运行) — the connection state (直连/中继) is gone from the
+      badge: ONLINE_DIRECT is the state machine's default, showing it as
+      a fact was a lie (product file §二 fact-check). New key
+      ui.service_running (keys.rs + all four dictionaries synced);
+      STATE_KEYS mapping removed from the badge path (device rows will
+      restore it later). diag 8/8, android 49/49, workspace 198/198,
+      vite build green. Drive-by: ipc_flow harness race fix (same as
+      DOG-01c/UPD-01c — flake on main's tree).
 
 ## Standing debts / 挂账
 
