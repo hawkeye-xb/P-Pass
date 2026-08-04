@@ -19,9 +19,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
@@ -70,6 +72,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PPassApp() {
     val context = LocalContext.current
+    // UPD-01: 下载安装是 suspend（IO 线程下载）——按钮 onClick 从协程调。
+    val scope = rememberCoroutineScope()
     val identity = remember { IdentityStore(context.filesDir) }
     val pairings = remember { PairingStore(context.filesDir) }
     val client = remember { DaemonClient() }
@@ -109,8 +113,10 @@ fun PPassApp() {
             },
             confirmButton = {
                 TextButton(onClick = {
-                    downloadAndInstall(context, info.url)
-                    updateInfo = null
+                    scope.launch {
+                        downloadAndInstall(context, info.url)
+                        updateInfo = null
+                    }
                 }) { Text("下载安装") }
             },
             dismissButton = {

@@ -182,14 +182,24 @@
   // UPD-01: 启动时检查一次更新（tauri-plugin-updater；manifest 在
   // tauri.conf.json endpoints，release 资产直链——draft/无 release 时
   // 404 = 无更新，静默）。失败静默，绝不打扰用户。
+  // UPD-01 返工：check 阶段任何错误（404=无正式 release、网络不可达）
+  // 一律静默返回——tauri 的 check() 只有 204 才当「无更新」，404 会
+  // reject，原实现把 404 也显示成「更新失败」，无 release 时每次启动
+  // 都弹错。只有用户点了「下载安装」后的下载/安装失败才上文案。
   async function checkForUpdate() {
+    let update;
     try {
-      const update = await checkUpdate();
-      if (!update) return;
-      const ok = await confirmDialog(t("ui.update_available", { version: update.version }), {
-        title: "P-Pass",
-      });
-      if (!ok) return;
+      update = await checkUpdate();
+    } catch (e) {
+      console.warn("[updater] check failed (silent — 404/draft/network = no update):", e);
+      return;
+    }
+    if (!update) return;
+    const ok = await confirmDialog(t("ui.update_available", { version: update.version }), {
+      title: "P-Pass",
+    });
+    if (!ok) return;
+    try {
       await update.downloadAndInstall();
       message = t("ui.update_installed");
     } catch (e) {
