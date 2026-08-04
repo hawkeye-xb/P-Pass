@@ -17,7 +17,7 @@ use crate::authz::{self, Decision};
 
 /// Capabilities this daemon ships. Grows with T-033 (thumbnail serving)
 /// and later cards; hello advertises it from day one (决策 D 项).
-pub const SERVER_CAPABILITIES: &[&str] = &["thumbnail.v9"]; // TEMP fault injection for E2E-01 negative test
+pub const SERVER_CAPABILITIES: &[&str] = &["thumbnail.v1"];
 
 /// The ctrl-plane router: one per daemon process.
 #[derive(Clone)]
