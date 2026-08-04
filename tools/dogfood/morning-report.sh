@@ -70,10 +70,9 @@ while IFS='|' read -r name node_hex; do
   stall=""
   if [ -n "$SINCE_MS" ] && [ "$wm" -gt 0 ] && [ "$wm" -lt "$SINCE_MS" ]; then
     stall="🔴 水位未推进"
-    stall_red=1
   fi
   # 反证模式：--expect-stall <name> 的预期红设备——出现 stall 即反证成立
-  # （该设备豁免，不计入 stall_red；其余设备 stall 仍是真问题）
+  # （该设备豁免，不计入 stall_red；其余设备 stall 仍是真问题）。
   exp=""
   if [ "$name" = "$EXPECT_STALL" ] && [ -n "$stall" ]; then
     exp="（反证成立：预期不推进 ✅）"
