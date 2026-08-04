@@ -211,6 +211,43 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       into update.rs OFFICIAL_PUBLIC_KEY & tauri.conf pubkey — command
       in PR #30 description. Desktop tauri-plugin-updater wiring lands
       after the public key exists
+- [ ] E2E-01 android live scenarios in CI — **code landed 2026-08-04
+      (PR #28)**: .github/workflows/e2e.yml — nightly cron (03:30 UTC) +
+      release tag 时并行跑（**2026-08-04 用户裁决：自动化测试不前置**——
+      原 release 构建前门禁撤掉，tag 触发与 release.yml 并行、产物照出，
+      e2e 结果供发布前人工核对）+ PR e2e label / manual dispatch;
+      every-commit never triggers. android hello/pair/backup scripts
+      tightened to PPF_BIND_ADDR=127.0.0.1:0; iroh Maven jar
+      confirmed to carry linux-x86-64 natives (JVM tests need no
+      simulator). **acceptance PASS 2026-08-04**: run 30886819356
+      all-green — HELLO OK / PAIR OK / BACKUP OK (pushed=12 ingested=12
+      rerun dup=12) in logs; negative: hello capabilities broken
+      (thumbnail.v1→v9) → AssertionError DaemonHelloTest:28, run
+      30887278528 red, reverted. CI-found fixes: JDK 21 (iroh uniffi
+      classes are major-65 bytecode), Linux abstract-namespace IPC in
+      DaemonPair/DaemonBackupTest, PID-exact daemon cleanup in scripts.
+      Known pitfalls (JDK17 必炸 / GenericNamespaced 平台差异) →
+      references/desktop-build.md 与本文档
+- [ ] REL-01 versioning & release norms — **code landed 2026-08-04
+      (PR #29)**: docs/RELEASING.md (en primary + zh; trunk-based:
+      main always releasable, tag=SemVer release, hotfix-only
+      release/vX.Y, draft→human publish, bump+changelog per release,
+      never overwrite/move tags) + CHANGELOG.md init (keep-a-changelog,
+      all-unreleased until first formal release) + tools/bump-version.sh
+      (one-shot Cargo.toml workspace version ↔ Android
+      versionName/versionCode; versionCode monotonic +1; overwrite
+      guards: rejects already-tagged versions, non-strictly-increasing
+      versions, invalid SemVer) — five-state test PASS: bump 0.3.0 ok
+      (diff touches version lines only), v0.2.0-test.7 rejected, 0.3.0
+      equal rejected, 0.1.0 downgrade rejected, "1.2" rejected
+- [ ] DOG-02 battery-whitelist onboarding — **code landed 2026-08-04 (PR #31)**:
+      PowerManager.isIgnoringBatteryOptimizations detect + backup-tab
+      guidance card (disappears once whitelisted, ON_RESUME refresh) +
+      vendor intent fallback chain (REQUEST dialog → Samsung Smart
+      Manager → Huawei phone manager → generic list). strings en/zh
+      symmetric (StringsSymmetryTest enforced), 49/49 unit tests green.
+      Device-side acceptance (dumpsys whitelist before/after + adb
+      whitelist-removal counterproof) pending real phone
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
