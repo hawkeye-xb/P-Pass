@@ -37,7 +37,7 @@
     <string name="safe_detail">%1$d new photos arrived home.</string>
     <string name="safe_detail_dup">%1$d new photos arrived home, %2$d were already there.</string>
     <string name="backup_now">Back up now</string>
-    <string name="backing_up">Backing up…</string>
+    <string name="backup_pause">Pause</string>
     <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">Background protection off</string>
