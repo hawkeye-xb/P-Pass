@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.backup.BackupTriplet
 import androidx.compose.ui.unit.sp
 
 /** What the user sees: exactly one of the design's meaning states. */
@@ -50,6 +51,8 @@ fun HomeScreen(
     // DOG-02: 电池白名单引导卡片（未加白时显示，加白后消失）
     batteryWhitelisted: Boolean = true,
     onOpenBatterySettings: () -> Unit = {},
+    // DOG-01: 恒真三元组（持久缓存，断网/失败时仍显示）
+    triplet: BackupTriplet? = null,
 ) {
     val (dot, pillBg) = when (state) {
         is BackupUiState.Idle -> PPColor.Idle to PPColor.IdleBg
@@ -127,6 +130,22 @@ fun HomeScreen(
             storageName, fontSize = 26.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
         )
 
+        // DOG-01: 恒真三元组「N 张 · 已备份 M · 待备份 K + 最后成功时间」
+        triplet?.let { t ->
+            Spacer(Modifier.height(14.dp))
+            Text(
+                stringResource(R.string.dog_triplet_line, t.n, t.m, t.k),
+                fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+            )
+            Text(
+                stringResource(
+                    R.string.dog_last_success,
+                    formatLastSuccess(t.lastSuccessAt),
+                ),
+                fontSize = 13.sp, color = PPColor.Ink40,
+            )
+        }
+
         when (state) {
             is BackupUiState.AllSafe -> {
                 Spacer(Modifier.height(14.dp))
@@ -182,5 +201,18 @@ fun HomeScreen(
             Text(stringResource(R.string.reconnect), fontSize = 16.sp, color = PPColor.Ink60)
         }
         Spacer(Modifier.height(6.dp))
+    }
+}
+
+// DOG-01: 「最后成功时间」人性化——几分钟前 → 几小时前 → 日期。
+private fun formatLastSuccess(ts: Long): String {
+    val now = System.currentTimeMillis()
+    val mins = (now - ts) / 60_000
+    return when {
+        mins < 1 -> "刚刚"
+        mins < 60 -> "$mins 分钟前"
+        mins < 60 * 24 -> "${mins / 60} 小时前"
+        else -> java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(ts))
     }
 }

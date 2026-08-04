@@ -193,6 +193,7 @@ fun PPassApp() {
                     HomeScreen(
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
+                        triplet = holder.triplet.value,
                         batteryWhitelisted = batteryWhitelisted,
                         onOpenBatterySettings = {
                             openBatteryOptimizationSettings(context)
