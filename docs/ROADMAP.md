@@ -256,6 +256,45 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] r/selfhosted post, open-source announcement
 - [ ] **Kill line: no exponential signal in 3 months → stop** (pre-agreed)
 
+## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
+
+- [ ] UX-01 备份中可暂停 — **code landed 2026-08-05 (PR #35)**: backup
+      button becomes 暂停 while busy and stays clickable — tap cancels the
+      current batch (BackupUiStateHolder tracks the job; BackupRunner push
+      loop got a cooperative ensureActive() cancel point). Idempotent
+      pipeline makes interruption safe: no commit, watermark not advanced,
+      next run re-offers everything and dedups. strings en/zh symmetric
+      (backing_up → backup_pause). android 49/49. Device acceptance
+      (Samsung pause→resume converges to 0 missing; counterproof: sqlite
+      has no half-written asset rows — guaranteed by ingest-at-commit)
+      pending real phone.
+- [ ] UX-02 失败通知，成功沉默 — **code landed 2026-08-05 (PR #36)**:
+      auto backup (BackupWorker) posts a system notification only when a
+      batch fails ("N 张照片没备份成功，打开看看", N = batch offered
+      count, tap opens MainActivity); success stays silent (FGS
+      notification auto-dismissed on completion). Dedicated channel
+      ppass.backup.failed; strings en/zh symmetric. android 49/49.
+      Device acceptance (mock failure → notification appears; all-success
+      → zero notifications via dumpsys) pending real phone.
+- [ ] UX-03 后台规则一行+极简设置 — **code landed 2026-08-05 (PR #37)**:
+      backup page gets one rule line ("插电+WiFi 时自动备份，无需打开
+      App") + two switches (仅充电 / 仅 WiFi). BackupSettings persists
+      to filesDir JSON (tmp+rename, corrupt→defaults, JVM-tested);
+      WorkManager constraints are built from the settings; flipping a
+      switch saves + rescheduleAutoBackup (REPLACE — KEEP never updates
+      existing constraints). android 52/52. Device acceptance (dumpsys
+      jobscheduler constraints follow the switches) pending real phone.
+- [ ] UX-04 「已直连」徽章降级 — **code landed 2026-08-05 (PR 待建)**:
+      desktop header badge now shows service state only (运行中 /
+      后台服务未运行) — the connection state (直连/中继) is gone from the
+      badge: ONLINE_DIRECT is the state machine's default, showing it as
+      a fact was a lie (product file §二 fact-check). New key
+      ui.service_running (keys.rs + all four dictionaries synced);
+      STATE_KEYS mapping removed from the badge path (device rows will
+      restore it later). diag 8/8, android 49/49, workspace 198/198,
+      vite build green. Drive-by: ipc_flow harness race fix (same as
+      DOG-01c/UPD-01c — flake on main's tree).
+
 ## Standing debts / 挂账
 
 - [ ] PPF_ADVERTISE_ADDR (QR carries LAN IP at boot on cloud boxes)
