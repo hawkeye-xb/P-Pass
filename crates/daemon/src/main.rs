@@ -234,8 +234,13 @@ async fn main() -> anyhow::Result<()> {
             _ = eof_rx => {
                 println!("--ephemeral: stdin 关闭，daemon 退出。");
                 // 显式 close endpoint：flush 连接关闭帧，否则 drop 清理
-                // 要数秒（验收限 3 秒内退出）。
-                transport.close().await;
+                // 要数秒（验收限 3 秒内退出）。close 本身在部分环境下也
+                // 可能慢——给它 2s 上限，超时即强制退出：close 已 flush
+                // 协议层关闭帧，剩余 tokio 任务（定时循环）abort 无副作用。
+                tokio::time::timeout(std::time::Duration::from_secs(2), transport.close())
+                    .await
+                    .ok();
+                std::process::exit(0);
             }
         }
     } else {
