@@ -276,15 +276,21 @@ jobs:
             target/release/SHA256SUMS-windows-x64
             target/release/BUILD_INFO-windows-x64
 
-  # H-10c: Android release APK（人类可装）。无签名配置 → app-release-unsigned.apk；
-  # 正式签名（keystore + CI secret）归 T-071 后续。lintVital 用 JDK 17 跑
-  # （AGP 8.7.3 内置 Kotlin 编译器不认识 JDK 26——本机实测 IllegalArgumentException）。
+  # H-10c: Android release APK（人类可装）。keystore secrets 注入 → 已签名
+  # app-release.apk；无凭据路径（secrets 未设置）→ app-release-unsigned.apk。
+  # lintVital 用 JDK 17 跑（AGP 8.7.3 内置 Kotlin 编译器不认识 JDK 26——
+  # 本机实测 IllegalArgumentException）。
   android:
-    name: "Android (unsigned APK)"
+    name: "Android (signed APK)"
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      # 只放布尔（secret 值不进 job env——T-071b 模式）
+      HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    outputs:
+      signed: ${{ steps.signdetect.outputs.signed }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -295,15 +301,44 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4
 
+      - name: Decode release keystore (gated)
+        if: env.HAS_ANDROID_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          # 不打印 keystore 内容；只确认解码后是有效 PKCS12（非空 + 头部魔数）
+          head -c 4 "$RUNNER_TEMP/release.keystore" | od -c | head -1
+
       - name: Assemble release APK
         working-directory: apps/android
+        env:
+          # 有凭据时注入签名参数；无凭据时留空 → gradle 走 unsigned
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
         run: ./gradlew :app:assembleRelease
+
+      - name: Detect signing
+        id: signdetect
+        working-directory: apps/android
+        run: |
+          set -euo pipefail
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            echo "signed=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=no" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: android
-          path: apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: |
+            apps/android/app/build/outputs/apk/release/app-release.apk
+            apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
 
   release:
     name: "Release 草稿"
@@ -337,11 +372,11 @@ jobs:
 
           构建自 \`${GITHUB_SHA::7}\` · $(date -u +%FT%TZ)
 
-          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（无凭据路径跳过）/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=unsigned（正式签名 T-071 后续）
+          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（无凭据路径跳过）/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || 'yes' }}（keystore 签名）
 
           ### 面向人类的资产（H-10c）
           - **P-Pass-macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
-          - **app-release-unsigned.apk** — Android APK（未签名；安装需允许"未知来源"，正式签名版待 T-071）
+          - **app-release.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
           - daemon 层自包含 zip（ppass-macos-arm64.zip）继续提供，向后兼容
 
           ### 验证（被拦截/不信任时先做这三步）
@@ -365,7 +400,7 @@ jobs:
             echo ""
             echo "### H-10c 资产 SHA-256"
             sha256sum artifacts/macos-arm64/P-Pass-macos-arm64.dmg \
-              artifacts/android/app-release-unsigned.apk
+              artifacts/android/app-release.apk
           } >> NOTES.md
 
       - name: VirusTotal 提交（gated，卡面 VT 步——支持 blocked-by-av 信誉建设）
@@ -399,5 +434,5 @@ jobs:
             macos-arm64/P-Pass-macos-arm64.dmg \
             windows-x64/daemon.exe windows-x64/testclient.exe \
             windows-x64/SHA256SUMS-windows-x64 windows-x64/BUILD_INFO-windows-x64 \
-            android/app-release-unsigned.apk
+            android/app-release.apk
           echo "assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
