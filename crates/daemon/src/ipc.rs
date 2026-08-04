@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use diag::state::DaemonState;
 use interprocess::local_socket::tokio::prelude::*;
+use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions};
 use proto::{codes, Req, Resp, RespError};
 use storage::Db;
@@ -56,13 +57,11 @@ pub enum Claim {
 // versions. All client-side (no server changes to the wire contract).
 
 /// Send one IPC request to the peer and read its response line.
-async fn peer_call(
-    socket_name: &str,
-    token_hex: &str,
-    method: &str,
-) -> Option<serde_json::Value> {
+async fn peer_call(socket_name: &str, token_hex: &str, method: &str) -> Option<serde_json::Value> {
     let name = socket_name.to_ns_name::<GenericNamespaced>().ok()?;
-    let conn = interprocess::local_socket::tokio::Stream::connect(name).await.ok()?;
+    let conn = interprocess::local_socket::tokio::Stream::connect(name)
+        .await
+        .ok()?;
     let (rx, mut tx) = conn.split();
     let mut lines = BufReader::new(rx).lines();
     tx.write_all(token_hex.as_bytes()).await.ok()?;
@@ -86,24 +85,79 @@ async fn notify_step_down(socket_name: &str, token_hex: &str) -> Option<serde_js
     peer_call(socket_name, token_hex, "daemon.step_down").await
 }
 
+/// True if anything is listening on the socket (raw connect, no auth).
+/// Distinguishes a dead socket file (connect refused) from a live peer —
+/// DAE-01b blocker①: the old code conflated the two and unlinked live
+/// sockets it merely failed to authenticate against.
+fn socket_is_live(socket_name: &str) -> bool {
+    let Ok(name) = socket_name.to_ns_name::<GenericNamespaced>() else {
+        return false;
+    };
+    // Sync connect, drop immediately — we only want the connect verdict.
+    interprocess::local_socket::Stream::connect(name).is_ok()
+}
+
+/// The predecessor's auth token, read from `data_dir/ipc.token`
+/// (`{socket_name}\n{token_hex}\n` — written by [`IpcServer::serve`]).
+/// `None` = no recorded predecessor (fresh data dir / token file absent).
+fn read_predecessor_token(data_dir: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(data_dir.join("ipc.token")).ok()?;
+    raw.lines()
+        .nth(1)
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+}
+
+/// Remove a stale socket file (unix only; named pipes don't leave files).
+fn clean_stale_socket(socket_name: &str) {
+    #[cfg(unix)]
+    {
+        let _ = std::fs::remove_file(format!("/tmp/{socket_name}"));
+    }
+}
+
+/// Resolve the effective daemon version, in precedence order:
+/// 1. `PPF_DAEMON_VERSION` (runtime override — integration tests);
+/// 2. `PPF_BUILD_VERSION` (baked at compile time from the release tag,
+///    DAE-01b blocker② — `CARGO_PKG_VERSION` carries no `-test.N` suffix,
+///    so test.7 and test.8 would both report 0.2.0 and the newer test
+///    package could never take over during dogfood week);
+/// 3. `CARGO_PKG_VERSION` (local / dev builds).
+pub fn daemon_version() -> String {
+    std::env::var("PPF_DAEMON_VERSION")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            option_env!("PPF_BUILD_VERSION")
+                .map(str::to_string)
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+}
+
 /// Numeric-segment semver compare ("0.2.0-test.7" vs "0.1.0" → Greater).
 /// Pre-release suffixes sort below the same core ("0.1.0" > "0.1.0-test.3"),
 /// so a formal build always takes over from a test build of the same core.
+/// Two pre-releases of the same core compare by their numeric segments
+/// ("0.2.0-test.8" > "0.2.0-test.7" — DAE-01b blocker②), so dogfood test
+/// packages can take over from each other.
 fn version_cmp(a: &str, b: &str) -> Ordering {
-    let parse = |s: &str| -> (Vec<u64>, bool) {
-        let (core, pre) = match s.split_once('-') {
-            Some((c, _)) => (c, true),
-            None => (s, false),
-        };
-        let nums: Vec<u64> = core
-            .split(|c: char| !c.is_ascii_digit())
+    let nums = |seg: &str| -> Vec<u64> {
+        seg.split(|c: char| !c.is_ascii_digit())
             .filter(|p| !p.is_empty())
             .map(|p| p.parse().unwrap_or(0))
-            .collect();
-        (nums, pre)
+            .collect()
     };
-    let (na, pa) = parse(a);
-    let (nb, pb) = parse(b);
+    let parse = |s: &str| -> (Vec<u64>, Vec<u64>, bool) {
+        let (core, pre) = match s.split_once('-') {
+            Some((c, p)) => (c, Some(p)),
+            None => (s, None),
+        };
+        (nums(core), pre.map(nums).unwrap_or_default(), pre.is_some())
+    };
+    let (na, npa, pa) = parse(a);
+    let (nb, npb, pb) = parse(b);
     for i in 0..na.len().max(nb.len()) {
         let (x, y) = (
             na.get(i).copied().unwrap_or(0),
@@ -116,7 +170,19 @@ fn version_cmp(a: &str, b: &str) -> Ordering {
     match (pa, pb) {
         (false, true) => Ordering::Greater,
         (true, false) => Ordering::Less,
-        _ => Ordering::Equal,
+        (true, true) => {
+            for i in 0..npa.len().max(npb.len()) {
+                let (x, y) = (
+                    npa.get(i).copied().unwrap_or(0),
+                    npb.get(i).copied().unwrap_or(0),
+                );
+                if x != y {
+                    return x.cmp(&y);
+                }
+            }
+            Ordering::Equal
+        }
+        (false, false) => Ordering::Equal,
     }
 }
 
@@ -158,23 +224,41 @@ impl IpcServer {
     /// DAE-01 single-instance claim — run BEFORE binding the socket.
     ///
     /// Replaces the old unlink-before-bind (which let a latecomer blind-kill
-    /// its live predecessor). Order: try the socket — if a live instance
-    /// answers, compare versions (newest wins): same-or-newer peer → we
-    /// stand down (exit 0, the peer keeps serving); we are newer → ask the
-    /// peer to step down, wait for the socket to free, then proceed. A dead
-    /// socket (connect refused / no response) is cleaned and we bind.
-    pub async fn claim_single_instance(
-        &self,
-        socket_name: &str,
-        token_hex: &str,
-        version: &str,
-    ) -> Claim {
-        let Some(peer) = probe_peer(socket_name, token_hex).await else {
-            // No live peer (or dead socket): clear any stale file, bind.
-            #[cfg(unix)]
-            {
-                let _ = std::fs::remove_file(format!("/tmp/{socket_name}"));
+    /// its live predecessor). Order: connect to the socket — if nothing is
+    /// listening (dead socket file / first start) clean and bind; if a live
+    /// instance answers, authenticate with the **predecessor's** token read
+    /// from `data_dir/ipc.token` (DAE-01b blocker①: probing with our own
+    /// fresh token would be rejected by the incumbent — the auth failure
+    /// looked like a dead socket and the claimant unlinked the live peer's
+    /// socket, ghosting it). Then compare versions (newest wins): same-or-
+    /// newer peer → we stand down (exit 0, the peer keeps serving); we are
+    /// newer → ask the peer to step down, wait for the socket to free, then
+    /// proceed. A live peer we cannot authenticate is NEVER unlinked — we
+    /// stand down instead.
+    pub async fn claim_single_instance(&self, socket_name: &str, version: &str) -> Claim {
+        if !socket_is_live(socket_name) {
+            // Nothing listening: stale file or first start — clean, bind.
+            clean_stale_socket(socket_name);
+            return Claim::Proceed;
+        }
+        // A live peer is listening. Authenticate with the predecessor's
+        // token — never a token of our own (DAE-01b blocker①).
+        let Some(token_hex) = read_predecessor_token(&self.data_dir) else {
+            tracing::error!(
+                "DAE-01b: live daemon on {socket_name} but no ipc.token — standing down (never blind-grab a live socket)"
+            );
+            return Claim::StandDown;
+        };
+        let Some(peer) = probe_peer(socket_name, &token_hex).await else {
+            if socket_is_live(socket_name) {
+                // Socket still live but rejects the recorded token (drift).
+                tracing::error!(
+                    "DAE-01b: live daemon on {socket_name} rejects the recorded token — standing down (do not unlink)"
+                );
+                return Claim::StandDown;
             }
+            // Peer exited between the two checks — dead socket, bind.
+            clean_stale_socket(socket_name);
             return Claim::Proceed;
         };
         let r = peer.get("result");
@@ -183,10 +267,11 @@ impl IpcServer {
             .and_then(|v| v.as_str())
             .unwrap_or("0.0.0")
             .to_string();
-        let peer_pid = r.and_then(|v| v.get("pid")).and_then(|v| v.as_i64()).unwrap_or(0);
-        tracing::info!(
-            "DAE-01: live daemon v{peer_version} (pid {peer_pid}) on {socket_name}"
-        );
+        let peer_pid = r
+            .and_then(|v| v.get("pid"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        tracing::info!("DAE-01: live daemon v{peer_version} (pid {peer_pid}) on {socket_name}");
         match version_cmp(version, &peer_version) {
             Ordering::Less | Ordering::Equal => {
                 tracing::info!(
@@ -195,21 +280,16 @@ impl IpcServer {
                 Claim::StandDown
             }
             Ordering::Greater => {
-                tracing::info!(
-                    "DAE-01: ours v{version} > existing v{peer_version} — takeover"
-                );
-                let _ = notify_step_down(socket_name, token_hex).await;
+                tracing::info!("DAE-01: ours v{version} > existing v{peer_version} — takeover");
+                let _ = notify_step_down(socket_name, &token_hex).await;
                 // Wait for the peer to exit (bounded), then bind.
                 for _ in 0..50 {
                     tokio::time::sleep(Duration::from_millis(100)).await;
-                    if probe_peer(socket_name, token_hex).await.is_none() {
+                    if probe_peer(socket_name, &token_hex).await.is_none() {
                         break;
                     }
                 }
-                #[cfg(unix)]
-                {
-                    let _ = std::fs::remove_file(format!("/tmp/{socket_name}"));
-                }
+                clean_stale_socket(socket_name);
                 Claim::TookOver
             }
         }
@@ -478,7 +558,7 @@ impl IpcServer {
             "library_dir": self.data_dir.display().to_string(),
             // DAE-01: identity fields for newest-wins handshake + ops
             // visibility (验收①：status 报 PID/版本/路径/启动时间).
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": daemon_version(),
             "pid": std::process::id(),
             "started_at": self.started_at,
             "exe_path": std::env::current_exe()
@@ -628,6 +708,22 @@ mod tests {
         assert_eq!(version_cmp("0.10.0", "0.9.0"), Ordering::Greater);
         // 预发布后缀：数字段比较为主（0.2.0-test.7 > 0.1.0）
         assert_eq!(version_cmp("0.2.0-test.7", "0.1.0"), Ordering::Greater);
+        assert_eq!(version_cmp("0.1.0", "0.2.0-test.7"), Ordering::Less);
+        // DAE-01b blocker②: pre-release numeric segments — dogfood test
+        // packages must take over from each other (test.8 > test.7).
+        assert_eq!(
+            version_cmp("0.2.0-test.8", "0.2.0-test.7"),
+            Ordering::Greater
+        );
+        assert_eq!(version_cmp("0.2.0-test.7", "0.2.0-test.8"), Ordering::Less);
+        assert_eq!(
+            version_cmp("0.2.0-test.10", "0.2.0-test.9"),
+            Ordering::Greater
+        );
+        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0-test.8"), Ordering::Equal);
+        // A formal build outranks any test build of the same core.
+        assert_eq!(version_cmp("0.2.0", "0.2.0-test.8"), Ordering::Greater);
+        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0"), Ordering::Less);
         // 同核心数字段：正式 > 预发布（正式构建接管 test 构建）
         assert_eq!(version_cmp("0.1.0", "0.1.0-test.3"), Ordering::Greater);
         assert_eq!(version_cmp("0.1.0-test.3", "0.1.0"), Ordering::Less);
