@@ -24,8 +24,14 @@ class DaemonPairTest {
         val script = """
 import socket, json, sys
 lines = open(sys.argv[1]).read().splitlines()
+name = lines[0].strip()
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-s.connect('/tmp/' + lines[0].strip())
+# ipc.rs uses interprocess GenericNamespaced: Linux = abstract namespace
+# (connect "\0"+name, no filesystem path), macOS = /tmp/<name> file.
+if sys.platform == 'linux':
+    s.connect('\0' + name)
+else:
+    s.connect('/tmp/' + name)
 f = s.makefile('rw')
 f.write(lines[1].strip() + '\n'); f.flush()
 f.write(json.dumps({'id':'t','method':'pairing.confirm','params':{'accept':True}}) + '\n'); f.flush()
