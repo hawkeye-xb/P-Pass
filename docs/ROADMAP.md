@@ -214,6 +214,40 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       DaemonPair/DaemonBackupTest, PID-exact daemon cleanup in scripts.
       Known pitfalls (JDK17 必炸 / GenericNamespaced 平台差异) →
       references/desktop-build.md 与本文档
+- [ ] DOG-01 backup triplet + per-device watermarks — **code landed 2026-08-04 (PR #33)**:
+      android TripletStore persists last-success {N photos, M backed up,
+      K to go, last_success_at} (crash-safe tmp+rename, survives app kill;
+      shown from cache when offline — K=N-M, never negative); daemon
+      `device.watermarks` IPC + sqlx view (name/last_backup_at/asset_count
+      from device+backup_watermark+asset.src_device). Tests: storage 2 +
+      TripletStore 6 (incl. counterproof all-missing → K=N), android
+      55/55, workspace 195/195. Device-side acceptance (Samsung kill+reopen,
+      offline reopen, dumpsys-style sqlite cross-check) pending real phone.
+      **DOG-01b rework 2026-08-05** (incremental-as-total blocker): N/M no
+      longer come from the single-run report — ConfirmedStore state cache
+      key=(hash, remote_id) in per-remote dir (backup-state/<nodeId>/,
+      crash-safe, survives app kill), M = confirmed count, N =
+      MediaScanner.countAll() (MediaStore COUNT(*) over the scan scope,
+      scope constant in one place), K = N-M clamp; manifest-missing
+      calibration (BackupReport.missing) removes drifted hashes from the
+      cache, confirmed candidates added — wired in both manual and
+      WorkManager paths. Regression test: full 100 → incremental 5 two-run
+      sequence ⇒ N=105 M=105 (not N=5); counterproof cleared-cache all-
+      missing ⇒ M=0 K=N. android 55/55, storage 12/12 (watermarks
+      retained-item re-verified).
+      **DOG-01c rework 2026-08-05** (missing 时序错位 blocker): recordRun
+      no longer subtracts report.missing — it is the **pre-upload**
+      manifest answer, so after a successful commit every candidate is
+      confirmed (confirmedAfterCommit; regression test first-run 100 all-
+      missing ⇒ M=100, counterproof reverted old semantics ⇒ red).
+      Drift calibration decoupled from backup runs into a read-only
+      exist-check (BackupRunner.existCheck: begin+manifest, no push/commit)
+      removing daemon-side-deleted hashes (removeMissing; cache 100 → 30
+      missing ⇒ M=70). Wired in BackupUiStateHolder (app-open + before
+      manual backup) and BackupWorker (before run). android 56/56,
+      workspace 200/200. Device acceptance (Samsung) still pending real
+      phone. Drive-by: ipc_flow.rs harness race fix (token file written
+      before socket bind ⇒ ENOENT under parallel load; poll the connect).
 - [ ] REL-01 versioning & release norms — **code landed 2026-08-04
       (PR #29)**: docs/RELEASING.md (en primary + zh; trunk-based:
       main always releasable, tag=SemVer release, hotfix-only

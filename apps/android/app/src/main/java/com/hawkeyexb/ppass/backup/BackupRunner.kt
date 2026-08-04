@@ -46,6 +46,9 @@ data class BackupReport(
     val pushed: Int,
     val ingested: Int,
     val duplicates: Int,
+    /** DOG-01b: manifest 回 missing 的 hash 集合（校准确认缓存用——
+     *  只查不传语义的产物，非新协议动词）。 */
+    val missing: Set<String>,
 )
 
 class BackupRunner(private val client: DaemonClient) {
@@ -107,8 +110,30 @@ class BackupRunner(private val client: DaemonClient) {
             pushed = toPush.size,
             ingested = ingested,
             duplicates = duplicates,
+            missing = missing,
         )
     }
+
+    /** DOG-01c: 漂移校准的只查不传 exist-check——用缓存 hash 集问 daemon
+     *  「哪些已不在库」（begin + manifest，不 push 不 commit）。返回
+     *  missing 集合；daemon 不可达/未配对时抛错，由调用方跳过
+     *  （三元组显示缓存值，不归零不崩）。 */
+    suspend fun existCheck(daemon: PeerAddrParts, hashes: Set<String>): Set<String> =
+        withContext(Dispatchers.IO) {
+            callOk(daemon, Methods.BACKUP_BEGIN, buildJsonObject {})
+            val manifest = BackupManifest(
+                hashes = hashes.toList(),
+                items = emptyList(),
+                provider = null,
+            )
+            val resp = callOk(
+                daemon, Methods.BACKUP_MANIFEST,
+                ProtoJson.encodeToJsonElement(BackupManifest.serializer(), manifest),
+            )
+            ProtoJson.decodeFromJsonElement(
+                BackupMissing.serializer(), resp.result!!
+            ).hashes.toSet()
+        }
 
     private suspend fun pushFile(conn: Connection, c: Candidate) {
         val bi = conn.openBi()
