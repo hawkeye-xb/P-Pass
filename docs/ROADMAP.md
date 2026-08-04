@@ -342,7 +342,6 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       ppass.backup.failed; strings en/zh symmetric. android 49/49.
       Device acceptance (mock failure → notification appears; all-success
       → zero notifications via dumpsys) pending real phone.
-- [ ] UX-05 folder.set 诚实化（未开工）
 - [ ] UX-06 移动端「暂停自动备份」+「断开连接」（未开工）
 - [ ] UX-07 daemon ephemeral 模式（未开工）
 - [ ] UX-03 后台规则一行+极简设置 — **code landed 2026-08-05 (PR #37)**:
@@ -363,6 +362,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       restore it later). diag 8/8, android 49/49, workspace 198/198,
       vite build green. Drive-by: ipc_flow harness race fix (same as
       DOG-01c/UPD-01c — flake on main's tree).
+- [ ] UX-05 folder.set 诚实化 — **code landed 2026-08-05 (PR #39)**:
+      change-library-location confirmation now states both facts:
+      takes effect after the service restarts + existing photos won't
+      migrate (new location starts empty; phones back up there from now
+      on). Previously "restart" only appeared in the post-save toast.
+      ui.change_body reworded en/zh, all four dicts byte-identical
+      (zero-drift tests cover). diag 8/8, android 49/49, vite build
+      green. Screenshot acceptance pending human.
 
 ## Standing debts / 挂账
 
