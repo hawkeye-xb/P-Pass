@@ -33,13 +33,33 @@
     <string name="safe_detail">新存 %1$d 张。</string>
     <string name="safe_detail_dup">新存 %1$d 张，%2$d 张原本就在。</string>
     <string name="backup_now">立即备份</string>
-    <string name="backing_up">备份中…</string>
+    <string name="backup_pause">暂停</string>
+    <!-- UX-02: 失败通知（成功保持沉默） -->
+    <string name="notif_backup_failed_title">照片备份没成功</string>
+    <string name="notif_backup_failed_body">%1$d 张照片没备份成功，打开看看</string>
     <string name="no_cloud">照片直接传回自己家的电脑，不经过任何云端。</string>
+    <!-- DOG-01: 恒真三元组 -->
+    <string name="dog_triplet_line">手机 %1$d 张 · 已备份 %2$d · 待备份 %3$d</string>
+    <string name="dog_last_success">最后成功：%1$s</string>
+    <!-- UX-03: 后台规则一行 + 极简设置 -->
+    <string name="auto_backup_rule">插电 + WiFi 时自动备份，无需打开 App</string>
+    <string name="setting_charge_only">仅充电时</string>
+    <string name="setting_wifi_only">仅 WiFi 时</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">后台保护未开启</string>
     <string name="dog_battery_body">本机可能阻止 P-Pass 在后台备份。请为 P-Pass 关闭电池优化，备份才能持续运行。</string>
     <string name="dog_battery_action">去开启</string>
     <string name="reconnect">重新扫码连接</string>
+    <!-- UX-06: 暂停自动备份 + 断开连接 -->
+    <string name="auto_backup_pause">自动备份</string>
+    <string name="auto_backup_pause_hint">插电 + WiFi 时，新照片自动到家</string>
+    <string name="disconnect">断开与这台电脑的连接</string>
+    <string name="disconnect_confirm_title">断开连接？</string>
+    <string name="disconnect_confirm_body">断开后：这台手机的备份进度会重新计算，家庭相册将切换到新的存储电脑。手机上的照片不会动；原电脑上的照片也仍然保留。</string>
+    <string name="disconnect_confirm_ok">断开</string>
+    <string name="disconnect_failed_title">断开失败</string>
+    <string name="disconnect_failed">无法连接存储电脑。请确认电脑已开机，再试一次。</string>
+    <string name="ok">好</string>
     <string name="run_failed">这次没传完——已存回家的照片是安全的；再点一次会从断点继续。</string>
 
     <string name="photos_title">全家的照片</string>

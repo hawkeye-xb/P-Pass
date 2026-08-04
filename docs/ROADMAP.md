@@ -197,6 +197,38 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       (assembleRelease; signed version T-071 follow-up), both added to
       Release draft assets; H-10b naive-user test pending tag-build
       acceptance
+- [ ] UPD-01 self-update channel — **code landed 2026-08-04 (PR #30),
+      rework 2026-08-05**: release.yml emits tauri-style manifest.json
+      (compose via tools/make-update-manifest.mjs — sha256 + Ed25519
+      signatures, gated on UPDATE_SIGNING_KEY, uploaded as release
+      asset; notes mark unsigned when key absent) + android self-update
+      flow (fetch manifest from release latest/download → semver
+      compare → dialog → download → FileProvider → system
+      PackageInstaller same-signature check; no embedded pubkey needed
+      — system enforces it). **Key done (2026-08-04, user authorized)**:
+      UPDATE_SIGNING_KEY secret set (tauri signer rsign format),
+      update.rs OFFICIAL_PUBLIC_KEY real-key swap (tamper-rejected
+      tests green), desktop tauri-plugin-updater wired (pubkey =
+      .pub full content, createUpdaterArtifacts, updater:default
+      capability, Svelte check dialog). **UPD-01 rework items**:
+      i18n bundle drift fixed (ui.update_* keys synced to Android
+      assets, zero-drift test green), android downloadAndInstall now
+      suspend+IO (was main-thread network swallowed), App.svelte 404
+      now silent (check errors never surface; only install errors
+      show), npx @tauri-apps/cli pinned to 2.11.4, RELEASING.md §3.5
+      documents update channel + darwin/windows gaps, ROADMAP wording
+      updated. Tests: UpdateCheckerTest 6/6 + android suite green.
+      **UPD-01c rework 2026-08-05** (i18n registration blocker): the
+      ui.update_* keys were in all four dictionaries but never
+      registered in crates/diag/src/keys.rs — diag test panicked
+      "unregistered key". Registered UI_UPDATE_AVAILABLE /
+      UI_UPDATE_INSTALLED / UI_UPDATE_FAILED into ALL (len 61→64);
+      all four jsons (root en/zh + android copies) now match ALL
+      byte-for-byte. Counterproof: deleting ui.update_failed from
+      en.json → all_keys_translated_in_en_and_zh FAILED (lib.rs:32),
+      restored → green. diag 8/8, android 55/55, workspace 200/200.
+      Branch CI green (pr.yml all jobs) after push. Drive-by: same
+      ipc_flow.rs harness race fix as DOG-01c (flake on main's tree).
 - [ ] E2E-01 android live scenarios in CI — **code landed 2026-08-04
       (PR #28)**: .github/workflows/e2e.yml — nightly cron (03:30 UTC) +
       release tag 时并行跑（**2026-08-04 用户裁决：自动化测试不前置**——
@@ -214,6 +246,40 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       DaemonPair/DaemonBackupTest, PID-exact daemon cleanup in scripts.
       Known pitfalls (JDK17 必炸 / GenericNamespaced 平台差异) →
       references/desktop-build.md 与本文档
+- [ ] DOG-01 backup triplet + per-device watermarks — **code landed 2026-08-04 (PR #33)**:
+      android TripletStore persists last-success {N photos, M backed up,
+      K to go, last_success_at} (crash-safe tmp+rename, survives app kill;
+      shown from cache when offline — K=N-M, never negative); daemon
+      `device.watermarks` IPC + sqlx view (name/last_backup_at/asset_count
+      from device+backup_watermark+asset.src_device). Tests: storage 2 +
+      TripletStore 6 (incl. counterproof all-missing → K=N), android
+      55/55, workspace 195/195. Device-side acceptance (Samsung kill+reopen,
+      offline reopen, dumpsys-style sqlite cross-check) pending real phone.
+      **DOG-01b rework 2026-08-05** (incremental-as-total blocker): N/M no
+      longer come from the single-run report — ConfirmedStore state cache
+      key=(hash, remote_id) in per-remote dir (backup-state/<nodeId>/,
+      crash-safe, survives app kill), M = confirmed count, N =
+      MediaScanner.countAll() (MediaStore COUNT(*) over the scan scope,
+      scope constant in one place), K = N-M clamp; manifest-missing
+      calibration (BackupReport.missing) removes drifted hashes from the
+      cache, confirmed candidates added — wired in both manual and
+      WorkManager paths. Regression test: full 100 → incremental 5 two-run
+      sequence ⇒ N=105 M=105 (not N=5); counterproof cleared-cache all-
+      missing ⇒ M=0 K=N. android 55/55, storage 12/12 (watermarks
+      retained-item re-verified).
+      **DOG-01c rework 2026-08-05** (missing 时序错位 blocker): recordRun
+      no longer subtracts report.missing — it is the **pre-upload**
+      manifest answer, so after a successful commit every candidate is
+      confirmed (confirmedAfterCommit; regression test first-run 100 all-
+      missing ⇒ M=100, counterproof reverted old semantics ⇒ red).
+      Drift calibration decoupled from backup runs into a read-only
+      exist-check (BackupRunner.existCheck: begin+manifest, no push/commit)
+      removing daemon-side-deleted hashes (removeMissing; cache 100 → 30
+      missing ⇒ M=70). Wired in BackupUiStateHolder (app-open + before
+      manual backup) and BackupWorker (before run). android 56/56,
+      workspace 200/200. Device acceptance (Samsung) still pending real
+      phone. Drive-by: ipc_flow.rs harness race fix (token file written
+      before socket bind ⇒ ENOENT under parallel load; poll the connect).
 - [ ] REL-01 versioning & release norms — **code landed 2026-08-04
       (PR #29)**: docs/RELEASING.md (en primary + zh; trunk-based:
       main always releasable, tag=SemVer release, hotfix-only
@@ -267,6 +333,63 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       + FIFO stdin (cleanup closes write end → self-exit + wait, replaces
       kill). EOF→exit 2.37s measured; full dogfood-smoke ALL GREEN with
       zero daemons left after run; fmt/clippy clean.
+- [ ] UX-01 备份中可暂停 — **code landed 2026-08-05 (PR #35)**: backup
+      button becomes 暂停 while busy and stays clickable — tap cancels the
+      current batch (BackupUiStateHolder tracks the job; BackupRunner push
+      loop got a cooperative ensureActive() cancel point). Idempotent
+      pipeline makes interruption safe: no commit, watermark not advanced,
+      next run re-offers everything and dedups. strings en/zh symmetric
+      (backing_up → backup_pause). android 49/49. Device acceptance
+      (Samsung pause→resume converges to 0 missing; counterproof: sqlite
+      has no half-written asset rows — guaranteed by ingest-at-commit)
+      pending real phone.
+- [ ] UX-02 失败通知，成功沉默 — **code landed 2026-08-05 (PR #36)**:
+      auto backup (BackupWorker) posts a system notification only when a
+      batch fails ("N 张照片没备份成功，打开看看", N = batch offered
+      count, tap opens MainActivity); success stays silent (FGS
+      notification auto-dismissed on completion). Dedicated channel
+      ppass.backup.failed; strings en/zh symmetric. android 49/49.
+      Device acceptance (mock failure → notification appears; all-success
+      → zero notifications via dumpsys) pending real phone.
+- [ ] UX-03 后台规则一行+极简设置 — **code landed 2026-08-05 (PR #37)**:
+      backup page gets one rule line ("插电+WiFi 时自动备份，无需打开
+      App") + two switches (仅充电 / 仅 WiFi). BackupSettings persists
+      to filesDir JSON (tmp+rename, corrupt→defaults, JVM-tested);
+      WorkManager constraints are built from the settings; flipping a
+      switch saves + rescheduleAutoBackup (REPLACE — KEEP never updates
+      existing constraints). android 52/52. Device acceptance (dumpsys
+      jobscheduler constraints follow the switches) pending real phone.
+- [ ] UX-04 「已直连」徽章降级 — **code landed 2026-08-05 (PR #38)**:
+      desktop header badge now shows service state only (运行中 /
+      后台服务未运行) — the connection state (直连/中继) is gone from the
+      badge: ONLINE_DIRECT is the state machine's default, showing it as
+      a fact was a lie (product file §二 fact-check). New key
+      ui.service_running (keys.rs + all four dictionaries synced);
+      STATE_KEYS mapping removed from the badge path (device rows will
+      restore it later). diag 8/8, android 49/49, workspace 198/198,
+      vite build green. Drive-by: ipc_flow harness race fix (same as
+      DOG-01c/UPD-01c — flake on main's tree).
+- [ ] UX-05 folder.set 诚实化 — **code landed 2026-08-05 (PR #39)**:
+      change-library-location confirmation now states both facts:
+      takes effect after the service restarts + existing photos won't
+      migrate (new location starts empty; phones back up there from now
+      on). Previously "restart" only appeared in the post-save toast.
+      ui.change_body reworded en/zh, all four dicts byte-identical
+      (zero-drift tests cover). diag 8/8, android 49/49, vite build
+      green. Screenshot acceptance pending human.
+- [ ] UX-06 暂停自动备份 + 断开连接 — **code landed 2026-08-05 (PR #40)**:
+      pause switch cancels the periodic WorkManager job + persists the
+      pause (AutoBackupPrefs JSON, tmp+rename, corrupt→defaults);
+      app-start schedule/catch-up respects it; manual backup
+      unaffected. Disconnect: warning dialog (progress resets, album
+      switches storage computer, local photos stay, old computer photos
+      stay) → device revokes ITSELF via new wire method device.unpair
+      (authz: any paired role, unpaired/revoked denied; router marks
+      caller revoked + audit device.unpaired) → hello denied → fresh
+      token rejoins (T-041 door) → clear pairing/watermark → Welcome.
+      Workspace 202/202, android 55/55, clippy/fmt clean. Device
+      acceptance (re-pair after disconnect, jobscheduler pause) pending
+      real phone.
 
 ## Standing debts / 挂账
 
