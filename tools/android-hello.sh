@@ -4,7 +4,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 D=$(mktemp -d /tmp/ppf-android-hello.XXXX)
-trap 'pkill -f "$D" 2>/dev/null || true; rm -rf "$D"' EXIT
+# 失败时保留 daemon 日志尾部（CI 诊断；成功路径不打印）
+trap 'rc=$?; pkill -f "$D" 2>/dev/null || true; if [ "$rc" -ne 0 ] && [ -f "$D/d.log" ]; then echo "=== daemon log (exit $rc) ==="; tail -30 "$D/d.log" || true; fi; rm -rf "$D"' EXIT
 mkdir -p "$D/library"
 PPF_DATA_DIR="$D/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
   PPF_BIND_ADDR="127.0.0.1:0" \
@@ -13,5 +14,5 @@ for _ in $(seq 1 50); do grep -q 'ppf://pair' "$D/d.log" 2>/dev/null && break; s
 QR=$(grep -o 'ppf://pair[^ ]*' "$D/d.log")
 cd "$ROOT/apps/android"
 JAVA_HOME="${JAVA_HOME:-$(brew --prefix openjdk)}" PPF_DAEMON_QR="$QR" \
-  ./gradlew -q :app:testDebugUnitTest --tests '*DaemonHelloTest' --rerun
+  ./gradlew :app:testDebugUnitTest --tests '*DaemonHelloTest' --rerun
 grep -o "HELLO OK[^<]*" app/build/test-results/testDebugUnitTest/TEST-*DaemonHelloTest.xml
