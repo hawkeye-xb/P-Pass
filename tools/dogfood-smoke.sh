@@ -15,12 +15,19 @@ TC="$ROOT/target/release/testclient"
 [ -x "$DAEMON" ] || { echo "先构建: cargo build --release -p daemon -p testclient"; exit 1; }
 
 rm -rf "$WORK" && mkdir -p "$WORK/library" && cd "$WORK"
-cleanup() { kill "$DAEMON_PID" 2>/dev/null || true; }
+# UX-07: --ephemeral + FIFO 控制 stdin——脚本收尾时关闭 FIFO 写端（EOF）
+# daemon 自己 3 秒内退出，不再需要 kill（杜绝 A 类孤儿）。
+mkfifo "$WORK/daemon-ctl"
+cleanup() {
+  exec 3>&- 2>/dev/null || true   # 关 FIFO 写端 → daemon EOF 自退
+  wait "$DAEMON_PID" 2>/dev/null || true
+}
 trap cleanup EXIT
 
 PPF_DATA_DIR="$WORK/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="${PPF_RELAY_URLS:-}" \
-  "$DAEMON" > daemon.log 2> daemon.err &
+  "$DAEMON" --ephemeral < "$WORK/daemon-ctl" > daemon.log 2> daemon.err &
 DAEMON_PID=$!
+exec 3>"$WORK/daemon-ctl"   # 保持写端打开——daemon 不会立即 EOF
 
 for _ in $(seq 1 50); do grep -q 'ppf://pair' daemon.log 2>/dev/null && break; sleep 0.2; done
 QR=$(grep -o 'ppf://pair[^ ]*' daemon.log)
