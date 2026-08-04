@@ -16,4 +16,7 @@ rendezvous_url = "https://rendezvous.p-pass.hawkeye-xb.com"
 
 [telemetry]
 enabled = true
-url = "https://telemetry.p-pass.hawkeye-xb.com"
+# T-061b-fix: the telemetry Worker only accepts POSTs on /ingest (any other
+# path 404s). This default must carry the /ingest suffix or a daemon running
+# on stock defaults silently loses every batch to a 404.
+url = "https://telemetry.p-pass.hawkeye-xb.com/ingest"

@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -29,6 +30,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.backup.BackupTriplet
 import androidx.compose.ui.unit.sp
 
 /** What the user sees: exactly one of the design's meaning states. */
@@ -46,7 +48,20 @@ fun HomeScreen(
     storageName: String,
     state: BackupUiState,
     onBackupNow: () -> Unit,
-    onReconnect: () -> Unit = {},
+    // DOG-02: 电池白名单引导卡片（未加白时显示，加白后消失）
+    batteryWhitelisted: Boolean = true,
+    onOpenBatterySettings: () -> Unit = {},
+    // DOG-01: 恒真三元组（持久缓存，断网/失败时仍显示）
+    triplet: BackupTriplet? = null,
+    // UX-03: 极简设置——仅充电 / 仅 WiFi（写 WorkManager 约束）
+    chargeOnly: Boolean = true,
+    onChargeOnlyChange: (Boolean) -> Unit = {},
+    wifiOnly: Boolean = true,
+    onWifiOnlyChange: (Boolean) -> Unit = {},
+    // UX-06: 全局暂停自动备份开关 + 断开连接（警示页确认在 MainActivity）
+    autoBackupPaused: Boolean = false,
+    onToggleAutoBackup: (Boolean) -> Unit = {},
+    onDisconnect: () -> Unit = {},
 ) {
     val (dot, pillBg) = when (state) {
         is BackupUiState.Idle -> PPColor.Idle to PPColor.IdleBg
@@ -83,12 +98,62 @@ fun HomeScreen(
         }
 
         Spacer(Modifier.height(26.dp))
+
+        // DOG-02: ROM 杀后台防护引导卡片（鸿蒙/三星已知咬点）——加白后消失
+        if (!batteryWhitelisted) {
+            Spacer(Modifier.height(4.dp))
+            androidx.compose.material3.Surface(
+                color = PPColor.WaitingBg,
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.dog_battery_title),
+                        fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.dog_battery_body),
+                        fontSize = 13.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Button(
+                        onClick = onOpenBatterySettings,
+                        modifier = Modifier.fillMaxWidth().height(46.dp),
+                        shape = RoundedCornerShape(PPSize.RadiusControl),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                        ),
+                    ) {
+                        Text(stringResource(R.string.dog_battery_action), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
         Text(
             stringResource(R.string.connected_to), fontSize = 15.sp, color = PPColor.Ink40,
         )
         Text(
             storageName, fontSize = 26.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
         )
+
+        // DOG-01: 恒真三元组「N 张 · 已备份 M · 待备份 K + 最后成功时间」
+        triplet?.let { t ->
+            Spacer(Modifier.height(14.dp))
+            Text(
+                stringResource(R.string.dog_triplet_line, t.n, t.m, t.k),
+                fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+            )
+            Text(
+                stringResource(
+                    R.string.dog_last_success,
+                    formatLastSuccess(t.lastSuccessAt),
+                ),
+                fontSize = 13.sp, color = PPColor.Ink40,
+            )
+        }
 
         when (state) {
             is BackupUiState.AllSafe -> {
@@ -115,8 +180,10 @@ fun HomeScreen(
         val busy = state is BackupUiState.Scanning ||
             state is BackupUiState.Hashing || state is BackupUiState.Sending
         Button(
+            // UX-01: 备份进行中按钮变「暂停」且可点——点击由 holder 转成
+            // 取消当前批（幂等管线安全），再点一次续传。
             onClick = onBackupNow,
-            enabled = !busy,
+            enabled = true,
             modifier = Modifier.fillMaxWidth().height(64.dp),
             shape = RoundedCornerShape(PPSize.RadiusControl),
             colors = ButtonDefaults.buttonColors(
@@ -125,7 +192,7 @@ fun HomeScreen(
             ),
         ) {
             Text(
-                if (busy) stringResource(R.string.backing_up) else stringResource(R.string.backup_now),
+                if (busy) stringResource(R.string.backup_pause) else stringResource(R.string.backup_now),
                 fontSize = 19.sp, fontWeight = FontWeight.Bold,
             )
         }
@@ -135,15 +202,92 @@ fun HomeScreen(
             fontSize = 14.sp, lineHeight = 22.sp, color = PPColor.Ink40,
             modifier = Modifier.fillMaxWidth(),
         )
+
+        // UX-03: 后台规则一行 + 极简设置两开关（仅充电/仅 WiFi）。
+        Spacer(Modifier.height(14.dp))
+        Text(
+            stringResource(R.string.auto_backup_rule),
+            fontSize = 14.sp, lineHeight = 22.sp, color = PPColor.Ink60,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(4.dp))
+        SettingSwitchRow(
+            label = stringResource(R.string.setting_charge_only),
+            checked = chargeOnly,
+            onCheckedChange = onChargeOnlyChange,
+        )
+        SettingSwitchRow(
+            label = stringResource(R.string.setting_wifi_only),
+            checked = wifiOnly,
+            onCheckedChange = onWifiOnlyChange,
+        )
+
         Spacer(Modifier.height(10.dp))
+        // UX-06: 设置行——全局暂停自动备份开关 + 断开连接。
+        // 开关只控制周期任务（WorkManager），手动「立即备份」不受影响。
+        Row(
+            Modifier.fillMaxWidth()
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.auto_backup_pause),
+                    fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                )
+                Text(
+                    stringResource(R.string.auto_backup_pause_hint),
+                    fontSize = 12.sp, lineHeight = 17.sp, color = PPColor.Ink40,
+                )
+            }
+            Switch(
+                checked = !autoBackupPaused,
+                onCheckedChange = { on -> onToggleAutoBackup(!on) },
+            )
+        }
         androidx.compose.material3.OutlinedButton(
-            onClick = onReconnect,
+            onClick = onDisconnect,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             shape = RoundedCornerShape(PPSize.RadiusControl),
             border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
         ) {
-            Text(stringResource(R.string.reconnect), fontSize = 16.sp, color = PPColor.Ink60)
+            Text(stringResource(R.string.disconnect), fontSize = 16.sp, color = PPColor.Ink60)
         }
         Spacer(Modifier.height(6.dp))
+    }
+}
+
+// DOG-01: 「最后成功时间」人性化——几分钟前 → 几小时前 → 日期。
+private fun formatLastSuccess(ts: Long): String {
+    val now = System.currentTimeMillis()
+    val mins = (now - ts) / 60_000
+    return when {
+        mins < 1 -> "刚刚"
+        mins < 60 -> "$mins 分钟前"
+        mins < 60 * 24 -> "${mins / 60} 小时前"
+        else -> java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date(ts))
+    }
+}
+
+/** UX-03: 极简设置开关行——label 左、Switch 右。 */
+@Composable
+private fun SettingSwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label, fontSize = 14.sp, color = PPColor.Ink,
+            modifier = Modifier.weight(1f),
+        )
+        androidx.compose.material3.Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
     }
 }

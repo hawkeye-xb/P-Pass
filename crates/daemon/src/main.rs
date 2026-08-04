@@ -7,6 +7,15 @@ use daemon::{Config, Router};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // UX-07: --ephemeral — 测试/脚本模式：stdin EOF（写入端关闭）即整体
+    // 退出（3 秒内），杜绝 A 类孤儿 daemon。生产/launchd 不带此 flag：
+    // 那时 stdin 关闭只让配对确认退到 IPC-only（下方既有行为），常驻不变。
+    let ephemeral = std::env::args().any(|a| a == "--ephemeral");
+    // EOF 信号：stdin 循环在 EOF 时发；ephemeral 模式下 main 用 select
+    // 竞争它，收到即优雅退出（oneshot 只消费一次）。
+    let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
+    let eof_tx = if ephemeral { Some(eof_tx) } else { None };
+
     // Log to stderr; level via RUST_LOG (default info). 狗粮机排障的眼睛.
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -85,13 +94,45 @@ async fn main() -> anyhow::Result<()> {
         pending_rx,
     ));
     let socket_name = format!("ppf-{}", &transport.node_id().to_string()[..8]);
+    // DAE-01: 版本可被 PPF_DAEMON_VERSION 覆盖（双实例集成测试用）；
+    // 生产 = PPF_BUILD_VERSION（release tag 注入，含 -test.N 后缀，
+    // DAE-01b blocker②）或 CARGO_PKG_VERSION。
+    let daemon_version = daemon::daemon_version();
     println!(
         "IPC: {socket_name}（令牌在 {}/ipc.token）",
         data_dir.display()
     );
+    // DAE-01 单实例纪律：先试连接、版本握手（newest wins）——旧逻辑
+    // unlink-before-bind 会让后来者盲杀前任（用户机实锤：launchd 至今
+    // 指向 7/31 开发构建路径，新 daemon 一直上不了岗）。
+    // DAE-01b blocker①：claim 内部用前任 token（data_dir/ipc.token）
+    // 握手——绝不用本实例的新随机 token 探测（生产必 auth 失败，
+    // 被误判死 socket 而抢绑，前任变幽灵占库锁）。
+    match ipc
+        .claim_single_instance(&socket_name, &daemon_version)
+        .await
+    {
+        daemon::Claim::StandDown => {
+            println!("已有同版本或更新版本的 daemon 在值班（v{daemon_version}），本实例退出。");
+            std::process::exit(0);
+        }
+        daemon::Claim::TookOver => {
+            // 升级退位收尾：重装 autostart，让 launchd 指向本实例的稳定
+            // 路径。守卫拒绝 target/、/tmp/ 等开发路径（不写坏 plist）。
+            use platform::PlatformAdapter as _;
+            if let Ok(exe) = std::env::current_exe() {
+                if let Err(e) = platform::adapter().install_autostart(&exe) {
+                    tracing::warn!("DAE-01: autostart re-install skipped: {e}");
+                }
+            }
+        }
+        daemon::Claim::Proceed => {}
+    }
+    // DAE-01b blocker①：claim 成功后才生成/写入自己的 token（serve 写
+    // 入 ipc.token）。claim 期间的探测用的是前任 token。
+    let token = rand_token()?;
     tokio::spawn({
         let ipc = std::sync::Arc::clone(&ipc);
-        let token = rand_token()?;
         async move {
             if let Err(e) = ipc.serve(&socket_name, token).await {
                 tracing::error!("IPC 服务退出：{e}");
@@ -101,8 +142,11 @@ async fn main() -> anyhow::Result<()> {
     // Interim console confirmer (until the tray, T-041): y = 允许队首.
     // stdin EOF（后台运行）⇒ 退出这个循环，确认只走 IPC——绝不把
     // "没有输入" 当成任何决定（狗粮冒烟抓到的真 bug：EOF 曾被当 n 秒拒）.
+    // UX-07: --ephemeral 模式下 EOF 同时发退出信号（main 的 select 收到
+    // 即整体退出，3 秒内）——测试脚本关掉 stdin 写入端即可收掉 daemon。
     tokio::spawn({
         let ipc = std::sync::Arc::clone(&ipc);
+        let eof_tx = eof_tx;
         async move {
             loop {
                 let line = tokio::task::spawn_blocking(|| {
@@ -115,6 +159,9 @@ async fn main() -> anyhow::Result<()> {
                 let (bytes_read, line) = line;
                 if bytes_read == 0 {
                     tracing::info!("stdin closed — pairing confirmation is IPC-only from here");
+                    if let Some(tx) = eof_tx {
+                        let _ = tx.send(());
+                    }
                     return;
                 }
                 if ipc.pending_names().is_empty() {
@@ -154,7 +201,7 @@ async fn main() -> anyhow::Result<()> {
                 heartbeat.record(daemon::TelemetryEvent::DaemonAlive {
                     uptime_h: started.elapsed().as_secs() / 3600,
                     os: std::env::consts::OS.to_string(),
-                    ver: env!("CARGO_PKG_VERSION").to_string(),
+                    ver: daemon::daemon_version(),
                 });
                 tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
             }
@@ -172,14 +219,33 @@ async fn main() -> anyhow::Result<()> {
     let upload = daemon::upload::UploadPlane::new(db.clone(), blobs, data_dir.join(".ppf/staging"));
     let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
-    Router::new(db, "P-Pass 存储端")
+    let router = Router::new(db, "P-Pass 存储端")
         .with_pairing(pairing)
         .with_backup(backup)
         .with_query(query)
         .with_upload(upload)
-        .with_download(download)
-        .serve(&transport)
-        .await;
+        .with_download(download);
+    if ephemeral {
+        // UX-07: --ephemeral — stdin EOF 即优雅退出（3 秒内），测试脚本
+        // 用它杜绝 A 类孤儿。router.serve 跑到 transport 关闭为止；EOF
+        // 信号一到，select 走退出分支，main 返回，进程干净结束。
+        tokio::select! {
+            _ = router.serve(&transport) => {}
+            _ = eof_rx => {
+                println!("--ephemeral: stdin 关闭，daemon 退出。");
+                // 显式 close endpoint：flush 连接关闭帧，否则 drop 清理
+                // 要数秒（验收限 3 秒内退出）。close 本身在部分环境下也
+                // 可能慢——给它 2s 上限，超时即强制退出：close 已 flush
+                // 协议层关闭帧，剩余 tokio 任务（定时循环）abort 无副作用。
+                tokio::time::timeout(std::time::Duration::from_secs(2), transport.close())
+                    .await
+                    .ok();
+                std::process::exit(0);
+            }
+        }
+    } else {
+        router.serve(&transport).await;
+    }
     Ok(())
 }
 

@@ -1,0 +1,4 @@
+# glibc iroh-relay 二进制（T-063b：官方镜像 musl 有 noq-udp cmsg panic，不用）
+# 获取：从 n0-computer/iroh GitHub release 下载 x86_64-unknown-linux-gnu 版，
+# 或从私有仓部署记录取。构建自建镜像：docker compose build relay
+iroh-relay

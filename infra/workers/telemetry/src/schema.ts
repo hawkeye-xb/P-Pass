@@ -1,5 +1,5 @@
 /**
- * Telemetry schema + ingestion (T-061).
+ * Telemetry schema + ingestion (T-061 / T-061b).
  *
  * Wire format comes from the Rust client (crates/daemon/src/telemetry.rs,
  * T-035): a JSON ARRAY of flat event objects. Every object carries the common
@@ -11,7 +11,9 @@
  *
  * Analytics Engine mapping (documented, queryable):
  * - indexes: [event]            → GROUP BY event type
- * - doubles: ts + every numeric field (ms/files/bytes/dur_s/uptime_h)
+ * - doubles: FIXED per-event-type columns (T-061b) — double1=ts, then
+ *   ms|files|uptime_h, bytes, dur_s; absent optional fields are zero-padded
+ *   so columns never shift. See toDataPoint.
  * - blobs:   the full event JSON (self-describing, lossless)
  */
 
@@ -92,13 +94,53 @@ export interface DataPoint {
   blobs?: string[];
 }
 
-/** Lossless, queryable mapping: full event as blob + numerics as doubles. */
+/**
+ * Exhaustiveness guard (T-061b-fix): the switch in toDataPoint must cover
+ * every event type in batchSchema. If someone adds a new event schema to the
+ * discriminated union but forgets the toDataPoint case, `event.event` in the
+ * default branch stops being `never` and this call fails to compile — a loud
+ * type error instead of a silent `doubles = undefined` in production.
+ */
+function assertNever(value: never): never {
+  throw new Error(`unhandled telemetry event type: ${String(value)}`);
+}
+
+/** Lossless, queryable mapping: full event as blob + numerics as doubles.
+ *
+ * T-061b: doubles use a FIXED per-event-type column layout. The old
+ * implementation iterated `Object.entries(event)` in client field order, so
+ * an absent optional field shifted every subsequent column (e.g. `conn`
+ * without `fail_stage` landed in a different double position) — `double2`
+ * had no stable meaning and queries broke silently. Now each event type maps
+ * to a fixed double array with zero-padding for absent optional fields:
+ *
+ *   conn          → [ts, ms]
+ *   backup_session→ [ts, files, bytes, dur_s]
+ *   first_byte    → [ts, ms]
+ *   daemon_alive  → [ts, uptime_h]
+ *
+ * Column semantics are therefore stable: double1=ts, double2=ms|files|uptime_h,
+ * double3=bytes, double4=dur_s. Add new numeric fields at the END of a type's
+ * array only.
+ */
 export function toDataPoint(event: ParsedEvent): DataPoint {
-  const doubles: number[] = [];
-  for (const [k, v] of Object.entries(event)) {
-    if (typeof v === "number") {
-      doubles.push(v); // ts + ms/files/bytes/dur_s/uptime_h
-    }
+  const t = event.ts;
+  let doubles: number[];
+  switch (event.event) {
+    case "conn":
+      doubles = [t, event.ms];
+      break;
+    case "backup_session":
+      doubles = [t, event.files, event.bytes, event.dur_s];
+      break;
+    case "first_byte":
+      doubles = [t, event.ms];
+      break;
+    case "daemon_alive":
+      doubles = [t, event.uptime_h];
+      break;
+    default:
+      return assertNever(event);
   }
   return {
     indexes: [event.event],

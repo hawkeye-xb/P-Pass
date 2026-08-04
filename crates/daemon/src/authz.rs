@@ -37,11 +37,17 @@ fn role_allows(role: Role, method: &str) -> bool {
             | methods::ASSET_DOWNLOAD
             | methods::DIAG_STATUS
     );
+    // UX-06: 任一端可单方停止——任何已配对角色都可以撤销自己
+    // （device.unpair 只作用于调用者自身，无需 owner 在场）。
+    let self_unpair = method == methods::DEVICE_UNPAIR;
     match role {
-        Role::Viewer => viewer_ok,
-        Role::Member => viewer_ok || method.starts_with("backup."),
+        Role::Viewer => viewer_ok || self_unpair,
+        Role::Member => viewer_ok || self_unpair || method.starts_with("backup."),
         Role::Owner => {
-            viewer_ok || method.starts_with("backup.") || method == methods::PAIR_REQUEST
+            viewer_ok
+                || self_unpair
+                || method.starts_with("backup.")
+                || method == methods::PAIR_REQUEST
         }
     }
 }
@@ -191,6 +197,27 @@ mod tests {
         assert!(!allowed(
             Some(&device(Role::Owner, false)),
             "asset.delete_all"
+        ));
+    }
+
+    // UX-06: 任一端可单方停止——已配对设备撤销自己是放行的，
+    // 未配对/已吊销的不行（吊销只剩 pair.request 一扇门）。
+    #[test]
+    fn paired_roles_may_unpair_themselves() {
+        for role in [Role::Viewer, Role::Member, Role::Owner] {
+            assert!(
+                allowed(Some(&device(role, false)), methods::DEVICE_UNPAIR),
+                "{role:?} must be able to unpair itself"
+            );
+        }
+    }
+
+    #[test]
+    fn unpaired_and_revoked_may_not_unpair() {
+        assert!(!allowed(None, methods::DEVICE_UNPAIR));
+        assert!(!allowed(
+            Some(&device(Role::Member, true)),
+            methods::DEVICE_UNPAIR
         ));
     }
 }

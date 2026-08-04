@@ -6,6 +6,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -15,15 +18,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # 直接下载官方 release + sha256 钉死（CI 实测：pin 的 install-action
+      # SHA 不认识 actionlint，回退 cargo-binstall 又找不到同名 crate——
+      # actionlint 是 Go 工具不是 crate，exit 76）。版本升级时同步换校验和。
+      - name: Actionlint (workflow lint)
+        run: |
+          set -euo pipefail
+          curl -sfL -o /tmp/actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz"
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          /tmp/actionlint -color
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/
@@ -38,12 +53,12 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
         with:
           tool: cargo-nextest
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
         with:
           tool: cargo-deny
 
@@ -68,13 +83,14 @@ jobs:
   android:
     name: android (proto drift + assemble)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
         with:
           distribution: temurin
           java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4
       - name: Unit tests (golden drift vs crates/proto snapshots)
         working-directory: apps/android
         run: ./gradlew :app:testDebugUnitTest
@@ -82,16 +98,24 @@ jobs:
         working-directory: apps/android
         run: ./gradlew :app:assembleDebug
 
+      # Packaging-completeness guard: gradle silently packages "whatever is
+      # there" — a missing jniLibs .so builds green and crashes on-device
+      # (UnsatisfiedLinkError, happened twice). Assert the native lib is IN
+      # the APK, not merely that the build succeeded.
+      - name: Assert APK contains libiroh_ffi.so
+        working-directory: apps/android
+        run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q "lib/arm64-v8a/libiroh_ffi.so"
+
   scenarios:
     name: T-070 failure scenarios (process-level)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/
@@ -107,3 +131,41 @@ jobs:
           bash tools/scenarios/huge_file.sh
           bash tools/scenarios/crash_recovery.sh
           bash tools/scenarios/disk_full.sh
+
+  # T-042b: src-tauri tests get their own job — the desktop workspace's
+  # dependency tree is deliberately kept out of the main rust job
+  # (T-041 decision), and compiling tauri v2 on Linux needs webkit/gtk
+  # system packages the lean job doesn't install.
+  desktop:
+    name: desktop (src-tauri tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo (desktop workspace)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            apps/desktop/src-tauri/target/
+          key: ${{ runner.os }}-cargo-desktop-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+      - name: System deps (tauri v2 on Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
+      # tauri-build wants the sidecar file to exist; the lib tests never
+      # spawn it, so an empty stub is enough.
+      - name: Stub sidecar
+        working-directory: apps/desktop/src-tauri
+        run: |
+          mkdir -p binaries
+          touch binaries/ppf-daemon-x86_64-unknown-linux-gnu
+          chmod +x binaries/ppf-daemon-x86_64-unknown-linux-gnu
+      - name: src-tauri lib tests
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --lib

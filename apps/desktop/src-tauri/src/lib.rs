@@ -8,6 +8,12 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 
+// UPD-01: updater plugin（pubkey/endpoints 在 tauri.conf.json；
+// build 期 updater artifact 签名需 TAURI_SIGNING_PRIVATE_KEY——CI 由
+// UPDATE_SIGNING_KEY 提供，本地无 key 路径跳过 .sig 生成）。
+// 注意：tauri-plugin-updater 2.10 的 build() 返回带 Config 的 TauriPlugin，
+// 需内联注册（独立函数标注单参数类型会类型不匹配）。
+
 /// Forward one IPC method. The frontend does the rest.
 #[tauri::command]
 fn daemon_call(method: String, params: Value) -> Result<Value, String> {
@@ -27,6 +33,11 @@ fn daemon_online() -> bool {
 /// a resident service. A config without an installed service means the
 /// wizard was abandoned mid-way — route back into the wizard instead of
 /// dumping the user on a bare "start the service" screen (xixi 实测反馈 3).
+/// T-042b: `configured_library_dir` prefills the wizard's folder step from
+/// the existing config, so a oneshot-degraded user (autostart registration
+/// failed → fallback spawn; lib.rs start_daemon Err branch) who bounces back
+/// into the wizard does NOT re-point the library to a fresh empty folder
+/// (orphaned-library risk) — the wizard shows what's already configured.
 #[tauri::command]
 fn wizard_state() -> Value {
     use platform::PlatformAdapter as _;
@@ -35,10 +46,15 @@ fn wizard_state() -> Value {
     // "传到哪儿了" had no answer while the library hid in ~/Library).
     let pictures = dirs_pictures().join("P-Pass 家庭照片库");
     let installed = platform::adapter().autostart_installed().unwrap_or(false);
+    let configured_dir = ipc::read_config_data_dir(&dir);
     json!({
         "configured": dir.join("config.toml").exists(),
         "installed": installed,
         "default_dir": pictures.to_string_lossy(),
+        // Some of the library, if the config already points somewhere —
+        // the wizard prefills this so re-running it never orphans the
+        // existing library (T-042b).
+        "configured_library_dir": configured_dir,
     })
 }
 
@@ -168,6 +184,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             daemon_call,
             daemon_online,

@@ -1,4 +1,4 @@
-# iroh-relay 配置示例（T-063）。cp relay-config.example.toml relay-config.toml 后编辑。
+# iroh-relay 配置示例（T-063 / T-063b）。cp relay-config.example.toml relay-config.toml 后编辑。
 #
 # 字段说明见 n0-computer/iroh iroh-relay/src/main.rs 的 Config 结构。
 # 本仓库默认开放（access = "everyone"）——家庭自建场景客户端无认证字段；
@@ -14,7 +14,19 @@ http_bind_addr = "[::]:80"
 enable_quic_addr_discovery = true
 
 [tls]
-# LetsEncrypt 自动证书；hostname 必须与客户端使用的 relay URL 域名一致
+# T-063b 修正：默认用 Manual 证书（certbot 签发），不要用 LetsEncrypt——
+# 内置 LetsEncrypt 的 ACME 挑战（HTTP-01/TLS-ALPN-01）需要 80/443 端口，
+# 单 VPS 上这两个端口被 caddy（或本机其他服务如 VPN）占用，永远签不出。
+# 证书获取见 SELFHOST.md 第 5 步：certbot certonly --standalone -d <域名>。
+#
+# hostname 必须与客户端使用的 relay URL 域名一致
 hostname = ["relay.example.com"]
-cert_mode = "LetsEncrypt"
-cert_dir = "/etc/iroh-relay/certs"
+cert_mode = "Manual"
+manual_cert_path = "/etc/iroh-relay/certs/live/relay.example.com/fullchain.pem"
+manual_key_path = "/etc/iroh-relay/certs/live/relay.example.com/privkey.pem"
+# 容器内监听 443（docker-compose.yml 映射 8443:443，客户端写 :8443）。
+# 裸二进制直跑（非 docker）时改为 "[::]:8443"。
+https_bind_addr = "[::]:443"
+# LetsEncrypt 模式（仅当 80/443 空闲、无其他服务占用时可用）：
+# cert_mode = "LetsEncrypt"
+# cert_dir = "/etc/iroh-relay/certs"

@@ -29,6 +29,7 @@ trap cleanup EXIT
 
 start_daemon() {
   PPF_DATA_DIR="$TMPFS/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
+  PPF_BIND_ADDR="0.0.0.0:0" \
     "$DAEMON" > daemon.log 2> daemon.err &
   DAEMON_PID=$!
   for _ in $(seq 1 50); do grep -q 'ppf://pair' daemon.log 2>/dev/null && break; sleep 0.2; done
@@ -37,21 +38,8 @@ start_daemon() {
   SOCK=$(sed -n 1p "$TMPFS/library/ipc.token"); TOKEN=$(sed -n 2p "$TMPFS/library/ipc.token")
 }
 
-ipc() { # ipc <method> [params-json]
-  local params="${2:-}"; [ -z "$params" ] && params='{}'
-  python3 - "$SOCK" "$TOKEN" "$1" "$params" <<'PYEOF'
-import socket, json, sys, platform
-p = sys.argv[1]
-# Linux: daemon 的 IPC socket 在抽象命名空间（\0 前缀，非 /tmp 文件）；
-# macOS: /tmp 下文件。按平台选连接路径（双机验证时记账的坑）。
-p = ("\0" if platform.system() == "Linux" else "/tmp/") + p
-s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect(p)
-f = s.makefile("rw"); f.write(sys.argv[2] + "\n"); f.flush()
-f.write(json.dumps({"id": "x", "method": sys.argv[3], "params": json.loads(sys.argv[4])}) + "\n"); f.flush()
-resp = json.loads(f.readline())
-print(json.dumps(resp, ensure_ascii=False)); sys.exit(0 if resp.get("ok") else 1)
-PYEOF
-}
+# shellcheck source=../ipc-lib.sh
+source "$ROOT/tools/ipc-lib.sh"
 
 echo "── 0. 挂 6MB tmpfs（全部数据目录都放这里）"
 sudo mount -t tmpfs -o size=6m tmpfs "$TMPFS"
@@ -68,12 +56,36 @@ PAIR_PID=$!; sleep 3
 ipc pairing.confirm '{"accept": true}' || { echo "FAIL: 配对确认失败（tmpfs 上 IPC 应可用）"; exit 1; }
 wait "$PAIR_PID" && grep -q '配对成功' pair.log
 
-echo "── 3. 备份 500 个小文件 → 磁盘爆掉（预期客户端报错、daemon 不崩）"
+echo "── 3. 备份大 payload → 磁盘爆掉（预期客户端报错、daemon 不崩）"
+echo "   payload: 500 文件 × 约 16KB ≈ 8MB > 6MB tmpfs（放不下，故障必然触发）"
 set +e
 "$TC" backup --files 500 --node "$NODE" > backup.log 2>&1
 BC=$?
 set -e
-echo "   testclient 退出码: $BC（非零=客户端侧优雅失败，符合预期）"
+echo "   testclient 退出码: $BC"
+# T-070b：故障必须真的发生——退出码 0 意味着备份"成功"，剧本是假绿。
+if [ "$BC" -eq 0 ]; then
+  echo "FAIL: 磁盘满但备份竟然成功——故障未触发（payload 可能放得下），判据失效"
+  tail -5 backup.log
+  exit 1
+fi
+# 硬证据两件套（CI 实测修正：iroh-blobs 的 fs store 把底层 ENOSPC 包装成
+# "Entity actor inbox is closed" / "local failure"，日志里不出现字面
+# "No space left"——错误文案不可依赖，物理证据才硬）：
+# ① 物理证据：tmpfs 使用率真的打满（备份残留的 staging/blob 还在盘上）。
+USEPCT=$(df "$TMPFS" | awk 'NR==2 {gsub("%","",$5); print $5}')
+if [ "${USEPCT:-0}" -lt 90 ]; then
+  echo "FAIL: tmpfs 使用率仅 ${USEPCT}%——磁盘没有真的被填满，故障未命中"
+  df "$TMPFS"
+  exit 1
+fi
+# ② 存储层失败签名：ENOSPC 原文（可能出现）或 iroh-blobs 的写失败包装。
+if ! grep -qiE "no space left|entity actor inbox is closed|local failure" daemon.err; then
+  echo "FAIL: daemon.err 无任何写失败证据（ENOSPC/entity actor/local failure 均无）"
+  tail -5 daemon.err
+  exit 1
+fi
+echo "   ✅ 磁盘满故障已实证（tmpfs ${USEPCT}% + daemon.err 写失败签名）"
 
 echo "── 4. daemon 必须还活着"
 kill -0 "$DAEMON_PID" 2>/dev/null || { echo "FAIL: daemon 在磁盘满时崩溃了"; tail -5 daemon.err; exit 1; }

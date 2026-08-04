@@ -157,6 +157,43 @@ impl Db {
             .await?;
         Ok(row.and_then(|r| r.get("last_gen")))
     }
+
+    /// Per-device backup watermarks for non-revoked devices (DOG-01):
+    /// `ipc device.watermarks` data source — dogfood daily reports, desktop
+    /// activity log, phone-side "last success" all read the same table.
+    pub async fn list_device_watermarks(&self) -> Result<Vec<DeviceWatermark>> {
+        let rows = sqlx::query(
+            "SELECT d.node_id, d.name, w.updated_at,
+                    (SELECT COUNT(*) FROM asset a WHERE a.src_device = d.node_id) AS asset_count
+             FROM device d
+             LEFT JOIN backup_watermark w ON w.node_id = d.node_id
+             WHERE d.revoked = 0
+             ORDER BY d.paired_at ASC",
+        )
+        .fetch_all(self.pool())
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| DeviceWatermark {
+                node_id: r.get("node_id"),
+                name: r.get("name"),
+                last_backup_at: r.get("updated_at"),
+                asset_count: r.get("asset_count"),
+            })
+            .collect())
+    }
+}
+
+/// One row of the DOG-01 per-device watermark view.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceWatermark {
+    pub node_id: Vec<u8>,
+    pub name: String,
+    /// Last committed backup (backup_watermark.updated_at); None if the
+    /// device never completed one.
+    pub last_backup_at: Option<i64>,
+    /// Assets this device contributed (asset.src_device count).
+    pub asset_count: i64,
 }
 
 #[cfg(test)]
@@ -224,5 +261,56 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(db.get_watermark(&[1u8; 32]).await.unwrap(), Some(250));
+    }
+
+    // ── DOG-01: per-device watermark view ──
+    fn asset(src: &[u8], hash_byte: u8) -> crate::asset_repo::Asset {
+        crate::asset_repo::Asset {
+            hash: vec![hash_byte; 32],
+            rel_path: format!("originals/{hash_byte:02x}.jpg"),
+            media_type: "image/jpeg".into(),
+            bytes: 100,
+            taken_at: Some(1),
+            width: None,
+            height: None,
+            src_device: src.to_vec(),
+            added_at: 1,
+            thumb_state: 0,
+        }
+    }
+
+    #[tokio::test]
+    async fn watermarks_report_name_time_and_asset_count() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+        db.upsert_device(&device(2, Role::Member)).await.unwrap();
+        db.set_watermark(&[1u8; 32], 500, 1_753_770_500_000)
+            .await
+            .unwrap();
+        // 设备 1 贡献 3 个资产；设备 2 还没备份过（无水位、无资产）。
+        db.insert_asset(&asset(&[1u8; 32], 1)).await.unwrap();
+        db.insert_asset(&asset(&[1u8; 32], 2)).await.unwrap();
+        db.insert_asset(&asset(&[1u8; 32], 3)).await.unwrap();
+
+        let wm = db.list_device_watermarks().await.unwrap();
+        assert_eq!(wm.len(), 2, "revoked=0 设备都要列出");
+        let d1 = wm.iter().find(|w| w.node_id == [1u8; 32]).unwrap();
+        assert_eq!(d1.name, "device-1");
+        assert_eq!(d1.last_backup_at, Some(1_753_770_500_000));
+        assert_eq!(d1.asset_count, 3);
+        let d2 = wm.iter().find(|w| w.node_id == [2u8; 32]).unwrap();
+        assert_eq!(d2.last_backup_at, None);
+        assert_eq!(d2.asset_count, 0);
+    }
+
+    #[tokio::test]
+    async fn revoked_device_is_excluded_from_watermarks() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+        db.revoke(&[1u8; 32]).await.unwrap();
+        db.insert_asset(&asset(&[1u8; 32], 9)).await.unwrap();
+
+        let wm = db.list_device_watermarks().await.unwrap();
+        assert!(wm.is_empty(), "revoked 设备不出现");
     }
 }

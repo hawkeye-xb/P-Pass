@@ -15,9 +15,12 @@ Engine。Rust 客户端（`crates/daemon/src/telemetry.rs`，T-035）POST 一个
 
 | Route | Method | Body | Responses |
 |---|---|---|---|
-| `/` | POST | JSON array of events | 200 `{accepted}` · 400 invalid batch / bad JSON · 413 too large · 405 |
+| `/ingest` | POST | JSON array of events | 200 `{accepted}` · 400 invalid batch / bad JSON · 404 wrong path · 413 too large · 405 |
 | `/` | GET | — | 200 health `{ok, service}` |
 
+- **Only `/ingest` accepts POSTs** (T-061b) — a typo'd path must 404, never
+  silently swallow a batch. The client's `PPF_TELEMETRY_URL` must include the
+  `/ingest` suffix (e.g. `https://telemetry.p-pass.hawkeye-xb.com/ingest`).
 - Hard caps: body ≤ 1 MiB (413), batch ≤ 100 events (400).
 - **Whole-batch strictness**: one invalid event rejects the whole batch with
   400 — the client drops failed batches anyway (best-effort telemetry), and a
@@ -38,12 +41,26 @@ Per event, one data point:
 
 - `indexes: [event]` — GROUP BY event type (`conn` / `backup_session` /
   `first_byte` / `daemon_alive`)
-- `doubles: [ts, ...numeric fields]` — ms / files / bytes / dur_s / uptime_h
+- `doubles` — **fixed per-event column layout** (T-061b; zero-padded for
+  absent optional fields — column semantics never shift):
+
+  | event | double1 | double2 | double3 | double4 |
+  |---|---|---|---|---|
+  | `conn` | ts | ms | — | — |
+  | `backup_session` | ts | files | bytes | dur_s |
+  | `first_byte` | ts | ms | — | — |
+  | `daemon_alive` | ts | uptime_h | — | — |
+
+  (So `double1` is always `ts`; `double2` is the primary metric. Add new
+  numeric fields at the END of a type's row only.)
 - `blobs: [full event JSON]` — self-describing, lossless
 
-每个事件一个数据点：`indexes: [event]`（按事件类型分组）；`doubles: [ts,
-...数值字段]`（ms/files/bytes/dur_s/uptime_h）；`blobs: [完整事件 JSON]`
-（自描述、无损）。
+每个事件一个数据点：`indexes: [event]`（按事件类型分组）；`doubles` 为
+**按事件类型固定的列位**（T-061b；可选字段缺席补 0 占位，列位语义永不
+漂移）——`conn`=[ts,ms]、`backup_session`=[ts,files,bytes,dur_s]、
+`first_byte`=[ts,ms]、`daemon_alive`=[ts,uptime_h]（double1 恒为 ts，
+double2 为主指标；新增数值字段只允许追加到行尾）；`blobs: [完整事件
+JSON]`（自描述、无损）。
 
 ## Local dev & test
 
