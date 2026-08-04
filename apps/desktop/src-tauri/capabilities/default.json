@@ -10,6 +10,7 @@
     "dialog:allow-open",
     "dialog:allow-confirm",
     "dialog:allow-message",
-    "opener:allow-reveal-item-in-dir"
+    "opener:allow-reveal-item-in-dir",
+    "updater:default"
   ]
 }
