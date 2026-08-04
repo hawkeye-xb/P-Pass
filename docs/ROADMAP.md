@@ -223,6 +223,26 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       TripletStore 6 (incl. counterproof all-missing → K=N), android
       55/55, workspace 195/195. Device-side acceptance (Samsung kill+reopen,
       offline reopen, dumpsys-style sqlite cross-check) pending real phone
+- [ ] REL-01 versioning & release norms — **code landed 2026-08-04
+      (PR #29)**: docs/RELEASING.md (en primary + zh; trunk-based:
+      main always releasable, tag=SemVer release, hotfix-only
+      release/vX.Y, draft→human publish, bump+changelog per release,
+      never overwrite/move tags) + CHANGELOG.md init (keep-a-changelog,
+      all-unreleased until first formal release) + tools/bump-version.sh
+      (one-shot Cargo.toml workspace version ↔ Android
+      versionName/versionCode; versionCode monotonic +1; overwrite
+      guards: rejects already-tagged versions, non-strictly-increasing
+      versions, invalid SemVer) — five-state test PASS: bump 0.3.0 ok
+      (diff touches version lines only), v0.2.0-test.7 rejected, 0.3.0
+      equal rejected, 0.1.0 downgrade rejected, "1.2" rejected
+- [ ] DOG-02 battery-whitelist onboarding — **code landed 2026-08-04 (PR #31)**:
+      PowerManager.isIgnoringBatteryOptimizations detect + backup-tab
+      guidance card (disappears once whitelisted, ON_RESUME refresh) +
+      vendor intent fallback chain (REQUEST dialog → Samsung Smart
+      Manager → Huawei phone manager → generic list). strings en/zh
+      symmetric (StringsSymmetryTest enforced), 49/49 unit tests green.
+      Device-side acceptance (dumpsys whitelist before/after + adb
+      whitelist-removal counterproof) pending real phone
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜

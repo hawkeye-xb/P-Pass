@@ -10,7 +10,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -18,6 +22,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
+import com.hawkeyexb.ppass.battery.openBatteryOptimizationSettings
 import com.hawkeyexb.ppass.i18n.DiagText
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
@@ -80,6 +88,20 @@ fun PPassApp() {
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> if (granted) screen = Screen.Scan }
+
+    // DOG-02: 电池白名单状态——ON_RESUME 刷新（从系统设置返回立即更新，
+    // 加白后卡片消失；拒绝授权时保持卡片）
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var batteryWhitelisted by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                batteryWhitelisted = isIgnoringBatteryOptimizations(context)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     when (val s = screen) {
         is Screen.Welcome -> WelcomeScreen(onScan = {
@@ -172,6 +194,10 @@ fun PPassApp() {
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
                         triplet = holder.triplet.value,
+                        batteryWhitelisted = batteryWhitelisted,
+                        onOpenBatterySettings = {
+                            openBatteryOptimizationSettings(context)
+                        },
                         onReconnect = {
                             // New daemon identity / new computer: drop the
                             // stored pairing and scan fresh.
