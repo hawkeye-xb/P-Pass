@@ -107,6 +107,10 @@ msg_keys! {
     UI_EXPORT_FAILED => "ui.export_failed",
     UI_STATUS => "ui.status",
     UI_LIBRARY_DIR_UNKNOWN => "ui.library_dir_unknown",
+    // ── Desktop self-update flow (UPD-01c) ────────────────────────────
+    UI_UPDATE_AVAILABLE => "ui.update_available",
+    UI_UPDATE_INSTALLED => "ui.update_installed",
+    UI_UPDATE_FAILED => "ui.update_failed",
 }
 
 #[cfg(test)]
@@ -177,10 +181,13 @@ mod tests {
             UI_EXPORT_FAILED,
             UI_STATUS,
             UI_LIBRARY_DIR_UNKNOWN,
+            UI_UPDATE_AVAILABLE,
+            UI_UPDATE_INSTALLED,
+            UI_UPDATE_FAILED,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 61);
+        assert_eq!(ALL.len(), 64);
     }
 
     #[test]
