@@ -204,8 +204,15 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       dispatch; every-commit never triggers. android hello/pair/backup
       scripts tightened to PPF_BIND_ADDR=127.0.0.1:0; iroh Maven jar
       confirmed to carry linux-x86-64 natives (JVM tests need no
-      simulator); local run 3/3 OK (HELLO/PAIR/BACKUP), both workflows
-      actionlint-clean — acceptance pending CI dispatch run
+      simulator). **acceptance PASS 2026-08-04**: run 30886819356
+      all-green — HELLO OK / PAIR OK / BACKUP OK (pushed=12 ingested=12
+      rerun dup=12) in logs; negative: hello capabilities broken
+      (thumbnail.v1→v9) → AssertionError DaemonHelloTest:28, run
+      30887278528 red, reverted. CI-found fixes: JDK 21 (iroh uniffi
+      classes are major-65 bytecode), Linux abstract-namespace IPC in
+      DaemonPair/DaemonBackupTest, PID-exact daemon cleanup in scripts.
+      Known pitfalls (JDK17 必炸 / GenericNamespaced 平台差异) →
+      references/desktop-build.md 与本文档
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
