@@ -34,7 +34,9 @@ import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.backup.BackupRunner
+import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.backupOnceNow
+import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.ui.BackupUiState
@@ -175,6 +177,11 @@ fun PPassApp() {
 
         is Screen.Home -> {
             val holder = remember { BackupUiStateHolder(context, client, identity, s.pairing) }
+            // UX-03: 极简设置状态（仅充电/仅 WiFi）——改开关即落盘 +
+            // 按新约束重建周期任务。
+            val backupSettings = remember { BackupSettings(context.filesDir) }
+            var chargeOnly by remember { mutableStateOf(backupSettings.load().chargeOnly) }
+            var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
             val loader = remember {
                 TimelineLoader(client, parsePeerAddrToken(s.pairing.daemonAddrToken)) {
                     client.bind(identity.secretKey())
@@ -196,6 +203,18 @@ fun PPassApp() {
                         batteryWhitelisted = batteryWhitelisted,
                         onOpenBatterySettings = {
                             openBatteryOptimizationSettings(context)
+                        },
+                        chargeOnly = chargeOnly,
+                        onChargeOnlyChange = {
+                            chargeOnly = it
+                            backupSettings.save(chargeOnly, wifiOnly)
+                            rescheduleAutoBackup(context)
+                        },
+                        wifiOnly = wifiOnly,
+                        onWifiOnlyChange = {
+                            wifiOnly = it
+                            backupSettings.save(chargeOnly, wifiOnly)
+                            rescheduleAutoBackup(context)
                         },
                         onReconnect = {
                             // New daemon identity / new computer: drop the

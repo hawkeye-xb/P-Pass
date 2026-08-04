@@ -39,6 +39,10 @@
     <string name="backup_now">Back up now</string>
     <string name="backing_up">Backing up…</string>
     <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
+    <!-- UX-03: 后台规则一行 + 极简设置 -->
+    <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
+    <string name="setting_charge_only">Only while charging</string>
+    <string name="setting_wifi_only">Only on WiFi</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">Background protection off</string>
     <string name="dog_battery_body">This phone may stop P-Pass from backing up in the background. Turn off battery optimization for P-Pass to keep backups running.</string>
