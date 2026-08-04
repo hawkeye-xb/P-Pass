@@ -39,6 +39,28 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 
 **✅ TAG-01 已完成（2026-08-06 凌晨出包轮，Salamira）——工程侧就绪，真机验收和狗粮周可开跑。**
 
+### 05:47 巡检轮补充（验收人）：TAG-01 连带事故与收尾
+
+- **main 曾红两个 commit**（756332b/9fb339f 的 PR Checks 均 failure）：
+  bump 0.1.0→0.2.1 打翻 dae_flow 两条测试——测试把版本**写死**成
+  "0.2.0"/"0.1.0" 字面量，bump 后"newer"claimant 反而比在位旧 →
+  TookOver 断言必挂。**产品逻辑没坏，是测试脆性**（每次 bump 必炸）。
+  验收人本地复现（bump 复演 → 同两条红）后直修：版本改为从
+  CARGO_PKG_VERSION 相对推导（same/newer/older 三助手），78/78 +
+  全量 206/206 绿，`6029de3` 已推。这属于 DAE-01b 验收时验收人漏掉
+  的脆性，责任在 review 侧，不记实施方。
+- **Cargo.lock 缺口**：bump-version.sh 只改 Cargo.toml，首次构建后
+  lock 的 workspace 成员版本项变脏——`6bb3239` 补上。**BUMP-01 微卡
+  （L0）**：bump-version.sh 末尾追加 lock 同步（`cargo update -w -q`
+  或等效）+ 断言 `git status` 干净，反证：删掉该步 → bump 后构建
+  必出脏 lock（贴 git status）。
+- **纪律重申（对实施方）**：直推 main 的 commit 与分支交付同规——
+  **push 后必须等 PR Checks 结论**，红了立刻跟修或回滚，不许留红
+  过夜。本次 756332b 红了之后又推了 9fb339f（还是红）才转去打 tag。
+- **网络备注**：办公网到 GitHub 的 SSH/HTTPS 全断过一段，验收人临时
+  走 `GIT_SSH_COMMAND="ssh -o ProxyJump=vultr-ppass"` 跳板完成收口；
+  后续巡检若 fetch 超时直接用这招，别空转。
+
 ### TAG-01 出包卡（L1）
 
 ```
