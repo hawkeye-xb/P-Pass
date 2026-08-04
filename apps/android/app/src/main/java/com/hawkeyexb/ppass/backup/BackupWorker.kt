@@ -7,7 +7,9 @@ package com.hawkeyexb.ppass.backup
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
@@ -19,6 +21,8 @@ import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.hawkeyexb.ppass.MainActivity
+import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairingStore
@@ -28,6 +32,9 @@ import java.util.concurrent.TimeUnit
 const val BACKUP_WORK_NAME = "ppass-auto-backup"
 private const val CHANNEL_ID = "ppass.backup"
 private const val NOTIFICATION_ID = 2026
+// UX-02: 失败通知（成功保持沉默——产品档案 §二.6）。
+private const val FAIL_CHANNEL_ID = "ppass.backup.failed"
+private const val FAIL_NOTIFICATION_ID = 2027
 
 /** One catch-up run right now (no constraints): app-open and
  *  post-pairing moments — the user is looking, back up what's new. */
@@ -104,10 +111,41 @@ class BackupWorker(
             Result.success()
         } catch (t: Throwable) {
             android.util.Log.w("PPassBackup", "auto backup failed, will retry", t)
+            // UX-02: 批次失败才发系统通知（成功保持沉默）。批次 = 本次
+            // scan 的候选数；点开落回主界面（失败清单区为后续卡）。
+            postFailureNotification(ctx, scan.items.size)
             Result.retry() // idempotent — next attempt converges
         } finally {
             client.close()
         }
+    }
+
+    /** UX-02: 失败通知——「N 张照片没备份成功，打开看看」，点开进 App。 */
+    private fun postFailureNotification(context: Context, failedCount: Int) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    FAIL_CHANNEL_ID, "照片备份失败 Backup failed",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                )
+            )
+        }
+        val open = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pi = PendingIntent.getActivity(
+            context, 0, open,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(context, FAIL_CHANNEL_ID)
+            .setContentTitle(context.getString(R.string.notif_backup_failed_title))
+            .setContentText(context.getString(R.string.notif_backup_failed_body, failedCount))
+            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        nm.notify(FAIL_NOTIFICATION_ID, notification)
     }
 
     private fun foregroundInfo(): ForegroundInfo {
