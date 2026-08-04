@@ -197,6 +197,38 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       (assembleRelease; signed version T-071 follow-up), both added to
       Release draft assets; H-10b naive-user test pending tag-build
       acceptance
+- [ ] UPD-01 self-update channel — **code landed 2026-08-04 (PR #30),
+      rework 2026-08-05**: release.yml emits tauri-style manifest.json
+      (compose via tools/make-update-manifest.mjs — sha256 + Ed25519
+      signatures, gated on UPDATE_SIGNING_KEY, uploaded as release
+      asset; notes mark unsigned when key absent) + android self-update
+      flow (fetch manifest from release latest/download → semver
+      compare → dialog → download → FileProvider → system
+      PackageInstaller same-signature check; no embedded pubkey needed
+      — system enforces it). **Key done (2026-08-04, user authorized)**:
+      UPDATE_SIGNING_KEY secret set (tauri signer rsign format),
+      update.rs OFFICIAL_PUBLIC_KEY real-key swap (tamper-rejected
+      tests green), desktop tauri-plugin-updater wired (pubkey =
+      .pub full content, createUpdaterArtifacts, updater:default
+      capability, Svelte check dialog). **UPD-01 rework items**:
+      i18n bundle drift fixed (ui.update_* keys synced to Android
+      assets, zero-drift test green), android downloadAndInstall now
+      suspend+IO (was main-thread network swallowed), App.svelte 404
+      now silent (check errors never surface; only install errors
+      show), npx @tauri-apps/cli pinned to 2.11.4, RELEASING.md §3.5
+      documents update channel + darwin/windows gaps, ROADMAP wording
+      updated. Tests: UpdateCheckerTest 6/6 + android suite green.
+      **UPD-01c rework 2026-08-05** (i18n registration blocker): the
+      ui.update_* keys were in all four dictionaries but never
+      registered in crates/diag/src/keys.rs — diag test panicked
+      "unregistered key". Registered UI_UPDATE_AVAILABLE /
+      UI_UPDATE_INSTALLED / UI_UPDATE_FAILED into ALL (len 61→64);
+      all four jsons (root en/zh + android copies) now match ALL
+      byte-for-byte. Counterproof: deleting ui.update_failed from
+      en.json → all_keys_translated_in_en_and_zh FAILED (lib.rs:32),
+      restored → green. diag 8/8, android 55/55, workspace 200/200.
+      Branch CI green (pr.yml all jobs) after push. Drive-by: same
+      ipc_flow.rs harness race fix as DOG-01c (flake on main's tree).
 - [ ] E2E-01 android live scenarios in CI — **code landed 2026-08-04
       (PR #28)**: .github/workflows/e2e.yml — nightly cron (03:30 UTC) +
       release tag 时并行跑（**2026-08-04 用户裁决：自动化测试不前置**——
