@@ -39,6 +39,10 @@
     <string name="backup_now">Back up now</string>
     <string name="backing_up">Backing up…</string>
     <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
+    <!-- DOG-02: 电池白名单引导卡片 -->
+    <string name="dog_battery_title">Background protection off</string>
+    <string name="dog_battery_body">This phone may stop P-Pass from backing up in the background. Turn off battery optimization for P-Pass to keep backups running.</string>
+    <string name="dog_battery_action">Open settings</string>
     <string name="reconnect">Scan a new code</string>
     <string name="run_failed">Could not finish this run — photos already home are safe; try again and it picks up where it left off.</string>
 
