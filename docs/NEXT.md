@@ -28,83 +28,80 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 3. 手机：装 apk（允许"未知来源"）→ 扫码 → 首次备份
 4. **每个卡点/看不懂的提示记下来**，丢回主会话，逐条立卡——这就是 H-10b 的产出
 
-## 三、这一轮交付的 review 状态（2026-08-05 晚，第二批四交付已审）
+## 三、这一轮交付的 review 状态（2026-08-05 21:47 巡检轮，第三批四交付已审）
 
 | 交付 | 裁决 |
 |---|---|
-| REL-01 返工 | ✅ **已合并**（b3e5e87：三处 sed 全改 `-i.bak && rm`，bash -n 过）|
-| DOG-02 | ✅ **已合并**（代码侧 PASS：四级回退链 resolveActivity 过滤、ON_RESUME 刷新、全不可用静默；**真机验收挂起**——手机上是在用的 release 签名包，装 debug 必须卸载，验收人裁决不动用户环境，挂到下个签名 test tag 我跑 dumpsys 正反证）。分支 CI 红已查实为偶发：Rust 树与绿基点 0aae850 逐字节相同 + 本地复跑 193/193 绿 |
-| DAE-01 | ❌ **返工**（见下 DAE-01b 卡，blocker 级）|
-| DOG-01 | ❌ **返工**（见下 DOG-01b 卡，blocker 级）|
-| UPD-01 | ⚠️ 返工中（前轮裁决不变）：①i18n 捆绑字典漂移（Android 副本没同步，DiagTestT 红）；②Android downloadAndInstall 主线程网络异常被吞。另修：App.svelte 404 静默、npx pin、manifest darwin 挂账注明、ROADMAP 文案、desktop 篡改反证 |
+| DAE-01b 返工 | ✅ **已合并**（dbcad43）：前任 token 握手正确（活 socket+错 token → StandDown 绝不抢绑，反证测试 wrong_token_never_grabs_a_live_socket 在案）；build.rs 烤入 PPF_BUILD_VERSION（release.yml macOS/Windows 双 job 注入）；version_cmp 预发布数字段 test.8>test.7。本地 nextest -p daemon 72/72 |
+| DOG-03 | ✅ **已合并**（代码侧 PASS：bash -n ×4、night 脚本 trap+PPF_BIND_ADDR、morning-report 只读对账+--expect-stall 反证豁免）。night1 实跑验收留到狗粮周开跑当晚，验收人执行 |
+| DOG-01b 返工 | ❌ **再返工**（见下 DOG-01c 卡）：ConfirmedStore 架构对了，但 recordRun 接线把「上传前的 missing」当「跑完还缺的」——首次备份 100 张成功后 M=0 且永远为 0。单测又是绕过生产语义喂手工集合 |
+| UPD-01 返工 | ❌ **第三轮返工**（见下 UPD-01c 卡）：i18n blocker 只修一半——Android 副本同步了，但 keys.rs 没注册 ui.update_* 三键，diag 测试 panic（"unregistered key"）。**纪律问题：带红 CI 交付**（exit 100 在分支上可见，交付前必须自查 CI）。suspend+IO 下载、App.svelte 404 静默两处修复本身是对的，保留 |
 | H-10a-fix | ❌ 未交付，卡仍挂 |
-| OPS-01 / E2E-01 | ✅ 前轮已合（存档见 git 历史）|
+| 前轮存档 | REL-01/DOG-02（真机验收挂签名包）/OPS-01/E2E-01/DAE-01 已合，见 git 历史 |
 
-### DAE-01b 返工卡（阻塞 DAE-01 验收，级别 L2）
+### DOG-01c 返工卡（阻塞 DOG-01 验收，级别 L2，在 feat/dog-01-watermarks 原分支继续）
 
 ```
-## DAE-01b daemon 单实例握手修复  级别 L2
-背景：DAE-01 主体架构正确（probe→版本握手→newest wins，Equal 退位
-  防 launchd 重拉死循环），但有一个生产必现 blocker + 一个版本口径缺口。
-blocker①（token 错位）：main.rs 用本实例新生成的 rand_token() 去探测
-  前任，而前任只认它自己启动时写进 data_dir/ipc.token 的 token——
-  生产上 probe 必然认证失败断连 → peer_call 返回 None → 误判死 socket
-  → remove_file 抢绑。后果：旧 daemon 没死、挂在已 unlink 的 socket 上
-  变幽灵（占库锁和 iroh endpoint），比 unlink-before-bind 更糟。
-  测试没抓到是因为 dae_flow.rs 两实例共享写死的 [7u8;32]。
-  修法：claim_single_instance 探测前先读现存 data_dir/ipc.token
-  （前任的 token）用它握手；claim 成功后才生成/写入自己的 token。
-blocker②（版本口径）：CARGO_PKG_VERSION 不含 test 后缀——test.7 和
-  test.8 的 daemon 都自报 0.2.0 → Equal → 新包退位，狗粮周换 test 包
-  接管永不触发。修法（二选一，PR 里说明取舍）：
-  a) release.yml 构建时把完整 tag 注入（如 build.rs 读 PPF_BUILD_VERSION
-     env 落 option_env!，version_cmp 已支持 -test.N 数字段则需扩展：
-     同核心时比较预发布数字段，test.8 > test.7）；
-  b) 流程规定每个 test tag 前必跑 bump-version.sh（REL-01 工具），
-     Cargo 版本严格递增。
-不准动：Equal → StandDown 语义（防同版本互踢循环）；IPC 七方法契约。
-可执行验收：①集成测试改为两实例各自独立 token + 前任 token 落
-  ipc.token 文件（复现生产时序），newer 接管/equal 退位仍过；
-  ②反证：故意让新实例用随机 token 探测 → 必须得到 StandDown 或
-  显式"auth failed"处理路径，绝不 Proceed 抢绑（贴测试输出）；
-  ③blocker② 选 a 则加 version_cmp("0.2.0-test.8","0.2.0-test.7")
-  == Greater 的测试；选 b 则在 RELEASING.md 写明并给 bump 演示输出。
-证据：测试输出 + 关键代码段。
+## DOG-01c recordRun 接线修复  级别 L2
+背景：DOG-01b 的 ConfirmedStore 架构正确（(hash,remote) per-remote 目录、
+  N=MediaStore 全量 count、tmp+rename、损坏不崩）——全部保留。
+  坏的是接线语义。
+blocker（missing 时序错位）：BackupRunner.report.missing 是**上传前**
+  manifest 应答的缺失集合；随后这些文件全被上传且 commit 成功。但
+  BackupUiStateHolder 传 confirmed = allHashes − missing（只剩 duplicates）、
+  missing 原样减掉——刚上传成功的照片被立刻从缓存删除。
+  失败场景：首次备份 100 张**成功** → 缓存 = (∅+∅)−100 = ∅ → UI 显示
+  「手机 100 张 · 已备份 0」，且增量扫描永不重新 offer 旧照片 → M 永远 0。
+  DOG-01b 的单测绿是因为在 ConfirmedStore 层手工喂集合，没走
+  BackupRunner 生产语义——与 DAE-01 第一版同款病，这是第二次，
+  以后测试必须从生产调用路径（至少 BackupRunner 报告→recordRun）连起来测。
+修法：
+  ①一次 commit 成功后，本次 candidates 全部确认：confirmed = allHashes，
+    减项 = ∅（duplicates 和刚 ingested 的都在家）；
+  ②漂移校准（电脑端库被删/换库）不能挂在备份运行上（增量 manifest
+    根本不含旧 hash）——单独做只查不传的 exist-check：用缓存里的
+    hash 集发 begin+manifest 读 missing 后不 push 不 commit（或加
+    显式 abort），missing 的从缓存移除。触发时机：App 打开或备份前，
+    daemon 可达才跑，不可达跳过（三元组显示缓存值）。
+  ③WorkManager 路径（BackupWorker）同步同一修法。
+  ④顺手：把误入分支的 tmp-pr-t042b.md 删掉。
+不准动：ConfirmedStore 本体、MediaScanner.countAll、DOG-01 daemon 侧。
+可执行验收：①集成级单测走真实调用链（构造 BackupReport{missing=上传前
+  集合} → recordRun）：首次 100 张全 missing 全上传成功 → M 必须=100
+  （这条就是本 bug 回归测试）；②两次运行 100→5 ⇒ N=105 M=105；
+  ③漂移：缓存 100 条、exist-check 回 30 条 missing → M=70；
+  ④三星实测（杀 App 重开不归零、新拍两张 K=2）——设备不在则标"挂验收人"。
+反证：把①的 confirmed 改回 allHashes−missing → 测试必红（贴输出后还原）。
+证据：单测输出 + 关键 diff。
 收尾：走 PR 等 review。
 ```
 
-### DOG-01b 返工卡（阻塞 DOG-01 验收，级别 L2）
+### UPD-01c 返工卡（级别 L1，在 feat/upd-01-auto-update 原分支继续）
 
 ```
-## DOG-01b 三元组口径修复  级别 L2
-背景：DOG-01 的 daemon 侧（list_device_watermarks SQL 视图 + IPC
-  device.watermarks + 两条测试）已过可保留；手机端三元组口径错误。
-blocker（增量当全量）：tripletOf 拿 scanSince(watermark) 增量运行的
-  offered/ingested 当 N/M——手机 100 张备完后新拍 5 张，第二次备份后
-  UI 显示「手机 5 张 · 已备份 5」。恒真三元组变假话。
-修法（按原卡架构预留实现，不许再绕）：
-  ①状态缓存表 key=(hash, remote_id)，落 per-remote 目录——记录哪些
-    本地资产已被哪个 remote 确认（备份成功即写入；不依赖单次运行报告）；
-  ②N = 当前扫描范围全量 count（MediaStore COUNT 查询，便宜，不需要
-    重 hash）；M = 缓存表中该 remote 已确认条数；K = N − M clamp ≥ 0；
-  ③exist-check 校准：备份运行时复用 manifest「给 hashes 回 missing」
-    语义（只查不传）——daemon 回 duplicates/missing 时同步修正缓存表
-    （处理"电脑端库被删/换库"的漂移）。增量扫描省 hash 的优化保留。
-可执行验收：①单测：模拟两次运行（全量 100 → 增量 5）→ 三元组必须是
-  N=105 M=105，不是 N=5（这条就是本次 bug 的回归测试）；②三星实测：
-  备份→杀 App 重开不归零、新拍两张重开 K=2；③断网重开显示缓存值；
-  ④`ipc device.watermarks` 与 sqlite 直查一致（daemon 侧保留项复验）。
-反证：清空状态缓存表 mock exist-check 全 missing → K 必须 = N（贴输出）。
-证据：单测输出 + 真机截图（真机部分若设备不在，明确标"挂验收人"）。
-收尾：走 PR 等 review。
+## UPD-01c i18n 注册收尾  级别 L1
+背景：UPD-01 第二轮返工把 Android 副本字典同步了、suspend+IO 下载和
+  App.svelte 404 静默都对——但 keys.rs 没注册新键，crates/diag 测试
+  all_keys_translated_in_en_and_zh panic："i18n/en.json contains
+  unregistered key: ui.update_available (register it in keys.rs)"。
+  **交付时分支 CI 就是红的（exit 100），没自查——以后红 CI 不许交付，
+  除非 PR 描述里写明"红因 X，与本卡无关，证据 Y"。**
+修法：keys.rs 注册 UI_UPDATE_AVAILABLE / UI_UPDATE_INSTALLED /
+  UI_UPDATE_FAILED 三键（进 ALL，len 断言随之 61→64 或按现状），
+  确认根字典/Android 副本四个 json 与 ALL 完全一致。
+可执行验收：cargo nextest -p diag 全绿 + Android DiagTest 相关单测绿 +
+  分支 CI 四 job 全绿（贴链接或 API 输出）。
+反证：从 en.json 临时删掉 ui.update_failed → diag 测试必红（贴输出后还原）。
+收尾：走 PR 等 review。合并后 UPD-01 整卡进入待验收（桌面篡改反证已在案）。
 ```
 
 ## 四、狗粮周阻塞卡（产品档案 §三之五 f 裁决：不落则狗粮周作废）
 
-> **当前队列顺序（2026-08-05 晚更新）**：DAE-01b → DOG-01b →
-> DOG-03 → UPD-01 返工 → UX-01..07。DOG-01/DAE-01 原卡代码留在
-> 各自分支上，返工在原分支继续（不开新分支）。DOG-02/REL-01 已合，
-> 不要重复做。
+> **当前队列顺序（2026-08-05 21:47 巡检轮更新）**：DOG-01c →
+> UPD-01c → UX-01..07。返工都在原分支继续（不开新分支）。
+> DAE-01(+b)/DOG-03/DOG-02/REL-01 已合并，不要重复做。
+> **DOG-01 原卡（下方全文）已由 DOG-01b 部分实现，只剩 DOG-01c
+> 的接线修复——别按原卡重做。**
 
 > 产品输入：docs/product/2026-08-04-experience-gaps.md + dogfood-week-cases.md。
 > 全部按 task-card-template.md，可直接转发云端 agent。
@@ -211,7 +208,18 @@ blocker（增量当全量）：tripletOf 拿 scanSince(watermark) 增量运行�
 
 ## 五、发布链路（更新）
 
-DOG-01/02 + DAE-01 合并 → 打新 test tag 出包 → 家人手机装 APK +
-媳妇 Mac 换 dmg + 本机 B 类孤儿清理 → **压缩版狗粮周开跑**（三晚编排，
-gate 语义修改建议见 dogfood-week-cases.md）→ 滚动衔接 M3 私测。
-H-02（用户）、UPD-01（审后合）、REL-01（返工后合）并行不阻塞。
+**只剩 DOG-01c 阻塞**（DOG-02/DAE-01/DOG-03 已合）→ 合并后打新
+test tag 出包（记得先 bump-version.sh，DAE-01 版本注入也吃 tag）→
+家人手机装 APK + 媳妇 Mac 换 dmg + 本机 B 类孤儿清理（验收人执行并
+贴证）+ DOG-02/DOG-01 三星真机验收（验收人）→ **压缩版狗粮周开跑**
+（night1..3 脚本已在 tools/dogfood/）→ 滚动衔接 M3 私测。
+H-02（用户）、UPD-01c（审后合）并行不阻塞。
+
+## 六、等用户
+
+1. **H-02 Apple 签名**：操作单在 docs/runbook/h02-apple-signing.md，
+   约 10-15 分钟，需要你的 Apple ID 和钥匙串授权。
+2. **UPD-01 桌面签名密钥对**：tauri updater 的 minisign 私钥必须你本人
+   生成（命令在 feat/upd-01-auto-update 的 PR 描述里），agent 不代生成。
+3. **桌面端删两个旧三星设备**（913D2DC2、D3AA8DF3）——上次真机
+   验收换包留下的重复配对。
