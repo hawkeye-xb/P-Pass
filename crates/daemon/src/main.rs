@@ -85,13 +85,38 @@ async fn main() -> anyhow::Result<()> {
         pending_rx,
     ));
     let socket_name = format!("ppf-{}", &transport.node_id().to_string()[..8]);
-    println!(
-        "IPC: {socket_name}（令牌在 {}/ipc.token）",
-        data_dir.display()
-    );
+    let token = rand_token()?;
+    let token_hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
+    // DAE-01: 版本可被 PPF_DAEMON_VERSION 覆盖（双实例集成测试用；
+    // 生产 = CARGO_PKG_VERSION）。
+    let daemon_version = std::env::var("PPF_DAEMON_VERSION")
+        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
+    println!("IPC: {socket_name}（令牌在 {}/ipc.token）", data_dir.display());
+    // DAE-01 单实例纪律：先试连接、版本握手（newest wins）——旧逻辑
+    // unlink-before-bind 会让后来者盲杀前任（用户机实锤：launchd 至今
+    // 指向 7/31 开发构建路径，新 daemon 一直上不了岗）。
+    match ipc
+        .claim_single_instance(&socket_name, &token_hex, &daemon_version)
+        .await
+    {
+        daemon::Claim::StandDown => {
+            println!("已有同版本或更新版本的 daemon 在值班（v{daemon_version}），本实例退出。");
+            std::process::exit(0);
+        }
+        daemon::Claim::TookOver => {
+            // 升级退位收尾：重装 autostart，让 launchd 指向本实例的稳定
+            // 路径。守卫拒绝 target/、/tmp/ 等开发路径（不写坏 plist）。
+            use platform::PlatformAdapter as _;
+            if let Ok(exe) = std::env::current_exe() {
+                if let Err(e) = platform::adapter().install_autostart(&exe) {
+                    tracing::warn!("DAE-01: autostart re-install skipped: {e}");
+                }
+            }
+        }
+        daemon::Claim::Proceed => {}
+    }
     tokio::spawn({
         let ipc = std::sync::Arc::clone(&ipc);
-        let token = rand_token()?;
         async move {
             if let Err(e) = ipc.serve(&socket_name, token).await {
                 tracing::error!("IPC 服务退出：{e}");

@@ -20,6 +20,7 @@ pub use backup::{BackupEngine, CommitOutcome};
 pub use config::{Config, TelemetryConfig};
 pub use diag_agg::DiagAgg;
 pub use ipc::IpcServer;
+pub use ipc::Claim;
 pub use pairing::{PairRejection, Pairing, PendingPair};
 pub use query::QueryEngine;
 pub use router::Router;

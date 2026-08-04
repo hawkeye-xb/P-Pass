@@ -214,6 +214,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       DaemonPair/DaemonBackupTest, PID-exact daemon cleanup in scripts.
       Known pitfalls (JDK17 必炸 / GenericNamespaced 平台差异) →
       references/desktop-build.md 与本文档
+- [ ] DAE-01 daemon resident discipline — **code landed 2026-08-04 (PR #32)**:
+      single-instance claim replaces unlink-before-bind (probe → version
+      handshake, newest wins; equal/older stands down, newer takes over +
+      re-installs autostart), status() now reports version/pid/started_at/
+      exe_path, install_autostart rejects /target//tmp/ paths. version_cmp
+      unit tests + dae_flow integration (3 tests: takeover/stand-down/dead
+      socket) + counterproof (reversed compare → 2/3 red, reverted).
+      workspace 197/197 green
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
