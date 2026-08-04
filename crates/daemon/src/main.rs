@@ -7,6 +7,15 @@ use daemon::{Config, Router};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // UX-07: --ephemeral — 测试/脚本模式：stdin EOF（写入端关闭）即整体
+    // 退出（3 秒内），杜绝 A 类孤儿 daemon。生产/launchd 不带此 flag：
+    // 那时 stdin 关闭只让配对确认退到 IPC-only（下方既有行为），常驻不变。
+    let ephemeral = std::env::args().any(|a| a == "--ephemeral");
+    // EOF 信号：stdin 循环在 EOF 时发；ephemeral 模式下 main 用 select
+    // 竞争它，收到即优雅退出（oneshot 只消费一次）。
+    let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
+    let eof_tx = if ephemeral { Some(eof_tx) } else { None };
+
     // Log to stderr; level via RUST_LOG (default info). 狗粮机排障的眼睛.
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -133,8 +142,11 @@ async fn main() -> anyhow::Result<()> {
     // Interim console confirmer (until the tray, T-041): y = 允许队首.
     // stdin EOF（后台运行）⇒ 退出这个循环，确认只走 IPC——绝不把
     // "没有输入" 当成任何决定（狗粮冒烟抓到的真 bug：EOF 曾被当 n 秒拒）.
+    // UX-07: --ephemeral 模式下 EOF 同时发退出信号（main 的 select 收到
+    // 即整体退出，3 秒内）——测试脚本关掉 stdin 写入端即可收掉 daemon。
     tokio::spawn({
         let ipc = std::sync::Arc::clone(&ipc);
+        let eof_tx = eof_tx;
         async move {
             loop {
                 let line = tokio::task::spawn_blocking(|| {
@@ -147,6 +159,9 @@ async fn main() -> anyhow::Result<()> {
                 let (bytes_read, line) = line;
                 if bytes_read == 0 {
                     tracing::info!("stdin closed — pairing confirmation is IPC-only from here");
+                    if let Some(tx) = eof_tx {
+                        let _ = tx.send(());
+                    }
                     return;
                 }
                 if ipc.pending_names().is_empty() {
@@ -204,14 +219,28 @@ async fn main() -> anyhow::Result<()> {
     let upload = daemon::upload::UploadPlane::new(db.clone(), blobs, data_dir.join(".ppf/staging"));
     let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
-    Router::new(db, "P-Pass 存储端")
+    let router = Router::new(db, "P-Pass 存储端")
         .with_pairing(pairing)
         .with_backup(backup)
         .with_query(query)
         .with_upload(upload)
-        .with_download(download)
-        .serve(&transport)
-        .await;
+        .with_download(download);
+    if ephemeral {
+        // UX-07: --ephemeral — stdin EOF 即优雅退出（3 秒内），测试脚本
+        // 用它杜绝 A 类孤儿。router.serve 跑到 transport 关闭为止；EOF
+        // 信号一到，select 走退出分支，main 返回，进程干净结束。
+        tokio::select! {
+            _ = router.serve(&transport) => {}
+            _ = eof_rx => {
+                println!("--ephemeral: stdin 关闭，daemon 退出。");
+                // 显式 close endpoint：flush 连接关闭帧，否则 drop 清理
+                // 要数秒（验收限 3 秒内退出）。
+                transport.close().await;
+            }
+        }
+    } else {
+        router.serve(&transport).await;
+    }
     Ok(())
 }
 
