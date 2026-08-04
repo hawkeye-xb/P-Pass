@@ -10,6 +10,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,6 +42,9 @@ import com.hawkeyexb.ppass.ui.JoinedScreen
 import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.ScanScreen
 import com.hawkeyexb.ppass.ui.WelcomeScreen
+import com.hawkeyexb.ppass.update.UpdateInfo
+import com.hawkeyexb.ppass.update.downloadAndInstall
+import com.hawkeyexb.ppass.update.fetchUpdate
 
 private sealed class Screen {
     data object Welcome : Screen()
@@ -80,6 +86,33 @@ fun PPassApp() {
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> if (granted) screen = Screen.Scan }
+
+    // UPD-01: 启动时检查一次更新（静默失败；draft/无 release = 无更新；
+    // 对话框覆盖所有 screen，不打断当前流程）
+    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+    LaunchedEffect(Unit) {
+        updateInfo = fetchUpdate(BuildConfig.VERSION_NAME)
+    }
+    updateInfo?.let { info ->
+        AlertDialog(
+            onDismissRequest = { updateInfo = null },
+            title = { Text("发现新版本 v${info.version}") },
+            text = {
+                Text(
+                    if (info.notes.isBlank()) "是否下载并安装？" else info.notes.take(200)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    downloadAndInstall(context, info.url)
+                    updateInfo = null
+                }) { Text("下载安装") }
+            },
+            dismissButton = {
+                TextButton(onClick = { updateInfo = null }) { Text("以后再说") }
+            },
+        )
+    }
 
     when (val s = screen) {
         is Screen.Welcome -> WelcomeScreen(onScan = {
