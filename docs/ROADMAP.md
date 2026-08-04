@@ -324,6 +324,15 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
 
+- [ ] UX-07 daemon --ephemeral — **code landed 2026-08-05 (PR #41)**:
+      test/script mode: stdin EOF exits the whole daemon in <3s (oneshot
+      from the stdin reader loop, tokio::select! vs router.serve, explicit
+      endpoint close to flush frames — drop cleanup alone is ~6s). No
+      flag = unchanged (EOF still only drops console confirm to IPC-only,
+      launchd residency intact). dogfood-smoke.sh switched to --ephemeral
+      + FIFO stdin (cleanup closes write end → self-exit + wait, replaces
+      kill). EOF→exit 2.37s measured; full dogfood-smoke ALL GREEN with
+      zero daemons left after run; fmt/clippy clean.
 - [ ] UX-01 备份中可暂停 — **code landed 2026-08-05 (PR #35)**: backup
       button becomes 暂停 while busy and stays clickable — tap cancels the
       current batch (BackupUiStateHolder tracks the job; BackupRunner push
@@ -342,7 +351,6 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       ppass.backup.failed; strings en/zh symmetric. android 49/49.
       Device acceptance (mock failure → notification appears; all-success
       → zero notifications via dumpsys) pending real phone.
-- [ ] UX-07 daemon ephemeral 模式（未开工）
 - [ ] UX-03 后台规则一行+极简设置 — **code landed 2026-08-05 (PR #37)**:
       backup page gets one rule line ("插电+WiFi 时自动备份，无需打开
       App") + two switches (仅充电 / 仅 WiFi). BackupSettings persists
