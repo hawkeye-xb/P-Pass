@@ -284,7 +284,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       switch saves + rescheduleAutoBackup (REPLACE — KEEP never updates
       existing constraints). android 52/52. Device acceptance (dumpsys
       jobscheduler constraints follow the switches) pending real phone.
-- [ ] UX-04 「已直连」徽章降级 — **code landed 2026-08-05 (PR 待建)**:
+- [ ] UX-04 「已直连」徽章降级 — **code landed 2026-08-05 (PR #38)**:
       desktop header badge now shows service state only (运行中 /
       后台服务未运行) — the connection state (直连/中继) is gone from the
       badge: ONLINE_DIRECT is the state machine's default, showing it as
