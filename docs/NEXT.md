@@ -28,17 +28,83 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 3. 手机：装 apk（允许"未知来源"）→ 扫码 → 首次备份
 4. **每个卡点/看不懂的提示记下来**，丢回主会话，逐条立卡——这就是 H-10b 的产出
 
-## 三、这一轮交付的 review 状态（2026-08-04 深夜）
+## 三、这一轮交付的 review 状态（2026-08-05 晚，第二批四交付已审）
 
 | 交付 | 裁决 |
 |---|---|
-| OPS-01 workers 部署 | ✅ PASS（验收人独立四发 curl：健康 200/非法批 400/错路径 404/rendezvous ok）|
-| E2E-01 | ✅ 已合并（正反证 run 经 API 核实；nightly+tag 并行+label，不阻塞 release）|
-| REL-01 | ⚠️ 一处返工：`tools/bump-version.sh` 三处 `sed -i ''` 是 macOS 专属，Linux 必炸——改便携写法（`sed -i.bak … && rm ….bak` 或探测 OS），其余全过即合 |
-| UPD-01 | ⚠️ **需返工**（密钥纪律✅干净：私钥三层扫描无泄露、公钥两处逐字节一致、secret 只在 step env）。两个 blocker：①i18n 捆绑字典又漂移（加了 ui.update_* 没同步 Android 副本，DiagTestT 实跑红——与 t042b 同款病，CI 会拦）；②Android downloadAndInstall 主线程跑网络必抛 NetworkOnMainThread 且被吞——"下载安装"点了没反应。另修：App.svelte 404 时误报"更新失败"横幅（应静默）、npx @tauri-apps/cli pin 版本、manifest 无 darwin 条目（桌面接了线收不到更新，挂账已诚实注明）、ROADMAP 文案对齐现状、desktop 端到端篡改反证补做 |
+| REL-01 返工 | ✅ **已合并**（b3e5e87：三处 sed 全改 `-i.bak && rm`，bash -n 过）|
+| DOG-02 | ✅ **已合并**（代码侧 PASS：四级回退链 resolveActivity 过滤、ON_RESUME 刷新、全不可用静默；**真机验收挂起**——手机上是在用的 release 签名包，装 debug 必须卸载，验收人裁决不动用户环境，挂到下个签名 test tag 我跑 dumpsys 正反证）。分支 CI 红已查实为偶发：Rust 树与绿基点 0aae850 逐字节相同 + 本地复跑 193/193 绿 |
+| DAE-01 | ❌ **返工**（见下 DAE-01b 卡，blocker 级）|
+| DOG-01 | ❌ **返工**（见下 DOG-01b 卡，blocker 级）|
+| UPD-01 | ⚠️ 返工中（前轮裁决不变）：①i18n 捆绑字典漂移（Android 副本没同步，DiagTestT 红）；②Android downloadAndInstall 主线程网络异常被吞。另修：App.svelte 404 静默、npx pin、manifest darwin 挂账注明、ROADMAP 文案、desktop 篡改反证 |
 | H-10a-fix | ❌ 未交付，卡仍挂 |
+| OPS-01 / E2E-01 | ✅ 前轮已合（存档见 git 历史）|
+
+### DAE-01b 返工卡（阻塞 DAE-01 验收，级别 L2）
+
+```
+## DAE-01b daemon 单实例握手修复  级别 L2
+背景：DAE-01 主体架构正确（probe→版本握手→newest wins，Equal 退位
+  防 launchd 重拉死循环），但有一个生产必现 blocker + 一个版本口径缺口。
+blocker①（token 错位）：main.rs 用本实例新生成的 rand_token() 去探测
+  前任，而前任只认它自己启动时写进 data_dir/ipc.token 的 token——
+  生产上 probe 必然认证失败断连 → peer_call 返回 None → 误判死 socket
+  → remove_file 抢绑。后果：旧 daemon 没死、挂在已 unlink 的 socket 上
+  变幽灵（占库锁和 iroh endpoint），比 unlink-before-bind 更糟。
+  测试没抓到是因为 dae_flow.rs 两实例共享写死的 [7u8;32]。
+  修法：claim_single_instance 探测前先读现存 data_dir/ipc.token
+  （前任的 token）用它握手；claim 成功后才生成/写入自己的 token。
+blocker②（版本口径）：CARGO_PKG_VERSION 不含 test 后缀——test.7 和
+  test.8 的 daemon 都自报 0.2.0 → Equal → 新包退位，狗粮周换 test 包
+  接管永不触发。修法（二选一，PR 里说明取舍）：
+  a) release.yml 构建时把完整 tag 注入（如 build.rs 读 PPF_BUILD_VERSION
+     env 落 option_env!，version_cmp 已支持 -test.N 数字段则需扩展：
+     同核心时比较预发布数字段，test.8 > test.7）；
+  b) 流程规定每个 test tag 前必跑 bump-version.sh（REL-01 工具），
+     Cargo 版本严格递增。
+不准动：Equal → StandDown 语义（防同版本互踢循环）；IPC 七方法契约。
+可执行验收：①集成测试改为两实例各自独立 token + 前任 token 落
+  ipc.token 文件（复现生产时序），newer 接管/equal 退位仍过；
+  ②反证：故意让新实例用随机 token 探测 → 必须得到 StandDown 或
+  显式"auth failed"处理路径，绝不 Proceed 抢绑（贴测试输出）；
+  ③blocker② 选 a 则加 version_cmp("0.2.0-test.8","0.2.0-test.7")
+  == Greater 的测试；选 b 则在 RELEASING.md 写明并给 bump 演示输出。
+证据：测试输出 + 关键代码段。
+收尾：走 PR 等 review。
+```
+
+### DOG-01b 返工卡（阻塞 DOG-01 验收，级别 L2）
+
+```
+## DOG-01b 三元组口径修复  级别 L2
+背景：DOG-01 的 daemon 侧（list_device_watermarks SQL 视图 + IPC
+  device.watermarks + 两条测试）已过可保留；手机端三元组口径错误。
+blocker（增量当全量）：tripletOf 拿 scanSince(watermark) 增量运行的
+  offered/ingested 当 N/M——手机 100 张备完后新拍 5 张，第二次备份后
+  UI 显示「手机 5 张 · 已备份 5」。恒真三元组变假话。
+修法（按原卡架构预留实现，不许再绕）：
+  ①状态缓存表 key=(hash, remote_id)，落 per-remote 目录——记录哪些
+    本地资产已被哪个 remote 确认（备份成功即写入；不依赖单次运行报告）；
+  ②N = 当前扫描范围全量 count（MediaStore COUNT 查询，便宜，不需要
+    重 hash）；M = 缓存表中该 remote 已确认条数；K = N − M clamp ≥ 0；
+  ③exist-check 校准：备份运行时复用 manifest「给 hashes 回 missing」
+    语义（只查不传）——daemon 回 duplicates/missing 时同步修正缓存表
+    （处理"电脑端库被删/换库"的漂移）。增量扫描省 hash 的优化保留。
+可执行验收：①单测：模拟两次运行（全量 100 → 增量 5）→ 三元组必须是
+  N=105 M=105，不是 N=5（这条就是本次 bug 的回归测试）；②三星实测：
+  备份→杀 App 重开不归零、新拍两张重开 K=2；③断网重开显示缓存值；
+  ④`ipc device.watermarks` 与 sqlite 直查一致（daemon 侧保留项复验）。
+反证：清空状态缓存表 mock exist-check 全 missing → K 必须 = N（贴输出）。
+证据：单测输出 + 真机截图（真机部分若设备不在，明确标"挂验收人"）。
+收尾：走 PR 等 review。
+```
 
 ## 四、狗粮周阻塞卡（产品档案 §三之五 f 裁决：不落则狗粮周作废）
+
+> **当前队列顺序（2026-08-05 晚更新）**：DAE-01b → DOG-01b →
+> DOG-03 → UPD-01 返工 → UX-01..07。DOG-01/DAE-01 原卡代码留在
+> 各自分支上，返工在原分支继续（不开新分支）。DOG-02/REL-01 已合，
+> 不要重复做。
 
 > 产品输入：docs/product/2026-08-04-experience-gaps.md + dogfood-week-cases.md。
 > 全部按 task-card-template.md，可直接转发云端 agent。
@@ -117,10 +183,31 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 收尾：走 PR 等 review。
 ```
 
-**尽量项**（不阻塞开跑，能落几张落几张——原文见产品档案 §五候选池）：
-备份中可暂停、失败通知（成功沉默）、后台规则说明+极简设置、
-「已直连」徽章降级、folder.set 诚实化、移动端暂停/断开、
-daemon ephemeral 模式、桌面壳新页面一律走 M3 改版 IA 不堆单页。
+### 尽量项轻量卡（阻塞队列+返工清空后按序做；共用规则：走 PR、
+### 证据照模板、产品语义以 docs/product/2026-08-04-experience-gaps.md 为准）
+
+- **UX-01 备份中可暂停**（L1，移动端）：备份进行中按钮变「暂停」，暂停
+  即中断当前批（幂等管线保安全），再点续传。验收：三星实测暂停→续传
+  收敛缺 0；反证：暂停后 sqlite 无半条 asset 记录。
+- **UX-02 失败通知，成功沉默**（L1，移动端）：批次有失败才发系统通知
+  （「N 张照片没备份成功，打开看看」），点开落在失败清单；成功零通知。
+  验收：mock 一张失败→通知出现；全成功→零通知（贴 dumpsys notification）。
+- **UX-03 后台规则一行+极简设置**（L1，移动端）：备份页一句「插电+WiFi
+  时自动备份，无需打开 App」+ 设置两开关（仅充电/仅 WiFi，写 WorkManager
+  约束）。验收：改开关后 dumpsys jobscheduler 约束随之变化（贴对照）。
+- **UX-04 「已直连」徽章降级**（L0，桌面）：顶部徽章只说服务态
+  （运行中/已停止）——现状 OnlineDirect 是状态机默认值，是假话
+  （产品档案 §二事实核查）。连接状态归属未来设备行，本卡只做降级。
+  验收：徽章文案不再出现「直连」字样。
+- **UX-05 folder.set 诚实化**（L0，桌面）：改库位置的确认文案如实说
+  「重启后生效；已有照片不会迁移」。验收：文案截图。
+- **UX-06 移动端「暂停自动备份」+「断开连接」**（L1）：设置里全局暂停
+  开关（取消周期任务）+ 断开配对（清 pairing/watermark/状态缓存，
+  警示页照产品档案 §二移动端 1 的告知清单）。验收：断开后 daemon 端
+  hello 仍被 authz 拒；重扫码可重建。
+- **UX-07 daemon ephemeral 模式**（L1）：`--ephemeral` 或 stdin EOF 即退，
+  测试脚本用它杜绝 A 类孤儿。验收：起进程关 stdin → 3 秒内退出；
+  dogfood 脚本切换到该模式。
 
 ## 五、发布链路（更新）
 
