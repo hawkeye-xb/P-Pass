@@ -12,9 +12,11 @@
 //       写入，不依赖单次运行报告）；
 //   K = N - M clamp ≥ 0。
 // 状态缓存 key=(hash, remote_id)，落 per-remote 目录（filesDir/
-// backup-state/<remoteId>/）；备份运行时用 manifest「给 hashes 回
-// missing」语义（只查不传）校准：missing → 从缓存移除（处理电脑端库被
-// 删/换库的漂移），其余候选（daemon 已确认存在）→ 加入缓存。
+// backup-state/<remoteId>/）；备份 commit 成功后本次候选全部加入缓存。
+// 漂移校准（电脑端库被删/换库）与备份运行解耦：单独对缓存 hash 集做
+// 只查不传的 exist-check（manifest「给 hashes 回 missing」语义，
+// 不 push 不 commit），missing → 从缓存移除。触发时机：App 打开或
+// 备份前，daemon 可达才跑，不可达跳过（三元组显示缓存值）。
 package com.hawkeyexb.ppass.backup
 
 import java.io.File
@@ -43,6 +45,19 @@ fun tripletOf(n: Long, confirmedCount: Long, lastSuccessAt: Long): BackupTriplet
         lastSuccessAt = lastSuccessAt,
     )
 
+/** DOG-01c: 一次成功 commit 后，本次候选**全部**确认。
+ *
+ *  [BackupReport.missing] 是**上传前** manifest 应答的缺失集合——这些文件
+ *  随后被上传且 commit 成功，duplicates 与刚 ingested 的都在 daemon 库中，
+ *  因此减项 = ∅。
+ *  （回归：DOG-01b 旧实现 confirmed = allHashes − missing，把刚上传成功
+ *  的照片从缓存删掉——首次全量备份 100 张成功后 M=0 且永远为 0。）
+ *  漂移校准（电脑端库被删/换库）由独立的 exist-check 负责
+ *  （[ConfirmedStore.removeMissing]），不挂在备份运行上。
+ */
+fun confirmedAfterCommit(candidates: List<Candidate>, report: BackupReport): Set<String> =
+    candidates.mapTo(mutableSetOf()) { it.hash }
+
 /** 一个 remote 的确认状态（崩溃安全持久化，tmp + rename）。 */
 @Serializable
 data class ConfirmedState(
@@ -55,8 +70,10 @@ data class ConfirmedState(
 /**
  * 状态缓存表 key=(hash, remote_id)——每 remote 一个目录：
  * `filesDir/backup-state/<remoteId>/confirmed.json`。
- * 备份成功后调用 [recordRun]：missing 从缓存移除（电脑端库被删/换库的
- * 漂移），其余候选（daemon 已确认存在，含 duplicates）加入缓存。
+ * 备份成功（commit 落地）后调用 [recordRun]：本次候选全部加入缓存
+ * （duplicates 与刚 ingested 的都在 daemon 库）。
+ * 漂移校准（电脑端库被删/换库）用 [removeMissing]：对缓存 hash 集做
+ * 只查不传的 exist-check，问出 daemon 已无的 hash 并从缓存移除。
  */
 class ConfirmedStore(private val dir: File) {
     private val file = File(dir, "confirmed.json")
@@ -77,13 +94,32 @@ class ConfirmedStore(private val dir: File) {
     /** 最后成功备份时间（0 = 从未成功）。 */
     fun lastSuccessAt(): Long = load().lastSuccessAt
 
-    /** 一次成功运行后同步缓存。幂等：重复传入同一 hash 集合无副作用。 */
-    fun recordRun(confirmed: Set<String>, missing: Set<String>, lastSuccessAt: Long) {
+    /** 一次成功运行后同步缓存：本次候选全部确认。幂等：重复传入同一
+     *  hash 集合无副作用。 */
+    fun recordRun(confirmed: Set<String>, lastSuccessAt: Long) {
         val cur = load()
-        val next = ConfirmedState(
-            confirmed = (cur.confirmed + confirmed) - missing,
-            lastSuccessAt = lastSuccessAt,
+        persist(
+            ConfirmedState(
+                confirmed = cur.confirmed + confirmed,
+                lastSuccessAt = lastSuccessAt,
+            )
         )
+    }
+
+    /** DOG-01c: 漂移校准——exist-check 问出 daemon 已无此库的 hash
+     *  （电脑端库被删/换库）从缓存移除；保留 lastSuccessAt 原值。 */
+    fun removeMissing(missing: Set<String>) {
+        if (missing.isEmpty()) return
+        val cur = load()
+        persist(
+            ConfirmedState(
+                confirmed = cur.confirmed - missing,
+                lastSuccessAt = cur.lastSuccessAt,
+            )
+        )
+    }
+
+    private fun persist(next: ConfirmedState) {
         dir.mkdirs()
         val tmp = File(dir, "confirmed.json.tmp")
         tmp.writeText(json.encodeToString(ConfirmedState.serializer(), next))

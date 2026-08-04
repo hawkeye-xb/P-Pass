@@ -38,6 +38,29 @@ class BackupUiStateHolder(
     init {
         // 启动即算一次（MediaStore COUNT 便宜；扫描在 IO 线程）。
         scope.launch { refreshTriplet() }
+        // DOG-01c: App 打开即做一次漂移校准（daemon 可达才跑，不可达跳过）。
+        scope.launch { calibrateFromDaemon() }
+    }
+
+    /** DOG-01c: 漂移校准——电脑端库被删/换库时，缓存里的旧 hash 已不在
+     *  daemon。用只查不传的 exist-check 问出 missing 并从缓存移除。
+     *  daemon 不可达/未配对 → 跳过（三元组显示缓存值，不归零不崩）。 */
+    private suspend fun calibrateFromDaemon() {
+        try {
+            val cached = withContext(Dispatchers.IO) { confirmedStore.load().confirmed }
+            if (cached.isEmpty()) return
+            withContext(Dispatchers.IO) { client.bind(identity.secretKey()) }
+            val daemon = parsePeerAddrToken(pairing.daemonAddrToken)
+            val missing = withContext(Dispatchers.IO) {
+                BackupRunner(client).existCheck(daemon, cached)
+            }
+            if (missing.isNotEmpty()) {
+                withContext(Dispatchers.IO) { confirmedStore.removeMissing(missing) }
+                refreshTriplet()
+            }
+        } catch (_: Throwable) {
+            // 不可达/未配对/超时——保留缓存值，下次再校准。
+        }
     }
 
     /** N=全量 count，M=确认缓存，K=N-M——随时可算（含断网/从未备份）。 */
@@ -69,6 +92,9 @@ class BackupUiStateHolder(
     }
 
     private suspend fun runBackup() {
+        // DOG-01c: 备份前先做一次漂移校准（只查不传；daemon 不可达则跳过）。
+        calibrateFromDaemon()
+
         val watermarks = WatermarkStore(context.filesDir)
         val since = watermarks.load()
 
@@ -109,14 +135,14 @@ class BackupUiStateHolder(
 
         // Watermark only advances after a committed run (T-053 semantics).
         withContext(Dispatchers.IO) { watermarks.save(scan.nextWatermark) }
-        // DOG-01b: 同步确认缓存——manifest 回 missing 的从缓存移除
-        // （电脑端库被删/换库的漂移），其余候选（daemon 已确认存在）
-        // 加入缓存；三元组 N/M/K 由「全量 count + 缓存」重算。
-        val allHashes = candidates.map { it.hash }.toSet()
+        // DOG-01c: commit 成功后本次候选**全部**确认——report.missing 是
+        // 上传前 manifest 应答的缺失集合，commit 成功后这些文件已在库，
+        // 不参与减项（回归：旧实现 confirmed = allHashes − missing 会把
+        // 刚上传成功的照片从缓存删掉，首次全量备份后 M=0 且永远为 0）。
+        // 漂移校准由独立的 exist-check（calibrateFromDaemon）负责。
         withContext(Dispatchers.IO) {
             confirmedStore.recordRun(
-                confirmed = allHashes - report.missing,
-                missing = report.missing,
+                confirmed = confirmedAfterCommit(candidates, report),
                 lastSuccessAt = System.currentTimeMillis(),
             )
         }
