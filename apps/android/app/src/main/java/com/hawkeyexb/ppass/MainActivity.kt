@@ -48,6 +48,7 @@ import com.hawkeyexb.ppass.backup.pauseAutoBackup
 import com.hawkeyexb.ppass.backup.resumeAutoBackup
 import com.hawkeyexb.ppass.backup.BACKUP_WORK_NAME
 import com.hawkeyexb.ppass.backup.WatermarkStore
+import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
@@ -312,6 +313,14 @@ fun PPassApp() {
                                     // daemon 端已撤销（unpaired）或不可达（peer 解析
                                     // 失败——本地照清，重扫用新 token 走 rejoin 门）。
                                     pairings.clear()
+                                    // UX-06b: 断开同时清该 remote 的确认缓存
+                                    // （backup-state/<daemonNodeId>/）——重配对到
+                                    // 同一台电脑后 M 从 0 重新计数，不沿用旧缓存
+                                    // （电脑端删过库时 M 虚高，首屏是错的）。
+                                    clearConfirmedCacheForRemote(
+                                        context.filesDir,
+                                        s.pairing.daemonNodeId,
+                                    )
                                     WatermarkStore(context.filesDir).save(0)
                                     AutoBackupPrefs(context.filesDir).setPaused(false)
                                     WorkManager.getInstance(context)
