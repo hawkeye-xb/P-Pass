@@ -33,7 +33,7 @@
     <string name="safe_detail">新存 %1$d 张。</string>
     <string name="safe_detail_dup">新存 %1$d 张，%2$d 张原本就在。</string>
     <string name="backup_now">立即备份</string>
-    <string name="backing_up">备份中…</string>
+    <string name="backup_pause">暂停</string>
     <string name="no_cloud">照片直接传回自己家的电脑，不经过任何云端。</string>
     <!-- DOG-01: 恒真三元组 -->
     <string name="dog_triplet_line">手机 %1$d 张 · 已备份 %2$d · 待备份 %3$d</string>
