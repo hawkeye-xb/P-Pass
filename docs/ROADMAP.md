@@ -197,6 +197,20 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       (assembleRelease; signed version T-071 follow-up), both added to
       Release draft assets; H-10b naive-user test pending tag-build
       acceptance
+- [ ] UPD-01 self-update channel — **code landed 2026-08-04 (PR #30)**:
+      release.yml emits tauri-style manifest.json (compose via
+      tools/make-update-manifest.mjs — sha256 + Ed25519 signatures,
+      gated on UPDATE_SIGNING_KEY, uploaded as release asset; notes
+      mark unsigned when key absent) + android self-update flow
+      (fetch manifest from release latest/download → semver compare →
+      dialog → download → FileProvider → system PackageInstaller
+      same-signature check; no embedded pubkey needed — system enforces
+      it) — UpdateCheckerTest 6/6, full android suite 55/55 green.
+      **Needs user (UPD-01 preamble)**: generate Ed25519 keypair →
+      private seed (base64) into secret UPDATE_SIGNING_KEY + public key
+      into update.rs OFFICIAL_PUBLIC_KEY & tauri.conf pubkey — command
+      in PR #30 description. Desktop tauri-plugin-updater wiring lands
+      after the public key exists
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜

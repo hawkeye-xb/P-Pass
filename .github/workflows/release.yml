@@ -366,6 +366,7 @@ jobs:
       # 只放布尔（不含 secret 值）：job 级 env 会暴露给本 job 每个第三方
       # action 的进程环境——secret 本体下沉到 VT step（Apple secrets 同款模式）。
       HAS_VT: ${{ secrets.VT_API_KEY != '' }}
+      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -389,6 +390,7 @@ jobs:
           构建自 \`${GITHUB_SHA::7}\` · $(date -u +%FT%TZ)
 
           **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（无凭据路径跳过）/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || 'yes' }}（keystore 签名）
+          **更新 manifest**：UPDATE_SIGNING_KEY 未设置 → manifest.json 未签名（signature 空，客户端系统签名校验兜底——Android PackageInstaller 强制同签名）
 
           ### 面向人类的资产（H-10c）
           - **P-Pass-macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
@@ -433,6 +435,34 @@ jobs:
             | jq -r .data.id)
           echo "VirusTotal 分析 ID: $ID（草稿发布后见扫描结果链接）" >> NOTES.md
 
+      # ── UPD-01: tauri-style update manifest (compose → optional sign) ──
+      # 客户端（desktop updater / android 自研流）读 release 资产直链
+      # manifest.json；UPDATE_SIGNING_KEY 到位后签名（Ed25519, base64 32B
+      # seed，@tauri-apps/cli signer 同款格式），无凭据路径 signature 留空
+      # + notes 标注。签名密钥由用户生成（命令见 UPD-01 PR 描述）。
+      - name: Compose update manifest (UPD-01)
+        run: |
+          set -euo pipefail
+          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
+          node tools/make-update-manifest.mjs \
+            --tag "$TAG" --notes NOTES.md \
+            --asset darwin-aarch64=artifacts/macos-arm64/P-Pass-macos-arm64.dmg \
+            --asset android-arm64="artifacts/android/$APK"
+          mv manifest.json artifacts/manifest.json
+
+      - name: Sign update manifest (UPD-01, gated)
+        if: env.HAS_UPDATE_KEY == 'true'
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/uassets
+          cp artifacts/macos-arm64/P-Pass-macos-arm64.dmg /tmp/uassets/
+          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
+          cp "artifacts/android/$APK" /tmp/uassets/
+          node tools/make-update-manifest.mjs \
+            --sign artifacts/manifest.json --asset-dir /tmp/uassets
+
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -449,7 +479,8 @@ jobs:
           ASSETS="macos-arm64/ppass-macos-arm64.zip macos-arm64/SHA256SUMS-macos-arm64 \
             macos-arm64/P-Pass-macos-arm64.dmg \
             windows-x64/daemon.exe windows-x64/testclient.exe \
-            windows-x64/SHA256SUMS-windows-x64 windows-x64/BUILD_INFO-windows-x64"
+            windows-x64/SHA256SUMS-windows-x64 windows-x64/BUILD_INFO-windows-x64 \
+            manifest.json"
           # 无凭据路径只产出 unsigned；有凭据路径产出 signed（unsigned 无）。
           if [ -f android/app-release.apk ]; then
             ASSETS="$ASSETS android/app-release.apk"
