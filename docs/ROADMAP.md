@@ -268,7 +268,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       (Samsung pause→resume converges to 0 missing; counterproof: sqlite
       has no half-written asset rows — guaranteed by ingest-at-commit)
       pending real phone.
-- [ ] UX-02 失败通知，成功沉默 — **code landed 2026-08-05 (PR 待建)**:
+- [ ] UX-02 失败通知，成功沉默 — **code landed 2026-08-05 (PR #36)**:
       auto backup (BackupWorker) posts a system notification only when a
       batch fails ("N 张照片没备份成功，打开看看", N = batch offered
       count, tap opens MainActivity); success stays silent (FGS
