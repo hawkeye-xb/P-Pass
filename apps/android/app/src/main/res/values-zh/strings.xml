@@ -34,6 +34,9 @@
     <string name="safe_detail_dup">新存 %1$d 张，%2$d 张原本就在。</string>
     <string name="backup_now">立即备份</string>
     <string name="backing_up">备份中…</string>
+    <!-- UX-02: 失败通知（成功保持沉默） -->
+    <string name="notif_backup_failed_title">照片备份没成功</string>
+    <string name="notif_backup_failed_body">%1$d 张照片没备份成功，打开看看</string>
     <string name="no_cloud">照片直接传回自己家的电脑，不经过任何云端。</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">后台保护未开启</string>

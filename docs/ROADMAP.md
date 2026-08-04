@@ -256,6 +256,27 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] r/selfhosted post, open-source announcement
 - [ ] **Kill line: no exponential signal in 3 months → stop** (pre-agreed)
 
+## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
+
+- [ ] UX-01 备份中可暂停 — **code landed 2026-08-05 (PR #35)**: backup
+      button becomes 暂停 while busy and stays clickable — tap cancels the
+      current batch (BackupUiStateHolder tracks the job; BackupRunner push
+      loop got a cooperative ensureActive() cancel point). Idempotent
+      pipeline makes interruption safe: no commit, watermark not advanced,
+      next run re-offers everything and dedups. strings en/zh symmetric
+      (backing_up → backup_pause). android 49/49. Device acceptance
+      (Samsung pause→resume converges to 0 missing; counterproof: sqlite
+      has no half-written asset rows — guaranteed by ingest-at-commit)
+      pending real phone.
+- [ ] UX-02 失败通知，成功沉默 — **code landed 2026-08-05 (PR 待建)**:
+      auto backup (BackupWorker) posts a system notification only when a
+      batch fails ("N 张照片没备份成功，打开看看", N = batch offered
+      count, tap opens MainActivity); success stays silent (FGS
+      notification auto-dismissed on completion). Dedicated channel
+      ppass.backup.failed; strings en/zh symmetric. android 49/49.
+      Device acceptance (mock failure → notification appears; all-success
+      → zero notifications via dumpsys) pending real phone.
+
 ## Standing debts / 挂账
 
 - [ ] PPF_ADVERTISE_ADDR (QR carries LAN IP at boot on cloud boxes)

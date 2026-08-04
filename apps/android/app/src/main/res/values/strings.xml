@@ -38,6 +38,9 @@
     <string name="safe_detail_dup">%1$d new photos arrived home, %2$d were already there.</string>
     <string name="backup_now">Back up now</string>
     <string name="backing_up">Backing up…</string>
+    <!-- UX-02: 失败通知（成功保持沉默） -->
+    <string name="notif_backup_failed_title">Backup didn\'t finish</string>
+    <string name="notif_backup_failed_body">%1$d photos didn\'t make it home — open to see</string>
     <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">Background protection off</string>
