@@ -1,0 +1,71 @@
+# E2E-01: android live scenarios (android-hello/pair/backup) in CI.
+# 防协议回归：Kotlin 侧走真实 iroh-ffi 栈（linux-x86-64 natives 在 Maven
+# jar 内，无需模拟器），连一个临时 release daemon，断言
+# HELLO OK / PAIR OK / BACKUP OK 三行（12/12 指标见剧本脚本输出）。
+#
+# 运行时机（E2E-01 卡面规定）：
+#   - 必须跑：nightly 定时（schedule）+ 每个 release tag 的产物构建前门禁
+#     （被 release.yml 以 reusable workflow 调用，构建 job needs 本 workflow）
+#   - 选择性：PR 打 e2e label，或手动 dispatch
+#   - 每 commit 不跑（PR 常规 push 不触发本 workflow）
+
+name: E2E live scenarios
+
+on:
+  workflow_call:
+  schedule:
+    - cron: "30 3 * * *"
+  pull_request:
+    branches: [main]
+    types: [labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: android live (hello/pair/backup)
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    # PR 只有打了 e2e label 才跑（labeled 事件但 label 不在 = 移除，跳过）
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: e2e-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # 抄 scenarios job：daemon release 构建需要 libheif-dev（vendored
+      # 编译）+ HEVC 解码插件；ffmpeg 供视频首帧测试。ubuntu-latest runner
+      # 自带 Android SDK，JVM 测试无需额外安装。
+      - name: System codecs (libheif + HEVC plugin, ffmpeg)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+
+      - name: Setup Java (17)
+        uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4
+
+      - name: Build release daemon
+        run: cargo build --release -p daemon
+
+      # 三剧本 = T-051/T-052/T-054 live 验收脚本：起临时 daemon（127.0.0.1
+      # 随机端口，无 relay），JVM 测试经真实 iroh-ffi 栈连它。
+      - name: Run android live scenarios
+        run: |
+          bash tools/android-hello.sh
+          bash tools/android-pair.sh
+          bash tools/android-backup.sh

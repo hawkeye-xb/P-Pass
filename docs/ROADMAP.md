@@ -197,6 +197,15 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       (assembleRelease; signed version T-071 follow-up), both added to
       Release draft assets; H-10b naive-user test pending tag-build
       acceptance
+- [ ] E2E-01 android live scenarios in CI — **code landed 2026-08-04
+      (PR #28)**: .github/workflows/e2e.yml — nightly cron (03:30 UTC) +
+      release-tag pre-build gate (reusable call from release.yml, the
+      three build jobs `needs: [e2e]`) + PR e2e label / manual
+      dispatch; every-commit never triggers. android hello/pair/backup
+      scripts tightened to PPF_BIND_ADDR=127.0.0.1:0; iroh Maven jar
+      confirmed to carry linux-x86-64 natives (JVM tests need no
+      simulator); local run 3/3 OK (HELLO/PAIR/BACKUP), both workflows
+      actionlint-clean — acceptance pending CI dispatch run
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
