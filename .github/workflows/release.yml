@@ -195,6 +195,12 @@ jobs:
           pnpm --version
 
       - name: Bundle desktop .app + dmg (H-10c)
+        # UPD-01: createUpdaterArtifacts 强制签名——tauri bundle 需要
+        # TAURI_SIGNING_PRIVATE_KEY（UPDATE_SIGNING_KEY，rsign 格式，空密码）。
+        # secret 只进本 step env（T-071b 模式）。
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
           set -euo pipefail
           # ⚠️ dmg 输出到 /tmp/rel/：upload-artifact@v4 按多个 path 的公共
@@ -437,16 +443,17 @@ jobs:
 
       # ── UPD-01: tauri-style update manifest (compose → optional sign) ──
       # 客户端（desktop updater / android 自研流）读 release 资产直链
-      # manifest.json；UPDATE_SIGNING_KEY 到位后签名（Ed25519, base64 32B
-      # seed，@tauri-apps/cli signer 同款格式），无凭据路径 signature 留空
-      # + notes 标注。签名密钥由用户生成（命令见 UPD-01 PR 描述）。
+      # manifest.json；UPDATE_SIGNING_KEY 到位后签名（tauri signer,
+      # minisign hashed 格式），无凭据路径 signature 留空 + notes 标注。
+      # 本卡只出 android-arm64 条目——darwin 需 .app.tar.gz（H-10c 衔接：
+      # createUpdaterArtifacts 的 tar.gz 须在塞 lib/ 后产出，挂账）；windows
+      # 桌面壳待建。签名密钥由用户生成（已 2026-08-04 完成）。
       - name: Compose update manifest (UPD-01)
         run: |
           set -euo pipefail
           APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
           node tools/make-update-manifest.mjs \
             --tag "$TAG" --notes NOTES.md \
-            --asset darwin-aarch64=artifacts/macos-arm64/P-Pass-macos-arm64.dmg \
             --asset android-arm64="artifacts/android/$APK"
           mv manifest.json artifacts/manifest.json
 
@@ -463,11 +470,8 @@ jobs:
           chmod 600 /tmp/ppass-update.key
           APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
           npx -y @tauri-apps/cli signer sign -f /tmp/ppass-update.key -p "" \
-            artifacts/macos-arm64/P-Pass-macos-arm64.dmg
-          npx -y @tauri-apps/cli signer sign -f /tmp/ppass-update.key -p "" \
             "artifacts/android/$APK"
           mkdir -p /tmp/sigs
-          cp artifacts/macos-arm64/*.sig /tmp/sigs/
           cp artifacts/android/*.sig /tmp/sigs/
           node tools/make-update-manifest.mjs \
             --sign artifacts/manifest.json --sig-dir /tmp/sigs

@@ -8,6 +8,12 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 
+// UPD-01: updater plugin（pubkey/endpoints 在 tauri.conf.json；
+// build 期 updater artifact 签名需 TAURI_SIGNING_PRIVATE_KEY——CI 由
+// UPDATE_SIGNING_KEY 提供，本地无 key 路径跳过 .sig 生成）。
+// 注意：tauri-plugin-updater 2.10 的 build() 返回带 Config 的 TauriPlugin，
+// 需内联注册（独立函数标注单参数类型会类型不匹配）。
+
 /// Forward one IPC method. The frontend does the rest.
 #[tauri::command]
 fn daemon_call(method: String, params: Value) -> Result<Value, String> {
@@ -178,6 +184,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             daemon_call,
             daemon_online,
