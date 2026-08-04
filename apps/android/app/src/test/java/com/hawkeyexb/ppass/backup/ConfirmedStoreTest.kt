@@ -1,8 +1,15 @@
-// DOG-01b: 三元组口径回归测试。
-// 回归：增量当全量——全量 100 备完后新拍 5 张，第二次运行后三元组必须
-// 是 N=105 M=105（不是 N=5）。M 来自确认缓存（不依赖单次运行报告）。
+// DOG-01b/DOG-01c: 三元组口径回归测试。
+// 回归①（DOG-01b）：增量当全量——全量 100 备完后新拍 5 张，第二次运行后
+//   三元组必须是 N=105 M=105（不是 N=5）。M 来自确认缓存（不依赖单次运行
+//   报告）。
+// 回归②（DOG-01c）：missing 时序错位——BackupReport.missing 是**上传前**
+//   manifest 应答的缺失集合，commit 成功后这些文件全在库；生产调用链
+//   （candidates + report → confirmedAfterCommit → recordRun）必须把本次
+//   候选全部确认。旧实现 confirmed = allHashes − missing 会把刚上传成功的
+//   照片从缓存删掉（首次全量备份 100 张成功后 M=0 且永远为 0）。
 package com.hawkeyexb.ppass.backup
 
+import java.io.ByteArrayInputStream
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -17,14 +24,45 @@ class ConfirmedStoreTest {
     private fun tempDir(tag: String): File =
         java.nio.file.Files.createTempDirectory("ppass-confirmed-$tag").toFile()
 
+    /** 造一个可被 BackupRunner 报告消费的候选（测试用，不真读内容）。 */
+    private fun candidate(i: Int): Candidate = Candidate(
+        hash = "hash-%05d".format(i),
+        fileName = "photo-$i.jpg",
+        mediaType = "image/jpeg",
+        bytes = 1024,
+        open = { ByteArrayInputStream(ByteArray(0)) },
+    )
+
+    @Test
+    fun first_run_all_missing_pre_upload_then_all_success_m_equals_100() {
+        // DOG-01c 回归测试（卡面验收①）：首次备份 100 张，manifest 上传前
+        // 回 100 条 missing，随后全部上传且 commit 成功 → M 必须 = 100。
+        // 走生产调用链：candidates + report → confirmedAfterCommit →
+        // recordRun（与 BackupUiStateHolder.runBackup / BackupWorker 同款）。
+        val dir = tempDir("dog01c-regression")
+        val store = ConfirmedStore(dir)
+        val candidates = (0 until 100).map { candidate(it) }
+        val report = BackupReport(
+            offered = 100, pushed = 100, ingested = 100, duplicates = 0,
+            missing = candidates.map { it.hash }.toSet(),
+        )
+        store.recordRun(
+            confirmed = confirmedAfterCommit(candidates, report),
+            lastSuccessAt = 1000,
+        )
+        assertEquals("首次全量 100 张全部成功 → M 必须 = 100", 100, store.count())
+        assertEquals(1000L, store.lastSuccessAt())
+        dir.deleteRecursively()
+    }
+
     @Test
     fun two_runs_full_then_incremental_shows_full_totals() {
-        // 本次 bug 的回归测试：模拟两次运行（全量 100 → 增量 5）。
+        // 卡面验收②：两次运行 100→5 ⇒ N=105 M=105（增量当全量回归）。
         val dir = tempDir("regression")
         val store = ConfirmedStore(dir)
 
         // 运行 1：全量 100 张，daemon 全部确认。
-        store.recordRun(confirmed = hashes(100), missing = emptySet(), lastSuccessAt = 1000)
+        store.recordRun(confirmed = hashes(100), lastSuccessAt = 1000)
         // MediaStore 全量 count = 100 → N=100 M=100 K=0。
         var t = tripletOf(n = 100, confirmedCount = store.count().toLong(), lastSuccessAt = store.lastSuccessAt())
         assertEquals(100L, t.n)
@@ -33,7 +71,7 @@ class ConfirmedStoreTest {
 
         // 运行 2：增量扫描只出 5 张新照片（100..104），全量 count = 105。
         val new5 = hashes(105).drop(100).toSet()
-        store.recordRun(confirmed = new5, missing = emptySet(), lastSuccessAt = 2000)
+        store.recordRun(confirmed = new5, lastSuccessAt = 2000)
         t = tripletOf(n = 105, confirmedCount = store.count().toLong(), lastSuccessAt = store.lastSuccessAt())
         assertEquals(
             "N 必须是全量 105，不是增量 offered 5",
@@ -45,16 +83,37 @@ class ConfirmedStoreTest {
     }
 
     @Test
-    fun counterproof_cleared_cache_all_missing_means_k_equals_n() {
-        // 反证：清空状态缓存表 + exist-check 全 missing → M=0，K 必须 = N。
+    fun drift_exist_check_removes_30_of_100() {
+        // 卡面验收③：缓存 100 条、exist-check 回 30 条 missing → M=70。
+        // 漂移校准与备份运行解耦（DOG-01c）：removeMissing 只删 exist-check
+        // 问出 daemon 已无的 hash，保留 lastSuccessAt 原值。
+        val dir = tempDir("dog01c-drift")
+        val store = ConfirmedStore(dir)
+        store.recordRun(confirmed = hashes(100), lastSuccessAt = 42_000)
+        assertEquals(100, store.count())
+
+        // exist-check 回 30 条 missing（电脑端库被删/换库）。
+        store.removeMissing(hashes(100).take(30).toSet())
+        assertEquals("漂移后 M 必须 = 70", 70, store.count())
+        assertEquals("lastSuccessAt 不被漂移校准改写", 42_000L, store.lastSuccessAt())
+
+        val t = tripletOf(n = 100, confirmedCount = store.count().toLong(), lastSuccessAt = store.lastSuccessAt())
+        assertEquals(70L, t.m)
+        assertEquals("K 必须 = 30", 30L, t.k)
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun counterproof_exist_check_all_missing_means_k_equals_n() {
+        // 反证（DOG-01 原卡）：exist-check 响应全 missing（电脑端库整个没了）
+        // → 缓存清空，M=0，K 必须 = N。
         val dir = tempDir("counterproof")
         val store = ConfirmedStore(dir)
 
-        store.recordRun(confirmed = hashes(50), missing = emptySet(), lastSuccessAt = 1)
+        store.recordRun(confirmed = hashes(50), lastSuccessAt = 1)
         assertEquals(50, store.count())
 
-        // 电脑端库被删 → 全 missing → 缓存清空。
-        store.recordRun(confirmed = emptySet(), missing = hashes(50), lastSuccessAt = 2)
+        store.removeMissing(hashes(50))
         assertEquals("全 missing 后缓存必须清零", 0, store.count())
 
         val t = tripletOf(n = 50, confirmedCount = store.count().toLong(), lastSuccessAt = store.lastSuccessAt())
@@ -67,28 +126,11 @@ class ConfirmedStoreTest {
     fun store_survives_reopen_like_app_kill() {
         // 杀 App 重开不归零：新 ConfirmedStore 实例读到同一缓存。
         val dir = tempDir("reopen")
-        ConfirmedStore(dir).recordRun(confirmed = hashes(7), missing = emptySet(), lastSuccessAt = 42_000)
+        ConfirmedStore(dir).recordRun(confirmed = hashes(7), lastSuccessAt = 42_000)
 
         val reopened = ConfirmedStore(dir)
         assertEquals(7, reopened.count())
         assertEquals(42_000L, reopened.lastSuccessAt())
-        dir.deleteRecursively()
-    }
-
-    @Test
-    fun record_run_removes_missing_hashes_drift_calibration() {
-        // 漂移校准：daemon 回 missing 的 hash 从缓存移除（电脑端库被删）。
-        val dir = tempDir("drift")
-        val store = ConfirmedStore(dir)
-        store.recordRun(confirmed = hashes(5), missing = emptySet(), lastSuccessAt = 1)
-        assertEquals(5, store.count())
-
-        // 第二次运行：h1/h2 被 daemon 报 missing（电脑端删了），其余仍在。
-        val confirmed = setOf("hash-00003", "hash-00004")
-        val missing = setOf("hash-00000", "hash-00001", "hash-00002")
-        store.recordRun(confirmed = confirmed, missing = missing, lastSuccessAt = 2)
-        assertEquals("漂移后只剩 daemon 确认的", 2, store.count())
-        assertEquals(2L, store.lastSuccessAt())
         dir.deleteRecursively()
     }
 
@@ -103,7 +145,7 @@ class ConfirmedStoreTest {
         assertEquals(0, store.count())
         assertEquals(0L, store.lastSuccessAt())
         // 恢复写入也不崩。
-        store.recordRun(confirmed = setOf("a"), missing = emptySet(), lastSuccessAt = 7)
+        store.recordRun(confirmed = setOf("a"), lastSuccessAt = 7)
         assertEquals(1, store.count())
         dir.deleteRecursively()
     }

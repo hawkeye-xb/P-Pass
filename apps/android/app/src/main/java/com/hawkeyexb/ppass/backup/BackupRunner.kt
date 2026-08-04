@@ -114,6 +114,27 @@ class BackupRunner(private val client: DaemonClient) {
         )
     }
 
+    /** DOG-01c: 漂移校准的只查不传 exist-check——用缓存 hash 集问 daemon
+     *  「哪些已不在库」（begin + manifest，不 push 不 commit）。返回
+     *  missing 集合；daemon 不可达/未配对时抛错，由调用方跳过
+     *  （三元组显示缓存值，不归零不崩）。 */
+    suspend fun existCheck(daemon: PeerAddrParts, hashes: Set<String>): Set<String> =
+        withContext(Dispatchers.IO) {
+            callOk(daemon, Methods.BACKUP_BEGIN, buildJsonObject {})
+            val manifest = BackupManifest(
+                hashes = hashes.toList(),
+                items = emptyList(),
+                provider = null,
+            )
+            val resp = callOk(
+                daemon, Methods.BACKUP_MANIFEST,
+                ProtoJson.encodeToJsonElement(BackupManifest.serializer(), manifest),
+            )
+            ProtoJson.decodeFromJsonElement(
+                BackupMissing.serializer(), resp.result!!
+            ).hashes.toSet()
+        }
+
     private suspend fun pushFile(conn: Connection, c: Candidate) {
         val bi = conn.openBi()
         val send = bi.send()

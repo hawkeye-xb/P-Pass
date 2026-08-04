@@ -70,13 +70,24 @@ async fn start(dir: &std::path::Path, tag: &str) -> (Db, Pairing, String, String
             let _ = ipc.serve(&socket, token).await;
         }
     });
-    // Wait for the socket to exist (serve binds asynchronously).
-    for _ in 0..100 {
-        if dir.join("ipc.token").exists() {
+    // Wait for the socket to accept connections. serve() writes the
+    // token file BEFORE binding the socket (ipc.rs), so waiting on the
+    // file alone can race the bind — a fast connect then hits ENOENT
+    // under parallel load. Poll the connect itself; an empty probe
+    // connection is a no-op for the server (read EOF → drop).
+    let name = socket.clone().to_ns_name::<GenericNamespaced>().unwrap();
+    let mut bound = false;
+    for _ in 0..200 {
+        if interprocess::local_socket::tokio::Stream::connect(name.clone())
+            .await
+            .is_ok()
+        {
+            bound = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    assert!(bound, "socket {socket} never became connectable");
     let _ = ipc;
     (db, pairing, socket, token_hex)
 }

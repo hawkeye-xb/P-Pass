@@ -22,6 +22,7 @@ import androidx.work.WorkerParameters
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairingStore
+import com.hawkeyexb.ppass.transport.PeerAddrParts
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -72,11 +73,7 @@ class BackupWorker(
         // its segment even if the user leaves.
         setForeground(foregroundInfo())
 
-        val watermarks = WatermarkStore(ctx.filesDir)
-        val scan = MediaScanner(ctx.contentResolver).scanSince(watermarks.load())
-        if (scan.items.isEmpty()) return Result.success()
-
-        // DOG-01b: 自动备份也同步确认缓存（M 口径一致，不能只靠手动备份）。
+        // DOG-01c: 自动备份也走同一确认缓存（M 口径一致，不能只靠手动备份）。
         val confirmedStore = ConfirmedStore(
             File(ctx.filesDir, "backup-state/${pairing.daemonNodeId}")
         )
@@ -84,6 +81,15 @@ class BackupWorker(
         val client = DaemonClient()
         return try {
             client.bind(IdentityStore(ctx.filesDir).secretKey())
+            val daemon = parsePeerAddrToken(pairing.daemonAddrToken)
+
+            // DOG-01c: 备份前漂移校准（只查不传；daemon 不可达则跳过）。
+            calibrateIfReachable(client, daemon, confirmedStore)
+
+            val watermarks = WatermarkStore(ctx.filesDir)
+            val scan = MediaScanner(ctx.contentResolver).scanSince(watermarks.load())
+            if (scan.items.isEmpty()) return Result.success()
+
             val candidates = scan.items.map { item ->
                 val open = {
                     ctx.contentResolver.openInputStream(item.uri)
@@ -97,17 +103,13 @@ class BackupWorker(
                     open = open,
                 )
             }
-            val report = BackupRunner(client).run(
-                parsePeerAddrToken(pairing.daemonAddrToken),
-                candidates,
-                scan.nextWatermark,
-            )
+            val report = BackupRunner(client).run(daemon, candidates, scan.nextWatermark)
             watermarks.save(scan.nextWatermark)
-            // DOG-01b: manifest missing → 移除缓存（漂移校准），其余加入。
-            val allHashes = candidates.map { it.hash }.toSet()
+            // DOG-01c: commit 成功后本次候选全部确认——report.missing 是
+            // 上传前集合，不参与减项（回归：旧实现把刚上传成功的照片从
+            // 缓存删掉，首次全量备份后 M=0）；漂移校准走独立 exist-check。
             confirmedStore.recordRun(
-                confirmed = allHashes - report.missing,
-                missing = report.missing,
+                confirmed = confirmedAfterCommit(candidates, report),
                 lastSuccessAt = System.currentTimeMillis(),
             )
             android.util.Log.i(
@@ -120,6 +122,24 @@ class BackupWorker(
             Result.retry() // idempotent — next attempt converges
         } finally {
             client.close()
+        }
+    }
+
+    /** DOG-01c: 漂移校准——对缓存 hash 集做只查不传的 exist-check，
+     *  daemon 已无的（电脑端库被删/换库）从缓存移除。daemon 不可达
+     *  则静默跳过（三元组显示缓存值，下次再校准）。 */
+    private suspend fun calibrateIfReachable(
+        client: DaemonClient,
+        daemon: PeerAddrParts,
+        store: ConfirmedStore,
+    ) {
+        try {
+            val cached = store.load().confirmed
+            if (cached.isEmpty()) return
+            val missing = BackupRunner(client).existCheck(daemon, cached)
+            if (missing.isNotEmpty()) store.removeMissing(missing)
+        } catch (_: Throwable) {
+            // 不可达/未配对/超时——保留缓存值。
         }
     }
 
