@@ -35,7 +35,7 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 | OPS-01 workers 部署 | ✅ PASS（验收人独立四发 curl：健康 200/非法批 400/错路径 404/rendezvous ok）|
 | E2E-01 | ✅ 已合并（正反证 run 经 API 核实；nightly+tag 并行+label，不阻塞 release）|
 | REL-01 | ⚠️ 一处返工：`tools/bump-version.sh` 三处 `sed -i ''` 是 macOS 专属，Linux 必炸——改便携写法（`sed -i.bak … && rm ….bak` 或探测 OS），其余全过即合 |
-| UPD-01 | 深审中（密钥纪律/双校验体系一致性/draft 资产 URL 404 坑）|
+| UPD-01 | ⚠️ **需返工**（密钥纪律✅干净：私钥三层扫描无泄露、公钥两处逐字节一致、secret 只在 step env）。两个 blocker：①i18n 捆绑字典又漂移（加了 ui.update_* 没同步 Android 副本，DiagTestT 实跑红——与 t042b 同款病，CI 会拦）；②Android downloadAndInstall 主线程跑网络必抛 NetworkOnMainThread 且被吞——"下载安装"点了没反应。另修：App.svelte 404 时误报"更新失败"横幅（应静默）、npx @tauri-apps/cli pin 版本、manifest 无 darwin 条目（桌面接了线收不到更新，挂账已诚实注明）、ROADMAP 文案对齐现状、desktop 端到端篡改反证补做 |
 | H-10a-fix | ❌ 未交付，卡仍挂 |
 
 ## 四、狗粮周阻塞卡（产品档案 §三之五 f 裁决：不落则狗粮周作废）
