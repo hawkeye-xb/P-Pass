@@ -37,7 +37,7 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 | 合并后全量 | Rust 206/206 + Android 73/73 绿；顺手清了 UX-06 合并遗留的重复 import |
 | H-10a-fix | ❌ 未交付，卡仍挂（不阻塞出包）|
 
-**队列只剩 TAG-01（出包卡，全文见下）——做完它，工程侧就绪，真机验收和狗粮周开跑。**
+**✅ TAG-01 已完成（2026-08-06 凌晨出包轮，Salamira）——工程侧就绪，真机验收和狗粮周可开跑。**
 
 ### TAG-01 出包卡（L1）
 
@@ -53,12 +53,31 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 反证：故意不 bump 直接打 tag → bump-version.sh 已拦（已 tag 版本拒绝），
   引用 REL-01 五态测试在案即可，不必实测。
 收尾：NEXT.md 第五节勾掉「打 tag」，验收人接手真机批量验收。
+---
+✅ **验收记录（2026-08-06 凌晨，Salamira）**：
+  - bump `756332b`：0.1.0→0.2.1（versionCode 1→2），diff 恰好只碰版本行
+  - **v0.2.1-test.1 红（run 30949374415）**：Release 草稿 job「Sign update
+    manifest」step 挂——`failed to decode base64 secret key: Invalid symbol
+    10, offset 348`。根因 = CI `echo "$UPDATE_SIGNING_KEY" > key` 追加尾换行
+    （key 文件 348B 单行 base64，offset 348 恰为 echo 补的 \n，tauri signer
+    base64 解码不 trim）。修复 `9fb339f`：`printf '%s'` 逐字节还原 +
+    重设 secret 无尾换行 + 本地 signer 签名预验证（cmp 字节一致）。
+  - **v0.2.1-test.2 全绿（run 30950901275）**：四 job success——Android
+    (signed APK, **Assert APK contains libiroh_ffi.so step success**)、
+    macOS arm64（Pack self-contained zip + Bundle .app+dmg 均 success）、
+    Windows x64、Release 草稿（**Sign update manifest step success**）。
+  - Draft release `v0.2.1-test.2` 9 资产：app-release.apk、daemon.exe、
+    testclient.exe、BUILD_INFO-windows-x64、ppass-macos-arm64.zip、
+    P-Pass-macos-arm64.dmg、SHA256SUMS-macos-arm64、SHA256SUMS-windows-x64、
+    manifest.json —— SHA256SUMS 两平台齐、manifest.json 在资产里 ✅
+  - 链接：https://github.com/hawkeye-xb/P-Pass/actions/runs/30950901275
+  - 下一手：验收人真机批量验收 + 本机 B 类孤儿清理 + 家人装包 → 狗粮周。
 ```
 
 ## 四、狗粮周阻塞卡（产品档案 §三之五 f 裁决：不落则狗粮周作废）
 
-> **当前队列顺序（2026-08-06 01:47 巡检轮更新）**：UX-06b → UX-07
-> （若未交）→ TAG-01（卡全文在第三节下方）。
+> **当前队列顺序（2026-08-06 凌晨出包轮更新）**：✅ TAG-01 已完成
+> （v0.2.1-test.2 全绿出包，验收记录见第三节卡体下）。
 > **本节下方的 DOG-01/02、DAE-01、DOG-03 原卡与 UX-01..06 全部已
 > 合并收口，仅作历史参照——不要重复做。** 真机验收项由验收人在
 > TAG-01 出包后批量执行。
@@ -170,7 +189,9 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 
 **狗粮周阻塞全清**（DOG-01/02/03、DAE-01、UPD-01、UX-01..06 全部
 已合，main 全量 android 71/71 + nextest 206/206 绿）→ UX-06b/UX-07
-小卡收尾 → **TAG-01 出包**（bump 0.2.1 + v0.2.1-test.1，卡在第三节）→
+小卡收尾 → **✅ TAG-01 出包已完成**（bump 0.2.1 `756332b` + 修复
+`9fb339f` + **v0.2.1-test.2 全绿 run 30950901275**，draft 9 资产齐，
+验收记录见第三节卡体）→
 验收人批量真机验收（DOG-01 三元组正反证、DOG-02 dumpsys 白名单、
 UX-01 暂停续传、UX-02 通知、UX-03 约束对照、UX-06 断开后 hello 拒）+
 本机 B 类孤儿清理贴证 + 家人装包 → **压缩版狗粮周开跑**（night1..3
