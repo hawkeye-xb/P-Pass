@@ -256,6 +256,25 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] r/selfhosted post, open-source announcement
 - [ ] **Kill line: no exponential signal in 3 months → stop** (pre-agreed)
 
+## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
+
+- [ ] UX-01 备份中可暂停 — **code landed 2026-08-05**: backup
+      button becomes 暂停 while busy and stays clickable — tap cancels the
+      current batch (BackupUiStateHolder tracks the job; BackupRunner push
+      loop got a cooperative ensureActive() cancel point). Idempotent
+      pipeline makes interruption safe: no commit, watermark not advanced,
+      next run re-offers everything and dedups. strings en/zh symmetric
+      (backing_up → backup_pause). android 49/49. Device acceptance
+      (Samsung pause→resume converges to 0 missing; counterproof: sqlite
+      has no half-written asset rows — guaranteed by ingest-at-commit)
+      pending real phone. PR 待建。
+- [ ] UX-02 失败通知，成功沉默（未开工）
+- [ ] UX-03 后台规则一行+极简设置（未开工）
+- [ ] UX-04 「已直连」徽章降级（未开工）
+- [ ] UX-05 folder.set 诚实化（未开工）
+- [ ] UX-06 移动端「暂停自动备份」+「断开连接」（未开工）
+- [ ] UX-07 daemon ephemeral 模式（未开工）
+
 ## Standing debts / 挂账
 
 - [ ] PPF_ADVERTISE_ADDR (QR carries LAN IP at boot on cloud boxes)

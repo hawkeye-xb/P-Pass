@@ -23,6 +23,7 @@ import computer.iroh.Connection
 import java.io.InputStream
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -82,6 +83,10 @@ class BackupRunner(private val client: DaemonClient) {
         val conn = client.connectRaw(daemon, ALPN_UPLOAD)
         try {
             for (c in toPush) {
+                // UX-01: 协作取消点——用户点「暂停」（job.cancel）后，
+                // 这里在下一个文件边界立即抛 CancellationException 中断
+                // 当前批；未 commit，水位不推进，幂等管线安全。
+                coroutineContext.ensureActive()
                 pushFile(conn, c)
             }
         } finally {
