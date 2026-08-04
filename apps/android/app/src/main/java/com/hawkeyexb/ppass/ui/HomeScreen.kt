@@ -53,6 +53,11 @@ fun HomeScreen(
     onOpenBatterySettings: () -> Unit = {},
     // DOG-01: 恒真三元组（持久缓存，断网/失败时仍显示）
     triplet: BackupTriplet? = null,
+    // UX-03: 极简设置——仅充电 / 仅 WiFi（写 WorkManager 约束）
+    chargeOnly: Boolean = true,
+    onChargeOnlyChange: (Boolean) -> Unit = {},
+    wifiOnly: Boolean = true,
+    onWifiOnlyChange: (Boolean) -> Unit = {},
 ) {
     val (dot, pillBg) = when (state) {
         is BackupUiState.Idle -> PPColor.Idle to PPColor.IdleBg
@@ -193,6 +198,26 @@ fun HomeScreen(
             fontSize = 14.sp, lineHeight = 22.sp, color = PPColor.Ink40,
             modifier = Modifier.fillMaxWidth(),
         )
+
+        // UX-03: 后台规则一行 + 极简设置两开关（仅充电/仅 WiFi）。
+        Spacer(Modifier.height(14.dp))
+        Text(
+            stringResource(R.string.auto_backup_rule),
+            fontSize = 14.sp, lineHeight = 22.sp, color = PPColor.Ink60,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(4.dp))
+        SettingSwitchRow(
+            label = stringResource(R.string.setting_charge_only),
+            checked = chargeOnly,
+            onCheckedChange = onChargeOnlyChange,
+        )
+        SettingSwitchRow(
+            label = stringResource(R.string.setting_wifi_only),
+            checked = wifiOnly,
+            onCheckedChange = onWifiOnlyChange,
+        )
+
         Spacer(Modifier.height(10.dp))
         androidx.compose.material3.OutlinedButton(
             onClick = onReconnect,
@@ -216,5 +241,27 @@ private fun formatLastSuccess(ts: Long): String {
         mins < 60 * 24 -> "${mins / 60} 小时前"
         else -> java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
             .format(java.util.Date(ts))
+    }
+}
+
+/** UX-03: 极简设置开关行——label 左、Switch 右。 */
+@Composable
+private fun SettingSwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label, fontSize = 14.sp, color = PPColor.Ink,
+            modifier = Modifier.weight(1f),
+        )
+        androidx.compose.material3.Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+        )
     }
 }

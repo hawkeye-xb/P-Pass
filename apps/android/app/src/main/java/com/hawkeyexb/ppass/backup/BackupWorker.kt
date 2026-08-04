@@ -50,18 +50,32 @@ fun backupOnceNow(context: Context) {
 }
 
 /** Schedule (or keep) the periodic backup. Call after pairing and on
- *  every app start — idempotent. */
+ *  every app start — idempotent (KEEP: existing work keeps its timing).
+ *  Constraints come from [BackupSettings] (UX-03). */
 fun scheduleAutoBackup(context: Context) {
+    enqueueAutoBackup(context, ExistingPeriodicWorkPolicy.KEEP)
+}
+
+/** UX-03: 设置变更后按新约束重建周期任务——KEEP 不会更新既有任务的
+ *  约束，必须 REPLACE（周期计时重置，但这是用户主动改设置的代价）。 */
+fun rescheduleAutoBackup(context: Context) {
+    enqueueAutoBackup(context, ExistingPeriodicWorkPolicy.REPLACE)
+}
+
+private fun enqueueAutoBackup(context: Context, policy: ExistingPeriodicWorkPolicy) {
+    val settings = BackupSettings(context.filesDir).load()
     val constraints = Constraints.Builder()
-        .setRequiredNetworkType(NetworkType.UNMETERED) // family WiFi
-        .setRequiresCharging(true)                     // 充电时才跑
+        .setRequiredNetworkType(
+            if (settings.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED
+        )
+        .setRequiresCharging(settings.chargeOnly)
         .build()
     val request = PeriodicWorkRequestBuilder<BackupWorker>(4, TimeUnit.HOURS)
         .setConstraints(constraints)
         .build()
     WorkManager.getInstance(context).enqueueUniquePeriodicWork(
         BACKUP_WORK_NAME,
-        ExistingPeriodicWorkPolicy.KEEP,
+        policy,
         request,
     )
 }
