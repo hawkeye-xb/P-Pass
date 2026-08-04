@@ -256,6 +256,18 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] r/selfhosted post, open-source announcement
 - [ ] **Kill line: no exponential signal in 3 months → stop** (pre-agreed)
 
+## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
+
+- [ ] UX-07 daemon --ephemeral — **code landed 2026-08-05 (PR #41)**:
+      test/script mode: stdin EOF exits the whole daemon in <3s (oneshot
+      from the stdin reader loop, tokio::select! vs router.serve, explicit
+      endpoint close to flush frames — drop cleanup alone is ~6s). No
+      flag = unchanged (EOF still only drops console confirm to IPC-only,
+      launchd residency intact). dogfood-smoke.sh switched to --ephemeral
+      + FIFO stdin (cleanup closes write end → self-exit + wait, replaces
+      kill). EOF→exit 2.37s measured; full dogfood-smoke ALL GREEN with
+      zero daemons left after run; fmt/clippy clean.
+
 ## Standing debts / 挂账
 
 - [ ] PPF_ADVERTISE_ADDR (QR carries LAN IP at boot on cloud boxes)
