@@ -382,6 +382,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       Workspace 202/202, android 55/55, clippy/fmt clean. Device
       acceptance (re-pair after disconnect, jobscheduler pause) pending
       real phone.
+- [ ] UX-06b 断开清确认缓存 — **code landed 2026-08-05 (PR #42)**:
+      disconnect now also clears the DOG-01 confirmed-cache directory
+      for that remote only (filesDir/backup-state/<daemonNodeId>/,
+      production fn clearConfirmedCacheForRemote shared with tests),
+      so re-pairing to the same computer starts M from 0 instead of
+      showing a stale high count after the computer's library was
+      deleted. android 73/73. Counterproof: comment out the delete →
+      disconnect_clears test red (restored). Acceptance pending review.
 
 ## Standing debts / 挂账
 
