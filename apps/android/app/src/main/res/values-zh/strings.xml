@@ -35,6 +35,10 @@
     <string name="backup_now">立即备份</string>
     <string name="backing_up">备份中…</string>
     <string name="no_cloud">照片直接传回自己家的电脑，不经过任何云端。</string>
+    <!-- DOG-02: 电池白名单引导卡片 -->
+    <string name="dog_battery_title">后台保护未开启</string>
+    <string name="dog_battery_body">本机可能阻止 P-Pass 在后台备份。请为 P-Pass 关闭电池优化，备份才能持续运行。</string>
+    <string name="dog_battery_action">去开启</string>
     <string name="reconnect">重新扫码连接</string>
     <string name="run_failed">这次没传完——已存回家的照片是安全的；再点一次会从断点继续。</string>
 

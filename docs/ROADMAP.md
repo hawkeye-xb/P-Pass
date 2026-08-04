@@ -214,6 +214,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       DaemonPair/DaemonBackupTest, PID-exact daemon cleanup in scripts.
       Known pitfalls (JDK17 必炸 / GenericNamespaced 平台差异) →
       references/desktop-build.md 与本文档
+- [ ] DOG-02 battery-whitelist onboarding — **code landed 2026-08-04 (PR #31)**:
+      PowerManager.isIgnoringBatteryOptimizations detect + backup-tab
+      guidance card (disappears once whitelisted, ON_RESUME refresh) +
+      vendor intent fallback chain (REQUEST dialog → Samsung Smart
+      Manager → Huawei phone manager → generic list). strings en/zh
+      symmetric (StringsSymmetryTest enforced), 49/49 unit tests green.
+      Device-side acceptance (dumpsys whitelist before/after + adb
+      whitelist-removal counterproof) pending real phone
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
