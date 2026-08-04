@@ -19,9 +19,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
@@ -47,6 +49,9 @@ import com.hawkeyexb.ppass.ui.JoinedScreen
 import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.ScanScreen
 import com.hawkeyexb.ppass.ui.WelcomeScreen
+import com.hawkeyexb.ppass.update.UpdateInfo
+import com.hawkeyexb.ppass.update.downloadAndInstall
+import com.hawkeyexb.ppass.update.fetchUpdate
 
 private sealed class Screen {
     data object Welcome : Screen()
@@ -67,6 +72,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun PPassApp() {
     val context = LocalContext.current
+    // UPD-01: 下载安装是 suspend（IO 线程下载）——按钮 onClick 从协程调。
+    val scope = rememberCoroutineScope()
     val identity = remember { IdentityStore(context.filesDir) }
     val pairings = remember { PairingStore(context.filesDir) }
     val client = remember { DaemonClient() }
@@ -88,6 +95,35 @@ fun PPassApp() {
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> if (granted) screen = Screen.Scan }
+
+    // UPD-01: 启动时检查一次更新（静默失败；draft/无 release = 无更新；
+    // 对话框覆盖所有 screen，不打断当前流程）
+    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+    LaunchedEffect(Unit) {
+        updateInfo = fetchUpdate(BuildConfig.VERSION_NAME)
+    }
+    updateInfo?.let { info ->
+        AlertDialog(
+            onDismissRequest = { updateInfo = null },
+            title = { Text("发现新版本 v${info.version}") },
+            text = {
+                Text(
+                    if (info.notes.isBlank()) "是否下载并安装？" else info.notes.take(200)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        downloadAndInstall(context, info.url)
+                        updateInfo = null
+                    }
+                }) { Text("下载安装") }
+            },
+            dismissButton = {
+                TextButton(onClick = { updateInfo = null }) { Text("以后再说") }
+            },
+        )
+    }
 
     // DOG-02: 电池白名单状态——ON_RESUME 刷新（从系统设置返回立即更新，
     // 加白后卡片消失；拒绝授权时保持卡片）
