@@ -19,6 +19,8 @@ pub use authz::Decision;
 pub use backup::{BackupEngine, CommitOutcome};
 pub use config::{Config, TelemetryConfig};
 pub use diag_agg::DiagAgg;
+pub use ipc::daemon_version;
+pub use ipc::Claim;
 pub use ipc::IpcServer;
 pub use pairing::{PairRejection, Pairing, PendingPair};
 pub use query::QueryEngine;
