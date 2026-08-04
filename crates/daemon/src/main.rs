@@ -85,18 +85,22 @@ async fn main() -> anyhow::Result<()> {
         pending_rx,
     ));
     let socket_name = format!("ppf-{}", &transport.node_id().to_string()[..8]);
-    let token = rand_token()?;
-    let token_hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
-    // DAE-01: 版本可被 PPF_DAEMON_VERSION 覆盖（双实例集成测试用；
-    // 生产 = CARGO_PKG_VERSION）。
-    let daemon_version = std::env::var("PPF_DAEMON_VERSION")
-        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
-    println!("IPC: {socket_name}（令牌在 {}/ipc.token）", data_dir.display());
+    // DAE-01: 版本可被 PPF_DAEMON_VERSION 覆盖（双实例集成测试用）；
+    // 生产 = PPF_BUILD_VERSION（release tag 注入，含 -test.N 后缀，
+    // DAE-01b blocker②）或 CARGO_PKG_VERSION。
+    let daemon_version = daemon::daemon_version();
+    println!(
+        "IPC: {socket_name}（令牌在 {}/ipc.token）",
+        data_dir.display()
+    );
     // DAE-01 单实例纪律：先试连接、版本握手（newest wins）——旧逻辑
     // unlink-before-bind 会让后来者盲杀前任（用户机实锤：launchd 至今
     // 指向 7/31 开发构建路径，新 daemon 一直上不了岗）。
+    // DAE-01b blocker①：claim 内部用前任 token（data_dir/ipc.token）
+    // 握手——绝不用本实例的新随机 token 探测（生产必 auth 失败，
+    // 被误判死 socket 而抢绑，前任变幽灵占库锁）。
     match ipc
-        .claim_single_instance(&socket_name, &token_hex, &daemon_version)
+        .claim_single_instance(&socket_name, &daemon_version)
         .await
     {
         daemon::Claim::StandDown => {
@@ -115,6 +119,9 @@ async fn main() -> anyhow::Result<()> {
         }
         daemon::Claim::Proceed => {}
     }
+    // DAE-01b blocker①：claim 成功后才生成/写入自己的 token（serve 写
+    // 入 ipc.token）。claim 期间的探测用的是前任 token。
+    let token = rand_token()?;
     tokio::spawn({
         let ipc = std::sync::Arc::clone(&ipc);
         async move {
@@ -179,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
                 heartbeat.record(daemon::TelemetryEvent::DaemonAlive {
                     uptime_h: started.elapsed().as_secs() / 3600,
                     os: std::env::consts::OS.to_string(),
-                    ver: env!("CARGO_PKG_VERSION").to_string(),
+                    ver: daemon::daemon_version(),
                 });
                 tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
             }

@@ -221,7 +221,13 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       exe_path, install_autostart rejects /target//tmp/ paths. version_cmp
       unit tests + dae_flow integration (3 tests: takeover/stand-down/dead
       socket) + counterproof (reversed compare → 2/3 red, reverted).
-      workspace 197/197 green
+      workspace 197/197 green. **DAE-01b rework 2026-08-05**: claim reads
+      the predecessor's token from data_dir/ipc.token (never probes with
+      its own fresh token); raw-connect pre-check + unauthenticated live
+      peer ⇒ StandDown (never unlink a live socket); tag-injected
+      PPF_BUILD_VERSION via build.rs + version_cmp pre-release numeric
+      segments (test.8 > test.7) so dogfood test packages can take over;
+      daemon_version() single source for handshake/status/telemetry
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
