@@ -214,6 +214,18 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       DaemonPair/DaemonBackupTest, PID-exact daemon cleanup in scripts.
       Known pitfalls (JDK17 必炸 / GenericNamespaced 平台差异) →
       references/desktop-build.md 与本文档
+- [ ] REL-01 versioning & release norms — **code landed 2026-08-04
+      (PR #29)**: docs/RELEASING.md (en primary + zh; trunk-based:
+      main always releasable, tag=SemVer release, hotfix-only
+      release/vX.Y, draft→human publish, bump+changelog per release,
+      never overwrite/move tags) + CHANGELOG.md init (keep-a-changelog,
+      all-unreleased until first formal release) + tools/bump-version.sh
+      (one-shot Cargo.toml workspace version ↔ Android
+      versionName/versionCode; versionCode monotonic +1; overwrite
+      guards: rejects already-tagged versions, non-strictly-increasing
+      versions, invalid SemVer) — five-state test PASS: bump 0.3.0 ok
+      (diff touches version lines only), v0.2.0-test.7 rejected, 0.3.0
+      equal rejected, 0.1.0 downgrade rejected, "1.2" rejected
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
