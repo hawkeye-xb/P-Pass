@@ -13,6 +13,7 @@ import com.hawkeyexb.ppass.ui.BackupUiState
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -72,15 +73,24 @@ class BackupUiStateHolder(
         _triplet.value = t
     }
 
+    // UX-01: 备份运行句柄——进行中再点 = 暂停（取消当前批，幂等管线安全）。
+    private var backupJob: Job? = null
+
     fun backupNow() {
-        if (_state.value is BackupUiState.Scanning ||
-            _state.value is BackupUiState.Hashing ||
-            _state.value is BackupUiState.Sending
-        ) return
-        scope.launch {
+        // UX-01: 备份进行中再点 = 暂停——中断当前批。幂等管线保证安全：
+        // 中断不 commit、水位不推进，已到家的 blob 下次 run 去重；再点
+        // 一次 = 续传（重新 offer 全部候选，dedup 收敛缺 0）。
+        if (backupJob?.isActive == true) {
+            backupJob?.cancel()
+            backupJob = null
+            _state.value = BackupUiState.Idle
+            return
+        }
+        backupJob = scope.launch {
             try {
                 runBackup()
             } catch (t: Throwable) {
+                if (t is kotlinx.coroutines.CancellationException) throw t
                 _state.value = BackupUiState.Trouble(
                     "Could not finish this run — photos already home are safe; " +
                         "try again and it picks up where it left off.\n" +

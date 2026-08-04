@@ -171,8 +171,10 @@ fun HomeScreen(
         val busy = state is BackupUiState.Scanning ||
             state is BackupUiState.Hashing || state is BackupUiState.Sending
         Button(
+            // UX-01: 备份进行中按钮变「暂停」且可点——点击由 holder 转成
+            // 取消当前批（幂等管线安全），再点一次续传。
             onClick = onBackupNow,
-            enabled = !busy,
+            enabled = true,
             modifier = Modifier.fillMaxWidth().height(64.dp),
             shape = RoundedCornerShape(PPSize.RadiusControl),
             colors = ButtonDefaults.buttonColors(
@@ -181,7 +183,7 @@ fun HomeScreen(
             ),
         ) {
             Text(
-                if (busy) stringResource(R.string.backing_up) else stringResource(R.string.backup_now),
+                if (busy) stringResource(R.string.backup_pause) else stringResource(R.string.backup_now),
                 fontSize = 19.sp, fontWeight = FontWeight.Bold,
             )
         }
