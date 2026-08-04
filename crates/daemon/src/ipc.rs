@@ -7,10 +7,13 @@
 //! `proto::Resp` line. Wrong token = connection dropped, one diag event.
 //!
 //! Methods (契约): `status` `pairing.start` `pairing.confirm`
-//! `devices.list` `device.revoke` `folder.set` `logs.export`.
+//! `devices.list` `device.revoke` `folder.set` `logs.export` —
+//! plus DAE-01 `daemon.step_down` (newest-wins takeover, added 2026-08-04).
 
+use std::cmp::Ordering;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use diag::state::DaemonState;
 use interprocess::local_socket::tokio::prelude::*;
@@ -29,6 +32,92 @@ pub struct IpcServer {
     diag: DiagAgg,
     data_dir: PathBuf,
     pending: Arc<Mutex<Vec<PendingPair>>>,
+    /// Process start time (unix ms) — surfaced in `status` (DAE-01).
+    started_at: i64,
+    /// What `daemon.step_down` does after replying. Production: exit(0)
+    /// (launchd KeepAlive relaunches from the new plist). Tests inject a
+    /// no-op to observe the handshake without killing the harness.
+    step_down_exit: Arc<dyn Fn() + Send + Sync>,
+}
+
+/// Result of the DAE-01 single-instance claim (newest wins).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Claim {
+    /// No live peer — bind now.
+    Proceed,
+    /// We took over from an older instance (it stepped down) — bind now,
+    /// and re-install autostart so launchd points at this (stable) path.
+    TookOver,
+    /// A same-or-newer instance is already serving — exit this process.
+    StandDown,
+}
+
+// ── DAE-01 helpers: probe the peer socket, ask it to step down, compare
+// versions. All client-side (no server changes to the wire contract).
+
+/// Send one IPC request to the peer and read its response line.
+async fn peer_call(
+    socket_name: &str,
+    token_hex: &str,
+    method: &str,
+) -> Option<serde_json::Value> {
+    let name = socket_name.to_ns_name::<GenericNamespaced>().ok()?;
+    let conn = interprocess::local_socket::tokio::Stream::connect(name).await.ok()?;
+    let (rx, mut tx) = conn.split();
+    let mut lines = BufReader::new(rx).lines();
+    tx.write_all(token_hex.as_bytes()).await.ok()?;
+    tx.write_all(b"\n").await.ok()?;
+    let req = format!("{{\"id\":\"dae-01\",\"method\":\"{method}\",\"params\":{{}}}}\n");
+    tx.write_all(req.as_bytes()).await.ok()?;
+    let line = tokio::time::timeout(Duration::from_millis(800), lines.next_line())
+        .await
+        .ok()?
+        .ok()??;
+    serde_json::from_str::<serde_json::Value>(&line).ok()
+}
+
+/// Live peer (status answered) or None (dead socket / no instance).
+async fn probe_peer(socket_name: &str, token_hex: &str) -> Option<serde_json::Value> {
+    peer_call(socket_name, token_hex, "status").await
+}
+
+/// Ask the live peer to exit (newest-wins takeover).
+async fn notify_step_down(socket_name: &str, token_hex: &str) -> Option<serde_json::Value> {
+    peer_call(socket_name, token_hex, "daemon.step_down").await
+}
+
+/// Numeric-segment semver compare ("0.2.0-test.7" vs "0.1.0" → Greater).
+/// Pre-release suffixes sort below the same core ("0.1.0" > "0.1.0-test.3"),
+/// so a formal build always takes over from a test build of the same core.
+fn version_cmp(a: &str, b: &str) -> Ordering {
+    let parse = |s: &str| -> (Vec<u64>, bool) {
+        let (core, pre) = match s.split_once('-') {
+            Some((c, _)) => (c, true),
+            None => (s, false),
+        };
+        let nums: Vec<u64> = core
+            .split(|c: char| !c.is_ascii_digit())
+            .filter(|p| !p.is_empty())
+            .map(|p| p.parse().unwrap_or(0))
+            .collect();
+        (nums, pre)
+    };
+    let (na, pa) = parse(a);
+    let (nb, pb) = parse(b);
+    for i in 0..na.len().max(nb.len()) {
+        let (x, y) = (
+            na.get(i).copied().unwrap_or(0),
+            nb.get(i).copied().unwrap_or(0),
+        );
+        if x != y {
+            return x.cmp(&y);
+        }
+    }
+    match (pa, pb) {
+        (false, true) => Ordering::Greater,
+        (true, false) => Ordering::Less,
+        _ => Ordering::Equal,
+    }
 }
 
 impl IpcServer {
@@ -56,6 +145,73 @@ impl IpcServer {
             diag,
             data_dir,
             pending,
+            started_at: now_ms(),
+            step_down_exit: Arc::new(|| std::process::exit(0)),
+        }
+    }
+
+    /// Override the step_down side effect (tests only).
+    pub fn set_step_down_exit(&mut self, f: impl Fn() + Send + Sync + 'static) {
+        self.step_down_exit = Arc::new(f);
+    }
+
+    /// DAE-01 single-instance claim — run BEFORE binding the socket.
+    ///
+    /// Replaces the old unlink-before-bind (which let a latecomer blind-kill
+    /// its live predecessor). Order: try the socket — if a live instance
+    /// answers, compare versions (newest wins): same-or-newer peer → we
+    /// stand down (exit 0, the peer keeps serving); we are newer → ask the
+    /// peer to step down, wait for the socket to free, then proceed. A dead
+    /// socket (connect refused / no response) is cleaned and we bind.
+    pub async fn claim_single_instance(
+        &self,
+        socket_name: &str,
+        token_hex: &str,
+        version: &str,
+    ) -> Claim {
+        let Some(peer) = probe_peer(socket_name, token_hex).await else {
+            // No live peer (or dead socket): clear any stale file, bind.
+            #[cfg(unix)]
+            {
+                let _ = std::fs::remove_file(format!("/tmp/{socket_name}"));
+            }
+            return Claim::Proceed;
+        };
+        let r = peer.get("result");
+        let peer_version = r
+            .and_then(|v| v.get("version"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("0.0.0")
+            .to_string();
+        let peer_pid = r.and_then(|v| v.get("pid")).and_then(|v| v.as_i64()).unwrap_or(0);
+        tracing::info!(
+            "DAE-01: live daemon v{peer_version} (pid {peer_pid}) on {socket_name}"
+        );
+        match version_cmp(version, &peer_version) {
+            Ordering::Less | Ordering::Equal => {
+                tracing::info!(
+                    "DAE-01: existing v{peer_version} >= ours v{version} — standing down"
+                );
+                Claim::StandDown
+            }
+            Ordering::Greater => {
+                tracing::info!(
+                    "DAE-01: ours v{version} > existing v{peer_version} — takeover"
+                );
+                let _ = notify_step_down(socket_name, token_hex).await;
+                // Wait for the peer to exit (bounded), then bind.
+                for _ in 0..50 {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    if probe_peer(socket_name, token_hex).await.is_none() {
+                        break;
+                    }
+                }
+                #[cfg(unix)]
+                {
+                    let _ = std::fs::remove_file(format!("/tmp/{socket_name}"));
+                }
+                Claim::TookOver
+            }
         }
     }
 
@@ -153,6 +309,19 @@ impl IpcServer {
                 Ok(v) => Resp::ok(id, v),
                 Err(_) => internal(id),
             },
+            // DAE-01: newest-wins takeover — the newer instance asks the
+            // older one to exit; launchd (KeepAlive) relaunches it from
+            // the new plist, which now points at the stable path.
+            "daemon.step_down" => {
+                let id2 = id.clone();
+                let exit = Arc::clone(&self.step_down_exit);
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    tracing::info!("DAE-01: step_down — exiting on request");
+                    exit();
+                });
+                Resp::ok(id2, serde_json::json!({ "bye": true }))
+            }
             "pairing.start" => {
                 let mut token = [0u8; 32];
                 if getrandom::fill(&mut token).is_err() {
@@ -307,6 +476,14 @@ impl IpcServer {
             // photo folder" needs an answer to "传到哪儿了" (real
             // walkthrough question, 2026-07-31).
             "library_dir": self.data_dir.display().to_string(),
+            // DAE-01: identity fields for newest-wins handshake + ops
+            // visibility (验收①：status 报 PID/版本/路径/启动时间).
+            "version": env!("CARGO_PKG_VERSION"),
+            "pid": std::process::id(),
+            "started_at": self.started_at,
+            "exe_path": std::env::current_exe()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
         }))
     }
 
@@ -439,5 +616,23 @@ mod tests {
     fn hex32_roundtrip_and_rejects() {
         assert!(parse_hex32("xyz").is_none());
         assert_eq!(parse_hex32(&"ab".repeat(32)).unwrap(), vec![0xab; 32]);
+    }
+
+    // ── DAE-01: version comparison (newest-wins handshake) ──
+    #[test]
+    fn version_cmp_semver_segments() {
+        assert_eq!(version_cmp("0.1.0", "0.1.0"), Ordering::Equal);
+        assert_eq!(version_cmp("0.2.0", "0.1.0"), Ordering::Greater);
+        assert_eq!(version_cmp("0.1.0", "0.2.0"), Ordering::Less);
+        assert_eq!(version_cmp("1.0.0", "0.9.9"), Ordering::Greater);
+        assert_eq!(version_cmp("0.10.0", "0.9.0"), Ordering::Greater);
+        // 预发布后缀：数字段比较为主（0.2.0-test.7 > 0.1.0）
+        assert_eq!(version_cmp("0.2.0-test.7", "0.1.0"), Ordering::Greater);
+        // 同核心数字段：正式 > 预发布（正式构建接管 test 构建）
+        assert_eq!(version_cmp("0.1.0", "0.1.0-test.3"), Ordering::Greater);
+        assert_eq!(version_cmp("0.1.0-test.3", "0.1.0"), Ordering::Less);
+        // 垃圾输入退化为 0
+        assert_eq!(version_cmp("", "0.0.0"), Ordering::Equal);
+        assert_eq!(version_cmp("alpha", "0.1.0"), Ordering::Less);
     }
 }
