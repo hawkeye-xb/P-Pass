@@ -200,6 +200,25 @@ impl IpcServer {
                 }
                 Err(_) => internal(id),
             },
+            // DOG-01: per-device backup watermarks — dogfood daily report /
+            // desktop activity / phone "last success" share this source.
+            "device.watermarks" => match self.db.list_device_watermarks().await {
+                Ok(watermarks) => {
+                    let list: Vec<_> = watermarks
+                        .iter()
+                        .map(|w| {
+                            serde_json::json!({
+                                "node_id": hex(&w.node_id),
+                                "name": w.name,
+                                "last_backup_at": w.last_backup_at,
+                                "asset_count": w.asset_count,
+                            })
+                        })
+                        .collect();
+                    Resp::ok(id, serde_json::json!({ "watermarks": list }))
+                }
+                Err(_) => internal(id),
+            },
             "device.revoke" => {
                 let Some(node_hex) = req.params.get("node_id").and_then(|v| v.as_str()) else {
                     return Resp::err(

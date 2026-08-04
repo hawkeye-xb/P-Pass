@@ -25,6 +25,10 @@ class BackupUiStateHolder(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val _state = mutableStateOf<BackupUiState>(BackupUiState.Idle)
     val state: State<BackupUiState> get() = _state
+    // DOG-01: 持久三元组（重开不归零）；空 = 还没成功备份过
+    private val tripletStore = TripletStore(context.filesDir)
+    private val _triplet = mutableStateOf<BackupTriplet?>(tripletStore.load())
+    val triplet: State<BackupTriplet?> get() = _triplet
 
     fun backupNow() {
         if (_state.value is BackupUiState.Scanning ||
@@ -86,6 +90,15 @@ class BackupUiStateHolder(
 
         // Watermark only advances after a committed run (T-053 semantics).
         withContext(Dispatchers.IO) { watermarks.save(scan.nextWatermark) }
+        // DOG-01: 持久化三元组（N=扫描范围，M=daemon 确认已在家，K=N-M）
+        val t = tripletOf(
+            offered = report.offered,
+            ingested = report.ingested,
+            duplicates = report.duplicates,
+            lastSuccessAt = System.currentTimeMillis(),
+        )
+        withContext(Dispatchers.IO) { tripletStore.save(t) }
+        _triplet.value = t
         _state.value = BackupUiState.AllSafe(report.ingested, report.duplicates)
     }
 }

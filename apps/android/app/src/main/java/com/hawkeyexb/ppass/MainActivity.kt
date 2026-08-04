@@ -171,6 +171,7 @@ fun PPassApp() {
                     HomeScreen(
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
+                        triplet = holder.triplet.value,
                         onReconnect = {
                             // New daemon identity / new computer: drop the
                             // stored pairing and scan fresh.
