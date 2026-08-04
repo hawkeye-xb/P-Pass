@@ -44,6 +44,16 @@ fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
 
 impl PlatformAdapter for MacosAdapter {
     fn install_autostart(&self, exec: &Path) -> Result<()> {
+        // DAE-01 稳定路径纪律：plist 绝不指向 target/ 开发路径或 /tmp/——
+        // 指向那里的 launchd 条目会把旧构建永远钉在岗上（用户机实锤：
+        // launchd 至今指向 7/31 开发构建路径）。非法路径直接拒绝，不写。
+        let exec_str = exec.display().to_string();
+        if exec_str.contains("/target/") || exec_str.contains("/tmp/") {
+            return Err(PlatformError::Failed {
+                action: "install_autostart rejects unstable path",
+                detail: exec_str,
+            });
+        }
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
