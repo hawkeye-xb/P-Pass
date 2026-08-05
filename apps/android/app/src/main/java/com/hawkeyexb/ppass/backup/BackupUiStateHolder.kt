@@ -37,6 +37,11 @@ class BackupUiStateHolder(
     private val _triplet = mutableStateOf<BackupTriplet?>(null)
     val triplet: State<BackupTriplet?> get() = _triplet
 
+    // 存储端移除/吊销本设备后，备份请求被配对门拒（err.not_paired /
+    // err.not_authorized）——UI 借此感知「配对已失效」，给出重新扫码入口。
+    private val _pairingLost = mutableStateOf(false)
+    val pairingLost: State<Boolean> get() = _pairingLost
+
     init {
         // 启动即算一次（MediaStore COUNT 便宜；扫描在 IO 线程）。
         scope.launch { refreshTriplet() }
@@ -93,6 +98,9 @@ class BackupUiStateHolder(
                 runBackup()
             } catch (t: Throwable) {
                 if (t is kotlinx.coroutines.CancellationException) throw t
+                // 存储端已移除/吊销本设备 → 备份被配对门拒——UI 切「配对已
+                // 失效」态，主按钮变重新扫码（rejoin 门：新 token 可重建）。
+                _pairingLost.value = isPairingLostError(t)
                 _state.value = BackupUiState.Trouble(
                     "Could not finish this run — photos already home are safe; " +
                         "try again and it picks up where it left off.\n" +
@@ -182,4 +190,18 @@ internal fun computeTripletSafe(
     tripletOf(n, store.count().toLong(), store.lastSuccessAt())
 } catch (_: Throwable) {
     null
+}
+
+/**
+ * 配对失效判定（存储端移除/吊销本设备）：备份链路的 check 失败异常消息
+ * 携带 daemon 的 msg_key——`err.not_paired`（设备行已删/从未配对）与
+ * `err.not_authorized`（已吊销/角色不允）都意味着「配对关系已失效，
+ * 需重新扫码」。其余错误（超时/磁盘满/网络）不算配对失效。
+ *
+ * 生产调用链：BackupUiStateHolder.backupNow 的 catch → 此函数。
+ * 测试注入：直接构造含 msg_key 的异常消息。
+ */
+internal fun isPairingLostError(t: Throwable): Boolean {
+    val msg = t.message ?: return false
+    return msg.contains("err.not_paired") || msg.contains("err.not_authorized")
 }
