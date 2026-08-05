@@ -283,6 +283,17 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       workspace 200/200. Device acceptance (Samsung) still pending real
       phone. Drive-by: ipc_flow.rs harness race fix (token file written
       before socket bind ⇒ ENOENT under parallel load; poll the connect).
+      **DOG-01d hotfix 2026-08-06** (Samsung first-launch FATAL, blocks
+      dogfood): countAll's `COUNT(*)` projection is rejected by the real
+      MediaStore provider (Invalid column count(*) — scoped storage
+      forbids SQL functions in projections); refreshTriplet runs at
+      startup with no guard ⇒ every device with photos crashed on open.
+      Fix: projection narrowed to [_ID] + cursor.count; Throwable-level
+      guard in the production function computeTripletSafe (what
+      refreshTriplet calls — tests go through the call chain) degrades
+      any media/confirm-store failure to "triplet hidden" (null), never
+      crash. Counterproof test: failing query ⇒ null triplet, no throw.
+      android 74/74. Real-device startup acceptance pending reviewer.
 - [ ] REL-01 versioning & release norms — **code landed 2026-08-04
       (PR #29)**: docs/RELEASING.md (en primary + zh; trunk-based:
       main always releasable, tag=SemVer release, hotfix-only
