@@ -269,4 +269,27 @@ mod tests {
     fn powercfg_garbage_is_unknown() {
         assert_eq!(parse_powercfg("no such section"), PowerHint::Unknown);
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_plist_keepalive_spares_clean_exit() {
+        // DAE-02 缺陷①：退位实例 exit(0) 后 launchd 不得重拉（无条件
+        // KeepAlive 会把它无限复活成 churn）。plist 必须是
+        // SuccessfulExit=false 语义——成功退出不重拉、崩溃/被杀才复活。
+        let plist = macos::agent_plist(std::path::Path::new(
+            "/Applications/P-Pass.app/Contents/MacOS/ppf-daemon",
+        ));
+        assert!(
+            plist.contains("<key>SuccessfulExit</key><false/>"),
+            "clean exit (stand-down) must not relaunch: {plist}"
+        );
+        assert!(
+            !plist.contains("<key>KeepAlive</key><true/>"),
+            "unconditional KeepAlive would churn a stepped-down instance: {plist}"
+        );
+        assert!(
+            plist.contains("<key>RunAtLoad</key><true/>"),
+            "RunAtLoad must stay"
+        );
+    }
 }

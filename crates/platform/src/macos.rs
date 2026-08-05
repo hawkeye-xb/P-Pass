@@ -28,6 +28,38 @@ impl MacosAdapter {
     }
 }
 
+/// DAE-02: LaunchAgent plist 文本（纯函数——测试断言 KeepAlive 语义）。
+///
+/// KeepAlive 不是无条件 `<true/>`：主动退位（stand_down / step_down 都
+/// 是 exit(0)）后 launchd 若照旧每 ~10s 重拉，退位实例会被自己的旧
+/// plist 无限复活，永久空转 churn（验收人实锤：升级接管场景必现）。
+/// `SuccessfulExit=false` 的语义 = 成功退出不重拉；崩溃/被杀（非零退出
+/// 或信号）照样复活——pkill 复活验收不回归。
+pub(crate) fn agent_plist(exec: &Path) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>{AGENT_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array><string>{}</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key><false/>
+    </dict>
+    <key>StandardOutPath</key><string>{}/Library/Logs/p-pass-daemon.log</string>
+    <key>StandardErrorPath</key><string>{}/Library/Logs/p-pass-daemon.err</string>
+</dict>
+</plist>
+"#,
+        exec.display(),
+        home().display(),
+        home().display(),
+    )
+}
+
 impl Default for MacosAdapter {
     fn default() -> Self {
         Self::new()
@@ -54,25 +86,7 @@ impl PlatformAdapter for MacosAdapter {
                 detail: exec_str,
             });
         }
-        let plist = format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>{AGENT_LABEL}</string>
-    <key>ProgramArguments</key>
-    <array><string>{}</string></array>
-    <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
-    <key>StandardOutPath</key><string>{}/Library/Logs/p-pass-daemon.log</string>
-    <key>StandardErrorPath</key><string>{}/Library/Logs/p-pass-daemon.err</string>
-</dict>
-</plist>
-"#,
-            exec.display(),
-            home().display(),
-            home().display(),
-        );
+        let plist = agent_plist(exec);
         let path = Self::agent_plist_path();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;

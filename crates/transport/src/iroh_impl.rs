@@ -119,6 +119,20 @@ pub struct IrohTransport {
     blobs_handler: Arc<Mutex<Option<iroh_blobs::BlobsProtocol>>>,
 }
 
+/// DAE-02: derive the stable node id from the identity secret key
+/// WITHOUT binding an endpoint.
+///
+/// The single-instance claim must run before the transport bind: with a
+/// fixed-port config, binding first fails outright while the incumbent
+/// holds the port (real machine finding — a 0.2.1 upgrade died on
+/// "Failed to bind sockets" before its version handshake ever ran, so
+/// the takeover never happened). The IPC socket name depends on the node
+/// id, which is a pure function of the identity key — no endpoint needed.
+pub fn node_id_from_secret_key(bytes: &[u8; 32]) -> NodeId {
+    let sk = SecretKey::from_bytes(bytes);
+    NodeId(*sk.public().as_bytes())
+}
+
 impl IrohTransport {
     pub async fn bind(cfg: TransportConfig) -> Result<Self> {
         let mut builder = if cfg.n0_services {
@@ -483,5 +497,28 @@ impl BiStream {
         self.send
             .finish()
             .map_err(|e| TransportError::Io(e.to_string()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn node_id_from_secret_key_matches_bound_endpoint() {
+        // DAE-02 根基：不 bind 预派的 node_id 必须与真实 endpoint 的
+        // node_id 逐字节一致——main 用它在 transport bind 之前跑单实例
+        // claim（socket_name 依赖 node_id）。漂移 = 身份错乱。
+        let secret = [0x77; 32];
+        let predicted = node_id_from_secret_key(&secret);
+        let mut cfg = TransportConfig::loopback(vec![crate::ALPN_CTRL.into()]);
+        cfg.secret_key = Some(secret);
+        let tp = IrohTransport::bind(cfg).await.unwrap();
+        assert_eq!(
+            tp.node_id(),
+            predicted,
+            "pre-derived node id must match the bound endpoint"
+        );
+        assert_eq!(predicted.to_string().len(), 64);
     }
 }
