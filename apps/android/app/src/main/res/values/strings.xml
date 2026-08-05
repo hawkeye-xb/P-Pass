@@ -54,6 +54,9 @@
     <string name="dog_battery_body">This phone may stop P-Pass from backing up in the background. Turn off battery optimization for P-Pass to keep backups running.</string>
     <string name="dog_battery_action">Open settings</string>
     <string name="reconnect">Scan a new code</string>
+    <!-- 配对已失效（存储端移除/吊销本设备后备份被拒） -->
+    <string name="pairing_lost_title">Pairing with this computer is no longer valid</string>
+    <string name="pairing_lost_body">The computer may have removed this phone. Scan the code again to resume backup.</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">Auto backup</string>
     <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>

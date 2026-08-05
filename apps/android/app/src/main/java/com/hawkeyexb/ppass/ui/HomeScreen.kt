@@ -62,6 +62,10 @@ fun HomeScreen(
     autoBackupPaused: Boolean = false,
     onToggleAutoBackup: (Boolean) -> Unit = {},
     onDisconnect: () -> Unit = {},
+    // 存储端移除/吊销本设备后备份被拒——显示「配对已失效」卡片，
+    // 主按钮切为重新扫码（rejoin 门，新 token 可重建）。
+    pairingLost: Boolean = false,
+    onRepair: () -> Unit = {},
 ) {
     val (dot, pillBg) = when (state) {
         is BackupUiState.Idle -> PPColor.Idle to PPColor.IdleBg
@@ -155,6 +159,28 @@ fun HomeScreen(
             )
         }
 
+        // 存储端移除/吊销本设备：醒目警示卡片，指明原因与出路（重新扫码）。
+        if (pairingLost) {
+            Spacer(Modifier.height(14.dp))
+            androidx.compose.material3.Surface(
+                color = PPColor.ActBg,
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.pairing_lost_title),
+                        fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.pairing_lost_body),
+                        fontSize = 13.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+                    )
+                }
+            }
+        }
+
         when (state) {
             is BackupUiState.AllSafe -> {
                 Spacer(Modifier.height(14.dp))
@@ -177,24 +203,43 @@ fun HomeScreen(
         }
 
         Spacer(Modifier.weight(1f))
-        val busy = state is BackupUiState.Scanning ||
-            state is BackupUiState.Hashing || state is BackupUiState.Sending
-        Button(
-            // UX-01: 备份进行中按钮变「暂停」且可点——点击由 holder 转成
-            // 取消当前批（幂等管线安全），再点一次续传。
-            onClick = onBackupNow,
-            enabled = true,
-            modifier = Modifier.fillMaxWidth().height(64.dp),
-            shape = RoundedCornerShape(PPSize.RadiusControl),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = PPColor.Ink, contentColor = PPColor.Paper,
-                disabledContainerColor = PPColor.Linen, disabledContentColor = PPColor.Ink40,
-            ),
-        ) {
-            Text(
-                if (busy) stringResource(R.string.backup_pause) else stringResource(R.string.backup_now),
-                fontSize = 19.sp, fontWeight = FontWeight.Bold,
-            )
+        if (pairingLost) {
+            // 配对已失效：主按钮直接给「重新扫码连接」——一条路走到重新配对，
+            // 不再让用户先找到隐藏的断开入口（存储端移除设备后的死锁修复）。
+            Button(
+                onClick = onRepair,
+                enabled = true,
+                modifier = Modifier.fillMaxWidth().height(64.dp),
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                ),
+            ) {
+                Text(
+                    stringResource(R.string.reconnect),
+                    fontSize = 19.sp, fontWeight = FontWeight.Bold,
+                )
+            }
+        } else {
+            val busy = state is BackupUiState.Scanning ||
+                state is BackupUiState.Hashing || state is BackupUiState.Sending
+            Button(
+                // UX-01: 备份进行中按钮变「暂停」且可点——点击由 holder 转成
+                // 取消当前批（幂等管线安全），再点一次续传。
+                onClick = onBackupNow,
+                enabled = true,
+                modifier = Modifier.fillMaxWidth().height(64.dp),
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                    disabledContainerColor = PPColor.Linen, disabledContentColor = PPColor.Ink40,
+                ),
+            ) {
+                Text(
+                    if (busy) stringResource(R.string.backup_pause) else stringResource(R.string.backup_now),
+                    fontSize = 19.sp, fontWeight = FontWeight.Bold,
+                )
+            }
         }
         Spacer(Modifier.height(10.dp))
         Text(

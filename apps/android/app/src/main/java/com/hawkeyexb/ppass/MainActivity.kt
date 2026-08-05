@@ -3,6 +3,7 @@
 package com.hawkeyexb.ppass
 
 import android.Manifest
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -25,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.work.WorkManager
@@ -240,7 +242,6 @@ fun PPassApp() {
             // ①daemon 撤销本设备（device.unpair，验收「断开后 hello 被拒」）
             // ②清 pairing/watermark ③回 Welcome（重扫可重建）。
             var showDisconnectDialog by remember { mutableStateOf(false) }
-            var disconnectError by remember { mutableStateOf<String?>(null) }
             val scope = rememberCoroutineScope()
             LaunchedEffect(Unit) { client.bind(identity.secretKey()) }
             val mediaPermission = rememberLauncherForActivityResult(
@@ -278,6 +279,14 @@ fun PPassApp() {
                             else resumeAutoBackup(context)
                         },
                         onDisconnect = { showDisconnectDialog = true },
+                        // 存储端移除/吊销本设备后：主按钮变「重新扫码连接」——
+                        // 本地照清（无需 unpair，daemon 端本就不认本设备），
+                        // 回 Welcome 扫码，新 token 走 rejoin 门重建。
+                        pairingLost = holder.pairingLost.value,
+                        onRepair = {
+                            clearLocalPairing(context, pairings, s.pairing)
+                            screen = Screen.Welcome
+                        },
                         onBackupNow = {
                             val needed = requiredMediaPermissions().filter {
                                 ContextCompat.checkSelfPermission(context, it) !=
@@ -297,55 +306,35 @@ fun PPassApp() {
                     confirmButton = {
                         TextButton(onClick = {
                             showDisconnectDialog = false
-                            disconnectError = null
                             scope.launch {
+                                // UX-06 单方停止：本地断开不依赖 daemon 回应。
+                                // unpair 只是尽力通知 daemon 撤销本设备——
+                                // 设备已被存储端移除/吊销时 authz 只给未配对/
+                                // 已吊销设备留 pair.request 一扇门，unpair 必被
+                                // 拒，此时 daemon 端本就不认本设备，无需再撤销；
+                                // daemon 不可达同理。unpair 失败不再阻塞断开，
+                                // 否则本地 pairing 永远清不掉，重新扫码入口
+                                // （Welcome）永久消失（存储端移除设备后的死锁）。
                                 val peer = try {
                                     parsePeerAddrToken(s.pairing.daemonAddrToken)
                                 } catch (t: Throwable) {
                                     null
                                 }
-                                val unpaired = peer != null && runCatching {
-                                    client.unpair(peer)
-                                }.getOrDefault(false)
-                                if (unpaired || peer == null) {
-                                    // 单方停止：本地状态清空（pairing/watermark），
-                                    // daemon 端已撤销（unpaired）或不可达（peer 解析
-                                    // 失败——本地照清，重扫用新 token 走 rejoin 门）。
-                                    pairings.clear()
-                                    // UX-06b: 断开同时清该 remote 的确认缓存
-                                    // （backup-state/<daemonNodeId>/）——重配对到
-                                    // 同一台电脑后 M 从 0 重新计数，不沿用旧缓存
-                                    // （电脑端删过库时 M 虚高，首屏是错的）。
-                                    clearConfirmedCacheForRemote(
-                                        context.filesDir,
-                                        s.pairing.daemonNodeId,
-                                    )
-                                    WatermarkStore(context.filesDir).save(0)
-                                    AutoBackupPrefs(context.filesDir).setPaused(false)
-                                    WorkManager.getInstance(context)
-                                        .cancelUniqueWork(BACKUP_WORK_NAME)
-                                    screen = Screen.Welcome
-                                } else {
-                                    disconnectError = context.getString(R.string.disconnect_failed)
+                                if (peer != null) {
+                                    try {
+                                        withTimeout(5_000) { client.unpair(peer) }
+                                    } catch (_: Throwable) {
+                                        // 尽力而为——本地照断，重扫用新 token 重建。
+                                    }
                                 }
+                                clearLocalPairing(context, pairings, s.pairing)
+                                screen = Screen.Welcome
                             }
                         }) { Text(stringResource(R.string.disconnect_confirm_ok)) }
                     },
                     dismissButton = {
                         TextButton(onClick = { showDisconnectDialog = false }) {
                             Text(stringResource(R.string.cancel))
-                        }
-                    },
-                )
-            }
-            disconnectError?.let { err ->
-                AlertDialog(
-                    onDismissRequest = { disconnectError = null },
-                    title = { Text(stringResource(R.string.disconnect_failed_title)) },
-                    text = { Text(err) },
-                    confirmButton = {
-                        TextButton(onClick = { disconnectError = null }) {
-                            Text(stringResource(R.string.ok))
                         }
                     },
                 )
@@ -367,4 +356,25 @@ private fun requiredMediaPermissions(): List<String> =
 private fun deviceName(): String {
     val m = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android"
     return m
+}
+
+/**
+ * 本地单方断开（UX-06/UX-06b 语义）——清空这台手机的配对现场：
+ * pairing 记录、该 remote 的确认缓存（重配对后 M 从 0 重新计数）、
+ * watermark、自动备份暂停态、周期任务。断开与「配对已失效重新扫码」
+ * 共用此清理；不依赖 daemon 是否可达/是否已撤销本设备。
+ */
+private fun clearLocalPairing(
+    context: Context,
+    pairings: PairingStore,
+    pairing: Pairing,
+) {
+    pairings.clear()
+    // UX-06b: 清该 remote 的确认缓存（backup-state/<daemonNodeId>/）——
+    // 重配对到同一台电脑后 M 从 0 重新计数，不沿用旧缓存
+    // （电脑端删过库时 M 虚高，首屏是错的）。
+    clearConfirmedCacheForRemote(context.filesDir, pairing.daemonNodeId)
+    WatermarkStore(context.filesDir).save(0)
+    AutoBackupPrefs(context.filesDir).setPaused(false)
+    WorkManager.getInstance(context).cancelUniqueWork(BACKUP_WORK_NAME)
 }
