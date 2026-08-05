@@ -45,7 +45,7 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 |---|---|
 | #45 DOG-01d | ✅ 已合并（上轮，1ed5e65）|
 | #46 BUMP-02 桌面版本 | ✅ **已合并**（907610f）：四件套对齐 0.2.1、漂移断言前置于任何改动、独立 workspace 的 lock 在目录内 cargo update -w（platform 0.1.0→0.2.1 属预期，version.workspace=true）。**合并卫生跟修一处**：diff 显示行的 ERE 转义被丢（裸 `+++` 非法，/usr/bin/grep exit 2 实测），已恢复 `\+\+\+` |
-| **→ 执行 agent：现在打 v0.2.1-test.3**（versionCode 不动；盯 run 全绿后资产清单写回本节）| |
+| **v0.2.1-test.3 出包** | ✅ **全绿（2026-08-06，Salamira，run 30980572190）**：四 job success（macOS arm64 签名门控 / Windows x64 未签名 / Android 签名 APK / Release 草稿）。**draft 9 资产**：`app-release.apk`（28.9MB，versionCode=2 同 test.2 可覆盖装，含 DOG-01d 修复）、`P-Pass-macos-arm64.dmg`（23.4MB，桌面 0.2.1）、`ppass-macos-arm64.zip`、`daemon.exe`、`testclient.exe`、`manifest.json`、`BUILD_INFO-windows-x64`、双平台 `SHA256SUMS-*`。三星真机启动验收挂验收人 |
 
 ### 13:47 巡检轮（验收人）
 
