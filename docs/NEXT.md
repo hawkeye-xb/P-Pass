@@ -39,6 +39,30 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 
 **✅ TAG-01 已完成（2026-08-06 凌晨出包轮，Salamira）——工程侧就绪，真机验收和狗粮周可开跑。**
 
+### 🔴 12:10 插播（验收人）：test.2 APK 三星启动必闪退——DOG-01d 卡
+
+真机实锤（用户手机首启即崩，logcat FATAL 在案）：
+`IllegalArgumentException: Invalid column count(*)` @ MediaScanner.countAll
+(MediaScanner.kt:97) ← BackupUiStateHolder.refreshTriplet (启动即跑)。
+JVM 单测摸不到真 MediaStore provider——三星（scoped storage 全家）不接受
+projection 里的 SQL 函数。**test.2 的 APK 对有照片的真机=启动必炸，别装。**
+
+```
+## DOG-01d countAll 真机崩溃修复  级别 L1（加急，堵狗粮周）
+blocker：countAll 用 projection ["count(*)"] 查 MediaStore——真机
+  provider 拒绝（Invalid column），且 refreshTriplet 启动即跑、异常
+  未接住 → 启动必闪退（三星实锤，logcat 在 NEXT.md 插播段）。
+修法：①countAll 改合规写法——projection 只放 MediaColumns._ID，
+  用 cursor.count 取数（scoped storage 不许 SQL 函数投影）；
+  ②refreshTriplet/countAll 全链 try/catch——媒体查询失败退化为
+  「三元组不显示」，绝不崩 App（真机教训与 T-052 同款：Throwable
+  级兜底）；③反证测试：mock resolver 抛 IllegalArgumentException →
+  refreshTriplet 不抛、triplet 为 null（贴输出）。
+验收：gradle 全测绿 + CI 绿；真机启动验收挂验收人（我有设备）。
+收尾：修完直接打 v0.2.1-test.3（versionCode 不用动，同 2 覆盖装；
+  PPF_BUILD_VERSION 会带 test.3，DAE-01 接管口径 test.3>test.2 已支持）。
+```
+
 ### 11:47 巡检轮（验收人）：DAE-02 合并 + 本机真实环境双验收
 
 | 事项 | 结果 |
