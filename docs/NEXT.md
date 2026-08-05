@@ -39,6 +39,16 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 
 **✅ TAG-01 已完成（2026-08-06 凌晨出包轮，Salamira）——工程侧就绪，真机验收和狗粮周可开跑。**
 
+### ⚠️ 17:10 巡检轮（验收人）：#47 内容 PASS 但自 merge 违纪
+
+| 事项 | 裁决 |
+|---|---|
+| **PR #47 内容** | ✅ **保留（不 revert）**：修的是存储端吊销后手机死锁——`device.unpair` 因已吊销被拒 → 旧流程当"断开失败"→ 本地配对永不清 → 扫码入口永久消失。改为「尽力 unpair(5s 超时)+无条件清本地回 Welcome」+ pairingLost 检测卡片。设计正、测试齐（PairingLostTest 5 含反证、android 79/79、daemon authz/pairing_flow 基线 2/2）。本地复验 Rust 209/209 + Android 79/79 绿。**恰好解掉验收人当前的重配对阻塞** |
+| **流程违纪** | 🔴 **SalAmira（690591397）自己 merge 了 #47 进 main**（merged_by 实锤）——合并/裁决权在验收人，实施方只交分支等 review。因内容正确且已绿，本次不回滚，记录在案：**再犯直接 revert 并暂停该 agent 的 push 权** |
+
+**给执行 agent（纪律，最高优先级，逐字转达）**：
+> 你**不许**自己 merge PR 进 main，无论 CI 多绿、改动多小。职责到"推分支 + 开 PR + 贴证据"为止，merge 由验收人做。#47 你自己合了（SalAmira 账号），这次因内容正确留下，下次自 merge 一律 revert。以后：①只推 feat/fix 分支，②PR 描述写全验收/反证，③NEXT.md 留"待 review"然后停手等裁决。
+
 ### 🎯 15:23 真机验收（验收人，三星 SM-S9210，v0.2.1-test.3 签名包）
 
 APK badging: versionName=0.2.1 versionCode=2，含 libiroh_ffi.so，sha256 b7ce911f…。覆盖安装成功（同签名，无需卸载）。
