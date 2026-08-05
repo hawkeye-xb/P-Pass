@@ -39,6 +39,43 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 
 **✅ TAG-01 已完成（2026-08-06 凌晨出包轮，Salamira）——工程侧就绪，真机验收和狗粮周可开跑。**
 
+### 09:47 巡检轮（验收人）：BUMP-01 合并 + 本机 daemon 清理完成
+
+| 事项 | 结果 |
+|---|---|
+| BUMP-01 返工 | ✅ **已合并**：`-uno` 修复在验收人机器复验 DIRTY=[]（未跟踪 .claude/ 不再误炸）|
+| 本机 A 类孤儿 | ✅ **清完**：4 个 target/release/daemon（数据目录全在 /tmp 的 ppf-android-*/ppf-t054b，lsof 证据在案）已 kill，无复活 |
+| 本机 B 类治理 | ✅ **完成**：launchd plist 原钉 src-tauri **dev 构建路径**（B 类病灶本尊）→ 一次性手工迁移（做 install_autostart 同款动作）：bootout → plist 改指 /Applications/P-Pass.app → bootstrap。**验证三连**：IPC status 报 version=0.2.1 / exe_path=/Applications/... / library_dir=用户真实库；devices.list 配对完整（鸿蒙 ALN-AL00 + 三星都在）；kill -TERM → **4 秒复活**（新 PID 70883）。/Applications/P-Pass.app 已被替换为「dev 壳 + 0.2.1 daemon」组合，用户装签名 test.2 dmg 覆盖即可（路径不变，launchd 跟着新二进制走）|
+
+### DAE-02 卡（L2，清理实战挖出的两个设计缺陷）
+
+```
+## DAE-02 daemon 常驻纪律补遗  级别 L2
+背景：验收人做本机 B 类清理时实锤两个缺陷（都有现场证据）。
+缺陷①（KeepAlive 无条件重拉退位实例）：plist KeepAlive=<true/>——
+  StandDown/step_down 都是 exit(0)，launchd 照样每 ~10s 重拉 → 每次
+  重拉又退位 → 永久空转 churn。升级接管场景必现（旧 launchd 实例
+  退位后被自己的旧 plist 无限重拉，直到新实例覆写 plist 才停）。
+  修法：KeepAlive 改 <dict><key>SuccessfulExit</key><false/></dict>
+  ——主动退位（exit 0）不重拉；崩溃/被杀（非零/信号）照样复活
+  （pkill 3 秒复活验收不回归）。
+缺陷②（QUIC bind 先于版本握手）：main.rs 里 transport bind 在
+  claim_single_instance 之前——用户 config 钉固定端口（41145）时，
+  新实例 bind 失败直接退出（"Failed to bind sockets"），版本握手
+  根本走不到，接管永不发生（验收人实测：0.2.1 新实例 vs 0.1.0
+  在位，bind 先炸）。修法：claim 提前到 transport bind 之前
+  （socket_name 依赖 node_id——从 identity.key 直接派生，不必先
+  bind endpoint），或 bind 失败时降级走一次 claim 再重试 bind。
+可执行验收：①集成测试：固定端口 + 在位实例 → 新版本实例必须完成
+  接管（不是 bind 失败退出）；②plist 断言 SuccessfulExit 键存在；
+  ③pkill 复活回归不破（信号杀 → 3 秒复活）；④退位实例 exit(0) 后
+  launchd 不重拉（sleep 15 后 launchctl list 该 label 无新 PID 或
+  PID 不变，贴输出）。
+反证：把 KeepAlive 改回 <true/> → 验收④必挂（贴输出后还原）。
+证据：测试输出 + plist diff + 实测日志。
+收尾：走 PR 等 review。
+```
+
 ### 07:47 巡检轮（验收人）
 
 | 交付 | 裁决 |
@@ -229,6 +266,10 @@ UX-01 暂停续传、UX-02 通知、UX-03 约束对照、UX-06 断开后 hello �
 
 ## 六、等用户
 
+0. **【新增·最优先】给验收人 v0.2.1-test.2 的签名 APK**——draft release
+   下载需登录态，验收人拿不到。你下载 app-release.apk 丢到
+   ~/Downloads/ 或直接说"发布了"（publish 后匿名可下）。拿到后我批量
+   跑六项真机验收（三星在线，升级安装不动配对）。
 1. **H-02 Apple 签名**：操作单在 docs/runbook/h02-apple-signing.md，
    约 10-15 分钟，需要你的 Apple ID 和钥匙串授权。
 2. **UPD-01 桌面签名密钥对**：tauri updater 的 minisign 私钥必须你本人
