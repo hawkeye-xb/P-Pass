@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# REL-01: bump workspace + Android version in one shot.
+# REL-01: bump workspace + Android + desktop (Tauri) versions in one shot.
 # Usage: tools/bump-version.sh <new-version>    e.g. tools/bump-version.sh 0.3.0
 #
 # 防版本覆盖（2026-08-04 用户裁决：绝不挪/覆盖旧版本）：
 #   - 已打过精确 tag（v<ver>）的版本号拒绝使用
 #   - 新版本必须高于当前 Cargo.toml version
-#   - 只改版本号行——验收：跑完 git diff 恰好只碰 Cargo.toml version 行
-#     与 build.gradle.kts 的 versionCode/versionName 行
+#   - 只改版本号行——验收：跑完 git diff 恰好只碰 Cargo.toml version 行、
+#     build.gradle.kts 的 versionCode/versionName 行、桌面四件套
+#     （tauri.conf.json / package.json / src-tauri/Cargo.toml /
+#     src-tauri/Cargo.lock——独立 workspace，主仓 cargo update 够不着）
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -26,6 +28,25 @@ fi
 CUR=$(awk '/^version = /{gsub(/"/,"",$3); print $3; exit}' Cargo.toml)
 if [ -z "$CUR" ]; then
   echo "error: 读不到 Cargo.toml workspace version" >&2
+  exit 1
+fi
+
+# ── Desktop (Tauri standalone workspace) 版本漂移断言 ─────────────
+# 桌面壳是独立 workspace（src-tauri/Cargo.toml 自带 [workspace]），主仓
+# cargo update 够不着它；版本散在四件套必须一起动：
+#   tauri.conf.json "version"    <- bundle/About 对话框（用户可见）
+#   package.json "version"
+#   src-tauri/Cargo.toml version
+#   src-tauri/Cargo.lock         <- 在该目录内 cargo update -w 同步
+# 漂移断言放在动任何文件之前：桌面版本必须等于主仓版本，否则装出来的
+# dmg 显示旧版本（DOG-01d 姊妹 bug：桌面卡 0.1.0 而主仓已 0.2.1）。
+DCUR=$(awk -F'"' '/"version"/{print $4; exit}' apps/desktop/src-tauri/tauri.conf.json)
+if [ -z "$DCUR" ]; then
+  echo "error: 读不到 apps/desktop/src-tauri/tauri.conf.json 的 version" >&2
+  exit 1
+fi
+if [ "$DCUR" != "$CUR" ]; then
+  echo "error: 桌面版本 ${DCUR} != 主仓版本 ${CUR} - 桌面版本漂移（用户装 dmg 看不出版本）。先对齐再 bump。" >&2
   exit 1
 fi
 
@@ -61,16 +82,32 @@ NCODE=$((VCODE + 1))
 sed -i.bak "s/versionCode = $VCODE/versionCode = $NCODE/" apps/android/app/build.gradle.kts && rm apps/android/app/build.gradle.kts.bak
 sed -i.bak "s/versionName = \"$CUR\"/versionName = \"$NEW\"/" apps/android/app/build.gradle.kts && rm apps/android/app/build.gradle.kts.bak
 
-echo "bumped: $CUR -> $NEW (android versionCode $VCODE -> $NCODE)"
+# ── Desktop (Tauri standalone workspace) 四件套同步 ──────────────
+# DCUR/漂移断言已在脚本前段（读 CUR 后、动任何文件前）完成；这里只做同步。
+# 桌面四件套同步（JSON 引号 + TOML 裸值两种写法）
+sed -i.bak "s/\"version\": \"$DCUR\"/\"version\": \"$NEW\"/" apps/desktop/src-tauri/tauri.conf.json && rm apps/desktop/src-tauri/tauri.conf.json.bak
+sed -i.bak "s/\"version\": \"$DCUR\"/\"version\": \"$NEW\"/" apps/desktop/package.json && rm apps/desktop/package.json.bak
+sed -i.bak "s/^version = \"$DCUR\"/version = \"$NEW\"/" apps/desktop/src-tauri/Cargo.toml && rm apps/desktop/src-tauri/Cargo.toml.bak
+# 独立 workspace 的 lock 同步（与主仓 BUMP-01 同款：cargo update -w）
+( cd apps/desktop/src-tauri && cargo update -w -q )
+
+echo "bumped: $CUR -> $NEW (android versionCode $VCODE -> $NCODE, desktop $DCUR -> $NEW)"
 echo "--- git diff（应只含版本号行）---"
-git diff --stat Cargo.toml apps/android/app/build.gradle.kts
-git diff Cargo.toml apps/android/app/build.gradle.kts | grep -E "^[+-]" | grep -vE "^(\+\+\+|---)" || true
+git diff --stat Cargo.toml apps/android/app/build.gradle.kts \
+  apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json \
+  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock
+git diff Cargo.toml apps/android/app/build.gradle.kts \
+  apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json \
+  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock \
+  | grep -E "^[+-]" | grep -vE "^(+++|---)" || true
 
 # BUMP-01 (2026-08-06): sync workspace-member versions into Cargo.lock.
-# bump-version.sh only edits Cargo.toml, so the first build after a bump
-# used to dirty the lock (TAG-01 0.2.1, fixed by hand in 6bb3239) — this
-# makes it automatic: `cargo update -w` refreshes just the workspace
-# members, leaving their dependency tree untouched.
+# bump-version.sh only edits Cargo.toml / build.gradle.kts / desktop files,
+# so the first build after a bump used to dirty the lock (TAG-01 0.2.1,
+# fixed by hand in 6bb3239) — this makes it automatic: `cargo update -w`
+# refreshes just the workspace members, leaving their dependency tree
+# untouched. Desktop is its own workspace: `cargo update -w` runs inside
+# apps/desktop/src-tauri for its lock.
 cargo update -w -q
 
 # BUMP-01: assert the tree is clean except the version files themselves.
@@ -80,7 +117,7 @@ cargo update -w -q
 # Rework (2026-08-06 07:47 round): use --porcelain -uno - untracked files
 # (e.g. a stray .claude/ dir on the reviewer's machine) are never added by
 # an explicit `git add`, so they must not fail the bump.
-DIRTY=$(git status --porcelain -uno | sed 's/^...//' | grep -v -E '^(Cargo\.toml|apps/android/app/build\.gradle\.kts|Cargo\.lock|tools/bump-version\.sh)$' || true)
+DIRTY=$(git status --porcelain -uno | sed 's/^...//' | grep -v -E '^(Cargo\.toml|apps/android/app/build\.gradle\.kts|Cargo\.lock|tools/bump-version\.sh|apps/desktop/src-tauri/tauri\.conf\.json|apps/desktop/package\.json|apps/desktop/src-tauri/Cargo\.toml|apps/desktop/src-tauri/Cargo\.lock)$' || true)
 if [ -n "$DIRTY" ]; then
   echo "error: unexpected dirty files after bump: $DIRTY" >&2
   exit 1
