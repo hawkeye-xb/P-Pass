@@ -87,6 +87,12 @@ class MediaScanner(private val resolver: ContentResolver) {
      * 当前扫描范围的全量 count（无 generation 过滤）——DOG-01b 三元组
      * 的分母 N。MediaStore COUNT 查询，便宜，不需要重 hash。口径常量
      * 一处定义（范围选择是另一张卡，改范围只动这里）。
+     *
+     * DOG-01d: 合规写法——projection 只放 [_ID]，用 cursor.count 取数。
+     * 三星真机实锤：scoped storage 的 provider 拒绝 projection 里的 SQL
+     * 函数（"Invalid column count(*)"），启动必闪退。查询异常不在此处
+     * 吞——由 computeTripletSafe（refreshTriplet 生产实现）Throwable 级
+     * 兜底为「三元组不显示」，绝不崩 App。
      */
     fun countAll(): Long {
         var total = 0L
@@ -94,9 +100,13 @@ class MediaScanner(private val resolver: ContentResolver) {
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
         )) {
-            resolver.query(collection, arrayOf("COUNT(*)"), null, null, null)?.use { cur ->
-                if (cur.moveToFirst()) total += cur.getLong(0)
-            }
+            resolver.query(
+                collection,
+                arrayOf(MediaStore.MediaColumns._ID),
+                null,
+                null,
+                null,
+            )?.use { cur -> total += cur.count.toLong() }
         }
         return total
     }
