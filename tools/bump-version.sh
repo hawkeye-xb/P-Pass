@@ -77,7 +77,10 @@ cargo update -w -q
 # Anything else dirty (stray build artifacts, accidental edits) fails the
 # bump instead of silently riding along into the commit. The script itself
 # is whitelisted: a developer may run it while it has uncommitted edits.
-DIRTY=$(git status --porcelain | sed 's/^...//' | grep -v -E '^(Cargo\.toml|apps/android/app/build\.gradle\.kts|Cargo\.lock|tools/bump-version\.sh)$' || true)
+# Rework (2026-08-06 07:47 round): use --porcelain -uno - untracked files
+# (e.g. a stray .claude/ dir on the reviewer's machine) are never added by
+# an explicit `git add`, so they must not fail the bump.
+DIRTY=$(git status --porcelain -uno | sed 's/^...//' | grep -v -E '^(Cargo\.toml|apps/android/app/build\.gradle\.kts|Cargo\.lock|tools/bump-version\.sh)$' || true)
 if [ -n "$DIRTY" ]; then
   echo "error: unexpected dirty files after bump: $DIRTY" >&2
   exit 1
