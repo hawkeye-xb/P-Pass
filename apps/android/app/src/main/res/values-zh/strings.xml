@@ -50,6 +50,9 @@
     <string name="dog_battery_body">本机可能阻止 P-Pass 在后台备份。请为 P-Pass 关闭电池优化，备份才能持续运行。</string>
     <string name="dog_battery_action">去开启</string>
     <string name="reconnect">重新扫码连接</string>
+    <!-- 配对已失效（存储端移除/吊销本设备后备份被拒） -->
+    <string name="pairing_lost_title">与这台电脑的配对已失效</string>
+    <string name="pairing_lost_body">电脑端可能已移除这台手机。重新扫码即可恢复备份。</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">自动备份</string>
     <string name="auto_backup_pause_hint">插电 + WiFi 时，新照片自动到家</string>
