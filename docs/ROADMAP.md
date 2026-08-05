@@ -294,7 +294,15 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       guards: rejects already-tagged versions, non-strictly-increasing
       versions, invalid SemVer) — five-state test PASS: bump 0.3.0 ok
       (diff touches version lines only), v0.2.0-test.7 rejected, 0.3.0
-      equal rejected, 0.1.0 downgrade rejected, "1.2" rejected
+      equal rejected, 0.1.0 downgrade rejected, "1.2" rejected; **BUMP-01
+      (2026-08-06, fix/bump-01-lock-sync)**: script now runs
+      `cargo update -w -q` after editing Cargo.toml (workspace-member
+      versions in Cargo.lock stay in sync — TAG-01 0.2.1 had to be fixed
+      by hand in 6bb3239) + asserts `git status` is clean except the
+      version files (Cargo.toml / build.gradle.kts / Cargo.lock / the
+      script itself), failing the bump otherwise — counter-proof: with
+      the sync step removed, the first cargo command after a bump dirties
+      the lock (10 member version rows 0.2.1→0.2.2)
 - [ ] DOG-02 battery-whitelist onboarding — **code landed 2026-08-04 (PR #31)**:
       PowerManager.isIgnoringBatteryOptimizations detect + backup-tab
       guidance card (disappears once whitelisted, ON_RESUME refresh) +
