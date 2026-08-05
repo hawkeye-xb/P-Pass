@@ -99,7 +99,7 @@ git diff --stat Cargo.toml apps/android/app/build.gradle.kts \
 git diff Cargo.toml apps/android/app/build.gradle.kts \
   apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json \
   apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock \
-  | grep -E "^[+-]" | grep -vE "^(+++|---)" || true
+  | grep -E "^[+-]" | grep -vE "^(\+\+\+|---)" || true
 
 # BUMP-01 (2026-08-06): sync workspace-member versions into Cargo.lock.
 # bump-version.sh only edits Cargo.toml / build.gradle.kts / desktop files,
