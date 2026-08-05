@@ -39,6 +39,14 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 
 **✅ TAG-01 已完成（2026-08-06 凌晨出包轮，Salamira）——工程侧就绪，真机验收和狗粮周可开跑。**
 
+### 11:47 巡检轮（验收人）：DAE-02 合并 + 本机真实环境双验收
+
+| 事项 | 结果 |
+|---|---|
+| DAE-02 | ✅ **已合并**（106cb57）：①plist KeepAlive → SuccessfulExit=false（纯函数化+单测）；②claim 提前到 transport bind 之前（identity.key 直接派生 node_id + bind 后漂移熔断 + QR 挪到 wait_online 之后）。本地 209/209（一次 blobs_resume 300s 超时，隔离复跑 6.4s 过=并发偶发）|
+| 本机真实环境验收 | ✅ 新 daemon 上岗（/Applications，plist 新语义）后双测过：**信号杀 → 5 秒复活**（96670→96780）；**IPC step_down（exit 0）→ 15 秒不重拉**（launchctl PID=[-]）——churn 缺陷实锤已死。kickstart 恢复值班（96900，version 0.2.1）|
+| 真机验收 | ⏳ 仍等 test.2 签名 APK——Downloads 里的 app-release*.apk 是昨天的 0.1.0 旧包（一个还是缺 .so 的残包），不是 0.2.1。见「等用户」§六.0 |
+
 ### 09:47 巡检轮（验收人）：BUMP-01 合并 + 本机 daemon 清理完成
 
 | 事项 | 结果 |
