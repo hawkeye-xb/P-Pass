@@ -2,6 +2,7 @@
 // MediaStore photos, hash, run BackupRunner, advance the watermark.
 package com.hawkeyexb.ppass.backup
 
+import android.content.ContentResolver
 import android.content.Context
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
@@ -64,13 +65,14 @@ class BackupUiStateHolder(
         }
     }
 
-    /** N=全量 count，M=确认缓存，K=N-M——随时可算（含断网/从未备份）。 */
+    /** N=全量 count，M=确认缓存，K=N-M——随时可算（含断网/从未备份）。
+     *  DOG-01d: 全链容错——媒体查询/缓存读取失败退化为「三元组不显示」
+     *  （triplet=null），绝不崩 App（三星真机：countAll 启动即跑且异常
+     *  未接住 → 启动必闪退）。 */
     private suspend fun refreshTriplet() {
-        val t = withContext(Dispatchers.IO) {
-            val n = MediaScanner(context.contentResolver).countAll()
-            tripletOf(n, confirmedStore.count().toLong(), confirmedStore.lastSuccessAt())
+        _triplet.value = withContext(Dispatchers.IO) {
+            computeTripletSafe(context.contentResolver, confirmedStore)
         }
-        _triplet.value = t
     }
 
     // UX-01: 备份运行句柄——进行中再点 = 暂停（取消当前批，幂等管线安全）。
@@ -159,4 +161,25 @@ class BackupUiStateHolder(
         refreshTriplet()
         _state.value = BackupUiState.AllSafe(report.ingested, report.duplicates)
     }
+}
+
+/**
+ * DOG-01d: 三元组计算全链容错（refreshTriplet 的生产实现，测试共用——
+ * DOG-01c 教训：语义测试走生产调用链）。媒体查询或缓存读取抛任何异常
+ * → 返回 null（UI 不显示三元组），绝不崩 App。三星真机实锤：COUNT(*)
+ * 投影被 provider 拒绝（Invalid column count(*)），refreshTriplet 启动
+ * 即跑、异常未接住 → 启动必闪退。
+ *
+ * @param resolver 生产恒传 context.contentResolver；null 仅测试注入
+ *  （JVM 单测无法实例化 android.jar 的 ContentResolver——构造即 Stub!，
+ *  checkNotNull 抛的 IllegalArgumentException 与三星 provider 拒绝同型）。
+ */
+internal fun computeTripletSafe(
+    resolver: ContentResolver?,
+    store: ConfirmedStore,
+): BackupTriplet? = try {
+    val n = MediaScanner(checkNotNull(resolver)).countAll()
+    tripletOf(n, store.count().toLong(), store.lastSuccessAt())
+} catch (_: Throwable) {
+    null
 }
