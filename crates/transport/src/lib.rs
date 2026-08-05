@@ -12,7 +12,9 @@ mod iroh_impl;
 
 pub use blobs::Blobs;
 pub use conninfo::{ConnInfo, PathKind};
-pub use iroh_impl::{BiStream, Incoming, IrohTransport, PeerAddr, TransportConfig};
+pub use iroh_impl::{
+    node_id_from_secret_key, BiStream, Incoming, IrohTransport, PeerAddr, TransportConfig,
+};
 
 use std::fmt;
 

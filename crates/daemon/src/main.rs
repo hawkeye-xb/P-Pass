@@ -44,45 +44,35 @@ async fn main() -> anyhow::Result<()> {
     // dir (same trust domain as ipc.token).
     let secret = load_or_mint_identity(&data_dir)?;
 
-    let mut transport_cfg = transport::TransportConfig::from_endpoints(
-        config.relay_urls.clone(),
-        vec![
-            transport::ALPN_CTRL.into(),
-            transport::ALPN_BLOBS.into(),
-            transport::ALPN_UPLOAD.into(),
-            transport::ALPN_DOWNLOAD.into(),
-        ],
+    // ── DAE-02: 单实例 claim 先于 transport bind ──────────────────
+    // 固定端口 config 下，在位实例占着端口会让新实例 bind 直接失败；
+    // 版本握手（接管/退位裁决）必须先于 bind 发生，否则接管永不发生
+    // （验收人实锤：0.2.1 新实例 vs 0.1.0 在位，bind 先炸）。socket_name
+    // 依赖 node_id——从 identity.key 直接派生，不必先 bind endpoint。
+    let node_id = transport::node_id_from_secret_key(&secret);
+    let socket_name = format!("ppf-{}", &node_id.to_string()[..8]);
+    let daemon_version = daemon::daemon_version();
+    println!(
+        "IPC: {socket_name}（令牌在 {}/ipc.token）",
+        data_dir.display()
     );
-    transport_cfg.bind_addr = config.bind_addr;
-    transport_cfg.secret_key = Some(secret);
-    let transport = transport::IrohTransport::bind(transport_cfg).await?;
-    // Wait for the home relay before announcing anything: a QR issued
-    // in the first seconds otherwise carries a bare LAN address and
-    // cross-network phones can never reach us (真机教训 T-054).
-    if !transport
-        .wait_online(std::time::Duration::from_secs(10))
-        .await
-    {
-        println!("提示：中继未在 10 秒内就绪，二维码将只含直连地址。");
-    }
 
-    println!("P-Pass daemon 已启动");
-    println!("NodeId: {}", transport.node_id());
-    println!("库目录: {}", data_dir.display());
+    // addr_provider 惰性填充：transport 在 claim 之后才 bind，配对二维码
+    // 也在这之后生成（&a= 要带 live endpoint 的当前地址，见 Pairing）。
+    let transport_slot: std::sync::Arc<std::sync::OnceLock<transport::IrohTransport>> =
+        std::sync::Arc::new(std::sync::OnceLock::new());
+    let slot = std::sync::Arc::clone(&transport_slot);
+    let addr_provider: Option<std::sync::Arc<dyn Fn() -> String + Send + Sync>> =
+        Some(std::sync::Arc::new(move || {
+            slot.get()
+                .map(|t| t.local_addr().to_string())
+                .unwrap_or_default()
+        }));
 
     // Pairing (T-031): issue one QR token at startup. Owner confirmation
     // is owned by the IPC layer (T-034) — tray UI and the interim console
     // prompt below both act through it. 绝不默认放行 (§2.2).
-    let (pairing, pending_rx) = daemon::Pairing::new(
-        db.clone(),
-        transport.node_id(),
-        Some(std::sync::Arc::new({
-            let tp = transport.clone();
-            move || tp.local_addr().to_string()
-        })),
-    );
-    let qr = pairing.start(rand_token()?, unix_ms_now());
-    println!("配对二维码内容（10 分钟内有效）: {qr}");
+    let (pairing, pending_rx) = daemon::Pairing::new(db.clone(), node_id, addr_provider);
 
     // IPC (T-034): local socket + per-launch token in the data dir.
     let diag_agg = daemon::DiagAgg::new(db.clone());
@@ -93,15 +83,6 @@ async fn main() -> anyhow::Result<()> {
         data_dir.clone(),
         pending_rx,
     ));
-    let socket_name = format!("ppf-{}", &transport.node_id().to_string()[..8]);
-    // DAE-01: 版本可被 PPF_DAEMON_VERSION 覆盖（双实例集成测试用）；
-    // 生产 = PPF_BUILD_VERSION（release tag 注入，含 -test.N 后缀，
-    // DAE-01b blocker②）或 CARGO_PKG_VERSION。
-    let daemon_version = daemon::daemon_version();
-    println!(
-        "IPC: {socket_name}（令牌在 {}/ipc.token）",
-        data_dir.display()
-    );
     // DAE-01 单实例纪律：先试连接、版本握手（newest wins）——旧逻辑
     // unlink-before-bind 会让后来者盲杀前任（用户机实锤：launchd 至今
     // 指向 7/31 开发构建路径，新 daemon 一直上不了岗）。
@@ -128,6 +109,48 @@ async fn main() -> anyhow::Result<()> {
         }
         daemon::Claim::Proceed => {}
     }
+
+    // ── transport bind（claim 之后：固定端口此刻已被前任释放或确认无人占用）──
+    let mut transport_cfg = transport::TransportConfig::from_endpoints(
+        config.relay_urls.clone(),
+        vec![
+            transport::ALPN_CTRL.into(),
+            transport::ALPN_BLOBS.into(),
+            transport::ALPN_UPLOAD.into(),
+            transport::ALPN_DOWNLOAD.into(),
+        ],
+    );
+    transport_cfg.bind_addr = config.bind_addr;
+    transport_cfg.secret_key = Some(secret);
+    let transport = transport::IrohTransport::bind(transport_cfg).await?;
+    // DAE-02 防漂移：bind 后的真实 node_id 必须与 claim 用的一致（同一
+    // identity.key）。不一致说明身份文件被换，绝不能继续服务。
+    if transport.node_id() != node_id {
+        tracing::error!(
+            "DAE-02: node id drift after bind (claim used {node_id}, bound {}) — aborting",
+            transport.node_id()
+        );
+        std::process::exit(1);
+    }
+    let _ = transport_slot.set(transport.clone());
+    // Wait for the home relay before announcing anything: a QR issued
+    // in the first seconds otherwise carries a bare LAN address and
+    // cross-network phones can never reach us (真机教训 T-054).
+    if !transport
+        .wait_online(std::time::Duration::from_secs(10))
+        .await
+    {
+        println!("提示：中继未在 10 秒内就绪，二维码将只含直连地址。");
+    }
+
+    println!("P-Pass daemon 已启动");
+    println!("NodeId: {}", transport.node_id());
+    println!("库目录: {}", data_dir.display());
+
+    // QR 在 transport bind 之后生成（&a= 需要 live endpoint 的地址）。
+    let qr = pairing.start(rand_token()?, unix_ms_now());
+    println!("配对二维码内容（10 分钟内有效）: {qr}");
+
     // DAE-01b blocker①：claim 成功后才生成/写入自己的 token（serve 写
     // 入 ipc.token）。claim 期间的探测用的是前任 token。
     let token = rand_token()?;

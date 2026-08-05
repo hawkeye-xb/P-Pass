@@ -325,6 +325,20 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       PPF_BUILD_VERSION via build.rs + version_cmp pre-release numeric
       segments (test.8 > test.7) so dogfood test packages can take over;
       daemon_version() single source for handshake/status/telemetry
+- [ ] DAE-02 daemon residency follow-up — **code landed 2026-08-06 (PR #44)**:
+      defect① KeepAlive churn — plist `KeepAlive=<true/>` relaunches a
+      stepped-down instance (exit 0) every ~10s forever; switched to
+      `<dict><key>SuccessfulExit</key><false/></dict>` (clean exit not
+      relaunched, crash/signal still revived — pkill regression kept).
+      defect② QUIC bind before version handshake — a fixed-port config
+      makes the newer instance die on bind while the incumbent holds the
+      port, so the takeover never runs; claim moved BEFORE transport bind,
+      node id pre-derived from identity.key via transport::
+      node_id_from_secret_key (no endpoint needed), then bind + drift
+      check. Tests: fixed-port takeover integration (claim without bind
+      while port held → TookOver → incumbent exits → rebind same port
+      succeeds), node-id-from-secret == bound endpoint, plist
+      SuccessfulExit assertion; dae_flow 5/5 + workspace 209/209 green.
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
