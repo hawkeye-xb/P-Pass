@@ -101,12 +101,13 @@ class BackupUiStateHolder(
                 // 存储端已移除/吊销本设备 → 备份被配对门拒——UI 切「配对已
                 // 失效」态，主按钮变重新扫码（rejoin 门：新 token 可重建）。
                 _pairingLost.value = isPairingLostError(t)
-                _state.value = BackupUiState.Trouble(
-                    "Could not finish this run — photos already home are safe; " +
-                        "try again and it picks up where it left off.\n" +
-                        "这次没传完——已存回家的照片是安全的；再点一次会从断点继续。\n" +
-                        "(${t.toString().take(140)})"
-                )
+                // T-083 红线：主文案永不带代码——人话正文由 HomeScreen 用
+                // 字符串资源出（run_failed，先说「照片没丢」）；Trouble 只携带
+                // 原始错误串，去处仅两个：默认收起的「查看技术详情」折叠区 +
+                // 这里的 Log.e（完整堆栈进 logcat/bugreport 诊断导出路径，
+                // tag 与 BackupWorker 同为 PPassBackup）。
+                android.util.Log.e("PPassBackup", "backup run failed", t)
+                _state.value = BackupUiState.Trouble(t.toString().take(500))
             }
         }
     }
