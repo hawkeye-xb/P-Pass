@@ -383,3 +383,15 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   ② folder.set 把 data_dir 追加到文件尾=落进 [telemetry] 段 → TOML
   解析拒绝 → daemon 崩溃循环!顶层键现在重建于文件头；
   ③ 用户误改库位置到 Desktop/NAS 已回滚（迁移流程仍是产品缺口）。
+
+## 2026-08-06 — 布局 v1 落库 + T-080/T-081 双端 UI 合并
+
+- **设计闭环**：Claude Design「P-Pass 设计稿交付」全量归档进
+  docs/design/2026-08-05-layout-v1/（主稿+运行时+设备外框+同步元数据+
+  任务卡），仓库为唯一权威版本，claude.ai 项目可删。
+- **T-080 Android**（9d13ce4f）：两 tab 对齐设计稿；杀掉两个真机缺陷
+  （「都存好了」vs 待备份 31 矛盾、epoch 0 假日期）。单测 6/6+反证红过，
+  模拟器假配对法视觉验收（run-as 注入 files/pairing.json）。
+- **T-081 桌面**（632b7932）：侧栏四页+hash 路由；IPC 集合逐字未变。
+  数据缺口全部诚实占位（不敢用绿点/不写承诺文案），对应 daemon IPC
+  扩展挂账见 ROADMAP。

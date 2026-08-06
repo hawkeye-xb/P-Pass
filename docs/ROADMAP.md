@@ -360,6 +360,22 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
 
+- [x] T-080 Android 两 tab 对齐布局 v1 — **merged 2026-08-06 (4bc62071)**:
+      照片页=统一时间线头部+全部/仅本机/家人的过滤胶囊；备份页=恒真三元组
+      英雄卡+备份规则卡+失败才说话+底部红字断开。修两个真机实锤缺陷：
+      ①待备份>0 时横幅仍说「照片都存好了」（裁决纯函数 statusLineOf 锁死，
+      「都存好了」文案 state_safe 独占）②从未成功备份渲染 epoch 0 假日期
+      （ts≤0→「还没有成功备份过」）。BackupStatusTest 6/6+反证红过；
+      模拟器视觉验收过（设计规范 docs/design/2026-08-05-layout-v1/）。
+      挂账：按人过滤需 proto owner 字段；网格 ↑/↓ 角标需本地×远端时间线
+      合并；新文案待收编 assets/i18n。
+- [x] T-081 桌面端侧边栏四页 — **merged 2026-08-06 (e56b1ec5)**:
+      单页长滚动→侧栏四页（总览/家人与设备/活动记录/设置，照片库并入
+      设置），hash 路由默认总览；徽章只说服务状态，连接状态下沉设备行；
+      危险操作只在桌面。纯 UI 重排，IPC 调用集合逐字未变（验收 diff 比
+      对过）。挂账：设备行连接事实/活动记录流/照片总数/磁盘水位需 daemon
+      IPC 扩展；新文案硬编码待 i18n 收编。
+
 - [ ] UX-07 daemon --ephemeral — **code landed 2026-08-05 (PR #41)**:
       test/script mode: stdin EOF exits the whole daemon in <3s (oneshot
       from the stdin reader loop, tokio::select! vs router.serve, explicit
