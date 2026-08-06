@@ -129,6 +129,134 @@ async fn status_devices_and_revoke_roundtrip() {
     assert!(db.get_device(&[0xAA; 32]).await.unwrap().unwrap().revoked);
 }
 
+// ── T-090: data-plane extensions (status / activity.list / connection) ──
+
+/// Seed helper: one asset from `src` added at `added_at` (unix ms).
+fn seeded_asset(src: u8, hash_byte: u8, added_at: i64) -> storage::Asset {
+    storage::Asset {
+        hash: {
+            let mut h = vec![0u8; 32];
+            h[0] = src;
+            h[1] = hash_byte;
+            h
+        },
+        rel_path: format!("originals/{src:02x}/{hash_byte:02x}.jpg"),
+        media_type: "image/jpeg".into(),
+        bytes: 1000,
+        taken_at: Some(added_at),
+        width: None,
+        height: None,
+        src_device: vec![src; 32],
+        added_at,
+        thumb_state: 1,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_photo_count_and_disk_watermarks() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "t090status").await;
+    for n in 0..3u8 {
+        db.insert_asset(&seeded_asset(0xA1, n, 1_700_000_000_000 + i64::from(n)))
+            .await
+            .unwrap();
+    }
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c.call("status", serde_json::Value::Null).await;
+    assert!(resp.ok);
+    let status = resp.result.unwrap();
+
+    // 三个新字段在场；photo_count == 种子数。
+    assert_eq!(status["photo_count"], 3, "photo_count must equal seeds");
+    let free = status["disk_free_bytes"]
+        .as_u64()
+        .expect("disk_free_bytes present and numeric on unix");
+    let total = status["disk_total_bytes"]
+        .as_u64()
+        .expect("disk_total_bytes present and numeric on unix");
+    assert!(total > 0, "library volume has a size");
+    assert!(free <= total, "free space cannot exceed the volume size");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn activity_list_aggregates_backup_batches() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "t090activity").await;
+    db.upsert_device(&Device {
+        node_id: vec![0xA1; 32],
+        name: "妈妈的手机".into(),
+        role: Role::Member,
+        paired_at: 1,
+        last_seen: None,
+        revoked: false,
+    })
+    .await
+    .unwrap();
+
+    let t0 = 1_700_000_000_000i64;
+    let min = 60_000i64;
+    // Device A1: burst of 3 (1 min apart) + burst of 2 after a 30-min
+    // silence → two batches. Device B2: single asset → one batch.
+    for (n, at) in [(1, t0), (2, t0 + min), (3, t0 + 2 * min)] {
+        db.insert_asset(&seeded_asset(0xA1, n, at)).await.unwrap();
+    }
+    for (n, at) in [(4, t0 + 32 * min), (5, t0 + 33 * min)] {
+        db.insert_asset(&seeded_asset(0xA1, n, at)).await.unwrap();
+    }
+    db.insert_asset(&seeded_asset(0xB2, 6, t0 + min)).await.unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c.call("activity.list", serde_json::Value::Null).await;
+    assert!(resp.ok, "{resp:?}");
+    let batches = resp.result.unwrap()["batches"].clone();
+    let batches = batches.as_array().expect("batches array");
+
+    // 10 分钟窗聚合：正确批次数 = 3（A1 两批 + B2 一批），倒序。
+    assert_eq!(batches.len(), 3, "expected 3 aggregated batches");
+    assert_eq!(batches[0]["node_id"], "a1".repeat(32));
+    assert_eq!(batches[0]["at"], t0 + 33 * min);
+    assert_eq!(batches[0]["asset_count"], 2);
+    assert_eq!(batches[0]["name"], "妈妈的手机");
+    assert_eq!(batches[1]["node_id"], "a1".repeat(32));
+    assert_eq!(batches[1]["at"], t0 + 2 * min);
+    assert_eq!(batches[1]["asset_count"], 3);
+    assert_eq!(batches[2]["node_id"], "b2".repeat(32));
+    assert_eq!(batches[2]["asset_count"], 1);
+    assert_eq!(batches[2]["name"], serde_json::Value::Null, "非名册设备名为 null");
+
+    // limit param truncates from the newest end.
+    let resp = c
+        .call("activity.list", serde_json::json!({ "limit": 1 }))
+        .await;
+    let top = resp.result.unwrap()["batches"].clone();
+    assert_eq!(top.as_array().unwrap().len(), 1);
+    assert_eq!(top[0]["at"], t0 + 33 * min);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn devices_list_reports_connection_unknown_without_transport() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "t090conn").await;
+    db.upsert_device(&Device {
+        node_id: vec![0xAB; 32],
+        name: "test-device".into(),
+        role: Role::Member,
+        paired_at: 1,
+        last_seen: Some(now()), // 有 last_seen 也不许推断在线
+        revoked: false,
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c.call("devices.list", serde_json::Value::Null).await;
+    let devices = resp.result.unwrap();
+    // No transport injected (this harness) → the honest answer is
+    // "unknown" — never "direct"/"offline" guessed from last_seen.
+    assert_eq!(devices["devices"][0]["connection"], "unknown");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn wrong_token_is_dropped_silently() {
     let dir = tempfile::tempdir().unwrap();

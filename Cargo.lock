@@ -909,6 +909,7 @@ dependencies = [
  "hex",
  "image",
  "interprocess",
+ "libc",
  "media-codec",
  "platform",
  "proto",
