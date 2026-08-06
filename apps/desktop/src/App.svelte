@@ -8,6 +8,10 @@
   import Wizard from "./Wizard.svelte";
   // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
   import { humanTime, needsAttention, daysSince } from "./lib/humanTime.js";
+  // T-092: connection 四态 → 文案/点色；字节 → 人读容量（纯函数，
+  // apps/desktop/scripts/check-wire-fns.mjs 断言）
+  import { connectionText, connectionDot } from "./lib/connection.js";
+  import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。直接从仓库根引用，
   // 零副本零漂移；按系统语言选语言表（UI 单语显示的既定决策）。
@@ -86,6 +90,9 @@
   let pendingCount = $state(0);
   // T-091: node_id -> {last_backup_at, asset_count}（device.watermarks，毫秒）
   let watermarks = $state({});
+  // T-092: activity.list 批次（{node_id,name,at,asset_count}，at=unix 毫秒，
+  // name 可能 null）——活动记录页数据源
+  let activity = $state([]);
   // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
   let nowMs = $state(Date.now());
 
@@ -106,6 +113,11 @@
         const w = await call("device.watermarks");
         watermarks = Object.fromEntries((w.watermarks ?? []).map((x) => [x.node_id, x]));
       } catch (_) {}
+      // T-092: 活动记录同样单独容错——倒序（新的在上）由 UI 兜底保证
+      try {
+        const a = await call("activity.list", { limit: 100 });
+        activity = (a.batches ?? []).slice().sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
+      } catch (_) {}
     } catch (e) {
       online = false;
       status = null;
@@ -114,7 +126,11 @@
 
   // T-091: 设备行展示态（纯推导）。哨兵 = 最近备份 >5 天（设计稿原文行为）：
   // 行点 ACT 色 + 右侧「需要看看」+ 次行设计稿话术；无水位记录 = 「还没备份过」
-  //（绝不渲染 epoch）。连接状态槽位保持 T-082 中性占位，等 T-090 合并后另卡接线。
+  //（绝不渲染 epoch）。
+  // T-092: sub 槽接 devices.list[].connection（direct→已直连/safe，
+  // relay→中继话术/wait，offline→离线+最后在线/idle）；哨兵红优先级
+  // 高于连接态——一台设备两个真相时先说要紧的。unknown 保持 T-082
+  // 中性占位（不捏造「已直连」）。
   function deviceRow(d, now) {
     const wm = watermarks[d.node_id];
     const lastBackupAt = wm?.last_backup_at ?? null;
@@ -124,13 +140,16 @@
     if (alert) {
       return {
         alert: true,
+        dot: "act",
         sub: `${daysSince(lastBackupAt, now)} 天没备份了——去那台手机上打开一次 App 就会自动补上`,
         right: "需要看看",
       };
     }
+    const connSub = connectionText(d.connection, lastSeen);
     return {
       alert: false,
-      sub: lastSeen ? `最后在线 ${lastSeen}` : "等待下次备份上报",
+      dot: connectionDot(d.connection),
+      sub: connSub ?? (lastSeen ? `最后在线 ${lastSeen}` : "等待下次备份上报"),
       right: backupTime ? `最近备份 ${backupTime} · ${wm.asset_count} 张` : "还没备份过",
     };
   }
@@ -271,6 +290,19 @@
   // 只说服务状态；连接状态归属每台设备行（daemon 尚未暴露 per-device
   // 连接事实，行内先留结构：状态点 + 右侧槽位）。
   const pairedCount = $derived(status ? status.devices - status.revoked : 0);
+  // T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes 可能 null——
+  // 拿不到时三个值都是 null，设置页整行隐藏，绝不渲染 undefined/NaN）
+  const diskFree = $derived(formatBytes(status?.disk_free_bytes ?? null));
+  const diskTotal = $derived(formatBytes(status?.disk_total_bytes ?? null));
+  const diskPct = $derived(
+    diskUsedPercent(status?.disk_free_bytes ?? null, status?.disk_total_bytes ?? null)
+  );
+  // T-092: 总览副标题「照片库 M 张」——photo_count 缺失时整段隐藏
+  const photoCount = $derived(
+    typeof status?.photo_count === "number" && Number.isFinite(status.photo_count)
+      ? status.photo_count
+      : null
+  );
 </script>
 
 {#if wizard && (!wizard.configured || !wizard.installed) && !online}
@@ -321,8 +353,10 @@
         <section class="page" data-testid="page-overview">
           <div class="lede">
             <h2 class="headline">全家的照片，安全地住在这台电脑上。</h2>
+            <!-- T-092: 副标题接 status.photo_count——「已配对设备 N 台 · 照片库 M 张」；
+                 photo_count 缺失时该段整体隐藏 -->
             <p class="sub">
-              {t("ui.paired_count", { n: pairedCount })}
+              {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · 照片库 ${photoCount} 张`}{/if}
               {#if status && status.revoked > 0}{t("ui.revoked_count", { n: status.revoked })}{/if}
             </p>
           </div>
@@ -359,9 +393,10 @@
                     {#each devices.filter((d) => !d.revoked) as d}
                       {@const row = deviceRow(d, nowMs)}
                       <li>
-                        <!-- T-091: 右侧接 device.watermarks 真数据；哨兵行点
-                             变 ACT 色（设计稿总览水位卡为单行结构）。 -->
-                        <span class="statusdot" class:idle={!row.alert} class:act={row.alert}></span>
+                        <!-- T-091: 右侧接 device.watermarks 真数据（设计稿总览
+                             水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
+                             连接态（direct=safe / relay=wait / offline·unknown=idle）。 -->
+                        <span class="statusdot {row.dot}"></span>
                         <span class="dev-name">{d.name}</span>
                         <span class="dev-right" class:act={row.alert}>{row.right}</span>
                       </li>
@@ -412,11 +447,13 @@
                   {#each activeDevices as d}
                     {@const row = deviceRow(d, nowMs)}
                     <li>
-                      <!-- T-091: 占位换真数据——次行「最后在线 <人性化时间>」，
-                           右侧「最近备份 <人性化时间> · N 张」；哨兵行 ACT 色 +
-                           「需要看看」+ 设计稿原文话术。机型/连接状态 daemon
-                           尚未暴露，槽位维持中性（T-082 决策，等 T-090）。 -->
-                      <span class="statusdot" class:idle={!row.alert} class:act={row.alert}></span>
+                      <!-- T-091: 右侧「最近备份 <人性化时间> · N 张」；哨兵行
+                           ACT 色 + 「需要看看」+ 设计稿原文话术。
+                           T-092: 次行接 connection 真数据（已直连 / 经中继连接
+                           ——内容加密，中继无法读取 / 离线，最后在线 <人性化时间>），
+                           unknown 保持 T-082 中性占位；哨兵红 > 连接态。机型
+                           daemon 仍未暴露，不捏造。 -->
+                      <span class="statusdot {row.dot}"></span>
                       <span class="dev-main">
                         <span class="dev-name">{d.name}</span>
                         <span class="dev-sub">{row.sub}</span>
@@ -452,9 +489,27 @@
             <h2 class="headline">活动记录</h2>
             <p class="sub">谁备份了什么，一目了然——不用去 Finder 里对账。</p>
           </div>
+          <!-- T-092: 接 activity.list 真数据——批次行「<设备名> 备份了 N 张」
+               + 右侧人性化时间（设计稿行结构），倒序。name 为 null 用中性
+               占位；at 无效时时间隐藏（绝不渲染 epoch/undefined）。
+               页脚不上设计稿的「保存 90 天」承诺（90 天保留未实现，
+               T-092 卡裁决），改说已实现的事实。 -->
           <div class="card">
-            <p class="hint">这里还没有内容。家人手机开始备份后，会按时间列出「谁备份了什么」。</p>
+            {#if activity.length === 0}
+              <p class="hint">这里还没有内容。家人手机开始备份后，会按时间列出「谁备份了什么」。</p>
+            {:else}
+              <ul class="log-rows">
+                {#each activity as b (b.node_id + ":" + b.at)}
+                  {@const at = humanTime(b.at, nowMs)}
+                  <li>
+                    <span class="log-text">{b.name ?? "未知设备"} 备份了 {b.asset_count} 张</span>
+                    {#if at}<span class="log-time">{at}</span>{/if}
+                  </li>
+                {/each}
+              </ul>
+            {/if}
           </div>
+          <p class="hint">记录来自本机照片库，不上传。</p>
         </section>
       {:else if page === "settings"}
         <section class="page" data-testid="page-settings">
@@ -471,6 +526,16 @@
                 <button class="primary" onclick={openLibrary}>{t("ui.open_library")}</button>
                 <button onclick={chooseFolder}>{t("ui.change_library")}</button>
               </div>
+              <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
+                   「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
+                   null（磁盘统计拿不到）整行连进度条一起隐藏。 -->
+              {#if diskFree !== null && diskTotal !== null && diskPct !== null}
+                <div class="disk-row">
+                  <span>磁盘空间</span>
+                  <span class="disk-val">可用 {diskFree} / 共 {diskTotal}</span>
+                </div>
+                <div class="disk-bar"><div class="disk-fill" style="width:{diskPct}%"></div></div>
+              {/if}
               <p class="hint">更改位置重启后台服务后生效；已备份的照片不会自动搬家。</p>
             </div>
             <div class="col">
@@ -731,6 +796,14 @@
   .statusdot.act {
     background: var(--pp-act);
   }
+  /* T-092: 连接态点色——direct=safe 绿，relay=wait 琥珀（语义色仅此三种 +
+     act，别的颜色不带含义） */
+  .statusdot.safe {
+    background: var(--pp-safe);
+  }
+  .statusdot.wait {
+    background: var(--pp-waiting);
+  }
   .dev-right.act {
     color: var(--pp-act);
   }
@@ -775,6 +848,60 @@
   .removed-name {
     color: var(--pp-ink-40);
     font-weight: 400;
+  }
+  /* T-092: 活动记录批次行——设计稿结构：文本左、时间右（baseline 对齐） */
+  .log-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .log-rows li {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--pp-divider);
+  }
+  .log-rows li:last-child {
+    border-bottom: none;
+  }
+  .log-text {
+    font-size: 15px;
+    font-weight: 500;
+  }
+  .log-time {
+    margin-left: auto;
+    flex: none;
+    font-size: 13px;
+    color: var(--pp-ink-40);
+  }
+  /* T-092: 设置页磁盘水位行 + 细进度条（设计稿：上分隔线、8px 圆角条，
+     轨道 hairline、填充 ink——全部 token 色） */
+  .disk-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    border-top: 1px solid var(--pp-divider);
+    margin-top: 14px;
+    padding-top: 14px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .disk-row .disk-val {
+    color: var(--pp-ink-40);
+    font-weight: 400;
+  }
+  .disk-bar {
+    height: 8px;
+    margin-top: 10px;
+    background: var(--pp-hairline);
+    border-radius: var(--pp-radius-pill);
+    overflow: hidden;
+  }
+  .disk-fill {
+    height: 100%;
+    background: var(--pp-ink);
+    border-radius: var(--pp-radius-pill);
   }
   .setting-row {
     display: flex;
