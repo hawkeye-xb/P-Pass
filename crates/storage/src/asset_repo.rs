@@ -35,6 +35,20 @@ pub struct TimelinePage {
     pub next_cursor: Option<String>,
 }
 
+/// One backup-activity batch (T-090 `activity.list`): a run of assets
+/// from one device whose arrival times never gap past the window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActivityBatch {
+    /// Uploader NodeId (32 bytes).
+    pub node_id: Vec<u8>,
+    /// Device display name; `None` when the uploader is not (or no
+    /// longer) in the device roster.
+    pub name: Option<String>,
+    /// Batch timestamp = newest `added_at` inside the batch (unix ms).
+    pub at: i64,
+    pub asset_count: i64,
+}
+
 impl Db {
     /// Insert a new asset row. Duplicate hash is an error — dedup decisions
     /// (T-011) check `get_asset` first; a violation here means a logic bug.
@@ -77,6 +91,71 @@ impl Db {
             .execute(self.pool())
             .await?;
         Ok(())
+    }
+
+    /// Total number of indexed assets — `status.photo_count` (T-090).
+    /// Read-only; the count is over the whole library regardless of
+    /// which device contributed the asset.
+    pub async fn count_assets(&self) -> Result<i64> {
+        Ok(sqlx::query_scalar("SELECT COUNT(*) FROM asset")
+            .fetch_one(self.pool())
+            .await?)
+    }
+
+    /// Backup activity batches, newest first (T-090 `activity.list`).
+    /// Read-only aggregation over the existing `asset` table — no new
+    /// tables, no write path.
+    ///
+    /// 聚合口径（与 IPC 契约一致，改动需双方同步）：
+    /// - 时间基准是 `added_at`（资产落库时刻）——activity 回答的是
+    ///   “备份什么时候发生”，不是照片拍摄时间（`taken_at`）。
+    /// - 批次 = 同一 `src_device` 内按 `added_at` 升序排列后，相邻
+    ///   间隔 ≤ `gap_ms` 的连续段；间隔 > `gap_ms` 即断开为新批次。
+    ///   （SQL 里用 LAG 标记断点，再前缀和编号；断点判定用严格大于，
+    ///   所以 `gap_ms = 0` 时相同时间戳仍同批、任何递增即断批。）
+    /// - 批次时间 `at` = 段内最大 `added_at`；结果按 `at` 倒序，
+    ///   同刻按 `src_device` 升序保证输出确定。
+    /// - 设备名 LEFT JOIN 自 `device` 表；不在名册的上传者名为 NULL。
+    pub async fn list_activity(&self, gap_ms: i64, limit: u32) -> Result<Vec<ActivityBatch>> {
+        let limit = i64::from(limit.clamp(1, 1000));
+        let rows = sqlx::query(
+            "WITH flagged AS (
+               SELECT src_device, added_at,
+                      CASE WHEN LAG(added_at) OVER w IS NULL
+                             OR added_at - LAG(added_at) OVER w > ?1
+                           THEN 1 ELSE 0 END AS is_new
+               FROM asset
+               WINDOW w AS (PARTITION BY src_device ORDER BY added_at)
+             ),
+             batched AS (
+               -- Default RANGE frame on purpose: added_at ties are peers
+               -- and must land in the same batch regardless of LAG's
+               -- (arbitrary) ordering among them.
+               SELECT src_device, added_at,
+                      SUM(is_new) OVER (PARTITION BY src_device
+                                        ORDER BY added_at) AS batch_no
+               FROM flagged
+             )
+             SELECT b.src_device, d.name, MAX(b.added_at) AS at,
+                    COUNT(*) AS asset_count
+             FROM batched b LEFT JOIN device d ON d.node_id = b.src_device
+             GROUP BY b.src_device, b.batch_no
+             ORDER BY at DESC, b.src_device ASC
+             LIMIT ?2",
+        )
+        .bind(gap_ms)
+        .bind(limit)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|r| ActivityBatch {
+                node_id: r.get("src_device"),
+                name: r.get("name"),
+                at: r.get("at"),
+                asset_count: r.get("asset_count"),
+            })
+            .collect())
     }
 
     pub async fn get_asset(&self, hash: &[u8]) -> Result<Option<Asset>> {
@@ -294,6 +373,92 @@ mod tests {
             keys, expected,
             "ORDER BY must match (taken_at DESC, hash ASC)"
         );
+    }
+
+    // ── T-090: photo_count + activity aggregation ──
+
+    fn asset_at(src: u8, hash_byte: u8, added_at: i64) -> Asset {
+        let mut a = asset(hash_byte, Some(added_at));
+        a.src_device = vec![src; 32];
+        a.added_at = added_at;
+        a
+    }
+
+    #[tokio::test]
+    async fn count_assets_matches_rows() {
+        let db = Db::open_in_memory().await.unwrap();
+        assert_eq!(db.count_assets().await.unwrap(), 0);
+        for n in 0..5u8 {
+            db.insert_asset(&asset(n, Some(1))).await.unwrap();
+        }
+        assert_eq!(db.count_assets().await.unwrap(), 5);
+    }
+
+    #[tokio::test]
+    async fn activity_batches_split_on_gap_and_partition_by_device() {
+        let db = Db::open_in_memory().await.unwrap();
+        let t0 = 1_700_000_000_000i64;
+        let min = 60_000i64;
+        // Device 1: three assets 1 min apart (one batch), then two more
+        // after a 30-min silence (second batch).
+        db.insert_asset(&asset_at(1, 1, t0)).await.unwrap();
+        db.insert_asset(&asset_at(1, 2, t0 + min)).await.unwrap();
+        db.insert_asset(&asset_at(1, 3, t0 + 2 * min)).await.unwrap();
+        db.insert_asset(&asset_at(1, 4, t0 + 32 * min)).await.unwrap();
+        db.insert_asset(&asset_at(1, 5, t0 + 33 * min)).await.unwrap();
+        // Device 2: one asset inside device 1's first window — still its
+        // own batch (partitioned per device).
+        db.insert_asset(&asset_at(2, 6, t0 + min)).await.unwrap();
+
+        let gap = 10 * min;
+        let batches = db.list_activity(gap, 50).await.unwrap();
+        assert_eq!(batches.len(), 3, "two device-1 batches + one device-2");
+        // Newest first: d1 batch2 (t0+33m), d1 batch1 (t0+2m), d2 (t0+1m).
+        assert_eq!(batches[0].node_id, vec![1u8; 32]);
+        assert_eq!(batches[0].at, t0 + 33 * min);
+        assert_eq!(batches[0].asset_count, 2);
+        assert_eq!(batches[1].node_id, vec![1u8; 32]);
+        assert_eq!(batches[1].at, t0 + 2 * min);
+        assert_eq!(batches[1].asset_count, 3);
+        assert_eq!(batches[2].node_id, vec![2u8; 32]);
+        assert_eq!(batches[2].asset_count, 1);
+        // Uploader not in the device roster → name is NULL, batch stays.
+        assert_eq!(batches[0].name, None);
+
+        // limit truncates from the newest end.
+        let top = db.list_activity(gap, 1).await.unwrap();
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].at, t0 + 33 * min);
+
+        // gap 0 = any strictly increasing added_at breaks the batch:
+        // 6 distinct timestamps → 6 batches (aggregation really works).
+        let split = db.list_activity(0, 50).await.unwrap();
+        assert_eq!(split.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn activity_ties_stay_in_one_batch_and_names_join() {
+        let db = Db::open_in_memory().await.unwrap();
+        // Two assets at the exact same instant: one batch even at gap 0.
+        db.insert_asset(&asset_at(3, 1, 42)).await.unwrap();
+        db.insert_asset(&asset_at(3, 2, 42)).await.unwrap();
+        let batches = db.list_activity(0, 50).await.unwrap();
+        assert_eq!(batches.len(), 1, "identical timestamps never split");
+        assert_eq!(batches[0].asset_count, 2);
+
+        // A rostered device contributes its display name.
+        db.upsert_device(&crate::Device {
+            node_id: vec![3u8; 32],
+            name: "妈妈的手机".into(),
+            role: crate::Role::Member,
+            paired_at: 1,
+            last_seen: None,
+            revoked: false,
+        })
+        .await
+        .unwrap();
+        let batches = db.list_activity(0, 50).await.unwrap();
+        assert_eq!(batches[0].name.as_deref(), Some("妈妈的手机"));
     }
 
     #[tokio::test]

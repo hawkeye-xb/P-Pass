@@ -7,8 +7,9 @@
 //! `proto::Resp` line. Wrong token = connection dropped, one diag event.
 //!
 //! Methods (契约): `status` `pairing.start` `pairing.confirm`
-//! `devices.list` `device.revoke` `folder.set` `logs.export` —
-//! plus DAE-01 `daemon.step_down` (newest-wins takeover, added 2026-08-04).
+//! `devices.list` `device.revoke` `device.watermarks` `folder.set`
+//! `logs.export` `activity.list` (T-090) — plus DAE-01
+//! `daemon.step_down` (newest-wins takeover, added 2026-08-04).
 
 use std::cmp::Ordering;
 use std::path::PathBuf;
@@ -39,7 +40,19 @@ pub struct IpcServer {
     /// (launchd KeepAlive relaunches from the new plist). Tests inject a
     /// no-op to observe the handshake without killing the harness.
     step_down_exit: Arc<dyn Fn() + Send + Sync>,
+    /// T-090: live connection status per device (raw 32-byte NodeId in).
+    /// main injects a closure over the transport slot; the default says
+    /// `Unknown` — 拿不到实况就如实报 unknown，绝不用 last_seen 推断.
+    conn_status: ConnStatusFn,
 }
+
+/// See [`IpcServer::set_conn_status_provider`].
+type ConnStatusFn = Arc<dyn Fn(&[u8]) -> transport::ConnectionStatus + Send + Sync>;
+
+/// `activity.list` batch window: assets from one device arriving within
+/// this gap of each other belong to one backup batch (卡片建议 10 分钟).
+/// The aggregation itself lives in `storage::Db::list_activity`.
+const ACTIVITY_GAP_MS: i64 = 10 * 60 * 1000;
 
 /// Result of the DAE-01 single-instance claim (newest wins).
 #[derive(Debug, PartialEq, Eq)]
@@ -213,12 +226,22 @@ impl IpcServer {
             pending,
             started_at: now_ms(),
             step_down_exit: Arc::new(|| std::process::exit(0)),
+            conn_status: Arc::new(|_| transport::ConnectionStatus::Unknown),
         }
     }
 
     /// Override the step_down side effect (tests only).
     pub fn set_step_down_exit(&mut self, f: impl Fn() + Send + Sync + 'static) {
         self.step_down_exit = Arc::new(f);
+    }
+
+    /// T-090: inject the live connection-status source (main wires this
+    /// to the transport once it is bound; unset = honest `Unknown`).
+    pub fn set_conn_status_provider(
+        &mut self,
+        f: impl Fn(&[u8]) -> transport::ConnectionStatus + Send + Sync + 'static,
+    ) {
+        self.conn_status = Arc::new(f);
     }
 
     /// DAE-01 single-instance claim — run BEFORE binding the socket.
@@ -442,6 +465,10 @@ impl IpcServer {
                                 "role": d.role.as_str(),
                                 "revoked": d.revoked,
                                 "last_seen": d.last_seen,
+                                // T-090: live transport verdict only —
+                                // "unknown" when no live info exists;
+                                // never derived from last_seen.
+                                "connection": (self.conn_status)(&d.node_id).as_str(),
                             })
                         })
                         .collect();
@@ -449,6 +476,33 @@ impl IpcServer {
                 }
                 Err(_) => internal(id),
             },
+            // T-090: backup activity feed — read-only aggregation of the
+            // existing assets table into per-device batches (10-minute
+            // arrival gap = batch boundary; 口径注释在 storage::list_activity).
+            "activity.list" => {
+                let limit = req
+                    .params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map_or(50, |v| v.min(1000) as u32);
+                match self.db.list_activity(ACTIVITY_GAP_MS, limit).await {
+                    Ok(batches) => {
+                        let list: Vec<_> = batches
+                            .iter()
+                            .map(|b| {
+                                serde_json::json!({
+                                    "node_id": hex(&b.node_id),
+                                    "name": b.name,
+                                    "at": b.at,
+                                    "asset_count": b.asset_count,
+                                })
+                            })
+                            .collect();
+                        Resp::ok(id, serde_json::json!({ "batches": list }))
+                    }
+                    Err(_) => internal(id),
+                }
+            }
             // DOG-01: per-device backup watermarks — dogfood daily report /
             // desktop activity / phone "last success" share this source.
             "device.watermarks" => match self.db.list_device_watermarks().await {
@@ -565,7 +619,14 @@ impl IpcServer {
         let devices = self.db.list_devices().await?;
         let state = self.diag.state();
         let pending = self.pending.lock().expect("pending lock").len();
+        // T-090: photo total + disk watermarks of the library volume.
+        let photo_count = self.db.count_assets().await?;
+        let disk = disk_stats(&self.data_dir);
         Ok(serde_json::json!({
+            // T-090 data-plane fields (桌面总览卡直接消费).
+            "photo_count": photo_count,
+            "disk_free_bytes": disk.map(|d| d.free),
+            "disk_total_bytes": disk.map(|d| d.total),
             "state": state_name(&state),
             "msg_key": state.msg_key(),
             "devices": devices.len(),
@@ -653,6 +714,46 @@ impl IpcServer {
         zip.finish()?;
         Ok(zip_path)
     }
+}
+
+/// Free/total bytes of the volume holding the photo library (T-090).
+#[derive(Debug, Clone, Copy)]
+struct DiskStats {
+    free: u64,
+    total: u64,
+}
+
+/// Volume capacity for `path`. `std::fs` has no stable capacity API, so
+/// unix goes through `libc::statvfs` (libc was already in the dependency
+/// tree via tokio/iroh; declared directly for this call). `free` is
+/// `f_bavail` — what an unprivileged writer can actually use, matching
+/// what Finder/`df` report. Non-unix returns `None` (fields serialize as
+/// null) until a platform adapter lands — rule B.2 keeps platform gates
+/// out of this crate, and honest null beats a made-up number.
+// statvfs field widths differ per unix (fsblkcnt_t: u32 on macOS, u64 on
+// Linux) — `u64::from` is required on one and "useless" on the other, so
+// the lint cannot be satisfied on both. From (not `as`) keeps it lossless.
+#[allow(clippy::useless_conversion)]
+#[cfg(unix)]
+fn disk_stats(path: &std::path::Path) -> Option<DiskStats> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut vfs: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut vfs) } != 0 {
+        return None;
+    }
+    // u64::from, not `as`: fsblkcnt_t is u32 on macOS and u64 on Linux —
+    // From compiles clean on both (identity impl on Linux), no lossy cast.
+    let frsize = u64::from(vfs.f_frsize);
+    Some(DiskStats {
+        free: u64::from(vfs.f_bavail) * frsize,
+        total: u64::from(vfs.f_blocks) * frsize,
+    })
+}
+
+#[cfg(not(unix))]
+fn disk_stats(_path: &std::path::Path) -> Option<DiskStats> {
+    None
 }
 
 /// Replace the user's home directory (and thus their username) in any

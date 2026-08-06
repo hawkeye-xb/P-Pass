@@ -11,7 +11,7 @@ mod conninfo;
 mod iroh_impl;
 
 pub use blobs::Blobs;
-pub use conninfo::{ConnInfo, PathKind};
+pub use conninfo::{ConnInfo, ConnectionStatus, PathKind};
 pub use iroh_impl::{
     node_id_from_secret_key, BiStream, Incoming, IrohTransport, PeerAddr, TransportConfig,
 };
