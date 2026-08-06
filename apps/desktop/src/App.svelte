@@ -6,6 +6,8 @@
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
+  // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
+  import { humanTime, needsAttention, daysSince } from "./lib/humanTime.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。直接从仓库根引用，
   // 零副本零漂移；按系统语言选语言表（UI 单语显示的既定决策）。
@@ -82,6 +84,10 @@
   let qrText = $state("");
   let message = $state("");
   let pendingCount = $state(0);
+  // T-091: node_id -> {last_backup_at, asset_count}（device.watermarks，毫秒）
+  let watermarks = $state({});
+  // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
+  let nowMs = $state(Date.now());
 
   async function call(method, params = {}) {
     return await invoke("daemon_call", { method, params });
@@ -94,10 +100,39 @@
       pendingCount = status.pending_pairs ?? 0;
       const d = await call("devices.list");
       devices = d.devices ?? [];
+      nowMs = Date.now();
+      // T-091: 水位数据单独容错——拿不到不拖垮整页（保留上次值）
+      try {
+        const w = await call("device.watermarks");
+        watermarks = Object.fromEntries((w.watermarks ?? []).map((x) => [x.node_id, x]));
+      } catch (_) {}
     } catch (e) {
       online = false;
       status = null;
     }
+  }
+
+  // T-091: 设备行展示态（纯推导）。哨兵 = 最近备份 >5 天（设计稿原文行为）：
+  // 行点 ACT 色 + 右侧「需要看看」+ 次行设计稿话术；无水位记录 = 「还没备份过」
+  //（绝不渲染 epoch）。连接状态槽位保持 T-082 中性占位，等 T-090 合并后另卡接线。
+  function deviceRow(d, now) {
+    const wm = watermarks[d.node_id];
+    const lastBackupAt = wm?.last_backup_at ?? null;
+    const backupTime = humanTime(lastBackupAt, now);
+    const alert = needsAttention(lastBackupAt, now);
+    const lastSeen = humanTime(d.last_seen, now);
+    if (alert) {
+      return {
+        alert: true,
+        sub: `${daysSince(lastBackupAt, now)} 天没备份了——去那台手机上打开一次 App 就会自动补上`,
+        right: "需要看看",
+      };
+    }
+    return {
+      alert: false,
+      sub: lastSeen ? `最后在线 ${lastSeen}` : "等待下次备份上报",
+      right: backupTime ? `最近备份 ${backupTime} · ${wm.asset_count} 张` : "还没备份过",
+    };
   }
 
   async function startPairing() {
@@ -322,12 +357,13 @@
                 {:else}
                   <ul class="device-rows">
                     {#each devices.filter((d) => !d.revoked) as d}
+                      {@const row = deviceRow(d, nowMs)}
                       <li>
-                        <span class="statusdot idle"></span>
+                        <!-- T-091: 右侧接 device.watermarks 真数据；哨兵行点
+                             变 ACT 色（设计稿总览水位卡为单行结构）。 -->
+                        <span class="statusdot" class:idle={!row.alert} class:act={row.alert}></span>
                         <span class="dev-name">{d.name}</span>
-                        <!-- T-082: 右侧是「最近备份」槽位；daemon 尚未暴露
-                             per-device 备份时间，数据未接前显示中性占位。 -->
-                        <span class="dev-right">—</span>
+                        <span class="dev-right" class:act={row.alert}>{row.right}</span>
                       </li>
                     {/each}
                   </ul>
@@ -374,13 +410,18 @@
               {:else}
                 <ul class="device-rows roomy">
                   {#each activeDevices as d}
+                    {@const row = deviceRow(d, nowMs)}
                     <li>
-                      <span class="statusdot idle"></span>
+                      <!-- T-091: 占位换真数据——次行「最后在线 <人性化时间>」，
+                           右侧「最近备份 <人性化时间> · N 张」；哨兵行 ACT 色 +
+                           「需要看看」+ 设计稿原文话术。机型/连接状态 daemon
+                           尚未暴露，槽位维持中性（T-082 决策，等 T-090）。 -->
+                      <span class="statusdot" class:idle={!row.alert} class:act={row.alert}></span>
                       <span class="dev-main">
                         <span class="dev-name">{d.name}</span>
-                        <span class="dev-sub">等待下次备份上报</span>
+                        <span class="dev-sub">{row.sub}</span>
                       </span>
-                      <span class="dev-right">—</span>
+                      <span class="dev-right" class:act={row.alert}>{row.right}</span>
                       <button class="danger" onclick={() => revoke(d.node_id, d.name)}>{t("ui.remove")}</button>
                     </li>
                   {/each}
@@ -685,6 +726,13 @@
   }
   .statusdot.idle {
     background: var(--pp-idle);
+  }
+  /* T-091: 哨兵态（最近备份 >5 天）——行点与右侧文案用 ACT 色 */
+  .statusdot.act {
+    background: var(--pp-act);
+  }
+  .dev-right.act {
+    color: var(--pp-act);
   }
   .dev-name {
     flex: 1;
