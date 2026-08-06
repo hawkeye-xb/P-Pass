@@ -13,8 +13,10 @@
     "windows": [
       {
         "title": "P-Pass",
-        "width": 760,
-        "height": 640,
+        "width": 1140,
+        "height": 720,
+        "minWidth": 920,
+        "minHeight": 600,
         "resizable": true
       }
     ],
