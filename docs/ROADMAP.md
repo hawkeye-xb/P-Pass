@@ -369,6 +369,15 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       模拟器视觉验收过（设计规范 docs/design/2026-08-05-layout-v1/）。
       挂账：按人过滤需 proto owner 字段；网格 ↑/↓ 角标需本地×远端时间线
       合并；新文案待收编 assets/i18n。
+- [x] T-090/T-091/T-092 链1数据面（daemon IPC + 桌面接线） — **merged 2026-08-06**:
+      daemon 暴露 photo_count/磁盘水位（statvfs）/activity.list（asset 表
+      窗口函数聚合，不建新表）/devices.list.connection（iroh 路径状态在
+      transport 内包成中性 enum，B.1 门禁绿）；桌面接 watermarks/last_seen/
+      connection/活动批次/照片总数/磁盘条，哨兵>5天亮红（红>连接态）。
+      三卡 22+28 断言脚本+82 rust 测试全绿，各带反证红；常驻 daemon 已
+      升级 v0.2.1（launchd 稳定路径受监护，NodeId/配对未变），真数据实测
+      photo_count=51、SM-S9210 批次上屏。挂账：设备行机型前缀（daemon 未
+      暴露机型）、活动页周统计胶囊、90 天保留策略。
 - [x] T-082 桌面 UI 还原走查修复 — **merged 2026-08-06 (6f4efb97)**:
       真窗口走查后修 7 项走样：窗口 1140×720+min 920×600、两卡等高
       (stretch)、QR 148×148 居中 2x、:focus-visible 墨色描边（灭系统蓝圈）、
