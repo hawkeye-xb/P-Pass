@@ -13,7 +13,7 @@ use std::task::{Context, Poll};
 use iroh::endpoint::{presets, Connection, ReadExactError, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
 
-use crate::conninfo::{classify, ConnInfo, PathFacts};
+use crate::conninfo::{classify, status_of_live, ConnInfo, ConnectionStatus, PathFacts};
 use crate::{NodeId, Result, Transport, TransportError, MAX_FRAME};
 
 /// Construction inputs, mapped from the daemon `Config` (T-004): the daemon
@@ -220,6 +220,25 @@ impl IrohTransport {
         self.ep.close().await;
     }
 
+    /// T-090: neutral connection status of one peer, for `devices.list`.
+    ///
+    /// Evidence source is the live [`Connection`]'s `paths()` — iroh 1.x's
+    /// per-path facts (`is_selected` / `is_relay` / `remote_addr`), the
+    /// successor of the old `Endpoint::remote_info` / `conn_type` surface.
+    /// No open connection (or a closed one) = `Offline`; a live connection
+    /// with no readable path yet = `Unknown`. `last_seen` is never
+    /// consulted — history must not masquerade as liveness (T-090 契约).
+    pub fn connection_status(&self, peer: NodeId) -> ConnectionStatus {
+        let conns = self.conns.lock().expect("conns lock");
+        let Some(conn) = conns.get(&peer) else {
+            return ConnectionStatus::Offline;
+        };
+        if conn.close_reason().is_some() {
+            return ConnectionStatus::Offline;
+        }
+        status_of_live(classify(&path_facts(conn)))
+    }
+
     /// Crate-internal endpoint access (blobs.rs shares the endpoint).
     pub(crate) fn endpoint(&self) -> &Endpoint {
         &self.ep
@@ -358,21 +377,25 @@ impl Transport for IrohTransport {
         if conn.close_reason().is_some() {
             return ConnInfo::NONE;
         }
-        let facts: Vec<PathFacts> = conn
-            .paths()
-            .iter()
-            .map(|p| PathFacts {
-                selected: p.is_selected(),
-                relay: p.is_relay(),
-                remote_ip: match p.remote_addr() {
-                    TransportAddr::Ip(sa) => Some(sa.ip()),
-                    _ => None,
-                },
-                rtt: p.rtt(),
-            })
-            .collect();
-        classify(&facts)
+        classify(&path_facts(conn))
     }
+}
+
+/// iroh-independent snapshot of a connection's open paths (shared by
+/// `conn_info` and `connection_status`).
+fn path_facts(conn: &Connection) -> Vec<PathFacts> {
+    conn.paths()
+        .iter()
+        .map(|p| PathFacts {
+            selected: p.is_selected(),
+            relay: p.is_relay(),
+            remote_ip: match p.remote_addr() {
+                TransportAddr::Ip(sa) => Some(sa.ip()),
+                _ => None,
+            },
+            rtt: p.rtt(),
+        })
+        .collect()
 }
 
 /// 100.64.0.0/10 — RFC 6598 carrier-grade NAT, also used by Tailscale.

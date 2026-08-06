@@ -40,6 +40,13 @@ zip = { version = "5", default-features = false, features = ["deflate"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
+# T-090 disk watermarks in `status`: statvfs on the photo-library volume —
+# std::fs has no stable capacity API. Already in the tree (tokio/iroh pull
+# it in); declared directly because we now call it ourselves. Unix-only:
+# rule B.2 keeps cfg(windows) out of this crate, non-unix reports null.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile = "3"
 blake3 = "1"

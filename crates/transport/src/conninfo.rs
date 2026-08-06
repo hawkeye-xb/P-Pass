@@ -38,6 +38,46 @@ impl ConnInfo {
     };
 }
 
+/// Neutral per-device connection status for `devices.list` (T-090).
+/// This vocabulary is the ONLY connection surface allowed past the
+/// transport boundary — iroh types never leave this crate (rule B.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionStatus {
+    /// Live connection over a LAN or holepunched/public UDP path.
+    Direct,
+    /// Live connection riding a relay server (works, rate-limited).
+    Relay,
+    /// No live connection to this peer right now (definitive: the
+    /// endpoint holds no open connection).
+    Offline,
+    /// Cannot determine — transport not bound yet, or a live connection
+    /// whose paths are unreadable. Never inferred from `last_seen`.
+    Unknown,
+}
+
+impl ConnectionStatus {
+    /// Wire form used in the IPC JSON (`devices.list[].connection`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ConnectionStatus::Direct => "direct",
+            ConnectionStatus::Relay => "relay",
+            ConnectionStatus::Offline => "offline",
+            ConnectionStatus::Unknown => "unknown",
+        }
+    }
+}
+
+/// Status of a LIVE connection from its classified path info. `Offline`
+/// is the caller's verdict (absence of a connection); a live connection
+/// whose paths cannot be read is `Unknown`, never guessed.
+pub(crate) fn status_of_live(info: ConnInfo) -> ConnectionStatus {
+    match info.path {
+        Some(PathKind::Lan | PathKind::Direct) => ConnectionStatus::Direct,
+        Some(PathKind::Relay) => ConnectionStatus::Relay,
+        None => ConnectionStatus::Unknown,
+    }
+}
+
 /// iroh-independent snapshot of one open network path.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PathFacts {
@@ -159,5 +199,36 @@ mod tests {
     fn no_paths_means_none() {
         assert_eq!(classify(&[]), ConnInfo::NONE);
         assert_eq!(ConnInfo::NONE.path, None);
+    }
+
+    // ── T-090: ConnectionStatus mapping ──
+
+    #[test]
+    fn live_status_maps_lan_and_direct_to_direct() {
+        let lan = classify(&[facts(true, false, Some("192.168.1.2"), 3)]);
+        assert_eq!(status_of_live(lan), ConnectionStatus::Direct);
+        let direct = classify(&[facts(true, false, Some("123.119.22.188"), 24)]);
+        assert_eq!(status_of_live(direct), ConnectionStatus::Direct);
+    }
+
+    #[test]
+    fn live_status_maps_relay_to_relay() {
+        let relay = classify(&[facts(true, true, None, 150)]);
+        assert_eq!(status_of_live(relay), ConnectionStatus::Relay);
+    }
+
+    #[test]
+    fn live_status_without_readable_paths_is_unknown_not_offline() {
+        // A live connection whose paths are unreadable: we must not
+        // claim offline — the connection exists. Honest answer: unknown.
+        assert_eq!(status_of_live(classify(&[])), ConnectionStatus::Unknown);
+    }
+
+    #[test]
+    fn status_wire_strings_match_ipc_contract() {
+        assert_eq!(ConnectionStatus::Direct.as_str(), "direct");
+        assert_eq!(ConnectionStatus::Relay.as_str(), "relay");
+        assert_eq!(ConnectionStatus::Offline.as_str(), "offline");
+        assert_eq!(ConnectionStatus::Unknown.as_str(), "unknown");
     }
 }
