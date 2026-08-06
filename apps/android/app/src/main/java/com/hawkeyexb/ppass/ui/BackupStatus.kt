@@ -72,6 +72,22 @@ fun lastSuccessOf(ts: Long, now: Long): LastSuccess {
     }
 }
 
+// ── T-083 目标 3：失败红卡渲染闸门（设计红线「报错永远不出现代码，
+// 先说『照片没丢』」）——纯函数、零 Android 依赖，JVM 直接可测。 ──
+
+/** 红卡文案的两个去处：[main] = 人话正文（来自字符串资源，进红卡正文）；
+ *  [detail] = 完整原始错误串（只进默认收起的「查看技术详情」折叠区，
+ *  完整原文同时由 BackupUiStateHolder 走 Log.e 进 logcat 诊断导出路径）。 */
+data class TroubleText(val main: String, val detail: String)
+
+/**
+ * 唯一允许把原始错误串（`IrohError { kind: ... }` / 异常 toString dump）
+ * 变成可渲染文案的地方：原文只落 [TroubleText.detail]；[TroubleText.main]
+ * 恒等于传入的人话正文——任何代码碎片都不经此进入主文案（有单测锁死）。
+ */
+fun troubleTextOf(rawError: String, humanBody: String): TroubleText =
+    TroubleText(main = humanBody, detail = rawError.trim())
+
 /** 照片页轻过滤器（设计稿：全部 / 仅本机 / 家人的）。
  *  proto 无 owner 字段（本卡不准动 proto），用「这台手机已确认备份的
  *  hash 集合」近似归属：在集合内 = 本机备份的；不在 = 家人设备的。 */

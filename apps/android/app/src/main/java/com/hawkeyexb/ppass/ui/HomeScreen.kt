@@ -6,6 +6,7 @@
 package com.hawkeyexb.ppass.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,8 +26,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
@@ -49,6 +55,8 @@ sealed class BackupUiState {
 
 @Composable
 fun HomeScreen(
+    // T-083 目标 1：副标题「已连接 …」已删（连接状态是桌面设备行的职责，
+    // 手机页头只有「备份」）。参数位暂留——调用方仍传入，后续卡可能复用。
     storageName: String,
     state: BackupUiState,
     onBackupNow: () -> Unit,
@@ -78,14 +86,10 @@ fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .padding(20.dp, 14.dp, 20.dp, 8.dp),
     ) {
-        // ── 标题：设计稿 = 「备份」大字 serif；电脑名做副行 ──
+        // ── 标题：设计稿 = 仅「备份」28px serif，无副标题（T-083 目标 1）──
         Text(
             stringResource(R.string.tab_backup),
-            fontSize = 30.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
-        )
-        Text(
-            "${stringResource(R.string.connected_to)} $storageName",
-            fontSize = 14.sp, color = PPColor.Ink40,
+            fontSize = 28.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
         )
         Spacer(Modifier.height(14.dp))
 
@@ -131,53 +135,60 @@ fun HomeScreen(
                 }
 
                 Spacer(Modifier.height(14.dp))
-                HorizontalDivider(color = PPColor.Border)
+                // 设计稿：hero 内 border-top = rgba(46,107,79,.18)（绿系）。
+                HorizontalDivider(color = PPColor.Safe.copy(alpha = 0.18f))
                 Spacer(Modifier.height(12.dp))
 
-                // ── 状态行 + 暂停/立即备份（配对失效时收起，出路在红卡）──
+                // ── 进度区（T-083 目标 2）：进行中 = 设计稿原样（状态行 +
+                // 6dp 进度条 + 白底描边「暂停」）；空闲态设计稿未画，按卡内
+                // 裁决做最小延伸 = 弱文案「插电 + Wi-Fi 时自动进行」+ 同款
+                // 白底描边次级按钮「现在备份」。黑色主按钮不再出现在 hero。
+                // 配对失效时按钮收起，出路在红卡（重新扫码连接）。
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(
-                            statusText(line),
-                            fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                            color = if (line is StatusLine.Trouble) PPColor.Act else PPColor.Ink60,
-                        )
-                        val progress = progressOf(state)
-                        if (progress != null) {
-                            Spacer(Modifier.height(8.dp))
-                            androidx.compose.material3.LinearProgressIndicator(
-                                progress = { progress },
-                                modifier = Modifier.fillMaxWidth().height(6.dp),
-                                color = PPColor.Safe,
-                                trackColor = PPColor.Hairline,
+                        if (busy) {
+                            Text(
+                                workingText(line as StatusLine.Working),
+                                fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
+                                color = PPColor.Ink60,
+                            )
+                            val progress = progressOf(state)
+                            if (progress != null) {
+                                Spacer(Modifier.height(8.dp))
+                                androidx.compose.material3.LinearProgressIndicator(
+                                    progress = { progress },
+                                    modifier = Modifier.fillMaxWidth().height(6.dp),
+                                    color = PPColor.Safe,
+                                    trackColor = PPColor.Safe.copy(alpha = 0.18f),
+                                )
+                            }
+                        } else {
+                            Text(
+                                stringResource(R.string.idle_auto_hint),
+                                fontSize = 13.5.sp, color = PPColor.Ink60,
                             )
                         }
                     }
                     if (!pairingLost) {
                         Spacer(Modifier.width(12.dp))
-                        Button(
-                            // UX-01: 进行中点 = 暂停（holder 取消当前批，幂等
-                            // 管线安全），再点 = 从断点续传。
+                        // UX-01: 进行中点 = 暂停（holder 取消当前批，幂等
+                        // 管线安全），再点 = 从断点续传。
+                        HeroSecondaryButton(
+                            label = if (busy) stringResource(R.string.backup_pause)
+                            else stringResource(R.string.backup_now),
                             onClick = onBackupNow,
-                            modifier = Modifier.height(48.dp),
-                            shape = RoundedCornerShape(14.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (busy) PPColor.Paper else PPColor.Ink,
-                                contentColor = if (busy) PPColor.Ink else PPColor.Paper,
-                            ),
-                        ) {
-                            Text(
-                                if (busy) stringResource(R.string.backup_pause)
-                                else stringResource(R.string.backup_now),
-                                fontSize = 15.sp, fontWeight = FontWeight.Bold,
-                            )
-                        }
+                        )
                     }
                 }
             }
         }
 
-        // ── 失败才说话：运行失败详情（ActBg 卡，成功永远沉默）──
+        // ── 失败才说话（T-083 目标 3 红线）：红卡正文只有人话（当前语言
+        // 单语，先说「照片没丢」）；原始错误串（IrohError/异常 dump）绝不
+        // 进主文案，只住在默认收起的「查看技术详情」里——troubleTextOf
+        // 是唯一渲染闸门（有单测）；完整原文另走 Log.e(PPassBackup) 的
+        // logcat/bugreport 诊断导出路径（BackupUiStateHolder catch）。
+        // 目标 4：普通失败主按钮 = 「再试一次」（重跑即从断点续传）。
         if (state is BackupUiState.Trouble && !pairingLost) {
             Spacer(Modifier.height(12.dp))
             Surface(
@@ -185,11 +196,58 @@ fun HomeScreen(
                 shape = RoundedCornerShape(PPSize.RadiusCard),
                 modifier = Modifier.fillMaxWidth(),
             ) {
-                Text(
-                    state.text,
-                    fontSize = 13.sp, lineHeight = 20.sp, color = PPColor.Ink60,
-                    modifier = Modifier.padding(16.dp),
-                )
+                Column(Modifier.padding(18.dp)) {
+                    val copy = troubleTextOf(
+                        rawError = state.text,
+                        humanBody = stringResource(R.string.run_failed),
+                    )
+                    Text(
+                        stringResource(R.string.state_trouble),
+                        fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        copy.main,
+                        fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink60,
+                    )
+                    if (copy.detail.isNotEmpty()) {
+                        var showDetail by remember { mutableStateOf(false) }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            stringResource(
+                                if (showDetail) R.string.trouble_details_hide
+                                else R.string.trouble_details_show
+                            ),
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            color = PPColor.Ink40,
+                            textDecoration = TextDecoration.Underline,
+                            modifier = Modifier
+                                .clickable { showDetail = !showDetail }
+                                .padding(vertical = 4.dp),
+                        )
+                        if (showDetail) {
+                            Text(
+                                copy.detail,
+                                fontSize = 12.sp, lineHeight = 17.sp,
+                                fontFamily = FontFamily.Monospace, color = PPColor.Ink40,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onBackupNow,
+                        modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
+                        shape = RoundedCornerShape(PPSize.RadiusControl),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                        ),
+                    ) {
+                        Text(
+                            stringResource(R.string.try_again),
+                            fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
             }
         }
 
@@ -259,6 +317,9 @@ fun HomeScreen(
         }
 
         // ── 备份规则（设计稿：小节标题 + 圆角卡逐行）──
+        // 挂账（T-083 明示不做，只留此结构注记）：设计稿此卡还有
+        // 「备份哪些相册 · 仅『相机』›」一行——等相册选择功能卡
+        // （与 proto owner 字段同批）落地后再加行，本卡不自创交互。
         Spacer(Modifier.height(18.dp))
         Text(
             stringResource(R.string.rules_title),
@@ -330,19 +391,32 @@ fun HomeScreen(
     }
 }
 
-/** 裁决 → 字符串资源的映射（唯一允许出文案的地方）。 */
+/** 进行中裁决 → 字符串资源（T-083 目标 2：进度区只在 Working 出状态行，
+ *  其余态一律走 idle_auto_hint；欠账/最近成功由 hero 第二行陈述）。 */
 @Composable
-private fun statusText(line: StatusLine): String = when (line) {
-    is StatusLine.Ready -> stringResource(R.string.state_ready)
-    is StatusLine.Working -> when (val s = line.state) {
-        is BackupUiState.Scanning -> stringResource(R.string.state_scanning, s.found)
-        is BackupUiState.Hashing -> stringResource(R.string.state_hashing, s.done, s.total)
-        is BackupUiState.Sending -> stringResource(R.string.state_sending, s.done, s.total)
-        else -> stringResource(R.string.state_ready) // unreachable
+private fun workingText(line: StatusLine.Working): String = when (val s = line.state) {
+    is BackupUiState.Scanning -> stringResource(R.string.state_scanning, s.found)
+    is BackupUiState.Hashing -> stringResource(R.string.state_hashing, s.done, s.total)
+    is BackupUiState.Sending -> stringResource(R.string.state_sending, s.done, s.total)
+    else -> stringResource(R.string.idle_auto_hint) // unreachable
+}
+
+/** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) +
+ *  圆角 14 + 高 44——「暂停/继续」与空闲态「现在备份」共用同一样式。 */
+@Composable
+private fun HeroSecondaryButton(label: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(PPColor.Paper)
+            .border(1.dp, PPColor.BorderStrong, RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 18.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink)
     }
-    is StatusLine.Pending -> stringResource(R.string.state_pending, line.k)
-    is StatusLine.AllSafe -> stringResource(R.string.state_safe)
-    is StatusLine.Trouble -> stringResource(R.string.state_trouble)
 }
 
 /** 「最后成功」裁决 → 文案；Never 分支 = 缺陷 (b) 的正确出口。 */

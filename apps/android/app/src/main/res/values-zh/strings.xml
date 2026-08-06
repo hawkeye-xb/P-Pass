@@ -27,7 +27,6 @@
     <string name="not_a_code">这不是 P-Pass 配对码。</string>
     <string name="code_missing_addr">配对码缺少地址信息，请在电脑上重新生成。</string>
 
-    <string name="state_ready">随时可以备份</string>
     <string name="state_scanning">正在找照片… %1$d</string>
     <string name="state_hashing">正在读取 %1$d/%2$d</string>
     <string name="state_sending">正在传回家 %1$d/%2$d</string>
@@ -35,11 +34,16 @@
     <!-- T-080 缺陷(a): 待备份 > 0 时状态条只允许说欠账，不许说存好了 -->
     <string name="state_pending">还有 %1$d 张待备份</string>
     <string name="state_trouble">需要再试一次</string>
-    <string name="connected_to">已连接</string>
     <string name="safe_detail">新存 %1$d 张。</string>
     <string name="safe_detail_dup">新存 %1$d 张，%2$d 张原本就在。</string>
-    <string name="backup_now">立即备份</string>
+    <string name="backup_now">现在备份</string>
     <string name="backup_pause">暂停</string>
+    <!-- T-083: hero 空闲态（设计稿未画，卡内裁决的最小延伸） -->
+    <string name="idle_auto_hint">插电 + Wi-Fi 时自动进行</string>
+    <!-- T-083: 失败红卡——正文只有人话，原始错误只住折叠区 -->
+    <string name="try_again">再试一次</string>
+    <string name="trouble_details_show">查看技术详情</string>
+    <string name="trouble_details_hide">收起技术详情</string>
     <!-- UX-02: 失败通知（成功保持沉默） -->
     <string name="notif_backup_failed_title">照片备份没成功</string>
     <string name="notif_backup_failed_body">%1$d 张照片没备份成功，打开看看</string>
@@ -70,7 +74,7 @@
     <string name="reconnect">重新扫码连接</string>
     <!-- 配对已失效（存储端移除/吊销本设备后备份被拒） -->
     <string name="pairing_lost_title">与这台电脑的配对已失效</string>
-    <string name="pairing_lost_body">电脑端可能已移除这台手机。重新扫码即可恢复备份。</string>
+    <string name="pairing_lost_body">照片都还在你手机上，一张没丢。电脑端可能已移除这台手机——重新扫码就会继续备份。</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">自动备份</string>
     <string name="auto_backup_pause_hint">插电 + WiFi 时，新照片自动到家</string>
@@ -81,7 +85,7 @@
     <string name="disconnect_failed_title">断开失败</string>
     <string name="disconnect_failed">无法连接存储电脑。请确认电脑已开机，再试一次。</string>
     <string name="ok">好</string>
-    <string name="run_failed">这次没传完——已存回家的照片是安全的；再点一次会从断点继续。</string>
+    <string name="run_failed">照片一张没丢——已存回家的都是安全的。这次没传完，再试一次会从断点继续。</string>
 
     <string name="photos_title">全家的照片</string>
     <string name="photos_count">%1$d 张</string>
