@@ -40,6 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
@@ -104,6 +105,14 @@ class TimelineLoader(
     }
 }
 
+/** T-080: 本机确认缓存的 hash 并集（backup-state/<remote>/confirmed.json，
+ *  只读不写）——照片页轻过滤器用它区分「仅本机 / 家人的」。proto 无
+ *  owner 字段（本卡不准动 proto），这是数据允许的最诚实近似。 */
+internal fun confirmedHashesUnder(stateRoot: java.io.File): Set<String> =
+    stateRoot.listFiles()?.filter { it.isDirectory }
+        ?.flatMap { com.hawkeyexb.ppass.backup.ConfirmedStore(it).load().confirmed }
+        ?.toSet() ?: emptySet()
+
 @Composable
 fun PhotosScreen(loader: TimelineLoader) {
     var items by remember { mutableStateOf<List<AssetMeta>>(emptyList()) }
@@ -111,6 +120,16 @@ fun PhotosScreen(loader: TimelineLoader) {
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
     var opened by remember { mutableStateOf<AssetMeta?>(null) }
+    // T-080: 轻过滤器（设计稿：全部 / 仅本机 / 家人的）。
+    var filter by remember { mutableStateOf(TimelineFilter.All) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val mine by produceState(initialValue = emptySet<String>()) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                confirmedHashesUnder(java.io.File(context.filesDir, "backup-state"))
+            }.getOrDefault(emptySet())
+        }
+    }
 
     LaunchedEffect(Unit) {
         try {
@@ -148,17 +167,35 @@ fun PhotosScreen(loader: TimelineLoader) {
                 fontFamily = FontFamily.Serif, color = PPColor.Ink,
             )
             Text(
-                stringResource(R.string.photos_count, items.size),
-                fontSize = 16.sp, color = PPColor.Ink40,
+                stringResource(R.string.photos_count_dedup, items.size),
+                fontSize = 14.sp, color = PPColor.Ink40,
             )
         }
 
+        // T-080: 轻过滤器 chips（设计稿样式:胶囊,选中=墨底纸字）。
+        Row(
+            Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(stringResource(R.string.chip_all), filter == TimelineFilter.All) {
+                filter = TimelineFilter.All
+            }
+            FilterChip(stringResource(R.string.chip_local), filter == TimelineFilter.LocalOnly) {
+                filter = TimelineFilter.LocalOnly
+            }
+            FilterChip(stringResource(R.string.chip_family), filter == TimelineFilter.Family) {
+                filter = TimelineFilter.Family
+            }
+        }
+
+        val shown = filterTimeline(items, filter, mine) { it.hash }
         when {
             loading -> Center(stringResource(R.string.photos_loading))
             error != null -> Center(
                 stringResource(R.string.photos_unreachable) + "\n(${error?.take(100)})"
             )
             items.isEmpty() -> Center(stringResource(R.string.photos_empty))
+            shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
             else -> LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
                 modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
@@ -166,7 +203,7 @@ fun PhotosScreen(loader: TimelineLoader) {
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 // Month sections: the design's timeline shape.
-                for ((month, group) in groupByMonth(items)) {
+                for ((month, group) in groupByMonth(shown)) {
                     item(key = "hdr-$month", span = { GridItemSpan(3) }) {
                         Text(
                             month,
@@ -253,6 +290,24 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
                 Text(stringResource(R.string.photos_loading), color = PPColor.PaperDim, fontSize = 16.sp)
             }
         }
+    }
+}
+
+/** 设计稿的过滤胶囊：高 36,圆角 999,选中=墨底纸字,未选=亚麻底墨字。 */
+@Composable
+private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.height(36.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (selected) PPColor.Ink else PPColor.Linen)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 15.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+            color = if (selected) PPColor.Paper else PPColor.Ink60,
+        )
     }
 }
 
