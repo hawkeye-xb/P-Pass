@@ -114,3 +114,55 @@
 
 **挂账（不在本卡，须留结构）**：备份规则「备份哪些相册」行、照片 tiles ↑/↓
 角标、大图页、onboarding 相册范围步——均等 proto owner 字段 / 相册选择功能卡。
+
+## 卡号 T-090  级别 L2 — daemon IPC 数据面扩展（链 1 后端）
+
+**目标**：桌面 UI 的四类真数据由 daemon 暴露：照片总数、磁盘水位、备份活动流、
+每设备实时连接类型。
+
+**范围**：`crates/daemon/**`、`crates/transport/**`（连接信息中性封装）、
+`crates/storage`/`crates/core-index` 中必要的只读查询函数。
+
+**不准动**：`apps/**`、proto 线上帧格式、现有 IPC 方法的已有字段语义、已有测试。
+
+**实现**：
+1. `status` 增 `photo_count`（assets 总数）、`disk_free_bytes`/`disk_total_bytes`
+   （照片库所在卷）
+2. 新 IPC `activity.list`（params: `limit` 默认 50）：从现有 assets 表按
+   设备+时间窗聚合成备份批次 `[{node_id, name, at, asset_count}]`，倒序；
+   **不建新表**，聚合口径注释写明（时间窗 gap 建议 10 分钟）
+3. `devices.list` 每设备增 `connection` 字段：`"direct"|"relay"|"offline"|"unknown"`
+   ——transport crate 内用 iroh 的 remote info 包成中性 enum 暴露（**铁律 B.1：
+   iroh 类型不得越出 crates/transport**），拿不到实况时如实 `unknown`，禁止猜
+
+**可执行验收**：
+  - `just arch-check` 绿（B.1 隔离）+ `cargo test -p daemon` 全绿
+  - ipc_flow 测试扩展：status 断言含三个新字段且 photo_count 与种子数据一致；
+    seeded db 上 `activity.list` 返回正确聚合批次数
+  - 反证：把聚合时间窗改为 0 → 批次数断言必须红（证明聚合真在工作），改回
+**证据要求**：报绿附命令+输出摘要。收尾：分支提交，停下等 review。
+
+## 卡号 T-091  级别 L2 — 桌面接真数据·第一批（链 1 前端，仅用现有 IPC）
+
+**目标**：把 daemon **已经暴露但桌面从未消费**的数据接上 UI：
+`device.watermarks`（每设备最近备份时间+张数）与 `devices.list.last_seen`。
+
+**范围**：`apps/desktop/src/**`。
+**不准动**：`src-tauri/**`、`crates/**`、不得调用任何 T-090 的新方法/新字段
+（未合并，跨卡禁令）；现有 invoke 集合只准新增 `device.watermarks` 调用。
+
+**实现**：
+1. 设备行（家人与设备页 + 总览水位卡）接真数据：次行「最后在线 <人性化时间>」，
+   右侧「最近备份 <人性化时间> · N 张」；无水位记录显示「还没备份过」
+2. 哨兵亮红（设计稿原文行为）：最近备份 >5 天 → 行点变 ACT 色 + 右侧「需要看看」;
+   数据来自 watermarks，纯函数判定
+3. 人性化时间纯函数（刚刚/今天 HH:MM/昨天 HH:MM/周X HH:MM/MM-DD），
+   独立成模块并配 node 可跑的断言脚本
+4. 连接状态槽位保持中性占位（等 T-090 合并后另卡接线，不许提前写死）
+
+**可执行验收**：
+  - `pnpm --dir apps/desktop build` 退出码 0
+  - `node` 直跑时间函数断言脚本：≥6 个边界用例（0/今天/昨天/6天/7天/去年）全过
+  - 反证：把「>5 天亮红」阈值断言改 >0 天 → 必须红，改回
+  - 真 daemon 实机复核 = 验收人做（本机有真存储端+真设备数据）
+**证据要求**：报绿附命令+输出摘要。收尾：分支提交，停下等 review。
