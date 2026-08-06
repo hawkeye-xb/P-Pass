@@ -76,13 +76,26 @@ async fn main() -> anyhow::Result<()> {
 
     // IPC (T-034): local socket + per-launch token in the data dir.
     let diag_agg = daemon::DiagAgg::new(db.clone());
-    let ipc = std::sync::Arc::new(daemon::IpcServer::new(
+    let mut ipc = daemon::IpcServer::new(
         db.clone(),
         pairing.clone(),
         diag_agg.clone(),
         data_dir.clone(),
         pending_rx,
-    ));
+    );
+    // T-090: devices.list connection 字段的实况来源——同样走惰性 slot
+    // （transport 在 claim 之后才 bind）。bind 之前如实报 unknown，
+    // 绝不用 last_seen 推断在线（卡片契约）。
+    {
+        let slot = std::sync::Arc::clone(&transport_slot);
+        ipc.set_conn_status_provider(move |node_id| {
+            let (Some(t), Ok(bytes)) = (slot.get(), <[u8; 32]>::try_from(node_id)) else {
+                return transport::ConnectionStatus::Unknown;
+            };
+            t.connection_status(transport::NodeId(bytes))
+        });
+    }
+    let ipc = std::sync::Arc::new(ipc);
     // DAE-01 单实例纪律：先试连接、版本握手（newest wins）——旧逻辑
     // unlink-before-bind 会让后来者盲杀前任（用户机实锤：launchd 至今
     // 指向 7/31 开发构建路径，新 daemon 一直上不了岗）。

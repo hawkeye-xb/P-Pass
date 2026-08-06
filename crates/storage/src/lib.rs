@@ -12,7 +12,7 @@ mod db;
 mod device_repo;
 mod diag_repo;
 
-pub use asset_repo::{Asset, TimelinePage};
+pub use asset_repo::{ActivityBatch, Asset, TimelinePage};
 pub use audit_repo::{AuditEntry, AuditRecord};
 pub use db::Db;
 pub use device_repo::{Device, Role};
