@@ -409,3 +409,15 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   卡：单语人话先说「照片一张没丢」，原文只进折叠详情+logcat。
 - 走查挂账重申：相册范围行、照片↑↓角标、大图页、onboarding 相册步、
   per-device 连接事实——全部等 daemon IPC / proto owner / 相册选择功能卡。
+
+## 2026-08-06（傍晚）— 链 1 数据面全线打通（T-090/091/092）
+
+- daemon：status+photo_count/磁盘水位、activity.list 聚合、connection 中性
+  enum（iroh 不出 transport）；桌面：watermarks/last_seen/connection/活动
+  批次/照片总数/磁盘条全部上屏，哨兵 >5 天亮红。
+- 常驻 daemon 升级 v0.2.1：稳定路径 + launchd 受监护，配对未变。真数据
+  实测：photo_count=51，SM-S9210 备份批次可查。
+- **事故记录**：验收人给 daemon 传 --help 触发误接管致常驻停机数分钟
+  （daemon 无参数解析）；已恢复。逼出三个产品缺口待立卡：①daemon
+  --help/--version 参数解析 ②纯新启动不装 autostart ③异身份实例端口
+  冲突报错不是人话。
