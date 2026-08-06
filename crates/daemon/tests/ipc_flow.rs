@@ -204,7 +204,9 @@ async fn activity_list_aggregates_backup_batches() {
     for (n, at) in [(4, t0 + 32 * min), (5, t0 + 33 * min)] {
         db.insert_asset(&seeded_asset(0xA1, n, at)).await.unwrap();
     }
-    db.insert_asset(&seeded_asset(0xB2, 6, t0 + min)).await.unwrap();
+    db.insert_asset(&seeded_asset(0xB2, 6, t0 + min))
+        .await
+        .unwrap();
 
     let mut c = IpcClient::connect(&socket, &token).await;
     let resp = c.call("activity.list", serde_json::Value::Null).await;
@@ -223,7 +225,11 @@ async fn activity_list_aggregates_backup_batches() {
     assert_eq!(batches[1]["asset_count"], 3);
     assert_eq!(batches[2]["node_id"], "b2".repeat(32));
     assert_eq!(batches[2]["asset_count"], 1);
-    assert_eq!(batches[2]["name"], serde_json::Value::Null, "非名册设备名为 null");
+    assert_eq!(
+        batches[2]["name"],
+        serde_json::Value::Null,
+        "非名册设备名为 null"
+    );
 
     // limit param truncates from the newest end.
     let resp = c

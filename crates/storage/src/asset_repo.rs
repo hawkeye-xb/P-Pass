@@ -403,9 +403,15 @@ mod tests {
         // after a 30-min silence (second batch).
         db.insert_asset(&asset_at(1, 1, t0)).await.unwrap();
         db.insert_asset(&asset_at(1, 2, t0 + min)).await.unwrap();
-        db.insert_asset(&asset_at(1, 3, t0 + 2 * min)).await.unwrap();
-        db.insert_asset(&asset_at(1, 4, t0 + 32 * min)).await.unwrap();
-        db.insert_asset(&asset_at(1, 5, t0 + 33 * min)).await.unwrap();
+        db.insert_asset(&asset_at(1, 3, t0 + 2 * min))
+            .await
+            .unwrap();
+        db.insert_asset(&asset_at(1, 4, t0 + 32 * min))
+            .await
+            .unwrap();
+        db.insert_asset(&asset_at(1, 5, t0 + 33 * min))
+            .await
+            .unwrap();
         // Device 2: one asset inside device 1's first window — still its
         // own batch (partitioned per device).
         db.insert_asset(&asset_at(2, 6, t0 + min)).await.unwrap();
