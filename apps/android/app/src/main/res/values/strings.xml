@@ -3,9 +3,13 @@
     <string name="app_name">P-Pass</string>
 
     <!-- Welcome -->
-    <string name="welcome_headline">Your photos, kept at home.</string>
-    <string name="welcome_sub">No account, no password, no monthly fee.</string>
-    <string name="welcome_scan">Scan the code on the computer</string>
+    <string name="welcome_headline">Photos,\nfinding their way home.</string>
+    <string name="welcome_sub">Phone photos back up to your own computer at home. No cloud, no account, no monthly fee.</string>
+    <string name="welcome_scan">Scan to connect the home computer</string>
+    <!-- T-080 layout v1: welcome three steps -->
+    <string name="welcome_step1">1 · Open P-Pass on the home computer</string>
+    <string name="welcome_step2">2 · Use the button below to scan the code on its screen</string>
+    <string name="welcome_step3">3 · Then there is nothing left to do</string>
 
     <!-- Scan -->
     <string name="scan_title">Point at the computer screen.</string>
@@ -32,6 +36,8 @@
     <string name="state_hashing">Reading %1$d/%2$d</string>
     <string name="state_sending">Sending %1$d/%2$d home</string>
     <string name="state_safe">All photos are backed up</string>
+    <!-- T-080 defect(a): with K > 0 the status line may only speak of the debt -->
+    <string name="state_pending">%1$d photos still to back up</string>
     <string name="state_trouble">Needs another try</string>
     <string name="connected_to">Connected to</string>
     <string name="safe_detail">%1$d new photos arrived home.</string>
@@ -42,16 +48,28 @@
     <string name="notif_backup_failed_title">Backup didn\'t finish</string>
     <string name="notif_backup_failed_body">%1$d photos didn\'t make it home — open to see</string>
     <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
-    <!-- DOG-01: 恒真三元组 -->
+    <!-- DOG-01: 恒真三元组（T-080 layout v1: hero card M / N home） -->
     <string name="dog_triplet_line">%1$d photos · %2$d backed up · %3$d to go</string>
-    <string name="dog_last_success">Last success: %1$s</string>
+    <string name="hero_of_n">/ %1$d photos home</string>
+    <string name="pending_count">%1$d to back up</string>
+    <string name="triplet_unavailable">Cannot read the photo count on this phone — it retries next time the app opens.</string>
+    <string name="dog_last_success">Last success %1$s</string>
+    <!-- T-080 defect(b): never render an epoch-0 date when nothing ever succeeded -->
+    <string name="last_success_never">No successful backup yet</string>
+    <string name="last_just_now">just now</string>
+    <string name="last_mins_ago">%1$d min ago</string>
+    <string name="last_hours_ago">%1$d h ago</string>
+    <!-- T-080 layout v1: backup rules card -->
+    <string name="rules_title">Backup rules</string>
+    <string name="rule_notify">Notifications</string>
+    <string name="rule_notify_value">Only on failure</string>
     <!-- UX-03: 后台规则一行 + 极简设置 -->
     <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
     <string name="setting_charge_only">Only while charging</string>
     <string name="setting_wifi_only">Only on WiFi</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">Background protection off</string>
-    <string name="dog_battery_body">This phone may stop P-Pass from backing up in the background. Turn off battery optimization for P-Pass to keep backups running.</string>
+    <string name="dog_battery_body">Tip: whitelist P-Pass in battery settings, so the system won\'t interrupt backups while the screen is off.</string>
     <string name="dog_battery_action">Open settings</string>
     <string name="reconnect">Scan a new code</string>
     <!-- 配对已失效（存储端移除/吊销本设备后备份被拒） -->
@@ -72,6 +90,12 @@
     <!-- Photos -->
     <string name="photos_title">Family photos</string>
     <string name="photos_count">%1$d photos</string>
+    <string name="photos_count_dedup">%1$d photos · deduplicated</string>
+    <!-- T-080 layout v1: photos light filter (all / this phone / family) -->
+    <string name="chip_all">All</string>
+    <string name="chip_local">This phone</string>
+    <string name="chip_family">Family</string>
+    <string name="photos_filter_empty">No photos under this filter yet.</string>
     <string name="photos_loading">Loading the family library…</string>
     <string name="photos_unreachable">Could not reach the computer.</string>
     <string name="photos_empty">No photos in the library yet — back up a batch first.</string>

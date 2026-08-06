@@ -65,7 +65,21 @@ fun WelcomeScreen(onScan: () -> Unit) {
         Spacer(Modifier.height(12.dp))
         Text(
             stringResource(R.string.welcome_sub),
-            fontSize = PPSize.BodyMin, lineHeight = 26.sp, color = PPColor.Ink40,
+            fontSize = PPSize.BodyMin, lineHeight = 28.sp, color = PPColor.Ink60,
+        )
+        Spacer(Modifier.height(20.dp))
+        // T-080 layout v1: 三步说明——1 打开电脑端 / 2 扫码 / 3 什么都不用做。
+        Text(
+            stringResource(R.string.welcome_step1),
+            fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
+        )
+        Text(
+            stringResource(R.string.welcome_step2),
+            fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
+        )
+        Text(
+            stringResource(R.string.welcome_step3),
+            fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
         )
         Spacer(Modifier.height(40.dp))
         PrimaryButton(stringResource(R.string.welcome_scan), onScan)
