@@ -2,9 +2,13 @@
 <resources>
     <string name="app_name">P-Pass</string>
 
-    <string name="welcome_headline">照片自动存回自己家的电脑。</string>
-    <string name="welcome_sub">不用注册、不用密码、不花钱。</string>
-    <string name="welcome_scan">扫描电脑上的二维码</string>
+    <string name="welcome_headline">照片，\n自动回家。</string>
+    <string name="welcome_sub">手机照片自动备份到你家里的电脑。没有云端、没有账号、没有月费。</string>
+    <string name="welcome_scan">扫码连接家里的电脑</string>
+    <!-- T-080 layout v1: 首屏三步说明 -->
+    <string name="welcome_step1">1 · 在家里电脑上打开 P-Pass</string>
+    <string name="welcome_step2">2 · 用下面的按钮扫电脑屏幕上的二维码</string>
+    <string name="welcome_step3">3 · 之后什么都不用做</string>
 
     <string name="scan_title">对准电脑屏幕上的二维码</string>
     <string name="scan_hint">拿稳就行，会自动识别。</string>
@@ -28,6 +32,8 @@
     <string name="state_hashing">正在读取 %1$d/%2$d</string>
     <string name="state_sending">正在传回家 %1$d/%2$d</string>
     <string name="state_safe">照片都存好了</string>
+    <!-- T-080 缺陷(a): 待备份 > 0 时状态条只允许说欠账，不许说存好了 -->
+    <string name="state_pending">还有 %1$d 张待备份</string>
     <string name="state_trouble">需要再试一次</string>
     <string name="connected_to">已连接</string>
     <string name="safe_detail">新存 %1$d 张。</string>
@@ -38,17 +44,29 @@
     <string name="notif_backup_failed_title">照片备份没成功</string>
     <string name="notif_backup_failed_body">%1$d 张照片没备份成功，打开看看</string>
     <string name="no_cloud">照片直接传回自己家的电脑，不经过任何云端。</string>
-    <!-- DOG-01: 恒真三元组 -->
+    <!-- DOG-01: 恒真三元组（T-080 layout v1: 英雄卡 M / N 张已回家） -->
     <string name="dog_triplet_line">手机 %1$d 张 · 已备份 %2$d · 待备份 %3$d</string>
-    <string name="dog_last_success">最后成功：%1$s</string>
+    <string name="hero_of_n">/ %1$d 张已回家</string>
+    <string name="pending_count">待备份 %1$d 张</string>
+    <string name="triplet_unavailable">读不到手机相册的数量——打开 App 时会再试。</string>
+    <string name="dog_last_success">最近成功 %1$s</string>
+    <!-- T-080 缺陷(b): 从未成功备份（时间戳 0）绝不渲染 epoch 日期 -->
+    <string name="last_success_never">还没有成功备份过</string>
+    <string name="last_just_now">刚刚</string>
+    <string name="last_mins_ago">%1$d 分钟前</string>
+    <string name="last_hours_ago">%1$d 小时前</string>
+    <!-- T-080 layout v1: 备份规则卡 -->
+    <string name="rules_title">备份规则</string>
+    <string name="rule_notify">通知</string>
+    <string name="rule_notify_value">仅失败时</string>
     <!-- UX-03: 后台规则一行 + 极简设置 -->
     <string name="auto_backup_rule">插电 + WiFi 时自动备份，无需打开 App</string>
     <string name="setting_charge_only">仅充电时</string>
     <string name="setting_wifi_only">仅 WiFi 时</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">后台保护未开启</string>
-    <string name="dog_battery_body">本机可能阻止 P-Pass 在后台备份。请为 P-Pass 关闭电池优化，备份才能持续运行。</string>
-    <string name="dog_battery_action">去开启</string>
+    <string name="dog_battery_body">建议：加入电池白名单，熄屏也不被系统打断。</string>
+    <string name="dog_battery_action">去设置</string>
     <string name="reconnect">重新扫码连接</string>
     <!-- 配对已失效（存储端移除/吊销本设备后备份被拒） -->
     <string name="pairing_lost_title">与这台电脑的配对已失效</string>
@@ -67,6 +85,12 @@
 
     <string name="photos_title">全家的照片</string>
     <string name="photos_count">%1$d 张</string>
+    <string name="photos_count_dedup">%1$d 张 · 已去重</string>
+    <!-- T-080 layout v1: 照片页轻过滤器（全部 / 仅本机 / 家人的） -->
+    <string name="chip_all">全部</string>
+    <string name="chip_local">仅本机</string>
+    <string name="chip_family">家人的</string>
+    <string name="photos_filter_empty">这个筛选下暂时没有照片。</string>
     <string name="photos_loading">正在读取家里的照片…</string>
     <string name="photos_unreachable">没能连上电脑。</string>
     <string name="photos_empty">照片库还是空的——先备份一批吧。</string>
