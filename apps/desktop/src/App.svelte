@@ -105,7 +105,8 @@
     try {
       const r = await call("pairing.start");
       qrText = r.qr;
-      qrDataUrl = await QRCode.toDataURL(r.qr, { width: 260, margin: 1 });
+      // T-082: 显示尺寸 148×148（设计稿），生成用 2x（296）保证高分屏清晰。
+      qrDataUrl = await QRCode.toDataURL(r.qr, { width: 296, margin: 1 });
     } catch (e) {
       message = t("ui.pair_failed", { err: String(e) });
     }
@@ -324,25 +325,29 @@
                       <li>
                         <span class="statusdot idle"></span>
                         <span class="dev-name">{d.name}</span>
-                        <span class="dev-right">{d.role}</span>
+                        <!-- T-082: 右侧是「最近备份」槽位；daemon 尚未暴露
+                             per-device 备份时间，数据未接前显示中性占位。 -->
+                        <span class="dev-right">—</span>
                       </li>
                     {/each}
                   </ul>
                 {/if}
-                <p class="hint">只要这台电脑开着、手机插电连 Wi-Fi，备份就在发生。</p>
+                <p class="hint">只要这台电脑开着、手机插电连 Wi-Fi，备份就在发生；任何一边不对劲，另一边 3 天内亮红。</p>
               </div>
 
-              <div class="card">
+              <!-- T-082: 设计稿——卡内容水平居中（标题左上），二维码 148×148
+                   白底圆角带边框，hint 与「无法扫码」折叠器跟随居中。 -->
+              <div class="card qr-card">
                 <h3>{t("ui.add_device")}</h3>
                 {#if qrDataUrl}
                   <img class="qr" src={qrDataUrl} alt={t("ui.generate_qr")} />
-                  <details>
+                  <p class="hint qr-hint">{t("ui.qr_hint")}</p>
+                  <details class="qr-fallback">
                     <summary>{t("ui.qr_fallback")}</summary>
                     <code class="qrtext">{qrText}</code>
                   </details>
-                  <p class="hint">{t("ui.qr_hint")}</p>
                 {:else}
-                  <p class="hint">用家人手机上的 P-Pass 扫一下，二维码 10 分钟内有效。</p>
+                  <p class="hint qr-hint">用家人手机上的 P-Pass 扫一下，二维码 10 分钟内有效。</p>
                   <button class="primary" onclick={startPairing}>{t("ui.generate_qr")}</button>
                 {/if}
               </div>
@@ -359,20 +364,43 @@
             {#if devices.length === 0}
               <p class="hint">{t("ui.no_devices")}</p>
             {:else}
-              <ul class="device-rows roomy">
-                {#each devices as d}
-                  <li>
-                    <span class="statusdot idle"></span>
-                    <span class="dev-name" class:revoked={d.revoked}>
-                      {d.name}
-                      <small>{d.role}{d.revoked ? t("ui.revoked_tag") : ""}</small>
-                    </span>
-                    {#if !d.revoked}
+              <!-- T-082: 设计稿两行结构——首行设备名加粗，次行「机型 · 连接状态」
+                   槽位；daemon 尚未暴露机型/连接事实，数据未接前显示中性占位，
+                   不捏造「已直连」。不再渲染原始 role 字串。 -->
+              {@const activeDevices = devices.filter((d) => !d.revoked)}
+              {@const removedDevices = devices.filter((d) => d.revoked)}
+              {#if activeDevices.length === 0}
+                <p class="hint">{t("ui.no_devices")}</p>
+              {:else}
+                <ul class="device-rows roomy">
+                  {#each activeDevices as d}
+                    <li>
+                      <span class="statusdot idle"></span>
+                      <span class="dev-main">
+                        <span class="dev-name">{d.name}</span>
+                        <span class="dev-sub">等待下次备份上报</span>
+                      </span>
+                      <span class="dev-right">—</span>
                       <button class="danger" onclick={() => revoke(d.node_id, d.name)}>{t("ui.remove")}</button>
-                    {/if}
-                  </li>
-                {/each}
-              </ul>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+              {#if removedDevices.length > 0}
+                <!-- T-082: 已移除设备折叠为展开器，展开后用 ink-40 弱化，
+                     不再划线平铺。 -->
+                <details class="removed-fold">
+                  <summary>已移除设备 {removedDevices.length} 台</summary>
+                  <ul class="device-rows roomy">
+                    {#each removedDevices as d}
+                      <li>
+                        <span class="statusdot idle"></span>
+                        <span class="dev-name removed-name">{d.name}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                </details>
+              {/if}
             {/if}
           </div>
           <p class="hint">移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</p>
@@ -442,6 +470,12 @@
   }
   :global(html), :global(body), :global(#app) {
     height: 100%;
+  }
+  /* T-082: 键盘焦点统一用 token 色 outline，消灭系统默认蓝色焦点圈。
+     :global 覆盖本窗口全部可聚焦元素（含 Wizard）。 */
+  :global(:focus-visible) {
+    outline: 2px solid var(--pp-ink);
+    outline-offset: 2px;
   }
 
   /* ---- shell：侧栏 + 内容区（布局 v1） ---- */
@@ -577,9 +611,10 @@
     padding: 20px 22px;
   }
   .cols {
+    /* T-082: 设计稿原文 display:flex;gap:22px;align-items:stretch——两卡等高 */
     display: flex;
     gap: 22px;
-    align-items: flex-start;
+    align-items: stretch;
   }
   .cols .grow {
     flex: 1.2;
@@ -656,19 +691,42 @@
     font-weight: 600;
     font-size: 15px;
   }
-  .dev-name small {
-    color: var(--pp-ink-40);
-    font-weight: 400;
-    margin-left: 8px;
-  }
   .dev-right {
     color: var(--pp-ink-40);
     font-size: 13.5px;
     flex: none;
   }
-  .revoked {
+  /* T-082: 设备行两行结构（首行名字加粗、次行机型/连接状态槽位） */
+  .dev-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .dev-main .dev-name {
+    flex: none;
+    font-size: 16px;
+  }
+  .dev-sub {
     color: var(--pp-ink-40);
-    text-decoration: line-through;
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
+  /* T-082: 已移除设备折叠器——展开后 ink-40 弱化，无删除线 */
+  .removed-fold {
+    margin-top: 12px;
+    border-top: 1px solid var(--pp-divider);
+    padding-top: 12px;
+  }
+  .removed-fold summary {
+    cursor: pointer;
+    color: var(--pp-ink-40);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .removed-name {
+    color: var(--pp-ink-40);
+    font-weight: 400;
   }
   .setting-row {
     display: flex;
@@ -742,12 +800,48 @@
     opacity: 0.5;
     cursor: default;
   }
+  /* T-082: 设计稿——添加设备卡内容水平居中，标题保持左上 */
+  .qr-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .qr-card h3 {
+    align-self: flex-start;
+    margin: 0;
+  }
+  /* T-082: 二维码 148×148，白底（PNG 自带）、圆角 12、带边框（设计稿原文） */
   .qr {
     display: block;
-    margin: 0 0 4px;
+    width: 148px;
+    height: 148px;
+    box-sizing: border-box;
+    margin: 0;
     border: 1px solid var(--pp-border);
-    border-radius: var(--pp-radius-card);
+    border-radius: var(--pp-radius-control-sm);
     max-width: 100%;
+  }
+  .qr-hint {
+    margin: 0;
+    text-align: center;
+  }
+  .qr-fallback {
+    align-self: stretch;
+    text-align: center;
+  }
+  .qr-fallback summary {
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--pp-safe);
+    list-style: none;
+  }
+  .qr-fallback summary::-webkit-details-marker {
+    display: none;
+  }
+  .qr-fallback .qrtext {
+    text-align: left;
   }
   .qrtext {
     display: block;
