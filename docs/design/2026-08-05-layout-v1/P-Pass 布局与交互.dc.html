@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet data-dc-atomics>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Manrope:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#EFE9DF;font-family:'Manrope','Noto Sans SC',-apple-system,'PingFang SC',sans-serif;color:#171512}
+a{color:#2E6B4F}a:hover{color:#171512}
+</style>
+</helmet>
+<div style="padding:52px 60px 80px;display:flex;flex-direction:column;gap:52px;align-items:flex-start">
+
+  <div style="max-width:880px;display:flex;flex-direction:column;gap:14px">
+    <div style="font:700 12px 'Manrope',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#6B655C">P-Pass · 布局与交互提案 · v1</div>
+    <div style="font:400 38px/1.25 'Newsreader',Georgia,serif;color:#171512">暖纸、墨字、一个只表示「安全」的绿。</div>
+    <div style="font:400 15px/1.7 'Manrope','Noto Sans SC',sans-serif;color:#4A453E;max-width:720px">依据仓库里的 tokens.json 与 2026-08-04 体验差距文档的已收敛裁决出稿:<b>桌面端</b>由单页长滚动改为侧边栏四页(总览 / 家人与设备 / 活动记录 / 设置,照片库并入设置),顶部徽章降级为只说服务状态,连接状态归属每台设备行;<b>手机端</b>只有两个 tab——照片页是统一时间线 + 轻过滤器,备份页是恒真三元组 + 可暂停 + 失败才说话。危险操作只在电脑上。下面的稿子可以点:侧栏、tab、过滤器、允许配对、暂停,都是活的。</div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <div style="font:700 12px 'Manrope',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#6B655C">新增(第 2 轮)· 桌面首启向导 / 手机 Onboarding / 大图页</div>
+      <div style="font:400 12px ui-monospace,Menlo,monospace;color:#6B655C">全部可点:向导步进 · 相册/条件开关 · 决策:只有「选相册」进 onboarding,其余给默认值,设置页随时改</div>
+    </div>
+    <div style="display:flex;gap:44px;align-items:flex-start;flex-wrap:wrap">
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="width:680px;height:600px;border-radius:14px;overflow:hidden;box-shadow:0 0 0 1px rgba(0,0,0,.2),0 16px 48px rgba(0,0,0,.28);display:flex;flex-direction:column;font-family:'Manrope','Noto Sans SC',sans-serif;background:#FBF8F2">
+          <div style="display:flex;gap:8px;align-items:center;padding:14px 16px;border-bottom:1px solid rgba(23,21,18,.10)">
+            <div style="width:13px;height:13px;border-radius:50%;background:#ff736a;border:.5px solid rgba(0,0,0,.1)"></div>
+            <div style="width:13px;height:13px;border-radius:50%;background:#febc2e;border:.5px solid rgba(0,0,0,.1)"></div>
+            <div style="width:13px;height:13px;border-radius:50%;background:#19c332;border:.5px solid rgba(0,0,0,.1)"></div>
+            <div style="font:600 13px sans-serif;color:#6B655C;margin-left:8px">P-Pass 首次设置</div>
+          </div>
+          <div style="flex:1;padding:34px 44px;display:flex;flex-direction:column;gap:22px;overflow:hidden">
+            <div style="display:flex;gap:8px">
+              <sc-for list="{{ wizDots }}" as="w" hint-placeholder-count="3">
+                <div style="{{ w.style }}"></div>
+              </sc-for>
+            </div>
+
+            <sc-if value="{{ isWiz1 }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <div style="font:400 28px/1.3 'Newsreader',Georgia,serif">全家的照片,要存到哪里?</div>
+                <div style="font:400 15px/1.7 sans-serif;color:#4A453E">选一个文件夹当「照片库」。照片会按原始文件存进去,你随时能在 Finder 里翻到它们。</div>
+                <div style="display:flex;gap:10px;align-items:center">
+                  <div style="flex:1;font:400 14px ui-monospace,Menlo,monospace;color:#4A453E;background:#F1ECE3;border-radius:12px;padding:13px 16px">~/Pictures/P-Pass 照片库</div>
+                  <div style="height:44px;display:flex;align-items:center;padding:0 20px;border:1px solid rgba(23,21,18,.24);border-radius:14px;font:600 15px sans-serif;cursor:pointer">更改…</div>
+                </div>
+                <div style="font:400 13.5px/1.6 sans-serif;color:#4A453E;background:#F7EBDA;border-radius:14px;padding:12px 16px">建议避开「桌面」和「文稿」——它们受 macOS 系统保护,会额外弹一次权限申请;放不下时也更难搬家。</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isWiz2 }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <div style="font:400 28px/1.3 'Newsreader',Georgia,serif">让这台电脑保持醒着。</div>
+                <div style="font:400 15px/1.7 sans-serif;color:#4A453E">家人手机会趁插电连 Wi-Fi 时把照片传回来——电脑得开着才收得到。</div>
+                <div style="display:flex;align-items:center;gap:12px;border:1px solid rgba(23,21,18,.12);border-radius:14px;padding:14px 18px">
+                  <div style="width:9px;height:9px;border-radius:50%;background:#2E6B4F"></div>
+                  <div style="font:600 15px sans-serif;flex:1">电源已接通</div>
+                  <div style="font:400 13px sans-serif;color:#2E6B4F">✓ 检查通过</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:12px;border:1px solid rgba(23,21,18,.12);border-radius:14px;padding:14px 18px;background:#F7EBDA">
+                  <div style="width:9px;height:9px;border-radius:50%;background:#C9761E"></div>
+                  <div style="flex:1">
+                    <div style="font:600 15px sans-serif">「自动睡眠」还开着</div>
+                    <div style="font:400 13px/1.5 sans-serif;color:#4A453E">睡着时收不了备份。去系统设置关掉,或点右边帮你打开对应页面。</div>
+                  </div>
+                  <div style="height:40px;display:flex;align-items:center;padding:0 16px;border:1px solid rgba(23,21,18,.24);border-radius:12px;font:600 14px sans-serif;cursor:pointer;background:#FBF8F2">去系统设置</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isWiz3 }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <div style="font:400 28px/1.3 'Newsreader',Georgia,serif">最后一步:设为常驻服务。</div>
+                <div style="font:400 15px/1.7 sans-serif;color:#4A453E">P-Pass 会注册为系统后台服务:开机自动运行,关掉这个窗口也在安静地收备份。随时可以在「设置」里停止它。</div>
+                <div style="display:flex;flex-direction:column;gap:0;border:1px solid rgba(23,21,18,.12);border-radius:14px;overflow:hidden">
+                  <div style="display:flex;gap:12px;padding:13px 18px;border-bottom:1px solid rgba(23,21,18,.10)"><div style="font:600 14px sans-serif;width:120px;flex:none;color:#6B655C">会申请什么</div><div style="font:400 14px/1.5 sans-serif;color:#4A453E">开机自启(系统会弹一次「后台项目已添加」通知,是正常的)</div></div>
+                  <div style="display:flex;gap:12px;padding:13px 18px;border-bottom:1px solid rgba(23,21,18,.10)"><div style="font:600 14px sans-serif;width:120px;flex:none;color:#6B655C">不会做什么</div><div style="font:400 14px/1.5 sans-serif;color:#4A453E">不上传到任何云端、不建账号——照片只在你家的设备之间走</div></div>
+                  <div style="display:flex;gap:12px;padding:13px 18px"><div style="font:600 14px sans-serif;width:120px;flex:none;color:#6B655C">如果被拦</div><div style="font:400 14px/1.5 sans-serif;color:#4A453E">首次打开被 macOS 拦截时:右键点 App → 打开(只需一次)</div></div>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isWiz4 }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px">
+                <div style="font:400 26px 'Newsreader',Georgia,serif">好了。去家人手机上,扫这个码。</div>
+                <div style="width:170px;height:170px;background:#FFFFFF;border:1px solid rgba(23,21,18,.12);border-radius:12px;position:relative">
+                  <div style="position:absolute;top:14px;left:14px;width:30px;height:30px;border:8px solid #171512"></div>
+                  <div style="position:absolute;top:14px;right:14px;width:30px;height:30px;border:8px solid #171512"></div>
+                  <div style="position:absolute;bottom:14px;left:14px;width:30px;height:30px;border:8px solid #171512"></div>
+                  <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:400 11px ui-monospace,monospace;color:#6B655C">配对二维码</div>
+                </div>
+                <div style="font:400 14px sans-serif;color:#6B655C">二维码 10 分钟内有效 · 手机扫完,回这里点「允许加入」</div>
+                <div style="height:44px;display:flex;align-items:center;padding:0 22px;background:#171512;color:#FBF8F2;border-radius:14px;font:600 15px sans-serif;cursor:pointer">进入主界面</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ wizFooter }}" hint-placeholder-val="{{ true }}">
+              <div style="margin-top:auto;display:flex;align-items:center;justify-content:space-between">
+                <div style="{{ wizBackStyle }}" onClick="{{ wizBack }}">‹ 上一步</div>
+                <div onClick="{{ wizNext }}" style="height:46px;display:flex;align-items:center;padding:0 26px;background:#171512;color:#FBF8F2;border-radius:14px;font:600 15px sans-serif;cursor:pointer">{{ wizBtnLabel }}</div>
+              </div>
+            </sc-if>
+          </div>
+        </div>
+        <div style="font:400 11.5px/1.7 ui-monospace,Menlo,monospace;color:#6B655C;max-width:600px">④ 桌面首启向导 · ①选库文件夹(带 TCC 保护目录提醒)→ ②电源检查(每步可验证、可重试)→ ③设常驻服务(说清「会申请什么 / 不会做什么 / 被拦怎么办」)→ 亮码。中途 kill 重开,从断点步继续。</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <x-import component-from-global-scope="AndroidDevice" from="./android-frame.jsx" hint-size="400px,840px">
+          <div style="height:100%;display:flex;flex-direction:column;background:#FBF8F2;font-family:'Manrope','Noto Sans SC',sans-serif;overflow:hidden;padding:0 22px 28px;box-sizing:border-box">
+
+            <sc-if value="{{ isOb0 }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+                <div style="font:700 12px sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#2E6B4F;padding-top:8px">配对成功 · 还差 3 步</div>
+                <div style="font:400 30px/1.25 'Newsreader',Georgia,serif">先给 3 个权限,<br>之后不再打扰。</div>
+                <div style="font:400 15px/1.6 sans-serif;color:#4A453E">每个都说清用途,点一个弹一次系统弹窗。</div>
+                <div style="border:1px solid rgba(23,21,18,.12);border-radius:20px;overflow:hidden">
+                  <sc-for list="{{ perms }}" as="pm" hint-placeholder-count="3">
+                    <div style="display:flex;align-items:center;gap:12px;padding:15px 18px;border-bottom:1px solid rgba(23,21,18,.10)">
+                      <div style="flex:1">
+                        <div style="font:600 16px sans-serif">{{ pm.title }}</div>
+                        <div style="font:400 13px/1.4 sans-serif;color:#6B655C;margin-top:1px">{{ pm.sub }}</div>
+                      </div>
+                      <div style="{{ pm.btnStyle }}" onClick="{{ pm.grant }}">{{ pm.btnLabel }}</div>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="font:400 13px/1.6 sans-serif;color:#6B655C">「读取照片」是必需的;后两个跳过也能用,只是备份得靠你手动打开 App。</div>
+                <div style="margin-top:auto;display:flex;flex-direction:column;gap:10px">
+                  <div onClick="{{ obNext }}" style="{{ permContinueStyle }}">{{ permContinueLabel }}</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isOb1 }}" hint-placeholder-val="{{ true }}">
+              <div style="flex:1;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+                <div style="font:700 12px sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#2E6B4F;padding-top:8px">还差 2 步</div>
+                <div style="font:400 30px/1.25 'Newsreader',Georgia,serif">只备份你勾选的相册。</div>
+                <div style="font:400 15px/1.6 sans-serif;color:#4A453E">P-Pass 只拿你明确给它的,随时可以在「备份」页更改。</div>
+                <div style="border:1px solid rgba(23,21,18,.12);border-radius:20px;overflow:hidden">
+                  <sc-for list="{{ albums }}" as="a" hint-placeholder-count="4">
+                    <div style="display:flex;align-items:center;gap:12px;padding:15px 18px;border-bottom:1px solid rgba(23,21,18,.10)">
+                      <div style="flex:1">
+                        <div style="font:600 16px sans-serif">{{ a.name }}</div>
+                        <div style="font:400 13px sans-serif;color:#6B655C;margin-top:1px">{{ a.countText }} 张</div>
+                      </div>
+                      <div style="{{ a.swStyle }}" onClick="{{ a.toggle }}"><div style="width:24px;height:24px;border-radius:50%;background:#FBF8F2;box-shadow:0 1px 3px rgba(0,0,0,.2)"></div></div>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="margin-top:auto;display:flex;flex-direction:column;gap:10px">
+                  <div style="font:400 14px sans-serif;color:#4A453E;text-align:center">将备份 <b>{{ obCountText }}</b> 张照片</div>
+                  <div onClick="{{ obNext }}" style="height:60px;display:flex;align-items:center;justify-content:center;background:#171512;color:#FBF8F2;border-radius:20px;font:600 18px sans-serif;cursor:pointer">继续</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isOb2 }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;display:flex;flex-direction:column;gap:14px;overflow:hidden">
+                <div style="font:700 12px sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#6B655C;padding-top:8px">最后一步</div>
+                <div style="font:400 30px/1.25 'Newsreader',Georgia,serif">什么时候备份?</div>
+                <div style="font:400 15px/1.6 sans-serif;color:#4A453E">默认最省心:插电 + Wi-Fi 时自动进行,不用打开 App。成功保持沉默,失败才通知你。</div>
+                <div style="border:1px solid rgba(23,21,18,.12);border-radius:20px;overflow:hidden">
+                  <sc-for list="{{ conds }}" as="c" hint-placeholder-count="3">
+                    <div style="display:flex;align-items:center;gap:12px;padding:15px 18px;border-bottom:1px solid rgba(23,21,18,.10)">
+                      <div style="flex:1">
+                        <div style="font:600 16px sans-serif">{{ c.title }}</div>
+                        <div style="font:400 13px/1.4 sans-serif;color:#6B655C;margin-top:1px">{{ c.sub }}</div>
+                      </div>
+                      <div style="{{ c.swStyle }}" onClick="{{ c.toggle }}"><div style="width:24px;height:24px;border-radius:50%;background:#FBF8F2;box-shadow:0 1px 3px rgba(0,0,0,.2)"></div></div>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="margin-top:auto;display:flex;flex-direction:column;gap:10px">
+                  <div style="font:400 14px sans-serif;color:#6B655C;text-align:center;cursor:pointer" onClick="{{ obBack }}">‹ 上一步</div>
+                  <div onClick="{{ obNext }}" style="height:60px;display:flex;align-items:center;justify-content:center;background:#171512;color:#FBF8F2;border-radius:20px;font:600 18px sans-serif;cursor:pointer">开始备份</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isOb3 }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:18px;background:#E4F1E8;margin:0 -22px -28px;padding:0 30px 40px">
+                <div style="width:12px;height:12px;border-radius:50%;background:#2E6B4F"></div>
+                <div style="font:400 40px/1.25 'Newsreader',Georgia,serif;color:#2E6B4F">{{ obCountText }} 张照片,正在回家。</div>
+                <div style="font:400 16px/1.7 sans-serif;color:#4A453E">之后什么都不用做。任何时候打开 App,都能看到照片安不安全。</div>
+                <div onClick="{{ obReset }}" style="height:60px;display:flex;align-items:center;justify-content:center;background:#171512;color:#FBF8F2;border-radius:20px;font:600 18px sans-serif;cursor:pointer;margin-top:10px">进入 App</div>
+              </div>
+            </sc-if>
+
+          </div>
+        </x-import>
+        <div style="font:400 11.5px/1.7 ui-monospace,Menlo,monospace;color:#6B655C;max-width:360px">⑤ 手机 Onboarding(配对成功后)· 三步:「系统权限」(读取照片必需;通知 + 忽略电池优化可跳过,说清用途、点一个弹一次)→「选相册范围」→「备份条件」。仅充电/仅 Wi-Fi 是 App 内策略不需权限;拒了的权限在备份页降级为引导卡,不堵路。点「进入 App」可重看。</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <x-import component-from-global-scope="AndroidDevice" from="./android-frame.jsx" dark="{{ true }}" hint-size="400px,840px">
+          <div style="height:100%;display:flex;flex-direction:column;background:#211E1A;font-family:'Manrope','Noto Sans SC',sans-serif;overflow:hidden;color:#FBF8F2">
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 20px">
+              <div style="font:600 17px sans-serif;cursor:pointer">‹</div>
+              <div>
+                <div style="font:600 15px sans-serif">7 月 31 日 · 14:02</div>
+                <div style="font:400 12.5px sans-serif;color:rgba(251,248,242,.55)">来自 妈妈的手机</div>
+              </div>
+              <div style="margin-left:auto;display:flex;align-items:center;gap:6px;background:rgba(46,107,79,.35);border-radius:999px;padding:6px 12px">
+                <div style="width:7px;height:7px;border-radius:50%;background:#7FC49E"></div>
+                <div style="font:600 12.5px sans-serif;color:#B9E0C9">已存到家里电脑</div>
+              </div>
+            </div>
+            <div style="flex:1;display:flex;align-items:center;padding:0 6px">
+              <div style="width:100%;aspect-ratio:3/4;background:#C4B49C;border-radius:6px;display:flex;align-items:center;justify-content:center;font:400 12px ui-monospace,monospace;color:rgba(23,21,18,.5)">photo · 原图按需从电脑拉取</div>
+            </div>
+            <div style="padding:14px 20px 30px;display:flex;flex-direction:column;gap:12px">
+              <div style="font:400 13px/1.6 sans-serif;color:rgba(251,248,242,.55)">IMG_7734.HEIC · 4.2 MB · 这张手机上没有,看的是电脑上的</div>
+              <div style="display:flex;gap:10px">
+                <div style="flex:1;height:56px;display:flex;align-items:center;justify-content:center;background:#FBF8F2;color:#171512;border-radius:20px;font:600 16px sans-serif;cursor:pointer">保存到手机</div>
+                <div style="flex:1;height:56px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(251,248,242,.35);border-radius:20px;font:600 16px sans-serif;cursor:pointer">分享</div>
+              </div>
+            </div>
+          </div>
+        </x-import>
+        <div style="font:400 11.5px/1.7 ui-monospace,Menlo,monospace;color:#6B655C;max-width:360px">⑥ 大图页 · 归因信息按需出现:网格不标来源,大图才显示「来自 妈妈的手机 · 日期」。「仅在电脑」的照片在这里给「保存到手机」取回入口(恢复承诺的日常形态)。深底 = tokens 的 surface-dark。删除等危险操作不在手机上。</div>
+      </div>
+
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <div style="font:700 12px 'Manrope',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#6B655C">一 · 桌面端(管理员)</div>
+      <div style="font:400 12px ui-monospace,Menlo,monospace;color:#6B655C">交互:点侧栏切页 · 「允许加入」会真的把设备加进列表</div>
+    </div>
+    <div style="width:1140px;height:720px;border-radius:14px;overflow:hidden;box-shadow:0 0 0 1px rgba(0,0,0,.2),0 16px 48px rgba(0,0,0,.28);display:flex;font-family:'Manrope','Noto Sans SC',sans-serif;background:#FBF8F2">
+        <div style="width:216px;flex:none;background:#F1ECE3;border-right:1px solid rgba(23,21,18,.12);display:flex;flex-direction:column;padding:16px 12px 16px">
+          <div style="display:flex;gap:8px;align-items:center;padding:2px 12px 18px">
+            <div style="width:13px;height:13px;border-radius:50%;background:#ff736a;border:.5px solid rgba(0,0,0,.1)"></div>
+            <div style="width:13px;height:13px;border-radius:50%;background:#febc2e;border:.5px solid rgba(0,0,0,.1)"></div>
+            <div style="width:13px;height:13px;border-radius:50%;background:#19c332;border:.5px solid rgba(0,0,0,.1)"></div>
+          </div>
+          <div style="font:500 22px 'Newsreader',Georgia,serif;padding:4px 12px 16px">P-Pass</div>
+          <div style="display:flex;flex-direction:column;gap:2px">
+            <sc-for list="{{ nav }}" as="n" hint-placeholder-count="5">
+              <div style="{{ n.style }}" onClick="{{ n.go }}">{{ n.label }}</div>
+            </sc-for>
+          </div>
+          <div style="margin-top:auto;display:flex;align-items:center;gap:8px;padding:10px 12px;background:#E4F1E8;border-radius:999px">
+            <div style="width:8px;height:8px;border-radius:50%;background:#2E6B4F"></div>
+            <div style="font:600 13px 'Manrope',sans-serif;color:#2E6B4F">后台服务运行中</div>
+          </div>
+        </div>
+        <div style="flex:1;background:#FBF8F2;padding:34px 38px;overflow:hidden">
+
+          <sc-if value="{{ isOverview }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:26px">
+              <div>
+                <div style="font:400 30px/1.3 'Newsreader',Georgia,serif">全家 4,213 张照片,安全地住在这台电脑上。</div>
+                <div style="font:400 15px/1.6 sans-serif;color:#6B655C;margin-top:8px">最近一次备份:昨晚 9:14 · 来自 妈妈的手机</div>
+              </div>
+              <sc-if value="{{ pendingPair }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;align-items:center;gap:16px;background:#F7EBDA;border:1px solid rgba(23,21,18,.12);border-radius:20px;padding:18px 22px">
+                  <div style="flex:1">
+                    <div style="font:600 16px sans-serif;color:#171512">有设备等待你确认配对</div>
+                    <div style="font:400 14px sans-serif;color:#4A453E;margin-top:3px">「小姨的手机」刚扫了这台电脑的二维码。是家里人吗?</div>
+                  </div>
+                  <div style="display:flex;gap:10px">
+                    <div onClick="{{ denyPair }}" style="height:44px;display:flex;align-items:center;padding:0 20px;border:1px solid rgba(23,21,18,.24);border-radius:14px;font:600 15px sans-serif;cursor:pointer;background:#FBF8F2">拒绝</div>
+                    <div onClick="{{ allowPair }}" style="height:44px;display:flex;align-items:center;padding:0 22px;background:#171512;color:#FBF8F2;border-radius:14px;font:600 15px sans-serif;cursor:pointer">允许加入</div>
+                  </div>
+                </div>
+              </sc-if>
+              <div style="display:flex;gap:22px;align-items:stretch">
+                <div style="flex:1.2;border:1px solid rgba(23,21,18,.12);border-radius:20px;padding:22px;display:flex;flex-direction:column;gap:12px">
+                  <div style="font:600 15px sans-serif">全家备份水位</div>
+                  <sc-for list="{{ devices }}" as="d" hint-placeholder-count="3">
+                    <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(23,21,18,.10)">
+                      <div style="{{ d.dotStyle }}"></div>
+                      <div style="font:600 15px sans-serif;flex:1">{{ d.name }}</div>
+                      <div style="{{ d.rightStyle }}">{{ d.right }}</div>
+                    </div>
+                  </sc-for>
+                  <div style="font:400 13px/1.6 sans-serif;color:#6B655C">只要这台电脑开着、手机插电连 Wi-Fi,备份就在发生;任何一边不对劲,另一边 3 天内亮红。</div>
+                </div>
+                <div style="flex:1;border:1px solid rgba(23,21,18,.12);border-radius:20px;padding:22px;display:flex;flex-direction:column;align-items:center;gap:12px">
+                  <div style="font:600 15px sans-serif;align-self:flex-start">添加设备</div>
+                  <div style="width:148px;height:148px;background:#FFFFFF;border:1px solid rgba(23,21,18,.12);border-radius:12px;position:relative">
+                    <div style="position:absolute;top:12px;left:12px;width:26px;height:26px;border:7px solid #171512"></div>
+                    <div style="position:absolute;top:12px;right:12px;width:26px;height:26px;border:7px solid #171512"></div>
+                    <div style="position:absolute;bottom:12px;left:12px;width:26px;height:26px;border:7px solid #171512"></div>
+                    <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:400 11px ui-monospace,monospace;color:#6B655C">配对二维码</div>
+                  </div>
+                  <div style="font:400 13px/1.5 sans-serif;color:#6B655C;text-align:center">用家人手机上的 P-Pass 扫一下。<br>二维码 10 分钟内有效。</div>
+                  <div style="font:600 13px sans-serif;color:#2E6B4F;cursor:pointer">无法扫码?复制配对串</div>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isDevices }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:20px">
+              <div>
+                <div style="font:400 28px 'Newsreader',Georgia,serif">家人与设备</div>
+                <div style="font:400 14px sans-serif;color:#6B655C;margin-top:6px">{{ pairedLine }} · 名字可以改成家人叫法,比如「妈妈的手机」</div>
+              </div>
+              <div style="border:1px solid rgba(23,21,18,.12);border-radius:20px;overflow:hidden">
+                <sc-for list="{{ devices }}" as="d" hint-placeholder-count="3">
+                  <div style="display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid rgba(23,21,18,.10)">
+                    <div style="{{ d.dotStyle }}"></div>
+                    <div style="flex:1">
+                      <div style="font:600 16px sans-serif">{{ d.name }}</div>
+                      <div style="font:400 13.5px/1.5 sans-serif;color:#6B655C;margin-top:2px">{{ d.sub }}</div>
+                    </div>
+                    <div style="{{ d.rightStyle }}">{{ d.right }}</div>
+                    <div style="font:600 14px sans-serif;color:#B5341F;cursor:pointer;padding:8px 4px">移除</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="font:400 13px/1.6 sans-serif;color:#6B655C">「经中继」= 直连不通时走加密中转,中继看不到照片内容,速度可能慢一些。移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isLog }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:16px">
+              <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:20px">
+                <div>
+                  <div style="font:400 28px 'Newsreader',Georgia,serif">活动记录</div>
+                  <div style="font:400 14px sans-serif;color:#6B655C;margin-top:6px">谁备份了什么,一目了然——不用去 Finder 里对账。</div>
+                </div>
+                <div style="display:flex;align-items:center;gap:18px;background:#F1ECE3;border-radius:999px;padding:10px 22px;flex:none">
+                  <div style="font:600 13px sans-serif;color:#6B655C">本周</div>
+                  <div style="font:400 14px sans-serif;color:#4A453E">新备份 <b style="color:#171512">31</b></div>
+                  <div style="font:400 14px sans-serif;color:#4A453E">去重跳过 <b style="color:#171512">7</b></div>
+                  <div style="font:400 14px sans-serif;color:#4A453E">重试成功 <b style="color:#171512">2</b></div>
+                </div>
+              </div>
+              <div style="border:1px solid rgba(23,21,18,.12);border-radius:20px;overflow:hidden">
+                <sc-for list="{{ logRows }}" as="r" hint-placeholder-count="4">
+                  <div style="display:flex;align-items:baseline;gap:14px;padding:16px 22px;border-bottom:1px solid rgba(23,21,18,.10)">
+                    <div style="{{ r.textStyle }}">{{ r.text }}</div>
+                    <div style="font:400 13px sans-serif;color:#6B655C;margin-left:auto;flex:none">{{ r.time }}</div>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="font:400 13px sans-serif;color:#6B655C">记录只在本机保存 90 天,不上传。</div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isSettings }}" hint-placeholder-val="{{ false }}">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;align-content:start">
+              <div style="grid-column:1/-1;font:400 28px 'Newsreader',Georgia,serif">设置</div>
+              <div style="border:1px solid rgba(23,21,18,.12);border-radius:20px;padding:22px;display:flex;flex-direction:column;gap:14px;align-self:start">
+                <div style="font:600 15px sans-serif">照片库</div>
+                <div style="font:400 14px ui-monospace,Menlo,monospace;color:#4A453E;background:#F1ECE3;border-radius:12px;padding:12px 16px">~/Pictures/P-Pass 照片库</div>
+                <div style="display:flex;gap:10px">
+                  <div style="height:44px;display:flex;align-items:center;padding:0 20px;background:#171512;color:#FBF8F2;border-radius:14px;font:600 15px sans-serif;cursor:pointer">在 Finder 中打开</div>
+                  <div style="height:44px;display:flex;align-items:center;padding:0 20px;border:1px solid rgba(23,21,18,.24);border-radius:14px;font:600 15px sans-serif;cursor:pointer">更改位置…</div>
+                </div>
+                <div style="display:flex;justify-content:space-between;font:600 14px sans-serif;border-top:1px solid rgba(23,21,18,.10);padding-top:14px"><span>磁盘空间</span><span style="color:#6B655C;font-weight:400">182 GB 可用,共 494 GB</span></div>
+                <div style="height:8px;background:#E0D8CB;border-radius:999px"><div style="width:63%;height:100%;background:#171512;border-radius:999px"></div></div>
+                <div style="font:400 13px/1.6 sans-serif;color:#6B655C">更改位置重启后台服务后生效;已备份的照片不会自动搬家。快满时提前 30 天在总览提醒。</div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:22px;align-self:start">
+                <div style="border:1px solid rgba(23,21,18,.12);border-radius:20px;overflow:hidden">
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:15px 22px;border-bottom:1px solid rgba(23,21,18,.10)"><span style="font:500 14.5px sans-serif">开机自动运行</span><span style="font:600 14px sans-serif;color:#2E6B4F">开</span></div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:15px 22px;border-bottom:1px solid rgba(23,21,18,.10)"><span style="font:500 14.5px sans-serif">版本</span><span style="font:400 14px sans-serif;color:#6B655C">0.4.2 · <b style="color:#2E6B4F;cursor:pointer;font-weight:600">检查更新</b></span></div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:15px 22px;border-bottom:1px solid rgba(23,21,18,.10)"><span style="font:500 14.5px sans-serif">这台电脑的名字</span><span style="font:400 14px sans-serif;color:#6B655C">家里的 Mac mini ›</span></div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;padding:15px 22px"><span style="font:500 14.5px sans-serif">遇到问题?导出诊断包</span><span style="font:400 14px sans-serif;color:#6B655C">自动抹去隐私路径 ›</span></div>
+                </div>
+                <div style="border:1px solid #B5341F;border-radius:20px;padding:22px;display:flex;flex-direction:column;gap:10px;background:#F7E2DE">
+                  <div style="font:600 15px sans-serif;color:#B5341F">停止后台服务</div>
+                  <div style="font:400 13px/1.6 sans-serif;color:#4A453E">停止后开机不再自动运行、备份暂停,家人手机将无法连接,直到你重新启用。</div>
+                  <div style="height:44px;display:flex;align-items:center;align-self:flex-start;padding:0 20px;background:#B5341F;color:#FBF8F2;border-radius:14px;font:600 15px sans-serif;cursor:pointer">停止…</div>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+
+        </div>
+      </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div style="display:flex;align-items:baseline;gap:12px">
+      <div style="font:700 12px 'Manrope',sans-serif;letter-spacing:.14em;text-transform:uppercase;color:#6B655C">二 · Android 端(家人)</div>
+      <div style="font:400 12px ui-monospace,Menlo,monospace;color:#6B655C">流程:欢迎 → 扫码 → 桌面「允许」→ 时间线 · 中间那台的 tab / 过滤器 / 暂停可以点</div>
+    </div>
+    <div style="display:flex;gap:44px;align-items:flex-start">
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <x-import component-from-global-scope="AndroidDevice" from="./android-frame.jsx" hint-size="400px,840px">
+          <div style="height:100%;display:flex;flex-direction:column;background:#FBF8F2;font-family:'Manrope','Noto Sans SC',sans-serif;padding:0 26px 34px;box-sizing:border-box;overflow:hidden">
+            <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:18px">
+              <div style="font:400 44px/1.2 'Newsreader',Georgia,serif">照片,<br>自动回家。</div>
+              <div style="font:400 17px/1.7 sans-serif;color:#4A453E">手机照片自动备份到<b>你家里的电脑</b>。没有云端、没有账号、没有月费。</div>
+              <div style="display:flex;flex-direction:column;gap:8px;font:400 15px/1.6 sans-serif;color:#6B655C">
+                <div>1 · 在家里电脑上打开 P-Pass</div>
+                <div>2 · 用下面的按钮扫电脑屏幕上的二维码</div>
+                <div>3 · 之后什么都不用做</div>
+              </div>
+            </div>
+            <div style="height:60px;display:flex;align-items:center;justify-content:center;background:#171512;color:#FBF8F2;border-radius:20px;font:600 18px sans-serif;cursor:pointer">扫码连接家里的电脑</div>
+          </div>
+        </x-import>
+        <div style="font:400 11.5px/1.7 ui-monospace,Menlo,monospace;color:#6B655C;max-width:360px">① Onboarding · 扫码后进 Waiting(「等待存储电脑上确认…」);桌面点允许 → 直接进 Home,第一个页面是相册范围选择(默认只勾「相机」)。</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <x-import component-from-global-scope="AndroidDevice" from="./android-frame.jsx" hint-size="400px,840px">
+          <div style="height:100%;display:flex;flex-direction:column;background:#FBF8F2;font-family:'Manrope','Noto Sans SC',sans-serif;overflow:hidden">
+
+            <sc-if value="{{ isPhotos }}" hint-placeholder-val="{{ true }}">
+              <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;padding:0 20px">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;padding:6px 2px 12px">
+                  <div style="font:400 28px 'Newsreader',Georgia,serif">全家的照片</div>
+                  <div style="font:400 13px sans-serif;color:#6B655C">4,213 张 · 已去重</div>
+                </div>
+                <div style="display:flex;gap:8px;padding-bottom:14px">
+                  <sc-for list="{{ chips }}" as="c" hint-placeholder-count="4">
+                    <div style="{{ c.style }}" onClick="{{ c.go }}">{{ c.label }}</div>
+                  </sc-for>
+                </div>
+                <div style="font:600 13px sans-serif;color:#4A453E;padding-bottom:8px">8 月</div>
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:3px;overflow:hidden">
+                  <sc-for list="{{ tiles }}" as="t" hint-placeholder-count="12">
+                    <div style="{{ t.style }}"><span style="{{ t.badgeStyle }}">{{ t.badge }}</span></div>
+                  </sc-for>
+                </div>
+                <div style="font:400 12px/1.6 sans-serif;color:#6B655C;padding:10px 2px">↑ 待备份 · ↓ 仅在电脑(点开可存回手机) · 成功不打标</div>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{ isBackup }}" hint-placeholder-val="{{ false }}">
+              <div style="flex:1;display:flex;flex-direction:column;gap:18px;overflow:hidden;padding:0 20px">
+                <div style="font:400 28px 'Newsreader',Georgia,serif;padding:6px 2px 0">备份</div>
+                <div style="background:#E4F1E8;border-radius:20px;padding:22px;display:flex;flex-direction:column;gap:14px">
+                  <div>
+                    <div style="font:400 42px 'Newsreader',Georgia,serif;color:#2E6B4F">1,180 <span style="font-size:19px">/ 1,234 张已回家</span></div>
+                    <div style="font:400 14px sans-serif;color:#4A453E;margin-top:6px">最近成功 今天 09:12 · <b style="border-bottom:1px dashed #4A453E;cursor:pointer">待备份 54 张</b></div>
+                  </div>
+                  <div style="display:flex;align-items:center;gap:12px;border-top:1px solid rgba(46,107,79,.18);padding-top:14px">
+                    <div style="flex:1">
+                      <div style="font:500 13.5px sans-serif;color:#4A453E">{{ progressTitle }}</div>
+                      <div style="height:6px;background:rgba(46,107,79,.18);border-radius:999px;margin-top:8px"><div style="{{ progressFillStyle }}"></div></div>
+                    </div>
+                    <div onClick="{{ togglePause }}" style="height:44px;display:flex;align-items:center;padding:0 18px;border:1px solid rgba(23,21,18,.24);border-radius:14px;font:600 15px sans-serif;cursor:pointer;flex:none;background:#FBF8F2">{{ pauseLabel }}</div>
+                  </div>
+                </div>
+                <div style="background:#F7EBDA;border-radius:16px;padding:13px 18px;display:flex;align-items:center;gap:12px">
+                  <div style="font:400 13.5px/1.5 sans-serif;color:#4A453E;flex:1"><b style="color:#C9761E">建议:</b>加入电池白名单,熄屏也不被系统打断。</div>
+                  <div style="font:600 14px sans-serif;color:#171512;cursor:pointer;flex:none;border-bottom:1.5px solid #171512">去设置</div>
+                </div>
+                <div>
+                  <div style="font:700 12px sans-serif;letter-spacing:.12em;text-transform:uppercase;color:#6B655C;padding:0 2px 8px">备份规则</div>
+                  <div style="border:1px solid rgba(23,21,18,.12);border-radius:20px;overflow:hidden">
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid rgba(23,21,18,.10)"><span style="font:500 15px sans-serif">备份哪些相册</span><span style="font:400 14px sans-serif;color:#6B655C">仅「相机」›</span></div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid rgba(23,21,18,.10)"><span style="font:500 15px sans-serif">什么时候备份</span><span style="font:400 14px sans-serif;color:#6B655C">充电 + Wi-Fi 时自动 ›</span></div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px"><span style="font:500 15px sans-serif">通知</span><span style="font:400 14px sans-serif;color:#6B655C">仅失败时 ›</span></div>
+                  </div>
+                </div>
+                <div style="display:flex;justify-content:center;padding-top:2px">
+                  <div style="font:600 14px sans-serif;color:#B5341F;cursor:pointer">断开与这台电脑的连接</div>
+                </div>
+              </div>
+            </sc-if>
+
+            <div style="height:64px;flex:none;display:flex;border-top:1px solid rgba(23,21,18,.12);background:#FBF8F2">
+              <div style="{{ tabPhotosStyle }}" onClick="{{ goPhotos }}">照片</div>
+              <div style="{{ tabBackupStyle }}" onClick="{{ goBackup }}">备份</div>
+            </div>
+          </div>
+        </x-import>
+        <div style="font:400 11.5px/1.7 ui-monospace,Menlo,monospace;color:#6B655C;max-width:360px">② Home · 两个 tab 到底。照片页 = 统一时间线(本机 + 已备份 + 家人的,BLAKE3 去重),过滤器抄 Apple 共享图库;备份页 = 恒真三元组(持久态) + 可暂停 + 规则一句话。点点看。</div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <x-import component-from-global-scope="AndroidDevice" from="./android-frame.jsx" hint-size="400px,840px">
+          <div style="height:100%;display:flex;flex-direction:column;background:#FBF8F2;font-family:'Manrope','Noto Sans SC',sans-serif;overflow:hidden">
+            <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;padding:0 20px">
+              <div style="font:400 28px 'Newsreader',Georgia,serif;padding:6px 2px 14px">全家的照片</div>
+              <div style="background:#F7E2DE;border:1px solid #B5341F;border-radius:20px;padding:20px;display:flex;flex-direction:column;gap:12px">
+                <div style="font:600 17px sans-serif;color:#B5341F">和家里的电脑失去了联系</div>
+                <div style="font:400 14.5px/1.6 sans-serif;color:#4A453E">备份已经暂停 5 天。照片都还在你手机上,一张没丢——重新连上就会自动补齐。</div>
+                <div style="height:56px;display:flex;align-items:center;justify-content:center;background:#171512;color:#FBF8F2;border-radius:20px;font:600 17px sans-serif;cursor:pointer">重新扫码连接</div>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:3px;overflow:hidden;opacity:.45;margin-top:16px">
+                <sc-for list="{{ allTiles }}" as="t" hint-placeholder-count="12">
+                  <div style="{{ t.style }}"></div>
+                </sc-for>
+              </div>
+            </div>
+            <div style="height:64px;flex:none;display:flex;border-top:1px solid rgba(23,21,18,.12)">
+              <div style="flex:1;display:flex;align-items:center;justify-content:center;font:700 15px sans-serif;color:#171512;cursor:pointer">照片</div>
+              <div style="flex:1;display:flex;align-items:center;justify-content:center;font:600 15px sans-serif;color:#B5341F;cursor:pointer">备份 !</div>
+            </div>
+          </div>
+        </x-import>
+        <div style="font:400 11.5px/1.7 ui-monospace,Menlo,monospace;color:#6B655C;max-width:360px">③ 哨兵态 · 存储端删了设备 / 长期不可达 → 红卡 + 主按钮变「重新扫码连接」。报错永远不出现代码,先说「照片没丢」。同一时刻,桌面端对应设备行也亮红(互为哨兵,可用右侧 Tweaks 开关演示)。</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;pendingPair&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;演示状态&quot;, &quot;description&quot;: &quot;桌面总览显示「配对请求待确认」卡&quot; },
+  &quot;sentinelAlert&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;演示状态&quot;, &quot;description&quot;: &quot;爸爸的手机 5 天未备份(哨兵亮红)&quot; },
+  &quot;relay&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;演示状态&quot;, &quot;description&quot;: &quot;外婆的平板走中继连接(琥珀态)&quot; }
+}">
+class Component extends DCLogic {
+  state = { deskPage: 'overview', phoneTab: 'photos', filter: 'all', pendingHandled: false, allowed: false, paused: false, wizStep: 1, obStep: 0, perms: { photos: false, notify: false, battery: false }, albums: { camera: true, shot: false, wechat: false, dl: false }, conds: { charge: true, wifi: true, bg: true } };
+  renderVals() {
+    const s = this.state, p = this.props;
+    const INK = '#171512', I40 = '#6B655C', SAFE = '#2E6B4F', WAIT = '#C9761E', ACT = '#B5341F', IDLE = '#8A857C';
+    const sans = "'Manrope','Noto Sans SC',sans-serif";
+    const sentinel = p.sentinelAlert ?? true, relay = p.relay ?? false;
+    const pendingPair = (p.pendingPair ?? true) && !s.pendingHandled;
+    const nav = [
+      { id: 'overview', label: '总览' }, { id: 'devices', label: '家人与设备' },
+      { id: 'log', label: '活动记录' }, { id: 'settings', label: '设置' }
+    ].map(n => ({
+      ...n,
+      go: () => this.setState({ deskPage: n.id }),
+      style: {
+        padding: '10px 12px', borderRadius: 12, fontFamily: sans, fontSize: 15, cursor: 'pointer',
+        fontWeight: s.deskPage === n.id ? 700 : 500,
+        background: s.deskPage === n.id ? INK : 'transparent',
+        color: s.deskPage === n.id ? '#FBF8F2' : '#4A453E'
+      }
+    }));
+    const dot = c => ({ width: 9, height: 9, borderRadius: '50%', background: c, flex: 'none' });
+    const right = c => ({ font: `400 13.5px ${sans}`, color: c || I40, flex: 'none', textAlign: 'right' });
+    const devices = [
+      { name: '妈妈的手机', sub: 'Pixel 8 · 已直连', dotStyle: dot(SAFE), right: '最近备份 昨晚 9:14', rightStyle: right() },
+      relay
+        ? { name: '外婆的平板', sub: 'Xiaomi Pad · 经中继连接——内容加密,中继无法读取,速度可能受限', dotStyle: dot(WAIT), right: '最近备份 周二 14:02', rightStyle: right(WAIT) }
+        : { name: '外婆的平板', sub: 'Xiaomi Pad · 已直连', dotStyle: dot(SAFE), right: '最近备份 周二 14:02', rightStyle: right() },
+      sentinel
+        ? { name: '爸爸的手机', sub: 'Galaxy S24 · 5 天没备份了——去那台手机上打开一次 App 就会自动补上', dotStyle: dot(ACT), right: '需要看看', rightStyle: right(ACT) }
+        : { name: '爸爸的手机', sub: 'Galaxy S24 · 离线,最后在线 昨天 22:40', dotStyle: dot(IDLE), right: '最近备份 昨天', rightStyle: right() }
+    ];
+    if (s.allowed) devices.push({ name: '小姨的手机', sub: '刚刚加入 · 等待第一次备份', dotStyle: dot(IDLE), right: '—', rightStyle: right() });
+    const logRows = [
+      { text: '妈妈的手机 备份了 23 张照片', time: '昨晚 9:14' },
+      { text: '外婆的平板 备份了 8 张照片', time: '周二 14:02' },
+      { text: '3 个文件在 P-Pass 之外被移动', time: '周一', warn: true },
+      { text: '后台服务更新到 0.4.2', time: '上周' }
+    ].map(r => ({ ...r, textStyle: { font: `500 15px ${sans}`, color: r.warn ? WAIT : INK } }));
+    const tones = ['#D8CBB8', '#C4B49C', '#A99B85', '#B0A088', '#C9BCA6', '#8A7E6B', '#D2C2AC', '#A8AB9C', '#96998C', '#C4B49C', '#9C8F7A', '#D8CBB8', '#B0A088', '#A99B85', '#C9BCA6', '#D2C2AC'];
+    const owners = ['me', 'mom', 'me', 'grandma', 'me', 'mom', 'me', 'me', 'grandma', 'mom', 'me', 'me', 'mom', 'me', 'grandma', 'me'];
+    const badges = { 2: '↑', 6: '↑', 9: '↓' };
+    const allTiles = tones.map((tone, i) => ({
+      owner: owners[i], badge: badges[i] || '',
+      style: { aspectRatio: '1', background: tone, borderRadius: 4, position: 'relative' },
+      badgeStyle: badges[i]
+        ? { position: 'absolute', top: 4, right: 4, width: 18, height: 18, borderRadius: '50%', background: badges[i] === '!' ? ACT : 'rgba(23,21,18,.75)', color: '#FBF8F2', font: `700 11px ${sans}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+        : { display: 'none' }
+    }));
+    const tiles = s.filter === 'all' ? allTiles : allTiles.filter(t => t.owner === (s.filter === 'local' ? 'me' : s.filter));
+    const chips = [
+      { id: 'all', label: '全部' }, { id: 'local', label: '仅本机' }, { id: 'mom', label: '妈妈' }, { id: 'grandma', label: '外婆' }
+    ].map(c => ({
+      ...c, go: () => this.setState({ filter: c.id }),
+      style: {
+        height: 36, display: 'flex', alignItems: 'center', padding: '0 15px', borderRadius: 999, cursor: 'pointer',
+        font: `600 14px ${sans}`,
+        background: s.filter === c.id ? INK : '#F1ECE3',
+        color: s.filter === c.id ? '#FBF8F2' : '#4A453E'
+      }
+    }));
+    const tab = active => ({ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', font: `${active ? 700 : 500} 15px ${sans}`, color: active ? INK : I40, borderTop: active ? `2px solid ${INK}` : '2px solid transparent' });
+    const sw = on => ({ width: 50, height: 30, borderRadius: 999, background: on ? SAFE : '#E0D8CB', display: 'flex', alignItems: 'center', justifyContent: on ? 'flex-end' : 'flex-start', padding: 3, cursor: 'pointer', flex: 'none', transition: 'all .15s' });
+    const albumDefs = [
+      { id: 'camera', name: '相机(DCIM)', count: 1234 }, { id: 'shot', name: '截图', count: 456 },
+      { id: 'wechat', name: '微信图片', count: 2048 }, { id: 'dl', name: '下载', count: 89 }
+    ];
+    const albums = albumDefs.map(a => ({
+      ...a, countText: a.count.toLocaleString(), swStyle: sw(s.albums[a.id]),
+      toggle: () => this.setState(st => ({ albums: { ...st.albums, [a.id]: !st.albums[a.id] } }))
+    }));
+    const conds = [
+      { id: 'charge', title: '仅充电时备份', sub: '不耗白天的电' },
+      { id: 'wifi', title: '仅 Wi-Fi 时备份', sub: '不走手机流量' },
+      { id: 'bg', title: '允许在后台运行', sub: '熄屏也能备份;部分手机稍后需在系统里确认一次' }
+    ].map(c => ({
+      ...c, swStyle: sw(s.conds[c.id]),
+      toggle: () => this.setState(st => ({ conds: { ...st.conds, [c.id]: !st.conds[c.id] } }))
+    }));
+    const wiz = s.wizStep;
+    const ext = {
+      wizDots: [1, 2, 3].map(i => ({ style: { width: 34, height: 5, borderRadius: 999, background: i <= Math.min(wiz, 3) ? INK : '#E0D8CB' } })),
+      isWiz1: wiz === 1, isWiz2: wiz === 2, isWiz3: wiz === 3, isWiz4: wiz === 4, wizFooter: wiz < 4,
+      wizNext: () => this.setState(st => ({ wizStep: Math.min(st.wizStep + 1, 4) })),
+      wizBack: () => this.setState(st => ({ wizStep: Math.max(st.wizStep - 1, 1) })),
+      wizBtnLabel: wiz === 3 ? '设为常驻服务并继续' : '继续',
+      wizBackStyle: { font: `600 14px ${sans}`, color: I40, cursor: 'pointer', visibility: wiz > 1 ? 'visible' : 'hidden' },
+      albums, conds,
+      perms: [
+        { id: 'photos', title: '读取照片', sub: '必需 · 只读你勾选的相册,不动其他文件' },
+        { id: 'notify', title: '发送通知', sub: '只在备份失败时说话,成功保持沉默' },
+        { id: 'battery', title: '忽略电池优化', sub: '熄屏时系统不打断备份;部分机型需在系统页确认' }
+      ].map(pm => {
+        const on = s.perms[pm.id];
+        return { ...pm,
+          btnLabel: on ? '已允许 ✓' : '允许',
+          btnStyle: { height: 38, display: 'flex', alignItems: 'center', padding: '0 16px', borderRadius: 12, font: `600 14px ${sans}`, cursor: on ? 'default' : 'pointer', flex: 'none', background: on ? '#E4F1E8' : INK, color: on ? SAFE : '#FBF8F2' },
+          grant: () => this.setState(st => ({ perms: { ...st.perms, [pm.id]: true } }))
+        };
+      }),
+      permContinueLabel: s.perms.photos ? '继续' : '先允许「读取照片」',
+      permContinueStyle: { height: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 20, font: `600 18px ${sans}`, cursor: s.perms.photos ? 'pointer' : 'default', background: s.perms.photos ? INK : '#E0D8CB', color: s.perms.photos ? '#FBF8F2' : I40, pointerEvents: s.perms.photos ? 'auto' : 'none' },
+      obCountText: albumDefs.filter(a => s.albums[a.id]).reduce((n, a) => n + a.count, 0).toLocaleString(),
+      isOb0: s.obStep === 0, isOb1: s.obStep === 1, isOb2: s.obStep === 2, isOb3: s.obStep === 3,
+      obNext: () => this.setState(st => ({ obStep: Math.min(st.obStep + 1, 3) })),
+      obBack: () => this.setState(st => ({ obStep: Math.max(st.obStep - 1, 0) })),
+      obReset: () => this.setState({ obStep: 0 })
+    };
+    return {
+      ...ext,
+      deskW: 1140, deskH: 720, nav, devices, logRows, chips, tiles, allTiles, pendingPair,
+      pairedLine: `已配对设备 ${devices.length} 台`,
+      isOverview: s.deskPage === 'overview', isDevices: s.deskPage === 'devices', isLibrary: s.deskPage === 'library', isLog: s.deskPage === 'log', isSettings: s.deskPage === 'settings',
+      allowPair: () => this.setState({ pendingHandled: true, allowed: true }),
+      denyPair: () => this.setState({ pendingHandled: true }),
+      isPhotos: s.phoneTab === 'photos', isBackup: s.phoneTab === 'backup',
+      goPhotos: () => this.setState({ phoneTab: 'photos' }), goBackup: () => this.setState({ phoneTab: 'backup' }),
+      tabPhotosStyle: tab(s.phoneTab === 'photos'), tabBackupStyle: tab(s.phoneTab === 'backup'),
+      togglePause: () => this.setState(st => ({ paused: !st.paused })),
+      pauseLabel: s.paused ? '继续' : '暂停',
+      progressTitle: s.paused ? '已暂停——随时可以继续,不会丢进度' : '正在备份 IMG_8841.jpg(第 12 / 54 张)',
+      progressFillStyle: { width: '62%', height: '100%', background: s.paused ? IDLE : SAFE, borderRadius: 999 }
+    };
+  }
+}
+</script>
+</body>
+</html>
+
