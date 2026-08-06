@@ -31,7 +31,6 @@
     <string name="code_missing_addr">The code has no address — generate a fresh one on the computer.</string>
 
     <!-- Home / backup -->
-    <string name="state_ready">Ready</string>
     <string name="state_scanning">Looking for photos… %1$d</string>
     <string name="state_hashing">Reading %1$d/%2$d</string>
     <string name="state_sending">Sending %1$d/%2$d home</string>
@@ -39,11 +38,16 @@
     <!-- T-080 defect(a): with K > 0 the status line may only speak of the debt -->
     <string name="state_pending">%1$d photos still to back up</string>
     <string name="state_trouble">Needs another try</string>
-    <string name="connected_to">Connected to</string>
     <string name="safe_detail">%1$d new photos arrived home.</string>
     <string name="safe_detail_dup">%1$d new photos arrived home, %2$d were already there.</string>
     <string name="backup_now">Back up now</string>
     <string name="backup_pause">Pause</string>
+    <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
+    <string name="idle_auto_hint">Runs by itself while charging on Wi-Fi</string>
+    <!-- T-083: trouble card — human copy only; raw errors live behind this fold -->
+    <string name="try_again">Try again</string>
+    <string name="trouble_details_show">Show technical details</string>
+    <string name="trouble_details_hide">Hide technical details</string>
     <!-- UX-02: 失败通知（成功保持沉默） -->
     <string name="notif_backup_failed_title">Backup didn\'t finish</string>
     <string name="notif_backup_failed_body">%1$d photos didn\'t make it home — open to see</string>
@@ -74,7 +78,7 @@
     <string name="reconnect">Scan a new code</string>
     <!-- 配对已失效（存储端移除/吊销本设备后备份被拒） -->
     <string name="pairing_lost_title">Pairing with this computer is no longer valid</string>
-    <string name="pairing_lost_body">The computer may have removed this phone. Scan the code again to resume backup.</string>
+    <string name="pairing_lost_body">Your photos are all still on this phone — nothing is lost. The computer may have removed this phone; scan the code again and backup resumes.</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">Auto backup</string>
     <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>
@@ -85,7 +89,7 @@
     <string name="disconnect_failed_title">Could not disconnect</string>
     <string name="disconnect_failed">Could not reach the storage computer. Check that it is on, then try again.</string>
     <string name="ok">OK</string>
-    <string name="run_failed">Could not finish this run — photos already home are safe; try again and it picks up where it left off.</string>
+    <string name="run_failed">No photos are lost — everything already home is safe. This run didn\'t finish; try again and it picks up where it left off.</string>
 
     <!-- Photos -->
     <string name="photos_title">Family photos</string>
