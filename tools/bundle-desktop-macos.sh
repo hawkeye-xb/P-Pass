@@ -58,7 +58,36 @@ echo "── 6. dmg → $DMG_OUT/P-Pass-macos-arm64.dmg"
 mkdir -p "$DMG_OUT"
 rm -rf /tmp/pp-dmg-stage && mkdir -p /tmp/pp-dmg-stage
 cp -R "$APP" /tmp/pp-dmg-stage/
+# H-10b (2026-08-08, xixi): dmg 打开必须"无脑拖拽"——先出可写卷，
+# 挂载后放 Applications 链接 + Finder 布局（图标位置/视图选项），
+# 再转 UDZO。缺布局时 dmg 里"孤零零一个程序"，用户不知道拖到
+# Applications（真机实测反馈）。
 hdiutil create -volname "P-Pass" -srcfolder /tmp/pp-dmg-stage \
-  -ov -format UDZO "$DMG_OUT/P-Pass-macos-arm64.dmg"
+  -ov -format UDRW /tmp/pp-dmg-rw.dmg
+hdiutil attach /tmp/pp-dmg-rw.dmg -mountpoint /Volumes/P-Pass -nobrowse
+ln -s /Applications /Volumes/P-Pass/Applications
+osascript <<'APPLESCRIPT'
+tell application "Finder"
+  tell disk "P-Pass"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set the bounds of container window to {100, 100, 520, 400}
+    set viewOptions to the icon view options of container window
+    set arrangement of viewOptions to not arranged
+    set icon size of viewOptions to 96
+    set position of item "P-Pass.app" of container window to {130, 180}
+    set position of item "Applications" of container window to {390, 180}
+    close
+  end tell
+end tell
+APPLESCRIPT
+# 布局失败（无头 CI 的 TCC 可能拦 Apple Events）不致命：Applications
+# 链接已在，拖拽路径仍然成立；布局只是窗口观感。
+if [ $? -ne 0 ]; then echo "warning: Finder layout skipped (headless/TCC) — Applications link still present"; fi
+hdiutil detach /Volumes/P-Pass -quiet
+hdiutil convert /tmp/pp-dmg-rw.dmg -format UDZO -o "$DMG_OUT/P-Pass-macos-arm64.dmg"
+rm -f /tmp/pp-dmg-rw.dmg
 
 echo "── done: $(du -sh "$DMG_OUT/P-Pass-macos-arm64.dmg" | cut -f1) dmg"
