@@ -51,7 +51,7 @@ fn socket_name(tag: &str) -> String {
 
 async fn start(dir: &std::path::Path, tag: &str) -> (Db, Pairing, String, String) {
     let db = Db::open_in_memory().await.unwrap();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
     let diag = DiagAgg::new(db.clone());
     let ipc = Arc::new(IpcServer::new(
         db.clone(),

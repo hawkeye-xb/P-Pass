@@ -72,6 +72,17 @@ impl PeerAddr {
     pub fn node_id(&self) -> NodeId {
         NodeId(*self.0.id.as_bytes())
     }
+
+    /// First relay URL, if any. Pairing QR (H-10b rework): the QR's `a=`
+    /// param used to carry the full PeerAddr (id + relay + direct IPs,
+    /// 100–180 chars base64) — too dense to scan. Now the QR carries just
+    /// the relay URL (`r=`), and the Android side rebuilds the token.
+    pub fn relay_url(&self) -> Option<String> {
+        self.0.addrs.iter().find_map(|a| match a {
+            TransportAddr::Relay(u) => Some(u.to_string()),
+            _ => None,
+        })
+    }
 }
 
 /// Compact URL-safe token (base64url over the serialized address) — what
