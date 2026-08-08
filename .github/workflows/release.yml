@@ -123,44 +123,12 @@ jobs:
             /tmp/rel/daemon /tmp/rel/testclient
           echo "signed=yes" >> "$GITHUB_OUTPUT"
 
-      - name: Notarize + staple (gated)
-        id: notarize
-        if: env.HAS_APPLE_CERT == 'true' && env.HAS_NOTARY == 'true'
-        env:
-          # 公证凭据二选一：API key（--key/--key-id/--issuer）或
-          # Apple ID + App-Specific Password + Team ID（Xisper 先例，.env.build 变量同名）
-          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
-          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
-          NOTARY_ARGS=""
-          if [ -n "${APPLE_NOTARY_KEY:-}" ]; then
-            NOTARY_ARGS="--key $APPLE_NOTARY_KEY --key-id $APPLE_NOTARY_KEY_ID --issuer $APPLE_NOTARY_ISSUER"
-          else
-            NOTARY_ARGS="--apple-id $APPLE_ID --password $APPLE_APP_SPECIFIC_PASSWORD --team-id $APPLE_TEAM_ID"
-          fi
-          for bin in /tmp/rel/daemon /tmp/rel/testclient; do
-            ditto -c -k --keepParent "$bin" "$bin.zip"
-            # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
-            xcrun notarytool submit "$bin.zip" $NOTARY_ARGS --wait --timeout 15m
-            xcrun stapler staple "$bin"
-            rm -f "$bin.zip"
-          done
-          echo "notarized=yes" >> "$GITHUB_OUTPUT"
-
-      - name: Signing status tag
-        id: signtag
-        run: |
-          SIG="no"
-          if [ "${{ steps.codesign.outputs.signed }}" = "yes" ] && [ "${{ steps.notarize.outputs.notarized }}" = "yes" ]; then
-            SIG="yes"
-          fi
-          echo "signed=$SIG" >> "$GITHUB_OUTPUT"
+      # ── 公证/装订（H-02 凭据路径，对象 = dmg）──
+      # v0.3.0-test.3 实锤：对裸 Mach-O（daemon/testclient）notarytool
+      # submit 可 Accepted，但 stapler staple 必 Error 73——Apple 的
+      # staple 只支持 UDIF dmg / code-signed .app bundle / 扁平 pkg。
+      # 公证对象改为 bundle 步骤产出的 dmg（含 Developer ID 签名的
+      # .app），staple 装订进 dmg。步骤移到 Bundle desktop 之后。
 
       - name: SHA256 + notes
         run: |
@@ -204,22 +172,75 @@ jobs:
         # UPD-01: createUpdaterArtifacts 强制签名——tauri bundle 需要
         # TAURI_SIGNING_PRIVATE_KEY（UPDATE_SIGNING_KEY，rsign 格式，空密码）。
         # secret 只进本 step env（T-071b 模式）。
+        # H-02: 凭据到位后，把 p12 导进临时钥匙串取 Developer ID identity
+        # 传 bundle 脚本（.app 用真证书签名，供后续 dmg 公证/staple）；
+        # 无凭据路径保持 ad-hoc（-），与 zip 资产一致。
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: |
           set -euo pipefail
+          IDENTITY="-"
+          if [ -n "${APPLE_CERT_P12:-}" ]; then
+            echo "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            KEYCHAIN=$RUNNER_TEMP/ppsign.keychain-db
+            security create-keychain -p pp "$KEYCHAIN" 2>/dev/null || true
+            security default-keychain -s "$KEYCHAIN"
+            security unlock-keychain -p pp "$KEYCHAIN"
+            security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+            security set-key-partition-list -S apple-tool:,apple: -s -k pp "$KEYCHAIN" >/dev/null
+            IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')"
+            echo "identity: $IDENTITY"
+          fi
           # ⚠️ dmg 输出到 /tmp/rel/：upload-artifact@v4 按多个 path 的公共
           # 祖先目录存储，若 dmg 放 /tmp/dmg/ 会让 artifact 内出现 rel/、
           # dmg/ 前缀（T-071 只传 /tmp/rel 时是根级平铺），release job 的
           # artifacts/macos-arm64/<file> 引用会全挂。zip 打包步骤在此之前
           # 已完成，dmg 落入 /tmp/rel 不会被收进 zip。
-          # 无凭据路径：ad-hoc（-）；有 APPLE_CERT 时门控传 identity。
-          # （公证整个 .app 属 H-02 凭据路径范畴，本步只做 ad-hoc 重签。）
-          tools/bundle-desktop-macos.sh /tmp/rel /tmp/rel
+          tools/bundle-desktop-macos.sh /tmp/rel /tmp/rel "$IDENTITY"
           # ⚠️ 不追加 dmg 到 SHA256SUMS-macos-arm64：zip 内 SUMS 与 release
           # 资产 SUMS 必须逐字节一致（T-071 三重核对①）。dmg 的 sha256
           # 由 release job 下载后计算写进 notes。
+
+      - name: Notarize + staple dmg (gated, H-02)
+        id: notarize
+        if: env.HAS_APPLE_CERT == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          # 公证凭据二选一：API key（--key/--key-id/--issuer）或
+          # Apple ID + App-Specific Password + Team ID（Xisper 先例，.env.build 变量同名）
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
+          NOTARY_ARGS=""
+          if [ -n "${APPLE_NOTARY_KEY:-}" ]; then
+            NOTARY_ARGS="--key $APPLE_NOTARY_KEY --key-id $APPLE_NOTARY_KEY_ID --issuer $APPLE_NOTARY_ISSUER"
+          else
+            NOTARY_ARGS="--apple-id $APPLE_ID --password $APPLE_APP_SPECIFIC_PASSWORD --team-id $APPLE_TEAM_ID"
+          fi
+          DMG=/tmp/rel/P-Pass-macos-arm64.dmg
+          [ -f "$DMG" ] || { echo "FATAL: $DMG missing (bundle step must run first)" >&2; exit 1; }
+          # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
+          xcrun notarytool submit "$DMG" $NOTARY_ARGS --wait --timeout 15m
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+          echo "notarized=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Signing status tag
+        id: signtag
+        run: |
+          SIG="no"
+          if [ "${{ steps.codesign.outputs.signed }}" = "yes" ] && [ "${{ steps.notarize.outputs.notarized }}" = "yes" ]; then
+            SIG="yes"
+          fi
+          echo "signed=$SIG" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
