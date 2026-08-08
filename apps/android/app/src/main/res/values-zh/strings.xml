@@ -12,6 +12,13 @@
 
     <string name="scan_title">对准电脑屏幕上的二维码</string>
     <string name="scan_hint">拿稳就行，会自动识别。</string>
+    <!-- H-10b: 手动输入配对码（扫不出时的退路） -->
+    <string name="scan_manual">手动输入</string>
+    <string name="scan_manual_hint">粘贴电脑上的配对码</string>
+    <string name="scan_manual_paste">粘贴</string>
+    <string name="scan_manual_submit">配对</string>
+    <string name="scan_manual_invalid">这不是 P-Pass 配对码</string>
+    <string name="scan_manual_back">返回扫码</string>
     <string name="cancel">取消</string>
 
     <string name="pair_waiting_title">正在请求加入</string>

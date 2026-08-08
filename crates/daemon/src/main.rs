@@ -59,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
 
     // addr_provider 惰性填充：transport 在 claim 之后才 bind，配对二维码
     // 也在这之后生成（&a= 要带 live endpoint 的当前地址，见 Pairing）。
+    // H-10b: QR 只带 relay（&r=）——relay_provider 同样惰性，从
+    // local_addr() 的 addrs 里取 Relay 变体。
     let transport_slot: std::sync::Arc<std::sync::OnceLock<transport::IrohTransport>> =
         std::sync::Arc::new(std::sync::OnceLock::new());
     let slot = std::sync::Arc::clone(&transport_slot);
@@ -68,11 +70,17 @@ async fn main() -> anyhow::Result<()> {
                 .map(|t| t.local_addr().to_string())
                 .unwrap_or_default()
         }));
+    let relay_slot = std::sync::Arc::clone(&transport_slot);
+    let relay_provider: Option<std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>> =
+        Some(std::sync::Arc::new(move || {
+            relay_slot.get().and_then(|t| t.local_addr().relay_url())
+        }));
 
     // Pairing (T-031): issue one QR token at startup. Owner confirmation
     // is owned by the IPC layer (T-034) — tray UI and the interim console
     // prompt below both act through it. 绝不默认放行 (§2.2).
-    let (pairing, pending_rx) = daemon::Pairing::new(db.clone(), node_id, addr_provider);
+    let (pairing, pending_rx) =
+        daemon::Pairing::new(db.clone(), node_id, addr_provider, relay_provider);
 
     // IPC (T-034): local socket + per-launch token in the data dir.
     let diag_agg = daemon::DiagAgg::new(db.clone());

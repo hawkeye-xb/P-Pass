@@ -34,8 +34,16 @@ suspend fun pairWithQr(
     } catch (e: Exception) {
         return PairOutcome.Failed("这不是 P-Pass 配对码")
     }
-    val addr = parsed.addr
-        ?: return PairOutcome.Failed("配对码缺少地址信息，请在电脑上重新生成")
+    // H-10b: 新 QR 只有 r=（relay URL）——从 node+relay 重建可连接地址；
+    // 旧 QR 的 a= 完整解析仍兼容。
+    val addr: PeerAddrParts = parsed.addr ?: parsed.relayUrl?.let {
+        PeerAddrParts(parsed.nodeIdHex, it, emptyList())
+    } ?: return PairOutcome.Failed("配对码缺少地址信息，请在电脑上重新生成")
+    // 存储 token：旧码存原 a= 串；新码从 node+relay 重建（backup 的
+    // parsePeerAddrToken 兼容）。
+    val addrToken: String = parsed.addr?.let { qr.substringAfter("&a=", "") }
+        ?: parsed.relayUrl?.let { buildAddrToken(parsed.nodeIdHex, it) }
+        ?: ""
 
     // Already a member on this storage (same phone, the computer's
     // identity/address changed)? Then no pair.request is needed — and
@@ -52,11 +60,10 @@ suspend fun pairWithQr(
             val name = if (hello.ok) {
                 ProtoJson.decodeFromJsonElement(Hello.serializer(), hello.result!!).deviceName
             } else "P-Pass 存储端"
-            val raw = qr.substringAfter("&a=", "")
             return PairOutcome.Joined(
                 Pairing(
                     daemonNodeId = parsed.nodeIdHex,
-                    daemonAddrToken = raw,
+                    daemonAddrToken = addrToken,
                     storageDeviceName = name,
                 )
             )
@@ -83,12 +90,9 @@ suspend fun pairWithQr(
             PairOutcome.Joined(
                 Pairing(
                     daemonNodeId = parsed.nodeIdHex,
-                    daemonAddrToken = "", // filled by caller with the QR's a= token
+                    daemonAddrToken = addrToken,
                     storageDeviceName = accepted.storageDeviceName,
-                ).let {
-                    val raw = qr.substringAfter("&a=", "")
-                    if (raw.isNotEmpty()) it.copy(daemonAddrToken = raw) else it
-                }
+                )
             )
         } else {
             PairOutcome.Refused(resp.error?.msgKey ?: "err.unknown")

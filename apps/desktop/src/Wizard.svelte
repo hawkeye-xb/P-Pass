@@ -60,7 +60,13 @@
       }
       if (!qr) throw new Error("后台服务没有在 10 秒内就绪");
       qrText = qr;
-      qrDataUrl = await QRCode.toDataURL(qr, { width: 240, margin: 1 });
+      // H-10b: 配对码瘦身后仍在 ~170 字符——渲染加大 + 低纠错（L）保
+      // 可扫性（内容长时 L 级比默认 M 级更好扫；三星/鸿蒙取景都实测过）。
+      qrDataUrl = await QRCode.toDataURL(qr, {
+        width: 320,
+        margin: 2,
+        errorCorrectionLevel: "L",
+      });
       step = 3;
     } catch (e) {
       error = `启动后台服务失败：${e}`;

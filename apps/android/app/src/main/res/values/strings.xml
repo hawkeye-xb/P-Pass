@@ -14,6 +14,13 @@
     <!-- Scan -->
     <string name="scan_title">Point at the computer screen.</string>
     <string name="scan_hint">Hold steady — it reads by itself.</string>
+    <!-- H-10b: manual pairing entry (QR too dense / camera trouble) -->
+    <string name="scan_manual">Type it instead</string>
+    <string name="scan_manual_hint">Paste the pairing code from the computer</string>
+    <string name="scan_manual_paste">Paste</string>
+    <string name="scan_manual_submit">Pair</string>
+    <string name="scan_manual_invalid">That doesn\'t look like a P-Pass pairing code</string>
+    <string name="scan_manual_back">Back to camera</string>
     <string name="cancel">Cancel</string>
 
     <!-- Pairing -->

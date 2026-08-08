@@ -29,7 +29,7 @@ async fn start_daemon(
     let tp = endpoint().await;
     let addr = tp.local_addr();
     let now = clock.clone();
-    let (pairing, mut pending) = daemon::Pairing::new(db.clone(), tp.node_id(), None);
+    let (pairing, mut pending) = daemon::Pairing::new(db.clone(), tp.node_id(), None, None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             req.decide(true); // 剧本自动确认（owner 在 IPC 侧）
