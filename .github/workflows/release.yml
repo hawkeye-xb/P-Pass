@@ -424,8 +424,8 @@ jobs:
 
           构建自 \`${GITHUB_SHA::7}\` · $(date -u +%FT%TZ)
 
-          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（无凭据路径跳过）/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || 'yes' }}（keystore 签名）
-          **更新 manifest**：UPDATE_SIGNING_KEY 未设置 → manifest.json 未签名（signature 空，客户端系统签名校验兜底——Android PackageInstaller 强制同签名）
+          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（${{ needs.macos-arm64.outputs.signed == 'yes' && 'Developer ID 签名 + 公证 + staple' || '无凭据路径跳过' }})/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || 'yes' }}（keystore 签名）
+          **更新 manifest**：${{ secrets.UPDATE_SIGNING_KEY != '' && 'UPDATE_SIGNING_KEY 在位 → manifest.json 已签名（tauri signer）' || 'UPDATE_SIGNING_KEY 未设置 → manifest.json 未签名（signature 空，客户端系统签名校验兜底——Android PackageInstaller 强制同签名）' }}
 
           ### 面向人类的资产（H-10c）
           - **P-Pass-macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
