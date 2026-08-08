@@ -42,6 +42,31 @@
     }
   }
 
+  // H-10b (2026-08-08, xixi): QR 无法刷新——token 10 分钟过期后界面
+  // 上没有任何重新生成的入口，只能退出向导重来。抽成 generateQr()
+  // 供首次（toStep3）和刷新按钮共用。
+  async function generateQr() {
+    busy = true;
+    error = "";
+    try {
+      const r = await invoke("daemon_call", { method: "pairing.start", params: {} });
+      const qr = r.qr;
+      // H-10b: 配对码瘦身后仍在 ~170 字符——渲染加大 + 低纠错（L）保
+      // 可扫性（内容长时 L 级比默认 M 级更好扫；三星/鸿蒙取景都实测过）。
+      qrText = qr;
+      qrDataUrl = await QRCode.toDataURL(qr, {
+        width: 320,
+        margin: 2,
+        errorCorrectionLevel: "L",
+      });
+      step = 3;
+    } catch (e) {
+      error = `生成配对码失败：${e}`;
+    } finally {
+      busy = false;
+    }
+  }
+
   async function toStep3() {
     error = "";
     busy = true;
@@ -60,8 +85,6 @@
       }
       if (!qr) throw new Error("后台服务没有在 10 秒内就绪");
       qrText = qr;
-      // H-10b: 配对码瘦身后仍在 ~170 字符——渲染加大 + 低纠错（L）保
-      // 可扫性（内容长时 L 级比默认 M 级更好扫；三星/鸿蒙取景都实测过）。
       qrDataUrl = await QRCode.toDataURL(qr, {
         width: 320,
         margin: 2,
@@ -138,6 +161,9 @@
       </details>
     {/if}
     <div class="nav">
+      <button onclick={generateQr} disabled={busy}>
+        {busy ? "正在刷新…" : "刷新二维码"}
+      </button>
       <button class="primary" onclick={onDone}>完成</button>
     </div>
   {/if}
