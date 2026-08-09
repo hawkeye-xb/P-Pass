@@ -74,6 +74,8 @@
     <string name="rules_title">Backup rules</string>
     <string name="rule_notify">Notifications</string>
     <string name="rule_notify_value">Only on failure</string>
+    <!-- T1: 版本号显示 -->
+    <string name="setting_version">Version</string>
     <!-- UX-03: 后台规则一行 + 极简设置 -->
     <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
     <string name="setting_charge_only">Only while charging</string>

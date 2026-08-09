@@ -70,6 +70,8 @@
     <string name="rules_title">备份规则</string>
     <string name="rule_notify">通知</string>
     <string name="rule_notify_value">仅失败时</string>
+    <!-- T1: 版本号显示 -->
+    <string name="setting_version">版本</string>
     <!-- UX-03: 后台规则一行 + 极简设置 -->
     <string name="auto_backup_rule">插电 + WiFi 时自动备份，无需打开 App</string>
     <string name="setting_charge_only">仅充电时</string>

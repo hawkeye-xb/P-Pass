@@ -1,5 +1,6 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
+  import { getVersion } from "@tauri-apps/api/app";
   import { open as openDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -93,6 +94,9 @@
   // T-092: activity.list 批次（{node_id,name,at,asset_count}，at=unix 毫秒，
   // name 可能 null）——活动记录页数据源
   let activity = $state([]);
+  // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
+  let version = $state("");
+  getVersion().then((v) => (version = v)).catch(() => {});
   // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
   let nowMs = $state(Date.now());
 
@@ -560,6 +564,10 @@
         </section>
       {/if}
     </main>
+    <!-- T1: 版本号——报问题/排查时先知道装的是什么版本。 -->
+    {#if version}
+      <footer class="version-footer">P-Pass v{version}</footer>
+    {/if}
   </div>
 {/if}
 
@@ -1026,6 +1034,15 @@
     padding: 10px;
     border-radius: var(--pp-radius-control-sm);
     margin-top: 6px;
+  }
+  .version-footer {
+    position: fixed;
+    right: 14px;
+    bottom: 8px;
+    font-size: 11px;
+    color: var(--pp-ink-40);
+    opacity: 0.8;
+    user-select: none;
   }
   .hint {
     color: var(--pp-ink-40);

@@ -41,6 +41,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.BuildConfig
 import com.hawkeyexb.ppass.backup.BackupTriplet
 
 /** What the user sees: exactly one of the design's meaning states. */
@@ -366,6 +367,22 @@ fun HomeScreen(
                     // UX-02 既有行为：成功沉默，仅失败通知——此行如实陈述。
                     Text(
                         stringResource(R.string.rule_notify_value),
+                        fontSize = 14.sp, color = PPColor.Ink40,
+                    )
+                }
+                // T1 (H-10b): 版本 + 构建号——报问题/排查时先知道装的是什么版本。
+                HorizontalDivider(color = PPColor.Divider)
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp, 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.setting_version),
+                        fontSize = 15.sp, color = PPColor.Ink,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                         fontSize = 14.sp, color = PPColor.Ink40,
                     )
                 }
