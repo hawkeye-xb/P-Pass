@@ -11,6 +11,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -22,10 +24,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -40,7 +46,9 @@ import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.backup.BackupRunner
+import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.backup.BackupSettings
+import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.backupOnceNow
 import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
@@ -59,6 +67,8 @@ import com.hawkeyexb.ppass.ui.TwoTabs
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.JoinedScreen
 import com.hawkeyexb.ppass.ui.PairStatusScreen
+import com.hawkeyexb.ppass.ui.BucketScreen
+import com.hawkeyexb.ppass.ui.PPColor
 import com.hawkeyexb.ppass.ui.ScanScreen
 import com.hawkeyexb.ppass.ui.WelcomeScreen
 import com.hawkeyexb.ppass.update.UpdateInfo
@@ -72,6 +82,8 @@ private sealed class Screen {
     data class Joined(val pairing: Pairing) : Screen()
     data class Trouble(val titleRes: Int, val bodyRes: Int, val detail: String = "") : Screen()
     data class Home(val pairing: Pairing) : Screen()
+    // T6: 相册选择（从 Home 的设置区进入）
+    data class Buckets(val pairing: Pairing, val current: Set<Long>) : Screen()
 }
 
 class MainActivity : ComponentActivity() {
@@ -287,6 +299,16 @@ fun PPassApp() {
                             clearLocalPairing(context, pairings, s.pairing)
                             screen = Screen.Welcome
                         },
+                        // T6: 备份范围——「选择相册」与「发起备份」两个动作。
+                        selectedBucketCount = remember {
+                            BackupScopeStore(context).selectedBucketIds()?.size
+                        },
+                        onOpenBucketPicker = {
+                            screen = Screen.Buckets(
+                                s.pairing,
+                                BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
+                            )
+                        },
                         onBackupNow = {
                             val needed = requiredMediaPermissions().filter {
                                 ContextCompat.checkSelfPermission(context, it) !=
@@ -337,6 +359,34 @@ fun PPassApp() {
                             Text(stringResource(R.string.cancel))
                         }
                     },
+                )
+            }
+        }
+
+        // T6: 相册选择页——「选择备份内容」与「发起备份」是两个动作。
+        is Screen.Buckets -> {
+            val scopeStore = remember { BackupScopeStore(context) }
+            var buckets by remember { mutableStateOf<List<MediaScanner.Bucket>?>(null) }
+            LaunchedEffect(Unit) {
+                buckets = withContext(Dispatchers.IO) {
+                    MediaScanner(context.contentResolver).listBuckets()
+                }
+            }
+            val list = buckets
+            if (list == null) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(stringResource(R.string.bucket_loading), color = PPColor.Ink40)
+                }
+            } else {
+                BucketScreen(
+                    buckets = list,
+                    selected = s.current,
+                    onDone = { sel ->
+                        scopeStore.saveSelectedBucketIds(sel)
+                        // 回 Home——重建时重新读范围，三元组/扫描随之生效。
+                        screen = Screen.Home(s.pairing)
+                    },
+                    onCancel = { screen = Screen.Home(s.pairing) },
                 )
             }
         }

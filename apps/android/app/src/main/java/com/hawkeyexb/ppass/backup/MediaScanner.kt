@@ -33,8 +33,44 @@ data class ScanResult(
 
 class MediaScanner(private val resolver: ContentResolver) {
 
-    /** All photos+videos newer than [watermark], oldest-first. */
-    fun scanSince(watermark: Long): ScanResult {
+    /** A photo/video album (MediaStore bucket) with its item count. */
+    data class Bucket(val id: Long, val name: String, val count: Int)
+
+    /**
+     * All albums, each with a total item count (photos+videos). T6:
+     * the user picks which albums to back up — WeChat/QQ albums etc.
+     * can be left out. Empty name buckets are grouped as 未命名.
+     */
+    fun listBuckets(): List<Bucket> {
+        val byId = LinkedHashMap<Long, MutableList<String>>()
+        for ((collection, _) in listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI to false,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI to true,
+        )) {
+            val projection = arrayOf(
+                MediaStore.MediaColumns.BUCKET_ID,
+                MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
+            )
+            resolver.query(collection, projection, null, null, null)?.use { cur ->
+                val idIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
+                val nameIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                while (cur.moveToNext()) {
+                    val id = cur.getLong(idIdx)
+                    val name = cur.getString(nameIdx)?.takeIf { it.isNotBlank() } ?: "未命名"
+                    byId.getOrPut(id) { mutableListOf() }.add(name)
+                }
+            }
+        }
+        return byId.map { (id, names) -> Bucket(id, names.first(), names.size) }
+            .sortedBy { it.name.lowercase() }
+    }
+
+    /**
+     * All photos+videos newer than [watermark] (or all of them when
+     * [bucketIds] selects albums), oldest-first. T6: bucketIds limits the
+     * scan to the user-selected albums; null = everything (legacy).
+     */
+    fun scanSince(watermark: Long, bucketIds: Set<Long>? = null): ScanResult {
         val items = mutableListOf<MediaItem>()
         var maxGen = watermark
         for ((collection, isVideo) in listOf(
@@ -53,9 +89,16 @@ class MediaScanner(private val resolver: ContentResolver) {
                 MediaStore.MediaColumns.SIZE,
                 genCol,
             )
+            val where = buildString {
+                append("$genCol > ?")
+                if (!bucketIds.isNullOrEmpty()) {
+                    append(" AND ${MediaStore.MediaColumns.BUCKET_ID} IN (")
+                    append(bucketIds.joinToString(","))
+                    append(")")
+                }
+            }
             resolver.query(
-                collection, projection,
-                "$genCol > ?", arrayOf(watermark.toString()),
+                collection, projection, where, arrayOf(watermark.toString()),
                 "$genCol ASC",
             )?.use { cur ->
                 val idIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
@@ -94,16 +137,19 @@ class MediaScanner(private val resolver: ContentResolver) {
      * 吞——由 computeTripletSafe（refreshTriplet 生产实现）Throwable 级
      * 兜底为「三元组不显示」，绝不崩 App。
      */
-    fun countAll(): Long {
+    fun countAll(bucketIds: Set<Long>? = null): Long {
         var total = 0L
         for (collection in listOf(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
         )) {
+            val where = if (!bucketIds.isNullOrEmpty()) {
+                "${MediaStore.MediaColumns.BUCKET_ID} IN (${bucketIds.joinToString(",")})"
+            } else null
             resolver.query(
                 collection,
                 arrayOf(MediaStore.MediaColumns._ID),
-                null,
+                where,
                 null,
                 null,
             )?.use { cur -> total += cur.count.toLong() }

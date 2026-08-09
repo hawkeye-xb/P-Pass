@@ -76,6 +76,18 @@
     <string name="rule_notify_value">Only on failure</string>
     <!-- T1: 版本号显示 -->
     <string name="setting_version">Version</string>
+    <!-- T6: 相册选择 -->
+    <string name="bucket_title">Choose albums to back up</string>
+    <string name="bucket_hint">Albums you leave out are never backed up (e.g. photos WeChat received).</string>
+    <string name="bucket_empty">No photos or videos found on this phone.</string>
+    <string name="bucket_loading">Reading albums…</string>
+    <string name="bucket_count">%1$d items</string>
+    <string name="bucket_select_all">Select all</string>
+    <string name="bucket_clear">Clear</string>
+    <string name="bucket_done">Back up %1$d albums</string>
+    <string name="backup_scope">Albums to back up</string>
+    <string name="backup_scope_all">All albums</string>
+    <string name="backup_scope_n">%1$d albums</string>
     <!-- UX-03: 后台规则一行 + 极简设置 -->
     <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
     <string name="setting_charge_only">Only while charging</string>

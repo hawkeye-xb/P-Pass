@@ -24,6 +24,7 @@ class BackupUiStateHolder(
     private val client: DaemonClient,
     private val identity: IdentityStore,
     private val pairing: Pairing,
+    private val scopeStore: BackupScopeStore = BackupScopeStore(context),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val _state = mutableStateOf<BackupUiState>(BackupUiState.Idle)
@@ -76,7 +77,11 @@ class BackupUiStateHolder(
      *  未接住 → 启动必闪退）。 */
     private suspend fun refreshTriplet() {
         _triplet.value = withContext(Dispatchers.IO) {
-            computeTripletSafe(context.contentResolver, confirmedStore)
+            computeTripletSafe(
+                context.contentResolver,
+                confirmedStore,
+                scopeStore.selectedBucketIds(),
+            )
         }
     }
 
@@ -116,15 +121,19 @@ class BackupUiStateHolder(
         // DOG-01c: 备份前先做一次漂移校准（只查不传；daemon 不可达则跳过）。
         calibrateFromDaemon()
 
+        // T6: 手动备份 = 重扫选中相册的**全部**（since=0，忽略水位）——
+        // "选择相册 → 主动发起备份"是两个动作。hash 全部候选后按确认
+        // 缓存过滤，只传新图。水位在 commit 后推进到本次扫描位置，自动
+        // 备份从此续跑。T2 语义：手动备份永远有反应（无新增/全已确认也
+        // 明确显示"已是最新"），不再被增量水位静默吞掉。
         val watermarks = WatermarkStore(context.filesDir)
-        val since = watermarks.load()
-
-        _state.value = BackupUiState.Scanning(0)
+        val bucketIds = scopeStore.selectedBucketIds()
         val scan = withContext(Dispatchers.IO) {
-            MediaScanner(context.contentResolver).scanSince(since)
+            MediaScanner(context.contentResolver).scanSince(0L, bucketIds)
         }
         _state.value = BackupUiState.Scanning(scan.items.size)
         if (scan.items.isEmpty()) {
+            // T6: 明确反馈——选中相册里没有任何照片（含"一个相册都没选"）。
             _state.value = BackupUiState.AllSafe(0, 0)
             return
         }
@@ -148,11 +157,18 @@ class BackupUiStateHolder(
                 )
             }
         }
+        // T6: 只传未确认的（已到家照片不再重复 hash 阶段后的传输）。
+        val fresh = candidates.filter { !confirmedStore.contains(it.hash) }
+        _state.value = BackupUiState.Sending(0, fresh.size)
+        if (fresh.isEmpty()) {
+            _state.value = BackupUiState.AllSafe(0, 0) // 全已确认 = 已是最新
+            return
+        }
 
-        _state.value = BackupUiState.Sending(0, candidates.size)
+        _state.value = BackupUiState.Sending(0, fresh.size)
         withContext(Dispatchers.IO) { client.bind(identity.secretKey()) }
         val daemon = parsePeerAddrToken(pairing.daemonAddrToken)
-        val report = BackupRunner(client).run(daemon, candidates, scan.nextWatermark)
+        val report = BackupRunner(client).run(daemon, fresh, scan.nextWatermark)
 
         // Watermark only advances after a committed run (T-053 semantics).
         withContext(Dispatchers.IO) { watermarks.save(scan.nextWatermark) }
@@ -186,8 +202,9 @@ class BackupUiStateHolder(
 internal fun computeTripletSafe(
     resolver: ContentResolver?,
     store: ConfirmedStore,
+    bucketIds: Set<Long>? = null,
 ): BackupTriplet? = try {
-    val n = MediaScanner(checkNotNull(resolver)).countAll()
+    val n = MediaScanner(checkNotNull(resolver)).countAll(bucketIds)
     tripletOf(n, store.count().toLong(), store.lastSuccessAt())
 } catch (_: Throwable) {
     null
