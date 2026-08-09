@@ -309,6 +309,17 @@ impl Router {
         match req.method.as_str() {
             methods::BACKUP_BEGIN => {
                 backup.begin(peer);
+                // T5: 备份会话开始（会话级审计——与资产级 commit 互补）。
+                let _ = self
+                    .db
+                    .append_audit(&storage::AuditEntry {
+                        ts: unix_ms_now(),
+                        actor: Some(peer.0.to_vec()),
+                        action: "backup.started".into(),
+                        target_hash: None,
+                        detail: None,
+                    })
+                    .await;
                 Resp::ok(req.id.clone(), serde_json::Value::Null)
             }
             methods::BACKUP_MANIFEST => {
@@ -341,6 +352,20 @@ impl Router {
                             outcome.ingested,
                             outcome.duplicates
                         );
+                        // T5: 备份会话结束 + 结果（几张/去重几张）。
+                        let _ = self
+                            .db
+                            .append_audit(&storage::AuditEntry {
+                                ts: unix_ms_now(),
+                                actor: Some(peer.0.to_vec()),
+                                action: "backup.finished".into(),
+                                target_hash: None,
+                                detail: Some(format!(
+                                    "ingested={} duplicates={}",
+                                    outcome.ingested, outcome.duplicates
+                                )),
+                            })
+                            .await;
                         Resp::ok(
                             req.id.clone(),
                             serde_json::json!({

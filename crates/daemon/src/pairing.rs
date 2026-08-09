@@ -177,9 +177,34 @@ impl Pairing {
             rx
         };
 
+        // T5: 扫码请求到达即审计（含后续被拒/超时——审计要全，不只看成功）。
+        let _ = self
+            .db
+            .append_audit(&storage::AuditEntry {
+                ts: now_ms,
+                actor: Some(peer.0.to_vec()),
+                action: "pair.requested".into(),
+                target_hash: None,
+                detail: Some(req.device_name.clone()),
+            })
+            .await;
+
         match decision_rx.await {
             Ok(true) => {}
-            _ => return Err(PairRejection::OwnerDeclined),
+            _ => {
+                // T5: owner 拒绝（或 UI 消失/超时）同样入审计。
+                let _ = self
+                    .db
+                    .append_audit(&storage::AuditEntry {
+                        ts: now_ms,
+                        actor: Some(peer.0.to_vec()),
+                        action: "pair.denied".into(),
+                        target_hash: None,
+                        detail: Some(req.device_name.clone()),
+                    })
+                    .await;
+                return Err(PairRejection::OwnerDeclined);
+            }
         }
 
         let device = Device {

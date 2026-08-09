@@ -503,6 +503,33 @@ impl IpcServer {
                     Err(_) => internal(id),
                 }
             }
+            // T5: 审计事件流——配对请求/允许/拒绝、备份会话、吊销、传输，
+            // 桌面「活动记录」页展示（时间倒序由 UI 兜底）。与 activity.list
+            // （资产聚合批次）互补：这里看"发生了什么"，那里看"传了多少"。
+            "audit.list" => {
+                let limit = req
+                    .params
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .map_or(100, |v| v.min(1000) as u32);
+                match self.db.list_audit(limit).await {
+                    Ok(records) => {
+                        let list: Vec<_> = records
+                            .iter()
+                            .map(|r| {
+                                serde_json::json!({
+                                    "ts": r.entry.ts,
+                                    "action": r.entry.action,
+                                    "actor": r.entry.actor.as_ref().map(|b| hex(b)),
+                                    "detail": r.entry.detail,
+                                })
+                            })
+                            .collect();
+                        Resp::ok(id, serde_json::json!({ "events": list }))
+                    }
+                    Err(_) => internal(id),
+                }
+            }
             // DOG-01: per-device backup watermarks — dogfood daily report /
             // desktop activity / phone "last success" share this source.
             "device.watermarks" => match self.db.list_device_watermarks().await {
