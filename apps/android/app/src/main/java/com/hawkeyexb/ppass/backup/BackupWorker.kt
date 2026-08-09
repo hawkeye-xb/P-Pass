@@ -123,7 +123,9 @@ class BackupWorker(
             calibrateIfReachable(client, daemon, confirmedStore)
 
             val watermarks = WatermarkStore(ctx.filesDir)
-            val scan = MediaScanner(ctx.contentResolver).scanSince(watermarks.load())
+            // T6: 自动备份同样只扫选中相册（范围与手动一致）。
+            val scan = MediaScanner(ctx.contentResolver)
+                .scanSince(watermarks.load(), BackupScopeStore(ctx).selectedBucketIds())
             if (scan.items.isEmpty()) return Result.success()
             batchSize = scan.items.size
 

@@ -78,6 +78,9 @@ fun HomeScreen(
     // 存储端移除/吊销本设备后备份被拒——「配对已失效」红卡 + 重新扫码。
     pairingLost: Boolean = false,
     onRepair: () -> Unit = {},
+    // T6: 备份范围（null = 全部相册）——「选择相册」与「发起备份」分离。
+    selectedBucketCount: Int? = null,
+    onOpenBucketPicker: () -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -383,6 +386,28 @@ fun HomeScreen(
                     )
                     Text(
                         "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                        fontSize = 14.sp, color = PPColor.Ink40,
+                    )
+                }
+                // T6: 备份范围入口——点击进相册选择（选择与备份分离）。
+                HorizontalDivider(color = PPColor.Divider)
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickable(onClick = onOpenBucketPicker)
+                        .padding(16.dp, 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.backup_scope),
+                        fontSize = 15.sp, color = PPColor.Ink,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        stringResource(
+                            if (selectedBucketCount == null) R.string.backup_scope_all
+                            else R.string.backup_scope_n,
+                            selectedBucketCount ?: 0,
+                        ),
                         fontSize = 14.sp, color = PPColor.Ink40,
                     )
                 }

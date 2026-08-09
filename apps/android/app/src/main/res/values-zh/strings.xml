@@ -72,6 +72,18 @@
     <string name="rule_notify_value">仅失败时</string>
     <!-- T1: 版本号显示 -->
     <string name="setting_version">版本</string>
+    <!-- T6: 相册选择 -->
+    <string name="bucket_title">选择要备份的相册</string>
+    <string name="bucket_hint">没勾选的相册不会备份（比如微信收到的图片，微信自己有备份）。</string>
+    <string name="bucket_empty">手机上没有找到照片或视频。</string>
+    <string name="bucket_loading">正在读取相册…</string>
+    <string name="bucket_count">%1$d 个</string>
+    <string name="bucket_select_all">全选</string>
+    <string name="bucket_clear">清空</string>
+    <string name="bucket_done">备份这 %1$d 个相册</string>
+    <string name="backup_scope">备份范围</string>
+    <string name="backup_scope_all">全部相册</string>
+    <string name="backup_scope_n">%1$d 个相册</string>
     <!-- UX-03: 后台规则一行 + 极简设置 -->
     <string name="auto_backup_rule">插电 + WiFi 时自动备份，无需打开 App</string>
     <string name="setting_charge_only">仅充电时</string>

@@ -100,6 +100,9 @@ class ConfirmedStore(private val dir: File) {
     /** 该 remote 已确认条数 M。 */
     fun count(): Int = load().confirmed.size
 
+    /** T6: 该 hash 是否已确认到家（手动备份跳过重复 hash 的预过滤）。 */
+    fun contains(hash: String): Boolean = hash in load().confirmed
+
     /** 最后成功备份时间（0 = 从未成功）。 */
     fun lastSuccessAt(): Long = load().lastSuccessAt
 
