@@ -426,7 +426,7 @@ impl IpcServer {
                 Resp::ok(id2, serde_json::json!({ "bye": true }))
             }
             "pairing.start" => {
-                let mut token = [0u8; 32];
+                let mut token = [0u8; 12];
                 if getrandom::fill(&mut token).is_err() {
                     return internal(id);
                 }

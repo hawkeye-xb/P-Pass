@@ -168,8 +168,8 @@ async fn main() -> anyhow::Result<()> {
     println!("NodeId: {}", transport.node_id());
     println!("库目录: {}", data_dir.display());
 
-    // QR 在 transport bind 之后生成（&a= 需要 live endpoint 的地址）。
-    let qr = pairing.start(rand_token()?, unix_ms_now());
+    // QR 在 transport bind 之后生成（&r= 需要 live endpoint 的中继）。
+    let qr = pairing.start(rand_pair_token()?, unix_ms_now());
     println!("配对二维码内容（10 分钟内有效）: {qr}");
 
     // DAE-01b blocker①：claim 成功后才生成/写入自己的 token（serve 写
@@ -323,6 +323,14 @@ fn load_or_mint_identity(data_dir: &std::path::Path) -> anyhow::Result<[u8; 32]>
 /// NOT enough — use getrandom through the `rand`-free std path).
 fn rand_token() -> anyhow::Result<[u8; 32]> {
     let mut token = [0u8; 32];
+    getrandom::fill(&mut token).map_err(|e| anyhow::anyhow!("系统随机数不可用：{e}"))?;
+    Ok(token)
+}
+
+/// 12 random bytes for a pairing token (H-10b v2: 96-bit entropy is
+/// plenty for one-shot pairing + 10-min TTL; keeps the QR short).
+fn rand_pair_token() -> anyhow::Result<[u8; 12]> {
+    let mut token = [0u8; 12];
     getrandom::fill(&mut token).map_err(|e| anyhow::anyhow!("系统随机数不可用：{e}"))?;
     Ok(token)
 }
