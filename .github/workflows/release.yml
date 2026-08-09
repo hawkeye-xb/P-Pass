@@ -306,7 +306,11 @@ jobs:
           set -euo pipefail
           npm install -g pnpm@11
           mkdir -p apps/desktop/src-tauri/binaries
-          cp target/release/daemon.exe apps/desktop/src-tauri/binaries/ppf-daemon.exe
+          # Tauri externalBin 按 target-triple 后缀查找
+          #（ppf-daemon-x86_64-pc-windows-msvc.exe）——裸名找不到，
+          # test.8 实锤 "resource path doesn't exist"。
+          cp target/release/daemon.exe \
+            apps/desktop/src-tauri/binaries/ppf-daemon-x86_64-pc-windows-msvc.exe
           cd apps/desktop
           pnpm install --frozen-lockfile
           pnpm tauri build --bundles nsis
