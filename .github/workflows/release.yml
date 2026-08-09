@@ -333,7 +333,7 @@ jobs:
         with:
           subject-path: target/release/daemon.exe, target/release/testclient.exe
 
-      - name: Upload artifact
+      - name: Upload artifact (binaries)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-x64
@@ -342,7 +342,14 @@ jobs:
             target/release/testclient.exe
             target/release/SHA256SUMS-windows-x64
             target/release/BUILD_INFO-windows-x64
-            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+
+      # T7: 安装包单独 artifact（upload-artifact v4 多顶层路径不再扁平化，
+      # 混在一起会让 release job 的 windows-x64/daemon.exe glob 失效）。
+      - name: Upload artifact (NSIS installer)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-x64-installer
+          path: apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
 
   # H-10c: Android release APK（人类可装）。keystore secrets 注入 → 已签名
   # app-release.apk；无凭据路径（secrets 未设置）→ app-release-unsigned.apk。
@@ -557,6 +564,7 @@ jobs:
             macos-arm64/P-Pass-macos-arm64.dmg \
             windows-x64/daemon.exe windows-x64/testclient.exe \
             windows-x64/SHA256SUMS-windows-x64 windows-x64/BUILD_INFO-windows-x64 \
+            windows-x64-installer/P-Pass_*-setup.exe \
             manifest.json"
           # 无凭据路径只产出 unsigned；有凭据路径产出 signed（unsigned 无）。
           if [ -f android/app-release.apk ]; then
