@@ -66,7 +66,7 @@ async fn full_flow_pairs_the_device() {
     let ctp = endpoint().await;
     ctp.add_peer(daddr);
 
-    let qr = pairing.start([0x42; 32], now());
+    let qr = pairing.start([0x42; 12], now());
     assert!(qr.starts_with(&format!("ppf://pair?node={}", dtp.node_id())));
 
     let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "妈妈的手机").await;
@@ -97,7 +97,7 @@ async fn expired_token_is_rejected() {
     ctp.add_peer(daddr);
 
     // Issued 11 minutes in the past — beyond the 600 s TTL.
-    let qr = pairing.start([0x43; 32], now() - 11 * 60 * 1000);
+    let qr = pairing.start([0x43; 12], now() - 11 * 60 * 1000);
     let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "过期设备").await;
     let err = resp.error.expect("expired token must be rejected");
     assert_eq!(err.code, codes::NOT_AUTHORIZED);
@@ -113,7 +113,7 @@ async fn token_replay_is_rejected() {
     let second = endpoint().await;
     second.add_peer(daddr);
 
-    let qr = pairing.start([0x44; 32], now());
+    let qr = pairing.start([0x44; 12], now());
     let token = token_of(&qr);
 
     let resp = send_pair(&first, dtp.node_id(), &token, "第一台").await;
@@ -133,7 +133,7 @@ async fn owner_decline_writes_nothing() {
     let ctp = endpoint().await;
     ctp.add_peer(daddr);
 
-    let qr = pairing.start([0x45; 32], now());
+    let qr = pairing.start([0x45; 12], now());
     let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "被拒绝的设备").await;
     let err = resp.error.expect("owner said no");
     assert_eq!(err.code, codes::NOT_AUTHORIZED);
@@ -148,7 +148,7 @@ async fn revoked_device_rejoins_with_fresh_token() {
     ctp.add_peer(daddr);
 
     // Pair, then the owner removes the device.
-    let qr = pairing.start([0x50; 32], now());
+    let qr = pairing.start([0x50; 12], now());
     assert!(
         send_pair(&ctp, dtp.node_id(), &token_of(&qr), "家人手机")
             .await
@@ -157,7 +157,7 @@ async fn revoked_device_rejoins_with_fresh_token() {
     assert!(db.revoke(&ctp.node_id().0).await.unwrap());
 
     // A fresh owner-issued token lets the SAME identity rejoin…
-    let qr2 = pairing.start([0x51; 32], now());
+    let qr2 = pairing.start([0x51; 12], now());
     let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr2), "家人手机").await;
     assert!(
         resp.ok,
@@ -205,7 +205,7 @@ async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
     ctp.add_peer(daddr);
 
     // Pair normally.
-    let qr = pairing.start([0x60; 32], now());
+    let qr = pairing.start([0x60; 12], now());
     assert!(
         send_pair(&ctp, dtp.node_id(), &token_of(&qr), "要断开的手机")
             .await
@@ -237,7 +237,7 @@ async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
     assert_eq!(hello.error.unwrap().code, codes::NOT_AUTHORIZED);
 
     // …but a fresh owner-issued token lets the SAME identity rejoin.
-    let qr2 = pairing.start([0x61; 32], now());
+    let qr2 = pairing.start([0x61; 12], now());
     let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr2), "要断开的手机").await;
     assert!(
         resp.ok,

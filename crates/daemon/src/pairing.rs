@@ -51,7 +51,7 @@ struct TokenState {
 }
 
 struct Inner {
-    tokens: HashMap<[u8; 32], TokenState>,
+    tokens: HashMap<[u8; 12], TokenState>,
     /// Owner-side queue of requests awaiting confirmation (UI drains it;
     /// tests drain it directly).
     pending_tx: tokio::sync::mpsc::UnboundedSender<PendingPair>,
@@ -113,7 +113,7 @@ impl Pairing {
     }
 
     /// Issue a fresh one-time token and return the QR content string.
-    pub fn start(&self, token: [u8; 32], now_ms: i64) -> String {
+    pub fn start(&self, token: [u8; 12], now_ms: i64) -> String {
         let mut inner = self.inner.lock().expect("pairing lock");
         inner.tokens.insert(
             token,
@@ -243,12 +243,15 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-fn parse_token(s: &str) -> Option<[u8; 32]> {
+// H-10b v2 (2026-08-08): 配对 token 32B → 12B。一次性配对 + 10 分钟
+// TTL，96-bit 熵绰绰有余；QR 里 token 从 64 hex 字符降到 24。
+// （IPC socket token 保持 32B——不同用途，见 main.rs/ipc.rs。）
+fn parse_token(s: &str) -> Option<[u8; 12]> {
     let s = s.trim();
-    if s.len() != 64 {
+    if s.len() != 24 {
         return None;
     }
-    let mut out = [0u8; 32];
+    let mut out = [0u8; 12];
     for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
         let hi = (chunk[0] as char).to_digit(16)?;
         let lo = (chunk[1] as char).to_digit(16)?;
@@ -270,19 +273,19 @@ mod tests {
         rt.block_on(async {
             let db = Db::open_in_memory().await.unwrap();
             let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None, None);
-            let qr = pairing.start([0x11; 32], 1_000);
+            let qr = pairing.start([0x11; 12], 1_000);
             assert_eq!(
                 qr,
-                format!("ppf://pair?node={}&t={}", "ab".repeat(32), "11".repeat(32))
+                format!("ppf://pair?node={}&t={}", "ab".repeat(32), "11".repeat(12))
             );
         });
     }
 
     #[test]
     fn token_parsing_rejects_garbage() {
-        assert!(parse_token(&"zz".repeat(32)).is_none());
+        assert!(parse_token(&"zz".repeat(12)).is_none());
         assert!(parse_token("abcd").is_none());
-        assert_eq!(parse_token(&"11".repeat(32)), Some([0x11; 32]));
+        assert_eq!(parse_token(&"11".repeat(12)), Some([0x11; 12]));
     }
 
     #[test]

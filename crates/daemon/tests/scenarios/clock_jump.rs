@@ -107,7 +107,7 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
     let phone = endpoint().await;
     phone.add_peer(daddr);
     // 在途会话：T0 铸造配对令牌（QR 串），尚未被使用。
-    let mut token = [0u8; 32];
+    let mut token = [0u8; 12];
     token[0] = 7;
     let qr = pairing.start(token, T0);
     // 解析 QR 里的 `t=` 参数——不能用 rsplit("&t=")（若 QR 未来带 `&a=` 地址
