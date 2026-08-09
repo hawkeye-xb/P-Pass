@@ -99,6 +99,9 @@
   // T-092: activity.list 批次（{node_id,name,at,asset_count}，at=unix 毫秒，
   // name 可能 null）——活动记录页数据源
   let activity = $state([]);
+  // T5: 审计事件流（{ts, action, actor, detail}）——配对请求/允许/拒绝、
+  // 备份会话、吊销，活动页的主数据源。
+  let auditEvents = $state([]);
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
@@ -135,9 +138,42 @@
         const a = await call("activity.list", { limit: 100 });
         activity = (a.batches ?? []).slice().sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
       } catch (_) {}
+      // T5: 审计事件流（配对/会话/吊销）——活动页主数据源。
+      try {
+        const au = await call("audit.list", { limit: 200 });
+        auditEvents = (au.events ?? []).slice().sort((x, y) => (y.ts ?? 0) - (x.ts ?? 0));
+      } catch (_) {}
     } catch (e) {
       online = false;
       status = null;
+    }
+  }
+
+  // T5: 审计事件 → 人话行文案（未知 action 兜底显示原始类型，绝不吞）。
+  function auditLine(e) {
+    const d = e.detail ?? "";
+    const who = devices.find((x) => x.node_id === e.actor)?.name ?? null;
+    switch (e.action) {
+      case "pair.requested":
+        return `${(who ?? d) || "未知设备"} 请求加入`;
+      case "pair.accepted":
+        return `${who ?? d} 已加入`;
+      case "pair.denied":
+        return `${who ?? d} 加入被拒绝`;
+      case "backup.started":
+        return `${who ?? "设备"} 开始备份`;
+      case "backup.finished":
+        return `${who ?? "设备"} 备份完成（${d}）`;
+      case "device.revoked":
+        return `已移除设备 ${(e.actor ?? "").slice(0, 8)}…`;
+      case "device.unpaired":
+        return `${who ?? "设备"} 主动断开连接`;
+      case "backup.commit":
+        return `备份提交（${d}）`;
+      case "external.delete":
+        return `外部删除（${d}）`;
+      default:
+        return `${e.action} ${d}`.trim();
     }
   }
 
@@ -513,27 +549,24 @@
             <h2 class="headline">活动记录</h2>
             <p class="sub">谁备份了什么，一目了然——不用去 Finder 里对账。</p>
           </div>
-          <!-- T-092: 接 activity.list 真数据——批次行「<设备名> 备份了 N 张」
-               + 右侧人性化时间（设计稿行结构），倒序。name 为 null 用中性
-               占位；at 无效时时间隐藏（绝不渲染 epoch/undefined）。
-               页脚不上设计稿的「保存 90 天」承诺（90 天保留未实现，
-               T-092 卡裁决），改说已实现的事实。 -->
+          <!-- T5: 活动记录页展示审计事件流——配对请求/允许/拒绝、备份会话
+               （开始/结束+数量）、设备吊销/断开，全部带时间倒序。 -->
           <div class="card">
-            {#if activity.length === 0}
-              <p class="hint">这里还没有内容。家人手机开始备份后，会按时间列出「谁备份了什么」。</p>
+            {#if auditEvents.length === 0}
+              <p class="hint">这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。</p>
             {:else}
               <ul class="log-rows">
-                {#each activity as b (b.node_id + ":" + b.at)}
-                  {@const at = humanTime(b.at, nowMs)}
+                {#each auditEvents as e (e.ts + ":" + e.action)}
+                  {@const at = humanTime(e.ts, nowMs)}
                   <li>
-                    <span class="log-text">{b.name ?? "未知设备"} 备份了 {b.asset_count} 张</span>
+                    <span class="log-text">{auditLine(e)}</span>
                     {#if at}<span class="log-time">{at}</span>{/if}
                   </li>
                 {/each}
               </ul>
             {/if}
           </div>
-          <p class="hint">记录来自本机照片库，不上传。</p>
+          <p class="hint">记录来自本机照片库与审计日志，不上传。</p>
         </section>
       {:else if page === "settings"}
         <section class="page" data-testid="page-settings">
