@@ -89,6 +89,11 @@
   let qrText = $state("");
   let message = $state("");
   let pendingCount = $state(0);
+  // T4 (H-10b): 配对状态机——二维码是弹窗模块，不是常驻卡片。有人扫码
+  // （pending 出现）→ 关二维码弹窗 → 切「允许/拒绝」模态 → 处理完关闭，
+  // 状态消失（不再一直占空间）。审计记录在 T5。
+  let showPairModal = $state(false);
+  let showConfirmModal = $state(false);
   // T-091: node_id -> {last_backup_at, asset_count}（device.watermarks，毫秒）
   let watermarks = $state({});
   // T-092: activity.list 批次（{node_id,name,at,asset_count}，at=unix 毫秒，
@@ -109,6 +114,14 @@
       status = await call("status");
       online = true;
       pendingCount = status.pending_pairs ?? 0;
+      // T4: pending 从无到有 = 有人扫了码——关二维码弹窗、打开允许/拒绝。
+      if (pendingCount > 0 && showPairModal) {
+        showPairModal = false;
+        showConfirmModal = true;
+      } else if (pendingCount === 0 && showConfirmModal) {
+        // 已处理完（confirmPair 清空 pending）——状态消失，不残留。
+        showConfirmModal = false;
+      }
       const d = await call("devices.list");
       devices = d.devices ?? [];
       nowMs = Date.now();
@@ -160,14 +173,27 @@
 
   async function startPairing() {
     message = "";
+    showPairModal = true; // T4: 二维码是弹窗模块，不是常驻卡片
     try {
       const r = await call("pairing.start");
       qrText = r.qr;
-      // T-082: 显示尺寸 148×148（设计稿），生成用 2x（296）保证高分屏清晰。
-      qrDataUrl = await QRCode.toDataURL(r.qr, { width: 296, margin: 1 });
+      // T4: 弹窗内大尺寸——显示 360px，生成 2x（720）保高分屏清晰；
+      // 配对码已瘦身（H-10b T3），低纠错 L 在内容较长时更好扫。
+      qrDataUrl = await QRCode.toDataURL(r.qr, {
+        width: 720,
+        margin: 2,
+        errorCorrectionLevel: "L",
+      });
     } catch (e) {
       message = t("ui.pair_failed", { err: String(e) });
     }
+  }
+
+  function closePairModal() {
+    showPairModal = false;
+    // 关弹窗即弃当前码（token 仍在 TTL 内有效，但下次打开重新生成更干净）。
+    qrDataUrl = "";
+    qrText = "";
   }
 
   async function confirmPair(accept) {
@@ -176,6 +202,7 @@
       message = accept
         ? t("ui.pair_allowed", { name: r.device })
         : t("ui.pair_denied", { name: r.device });
+      // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
       await refresh();
     } catch (e) {
       message = t("ui.confirm_failed", { err: String(e) });
@@ -374,7 +401,7 @@
               <p class="hint">{t("ui.refresh_hint")}</p>
             </div>
           {:else}
-            {#if pendingCount > 0}
+            {#if pendingCount > 0 && !showConfirmModal}
               <div class="pending-card">
                 <div class="pending-text">
                   <strong>{t("diag.desktop.pairing")}</strong>
@@ -412,19 +439,12 @@
 
               <!-- T-082: 设计稿——卡内容水平居中（标题左上），二维码 148×148
                    白底圆角带边框，hint 与「无法扫码」折叠器跟随居中。 -->
+              <!-- T4 (H-10b): 二维码不再是常驻卡片——点按钮弹窗出码，配对完
+                   状态消失；扫码后的允许/拒绝也走模态。 -->
               <div class="card qr-card">
                 <h3>{t("ui.add_device")}</h3>
-                {#if qrDataUrl}
-                  <img class="qr" src={qrDataUrl} alt={t("ui.generate_qr")} />
-                  <p class="hint qr-hint">{t("ui.qr_hint")}</p>
-                  <details class="qr-fallback">
-                    <summary>{t("ui.qr_fallback")}</summary>
-                    <code class="qrtext">{qrText}</code>
-                  </details>
-                {:else}
-                  <p class="hint qr-hint">用家人手机上的 P-Pass 扫一下，二维码 10 分钟内有效。</p>
-                  <button class="primary" onclick={startPairing}>{t("ui.generate_qr")}</button>
-                {/if}
+                <p class="hint qr-hint">点下面的按钮弹出配对码，用家人手机上的 P-Pass 扫一下；码 10 分钟内有效，可随时刷新。</p>
+                <button class="primary" onclick={startPairing}>{t("ui.generate_qr")}</button>
               </div>
             </div>
           {/if}
@@ -564,6 +584,39 @@
         </section>
       {/if}
     </main>
+    <!-- T4 (H-10b): 配对状态机模态——二维码弹窗 + 允许/拒绝弹窗。 -->
+    {#if showPairModal}
+      <div class="modal-backdrop" onclick={closePairModal}>
+        <div class="modal" onclick={(e) => e.stopPropagation()}>
+          <h3>扫码添加手机</h3>
+          {#if qrDataUrl}
+            <img class="qr-lg" src={qrDataUrl} alt="配对二维码" />
+            <p class="hint modal-hint">
+              用家人手机上的 P-Pass 扫这个码；手机发来的加入请求会自动出现在这里。
+            </p>
+            <div class="modal-actions">
+              <button onclick={startPairing}>刷新二维码</button>
+              <button class="primary" onclick={closePairModal}>关闭</button>
+            </div>
+          {:else}
+            <p class="hint modal-hint">正在生成配对码…</p>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
+    {#if showConfirmModal}
+      <div class="modal-backdrop">
+        <div class="modal">
+          <h3>{pendingCount > 1 ? `有 ${pendingCount} 台设备请求加入` : "有设备请求加入"}</h3>
+          <p class="hint modal-hint">确认是家人的手机吗？允许后它会出现在设备列表里。</p>
+          <div class="modal-actions">
+            <button onclick={() => confirmPair(false)}>{t("ui.deny")}</button>
+            <button class="primary" onclick={() => confirmPair(true)}>{t("ui.allow")}</button>
+          </div>
+        </div>
+      </div>
+    {/if}
     <!-- T1: 版本号——报问题/排查时先知道装的是什么版本。 -->
     {#if version}
       <footer class="version-footer">P-Pass v{version}</footer>
@@ -1043,6 +1096,41 @@
     color: var(--pp-ink-40);
     opacity: 0.8;
     user-select: none;
+  }
+  /* T4: 配对状态机模态 */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(23, 21, 18, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 50;
+  }
+  .modal {
+    background: var(--pp-paper);
+    border-radius: var(--pp-radius-card);
+    padding: 26px 30px 22px;
+    width: 420px;
+    max-width: 92vw;
+    text-align: center;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  }
+  .qr-lg {
+    width: 360px;
+    max-width: 100%;
+    image-rendering: pixelated;
+    border-radius: var(--pp-radius-control-sm);
+    margin: 14px 0 4px;
+  }
+  .modal-hint {
+    margin: 12px 0 16px;
+  }
+  .modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 4px;
   }
   .hint {
     color: var(--pp-ink-40);
