@@ -187,28 +187,60 @@ fn run_async(fut: impl std::future::Future<Output = anyhow::Result<String>>) -> 
     }
 }
 
-/// T-031 剧本：解析 QR 串 → 连接存储端 → PairRequest → 等 owner 确认。
-async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
+/// FIX-SC1: 解析配对 QR，返回 (node_hex, token, addr_token)。
+///
+/// 兼容两种 QR 形状：
+/// - 新（H-10b 起）：`ppf://pair?node=<64hex>&t=<token>&r=<relay URL>`
+///   ——只带 relay URL（~30 字符），地址段由 node + relay 重建
+///   （与 Android `buildAddrToken` 同语义：`{"id":..,"addrs":[{"Relay":..}]}`
+///   base64url JSON，transport::PeerAddr 的线格式）。
+/// - 旧（≤0.3.0-test.2）：`&a=<完整 PeerAddr base64>`，原样透传。
+///
+/// ⚠️ 回归根因（2026-08-10）：旧实现只认 `&a=`，新 QR 没有 `&a=` 时
+/// 把整个 rest（含 `&r=` 尾巴）当 token → pair.request 带坏 token →
+/// daemon 拒 → scenarios 剧本 confirm 队列空 → err.unsupported。
+fn parse_pair_qr(qr: &str) -> anyhow::Result<(String, String, Option<String>)> {
     let rest = qr
         .strip_prefix("ppf://pair?node=")
         .ok_or_else(|| anyhow::anyhow!("配对串必须以 ppf://pair?node= 开头：{qr}"))?;
     let (node_hex, rest) = rest
         .split_once("&t=")
         .ok_or_else(|| anyhow::anyhow!("配对串缺少 &t=<token> 段：{qr}"))?;
-    let (token, addr_token) = match rest.split_once("&a=") {
-        Some((t, a)) => (t, Some(a)),
-        None => (rest, None),
+    let (token, addr_token) = match rest.split_once("&r=") {
+        // 新格式：relay URL → 重建 PeerAddr token（node + relay）。
+        Some((t, relay)) => (t, Some(build_addr_token(node_hex, relay))),
+        // 旧格式：&a= 完整 PeerAddr，原样透传（老 QR/老 daemon 兼容）。
+        None => match rest.split_once("&a=") {
+            Some((t, a)) => (t, Some(a.to_string())),
+            None => (rest, None),
+        },
     };
+    Ok((node_hex.to_string(), token.to_string(), addr_token))
+}
+
+/// FIX-SC1: node id + relay URL → PeerAddr 的 base64url 线格式
+/// （transport::PeerAddr Display/FromStr 的 JSON 形状，与 Android
+/// buildAddrToken 逐字段一致）。relay 是受控 URL（https://host[:port]），
+/// 明文拼接安全——daemon pairing.rs 注释已声明此约束。
+fn build_addr_token(node_hex: &str, relay: &str) -> String {
+    use base64::Engine as _;
+    let json = format!(r#"{{"id":"{node_hex}","addrs":[{{"Relay":"{relay}"}}]}}"#);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes())
+}
+
+/// T-031 剧本：解析 QR 串 → 连接存储端 → PairRequest → 等 owner 确认。
+async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
+    let (node_hex, token, addr_token) = parse_pair_qr(qr)?;
     let daemon: transport::NodeId = node_hex
         .parse()
         .map_err(|_| anyhow::anyhow!("配对串里的 NodeId 不合法：{node_hex}"))?;
 
     let tp = bind_endpoint(identity).await?;
-    if let Some(a) = addr_token {
+    if let Some(a) = &addr_token {
         // QR 自带地址：扫码即连，不依赖任何发现服务。
         let addr: transport::PeerAddr = a
             .parse()
-            .map_err(|_| anyhow::anyhow!("配对串里的地址段(&a=)无法解析"))?;
+            .map_err(|_| anyhow::anyhow!("配对串里的地址段无法解析"))?;
         tp.add_peer(addr);
     }
     let mut stream = connect_ctrl(&tp, daemon).await?;
@@ -229,7 +261,7 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
             let accepted: proto::PairAccepted =
                 serde_json::from_value(resp.result.unwrap_or_default())?;
             // 存储端地址存进 sidecar——backup/browse 等后续命令免发现服务.
-            if let Some(a) = addr_token {
+            if let Some(a) = &addr_token {
                 let _ = std::fs::write(format!("{identity}.daemon"), format!("{node_hex}\n{a}\n"));
             }
             Ok(format!(
@@ -512,5 +544,87 @@ mod tests {
     #[test]
     fn cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn parse_pair_qr_new_relay_format_extracts_token() {
+        // FIX-SC1 验收①：新格式 &r= 的 token 不能被 &r= 尾巴污染。
+        // node 必须用真实公钥 hex——PublicKey::from_str 会校验曲线点，
+        // 假 hex（如 "ab".repeat(32)）不是合法点 → InvalidNodeId。
+        let mut sk = [0u8; 32];
+        getrandom::fill(&mut sk).expect("rng");
+        let node = transport::node_id_from_secret_key(&sk).to_string();
+        let (n, token, addr) = parse_pair_qr(&format!(
+            "ppf://pair?node={node}&t=9fc4f658f6ce2c03&r=https://usw1-1.relay.n0.iroh.link"
+        ))
+        .expect("new format parses");
+        assert_eq!(n, node);
+        assert_eq!(token, "9fc4f658f6ce2c03");
+        let addr = addr.expect("relay rebuilds an addr token");
+        // 重建的 token 必须能被 transport::PeerAddr 反序列化（线格式一致）。
+        let parsed: transport::PeerAddr = addr.parse().expect("addr token is valid PeerAddr");
+        // iroh 规范化：443 默认端口被移除、补尾斜杠 → 断言 host 而非逐字串。
+        assert_eq!(
+            parsed
+                .relay_url()
+                .as_deref()
+                .map(|u| u.trim_end_matches('/')),
+            Some("https://usw1-1.relay.n0.iroh.link"),
+        );
+    }
+
+    #[test]
+    fn parse_pair_qr_legacy_addr_format_still_works() {
+        // FIX-SC1 验收①（旧格式兼容）：&a= 完整 PeerAddr 原样透传。
+        let mut sk = [0u8; 32];
+        getrandom::fill(&mut sk).expect("rng");
+        let node = transport::node_id_from_secret_key(&sk).to_string();
+        let legacy_addr = "eyJpZCI6ImFiIn0"; // 任意合法 base64（只透传不解析）
+        let (n, token, addr) = parse_pair_qr(&format!(
+            "ppf://pair?node={node}&t=abcd1234&a={legacy_addr}"
+        ))
+        .expect("legacy format parses");
+        assert_eq!(n, node);
+        assert_eq!(token, "abcd1234");
+        assert_eq!(addr.as_deref(), Some(legacy_addr));
+    }
+
+    #[test]
+    fn parse_pair_qr_no_addr_segment_is_ok() {
+        // 无地址段（纯 node+token，如内网直连场景）→ addr_token = None。
+        let mut sk = [0u8; 32];
+        getrandom::fill(&mut sk).expect("rng");
+        let node = transport::node_id_from_secret_key(&sk).to_string();
+        let (n, token, addr) =
+            parse_pair_qr(&format!("ppf://pair?node={node}&t=deadbeef")).expect("no-addr parses");
+        assert_eq!(n, node);
+        assert_eq!(token, "deadbeef");
+        assert!(addr.is_none());
+    }
+
+    #[test]
+    fn parse_pair_qr_bad_prefix_is_rejected() {
+        assert!(parse_pair_qr("http://not-a-pair-token").is_err());
+        assert!(parse_pair_qr("ppf://pair?node=abc").is_err()); // 缺 &t=
+    }
+
+    #[test]
+    fn build_addr_token_roundtrips_through_peer_addr() {
+        // 重建的 token 与 Android buildAddrToken 同语义：node+relay →
+        // base64url JSON → transport::PeerAddr 能解析出 relay。
+        // node 必须用真实公钥 hex（PublicKey::from_str 校验曲线点）。
+        let mut sk = [0u8; 32];
+        getrandom::fill(&mut sk).expect("rng");
+        let node = transport::node_id_from_secret_key(&sk).to_string();
+        let token = build_addr_token(&node, "https://relay.example:443");
+        let parsed: transport::PeerAddr = token.parse().expect("valid PeerAddr");
+        assert_eq!(parsed.node_id().to_string(), node);
+        assert_eq!(
+            parsed
+                .relay_url()
+                .as_deref()
+                .map(|u| u.trim_end_matches('/')),
+            Some("https://relay.example"),
+        );
     }
 }

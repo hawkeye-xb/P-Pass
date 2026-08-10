@@ -61,3 +61,24 @@ scenarios 是进程级剧本，独立 job）。
 
 直推 main 前确认 CI 绿（重点盯 scenarios job）；PROGRESS/NEXT 各留一
 行；卡移 done/ 并附验收记录。
+
+---
+✅ **验收记录（2026-08-10，Salamira）**：
+- 实现：`tools/testclient/src/main.rs` 新增 `parse_pair_qr`（新格式
+  `&r=` → `build_addr_token` 重建 PeerAddr token，node+relay → base64url
+  JSON，与 Android `buildAddrToken` 逐字段一致；旧格式 `&a=` 原样透传；
+  无地址段 → None）+ `build_addr_token`。testclient/Cargo.toml 加
+  base64 = "0.22"（与 transport 同版本）。
+- 单测 5 个新增（7 个全绿）：`parse_pair_qr_new_relay_format_extracts_token`
+  （&r= token 不被污染 + 重建 token 能被 PeerAddr 反序列化 + relay host
+  匹配）、`parse_pair_qr_legacy_addr_format_still_works`（&a= 透传）、
+  `parse_pair_qr_no_addr_segment_is_ok`（None）、
+  `parse_pair_qr_bad_prefix_is_rejected`（坏串拒绝）、
+  `build_addr_token_roundtrips_through_peer_addr`（node+relay → PeerAddr
+  往返一致）。
+- ⚠️ 测试陷阱：node hex 必须用真实公钥（`node_id_from_secret_key`）——
+  PublicKey::from_str 校验曲线点，假 hex（"ab".repeat(32)）→ InvalidNodeId。
+- 本地 scenarios 实证：`huge_file.sh`（64M）**ALL GREEN**（配对通过 →
+  64M 备份 → 落盘校验 → 幂等重跑）+ `crash_recovery.sh` **ALL GREEN**
+  （disk_full 平台跳过属预期）。
+- fmt/clippy 绿；Cargo.lock 同步（+base64）。
