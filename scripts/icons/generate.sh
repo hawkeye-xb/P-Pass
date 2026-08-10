@@ -30,37 +30,47 @@ for size in 16 32 64 128 256 512; do
   rsvg-convert -w "$px" -h "$px" "$DESIGN/icon-carbon.svg" -o "$OUT/${size}x${size}@2x.png"
 done
 
-# ── 2. Windows .ico（多尺寸合成，碳纹版）─────────────────────
-# ico 无 1024 档（Vista+ 最大 256），用 16/32/48/64/128/256。
-python3 - "$OUT" <<'PYEOF'
-import sys, struct
-out = sys.argv[1]
+# ── 2. Windows .ico（多尺寸合成；≤32px 用 beast，≥48px 碳纹）─
+# ico 无 1024 档（Vista+ 最大 256）。小尺寸档碳纹会糊 → beast 覆盖。
+python3 - "$OUT" "$DESIGN" <<'PYEOF'
+import subprocess, sys, struct, os
+out, design = sys.argv[1], sys.argv[2]
+def render(s, svg):
+    p = f"{out}/gen-{s}-{'beast' if 'beast' in svg else 'carbon'}.png"
+    subprocess.run(["rsvg-convert", "-w", str(s), "-h", str(s), svg, "-o", p], check=True)
+    return p
 sizes = [16, 32, 48, 64, 128, 256]
-# PNG-compressed ICO entries (Vista+ style): header + per-size PNG blobs
 pngs = []
 for s in sizes:
-    pngs.append((s, open(f"{out}/{s}x{s}.png", "rb").read()))
+    svg = f"{design}/icon-beast.svg" if s <= 32 else f"{design}/icon-carbon.svg"
+    p = render(s, svg)
+    pngs.append((s, open(p, "rb").read()))
 header = struct.pack("<HHH", 0, 1, len(pngs))
 entries = b""
 offset = 6 + 16 * len(pngs)
 for s, data in pngs:
-    # width/height byte: 0 means 256
     w = 0 if s == 256 else s
     entries += struct.pack("<BBBBHHII", w, w, 0, 0, 1, 32, len(data), offset)
     offset += len(data)
 with open(f"{out}/icon.ico", "wb") as f:
     f.write(header + entries + b"".join(d for _, d in pngs))
-print("ico written")
+print("ico written (beast ≤32px, carbon ≥48px)")
 PYEOF
 
-# ── 3. macOS .icns（iconutil，碳纹版）────────────────────────
+# ── 3. macOS .icns（iconutil，碳纹版大层 + beast 小层）────────
+# ICON-01 分工：icns 内 ≤32px 层用 beast（碳纹小尺寸会糊），大层碳纹。
 ICONSET="$OUT/icon.iconset"
 mkdir -p "$ICONSET"
-# icon_16x16.png / icon_16x16@2x.png ... icon_512x512@2x.png
-for s in 16 32 128 256 512; do
-  cp "$OUT/${s}x${s}.png" "$ICONSET/icon_${s}x${s}.png"
-  cp "$OUT/${s}x${s}@2x.png" "$ICONSET/icon_${s}x${s}@2x.png"
-done
+# 16/32px 层 → beast 全实线；≥128px 层 → 碳纹（含 @2x 表示）
+rsvg-convert -w 16 -h 16 "$DESIGN/icon-beast.svg" -o "$ICONSET/icon_16x16.png"
+rsvg-convert -w 32 -h 32 "$DESIGN/icon-beast.svg" -o "$ICONSET/icon_16x16@2x.png"
+rsvg-convert -w 32 -h 32 "$DESIGN/icon-beast.svg" -o "$ICONSET/icon_32x32.png"
+rsvg-convert -w 64 -h 64 "$DESIGN/icon-beast.svg" -o "$ICONSET/icon_32x32@2x.png"
+cp "$OUT/128x128.png" "$ICONSET/icon_128x128.png"
+cp "$OUT/256x256.png" "$ICONSET/icon_128x128@2x.png"
+cp "$OUT/256x256.png" "$ICONSET/icon_256x256.png"
+cp "$OUT/512x512.png" "$ICONSET/icon_256x256@2x.png"
+cp "$OUT/512x512.png" "$ICONSET/icon_512x512.png"
 # 512@2x 就是 1024
 cp "$OUT/1024x1024.png" "$ICONSET/icon_512x512@2x.png"
 iconutil -c icns "$ICONSET" -o "$OUT/icon.icns"
@@ -140,10 +150,78 @@ XEOF
 
 # 旧密度目录可能残留 ic_launcher.png/round（Tauri 模板生成）——清掉，
 # 只留 foreground（round 由自适应图标系统自动裁）。
-for d in "${!DENS[@]}"; do
+for i in "${!DENS_NAMES[@]}"; do
+  d="${DENS_NAMES[$i]}"
   rm -f "$ANDROID_RES/mipmap-$d"/ic_launcher.png \
         "$ANDROID_RES/mipmap-$d"/ic_launcher_round.png \
         "$ANDROID_RES/mipmap-$d"/ic_launcher_round_foreground.png
 done
+
+# ── 7. Android 通知小图标（status bar，beast 剪影）────────────
+# 通知小图标要求纯 alpha 剪影（系统渲染成白色，彩色会被当成剪影吃掉）。
+# beast 全实线 → 剪掉纸底和绿色，只剩黑色轮廓 → 反相成白轮廓。
+mkdir -p "$ANDROID_RES/drawable"
+python3 - "$DESIGN/icon-beast.svg" "$ANDROID_RES/drawable/ic_notification.xml" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1]).read()
+src = re.sub(r'<rect width="1024" height="1024" fill="#FBF8F2"/>', '', src)
+src = src.replace('stroke="#171512"', 'stroke="#FFFFFF"')
+src = src.replace('fill="#2E6B4F"', 'fill="#FFFFFF"')
+# 去掉外层的 svg 标签，转成 VectorDrawable（全实线无 pattern，可矢量）
+paths = re.findall(r'<path d="([^"]+)"[^>]*/>', src)
+circles = re.findall(r'<circle cx="(\d+)" cy="(\d+)" r="(\d+)"/>', src)
+out = ['<?xml version="1.0" encoding="utf-8"?>',
+       '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
+       '    android:width="24dp" android:height="24dp"',
+       '    android:viewportWidth="1024" android:viewportHeight="1024">']
+for d in paths:
+    out.append(f'    <path android:pathData="{d}" android:strokeColor="#FFFFFF" android:strokeWidth="72" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"/>')
+for cx, cy, r in circles:
+    out.append(f'    <path android:pathData="M {cx} {int(cy)-int(r)} a {r} {r} 0 1 0 1 0 z" android:fillColor="#FFFFFF"/>')
+out.append('</vector>')
+open(sys.argv[2], 'w').write('\n'.join(out))
+print("notification icon written")
+PYEOF
+
+# ── 8. Android 13 monochrome 主题图标（beast 单色矢量）────────
+# Android 13+ 主题图标：monochrome 层 = 单色矢量（THEMED_ICON）。
+# beast 全实线无 pattern → 可直接转 VectorDrawable；白底去掉。
+python3 - "$DESIGN/icon-beast.svg" "$ANDROID_RES/drawable/ic_launcher_monochrome.xml" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1]).read()
+src = re.sub(r'<rect width="1024" height="1024" fill="#FBF8F2"/>', '', src)
+src = src.replace('stroke="#171512"', 'stroke="#000000"')
+src = src.replace('fill="#2E6B4F"', 'fill="#000000"')
+paths = re.findall(r'<path d="([^"]+)"[^>]*/>', src)
+circles = re.findall(r'<circle cx="(\d+)" cy="(\d+)" r="(\d+)"/>', src)
+out = ['<?xml version="1.0" encoding="utf-8"?>',
+       '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
+       '    android:width="108dp" android:height="108dp"',
+       '    android:viewportWidth="1024" android:viewportHeight="1024">']
+for d in paths:
+    out.append(f'    <path android:pathData="{d}" android:strokeColor="#000000" android:strokeWidth="72" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"/>')
+for cx, cy, r in circles:
+    out.append(f'    <path android:pathData="M {cx} {int(cy)-int(r)} a {r} {r} 0 1 0 1 0 z" android:fillColor="#000000"/>')
+out.append('</vector>')
+open(sys.argv[2], 'w').write('\n'.join(out))
+print("monochrome written")
+PYEOF
+
+# monochrome 层挂进自适应图标（Android 13+ 主题图标）
+python3 - "$ANDROID_RES/mipmap-anydpi-v26/ic_launcher.xml" <<'PYEOF'
+import sys
+p = sys.argv[1]
+src = open(p).read()
+if 'monochrome' not in src:
+    src = src.replace(
+        '  <foreground android:drawable="@mipmap/ic_launcher_foreground"/>',
+        '  <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n'
+        '  <monochrome android:drawable="@drawable/ic_launcher_monochrome"/>'
+    )
+    open(p, 'w').write(src)
+    print("monochrome wired into adaptive icon")
+else:
+    print("monochrome already wired")
+PYEOF
 
 echo "✅ 图标资产已生成（幂等）"
