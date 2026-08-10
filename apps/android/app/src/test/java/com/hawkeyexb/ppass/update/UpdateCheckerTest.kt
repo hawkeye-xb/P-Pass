@@ -68,51 +68,33 @@ class UpdateCheckerTest {
         assertNull(parseUpdateManifest("", "0.1.0"))
     }
 
-    // ── REL-02: test 通道——最新 prerelease 的 manifest URL（纯函数） ──
+    // ── REL-02: 通道 → manifest URL（反证红线：stable 原 URL 不准动） ──
 
     @Test
-    fun latestPrerelease_picksPrereleaseOverStable() {
-        // 列表里有正式 release + prerelease → 取 prerelease（GitHub API
-        // 按时间倒序返回；latest 忽略 prerelease，test 通道必须自己找）。
-        val body = """
-            [
-              {"tag_name": "v0.3.1", "prerelease": false, "draft": false},
-              {"tag_name": "v0.3.1-test.4", "prerelease": true, "draft": false},
-              {"tag_name": "v0.3.1-test.3", "prerelease": true, "draft": false}
-            ]
-        """.trimIndent()
+    fun channelManifestUrl_stableLockedToGitHubLatest() {
+        // 卡面「不准动」：stable 通道 URL 与语义必须原样——
+        // 改了这个 URL，本测试必红（家人设备的更新源）。
         assertEquals(
-            "https://github.com/hawkeye-xb/P-Pass/releases/download/v0.3.1-test.4/manifest.json",
-            latestPrereleaseManifestUrl(body),
+            "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json",
+            channelManifestUrl(UpdateChannel.Stable),
         )
     }
 
     @Test
-    fun latestPrerelease_none_returnsNull() {
-        // 反证：test 通道包故意不 publish（留 draft）→ 无 prerelease →
-        // 必须返回 null（test 通道检查不到更新）。
-        val body = """
-            [
-              {"tag_name": "v0.3.1", "prerelease": false, "draft": false},
-              {"tag_name": "v0.3.1-draft", "prerelease": false, "draft": true}
-            ]
-        """.trimIndent()
-        assertNull(latestPrereleaseManifestUrl(body))
-        // 空列表 / 垃圾输入同样 null。
-        assertNull(latestPrereleaseManifestUrl("[]"))
-        assertNull(latestPrereleaseManifestUrl("not json"))
+    fun channelManifestUrl_testGoesThroughWorker() {
+        // test 通道走 Cloudflare Worker（GitHub API 未认证限流 60/h/IP，
+        // 客户端不直连）；Worker 端解析最新 prerelease。
+        assertEquals(
+            "https://update.p-pass.hawkeye-xb.com/manifest?channel=test",
+            channelManifestUrl(UpdateChannel.Test),
+        )
     }
 
     @Test
-    fun latestPrerelease_draftPrereleaseStillCounts() {
-        // GitHub API 里 prerelease 与 draft 独立——test tag 自动 publish
-        // 为 prerelease 后 draft=false；这里验证只认 prerelease 标志。
-        val body = """
-            [{"tag_name": "v0.4.0-test.1", "prerelease": true, "draft": false}]
-        """.trimIndent()
-        assertEquals(
-            "https://github.com/hawkeye-xb/P-Pass/releases/download/v0.4.0-test.1/manifest.json",
-            latestPrereleaseManifestUrl(body),
-        )
+    fun channelStore_defaultsToStable() {
+        // 通道默认永远 stable（家人设备绝不被 test 构建波及）。
+        assertEquals(UpdateChannel.Stable, UpdateChannel.fromId(null))
+        assertEquals(UpdateChannel.Stable, UpdateChannel.fromId("garbage"))
+        assertEquals(UpdateChannel.Test, UpdateChannel.fromId("test"))
     }
 }

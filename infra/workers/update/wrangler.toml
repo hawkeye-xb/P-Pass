@@ -1,0 +1,15 @@
+# Committed placeholder — dev and tests don't need a real account.
+# Real prod deployment config lives in the private ops repo
+# (ppf-ops/deploy/workers.prod.toml), per the isolation plan §2.
+# Route (DNS) 建议：update.p-pass.hawkeye-xb.com → 本 worker。
+
+name = "ppass-update"
+main = "src/index.ts"
+compatibility_date = "2026-07-31"
+
+# account_id = "<your-account-id>"   # needed only for `wrangler deploy`
+# workers_dev = false                # put it behind your own route/domain
+
+# 可选：提升 GitHub API 限额（60/h → 5000/h）。用 secret 存，别写进 toml：
+#   npx wrangler secret put GH_TOKEN
+# vars = { GH_TOKEN = "" }
