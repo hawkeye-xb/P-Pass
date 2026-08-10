@@ -28,8 +28,10 @@ force-push 死对象 + 中断 fetch 的 tmp_pack 残骸占 95%+）。措施：�
 fetch refspec 排除 `^refs/heads/bin-*` + gc --prune=now；artifacts.yml
 加 paths 过滤（docs/卡片类 push 不再重建+重推 ~100MB 产物）。
 
-**执行 agent 下一手**：按队列做 PERF-01 → DOC-01 → FIX-T3 → FIX-T6
-（FIX-T6 依赖 PERF-01 合并，别并行）。
+**执行 agent 下一手**：✅ **PERF-01 已完成并推 main**（2026-08-10，Salamira：
+hash 缓存，android 99/99 绿，验收记录见 PROGRESS 顶部；真机「第二次
+手动备份 Hashing 秒级」挂验收人）。队列剩余 → **DOC-01 → FIX-T3 →
+FIX-T6**（FIX-T6 依赖 PERF-01 合并，别并行）。
 
 **等用户**：无新增硬项。真机验收欠账不变（0.3.1 的 Android 六项 +
 T-082/091/092 桌面真窗口走查）。

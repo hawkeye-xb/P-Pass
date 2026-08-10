@@ -50,3 +50,27 @@ FIX-T6 要改的范围语义（那是另一张卡，别顺手改）。
 ## 收尾
 
 直推 main 前确认 CI 绿；PROGRESS/NEXT 各留一行记录；卡移 done/ 并附验收记录。
+
+---
+✅ **验收记录（2026-08-10，Salamira）**：
+- 实现：`backup/HashCache.kt`（HashCache + hashWithCache + hashCacheKey +
+  hashCacheFile + pruneHashCache）；MediaItem 补 `dateModified` 字段（投影
+  DATE_MODIFIED，全 API）；MediaScanner 新增 `allItemUris()`；手动
+  （BackupUiStateHolder.runBackup）+ 自动（BackupWorker.doWork）双通道接线；
+  校准时刻（calibrateFromDaemon / calibrateIfReachable）prune 孤儿。
+- 验收①：`second_run_same_batch_opens_zero`——同批 50 候选二次跑 open=0
+  （内存态 + flush 后重开实例双验证，贴 XML 输出）。
+- 验收②：`generation_change_recomputes`——同 uri generation 5→6，
+  第二次 open=1（重算）。
+- 验收③：`corrupted_cache_reads_as_empty_full_recompute_no_crash`——
+  损坏 JSON 当空全量重算（open=10）且恢复写入不崩。
+- 反证：`counterproof_no_cache_read_opens_full`——空缓存 open 全量 20，
+  填满后第二次 0（正反都钉死，证明命中逻辑非恒真）。
+- 额外：缓存 hash 与流式 blake3 逐位一致；prune 只留现存 uri；
+  API<30 key 含 dateModified+size。
+- 全量：android **99/99**（92 基线 + 7 新增）绿 + assembleDebug 绿
+  （输出：BUILD SUCCESSFUL，tests=99 failures=0 errors=0）。
+- 清理策略（卡尾说明）：跟随 MediaStore 现存 _ID 集合，校准时刻
+  （App 打开 / 备份前）清孤儿；MediaStore 查询失败跳过不影响备份。
+- 真机验收挂账（验收人补跑）：同一库第二次手动备份 Hashing 阶段秒级
+  （贴前后耗时）。

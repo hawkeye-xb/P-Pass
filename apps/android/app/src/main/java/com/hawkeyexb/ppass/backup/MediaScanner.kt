@@ -23,6 +23,9 @@ data class MediaItem(
     val bytes: Long,
     /** Volume generation (API 30+) or DATE_ADDED seconds (fallback). */
     val generation: Long,
+    /** MediaStore DATE_MODIFIED (seconds, all API levels). PERF-01:
+     *  the hash-cache key falls back to this + size below API 30. */
+    val dateModified: Long,
 )
 
 data class ScanResult(
@@ -88,6 +91,7 @@ class MediaScanner(private val resolver: ContentResolver) {
                 MediaStore.MediaColumns.MIME_TYPE,
                 MediaStore.MediaColumns.SIZE,
                 genCol,
+                MediaStore.MediaColumns.DATE_MODIFIED,
             )
             val where = buildString {
                 append("$genCol > ?")
@@ -106,6 +110,7 @@ class MediaScanner(private val resolver: ContentResolver) {
                 val mimeIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
                 val sizeIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
                 val genIdx = cur.getColumnIndexOrThrow(genCol)
+                val modifiedIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
                 while (cur.moveToNext()) {
                     val gen = cur.getLong(genIdx)
                     if (gen > maxGen) maxGen = gen
@@ -117,6 +122,7 @@ class MediaScanner(private val resolver: ContentResolver) {
                                 ?: if (isVideo) "video/*" else "image/*",
                             bytes = cur.getLong(sizeIdx),
                             generation = gen,
+                            dateModified = cur.getLong(modifiedIdx),
                         )
                     )
                 }
@@ -126,8 +132,7 @@ class MediaScanner(private val resolver: ContentResolver) {
         return ScanResult(items, maxGen)
     }
 
-    /**
-     * 当前扫描范围的全量 count（无 generation 过滤）——DOG-01b 三元组
+    /** 当前扫描范围的全量 count（无 generation 过滤）——DOG-01b 三元组
      * 的分母 N。MediaStore COUNT 查询，便宜，不需要重 hash。口径常量
      * 一处定义（范围选择是另一张卡，改范围只动这里）。
      *
@@ -155,6 +160,31 @@ class MediaScanner(private val resolver: ContentResolver) {
             )?.use { cur -> total += cur.count.toLong() }
         }
         return total
+    }
+
+    /** PERF-01: MediaStore 现存所有行（images+videos）的 content uri 集。
+     *  只投影 _ID，便宜；供 hash-cache 孤儿清理（prune）对齐现存 _ID
+     *  集合用——照片被删/相册被清后，缓存里的孤儿条目随下次校准清掉。 */
+    fun allItemUris(): Set<String> {
+        val uris = mutableSetOf<String>()
+        for (collection in listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+        )) {
+            resolver.query(
+                collection,
+                arrayOf(MediaStore.MediaColumns._ID),
+                null,
+                null,
+                null,
+            )?.use { cur ->
+                val idIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                while (cur.moveToNext()) {
+                    uris.add(ContentUris.withAppendedId(collection, cur.getLong(idIdx)).toString())
+                }
+            }
+        }
+        return uris
     }
 }
 

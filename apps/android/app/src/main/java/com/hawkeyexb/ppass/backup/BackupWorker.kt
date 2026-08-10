@@ -129,19 +129,26 @@ class BackupWorker(
             if (scan.items.isEmpty()) return Result.success()
             batchSize = scan.items.size
 
+            // PERF-01: 自动备份同样走哈希缓存——增量扫描 mostly 命中，
+            // hash 阶段不再全量读流（千张库从分钟级降到秒级）。
+            val hashCache = HashCache(hashCacheFile(ctx))
             val candidates = scan.items.map { item ->
                 val open = {
                     ctx.contentResolver.openInputStream(item.uri)
                         ?: error("cannot open ${item.displayName}")
                 }
+                val key = hashCacheKey(
+                    item.uri.toString(), item.generation, item.dateModified,
+                    item.bytes, Build.VERSION.SDK_INT >= 30,
+                )
                 Candidate(
-                    hash = open().use { blake3Hex(it) },
+                    hash = hashWithCache(hashCache, key, open),
                     fileName = item.displayName,
                     mediaType = item.mimeType,
                     bytes = item.bytes,
                     open = open,
                 )
-            }
+            }.also { hashCache.flush() }
             val report = BackupRunner(client).run(daemon, candidates, scan.nextWatermark)
             watermarks.save(scan.nextWatermark)
             // DOG-01c: commit 成功后本次候选全部确认——report.missing 是
@@ -177,6 +184,9 @@ class BackupWorker(
         store: ConfirmedStore,
     ) {
         try {
+            // PERF-01: 校准时刻顺手清 hash-cache 孤儿（跟随 MediaStore
+            // 现存 _ID 集合；查询失败内部跳过，不影响校准）。
+            pruneHashCache(applicationContext)
             val cached = store.load().confirmed
             if (cached.isEmpty()) return
             val missing = BackupRunner(client).existCheck(daemon, cached)
