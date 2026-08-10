@@ -23,6 +23,8 @@
   "ui.pending_pairs": "{n} pairing request(s) awaiting confirmation",
   "ui.allow": "Allow",
   "ui.deny": "Deny",
+  "ui.allow_replace": "Replace old, allow",
+  "ui.allow_new": "As new device",
   "ui.add_device": "Add a device",
   "ui.generate_qr": "Generate pairing QR",
   "ui.qr_fallback": "Can't scan? Copy the pairing string",

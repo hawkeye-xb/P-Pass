@@ -423,7 +423,7 @@ mod tests {
         db.upsert_device(&hinted(1, "abc")).await.unwrap();
         db.upsert_device(&hinted(2, "def")).await.unwrap();
         // Same hint but revoked — must not surface as a merge candidate.
-        let mut revoked = hinted(3, "abc");
+        let revoked = hinted(3, "abc");
         db.upsert_device(&revoked).await.unwrap();
         db.revoke(&[3u8; 32]).await.unwrap();
 
