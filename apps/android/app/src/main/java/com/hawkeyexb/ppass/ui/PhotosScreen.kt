@@ -56,8 +56,22 @@ import com.hawkeyexb.ppass.proto.TimelineQuery
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.PeerAddrParts
 
-/** Small in-memory thumb cache — 32 MB of decoded bitmaps. */
+/**
+ * MOB-04 红线②：缩略图缓存 = 内存 LruCache，**绝不落盘**（手机是减负端，
+ * 不是第二存储端）。上限按 32MB 估算（≈838 张 256px 解码位图，覆盖常见
+ * 家庭库首屏 + 翻页缓冲）；不做设备内存分级——低内存设备由系统缓存压力
+ * 自动回收 Bitmap，分级只会引入复杂度。任何改动不得引入磁盘 thumb 缓存
+ * （守卫测试 CacheRedlineTest 扫描全工程源码）。
+ */
 private val thumbCache = LruCache<String, Bitmap>(32 * 1024 * 1024 / 40_000)
+
+/**
+ * MOB-04 红线①失效联动的逐出决策（纯函数，JVM 可测）：给定缓存 key
+ * 列表与「当前仍在时间线返回集里」的 hash 集合，返回应当逐出的 key。
+ * key 格式 = "$hash/$size.px"——hash 相同不同尺寸都保留（都在返回集里）。
+ */
+internal fun staleThumbKeys(keys: Collection<String>, currentHashes: Set<String>): List<String> =
+    keys.filter { it.substringBefore('/') !in currentHashes }
 
 class TimelineLoader(
     private val client: DaemonClient,
@@ -66,6 +80,26 @@ class TimelineLoader(
      *  before the app's own bind LaunchedEffect (race seen live). */
     private val ensureBound: suspend () -> Unit,
 ) {
+    // MOB-04 红线①失效联动：已加载的时间线 hash 集合（分页累计）。
+    // onTimelineRefreshed 整页重载时重置集合并逐出不在返回集里的缓存
+    // 条目（SYNC-01 对账后 daemon 已删的照片，内存里不能继续闪旧图）；
+    // onTimelineAppended 翻页追加只增不逐。
+    private val knownHashes = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    /** 时间线整页重载（第一页）——重置已知集合并逐出失效缩略图。 */
+    fun onTimelineRefreshed(hashes: Set<String>) {
+        knownHashes.clear()
+        knownHashes.addAll(hashes)
+        for (key in staleThumbKeys(thumbCache.snapshot().keys, knownHashes)) {
+            thumbCache.remove(key)
+        }
+    }
+
+    /** 翻页追加——只增不逐（后页照片仍在库中）。 */
+    fun onTimelineAppended(hashes: Set<String>) {
+        knownHashes.addAll(hashes)
+    }
+
     suspend fun page(cursor: String?): TimelinePage {
         ensureBound()
         val resp = client.call(
@@ -136,6 +170,9 @@ fun PhotosScreen(loader: TimelineLoader) {
             val page = loader.page(null)
             items = page.items
             next = page.next
+            // MOB-04 红线①失效联动：整页重载后逐出不在返回集里的缩略图
+            // 缓存（SYNC-01 对账后 daemon 已删的照片不再闪旧图）。
+            loader.onTimelineRefreshed(page.items.map { it.hash }.toSet())
         } catch (t: Throwable) {
             error = t.message
         } finally {
@@ -223,6 +260,8 @@ fun PhotosScreen(loader: TimelineLoader) {
                                 val page = loader.page(next)
                                 items = items + page.items
                                 next = page.next
+                                // MOB-04: 翻页追加只增不逐（后页照片仍在库中）。
+                                loader.onTimelineAppended(page.items.map { it.hash }.toSet())
                             } catch (_: Throwable) {
                                 next = null
                             }
@@ -263,6 +302,10 @@ private fun ThumbCell(loader: TimelineLoader, asset: AssetMeta, onOpen: () -> Un
 
 @Composable
 private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () -> Unit) {
+    // MOB-04 红线③（大图）：当前查看 = 1024 缩略图走内存缓存（见下）；
+    // 未来加原图查看时——拉原图只走**临时文件即看即清或纯内存流式**，
+    // 绝不建长期原图缓存。手机是减负端不是第二存储端。备忘：
+    // docs/product/2026-08-12-cache-redlines.md。
     val bmp by produceState<Bitmap?>(initialValue = null, asset.hash) {
         value = runCatching { loader.thumb(asset.hash, ThumbSize.S1024) }.getOrNull()
             ?: thumbCache.get("${asset.hash}/256")
