@@ -132,6 +132,8 @@ class BackupWorker(
             // PERF-01: 自动备份同样走哈希缓存——增量扫描 mostly 命中，
             // hash 阶段不再全量读流（千张库从分钟级降到秒级）。
             val hashCache = HashCache(hashCacheFile(ctx))
+            // FIX-T6: 记录每个候选 hash 的所属相册（自动备份同口径）。
+            val hashToBucket = mutableMapOf<String, Long>()
             val candidates = scan.items.map { item ->
                 val open = {
                     ctx.contentResolver.openInputStream(item.uri)
@@ -141,8 +143,10 @@ class BackupWorker(
                     item.uri.toString(), item.generation, item.dateModified,
                     item.bytes, Build.VERSION.SDK_INT >= 30,
                 )
+                val hash = hashWithCache(hashCache, key, open)
+                item.bucketId?.let { hashToBucket[hash] = it }
                 Candidate(
-                    hash = hashWithCache(hashCache, key, open),
+                    hash = hash,
                     fileName = item.displayName,
                     mediaType = item.mimeType,
                     bytes = item.bytes,
@@ -157,6 +161,7 @@ class BackupWorker(
             confirmedStore.recordRun(
                 confirmed = confirmedAfterCommit(candidates, report),
                 lastSuccessAt = System.currentTimeMillis(),
+                bucketOf = hashToBucket,
             )
             android.util.Log.i(
                 "PPassBackup",

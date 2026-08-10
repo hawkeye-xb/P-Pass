@@ -51,6 +51,9 @@ sealed class BackupUiState {
     data class Hashing(val done: Int, val total: Int) : BackupUiState()
     data class Sending(val done: Int, val total: Int) : BackupUiState()
     data class AllSafe(val ingested: Int, val duplicates: Int) : BackupUiState()
+    /** FIX-T6: 一个相册都没选（空集 = 一个都不备）——显式「没有可
+     *  备份的相册」，绝不显示假话「照片都存好了」。 */
+    data object NoAlbums : BackupUiState()
     data class Trouble(val text: String) : BackupUiState()
 }
 
@@ -168,7 +171,12 @@ fun HomeScreen(
                             }
                         } else {
                             Text(
-                                stringResource(R.string.idle_auto_hint),
+                                // FIX-T6: 空集反馈——「没有可备份的相册」
+                                // 替代通用的「插电 + Wi-Fi 时自动进行」。
+                                stringResource(
+                                    if (state is BackupUiState.NoAlbums) R.string.state_no_albums
+                                    else R.string.idle_auto_hint
+                                ),
                                 fontSize = 13.5.sp, color = PPColor.Ink60,
                             )
                         }

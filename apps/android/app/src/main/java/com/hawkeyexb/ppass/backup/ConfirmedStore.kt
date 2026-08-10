@@ -37,11 +37,15 @@ data class BackupTriplet(
 /** DOG-01b: 由「全量 N + 确认缓存 M」算三元组；单独提纯便于测试。
  *  @param n 扫描范围全量 count（MediaStore COUNT，非增量 offered）
  *  @param confirmedCount 该 remote 已确认缓存条数
+ *
+ *  FIX-T6 验收③：**UI 三元组永不出现 M > N**——m 在这里 clamp 到 n
+ *  （确认缓存漂移/口径过渡期 m 可能超 n，显示层必须收敛，否则 UI 出
+ *  「手机 10 张 · 已备份 51」类假话）。k 由 clamp 后的 m 计算，恒 ≥0。
  */
 fun tripletOf(n: Long, confirmedCount: Long, lastSuccessAt: Long): BackupTriplet =
     BackupTriplet(
         n = n,
-        m = confirmedCount,
+        m = confirmedCount.coerceAtMost(n),
         lastSuccessAt = lastSuccessAt,
     )
 
@@ -72,6 +76,11 @@ fun clearConfirmedCacheForRemote(filesDir: File, daemonNodeId: String) {
 data class ConfirmedState(
     /** 已被该 remote 确认存在的本地资产 hash 集合。 */
     val confirmed: Set<String> = emptySet(),
+    /** FIX-T6: 确认条目的所属相册（hash → bucketId）。记录备份时从
+     *  MediaItem 带过来；**存量旧条目无 bucketId = 视为范围内**（口径
+     *  注释见 [ConfirmedStore.countInScope]），随下次备份/exist-check
+     *  校准逐步补齐。 */
+    val bucketOf: Map<String, Long> = emptyMap(),
     /** 最后成功备份时间（unix ms）。 */
     val lastSuccessAt: Long = 0L,
 )
@@ -97,8 +106,30 @@ class ConfirmedStore(private val dir: File) {
             }
         } else ConfirmedState()
 
-    /** 该 remote 已确认条数 M。 */
+    /** 该 remote 已确认条数 M（全量口径——调用方按范围过滤，
+     *  见 [countInScope]）。 */
     fun count(): Int = load().confirmed.size
+
+    /** FIX-T6: 当前备份范围口径下的已确认条数。范围外的确认数不进 M
+     *  （DOG-01 钉死的「分母=当前扫描范围、口径一处定义」——T6 改了
+     *  分母（N 按范围算）就必须同步改分子）。
+     *
+     *  - [bucketIds] == null（从未选范围）= 全量口径 = [count]；
+     *  - 空集 = 一个都不备 → 0；
+     *  - 非空：只数 bucketId ∈ 范围的条目；**存量旧条目（无 bucketId，
+     *    0.3.1 之前备份的）视为范围内**——无法判定归属时宁可多算也不
+     *    谎报「未备份」，随下次备份/exist-check 校准逐步补齐 bucketId。
+     */
+    fun countInScope(bucketIds: Set<Long>?): Int {
+        if (bucketIds == null) return count()
+        if (bucketIds.isEmpty()) return 0
+        val s = load()
+        if (s.bucketOf.isEmpty()) return s.confirmed.size // 全存量旧条目
+        return s.confirmed.count { h ->
+            val b = s.bucketOf[h]
+            b == null || b in bucketIds
+        }
+    }
 
     /** T6: 该 hash 是否已确认到家（手动备份跳过重复 hash 的预过滤）。 */
     fun contains(hash: String): Boolean = hash in load().confirmed
@@ -107,12 +138,19 @@ class ConfirmedStore(private val dir: File) {
     fun lastSuccessAt(): Long = load().lastSuccessAt
 
     /** 一次成功运行后同步缓存：本次候选全部确认。幂等：重复传入同一
-     *  hash 集合无副作用。 */
-    fun recordRun(confirmed: Set<String>, lastSuccessAt: Long) {
+     *  hash 集合无副作用。FIX-T6: 同时记录每个 hash 的所属相册
+     *  [bucketOf]（备份记录时从 MediaItem 带过来；无 bucketId 的条目
+     *  不写——保持「旧条目」语义由 [countInScope] 视为范围内）。 */
+    fun recordRun(
+        confirmed: Set<String>,
+        lastSuccessAt: Long,
+        bucketOf: Map<String, Long> = emptyMap(),
+    ) {
         val cur = load()
         persist(
             ConfirmedState(
                 confirmed = cur.confirmed + confirmed,
+                bucketOf = cur.bucketOf + bucketOf,
                 lastSuccessAt = lastSuccessAt,
             )
         )

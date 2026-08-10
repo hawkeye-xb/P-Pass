@@ -50,3 +50,31 @@
 
 直推 main 前确认 CI 绿；PROGRESS/NEXT 各留一行；BackupScopeStore 头注释
 与实际行为逐字核对一致；卡移 done/ 并附验收记录。
+
+---
+✅ **验收记录（2026-08-10，Salamira）**：
+- **空集语义**：MediaScanner.scanSince/countAll 空集分支（`bucketIds !=
+  null && isEmpty()`）直接返回空结果/0，不发查询（消掉「空 IN ()」风险）；
+  scanSince 空集水位不推进（nextWatermark = watermark，自动备份 no-op
+  不会越过范围）。BackupScopeStore 头注释已核对与实际一致（null=全量，
+  空集=一个都不备）。
+- **手动备份空集显式反馈**：BackupUiStateHolder.runBackup 空集 → 新状态
+  `BackupUiState.NoAlbums` → `StatusLine.NoAlbums` → HomeScreen 显示
+  「没有可备份的相册（一个都没选）」（en: "No albums selected — nothing
+  to back up"），绝不显示假话「照片都存好了」。
+- **三元组口径**：ConfirmedStore 加 `bucketOf`（hash → bucketId，备份
+  记录时从 MediaItem 带过来——手动+自动双通道 recordRun 都传）+ 新方法
+  `countInScope(bucketIds)`（null=全量、空集=0、非空只数范围内；存量旧
+  条目无 bucketId 视为范围内，随下次备份/exist-check 校准补齐）。
+  computeTripletSafe 改用 countInScope——N/M 同口径，先全量备份再缩范围
+  不再显示「手机 10 张 · 已备份 51」。
+- **验收③ M 永不超 N**：tripletOf 的 m clamp 到 n（UI 层防御）；
+  k_is_never_negative 测试断言同步更新（m=5→3，语义注释写明）。
+- **测试**：ConfirmedStoreTest +4（范围口径 A3/B5→M=3、旧条目视为范围
+  内、M≤N 属性断言、recordRun 幂等带 bucket）+ 新 MediaScannerScopeTest
+  +3（空集 scan 空且水位不动、空集 count=0、null≠空集走查询路径）。
+  反证：删除空集守卫 → null resolver 空集路径触碰 resolver 必抛 →
+  测试红（null_scope_still_means_full_scan_path 钉住「守卫是唯一分界」）。
+  android 全量 **107/107**（100+7）绿 + assembleDebug 绿。
+- 挂账（真机，验收人补跑）：全取消相册 → 手动备份显示「没有可备份的
+  相册」；缩范围后三元组 N/M 同口径。

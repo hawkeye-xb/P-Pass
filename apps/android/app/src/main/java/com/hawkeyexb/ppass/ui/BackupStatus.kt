@@ -19,6 +19,10 @@ sealed class StatusLine {
     /** 只有欠账为 0 且确有成功运行时，才允许「照片都存好了」。 */
     data object AllSafe : StatusLine()
 
+    /** FIX-T6: 一个相册都没选（空集 = 一个都不备）——「没有可备份的
+     *  相册」。与 AllSafe 区分：空集不是「都存好了」，是「没东西可备」。 */
+    data object NoAlbums : StatusLine()
+
     /** 失败才说话。 */
     data object Trouble : StatusLine()
 }
@@ -37,6 +41,7 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
     is BackupUiState.Hashing,
     is BackupUiState.Sending,
     -> StatusLine.Working(state)
+    is BackupUiState.NoAlbums -> StatusLine.NoAlbums
     is BackupUiState.Idle,
     is BackupUiState.AllSafe,
     -> when {
