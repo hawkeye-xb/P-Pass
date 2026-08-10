@@ -2,7 +2,11 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="1024" android:viewportHeight="1024">
-    <path android:pathData="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" android:strokeColor="#000000" android:strokeWidth="72" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"/>
-    <path android:pathData="M 300 332 a 146 146 0 1 0 1 0 z" android:fillColor="#000000"/>
-    <path android:pathData="M 724 332 a 146 146 0 1 0 1 0 z" android:fillColor="#000000"/>
+    <!-- ICON-01b: 66dp 安全区缩排（scale 66/108，居中 translate） -->
+    <group android:scaleX="0.6111" android:scaleY="0.6111"
+        android:translateX="199" android:translateY="199">
+        <path android:pathData="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" android:strokeColor="#000000" android:strokeWidth="72" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"/>
+        <path android:pathData="M 300 332 a 146 146 0 1 0 1 0 z" android:fillColor="#000000"/>
+        <path android:pathData="M 724 332 a 146 146 0 1 0 1 0 z" android:fillColor="#000000"/>
+    </group>
 </vector>

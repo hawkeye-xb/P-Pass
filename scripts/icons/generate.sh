@@ -134,19 +134,42 @@ cat > "$ANDROID_RES/values/ic_launcher_background.xml" <<'XEOF'
 </resources>
 XEOF
 
-# 前景：碳纹版主图标，但 Android 自适应图标安全区要求内容在中央 66%。
-# 做法：把 1024 画布缩到 66%（676px 有效），再渲染到各密度画布。
-# 密度参考：mdpi=48dp → 前景 108dp 画布；ldpi/mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi
-# 对应 px = dp * density/160。
+# 前景：碳纹版主图标 + 自适应图标安全区（ICON-01b 修复）。
+# 系统遮罩只显示中央 ~66%（66dp/108dp）——ICON-01 直接全幅渲染，兽面
+# 占画布 ~77% 被放大裁切（三星真机实锤 2026-08-12）。修法：整幅内容
+# 缩到 66/108 ≈ 0.611 居中，兽面落进 66dp 安全圆内，四角透明呼吸区
+# （背景色由背景层 ic_launcher_background 提供，前景不再带纸底）。
 # ⚠️ bash 3.2（macOS 默认）不支持关联数组——用并行数组。
+ART_SVG="$OUT/foreground-carbon.svg"
+python3 - "$DESIGN/icon-carbon.svg" "$ART_SVG" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1]).read()
+# 去纸底矩形——前景层透明，背景色由背景层提供（同托盘做法）
+src = re.sub(r'<rect width="1024" height="1024" fill="#FBF8F2"/>', '', src)
+open(sys.argv[2], 'w').write(src)
+print("foreground svg written (paper rect stripped)")
+PYEOF
 DENS_NAMES=(mdpi hdpi xhdpi xxhdpi xxxhdpi)
 DENS_SCALE=(1 1.5 2 3 4)
 for i in "${!DENS_NAMES[@]}"; do
   d="${DENS_NAMES[$i]}"
   px=$(python3 -c "print(int(108 * ${DENS_SCALE[$i]}))")
   mkdir -p "$ANDROID_RES/mipmap-$d"
-  rsvg-convert -w "$px" -h "$px" "$DESIGN/icon-carbon.svg" \
-    -o "$ANDROID_RES/mipmap-$d/ic_launcher_foreground.png"
+  # 安全区缩排：内容渲染到 66/108 比例，居中贴到透明画布
+  python3 - "$ART_SVG" "$px" "$ANDROID_RES/mipmap-$d/ic_launcher_foreground.png" <<'PYEOF'
+import subprocess, sys, os
+from PIL import Image
+svg, px, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+safe = round(px * 66 / 108)  # 66dp 安全圆直径（108dp 画布）
+tmp = f"{out}.art.png"
+subprocess.run(["rsvg-convert", "-w", str(safe), "-h", str(safe), svg, "-o", tmp], check=True)
+art = Image.open(tmp).convert("RGBA")
+canvas = Image.new("RGBA", (px, px), (0, 0, 0, 0))
+canvas.paste(art, ((px - safe) // 2, (px - safe) // 2), art)
+canvas.save(out)
+os.remove(tmp)
+print(f"{os.path.basename(out)}: {px}px canvas, art {safe}px centered (safe zone 66/108={66/108:.3f})")
+PYEOF
 done
 
 # anydpi-v26 自适应图标定义（引分密度前景 PNG + 背景色）
@@ -197,6 +220,9 @@ PYEOF
 # ── 8. Android 13 monochrome 主题图标（beast 单色矢量）────────
 # Android 13+ 主题图标：monochrome 层 = 单色矢量（THEMED_ICON）。
 # beast 全实线无 pattern → 可直接转 VectorDrawable；白底去掉。
+# ICON-01b: 主题图标同样受遮罩安全区约束——整组内容按 66/108 缩到
+# 中央安全圆内（scale 0.6111 + translate 199 = (1024-1024*0.6111)/2），
+# 与前景 PNG 的缩排保持一致，否则圆遮罩下同样被裁。
 python3 - "$DESIGN/icon-beast.svg" "$ANDROID_RES/drawable/ic_launcher_monochrome.xml" <<'PYEOF'
 import re, sys
 src = open(sys.argv[1]).read()
@@ -208,14 +234,18 @@ circles = re.findall(r'<circle cx="(\d+)" cy="(\d+)" r="(\d+)"/>', src)
 out = ['<?xml version="1.0" encoding="utf-8"?>',
        '<vector xmlns:android="http://schemas.android.com/apk/res/android"',
        '    android:width="108dp" android:height="108dp"',
-       '    android:viewportWidth="1024" android:viewportHeight="1024">']
+       '    android:viewportWidth="1024" android:viewportHeight="1024">',
+       '    <!-- ICON-01b: 66dp 安全区缩排（scale 66/108，居中 translate） -->',
+       '    <group android:scaleX="0.6111" android:scaleY="0.6111"',
+       '        android:translateX="199" android:translateY="199">']
 for d in paths:
-    out.append(f'    <path android:pathData="{d}" android:strokeColor="#000000" android:strokeWidth="72" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"/>')
+    out.append(f'        <path android:pathData="{d}" android:strokeColor="#000000" android:strokeWidth="72" android:strokeLineCap="round" android:strokeLineJoin="round" android:fillColor="#00000000"/>')
 for cx, cy, r in circles:
-    out.append(f'    <path android:pathData="M {cx} {int(cy)-int(r)} a {r} {r} 0 1 0 1 0 z" android:fillColor="#000000"/>')
+    out.append(f'        <path android:pathData="M {cx} {int(cy)-int(r)} a {r} {r} 0 1 0 1 0 z" android:fillColor="#000000"/>')
+out.append('    </group>')
 out.append('</vector>')
 open(sys.argv[2], 'w').write('\n'.join(out))
-print("monochrome written")
+print("monochrome written (safe-zone group applied)")
 PYEOF
 
 # monochrome 层挂进自适应图标（Android 13+ 主题图标）
