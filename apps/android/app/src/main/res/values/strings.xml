@@ -119,9 +119,7 @@
     <!-- MOB-02 §一: 设置页低调立即备份入口（测试/狗粮用） -->
     <string name="manual_backup_entry">Back up now</string>
     <!-- REL-02/DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. → test）。 -->
-    <!-- DEV-01: 重装识别开关 -->
-    <string name="reinstall_hint_switch">Reinstall recognition</string>
-    <string name="reinstall_hint_switch_hint">After reinstalling the app, the computer can recognise this phone and offer to replace the old entry.</string>
+    <!-- DEV-01b: 重装识别开关行已隐藏（用户拍板）——strings 随 UI 删除。 -->
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">Background protection off</string>
     <string name="dog_battery_body">Tip: whitelist P-Pass in battery settings, so the system won\'t interrupt backups while the screen is off.</string>

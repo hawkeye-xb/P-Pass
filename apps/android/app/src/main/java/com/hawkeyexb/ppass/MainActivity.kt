@@ -366,9 +366,9 @@ fun PPassApp() {
             val backupSettings = remember { BackupSettings(context.filesDir) }
             var chargeOnly by remember { mutableStateOf(backupSettings.load().chargeOnly) }
             var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
-            // DEV-01: 重装识别开关（默认开）——Home 设置区切换，配对时读取。
-            val hintPrefs = remember { ReinstallHintPrefs(context.filesDir) }
-            var reinstallHintEnabled by remember { mutableStateOf(hintPrefs.enabled()) }
+            // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页开关行已删；
+            // device_hint 照发照存（pair.request 处直接读 pref，默认开，
+            // 数据继续积累，未来打开入口即用）。
             // MOB-02 §三: 「需要 Wi-Fi」关闭需二次确认（移动网络消耗流量）。
             var pendingWifiOff by remember { mutableStateOf(false) }
             val loader = remember {
@@ -425,15 +425,9 @@ fun PPassApp() {
                             if (paused) pauseAutoBackup(context)
                             else resumeAutoBackup(context)
                         },
-                        // DESK-02①: 更新通道零 UI——由构建推导，设置页不再有
-                        // 通道行（旧 REL-02 显式切换 UI 已删）。
-                        // DEV-01: 重装识别开关（默认开）——落盘 ReinstallHintPrefs，
-                        // 下次配对（pair.request）读取。
-                        reinstallHintEnabled = reinstallHintEnabled,
-                        onReinstallHintChange = { enabled ->
-                            reinstallHintEnabled = enabled
-                            ReinstallHintPrefs(context.filesDir).setEnabled(enabled)
-                        },
+                        // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页
+                        // 开关行已删；device_hint 照发照存（默认开，数据继续
+                        // 积累，未来打开入口即用）。
                         onDisconnect = { showDisconnectDialog = true },
                         // 存储端移除/吊销本设备后：主按钮变「重新扫码连接」——
                         // 本地照清（无需 unpair，daemon 端本就不认本设备），

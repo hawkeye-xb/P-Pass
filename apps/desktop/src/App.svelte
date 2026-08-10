@@ -119,6 +119,12 @@
     displayVersion.includes("-test.") ? "test" : "stable"
   );
   const isTestBuild = $derived(displayVersion.includes("-test."));
+  // DEV-01b: 重装识别/「替换旧的」入口先隐藏（用户拍板 2026-08-12）——
+  // 现阶段统一走「重新扫码 = 全新授权」，不给用户多一个要理解的概念。
+  // 编译期 flag 默认关；打开 = DEV-01 行为原样回来（反证路径）。
+  // 底层不拆：pair.request 的 device_hint 照发照存（数据继续积累），
+  // 未来打开入口即用。关闭时对话框与 DEV-01 之前完全一致。
+  const MERGE_ENTRY_ENABLED = false;
   // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
   let nowMs = $state(Date.now());
 
@@ -778,13 +784,14 @@
           <div class="pending-list">
             {#each pendingList as item}
               <!-- DEV-01: item 可能带 hint_match——这台手机以前配对过
-                   （重装/清数据后重扫）。主按钮「允许」默认带 merge=替换
-                   旧的（继承名字/备份记录/水位），旁边加「作为新设备」
-                   次级按钮=全新流程（与现状完全一致）。 -->
+                   （重装/清数据后重扫）。DEV-01b: 入口先隐藏——flag 关时
+                   hint_match 分支不渲染，对话框与 DEV-01 之前完全一致
+                   （主按钮「允许」= 作为新设备）；打开 flag 即恢复
+                   「替换旧的」主按钮 + 「作为新设备」次级按钮。 -->
               <div class="pending-row">
                 <div class="pending-info">
                   <span class="pending-name">{item.name}</span>
-                  {#if item.hint_match}
+                  {#if MERGE_ENTRY_ENABLED && item.hint_match}
                     <span class="pending-hint">
                       这台手机重装过——可以替换原来的「{item.hint_match.name}」，保留它的备份记录
                     </span>
@@ -792,7 +799,7 @@
                 </div>
                 <div class="pending-actions">
                   <button onclick={() => confirmPair(false, item.name)}>{t("ui.deny")}</button>
-                  {#if item.hint_match}
+                  {#if MERGE_ENTRY_ENABLED && item.hint_match}
                     <button onclick={() => confirmPair(true, item.name)}>{t("ui.allow_new")}</button>
                     <button class="primary" onclick={() => confirmPair(true, item.name, item.hint_match.node_id)}>
                       {t("ui.allow_replace")}

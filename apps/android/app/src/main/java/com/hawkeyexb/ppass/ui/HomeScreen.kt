@@ -91,10 +91,6 @@ fun HomeScreen(
     onOpenAppSettings: () -> Unit = {},
     // MOB-02 §四事件①: Wi-Fi 要求不满足时触发已排队——显示提示行。
     wifiDeferred: Boolean = false,
-    // DEV-01: 重装识别开关（默认开）——关掉后配对不发 device_hint，
-    // 重装后按旧行为出新设备行（电脑端不再默认「替换旧的」）。
-    reinstallHintEnabled: Boolean = true,
-    onReinstallHintChange: (Boolean) -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -474,16 +470,8 @@ fun HomeScreen(
                         fontSize = 14.sp, color = PPColor.Ink40,
                     )
                 }
-                // DEV-01: 重装识别开关——重装后重扫一次码，电脑端认出旧
-                // 设备、默认「替换旧的」不留僵尸行。关掉 = 行为回到
-                // DEV-01 前（重装后出新设备行）。
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.reinstall_hint_switch),
-                    checked = reinstallHintEnabled,
-                    onCheckedChange = onReinstallHintChange,
-                    hint = stringResource(R.string.reinstall_hint_switch_hint),
-                )
+                // DEV-01b: 重装识别开关行已隐藏（用户拍板）——统一走
+                // 「重新扫码 = 全新授权」；device_hint 照发照存。
                 // T6: 备份范围入口——点击进相册选择（选择与备份分离）。
                 HorizontalDivider(color = PPColor.Divider)
                 Row(
