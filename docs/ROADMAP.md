@@ -211,8 +211,10 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       DONE 2026-08-10**（android 99/99；千张库分钟级→秒级）；✅
       **FIX-SC1 testclient 解析器跟上 &r= DONE 2026-08-10**（scenarios
       CI 自 8/8 起 15+ run 全红的根因，已修 + 本地 scenarios ALL
-      GREEN）；queue 剩余：DOC-01（本卡，文档补账）→ FIX-T3（QR
-      升级顺序）→ FIX-T6（范围语义，依赖 PERF-01）
+      GREEN）；✅ **FIX-T3 QR 升级提示 DONE**（桌面弹窗版本提示 +
+      Android 人话错误）；✅ **FIX-T6 范围语义 DONE**（空集=一个都不备
+      + 三元组 N/M 同口径，android 107/107）；📌 FIX-SC2 取证桩已落
+      （卡留队列等 CI 证据）。队列清空，下一批卡由验收人出。
 - [ ] UPD-01 self-update channel — **code landed 2026-08-04 (PR #30),
       rework 2026-08-05**: release.yml emits tauri-style manifest.json
       (compose via tools/make-update-manifest.mjs — sha256 + Ed25519

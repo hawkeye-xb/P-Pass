@@ -152,10 +152,11 @@ class ConfirmedStoreTest {
 
     @Test
     fun k_is_never_negative() {
-        // M 超过 N（防御：确认缓存多过全量 count 的竞态）→ K clamp 0。
+        // M 超过 N（防御：确认缓存多过全量 count 的竞态）→ FIX-T6 验收③：
+        // m clamp 到 n（UI 永不显示「手机 3 张 · 已备份 5」），k 恒 0。
         val t = tripletOf(n = 3, confirmedCount = 5, lastSuccessAt = 1)
         assertEquals(3L, t.n)
-        assertEquals(5L, t.m)
+        assertEquals("M 必须 clamp 到 N", 3L, t.m)
         assertTrue("K 不为负", t.k >= 0)
         assertEquals(0L, t.k)
     }
@@ -198,5 +199,68 @@ class ConfirmedStoreTest {
             5, ConfirmedStore(remote).count(),
         )
         root.deleteRecursively()
+    }
+
+    // ── FIX-T6：范围口径（验收②）──
+
+    @Test
+    fun count_in_scope_counts_only_selected_albums() {
+        // 验收②：范围 {相册A}，confirmed 含 A 的 3 条 + B 的 5 条 → M=3。
+        val dir = tempDir("t6-scope")
+        val store = ConfirmedStore(dir)
+        // 记录时带 bucketId（备份记录从 MediaItem 带过来的生产语义）。
+        val confirmed = hashes(8)
+        val bucketOf = buildMap {
+            confirmed.take(3).forEach { put(it, 1001L) } // A
+            confirmed.drop(3).forEach { put(it, 2002L) } // B
+        }
+        store.recordRun(confirmed = confirmed, lastSuccessAt = 42, bucketOf = bucketOf)
+
+        assertEquals("范围内 {A} → M 必须 = 3", 3, store.countInScope(setOf(1001L)))
+        assertEquals("范围内 {B} → M 必须 = 5", 5, store.countInScope(setOf(2002L)))
+        assertEquals("范围内 {A,B} → M = 8", 8, store.countInScope(setOf(1001L, 2002L)))
+        assertEquals("null（从未选范围）→ 全量 8", 8, store.countInScope(null))
+        assertEquals("空集（一个都不备）→ 0", 0, store.countInScope(emptySet()))
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun count_in_scope_legacy_entries_without_bucket_are_in_scope() {
+        // 存量旧条目（0.3.1 之前备份，无 bucketId）→ 视为范围内（无法
+        // 判定归属时宁可多算也不谎报「未备份」）。bucketOf 为空时全部
+        // 旧条目都算进 M。
+        val dir = tempDir("t6-legacy")
+        val store = ConfirmedStore(dir)
+        store.recordRun(confirmed = hashes(7), lastSuccessAt = 1) // 无 bucketOf
+
+        assertEquals("旧条目无 bucketId → 范围内 M=7", 7, store.countInScope(setOf(1001L)))
+        assertEquals("空集仍 = 0（一个都不备优先）", 0, store.countInScope(emptySet()))
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun triplet_m_never_exceeds_n() {
+        // 验收③：任意组合下 UI 三元组永不出现 M > N——tripletOf clamp。
+        for (n in listOf(0L, 1L, 10L, 1000L)) {
+            for (m in listOf(0L, 1L, 10L, 1000L, 99999L)) {
+                val t = tripletOf(n = n, confirmedCount = m, lastSuccessAt = 1)
+                assertTrue("M 永不超 N (n=$n m=$m)", t.m <= t.n)
+                assertTrue("K 恒 ≥0", t.k >= 0)
+            }
+        }
+    }
+
+    @Test
+    fun record_run_with_bucket_updates_bucket_of() {
+        // recordRun 带 bucketOf → 后续 countInScope 按新记录数；重复
+        // 记录同 hash（幂等）不重复计数。
+        val dir = tempDir("t6-record")
+        val store = ConfirmedStore(dir)
+        store.recordRun(confirmed = setOf("h1"), lastSuccessAt = 1, bucketOf = mapOf("h1" to 1001L))
+        store.recordRun(confirmed = setOf("h1"), lastSuccessAt = 2, bucketOf = mapOf("h1" to 1001L))
+        assertEquals(1, store.count())
+        assertEquals(1, store.countInScope(setOf(1001L)))
+        assertEquals("B 范围不包含 h1 → 0", 0, store.countInScope(setOf(2002L)))
+        dir.deleteRecursively()
     }
 }

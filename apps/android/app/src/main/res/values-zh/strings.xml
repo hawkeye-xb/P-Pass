@@ -47,6 +47,7 @@
     <string name="backup_pause">暂停</string>
     <!-- T-083: hero 空闲态（设计稿未画，卡内裁决的最小延伸） -->
     <string name="idle_auto_hint">插电 + Wi-Fi 时自动进行</string>
+    <string name="state_no_albums">没有可备份的相册（一个都没选）</string>
     <!-- T-083: 失败红卡——正文只有人话，原始错误只住折叠区 -->
     <string name="try_again">再试一次</string>
     <string name="trouble_details_show">查看技术详情</string>

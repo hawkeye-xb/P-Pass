@@ -132,6 +132,11 @@ class BackupUiStateHolder(
         // 明确显示"已是最新"），不再被增量水位静默吞掉。
         val watermarks = WatermarkStore(context.filesDir)
         val bucketIds = scopeStore.selectedBucketIds()
+        // FIX-T6: 空集 = 一个都不备（用户全取消）——显式反馈，不扫不备。
+        if (bucketIds != null && bucketIds.isEmpty()) {
+            _state.value = BackupUiState.NoAlbums
+            return
+        }
         val scan = withContext(Dispatchers.IO) {
             MediaScanner(context.contentResolver).scanSince(0L, bucketIds)
         }
@@ -148,6 +153,9 @@ class BackupUiStateHolder(
         // 秒级完成。open 工厂仍保留（传输阶段 pushFile 要重开流），但
         // 缓存命中时 hash 阶段不再调用它。
         val hashCache = HashCache(hashCacheFile(context))
+        // FIX-T6: 记录每个候选 hash 的所属相册——recordRun 写进
+        // ConfirmedStore.bucketOf，三元组 M 按范围口径数。
+        val hashToBucket = mutableMapOf<String, Long>()
         val candidates = withContext(Dispatchers.IO) {
             scan.items.mapIndexed { i, item ->
                 withContext(Dispatchers.Main) {
@@ -161,8 +169,10 @@ class BackupUiStateHolder(
                     item.uri.toString(), item.generation, item.dateModified,
                     item.bytes, Build.VERSION.SDK_INT >= 30,
                 )
+                val hash = hashWithCache(hashCache, key, open)
+                item.bucketId?.let { hashToBucket[hash] = it }
                 Candidate(
-                    hash = hashWithCache(hashCache, key, open),
+                    hash = hash,
                     fileName = item.displayName,
                     mediaType = item.mimeType,
                     bytes = item.bytes,
@@ -194,6 +204,7 @@ class BackupUiStateHolder(
             confirmedStore.recordRun(
                 confirmed = confirmedAfterCommit(candidates, report),
                 lastSuccessAt = System.currentTimeMillis(),
+                bucketOf = hashToBucket,
             )
         }
         refreshTriplet()
@@ -218,7 +229,9 @@ internal fun computeTripletSafe(
     bucketIds: Set<Long>? = null,
 ): BackupTriplet? = try {
     val n = MediaScanner(checkNotNull(resolver)).countAll(bucketIds)
-    tripletOf(n, store.count().toLong(), store.lastSuccessAt())
+    // FIX-T6: M 必须按同一范围口径（范围外确认数不进 M），否则先全量
+    // 备份再缩范围会显示「手机 10 张 · 已备份 51」。
+    tripletOf(n, store.countInScope(bucketIds).toLong(), store.lastSuccessAt())
 } catch (_: Throwable) {
     null
 }

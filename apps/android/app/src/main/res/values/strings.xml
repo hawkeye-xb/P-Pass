@@ -51,6 +51,7 @@
     <string name="backup_pause">Pause</string>
     <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
     <string name="idle_auto_hint">Runs by itself while charging on Wi-Fi</string>
+    <string name="state_no_albums">No albums selected — nothing to back up</string>
     <!-- T-083: trouble card — human copy only; raw errors live behind this fold -->
     <string name="try_again">Try again</string>
     <string name="trouble_details_show">Show technical details</string>
