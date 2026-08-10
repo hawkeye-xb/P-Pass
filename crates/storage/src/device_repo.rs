@@ -84,9 +84,7 @@ impl Db {
             "SELECT node_id, name, role, paired_at, last_seen, revoked, device_hint
              FROM device WHERE revoked = 0 ORDER BY paired_at ASC"
         };
-        let rows = sqlx::query(sql)
-            .fetch_all(self.pool())
-            .await?;
+        let rows = sqlx::query(sql).fetch_all(self.pool()).await?;
         Ok(rows
             .iter()
             .map(|r| Device {
