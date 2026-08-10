@@ -5163,6 +5163,7 @@ name = "testclient"
 version = "0.3.1"
 dependencies = [
  "anyhow",
+ "base64",
  "blake3",
  "clap",
  "getrandom 0.3.4",
