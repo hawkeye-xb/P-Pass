@@ -1,6 +1,38 @@
-# NEXT — 当前状态与下一步（2026-08-04，H-10c 收官后）
+# NEXT — 当前状态与下一步（2026-08-10，周末 h10b 批次 review 后）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-10 巡检轮（验收人）：周末 h10b-T1~T7 批次 review + 流程改制
+
+**批次健全性**：本地全量复验绿——Rust 219/219 + Android 92/92 +
+fmt/arch-check 干净。功能方向对（都是 xixi 真机反馈驱动），**保留不 revert**。
+
+**review 实锤 4 个问题 → 已立卡**（队列新入口 `.claude/cards/`）：
+
+| 问题 | 卡 |
+|---|---|
+| T6 空集语义反转：全取消相册=备份整库（scanSince/countAll 的 `isNullOrEmpty` 把空集当 null），手动+自动双路径中招 | FIX-T6（L1） |
+| T6 三元组口径打架：N 按范围、M 全库 → 可显示「手机 10 张 · 已备份 51」、K 恒 0 谎报都存好了 | FIX-T6（L1） |
+| T6 性能：手动备份 since=0 全量重扫+全量 blake3 重哈希，千张库分钟级 Hashing | PERF-01（L1，**先做**） |
+| T3 升级顺序地雷：旧 APK（≤0.3.0-test.2）只认 `a=`，新 QR 只带 `r=` → 旧 App 扫新码静默失败 | FIX-T3（L0） |
+
+另有 DOC-01（L0）：h10b 13 个 commit 在 PROGRESS/ROADMAP/NEXT 零记录，补欠账。
+
+**流程改制（用户特批，AGENT_PROTOCOL 新增 §D + 仓库根 CLAUDE.md）**：
+直推 main/自 merge 不再算违纪；换三条底线——CI 绿不过夜、每批必更文档、
+验收人事后抽检有 revert 权。tag 纪律：调管线用 workflow_dispatch，
+tag 只打真发版本（test.3~.10 一周末八个 tag 是反面教材，已打的不删）。
+
+**仓库膨胀已修**（验收人执行）：dev 机 .git 3.3GB → 19MB（bin-* 历代
+force-push 死对象 + 中断 fetch 的 tmp_pack 残骸占 95%+）。措施：本地
+fetch refspec 排除 `^refs/heads/bin-*` + gc --prune=now；artifacts.yml
+加 paths 过滤（docs/卡片类 push 不再重建+重推 ~100MB 产物）。
+
+**执行 agent 下一手**：按队列做 PERF-01 → DOC-01 → FIX-T3 → FIX-T6
+（FIX-T6 依赖 PERF-01 合并，别并行）。
+
+**等用户**：无新增硬项。真机验收欠账不变（0.3.1 的 Android 六项 +
+T-082/091/092 桌面真窗口走查）。
 
 ## 〇、重要更新（2026-08-04 午后）：test.6 的 APK 是残包，用 test.7
 
