@@ -200,6 +200,11 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       lib/) via tools/bundle-desktop-macos.sh + signed app-release.apk
       (CN=HawkeyeXbOrg), both added to Release draft assets; H-10b
       naive-user test pending tag-build acceptance
+- [ ] H-10b review fixes (2026-08-10 巡检轮 4 卡) — **PERF-01 hash
+      cache DONE 2026-08-10** (android 99/99; 手动备份 hash 阶段从
+      since=0 全量重哈希改为缓存命中——千张库分钟级→秒级); queue
+      `.claude/cards/`: DOC-01 (h10b 文档欠账) → FIX-T3 (QR 升级顺序)
+      → FIX-T6 (范围语义，依赖 PERF-01)
 - [ ] UPD-01 self-update channel — **code landed 2026-08-04 (PR #30),
       rework 2026-08-05**: release.yml emits tauri-style manifest.json
       (compose via tools/make-update-manifest.mjs — sha256 + Ed25519

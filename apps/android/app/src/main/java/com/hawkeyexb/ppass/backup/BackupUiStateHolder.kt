@@ -4,6 +4,7 @@ package com.hawkeyexb.ppass.backup
 
 import android.content.ContentResolver
 import android.content.Context
+import android.os.Build
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import com.hawkeyexb.ppass.transport.DaemonClient
@@ -55,6 +56,9 @@ class BackupUiStateHolder(
      *  daemon 不可达/未配对 → 跳过（三元组显示缓存值，不归零不崩）。 */
     private suspend fun calibrateFromDaemon() {
         try {
+            // PERF-01: 校准时刻顺手清 hash-cache 孤儿（跟随 MediaStore
+            // 现存 _ID 集合；查询失败内部跳过，不影响校准）。
+            pruneHashCache(context)
             val cached = withContext(Dispatchers.IO) { confirmedStore.load().confirmed }
             if (cached.isEmpty()) return
             withContext(Dispatchers.IO) { client.bind(identity.secretKey()) }
@@ -138,7 +142,12 @@ class BackupUiStateHolder(
             return
         }
 
-        // Hash every candidate (streamed off the resolver).
+        // Hash every candidate (streamed off the resolver). PERF-01:
+        // 哈希缓存——同一张没变过的照片只在第一次备份读流哈希一次；
+        // 之后 hash 阶段命中缓存（key = _ID + generation/dateModified+size），
+        // 秒级完成。open 工厂仍保留（传输阶段 pushFile 要重开流），但
+        // 缓存命中时 hash 阶段不再调用它。
+        val hashCache = HashCache(hashCacheFile(context))
         val candidates = withContext(Dispatchers.IO) {
             scan.items.mapIndexed { i, item ->
                 withContext(Dispatchers.Main) {
@@ -148,14 +157,18 @@ class BackupUiStateHolder(
                     context.contentResolver.openInputStream(item.uri)
                         ?: error("cannot open ${item.displayName}")
                 }
+                val key = hashCacheKey(
+                    item.uri.toString(), item.generation, item.dateModified,
+                    item.bytes, Build.VERSION.SDK_INT >= 30,
+                )
                 Candidate(
-                    hash = open().use { blake3Hex(it) },
+                    hash = hashWithCache(hashCache, key, open),
                     fileName = item.displayName,
                     mediaType = item.mimeType,
                     bytes = item.bytes,
                     open = open,
                 )
-            }
+            }.also { hashCache.flush() }
         }
         // T6: 只传未确认的（已到家照片不再重复 hash 阶段后的传输）。
         val fresh = candidates.filter { !confirmedStore.contains(it.hash) }
