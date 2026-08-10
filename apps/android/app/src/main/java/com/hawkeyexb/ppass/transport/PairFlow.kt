@@ -38,7 +38,11 @@ suspend fun pairWithQr(
     // 旧 QR 的 a= 完整解析仍兼容。
     val addr: PeerAddrParts = parsed.addr ?: parsed.relayUrl?.let {
         PeerAddrParts(parsed.nodeIdHex, it, emptyList())
-    } ?: return PairOutcome.Failed("配对码缺少地址信息，请在电脑上重新生成")
+    } ?: return PairOutcome.Failed(
+        // FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，新码
+        // 只带 r=；a=/r= 都缺 = 配对码无法解析。明确引导升级而非静默失败。
+        "配对码无法解析，请把电脑端和手机 App 都升级到最新版"
+    )
     // 存储 token：旧码存原 a= 串；新码从 node+relay 重建（backup 的
     // parsePeerAddrToken 兼容）。
     val addrToken: String = parsed.addr?.let { qr.substringAfter("&a=", "") }

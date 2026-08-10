@@ -624,6 +624,11 @@
           <h3>扫码添加手机</h3>
           {#if qrDataUrl}
             <img class="qr-lg" src={qrDataUrl} alt="配对二维码" />
+            <!-- FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，
+                 新码只带 r=，旧手机扫新码静默失败。把话说清：先升手机 App。 -->
+            <p class="hint modal-hint modal-upgrade-note">
+              {t("ui.qr_phone_version")}
+            </p>
             <p class="hint modal-hint">
               用家人手机上的 P-Pass 扫这个码；手机发来的加入请求会自动出现在这里。
             </p>

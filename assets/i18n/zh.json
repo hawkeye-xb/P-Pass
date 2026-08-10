@@ -26,6 +26,7 @@
   "ui.add_device": "添加设备",
   "ui.generate_qr": "生成配对二维码",
   "ui.qr_fallback": "无法扫码？复制配对串",
+  "ui.qr_phone_version": "手机 App 需 v0.3.1 或更新才能扫这个码",
   "ui.qr_hint": "二维码 10 分钟内有效；扫码后回到本窗口点「允许加入」。",
   "ui.devices": "设备",
   "ui.no_devices": "还没有配对的设备。",

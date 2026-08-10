@@ -92,4 +92,20 @@ class PeerAddrTokenTest {
         assertEquals("https://relay.example.com:8443", p.relayUrl)
         assertEquals(emptyList<String>(), p.directAddresses)
     }
+
+    // ── FIX-T3: 升级顺序地雷——缺地址参数的 QR 不能静默失败 ──
+
+    @Test
+    fun qrWithoutAnyAddressIsDetectable() {
+        // 旧 APK（≤0.3.0-test.2）只认 a=；新码只带 r=。一个既无 a=
+        // 也无 r= 的码（例如被截断/手抄丢段）必须能被上层识别为
+        // 「无法解析」——parsePairingQr 返回 addr=null 且 relayUrl=null，
+        // PairFlow 据此给「配对码无法解析」人话错误（非崩溃非静默）。
+        val nodeHex = "fe".repeat(32)
+        val qr = parsePairingQr("ppf://pair?node=$nodeHex&t=${"33".repeat(32)}")
+        assertEquals(nodeHex, qr.nodeIdHex)
+        assertEquals("33".repeat(32), qr.token)
+        assertNull("无 a= 无 r= → addr 必须为 null", qr.addr)
+        assertNull("无 a= 无 r= → relayUrl 必须为 null", qr.relayUrl)
+    }
 }
