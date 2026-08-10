@@ -84,6 +84,12 @@ fun HomeScreen(
     // T6: 备份范围（null = 全部相册）——「选择相册」与「发起备份」分离。
     selectedBucketCount: Int? = null,
     onOpenBucketPicker: () -> Unit = {},
+    // MOB-02 §二: 部分授权态（只授权了部分照片）——hero 显示引导卡顶替
+    // 三元组（部分授权下 N/M 是假数），一键去系统设置。
+    partialAccess: Boolean = false,
+    onOpenAppSettings: () -> Unit = {},
+    // MOB-02 §四事件①: Wi-Fi 要求不满足时触发已排队——显示提示行。
+    wifiDeferred: Boolean = false,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -101,12 +107,39 @@ fun HomeScreen(
         Spacer(Modifier.height(14.dp))
 
         // ── 英雄卡：恒真三元组（M / N 张已回家 · 最近成功 · 待备份 K）──
+        // MOB-02 §二: 部分授权下不显示假 0/0——引导卡顶替三元组，
+        // 诚实说明「只授权了部分照片——备份需要完整相册权限」+ 去设置。
         Surface(
-            color = PPColor.SafeBg,
+            color = if (partialAccess) PPColor.ActBg else PPColor.SafeBg,
             shape = RoundedCornerShape(PPSize.RadiusCard),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(Modifier.padding(20.dp)) {
+                if (partialAccess) {
+                    Text(
+                        stringResource(R.string.partial_access_title),
+                        fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.partial_access_body),
+                        fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink60,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = onOpenAppSettings,
+                        modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
+                        shape = RoundedCornerShape(PPSize.RadiusControl),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                        ),
+                    ) {
+                        Text(
+                            stringResource(R.string.partial_access_action),
+                            fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                        )
+                    }
+                } else {
                 val t = triplet
                 if (t != null) {
                     Row(verticalAlignment = Alignment.Bottom) {
@@ -183,16 +216,30 @@ fun HomeScreen(
                     }
                     if (!pairingLost) {
                         Spacer(Modifier.width(12.dp))
-                        // UX-01: 进行中点 = 暂停（holder 取消当前批，幂等
-                        // 管线安全），再点 = 从断点续传。
+                        // MOB-02 §一: 空闲态按钮 = 「选择备份的相册」（首页
+                        // 主按钮删除，主操作 = 选相册 → 事件①触发）；进行中
+                        // 仍可暂停（UX-01 不动，砍的只是手动发起）。
                         HeroSecondaryButton(
                             label = if (busy) stringResource(R.string.backup_pause)
-                            else stringResource(R.string.backup_now),
-                            onClick = onBackupNow,
+                            else stringResource(R.string.choose_albums),
+                            onClick = if (busy) onBackupNow else onOpenBucketPicker,
                         )
                     }
                 }
+                }
             }
+        }
+
+        // MOB-02 §四事件①: 触发已排队（Wi-Fi 要求不满足）——「将在连上
+        // Wi-Fi 后进行」，不假装已经开跑。
+        if (wifiDeferred && !busy && !partialAccess) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                stringResource(R.string.wifi_deferred_hint),
+                fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
+                color = PPColor.Waiting,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+            )
         }
 
         // ── 失败才说话（T-083 目标 3 红线）：红卡正文只有人话（当前语言
@@ -347,6 +394,21 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column {
+                // MOB-02 §三: 设置页顶部合成一句当前生效条件——四种组合
+                // 各有明确句子，不留歧义（裁决纯函数 policySentenceKey）。
+                Row(
+                    Modifier.fillMaxWidth().padding(16.dp, 14.dp, 16.dp, 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(policySentenceKey(chargeOnly, wifiOnly)),
+                        fontSize = 13.5.sp, lineHeight = 19.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = PPColor.Ink60,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(
                     label = stringResource(R.string.auto_backup_pause),
                     hint = stringResource(R.string.auto_backup_pause_hint),
@@ -359,6 +421,16 @@ fun HomeScreen(
                     checked = chargeOnly,
                     onCheckedChange = onChargeOnlyChange,
                 )
+                // MOB-02 §三: 「需要充电」关闭的后果描述（用户定稿文案——
+                // 打消耗电顾虑是文案的任务：「有新照片就会尝试备份（系统级
+                // 监听，不额外耗电）」）。
+                if (!chargeOnly) {
+                    Text(
+                        stringResource(R.string.req_charge_off_consequence),
+                        fontSize = 12.5.sp, lineHeight = 18.sp, color = PPColor.Ink40,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                    )
+                }
                 HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(
                     label = stringResource(R.string.setting_wifi_only),
@@ -419,6 +491,26 @@ fun HomeScreen(
                         fontSize = 14.sp, color = PPColor.Ink40,
                     )
                 }
+                // MOB-02 §一: 设置页低调「立即备份」入口（测试/狗粮用，
+                // 不在首页）——跑前台管线，进度/暂停可见。部分授权下隐藏
+                // （部分授权态不落范围、不显示假数据，入口无意义）。
+                if (!partialAccess) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable(onClick = onBackupNow)
+                            .padding(16.dp, 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            stringResource(R.string.manual_backup_entry),
+                            fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                            color = PPColor.Ink40,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+                    }
+                }
             }
         }
 
@@ -452,7 +544,7 @@ private fun workingText(line: StatusLine.Working): String = when (val s = line.s
 }
 
 /** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) +
- *  圆角 14 + 高 44——「暂停/继续」与空闲态「现在备份」共用同一样式。 */
+ *  圆角 14 + 高 44——「暂停」与空闲态「选择相册」共用同一样式。 */
 @Composable
 private fun HeroSecondaryButton(label: String, onClick: () -> Unit) {
     Row(
@@ -496,6 +588,17 @@ private fun progressOf(state: BackupUiState): Float? = when (state) {
     is BackupUiState.Sending ->
         if (state.total > 0) state.done.toFloat() / state.total else null
     else -> null
+}
+
+/**
+ * MOB-02 §三: 四种条件组合 → 设置页顶部合成句的字符串资源（纯函数，
+ * JVM 可测）。四种组合各有明确句子，不留歧义。
+ */
+fun policySentenceKey(chargeOnly: Boolean, wifiOnly: Boolean): Int = when {
+    chargeOnly && wifiOnly -> R.string.policy_both
+    chargeOnly && !wifiOnly -> R.string.policy_charge_only
+    !chargeOnly && wifiOnly -> R.string.policy_wifi_only
+    else -> R.string.policy_none
 }
 
 /** 备份规则卡里的开关行——label（可带 hint）左、Switch 右。 */

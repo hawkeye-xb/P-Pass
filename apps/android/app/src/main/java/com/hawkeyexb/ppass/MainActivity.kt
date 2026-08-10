@@ -5,6 +5,8 @@ package com.hawkeyexb.ppass
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -51,11 +53,13 @@ import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
-import com.hawkeyexb.ppass.backup.backupOnceNow
+import com.hawkeyexb.ppass.backup.ConfirmedStore
+import com.hawkeyexb.ppass.backup.isPartialMediaAccess
 import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.pauseAutoBackup
 import com.hawkeyexb.ppass.backup.resumeAutoBackup
+import com.hawkeyexb.ppass.backup.triggerUserPresentBackup
 import com.hawkeyexb.ppass.backup.BACKUP_WORK_NAME
 import com.hawkeyexb.ppass.backup.WatermarkStore
 import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
@@ -109,15 +113,28 @@ fun PPassApp() {
     var screen by remember {
         mutableStateOf<Screen>(pairings.load()?.let { Screen.Home(it) } ?: Screen.Welcome)
     }
-    // Paired phones: periodic backup stays scheduled (idempotent KEEP)
-    // and every app-open triggers one catch-up run — the phone backs
-    // itself up without anyone finding a button. UX-06: 全局暂停态下
-    // 两者都不跑（重开 App 不自动恢复，直到用户恢复开关）。
+    // MOB-02 §四事件①: 排队提示——触发时 Wi-Fi 要求不满足，WorkManager
+    // 排队等网，首页显示「将在连上 Wi-Fi 后进行」。
+    var wifiDeferred by remember { mutableStateOf(false) }
+    // Paired phones: periodic backup + content trigger stay scheduled
+    // (idempotent KEEP) and every app-open runs one catch-up — BUT only
+    // if the last success is older than 24h (MOB-02 事件④, user-present
+    // tier). UX-06: 全局暂停态下两者都不跑（重开 App 不自动恢复，
+    // 直到用户恢复开关）。
     remember {
-        if (pairings.load() != null && !AutoBackupPrefs(context.filesDir).paused()) {
+        val pairing = pairings.load()
+        if (pairing != null && !AutoBackupPrefs(context.filesDir).paused()) {
             scheduleAutoBackup(context)
-            backupOnceNow(context)
+            // MOB-02 §四事件④：App 进前台且距上次成功 >24h → 用户在场档。
+            val lastSuccess = ConfirmedStore(
+                java.io.File(context.filesDir, "backup-state/${pairing.daemonNodeId}")
+            ).lastSuccessAt()
+            if (System.currentTimeMillis() - lastSuccess > MOB_APP_OPEN_GATE_MS) {
+                triggerUserPresentBackup(context)
+            }
         }
+        // 新会话重新评估排队提示（上一轮的排队状态随进程重开作废）。
+        wifiDeferred = false
         true
     }
 
@@ -158,10 +175,14 @@ fun PPassApp() {
     // 加白后卡片消失；拒绝授权时保持卡片）
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var batteryWhitelisted by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+    // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
+    // （用户去系统设置改完全授权返回后引导卡消失）。
+    var partialMedia by remember { mutableStateOf(hasPartialMediaAccess(context)) }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 batteryWhitelisted = isIgnoringBatteryOptimizations(context)
+                partialMedia = hasPartialMediaAccess(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -227,7 +248,14 @@ fun PPassApp() {
 
         is Screen.Joined -> JoinedScreen(
             storageName = s.pairing.storageDeviceName,
-            onDone = { screen = Screen.Home(s.pairing) },
+            // MOB-02 卡面 §一：配对成功 → 引导进入相册选择页 → 选完走
+            // 事件①触发首备份（配对本身不触发备份）。
+            onDone = {
+                screen = Screen.Buckets(
+                    s.pairing,
+                    BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
+                )
+            },
         )
 
         is Screen.Trouble -> PairStatusScreen(
@@ -241,10 +269,13 @@ fun PPassApp() {
         is Screen.Home -> {
             val holder = remember { BackupUiStateHolder(context, client, identity, s.pairing) }
             // UX-03: 极简设置状态（仅充电/仅 WiFi）——改开关即落盘 +
-            // 按新约束重建周期任务。
+            // 按新约束重建周期任务。MOB-02 起语义为「需要充电/需要 Wi-Fi」
+            // 两档运行条件（默认都开），设置页有后果描述 + 合成句。
             val backupSettings = remember { BackupSettings(context.filesDir) }
             var chargeOnly by remember { mutableStateOf(backupSettings.load().chargeOnly) }
             var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
+            // MOB-02 §三: 「需要 Wi-Fi」关闭需二次确认（移动网络消耗流量）。
+            var pendingWifiOff by remember { mutableStateOf(false) }
             val loader = remember {
                 TimelineLoader(client, parsePeerAddrToken(s.pairing.daemonAddrToken)) {
                     client.bind(identity.secretKey())
@@ -283,10 +314,15 @@ fun PPassApp() {
                             rescheduleAutoBackup(context)
                         },
                         wifiOnly = wifiOnly,
-                        onWifiOnlyChange = {
-                            wifiOnly = it
-                            backupSettings.save(chargeOnly, wifiOnly)
-                            rescheduleAutoBackup(context)
+                        onWifiOnlyChange = { enable ->
+                            // MOB-02 §三: 关闭「需要 Wi-Fi」需二次确认
+                            // （移动网络也会备份，可能消耗流量）。
+                            if (!enable) pendingWifiOff = true
+                            else {
+                                wifiOnly = true
+                                backupSettings.save(chargeOnly, wifiOnly)
+                                rescheduleAutoBackup(context)
+                            }
                         },
                         autoBackupPaused = autoBackupPaused,
                         onToggleAutoBackup = { paused ->
@@ -313,6 +349,9 @@ fun PPassApp() {
                                 BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
                             )
                         },
+                        // MOB-02 §一: 首页主按钮删除——hero 空闲态按钮 =
+                        // 「选择备份的相册」；onBackupNow 保留给：进行中暂停、
+                        // 失败红卡「再试一次」、设置页低调「立即备份」（狗粮）。
                         onBackupNow = {
                             val needed = requiredMediaPermissions().filter {
                                 ContextCompat.checkSelfPermission(context, it) !=
@@ -321,9 +360,35 @@ fun PPassApp() {
                             if (needed.isEmpty()) holder.backupNow()
                             else mediaPermission.launch(needed.toTypedArray())
                         },
+                        // MOB-02 §二: 部分授权引导（只授权了部分照片 →
+                        // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
+                        partialAccess = partialMedia,
+                        onOpenAppSettings = { openAppDetailsSettings(context) },
+                        // MOB-02 §四事件①: 排队提示（Wi-Fi 要求不满足时）。
+                        wifiDeferred = wifiDeferred,
                     )
                 },
             )
+            if (pendingWifiOff) {
+                AlertDialog(
+                    onDismissRequest = { pendingWifiOff = false },
+                    title = { Text(stringResource(R.string.wifi_off_confirm_title)) },
+                    text = { Text(stringResource(R.string.wifi_off_confirm_body)) },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            pendingWifiOff = false
+                            wifiOnly = false
+                            backupSettings.save(chargeOnly, false)
+                            rescheduleAutoBackup(context)
+                        }) { Text(stringResource(R.string.wifi_off_confirm_ok)) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingWifiOff = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    },
+                )
+            }
             if (showDisconnectDialog) {
                 AlertDialog(
                     onDismissRequest = { showDisconnectDialog = false },
@@ -385,8 +450,28 @@ fun PPassApp() {
                 BucketScreen(
                     buckets = list,
                     selected = s.current,
+                    // MOB-02 §六: 新相册判定基准（null = 从未选过范围，全量模式）。
+                    knownBuckets = scopeStore.knownBucketIds(),
                     onDone = { sel ->
-                        scopeStore.saveSelectedBucketIds(sel)
+                        // MOB-02 §二: 部分授权态不保存范围（选了也备不完整，
+                        // 且会显示假 0/0）——直接回 Home，Home 显示部分授权
+                        // 引导卡（一键去系统设置改完全授权）。
+                        if (hasPartialMediaAccess(context)) {
+                            screen = Screen.Home(s.pairing)
+                            return@BucketScreen
+                        }
+                        // MOB-02 §六: 保存范围 + 记录当前全部相册（新相册
+                        // 基准）；新出现的相册默认不包含（不在 sel 里）。
+                        scopeStore.saveScope(
+                            selected = sel,
+                            allCurrent = list.map { it.id }.toSet(),
+                        )
+                        // MOB-02 §四事件①: 选完/改完备份范围返回 → 用户在场
+                        // 档触发（只查 Wi-Fi 不查充电）；不满足则 WorkManager
+                        // 排队，首页显示「将在连上 Wi-Fi 后进行」。
+                        val settings = BackupSettings(context.filesDir).load()
+                        wifiDeferred = settings.wifiOnly && !isOnUnmetered(context)
+                        triggerUserPresentBackup(context)
                         // 回 Home——重建时重新读范围，三元组/扫描随之生效。
                         screen = Screen.Home(s.pairing)
                     },
@@ -406,6 +491,38 @@ private fun requiredMediaPermissions(): List<String> =
     } else {
         listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
+
+// MOB-02 §四事件④: App 进前台且距上次成功 >24h → 用户在场档补跑。
+private const val MOB_APP_OPEN_GATE_MS = 24L * 60 * 60 * 1000
+
+/** MOB-02 §二: 部分授权检测（走纯函数判定，权限查询为生产注入）。 */
+private fun hasPartialMediaAccess(context: Context): Boolean =
+    isPartialMediaAccess(
+        imagesGranted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.READ_MEDIA_IMAGES
+        ) == PackageManager.PERMISSION_GRANTED,
+        visualSelectedGranted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+        ) == PackageManager.PERMISSION_GRANTED,
+        sdkInt = Build.VERSION.SDK_INT,
+    )
+
+/** MOB-02 §四事件①: 是否在不计流量网络（Wi-Fi）上——排队提示的判据。 */
+private fun isOnUnmetered(context: Context): Boolean {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        ?: return false
+    val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+    return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+}
+
+/** MOB-02 §二: 一键去系统设置（应用详情页）改完整相册权限。 */
+private fun openAppDetailsSettings(context: Context) {
+    val intent = android.content.Intent(
+        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+        android.net.Uri.fromParts("package", context.packageName, null),
+    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+    context.startActivity(intent)
+}
 
 private fun deviceName(): String {
     val m = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android"

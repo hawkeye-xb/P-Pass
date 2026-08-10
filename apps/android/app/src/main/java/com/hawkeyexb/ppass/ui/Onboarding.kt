@@ -124,7 +124,14 @@ fun JoinedScreen(storageName: String, onDone: () -> Unit) {
                 colors = ButtonDefaults.buttonColors(
                     containerColor = PPColor.Ink, contentColor = PPColor.Paper
                 ),
-            ) { Text(stringResource(R.string.done), fontSize = 19.sp, fontWeight = FontWeight.Bold) }
+            ) {
+                // MOB-02 §一: 配对成功 → 引导进入相册选择页（选完走事件①
+                // 触发首备份；配对本身不触发备份）。
+                Text(
+                    stringResource(R.string.choose_albums),
+                    fontSize = 19.sp, fontWeight = FontWeight.Bold,
+                )
+            }
         }
     }
 }

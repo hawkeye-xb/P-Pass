@@ -11,6 +11,10 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- T-053 MediaStore enumeration. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- MOB-02: Android 14+「部分照片」授权态的正确表达——不声明的话
+         系统会反复弹窗（每次扫码/查询都让用户重选）；声明后系统知道
+         App 能理解部分授权态，我们据此显示引导而非假 0/0。 -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
