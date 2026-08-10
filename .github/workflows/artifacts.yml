@@ -3,16 +3,35 @@ name: Linux Artifacts
 # Push-to-main builds the Linux x86_64 daemon + testclient and force-pushes
 # them to the orphan branch `bin-linux-x64` — pure-git distribution for
 # cloud/dogfood machines (they `git fetch` instead of compiling for 40min
-# on a 2-core box). The branch is overwritten every time: no history, no
-# repo bloat on main.
+# on a 2-core box). The branch is overwritten every time: no history on
+# the branch itself.
 #
 # macOS arm64 → bin-macos-arm64 (push-to-main); Windows x64 → bin-win-x64
 # (workflow_dispatch only — vcpkg static libheif is ~20min, not worth every
 # push; H-09 Windows smoke machine fetches it the same pure-git way).
+#
+# ⚠️ Repo-bloat lessons (2026-08-10, dev machine .git hit 3.3GB):
+# 1. Force-pushed generations pile up as unreachable objects in every
+#    clone that fetches bin-*. Dev machines that never run these binaries
+#    MUST exclude them:  git config --add remote.origin.fetch '^refs/heads/bin-*'
+#    Consumer machines should fetch shallowly into a dedicated checkout.
+# 2. paths-filter below: docs/card-only pushes must not rebuild + repush
+#    ~100MB of identical binaries. Keep the filter in sync with what
+#    actually feeds the build.
 
 on:
   push:
     branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "config/**"
+      - "assets/i18n/**"
+      - "tools/bundle-macos.sh"
+      - "tools/dogfood-smoke.sh"
+      - "tools/win-smoke.ps1"
+      - ".github/workflows/artifacts.yml"
   workflow_dispatch:
 
 permissions:
