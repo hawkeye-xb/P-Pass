@@ -26,6 +26,7 @@
   "ui.add_device": "Add a device",
   "ui.generate_qr": "Generate pairing QR",
   "ui.qr_fallback": "Can't scan? Copy the pairing string",
+  "ui.qr_phone_version": "Phone app must be v0.3.1 or newer to scan this code",
   "ui.qr_hint": "The QR is valid for 10 minutes; after scanning, come back here and click Allow.",
   "ui.devices": "Devices",
   "ui.no_devices": "No devices paired yet.",

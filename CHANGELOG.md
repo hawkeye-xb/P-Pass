@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 配对升级顺序地雷：旧版手机 App（≤0.3.0-test.2）只认旧式配对码
+  （`a=` 段），扫新版电脑生成的码（只带 `r=`）会静默失败——桌面配对
+  弹窗新增提示「手机 App 需 v0.3.1 或更新」，手机端对无法解析的码给出
+  人话错误。**升级顺序：先升级手机 App，再扫新码。**
+
 ### Added
 - Cross-ecosystem family photo center: Android → home computer encrypted
   auto-backup over iroh 1.0 P2P (direct connection with relay fallback).

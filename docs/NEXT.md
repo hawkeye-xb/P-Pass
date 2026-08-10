@@ -33,8 +33,10 @@ hash 缓存，android 99/99 绿，验收记录见 PROGRESS 顶部；真机「第
 手动备份 Hashing 秒级」挂验收人）。✅ **FIX-SC1 已完成并推 main**
 （testclient 解析器跟上 &r= QR——scenarios job 自 8/8 起的 15+ run 全红
 根因修复，本地 huge_file+crash_recovery ALL GREEN；卡已移 done/）。
-队列剩余 → **DOC-01 → FIX-T3 → FIX-T6**（FIX-T6 依赖 PERF-01 合并，
-别并行）。
+队列剩余 → **DOC-01 已完成**（h10b 13 commit 补账，卡移 done/）→
+**FIX-SC2 取证桩已落**（第 1 步单独推了，卡留队列等 CI 证据）→
+**FIX-T3 已完成**（QR 升级提示，见 PROGRESS 顶部）→ **FIX-T6**（范围
+语义，依赖 PERF-01 合并，别并行）。
 
 **等用户**：无新增硬项。真机验收欠账不变（0.3.1 的 Android 六项 +
 T-082/091/092 桌面真窗口走查）。
