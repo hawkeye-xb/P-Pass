@@ -31,14 +31,16 @@ fun TwoTabs(
     photos: @Composable () -> Unit,
     backup: @Composable () -> Unit,
 ) {
-    Column(Modifier.fillMaxSize().background(PPColor.Paper)) {
-        Box(Modifier.weight(1f)) {
-            if (tab == 0) photos() else backup()
-        }
-        HorizontalDivider(color = PPColor.Border)
-        Row(Modifier.fillMaxWidth().height(64.dp).background(PPColor.Paper)) {
-            TabCell(stringResource(R.string.tab_photos), tab == 0, Modifier.weight(1f)) { onTab(0) }
-            TabCell(stringResource(R.string.tab_backup), tab == 1, Modifier.weight(1f)) { onTab(1) }
+    PPScreen {
+        Column(Modifier.fillMaxSize()) {
+            Box(Modifier.weight(1f)) {
+                if (tab == 0) photos() else backup()
+            }
+            HorizontalDivider(color = PPColor.Border)
+            Row(Modifier.fillMaxWidth().height(64.dp).background(PPColor.Paper)) {
+                TabCell(stringResource(R.string.tab_photos), tab == 0, Modifier.weight(1f)) { onTab(0) }
+                TabCell(stringResource(R.string.tab_backup), tab == 1, Modifier.weight(1f)) { onTab(1) }
+            }
         }
     }
 }

@@ -85,7 +85,8 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
     var input by remember { mutableStateOf("") }
     var inputError by remember { mutableStateOf(false) }
 
-    Column(Modifier.fillMaxSize().background(PPColor.SurfaceDark).padding(24.dp)) {
+    PPScreen(background = PPColor.SurfaceDark) {
+        Column(Modifier.fillMaxSize().padding(24.dp)) {
         Text(
             stringResource(R.string.scan_title),
             fontSize = 30.sp, fontFamily = FontFamily.Serif, color = PPColor.Paper,
@@ -217,5 +218,6 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
             ) { Text(stringResource(R.string.cancel), fontSize = 16.sp, color = PPColor.Paper) }
         }
         Spacer(Modifier.height(14.dp))
+        }
     }
 }

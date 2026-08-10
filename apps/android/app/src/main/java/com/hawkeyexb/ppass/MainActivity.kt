@@ -10,6 +10,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -89,6 +90,9 @@ private sealed class Screen {
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // MOB-01: 统一 edge-to-edge——API 35+ 默认强制，低版本主动
+        // 开启后行为一致；各屏内容安全区由 PPScreen 一处处理。
+        enableEdgeToEdge()
         setContent { PPassApp() }
     }
 }
