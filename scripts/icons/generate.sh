@@ -24,6 +24,17 @@ trap 'rm -rf "$OUT"' EXIT
 for size in 16 32 48 64 128 256 512 1024; do
   rsvg-convert -w "$size" -h "$size" "$DESIGN/icon-carbon.svg" -o "$OUT/${size}x${size}.png"
 done
+# ⚠️ tauri generate_context! 硬性要求 icons/*.png 为 RGBA——rsvg-convert
+# 对铺满纸底的 SVG 输出 RGB（无 alpha），必须强制转 RGBA。
+python3 - "$OUT" <<'PYEOF'
+import sys, pathlib
+from PIL import Image
+out = pathlib.Path(sys.argv[1])
+for p in out.glob("*.png"):
+    im = Image.open(p).convert("RGBA")
+    im.save(p)
+print("all pngs converted to RGBA")
+PYEOF
 # @2x 档（macOS icns 的 retina 表示：16@2x=32, 32@2x=64, ...）
 for size in 16 32 64 128 256 512; do
   px=$((size * 2))
