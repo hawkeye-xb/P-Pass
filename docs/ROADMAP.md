@@ -200,11 +200,19 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       lib/) via tools/bundle-desktop-macos.sh + signed app-release.apk
       (CN=HawkeyeXbOrg), both added to Release draft assets; H-10b
       naive-user test pending tag-build acceptance
-- [ ] H-10b review fixes (2026-08-10 巡检轮 4 卡) — **PERF-01 hash
-      cache DONE 2026-08-10** (android 99/99; 手动备份 hash 阶段从
-      since=0 全量重哈希改为缓存命中——千张库分钟级→秒级); queue
-      `.claude/cards/`: DOC-01 (h10b 文档欠账) → FIX-T3 (QR 升级顺序)
-      → FIX-T6 (范围语义，依赖 PERF-01)
+- [ ] H-10b T1–T7 + fix 批次 — **全部代码已合并 2026-08-08/09（13
+      commits，0.3.1 正式发布 `9c66c76`）**：QR 密度瘦身（`&a=`→`&r=` +
+      手机手动输入 + QR 刷新 + dmg 拖拽布局）、T1 版本号显示、T3 配对
+      token 32B→12B、T4 配对状态机（QR 弹窗化）、T5 审计事件流 +
+      activity 页、T6 相册级备份范围、T7 Windows NSIS 图形安装包进
+      管线；macOS 签名公证已通（Developer ID）。真机验收待验收（见
+      PROGRESS h10b 行）。⚠️ review 实锤问题 → 见下行
+- [ ] H-10b review fixes (2026-08-10 巡检轮) — ✅ **PERF-01 hash cache
+      DONE 2026-08-10**（android 99/99；千张库分钟级→秒级）；✅
+      **FIX-SC1 testclient 解析器跟上 &r= DONE 2026-08-10**（scenarios
+      CI 自 8/8 起 15+ run 全红的根因，已修 + 本地 scenarios ALL
+      GREEN）；queue 剩余：DOC-01（本卡，文档补账）→ FIX-T3（QR
+      升级顺序）→ FIX-T6（范围语义，依赖 PERF-01）
 - [ ] UPD-01 self-update channel — **code landed 2026-08-04 (PR #30),
       rework 2026-08-05**: release.yml emits tauri-style manifest.json
       (compose via tools/make-update-manifest.mjs — sha256 + Ed25519
