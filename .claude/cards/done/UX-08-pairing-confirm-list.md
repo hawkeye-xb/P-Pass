@@ -35,3 +35,22 @@ apps/desktop（App.svelte + i18n 字典）。daemon IPC 的 pending 队列如果
 
 CI 绿；PROGRESS/NEXT 一行；卡移 done/。UI 走查欠账照记（真窗口截图
 挂验收人）。
+
+---
+
+## 验收记录（2026-08-11 Salamira）
+
+- daemon：只读 IPC `pairing.pending`（pending_names 全量；confirm 带
+  device_name 逐台精确确认，不带则队首——语义零改动）。
+- 桌面：pendingList 全量渲染逐行 allow/deny；flashMessage 统一 14 处
+  t() + 2 处硬编码赋值（5s 自动消失 + × 手动关闭）；CSS token 色。
+- 测试：ipc_flow **8/8**（新增 pairing_pending_lists_all_waiting_then_
+  confirm_by_name——三台独立 token 入队→列表三行→按名确认中间→剩两台→
+  全清后 pending 空 + status.pending_pairs=0 + 设备表含被允许的 B）；
+  vite build 绿（173 modules）；cargo fmt clean。
+- CI：run 31368612144 等待中（commit 07cd1b9）。
+- 挂验收人：①模拟 3 台同时扫码真窗口一屏三行逐行处理截图；②提示条
+  5s 自动消失 + × 手动关闭实机观感；③反证：去掉自动消失定时器 →
+  提示条常驻（贴对照后还原）。
+- 坑：多台测试同一一次性 token 会被引擎拒（token 单用）——每台独立
+  铸 token（Pairing::start 可多铸共存）。
