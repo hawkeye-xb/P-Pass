@@ -78,3 +78,22 @@ backoff 空转、并行测试间端口/socket 竞争、iroh-blobs 内部竞态�
 - 后续：每次 CI 再 TIMEOUT，日志会显示最后一条 stamp 在哪——卡在
   attempt N waiting（传输没动）= 传输前 stall；卡在 resume pull
   started = 重拨/续传 stall。等证据积累后做第 2 步（本地复现）。
+
+---
+📌 **CI 证据 #1（2026-08-11，Salamira）——run 31370863470 撞 TIMEOUT，卡点定位成功**
+
+- 场景：pr.yml lint+test，`kill_mid_transfer_then_resume_verifies` 300s
+  TIMEOUT（322s 后被杀，223/224 其余全过）。commit 8b5362c 只动 Android/
+  桌面/worker，**Rust 传输层零改动**——纯 flake 复现。
+- 进度桩最后一条：`restart: rebinding receiver endpoint`——**之后到
+  超时没有任何后续 stamp**（无 resume pull started / completed）。
+- 卡点结论：**kill 后 restart 阶段的重拨 stall**——receiver endpoint
+  重绑后 resume pull 从未启动，卡在等一个永远不来的连接/重拨。与卡面
+  候选假设（kill 后重拨等一个永远不来的连接）吻合，且排除「传输中
+  stall」（kill 前逐 MB 打点正常到 ~7.3MB）。
+- 反证对照（同 commit 本地）：`kill_mid_transfer_then_resume_verifies`
+  隔离跑 **10.664s 过**（4/4 全绿）——量级差再次确认并发时序下的竞态，
+  不是慢。
+- 后续 run 自愈：e7551c4（同一份 Rust 代码）31370939766 **success**。
+- 下一步（第 2 步铺垫）：本地高并发压力复现 + 重点看 redial/rebind
+  阶段时序（attempt 循环里 receiver 重绑与 iroh-blobs 连接建立的竞争）。
