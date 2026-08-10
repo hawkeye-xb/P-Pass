@@ -122,6 +122,15 @@ fun PPassApp() {
     var screen by remember {
         mutableStateOf<Screen>(pairings.load()?.let { Screen.Home(it) } ?: Screen.Welcome)
     }
+    // MOB-03: 相册选择页权限链——「等授权结果后去哪」的落点。设置后由
+    // bucketMediaPermission 回调消费；不进 Buckets 的路径立即清掉。
+    var pendingBucketsPairing by remember { mutableStateOf<Pairing?>(null) }
+    // MOB-03: 媒体权限被拒 → 人话引导（不崩不白屏，说清为什么需要）。
+    var showMediaPermissionDialog by remember { mutableStateOf(false) }
+    // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
+    // （用户去系统设置改完全授权返回后引导卡消失）；bucketMediaPermission
+    // 回调里也会即时重读。声明提前：launcher 回调需要引用。
+    var partialMedia by remember { mutableStateOf(hasPartialMediaAccess(context)) }
     // MOB-02 §四事件①: 排队提示——触发时 Wi-Fi 要求不满足，WorkManager
     // 排队等网，首页显示「将在连上 Wi-Fi 后进行」。
     var wifiDeferred by remember { mutableStateOf(false) }
@@ -150,6 +159,31 @@ fun PPassApp() {
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> if (granted) screen = Screen.Scan }
+
+    // MOB-03: 相册选择页权限链——未授权先弹系统权限，完整授权后才进列表；
+    // 部分授权 → Home 引导卡（MOB-02 §二，不显示假 0/0）；拒绝 → 人话对话框。
+    val bucketMediaPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { _ ->
+        val pairing = pendingBucketsPairing
+        if (pairing != null) {
+            pendingBucketsPairing = null
+            // 系统弹窗关闭后状态已落定，直接重读（比 ON_RESUME 刷新更及时）。
+            partialMedia = hasPartialMediaAccess(context)
+            val stillNeeded = requiredMediaPermissions().filter {
+                ContextCompat.checkSelfPermission(context, it) !=
+                    PackageManager.PERMISSION_GRANTED
+            }
+            when {
+                stillNeeded.isEmpty() && !partialMedia -> screen = Screen.Buckets(
+                    pairing,
+                    BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
+                )
+                partialMedia -> screen = Screen.Home(pairing)
+                else -> showMediaPermissionDialog = true
+            }
+        }
+    }
 
     // UPD-01: 启动时检查一次更新（静默失败；draft/无 release = 无更新；
     // 对话框覆盖所有 screen，不打断当前流程）。REL-02: 按通道取源
@@ -183,13 +217,30 @@ fun PPassApp() {
         )
     }
 
+    // MOB-03: 媒体权限被拒的人话引导——说清为什么需要，给出去设置的路。
+    if (showMediaPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showMediaPermissionDialog = false },
+            title = { Text(stringResource(R.string.media_permission_denied_title)) },
+            text = { Text(stringResource(R.string.media_permission_denied_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    showMediaPermissionDialog = false
+                    openAppDetailsSettings(context)
+                }) { Text(stringResource(R.string.partial_access_action)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMediaPermissionDialog = false }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
+
     // DOG-02: 电池白名单状态——ON_RESUME 刷新（从系统设置返回立即更新，
     // 加白后卡片消失；拒绝授权时保持卡片）
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var batteryWhitelisted by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
-    // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
-    // （用户去系统设置改完全授权返回后引导卡消失）。
-    var partialMedia by remember { mutableStateOf(hasPartialMediaAccess(context)) }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -199,6 +250,28 @@ fun PPassApp() {
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    // MOB-03: 进相册选择页的完整权限链（Home「选择备份的相册」与 onboarding
+    // 「配对成功→选相册」共用）——未授权 → 系统权限请求（完整授权后进列表）；
+    // 部分授权 → Home 引导卡（MOB-02 §二，不显示假 0/0）；拒绝 → 人话对话框。
+    // 备份主流程的入口，任何分支都不许白屏。
+    fun enterBucketPicker(pairing: Pairing) {
+        val needed = requiredMediaPermissions().filter {
+            ContextCompat.checkSelfPermission(context, it) !=
+                PackageManager.PERMISSION_GRANTED
+        }
+        when {
+            needed.isNotEmpty() -> {
+                pendingBucketsPairing = pairing
+                bucketMediaPermission.launch(needed.toTypedArray())
+            }
+            hasPartialMediaAccess(context) -> screen = Screen.Home(pairing)
+            else -> screen = Screen.Buckets(
+                pairing,
+                BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
+            )
+        }
     }
 
     when (val s = screen) {
@@ -270,10 +343,9 @@ fun PPassApp() {
             // MOB-02 卡面 §一：配对成功 → 引导进入相册选择页 → 选完走
             // 事件①触发首备份（配对本身不触发备份）。
             onDone = {
-                screen = Screen.Buckets(
-                    s.pairing,
-                    BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
-                )
+                // MOB-03: onboarding 入口同样过权限链（未授权先弹系统权限，
+                // 完整授权后才进相册列表；拒绝/部分授权回引导）。
+                enterBucketPicker(s.pairing)
             },
         )
 
@@ -374,12 +446,10 @@ fun PPassApp() {
                         selectedBucketCount = remember {
                             BackupScopeStore(context).selectedBucketIds()?.size
                         },
-                        onOpenBucketPicker = {
-                            screen = Screen.Buckets(
-                                s.pairing,
-                                BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
-                            )
-                        },
+                        // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
+                        // 备份按钮时把挂在它身上的权限申请链一起删没了，
+                        // 无权限直接进列表 = MediaStore 空查询 = 全白。
+                        onOpenBucketPicker = { enterBucketPicker(s.pairing) },
                         // MOB-02 §一: 首页主按钮删除——hero 空闲态按钮 =
                         // 「选择备份的相册」；onBackupNow 保留给：进行中暂停、
                         // 失败红卡「再试一次」、设置页低调「立即备份」（狗粮）。

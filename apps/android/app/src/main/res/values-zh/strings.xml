@@ -109,6 +109,9 @@
     <string name="partial_access_title">只授权了部分照片</string>
     <string name="partial_access_body">备份需要完整相册权限——授予完整相册访问权限，才能备份全部照片。</string>
     <string name="partial_access_action">去设置</string>
+    <!-- MOB-03: 相册选择页权限链——拒绝引导（不崩不白屏，说清为什么需要） -->
+    <string name="media_permission_denied_title">需要照片权限</string>
+    <string name="media_permission_denied_body">备份需要访问你的照片和视频，才能选择要备份的相册。请到系统设置中允许访问。</string>
     <!-- MOB-02 §一: 设置页低调立即备份入口（测试/狗粮用） -->
     <string name="manual_backup_entry">立即备份</string>
     <!-- REL-02: 更新通道（stable 默认 / test） -->
