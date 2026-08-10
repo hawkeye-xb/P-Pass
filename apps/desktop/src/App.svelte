@@ -3,7 +3,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { open as openDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
-  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
@@ -110,6 +110,14 @@
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
+  // REL-02: 更新通道（stable 默认 / test）——localStorage 持久化，显式
+  // 切换，默认永远 stable（家人设备不被 test 构建波及）。
+  let updateChannel = $state(localStorage.getItem("pp_update_channel") || "stable");
+  function setUpdateChannel(ch) {
+    updateChannel = ch;
+    localStorage.setItem("pp_update_channel", ch);
+    checkForUpdate(false); // 切通道立即按新通道重查
+  }
   // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
   let nowMs = $state(Date.now());
 
@@ -350,7 +358,64 @@
   // 都弹错。只有用户点了「下载安装」后的下载/安装失败才上文案。
   // T-081: 设置页「检查更新」手动入口复用同一函数（manual=true 时
   // 「已是最新」也给一句反馈，不再沉默）。
+  // REL-02: test 通道的 manifest 源——Cloudflare Worker 代理
+  // （infra/workers/update；GitHub API 未认证限流 60/h/IP，客户端不
+  // 直连；解析最新 prerelease 在 Worker 端，命中 300s 缓存）。
+  const WORKER_TEST_URL = "https://update.p-pass.hawkeye-xb.com/manifest?channel=test";
+
+  // SemVer 三段比较（与 Android UpdateChecker.isNewer 同语义）。
+  function isNewerVersion(candidate, current) {
+    const c = String(candidate).split("-")[0].split(".").map((x) => parseInt(x, 10) || 0);
+    const cur = String(current).split("-")[0].split(".").map((x) => parseInt(x, 10) || 0);
+    for (let i = 0; i < 3; i++) {
+      const d = (c[i] ?? 0) - (cur[i] ?? 0);
+      if (d !== 0) return d > 0;
+    }
+    return false;
+  }
+
+  // REL-02: test 通道检查——壳内 fetch Worker manifest，弹窗后打开
+  // 下载页。安装路径说明：tauri updater 的 endpoint 构建期写死、Update
+  // 无公开构造器，运行时无法指向任意 manifest URL（2.10.1 源码确认）；
+  // 且当前 release manifest 只含 android-arm64（桌面壳待建）——test
+  // 通道「检查到更新 + 一键打开下载页」是当前平台约束下的诚实形态。
+  async function checkTestChannel(manual) {
+    try {
+      const resp = await fetch(WORKER_TEST_URL);
+      if (!resp.ok) {
+        if (manual) flashMessage("没有发现新版本。");
+        return;
+      }
+      const m = await resp.json();
+      if (!m?.version || !isNewerVersion(m.version, version)) {
+        if (manual) flashMessage("没有发现新版本。");
+        return;
+      }
+      const ok = await confirmDialog(t("ui.update_available", { version: m.version }), {
+        title: "P-Pass",
+      });
+      if (!ok) return;
+      // 优先资产直链（manifest 里 darwin 条目），没有则落到 release 页。
+      const entry =
+        m.platforms?.["darwin-aarch64"] ??
+        m.platforms?.["macos-arm64"] ??
+        m.platforms?.["macos-x64"];
+      const url =
+        entry?.url || `https://github.com/hawkeye-xb/P-Pass/releases/tag/v${m.version}`;
+      await openUrl(url);
+    } catch (e) {
+      console.warn("[updater] test channel check failed (silent):", e);
+      if (manual) flashMessage("没有发现新版本。");
+    }
+  }
+
   async function checkForUpdate(manual = true) {
+    // REL-02: test 通道走壳内检查（Worker 源）；stable 保持原 tauri
+    // updater 路径（语义不动）。
+    if (updateChannel === "test") {
+      await checkTestChannel(manual);
+      return;
+    }
     let update;
     try {
       update = await checkUpdate();
@@ -629,6 +694,19 @@
             </div>
             <div class="col">
               <div class="card">
+                <!-- REL-02: 更新通道（stable 默认 / test）——显式切换，
+                     默认永远 stable；test 通道走 Worker 源（GitHub API
+                     限流，客户端不直连）。 -->
+                <div class="setting-row">
+                  <span>更新通道</span>
+                  <select
+                    value={updateChannel}
+                    onchange={(e) => setUpdateChannel(e.currentTarget.value)}
+                  >
+                    <option value="stable">稳定版——只收正式发布</option>
+                    <option value="test">测试版——最新测试构建</option>
+                  </select>
+                </div>
                 <div class="setting-row">
                   <span>软件更新</span>
                   <button onclick={() => checkForUpdate(true)}>检查更新</button>

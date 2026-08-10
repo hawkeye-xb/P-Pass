@@ -12,6 +12,25 @@ loop + release pipeline land with T-071.
 在此定义；客户端读取/验签逻辑在 `crates/daemon/src/update.rs`（纯函数，单测覆盖）。
 抓取循环与发布管线归 T-071。
 
+## REL-02: 更新通道代理（Worker）
+
+本目录现在是 **Cloudflare Worker**（`src/index.ts` + `wrangler.toml` 占位，
+生产配置在 ppf-ops，隔离方案 §2）：
+
+- `GET /manifest?channel=test` — 最新 **prerelease** 的 manifest.json
+  （Worker 端调 GitHub API 解析最新 prerelease tag；客户端不直连 GitHub
+  API——未认证限流 60 次/小时/IP）。
+- `GET /manifest?channel=stable` — 代理 GitHub latest 的 manifest.json
+  （仅供测试对照；**stable 客户端保持直连 GitHub 原 URL，一个字节不动**）。
+
+特性：按 channel 缓存 300s（Cache API，客户端命中不碰 GitHub）；manifest
+字节原样透传（签名随字节不变，客户端验签零改动）；可选 secret `GH_TOKEN`
+提升 GitHub API 限额。反证：test 通道包留 draft 不 publish → Worker 404 →
+客户端静默无更新。
+
+部署：`wrangler deploy`（需 CF 账号，生产配置在 ppf-ops）；DNS 建议
+`update.p-pass.hawkeye-xb.com` → 本 worker。
+
 ## File layout / 文件布局
 
 ```
