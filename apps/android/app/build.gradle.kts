@@ -14,7 +14,15 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 5
-        versionName = "0.3.2"
+        // DESK-02①: 构建期注入完整版本串（release tag = "v0.3.2-test.2"，
+        // 去前导 v）——Android 端靠它推导更新通道（含 -test. → test）并
+        // 让连续 test tag 能自动升级（isNewer 预发布段比较）。本地/非 tag
+        // 构建回退固定版本号。
+        versionName =
+            System.getenv("PPF_BUILD_VERSION")
+                ?.takeIf { it.isNotBlank() }
+                ?.removePrefix("v")
+                ?: "0.3.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -110,14 +110,15 @@
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
-  // REL-02: 更新通道（stable 默认 / test）——localStorage 持久化，显式
-  // 切换，默认永远 stable（家人设备不被 test 构建波及）。
-  let updateChannel = $state(localStorage.getItem("pp_update_channel") || "stable");
-  function setUpdateChannel(ch) {
-    updateChannel = ch;
-    localStorage.setItem("pp_update_channel", ch);
-    checkForUpdate(false); // 切通道立即按新通道重查
-  }
+  // DESK-02①: 更新通道由构建推导——daemon status.version 带完整 tag
+  // （release 构建 = PPF_BUILD_VERSION 注入 "v0.3.2-test.2"），含 `-test.`
+  // → test 通道，否则 stable。零 UI、零持久化（旧 REL-02 显式切换已删）。
+  // 壳版本（tauri.conf.json）无 tag 后缀，daemon 不可达时回退壳版本（stable）。
+  const displayVersion = $derived(status?.version || version);
+  const updateChannel = $derived(
+    displayVersion.includes("-test.") ? "test" : "stable"
+  );
+  const isTestBuild = $derived(displayVersion.includes("-test."));
   // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
   let nowMs = $state(Date.now());
 
@@ -349,9 +350,10 @@
   let timer;
   onMount(() => {
     checkWizard();
-    refresh();
+    // DESK-02①: 更新检查放首次 status 落地后——updateChannel 由
+    // status.version（完整 tag）推导，避免启动竞态按壳版本误判 stable。
+    refresh().then(() => checkForUpdate(false));
     timer = setInterval(refresh, 3000); // 契约: 状态 3s 轮询
-    checkForUpdate(false);
     window.addEventListener("hashchange", onHashChange);
   });
   onDestroy(() => {
@@ -374,12 +376,26 @@
   const WORKER_TEST_URL = "https://update.p-pass.hawkeye-xb.com/manifest?channel=test";
 
   // SemVer 三段比较（与 Android UpdateChecker.isNewer 同语义）。
+  // DESK-02①: 同核心预发布按数字段比较（0.3.2-test.2 > 0.3.2-test.1）——
+  // test 通道连续 tag 自动升级的判据；正式 > 预发布（同核心）。
   function isNewerVersion(candidate, current) {
-    const c = String(candidate).split("-")[0].split(".").map((x) => parseInt(x, 10) || 0);
-    const cur = String(current).split("-")[0].split(".").map((x) => parseInt(x, 10) || 0);
+    const parse = (s) => {
+      const parts = String(s).split("-");
+      const nums = parts[0].split(".").map((x) => parseInt(x, 10) || 0);
+      return { nums, pre: parts[1] ?? null };
+    };
+    const c = parse(candidate);
+    const cur = parse(current);
     for (let i = 0; i < 3; i++) {
-      const d = (c[i] ?? 0) - (cur[i] ?? 0);
+      const d = (c.nums[i] ?? 0) - (cur.nums[i] ?? 0);
       if (d !== 0) return d > 0;
+    }
+    if (c.pre === null && cur.pre !== null) return true;
+    if (c.pre !== null && cur.pre === null) return false;
+    if (c.pre !== null && cur.pre !== null) {
+      const a = parseInt(c.pre.replace(/\D/g, "") || "0", 10);
+      const b = parseInt(cur.pre.replace(/\D/g, "") || "0", 10);
+      return a > b;
     }
     return false;
   }
@@ -704,19 +720,8 @@
             </div>
             <div class="col">
               <div class="card">
-                <!-- REL-02: 更新通道（stable 默认 / test）——显式切换，
-                     默认永远 stable；test 通道走 Worker 源（GitHub API
-                     限流，客户端不直连）。 -->
-                <div class="setting-row">
-                  <span>更新通道</span>
-                  <select
-                    value={updateChannel}
-                    onchange={(e) => setUpdateChannel(e.currentTarget.value)}
-                  >
-                    <option value="stable">稳定版——只收正式发布</option>
-                    <option value="test">测试版——最新测试构建</option>
-                  </select>
-                </div>
+                <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
+                     test），旧 REL-02 通道选择行已删。 -->
                 <div class="setting-row">
                   <span>软件更新</span>
                   <button onclick={() => checkForUpdate(true)}>检查更新</button>
@@ -803,8 +808,15 @@
       </div>
     {/if}
     <!-- T1: 版本号——报问题/排查时先知道装的是什么版本。 -->
-    {#if version}
-      <footer class="version-footer">P-Pass v{version}</footer>
+    {#if displayVersion}
+      <footer class="version-footer">
+        <span>P-Pass v{displayVersion}</span>
+        <!-- DESK-02①: 环境显式徽标——prerelease 构建琥珀小徽标（「测试版」），
+             环境在 UI 上一眼可辨，不靠用户读懂 -test 后缀；正式构建只显示版本号。 -->
+        {#if isTestBuild}
+          <span class="env-badge">测试版</span>
+        {/if}
+      </footer>
     {/if}
   </div>
 {/if}
@@ -1281,6 +1293,21 @@
     color: var(--pp-ink-40);
     opacity: 0.8;
     user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  /* DESK-02①: 环境徽标——prerelease 构建琥珀小徽标（测试版），
+     环境在 UI 上一眼可辨；正式构建不渲染。 */
+  .env-badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--pp-act-bg);
+    color: var(--pp-act);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
   }
   /* T4: 配对状态机模态 */
   .modal-backdrop {

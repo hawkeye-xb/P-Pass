@@ -114,11 +114,7 @@
     <string name="media_permission_denied_body">备份需要访问你的照片和视频，才能选择要备份的相册。请到系统设置中允许访问。</string>
     <!-- MOB-02 §一: 设置页低调立即备份入口（测试/狗粮用） -->
     <string name="manual_backup_entry">立即备份</string>
-    <!-- REL-02: 更新通道（stable 默认 / test） -->
-    <string name="update_channel">更新通道</string>
-    <string name="update_channel_stable">稳定版——只收正式发布</string>
-    <string name="update_channel_test">测试版——最新测试构建</string>
-    <string name="update_channel_switch_title">选择更新通道？</string>
+    <!-- REL-02/DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. → test）。 -->
     <!-- DEV-01: 重装识别开关 -->
     <string name="reinstall_hint_switch">重装识别</string>
     <string name="reinstall_hint_switch_hint">重装 App 后，电脑能认出这台手机，默认「替换旧的」不留僵尸记录。</string>

@@ -91,9 +91,6 @@ fun HomeScreen(
     onOpenAppSettings: () -> Unit = {},
     // MOB-02 §四事件①: Wi-Fi 要求不满足时触发已排队——显示提示行。
     wifiDeferred: Boolean = false,
-    // REL-02: 更新通道（stable 默认 / test）——切换必须显式（设置页）。
-    updateChannel: UpdateChannel = UpdateChannel.Stable,
-    onChannelChangeRequest: () -> Unit = {},
     // DEV-01: 重装识别开关（默认开）——关掉后配对不发 device_hint，
     // 重装后按旧行为出新设备行（电脑端不再默认「替换旧的」）。
     reinstallHintEnabled: Boolean = true,
@@ -476,32 +473,6 @@ fun HomeScreen(
                         "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                         fontSize = 14.sp, color = PPColor.Ink40,
                     )
-                }
-                // REL-02: 更新通道（stable 默认 / test）——显式切换，默认
-                // 永远 stable；家人设备不受 test 通道影响。
-                HorizontalDivider(color = PPColor.Divider)
-                Row(
-                    Modifier.fillMaxWidth()
-                        .clickable(onClick = onChannelChangeRequest)
-                        .padding(16.dp, 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.update_channel),
-                        fontSize = 15.sp, color = PPColor.Ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        stringResource(
-                            if (updateChannel == UpdateChannel.Stable) {
-                                R.string.update_channel_stable
-                            } else {
-                                R.string.update_channel_test
-                            }
-                        ),
-                        fontSize = 14.sp, color = PPColor.Ink40,
-                    )
-                    Text("›", fontSize = 16.sp, color = PPColor.Ink40)
                 }
                 // DEV-01: 重装识别开关——重装后重扫一次码，电脑端认出旧
                 // 设备、默认「替换旧的」不留僵尸行。关掉 = 行为回到

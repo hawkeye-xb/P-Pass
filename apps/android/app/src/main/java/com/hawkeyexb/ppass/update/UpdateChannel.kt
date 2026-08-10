@@ -1,11 +1,10 @@
-// REL-02: 更新通道（stable 默认 / test）——显式切换，默认永远 stable。
-// stable = GitHub latest（只认已发布的正式 release，人工 publish 即发布
-// 动作）；test = 最新 prerelease（CI 出 test tag 全绿后自动 publish）。
+// REL-02: 更新通道（stable / test）。
+// DESK-02①: 通道不再由用户切换——构建期 PPF_BUILD_VERSION 注入版本串，
+// channelFromVersion() 推导（含 `-test.` → test，否则 stable）。零 UI、
+// 零持久化；UpdateChannelStore 已随设置页通道行一并删除。
 package com.hawkeyexb.ppass.update
 
-import android.content.Context
-
-/** 更新通道。stable 默认；切换必须显式（设置页），绝不自动回退。 */
+/** 更新通道。正式构建永远 stable（家人设备不被 test 构建波及）。 */
 enum class UpdateChannel(val id: String) {
     Stable("stable"),
     Test("test"),
@@ -14,16 +13,5 @@ enum class UpdateChannel(val id: String) {
     companion object {
         fun fromId(id: String?): UpdateChannel =
             entries.firstOrNull { it.id == id } ?: Stable
-    }
-}
-
-class UpdateChannelStore(context: Context) {
-    private val prefs =
-        context.getSharedPreferences("update_channel", Context.MODE_PRIVATE)
-
-    fun load(): UpdateChannel = UpdateChannel.fromId(prefs.getString("channel", null))
-
-    fun save(channel: UpdateChannel) {
-        prefs.edit().putString("channel", channel.id).apply()
     }
 }

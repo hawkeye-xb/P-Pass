@@ -72,14 +72,21 @@ impl Db {
         Ok(())
     }
 
-    /// All devices, including revoked ones (the roster UI shows both).
-    pub async fn list_devices(&self) -> Result<Vec<Device>> {
-        let rows = sqlx::query(
+    /// All devices, or only in-use ones.
+    /// DESK-02②: 默认过滤已吊销/移除设备——列表只展示在用设备
+    /// （审计流有 device.revoked/unpaired 历史可查）。内部统计
+    /// （status.devices/revoked、export_logs）传 include_revoked=true。
+    pub async fn list_devices(&self, include_revoked: bool) -> Result<Vec<Device>> {
+        let sql = if include_revoked {
             "SELECT node_id, name, role, paired_at, last_seen, revoked, device_hint
-             FROM device ORDER BY paired_at ASC",
-        )
-        .fetch_all(self.pool())
-        .await?;
+             FROM device ORDER BY paired_at ASC"
+        } else {
+            "SELECT node_id, name, role, paired_at, last_seen, revoked, device_hint
+             FROM device WHERE revoked = 0 ORDER BY paired_at ASC"
+        };
+        let rows = sqlx::query(sql)
+            .fetch_all(self.pool())
+            .await?;
         Ok(rows
             .iter()
             .map(|r| Device {
@@ -312,12 +319,12 @@ mod tests {
         db.upsert_device(&device(1, Role::Owner)).await.unwrap();
         db.upsert_device(&device(2, Role::Viewer)).await.unwrap();
 
-        let devices = db.list_devices().await.unwrap();
+        let devices = db.list_devices(true).await.unwrap();
         assert_eq!(devices.len(), 2);
         assert!(devices.iter().all(|d| !d.revoked));
 
         assert!(db.revoke(&[2u8; 32]).await.unwrap());
-        let devices = db.list_devices().await.unwrap();
+        let devices = db.list_devices(true).await.unwrap();
         let d2 = devices.iter().find(|d| d.node_id == vec![2u8; 32]).unwrap();
         assert!(d2.revoked, "revocation must be reflected in list_devices");
         let d1 = devices.iter().find(|d| d.node_id == vec![1u8; 32]).unwrap();
@@ -337,9 +344,29 @@ mod tests {
         again.name = "renamed".into();
         db.upsert_device(&again).await.unwrap();
 
-        let devices = db.list_devices().await.unwrap();
+        let devices = db.list_devices(true).await.unwrap();
         assert_eq!(devices[0].name, "renamed");
         assert!(devices[0].revoked, "upsert must not silently un-revoke");
+    }
+
+    #[tokio::test]
+    async fn list_devices_filters_revoked_by_default() {
+        // DESK-02②: 家人与设备列表只展示在用设备——被移除/吊销的设备
+        // 不再挂着（审计流有 device.revoked/unpaired 历史可查）。
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(2, Role::Viewer)).await.unwrap();
+        assert!(db.revoke(&[2u8; 32]).await.unwrap());
+
+        // 默认（include_revoked=false）：只剩在用设备。
+        let active = db.list_devices(false).await.unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].node_id, vec![1u8; 32]);
+
+        // include_revoked=true：全量（status/export_logs 等内部统计用）。
+        let all = db.list_devices(true).await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().any(|d| d.revoked));
     }
 
     #[tokio::test]
