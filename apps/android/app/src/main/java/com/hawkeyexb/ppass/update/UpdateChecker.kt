@@ -44,7 +44,34 @@ data class UpdateInfo(
 private const val MANIFEST_URL =
     "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json"
 
+// REL-02 test 通道：GitHub API 拉最新 releases（per_page=10 足够覆盖
+// 活跃测试周期），取最新 prerelease 的 tag → 该 tag 的 manifest 资产
+// URL（不能用 latest/download——latest 天然忽略 prerelease）。
+private const val RELEASES_API_URL =
+    "https://api.github.com/repos/hawkeye-xb/P-Pass/releases?per_page=10"
+
 private val json = Json { ignoreUnknownKeys = true }
+
+/**
+ * REL-02: 从 GitHub releases API JSON 里找「最新 prerelease」的 manifest
+ * 资产 URL（纯函数，JVM 可测）。找不到（无 prerelease / 解析失败）→ null
+ * ——反证：test 通道包故意不 publish（留 draft）→ 这里必须返回 null。
+ */
+fun latestPrereleaseManifestUrl(releasesJson: String): String? = try {
+    val releases = json.decodeFromString<List<ReleaseEntry>>(releasesJson)
+    val pre = releases.firstOrNull { it.prerelease == true } ?: return null
+    pre.tagName?.let { tag ->
+        "https://github.com/hawkeye-xb/P-Pass/releases/download/$tag/manifest.json"
+    }
+} catch (_: Exception) {
+    null
+}
+
+@Serializable
+private data class ReleaseEntry(
+    @SerialName("tag_name") val tagName: String? = null,
+    val prerelease: Boolean? = null,
+)
 
 /** SemVer 三段数字比较：candidate 严格大于 current 才算更新（预发布后缀忽略）。 */
 fun isNewer(candidate: String, current: String): Boolean {
@@ -69,19 +96,40 @@ fun parseUpdateManifest(body: String, currentVersion: String): UpdateInfo? {
     }
 }
 
-/** 拉取并解析 manifest；无更新/不可达返回 null（静默，绝不打断启动）。 */
-suspend fun fetchUpdate(currentVersion: String): UpdateInfo? = withContext(Dispatchers.IO) {
-    try {
-        val conn = java.net.URL(MANIFEST_URL).openConnection() as java.net.HttpURLConnection
-        conn.connectTimeout = 8_000
-        conn.readTimeout = 8_000
-        conn.requestMethod = "GET"
-        if (conn.responseCode != 200) return@withContext null // draft/无 release = 无更新
-        val body = conn.inputStream.bufferedReader().use { it.readText() }
-        parseUpdateManifest(body, currentVersion)
-    } catch (_: Exception) {
-        null // 网络/解析失败一律静默——更新检查绝不能崩启动
+/**
+ * 拉取并解析 manifest；无更新/不可达返回 null（静默，绝不打断启动）。
+ * REL-02: 按通道取源——stable = GitHub latest（原 URL 语义不动）；
+ * test = GitHub API 最新 prerelease 的 manifest 资产。
+ */
+suspend fun fetchUpdate(currentVersion: String, channel: UpdateChannel = UpdateChannel.Stable): UpdateInfo? =
+    withContext(Dispatchers.IO) {
+        try {
+            val url = when (channel) {
+                UpdateChannel.Stable -> MANIFEST_URL
+                UpdateChannel.Test -> {
+                    val apiBody = httpGet(RELEASES_API_URL) ?: return@withContext null
+                    latestPrereleaseManifestUrl(apiBody) ?: return@withContext null
+                }
+            }
+            val body = httpGet(url) ?: return@withContext null
+            parseUpdateManifest(body, currentVersion)
+        } catch (_: Exception) {
+            null // 网络/解析失败一律静默——更新检查绝不能崩启动
+        }
     }
+
+/** GET 文本；非 200 / 网络失败返回 null。 */
+private fun httpGet(url: String): String? = try {
+    val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+    conn.connectTimeout = 8_000
+    conn.readTimeout = 8_000
+    conn.requestMethod = "GET"
+    // GitHub API 要 User-Agent（无 UA 403）。
+    conn.setRequestProperty("User-Agent", "P-Pass-UpdateChecker")
+    if (conn.responseCode != 200) null
+    else conn.inputStream.bufferedReader().use { it.readText() }
+} catch (_: Exception) {
+    null
 }
 
 /**

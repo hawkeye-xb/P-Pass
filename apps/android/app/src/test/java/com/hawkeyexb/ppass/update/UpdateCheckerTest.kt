@@ -67,4 +67,52 @@ class UpdateCheckerTest {
         assertNull(parseUpdateManifest("not json at all", "0.1.0"))
         assertNull(parseUpdateManifest("", "0.1.0"))
     }
+
+    // ── REL-02: test 通道——最新 prerelease 的 manifest URL（纯函数） ──
+
+    @Test
+    fun latestPrerelease_picksPrereleaseOverStable() {
+        // 列表里有正式 release + prerelease → 取 prerelease（GitHub API
+        // 按时间倒序返回；latest 忽略 prerelease，test 通道必须自己找）。
+        val body = """
+            [
+              {"tag_name": "v0.3.1", "prerelease": false, "draft": false},
+              {"tag_name": "v0.3.1-test.4", "prerelease": true, "draft": false},
+              {"tag_name": "v0.3.1-test.3", "prerelease": true, "draft": false}
+            ]
+        """.trimIndent()
+        assertEquals(
+            "https://github.com/hawkeye-xb/P-Pass/releases/download/v0.3.1-test.4/manifest.json",
+            latestPrereleaseManifestUrl(body),
+        )
+    }
+
+    @Test
+    fun latestPrerelease_none_returnsNull() {
+        // 反证：test 通道包故意不 publish（留 draft）→ 无 prerelease →
+        // 必须返回 null（test 通道检查不到更新）。
+        val body = """
+            [
+              {"tag_name": "v0.3.1", "prerelease": false, "draft": false},
+              {"tag_name": "v0.3.1-draft", "prerelease": false, "draft": true}
+            ]
+        """.trimIndent()
+        assertNull(latestPrereleaseManifestUrl(body))
+        // 空列表 / 垃圾输入同样 null。
+        assertNull(latestPrereleaseManifestUrl("[]"))
+        assertNull(latestPrereleaseManifestUrl("not json"))
+    }
+
+    @Test
+    fun latestPrerelease_draftPrereleaseStillCounts() {
+        // GitHub API 里 prerelease 与 draft 独立——test tag 自动 publish
+        // 为 prerelease 后 draft=false；这里验证只认 prerelease 标志。
+        val body = """
+            [{"tag_name": "v0.4.0-test.1", "prerelease": true, "draft": false}]
+        """.trimIndent()
+        assertEquals(
+            "https://github.com/hawkeye-xb/P-Pass/releases/download/v0.4.0-test.1/manifest.json",
+            latestPrereleaseManifestUrl(body),
+        )
+    }
 }

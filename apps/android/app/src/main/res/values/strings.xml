@@ -115,6 +115,11 @@
     <string name="partial_access_action">Open settings</string>
     <!-- MOB-02 §一: 设置页低调立即备份入口（测试/狗粮用） -->
     <string name="manual_backup_entry">Back up now</string>
+    <!-- REL-02: 更新通道（stable 默认 / test） -->
+    <string name="update_channel">Update channel</string>
+    <string name="update_channel_stable">Stable — only published releases</string>
+    <string name="update_channel_test">Test — latest test build</string>
+    <string name="update_channel_switch_title">Which update channel?</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">Background protection off</string>
     <string name="dog_battery_body">Tip: whitelist P-Pass in battery settings, so the system won\'t interrupt backups while the screen is off.</string>

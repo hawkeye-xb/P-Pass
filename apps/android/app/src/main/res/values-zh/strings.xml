@@ -111,6 +111,11 @@
     <string name="partial_access_action">去设置</string>
     <!-- MOB-02 §一: 设置页低调立即备份入口（测试/狗粮用） -->
     <string name="manual_backup_entry">立即备份</string>
+    <!-- REL-02: 更新通道（stable 默认 / test） -->
+    <string name="update_channel">更新通道</string>
+    <string name="update_channel_stable">稳定版——只收正式发布</string>
+    <string name="update_channel_test">测试版——最新测试构建</string>
+    <string name="update_channel_switch_title">选择更新通道？</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">后台保护未开启</string>
     <string name="dog_battery_body">建议：加入电池白名单，熄屏也不被系统打断。</string>
