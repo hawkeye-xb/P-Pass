@@ -85,3 +85,24 @@ FIX-T6 空集/范围口径；PERF-01 哈希缓存接口；水位/确认缓存/ex
 ## 收尾
 
 CI 绿；PROGRESS/NEXT/ROADMAP 各一行；卡移 done/。
+
+---
+
+## 验收记录（2026-08-11 Salamira）
+
+- 实现（全部照卡面用户定稿，交互/文案零走样）：见 PROGRESS.md MOB-02 行。
+- 本地：`./gradlew :app:assembleDebug :app:testDebugUnitTest` BUILD SUCCESSFUL，
+  **121/121** 绿（107 既有 + TriggerPolicyTest 9 + BackupAttemptStoreTest 3 +
+  TroubleTextTest 文案断言随定稿更新）。
+- CI：PR Checks run 31368510611（commit e3931ba）。
+- 技术坑记录：work-runtime 2.10 content trigger API 在 Constraints.Builder
+  （javap 反编译确认）；mockable android.jar SDK_INT=0 → Constraints.build()
+  SDK<24 分支把 delay 强制 -1 → WorkSpec 读不回 → 验收 2 用文件级接线反证
+  （DOG-01d 同款）+ 真机连拍日志覆盖（验收 8）。
+- 挂验收人：①模拟器 onboarding 全流程逐屏截图（本机模拟器不可用，同 MOB-01）；
+  ②三星真机 选相册→授权→自动首备份 全流程无死局；③连拍 20 张→只触发一次
+  备份（WorkManager 日志）；④部分授权引导卡观感；⑤「将在连上 Wi-Fi 后
+  进行」排队提示实机观感。
+- 反证说明：验收 1 反证（去掉充电豁免 → 测试红）由 `user_present_ignores_
+  charging_requirement` 锁死；验收 2 反证（去掉 update delay → 测试红）由
+  `content_trigger_wires_delays_in_constraints_builder` 文件级断言锁死。

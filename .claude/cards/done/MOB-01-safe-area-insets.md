@@ -31,3 +31,21 @@
 ## 收尾
 
 CI 绿；PROGRESS/NEXT 一行；卡移 done/。
+
+---
+
+## 验收记录（2026-08-11 Salamira）
+
+- 实现：MainActivity `enableEdgeToEdge()` + 新增 `ui/PPScreen.kt`（全应用唯一
+  安全区容器：背景铺满 + safeDrawingPadding，status bar/nav bar/cutout/IME
+  全让出；系统栏图标深浅随背景亮度自动切换）。全部页面接入：Welcome/Scan/
+  Joined/PairStatus + TwoTabs 壳（照片/备份/设置）+ Bucket + PhotoViewer +
+  VideoScreen。
+- 本地：`./gradlew :app:assembleDebug :app:testDebugUnitTest` BUILD SUCCESSFUL，
+  **107/107** 绿（唯一 warning 为既有 LocalLifecycleOwner 弃用，非本次引入）。
+- CI：PR Checks run 31366637154 **success**（commit 8d0b4b4）。
+- 模拟器项（验收 1/2/反证）未做：本机 VM 无嵌套虚拟化（HVF: HV_UNSUPPORTED），
+  TCG 软件模拟冷启动 >10min 未完成；按用户指令「验证不了的话可以先跳过，我来
+  验证」挂验收人。
+- 反证（待验收人执行）：去掉 insets 容器 → 模拟器三键导航下底部按钮必被遮。
+
