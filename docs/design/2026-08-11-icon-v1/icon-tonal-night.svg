@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- P-Pass 图标 · 色阶版 · 夜巡配色 -->
+  <rect width="1024" height="1024" fill="#211E1A"/>
+  <g stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 452 768" stroke="#FBF8F2"/>
+    <circle cx="300" cy="478" r="146" stroke="#FBF8F2"/>
+    <path d="M 452 768 L 496 706 L 512 768" stroke="#FBF8F2" stroke-linecap="butt"/>
+    <path d="M 512 768 L 528 830 L 572 768" stroke="#6B655C" stroke-linecap="butt"/>
+    <path d="M 572 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke="#6B655C"/>
+    <circle cx="724" cy="478" r="146" stroke="#6B655C"/>
+  </g>
+  <circle cx="300" cy="478" r="58" fill="#E4F1E8"/>
+  <circle cx="724" cy="478" r="58" fill="#E4F1E8"/>
+</svg>

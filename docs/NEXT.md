@@ -15,6 +15,7 @@
 | REL-02 更新双通道 | ✅ **已完成并推 main**（`96c61ae` `8b5362c`，android 124/124 + vite build 绿；Worker 部署 + 发 prerelease/正式 release 双端对照验收挂验收人） |
 | DEV-01 身份保全+重配对合并 | ⏳ 队列（下一张，已解挂，按 A 档做） |
 | FIX-SC2 blobs_resume | ⏳ 留队列等 CI 证据 |
+| ICON-01 图标接入构建 | 📋 待出卡（图标已定稿归档 docs/design/2026-08-11-icon-v1/，主图标=碳纹版） |
 
 ## 〇、2026-08-10 巡检轮（验收人）：周末 h10b 批次 review + 流程改制
 
