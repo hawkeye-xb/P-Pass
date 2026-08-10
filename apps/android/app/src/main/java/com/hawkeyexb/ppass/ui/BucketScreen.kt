@@ -47,9 +47,10 @@ fun BucketScreen(
     var checked by remember { mutableStateOf(selected) }
     var selectAll by remember { mutableStateOf(selected.size == buckets.size) }
 
-    Column(
-        Modifier.fillMaxSize().background(PPColor.Paper).padding(24.dp),
-    ) {
+    PPScreen {
+        Column(
+            Modifier.fillMaxSize().padding(24.dp),
+        ) {
         Text(
             stringResource(R.string.bucket_title),
             fontSize = 28.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
@@ -139,5 +140,6 @@ fun BucketScreen(
             )
         }
         Spacer(Modifier.height(6.dp))
+        }
     }
 }

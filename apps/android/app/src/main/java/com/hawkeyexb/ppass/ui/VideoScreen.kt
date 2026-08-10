@@ -63,32 +63,34 @@ fun VideoScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize().background(PPColor.SurfaceDark).padding(16.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(
-                stringResource(R.string.back), fontSize = 17.sp, color = PPColor.Paper,
-                modifier = Modifier.clickable(onClick = onClose).padding(10.dp),
-            )
-        }
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            when (val s = state) {
-                is VideoState.Fetching -> Text(
-                    stringResource(R.string.video_loading, s.percent),
-                    color = PPColor.PaperDim, fontSize = 16.sp,
+    PPScreen(background = PPColor.SurfaceDark) {
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    stringResource(R.string.back), fontSize = 17.sp, color = PPColor.Paper,
+                    modifier = Modifier.clickable(onClick = onClose).padding(10.dp),
                 )
-                is VideoState.Failed -> Text(
-                    stringResource(R.string.video_failed),
-                    color = PPColor.PaperDim, fontSize = 16.sp,
-                )
-                is VideoState.Ready -> AndroidView(
-                    modifier = Modifier.fillMaxSize(),
-                    factory = { ctx ->
-                        VideoView(ctx).apply {
-                            setVideoURI(Uri.fromFile(s.file))
-                            setOnPreparedListener { it.isLooping = true; start() }
-                        }
-                    },
-                )
+            }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                when (val s = state) {
+                    is VideoState.Fetching -> Text(
+                        stringResource(R.string.video_loading, s.percent),
+                        color = PPColor.PaperDim, fontSize = 16.sp,
+                    )
+                    is VideoState.Failed -> Text(
+                        stringResource(R.string.video_failed),
+                        color = PPColor.PaperDim, fontSize = 16.sp,
+                    )
+                    is VideoState.Ready -> AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = { ctx ->
+                            VideoView(ctx).apply {
+                                setVideoURI(Uri.fromFile(s.file))
+                                setOnPreparedListener { it.isLooping = true; start() }
+                            }
+                        },
+                    )
+                }
             }
         }
     }

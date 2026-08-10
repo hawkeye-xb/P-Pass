@@ -267,7 +267,8 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
         value = runCatching { loader.thumb(asset.hash, ThumbSize.S1024) }.getOrNull()
             ?: thumbCache.get("${asset.hash}/256")
     }
-    Column(Modifier.fillMaxSize().background(PPColor.SurfaceDark).padding(16.dp)) {
+    PPScreen(background = PPColor.SurfaceDark) {
+        Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
                 stringResource(R.string.back), fontSize = 17.sp, color = PPColor.Paper,
@@ -289,6 +290,7 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
             } else {
                 Text(stringResource(R.string.photos_loading), color = PPColor.PaperDim, fontSize = 16.sp)
             }
+        }
         }
     }
 }
