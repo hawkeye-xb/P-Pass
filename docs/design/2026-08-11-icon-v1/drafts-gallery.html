@@ -1,0 +1,717 @@
+<title>P-Pass 图标草稿 · P-P 猫眼</title>
+<style>
+  :root {
+    --paper: #FBF8F2;
+    --canvas: #EFE9DF;
+    --linen: #F1ECE3;
+    --ink: #171512;
+    --ink-60: #4A453E;
+    --ink-40: #6B655C;
+    --hairline: #E0D8CB;
+    --safe: #2E6B4F;
+    --safe-bg: #E4F1E8;
+    --dark: #211E1A;
+
+    --bg: var(--paper);
+    --card: #FFFFFF;
+    --card-edge: var(--hairline);
+    --fg: var(--ink);
+    --fg-sub: var(--ink-60);
+    --fg-meta: var(--ink-40);
+    --rule: var(--hairline);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #211E1A; --card: #2A2621; --card-edge: #3A352E;
+      --fg: #F1ECE3; --fg-sub: #CFC6B6; --fg-meta: #A79D8C; --rule: #3A352E;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #211E1A; --card: #2A2621; --card-edge: #3A352E;
+    --fg: #F1ECE3; --fg-sub: #CFC6B6; --fg-meta: #A79D8C; --rule: #3A352E;
+  }
+  :root[data-theme="light"] {
+    --bg: #FBF8F2; --card: #FFFFFF; --card-edge: #E0D8CB;
+    --fg: #171512; --fg-sub: #4A453E; --fg-meta: #6B655C; --rule: #E0D8CB;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.6;
+    margin: 0;
+    padding: 48px 24px 80px;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; }
+
+  header { margin-bottom: 40px; }
+  .eyebrow {
+    font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--safe); font-weight: 600; margin-bottom: 12px;
+  }
+  h1 {
+    font-family: Georgia, "Times New Roman", "Songti SC", "STSong", serif;
+    font-size: clamp(28px, 5vw, 40px); font-weight: 600;
+    margin: 0 0 10px; text-wrap: balance;
+  }
+  .principle {
+    color: var(--fg-sub); max-width: 34em; margin: 0;
+    font-size: 15px;
+  }
+  .principle em { font-style: normal; color: var(--safe); font-weight: 600; }
+
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 20px; margin-top: 8px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 16px;
+    padding: 26px 26px 22px;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .card.pick { border-color: var(--safe); border-width: 1.5px; }
+  .card h2 {
+    font-family: Georgia, "Songti SC", serif;
+    font-size: 20px; font-weight: 600; margin: 0;
+  }
+  .card h2 .tag {
+    font-family: -apple-system, "PingFang SC", sans-serif;
+    font-size: 11px; letter-spacing: 0.14em; color: var(--fg-meta);
+    font-weight: 500; margin-right: 10px; vertical-align: 2px;
+  }
+  .card p { margin: 0; color: var(--fg-sub); font-size: 14px; max-width: 36em; }
+
+  .stage { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; }
+  .hero-ico svg { display: block; border-radius: 22.6%; box-shadow: 0 2px 14px rgba(23,21,18,0.10); }
+  .ladder { display: flex; align-items: flex-end; gap: 14px; padding-bottom: 4px; }
+  .step { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .step svg { display: block; border-radius: 22.6%; }
+  .step small { font-size: 11px; color: var(--fg-meta); font-variant-numeric: tabular-nums; }
+
+  section { margin-top: 56px; }
+  section > h3 {
+    font-family: Georgia, "Songti SC", serif; font-size: 22px; font-weight: 600;
+    margin: 0 0 6px;
+  }
+  section > .lede { color: var(--fg-sub); font-size: 14px; margin: 0 0 22px; max-width: 40em; }
+
+  .shelf {
+    border-radius: 16px; padding: 26px 28px;
+    display: flex; gap: 26px; align-items: center; flex-wrap: wrap;
+  }
+  .shelf.light { background: var(--canvas); border: 1px solid var(--hairline); }
+  .shelf.dark  { background: #14110E; }
+  .shelf .slot { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .shelf .slot svg { display: block; border-radius: 22.6%; }
+  .shelf .slot.round svg { border-radius: 50%; }
+  .shelf .slot span { font-size: 11px; }
+  .shelf.light .slot span { color: var(--ink-40); }
+  .shelf.dark  .slot span { color: #A79D8C; }
+  .neighbor { width: 72px; height: 72px; border-radius: 16px; opacity: 0.55; }
+  .n1 { background: linear-gradient(135deg, #C9761E, #B5341F); }
+  .n2 { background: linear-gradient(135deg, #4A453E, #171512); }
+  .n3 { background: linear-gradient(135deg, #2E6B4F, #6B655C); }
+
+  .archive .card { opacity: 0.82; }
+  .archive .hero-ico svg { box-shadow: none; }
+
+  .note {
+    margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--rule);
+    color: var(--fg-meta); font-size: 13px; max-width: 44em;
+  }
+  .note strong { color: var(--fg-sub); }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">P-Pass · Icon Drafts · 第九轮 · 终调</div>
+    <h1>分界严格过中心</h1>
+    <p class="principle">终调两处：斑马纹加粗（纹 36 / 隙 32）；<em>虚实分界严格切在画布中心</em>——闪电中段那条斜线恰好穿过 (512,768)，颜色就在这个点上换：左半墨、右半浅墨/斑马纹，切口垂直于斜线，实侧不再越界半分。</p>
+  </header>
+
+  <!-- symbol 定义 -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <!-- 碳纤维斜纹 pattern（45°，墨/透明相间） -->
+      <pattern id="cfLight" patternUnits="userSpaceOnUse" width="68" height="68" patternTransform="rotate(45)">
+        <rect width="36" height="68" fill="#171512"/>
+      </pattern>
+      <pattern id="cfDark" patternUnits="userSpaceOnUse" width="68" height="68" patternTransform="rotate(45)">
+        <rect width="36" height="68" fill="#FBF8F2"/>
+      </pattern>
+
+      <!-- O 色阶版：折线闪电 + 右半浅墨 ink-40 -->
+      <symbol id="icoO" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 452 768" stroke="#171512"/>
+          <circle cx="300" cy="478" r="146" stroke="#171512"/>
+          <path d="M 452 768 L 496 706 L 512 768" stroke="#171512" stroke-linecap="butt"/>
+          <path d="M 512 768 L 528 830 L 572 768" stroke="#6B655C" stroke-linecap="butt"/>
+          <path d="M 572 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke="#6B655C"/>
+          <circle cx="724" cy="478" r="146" stroke="#6B655C"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+      </symbol>
+
+      <!-- O 夜巡配色 -->
+      <symbol id="icoOd" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#211E1A"/>
+        <g stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 452 768" stroke="#FBF8F2"/>
+          <circle cx="300" cy="478" r="146" stroke="#FBF8F2"/>
+          <path d="M 452 768 L 496 706 L 512 768" stroke="#FBF8F2" stroke-linecap="butt"/>
+          <path d="M 512 768 L 528 830 L 572 768" stroke="#6B655C" stroke-linecap="butt"/>
+          <path d="M 572 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke="#6B655C"/>
+          <circle cx="724" cy="478" r="146" stroke="#6B655C"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#E4F1E8"/>
+        <circle cx="724" cy="478" r="58" fill="#E4F1E8"/>
+      </symbol>
+
+      <!-- P 碳纹版：折线闪电 + 右半 45° 斜纹描边 -->
+      <symbol id="icoP" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 452 768" stroke="#171512"/>
+          <circle cx="300" cy="478" r="146" stroke="#171512"/>
+          <path d="M 452 768 L 496 706 L 512 768" stroke="#171512" stroke-linecap="butt"/>
+          <path d="M 512 768 L 528 830 L 572 768" stroke="url(#cfLight)" stroke-linecap="butt"/>
+          <path d="M 572 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke="url(#cfLight)"/>
+          <circle cx="724" cy="478" r="146" stroke="url(#cfLight)"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+      </symbol>
+
+      <!-- P 夜巡配色 -->
+      <symbol id="icoPd" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#211E1A"/>
+        <g stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 452 768" stroke="#FBF8F2"/>
+          <circle cx="300" cy="478" r="146" stroke="#FBF8F2"/>
+          <path d="M 452 768 L 496 706 L 512 768" stroke="#FBF8F2" stroke-linecap="butt"/>
+          <path d="M 512 768 L 528 830 L 572 768" stroke="url(#cfDark)" stroke-linecap="butt"/>
+          <path d="M 572 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke="url(#cfDark)"/>
+          <circle cx="724" cy="478" r="146" stroke="url(#cfDark)"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#E4F1E8"/>
+        <circle cx="724" cy="478" r="58" fill="#E4F1E8"/>
+      </symbol>
+
+      <!-- M 浅墨右半 + 镂空闪电（推荐）：右半用 ink-40，嘴央闪电为负空间 -->
+      <symbol id="icoM" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke-width="72" stroke-linecap="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 512 768" stroke="#171512"/>
+          <circle cx="300" cy="478" r="146" stroke="#171512"/>
+          <path d="M 512 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke="#6B655C"/>
+          <circle cx="724" cy="478" r="146" stroke="#6B655C"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+        <!-- 镂空闪电：背景色刻进嘴条 -->
+        <path d="M 536 700 L 484 770 L 524 758 L 492 832" stroke="#FBF8F2" stroke-width="34" stroke-linecap="butt" stroke-linejoin="miter" fill="none"/>
+      </symbol>
+
+      <!-- M 夜巡配色：右半用 hairline 浅纸档 -->
+      <symbol id="icoMd" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#211E1A"/>
+        <g stroke-width="72" stroke-linecap="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 512 768" stroke="#FBF8F2"/>
+          <circle cx="300" cy="478" r="146" stroke="#FBF8F2"/>
+          <path d="M 512 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke="#6B655C"/>
+          <circle cx="724" cy="478" r="146" stroke="#6B655C"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#E4F1E8"/>
+        <circle cx="724" cy="478" r="58" fill="#E4F1E8"/>
+        <path d="M 536 700 L 484 770 L 524 758 L 492 832" stroke="#211E1A" stroke-width="34" stroke-linecap="butt" stroke-linejoin="miter" fill="none"/>
+      </symbol>
+
+      <!-- N 短划线版：右半规整短划线 + 同款镂空闪电 -->
+      <symbol id="icoN" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 512 768"/>
+          <circle cx="300" cy="478" r="146"/>
+          <path d="M 512 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke-dasharray="70 58"/>
+          <circle cx="724" cy="478" r="146" stroke-dasharray="70 61"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+        <path d="M 536 700 L 484 770 L 524 758 L 492 832" stroke="#FBF8F2" stroke-width="34" stroke-linecap="butt" stroke-linejoin="miter" fill="none"/>
+      </symbol>
+
+      <!-- L 闪电虚实：左半实线，右半圆点虚线，嘴中央小闪电连接 -->
+      <symbol id="icoL" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- 左半：角-竖线-嘴（实） -->
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 452 768"/>
+          <circle cx="300" cy="478" r="146"/>
+          <!-- 中央小闪电（实，连接虚实两半） -->
+          <path d="M 452 768 L 496 706 L 528 830 L 572 768"/>
+          <!-- 右半：嘴-竖线-角（圆点虚线） -->
+          <path d="M 572 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke-dasharray="0 110"/>
+          <circle cx="724" cy="478" r="146" stroke-dasharray="0 91.7"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+      </symbol>
+
+      <!-- L 夜巡配色 -->
+      <symbol id="icoLd" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#211E1A"/>
+        <g stroke="#FBF8F2" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 452 768"/>
+          <circle cx="300" cy="478" r="146"/>
+          <path d="M 452 768 L 496 706 L 528 830 L 572 768"/>
+          <path d="M 572 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke-dasharray="0 110"/>
+          <circle cx="724" cy="478" r="146" stroke-dasharray="0 91.7"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#E4F1E8"/>
+        <circle cx="724" cy="478" r="58" fill="#E4F1E8"/>
+      </symbol>
+
+      <!-- J 屋脊兽（间距修订）：眼嘴净空 = 一个笔画宽 72 -->
+      <symbol id="icoJ" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256"/>
+          <circle cx="300" cy="478" r="146"/>
+          <circle cx="724" cy="478" r="146"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+      </symbol>
+
+      <!-- J 夜巡配色 -->
+      <symbol id="icoJd" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#211E1A"/>
+        <g stroke="#FBF8F2" stroke-width="72" stroke-linecap="round" fill="none">
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256"/>
+          <circle cx="300" cy="478" r="146"/>
+          <circle cx="724" cy="478" r="146"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#E4F1E8"/>
+        <circle cx="724" cy="478" r="58" fill="#E4F1E8"/>
+      </symbol>
+
+      <!-- J₀ 初版存档（眼嘴净空仅 12） -->
+      <symbol id="icoJ0" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+          <path d="M 110 286 Q 154 308 154 362 L 154 658 Q 154 738 234 738 L 790 738 Q 870 738 870 658 L 870 362 Q 870 308 914 286"/>
+          <circle cx="300" cy="508" r="146"/>
+          <circle cx="724" cy="508" r="146"/>
+        </g>
+        <circle cx="300" cy="508" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="508" r="58" fill="#2E6B4F"/>
+      </symbol>
+
+      <!-- K 瓦当：圆牌边框 + 缩放的兽面（同步新间距） -->
+      <symbol id="icoK" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <circle cx="512" cy="512" r="424" fill="none" stroke="#171512" stroke-width="52"/>
+        <g transform="translate(194.56,194.56) scale(0.62)">
+          <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+            <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256"/>
+            <circle cx="300" cy="478" r="146"/>
+            <circle cx="724" cy="478" r="146"/>
+          </g>
+          <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+          <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+        </g>
+      </symbol>
+
+      <!-- H 面对面：右 P 镜像，外侧双竖线连成整条嘴，完全对称 -->
+      <symbol id="icoH" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+          <path d="M 154 324 L 154 620 Q 154 700 234 700 L 790 700 Q 870 700 870 620 L 870 324"/>
+          <circle cx="300" cy="470" r="146"/>
+          <circle cx="724" cy="470" r="146"/>
+        </g>
+        <circle cx="300" cy="470" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="470" r="58" fill="#2E6B4F"/>
+      </symbol>
+
+      <!-- H 夜巡配色 -->
+      <symbol id="icoHd" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#211E1A"/>
+        <g stroke="#FBF8F2" stroke-width="72" stroke-linecap="round" fill="none">
+          <path d="M 154 324 L 154 620 Q 154 700 234 700 L 790 700 Q 870 700 870 620 L 870 324"/>
+          <circle cx="300" cy="470" r="146"/>
+          <circle cx="724" cy="470" r="146"/>
+        </g>
+        <circle cx="300" cy="470" r="58" fill="#E4F1E8"/>
+        <circle cx="724" cy="470" r="58" fill="#E4F1E8"/>
+      </symbol>
+
+      <!-- I 正字版：P-P 不镜像，嘴独立居中（保守对照） -->
+      <symbol id="icoI" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+          <line x1="154" y1="324" x2="154" y2="640"/>
+          <circle cx="300" cy="470" r="146"/>
+          <line x1="578" y1="324" x2="578" y2="640"/>
+          <circle cx="724" cy="470" r="146"/>
+        </g>
+        <circle cx="300" cy="470" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="470" r="58" fill="#2E6B4F"/>
+        <rect x="442" y="700" width="140" height="32" rx="16" fill="#171512"/>
+      </symbol>
+
+      <!-- G = E+F 结合：等大双眼绿瞳，右竖线拐弯连成居中的嘴 -->
+      <symbol id="icoG" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <line x1="154" y1="324" x2="154" y2="700"/>
+          <circle cx="300" cy="470" r="146"/>
+          <path d="M 578 324 L 578 700 L 446 700"/>
+          <circle cx="724" cy="470" r="146"/>
+        </g>
+        <circle cx="300" cy="470" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="470" r="58" fill="#2E6B4F"/>
+      </symbol>
+
+      <!-- G 夜巡配色 -->
+      <symbol id="icoGd" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#211E1A"/>
+        <g stroke="#FBF8F2" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <line x1="154" y1="324" x2="154" y2="700"/>
+          <circle cx="300" cy="470" r="146"/>
+          <path d="M 578 324 L 578 700 L 446 700"/>
+          <circle cx="724" cy="470" r="146"/>
+        </g>
+        <circle cx="300" cy="470" r="58" fill="#E4F1E8"/>
+        <circle cx="724" cy="470" r="58" fill="#E4F1E8"/>
+      </symbol>
+
+      <!-- E 鼻影连嘴：左 P 眼镜眼，右 P 实心鼻影 + 竖线拐弯连成嘴 -->
+      <symbol id="icoE" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <line x1="208" y1="284" x2="208" y2="680"/>
+          <circle cx="354" cy="430" r="146"/>
+          <path d="M 632 284 L 632 660 L 494 660"/>
+        </g>
+        <circle cx="354" cy="430" r="58" fill="#2E6B4F"/>
+        <circle cx="742" cy="430" r="110" fill="#171512"/>
+      </symbol>
+
+      <!-- F 双眼+嘴：A 的修正——竖线缩短，横杠挪到嘴巴位置居中 -->
+      <symbol id="icoF" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+          <line x1="154" y1="284" x2="154" y2="680"/>
+          <circle cx="300" cy="430" r="146"/>
+          <line x1="578" y1="284" x2="578" y2="680"/>
+          <circle cx="724" cy="430" r="146"/>
+        </g>
+        <circle cx="300" cy="430" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="430" r="58" fill="#2E6B4F"/>
+        <rect x="452" y="718" width="120" height="30" rx="15" fill="#171512"/>
+      </symbol>
+
+      <!-- E 夜巡配色版 -->
+      <symbol id="icoEd" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#211E1A"/>
+        <g stroke="#FBF8F2" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <line x1="208" y1="284" x2="208" y2="680"/>
+          <circle cx="354" cy="430" r="146"/>
+          <path d="M 632 284 L 632 660 L 494 660"/>
+        </g>
+        <circle cx="354" cy="430" r="58" fill="#E4F1E8"/>
+        <circle cx="742" cy="430" r="110" fill="#FBF8F2"/>
+      </symbol>
+
+      <!-- 第一轮存档 -->
+      <symbol id="icoA" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+          <line x1="154" y1="284" x2="154" y2="756"/>
+          <circle cx="300" cy="430" r="146"/>
+          <line x1="578" y1="284" x2="578" y2="756"/>
+          <circle cx="724" cy="430" r="146"/>
+        </g>
+        <circle cx="300" cy="430" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="430" r="58" fill="#2E6B4F"/>
+        <rect x="486" y="546" width="52" height="28" rx="14" fill="#171512"/>
+      </symbol>
+      <symbol id="icoB" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+          <line x1="154" y1="284" x2="154" y2="756"/>
+          <circle cx="300" cy="430" r="146"/>
+          <line x1="578" y1="284" x2="578" y2="756"/>
+          <path d="M 598 430 Q 724 548 850 430"/>
+        </g>
+        <circle cx="300" cy="430" r="58" fill="#2E6B4F"/>
+        <rect x="486" y="546" width="52" height="28" rx="14" fill="#171512"/>
+      </symbol>
+      <symbol id="icoC" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#211E1A"/>
+        <g stroke="#FBF8F2" stroke-width="72" stroke-linecap="round" fill="none">
+          <line x1="154" y1="284" x2="154" y2="756"/>
+          <circle cx="300" cy="430" r="146"/>
+          <line x1="578" y1="284" x2="578" y2="756"/>
+          <circle cx="724" cy="430" r="146"/>
+        </g>
+        <circle cx="300" cy="430" r="58" fill="#E4F1E8"/>
+        <circle cx="724" cy="430" r="58" fill="#E4F1E8"/>
+        <rect x="486" y="546" width="52" height="28" rx="14" fill="#FBF8F2"/>
+      </symbol>
+      <symbol id="icoD" viewBox="0 0 1024 1024">
+        <rect width="1024" height="1024" fill="#EFE9DF"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+          <line x1="154" y1="284" x2="154" y2="756"/>
+          <circle cx="300" cy="430" r="146"/>
+          <line x1="578" y1="284" x2="578" y2="756"/>
+          <circle cx="724" cy="430" r="146"/>
+        </g>
+        <circle cx="300" cy="430" r="58" fill="#171512"/>
+        <circle cx="724" cy="430" r="58" fill="#171512"/>
+      </symbol>
+    </defs>
+  </svg>
+
+  <div class="grid">
+    <div class="card pick">
+      <h2><span class="tag">O</span>色阶版（折线闪电回归）</h2>
+      <p>线在嘴巴正中走出一道闪电（上个折线版），右半整段换浅墨 <strong>ink-40</strong>——虚实用色阶说，不再有任何虚线。闪电以中点为界严格分色：左半墨、右半浅墨，切口精确落在画布中心 (512,768)——实侧不再越界。</p>
+      <div class="stage">
+        <div class="hero-ico"><svg width="176" height="176"><use href="#icoO"/></svg></div>
+        <div class="ladder">
+          <div class="step"><svg width="64" height="64"><use href="#icoO"/></svg><small>64</small></div>
+          <div class="step"><svg width="40" height="40"><use href="#icoO"/></svg><small>40</small></div>
+          <div class="step"><svg width="24" height="24"><use href="#icoO"/></svg><small>24</small></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="tag">O·夜</span>同款夜巡配色</h2>
+      <p>左半纸白，右半压暗一档，闪电纸白。</p>
+      <div class="stage">
+        <div class="hero-ico"><svg width="176" height="176"><use href="#icoOd"/></svg></div>
+        <div class="ladder">
+          <div class="step"><svg width="64" height="64"><use href="#icoOd"/></svg><small>64</small></div>
+          <div class="step"><svg width="40" height="40"><use href="#icoOd"/></svg><small>40</small></div>
+          <div class="step"><svg width="24" height="24"><use href="#icoOd"/></svg><small>24</small></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="tag">P</span>碳纹版（斑马纹试验）</h2>
+      <p>你说的碳纤维质感：右半笔画填 <strong>45° 墨/透明相间斜纹</strong>（纹宽 36 / 隙 32，比上版更粗犷）。闪电同样中点分色，虚侧那半也是斑马纹。大尺寸下材质感明显；40px 以下斜纹会糊成半灰——视觉上自动退化成 O 的色阶效果，不算坏。</p>
+      <div class="stage">
+        <div class="hero-ico"><svg width="176" height="176"><use href="#icoP"/></svg></div>
+        <div class="ladder">
+          <div class="step"><svg width="64" height="64"><use href="#icoP"/></svg><small>64</small></div>
+          <div class="step"><svg width="40" height="40"><use href="#icoP"/></svg><small>40</small></div>
+          <div class="step"><svg width="24" height="24"><use href="#icoP"/></svg><small>24</small></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="tag">P·夜</span>同款夜巡配色</h2>
+      <p>墨底上纸白斜纹——像夜里百叶窗漏进来的光。</p>
+      <div class="stage">
+        <div class="hero-ico"><svg width="176" height="176"><use href="#icoPd"/></svg></div>
+        <div class="ladder">
+          <div class="step"><svg width="64" height="64"><use href="#icoPd"/></svg><small>64</small></div>
+          <div class="step"><svg width="40" height="40"><use href="#icoPd"/></svg><small>40</small></div>
+          <div class="step"><svg width="24" height="24"><use href="#icoPd"/></svg><small>24</small></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="tag">J</span>屋脊兽（间距修订）</h2>
+      <p>眼嘴间距按「留白节奏 = 笔画节奏」重排：眼圈外缘到嘴线的净空从 12 加到 <strong>正好一个笔画宽（72）</strong>，嘴线落在脸高 75%、眼心在 47%——挤的感觉没了，脸也更沉稳。角、对称、居中全部保持（脚本复验）。</p>
+      <div class="stage">
+        <div class="hero-ico"><svg width="176" height="176"><use href="#icoJ"/></svg></div>
+        <div class="ladder">
+          <div class="step"><svg width="64" height="64"><use href="#icoJ"/></svg><small>64</small></div>
+          <div class="step"><svg width="40" height="40"><use href="#icoJ"/></svg><small>40</small></div>
+          <div class="step"><svg width="24" height="24"><use href="#icoJ"/></svg><small>24</small></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="tag">J·夜</span>同款夜巡配色</h2>
+      <p>墨底纸线，瞳孔换 safe-bg 浅绿——夜里蹲在屋脊上的那只。</p>
+      <div class="stage">
+        <div class="hero-ico"><svg width="176" height="176"><use href="#icoJd"/></svg></div>
+        <div class="ladder">
+          <div class="step"><svg width="64" height="64"><use href="#icoJd"/></svg><small>64</small></div>
+          <div class="step"><svg width="40" height="40"><use href="#icoJd"/></svg><small>40</small></div>
+          <div class="step"><svg width="24" height="24"><use href="#icoJd"/></svg><small>24</small></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="tag">K</span>瓦当</h2>
+      <p>同一张兽面装进圆牌——檐头瓦当的形制，天然适配圆形遮罩，做徽章/水印/「关于」页图章都好用。可以和 J 配成一套：J 当主图标，K 当圆形场合的变体。</p>
+      <div class="stage">
+        <div class="hero-ico"><svg width="176" height="176"><use href="#icoK"/></svg></div>
+        <div class="ladder">
+          <div class="step"><svg width="64" height="64"><use href="#icoK"/></svg><small>64</small></div>
+          <div class="step"><svg width="40" height="40"><use href="#icoK"/></svg><small>40</small></div>
+          <div class="step"><svg width="24" height="24"><use href="#icoK"/></svg><small>24</small></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <section>
+    <h3>放进真实环境看看</h3>
+    <p class="lede">左：macOS 程序坞（浅色）。右：手机深色主屏 + 圆形遮罩。邻居是占位色块，只为看对比度和存在感。</p>
+    <div style="display:grid; gap:16px;">
+      <div class="shelf light">
+        <div class="neighbor n1"></div>
+        <div class="slot"><svg width="72" height="72"><use href="#icoO"/></svg><span>O</span></div>
+        <div class="slot"><svg width="72" height="72"><use href="#icoP"/></svg><span>P</span></div>
+        <div class="neighbor n2"></div>
+        <div class="slot"><svg width="72" height="72"><use href="#icoJ"/></svg><span>J</span></div>
+        <div class="neighbor n3"></div>
+      </div>
+      <div class="shelf dark">
+        <div class="neighbor n1"></div>
+        <div class="slot"><svg width="72" height="72"><use href="#icoO"/></svg><span>O</span></div>
+        <div class="slot"><svg width="72" height="72"><use href="#icoOd"/></svg><span>O·夜</span></div>
+        <div class="slot round"><svg width="72" height="72"><use href="#icoO"/></svg><span>O · 圆遮罩</span></div>
+        <div class="slot round"><svg width="72" height="72"><use href="#icoPd"/></svg><span>P·夜 · 圆遮罩</span></div>
+        <div class="neighbor n2"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="archive">
+    <h3>历轮存档</h3>
+    <p class="lede">留着对照：第四轮 H 面对面 / I 正字版；第三轮 G；第二轮 E / F；第一轮 A / B / C / D。</p>
+    <div class="grid">
+      <div class="card">
+        <h2><span class="tag">L</span>圆点虚线版（已否）</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoL"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoL"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoL"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">J₀</span>屋脊兽初版（净空 12，对照）</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoJ0"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoJ0"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoJ0"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">H</span>面对面</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoH"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoH"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoH"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">I</span>正字版</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoI"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoI"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoI"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">G</span>E+F 连嘴版</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoG"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoG"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoG"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">E</span>鼻影连嘴</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoE"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoE"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoE"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">F</span>双眼+嘴</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoF"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoF"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoF"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">A</span>绿瞳猫眼</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoA"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoA"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoA"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">B</span>眨眼</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoB"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoB"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoB"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">C</span>夜巡</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoC"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoC"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoC"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h2><span class="tag">D</span>纯字标</h2>
+        <div class="stage">
+          <div class="hero-ico"><svg width="120" height="120"><use href="#icoD"/></svg></div>
+          <div class="ladder">
+            <div class="step"><svg width="40" height="40"><use href="#icoD"/></svg><small>40</small></div>
+            <div class="step"><svg width="24" height="24"><use href="#icoD"/></svg><small>24</small></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <p class="note"><strong>还能调的旋钮：</strong>闪电颜色可换琥珀 waiting（=「传输中」的含义色，会多一种颜色你拍板）；O 右半深浅（ink-40 → ink-60 更接近主色）；P 的斜纹角度/密度（45°/纹 28 隙 24，可更细密更"碳"）；折线闪电振幅。定稿后出正式资产：macOS <code>.icns</code> + 托盘模板图标、Android 自适应图标分层版、SVG 源入库 <code>assets/design/</code>。</p>
+</div>

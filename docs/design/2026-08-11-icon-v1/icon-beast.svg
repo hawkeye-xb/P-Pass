@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- P-Pass 图标 · 屋脊兽版（全实线）：≤40px 小尺寸档的退化基准，
+       托盘/favicon 等最小场合用它，碳纹在小尺寸会糊。 -->
+  <rect width="1024" height="1024" fill="#FBF8F2"/>
+  <g stroke="#171512" stroke-width="72" stroke-linecap="round" fill="none">
+    <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256"/>
+    <circle cx="300" cy="478" r="146"/>
+    <circle cx="724" cy="478" r="146"/>
+  </g>
+  <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+  <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+</svg>
