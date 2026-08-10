@@ -420,7 +420,7 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
     assert!(resp.ok, "{resp:?}");
     assert_eq!(resp.result.unwrap()["device"], "设备B");
     let resp = c.call("pairing.pending", serde_json::Value::Null).await;
-    let list: Vec<String> = resp.result.unwrap()["pending"]
+    let mut list: Vec<String> = resp.result.unwrap()["pending"]
         .as_array()
         .unwrap()
         .iter()
@@ -431,6 +431,8 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
                 .to_string()
         })
         .collect();
+    // 并发入队顺序不保证——排序后断言集合等价。
+    list.sort();
     assert_eq!(list, vec!["设备A".to_string(), "设备C".to_string()]);
 
     // 剩下两台按名拒绝 → 全清 → 列表空 + status.pending_pairs = 0。
