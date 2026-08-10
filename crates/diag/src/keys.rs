@@ -70,6 +70,10 @@ msg_keys! {
     UI_PENDING_PAIRS => "ui.pending_pairs",
     UI_ALLOW => "ui.allow",
     UI_DENY => "ui.deny",
+    /// DEV-01: owner picks "replace the old device" in the confirm dialog.
+    UI_ALLOW_REPLACE => "ui.allow_replace",
+    /// DEV-01: owner picks "join as a brand-new device" instead.
+    UI_ALLOW_NEW => "ui.allow_new",
     UI_ADD_DEVICE => "ui.add_device",
     UI_GENERATE_QR => "ui.generate_qr",
     UI_QR_FALLBACK => "ui.qr_fallback",
@@ -189,10 +193,12 @@ mod tests {
             UI_UPDATE_AVAILABLE,
             UI_UPDATE_INSTALLED,
             UI_UPDATE_FAILED,
+            UI_ALLOW_REPLACE,
+            UI_ALLOW_NEW,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 66);
+        assert_eq!(ALL.len(), 68);
     }
 
     #[test]
