@@ -65,9 +65,9 @@
     if (!yes) return;
     try {
       await invoke("stop_daemon");
-      message = t("ui.service_stopped");
+      flashMessage(t("ui.service_stopped"));
     } catch (e) {
-      message = t("ui.stop_failed", { err: String(e) });
+      flashMessage(t("ui.stop_failed", { err: String(e) }));
     }
   }
 
@@ -76,7 +76,7 @@
     try {
       await invoke("start_daemon");
     } catch (e) {
-      message = t("ui.start_failed", { err: String(e) });
+      flashMessage(t("ui.start_failed", { err: String(e) }));
     } finally {
       setTimeout(() => (starting = false), 3000);
     }
@@ -89,6 +89,11 @@
   let qrText = $state("");
   let message = $state("");
   let pendingCount = $state(0);
+  // UX-08: 待确认配对请求全量列表（pairing.pending）——一屏一行，逐行
+  // 允许/拒绝；处理完该行消失，全清后模态关闭，无残留状态。
+  let pendingList = $state([]);
+  // UX-08: 提示条 5s 自动消失（右侧 × 手动关闭）的定时器句柄。
+  let messageTimer = null;
   // T4 (H-10b): 配对状态机——二维码是弹窗模块，不是常驻卡片。有人扫码
   // （pending 出现）→ 关二维码弹窗 → 切「允许/拒绝」模态 → 处理完关闭，
   // 状态消失（不再一直占空间）。审计记录在 T5。
@@ -112,16 +117,33 @@
     return await invoke("daemon_call", { method, params });
   }
 
+  // UX-08: 提示条——5s 自动消失 + 右侧 × 手动关闭，两者都要。
+  // 反证：把自动消失定时器去掉 → 验收 2 必挂（提示条常驻）。
+  function flashMessage(msg) {
+    message = msg;
+    clearTimeout(messageTimer);
+    messageTimer = setTimeout(() => (message = ""), 5000);
+  }
+
   async function refresh() {
     try {
       status = await call("status");
       online = true;
       pendingCount = status.pending_pairs ?? 0;
+      // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
+      // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
+      try {
+        const p = await call("pairing.pending", {});
+        pendingList = p.pending ?? [];
+      } catch (_) {
+        pendingList = [];
+      }
       // T4: pending 从无到有 = 有人扫了码——关二维码弹窗、打开允许/拒绝。
-      if (pendingCount > 0 && showPairModal) {
+      // UX-08: 一屏列全部 pending，逐行处理；全清后关闭，无残留。
+      if (pendingList.length > 0 && showPairModal) {
         showPairModal = false;
         showConfirmModal = true;
-      } else if (pendingCount === 0 && showConfirmModal) {
+      } else if (pendingList.length === 0 && showConfirmModal) {
         // 已处理完（confirmPair 清空 pending）——状态消失，不残留。
         showConfirmModal = false;
       }
@@ -221,7 +243,7 @@
         errorCorrectionLevel: "L",
       });
     } catch (e) {
-      message = t("ui.pair_failed", { err: String(e) });
+      flashMessage(t("ui.pair_failed", { err: String(e) }));
     }
   }
 
@@ -232,16 +254,18 @@
     qrText = "";
   }
 
-  async function confirmPair(accept) {
+  async function confirmPair(accept, name) {
     try {
-      const r = await call("pairing.confirm", { accept });
-      message = accept
-        ? t("ui.pair_allowed", { name: r.device })
-        : t("ui.pair_denied", { name: r.device });
+      // UX-08: 逐行处理——pairing.confirm 带 device_name 精确确认该台；
+      // 不带则默认队首（老调用方兼容，语义不动）。
+      const r = await call("pairing.confirm", { accept, device_name: name });
+      flashMessage(
+        accept ? t("ui.pair_allowed", { name: r.device }) : t("ui.pair_denied", { name: r.device })
+      );
       // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
       await refresh();
     } catch (e) {
-      message = t("ui.confirm_failed", { err: String(e) });
+      flashMessage(t("ui.confirm_failed", { err: String(e) }));
     }
   }
 
@@ -253,10 +277,10 @@
     if (!yes) return;
     try {
       await call("device.revoke", { node_id: nodeId });
-      message = t("ui.revoked", { name });
+      flashMessage(t("ui.revoked", { name }));
       await refresh();
     } catch (e) {
-      message = t("ui.revoke_failed", { err: String(e) });
+      flashMessage(t("ui.revoke_failed", { err: String(e) }));
     }
   }
 
@@ -272,7 +296,7 @@
         await revealItemInDir(dir);
       }
     } catch (e) {
-      message = t("ui.open_failed", { err: String(e) });
+      flashMessage(t("ui.open_failed", { err: String(e) }));
     }
   }
 
@@ -286,21 +310,21 @@
     if (!yes) return;
     try {
       await call("folder.set", { path: dir });
-      message = t("ui.change_saved", { dir });
+      flashMessage(t("ui.change_saved", { dir }));
     } catch (e) {
-      message = t("ui.save_failed", { err: String(e) });
+      flashMessage(t("ui.save_failed", { err: String(e) }));
     }
   }
 
   async function exportLogs() {
     try {
       const r = await call("logs.export");
-      message = t("ui.logs_exported", { path: r.zip });
+      flashMessage(t("ui.logs_exported", { path: r.zip }));
       try {
         await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示
       } catch (_) {}
     } catch (e) {
-      message = t("ui.export_failed", { err: String(e) });
+      flashMessage(t("ui.export_failed", { err: String(e) }));
     }
   }
 
@@ -332,11 +356,11 @@
       update = await checkUpdate();
     } catch (e) {
       console.warn("[updater] check failed (silent — 404/draft/network = no update):", e);
-      if (manual) message = "没有发现新版本。";
+      if (manual) flashMessage("没有发现新版本。");
       return;
     }
     if (!update) {
-      if (manual) message = "没有发现新版本。";
+      if (manual) flashMessage("没有发现新版本。");
       return;
     }
     const ok = await confirmDialog(t("ui.update_available", { version: update.version }), {
@@ -345,9 +369,9 @@
     if (!ok) return;
     try {
       await update.downloadAndInstall();
-      message = t("ui.update_installed");
+      flashMessage(t("ui.update_installed"));
     } catch (e) {
-      message = t("ui.update_failed", { err: String(e) });
+      flashMessage(t("ui.update_failed", { err: String(e) }));
     }
   }
 
@@ -382,7 +406,11 @@
       <h1>P-Pass</h1>
     </header>
     {#if message}
-      <p class="message">{message}</p>
+      <p class="message">
+        {message}
+        <!-- UX-08: 提示条右侧 × 手动关闭（5s 自动消失之外的第二条路） -->
+        <button class="message-close" aria-label="关闭提示" onclick={() => (message = "")}>×</button>
+      </p>
     {/if}
     <Wizard
       defaultDir={wizard.default_dir}
@@ -413,7 +441,11 @@
 
     <main class="content" data-page={page}>
       {#if message}
-        <p class="message">{message}</p>
+        <p class="message">
+          {message}
+          <!-- UX-08: 提示条右侧 × 手动关闭（5s 自动消失之外的第二条路） -->
+          <button class="message-close" aria-label="关闭提示" onclick={() => (message = "")}>×</button>
+        </p>
       {/if}
 
       {#if page === "overview"}
@@ -643,14 +675,23 @@
       </div>
     {/if}
 
-    {#if showConfirmModal}
+    {#if showConfirmModal && pendingList.length > 0}
       <div class="modal-backdrop">
         <div class="modal">
-          <h3>{pendingCount > 1 ? `有 ${pendingCount} 台设备请求加入` : "有设备请求加入"}</h3>
+          <!-- UX-08: 多台同时扫码 → 一屏全列，逐行允许/拒绝，处理完该行
+               消失，全清后列表关闭——不挤牙膏式顺序弹窗。 -->
+          <h3>{pendingList.length > 1 ? `有 ${pendingList.length} 台设备请求加入` : "有设备请求加入"}</h3>
           <p class="hint modal-hint">确认是家人的手机吗？允许后它会出现在设备列表里。</p>
-          <div class="modal-actions">
-            <button onclick={() => confirmPair(false)}>{t("ui.deny")}</button>
-            <button class="primary" onclick={() => confirmPair(true)}>{t("ui.allow")}</button>
+          <div class="pending-list">
+            {#each pendingList as name}
+              <div class="pending-row">
+                <span class="pending-name">{name}</span>
+                <div class="pending-actions">
+                  <button onclick={() => confirmPair(false, name)}>{t("ui.deny")}</button>
+                  <button class="primary" onclick={() => confirmPair(true, name)}>{t("ui.allow")}</button>
+                </div>
+              </div>
+            {/each}
           </div>
         </div>
       </div>
@@ -1170,6 +1211,38 @@
     justify-content: center;
     margin-top: 4px;
   }
+  /* UX-08: pending 全量列表——一屏一行，逐行允许/拒绝 */
+  .pending-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+  .pending-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: var(--pp-linen);
+    border-radius: var(--pp-radius-control-sm);
+    padding: 10px 12px;
+  }
+  .pending-name {
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pending-actions {
+    display: flex;
+    gap: 8px;
+    flex: none;
+  }
+  .pending-actions button {
+    min-width: 64px;
+  }
   .hint {
     color: var(--pp-ink-40);
     font-size: 14px;
@@ -1192,5 +1265,25 @@
     padding: 10px 14px;
     font-size: 15px;
     margin: 0 0 18px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  /* UX-08: 提示条右侧 × 手动关闭——弱化小按钮，不抢正文 */
+  .message-close {
+    background: none;
+    border: none;
+    color: var(--pp-ink-40);
+    font-size: 18px;
+    line-height: 1;
+    padding: 2px 6px;
+    cursor: pointer;
+    flex: none;
+    border-radius: 6px;
+  }
+  .message-close:hover {
+    color: var(--pp-ink);
+    background: var(--pp-linen);
   }
 </style>

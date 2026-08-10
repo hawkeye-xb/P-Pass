@@ -454,6 +454,13 @@ impl IpcServer {
                     ),
                 }
             }
+            // UX-08: 待确认配对请求全量列表（只读）——桌面端一屏列出所有
+            // pending 逐行允许/拒绝（confirm 带 device_name 逐台处理）。
+            // 不动确认语义，只补「队列里都有谁」。
+            "pairing.pending" => {
+                let names = self.pending_names();
+                Resp::ok(id, serde_json::json!({ "pending": names }))
+            }
             "devices.list" => match self.db.list_devices().await {
                 Ok(devices) => {
                     let list: Vec<_> = devices
