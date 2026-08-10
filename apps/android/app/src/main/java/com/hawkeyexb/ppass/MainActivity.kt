@@ -61,6 +61,7 @@ import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.ConfirmedStore
 import com.hawkeyexb.ppass.backup.isPartialMediaAccess
+import com.hawkeyexb.ppass.backup.ReinstallHintPrefs
 import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.pauseAutoBackup
@@ -229,7 +230,14 @@ fun PPassApp() {
                 // never crash the app (real-phone T-052 lesson).
                 val outcome = try {
                     client.bind(identity.secretKey())
-                    pairWithQr(client, s.qr, deviceName())
+                    // DEV-01: 重装识别开关（默认开）——关掉时 pair.request
+                    // 不带 device_hint，重装后按旧行为出新设备行。
+                    pairWithQr(
+                        client,
+                        s.qr,
+                        deviceName(),
+                        reinstallHintEnabled = ReinstallHintPrefs(context.filesDir).enabled(),
+                    )
                 } catch (t: Throwable) {
                     PairOutcome.Failed(t.toString())
                 }
@@ -285,6 +293,9 @@ fun PPassApp() {
             val backupSettings = remember { BackupSettings(context.filesDir) }
             var chargeOnly by remember { mutableStateOf(backupSettings.load().chargeOnly) }
             var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
+            // DEV-01: 重装识别开关（默认开）——Home 设置区切换，配对时读取。
+            val hintPrefs = remember { ReinstallHintPrefs(context.filesDir) }
+            var reinstallHintEnabled by remember { mutableStateOf(hintPrefs.enabled()) }
             // MOB-02 §三: 「需要 Wi-Fi」关闭需二次确认（移动网络消耗流量）。
             var pendingWifiOff by remember { mutableStateOf(false) }
             // REL-02: 更新通道切换对话框（显式操作，默认永远 stable）。
@@ -342,6 +353,13 @@ fun PPassApp() {
                             autoBackupPaused = paused
                             if (paused) pauseAutoBackup(context)
                             else resumeAutoBackup(context)
+                        },
+                        // DEV-01: 重装识别开关（默认开）——落盘 ReinstallHintPrefs，
+                        // 下次配对（pair.request）读取。
+                        reinstallHintEnabled = reinstallHintEnabled,
+                        onReinstallHintChange = { enabled ->
+                            reinstallHintEnabled = enabled
+                            ReinstallHintPrefs(context.filesDir).setEnabled(enabled)
                         },
                         onDisconnect = { showDisconnectDialog = true },
                         // 存储端移除/吊销本设备后：主按钮变「重新扫码连接」——

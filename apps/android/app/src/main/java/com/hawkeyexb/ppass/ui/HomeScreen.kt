@@ -94,6 +94,10 @@ fun HomeScreen(
     // REL-02: 更新通道（stable 默认 / test）——切换必须显式（设置页）。
     updateChannel: UpdateChannel = UpdateChannel.Stable,
     onChannelChangeRequest: () -> Unit = {},
+    // DEV-01: 重装识别开关（默认开）——关掉后配对不发 device_hint，
+    // 重装后按旧行为出新设备行（电脑端不再默认「替换旧的」）。
+    reinstallHintEnabled: Boolean = true,
+    onReinstallHintChange: (Boolean) -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -499,6 +503,16 @@ fun HomeScreen(
                     )
                     Text("›", fontSize = 16.sp, color = PPColor.Ink40)
                 }
+                // DEV-01: 重装识别开关——重装后重扫一次码，电脑端认出旧
+                // 设备、默认「替换旧的」不留僵尸行。关掉 = 行为回到
+                // DEV-01 前（重装后出新设备行）。
+                HorizontalDivider(color = PPColor.Divider)
+                RuleSwitchRow(
+                    label = stringResource(R.string.reinstall_hint_switch),
+                    checked = reinstallHintEnabled,
+                    onCheckedChange = onReinstallHintChange,
+                    hint = stringResource(R.string.reinstall_hint_switch_hint),
+                )
                 // T6: 备份范围入口——点击进相册选择（选择与备份分离）。
                 HorizontalDivider(color = PPColor.Divider)
                 Row(

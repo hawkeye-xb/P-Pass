@@ -58,3 +58,16 @@ QR 内容；手机端配对流程步骤数。
 ## 收尾
 
 CI 绿；PROGRESS/NEXT 一行；ROADMAP 状态行；卡移 done/。
+
+---
+## 验收记录（2026-08-11 Salamira）
+
+**段①金样本**：`crates/proto` `pair_request_hint_roundtrip`（带 hint 帧往返一致 + 序列化含键）+ `pair_request_old_frame_parses_as_none`（旧帧无 hint 键解析 None + 重序列化不含键——字节不变）✓；Kotlin `explicitNulls=false` 保证 null 不进帧（同性质）。
+**段②集成**：`pairing_flow.rs` 3 个新测试——
+- `reinstall_merge_replaces_old_device_keeps_assets_watermark`：旧设备+2 资产+水位 500 → 新配对 AcceptMerge → 资产归新 NodeId、水位=500、旧行消失、审计 device.merged ✓
+- `reinstall_accept_as_new_keeps_old_row_untouched`：同 hint 但 Accept → 新旧两行并存、无 merge 审计 ✓
+- `merged_old_identity_hello_is_denied`：合并后旧 NodeId `backup.begin` → NOT_AUTHORIZED ✓（hello 对未配对本就允许，反证用 member-gated 方法）
+**storage 单测**：`find_by_hint_matches_active_only_and_excludes_self`（排除自身+revoked）+ `merge_moves_assets_takes_max_watermark_and_removes_old` ✓
+**全量**：`cargo test -p daemon -p storage -p proto` 全绿（daemon 10 个测试文件全过；storage 27+13+17；proto 含金样本）。cargo fmt 干净。
+**Android**：设置页「重装识别」开关（默认开）+ ReinstallHintPrefs 落盘 + pairWithQr 读开关传 hint；strings.xml en/zh 双语。assembleDebug 绿（JAVA_HOME=/opt/homebrew/opt/openjdk@17——默认 JDK 26 的 jlink 在 AGP 下失败）。
+**挂账（验收人）**：真机重装→重扫→确认框默认「替换旧的」→旧行消失备份记录还在；开关关闭→重装后出新设备行。

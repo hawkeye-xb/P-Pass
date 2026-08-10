@@ -120,6 +120,9 @@
     <string name="update_channel_stable">Stable — only published releases</string>
     <string name="update_channel_test">Test — latest test build</string>
     <string name="update_channel_switch_title">Which update channel?</string>
+    <!-- DEV-01: 重装识别开关 -->
+    <string name="reinstall_hint_switch">Reinstall recognition</string>
+    <string name="reinstall_hint_switch_hint">After reinstalling the app, the computer can recognise this phone and offer to replace the old entry.</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">Background protection off</string>
     <string name="dog_battery_body">Tip: whitelist P-Pass in battery settings, so the system won\'t interrupt backups while the screen is off.</string>

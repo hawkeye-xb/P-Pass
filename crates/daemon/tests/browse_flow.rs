@@ -105,6 +105,7 @@ async fn harness(dir: &Path, db: Db) -> Harness {
         .await
         .unwrap();
     db.upsert_device(&Device {
+        device_hint: None,
         node_id: client_tp.node_id().0.to_vec(),
         name: "viewer".into(),
         role: Role::Viewer, // browse is exactly the viewer's power

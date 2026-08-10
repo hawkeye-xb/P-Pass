@@ -22,7 +22,7 @@ pub use diag_agg::DiagAgg;
 pub use ipc::daemon_version;
 pub use ipc::Claim;
 pub use ipc::IpcServer;
-pub use pairing::{PairRejection, Pairing, PendingPair};
+pub use pairing::{PairDecision, PairRejection, Pairing, PendingPair};
 pub use query::QueryEngine;
 pub use router::Router;
 pub use telemetry::{Event as TelemetryEvent, Telemetry};

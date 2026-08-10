@@ -117,6 +117,13 @@ pub struct PairRequest {
     pub device_name: String,
     /// Requested role: `"member"` or `"viewer"`.
     pub role: String,
+    /// DEV-01: optional reinstall fingerprint — SHA-256(Build.MODEL +
+    /// ANDROID_ID) first 8 bytes as hex. Absent on old clients / when
+    /// the owner disabled "重装识别" — `None` keeps the frame byte-identical
+    /// to pre-DEV-01 (proto evolution rule: old frames stay parseable).
+    /// Hint is a *hint only*: authz never reads it (not a credential).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_hint: Option<String>,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -126,6 +133,7 @@ impl Default for PairRequest {
             token: String::new(),
             device_name: String::new(),
             role: String::from("member"),
+            device_hint: None,
         }
     }
 }
@@ -446,8 +454,36 @@ mod tests {
             token: "abcd1234".into(),
             device_name: "Mom's Phone".into(),
             role: "member".into(),
+            device_hint: None,
         }
     );
+
+    // DEV-01: with-hint frame round-trips; and a pre-DEV-01 frame
+    // (no device_hint key) parses as None — old clients keep working.
+    #[test]
+    fn pair_request_hint_roundtrip() {
+        let val = PairRequest {
+            token: "abcd1234".into(),
+            device_name: "Mom's Phone".into(),
+            role: "member".into(),
+            device_hint: Some("a1b2c3d4e5f60718".into()),
+        };
+        let json = serde_json::to_string(&val).unwrap();
+        let back: PairRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(val, back);
+        assert!(json.contains("\"device_hint\""), "hint must serialize");
+    }
+
+    #[test]
+    fn pair_request_old_frame_parses_as_none() {
+        // Exact pre-DEV-01 wire shape — no device_hint key at all.
+        let json = r#"{"token":"abcd1234","device_name":"Mom's Phone","role":"member"}"#;
+        let parsed: PairRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.device_hint, None);
+        // And when the hint is absent, re-serialization stays old-shaped.
+        let re = serde_json::to_string(&parsed).unwrap();
+        assert!(!re.contains("device_hint"), "None hint must not serialize");
+    }
 
     roundtrip_test!(
         pair_accepted_roundtrip,

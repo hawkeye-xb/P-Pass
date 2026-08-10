@@ -13,9 +13,9 @@
 | MOB-02 备份触发模型重构 | ✅ **已完成并推 main**（`e3931ba`，android 121/121 绿；交互/文案照用户定稿实施；模拟器 onboarding 截图 + 三星真机全流程/连拍聚合/部分授权观感挂验收人） |
 | UX-08 配对确认列表化 | ✅ **已完成并推 main**（`07cd1b9`，vite build 绿 + ipc_flow 8/8；3 台同时扫码一屏三行/提示条 5s 消失+×关闭 挂验收人真窗口走查） |
 | REL-02 更新双通道 | ✅ **已完成并推 main**（`96c61ae` `8b5362c`，android 124/124 + vite build 绿；Worker 部署 + 发 prerelease/正式 release 双端对照验收挂验收人） |
-| DEV-01 身份保全+重配对合并 | ⏳ 队列（下一张，已解挂，按 A 档做） |
+| DEV-01 身份保全+重配对合并 | ✅ **已完成并推 main**（本 commit，daemon/storage/proto 全量绿含 3 新集成测试；真机重装→重扫→「替换旧的」流程挂验收人） |
+| ICON-01 图标接入双端构建 | ✅ **已完成并推 main**（本 commit，桌面 cargo check 绿 + Android assembleDebug 绿 + 67 产物幂等；视觉核对/托盘观感/真机桌面图标挂验收人） |
 | FIX-SC2 blobs_resume | ⏳ 留队列等 CI 证据 |
-| ICON-01 图标接入构建 | 📋 待出卡（图标已定稿归档 docs/design/2026-08-11-icon-v1/，主图标=碳纹版） |
 
 ## 〇、2026-08-10 巡检轮（验收人）：周末 h10b 批次 review + 流程改制
 

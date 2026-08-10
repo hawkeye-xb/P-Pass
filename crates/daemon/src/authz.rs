@@ -101,6 +101,7 @@ mod tests {
             paired_at: 0,
             last_seen: None,
             revoked,
+            device_hint: None,
         }
     }
 

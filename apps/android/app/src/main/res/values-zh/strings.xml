@@ -116,6 +116,9 @@
     <string name="update_channel_stable">稳定版——只收正式发布</string>
     <string name="update_channel_test">测试版——最新测试构建</string>
     <string name="update_channel_switch_title">选择更新通道？</string>
+    <!-- DEV-01: 重装识别开关 -->
+    <string name="reinstall_hint_switch">重装识别</string>
+    <string name="reinstall_hint_switch_hint">重装 App 后，电脑能认出这台手机，默认「替换旧的」不留僵尸记录。</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">后台保护未开启</string>
     <string name="dog_battery_body">建议：加入电池白名单，熄屏也不被系统打断。</string>

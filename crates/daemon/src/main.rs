@@ -212,7 +212,7 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
                 let accept = line.trim().eq_ignore_ascii_case("y");
-                if let Some(name) = ipc.confirm(None, accept) {
+                if let Some(name) = ipc.confirm(None, accept, None) {
                     println!("「{name}」：{}", if accept { "已允许" } else { "已拒绝" });
                 }
             }

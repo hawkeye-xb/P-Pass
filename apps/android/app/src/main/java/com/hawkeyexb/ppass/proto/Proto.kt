@@ -73,6 +73,11 @@ data class PairRequest(
     val token: String = "",
     @SerialName("device_name") val deviceName: String = "",
     val role: String = "member",
+    // DEV-01: 重装指纹（SHA-256(Build.MODEL+ANDROID_ID) 前 8 字节 hex）。
+    // null = 旧客户端/设置里关了「重装识别」——序列化时省略该键，
+    // 帧与 DEV-01 前逐字节一致（proto 演进铁律：旧端互解）。
+    @SerialName("device_hint")
+    val deviceHint: String? = null,
 )
 
 @Serializable

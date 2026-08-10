@@ -25,7 +25,7 @@ use storage::Db;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::diag_agg::DiagAgg;
-use crate::pairing::{Pairing, PendingPair};
+use crate::pairing::{PairDecision, Pairing, PendingPair};
 
 /// One IPC server per daemon. Owns the pending-pair queue the UI drains.
 pub struct IpcServer {
@@ -444,7 +444,13 @@ impl IpcServer {
                     .get("device_name")
                     .and_then(|v| v.as_str())
                     .map(str::to_owned);
-                match self.confirm(device_name.as_deref(), accept) {
+                // DEV-01: merge_node_id (hex) = owner picked "替换旧的".
+                let merge_node_id = req
+                    .params
+                    .get("merge_node_id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
+                match self.confirm(device_name.as_deref(), accept, merge_node_id.as_deref()) {
                     Some(name) => {
                         Resp::ok(id, serde_json::json!({ "decided": accept, "device": name }))
                     }
@@ -457,9 +463,10 @@ impl IpcServer {
             // UX-08: 待确认配对请求全量列表（只读）——桌面端一屏列出所有
             // pending 逐行允许/拒绝（confirm 带 device_name 逐台处理）。
             // 不动确认语义，只补「队列里都有谁」。
+            // DEV-01: 每项带 hint_match——存量同指纹设备（「替换旧的」选项）。
             "pairing.pending" => {
-                let names = self.pending_names();
-                Resp::ok(id, serde_json::json!({ "pending": names }))
+                let pending = self.pending_summary();
+                Resp::ok(id, serde_json::json!({ "pending": pending }))
             }
             "devices.list" => match self.db.list_devices().await {
                 Ok(devices) => {
@@ -624,7 +631,16 @@ impl IpcServer {
     /// Decide one pending pairing request: by device name, or the queue
     /// head when `device_name` is None. Returns the decided device's
     /// name. Shared by IPC and the interim console confirmer in main.
-    pub fn confirm(&self, device_name: Option<&str>, accept: bool) -> Option<String> {
+    ///
+    /// DEV-01: `merge_node_id` (hex) — when the owner picked "替换旧的",
+    /// the decision carries the old device whose data the fresh pairing
+    /// takes over. `None` = plain accept (pre-DEV-01 semantics).
+    pub fn confirm(
+        &self,
+        device_name: Option<&str>,
+        accept: bool,
+        merge_node_id: Option<&str>,
+    ) -> Option<String> {
         let mut queue = self.pending.lock().expect("pending lock");
         let idx = match device_name {
             Some(name) => queue.iter().position(|p| p.device_name == name),
@@ -635,8 +651,47 @@ impl IpcServer {
             self.diag.apply(diag::DaemonEvent::PairingEnded);
         }
         let name = p.device_name.clone();
-        p.decide(accept);
+        let decision = if !accept {
+            PairDecision::Reject
+        } else if let Some(hex_id) = merge_node_id {
+            // Only offer the merge when the pending request actually has
+            // a matching old device — a client-side fabrication must not
+            // turn into a data migration (authz stays untouched: this is
+            // still an owner-confirmed accept, just with a target).
+            match p.hint_match.as_ref() {
+                Some(m) if hex_id == hex(&m.node_id) => PairDecision::AcceptMerge {
+                    old_node_id: m.node_id.clone(),
+                },
+                _ => PairDecision::Accept,
+            }
+        } else {
+            PairDecision::Accept
+        };
+        p.decide(decision);
         Some(name)
+    }
+
+    /// Pending pairing requests for the owner UI — name plus, when the
+    /// joining device carries a reinstall hint that matches an existing
+    /// device, that old device's identity (DEV-01 "替换旧的" option).
+    pub fn pending_summary(&self) -> Vec<serde_json::Value> {
+        self.pending
+            .lock()
+            .expect("pending lock")
+            .iter()
+            .map(|p| {
+                let hint_match = p.hint_match.as_ref().map(|m| {
+                    serde_json::json!({
+                        "node_id": hex(&m.node_id),
+                        "name": m.name,
+                    })
+                });
+                serde_json::json!({
+                    "name": p.device_name,
+                    "hint_match": hint_match,
+                })
+            })
+            .collect()
     }
 
     /// Names of requests waiting for the owner (UI list / console prompt).

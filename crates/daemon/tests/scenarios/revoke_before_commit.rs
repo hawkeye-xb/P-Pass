@@ -116,7 +116,9 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
     // 预置设备为 member（正常配对后的状态）。
     let node = client.tp.node_id().0;
     db.upsert_device(&Device {
+        device_hint: None,
         node_id: node.to_vec(),
+
         name: "手机".into(),
         role: Role::Member,
         paired_at: 1,
@@ -169,6 +171,7 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
     // daemon 健康：另一个已配对设备 hello 照常。
     let other = Client::new(&dtp, dtp.node_id()).await;
     db.upsert_device(&Device {
+        device_hint: None,
         node_id: other.tp.node_id().0.to_vec(),
         name: "客厅电脑".into(),
         role: Role::Member,

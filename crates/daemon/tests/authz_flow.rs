@@ -51,6 +51,7 @@ fn paired(node_id: &[u8; 32], role: Role) -> Device {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        device_hint: None,
     }
 }
 

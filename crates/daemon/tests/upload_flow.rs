@@ -106,6 +106,7 @@ async fn fixture() -> Fixture {
     let phone_tp = bind(vec![transport::ALPN_CTRL.into()]).await;
     phone_tp.add_peer(daemon_tp.local_addr());
     db.upsert_device(&Device {
+        device_hint: None,
         node_id: phone_tp.node_id().0.to_vec(),
         name: "phone".into(),
         role: Role::Member,

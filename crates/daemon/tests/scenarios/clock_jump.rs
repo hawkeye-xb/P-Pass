@@ -32,7 +32,7 @@ async fn start_daemon(
     let (pairing, mut pending) = daemon::Pairing::new(db.clone(), tp.node_id(), None, None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
-            req.decide(true); // 剧本自动确认（owner 在 IPC 侧）
+            req.decide(daemon::PairDecision::Accept); // 剧本自动确认（owner 在 IPC 侧）
         }
     });
     let router = Router::new(db, "时钟剧本存储端")
@@ -74,6 +74,7 @@ async fn send_pair(tp: &IrohTransport, daemon: transport::NodeId, token: &str, n
             token: token.into(),
             device_name: name.into(),
             role: "member".into(),
+            device_hint: None,
         })
         .unwrap(),
     )
@@ -90,6 +91,7 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
 
     // 健康基线：一个已配对设备 hello 正常。
     db.upsert_device(&Device {
+        device_hint: None,
         node_id: ctp.node_id().0.to_vec(),
         name: "老设备".into(),
         role: Role::Member,

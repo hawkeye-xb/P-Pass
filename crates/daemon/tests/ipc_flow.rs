@@ -97,6 +97,7 @@ async fn status_devices_and_revoke_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "roundtrip").await;
     db.upsert_device(&Device {
+        device_hint: None,
         node_id: vec![0xAA; 32],
         name: "妈妈的手机".into(),
         role: Role::Member,
@@ -184,6 +185,7 @@ async fn activity_list_aggregates_backup_batches() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "t090activity").await;
     db.upsert_device(&Device {
+        device_hint: None,
         node_id: vec![0xA1; 32],
         name: "妈妈的手机".into(),
         role: Role::Member,
@@ -245,6 +247,7 @@ async fn devices_list_reports_connection_unknown_without_transport() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "t090conn").await;
     db.upsert_device(&Device {
+        device_hint: None,
         node_id: vec![0xAB; 32],
         name: "test-device".into(),
         role: Role::Member,
@@ -314,6 +317,7 @@ async fn pairing_start_and_confirm_over_ipc() {
                         token: pairing_token,
                         device_name: "IPC 测试机".into(),
                         role: "member".into(),
+                        device_hint: None,
                     },
                     now(),
                 )
@@ -376,6 +380,7 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
                         token,
                         device_name: name,
                         role: "member".into(),
+                        device_hint: None,
                     },
                     now(),
                 )
@@ -384,13 +389,19 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
     }
 
     // 轮询直到三台都在 pending 列表里（一屏三行）。
+    // DEV-01: pending 项是 {name, hint_match} 对象（兼容老 daemon 字符串）。
     let mut list: Vec<String> = Vec::new();
     for _ in 0..200 {
         let resp = c.call("pairing.pending", serde_json::Value::Null).await;
         let arr = resp.result.unwrap()["pending"].as_array().unwrap().clone();
         list = arr
             .iter()
-            .map(|v| v.as_str().unwrap().to_string())
+            .map(|v| {
+                v["name"]
+                    .as_str()
+                    .unwrap_or_else(|| v.as_str().unwrap())
+                    .to_string()
+            })
             .collect();
         if list.len() == 3 {
             break;
@@ -413,7 +424,12 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|v| v.as_str().unwrap().to_string())
+        .map(|v| {
+            v["name"]
+                .as_str()
+                .unwrap_or_else(|| v.as_str().unwrap())
+                .to_string()
+        })
         .collect();
     assert_eq!(list, vec!["设备A".to_string(), "设备C".to_string()]);
 
