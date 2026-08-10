@@ -200,8 +200,13 @@ pub fn run() {
             let stop = MenuItem::with_id(app, "stop", "停止后台服务", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 App", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &stop, &quit])?;
+            // ICON-01: 托盘用 beast 全实线纯黑版 + 模板标记——macOS 系统按
+            // 深浅色自动反色（碳纹版 22px 会糊，模板图标不渲染颜色）。
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+                .expect("tray icon bytes");
             TrayIconBuilder::with_id("main")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
+                .icon_as_template(cfg!(target_os = "macos"))
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {
