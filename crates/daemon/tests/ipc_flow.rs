@@ -342,6 +342,105 @@ async fn pairing_start_and_confirm_over_ipc() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
+    // UX-08: 多台同时扫码 → pairing.pending 全量列出，逐行按名确认——
+    // 不弹挤牙膏式顺序弹窗。三台入队 → 列表三行 → 按名确认中间那台 →
+    // 剩两台 → 全清后列表空、status.pending_pairs = 0。
+    let dir = tempfile::tempdir().unwrap();
+    let (db, pairing, socket, token) = start(dir.path(), "pending").await;
+    let mut c = IpcClient::connect(&socket, &token).await;
+
+    let resp = c.call("pairing.start", serde_json::Value::Null).await;
+    let qr = resp.result.unwrap()["qr"].as_str().unwrap().to_string();
+    assert!(qr.starts_with("ppf://pair?node="));
+
+    // 三台设备同时敲门——每台一枚独立一次性 token（Pairing::start 铸新
+    // token，多枚共存；同一 token 只能被一台用，共用会被引擎拒）。
+    let pairing = pairing.clone();
+    let tokens: Vec<String> = (0..3)
+        .map(|i| {
+            let qr = pairing.start([0x11 + i as u8; 12], now());
+            qr.rsplit("&t=").next().unwrap().to_string()
+        })
+        .collect();
+    let names = ["设备A", "设备B", "设备C"];
+    for (i, name) in names.iter().enumerate() {
+        let pairing = pairing.clone();
+        let token = tokens[i].clone();
+        let name = name.to_string();
+        tokio::spawn(async move {
+            pairing
+                .handle_request(
+                    transport::NodeId([0xE0 + i as u8; 32]),
+                    &proto::PairRequest {
+                        token,
+                        device_name: name,
+                        role: "member".into(),
+                    },
+                    now(),
+                )
+                .await
+        });
+    }
+
+    // 轮询直到三台都在 pending 列表里（一屏三行）。
+    let mut list: Vec<String> = Vec::new();
+    for _ in 0..200 {
+        let resp = c.call("pairing.pending", serde_json::Value::Null).await;
+        let arr = resp.result.unwrap()["pending"].as_array().unwrap().clone();
+        list = arr
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        if list.len() == 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(list.len(), 3, "pending 必须全量列出三台: {list:?}");
+
+    // 按名确认中间那台 → 列表剩两台（其余不受影响）。
+    let resp = c
+        .call(
+            "pairing.confirm",
+            serde_json::json!({ "device_name": "设备B", "accept": true }),
+        )
+        .await;
+    assert!(resp.ok, "{resp:?}");
+    assert_eq!(resp.result.unwrap()["device"], "设备B");
+    let resp = c.call("pairing.pending", serde_json::Value::Null).await;
+    let list: Vec<String> = resp.result.unwrap()["pending"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(list, vec!["设备A".to_string(), "设备C".to_string()]);
+
+    // 剩下两台按名拒绝 → 全清 → 列表空 + status.pending_pairs = 0。
+    for name in ["设备A", "设备C"] {
+        let resp = c
+            .call(
+                "pairing.confirm",
+                serde_json::json!({ "device_name": name, "accept": false }),
+            )
+            .await;
+        assert!(resp.ok, "{resp:?}");
+    }
+    let resp = c.call("pairing.pending", serde_json::Value::Null).await;
+    assert_eq!(
+        resp.result.unwrap()["pending"].as_array().unwrap().len(),
+        0,
+        "全清后列表必须为空（无残留状态）"
+    );
+    let resp = c.call("status", serde_json::Value::Null).await;
+    assert_eq!(resp.result.unwrap()["pending_pairs"], 0);
+    // B 已被允许——设备表里有它。
+    let device = db.get_device(&[0xE1; 32]).await.unwrap().expect("row");
+    assert_eq!(device.name, "设备B");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn logs_export_zip_leaks_no_username() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "logs").await;
