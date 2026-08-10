@@ -85,7 +85,7 @@ import com.hawkeyexb.ppass.ui.ScanScreen
 import com.hawkeyexb.ppass.ui.WelcomeScreen
 import com.hawkeyexb.ppass.update.UpdateInfo
 import com.hawkeyexb.ppass.update.UpdateChannel
-import com.hawkeyexb.ppass.update.UpdateChannelStore
+import com.hawkeyexb.ppass.update.channelFromVersion
 import com.hawkeyexb.ppass.update.downloadAndInstall
 import com.hawkeyexb.ppass.update.fetchUpdate
 
@@ -188,8 +188,9 @@ fun PPassApp() {
     // UPD-01: 启动时检查一次更新（静默失败；draft/无 release = 无更新；
     // 对话框覆盖所有 screen，不打断当前流程）。REL-02: 按通道取源
     // （stable 默认 / test 最新 prerelease），切换通道后立即重查。
-    val updateChannelStore = remember { UpdateChannelStore(context) }
-    var updateChannel by remember { mutableStateOf(updateChannelStore.load()) }
+    // DESK-02①: 更新通道由构建推导——版本含 `-test.`（构建期 PPF_BUILD_VERSION
+    // 注入）→ test，否则 stable。零 UI、零持久化；正式构建永远 stable。
+    val updateChannel = channelFromVersion(BuildConfig.VERSION_NAME)
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     LaunchedEffect(updateChannel) {
         updateInfo = fetchUpdate(BuildConfig.VERSION_NAME, updateChannel)
@@ -370,8 +371,6 @@ fun PPassApp() {
             var reinstallHintEnabled by remember { mutableStateOf(hintPrefs.enabled()) }
             // MOB-02 §三: 「需要 Wi-Fi」关闭需二次确认（移动网络消耗流量）。
             var pendingWifiOff by remember { mutableStateOf(false) }
-            // REL-02: 更新通道切换对话框（显式操作，默认永远 stable）。
-            var pendingChannelSwitch by remember { mutableStateOf(false) }
             val loader = remember {
                 TimelineLoader(client, parsePeerAddrToken(s.pairing.daemonAddrToken)) {
                     client.bind(identity.secretKey())
@@ -426,6 +425,8 @@ fun PPassApp() {
                             if (paused) pauseAutoBackup(context)
                             else resumeAutoBackup(context)
                         },
+                        // DESK-02①: 更新通道零 UI——由构建推导，设置页不再有
+                        // 通道行（旧 REL-02 显式切换 UI 已删）。
                         // DEV-01: 重装识别开关（默认开）——落盘 ReinstallHintPrefs，
                         // 下次配对（pair.request）读取。
                         reinstallHintEnabled = reinstallHintEnabled,
@@ -467,9 +468,6 @@ fun PPassApp() {
                         onOpenAppSettings = { openAppDetailsSettings(context) },
                         // MOB-02 §四事件①: 排队提示（Wi-Fi 要求不满足时）。
                         wifiDeferred = wifiDeferred,
-                        // REL-02: 更新通道（stable 默认 / test）——显式切换。
-                        updateChannel = updateChannel,
-                        onChannelChangeRequest = { pendingChannelSwitch = true },
                     )
                 },
             )
@@ -488,48 +486,6 @@ fun PPassApp() {
                     },
                     dismissButton = {
                         TextButton(onClick = { pendingWifiOff = false }) {
-                            Text(stringResource(R.string.cancel))
-                        }
-                    },
-                )
-            }
-            if (pendingChannelSwitch) {
-                // REL-02: 通道切换必须显式——两个选项 + 取消，默认永远 stable；
-                // 切换后 LaunchedEffect(updateChannel) 立即按新通道重查更新。
-                AlertDialog(
-                    onDismissRequest = { pendingChannelSwitch = false },
-                    title = { Text(stringResource(R.string.update_channel_switch_title)) },
-                    text = {
-                        Column {
-                            Text(
-                                stringResource(R.string.update_channel_stable),
-                                fontSize = 16.sp, color = PPColor.Ink,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        pendingChannelSwitch = false
-                                        updateChannelStore.save(UpdateChannel.Stable)
-                                        updateChannel = UpdateChannel.Stable
-                                    }
-                                    .padding(vertical = 10.dp),
-                            )
-                            Text(
-                                stringResource(R.string.update_channel_test),
-                                fontSize = 16.sp, color = PPColor.Ink,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        pendingChannelSwitch = false
-                                        updateChannelStore.save(UpdateChannel.Test)
-                                        updateChannel = UpdateChannel.Test
-                                    }
-                                    .padding(vertical = 10.dp),
-                            )
-                        }
-                    },
-                    confirmButton = {},
-                    dismissButton = {
-                        TextButton(onClick = { pendingChannelSwitch = false }) {
                             Text(stringResource(R.string.cancel))
                         }
                     },

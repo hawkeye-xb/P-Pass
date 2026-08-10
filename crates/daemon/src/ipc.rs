@@ -468,27 +468,37 @@ impl IpcServer {
                 let pending = self.pending_summary();
                 Resp::ok(id, serde_json::json!({ "pending": pending }))
             }
-            "devices.list" => match self.db.list_devices().await {
-                Ok(devices) => {
-                    let list: Vec<_> = devices
-                        .iter()
-                        .map(|d| {
-                            serde_json::json!({
-                                "node_id": hex(&d.node_id),
-                                "name": d.name,
-                                "role": d.role.as_str(),
-                                "revoked": d.revoked,
-                                "last_seen": d.last_seen,
-                                // T-090: live transport verdict only —
-                                // "unknown" when no live info exists;
-                                // never derived from last_seen.
-                                "connection": (self.conn_status)(&d.node_id).as_str(),
+            // DESK-02②: 默认只返回在用设备（include_revoked 默认 false）——
+            // 被移除/吊销的设备不再挂在列表；include_revoked=true 时全量
+            // （内部统计/诊断用）。
+            "devices.list" => {
+                let include_revoked = req
+                    .params
+                    .get("include_revoked")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                match self.db.list_devices(include_revoked).await {
+                    Ok(devices) => {
+                        let list: Vec<_> = devices
+                            .iter()
+                            .map(|d| {
+                                serde_json::json!({
+                                    "node_id": hex(&d.node_id),
+                                    "name": d.name,
+                                    "role": d.role.as_str(),
+                                    "revoked": d.revoked,
+                                    "last_seen": d.last_seen,
+                                    // T-090: live transport verdict only —
+                                    // "unknown" when no live info exists;
+                                    // never derived from last_seen.
+                                    "connection": (self.conn_status)(&d.node_id).as_str(),
+                                })
                             })
-                        })
-                        .collect();
-                    Resp::ok(id, serde_json::json!({ "devices": list }))
+                            .collect();
+                        Resp::ok(id, serde_json::json!({ "devices": list }))
+                    }
+                    Err(_) => internal(id),
                 }
-                Err(_) => internal(id),
             },
             // T-090: backup activity feed — read-only aggregation of the
             // existing assets table into per-device batches (10-minute
@@ -705,7 +715,7 @@ impl IpcServer {
     }
 
     async fn status(&self) -> anyhow::Result<serde_json::Value> {
-        let devices = self.db.list_devices().await?;
+        let devices = self.db.list_devices(true).await?;
         let state = self.diag.state();
         let pending = self.pending.lock().expect("pending lock").len();
         // T-090: photo total + disk watermarks of the library volume.
@@ -758,7 +768,7 @@ impl IpcServer {
     /// a shared log must never leak a username (契约).
     async fn export_logs(&self) -> anyhow::Result<PathBuf> {
         let events = self.db.list_diag(1000).await?;
-        let devices = self.db.list_devices().await?;
+        let devices = self.db.list_devices(true).await?;
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_default();

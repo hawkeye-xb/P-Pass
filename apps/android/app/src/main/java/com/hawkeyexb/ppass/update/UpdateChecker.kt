@@ -63,16 +63,45 @@ fun channelManifestUrl(channel: UpdateChannel): String = when (channel) {
     UpdateChannel.Test -> WORKER_TEST_URL
 }
 
-/** SemVer 三段数字比较：candidate 严格大于 current 才算更新（预发布后缀忽略）。 */
+/** SemVer 三段数字比较：candidate 严格大于 current 才算更新。 */
 fun isNewer(candidate: String, current: String): Boolean {
-    val c = candidate.split('-', '+').first().split('.').map { it.toIntOrNull() ?: 0 }
-    val cur = current.split('-', '+').first().split('.').map { it.toIntOrNull() ?: 0 }
+    val c = parseSemVer(candidate)
+    val cur = parseSemVer(current)
     for (i in 0..2) {
-        val diff = c.getOrElse(i) { 0 } - cur.getOrElse(i) { 0 }
+        val diff = c.first.getOrElse(i) { 0 } - cur.first.getOrElse(i) { 0 }
         if (diff != 0) return diff > 0
+    }
+    // 同核心：正式 > 预发布（0.3.2 比 0.3.2-test.1 新）；同为预发布按数字段
+    // 比较（0.3.2-test.2 > 0.3.2-test.1）——与 daemon version_cmp 同语义，
+    // test 通道连续 test tag 才能自动升级（DESK-02 用户手机自动更新链路）。
+    val cp = c.second
+    val curp = cur.second
+    if (cp == null && curp != null) return true
+    if (cp != null && curp == null) return false
+    if (cp != null && curp != null) {
+        return prereleaseNum(cp) > prereleaseNum(curp)
     }
     return false
 }
+
+/** "0.3.2-test.1" → (数字段, 预发布后缀或 null)。 */
+private fun parseSemVer(v: String): Pair<List<Int>, String?> {
+    val parts = v.split('-', '+')
+    val nums = parts.first().split('.').map { it.toIntOrNull() ?: 0 }
+    return nums to parts.getOrNull(1)
+}
+
+/** 预发布后缀的数字段："test.2" → 2、"rc1" → 1；无数字 → 0。 */
+private fun prereleaseNum(pre: String): Int =
+    pre.filter { it.isDigit() }.toIntOrNull() ?: 0
+
+/**
+ * DESK-02①: 更新通道由构建推导——零 UI、零持久化。
+ * 版本含 `-test.`（构建期 PPF_BUILD_VERSION 注入完整 tag）→ test 通道，
+ * 否则 stable。正式构建永远 stable（家人设备不被 test 构建波及）。
+ */
+fun channelFromVersion(version: String): UpdateChannel =
+    if (version.contains("-test.")) UpdateChannel.Test else UpdateChannel.Stable
 
 /** 解析 manifest body → 更新信息；无 android 条目/版本不更新/解析失败返回 null。 */
 fun parseUpdateManifest(body: String, currentVersion: String): UpdateInfo? {

@@ -25,6 +25,34 @@ class UpdateCheckerTest {
         assertEquals(false, isNewer("0.1.0-test.3", "0.1.0")) // 同主版本预发布不视为升级
     }
 
+    // ── DESK-02①: 同核心预发布按数字段比较（test 通道连续 tag 自动升级） ──
+
+    @Test
+    fun isNewer_prereleaseSameCore() {
+        // 用户手机自动更新链路：test.1 → test.2 必须判定为更新。
+        assertTrue(isNewer("0.3.2-test.2", "0.3.2-test.1"))
+        assertEquals(false, isNewer("0.3.2-test.1", "0.3.2-test.2"))
+        assertEquals(false, isNewer("0.3.2-test.1", "0.3.2-test.1"))
+        // 正式 > 预发布（同核心）：已装正式 0.3.2 不该被拉回 test.1。
+        assertEquals(false, isNewer("0.3.2-test.1", "0.3.2"))
+        assertTrue(isNewer("0.3.2", "0.3.2-test.1"))
+        // 跨核心仍以数字段优先。
+        assertTrue(isNewer("0.3.3-test.1", "0.3.2-test.9"))
+    }
+
+    // ── DESK-02①: 更新通道由构建推导（零 UI、零持久化） ──
+
+    @Test
+    fun channelFromVersion_derivesFromVersionString() {
+        // 正式构建（无 -test. 后缀）→ stable，家人设备不被 test 波及。
+        assertEquals(UpdateChannel.Stable, channelFromVersion("0.3.2"))
+        assertEquals(UpdateChannel.Stable, channelFromVersion("0.3.1"))
+        // 构建期 PPF_BUILD_VERSION 注入完整 tag → test。
+        assertEquals(UpdateChannel.Test, channelFromVersion("0.3.2-test.1"))
+        assertEquals(UpdateChannel.Test, channelFromVersion("0.3.2-test.2"))
+        assertEquals(UpdateChannel.Test, channelFromVersion("v0.3.2-test.1"))
+    }
+
     @Test
     fun parseManifest_returnsUpdateWhenNewer() {
         val body = """
