@@ -60,3 +60,21 @@ backoff 空转、并行测试间端口/socket 竞争、iroh-blobs 内部竞态�
 ## 收尾
 
 直推 main 前确认 CI 绿；PROGRESS/NEXT 各留一行；卡移 done/ 并附验收记录。
+
+---
+📌 **第 1 步完成（2026-08-10，Salamira）——取证桩已落，单独推 main；卡留队列等证据**
+
+- 实现：`crates/transport/tests/blobs_resume.rs` 新增 `stamp()`（带
+  时间戳的阶段打点，eprintln——nextest 捕获 stderr、仅失败时显示，
+  TIMEOUT 日志直接指出卡点）；`kill_mid_transfer_then_resume_verifies`
+  全阶段插桩：setup → provider ready → 每 attempt receiver bound /
+  pull spawned / 传输进度逐 MB 打点（waiting for kill threshold:
+  N bytes on disk）→ kill landed / outran-retry → restart rebinding /
+  durable bytes / resume pull started / completed+verified → verify
+  ALL GREEN。
+- 本地实证（贴输出）：7.80s 全绿——进度桩逐 MB 增长正常、kill 落在
+  ~7.5MB、restart 后 resume pull 2s 完成、位级一致。桩零侵入：测试
+  行为不变（4/4 全绿，9.83s 全文件）。
+- 后续：每次 CI 再 TIMEOUT，日志会显示最后一条 stamp 在哪——卡在
+  attempt N waiting（传输没动）= 传输前 stall；卡在 resume pull
+  started = 重拨/续传 stall。等证据积累后做第 2 步（本地复现）。

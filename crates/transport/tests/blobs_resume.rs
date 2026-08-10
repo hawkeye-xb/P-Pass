@@ -20,6 +20,15 @@ use transport::{Blobs, IrohTransport, TransportConfig};
 
 const PAYLOAD: usize = 50 * 1024 * 1024;
 
+// FIX-SC2 (2026-08-10): 取证桩——带时间戳的阶段进度标记。该测试在
+// pr.yml lint+test 里 300s TIMEOUT 过 3 次（隔离复跑 6.4s 过），量级差
+// 说明是并发时序下的 stall 而非慢。nextest 默认捕获 stderr、仅失败时
+// 连同输出一起显示——所以每次 TIMEOUT 的日志会直接指出卡在哪个阶段，
+// 变 rerun 碰运气为每次失败都在积累证据（用户拍板的取证桩方向）。
+fn stamp(t0: &std::time::Instant, phase: &str, detail: impl std::fmt::Display) {
+    eprintln!("[+{:>6.1}s] {phase}: {detail}", t0.elapsed().as_secs_f64());
+}
+
 /// Deterministic 50MB that doesn't compress to nothing (xorshift bytes).
 fn payload() -> Vec<u8> {
     let mut v = Vec::with_capacity(PAYLOAD);
@@ -53,9 +62,12 @@ async fn provider(dir: &Path) -> (IrohTransport, Blobs, [u8; 32], String, Vec<u8
 
 #[tokio::test(flavor = "multi_thread")]
 async fn kill_mid_transfer_then_resume_verifies() {
+    let t0 = std::time::Instant::now();
+    stamp(&t0, "setup", "tempdir + provider");
     let dir = tempfile::tempdir().unwrap();
     let (_tp, _blobs, hash, ticket, data) = provider(dir.path()).await;
     let receiver_store = dir.path().join("receiver-store");
+    stamp(&t0, "setup", "provider ready");
 
     // Phase 1: start pulling, kill the receiver mid-flight. The store dir
     // is probed via the file system only — opening the redb store from a
@@ -74,16 +86,30 @@ async fn kill_mid_transfer_then_resume_verifies() {
             ))
             .await
             .unwrap();
+        stamp(&t0, &format!("attempt {attempt}"), "receiver bound");
         let blobs = Blobs::open(&rx_tp, &receiver_store).await.unwrap();
         let ticket = ticket.clone();
         let dest = dir.path().join("never-finished.bin");
         let pull = tokio::spawn(async move { blobs.pull(&ticket, &dest).await });
+        stamp(&t0, &format!("attempt {attempt}"), "pull spawned");
 
         // Deadline: if the pull never even starts moving bytes (slow CI
         // runner, transient bind failure), fail fast with a diagnosis
         // instead of spinning until the CI job's global timeout kills us.
         let started = std::time::Instant::now();
+        let mut last_stamp = 0u64;
         while !pull.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+            // FIX-SC2: 周期打点——每 ~250ms 报一次已落盘字节数。若卡在
+            // 传输前/传输中，日志直接显示字节不再增长（stall 现场）。
+            let bytes = dir_bytes(&receiver_store);
+            if bytes / 1024 / 1024 != last_stamp {
+                last_stamp = bytes / 1024 / 1024;
+                stamp(
+                    &t0,
+                    &format!("attempt {attempt}"),
+                    format_args!("waiting for kill threshold: {bytes} bytes on disk"),
+                );
+            }
             assert!(
                 started.elapsed() < std::time::Duration::from_secs(120),
                 "pull moved no bytes in 120 s — transfer never started                  (store bytes: {})",
@@ -102,15 +128,26 @@ async fn kill_mid_transfer_then_resume_verifies() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         if was_killed {
             killed = true;
+            stamp(
+                &t0,
+                &format!("attempt {attempt}"),
+                "kill landed mid-transfer",
+            );
             break;
         }
         eprintln!("attempt {attempt}: transfer outran the abort, retrying");
+        stamp(
+            &t0,
+            &format!("attempt {attempt}"),
+            "transfer outran abort, retrying",
+        );
     }
     assert!(killed, "could not land a mid-transfer kill in 5 attempts");
 
     // Restarted receiver: fresh endpoint, same store dir. How much the
     // crash left durable is the store's business (batching) — what MUST
     // hold is that the pull completes and verifies from whatever is there.
+    stamp(&t0, "restart", "rebinding receiver endpoint");
     let rx_tp = IrohTransport::bind(TransportConfig::loopback(
         vec![transport::ALPN_BLOBS.into()],
     ))
@@ -119,10 +156,17 @@ async fn kill_mid_transfer_then_resume_verifies() {
     let blobs = Blobs::open(&rx_tp, &receiver_store).await.unwrap();
     let already = blobs.local_bytes(hash).await.unwrap();
     eprintln!("restart found {already} durable bytes (informational)");
+    stamp(
+        &t0,
+        "restart",
+        format_args!("durable bytes on restart: {already}"),
+    );
 
     let dest = dir.path().join("recovered.bin");
+    stamp(&t0, "restart", "resume pull started");
     let got = blobs.pull(&ticket, &dest).await.unwrap();
     assert_eq!(got, hash, "pull must verify the expected hash");
+    stamp(&t0, "restart", "resume pull completed + hash verified");
 
     let recovered = fs::read(&dest).unwrap();
     assert_eq!(recovered.len(), data.len());
@@ -131,6 +175,7 @@ async fn kill_mid_transfer_then_resume_verifies() {
         &hash,
         "recovered file must be bit-identical"
     );
+    stamp(&t0, "verify", "recovered file bit-identical, ALL GREEN");
     blobs.close().await;
     rx_tp.close().await;
 }
