@@ -1,42 +1,61 @@
-# FIX-SC2 blobs_resume 300s 超时 flake 根治　级别 L1
+# FIX-SC2 blobs_resume 300s 超时 flake 根治　级别 L2（2026-08-10 用户拍板改方向）
 
-## blocker（2026-08-10 第三次撞上，每次都要 rerun 碰运气）
+## blocker
 
 `transport::blobs_resume::kill_mid_transfer_then_resume_verifies` 在
-pr.yml lint+test job 里 300s TIMEOUT（nextest 默认每测试 300s 上限）。
-历史：NEXT.md DAE-02 段记过 1 次（「隔离复跑 6.4s 过=并发偶发」），
-2026-08-10 同一天连续 2 次（run 31351715951 / 31353615430，均为
-`TIMEOUT [300.007s] (N/N) transport::blobs_resume`，rerun 后 5m21s
-整体通过）。**第 3 次了，不能继续靠 rerun 碰运气**——CI 稳定性是
-「CI 绿不过夜」底线的支撑，连续撞说明不是纯随机：50MB 传输 +
-abort + 新 endpoint 重开 store + pull 补完，在 CI 慢 runner 上
-可能逼近 300s，或被 nextest 默认线程数拖慢（T-021 原卡验收是
-`--test-threads 1` 连跑 5 次零 flake，CI 是并行跑）。
+pr.yml lint+test 里 300s TIMEOUT，已撞 3 次（NEXT.md DAE-02 段 1 次 +
+2026-08-10 run 31351715951 / 31353615430），每次靠 rerun 碰运气。
 
-## 修法（可选其一，选前在卡尾写理由）
+## 关键证据：这不是「慢」，是「卡死」
 
-1. 该测试加 `#[nextest(timeout = 600)]` 或 nextest 配置里对该测试
-   单独放宽——最小改动，先看是不是真慢（贴慢 runner 实际耗时）。
-2. 测试数据降档：50MB → 16MB（T-021 验收时 8MiB 已能钉死续传语义，
-   50MB 是「大文件」余量，CI 上不值 300s 风险）——先量化耗时再降。
-3. pr.yml lint+test job 用 `--test-threads 1` 跑 transport 包或该
-   测试（T-021 原卡就是这么验收的，最接近「零 flake」的已知配置）。
+- 隔离复跑 **6.4s** 过（NEXT.md 在案）；
+- 验收人本机全量并行跑 **12.75s** 过（2026-08-10，219/219 那轮）；
+- CI 上 300s 打满被杀。
+
+12s 的测试不会因为 runner 慢就变成 300s+——**量级差说明是并发时序下的
+stall/死锁/无限等待**（候选：kill 后重拨等一个永远不来的连接、retry
+backoff 空转、并行测试间端口/socket 竞争、iroh-blobs 内部竞态）。
+
+## 禁止项（用户明令，写在最前面）
+
+以下手段**不许作为修复**：放宽 timeout、缩小测试数据量、加 retries、
+跳测/标 flaky。`--test-threads 1` 只许作为「证明与并发相关」的**实验
+证据**，不许作为最终修法——生产里 daemon 同样是并发环境，串行化测试
+等于把真 bug 扫进地毯。
+
+## 修法（按序做，每步产出证据）
+
+1. **先落取证桩（可以单独先推）**：给该测试加带时间戳的进度标记
+   （bind / 传输进度字节数 / kill / 重开 store / redial / pull 进度 /
+   verify 各阶段 eprintln 或 tracing）——下次 CI 再 TIMEOUT，日志直接
+   指出卡在哪个阶段。变 rerun 碰运气为每次失败都在积累证据。
+2. **本地复现**：高并发压力下循环跑（`cargo nextest run -p transport
+   --retries 0` 全量并行 + 人为 CPU 负载，或提高 test-threads），目标
+   是拿到至少一次本地 stall + 完整进度日志。复现不了就在 CI 上用
+   workflow_dispatch 循环收集（不打 tag）。
+3. **从卡点定根因**：进度日志指到哪个阶段，就查那个阶段的时序——
+   test harness 的竞态（如 kill 时机与 store 落盘竞争）和产品代码的
+   竞态（transport 重连/续传逻辑）都有可能。**若是产品 bug，这张卡
+   价值翻倍**（用户真机 kill App 续传就是这条路径）。
+4. **例外出口（须证据齐全）**：若根因锁定为 iroh-blobs 上游 bug——
+   贴最小复现 + 上游 issue 链接，在正确的层做最窄 workaround，卡尾
+   写清理由等 review。
 
 ## 可执行验收
 
-1. 修完连续 3 次 CI run 的 lint+test job 全绿（不再 TIMEOUT）。
-2. 本地 `cargo nextest run -p transport --retries 0 --test-threads 1`
-   连跑 5 次零 flake（T-021 原验收命令，回归不破）。
+1. 根因写成一段话，能指到具体代码行/时序（不接受「可能是 CI 慢」）。
+2. 修复后，在能复现 stall 的环境连跑 **20 次零 TIMEOUT**（贴输出）。
+3. CI lint+test 连续 3 个 run 绿（不再 TIMEOUT）。
+4. 隔离基线不回归：`--test-threads 1` 连跑 5 次仍绿（T-021 原验收）。
 
 ## 反证
 
-把超时上限改回 300s / 数据档调回 50MB → 慢 runner 上必复现 TIMEOUT
-（贴输出后还原）。
+把修复撤掉，在第 2 步的复现环境里必须重新 stall（贴输出后还原）。
+若撤掉修复也不复现 = 没找到根因，打回。
 
 ## 证据要求
 
-慢 runner 上该测试的实际 wall time（`--report-time` 或 nextest
-timing）+ 3 次 CI 绿 run 链接。
+进度日志（含一次 stall 现场）+ 20 连跑输出 + 3 个 CI run 链接。
 
 ## 收尾
 
