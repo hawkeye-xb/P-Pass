@@ -388,7 +388,11 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       死局、失败短退避重试 2 次后放弃、新相册默认不包含+「新」徽标。
       android 121/121 + CI 绿。挂账：模拟器 onboarding 截图 + 三星真机
       全流程/连拍 20 张只触发一次/部分授权观感（验收人）。
-- [ ] UX-08 配对确认列表化
+- [x] UX-08 配对确认列表化 — **merged 2026-08-11 (07cd1b9)**:
+      多台同时扫码 → pending 全量列表一屏列出，逐行允许/拒绝，全清后
+      关闭无残留（daemon 只读 pairing.pending + confirm 带 device_name）；
+      提示条 5s 自动消失 + × 手动关闭。ipc_flow 8/8 + vite build 绿。
+      挂账：3 台同时扫码真窗口逐行处理截图 + 提示条实机观感（验收人）。
 - [ ] REL-02 更新双通道
 - [ ] DEV-01 身份保全+重配对合并（A 档）
 
