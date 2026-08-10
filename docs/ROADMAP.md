@@ -393,7 +393,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       关闭无残留（daemon 只读 pairing.pending + confirm 带 device_name）；
       提示条 5s 自动消失 + × 手动关闭。ipc_flow 8/8 + vite build 绿。
       挂账：3 台同时扫码真窗口逐行处理截图 + 提示条实机观感（验收人）。
-- [ ] REL-02 更新双通道
+- [x] REL-02 更新双通道 — **merged 2026-08-11 (96c61ae + 8b5362c)**:
+      test tag 自动 publish 为 prerelease（latest 天然忽略，不漏 stable）；
+      Worker 代理 test 通道 manifest（GitHub API 限流 60/h/IP，客户端不
+      直连，300s 缓存）；Android 设置页通道切换（默认 stable，stable 原
+      URL 单测锁死）；桌面设置页通道 + 壳内检查 + 下载页（tauri updater
+      静态 endpoint 硬约束）。android 124/124 + vite build 绿。
+      挂账：Worker 部署（ppf-ops）+ 发 prerelease/正式 release 双端对照
+      + 篡改签名拒绝（验收人）。
 - [ ] DEV-01 身份保全+重配对合并（A 档）
 
 ## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
