@@ -320,7 +320,7 @@ class BackupWorker(
         val notification = NotificationCompat.Builder(context, FAIL_CHANNEL_ID)
             .setContentTitle(context.getString(R.string.notif_backup_failed_title))
             .setContentText(context.getString(R.string.notif_backup_failed_body, failedCount))
-            .setSmallIcon(android.R.drawable.stat_sys_warning)
+            .setSmallIcon(R.drawable.ic_notification)
             .setAutoCancel(true)
             .setContentIntent(pi)
             .build()
@@ -340,7 +340,7 @@ class BackupWorker(
         val notification = NotificationCompat.Builder(applicationContext, CHANNEL_ID)
             .setContentTitle("P-Pass 正在备份照片")
             .setContentText("Backing up to your home computer…")
-            .setSmallIcon(android.R.drawable.stat_sys_upload)
+            .setSmallIcon(R.drawable.ic_notification)
             .setOngoing(true)
             .build()
         return if (Build.VERSION.SDK_INT >= 29) {

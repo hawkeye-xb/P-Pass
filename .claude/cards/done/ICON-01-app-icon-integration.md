@@ -70,3 +70,15 @@ SVG 源文件的几何与颜色；tokens.json；图标之外的任何 UI。
 
 CI 绿；PROGRESS/NEXT 一行 + ROADMAP 状态；卡移 done/。完成后具备打
 v0.3.2-test.1 的条件（MOB 批次 + DEV-01 + 新图标一起上真机）。
+
+---
+## 验收记录（2026-08-11 Salamira 执行，实现见 ICON-01-icon-assets.md）
+
+本卡定义的交付全部落地：
+- ① 工具链 `scripts/icons/generate.sh`（rsvg-convert + iconutil + python3）幂等 ✓
+- ② 桌面：icons/ 全套替换；**icns/ico 的 ≤32px 层用 beast 覆盖**（16px 灰像素与 beast 参考逐像素一致）✓；托盘模板图 tray-icon.png（纯黑+alpha）+ `icon_as_template(true)` ✓
+- ③ Android：分密度前景 PNG（VectorDrawable 不支持 pattern 已绕）✓；**monochrome 层**（ic_launcher_monochrome.xml，beast 单色矢量，挂进 adaptive-icon）✓；**通知小图标**（ic_notification.xml，beast 白轮廓矢量，BackupWorker 两处 setSmallIcon 替换系统默认）✓；66% 安全区按 README 处理 ✓
+- ④ 清理：tauri 模板 android 图标目录删除（无引用）✓；HomeScreen 过期注释修正 ✓
+- 反证（icns 小层 beast）：16px 灰像素 52=52 与 beast 一致、carbon 为 57 ✓
+
+挂账（验收人）：浅/深色菜单栏托盘截图、Android 13 主题图标观感、通知小图标实机、圆/方遮罩不裁脸。

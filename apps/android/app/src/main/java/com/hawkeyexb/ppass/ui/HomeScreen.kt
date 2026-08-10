@@ -187,11 +187,11 @@ fun HomeScreen(
                 HorizontalDivider(color = PPColor.Safe.copy(alpha = 0.18f))
                 Spacer(Modifier.height(12.dp))
 
-                // ── 进度区（T-083 目标 2）：进行中 = 设计稿原样（状态行 +
-                // 6dp 进度条 + 白底描边「暂停」）；空闲态设计稿未画，按卡内
-                // 裁决做最小延伸 = 弱文案「插电 + Wi-Fi 时自动进行」+ 同款
-                // 白底描边次级按钮「现在备份」。黑色主按钮不再出现在 hero。
-                // 配对失效时按钮收起，出路在红卡（重新扫码连接）。
+                // ── 进度区（T-083 目标 2 + MOB-02 重构）：进行中 = 状态行 +
+                // 6dp 进度条 + 「暂停」；空闲态 = 弱文案「插电 + Wi-Fi 时
+                // 自动进行」（MOB-02 起 hero 主按钮=「选择相册」，见顶部
+                // 英雄卡；「立即备份」入口在设置页）。配对失效时按钮收起，
+                // 出路在红卡（重新扫码连接）。
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         if (busy) {
