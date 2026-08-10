@@ -373,6 +373,20 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] r/selfhosted post, open-source announcement
 - [ ] **Kill line: no exponential signal in 3 months → stop** (pre-agreed)
 
+## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
+
+- [x] MOB-01 全页面安全区适配 — **merged 2026-08-11 (8d0b4b4)**:
+      三星真机内容被导航键遮挡/顶到状态栏。根因 targetSdk 35 强制
+      edge-to-edge 但零 insets 处理。enableEdgeToEdge + PPScreen 统一
+      容器（safeDrawingPadding 一处封装全页面套用，手势/三键导航天然
+      区分），系统栏图标深浅随背景亮度切换。android 107/107 + CI 绿。
+      挂账：模拟器三键/手势逐屏截图 + 三星真机复核（验收人）。
+- [ ] MOB-02 备份触发模型重构（L2，用户 2026-08-11 定稿：事件驱动替代
+      手动按钮、两档运行条件+后果文案、连拍聚合、有限重试、新相册策略）
+- [ ] UX-08 配对确认列表化
+- [ ] REL-02 更新双通道
+- [ ] DEV-01 身份保全+重配对合并（A 档）
+
 ## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
 
 - [x] T-080 Android 两 tab 对齐布局 v1 — **merged 2026-08-06 (4bc62071)**:
