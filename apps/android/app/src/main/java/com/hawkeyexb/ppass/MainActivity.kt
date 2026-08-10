@@ -14,8 +14,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -31,6 +35,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -77,6 +83,8 @@ import com.hawkeyexb.ppass.ui.PPColor
 import com.hawkeyexb.ppass.ui.ScanScreen
 import com.hawkeyexb.ppass.ui.WelcomeScreen
 import com.hawkeyexb.ppass.update.UpdateInfo
+import com.hawkeyexb.ppass.update.UpdateChannel
+import com.hawkeyexb.ppass.update.UpdateChannelStore
 import com.hawkeyexb.ppass.update.downloadAndInstall
 import com.hawkeyexb.ppass.update.fetchUpdate
 
@@ -143,10 +151,13 @@ fun PPassApp() {
     ) { granted -> if (granted) screen = Screen.Scan }
 
     // UPD-01: 启动时检查一次更新（静默失败；draft/无 release = 无更新；
-    // 对话框覆盖所有 screen，不打断当前流程）
+    // 对话框覆盖所有 screen，不打断当前流程）。REL-02: 按通道取源
+    // （stable 默认 / test 最新 prerelease），切换通道后立即重查。
+    val updateChannelStore = remember { UpdateChannelStore(context) }
+    var updateChannel by remember { mutableStateOf(updateChannelStore.load()) }
     var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
-    LaunchedEffect(Unit) {
-        updateInfo = fetchUpdate(BuildConfig.VERSION_NAME)
+    LaunchedEffect(updateChannel) {
+        updateInfo = fetchUpdate(BuildConfig.VERSION_NAME, updateChannel)
     }
     updateInfo?.let { info ->
         AlertDialog(
@@ -276,6 +287,8 @@ fun PPassApp() {
             var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
             // MOB-02 §三: 「需要 Wi-Fi」关闭需二次确认（移动网络消耗流量）。
             var pendingWifiOff by remember { mutableStateOf(false) }
+            // REL-02: 更新通道切换对话框（显式操作，默认永远 stable）。
+            var pendingChannelSwitch by remember { mutableStateOf(false) }
             val loader = remember {
                 TimelineLoader(client, parsePeerAddrToken(s.pairing.daemonAddrToken)) {
                     client.bind(identity.secretKey())
@@ -366,6 +379,9 @@ fun PPassApp() {
                         onOpenAppSettings = { openAppDetailsSettings(context) },
                         // MOB-02 §四事件①: 排队提示（Wi-Fi 要求不满足时）。
                         wifiDeferred = wifiDeferred,
+                        // REL-02: 更新通道（stable 默认 / test）——显式切换。
+                        updateChannel = updateChannel,
+                        onChannelChangeRequest = { pendingChannelSwitch = true },
                     )
                 },
             )
@@ -384,6 +400,48 @@ fun PPassApp() {
                     },
                     dismissButton = {
                         TextButton(onClick = { pendingWifiOff = false }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    },
+                )
+            }
+            if (pendingChannelSwitch) {
+                // REL-02: 通道切换必须显式——两个选项 + 取消，默认永远 stable；
+                // 切换后 LaunchedEffect(updateChannel) 立即按新通道重查更新。
+                AlertDialog(
+                    onDismissRequest = { pendingChannelSwitch = false },
+                    title = { Text(stringResource(R.string.update_channel_switch_title)) },
+                    text = {
+                        Column {
+                            Text(
+                                stringResource(R.string.update_channel_stable),
+                                fontSize = 16.sp, color = PPColor.Ink,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        pendingChannelSwitch = false
+                                        updateChannelStore.save(UpdateChannel.Stable)
+                                        updateChannel = UpdateChannel.Stable
+                                    }
+                                    .padding(vertical = 10.dp),
+                            )
+                            Text(
+                                stringResource(R.string.update_channel_test),
+                                fontSize = 16.sp, color = PPColor.Ink,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        pendingChannelSwitch = false
+                                        updateChannelStore.save(UpdateChannel.Test)
+                                        updateChannel = UpdateChannel.Test
+                                    }
+                                    .padding(vertical = 10.dp),
+                            )
+                        }
+                    },
+                    confirmButton = {},
+                    dismissButton = {
+                        TextButton(onClick = { pendingChannelSwitch = false }) {
                             Text(stringResource(R.string.cancel))
                         }
                     },

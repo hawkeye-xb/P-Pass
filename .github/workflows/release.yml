@@ -575,3 +575,15 @@ jobs:
           # shellcheck disable=SC2086 # ASSETS 是刻意拆分
           gh release upload "$TAG" $ASSETS
           echo "assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      # REL-02: test tag → 自动 publish 为 prerelease（GitHub latest 天然
+      # 忽略 prerelease，绝不会漏进 stable 通道）——开发/狗粮设备 test
+      # 通道自动更新，无需手动传包；正式 tag 保持 draft 等人工 publish
+      #（人工 publish 就是验收后的发布动作，零新基建）。
+      - name: Auto-publish test tags as prerelease
+        if: contains(env.TAG, '-test.')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "$TAG" --prerelease
+          echo "test 通道已发布（prerelease，stable 不受影响）: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
