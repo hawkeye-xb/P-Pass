@@ -140,9 +140,13 @@
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
+      // DEV-01: 每项可能是 {name, hint_match}（新 daemon）或纯字符串
+      // （老 daemon）——统一 normalize 成对象。
       try {
         const p = await call("pairing.pending", {});
-        pendingList = p.pending ?? [];
+        pendingList = (p.pending ?? []).map((x) =>
+          typeof x === "string" ? { name: x, hint_match: null } : x
+        );
       } catch (_) {
         pendingList = [];
       }
@@ -262,11 +266,17 @@
     qrText = "";
   }
 
-  async function confirmPair(accept, name) {
+  async function confirmPair(accept, name, mergeNodeId) {
     try {
       // UX-08: 逐行处理——pairing.confirm 带 device_name 精确确认该台；
       // 不带则默认队首（老调用方兼容，语义不动）。
-      const r = await call("pairing.confirm", { accept, device_name: name });
+      // DEV-01: merge_node_id 存在 = 用户选「替换旧的」——daemon 迁移
+      // 旧设备资产/水位后删除旧行；不传 = 作为新设备（与现状一致）。
+      const r = await call("pairing.confirm", {
+        accept,
+        device_name: name,
+        merge_node_id: mergeNodeId ?? null,
+      });
       flashMessage(
         accept ? t("ui.pair_allowed", { name: r.device }) : t("ui.pair_denied", { name: r.device })
       );
@@ -761,12 +771,30 @@
           <h3>{pendingList.length > 1 ? `有 ${pendingList.length} 台设备请求加入` : "有设备请求加入"}</h3>
           <p class="hint modal-hint">确认是家人的手机吗？允许后它会出现在设备列表里。</p>
           <div class="pending-list">
-            {#each pendingList as name}
+            {#each pendingList as item}
+              <!-- DEV-01: item 可能带 hint_match——这台手机以前配对过
+                   （重装/清数据后重扫）。主按钮「允许」默认带 merge=替换
+                   旧的（继承名字/备份记录/水位），旁边加「作为新设备」
+                   次级按钮=全新流程（与现状完全一致）。 -->
               <div class="pending-row">
-                <span class="pending-name">{name}</span>
+                <div class="pending-info">
+                  <span class="pending-name">{item.name}</span>
+                  {#if item.hint_match}
+                    <span class="pending-hint">
+                      这台手机重装过——可以替换原来的「{item.hint_match.name}」，保留它的备份记录
+                    </span>
+                  {/if}
+                </div>
                 <div class="pending-actions">
-                  <button onclick={() => confirmPair(false, name)}>{t("ui.deny")}</button>
-                  <button class="primary" onclick={() => confirmPair(true, name)}>{t("ui.allow")}</button>
+                  <button onclick={() => confirmPair(false, item.name)}>{t("ui.deny")}</button>
+                  {#if item.hint_match}
+                    <button onclick={() => confirmPair(true, item.name)}>{t("ui.allow_new")}</button>
+                    <button class="primary" onclick={() => confirmPair(true, item.name, item.hint_match.node_id)}>
+                      {t("ui.allow_replace")}
+                    </button>
+                  {:else}
+                    <button class="primary" onclick={() => confirmPair(true, item.name)}>{t("ui.allow")}</button>
+                  {/if}
                 </div>
               </div>
             {/each}
@@ -1307,11 +1335,22 @@
     border-radius: var(--pp-radius-control-sm);
     padding: 10px 12px;
   }
+  .pending-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
   .pending-name {
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .pending-hint {
+    color: var(--pp-act);
+    font-size: 13px;
+    line-height: 17px;
   }
   .pending-actions {
     display: flex;

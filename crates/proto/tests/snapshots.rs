@@ -61,6 +61,7 @@ fn snapshot_pair_request() {
         token: "abcd1234abcd1234abcd1234abcd1234".into(),
         device_name: "Mom's Phone".into(),
         role: "member".into(),
+        device_hint: None,
     };
     assert_roundtrip(&pr);
     snapshot_message("pair_request", &pr);

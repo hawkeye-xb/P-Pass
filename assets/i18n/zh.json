@@ -23,6 +23,8 @@
   "ui.pending_pairs": "{n} 个配对请求待确认",
   "ui.allow": "允许加入",
   "ui.deny": "拒绝",
+  "ui.allow_replace": "替换旧的，允许",
+  "ui.allow_new": "作为新设备",
   "ui.add_device": "添加设备",
   "ui.generate_qr": "生成配对二维码",
   "ui.qr_fallback": "无法扫码？复制配对串",

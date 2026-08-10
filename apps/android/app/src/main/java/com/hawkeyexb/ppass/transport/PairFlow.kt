@@ -19,6 +19,21 @@ sealed class PairOutcome {
 }
 
 /**
+ * DEV-01 重装指纹：SHA-256(Build.MODEL + ANDROID_ID) 前 8 字节 hex。
+ * - 免权限：Build.MODEL / ANDROID_ID 都无需运行时权限；
+ * - ANDROID_ID 自 API 26 按「签名+用户+设备」隔离——同签名重装不变、
+ *   仅恢复出厂重置才变——正是「识别重装」需要的性质；
+ * - 只作提示不作凭据：daemon 的鉴权不读它。
+ */
+fun reinstallHint(): String {
+    val model = android.os.Build.MODEL
+    val androidId = android.provider.Settings.Secure.ANDROID_ID
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+        .digest((model + androidId).toByteArray(Charsets.UTF_8))
+    return digest.take(8).joinToString("") { "%02x".format(it) }
+}
+
+/**
  * Scan result → pair.request → wait for the owner's Allow.
  * [waitMs] must exceed a human's reaction time generously; the QR
  * token itself lives 10 minutes.
@@ -28,6 +43,9 @@ suspend fun pairWithQr(
     qr: String,
     deviceName: String,
     waitMs: Long = 120_000,
+    // DEV-01: 重装识别开关——关掉时不发指纹，行为回到 DEV-01 前
+    // （重装后出新设备行）。默认开。
+    reinstallHintEnabled: Boolean = true,
 ): PairOutcome {
     val parsed = try {
         parsePairingQr(qr)
@@ -83,7 +101,11 @@ suspend fun pairWithQr(
                 Methods.PAIR_REQUEST,
                 ProtoJson.encodeToJsonElement(
                     PairRequest.serializer(),
-                    PairRequest(token = parsed.token, deviceName = deviceName),
+                    PairRequest(
+                        token = parsed.token,
+                        deviceName = deviceName,
+                        deviceHint = if (reinstallHintEnabled) reinstallHint() else null,
+                    ),
                 ),
             )
         }

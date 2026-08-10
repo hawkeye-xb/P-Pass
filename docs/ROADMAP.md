@@ -401,7 +401,24 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       静态 endpoint 硬约束）。android 124/124 + vite build 绿。
       挂账：Worker 部署（ppf-ops）+ 发 prerelease/正式 release 双端对照
       + 篡改签名拒绝（验收人）。
-- [ ] DEV-01 身份保全+重配对合并（A 档）
+- [x] DEV-01 身份保全+重配对合并（A 档）— **merged 2026-08-11（本 commit）**:
+      重装/清数据后旧设备变僵尸行的根治。两段：①pair.request 加可选
+      device_hint（SHA-256(Build.MODEL+ANDROID_ID) 前 8 字节 hex，免权限、
+      不进 QR、不作凭据；Android 设置页「重装识别」开关默认开，关掉不
+      发 hint 行为回到现状）；②owner 确认框发现存量同 hint 设备 → 多一组
+      选项默认「替换旧的 <名字>」（继承名字/备份记录/水位，asset 归属
+      迁移 + watermark 取 max + 旧行删除 + 审计 device.merged），另一项
+      「作为新设备」= 与现状一致。反证：合并后旧 NodeId backup.begin 被拒。
+      proto 金样本新旧帧互解（旧帧无 hint 字节不变）。daemon/storage/proto
+      全量绿（含 3 个新集成测试）。
+- [x] ICON-01 图标接入双端构建 — **merged 2026-08-11（本 commit）**:
+      屋脊兽图标从设计归档变正式构建资产。版本分工（用户钦定）：主图标=
+      碳纹版（macOS .icns 全档位/Windows .ico 6 档/Android 自适应前景）；
+      ≤40px/托盘/通知=beast 全实线版（16px 碳纹糊成灰已视觉实证）；macOS
+      托盘=模板图标（纯黑+alpha + icon_as_template）。Android 前景层分密度
+      PNG（VectorDrawable 不支持 pattern），Manifest 接 android:icon。
+      生成脚本 scripts/icons/generate.sh 幂等（67 产物两次跑字节一致）。
+      桌面 cargo check 绿 + Android assembleDebug 绿（验收中）。
 
 ## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
 

@@ -30,18 +30,46 @@ pub enum PairRejection {
     OwnerDeclined,
 }
 
+/// Owner-side verdict for one pending pairing request.
+///
+/// DEV-01: `AcceptMerge` carries the old device whose data (assets,
+/// watermark, name) the fresh pairing takes over — the owner picked
+/// "替换旧的 <名字>" in the confirm dialog. `Accept` = plain join.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PairDecision {
+    /// Join as a brand-new device (identical to pre-DEV-01 accept).
+    Accept,
+    /// Join and merge the named old device's data into this identity.
+    AcceptMerge { old_node_id: Vec<u8> },
+    /// The owner said no.
+    Reject,
+}
+
+/// A device that matches the joining device's reinstall hint (DEV-01).
+#[derive(Debug, Clone)]
+pub struct HintMatch {
+    pub node_id: Vec<u8>,
+    pub name: String,
+}
+
 /// A pairing request waiting for the owner's decision.
 #[derive(Debug)]
 pub struct PendingPair {
     pub peer: transport::NodeId,
     pub device_name: String,
     pub role: Role,
-    decision: oneshot::Sender<bool>,
+    /// DEV-01: joining device's reinstall fingerprint, if the client
+    /// sent one (owner enabled 重装识别 on the phone).
+    pub device_hint: Option<String>,
+    /// DEV-01: an existing non-revoked device sharing the same hint —
+    /// the "replace the old device" candidate. None = no match.
+    pub hint_match: Option<HintMatch>,
+    decision: oneshot::Sender<PairDecision>,
 }
 
 impl PendingPair {
-    pub fn decide(self, accept: bool) {
-        let _ = self.decision.send(accept);
+    pub fn decide(self, decision: PairDecision) {
+        let _ = self.decision.send(decision);
     }
 }
 
@@ -152,6 +180,23 @@ impl Pairing {
             _ => Role::Member,
         };
 
+        // DEV-01: resolve the reinstall-hint match *before* parking the
+        // request — the confirm dialog needs to know whether "替换旧的"
+        // is even offered. Hint is a hint only: no match = plain join.
+        let hint_match = match &req.device_hint {
+            Some(hint) => self
+                .db
+                .find_by_hint(hint, &peer.0)
+                .await
+                .ok()
+                .and_then(|v| v.into_iter().next())
+                .map(|d| HintMatch {
+                    node_id: d.node_id,
+                    name: d.name,
+                }),
+            None => None,
+        };
+
         let decision_rx = {
             let mut inner = self.inner.lock().expect("pairing lock");
             let token = parse_token(&req.token).ok_or(PairRejection::BadToken)?;
@@ -169,6 +214,8 @@ impl Pairing {
                 peer,
                 device_name: req.device_name.clone(),
                 role,
+                device_hint: req.device_hint.clone(),
+                hint_match,
                 decision: tx,
             };
             if inner.pending_tx.send(pending).is_err() {
@@ -189,22 +236,26 @@ impl Pairing {
             })
             .await;
 
-        match decision_rx.await {
-            Ok(true) => {}
-            _ => {
-                // T5: owner 拒绝（或 UI 消失/超时）同样入审计。
-                let _ = self
-                    .db
-                    .append_audit(&storage::AuditEntry {
-                        ts: now_ms,
-                        actor: Some(peer.0.to_vec()),
-                        action: "pair.denied".into(),
-                        target_hash: None,
-                        detail: Some(req.device_name.clone()),
-                    })
-                    .await;
-                return Err(PairRejection::OwnerDeclined);
-            }
+        let decision = decision_rx.await;
+        let (accept, merge_from) = match decision {
+            Ok(PairDecision::Accept) => (true, None),
+            Ok(PairDecision::AcceptMerge { old_node_id }) => (true, Some(old_node_id)),
+            _ => (false, None),
+        };
+
+        if !accept {
+            // T5: owner 拒绝（或 UI 消失/超时）同样入审计。
+            let _ = self
+                .db
+                .append_audit(&storage::AuditEntry {
+                    ts: now_ms,
+                    actor: Some(peer.0.to_vec()),
+                    action: "pair.denied".into(),
+                    target_hash: None,
+                    detail: Some(req.device_name.clone()),
+                })
+                .await;
+            return Err(PairRejection::OwnerDeclined);
         }
 
         let device = Device {
@@ -214,6 +265,7 @@ impl Pairing {
             paired_at: now_ms,
             last_seen: Some(now_ms),
             revoked: false,
+            device_hint: req.device_hint.clone(),
         };
         let rejoining = matches!(
             self.db.get_device(&peer.0).await,
@@ -228,6 +280,37 @@ impl Pairing {
             // flag by design, so reinstate explicitly.
             let _ = self.db.unrevoke(&peer.0).await;
         }
+
+        // DEV-01: owner picked "替换旧的" — migrate the old device's
+        // assets/watermark into this fresh identity and delete it.
+        let mut detail = if rejoining {
+            format!("{} (rejoined after revoke)", device.name)
+        } else {
+            device.name.clone()
+        };
+        if let Some(old_id) = merge_from {
+            if let Ok(old_name) = self.db.merge_device(&old_id, &peer.0).await {
+                detail = format!(
+                    "{} (merged from {} — reinstall replacement)",
+                    device.name, old_name
+                );
+                let _ = self
+                    .db
+                    .append_audit(&storage::AuditEntry {
+                        ts: now_ms,
+                        actor: Some(peer.0.to_vec()),
+                        action: "device.merged".into(),
+                        target_hash: None,
+                        detail: Some(format!(
+                            "from {} to {} (reinstall replacement)",
+                            hex(&old_id),
+                            hex(&peer.0)
+                        )),
+                    })
+                    .await;
+            }
+        }
+
         let _ = self
             .db
             .append_audit(&storage::AuditEntry {
@@ -235,11 +318,7 @@ impl Pairing {
                 actor: Some(peer.0.to_vec()),
                 action: "pair.accepted".into(),
                 target_hash: None,
-                detail: Some(if rejoining {
-                    format!("{} (rejoined after revoke)", device.name)
-                } else {
-                    device.name.clone()
-                }),
+                detail: Some(detail),
             })
             .await;
         Ok(())

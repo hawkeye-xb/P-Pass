@@ -454,6 +454,7 @@ mod tests {
 
         // A rostered device contributes its display name.
         db.upsert_device(&crate::Device {
+            device_hint: None,
             node_id: vec![3u8; 32],
             name: "妈妈的手机".into(),
             role: crate::Role::Member,
