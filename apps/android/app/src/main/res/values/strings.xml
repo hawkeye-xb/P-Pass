@@ -32,8 +32,10 @@
     <string name="pair_failed_body">Make sure the computer is on and both devices have internet, then scan again.</string>
     <string name="scan_again">Scan again</string>
     <string name="joined_title">This phone has joined.</string>
-    <string name="joined_body">Connected to %1$s.\nBacking up starts now — on Wi-Fi, while charging. You can close the app.</string>
+    <string name="joined_body">Connected to %1$s.\nNext, choose which albums to back up.</string>
     <string name="done">Done</string>
+    <!-- MOB-02 §一: 配对成功后的引导按钮（进相册选择页） -->
+    <string name="choose_albums">Choose albums</string>
     <string name="not_a_code">This is not a P-Pass pairing code.</string>
     <string name="code_missing_addr">The code has no address — generate a fresh one on the computer.</string>
 
@@ -86,13 +88,33 @@
     <string name="bucket_select_all">Select all</string>
     <string name="bucket_clear">Clear</string>
     <string name="bucket_done">Back up %1$d albums</string>
+    <!-- MOB-02 §六: 新相册徽标 -->
+    <string name="bucket_new">New</string>
     <string name="backup_scope">Albums to back up</string>
     <string name="backup_scope_all">All albums</string>
     <string name="backup_scope_n">%1$d albums</string>
-    <!-- UX-03: 后台规则一行 + 极简设置 -->
+    <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
+         Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
     <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
-    <string name="setting_charge_only">Only while charging</string>
-    <string name="setting_wifi_only">Only on WiFi</string>
+    <string name="setting_charge_only">Require charging</string>
+    <string name="setting_wifi_only">Require Wi-Fi</string>
+    <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
+    <string name="req_charge_off_consequence">Will try to back up whenever new photos arrive — system-level watch, no extra battery drain</string>
+    <string name="wifi_off_confirm_title">Turn off the Wi-Fi requirement?</string>
+    <string name="wifi_off_confirm_body">Backup will also run on mobile data — it may use your data allowance.</string>
+    <string name="wifi_off_confirm_ok">Turn off anyway</string>
+    <string name="policy_both">Now: backs up automatically when charging and on Wi-Fi</string>
+    <string name="policy_charge_only">Now: backs up automatically when charging (mobile data allowed)</string>
+    <string name="policy_wifi_only">Now: backs up automatically on Wi-Fi (no charging needed)</string>
+    <string name="policy_none">Now: backs up automatically any time</string>
+    <!-- MOB-02 §四事件①: 排队提示 -->
+    <string name="wifi_deferred_hint">Will run once Wi-Fi is available</string>
+    <!-- MOB-02 §二: 部分授权引导 -->
+    <string name="partial_access_title">Only some photos are accessible</string>
+    <string name="partial_access_body">Backup needs access to the full library. Grant full photo access to back up everything.</string>
+    <string name="partial_access_action">Open settings</string>
+    <!-- MOB-02 §一: 设置页低调立即备份入口（测试/狗粮用） -->
+    <string name="manual_backup_entry">Back up now</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">Background protection off</string>
     <string name="dog_battery_body">Tip: whitelist P-Pass in battery settings, so the system won\'t interrupt backups while the screen is off.</string>
@@ -111,7 +133,7 @@
     <string name="disconnect_failed_title">Could not disconnect</string>
     <string name="disconnect_failed">Could not reach the storage computer. Check that it is on, then try again.</string>
     <string name="ok">OK</string>
-    <string name="run_failed">No photos are lost — everything already home is safe. This run didn\'t finish; try again and it picks up where it left off.</string>
+    <string name="run_failed">This backup didn\'t finish — it will try again automatically, and also with the next new photos or scheduled run.</string>
 
     <!-- Photos -->
     <string name="photos_title">Family photos</string>

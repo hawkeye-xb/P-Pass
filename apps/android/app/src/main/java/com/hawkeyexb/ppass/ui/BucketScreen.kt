@@ -36,16 +36,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.MediaScanner
+import com.hawkeyexb.ppass.backup.newAlbumIds
 
 @Composable
 fun BucketScreen(
     buckets: List<MediaScanner.Bucket>,
     selected: Set<Long>,
+    // MOB-02 §六: 新相册判定基准（null = 从未选过范围 = 全量模式，无徽标）。
+    knownBuckets: Set<Long>? = null,
     onDone: (Set<Long>) -> Unit,
     onCancel: () -> Unit,
 ) {
     var checked by remember { mutableStateOf(selected) }
     var selectAll by remember { mutableStateOf(selected.size == buckets.size) }
+    // MOB-02 §六: 新出现的相册 = 当前 − 已知；标「新」徽标，默认不勾选
+    // （不在 selected 里）——配合用户「专用目录」用法。
+    val newIds = newAlbumIds(buckets.map { it.id }.toSet(), knownBuckets)
 
     PPScreen {
         Column(
@@ -97,6 +103,15 @@ fun BucketScreen(
                                 fontSize = 16.sp, color = PPColor.Ink,
                                 modifier = Modifier.weight(1f),
                             )
+                            // MOB-02 §六: 新相册徽标（琥珀小标，不抢主内容）。
+                            if (b.id in newIds) {
+                                Text(
+                                    stringResource(R.string.bucket_new),
+                                    fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                                    color = PPColor.Waiting,
+                                    modifier = Modifier.padding(start = 6.dp),
+                                )
+                            }
                             Text(
                                 stringResource(R.string.bucket_count, b.count),
                                 fontSize = 14.sp, color = PPColor.Ink40,

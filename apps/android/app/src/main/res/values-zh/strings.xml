@@ -29,8 +29,10 @@
     <string name="pair_failed_body">确认电脑开着、两边都能上网，然后重新扫码。</string>
     <string name="scan_again">重新扫码</string>
     <string name="joined_title">这台手机已加入。</string>
-    <string name="joined_body">已连接「%1$s」。\n现在开始备份：连 Wi-Fi、充电时自动进行。可以关掉 App。</string>
+    <string name="joined_body">已连接「%1$s」。\n接下来选择要备份的相册。</string>
     <string name="done">好的</string>
+    <!-- MOB-02 §一: 配对成功后的引导按钮（进相册选择页） -->
+    <string name="choose_albums">选择相册</string>
     <string name="not_a_code">这不是 P-Pass 配对码。</string>
     <string name="code_missing_addr">配对码缺少地址信息，请在电脑上重新生成。</string>
 
@@ -82,13 +84,33 @@
     <string name="bucket_select_all">全选</string>
     <string name="bucket_clear">清空</string>
     <string name="bucket_done">备份这 %1$d 个相册</string>
+    <!-- MOB-02 §六: 新相册徽标 -->
+    <string name="bucket_new">新</string>
     <string name="backup_scope">备份范围</string>
     <string name="backup_scope_all">全部相册</string>
     <string name="backup_scope_n">%1$d 个相册</string>
-    <!-- UX-03: 后台规则一行 + 极简设置 -->
+    <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
+         Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
     <string name="auto_backup_rule">插电 + WiFi 时自动备份，无需打开 App</string>
-    <string name="setting_charge_only">仅充电时</string>
-    <string name="setting_wifi_only">仅 WiFi 时</string>
+    <string name="setting_charge_only">需要充电</string>
+    <string name="setting_wifi_only">需要 Wi-Fi</string>
+    <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
+    <string name="req_charge_off_consequence">有新照片就会尝试备份（系统级监听，不额外耗电）</string>
+    <string name="wifi_off_confirm_title">关闭「需要 Wi-Fi」？</string>
+    <string name="wifi_off_confirm_body">移动网络也会备份，可能消耗流量</string>
+    <string name="wifi_off_confirm_ok">仍然关闭</string>
+    <string name="policy_both">当前：插电且连 Wi-Fi 时自动备份</string>
+    <string name="policy_charge_only">当前：插电时自动备份（移动网络也会）</string>
+    <string name="policy_wifi_only">当前：连 Wi-Fi 时自动备份（不要求插电）</string>
+    <string name="policy_none">当前：随时自动备份</string>
+    <!-- MOB-02 §四事件①: 排队提示 -->
+    <string name="wifi_deferred_hint">将在连上 Wi-Fi 后进行</string>
+    <!-- MOB-02 §二: 部分授权引导 -->
+    <string name="partial_access_title">只授权了部分照片</string>
+    <string name="partial_access_body">备份需要完整相册权限——授予完整相册访问权限，才能备份全部照片。</string>
+    <string name="partial_access_action">去设置</string>
+    <!-- MOB-02 §一: 设置页低调立即备份入口（测试/狗粮用） -->
+    <string name="manual_backup_entry">立即备份</string>
     <!-- DOG-02: 电池白名单引导卡片 -->
     <string name="dog_battery_title">后台保护未开启</string>
     <string name="dog_battery_body">建议：加入电池白名单，熄屏也不被系统打断。</string>
@@ -107,7 +129,7 @@
     <string name="disconnect_failed_title">断开失败</string>
     <string name="disconnect_failed">无法连接存储电脑。请确认电脑已开机，再试一次。</string>
     <string name="ok">好</string>
-    <string name="run_failed">照片一张没丢——已存回家的都是安全的。这次没传完，再试一次会从断点继续。</string>
+    <string name="run_failed">本次备份没有完成，稍后会自动再试；也会随下次新照片或定时任务自动补上。</string>
 
     <string name="photos_title">全家的照片</string>
     <string name="photos_count">%1$d 张</string>

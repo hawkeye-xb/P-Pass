@@ -57,11 +57,20 @@ class TroubleTextTest {
     @Test
     fun redCardHumanCopySaysPhotosSafeAndCarriesNoCode() {
         val zh = zhStrings()
-        for (key in listOf("run_failed", "pairing_lost_body")) {
-            val v = zh.getValue(key)
-            assertTrue("$key 必须先说照片没丢: $v", v.contains("没丢") || v.contains("安全"))
-            assertFalse("$key 不得含代码碎片: $v", v.contains("{") || v.contains("kind:"))
-        }
+        // 配对失效卡：先说「照片没丢」+ 不含代码碎片（T-083 红线原文案）。
+        val pairingLost = zh.getValue("pairing_lost_body")
+        assertTrue("pairing_lost_body 必须先说照片没丢: $pairingLost", pairingLost.contains("没丢"))
+        assertFalse("pairing_lost_body 不得含代码碎片", pairingLost.contains("{") || pairingLost.contains("kind:"))
+        // MOB-02 §五（2026-08-11 用户定稿）失败文案：「本次备份没有完成，
+        // 稍后会自动再试；也会随下次新照片或定时任务自动补上」——文案
+        // 职责从「先说照片没丢」改为「说明会自动捞回」，逐字照卡面。
+        // 资源级红线保留：人话正文、不含任何代码碎片。
+        val runFailed = zh.getValue("run_failed")
+        assertTrue(
+            "run_failed 必须是用户定稿文案: $runFailed",
+            runFailed.contains("本次备份没有完成") && runFailed.contains("自动再试"),
+        )
+        assertFalse("run_failed 不得含代码碎片", runFailed.contains("{") || runFailed.contains("kind:"))
         // 哨兵态主按钮文案 = 「重新扫码连接」（T-083 目标 4）。
         assertEquals("重新扫码连接", zh.getValue("reconnect"))
         // 普通失败主按钮 = 「再试一次」语义。
