@@ -51,3 +51,26 @@ test 通道包故意不 publish（留 draft）→ test 通道必须检查不到�
 ## 收尾
 
 CI 绿；RELEASING.md 补通道说明（en+zh）；PROGRESS/NEXT 一行；卡移 done/。
+
+---
+
+## 验收记录（2026-08-11 Salamira）
+
+- release.yml：`contains(env.TAG, '-test.')` → `gh release edit --prerelease`
+  （Compose notes 步骤把 TAG 写进 GITHUB_ENV，dispatch 与 tag 触发都覆盖）。
+- Worker：infra/workers/update/src/index.ts（/manifest?channel=test|stable，
+  300s Cache API 缓存，manifest 字节透传签名零改动，GH_TOKEN secret 可选）
+  + wrangler.toml 占位（生产配置 ppf-ops，隔离方案 §2）；README 通道说明。
+- Android：UpdateChannelStore（默认 stable）；fetchUpdate(channel)；
+  channelManifestUrl 纯函数；设置页通道行 + 显式切换对话框；GitHub API
+  直连解析（latestPrereleaseManifestUrl）删除。
+- 桌面：设置页通道 select（localStorage）；checkTestChannel 壳内 fetch
+  Worker + 弹窗 + openUrl 下载页；stable 路径原样。
+- 测试：android 124/124（+3：stable URL 锁死反证/test Worker URL/默认
+  stable）；vite build 绿。
+- 用户指正（本卡关键修正）：GitHub 未认证 API 限流 60/h/IP——客户端不
+  直连，解析挪 Cloudflare Worker（占位一直在，一个配置文件的事）。
+- 挂验收人：①Worker 部署（wrangler deploy + DNS update.p-pass.hawkeye-xb.com，
+  生产配置 ppf-ops）；②发 prerelease → test 检查到 / stable 检查不到
+  （双端对照）；③publish 正式 release → stable 检查到；④反证：test tag
+  留 draft → 双端静默；⑤篡改 manifest 签名 → 双端拒绝（既有测试不回归）。

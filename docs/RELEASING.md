@@ -63,6 +63,35 @@
   Without it the manifest ships with empty signatures and the release
   notes say "unsigned".
 
+## 3.6 Update channels (REL-02) — test / stable
+
+Two channels, explicit switch in settings, **stable is always the
+default** (family devices are never touched by test builds):
+
+- **stable** (family devices): clients keep hitting GitHub
+  `releases/latest/download/manifest.json` directly — URL and semantics
+  unchanged (locked by a unit test; do not touch). GitHub `latest` only
+  ever points at a *published* release, so **publishing manually IS the
+  release action** after acceptance.
+- **test** (dev/dogfood devices): CI auto-publishes any tag containing
+  `-test.` as a **GitHub prerelease** (release.yml; GitHub `latest`
+  ignores prereleases by design, so it can never leak into stable).
+  Clients on the test channel fetch
+  `https://update.p-pass.hawkeye-xb.com/manifest?channel=test` — a
+  Cloudflare Worker (`infra/workers/update`) that resolves the latest
+  prerelease's manifest and caches it 300s. Clients never call the
+  GitHub API directly (unauthenticated limit 60/h/IP). Worker deployment
+  config lives in ppf-ops; DNS: `update.p-pass.hawkeye-xb.com`.
+- **404 semantics unchanged**: a test tag left as draft (not published)
+  → no prerelease → Worker 404 → clients stay silent ("no update").
+- Desktop note: tauri updater's endpoint is baked at build time and
+  `Update` has no public constructor, so the test-channel **install**
+  path on desktop is currently "check → dialog → open download page"
+  (in-shell fetch of the Worker manifest + `plugin-opener`). Full
+  auto-install on the test channel would require reimplementing the
+  updater install logic (dmg mount/NSIS silent) — deferred until the
+  desktop updater artifact (3.5 gaps) lands.
+
 ## 4. Release flow (pipeline acceptance / test tags)
 
 - Acceptance tags: `v<X.Y.Z>-test.N` (increment N, never reuse).
@@ -118,6 +147,31 @@
    draft Release（三平台资产）。
 5. **人工 publish**：核对 draft（签名状态、资产清单、e2e 结果若本次
    tag 跑了），然后 `gh release edit <tag> --draft=false`。
+
+## 3.6 更新通道（REL-02）— test / stable
+
+两条通道，设置页显式切换，**默认永远 stable**（家人设备绝不被 test
+构建波及）：
+
+- **stable**（家人设备）：客户端保持直连 GitHub
+  `releases/latest/download/manifest.json`——URL 与语义原样不动（单测
+  锁死，不许碰）。GitHub latest 只认已发布的正式 release，**人工
+  publish 就是验收后的发布动作**。
+- **test**（开发/狗粮设备）：CI 把含 `-test.` 的 tag 自动 publish 为
+  **GitHub prerelease**（release.yml；GitHub latest 设计上忽略
+  prerelease，绝不会漏进 stable）。test 通道客户端 fetch
+  `https://update.p-pass.hawkeye-xb.com/manifest?channel=test`——这是
+  Cloudflare Worker（`infra/workers/update`），Worker 端解析最新
+  prerelease 的 manifest 并缓存 300s。客户端不直连 GitHub API（未认证
+  限流 60 次/小时/IP）。Worker 生产配置在 ppf-ops；DNS：
+  `update.p-pass.hawkeye-xb.com`。
+- **404 语义不变**：test tag 留 draft 不 publish → 无 prerelease →
+  Worker 404 → 客户端静默（「无更新」）。
+- 桌面注：tauri updater endpoint 构建期写死、`Update` 无公开构造器，
+  test 通道**安装**路径当前形态是「检查 → 弹窗 → 打开下载页」（壳内
+  fetch Worker manifest + plugin-opener）。test 通道全自动安装需要重写
+  updater 安装逻辑（dmg 挂载/NSIS 静默）——等桌面更新产物（3.5 挂账）
+  落地后再议。
 
 ## 4. 发布流程（流水线验收 / 测试 tag）
 
