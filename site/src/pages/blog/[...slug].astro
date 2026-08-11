@@ -1,9 +1,11 @@
 ---
 import Base from '../../layouts/Base.astro';
-import { getCollection } from 'astro:content';
+import { getCollection, render } from 'astro:content';
 
 export async function getStaticPaths() {
-  const posts = await getCollection('blog', ({ data }) => !data.draft);
+  const posts = await getCollection('blog', ({ data }) => {
+    return import.meta.env.PROD ? data.draft !== true : true;
+  });
   return posts.map((post) => ({
     params: { slug: post.id },
     props: { post },
@@ -12,7 +14,7 @@ export async function getStaticPaths() {
 
 const { post } = Astro.props;
 const { title, date, tags } = post.data;
-const { Content } = await post.render();
+const { Content } = await render(post);
 ---
 
 <Base title={`${title} — P-Pass`}>
