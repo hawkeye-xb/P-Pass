@@ -15,6 +15,22 @@
 **v0.3.2-test.2 出包**：⏳ 待本收尾 commit 推 main 后打 tag（含 MOB-03/
 ICON-01b/DESK-02/DEV-01b/MOB-04 全部修复；用户手机 test 通道自动收到）。
 
+**2026-08-11 部署补记（Salamira）**：
+- v0.3.2-test.2 tag 已被 8/10 20:24 的中间包占用（只含 MOB-03+ICON-01b），
+  tag 纪律不允许覆盖 → 改打 **v0.3.2-test.3**（含全部 5 修复，run
+  31451793169）。
+- **release.yml draft bug 修复**（`0610943`）：Auto-publish test tag 只设
+  `--prerelease` 不清 draft → GitHub API 不返回 draft → Worker 永远 404。
+  改为 `--draft=false --prerelease`。
+- **update Worker 已部署**（ppass-update，custom domain
+  update.p-pass.hawkeye-xb.com）：清理了旧的 R2 占位绑定
+  （ppf-update bucket 的 custom domain + 自动生成的 DNS CNAME → public.r2.dev），
+  生产配置镜像在 ppf-ops/deploy/update.prod.toml。验证：bad channel 400 /
+  wrong path 404 / test channel 当前 `{"error":"no test release"}`（pipeline
+  出包 publish 后即返回 manifest）。
+- **分块按需**（用户提议）：release.yml 目前 4 job 全跑（~30m）。分块
+  （inputs 控制只跑 android）可行但建议后续单独出卡，出包前不动 CI。
+
 **队列剩余**：MOB-04 → SYNC-01 → IPC-02 → PRES-01 → DESK-03；
 FIX-SC2 等第 2 步（卡点已锁定 restart 重拨）。
 
