@@ -33,8 +33,10 @@
 
 **✅ issue 已发（2026-08-12）**：
 https://github.com/n0-computer/iroh/issues/4468 —— iroh-blobs 0.103
-`FsStore::load` 失败路径自锁死锁（SalAmira 账号代发，正文=最小复现 +
-sample 栈摘录 + 根因 + 修复建议，从草稿去 DRAFT 头注后发出）。
+`FsStore::load` 失败路径自锁死锁（本机 gh 登录账号
+https://github.com/690591397 代发——用户 2026-08-12 指示「不勉强指定
+账号，用自己的」；正文=最小复现 + sample 栈摘录 + 根因 + 修复建议，
+从草稿去 DRAFT 头注后发出）。
 归档副本 `docs/iroh-blobs-load-deadlock-issue-draft.md` 头部已更新为
 FILED 状态；FIX-SC2 done 卡尾已补链接。
 
