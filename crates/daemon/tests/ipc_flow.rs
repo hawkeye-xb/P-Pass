@@ -166,6 +166,119 @@ async fn status_devices_and_revoke_roundtrip() {
     assert!(db.get_device(&[0xAA; 32]).await.unwrap().unwrap().revoked);
 }
 
+// ── NAME-01: device.rename（ID 与显示名分离，decisions ②）──────────
+
+#[tokio::test(flavor = "multi_thread")]
+async fn device_rename_updates_list_and_appends_audit() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "rename").await;
+    db.upsert_device(&Device {
+        device_hint: None,
+        node_id: vec![0xBB; 32],
+        name: "默认名字".into(),
+        role: Role::Member,
+        paired_at: 1,
+        last_seen: None,
+        revoked: false,
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+
+    // 改名成功：返回旧名/新名，devices.list 出新名，ID 不变。
+    let resp = c
+        .call(
+            "device.rename",
+            serde_json::json!({ "node_id": "bb".repeat(32), "name": "爸爸的手机" }),
+        )
+        .await;
+    assert!(resp.ok, "rename should succeed: {resp:?}");
+    let r = resp.result.unwrap();
+    assert_eq!(r["renamed"], true);
+    assert_eq!(r["old_name"], "默认名字");
+    assert_eq!(r["name"], "爸爸的手机");
+
+    let resp = c.call("devices.list", serde_json::Value::Null).await;
+    let devices = resp.result.unwrap();
+    assert_eq!(devices["devices"][0]["name"], "爸爸的手机");
+    assert_eq!(devices["devices"][0]["node_id"], "bb".repeat(32));
+
+    // 审计有记录（device.renamed 旧名→新名+node_id）。
+    let resp = c.call("audit.list", serde_json::Value::Null).await;
+    let audits = resp.result.unwrap();
+    let renamed: Vec<_> = audits["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["action"] == "device.renamed")
+        .collect();
+    assert_eq!(renamed.len(), 1, "audit 必须有 device.renamed 记录");
+    let detail = renamed[0]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("默认名字 -> 爸爸的手机") && detail.contains(&"bb".repeat(32)),
+        "detail 应含旧名→新名+node_id, got: {detail}",
+    );
+
+    // 反证：audit 断言删掉必红——改名没审计 = 本测试第一个 assert 挂。
+    //（验收要求显式反证；此处通过上面 renamed.len()==1 锁死。）
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn device_rename_rejects_bad_input_and_unknown_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "rename-bad").await;
+    db.upsert_device(&Device {
+        device_hint: None,
+        node_id: vec![0xCC; 32],
+        name: "A".into(),
+        role: Role::Member,
+        paired_at: 1,
+        last_seen: None,
+        revoked: false,
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+
+    // 空名 = 非法请求。
+    let resp = c
+        .call(
+            "device.rename",
+            serde_json::json!({ "node_id": "cc".repeat(32), "name": "   " }),
+        )
+        .await;
+    assert!(!resp.ok, "blank name must be rejected");
+
+    // 缺 node_id / 缺 name = 非法请求。
+    let resp = c
+        .call("device.rename", serde_json::json!({ "name": "X" }))
+        .await;
+    assert!(!resp.ok);
+    let resp = c
+        .call(
+            "device.rename",
+            serde_json::json!({ "node_id": "cc".repeat(32) }),
+        )
+        .await;
+    assert!(!resp.ok);
+
+    // 未知设备 = NOT_FOUND 语义。
+    let resp = c
+        .call(
+            "device.rename",
+            serde_json::json!({ "node_id": "ee".repeat(32), "name": "幽灵" }),
+        )
+        .await;
+    assert!(!resp.ok, "unknown device must fail");
+    assert_eq!(
+        resp.error.as_ref().unwrap().code,
+        "NOT_FOUND",
+        "unknown device must be NOT_FOUND",
+    );
+}
+
 // ── T-090: data-plane extensions (status / activity.list / connection) ──
 
 /// Seed helper: one asset from `src` added at `added_at` (unix ms).

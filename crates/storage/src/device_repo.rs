@@ -237,6 +237,26 @@ impl Db {
         Ok(res.rows_affected() > 0)
     }
 
+    /// NAME-01: 改显示名（ID 与显示名分离——decisions ②）。返回旧名，
+    /// 供调用方写审计（device.renamed 旧名→新名）。设备不存在 = 无行
+    /// 受影响 → None（IPC 层答 NOT_FOUND 语义）。
+    pub async fn rename_device(&self, node_id: &[u8], new_name: &str) -> Result<Option<String>> {
+        // 先取旧名——UPDATE 本身不返回旧值。
+        let old: Option<String> = sqlx::query_scalar("SELECT name FROM device WHERE node_id = ?")
+            .bind(node_id)
+            .fetch_optional(self.pool())
+            .await?;
+        let Some(old_name) = old else {
+            return Ok(None);
+        };
+        sqlx::query("UPDATE device SET name = ? WHERE node_id = ?")
+            .bind(new_name)
+            .bind(node_id)
+            .execute(self.pool())
+            .await?;
+        Ok(Some(old_name))
+    }
+
     /// Advance a device's incremental-backup watermark (server-side
     /// dedup guard; `last_gen` = Android MediaStore generation).
     pub async fn set_watermark(
@@ -376,6 +396,28 @@ mod tests {
         let all = db.list_devices(true).await.unwrap();
         assert_eq!(all.len(), 2);
         assert!(all.iter().any(|d| d.revoked));
+    }
+
+    #[tokio::test]
+    async fn rename_updates_name_and_returns_old() {
+        // NAME-01: 改名返回旧名（audit 用），devices.list 出新名；
+        // 未知设备 = None（NOT_FOUND 语义）。
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+
+        let old = db.rename_device(&[1u8; 32], "爸爸的手机").await.unwrap();
+        assert_eq!(old.as_deref(), Some("device-1"));
+
+        let devices = db.list_devices(false).await.unwrap();
+        assert_eq!(devices[0].name, "爸爸的手机");
+        // ID 不变——改名只动显示名（decisions ②：一切逻辑仍按 node_id）。
+        assert_eq!(devices[0].node_id, vec![1u8; 32]);
+
+        assert_eq!(
+            db.rename_device(&[9u8; 32], "幽灵").await.unwrap(),
+            None,
+            "unknown id: None",
+        );
     }
 
     #[tokio::test]

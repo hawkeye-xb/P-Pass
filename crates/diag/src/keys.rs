@@ -105,6 +105,10 @@ msg_keys! {
     UI_REVOKE_CONFIRM_BODY => "ui.revoke_confirm_body",
     UI_REVOKED => "ui.revoked",
     UI_REVOKE_FAILED => "ui.revoke_failed",
+    /// NAME-01: 设备改名（decisions ② ID 与显示名分离）。
+    UI_RENAME => "ui.rename",
+    UI_RENAME_SAVED => "ui.rename_saved",
+    UI_RENAME_FAILED => "ui.rename_failed",
     UI_OPEN_FAILED => "ui.open_failed",
     UI_CHANGE_TITLE => "ui.change_title",
     UI_CHANGE_BODY => "ui.change_body",
@@ -190,6 +194,9 @@ mod tests {
             UI_REVOKE_CONFIRM_BODY,
             UI_REVOKED,
             UI_REVOKE_FAILED,
+            UI_RENAME,
+            UI_RENAME_SAVED,
+            UI_RENAME_FAILED,
             UI_OPEN_FAILED,
             UI_CHANGE_TITLE,
             UI_CHANGE_BODY,
@@ -215,7 +222,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 76);
+        assert_eq!(ALL.len(), 79);
     }
 
     #[test]

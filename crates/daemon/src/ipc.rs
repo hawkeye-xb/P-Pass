@@ -9,7 +9,8 @@
 //! Methods (契约): `status` `pairing.start` `pairing.confirm`
 //! `devices.list` `device.revoke` `device.watermarks` `folder.set`
 //! `logs.export` `activity.list` (T-090) — plus DAE-01
-//! `daemon.step_down` (newest-wins takeover, added 2026-08-04).
+//! `daemon.step_down` (newest-wins takeover, added 2026-08-04) and
+//! NAME-01 `device.rename` (display-name only, ID 不变, added 2026-08-12).
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -730,6 +731,75 @@ impl IpcServer {
                             );
                         }
                         Resp::ok(id, serde_json::json!({ "revoked": revoked }))
+                    }
+                    Err(_) => internal(id),
+                }
+            }
+            "device.rename" => {
+                // NAME-01: 改显示名（ID 与显示名分离——decisions ②）。
+                // 本机 owner 经 IPC 操作（与 device.revoke 同鉴权面）。
+                let Some(node_hex) = req.params.get("node_id").and_then(|v| v.as_str()) else {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                let Some(node_id) = parse_hex32(node_hex) else {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                // 新名必填（空名 = 非法请求）；长度上限防滥用。
+                let Some(new_name) = req.params.get("name").and_then(|v| v.as_str()) else {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                let new_name = new_name.trim();
+                if new_name.is_empty() || new_name.chars().count() > 64 {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                }
+                match self.db.rename_device(&node_id, new_name).await {
+                    Ok(Some(old_name)) => {
+                        // 审计：旧名→新名 + node_id（decisions ②「audit 记
+                        // device.renamed 旧名→新名+node_id」）。
+                        let _ = self
+                            .db
+                            .append_audit(&storage::AuditEntry {
+                                ts: now_ms(),
+                                actor: None, // 本机 owner 经 IPC 操作
+                                action: "device.renamed".into(),
+                                target_hash: None,
+                                detail: Some(format!("{old_name} -> {new_name} ({node_hex})")),
+                            })
+                            .await;
+                        // IPC-02: 改名后设备行即时刷新。
+                        events::emit(
+                            &self.events,
+                            events::DEVICE_CHANGED,
+                            serde_json::json!({ "node_id": node_hex }),
+                        );
+                        Resp::ok(
+                            id,
+                            serde_json::json!({
+                                "renamed": true,
+                                "node_id": node_hex,
+                                "old_name": old_name,
+                                "name": new_name,
+                            }),
+                        )
+                    }
+                    Ok(None) => {
+                        // 设备不存在（已吊销/从未配对）——NOT_FOUND 语义。
+                        Resp::err(
+                            id,
+                            RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
+                        )
                     }
                     Err(_) => internal(id),
                 }
