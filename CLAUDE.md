@@ -21,6 +21,13 @@
 
 速度优先阶段到有外部用户/第二个贡献者为止，届时恢复走 PR。
 
+## 提交与构建纪律
+
+- **纯文档/卡片提交（只动 docs/ 或 .claude/）commit message 末尾加
+  `[skip ci]`**——GitHub 原生跳过 push 触发的 workflow，别为一张卡烧
+  四个 job（CI-01 落地路径过滤后此规则自动失效，可删）。
+- 小步提交本地攒，**一张卡一次 push**，别按保存键式碎推。
+
 ## tag 纪律
 
 - 调发布管线用 **workflow_dispatch**（release.yml 已支持），不许拿正式

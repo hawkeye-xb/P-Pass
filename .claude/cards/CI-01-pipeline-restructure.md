@@ -43,6 +43,18 @@ c. **site 部署切 CF Pages**（可选项，SITE-01 已上 GH Pages 则做成�
 token 未就位时：a/b/c 全部做成「secret 存在才启用」的门控 step，
 缺 secret 干净跳过并在 summary 标注（沿用 APPLE_CERT 门控先例）。
 
+### ④ 分层构建节奏（业内标准三层，本卡一并落）
+
+- **每推**：受影响域的快检+单测（①的拆分即实现）；纯 docs/.claude 零 CI。
+- **每夜**：全量 nextest + scenarios（scenarios 从每推挪到 nightly +
+  tag 前门禁——它抓真 bug 但不该每推都烧 release 构建；e2e.yml 已有
+  nightly 先例，并轨即可）。
+- **每 tag**：全平台发布级（现状保持）。
+- 底线①口径随之更新进 CLAUDE.md：push 后盯**受影响域** CI 绿；nightly
+  红次日第一优先修。
+- 缓存策略顺手治理：四平台缓存 key 加边界（10GB 仓上限 LRU 挤兑是
+  Windows vcpkg 反复重编的根因），必要时 Windows 缓存单独 key 前缀。
+
 ## 不准动
 
 e2e.yml（nightly+tag 门禁语义）；artifacts.yml；release tag 全量语义；
