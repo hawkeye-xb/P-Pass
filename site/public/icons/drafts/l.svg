@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="128" height="128"><defs></defs>
+        <rect width="1024" height="1024" fill="#FBF8F2"/>
+        <g stroke="#171512" stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+          <!-- 左半：角-竖线-嘴（实） -->
+          <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 452 768"/>
+          <circle cx="300" cy="478" r="146"/>
+          <!-- 中央小闪电（实，连接虚实两半） -->
+          <path d="M 452 768 L 496 706 L 528 830 L 572 768"/>
+          <!-- 右半：嘴-竖线-角（圆点虚线） -->
+          <path d="M 572 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke-dasharray="0 110"/>
+          <circle cx="724" cy="478" r="146" stroke-dasharray="0 91.7"/>
+        </g>
+        <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+        <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+      </svg>
