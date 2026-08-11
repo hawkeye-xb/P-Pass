@@ -1,0 +1,92 @@
+---
+import '../styles/tokens.css';
+import '../styles/global.css';
+import { SITE_TITLE, SITE_DESCRIPTION } from '../consts';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const { title = SITE_TITLE, description = SITE_DESCRIPTION } = Astro.props;
+---
+
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="description" content={description} />
+    <link rel="icon" type="image/svg+xml" href="/icons/icon-beast.svg" />
+    <link rel="alternate" type="application/rss+xml" title={SITE_TITLE} href="/rss.xml" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="site-nav">
+        <a class="brand" href="/">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="/icons/icon-beast-night.svg" />
+            <img src="/icons/icon-beast.svg" alt="" width="36" height="36" />
+          </picture>
+          <span>P-Pass</span>
+        </a>
+        <a href="/blog/">博客</a>
+        <a href="https://github.com/hawkeye-xb/P-Pass" rel="external">GitHub</a>
+        <a href="/rss.xml">RSS</a>
+      </nav>
+    </header>
+    <main>
+      <slot />
+    </main>
+    <footer class="site-footer">
+      <p>P-Pass — 家人照片备份。开源，端到端加密，零追踪。</p>
+      <p><a href="https://github.com/hawkeye-xb/P-Pass" rel="external">GitHub 仓库</a></p>
+    </footer>
+  </body>
+</html>
+
+<style>
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--hairline);
+  }
+  .site-nav {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0.6rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    font-size: 0.95rem;
+  }
+  .site-nav a {
+    text-decoration: none;
+    color: var(--text-secondary);
+  }
+  .site-nav a:hover { color: var(--text); }
+  .site-nav .brand {
+    margin-right: auto;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--text);
+    font-weight: 600;
+  }
+  .brand img { display: block; }
+  .site-footer {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 2.5rem 1.25rem 3rem;
+    border-top: 1px solid var(--hairline);
+    color: var(--text-meta);
+    font-size: 0.9rem;
+    text-align: center;
+  }
+  .site-footer p { margin: 0.3rem 0; }
+</style>

@@ -1,0 +1,68 @@
+---
+import Base from '../../layouts/Base.astro';
+import { getCollection } from 'astro:content';
+
+export async function getStaticPaths() {
+  const posts = await getCollection('blog', ({ data }) => !data.draft);
+  return posts.map((post) => ({
+    params: { slug: post.id },
+    props: { post },
+  }));
+}
+
+const { post } = Astro.props;
+const { title, date, tags } = post.data;
+const { Content } = await post.render();
+---
+
+<Base title={`${title} — P-Pass`}>
+  <article class="post">
+    <header>
+      <p class="meta">
+        <time datetime={date.toISOString()}>{date.toISOString().slice(0, 10)}</time>
+        {tags.length > 0 && <span class="tags"> · {tags.join(' / ')}</span>}
+      </p>
+      <h1>{title}</h1>
+    </header>
+    <div class="prose">
+      <Content />
+    </div>
+    <footer class="post-foot">
+      <a href="/blog/">← 返回博客</a>
+    </footer>
+  </article>
+</Base>
+
+<style>
+  .post {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 3.5rem 1.25rem 4rem;
+  }
+  .meta {
+    color: var(--text-meta);
+    font-size: 0.85rem;
+    margin: 0 0 0.75rem;
+  }
+  h1 { font-size: 2.1rem; margin: 0 0 1.75rem; }
+  .prose { font-size: 1.02rem; }
+  .prose h2 {
+    font-size: 1.5rem;
+    margin: 2.25rem 0 0.9rem;
+  }
+  .prose h3 { font-size: 1.2rem; margin: 1.75rem 0 0.7rem; }
+  .prose p { margin: 0 0 1.25rem; }
+  .prose ul, .prose ol { margin: 0 0 1.25rem; padding-left: 1.5rem; }
+  .prose li { margin-bottom: 0.4rem; }
+  .prose blockquote {
+    margin: 1.5rem 0;
+    padding: 0.25rem 0 0.25rem 1.1rem;
+    border-left: 3px solid var(--accent);
+    color: var(--text-secondary);
+  }
+  .prose img {
+    max-width: 100%;
+    border-radius: var(--radius-control);
+  }
+  .post-foot { margin-top: 3rem; }
+</style>

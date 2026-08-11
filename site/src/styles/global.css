@@ -1,0 +1,74 @@
+/* Global styles: consumes tokens.css variables, adds layout + dark mode.
+   Dark mode inverts with existing token values only — no new colors. */
+:root {
+  --bg: var(--paper);
+  --bg-canvas: var(--canvas);
+  --text: var(--ink);
+  --text-secondary: var(--ink-60);
+  --text-meta: var(--ink-40);
+  --accent: var(--safe);
+  --hairline: var(--hairline);
+}
+
+html {
+  background: var(--bg-canvas);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+}
+
+/* Headlines use the serif token stack (Georgia/system fallback if Newsreader
+   is not locally installed — no web fonts, zero third-party requests). */
+h1, h2, h3, .serif {
+  font-family: var(--font-serif);
+  font-weight: 400;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+a {
+  color: var(--text);
+  text-decoration-color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-color: var(--text);
+}
+
+code, pre {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+pre {
+  background: var(--canvas);
+  border-radius: var(--radius-control);
+  padding: 1rem 1.25rem;
+  overflow-x: auto;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: var(--surface-dark);
+    --bg-canvas: var(--surface-dark);
+    --text: var(--paper);
+    --text-secondary: var(--linen);
+    --text-meta: var(--idle);
+    --hairline: var(--border);
+  }
+  html { background: var(--surface-dark); }
+  pre { background: #171512; }
+}
+
+@media (max-width: 640px) {
+  html { font-size: 18px; }
+}
