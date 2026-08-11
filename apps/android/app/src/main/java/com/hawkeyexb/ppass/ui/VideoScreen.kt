@@ -20,6 +20,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -30,6 +32,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.proto.AssetMeta
 import java.io.File
+import kotlinx.coroutines.launch
 
 sealed class VideoState {
     data class Fetching(val percent: Int) : VideoState()
@@ -62,6 +65,42 @@ fun VideoScreen(
             VideoState.Failed
         }
     }
+    // RET-01: 取回=使用动作——视频 Ready 后同样可保存到相册 / 用其他
+    // 应用打开（播放缓存文件即用即清，cacheDir 语义由系统兜底）。
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
+
+    fun runAssetAction(save: Boolean) {
+        if (busy) return
+        val ready = state as? VideoState.Ready ?: return
+        busy = true
+        notice = null
+        scope.launch {
+            try {
+                if (save) {
+                    saveToGallery(context, ready.file, asset)
+                    notice = context.getString(R.string.saved_to_gallery)
+                } else {
+                    val share = shareDir(context)
+                    share.listFiles()?.forEach { it.delete() }
+                    val tmp = File(share, "video-${asset.hash.take(16)}.mp4")
+                    ready.file.copyTo(tmp, overwrite = true)
+                    try {
+                        val intent = openWithAppIntent(context, tmp, asset)
+                        context.startActivity(intent)
+                    } catch (_: android.content.ActivityNotFoundException) {
+                        tmp.delete()
+                        notice = context.getString(R.string.no_app_for_file)
+                    }
+                }
+            } catch (_: Throwable) {
+                notice = context.getString(R.string.share_download_failed)
+            } finally {
+                busy = false
+            }
+        }
+    }
 
     PPScreen(background = PPColor.SurfaceDark) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -89,6 +128,33 @@ fun VideoScreen(
                                 setOnPreparedListener { it.isLooping = true; start() }
                             }
                         },
+                    )
+                }
+            }
+            // RET-01: 视频 Ready 才显示动作（未取到前无原图可存/可开）。
+            if (state is VideoState.Ready) {
+                notice?.let {
+                    Text(
+                        it, fontSize = 13.sp, color = PPColor.PaperDim,
+                        modifier = Modifier.padding(4.dp, 8.dp),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    ViewerAction(
+                        label = stringResource(R.string.save_to_gallery),
+                        enabled = !busy,
+                        onClick = { runAssetAction(save = true) },
+                        modifier = Modifier.weight(1f),
+                    )
+                    ViewerAction(
+                        label = stringResource(R.string.open_with_app),
+                        enabled = !busy,
+                        onClick = { runAssetAction(save = false) },
+                        modifier = Modifier.weight(1f),
                     )
                 }
             }
