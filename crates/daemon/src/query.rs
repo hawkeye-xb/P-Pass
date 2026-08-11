@@ -125,6 +125,45 @@ impl QueryEngine {
             .map_err(|e| QueryError::Ticket(e.to_string()))?;
         Ok(BlobTicketResponse { ticket })
     }
+
+    /// DESK-03: `asset.path` — the ORIGINAL file's absolute path on disk.
+    /// 桌面壳与 daemon 同机：Finder 揭示直接指向这个路径（读 rel_path
+    /// 拼 library_root，不做任何复制）。仅桌面 IPC 消费，不走网络平面。
+    pub async fn asset_path(&self, hash_hex: &str) -> Result<PathBuf, QueryError> {
+        let hash = parse_hash(hash_hex).ok_or(QueryError::NotFound)?;
+        let asset = self
+            .db
+            .get_asset(&hash)
+            .await?
+            .ok_or(QueryError::NotFound)?;
+        Ok(self.library_root.join(&asset.rel_path))
+    }
+
+    /// DESK-03: `asset.original` — 原图字节（大图查看用，不落盘）。
+    ///
+    /// 同机桌面壳直接读原文件字节，内存展示后即弃——「不长期落盘」由
+    /// 不写任何临时文件天然满足。受 ctrl 帧上限约束：> 12 MiB 的原图
+    /// 返回 NotFound（base64 后超 16 MiB 帧），桌面端降级到 1024 缩略图。
+    /// 只服务 photo（video 原片体量必然超限，桌面大图只看照片）。
+    pub async fn original(&self, hash_hex: &str) -> Result<Vec<u8>, QueryError> {
+        const ORIGINAL_CAP: i64 = 12 * 1024 * 1024; // base64(12MiB) ≈ 16MiB 帧上限
+        let hash = parse_hash(hash_hex).ok_or(QueryError::NotFound)?;
+        let asset = self
+            .db
+            .get_asset(&hash)
+            .await?
+            .ok_or(QueryError::NotFound)?;
+        if !asset.media_type.starts_with("image/") {
+            return Err(QueryError::NotFound); // video 不走大图
+        }
+        if asset.bytes > ORIGINAL_CAP {
+            return Err(QueryError::NotFound);
+        }
+        let abs = self.library_root.join(&asset.rel_path);
+        tokio::fs::read(&abs)
+            .await
+            .map_err(|_| QueryError::NotFound)
+    }
 }
 
 /// storage 行 → 线上元数据: taken_at ms→s, MIME → "photo"/"video" 粗类.

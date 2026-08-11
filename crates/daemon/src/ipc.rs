@@ -48,6 +48,12 @@ pub struct IpcServer {
     /// main injects a closure over the transport slot; the default says
     /// `Unknown` — 拿不到实况就如实报 unknown，绝不用 last_seen 推断.
     conn_status: ConnStatusFn,
+    /// DESK-03: query plane（timeline/thumb/asset.*）——桌面壳与 daemon
+    /// 同机，照片墙直接走本地 IPC 消费查询平面（与手机同一数据源）。
+    /// OnceLock：main 在 transport bind 之后才建 QueryEngine（blobs 依赖
+    /// 已绑定 transport），而 IpcServer 早已 Arc 化——用 set_query(&self)
+    /// 后注入，dispatch 端 get() 零锁零等待。未注入时答 err.unsupported。
+    query: std::sync::OnceLock<crate::query::QueryEngine>,
 }
 
 /// See [`IpcServer::set_conn_status_provider`].
@@ -241,7 +247,15 @@ impl IpcServer {
             started_at: now_ms(),
             step_down_exit: Arc::new(|| std::process::exit(0)),
             conn_status: Arc::new(|_| transport::ConnectionStatus::Unknown),
+            query: std::sync::OnceLock::new(),
         }
+    }
+
+    /// DESK-03: 注入查询平面（main 在 transport bind 后调用，把 Router
+    /// 同款 QueryEngine clone 过来）——桌面壳照片墙走本地 IPC 消费
+    /// timeline/thumb/asset.*。重复 set 静默忽略（只注入一次）。
+    pub fn set_query(&self, query: crate::query::QueryEngine) {
+        let _ = self.query.set(query);
     }
 
     /// Override the step_down side effect (tests only).
@@ -588,6 +602,14 @@ impl IpcServer {
                                     // "unknown" when no live info exists;
                                     // never derived from last_seen.
                                     "connection": (self.conn_status)(&d.node_id).as_str(),
+                                    // PRES-01: 三档在线态（纯函数，单测覆盖
+                                    // 边界）——在线 / x 分钟前在线 / 离线。
+                                    // 展示口径，不参与鉴权。
+                                    "presence": crate::presence::presence(
+                                        (self.conn_status)(&d.node_id).as_str(),
+                                        d.last_seen,
+                                        now_ms(),
+                                    ),
                                 })
                             })
                             .collect();
@@ -738,6 +760,125 @@ impl IpcServer {
                     internal(id)
                 }
             },
+            // DESK-03: 查询平面（桌面照片墙，与手机同一数据源）——
+            // 未注入 QueryEngine 时统一答 err.unsupported（老测试构造
+            // 零波及；main 总是注入）。响应形状与网络平面逐字段一致，
+            // 桌面端消费代码可与手机端镜像。
+            "timeline.page" | "thumb.get" | "asset.meta" | "asset.path" | "asset.original" => {
+                let Some(query) = self.query.get() else {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                match req.method.as_str() {
+                    "timeline.page" => {
+                        let Ok(q) =
+                            serde_json::from_value::<proto::TimelineQuery>(req.params.clone())
+                        else {
+                            return Resp::err(
+                                id,
+                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                            );
+                        };
+                        match query.timeline(&q).await {
+                            Ok(page) => match serde_json::to_value(&page) {
+                                Ok(v) => Resp::ok(id, v),
+                                Err(_) => internal(id),
+                            },
+                            Err(_) => Resp::err(
+                                id,
+                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
+                            ),
+                        }
+                    }
+                    "thumb.get" => {
+                        let Ok(t) = serde_json::from_value::<proto::ThumbGet>(req.params.clone())
+                        else {
+                            return Resp::err(
+                                id,
+                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                            );
+                        };
+                        match query.thumb(&t).await {
+                            Ok(bytes) => {
+                                use base64::Engine as _;
+                                let data = proto::ThumbData {
+                                    jpeg_base64: base64::engine::general_purpose::STANDARD
+                                        .encode(bytes),
+                                };
+                                match serde_json::to_value(&data) {
+                                    Ok(v) => Resp::ok(id, v),
+                                    Err(_) => internal(id),
+                                }
+                            }
+                            Err(_) => Resp::err(
+                                id,
+                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
+                            ),
+                        }
+                    }
+                    "asset.meta" => {
+                        let Some(hash) = req.params.get("hash").and_then(|v| v.as_str()) else {
+                            return Resp::err(
+                                id,
+                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                            );
+                        };
+                        match query.asset_meta(hash).await {
+                            Ok(meta) => match serde_json::to_value(&meta) {
+                                Ok(v) => Resp::ok(id, v),
+                                Err(_) => internal(id),
+                            },
+                            Err(_) => Resp::err(
+                                id,
+                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
+                            ),
+                        }
+                    }
+                    "asset.path" => {
+                        let Some(hash) = req.params.get("hash").and_then(|v| v.as_str()) else {
+                            return Resp::err(
+                                id,
+                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                            );
+                        };
+                        match query.asset_path(hash).await {
+                            Ok(path) => {
+                                Resp::ok(id, serde_json::json!({ "path": path.to_string_lossy() }))
+                            }
+                            Err(_) => Resp::err(
+                                id,
+                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
+                            ),
+                        }
+                    }
+                    "asset.original" => {
+                        let Some(hash) = req.params.get("hash").and_then(|v| v.as_str()) else {
+                            return Resp::err(
+                                id,
+                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                            );
+                        };
+                        match query.original(hash).await {
+                            Ok(bytes) => {
+                                use base64::Engine as _;
+                                Resp::ok(
+                                    id,
+                                    serde_json::json!({
+                                        "data_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
+                                    }),
+                                )
+                            }
+                            Err(_) => Resp::err(
+                                id,
+                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
+                            ),
+                        }
+                    }
+                    _ => unreachable!("covered by the outer arm"),
+                }
+            }
             _ => Resp::err(
                 id,
                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
@@ -833,10 +974,13 @@ impl IpcServer {
         let pending = self.pending.lock().expect("pending lock").len();
         // T-090: photo total + disk watermarks of the library volume.
         let photo_count = self.db.count_assets().await?;
+        let photo_sources = self.db.count_asset_sources().await?;
         let disk = disk_stats(&self.data_dir);
         Ok(serde_json::json!({
             // T-090 data-plane fields (桌面总览卡直接消费).
             "photo_count": photo_count,
+            // DESK-03: 「共 N 张 · 来自 M 台设备」的 M。
+            "photo_sources": photo_sources,
             "disk_free_bytes": disk.map(|d| d.free),
             "disk_total_bytes": disk.map(|d| d.total),
             "state": state_name(&state),

@@ -40,6 +40,25 @@ export function humanTime(tsMs, nowMs = Date.now()) {
 export const BACKUP_ATTENTION_DAYS = 5;
 
 /**
+ * PRES-01: 相对时间（「3 分钟前在线」的数据源）。
+ * <60s 刚刚 / <60min N 分钟前 / <24h N 小时前 / <30d N 天前 / 更早或
+ * 缺失 → null（调用方退回 humanTime 的日历格式）。时钟偏差（未来值）
+ * 视为刚刚。向下取整，最小 1（61s → 1 分钟前）。
+ */
+export function relativeTime(tsMs, nowMs = Date.now()) {
+  if (typeof tsMs !== "number" || !Number.isFinite(tsMs) || tsMs <= 0) return null;
+  const diff = nowMs - tsMs;
+  if (diff < 60_000) return "刚刚";
+  const minutes = Math.max(1, Math.floor(diff / 60_000));
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.max(1, Math.floor(minutes / 60));
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.max(1, Math.floor(hours / 24));
+  if (days < 30) return `${days} 天前`;
+  return null;
+}
+
+/**
  * 哨兵判定（纯函数）：最近备份距今 > thresholdDays 天 → true。
  * 从未备份（缺失/0/负值）不算哨兵态——那是「还没备份过」，另有文案。
  */

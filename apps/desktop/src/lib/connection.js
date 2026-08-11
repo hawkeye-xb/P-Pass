@@ -45,3 +45,33 @@ export function connectionDot(connection) {
       return "idle";
   }
 }
+
+/**
+ * PRES-01: presence 三档 → 设备行 sub 文案 + 点色。
+ * 契约（crates/daemon/src/presence.rs）：presence = "online" | "recent" |
+ * "offline"。online 优先展示连接路径事实（已直连/经中继）；心跳新鲜但
+ * 无活连接 → 泛化「在线」。recent → 「x 分钟前在线」（relativeText 是
+ * relativeTime 输出）；offline → 保留旧话术「离线，最后在线 <日历时间>」，
+ * 无 last_seen → 「等待下次备份上报」（中性，不捏造）。哨兵红由调用方
+ * （deviceRow）在 presence 之前裁决，优先级最高。
+ * @param {string} presence
+ * @param {string} connection devices.list[].connection 四态
+ * @param {string|null} relativeText relativeTime 输出（recent 用）
+ * @param {string|null} humanText humanTime 输出（offline 用）
+ */
+export function presenceText(presence, connection, relativeText = null, humanText = null) {
+  switch (presence) {
+    case "online":
+      if (connection === "direct") return { sub: "已直连", dot: "safe" };
+      if (connection === "relay") return { sub: "经中继连接——内容加密，中继无法读取", dot: "wait" };
+      return { sub: "在线", dot: "safe" }; // 心跳新鲜，无活连接
+    case "recent":
+      return { sub: relativeText ? `${relativeText}在线` : "刚刚在线", dot: "idle" };
+    case "offline":
+    default:
+      return {
+        sub: humanText ? `离线，最后在线 ${humanText}` : "等待下次备份上报",
+        dot: "idle",
+      };
+  }
+}

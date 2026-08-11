@@ -1,7 +1,7 @@
 // T-092 验收脚本：node 直跑 formatBytes / diskUsedPercent / connectionText /
 // connectionDot 边界断言。用法：node apps/desktop/scripts/check-wire-fns.mjs
 import { formatBytes, diskUsedPercent } from "../src/lib/formatBytes.js";
-import { connectionText, connectionDot } from "../src/lib/connection.js";
+import { connectionText, connectionDot, presenceText } from "../src/lib/connection.js";
 
 let failed = 0;
 function eq(label, actual, expected) {
@@ -55,6 +55,31 @@ eq("relay -> wait", connectionDot("relay"), "wait");
 eq("offline -> idle", connectionDot("offline"), "idle");
 eq("unknown -> idle", connectionDot("unknown"), "idle");
 eq("缺失字段(undefined) -> idle", connectionDot(undefined), "idle");
+
+// ---- PRES-01 presenceText 三档 → sub/dot（online 优先连接路径事实） ----
+const eqObj = (label, actual, expected) => {
+  const ok = JSON.stringify(actual) === JSON.stringify(expected);
+  if (!ok) failed++;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${label}: got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`);
+};
+eqObj("online+direct -> 已直连/safe", presenceText("online", "direct"), { sub: "已直连", dot: "safe" });
+eqObj(
+  "online+relay -> 中继话术/wait",
+  presenceText("online", "relay"),
+  { sub: "经中继连接——内容加密，中继无法读取", dot: "wait" }
+);
+eqObj("online 心跳新鲜无活连接 -> 在线/safe", presenceText("online", "unknown"), { sub: "在线", dot: "safe" });
+eqObj("recent -> 3 分钟前在线/idle", presenceText("recent", "unknown", "3 分钟前"), { sub: "3 分钟前在线", dot: "idle" });
+eqObj("recent 无相对时间 -> 刚刚在线", presenceText("recent", "unknown", null), { sub: "刚刚在线", dot: "idle" });
+eqObj(
+  "offline + 最后在线 -> 离线，最后在线 <时间>",
+  presenceText("offline", "offline", null, "昨天 22:40"),
+  { sub: "离线，最后在线 昨天 22:40", dot: "idle" }
+);
+eqObj("offline 无 last_seen -> 等待下次备份上报", presenceText("offline", "unknown", null, null), {
+  sub: "等待下次备份上报",
+  dot: "idle",
+});
 
 if (failed > 0) {
   console.error(`\n${failed} assertion(s) FAILED`);

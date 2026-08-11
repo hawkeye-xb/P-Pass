@@ -147,13 +147,18 @@ async fn kill_mid_transfer_then_resume_verifies() {
     // Restarted receiver: fresh endpoint, same store dir. How much the
     // crash left durable is the store's business (batching) — what MUST
     // hold is that the pull completes and verifies from whatever is there.
+    // FIX-SC2: 细化打点——CI 现场停在「rebinding receiver endpoint」，
+    // 但 bind / store open / local_bytes 之间没有桩，无法定位卡点。
+    // 三步分开打：bind 完 / store 开完 / durable 读完。
     stamp(&t0, "restart", "rebinding receiver endpoint");
     let rx_tp = IrohTransport::bind(TransportConfig::loopback(
         vec![transport::ALPN_BLOBS.into()],
     ))
     .await
     .unwrap();
+    stamp(&t0, "restart", "endpoint bound");
     let blobs = Blobs::open(&rx_tp, &receiver_store).await.unwrap();
+    stamp(&t0, "restart", "store opened");
     let already = blobs.local_bytes(hash).await.unwrap();
     eprintln!("restart found {already} durable bytes (informational)");
     stamp(

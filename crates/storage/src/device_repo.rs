@@ -72,7 +72,18 @@ impl Db {
         Ok(())
     }
 
-    /// All devices, or only in-use ones.
+    /// PRES-01: 心跳落点——更新设备 last_seen（revoked 设备不碰，
+    /// 被吊销者的心跳不该刷新任何展示）。无行 = 未配对/未知设备，
+    /// 静默成功（hello 对未配对节点本就允许，不产生副作用）。
+    pub async fn touch_last_seen(&self, node_id: &[u8], ts: i64) -> Result<()> {
+        sqlx::query("UPDATE device SET last_seen = ? WHERE node_id = ? AND revoked = 0")
+            .bind(ts)
+            .bind(node_id)
+            .execute(self.pool())
+            .await?;
+        Ok(())
+    }
+
     /// DESK-02②: 默认过滤已吊销/移除设备——列表只展示在用设备
     /// （审计流有 device.revoked/unpaired 历史可查）。内部统计
     /// （status.devices/revoked、export_logs）传 include_revoked=true。

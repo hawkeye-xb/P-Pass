@@ -71,6 +71,17 @@ impl Db {
             })
             .collect())
     }
+
+    /// PRES-01: 某 actor 最近一次指定 action 的时间（unix ms）；从未
+    /// 发生过 → None。device.connected 的 10 分钟去重靠它。
+    pub async fn last_audit_ts(&self, actor: &[u8], action: &str) -> Result<Option<i64>> {
+        let row = sqlx::query("SELECT MAX(ts) AS ts FROM audit_log WHERE actor = ? AND action = ?")
+            .bind(actor)
+            .bind(action)
+            .fetch_one(self.pool())
+            .await?;
+        Ok(row.get::<Option<i64>, _>("ts"))
+    }
 }
 
 #[cfg(test)]

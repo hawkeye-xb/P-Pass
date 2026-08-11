@@ -118,6 +118,15 @@ msg_keys! {
     UI_UPDATE_AVAILABLE => "ui.update_available",
     UI_UPDATE_INSTALLED => "ui.update_installed",
     UI_UPDATE_FAILED => "ui.update_failed",
+    // ── Desktop photos page (DESK-03) + env badge (DESK-02 收编债) ────
+    UI_ENV_BADGE_TEST => "ui.env_badge_test",
+    UI_NAV_PHOTOS => "ui.nav_photos",
+    UI_PHOTOS_COUNT => "ui.photos_count",
+    UI_PHOTOS_TODAY => "ui.photos_today",
+    UI_PHOTOS_MONTH => "ui.photos_month",
+    UI_PHOTOS_EARLIER => "ui.photos_earlier",
+    UI_PHOTOS_EMPTY => "ui.photos_empty",
+    UI_PHOTOS_OPEN_IN_FINDER => "ui.photos_open_in_finder",
 }
 
 #[cfg(test)]
@@ -195,10 +204,18 @@ mod tests {
             UI_UPDATE_FAILED,
             UI_ALLOW_REPLACE,
             UI_ALLOW_NEW,
+            UI_ENV_BADGE_TEST,
+            UI_NAV_PHOTOS,
+            UI_PHOTOS_COUNT,
+            UI_PHOTOS_TODAY,
+            UI_PHOTOS_MONTH,
+            UI_PHOTOS_EARLIER,
+            UI_PHOTOS_EMPTY,
+            UI_PHOTOS_OPEN_IN_FINDER,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 68);
+        assert_eq!(ALL.len(), 76);
     }
 
     #[test]
