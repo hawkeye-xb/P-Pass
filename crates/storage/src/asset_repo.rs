@@ -124,6 +124,16 @@ impl Db {
             .await?)
     }
 
+    /// DESK-03: 贡献过照片的设备数（status.photo_sources）——
+    /// 「共 N 张 · 来自 M 台设备」的 M。
+    pub async fn count_asset_sources(&self) -> Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT COUNT(DISTINCT src_device) FROM asset")
+                .fetch_one(self.pool())
+                .await?,
+        )
+    }
+
     /// Backup activity batches, newest first (T-090 `activity.list`).
     /// Read-only aggregation over the existing `asset` table — no new
     /// tables, no write path.

@@ -8,11 +8,13 @@
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
+  import PhotoThumb from "./lib/PhotoThumb.svelte";
   // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
-  import { humanTime, needsAttention, daysSince } from "./lib/humanTime.js";
+  import { humanTime, needsAttention, daysSince, relativeTime } from "./lib/humanTime.js";
   // T-092: connection 四态 → 文案/点色；字节 → 人读容量（纯函数，
   // apps/desktop/scripts/check-wire-fns.mjs 断言）
-  import { connectionText, connectionDot } from "./lib/connection.js";
+  // PRES-01: presence 三档 → 文案/点色（connection 路径事实优先展示）
+  import { presenceText } from "./lib/connection.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。直接从仓库根引用，
@@ -30,16 +32,17 @@
   };
 
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
-  // 照片库并入设置）。默认落在「总览」。hash 同步只为可验证/可深链，
-  // 不引入路由依赖。 ----
+  // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
+  // DESK-03: 新增「照片」页（照片墙）——侧边栏第五项，文案走 i18n。
   const NAV = [
     { id: "overview", label: "总览" },
+    { id: "photos", label: t("ui.nav_photos") },
     { id: "devices", label: "家人与设备" },
     { id: "log", label: "活动记录" },
     { id: "settings", label: "设置" },
   ];
   const pageFromHash = () => {
-    const m = (location.hash || "").match(/^#\/(overview|devices|log|settings)$/);
+    const m = (location.hash || "").match(/^#\/(overview|photos|devices|log|settings)$/);
     return m ? m[1] : "overview";
   };
   let page = $state(pageFromHash());
@@ -210,6 +213,10 @@
         return `已移除设备 ${(e.actor ?? "").slice(0, 8)}…`;
       case "device.unpaired":
         return `${who ?? "设备"} 主动断开连接`;
+      case "device.connected":
+        // PRES-01: hello 心跳进活动流——「小红 连接了」（10 分钟去重，
+        // 防锁屏重连刷屏）。
+        return `${who ?? d} 连接了`;
       case "backup.commit":
         return `备份提交（${d}）`;
       case "external.delete":
@@ -219,19 +226,15 @@
     }
   }
 
-  // T-091: 设备行展示态（纯推导）。哨兵 = 最近备份 >5 天（设计稿原文行为）：
-  // 行点 ACT 色 + 右侧「需要看看」+ 次行设计稿话术；无水位记录 = 「还没备份过」
-  //（绝不渲染 epoch）。
-  // T-092: sub 槽接 devices.list[].connection（direct→已直连/safe，
-  // relay→中继话术/wait，offline→离线+最后在线/idle）；哨兵红优先级
-  // 高于连接态——一台设备两个真相时先说要紧的。unknown 保持 T-082
-  // 中性占位（不捏造「已直连」）。
+  // PRES-01: sub 槽接 devices.list[].presence 三档（online 优先展示连接
+  // 路径事实：已直连/经中继；心跳新鲜无活连接 → 「在线」；recent →
+  // 「x 分钟前在线」；offline → 「离线，最后在线 <时间>」/「等待下次备份
+  // 上报」）。哨兵红优先级高于 presence——一台设备两个真相时先说要紧的。
   function deviceRow(d, now) {
     const wm = watermarks[d.node_id];
     const lastBackupAt = wm?.last_backup_at ?? null;
     const backupTime = humanTime(lastBackupAt, now);
     const alert = needsAttention(lastBackupAt, now);
-    const lastSeen = humanTime(d.last_seen, now);
     if (alert) {
       return {
         alert: true,
@@ -240,11 +243,16 @@
         right: "需要看看",
       };
     }
-    const connSub = connectionText(d.connection, lastSeen);
+    const pres = presenceText(
+      d.presence,
+      d.connection,
+      relativeTime(d.last_seen, now),
+      humanTime(d.last_seen, now)
+    );
     return {
       alert: false,
-      dot: connectionDot(d.connection),
-      sub: connSub ?? (lastSeen ? `最后在线 ${lastSeen}` : "等待下次备份上报"),
+      dot: pres.dot,
+      sub: pres.sub,
       right: backupTime ? `最近备份 ${backupTime} · ${wm.asset_count} 张` : "还没备份过",
     };
   }
@@ -508,6 +516,125 @@
       ? status.photo_count
       : null
   );
+
+  // ---- DESK-03: 照片墙（与手机同一数据源 query.timeline / thumb） ----
+  // 缩略图墙分页懒加载；点开 = 原图内存展示（asset.original，不落盘）+
+  // 「在 Finder 中显示」（asset.path → originals 原文件）。被外删的照片
+  // 由 SYNC-01 对账从墙上自然消失（两卡独立可验）。
+  const photoSources = $derived(
+    typeof status?.photo_sources === "number" && Number.isFinite(status.photo_sources)
+      ? status.photo_sources
+      : null
+  );
+  const PHOTOS_PAGE_SIZE = 60;
+  let photos = $state([]); // AssetMeta[]，timeline 顺序（新→旧）
+  let photosNext = $state(null); // 分页游标
+  let photosLoading = $state(false);
+  let photosLoaded = $state(false); // 首次加载完成（区分空库与未加载）
+  let sentinelEl = $state(null); // 墙底哨兵 → 触发下一页
+  let photoViewer = $state(null); // {hash, taken_at, media_type} 大图目标
+  let viewerSrc = $state(null); // 大图 data URL（原图或 1024 降级）
+  let viewerPath = $state(null); // 原文件绝对路径（Finder 揭示）
+
+  async function loadPhotosPage() {
+    if (photosLoading || !photosNext) return;
+    photosLoading = true;
+    try {
+      const r = await call("timeline.page", { cursor: photosNext, limit: PHOTOS_PAGE_SIZE });
+      photos = photos.concat(r.items ?? []);
+      photosNext = r.next ?? null;
+    } catch (_) {
+      photosNext = null; // 下一页拿不到就停，不循环报错
+    } finally {
+      photosLoading = false;
+      photosLoaded = true;
+    }
+  }
+
+  // 进照片页拉第一页；哨兵可见 → 拉下一页（滚动流畅的关键：按需加载）。
+  $effect(() => {
+    if (page !== "photos") return;
+    if (!photosLoaded && !photosLoading) {
+      photosLoading = true;
+      call("timeline.page", { cursor: null, limit: PHOTOS_PAGE_SIZE })
+        .then((r) => {
+          photos = r.items ?? [];
+          photosNext = r.next ?? null;
+        })
+        .catch(() => (photosNext = null))
+        .finally(() => {
+          photosLoading = false;
+          photosLoaded = true;
+        });
+    }
+    if (sentinelEl) {
+      const io = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting) loadPhotosPage();
+        },
+        { rootMargin: "400px" }
+      );
+      io.observe(sentinelEl);
+      return () => io.disconnect();
+    }
+  });
+
+  // taken_at 是秒（proto AssetMeta）——按「今天 / 本月 / 更早」分组。
+  function photoGroupKey(tsSec) {
+    const d = new Date(tsSec * 1000);
+    const now = new Date();
+    if (d.toDateString() === now.toDateString()) return "today";
+    if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) return "month";
+    return "earlier";
+  }
+  const photoGroups = $derived.by(() => {
+    const groups = [
+      { key: "today", label: t("ui.photos_today"), items: [] },
+      { key: "month", label: t("ui.photos_month"), items: [] },
+      { key: "earlier", label: t("ui.photos_earlier"), items: [] },
+    ];
+    for (const item of photos) {
+      groups.find((g) => g.key === photoGroupKey(item.taken_at)).items.push(item);
+    }
+    return groups.filter((g) => g.items.length > 0);
+  });
+
+  // 大图：原图内存展示（asset.original）；>12MiB/视频/失败 → 1024 缩略图
+  // 降级。关闭即清引用——「不长期落盘」由不写任何临时文件天然满足。
+  $effect(() => {
+    const v = photoViewer;
+    viewerSrc = null;
+    viewerPath = null;
+    if (!v) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const o = await call("asset.original", { hash: v.hash });
+        if (!cancelled) viewerSrc = `data:image/jpeg;base64,${o.data_base64}`;
+      } catch (_) {
+        try {
+          const t = await call("thumb.get", { hash: v.hash, size: 1024 });
+          if (!cancelled) viewerSrc = `data:image/jpeg;base64,${t.jpeg_base64}`;
+        } catch (_) {}
+      }
+      try {
+        const p = await call("asset.path", { hash: v.hash });
+        if (!cancelled) viewerPath = p.path;
+      } catch (_) {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  async function revealPhotoInFinder() {
+    if (!viewerPath) return;
+    try {
+      await revealItemInDir(viewerPath);
+    } catch (e) {
+      flashMessage(`无法在 Finder 中显示：${e}`);
+    }
+  }
 </script>
 
 {#if wizard && (!wizard.configured || !wizard.installed) && !online}
@@ -689,6 +816,52 @@
           </div>
           <p class="hint">移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</p>
         </section>
+      {:else if page === "photos"}
+        <!-- DESK-03: 照片墙——与手机时间线同一数据源（query.timeline +
+             thumb.get），本机直连 daemon 拉取；分组 今天/本月/更早；
+             点开 = 原图内存查看（不落盘）+「在 Finder 中显示」原文件。 -->
+        <section class="page" data-testid="page-photos">
+          <div class="lede">
+            <h2 class="headline">{t("ui.nav_photos")}</h2>
+            <p class="sub">
+              {t("ui.photos_count", {
+                n: photoCount !== null ? photoCount : 0,
+                m: photoSources !== null ? photoSources : 0,
+              })}
+            </p>
+          </div>
+          <div class="card photo-wall">
+            {#if photosLoaded && photos.length === 0}
+              <p class="hint">{t("ui.photos_empty")}</p>
+            {:else if !photosLoaded}
+              <p class="hint">正在加载照片…</p>
+            {:else}
+              {#each photoGroups as g (g.key)}
+                <h4 class="photo-group">{g.label}</h4>
+                <div class="photo-grid">
+                  {#each g.items as item (item.hash)}
+                    <button
+                      class="photo-cell"
+                      onclick={() => (photoViewer = item)}
+                      aria-label="查看大图"
+                    >
+                      <PhotoThumb hash={item.hash} />
+                      {#if item.media_type === "video"}
+                        <span class="video-badge">▶</span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+              {/each}
+              {#if photosNext}
+                <div class="photo-sentinel" bind:this={sentinelEl}>
+                  {photosLoading ? "加载中…" : ""}
+                </div>
+              {/if}
+            {/if}
+          </div>
+          <p class="hint">照片都存在这台电脑上；在 Finder 里删掉的照片会从墙上消失。</p>
+        </section>
       {:else if page === "log"}
         <section class="page" data-testid="page-log">
           <div class="lede">
@@ -831,6 +1004,27 @@
         </div>
       </div>
     {/if}
+    <!-- DESK-03: 大图查看——原图内存展示（不落盘），关闭即弃；
+         「在 Finder 中显示」揭示 originals 里的原文件。 -->
+    {#if photoViewer}
+      <div class="modal-backdrop" onclick={() => (photoViewer = null)}>
+        <div class="modal photo-modal" onclick={(e) => e.stopPropagation()}>
+          <div class="photo-viewer-wrap">
+            {#if viewerSrc}
+              <img class="photo-viewer-img" src={viewerSrc} alt="" />
+            {:else}
+              <div class="photo-viewer-loading">加载中…</div>
+            {/if}
+          </div>
+          <div class="modal-actions">
+            <button onclick={revealPhotoInFinder} disabled={!viewerPath}>
+              {t("ui.photos_open_in_finder")}
+            </button>
+            <button class="primary" onclick={() => (photoViewer = null)}>关闭</button>
+          </div>
+        </div>
+      </div>
+    {/if}
     <!-- T1: 版本号——报问题/排查时先知道装的是什么版本。 -->
     {#if displayVersion}
       <footer class="version-footer">
@@ -838,7 +1032,7 @@
         <!-- DESK-02①: 环境显式徽标——prerelease 构建琥珀小徽标（「测试版」），
              环境在 UI 上一眼可辨，不靠用户读懂 -test 后缀；正式构建只显示版本号。 -->
         {#if isTestBuild}
-          <span class="env-badge">测试版</span>
+          <span class="env-badge">{t("ui.env_badge_test")}</span>
         {/if}
       </footer>
     {/if}
@@ -1453,5 +1647,79 @@
   .message-close:hover {
     color: var(--pp-ink);
     background: var(--pp-linen);
+  }
+
+  /* ── DESK-03: 照片墙 ─────────────────────────────────────────── */
+  .photo-wall {
+    overflow: hidden; /* 卡片内滚动由页面容器负责，墙不撑破圆角 */
+  }
+  .photo-group {
+    margin: 14px 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--pp-ink-60, #5c5347);
+  }
+  .photo-group:first-child {
+    margin-top: 0;
+  }
+  .photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 6px;
+  }
+  .photo-cell {
+    position: relative;
+    aspect-ratio: 1;
+    padding: 0;
+    border: none;
+    border-radius: var(--pp-radius-control-sm, 6px);
+    background: var(--pp-border, #e8e0d5);
+    overflow: hidden;
+    cursor: zoom-in;
+  }
+  .photo-cell:hover {
+    outline: 2px solid var(--pp-ink);
+    outline-offset: 2px;
+  }
+  .video-badge {
+    position: absolute;
+    right: 5px;
+    bottom: 5px;
+    font-size: 11px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.55);
+    border-radius: 4px;
+    padding: 1px 5px;
+    pointer-events: none;
+  }
+  .photo-sentinel {
+    height: 24px;
+    text-align: center;
+    color: var(--pp-ink-60, #5c5347);
+    font-size: 12px;
+  }
+  /* 大图 modal：图片区域限高、object-contain 保完整（大图看全貌优先） */
+  .photo-modal {
+    width: min(88vw, 880px);
+  }
+  .photo-viewer-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 260px;
+    max-height: 70vh;
+    overflow: hidden;
+    background: #14100c;
+    border-radius: var(--pp-radius-control-sm, 6px);
+  }
+  .photo-viewer-img {
+    max-width: 100%;
+    max-height: 70vh;
+    object-fit: contain;
+  }
+  .photo-viewer-loading {
+    color: #cbbfa8;
+    padding: 40px;
+    font-size: 13px;
   }
 </style>

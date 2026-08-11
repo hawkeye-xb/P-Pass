@@ -101,6 +101,38 @@ impl Router {
         self
     }
 
+    /// PRES-01: hello 的心跳落点——已配对未吊销设备刷新 last_seen +
+    /// 记 device.connected 审计（同设备 10 分钟去重防刷屏，防「锁屏
+    /// 重连」刷爆活动流）。失败静默：心跳是尽力而为的加速器，不是
+    /// 承诺——写库失败不影响 hello 应答。
+    async fn record_presence(&self, peer: transport::NodeId) {
+        let Ok(Some(device)) = self.db.get_device(&peer.0).await else {
+            return; // 未配对节点：hello 只是能力握手，不产生副作用
+        };
+        if device.revoked {
+            return;
+        }
+        let now = (self.now)();
+        let _ = self.db.touch_last_seen(&peer.0, now).await;
+        let last = self
+            .db
+            .last_audit_ts(&peer.0, "device.connected")
+            .await
+            .unwrap_or(None);
+        if last.is_none_or(|t| now - t > crate::presence::CONNECTED_AUDIT_DEDUPE_MS) {
+            let _ = self
+                .db
+                .append_audit(&storage::AuditEntry {
+                    ts: now,
+                    actor: Some(peer.0.to_vec()),
+                    action: "device.connected".into(),
+                    target_hash: None,
+                    detail: Some(device.name.clone()),
+                })
+                .await;
+        }
+    }
+
     /// Accept-loop over inbound connections. Runs until the transport
     /// closes. Each connection is served on its own task.
     pub async fn serve<T: Transport>(&self, transport: &T) {
@@ -206,6 +238,15 @@ impl Router {
             | methods::THUMB_GET
             | methods::ASSET_BLOB_TICKET => self.handle_query(req).await,
             methods::HELLO => {
+                // PRES-01: hello 是「我还活着」的轻信号——已配对未吊销的
+                // 设备每次 hello 更新 last_seen（三档在线态的数据源）+
+                // 记 device.connected 审计（同设备 10 分钟内去重防刷屏）。
+                // 复用 hello 不加协议动词的理由：hello 是唯一对成员/未配对
+                // 都放行的零数据方法，能力握手语义天然合适；新加轻方法要
+                // 动 authz + 双端协议，收益为零。红线：不参与鉴权、后台
+                // 不心跳（客户端侧把关）。未配对节点的 hello 只是能力握手，
+                // 无设备行可更新，静默跳过。
+                self.record_presence(peer).await;
                 let ours = Hello {
                     proto_ver: PROTO_VER,
                     capabilities: SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect(),

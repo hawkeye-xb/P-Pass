@@ -10,6 +10,7 @@ pub mod download;
 pub mod events;
 pub mod ipc;
 pub mod pairing;
+pub mod presence;
 pub mod query;
 pub mod reconcile;
 pub mod router;

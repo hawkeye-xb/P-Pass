@@ -265,6 +265,9 @@ async fn main() -> anyhow::Result<()> {
     blobs.attach_to_listener();
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir);
     let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir);
+    // DESK-03: 本地 IPC 也注入查询平面——桌面壳照片墙走同一 QueryEngine
+    // （与手机同一数据源），timeline/thumb/asset.* 双平面可答。
+    ipc.set_query(query.clone());
     let upload = daemon::upload::UploadPlane::new(db.clone(), blobs, data_dir.join(".ppf/staging"));
     let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 

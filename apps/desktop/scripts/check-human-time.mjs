@@ -1,6 +1,6 @@
 // T-091 验收脚本：node 直跑 humanTime / needsAttention 边界断言。
 // 用法：node apps/desktop/scripts/check-human-time.mjs
-import { humanTime, needsAttention, daysSince, BACKUP_ATTENTION_DAYS } from "../src/lib/humanTime.js";
+import { humanTime, needsAttention, daysSince, relativeTime, BACKUP_ATTENTION_DAYS } from "../src/lib/humanTime.js";
 
 const DAY = 86_400_000;
 // 固定「现在」= 本地 2026-08-06(周四) 15:00:00，避免跑的时刻影响结果
@@ -44,6 +44,19 @@ eq(`从未备份(undefined) -> 不算哨兵态`, needsAttention(undefined, NOW, 
 eq("6 天前 -> 6", daysSince(NOW - 6 * DAY, NOW), 6);
 eq("刚刚 -> 0", daysSince(NOW - 1000, NOW), 0);
 eq("0 -> null", daysSince(0, NOW), null);
+
+// ---- PRES-01 relativeTime（「x 分钟前在线」数据源） ----
+eq("59s -> 刚刚", relativeTime(NOW - 59_000, NOW), "刚刚");
+eq("61s -> 1 分钟前（向下取整最小 1）", relativeTime(NOW - 61_000, NOW), "1 分钟前");
+eq("3 分钟前 -> 3 分钟前", relativeTime(NOW - 3 * 60_000, NOW), "3 分钟前");
+eq("59 分钟 -> 59 分钟前", relativeTime(NOW - 59 * 60_000, NOW), "59 分钟前");
+eq("61 分钟 -> 1 小时前", relativeTime(NOW - 61 * 60_000, NOW), "1 小时前");
+eq("23 小时 -> 23 小时前", relativeTime(NOW - 23 * 3600_000, NOW), "23 小时前");
+eq("25 小时 -> 1 天前", relativeTime(NOW - 25 * 3600_000, NOW), "1 天前");
+eq("5 天 -> 5 天前", relativeTime(NOW - 5 * DAY, NOW), "5 天前");
+eq("30 天 -> null（退回日历格式）", relativeTime(NOW - 30 * DAY, NOW), null);
+eq("0 -> null", relativeTime(0, NOW), null);
+eq("undefined -> null", relativeTime(undefined, NOW), null);
 
 if (failed > 0) {
   console.error(`\n${failed} assertion(s) FAILED`);

@@ -66,5 +66,13 @@
   "ui.logs_exported": "诊断包已导出（内容已脱敏，可放心外发）：{path}",
   "ui.export_failed": "导出失败：{err}",
   "ui.status": "状态",
-  "ui.library_dir_unknown": "后台服务还没报告库位置"
+  "ui.library_dir_unknown": "后台服务还没报告库位置",
+  "ui.env_badge_test": "测试版",
+  "ui.nav_photos": "照片",
+  "ui.photos_count": "共 {n} 张 · 来自 {m} 台设备",
+  "ui.photos_today": "今天",
+  "ui.photos_month": "本月",
+  "ui.photos_earlier": "更早",
+  "ui.photos_empty": "还没有照片。手机备份完成后会出现在这里。",
+  "ui.photos_open_in_finder": "在 Finder 中显示"
 }

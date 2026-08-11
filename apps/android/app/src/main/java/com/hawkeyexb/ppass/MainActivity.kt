@@ -49,6 +49,7 @@ import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
 import com.hawkeyexb.ppass.battery.openBatteryOptimizationSettings
 import com.hawkeyexb.ppass.i18n.DiagText
 import com.hawkeyexb.ppass.transport.DaemonClient
+import com.hawkeyexb.ppass.transport.ForegroundHeartbeat
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairOutcome
 import com.hawkeyexb.ppass.transport.Pairing
@@ -242,15 +243,27 @@ fun PPassApp() {
     // 加白后卡片消失；拒绝授权时保持卡片）
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var batteryWhitelisted by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+    // PRES-01: 前台轻心跳——ON_RESUME 起、ON_STOP 停（退后台绝不心跳，
+    // 耗电红线）；app 在前台时 daemon 每 ~30s 收到一次 hello，桌面设备行
+    // 才显示「在线」而不是「离线」（锁屏 ≠ 离开）。
+    val heartbeat = remember { ForegroundHeartbeat(client, pairings, scope) }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                batteryWhitelisted = isIgnoringBatteryOptimizations(context)
-                partialMedia = hasPartialMediaAccess(context)
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    batteryWhitelisted = isIgnoringBatteryOptimizations(context)
+                    partialMedia = hasPartialMediaAccess(context)
+                    heartbeat.start()
+                }
+                Lifecycle.Event.ON_STOP -> heartbeat.stop()
+                else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            heartbeat.stop()
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     // MOB-03: 进相册选择页的完整权限链（Home「选择备份的相册」与 onboarding
