@@ -157,3 +157,10 @@ tools/dogfood-smoke.sh     # production-shape end-to-end smoke, agent-runnable
   GUIs are skins over those interfaces.
 - **Architecture gates**: `iroh` imports only in `transport`; platform
   `#[cfg]` only in `platform`; enforced by `tools/arch-check.sh` in CI.
+
+## License
+
+P-Pass is licensed under the **GNU Affero General Public License v3**
+(AGPL-3.0) — see [LICENSE](LICENSE) for the full text. All crates,
+the Android app, the desktop shell and the website (`site/`) are covered.
+Copyright (C) 2026 Hawkeye XB.
