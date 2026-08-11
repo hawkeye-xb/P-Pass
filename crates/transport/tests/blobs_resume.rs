@@ -123,9 +123,36 @@ async fn kill_mid_transfer_then_resume_verifies() {
             Ok(_) => false, // finished before the abort landed — retry
         };
         rx_tp.close().await;
-        // Let the aborted task's store handle drop fully (releases the
-        // redb lock) before the restarted receiver opens the same dir.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // FIX-SC2: 等文件锁真正释放，而不是固定睡 100ms。
+        //
+        // 为什么：abort 是 in-process 取消，不是进程死亡——redb 的
+        // Database（持 blobs.db 的 flock）在独立 runtime 的 store actor
+        // 手里，abort 只 drop 了 FsStore（关 channel），actor 要等手头的
+        // batch 写完 + 被调度才退出、才释放锁。CI/负载下这个窗口 >100ms，
+        // 重开撞锁 → `DatabaseAlreadyOpen` 错误 → iroh-blobs 0.103 在
+        // 错误路径上把持 runtime 的 RtWrapper 从自身线程 drop 掉 →
+        // BlockingPool::shutdown 自锁挂死（栈实证，见卡尾）。真机 kill
+        // App = 进程死 → 锁随进程释放，无此竞态；这里用轮询把「等锁」
+        // 变成事实而不是赌时序。
+        let db_path = receiver_store.join("blobs.db");
+        let lock_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let free = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&db_path)
+                .map(|f| f.try_lock().is_ok())
+                .unwrap_or(true); // 文件还不存在（首轮）→ 无锁可等
+            if free {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < lock_deadline,
+                "旧 store 30s 内未释放 blobs.db 锁——actor 退出被卡死"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        stamp(&t0, &format!("attempt {attempt}"), "store lock released");
         if was_killed {
             killed = true;
             stamp(

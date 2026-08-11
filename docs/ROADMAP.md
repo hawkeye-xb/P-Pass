@@ -219,10 +219,12 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       2026-08-11**（前台 30s 心跳 + 三档在线态 + hello 进活动流 10 分钟
       去重，哨兵 >5 天口径不动）；✅ **DESK-03 桌面照片墙 DONE
       2026-08-11**（本地 IPC 查询平面 + 缩略图墙 + 大图不落盘 + Finder
-      揭示，三方对照测试）；📌 **FIX-SC2 复现突破 2026-08-11**（本地
-      高并发首次复现 stall，卡点锁定 Blobs::open，第 3 步定根因修复
-      进行中）。**v0.3.3-test.1 prerelease 已 publish**（test 通道
-      返回新 manifest，stable 隔离正确）。
+      揭示，三方对照测试）；✅ **FIX-SC2 DONE 2026-08-11**（本地复现
+      restart stall 卡点锁定 Blobs::open → 栈实证 iroh-blobs 0.103
+      RtWrapper::drop 错误路径自锁 + harness 锁竞态触发；修复=文件锁
+      释放轮询，40/40 压力验证 + 反证完备，卡移 done/）。**v0.3.3-test.1
+      prerelease 已 publish**（test 通道返回新 manifest，stable 隔离
+      正确）。
 - [ ] UPD-01 self-update channel — **code landed 2026-08-04 (PR #30),
       rework 2026-08-05**: release.yml emits tauri-style manifest.json
       (compose via tools/make-update-manifest.mjs — sha256 + Ed25519
