@@ -36,15 +36,30 @@ on:
       tag:
         description: "手工触发的 tag 名（草稿发布用）"
         required: false
+      # CI-01②: 平台选择（只对 workflow_dispatch 生效；tag push 永远全量
+      # ——发布完整性不许分块）。
+      platforms:
+        description: "构建平台（逗号组合：android / macos / windows；留空 = all）"
+        required: false
+        default: "all"
 
 permissions:
   contents: read
+
+env:
+  # CI-01②: dispatch 指定平台集合；tag push（发布）恒全量。
+  # ⚠️ 表达式在 job 级 if 里用 ${{ }} 求值，env 里不能引用 github ——
+  # 平台门控在每 job 的 if 里直接写表达式（见下）。
+  PLATFORMS: ${{ inputs.platforms || 'all' }}
 
 jobs:
   macos-arm64:
     name: "macOS arm64 (签名门控)"
     runs-on: macos-14
     environment: release-signing
+    # CI-01②: 平台门控——tag push 恒跑；dispatch 按 platforms 输入。
+    # 留空/all/含 macos 都跑。
+    if: github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'macos') || (inputs.platforms == '' || inputs.platforms == 'all')
     permissions:
       contents: read
       id-token: write
@@ -255,6 +270,8 @@ jobs:
     name: "Windows x64 (未签名)"
     runs-on: windows-latest
     timeout-minutes: 60
+    # CI-01②: 平台门控（同 macos job 语义）。
+    if: github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'windows') || (inputs.platforms == '' || inputs.platforms == 'all')
     permissions:
       contents: read
       id-token: write
@@ -359,6 +376,8 @@ jobs:
     name: "Android (signed APK)"
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # CI-01②: 平台门控（同 macos job 语义）。
+    if: github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'android') || (inputs.platforms == '' || inputs.platforms == 'all')
     permissions:
       contents: read
     env:
@@ -441,6 +460,9 @@ jobs:
       # action 的进程环境——secret 本体下沉到 VT step（Apple secrets 同款模式）。
       HAS_VT: ${{ secrets.VT_API_KEY != '' }}
       HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
+      # CI-01③a: R2 发布镜像门控——CLOUDFLARE_API_TOKEN 未就位时干净跳过
+      #（卡面：secret 存在才启用）。
+      HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -516,12 +538,19 @@ jobs:
       # 本卡只出 android-arm64 条目——darwin 需 .app.tar.gz（H-10c 衔接：
       # createUpdaterArtifacts 的 tar.gz 须在塞 lib/ 后产出，挂账）；windows
       # 桌面壳待建。签名密钥由用户生成（已 2026-08-04 完成）。
+      # CI-01③a: CF token 在位时 asset-base 用 R2 镜像域（国内下载可达；
+      # 签名是对资产字节的，换域名验签零变化）；缺 token 保持 GitHub 直链。
       - name: Compose update manifest (UPD-01)
         run: |
           set -euo pipefail
           APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
+          ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+          if [ "${{ env.HAS_CF_TOKEN }}" = "true" ]; then
+            ASSET_BASE="https://dl.p-pass.hawkeye-xb.com/releases/${TAG}"
+          fi
           node tools/make-update-manifest.mjs \
             --tag "$TAG" --notes NOTES.md \
+            --asset-base "$ASSET_BASE" \
             --asset android-arm64="artifacts/android/$APK"
           mv manifest.json artifacts/manifest.json
 
@@ -594,3 +623,39 @@ jobs:
           # 找不到 → test 通道 404 → 手机收不到。必须显式清 draft。
           gh release edit "$TAG" --draft=false --prerelease
           echo "test 通道已发布（prerelease，stable 不受影响）: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      # ── CI-01③a: R2 发布镜像（dl.p-pass.hawkeye-xb.com，国内下载
+      # 可达性）。manifest URL 改指镜像域——客户端从 R2 拉资产，验签
+      # 语义零变化（SHA256SUMS 一并镜像，notes 里给出镜像地址）。
+      # 门控：CLOUDFLARE_API_TOKEN secret 未就位 → 干净跳过并在 summary
+      # 标注（卡面：secret 存在才启用，缺 secret 不阻塞发布）。 ⚠️ 用
+      # wrangler@3（r2 子命令在 v4 改名）——CI 环境 npx 直装。
+      - name: Mirror release assets to R2 (gated, CI-01)
+        if: env.HAS_CF_TOKEN == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # 逐资产镜像（平台门控下只镜像实际产物——glob 不存在即跳过）。
+          for f in \
+            artifacts/macos-arm64/ppass-macos-arm64.zip \
+            artifacts/macos-arm64/P-Pass-macos-arm64.dmg \
+            artifacts/macos-arm64/SHA256SUMS-macos-arm64 \
+            artifacts/windows-x64/daemon.exe \
+            artifacts/windows-x64/testclient.exe \
+            artifacts/windows-x64/SHA256SUMS-windows-x64 \
+            artifacts/windows-x64-installer/*.exe \
+            artifacts/android/app-release.apk \
+            artifacts/android/app-release-unsigned.apk \
+            artifacts/manifest.json
+          do
+            [ -f "$f" ] || continue
+            npx --yes wrangler@3 r2 object put "ppf-dl/releases/${TAG}/$(basename "$f")" --file "$f"
+          done
+          {
+            echo ""
+            echo "### R2 镜像（dl.p-pass.hawkeye-xb.com，国内下载可达）"
+            echo "https://dl.p-pass.hawkeye-xb.com/releases/${TAG}/（同 release 资产，SHA256SUMS 一并镜像）"
+          } >> NOTES.md
+          echo "R2 镜像完成 → dl.p-pass.hawkeye-xb.com/releases/${TAG}/"

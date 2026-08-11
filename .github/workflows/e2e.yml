@@ -3,6 +3,11 @@
 # jar 内，无需模拟器），连一个临时 release daemon，断言
 # HELLO OK / PAIR OK / BACKUP OK 三行（12/12 指标见剧本脚本输出）。
 #
+# CI-01（2026-08-12）并轨：T-070 failure scenarios（huge file / crash
+# recovery / disk full）从每推（旧 pr.yml）挪到本 workflow——nightly +
+# tag 前门禁（它抓真 bug 但不该每推都烧 release 构建）。e2e job 触发
+# 条件不动（nightly/tag/labeled/dispatch），scenarios job 同门禁。
+#
 # 运行时机（2026-08-04 用户裁决：自动化测试不前置）：
 #   - nightly 定时（schedule）
 #   - release tag 时并行跑（不阻塞 release 构建——tag 触发与 release.yml
@@ -74,3 +79,34 @@ jobs:
           bash tools/android-hello.sh
           bash tools/android-pair.sh
           bash tools/android-backup.sh
+
+  # CI-01: T-070 failure scenarios 从每推挪到 nightly + tag 前门禁——
+  # 它抓真 bug 但不该每推都烧 release 构建（旧 pr.yml 每 push 全跑
+  # 四 job 是验收人点名的病灶①）。触发门禁与 e2e job 相同：
+  # nightly/tag/labeled/dispatch，纯 docs/卡片提交零触发。
+  scenarios:
+    name: T-070 failure scenarios (process-level)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: System codecs
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+      - name: Build release binaries
+        run: cargo build --release -p daemon -p testclient
+      - name: Run scenarios (huge file / crash recovery / disk full)
+        run: |
+          bash tools/scenarios/huge_file.sh
+          bash tools/scenarios/crash_recovery.sh
+          bash tools/scenarios/disk_full.sh

@@ -13,8 +13,13 @@
 
 允许直推 main / 自 merge，**不用等 review**。代价是三条底线，破一条视为事故：
 
-1. **CI 绿不过夜**：push 后必须盯 main 的 PR Checks 到结论；红了立刻修或
-   revert（8/7 的 fmt 红是反面教材——push 前本地过 `cargo fmt --check`）。
+1. **CI 绿不过夜**：push 后必须盯**受影响域**的 CI 到结论（CI-01 分块后：
+   改 crates/** 看 ci-rust，改 apps/android/** 看 ci-android，改
+   apps/desktop/** 或 assets/** 看 ci-desktop；纯 docs/.claude 提交零
+   CI）；红了立刻修或 revert（8/7 的 fmt 红是反面教材——push 前本地过
+   `cargo fmt --check`）。**nightly 红次日第一优先修**（e2e.yml 的
+   nightly + tag 门禁跑全量 nextest + scenarios，不是每推——它红了
+   代表真 bug，别拖）。
 2. **每批交付必更文档**：PROGRESS.md 每卡一行 + NEXT.md 队列状态 +
    ROADMAP.md 状态行（ROADMAP 是用户看进度的唯一入口）。零记录 = 事故。
 3. **验收人事后抽检有 revert 权**：内容被打回就返工，不争辩已合并事实。
@@ -23,9 +28,8 @@
 
 ## 提交与构建纪律
 
-- **纯文档/卡片提交（只动 docs/ 或 .claude/）commit message 末尾加
-  `[skip ci]`**——GitHub 原生跳过 push 触发的 workflow，别为一张卡烧
-  四个 job（CI-01 落地路径过滤后此规则自动失效，可删）。
+- **纯文档/卡片提交（只动 docs/ 或 .claude/）**：CI-01 已做路径过滤——
+  不匹配任何域 paths 的提交零 CI 触发，无需再写 `[skip ci]`。
 - 小步提交本地攒，**一张卡一次 push**，别按保存键式碎推。
 
 ## tag 纪律
