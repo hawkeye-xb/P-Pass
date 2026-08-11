@@ -31,11 +31,12 @@
 | DESK-04 向导对齐 | 9072735 | vite build 绿 | 三步截图对照；扫码→确认列表即时出现 |
 | CI-01 流水线分块 | 5b8cb88 | actionlint 8/8 | CI 实跑验收（纯 docs 零 run/单域触发/platforms 门控/取消旧 run）留推后确认 |
 
-**⏳ 等用户过目（issue 草稿，先不发）**：
-`docs/iroh-blobs-load-deadlock-issue-draft.md` —— iroh-blobs 0.103
-`FsStore::load` 失败路径自锁死锁的英文 issue 草稿（最小复现 + sample
-栈摘录 + 根因分析 + 修复建议）。**用户过目后决定是否代发到
-n0-computer/iroh**（FIX-SC2 卡尾报告同源，未发过）。
+**✅ issue 已发（2026-08-12）**：
+https://github.com/n0-computer/iroh/issues/4468 —— iroh-blobs 0.103
+`FsStore::load` 失败路径自锁死锁（SalAmira 账号代发，正文=最小复现 +
+sample 栈摘录 + 根因 + 修复建议，从草稿去 DRAFT 头注后发出）。
+归档副本 `docs/iroh-blobs-load-deadlock-issue-draft.md` 头部已更新为
+FILED 状态；FIX-SC2 done 卡尾已补链接。
 
 **等用户（CI-01 CF 联动激活）**：GitHub 仓库 Settings → Secrets and
 variables → Actions 添加 `CLOUDFLARE_API_TOKEN`（+ 可选

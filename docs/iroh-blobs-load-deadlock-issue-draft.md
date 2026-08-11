@@ -1,7 +1,9 @@
-# iroh-blobs 0.103: `FsStore::load` failure deadlocks the process — draft issue
+# iroh-blobs 0.103: `FsStore::load` failure deadlocks the process — filed issue
 
-> ⚠️ DRAFT — not posted anywhere. Owner (xixi) reviews before we file it
-> against n0-computer/iroh. Evidence from P-Pass FIX-SC2 (2026-08-11):
+> ✅ **FILED 2026-08-12**: https://github.com/n0-computer/iroh/issues/4468
+> (SalAmira account). 本文件为归档副本——正文与所发 issue 一致（仅去
+> 掉 DRAFT 头注）。后续更新以 issue 线程为准。
+> Evidence from P-Pass FIX-SC2 (2026-08-11):
 > reproduced locally 2× under load + captured a full thread stack via
 > `sample`; root cause confirmed by reading vendored sources.
 
@@ -154,4 +156,4 @@ is why we think this deserves an upstream fix.
 
 ---
 
-*Draft by Salamira (agent) for xixi's review — not filed.*
+*Filed by Salamira (agent) on behalf of the P-Pass project — 2026-08-12.*

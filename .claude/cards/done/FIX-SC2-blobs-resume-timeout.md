@@ -142,7 +142,10 @@ stamp 断言）。把「等锁」从赌时序变成事实。真机 kill App = �
 条件 2 次复现）；本地全量 149/149 绿。**反证**：修复前 = 固定 100ms
 睡眠 → 本卡上述 2 次复现 + 死锁栈即为「去掉修复必红」的证据。
 
-**上游报告**（未发 issue——n0-computer/iroh 非本仓可代发）：机制 +
+**上游报告**（✅ **已发 issue 2026-08-12**：
+https://github.com/n0-computer/iroh/issues/4468 —— SalAmira 账号代发，
+正文=本卡尾存档的机制 + 栈摘录 + 最小复现，归档副本
+docs/iroh-blobs-load-deadlock-issue-draft.md）：机制 +
 栈摘录 + 最小复现路径已存档。影响面：任何 FsStore::load 失败（磁盘满/
 库损坏/锁竞争）都会让进程挂死而非报错——daemon 启动时若踩到会挂起，
 建议上游修 RtWrapper::drop（错误路径不该 drop 所在 runtime 的 Runtime）。
