@@ -588,5 +588,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release edit "$TAG" --prerelease
+          # REL-02 补丁（2026-08-11）：gh release edit --prerelease 只设
+          # prerelease 标志、不清 draft——release 仍是 draft，GitHub API
+          # 默认不返回 draft，update Worker 的 latestPrereleaseTag 永远
+          # 找不到 → test 通道 404 → 手机收不到。必须显式清 draft。
+          gh release edit "$TAG" --draft=false --prerelease
           echo "test 通道已发布（prerelease，stable 不受影响）: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
