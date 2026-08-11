@@ -579,6 +579,16 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] background thumbnail batch generation after ingest
 - [ ] Windows smoke (T-040 will carry it)
 
+## 链 2 取回/哨兵批次（2026-08-12 实施；语义基准 docs/product/2026-08-11-chain2-decisions.md ①③④⑤⑥）
+
+- [x] RET-01 单张照片取回=使用动作 — **merged 2026-08-12 (4a92aae)**: 查看页「保存到相册」（MediaStore 29+ RELATIVE_PATH/26-28 DATA+扫描广播）+「用其他应用打开」（FileProvider+ACTION_VIEW）；原图按需下载 cacheDir/share 即用即清（MOB-04 红线）；文件头魔数嗅探真实 MIME（纯函数 JVM 可测）；防循环钉子显式断言（存回→再备份→ingested=0 duplicates=12）。android 140/140。挂账（真机）：家人照片保存到相册可见+时间元数据、打开面板+临时目录零残留、断网人话错误。
+- [x] SENT-01 手机盯电脑哨兵 — **merged 2026-08-12 (29af0ff)**: 搭后台任务便车（非心跳）记 daemon 可达性；判定纯函数四条件（确认可达过/距今>72h/期间有失败尝试/去重窗口 72h）；「3 天没连上电脑了——照片没丢」走 UX-02 通道 id 2028。android 150/150。挂账（真机）：mock 全失败跨阈值→通知一次不重复、恢复可达清零。
+- [x] DOG-02b 契机式白名单提醒 — **merged 2026-08-12 (a0792fe)**: 独立 store + 纯函数五条件（未加白/有失败/≤2天/失败后无成功/去重 72h）；成功一轮清零；通知进 App 见 DOG-02 Home 引导条。android 161/161。挂账（真机）：mock 条件满足→通知+点开引导、加白后不再通知。
+- [x] DESK-04 桌面向导低成本对齐 — **merged 2026-08-12 (9072735)**: 文案按产品语言过一遍（去「常驻服务/访达」等词）；step3 接 T4 新配对流（daemon-event 事件驱动 + 3s 轮询兜底，pending 出现即时切确认列表）；全 token 化。vite build 绿。挂账（真机）：三步截图对照、走完向导→扫码→确认列表即时出现。
+- [x] CI-01 流水线分块重构 — **merged 2026-08-12 (5b8cb88)**: pr.yml 拆三域 workflow（ci-rust/ci-android/ci-desktop，paths 门控+concurrency 取消，纯 docs 零 CI）；release.yml platforms dispatch 输入（tag 恒全量）；T-070 scenarios 并轨 e2e nightly+tag；CF 联动门控（R2 镜像 ppf-dl/dl.p-pass.hawkeye-xb.com + ci-workers 自动部署，CLOUDFLARE_API_TOKEN 未就位跳过）；CLAUDE.md 底线①口径更新。actionlint 8 workflow 零告警。等用户：GitHub Secrets 加 CLOUDFLARE_API_TOKEN。
+- [ ] NAME-01 设备改名（L0 排队尾，可砍）
+- [ ] 恢复向导（换机整库恢复）— 后置
+
 ## SITE 站点线（2026-08-11 启动；架构档案 docs/product/2026-08-11-site-architecture.md）
 
 > Landing + blog 对外阵地，与 app 主线并行。内容 zh 先行，en 随开源节奏补。
