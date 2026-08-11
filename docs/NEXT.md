@@ -17,15 +17,21 @@ site.yml（paths 过滤 `site/**`）与主 CI 完全隔离，推 GH Pages。CNAM
 2. **DNS 待改**：CF zone `hawkeye-xb.com`（zone id 65dec62bc61b00e5d22fedc40b774bdc）里 `p-pass.hawkeye-xb.com` 的 CNAME 目前指向旧占位 `p-pass-landing.pages.dev`——**需改为 `hawkeye-xb.github.io`**（GH Pages）。改完 GH 侧 custom domain 自动生效（CNAME 文件已随构建入库）。
 3. SITE-02 三篇博文草稿（下一轮，做完更新本段）。
 
-## 〇、2026-08-11 SITE-02 轮（Salamira）：三篇博文草稿待做
+## 〇、2026-08-11 SITE-02 轮（Salamira）：三篇博文草稿待审
 
-**依赖 SITE-01**（素材源见架构档案 §Blog 素材管线）：
+**三篇草稿已写好，推在分支 `site/site-02`（46b4edc，未合并 main、未发布）**，
+本地渲染验证通过（三篇 200、过程图全出、生产构建正确排除草稿、零第三方断言绿）：
 
 1. 《为什么给家人做一个照片备份》——docs/product/ 定位+体验差距档案改写
-2. 《一只屋脊兽的诞生》——图标九轮迭代复盘（drafts-gallery.html 过程图 SVG 直接嵌）
-3. 《从 3 秒轮询到 36 毫秒》——IPC-02 重构记（事件总线、Lagged 取舍、兜底 60s 对账）
+   （数据铁律、三层掌控、妈妈手机不叫 NodeId）。
+2. 《一只屋脊兽的诞生》——图标九轮迭代复盘（圆点虚线被否/大小眼净空
+   12→72/碳纹 vs 屋脊兽分工/瓦当变体），6 张过程图直接嵌 SVG。
+3. 《从 3 秒轮询到 36 毫秒》——IPC-02 重构记（事件总线、Lagged 取舍、
+   36ms vs 3s、60s 兜底对账）。
 
-要求：zh 先行、真实过程含走弯路、不写营销稿。**草稿完成即停等用户审，不许发布**。
+**待用户审稿**（审在 GitHub 分支上改也行）：审后合并 main + 去 `draft: true`
+即发布。另外用户指正已修：**站点全图标统一碳纹主图标**（hero/左上角
+logo/favicon，亮/夜双版）。
 
 ## 〇、2026-08-11 PRES-01 + DESK-03 轮（Salamira）：在线状态三档 + 桌面照片墙 + 出包
 
