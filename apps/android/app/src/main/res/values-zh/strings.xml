@@ -150,6 +150,12 @@
     <string name="back">返回</string>
     <string name="video_loading">正在从家里取视频… %1$d%%</string>
     <string name="video_failed">视频没取到，请再试一次。</string>
+    <!-- RET-01: 单张取回 = 使用动作（保存到相册 / 用其他应用打开） -->
+    <string name="save_to_gallery">保存到相册</string>
+    <string name="open_with_app">用其他应用打开</string>
+    <string name="saved_to_gallery">已保存到相册</string>
+    <string name="no_app_for_file">手机上没有能打开这个文件的应用。</string>
+    <string name="share_download_failed">原图没取到，请再试一次。</string>
 
     <string name="tab_photos">照片</string>
     <string name="tab_backup">备份</string>
