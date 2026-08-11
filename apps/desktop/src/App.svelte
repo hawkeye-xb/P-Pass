@@ -318,6 +318,34 @@
     }
   }
 
+  // ── NAME-01: 设备改名（decisions ② ID 与显示名分离）──────────────
+  // 点设备名 → 变输入框；回车/失焦保存（空名/未改动不提交）；Esc 取消。
+  let renameTarget = $state(null); // { nodeId, name }
+  let renameValue = $state("");
+
+  function startRename(d) {
+    renameTarget = { nodeId: d.node_id, name: d.name };
+    renameValue = d.name;
+  }
+
+  async function commitRename() {
+    const target = renameTarget;
+    if (!target) return;
+    const trimmed = renameValue.trim();
+    renameTarget = null;
+    if (!trimmed || trimmed === target.name) return; // 空名/未改动 = 不提交
+    try {
+      const r = await call("device.rename", {
+        node_id: target.nodeId,
+        name: trimmed,
+      });
+      flashMessage(t("ui.rename_saved", { name: r.name ?? trimmed }));
+      await refresh();
+    } catch (e) {
+      flashMessage(t("ui.rename_failed", { err: String(e) }));
+    }
+  }
+
   async function openLibrary() {
     try {
       const s = await call("status");
@@ -788,7 +816,27 @@
                            daemon 仍未暴露，不捏造。 -->
                       <span class="statusdot {row.dot}"></span>
                       <span class="dev-main">
-                        <span class="dev-name">{d.name}</span>
+                        {#if renameTarget?.nodeId === d.node_id}
+                          <!-- NAME-01: 改名输入框——回车保存 / Esc 取消 /
+                               失焦保存（空名与未改动不提交）。 -->
+                          <input
+                            class="dev-rename"
+                            value={renameValue}
+                            oninput={(e) => (renameValue = e.currentTarget.value)}
+                            onkeydown={(e) => {
+                              if (e.key === "Enter") commitRename();
+                              else if (e.key === "Escape") renameTarget = null;
+                            }}
+                            onblur={commitRename}
+                            autofocus
+                          />
+                        {:else}
+                          <button
+                            class="dev-name dev-name-btn"
+                            title={t("ui.rename")}
+                            onclick={() => startRename(d)}
+                          >{d.name}</button>
+                        {/if}
                         <span class="dev-sub">{row.sub}</span>
                       </span>
                       <span class="dev-right" class:act={row.alert}>{row.right}</span>
@@ -1303,6 +1351,44 @@
   .dev-main .dev-name {
     flex: none;
     font-size: 16px;
+  }
+  /* NAME-01: 设备名可点击编辑——按钮化保持纸底墨字（hover 提亮），
+     与行内其他动作（移除）同族但低调（无边框无底色，仅 hover 下划线）。 */
+  .dev-name-btn {
+    flex: none;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--pp-ink);
+    background: transparent;
+    border: none;
+    border-radius: var(--pp-radius-control-sm);
+    padding: 2px 6px;
+    margin-left: -6px;
+    cursor: pointer;
+    text-align: left;
+    min-height: 0;
+    font-family: inherit;
+  }
+  .dev-name-btn:hover {
+    background: var(--pp-linen);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  .dev-rename {
+    flex: none;
+    font-size: 16px;
+    font-weight: 600;
+    font-family: inherit;
+    color: var(--pp-ink);
+    background: var(--pp-paper);
+    border: 1.5px solid var(--pp-border-strong);
+    border-radius: var(--pp-radius-control-sm);
+    padding: 2px 6px;
+    max-width: 260px;
+  }
+  .dev-rename:focus {
+    outline: none;
+    border-color: var(--pp-safe);
   }
   .dev-sub {
     color: var(--pp-ink-40);
