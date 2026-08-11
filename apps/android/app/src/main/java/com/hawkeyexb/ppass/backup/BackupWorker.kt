@@ -53,6 +53,8 @@ private const val NOTIFICATION_ID = 2026
 // UX-02: 失败通知（成功保持沉默——产品档案 §二.6）。
 private const val FAIL_CHANNEL_ID = "ppass.backup.failed"
 private const val FAIL_NOTIFICATION_ID = 2027
+// SENT-01: 手机侧哨兵通知（同 UX-02 通道，独立 notification id）。
+private const val SENTINEL_NOTIFICATION_ID = 2028
 
 // MOB-02 §四事件②：连拍聚合——update delay（安静窗口）内连续变化只
 // 触发一次；超过 max delay 强制跑（变化持续不断时不被饿死）。
@@ -202,12 +204,18 @@ class BackupWorker(
         // MOB-02 §五：连续失败计数——成功或放弃本轮时清零，下一个触发
         // 事件（②③④）天然就是新一轮重试。
         val attempts = BackupAttemptStore(ctx.filesDir)
+        // SENT-01: 手机盯电脑哨兵——搭便车，每次后台任务执行顺记一笔
+        // daemon 可达性结果（非心跳）。判定与通知在 finally 统一检查。
+        val sentinel = SentinelStore(ctx.filesDir)
         return try {
             client.bind(IdentityStore(ctx.filesDir).secretKey())
             val daemon = parsePeerAddrToken(pairing.daemonAddrToken)
 
             // DOG-01c: 备份前漂移校准（只查不传；daemon 不可达则跳过）。
-            calibrateIfReachable(client, daemon, confirmedStore)
+            // SENT-01: 校准返回是否确认可达——false（含无交互/失败）也
+            // 是一次失败尝试（否则连续 3 天「scan 空早退」会漏记）。
+            val reachable = calibrateIfReachable(client, daemon, confirmedStore)
+            if (reachable) sentinel.recordReachable() else sentinel.recordUnreachable()
 
             val watermarks = WatermarkStore(ctx.filesDir)
             // T6: 自动备份同样只扫选中相册（范围与手动一致）。
@@ -245,6 +253,9 @@ class BackupWorker(
             }.also { hashCache.flush() }
             val report = BackupRunner(client).run(daemon, candidates, scan.nextWatermark)
             watermarks.save(scan.nextWatermark)
+            // SENT-01: run 成功 = 确认 daemon 可达（即使校准阶段缓存空
+            // 没交互，这里才是硬证据）。
+            sentinel.recordReachable()
             // DOG-01c: commit 成功后本次候选全部确认——report.missing 是
             // 上传前集合，不参与减项（回归：旧实现把刚上传成功的照片从
             // 缓存删掉，首次全量备份后 M=0）；漂移校准走独立 exist-check。
@@ -275,27 +286,71 @@ class BackupWorker(
             }
         } finally {
             client.close()
+            // SENT-01: 搭便车检查——每次后台任务结束（成败都算）看
+            // 一次哨兵判定；该发则发（内部去重，发过 markNotified）。
+            maybeNotifySentinel(ctx)
         }
+    }
+
+    /** SENT-01: 哨兵通知判定 + 发送（UX-02 通道；发过 72h 内不重复）。
+     *  纯判定在 shouldNotifySentinel（JVM 可测），这里只做接线。 */
+    private fun maybeNotifySentinel(context: Context) {
+        val store = SentinelStore(context.filesDir)
+        if (!shouldNotifySentinel(store.load())) return
+        postSentinelNotification(context)
+        store.markNotified()
+    }
+
+    /** SENT-01: 「3 天没连上电脑了」通知——文案先说照片没丢。 */
+    private fun postSentinelNotification(context: Context) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    FAIL_CHANNEL_ID, "照片备份失败 Backup failed",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                )
+            )
+        }
+        val open = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pi = PendingIntent.getActivity(
+            context, 1, open,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(context, FAIL_CHANNEL_ID)
+            .setContentTitle(context.getString(R.string.notif_sentinel_title))
+            .setContentText(context.getString(R.string.notif_sentinel_body))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        nm.notify(SENTINEL_NOTIFICATION_ID, notification)
     }
 
     /** DOG-01c: 漂移校准——对缓存 hash 集做只查不传的 exist-check，
      *  daemon 已无的（电脑端库被删/换库）从缓存移除。daemon 不可达
-     *  则静默跳过（三元组显示缓存值，下次再校准）。 */
+     *  则静默跳过（三元组显示缓存值，下次再校准）。
+     *  SENT-01: 返回是否确认可达（成功交互=true；不可达/无缓存可查
+     *  =false——调用方据此记哨兵可达性）。 */
     private suspend fun calibrateIfReachable(
         client: DaemonClient,
         daemon: PeerAddrParts,
         store: ConfirmedStore,
-    ) {
-        try {
+    ): Boolean {
+        return try {
             // PERF-01: 校准时刻顺手清 hash-cache 孤儿（跟随 MediaStore
             // 现存 _ID 集合；查询失败内部跳过，不影响校准）。
             pruneHashCache(applicationContext)
             val cached = store.load().confirmed
-            if (cached.isEmpty()) return
+            if (cached.isEmpty()) return false // 无缓存可查——无结论
             val missing = BackupRunner(client).existCheck(daemon, cached)
             if (missing.isNotEmpty()) store.removeMissing(missing)
+            true // 交互成功 = 确认可达
         } catch (_: Throwable) {
             // 不可达/未配对/超时——保留缓存值。
+            false
         }
     }
 
