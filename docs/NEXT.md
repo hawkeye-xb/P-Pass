@@ -68,6 +68,16 @@ restart 重拨）；MOB-04 已提前完成（14b8353，缓存红线落地）。
 **等用户**：无新增硬项。Android 测试已移交别的 Agent（xixi 安排），
 本 VM 不跑模拟器。
 
+## 〇、2026-08-11 晚巡检轮（验收人）：PRES-01 + DESK-03 + 小债抽检
+
+**本地全量复验**：Rust **248/248** + fmt ✅ + arch-check ✅ + Android **132/132**。
+
+| 交付 | 裁决 |
+|---|---|
+| **PRES-01 在线三档** | ✅ **PASS**——心跳 ON_RESUME 起/ON_STOP 停/onDispose 兜底（后台绝不心跳，耗电红线代码级成立）；三档判定纯函数带边界测试，活跃连接优先于 last_seen；哨兵 5 天口径带「改不得」注释；connected 审计 10min 去重常量化。复用 hello 未加协议动词 ✓ |
+| **DESK-03 照片墙** | ✅ **PASS**——与手机同数据源；桌面端原图直接 revealItemInDir 本地文件（不存在临时文件问题，比卡面要求更干净）；desk_flow 264 行集成测试。真窗口目视/滚动流畅度挂走查轮 |
+| **三笔小债** | ✅ 全还——reconcile 模块头补了 ingest 顺序依赖警告；HomeScreen 过期注释已改写；「测试版」徽标 i18n 收编仍挂 T-042 债（可接受） |
+
 ## 〇、2026-08-11 午间巡检轮（验收人）：IPC-02 + SYNC-01 抽检
 
 **本地复验**：Rust **237/237** + arch-check ✅ + fmt ✅ + clippy 0 warning。
