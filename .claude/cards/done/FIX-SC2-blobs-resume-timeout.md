@@ -143,7 +143,8 @@ stamp 断言）。把「等锁」从赌时序变成事实。真机 kill App = �
 睡眠 → 本卡上述 2 次复现 + 死锁栈即为「去掉修复必红」的证据。
 
 **上游报告**（✅ **已发 issue 2026-08-12**：
-https://github.com/n0-computer/iroh/issues/4468 —— SalAmira 账号代发，
+https://github.com/n0-computer/iroh/issues/4468 —— 本机 gh 登录账号
+https://github.com/690591397 代发（用户指示「用自己的账号」），
 正文=本卡尾存档的机制 + 栈摘录 + 最小复现，归档副本
 docs/iroh-blobs-load-deadlock-issue-draft.md）：机制 +
 栈摘录 + 最小复现路径已存档。影响面：任何 FsStore::load 失败（磁盘满/
