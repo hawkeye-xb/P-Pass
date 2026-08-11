@@ -67,11 +67,11 @@ impl Reconcile {
         };
         let mut report = ReconcileReport::default();
         for (hash, rel_path) in paths {
-            if !self.library_root.join(&rel_path).exists() {
-                if self.remove_asset(&hash, &rel_path).await.is_ok() {
-                    report.removed += 1;
-                    self.total_removed.fetch_add(1, Ordering::Relaxed);
-                }
+            if !self.library_root.join(&rel_path).exists()
+                && self.remove_asset(&hash, &rel_path).await.is_ok()
+            {
+                report.removed += 1;
+                self.total_removed.fetch_add(1, Ordering::Relaxed);
             }
         }
         report
