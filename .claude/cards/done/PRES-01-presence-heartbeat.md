@@ -34,3 +34,18 @@ authz 语义；哨兵 >5 天亮红口径；后台不许常驻心跳（耗电红�
 
 ## 收尾
 CI 绿；PROGRESS/NEXT 一行 + ROADMAP 状态；卡移 done/。
+
+## 验收记录（2026-08-12 队列卫生补录；代码于 2026-08-11 完成，PROGRESS 行 71a34da）
+
+**实现**：前台 30s 轻心跳（复用 hello 不加协议动词，**后台绝不心跳=耗电
+红线**，失败静默）+ 三档在线态（presence.rs 纯函数：在线/刚刚在线/
+离线=哨兵 >5 天口径不动）+ hello 进活动流（device.connected 审计，
+同设备 10 分钟去重）。红线自查：hint/心跳绝不参与鉴权（revoked hello
+仍被拒）。
+
+**验证**：presence.rs 边界单测 + presence_flow.rs 5 个集成（hello→审计/
+10min 去重/跨窗口重记/未配对零副作用/revoked 被拒/devices.list 三档），
+反证注释（去重去掉必红）；Rust 149/149 + Android 单测 + vite build 绿。
+
+**挂账（验收人）**：真机锁屏 10 分钟活动流不刷屏、桌面「3 分钟前在线」
+观感。

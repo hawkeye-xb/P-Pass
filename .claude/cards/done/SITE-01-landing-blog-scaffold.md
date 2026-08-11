@@ -27,3 +27,20 @@ docs/product/2026-08-11-site-architecture.md——架构决策照单全收，不
 
 ## 收尾
 文档三件套；卡移 done/。
+
+## 验收记录（2026-08-12 队列卫生补录；代码于 2026-08-11 完成，PROGRESS 行 本 commit）
+
+**实现**：站点脚手架——landing+blog（L2，架构档案
+docs/product/2026-08-11-site-architecture.md 照单全收）。Astro 5 纯
+静态（landing 只说三件事：照片回家/为 60 岁的家人设计/开源·端到端
+加密；CTA=GitHub Releases latest；blog 列表/文章/RSS；404）；
+tokens.css 构建期从 tokens.json 生成（幂等 + --check 断言），图标
+构建期同步（亮/夜双版 picture）；暗色跟随系统只用既有 token；移动端
+单列；零 tracker（CI 零第三方请求断言）。site.yml paths 过滤
+`site/**` 与主 CI 完全隔离。CNAME 入库（p-pass.hawkeye-xb.com）。
+
+**验证**：本地 build 绿 + tokens/icons 断言绿 + 零第三方请求断言绿。
+
+**挂账（验收人）**：①Pages 部署后三路由 200 ②Lighthouse ≥90
+③DNS CNAME p-pass.hawkeye-xb.com → hawkeye-xb.github.io（当前记录
+指向旧 p-pass-landing.pages.dev 占位）。

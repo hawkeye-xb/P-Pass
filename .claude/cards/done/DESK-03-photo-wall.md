@@ -33,3 +33,18 @@ SYNC-01 合并后，被外删的照片自然从墙上消失——两卡各自独
 
 ## 收尾
 CI 绿；PROGRESS/NEXT 一行 + ROADMAP 状态；卡移 done/。
+
+## 验收记录（2026-08-12 队列卫生补录；代码于 2026-08-11 完成，PROGRESS 行 71a34da）
+
+**实现**：桌面照片墙（L2，与手机同一数据源——终结 Finder 对账）。
+daemon 本地 IPC 查询平面落地（timeline.page/thumb.get/asset.meta 与
+网络平面逐字段一致）+ asset.path（Finder 揭示用）+ asset.original
+（原图内存展示不落盘，>12MiB 降级 1024，video 拒）。桌面壳照片页：
+缩略图墙（IntersectionObserver 视口懒加载 + 200px 预载）、今天/本月/
+更早分组、哨兵分页（60/页）、大图内存查看 + 在 Finder 中显示。
+
+**验证**：Rust 149/149 + clippy 0 + arch-check 绿；desk_flow 三方对照
+（墙上数==IPC photo_count==sqlite 直查 + thumb 可解码 JPEG + asset.path
+指真实原文件 + original 字节校验 + 未注入回归）；vite build 绿。
+
+**挂账（验收人）**：真窗口 500 张滚动流畅度、大图/Finder 揭示走查。
