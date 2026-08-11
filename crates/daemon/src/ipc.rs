@@ -499,7 +499,7 @@ impl IpcServer {
                     }
                     Err(_) => internal(id),
                 }
-            },
+            }
             // T-090: backup activity feed — read-only aggregation of the
             // existing assets table into per-device batches (10-minute
             // arrival gap = batch boundary; 口径注释在 storage::list_activity).
