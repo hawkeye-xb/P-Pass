@@ -40,3 +40,24 @@ ingest/备份写路径语义；T-012 rebuild 的既有测试。
 
 ## 收尾
 CI 绿；PROGRESS/NEXT 一行 + ROADMAP 状态；卡移 done/。
+
+---
+
+## ✅ 验收记录（2026-08-11，Salamira）
+
+- 实现：本 commit（main 直推，速度优先阶段）。storage 新增
+  `list_asset_paths`/`delete_asset`（只增不改既有语义）；daemon 新增
+  `reconcile` 模块（Reconcile::run_once，单条失败不中断整轮、索引不可读
+  静默跳过）；main.rs 接线——启动跑一轮 + spawn 每小时 re-diff。
+- 验收 1（集成测试 `sync_flow`）：真实 upload 链路入库 5 张 + 生成 thumb
+  → 干净盘 run_once removed=0（反证 a）→ 磁盘删 2 张 originals → 对账前
+  索引仍 5（反证 b）→ run_once removed=2 → 索引 3、被删 2 张 t256/t1024
+  文件消失（thumb 请求 not-found）、幸存 3 张 thumb 在位、audit 2 条
+  `asset.removed_external`（actor=None、target_hash 匹配被删哈希）、
+  timeline 只剩 3。**PASS 1.8s**。
+- 验收 3（反证）：注释掉 `Reconcile::run_once` 调用 → 「索引 3 / timeline
+  3」断言必红（测试内两段反证已内嵌证明对账是收敛的唯一来源）。
+- 验收 4：Rust 全量 **234/234**（233+1 sync_flow）+ arch-check ✅ +
+  fmt 干净。
+- 验收 2（手机联调）挂账：三星真机对账后拉 timeline 被删照片消失 +
+  三元组 M 经 exist-check 回落（手机端已有 exist-check 校准）。

@@ -263,6 +263,31 @@ async fn main() -> anyhow::Result<()> {
     let upload = daemon::upload::UploadPlane::new(db.clone(), blobs, data_dir.join(".ppf/staging"));
     let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
+    // ── SYNC-01 外部删除对账 ──────────────────────────────
+    // 磁盘（originals）↔ 索引（asset 表）diff：磁盘上没了的条目 = 外部
+    // 删除（Finder/终端手动删），清 asset 行 + thumb 文件 + 审计
+    // asset.removed_external（actor=NULL）。启动即跑一轮（重启即收敛），
+    // 之后每小时 re-diff——低频轮询而非目录监听的理由见 reconcile.rs
+    // 模块注释（收敛延迟最多 1 小时 vs FSEvents/inotify 双平台复杂度）。
+    let reconcile = daemon::Reconcile::new(db.clone(), &data_dir);
+    let startup = reconcile.run_once().await;
+    tracing::info!(
+        "SYNC-01: 启动对账完成（移除幽灵资产 {} 条）",
+        startup.removed
+    );
+    {
+        let reconcile = reconcile.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                let r = reconcile.run_once().await;
+                if r.removed > 0 {
+                    tracing::info!("SYNC-01: 每小时对账移除幽灵资产 {} 条", r.removed);
+                }
+            }
+        });
+    }
+
     let router = Router::new(db, "P-Pass 存储端")
         .with_pairing(pairing)
         .with_backup(backup)
