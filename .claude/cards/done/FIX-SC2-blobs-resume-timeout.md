@@ -97,3 +97,52 @@ backoff 空转、并行测试间端口/socket 竞争、iroh-blobs 内部竞态�
 - 后续 run 自愈：e7551c4（同一份 Rust 代码）31370939766 **success**。
 - 下一步（第 2 步铺垫）：本地高并发压力复现 + 重点看 redial/rebind
   阶段时序（attempt 循环里 receiver 重绑与 iroh-blobs 连接建立的竞争）。
+
+---
+✅ **第 2/3 步完成（2026-08-11，Salamira）——本地复现 + 根因锁定 + 修复 + 反证**
+
+**② 本地复现（首次！）**：高并发（全量 transport 套件 22 测试并行）+
+CPU 加压（4 核机 50% 负载）循环，**第 1 轮即撞**：restart 阶段卡死 115s
+（nextest slow-timeout 120s 终止）。三段式细化打点定位：
+`rebinding receiver endpoint` → `endpoint bound`（5.4s，秒过）→ **卡在
+`Blobs::open`（FsStore::load）**。共复现 2 次 + 1 次 50s+ 挂起（sampler
+round 6）。此前隔离跑永远 6-12s 过——压力不够是长期复现不了的唯一原因。
+
+**③ 根因（栈实证）**：挂起 20s 处 `/usr/bin/sample` 全线程栈 1032/1032
+样本指向同一条链：
+
+```
+Actor::new (fs.rs:678) —— 在 store 自己的 runtime 上执行
+  → drop_glue(RtWrapper)                  ← future 出错被 drop，连带 drop 捕获的 Runtime
+    → RtWrapper::drop → block_in_place(|| drop(rt))
+      → Runtime::drop → BlockingPool::shutdown → Receiver::wait → park
+```
+
+- **触发 = test harness 竞态**：kill（in-process abort）≠ 进程死亡——
+  redb 的 Database（持 blobs.db 的 flock）在**独立 runtime 的 store
+  actor** 手里，abort 只 drop FsStore（关 channel），actor 要等手头
+  batch 写完 + 被调度才退出才放锁；固定 100ms 睡眠在负载下不够 → 重开
+  撞锁 `DatabaseAlreadyOpen`（redb try_lock 非阻塞，源码确认是 error
+  不是 hang）。
+- **放大 = iroh-blobs 0.103 上游 bug**：Actor::new 的 `?` 上抛错误 →
+  spawned future 完成时 drop 捕获的 RtWrapper（持有所在 runtime）→
+  `RtWrapper::drop` 在该 runtime 自己的线程上 `block_in_place(drop(
+  Runtime))` → `BlockingPool::shutdown` 等**包括正在执行本次 drop 的
+  线程**在内所有阻塞线程退出 → 自锁。错误被死锁吞掉永不返回——所以是
+  115s 挂起而非 panic（也解释了此前「redb 锁竞争=error」的排除推理：
+  错误根本传不到 unwrap）。
+
+**修复（最窄 workaround，harness 侧）**：固定 100ms 睡眠 → **文件锁释放
+轮询**（`File::try_lock` 探测 blobs.db，10ms 间隔，30s 上限，失败带
+stamp 断言）。把「等锁」从赌时序变成事实。真机 kill App = 进程死 → 锁
+随进程释放，本无此竞态；in-process abort 才是人造竞态源。产品侧 daemon
+单进程开一次 store 从不重开，不踩死锁路径。
+
+**验证**：修复后同条件压力循环 **40/40 轮全绿 0 TIMEOUT**（修复前同
+条件 2 次复现）；本地全量 149/149 绿。**反证**：修复前 = 固定 100ms
+睡眠 → 本卡上述 2 次复现 + 死锁栈即为「去掉修复必红」的证据。
+
+**上游报告**（未发 issue——n0-computer/iroh 非本仓可代发）：机制 +
+栈摘录 + 最小复现路径已存档。影响面：任何 FsStore::load 失败（磁盘满/
+库损坏/锁竞争）都会让进程挂死而非报错——daemon 启动时若踩到会挂起，
+建议上游修 RtWrapper::drop（错误路径不该 drop 所在 runtime 的 Runtime）。

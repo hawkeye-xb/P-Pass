@@ -1,6 +1,31 @@
-# NEXT — 当前状态与下一步（2026-08-11，SITE-01 站点线）
+# NEXT — 当前状态与下一步（2026-08-11，FIX-SC2 完成——全队列清空）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-11 FIX-SC2 完成轮（Salamira）：blobs_resume stall 根因锁定 + 修复
+
+**FIX-SC2 第 2/3 步完成**（blobs_resume 300s 超时 flake 根治，卡移 done/）：
+- **本地复现（首次）**：全量套件并行 + CPU 加压，第 1 轮即撞 restart
+  卡死 115s；三段式打点定位卡点 = `Blobs::open`（FsStore::load），
+  bind 秒过（排除重拨嫌疑）。
+- **根因（栈实证）**：触发 = test harness 竞态（in-process abort ≠ 进程
+  死亡——redb 锁在独立 runtime 的 store actor 手里异步释放，固定 100ms
+  睡眠负载下不够 → 重开撞锁 DatabaseAlreadyOpen）；放大 = **iroh-blobs
+  0.103 上游 bug**——store 打开失败路径上 Actor::new 的 future 被 drop
+  → 连带 drop 所持 Runtime（RtWrapper::drop 在自身 runtime 线程上
+  block_in_place(drop(Runtime)) → BlockingPool::shutdown 等正在执行
+  drop 的线程 → 自锁挂死，错误被吞 → 挂起而非 panic）。
+- **修复**：100ms 固定睡眠 → 文件锁释放轮询（File::try_lock 探测
+  blobs.db，10ms 间隔 30s 上限），把「等锁」变成事实。验证：同条件
+  压力循环 **40/40 全绿**（修复前 2 次复现 = 反证）；本地全量 149/149。
+- 上游报告存档在卡尾（未代发 issue——n0-computer/iroh 非本仓可代发）。
+
+**队列剩余**：无。PRES-01 / DESK-03 / 三笔小债 / v0.3.3-test.1 出包 /
+FIX-SC2 全部完成，下一批卡由验收人出。
+
+**等用户**：PRES-01 真机锁屏活动流不刷屏 + 桌面三档在线态观感；
+DESK-03 真窗口照片墙流畅度 + 大图/Finder 走查；0.3.3-test.1 真机更新
+走查；FIX-SC2 上游 issue 是否代发（卡尾已备好报告）。
 
 ## 〇、2026-08-11 SITE-01 轮（Salamira）：站点脚手架（landing + blog）
 
