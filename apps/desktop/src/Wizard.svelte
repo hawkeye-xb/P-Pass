@@ -1,7 +1,9 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import QRCode from "qrcode";
+  import { onDestroy } from "svelte";
 
   let { defaultDir, configuredLibraryDir, onDone } = $props();
 
@@ -14,6 +16,60 @@
   let qrText = $state("");
   let busy = $state(false);
   let error = $state("");
+  // DESK-04③: 第三步接 T4 新配对弹窗流——扫码后即时切确认列表
+  // （IPC-02 事件驱动 + 3s 轮询兜底），不再停留常驻 QR。
+  let pendingList = $state([]);
+  let pendingTimer = null;
+  let unlisten = null;
+
+  async function call(method, params = {}) {
+    return await invoke("daemon_call", { method, params });
+  }
+
+  // DESK-04③: pending 轮询（3s，比主界面 60s 对账密——wizard 阶段
+  // 是配对发生时刻，等 60s 太久；事件驱动命中后立即刷新）。
+  async function refreshPending() {
+    if (step !== 3) return;
+    try {
+      const p = await call("pairing.pending", {});
+      pendingList = (p.pending ?? []).map((x) =>
+        typeof x === "string" ? { name: x, hint_match: null } : x
+      );
+    } catch (_) {
+      // daemon 还没就绪/短暂不可达——下次轮询再试。
+    }
+  }
+
+  async function confirmPair(accept, name) {
+    try {
+      await call("pairing.confirm", { accept, device_name: name, merge_node_id: null });
+      await refreshPending();
+    } catch (e) {
+      error = `处理失败：${e}`;
+    }
+  }
+
+  function startPendingWatch() {
+    stopPendingWatch();
+    refreshPending();
+    pendingTimer = setInterval(refreshPending, 3000);
+    listen("daemon-event", onDaemonEvent).then((f) => (unlisten = f));
+  }
+
+  function stopPendingWatch() {
+    if (pendingTimer) clearInterval(pendingTimer);
+    pendingTimer = null;
+    if (unlisten) unlisten();
+    unlisten = null;
+  }
+
+  function onDaemonEvent(ev) {
+    const name = ev?.payload?.event;
+    if (!name) return;
+    refreshPending();
+  }
+
+  onDestroy(() => stopPendingWatch());
 
   async function chooseFolder() {
     const dir = await openDialog({
@@ -60,6 +116,7 @@
         errorCorrectionLevel: "L",
       });
       step = 3;
+      startPendingWatch();
     } catch (e) {
       error = `生成配对码失败：${e}`;
     } finally {
@@ -91,6 +148,7 @@
         errorCorrectionLevel: "L",
       });
       step = 3;
+      startPendingWatch();
     } catch (e) {
       error = `启动后台服务失败：${e}`;
     } finally {
@@ -101,7 +159,7 @@
 
 <div class="wizard">
   <div class="steps">
-    {#each ["选择照片位置", "电源检查", "添加手机"] as label, i}
+    {#each ["照片存在哪", "电脑会睡吗", "加手机"] as label, i}
       <span class="step" class:active={step === i + 1} class:done={step > i + 1}>
         {i + 1}. {label}
       </span>
@@ -113,13 +171,13 @@
   {/if}
 
   {#if step === 1}
-    <h2>照片存到哪里？</h2>
-    <p class="hint">家人手机备份的照片和视频会以普通文件保存在这个文件夹里——用访达也能直接看到，随时可以整体拷走。</p>
+    <h2>照片存在哪里？</h2>
+    <p class="hint">家人手机里的照片和视频会以普通文件保存在这个文件夹里——用电脑自带的文件管理器也能直接看到，随时可以整个拷走。</p>
     {#if libraryDir}
       <p class="chosen">已选择：<code>{libraryDir}</code></p>
     {/if}
     <div class="row">
-      <button class="primary" onclick={chooseFolder}>选择文件夹…</button>
+      <button class="primary" onclick={chooseFolder}>选一个文件夹…</button>
       <button onclick={useDefault}>用默认位置</button>
     </div>
     {#if !libraryDir}
@@ -142,17 +200,33 @@
       <p class="hint">没能读到这台电脑的电源策略（不影响使用）：备份进行中我们会自动保持它清醒。</p>
     {/if}
     {#if true}
-      <p class="hint">下一步会把 P-Pass 后台服务注册为系统常驻服务：开机自动运行、意外退出自动恢复——之后你永远不需要手动启动它。</p>
+      <p class="hint">下一步会让 P-Pass 开机自动运行、意外退出自动恢复——之后你不需要手动打开它。</p>
     {/if}
     <div class="nav">
       <button onclick={() => (step = 1)}>上一步</button>
       <button class="primary" disabled={busy} onclick={toStep3}>
-        {busy ? "正在设置后台服务…" : "设为常驻服务并继续"}
+        {busy ? "正在设置…" : "继续"}
       </button>
+    </div>
+  {:else if step === 3 && pendingList.length > 0}
+    <!-- DESK-04③: 有人扫码 → 即时切确认列表（不再停留常驻 QR）。
+         与主界面 T4 模态同语义：逐行允许/拒绝，处理完该行消失。 -->
+    <h2>{pendingList.length > 1 ? `有 ${pendingList.length} 台手机请求加入` : "有手机请求加入"}</h2>
+    <p class="hint">是家人的手机吗？点「允许」后它就能开始备份照片了。</p>
+    <div class="pending-list">
+      {#each pendingList as item}
+        <div class="pending-row">
+          <span class="pending-name">{item.name}</span>
+          <div class="pending-actions">
+            <button onclick={() => confirmPair(false, item.name)}>拒绝</button>
+            <button class="primary" onclick={() => confirmPair(true, item.name)}>允许</button>
+          </div>
+        </div>
+      {/each}
     </div>
   {:else}
     <h2>用手机扫码加入</h2>
-    <p class="hint">在手机上打开 P-Pass App，扫描下面的二维码；手机发来的加入请求会出现在本窗口，点「允许」即可。</p>
+    <p class="hint">在手机上打开 P-Pass App，扫描下面的二维码；手机发来的加入请求会立刻出现在这里，点「允许」即可。</p>
     {#if qrDataUrl}
       <img class="qr" src={qrDataUrl} alt="配对二维码" />
       <details>
@@ -271,6 +345,31 @@
     border-radius: var(--pp-radius-control);
     padding: 10px 14px;
     font-size: 15px;
+  }
+  /* DESK-04③: 确认列表——逐行允许/拒绝，token 同主界面模态。 */
+  .pending-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .pending-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    background: var(--pp-linen);
+    border-radius: var(--pp-radius-control);
+    padding: 10px 14px;
+  }
+  .pending-name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--pp-ink);
+  }
+  .pending-actions {
+    display: flex;
+    gap: 8px;
   }
   .qr {
     display: block;
