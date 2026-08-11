@@ -1,0 +1,64 @@
+# CI-01③b: workers 自动部署——infra/workers/** 改动 → wrangler deploy。
+#
+# 生产值经 secret 注入不入库（沿用 ppf-ops 镜像惯例：公开仓 wrangler.toml
+# 保持占位，真实配置在私有仓 ppf-ops/deploy/*.prod.toml）。CI 用临时
+# toml + secret 部署 update worker；custom_domain 保持生产绑定不被破坏。
+# CLOUDFLARE_API_TOKEN 未就位 → 干净跳过并在 summary 标注（卡面：
+# secret 存在才启用）。
+name: CI Workers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/workers/**"
+      - ".github/workflows/ci-workers.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-workers-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+
+jobs:
+  deploy:
+    name: deploy workers (gated)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Wrangler deploy (gated by CLOUDFLARE_API_TOKEN)
+        if: env.HAS_CF_TOKEN == 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN_SECRET: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${CF_ACCOUNT_ID:?CLOUDFLARE_ACCOUNT_ID secret missing}"
+          # 临时部署 toml：custom_domain 保真（--route 会降级成普通路由，
+          # 破坏现有 custom domain 绑定——update worker 现网正是 custom_domain）。
+          cat > /tmp/deploy.toml <<EOF
+          name = "ppass-update"
+          main = "$PWD/infra/workers/update/src/index.ts"
+          compatibility_date = "2026-07-31"
+          account_id = "$CF_ACCOUNT_ID"
+          routes = [{ pattern = "update.p-pass.hawkeye-xb.com", custom_domain = true }]
+          EOF
+          npx --yes wrangler@4 deploy --config /tmp/deploy.toml
+          # GH_TOKEN 提升 GitHub API 限额（60/h → 5000/h）——已有则更新，无则跳过。
+          if [ -n "${GH_TOKEN_SECRET:-}" ]; then
+            echo "$GH_TOKEN_SECRET" | npx --yes wrangler@4 secret put GH_TOKEN --config /tmp/deploy.toml
+          fi
+      - name: Skip note (token absent)
+        if: env.HAS_CF_TOKEN != 'true'
+        run: echo "CLOUDFLARE_API_TOKEN 未设置——workers 自动部署跳过（CI-01③b 门控）；请在 GitHub 仓库 Settings → Secrets and variables → Actions 添加 CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID。"

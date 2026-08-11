@@ -1,0 +1,57 @@
+# CI-01: 流水线分块——Android 域（proto drift + assemble + 打包完整性）。
+#
+# 触发路径（依赖表，2026-08-12）：
+#   apps/android/**  —— Android 工程本体（Kotlin/资源/gradle）
+#   assets/i18n/**   —— i18n 字典（Android 捆绑副本与仓库源零漂移测试消费）
+# 反向依赖检查：GoldenDriftTest 比对 crates/proto 金样本 snapshots.rs——
+# proto 侧改动由 ci-rust.yml（crates/**）触发，本 workflow 只在 Android
+# 侧改动时重跑比对，两侧合起来全覆盖。
+name: CI Android
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/android/**"
+      - "assets/i18n/**"
+      - ".github/workflows/ci-android.yml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/android/**"
+      - "assets/i18n/**"
+      - ".github/workflows/ci-android.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: android (proto drift + assemble)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@d7793b545071e98d581d3bf084a51c3213318a07 # v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4
+      - name: Unit tests (golden drift vs crates/proto snapshots)
+        working-directory: apps/android
+        run: ./gradlew :app:testDebugUnitTest
+      - name: Assemble debug APK
+        working-directory: apps/android
+        run: ./gradlew :app:assembleDebug
+
+      # Packaging-completeness guard: gradle silently packages "whatever is
+      # there" — a missing jniLibs .so builds green and crashes on-device
+      # (UnsatisfiedLinkError, happened twice). Assert the native lib is IN
+      # the APK, not merely that the build succeeded.
+      - name: Assert APK contains libiroh_ffi.so
+        working-directory: apps/android
+        run: unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q "lib/arm64-v8a/libiroh_ffi.so"

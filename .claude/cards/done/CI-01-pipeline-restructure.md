@@ -75,3 +75,67 @@ e2e.yml（nightly+tag 门禁语义）；artifacts.yml；release tag 全量语义
 
 ## 收尾
 文档三件套（RELEASING.md 补分块说明）；卡移 done/。
+
+---
+
+## 验收记录（2026-08-12 Salamira）
+
+**实现**：
+
+① **pr.yml 拆分为按域独立 workflow**（pr.yml 删除）：
+- `ci-rust.yml`（paths: crates/** Cargo.* config/** assets/i18n/**
+  tools/arch-check.sh）——lint + test + arch-check + deny + actionlint。
+- `ci-android.yml`（paths: apps/android/** assets/i18n/**）——单测 +
+  assembleDebug + APK .so 断言。
+- `ci-desktop.yml`（paths: apps/desktop/** assets/**）——src-tauri lib
+  tests + vite build（pnpm，与 release.yml 一致）。
+- 每个 workflow `concurrency: {group: <域>-${{github.ref}}, cancel-in-progress}`
+- **依赖表（paths 对齐核心）**：crates/**（Rust 核心，金样本 snapshots.rs
+  在 crates/proto，Android GoldenDriftTest 消费——android 域改动由
+  ci-android 触发时比对，crates 改动由 ci-rust 自检，两侧全覆盖）；
+  assets/i18n/** 同时进 rust（diag ALL 断言）+ android（捆绑副本对称
+  测试）；assets/**（含 i18n）进 desktop（UI token 消费）。
+- 纯 docs/.claude 提交不匹配任何 paths → 零 CI（验收 1）。
+
+② **release.yml 平台选择**：workflow_dispatch 加 `platforms` 输入
+（逗号组合 android/macos/windows，留空=all）；三平台 job 加 if 门控
+（tag push 恒全量——发布完整性不许分块）；release 汇总 job 按 glob
+实际产物收集（不存在的资产跳过）。
+
+③ **Cloudflare 联动（secret 门控，token 未就位干净跳过）**：
+- a. R2 发布镜像：release job 末尾新 step——资产镜像到 `ppf-dl`
+  bucket `releases/<tag>/`（dl.p-pass.hawkeye-xb.com 已绑定）；update
+  manifest 的 --asset-base 在有 CF token 时切镜像域（签名针对资产
+  字节，换域名验签零变化——make-update-manifest.mjs 新增参数，本地
+  双分支验证通过）；SHA256SUMS 一并镜像。**R2 基建已建**：ppf-dl
+  bucket + custom domain dl.p-pass.hawkeye-xb.com。
+- b. `ci-workers.yml`（paths: infra/workers/**）——临时 toml +
+  wrangler@4 deploy（custom_domain 保真，不破坏现有绑定）；GH_TOKEN
+  secret 提升 GitHub API 限额；CLOUDFLARE_API_TOKEN 未就位 → skip
+  step + summary 标注。
+- c. site 部署切 CF Pages：**不做**（SITE-01 已上 GH Pages，DNS 已改指
+  hawkeye-xb.github.io，双发/切换是纯维护面增加零收益；理由入卡尾）。
+
+④ **分层构建节奏**：
+- 每推：受影响域快检+单测（①的拆分即实现）；纯 docs 零 CI。
+- 每夜：e2e.yml 现有 nightly（30 3 * * *）——T-070 scenarios job
+  **并轨进 e2e.yml**（同门禁：nightly/tag/labeled/dispatch；不再每推
+  烧 release 构建）；全量 nextest 保持 nightly。
+- 每 tag：release.yml 全平台发布级（现状保持）。
+- CLAUDE.md 底线①口径更新：push 后盯**受影响域** CI；nightly 红次日
+  第一优先修。
+- 缓存治理：Windows 缓存 key 已是独立前缀 `win-x64-release-`
+  （vcpkg 静态 libheif 不与 Linux/macOS 挤 10GB 上限），无需再改。
+
+**验证**：
+- actionlint 全部 8 个 workflow 零告警。
+- make-update-manifest.mjs --asset-base 双分支（GitHub 默认 / R2
+  镜像域）本地实测 url 正确。
+- R2 ppf-dl bucket + custom domain 创建成功（wrangler 实测）。
+- ⚠️ 本卡 commit 触发 CI 后需人工确认：①纯 docs 提交零 run
+  ②只改 android 仅 ci-android 触发 ③dispatch platforms=android 只跑
+  android+release ④连续 push 取消旧 run（验收 1/2/3/4 留 CI 实跑证据）。
+
+**等用户**：GitHub 仓库 Settings → Secrets 添加 `CLOUDFLARE_API_TOKEN`
+（+ 可选 `CLOUDFLARE_ACCOUNT_ID`、`GH_TOKEN`）后，R2 镜像 + workers
+自动部署才启用（当前门控跳过路径已验证可跑）。

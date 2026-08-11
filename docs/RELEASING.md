@@ -98,6 +98,29 @@ default** (family devices are never touched by test builds):
 - They exercise the full Release workflow against a draft; publish
   only when the acceptance passes and the version is intended for users.
 
+## 4.1 CI split by domain (CI-01, 2026-08-12)
+
+The old `pr.yml` (every push ran all four jobs) is replaced by per-domain
+workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
+
+- `ci-rust.yml` — `crates/** Cargo.* config/** assets/i18n/** tools/arch-check.sh`
+  → lint + test + arch-check + deny. Scenarios (T-070) moved to e2e.yml's
+  nightly + tag gate.
+- `ci-android.yml` — `apps/android/** assets/i18n/**` → unit tests + APK.
+- `ci-desktop.yml` — `apps/desktop/** assets/**` → src-tauri lib tests + vite build.
+- `ci-workers.yml` — `infra/workers/**` → wrangler deploy (gated on
+  `CLOUDFLARE_API_TOKEN`; skipped cleanly when absent).
+- Every workflow has `concurrency: cancel-in-progress`.
+- `release.yml` gained a `platforms` dispatch input (`android`/`macos`/
+  `windows` comma list; empty = all). Tag pushes always build everything.
+- R2 mirror: assets are mirrored to `ppf-dl` bucket
+  (`dl.p-pass.hawkeye-xb.com/releases/<tag>/`) when `CLOUDFLARE_API_TOKEN`
+  is set; the update manifest's `--asset-base` switches to the mirror
+  domain (signatures are over asset bytes, so changing the download URL
+  never invalidates verification).
+- Nightly (e2e.yml schedule) runs full nextest + scenarios — a red nightly
+  is a real bug and is top priority next day.
+
 ## 5. Version-overwrite guards (remember)
 
 - `git tag -l "v<ver>"` exists → that version number is **taken**.
@@ -177,6 +200,27 @@ default** (family devices are never touched by test builds):
 
 - 验收 tag：`v<X.Y.Z>-test.N`（N 递增，不复用）。
 - 全链跑 Release workflow 出 draft；验收通过且版本面向用户才 publish。
+
+## 4.1 CI 按域分块（CI-01，2026-08-12）
+
+旧 pr.yml（每次 push 全量跑四 job）拆成按 paths 门控的域 workflow，
+纯 docs/卡片提交零 CI：
+
+- `ci-rust.yml`（crates/** Cargo.* config/** assets/i18n/** tools/arch-check.sh）
+  → lint + test + arch-check + deny；T-070 scenarios 挪到 e2e.yml 的
+  nightly + tag 门禁。
+- `ci-android.yml`（apps/android/** assets/i18n/**）→ 单测 + APK。
+- `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + vite build。
+- `ci-workers.yml`（infra/workers/**）→ wrangler deploy（CLOUDFLARE_API_TOKEN
+  门控，缺 secret 干净跳过）。
+- 每个 workflow 带 `concurrency: cancel-in-progress`（连续 push 取消旧 run）。
+- release.yml 加 `platforms` dispatch 输入（android/macos/windows 逗号
+  组合，留空=all）；tag push 恒全量（发布完整性不许分块）。
+- R2 镜像：CLOUDFLARE_API_TOKEN 在位时资产镜像到 ppf-dl bucket
+  （dl.p-pass.hawkeye-xb.com/releases/<tag>/）；update manifest 的
+  asset-base 切镜像域（签名针对资产字节，换下载域名验签零变化）。
+- nightly（e2e.yml schedule）跑全量 nextest + scenarios——nightly 红
+  是实打实的 bug，次日第一优先修。
 
 ## 5. 版本覆盖禁令（记住）
 

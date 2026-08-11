@@ -11,9 +11,10 @@
 //
 // Manifest shape (tauri-plugin-updater compatible):
 //   { version, notes, pub_date, platforms: { <target>: { url, signature } } }
-//   url points at the GitHub release asset download link for TAG.
-//
-// Output: manifest.json in CWD (compose) or in place (sign).
+//   url points at the GitHub release asset download link for TAG, unless
+//   --asset-base overrides it (CI-01: R2 mirror domain dl.p-pass.hawkeye-xb.com
+//   for mainland download reachability — signature is over the asset bytes,
+//   so changing the download URL never invalidates verification).
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
@@ -55,7 +56,13 @@ if (args[0] === "--sign") {
   }
   if (Object.keys(assets).length === 0) throw new Error("no --asset target=path pairs");
   const notes = readFileSync(notesFile, "utf8");
-  const base = `https://github.com/hawkeye-xb/P-Pass/releases/download/${tag}`;
+  // CI-01③a: --asset-base 覆盖下载前缀（默认 GitHub release 直链）。
+  // R2 镜像域（dl.p-pass.hawkeye-xb.com/releases/<tag>）给国内下载可达性；
+  // url 只是下载地址，签名是对资产字节的，换域名验签零变化。
+  const base =
+    (args.indexOf("--asset-base") >= 0
+      ? need("--asset-base")
+      : `https://github.com/hawkeye-xb/P-Pass/releases/download/${tag}`);
 
   const platforms = {};
   for (const [target, path] of Object.entries(assets)) {
