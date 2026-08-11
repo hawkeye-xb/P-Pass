@@ -38,14 +38,21 @@ sample 栈摘录 + 根因 + 修复建议，从草稿去 DRAFT 头注后发出）
 归档副本 `docs/iroh-blobs-load-deadlock-issue-draft.md` 头部已更新为
 FILED 状态；FIX-SC2 done 卡尾已补链接。
 
-**等用户（CI-01 CF 联动激活）**：GitHub 仓库 Settings → Secrets and
-variables → Actions 添加 `CLOUDFLARE_API_TOKEN`（+ 可选
-`CLOUDFLARE_ACCOUNT_ID`、`GH_TOKEN`）——R2 发布镜像
-（dl.p-pass.hawkeye-xb.com/releases/<tag>/）与 workers 自动部署
-（ci-workers.yml）当前为门控跳过态，token 到位即自动启用。
-R2 基建已建好：bucket `ppf-dl` + custom domain `dl.p-pass.hawkeye-xb.com`。
+**✅ CF 联动已激活（2026-08-12）**：窄权限 token
+`ci-ppass-r2-mirror-worker-deploy-2026-08-12` 已建（R2 ppf-dl bucket
+写=精确到 bucket + Workers Scripts Write/Routes Write/Account Settings
+Read=account 级——CF 平台限制无法细化到单 script）+ `CLOUDFLARE_API_TOKEN`
+/ `CLOUDFLARE_ACCOUNT_ID` 已 gh secret set。
+- **workers 自动部署链实测通过**：ci-workers.yml dispatch run 15s 绿，
+  `Uploaded ppass-update` + `Deployed triggers`，线上
+  update.p-pass.hawkeye-xb.com 正常应答（no test release = worker 活着）。
+- **R2 镜像链等效验证通过**：token 实测写 ppf-dl 成功 + custom domain
+  dl.p-pass.hawkeye-xb.com 可读（releases/ci01-chain-verify 测试对象
+  已删）。完整 release 链留待下一个真 tag 自然验证（tag 纪律不试错）。
+- ⚠️ token 值只存在于 GitHub Actions secrets（CF 创建时仅显示一次，
+  未落任何日志/文件）。
 
-**队列剩余**：NAME-01（L0 排队尾可砍）；恢复向导（后置）。SITE-02
+**队列剩余**：恢复向导（换机整库恢复，后置）。SITE-02
 三篇博文草稿在 site/site-02 分支待用户审稿（**维持 draft 不动**，
 审后去 draft 发布——用户 2026-08-12 指令）。
 
