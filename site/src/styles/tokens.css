@@ -1,0 +1,53 @@
+/*
+ * AUTO-GENERATED from assets/design/tokens.json — DO NOT EDIT BY HAND.
+ * Source of truth: assets/design/tokens.json (edit there, run `npm run tokens`).
+ *
+ * Only 3 colours carry meaning: green=safe, amber=waiting, red=act. 只有三种含义色。
+ * Green appears when, and only when, photos are safely stored. 绿色只在照片确实存好时出现。
+ * Body text: >=17px on phone, >=16px on desktop. 正文下限。
+ * Tap targets: >=56px on phone, >=44px on desktop. 点击区下限。
+ * <=40 words per screen: one conclusion, one explanation. 每屏一个结论一句解释。
+ * No jargon stands alone — every term gets a plain sentence. 术语必须带白话。
+ * Chinese always appears at the same level as English, never as a footnote. 中文与英文同级出现。
+ * Phone has exactly 2 tabs (Photos / Backup); no settings screen in the way. 手机只有两个标签。
+ * Destructive actions (remove device) live on desktop only. 危险操作只在电脑上。
+ * Errors never show a code or bare technical term. 报错不出现代码或孤立术语。
+ */
+
+:root {
+  --paper: #FBF8F2;
+  --canvas: #EFE9DF;
+  --linen: #F1ECE3;
+  --ink: #171512;
+  --ink-hover: #2A2621;
+  --ink-60: #4A453E;
+  --ink-40: #6B655C;
+  --hairline: #E0D8CB;
+  --surface-dark: #211E1A;
+  --safe: #2E6B4F;
+  --safe-bg: #E4F1E8;
+  --waiting: #C9761E;
+  --waiting-bg: #F7EBDA;
+  --act: #B5341F;
+  --act-bg: #F7E2DE;
+  --idle: #8A857C;
+  --idle-bg: #EDE8DF;
+  --border: rgba(23,21,18,.12);
+  --border-strong: rgba(23,21,18,.24);
+  --divider: rgba(23,21,18,.10);
+  --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Manrope', 'Noto Sans SC', -apple-system, 'PingFang SC', 'Segoe UI', ui-sans-serif, system-ui, sans-serif;
+  --radius-card: 20px;
+  --radius-control: 14px;
+  --radius-control-sm: 12px;
+  --radius-control-mobile: 20px;
+  --radius-pill: 999px;
+  --size-desktop-body-min: 16px;
+  --size-desktop-tap-min: 44px;
+  --size-desktop-headline: 26px–42px;
+  --size-mobile-body-min: 17px;
+  --size-mobile-tap-min: 56px;
+  --size-mobile-headline: 30px–52px;
+  --size-overline-value: undefined;
+  --size-overline-use: undefined;
+}

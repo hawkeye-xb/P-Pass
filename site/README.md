@@ -17,10 +17,11 @@ npm run preview  # 本地预览产物
 ## 设计令牌（tokens）
 
 - 唯一数据源：`assets/design/tokens.json`（仓库根）。
-- `src/styles/tokens.css` 由 `scripts/generate-tokens.mjs` 构建期生成，**不入库**。
-- 改了 tokens.json 后 `npm run tokens` 再提交；CI 跑 `npm run tokens:check` 断言一致。
-- 图标资产同理：`docs/design/2026-08-11-icon-v1/` 是源，构建期同步到
-  `public/icons/`（`scripts/sync-icons.mjs`，不入库）。
+- `src/styles/tokens.css` 由 `scripts/generate-tokens.mjs` 生成并**入库**，
+  改了 tokens.json 后 `npm run tokens` 重新生成再提交；CI 跑
+  `npm run tokens:check` 断言一致（防只改源忘生成）。
+- 图标资产同理：`docs/design/2026-08-11-icon-v1/` 是源，`npm run icons`
+  同步到 `public/icons/`（生成物入库，CI `icons:check` 断言一致）。
 
 ## 内容
 

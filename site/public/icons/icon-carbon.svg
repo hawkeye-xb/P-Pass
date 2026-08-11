@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- P-Pass 主图标 · 碳纹版（定稿 2026-08-11）
+       两个 P 面对面组成的屋脊兽脸：左实（家里的电脑）右斑马纹（在外的手机），
+       闪电在画布正中 (512,768) 分色——连接发生在两端正中间。
+       颜色全部来自 assets/design/tokens.json：paper/ink/ink-40/safe。 -->
+  <defs>
+    <pattern id="cf" patternUnits="userSpaceOnUse" width="68" height="68" patternTransform="rotate(45)">
+      <rect width="36" height="68" fill="#171512"/>
+    </pattern>
+  </defs>
+  <rect width="1024" height="1024" fill="#FBF8F2"/>
+  <g stroke-width="72" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M 110 256 Q 154 278 154 332 L 154 688 Q 154 768 234 768 L 452 768" stroke="#171512"/>
+    <circle cx="300" cy="478" r="146" stroke="#171512"/>
+    <path d="M 452 768 L 496 706 L 512 768" stroke="#171512" stroke-linecap="butt"/>
+    <path d="M 512 768 L 528 830 L 572 768" stroke="url(#cf)" stroke-linecap="butt"/>
+    <path d="M 572 768 L 790 768 Q 870 768 870 688 L 870 332 Q 870 278 914 256" stroke="url(#cf)"/>
+    <circle cx="724" cy="478" r="146" stroke="url(#cf)"/>
+  </g>
+  <circle cx="300" cy="478" r="58" fill="#2E6B4F"/>
+  <circle cx="724" cy="478" r="58" fill="#2E6B4F"/>
+</svg>

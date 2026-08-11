@@ -1,5 +1,3 @@
 node_modules/
 dist/
-src/styles/tokens.css
-public/icons/
 .DS_Store

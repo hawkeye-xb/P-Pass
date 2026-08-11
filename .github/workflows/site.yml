@@ -40,6 +40,8 @@ jobs:
         run: npm ci
 
       # Token/icon derivation must stay in sync with design source of truth.
+      # tokens.css / public/icons/ ARE committed; these asserts catch edits to
+      # tokens.json / icon SVGs that forgot to regenerate the derived files.
       - name: Assert tokens.css matches tokens.json
         run: npm run tokens:check
 
