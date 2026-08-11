@@ -61,6 +61,9 @@
     <!-- UX-02: 失败通知（成功保持沉默） -->
     <string name="notif_backup_failed_title">Backup didn\'t finish</string>
     <string name="notif_backup_failed_body">%1$d photos didn\'t make it home — open to see</string>
+    <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->
+    <string name="notif_sentinel_title">Haven\'t connected in 3 days</string>
+    <string name="notif_sentinel_body">Your photos are safe — check that P-Pass is still running on your computer.</string>
     <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
     <!-- DOG-01: 恒真三元组（T-080 layout v1: hero card M / N home） -->
     <string name="dog_triplet_line">%1$d photos · %2$d backed up · %3$d to go</string>
