@@ -1,6 +1,6 @@
 ---
 title: 为什么给家人做一个照片备份
-date: 2026-08-11
+date: 2026-07-31
 tags: [产品, 设计]
 lang: zh
 draft: false

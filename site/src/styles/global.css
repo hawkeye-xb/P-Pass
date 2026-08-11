@@ -1,6 +1,7 @@
 /* Global styles: consumes tokens.css variables, adds layout + dark mode.
    Dark mode inverts with existing token values only — no new colors. */
 :root {
+  color-scheme: light dark;
   --bg: var(--paper);
   --bg-canvas: var(--canvas);
   --text: var(--ink);
@@ -60,10 +61,14 @@ pre {
   :root {
     --bg: var(--surface-dark);
     --bg-canvas: var(--surface-dark);
+    /* --canvas is a surface (cards, pre) — must go dark too, or cards stay
+       light-beige with light text (unreadable). --ink-hover is the elevated
+       warm-dark surface. */
+    --canvas: var(--ink-hover);
     --text: var(--paper);
     --text-secondary: var(--linen);
     --text-meta: var(--idle);
-    --hairline: var(--border);
+    --hairline: rgba(251, 248, 242, 0.14);
   }
   html { background: var(--surface-dark); }
   pre { background: #171512; }
