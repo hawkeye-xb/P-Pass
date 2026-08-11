@@ -30,3 +30,18 @@ stable URL 红线不变。
 
 ## 收尾
 CI 绿；PROGRESS/NEXT 一行；卡移 done/。
+
+---
+
+## ✅ 验收记录（2026-08-10 巡检轮 + 2026-08-11 agent 收尾）
+
+- 实现：`2c4feba`（8/10 20:46 推 main）。①通道零 UI 由版本推导 +
+  环境徽标（prerelease 琥珀「测试版」徽标，页脚完整版本串）；②
+  devices.list 默认过滤 revoked + include_revoked 参数 + 语义单测；
+  ③正确移交 IPC-02 未越权（本卡不做临时轮询）。
+- 巡检轮抽检（f12cfd8）：✅ **内容 PASS**。nit：徽标文案写死组件
+  未走 i18n，归 T-042 收编债（记录在案，不阻塞本卡）。
+- ⚠️ 纪律记录：直推前没跑 fmt → main 红 Format check（8/7 同款），
+  验收人 `5ec6ea6` 一键修复（纯格式零逻辑）。push 前
+  `cargo fmt --check` 已写入 CLAUDE.md（这是第二次）。
+- 测试：巡检轮本地复验 Rust 233/233 + Android 126/126 + arch-check ✅。
