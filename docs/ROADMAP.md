@@ -576,3 +576,12 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] blob-store GC (originals currently duplicated in the blob store)
 - [ ] background thumbnail batch generation after ingest
 - [ ] Windows smoke (T-040 will carry it)
+
+## SITE 站点线（2026-08-11 启动；架构档案 docs/product/2026-08-11-site-architecture.md）
+
+> Landing + blog 对外阵地，与 app 主线并行。内容 zh 先行，en 随开源节奏补。
+
+- [x] SITE-01 站点脚手架（landing v1 + blog 骨架 + RSS + GH Pages 部署）— **code landed 2026-08-11**: Astro 5 纯静态，tokens.css 构建期从 tokens.json 生成（脚本断言一致），图标从 docs/design/2026-08-11-icon-v1/ 同步，零 tracker（CI 断言）。site.yml paths 过滤 `site/**` 与主 CI 隔离。挂账：Pages 部署三路由 200 + Lighthouse ≥90 + DNS CNAME 改指 hawkeye-xb.github.io（当前指向旧 p-pass-landing.pages.dev 占位）。
+- [ ] SITE-02 首批三篇博文（定位故事 / 图标九轮 / IPC-02 重构）— 草稿完成待用户审稿，审后去 draft 发布
+- [ ] DNS: p-pass.hawkeye-xb.com CNAME → hawkeye-xb.github.io（CF zone 65dec62bc61b00e5d22fedc40b774bdc）
+- [ ] T-073 one-page site + README polish（M4 原条目，站点线落地后待并轨）

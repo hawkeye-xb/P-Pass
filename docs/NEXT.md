@@ -1,6 +1,31 @@
-# NEXT — 当前状态与下一步（2026-08-11，PRES-01 + DESK-03 + 0.3.3-test.1）
+# NEXT — 当前状态与下一步（2026-08-11，SITE-01 站点线）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-11 SITE-01 轮（Salamira）：站点脚手架（landing + blog）
+
+**SITE-01 已完成并推 main**（本 commit）：Astro 5 纯静态站落地 `site/`——
+landing 只说三件事（照片回家 / 为 60 岁的家人设计 / 开源·端到端加密）+ 屋脊兽
+图标 + 下载 CTA（指 Releases latest）；blog 列表/文章/RSS/404；tokens.css 由
+assets/design/tokens.json 构建期生成（脚本幂等 + CI 断言一致），图标从
+docs/design/2026-08-11-icon-v1/ 同步（亮/夜双版）；暗色跟随系统、移动端单列、
+**零 tracker**（CI 内断言产物无第三方请求域，allowlist 仅本站 + github.com 外链）。
+site.yml（paths 过滤 `site/**`）与主 CI 完全隔离，推 GH Pages。CNAME 文件入库。
+
+**等用户 / 验收人**：
+1. Pages 部署后 `https://p-pass.hawkeye-xb.com` landing/blog/RSS 三路由 200 + Lighthouse ≥90（本 VM 无外网出站，部署/测分走验收人）。
+2. **DNS 待改**：CF zone `hawkeye-xb.com`（zone id 65dec62bc61b00e5d22fedc40b774bdc）里 `p-pass.hawkeye-xb.com` 的 CNAME 目前指向旧占位 `p-pass-landing.pages.dev`——**需改为 `hawkeye-xb.github.io`**（GH Pages）。改完 GH 侧 custom domain 自动生效（CNAME 文件已随构建入库）。
+3. SITE-02 三篇博文草稿（下一轮，做完更新本段）。
+
+## 〇、2026-08-11 SITE-02 轮（Salamira）：三篇博文草稿待做
+
+**依赖 SITE-01**（素材源见架构档案 §Blog 素材管线）：
+
+1. 《为什么给家人做一个照片备份》——docs/product/ 定位+体验差距档案改写
+2. 《一只屋脊兽的诞生》——图标九轮迭代复盘（drafts-gallery.html 过程图 SVG 直接嵌）
+3. 《从 3 秒轮询到 36 毫秒》——IPC-02 重构记（事件总线、Lagged 取舍、兜底 60s 对账）
+
+要求：zh 先行、真实过程含走弯路、不写营销稿。**草稿完成即停等用户审，不许发布**。
 
 ## 〇、2026-08-11 PRES-01 + DESK-03 轮（Salamira）：在线状态三档 + 桌面照片墙 + 出包
 
