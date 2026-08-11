@@ -110,6 +110,9 @@ pub struct Pairing {
     /// Separate from addr_provider because the QR must stay short — a
     /// relay URL (~30 chars) instead of the full PeerAddr (~150 chars).
     relay_provider: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
+    /// IPC-02: 事件总线（可选）——配对落定（accept/merge）后发
+    /// device.changed，桌面设备行即时更新。
+    events: Option<crate::events::EventBus>,
     inner: Arc<Mutex<Inner>>,
 }
 
@@ -131,6 +134,7 @@ impl Pairing {
                 node_id,
                 addr_provider,
                 relay_provider,
+                events: None,
                 inner: Arc::new(Mutex::new(Inner {
                     tokens: HashMap::new(),
                     pending_tx: tx,
@@ -138,6 +142,12 @@ impl Pairing {
             },
             rx,
         )
+    }
+
+    /// IPC-02: 注入事件总线——配对落定后发 device.changed。
+    pub fn with_events(mut self, events: crate::events::EventBus) -> Self {
+        self.events = Some(events);
+        self
     }
 
     /// Issue a fresh one-time token and return the QR content string.
@@ -321,6 +331,19 @@ impl Pairing {
                 detail: Some(detail),
             })
             .await;
+        // IPC-02: 配对落定——桌面设备行即时出现（新设备/替换旧设备）。
+        if let Some(bus) = &self.events {
+            crate::events::emit(
+                bus,
+                crate::events::DEVICE_CHANGED,
+                serde_json::json!({ "node_id": peer.to_string() }),
+            );
+            crate::events::emit(
+                bus,
+                crate::events::ACTIVITY_APPENDED,
+                serde_json::json!({ "action": "pair.accepted" }),
+            );
+        }
         Ok(())
     }
 

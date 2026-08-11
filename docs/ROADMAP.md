@@ -434,6 +434,19 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       Rust 全量 234/234 + arch-check 绿。挂账：三星真机对账后时间线
       收敛 + 手机 exist-check 回落链（验收人）。
 
+## IPC 批次（2026-08-11 用户裁决：轮询是「体验、实现、内存都不友好」）
+
+- [x] IPC-02 IPC 事件订阅 — **merged 2026-08-11（本 commit）**:
+      桌面壳告别 3s 轮询。daemon 事件总线（broadcast，4 事件）+ IPC
+      `events.subscribe` 长连接（newline JSON 事件帧，types 过滤，
+      unsubscribe/断开即关）；触发点接真实变化处（pending 入队/出队、
+      backup commit、unpair、revoke、配对落定）。桌面壳 setup 启动
+      订阅线程（2s 退避自动重连，老 daemon 静默降级）+ 前端事件驱动
+      刷新；轮询降级 60s 兜底对账。ipc_flow +3：订阅后配对请求 →
+      pending_changed <100ms（实测 36ms）；类型过滤反证；unsubscribe
+      反证。Rust 全量 237/237 + vite build 绿。挂账：扫码即时切弹窗/
+      断线重连恢复/兜底轮询可用（验收人）。
+
 ## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
 
 - [x] T-080 Android 两 tab 对齐布局 v1 — **merged 2026-08-06 (4bc62071)**:

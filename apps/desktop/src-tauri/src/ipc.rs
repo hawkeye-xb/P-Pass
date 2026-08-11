@@ -128,6 +128,58 @@ impl DaemonHandle {
                 .to_string())
         }
     }
+
+    /// IPC-02: 长连接事件订阅——连接保持，daemon 事件逐条回调。
+    ///
+    /// 阻塞直到连接断开（daemon 退出/重启/网络错误），返回 Err 后由
+    /// 调用方决定重连。握手失败（老 daemon 无 events.subscribe）也返回
+    /// Err——上层据此降级（前端 60s 兜底轮询仍在）。
+    pub fn subscribe_events(
+        &self,
+        mut on_event: impl FnMut(Value),
+    ) -> Result<(), String> {
+        let name = self
+            .socket_name
+            .clone()
+            .to_ns_name::<GenericNamespaced>()
+            .map_err(|e| format!("socket 名不合法: {e}"))?;
+        let conn = Stream::connect(name).map_err(|e| format!("连接后台服务失败: {e}"))?;
+        let mut reader = BufReader::new(conn);
+
+        let req = json!({ "id": "events.subscribe", "method": "events.subscribe", "params": {} });
+        let payload = format!("{token}\n{req}\n", token = self.token);
+        reader
+            .get_mut()
+            .write_all(payload.as_bytes())
+            .map_err(|e| format!("发送失败: {e}"))?;
+
+        let mut line = String::new();
+        reader
+            .read_line(&mut line)
+            .map_err(|e| format!("读取握手响应失败: {e}"))?;
+        let resp: Value =
+            serde_json::from_str(line.trim()).map_err(|e| format!("响应不是 JSON: {e}"))?;
+        if resp["ok"].as_bool() != Some(true) {
+            return Err(resp["error"]["msg_key"]
+                .as_str()
+                .unwrap_or("err.unsupported")
+                .to_string());
+        }
+
+        // 事件循环：newline JSON 事件帧，读到 EOF/错误即返回。
+        loop {
+            let mut ev_line = String::new();
+            match reader.read_line(&mut ev_line) {
+                Ok(0) => return Err("订阅连接被服务端关闭".into()),
+                Ok(_) => {
+                    let ev: Value = serde_json::from_str(ev_line.trim())
+                        .map_err(|e| format!("事件不是 JSON: {e}"))?;
+                    on_event(ev);
+                }
+                Err(e) => return Err(format!("读取事件失败: {e}")),
+            }
+        }
+    }
 }
 
 #[cfg(test)]

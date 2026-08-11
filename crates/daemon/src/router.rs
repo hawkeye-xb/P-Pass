@@ -14,6 +14,7 @@ use storage::{Db, DiagEvent};
 use transport::{BiStream, Incoming, Transport};
 
 use crate::authz::{self, Decision};
+use crate::events::{self, EventBus};
 
 /// Capabilities this daemon ships. Grows with T-033 (thumbnail serving)
 /// and later cards; hello advertises it from day one (决策 D 项).
@@ -29,6 +30,9 @@ pub struct Router {
     query: Option<crate::query::QueryEngine>,
     upload: Option<crate::upload::UploadPlane>,
     download: Option<crate::download::DownloadPlane>,
+    /// IPC-02: 事件总线（可选——未注入时事件静默不发，测试/单组件
+    /// 构造不受影响）。
+    events: Option<EventBus>,
     /// Clock seam (T-070 时钟前跳剧本): production uses the wall clock;
     /// integration scenarios inject a controllable clock.
     now: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>,
@@ -44,8 +48,16 @@ impl Router {
             query: None,
             upload: None,
             download: None,
+            events: None,
             now: std::sync::Arc::new(unix_ms_now),
         }
+    }
+
+    /// IPC-02: 注入事件总线——backup commit / unpair 等数据面变化
+    /// 沿订阅通道即时通知桌面壳。
+    pub fn with_events(mut self, events: EventBus) -> Self {
+        self.events = Some(events);
+        self
     }
 
     /// Override the clock (T-070): lets integration scenarios simulate a
@@ -366,6 +378,23 @@ impl Router {
                                 )),
                             })
                             .await;
+                        // IPC-02: 备份批次落地——桌面活动流/水位即时更新。
+                        if let Some(bus) = &self.events {
+                            events::emit(
+                                bus,
+                                events::ACTIVITY_APPENDED,
+                                serde_json::json!({
+                                    "node_id": peer.to_string(),
+                                    "ingested": outcome.ingested,
+                                    "duplicates": outcome.duplicates,
+                                }),
+                            );
+                            events::emit(
+                                bus,
+                                events::DEVICE_CHANGED,
+                                serde_json::json!({ "node_id": peer.to_string() }),
+                            );
+                        }
                         Resp::ok(
                             req.id.clone(),
                             serde_json::json!({
@@ -440,6 +469,19 @@ impl Router {
                         detail: None,
                     })
                     .await;
+                // IPC-02: 设备自我断开——桌面设备行即时消失。
+                if let Some(bus) = &self.events {
+                    events::emit(
+                        bus,
+                        events::DEVICE_CHANGED,
+                        serde_json::json!({ "node_id": peer.to_string() }),
+                    );
+                    events::emit(
+                        bus,
+                        events::ACTIVITY_APPENDED,
+                        serde_json::json!({ "action": "device.unpaired" }),
+                    );
+                }
                 Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": true }))
             }
             Err(_) => Resp::err(

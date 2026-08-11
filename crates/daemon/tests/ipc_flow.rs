@@ -42,6 +42,39 @@ impl IpcClient {
         let resp_line = self.lines.next_line().await.unwrap().expect("a response");
         serde_json::from_str(&resp_line).unwrap()
     }
+
+    /// IPC-02: events.subscribe——握手应答后连接转为事件流。
+    async fn subscribe(&mut self, types: Option<Vec<&str>>) -> proto::Resp {
+        let params = match types {
+            Some(t) => serde_json::json!({ "types": t }),
+            None => serde_json::json!({}),
+        };
+        self.call("events.subscribe", params).await
+    }
+
+    /// 读一条事件帧 `{"event":"...","data":{...}}`。
+    async fn next_event(&mut self) -> serde_json::Value {
+        let line = self
+            .lines
+            .next_line()
+            .await
+            .unwrap()
+            .expect("an event line");
+        serde_json::from_str(&line).unwrap()
+    }
+
+    /// 显式退订——连接应被服务端关闭（再读返回 None）。
+    async fn unsubscribe(&mut self) {
+        let req = proto::Req {
+            id: "events.unsubscribe".into(),
+            method: "events.unsubscribe".into(),
+            params: serde_json::json!({}),
+            ..Default::default()
+        };
+        let mut line = serde_json::to_string(&req).unwrap();
+        line.push('\n');
+        self.tx.write_all(line.as_bytes()).await.unwrap();
+    }
 }
 
 /// Unique socket name per test (namespaced sockets are machine-global).
@@ -51,7 +84,9 @@ fn socket_name(tag: &str) -> String {
 
 async fn start(dir: &std::path::Path, tag: &str) -> (Db, Pairing, String, String) {
     let db = Db::open_in_memory().await.unwrap();
+    let (event_bus, _probe) = daemon::events::bus();
     let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
+    let pairing = pairing.with_events(event_bus.clone());
     let diag = DiagAgg::new(db.clone());
     let ipc = Arc::new(IpcServer::new(
         db.clone(),
@@ -59,6 +94,7 @@ async fn start(dir: &std::path::Path, tag: &str) -> (Db, Pairing, String, String
         diag,
         dir.to_path_buf(),
         pending_rx,
+        event_bus,
     ));
     let socket = socket_name(tag);
     let token = [0x5A; 32];
@@ -496,6 +532,153 @@ async fn logs_export_zip_leaks_no_username() {
         all_text.contains("<DATA>/Pictures/secret.jpg"),
         "the path must be present but sanitised: {all_text}"
     );
+}
+
+// ── IPC-02: events.subscribe——事件订阅通道（桌面壳告别 3s 轮询）──
+
+/// 验收 1：订阅后注入配对请求 → pending_changed 事件帧 <100ms 到达
+/// （对照轮询 3s 延迟）。走真实 pending 入队链路（Pairing 引擎 →
+/// pending_tx → IpcServer 队列）。
+#[tokio::test(flavor = "multi_thread")]
+async fn subscription_delivers_pending_change_under_100ms() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, pairing, socket, token) = start(dir.path(), "sub-fast").await;
+
+    // 订阅客户端：全量事件。
+    let mut sub = IpcClient::connect(&socket, &token).await;
+    let resp = sub.subscribe(None).await;
+    assert!(resp.ok, "{resp:?}");
+    assert_eq!(resp.result.unwrap()["subscribed"], true);
+
+    // 注入配对请求：真实 pending 入队链路（handle_request 在 owner
+    // 决策前入队——spawn 后挂住在 decision 上，confirm 才收尾）。
+    let qr = pairing.start([0x11; 12], now() + 60_000);
+    assert!(qr.contains("t=111111111111111111111111"));
+    let pair_req = proto::PairRequest {
+        token: "11".repeat(12),
+        device_name: "事件测试机".into(),
+        role: "member".into(),
+        device_hint: None,
+    };
+    let peer = transport::NodeId([0xBB; 32]);
+    let pairing2 = pairing.clone();
+    let handle = tokio::spawn(async move {
+        let _ = pairing2.handle_request(peer, &pair_req, now() + 1).await;
+    });
+
+    let t0 = std::time::Instant::now();
+    let ev = sub.next_event().await;
+    let elapsed = t0.elapsed();
+    assert_eq!(ev["event"], "pairing.pending_changed", "{ev}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(100),
+        "事件延迟 {elapsed:?} 应 <100ms（对照轮询 3s）"
+    );
+
+    // 收尾：confirm 让 handle_request 结束，避免悬空 task。
+    let mut c2 = IpcClient::connect(&socket, &token).await;
+    let resp = c2
+        .call(
+            "pairing.confirm",
+            serde_json::json!({ "accept": true, "device_name": "事件测试机" }),
+        )
+        .await;
+    assert!(resp.ok, "{resp:?}");
+    handle.await.unwrap();
+    // confirm 处理掉 pending → 队列减（pending_changed），随后 accept
+    // 落定 → device.changed（配对成功即时反映到桌面设备行）。
+    let ev2 = sub.next_event().await;
+    assert_eq!(ev2["event"], "pairing.pending_changed", "{ev2}");
+    let ev3 = sub.next_event().await;
+    assert_eq!(ev3["event"], "device.changed", "{ev3}");
+    let device = db.get_device(&[0xBB; 32]).await.unwrap().expect("row");
+    assert_eq!(device.name, "事件测试机");
+}
+
+/// 反证①：类型过滤——只订阅 status.changed 的连接收不到 pending 事件。
+#[tokio::test(flavor = "multi_thread")]
+async fn subscription_filter_blocks_unwanted_event_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_db, pairing, socket, token) = start(dir.path(), "sub-filter").await;
+
+    let mut sub = IpcClient::connect(&socket, &token).await;
+    let resp = sub.subscribe(Some(vec!["status.changed"])).await;
+    assert!(resp.ok, "{resp:?}");
+
+    // 注入配对请求（pending 变化）。
+    let _ = pairing.start([0x22; 12], now() + 60_000);
+    let pair_req = proto::PairRequest {
+        token: "22".repeat(12),
+        device_name: "过滤测试机".into(),
+        role: "member".into(),
+        device_hint: None,
+    };
+    let pairing2 = pairing.clone();
+    let handle = tokio::spawn(async move {
+        let _ = pairing2
+            .handle_request(transport::NodeId([0xBC; 32]), &pair_req, now() + 1)
+            .await;
+    });
+
+    // 过滤连接：200ms 内必须没有任何事件行。
+    let nothing =
+        tokio::time::timeout(std::time::Duration::from_millis(200), sub.next_event()).await;
+    assert!(nothing.is_err(), "过滤订阅收到了不该收的事件: {nothing:?}");
+
+    // 收尾：confirm 结束挂起 task。
+    let mut c2 = IpcClient::connect(&socket, &token).await;
+    let resp = c2
+        .call(
+            "pairing.confirm",
+            serde_json::json!({ "accept": true, "device_name": "过滤测试机" }),
+        )
+        .await;
+    assert!(resp.ok, "{resp:?}");
+    handle.await.unwrap();
+}
+
+/// 反证②：events.unsubscribe → 连接被服务端关闭（再读 = EOF）。
+/// 客户端退订后依赖 60s 兜底轮询仍可用（降级路径）。
+#[tokio::test(flavor = "multi_thread")]
+async fn unsubscribe_closes_subscription_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_db, pairing, socket, token) = start(dir.path(), "sub-unsub").await;
+
+    let mut sub = IpcClient::connect(&socket, &token).await;
+    let resp = sub.subscribe(None).await;
+    assert!(resp.ok, "{resp:?}");
+
+    sub.unsubscribe().await;
+    // 服务端应关闭连接——next_line 返回 None（EOF）。
+    let eof =
+        tokio::time::timeout(std::time::Duration::from_millis(500), sub.lines.next_line()).await;
+    assert!(matches!(eof, Ok(Ok(None))), "退订后连接应被关闭: {eof:?}");
+
+    // 退订后再发事件——没有连接接收，事件静默丢弃（不报错不阻塞）。
+    let _ = pairing.start([0x33; 12], now() + 60_000);
+    let pair_req = proto::PairRequest {
+        token: "33".repeat(12),
+        device_name: "退订测试机".into(),
+        role: "member".into(),
+        device_hint: None,
+    };
+    let pairing2 = pairing.clone();
+    let handle = tokio::spawn(async move {
+        let _ = pairing2
+            .handle_request(transport::NodeId([0xBD; 32]), &pair_req, now() + 1)
+            .await;
+    });
+    // 让事件发送路径跑完（sleep 后 handle_request 仍在等 decision——无妨）。
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    let mut c2 = IpcClient::connect(&socket, &token).await;
+    let resp = c2
+        .call(
+            "pairing.confirm",
+            serde_json::json!({ "accept": true, "device_name": "退订测试机" }),
+        )
+        .await;
+    assert!(resp.ok, "{resp:?}");
+    handle.await.unwrap();
 }
 
 fn now() -> i64 {
