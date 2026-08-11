@@ -1,0 +1,76 @@
+---
+import Base from '../../layouts/Base.astro';
+import { getCollection } from 'astro:content';
+
+const posts = (await getCollection('blog', ({ data }) => !data.draft)).sort(
+  (a, b) => b.data.date.valueOf() - a.data.date.valueOf(),
+);
+---
+
+<Base title="博客 — P-Pass" description="P-Pass 的开发过程、产品设计与踩坑记录。">
+  <section class="blog">
+    <h1>博客</h1>
+    <p class="sub">产品想法、设计决策、开发过程——写真实过程，不写营销稿。</p>
+
+    {
+      posts.length === 0 ? (
+        <p class="empty">第一篇在路上。</p>
+      ) : (
+        <ul class="post-list">
+          {posts.map((post) => (
+            <li>
+              <a href={`/blog/${post.id}/`}>
+                <time datetime={post.data.date.toISOString()}>
+                  {post.data.date.toISOString().slice(0, 10)}
+                </time>
+                <span class="post-title">{post.data.title}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )
+    }
+  </section>
+</Base>
+
+<style>
+  .blog {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 3.5rem 1.25rem 4rem;
+  }
+  h1 { font-size: 2.2rem; margin: 0 0 0.5rem; }
+  .sub { color: var(--text-secondary); margin: 0 0 2.5rem; }
+  .empty { color: var(--text-meta); }
+  .post-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .post-list li {
+    border-bottom: 1px solid var(--hairline);
+  }
+  .post-list a {
+    display: flex;
+    align-items: baseline;
+    gap: 1.25rem;
+    padding: 1rem 0;
+    text-decoration: none;
+  }
+  .post-list time {
+    color: var(--text-meta);
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .post-title {
+    font-family: var(--font-serif);
+    font-size: 1.2rem;
+  }
+  .post-list a:hover .post-title { text-decoration: underline; }
+  @media (max-width: 640px) {
+    .post-list a { flex-direction: column; gap: 0.2rem; }
+  }
+</style>

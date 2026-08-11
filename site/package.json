@@ -1,0 +1,20 @@
+{
+  "name": "p-pass-site",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tokens": "node scripts/generate-tokens.mjs",
+    "tokens:check": "node scripts/generate-tokens.mjs --check",
+    "icons": "node scripts/sync-icons.mjs",
+    "icons:check": "node scripts/sync-icons.mjs --check",
+    "prebuild": "npm run tokens && npm run icons",
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/rss": "^4.0.19",
+    "astro": "^5.18.2"
+  }
+}
