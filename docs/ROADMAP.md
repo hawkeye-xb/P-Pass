@@ -420,6 +420,20 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       生成脚本 scripts/icons/generate.sh 幂等（67 产物两次跑字节一致）。
       桌面 cargo check 绿 + Android assembleDebug 绿（验收中）。
 
+## SYNC 批次（2026-08-11 三星真机反馈驱动：Finder 删文件 ≠ 手机时间线消失）
+
+- [x] SYNC-01 外部删除对账 — **merged 2026-08-11（本 commit）**:
+      幽灵照片根治。daemon 启动 + 每小时 re-diff 磁盘 originals ↔ asset
+      索引：磁盘上没了的条目清 asset 行 + thumb 文件 + 审计
+      asset.removed_external（actor=NULL 如实记，不背锅给文件系统）。
+      低频轮询论证在 reconcile.rs 模块注释（vs FSEvents/inotify 双平台
+      复杂度）；blob 不删（iroh-blobs 0.103 无公开 delete API，孤儿 blob
+      内容寻址惰性无害，空间回收另立卡）。storage 只增两方法不改既有
+      语义；集成测试走真实 upload 链路 5 入 2 删 3 剩（干净盘 no-op 反证
+      + 对账前索引仍 5 反证 + 索引/thumb/audit/timeline 四断言）。
+      Rust 全量 234/234 + arch-check 绿。挂账：三星真机对账后时间线
+      收敛 + 手机 exist-check 回落链（验收人）。
+
 ## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
 
 - [x] T-080 Android 两 tab 对齐布局 v1 — **merged 2026-08-06 (4bc62071)**:

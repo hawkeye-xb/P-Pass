@@ -82,6 +82,28 @@ impl Db {
         Ok(done.rows_affected())
     }
 
+    /// All (hash, rel_path) pairs — SYNC-01 启动对账的数据源：磁盘 ↔ 索引
+    /// diff 靠它枚举索引侧全集（不需要完整 Asset，省内存）。
+    pub async fn list_asset_paths(&self) -> Result<Vec<(Vec<u8>, String)>> {
+        let rows = sqlx::query("SELECT hash, rel_path FROM asset")
+            .fetch_all(self.pool())
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|r| (r.get("hash"), r.get("rel_path")))
+            .collect())
+    }
+
+    /// Remove one asset row — SYNC-01 外部删除对账（索引是派生数据，
+    /// 磁盘文件没了，行就没有存在意义）。
+    pub async fn delete_asset(&self, hash: &[u8]) -> Result<u64> {
+        Ok(sqlx::query("DELETE FROM asset WHERE hash = ?")
+            .bind(hash)
+            .execute(self.pool())
+            .await?
+            .rows_affected())
+    }
+
     /// Record the thumbnail pipeline's verdict for one asset
     /// (0 pending / 1 done / 2 failed-placeholder, T-013/T-033).
     pub async fn set_thumb_state(&self, hash: &[u8], state: i64) -> Result<()> {

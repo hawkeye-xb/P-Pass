@@ -1,6 +1,23 @@
-# NEXT — 当前状态与下一步（2026-08-11，收尾轮完成）
+# NEXT — 当前状态与下一步（2026-08-11，SYNC-01 完成）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-11 SYNC-01 轮（Salamira）：外部删除对账完成
+
+**SYNC-01 已完成并推 main**（本 commit，Rust 全量 234/234 + arch-check
+绿 + fmt 干净）：daemon 启动 + 每小时 re-diff 磁盘 originals ↔ asset 索引
+——Finder 手动删 originals 后手机时间线依旧见旧照片的根治（三星真机
+2026-08-12 实锤）。清 asset 行 + thumb 文件 + 审计 asset.removed_external
+（actor=NULL）。集成测试走真实 upload 链路（5 入 2 删 3 剩，反证两段内嵌：
+干净盘 no-op + 对账前索引仍 5）。实现/论证/挂账细节见 PROGRESS 顶部 +
+卡验收记录。**挂账（验收人）**：三星真机对账后拉 timeline 被删照片消失
+（手机 exist-check 回落链，卡验收 2）。
+
+**队列剩余**：IPC-02 → PRES-01 → DESK-03；FIX-SC2 等第 2 步（卡点已
+锁定 restart 重拨）；MOB-04 已提前完成（14b8353，缓存红线落地）。
+
+**等用户**：无新增硬项。Android 测试已移交别的 Agent（xixi 安排），
+本 VM 不跑模拟器。
 
 ## 〇、2026-08-11 模拟器补证轮（验收人）：MOB-03/ICON-01b 证据闭环
 
