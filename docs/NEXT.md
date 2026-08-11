@@ -2,6 +2,22 @@
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
+## 〇、2026-08-12 巡检轮（验收人）：五卡批次全 PASS
+
+**本地复验**：Android **161/161** 新鲜跑 ✅。
+
+| 交付 | 裁决 |
+|---|---|
+| RET-01 | ✅ 防循环钉子实测在案（DaemonBackupTest:100——存回相册再备份 offered 含它但 ingested=0） |
+| SENT-01 | ✅ 反证正中要害：`stale_but_zero_attempts_never_notifies`（手机自己没触发不误报）+ 边界/去重/复位共 8 测试 |
+| DOG-02b / DESK-04 | ✅ 抽检过 |
+| CI-01 | ✅ 依赖表进 commit message、三域 paths 合理、scenarios 并轨 e2e nightly+tag、并发取消齐；实跑证据（docs 推零 run）在案。备注：crates/proto 线格式改动不触发 ci-android（Kotlin 侧金样本在 apps/ 内，双侧必然同改 + e2e nightly 兜底，可接受） |
+| iroh-blobs issue 草稿 | ✅ 质量高（最小复现+栈+源码逐行核对），无敏感信息，DRAFT 标记清晰——等用户裁决 |
+
+**商业线**：BIZ-00 已入 P-Pass-buisness 私仓 biz/（不能公开的内容一律进该仓，规则固化）。
+
+**等用户**：①iroh issue 发不发/谁发；②GitHub secret 加 CLOUDFLARE_API_TOKEN（窄权限，见 CI-01 红线）→ R2 镜像+workers 自动部署即启用。
+
 ## 〇、2026-08-12 链 2 批次（Salamira）：RET-01 → SENT-01 → DOG-02b → DESK-04 → CI-01 全部完成
 
 **五卡全部推 main**（语义基准 docs/product/2026-08-11-chain2-decisions.md
