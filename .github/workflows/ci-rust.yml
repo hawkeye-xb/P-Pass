@@ -1,0 +1,114 @@
+# CI-01: 流水线分块——Rust 域（lint + test + arch-check + license）。
+#
+# 触发路径（依赖表，2026-08-12 验收核心）：
+#   crates/**       —— 核心 crate 代码（proto/daemon/storage/transport…）
+#   Cargo.toml      —— workspace 依赖变更（影响全部 crate）
+#   Cargo.lock      —— 锁文件变更（依赖解析结果）
+#   config/**       —— 运行配置（arch-check 读它做架构门禁）
+#   assets/i18n/**  —— i18n 字典（diag keys.rs ALL 断言消费）
+#   tools/arch-check.sh —— 架构门禁脚本本身
+# 反向依赖检查：crates/proto 的金样本 snapshots.rs 被 Android GoldenDriftTest
+# 消费——改 crates/** 触发本 workflow（Rust 侧自检），Android 侧由
+# ci-android.yml（apps/android/**）触发时 GoldenDriftTest 比对，两域都覆盖。
+# 纯 docs/ .claude/ 提交不匹配任何 paths → 零 CI（验收 1）。
+name: CI Rust
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "config/**"
+      - "assets/i18n/**"
+      - "tools/arch-check.sh"
+      - ".github/workflows/ci-rust.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "config/**"
+      - "assets/i18n/**"
+      - "tools/arch-check.sh"
+      - ".github/workflows/ci-rust.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-rust-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: lint + test + arch-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # 直接下载官方 release + sha256 钉死（CI 实测：pin 的 install-action
+      # SHA 不认识 actionlint，回退 cargo-binstall 又找不到同名 crate——
+      # actionlint 是 Go 工具不是 crate，exit 76）。版本升级时同步换校验和。
+      - name: Actionlint (workflow lint)
+        run: |
+          set -euo pipefail
+          curl -sfL -o /tmp/actionlint.tgz \
+            "https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz"
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  /tmp/actionlint.tgz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
+          /tmp/actionlint -color
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: System codecs (libheif + HEVC plugin for HEIC, ffmpeg for video thumbs)
+        # libheif-plugin-libde265 is the HEVC decode plugin — without it
+        # libheif opens HEIC containers but cannot decode the pixels
+        # ("Unsupported codec"), verified in a clean noble container.
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
+        with:
+          tool: cargo-nextest
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
+        with:
+          tool: cargo-deny
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Test (nextest)
+        run: cargo nextest run --all-features
+
+      - name: Windows cross-check (platform crate compiles for msvc)
+        run: rustup target add x86_64-pc-windows-msvc && cargo check -p platform --target x86_64-pc-windows-msvc
+
+      - name: Architecture enforcement
+        run: bash tools/arch-check.sh
+
+      - name: License and dependency audit
+        run: cargo deny check advisories licenses bans
