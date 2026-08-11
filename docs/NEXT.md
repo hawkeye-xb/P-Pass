@@ -1,6 +1,25 @@
-# NEXT — 当前状态与下一步（2026-08-11，SYNC-01 完成）
+# NEXT — 当前状态与下一步（2026-08-11，IPC-02 完成）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-11 IPC-02 轮（Salamira）：IPC 事件订阅完成
+
+**IPC-02 已完成并推 main**（本 commit，Rust 全量 237/237 + clippy 0
+warning + arch-check 绿 + vite build 绿）：桌面壳告别 3s 轮询——daemon
+事件总线 + `events.subscribe` 长连接（pending_changed/status.changed/
+activity.appended/device.changed 四事件，types 过滤，unsubscribe 即关），
+触发点接真实变化处（pending 入队/出队、backup commit、unpair、revoke、
+配对落定）；桌面壳 setup 启动订阅线程（2s 退避自动重连，老 daemon
+静默降级）+ 前端事件驱动刷新，轮询降级 60s 兜底对账。集成测试：订阅后
+配对请求 → pending_changed **<100ms**（实测 36ms）+ 类型过滤反证 +
+unsubscribe 反证。**挂账（验收人）**：扫码即时切弹窗时序、断线重连恢复、
+订阅失效兜底轮询可用。
+
+**队列剩余**：PRES-01 → DESK-03；FIX-SC2 等第 2 步（卡点已锁定
+restart 重拨）；MOB-04 已提前完成（14b8353，缓存红线落地）。
+
+**等用户**：无新增硬项。Android 测试已移交别的 Agent（xixi 安排），
+本 VM 不跑模拟器。
 
 ## 〇、2026-08-11 SYNC-01 轮（Salamira）：外部删除对账完成
 

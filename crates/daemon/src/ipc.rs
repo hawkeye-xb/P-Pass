@@ -12,6 +12,7 @@
 //! `daemon.step_down` (newest-wins takeover, added 2026-08-04).
 
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -25,6 +26,7 @@ use storage::Db;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::diag_agg::DiagAgg;
+use crate::events::{self, EventBus};
 use crate::pairing::{PairDecision, Pairing, PendingPair};
 
 /// One IPC server per daemon. Owns the pending-pair queue the UI drains.
@@ -34,6 +36,8 @@ pub struct IpcServer {
     diag: DiagAgg,
     data_dir: PathBuf,
     pending: Arc<Mutex<Vec<PendingPair>>>,
+    /// IPC-02: 事件总线——`events.subscribe` 连接的推送源（见 events.rs）。
+    events: EventBus,
     /// Process start time (unix ms) — surfaced in `status` (DAE-01).
     started_at: i64,
     /// What `daemon.step_down` does after replying. Production: exit(0)
@@ -208,14 +212,23 @@ impl IpcServer {
         diag: DiagAgg,
         data_dir: PathBuf,
         mut pending_rx: tokio::sync::mpsc::UnboundedReceiver<PendingPair>,
+        events: EventBus,
     ) -> Self {
         let pending: Arc<Mutex<Vec<PendingPair>>> = Arc::default();
         let queue = Arc::clone(&pending);
         let diag2 = diag.clone();
+        let events2 = events.clone();
         tokio::spawn(async move {
             while let Some(p) = pending_rx.recv().await {
                 diag2.apply(diag::DaemonEvent::PairingStarted);
                 queue.lock().expect("pending lock").push(p);
+                // IPC-02: 新扫码请求入队——桌面壳即时从「二维码弹窗」切到
+                // 「授权列表」，不再等下一次 3s 轮询。
+                events::emit(
+                    &events2,
+                    events::PAIRING_PENDING_CHANGED,
+                    serde_json::json!({ "pending": 0 }), // 占位，客户端全量拉取
+                );
             }
         });
         Self {
@@ -224,6 +237,7 @@ impl IpcServer {
             diag,
             data_dir,
             pending,
+            events,
             started_at: now_ms(),
             step_down_exit: Arc::new(|| std::process::exit(0)),
             conn_status: Arc::new(|_| transport::ConnectionStatus::Unknown),
@@ -385,18 +399,100 @@ impl IpcServer {
             if line.trim().is_empty() {
                 continue;
             }
-            let resp = match serde_json::from_str::<Req>(&line) {
-                Ok(req) => self.dispatch(req).await,
-                Err(_) => Resp::err(
-                    String::new(),
-                    RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                ),
+            let req = match serde_json::from_str::<Req>(&line) {
+                Ok(req) => req,
+                Err(_) => {
+                    let resp = Resp::err(
+                        String::new(),
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                    let mut out = serde_json::to_string(&resp)?;
+                    out.push('\n');
+                    tx.write_all(out.as_bytes()).await?;
+                    continue;
+                }
             };
+            // IPC-02: 事件订阅——握手应答后连接转为事件流（仍可应答
+            // 其他请求），直到客户端断开或 events.unsubscribe。
+            if req.method == "events.subscribe" {
+                let resp = Resp::ok(req.id.clone(), serde_json::json!({ "subscribed": true }));
+                let mut out = serde_json::to_string(&resp)?;
+                out.push('\n');
+                tx.write_all(out.as_bytes()).await?;
+                return self.serve_subscription(&mut lines, &mut tx, &req).await;
+            }
+            let resp = self.dispatch(req).await;
             let mut out = serde_json::to_string(&resp)?;
             out.push('\n');
             tx.write_all(out.as_bytes()).await?;
         }
         Ok(())
+    }
+
+    /// IPC-02: 订阅模式——握手应答后连接保持，事件发生时沿连接推送
+    /// newline JSON `{"event":"<name>","data":{...}}`。连接上仍可发
+    /// 普通请求（照常应答），`events.unsubscribe` 或断开即退出。
+    /// 类型过滤：subscribe 请求带 `types: ["pairing.pending_changed", …]`
+    /// 时只推匹配事件；不带 = 全部。
+    async fn serve_subscription(
+        &self,
+        lines: &mut tokio::io::Lines<BufReader<interprocess::local_socket::tokio::RecvHalf>>,
+        tx: &mut interprocess::local_socket::tokio::SendHalf,
+        req: &Req,
+    ) -> anyhow::Result<()> {
+        let filter: Option<HashSet<String>> = req
+            .params
+            .get("types")
+            .and_then(|t| t.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(str::to_owned))
+                    .collect()
+            });
+        let mut rx = self.events.subscribe();
+        loop {
+            tokio::select! {
+                line = lines.next_line() => {
+                    let Some(line) = line? else { return Ok(()); }; // 客户端断开
+                    if line.trim().is_empty() { continue; }
+                    let Ok(req) = serde_json::from_str::<Req>(&line) else {
+                        let resp = Resp::err(
+                            String::new(),
+                            RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                        );
+                        let mut out = serde_json::to_string(&resp)?;
+                        out.push('\n');
+                        tx.write_all(out.as_bytes()).await?;
+                        continue;
+                    };
+                    if req.method == "events.unsubscribe" {
+                        return Ok(()); // 明确退订——客户端转兜底轮询
+                    }
+                    // 订阅期间的其他请求照常应答（客户端可随时查状态）。
+                    let resp = self.dispatch(req).await;
+                    let mut out = serde_json::to_string(&resp)?;
+                    out.push('\n');
+                    tx.write_all(out.as_bytes()).await?;
+                }
+                ev = rx.recv() => {
+                    match ev {
+                        Ok(v) => {
+                            if let Some(f) = &filter {
+                                let name = v.get("event").and_then(|e| e.as_str()).unwrap_or("");
+                                if !f.contains(name) { continue; }
+                            }
+                            let mut out = serde_json::to_string(&v)?;
+                            out.push('\n');
+                            tx.write_all(out.as_bytes()).await?;
+                        }
+                        // 慢订阅者错过的事件跳过——客户端全量 refresh 兜底。
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        // 总线关闭（daemon 退出）——连接自然结束。
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => return Ok(()),
+                    }
+                }
+            }
+        }
     }
 
     async fn dispatch(&self, req: Req) -> Resp {
@@ -599,6 +695,17 @@ impl IpcServer {
                                     detail: Some(node_hex.into()),
                                 })
                                 .await;
+                            // IPC-02: 设备移除——桌面设备行即时消失。
+                            events::emit(
+                                &self.events,
+                                events::DEVICE_CHANGED,
+                                serde_json::json!({ "node_id": node_hex }),
+                            );
+                            events::emit(
+                                &self.events,
+                                events::ACTIVITY_APPENDED,
+                                serde_json::json!({ "action": "device.revoked" }),
+                            );
                         }
                         Resp::ok(id, serde_json::json!({ "revoked": revoked }))
                     }
@@ -660,6 +767,12 @@ impl IpcServer {
         if queue.is_empty() {
             self.diag.apply(diag::DaemonEvent::PairingEnded);
         }
+        // IPC-02: 处理完一条 pending——桌面壳即时刷新授权列表。
+        events::emit(
+            &self.events,
+            events::PAIRING_PENDING_CHANGED,
+            serde_json::json!({ "pending": queue.len() }),
+        );
         let name = p.device_name.clone();
         let decision = if !accept {
             PairDecision::Reject

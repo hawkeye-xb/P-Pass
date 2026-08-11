@@ -79,8 +79,12 @@ async fn main() -> anyhow::Result<()> {
     // Pairing (T-031): issue one QR token at startup. Owner confirmation
     // is owned by the IPC layer (T-034) — tray UI and the interim console
     // prompt below both act through it. 绝不默认放行 (§2.2).
+    // IPC-02: 事件总线在此创建——配对落定/备份落地/设备变化沿订阅通道
+    // 即时通知桌面壳。
+    let (event_bus, _event_probe) = daemon::events::bus();
     let (pairing, pending_rx) =
         daemon::Pairing::new(db.clone(), node_id, addr_provider, relay_provider);
+    let pairing = pairing.with_events(event_bus.clone());
 
     // IPC (T-034): local socket + per-launch token in the data dir.
     let diag_agg = daemon::DiagAgg::new(db.clone());
@@ -90,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
         diag_agg.clone(),
         data_dir.clone(),
         pending_rx,
+        event_bus.clone(),
     );
     // T-090: devices.list connection 字段的实况来源——同样走惰性 slot
     // （transport 在 claim 之后才 bind）。bind 之前如实报 unknown，
@@ -289,11 +294,18 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let router = Router::new(db, "P-Pass 存储端")
+        .with_events(event_bus.clone())
         .with_pairing(pairing)
         .with_backup(backup)
         .with_query(query)
         .with_upload(upload)
         .with_download(download);
+    // IPC-02: 启动就绪——订阅者（桌面壳）收到后即时刷新一次状态。
+    daemon::events::emit(
+        &event_bus,
+        daemon::events::STATUS_CHANGED,
+        serde_json::json!({}),
+    );
     if ephemeral {
         // UX-07: --ephemeral — stdin EOF 即优雅退出（3 秒内），测试脚本
         // 用它杜绝 A 类孤儿。router.serve 跑到 transport 关闭为止；EOF

@@ -6,6 +6,7 @@ mod ipc;
 use serde_json::{json, Value};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::Emitter;
 use tauri::Manager;
 
 // UPD-01: updater plugin（pubkey/endpoints 在 tauri.conf.json；
@@ -26,6 +27,29 @@ fn daemon_online() -> bool {
     ipc::DaemonHandle::discover()
         .and_then(|d| d.call("status", json!({})))
         .is_ok()
+}
+
+/// IPC-02: 长连接事件订阅——daemon 事件经 Tauri event `daemon-event`
+/// 转发给前端（前端 `listen("daemon-event", …)` 按事件类型即时刷新）。
+/// 断线 2s 退避自动重连；订阅握手失败（老 daemon）静默降级——前端
+/// 60s 兜底轮询仍在，功能不丢。
+#[tauri::command]
+fn start_event_stream(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        match ipc::DaemonHandle::discover() {
+            Ok(handle) => {
+                let app = app.clone();
+                let _ = handle.subscribe_events(move |ev| {
+                    let _ = app.emit("daemon-event", ev);
+                });
+                // 连接断开（daemon 重启/退出）——退避后重连。
+            }
+            Err(_) => {
+                // daemon 还没起——继续探测。
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    });
 }
 
 /// First-run wizard state (T-042): configured = a config.toml exists in
@@ -188,6 +212,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             daemon_call,
             daemon_online,
+            start_event_stream,
             wizard_state,
             power_hint,
             open_power_settings,
@@ -196,6 +221,9 @@ pub fn run() {
             stop_daemon
         ])
         .setup(|app| {
+            // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
+            // 备份落地即时刷新），不依赖前端渲染时序。
+            start_event_stream(app.handle().clone());
             let show = MenuItem::with_id(app, "show", "打开 P-Pass", true, None::<&str>)?;
             let stop = MenuItem::with_id(app, "stop", "停止后台服务", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 App", true, None::<&str>)?;

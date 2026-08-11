@@ -59,9 +59,10 @@ fn hex(t: &[u8; 32]) -> String {
 /// Build an IpcServer whose step_down only sets a flag (no exit).
 async fn mk_server(dir: &Path) -> (Arc<IpcServer>, Arc<AtomicBool>) {
     let db = Db::open_in_memory().await.unwrap();
+    let (event_bus, _probe) = daemon::events::bus();
     let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
     let diag = DiagAgg::new(db.clone());
-    let mut ipc = IpcServer::new(db, pairing, diag, dir.to_path_buf(), pending_rx);
+    let mut ipc = IpcServer::new(db, pairing, diag, dir.to_path_buf(), pending_rx, event_bus);
     let flag = Arc::new(AtomicBool::new(false));
     let f2 = Arc::clone(&flag);
     ipc.set_step_down_exit(move || {

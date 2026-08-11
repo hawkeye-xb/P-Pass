@@ -1,6 +1,7 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
+  import { listen } from "@tauri-apps/api/event";
   import { open as openDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
   import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
@@ -354,18 +355,34 @@
   }
 
   let timer;
+  let unlisten;
   onMount(() => {
     checkWizard();
     // DESK-02①: 更新检查放首次 status 落地后——updateChannel 由
     // status.version（完整 tag）推导，避免启动竞态按壳版本误判 stable。
     refresh().then(() => checkForUpdate(false));
-    timer = setInterval(refresh, 3000); // 契约: 状态 3s 轮询
+    // IPC-02: 事件驱动为主——daemon 事件（扫码/配对落定/备份落地/设备
+    // 变化）即时刷新；轮询降级为 60s 兜底对账（防漏事件，不再是主通道）。
+    timer = setInterval(refresh, 60000); // 契约: 兜底对账 60s
+    // 订阅线程在 src-tauri setup 启动（start_event_stream），事件经
+    // `daemon-event` 转发——这里只负责收。
+    listen("daemon-event", onDaemonEvent).then((f) => (unlisten = f));
     window.addEventListener("hashchange", onHashChange);
   });
   onDestroy(() => {
     clearInterval(timer);
+    unlisten?.();
     window.removeEventListener("hashchange", onHashChange);
   });
+
+  // IPC-02: daemon 事件 → 即时刷新。事件是加速器，丢了也有 60s 兜底
+  // 对账——全量 refresh() 简单可靠（本地 IPC 快、事件频率低）。
+  function onDaemonEvent(ev) {
+    const name = ev?.payload?.event;
+    if (!name) return;
+    // 事件帧 {event, data}——data 是占位/增量提示，具体状态一律全量拉。
+    refresh();
+  }
 
   // UPD-01: 启动时检查一次更新（tauri-plugin-updater；manifest 在
   // tauri.conf.json endpoints，release 资产直链——draft/无 release 时
