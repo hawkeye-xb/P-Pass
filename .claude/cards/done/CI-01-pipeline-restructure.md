@@ -31,6 +31,11 @@ job 按实际产物收集。**tag push 永远全量**（发布完整性不许分
 
 ### ③ Cloudflare 联动（前置：用户在 GitHub 加 CLOUDFLARE_API_TOKEN）
 
+**⚠️ token 爆炸半径红线（BIZ-00 隔离原则）**：公开仓 secrets 里的 CF
+token 必须是**窄权限**——只授 R2 指定 bucket 写 + 指定 Worker 部署，
+不许账号级/Zone 级权限。生产部署级凭据永不进公开仓 secrets（公开仓
+workflow 可被直推修改，一次误改即外流通道）。
+
 a. **R2 发布镜像**：release.yml 出包后新增 job——资产上传 R2 bucket
    （`ppf-dl`），绑定 `dl.p-pass.hawkeye-xb.com`；update Worker 的
    manifest URL 改指镜像域（国内下载可达性）。SHA256SUMS 一并镜像，
