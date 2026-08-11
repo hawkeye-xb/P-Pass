@@ -155,6 +155,12 @@
     <string name="back">Back</string>
     <string name="video_loading">Fetching the video from home… %1$d%%</string>
     <string name="video_failed">Could not fetch the video. Try again.</string>
+    <!-- RET-01: 单张取回 = 使用动作（保存到相册 / 用其他应用打开） -->
+    <string name="save_to_gallery">Save to Photos</string>
+    <string name="open_with_app">Open with…</string>
+    <string name="saved_to_gallery">Saved to Photos</string>
+    <string name="no_app_for_file">No app on this phone can open this file.</string>
+    <string name="share_download_failed">Could not fetch the original from home. Try again.</string>
 
     <!-- Tabs -->
     <string name="tab_photos">Photos</string>

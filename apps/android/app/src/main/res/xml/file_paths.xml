@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- UPD-01: FileProvider paths — 只暴露 cacheDir 下载的更新 APK -->
+<!-- UPD-01: FileProvider paths — 只暴露 cacheDir 下载的更新 APK
+     RET-01: + cacheDir/share/（「用其他应用打开」的临时文件） -->
 <paths>
     <cache-path name="update" path="ppass-update.apk" />
+    <cache-path name="share" path="share/" />
 </paths>

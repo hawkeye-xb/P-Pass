@@ -8,6 +8,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.LruCache
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,12 +35,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
@@ -55,6 +59,7 @@ import com.hawkeyexb.ppass.proto.TimelinePage
 import com.hawkeyexb.ppass.proto.TimelineQuery
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.PeerAddrParts
+import kotlinx.coroutines.launch
 
 /**
  * MOB-04 红线②：缩略图缓存 = 内存 LruCache，**绝不落盘**（手机是减负端，
@@ -306,10 +311,51 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
     // 未来加原图查看时——拉原图只走**临时文件即看即清或纯内存流式**，
     // 绝不建长期原图缓存。手机是减负端不是第二存储端。备忘：
     // docs/product/2026-08-12-cache-redlines.md。
+    // RET-01: 取回=使用动作。原图按需下载到 cacheDir/share/（即用即清），
+    // 不落任何长期缓存。
     val bmp by produceState<Bitmap?>(initialValue = null, asset.hash) {
         value = runCatching { loader.thumb(asset.hash, ThumbSize.S1024) }.getOrNull()
             ?: thumbCache.get("${asset.hash}/256")
     }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<String?>(null) }
+    val share = remember { shareDir(context) }
+
+    // RET-01: 「用其他应用打开」面板关闭后清理临时文件（MOB-04 红线）。
+    // 有些系统查看器不回传 result——不依赖回调，每次使用前先清旧残留 +
+    // 进程重启由 cacheDir 语义兜底。
+    val openLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        share.listFiles()?.forEach { it.delete() }
+    }
+
+    fun runAssetAction(save: Boolean) {
+        if (busy) return
+        busy = true
+        notice = null
+        scope.launch {
+            try {
+                val file = downloadToShare(loader, asset.hash, share)
+                if (save) {
+                    saveToGallery(context, file, asset)
+                    file.delete() // 保存走 MediaStore，临时文件即用即清
+                    notice = context.getString(R.string.saved_to_gallery)
+                } else {
+                    openLauncher.launch(openWithAppIntent(context, file, asset))
+                }
+            } catch (_: android.content.ActivityNotFoundException) {
+                notice = context.getString(R.string.no_app_for_file)
+            } catch (_: Throwable) {
+                notice = context.getString(R.string.share_download_failed)
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     PPScreen(background = PPColor.SurfaceDark) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -334,7 +380,55 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
                 Text(stringResource(R.string.photos_loading), color = PPColor.PaperDim, fontSize = 16.sp)
             }
         }
+        // RET-01: 取回=使用动作——保存到相册 / 用其他应用打开。
+        notice?.let {
+            Text(
+                it, fontSize = 13.sp, color = PPColor.PaperDim,
+                modifier = Modifier.padding(4.dp, 8.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
         }
+        Row(
+            Modifier.fillMaxWidth().padding(top = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            ViewerAction(
+                label = stringResource(R.string.save_to_gallery),
+                enabled = !busy,
+                onClick = { runAssetAction(save = true) },
+                modifier = Modifier.weight(1f),
+            )
+            ViewerAction(
+                label = stringResource(R.string.open_with_app),
+                enabled = !busy,
+                onClick = { runAssetAction(save = false) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+        }
+    }
+}
+
+/** RET-01: 查看页动作按钮（纸底墨字胶囊，与 FilterChip 同族）。 */
+@Composable
+internal fun ViewerAction(
+    label: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier
+            .height(44.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (enabled) PPColor.Paper else PPColor.PaperDim.copy(alpha = 0.35f))
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+            color = if (enabled) PPColor.Ink else PPColor.PaperDim,
+        )
     }
 }
 

@@ -18,6 +18,10 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- RET-01: 保存到相册的 API 26-28 分支需要写权限（29+ Scoped
+         Storage 免权限走 RELATIVE_PATH）。 -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <!-- T-052 pairing by camera scan. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <!-- DOG-02: 请求系统"忽略电池优化"白名单对话框（杀后台防护引导）。 -->

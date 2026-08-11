@@ -97,7 +97,11 @@ print('confirmed')
                 assertEquals("all 12 ingested", 12, first.ingested)
 
                 // Idempotent rerun: nothing missing, nothing pushed.
+                // RET-01 防循环钉子：存回相册 = 同内容重新进入扫描集
+                // （hash 不变）→ 再备份 → offered 含它但 ingested=0
+                // duplicates=N，daemon 零新增。幂等去重天然防住循环。
                 val second = runner.run(daemon, candidates, generation = 100)
+                assertEquals("rerun offers all 12", 12, second.offered)
                 assertEquals("rerun pushes nothing", 0, second.pushed)
                 assertEquals("rerun ingests nothing", 0, second.ingested)
                 assertEquals("rerun sees 12 duplicates", 12, second.duplicates)
