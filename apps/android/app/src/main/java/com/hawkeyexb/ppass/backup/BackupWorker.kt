@@ -36,6 +36,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.hawkeyexb.ppass.MainActivity
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairingStore
@@ -55,6 +56,8 @@ private const val FAIL_CHANNEL_ID = "ppass.backup.failed"
 private const val FAIL_NOTIFICATION_ID = 2027
 // SENT-01: 手机侧哨兵通知（同 UX-02 通道，独立 notification id）。
 private const val SENTINEL_NOTIFICATION_ID = 2028
+// DOG-02b: 契机式白名单提醒通知（同通道独立 id）。
+private const val WHITELIST_NUDGE_NOTIFICATION_ID = 2029
 
 // MOB-02 §四事件②：连拍聚合——update delay（安静窗口）内连续变化只
 // 触发一次；超过 max delay 强制跑（变化持续不断时不被饿死）。
@@ -207,6 +210,8 @@ class BackupWorker(
         // SENT-01: 手机盯电脑哨兵——搭便车，每次后台任务执行顺记一笔
         // daemon 可达性结果（非心跳）。判定与通知在 finally 统一检查。
         val sentinel = SentinelStore(ctx.filesDir)
+        // DOG-02b: 契机式白名单提醒——同套路独立 store，不耦合。
+        val nudge = WhitelistNudgeStore(ctx.filesDir)
         return try {
             client.bind(IdentityStore(ctx.filesDir).secretKey())
             val daemon = parsePeerAddrToken(pairing.daemonAddrToken)
@@ -223,6 +228,7 @@ class BackupWorker(
                 .scanSince(watermarks.load(), BackupScopeStore(ctx).selectedBucketIds())
             if (scan.items.isEmpty()) {
                 attempts.reset() // 无新照片也算成功一轮——连续失败清零
+                nudge.recordSuccess() // DOG-02b: 成功一轮状态清零
                 return Result.success()
             }
             batchSize = scan.items.size
@@ -269,6 +275,7 @@ class BackupWorker(
                 "auto backup: offered=${report.offered} pushed=${report.pushed} ingested=${report.ingested}",
             )
             attempts.reset() // 成功——连续失败清零
+            nudge.recordSuccess() // DOG-02b: 成功一轮状态清零
             Result.success()
         } catch (t: Throwable) {
             android.util.Log.w("PPassBackup", "auto backup failed, will retry", t)
@@ -276,6 +283,8 @@ class BackupWorker(
             // 放弃本轮——捞回责任交给下一个触发事件（②③④天然就是重试）。
             // UX-02: 只在放弃本轮时发失败通知（成功保持沉默；扫描前就
             // 失败没有批次数，静默放弃不发「0 张」）；重试中间不打扰。
+            // 失败尝试也记给 DOG-02b（近 2 天连续没跑成才提醒）。
+            nudge.recordFailure()
             val failures = attempts.recordFailure()
             if (shouldRetryAfter(failures)) {
                 Result.retry() // idempotent — next attempt converges
@@ -289,7 +298,51 @@ class BackupWorker(
             // SENT-01: 搭便车检查——每次后台任务结束（成败都算）看
             // 一次哨兵判定；该发则发（内部去重，发过 markNotified）。
             maybeNotifySentinel(ctx)
+            // DOG-02b: 契机式白名单提醒（同 finally 时机，各自判定）。
+            maybeNudgeWhitelist(ctx)
         }
+    }
+
+    /** DOG-02b: 白名单提醒判定 + 发送（UX-02 通道；去重 ≥72h）。
+     *  纯判定在 shouldNudgeWhitelist（JVM 可测），这里只做接线。 */
+    private fun maybeNudgeWhitelist(context: Context) {
+        val store = WhitelistNudgeStore(context.filesDir)
+        if (!shouldNudgeWhitelist(
+                store.load(),
+                isWhitelisted = isIgnoringBatteryOptimizations(context),
+            )
+        ) return
+        postWhitelistNudgeNotification(context)
+        store.markNudged()
+    }
+
+    /** DOG-02b: 「昨晚没备份成」通知——点开落白名单引导（DOG-02 现有
+     *  回退链在 App 内 Home 引导条，通知进 App 即见）。 */
+    private fun postWhitelistNudgeNotification(context: Context) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    FAIL_CHANNEL_ID, "照片备份失败 Backup failed",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                )
+            )
+        }
+        val open = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pi = PendingIntent.getActivity(
+            context, 2, open,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(context, FAIL_CHANNEL_ID)
+            .setContentTitle(context.getString(R.string.notif_whitelist_title))
+            .setContentText(context.getString(R.string.notif_whitelist_body))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        nm.notify(WHITELIST_NUDGE_NOTIFICATION_ID, notification)
     }
 
     /** SENT-01: 哨兵通知判定 + 发送（UX-02 通道；发过 72h 内不重复）。
