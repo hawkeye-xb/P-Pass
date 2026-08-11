@@ -213,8 +213,16 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       CI 自 8/8 起 15+ run 全红的根因，已修 + 本地 scenarios ALL
       GREEN）；✅ **FIX-T3 QR 升级提示 DONE**（桌面弹窗版本提示 +
       Android 人话错误）；✅ **FIX-T6 范围语义 DONE**（空集=一个都不备
-      + 三元组 N/M 同口径，android 107/107）；📌 FIX-SC2 取证桩已落
-      （卡留队列等 CI 证据）。队列清空，下一批卡由验收人出。
+      + 三元组 N/M 同口径，android 107/107）；✅ **IPC-02 事件订阅
+      DONE 2026-08-11**（桌面壳告别 3s 轮询）；✅ **SYNC-01 外部删除
+      对账 DONE 2026-08-11**；✅ **PRES-01 在线状态三档 DONE
+      2026-08-11**（前台 30s 心跳 + 三档在线态 + hello 进活动流 10 分钟
+      去重，哨兵 >5 天口径不动）；✅ **DESK-03 桌面照片墙 DONE
+      2026-08-11**（本地 IPC 查询平面 + 缩略图墙 + 大图不落盘 + Finder
+      揭示，三方对照测试）；📌 **FIX-SC2 复现突破 2026-08-11**（本地
+      高并发首次复现 stall，卡点锁定 Blobs::open，第 3 步定根因修复
+      进行中）。**v0.3.3-test.1 prerelease 已 publish**（test 通道
+      返回新 manifest，stable 隔离正确）。
 - [ ] UPD-01 self-update channel — **code landed 2026-08-04 (PR #30),
       rework 2026-08-05**: release.yml emits tauri-style manifest.json
       (compose via tools/make-update-manifest.mjs — sha256 + Ed25519
