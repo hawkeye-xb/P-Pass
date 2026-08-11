@@ -1,6 +1,36 @@
-# NEXT — 当前状态与下一步（2026-08-11，IPC-02 完成）
+# NEXT — 当前状态与下一步（2026-08-11，PRES-01 + DESK-03 + 0.3.3-test.1）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-11 PRES-01 + DESK-03 轮（Salamira）：在线状态三档 + 桌面照片墙 + 出包
+
+**PRES-01 + DESK-03 + 三笔小债已推 main**（71a34da，CI 4/4 绿；bump
+0f4b2ab → **v0.3.3-test.1 prerelease 已 publish**，update Worker test 通道
+返回 0.3.3-test.1 manifest、stable 通道仍 0.2.1-test.4 隔离正确）：
+
+- **PRES-01**：前台 30s 轻心跳（复用 hello，Android ON_RESUME~ON_STOP，
+  后台绝不心跳）+ 三档在线态（在线/刚刚在线/离线，哨兵 >5 天口径不动）
+  + hello 进活动流（device.connected 审计 10 分钟去重）；devices.list
+  直出 presence，桌面设备行三档渲染。红线自查：心跳绝不参与鉴权。
+- **DESK-03**：本地 IPC 查询平面（timeline/thumb/asset.* 与手机同一
+  QueryEngine）+ 照片墙页（缩略图按需加载、分组、大图内存查看不落盘、
+  Finder 揭示）+ status.photo_sources；desk_flow 三方对照测试
+  （墙上数==photo_count==sqlite 直查）。
+- **小债**：reconcile 竞态注释补全；「测试版」徽标 + 照片墙文案收编
+  i18n（keys.rs 68→76，四份 JSON 同步）；HomeScreen.kt 过期注释确认已
+  随 MOB-02 删除。
+
+**FIX-SC2 第 2 步有突破（进行中）**：本地高并发 + CPU 加压**首次复现
+stall**——restart 阶段卡死 115s，三段式打点锁定卡点 = `Blobs::open`
+（FsStore::load），bind 秒过（排除重拨嫌疑）。RUST_LOG=iroh_blobs=debug
+复现循环进行中，等拿到卡点内的最后一条日志/线程栈定根因（harness 竞态
+vs 产品竞态），再修 + 反证。
+
+**队列剩余**：FIX-SC2 第 3 步（定根因修复）。
+
+**等用户**：PRES-01 真机锁屏 10 分钟活动流不刷屏 + 桌面「3 分钟前在线」
+观感；DESK-03 真窗口 500 张滚动流畅度 + 大图/Finder 揭示走查；0.3.3-test.1
+真机更新走查。
 
 ## 〇、2026-08-11 IPC-02 轮（Salamira）：IPC 事件订阅完成
 
