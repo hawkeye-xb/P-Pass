@@ -43,4 +43,5 @@ android 全量单测绿；CI 待推 main 后盯 ci-android。
   复用 `PhotosScreen.thumbCache`，全量单测转绿——闭环调试过程本身即
   验证证据（复现→隔离→假设→测试→验证）。
 - debug 包已 `adb install -r` 装到用户日常用的真机。
+- CI：push `28c4576` → main，ci-android #5 绿（1m42s）。
 - 挂账（真机，用户）：视觉效果 + 老设备退化观感待确认。
