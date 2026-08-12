@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -390,7 +391,10 @@ fun HomeScreen(
             border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column {
+            // UX-12: 卡片圆角 20dp 偏大，行内容紧贴上下边缘会显得局促
+            // （真机反馈：第一行和最后一行"略显拥挤"）——给整列上下各留
+            // 8dp 呼吸空间，不紧贴圆角弧线。
+            Column(Modifier.padding(vertical = 8.dp)) {
                 // MOB-02 §三: 设置页顶部合成一句当前生效条件——四种组合
                 // 各有明确句子，不留歧义（裁决纯函数 policySentenceKey）。
                 Row(
@@ -436,7 +440,7 @@ fun HomeScreen(
                 )
                 HorizontalDivider(color = PPColor.Divider)
                 Row(
-                    Modifier.fillMaxWidth().padding(16.dp, 14.dp),
+                    Modifier.fillMaxWidth().heightIn(min = RuleRowMinHeight).padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -453,7 +457,7 @@ fun HomeScreen(
                 // T1 (H-10b): 版本 + 构建号——报问题/排查时先知道装的是什么版本。
                 HorizontalDivider(color = PPColor.Divider)
                 Row(
-                    Modifier.fillMaxWidth().padding(16.dp, 14.dp),
+                    Modifier.fillMaxWidth().heightIn(min = RuleRowMinHeight).padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -473,7 +477,8 @@ fun HomeScreen(
                 Row(
                     Modifier.fillMaxWidth()
                         .clickable(onClick = onOpenBucketPicker)
-                        .padding(16.dp, 14.dp),
+                        .heightIn(min = RuleRowMinHeight)
+                        .padding(horizontal = 16.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
@@ -498,7 +503,8 @@ fun HomeScreen(
                     Row(
                         Modifier.fillMaxWidth()
                             .clickable(onClick = onBackupNow)
-                            .padding(16.dp, 14.dp),
+                            .heightIn(min = RuleRowMinHeight)
+                            .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
@@ -617,6 +623,14 @@ fun policySentenceKey(chargeOnly: Boolean, wifiOnly: Boolean): Int = when {
     else -> R.string.policy_none
 }
 
+/** UX-12: 备份规则卡所有单行统一的最小高度——真机反馈：带 Switch 的行
+ *  用 8dp 垂直 padding、纯文字行用 14dp，但 Switch 组件自带的最小触控
+ *  尺寸比文字行高，两种 padding 反而让 Switch 行看起来更大，行与行
+ *  高度参差。改用同一条 heightIn(min=...) 兜底、内容垂直居中——单行
+ *  内容（开关/纯文字/带箭头）视觉行高统一；带 hint 的两行开关自然
+ *  长过这个下限，是合理例外，不受这条线约束。 */
+private val RuleRowMinHeight = 56.dp
+
 /** 备份规则卡里的开关行——label（可带 hint）左、Switch 右。 */
 @Composable
 private fun RuleSwitchRow(
@@ -626,7 +640,7 @@ private fun RuleSwitchRow(
     hint: String? = null,
 ) {
     Row(
-        Modifier.fillMaxWidth().padding(16.dp, 8.dp),
+        Modifier.fillMaxWidth().heightIn(min = RuleRowMinHeight).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {

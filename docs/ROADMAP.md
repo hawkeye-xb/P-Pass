@@ -385,6 +385,16 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [x] UX-11 daemon 请求无超时（真死机永久卡 loading） — **2026-08-12
+      （用户真机反馈，L1 严重，待推 main）**: `DaemonClient.call`/
+      `connectRaw` 加 15s 超时（自定义 `DaemonUnreachableException`，
+      故意不继承 `CancellationException` 避免被暂停语义误吞）。
+      android 全量单测绿。挂账：真机确认（用户，该机当前正好桌面服务
+      已停）。
+- [x] UX-12 设置页规则卡行高/间距统一 — **2026-08-12（用户走查反馈，
+      待推 main）**: Switch 行与文字行统一 `heightIn(min=56dp)`，
+      规则卡整列加 8dp 上下 padding。android 全量单测绿。挂账：真机
+      视觉确认（用户）。
 - [x] UX-10 相册选择页封面缩略图 — **2026-08-12（用户产品反馈，待推 main）**:
       `MediaScanner.Bucket` 加 `coverUri`，`BucketScreen` 每行加 48dp
       封面（API 29+ `loadThumbnail`）；复用 `PhotosScreen.thumbCache`
