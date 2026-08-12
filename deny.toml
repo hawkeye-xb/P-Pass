@@ -35,6 +35,9 @@ allow = [
   # Added with libheif (T-013) — permissive Apache variant on a build-time
   # dep (system-deps → cfg-expr → target-lexicon):
   "Apache-2.0 WITH LLVM-exception",
+  # Added with notify (WATCH-01) — CC0 is public-domain-equivalent, used by
+  # notify itself (notify-7.0.0 declares CC0-1.0).
+  "CC0-1.0",
   # Added with interprocess (T-034) — zero-clause BSD, maximally
   # permissive (doctest-file, recvmsg):
   "0BSD",
