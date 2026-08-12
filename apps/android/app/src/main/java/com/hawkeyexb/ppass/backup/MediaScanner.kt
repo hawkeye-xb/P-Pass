@@ -48,8 +48,12 @@ class MediaScanner(private val resolver: ContentResolver?) {
     private fun requireResolver(): ContentResolver =
         checkNotNull(resolver) { "MediaScanner requires a ContentResolver" }
 
-    /** A photo/video album (MediaStore bucket) with its item count. */
-    data class Bucket(val id: Long, val name: String, val count: Int)
+    /** A photo/video album (MediaStore bucket) with its item count.
+     *  UX-10: [coverUri] = 相册内最新一项（按 DATE_ADDED 比较，跨
+     *  图片/视频两个 collection 取全局最新）——BucketScreen 拿它解码
+     *  封面缩略图，模拟系统相册选择器的交互；取不到（老数据/异常）
+     *  时为 null，UI 退化为空白封面，不阻塞选择流程。 */
+    data class Bucket(val id: Long, val name: String, val count: Int, val coverUri: Uri? = null)
 
     /**
      * All albums, each with a total item count (photos+videos). T6:
@@ -58,25 +62,36 @@ class MediaScanner(private val resolver: ContentResolver?) {
      */
     fun listBuckets(): List<Bucket> {
         val byId = LinkedHashMap<Long, MutableList<String>>()
+        val coverUri = mutableMapOf<Long, Uri>()
+        val coverDate = mutableMapOf<Long, Long>()
         for ((collection, _) in listOf(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI to false,
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI to true,
         )) {
             val projection = arrayOf(
+                MediaStore.MediaColumns._ID,
                 MediaStore.MediaColumns.BUCKET_ID,
                 MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
+                MediaStore.MediaColumns.DATE_ADDED,
             )
             requireResolver().query(collection, projection, null, null, null)?.use { cur ->
-                val idIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
+                val idIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val bucketIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
                 val nameIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+                val dateIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
                 while (cur.moveToNext()) {
-                    val id = cur.getLong(idIdx)
+                    val id = cur.getLong(bucketIdx)
                     val name = cur.getString(nameIdx)?.takeIf { it.isNotBlank() } ?: "未命名"
                     byId.getOrPut(id) { mutableListOf() }.add(name)
+                    val date = cur.getLong(dateIdx)
+                    if (date > (coverDate[id] ?: -1L)) {
+                        coverDate[id] = date
+                        coverUri[id] = ContentUris.withAppendedId(collection, cur.getLong(idIdx))
+                    }
                 }
             }
         }
-        return byId.map { (id, names) -> Bucket(id, names.first(), names.size) }
+        return byId.map { (id, names) -> Bucket(id, names.first(), names.size, coverUri[id]) }
             .sortedBy { it.name.lowercase() }
     }
 

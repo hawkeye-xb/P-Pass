@@ -67,8 +67,13 @@ import kotlinx.coroutines.launch
  * 家庭库首屏 + 翻页缓冲）；不做设备内存分级——低内存设备由系统缓存压力
  * 自动回收 Bitmap，分级只会引入复杂度。任何改动不得引入磁盘 thumb 缓存
  * （守卫测试 CacheRedlineTest 扫描全工程源码）。
+ *
+ * UX-10: 全 App 唯一内存缩略图缓存（CacheRedlineTest 断言 LruCache 声明
+ * 只能有这一处）——BucketScreen 的相册封面缩略图共用这个实例，key 加
+ * `"bucket:"` 前缀（远端 hash 值不含冒号，不会撞车），不为局部化缓存
+ * 各开各的内存预算。
  */
-private val thumbCache = LruCache<String, Bitmap>(32 * 1024 * 1024 / 40_000)
+internal val thumbCache = LruCache<String, Bitmap>(32 * 1024 * 1024 / 40_000)
 
 /**
  * MOB-04 红线①失效联动的逐出决策（纯函数，JVM 可测）：给定缓存 key
