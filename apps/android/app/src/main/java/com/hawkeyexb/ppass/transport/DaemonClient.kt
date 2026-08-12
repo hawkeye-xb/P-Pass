@@ -6,6 +6,7 @@
 // frame, finish the send side, read one response frame.
 package com.hawkeyexb.ppass.transport
 
+import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.Req
 import com.hawkeyexb.ppass.proto.Resp
 import com.hawkeyexb.ppass.proto.encodeFrame
@@ -21,9 +22,13 @@ import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
 const val ALPN_CTRL = "ppf/ctrl/1"
@@ -137,6 +142,68 @@ class DaemonClient {
                 )
             }
         }
+
+    /**
+     * SYNC-04: 前台常驻订阅——发一次 `timeline.subscribe`，之后只管读
+     * 直到这条流结束（对端主动关闭 / 连接坏了 / 协程被取消）。收到第
+     * 一个帧（订阅确认本身）就调用一次 [onConnected]——调用方拿它区分
+     * "正在重连"和"已经连上，安静等事件"两种状态，不然重连期间界面
+     * 全程没有任何提示（真机验收发现的缺口：原设计只在退避耗尽之后
+     * 才亮提示，中间过程完全沉默）。每收到一次 `timeline.invalidated`
+     * 推送（包括订阅建立那一刻的"当前态"那一次，§③）就调用
+     * [onInvalidated]。
+     *
+     * 正常返回（对端 `finish` 了发送方向）和抛异常（真正的连接错误）
+     * 对调用方是同一个意思：这次订阅结束了，按断线退避重连处理，不用
+     * 区分对待。发送方向在发完订阅请求后立即半关闭——取数据永远走
+     * 独立鉴权的普通 `call`，这条流从头到尾不传照片内容（决策档案
+     * §⑦）。
+     */
+    suspend fun subscribeTimeline(
+        peer: PeerAddrParts,
+        onConnected: suspend () -> Unit = {},
+        onInvalidated: suspend () -> Unit,
+    ): Unit = withContext(Dispatchers.IO) {
+        val ep = endpoint ?: error("bind() first")
+        val addr = EndpointAddr(
+            EndpointId.fromString(peer.idHex),
+            peer.relayUrl,
+            peer.directAddresses,
+        )
+        val conn = ep.connectBounded(addr, ALPN_CTRL.toByteArray())
+        try {
+            val bi = conn.openBi()
+            val send = bi.send()
+            val recv = bi.recv()
+            val req = Req(
+                id = UUID.randomUUID().toString(),
+                method = Methods.TIMELINE_SUBSCRIBE,
+                params = buildJsonObject {},
+            )
+            send.writeAll(encodeFrame(Req.serializer(), req))
+            send.finish()
+
+            var firstFrame = true
+            while (true) {
+                currentCoroutineContext().ensureActive()
+                val header = recv.readExact(4u)
+                val len = frameLen(header)
+                val payload = decodePayload(JsonElement.serializer(), recv.readExact(len.toUInt()))
+                if (firstFrame) {
+                    firstFrame = false
+                    onConnected() // 读到第一个帧（订阅确认）= 这次真的连上了
+                }
+                val event = (payload as? JsonObject)?.get("event")
+                    ?.let { (it as? JsonPrimitive)?.content }
+                if (event == "timeline.invalidated") {
+                    onInvalidated()
+                }
+                // 没有 "event" 键的帧是订阅确认本身（{"ok":true,...}）——忽略。
+            }
+        } finally {
+            conn.close(0L, ByteArray(0))
+        }
+    }
 
     /** UX-06: unilateral stop — ask the daemon to revoke THIS device.
      *  Success means hello is denied from now on; a fresh owner-issued

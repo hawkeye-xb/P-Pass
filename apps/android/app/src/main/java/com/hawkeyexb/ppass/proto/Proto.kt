@@ -217,6 +217,8 @@ object Methods {
     const val BACKUP_COMMIT = "backup.commit"
     const val DIAG_STATUS = "diag.status"
     const val BACKUP_UPLOAD = "backup.upload"
+    /** SYNC-04: 前台常驻订阅——见 DaemonClient.subscribeTimeline。 */
+    const val TIMELINE_SUBSCRIBE = "timeline.subscribe"
 }
 
 object Codes {

@@ -496,5 +496,14 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   `cargo test -p daemon -p proto -p core-index` 全绿 + `arch-check` 绿。
   **本地验证完，未推 GitHub**——按用户要求先在本地把 daemon+Android
   真机联调一起做完再决定推不推。
-- 下一步：SYNC-04（Android 前台订阅，真机验收挂用户，本地已备好三星
-  设备）。SYNC-05 独立，暂缓。
+- **SYNC-04 代码完成，真机验收进行中**：Android 端 `DaemonClient.
+  subscribeTimeline` + `PhotosScreen` 换掉 15s 仅追加轮询，改前台常驻
+  订阅+整页覆盖+断线退避重连（状态机抽成纯函数 `nextSubscribeRetry`，
+  5 个新单测）。真机（SM-S9210）飞行模式测试时发现并当场修复一个缺口：
+  重连期间界面原本全程沉默，只有耗尽后才提示，补了"正在重新连接电脑…"
+  的中间态提示。桌面壳本地跑最新 daemon sidecar（release build）验证
+  中。**待用户确认的 5 条真机剧本一条都还没过**，本卡未移入 done/。
+  另发现两处范围外的既有行为（非本卡引入）：backup WorkManager 网络
+  约束下飞行模式的"延迟传输"是既有设计；桌面壳某处"连接中"文案在源码
+  里查无实据，等用户截图确认。
+- 下一步：等真机验收 5 条剧本走完；SYNC-05 独立，暂缓。
