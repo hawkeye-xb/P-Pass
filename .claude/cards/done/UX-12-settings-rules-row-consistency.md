@@ -41,4 +41,5 @@ android 全量单测绿；CI 待推 main 后盯 ci-android；真机视觉确认�
 
 - 实现：见「修法」两项，`HomeScreen.kt` 六处行统一改造。
 - debug 包已 `adb install -r` 装到用户日常用的真机（与 UX-11 同批）。
+- CI：push `971c0e5` → main，ci-android 绿（1m42s）。
 - 挂账（真机，用户）：视觉效果确认。
