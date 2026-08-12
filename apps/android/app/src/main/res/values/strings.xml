@@ -91,8 +91,6 @@
     <string name="bucket_empty">No photos or videos found on this phone.</string>
     <string name="bucket_loading">Reading albums…</string>
     <string name="bucket_count">%1$d items</string>
-    <string name="bucket_select_all">Select all</string>
-    <string name="bucket_clear">Clear</string>
     <string name="bucket_done">Back up %1$d albums</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">New</string>

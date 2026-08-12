@@ -110,7 +110,6 @@ fun BucketScreen(
     onCancel: () -> Unit,
 ) {
     var checked by remember { mutableStateOf(selected) }
-    var selectAll by remember { mutableStateOf(selected.size == buckets.size) }
     // MOB-02 §六: 新出现的相册 = 当前 − 已知；标「新」徽标，默认不勾选
     // （不在 selected 里）——配合用户「专用目录」用法。
     val newIds = newAlbumIds(buckets.map { it.id }.toSet(), knownBuckets)
@@ -150,10 +149,8 @@ fun BucketScreen(
                                 .padding(vertical = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            // UX-10: 封面缩略图——像普通图库相册选择器那样，
-                            // 一眼认出相册是什么，不用光靠名字猜。
-                            BucketCover(b.id, b.coverUri)
-                            Spacer(Modifier.width(12.dp))
+                            // UX-10: 勾选框在缩略图左侧——和系统相册选择器的
+                            // 阅读顺序一致（先看到"要不要选"，再看图认相册）。
                             Checkbox(
                                 checked = on,
                                 onCheckedChange = { c ->
@@ -164,6 +161,8 @@ fun BucketScreen(
                                     uncheckedColor = PPColor.Ink40,
                                 ),
                             )
+                            BucketCover(b.id, b.coverUri)
+                            Spacer(Modifier.width(12.dp))
                             Text(
                                 b.name,
                                 fontSize = 16.sp, color = PPColor.Ink,
@@ -188,37 +187,27 @@ fun BucketScreen(
             }
         }
 
+        // UX-10: 「全选/清空」删除——选相册是要逐个决策的事，不该有一键
+        // 清空的意外风险；真想全选，相册数量有限，自己点几下也不麻烦。
+        // 取消 1/4 + 备份 3/4——备份是本页的主动作，取消只是退路，
+        // 宽度该有落差，不是平分。
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedButton(
-                onClick = {
-                    selectAll = !selectAll
-                    checked = if (selectAll) buckets.map { it.id }.toSet() else emptySet()
-                },
-                modifier = Modifier.weight(1f).height(52.dp),
+                onClick = onCancel,
+                modifier = Modifier.weight(1f).height(58.dp),
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+            ) { Text(stringResource(R.string.cancel), fontSize = 15.sp, color = PPColor.Ink) }
+            OutlinedButton(
+                onClick = { onDone(checked) },
+                modifier = Modifier.weight(3f).height(58.dp),
                 shape = RoundedCornerShape(PPSize.RadiusControl),
             ) {
                 Text(
-                    stringResource(if (selectAll) R.string.bucket_clear else R.string.bucket_select_all),
-                    fontSize = 15.sp, color = PPColor.Ink,
+                    stringResource(R.string.bucket_done, checked.size),
+                    fontSize = 17.sp, color = PPColor.Safe, fontWeight = FontWeight.Bold,
                 )
             }
-            OutlinedButton(
-                onClick = onCancel,
-                modifier = Modifier.weight(1f).height(52.dp),
-                shape = RoundedCornerShape(PPSize.RadiusControl),
-            ) { Text(stringResource(R.string.cancel), fontSize = 15.sp, color = PPColor.Ink) }
-        }
-        Spacer(Modifier.height(10.dp))
-        OutlinedButton(
-            onClick = { onDone(checked) },
-            modifier = Modifier.fillMaxWidth().height(58.dp),
-            shape = RoundedCornerShape(PPSize.RadiusControl),
-        ) {
-            Text(
-                stringResource(R.string.bucket_done, checked.size),
-                fontSize = 17.sp, color = PPColor.Safe, fontWeight = FontWeight.Bold,
-            )
         }
         Spacer(Modifier.height(6.dp))
         }

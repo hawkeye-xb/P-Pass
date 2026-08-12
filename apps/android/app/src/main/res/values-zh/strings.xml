@@ -87,8 +87,6 @@
     <string name="bucket_empty">手机上没有找到照片或视频。</string>
     <string name="bucket_loading">正在读取相册…</string>
     <string name="bucket_count">%1$d 个</string>
-    <string name="bucket_select_all">全选</string>
-    <string name="bucket_clear">清空</string>
     <string name="bucket_done">备份这 %1$d 个相册</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">新</string>
