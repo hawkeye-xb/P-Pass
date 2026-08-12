@@ -1,4 +1,4 @@
-# NEXT — 当前状态与下一步（2026-08-12，链 2 批次完成）
+# NEXT — 当前状态与下一步（2026-08-12，WATCH-01 合并）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
@@ -12,6 +12,16 @@ material-icons-extended）+ `AssetActions.shareIntent` + 三动作枚举化共�
 管线。android 166/166 绿 + assembleDebug 绿。**等用户**：①真机分享到微信
 收到原图；②面板关闭后 cacheDir/share/ 零残留；③这批改动（MOB-06 等）怎么
 正式发布。
+
+## 〇、2026-08-12（WATCH-01 本地目录监听完成）
+
+**已合并**：notify 监听 `originals/` + 防抖（500ms）+ 父路径合并 + 增量
+扫描（新文件 ingest / 删除局部对账），变化 emit `timeline.invalidated`
+——metadata 秒级更新，SYNC-02/03/04 事件链路第一跳补齐。每小时 reconcile
+保留兜底。测试：watcher 6 单测 + watch_flow 4 集成测试全绿 + 全量绿 +
+arch-check 绿 + clippy 零警告。REV-01（SYNC-03/04 review 5 项 backlog）
+在队列等排期。**挂账（真机）**：Finder 放/删照片 → 手机时间线秒级
+出现/消失。SYNC-04 真机 5 条剧本仍待用户验收。
 
 ## 〇、2026-08-12（用户真机反馈）：UX-11（严重）+ UX-12
 

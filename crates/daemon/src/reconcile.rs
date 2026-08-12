@@ -97,7 +97,9 @@ impl Reconcile {
     }
 
     /// 清理单个幽灵资产：thumb 文件 + asset 行 + 审计。
-    async fn remove_asset(&self, hash: &[u8], rel_path: &str) -> storage::Result<()> {
+    /// WATCH-01: `pub(crate)`——目录监听的局部对账复用同一清理逻辑
+    /// （thumb 路径约定 + 审计口径只此一份，不复制）。
+    pub(crate) async fn remove_asset(&self, hash: &[u8], rel_path: &str) -> storage::Result<()> {
         // thumb 文件（.ppf/thumbs/<2hex>/<hex>.{256,1024}.jpg）——纯文件，
         // 直接删；不存在（从未生成过缩略图）也正常。
         if let Ok(h32) = <[u8; 32]>::try_from(hash) {

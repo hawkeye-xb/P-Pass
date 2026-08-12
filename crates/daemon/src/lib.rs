@@ -18,6 +18,7 @@ pub mod subscriptions;
 pub mod telemetry;
 pub mod update;
 pub mod upload;
+pub mod watcher;
 
 pub use authz::Decision;
 pub use backup::{BackupEngine, CommitOutcome};
@@ -31,3 +32,4 @@ pub use query::QueryEngine;
 pub use reconcile::Reconcile;
 pub use router::Router;
 pub use telemetry::{Event as TelemetryEvent, Telemetry};
+pub use watcher::LibraryWatcher;
