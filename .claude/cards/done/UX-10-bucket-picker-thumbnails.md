@@ -16,7 +16,7 @@
 2. `BucketScreen.kt` 新增 `BucketCover` composable：API 29+ 用官方
    `ContentResolver.loadThumbnail`（图片/视频统一接口）解码 96px 封面；
    低于 29 的设备封面留空（纯视觉锚点，不为老设备多维护一条解码路径）。
-   每行 Checkbox 前插入一个 48dp 圆角封面图。
+   每行插入一个 48dp 圆角封面图。
 3. **复用而非新开缓存**：第一版直接在 BucketScreen 里开了个独立
    `LruCache<Long, Bitmap>`，撞上 `CacheRedlineTest.noDiskThumbCacheInSources`
    的断言——「LruCache 声明全工程只能有 PhotosScreen.kt 一处」，测试
@@ -24,6 +24,16 @@
    `internal`（全 App 唯一内存缩略图缓存），BucketScreen 复用同一实例，
    key 加 `"bucket:"` 前缀避免和远端 hash key 撞车。这条红线测试没有为
    了迎合新代码放宽——按测试原意改代码，不改测试。
+4. **走查追加（用户看完首版截图后的三点反馈）**：
+   ①Checkbox 挪到缩略图左侧（阅读顺序：先看到"要不要选"，再看图认
+   相册，和系统相册选择器一致，之前顺序反了）；
+   ②「全选/清空」整行删除——选相册是要逐个决策的事，不该给一键清空的
+   意外风险；真想全选，相册数量有限，自己点几下不麻烦（连带删掉
+   `selectAll` 状态变量与 `bucket_select_all`/`bucket_clear` 两个只在
+   这一处用的字符串资源）；
+   ③底部改「取消 1/4 + 备份 3/4」单行（原来是「全选/清空」+「取消」
+   各占一半、下面再叠一条独立的全宽「备份」按钮，三行变一行）——备份
+   是本页主动作，取消只是退路，宽度该有落差不该对半分。
 
 ## 可执行验收
 
@@ -44,4 +54,7 @@ android 全量单测绿；CI 待推 main 后盯 ci-android。
   验证证据（复现→隔离→假设→测试→验证）。
 - debug 包已 `adb install -r` 装到用户日常用的真机。
 - CI：push `28c4576` → main，ci-android #5 绿（1m42s）。
+- 走查追加三点（Checkbox 移位/删全选清空/取消 1/4+备份 3/4）已改完，
+  单测重跑绿（`StringsSymmetryTest` 确认删除的两个字符串键 en/zh 同步
+  消失，没留孤儿），debug 包已重新装机。
 - 挂账（真机，用户）：视觉效果 + 老设备退化观感待确认。
