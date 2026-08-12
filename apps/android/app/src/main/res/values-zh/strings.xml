@@ -164,6 +164,9 @@
     <string name="saved_to_gallery">已保存到相册</string>
     <string name="no_app_for_file">手机上没有能打开这个文件的应用。</string>
     <string name="share_download_failed">原图没取到，请再试一次。</string>
+    <!-- MOB-06: 右上角分享（ACTION_SEND 系统分享面板） -->
+    <string name="share">分享</string>
+    <string name="share_to">分享到…</string>
 
     <string name="tab_photos">照片</string>
     <!-- UX-09: 「备份」改名「设置」——tab 内容其实是开关/规则/版本/断开，

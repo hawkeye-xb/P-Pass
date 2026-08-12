@@ -2,6 +2,17 @@
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
+## 〇、2026-08-12（用户询问）：MOB-06 查看页右上角「分享」
+
+用户问「分享」和「其它 APP 打开」是不是一回事——**不是**（Android 里是
+两种 Intent：分享=ACTION_SEND 内容/附件语义走系统分享面板；打开=ACTION_VIEW
+文件处理语义走打开方式选择器；底层共用 FileProvider+即用即清管线）。已按
+常规做法实现：照片/视频查看页右上角分享图标（自绘 ic_share.xml 不引
+material-icons-extended）+ `AssetActions.shareIntent` + 三动作枚举化共享下载
+管线。android 166/166 绿 + assembleDebug 绿。**等用户**：①真机分享到微信
+收到原图；②面板关闭后 cacheDir/share/ 零残留；③这批改动（MOB-06 等）怎么
+正式发布。
+
 ## 〇、2026-08-12（用户真机反馈）：UX-11（严重）+ UX-12
 
 用户桌面服务停掉后手机 Photos tab 永久卡"正在读取"不报错——定位到

@@ -155,6 +155,30 @@ suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): Uri {
 }
 
 /**
+ * 「分享」Intent：FileProvider URI + ACTION_SEND + EXTRA_STREAM + 系统分享面板。
+ * 与 [openWithAppIntent] 的语义区别：
+ *  - ACTION_SEND = 把文件作为**内容/附件**发给目标 app（接收方新建消息/上传附件，
+ *    面板=微信/QQ/邮件/云盘/Nearby）；
+ *  - ACTION_VIEW = 让目标 app 以**打开**模式处理文件（修图/播放/查看，
+ *    面板=打开方式选择器）。
+ * 底层共用：FileProvider URI + FLAG_GRANT_READ_URI_PERMISSION + 临时文件即用即清。
+ * 调用方用 startActivity 前先 try-catch ActivityNotFoundException；面板关闭后删除 [file]。
+ */
+fun shareIntent(context: Context, file: File, asset: AssetMeta, chooserTitle: String?): Intent {
+    val isVideo = asset.mediaType.startsWith("video")
+    val mime = sniffMimeFromHeader(file, isVideo)
+    val uri = FileProvider.getUriForFile(
+        context, "${context.packageName}.fileprovider", file,
+    )
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = mime
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    return Intent.createChooser(send, chooserTitle)
+}
+
+/**
  * 「用其他应用打开」的 Intent：FileProvider URI + ACTION_VIEW。
  * 调用方用 startActivity 前先 try-catch ActivityNotFoundException →
  * 人话「没有能打开它的应用」；面板关闭后删除 [file]。

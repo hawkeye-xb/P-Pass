@@ -385,6 +385,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [x] MOB-06 查看页右上角「分享」 — **2026-08-12（用户询问「分享 vs 用其他
+      应用打开是不是一回事」，待推 main）**: 不是一回事——分享=`ACTION_SEND`
+      （文件作为内容/附件发给目标 app，分享面板：微信/邮件/云盘）；
+      打开=`ACTION_VIEW`（目标 app 以打开模式处理文件，打开方式选择器）。
+      底层共用 FileProvider + FLAG_GRANT_READ_URI_PERMISSION + 临时文件即用
+      即清。实现：`AssetActions.shareIntent` + 自绘 ic_share.xml + 照片/视频
+      查看页右上角分享图标 + 动作枚举化（三动作共享下载管线）。android
+      166/166 绿。挂账：真机分享到微信收到原图 + share 目录零残留（用户）。
 - [x] UX-11 daemon 请求无超时（真死机永久卡 loading） — **2026-08-12
       （用户真机反馈，L1 严重，待推 main）**: `DaemonClient.call`/
       `connectRaw` 加 15s 超时（自定义 `DaemonUnreachableException`，
