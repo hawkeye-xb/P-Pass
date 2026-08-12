@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -25,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -39,6 +41,9 @@ sealed class VideoState {
     data class Ready(val file: File) : VideoState()
     data object Failed : VideoState()
 }
+
+/** RET-01/MOB-06: 查看页可用动作——保存到相册 / 用其他应用打开 / 分享。 */
+private enum class VideoOp { Save, OpenWith, Share }
 
 @Composable
 fun VideoScreen(
@@ -71,27 +76,38 @@ fun VideoScreen(
     var busy by remember { mutableStateOf(false) }
     var notice by remember { mutableStateOf<String?>(null) }
 
-    fun runAssetAction(save: Boolean) {
+    fun runAssetAction(op: VideoOp) {
         if (busy) return
         val ready = state as? VideoState.Ready ?: return
         busy = true
         notice = null
         scope.launch {
             try {
-                if (save) {
-                    saveToGallery(context, ready.file, asset)
-                    notice = context.getString(R.string.saved_to_gallery)
-                } else {
-                    val share = shareDir(context)
-                    share.listFiles()?.forEach { it.delete() }
-                    val tmp = File(share, "video-${asset.hash.take(16)}.mp4")
-                    ready.file.copyTo(tmp, overwrite = true)
-                    try {
-                        val intent = openWithAppIntent(context, tmp, asset)
-                        context.startActivity(intent)
-                    } catch (_: android.content.ActivityNotFoundException) {
-                        tmp.delete()
-                        notice = context.getString(R.string.no_app_for_file)
+                when (op) {
+                    VideoOp.Save -> {
+                        saveToGallery(context, ready.file, asset)
+                        notice = context.getString(R.string.saved_to_gallery)
+                    }
+                    VideoOp.OpenWith, VideoOp.Share -> {
+                        val share = shareDir(context)
+                        share.listFiles()?.forEach { it.delete() }
+                        val tmp = File(share, "video-${asset.hash.take(16)}.mp4")
+                        ready.file.copyTo(tmp, overwrite = true)
+                        val intent = if (op == VideoOp.OpenWith) {
+                            openWithAppIntent(context, tmp, asset)
+                        } else {
+                            // MOB-06: ACTION_SEND 系统分享面板（微信/邮件/云盘…）
+                            shareIntent(
+                                context, tmp, asset,
+                                context.getString(R.string.share_to),
+                            )
+                        }
+                        try {
+                            context.startActivity(intent)
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            tmp.delete()
+                            notice = context.getString(R.string.no_app_for_file)
+                        }
                     }
                 }
             } catch (_: Throwable) {
@@ -108,6 +124,19 @@ fun VideoScreen(
                 Text(
                     stringResource(R.string.back), fontSize = 17.sp, color = PPColor.Paper,
                     modifier = Modifier.clickable(onClick = onClose).padding(10.dp),
+                )
+                // MOB-06: 右上角分享——ACTION_SEND 系统分享面板（微信/邮件/云盘…）。
+                // 仅 Ready 后可分享（未取到前无文件可发）。
+                Icon(
+                    painter = painterResource(R.drawable.ic_share),
+                    contentDescription = stringResource(R.string.share),
+                    tint = PPColor.Paper,
+                    modifier = Modifier
+                        .clickable(
+                            enabled = !busy && state is VideoState.Ready,
+                            onClick = { runAssetAction(VideoOp.Share) },
+                        )
+                        .padding(10.dp),
                 )
             }
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -147,13 +176,13 @@ fun VideoScreen(
                     ViewerAction(
                         label = stringResource(R.string.save_to_gallery),
                         enabled = !busy,
-                        onClick = { runAssetAction(save = true) },
+                        onClick = { runAssetAction(VideoOp.Save) },
                         modifier = Modifier.weight(1f),
                     )
                     ViewerAction(
                         label = stringResource(R.string.open_with_app),
                         enabled = !busy,
-                        onClick = { runAssetAction(save = false) },
+                        onClick = { runAssetAction(VideoOp.OpenWith) },
                         modifier = Modifier.weight(1f),
                     )
                 }

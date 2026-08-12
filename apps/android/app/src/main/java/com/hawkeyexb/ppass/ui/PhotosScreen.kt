@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -45,6 +46,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
@@ -469,6 +471,9 @@ private fun ThumbCell(loader: TimelineLoader, asset: AssetMeta, onOpen: () -> Un
     }
 }
 
+/** RET-01/MOB-06: 查看页可用动作——保存到相册 / 用其他应用打开 / 分享。 */
+private enum class ViewerOp { Save, OpenWith, Share }
+
 @Composable
 private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () -> Unit) {
     // MOB-04 红线③（大图）：当前查看 = 1024 缩略图走内存缓存（见下）；
@@ -487,28 +492,41 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
     var notice by remember { mutableStateOf<String?>(null) }
     val share = remember { shareDir(context) }
 
-    // RET-01: 「用其他应用打开」面板关闭后清理临时文件（MOB-04 红线）。
-    // 有些系统查看器不回传 result——不依赖回调，每次使用前先清旧残留 +
-    // 进程重启由 cacheDir 语义兜底。
+    // RET-01: 「用其他应用打开」/ MOB-06:「分享」面板关闭后清理临时文件
+    // （MOB-04 红线）。有些系统查看器不回传 result——不依赖回调，每次使用
+    // 前先清旧残留 + 进程重启由 cacheDir 语义兜底。分享与打开共用同一个
+    // launcher：回调语义都是「面板关闭后清空 share 目录」。
     val openLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
         share.listFiles()?.forEach { it.delete() }
     }
 
-    fun runAssetAction(save: Boolean) {
+    fun runAssetAction(op: ViewerOp) {
         if (busy) return
         busy = true
         notice = null
         scope.launch {
             try {
                 val file = downloadToShare(loader, asset.hash, share)
-                if (save) {
-                    saveToGallery(context, file, asset)
-                    file.delete() // 保存走 MediaStore，临时文件即用即清
-                    notice = context.getString(R.string.saved_to_gallery)
-                } else {
-                    openLauncher.launch(openWithAppIntent(context, file, asset))
+                when (op) {
+                    ViewerOp.Save -> {
+                        saveToGallery(context, file, asset)
+                        file.delete() // 保存走 MediaStore，临时文件即用即清
+                        notice = context.getString(R.string.saved_to_gallery)
+                    }
+                    ViewerOp.OpenWith -> {
+                        openLauncher.launch(openWithAppIntent(context, file, asset))
+                    }
+                    ViewerOp.Share -> {
+                        // MOB-06: ACTION_SEND 系统分享面板（微信/邮件/云盘…）
+                        openLauncher.launch(
+                            shareIntent(
+                                context, file, asset,
+                                context.getString(R.string.share_to),
+                            ),
+                        )
+                    }
                 }
             } catch (_: android.content.ActivityNotFoundException) {
                 notice = context.getString(R.string.no_app_for_file)
@@ -527,10 +545,21 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
                 stringResource(R.string.back), fontSize = 17.sp, color = PPColor.Paper,
                 modifier = Modifier.clickable(onClick = onClose).padding(10.dp),
             )
-            Text(
-                "${asset.width}×${asset.height}", fontSize = 14.sp,
-                color = PPColor.PaperDim, modifier = Modifier.padding(10.dp),
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    "${asset.width}×${asset.height}", fontSize = 14.sp,
+                    color = PPColor.PaperDim, modifier = Modifier.padding(10.dp),
+                )
+                // MOB-06: 右上角分享——ACTION_SEND 系统分享面板（微信/邮件/云盘…）。
+                Icon(
+                    painter = painterResource(R.drawable.ic_share),
+                    contentDescription = stringResource(R.string.share),
+                    tint = PPColor.Paper,
+                    modifier = Modifier
+                        .clickable(enabled = !busy, onClick = { runAssetAction(ViewerOp.Share) })
+                        .padding(10.dp),
+                )
+            }
         }
         Spacer(Modifier.height(8.dp))
         Box(Modifier.fillMaxSize().clip(RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
@@ -559,13 +588,13 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
             ViewerAction(
                 label = stringResource(R.string.save_to_gallery),
                 enabled = !busy,
-                onClick = { runAssetAction(save = true) },
+                onClick = { runAssetAction(ViewerOp.Save) },
                 modifier = Modifier.weight(1f),
             )
             ViewerAction(
                 label = stringResource(R.string.open_with_app),
                 enabled = !busy,
-                onClick = { runAssetAction(save = false) },
+                onClick = { runAssetAction(ViewerOp.OpenWith) },
                 modifier = Modifier.weight(1f),
             )
         }
