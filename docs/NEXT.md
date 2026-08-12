@@ -68,6 +68,18 @@ Read=account 级——CF 平台限制无法细化到单 script）+ `CLOUDFLARE_A
 三篇博文草稿在 site/site-02 分支待用户审稿（**维持 draft 不动**，
 审后去 draft 发布——用户 2026-08-12 指令）。
 
+## 〇、2026-08-12 桌面反馈轮（Salamira）：DESK-05 三项完成
+
+用户（xixi）桌面走查反馈三项全部落地（vite build 绿 176 modules）：
+
+| 反馈 | 修法 |
+|---|---|
+| ① 向导第一步为什么要先点「用默认位置」才填充 path？ | `libraryDir = configuredLibraryDir \|\| defaultDir` 默认填充；路径 ≠ 默认时旁挂「↺ 回到默认」按钮，= 默认时不显示（DESK-05 commit） |
+| ② 活动记录用真正的表格设计，内容超长 | 设备/事件/时间三列表格（auditLine 拆 auditWho/auditText）；`ingest.*` 逐文件全路径行过滤不展示（backup.finished 的 ingested= 汇总保留），数据层不动 |
+| ③ 备份了的内容，在照片库展示不出来 | 根因：`photosLoaded` 一次加载永不重置 → 墙 stale。`activity.appended`/`device.changed` 事件到达时重置 photos/photosLoaded/photosNext 强制重拉第一页 |
+
+**挂账（真机）**：向导第一步默认填充观感、活动表格布局、备份后照片墙自动刷新。
+
 ## 历史真机挂账汇总（跨多轮未闭环，照单核对）
 
 - **PRES-01**：真机锁屏 10 分钟活动流不刷屏 + 桌面「3 分钟前在线」观感。

@@ -10,7 +10,9 @@
   let step = $state(1);
   // T-042b: 若 config 已指向某库（oneshot 降级/中途退出回 wizard），预填它——
   // 用户直接"下一步"不会把库改到新空目录（孤儿库风险）。
-  let libraryDir = $state(configuredLibraryDir ?? "");
+  // DESK-05: 新装时默认填充 defaultDir——不再要求先点「用默认位置」才能
+  // 继续；选了别的文件夹后路径旁出现「回到默认」按钮。
+  let libraryDir = $state(configuredLibraryDir || defaultDir);
   let power = $state(null); // {kind, minutes}
   let qrDataUrl = $state("");
   let qrText = $state("");
@@ -173,16 +175,17 @@
   {#if step === 1}
     <h2>照片存在哪里？</h2>
     <p class="hint">家人手机里的照片和视频会以普通文件保存在这个文件夹里——用电脑自带的文件管理器也能直接看到，随时可以整个拷走。</p>
-    {#if libraryDir}
-      <p class="chosen">已选择：<code>{libraryDir}</code></p>
-    {/if}
+    <!-- DESK-05: 路径始终有值（默认填充 defaultDir / 预填已配置库）——
+         不再要求先点按钮才能继续。路径 ≠ 默认时旁挂「回到默认」按钮，
+         路径 = 默认时不显示（没有可回退的目标）。 -->
+    <p class="chosen">已选择：<code>{libraryDir}</code>
+      {#if libraryDir !== defaultDir}
+        <button class="reset-default" onclick={useDefault} title="回到默认位置">↺ 回到默认</button>
+      {/if}
+    </p>
     <div class="row">
       <button class="primary" onclick={chooseFolder}>选一个文件夹…</button>
-      <button onclick={useDefault}>用默认位置</button>
     </div>
-    {#if !libraryDir}
-      <p class="hint">默认位置：<code>{defaultDir}</code></p>
-    {/if}
     <div class="nav">
       <button class="primary" disabled={!libraryDir || busy} onclick={toStep2}>下一步</button>
     </div>
@@ -281,6 +284,16 @@
   }
   .chosen {
     font-size: 15px;
+  }
+  /* DESK-05: 路径旁「回到默认」小按钮——文本行内，不占独立行。 */
+  .chosen .reset-default {
+    margin-left: 8px;
+    min-height: 0;
+    padding: 2px 10px;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: var(--pp-radius-control-sm, 6px);
+    vertical-align: middle;
   }
   .row {
     display: flex;
