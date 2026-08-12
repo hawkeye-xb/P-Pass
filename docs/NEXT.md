@@ -112,6 +112,19 @@ Read=account 级——CF 平台限制无法细化到单 script）+ `CLOUDFLARE_A
 
 **挂账（真机）**：向导第一步默认填充观感、活动表格布局、备份后照片墙自动刷新。
 
+## 〇、2026-08-12 出包轮（Salamira）：v0.3.3-test.2/test.3 + 两个 pipeline 修复
+
+用户要包含 DESK-05 的最新包 → dispatch 单平台出 macos，实测暴露两个 CI-01 遗留 bug：
+
+| commit | bug | 修法 |
+|---|---|---|
+| `2a762e0` | release 汇总 job 无 if 门控——dispatch 单平台时其余构建 job skipped → 汇总 job 连带 skipped，**草稿永远建不出**（GitHub 默认：needs 任一非 success 且无 always() → 下游跳过） | release job 加 `if: !cancelled() && (任一平台 success)`；H-10c sha256/manifest 组装/签名/资产上传全步骤单平台 `[ -f ]` 容错；`[[ -e ]]` 根治 SC2086 |
+| `3b05791` | R2 镜像步骤 403/10000——wrangler 无 account_id 先探测 /memberships（窄权限 token 无读权限 → 10000），补 account_id 后又遇 403（token 的 R2 写权限实际未生效？） | 已补 `CLOUDFLARE_ACCOUNT_ID` env（10000 解决）；**403 未解决，R2 镜像仍失败——挂账** |
+
+**✅ 包已交付**：`v0.3.3-test.3`（draft=false, prerelease=true，含 DESK-05）——P-Pass-macos-arm64.dmg（22M）+ ppass-macos-arm64.zip + SHA256SUMS；本地下载对照 notes 声明的 H-10c sha256 **逐字节一致**。test.2 同批产物（R2 失败不影响 GitHub 直链）。
+
+**🔴 挂账（新）**：R2 发布镜像 403 Forbidden（`/accounts/.../r2/buckets/ppf-dl/objects/...`）——token `ci-ppass-r2-mirror-worker-deploy-2026-08-12` 声称 R2 bucket 写=精确到 ppf-dl，但 wrangler@3 `r2 object put` 实测 403。排查方向：①token 权限配置页核对 R2 权限作用域是否真的含「Workers R2 Storage → Edit」且绑定 bucket 正确；②cfk_ Global Key（CF_API_KEY+CF_EMAIL）替代测试。不影响下载（GitHub 直链可用），国内镜像暂缺。
+
 ## 历史真机挂账汇总（跨多轮未闭环，照单核对）
 
 - **PRES-01**：真机锁屏 10 分钟活动流不刷屏 + 桌面「3 分钟前在线」观感。
