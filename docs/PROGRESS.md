@@ -467,3 +467,23 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   （daemon 无参数解析）；已恢复。逼出三个产品缺口待立卡：①daemon
   --help/--version 参数解析 ②纯新启动不装 autostart ③异身份实例端口
   冲突报错不是人话。
+
+## 2026-08-12 — metadata 新鲜度同步：裁决落库 + SYNC-02 daemon 侧节流
+
+- 狗粮周暴露手机端删除不可见/QUIC 平面零推送等问题，讨论收敛为
+  `docs/product/2026-08-12-metadata-sync-decisions.md`（8 条裁决）+
+  SYNC-02..05 四张任务卡。
+- **SYNC-02 完成**：`events.rs` 新增 `timeline.invalidated` + `Throttle`
+  （固定窗口节流+批次收尾强制 flush，明确不是防抖，见决策档案 §⑤）；
+  `backup.commit` 逐条 ingest 触发节流、收尾强制 flush；
+  `Reconcile::run_once` 完成后直发一次（单轮操作不经节流）。反证：
+  临时去掉节流逻辑，`window_merges_bursts_into_one_emit` 立刻变红，
+  证明判据非恒真式。`cargo test -p daemon -p core-index` 全绿 + 新增
+  集成测试 `commit_batch_emits_timeline_invalidated_exactly_once`
+  （5 文件一批 commit → 恰好 1 次 emit）+ `just arch-check` 绿。
+  **范围收窄**：`rebuild.rs` 的触发点未接——查证实际调用链后发现
+  `rebuild()` 当前在 daemon 运行期零调用点（只在测试里跑），接一个
+  没有真实消费者的空调用没有验证价值，留作后续若真正接入 rebuild
+  运行路径时再补。
+- 下一步：SYNC-03（QUIC 订阅入口+连接登记表）→ SYNC-04（Android 前台
+  订阅，真机验收挂用户，本地已备好三星设备）。SYNC-05 独立，暂缓。

@@ -23,6 +23,8 @@ use proto::{BackupItem, BackupManifest, BackupMissing};
 use storage::Db;
 use transport::Blobs;
 
+use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
+
 /// One device's announced-but-not-yet-committed manifest items.
 #[derive(Default)]
 struct Session {
@@ -40,6 +42,10 @@ pub struct BackupEngine {
     blobs: Arc<Blobs>,
     staging: PathBuf,
     sessions: Arc<Mutex<HashMap<transport::NodeId, Session>>>,
+    /// SYNC-02：ingest 逐条触发，经节流合并；`commit` 收尾强制 flush。
+    /// `None`（未接事件总线，如某些测试场景）时 `signal`/`flush_now`
+    /// 直接跳过，不影响 ingest 本身。
+    throttle: Option<Throttle>,
 }
 
 /// What a commit did (also serialized into the audit detail).
@@ -72,7 +78,15 @@ impl BackupEngine {
             blobs,
             staging: root.join(".ppf/staging"),
             sessions: Arc::default(),
+            throttle: None,
         }
+    }
+
+    /// SYNC-02：接上事件总线——之后每条新 ingest 经节流合并推
+    /// `timeline.invalidated`，`commit` 收尾强制 flush 一次挂起信号。
+    pub fn with_events(mut self, events: EventBus) -> Self {
+        self.throttle = Some(Throttle::new(events, DEFAULT_THROTTLE_WINDOW));
+        self
     }
 
     /// `backup.begin`: reset the device's session. Idempotent.
@@ -188,7 +202,12 @@ impl BackupEngine {
                 src_device: peer.0.to_vec(),
             };
             match self.ingestor.ingest(&incoming).await {
-                Ok(core_index::IngestOutcome::New(_)) => outcome.ingested += 1,
+                Ok(core_index::IngestOutcome::New(_)) => {
+                    outcome.ingested += 1;
+                    if let Some(throttle) = &self.throttle {
+                        throttle.signal();
+                    }
+                }
                 Ok(core_index::IngestOutcome::Duplicate) => {
                     outcome.duplicates += 1;
                     let _ = std::fs::remove_file(&staged);
@@ -209,6 +228,11 @@ impl BackupEngine {
                 .await?;
         }
         self.sessions.lock().expect("sessions lock").remove(&peer);
+        // §⑤ 批次收尾：这批里若还有挂起的节流信号，立即发，不等窗口到点
+        // ——避免最后一批结果多等一个窗口才在时间线上出现。
+        if let Some(throttle) = &self.throttle {
+            throttle.flush_now();
+        }
         Ok(outcome)
     }
 }

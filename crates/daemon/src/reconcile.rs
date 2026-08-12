@@ -31,6 +31,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use storage::{AuditEntry, Db};
 
+use crate::events::{self, EventBus};
+
 /// 一轮对账的统计（供调用方记录/测试断言）。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ReconcileReport {
@@ -45,6 +47,7 @@ pub struct Reconcile {
     library_root: PathBuf,
     /// 累计移除计数（诊断用；Arc 使 clone 实例共享同一统计）。
     total_removed: std::sync::Arc<AtomicUsize>,
+    events: Option<EventBus>,
 }
 
 impl Reconcile {
@@ -53,7 +56,16 @@ impl Reconcile {
             db,
             library_root: library_root.into(),
             total_removed: std::sync::Arc::new(AtomicUsize::new(0)),
+            events: None,
         }
+    }
+
+    /// SYNC-02：接上事件总线后，每跑完一轮就直发一次
+    /// `timeline.invalidated`——单轮整轮操作，天然只触发一次，不经
+    /// [`crate::events::Throttle`]（那个只用于 ingest 的高频逐文件调用）。
+    pub fn with_events(mut self, events: EventBus) -> Self {
+        self.events = Some(events);
+        self
     }
 
     /// 已累计移除的条目数（运行期任务可查）。
@@ -77,6 +89,9 @@ impl Reconcile {
                 report.removed += 1;
                 self.total_removed.fetch_add(1, Ordering::Relaxed);
             }
+        }
+        if let Some(bus) = &self.events {
+            events::emit(bus, events::TIMELINE_INVALIDATED, serde_json::json!({}));
         }
         report
     }
@@ -111,4 +126,36 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn run_once_emits_timeline_invalidated_exactly_once() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let (bus, mut rx) = events::bus();
+        let reconcile = Reconcile::new(db, dir.path()).with_events(bus);
+
+        let report = reconcile.run_once().await;
+        assert_eq!(report.removed, 0, "空索引，磁盘侧自然也没有需要清理的");
+
+        let msg = rx.try_recv().expect("跑完一轮该发一次");
+        assert_eq!(msg["event"], events::TIMELINE_INVALIDATED);
+        assert!(
+            rx.try_recv().is_err(),
+            "单轮 reconcile 只应触发一次，不是零次也不是多次"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_once_without_events_bus_does_not_panic() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let reconcile = Reconcile::new(db, dir.path()); // 没接 with_events
+
+        reconcile.run_once().await;
+    }
 }

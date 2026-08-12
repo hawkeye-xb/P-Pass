@@ -263,7 +263,8 @@ async fn main() -> anyhow::Result<()> {
         transport::Blobs::open(&transport, &data_dir.join(".ppf/blobs")).await?,
     );
     blobs.attach_to_listener();
-    let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir);
+    let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
+        .with_events(event_bus.clone());
     let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir);
     // DESK-03: 本地 IPC 也注入查询平面——桌面壳照片墙走同一 QueryEngine
     // （与手机同一数据源），timeline/thumb/asset.* 双平面可答。
@@ -277,7 +278,7 @@ async fn main() -> anyhow::Result<()> {
     // asset.removed_external（actor=NULL）。启动即跑一轮（重启即收敛），
     // 之后每小时 re-diff——低频轮询而非目录监听的理由见 reconcile.rs
     // 模块注释（收敛延迟最多 1 小时 vs FSEvents/inotify 双平台复杂度）。
-    let reconcile = daemon::Reconcile::new(db.clone(), &data_dir);
+    let reconcile = daemon::Reconcile::new(db.clone(), &data_dir).with_events(event_bus.clone());
     let startup = reconcile.run_once().await;
     tracing::info!(
         "SYNC-01: 启动对账完成（移除幽灵资产 {} 条）",

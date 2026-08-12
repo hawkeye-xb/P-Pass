@@ -235,6 +235,51 @@ async fn backup_500_mixed_files_dedups_and_commits() {
     assert_eq!(asset_count(&storage.db).await, unique);
 }
 
+/// SYNC-02：一次 commit 里 5 个文件逐条 ingest，节流合并 + 收尾强制
+/// flush 应该让订阅者恰好收到 1 次 `timeline.invalidated`（不是 5 次，
+/// 也不必等节流窗口——commit 收尾就该立即发出）。
+#[tokio::test(flavor = "multi_thread")]
+async fn commit_batch_emits_timeline_invalidated_exactly_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(&dir.path().join("index.sqlite")).await.unwrap();
+    let tp = endpoint().await;
+    let blobs = std::sync::Arc::new(
+        Blobs::open(&tp, &dir.path().join("daemon-blobs"))
+            .await
+            .unwrap(),
+    );
+    let (event_bus, mut rx) = daemon::events::bus();
+    let backup =
+        BackupEngine::new(db.clone(), blobs, dir.path().join("library")).with_events(event_bus);
+    let router = Router::new(db.clone(), "storage").with_backup(backup);
+    let tp2 = tp.clone();
+    let serve_task = tokio::spawn(async move { router.serve(&tp2).await });
+    let storage = StorageSide { tp, db, serve_task };
+
+    let client = Client::new(dir.path(), &storage).await;
+    storage
+        .db
+        .upsert_device(&member(&client.tp.node_id()))
+        .await
+        .unwrap();
+
+    let src_dir = dir.path().join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    let files = corpus(&src_dir, 5, 0); // 5 个各不相同的文件，一批提交
+    import_all(&client, &files, &src_dir).await;
+    let missing = client.run_backup(&files).await;
+    assert_eq!(missing, 5);
+
+    // commit 收尾会强制 flush 挂起信号——不必等节流窗口，commit 的
+    // RPC 响应回到这里时，emit 早已在 bus 上完成（同步调用，非异步排队）。
+    let msg = rx.try_recv().expect("commit 收尾必须立即 flush 挂起信号");
+    assert_eq!(msg["event"], daemon::events::TIMELINE_INVALIDATED);
+    assert!(
+        rx.try_recv().is_err(),
+        "5 个文件的一次 commit 应合并成 1 次 emit，不是 5 次"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn interrupted_commit_rerun_converges_and_survives_rebuild() {
     let dir = tempfile::tempdir().unwrap();
