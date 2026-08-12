@@ -195,28 +195,38 @@
   }
 
   // T5: 审计事件 → 人话行文案（未知 action 兜底显示原始类型，绝不吞）。
-  function auditLine(e) {
+  // DESK-05: 拆成 设备/事件 两列喂表格——设备列解析 actor 名称，事件列
+  // 只留动作文本（原「<设备名> 备份完成」式前缀并入设备列）。
+  function auditWho(e) {
     const d = e.detail ?? "";
     const who = devices.find((x) => x.node_id === e.actor)?.name ?? null;
+    if (who) return who;
+    // 配对类事件 detail 里是设备名（actor 为 null 时兜底）。
+    if (e.action.startsWith("pair.") && d) return d;
+    if (e.actor) return `${e.actor.slice(0, 8)}…`;
+    return "本机";
+  }
+  function auditText(e) {
+    const d = e.detail ?? "";
     switch (e.action) {
       case "pair.requested":
-        return `${(who ?? d) || "未知设备"} 请求加入`;
+        return "请求加入";
       case "pair.accepted":
-        return `${who ?? d} 已加入`;
+        return "已加入";
       case "pair.denied":
-        return `${who ?? d} 加入被拒绝`;
+        return "加入被拒绝";
       case "backup.started":
-        return `${who ?? "设备"} 开始备份`;
+        return "开始备份";
       case "backup.finished":
-        return `${who ?? "设备"} 备份完成（${d}）`;
+        return `备份完成（${d}）`;
       case "device.revoked":
-        return `已移除设备 ${(e.actor ?? "").slice(0, 8)}…`;
+        return "已移除设备";
       case "device.unpaired":
-        return `${who ?? "设备"} 主动断开连接`;
+        return "主动断开连接";
       case "device.connected":
         // PRES-01: hello 心跳进活动流——「小红 连接了」（10 分钟去重，
         // 防锁屏重连刷屏）。
-        return `${who ?? d} 连接了`;
+        return "连接了";
       case "backup.commit":
         return `备份提交（${d}）`;
       case "external.delete":
@@ -225,6 +235,11 @@
         return `${e.action} ${d}`.trim();
     }
   }
+  // DESK-05: 活动表格只展示设备级事件——ingest.* 逐文件行是全路径噪音
+  // （备份完成行的 ingested= 汇总已覆盖数量），不参与展示。数据层不动。
+  const visibleAudit = $derived(
+    auditEvents.filter((e) => !e.action.startsWith("ingest."))
+  );
 
   // PRES-01: sub 槽接 devices.list[].presence 三档（online 优先展示连接
   // 路径事实：已直连/经中继；心跳新鲜无活连接 → 「在线」；recent →
@@ -416,6 +431,14 @@
   function onDaemonEvent(ev) {
     const name = ev?.payload?.event;
     if (!name) return;
+    // DESK-05: 备份落地（activity.appended=审计/活动流新条目，
+    // device.changed=水位推进）→ 照片墙失效重拉——否则照片库一直停在
+    // 首次加载的快照，新备份的照片显示不出来（photosLoaded 永不重置）。
+    if (name === "activity.appended" || name === "device.changed") {
+      photosLoaded = false;
+      photos = [];
+      photosNext = null;
+    }
     // 事件帧 {event, data}——data 是占位/增量提示，具体状态一律全量拉。
     refresh();
   }
@@ -917,20 +940,32 @@
             <p class="sub">谁备份了什么，一目了然——不用去 Finder 里对账。</p>
           </div>
           <!-- T5: 活动记录页展示审计事件流——配对请求/允许/拒绝、备份会话
-               （开始/结束+数量）、设备吊销/断开，全部带时间倒序。 -->
+               （开始/结束+数量）、设备吊销/断开，全部带时间倒序。
+               DESK-05: 真表格（设备/事件/时间三列）；ingest.* 逐文件行
+               过滤不展示（全路径噪音），备份完成行保留 ingested 汇总。 -->
           <div class="card">
-            {#if auditEvents.length === 0}
+            {#if visibleAudit.length === 0}
               <p class="hint">这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。</p>
             {:else}
-              <ul class="log-rows">
-                {#each auditEvents as e (e.ts + ":" + e.action)}
-                  {@const at = humanTime(e.ts, nowMs)}
-                  <li>
-                    <span class="log-text">{auditLine(e)}</span>
-                    {#if at}<span class="log-time">{at}</span>{/if}
-                  </li>
-                {/each}
-              </ul>
+              <table class="log-table">
+                <thead>
+                  <tr>
+                    <th class="th-who">设备</th>
+                    <th class="th-what">事件</th>
+                    <th class="th-time">时间</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each visibleAudit as e (e.ts + ":" + e.action)}
+                    {@const at = humanTime(e.ts, nowMs)}
+                    <tr>
+                      <td class="td-who">{auditWho(e)}</td>
+                      <td class="td-what">{auditText(e)}</td>
+                      <td class="td-time">{#if at}{at}{/if}</td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
             {/if}
           </div>
           <p class="hint">记录来自本机照片库与审计日志，不上传。</p>
@@ -1411,31 +1446,45 @@
     color: var(--pp-ink-40);
     font-weight: 400;
   }
-  /* T-092: 活动记录批次行——设计稿结构：文本左、时间右（baseline 对齐） */
-  .log-rows {
-    list-style: none;
-    margin: 0;
-    padding: 0;
+  /* DESK-05: 活动记录真表格——设备/事件/时间三列，行分隔线同旧列表；
+     时间列右对齐 ink-40（延续旧 log-time 观感）。 */
+  .log-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 15px;
   }
-  .log-rows li {
-    display: flex;
-    align-items: baseline;
-    gap: 14px;
-    padding: 14px 0;
+  .log-table th {
+    text-align: left;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--pp-ink-40);
+    padding: 6px 12px 10px 0;
     border-bottom: 1px solid var(--pp-divider);
   }
-  .log-rows li:last-child {
+  .log-table th.th-time,
+  .log-table td.td-time {
+    text-align: right;
+  }
+  .log-table td {
+    padding: 14px 12px 14px 0;
+    border-bottom: 1px solid var(--pp-divider);
+    vertical-align: baseline;
+  }
+  .log-table tr:last-child td {
     border-bottom: none;
   }
-  .log-text {
-    font-size: 15px;
-    font-weight: 500;
+  .log-table .td-who {
+    font-weight: 600;
+    white-space: nowrap;
   }
-  .log-time {
-    margin-left: auto;
-    flex: none;
+  .log-table .td-what {
+    font-weight: 500;
+    color: var(--pp-ink);
+  }
+  .log-table .td-time {
     font-size: 13px;
     color: var(--pp-ink-40);
+    white-space: nowrap;
   }
   /* T-092: 设置页磁盘水位行 + 细进度条（设计稿：上分隔线、8px 圆角条，
      轨道 hairline、填充 ink——全部 token 色） */
