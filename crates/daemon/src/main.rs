@@ -82,6 +82,9 @@ async fn main() -> anyhow::Result<()> {
     // IPC-02: 事件总线在此创建——配对落定/备份落地/设备变化沿订阅通道
     // 即时通知桌面壳。
     let (event_bus, _event_probe) = daemon::events::bus();
+    // SYNC-03: 一份订阅登记表，Router（QUIC 订阅入口）和 IpcServer
+    // （device.revoke 在此发起主动断连）共用同一个实例。
+    let subscriptions = daemon::subscriptions::SubscriptionRegistry::new();
     let (pairing, pending_rx) =
         daemon::Pairing::new(db.clone(), node_id, addr_provider, relay_provider);
     let pairing = pairing.with_events(event_bus.clone());
@@ -108,6 +111,7 @@ async fn main() -> anyhow::Result<()> {
             t.connection_status(transport::NodeId(bytes))
         });
     }
+    ipc.set_subscriptions(subscriptions.clone());
     let ipc = std::sync::Arc::new(ipc);
     // DAE-01 单实例纪律：先试连接、版本握手（newest wins）——旧逻辑
     // unlink-before-bind 会让后来者盲杀前任（用户机实锤：launchd 至今
@@ -299,6 +303,7 @@ async fn main() -> anyhow::Result<()> {
 
     let router = Router::new(db, "P-Pass 存储端")
         .with_events(event_bus.clone())
+        .with_subscriptions(subscriptions)
         .with_pairing(pairing)
         .with_backup(backup)
         .with_query(query)

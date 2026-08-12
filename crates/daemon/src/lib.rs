@@ -14,6 +14,7 @@ pub mod presence;
 pub mod query;
 pub mod reconcile;
 pub mod router;
+pub mod subscriptions;
 pub mod telemetry;
 pub mod update;
 pub mod upload;

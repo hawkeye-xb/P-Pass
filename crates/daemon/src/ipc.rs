@@ -29,6 +29,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use crate::diag_agg::DiagAgg;
 use crate::events::{self, EventBus};
 use crate::pairing::{PairDecision, Pairing, PendingPair};
+use crate::subscriptions::SubscriptionRegistry;
 
 /// One IPC server per daemon. Owns the pending-pair queue the UI drains.
 pub struct IpcServer {
@@ -55,6 +56,10 @@ pub struct IpcServer {
     /// 已绑定 transport），而 IpcServer 早已 Arc 化——用 set_query(&self)
     /// 后注入，dispatch 端 get() 零锁零等待。未注入时答 err.unsupported。
     query: std::sync::OnceLock<crate::query::QueryEngine>,
+    /// SYNC-03: 与 Router 共用同一份登记表——`device.revoke` 命中一个
+    /// 挂着 `timeline.subscribe` 长连接的设备时主动断连。main 未注入时
+    /// 是一份空表（`close` 天然 no-op），不影响任何现有测试。
+    subscriptions: SubscriptionRegistry,
 }
 
 /// See [`IpcServer::set_conn_status_provider`].
@@ -249,7 +254,15 @@ impl IpcServer {
             step_down_exit: Arc::new(|| std::process::exit(0)),
             conn_status: Arc::new(|_| transport::ConnectionStatus::Unknown),
             query: std::sync::OnceLock::new(),
+            subscriptions: SubscriptionRegistry::new(),
         }
+    }
+
+    /// SYNC-03: 与 Router 共用同一份订阅登记表——不注入时是一份独立空表
+    /// （`close` no-op，现有测试不受影响）。main 在 transport bind 前
+    /// 就能调（不依赖 transport，跟 Router 的 `with_events` 时机一致）。
+    pub fn set_subscriptions(&mut self, subscriptions: SubscriptionRegistry) {
+        self.subscriptions = subscriptions;
     }
 
     /// DESK-03: 注入查询平面（main 在 transport bind 后调用，把 Router
@@ -729,6 +742,11 @@ impl IpcServer {
                                 events::ACTIVITY_APPENDED,
                                 serde_json::json!({ "action": "device.revoked" }),
                             );
+                            // SYNC-03 §⑦：命中一个还挂着 timeline.subscribe
+                            // 长连接的设备就主动关掉，不等它自然掉线。
+                            if let Ok(bytes) = <[u8; 32]>::try_from(node_id.as_slice()) {
+                                self.subscriptions.close(transport::NodeId(bytes));
+                            }
                         }
                         Resp::ok(id, serde_json::json!({ "revoked": revoked }))
                     }

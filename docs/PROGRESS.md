@@ -485,5 +485,16 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   `rebuild()` 当前在 daemon 运行期零调用点（只在测试里跑），接一个
   没有真实消费者的空调用没有验证价值，留作后续若真正接入 rebuild
   运行路径时再补。
-- 下一步：SYNC-03（QUIC 订阅入口+连接登记表）→ SYNC-04（Android 前台
-  订阅，真机验收挂用户，本地已备好三星设备）。SYNC-05 独立，暂缓。
+- **SYNC-03 完成**：`proto::methods::TIMELINE_SUBSCRIBE` + `authz.rs`
+  放行（viewer 级）；新文件 `subscriptions.rs`（`SubscriptionRegistry`，
+  用 `tokio_util::sync::CancellationToken` 而不是手搓 channel）；
+  `router.rs` 的 `serve_stream` 拦截订阅方法转入推送态（ack+§③初始
+  当前态推送+`timeline.invalidated` 转发）；`ipc.rs` 的 `device.revoke`
+  和 `router.rs` 的自我 `unpair` 都接上主动断连。新集成测试
+  `subscribe_flow.rs` 两条（真实 broadcast 转发；revoke 后连接必须在
+  3 秒内关闭），反证：临时去掉 close 调用，后一条测试变红。
+  `cargo test -p daemon -p proto -p core-index` 全绿 + `arch-check` 绿。
+  **本地验证完，未推 GitHub**——按用户要求先在本地把 daemon+Android
+  真机联调一起做完再决定推不推。
+- 下一步：SYNC-04（Android 前台订阅，真机验收挂用户，本地已备好三星
+  设备）。SYNC-05 独立，暂缓。

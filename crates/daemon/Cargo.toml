@@ -24,6 +24,10 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 futures-core = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
+# SYNC-03: per-NodeId cancellation handle for the QUIC subscribe registry —
+# same primitive tokio itself ships for "cancel this task from outside",
+# not a hand-rolled channel.
+tokio-util = "0.7"
 # OS randomness for one-time pairing tokens (T-031). Already in the tree
 # via iroh; declared directly because tokens are a security surface.
 getrandom = "0.3"

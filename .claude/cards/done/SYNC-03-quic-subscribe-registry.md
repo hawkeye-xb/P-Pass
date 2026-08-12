@@ -76,3 +76,35 @@
 
 `cargo test`（daemon + proto）全绿 + `just arch-check` 绿 + PROGRESS.md
 一行 + 本卡移入 `done/`。
+
+---
+
+### 执行记录（2026-08-12）
+
+- `proto::msgs::methods::TIMELINE_SUBSCRIBE`（`"timeline.subscribe"`）
+  新增；`authz.rs` 加进 `viewer_ok`（任何已配对角色可订阅，跟
+  `timeline.page` 同级），未配对/已吊销一律拒绝（补了对应单测）。
+- `crates/daemon/src/subscriptions.rs`（新文件）：`SubscriptionRegistry`
+  用 `tokio_util::sync::CancellationToken`（库原语，不是手搓 channel）
+  + `Arc` 内部共享，`Clone` 廉价；`generation` 计数器防止旧订阅流收尾
+  的 `unregister` 误删同设备刚建立的新登记。单测 3 条。
+- `router.rs`：`serve_stream` 在 authz 通过后拦截
+  `TIMELINE_SUBSCRIBE`，转入 `serve_subscription`——发 ack、立即推一次
+  当前态（§③，不广播给其他订阅者)，然后 `tokio::select!` 三路（吊销
+  token/客户端读取/事件总线），只转发 `timeline.invalidated`。
+  `handle_unpair` 收尾顺手 `subscriptions.close(peer)`（自我退出）。
+- `ipc.rs` 的 `device.revoke`：`revoked` 分支里补
+  `self.subscriptions.close(...)`，与 Router 共用同一份登记表（main.rs
+  建一份 `SubscriptionRegistry`，`with_subscriptions`/`set_subscriptions`
+  各喂一份 clone）。
+- 新集成测试 `daemon/tests/subscribe_flow.rs`：
+  `subscribe_relays_a_real_broadcast_event`（订阅→ack→初始推送→真实
+  broadcast 事件也能收到）+
+  `revoke_actively_closes_an_open_subscription`（revoke 后连接在
+  3 秒超时内必须结束）。反证：临时注释掉测试里的 `subscriptions.close`
+  调用 → 后一条测试从绿变红（超时 panic），证明断言测的是真机制不是
+  恒真式；改回后重新全绿。
+- 证据：`cargo test -p daemon -p proto -p core-index` 全绿（新增 3+2
+  个单测 + 2 个集成测试）；`just arch-check` 绿；`cargo fmt --check`
+  干净。**未推 GitHub**——按用户要求先在本地把 daemon 侧和后续
+  Android 真机联调一起验证完再决定是否推送。

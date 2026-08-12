@@ -36,6 +36,7 @@ fn role_allows(role: Role, method: &str) -> bool {
             | methods::ASSET_BLOB_TICKET
             | methods::ASSET_DOWNLOAD
             | methods::DIAG_STATUS
+            | methods::TIMELINE_SUBSCRIBE
     );
     // UX-06: 任一端可单方停止——任何已配对角色都可以撤销自己
     // （device.unpair 只作用于调用者自身，无需 owner 在场）。
@@ -118,6 +119,7 @@ mod tests {
             methods::THUMB_GET,
             methods::BACKUP_BEGIN,
             methods::DIAG_STATUS,
+            methods::TIMELINE_SUBSCRIBE,
         ] {
             assert_eq!(
                 check(None, m),
@@ -136,6 +138,7 @@ mod tests {
             methods::HELLO,
             methods::TIMELINE_PAGE,
             methods::BACKUP_BEGIN,
+            methods::TIMELINE_SUBSCRIBE,
         ] {
             assert_eq!(
                 check(Some(&d), m),
@@ -157,6 +160,7 @@ mod tests {
             methods::THUMB_GET,
             methods::ASSET_BLOB_TICKET,
             methods::DIAG_STATUS,
+            methods::TIMELINE_SUBSCRIBE,
         ] {
             assert!(allowed(Some(&d), m), "viewer must reach {m}");
         }
