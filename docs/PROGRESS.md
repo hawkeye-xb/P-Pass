@@ -508,3 +508,14 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   约束下飞行模式的"延迟传输"是既有设计；桌面壳某处"连接中"文案在源码
   里查无实据，等用户截图确认。
 - 下一步：等真机验收 5 条剧本走完；SYNC-05 独立，暂缓。
+- **WATCH-01 完成（本地目录监听，本 session）**：`LibraryWatcher`
+  （watcher.rs）——notify 监听 `originals/` + 防抖（500ms 静默窗口）+
+  父路径合并 + 增量扫描：新文件经 `Ingestor` 入库（src_device=本机
+  node_id，审计记本地导入，hash dedup 幂等），删除走局部对账
+  （`list_asset_paths_under` + `Reconcile::remove_asset`），变化经
+  `Throttle` 合并 emit `timeline.invalidated`。每小时 reconcile 保留兜底。
+  macOS 符号链接坑：FSEvents 返回 /private/var 真实路径，监听根必须
+  canonicalize（否则 strip_prefix 全失败）；FSEvents 同批次 Create+Remove
+  合并成无事件（测试时序显式等批次 flush）。watcher 6 单测 + watch_flow
+  4 集成测试（真实 notify）全绿；daemon/proto/core-index 全量 25 组绿 +
+  arch-check 绿 + clippy 零警告。

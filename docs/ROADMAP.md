@@ -469,6 +469,24 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## SYNC 批次（2026-08-11 三星真机反馈驱动：Finder 删文件 ≠ 手机时间线消失）
 
+- [x] **WATCH-01 本地目录监听 + 增量同步 — merged 2026-08-12（本 commit）**:
+      metadata 秒级更新的第一跳（此前本地新增只有 backup 协议入口、
+      删除靠每小时 reconcile——用户实测 metadata 不及时踩坑）。notify
+      监听 `originals/` 树 + 500ms 防抖（静默窗口 Reset）+ 父路径合并
+      （旧版 filterParentPaths 平移）+ 增量扫描：新文件 ingest
+      （src_device=本机 node_id，审计记本地导入；hash dedup 幂等——
+      ingest 自产事件二次扫描 = Duplicate 跳过）；删除走局部对账
+      （`list_asset_paths_under` SQL prefix + `Reconcile::remove_asset`
+      复用，thumb/审计口径只此一份）；变化经 `Throttle` 合并 emit
+      `timeline.invalidated`（SYNC-02/03/04 链路全通）。每小时全量
+      reconcile 保留兜底。事件风暴策略：防抖吸收批量、.ppf 在监听树外
+      天然排除、ingest 并发 Semaphore(4)、单文件失败不中断整批、
+      watcher 启动失败降级对账。macOS 坑两则：FSEvents 返回真实路径
+      （/var→/private/var），监听根必须 canonicalize；同批次 Create+
+      Remove 合并成无事件（测试显式等批次 flush）。watcher 6 单测 +
+      watch_flow 4 集成测试（真实 notify）全绿，daemon/proto/core-index
+      全量绿 + arch-check 绿 + clippy 零警告。挂账（真机）：Finder 放
+      照片→手机时间线秒级出现；Finder 删照片→手机时间线秒级消失。
 - [x] SYNC-01 外部删除对账 — **merged 2026-08-11（本 commit）**:
       幽灵照片根治。daemon 启动 + 每小时 re-diff 磁盘 originals ↔ asset
       索引：磁盘上没了的条目清 asset 行 + thumb 文件 + 审计

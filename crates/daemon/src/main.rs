@@ -301,6 +301,15 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // ── WATCH-01 本地目录监听（秒级增量同步）────────────────────
+    // 库目录变化 → 增量 ingest/清理 → timeline.invalidated（SYNC-02 节流
+    // 合并 → SYNC-03 订阅 → 手机刷新）。启动失败降级为每小时对账兜底，
+    // 不阻塞 daemon（策略与理由见 watcher.rs 模块注释 + WATCH-01 卡）。
+    let watcher = daemon::LibraryWatcher::new(db.clone(), &data_dir, node_id.0, event_bus.clone());
+    if let Err(e) = watcher.spawn() {
+        tracing::warn!("WATCH-01: 目录监听启动失败，降级为每小时对账兜底: {e}");
+    }
+
     let router = Router::new(db, "P-Pass 存储端")
         .with_events(event_bus.clone())
         .with_subscriptions(subscriptions)

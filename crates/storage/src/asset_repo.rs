@@ -94,6 +94,22 @@ impl Db {
             .collect())
     }
 
+    /// (hash, rel_path) pairs whose rel_path lives under `prefix` —
+    /// WATCH-01 局部对账（变化目录）数据源：只枚举受影响子树，不用
+    /// 全量拉。`prefix` 按目录边界匹配（`originals/ab` 不误中
+    /// `originals/abc`）。
+    pub async fn list_asset_paths_under(&self, prefix: &str) -> Result<Vec<(Vec<u8>, String)>> {
+        let like = format!("{prefix}/%");
+        let rows = sqlx::query("SELECT hash, rel_path FROM asset WHERE rel_path LIKE ?")
+            .bind(like)
+            .fetch_all(self.pool())
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|r| (r.get("hash"), r.get("rel_path")))
+            .collect())
+    }
+
     /// Remove one asset row — SYNC-01 外部删除对账（索引是派生数据，
     /// 磁盘文件没了，行就没有存在意义）。
     pub async fn delete_asset(&self, hash: &[u8]) -> Result<u64> {
