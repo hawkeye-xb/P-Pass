@@ -64,12 +64,10 @@ where
     panic!("timeout waiting for {what}");
 }
 
-fn count_eq<'a>(f: &'a Fixture, n: i64) -> impl futures_core::Future<Output = bool> + 'a {
-    async move {
-        match f.db.count_assets().await {
-            Ok(c) => c == n,
-            Err(_) => false,
-        }
+async fn count_eq(f: &Fixture, n: i64) -> bool {
+    match f.db.count_assets().await {
+        Ok(c) => c == n,
+        Err(_) => false,
     }
 }
 
