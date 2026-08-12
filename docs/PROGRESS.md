@@ -514,8 +514,12 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   node_id，审计记本地导入，hash dedup 幂等），删除走局部对账
   （`list_asset_paths_under` + `Reconcile::remove_asset`），变化经
   `Throttle` 合并 emit `timeline.invalidated`。每小时 reconcile 保留兜底。
-  macOS 符号链接坑：FSEvents 返回 /private/var 真实路径，监听根必须
-  canonicalize（否则 strip_prefix 全失败）；FSEvents 同批次 Create+Remove
-  合并成无事件（测试时序显式等批次 flush）。watcher 6 单测 + watch_flow
-  4 集成测试（真实 notify）全绿；daemon/proto/core-index 全量 25 组绿 +
-  arch-check 绿 + clippy 零警告。
+  macOS 坑两则：FSEvents 返回 /private/var 真实路径，监听根必须
+  canonicalize（否则 strip_prefix 全失败）；同批次 Create+Remove 合并成
+  无事件（测试显式等批次 flush）。Linux inotify 坑：默认监听 Access
+  （读访问）事件，扫描/ingest 自读触发 Access → 触发扫描 → 无限事件
+  循环淹没 Remove（CI 取证桩复现，删除永不被发现）——回调过滤
+  EventKind::Access 根治。deny.toml 补 notify CC0-1.0 license +
+  RUSTSEC-2024-0384 ignore（instant unmaintained informational）。
+  watcher 6 单测 + watch_flow 4 集成测试（真实 notify）全绿；
+  daemon/proto/core-index 全量绿 + arch-check 绿 + clippy 零警告 + deny 本地绿。
