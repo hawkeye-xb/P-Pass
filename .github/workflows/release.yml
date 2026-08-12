@@ -452,6 +452,11 @@ jobs:
   release:
     name: "Release 草稿"
     needs: [macos-arm64, windows-x64, android]
+    # DESK-05 实测修复：dispatch 单平台时其余构建 job skipped → 无 if
+    # 门控则本 job 连带 skipped（GitHub 默认：needs 中任一 skipped 且无
+    # always() → 下游跳过），草稿永远建不出。任一平台成功即出草稿，
+    # 缺失平台由下方各步骤 [ -f ] 容错。
+    if: ${{ !cancelled() && (needs.macos-arm64.result == 'success' || needs.windows-x64.result == 'success' || needs.android.result == 'success') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -507,15 +512,21 @@ jobs:
 
       # H-10c: dmg/apk 的 sha256（不进平台 SUMS——保持 zip 内 SUMS 与 release
       # 资产逐字节一致，T-071 三重核对①；人类资产哈希单独列在 notes）
+      # DESK-05: 单平台 dispatch 容错——缺平台的文件不存在就不写。
       - name: H-10c assets sha256 → notes
         run: |
           set -euo pipefail
-          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
           {
             echo ""
             echo "### H-10c 资产 SHA-256"
-            sha256sum artifacts/macos-arm64/P-Pass-macos-arm64.dmg \
-              "artifacts/android/$APK"
+            if [ -f artifacts/macos-arm64/P-Pass-macos-arm64.dmg ]; then
+              sha256sum artifacts/macos-arm64/P-Pass-macos-arm64.dmg
+            fi
+            if [ -f artifacts/android/app-release.apk ]; then
+              sha256sum artifacts/android/app-release.apk
+            elif [ -f artifacts/android/app-release-unsigned.apk ]; then
+              sha256sum artifacts/android/app-release-unsigned.apk
+            fi
           } >> NOTES.md
 
       - name: VirusTotal 提交（gated，卡面 VT 步——支持 blocked-by-av 信誉建设）
@@ -543,23 +554,37 @@ jobs:
       - name: Compose update manifest (UPD-01)
         run: |
           set -euo pipefail
-          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
-          ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
-          if [ "${{ env.HAS_CF_TOKEN }}" = "true" ]; then
-            ASSET_BASE="https://dl.p-pass.hawkeye-xb.com/releases/${TAG}"
+          # DESK-05: 单平台 dispatch 容错——缺平台就没对应 asset，
+          # 全缺（纯 macos 无 android）时跳过 manifest 组装。
+          APK_ARGS=()
+          if [ -f artifacts/android/app-release.apk ]; then
+            APK_ARGS=(--asset android-arm64=artifacts/android/app-release.apk)
+          elif [ -f artifacts/android/app-release-unsigned.apk ]; then
+            APK_ARGS=(--asset android-arm64=artifacts/android/app-release-unsigned.apk)
           fi
-          node tools/make-update-manifest.mjs \
-            --tag "$TAG" --notes NOTES.md \
-            --asset-base "$ASSET_BASE" \
-            --asset android-arm64="artifacts/android/$APK"
-          mv manifest.json artifacts/manifest.json
+          if [ "${#APK_ARGS[@]}" -gt 0 ]; then
+            ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+            if [ "${{ env.HAS_CF_TOKEN }}" = "true" ]; then
+              ASSET_BASE="https://dl.p-pass.hawkeye-xb.com/releases/${TAG}"
+            fi
+            node tools/make-update-manifest.mjs \
+              --tag "$TAG" --notes NOTES.md \
+              --asset-base "$ASSET_BASE" \
+              "${APK_ARGS[@]}"
+            mv manifest.json artifacts/manifest.json
+          else
+            echo "无 android 资产（单平台 dispatch）——跳过 manifest 组装"
+          fi
 
       - name: Sign update manifest (UPD-01, gated)
-        if: env.HAS_UPDATE_KEY == 'true'
+        if: env.HAS_UPDATE_KEY == 'true' && hashFiles('artifacts/manifest.json') != ''
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
+          # DESK-05: 单平台 dispatch 容错——manifest 没组装（无 android）
+          # 就没得签，直接跳过（if 已用 hashFiles 门控）。
+          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
           # rsign 私钥（base64 文本，tauri signer 格式）还原成文件；CI
           # 非交互 → 空密码。签名走 tauri 官方 signer（minisign 格式，
           # 与 tauri-plugin-updater 验证端同源）。
@@ -568,7 +593,6 @@ jobs:
           #   逐字节还原（v0.2.1-test.1 实测踩坑）。
           printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
           chmod 600 /tmp/ppass-update.key
-          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
           # UPD-01 返工：pin 版本（与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4
           # 一致）——裸 npx @tauri-apps/cli 每次拉最新，signer 格式漂移会静默
           # 产出坏签名。
@@ -591,13 +615,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # shellcheck disable=SC2086 # ASSETS/glob 是刻意拆分
           cd artifacts
-          ASSETS="macos-arm64/ppass-macos-arm64.zip macos-arm64/SHA256SUMS-macos-arm64 \
+          # DESK-05: 单平台 dispatch 容错——只上传实际存在的资产，
+          # 缺平台的文件不存在就跳过（此前硬编码全平台清单，单平台
+          # dispatch 时 gh release upload 会因文件缺失失败）。
+          ASSETS=""
+          for f in \
+            macos-arm64/ppass-macos-arm64.zip macos-arm64/SHA256SUMS-macos-arm64 \
             macos-arm64/P-Pass-macos-arm64.dmg \
             windows-x64/daemon.exe windows-x64/testclient.exe \
             windows-x64/SHA256SUMS-windows-x64 windows-x64/BUILD_INFO-windows-x64 \
             windows-x64-installer/P-Pass_*-setup.exe \
-            manifest.json"
+            manifest.json; do
+            if [[ -e $f ]]; then ASSETS="$ASSETS $f"; fi
+          done
           # 无凭据路径只产出 unsigned；有凭据路径产出 signed（unsigned 无）。
           if [ -f android/app-release.apk ]; then
             ASSETS="$ASSETS android/app-release.apk"
