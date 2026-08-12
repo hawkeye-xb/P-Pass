@@ -385,6 +385,12 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [x] UX-09 备份/照片 tab 三处走查反馈 — **2026-08-12（用户真机反馈，待推 main）**:
+      「立即备份」点了没反应（statusLineOf 早算好的 Pending/AllSafe
+      裁决从未接上 UI）+ hero「选择相册」大按钮降权（设置卡已有等价
+      入口）+「备份」tab 改名「设置」+ 照片 tab 前台轻量轮询（停留期间
+      每 15s 补新照片，之前零刷新触发点）。android 全量单测绿。
+      挂账：真机四项验收（用户）。
 - [x] MOB-05 部分授权误判死循环修复 — **2026-08-12（用户真机报告，待推 main）**:
       MOB-02 的 `isPartialMediaAccess` 判定式写反——真机上
       `READ_MEDIA_VISUAL_USER_SELECTED` 授予后不随升级到完整授权被撤销，

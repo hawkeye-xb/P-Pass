@@ -170,5 +170,7 @@
 
     <!-- Tabs -->
     <string name="tab_photos">Photos</string>
-    <string name="tab_backup">Backup</string>
+    <!-- UX-09: renamed from tab_backup — tab holds switches/rules/version/
+         disconnect, not backup progress itself (real-device feedback). -->
+    <string name="tab_settings">Settings</string>
 </resources>

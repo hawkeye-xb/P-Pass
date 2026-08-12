@@ -164,5 +164,7 @@
     <string name="share_download_failed">原图没取到，请再试一次。</string>
 
     <string name="tab_photos">照片</string>
-    <string name="tab_backup">备份</string>
+    <!-- UX-09: 「备份」改名「设置」——tab 内容其实是开关/规则/版本/断开，
+         不是备份进度本身（真机反馈：名不副实）。 -->
+    <string name="tab_settings">设置</string>
 </resources>
