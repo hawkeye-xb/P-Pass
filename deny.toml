@@ -7,6 +7,11 @@ all-features = false
 [advisories]
 yanked = "deny"
 ignore = [
+  # `instant` is unmaintained (informational, no vulnerability). Pulled in
+  # via notify → notify-types (WATCH-01); no safe upgrade exists upstream
+  # (notify 7 is the current stable line; notify 8 reworks the dep tree).
+  # Re-check when bumping notify.
+  "RUSTSEC-2024-0384",
   # `paste` is unmaintained (informational, no vulnerability). Pulled in via
   # iroh → netwatch → netlink-packet-core (T-020); no safe upgrade exists
   # upstream. Re-check when bumping iroh.
