@@ -15,6 +15,7 @@ use transport::{BiStream, Incoming, Transport};
 
 use crate::authz::{self, Decision};
 use crate::events::{self, EventBus};
+use crate::subscriptions::SubscriptionRegistry;
 
 /// Capabilities this daemon ships. Grows with T-033 (thumbnail serving)
 /// and later cards; hello advertises it from day one (决策 D 项).
@@ -33,6 +34,10 @@ pub struct Router {
     /// IPC-02: 事件总线（可选——未注入时事件静默不发，测试/单组件
     /// 构造不受影响）。
     events: Option<EventBus>,
+    /// SYNC-03: 与 IpcServer 共用同一份订阅登记表——未注入（`Router::new`
+    /// 默认值）时是独立空表，`timeline.subscribe` 仍能跑但 revoke 摘不到
+    /// 它（测试/单组件构造场景，不影响现有行为）。
+    subscriptions: SubscriptionRegistry,
     /// Clock seam (T-070 时钟前跳剧本): production uses the wall clock;
     /// integration scenarios inject a controllable clock.
     now: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>,
@@ -49,6 +54,7 @@ impl Router {
             upload: None,
             download: None,
             events: None,
+            subscriptions: SubscriptionRegistry::new(),
             now: std::sync::Arc::new(unix_ms_now),
         }
     }
@@ -57,6 +63,14 @@ impl Router {
     /// 沿订阅通道即时通知桌面壳。
     pub fn with_events(mut self, events: EventBus) -> Self {
         self.events = Some(events);
+        self
+    }
+
+    /// SYNC-03: 与 IpcServer 共用同一份订阅登记表（同一个实例 clone
+    /// 两次），这样 `device.revoke`（IPC 侧）才能摘到 Router 侧注册的
+    /// QUIC 订阅连接。
+    pub fn with_subscriptions(mut self, subscriptions: SubscriptionRegistry) -> Self {
+        self.subscriptions = subscriptions;
         self
     }
 
@@ -217,11 +231,95 @@ impl Router {
                 false // 关流 (§2.3: deny closes the connection)
             }
             Decision::Allow => {
+                if req.method == methods::TIMELINE_SUBSCRIBE {
+                    return self.serve_subscription(peer, stream, &req).await;
+                }
                 let resp = self.dispatch(peer, &req).await;
                 let _ = self.send(stream, &resp).await;
                 true
             }
         }
+    }
+
+    /// `timeline.subscribe`（SYNC-03）：应答后连接不 `finish`，转入
+    /// 推送态——只推 `timeline.invalidated`（不带数据），直到吊销/客户端
+    /// 断开/daemon 退出。取数据永远走独立鉴权的普通请求（同一条 QUIC
+    /// 连接上的另一条 stream），这条流从头到尾不传照片内容。
+    async fn serve_subscription(
+        &self,
+        peer: transport::NodeId,
+        stream: &mut BiStream,
+        req: &Req,
+    ) -> bool {
+        let ack = Resp::ok(req.id.clone(), serde_json::json!({ "subscribed": true }));
+        if self.send_push(stream, &ack).await.is_err() {
+            return false;
+        }
+        // §③ 订阅即返回当前态：立即给这个新订阅者推一次，不广播给别人、
+        // 不等下一次真实变更。
+        if self
+            .send_push(
+                stream,
+                &serde_json::json!({ "event": events::TIMELINE_INVALIDATED, "data": {} }),
+            )
+            .await
+            .is_err()
+        {
+            return false;
+        }
+
+        let Some(bus) = &self.events else {
+            // 没接事件总线（单组件构造/测试）——退化为一次性 ack，
+            // 结束这条流，不假装能推送。
+            let _ = stream.finish();
+            return true;
+        };
+        let mut rx = bus.subscribe();
+        let (token, generation) = self.subscriptions.register(peer);
+
+        // 客户端预期只发一次订阅请求就半关闭发送方向（拿数据走别的
+        // stream）；`Ok(None)` 之后不再 select 这个分支，避免忙等。
+        let mut client_send_open = true;
+        loop {
+            tokio::select! {
+                _ = token.cancelled() => break,
+                frame = stream.recv_frame(), if client_send_open => {
+                    match frame {
+                        Ok(Some(_)) => continue, // 这条流上的多余数据——忽略
+                        Ok(None) => { client_send_open = false; continue; }
+                        Err(_) => break, // 连接异常
+                    }
+                }
+                ev = rx.recv() => {
+                    match ev {
+                        Ok(v) if v.get("event").and_then(|e| e.as_str())
+                            == Some(events::TIMELINE_INVALIDATED) =>
+                        {
+                            if self.send_push(stream, &v).await.is_err() {
+                                break; // 写失败 = 连接真的断了
+                            }
+                        }
+                        Ok(_) => continue, // 只推 timeline.invalidated，别的事件不转发
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+        self.subscriptions.unregister(peer, generation);
+        let _ = stream.finish();
+        true
+    }
+
+    /// 推送态下发一个 JSON 帧（ack 或事件），不 `finish` 发送方向。
+    async fn send_push(
+        &self,
+        stream: &mut BiStream,
+        value: &impl serde::Serialize,
+    ) -> transport::Result<()> {
+        let frame = proto::codec::encode(value)
+            .map_err(|e| transport::TransportError::Io(e.to_string()))?;
+        stream.send_frame(&frame).await
     }
 
     /// Method dispatch for authorized requests. T-030 ships `hello`,
@@ -523,6 +621,9 @@ impl Router {
                         serde_json::json!({ "action": "device.unpaired" }),
                     );
                 }
+                // SYNC-03 §⑦：自我退出——顺手把自己的订阅登记摘掉（如果
+                // 同一连接上还有一条 timeline.subscribe 挂着）。
+                self.subscriptions.close(peer);
                 Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": true }))
             }
             Err(_) => Resp::err(

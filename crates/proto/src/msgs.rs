@@ -386,6 +386,10 @@ pub mod methods {
     /// caller revoked; hello is then denied, and a fresh owner-issued
     /// token can rejoin (same rejoin door as owner revoke, T-041).
     pub const DEVICE_UNPAIR: &str = "device.unpair";
+    /// SYNC-03: QUIC 平面订阅入口——照抄本地 IPC 已跑通的
+    /// `events.subscribe`（IPC-02）。应答后连接不 finish，转入推送态，
+    /// 只推 `timeline.invalidated`（不带数据，取数据仍走独立鉴权请求）。
+    pub const TIMELINE_SUBSCRIBE: &str = "timeline.subscribe";
 }
 
 #[cfg(test)]
