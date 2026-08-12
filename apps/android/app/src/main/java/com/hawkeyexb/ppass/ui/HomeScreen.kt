@@ -100,9 +100,10 @@ fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .padding(20.dp, 14.dp, 20.dp, 8.dp),
     ) {
-        // ── 标题：设计稿 = 仅「备份」28px serif，无副标题（T-083 目标 1）──
+        // ── 标题：设计稿 = 仅「设置」28px serif，无副标题（T-083 目标 1；
+        // UX-09 改名，随 tab 同步）──
         Text(
-            stringResource(R.string.tab_backup),
+            stringResource(R.string.tab_settings),
             fontSize = 28.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
         )
         Spacer(Modifier.height(14.dp))
@@ -180,11 +181,14 @@ fun HomeScreen(
                 HorizontalDivider(color = PPColor.Safe.copy(alpha = 0.18f))
                 Spacer(Modifier.height(12.dp))
 
-                // ── 进度区（T-083 目标 2 + MOB-02 重构）：进行中 = 状态行 +
-                // 6dp 进度条 + 「暂停」；空闲态 = 弱文案「插电 + Wi-Fi 时
-                // 自动进行」（MOB-02 起 hero 主按钮=「选择相册」，见顶部
-                // 英雄卡；「立即备份」入口在设置页）。配对失效时按钮收起，
-                // 出路在红卡（重新扫码连接）。
+                // ── 进度区（T-083 目标 2 + MOB-02 重构 + UX-09）：进行中 =
+                // 状态行 + 6dp 进度条 + 「暂停」；空闲态 = 按裁决结果说话
+                // （statusText——Ready/Pending/AllSafe/NoAlbums 各有文案，
+                // 不再恒是「插电 + Wi-Fi 时自动进行」）。UX-09：「选择相册」
+                // 大按钮从 hero 移除——onboarding 已经选过一次，属低频操作，
+                // 入口留在下方设置卡「备份范围」行（已存在，未删功能）；
+                // 空出的位置让状态文案占满整行，「立即备份」点击后不再
+                // 「看起来毫无反应」。配对失效时按钮收起，出路在红卡。
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         if (busy) {
@@ -205,25 +209,17 @@ fun HomeScreen(
                             }
                         } else {
                             Text(
-                                // FIX-T6: 空集反馈——「没有可备份的相册」
-                                // 替代通用的「插电 + Wi-Fi 时自动进行」。
-                                stringResource(
-                                    if (state is BackupUiState.NoAlbums) R.string.state_no_albums
-                                    else R.string.idle_auto_hint
-                                ),
+                                idleStatusText(line),
                                 fontSize = 13.5.sp, color = PPColor.Ink60,
                             )
                         }
                     }
-                    if (!pairingLost) {
+                    if (busy && !pairingLost) {
                         Spacer(Modifier.width(12.dp))
-                        // MOB-02 §一: 空闲态按钮 = 「选择备份的相册」（首页
-                        // 主按钮删除，主操作 = 选相册 → 事件①触发）；进行中
-                        // 仍可暂停（UX-01 不动，砍的只是手动发起）。
+                        // UX-01 不动：进行中再点 = 暂停（幂等管线安全）。
                         HeroSecondaryButton(
-                            label = if (busy) stringResource(R.string.backup_pause)
-                            else stringResource(R.string.choose_albums),
-                            onClick = if (busy) onBackupNow else onOpenBucketPicker,
+                            label = stringResource(R.string.backup_pause),
+                            onClick = onBackupNow,
                         )
                     }
                 }
@@ -536,8 +532,7 @@ fun HomeScreen(
     }
 }
 
-/** 进行中裁决 → 字符串资源（T-083 目标 2：进度区只在 Working 出状态行，
- *  其余态一律走 idle_auto_hint；欠账/最近成功由 hero 第二行陈述）。 */
+/** 进行中裁决 → 字符串资源（T-083 目标 2：进度区只在 Working 出状态行）。 */
 @Composable
 private fun workingText(line: StatusLine.Working): String = when (val s = line.state) {
     is BackupUiState.Scanning -> stringResource(R.string.state_scanning, s.found)
@@ -546,8 +541,26 @@ private fun workingText(line: StatusLine.Working): String = when (val s = line.s
     else -> stringResource(R.string.idle_auto_hint) // unreachable
 }
 
+/**
+ * UX-09: 空闲态状态文案——statusLineOf 早就算出了 Pending/AllSafe/
+ * NoAlbums/Ready 四种裁决（BackupStatusTest 锁死了 Pending→state_pending、
+ * AllSafe→state_safe 的映射与真实中文文案），但这层映射从没接上过 UI：
+ * 空闲态永远只显示 idle_auto_hint，导致「立即备份」点完（尤其是已经被
+ * 后台自动任务提前传完、这次点击零新增）看起来毫无反应。按裁决结果
+ * 逐一出对应文案，才是「点了有交代」的最小闭环。
+ */
+@Composable
+private fun idleStatusText(line: StatusLine): String = when (line) {
+    is StatusLine.NoAlbums -> stringResource(R.string.state_no_albums)
+    is StatusLine.Pending -> stringResource(R.string.state_pending, line.k)
+    is StatusLine.AllSafe -> stringResource(R.string.state_safe)
+    is StatusLine.Ready -> stringResource(R.string.idle_auto_hint)
+    is StatusLine.Working, is StatusLine.Trouble -> stringResource(R.string.idle_auto_hint) // unreachable
+}
+
 /** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) +
- *  圆角 14 + 高 44——「暂停」与空闲态「选择相册」共用同一样式。 */
+ *  圆角 14 + 高 44——现仅「暂停」用（UX-09：空闲态「选择相册」已移除，
+ *  入口在下方设置卡「备份范围」行）。 */
 @Composable
 private fun HeroSecondaryButton(label: String, onClick: () -> Unit) {
     Row(

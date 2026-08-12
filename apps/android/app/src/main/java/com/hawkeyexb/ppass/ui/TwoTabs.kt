@@ -39,7 +39,7 @@ fun TwoTabs(
             HorizontalDivider(color = PPColor.Border)
             Row(Modifier.fillMaxWidth().height(64.dp).background(PPColor.Paper)) {
                 TabCell(stringResource(R.string.tab_photos), tab == 0, Modifier.weight(1f)) { onTab(0) }
-                TabCell(stringResource(R.string.tab_backup), tab == 1, Modifier.weight(1f)) { onTab(1) }
+                TabCell(stringResource(R.string.tab_settings), tab == 1, Modifier.weight(1f)) { onTab(1) }
             }
         }
     }

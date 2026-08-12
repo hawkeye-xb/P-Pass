@@ -185,6 +185,31 @@ fun PhotosScreen(loader: TimelineLoader) {
         }
     }
 
+    // UX-09: 停留在照片 tab 期间的轻量前台轮询——后台自动备份（daemon
+    // 无事件推送渠道，桌面 IPC-02 的事件订阅只接了桌面壳）新落库的照片
+    // 不会自己冒出来，真机反馈"点了备份、照片 tab 却一动不动"。timeline
+    // 按 taken_at DESC 排序（asset_repo.rs），新拍的照片天然落在首页最
+    // 前——每 15s 悄悄重拉首页，只把没见过的 hash 插到最前面，不动已加
+    // 载内容/翻页游标，也不触发 onTimelineRefreshed（那是整页替换语义，
+    // 会误逐出后面已翻页加载的缩略图缓存）。切走这个 tab 时 LaunchedEffect
+    // 自动取消，不留后台轮询。
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(15_000)
+            try {
+                val page = loader.page(null)
+                val known = items.map { it.hash }.toSet()
+                val fresh = page.items.filter { it.hash !in known }
+                if (fresh.isNotEmpty()) {
+                    items = fresh + items
+                    loader.onTimelineAppended(fresh.map { it.hash }.toSet())
+                }
+            } catch (_: Throwable) {
+                // 静默——下一轮再试，不用错误态打断正在看的照片。
+            }
+        }
+    }
+
     val current = opened
     if (current != null) {
         // Wire format is the normalized "video"/"photo" (golden snapshot),
