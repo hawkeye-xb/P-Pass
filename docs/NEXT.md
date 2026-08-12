@@ -2,6 +2,16 @@
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
+## 〇、2026-08-12（用户产品反馈）：UX-10 相册选择页封面缩略图
+
+UX-09 验证通过后，用户追问相册选择页能不能像系统相册选择器一样有
+缩略图。已实现（`MediaScanner.Bucket.coverUri` + `BucketScreen.
+BucketCover`），过程中撞过一次 `CacheRedlineTest`（新开缓存被拦，改为
+复用 `PhotosScreen.thumbCache`），android 全量单测绿，debug 包已装
+真机。**等用户**：真机看一眼视觉效果 + 决定这批改动（MOB-05/UX-09/
+UX-10）怎么正式发布（打 -test tag 让手机自己检测更新，还是先攒着一起
+发）。
+
 ## 〇、2026-08-12（用户真机走查）：UX-09 备份/照片 tab 三处反馈修复
 
 MOB-05 验证通过后，用户接着走查备份/照片两个 tab，提了三条反馈——

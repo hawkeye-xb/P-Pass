@@ -385,6 +385,11 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [x] UX-10 相册选择页封面缩略图 — **2026-08-12（用户产品反馈，待推 main）**:
+      `MediaScanner.Bucket` 加 `coverUri`，`BucketScreen` 每行加 48dp
+      封面（API 29+ `loadThumbnail`）；复用 `PhotosScreen.thumbCache`
+      而非新开缓存（撞过一次 CacheRedlineTest 红线，改代码不改测试）。
+      android 全量单测绿。挂账：真机视觉确认（用户）。
 - [x] UX-09 备份/照片 tab 三处走查反馈 — **2026-08-12（用户真机反馈，待推 main）**:
       「立即备份」点了没反应（statusLineOf 早算好的 Pending/AllSafe
       裁决从未接上 UI）+ hero「选择相册」大按钮降权（设置卡已有等价
