@@ -666,6 +666,11 @@ jobs:
         if: env.HAS_CF_TOKEN == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # 2026-08-12 实测修复：wrangler 无 account_id 时先调 /memberships
+          # 探测账号——窄权限 token 无 memberships 读权限 → 10000
+          # Authentication error（R2 镜像步骤失败）。显式给 account_id
+          # 跳过探测。
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
