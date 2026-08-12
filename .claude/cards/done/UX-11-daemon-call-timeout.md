@@ -62,5 +62,6 @@ android 全量单测绿；CI 待推 main 后盯 ci-android；真机验证挂用�
 - 实现：见「修法」三项，`DaemonClient.call`/`connectRaw` 均已接线；
   debug 包已 `adb install -r` 装到用户日常用的真机（该真机当前正处于
   桌面服务已停的状态，天然具备验证条件，不需要额外构造故障场景）。
+- CI：push `971c0e5` → main，ci-android 绿（1m42s）。
 - 挂账（真机，用户）：停留照片 tab，确认约 15s 内从"正在读取"变成
   报错文案，而不是永久卡住。
