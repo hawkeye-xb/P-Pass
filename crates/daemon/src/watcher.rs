@@ -151,6 +151,7 @@ impl LibraryWatcher {
                     tracing::warn!("WATCH-01: 事件桥接关闭，监听停止");
                     return;
                 };
+                eprintln!("[WATCH-DBG] first event: {first:?}");
                 let mut pending: HashSet<PathBuf> = first.paths.into_iter().collect();
                 // 继续收，直到静默满 debounce——Reset 风格窗口。
                 while let Ok(Some(ev)) = tokio::time::timeout(inner.debounce, tokio_rx.recv()).await
@@ -165,7 +166,9 @@ impl LibraryWatcher {
 
     /// 处理一批变化路径：过滤 → 父路径合并 → 增量扫描 ingest → 局部清理。
     async fn process(&self, paths: HashSet<PathBuf>) {
+        eprintln!("[WATCH-DBG] process paths: {paths:?}");
         let dirs = self.affected_dirs(paths);
+        eprintln!("[WATCH-DBG] affected dirs: {dirs:?}");
         if dirs.is_empty() {
             return;
         }
@@ -281,6 +284,10 @@ impl LibraryWatcher {
             };
             for (hash, rel_path) in paths {
                 let abs = self.inner.library_root.join(&rel_path);
+                eprintln!(
+                    "[WATCH-DBG] check rel={rel_path} abs_exists={}",
+                    abs.exists()
+                );
                 if !abs.exists()
                     && self
                         .inner
