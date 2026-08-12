@@ -101,21 +101,26 @@ class TriggerPolicyTest {
 
     @Test
     fun partial_access_detection() {
-        // API 34+ 上「部分照片」授权 = READ_MEDIA_IMAGES 与
-        // READ_MEDIA_VISUAL_USER_SELECTED 同时已授。
-        assertTrue(
+        // 真机反证：READ_MEDIA_VISUAL_USER_SELECTED 授予后不会因为后续
+        // 升级到完整授权而被系统撤销——images 已授时必须判定为非部分，
+        // 不管 visual_selected 是否历史遗留 true（否则用户永远卡在
+        // 「已完整授权却被判部分」的死循环，2026-08-12 真机报告）。
+        assertFalse(
             isPartialMediaAccess(imagesGranted = true, visualSelectedGranted = true, sdkInt = 34)
         )
-        // 完整授权只给 images（不给 visual_selected）→ 不是部分。
         assertFalse(
             isPartialMediaAccess(imagesGranted = true, visualSelectedGranted = false, sdkInt = 34)
         )
-        assertFalse(
+        // 真正的部分授权：images 未授、visual_selected 已授。
+        assertTrue(
             isPartialMediaAccess(imagesGranted = false, visualSelectedGranted = true, sdkInt = 34)
+        )
+        assertFalse(
+            isPartialMediaAccess(imagesGranted = false, visualSelectedGranted = false, sdkInt = 34)
         )
         // API < 34 无此权限，恒 false。
         assertFalse(
-            isPartialMediaAccess(imagesGranted = true, visualSelectedGranted = true, sdkInt = 33)
+            isPartialMediaAccess(imagesGranted = false, visualSelectedGranted = true, sdkInt = 33)
         )
     }
 
