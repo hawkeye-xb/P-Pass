@@ -67,6 +67,12 @@ CI 绿；PROGRESS/NEXT/ROADMAP 一行；卡移 done/。
   （`TriggerPolicyTest` 11/11，含改写后的 `partial_access_detection`）。
 - 消费点核查：`grep -rn "PartialMediaAccess"` 确认唯一调用方是
   `MainActivity.hasPartialMediaAccess`，无 BackupWorker/BackupRunner 旁路。
-- 挂账（真机，用户）：反馈本卡是否解决"完整授权仍被判部分/相册选择进不去"
-  的死循环；若真机仍复现，回退到"仅 grep 到的表层"重新排查（本卡假设是
-  唯一根因，需真机确认闭环）。
+- CI：push `68b8f2d` → main，ci-android #3 绿（1m36s）。
+- 真机复现前提（pm grant 实测，用户授权连接测试机后）：先 grant
+  `READ_MEDIA_VISUAL_USER_SELECTED` 单独授予（模拟「选择照片」），再
+  额外 grant `READ_MEDIA_IMAGES`/`VIDEO`（模拟升级为「允许所有照片」，
+  不撤销前者）→ `dumpsys package` 确认三个权限均 `granted=true` 同时
+  成立——证实了本卡假设的真机行为（visual_selected 不随升级被撤销）。
+  debug 包装机、启动无崩溃（Welcome 页正常）。
+- **用户真机确认（2026-08-12）**：日常使用设备上"可以选择相册了"——
+  死循环解除。本卡闭环。
