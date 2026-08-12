@@ -385,6 +385,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [x] MOB-05 部分授权误判死循环修复 — **2026-08-12（用户真机报告，待推 main）**:
+      MOB-02 的 `isPartialMediaAccess` 判定式写反——真机上
+      `READ_MEDIA_VISUAL_USER_SELECTED` 授予后不随升级到完整授权被撤销，
+      旧式 `imagesGranted && visualSelectedGranted` 几乎恒真，把完整授权
+      误判成部分授权，用户永远进不了相册选择页、选择被静默丢弃。改为
+      `!imagesGranted && visualSelectedGranted`（与官方检测顺序一致）。
+      android 全量绿（TriggerPolicyTest 11/11）。挂账：真机确认死循环解除
+      （用户）。
 - [x] MOB-01 全页面安全区适配 — **merged 2026-08-11 (8d0b4b4)**:
       三星真机内容被导航键遮挡/顶到状态栏。根因 targetSdk 35 强制
       edge-to-edge 但零 insets 处理。enableEdgeToEdge + PPScreen 统一

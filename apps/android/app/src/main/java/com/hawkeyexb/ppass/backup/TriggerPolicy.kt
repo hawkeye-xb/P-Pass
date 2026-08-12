@@ -56,13 +56,17 @@ fun newAlbumIds(current: Set<Long>, known: Set<Long>?): Set<Long> =
 
 /**
  * MOB-02 卡面 §二：部分授权判定（消灭 0/0 死局）。
- * API 34+ 上「部分照片」授权 = READ_MEDIA_IMAGES 与
- * READ_MEDIA_VISUAL_USER_SELECTED 同时已授（系统给部分照片时两个都给；
- * 完整授权只给 READ_MEDIA_IMAGES/VIDEO，不给 visual_selected）。
+ * API 34+ 上「部分照片」授权 = READ_MEDIA_IMAGES 未授、
+ * READ_MEDIA_VISUAL_USER_SELECTED 已授。
+ * 真机反证（2026-08-12 用户报告）：READ_MEDIA_VISUAL_USER_SELECTED 一旦
+ * 授予过，之后去系统设置升级到「允许所有照片」也不会被系统撤销——
+ * 旧版用 `imagesGranted && visualSelectedGranted` 判 partial，导致完整
+ * 授权后仍被误判成部分授权，永远进不了相册列表。imagesGranted 本身就是
+ * 完整授权的充分条件，与 visualSelected 是否历史遗留无关。
  * API < 34 无此权限（partial 恒 false）。
  */
 fun isPartialMediaAccess(
     imagesGranted: Boolean,
     visualSelectedGranted: Boolean,
     sdkInt: Int,
-): Boolean = sdkInt >= 34 && imagesGranted && visualSelectedGranted
+): Boolean = sdkInt >= 34 && !imagesGranted && visualSelectedGranted
