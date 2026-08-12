@@ -151,6 +151,10 @@
     <string name="photos_loading">正在读取家里的照片…</string>
     <string name="photos_unreachable">没能连上电脑。</string>
     <string name="photos_empty">照片库还是空的——先备份一批吧。</string>
+    <!-- SYNC-04: 实时订阅放弃重试——同款 UX-11 哲学（有界等待→亮错误→交给用户） -->
+    <string name="photos_live_disconnected">和电脑的实时连接断了。</string>
+    <string name="photos_live_retry">重试</string>
+    <string name="photos_live_reconnecting">正在重新连接电脑…</string>
     <string name="back">返回</string>
     <string name="video_loading">正在从家里取视频… %1$d%%</string>
     <string name="video_failed">视频没取到，请再试一次。</string>

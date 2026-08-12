@@ -156,6 +156,11 @@
     <string name="photos_loading">Loading the family library…</string>
     <string name="photos_unreachable">Could not reach the computer.</string>
     <string name="photos_empty">No photos in the library yet — back up a batch first.</string>
+    <!-- SYNC-04: live subscription gave up retrying — same UX-11 philosophy
+         (bounded wait -> surface an error -> hand it to the user). -->
+    <string name="photos_live_disconnected">Lost the live connection to the computer.</string>
+    <string name="photos_live_retry">Retry</string>
+    <string name="photos_live_reconnecting">Reconnecting to the computer…</string>
     <string name="back">Back</string>
     <string name="video_loading">Fetching the video from home… %1$d%%</string>
     <string name="video_failed">Could not fetch the video. Try again.</string>

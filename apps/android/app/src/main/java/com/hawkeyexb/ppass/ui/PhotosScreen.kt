@@ -75,6 +75,19 @@ import kotlinx.coroutines.launch
  */
 internal val thumbCache = LruCache<String, Bitmap>(32 * 1024 * 1024 / 40_000)
 
+/** SYNC-04: 前台订阅断线重连的退避序列——有限次数，不是无限重试
+ *  （UX-11 同款哲学）。用完最后一档还是连不上就停下来交给用户。 */
+internal val SUBSCRIBE_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
+
+/** SYNC-04: 连上并撑过这段时间才断——算一次"曾经连上"，退避计数清零
+ *  重来，不带着上次失败攒的重试档位（否则长时间正常使用后的偶发断线
+ *  会直接跳到大退避档）。 */
+internal const val SUBSCRIBE_WAS_LIVE_MS = 5_000L
+
+/** SYNC-04: 订阅之外的整页刷新兜底频率——对齐桌面端已有的 60s 兜底，
+ *  远低于原来 15s 轮询，只防真实丢事件场景，不是主通道。 */
+internal const val FULL_REFRESH_FALLBACK_MS = 60_000L
+
 /**
  * MOB-04 红线①失效联动的逐出决策（纯函数，JVM 可测）：给定缓存 key
  * 列表与「当前仍在时间线返回集里」的 hash 集合，返回应当逐出的 key。
@@ -82,6 +95,33 @@ internal val thumbCache = LruCache<String, Bitmap>(32 * 1024 * 1024 / 40_000)
  */
 internal fun staleThumbKeys(keys: Collection<String>, currentHashes: Set<String>): List<String> =
     keys.filter { it.substringBefore('/') !in currentHashes }
+
+/** SYNC-04: 一次订阅断开之后该怎么做——纯函数，JVM 可测（把状态机从
+ *  Compose `LaunchedEffect` 里剥出来，不用起 Compose 测试环境）。
+ *  [delayMs] 非空时调用方应该 delay 这么久再重连；`exhausted=true` 时
+ *  [delayMs] 为 null，调用方停止静默重试，把状态交给用户（UX-11 哲学：
+ *  有界等待→亮错误→交给用户）。*/
+internal data class SubscribeRetryDecision(
+    val nextAttempt: Int,
+    val exhausted: Boolean,
+    val delayMs: Long?,
+)
+
+internal fun nextSubscribeRetry(
+    currentAttempt: Int,
+    wasLive: Boolean,
+    delays: LongArray = SUBSCRIBE_RETRY_DELAYS_MS,
+): SubscribeRetryDecision {
+    // 这次连上并撑过了一小段时间才断——算一次"曾经连上"，退避从头算起，
+    // 不带着上次失败攒的重试档位（否则长时间正常使用后的偶发断线会
+    // 直接跳到大退避档，体验上像"越用越慢"）。
+    val attempt = if (wasLive) 0 else currentAttempt
+    return if (attempt < delays.size) {
+        SubscribeRetryDecision(nextAttempt = attempt + 1, exhausted = false, delayMs = delays[attempt])
+    } else {
+        SubscribeRetryDecision(nextAttempt = attempt, exhausted = true, delayMs = null)
+    }
+}
 
 class TimelineLoader(
     private val client: DaemonClient,
@@ -108,6 +148,20 @@ class TimelineLoader(
     /** 翻页追加——只增不逐（后页照片仍在库中）。 */
     fun onTimelineAppended(hashes: Set<String>) {
         knownHashes.addAll(hashes)
+    }
+
+    /**
+     * SYNC-04: 前台常驻订阅——包一层 ensureBound，语义同 [page]/[thumb]。
+     * 挂起直到这条订阅结束（对端主动关闭/连接坏了/协程被取消）；抛异常
+     * 和正常返回对调用方是同一件事："这次订阅结束了"，按断线退避重连
+     * 处理。[onConnected] 在读到第一个帧（订阅确认）时调用一次——调用方
+     * 拿它区分"正在重连"和"已经连上"两种状态。[onInvalidated] 收到一次
+     * 信号就整页覆盖刷新（不是追加）——这是本卡的核心：SYNC-01 对账
+     * 删掉的照片必须真的从时间线消失。
+     */
+    suspend fun subscribe(onConnected: suspend () -> Unit = {}, onInvalidated: suspend () -> Unit) {
+        ensureBound()
+        client.subscribeTimeline(daemon, onConnected, onInvalidated)
     }
 
     suspend fun page(cursor: String?): TimelinePage {
@@ -175,14 +229,20 @@ fun PhotosScreen(loader: TimelineLoader) {
         }
     }
 
+    // SYNC-04：整页重载的共用逻辑——首次加载、订阅收到信号、兜底轮询、
+    // 手动重试都走这一条路径。MOB-04 红线①失效联动：整页重载后逐出
+    // 不在返回集里的缩略图缓存（SYNC-01 对账后 daemon 已删的照片不再
+    // 闪旧图）。
+    suspend fun refreshFullPage() {
+        val page = loader.page(null)
+        items = page.items
+        next = page.next
+        loader.onTimelineRefreshed(page.items.map { it.hash }.toSet())
+    }
+
     LaunchedEffect(Unit) {
         try {
-            val page = loader.page(null)
-            items = page.items
-            next = page.next
-            // MOB-04 红线①失效联动：整页重载后逐出不在返回集里的缩略图
-            // 缓存（SYNC-01 对账后 daemon 已删的照片不再闪旧图）。
-            loader.onTimelineRefreshed(page.items.map { it.hash }.toSet())
+            refreshFullPage()
         } catch (t: Throwable) {
             error = t.message
         } finally {
@@ -190,27 +250,66 @@ fun PhotosScreen(loader: TimelineLoader) {
         }
     }
 
-    // UX-09: 停留在照片 tab 期间的轻量前台轮询——后台自动备份（daemon
-    // 无事件推送渠道，桌面 IPC-02 的事件订阅只接了桌面壳）新落库的照片
-    // 不会自己冒出来，真机反馈"点了备份、照片 tab 却一动不动"。timeline
-    // 按 taken_at DESC 排序（asset_repo.rs），新拍的照片天然落在首页最
-    // 前——每 15s 悄悄重拉首页，只把没见过的 hash 插到最前面，不动已加
-    // 载内容/翻页游标，也不触发 onTimelineRefreshed（那是整页替换语义，
-    // 会误逐出后面已翻页加载的缩略图缓存）。切走这个 tab 时 LaunchedEffect
-    // 自动取消，不留后台轮询。
+    // SYNC-04：前台常驻订阅，取代原来的 15s"仅追加"轮询——收到信号走
+    // 整页覆盖语义（refreshFullPage，onTimelineRefreshed 现成的缓存
+    // 失效逐出），删除的照片才能真的从时间线消失，不是像原来那样永久
+    // 停留到进程重启。断线（含对端主动 finish，比如被吊销）按有限退避
+    // 重连；超过重试上限停止静默重试，UI 亮"连不上"状态 + 手动重试
+    // 入口（UX-11 同款：有界等待→亮错误→交给用户）。切走这个 tab 时
+    // LaunchedEffect 自动取消，订阅连接跟着断（同一条心跳生命周期，
+    // 不是另开一套判断在线的逻辑，见 PRES-01）。
+    var subscribeAttempt by remember { mutableStateOf(0) }
+    var subscribeExhausted by remember { mutableStateOf(false) }
+    // 真机验收发现的缺口：原设计重连期间界面完全沉默，只有耗尽之后才
+    // 亮提示——用户在飞行模式下什么都看不到，以为是卡死。现在细分成
+    // 三态：还没连上第一次(两者皆假) / 已连上安静收听(connected) /
+    // 断线重试中(hadFailure，跟 subscribeAttempt 解耦——否则第一次
+    // 断线后的第一档退避窗口里，key 还没来得及变，提示会漏出现)。
+    var subscribeConnected by remember { mutableStateOf(false) }
+    var subscribeHadFailure by remember { mutableStateOf(false) }
+
+    LaunchedEffect(subscribeAttempt) {
+        if (subscribeExhausted) return@LaunchedEffect
+        subscribeConnected = false
+        val startedAt = System.currentTimeMillis()
+        try {
+            loader.subscribe(
+                onConnected = {
+                    subscribeConnected = true
+                    subscribeHadFailure = false
+                },
+            ) {
+                try {
+                    refreshFullPage()
+                } catch (_: Throwable) {
+                    // 这一次刷新失败——不动 items，等下一次信号/兜底轮询再试。
+                }
+            }
+            // 正常返回（对端主动 finish 了发送方向，比如设备被吊销）
+            // 和抛异常是同一件事：这次订阅结束了，都走下面的退避重连。
+        } catch (_: Throwable) {
+            // 连接异常——同样走退避重连。
+        }
+        subscribeConnected = false
+        subscribeHadFailure = true
+        val wasLive = System.currentTimeMillis() - startedAt >= SUBSCRIBE_WAS_LIVE_MS
+        val decision = nextSubscribeRetry(subscribeAttempt, wasLive)
+        if (decision.delayMs != null) {
+            kotlinx.coroutines.delay(decision.delayMs)
+        }
+        subscribeAttempt = decision.nextAttempt
+        subscribeExhausted = decision.exhausted
+    }
+
+    // 远低于原轮询频率的整页刷新兜底（对齐桌面端已有的 60s 兜底）：
+    // 订阅本该覆盖所有变化，这层只防真实丢事件场景，不是主通道。
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(15_000)
+            kotlinx.coroutines.delay(FULL_REFRESH_FALLBACK_MS)
             try {
-                val page = loader.page(null)
-                val known = items.map { it.hash }.toSet()
-                val fresh = page.items.filter { it.hash !in known }
-                if (fresh.isNotEmpty()) {
-                    items = fresh + items
-                    loader.onTimelineAppended(fresh.map { it.hash }.toSet())
-                }
+                refreshFullPage()
             } catch (_: Throwable) {
-                // 静默——下一轮再试，不用错误态打断正在看的照片。
+                // 静默——下一轮再试。
             }
         }
     }
@@ -257,6 +356,41 @@ fun PhotosScreen(loader: TimelineLoader) {
             }
             FilterChip(stringResource(R.string.chip_family), filter == TimelineFilter.Family) {
                 filter = TimelineFilter.Family
+            }
+        }
+
+        // SYNC-04：断线重连期间的轻提示——真机验收发现的缺口：重连中
+        // 界面原来完全沉默（飞行模式几秒钟用户会以为是卡死），现在给
+        // 一个不打断浏览的小字提示。跟下面"耗尽"的提示互斥（耗尽之后
+        // 不会再是"重连中"）。
+        if (subscribeHadFailure && !subscribeConnected && !subscribeExhausted) {
+            Text(
+                stringResource(R.string.photos_live_reconnecting),
+                fontSize = 13.sp, color = PPColor.Ink40,
+                modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+            )
+        }
+
+        // SYNC-04：订阅退避重试耗尽——不挡住已加载的照片，只在上面提示
+        // "连不上"+手动重试（UX-11 同款：有界等待→亮错误→交给用户）。
+        if (subscribeExhausted) {
+            Row(
+                Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.photos_live_disconnected),
+                    fontSize = 13.sp, color = PPColor.Ink40,
+                )
+                Text(
+                    stringResource(R.string.photos_live_retry),
+                    fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
+                    modifier = Modifier.clickable {
+                        subscribeExhausted = false
+                        subscribeAttempt = 0
+                    }.padding(6.dp),
+                )
             }
         }
 
