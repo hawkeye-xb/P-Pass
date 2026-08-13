@@ -7,10 +7,26 @@ use daemon::{Config, Router};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // UX-07: --ephemeral — 测试/脚本模式：stdin EOF（写入端关闭）即整体
-    // 退出（3 秒内），杜绝 A 类孤儿 daemon。生产/launchd 不带此 flag：
-    // 那时 stdin 关闭只让配对确认退到 IPC-only（下方既有行为），常驻不变。
-    let ephemeral = std::env::args().any(|a| a == "--ephemeral");
+    // DAE-03 ①：参数解析最先——--help/--version 在任何 daemon 机制
+    // （日志/配置/数据库/身份/claim/bind）之前短路退出。8/6 事故：daemon
+    // 无解析，--help 被当普通启动一路走到单实例 claim 触发误接管、常驻
+    // 停机数分钟。未知参数报错退出（exit 2），绝不静默忽略。
+    let ephemeral = match daemon::cli::parse_cli(std::env::args().skip(1)) {
+        Ok(daemon::cli::Cli::Help) => {
+            print!("{}", daemon::cli::USAGE);
+            return Ok(());
+        }
+        Ok(daemon::cli::Cli::Version) => {
+            println!("P-Pass daemon {}", daemon::daemon_version());
+            return Ok(());
+        }
+        Ok(daemon::cli::Cli::Run { ephemeral }) => ephemeral,
+        Err(e) => {
+            eprintln!("{e}");
+            eprint!("{}", daemon::cli::USAGE);
+            std::process::exit(2);
+        }
+    };
     // EOF 信号：stdin 循环在 EOF 时发；ephemeral 模式下 main 用 select
     // 竞争它，收到即优雅退出（oneshot 只消费一次）。
     let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
@@ -130,14 +146,22 @@ async fn main() -> anyhow::Result<()> {
         daemon::Claim::TookOver => {
             // 升级退位收尾：重装 autostart，让 launchd 指向本实例的稳定
             // 路径。守卫拒绝 target/、/tmp/ 等开发路径（不写坏 plist）。
-            use platform::PlatformAdapter as _;
-            if let Ok(exe) = std::env::current_exe() {
-                if let Err(e) = platform::adapter().install_autostart(&exe) {
-                    tracing::warn!("DAE-01: autostart re-install skipped: {e}");
+            // DAE-03 ②：autostart 安装决策收敛在
+            // cli::autostart_install_required（单测钉死）——只有 TookOver
+            // 装；Proceed（纯新启动）与 StandDown（退位）绝不碰。
+            if daemon::cli::autostart_install_required(&daemon::Claim::TookOver) {
+                use platform::PlatformAdapter as _;
+                if let Ok(exe) = std::env::current_exe() {
+                    if let Err(e) = platform::adapter().install_autostart(&exe) {
+                        tracing::warn!("DAE-01: autostart re-install skipped: {e}");
+                    }
                 }
             }
         }
-        daemon::Claim::Proceed => {}
+        daemon::Claim::Proceed => {
+            // DAE-03 ②：纯新启动绝不装 autostart——手动/开发构建启动
+            // 不得篡改用户的开机自启配置（决策见 cli.rs 单测）。
+        }
     }
 
     // ── transport bind（claim 之后：固定端口此刻已被前任释放或确认无人占用）──
@@ -152,7 +176,18 @@ async fn main() -> anyhow::Result<()> {
     );
     transport_cfg.bind_addr = config.bind_addr;
     transport_cfg.secret_key = Some(secret);
-    let transport = transport::IrohTransport::bind(transport_cfg).await?;
+    let transport = match transport::IrohTransport::bind(transport_cfg).await {
+        Ok(t) => t,
+        Err(e) => {
+            // DAE-03 ③：固定端口被异身份实例/其它程序占用 → 人话报错。
+            // 原始错误照常留日志；文案与占用识别见 cli.rs 单测。同身份
+            // 冲突走不到这里（claim 已裁决），到这里的都是异身份/第三方。
+            let msg = daemon::cli::humanize_bind_error(config.bind_addr, &e.to_string());
+            tracing::error!("{msg}");
+            println!("启动失败：{msg}");
+            std::process::exit(1);
+        }
+    };
     // DAE-02 防漂移：bind 后的真实 node_id 必须与 claim 用的一致（同一
     // identity.key）。不一致说明身份文件被换，绝不能继续服务。
     if transport.node_id() != node_id {

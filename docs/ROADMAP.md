@@ -375,6 +375,25 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       while port held → TookOver → incumbent exits → rebind same port
       succeeds), node-id-from-secret == bound endpoint, plist
       SuccessfulExit assertion; dae_flow 5/5 + workspace 209/209 green.
+- [x] DAE-03 daemon CLI discipline + humanized errors — **code landed
+      2026-08-13**: 8/6 `daemon --help` mis-takeover incident's 3 gaps —
+      ① `--help`/`-h`/`--version`/`-V` parsed first and short-circuit
+      (exit 0) before any daemon machinery (logs/config/db/identity/
+      claim/bind); unknown args → error + usage, exit 2 — never silently
+      ignored (the incident root cause). ② autostart install decision
+      extracted to pure fn `cli::autostart_install_required` (TookOver
+      only; fresh start / stand-down never touch launchd/registry) +
+      unit test. ③ fixed-port bind failure humanized: address-in-use →
+      Chinese guidance (another P-Pass identity or third-party holds the
+      port; change config.toml bind_addr or close the holder), raw error
+      kept in logs; non-in-use errors pass through untranslated. New
+      crates/daemon/src/cli.rs (pure fns, 8 unit tests) + tests/
+      cli_flow.rs (binary smoke: --help exits 0 with no IPC/identity
+      side effects, --version prints version, --bogus exits 2 with
+      usage). Counterproofs: silent-ignore → daemon actually starts on
+      --bogus (incident reproduced, test hangs/red); constant-true
+      autostart → red; loose "use" substring → red. workspace 286/286 +
+      arch-check + clippy zero warnings + fmt clean.
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜

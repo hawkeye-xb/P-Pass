@@ -525,3 +525,30 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   RUSTSEC-2024-0384 ignore（instant unmaintained informational）。
   watcher 6 单测 + watch_flow 4 集成测试（真实 notify）全绿；
   daemon/proto/core-index 全量绿 + arch-check 绿 + clippy 零警告 + deny 本地绿。
+
+## 2026-08-13 — DAE-03 daemon CLI 纪律 + 人话报错（8/6 --help 事故 3 缺口）
+
+- 事故（8/6 傍晚）：daemon 无参数解析，`--help` 被当普通启动一路走到单实例
+  claim 触发误接管、常驻停机数分钟。三缺口补齐：
+  - **① --help/--version 参数解析**：新 `crates/daemon/src/cli.rs`（纯函数 +
+    单测）——`--help`/`-h`/`--version`/`-V` 在一切 daemon 机制（日志/配置/
+    数据库/身份/claim/bind）之前短路退出（exit 0）；未知参数报错 + 用法，
+    exit 2，**绝不静默忽略**（静默忽略 = 事故根因）。main.rs 最顶接线。
+  - **② autostart 只在升级接管装**：决策抽成 `cli::autostart_install_required`
+    （TookOver=true；Proceed/StandDown=false）+ 单测——纯新启动/手动/开发
+    构建启动绝不写 launchd/注册表（8/6 事故第二缺口：手动启动篡改自启配置）。
+  - **③ 固定端口冲突人话报错**：异身份实例（不同数据目录）或第三方程序占住
+    config.toml 钉的 UDP 端口时，`humanize_bind_error` 把英文底层错误翻译成
+    中文 + 修复指引（改 bind_addr / 关占用方），原始错误留日志；非占用类
+    错误原样透传。
+- **测试**：cli 单测 8/8（parse_cli 短路/未知拒绝/autostart 决策/占用识别/
+  透传）；二进制冒烟 tests/cli_flow.rs 3/3——`--help` exit 0 且 stdout 无
+  IPC:/身份铸造/已启动（证明没走到 claim/bind）；`--version` exit 0 打印版本；
+  `--bogus` exit 2 + stderr 报未知参数 + 用法。**三反证全成立**：①未知参数改
+  静默忽略 → `--bogus` 真的把 daemon 拉起来常驻（事故模式复现，测试挂死）；
+  ②autostart 恒 true → 单测红；③in_use 放宽成 "use" 子串 → 含 "use" 的合法
+  错误被误伤，透传断言红。workspace 286/286 + arch-check 绿 + clippy 零警告
+  + fmt 干净。
+- 期间环境：subscribe_flow 全量并发跑一次偶发红（REV-01 的 revoke 计时断言），
+  隔离复跑 3/3×2 绿——与既有 blobs_resume 300s 同类并发偶发，CI（REV-01 推
+  动 ci-rust 成功）未复现。
