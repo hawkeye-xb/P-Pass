@@ -556,3 +556,4 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
 - 期间环境：subscribe_flow 全量并发跑一次偶发红（REV-01 的 revoke 计时断言），
   隔离复跑 3/3×2 绿——与既有 blobs_resume 300s 同类并发偶发，CI（REV-01 推
   动 ci-rust 成功）未复现。
+| **桌面走查补漏（≥1440 居中）** | 2026-08-13 | 本 commit | ✅ 已实现（vite build 绿 176 modules；实测 1920px 右侧死区 486px→0） | 44f9a0b 的 `@media(min-width:1440px)` 给 `.page` 加 `max-width:1180px` 但漏了 `margin: 0 auto`——只限宽不居中，超宽窗口下内容左贴、右侧留死区（用户实测反馈「右边留死区」的同类症状，只是阈值从 880px 上移到了 1180px）。补 `margin: 0 auto` 后内容居中，1920px 死区从右侧 486px 变为对称留白。 |
