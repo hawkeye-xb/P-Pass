@@ -18,15 +18,21 @@ ICONS="$ROOT/apps/desktop/src-tauri/icons"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
-# ── 0. macOS 安全区缩排版 SVG（2026-08-13 DESK-05b 修复）─────
-# macOS Big Sur+ 图标规范：系统对图标应用圆角矩形遮罩（corner radius
-# ~18.75%），主图形应居中且视觉尺寸占画布 ~60-66%，四周留呼吸区。
-# ICON-01 直接把 icon-carbon.svg 全幅渲染进 icns——兽面含笔画横向占
-# 画布 ~86%，Dock/Cmd+Tab 显示「显得特大」、不符合规范。Android 侧
-# ICON-01b 已做过 66% 安全区缩排，macOS 侧漏了，本步骤补齐。
-# 修法：以画布中心 (512,512) 为原点整体 scale，把兽面视觉宽度
-# 876px（110-36=74 至 914+36=950）缩到 1024×66% ≈ 676 → s = 676/876 ≈ 0.77。
-# 纸底 rect 保持铺满 1024（系统遮罩负责形状，背景必须不透明）。
+# ── 0. macOS 安全区缩排版 SVG（2026-08-13 DESK-05b + 2026-08-13 二次修复）──
+# macOS Big Sur+ 图标规范有两层，容易只做一层就以为修完了：
+#  ① 兽面在纸底内部的占比（DESK-05b 已修，scale 0.77，兽面视觉宽度
+#     86%→66%，居中不顶格）。
+#  ② 整个图标（纸底+兽面一起）在 1024 画布里占多大——这一层 DESK-05b
+#     漏了：纸底 rect 之前保持铺满 1024，四周零透明边距。系统会给图标
+#     套圆角遮罩+投影，前提是图标本身留出呼吸区；顶格铺满会让图标比
+#     留了边距的邻居们视觉上明显偏大（用户实测反馈「程序坞图标太大、
+#     不标准」，2026-08-13）。数值来自 Apple 官方模板换算：512 画布
+#     留 50px 边距 → scale = 1 - 2×50/512 ≈ 0.805，取整 0.8（画布四周
+#     各留 ~10% 透明边，不是系统遮罩负责的圆角本身，是遮罩+投影之外
+#     必须预留的空白）。
+# 两层缩放嵌套：内层 0.77（兽面 vs 纸底）→ 外层 0.8（纸底+兽面 vs 1024
+# 画布）。纸底 rect 不再铺满 1024，改成随外层 scale 一起缩小，画布剩余
+# 部分保持 SVG 默认透明（不画东西）。
 SAFE_CARBON="$OUT/icon-carbon-safe.svg"
 SAFE_BEAST="$OUT/icon-beast-safe.svg"
 python3 - "$DESIGN/icon-carbon.svg" "$SAFE_CARBON" "$DESIGN/icon-beast.svg" "$SAFE_BEAST" <<'PYEOF'
@@ -34,17 +40,19 @@ import re, sys
 _, carbon_src, carbon_out, beast_src, beast_out = sys.argv
 def safe(svg_path, out_path):
     src = open(svg_path).read()
-    # 纸底 rect 留在最外层（铺满画布）；其余内容包进中心缩放 group。
-    # pattern 是 userSpaceOnUse、坐标基于引用元素（path）的 user space，
-    # path 已在缩放 group 内 → 碳纹自动随兽面等比缩放，无需手动改 pattern。
     m = re.match(r'(<svg[^>]*>)(.*)(</svg>)', src, re.S)
     head, body, tail = m.group(1), m.group(2), m.group(3)
     body = re.sub(r'<rect width="1024" height="1024" fill="#FBF8F2"/>', '', body)
-    wrapped = f'<g transform="translate(512 512) scale(0.77) translate(-512 -512)">{body}</g>'
-    open(out_path, 'w').write(f'{head}\n  <rect width="1024" height="1024" fill="#FBF8F2"/>\n  {wrapped}\n{tail}')
+    # 内层：兽面缩到纸底内部 66%（DESK-05b）。
+    inner = f'<g transform="translate(512 512) scale(0.77) translate(-512 -512)">{body}</g>'
+    paper = '<rect width="1024" height="1024" fill="#FBF8F2"/>'
+    whole = f'{paper}\n  {inner}'
+    # 外层：纸底+兽面整体缩到画布 80%，四周留透明边距（本次修复）。
+    outer = f'<g transform="translate(512 512) scale(0.8) translate(-512 -512)">{whole}</g>'
+    open(out_path, 'w').write(f'{head}\n  {outer}\n{tail}')
 safe(carbon_src, carbon_out)
 safe(beast_src, beast_out)
-print("safe-zone svgs written (scale 0.77, paper bg full-bleed)")
+print("safe-zone svgs written (inner 0.77 face-in-paper + outer 0.8 whole-icon-in-canvas, transparent margin)")
 PYEOF
 
 # ── 1. 主图标 PNG 阶梯（碳纹版安全区缩排，1024 源 → 各档）────
@@ -65,9 +73,12 @@ for p in out.glob("*.png"):
 print("all pngs converted to RGBA")
 PYEOF
 # @2x 档（macOS icns 的 retina 表示：16@2x=32, 32@2x=64, ...）
+# 2026-08-13：改用 $SAFE_CARBON——之前直接读原始 icon-carbon.svg，跟
+# 其它档位不一致（Tauri 的 32x32@2x.png/128x128@2x.png 会跟同尺寸非
+# @2x 档、以及 icns 里的档位视觉比例不一样，顶格无边距）。
 for size in 16 32 64 128 256 512; do
   px=$((size * 2))
-  rsvg-convert -w "$px" -h "$px" "$DESIGN/icon-carbon.svg" -o "$OUT/${size}x${size}@2x.png"
+  rsvg-convert -w "$px" -h "$px" "$SAFE_CARBON" -o "$OUT/${size}x${size}@2x.png"
 done
 
 # ── 2. Windows .ico（多尺寸合成；≤32px 用 beast，≥48px 碳纹）─

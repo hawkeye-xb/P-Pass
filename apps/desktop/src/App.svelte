@@ -34,12 +34,36 @@
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
   // DESK-03: 新增「照片」页（照片墙）——侧边栏第五项，文案走 i18n。
+  // 2026-08-13: icon 字段供 <1080px 收起态的 64px 图标轨使用（设计稿
+  // 离线版 v2「第 3 轮响应式」新增，图标形状原样照抄设计稿 SVG path）。
+  // ≥1080px 展开态不画图标，跟设计稿交互原型一致（原型的 nav 只有
+  // label，没有 icon——图标是收起态专属，不是随时都显示的装饰）。
   const NAV = [
-    { id: "overview", label: "总览" },
-    { id: "photos", label: t("ui.nav_photos") },
-    { id: "devices", label: "家人与设备" },
-    { id: "log", label: "活动记录" },
-    { id: "settings", label: "设置" },
+    {
+      id: "overview",
+      label: "总览",
+      icon: '<path d="M3 10.5 12 3l9 7.5"></path><path d="M5 9.5V21h14V9.5"></path>',
+    },
+    {
+      id: "photos",
+      label: t("ui.nav_photos"),
+      icon: '<rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m21 16-5-5-9 9"></path>',
+    },
+    {
+      id: "devices",
+      label: "家人与设备",
+      icon: '<rect x="6" y="2.5" width="12" height="19" rx="2.5"></rect><path d="M11 18.5h2"></path>',
+    },
+    {
+      id: "log",
+      label: "活动记录",
+      icon: '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path>',
+    },
+    {
+      id: "settings",
+      label: "设置",
+      icon: '<circle cx="12" cy="12" r="3"></circle><path d="M19 12a7 7 0 0 0-.14-1.4l2.1-1.63-2-3.46-2.48 1a7 7 0 0 0-2.42-1.4L13.7 2.5h-3.4l-.36 2.61a7 7 0 0 0-2.42 1.4l-2.48-1-2 3.46 2.1 1.63A7 7 0 0 0 5 12c0 .48.05.94.14 1.4l-2.1 1.63 2 3.46 2.48-1a7 7 0 0 0 2.42 1.4l.36 2.61h3.4l.36-2.61a7 7 0 0 0 2.42-1.4l2.48 1 2-3.46-2.1-1.63c.09-.46.14-.92.14-1.4Z"></path>',
+    },
   ];
   const pageFromHash = () => {
     const m = (location.hash || "").match(/^#\/(overview|photos|devices|log|settings)$/);
@@ -264,6 +288,24 @@
   const visibleAudit = $derived(
     auditEvents.filter((e) => !e.action.startsWith("ingest."))
   );
+  // 设计稿"本周"统计条：只取真实能从审计里推出来的两项（新备份/去重
+  // 跳过，backup.finished 的 ingested=/duplicates= 汇总，过去 7 天）；
+  // 设计稿画的第三项「重试成功」在当前审计事件里没有对应的真实语义
+  // （没有 retry 相关的 action），不编造数字，先只做这两项。
+  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+  const weekStats = $derived.by(() => {
+    let added = 0, dup = 0;
+    const cutoff = nowMs - WEEK_MS;
+    for (const e of auditEvents) {
+      if (e.action !== "backup.finished" || e.ts < cutoff) continue;
+      const m = /ingested=(\d+)\s+duplicates=(\d+)/.exec(e.detail ?? "");
+      if (m) {
+        added += Number(m[1]);
+        dup += Number(m[2]);
+      }
+    }
+    return { added, dup };
+  });
 
   // PRES-01: sub 槽接 devices.list[].presence 三档（online 优先展示连接
   // 路径事实：已直连/经中继；心跳新鲜无活连接 → 「在线」；recent →
@@ -296,6 +338,36 @@
     };
   }
 
+  // 设计稿离线版：总览标题副标题是"全家 N 张照片…"+"最近一次备份：
+  // <时间> · 来自 <设备>"，不是"已配对设备 N 台 · 照片库 M 张"——
+  // 取所有设备水位里 last_backup_at 最大的那条，真实数据，没有就
+  // 优雅退回旧文案（没备份过/watermarks 还没加载完时不假装有数据）。
+  const lastBackupOverall = $derived.by(() => {
+    let best = null;
+    for (const d of devices) {
+      if (d.revoked) continue;
+      const wm = watermarks[d.node_id];
+      if (!wm?.last_backup_at) continue;
+      if (!best || wm.last_backup_at > best.at) best = { at: wm.last_backup_at, name: d.name };
+    }
+    return best;
+  });
+  // 设计稿离线版：总览水位卡只放"需要留意的 + 最近动过的"，不是全量
+  // 平铺——告警设备（alert）永远全show，正常设备只show 前 OK_CAP 个，
+  // 剩下的收进"一切正常的还有 N 台"链接（点进「家人与设备」看全部，
+  // 那边才是全量真相，这里只是总览摘要）。
+  const OVERVIEW_OK_CAP = 2;
+  const waterRows = $derived.by(() => {
+    const active = devices.filter((d) => !d.revoked);
+    const withRow = active.map((d) => ({ d, row: deviceRow(d, nowMs) }));
+    const alerts = withRow.filter((x) => x.row.alert);
+    const ok = withRow.filter((x) => !x.row.alert);
+    return {
+      shown: [...alerts, ...ok.slice(0, OVERVIEW_OK_CAP)],
+      moreOk: Math.max(0, ok.length - OVERVIEW_OK_CAP),
+    };
+  });
+
   async function startPairing() {
     message = "";
     showPairModal = true; // T4: 二维码是弹窗模块，不是常驻卡片
@@ -319,6 +391,19 @@
     // 关弹窗即弃当前码（token 仍在 TTL 内有效，但下次打开重新生成更干净）。
     qrDataUrl = "";
     qrText = "";
+  }
+
+  /* 扫码有困难的退路：复制配对串本文，用户自己找办法传给手机（隔空
+   * 投送/微信自己发自己）。剪贴板失败静默不打扰——这是个次要退路，
+   * 不是关键路径。 */
+  async function copyPairString() {
+    if (!qrText) return;
+    try {
+      await navigator.clipboard.writeText(qrText);
+      flashMessage("配对串已复制");
+    } catch {
+      // 静默——剪贴板权限问题不值得打断用户，主路径还是扫码。
+    }
   }
 
   async function confirmPair(accept, name, mergeNodeId) {
@@ -807,14 +892,19 @@
             class="nav-item"
             class:active={page === n.id}
             aria-current={page === n.id ? "page" : undefined}
+            title={n.label}
             onclick={() => go(n.id)}
-          >{n.label}</button>
+          >
+            <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html n.icon}</svg>
+            <span class="nav-label">{n.label}</span>
+          </button>
         {/each}
       </nav>
-      <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊。 -->
-      <div class="service-pill" class:ok={online} class:bad={!online}>
+      <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊；<1080px
+           收起态缩成纯色点（设计稿：服务状态缩成底部绿点）。 -->
+      <div class="service-pill" class:ok={online} class:bad={!online} title={online ? "后台服务运行中" : t("ui.offline_banner")}>
         <span class="dot"></span>
-        <span>{online ? "后台服务运行中" : t("ui.offline_banner")}</span>
+        <span class="service-label">{online ? "后台服务运行中" : t("ui.offline_banner")}</span>
       </div>
     </aside>
 
@@ -830,11 +920,21 @@
       {#if page === "overview"}
         <section class="page" data-testid="page-overview">
           <div class="lede">
-            <h2 class="headline">全家的照片，安全地住在这台电脑上。</h2>
-            <!-- T-092: 副标题接 status.photo_count——「已配对设备 N 台 · 照片库 M 张」；
-                 photo_count 缺失时该段整体隐藏 -->
+            <!-- 2026-08-13：设计稿离线版标题带真实照片数——"全家的照片"
+                 换成"全家 N 张照片"，photoCount 没拿到时退回原句（不写
+                 假数字）。 -->
+            <h2 class="headline">
+              {#if photoCount !== null}全家 {photoCount} 张照片，安全地住在这台电脑上。{:else}全家的照片，安全地住在这台电脑上。{/if}
+            </h2>
+            <!-- 副标题：有真实"最近一次备份"数据就用设计稿的格式，没有
+                 （比如还没配对过/一次都没备份过）就退回旧的配对数摘要，
+                 不硬凑一句假话。 -->
             <p class="sub">
-              {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · 照片库 ${photoCount} 张`}{/if}
+              {#if lastBackupOverall}
+                最近一次备份：{humanTime(lastBackupOverall.at, nowMs)} · 来自 {lastBackupOverall.name}
+              {:else}
+                {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · 照片库 ${photoCount} 张`}{/if}
+              {/if}
               {#if status && status.revoked > 0}{t("ui.revoked_count", { n: status.revoked })}{/if}
             </p>
           </div>
@@ -868,8 +968,7 @@
                   <p class="hint">{t("ui.no_devices")}</p>
                 {:else}
                   <ul class="device-rows">
-                    {#each devices.filter((d) => !d.revoked) as d}
-                      {@const row = deviceRow(d, nowMs)}
+                    {#each waterRows.shown as { d, row }}
                       <li>
                         <!-- T-091: 右侧接 device.watermarks 真数据（设计稿总览
                              水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
@@ -880,6 +979,11 @@
                       </li>
                     {/each}
                   </ul>
+                  {#if waterRows.moreOk > 0}
+                    <button class="link-more safe" onclick={() => go("devices")}
+                      >一切正常的还有 {waterRows.moreOk} 台 ›</button
+                    >
+                  {/if}
                 {/if}
                 <p class="hint">只要这台电脑开着、手机插电连 Wi-Fi，备份就在发生；任何一边不对劲，另一边 3 天内亮红。</p>
               </div>
@@ -893,6 +997,28 @@
                 <p class="hint qr-hint">点下面的按钮弹出配对码，用家人手机上的 P-Pass 扫一下；码 10 分钟内有效，可随时刷新。</p>
                 <button class="primary" onclick={startPairing}>{t("ui.generate_qr")}</button>
               </div>
+
+              <!-- 2026-08-13：「最近动静」摘要卡（离线版设计稿 v2「第 3 轮」
+                   新增）——只在 ≥1440px 显示（见上方 @media），大屏富余
+                   空间放信息，不留白；数据是活动记录前 3 条，复用同一套
+                   auditWho/auditText，不是另开一套数据源。 -->
+              <div class="card recent-activity-card">
+                <h3>最近动静</h3>
+                {#if visibleAudit.length === 0}
+                  <p class="hint">还没有活动记录。</p>
+                {:else}
+                  <!-- 设计稿这张摘要卡是单行紧凑文案（设备+事件+相对时间
+                       连成一行，不分列、行间不加分隔线），跟主活动记录页
+                       的双列卡片行是两种密度，故意不共用 .log-rows。 -->
+                  <ul class="recent-rows">
+                    {#each visibleAudit.slice(0, 3) as e (e.ts + ":" + e.action)}
+                      {@const at = humanTime(e.ts, nowMs)}
+                      <li><b>{auditWho(e)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
+                    {/each}
+                  </ul>
+                {/if}
+                <button class="link-more safe" onclick={() => go("log")}>全部活动记录 ›</button>
+              </div>
             </div>
           {/if}
         </section>
@@ -902,7 +1028,7 @@
             <h2 class="headline">家人与设备</h2>
             <p class="sub">{t("ui.paired_count", { n: pairedCount })}</p>
           </div>
-          <div class="card">
+          <div class="card list-card">
             {#if devices.length === 0}
               <p class="hint">{t("ui.no_devices")}</p>
             {:else}
@@ -914,7 +1040,7 @@
               {#if activeDevices.length === 0}
                 <p class="hint">{t("ui.no_devices")}</p>
               {:else}
-                <ul class="device-rows roomy">
+                <ul class="device-rows roomy edge">
                   {#each activeDevices as d}
                     {@const row = deviceRow(d, nowMs)}
                     <li>
@@ -950,7 +1076,7 @@
                         <span class="dev-sub">{row.sub}</span>
                       </span>
                       <span class="dev-right" class:act={row.alert}>{row.right}</span>
-                      <button class="danger" onclick={() => revoke(d.node_id, d.name)}>{t("ui.remove")}</button>
+                      <button class="dev-remove-btn" onclick={() => revoke(d.node_id, d.name)}>{t("ui.remove")}</button>
                     </li>
                   {/each}
                 </ul>
@@ -972,7 +1098,7 @@
               {/if}
             {/if}
           </div>
-          <p class="hint">移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</p>
+          <p class="hint">「经中继」= 直连不通时走加密中转，中继看不到照片内容，速度可能慢一些。移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</p>
         </section>
       {:else if page === "photos"}
         <!-- DESK-03: 照片墙——与手机时间线同一数据源（query.timeline +
@@ -1030,37 +1156,40 @@
         </section>
       {:else if page === "log"}
         <section class="page" data-testid="page-log">
-          <div class="lede">
-            <h2 class="headline">活动记录</h2>
-            <p class="sub">谁备份了什么，一目了然——不用去 Finder 里对账。</p>
+          <div class="lede-log">
+            <div class="lede">
+              <h2 class="headline">活动记录</h2>
+              <p class="sub">谁备份了什么，一目了然——不用去 Finder 里对账。</p>
+            </div>
+            <!-- 设计稿"本周"统计条：只做能从真实审计数据推出来的两项，
+                 见上方 weekStats 注释——不编造「重试成功」这类没有真实
+                 语义支撑的数字。 -->
+            <div class="week-pill">
+              <span class="week-label">本周</span>
+              <span>新备份 <b>{weekStats.added}</b></span>
+              <span>去重跳过 <b>{weekStats.dup}</b></span>
+            </div>
           </div>
           <!-- T5: 活动记录页展示审计事件流——配对请求/允许/拒绝、备份会话
                （开始/结束+数量）、设备吊销/断开，全部带时间倒序。
-               DESK-05: 真表格（设备/事件/时间三列）；ingest.* 逐文件行
-               过滤不展示（全路径噪音），备份完成行保留 ingested 汇总。 -->
-          <div class="card">
+               ingest.* 逐文件行过滤不展示（全路径噪音），备份完成行
+               保留 ingested 汇总。2026-08-13: 改回设计稿的卡片行列表
+               （DESK-05 当时改真表格的顾虑是"内容超长"，但 ingest.*
+               噪音行本来就被过滤掉了，跟表格与否无关；卡片行是 flex
+               布局，长文本本来就会自然换行，不会重新踩那个坑）。 -->
+          <div class="card list-card">
             {#if visibleAudit.length === 0}
               <p class="hint">这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。</p>
             {:else}
-              <table class="log-table">
-                <thead>
-                  <tr>
-                    <th class="th-who">设备</th>
-                    <th class="th-what">事件</th>
-                    <th class="th-time">时间</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {#each visibleAudit as e (e.ts + ":" + e.action)}
-                    {@const at = humanTime(e.ts, nowMs)}
-                    <tr>
-                      <td class="td-who">{auditWho(e)}</td>
-                      <td class="td-what">{auditText(e)}</td>
-                      <td class="td-time">{#if at}{at}{/if}</td>
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
+              <ul class="log-rows">
+                {#each visibleAudit as e (e.ts + ":" + e.action)}
+                  {@const at = humanTime(e.ts, nowMs)}
+                  <li>
+                    <span class="log-text"><b>{auditWho(e)}</b> {auditText(e)}</span>
+                    <span class="log-time">{#if at}{at}{/if}</span>
+                  </li>
+                {/each}
+              </ul>
             {/if}
           </div>
           <p class="hint">记录来自本机照片库与审计日志，不上传。</p>
@@ -1093,7 +1222,7 @@
               <p class="hint">更改位置重启后台服务后生效；已备份的照片不会自动搬家。</p>
             </div>
             <div class="col">
-              <div class="card">
+              <div class="card list-card">
                 <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
                      test），旧 REL-02 通道选择行已删。 -->
                 <div class="setting-row">
@@ -1146,6 +1275,9 @@
               <button onclick={startPairing}>刷新二维码</button>
               <button class="primary" onclick={closePairModal}>关闭</button>
             </div>
+            <!-- 设计稿离线版 v2：扫码有困难的退路——复制配对串手动传给
+                 手机（比如隔空投送/微信发给家人自己粘）。 -->
+            <button class="link-more safe" onclick={copyPairString}>无法扫码？复制配对串</button>
           {:else}
             <p class="hint modal-hint">正在生成配对码…</p>
           {/if}
@@ -1330,6 +1462,13 @@
   .service-pill.bad .dot {
     background: var(--pp-act);
   }
+  /* 展开态（≥1080px，跟设计稿交互原型一致）：不画图标，只显示文字。 */
+  .nav-icon {
+    display: none;
+  }
+  .nav-label {
+    display: inline;
+  }
   .content {
     flex: 1;
     overflow-y: auto;
@@ -1340,19 +1479,22 @@
     display: flex;
     flex-direction: column;
     gap: 22px;
-    max-width: 880px;
+    /* 设计稿基准档（16 寸/1080-1439）内容区就是填满侧栏之外的可用宽度，
+     * 不设人为上限——之前写死 880px，任何比 880+侧栏宽的窗口右边全是
+     * 死区（用户实测反馈）。max-width 只在 ≥1440px 才需要（见文件尾
+     * 的响应式媒体查询），防真的超宽屏内容无限拉伸。 */
   }
   .lede .headline {
     font-family: var(--pp-font-serif);
-    font-size: 30px;
+    font-size: 28px;
     font-weight: 400;
     line-height: 1.3;
     margin: 0;
   }
   .lede .sub {
     color: var(--pp-ink-40);
-    font-size: 15px;
-    margin: 8px 0 0;
+    font-size: 14px;
+    margin: 6px 0 0;
   }
 
   /* 照片墙同步: lede 右侧手动刷新按钮——flex 排布，标题区自适应收缩 */
@@ -1397,10 +1539,13 @@
     padding: 20px 22px;
   }
   .cols {
-    /* T-082: 设计稿原文 display:flex;gap:22px;align-items:stretch——两卡等高 */
+    /* 2026-08-13 更正：离线版设计稿 v2 的响应式静态示意图里，两张卡
+       明显不是等高的（各自撑开到自己内容的高度）——T-082 当时记的
+       "设计稿原文 stretch" 是旧版设计稿，这版已经不是了，改
+       flex-start。 */
     display: flex;
     gap: 22px;
-    align-items: stretch;
+    align-items: flex-start;
   }
   .cols .grow {
     flex: 1.2;
@@ -1444,6 +1589,18 @@
     font-size: 14px;
     color: var(--pp-ink-60);
   }
+  /* 设计稿原文：列表容器无 padding，每一行自己 padding:18px 22px，
+     分隔线贴着卡片圆角边缘——不是容器统一留白、行内零横向 padding。
+     .list-card 承载这条结构；.edge 是这条边距规则的开关（只给真正
+     贴边的顶层列表用，「已移除设备」折叠区的嵌套列表不用，见下方
+     .removed-fold 单独处理）。 */
+  .card.list-card {
+    padding: 0;
+  }
+  .card.list-card > .hint {
+    padding: 18px 22px;
+    margin: 0;
+  }
   .device-rows {
     list-style: none;
     margin: 0;
@@ -1459,6 +1616,9 @@
   .device-rows.roomy li {
     padding: 14px 0;
     gap: 14px;
+  }
+  .device-rows.roomy.edge li {
+    padding: 18px 22px;
   }
   .device-rows li:last-child {
     border-bottom: none;
@@ -1530,6 +1690,28 @@
     text-decoration: underline;
     text-underline-offset: 3px;
   }
+  /* 设计稿原文：font:600 14px sans-serif;color:#B5341F;cursor:pointer;
+     padding:8px 4px——就是一行红字，不是实心按钮。跟 .dev-name-btn 同族
+     （无边框无底色），不复用 button.danger（那个是「停止后台服务」这类
+     更重的确认动作用的胶囊按钮，两者场景不同，不能共用一套样式）。 */
+  .dev-remove-btn {
+    flex: none;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--pp-act);
+    background: transparent;
+    border: none;
+    border-radius: var(--pp-radius-control-sm);
+    padding: 8px 4px;
+    cursor: pointer;
+    min-height: 0;
+    font-family: inherit;
+  }
+  .dev-remove-btn:hover {
+    background: var(--pp-act-bg);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
   .dev-rename {
     flex: none;
     font-size: 16px;
@@ -1551,11 +1733,14 @@
     font-size: 13.5px;
     line-height: 1.5;
   }
-  /* T-082: 已移除设备折叠器——展开后 ink-40 弱化，无删除线 */
+  /* T-082: 已移除设备折叠器——展开后 ink-40 弱化，无删除线。
+     卡片本身已零 padding（.list-card），这里补横向内边距自己撑住，
+     嵌套列表不用 .edge（沿用旧的「行内零横向 padding、靠容器撑」
+     写法，折叠区不是设计稿覆盖的主列表，不用跟主列表一样贴边）。 */
   .removed-fold {
     margin-top: 12px;
+    padding: 12px 22px 0;
     border-top: 1px solid var(--pp-divider);
-    padding-top: 12px;
   }
   .removed-fold summary {
     cursor: pointer;
@@ -1567,42 +1752,76 @@
     color: var(--pp-ink-40);
     font-weight: 400;
   }
-  /* DESK-05: 活动记录真表格——设备/事件/时间三列，行分隔线同旧列表；
-     时间列右对齐 ink-40（延续旧 log-time 观感）。 */
-  .log-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 15px;
+  /* 2026-08-13: 活动记录改回设计稿的卡片行列表，撤掉 DESK-05 的真
+     表格方案（撤销理由见上方模板注释）。标题行右侧挂一个"本周"统计
+     胶囊，跟"家人与设备"页同一套 .list-card/边距贴边逻辑。 */
+  .lede-log {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 20px;
+    flex-wrap: wrap;
   }
-  .log-table th {
-    text-align: left;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--pp-ink-40);
-    padding: 6px 12px 10px 0;
-    border-bottom: 1px solid var(--pp-divider);
+  .week-pill {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    background: var(--pp-linen);
+    border-radius: var(--pp-radius-pill);
+    padding: 10px 22px;
+    flex: none;
+    font-size: 14px;
+    color: var(--pp-ink-60);
   }
-  .log-table th.th-time,
-  .log-table td.td-time {
-    text-align: right;
-  }
-  .log-table td {
-    padding: 14px 12px 14px 0;
-    border-bottom: 1px solid var(--pp-divider);
-    vertical-align: baseline;
-  }
-  .log-table tr:last-child td {
-    border-bottom: none;
-  }
-  .log-table .td-who {
-    font-weight: 600;
-    white-space: nowrap;
-  }
-  .log-table .td-what {
-    font-weight: 500;
+  .week-pill b {
     color: var(--pp-ink);
   }
-  .log-table .td-time {
+  .week-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--pp-ink-40);
+  }
+  /* 2026-08-13：列表本身内部滚动，不是靠整个右边内容区变高再滚动
+     （用户实测反馈：应该是表格内滚动，游标加载，不是整个右边区域
+     滚动）。真正的游标分页（滚到底再补一批，而不是一次性 limit=100
+     取全量）需要 activity.list 后端加 cursor 参数——现状后端只有
+     limit，没有 before_ts/cursor，这部分先留白不假装做了，只把
+     "列表内部滚动"这一半先落地。 */
+  main[data-page="log"] .page {
+    height: 100%;
+    box-sizing: border-box;
+  }
+  main[data-page="log"] .card.list-card {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  .log-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .log-rows li {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    padding: 16px 22px;
+    border-bottom: 1px solid var(--pp-divider);
+  }
+  .log-rows li:last-child {
+    border-bottom: none;
+  }
+  .log-text {
+    flex: 1;
+    font-size: 15px;
+    color: var(--pp-ink);
+  }
+  .log-text b {
+    font-weight: 600;
+  }
+  .log-time {
+    flex: none;
+    margin-left: auto;
     font-size: 13px;
     color: var(--pp-ink-40);
     white-space: nowrap;
@@ -1635,12 +1854,16 @@
     background: var(--pp-ink);
     border-radius: var(--pp-radius-pill);
   }
+  /* 2026-08-13：跟 device-rows/log-rows 同一套"容器零 padding、行自己
+     18px 22px、分隔线贴边"规则（用户实测反馈：分割线没跟卡片边框连上，
+     跟 UI 严重不符）。这个卡的容器已经是 .list-card（见模板），这里
+     只改行自己的 padding。 */
   .setting-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 12px;
-    padding: 10px 0;
+    padding: 16px 22px;
     border-bottom: 1px solid var(--pp-divider);
     font-size: 15px;
     font-weight: 500;
@@ -1654,6 +1877,12 @@
   }
   .danger-title {
     color: var(--pp-act);
+  }
+  /* 危险区域按钮：卡片底色已经是浅红（--pp-act-bg），按钮如果还用通用
+     button 的中性灰边框（--pp-border-strong）配纸白底，跟卡片撞色不
+     协调——边框改成跟卡片同一个红，视觉上才算一家人。 */
+  .danger-card button.danger {
+    border-color: var(--pp-act);
   }
   .path {
     display: block;
@@ -1732,6 +1961,59 @@
   .qr-hint {
     margin: 0;
     text-align: center;
+  }
+  /* 「最近动静」摘要卡：默认隐藏，只在 ≥1440px 由上方 @media 打开
+     （见 .cols .recent-activity-card 规则）。 */
+  .recent-activity-card {
+    display: none;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .recent-activity-card h3 {
+    margin: 0;
+  }
+  .recent-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--pp-ink);
+  }
+  .recent-rows b {
+    font-weight: 600;
+  }
+  /* 跟 .dev-name-btn/.dev-remove-btn 同族的极简文字链接——次要跳转
+     不该是实心按钮，这条规则以后别的「看全部」链接也可以直接复用。 */
+  .link-more {
+    align-self: flex-start;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--pp-ink-60);
+    background: transparent;
+    border: none;
+    padding: 2px 0;
+    cursor: pointer;
+    min-height: 0;
+    font-family: inherit;
+  }
+  .link-more:hover {
+    color: var(--pp-ink);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+  /* 设计稿离线版："一切正常还有 N 台"/"全部活动记录" 这类"一切都好，
+     只是还有更多"的次要跳转用安全绿，不是中性灰——跟危险动作的红形成
+     对照，颜色本身就是语义。 */
+  .link-more.safe {
+    color: var(--pp-safe);
+  }
+  .link-more.safe:hover {
+    color: var(--pp-safe);
+    text-decoration: underline;
+    text-underline-offset: 3px;
   }
   .qr-fallback {
     align-self: stretch;
@@ -1863,9 +2145,9 @@
   }
   .hint {
     color: var(--pp-ink-40);
-    font-size: 14px;
+    font-size: 13px;
     margin: 10px 0 0;
-    line-height: 1.55;
+    line-height: 1.6;
   }
   .card > .hint:first-of-type {
     margin-top: 0;
@@ -1977,5 +2259,80 @@
     color: #cbbfa8;
     padding: 40px;
     font-size: 13px;
+  }
+
+  /* ============================================================
+   * 三档响应式（离线版设计稿 v2「第 3 轮」），断点数值是设计稿原文。
+   * 2026-08-13 二次修复：这几条媒体查询之前写在文件中段，被后面的
+   * 无条件 .page/.cols 规则（同优先级、后出现）盖掉，等于白写——
+   * CSS 层叠顺序下同优先级选择器谁在后面谁赢。媒体查询必须放在
+   * 所有同选择器的无条件规则之后，这里统一挪到 <style> 最末尾。
+   * ============================================================ */
+  @media (max-width: 1079px) {
+    .sidebar {
+      width: 64px;
+      padding: 14px 0;
+      align-items: center;
+    }
+    .brand {
+      display: none;
+    }
+    nav {
+      align-items: center;
+      gap: 4px;
+    }
+    .nav-item {
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: none;
+    }
+    .nav-icon {
+      display: block;
+      color: var(--pp-ink-60);
+    }
+    .nav-item.active .nav-icon {
+      color: var(--pp-paper);
+    }
+    .nav-label {
+      display: none;
+    }
+    /* 服务状态缩成一个纯色点（设计稿原文），不再是文字胶囊。 */
+    .service-pill {
+      background: transparent !important;
+      padding: 0;
+      gap: 0;
+    }
+    .service-pill .dot {
+      width: 12px;
+      height: 12px;
+    }
+    .service-label {
+      display: none;
+    }
+    /* 内容单栏：水位/添加设备两卡竖排，各占满宽度（设计稿⑨：小屏不给
+       扫码这种低频动作留一整卡，但完整的横条降级属于更大改动，本卡
+       先保证「竖排不挤不裁切」这条底线，横条卡样式留后续卡打磨）。 */
+    .cols {
+      flex-direction: column;
+    }
+  }
+  /* ≥1440：三栏，内容区居中不无限拉伸，新增「最近动静」摘要卡。
+     照片墙是缩略图网格不是读文字，没有"一行多少字读得舒服"的考量，
+     豁免这条居中限宽，让墙铺满可用宽度（用户实测反馈：右边留白）。 */
+  @media (min-width: 1440px) {
+    .page {
+      max-width: 1180px;
+    }
+    main[data-page="photos"] .page {
+      max-width: none;
+    }
+    .cols .recent-activity-card {
+      display: flex;
+      flex: 1;
+    }
   }
 </style>
