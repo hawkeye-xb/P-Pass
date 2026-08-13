@@ -11,8 +11,7 @@ macOS Big Sur+ 图标规范（主图形居中占 ~60-66%）。修法：generate.
 步骤 0 生成安全区缩排版（画布中心 scale 0.77，纸底铺满不透明，系统圆角
 遮罩负责形状），icns/ico/Tauri PNG 各档全切缩排版。验证：兽面墨色宽度
 65.8%、高度 48.5%、居中；幂等 PASS；本地 tauri build 后 bundle icns 与源
-md5 一致。**等用户**：装新包看 Cmd+Tab / Dock 图标观感（出包走 release
-pipeline，见下）。
+md5 一致。**✅ 已出包 v0.3.3-test.4**（`3113f62`，macos 单平台 dispatch，GitHub 直链可用；R2 镜像仍 403 挂账）。**等用户**：装 v0.3.3-test.4 看 Cmd+Tab / Dock 图标观感（dmg: https://github.com/hawkeye-xb/P-Pass/releases/tag/v0.3.3-test.4）。
 
 ## 〇、2026-08-13：REV-01（SYNC-03/04 review 遗留 5 项）全部修完
 
