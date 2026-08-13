@@ -203,6 +203,8 @@
   // T5: 审计事件 → 人话行文案（未知 action 兜底显示原始类型，绝不吞）。
   // DESK-05: 拆成 设备/事件 两列喂表格——设备列解析 actor 名称，事件列
   // 只留动作文本（原「<设备名> 备份完成」式前缀并入设备列）。
+  // 照片墙同步卡: detail 里机器可读字段（ingested= duplicates=）翻译成
+  // 人话；asset.removed_external 只留文件名（全路径是噪音）。
   function auditWho(e) {
     const d = e.detail ?? "";
     const who = devices.find((x) => x.node_id === e.actor)?.name ?? null;
@@ -223,8 +225,17 @@
         return "加入被拒绝";
       case "backup.started":
         return "开始备份";
-      case "backup.finished":
+      case "backup.finished": {
+        // detail 是机器可读 "ingested=N duplicates=M"（router.rs 备份
+        // 提交审计）——翻译成人话；解析失败回退原文（绝不吞）。
+        const m = /ingested=(\d+)\s+duplicates=(\d+)/.exec(d);
+        if (m) return `备份完成：新增 ${m[1]} 张，去重 ${m[2]} 张`;
         return `备份完成（${d}）`;
+      }
+      case "asset.removed_external":
+        // detail "originals missing: <rel_path>"（SYNC-01 对账/WATCH-01
+        // 秒级监听清索引）——只留文件名，全路径是噪音。
+        return `外部删除（${shortName(d)}）`;
       case "device.revoked":
         return "已移除设备";
       case "device.unpaired":
@@ -234,12 +245,19 @@
         // 防锁屏重连刷屏）。
         return "连接了";
       case "backup.commit":
-        return `备份提交（${d}）`;
+        return `备份提交（${shortName(d)}）`;
       case "external.delete":
-        return `外部删除（${d}）`;
+        return `外部删除（${shortName(d)}）`;
       default:
         return `${e.action} ${d}`.trim();
     }
+  }
+  // 审计 detail 常带全路径/机器前缀——只留最后一段文件名（噪音过滤，
+  // 与 visibleAudit 的 ingest.* 过滤同一原则）。没有路径就原样返回。
+  function shortName(d) {
+    const s = String(d ?? "");
+    const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
+    return i >= 0 ? s.slice(i + 1) : s;
   }
   // DESK-05: 活动表格只展示设备级事件——ingest.* 逐文件行是全路径噪音
   // （备份完成行的 ingested= 汇总已覆盖数量），不参与展示。数据层不动。
@@ -437,16 +455,28 @@
   function onDaemonEvent(ev) {
     const name = ev?.payload?.event;
     if (!name) return;
-    // DESK-05: 备份落地（activity.appended=审计/活动流新条目，
-    // device.changed=水位推进）→ 照片墙失效重拉——否则照片库一直停在
-    // 首次加载的快照，新备份的照片显示不出来（photosLoaded 永不重置）。
-    if (name === "activity.appended" || name === "device.changed") {
-      photosLoaded = false;
-      photos = [];
-      photosNext = null;
+    // DESK-05 + 照片墙同步: 照片墙失效重拉——activity.appended（备份
+    // 审计落地）/ device.changed（水位推进）/ timeline.invalidated
+    // （WATCH-01 秒级监听 + SYNC-01 对账：Finder 删除/新增）任一发生
+    // 都重置照片墙缓存，否则停在首次加载快照（photosLoaded 永不重置，
+    // 删除/新增都不显示）。timeline.invalidated 之前漏了——手机端订阅
+    // 了它实时刷新，桌面端没订阅导致「移动端体现了，桌面端没有」。
+    if (
+      name === "activity.appended" ||
+      name === "device.changed" ||
+      name === "timeline.invalidated"
+    ) {
+      resetPhotosWall();
     }
     // 事件帧 {event, data}——data 是占位/增量提示，具体状态一律全量拉。
     refresh();
+  }
+
+  // 照片墙缓存重置（事件失效 + 手动刷新共用同一入口，避免两处漂移）。
+  function resetPhotosWall() {
+    photosLoaded = false;
+    photos = [];
+    photosNext = null;
   }
 
   // UPD-01: 启动时检查一次更新（tauri-plugin-updater；manifest 在
@@ -949,14 +979,22 @@
              thumb.get），本机直连 daemon 拉取；分组 今天/本月/更早；
              点开 = 原图内存查看（不落盘）+「在 Finder 中显示」原文件。 -->
         <section class="page" data-testid="page-photos">
-          <div class="lede">
-            <h2 class="headline">{t("ui.nav_photos")}</h2>
-            <p class="sub">
-              {t("ui.photos_count", {
-                n: photoCount !== null ? photoCount : 0,
-                m: photoSources !== null ? photoSources : 0,
-              })}
-            </p>
+          <div class="lede lede-photos">
+            <div class="lede-titles">
+              <h2 class="headline">{t("ui.nav_photos")}</h2>
+              <p class="sub">
+                {t("ui.photos_count", {
+                  n: photoCount !== null ? photoCount : 0,
+                  m: photoSources !== null ? photoSources : 0,
+                })}
+              </p>
+            </div>
+            <!-- 照片墙同步: 手动刷新兜底——事件驱动失效重拉是主通道
+                 （timeline.invalidated 等），按钮是用户能主动触发的兜底；
+                 resetPhotosWall 后 $effect 自动重拉第一页。 -->
+            <button class="photo-refresh" onclick={resetPhotosWall}>
+              {photosLoading ? "刷新中…" : "刷新"}
+            </button>
           </div>
           <div class="card photo-wall">
             {#if photosLoaded && photos.length === 0}
@@ -1315,6 +1353,21 @@
     color: var(--pp-ink-40);
     font-size: 15px;
     margin: 8px 0 0;
+  }
+
+  /* 照片墙同步: lede 右侧手动刷新按钮——flex 排布，标题区自适应收缩 */
+  .lede-photos {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .lede-titles {
+    min-width: 0;
+  }
+  .photo-refresh {
+    flex-shrink: 0;
+    margin-top: 2px;
   }
 
   /* wizard 全窗（首启向导独占，无侧栏） */
