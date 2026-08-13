@@ -1,6 +1,25 @@
-# NEXT — 当前状态与下一步（2026-08-13，SYNC-06 订阅生命周期前台化）
+# NEXT — 当前状态与下一步（2026-08-13，DAE-04 桌面壳重启后台服务）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-13：DAE-04 桌面壳更新后手动重启 daemon（完成，跨版本手动验收挂用户）
+
+xixi 在 #p-pass 开 DAE-04 线程（卡号撞车后由 DAE-03 改名，桌面壳重启方案）。
+已实现：①桌面壳新增 Tauri 命令 `restart_daemon_process`——照抄 stop_daemon
+的 pkill/taskkill 杀旧进程但**绝不碰 autostart 注册**（uninstall 会阻止复活；
+SuccessfulExit=false 下 exit(0) 反而不复活 → 必须真「杀」，step_down/claim
+机制明确不用）；Windows 无 KeepAlive 语义 → 杀后显式重拉；②杀后每 500ms
+轮询 status 最长 12s（实测信号杀 4~5s 复活）确认复活且版本号真的变了——
+变了才报成功，没变=文件没更新明说失败；③设置页「软件更新」卡新增按钮，
+仅当壳版本与 daemon status.version 核心三段不同（忽略 v 前缀与 -test.N 后缀）
+才显示；④i18n 10 键 zh/en 对称 + keys.rs 注册（ALL 79→89）。
+验证：桌面 lib 6/6（新增 4 项 restart_outcome 纯函数单测）+ diag 8/8 +
+vite build 绿 + 桌面 clippy 零警告 + 主仓 fmt 干净。
+**等用户（三条手动验收，卡内禁令：未经确认不得宣称「已验证有效」）**：
+①临时改 daemon 版本常量编译安装造「版本不一致」→ 按钮出现 → 点击 →
+ps 前后 PID 对照 + launchd 数秒拉起 + 壳读回新版本号；
+②反证：破坏 sidecar 路径让复活失败 → 按钮流程捕获失败明确提示；
+③正常场景强制调用命令不误伤（版本一致时按钮本不该出现）。
 
 ## 〇、2026-08-13：SYNC-06 订阅连接生命周期上提到 App 前台级别（完成，真机挂账）
 

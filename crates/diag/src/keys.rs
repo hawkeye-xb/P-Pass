@@ -122,6 +122,17 @@ msg_keys! {
     UI_UPDATE_AVAILABLE => "ui.update_available",
     UI_UPDATE_INSTALLED => "ui.update_installed",
     UI_UPDATE_FAILED => "ui.update_failed",
+    // ── Desktop daemon restart after shell update (DAE-04) ───────────
+    UI_RESTART_SERVICE => "ui.restart_service",
+    UI_RESTART_SERVICE_BTN => "ui.restart_service_btn",
+    UI_RESTARTING_SERVICE => "ui.restarting_service",
+    UI_RESTART_SERVICE_HINT => "ui.restart_service_hint",
+    UI_RESTART_SERVICE_CONFIRM_TITLE => "ui.restart_service_confirm_title",
+    UI_RESTART_SERVICE_CONFIRM_BODY => "ui.restart_service_confirm_body",
+    UI_RESTART_SERVICE_OK => "ui.restart_service_ok",
+    UI_RESTART_SERVICE_NO_CHANGE => "ui.restart_service_no_change",
+    UI_RESTART_SERVICE_STARTED => "ui.restart_service_started",
+    UI_RESTART_SERVICE_FAILED => "ui.restart_service_failed",
     // ── Desktop photos page (DESK-03) + env badge (DESK-02 收编债) ────
     UI_ENV_BADGE_TEST => "ui.env_badge_test",
     UI_NAV_PHOTOS => "ui.nav_photos",
@@ -209,6 +220,16 @@ mod tests {
             UI_UPDATE_AVAILABLE,
             UI_UPDATE_INSTALLED,
             UI_UPDATE_FAILED,
+            UI_RESTART_SERVICE,
+            UI_RESTART_SERVICE_BTN,
+            UI_RESTARTING_SERVICE,
+            UI_RESTART_SERVICE_HINT,
+            UI_RESTART_SERVICE_CONFIRM_TITLE,
+            UI_RESTART_SERVICE_CONFIRM_BODY,
+            UI_RESTART_SERVICE_OK,
+            UI_RESTART_SERVICE_NO_CHANGE,
+            UI_RESTART_SERVICE_STARTED,
+            UI_RESTART_SERVICE_FAILED,
             UI_ALLOW_REPLACE,
             UI_ALLOW_NEW,
             UI_ENV_BADGE_TEST,
@@ -222,7 +243,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 79);
+        assert_eq!(ALL.len(), 89);
     }
 
     #[test]

@@ -123,6 +123,12 @@
     displayVersion.includes("-test.") ? "test" : "stable"
   );
   const isTestBuild = $derived(displayVersion.includes("-test."));
+  // DAE-04: daemon 版本落后于桌面壳（更新装好了但旧 daemon 进程还在跑）——
+  // 设置页「重启后台服务」按钮的唯一显示条件。版本一致/读不到时不显示，
+  // 避免用户瞎点误杀正常运行的服务。
+  const daemonStale = $derived(
+    !!version && !!status?.version && !sameRelease(version, status.version)
+  );
   // DEV-01b: 重装识别/「替换旧的」入口先隐藏（用户拍板 2026-08-12）——
   // 现阶段统一走「重新扫码 = 全新授权」，不给用户多一个要理解的概念。
   // 编译期 flag 默认关；打开 = DEV-01 行为原样回来（反证路径）。
@@ -480,6 +486,57 @@
       return a > b;
     }
     return false;
+  }
+
+  // DAE-04: 「桌面壳自己的版本」与「daemon 版本」是否同一次发布——只比
+  // 核心三段数字，忽略 v 前缀和 -test.N 后缀：release 里 daemon 报
+  // "v0.3.3-test.1"、壳报 "0.3.3"（tauri.conf.json），是同一份；更新
+  // 装好后壳变 0.3.4、daemon 还是 v0.3.3-test.1 → 核心不同 → 真不一致。
+  function sameRelease(a, b) {
+    const core = (s) =>
+      String(s)
+        .replace(/^v/i, "")
+        .split("-")[0]
+        .split(".")
+        .map((x) => parseInt(x, 10) || 0);
+    const ca = core(a);
+    const cb = core(b);
+    return (
+      ca.length === 3 &&
+      cb.length === 3 &&
+      ca[0] === cb[0] &&
+      ca[1] === cb[1] &&
+      ca[2] === cb[2]
+    );
+  }
+
+  // DAE-04: 桌面壳更新后手动重启后台服务——杀旧 daemon，靠 launchd 拉起
+  // 磁盘上的新版本（Windows 无 KeepAlive 语义，Rust 命令内显式重拉）。
+  // 成功/失败都明说：版本真变了才报成功；没变 = 服务文件没更新，提示重装。
+  let restartingService = $state(false);
+  async function restartDaemonProcess() {
+    const yes = await confirmDialog(t("ui.restart_service_confirm_body"), {
+      title: t("ui.restart_service_confirm_title"),
+      kind: "warning",
+    });
+    if (!yes) return;
+    restartingService = true;
+    try {
+      const r = await invoke("restart_daemon_process");
+      if (r?.changed) {
+        flashMessage(
+          r.old_version
+            ? t("ui.restart_service_ok", { from: r.old_version, to: r.new_version })
+            : t("ui.restart_service_started", { version: r.new_version })
+        );
+      } else {
+        flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }));
+      }
+    } catch (e) {
+      flashMessage(t("ui.restart_service_failed", { err: String(e) }));
+    } finally {
+      restartingService = false;
+    }
   }
 
   // REL-02: test 通道检查——壳内 fetch Worker manifest，弹窗后打开
@@ -1005,6 +1062,17 @@
                   <span>软件更新</span>
                   <button onclick={() => checkForUpdate(true)}>检查更新</button>
                 </div>
+                <!-- DAE-04: 桌面壳更新后 daemon 还是旧版（版本不一致）才
+                     显示——一致时不出现，避免误杀正常运行的服务。 -->
+                {#if daemonStale}
+                  <div class="setting-row">
+                    <span>{t("ui.restart_service")}</span>
+                    <button onclick={restartDaemonProcess} disabled={restartingService}>
+                      {restartingService ? t("ui.restarting_service") : t("ui.restart_service_btn")}
+                    </button>
+                  </div>
+                  <p class="hint">{t("ui.restart_service_hint")}</p>
+                {/if}
                 <div class="setting-row">
                   <span>遇到问题？导出诊断包</span>
                   <button onclick={exportLogs}>{t("ui.export_logs")}</button>

@@ -203,6 +203,106 @@ fn stop_daemon() -> Result<(), String> {
     Ok(())
 }
 
+/// DAE-04: 桌面壳更新后手动重启后台服务——杀掉当前运行的旧 daemon 进程，
+/// 靠 launchd KeepAlive（SuccessfulExit=false，crates/platform/src/macos.rs
+/// 注释：崩溃/被杀照样复活）自动拉起磁盘上已是新版本的同一个文件。
+/// 与 stop_daemon 相反：本命令**绝不碰 autostart 注册**（uninstall 会
+/// 阻止复活）——注册从头到尾没动过，这正是设计要点。体面退出（exit 0）
+/// 反而不会被复活，所以必须是真的"杀"（信号终止），不走 step_down 那套
+/// 版本协商。Windows 的 autostart 是普通 Run key、没有 KeepAlive 复活
+/// 语义——杀掉后显式重新拉起一次（start_daemon 的一次性 spawn 分支，
+/// 不注册 autostart）。
+/// 杀完轮询 status 确认进程复活且版本号确实变了（12s 超时，超时报错，
+/// 不能无限等）——这是 Clash Verge Rev #5451「报告升级成功但实际没换好」
+/// 的教训：验证失败必须明说，不能沉默假装成功。
+#[tauri::command]
+fn restart_daemon_process() -> Result<Value, String> {
+    // 1) 杀前读当前 daemon 版本——复活后拿它跟新版本对比。
+    let old_version = ipc::DaemonHandle::discover()
+        .and_then(|d| d.call("status", json!({})))
+        .ok()
+        .and_then(|v| {
+            v.get("version")
+                .and_then(|x| x.as_str())
+                .map(str::to_string)
+        });
+    // 2) 杀进程——照抄 stop_daemon 的 kill 逻辑（同款 pkill/taskkill），
+    //    但绝不做任何 uninstall_autostart。
+    #[cfg(unix)]
+    {
+        let out = std::process::Command::new("pkill")
+            .args(["-f", "ppf-daemon"])
+            .output()
+            .map_err(|e| format!("杀掉旧后台服务进程失败：{e}"))?;
+        // pkill 退出码 1 = 没有匹配进程（服务本来就没在跑）——不 panic，
+        // 继续走轮询（launchd 会把它拉起来）。
+        if !out.status.success() && out.status.code() != Some(1) {
+            return Err(format!(
+                "杀掉旧后台服务进程失败：pkill 退出码 {:?}",
+                out.status.code()
+            ));
+        }
+    }
+    #[cfg(windows)]
+    {
+        let out = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "ppf-daemon.exe"])
+            .output()
+            .map_err(|e| format!("杀掉旧后台服务进程失败：{e}"))?;
+        // Windows 没有 launchd KeepAlive 复活语义——杀掉后必须显式重新
+        // 拉起（start_daemon 的一次性 spawn fallback 分支）。
+        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        let sidecar = exe.parent().ok_or("no parent dir")?.join("ppf-daemon.exe");
+        if !sidecar.is_file() {
+            return Err(format!("找不到内置后台服务：{}", sidecar.display()));
+        }
+        std::process::Command::new(&sidecar)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .stdin(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("重启后台服务失败：{e}"))?;
+    }
+    // 3) 轮询 status 直到复活（每 500ms，最长 12s——实测信号杀 4~5s
+    //    复活，12s 预算充裕；超时报错，绝不无限等）。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
+    let new_version = loop {
+        if let Ok(v) = ipc::DaemonHandle::discover().and_then(|d| d.call("status", json!({}))) {
+            break v
+                .get("version")
+                .and_then(|x| x.as_str())
+                .map(str::to_string);
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(
+                "后台服务被杀后没能自动重启（系统没有把它拉起来）。请重启电脑，或手动点「启动后台服务」。"
+                    .into(),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    };
+    Ok(restart_outcome(
+        old_version.as_deref(),
+        new_version.as_deref(),
+    ))
+}
+
+/// DAE-04: 组装重启结果（纯函数，单测覆盖）。`changed=true` 才是真成功
+/// （进程复活且版本号真的变了）；版本没变 = 磁盘上的服务文件其实没更新，
+/// 前端必须明说失败，不能假装成功。
+fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>) -> Value {
+    json!({
+        "old_version": old_version,
+        "new_version": new_version,
+        "changed": match (old_version, new_version) {
+            // 复活了但版本没变 → 文件没更新，不算成功。
+            (Some(old), Some(new)) => old != new,
+            // 杀前没读到（服务本来就没在跑）或杀后读到——重启本身有进展。
+            _ => new_version.is_some(),
+        },
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -218,7 +318,8 @@ pub fn run() {
             open_power_settings,
             write_config,
             start_daemon,
-            stop_daemon
+            stop_daemon,
+            restart_daemon_process
         ])
         .setup(|app| {
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
@@ -264,4 +365,44 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // DAE-04: 版本真的变了 → changed=true（真成功，前端报「已重启」）。
+    #[test]
+    fn restart_outcome_marks_version_change() {
+        let v = restart_outcome(Some("v0.3.3-test.1"), Some("0.3.4"));
+        assert_eq!(v["changed"], true);
+        assert_eq!(v["old_version"], "v0.3.3-test.1");
+        assert_eq!(v["new_version"], "0.3.4");
+    }
+
+    // DAE-04: 复活但版本没变 = 磁盘上的服务文件其实没更新——必须报为
+    // 未变更，前端明说失败（Clash Verge Rev #5451 的教训），不假装成功。
+    #[test]
+    fn restart_outcome_same_version_is_not_a_change() {
+        let v = restart_outcome(Some("0.3.3"), Some("0.3.3"));
+        assert_eq!(v["changed"], false);
+    }
+
+    // DAE-04: 杀前 daemon 没在跑（读到不到版本）、杀后起来了 → 也算
+    // 有进展（前端报「已启动」）。
+    #[test]
+    fn restart_outcome_starts_an_offline_daemon() {
+        let v = restart_outcome(None, Some("0.3.3"));
+        assert_eq!(v["changed"], true);
+        assert_eq!(v["old_version"], Value::Null);
+    }
+
+    // DAE-04: 杀后没读到版本 = 无法验证，不算成功（防御分支——轮询
+    // 超时已在上游拦掉，这里兜底语义）。
+    #[test]
+    fn restart_outcome_without_new_version_is_not_verified() {
+        let v = restart_outcome(Some("0.3.3"), None);
+        assert_eq!(v["changed"], false);
+        assert_eq!(v["new_version"], Value::Null);
+    }
 }

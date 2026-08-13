@@ -394,6 +394,31 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       --bogus (incident reproduced, test hangs/red); constant-true
       autostart → red; loose "use" substring → red. workspace 286/286 +
       arch-check + clippy zero warnings + fmt clean.
+- [ ] DAE-04 desktop restart button for stale daemon after shell update —
+      **code landed 2026-08-13**: after `downloadAndInstall()` replaces the
+      .app bundle, the old sidecar daemon keeps running (launchd task
+      unchanged, never killed) until reboot — real gap found 2026-08-13
+      when the user asked "can auto-update also update the resident
+      service?"; no industry shortcut exists (Docker vmnetd / tailscaled /
+      Clash Verge Rev all hit the same wall) → manual button, minimal
+      scope. Desktop shell adds `restart_daemon_process` Tauri command:
+      kill via the same pkill/taskkill as stop_daemon **but never touches
+      autostart registration** (uninstall would block respawn; clean
+      exit(0) also wouldn't respawn under `SuccessfulExit=false`, so a
+      real signal kill is required — step_down/claim machinery explicitly
+      not used), Windows has no KeepAlive semantics → explicit one-shot
+      respawn after taskkill; then poll status every 500ms up to 12s
+      (measured signal-kill respawn is 4–5s), verify the version actually
+      changed — silent fake-success forbidden (Clash Verge Rev #5451
+      lesson). Button shows in Settings only when the shell's version and
+      the daemon's status.version are different releases (core-triplet
+      compare, ignoring `v` prefix and `-test.N` suffix so a fresh test
+      install never false-positives), hidden otherwise. 4 unit tests for
+      the outcome-assembly pure fn + desktop lib 6/6 + diag i18n
+      symmetry 8/8 (10 new ui.restart_service_* keys registered) + vite
+      build green. Cross-version manual acceptance (stale-daemon
+      simulation, broken-sidecar counterproof, normal-scene no-op) hangs
+      on the user.
 - [ ] **Gate: 5–10 household private beta, 2 weeks**
 
 ## M4 — Launch / 发布 ⬜
