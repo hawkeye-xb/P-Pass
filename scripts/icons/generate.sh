@@ -18,11 +18,40 @@ ICONS="$ROOT/apps/desktop/src-tauri/icons"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
-# ── 1. 主图标 PNG 阶梯（碳纹版，1024 源 → 各档）──────────────
+# ── 0. macOS 安全区缩排版 SVG（2026-08-13 DESK-05b 修复）─────
+# macOS Big Sur+ 图标规范：系统对图标应用圆角矩形遮罩（corner radius
+# ~18.75%），主图形应居中且视觉尺寸占画布 ~60-66%，四周留呼吸区。
+# ICON-01 直接把 icon-carbon.svg 全幅渲染进 icns——兽面含笔画横向占
+# 画布 ~86%，Dock/Cmd+Tab 显示「显得特大」、不符合规范。Android 侧
+# ICON-01b 已做过 66% 安全区缩排，macOS 侧漏了，本步骤补齐。
+# 修法：以画布中心 (512,512) 为原点整体 scale，把兽面视觉宽度
+# 876px（110-36=74 至 914+36=950）缩到 1024×66% ≈ 676 → s = 676/876 ≈ 0.77。
+# 纸底 rect 保持铺满 1024（系统遮罩负责形状，背景必须不透明）。
+SAFE_CARBON="$OUT/icon-carbon-safe.svg"
+SAFE_BEAST="$OUT/icon-beast-safe.svg"
+python3 - "$DESIGN/icon-carbon.svg" "$SAFE_CARBON" "$DESIGN/icon-beast.svg" "$SAFE_BEAST" <<'PYEOF'
+import re, sys
+_, carbon_src, carbon_out, beast_src, beast_out = sys.argv
+def safe(svg_path, out_path):
+    src = open(svg_path).read()
+    # 纸底 rect 留在最外层（铺满画布）；其余内容包进中心缩放 group。
+    # pattern 是 userSpaceOnUse、坐标基于引用元素（path）的 user space，
+    # path 已在缩放 group 内 → 碳纹自动随兽面等比缩放，无需手动改 pattern。
+    m = re.match(r'(<svg[^>]*>)(.*)(</svg>)', src, re.S)
+    head, body, tail = m.group(1), m.group(2), m.group(3)
+    body = re.sub(r'<rect width="1024" height="1024" fill="#FBF8F2"/>', '', body)
+    wrapped = f'<g transform="translate(512 512) scale(0.77) translate(-512 -512)">{body}</g>'
+    open(out_path, 'w').write(f'{head}\n  <rect width="1024" height="1024" fill="#FBF8F2"/>\n  {wrapped}\n{tail}')
+safe(carbon_src, carbon_out)
+safe(beast_src, beast_out)
+print("safe-zone svgs written (scale 0.77, paper bg full-bleed)")
+PYEOF
+
+# ── 1. 主图标 PNG 阶梯（碳纹版安全区缩排，1024 源 → 各档）────
 # Tauri 期望的清单（含 Windows Store 档 + macOS icns 用各尺寸）。
 # macOS icns 需要 16/32/64/128/256/512/1024（@2x 档由 iconutil 生成）。
 for size in 16 32 48 64 128 256 512 1024; do
-  rsvg-convert -w "$size" -h "$size" "$DESIGN/icon-carbon.svg" -o "$OUT/${size}x${size}.png"
+  rsvg-convert -w "$size" -h "$size" "$SAFE_CARBON" -o "$OUT/${size}x${size}.png"
 done
 # ⚠️ tauri generate_context! 硬性要求 icons/*.png 为 RGBA——rsvg-convert
 # 对铺满纸底的 SVG 输出 RGB（无 alpha），必须强制转 RGBA。
@@ -43,9 +72,10 @@ done
 
 # ── 2. Windows .ico（多尺寸合成；≤32px 用 beast，≥48px 碳纹）─
 # ico 无 1024 档（Vista+ 最大 256）。小尺寸档碳纹会糊 → beast 覆盖。
-python3 - "$OUT" "$DESIGN" <<'PYEOF'
+# 2026-08-13：统一用安全区缩排版（与 macOS/PNG 各档构图一致）。
+python3 - "$OUT" "$DESIGN" "$SAFE_CARBON" "$SAFE_BEAST" <<'PYEOF'
 import subprocess, sys, struct, os
-out, design = sys.argv[1], sys.argv[2]
+out, design, safe_carbon, safe_beast = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 def render(s, svg):
     p = f"{out}/gen-{s}-{'beast' if 'beast' in svg else 'carbon'}.png"
     subprocess.run(["rsvg-convert", "-w", str(s), "-h", str(s), svg, "-o", p], check=True)
@@ -53,7 +83,7 @@ def render(s, svg):
 sizes = [16, 32, 48, 64, 128, 256]
 pngs = []
 for s in sizes:
-    svg = f"{design}/icon-beast.svg" if s <= 32 else f"{design}/icon-carbon.svg"
+    svg = safe_beast if s <= 32 else safe_carbon
     p = render(s, svg)
     pngs.append((s, open(p, "rb").read()))
 header = struct.pack("<HHH", 0, 1, len(pngs))
@@ -70,13 +100,14 @@ PYEOF
 
 # ── 3. macOS .icns（iconutil，碳纹版大层 + beast 小层）────────
 # ICON-01 分工：icns 内 ≤32px 层用 beast（碳纹小尺寸会糊），大层碳纹。
+# 2026-08-13 DESK-05b：全部层切安全区缩排版（兽面居画布中央 ~66%）。
 ICONSET="$OUT/icon.iconset"
 mkdir -p "$ICONSET"
-# 16/32px 层 → beast 全实线；≥128px 层 → 碳纹（含 @2x 表示）
-rsvg-convert -w 16 -h 16 "$DESIGN/icon-beast.svg" -o "$ICONSET/icon_16x16.png"
-rsvg-convert -w 32 -h 32 "$DESIGN/icon-beast.svg" -o "$ICONSET/icon_16x16@2x.png"
-rsvg-convert -w 32 -h 32 "$DESIGN/icon-beast.svg" -o "$ICONSET/icon_32x32.png"
-rsvg-convert -w 64 -h 64 "$DESIGN/icon-beast.svg" -o "$ICONSET/icon_32x32@2x.png"
+# 16/32px 层 → beast 全实线（安全区版）；≥128px 层 → 碳纹（含 @2x 表示）
+rsvg-convert -w 16 -h 16 "$SAFE_BEAST" -o "$ICONSET/icon_16x16.png"
+rsvg-convert -w 32 -h 32 "$SAFE_BEAST" -o "$ICONSET/icon_16x16@2x.png"
+rsvg-convert -w 32 -h 32 "$SAFE_BEAST" -o "$ICONSET/icon_32x32.png"
+rsvg-convert -w 64 -h 64 "$SAFE_BEAST" -o "$ICONSET/icon_32x32@2x.png"
 cp "$OUT/128x128.png" "$ICONSET/icon_128x128.png"
 cp "$OUT/256x256.png" "$ICONSET/icon_128x128@2x.png"
 cp "$OUT/256x256.png" "$ICONSET/icon_256x256.png"
