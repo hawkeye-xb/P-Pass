@@ -2326,6 +2326,9 @@
   @media (min-width: 1440px) {
     .page {
       max-width: 1180px;
+      /* 2026-08-13 二次走查：只限宽不居中 = 右侧死区（1920px 下实测
+         486px）——"内容区居中不无限拉伸"要两个都做，margin auto 居中。 */
+      margin: 0 auto;
     }
     main[data-page="photos"] .page {
       max-width: none;
