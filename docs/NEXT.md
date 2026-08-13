@@ -1,6 +1,25 @@
-# NEXT — 当前状态与下一步（2026-08-13，DAE-04 桌面壳重启后台服务）
+# NEXT — 当前状态与下一步（2026-08-13，DESK-06 照片墙同步补漏）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-13：DESK-06 照片墙同步补漏（完成，桌面真机验收挂用户）
+
+xixi 在 #p-pass 反馈「移动端订阅状态有了，我们 desktop 照片反而没有同步？？？
+我本地 finder 删除了照片，移动端都体现出来了，我们桌面端反而没有」——直接催修。
+**根因**：SYNC-01/WATCH-01 的 `timeline.invalidated` 事件桌面端没订阅——
+`onDaemonEvent` 只对 `activity.appended`/`device.changed` 重置照片墙缓存
+（photosLoaded/photos/photosNext），Finder 删照片后移动端（SYNC-03/06 订阅）
+实时刷新、桌面端照片墙停在首次加载快照；60s 兜底轮询也不重拉照片墙。
+**修法（apps/desktop/src/App.svelte，daemon 零改动）**：①`timeline.invalidated`
+加入照片墙失效重置，重置抽 `resetPhotosWall()` 统一入口；②照片墙 lede 右侧
+「刷新」按钮兜底（点击 resetPhotosWall → `$effect` 自动重拉第一页）；
+③活动记录人话化——`backup.finished` 的 `ingested=N duplicates=M` 解析成
+「备份完成：新增 N 张，去重 M 张」（解析失败回退原文）、`asset.removed_external`/
+`external.delete`/`backup.commit` 用 `shortName()` 只留文件名。
+验证：vite build 绿（176 modules）。
+**等用户（三条真机验收）**：①Finder 删一张照片 → 桌面照片墙秒级消失（不点刷新）；
+②点「刷新」按钮 → 重拉；③活动记录显示人话（「备份完成：新增 N 张，去重 M 张」/
+「外部删除（文件名）」）。
 
 ## 〇、2026-08-13：DAE-04 桌面壳更新后手动重启 daemon（完成，跨版本手动验收挂用户）
 
