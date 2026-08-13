@@ -488,6 +488,21 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## SYNC 批次（2026-08-11 三星真机反馈驱动：Finder 删文件 ≠ 手机时间线消失）
 
+- [x] **SYNC-06 订阅生命周期上提到 App 前台级别 — merged 2026-08-13（本 commit）**:
+      用户 review 指出 SYNC-04 的订阅绑在 PhotosScreen 组合可见性上——切设置
+      tab 订阅就断、切回重建有空窗还丢信号。订阅状态与驱动循环抽到
+      `TimelineSubscriptionHolder`（MainActivity 跟 ForegroundHeartbeat 并列
+      持有，复用同一条 LifecycleEventObserver）：ON_RESUME 起 / ON_STOP 停
+      （PRES-01 后台零网络红线同款判断），前台期间不管哪个 tab 订阅保持、
+      信号照收照刷；回前台重建订阅 + 整页刷新补齐。协议层（SYNC-03/04）一字
+      未动，nextSubscribeRetry 原样，60s 兜底轮询保持 REV-01#2「仅追加」语义；
+      配对监视（前台 2s 轮询 pairing.json）处理重配对/断开/换 token；翻页也
+      收进 holder（appendNextPage）。PhotosScreen 只渲染。测试：纯函数状态机
+      7 项（tab 0→1→0 零转换 = 订阅发起次数 0 变化，旧接线对照每次切回 +1）
+      + holder 协程级 5 项（计数 fake 通道，tab 切换不重连/start 幂等/
+      ON_STOP 关 ON_RESUME 重建/耗尽后手动重试/未配对空闲+配对落盘自动起订）
+      ——android 178/178 绿 + assembleDebug 绿。**真机验收挂用户**（两条，见
+      NEXT；未经确认不得宣称「已对齐前台」）。
 - [x] **REV-01 SYNC-03/04 review 遗留 5 项 — merged 2026-08-13（本 commit）**:
       另一 agent review SYNC-03（QUIC 订阅登记表）/SYNC-04（Android 前台
       订阅）代码时发现的 5 项 backlog，用户当时本地无手机直连改排本卡。

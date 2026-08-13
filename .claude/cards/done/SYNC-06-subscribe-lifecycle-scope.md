@@ -91,3 +91,45 @@ Android 单测输出摘要 + tab 切换场景的状态转换断言输出 + 真�
 
 android 全量单测绿 + PROGRESS.md 一行 + ROADMAP.md 状态行 + 真机验收
 挂用户。
+
+---
+
+## 验收记录（2026-08-13，本卡完成）
+
+**实现**：`TimelineSubscriptionHolder`（ui/TimelineSubscriptionHolder.kt）——
+纯函数状态机（`SubscriptionSessionState` + 转换函数，tab 切换不在输入集）+
+`TimelineChannel` 依赖面（生产 = `LoaderTimelineChannel` 薄包装 TimelineLoader，
+协议层零改动）+ 配对监视循环（前台 2s 轮询 pairing.json，重配对/断开/换
+token 重建会话）+ 60s 兜底轮询（REV-01#2「仅追加」语义原样）+ 翻页
+`appendNextPage` 收进 holder。MainActivity 跟 ForegroundHeartbeat 并列持有、
+复用同一条 LifecycleEventObserver（ON_RESUME 起 / ON_STOP 停，PRES-01 红线
+同款判断）。PhotosScreen 只渲染 holder 状态，不再创建/销毁订阅连接。
+
+**测试证据**（`./gradlew :app:testDebugUnitTest`，178 tests / 0 failed / 4
+skipped；assembleDebug 绿）：
+- 纯状态机 7 项（TimelineSubscriptionStateTest）：tab 0→1→0 零状态转换 →
+  `subscriptionsStarted` 保持 1（一次都没重新触发）、`subscribeAttempt` 0 变
+  化；旧接线对照——每次切回 tab 重新发起（+1/次）；connect 清失败标志；
+  断线退避递增 + 返回 delay；wasLive 清零退避（nextAttempt=1 从第一档重来）；
+  耗尽后 `delayMs=null` + 手动重试清零；回前台 start() 清零重来。
+- holder 协程级 5 项（TimelineSubscriptionHolderTest，计数 fake 通道 +
+  kotlinx-coroutines-test 虚拟时间）：`tabSwitchDoesNotRestartSubscription`
+  （start 后 subscribeCalls=1，tab 0→1→0 后仍 1）；`repeatedStartIsIdempotent`
+  （三次 start 仍 1）；`stopClosesAndResumeRestarts`（stop→start = 2）；
+  `exhaustionStopsAndManualRetryRelaunches`（6 档退避后第 7 次失败 exhausted、
+  手动重试第 8 次发起）；`unpairedStaysIdleAndPairingAppearsStartsSession`
+  （未配对零订阅、配对落盘 2s 内自动起订）。
+- SubscribeRetryTest 原 5 条保持绿（退避纯函数未动）。
+
+**环境修复（本卡顺带）**：本地 android 构建此前必挂——temurin-26 在 macOS
+java_home 注册表且为最高版本，AGP JdkImageTransform 直接查 java_home 拿它跑
+jlink（JDK 24+ 移除 `--disable-plugin system-modules`，transform 必失败）。
+已把 temurin-26 移出注册表（备份 /tmp/temurin-26.jdk.bak）+ Homebrew JDK 17
+symlink 进 /Library/Java/JavaVirtualMachines（java_home 返回 17）。此后本地
+构建无需任何 flag。
+
+**真机验收挂用户（两条，未经确认不得宣称「已对齐前台」）**：
+①停在设置 tab → daemon 侧发生变化 → 切回照片 tab 立即看到最新状态，没有
+「重新连接中」的等待/转圈；②反证：临时把订阅状态改回绑定 PhotosScreen 组合
+可见性（还原改动前行为）→ 切 tab 来回 → 观察到订阅确实重新建立（如加日志
+数进入订阅循环的次数）。

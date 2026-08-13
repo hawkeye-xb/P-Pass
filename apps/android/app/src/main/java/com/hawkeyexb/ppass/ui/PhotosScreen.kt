@@ -214,11 +214,19 @@ internal fun confirmedHashesUnder(stateRoot: java.io.File): Set<String> =
         ?.toSet() ?: emptySet()
 
 @Composable
-fun PhotosScreen(loader: TimelineLoader) {
-    var items by remember { mutableStateOf<List<AssetMeta>>(emptyList()) }
-    var next by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
+internal fun PhotosScreen(holder: TimelineSubscriptionHolder) {
+    // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
+    // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
+    // 订阅连接保持，本 composable 只渲染这份状态，不再自己创建/销毁订阅。
+    val loader = holder.loader
+    val items = holder.items
+    val next = holder.next
+    val loading = holder.loading
+    val error = holder.error
+    val subscribeExhausted = holder.state.subscribeExhausted
+    val subscribeConnected = holder.state.subscribeConnected
+    val subscribeHadFailure = holder.state.subscribeHadFailure
+
     var opened by remember { mutableStateOf<AssetMeta?>(null) }
     // T-080: 轻过滤器（设计稿：全部 / 仅本机 / 家人的）。
     var filter by remember { mutableStateOf(TimelineFilter.All) }
@@ -231,115 +239,8 @@ fun PhotosScreen(loader: TimelineLoader) {
         }
     }
 
-    // SYNC-04：整页重载的共用逻辑——首次加载、订阅收到信号、兜底轮询、
-    // 手动重试都走这一条路径。MOB-04 红线①失效联动：整页重载后逐出
-    // 不在返回集里的缩略图缓存（SYNC-01 对账后 daemon 已删的照片不再
-    // 闪旧图）。
-    suspend fun refreshFullPage() {
-        val page = loader.page(null)
-        items = page.items
-        next = page.next
-        loader.onTimelineRefreshed(page.items.map { it.hash }.toSet())
-    }
-
-    LaunchedEffect(Unit) {
-        try {
-            refreshFullPage()
-        } catch (t: Throwable) {
-            error = t.message
-        } finally {
-            loading = false
-        }
-    }
-
-    // SYNC-04：前台常驻订阅，取代原来的 15s"仅追加"轮询——收到信号走
-    // 整页覆盖语义（refreshFullPage，onTimelineRefreshed 现成的缓存
-    // 失效逐出），删除的照片才能真的从时间线消失，不是像原来那样永久
-    // 停留到进程重启。断线（含对端主动 finish，比如被吊销）按有限退避
-    // 重连；超过重试上限停止静默重试，UI 亮"连不上"状态 + 手动重试
-    // 入口（UX-11 同款：有界等待→亮错误→交给用户）。切走这个 tab 时
-    // LaunchedEffect 自动取消，订阅连接跟着断（同一条心跳生命周期，
-    // 不是另开一套判断在线的逻辑，见 PRES-01）。
-    var subscribeAttempt by remember { mutableStateOf(0) }
-    var subscribeExhausted by remember { mutableStateOf(false) }
-    // 真机验收发现的缺口：原设计重连期间界面完全沉默，只有耗尽之后才
-    // 亮提示——用户在飞行模式下什么都看不到，以为是卡死。现在细分成
-    // 三态：还没连上第一次(两者皆假) / 已连上安静收听(connected) /
-    // 断线重试中(hadFailure，跟 subscribeAttempt 解耦——否则第一次
-    // 断线后的第一档退避窗口里，key 还没来得及变，提示会漏出现)。
-    var subscribeConnected by remember { mutableStateOf(false) }
-    var subscribeHadFailure by remember { mutableStateOf(false) }
-
-    LaunchedEffect(subscribeAttempt) {
-        if (subscribeExhausted) return@LaunchedEffect
-        subscribeConnected = false
-        // REV-01 #5: 计时起点必须是连接真正建立的那一刻，不是 effect
-        // 开始（含重连尝试耗时）——否则"建了很久才连上、一连上就断"的
-        // 边缘情况会被误判成 wasLive=true（退避档位被错误清零重来）。
-        // 没连上过（connectedAt 仍是 null）时 wasLive 恒为 false。
-        var connectedAt: Long? = null
-        try {
-            loader.subscribe(
-                onConnected = {
-                    subscribeConnected = true
-                    subscribeHadFailure = false
-                    connectedAt = System.currentTimeMillis()
-                },
-            ) {
-                try {
-                    refreshFullPage()
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e // REV-01 #4: 协程惯例——取消不能被当成普通失败吞掉。
-                } catch (_: Throwable) {
-                    // 这一次刷新失败——不动 items，等下一次信号/兜底轮询再试。
-                }
-            }
-            // 正常返回（对端主动 finish 了发送方向，比如设备被吊销）
-            // 和抛异常是同一件事：这次订阅结束了，都走下面的退避重连。
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            throw e // REV-01 #4: 同上——effect 被取消（切走 tab/App 进后台）
-            // 时必须真的停下来，不能被下面的退避重连逻辑当成"断线"接着跑。
-        } catch (_: Throwable) {
-            // 连接异常——同样走退避重连。
-        }
-        subscribeConnected = false
-        subscribeHadFailure = true
-        val wasLive = connectedAt?.let { System.currentTimeMillis() - it >= SUBSCRIBE_WAS_LIVE_MS } ?: false
-        val decision = nextSubscribeRetry(subscribeAttempt, wasLive)
-        if (decision.delayMs != null) {
-            kotlinx.coroutines.delay(decision.delayMs)
-        }
-        subscribeAttempt = decision.nextAttempt
-        subscribeExhausted = decision.exhausted
-    }
-
-    // REV-01 #2：兜底轮询必须是"仅追加"语义，不能调 refreshFullPage()。
-    // 订阅信号走整页覆盖是必须的（删除可见性核心），但兜底轮询只是防
-    // 订阅真实丢事件的保险丝——不该有自己的整页覆盖副作用。之前误用了
-    // refreshFullPage()：用户翻到第 N 页，每 60s 被拉回第 1 页，翻页
-    // 加载过的缩略图缓存被逐出。旧版 15s 轮询本来就是"只把没见过的
-    // hash 插到最前面，不动已加载内容/翻页游标，不触发
-    // onTimelineRefreshed"——这里原样保留那条语义，只是频率从 15s
-    // 降到 60s（订阅是主通道，这层只是远低频率的保险）。
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(FULL_REFRESH_FALLBACK_MS)
-            try {
-                val page = loader.page(null)
-                val known = items.map { it.hash }.toSet()
-                val fresh = page.items.filter { it.hash !in known }
-                if (fresh.isNotEmpty()) {
-                    items = fresh + items
-                    loader.onTimelineAppended(fresh.map { it.hash }.toSet())
-                }
-            } catch (_: Throwable) {
-                // 静默——下一轮再试，不用错误态打断正在看的照片。
-            }
-        }
-    }
-
     val current = opened
-    if (current != null) {
+    if (current != null && loader != null) {
         // Wire format is the normalized "video"/"photo" (golden snapshot),
         // not a MIME type — keep the prefix check so a raw "video/mp4" from
         // an older daemon routes correctly too.
@@ -410,16 +311,15 @@ fun PhotosScreen(loader: TimelineLoader) {
                 Text(
                     stringResource(R.string.photos_live_retry),
                     fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
-                    modifier = Modifier.clickable {
-                        subscribeExhausted = false
-                        subscribeAttempt = 0
-                    }.padding(6.dp),
+                    modifier = Modifier.clickable { holder.retry() }.padding(6.dp),
                 )
             }
         }
 
         val shown = filterTimeline(items, filter, mine) { it.hash }
         when {
+            // SYNC-06: loader 尚未就绪（换配对后的极短窗口）——不渲染交互。
+            loader == null -> Center(stringResource(R.string.photos_loading))
             loading -> Center(stringResource(R.string.photos_loading))
             error != null -> Center(
                 stringResource(R.string.photos_unreachable) + "\n(${error?.take(100)})"
@@ -449,15 +349,9 @@ fun PhotosScreen(loader: TimelineLoader) {
                 if (next != null) {
                     item(key = "pager") {
                         LaunchedEffect(next) {
-                            try {
-                                val page = loader.page(next)
-                                items = items + page.items
-                                next = page.next
-                                // MOB-04: 翻页追加只增不逐（后页照片仍在库中）。
-                                loader.onTimelineAppended(page.items.map { it.hash }.toSet())
-                            } catch (_: Throwable) {
-                                next = null
-                            }
+                            // SYNC-06: 翻页也走 holder——items/next 归 holder 管，
+                            // 本 composable 只触发，不直接改状态。
+                            next?.let { holder.appendNextPage(it) }
                         }
                     }
                 }
