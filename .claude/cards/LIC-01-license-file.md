@@ -9,3 +9,13 @@ Cargo.toml 声明 license = "AGPL-3.0"，但仓库根**没有 LICENSE 文件**�
 
 验收：LICENSE 与 GNU 官方文本逐字节一致（sha256 对照）；GitHub 仓库
 页正确识别出 AGPL-3.0 徽章。收尾照旧 [skip ci]。
+
+---
+
+## 验收记录（2026-08-13，队列巡检发现早已完成）
+
+本卡实际已在 `a2a1444`（chore(lic-01): 补 AGPL-3.0 LICENSE 全文 +
+site/desktop package.json license 字段 + README License 段）完成，
+只是当时没把卡移 done/，队列里挂了个已完成的空卡。核实：仓库根
+`LICENSE` 存在（34582 字节，开头是标准 AGPL-3.0 v3 header），来自
+该 commit。卡移 done/ 收尾，不重做。
