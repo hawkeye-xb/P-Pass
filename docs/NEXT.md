@@ -1,6 +1,23 @@
-# NEXT — 当前状态与下一步（2026-08-13，DAE-03 daemon CLI 纪律）
+# NEXT — 当前状态与下一步（2026-08-13，SYNC-06 订阅生命周期前台化）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-13：SYNC-06 订阅连接生命周期上提到 App 前台级别（完成，真机挂账）
+
+用户 review 指出 SYNC-04 的订阅绑在 PhotosScreen 组合可见性上——切设置 tab
+订阅就断、切回重建有空窗。已把订阅状态与驱动循环抽到 `TimelineSubscriptionHolder`
+（跟 ForegroundHeartbeat 同一条 ON_RESUME~ON_STOP 边界，MainActivity 持有），
+PhotosScreen 只渲染。android 178/178 单测绿（新增 12 项：纯状态机 7 + holder
+协程级 5）+ assembleDebug 绿。**真机验收挂用户（卡内禁令：未经两条确认不得
+宣称「已对齐前台」）**：①停在设置 tab → daemon 侧变化 → 切回照片 tab 立即
+最新态、无「重新连接中」；②反证：临时还原旧行为（订阅绑回组合可见性）→
+切 tab 来回 → 观察到订阅确实重建（如加日志数订阅循环进入次数）。另：本卡
+顺手修了本地 android 构建环境——机器上 temurin-26 在 macOS java_home 注册表
+里且为最高版本，AGP 的 JdkImageTransform 直接查 java_home 拿它跑 jlink（JDK
+24+ 移除 `--disable-plugin system-modules` → transform 必挂）。已把 temurin-26
+移出注册表（备份在 /tmp/temurin-26.jdk.bak）+ 把 Homebrew JDK 17 symlink 进
+/Library/Java/JavaVirtualMachines（java_home 现返回 17）。**其他并行 session/
+以后本地构建 android 直接可用，无需任何 flag**。
 
 ## 〇、2026-08-13：DAE-03（8/6 --help 误接管事故 3 缺口）完成
 
@@ -14,8 +31,6 @@ worktree `~/workspace/P-Pass-dae03`（分支 feat/dae-03-cli-discipline）完成
 二进制冒烟 3/3 + 三反证全成立（静默忽略→daemon 真被拉起复现事故/恒 true→
 红/宽松子串→红）+ workspace 286/286 + arch-check 绿 + clippy 零警告。
 **等用户**：无（代码级收尾，无真机项；已推送/合并见 git log）。
-
-## 〇、2026-08-13：ICON-01c macOS 图标安全区缩排（xixi 反馈）
 
 用户反馈「按住 cmd+tab 展示、程序坞 icon 都不对，不符合规范，显得特大」。
 根因：ICON-01 接入时 Android 侧做了 66% 安全区缩排（ICON-01b），macOS icns

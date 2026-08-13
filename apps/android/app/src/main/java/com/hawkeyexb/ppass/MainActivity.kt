@@ -74,8 +74,10 @@ import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
+import com.hawkeyexb.ppass.ui.LoaderTimelineChannel
 import com.hawkeyexb.ppass.ui.PhotosScreen
 import com.hawkeyexb.ppass.ui.TimelineLoader
+import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
 import com.hawkeyexb.ppass.ui.TwoTabs
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.JoinedScreen
@@ -247,6 +249,23 @@ fun PPassApp() {
     // 耗电红线）；app 在前台时 daemon 每 ~30s 收到一次 hello，桌面设备行
     // 才显示「在线」而不是「离线」（锁屏 ≠ 离开）。
     val heartbeat = remember { ForegroundHeartbeat(client, pairings, scope) }
+    // SYNC-06: 订阅连接生命周期跟心跳对齐——ON_RESUME 起 / ON_STOP 停，
+    // App 前台期间不管显示哪个 tab 都保持订阅（脱钩 tab 切换，旧实现
+    // 绑在 PhotosScreen 组合可见性上，切设置 tab 就断）。只有退后台/
+    // 锁屏/进程被杀才断开；回前台重建并整页刷新补齐错过的变化。
+    val timeline = remember {
+        TimelineSubscriptionHolder(
+            scope = scope,
+            currentPairing = { pairings.load() },
+            channelFor = { p ->
+                LoaderTimelineChannel(
+                    TimelineLoader(client, parsePeerAddrToken(p.daemonAddrToken)) {
+                        client.bind(identity.secretKey())
+                    }
+                )
+            },
+        )
+    }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
@@ -254,14 +273,19 @@ fun PPassApp() {
                     batteryWhitelisted = isIgnoringBatteryOptimizations(context)
                     partialMedia = hasPartialMediaAccess(context)
                     heartbeat.start()
+                    timeline.start()
                 }
-                Lifecycle.Event.ON_STOP -> heartbeat.stop()
+                Lifecycle.Event.ON_STOP -> {
+                    heartbeat.stop()
+                    timeline.stop()
+                }
                 else -> {}
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             heartbeat.stop()
+            timeline.stop()
             lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
@@ -384,11 +408,8 @@ fun PPassApp() {
             // 数据继续积累，未来打开入口即用）。
             // MOB-02 §三: 「需要 Wi-Fi」关闭需二次确认（移动网络消耗流量）。
             var pendingWifiOff by remember { mutableStateOf(false) }
-            val loader = remember {
-                TimelineLoader(client, parsePeerAddrToken(s.pairing.daemonAddrToken)) {
-                    client.bind(identity.secretKey())
-                }
-            }
+            // SYNC-06: TimelineLoader 由 timeline holder 按配对创建/重建
+            // （PhotoScreen 用户交互共用 holder.loader）——这里不再各自建。
             var tab by remember { mutableStateOf(0) } // 0=Photos 1=Backup
             // UX-06: 暂停态持久化——重开 App 保持用户选择；恢复时重新排周期任务。
             val prefs = remember { AutoBackupPrefs(context.filesDir) }
@@ -405,7 +426,7 @@ fun PPassApp() {
             TwoTabs(
                 tab = tab,
                 onTab = { tab = it },
-                photos = { PhotosScreen(loader) },
+                photos = { PhotosScreen(timeline) },
                 backup = {
                     HomeScreen(
                         storageName = s.pairing.storageDeviceName,
