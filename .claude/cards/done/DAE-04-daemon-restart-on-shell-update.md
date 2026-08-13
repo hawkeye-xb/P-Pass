@@ -125,3 +125,23 @@ SuccessfulExit=false`（`crates/platform/src/macos.rs` 第 36~37 行注释：
 
 桌面壳全量测试绿（如涉及 Rust 测试）+ PROGRESS.md 一行 + ROADMAP.md
 状态行 + 三条手动验收挂用户确认。
+
+---
+
+## 验收记录（2026-08-13）
+
+**实施**：@salamira（Hermes）。单测 4 项新增（`restart_outcome` 纯函数：
+版本变化=真成功 / 同版本=未变更 / 杀前离线杀后起来=有进展 / 无新版本=未验证兜底）
++ 桌面 lib 6/6 绿 + diag i18n 对称 8/8（10 个 `ui.restart_service_*` 键注册，
+ALL 79→89）+ vite build 绿 176 modules + 桌面 clippy 零警告 + 主仓 fmt 干净。
+
+**三条手动验收挂用户（xixi）确认**：
+1. 版本不一致场景：临时改 daemon 版本常量编译安装 → 设置页「软件更新」卡出现
+   「重启后台服务」按钮 → 点击 → ps 前后 PID 对照（旧进程消失）→ launchd 数秒
+   拉起新进程 → 壳读回 status.version 为新版本号 → 按钮消失。
+2. 反证：破坏 sidecar 路径让复活失败 → 按钮流程捕获失败并明确提示
+   （不显示成功）。
+3. 正常场景强制调用 `restart_daemon_process`（版本一致，按钮本不该出现）→
+   不 panic、不产生数据损坏（会打断进行中的传输，用户主动点击即视为接受）。
+
+**跨卡声明禁令**：未经上述三条用户确认，不得宣称「daemon 更新按钮已验证有效」。
