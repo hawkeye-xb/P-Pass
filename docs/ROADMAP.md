@@ -469,6 +469,19 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## SYNC 批次（2026-08-11 三星真机反馈驱动：Finder 删文件 ≠ 手机时间线消失）
 
+- [x] **REV-01 SYNC-03/04 review 遗留 5 项 — merged 2026-08-13（本 commit）**:
+      另一 agent review SYNC-03（QUIC 订阅登记表）/SYNC-04（Android 前台
+      订阅）代码时发现的 5 项 backlog，用户当时本地无手机直连改排本卡。
+      ①`serve_subscription` register 提到 ack/initial push 之前，吊销
+      窗口覆盖整个订阅生命周期；②**真 bug**——60s 兜底轮询误用整页覆盖
+      语义打断翻页/逐出已翻页缩略图缓存，改回旧版「仅追加」语义，订阅
+      信号（整页覆盖，删除可见性核心）与兜底轮询（仅追加，只防丢事件）
+      两职责分开；③新增 `device_revoke_over_ipc_closes_the_quic_subscription`
+      （Router+IpcServer 共用同一份登记表，走完整 IPC JSON 链路，反证
+      已跑确认变红）；④订阅 effect 两处补 `CancellationException` 前置
+      重抛；⑤`wasLive` 计时起点从 effect 开始改为连接真正建立那一刻。
+      daemon 全量绿 + arch-check + clippy 零警告 + fmt 干净，android
+      166/166 绿。不涉及真机验收，SYNC-04 五条真机剧本挂账状态不变。
 - [x] **WATCH-01 本地目录监听 + 增量同步 — merged 2026-08-12（本 commit）**:
       metadata 秒级更新的第一跳（此前本地新增只有 backup 协议入口、
       删除靠每小时 reconcile——用户实测 metadata 不及时踩坑）。notify

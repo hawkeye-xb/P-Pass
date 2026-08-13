@@ -273,28 +273,38 @@ fun PhotosScreen(loader: TimelineLoader) {
     LaunchedEffect(subscribeAttempt) {
         if (subscribeExhausted) return@LaunchedEffect
         subscribeConnected = false
-        val startedAt = System.currentTimeMillis()
+        // REV-01 #5: 计时起点必须是连接真正建立的那一刻，不是 effect
+        // 开始（含重连尝试耗时）——否则"建了很久才连上、一连上就断"的
+        // 边缘情况会被误判成 wasLive=true（退避档位被错误清零重来）。
+        // 没连上过（connectedAt 仍是 null）时 wasLive 恒为 false。
+        var connectedAt: Long? = null
         try {
             loader.subscribe(
                 onConnected = {
                     subscribeConnected = true
                     subscribeHadFailure = false
+                    connectedAt = System.currentTimeMillis()
                 },
             ) {
                 try {
                     refreshFullPage()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e // REV-01 #4: 协程惯例——取消不能被当成普通失败吞掉。
                 } catch (_: Throwable) {
                     // 这一次刷新失败——不动 items，等下一次信号/兜底轮询再试。
                 }
             }
             // 正常返回（对端主动 finish 了发送方向，比如设备被吊销）
             // 和抛异常是同一件事：这次订阅结束了，都走下面的退避重连。
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e // REV-01 #4: 同上——effect 被取消（切走 tab/App 进后台）
+            // 时必须真的停下来，不能被下面的退避重连逻辑当成"断线"接着跑。
         } catch (_: Throwable) {
             // 连接异常——同样走退避重连。
         }
         subscribeConnected = false
         subscribeHadFailure = true
-        val wasLive = System.currentTimeMillis() - startedAt >= SUBSCRIBE_WAS_LIVE_MS
+        val wasLive = connectedAt?.let { System.currentTimeMillis() - it >= SUBSCRIBE_WAS_LIVE_MS } ?: false
         val decision = nextSubscribeRetry(subscribeAttempt, wasLive)
         if (decision.delayMs != null) {
             kotlinx.coroutines.delay(decision.delayMs)
@@ -303,15 +313,27 @@ fun PhotosScreen(loader: TimelineLoader) {
         subscribeExhausted = decision.exhausted
     }
 
-    // 远低于原轮询频率的整页刷新兜底（对齐桌面端已有的 60s 兜底）：
-    // 订阅本该覆盖所有变化，这层只防真实丢事件场景，不是主通道。
+    // REV-01 #2：兜底轮询必须是"仅追加"语义，不能调 refreshFullPage()。
+    // 订阅信号走整页覆盖是必须的（删除可见性核心），但兜底轮询只是防
+    // 订阅真实丢事件的保险丝——不该有自己的整页覆盖副作用。之前误用了
+    // refreshFullPage()：用户翻到第 N 页，每 60s 被拉回第 1 页，翻页
+    // 加载过的缩略图缓存被逐出。旧版 15s 轮询本来就是"只把没见过的
+    // hash 插到最前面，不动已加载内容/翻页游标，不触发
+    // onTimelineRefreshed"——这里原样保留那条语义，只是频率从 15s
+    // 降到 60s（订阅是主通道，这层只是远低频率的保险）。
     LaunchedEffect(Unit) {
         while (true) {
             kotlinx.coroutines.delay(FULL_REFRESH_FALLBACK_MS)
             try {
-                refreshFullPage()
+                val page = loader.page(null)
+                val known = items.map { it.hash }.toSet()
+                val fresh = page.items.filter { it.hash !in known }
+                if (fresh.isNotEmpty()) {
+                    items = fresh + items
+                    loader.onTimelineAppended(fresh.map { it.hash }.toSet())
+                }
             } catch (_: Throwable) {
-                // 静默——下一轮再试。
+                // 静默——下一轮再试，不用错误态打断正在看的照片。
             }
         }
     }

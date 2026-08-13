@@ -1,6 +1,17 @@
-# NEXT — 当前状态与下一步（2026-08-12，WATCH-01 合并）
+# NEXT — 当前状态与下一步（2026-08-13，REV-01 修完）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-13：REV-01（SYNC-03/04 review 遗留 5 项）全部修完
+
+用户本地暂无手机直连，改排这条 backlog 卡（另一个 agent 在 2026-08-12
+review SYNC-03/04 时立的）。5 项：①register 竞态 ②60s 兜底轮询整页覆盖
+打断翻页（**真 bug**，已修）③反证固化为测试 + device.revoke 走完整 IPC
+链路的测试盲区 ④CancellationException 被吞 ⑤wasLive 计时起点。详见
+`.claude/cards/done/REV-01-sync0304-review-followups.md` 执行记录。
+daemon 全量测试 + arch-check + clippy + fmt 干净，android 166/166 绿。
+**不影响** SYNC-04 五条真机剧本的挂账状态——本卡是纯代码级修复，真机
+验收仍等用户手机重新连回来再跑。
 
 ## 〇、2026-08-12（用户询问）：MOB-06 查看页右上角「分享」
 

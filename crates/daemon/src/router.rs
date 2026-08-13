@@ -251,8 +251,16 @@ impl Router {
         stream: &mut BiStream,
         req: &Req,
     ) -> bool {
+        // REV-01 #1：register 提到最前——订阅请求一进来就登记，吊销窗口
+        // 覆盖整个订阅生命周期。此前 register 排在 ack/initial push 之后，
+        // owner 若恰好在那个窗口 revoke，ipc.rs 查表摘不到这条尚未登记的
+        // 订阅（no-op），订阅继续活着直到自然断开——微秒级窗口但零成本
+        // 顺手修（register 本身不依赖事件总线/ack 是否发出）。
+        let (token, generation) = self.subscriptions.register(peer);
+
         let ack = Resp::ok(req.id.clone(), serde_json::json!({ "subscribed": true }));
         if self.send_push(stream, &ack).await.is_err() {
+            self.subscriptions.unregister(peer, generation);
             return false;
         }
         // §③ 订阅即返回当前态：立即给这个新订阅者推一次，不广播给别人、
@@ -265,17 +273,18 @@ impl Router {
             .await
             .is_err()
         {
+            self.subscriptions.unregister(peer, generation);
             return false;
         }
 
         let Some(bus) = &self.events else {
             // 没接事件总线（单组件构造/测试）——退化为一次性 ack，
             // 结束这条流，不假装能推送。
+            self.subscriptions.unregister(peer, generation);
             let _ = stream.finish();
             return true;
         };
         let mut rx = bus.subscribe();
-        let (token, generation) = self.subscriptions.register(peer);
 
         // 客户端预期只发一次订阅请求就半关闭发送方向（拿数据走别的
         // stream）；`Ok(None)` 之后不再 select 这个分支，避免忙等。
