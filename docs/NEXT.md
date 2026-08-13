@@ -1,6 +1,19 @@
-# NEXT — 当前状态与下一步（2026-08-13，ICON-01c macOS 图标安全区）
+# NEXT — 当前状态与下一步（2026-08-13，DAE-03 daemon CLI 纪律）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-13：DAE-03（8/6 --help 误接管事故 3 缺口）完成
+
+xixi 在 #p-pass 开 DAE-03 线程（提醒 git worktree）。已按铁律在独立
+worktree `~/workspace/P-Pass-dae03`（分支 feat/dae-03-cli-discipline）完成：
+①`--help/--version` 在一切 daemon 机制前短路退出，未知参数报错 exit 2
+（绝不静默忽略——事故根因）；②autostart 只有升级接管 TookOver 才装
+（决策纯函数 + 单测），纯新启动/手动启动绝不碰自启配置；③固定端口被
+异身份实例/第三方占用 → 中文人话报错 + 修复指引（原始错误留日志）。
+新文件 crates/daemon/src/cli.rs + tests/cli_flow.rs。验证：单测 8/8 +
+二进制冒烟 3/3 + 三反证全成立（静默忽略→daemon 真被拉起复现事故/恒 true→
+红/宽松子串→红）+ workspace 286/286 + arch-check 绿 + clippy 零警告。
+**等用户**：无（代码级收尾，无真机项；已推送/合并见 git log）。
 
 ## 〇、2026-08-13：ICON-01c macOS 图标安全区缩排（xixi 反馈）
 

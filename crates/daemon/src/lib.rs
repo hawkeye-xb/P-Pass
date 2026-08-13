@@ -4,6 +4,7 @@
 
 pub mod authz;
 pub mod backup;
+pub mod cli;
 pub mod config;
 pub mod diag_agg;
 pub mod download;
