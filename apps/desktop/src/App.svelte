@@ -9,6 +9,10 @@
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
   import PhotoThumb from "./lib/PhotoThumb.svelte";
+  // DESK-07: shadcn-svelte 组件（组件代码进仓库 src/lib/components/ui/，
+  // 不是 node_modules 黑箱；Tailwind 工具类全局可用）
+  import { Button } from "$lib/components/ui/button";
+  import { Card } from "$lib/components/ui/card";
   // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
   import { humanTime, needsAttention, daysSince, relativeTime } from "./lib/humanTime.js";
   // T-092: connection 四态 → 文案/点色；字节 → 人读容量（纯函数，
@@ -311,6 +315,10 @@
   // 路径事实：已直连/经中继；心跳新鲜无活连接 → 「在线」；recent →
   // 「x 分钟前在线」；offline → 「离线，最后在线 <时间>」/「等待下次备份
   // 上报」）。哨兵红优先级高于 presence——一台设备两个真相时先说要紧的。
+  // DESK-07: 设备行状态点色 map（语义色仅 safe/wait/idle/act 四种，
+  // 颜色值全来自 tokens.css，见其注释）
+  const DOT_BG = { idle: "bg-idle", act: "bg-act", safe: "bg-safe", wait: "bg-waiting" };
+
   function deviceRow(d, now) {
     const wm = watermarks[d.node_id];
     const lastBackupAt = wm?.last_backup_at ?? null;
@@ -1023,14 +1031,18 @@
           {/if}
         </section>
       {:else if page === "devices"}
+        <!-- DESK-07: 本页已迁到 Tailwind CSS + shadcn-svelte（Button/Card）。
+             样式一律工具类，不再吃 App.svelte 手写 CSS；数据流与交互逻辑
+             （改名/移除/状态推导）一字未动。像素基准（列表贴边 18px 22px、
+             移除=纯文字链接、标题 28px/副标题 14px/提示 13px）验收见卡记录。 -->
         <section class="page" data-testid="page-devices">
           <div class="lede">
-            <h2 class="headline">家人与设备</h2>
-            <p class="sub">{t("ui.paired_count", { n: pairedCount })}</p>
+            <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">家人与设备</h2>
+            <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.paired_count", { n: pairedCount })}</p>
           </div>
-          <div class="card list-card">
+          <Card class="gap-0 rounded-xl border border-border py-0 shadow-none ring-0 ring-transparent">
             {#if devices.length === 0}
-              <p class="hint">{t("ui.no_devices")}</p>
+              <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
             {:else}
               <!-- T-082: 设计稿两行结构——首行设备名加粗，次行「机型 · 连接状态」
                    槽位；daemon 尚未暴露机型/连接事实，数据未接前显示中性占位，
@@ -1038,25 +1050,21 @@
               {@const activeDevices = devices.filter((d) => !d.revoked)}
               {@const removedDevices = devices.filter((d) => d.revoked)}
               {#if activeDevices.length === 0}
-                <p class="hint">{t("ui.no_devices")}</p>
+                <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
               {:else}
-                <ul class="device-rows roomy edge">
+                <ul>
                   {#each activeDevices as d}
                     {@const row = deviceRow(d, nowMs)}
-                    <li>
-                      <!-- T-091: 右侧「最近备份 <人性化时间> · N 张」；哨兵行
-                           ACT 色 + 「需要看看」+ 设计稿原文话术。
-                           T-092: 次行接 connection 真数据（已直连 / 经中继连接
-                           ——内容加密，中继无法读取 / 离线，最后在线 <人性化时间>），
-                           unknown 保持 T-082 中性占位；哨兵红 > 连接态。机型
-                           daemon 仍未暴露，不捏造。 -->
-                      <span class="statusdot {row.dot}"></span>
-                      <span class="dev-main">
+                    <li class="flex items-center gap-[14px] border-b border-divider px-[22px] py-[18px] last:border-b-0">
+                      <!-- T-091: 哨兵行 ACT 色 + 「需要看看」；T-092: 连接态点色
+                           （direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
+                      <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
+                      <span class="flex flex-1 flex-col gap-[2px]">
                         {#if renameTarget?.nodeId === d.node_id}
                           <!-- NAME-01: 改名输入框——回车保存 / Esc 取消 /
                                失焦保存（空名与未改动不提交）。 -->
                           <input
-                            class="dev-rename"
+                            class="max-w-[260px] flex-none rounded-sm border-[1.5px] border-border-strong bg-paper px-[6px] py-[2px] font-sans text-[16px] font-semibold text-ink focus:border-safe focus:outline-none"
                             value={renameValue}
                             oninput={(e) => (renameValue = e.currentTarget.value)}
                             onkeydown={(e) => {
@@ -1067,16 +1075,23 @@
                             autofocus
                           />
                         {:else}
-                          <button
-                            class="dev-name dev-name-btn"
+                          <!-- NAME-01: 设备名可点击编辑——Button link 变体保持
+                               纸底墨字（hover 提亮 + 下划线），与移除按钮同族但低调 -->
+                          <Button
+                            variant="link"
+                            class="-ml-[6px] h-auto min-h-0 rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
                             title={t("ui.rename")}
                             onclick={() => startRename(d)}
-                          >{d.name}</button>
+                          >{d.name}</Button>
                         {/if}
-                        <span class="dev-sub">{row.sub}</span>
+                        <span class="text-[13.5px] leading-[1.5] text-ink-40">{row.sub}</span>
                       </span>
-                      <span class="dev-right" class:act={row.alert}>{row.right}</span>
-                      <button class="dev-remove-btn" onclick={() => revoke(d.node_id, d.name)}>{t("ui.remove")}</button>
+                      <span class="flex-none text-[13.5px] text-ink-40" class:text-act={row.alert}>{row.right}</span>
+                      <Button
+                        variant="link"
+                        class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
+                        onclick={() => revoke(d.node_id, d.name)}
+                      >{t("ui.remove")}</Button>
                     </li>
                   {/each}
                 </ul>
@@ -1084,21 +1099,21 @@
               {#if removedDevices.length > 0}
                 <!-- T-082: 已移除设备折叠为展开器，展开后用 ink-40 弱化，
                      不再划线平铺。 -->
-                <details class="removed-fold">
-                  <summary>已移除设备 {removedDevices.length} 台</summary>
-                  <ul class="device-rows roomy">
+                <details class="mt-[12px] border-t border-divider px-[22px] pt-[12px]">
+                  <summary class="cursor-pointer text-[14px] font-semibold text-ink-40">已移除设备 {removedDevices.length} 台</summary>
+                  <ul>
                     {#each removedDevices as d}
-                      <li>
-                        <span class="statusdot idle"></span>
-                        <span class="dev-name removed-name">{d.name}</span>
+                      <li class="flex items-center gap-[14px] py-[14px]">
+                        <span class="h-[9px] w-[9px] flex-none rounded-full bg-idle"></span>
+                        <span class="flex-1 text-[15px] font-normal text-ink-40">{d.name}</span>
                       </li>
                     {/each}
                   </ul>
                 </details>
               {/if}
             {/if}
-          </div>
-          <p class="hint">「经中继」= 直连不通时走加密中转，中继看不到照片内容，速度可能慢一些。移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</p>
+          </Card>
+          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">「经中继」= 直连不通时走加密中转，中继看不到照片内容，速度可能慢一些。移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</p>
         </section>
       {:else if page === "photos"}
         <!-- DESK-03: 照片墙——与手机时间线同一数据源（query.timeline +
@@ -1613,13 +1628,6 @@
     padding: 10px 0;
     border-bottom: 1px solid var(--pp-divider);
   }
-  .device-rows.roomy li {
-    padding: 14px 0;
-    gap: 14px;
-  }
-  .device-rows.roomy.edge li {
-    padding: 18px 22px;
-  }
   .device-rows li:last-child {
     border-bottom: none;
   }
@@ -1657,101 +1665,7 @@
     font-size: 13.5px;
     flex: none;
   }
-  /* T-082: 设备行两行结构（首行名字加粗、次行机型/连接状态槽位） */
-  .dev-main {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .dev-main .dev-name {
-    flex: none;
-    font-size: 16px;
-  }
-  /* NAME-01: 设备名可点击编辑——按钮化保持纸底墨字（hover 提亮），
-     与行内其他动作（移除）同族但低调（无边框无底色，仅 hover 下划线）。 */
-  .dev-name-btn {
-    flex: none;
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--pp-ink);
-    background: transparent;
-    border: none;
-    border-radius: var(--pp-radius-control-sm);
-    padding: 2px 6px;
-    margin-left: -6px;
-    cursor: pointer;
-    text-align: left;
-    min-height: 0;
-    font-family: inherit;
-  }
-  .dev-name-btn:hover {
-    background: var(--pp-linen);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-  /* 设计稿原文：font:600 14px sans-serif;color:#B5341F;cursor:pointer;
-     padding:8px 4px——就是一行红字，不是实心按钮。跟 .dev-name-btn 同族
-     （无边框无底色），不复用 button.danger（那个是「停止后台服务」这类
-     更重的确认动作用的胶囊按钮，两者场景不同，不能共用一套样式）。 */
-  .dev-remove-btn {
-    flex: none;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--pp-act);
-    background: transparent;
-    border: none;
-    border-radius: var(--pp-radius-control-sm);
-    padding: 8px 4px;
-    cursor: pointer;
-    min-height: 0;
-    font-family: inherit;
-  }
-  .dev-remove-btn:hover {
-    background: var(--pp-act-bg);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-  .dev-rename {
-    flex: none;
-    font-size: 16px;
-    font-weight: 600;
-    font-family: inherit;
-    color: var(--pp-ink);
-    background: var(--pp-paper);
-    border: 1.5px solid var(--pp-border-strong);
-    border-radius: var(--pp-radius-control-sm);
-    padding: 2px 6px;
-    max-width: 260px;
-  }
-  .dev-rename:focus {
-    outline: none;
-    border-color: var(--pp-safe);
-  }
-  .dev-sub {
-    color: var(--pp-ink-40);
-    font-size: 13.5px;
-    line-height: 1.5;
-  }
-  /* T-082: 已移除设备折叠器——展开后 ink-40 弱化，无删除线。
-     卡片本身已零 padding（.list-card），这里补横向内边距自己撑住，
-     嵌套列表不用 .edge（沿用旧的「行内零横向 padding、靠容器撑」
-     写法，折叠区不是设计稿覆盖的主列表，不用跟主列表一样贴边）。 */
-  .removed-fold {
-    margin-top: 12px;
-    padding: 12px 22px 0;
-    border-top: 1px solid var(--pp-divider);
-  }
-  .removed-fold summary {
-    cursor: pointer;
-    color: var(--pp-ink-40);
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .removed-name {
-    color: var(--pp-ink-40);
-    font-weight: 400;
-  }
+
   /* 2026-08-13: 活动记录改回设计稿的卡片行列表，撤掉 DESK-05 的真
      表格方案（撤销理由见上方模板注释）。标题行右侧挂一个"本周"统计
      胶囊，跟"家人与设备"页同一套 .list-card/边距贴边逻辑。 */
