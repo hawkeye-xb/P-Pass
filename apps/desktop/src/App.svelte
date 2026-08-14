@@ -319,6 +319,17 @@
   // 颜色值全来自 tokens.css，见其注释）
   const DOT_BG = { idle: "bg-idle", act: "bg-act", safe: "bg-safe", wait: "bg-waiting" };
 
+  /* DESK-08: 迁移后的按钮族常量——原手写 button 规则的 Tailwind 等价
+     （base=透明底+1.5px border-strong；primary=ink 底纸字；danger=纸底
+     act 字 act 边；link=纯文字）。所有迁移页共用，保证全站按钮一致。 */
+  const BTN = "h-11 min-h-11 rounded-md border border-ink px-[18px] text-[15px] font-bold";
+  const BTN_OUTLINE =
+    "h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60";
+  const BTN_DANGER =
+    "h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-paper px-[18px] text-[15px] font-semibold text-act hover:border-act hover:bg-act-bg hover:text-act";
+  const BTN_LINK =
+    "h-auto min-h-0 rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px]";
+
   function deviceRow(d, now) {
     const wm = watermarks[d.node_id];
     const lastBackupAt = wm?.last_backup_at ?? null;
@@ -941,17 +952,17 @@
 
       {#if page === "overview"}
         <section class="page" data-testid="page-overview">
-          <div class="lede">
+          <div>
             <!-- 2026-08-13：设计稿离线版标题带真实照片数——"全家的照片"
                  换成"全家 N 张照片"，photoCount 没拿到时退回原句（不写
                  假数字）。 -->
-            <h2 class="headline">
+            <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3] text-ink">
               {#if photoCount !== null}全家 {photoCount} 张照片，安全地住在这台电脑上。{:else}全家的照片，安全地住在这台电脑上。{/if}
             </h2>
             <!-- 副标题：有真实"最近一次备份"数据就用设计稿的格式，没有
                  （比如还没配对过/一次都没备份过）就退回旧的配对数摘要，
                  不硬凑一句假话。 -->
-            <p class="sub">
+            <p class="mt-[6px] text-[14px] text-ink-40">
               {#if lastBackupOverall}
                 最近一次备份：{humanTime(lastBackupOverall.at, nowMs)} · 来自 {lastBackupOverall.name}
               {:else}
@@ -962,94 +973,94 @@
           </div>
 
           {#if !online}
-            <div class="card offline-card">
-              <p>{t("ui.offline_action")}</p>
-              <button class="primary" disabled={starting} onclick={startDaemonNow}>
+            <Card class="gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.offline_action")}</p>
+              <Button class="mt-[12px] {BTN}" disabled={starting} onclick={startDaemonNow}>
                 {starting ? t("ui.starting") : t("ui.start_service")}
-              </button>
-              <p class="hint">{t("ui.refresh_hint")}</p>
-            </div>
+              </Button>
+              <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
+            </Card>
           {:else}
             {#if pendingCount > 0 && !showConfirmModal}
-              <div class="pending-card">
-                <div class="pending-text">
-                  <strong>{t("diag.desktop.pairing")}</strong>
+              <div class="flex items-center gap-[16px] rounded-xl border border-border bg-waiting-bg px-[22px] py-[18px]">
+                <div class="flex flex-1 flex-col gap-[3px]">
+                  <strong class="text-[16px]">{t("diag.desktop.pairing")}</strong>
                   <!-- 设计稿 v2：横幅直接点名刚扫码的设备（pendingList 里
                        有真实名字）；列表为空时退回数量摘要（老 daemon 过渡）。 -->
                   {#if pendingList.length > 0}
-                    <span>{t("ui.pending_banner_text", { name: pendingList[0].name })}</span>
+                    <span class="text-[14px] text-ink-60">{t("ui.pending_banner_text", { name: pendingList[0].name })}</span>
                   {:else}
-                    <span>{t("ui.pending_pairs", { n: pendingCount })}</span>
+                    <span class="text-[14px] text-ink-60">{t("ui.pending_pairs", { n: pendingCount })}</span>
                   {/if}
                 </div>
-                <div class="row">
-                  <button onclick={() => confirmPair(false)}>{t("ui.deny")}</button>
-                  <button class="primary" onclick={() => confirmPair(true)}>{t("ui.allow")}</button>
+                <div class="flex flex-none flex-wrap gap-[10px]">
+                  <Button variant="outline" class="h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60" onclick={() => confirmPair(false)}>{t("ui.deny")}</Button>
+                  <Button class="h-11 min-h-11 rounded-md border border-ink px-[18px] text-[15px] font-bold" onclick={() => confirmPair(true)}>{t("ui.allow")}</Button>
                 </div>
               </div>
             {/if}
 
-            <div class="cols">
-              <div class="card grow">
-                <h3>全家备份水位</h3>
+            <div class="flex items-start gap-[22px] max-[1079px]:flex-col">
+              <Card class="flex-[1.2_1_0%] gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+                <h3 class="mb-[12px] text-[15px] font-semibold">全家备份水位</h3>
                 {#if devices.filter((d) => !d.revoked).length === 0}
-                  <p class="hint">{t("ui.no_devices")}</p>
+                  <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
                 {:else}
-                  <ul class="device-rows">
+                  <ul class="m-0 list-none p-0">
                     {#each waterRows.shown as { d, row }}
-                      <li>
+                      <li class="flex items-center gap-[10px] border-b border-divider py-[10px] last:border-b-0">
                         <!-- T-091: 右侧接 device.watermarks 真数据（设计稿总览
                              水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
                              连接态（direct=safe / relay=wait / offline·unknown=idle）。 -->
-                        <span class="statusdot {row.dot}"></span>
-                        <span class="dev-name">{d.name}</span>
-                        <span class="dev-right" class:act={row.alert}>{row.right}</span>
+                        <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
+                        <span class="flex-1 text-[15px] font-semibold">{d.name}</span>
+                        <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
                       </li>
                     {/each}
                   </ul>
                   {#if waterRows.moreOk > 0}
-                    <button class="link-more safe" onclick={() => go("devices")}
+                    <button class="h-auto min-h-0 rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] mt-px self-start text-safe hover:text-safe" onclick={() => go("devices")}
                       >一切正常的还有 {waterRows.moreOk} 台 ›</button
                     >
                   {/if}
                 {/if}
-                <p class="hint">只要这台电脑开着、手机插电连 Wi-Fi，备份就在发生；任何一边不对劲，另一边 3 天内亮红。</p>
-              </div>
+                <p class="m-0 text-[13px] leading-[1.6] text-ink-40">只要这台电脑开着、手机插电连 Wi-Fi，备份就在发生；任何一边不对劲，另一边 3 天内亮红。</p>
+              </Card>
 
               <!-- T-082: 设计稿——卡内容水平居中（标题左上），二维码 148×148
                    白底圆角带边框，hint 与「无法扫码」折叠器跟随居中。 -->
               <!-- T4 (H-10b): 二维码不再是常驻卡片——点按钮弹窗出码，配对完
                    状态消失；扫码后的允许/拒绝也走模态。 -->
-              <div class="card qr-card">
-                <h3>{t("ui.add_device")}</h3>
-                <p class="hint qr-hint">点击后会放大显示一个配对二维码，用家人手机上的 P-Pass 扫一下；扫到后二维码自动收起，回到这里确认「允许加入」。</p>
-                <button class="primary" onclick={startPairing}>{t("ui.generate_qr")}</button>
+              <Card class="flex-[1_1_0%] flex flex-col items-center gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+                <h3 class="mb-0 self-start text-[15px] font-semibold">{t("ui.add_device")}</h3>
+                <p class="m-0 text-center text-[13px] leading-[1.6] text-ink-40">点击后会放大显示一个配对二维码，用家人手机上的 P-Pass 扫一下；扫到后二维码自动收起，回到这里确认「允许加入」。</p>
+                <Button class="h-11 min-h-11 rounded-md border border-ink px-[18px] text-[15px] font-bold" onclick={startPairing}>{t("ui.generate_qr")}</Button>
                 <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
                      能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
-                <button class="link-more safe" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</button>
-              </div>
+                <button class="h-auto min-h-0 self-start rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] text-safe hover:text-safe" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</button>
+              </Card>
 
               <!-- 2026-08-13：「最近动静」摘要卡（离线版设计稿 v2「第 3 轮」
                    新增）——只在 ≥1440px 显示（见上方 @media），大屏富余
                    空间放信息，不留白；数据是活动记录前 3 条，复用同一套
                    auditWho/auditText，不是另开一套数据源。 -->
-              <div class="card recent-activity-card">
-                <h3>最近动静</h3>
+              <Card class="hidden flex-col gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px] min-[1440px]:flex min-[1440px]:flex-[1_1_0%]">
+                <h3 class="mb-0 text-[15px] font-semibold">最近动静</h3>
                 {#if visibleAudit.length === 0}
-                  <p class="hint">还没有活动记录。</p>
+                  <p class="m-0 text-[13px] leading-[1.6] text-ink-40">还没有活动记录。</p>
                 {:else}
                   <!-- 设计稿这张摘要卡是单行紧凑文案（设备+事件+相对时间
                        连成一行，不分列、行间不加分隔线），跟主活动记录页
                        的双列卡片行是两种密度，故意不共用 .log-rows。 -->
-                  <ul class="recent-rows">
+                  <ul class="m-0 flex list-none flex-col gap-[10px] p-0 text-[14px] text-ink">
                     {#each visibleAudit.slice(0, 3) as e (e.ts + ":" + e.action)}
                       {@const at = humanTime(e.ts, nowMs)}
-                      <li><b>{auditWho(e)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
+                      <li><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
                     {/each}
                   </ul>
                 {/if}
-                <button class="link-more safe" onclick={() => go("log")}>全部活动记录 ›</button>
-              </div>
+                <button class="h-auto min-h-0 self-start rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] text-safe hover:text-safe" onclick={() => go("log")}>全部活动记录 ›</button>
+              </Card>
             </div>
           {/if}
         </section>
@@ -1102,14 +1113,14 @@
                                纸底墨字（hover 提亮 + 下划线），与移除按钮同族但低调 -->
                           <Button
                             variant="link"
-                            class="-ml-[6px] h-auto min-h-0 rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
+                            class="-ml-[6px] h-auto min-h-0 flex-none rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] leading-[1.38] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
                             title={t("ui.rename")}
                             onclick={() => startRename(d)}
                           >{d.name}</Button>
                         {/if}
                         <span class="text-[13.5px] leading-[1.5] text-ink-40">{row.sub}</span>
                       </span>
-                      <span class="flex-none text-[13.5px] text-ink-40" class:text-act={row.alert}>{row.right}</span>
+                      <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
                       <Button
                         variant="link"
                         class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
@@ -1249,7 +1260,7 @@
             <h2 class="headline">{t("ui.settings")}</h2>
           </div>
           <div class="cols">
-            <div class="card grow">
+            <div class="card cols-grow">
               <h3>照片库</h3>
               {#if status?.library_dir}
                 <code class="path">{status.library_dir}</code>
@@ -1411,6 +1422,11 @@
 {/if}
 
 <style>
+  /* DESK-08: 整个组件样式包进 @layer components——Tailwind v4 的
+     utilities 层声明在 components 之后，工具类才能压过手写规则
+     （Svelte 会把 button 等元素选择器加作用域类提升特异性，
+     不包 layer 的话 44px min-height 这类基类永远赢）。 */
+  @layer components {
   /* All colours/typography come from assets/design/tokens.css (single
      source of truth). Meaning colours: green=safe, amber=waiting,
      red=act — nothing else carries meaning. */
@@ -1604,10 +1620,10 @@
     gap: 22px;
     align-items: flex-start;
   }
-  .cols .grow {
+  .cols .cols-grow {
     flex: 1.2;
   }
-  .cols .card:not(.grow) {
+  .cols .card:not(.cols-grow) {
     flex: 1;
   }
   .col {
@@ -2293,5 +2309,6 @@
       display: flex;
       flex: 1;
     }
+  }
   }
 </style>
