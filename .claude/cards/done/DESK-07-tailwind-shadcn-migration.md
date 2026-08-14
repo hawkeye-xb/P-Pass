@@ -100,3 +100,60 @@ build 输出。
 `npm run build` 绿 + "家人与设备"页视觉对照通过 + PROGRESS.md 一行
 （写清楚验证了什么、其它页面还没迁）+ ROADMAP.md 状态行 + NEXT.md
 队列状态（列出后续还要迁哪些页面，方便排下一张卡）。
+
+---
+
+## 验收记录（2026-08-14 完成第一轮）
+
+**结论：地基验证通过 + 家人与设备页迁移完成；其余页面未迁，排后续卡。**
+（跨卡声明禁令遵守——不写「桌面壳已全面迁移」。）
+
+### 兼容性确认
+shadcn-svelte 1.5.0（2026-07 发布）peer dep 即 `svelte: ^5.0.0`，Svelte 5 支持是
+主线（PR #1182 早已合入），**无硬性不兼容，未换方案**。
+
+### 做了什么
+1. **依赖/初始化**：`tailwindcss@4.3.3` + `@tailwindcss/vite`（vite.config.js 插件 +
+   `$lib` alias）+ `shadcn-svelte init`（Vega preset → components.json、`src/lib/utils.ts`
+   cn 工具、tsconfig.json 供 CLI/IDE）；`add button card` 只装这两组件。
+2. **token 桥接（本卡核心技术决定）**：`src/app.css` 用 `@theme inline` 把
+   `--color-*`/`--font-*`/`--radius-*` 全部映射到 `assets/design/tokens.css` 的
+   `var(--pp-*)`——工具类（bg-ink/text-act/border-divider/rounded-sm…）运行时解析，
+   不抄数值、无平行调色板。shadcn 语义槽位映射：primary=ink/paper（P-Pass 主按钮
+   是墨不是绿）、destructive=act、secondary/muted/accent=linen/idle-bg。
+3. **迁移页**：App.svelte「家人与设备」分支换 `Button`(link 变体) + `Card` +
+   工具类；数据流/交互（改名/移除/状态推导）一字未动；设备页专属手写 CSS 已删，
+   overview 仍用的 .device-rows/.statusdot/.dev-name/.dev-right 保留。
+4. **preflight 副作用修复（回归中发现）**：`html { line-height: normal }` 抵消
+   preflight 的 1.5 全局继承（否则其它页内容整体下移）；`code/kbd/samp/pre`
+   还原 UA 默认 monospace（否则设置页库路径框字形变化）——**其它页渲染保持原样**。
+
+### 可执行验收逐条
+- ✅ `pnpm build` 绿（192 modules；CSS 40.84kB / JS 205.30kB gzip 66.76kB）
+- ✅ 像素基准 19 项迁移前后 DOM 实测全等（Playwright 无头 + mock Tauri 桥，w1280+w1000）：
+  标题 28px / 副标题 14px+mt6 / 提示 13px / 列表容器 padding 0 + 行 18px 22px /
+  分隔线贴圆角边缘（行 x=255 vs 卡 x=254，差 1px=边框）/ 移除=纯文字链接
+  （act 色 rgb(181,52,31)、bg 透明、border none、radius 12px 非胶囊、fs 14 fw 600）/
+  <1080px 侧栏收起 64px / 状态点色 safe/wait/idle/act 四态正确
+- ✅ 反证：故意给移除按钮加 `border-2 border-act` → 测量抓到 borderStyle=solid/2px
+  （与 baseline none/0px 显著不同）→ 还原后复测归零 —— 验证方法真在比对
+- ✅ 全页回归：其余四页（总览/照片/活动记录/设置）迁移前后**像素级 identical**
+  （8/8 截图 diff 零差异）
+- ✅ `cargo test --workspace` 全量绿（本卡未改 Rust）
+- ✅ 交互闭环：改名（点击→输入→Enter→flash「已改名为」→刷新显示新名）、
+  移除点击无异常；双视口 console 零错误
+
+### 证据
+- `docs/evidence/2026-08-14-desk07-tailwind/`：迁移前后设备页截图（w1280/w1000）
+  + 前后 DOM 实测 JSON
+- 依赖安装日志摘要：pnpm add tailwindcss@4.3.3/@tailwindcss/vite@4.3.3 →
+  shadcn-svelte 1.5.0 init（bits-ui/tailwind-merge/tailwind-variants/clsx/
+  tw-animate-css/lucide 等 8 包）→ add button card
+- build 输出：见上
+
+### 挂用户（真机一条）
+Tauri 实际窗口观感确认（浏览器渲染已像素级对齐；真机窗口走查一次即可）。
+
+### 后续页面（排卡顺序）
+总览（DESK-08）→ 活动记录（DESK-09）→ 设置（DESK-10）→ 照片（DESK-11）；
+shadcn 组件按页按需 add，不批量装。详见 docs/NEXT.md。

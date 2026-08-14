@@ -1,6 +1,27 @@
-# NEXT — 当前状态与下一步（2026-08-13，桌面壳设计稿走查修复）
+# NEXT — 当前状态与下一步（2026-08-14，DESK-07 Tailwind 迁移第一轮）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-14：DESK-07 桌面壳迁 Tailwind CSS + shadcn-svelte（第一轮完成，后续页面排卡）
+
+用户拍板把桌面壳从「零组件库、手写 CSS 自律」迁到 Tailwind CSS + shadcn-svelte，
+拆多轮执行。**本卡（第一轮）已完成**：地基（tailwindcss@4 + @tailwindcss/vite +
+shadcn-svelte 1.5 Vega preset + `src/app.css` `@theme inline` token 桥——工具类全部
+读 `assets/design/tokens.css` 的 `var(--pp-*)`，零平行调色板）+ 「家人与设备」页
+迁移验证（19 项像素基准 DOM 实测全等 + 反证有效 + 其余四页像素级 identical）。
+详情见 `docs/PROGRESS.md` DESK-07 行、证据 `docs/evidence/2026-08-14-desk07-tailwind/`。
+**挂用户（一条真机）**：Tauri 实际窗口观感确认。
+
+**后续轮次（排下一张卡，按此顺序建议）**：
+- **DESK-08 总览页**（最大头：两卡布局/水位卡/添加设备卡/最近动静摘要卡，还有
+  ≥1440px 媒体查询联动）
+- **DESK-09 活动记录页**（.card.list-card 与设备页同款贴边逻辑，可复用 Card +
+  本卡已删的 .roomy/.edge 经验；含列表内部滚动）
+- **DESK-10 设置页**（.setting-row 分隔线贴边、danger 卡按钮——Button destructive
+  变体映射 act 色已在主题层就位）
+- **DESK-11 照片页**（photo-wall 网格、大图 modal；photo-cell hover outline 等）
+- 公共待办：sidebar/lede/hint 等 shell 级样式是否也收编进 Tailwind（可与各页同做）；
+  shadcn 组件按页按需 `add`，不批量装（本卡只装了 button + card）。
 
 ## 〇、2026-08-13：桌面壳对照最新离线版设计稿逐页走查修复
 
