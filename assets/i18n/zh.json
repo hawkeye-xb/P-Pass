@@ -20,13 +20,14 @@
   "ui.refresh_hint": "启动后本窗口每 3 秒自动刷新；如果一直没反应，关闭 App 重新打开再点一次。",
   "ui.paired_count": "已配对设备 {n} 台",
   "ui.revoked_count": "（另有 {n} 台已移除）",
+  "ui.pending_banner_text": "「{name}」刚扫了这台电脑的二维码。是家里人吗？",
   "ui.pending_pairs": "{n} 个配对请求待确认",
   "ui.allow": "允许加入",
   "ui.deny": "拒绝",
   "ui.allow_replace": "替换旧的，允许",
   "ui.allow_new": "作为新设备",
   "ui.add_device": "添加设备",
-  "ui.generate_qr": "生成配对二维码",
+  "ui.generate_qr": "显示配对二维码",
   "ui.qr_fallback": "无法扫码？复制配对串",
   "ui.qr_phone_version": "手机 App 需 v0.3.1 或更新才能扫这个码",
   "ui.qr_hint": "二维码 10 分钟内有效；扫码后回到本窗口点「允许加入」。",
@@ -83,9 +84,11 @@
   "ui.env_badge_test": "测试版",
   "ui.nav_photos": "照片",
   "ui.photos_count": "共 {n} 张 · 来自 {m} 台设备",
+  "ui.photos_count_path": "{n} 张 · 按原始文件存在 {path}",
   "ui.photos_today": "今天",
   "ui.photos_month": "本月",
   "ui.photos_earlier": "更早",
   "ui.photos_empty": "还没有照片。手机备份完成后会出现在这里。",
-  "ui.photos_open_in_finder": "在 Finder 中显示"
+  "ui.photos_open_in_finder": "在 Finder 中显示",
+  "ui.photos_open_library": "在 Finder 中打开"
 }
