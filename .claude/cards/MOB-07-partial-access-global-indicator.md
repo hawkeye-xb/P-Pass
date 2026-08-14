@@ -80,8 +80,16 @@
   文件夹写新文件时，SAF 的变化监听会不会真的触发——这是具体存储
   实现细节，Android 官方文档没有通用保证。**要真的搞清楚，需要一次
   跟本卡"部分授权唤醒测试"同款的真机实测**，不能只凭文档下结论。
-- 代价：放弃 MediaStore 免费提供的 EXIF 拍摄时间/缩略图/按 ID 去重，
-  这些要自己重新实现。
+- **代价重新核实过（2026-08-14 查代码，纠正了此前凭印象写的说法）**：
+  拍摄时间 `taken_at`/去重哈希跟 MediaStore 无关——手机侧 `BackupRunner.kt`
+  的 `Candidate` 根本没有 `taken_at` 字段，只推原始文件字节；拍摄时间是
+  daemon 侧 `crates/core-media/src/exif_meta.rs::read_meta()` 直接解析
+  文件自带的 EXIF 段算出来的，去重哈希是手机侧自算的 blake3——都不依赖
+  MediaStore 的任何列，换成 SAF 拿到的还是同一份文件字节，这块零影响。
+  真正的代价是手机侧 `MediaScanner.kt` 现在靠 `DATE_ADDED`/
+  `GENERATION_MODIFIED` 做的**增量扫描**（不用每次全量扫文件系统）——
+  SAF 的文件夹树授权没有对应的内置变化流，就是上一条"变化监听会不会
+  真的触发"要验的东西，不是元数据丢失问题。
 - 没查到有参考价值的同类 App 案例（Syncthing/FolderSync 等，调研
   时间预算用完，没查到，不是查了没有）。
 
