@@ -117,7 +117,7 @@
         margin: 2,
         errorCorrectionLevel: "L",
       });
-      step = 3;
+      step = 4;
       startPendingWatch();
     } catch (e) {
       error = `生成配对码失败：${e}`;
@@ -127,12 +127,20 @@
   }
 
   async function toStep3() {
+    // 设计稿 v2：第 3 步 = 「设为常驻服务」说明页——先讲清楚会申请什么/
+    // 不会做什么/被拦怎么办，再动手。真正的 start_daemon（含 autostart
+    // 注册）在用户点「下一步」的 toStep4 里才执行。
+    step = 3;
+  }
+
+  // 设计稿 v2：第 4 步 = 亮码。启动 daemon（此刻才注册开机自启）→ 等待
+  // 就绪 → 取配对码 → 进入配对页并开始轮询 pending。
+  async function toStep4() {
     error = "";
     busy = true;
     try {
       const mode = await invoke("start_daemon");
       console.log("daemon mode:", mode);
-      // Wait for the daemon to come up, then fetch a pairing QR.
       let qr = "";
       for (let i = 0; i < 20; i++) {
         await new Promise((r) => setTimeout(r, 500));
@@ -149,7 +157,7 @@
         margin: 2,
         errorCorrectionLevel: "L",
       });
-      step = 3;
+      step = 4;
       startPendingWatch();
     } catch (e) {
       error = `启动后台服务失败：${e}`;
@@ -161,7 +169,7 @@
 
 <div class="wizard">
   <div class="steps">
-    {#each ["照片存在哪", "电脑会睡吗", "加手机"] as label, i}
+    {#each ["照片存在哪", "电脑会睡吗", "设为常驻服务", "加手机"] as label, i}
       <span class="step" class:active={step === i + 1} class:done={step > i + 1}>
         {i + 1}. {label}
       </span>
@@ -173,8 +181,8 @@
   {/if}
 
   {#if step === 1}
-    <h2>照片存在哪里？</h2>
-    <p class="hint">家人手机里的照片和视频会以普通文件保存在这个文件夹里——用电脑自带的文件管理器也能直接看到，随时可以整个拷走。</p>
+    <h2>全家的照片，要存到哪里？</h2>
+    <p class="hint">选一个文件夹当「照片库」。照片会按原始文件存进去，你随时能在 Finder 里翻到它们。</p>
     <!-- DESK-05: 路径始终有值（默认填充 defaultDir / 预填已配置库）——
          不再要求先点按钮才能继续。路径 ≠ 默认时旁挂「回到默认」按钮，
          路径 = 默认时不显示（没有可回退的目标）。 -->
@@ -184,34 +192,58 @@
       {/if}
     </p>
     <div class="row">
-      <button class="primary" onclick={chooseFolder}>选一个文件夹…</button>
+      <button class="primary" onclick={chooseFolder}>更改…</button>
     </div>
+    <!-- 设计稿 v2：TCC 保护目录提醒——「桌面」「文稿」受 macOS 保护会
+         额外弹一次权限申请，放不下时也更难搬家。 -->
+    <p class="hint">建议避开「桌面」和「文稿」——它们受 macOS 系统保护，会额外弹一次权限申请；放不下时也更难搬家。</p>
     <div class="nav">
-      <button class="primary" disabled={!libraryDir || busy} onclick={toStep2}>下一步</button>
+      <button class="primary" disabled={!libraryDir || busy} onclick={toStep2}>继续</button>
     </div>
   {:else if step === 2}
-    <h2>电脑会睡着吗？</h2>
+    <h2>让这台电脑保持醒着。</h2>
     {#if power?.kind === "never"}
-      <p class="ok-box">✓ 这台电脑设置为不自动休眠——备份随时都能进行，无需调整。</p>
+      <p class="ok-box">✓ 检查通过：这台电脑设置为不自动休眠——备份随时都能进行，无需调整。</p>
     {:else if power?.kind === "sleeps"}
       <p class="warn-box">
         这台电脑闲置 {power.minutes} 分钟后会休眠。备份进行中我们会自动保持它清醒；
         但如果你希望家人<strong>随时</strong>都能翻看照片，建议把「关闭显示器后仍保持唤醒」打开。
       </p>
-      <button onclick={() => invoke("open_power_settings")}>打开系统电源设置…</button>
+      <button onclick={() => invoke("open_power_settings")}>去系统设置</button>
     {:else}
       <p class="hint">没能读到这台电脑的电源策略（不影响使用）：备份进行中我们会自动保持它清醒。</p>
     {/if}
-    {#if true}
-      <p class="hint">下一步会让 P-Pass 开机自动运行、意外退出自动恢复——之后你不需要手动打开它。</p>
-    {/if}
     <div class="nav">
       <button onclick={() => (step = 1)}>上一步</button>
-      <button class="primary" disabled={busy} onclick={toStep3}>
-        {busy ? "正在设置…" : "继续"}
+      <button class="primary" onclick={toStep3}>继续</button>
+    </div>
+  {:else if step === 3}
+    <!-- 设计稿 v2：第 3 步 = 「设为常驻服务」——先讲清会申请什么/不会
+         做什么/被拦怎么办，点「下一步」才真正启动 daemon（含 autostart
+         注册，toStep4）。 -->
+    <h2>最后一步：设为常驻服务。</h2>
+    <p class="hint">P-Pass 会注册为系统后台服务：开机自动运行，关掉这个窗口也在安静地收备份。随时可以在「设置」里停止它。</p>
+    <div class="faq">
+      <div class="faq-item">
+        <strong>会申请什么</strong>
+        <p class="hint">开机自启（系统会弹一次「后台项目已添加」通知，是正常的）</p>
+      </div>
+      <div class="faq-item">
+        <strong>不会做什么</strong>
+        <p class="hint">不上传到任何云端、不建账号——照片只在你家的设备之间走</p>
+      </div>
+      <div class="faq-item">
+        <strong>如果被拦</strong>
+        <p class="hint">首次打开被 macOS 拦截时：右键点 App → 打开（只需一次）</p>
+      </div>
+    </div>
+    <div class="nav">
+      <button onclick={() => (step = 2)}>上一步</button>
+      <button class="primary" disabled={busy} onclick={toStep4}>
+        {busy ? "正在启动…" : "下一步"}
       </button>
     </div>
-  {:else if step === 3 && pendingList.length > 0}
+  {:else if step === 4 && pendingList.length > 0}
     <!-- DESK-04③: 有人扫码 → 即时切确认列表（不再停留常驻 QR）。
          与主界面 T4 模态同语义：逐行允许/拒绝，处理完该行消失。 -->
     <h2>{pendingList.length > 1 ? `有 ${pendingList.length} 台手机请求加入` : "有手机请求加入"}</h2>
@@ -241,7 +273,7 @@
       <button onclick={generateQr} disabled={busy}>
         {busy ? "正在刷新…" : "刷新二维码"}
       </button>
-      <button class="primary" onclick={onDone}>完成</button>
+      <button class="primary" onclick={onDone}>进入主界面</button>
     </div>
   {/if}
 </div>
@@ -351,6 +383,27 @@
     padding: 12px 14px;
     font-size: 15px;
     line-height: 1.55;
+  }
+  /* 设计稿 v2：第 3 步「设为常驻服务」——会申请什么/不会做什么/被拦
+     怎么办，三项卡片式列表。 */
+  .faq {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 14px 0;
+  }
+  .faq-item {
+    background: var(--pp-linen);
+    border-radius: var(--pp-radius-control);
+    padding: 12px 14px;
+  }
+  .faq-item strong {
+    display: block;
+    font-size: 14px;
+    margin-bottom: 4px;
+  }
+  .faq-item .hint {
+    margin: 0;
   }
   .error {
     background: var(--pp-act-bg);
