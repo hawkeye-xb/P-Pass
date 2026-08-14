@@ -414,6 +414,20 @@
     }
   }
 
+  /* 设计稿 v2 对齐：卡片级「无法扫码？复制配对串」——不打开弹窗，静默
+   * 取一次配对串（pairing.start 每次调用即轮换，与弹窗「刷新二维码」
+   * 同一语义）复制；失败静默。主路径仍是扫码，这是退路。 */
+  async function copyPairQuiet() {
+    try {
+      const r = qrText || (await call("pairing.start")).qr;
+      qrText = r;
+      await navigator.clipboard.writeText(r);
+      flashMessage("配对串已复制");
+    } catch {
+      // 静默
+    }
+  }
+
   async function confirmPair(accept, name, mergeNodeId) {
     try {
       // UX-08: 逐行处理——pairing.confirm 带 device_name 精确确认该台；
@@ -960,7 +974,13 @@
               <div class="pending-card">
                 <div class="pending-text">
                   <strong>{t("diag.desktop.pairing")}</strong>
-                  <span>{t("ui.pending_pairs", { n: pendingCount })}</span>
+                  <!-- 设计稿 v2：横幅直接点名刚扫码的设备（pendingList 里
+                       有真实名字）；列表为空时退回数量摘要（老 daemon 过渡）。 -->
+                  {#if pendingList.length > 0}
+                    <span>{t("ui.pending_banner_text", { name: pendingList[0].name })}</span>
+                  {:else}
+                    <span>{t("ui.pending_pairs", { n: pendingCount })}</span>
+                  {/if}
                 </div>
                 <div class="row">
                   <button onclick={() => confirmPair(false)}>{t("ui.deny")}</button>
@@ -1002,8 +1022,11 @@
                    状态消失；扫码后的允许/拒绝也走模态。 -->
               <div class="card qr-card">
                 <h3>{t("ui.add_device")}</h3>
-                <p class="hint qr-hint">点下面的按钮弹出配对码，用家人手机上的 P-Pass 扫一下；码 10 分钟内有效，可随时刷新。</p>
+                <p class="hint qr-hint">点击后会放大显示一个配对二维码，用家人手机上的 P-Pass 扫一下；扫到后二维码自动收起，回到这里确认「允许加入」。</p>
                 <button class="primary" onclick={startPairing}>{t("ui.generate_qr")}</button>
+                <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
+                     能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
+                <button class="link-more safe" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</button>
               </div>
 
               <!-- 2026-08-13：「最近动静」摘要卡（离线版设计稿 v2「第 3 轮」
@@ -1124,18 +1147,29 @@
             <div class="lede-titles">
               <h2 class="headline">{t("ui.nav_photos")}</h2>
               <p class="sub">
-                {t("ui.photos_count", {
-                  n: photoCount !== null ? photoCount : 0,
-                  m: photoSources !== null ? photoSources : 0,
-                })}
+                {#if status?.library_dir}
+                  <!-- 设计稿 v2：照片页副标题 = 张数 + 「按原始文件存在 <库路径>」
+                       （真实 library_dir，不写死路径） -->
+                  {t("ui.photos_count_path", {
+                    n: photoCount !== null ? photoCount : 0,
+                    path: status.library_dir,
+                  })}
+                {:else}
+                  {t("ui.photos_count", {
+                    n: photoCount !== null ? photoCount : 0,
+                    m: photoSources !== null ? photoSources : 0,
+                  })}
+                {/if}
               </p>
             </div>
-            <!-- 照片墙同步: 手动刷新兜底——事件驱动失效重拉是主通道
-                 （timeline.invalidated 等），按钮是用户能主动触发的兜底；
-                 resetPhotosWall 后 $effect 自动重拉第一页。 -->
-            <button class="photo-refresh" onclick={resetPhotosWall}>
-              {photosLoading ? "刷新中…" : "刷新"}
-            </button>
+            <!-- 设计稿 v2：lede 右侧「在 Finder 中打开」（openLibrary 揭示
+                 originals/）；「刷新」是 DESK-06 的事件驱动失效兜底，保留。 -->
+            <div class="lede-actions">
+              <button class="photo-refresh" onclick={openLibrary}>{t("ui.photos_open_library")}</button>
+              <button class="photo-refresh" onclick={resetPhotosWall}>
+                {photosLoading ? "刷新中…" : "刷新"}
+              </button>
+            </div>
           </div>
           <div class="card photo-wall">
             {#if photosLoaded && photos.length === 0}
@@ -1167,7 +1201,7 @@
               {/if}
             {/if}
           </div>
-          <p class="hint">照片都存在这台电脑上；在 Finder 里删掉的照片会从墙上消失。</p>
+          <p class="hint">缩略图只用来快速翻找；整理、导出、删除都在 Finder 里进行——文件就是普通文件。</p>
         </section>
       {:else if page === "log"}
         <section class="page" data-testid="page-log">
@@ -1525,6 +1559,13 @@
   .photo-refresh {
     flex-shrink: 0;
     margin-top: 2px;
+  }
+  /* 设计稿 v2：lede 右侧按钮组（在 Finder 中打开 + 刷新） */
+  .lede-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
   }
 
   /* wizard 全窗（首启向导独占，无侧栏） */

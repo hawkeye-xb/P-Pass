@@ -20,13 +20,14 @@
   "ui.refresh_hint": "This window refreshes every 3 seconds after start; if nothing happens, close the app and reopen it, then click again.",
   "ui.paired_count": "{n} paired devices",
   "ui.revoked_count": "({n} more removed)",
+  "ui.pending_banner_text": "\"{name}\" just scanned this computer's QR code. Is this a family member?",
   "ui.pending_pairs": "{n} pairing request(s) awaiting confirmation",
   "ui.allow": "Allow",
   "ui.deny": "Deny",
   "ui.allow_replace": "Replace old, allow",
   "ui.allow_new": "As new device",
   "ui.add_device": "Add a device",
-  "ui.generate_qr": "Generate pairing QR",
+  "ui.generate_qr": "Show pairing QR",
   "ui.qr_fallback": "Can't scan? Copy the pairing string",
   "ui.qr_phone_version": "Phone app must be v0.3.1 or newer to scan this code",
   "ui.qr_hint": "The QR is valid for 10 minutes; after scanning, come back here and click Allow.",
@@ -83,9 +84,11 @@
   "ui.env_badge_test": "Test build",
   "ui.nav_photos": "Photos",
   "ui.photos_count": "{n} photos · from {m} devices",
+  "ui.photos_count_path": "{n} photos · stored as original files in {path}",
   "ui.photos_today": "Today",
   "ui.photos_month": "This month",
   "ui.photos_earlier": "Earlier",
   "ui.photos_empty": "No photos yet. They'll appear here after a phone backup.",
-  "ui.photos_open_in_finder": "Show in Finder"
+  "ui.photos_open_in_finder": "Show in Finder",
+  "ui.photos_open_library": "Show in Finder"
 }
