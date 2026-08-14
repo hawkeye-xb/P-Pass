@@ -63,6 +63,7 @@ class BackupRunner(private val client: DaemonClient) {
         daemon: PeerAddrParts,
         candidates: List<Candidate>,
         generation: Long?,
+        onProgress: (sent: Int, total: Int) -> Unit = { _, _ -> },
     ): BackupReport = withContext(Dispatchers.IO) {
         // begin + manifest on the ctrl plane.
         callOk(daemon, Methods.BACKUP_BEGIN, buildJsonObject {})
@@ -83,14 +84,21 @@ class BackupRunner(private val client: DaemonClient) {
 
         // Push every missing file over the upload plane, one stream each.
         val toPush = candidates.filter { it.hash in missing }
+        // 2026-08-14：真实进度回调——之前这个循环对调用方完全不可见，
+        // UI 只能在批次开始时钉死 Sending(0,N) 然后一路卡到批次结束才
+        // 跳到 AllSafe（真机实测反馈：进度条像卡死了，一大批"突然"传完）。
+        // toPush.size 才是这次真的要传的数量（manifest 去重后，可能比
+        // 外层预估的 fresh.size 小）——先报一次校正总数，再逐条报进度。
+        onProgress(0, toPush.size)
         val conn = client.connectRaw(daemon, ALPN_UPLOAD)
         try {
-            for (c in toPush) {
+            toPush.forEachIndexed { i, c ->
                 // UX-01: 协作取消点——用户点「暂停」（job.cancel）后，
                 // 这里在下一个文件边界立即抛 CancellationException 中断
                 // 当前批；未 commit，水位不推进，幂等管线安全。
                 coroutineContext.ensureActive()
                 pushFile(conn, c)
+                onProgress(i + 1, toPush.size)
             }
         } finally {
             conn.close(0L, ByteArray(0))
