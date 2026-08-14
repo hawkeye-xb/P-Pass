@@ -1309,7 +1309,8 @@
     {#if showPairModal}
       <div class="modal-backdrop" onclick={closePairModal}>
         <div class="modal" onclick={(e) => e.stopPropagation()}>
-          <h3>扫码添加手机</h3>
+          <!-- 设计稿 v2：弹窗标题「配对二维码 · 放大版」——亮码用途一目了然 -->
+          <h3>配对二维码</h3>
           {#if qrDataUrl}
             <img class="qr-lg" src={qrDataUrl} alt="配对二维码" />
             <!-- FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，
