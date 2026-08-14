@@ -1,0 +1,116 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn-svelte/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ============================================================
+ * DESK-07: Tailwind 主题桥——只"消费" assets/design/tokens.css
+ * 的 --pp-* 变量，不新建调色板、不重复任何数值。tokens.css 仍是
+ * 颜色/圆角/字体的唯一真相源；以后改色只改 tokens.css，本文件
+ * 零改动。
+ *
+ * 用 @theme inline：工具类直接 emit var(--pp-xxx)，运行时解析，
+ * 不经过中间变量，杜绝"两处同步"型 drift。
+ * ============================================================ */
+@theme inline {
+  /* surfaces */
+  --color-paper: var(--pp-paper);
+  --color-canvas: var(--pp-canvas);
+  --color-linen: var(--pp-linen);
+  --color-surface-dark: var(--pp-surface-dark);
+
+  /* ink */
+  --color-ink: var(--pp-ink);
+  --color-ink-hover: var(--pp-ink-hover);
+  --color-ink-60: var(--pp-ink-60);
+  --color-ink-40: var(--pp-ink-40);
+  --color-hairline: var(--pp-hairline);
+
+  /* 三个语义色 + 中性 idle */
+  --color-safe: var(--pp-safe);
+  --color-safe-bg: var(--pp-safe-bg);
+  --color-waiting: var(--pp-waiting);
+  --color-waiting-bg: var(--pp-waiting-bg);
+  --color-act: var(--pp-act);
+  --color-act-bg: var(--pp-act-bg);
+  --color-idle: var(--pp-idle);
+  --color-idle-bg: var(--pp-idle-bg);
+
+  /* lines */
+  --color-border: var(--pp-border);
+  --color-border-strong: var(--pp-border-strong);
+  --color-divider: var(--pp-divider);
+
+  /* type：字体栈读 tokens.css，不内置 Inter */
+  --font-serif: var(--pp-font-serif);
+  --font-sans: var(--pp-font-sans);
+
+  /* radii：Tailwind 圆角刻度映射到 P-Pass 圆角 token */
+  --radius-sm: var(--pp-radius-control-sm); /* 12px */
+  --radius-md: var(--pp-radius-control);    /* 14px */
+  --radius-xl: var(--pp-radius-card);       /* 20px */
+  --radius-3xl: var(--pp-radius-pill);      /* 999px */
+
+  /* shadcn 语义槽位 → P-Pass 语义（不是 shadcn 默认值）：
+     primary = 墨底纸白字（P-Pass 的主按钮是 ink 不是绿，绿=安全状态色）
+     destructive = act 红（危险操作）
+     secondary/muted/accent = linen/idle-bg 中性浅色 */
+  --color-background: var(--pp-paper);
+  --color-foreground: var(--pp-ink);
+  --color-card: var(--pp-paper);
+  --color-card-foreground: var(--pp-ink);
+  --color-primary: var(--pp-ink);
+  --color-primary-foreground: var(--pp-paper);
+  --color-secondary: var(--pp-linen);
+  --color-secondary-foreground: var(--pp-ink);
+  --color-muted: var(--pp-idle-bg);
+  --color-muted-foreground: var(--pp-ink-40);
+  --color-accent: var(--pp-linen);
+  --color-accent-foreground: var(--pp-ink);
+  --color-destructive: var(--pp-act);
+  --color-destructive-foreground: var(--pp-act-bg);
+  --color-input: var(--pp-border-strong);
+  --color-ring: var(--pp-ink);
+  --color-popover: var(--pp-paper);
+  --color-popover-foreground: var(--pp-ink);
+  --color-sidebar: var(--pp-linen);
+  --color-sidebar-foreground: var(--pp-ink);
+  --color-sidebar-primary: var(--pp-ink);
+  --color-sidebar-primary-foreground: var(--pp-paper);
+  --color-sidebar-accent: var(--pp-hairline);
+  --color-sidebar-accent-foreground: var(--pp-ink);
+  --color-sidebar-border: var(--pp-border);
+  --color-sidebar-ring: var(--pp-ink);
+  --color-chart-1: var(--pp-safe);
+  --color-chart-2: var(--pp-waiting);
+  --color-chart-3: var(--pp-act);
+  --color-chart-4: var(--pp-idle);
+  --color-chart-5: var(--pp-ink-60);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  body {
+    background: var(--color-background);
+    color: var(--color-foreground);
+  }
+  html {
+    font-family: var(--font-sans);
+    /* Tailwind preflight 默认给 html 设 line-height: 1.5 并继承到所有元素，
+       会让未显式设行高的页面整体变高（内容下移、字形重排）——旧渲染靠
+       浏览器默认行高。DESK-07 只迁「家人与设备」页，其它页渲染必须原样，
+       所以在这里还原为 normal（显式 leading-* 工具类不受影响）。 */
+    line-height: normal;
+  }
+  /* preflight 会给 code/kbd/samp/pre 换 ui-monospace 字体栈，旧渲染是 UA
+     默认 monospace（如设置页的库路径框 code.path）——还原，避免字形变化。 */
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: monospace;
+  }
+}

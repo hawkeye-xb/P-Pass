@@ -1,0 +1,138 @@
+{
+ "w1280": {
+  "headline_fs": "28px",
+  "headline_family": "Newsreader, Georgia, \"Times New Roman\", serif",
+  "sub_fs": "14px",
+  "sub_mt": "6px",
+  "sub_color": "rgb(107, 101, 92)",
+  "hint_fs": "13px",
+  "card_padding": "0px",
+  "card_border": "1px solid rgba(23, 21, 18, 0.12)",
+  "card_bg": "rgb(251, 248, 242)",
+  "card_radius": "20px",
+  "card_shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+  "row_padding": "18px 22px",
+  "row_border_bottom": "1px",
+  "row_border_color": "rgba(23, 21, 18, 0.1)",
+  "row_x_vs_card_x": [
+   {
+    "x": 255,
+    "y": 119,
+    "w": 986,
+    "h": 86
+   },
+   {
+    "x": 254,
+    "y": 118,
+    "w": 988,
+    "h": 563
+   }
+  ],
+  "remove_btn": {
+   "color": "rgb(181, 52, 31)",
+   "bg": "rgba(0, 0, 0, 0)",
+   "borderStyle": "none",
+   "borderWidth": "0px",
+   "radius": "12px",
+   "fs": "14px",
+   "fw": "600",
+   "textDecor": "none",
+   "w": 36,
+   "h": 36,
+   "minH": "0px"
+  },
+  "name_btn": {
+   "color": "rgb(23, 21, 18)",
+   "fs": "16px",
+   "fw": "600",
+   "radius": "12px",
+   "padding": "2px 6px",
+   "textDecor": "none"
+  },
+  "sidebar_w": {
+   "x": 0,
+   "y": 0,
+   "w": 216,
+   "h": 800
+  },
+  "rows_count": 7,
+  "dot_colors": [
+   "rgb(46, 107, 79)",
+   "rgb(201, 118, 30)",
+   "rgb(138, 133, 124)",
+   "rgb(138, 133, 124)",
+   "rgb(138, 133, 124)",
+   "rgb(181, 52, 31)",
+   "rgb(138, 133, 124)"
+  ],
+  "console_errors": []
+ },
+ "w1000": {
+  "headline_fs": "28px",
+  "headline_family": "Newsreader, Georgia, \"Times New Roman\", serif",
+  "sub_fs": "14px",
+  "sub_mt": "6px",
+  "sub_color": "rgb(107, 101, 92)",
+  "hint_fs": "13px",
+  "card_padding": "0px",
+  "card_border": "1px solid rgba(23, 21, 18, 0.12)",
+  "card_bg": "rgb(251, 248, 242)",
+  "card_radius": "20px",
+  "card_shadow": "rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px",
+  "row_padding": "18px 22px",
+  "row_border_bottom": "1px",
+  "row_border_color": "rgba(23, 21, 18, 0.1)",
+  "row_x_vs_card_x": [
+   {
+    "x": 103,
+    "y": 119,
+    "w": 858,
+    "h": 86
+   },
+   {
+    "x": 102,
+    "y": 118,
+    "w": 860,
+    "h": 563
+   }
+  ],
+  "remove_btn": {
+   "color": "rgb(181, 52, 31)",
+   "bg": "rgba(0, 0, 0, 0)",
+   "borderStyle": "none",
+   "borderWidth": "0px",
+   "radius": "12px",
+   "fs": "14px",
+   "fw": "600",
+   "textDecor": "none",
+   "w": 36,
+   "h": 36,
+   "minH": "0px"
+  },
+  "name_btn": {
+   "color": "rgb(23, 21, 18)",
+   "fs": "16px",
+   "fw": "600",
+   "radius": "12px",
+   "padding": "2px 6px",
+   "textDecor": "none"
+  },
+  "sidebar_w": {
+   "x": 0,
+   "y": 0,
+   "w": 64,
+   "h": 720
+  },
+  "rows_count": 7,
+  "dot_colors": [
+   "rgb(46, 107, 79)",
+   "rgb(201, 118, 30)",
+   "rgb(138, 133, 124)",
+   "rgb(138, 133, 124)",
+   "rgb(138, 133, 124)",
+   "rgb(181, 52, 31)",
+   "rgb(138, 133, 124)"
+  ],
+  "console_errors": []
+ }
+}
