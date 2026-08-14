@@ -38,7 +38,10 @@ pub const TIMELINE_INVALIDATED: &str = "timeline.invalidated";
 /// [`Throttle`] 默认合并窗口——窗口内多次 [`Throttle::signal`] 只发一次，
 /// 窗口到点必发（不是防抖：防抖会在持续到达场景下让用户整批传输期间
 /// 什么都看不到，见决策档案 §⑤，明确否掉的方案）。可调参数，非定案值。
-pub const DEFAULT_THROTTLE_WINDOW: Duration = Duration::from_secs(3);
+/// 2026-08-14：3s→1s（用户实测反馈"批量传输时界面一下子跳一大堆"——
+/// 窗口越长单次合并的量越大，视觉上越像"卡了一下才刷新"；1s 既不会
+/// 高频到刷屏，又能让持续传输场景看起来是连续的，不是分段跳变）。
+pub const DEFAULT_THROTTLE_WINDOW: Duration = Duration::from_secs(1);
 
 /// 创建事件总线（sender + 首个 receiver）。容量 64：事件只是加速器，
 /// 满则 Lagged 跳过，客户端全量 refresh 兜底。

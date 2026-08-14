@@ -191,7 +191,11 @@ class BackupUiStateHolder(
         _state.value = BackupUiState.Sending(0, fresh.size)
         withContext(Dispatchers.IO) { client.bind(identity.secretKey()) }
         val daemon = parsePeerAddrToken(pairing.daemonAddrToken)
-        val report = BackupRunner(client).run(daemon, fresh, scan.nextWatermark)
+        // 2026-08-14：真实进度——BackupRunner 每传完一个文件回调一次，
+        // 之前这里只在批次开始/结束各设一次状态，中途界面纹丝不动。
+        val report = BackupRunner(client).run(daemon, fresh, scan.nextWatermark) { sent, total ->
+            _state.value = BackupUiState.Sending(sent, total)
+        }
 
         // Watermark only advances after a committed run (T-053 semantics).
         withContext(Dispatchers.IO) { watermarks.save(scan.nextWatermark) }
