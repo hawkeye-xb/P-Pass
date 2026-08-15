@@ -90,5 +90,6 @@
   "ui.photos_earlier": "更早",
   "ui.photos_empty": "还没有照片。手机备份完成后会出现在这里。",
   "ui.photos_open_in_finder": "在 Finder 中显示",
-  "ui.photos_open_library": "在 Finder 中打开"
+  "ui.photos_open_library": "在 Finder 中打开",
+  "ui.devices_paired_line": "已配对设备 {n} 台 · 名字可以改成家人叫法,比如「妈妈的手机」"
 }
