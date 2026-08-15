@@ -320,9 +320,10 @@
   const DOT_BG = { idle: "bg-idle", act: "bg-act", safe: "bg-safe", wait: "bg-waiting" };
 
   /* DESK-08: 迁移后的按钮族常量——原手写 button 规则的 Tailwind 等价
-     （base=透明底+1.5px border-strong；primary=ink 底纸字；danger=纸底
+     （base=透明底+1.5px border-strong；primary=ink 底纸字；danger=透明底
      act 字 act 边；link=纯文字）。所有迁移页共用，保证全站按钮一致。 */
-  const BTN = "h-11 min-h-11 rounded-md border border-ink px-[18px] text-[15px] font-bold";
+  const BTN =
+    "h-11 min-h-11 rounded-md border border-ink px-[18px] text-[15px] font-bold hover:bg-ink-hover";
   const BTN_OUTLINE =
     "h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60";
   const BTN_DANGER =
@@ -975,7 +976,7 @@
           {#if !online}
             <Card class="gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.offline_action")}</p>
-              <Button class="mt-[12px] {BTN}" disabled={starting} onclick={startDaemonNow}>
+              <Button class="mt-[12px] self-start {BTN}" disabled={starting} onclick={startDaemonNow}>
                 {starting ? t("ui.starting") : t("ui.start_service")}
               </Button>
               <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
@@ -1154,10 +1155,12 @@
              thumb.get），本机直连 daemon 拉取；分组 今天/本月/更早；
              点开 = 原图内存查看（不落盘）+「在 Finder 中显示」原文件。 -->
         <section class="page" data-testid="page-photos">
-          <div class="lede lede-photos">
-            <div class="lede-titles">
-              <h2 class="headline">{t("ui.nav_photos")}</h2>
-              <p class="sub">
+          <!-- DESK-08: 照片页已迁 Tailwind + 组件库（Card + Button）；数据流
+               （timeline 拉取/分组/查看大图/哨兵加载）一字未动。 -->
+          <div class="flex items-start justify-between gap-[12px]">
+            <div class="min-w-0">
+              <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.nav_photos")}</h2>
+              <p class="mt-[6px] text-[14px] text-ink-40">
                 {#if status?.library_dir}
                   <!-- 设计稿 v2：照片页副标题 = 张数 + 「按原始文件存在 <库路径>」
                        （真实 library_dir，不写死路径） -->
@@ -1175,59 +1178,61 @@
             </div>
             <!-- 设计稿 v2：lede 右侧「在 Finder 中打开」（openLibrary 揭示
                  originals/）；「刷新」是 DESK-06 的事件驱动失效兜底，保留。 -->
-            <div class="lede-actions">
-              <button class="photo-refresh" onclick={openLibrary}>{t("ui.photos_open_library")}</button>
-              <button class="photo-refresh" onclick={resetPhotosWall}>
+            <div class="flex flex-none items-center gap-[10px]">
+              <Button variant="outline" class="{BTN_OUTLINE} mt-[2px] flex-none" onclick={openLibrary}>{t("ui.photos_open_library")}</Button>
+              <Button variant="outline" class="{BTN_OUTLINE} mt-[2px] flex-none" onclick={resetPhotosWall}>
                 {photosLoading ? "刷新中…" : "刷新"}
-              </button>
+              </Button>
             </div>
           </div>
-          <div class="card photo-wall">
+          <Card class="gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
             {#if photosLoaded && photos.length === 0}
-              <p class="hint">{t("ui.photos_empty")}</p>
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_empty")}</p>
             {:else if !photosLoaded}
-              <p class="hint">正在加载照片…</p>
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">正在加载照片…</p>
             {:else}
               {#each photoGroups as g (g.key)}
-                <h4 class="photo-group">{g.label}</h4>
-                <div class="photo-grid">
+                <h4 class="mt-[14px] mb-[8px] text-[13px] font-semibold text-ink-60 first:mt-0">{g.label}</h4>
+                <div class="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-[6px]">
                   {#each g.items as item (item.hash)}
                     <button
-                      class="photo-cell"
+                      class="relative aspect-square cursor-zoom-in overflow-hidden rounded-sm border-0 border-none bg-border p-0 hover:outline-2 hover:outline-ink hover:outline-offset-2"
                       onclick={() => (photoViewer = item)}
                       aria-label="查看大图"
                     >
                       <PhotoThumb hash={item.hash} />
                       {#if item.media_type === "video"}
-                        <span class="video-badge">▶</span>
+                        <span class="pointer-events-none absolute bottom-[5px] right-[5px] rounded-[4px] bg-black/55 px-[5px] py-[1px] text-[11px] text-white">▶</span>
                       {/if}
                     </button>
                   {/each}
                 </div>
               {/each}
               {#if photosNext}
-                <div class="photo-sentinel" bind:this={sentinelEl}>
+                <div class="h-6 text-center text-[12px] text-ink-60" bind:this={sentinelEl}>
                   {photosLoading ? "加载中…" : ""}
                 </div>
               {/if}
             {/if}
-          </div>
-          <p class="hint">缩略图只用来快速翻找；整理、导出、删除都在 Finder 里进行——文件就是普通文件。</p>
+          </Card>
+          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">缩略图只用来快速翻找；整理、导出、删除都在 Finder 里进行——文件就是普通文件。</p>
         </section>
       {:else if page === "log"}
         <section class="page" data-testid="page-log">
-          <div class="lede-log">
-            <div class="lede">
-              <h2 class="headline">活动记录</h2>
-              <p class="sub">谁备份了什么，一目了然——不用去 Finder 里对账。</p>
+          <!-- DESK-08: 活动记录页已迁 Tailwind + Card；审计流数据与过滤
+               （ingest.* 噪音行剔除）一字未动。 -->
+          <div class="flex flex-wrap items-end justify-between gap-[20px]">
+            <div>
+              <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">活动记录</h2>
+              <p class="mt-[6px] text-[14px] text-ink-40">谁备份了什么，一目了然——不用去 Finder 里对账。</p>
             </div>
             <!-- 设计稿"本周"统计条：只做能从真实审计数据推出来的两项，
                  见上方 weekStats 注释——不编造「重试成功」这类没有真实
                  语义支撑的数字。 -->
-            <div class="week-pill">
-              <span class="week-label">本周</span>
-              <span>新备份 <b>{weekStats.added}</b></span>
-              <span>去重跳过 <b>{weekStats.dup}</b></span>
+            <div class="flex flex-none items-center gap-[18px] rounded-full bg-linen px-[22px] py-[10px] text-[14px] text-ink-60">
+              <span class="text-[13px] font-semibold text-ink-40">本周</span>
+              <span>新备份 <b class="text-ink">{weekStats.added}</b></span>
+              <span>去重跳过 <b class="text-ink">{weekStats.dup}</b></span>
             </div>
           </div>
           <!-- T5: 活动记录页展示审计事件流——配对请求/允许/拒绝、备份会话
@@ -1237,80 +1242,82 @@
                （DESK-05 当时改真表格的顾虑是"内容超长"，但 ingest.*
                噪音行本来就被过滤掉了，跟表格与否无关；卡片行是 flex
                布局，长文本本来就会自然换行，不会重新踩那个坑）。 -->
-          <div class="card list-card">
+          <Card class="min-h-0 flex-1 gap-0 overflow-y-auto rounded-xl border border-border p-0 shadow-none ring-0 ring-transparent text-[16px]">
             {#if visibleAudit.length === 0}
-              <p class="hint">这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。</p>
+              <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。</p>
             {:else}
-              <ul class="log-rows">
+              <ul class="m-0 list-none p-0">
                 {#each visibleAudit as e (e.ts + ":" + e.action)}
                   {@const at = humanTime(e.ts, nowMs)}
-                  <li>
-                    <span class="log-text"><b>{auditWho(e)}</b> {auditText(e)}</span>
-                    <span class="log-time">{#if at}{at}{/if}</span>
+                  <li class="flex items-baseline gap-[14px] border-b border-divider px-[22px] py-[16px] last:border-b-0">
+                    <span class="flex-1 text-[15px] text-ink"><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}</span>
+                    <span class="ml-auto flex-none whitespace-nowrap text-[13px] text-ink-40">{#if at}{at}{/if}</span>
                   </li>
                 {/each}
               </ul>
             {/if}
-          </div>
-          <p class="hint">记录来自本机照片库与审计日志，不上传。</p>
+          </Card>
+          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">记录来自本机照片库与审计日志，不上传。</p>
         </section>
       {:else if page === "settings"}
         <section class="page" data-testid="page-settings">
-          <div class="lede">
-            <h2 class="headline">{t("ui.settings")}</h2>
+          <!-- DESK-08: 设置页已迁 Tailwind + Card/Button；所有 IPC 调用与
+               条件渲染（daemonStale 重启行/磁盘水位行）一字未动。 -->
+          <div>
+            <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.settings")}</h2>
           </div>
-          <div class="cols">
-            <div class="card cols-grow">
-              <h3>照片库</h3>
+          <div class="flex items-start gap-[22px] max-[1079px]:flex-col">
+            <Card class="flex-[1.2_1_0%] gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+              <h3 class="mb-[12px] text-[15px] font-semibold">照片库</h3>
               {#if status?.library_dir}
-                <code class="path">{status.library_dir}</code>
+                <code class="block rounded-sm bg-linen px-[16px] py-[12px] text-[14px] break-all">{status.library_dir}</code>
               {/if}
-              <div class="row">
-                <button class="primary" onclick={openLibrary}>{t("ui.open_library")}</button>
-                <button onclick={chooseFolder}>{t("ui.change_library")}</button>
+              <div class="mt-[12px] flex flex-wrap gap-[10px]">
+                <Button class="{BTN}" onclick={openLibrary}>{t("ui.open_library")}</Button>
+                <Button variant="outline" class="{BTN_OUTLINE}" onclick={chooseFolder}>{t("ui.change_library")}</Button>
               </div>
               <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
                    「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
                    null（磁盘统计拿不到）整行连进度条一起隐藏。 -->
               {#if diskFree !== null && diskTotal !== null && diskPct !== null}
-                <div class="disk-row">
+                <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold">
                   <span>磁盘空间</span>
-                  <span class="disk-val">可用 {diskFree} / 共 {diskTotal}</span>
+                  <span class="text-[14px] font-normal text-ink-40">可用 {diskFree} / 共 {diskTotal}</span>
                 </div>
-                <div class="disk-bar"><div class="disk-fill" style="width:{diskPct}%"></div></div>
+                <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
               {/if}
-              <p class="hint">更改位置重启后台服务后生效；已备份的照片不会自动搬家。</p>
-            </div>
-            <div class="col">
-              <div class="card list-card">
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">更改位置重启后台服务后生效；已备份的照片不会自动搬家。</p>
+            </Card>
+            <div class="flex flex-1 flex-col gap-[22px]">
+              <Card class="min-h-0 flex-1 gap-0 overflow-y-auto rounded-xl border border-border p-0 shadow-none ring-0 ring-transparent text-[16px]">
                 <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
                      test），旧 REL-02 通道选择行已删。 -->
-                <div class="setting-row">
+                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                   <span>软件更新</span>
-                  <button onclick={() => checkForUpdate(true)}>检查更新</button>
+                  <Button variant="outline" class="{BTN_OUTLINE}" onclick={() => checkForUpdate(true)}>检查更新</Button>
                 </div>
                 <!-- DAE-04: 桌面壳更新后 daemon 还是旧版（版本不一致）才
                      显示——一致时不出现，避免误杀正常运行的服务。 -->
                 {#if daemonStale}
-                  <div class="setting-row">
+                  <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                     <span>{t("ui.restart_service")}</span>
-                    <button onclick={restartDaemonProcess} disabled={restartingService}>
+                    <Button variant="outline" class="{BTN_OUTLINE}" onclick={restartDaemonProcess} disabled={restartingService}>
                       {restartingService ? t("ui.restarting_service") : t("ui.restart_service_btn")}
-                    </button>
+                    </Button>
                   </div>
-                  <p class="hint">{t("ui.restart_service_hint")}</p>
+                  <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.restart_service_hint")}</p>
                 {/if}
-                <div class="setting-row">
+                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                   <span>遇到问题？导出诊断包</span>
-                  <button onclick={exportLogs}>{t("ui.export_logs")}</button>
+                  <Button variant="outline" class="{BTN_OUTLINE}" onclick={exportLogs}>{t("ui.export_logs")}</Button>
                 </div>
-                <p class="hint">{t("ui.logs_hint")}</p>
-              </div>
-              <div class="card danger-card">
-                <h3 class="danger-title">{t("ui.stop_service")}</h3>
-                <p class="hint">{t("ui.stop_hint")}</p>
-                <button class="danger" onclick={stopService}>{t("ui.stop_service")}</button>
-              </div>
+                <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.logs_hint")}</p>
+              </Card>
+              <Card class="gap-0 rounded-xl border border-act bg-act-bg px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+                <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
+                <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.stop_hint")}</p>
+                <Button variant="outline" class="self-start {BTN_DANGER}" onclick={stopService}>{t("ui.stop_service")}</Button>
+              </Card>
             </div>
           </div>
         </section>
@@ -1550,40 +1557,13 @@
      * 死区（用户实测反馈）。max-width 只在 ≥1440px 才需要（见文件尾
      * 的响应式媒体查询），防真的超宽屏内容无限拉伸。 */
   }
-  .lede .headline {
-    font-family: var(--pp-font-serif);
-    font-size: 28px;
-    font-weight: 400;
-    line-height: 1.3;
-    margin: 0;
-  }
-  .lede .sub {
-    color: var(--pp-ink-40);
-    font-size: 14px;
-    margin: 6px 0 0;
-  }
 
-  /* 照片墙同步: lede 右侧手动刷新按钮——flex 排布，标题区自适应收缩 */
-  .lede-photos {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-  }
-  .lede-titles {
-    min-width: 0;
-  }
-  .photo-refresh {
-    flex-shrink: 0;
-    margin-top: 2px;
-  }
-  /* 设计稿 v2：lede 右侧按钮组（在 Finder 中打开 + 刷新） */
-  .lede-actions {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-shrink: 0;
-  }
+
+
+  
+
+
+  
 
   /* wizard 全窗（首启向导独占，无侧栏） */
   .wizard-shell {
@@ -1604,155 +1584,39 @@
     margin: 0;
   }
 
-  /* ---- 卡片与行 ---- */
-  .card {
-    background: var(--pp-paper);
-    border: 1px solid var(--pp-border);
-    border-radius: var(--pp-radius-card);
-    padding: 20px 22px;
-  }
-  .cols {
-    /* 2026-08-13 更正：离线版设计稿 v2 的响应式静态示意图里，两张卡
-       明显不是等高的（各自撑开到自己内容的高度）——T-082 当时记的
-       "设计稿原文 stretch" 是旧版设计稿，这版已经不是了，改
-       flex-start。 */
-    display: flex;
-    gap: 22px;
-    align-items: flex-start;
-  }
-  .cols .cols-grow {
-    flex: 1.2;
-  }
-  .cols .card:not(.cols-grow) {
-    flex: 1;
-  }
-  .col {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 22px;
-  }
-  .col .card {
-    flex: none;
-  }
+  
+
+
+
+
+
   h3 {
     font-size: 15px;
     font-weight: 600;
     margin: 0 0 12px;
   }
-  .pending-card {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    background: var(--pp-waiting-bg);
-    border: 1px solid var(--pp-border);
-    border-radius: var(--pp-radius-card);
-    padding: 18px 22px;
-  }
-  .pending-text {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-  .pending-text strong {
-    font-size: 16px;
-  }
-  .pending-text span {
-    font-size: 14px;
-    color: var(--pp-ink-60);
-  }
-  /* 设计稿原文：列表容器无 padding，每一行自己 padding:18px 22px，
-     分隔线贴着卡片圆角边缘——不是容器统一留白、行内零横向 padding。
-     .list-card 承载这条结构；.edge 是这条边距规则的开关（只给真正
-     贴边的顶层列表用，「已移除设备」折叠区的嵌套列表不用，见下方
-     .removed-fold 单独处理）。 */
-  .card.list-card {
-    padding: 0;
-  }
-  .card.list-card > .hint {
-    padding: 18px 22px;
-    margin: 0;
-  }
-  .device-rows {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .device-rows li {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 0;
-    border-bottom: 1px solid var(--pp-divider);
-  }
-  .device-rows li:last-child {
-    border-bottom: none;
-  }
-  .statusdot {
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    flex: none;
-  }
-  .statusdot.idle {
-    background: var(--pp-idle);
-  }
-  /* T-091: 哨兵态（最近备份 >5 天）——行点与右侧文案用 ACT 色 */
-  .statusdot.act {
-    background: var(--pp-act);
-  }
-  /* T-092: 连接态点色——direct=safe 绿，relay=wait 琥珀（语义色仅此三种 +
-     act，别的颜色不带含义） */
-  .statusdot.safe {
-    background: var(--pp-safe);
-  }
-  .statusdot.wait {
-    background: var(--pp-waiting);
-  }
-  .dev-right.act {
-    color: var(--pp-act);
-  }
-  .dev-name {
-    flex: 1;
-    font-weight: 600;
-    font-size: 15px;
-  }
-  .dev-right {
-    color: var(--pp-ink-40);
-    font-size: 13.5px;
-    flex: none;
-  }
 
-  /* 2026-08-13: 活动记录改回设计稿的卡片行列表，撤掉 DESK-05 的真
-     表格方案（撤销理由见上方模板注释）。标题行右侧挂一个"本周"统计
-     胶囊，跟"家人与设备"页同一套 .list-card/边距贴边逻辑。 */
-  .lede-log {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 20px;
-    flex-wrap: wrap;
-  }
-  .week-pill {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    background: var(--pp-linen);
-    border-radius: var(--pp-radius-pill);
-    padding: 10px 22px;
-    flex: none;
-    font-size: 14px;
-    color: var(--pp-ink-60);
-  }
-  .week-pill b {
-    color: var(--pp-ink);
-  }
-  .week-label {
-    font-weight: 600;
-    font-size: 13px;
-    color: var(--pp-ink-40);
-  }
+
+
+
+  
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+  
+
+
+
   /* 2026-08-13：列表本身内部滚动，不是靠整个右边内容区变高再滚动
      （用户实测反馈：应该是表格内滚动，游标加载，不是整个右边区域
      滚动）。真正的游标分页（滚到底再补一批，而不是一次性 limit=100
@@ -1763,114 +1627,25 @@
     height: 100%;
     box-sizing: border-box;
   }
-  main[data-page="log"] .card.list-card {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-  }
-  .log-rows {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-  }
-  .log-rows li {
-    display: flex;
-    align-items: baseline;
-    gap: 14px;
-    padding: 16px 22px;
-    border-bottom: 1px solid var(--pp-divider);
-  }
-  .log-rows li:last-child {
-    border-bottom: none;
-  }
-  .log-text {
-    flex: 1;
-    font-size: 15px;
-    color: var(--pp-ink);
-  }
-  .log-text b {
-    font-weight: 600;
-  }
-  .log-time {
-    flex: none;
-    margin-left: auto;
-    font-size: 13px;
-    color: var(--pp-ink-40);
-    white-space: nowrap;
-  }
-  /* T-092: 设置页磁盘水位行 + 细进度条（设计稿：上分隔线、8px 圆角条，
-     轨道 hairline、填充 ink——全部 token 色） */
-  .disk-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    border-top: 1px solid var(--pp-divider);
-    margin-top: 14px;
-    padding-top: 14px;
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .disk-row .disk-val {
-    color: var(--pp-ink-40);
-    font-weight: 400;
-  }
-  .disk-bar {
-    height: 8px;
-    margin-top: 10px;
-    background: var(--pp-hairline);
-    border-radius: var(--pp-radius-pill);
-    overflow: hidden;
-  }
-  .disk-fill {
-    height: 100%;
-    background: var(--pp-ink);
-    border-radius: var(--pp-radius-pill);
-  }
-  /* 2026-08-13：跟 device-rows/log-rows 同一套"容器零 padding、行自己
-     18px 22px、分隔线贴边"规则（用户实测反馈：分割线没跟卡片边框连上，
-     跟 UI 严重不符）。这个卡的容器已经是 .list-card（见模板），这里
-     只改行自己的 padding。 */
-  .setting-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 12px;
-    padding: 16px 22px;
-    border-bottom: 1px solid var(--pp-divider);
-    font-size: 15px;
-    font-weight: 500;
-  }
-  .setting-row:last-of-type {
-    border-bottom: none;
-  }
-  .danger-card {
-    border-color: var(--pp-act);
-    background: var(--pp-act-bg);
-  }
-  .danger-title {
-    color: var(--pp-act);
-  }
-  /* 危险区域按钮：卡片底色已经是浅红（--pp-act-bg），按钮如果还用通用
-     button 的中性灰边框（--pp-border-strong）配纸白底，跟卡片撞色不
-     协调——边框改成跟卡片同一个红，视觉上才算一家人。 */
-  .danger-card button.danger {
-    border-color: var(--pp-act);
-  }
-  .path {
-    display: block;
-    font-size: 14px;
-    background: var(--pp-linen);
-    border-radius: var(--pp-radius-control-sm);
-    padding: 12px 16px;
-    margin-bottom: 12px;
-    word-break: break-all;
-  }
 
-  .row {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
+
+
+
+
+
+
+  
+
+
+
+  
+
+
+
+  
+
+
+
   button {
     min-height: var(--pp-tap-min);
     border: 1.5px solid var(--pp-border-strong);
@@ -1895,68 +1670,21 @@
   button.primary:hover {
     background: var(--pp-ink-hover);
   }
-  button.danger {
-    color: var(--pp-act);
-    border-color: var(--pp-border-strong);
-    background: var(--pp-paper);
-  }
-  button.danger:hover {
-    border-color: var(--pp-act);
-    background: var(--pp-act-bg);
-  }
+
+
   button:disabled {
     opacity: 0.5;
     cursor: default;
   }
-  /* T-082: 设计稿——添加设备卡内容水平居中，标题保持左上 */
-  .qr-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 12px;
-  }
-  .qr-card h3 {
-    align-self: flex-start;
-    margin: 0;
-  }
-  /* T-082: 二维码 148×148，白底（PNG 自带）、圆角 12、带边框（设计稿原文） */
-  .qr {
-    display: block;
-    width: 148px;
-    height: 148px;
-    box-sizing: border-box;
-    margin: 0;
-    border: 1px solid var(--pp-border);
-    border-radius: var(--pp-radius-control-sm);
-    max-width: 100%;
-  }
-  .qr-hint {
-    margin: 0;
-    text-align: center;
-  }
+  
+
+  
+
   /* 「最近动静」摘要卡：默认隐藏，只在 ≥1440px 由上方 @media 打开
-     （见 .cols .recent-activity-card 规则）。 */
-  .recent-activity-card {
-    display: none;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .recent-activity-card h3 {
-    margin: 0;
-  }
-  .recent-rows {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    font-size: 14px;
-    color: var(--pp-ink);
-  }
-  .recent-rows b {
-    font-weight: 600;
-  }
+
+
+
+
   /* 跟 .dev-name-btn/.dev-remove-btn 同族的极简文字链接——次要跳转
      不该是实心按钮，这条规则以后别的「看全部」链接也可以直接复用。 */
   .link-more {
@@ -2121,15 +1849,9 @@
     margin: 10px 0 0;
     line-height: 1.6;
   }
-  .card > .hint:first-of-type {
-    margin-top: 0;
-  }
-  .card .row {
-    margin-top: 12px;
-  }
-  .offline-card p:first-child {
-    margin-top: 0;
-  }
+
+
+
   .message {
     background: var(--pp-waiting-bg);
     border: 1px solid var(--pp-waiting);
@@ -2159,55 +1881,14 @@
     background: var(--pp-linen);
   }
 
-  /* ── DESK-03: 照片墙 ─────────────────────────────────────────── */
-  .photo-wall {
-    overflow: hidden; /* 卡片内滚动由页面容器负责，墙不撑破圆角 */
-  }
-  .photo-group {
-    margin: 14px 0 8px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--pp-ink-60, #5c5347);
-  }
-  .photo-group:first-child {
-    margin-top: 0;
-  }
-  .photo-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-    gap: 6px;
-  }
-  .photo-cell {
-    position: relative;
-    aspect-ratio: 1;
-    padding: 0;
-    border: none;
-    border-radius: var(--pp-radius-control-sm, 6px);
-    background: var(--pp-border, #e8e0d5);
-    overflow: hidden;
-    cursor: zoom-in;
-  }
-  .photo-cell:hover {
-    outline: 2px solid var(--pp-ink);
-    outline-offset: 2px;
-  }
-  .video-badge {
-    position: absolute;
-    right: 5px;
-    bottom: 5px;
-    font-size: 11px;
-    color: #fff;
-    background: rgba(0, 0, 0, 0.55);
-    border-radius: 4px;
-    padding: 1px 5px;
-    pointer-events: none;
-  }
-  .photo-sentinel {
-    height: 24px;
-    text-align: center;
-    color: var(--pp-ink-60, #5c5347);
-    font-size: 12px;
-  }
+  
+
+
+
+
+
+
+
   /* 大图 modal：图片区域限高、object-contain 保完整（大图看全貌优先） */
   .photo-modal {
     width: min(88vw, 880px);
@@ -2288,9 +1969,7 @@
     /* 内容单栏：水位/添加设备两卡竖排，各占满宽度（设计稿⑨：小屏不给
        扫码这种低频动作留一整卡，但完整的横条降级属于更大改动，本卡
        先保证「竖排不挤不裁切」这条底线，横条卡样式留后续卡打磨）。 */
-    .cols {
-      flex-direction: column;
-    }
+
   }
   /* ≥1440：三栏，内容区居中不无限拉伸，新增「最近动静」摘要卡。
      照片墙是缩略图网格不是读文字，没有"一行多少字读得舒服"的考量，
@@ -2305,10 +1984,7 @@
     main[data-page="photos"] .page {
       max-width: none;
     }
-    .cols .recent-activity-card {
-      display: flex;
-      flex: 1;
-    }
+
   }
   }
 </style>
