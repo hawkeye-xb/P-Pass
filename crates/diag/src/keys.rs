@@ -142,6 +142,12 @@ msg_keys! {
     UI_PHOTOS_EARLIER => "ui.photos_earlier",
     UI_PHOTOS_EMPTY => "ui.photos_empty",
     UI_PHOTOS_OPEN_IN_FINDER => "ui.photos_open_in_finder",
+    /// 设计稿 v2：照片页副标题 = 张数 + 真实库路径。
+    UI_PHOTOS_COUNT_PATH => "ui.photos_count_path",
+    /// 设计稿 v2：lede 右侧「在 Finder 中打开」。
+    UI_PHOTOS_OPEN_LIBRARY => "ui.photos_open_library",
+    /// 设计稿 v2：配对横幅点名设备名。
+    UI_PENDING_BANNER_TEXT => "ui.pending_banner_text",
 }
 
 #[cfg(test)]
@@ -240,10 +246,13 @@ mod tests {
             UI_PHOTOS_EARLIER,
             UI_PHOTOS_EMPTY,
             UI_PHOTOS_OPEN_IN_FINDER,
+            UI_PHOTOS_COUNT_PATH,
+            UI_PHOTOS_OPEN_LIBRARY,
+            UI_PENDING_BANNER_TEXT,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 89);
+        assert_eq!(ALL.len(), 92);
     }
 
     #[test]
