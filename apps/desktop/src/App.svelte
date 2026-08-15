@@ -354,7 +354,7 @@
       alert: false,
       dot: pres.dot,
       sub: pres.sub,
-      right: backupTime ? `最近备份 ${backupTime} · ${wm.asset_count} 张` : "还没备份过",
+      right: backupTime ? `最近备份 ${backupTime}` : "还没备份过",
     };
   }
 
@@ -1073,7 +1073,7 @@
         <section class="page" data-testid="page-devices">
           <div class="lede">
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">家人与设备</h2>
-            <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.paired_count", { n: pairedCount })}</p>
+            <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.devices_paired_line", { n: pairedCount })}</p>
           </div>
           <Card class="gap-0 rounded-xl border border-border py-0 shadow-none ring-0 ring-transparent">
             {#if devices.length === 0}

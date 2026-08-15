@@ -148,6 +148,8 @@ msg_keys! {
     UI_PHOTOS_OPEN_LIBRARY => "ui.photos_open_library",
     /// 设计稿 v2：配对横幅点名设备名。
     UI_PENDING_BANNER_TEXT => "ui.pending_banner_text",
+    /// 设计稿 v2：设备页副标题——已配对 N 台 + 可改家人叫法的提示。
+    UI_DEVICES_PAIRED_LINE => "ui.devices_paired_line",
 }
 
 #[cfg(test)]
@@ -249,10 +251,11 @@ mod tests {
             UI_PHOTOS_COUNT_PATH,
             UI_PHOTOS_OPEN_LIBRARY,
             UI_PENDING_BANNER_TEXT,
+            UI_DEVICES_PAIRED_LINE,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 92);
+        assert_eq!(ALL.len(), 93);
     }
 
     #[test]
