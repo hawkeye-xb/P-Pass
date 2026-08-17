@@ -175,7 +175,6 @@
     <!-- Photos -->
     <string name="photos_title">Family photos</string>
     <string name="photos_count">%1$d photos</string>
-    <string name="photos_count_dedup">%1$d photos · deduplicated</string>
     <!-- T-080 layout v1: photos light filter (all / this phone / family) -->
     <string name="chip_all">All</string>
     <string name="chip_local">This phone</string>

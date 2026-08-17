@@ -214,7 +214,15 @@ internal fun confirmedHashesUnder(stateRoot: java.io.File): Set<String> =
         ?.toSet() ?: emptySet()
 
 @Composable
-internal fun PhotosScreen(holder: TimelineSubscriptionHolder) {
+internal fun PhotosScreen(
+    holder: TimelineSubscriptionHolder,
+    // 2026-08-17 大图查看页导航修复：查看大图/视频时通知外层
+    // （MainActivity）关掉主 [照片]/[设置] tab 栏——大图页参考系统
+    // 相册惯例，不该跟主导航叠在一起。PhotosScreen 仍然自己管
+    // opened/viewer 状态（不改动内部数据流），只是多一条"我现在是否
+    // 在全屏查看"的通知线往上冒泡。
+    onViewerOpenChange: (Boolean) -> Unit = {},
+) {
     // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
     // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
     // 订阅连接保持，本 composable 只渲染这份状态，不再自己创建/销毁订阅。
@@ -240,6 +248,7 @@ internal fun PhotosScreen(holder: TimelineSubscriptionHolder) {
     }
 
     val current = opened
+    LaunchedEffect(current) { onViewerOpenChange(current != null) }
     if (current != null && loader != null) {
         // Wire format is the normalized "video"/"photo" (golden snapshot),
         // not a MIME type — keep the prefix check so a raw "video/mp4" from
@@ -253,20 +262,16 @@ internal fun PhotosScreen(holder: TimelineSubscriptionHolder) {
     }
 
     Column(Modifier.fillMaxSize().background(PPColor.Paper)) {
-        Row(
-            Modifier.fillMaxWidth().padding(24.dp, 18.dp, 24.dp, 10.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            Text(
-                stringResource(R.string.photos_title), fontSize = 30.sp,
-                fontFamily = FontFamily.Serif, color = PPColor.Ink,
-            )
-            Text(
-                stringResource(R.string.photos_count_dedup, items.size),
-                fontSize = 14.sp, color = PPColor.Ink40,
-            )
-        }
+        // 2026-08-17 用户真机反馈："N 张 · 已去重"这行副标题对家人用户
+        // 没有信息量（纯技术术语，桌面端才关心去重）——没有现成的"上次
+        // 同步于 X 分钟前"这类数据源可用（TimelineSubscriptionHolder 不
+        // 追踪时间戳，硬加会是编数据），删掉这行副标题，标题单独站着，
+        // 不为了填内容硬凑一句没用的话。
+        Text(
+            stringResource(R.string.photos_title), fontSize = 30.sp,
+            fontFamily = FontFamily.Serif, color = PPColor.Ink,
+            modifier = Modifier.padding(24.dp, 18.dp, 24.dp, 10.dp),
+        )
 
         // T-080: 轻过滤器 chips（设计稿样式:胶囊,选中=墨底纸字）。
         Row(
