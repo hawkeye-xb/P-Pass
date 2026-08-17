@@ -45,7 +45,17 @@ def safe(svg_path, out_path):
     body = re.sub(r'<rect width="1024" height="1024" fill="#FBF8F2"/>', '', body)
     # 内层：兽面缩到纸底内部 66%（DESK-05b）。
     inner = f'<g transform="translate(512 512) scale(0.77) translate(-512 -512)">{body}</g>'
-    paper = '<rect width="1024" height="1024" fill="#FBF8F2"/>'
+    # 2026-08-17：纸底直角矩形改成圆角（ICON-01d）——用户拿真实系统图标
+    # （iCloud）对比发现我们是直角，人家是圆角。之前只做了①内容留白
+    # （0.8 外层缩放）没做②形状本身的圆角——macOS 不会替第三方图标自动
+    # 套圆角遮罩，需要美术本身就是圆角（squircle）。rx=250 不是拍脑袋：
+    # 用同款方法（iconutil 解包 + PIL 逐像素找不透明边界）实测系统
+    # Music.app 图标算出来的——留白 9.8%（跟我们已有的 10% 吻合）+ 圆角
+    # 曲线在留白之后延伸到画布 29.3% 处变直边，换算回 1024 画布、外层
+    # 0.8 缩放前的 rx ≈ 250px。SVG rx 是简单圆弧，Apple 真实是更平滑的
+    # 超椭圆（superellipse）——这是视觉近似，不是逐像素复刻，但比之前
+    # 直角方形准确得多。
+    paper = '<rect width="1024" height="1024" rx="250" ry="250" fill="#FBF8F2"/>'
     whole = f'{paper}\n  {inner}'
     # 外层：纸底+兽面整体缩到画布 80%，四周留透明边距（本次修复）。
     outer = f'<g transform="translate(512 512) scale(0.8) translate(-512 -512)">{whole}</g>'
