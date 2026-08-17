@@ -1094,12 +1094,12 @@
                       <!-- T-091: 哨兵行 ACT 色 + 「需要看看」；T-092: 连接态点色
                            （direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
                       <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
-                      <span class="flex flex-1 flex-col gap-[2px]">
+                      <span class="flex flex-1 flex-col items-start gap-[2px]">
                         {#if renameTarget?.nodeId === d.node_id}
                           <!-- NAME-01: 改名输入框——回车保存 / Esc 取消 /
                                失焦保存（空名与未改动不提交）。 -->
                           <input
-                            class="max-w-[260px] flex-none rounded-sm border-[1.5px] border-border-strong bg-paper px-[6px] py-[2px] font-sans text-[16px] font-semibold text-ink focus:border-safe focus:outline-none"
+                            class="max-w-[260px] flex-none self-start rounded-sm border-[1.5px] border-border-strong bg-paper px-[6px] py-[2px] font-sans text-[16px] font-semibold text-ink focus:border-safe focus:outline-none"
                             value={renameValue}
                             oninput={(e) => (renameValue = e.currentTarget.value)}
                             onkeydown={(e) => {
@@ -1111,10 +1111,14 @@
                           />
                         {:else}
                           <!-- NAME-01: 设备名可点击编辑——Button link 变体保持
-                               纸底墨字（hover 提亮 + 下划线），与移除按钮同族但低调 -->
+                               纸底墨字（hover 提亮 + 下划线），与移除按钮同族但低调。
+                               2026-08-17：shadcn Button 基类自带
+                               justify-center，父容器 flex-col 默认拉伸满宽会把
+                               名字挤到行中间（design v2 对齐轮实测发现）——
+                               self-start + justify-start 双保险钉死左对齐。 -->
                           <Button
                             variant="link"
-                            class="-ml-[6px] h-auto min-h-0 flex-none rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] leading-[1.38] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
+                            class="-ml-[6px] h-auto min-h-0 flex-none self-start justify-start rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] leading-[1.38] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
                             title={t("ui.rename")}
                             onclick={() => startRename(d)}
                           >{d.name}</Button>
@@ -1148,7 +1152,10 @@
               {/if}
             {/if}
           </Card>
-          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">「经中继」= 直连不通时走加密中转，中继看不到照片内容，速度可能慢一些。移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</p>
+          <!-- 设计稿 v2：区块间距靠 .page 的 flex gap(22px)统一撑开，
+               这里不再叠加 mt——叠加会让卡片到提示文字的间距变成 32px，
+               跟标题到卡片的 22px 不一致（design v2 是整段 20px 等距）。 -->
+          <p class="text-[13px] leading-[1.6] text-ink-40">「经中继」= 直连不通时走加密中转，中继看不到照片内容，速度可能慢一些。移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</p>
         </section>
       {:else if page === "photos"}
         <!-- DESK-03: 照片墙——与手机时间线同一数据源（query.timeline +
