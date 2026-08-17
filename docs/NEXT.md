@@ -1,6 +1,30 @@
-# NEXT — 当前状态与下一步（2026-08-17，Android 四项 UI/交互修复——备份页信息层级/照片页副标题/断开连接防误触/大图页导航结构）
+# NEXT — 当前状态与下一步（2026-08-17，Android onboarding「系统权限」步骤收缩为仅照片权限）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-17（续十一）：onboarding「系统权限」步骤收缩为仅照片权限（完成）
+
+用户实机走查续十的三步 onboarding 后拍板：通知 + 忽略电池优化两项从
+onboarding「系统权限」步骤里整个拿掉——理由：①都是可跳过项，占一屏
+换来的只是"弹窗前多一句解释"，不值这一步（用户原话"收缩回去吧，请求
+必须的照片权限"）；②即使拿掉，既有的契机式提醒机制已经能接住——
+`HomeScreen.kt` 的电池白名单卡（`DOG-02`，未加白时常驻显示）和通知
+引导卡（续十新增，只看 `hasNotificationPermission` 现状）都是独立于
+onboarding、只看当前授权状态的判定，不依赖"onboarding 问过没问过"。
+**改法**：`OnboardPermissionsScreen`（`ui/OnboardingSteps.kt`）只剩
+读取照片一行 + 继续按钮；`MainActivity.kt` 的 `Screen.OnboardPermissions`
+分支删掉通知/电池相关的 launcher/状态；`backup/OnboardingPermissions.kt`
+只留 `onboardingCanContinue`，删掉整套现在没有消费者的
+`OnboardingAskState`/`OnboardingPermissionsStore`/
+`shouldOfferNotificationPermission`/`shouldOfferBatteryWhitelist`（不留
+死代码）；`PermissionRow` 组件顺手简化（去掉现在恒为 null 的 `onSkip`
+分支）；删掉 `strings.xml` en/zh 里对应的 5 个孤儿字符串（通知/电池
+标题+说明、跳过按钮），更新 `onboard_permissions_sub` 措辞去掉对
+通知/电池的提及。**测试**：`OnboardingPermissionsTest` 从 11 例减到 1
+例（只留 `continue_requires_photo_permission_only`，删掉的都是被删函数
+自己的测试，不是"删测试绕过失败"）；android 全量 **179/179**（189-10）
+绿 + `assembleDebug` 绿。已重新打包、`adb uninstall`+`install -r` 装到
+真机，从当前 main 干净状态可以直接走新流程验收。
 
 ## 〇、2026-08-17（续十）：Android 四项 UI/交互修复——真机走查续二（完成）
 

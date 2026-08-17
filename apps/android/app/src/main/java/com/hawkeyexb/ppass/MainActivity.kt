@@ -406,28 +406,16 @@ fun PPassApp() {
 
         is Screen.OnboardPermissions -> {
             var photoGranted by remember { mutableStateOf(hasFullMediaAccess(context)) }
-            val askStore = remember { com.hawkeyexb.ppass.backup.OnboardingPermissionsStore(context.filesDir) }
-            var askState by remember { mutableStateOf(askStore.load()) }
-            var notifGranted by remember { mutableStateOf(hasNotificationPermission(context)) }
-            var batteryOk by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
 
             val photoLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
             ) { _ -> photoGranted = hasFullMediaAccess(context) }
-            val notifLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission()
-            ) { granted ->
-                notifGranted = granted
-                askStore.markNotificationAsked()
-                askState = askStore.load()
-            }
 
-            // ON_RESUME：从「去设置」电池页返回后立即反映最新状态。
+            // ON_RESUME：从系统权限页返回后立即反映最新状态。
             DisposableEffect(lifecycleOwner) {
                 val observer = LifecycleEventObserver { _, event ->
                     if (event == Lifecycle.Event.ON_RESUME) {
                         photoGranted = hasFullMediaAccess(context)
-                        batteryOk = isIgnoringBatteryOptimizations(context)
                     }
                 }
                 lifecycleOwner.lifecycle.addObserver(observer)
@@ -437,32 +425,6 @@ fun PPassApp() {
             OnboardPermissionsScreen(
                 photoGranted = photoGranted,
                 onRequestPhoto = { photoLauncher.launch(requiredMediaPermissions().toTypedArray()) },
-                showNotificationRow = com.hawkeyexb.ppass.backup.shouldOfferNotificationPermission(
-                    Build.VERSION.SDK_INT, notifGranted, askState.notificationAsked,
-                ),
-                notificationGranted = notifGranted,
-                onRequestNotification = {
-                    askStore.markNotificationAsked()
-                    askState = askStore.load()
-                    notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                },
-                onSkipNotification = {
-                    askStore.markNotificationAsked()
-                    askState = askStore.load()
-                },
-                showBatteryRow = com.hawkeyexb.ppass.backup.shouldOfferBatteryWhitelist(
-                    batteryOk, askState.batteryAsked,
-                ),
-                batteryWhitelisted = batteryOk,
-                onRequestBattery = {
-                    askStore.markBatteryAsked()
-                    askState = askStore.load()
-                    openBatteryOptimizationSettings(context)
-                },
-                onSkipBattery = {
-                    askStore.markBatteryAsked()
-                    askState = askStore.load()
-                },
                 onContinue = {
                     if (s.reviewOnly) {
                         // 复看模式只为补权限，不重新走相册选择。

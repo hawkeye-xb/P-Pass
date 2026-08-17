@@ -39,16 +39,11 @@
     <string name="onboard_step_of">第 %1$d / %2$d 步</string>
     <string name="continue_label">继续</string>
     <string name="onboard_permission_granted">已授予</string>
-    <string name="onboard_skip">跳过</string>
     <string name="onboard_allow">允许</string>
     <string name="onboard_permissions_title">系统权限</string>
-    <string name="onboard_permissions_sub">读取照片是必需的。通知和电池优化设置是可选的——之后可以在备份页随时补开。</string>
+    <string name="onboard_permissions_sub">读取照片是必需的——没有它 P-Pass 看不到任何东西可以备份。</string>
     <string name="onboard_perm_photos_title">照片和视频</string>
     <string name="onboard_perm_photos_body">必需——没有这个权限，P-Pass 看不到任何东西可以备份。</string>
-    <string name="onboard_perm_notif_title">通知</string>
-    <string name="onboard_perm_notif_body">可选——备份失败时能提醒你。</string>
-    <string name="onboard_perm_battery_title">忽略电池优化</string>
-    <string name="onboard_perm_battery_body">可选——避免系统在锁屏时把备份任务停掉。</string>
     <string name="onboard_conditions_title">备份条件</string>
     <string name="onboard_conditions_sub">这两个开关是 App 内的策略，不是系统权限——之后随时可以在备份页改。</string>
     <string name="onboard_conditions_no_permission_note">这两项不需要额外的系统权限——它们只决定 App 自己什么时候发起备份。</string>
