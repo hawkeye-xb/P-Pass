@@ -80,12 +80,10 @@ fun HomeScreen(
     // DOG-02: 电池白名单引导（未加白时显示，加白后消失）
     batteryWhitelisted: Boolean = true,
     onOpenBatterySettings: () -> Unit = {},
-    // Onboarding「系统权限」步骤里跳过的通知权限——同款不堵路引导卡，
+    // 通知权限未授予的不堵路引导卡（同 DOG-02 电池白名单卡风格）——
     // 已授予或本来就不需要（API<33）时不显示。
     notificationSkipped: Boolean = false,
     onOpenNotificationSettings: () -> Unit = {},
-    // 手机 Onboarding 三步（系统权限/选相册/备份条件）事后重看入口。
-    onReviewOnboarding: () -> Unit = {},
     // DOG-01: 恒真三元组（持久缓存，断网/失败时仍显示）
     triplet: BackupTriplet? = null,
     // UX-03: 极简设置——仅充电 / 仅 WiFi（写 WorkManager 约束）
@@ -544,13 +542,6 @@ fun HomeScreen(
                         fontSize = 14.sp, color = PPColor.Ink40,
                     )
                 }
-                // 手机 Onboarding 三步重看入口——想回头补授权（通知/电池）
-                // 或者单纯想再看一遍那三步说明，不需要重新扫码配对。
-                HorizontalDivider(color = PPColor.Divider)
-                CellRow(
-                    label = stringResource(R.string.review_onboarding),
-                    onClick = onReviewOnboarding,
-                )
                 // MOB-02 §一: 设置页低调「立即备份」入口（测试/狗粮用，
                 // 不在首页）——跑前台管线，进度/暂停可见。部分授权下隐藏
                 // （部分授权态不落范围、不显示假数据，入口无意义）。
