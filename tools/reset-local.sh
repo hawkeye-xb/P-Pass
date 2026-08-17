@@ -82,11 +82,21 @@ if [ -n "$DAEMON_BIN" ]; then
   pkill -f "$DAEMON_BIN" 2>/dev/null && echo "  已 kill $DAEMON_BIN" || true
 fi
 pkill -f 'ppf-daemon' 2>/dev/null && echo "  已 kill ppf-daemon" || true
-pkill -f '/target/(debug|release)/(daemon|testclient)' 2>/dev/null && echo "  已 kill 开发构建 daemon/testclient" || true
+# 2026-08-17：真事故实锤——`pnpm tauri dev` 是从 apps/desktop/src-tauri
+# 这个 cwd 启动子进程的，argv 里存的是相对路径 `target/debug/p-pass-desktop`
+# （没有前导 `/`）。下面这几条 pattern 原来写的是 `/target/(debug|release)/...`
+# （带前导斜杠），`pkill -f`/`pgrep -f` 是子串匹配不是锚定匹配，但相对路径
+# 字符串里压根没有这个前导 `/` 子串，导致这几条从来没匹配上过——`pnpm
+# tauri dev` 起的桌面壳进程在「清场」全程存活，验证步骤（当年同一个
+# pattern 写了两遍）也因为同款 bug 谎报「✅ 无残留进程」。后果：桌面壳
+# 网页层的 Svelte 内存态（比如照片墙数组）跨越整次数据清场纹丝不动，
+# daemon/sqlite 真清空了，界面却因为进程根本没重启而继续显示清场前的
+# 缩略图——「清数据清得不够彻底」的假象根源在这里，不在数据层。
+# 反证：`pgrep -fl '/target/(debug|release)/p-pass-desktop'` 在真实
+# `pnpm tauri dev` 会话下返回空（exit 1），去掉前导 `/` 后立刻能匹配到。
+pkill -f 'target/(debug|release)/(daemon|testclient)' 2>/dev/null && echo "  已 kill 开发构建 daemon/testclient" || true
 pkill -f 'P-Pass.app/Contents/MacOS/p-pass-desktop' 2>/dev/null && echo "  已 kill 桌面壳" || true
-# 2026-08-17：pnpm tauri dev 跑的是 src-tauri/target/(debug|release) 下的
-# p-pass-desktop，不是安装包路径，前面那条 P-Pass.app 的 pattern 抓不到。
-pkill -f '/target/(debug|release)/p-pass-desktop' 2>/dev/null && echo "  已 kill 开发构建桌面壳（pnpm tauri dev）" || true
+pkill -f 'target/(debug|release)/p-pass-desktop' 2>/dev/null && echo "  已 kill 开发构建桌面壳（pnpm tauri dev）" || true
 sleep 1
 
 echo "== 4. 卸载 App =="
@@ -103,7 +113,7 @@ rm -f "$LOG_OUT" "$LOG_ERR"
 
 echo "== 6. 验证清场 =="
 FAIL=0
-if REMAIN=$(pgrep -fl 'ppf-daemon|/target/(debug|release)/(daemon|testclient|p-pass-desktop)|P-Pass\.app/Contents/MacOS/p-pass-desktop' 2>/dev/null); then
+if REMAIN=$(pgrep -fl 'ppf-daemon|target/(debug|release)/(daemon|testclient|p-pass-desktop)|P-Pass\.app/Contents/MacOS/p-pass-desktop' 2>/dev/null); then
   echo "  ⚠️ 仍有残留进程："
   echo "$REMAIN"
   FAIL=1
