@@ -4,6 +4,17 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import QRCode from "qrcode";
   import { onDestroy } from "svelte";
+  import { Button } from "$lib/components/ui/button";
+
+  // 2026-08-17：向导页对齐设计稿 v2 重写——跟 App.svelte 迁移页同款
+  // 按钮族常量（BTN=主按钮 ink 底纸字，BTN_OUTLINE=次按钮透明底描边，
+  // BTN_LINK=纯文字链接），保证全站按钮视觉一致，不重复定义新样式。
+  const BTN =
+    "h-11 min-h-11 rounded-md border border-ink px-[26px] text-[15px] font-bold hover:bg-ink-hover";
+  const BTN_OUTLINE =
+    "h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60";
+  const BTN_LINK =
+    "h-auto min-h-0 rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px]";
 
   let { defaultDir, configuredLibraryDir, onDone } = $props();
 
@@ -139,8 +150,7 @@
     error = "";
     busy = true;
     try {
-      const mode = await invoke("start_daemon");
-      console.log("daemon mode:", mode);
+      await invoke("start_daemon");
       let qr = "";
       for (let i = 0; i < 20; i++) {
         await new Promise((r) => setTimeout(r, 500));
@@ -167,289 +177,147 @@
   }
 </script>
 
-<div class="wizard">
-  <div class="steps">
+<!-- 2026-08-17：整页对齐设计稿 v2（用户实测反馈"onboarding 整个流程
+     UI 都不对"——此前 DESK-07/08 只迁了 App.svelte 的五个主页面，向导
+     组件一直是迁移前的手写 CSS，字号/按钮样式/间距跟主界面已经不是
+     一套体系）。逐字段核对设计稿 wizard 四步 markup 重写，数据流/交互
+     逻辑（chooseFolder/toStep2~4/generateQr/confirmPair 等）一字未动，
+     只换展示层。外层 wizard-shell 已有 padding 24 + max-width 680，
+     这里卡片自身 padding 用 32/28（不是设计稿原始 44/34）——设计稿那份
+     mock 是独立 680 宽窗口，我们是嵌套在 wizard-shell 里，照抄 44 会
+     产生双重内边距，按比例收窄更合理。 -->
+<div class="mt-4 flex flex-col gap-[22px] rounded-xl border border-border bg-paper px-8 py-7">
+  <div class="flex gap-2">
     {#each ["照片存在哪", "电脑会睡吗", "设为常驻服务", "加手机"] as label, i}
-      <span class="step" class:active={step === i + 1} class:done={step > i + 1}>
+      <span class="text-[13px] font-semibold {step === i + 1 ? 'text-ink' : step > i + 1 ? 'text-safe' : 'text-ink-40'}">
         {i + 1}. {label}
       </span>
     {/each}
   </div>
 
   {#if error}
-    <p class="error">{error}</p>
+    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">{error}</p>
   {/if}
 
   {#if step === 1}
-    <h2>全家的照片，要存到哪里？</h2>
-    <p class="hint">选一个文件夹当「照片库」。照片会按原始文件存进去，你随时能在 Finder 里翻到它们。</p>
-    <!-- DESK-05: 路径始终有值（默认填充 defaultDir / 预填已配置库）——
-         不再要求先点按钮才能继续。路径 ≠ 默认时旁挂「回到默认」按钮，
-         路径 = 默认时不显示（没有可回退的目标）。 -->
-    <p class="chosen">已选择：<code>{libraryDir}</code>
+    <div class="flex flex-col gap-4">
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">全家的照片，要存到哪里？</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">选一个文件夹当「照片库」。照片会按原始文件存进去，你随时能在 Finder 里翻到它们。</p>
+      <!-- DESK-05: 路径始终有值（默认填充 defaultDir / 预填已配置库）——
+           不再要求先点按钮才能继续。路径 ≠ 默认时旁挂「回到默认」链接，
+           路径 = 默认时不显示（没有可回退的目标）。 -->
+      <div class="flex items-center gap-[10px]">
+        <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{libraryDir}</code>
+        <Button variant="outline" class="{BTN_OUTLINE} flex-none" onclick={chooseFolder}>更改…</Button>
+      </div>
       {#if libraryDir !== defaultDir}
-        <button class="reset-default" onclick={useDefault} title="回到默认位置">↺ 回到默认</button>
+        <button class="self-start {BTN_LINK} text-safe hover:text-safe" onclick={useDefault} title="回到默认位置">↺ 回到默认位置</button>
       {/if}
-    </p>
-    <div class="row">
-      <button class="primary" onclick={chooseFolder}>更改…</button>
+      <!-- 设计稿 v2：TCC 保护目录提醒——「桌面」「文稿」受 macOS 保护会
+           额外弹一次权限申请，放不下时也更难搬家。 -->
+      <p class="m-0 rounded-xl bg-waiting-bg px-4 py-3 text-[13.5px] leading-[1.6] text-ink-60">建议避开「桌面」和「文稿」——它们受 macOS 系统保护，会额外弹一次权限申请；放不下时也更难搬家。</p>
     </div>
-    <!-- 设计稿 v2：TCC 保护目录提醒——「桌面」「文稿」受 macOS 保护会
-         额外弹一次权限申请，放不下时也更难搬家。 -->
-    <p class="hint">建议避开「桌面」和「文稿」——它们受 macOS 系统保护，会额外弹一次权限申请；放不下时也更难搬家。</p>
-    <div class="nav">
-      <button class="primary" disabled={!libraryDir || busy} onclick={toStep2}>继续</button>
+    <div class="mt-auto flex items-center justify-between">
+      <span></span>
+      <Button class={BTN} disabled={!libraryDir || busy} onclick={toStep2}>继续</Button>
     </div>
   {:else if step === 2}
-    <h2>让这台电脑保持醒着。</h2>
-    {#if power?.kind === "never"}
-      <p class="ok-box">✓ 检查通过：这台电脑设置为不自动休眠——备份随时都能进行，无需调整。</p>
-    {:else if power?.kind === "sleeps"}
-      <p class="warn-box">
-        这台电脑闲置 {power.minutes} 分钟后会休眠。备份进行中我们会自动保持它清醒；
-        但如果你希望家人<strong>随时</strong>都能翻看照片，建议把「关闭显示器后仍保持唤醒」打开。
-      </p>
-      <button onclick={() => invoke("open_power_settings")}>去系统设置</button>
-    {:else}
-      <p class="hint">没能读到这台电脑的电源策略（不影响使用）：备份进行中我们会自动保持它清醒。</p>
-    {/if}
-    <div class="nav">
-      <button onclick={() => (step = 1)}>上一步</button>
-      <button class="primary" onclick={toStep3}>继续</button>
+    <div class="flex flex-col gap-4">
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">让这台电脑保持醒着。</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">家人手机会趁插电连 Wi-Fi 时把照片传回来——电脑得开着才收得到。</p>
+      {#if power?.kind === "never"}
+        <div class="flex items-center gap-3 rounded-xl border border-border px-[18px] py-[14px]">
+          <span class="h-[9px] w-[9px] flex-none rounded-full bg-safe"></span>
+          <span class="flex-1 text-[15px] font-semibold">这台电脑设置为不自动休眠</span>
+          <span class="text-[13px] text-safe">✓ 检查通过</span>
+        </div>
+      {:else if power?.kind === "sleeps"}
+        <div class="flex items-center gap-3 rounded-xl border border-border bg-waiting-bg px-[18px] py-[14px]">
+          <span class="h-[9px] w-[9px] flex-none rounded-full bg-waiting"></span>
+          <div class="flex-1">
+            <p class="m-0 text-[15px] font-semibold">「自动睡眠」还开着</p>
+            <p class="m-0 mt-[3px] text-[13px] leading-[1.5] text-ink-60">
+              这台电脑闲置 {power.minutes} 分钟后会休眠，睡着时收不了备份。去系统设置关掉，或点右边帮你打开对应页面。
+            </p>
+          </div>
+          <Button variant="outline" class="{BTN_OUTLINE} h-10 min-h-10 flex-none text-[14px]" onclick={() => invoke("open_power_settings")}>去系统设置</Button>
+        </div>
+      {:else}
+        <p class="m-0 text-[13px] leading-[1.6] text-ink-40">没能读到这台电脑的电源策略（不影响使用）：备份进行中我们会自动保持它清醒。</p>
+      {/if}
+    </div>
+    <div class="mt-auto flex items-center justify-between">
+      <button class={BTN_LINK} onclick={() => (step = 1)}>‹ 上一步</button>
+      <Button class={BTN} onclick={toStep3}>继续</Button>
     </div>
   {:else if step === 3}
     <!-- 设计稿 v2：第 3 步 = 「设为常驻服务」——先讲清会申请什么/不会
          做什么/被拦怎么办，点「下一步」才真正启动 daemon（含 autostart
          注册，toStep4）。 -->
-    <h2>最后一步：设为常驻服务。</h2>
-    <p class="hint">P-Pass 会注册为系统后台服务：开机自动运行，关掉这个窗口也在安静地收备份。随时可以在「设置」里停止它。</p>
-    <div class="faq">
-      <div class="faq-item">
-        <strong>会申请什么</strong>
-        <p class="hint">开机自启（系统会弹一次「后台项目已添加」通知，是正常的）</p>
-      </div>
-      <div class="faq-item">
-        <strong>不会做什么</strong>
-        <p class="hint">不上传到任何云端、不建账号——照片只在你家的设备之间走</p>
-      </div>
-      <div class="faq-item">
-        <strong>如果被拦</strong>
-        <p class="hint">首次打开被 macOS 拦截时：右键点 App → 打开（只需一次）</p>
+    <div class="flex flex-col gap-4">
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">最后一步：设为常驻服务。</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">P-Pass 会注册为系统后台服务：开机自动运行，关掉这个窗口也在安静地收备份。随时可以在「设置」里停止它。</p>
+      <!-- 设计稿 v2：三行"标签(120px)+说明"的表格式布局，不是三个
+           各自独立的卡片——分隔线贴边，跟其它页面的 list-card 同款。 -->
+      <div class="rounded-xl border border-border">
+        <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">会申请什么</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">开机自启（系统会弹一次「后台项目已添加」通知，是正常的）</span>
+        </div>
+        <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">不会做什么</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">不上传到任何云端、不建账号——照片只在你家的设备之间走</span>
+        </div>
+        <div class="flex gap-3 px-[18px] py-[13px]">
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">如果被拦</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">首次打开被 macOS 拦截时：右键点 App → 打开（只需一次）</span>
+        </div>
       </div>
     </div>
-    <div class="nav">
-      <button onclick={() => (step = 2)}>上一步</button>
-      <button class="primary" disabled={busy} onclick={toStep4}>
+    <div class="mt-auto flex items-center justify-between">
+      <button class={BTN_LINK} onclick={() => (step = 2)}>‹ 上一步</button>
+      <Button class={BTN} disabled={busy} onclick={toStep4}>
         {busy ? "正在启动…" : "下一步"}
-      </button>
+      </Button>
     </div>
   {:else if step === 4 && pendingList.length > 0}
     <!-- DESK-04③: 有人扫码 → 即时切确认列表（不再停留常驻 QR）。
          与主界面 T4 模态同语义：逐行允许/拒绝，处理完该行消失。 -->
-    <h2>{pendingList.length > 1 ? `有 ${pendingList.length} 台手机请求加入` : "有手机请求加入"}</h2>
-    <p class="hint">是家人的手机吗？点「允许」后它就能开始备份照片了。</p>
-    <div class="pending-list">
-      {#each pendingList as item}
-        <div class="pending-row">
-          <span class="pending-name">{item.name}</span>
-          <div class="pending-actions">
-            <button onclick={() => confirmPair(false, item.name)}>拒绝</button>
-            <button class="primary" onclick={() => confirmPair(true, item.name)}>允许</button>
+    <div class="flex flex-col gap-4">
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{pendingList.length > 1 ? `有 ${pendingList.length} 台手机请求加入` : "有手机请求加入"}</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">是家人的手机吗？点「允许」后它就能开始备份照片了。</p>
+      <div class="flex flex-col gap-2">
+        {#each pendingList as item}
+          <div class="flex items-center justify-between gap-3 rounded-xl bg-linen px-[14px] py-[10px]">
+            <span class="text-[15px] font-semibold text-ink">{item.name}</span>
+            <div class="flex gap-2">
+              <Button variant="outline" class="{BTN_OUTLINE} h-10 min-h-10 text-[14px]" onclick={() => confirmPair(false, item.name)}>拒绝</Button>
+              <Button class="{BTN} h-10 min-h-10 px-[18px] text-[14px]" onclick={() => confirmPair(true, item.name)}>允许</Button>
+            </div>
           </div>
-        </div>
-      {/each}
+        {/each}
+      </div>
     </div>
   {:else}
-    <h2>用手机扫码加入</h2>
-    <p class="hint">在手机上打开 P-Pass App，扫描下面的二维码；手机发来的加入请求会立刻出现在这里，点「允许」即可。</p>
-    {#if qrDataUrl}
-      <img class="qr" src={qrDataUrl} alt="配对二维码" />
-      <details>
-        <summary>无法扫码？复制配对串</summary>
-        <code class="qrtext">{qrText}</code>
-      </details>
-    {/if}
-    <div class="nav">
-      <button onclick={generateQr} disabled={busy}>
-        {busy ? "正在刷新…" : "刷新二维码"}
-      </button>
-      <button class="primary" onclick={onDone}>进入主界面</button>
+    <!-- 设计稿 v2：第 4 步内容整体居中（跟前三步左对齐的说明页不同，
+         这一步是"完成态"，靠 CTA 收尾，不需要底部共享 nav）。 -->
+    <div class="flex flex-1 flex-col items-center justify-center gap-[14px] text-center">
+      <h2 class="m-0 font-serif text-[26px] font-normal leading-[1.3]">好了。去家人手机上，扫这个码。</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">在手机上打开 P-Pass App，扫描下面的二维码；手机发来的加入请求会立刻出现在这里。</p>
+      {#if qrDataUrl}
+        <img class="block w-[220px] rounded-xl border border-border" src={qrDataUrl} alt="配对二维码" />
+        <p class="m-0 text-[14px] text-ink-40">二维码 10 分钟内有效 · 手机扫完，回这里点「允许加入」</p>
+        <details class="text-[13px] text-ink-40">
+          <summary class="cursor-pointer font-semibold">无法扫码？复制配对串</summary>
+          <code class="mt-[6px] block rounded-sm bg-linen p-[10px] text-[12px] break-all">{qrText}</code>
+        </details>
+      {/if}
+      <div class="mt-[6px] flex items-center gap-[10px]">
+        <Button variant="outline" class={BTN_OUTLINE} onclick={generateQr} disabled={busy}>
+          {busy ? "正在刷新…" : "刷新二维码"}
+        </Button>
+        <Button class={BTN} onclick={onDone}>进入主界面</Button>
+      </div>
     </div>
   {/if}
 </div>
-
-<style>
-  /* Colours/typography from assets/design/tokens.css. */
-  .wizard {
-    background: var(--pp-paper);
-    border: 1px solid var(--pp-border);
-    border-radius: var(--pp-radius-card);
-    padding: 24px;
-    margin-top: 16px;
-  }
-  .steps {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 18px;
-  }
-  .step {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--pp-ink-40);
-  }
-  .step.active {
-    color: var(--pp-ink);
-  }
-  .step.done {
-    color: var(--pp-safe);
-  }
-  h2 {
-    font-family: var(--pp-font-serif);
-    font-size: 26px;
-    font-weight: 400;
-    margin: 0 0 10px;
-  }
-  .hint {
-    color: var(--pp-ink-40);
-    font-size: 14px;
-    line-height: 1.55;
-  }
-  .chosen {
-    font-size: 15px;
-  }
-  /* DESK-05: 路径旁「回到默认」小按钮——文本行内，不占独立行。 */
-  .chosen .reset-default {
-    margin-left: 8px;
-    min-height: 0;
-    padding: 2px 10px;
-    font-size: 13px;
-    font-weight: 600;
-    border-radius: var(--pp-radius-control-sm, 6px);
-    vertical-align: middle;
-  }
-  .row {
-    display: flex;
-    gap: 10px;
-    margin: 12px 0;
-  }
-  .nav {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    margin-top: 22px;
-    padding-top: 18px;
-    border-top: 1px solid var(--pp-divider);
-  }
-  button {
-    min-height: var(--pp-tap-min);
-    border: 1.5px solid var(--pp-border-strong);
-    background: transparent;
-    border-radius: var(--pp-radius-control);
-    padding: 0 18px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--pp-ink-60);
-  }
-  button:hover {
-    background: var(--pp-linen);
-  }
-  button.primary {
-    background: var(--pp-ink);
-    border-color: var(--pp-ink);
-    color: var(--pp-paper);
-    font-weight: 700;
-  }
-  button.primary:hover {
-    background: var(--pp-ink-hover);
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  .ok-box {
-    background: var(--pp-safe-bg);
-    color: var(--pp-safe);
-    border-radius: var(--pp-radius-control);
-    padding: 12px 14px;
-    font-size: 15px;
-    line-height: 1.5;
-  }
-  .warn-box {
-    background: var(--pp-waiting-bg);
-    color: var(--pp-ink-60);
-    border-radius: var(--pp-radius-control);
-    padding: 12px 14px;
-    font-size: 15px;
-    line-height: 1.55;
-  }
-  /* 设计稿 v2：第 3 步「设为常驻服务」——会申请什么/不会做什么/被拦
-     怎么办，三项卡片式列表。 */
-  .faq {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin: 14px 0;
-  }
-  .faq-item {
-    background: var(--pp-linen);
-    border-radius: var(--pp-radius-control);
-    padding: 12px 14px;
-  }
-  .faq-item strong {
-    display: block;
-    font-size: 14px;
-    margin-bottom: 4px;
-  }
-  .faq-item .hint {
-    margin: 0;
-  }
-  .error {
-    background: var(--pp-act-bg);
-    color: var(--pp-act);
-    border-radius: var(--pp-radius-control);
-    padding: 10px 14px;
-    font-size: 15px;
-  }
-  /* DESK-04③: 确认列表——逐行允许/拒绝，token 同主界面模态。 */
-  .pending-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-top: 14px;
-  }
-  .pending-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    background: var(--pp-linen);
-    border-radius: var(--pp-radius-control);
-    padding: 10px 14px;
-  }
-  .pending-name {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--pp-ink);
-  }
-  .pending-actions {
-    display: flex;
-    gap: 8px;
-  }
-  .qr {
-    display: block;
-    margin: 12px 0 4px;
-    border: 1px solid var(--pp-border);
-    border-radius: var(--pp-radius-card);
-  }
-  .qrtext {
-    display: block;
-    word-break: break-all;
-    font-size: 12px;
-    background: var(--pp-linen);
-    padding: 10px;
-    border-radius: var(--pp-radius-control-sm);
-    margin-top: 6px;
-  }
-</style>

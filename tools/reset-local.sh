@@ -49,7 +49,13 @@ for a in "$@"; do
 done
 
 if [ "$YES" -ne 1 ]; then
-  echo "将执行不可逆清场：删 $APP、$CONFIG_DIR（config.toml 指针）、$PLIST"
+  # 注意：macOS 自带 bash 3.2（GPLv3 avoidance，苹果一直没升级）解析
+  # $VAR 紧跟多字节 UTF-8 字符（比如中文标点）在 set -u 下有真实 bug——
+  # 会把变量名跟后面字符的字节片段混着解析成一个不存在的变量名，报
+  # "unbound variable"（2026-08-17 实测复现，`bash -c 'set -u; FOO=x;
+  # echo "$FOO（"'` 直接炸）。全脚本 $VAR 后紧跟中文标点的地方一律用
+  # ${VAR} 花括号显式定界，不能偷懒省略。
+  echo "将执行不可逆清场：删 ${APP}、${CONFIG_DIR}（config.toml 指针）、${PLIST}"
   echo "以及真正存身份/配对/索引的照片库目录：${PHOTO_LIBRARY_DIR:-<config.toml 未记录，跳过>}"
   read -r -p "确认继续？输入 yes 继续，其它任意键取消: " CONFIRM
   [ "$CONFIRM" = "yes" ] || { echo "已取消。"; exit 1; }
@@ -89,7 +95,7 @@ if [ -d "$APP" ]; then rm -rf "$APP" && echo "  已删 $APP"; else echo "  未�
 echo "== 5. 清空数据（config 指针 + 真正的照片库 .ppf 身份/配对/索引）=="
 if [ -d "$CONFIG_DIR" ]; then rm -rf "$CONFIG_DIR" && echo "  已删 $CONFIG_DIR"; else echo "  config 目录不存在（跳过）"; fi
 if [ -n "$PHOTO_LIBRARY_DIR" ] && [ -d "$PHOTO_LIBRARY_DIR" ]; then
-  rm -rf "$PHOTO_LIBRARY_DIR" && echo "  已删照片库 $PHOTO_LIBRARY_DIR（含 .ppf 身份/配对/索引/缩略图/blob 与 originals 原图）"
+  rm -rf "$PHOTO_LIBRARY_DIR" && echo "  已删照片库 ${PHOTO_LIBRARY_DIR}（含 .ppf 身份/配对/索引/缩略图/blob 与 originals 原图）"
 else
   echo "  照片库目录不存在/未记录（跳过）"
 fi
