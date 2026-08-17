@@ -1028,17 +1028,20 @@
                 <p class="m-0 text-[13px] leading-[1.6] text-ink-40">只要这台电脑开着、手机插电连 Wi-Fi，备份就在发生；任何一边不对劲，另一边 3 天内亮红。</p>
               </Card>
 
-              <!-- T-082: 设计稿——卡内容水平居中（标题左上），二维码 148×148
-                   白底圆角带边框，hint 与「无法扫码」折叠器跟随居中。 -->
+              <!-- 设计稿 v2 实测（2026-08-17 对齐修复）：卡片本身不居中——
+                   标题、说明文字都是左对齐的普通文本；只有按钮内文字（Button
+                   基类自带 justify-center）和底部「无法扫码」退路是居中的。
+                   之前误加 items-center 把整卡都居中挤扁了，按钮也因此收缩
+                   成内容宽而不是撑满卡宽。 -->
               <!-- T4 (H-10b): 二维码不再是常驻卡片——点按钮弹窗出码，配对完
                    状态消失；扫码后的允许/拒绝也走模态。 -->
-              <Card class="flex-[1_1_0%] flex flex-col items-center gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
-                <h3 class="mb-0 self-start text-[15px] font-semibold">{t("ui.add_device")}</h3>
-                <p class="m-0 text-center text-[13px] leading-[1.6] text-ink-40">点击后会放大显示一个配对二维码，用家人手机上的 P-Pass 扫一下；扫到后二维码自动收起，回到这里确认「允许加入」。</p>
-                <Button class="h-11 min-h-11 rounded-md border border-ink px-[18px] text-[15px] font-bold" onclick={startPairing}>{t("ui.generate_qr")}</Button>
+              <Card class="flex-[1_1_0%] flex flex-col gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+                <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
+                <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">点击后会放大显示一个配对二维码，用家人手机上的 P-Pass 扫一下；扫到后二维码自动收起，回到这里确认「允许加入」。</p>
+                <Button class="h-11 min-h-11 w-full rounded-md border border-ink px-[18px] text-[15px] font-bold" onclick={startPairing}>{t("ui.generate_qr")}</Button>
                 <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
                      能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
-                <button class="h-auto min-h-0 self-start rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] text-safe hover:text-safe" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</button>
+                <button class="h-auto min-h-0 w-full rounded-md border-none bg-transparent px-0 py-[2px] text-center text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] text-safe hover:text-safe" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</button>
               </Card>
 
               <!-- 2026-08-13：「最近动静」摘要卡（离线版设计稿 v2「第 3 轮」
@@ -1192,7 +1195,11 @@
               </Button>
             </div>
           </div>
-          <Card class="gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+          <!-- 2026-08-17：DESK-08 迁 Tailwind 时把这张卡的 flex-1/min-h-0/
+               overflow-y-auto 弄丢了，变回整个右侧内容区跟着长高再滚动
+               （回归到 2026-08-13 已经修过一次的老问题）——照活动记录页
+               同款处理补回来，照片格子在卡内自己滚，标题/工具栏不跟着走。 -->
+          <Card class="min-h-0 flex-1 gap-0 overflow-y-auto rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
             {#if photosLoaded && photos.length === 0}
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_empty")}</p>
             {:else if !photosLoaded}
@@ -1630,7 +1637,8 @@
      取全量）需要 activity.list 后端加 cursor 参数——现状后端只有
      limit，没有 before_ts/cursor，这部分先留白不假装做了，只把
      "列表内部滚动"这一半先落地。 */
-  main[data-page="log"] .page {
+  main[data-page="log"] .page,
+  main[data-page="photos"] .page {
     height: 100%;
     box-sizing: border-box;
   }
