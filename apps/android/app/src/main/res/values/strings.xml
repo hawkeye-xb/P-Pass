@@ -155,11 +155,10 @@
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">Auto backup</string>
     <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>
-    <string name="disconnect">Disconnect from this computer</string>
-    <string name="disconnect_swipe_hint">Swipe to disconnect</string>
-    <string name="disconnect_confirm_title">Disconnect?</string>
-    <string name="disconnect_confirm_body">Backup progress on this phone will be reset and the family album will switch to a new storage computer. Photos on this phone stay put; photos on the old computer stay there too.</string>
-    <string name="disconnect_confirm_ok">Disconnect</string>
+    <string name="disconnect">Disconnect from this computer…</string>
+    <string name="disconnect_armed_title">Disconnect for real?</string>
+    <string name="disconnect_armed_body">Backups will stop. Photos on both sides stay put — nothing is deleted. Scan again anytime to reconnect; anything already backed up won\'t re-upload.</string>
+    <string name="disconnect_confirm">Confirm disconnect</string>
     <string name="disconnect_failed_title">Could not disconnect</string>
     <string name="disconnect_failed">Could not reach the storage computer. Check that it is on, then try again.</string>
     <string name="ok">OK</string>
@@ -196,8 +195,7 @@
 
     <!-- Tabs -->
     <string name="tab_photos">Photos</string>
-    <!-- 2026-08-17: reverted to "Backup" to match the design mock and the
-         page's actual content (hero progress card up top, not just switches). -->
-    <string name="tab_settings">Backup</string>
-    <string name="tab_settings_alert">Backup !</string>
+    <!-- 2026-08-17: re-checked the design doc via the claude_design MCP —
+         the tab/page name is a static "Settings", not state-dependent. -->
+    <string name="tab_settings">Settings</string>
 </resources>

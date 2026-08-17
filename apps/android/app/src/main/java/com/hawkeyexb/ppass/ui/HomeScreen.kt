@@ -8,8 +8,7 @@ package com.hawkeyexb.ppass.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,9 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -34,14 +32,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
@@ -570,16 +564,19 @@ fun HomeScreen(
     }
 }
 
-/** "存储电脑"详情子页——2026-08-17 设计稿原文对齐："断开连接"不再
- *  裸露在备份页主列表里，收进这里最底部，且必须滑动确认才生效（不是
- *  点一下弹确认框）——危险操作要求一个连续、有意识的手势，比"点击→
- *  再点一次确认"更难被无意划过触发。 */
+/** "存储电脑"详情子页——2026-08-17 用 claude_design MCP 重新核对设计稿
+ *  原文更正："断开连接"不再裸露在备份页主列表里，收进这里最底部，
+ *  三层防误触：入口藏在这个详情页 → 红色描边按钮 → 点了展开一张
+ *  "确定断开吗？"说明卡，卡里再点一次"确认断开"才真的触发——不是
+ *  滑动手势（上一轮按一份更早的设计稿快照做了自绘滑动控件，这次改回
+ *  设计稿现在的原文）。 */
 @Composable
 private fun StorageComputerDetail(
     storageName: String,
     onBack: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
+    var armed by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
@@ -618,11 +615,50 @@ private fun StorageComputerDetail(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(14.dp))
-        SwipeToConfirm(
-            label = stringResource(R.string.disconnect_swipe_hint),
-            confirmLabel = stringResource(R.string.disconnect),
-            onConfirmed = onDisconnect,
-        )
+        if (armed) {
+            Surface(
+                color = PPColor.ActBg,
+                shape = RoundedCornerShape(PPSize.RadiusCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Text(
+                        stringResource(R.string.disconnect_armed_title),
+                        fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.disconnect_armed_body),
+                        fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedButton(
+                            onClick = { armed = false },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(PPSize.RadiusControl),
+                        ) { Text(stringResource(R.string.cancel), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink) }
+                        Button(
+                            onClick = onDisconnect,
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(PPSize.RadiusControl),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = PPColor.Act, contentColor = PPColor.Paper,
+                            ),
+                        ) { Text(stringResource(R.string.disconnect_confirm), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+                    }
+                }
+            }
+        } else {
+            OutlinedButton(
+                onClick = { armed = true },
+                modifier = Modifier.fillMaxWidth().height(RuleRowMinHeight),
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
+            ) { Text(stringResource(R.string.disconnect), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+        }
         Spacer(Modifier.height(8.dp))
     }
 }
@@ -836,75 +872,6 @@ private fun BackupTimingDetail(
                     checked = wifiOnly,
                     onCheckedChange = onWifiOnlyChange,
                 )
-            }
-        }
-    }
-}
-
-/** 滑动确认——危险操作（断开连接）要求一个连续、有意识的拖动手势，
- *  比"点一下→弹确认框再点一次"更难被无意间划过触发（设计稿原文明确
- *  要求"滑动确认才生效"，不是弹窗）。Compose Material3 没有现成组件，
- *  自绘：一个可拖拽的圆形把手 + 底纹提示文字，拖到轨道 85% 以上松手
- *  才触发 [onConfirmed]，否则弹回起点。 */
-@Composable
-private fun SwipeToConfirm(label: String, confirmLabel: String, onConfirmed: () -> Unit) {
-    val density = androidx.compose.ui.platform.LocalDensity.current
-    val handleSize = 48.dp
-    val trackHeight = 56.dp
-    var trackWidthPx by remember { mutableStateOf(0f) }
-    val handleSizePx = with(density) { handleSize.toPx() }
-    val maxOffsetPx = (trackWidthPx - handleSizePx).coerceAtLeast(0f)
-    val offset = remember { androidx.compose.animation.core.Animatable(0f) }
-    val scope = rememberCoroutineScope()
-
-    Surface(
-        color = PPColor.ActBg,
-        shape = RoundedCornerShape(trackHeight / 2),
-        border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.35f)),
-        modifier = Modifier.fillMaxWidth().height(trackHeight)
-            .onGloballyPositioned { trackWidthPx = it.size.width.toFloat() },
-    ) {
-        Box(Modifier.fillMaxSize()) {
-            // 底纹：拖得越远这句提示越淡，快到底时几乎看不见（视觉反馈
-            // "快松手了"）。
-            val labelAlpha = 1f - (if (maxOffsetPx > 0) offset.value / maxOffsetPx else 0f) * 0.85f
-            Text(
-                if (offset.value / maxOffsetPx.coerceAtLeast(1f) > 0.5f) confirmLabel else label,
-                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
-                modifier = Modifier.fillMaxSize().alpha(labelAlpha.coerceIn(0f, 1f))
-                    .padding(start = handleSize + 8.dp),
-                textAlign = TextAlign.Center,
-            )
-            Box(
-                Modifier
-                    .offset { androidx.compose.ui.unit.IntOffset(offset.value.toInt(), 0) }
-                    .padding(4.dp)
-                    .size(handleSize)
-                    .clip(RoundedCornerShape(50))
-                    .background(PPColor.Act)
-                    .pointerInput(maxOffsetPx) {
-                        detectHorizontalDragGestures(
-                            onDragEnd = {
-                                scope.launch {
-                                    if (maxOffsetPx > 0 && offset.value >= maxOffsetPx * 0.85f) {
-                                        offset.animateTo(maxOffsetPx)
-                                        onConfirmed()
-                                    } else {
-                                        offset.animateTo(0f)
-                                    }
-                                }
-                            },
-                            onDragCancel = { scope.launch { offset.animateTo(0f) } },
-                        ) { change, dragAmount ->
-                            change.consume()
-                            scope.launch {
-                                offset.snapTo((offset.value + dragAmount).coerceIn(0f, maxOffsetPx))
-                            }
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("→", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PPColor.Paper)
             }
         }
     }

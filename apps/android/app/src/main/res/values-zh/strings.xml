@@ -160,13 +160,13 @@
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">自动备份</string>
     <string name="auto_backup_pause_hint">插电 + WiFi 时，新照片自动到家</string>
-    <string name="disconnect">断开与这台电脑的连接</string>
-    <!-- 滑动确认控件的底纹提示——设计稿原文"进详情 → 滑动确认才生效，
-         杜绝误触"，不是点一下弹确认框。 -->
-    <string name="disconnect_swipe_hint">滑动以断开连接</string>
-    <string name="disconnect_confirm_title">断开连接？</string>
-    <string name="disconnect_confirm_body">断开后：这台手机的备份进度会重新计算，家庭相册将切换到新的存储电脑。手机上的照片不会动；原电脑上的照片也仍然保留。</string>
-    <string name="disconnect_confirm_ok">断开</string>
+    <!-- 三层防误触第二层——存储电脑详情页最底部的红色描边入口按钮。 -->
+    <string name="disconnect">断开与这台电脑的连接…</string>
+    <!-- 三层防误触第三层——点了上面那个按钮后展开的确认卡（不是弹窗，
+         逐字对齐 dc.html 原文）。 -->
+    <string name="disconnect_armed_title">确定断开吗？</string>
+    <string name="disconnect_armed_body">断开后备份停止。两边的照片都不会被删除；想恢复，重新扫码即可，已备份的不会重传。</string>
+    <string name="disconnect_confirm">确认断开</string>
     <string name="disconnect_failed_title">断开失败</string>
     <string name="disconnect_failed">无法连接存储电脑。请确认电脑已开机，再试一次。</string>
     <string name="ok">好</string>
@@ -200,12 +200,9 @@
     <string name="share_to">分享到…</string>
 
     <string name="tab_photos">照片</string>
-    <!-- 2026-08-17 设计稿对齐：UX-09 当时把「备份」改成「设置」，理由是
-         内容偏开关/规则/版本，不是备份进度——但现在这一页最上面就是
-         恒真三元组英雄卡（备份进度/暂停），设计稿的页名也是「备份」，
-         改回来跟页面实际内容和设计稿一致。 -->
-    <string name="tab_settings">备份</string>
-    <!-- 需要用户注意时（配对失效/电池未加白等）tab 变红字感叹号。设计稿
-         原文"备份"和"!"之间有个空格，不是紧贴的"备份!"。 -->
-    <string name="tab_settings_alert">备份 !</string>
+    <!-- 2026-08-17：用 claude_design MCP 重新核对设计稿原文，页名/tab
+         名都是静态的「设置」，不随配对失效/电池未加白等状态变红——
+         上一轮按另一份较早的设计稿快照改成了"备份"/红字"备份 !"，
+         这次改回当前设计稿的原文。 -->
+    <string name="tab_settings">设置</string>
 </resources>
