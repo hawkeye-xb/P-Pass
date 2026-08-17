@@ -102,9 +102,10 @@ fn power_hint() -> Value {
     }
 }
 
-/// Open the OS power settings pane (the wizard's "fix it" action —
+/// Open the OS power settings pane (the wizard's manual fallback —
 /// backup-time wakefulness is handled automatically by the daemon's
-/// AwakeGuard; this is for users who want always-on).
+/// AwakeGuard; this is for users who want always-on and don't want to
+/// grant the one-click fix admin rights).
 #[tauri::command]
 fn open_power_settings() {
     #[cfg(target_os = "macos")]
@@ -118,6 +119,44 @@ fn open_power_settings() {
         let _ = std::process::Command::new("cmd")
             .args(["/C", "start", "ms-settings:powersleep"])
             .spawn();
+    }
+}
+
+/// 2026-08-17：一键关闭自动睡眠（向导第 2 步主选项）——用户实测反馈
+/// 「去系统设置」打开的电池面板根本没把这个开关摆在明面上（不同 macOS
+/// 版本/Mac 型号入口都不一样，本机实测 Battery 面板顶层就看不到），
+/// 与其让家人自己找菜单，不如用系统原生的管理员授权弹窗（不是终端，
+/// 是"输入密码/Touch ID"那种系统弹窗，很多工具类 App 都这么做）直接
+/// 帮用户改。`-a`（覆盖电池+电源两种场景）而非只 `-c`（仅电源）——跟
+/// `parse_pmset` 的检测口径一致（取所有场景里最小的正数 sleep 值），
+/// 只改 AC 场景的话笔记本用电池时检测仍会报"还会睡眠"，勾不上✓。
+/// 用户拒绝授权/找不到管理员密码时，「去系统设置」手动入口原样保留
+/// 作为退路，不因为加了一键设置就删掉。
+#[tauri::command]
+fn disable_auto_sleep() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("osascript")
+            .args([
+                "-e",
+                "do shell script \"pmset -a sleep 0\" with administrator privileges",
+            ])
+            .output()
+            .map_err(|e| format!("无法执行系统命令：{e}"))?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("User canceled") || stderr.contains("-128") {
+                Err("已取消授权".into())
+            } else {
+                Err(format!("设置失败：{}", stderr.trim()))
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("这台电脑暂不支持一键设置，请用「去系统设置」手动关闭".into())
     }
 }
 
@@ -316,6 +355,7 @@ pub fn run() {
             wizard_state,
             power_hint,
             open_power_settings,
+            disable_auto_sleep,
             write_config,
             start_daemon,
             stop_daemon,
