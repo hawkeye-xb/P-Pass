@@ -264,6 +264,15 @@
         // detail "originals missing: <rel_path>"（SYNC-01 对账/WATCH-01
         // 秒级监听清索引）——只留文件名，全路径是噪音。
         return `外部删除（${shortName(d)}）`;
+      case "device.renamed": {
+        // detail "{旧名} -> {新名} ({64位hex node_id})"（ipc.rs 改名审计
+        // 写入）——node_id 是取证用的，不给用户看，只留改名前后的名字，
+        // 不然一条动态挤进 64 位十六进制字符串，总览摘要卡/活动记录页
+        // 都会被撑爆换行（用户实测反馈）。
+        const m = /^(.*) -> (.*) \([0-9a-f]{64}\)$/.exec(d);
+        if (m) return `改名：${m[1]} → ${m[2]}`;
+        return `已改名（${d}）`;
+      }
       case "device.revoked":
         return "已移除设备";
       case "device.unpaired":
@@ -600,16 +609,40 @@
     photosNext = null;
   }
 
-  // 2026-08-17：daemon 事件驱动的照片墙同步改成增量合并，不清空重拉——
-  // 之前 resetPhotosWall 把 photos 置空再整页重新拉取，Svelte 的
+  // 2026-08-17（用户复核纠正）：墙是按拍摄时间排的（daemon
+  // asset_repo.rs::timeline_page 「ORDER BY COALESCE(taken_at, 0) DESC,
+  // hash ASC」），不是按同步/到达时间——补录的老照片 taken_at 可能很
+  // 老，直接插到数组最前面会把它排到"最新"，弄错时间线顺序。这里跟
+  // 后端用同一个排序键做正确位置的插入，不是无脑塞最前面。
+  function comparePhotoOrder(a, b) {
+    const ta = a.taken_at ?? 0;
+    const tb = b.taken_at ?? 0;
+    if (ta !== tb) return tb - ta;
+    return a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0;
+  }
+  function insertPhotoSorted(arr, item) {
+    let lo = 0;
+    let hi = arr.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (comparePhotoOrder(arr[mid], item) <= 0) lo = mid + 1;
+      else hi = mid;
+    }
+    arr.splice(lo, 0, item);
+  }
+
+  // daemon 事件驱动的照片墙同步改成增量合并，不清空重拉——之前
+  // resetPhotosWall 把 photos 置空再整页重新拉取，Svelte 的
   // {#each g.items as item (item.hash)} keyed diff 面对"先清空再填入"
   // 这种中间态无从复用，等于把所有 PhotoThumb 组件实例（含已经拉到手的
   // 缩略图）全部销毁重建，即使绝大多数照片压根没变——库大/事件密集时
-  // 就是用户反馈的"卡顿"。改法：拉一次最新第一页当真相，只把"本地还
-  // 没有的 hash"往数组最前面插入（timeline 是新→旧顺序，新照片天然该
-  // 在最前），已经渲染的条目原样不动，一次 IPC/PhotoThumb 请求都不多花。
-  // 深层分页里的删除（不在第一页窗口内）这版不处理——那是小概率场景，
-  // 靠 SYNC-01 每小时对账 + 手动"刷新"兜底，不是这次要解决的卡顿主因。
+  // 就是用户反馈的"卡顿"。改法：拉一次最新第一页当真相，本地还没有的
+  // hash 按 comparePhotoOrder 插入正确位置，已经渲染的条目原样不动，
+  // 一次 IPC/PhotoThumb 请求都不多花。**已加载窗口之外**的补录老照片
+  // （page-1 压根拉不到，因为它按 taken_at 排且只取最新一页）这版不
+  // 处理——用户滚动到那个时间范围时，正常分页 loadPhotosPage 会照常
+  // 拉到，不需要特殊代码；深层分页内的删除同理靠 SYNC-01 每小时对账 +
+  // 手动"刷新"兜底，不是这次要解决的卡顿主因。
   async function syncPhotosWallIncremental() {
     if (!photosLoaded) return; // 还没首次加载过，交给进页时的 $effect 首拉
     try {
@@ -618,7 +651,9 @@
       const known = new Set(photos.map((p) => p.hash));
       const arrivals = fresh.filter((it) => !known.has(it.hash));
       if (arrivals.length > 0) {
-        photos = [...arrivals, ...photos];
+        const next = [...photos];
+        for (const item of arrivals) insertPhotoSorted(next, item);
+        photos = next;
       }
     } catch (_) {
       // 静默失败——不影响墙上已有内容，下次事件/60s 兜底再试。
