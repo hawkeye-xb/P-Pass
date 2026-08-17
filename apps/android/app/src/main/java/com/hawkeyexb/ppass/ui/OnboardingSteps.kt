@@ -1,11 +1,11 @@
 // 手机 Onboarding（配对成功后）三步的后两步：「系统权限」→（相册选择，
-// 复用既有 BucketScreen，不在本文件）→「备份条件」。设计规格（用户
-// 2026-08-17 原话）：读取照片必需、通知与忽略电池优化可跳过且各自说清
-// 用途、点一个只弹一次系统对话框；仅充电/仅 WiFi 是 App 内策略不需
-// 权限。点「进入 App」收尾，事后可在设置页重新查看这三步。
+// 复用既有 BucketScreen，不在本文件）→「备份条件」。2026-08-17 用户
+// 复核实机效果后收缩：系统权限步骤只问读取照片（必需），通知与忽略
+// 电池优化退回既有的契机式提醒（HomeScreen 的通知/电池白名单卡），
+// 不再占 onboarding 的一步；仅充电/仅 WiFi 是 App 内策略不需权限。
+// 点「进入 App」收尾，事后可在设置页重新查看这三步。
 package com.hawkeyexb.ppass.ui
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,7 +20,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,16 +42,14 @@ private fun StepKicker(step: Int, total: Int, title: String) {
     Text(title, fontSize = 26.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink)
 }
 
-/** 一条权限行：说明用途 + 状态相关的一个动作（必需项没有「跳过」）。 */
+/** 权限行：说明用途 + 一个「允许」动作（照片必需，没有「跳过」）。 */
 @Composable
 private fun PermissionRow(
     title: String,
     body: String,
     granted: Boolean,
-    required: Boolean,
     actionLabel: String,
     onAction: () -> Unit,
-    onSkip: (() -> Unit)? = null,
 ) {
     Surface(
         color = PPColor.Paper,
@@ -77,49 +74,29 @@ private fun PermissionRow(
             Text(body, fontSize = 14.sp, lineHeight = 20.sp, color = PPColor.Ink60)
             if (!granted) {
                 Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = onAction,
-                        shape = RoundedCornerShape(PPSize.RadiusControl),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = PPColor.Ink, contentColor = PPColor.Paper,
-                        ),
-                    ) { Text(actionLabel, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
-                    if (onSkip != null) {
-                        TextButton(onClick = onSkip) {
-                            Text(
-                                stringResource(R.string.onboard_skip),
-                                fontSize = 15.sp, color = PPColor.Ink40,
-                            )
-                        }
-                    } else if (required) {
-                        Spacer(Modifier.height(1.dp)) // 必需项没有跳过，占位对齐由按钮自身撑起
-                    }
-                }
+                Button(
+                    onClick = onAction,
+                    shape = RoundedCornerShape(PPSize.RadiusControl),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                    ),
+                ) { Text(actionLabel, fontSize = 15.sp, fontWeight = FontWeight.Bold) }
             }
         }
     }
 }
 
 /**
- * 步骤 1/3「系统权限」。[photoGranted] 决定「继续」是否可点
- * （[onboardingCanContinue] 判定，读取照片必需）；通知/电池两项传
- * null action 表示已经问过或已授予，本次不再出现可点入口——由调用方
- * （MainActivity）按 [com.hawkeyexb.ppass.backup.shouldOfferNotificationPermission]
- * / [com.hawkeyexb.ppass.backup.shouldOfferBatteryWhitelist] 算好再传进来。
+ * 步骤 1/3「系统权限」。2026-08-17 用户复核实机效果后收缩：只问读取
+ * 照片（必需，[onboardingCanContinue] 判定「继续」是否可点）——通知
+ * 和忽略电池优化两项原来也在这一步问，占一屏换来的只是「弹窗前多一句
+ * 解释」，用户拍板去掉，两项都退回既有的契机式提醒（HomeScreen 的
+ * 通知/电池白名单卡，各自只看当前授权状态，跟这一步完全独立）。
  */
 @Composable
 fun OnboardPermissionsScreen(
     photoGranted: Boolean,
     onRequestPhoto: () -> Unit,
-    showNotificationRow: Boolean,
-    notificationGranted: Boolean,
-    onRequestNotification: () -> Unit,
-    onSkipNotification: () -> Unit,
-    showBatteryRow: Boolean,
-    batteryWhitelisted: Boolean,
-    onRequestBattery: () -> Unit,
-    onSkipBattery: () -> Unit,
     onContinue: () -> Unit,
 ) {
     PPScreen {
@@ -131,39 +108,13 @@ fun OnboardPermissionsScreen(
                 fontSize = 14.sp, lineHeight = 20.sp, color = PPColor.Ink40,
             )
             Spacer(Modifier.height(20.dp))
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                PermissionRow(
-                    title = stringResource(R.string.onboard_perm_photos_title),
-                    body = stringResource(R.string.onboard_perm_photos_body),
-                    granted = photoGranted,
-                    required = true,
-                    actionLabel = stringResource(R.string.onboard_allow),
-                    onAction = onRequestPhoto,
-                    onSkip = null,
-                )
-                if (showNotificationRow) {
-                    PermissionRow(
-                        title = stringResource(R.string.onboard_perm_notif_title),
-                        body = stringResource(R.string.onboard_perm_notif_body),
-                        granted = notificationGranted,
-                        required = false,
-                        actionLabel = stringResource(R.string.onboard_allow),
-                        onAction = onRequestNotification,
-                        onSkip = onSkipNotification,
-                    )
-                }
-                if (showBatteryRow) {
-                    PermissionRow(
-                        title = stringResource(R.string.onboard_perm_battery_title),
-                        body = stringResource(R.string.onboard_perm_battery_body),
-                        granted = batteryWhitelisted,
-                        required = false,
-                        actionLabel = stringResource(R.string.onboard_allow),
-                        onAction = onRequestBattery,
-                        onSkip = onSkipBattery,
-                    )
-                }
-            }
+            PermissionRow(
+                title = stringResource(R.string.onboard_perm_photos_title),
+                body = stringResource(R.string.onboard_perm_photos_body),
+                granted = photoGranted,
+                actionLabel = stringResource(R.string.onboard_allow),
+                onAction = onRequestPhoto,
+            )
             Spacer(Modifier.weight(1f))
             Button(
                 onClick = onContinue,
