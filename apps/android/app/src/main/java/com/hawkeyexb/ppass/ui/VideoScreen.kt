@@ -49,6 +49,7 @@ private enum class VideoOp { Save, OpenWith, Share }
 fun VideoScreen(
     loader: TimelineLoader,
     asset: AssetMeta,
+    isMine: Boolean,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -139,6 +140,12 @@ fun VideoScreen(
                         .padding(10.dp),
                 )
             }
+            // 归因信息按需出现——网格不标来源，只有大图才显示。
+            Text(
+                attributionText(isMine, asset.takenAt),
+                fontSize = 13.sp, color = PPColor.PaperDim,
+                modifier = Modifier.padding(horizontal = 10.dp),
+            )
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 when (val s = state) {
                     is VideoState.Fetching -> Text(

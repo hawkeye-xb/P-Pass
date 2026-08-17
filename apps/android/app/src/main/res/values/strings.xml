@@ -37,6 +37,34 @@
     <!-- MOB-02 §一: 配对成功后的引导按钮（进相册选择页） -->
     <string name="choose_albums">Choose albums</string>
     <string name="not_a_code">This is not a P-Pass pairing code.</string>
+    <!-- Onboarding after pairing: 3 steps — system permissions / choose
+         albums (BucketScreen, existing) / backup conditions. -->
+    <string name="onboard_step_of">STEP %1$d OF %2$d</string>
+    <string name="continue_label">Continue</string>
+    <string name="onboard_permission_granted">Granted</string>
+    <string name="onboard_skip">Skip</string>
+    <string name="onboard_allow">Allow</string>
+    <string name="onboard_permissions_title">System permissions</string>
+    <string name="onboard_permissions_sub">Photo access is required. Notifications and battery settings are optional — you can turn them on later from the backup page.</string>
+    <string name="onboard_perm_photos_title">Photos and videos</string>
+    <string name="onboard_perm_photos_body">Required — without this, P-Pass cannot see anything to back up.</string>
+    <string name="onboard_perm_notif_title">Notifications</string>
+    <string name="onboard_perm_notif_body">Optional — lets P-Pass tell you if a backup fails.</string>
+    <string name="onboard_perm_battery_title">Ignore battery optimization</string>
+    <string name="onboard_perm_battery_body">Optional — keeps the system from stopping backups while the screen is off.</string>
+    <string name="onboard_conditions_title">Backup conditions</string>
+    <string name="onboard_conditions_sub">These two switches are app settings, not a system permission — you can change them any time on the backup page.</string>
+    <string name="onboard_conditions_no_permission_note">No extra system permission needed for these — they only control when the app itself starts a backup.</string>
+    <string name="onboard_enter_app">Enter app</string>
+    <string name="review_onboarding">Review setup steps</string>
+    <!-- DOG-02 style nudge card for the notification permission, when skipped/denied. -->
+    <string name="notif_nudge_body">Tip: allow notifications so P-Pass can tell you if a backup fails.</string>
+    <string name="notif_nudge_action">Open settings</string>
+    <!-- Full-image viewer attribution line (grid stays unlabeled; only
+         the full view shows this). src_device is not yet on the wire
+         (SYNC-05), so non-own photos say "family" rather than a name. -->
+    <string name="attribution_mine">From your phone · %1$s</string>
+    <string name="attribution_family">From family\'s phone · %1$s</string>
     <string name="code_missing_addr">The code has no address — generate a fresh one on the computer.</string>
 
     <!-- Home / backup -->

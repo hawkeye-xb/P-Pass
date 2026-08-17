@@ -1,6 +1,65 @@
-# NEXT — 当前状态与下一步（2026-08-17，reset-local.sh 真 bug 修复 + 双向同步真机验收开跑）
+# NEXT — 当前状态与下一步（2026-08-17，Android 三项 UI/流程功能落地——onboarding 权限步骤/大图归因/备份页重组）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-17（续九）：Android 三项 UI/流程功能——onboarding 权限步骤 + 大图页归因 + 备份页重看入口（完成，含一项诚实挂账）
+
+用户给了设计规格三条，逐条落地：
+
+1. **手机 Onboarding 插入「系统权限」+「备份条件」两步**（配对成功后，
+   夹在既有的「选相册」步骤前后）：新 `ui/OnboardingSteps.kt`
+   （`OnboardPermissionsScreen`/`OnboardConditionsScreen`）+ 新
+   `backup/OnboardingPermissions.kt`（纯函数
+   `onboardingCanContinue`/`shouldOfferNotificationPermission`/
+   `shouldOfferBatteryWhitelist` + 持久化 `OnboardingPermissionsStore`，
+   记「通知/电池优化是否已经问过一次」，跳过后本轮不再重复弹系统对话
+   框）。读取照片必需（不给不能继续，复用既有 `enterBucketPicker`
+   权限链）；通知（API 33+ 才有运行时权限）与忽略电池优化可跳过，
+   各自一句话说明用途。`MainActivity.kt` 的 `Screen` 密封类新增
+   `OnboardPermissions`/`OnboardConditions`，`Screen.Buckets` 加
+   `fromOnboarding` 标记区分「onboarding 走完接着走备份条件」还是
+   「Home 页重选相册直接回 Home」。**这直接补上了本 session 早些时候
+   诊断出的真 bug**：Android 端此前从未在任何地方主动申请过
+   `POST_NOTIFICATIONS`（全仓库零处 `requestPermissions` 调用），
+   Android 13+ 不主动申请永远拒绝，导致 DOG-02b 的失败通知机制即使
+   检测到问题也发不出提醒——现在 onboarding 会主动问一次。
+   **设置/备份页新增「重新查看引导」入口**（`HomeScreen.kt` 规则卡新
+   行），事后想补权限不需要重新扫码配对；同时给通知权限也补了一张跟
+   电池白名单卡同款风格的不堵路引导卡（之前只有电池优化有这张卡）。
+2. **大图页归因信息**（`ui/PhotosScreen.kt`/`ui/VideoScreen.kt`）：网格
+   不标来源，只有点开大图才显示「来自 XX · 日期」，`PPColor.SurfaceDark`
+   深底本来就已经在用（无需新增 token）。**诚实挂账**：`proto.AssetMeta`
+   目前没有 `src_device` 字段（这是独立卡 `SYNC-05-asset-meta-src-device.md`
+   的范围，本次没有顺手做 proto/daemon 改动，避免和那张卡冲突）——
+   拿不到具体设备名，用已有的 `mine`（T-080 轻过滤器同款的本机确认
+   缓存数据源）近似区分「你自己传的」/「不是你传的」，后者笼统标
+   「家人的手机」而不是编造一个具体名字（如「妈妈的手机」）；等
+   SYNC-05 落地后把 `attributionText` 里的 family 分支换成真实设备名。
+   「仅在电脑」→「保存到手机」取回入口：既有的「保存到相册」按钮本来
+   就对所有资产可用（不区分是不是自己传的），复用它满足这条，没有
+   新增重复的按钮。手机端删除等危险操作确认未新增任何入口（红线遵守）。
+3. **备份页信息架构**：`HomeScreen.kt`（654 行）本来就已经覆盖了设计
+   稿 README 摘要要求的「进度/规则/白名单建议」三块（恒真三元组英雄卡
+   +进度条、备份规则卡、DOG-02 电池白名单卡）——这次没有推倒重写，
+   只是新增了通知权限引导卡（同①）+「重新查看引导」入口两行，信息
+   架构层面判断现状已经基本符合，未做大改。
+4. **测试**：新增 `backup/OnboardingPermissionsTest.kt`（11 项，纯函数
+   判定 + 持久化存取/损坏回默认，风格照抄 `BackupSettingsTest.kt`）；
+   android 全量 **189/189** 绿（原有 188 + 新增，另有 4 项环境相关
+   skip 是既有基线，非本次引入）；`assembleDebug` 绿。
+5. **顺手修复一个无关但阻塞测试的漂移**：`DiagTextTest` 的
+   `bundled_assets_never_drift_from_repo_source` 跑起来是红的——根因
+   是今天早些时候桌面端一轮改动往 `assets/i18n/{en,zh}.json`（仓库
+   共享源）加了新 key（`ui.pending_banner_text` 等），但 Android 端
+   自己捆绑的副本 `apps/android/app/src/main/assets/i18n/*.json`
+   没跟着同步（DAE-04 漂移守卫机制存在，但没人在那次改动后手动跑
+   一次同步）——直接复制源文件覆盖捆绑副本即修复，不是本次三项功能
+   引入的问题，顺手带上避免测试常红。
+
+**下一步**：等用户真机走一遍新 onboarding 流程（重新走 `adb uninstall`
+清场→安装→扫码→系统权限步骤→选相册→备份条件→进入 App），确认三处
+权限提示、大图归因文案、重看引导入口是否符合预期。SYNC-05（`src_device`
+落地）完成后记得回来把 `attributionText` 的 family 分支换成真实设备名。
 
 ## 〇、2026-08-17（续八）：reset-local.sh pkill 相对路径 bug 修复 + Android 重新编译清场 + 三条待拍板/待记录事项
 
