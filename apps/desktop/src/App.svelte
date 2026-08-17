@@ -1001,11 +1001,32 @@
               </div>
             {/if}
 
-            <div class="flex items-start gap-[22px] max-[1079px]:flex-col">
-              <Card class="flex-[1.2_1_0%] gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+            <!-- 2026-08-17：总览卡片区改功能驱动布局（用户拍板：桌面端
+                 不再逐屏对设计稿，按功能优先级+屏幕尺寸各自最优排布）。
+                 内容优先级（非"操作优先展示其次"的二元对立——总览的核心
+                 功能就是「一眼确认备份没坏」，这才是大多数人打开这个
+                 页面的原因，比"加设备"这种低频动作更该占主位）：
+                 ①水位卡=核心状态，永远第一、永远最大；②添加设备=常驻
+                 但低频的动作，次要位置；③最近动静=锦上添花的补充信息，
+                 之前 <1440px 直接整卡消失是"設計稿驱动"年代的遗留（凑
+                 三栏才加的卡，容不下就砍掉）——现在改成"任何尺寸都在，
+                 只是密度/位置跟着可用空间变"：用 grid 而不是 flex+hidden，
+                 大屏三栏并排，中屏两栏+第三卡沉到下面占满宽度，小屏单栏
+                 全部竖排，没有哪个尺寸会突然"少一块内容"。 -->
+            <!-- 2026-08-17：items-start 改等高（不设 align-items，grid 默认
+                 stretch）——功能驱动阶段不用再守"卡片不等高"的旧设计规则
+                 （T-082 反转过一次是为了贴设计稿，现在不追设计稿了）；
+                 中屏两栏并排时"添加设备"卡内容天然比"全家备份水位"空
+                 状态多，不等高会让水位卡下面露出一大块空白背景。 -->
+            <div class="grid grid-cols-1 gap-[22px] min-[1080px]:grid-cols-2 min-[1440px]:grid-cols-3">
+              <Card class="gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
                 <h3 class="mb-[12px] text-[15px] font-semibold">全家备份水位</h3>
                 {#if devices.filter((d) => !d.revoked).length === 0}
-                  <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
+                  <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
+                       卡片顶部，下面一截空白显得像没做完。 -->
+                  <div class="flex flex-1 items-center justify-center">
+                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
+                  </div>
                 {:else}
                   <ul class="m-0 list-none p-0">
                     {#each waterRows.shown as { d, row }}
@@ -1025,17 +1046,14 @@
                     >
                   {/if}
                 {/if}
-                <p class="m-0 text-[13px] leading-[1.6] text-ink-40">只要这台电脑开着、手机插电连 Wi-Fi，备份就在发生；任何一边不对劲，另一边 3 天内亮红。</p>
               </Card>
 
-              <!-- 设计稿 v2 实测（2026-08-17 对齐修复）：卡片本身不居中——
-                   标题、说明文字都是左对齐的普通文本；只有按钮内文字（Button
-                   基类自带 justify-center）和底部「无法扫码」退路是居中的。
-                   之前误加 items-center 把整卡都居中挤扁了，按钮也因此收缩
-                   成内容宽而不是撑满卡宽。 -->
+              <!-- 卡片本身不居中——标题、说明文字都是左对齐的普通文本；
+                   只有按钮内文字（Button 基类自带 justify-center）和底部
+                   「无法扫码」退路是居中的。 -->
               <!-- T4 (H-10b): 二维码不再是常驻卡片——点按钮弹窗出码，配对完
                    状态消失；扫码后的允许/拒绝也走模态。 -->
-              <Card class="flex-[1_1_0%] flex flex-col gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+              <Card class="flex flex-col gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
                 <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
                 <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">点击后会放大显示一个配对二维码，用家人手机上的 P-Pass 扫一下；扫到后二维码自动收起，回到这里确认「允许加入」。</p>
                 <Button class="h-11 min-h-11 w-full rounded-md border border-ink px-[18px] text-[15px] font-bold" onclick={startPairing}>{t("ui.generate_qr")}</Button>
@@ -1044,18 +1062,19 @@
                 <button class="h-auto min-h-0 w-full rounded-md border-none bg-transparent px-0 py-[2px] text-center text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] text-safe hover:text-safe" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</button>
               </Card>
 
-              <!-- 2026-08-13：「最近动静」摘要卡（离线版设计稿 v2「第 3 轮」
-                   新增）——只在 ≥1440px 显示（见上方 @media），大屏富余
-                   空间放信息，不留白；数据是活动记录前 3 条，复用同一套
-                   auditWho/auditText，不是另开一套数据源。 -->
-              <Card class="hidden flex-col gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px] min-[1440px]:flex min-[1440px]:flex-[1_1_0%]">
+              <!-- 「最近动静」摘要卡——不再靠 hidden+断点整卡消失。中屏
+                   （1080-1439px）沉到第二行占满两栏宽度；大屏（≥1440px）
+                   回到第三栏；小屏（<1080px）跟其它卡一样单栏竖排。数据
+                   是活动记录前 3 条，复用同一套 auditWho/auditText，不是
+                   另开一套数据源。 -->
+              <Card class="flex flex-col gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px] min-[1080px]:col-span-2 min-[1440px]:col-span-1">
                 <h3 class="mb-0 text-[15px] font-semibold">最近动静</h3>
                 {#if visibleAudit.length === 0}
                   <p class="m-0 text-[13px] leading-[1.6] text-ink-40">还没有活动记录。</p>
                 {:else}
-                  <!-- 设计稿这张摘要卡是单行紧凑文案（设备+事件+相对时间
-                       连成一行，不分列、行间不加分隔线），跟主活动记录页
-                       的双列卡片行是两种密度，故意不共用 .log-rows。 -->
+                  <!-- 单行紧凑文案（设备+事件+相对时间连成一行，不分列、
+                       行间不加分隔线），跟主活动记录页的双列卡片行是两种
+                       密度，故意不共用 .log-rows。 -->
                   <ul class="m-0 flex list-none flex-col gap-[10px] p-0 text-[14px] text-ink">
                     {#each visibleAudit.slice(0, 3) as e (e.ts + ":" + e.action)}
                       {@const at = humanTime(e.ts, nowMs)}
@@ -1691,15 +1710,6 @@
     opacity: 0.5;
     cursor: default;
   }
-  
-
-  
-
-  /* 「最近动静」摘要卡：默认隐藏，只在 ≥1440px 由上方 @media 打开
-
-
-
-
   /* 跟 .dev-name-btn/.dev-remove-btn 同族的极简文字链接——次要跳转
      不该是实心按钮，这条规则以后别的「看全部」链接也可以直接复用。 */
   .link-more {
@@ -1981,12 +1991,10 @@
     .service-label {
       display: none;
     }
-    /* 内容单栏：水位/添加设备两卡竖排，各占满宽度（设计稿⑨：小屏不给
-       扫码这种低频动作留一整卡，但完整的横条降级属于更大改动，本卡
-       先保证「竖排不挤不裁切」这条底线，横条卡样式留后续卡打磨）。 */
-
   }
-  /* ≥1440：三栏，内容区居中不无限拉伸，新增「最近动静」摘要卡。
+  /* ≥1440：三栏，内容区居中不无限拉伸。总览卡片区（水位/添加设备/
+     最近动静）改用 grid（见模板内联类），断点行为不靠这里的 @media，
+     小屏单栏竖排是 grid-cols-1 默认值自然得到的，不需要额外规则。
      照片墙是缩略图网格不是读文字，没有"一行多少字读得舒服"的考量，
      豁免这条居中限宽，让墙铺满可用宽度（用户实测反馈：右边留白）。 */
   @media (min-width: 1440px) {
