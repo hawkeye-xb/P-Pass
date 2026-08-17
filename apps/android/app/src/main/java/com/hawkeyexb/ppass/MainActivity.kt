@@ -261,6 +261,15 @@ fun PPassApp() {
     // Onboarding「通知」权限——Home 页跳过引导卡用（同款「未加白就一直
     // 显示」风格，跟电池白名单卡对称，不额外记「是否已经跳过过」）。
     var notificationGrantedForHome by remember { mutableStateOf(hasNotificationPermission(context)) }
+    // 设计稿"失联多少天"——复用 SENT-01 既有的 SentinelStore（不是新
+    // 造的判定），距上次确认可达的天数；从未确认可达过（lastReachableAt
+    // <= 0）时为 null，调用方（PhotosScreen）走不编造天数的兜底文案。
+    fun computeDaysUnreachable(): Int? {
+        val last = com.hawkeyexb.ppass.backup.SentinelStore(context.filesDir).load().lastReachableAt
+        if (last <= 0) return null
+        return ((System.currentTimeMillis() - last) / (24 * 60 * 60 * 1000L)).toInt()
+    }
+    var daysUnreachable by remember { mutableStateOf(computeDaysUnreachable()) }
     // PRES-01: 前台轻心跳——ON_RESUME 起、ON_STOP 停（退后台绝不心跳，
     // 耗电红线）；app 在前台时 daemon 每 ~30s 收到一次 hello，桌面设备行
     // 才显示「在线」而不是「离线」（锁屏 ≠ 离开）。
@@ -288,6 +297,7 @@ fun PPassApp() {
                 Lifecycle.Event.ON_RESUME -> {
                     batteryWhitelisted = isIgnoringBatteryOptimizations(context)
                     notificationGrantedForHome = hasNotificationPermission(context)
+                    daysUnreachable = computeDaysUnreachable()
                     partialMedia = hasPartialMediaAccess(context)
                     heartbeat.start()
                     timeline.start()
@@ -496,12 +506,29 @@ fun PPassApp() {
             val mediaPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
             ) { grants -> if (grants.values.any { it }) holder.backupNow() }
+            // 存储端移除/吊销本设备后：本地照清（无需 unpair，daemon 端
+            // 本就不认本设备），回 Welcome 扫码，新 token 走 rejoin 门
+            // 重建——备份页、照片页的失联红卡按同一个动作走。
+            val onRepairPairing = {
+                clearLocalPairing(context, pairings, s.pairing)
+                screen = Screen.Welcome
+            }
             TwoTabs(
                 tab = tab,
                 onTab = { tab = it },
                 showTabBar = !photoViewerOpen,
+                // 设计稿"备份!"红字——配对失效最紧急，电池未加白次之；
+                // 两个信号本来就都在（pairingLost/batteryWhitelisted），
+                // 汇总成一个布尔值给 tab 栏。
+                backupNeedsAttention = holder.pairingLost.value || !batteryWhitelisted,
                 photos = {
-                    PhotosScreen(timeline, onViewerOpenChange = { photoViewerOpen = it })
+                    PhotosScreen(
+                        timeline,
+                        onViewerOpenChange = { photoViewerOpen = it },
+                        pairingLost = holder.pairingLost.value,
+                        onReconnect = onRepairPairing,
+                        daysUnreachable = daysUnreachable,
+                    )
                 },
                 backup = {
                     HomeScreen(
@@ -548,10 +575,7 @@ fun PPassApp() {
                         // 本地照清（无需 unpair，daemon 端本就不认本设备），
                         // 回 Welcome 扫码，新 token 走 rejoin 门重建。
                         pairingLost = holder.pairingLost.value,
-                        onRepair = {
-                            clearLocalPairing(context, pairings, s.pairing)
-                            screen = Screen.Welcome
-                        },
+                        onRepair = onRepairPairing,
                         // T6: 备份范围——「选择相册」与「发起备份」两个动作。
                         selectedBucketCount = remember {
                             BackupScopeStore(context).selectedBucketIds()?.size

@@ -62,6 +62,7 @@
     <string name="state_scanning">正在找照片… %1$d</string>
     <string name="state_hashing">正在读取 %1$d/%2$d</string>
     <string name="state_sending">正在传回家 %1$d/%2$d</string>
+    <string name="state_sending_file">正在备份 %1$s（第 %2$d / %3$d 张）</string>
     <string name="state_safe">照片都存好了</string>
     <!-- T-080 缺陷(a): 待备份 > 0 时状态条只允许说欠账，不许说存好了 -->
     <string name="state_pending">还有 %1$d 张待备份</string>
@@ -89,7 +90,7 @@
     <string name="no_cloud">照片直接传回自己家的电脑，不经过任何云端。</string>
     <!-- DOG-01: 恒真三元组（T-080 layout v1: 英雄卡 M / N 张已回家） -->
     <string name="dog_triplet_line">手机 %1$d 张 · 已备份 %2$d · 待备份 %3$d</string>
-    <string name="hero_of_n">/ %1$d 张已回家</string>
+    <string name="hero_of_n">/ %1$s 张已回家</string>
     <string name="pending_count">待备份 %1$d 张</string>
     <string name="triplet_unavailable">读不到手机相册的数量——打开 App 时会再试。</string>
     <string name="dog_last_success">最近成功 %1$s</string>
@@ -100,6 +101,7 @@
     <string name="last_hours_ago">%1$d 小时前</string>
     <!-- T-080 layout v1: 备份规则卡 -->
     <string name="rules_title">备份规则</string>
+    <string name="more_section_title">更多</string>
     <string name="rule_notify">通知</string>
     <string name="rule_notify_value">仅失败时</string>
     <!-- T1: 版本号显示 -->
@@ -113,9 +115,19 @@
     <string name="bucket_done">备份这 %1$d 个相册</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">新</string>
-    <string name="backup_scope">备份范围</string>
+    <!-- 2026-08-17 设计稿对齐：这行原文是"备份范围"，改成设计稿原文
+         "备份哪些相册"，跟下面几行同款"问句式"标签。 -->
+    <string name="backup_scope">备份哪些相册</string>
     <string name="backup_scope_all">全部相册</string>
     <string name="backup_scope_n">%1$d 个相册</string>
+    <!-- 设计稿"什么时候备份 › 充电 + Wi-Fi 时自动"——跟 policy_* 是
+         同一份判定逻辑，只是 cell 里要短句不要"当前："前缀。 -->
+    <string name="backup_timing_title">什么时候备份</string>
+    <string name="timing_summary_both">充电 + Wi-Fi 时自动</string>
+    <string name="timing_summary_charge_only">充电时自动</string>
+    <string name="timing_summary_wifi_only">连 Wi-Fi 时自动</string>
+    <string name="timing_summary_none">随时自动</string>
+    <string name="storage_computer">存储电脑</string>
     <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
     <string name="auto_backup_rule">插电 + WiFi 时自动备份，无需打开 App</string>
@@ -151,10 +163,22 @@
     <!-- 配对已失效（存储端移除/吊销本设备后备份被拒） -->
     <string name="pairing_lost_title">与这台电脑的配对已失效</string>
     <string name="pairing_lost_body">照片都还在你手机上，一张没丢。电脑端可能已移除这台手机——重新扫码就会继续备份。</string>
+    <!-- 照片页的失联红卡（同一个 pairingLost 信号，设计稿要求也在照片
+         页露出）；天数来自 SentinelStore.lastReachableAt，从未确认可达
+         过时不编造具体天数，走 unknown 兜底文案。 -->
+    <string name="photos_lost_title">和家里的电脑失去了联系</string>
+    <string name="photos_lost_body_days">备份已经暂停 %1$d 天。照片都还在你手机上，一张没丢——重新连上就会自动补齐。</string>
+    <string name="photos_lost_body_unknown">备份已经暂停。照片都还在你手机上，一张没丢——重新连上就会自动补齐。</string>
+    <!-- 设计稿原文按钮文案是"重新扫码连接"，跟 scan_again（欢迎/配对
+         流程用的"重新扫码"）不是同一个字符串，各自独立不复用。 -->
+    <string name="photos_lost_action">重新扫码连接</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">自动备份</string>
     <string name="auto_backup_pause_hint">插电 + WiFi 时，新照片自动到家</string>
     <string name="disconnect">断开与这台电脑的连接</string>
+    <!-- 滑动确认控件的底纹提示——设计稿原文"进详情 → 滑动确认才生效，
+         杜绝误触"，不是点一下弹确认框。 -->
+    <string name="disconnect_swipe_hint">滑动以断开连接</string>
     <string name="disconnect_confirm_title">断开连接？</string>
     <string name="disconnect_confirm_body">断开后：这台手机的备份进度会重新计算，家庭相册将切换到新的存储电脑。手机上的照片不会动；原电脑上的照片也仍然保留。</string>
     <string name="disconnect_confirm_ok">断开</string>
@@ -191,7 +215,12 @@
     <string name="share_to">分享到…</string>
 
     <string name="tab_photos">照片</string>
-    <!-- UX-09: 「备份」改名「设置」——tab 内容其实是开关/规则/版本/断开，
-         不是备份进度本身（真机反馈：名不副实）。 -->
-    <string name="tab_settings">设置</string>
+    <!-- 2026-08-17 设计稿对齐：UX-09 当时把「备份」改成「设置」，理由是
+         内容偏开关/规则/版本，不是备份进度——但现在这一页最上面就是
+         恒真三元组英雄卡（备份进度/暂停），设计稿的页名也是「备份」，
+         改回来跟页面实际内容和设计稿一致。 -->
+    <string name="tab_settings">备份</string>
+    <!-- 需要用户注意时（配对失效/电池未加白等）tab 变红字感叹号。设计稿
+         原文"备份"和"!"之间有个空格，不是紧贴的"备份!"。 -->
+    <string name="tab_settings_alert">备份 !</string>
 </resources>

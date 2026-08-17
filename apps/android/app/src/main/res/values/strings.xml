@@ -66,6 +66,7 @@
     <string name="state_scanning">Looking for photos… %1$d</string>
     <string name="state_hashing">Reading %1$d/%2$d</string>
     <string name="state_sending">Sending %1$d/%2$d home</string>
+    <string name="state_sending_file">Backing up %1$s (%2$d / %3$d)</string>
     <string name="state_safe">All photos are backed up</string>
     <!-- T-080 defect(a): with K > 0 the status line may only speak of the debt -->
     <string name="state_pending">%1$d photos still to back up</string>
@@ -93,7 +94,7 @@
     <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
     <!-- DOG-01: 恒真三元组（T-080 layout v1: hero card M / N home） -->
     <string name="dog_triplet_line">%1$d photos · %2$d backed up · %3$d to go</string>
-    <string name="hero_of_n">/ %1$d photos home</string>
+    <string name="hero_of_n">/ %1$s photos home</string>
     <string name="pending_count">%1$d to back up</string>
     <string name="triplet_unavailable">Cannot read the photo count on this phone — it retries next time the app opens.</string>
     <string name="dog_last_success">Last success %1$s</string>
@@ -104,6 +105,7 @@
     <string name="last_hours_ago">%1$d h ago</string>
     <!-- T-080 layout v1: backup rules card -->
     <string name="rules_title">Backup rules</string>
+    <string name="more_section_title">More</string>
     <string name="rule_notify">Notifications</string>
     <string name="rule_notify_value">Only on failure</string>
     <!-- T1: 版本号显示 -->
@@ -120,6 +122,12 @@
     <string name="backup_scope">Albums to back up</string>
     <string name="backup_scope_all">All albums</string>
     <string name="backup_scope_n">%1$d albums</string>
+    <string name="backup_timing_title">When to back up</string>
+    <string name="timing_summary_both">Charging + Wi-Fi</string>
+    <string name="timing_summary_charge_only">While charging</string>
+    <string name="timing_summary_wifi_only">On Wi-Fi</string>
+    <string name="timing_summary_none">Any time</string>
+    <string name="storage_computer">Storage computer</string>
     <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
     <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
@@ -155,10 +163,15 @@
     <!-- 配对已失效（存储端移除/吊销本设备后备份被拒） -->
     <string name="pairing_lost_title">Pairing with this computer is no longer valid</string>
     <string name="pairing_lost_body">Your photos are all still on this phone — nothing is lost. The computer may have removed this phone; scan the code again and backup resumes.</string>
+    <string name="photos_lost_title">Lost touch with the home computer</string>
+    <string name="photos_lost_body_days">Backups have been paused for %1$d days. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</string>
+    <string name="photos_lost_body_unknown">Backups have been paused. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</string>
+    <string name="photos_lost_action">Scan the code again to reconnect</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">Auto backup</string>
     <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>
     <string name="disconnect">Disconnect from this computer</string>
+    <string name="disconnect_swipe_hint">Swipe to disconnect</string>
     <string name="disconnect_confirm_title">Disconnect?</string>
     <string name="disconnect_confirm_body">Backup progress on this phone will be reset and the family album will switch to a new storage computer. Photos on this phone stay put; photos on the old computer stay there too.</string>
     <string name="disconnect_confirm_ok">Disconnect</string>
@@ -198,7 +211,8 @@
 
     <!-- Tabs -->
     <string name="tab_photos">Photos</string>
-    <!-- UX-09: renamed from tab_backup — tab holds switches/rules/version/
-         disconnect, not backup progress itself (real-device feedback). -->
-    <string name="tab_settings">Settings</string>
+    <!-- 2026-08-17: reverted to "Backup" to match the design mock and the
+         page's actual content (hero progress card up top, not just switches). -->
+    <string name="tab_settings">Backup</string>
+    <string name="tab_settings_alert">Backup !</string>
 </resources>

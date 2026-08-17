@@ -8,6 +8,8 @@ package com.hawkeyexb.ppass.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,7 +17,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,10 +34,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
@@ -45,13 +53,16 @@ import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.BuildConfig
 import com.hawkeyexb.ppass.backup.BackupTriplet
 import com.hawkeyexb.ppass.update.UpdateChannel
+import kotlinx.coroutines.launch
 
 /** What the user sees: exactly one of the design's meaning states. */
 sealed class BackupUiState {
     data object Idle : BackupUiState()
     data class Scanning(val found: Int) : BackupUiState()
     data class Hashing(val done: Int, val total: Int) : BackupUiState()
-    data class Sending(val done: Int, val total: Int) : BackupUiState()
+    // 2026-08-17：currentFile——设计稿"正在备份 {文件名}（第 x / y 张）"
+    // 要求展示当前文件名，不只是计数；默认空串（还没传完第一个文件时）。
+    data class Sending(val done: Int, val total: Int, val currentFile: String = "") : BackupUiState()
     data class AllSafe(val ingested: Int, val duplicates: Int) : BackupUiState()
     /** FIX-T6: 一个相册都没选（空集 = 一个都不备）——显式「没有可
      *  备份的相册」，绝不显示假话「照片都存好了」。 */
@@ -101,6 +112,31 @@ fun HomeScreen(
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
+
+    // 设计稿"什么时候备份 ›"点进去的详情页——本地状态局部替换内容，
+    // 跟 PhotosScreen 的大图查看同一个套路，不需要 MainActivity 的顶层
+    // Screen 状态机（这只是设置子页，不需要像大图那样隐藏底部 tab 栏）。
+    var showTimingDetail by remember { mutableStateOf(false) }
+    if (showTimingDetail) {
+        BackupTimingDetail(
+            chargeOnly = chargeOnly,
+            onChargeOnlyChange = onChargeOnlyChange,
+            wifiOnly = wifiOnly,
+            onWifiOnlyChange = onWifiOnlyChange,
+            onBack = { showTimingDetail = false },
+        )
+        return
+    }
+    // "存储电脑"详情子页——"断开连接"收进这里最底部（滑动确认）。
+    var showStorageDetail by remember { mutableStateOf(false) }
+    if (showStorageDetail) {
+        StorageComputerDetail(
+            storageName = storageName,
+            onBack = { showStorageDetail = false },
+            onDisconnect = onDisconnect,
+        )
+        return
+    }
 
     Column(
         Modifier.fillMaxSize().background(PPColor.Paper)
@@ -152,13 +188,15 @@ fun HomeScreen(
                 val t = triplet
                 if (t != null) {
                     Row(verticalAlignment = Alignment.Bottom) {
+                        // 设计稿："1,180 / 1,234 张已回家"——千分位分组，
+                        // 三位数以内跟纯数字一样，大库才看得出差别。
                         Text(
-                            "${t.m}",
+                            groupThousands(t.m),
                             fontSize = 40.sp, fontFamily = FontFamily.Serif,
                             color = PPColor.Safe,
                         )
                         Text(
-                            stringResource(R.string.hero_of_n, t.n),
+                            stringResource(R.string.hero_of_n, groupThousands(t.n)),
                             fontSize = 18.sp, fontFamily = FontFamily.Serif,
                             color = PPColor.Safe,
                             modifier = Modifier.padding(start = 6.dp, bottom = 4.dp),
@@ -410,10 +448,11 @@ fun HomeScreen(
             }
         }
 
-        // ── 备份规则（设计稿：小节标题 + 圆角卡逐行）──
-        // 挂账（T-083 明示不做，只留此结构注记）：设计稿此卡还有
-        // 「备份哪些相册 · 仅『相机』›」一行——等相册选择功能卡
-        // （与 proto owner 字段同批）落地后再加行，本卡不自创交互。
+        // ── 备份规则（2026-08-17 对齐设计稿截图：4 行 cell，不再是一串
+        // 开关——"备份哪些相册 ›"/"什么时候备份 ›"/"通知 ›"/"存储电脑 ›"，
+        // 每行 label 左、值+chevron 右，点进去才展开细节，跟设计稿的
+        // cell 结构一致。仅充电/仅 WiFi 两个开关折进"什么时候备份"详情
+        // 页（BackupTimingDetail），不再各占一行。）──
         Spacer(Modifier.height(18.dp))
         Text(
             stringResource(R.string.rules_title),
@@ -421,29 +460,68 @@ fun HomeScreen(
             letterSpacing = 1.5.sp, color = PPColor.Ink40,
             modifier = Modifier.padding(horizontal = 2.dp),
         )
-        // 2026-08-17 用户真机反馈：合成状态句（policySentenceKey）原来
-        // 混在下面设置卡的第一行 cell 里，跟"仅充电"这种可点开关长得
-        // 一样——看不出"这是一句状态描述"和"这是一个设置项"的区别。
-        // 挪到卡片外面单独一行：更大字号 + 无 divider + 无卡片边框，
-        // 视觉上是"这一节说明"而不是"可点的一行"，跟下面纯设置卡分开。
-        Spacer(Modifier.height(6.dp))
-        Text(
-            stringResource(policySentenceKey(chargeOnly, wifiOnly)),
-            fontSize = 15.sp, lineHeight = 21.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = PPColor.Ink,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
             border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            // UX-12: 卡片圆角 20dp 偏大，行内容紧贴上下边缘会显得局促
-            // （真机反馈：第一行和最后一行"略显拥挤"）——给整列上下各留
-            // 8dp 呼吸空间，不紧贴圆角弧线。
+            Column(Modifier.padding(vertical = 8.dp)) {
+                CellRow(
+                    label = stringResource(R.string.backup_scope),
+                    value = stringResource(
+                        if (selectedBucketCount == null) R.string.backup_scope_all
+                        else R.string.backup_scope_n,
+                        selectedBucketCount ?: 0,
+                    ),
+                    onClick = onOpenBucketPicker,
+                )
+                HorizontalDivider(color = PPColor.Divider)
+                CellRow(
+                    label = stringResource(R.string.backup_timing_title),
+                    value = stringResource(timingSummaryKey(chargeOnly, wifiOnly)),
+                    onClick = { showTimingDetail = true },
+                )
+                HorizontalDivider(color = PPColor.Divider)
+                // 通知这行本身不是开关——权限在系统层，这里只显示现有
+                // 行为陈述（成功沉默/仅失败通知）+ chevron 去系统通知
+                // 设置（未授予时才有实际动作，已授予也允许点开看一眼）。
+                CellRow(
+                    label = stringResource(R.string.rule_notify),
+                    value = stringResource(R.string.rule_notify_value),
+                    onClick = onOpenNotificationSettings,
+                )
+                HorizontalDivider(color = PPColor.Divider)
+                // 2026-08-17 设计稿原文对齐："断开连接"不再裸露在主列表
+                // 里——收进这行"存储电脑"详情子页最底部，滑动确认才生效。
+                // 数据源：pairing 时缓存的 storageDeviceName（proto/daemon
+                // 没有主动查询"这台设备现在叫什么"的接口，改名后要等下次
+                // 配对才刷新，如实挂账，不做新协议改动）。
+                CellRow(
+                    label = stringResource(R.string.storage_computer),
+                    value = storageName,
+                    onClick = { showStorageDetail = true },
+                )
+            }
+        }
+
+        // ── 更多（设计稿截图没画这几行，但都是现有功能，不能删——挪到
+        // 第二张卡，跟上面 4 行设计稿明确给的 cell 分开，视觉上次要）──
+        Spacer(Modifier.height(18.dp))
+        Text(
+            stringResource(R.string.more_section_title),
+            fontSize = 12.sp, fontWeight = FontWeight.Bold,
+            letterSpacing = 1.5.sp, color = PPColor.Ink40,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
+        Spacer(Modifier.height(8.dp))
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
             Column(Modifier.padding(vertical = 8.dp)) {
                 RuleSwitchRow(
                     label = stringResource(R.string.auto_backup_pause),
@@ -451,45 +529,6 @@ fun HomeScreen(
                     checked = !autoBackupPaused,
                     onCheckedChange = { on -> onToggleAutoBackup(!on) },
                 )
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.setting_charge_only),
-                    checked = chargeOnly,
-                    onCheckedChange = onChargeOnlyChange,
-                )
-                // MOB-02 §三: 「需要充电」关闭的后果描述（用户定稿文案——
-                // 打消耗电顾虑是文案的任务：「有新照片就会尝试备份（系统级
-                // 监听，不额外耗电）」）。
-                if (!chargeOnly) {
-                    Text(
-                        stringResource(R.string.req_charge_off_consequence),
-                        fontSize = 12.5.sp, lineHeight = 18.sp, color = PPColor.Ink40,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-                    )
-                }
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.setting_wifi_only),
-                    checked = wifiOnly,
-                    onCheckedChange = onWifiOnlyChange,
-                )
-                HorizontalDivider(color = PPColor.Divider)
-                Row(
-                    Modifier.fillMaxWidth().heightIn(min = RuleRowMinHeight).padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.rule_notify),
-                        fontSize = 15.sp, color = PPColor.Ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    // UX-02 既有行为：成功沉默，仅失败通知——此行如实陈述。
-                    Text(
-                        stringResource(R.string.rule_notify_value),
-                        fontSize = 14.sp, color = PPColor.Ink40,
-                    )
-                }
-                // T1 (H-10b): 版本 + 构建号——报问题/排查时先知道装的是什么版本。
                 HorizontalDivider(color = PPColor.Divider)
                 Row(
                     Modifier.fillMaxWidth().heightIn(min = RuleRowMinHeight).padding(horizontal = 16.dp),
@@ -508,45 +547,10 @@ fun HomeScreen(
                 // 手机 Onboarding 三步重看入口——想回头补授权（通知/电池）
                 // 或者单纯想再看一遍那三步说明，不需要重新扫码配对。
                 HorizontalDivider(color = PPColor.Divider)
-                Row(
-                    Modifier.fillMaxWidth()
-                        .clickable(onClick = onReviewOnboarding)
-                        .heightIn(min = RuleRowMinHeight)
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.review_onboarding),
-                        fontSize = 15.sp, color = PPColor.Ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text("›", fontSize = 16.sp, color = PPColor.Ink40)
-                }
-                // DEV-01b: 重装识别开关行已隐藏（用户拍板）——统一走
-                // 「重新扫码 = 全新授权」；device_hint 照发照存。
-                // T6: 备份范围入口——点击进相册选择（选择与备份分离）。
-                HorizontalDivider(color = PPColor.Divider)
-                Row(
-                    Modifier.fillMaxWidth()
-                        .clickable(onClick = onOpenBucketPicker)
-                        .heightIn(min = RuleRowMinHeight)
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.backup_scope),
-                        fontSize = 15.sp, color = PPColor.Ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        stringResource(
-                            if (selectedBucketCount == null) R.string.backup_scope_all
-                            else R.string.backup_scope_n,
-                            selectedBucketCount ?: 0,
-                        ),
-                        fontSize = 14.sp, color = PPColor.Ink40,
-                    )
-                }
+                CellRow(
+                    label = stringResource(R.string.review_onboarding),
+                    onClick = onReviewOnboarding,
+                )
                 // MOB-02 §一: 设置页低调「立即备份」入口（测试/狗粮用，
                 // 不在首页）——跑前台管线，进度/暂停可见。部分授权下隐藏
                 // （部分授权态不落范围、不显示假数据，入口无意义）。
@@ -571,17 +575,51 @@ fun HomeScreen(
             }
         }
 
-        // ── 底部：断开连接——2026-08-17 用户真机反馈：紧贴在滚动内容流
-        // 里的一整行纯文字点击热区，手指划到底部很容易顺手带一下就碰到
-        // （即使点击后面还有 MainActivity 的二次确认弹窗，被意外弹出来
-        // 本身就是不必要的惊吓）。危险/不可逆操作的主流隔离手法：①跟
-        // 上面内容之间留明显更大的间距（40dp，页面其它间距的 2-3 倍，
-        // 形成"这是另一个区域"的心理暗示）；②从"文字流"升格成独立的
-        // 描边小卡片（有边框+圆角，点击热区被卡片边界框住，不再是随手
-        // 一划就能带到的一整条文字）。二次确认对话框本身已存在
-        // （MainActivity.kt showDisconnectDialog），这里只处理"太容易
-        // 被顺手碰到"这一半。
-        Spacer(Modifier.height(40.dp))
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** "存储电脑"详情子页——2026-08-17 设计稿原文对齐："断开连接"不再
+ *  裸露在备份页主列表里，收进这里最底部，且必须滑动确认才生效（不是
+ *  点一下弹确认框）——危险操作要求一个连续、有意识的手势，比"点击→
+ *  再点一次确认"更难被无意划过触发。 */
+@Composable
+private fun StorageComputerDetail(
+    storageName: String,
+    onBack: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "‹", fontSize = 24.sp, color = PPColor.Ink,
+                modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 12.dp, 0.dp),
+            )
+            Text(
+                stringResource(R.string.storage_computer),
+                fontSize = 22.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = RuleRowMinHeight).padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.storage_computer),
+                    fontSize = 15.sp, color = PPColor.Ink,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(storageName, fontSize = 14.sp, color = PPColor.Ink40)
+            }
+        }
+        Spacer(Modifier.weight(1f))
         Text(
             stringResource(R.string.no_cloud),
             fontSize = 13.sp, lineHeight = 20.sp, color = PPColor.Ink40,
@@ -589,19 +627,11 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
         )
         Spacer(Modifier.height(14.dp))
-        Surface(
-            color = PPColor.Paper,
-            shape = RoundedCornerShape(PPSize.RadiusCard),
-            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onDisconnect),
-        ) {
-            Text(
-                stringResource(R.string.disconnect),
-                fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            )
-        }
+        SwipeToConfirm(
+            label = stringResource(R.string.disconnect_swipe_hint),
+            confirmLabel = stringResource(R.string.disconnect),
+            onConfirmed = onDisconnect,
+        )
         Spacer(Modifier.height(8.dp))
     }
 }
@@ -611,7 +641,13 @@ fun HomeScreen(
 private fun workingText(line: StatusLine.Working): String = when (val s = line.state) {
     is BackupUiState.Scanning -> stringResource(R.string.state_scanning, s.found)
     is BackupUiState.Hashing -> stringResource(R.string.state_hashing, s.done, s.total)
-    is BackupUiState.Sending -> stringResource(R.string.state_sending, s.done, s.total)
+    // 设计稿："正在备份 {文件名}（第 x / y 张）"——sent=0 时还没有当前
+    // 文件（onProgress(0, total, "") 那一次），退回旧的纯计数文案。
+    is BackupUiState.Sending -> if (s.currentFile.isNotEmpty()) {
+        stringResource(R.string.state_sending_file, s.currentFile, s.done, s.total)
+    } else {
+        stringResource(R.string.state_sending, s.done, s.total)
+    }
     else -> stringResource(R.string.idle_auto_hint) // unreachable
 }
 
@@ -671,6 +707,10 @@ private fun lastSuccessText(ts: Long): String =
         )
     }
 
+/** 千分位分组（设计稿"1,180 / 1,234"）——用户当前 locale 的分组符号。 */
+private fun groupThousands(n: Long): String =
+    java.text.NumberFormat.getIntegerInstance().format(n)
+
 /** 进行中的确定进度（0..1）；扫描/无总数时 null = 不画进度条。 */
 private fun progressOf(state: BackupUiState): Float? = when (state) {
     is BackupUiState.Hashing ->
@@ -689,6 +729,16 @@ fun policySentenceKey(chargeOnly: Boolean, wifiOnly: Boolean): Int = when {
     chargeOnly && !wifiOnly -> R.string.policy_charge_only
     !chargeOnly && wifiOnly -> R.string.policy_wifi_only
     else -> R.string.policy_none
+}
+
+/** 同款四组合判定，短句形式给"什么时候备份 › {这句}" cell 用（design
+ *  只要"充电 + Wi-Fi 时自动"，不要 policySentenceKey 那个"当前："前缀
+ *  的完整句）。 */
+fun timingSummaryKey(chargeOnly: Boolean, wifiOnly: Boolean): Int = when {
+    chargeOnly && wifiOnly -> R.string.timing_summary_both
+    chargeOnly && !wifiOnly -> R.string.timing_summary_charge_only
+    !chargeOnly && wifiOnly -> R.string.timing_summary_wifi_only
+    else -> R.string.timing_summary_none
 }
 
 /** UX-12: 备份规则卡所有单行统一的最小高度——真机反馈：带 Switch 的行
@@ -718,5 +768,153 @@ private fun RuleSwitchRow(
             }
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+/** 设计稿的 cell 行——label 左、可选的 value + "›" 右，整行可点。 */
+@Composable
+private fun CellRow(label: String, value: String? = null, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(onClick = onClick)
+            .heightIn(min = RuleRowMinHeight)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, fontSize = 15.sp, color = PPColor.Ink, modifier = Modifier.weight(1f))
+        if (value != null) {
+            Text(value, fontSize = 14.sp, color = PPColor.Ink40)
+            Spacer(Modifier.width(4.dp))
+        }
+        Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+    }
+}
+
+/** "什么时候备份 ›" 详情页——原来直接摆在备份规则卡里的仅充电/仅 WiFi
+ *  两个开关，收进这个子页（跟 HomeScreen 顶部大卡片同一套返回手势，
+ *  不需要 MainActivity 的顶层 Screen 状态机，局部替换即可）。 */
+@Composable
+private fun BackupTimingDetail(
+    chargeOnly: Boolean,
+    onChargeOnlyChange: (Boolean) -> Unit,
+    wifiOnly: Boolean,
+    onWifiOnlyChange: (Boolean) -> Unit,
+    onBack: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "‹", fontSize = 24.sp, color = PPColor.Ink,
+                modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 12.dp, 0.dp),
+            )
+            Text(
+                stringResource(R.string.backup_timing_title),
+                fontSize = 22.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
+        Text(
+            stringResource(policySentenceKey(chargeOnly, wifiOnly)),
+            fontSize = 14.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
+        Spacer(Modifier.height(14.dp))
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column(Modifier.padding(vertical = 8.dp)) {
+                RuleSwitchRow(
+                    label = stringResource(R.string.setting_charge_only),
+                    checked = chargeOnly,
+                    onCheckedChange = onChargeOnlyChange,
+                )
+                // MOB-02 §三: 「需要充电」关闭的后果描述（用户定稿文案）。
+                if (!chargeOnly) {
+                    Text(
+                        stringResource(R.string.req_charge_off_consequence),
+                        fontSize = 12.5.sp, lineHeight = 18.sp, color = PPColor.Ink40,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
+                    )
+                }
+                HorizontalDivider(color = PPColor.Divider)
+                RuleSwitchRow(
+                    label = stringResource(R.string.setting_wifi_only),
+                    checked = wifiOnly,
+                    onCheckedChange = onWifiOnlyChange,
+                )
+            }
+        }
+    }
+}
+
+/** 滑动确认——危险操作（断开连接）要求一个连续、有意识的拖动手势，
+ *  比"点一下→弹确认框再点一次"更难被无意间划过触发（设计稿原文明确
+ *  要求"滑动确认才生效"，不是弹窗）。Compose Material3 没有现成组件，
+ *  自绘：一个可拖拽的圆形把手 + 底纹提示文字，拖到轨道 85% 以上松手
+ *  才触发 [onConfirmed]，否则弹回起点。 */
+@Composable
+private fun SwipeToConfirm(label: String, confirmLabel: String, onConfirmed: () -> Unit) {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val handleSize = 48.dp
+    val trackHeight = 56.dp
+    var trackWidthPx by remember { mutableStateOf(0f) }
+    val handleSizePx = with(density) { handleSize.toPx() }
+    val maxOffsetPx = (trackWidthPx - handleSizePx).coerceAtLeast(0f)
+    val offset = remember { androidx.compose.animation.core.Animatable(0f) }
+    val scope = rememberCoroutineScope()
+
+    Surface(
+        color = PPColor.ActBg,
+        shape = RoundedCornerShape(trackHeight / 2),
+        border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth().height(trackHeight)
+            .onGloballyPositioned { trackWidthPx = it.size.width.toFloat() },
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            // 底纹：拖得越远这句提示越淡，快到底时几乎看不见（视觉反馈
+            // "快松手了"）。
+            val labelAlpha = 1f - (if (maxOffsetPx > 0) offset.value / maxOffsetPx else 0f) * 0.85f
+            Text(
+                if (offset.value / maxOffsetPx.coerceAtLeast(1f) > 0.5f) confirmLabel else label,
+                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
+                modifier = Modifier.fillMaxSize().alpha(labelAlpha.coerceIn(0f, 1f))
+                    .padding(start = handleSize + 8.dp),
+                textAlign = TextAlign.Center,
+            )
+            Box(
+                Modifier
+                    .offset { androidx.compose.ui.unit.IntOffset(offset.value.toInt(), 0) }
+                    .padding(4.dp)
+                    .size(handleSize)
+                    .clip(RoundedCornerShape(50))
+                    .background(PPColor.Act)
+                    .pointerInput(maxOffsetPx) {
+                        detectHorizontalDragGestures(
+                            onDragEnd = {
+                                scope.launch {
+                                    if (maxOffsetPx > 0 && offset.value >= maxOffsetPx * 0.85f) {
+                                        offset.animateTo(maxOffsetPx)
+                                        onConfirmed()
+                                    } else {
+                                        offset.animateTo(0f)
+                                    }
+                                }
+                            },
+                            onDragCancel = { scope.launch { offset.animateTo(0f) } },
+                        ) { change, dragAmount ->
+                            change.consume()
+                            scope.launch {
+                                offset.snapTo((offset.value + dragAmount).coerceIn(0f, maxOffsetPx))
+                            }
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("→", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = PPColor.Paper)
+            }
+        }
     }
 }
