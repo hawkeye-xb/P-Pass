@@ -69,6 +69,12 @@ fun HomeScreen(
     // DOG-02: 电池白名单引导（未加白时显示，加白后消失）
     batteryWhitelisted: Boolean = true,
     onOpenBatterySettings: () -> Unit = {},
+    // Onboarding「系统权限」步骤里跳过的通知权限——同款不堵路引导卡，
+    // 已授予或本来就不需要（API<33）时不显示。
+    notificationSkipped: Boolean = false,
+    onOpenNotificationSettings: () -> Unit = {},
+    // 手机 Onboarding 三步（系统权限/选相册/备份条件）事后重看入口。
+    onReviewOnboarding: () -> Unit = {},
     // DOG-01: 恒真三元组（持久缓存，断网/失败时仍显示）
     triplet: BackupTriplet? = null,
     // UX-03: 极简设置——仅充电 / 仅 WiFi（写 WorkManager 约束）
@@ -373,6 +379,37 @@ fun HomeScreen(
             }
         }
 
+        // ── Onboarding 通知权限跳过引导（同款琥珀底一句话 + 去设置，
+        // 跟电池白名单卡视觉一致，出现时机由 shouldOfferNotificationPermission
+        // 之外的「已跳过但仍未授权」态决定，调用方传入）──
+        if (notificationSkipped) {
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                color = PPColor.WaitingBg,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(16.dp, 13.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.notif_nudge_body),
+                        fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        stringResource(R.string.notif_nudge_action),
+                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.clickable(onClick = onOpenNotificationSettings)
+                            .padding(4.dp),
+                    )
+                }
+            }
+        }
+
         // ── 备份规则（设计稿：小节标题 + 圆角卡逐行）──
         // 挂账（T-083 明示不做，只留此结构注记）：设计稿此卡还有
         // 「备份哪些相册 · 仅『相机』›」一行——等相册选择功能卡
@@ -469,6 +506,23 @@ fun HomeScreen(
                         "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                         fontSize = 14.sp, color = PPColor.Ink40,
                     )
+                }
+                // 手机 Onboarding 三步重看入口——想回头补授权（通知/电池）
+                // 或者单纯想再看一遍那三步说明，不需要重新扫码配对。
+                HorizontalDivider(color = PPColor.Divider)
+                Row(
+                    Modifier.fillMaxWidth()
+                        .clickable(onClick = onReviewOnboarding)
+                        .heightIn(min = RuleRowMinHeight)
+                        .padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.review_onboarding),
+                        fontSize = 15.sp, color = PPColor.Ink,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text("›", fontSize = 16.sp, color = PPColor.Ink40)
                 }
                 // DEV-01b: 重装识别开关行已隐藏（用户拍板）——统一走
                 // 「重新扫码 = 全新授权」；device_hint 照发照存。

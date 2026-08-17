@@ -245,9 +245,9 @@ internal fun PhotosScreen(holder: TimelineSubscriptionHolder) {
         // not a MIME type — keep the prefix check so a raw "video/mp4" from
         // an older daemon routes correctly too.
         if (current.mediaType.startsWith("video")) {
-            VideoScreen(loader, current) { opened = null }
+            VideoScreen(loader, current, isMine = current.hash in mine) { opened = null }
         } else {
-            PhotoViewer(loader, current) { opened = null }
+            PhotoViewer(loader, current, isMine = current.hash in mine) { opened = null }
         }
         return
     }
@@ -390,8 +390,27 @@ private fun ThumbCell(loader: TimelineLoader, asset: AssetMeta, onOpen: () -> Un
 /** RET-01/MOB-06: 查看页可用动作——保存到相册 / 用其他应用打开 / 分享。 */
 private enum class ViewerOp { Save, OpenWith, Share }
 
+/**
+ * 大图页归因文案（2026-08-17 用户拍板）：网格不标来源，只有大图才显示
+ * 「来自 XX的手机 · 日期」。**诚实挂账**：proto `AssetMeta` 目前没有
+ * `src_device` 字段（SYNC-05 待做——它是独立卡，proto/daemon 改动不在
+ * 本次改动范围内），拿不到具体设备名；用已有的 `mine`（本机确认缓存，
+ * T-080 轻过滤器同款数据源）近似区分「我自己传的」与「不是我传的」，
+ * 后者笼统标「家人的手机」——等 SYNC-05 落地后把这里换成真实设备名，
+ * 不在这之前编造一个具体名字。 */
 @Composable
-private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () -> Unit) {
+internal fun attributionText(isMine: Boolean, takenAtSeconds: Long): String {
+    val date = java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault())
+        .format(java.util.Date(takenAtSeconds * 1000))
+    return if (isMine) {
+        stringResource(R.string.attribution_mine, date)
+    } else {
+        stringResource(R.string.attribution_family, date)
+    }
+}
+
+@Composable
+private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolean, onClose: () -> Unit) {
     // MOB-04 红线③（大图）：当前查看 = 1024 缩略图走内存缓存（见下）；
     // 未来加原图查看时——拉原图只走**临时文件即看即清或纯内存流式**，
     // 绝不建长期原图缓存。手机是减负端不是第二存储端。备忘：
@@ -477,6 +496,12 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, onClose: () ->
                 )
             }
         }
+        // 归因信息按需出现——网格不标来源，只有大图才显示。
+        Text(
+            attributionText(isMine, asset.takenAt),
+            fontSize = 13.sp, color = PPColor.PaperDim,
+            modifier = Modifier.padding(horizontal = 10.dp),
+        )
         Spacer(Modifier.height(8.dp))
         Box(Modifier.fillMaxSize().clip(RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
             val b = bmp
