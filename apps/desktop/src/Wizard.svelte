@@ -1,9 +1,6 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import QRCode from "qrcode";
-  import { onDestroy } from "svelte";
   import { Button } from "$lib/components/ui/button";
 
   // 2026-08-17：向导页对齐设计稿 v2 重写——跟 App.svelte 迁移页同款
@@ -25,64 +22,8 @@
   // 继续；选了别的文件夹后路径旁出现「回到默认」按钮。
   let libraryDir = $state(configuredLibraryDir || defaultDir);
   let power = $state(null); // {kind, minutes}
-  let qrDataUrl = $state("");
-  let qrText = $state("");
   let busy = $state(false);
   let error = $state("");
-  // DESK-04③: 第三步接 T4 新配对弹窗流——扫码后即时切确认列表
-  // （IPC-02 事件驱动 + 3s 轮询兜底），不再停留常驻 QR。
-  let pendingList = $state([]);
-  let pendingTimer = null;
-  let unlisten = null;
-
-  async function call(method, params = {}) {
-    return await invoke("daemon_call", { method, params });
-  }
-
-  // DESK-04③: pending 轮询（3s，比主界面 60s 对账密——wizard 阶段
-  // 是配对发生时刻，等 60s 太久；事件驱动命中后立即刷新）。
-  async function refreshPending() {
-    if (step !== 3) return;
-    try {
-      const p = await call("pairing.pending", {});
-      pendingList = (p.pending ?? []).map((x) =>
-        typeof x === "string" ? { name: x, hint_match: null } : x
-      );
-    } catch (_) {
-      // daemon 还没就绪/短暂不可达——下次轮询再试。
-    }
-  }
-
-  async function confirmPair(accept, name) {
-    try {
-      await call("pairing.confirm", { accept, device_name: name, merge_node_id: null });
-      await refreshPending();
-    } catch (e) {
-      error = `处理失败：${e}`;
-    }
-  }
-
-  function startPendingWatch() {
-    stopPendingWatch();
-    refreshPending();
-    pendingTimer = setInterval(refreshPending, 3000);
-    listen("daemon-event", onDaemonEvent).then((f) => (unlisten = f));
-  }
-
-  function stopPendingWatch() {
-    if (pendingTimer) clearInterval(pendingTimer);
-    pendingTimer = null;
-    if (unlisten) unlisten();
-    unlisten = null;
-  }
-
-  function onDaemonEvent(ev) {
-    const name = ev?.payload?.event;
-    if (!name) return;
-    refreshPending();
-  }
-
-  onDestroy(() => stopPendingWatch());
 
   async function chooseFolder() {
     const dir = await openDialog({
@@ -95,6 +36,23 @@
 
   function useDefault() {
     libraryDir = defaultDir;
+  }
+
+  // 2026-08-17：一键关闭自动睡眠——独立的 busy/error 状态，不复用向导
+  // 全局 busy（那个会连累"继续"按钮跟着置灰，这里只是个局部小动作）。
+  let sleepFixBusy = $state(false);
+  let sleepFixError = $state("");
+  async function fixAutoSleep() {
+    sleepFixBusy = true;
+    sleepFixError = "";
+    try {
+      await invoke("disable_auto_sleep");
+      power = await invoke("power_hint"); // 刷新，成功的话这里应该变成 never
+    } catch (e) {
+      sleepFixError = String(e);
+    } finally {
+      sleepFixBusy = false;
+    }
   }
 
   async function toStep2() {
@@ -111,64 +69,35 @@
     }
   }
 
-  // H-10b (2026-08-08, xixi): QR 无法刷新——token 10 分钟过期后界面
-  // 上没有任何重新生成的入口，只能退出向导重来。抽成 generateQr()
-  // 供首次（toStep3）和刷新按钮共用。
-  async function generateQr() {
-    busy = true;
-    error = "";
-    try {
-      const r = await invoke("daemon_call", { method: "pairing.start", params: {} });
-      const qr = r.qr;
-      // H-10b: 配对码瘦身后仍在 ~170 字符——渲染加大 + 低纠错（L）保
-      // 可扫性（内容长时 L 级比默认 M 级更好扫；三星/鸿蒙取景都实测过）。
-      qrText = qr;
-      qrDataUrl = await QRCode.toDataURL(qr, {
-        width: 320,
-        margin: 2,
-        errorCorrectionLevel: "L",
-      });
-      step = 4;
-      startPendingWatch();
-    } catch (e) {
-      error = `生成配对码失败：${e}`;
-    } finally {
-      busy = false;
-    }
-  }
-
   async function toStep3() {
     // 设计稿 v2：第 3 步 = 「设为常驻服务」说明页——先讲清楚会申请什么/
     // 不会做什么/被拦怎么办，再动手。真正的 start_daemon（含 autostart
-    // 注册）在用户点「下一步」的 toStep4 里才执行。
+    // 注册）在用户点「完成」的 finishSetup 里才执行。
     step = 3;
   }
 
-  // 设计稿 v2：第 4 步 = 亮码。启动 daemon（此刻才注册开机自启）→ 等待
-  // 就绪 → 取配对码 → 进入配对页并开始轮询 pending。
-  async function toStep4() {
+  // 2026-08-17：第 3 步完成 = 整个 onboarding 完成，不再单开第 4 步扫码
+  // 页——总览页本来就有常驻的"添加设备"卡片（含"显示配对二维码"
+  // 按钮，不受配对状态影响一直显示），用户落地主界面自然看得到，不需要
+  // 在向导里重复一遍相同的能力。启动 daemon（此刻才注册开机自启）→
+  // 轮询 status 确认真的就绪（不然主界面会闪一下"服务未连接"）→ 直接
+  // onDone() 进主界面。
+  async function finishSetup() {
     error = "";
     busy = true;
     try {
       await invoke("start_daemon");
-      let qr = "";
+      let ready = false;
       for (let i = 0; i < 20; i++) {
         await new Promise((r) => setTimeout(r, 500));
         try {
-          const r = await invoke("daemon_call", { method: "pairing.start", params: {} });
-          qr = r.qr;
+          await invoke("daemon_call", { method: "status", params: {} });
+          ready = true;
           break;
         } catch (_) {}
       }
-      if (!qr) throw new Error("后台服务没有在 10 秒内就绪");
-      qrText = qr;
-      qrDataUrl = await QRCode.toDataURL(qr, {
-        width: 320,
-        margin: 2,
-        errorCorrectionLevel: "L",
-      });
-      step = 4;
-      startPendingWatch();
+      if (!ready) throw new Error("后台服务没有在 10 秒内就绪");
+      onDone();
     } catch (e) {
       error = `启动后台服务失败：${e}`;
     } finally {
@@ -180,15 +109,17 @@
 <!-- 2026-08-17：整页对齐设计稿 v2（用户实测反馈"onboarding 整个流程
      UI 都不对"——此前 DESK-07/08 只迁了 App.svelte 的五个主页面，向导
      组件一直是迁移前的手写 CSS，字号/按钮样式/间距跟主界面已经不是
-     一套体系）。逐字段核对设计稿 wizard 四步 markup 重写，数据流/交互
-     逻辑（chooseFolder/toStep2~4/generateQr/confirmPair 等）一字未动，
-     只换展示层。外层 wizard-shell 已有 padding 24 + max-width 680，
+     一套体系）。外层 wizard-shell 已有 padding 24 + max-width 680，
      这里卡片自身 padding 用 32/28（不是设计稿原始 44/34）——设计稿那份
      mock 是独立 680 宽窗口，我们是嵌套在 wizard-shell 里，照抄 44 会
-     产生双重内边距，按比例收窄更合理。 -->
+     产生双重内边距，按比例收窄更合理。
+     2026-08-17（续）：向导收缩成 3 步——原第 4 步「扫码」整个删掉，
+     总览页本来就有常驻的"添加设备"卡片（不受配对状态影响一直显示），
+     没必要在向导里重复一份配对 UI；第 3 步「完成」直接 onDone() 进
+     主界面，用户落地总览页自然看得到那张卡片。 -->
 <div class="mt-4 flex flex-col gap-[22px] rounded-xl border border-border bg-paper px-8 py-7">
   <div class="flex gap-2">
-    {#each ["照片存在哪", "电脑会睡吗", "设为常驻服务", "加手机"] as label, i}
+    {#each ["照片存在哪", "电脑会睡吗", "设为常驻服务"] as label, i}
       <span class="text-[13px] font-semibold {step === i + 1 ? 'text-ink' : step > i + 1 ? 'text-safe' : 'text-ink-40'}">
         {i + 1}. {label}
       </span>
@@ -232,15 +163,29 @@
           <span class="text-[13px] text-safe">✓ 检查通过</span>
         </div>
       {:else if power?.kind === "sleeps"}
-        <div class="flex items-center gap-3 rounded-xl border border-border bg-waiting-bg px-[18px] py-[14px]">
-          <span class="h-[9px] w-[9px] flex-none rounded-full bg-waiting"></span>
-          <div class="flex-1">
-            <p class="m-0 text-[15px] font-semibold">「自动睡眠」还开着</p>
-            <p class="m-0 mt-[3px] text-[13px] leading-[1.5] text-ink-60">
-              这台电脑闲置 {power.minutes} 分钟后会休眠，睡着时收不了备份。去系统设置关掉，或点右边帮你打开对应页面。
-            </p>
+        <div class="flex flex-col gap-3 rounded-xl border border-border bg-waiting-bg px-[18px] py-[14px]">
+          <div class="flex items-center gap-3">
+            <span class="h-[9px] w-[9px] flex-none rounded-full bg-waiting"></span>
+            <div class="flex-1">
+              <p class="m-0 text-[15px] font-semibold">「自动睡眠」还开着</p>
+              <p class="m-0 mt-[3px] text-[13px] leading-[1.5] text-ink-60">
+                这台电脑闲置 {power.minutes} 分钟后会休眠，睡着时收不了备份。
+              </p>
+            </div>
           </div>
-          <Button variant="outline" class="{BTN_OUTLINE} h-10 min-h-10 flex-none text-[14px]" onclick={() => invoke("open_power_settings")}>去系统设置</Button>
+          <!-- 2026-08-17：一键设置为主选项（系统原生管理员授权弹窗，不是
+               终端）——用户实测反馈系统设置里这个开关根本不在明面上，
+               不同 macOS 版本/机型入口还不一样，与其让人自己找菜单，不如
+               弹系统授权直接帮着改；不想授权的人保留手动入口退路。 -->
+          <div class="flex items-center gap-[10px]">
+            <Button class="{BTN} h-10 min-h-10 flex-none text-[14px]" disabled={sleepFixBusy} onclick={fixAutoSleep}>
+              {sleepFixBusy ? "设置中…" : "一键设置"}
+            </Button>
+            <Button variant="outline" class="{BTN_OUTLINE} h-10 min-h-10 flex-none text-[14px]" onclick={() => invoke("open_power_settings")}>去系统设置</Button>
+          </div>
+          {#if sleepFixError}
+            <p class="m-0 text-[13px] text-act">{sleepFixError}——你也可以点「去系统设置」自己关：打开后在右上角搜索框搜「睡眠」最快，不同 macOS 版本菜单位置不一样。</p>
+          {/if}
         </div>
       {:else}
         <p class="m-0 text-[13px] leading-[1.6] text-ink-40">没能读到这台电脑的电源策略（不影响使用）：备份进行中我们会自动保持它清醒。</p>
@@ -252,8 +197,8 @@
     </div>
   {:else if step === 3}
     <!-- 设计稿 v2：第 3 步 = 「设为常驻服务」——先讲清会申请什么/不会
-         做什么/被拦怎么办，点「下一步」才真正启动 daemon（含 autostart
-         注册，toStep4）。 -->
+         做什么/被拦怎么办，点「完成」才真正启动 daemon（含 autostart
+         注册，finishSetup）。 -->
     <div class="flex flex-col gap-4">
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">最后一步：设为常驻服务。</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">P-Pass 会注册为系统后台服务：开机自动运行，关掉这个窗口也在安静地收备份。随时可以在「设置」里停止它。</p>
@@ -276,48 +221,9 @@
     </div>
     <div class="mt-auto flex items-center justify-between">
       <button class={BTN_LINK} onclick={() => (step = 2)}>‹ 上一步</button>
-      <Button class={BTN} disabled={busy} onclick={toStep4}>
-        {busy ? "正在启动…" : "下一步"}
+      <Button class={BTN} disabled={busy} onclick={finishSetup}>
+        {busy ? "正在启动…" : "完成"}
       </Button>
-    </div>
-  {:else if step === 4 && pendingList.length > 0}
-    <!-- DESK-04③: 有人扫码 → 即时切确认列表（不再停留常驻 QR）。
-         与主界面 T4 模态同语义：逐行允许/拒绝，处理完该行消失。 -->
-    <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{pendingList.length > 1 ? `有 ${pendingList.length} 台手机请求加入` : "有手机请求加入"}</h2>
-      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">是家人的手机吗？点「允许」后它就能开始备份照片了。</p>
-      <div class="flex flex-col gap-2">
-        {#each pendingList as item}
-          <div class="flex items-center justify-between gap-3 rounded-xl bg-linen px-[14px] py-[10px]">
-            <span class="text-[15px] font-semibold text-ink">{item.name}</span>
-            <div class="flex gap-2">
-              <Button variant="outline" class="{BTN_OUTLINE} h-10 min-h-10 text-[14px]" onclick={() => confirmPair(false, item.name)}>拒绝</Button>
-              <Button class="{BTN} h-10 min-h-10 px-[18px] text-[14px]" onclick={() => confirmPair(true, item.name)}>允许</Button>
-            </div>
-          </div>
-        {/each}
-      </div>
-    </div>
-  {:else}
-    <!-- 设计稿 v2：第 4 步内容整体居中（跟前三步左对齐的说明页不同，
-         这一步是"完成态"，靠 CTA 收尾，不需要底部共享 nav）。 -->
-    <div class="flex flex-1 flex-col items-center justify-center gap-[14px] text-center">
-      <h2 class="m-0 font-serif text-[26px] font-normal leading-[1.3]">好了。去家人手机上，扫这个码。</h2>
-      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">在手机上打开 P-Pass App，扫描下面的二维码；手机发来的加入请求会立刻出现在这里。</p>
-      {#if qrDataUrl}
-        <img class="block w-[220px] rounded-xl border border-border" src={qrDataUrl} alt="配对二维码" />
-        <p class="m-0 text-[14px] text-ink-40">二维码 10 分钟内有效 · 手机扫完，回这里点「允许加入」</p>
-        <details class="text-[13px] text-ink-40">
-          <summary class="cursor-pointer font-semibold">无法扫码？复制配对串</summary>
-          <code class="mt-[6px] block rounded-sm bg-linen p-[10px] text-[12px] break-all">{qrText}</code>
-        </details>
-      {/if}
-      <div class="mt-[6px] flex items-center gap-[10px]">
-        <Button variant="outline" class={BTN_OUTLINE} onclick={generateQr} disabled={busy}>
-          {busy ? "正在刷新…" : "刷新二维码"}
-        </Button>
-        <Button class={BTN} onclick={onDone}>进入主界面</Button>
-      </div>
     </div>
   {/if}
 </div>
