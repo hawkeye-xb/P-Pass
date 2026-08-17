@@ -574,28 +574,55 @@
   function onDaemonEvent(ev) {
     const name = ev?.payload?.event;
     if (!name) return;
-    // DESK-05 + 照片墙同步: 照片墙失效重拉——activity.appended（备份
-    // 审计落地）/ device.changed（水位推进）/ timeline.invalidated
-    // （WATCH-01 秒级监听 + SYNC-01 对账：Finder 删除/新增）任一发生
-    // 都重置照片墙缓存，否则停在首次加载快照（photosLoaded 永不重置，
-    // 删除/新增都不显示）。timeline.invalidated 之前漏了——手机端订阅
-    // 了它实时刷新，桌面端没订阅导致「移动端体现了，桌面端没有」。
+    // DESK-05 + 照片墙同步: activity.appended（备份审计落地）/
+    // device.changed（水位推进）/ timeline.invalidated（WATCH-01 秒级
+    // 监听 + SYNC-01 对账：Finder 删除/新增）任一发生都要让照片墙感知
+    // 到——但 2026-08-17 改成增量合并，不再整墙清空重拉（见
+    // syncPhotosWallIncremental 注释：清空重拉会让已经渲染好的缩略图
+    // 全部销毁重建，来一次事件卡一下，照片多的库尤其明显）。
     if (
       name === "activity.appended" ||
       name === "device.changed" ||
       name === "timeline.invalidated"
     ) {
-      resetPhotosWall();
+      syncPhotosWallIncremental();
     }
     // 事件帧 {event, data}——data 是占位/增量提示，具体状态一律全量拉。
     refresh();
   }
 
-  // 照片墙缓存重置（事件失效 + 手动刷新共用同一入口，避免两处漂移）。
+  // 照片墙硬重置——手动"刷新"按钮专用，用户主动要求"就要最新真相"时
+  // 才整墙清空重拉，代价（缩略图重新请求+滚动位置归零）用户自己选的，
+  // 不是背着用户在后台悄悄发生。
   function resetPhotosWall() {
     photosLoaded = false;
     photos = [];
     photosNext = null;
+  }
+
+  // 2026-08-17：daemon 事件驱动的照片墙同步改成增量合并，不清空重拉——
+  // 之前 resetPhotosWall 把 photos 置空再整页重新拉取，Svelte 的
+  // {#each g.items as item (item.hash)} keyed diff 面对"先清空再填入"
+  // 这种中间态无从复用，等于把所有 PhotoThumb 组件实例（含已经拉到手的
+  // 缩略图）全部销毁重建，即使绝大多数照片压根没变——库大/事件密集时
+  // 就是用户反馈的"卡顿"。改法：拉一次最新第一页当真相，只把"本地还
+  // 没有的 hash"往数组最前面插入（timeline 是新→旧顺序，新照片天然该
+  // 在最前），已经渲染的条目原样不动，一次 IPC/PhotoThumb 请求都不多花。
+  // 深层分页里的删除（不在第一页窗口内）这版不处理——那是小概率场景，
+  // 靠 SYNC-01 每小时对账 + 手动"刷新"兜底，不是这次要解决的卡顿主因。
+  async function syncPhotosWallIncremental() {
+    if (!photosLoaded) return; // 还没首次加载过，交给进页时的 $effect 首拉
+    try {
+      const r = await call("timeline.page", { cursor: null, limit: PHOTOS_PAGE_SIZE });
+      const fresh = r.items ?? [];
+      const known = new Set(photos.map((p) => p.hash));
+      const arrivals = fresh.filter((it) => !known.has(it.hash));
+      if (arrivals.length > 0) {
+        photos = [...arrivals, ...photos];
+      }
+    } catch (_) {
+      // 静默失败——不影响墙上已有内容，下次事件/60s 兜底再试。
+    }
   }
 
   // UPD-01: 启动时检查一次更新（tauri-plugin-updater；manifest 在
@@ -1016,11 +1043,11 @@
             <!-- 2026-08-17：items-start 改等高（不设 align-items，grid 默认
                  stretch）——功能驱动阶段不用再守"卡片不等高"的旧设计规则
                  （T-082 反转过一次是为了贴设计稿，现在不追设计稿了）；
-                 中屏两栏并排时"添加设备"卡内容天然比"全家备份水位"空
+                 中屏两栏并排时"添加设备"卡内容天然比"备份状态"空
                  状态多，不等高会让水位卡下面露出一大块空白背景。 -->
             <div class="grid grid-cols-1 gap-[22px] min-[1080px]:grid-cols-2 min-[1440px]:grid-cols-3">
               <Card class="gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
-                <h3 class="mb-[12px] text-[15px] font-semibold">全家备份水位</h3>
+                <h3 class="mb-[12px] text-[15px] font-semibold">备份状态</h3>
                 {#if devices.filter((d) => !d.revoked).length === 0}
                   <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
                        卡片顶部，下面一截空白显得像没做完。 -->
@@ -1069,19 +1096,26 @@
                    另开一套数据源。 -->
               <Card class="flex flex-col gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px] min-[1080px]:col-span-2 min-[1440px]:col-span-1">
                 <h3 class="mb-0 text-[15px] font-semibold">最近动静</h3>
-                {#if visibleAudit.length === 0}
-                  <p class="m-0 text-[13px] leading-[1.6] text-ink-40">还没有活动记录。</p>
-                {:else}
-                  <!-- 单行紧凑文案（设备+事件+相对时间连成一行，不分列、
-                       行间不加分隔线），跟主活动记录页的双列卡片行是两种
-                       密度，故意不共用 .log-rows。 -->
-                  <ul class="m-0 flex list-none flex-col gap-[10px] p-0 text-[14px] text-ink">
-                    {#each visibleAudit.slice(0, 3) as e (e.ts + ":" + e.action)}
-                      {@const at = humanTime(e.ts, nowMs)}
-                      <li><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
-                    {/each}
-                  </ul>
-                {/if}
+                <!-- 2026-08-17：内容包一层 flex-1——大屏三栏等高时这张卡
+                     内容天然比左边两张少（最多 3 行），没有这层撑底的话
+                     链接会紧贴在短内容下面、卡片下半段留一截空白，看起来
+                     跟左边两张卡"高度不一样"（其实外框是等高的，只是内容
+                     没撑满，视觉上像矮了一截）。 -->
+                <div class="flex-1">
+                  {#if visibleAudit.length === 0}
+                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">还没有活动记录。</p>
+                  {:else}
+                    <!-- 单行紧凑文案（设备+事件+相对时间连成一行，不分列、
+                         行间不加分隔线），跟主活动记录页的双列卡片行是两种
+                         密度，故意不共用 .log-rows。 -->
+                    <ul class="m-0 flex list-none flex-col gap-[10px] p-0 text-[14px] text-ink">
+                      {#each visibleAudit.slice(0, 3) as e (e.ts + ":" + e.action)}
+                        {@const at = humanTime(e.ts, nowMs)}
+                        <li><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
                 <button class="h-auto min-h-0 self-start rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] text-safe hover:text-safe" onclick={() => go("log")}>全部活动记录 ›</button>
               </Card>
             </div>
