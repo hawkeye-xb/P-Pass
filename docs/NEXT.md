@@ -1,8 +1,48 @@
-# NEXT — 当前状态与下一步（2026-08-17，Android 三项 UI/流程功能落地——onboarding 权限步骤/大图归因/备份页重组）
+# NEXT — 当前状态与下一步（2026-08-17，Android 四项 UI/交互修复——备份页信息层级/照片页副标题/断开连接防误触/大图页导航结构）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
-## 〇、2026-08-17（续九）：Android 三项 UI/流程功能——onboarding 权限步骤 + 大图页归因 + 备份页重看入口（完成，含一项诚实挂账）
+## 〇、2026-08-17（续十）：Android 四项 UI/交互修复——真机走查续二（完成）
+
+用户走查上一轮（续九）落地的三项功能后，追加四点具体反馈，均已核实
+为真问题并修复：
+
+1. **备份规则卡"状态摘要句"混进设置行里，看不出区别**：`HomeScreen.kt`
+   原来把 `policySentenceKey`（如"插电且连 Wi-Fi 时自动备份"）当成卡片
+   第一行渲染，跟下面一串可点/可切换设置行长得一样。挪到卡片外面单独
+   一行——更大字号（15sp 加粗）、无 divider、无卡片边框，视觉上是"这
+   一节的说明"不是"可点的一行"；卡片本身只保留真正的设置行。
+2. **照片页"N 张·已去重"副标题没有信息量**：删掉。诚实说明——没有
+   现成的"上次同步于 X 分钟前"数据源（`TimelineSubscriptionHolder` 不
+   追踪时间戳），临时加一条时间戳追踪机制超出本轮范围，与其编数据不如
+   直接删，标题"全家的照片"单独站着。顺手清理了 `strings.xml`（en/zh）
+   里因此变成孤儿的 `photos_count_dedup` 字符串。
+3. **"断开连接"太容易在滚动时误触**：这行原来紧贴在可滚动内容流最
+   下面，是一整条纯文字点击热区。改用主流的"危险操作隔离"手法：①跟
+   上方内容间距从 10dp 拉大到 40dp（页面其它间距的 2-3 倍，形成"这是
+   另一个区域"的心理暗示）；②从纯文字升格成独立的描边卡片（点击热区
+   被卡片边界框住）。二次确认弹窗本来就有（`MainActivity.kt`
+   `showDisconnectDialog`），这次只处理"太容易被顺手带到"这一半。
+4. **大图查看页导航结构错误（结构性 bug，非样式）**：查看大图/视频时
+   底部仍然显示主 `[照片]/[设置]` tab 栏——根因是 `PhotosScreen.kt`
+   把"当前打开的大图项"状态和 `VideoScreen`/`PhotoViewer` 的渲染都
+   放在自己内部，从 `TwoTabs.kt` 的视角看只是"照片 tab 内容区自己换了
+   个样子"，外层 tab 栏对此一无所知、照常渲染。**修法**：`TwoTabs`
+   新增 `showTabBar` 参数，`false` 时那个 tab 栏 `Row` 根本不进组合树
+   （不是盖住看不见）；`PhotosScreen` 新增 `onViewerOpenChange` 回调，
+   `opened` 状态变化时通过 `LaunchedEffect` 往上冒泡通知；
+   `MainActivity.kt` 的 `Screen.Home` 分支持有 `photoViewerOpen` 状态，
+   接住这个回调后传给 `TwoTabs` 的 `showTabBar`。不改动 `PhotosScreen`
+   内部既有的 `loader`/`mine` 数据流，只加一条状态通知线，改动面小。
+   大图页自己的两个按钮（保存到相册/用其他应用打开）保持不变，不需要
+   换成收藏/编辑/分享这类图标 tab（用户已确认现有两按钮方案合理）。
+
+验证：`./gradlew :app:assembleDebug` BUILD SUCCESSFUL；
+`./gradlew :app:testDebugUnitTest` 189/189、0 failures、0 errors、
+4 skipped（跟修复前数量一致——这轮是 Compose 布局/导航接线改动，没有
+新增可测的纯函数判据，如实说明不是漏测）。
+
+
 
 用户给了设计规格三条，逐条落地：
 

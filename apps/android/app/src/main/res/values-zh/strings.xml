@@ -170,7 +170,6 @@
 
     <string name="photos_title">全家的照片</string>
     <string name="photos_count">%1$d 张</string>
-    <string name="photos_count_dedup">%1$d 张 · 已去重</string>
     <!-- T-080 layout v1: 照片页轻过滤器（全部 / 仅本机 / 家人的） -->
     <string name="chip_all">全部</string>
     <string name="chip_local">仅本机</string>

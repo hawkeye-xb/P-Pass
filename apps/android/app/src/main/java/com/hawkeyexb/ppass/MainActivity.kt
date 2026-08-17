@@ -519,6 +519,9 @@ fun PPassApp() {
             // SYNC-06: TimelineLoader 由 timeline holder 按配对创建/重建
             // （PhotoScreen 用户交互共用 holder.loader）——这里不再各自建。
             var tab by remember { mutableStateOf(0) } // 0=Photos 1=Backup
+            // 2026-08-17 大图查看页导航修复：正在全屏看大图/视频时，
+            // 主 [照片]/[设置] tab 栏根本不进组合树（不是盖住看不见）。
+            var photoViewerOpen by remember { mutableStateOf(false) }
             // UX-06: 暂停态持久化——重开 App 保持用户选择；恢复时重新排周期任务。
             val prefs = remember { AutoBackupPrefs(context.filesDir) }
             var autoBackupPaused by remember { mutableStateOf(prefs.paused()) }
@@ -534,7 +537,10 @@ fun PPassApp() {
             TwoTabs(
                 tab = tab,
                 onTab = { tab = it },
-                photos = { PhotosScreen(timeline) },
+                showTabBar = !photoViewerOpen,
+                photos = {
+                    PhotosScreen(timeline, onViewerOpenChange = { photoViewerOpen = it })
+                },
                 backup = {
                     HomeScreen(
                         storageName = s.pairing.storageDeviceName,

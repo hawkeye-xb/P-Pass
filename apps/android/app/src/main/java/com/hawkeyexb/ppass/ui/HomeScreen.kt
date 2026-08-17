@@ -421,7 +421,20 @@ fun HomeScreen(
             letterSpacing = 1.5.sp, color = PPColor.Ink40,
             modifier = Modifier.padding(horizontal = 2.dp),
         )
-        Spacer(Modifier.height(8.dp))
+        // 2026-08-17 用户真机反馈：合成状态句（policySentenceKey）原来
+        // 混在下面设置卡的第一行 cell 里，跟"仅充电"这种可点开关长得
+        // 一样——看不出"这是一句状态描述"和"这是一个设置项"的区别。
+        // 挪到卡片外面单独一行：更大字号 + 无 divider + 无卡片边框，
+        // 视觉上是"这一节说明"而不是"可点的一行"，跟下面纯设置卡分开。
+        Spacer(Modifier.height(6.dp))
+        Text(
+            stringResource(policySentenceKey(chargeOnly, wifiOnly)),
+            fontSize = 15.sp, lineHeight = 21.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = PPColor.Ink,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
+        Spacer(Modifier.height(12.dp))
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -432,21 +445,6 @@ fun HomeScreen(
             // （真机反馈：第一行和最后一行"略显拥挤"）——给整列上下各留
             // 8dp 呼吸空间，不紧贴圆角弧线。
             Column(Modifier.padding(vertical = 8.dp)) {
-                // MOB-02 §三: 设置页顶部合成一句当前生效条件——四种组合
-                // 各有明确句子，不留歧义（裁决纯函数 policySentenceKey）。
-                Row(
-                    Modifier.fillMaxWidth().padding(16.dp, 14.dp, 16.dp, 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(policySentenceKey(chargeOnly, wifiOnly)),
-                        fontSize = 13.5.sp, lineHeight = 19.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = PPColor.Ink60,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(
                     label = stringResource(R.string.auto_backup_pause),
                     hint = stringResource(R.string.auto_backup_pause_hint),
@@ -573,22 +571,38 @@ fun HomeScreen(
             }
         }
 
-        // ── 底部：断开连接 = 红字文本（危险动作电脑上确认更重的部分）──
-        Spacer(Modifier.height(10.dp))
+        // ── 底部：断开连接——2026-08-17 用户真机反馈：紧贴在滚动内容流
+        // 里的一整行纯文字点击热区，手指划到底部很容易顺手带一下就碰到
+        // （即使点击后面还有 MainActivity 的二次确认弹窗，被意外弹出来
+        // 本身就是不必要的惊吓）。危险/不可逆操作的主流隔离手法：①跟
+        // 上面内容之间留明显更大的间距（40dp，页面其它间距的 2-3 倍，
+        // 形成"这是另一个区域"的心理暗示）；②从"文字流"升格成独立的
+        // 描边小卡片（有边框+圆角，点击热区被卡片边界框住，不再是随手
+        // 一划就能带到的一整条文字）。二次确认对话框本身已存在
+        // （MainActivity.kt showDisconnectDialog），这里只处理"太容易
+        // 被顺手碰到"这一半。
+        Spacer(Modifier.height(40.dp))
         Text(
             stringResource(R.string.no_cloud),
             fontSize = 13.sp, lineHeight = 20.sp, color = PPColor.Ink40,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
-        Text(
-            stringResource(R.string.disconnect),
-            fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-                .clickable(onClick = onDisconnect)
-                .padding(vertical = 18.dp),
-        )
+        Spacer(Modifier.height(14.dp))
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onDisconnect),
+        ) {
+            Text(
+                stringResource(R.string.disconnect),
+                fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
     }
 }
 
