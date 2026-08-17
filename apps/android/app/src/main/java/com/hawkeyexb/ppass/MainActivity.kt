@@ -433,10 +433,6 @@ fun PPassApp() {
             // UX-06: 暂停态持久化——重开 App 保持用户选择；恢复时重新排周期任务。
             val prefs = remember { AutoBackupPrefs(context.filesDir) }
             var autoBackupPaused by remember { mutableStateOf(prefs.paused()) }
-            // UX-06: 断开连接警示页（产品档案 §二移动端 1 告知清单）——确认后
-            // ①daemon 撤销本设备（device.unpair，验收「断开后 hello 被拒」）
-            // ②清 pairing/watermark ③回 Welcome（重扫可重建）。
-            var showDisconnectDialog by remember { mutableStateOf(false) }
             val scope = rememberCoroutineScope()
             LaunchedEffect(Unit) { client.bind(identity.secretKey()) }
             val mediaPermission = rememberLauncherForActivityResult(
@@ -453,10 +449,6 @@ fun PPassApp() {
                 tab = tab,
                 onTab = { tab = it },
                 showTabBar = !photoViewerOpen,
-                // 设计稿"备份!"红字——配对失效最紧急，电池未加白次之；
-                // 两个信号本来就都在（pairingLost/batteryWhitelisted），
-                // 汇总成一个布尔值给 tab 栏。
-                backupNeedsAttention = holder.pairingLost.value || !batteryWhitelisted,
                 photos = {
                     PhotosScreen(
                         timeline,
@@ -500,10 +492,35 @@ fun PPassApp() {
                             if (paused) pauseAutoBackup(context)
                             else resumeAutoBackup(context)
                         },
-                        // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页
-                        // 开关行已删；device_hint 照发照存（默认开，数据继续
-                        // 积累，未来打开入口即用）。
-                        onDisconnect = { showDisconnectDialog = true },
+                        // UX-06 单方停止：本地断开不依赖 daemon 回应。确认
+                        // 交互（三层防误触）在 StorageComputerDetail 内部
+                        // 完成（红色描边按钮→展开确认卡→「确认断开」），
+                        // 这里不再弹第二层 AlertDialog——onDisconnect 就是
+                        // 真正执行断开。unpair 只是尽力通知 daemon 撤销本
+                        // 设备——设备已被存储端移除/吊销时 authz 只给未配对/
+                        // 已吊销设备留 pair.request 一扇门，unpair 必被拒，
+                        // 此时 daemon 端本就不认本设备，无需再撤销；daemon
+                        // 不可达同理。unpair 失败不再阻塞断开，否则本地
+                        // pairing 永远清不掉，重新扫码入口（Welcome）永久
+                        // 消失（存储端移除设备后的死锁）。
+                        onDisconnect = {
+                            scope.launch {
+                                val peer = try {
+                                    parsePeerAddrToken(s.pairing.daemonAddrToken)
+                                } catch (t: Throwable) {
+                                    null
+                                }
+                                if (peer != null) {
+                                    try {
+                                        withTimeout(5_000) { client.unpair(peer) }
+                                    } catch (_: Throwable) {
+                                        // 尽力而为——本地照断，重扫用新 token 重建。
+                                    }
+                                }
+                                clearLocalPairing(context, pairings, s.pairing)
+                                screen = Screen.Welcome
+                            }
+                        },
                         // 存储端移除/吊销本设备后：主按钮变「重新扫码连接」——
                         // 本地照清（无需 unpair，daemon 端本就不认本设备），
                         // 回 Welcome 扫码，新 token 走 rejoin 门重建。
@@ -552,47 +569,6 @@ fun PPassApp() {
                     },
                     dismissButton = {
                         TextButton(onClick = { pendingWifiOff = false }) {
-                            Text(stringResource(R.string.cancel))
-                        }
-                    },
-                )
-            }
-            if (showDisconnectDialog) {
-                AlertDialog(
-                    onDismissRequest = { showDisconnectDialog = false },
-                    title = { Text(stringResource(R.string.disconnect_confirm_title)) },
-                    text = { Text(stringResource(R.string.disconnect_confirm_body)) },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            showDisconnectDialog = false
-                            scope.launch {
-                                // UX-06 单方停止：本地断开不依赖 daemon 回应。
-                                // unpair 只是尽力通知 daemon 撤销本设备——
-                                // 设备已被存储端移除/吊销时 authz 只给未配对/
-                                // 已吊销设备留 pair.request 一扇门，unpair 必被
-                                // 拒，此时 daemon 端本就不认本设备，无需再撤销；
-                                // daemon 不可达同理。unpair 失败不再阻塞断开，
-                                // 否则本地 pairing 永远清不掉，重新扫码入口
-                                // （Welcome）永久消失（存储端移除设备后的死锁）。
-                                val peer = try {
-                                    parsePeerAddrToken(s.pairing.daemonAddrToken)
-                                } catch (t: Throwable) {
-                                    null
-                                }
-                                if (peer != null) {
-                                    try {
-                                        withTimeout(5_000) { client.unpair(peer) }
-                                    } catch (_: Throwable) {
-                                        // 尽力而为——本地照断，重扫用新 token 重建。
-                                    }
-                                }
-                                clearLocalPairing(context, pairings, s.pairing)
-                                screen = Screen.Welcome
-                            }
-                        }) { Text(stringResource(R.string.disconnect_confirm_ok)) }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showDisconnectDialog = false }) {
                             Text(stringResource(R.string.cancel))
                         }
                     },
