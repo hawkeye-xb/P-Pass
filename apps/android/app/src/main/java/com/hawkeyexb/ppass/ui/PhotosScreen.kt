@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -222,6 +223,14 @@ internal fun PhotosScreen(
     // opened/viewer 状态（不改动内部数据流），只是多一条"我现在是否
     // 在全屏查看"的通知线往上冒泡。
     onViewerOpenChange: (Boolean) -> Unit = {},
+    // 2026-08-17 设计稿对齐：存储端移除/吊销本设备后（同 HomeScreen 的
+    // pairingLost），照片页也要露出红色警示卡——不能只藏在设置页。
+    pairingLost: Boolean = false,
+    onReconnect: () -> Unit = {},
+    // 距上次确认可达的天数（SentinelStore.lastReachableAt 推算，
+    // SENT-01 既有数据源，非新造）；null = 从未确认可达过，不编造
+    // 具体天数，警示卡改用不带天数的兜底文案。
+    daysUnreachable: Int? = null,
 ) {
     // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
     // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
@@ -272,6 +281,47 @@ internal fun PhotosScreen(
             fontFamily = FontFamily.Serif, color = PPColor.Ink,
             modifier = Modifier.padding(24.dp, 18.dp, 24.dp, 10.dp),
         )
+
+        // 设计稿："和家里的电脑失去了联系"红色警示卡——配对被电脑端
+        // 移除/吊销后，照片页也要露出（不能只藏在设置页才看得到）。
+        if (pairingLost) {
+            Surface(
+                color = PPColor.ActBg,
+                shape = RoundedCornerShape(PPSize.RadiusCard),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.3f)),
+                modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+            ) {
+                Column(Modifier.padding(18.dp)) {
+                    Text(
+                        stringResource(R.string.photos_lost_title),
+                        fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (daysUnreachable != null) {
+                            stringResource(R.string.photos_lost_body_days, daysUnreachable)
+                        } else {
+                            stringResource(R.string.photos_lost_body_unknown)
+                        },
+                        fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink60,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    androidx.compose.material3.Button(
+                        onClick = onReconnect,
+                        modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
+                        shape = RoundedCornerShape(PPSize.RadiusControl),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                            containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                        ),
+                    ) {
+                        Text(
+                            stringResource(R.string.photos_lost_action),
+                            fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
+            }
+        }
 
         // T-080: 轻过滤器 chips（设计稿样式:胶囊,选中=墨底纸字）。
         Row(

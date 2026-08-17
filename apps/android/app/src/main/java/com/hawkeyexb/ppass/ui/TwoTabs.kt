@@ -39,6 +39,10 @@ fun TwoTabs(
     photos: @Composable () -> Unit,
     backup: @Composable () -> Unit,
     showTabBar: Boolean = true,
+    // 2026-08-17 设计稿："备份!" 红字——配对失效/电池未加白/失败通知
+    // 等需要用户注意的情况下，备份 tab 从黑字换成红字+感叹号，不是
+    // 恒定黑字。调用方（MainActivity）汇总各信号算出这一个布尔值。
+    backupNeedsAttention: Boolean = false,
 ) {
     PPScreen {
         Column(Modifier.fillMaxSize()) {
@@ -49,7 +53,16 @@ fun TwoTabs(
                 HorizontalDivider(color = PPColor.Border)
                 Row(Modifier.fillMaxWidth().height(64.dp).background(PPColor.Paper)) {
                     TabCell(stringResource(R.string.tab_photos), tab == 0, Modifier.weight(1f)) { onTab(0) }
-                    TabCell(stringResource(R.string.tab_settings), tab == 1, Modifier.weight(1f)) { onTab(1) }
+                    TabCell(
+                        label = if (backupNeedsAttention) {
+                            stringResource(R.string.tab_settings_alert)
+                        } else {
+                            stringResource(R.string.tab_settings)
+                        },
+                        selected = tab == 1,
+                        modifier = Modifier.weight(1f),
+                        alert = backupNeedsAttention,
+                    ) { onTab(1) }
                 }
             }
         }
@@ -61,6 +74,7 @@ private fun TabCell(
     label: String,
     selected: Boolean,
     modifier: Modifier,
+    alert: Boolean = false,
     onClick: () -> Unit,
 ) {
     Column(modifier.fillMaxHeight().clickable(onClick = onClick)) {
@@ -72,8 +86,8 @@ private fun TabCell(
             Text(
                 label,
                 fontSize = 15.sp,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                color = if (selected) PPColor.Ink else PPColor.Ink40,
+                fontWeight = if (selected || alert) FontWeight.Bold else FontWeight.Medium,
+                color = if (alert) PPColor.Act else if (selected) PPColor.Ink else PPColor.Ink40,
             )
         }
     }

@@ -63,7 +63,10 @@ class BackupRunner(private val client: DaemonClient) {
         daemon: PeerAddrParts,
         candidates: List<Candidate>,
         generation: Long?,
-        onProgress: (sent: Int, total: Int) -> Unit = { _, _ -> },
+        // 2026-08-17：设计稿要求"正在备份 {文件名}（第 x / y 张）"——
+        // 加一个文件名参数，取刚推完这个文件的 fileName（sent=0 时还
+        // 没有当前文件，传空串，调用方按 sent>0 判断要不要显示文件名）。
+        onProgress: (sent: Int, total: Int, fileName: String) -> Unit = { _, _, _ -> },
     ): BackupReport = withContext(Dispatchers.IO) {
         // begin + manifest on the ctrl plane.
         callOk(daemon, Methods.BACKUP_BEGIN, buildJsonObject {})
@@ -89,7 +92,7 @@ class BackupRunner(private val client: DaemonClient) {
         // 跳到 AllSafe（真机实测反馈：进度条像卡死了，一大批"突然"传完）。
         // toPush.size 才是这次真的要传的数量（manifest 去重后，可能比
         // 外层预估的 fresh.size 小）——先报一次校正总数，再逐条报进度。
-        onProgress(0, toPush.size)
+        onProgress(0, toPush.size, "")
         val conn = client.connectRaw(daemon, ALPN_UPLOAD)
         try {
             toPush.forEachIndexed { i, c ->
@@ -98,7 +101,7 @@ class BackupRunner(private val client: DaemonClient) {
                 // 当前批；未 commit，水位不推进，幂等管线安全。
                 coroutineContext.ensureActive()
                 pushFile(conn, c)
-                onProgress(i + 1, toPush.size)
+                onProgress(i + 1, toPush.size, c.fileName)
             }
         } finally {
             conn.close(0L, ByteArray(0))
