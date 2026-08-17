@@ -81,8 +81,6 @@ import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
 import com.hawkeyexb.ppass.ui.TwoTabs
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.JoinedScreen
-import com.hawkeyexb.ppass.ui.OnboardConditionsScreen
-import com.hawkeyexb.ppass.ui.OnboardPermissionsScreen
 import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.BucketScreen
 import com.hawkeyexb.ppass.ui.PPColor
@@ -101,13 +99,8 @@ private sealed class Screen {
     data class Joined(val pairing: Pairing) : Screen()
     data class Trouble(val titleRes: Int, val bodyRes: Int, val detail: String = "") : Screen()
     data class Home(val pairing: Pairing) : Screen()
-    // T6: 相册选择（从 Home 的设置区进入）
-    data class Buckets(val pairing: Pairing, val current: Set<Long>, val fromOnboarding: Boolean = false) : Screen()
-    // Onboarding「系统权限」→（选相册，复用 Buckets）→「备份条件」三步中
-    // 的第一步和第三步。reviewOnly：从设置页「重新查看引导」重进——只
-    // 走权限+条件说明，跳过相册选择（那不是复看权限想解决的问题）。
-    data class OnboardPermissions(val pairing: Pairing, val reviewOnly: Boolean = false) : Screen()
-    data class OnboardConditions(val pairing: Pairing, val reviewOnly: Boolean = false) : Screen()
+    // T6: 相册选择（配对成功直接进这页，或从 Home 的设置区重进）
+    data class Buckets(val pairing: Pairing, val current: Set<Long>) : Screen()
 }
 
 class MainActivity : ComponentActivity() {
@@ -135,10 +128,6 @@ fun PPassApp() {
     // MOB-03: 相册选择页权限链——「等授权结果后去哪」的落点。设置后由
     // bucketMediaPermission 回调消费；不进 Buckets 的路径立即清掉。
     var pendingBucketsPairing by remember { mutableStateOf<Pairing?>(null) }
-    // Onboarding「系统权限」步骤走完之后进相册选择——记住这次是不是从
-    // onboarding 来的，Buckets 的 onDone 才知道选完该回 Home 还是接着
-    // 走「备份条件」这最后一步。
-    var pendingBucketsFromOnboarding by remember { mutableStateOf(false) }
     // MOB-03: 媒体权限被拒 → 人话引导（不崩不白屏，说清为什么需要）。
     var showMediaPermissionDialog by remember { mutableStateOf(false) }
     // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
@@ -192,12 +181,10 @@ fun PPassApp() {
                 stillNeeded.isEmpty() && !partialMedia -> screen = Screen.Buckets(
                     pairing,
                     BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
-                    fromOnboarding = pendingBucketsFromOnboarding,
                 )
                 partialMedia -> screen = Screen.Home(pairing)
                 else -> showMediaPermissionDialog = true
             }
-            pendingBucketsFromOnboarding = false
         }
     }
 
@@ -317,11 +304,13 @@ fun PPassApp() {
         }
     }
 
-    // MOB-03: 进相册选择页的完整权限链（Home「选择备份的相册」与 onboarding
-    // 「配对成功→选相册」共用）——未授权 → 系统权限请求（完整授权后进列表）；
-    // 部分授权 → Home 引导卡（MOB-02 §二，不显示假 0/0）；拒绝 → 人话对话框。
-    // 备份主流程的入口，任何分支都不许白屏。
-    fun enterBucketPicker(pairing: Pairing, fromOnboarding: Boolean = false) {
+    // MOB-03: 进相册选择页的完整权限链（Home「选择备份的相册」与配对
+    // 成功→直接选相册共用）——未授权 → 系统权限请求（完整授权后进
+    // 列表，这就是设计稿决策「只有选相册进 onboarding」里读取照片权限
+    // 的唯一来源，不需要单独一屏）；部分授权 → Home 引导卡（MOB-02 §二，
+    // 不显示假 0/0）；拒绝 → 人话对话框。备份主流程的入口，任何分支都
+    // 不许白屏。
+    fun enterBucketPicker(pairing: Pairing) {
         val needed = requiredMediaPermissions().filter {
             ContextCompat.checkSelfPermission(context, it) !=
                 PackageManager.PERMISSION_GRANTED
@@ -329,14 +318,12 @@ fun PPassApp() {
         when {
             needed.isNotEmpty() -> {
                 pendingBucketsPairing = pairing
-                pendingBucketsFromOnboarding = fromOnboarding
                 bucketMediaPermission.launch(needed.toTypedArray())
             }
             hasPartialMediaAccess(context) -> screen = Screen.Home(pairing)
             else -> screen = Screen.Buckets(
                 pairing,
                 BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
-                fromOnboarding = fromOnboarding,
             )
         }
     }
@@ -407,65 +394,14 @@ fun PPassApp() {
 
         is Screen.Joined -> JoinedScreen(
             storageName = s.pairing.storageDeviceName,
-            // 手机 Onboarding（配对成功后）三步规格（2026-08-17 用户拍板）：
-            // 「系统权限」→「选相册范围」→「备份条件」。原来直接进相册
-            // 选择页，权限只是选相册时顺带弹的系统对话框，通知/电池优化
-            // 从未被主动问过——插入显式的权限步骤，把三项一次说清楚。
-            onDone = { screen = Screen.OnboardPermissions(s.pairing) },
+            // 设计稿原文（决策）：只有「选相册」进 onboarding，其余给
+            // 默认值，设置页随时改——配对成功直接进相册选择页，读取照片
+            // 权限就是进这一页时顺带弹的系统对话框（enterBucketPicker
+            // 已有的权限链），不再插入单独的「系统权限」/「备份条件」
+            // 步骤（2026-08-17 用户实机验收后拍板收回，这两步一度存在
+            // 又被删掉，见 NEXT.md 本条目）。
+            onDone = { enterBucketPicker(s.pairing) },
         )
-
-        is Screen.OnboardPermissions -> {
-            var photoGranted by remember { mutableStateOf(hasFullMediaAccess(context)) }
-
-            val photoLauncher = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestMultiplePermissions()
-            ) { _ -> photoGranted = hasFullMediaAccess(context) }
-
-            // ON_RESUME：从系统权限页返回后立即反映最新状态。
-            DisposableEffect(lifecycleOwner) {
-                val observer = LifecycleEventObserver { _, event ->
-                    if (event == Lifecycle.Event.ON_RESUME) {
-                        photoGranted = hasFullMediaAccess(context)
-                    }
-                }
-                lifecycleOwner.lifecycle.addObserver(observer)
-                onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-            }
-
-            OnboardPermissionsScreen(
-                photoGranted = photoGranted,
-                onRequestPhoto = { photoLauncher.launch(requiredMediaPermissions().toTypedArray()) },
-                onContinue = {
-                    if (s.reviewOnly) {
-                        // 复看模式只为补权限，不重新走相册选择。
-                        screen = Screen.OnboardConditions(s.pairing, reviewOnly = true)
-                    } else {
-                        enterBucketPicker(s.pairing, fromOnboarding = true)
-                    }
-                },
-            )
-        }
-
-        is Screen.OnboardConditions -> {
-            val backupSettings = remember { BackupSettings(context.filesDir) }
-            var chargeOnly by remember { mutableStateOf(backupSettings.load().chargeOnly) }
-            var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
-            OnboardConditionsScreen(
-                chargeOnly = chargeOnly,
-                onChargeOnlyChange = {
-                    chargeOnly = it
-                    backupSettings.save(chargeOnly, wifiOnly)
-                    rescheduleAutoBackup(context)
-                },
-                wifiOnly = wifiOnly,
-                onWifiOnlyChange = {
-                    wifiOnly = it
-                    backupSettings.save(chargeOnly, wifiOnly)
-                    rescheduleAutoBackup(context)
-                },
-                onEnterApp = { screen = Screen.Home(s.pairing) },
-            )
-        }
 
         is Screen.Trouble -> PairStatusScreen(
             title = androidx.compose.ui.res.stringResource(s.titleRes),
@@ -541,9 +477,6 @@ fun PPassApp() {
                         },
                         notificationSkipped = !notificationGrantedForHome,
                         onOpenNotificationSettings = { openAppDetailsSettings(context) },
-                        onReviewOnboarding = {
-                            screen = Screen.OnboardPermissions(s.pairing, reviewOnly = true)
-                        },
                         chargeOnly = chargeOnly,
                         onChargeOnlyChange = {
                             chargeOnly = it
@@ -707,22 +640,10 @@ fun PPassApp() {
                         val settings = BackupSettings(context.filesDir).load()
                         wifiDeferred = settings.wifiOnly && !isOnUnmetered(context)
                         triggerUserPresentBackup(context)
-                        // Onboarding 来的接着走「备份条件」这最后一步；
-                        // Home「选择相册」重进的直接回 Home——重建时重新
-                        // 读范围，三元组/扫描随之生效。
-                        screen = if (s.fromOnboarding) {
-                            Screen.OnboardConditions(s.pairing)
-                        } else {
-                            Screen.Home(s.pairing)
-                        }
+                        // 重建时重新读范围，三元组/扫描随之生效。
+                        screen = Screen.Home(s.pairing)
                     },
-                    onCancel = {
-                        screen = if (s.fromOnboarding) {
-                            Screen.OnboardConditions(s.pairing)
-                        } else {
-                            Screen.Home(s.pairing)
-                        }
-                    },
+                    onCancel = { screen = Screen.Home(s.pairing) },
                 )
             }
         }
@@ -742,14 +663,8 @@ private fun requiredMediaPermissions(): List<String> =
 // MOB-02 §四事件④: App 进前台且距上次成功 >24h → 用户在场档补跑。
 private const val MOB_APP_OPEN_GATE_MS = 24L * 60 * 60 * 1000
 
-/** Onboarding「系统权限」步骤：读取照片是否已经完整授权（不是部分）。 */
-private fun hasFullMediaAccess(context: Context): Boolean =
-    requiredMediaPermissions().all {
-        ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-    } && !hasPartialMediaAccess(context)
-
-/** Onboarding「系统权限」步骤：通知权限现状（API<33 恒真——那些版本
- *  装完就有，没有运行时权限这一说，onboarding 里也就不需要再问）。 */
+/** 通知权限现状（API<33 恒真——那些版本装完就有，没有运行时权限这
+ *  一说）；只喂 HomeScreen 的不堵路引导卡，不参与任何 onboarding 流程。 */
 private fun hasNotificationPermission(context: Context): Boolean =
     if (Build.VERSION.SDK_INT >= 33) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==

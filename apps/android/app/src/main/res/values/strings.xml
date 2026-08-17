@@ -37,22 +37,7 @@
     <!-- MOB-02 §一: 配对成功后的引导按钮（进相册选择页） -->
     <string name="choose_albums">Choose albums</string>
     <string name="not_a_code">This is not a P-Pass pairing code.</string>
-    <!-- Onboarding after pairing: 3 steps — system permissions / choose
-         albums (BucketScreen, existing) / backup conditions. -->
-    <string name="onboard_step_of">STEP %1$d OF %2$d</string>
-    <string name="continue_label">Continue</string>
-    <string name="onboard_permission_granted">Granted</string>
-    <string name="onboard_allow">Allow</string>
-    <string name="onboard_permissions_title">System permissions</string>
-    <string name="onboard_permissions_sub">Photo access is required — without it, P-Pass cannot see anything to back up.</string>
-    <string name="onboard_perm_photos_title">Photos and videos</string>
-    <string name="onboard_perm_photos_body">Required — without this, P-Pass cannot see anything to back up.</string>
-    <string name="onboard_conditions_title">Backup conditions</string>
-    <string name="onboard_conditions_sub">These two switches are app settings, not a system permission — you can change them any time on the backup page.</string>
-    <string name="onboard_conditions_no_permission_note">No extra system permission needed for these — they only control when the app itself starts a backup.</string>
-    <string name="onboard_enter_app">Enter app</string>
-    <string name="review_onboarding">Review setup steps</string>
-    <!-- DOG-02 style nudge card for the notification permission, when skipped/denied. -->
+    <!-- Nudge card for the notification permission when not granted, same style as the battery whitelist card. -->
     <string name="notif_nudge_body">Tip: allow notifications so P-Pass can tell you if a backup fails.</string>
     <string name="notif_nudge_action">Open settings</string>
     <!-- Full-image viewer attribution line (grid stays unlabeled; only

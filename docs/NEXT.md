@@ -1,6 +1,38 @@
-# NEXT — 当前状态与下一步（2026-08-17，备份页/照片页对齐设计稿截图+dc.html 原文）
+# NEXT — 当前状态与下一步（2026-08-17，配对成功直接进选相册——onboarding 权限/条件步骤整个删除）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-17（续十三）：配对成功直接进选相册，「系统权限」/「备份条件」onboarding 步骤整个删除（完成）
+
+用户实机走查后明确："onboarding 123步骤都是多余，就申请一个图片的权限。
+还不如改之前呢"——比续十一（只砍通知/电池两行）更进一步：连"系统权限
+（仅照片）"这一屏本身都不要了。**用浏览器把 dc.html 设计稿实际渲染
+出来后找到直接证据支持这个方向**：设计稿"新增(第2轮)"分区顶部原文
+写着"决策：只有「选相册」进 onboarding，其余给默认值，设置页随时
+改"；再往下的第一轮原始流程标注①也写"桌面点允许 → **直接进 Home，
+第一个页面是相册范围选择**（默认只勾「相机」）"——跟用户这次要的一致。
+"先给3个权限"那屏是被这条决策覆盖掉的过时草稿，没跟着删。
+
+**改法**：`Screen.Joined` 的 `onDone` 直接调 `enterBucketPicker`（选相册
+页本来就有的完整权限链——未授权先弹系统原生对话框，完整授权后进
+列表，部分授权/拒绝各有既有分支），不再经过任何专门的 onboarding
+屏幕；读取照片权限就是打开这一页时顺带弹出来的，不需要额外解释屏。
+删除 `Screen.OnboardPermissions`/`Screen.OnboardConditions` 两个状态
+分支 + `fromOnboarding`/`pendingBucketsFromOnboarding` 全部相关字段
+（`Screen.Buckets` 选完/取消统一回 `Screen.Home`，不再分支去"备份
+条件"）；设置页"重新查看引导"入口一并删除（三步都没了，没有可
+重看的东西）。**顺手清理死代码**：`ui/OnboardingSteps.kt`、
+`backup/OnboardingPermissions.kt`、`OnboardingPermissionsTest.kt`
+三个文件整个删除（唯一消费者都没了）；`hasFullMediaAccess` 函数
+（零调用点）一并删除；strings.xml en/zh 各清 13 个孤儿字符串
+（`onboard_step_of`/`continue_label`/`onboard_permission_granted`/
+`onboard_allow`/`onboard_permissions_*`/`onboard_perm_photos_*`/
+`onboard_conditions_*`/`onboard_enter_app`/`review_onboarding`）。
+
+通知/忽略电池优化两项（续十一已经从 onboarding 拿掉）继续走既有的
+契机式提醒（`HomeScreen.kt` 的电池白名单卡 + 通知引导卡），跟本轮无关，
+未受影响。**测试**：android 全量 **182/182**（183-1，删的是被删函数
+自己的测试）绿 + `assembleDebug` 绿。已重新打包、卸载重装到真机。
 
 ## 〇、2026-08-17（续十二）：备份页/照片页按设计稿截图+dc.html 原文重做（完成）
 

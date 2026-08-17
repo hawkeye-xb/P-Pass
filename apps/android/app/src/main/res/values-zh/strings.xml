@@ -34,22 +34,7 @@
     <!-- MOB-02 §一: 配对成功后的引导按钮（进相册选择页） -->
     <string name="choose_albums">选择相册</string>
     <string name="not_a_code">这不是 P-Pass 配对码。</string>
-    <!-- 配对成功后的 onboarding 三步：系统权限 / 选相册（复用现有
-         BucketScreen）/ 备份条件。 -->
-    <string name="onboard_step_of">第 %1$d / %2$d 步</string>
-    <string name="continue_label">继续</string>
-    <string name="onboard_permission_granted">已授予</string>
-    <string name="onboard_allow">允许</string>
-    <string name="onboard_permissions_title">系统权限</string>
-    <string name="onboard_permissions_sub">读取照片是必需的——没有它 P-Pass 看不到任何东西可以备份。</string>
-    <string name="onboard_perm_photos_title">照片和视频</string>
-    <string name="onboard_perm_photos_body">必需——没有这个权限，P-Pass 看不到任何东西可以备份。</string>
-    <string name="onboard_conditions_title">备份条件</string>
-    <string name="onboard_conditions_sub">这两个开关是 App 内的策略，不是系统权限——之后随时可以在备份页改。</string>
-    <string name="onboard_conditions_no_permission_note">这两项不需要额外的系统权限——它们只决定 App 自己什么时候发起备份。</string>
-    <string name="onboard_enter_app">进入 App</string>
-    <string name="review_onboarding">重新查看引导</string>
-    <!-- 通知权限跳过后的引导卡，跟电池白名单卡同款样式。 -->
+    <!-- 通知权限未授予的引导卡，跟电池白名单卡同款样式。 -->
     <string name="notif_nudge_body">提示：允许通知，这样备份失败时 P-Pass 才能提醒你。</string>
     <string name="notif_nudge_action">去设置</string>
     <!-- 大图页归因文案（网格不标来源，只有大图才显示）。src_device 目前
