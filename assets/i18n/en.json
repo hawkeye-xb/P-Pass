@@ -86,6 +86,8 @@
   "ui.photos_count": "{n} photos · from {m} devices",
   "ui.photos_count_path": "{n} photos · stored as original files in {path}",
   "ui.photos_today": "Today",
+  "ui.photos_yesterday": "Yesterday",
+  "ui.photos_week": "This week",
   "ui.photos_month": "This month",
   "ui.photos_earlier": "Earlier",
   "ui.photos_empty": "No photos yet. They'll appear here after a phone backup.",
