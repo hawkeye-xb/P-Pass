@@ -86,6 +86,8 @@
   "ui.photos_count": "共 {n} 张 · 来自 {m} 台设备",
   "ui.photos_count_path": "{n} 张 · 按原始文件存在 {path}",
   "ui.photos_today": "今天",
+  "ui.photos_yesterday": "昨天",
+  "ui.photos_week": "本周",
   "ui.photos_month": "本月",
   "ui.photos_earlier": "更早",
   "ui.photos_empty": "还没有照片。手机备份完成后会出现在这里。",
