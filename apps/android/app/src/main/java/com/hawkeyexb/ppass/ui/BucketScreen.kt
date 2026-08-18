@@ -1,6 +1,7 @@
-// T6 (H-10b): 相册选择——"选择备份内容"与"发起备份"是两个动作。
-// 列出 MediaStore 相册（名称+张数），勾选要备份的，微信/QQ 等相册
-// 可以不勾（微信自带备份，无需独立备份它收到的图）。
+// M5（全页面状态稿）：选相册——2 列封面卡片网格，右上角圆形勾选角标，
+// 顶部总结句+单个"开始备份"主按钮（取代旧的竖排复选框列表 +
+// "取消/备份N个相册"两按钮）。共用入口：onboarding 配对成功后 与
+// 设置页"备份哪些相册"重选，都是这一个 composable。
 package com.hawkeyexb.ppass.ui
 
 import android.content.ContentResolver
@@ -9,24 +10,25 @@ import android.net.Uri
 import android.os.Build
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -66,14 +68,14 @@ private fun bucketCoverCacheKey(bucketId: Long) = "bucket:$bucketId"
  *  解码路径。 */
 private fun decodeBucketCover(resolver: ContentResolver, uri: Uri): Bitmap? = runCatching {
     if (Build.VERSION.SDK_INT >= 29) {
-        resolver.loadThumbnail(uri, android.util.Size(96, 96), null)
+        resolver.loadThumbnail(uri, android.util.Size(200, 200), null)
     } else {
         null
     }
 }.getOrNull()
 
 @Composable
-private fun BucketCover(bucketId: Long, coverUri: Uri?) {
+private fun BucketCoverImage(bucketId: Long, coverUri: Uri?, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val cacheKey = bucketCoverCacheKey(bucketId)
     val bmp by produceState(
@@ -86,15 +88,80 @@ private fun BucketCover(bucketId: Long, coverUri: Uri?) {
             }?.also { thumbCache.put(cacheKey, it) }
         }
     }
-    Box(
-        Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)).background(PPColor.Linen),
-        contentAlignment = Alignment.Center,
-    ) {
+    Box(modifier.background(PPColor.Linen)) {
         val b = bmp
         if (b != null) {
             Image(
                 bitmap = b.asImageBitmap(), contentDescription = null,
                 modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
+            )
+        }
+    }
+}
+
+/** 右上角勾选角标——设计稿：选中=墨底白勾，未选中=半透明纸底描边圈。 */
+@Composable
+private fun SelectBadge(selected: Boolean, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(22.dp)
+            .clip(CircleShape)
+            .background(if (selected) PPColor.Ink else PPColor.PaperDim)
+            .then(
+                if (selected) Modifier
+                else Modifier.border(1.5.dp, PPColor.BorderStrong, CircleShape)
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (selected) {
+            Text("✓", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = PPColor.Paper)
+        }
+    }
+}
+
+@Composable
+private fun BucketCard(
+    bucket: MediaScanner.Bucket,
+    selected: Boolean,
+    isNew: Boolean,
+    onToggle: () -> Unit,
+) {
+    Column(
+        Modifier
+            .clip(RoundedCornerShape(16.dp))
+            .background(PPColor.Paper)
+            .border(
+                2.dp,
+                if (selected) PPColor.Ink else PPColor.Border,
+                RoundedCornerShape(16.dp),
+            )
+            .clickable(onClick = onToggle),
+    ) {
+        Box {
+            BucketCoverImage(
+                bucket.id, bucket.coverUri,
+                modifier = Modifier.fillMaxWidth().aspectRatio(1.6f),
+            )
+            SelectBadge(selected, Modifier.align(Alignment.TopEnd).padding(8.dp))
+        }
+        Column(Modifier.padding(12.dp, 9.dp, 12.dp, 11.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    bucket.name, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
+                    color = PPColor.Ink, modifier = Modifier.weight(1f, fill = false),
+                )
+                if (isNew) {
+                    Text(
+                        stringResource(R.string.bucket_new),
+                        fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                        color = PPColor.Waiting,
+                        modifier = Modifier.padding(start = 6.dp),
+                    )
+                }
+            }
+            Text(
+                stringResource(R.string.bucket_count, bucket.count),
+                fontSize = 12.5.sp, color = PPColor.Ink40,
             )
         }
     }
@@ -113,103 +180,78 @@ fun BucketScreen(
     // MOB-02 §六: 新出现的相册 = 当前 − 已知；标「新」徽标，默认不勾选
     // （不在 selected 里）——配合用户「专用目录」用法。
     val newIds = newAlbumIds(buckets.map { it.id }.toSet(), knownBuckets)
+    val selectedCount = buckets.filter { it.id in checked }.sumOf { it.count }
 
     PPScreen {
-        Column(
-            Modifier.fillMaxSize().padding(24.dp),
-        ) {
-        Text(
-            stringResource(R.string.bucket_title),
-            fontSize = 28.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            stringResource(R.string.bucket_hint),
-            fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink40,
-        )
-        Spacer(Modifier.height(16.dp))
-
-        Box(Modifier.weight(1f)) {
-            if (buckets.isEmpty()) {
+        Column(Modifier.fillMaxSize().padding(24.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    stringResource(R.string.bucket_empty),
-                    fontSize = 15.sp, color = PPColor.Ink40,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+                    "‹", fontSize = 24.sp, color = PPColor.Ink,
+                    modifier = Modifier.clickable(onClick = onCancel).padding(4.dp, 0.dp, 10.dp, 0.dp),
                 )
-            } else {
-                LazyColumn {
-                    items(buckets, key = { it.id }) { b ->
-                        val on = b.id in checked
-                        Row(
-                            Modifier.fillMaxWidth()
-                                .clickable {
-                                    checked = if (on) checked - b.id else checked + b.id
-                                }
-                                .padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            // UX-10: 勾选框在缩略图左侧——和系统相册选择器的
-                            // 阅读顺序一致（先看到"要不要选"，再看图认相册）。
-                            Checkbox(
-                                checked = on,
-                                onCheckedChange = { c ->
-                                    checked = if (c) checked + b.id else checked - b.id
+                Column {
+                    Text(
+                        stringResource(R.string.bucket_title),
+                        fontSize = 24.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
+                    )
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                stringResource(R.string.bucket_hint),
+                fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink40,
+            )
+            Spacer(Modifier.height(16.dp))
+
+            Box(Modifier.weight(1f)) {
+                if (buckets.isEmpty()) {
+                    Text(
+                        stringResource(R.string.bucket_empty),
+                        fontSize = 15.sp, color = PPColor.Ink40,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+                    )
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(buckets, key = { it.id }) { b ->
+                            BucketCard(
+                                bucket = b,
+                                selected = b.id in checked,
+                                isNew = b.id in newIds,
+                                onToggle = {
+                                    checked = if (b.id in checked) checked - b.id else checked + b.id
                                 },
-                                colors = CheckboxDefaults.colors(
-                                    checkedColor = PPColor.Safe,
-                                    uncheckedColor = PPColor.Ink40,
-                                ),
-                            )
-                            BucketCover(b.id, b.coverUri)
-                            Spacer(Modifier.width(12.dp))
-                            Text(
-                                b.name,
-                                fontSize = 16.sp, color = PPColor.Ink,
-                                modifier = Modifier.weight(1f),
-                            )
-                            // MOB-02 §六: 新相册徽标（琥珀小标，不抢主内容）。
-                            if (b.id in newIds) {
-                                Text(
-                                    stringResource(R.string.bucket_new),
-                                    fontSize = 11.sp, fontWeight = FontWeight.Bold,
-                                    color = PPColor.Waiting,
-                                    modifier = Modifier.padding(start = 6.dp),
-                                )
-                            }
-                            Text(
-                                stringResource(R.string.bucket_count, b.count),
-                                fontSize = 14.sp, color = PPColor.Ink40,
                             )
                         }
                     }
                 }
             }
-        }
 
-        // UX-10: 「全选/清空」删除——选相册是要逐个决策的事，不该有一键
-        // 清空的意外风险；真想全选，相册数量有限，自己点几下也不麻烦。
-        // 取消 1/4 + 备份 3/4——备份是本页的主动作，取消只是退路，
-        // 宽度该有落差，不是平分。
-        Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(
-                onClick = onCancel,
-                modifier = Modifier.weight(1f).height(58.dp),
-                shape = RoundedCornerShape(PPSize.RadiusControl),
-            ) { Text(stringResource(R.string.cancel), fontSize = 15.sp, color = PPColor.Ink) }
-            OutlinedButton(
+            Spacer(Modifier.height(14.dp))
+            Text(
+                stringResource(R.string.bucket_summary, groupThousands(selectedCount.toLong())),
+                fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+            Button(
                 onClick = { onDone(checked) },
-                modifier = Modifier.weight(3f).height(58.dp),
+                modifier = Modifier.fillMaxWidth().height(60.dp),
                 shape = RoundedCornerShape(PPSize.RadiusControl),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PPColor.Ink, contentColor = PPColor.Paper
+                ),
             ) {
                 Text(
-                    stringResource(R.string.bucket_done, checked.size),
-                    fontSize = 17.sp, color = PPColor.Safe, fontWeight = FontWeight.Bold,
+                    stringResource(R.string.bucket_start),
+                    fontSize = 18.sp, fontWeight = FontWeight.Bold,
                 )
             }
-        }
-        Spacer(Modifier.height(6.dp))
         }
     }
 }

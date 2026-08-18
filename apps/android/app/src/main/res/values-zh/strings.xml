@@ -10,15 +10,19 @@
     <string name="welcome_step2">2 · 用下面的按钮扫电脑屏幕上的二维码</string>
     <string name="welcome_step3">3 · 之后什么都不用做</string>
 
-    <string name="scan_title">对准电脑屏幕上的二维码</string>
-    <string name="scan_hint">拿稳就行，会自动识别。</string>
-    <!-- H-10b: 手动输入配对码（扫不出时的退路） -->
-    <string name="scan_manual">手动输入</string>
-    <string name="scan_manual_hint">粘贴电脑上的配对码</string>
+    <!-- M2 全页面状态稿：暗底顶部窄标题栏，X 关闭代替「取消」按钮。 -->
+    <string name="scan_header_title">扫码连接</string>
+    <string name="scan_hint">对准家里电脑屏幕上的\nP-Pass 配对二维码</string>
+    <string name="scan_manual_link">无法扫码？手动输入配对串</string>
+
+    <!-- M3 全页面状态稿：独立子页，不是内联展开。 -->
+    <string name="scan_manual_title">输入配对串</string>
+    <string name="scan_manual_body">在电脑的「添加设备」里点「无法扫码？复制配对串」，把它发到这台手机上，粘贴到下面。</string>
+    <string name="scan_manual_placeholder">PP-XXXX-XXXX-XXXX-XXXX</string>
     <string name="scan_manual_paste">粘贴</string>
-    <string name="scan_manual_submit">配对</string>
+    <string name="scan_manual_note">配对串和二维码一样，10 分钟内有效。</string>
+    <string name="scan_manual_submit">连接</string>
     <string name="scan_manual_invalid">这不是 P-Pass 配对码</string>
-    <string name="scan_manual_back">返回扫码</string>
     <string name="cancel">取消</string>
 
     <string name="pair_waiting_title">正在请求加入</string>
@@ -100,8 +104,10 @@
     <string name="bucket_hint">没勾选的相册不会备份（比如微信收到的图片，微信自己有备份）。</string>
     <string name="bucket_empty">手机上没有找到照片或视频。</string>
     <string name="bucket_loading">正在读取相册…</string>
-    <string name="bucket_count">%1$d 个</string>
-    <string name="bucket_done">备份这 %1$d 个相册</string>
+    <string name="bucket_count">%1$d 张</string>
+    <!-- M5 全页面状态稿：总结句 + 单个主按钮，取代"取消/备份N个相册"两按钮。 -->
+    <string name="bucket_summary">将备份 %1$s 张 · 默认插电 + Wi-Fi 时自动进行，可在「设置」里更改</string>
+    <string name="bucket_start">开始备份</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">新</string>
     <!-- 2026-08-17 设计稿对齐：这行原文是"备份范围"，改成设计稿原文

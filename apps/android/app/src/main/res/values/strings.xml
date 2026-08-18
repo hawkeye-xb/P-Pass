@@ -11,16 +11,18 @@
     <string name="welcome_step2">2 · Use the button below to scan the code on its screen</string>
     <string name="welcome_step3">3 · Then there is nothing left to do</string>
 
-    <!-- Scan -->
-    <string name="scan_title">Point at the computer screen.</string>
-    <string name="scan_hint">Hold steady — it reads by itself.</string>
-    <!-- H-10b: manual pairing entry (QR too dense / camera trouble) -->
-    <string name="scan_manual">Type it instead</string>
-    <string name="scan_manual_hint">Paste the pairing code from the computer</string>
+    <!-- Scan (M2/M3, full-page-states doc) -->
+    <string name="scan_header_title">Scan to connect</string>
+    <string name="scan_hint">Point at the P-Pass pairing QR\non your home computer\'s screen</string>
+    <string name="scan_manual_link">Can\'t scan? Enter the pairing string instead</string>
+
+    <string name="scan_manual_title">Enter pairing string</string>
+    <string name="scan_manual_body">On the computer\'s "Add device" screen, tap "Can\'t scan? Copy pairing string", send it to this phone, and paste it below.</string>
+    <string name="scan_manual_placeholder">PP-XXXX-XXXX-XXXX-XXXX</string>
     <string name="scan_manual_paste">Paste</string>
-    <string name="scan_manual_submit">Pair</string>
+    <string name="scan_manual_note">The pairing string is valid for 10 minutes, same as the QR code.</string>
+    <string name="scan_manual_submit">Connect</string>
     <string name="scan_manual_invalid">That doesn\'t look like a P-Pass pairing code</string>
-    <string name="scan_manual_back">Back to camera</string>
     <string name="cancel">Cancel</string>
 
     <!-- Pairing -->
@@ -104,8 +106,10 @@
     <string name="bucket_hint">Albums you leave out are never backed up (e.g. photos WeChat received).</string>
     <string name="bucket_empty">No photos or videos found on this phone.</string>
     <string name="bucket_loading">Reading albums…</string>
-    <string name="bucket_count">%1$d items</string>
-    <string name="bucket_done">Back up %1$d albums</string>
+    <string name="bucket_count">%1$d</string>
+    <!-- M5 (full-page-states doc): summary sentence + single primary button. -->
+    <string name="bucket_summary">%1$s photos will back up · runs automatically on power + Wi-Fi by default, change anytime in Settings</string>
+    <string name="bucket_start">Start backup</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">New</string>
     <string name="backup_scope">Albums to back up</string>
