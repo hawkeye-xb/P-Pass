@@ -28,7 +28,6 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -47,7 +46,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
@@ -442,8 +440,8 @@ private fun ThumbCell(loader: TimelineLoader, asset: AssetMeta, onOpen: () -> Un
     }
 }
 
-/** RET-01/MOB-06: 查看页可用动作——保存到相册 / 用其他应用打开 / 分享。 */
-private enum class ViewerOp { Save, OpenWith, Share }
+/** RET-01/MOB-06: 查看页可用动作——设计稿收敛为两个：保存 / 分享。 */
+private enum class ViewerOp { Save, Share }
 
 /**
  * 大图页归因文案（2026-08-17 用户拍板）：网格不标来源，只有大图才显示
@@ -505,9 +503,6 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
                         file.delete() // 保存走 MediaStore，临时文件即用即清
                         notice = context.getString(R.string.saved_to_gallery)
                     }
-                    ViewerOp.OpenWith -> {
-                        openLauncher.launch(openWithAppIntent(context, file, asset))
-                    }
                     ViewerOp.Share -> {
                         // MOB-06: ACTION_SEND 系统分享面板（微信/邮件/云盘…）
                         openLauncher.launch(
@@ -535,21 +530,11 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
                 stringResource(R.string.back), fontSize = 17.sp, color = PPColor.Paper,
                 modifier = Modifier.clickable(onClick = onClose).padding(10.dp),
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "${asset.width}×${asset.height}", fontSize = 14.sp,
-                    color = PPColor.PaperDim, modifier = Modifier.padding(10.dp),
-                )
-                // MOB-06: 右上角分享——ACTION_SEND 系统分享面板（微信/邮件/云盘…）。
-                Icon(
-                    painter = painterResource(R.drawable.ic_share),
-                    contentDescription = stringResource(R.string.share),
-                    tint = PPColor.Paper,
-                    modifier = Modifier
-                        .clickable(enabled = !busy, onClick = { runAssetAction(ViewerOp.Share) })
-                        .padding(10.dp),
-                )
-            }
+            // 设计稿 M9：头部只有尺寸信息，分享挪到底部按钮。
+            Text(
+                "${asset.width}×${asset.height}", fontSize = 14.sp,
+                color = PPColor.PaperDim, modifier = Modifier.padding(10.dp),
+            )
         }
         // 归因信息按需出现——网格不标来源，只有大图才显示。
         Text(
@@ -588,9 +573,9 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
                 modifier = Modifier.weight(1f),
             )
             ViewerAction(
-                label = stringResource(R.string.open_with_app),
+                label = stringResource(R.string.share),
                 enabled = !busy,
-                onClick = { runAssetAction(ViewerOp.OpenWith) },
+                onClick = { runAssetAction(ViewerOp.Share) },
                 modifier = Modifier.weight(1f),
             )
         }

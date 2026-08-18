@@ -735,7 +735,7 @@ private fun lastSuccessText(ts: Long): String =
     }
 
 /** 千分位分组（设计稿"1,180 / 1,234"）——用户当前 locale 的分组符号。 */
-private fun groupThousands(n: Long): String =
+internal fun groupThousands(n: Long): String =
     java.text.NumberFormat.getIntegerInstance().format(n)
 
 /** 进行中的确定进度（0..1）；扫描/无总数时 null = 不画进度条。 */

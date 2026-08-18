@@ -5,18 +5,23 @@ package com.hawkeyexb.ppass.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -39,6 +44,9 @@ fun TwoTabs(
     photos: @Composable () -> Unit,
     backup: @Composable () -> Unit,
     showTabBar: Boolean = true,
+    // M13 哨兵态：长期失联时设置图标角标一个红点（不是文字变色/变红——
+    // 那个方案照的是过时设计稿快照，已在 798b7ae 里被官方最新稿否掉）。
+    settingsAlert: Boolean = false,
 ) {
     PPScreen {
         Column(Modifier.fillMaxSize()) {
@@ -48,8 +56,15 @@ fun TwoTabs(
             if (showTabBar) {
                 HorizontalDivider(color = PPColor.Border)
                 Row(Modifier.fillMaxWidth().height(64.dp).background(PPColor.Paper)) {
-                    TabCell(stringResource(R.string.tab_photos), tab == 0, Modifier.weight(1f)) { onTab(0) }
-                    TabCell(stringResource(R.string.tab_settings), tab == 1, Modifier.weight(1f)) { onTab(1) }
+                    TabCell(
+                        stringResource(R.string.tab_photos), tab == 0, Modifier.weight(1f),
+                        icon = { tint -> PhotosTabIcon(tint) },
+                    ) { onTab(0) }
+                    TabCell(
+                        stringResource(R.string.tab_settings), tab == 1, Modifier.weight(1f),
+                        icon = { tint -> SettingsTabIcon(tint) },
+                        alert = settingsAlert,
+                    ) { onTab(1) }
                 }
             }
         }
@@ -61,19 +76,39 @@ private fun TabCell(
     label: String,
     selected: Boolean,
     modifier: Modifier,
+    icon: @Composable (Color) -> Unit,
+    alert: Boolean = false,
     onClick: () -> Unit,
 ) {
+    val tint = if (selected) PPColor.Ink else PPColor.Ink40
     Column(modifier.fillMaxHeight().clickable(onClick = onClick)) {
         Box(
             Modifier.fillMaxWidth().height(2.dp)
                 .background(if (selected) PPColor.Ink else Color.Transparent)
         )
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Box {
+                icon(tint)
+                if (alert) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(PPColor.Act),
+                    )
+                }
+            }
+            Spacer(Modifier.height(3.dp))
             Text(
                 label,
-                fontSize = 15.sp,
+                fontSize = 11.5.sp,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                color = if (selected) PPColor.Ink else PPColor.Ink40,
+                color = tint,
             )
         }
     }

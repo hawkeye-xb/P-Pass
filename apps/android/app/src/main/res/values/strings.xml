@@ -36,6 +36,10 @@
     <string name="done">Done</string>
     <!-- MOB-02 §一: 配对成功后的引导按钮（进相册选择页） -->
     <string name="choose_albums">Choose albums</string>
+    <!-- M6 completion screen (full-page-states doc): shown right after the first backup is triggered. -->
+    <string name="backup_started_title">%1$s photos, on their way home.</string>
+    <string name="backup_started_body">Nothing else to do. Open the app anytime to see your photos are safe.</string>
+    <string name="backup_started_enter">Enter app</string>
     <string name="not_a_code">This is not a P-Pass pairing code.</string>
     <!-- Nudge card for the notification permission when not granted, same style as the battery whitelist card. -->
     <string name="notif_nudge_body">Tip: allow notifications so P-Pass can tell you if a backup fails.</string>
