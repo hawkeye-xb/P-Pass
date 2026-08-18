@@ -172,6 +172,71 @@ class TriggerPolicyTest {
             src.contains("MediaStore.Images.Media.EXTERNAL_CONTENT_URI") &&
                 src.contains("MediaStore.Video.Media.EXTERNAL_CONTENT_URI"),
         )
+        // MOB-08 回归锁：forDescendants 必须为 true。MediaProvider 的
+        // notifyChange 发的是带行 id 的 item URI，精确匹配（false）永远
+        // 收不到——这正是「content trigger 从未触发」的根因，改回 false
+        // 本测试必红。
+        assertTrue(
+            "content trigger 必须 forDescendants=true（否则收不到 item URI 通知）",
+            src.contains("addContentUriTrigger(it, true)"),
+        )
+        assertTrue(
+            "不允许退回 forDescendants=false",
+            !src.contains("addContentUriTrigger(it, false)"),
+        )
+    }
+
+    // ── MOB-08：content trigger 跑完必须重挂 ──
+
+    @Test
+    fun content_trigger_rearms_after_every_run() {
+        // 根因回归锁：content trigger 是 OneTimeWork，触发跑完监听就没了。
+        // 只在 App 启动/改设置时挂 = 后台自动同步只在开过 App 那一次有效。
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        val src = File(
+            dir,
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
+        ).readText()
+        assertTrue(
+            "每轮备份结束必须排一次重挂",
+            src.contains("enqueueContentTriggerRearm(ctx)"),
+        )
+        assertTrue(
+            "重挂中转必须用独立 unique name（同名 REPLACE 会取消正在跑的自己）",
+            CONTENT_REARM_WORK_NAME != CONTENT_TRIGGER_WORK_NAME &&
+                CONTENT_REARM_WORK_NAME != BACKUP_WORK_NAME &&
+                CONTENT_REARM_WORK_NAME != CATCHUP_WORK_NAME,
+        )
+        assertTrue(
+            "重挂前必须确认上一轮已终态（否则 REPLACE 掉正在传照片的 worker）",
+            src.contains("getWorkInfosForUniqueWork(CONTENT_TRIGGER_WORK_NAME)") &&
+                src.contains("all { it.state.isFinished }"),
+        )
+        assertTrue(
+            "取消路径上的收尾必须 NonCancellable（否则 client.close() 跑不到）",
+            src.contains("withContext(NonCancellable)"),
+        )
+    }
+
+    @Test
+    fun pause_cancels_rearm_channel_too() {
+        // UX-06 回归：暂停后如果 rearm 还在路上，监听会被悄悄装回去。
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        val src = File(
+            dir,
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
+        ).readText()
+        val pauseBody = src.substringAfter("fun pauseAutoBackup(").substringBefore("fun resumeAutoBackup(")
+        assertTrue(
+            "暂停必须取消重挂中转",
+            pauseBody.contains("cancelUniqueWork(CONTENT_REARM_WORK_NAME)"),
+        )
     }
 
     @Test

@@ -20,6 +20,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import androidx.work.BackoffPolicy
@@ -33,6 +34,7 @@ import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.WorkInfo
 import androidx.work.WorkerParameters
 import com.hawkeyexb.ppass.MainActivity
 import com.hawkeyexb.ppass.R
@@ -44,11 +46,18 @@ import com.hawkeyexb.ppass.transport.PeerAddrParts
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import java.io.File
 import java.util.concurrent.TimeUnit
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 const val BACKUP_WORK_NAME = "ppass-auto-backup"
 // MOB-02: 三个 unique work 通道（互不覆盖，各管一个触发族）。
 const val CONTENT_TRIGGER_WORK_NAME = "ppass-content-trigger"
 const val CATCHUP_WORK_NAME = "ppass-catchup-backup"
+// MOB-08: content trigger 重挂中转通道——见 ContentTriggerRearmWorker。
+const val CONTENT_REARM_WORK_NAME = "ppass-content-trigger-rearm"
 private const val CHANNEL_ID = "ppass.backup"
 private const val NOTIFICATION_ID = 2026
 // UX-02: 失败通知（成功保持沉默——产品档案 §二.6）。
@@ -116,7 +125,13 @@ fun buildContentTriggerRequest(
             if (spec.requiresUnmetered) NetworkType.UNMETERED else NetworkType.CONNECTED
         )
         .setRequiresCharging(spec.requiresCharging)
-        .apply { triggerUris.forEach { addContentUriTrigger(it, false) } }
+        // MOB-08: forDescendants 必须为 true。MediaProvider 在 insert 后
+        // notifyChange 发的是带行 id 的 item URI（.../images/media/1000000299），
+        // 不是集合 URI——精确匹配（false）永远收不到通知，content trigger
+        // 从此不触发。AOSP 官方 MediaContentJob 示例用的正是
+        // FLAG_NOTIFY_FOR_DESCENDANTS；真机 dumpsys 里系统自家的 MediaStore
+        // 观察者也全是 0x1（descendants），只有我们是 0x0。
+        .apply { triggerUris.forEach { addContentUriTrigger(it, true) } }
         .setTriggerContentUpdateDelay(CONTENT_UPDATE_DELAY_MS, TimeUnit.MILLISECONDS)
         .setTriggerContentMaxDelay(CONTENT_MAX_DELAY_MS, TimeUnit.MILLISECONDS)
         .build()
@@ -132,6 +147,60 @@ fun scheduleContentTriggerBackup(context: Context) {
         CONTENT_TRIGGER_WORK_NAME,
         CONTENT_TRIGGER_POLICY,
         buildContentTriggerRequest(settings),
+    )
+}
+
+// MOB-08: 重挂中转的延迟与等待参数。延迟让本轮 BackupWorker 先落终态；
+// 等待轮询是防御——超长批次（首次全量备份）可能还没跑完。
+const val REARM_INITIAL_DELAY_SECONDS = 15L
+const val REARM_WAIT_TICKS = 30
+const val REARM_WAIT_TICK_MS = 2_000L
+
+/** MOB-08: content trigger 是 OneTimeWork——被 MediaStore 变化触发、跑完
+ *  一轮之后监听就没了。旧实现只在 App 启动（scheduleAutoBackup）和改设置
+ *  （rescheduleAutoBackup）时挂，于是「后台自动同步」实际只在开过 App 的
+ *  那一次有效，第二张照片再也不会触发——用户看到的就是「不主动同步」。
+ *
+ *  为什么要中转一层而不是在 doWork 里直接重挂：CONTENT_TRIGGER_WORK_NAME
+ *  是 unique work + REPLACE，在自己的 doWork 里 REPLACE 同名 work 会取消
+ *  正在跑的自己，亲手制造 JobCancellationException（正是本卡现象 2 的形状）。
+ *  所以交给一个独立 name 的无约束 work：等上一轮落终态后再 REPLACE。 */
+class ContentTriggerRearmWorker(
+    context: Context,
+    params: WorkerParameters,
+) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        val ctx = applicationContext
+        // UX-06: 暂停态下不重挂（否则「暂停自动备份」被 rearm 悄悄复活）。
+        if (AutoBackupPrefs(ctx.filesDir).paused()) return@withContext Result.success()
+        // 未配对时无事可做（与 doWork 同口径）。
+        if (PairingStore(ctx.filesDir).load() == null) return@withContext Result.success()
+        val wm = WorkManager.getInstance(ctx)
+        repeat(REARM_WAIT_TICKS) {
+            // 空列表也算「已终态」——没有活跃 work，直接挂新的。
+            if (wm.getWorkInfosForUniqueWork(CONTENT_TRIGGER_WORK_NAME).get()
+                    .all { it.state.isFinished }
+            ) {
+                scheduleContentTriggerBackup(ctx)
+                return@withContext Result.success()
+            }
+            delay(REARM_WAIT_TICK_MS)
+        }
+        // 上一轮还在跑（超长批次）——它跑完自己也会排一次 rearm，这里放手，
+        // 不强行 REPLACE 掉一个正在传照片的 worker。
+        Result.success()
+    }
+}
+
+/** MOB-08: 每轮备份结束后排一次重挂（unique + REPLACE：一轮里多次调用
+ *  只留最后一个）。无约束，不占用 charging/unmetered 条件。 */
+fun enqueueContentTriggerRearm(context: Context) {
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        CONTENT_REARM_WORK_NAME,
+        ExistingWorkPolicy.REPLACE,
+        OneTimeWorkRequestBuilder<ContentTriggerRearmWorker>()
+            .setInitialDelay(REARM_INITIAL_DELAY_SECONDS, TimeUnit.SECONDS)
+            .build(),
     )
 }
 
@@ -173,6 +242,9 @@ private fun enqueueAutoBackup(context: Context, policy: ExistingPeriodicWorkPoli
 fun pauseAutoBackup(context: Context) {
     WorkManager.getInstance(context).cancelUniqueWork(BACKUP_WORK_NAME)
     WorkManager.getInstance(context).cancelUniqueWork(CONTENT_TRIGGER_WORK_NAME)
+    // MOB-08: 重挂中转也要取消——否则暂停后还有一个 rearm 在路上把监听
+    // 装回去（rearm 内部另有暂停态判断，这里是第二道闸）。
+    WorkManager.getInstance(context).cancelUniqueWork(CONTENT_REARM_WORK_NAME)
     AutoBackupPrefs(context.filesDir).setPaused(true)
 }
 
@@ -188,12 +260,12 @@ class BackupWorker(
 
     override suspend fun doWork(): Result {
         val ctx = applicationContext
+        // MOB-08: 被系统取消时要能区分「几秒内就被打断」（FGS 提升被拒/
+        // 约束抖动）和「跑满执行时限」（10min JobScheduler 上限）——两者
+        // 的修法完全不同，光看异常类型分不出来。
+        val startedAt = SystemClock.elapsedRealtime()
         val pairing = PairingStore(ctx.filesDir).load()
             ?: return Result.success() // not paired yet — nothing to do
-
-        // FGS promotion: the OS lets a dataSync foreground job finish
-        // its segment even if the user leaves.
-        setForeground(foregroundInfo())
 
         // DOG-01c: 自动备份也走同一确认缓存（M 口径一致，不能只靠手动备份）。
         val confirmedStore = ConfirmedStore(
@@ -213,6 +285,12 @@ class BackupWorker(
         // DOG-02b: 契机式白名单提醒——同套路独立 store，不耦合。
         val nudge = WhitelistNudgeStore(ctx.filesDir)
         return try {
+            // FGS promotion: the OS lets a dataSync foreground job finish
+            // its segment even if the user leaves.
+            // MOB-08: 必须在 try 内——WorkManager 自查约束不满足时会在
+            // 提升的同一瞬间 stopWork，setForeground 直接抛取消异常；放在
+            // try 外面等于这条最常见的失败路径连日志都没有。
+            setForeground(foregroundInfo())
             client.bind(IdentityStore(ctx.filesDir).secretKey())
             val daemon = parsePeerAddrToken(pairing.daemonAddrToken)
 
@@ -277,6 +355,20 @@ class BackupWorker(
             attempts.reset() // 成功——连续失败清零
             nudge.recordSuccess() // DOG-02b: 成功一轮状态清零
             Result.success()
+        } catch (t: CancellationException) {
+            // MOB-08: 系统 stop（配额耗尽/约束丢失/FGS 被收回/执行超时）
+            // 不是业务失败——旧实现把它吞进下面的 Throwable 分支，记成一次
+            // 失败尝试 + 走短退避重试，既污染连续失败计数又可能误发失败
+            // 通知。正确做法是原样抛出让协程正常终结，重排交给 WorkManager
+            // 按 stopReason 决定。
+            android.util.Log.w(
+                "PPassBackup",
+                "auto backup cancelled by system after " +
+                    "${SystemClock.elapsedRealtime() - startedAt}ms, " +
+                    "stopReason=${stopReasonText()}",
+                t,
+            )
+            throw t
         } catch (t: Throwable) {
             android.util.Log.w("PPassBackup", "auto backup failed, will retry", t)
             // MOB-02 §五：本轮最多短退避重试 2 次（扛网络瞬断），之后
@@ -298,13 +390,52 @@ class BackupWorker(
                 Result.failure()
             }
         } finally {
-            client.close()
-            // SENT-01: 搭便车检查——每次后台任务结束（成败都算）看
-            // 一次哨兵判定；该发则发（内部去重，发过 markNotified）。
-            maybeNotifySentinel(ctx)
-            // DOG-02b: 契机式白名单提醒（同 finally 时机，各自判定）。
-            maybeNudgeWhitelist(ctx)
+            // MOB-08: client.close() 是 suspend——协程已被取消时直接抛
+            // CancellationException，清理根本跑不到（连接泄漏）。
+            // NonCancellable 保证取消路径上的收尾照样执行。
+            withContext(NonCancellable) {
+                client.close()
+                // MOB-08: content trigger 跑完就失效了，每轮结束重挂一次
+                // （周期/catchup 通道跑完也顺手挂——幂等，KEEP 语义在
+                // rearm 内部靠终态判断保证）。
+                enqueueContentTriggerRearm(ctx)
+                // SENT-01: 搭便车检查——每次后台任务结束（成败都算）看
+                // 一次哨兵判定；该发则发（内部去重，发过 markNotified）。
+                maybeNotifySentinel(ctx)
+                // DOG-02b: 契机式白名单提醒（同 finally 时机，各自判定）。
+                maybeNudgeWhitelist(ctx)
+            }
         }
+    }
+
+    /** MOB-08: stopReason 数值转可读——排障时要一眼看出是配额、约束
+     *  丢失还是执行超时。API<31 拿不到真实值（返回 UNKNOWN）。 */
+    private fun stopReasonText(): String {
+        // getStopReason 是 API 31+ 才有的读数（minSdk 26，低版本直接调用会崩）。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return "N/A(API<31)"
+        return stopReasonTextApi31()
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.S)
+    private fun stopReasonTextApi31(): String = when (val r = stopReason) {
+        WorkInfo.STOP_REASON_NOT_STOPPED -> "NOT_STOPPED($r)"
+        WorkInfo.STOP_REASON_UNKNOWN -> "UNKNOWN($r)"
+        WorkInfo.STOP_REASON_CANCELLED_BY_APP -> "CANCELLED_BY_APP($r)"
+        WorkInfo.STOP_REASON_PREEMPT -> "PREEMPT($r)"
+        WorkInfo.STOP_REASON_TIMEOUT -> "TIMEOUT($r)"
+        WorkInfo.STOP_REASON_DEVICE_STATE -> "DEVICE_STATE($r)"
+        WorkInfo.STOP_REASON_CONSTRAINT_BATTERY_NOT_LOW -> "CONSTRAINT_BATTERY_NOT_LOW($r)"
+        WorkInfo.STOP_REASON_CONSTRAINT_CHARGING -> "CONSTRAINT_CHARGING($r)"
+        WorkInfo.STOP_REASON_CONSTRAINT_CONNECTIVITY -> "CONSTRAINT_CONNECTIVITY($r)"
+        WorkInfo.STOP_REASON_CONSTRAINT_DEVICE_IDLE -> "CONSTRAINT_DEVICE_IDLE($r)"
+        WorkInfo.STOP_REASON_CONSTRAINT_STORAGE_NOT_LOW -> "CONSTRAINT_STORAGE_NOT_LOW($r)"
+        WorkInfo.STOP_REASON_QUOTA -> "QUOTA($r)"
+        WorkInfo.STOP_REASON_BACKGROUND_RESTRICTION -> "BACKGROUND_RESTRICTION($r)"
+        WorkInfo.STOP_REASON_APP_STANDBY -> "APP_STANDBY($r)"
+        WorkInfo.STOP_REASON_USER -> "USER($r)"
+        WorkInfo.STOP_REASON_SYSTEM_PROCESSING -> "SYSTEM_PROCESSING($r)"
+        WorkInfo.STOP_REASON_ESTIMATED_APP_LAUNCH_TIME_CHANGED -> "APP_LAUNCH_TIME_CHANGED($r)"
+        else -> "OTHER($r)"
     }
 
     /** DOG-02b: 白名单提醒判定 + 发送（UX-02 通道；去重 ≥72h）。
