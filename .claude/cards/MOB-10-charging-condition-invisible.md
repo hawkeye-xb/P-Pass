@@ -30,6 +30,34 @@ androidx.work.impl.WorkerStoppedException
 排查本身就被这个前提骗过一次（卡里写着"排查时手机确实在插电，理论上
 应该能跑"）——连排查的人都会误判，用户更没机会想明白。
 
+## ⚠️ 追加证据（2026-08-18 当天晚些时候）：这不是边缘情况，是这台机的常态
+
+用户换成**真墙充**之后，实测：
+
+```
+15:43:44  status:2 (CHARGING)      ac:true   level:79    ← 插上，开始充
+15:43:54  status:2                 current_avg:623       ← 充电中
+15:44:24  status:4 (NOT_CHARGING)  level:80              ← 充了 40 秒就停
+15:47:56  status:4                 ac:true               ← 之后一直未充电
+adb shell settings get global protect_battery → 2        ← 三星「保护电池」开着
+```
+
+即：**三星「保护电池」把充电限制在上限（这台机表现为 80%），到达上限
+后系统状态就是 NOT_CHARGING**。所以只要用户电量在上限附近——这正是
+一台天天插着充的手机的常态——「仅充电时备份」就等于「永不备份」，
+插不插电、插墙充还是数据线，都一样。
+
+这把本卡从"UX 可见性问题"提升为**默认策略在真实设备上失效**：
+`chargeOnly = true` 是产品默认值（`BackupSettings.kt`），而开着保护
+电池的三星机（以及任何有充电上限功能的设备：小米、OPPO、部分
+Pixel/iOS 同类功能）在满电时永远不满足这个约束。MOB-08 的三个根因
+修完之后，这一条会成为「后台自动同步仍然不工作」的下一个原因。
+
+因此选项 2（放宽约束）不再是"可选项"，需要用户优先拍板。备选思路：
+`requiresCharging` 改为「插着电源即可」而不是「正在充电」——
+`BatteryManager.EXTRA_PLUGGED != 0` 能区分这两者，WorkManager 的
+`setRequiresCharging` 做不到，需要自己在 doWork 里判定或换约束组合。
+
 ## 目标
 
 让「当前不满足自动备份条件」这件事对用户可见，用户能据此行动。不改变
