@@ -125,7 +125,6 @@
     <string name="setting_charge_only">Back up only while charging</string>
     <string name="setting_wifi_only">Back up only on Wi-Fi</string>
     <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
-    <string name="req_charge_off_consequence">Will try to back up whenever new photos arrive — system-level watch, no extra battery drain</string>
     <string name="wifi_off_confirm_title">Turn off the Wi-Fi requirement?</string>
     <string name="wifi_off_confirm_body">Backup will also run on mobile data — it may use your data allowance.</string>
     <string name="wifi_off_confirm_ok">Turn off anyway</string>

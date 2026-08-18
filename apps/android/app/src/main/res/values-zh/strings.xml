@@ -125,7 +125,6 @@
     <string name="setting_charge_only">仅充电时备份</string>
     <string name="setting_wifi_only">仅 Wi-Fi 时备份</string>
     <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
-    <string name="req_charge_off_consequence">有新照片就会尝试备份（系统级监听，不额外耗电）</string>
     <string name="wifi_off_confirm_title">关闭「需要 Wi-Fi」？</string>
     <string name="wifi_off_confirm_body">移动网络也会备份，可能消耗流量</string>
     <string name="wifi_off_confirm_ok">仍然关闭</string>
