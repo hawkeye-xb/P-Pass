@@ -33,11 +33,6 @@
     <string name="pair_failed_title">Could not reach the computer.</string>
     <string name="pair_failed_body">Make sure the computer is on and both devices have internet, then scan again.</string>
     <string name="scan_again">Scan again</string>
-    <string name="joined_title">This phone has joined.</string>
-    <string name="joined_body">Connected to %1$s.\nNext, choose which albums to back up.</string>
-    <string name="done">Done</string>
-    <!-- MOB-02 §一: 配对成功后的引导按钮（进相册选择页） -->
-    <string name="choose_albums">Choose albums</string>
     <!-- M6 completion screen (full-page-states doc): shown right after the first backup is triggered. -->
     <string name="backup_started_title">%1$s photos, on their way home.</string>
     <string name="backup_started_body">Nothing else to do. Open the app anytime to see your photos are safe.</string>
@@ -82,7 +77,11 @@
     <!-- DOG-02b: 契机式白名单提醒——该跑没跑成才提醒。 -->
     <string name="notif_whitelist_title">Last night\'s backup didn\'t run</string>
     <string name="notif_whitelist_body">The system may be limiting background work. Allow P-Pass to run unrestricted — open to fix.</string>
-    <string name="no_cloud">Photos go straight to your own computer. Nothing is uploaded to a cloud.</string>
+    <!-- M11 storage detail info card (full-page-states doc): status dot +
+         device name + these two lines, not a generic "nothing uploaded" disclaimer. -->
+    <string name="storage_detail_connected">Connected · %1$s</string>
+    <string name="storage_detail_paired">Paired %1$s · storing %2$s photos from this phone</string>
+    <string name="storage_detail_lost">Pairing is no longer valid</string>
     <!-- DOG-01: 恒真三元组（T-080 layout v1: hero card M / N home） -->
     <string name="dog_triplet_line">%1$d photos · %2$d backed up · %3$d to go</string>
     <string name="hero_of_n">/ %1$s photos home</string>
@@ -95,10 +94,13 @@
     <string name="last_mins_ago">%1$d min ago</string>
     <string name="last_hours_ago">%1$d h ago</string>
     <!-- T-080 layout v1: backup rules card -->
-    <string name="rules_title">Backup rules</string>
+    <!-- M10 (full-page-states doc) exact copy — section label is just "Backup". -->
+    <string name="rules_title">Backup</string>
+    <string name="other_section_title">Other</string>
     <string name="more_section_title">More</string>
-    <string name="rule_notify">Notifications</string>
-    <string name="rule_notify_value">Only on failure</string>
+    <!-- M10 (full-page-states doc) exact copy — a real toggle row
+         (NotifyOnFailurePrefs), no longer a nav row to system settings. -->
+    <string name="rule_notify">Notify me on backup failure</string>
     <!-- T1: 版本号显示 -->
     <string name="setting_version">Version</string>
     <!-- T6: 相册选择 -->
@@ -115,26 +117,18 @@
     <string name="backup_scope">Albums to back up</string>
     <string name="backup_scope_all">All albums</string>
     <string name="backup_scope_n">%1$d albums</string>
-    <string name="backup_timing_title">When to back up</string>
-    <string name="timing_summary_both">Charging + Wi-Fi</string>
-    <string name="timing_summary_charge_only">While charging</string>
-    <string name="timing_summary_wifi_only">On Wi-Fi</string>
-    <string name="timing_summary_none">Any time</string>
     <string name="storage_computer">Storage computer</string>
     <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
     <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
-    <string name="setting_charge_only">Require charging</string>
-    <string name="setting_wifi_only">Require Wi-Fi</string>
+    <!-- M10 (full-page-states doc) exact copy — "back up only when...", not "require...". -->
+    <string name="setting_charge_only">Back up only while charging</string>
+    <string name="setting_wifi_only">Back up only on Wi-Fi</string>
     <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
     <string name="req_charge_off_consequence">Will try to back up whenever new photos arrive — system-level watch, no extra battery drain</string>
     <string name="wifi_off_confirm_title">Turn off the Wi-Fi requirement?</string>
     <string name="wifi_off_confirm_body">Backup will also run on mobile data — it may use your data allowance.</string>
     <string name="wifi_off_confirm_ok">Turn off anyway</string>
-    <string name="policy_both">Now: backs up automatically when charging and on Wi-Fi</string>
-    <string name="policy_charge_only">Now: backs up automatically when charging (mobile data allowed)</string>
-    <string name="policy_wifi_only">Now: backs up automatically on Wi-Fi (no charging needed)</string>
-    <string name="policy_none">Now: backs up automatically any time</string>
     <!-- MOB-02 §四事件①: 排队提示 -->
     <string name="wifi_deferred_hint">Will run once Wi-Fi is available</string>
     <!-- MOB-02 §二: 部分授权引导 -->

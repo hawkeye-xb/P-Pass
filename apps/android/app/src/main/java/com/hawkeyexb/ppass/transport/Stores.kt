@@ -38,6 +38,10 @@ data class Pairing(
     val daemonAddrToken: String,
     /** Human name shown in the UI („P-Pass 存储端“…). */
     val storageDeviceName: String,
+    /** M11（全页面状态稿）"配对日期"用——本地时间戳，配对成功时打上；
+     *  0 = 未知（老版本升级上来的存量 pairing，字段不存在，`ignoreUnknownKeys`
+     *  兜底出默认值，不倒推瞎编一个日期）。 */
+    val pairedAt: Long = 0L,
 )
 
 class PairingStore(private val dir: File) {

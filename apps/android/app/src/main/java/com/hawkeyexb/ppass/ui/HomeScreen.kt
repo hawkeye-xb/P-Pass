@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,7 +41,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,6 +86,10 @@ fun HomeScreen(
     onChargeOnlyChange: (Boolean) -> Unit = {},
     wifiOnly: Boolean = true,
     onWifiOnlyChange: (Boolean) -> Unit = {},
+    // M10（全页面状态稿）："备份失败时通知我"——真实开关，不是摆设，
+    // 默认开，落地到 NotifyOnFailurePrefs，BackupWorker 发通知前会读。
+    notifyOnFailure: Boolean = true,
+    onNotifyOnFailureChange: (Boolean) -> Unit = {},
     // UX-06: 全局暂停自动备份开关 + 断开连接（警示页确认在 MainActivity）
     autoBackupPaused: Boolean = false,
     onToggleAutoBackup: (Boolean) -> Unit = {},
@@ -92,6 +97,9 @@ fun HomeScreen(
     // 存储端移除/吊销本设备后备份被拒——「配对已失效」红卡 + 重新扫码。
     pairingLost: Boolean = false,
     onRepair: () -> Unit = {},
+    // M11（全页面状态稿）"存储电脑"详情页富文本用——配对日期（0=未知，
+    // 老 pairing 升级上来的存量数据，不倒推瞎编）。
+    pairedAt: Long = 0L,
     // T6: 备份范围（null = 全部相册）——「选择相册」与「发起备份」分离。
     selectedBucketCount: Int? = null,
     onOpenBucketPicker: () -> Unit = {},
@@ -105,25 +113,18 @@ fun HomeScreen(
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
 
-    // 设计稿"什么时候备份 ›"点进去的详情页——本地状态局部替换内容，
-    // 跟 PhotosScreen 的大图查看同一个套路，不需要 MainActivity 的顶层
-    // Screen 状态机（这只是设置子页，不需要像大图那样隐藏底部 tab 栏）。
-    var showTimingDetail by remember { mutableStateOf(false) }
-    if (showTimingDetail) {
-        BackupTimingDetail(
-            chargeOnly = chargeOnly,
-            onChargeOnlyChange = onChargeOnlyChange,
-            wifiOnly = wifiOnly,
-            onWifiOnlyChange = onWifiOnlyChange,
-            onBack = { showTimingDetail = false },
-        )
-        return
-    }
-    // "存储电脑"详情子页——"断开连接"收进这里最底部（滑动确认）。
+    // "存储电脑"详情子页——"断开连接"收进这里最底部（点按钮二次确认）。
+    // M10：仅充电/仅 Wi-Fi 改回主列表里的直接开关行，不再收进单独的
+    // "什么时候备份"子页（用户实机反馈：设计稿 M10 就是直接开关行，
+    // 折进子页是上一轮自己想当然加的一层，设计稿没有）。
     var showStorageDetail by remember { mutableStateOf(false) }
     if (showStorageDetail) {
         StorageComputerDetail(
             storageName = storageName,
+            pairedAt = pairedAt,
+            confirmedCount = triplet?.m ?: 0L,
+            lastSuccessAt = triplet?.lastSuccessAt ?: 0L,
+            pairingLost = pairingLost,
             onBack = { showStorageDetail = false },
             onDisconnect = onDisconnect,
         )
@@ -440,11 +441,11 @@ fun HomeScreen(
             }
         }
 
-        // ── 备份规则（2026-08-17 对齐设计稿截图：4 行 cell，不再是一串
-        // 开关——"备份哪些相册 ›"/"什么时候备份 ›"/"通知 ›"/"存储电脑 ›"，
-        // 每行 label 左、值+chevron 右，点进去才展开细节，跟设计稿的
-        // cell 结构一致。仅充电/仅 WiFi 两个开关折进"什么时候备份"详情
-        // 页（BackupTimingDetail），不再各占一行。）──
+        // ── "备份"（M10，全页面状态稿）：4 行——第 1 行导航到选相册，
+        // 后 3 行是直接开关（不折进子页——用户实机反馈上一轮把充电/
+        // WiFi 折进"什么时候备份"子页是自己想当然加的一层，设计稿就是
+        // 摆开的开关行；"备份失败时通知我"落地成真实偏好，见
+        // NotifyOnFailurePrefs）。──
         Spacer(Modifier.height(18.dp))
         Text(
             stringResource(R.string.rules_title),
@@ -459,7 +460,7 @@ fun HomeScreen(
             border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(Modifier.padding(vertical = 8.dp)) {
+            Column {
                 CellRow(
                     label = stringResource(R.string.backup_scope),
                     value = stringResource(
@@ -470,23 +471,44 @@ fun HomeScreen(
                     onClick = onOpenBucketPicker,
                 )
                 HorizontalDivider(color = PPColor.Divider)
-                CellRow(
-                    label = stringResource(R.string.backup_timing_title),
-                    value = stringResource(timingSummaryKey(chargeOnly, wifiOnly)),
-                    onClick = { showTimingDetail = true },
+                RuleSwitchRow(
+                    label = stringResource(R.string.setting_charge_only),
+                    checked = chargeOnly,
+                    onCheckedChange = onChargeOnlyChange,
+                    // MOB-02 §三: 「仅充电时备份」关闭的后果描述（用户定稿文案）。
+                    hint = if (!chargeOnly) stringResource(R.string.req_charge_off_consequence) else null,
                 )
                 HorizontalDivider(color = PPColor.Divider)
-                // 通知这行本身不是开关——权限在系统层，这里只显示现有
-                // 行为陈述（成功沉默/仅失败通知）+ chevron 去系统通知
-                // 设置（未授予时才有实际动作，已授予也允许点开看一眼）。
-                CellRow(
+                RuleSwitchRow(
+                    label = stringResource(R.string.setting_wifi_only),
+                    checked = wifiOnly,
+                    onCheckedChange = onWifiOnlyChange,
+                )
+                HorizontalDivider(color = PPColor.Divider)
+                RuleSwitchRow(
                     label = stringResource(R.string.rule_notify),
-                    value = stringResource(R.string.rule_notify_value),
-                    onClick = onOpenNotificationSettings,
+                    checked = notifyOnFailure,
+                    onCheckedChange = onNotifyOnFailureChange,
                 )
-                HorizontalDivider(color = PPColor.Divider)
-                // 2026-08-17 设计稿原文对齐："断开连接"不再裸露在主列表
-                // 里——收进这行"存储电脑"详情子页最底部，滑动确认才生效。
+            }
+        }
+
+        // ── "其他"（M10）：存储电脑 + 版本，两行。──
+        Spacer(Modifier.height(18.dp))
+        Text(
+            stringResource(R.string.other_section_title),
+            fontSize = 12.sp, fontWeight = FontWeight.Bold,
+            letterSpacing = 1.5.sp, color = PPColor.Ink40,
+            modifier = Modifier.padding(horizontal = 2.dp),
+        )
+        Spacer(Modifier.height(8.dp))
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Column {
                 // 数据源：pairing 时缓存的 storageDeviceName（proto/daemon
                 // 没有主动查询"这台设备现在叫什么"的接口，改名后要等下次
                 // 配对才刷新，如实挂账，不做新协议改动）。
@@ -495,11 +517,26 @@ fun HomeScreen(
                     value = storageName,
                     onClick = { showStorageDetail = true },
                 )
+                HorizontalDivider(color = PPColor.Divider)
+                Row(
+                    Modifier.fillMaxWidth().height(CellRowHeight).padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.setting_version),
+                        fontSize = 15.sp, color = PPColor.Ink,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                        fontSize = 14.sp, color = PPColor.Ink40,
+                    )
+                }
             }
         }
 
-        // ── 更多（设计稿截图没画这几行，但都是现有功能，不能删——挪到
-        // 第二张卡，跟上面 4 行设计稿明确给的 cell 分开，视觉上次要）──
+        // ── "更多"（设计稿没画这几行，但都是现有功能，不能删——挪到
+        // 第三张卡，跟设计稿明确给的两张卡分开，视觉上次要）──
         Spacer(Modifier.height(18.dp))
         Text(
             stringResource(R.string.more_section_title),
@@ -514,28 +551,13 @@ fun HomeScreen(
             border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Column(Modifier.padding(vertical = 8.dp)) {
+            Column {
                 RuleSwitchRow(
                     label = stringResource(R.string.auto_backup_pause),
                     hint = stringResource(R.string.auto_backup_pause_hint),
                     checked = !autoBackupPaused,
                     onCheckedChange = { on -> onToggleAutoBackup(!on) },
                 )
-                HorizontalDivider(color = PPColor.Divider)
-                Row(
-                    Modifier.fillMaxWidth().heightIn(min = RuleRowMinHeight).padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.setting_version),
-                        fontSize = 15.sp, color = PPColor.Ink,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-                        fontSize = 14.sp, color = PPColor.Ink40,
-                    )
-                }
                 // MOB-02 §一: 设置页低调「立即备份」入口（测试/狗粮用，
                 // 不在首页）——跑前台管线，进度/暂停可见。部分授权下隐藏
                 // （部分授权态不落范围、不显示假数据，入口无意义）。
@@ -544,7 +566,7 @@ fun HomeScreen(
                     Row(
                         Modifier.fillMaxWidth()
                             .clickable(onClick = onBackupNow)
-                            .heightIn(min = RuleRowMinHeight)
+                            .height(CellRowHeight)
                             .padding(horizontal = 16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
@@ -564,15 +586,19 @@ fun HomeScreen(
     }
 }
 
-/** "存储电脑"详情子页——2026-08-17 用 claude_design MCP 重新核对设计稿
- *  原文更正："断开连接"不再裸露在备份页主列表里，收进这里最底部，
- *  三层防误触：入口藏在这个详情页 → 红色描边按钮 → 点了展开一张
- *  "确定断开吗？"说明卡，卡里再点一次"确认断开"才真的触发——不是
- *  滑动手势（上一轮按一份更早的设计稿快照做了自绘滑动控件，这次改回
- *  设计稿现在的原文）。 */
+/** "存储电脑"详情子页（M11/M12，全页面状态稿）——信息卡是状态点+
+ *  设备名+"已连接·最近同步 X\n配对日期·存了 N 张照片"富文本，不是
+ *  简单的"存储电脑｜名字"重复行（上一轮的真实差距，用户实机反馈
+ *  "M11/12 也都需要对齐"）；断开连接三层防误触：入口藏在这个详情页 →
+ *  红色描边按钮 → 点了展开一张"确定断开吗？"说明卡，卡里再点一次
+ *  "确认断开"才真的触发。 */
 @Composable
 private fun StorageComputerDetail(
     storageName: String,
+    pairedAt: Long,
+    confirmedCount: Long,
+    lastSuccessAt: Long,
+    pairingLost: Boolean,
     onBack: () -> Unit,
     onDisconnect: () -> Unit,
 ) {
@@ -585,7 +611,7 @@ private fun StorageComputerDetail(
             )
             Text(
                 stringResource(R.string.storage_computer),
-                fontSize = 22.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
+                fontSize = 24.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
             )
         }
         Spacer(Modifier.height(16.dp))
@@ -595,26 +621,22 @@ private fun StorageComputerDetail(
             border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = RuleRowMinHeight).padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    stringResource(R.string.storage_computer),
-                    fontSize = 15.sp, color = PPColor.Ink,
-                    modifier = Modifier.weight(1f),
+            Column(Modifier.padding(20.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(9.dp).clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(if (pairingLost) PPColor.Act else PPColor.Safe),
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text(storageName, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink)
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(storageDetailBody(pairingLost, lastSuccessAt, pairedAt, confirmedCount),
+                    fontSize = 14.sp, lineHeight = 24.sp, color = PPColor.Ink60,
                 )
-                Text(storageName, fontSize = 14.sp, color = PPColor.Ink40)
             }
         }
         Spacer(Modifier.weight(1f))
-        Text(
-            stringResource(R.string.no_cloud),
-            fontSize = 13.sp, lineHeight = 20.sp, color = PPColor.Ink40,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(14.dp))
         if (armed) {
             Surface(
                 color = PPColor.ActBg,
@@ -636,13 +658,13 @@ private fun StorageComputerDetail(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedButton(
                             onClick = { armed = false },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(PPSize.RadiusControl),
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = RoundedCornerShape(14.dp),
                         ) { Text(stringResource(R.string.cancel), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink) }
                         Button(
                             onClick = onDisconnect,
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(PPSize.RadiusControl),
+                            modifier = Modifier.weight(1f).height(48.dp),
+                            shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = PPColor.Act, contentColor = PPColor.Paper,
                             ),
@@ -653,14 +675,33 @@ private fun StorageComputerDetail(
         } else {
             OutlinedButton(
                 onClick = { armed = true },
-                modifier = Modifier.fillMaxWidth().height(RuleRowMinHeight),
-                shape = RoundedCornerShape(PPSize.RadiusControl),
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                shape = RoundedCornerShape(14.dp),
                 border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
                 colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
             ) { Text(stringResource(R.string.disconnect), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
         }
         Spacer(Modifier.height(8.dp))
     }
+}
+
+/** M11 信息卡正文——已失效直接说失效；否则"已连接·最近同步 X"，
+ *  配对日期未知（老 pairing 升级上来，字段是 0）就不硬凑第二行，
+ *  不编数据。 */
+@Composable
+private fun storageDetailBody(
+    pairingLost: Boolean,
+    lastSuccessAt: Long,
+    pairedAt: Long,
+    confirmedCount: Long,
+): String {
+    if (pairingLost) return stringResource(R.string.storage_detail_lost)
+    val line1 = stringResource(R.string.storage_detail_connected, lastSuccessText(lastSuccessAt))
+    if (pairedAt <= 0) return line1
+    val date = java.text.SimpleDateFormat("yyyy年M月d日", java.util.Locale.getDefault())
+        .format(java.util.Date(pairedAt))
+    val line2 = stringResource(R.string.storage_detail_paired, date, groupThousands(confirmedCount))
+    return "$line1\n$line2"
 }
 
 /** 进行中裁决 → 字符串资源（T-083 目标 2：进度区只在 Working 出状态行）。 */
@@ -747,34 +788,9 @@ private fun progressOf(state: BackupUiState): Float? = when (state) {
     else -> null
 }
 
-/**
- * MOB-02 §三: 四种条件组合 → 设置页顶部合成句的字符串资源（纯函数，
- * JVM 可测）。四种组合各有明确句子，不留歧义。
- */
-fun policySentenceKey(chargeOnly: Boolean, wifiOnly: Boolean): Int = when {
-    chargeOnly && wifiOnly -> R.string.policy_both
-    chargeOnly && !wifiOnly -> R.string.policy_charge_only
-    !chargeOnly && wifiOnly -> R.string.policy_wifi_only
-    else -> R.string.policy_none
-}
-
-/** 同款四组合判定，短句形式给"什么时候备份 › {这句}" cell 用（design
- *  只要"充电 + Wi-Fi 时自动"，不要 policySentenceKey 那个"当前："前缀
- *  的完整句）。 */
-fun timingSummaryKey(chargeOnly: Boolean, wifiOnly: Boolean): Int = when {
-    chargeOnly && wifiOnly -> R.string.timing_summary_both
-    chargeOnly && !wifiOnly -> R.string.timing_summary_charge_only
-    !chargeOnly && wifiOnly -> R.string.timing_summary_wifi_only
-    else -> R.string.timing_summary_none
-}
-
-/** UX-12: 备份规则卡所有单行统一的最小高度——真机反馈：带 Switch 的行
- *  用 8dp 垂直 padding、纯文字行用 14dp，但 Switch 组件自带的最小触控
- *  尺寸比文字行高，两种 padding 反而让 Switch 行看起来更大，行与行
- *  高度参差。改用同一条 heightIn(min=...) 兜底、内容垂直居中——单行
- *  内容（开关/纯文字/带箭头）视觉行高统一；带 hint 的两行开关自然
- *  长过这个下限，是合理例外，不受这条线约束。 */
-private val RuleRowMinHeight = 56.dp
+/** M10（全页面状态稿）：cell 行高 52dp——设计稿原文数值，带 hint 的
+ *  两行开关自然长过这个下限，是合理例外，不受这条线约束。 */
+private val CellRowHeight = 52.dp
 
 /** 备份规则卡里的开关行——label（可带 hint）左、Switch 右。 */
 @Composable
@@ -785,7 +801,7 @@ private fun RuleSwitchRow(
     hint: String? = null,
 ) {
     Row(
-        Modifier.fillMaxWidth().heightIn(min = RuleRowMinHeight).padding(horizontal = 16.dp),
+        Modifier.fillMaxWidth().heightIn(min = CellRowHeight).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -804,7 +820,7 @@ private fun CellRow(label: String, value: String? = null, onClick: () -> Unit) {
     Row(
         Modifier.fillMaxWidth()
             .clickable(onClick = onClick)
-            .heightIn(min = RuleRowMinHeight)
+            .heightIn(min = CellRowHeight)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -817,62 +833,3 @@ private fun CellRow(label: String, value: String? = null, onClick: () -> Unit) {
     }
 }
 
-/** "什么时候备份 ›" 详情页——原来直接摆在备份规则卡里的仅充电/仅 WiFi
- *  两个开关，收进这个子页（跟 HomeScreen 顶部大卡片同一套返回手势，
- *  不需要 MainActivity 的顶层 Screen 状态机，局部替换即可）。 */
-@Composable
-private fun BackupTimingDetail(
-    chargeOnly: Boolean,
-    onChargeOnlyChange: (Boolean) -> Unit,
-    wifiOnly: Boolean,
-    onWifiOnlyChange: (Boolean) -> Unit,
-    onBack: () -> Unit,
-) {
-    Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "‹", fontSize = 24.sp, color = PPColor.Ink,
-                modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 12.dp, 0.dp),
-            )
-            Text(
-                stringResource(R.string.backup_timing_title),
-                fontSize = 22.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
-            )
-        }
-        Spacer(Modifier.height(16.dp))
-        Text(
-            stringResource(policySentenceKey(chargeOnly, wifiOnly)),
-            fontSize = 14.sp, lineHeight = 20.sp, color = PPColor.Ink60,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-        Spacer(Modifier.height(14.dp))
-        Surface(
-            color = PPColor.Paper,
-            shape = RoundedCornerShape(PPSize.RadiusCard),
-            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(Modifier.padding(vertical = 8.dp)) {
-                RuleSwitchRow(
-                    label = stringResource(R.string.setting_charge_only),
-                    checked = chargeOnly,
-                    onCheckedChange = onChargeOnlyChange,
-                )
-                // MOB-02 §三: 「需要充电」关闭的后果描述（用户定稿文案）。
-                if (!chargeOnly) {
-                    Text(
-                        stringResource(R.string.req_charge_off_consequence),
-                        fontSize = 12.5.sp, lineHeight = 18.sp, color = PPColor.Ink40,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp),
-                    )
-                }
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.setting_wifi_only),
-                    checked = wifiOnly,
-                    onCheckedChange = onWifiOnlyChange,
-                )
-            }
-        }
-    }
-}

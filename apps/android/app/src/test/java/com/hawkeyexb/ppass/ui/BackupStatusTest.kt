@@ -94,34 +94,6 @@ class BackupStatusTest {
         assertEquals(listOf("b"), filterTimeline(items, TimelineFilter.Family, mine) { it })
     }
 
-    // ── timingSummaryKey：设计稿"什么时候备份"cell 的四组合短句判定
-    //    （跟 policySentenceKey 同一份逻辑，只是短句形式，各自独立测）──
-    @Test
-    fun timing_summary_both_when_charge_and_wifi() {
-        assertEquals(R.string.timing_summary_both, timingSummaryKey(chargeOnly = true, wifiOnly = true))
-    }
-
-    @Test
-    fun timing_summary_charge_only_when_only_charging() {
-        assertEquals(
-            R.string.timing_summary_charge_only,
-            timingSummaryKey(chargeOnly = true, wifiOnly = false),
-        )
-    }
-
-    @Test
-    fun timing_summary_wifi_only_when_only_wifi() {
-        assertEquals(
-            R.string.timing_summary_wifi_only,
-            timingSummaryKey(chargeOnly = false, wifiOnly = true),
-        )
-    }
-
-    @Test
-    fun timing_summary_none_when_neither_required() {
-        assertEquals(R.string.timing_summary_none, timingSummaryKey(chargeOnly = false, wifiOnly = false))
-    }
-
     // ── 工具：解析真实 values-zh/strings.xml（同 StringsSymmetryTest 手法）──
 
     private fun zhStrings(): Map<String, String> {

@@ -182,19 +182,4 @@ class TriggerPolicyTest {
         assertEquals(ExistingWorkPolicy.REPLACE, CONTENT_TRIGGER_POLICY)
     }
 
-    // ── 验收 6：四种条件组合各有合成句（裁决纯函数映射）──
-
-    @Test
-    fun policy_sentence_maps_all_four_combinations() {
-        // 映射函数在 ui 包（policySentenceKey 需要 R 常量）；
-        // 这里验证两档开关与合成句的对应关系通过「不歧义」断言：
-        // 四种组合必须映射到四个不同结果。
-        val keys = setOf(
-            com.hawkeyexb.ppass.ui.policySentenceKey(chargeOnly = true, wifiOnly = true),
-            com.hawkeyexb.ppass.ui.policySentenceKey(chargeOnly = true, wifiOnly = false),
-            com.hawkeyexb.ppass.ui.policySentenceKey(chargeOnly = false, wifiOnly = true),
-            com.hawkeyexb.ppass.ui.policySentenceKey(chargeOnly = false, wifiOnly = false),
-        )
-        assertEquals("四种组合必须四句不同文案，不留歧义", 4, keys.size)
-    }
 }

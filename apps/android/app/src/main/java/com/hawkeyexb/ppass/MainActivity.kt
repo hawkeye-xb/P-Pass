@@ -81,7 +81,6 @@ import com.hawkeyexb.ppass.ui.TimelineLoader
 import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
 import com.hawkeyexb.ppass.ui.TwoTabs
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
-import com.hawkeyexb.ppass.ui.JoinedScreen
 import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.BucketScreen
 import com.hawkeyexb.ppass.ui.PPColor
@@ -97,11 +96,14 @@ private sealed class Screen {
     data object Welcome : Screen()
     data object Scan : Screen()
     data class Waiting(val qr: String) : Screen()
-    data class Joined(val pairing: Pairing) : Screen()
     data class Trouble(val titleRes: Int, val bodyRes: Int, val detail: String = "") : Screen()
     data class Home(val pairing: Pairing) : Screen()
-    // T6: 相册选择（配对成功直接进这页，或从 Home 的设置区重进）
-    data class Buckets(val pairing: Pairing, val current: Set<Long>) : Screen()
+    // T6: 相册选择（配对成功直接进这页，或从 Home 的设置区重进）；
+    // M4（全页面状态稿）：配对成功不再停一个要点按钮的 Joined 中间页，
+    // firstTime 记这次是不是 onboarding 首次选相册——只有这个分支选完
+    // 才过 M6 安心收尾页，设置页重选直接回 Home（用户实机反馈：
+    // "完成页只有首次 onboarding 才需要"）。
+    data class Buckets(val pairing: Pairing, val current: Set<Long>, val firstTime: Boolean) : Screen()
     // M6 完成页（全页面状态稿）：选相册→触发首次备份之后、落到 Home 之前
     // 的安心收尾页。
     data class Started(val pairing: Pairing, val photoCount: Int) : Screen()
@@ -132,6 +134,7 @@ fun PPassApp() {
     // MOB-03: 相册选择页权限链——「等授权结果后去哪」的落点。设置后由
     // bucketMediaPermission 回调消费；不进 Buckets 的路径立即清掉。
     var pendingBucketsPairing by remember { mutableStateOf<Pairing?>(null) }
+    var pendingBucketsFirstTime by remember { mutableStateOf(false) }
     // MOB-03: 媒体权限被拒 → 人话引导（不崩不白屏，说清为什么需要）。
     var showMediaPermissionDialog by remember { mutableStateOf(false) }
     // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
@@ -185,6 +188,7 @@ fun PPassApp() {
                 stillNeeded.isEmpty() && !partialMedia -> screen = Screen.Buckets(
                     pairing,
                     BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
+                    pendingBucketsFirstTime,
                 )
                 partialMedia -> screen = Screen.Home(pairing)
                 else -> showMediaPermissionDialog = true
@@ -314,7 +318,7 @@ fun PPassApp() {
     // 的唯一来源，不需要单独一屏）；部分授权 → Home 引导卡（MOB-02 §二，
     // 不显示假 0/0）；拒绝 → 人话对话框。备份主流程的入口，任何分支都
     // 不许白屏。
-    fun enterBucketPicker(pairing: Pairing) {
+    fun enterBucketPicker(pairing: Pairing, firstTime: Boolean) {
         val needed = requiredMediaPermissions().filter {
             ContextCompat.checkSelfPermission(context, it) !=
                 PackageManager.PERMISSION_GRANTED
@@ -322,12 +326,14 @@ fun PPassApp() {
         when {
             needed.isNotEmpty() -> {
                 pendingBucketsPairing = pairing
+                pendingBucketsFirstTime = firstTime
                 bucketMediaPermission.launch(needed.toTypedArray())
             }
             hasPartialMediaAccess(context) -> screen = Screen.Home(pairing)
             else -> screen = Screen.Buckets(
                 pairing,
                 BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
+                firstTime,
             )
         }
     }
@@ -375,37 +381,31 @@ fun PPassApp() {
                 // The user may have cancelled while we waited — a stale
                 // result must not yank them out of another screen.
                 if (screen != s) return@LaunchedEffect
-                screen = when (outcome) {
+                when (outcome) {
                     is PairOutcome.Joined -> {
                         pairings.save(outcome.pairing)
                         scheduleAutoBackup(context)
-                        Screen.Joined(outcome.pairing)
+                        // M4（全页面状态稿）：桌面点"允许"之后不再停一个要
+                        // 点按钮的 Joined 中间页——直接进选相册（用户实机
+                        // 反馈"扫完等 desktop 允许自己跳选择相册页面不行？"）；
+                        // firstTime=true 标记这是 onboarding 首次选相册，
+                        // 选完才过 M6 安心收尾页。
+                        enterBucketPicker(outcome.pairing, firstTime = true)
                     }
-                    is PairOutcome.Refused -> Screen.Trouble(
+                    is PairOutcome.Refused -> screen = Screen.Trouble(
                         R.string.pair_refused_title,
                         R.string.pair_refused_body,
                         // T-072: 具体拒绝原因走 diag 字典（msg_key → 双语人话）
                         // 渲染在通用文案下方；未知 key 显示空详情，绝不崩溃。
                         DiagText.resolve(context, outcome.msgKey) ?: "",
                     )
-                    is PairOutcome.Failed -> Screen.Trouble(
+                    is PairOutcome.Failed -> screen = Screen.Trouble(
                         R.string.pair_failed_title, R.string.pair_failed_body,
                         "(${outcome.reason.take(160)})",
                     )
                 }
             }
         }
-
-        is Screen.Joined -> JoinedScreen(
-            storageName = s.pairing.storageDeviceName,
-            // 设计稿原文（决策）：只有「选相册」进 onboarding，其余给
-            // 默认值，设置页随时改——配对成功直接进相册选择页，读取照片
-            // 权限就是进这一页时顺带弹的系统对话框（enterBucketPicker
-            // 已有的权限链），不再插入单独的「系统权限」/「备份条件」
-            // 步骤（2026-08-17 用户实机验收后拍板收回，这两步一度存在
-            // 又被删掉，见 NEXT.md 本条目）。
-            onDone = { enterBucketPicker(s.pairing) },
-        )
 
         is Screen.Trouble -> PairStatusScreen(
             title = androidx.compose.ui.res.stringResource(s.titleRes),
@@ -423,6 +423,11 @@ fun PPassApp() {
             val backupSettings = remember { BackupSettings(context.filesDir) }
             var chargeOnly by remember { mutableStateOf(backupSettings.load().chargeOnly) }
             var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
+            // M10（全页面状态稿）："备份失败时通知我"真实开关。
+            val notifyOnFailurePrefs = remember {
+                com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir)
+            }
+            var notifyOnFailure by remember { mutableStateOf(notifyOnFailurePrefs.enabled()) }
             // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页开关行已删；
             // device_hint 照发照存（pair.request 处直接读 pref，默认开，
             // 数据继续积累，未来打开入口即用）。
@@ -493,6 +498,12 @@ fun PPassApp() {
                                 rescheduleAutoBackup(context)
                             }
                         },
+                        notifyOnFailure = notifyOnFailure,
+                        onNotifyOnFailureChange = {
+                            notifyOnFailure = it
+                            notifyOnFailurePrefs.setEnabled(it)
+                        },
+                        pairedAt = s.pairing.pairedAt,
                         autoBackupPaused = autoBackupPaused,
                         onToggleAutoBackup = { paused ->
                             autoBackupPaused = paused
@@ -540,7 +551,7 @@ fun PPassApp() {
                         // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
                         // 备份按钮时把挂在它身上的权限申请链一起删没了，
                         // 无权限直接进列表 = MediaStore 空查询 = 全白。
-                        onOpenBucketPicker = { enterBucketPicker(s.pairing) },
+                        onOpenBucketPicker = { enterBucketPicker(s.pairing, firstTime = false) },
                         // MOB-02 §一: 首页主按钮删除——hero 空闲态按钮 =
                         // 「选择备份的相册」；onBackupNow 保留给：进行中暂停、
                         // 失败红卡「再试一次」、设置页低调「立即备份」（狗粮）。
@@ -623,11 +634,16 @@ fun PPassApp() {
                         val settings = BackupSettings(context.filesDir).load()
                         wifiDeferred = settings.wifiOnly && !isOnUnmetered(context)
                         triggerUserPresentBackup(context)
-                        // M6 完成页（全页面状态稿）：先过一遍"正在回家"的安心
-                        // 收尾页，再落到 Home；重建时重新读范围，三元组/扫描
-                        // 随之生效。
-                        val selectedCount = list.filter { it.id in sel }.sumOf { it.count }
-                        screen = Screen.Started(s.pairing, selectedCount)
+                        // M6 完成页（全页面状态稿，用户实机反馈"只有首次
+                        // onboarding 才需要"）：只有 firstTime（配对成功后
+                        // 第一次选相册）才过这页；设置页重选直接回 Home，
+                        // 不重复打扰。重建时重新读范围，三元组/扫描随之生效。
+                        if (s.firstTime) {
+                            val selectedCount = list.filter { it.id in sel }.sumOf { it.count }
+                            screen = Screen.Started(s.pairing, selectedCount)
+                        } else {
+                            screen = Screen.Home(s.pairing)
+                        }
                     },
                     onCancel = { screen = Screen.Home(s.pairing) },
                 )

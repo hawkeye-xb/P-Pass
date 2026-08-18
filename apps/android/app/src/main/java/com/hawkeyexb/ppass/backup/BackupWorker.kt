@@ -290,7 +290,11 @@ class BackupWorker(
                 Result.retry() // idempotent — next attempt converges
             } else {
                 attempts.reset() // 下一触发事件从 0 开始新一轮
-                if (batchSize > 0) postFailureNotification(ctx, batchSize)
+                // M10（全页面状态稿）："备份失败时通知我"开关——设置页里
+                // 真实生效的偏好，不是摆设（默认开，跟 OS 通知权限是两层）。
+                if (batchSize > 0 && NotifyOnFailurePrefs(ctx.filesDir).enabled()) {
+                    postFailureNotification(ctx, batchSize)
+                }
                 Result.failure()
             }
         } finally {

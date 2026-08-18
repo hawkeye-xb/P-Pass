@@ -87,6 +87,7 @@ suspend fun pairWithQr(
                     daemonNodeId = parsed.nodeIdHex,
                     daemonAddrToken = addrToken,
                     storageDeviceName = name,
+                    pairedAt = System.currentTimeMillis(),
                 )
             )
         }
@@ -118,6 +119,7 @@ suspend fun pairWithQr(
                     daemonNodeId = parsed.nodeIdHex,
                     daemonAddrToken = addrToken,
                     storageDeviceName = accepted.storageDeviceName,
+                    pairedAt = System.currentTimeMillis(),
                 )
             )
         } else {
