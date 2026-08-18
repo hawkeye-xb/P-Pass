@@ -4,17 +4,13 @@
 // buttons >=56dp.
 package com.hawkeyexb.ppass.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -89,53 +85,6 @@ fun WelcomeScreen(onScan: () -> Unit) {
     }
 }
 
-/** Screen 3: joined — say what happens next, allow walking away. */
-@Composable
-fun JoinedScreen(storageName: String, onDone: () -> Unit) {
-    PPScreen {
-        Column(
-            Modifier.fillMaxSize().padding(34.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Box(
-                Modifier.size(104.dp).background(PPColor.SafeBg, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("✓", fontSize = 46.sp, color = PPColor.Safe, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(24.dp))
-            Text(
-                stringResource(R.string.joined_title),
-                fontSize = PPSize.Headline, fontFamily = FontFamily.Serif,
-                color = PPColor.Ink, textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(14.dp))
-            Text(
-                stringResource(R.string.joined_body, storageName),
-                fontSize = PPSize.BodyMin, lineHeight = 26.sp,
-                color = PPColor.Ink40, textAlign = TextAlign.Center,
-            )
-            Spacer(Modifier.height(40.dp))
-            Button(
-                onClick = onDone,
-                modifier = Modifier.fillMaxWidth().height(64.dp),
-                shape = RoundedCornerShape(PPSize.RadiusControl),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = PPColor.Ink, contentColor = PPColor.Paper
-                ),
-            ) {
-                // MOB-02 §一: 配对成功 → 引导进入相册选择页（选完走事件①
-                // 触发首备份；配对本身不触发备份）。
-                Text(
-                    stringResource(R.string.choose_albums),
-                    fontSize = 19.sp, fontWeight = FontWeight.Bold,
-                )
-            }
-        }
-    }
-}
-
 /**
  * M6 完成页（全页面状态稿）：选完相册、真正触发首次备份之后的收尾——
  * 绿底给一句安心承诺,"进入 App" 才落到 Home。选相册页自己不管发生在
@@ -148,8 +97,6 @@ fun BackupStartedScreen(photoCount: Int, onEnter: () -> Unit) {
             Modifier.fillMaxSize().padding(30.dp, 0.dp, 30.dp, 40.dp),
             verticalArrangement = Arrangement.Center,
         ) {
-            Box(Modifier.size(12.dp).background(PPColor.Safe, CircleShape))
-            Spacer(Modifier.height(18.dp))
             Text(
                 stringResource(R.string.backup_started_title, groupThousands(photoCount.toLong())),
                 fontSize = 34.sp, lineHeight = 42.sp,

@@ -156,43 +156,53 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
                 Spacer(Modifier.width(20.dp))
             }
 
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                AndroidView(
-                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(0.dp)),
-                    factory = { ctx ->
-                        val view = PreviewView(ctx)
-                        val future = ProcessCameraProvider.getInstance(ctx)
-                        future.addListener({
-                            val provider = future.get()
-                            val preview = Preview.Builder().build().also {
-                                it.surfaceProvider = view.surfaceProvider
-                            }
-                            val analysis = ImageAnalysis.Builder()
-                                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                                .build()
-                            analysis.setAnalyzer(executor) { image ->
-                                val text = decodeQr(image, reader)
-                                image.close()
-                                if (text != null && text.startsWith("ppf://pair") &&
-                                    delivered.compareAndSet(false, true)
-                                ) {
-                                    ContextCompat.getMainExecutor(ctx).execute { onQr(text) }
-                                }
-                            }
-                            provider.unbindAll()
-                            provider.bindToLifecycle(
-                                lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA,
-                                preview, analysis,
-                            )
-                        }, ContextCompat.getMainExecutor(ctx))
-                        view
-                    },
-                )
-                Column(
-                    Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    ViewfinderFrame()
+            // 设计稿：取景窗口是固定 240dp 圆角方框，不是铺满全屏——窗口
+            // 之外是纯黑背景（PPScreen 已经是 SurfaceDark），摄像头画面
+            // 本身也裁到这个窗口里，不是裁剪只套在装饰框上而画面照样
+            // 铺满全屏（那样黑底区域会全被摄像头画面占掉，跟设计稿的
+            // "小窗口+大片纯黑"对不上）。
+            Box(
+                Modifier.weight(1f).fillMaxWidth(),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        Modifier.size(240.dp).clip(RoundedCornerShape(20.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                val view = PreviewView(ctx)
+                                val future = ProcessCameraProvider.getInstance(ctx)
+                                future.addListener({
+                                    val provider = future.get()
+                                    val preview = Preview.Builder().build().also {
+                                        it.surfaceProvider = view.surfaceProvider
+                                    }
+                                    val analysis = ImageAnalysis.Builder()
+                                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                                        .build()
+                                    analysis.setAnalyzer(executor) { image ->
+                                        val text = decodeQr(image, reader)
+                                        image.close()
+                                        if (text != null && text.startsWith("ppf://pair") &&
+                                            delivered.compareAndSet(false, true)
+                                        ) {
+                                            ContextCompat.getMainExecutor(ctx).execute { onQr(text) }
+                                        }
+                                    }
+                                    provider.unbindAll()
+                                    provider.bindToLifecycle(
+                                        lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA,
+                                        preview, analysis,
+                                    )
+                                }, ContextCompat.getMainExecutor(ctx))
+                                view
+                            },
+                        )
+                        ViewfinderFrame()
+                    }
                     Spacer(Modifier.height(24.dp))
                     Text(
                         stringResource(R.string.scan_hint),
@@ -249,10 +259,30 @@ private fun ManualPairScreen(
                     .border(1.5.dp, PPColor.BorderStrong, RoundedCornerShape(PPSize.RadiusCard)),
             ) {
                 Column(Modifier.padding(16.dp)) {
-                    Text(
-                        input.ifEmpty { stringResource(R.string.scan_manual_placeholder) },
-                        fontSize = 15.sp, fontFamily = FontFamily.Monospace,
-                        color = if (input.isEmpty()) PPColor.Ink40 else PPColor.Ink,
+                    // 真实可编辑输入框——之前误用 Text 纯展示，既打不了字也
+                    // 长按不出系统粘贴菜单（用户实机反馈的真 bug）；
+                    // BasicTextField 自带长按选择/粘贴工具条，不用自己接。
+                    androidx.compose.foundation.text.BasicTextField(
+                        value = input,
+                        onValueChange = onInputChange,
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(
+                            fontSize = 15.sp, fontFamily = FontFamily.Monospace, color = PPColor.Ink,
+                        ),
+                        cursorBrush = androidx.compose.ui.graphics.SolidColor(PPColor.Ink),
+                        modifier = Modifier.fillMaxWidth(),
+                        decorationBox = { innerTextField ->
+                            Box {
+                                if (input.isEmpty()) {
+                                    Text(
+                                        stringResource(R.string.scan_manual_placeholder),
+                                        fontSize = 15.sp, fontFamily = FontFamily.Monospace,
+                                        color = PPColor.Ink40,
+                                    )
+                                }
+                                innerTextField()
+                            }
+                        },
                     )
                     Spacer(Modifier.height(10.dp))
                     OutlinedButton(

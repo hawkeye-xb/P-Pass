@@ -32,11 +32,6 @@
     <string name="pair_failed_title">没能连上电脑</string>
     <string name="pair_failed_body">确认电脑开着、两边都能上网，然后重新扫码。</string>
     <string name="scan_again">重新扫码</string>
-    <string name="joined_title">这台手机已加入。</string>
-    <string name="joined_body">已连接「%1$s」。\n接下来选择要备份的相册。</string>
-    <string name="done">好的</string>
-    <!-- MOB-02 §一: 配对成功后的引导按钮（进相册选择页） -->
-    <string name="choose_albums">选择相册</string>
     <!-- M6 完成页（全页面状态稿）：选完相册、真正触发首次备份之后的收尾。 -->
     <string name="backup_started_title">%1$s 张照片，正在回家。</string>
     <string name="backup_started_body">之后什么都不用做。任何时候打开 App，都能看到照片安不安全。</string>
@@ -80,7 +75,11 @@
     <!-- DOG-02b: 契机式白名单提醒——该跑没跑成才提醒。 -->
     <string name="notif_whitelist_title">昨晚的备份没跑成</string>
     <string name="notif_whitelist_body">可能是系统限制了后台——加入电池白名单可以避免，点开看看</string>
-    <string name="no_cloud">照片直接传回自己家的电脑，不经过任何云端。</string>
+    <!-- M11 存储电脑详情信息卡（全页面状态稿）：状态点+设备名+这两句富文本，
+         不是"照片直接传回...不经过云端"这句泛泛的免责声明。 -->
+    <string name="storage_detail_connected">已连接 · %1$s</string>
+    <string name="storage_detail_paired">%1$s 配对 · 存着这台手机的 %2$s 张照片</string>
+    <string name="storage_detail_lost">配对已失效</string>
     <!-- DOG-01: 恒真三元组（T-080 layout v1: 英雄卡 M / N 张已回家） -->
     <string name="dog_triplet_line">手机 %1$d 张 · 已备份 %2$d · 待备份 %3$d</string>
     <string name="hero_of_n">/ %1$s 张已回家</string>
@@ -93,10 +92,13 @@
     <string name="last_mins_ago">%1$d 分钟前</string>
     <string name="last_hours_ago">%1$d 小时前</string>
     <!-- T-080 layout v1: 备份规则卡 -->
-    <string name="rules_title">备份规则</string>
+    <!-- M10 全页面状态稿原文——section 标签就是"备份"两字，不是"备份规则"。 -->
+    <string name="rules_title">备份</string>
+    <string name="other_section_title">其他</string>
     <string name="more_section_title">更多</string>
-    <string name="rule_notify">通知</string>
-    <string name="rule_notify_value">仅失败时</string>
+    <!-- M10 全页面状态稿原文——真实开关行(NotifyOnFailurePrefs)，不再是
+         导航到系统设置的展示行。 -->
+    <string name="rule_notify">备份失败时通知我</string>
     <!-- T1: 版本号显示 -->
     <string name="setting_version">版本</string>
     <!-- T6: 相册选择 -->
@@ -115,28 +117,18 @@
     <string name="backup_scope">备份哪些相册</string>
     <string name="backup_scope_all">全部相册</string>
     <string name="backup_scope_n">%1$d 个相册</string>
-    <!-- 设计稿"什么时候备份 › 充电 + Wi-Fi 时自动"——跟 policy_* 是
-         同一份判定逻辑，只是 cell 里要短句不要"当前："前缀。 -->
-    <string name="backup_timing_title">什么时候备份</string>
-    <string name="timing_summary_both">充电 + Wi-Fi 时自动</string>
-    <string name="timing_summary_charge_only">充电时自动</string>
-    <string name="timing_summary_wifi_only">连 Wi-Fi 时自动</string>
-    <string name="timing_summary_none">随时自动</string>
     <string name="storage_computer">存储电脑</string>
     <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
     <string name="auto_backup_rule">插电 + WiFi 时自动备份，无需打开 App</string>
-    <string name="setting_charge_only">需要充电</string>
-    <string name="setting_wifi_only">需要 Wi-Fi</string>
+    <!-- M10 全页面状态稿原文——"仅...时备份"，不是"需要..."。 -->
+    <string name="setting_charge_only">仅充电时备份</string>
+    <string name="setting_wifi_only">仅 Wi-Fi 时备份</string>
     <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
     <string name="req_charge_off_consequence">有新照片就会尝试备份（系统级监听，不额外耗电）</string>
     <string name="wifi_off_confirm_title">关闭「需要 Wi-Fi」？</string>
     <string name="wifi_off_confirm_body">移动网络也会备份，可能消耗流量</string>
     <string name="wifi_off_confirm_ok">仍然关闭</string>
-    <string name="policy_both">当前：插电且连 Wi-Fi 时自动备份</string>
-    <string name="policy_charge_only">当前：插电时自动备份（移动网络也会）</string>
-    <string name="policy_wifi_only">当前：连 Wi-Fi 时自动备份（不要求插电）</string>
-    <string name="policy_none">当前：随时自动备份</string>
     <!-- MOB-02 §四事件①: 排队提示 -->
     <string name="wifi_deferred_hint">将在连上 Wi-Fi 后进行</string>
     <!-- MOB-02 §二: 部分授权引导 -->
