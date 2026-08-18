@@ -1,8 +1,55 @@
-# NEXT — 当前状态与下一步（2026-08-18，真机走查续十七反馈 + 新开 MOB-08 后台同步排障卡）
+# NEXT — 当前状态与下一步（2026-08-18，MOB-08 后台自动同步三根因定位 + 修复）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
-## 〇、2026-08-18（续十八）：真机走查续十七反馈四处修复 + 新开 MOB-08（当前状态）
+## 〇、2026-08-18（续十九）：MOB-08 后台自动同步——三根因定位 + 修复（当前状态）
+
+用户报的"三星手机后台不主动同步"已定位并修复，**adb 侧全链路闭环验证
+通过，只差用户按一次真实快门做最终验收**（剧本见卡里《用户真机验收
+剧本》，关键一条：必须插墙充，不能用连电脑的数据线）。
+
+**三个根因**（详细证据见 `.claude/cards/MOB-08-background-sync-not-firing.md`
+的《排查结论》和《验证记录》）：
+
+- **A · `addContentUriTrigger(it, false)`** —— MediaProvider 通知的是带
+  行 id 的 item URI，精确匹配收不到，content trigger 从未触发。改成
+  `true`。**这是自家代码 bug，跟三星无关，在任何 Android 机上都不触发**
+  ——上一轮"怀疑三星 One UI OEM 限制"的方向被证据否掉（该 job 的系统
+  约束全程全绿，同机其它 app 的 content trigger 正常翻转）。
+- **B · content trigger 跑完不重挂** —— 它是 OneTimeWork，触发执行一次
+  就进终态、监听消失，而 `doWork()` 里没有任何重新 enqueue，只有 App
+  启动/改设置才挂。即"后台自动同步"实际只在开过 App 之后的第一张照片
+  有效。修法是独立 name 的中转 worker（`ContentTriggerRearmWorker`）——
+  不能在 doWork 里 REPLACE 同名 unique work，那会取消正在跑的自己。
+- **C · `JobCancellationException` 是排查前提错了，不是代码 bug** ——
+  手机插着 USB 但 `status: 4 NOT_CHARGING`，JobScheduler 认为 CHARGING
+  满足并放行，WorkManager 的 `BatteryChargingTracker` 认为没充电，job
+  起来的同一瞬间被停掉。它顺带暴露了三个真实缺陷，已一并修：
+  `setForeground()` 原本在 `try` 之外（最常见失败路径连日志都没有）、
+  cancellation 被当业务失败吞掉（污染失败计数 + 可能误发失败通知）、
+  `client.close()` 在取消路径上跑不到（连接泄漏，已用 `NonCancellable`
+  包住收尾）。新增 `stopReason` + 耗时的仪器化日志。
+
+**修复有效性的实证**：清掉排查期造的坏记录后，真机上备份真正跑通——
+`auto backup: offered=15 pushed=15 ingested=14`，`Worker result SUCCESS`
++ `reschedule = false`（终态，对照组正是死在这一步），27 秒后
+`ContentTriggerRearmWorker` 执行成功、新的 content trigger job 顶上；
+再模拟一张照片（全程不碰 App）又触发了一轮，监听再次自动续上。电脑端
+`~/P-Pass NAS/originals/` 收到 15 个文件，**其中包含用户当天 13:47
+真实拍摄的照片和视频**——它们此前一直滞留在手机里没同步，这是 A+B
+造成用户可感损失的直接证据。
+
+**顺带开的两张新卡**（MOB-08 排查中撞到，不在本卡范围）：
+
+- `MOB-09-one-bad-media-record-kills-batch.md`（L1）——MediaStore 里
+  一条"有记录没文件"的坏条目会让**整批**备份 ENOENT 失败并无限重试，
+  watermark 不推进，等于永久卡死这台设备的备份。现网成因不少（用户删
+  了文件、云占位、外部存储卸载）。
+- `MOB-10-charging-condition-invisible.md`（L2）——"仅充电时备份"在
+  插着线但系统判未充电时静默失效，界面无任何提示。卡里留了产品决策点
+  （只做可见性 / 兼放宽约束），**需要用户拍板后再实施**。
+
+## 〇、2026-08-18（续十八）：真机走查续十七反馈四处修复 + 新开 MOB-08
 
 **已完成的四处修复**（用户真机走查续十七那批后追加反馈，逐条修复）：
 
@@ -56,6 +103,12 @@ UI/导航层改动）+ `assembleDebug` 绿。已 `adb install -r` 装到三星
 `setForeground()` 前台服务提升在纯后台触发时被系统打断。**下一
 session 直接读 `MOB-08` 卡开工**，卡里有完整的复现命令、日志摘录、
 排查方向排序、验收标准（必须用真实拍照复现，不能只信 adb 模拟）。
+
+> ⚠️ **2026-08-18 续十九更正**：上面这段怀疑方向已被证据否掉，真实
+> 根因见本文件顶部《续十九》一节（A/B/C 三条）。"三星 OEM 限制"不是
+> 原因；`setForeground` 被打断这条方向对了一半（确实是提升的同一瞬间
+> 被打断），但原因是充电约束当场不满足，不是后台 FGS 限制。这段保留
+> 只为存档当时的判断，**不要照着它开工**。
 
 ## 〇、2026-08-18（续十七）：真机走查续十六反馈——M2/M3/M4/M6/M10/M11/M12 七处修复（完成）
 
