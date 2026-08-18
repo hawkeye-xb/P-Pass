@@ -218,8 +218,13 @@
         activity = (a.batches ?? []).slice().sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
       } catch (_) {}
       // T5: 审计事件流（配对/会话/吊销）——活动页主数据源。
+      // 2026-08-18（用户反馈④）：limit 200 → 500。audit_log 里 ingest.*
+      // 逐文件行占绝大多数（每张照片一行），但展示层把它们过滤掉——
+      // 200 条上限下，一次几百张的备份就能把全部设备级事件挤出窗口，
+      // 活动记录页看着"没几条"其实是被饿死的。IPC 侧 clamp 上限 1000
+      // （ipc.rs audit.list），500 在上限内。
       try {
-        const au = await call("audit.list", { limit: 200 });
+        const au = await call("audit.list", { limit: 500 });
         auditEvents = (au.events ?? []).slice().sort((x, y) => (y.ts ?? 0) - (x.ts ?? 0));
       } catch (_) {}
     } catch (e) {
@@ -296,6 +301,49 @@
     const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
     return i >= 0 ? s.slice(i + 1) : s;
   }
+  // 2026-08-18（用户反馈④）：精确时刻——humanTime 的相对说法（"昨天
+  // 14:32"/"周三"/"08-11"）读起来舒服，但超过 7 天就只剩日期没有钟点，
+  // 排查"到底几点传的"时不够用。活动记录页给每行补一条精确时间小字，
+  // 只在这一页用（总览"最近动静"迷你卡仍然只要一行相对时间）。
+  function exactTime(tsMs) {
+    if (typeof tsMs !== "number" || !Number.isFinite(tsMs) || tsMs <= 0) return null;
+    const d = new Date(tsMs);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  // 2026-08-18（用户反馈④）：备份耗时——daemon 只记 backup.started /
+  // backup.finished 两条会话事件（router.rs），没有 duration 字段，这里
+  // 按 actor 把 finished 配到它前面最近的一条 started 上算差值。配不到
+  // （daemon 重启丢了 started / 窗口外）就不显示，不猜。
+  const backupDuration = $derived.by(() => {
+    const out = {};
+    // auditEvents 是时间倒序——倒着扫等于按时间正序遇到 started 再遇到
+    // finished，同一 actor 后来的 started 覆盖前一个（会话不嵌套）。
+    const openedAt = {};
+    for (let i = auditEvents.length - 1; i >= 0; i--) {
+      const e = auditEvents[i];
+      const who = e.actor ?? "";
+      if (e.action === "backup.started") openedAt[who] = e.ts;
+      else if (e.action === "backup.finished") {
+        const from = openedAt[who];
+        if (typeof from === "number" && e.ts >= from) out[e.ts + ":" + who] = e.ts - from;
+        delete openedAt[who];
+      }
+    }
+    return out;
+  });
+  // 毫秒 → 人话时长（秒 / 分秒 / 小时分）。0 秒也如实说"不到 1 秒"。
+  function humanDuration(ms) {
+    if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return null;
+    if (ms < 1000) return "不到 1 秒";
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s} 秒`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return s % 60 === 0 ? `${m} 分钟` : `${m} 分 ${s % 60} 秒`;
+    const h = Math.floor(m / 60);
+    return m % 60 === 0 ? `${h} 小时` : `${h} 小时 ${m % 60} 分`;
+  }
+
   // DESK-05: 活动表格只展示设备级事件——ingest.* 逐文件行是全路径噪音
   // （备份完成行的 ingested= 汇总已覆盖数量），不参与展示。数据层不动。
   const visibleAudit = $derived(
@@ -385,16 +433,26 @@
   // 平铺——告警设备（alert）永远全show，正常设备只show 前 OK_CAP 个，
   // 剩下的收进"一切正常的还有 N 台"链接（点进「家人与设备」看全部，
   // 那边才是全量真相，这里只是总览摘要）。
-  const OVERVIEW_OK_CAP = 2;
+  // 2026-08-18（用户反馈①）：卡里展示 3 行、按「最新活跃」排。活跃度
+  // 取 max(last_seen, last_backup_at)——两者都是"这台设备最近有动静"的
+  // 真实证据，只看其中一个都会漏（刚连上还没备份 / 备份完就锁屏离线）。
+  // 告警设备（needsAttention）仍然全部置顶且不受 3 行上限挤出：这张卡的
+  // 使命是"一眼确认备份没坏"，而告警设备按定义就是最不活跃的那批，纯
+  // 活跃排序恰好会把最该看见的行排到最后。
+  const OVERVIEW_ROWS = 3;
+  function lastActivityAt(d) {
+    const wm = watermarks[d.node_id];
+    return Math.max(d.last_seen ?? 0, wm?.last_backup_at ?? 0);
+  }
   const waterRows = $derived.by(() => {
     const active = devices.filter((d) => !d.revoked);
-    const withRow = active.map((d) => ({ d, row: deviceRow(d, nowMs) }));
+    const withRow = active
+      .map((d) => ({ d, row: deviceRow(d, nowMs) }))
+      .sort((a, b) => lastActivityAt(b.d) - lastActivityAt(a.d));
     const alerts = withRow.filter((x) => x.row.alert);
     const ok = withRow.filter((x) => !x.row.alert);
-    return {
-      shown: [...alerts, ...ok.slice(0, OVERVIEW_OK_CAP)],
-      moreOk: Math.max(0, ok.length - OVERVIEW_OK_CAP),
-    };
+    const shown = [...alerts, ...ok.slice(0, Math.max(0, OVERVIEW_ROWS - alerts.length))];
+    return { shown, moreOk: Math.max(0, active.length - shown.length) };
   });
 
   async function startPairing() {
@@ -898,22 +956,39 @@
     }
   });
 
-  // taken_at 是秒（proto AssetMeta）——按「今天 / 本月 / 更早」分组。
-  function photoGroupKey(tsSec) {
-    const d = new Date(tsSec * 1000);
-    const now = new Date();
-    if (d.toDateString() === now.toDateString()) return "today";
-    if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) return "month";
+  // taken_at 是秒（proto AssetMeta）——2026-08-18（用户反馈②）分组从三档
+  // 细化到五档：今天 / 昨天 / 本周 / 本月 / 更早。边界用「本地时区当天
+  // 0 点」的时间戳算，不用 toDateString 字符串比对（跨月/跨年的本周同样
+  // 落对档：本周一 0 点是唯一判据，与月份无关）。判定顺序即档位优先级，
+  // 昨天先于本周命中，所以周一~周日的"昨天"不会被本周吞掉。
+  function photoDayBounds(now) {
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const DAY = 86400000;
+    // 周一为一周之首：getDay() 周日=0 → (day + 6) % 7 天前是本周一。
+    const weekStart = startOfToday - (((now.getDay() + 6) % 7) * DAY);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    return { today: startOfToday, yesterday: startOfToday - DAY, week: weekStart, month: monthStart };
+  }
+  function photoGroupKey(tsSec, b) {
+    const ms = tsSec * 1000;
+    if (ms >= b.today) return "today";
+    if (ms >= b.yesterday) return "yesterday";
+    if (ms >= b.week) return "week";
+    if (ms >= b.month) return "month";
     return "earlier";
   }
   const photoGroups = $derived.by(() => {
+    // nowMs 随刷新推进 → 跨零点时分组自动重算，不会停在昨天的"今天"。
+    const bounds = photoDayBounds(new Date(nowMs));
     const groups = [
       { key: "today", label: t("ui.photos_today"), items: [] },
+      { key: "yesterday", label: t("ui.photos_yesterday"), items: [] },
+      { key: "week", label: t("ui.photos_week"), items: [] },
       { key: "month", label: t("ui.photos_month"), items: [] },
       { key: "earlier", label: t("ui.photos_earlier"), items: [] },
     ];
     for (const item of photos) {
-      groups.find((g) => g.key === photoGroupKey(item.taken_at)).items.push(item);
+      groups.find((g) => g.key === photoGroupKey(item.taken_at, bounds)).items.push(item);
     }
     return groups.filter((g) => g.items.length > 0);
   });
@@ -1166,14 +1241,22 @@
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">家人与设备</h2>
             <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.devices_paired_line", { n: pairedCount })}</p>
           </div>
-          <Card class="gap-0 rounded-xl border border-border py-0 shadow-none ring-0 ring-transparent">
+          <!-- 2026-08-18（用户反馈③）：设备列表在卡内自己滚，标题/副标题和
+               底部说明不跟着长——与活动记录页/照片页同一套 min-h-0 flex-1
+               overflow-y-auto 处理（那两页踩过"整个右侧内容区跟着长高"的坑）。 -->
+          <Card class="min-h-0 flex-1 gap-0 overflow-y-auto rounded-xl border border-border py-0 shadow-none ring-0 ring-transparent">
             {#if devices.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
             {:else}
               <!-- T-082: 设计稿两行结构——首行设备名加粗，次行「机型 · 连接状态」
                    槽位；daemon 尚未暴露机型/连接事实，数据未接前显示中性占位，
                    不捏造「已直连」。不再渲染原始 role 字串。 -->
-              {@const activeDevices = devices.filter((d) => !d.revoked)}
+              <!-- 2026-08-18（用户反馈③）：按最近一次有动静倒序（新的在上）
+                   ——与总览水位卡同一个 lastActivityAt 口径（last_seen 与
+                   last_backup_at 取大者），不是 daemon 返回的入库顺序。 -->
+              {@const activeDevices = devices
+                .filter((d) => !d.revoked)
+                .sort((a, b) => lastActivityAt(b) - lastActivityAt(a))}
               {@const removedDevices = devices.filter((d) => d.revoked)}
               {#if activeDevices.length === 0}
                 <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
@@ -1351,9 +1434,21 @@
               <ul class="m-0 list-none p-0">
                 {#each visibleAudit as e (e.ts + ":" + e.action)}
                   {@const at = humanTime(e.ts, nowMs)}
+                  {@const exact = exactTime(e.ts)}
+                  <!-- 2026-08-18（用户反馈④）：一行两层——主行是设备+事件
+                       （+ 备份会话的耗时），次行是精确时刻。auditText 不动
+                       （总览"最近动静"迷你卡共用它，只能是一句话）。 -->
+                  {@const dur = e.action === "backup.finished"
+                    ? humanDuration(backupDuration[e.ts + ":" + (e.actor ?? "")])
+                    : null}
                   <li class="flex items-baseline gap-[14px] border-b border-divider px-[22px] py-[16px] last:border-b-0">
-                    <span class="flex-1 text-[15px] text-ink"><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}</span>
-                    <span class="ml-auto flex-none whitespace-nowrap text-[13px] text-ink-40">{#if at}{at}{/if}</span>
+                    <span class="flex-1 text-[15px] text-ink"
+                      ><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}{#if dur}<span class="text-ink-40"> · 用时 {dur}</span>{/if}</span
+                    >
+                    <span class="ml-auto flex flex-none flex-col items-end gap-[2px] whitespace-nowrap text-[13px] text-ink-40">
+                      {#if at}<span>{at}</span>{/if}
+                      {#if exact}<span class="text-[11.5px] text-ink-40">{exact}</span>{/if}
+                    </span>
                   </li>
                 {/each}
               </ul>
@@ -1413,7 +1508,6 @@
                   <span>遇到问题？导出诊断包</span>
                   <Button variant="outline" class="{BTN_OUTLINE}" onclick={exportLogs}>{t("ui.export_logs")}</Button>
                 </div>
-                <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.logs_hint")}</p>
               </Card>
               <Card class="gap-0 rounded-xl border border-act bg-act-bg px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
                 <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
@@ -1726,7 +1820,10 @@
      limit，没有 before_ts/cursor，这部分先留白不假装做了，只把
      "列表内部滚动"这一半先落地。 */
   main[data-page="log"] .page,
-  main[data-page="photos"] .page {
+  main[data-page="photos"] .page,
+  /* 2026-08-18（用户反馈③）：设备列表卡内滚——.page 撑满内容区高度是
+     卡片 flex-1 + overflow-y-auto 生效的前提（log/photos 同款）。 */
+  main[data-page="devices"] .page {
     height: 100%;
     box-sizing: border-box;
   }

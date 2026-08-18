@@ -138,6 +138,9 @@ msg_keys! {
     UI_NAV_PHOTOS => "ui.nav_photos",
     UI_PHOTOS_COUNT => "ui.photos_count",
     UI_PHOTOS_TODAY => "ui.photos_today",
+    // 2026-08-18（用户反馈②）：照片墙分组从三档细化到五档。
+    UI_PHOTOS_YESTERDAY => "ui.photos_yesterday",
+    UI_PHOTOS_WEEK => "ui.photos_week",
     UI_PHOTOS_MONTH => "ui.photos_month",
     UI_PHOTOS_EARLIER => "ui.photos_earlier",
     UI_PHOTOS_EMPTY => "ui.photos_empty",
@@ -244,6 +247,8 @@ mod tests {
             UI_NAV_PHOTOS,
             UI_PHOTOS_COUNT,
             UI_PHOTOS_TODAY,
+            UI_PHOTOS_YESTERDAY,
+            UI_PHOTOS_WEEK,
             UI_PHOTOS_MONTH,
             UI_PHOTOS_EARLIER,
             UI_PHOTOS_EMPTY,
@@ -255,7 +260,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 93);
+        assert_eq!(ALL.len(), 95);
     }
 
     #[test]

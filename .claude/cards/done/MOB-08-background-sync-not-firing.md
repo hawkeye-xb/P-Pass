@@ -1,10 +1,9 @@
 # MOB-08 三星真机后台自动同步不生效——content trigger 从未触发 + 周期任务报 JobCancellationException　级别 L3【真机排障，需要连着 adb 的三星设备】
 
-## 当前状态（2026-08-18）
+## 当前状态（2026-08-18）：✅ 已完成，用户真实快门验收通过
 
-**修复已实装，adb 侧全链路闭环验证通过，等用户按一次真实快门做最终
-验收——本卡暂不移入 `done/`。** 三根因见《排查结论》，实证读数见
-《验证记录》，用户要做的事见《用户真机验收剧本》。
+三根因定位并修复，**用户在卸载重装的干净环境下用真实相机拍照验收
+通过**，见下面《用户真机验收结果》。
 
 ## 背景
 
@@ -390,7 +389,62 @@ adb 侧能证的都已经证完（见《排查结论》与《验证记录》）�
 7. **再拍第二张，全程不要打开 App**——第二张也必须到达。这一条才是
    根因 B（跑完不重挂）的验收，只测一张测不出来。
 
-## adb 模拟未覆盖的部分（为什么仍必须真实快门）
+## 用户真机验收结果（2026-08-18，卸载重装的干净环境，真实相机拍照）
+
+用户卸载 App 后全新安装（`firstInstallTime=2026-08-18 15:55:41`），
+重新配对、选相册、**关掉「仅充电」**（原因见下），然后用相机 App 真实
+拍照。文件名里的时间戳即拍摄时刻，与电脑端文件创建时间对照：
+
+| 拍摄 | 到达 `~/P-Pass NAS/originals/` | 延迟 | 大小 |
+|---|---|---|---|
+| 15:57:44 | 15:59:47 | **2 分 03 秒** | 957 KB |
+| 16:02:17 | 16:04:20 | **2 分 03 秒** | 3.1 MB |
+
+两张延迟完全一致 = `CONTENT_UPDATE_DELAY_MS`（2min 安静窗口）+ ~3s
+传输。**这是 content trigger 主路径在工作，不是 6h 周期兜底。**
+
+对应日志（第二张全程未打开 App，正是根因 B 的验收）：
+
+```
+15:59:48 I PPassBackup: auto backup: offered=1 pushed=1 ingested=1   ← 第一张
+16:00:03 I WM-WorkerWrapper: Worker result SUCCESS ContentTriggerRearmWorker (29ms)
+16:04:21 I PPassBackup: auto backup: offered=1 pushed=1 ingested=1   ← 第二张
+16:04:36 I WM-WorkerWrapper: Worker result SUCCESS ContentTriggerRearmWorker (41ms)
+```
+
+### 新增仪器化当场兑现了价值
+
+关掉「仅充电」之前那次触发：
+
+```
+15:56:57 W PPassBackup: auto backup cancelled by system after 20ms,
+                        stopReason=CONSTRAINT_CHARGING(6)
+```
+
+**20 毫秒被取消 + 原因直接可读**。修复前这里只会打一句没头没尾的
+`JobCancellationException`——上一轮排查正是卡在这条日志上、误判成
+"三星 OEM 后台限制"。
+
+### 验收时必须关掉「仅充电」——这是 MOB-10，不是本卡未修完
+
+这台机开着三星「保护电池」（`settings get global protect_battery = 2`），
+充到上限（80%）后系统状态恒为 `NOT_CHARGING`，插墙充也一样。于是
+产品默认的 `chargeOnly = true` 在这台设备上等于"后台档永不满足"。
+本卡的三个根因与此无关（关掉开关后全部通过），但**用户实际能不能用
+上自动备份取决于 MOB-10 怎么解**——那张卡已按此升级为"默认策略在
+真实设备上失效"，等用户拍板。
+
+### 另：rearm 的耗时有两种形态（符合设计，非缺陷）
+
+正常路径 29~41ms（上一轮 work 已终态，立即重挂）；上一轮处于 retry
+等待（非终态）时会轮询满 60s 后放手——那一轮 work 自己落终态时
+`finally` 会再排一次 rearm，逻辑自洽，不会漏挂。
+
+## adb 模拟未覆盖的部分（当时的顾虑，已被真实快门验收覆盖）
+
+> ✅ 下面这段是真实快门验收之前写的顾虑，**已由上面的验收结果证伪**
+> ——真实相机的 `IS_PENDING` 生命周期没有造成任何问题，两张照片都
+> 正常触发并送达。保留存档，供日后类似排查参考。
 
 本轮验证用的是 `adb push` 完整文件 + `MEDIA_SCANNER_SCAN_FILE`，文件
 落库那一刻就是完整的。**真实相机走的是 `IS_PENDING=1` → 写入数据 →
