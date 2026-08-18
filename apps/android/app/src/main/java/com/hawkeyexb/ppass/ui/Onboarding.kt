@@ -136,6 +136,48 @@ fun JoinedScreen(storageName: String, onDone: () -> Unit) {
     }
 }
 
+/**
+ * M6 完成页（全页面状态稿）：选完相册、真正触发首次备份之后的收尾——
+ * 绿底给一句安心承诺,"进入 App" 才落到 Home。选相册页自己不管发生在
+ * onboarding 还是设置里改范围,统一过一遍,不额外分叉判断来源。
+ */
+@Composable
+fun BackupStartedScreen(photoCount: Int, onEnter: () -> Unit) {
+    PPScreen(background = PPColor.SafeBg) {
+        Column(
+            Modifier.fillMaxSize().padding(30.dp, 0.dp, 30.dp, 40.dp),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Box(Modifier.size(12.dp).background(PPColor.Safe, CircleShape))
+            Spacer(Modifier.height(18.dp))
+            Text(
+                stringResource(R.string.backup_started_title, groupThousands(photoCount.toLong())),
+                fontSize = 34.sp, lineHeight = 42.sp,
+                fontFamily = FontFamily.Serif, color = PPColor.Safe,
+            )
+            Spacer(Modifier.height(14.dp))
+            Text(
+                stringResource(R.string.backup_started_body),
+                fontSize = 16.sp, lineHeight = 27.sp, color = PPColor.Ink60,
+            )
+            Spacer(Modifier.height(28.dp))
+            Button(
+                onClick = onEnter,
+                modifier = Modifier.fillMaxWidth().height(60.dp),
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PPColor.Ink, contentColor = PPColor.Paper
+                ),
+            ) {
+                Text(
+                    stringResource(R.string.backup_started_enter),
+                    fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+    }
+}
+
 /** Pairing in flight / refused / failed states share one screen. */
 @Composable
 fun PairStatusScreen(title: String, body: String, action: Pair<String, () -> Unit>?) {

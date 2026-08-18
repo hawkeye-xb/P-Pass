@@ -33,6 +33,10 @@
     <string name="done">好的</string>
     <!-- MOB-02 §一: 配对成功后的引导按钮（进相册选择页） -->
     <string name="choose_albums">选择相册</string>
+    <!-- M6 完成页（全页面状态稿）：选完相册、真正触发首次备份之后的收尾。 -->
+    <string name="backup_started_title">%1$s 张照片，正在回家。</string>
+    <string name="backup_started_body">之后什么都不用做。任何时候打开 App，都能看到照片安不安全。</string>
+    <string name="backup_started_enter">进入 App</string>
     <string name="not_a_code">这不是 P-Pass 配对码。</string>
     <!-- 通知权限未授予的引导卡，跟电池白名单卡同款样式。 -->
     <string name="notif_nudge_body">提示：允许通知，这样备份失败时 P-Pass 才能提醒你。</string>

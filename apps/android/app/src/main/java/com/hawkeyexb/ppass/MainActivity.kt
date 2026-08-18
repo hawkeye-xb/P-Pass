@@ -72,6 +72,7 @@ import com.hawkeyexb.ppass.backup.BACKUP_WORK_NAME
 import com.hawkeyexb.ppass.backup.WatermarkStore
 import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
+import com.hawkeyexb.ppass.ui.BackupStartedScreen
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
 import com.hawkeyexb.ppass.ui.LoaderTimelineChannel
@@ -101,6 +102,9 @@ private sealed class Screen {
     data class Home(val pairing: Pairing) : Screen()
     // T6: 相册选择（配对成功直接进这页，或从 Home 的设置区重进）
     data class Buckets(val pairing: Pairing, val current: Set<Long>) : Screen()
+    // M6 完成页（全页面状态稿）：选相册→触发首次备份之后、落到 Home 之前
+    // 的安心收尾页。
+    data class Started(val pairing: Pairing, val photoCount: Int) : Screen()
 }
 
 class MainActivity : ComponentActivity() {
@@ -449,6 +453,9 @@ fun PPassApp() {
                 tab = tab,
                 onTab = { tab = it },
                 showTabBar = !photoViewerOpen,
+                // M13 哨兵态：长期失联时设置图标角标红点，跟照片页的失联
+                // 红卡同一个信号源（holder.pairingLost），不额外判天数。
+                settingsAlert = holder.pairingLost.value,
                 photos = {
                     PhotosScreen(
                         timeline,
@@ -616,13 +623,21 @@ fun PPassApp() {
                         val settings = BackupSettings(context.filesDir).load()
                         wifiDeferred = settings.wifiOnly && !isOnUnmetered(context)
                         triggerUserPresentBackup(context)
-                        // 重建时重新读范围，三元组/扫描随之生效。
-                        screen = Screen.Home(s.pairing)
+                        // M6 完成页（全页面状态稿）：先过一遍"正在回家"的安心
+                        // 收尾页，再落到 Home；重建时重新读范围，三元组/扫描
+                        // 随之生效。
+                        val selectedCount = list.filter { it.id in sel }.sumOf { it.count }
+                        screen = Screen.Started(s.pairing, selectedCount)
                     },
                     onCancel = { screen = Screen.Home(s.pairing) },
                 )
             }
         }
+
+        is Screen.Started -> BackupStartedScreen(
+            photoCount = s.photoCount,
+            onEnter = { screen = Screen.Home(s.pairing) },
+        )
     }
 }
 
