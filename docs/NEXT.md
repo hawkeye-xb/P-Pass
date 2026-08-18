@@ -1,6 +1,61 @@
-# NEXT — 当前状态与下一步（2026-08-18，真机走查续十六反馈——M2/M3/M4/M6/M10/M11/M12 七处修复）
+# NEXT — 当前状态与下一步（2026-08-18，真机走查续十七反馈 + 新开 MOB-08 后台同步排障卡）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-18（续十八）：真机走查续十七反馈四处修复 + 新开 MOB-08（当前状态）
+
+**已完成的四处修复**（用户真机走查续十七那批后追加反馈，逐条修复）：
+
+1. **扫码取景框圆角被截断**——根因：`ScanScreen.kt` 里摄像头预览外层
+   `Box(Modifier.size(240.dp).clip(RoundedCornerShape(20.dp)))` 把裁剪
+   套在了跟 `ViewfinderFrame`（Canvas 手绘四角括号）同一层，`clip` 的
+   圆角遮罩把画在方框物理边缘（0,0 ~ w,h）上的四角尖角一并削掉。
+   改成裁剪只套在 `AndroidView`（摄像头预览本身）的 modifier 上，外层
+   `Box` 不裁，取景框完整显示。
+2. **设置页"更多"卡先隐藏**——用户拍板"默认自动备份，不提供手动
+   触发，先隐藏吧"。删掉 `HomeScreen.kt` 里"更多"卡的 UI 渲染（暂停
+   自动备份开关 + 手动备份入口两行），底层机制原样保留不动
+   （`AutoBackupPrefs`/`pauseAutoBackup`/`onBackupNow`——`onBackupNow`
+   仍被失败红卡"再试一次"、进行中"暂停"按钮复用，不是死代码）。
+3. **相册选择页回退后错误跳到照片 tab**——根因：`var tab by remember`
+   原来声明在 `MainActivity.kt` 的 `is Screen.Home ->` 分支内部；
+   `Screen.Buckets` 是独立的顶层 `Screen`，从相册页回退时 Home 分支
+   会整个重新进组合，分支内的 `remember` 状态被重置回 0（照片 tab）。
+   把这个状态提到 `PPassApp()` 顶层（跟 `wifiDeferred` 等状态同级），
+   跨 Screen 切换不再丢。
+4. **存储电脑详情二级页时底部 tab 栏仍显示**——新增
+   `HomeScreen.onStorageDetailOpenChange: (Boolean) -> Unit` 回调，
+   在打开/关闭 `StorageComputerDetail` 的两处状态切换点一并调用；
+   `MainActivity.kt` 新增顶层 `storageDetailOpen` 状态接住这个回调，
+   `TwoTabs` 的 `showTabBar` 改成 `!photoViewerOpen &&
+   !storageDetailOpen`（跟大图查看页隐藏 tab 栏同一套机制）。
+
+**测试**：android 全量 **177/177** 绿（无新增/删除测试，本轮都是纯
+UI/导航层改动）+ `assembleDebug` 绿。已 `adb install -r` 装到三星
+真机（保留现有配对数据，不是清场重装）。**真机验收待用户**——四处
+都需要用户自己在设备上走一遍确认（扫码看取景框、设置页确认"更多"
+卡不见了、进相册选择页回退看 tab 是否还留在设置页、点存储电脑详情
+看底部 tab 是否消失）。
+
+**新发现，挂新卡 `.claude/cards/MOB-08-background-sync-not-firing.md`**：
+用户随后问"现在三星手机，后台不主动同步内容吗？"，现场用
+`dumpsys jobscheduler`/`dumpsys deviceidle`/`dumpsys connectivity`
+确认手机当时插电+连 Wi-Fi、电池优化白名单、standby bucket=ACTIVE，
+理论上后台两条自动备份通道都应该能跑。实测发现：
+- `adb shell content insert` 直接走 `ContentProvider.insert()` 真实
+  代码路径（跟相机 App 落库同一条路）插入新 MediaStore 记录后，
+  content trigger（`CONTENT_TRIGGER_WORK_NAME`）等了远超 2 分钟安静
+  窗口，`dumpsys jobscheduler` 里这个 job 的 `CONTENT_TRIGGER` 约束
+  全程没有满足过，一次都没触发。
+- 周期任务（6h 兜底）按时触发了，但 `PPassBackup` 日志报
+  `kotlinx.coroutines.JobCancellationException`，没跑完一轮，进入
+  短退避重试。
+
+怀疑方向（未定论）：三星 One UI 在标准 Android Doze 白名单之外自己
+的后台限制层（"睡眠应用"名单），或 `BackupWorker.doWork()` 里
+`setForeground()` 前台服务提升在纯后台触发时被系统打断。**下一
+session 直接读 `MOB-08` 卡开工**，卡里有完整的复现命令、日志摘录、
+排查方向排序、验收标准（必须用真实拍照复现，不能只信 adb 模拟）。
 
 ## 〇、2026-08-18（续十七）：真机走查续十六反馈——M2/M3/M4/M6/M10/M11/M12 七处修复（完成）
 

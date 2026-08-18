@@ -97,6 +97,10 @@ fun HomeScreen(
     // 存储端移除/吊销本设备后备份被拒——「配对已失效」红卡 + 重新扫码。
     pairingLost: Boolean = false,
     onRepair: () -> Unit = {},
+    // 存储电脑详情是二级页——打开/关闭时告知调用方，好让底部 Photos/
+    // 设置 tab 栏跟大图查看页一样整体隐藏（用户实机反馈：进了二级页
+    // 底部 tab 还杵在那，不该在）。
+    onStorageDetailOpenChange: (Boolean) -> Unit = {},
     // M11（全页面状态稿）"存储电脑"详情页富文本用——配对日期（0=未知，
     // 老 pairing 升级上来的存量数据，不倒推瞎编）。
     pairedAt: Long = 0L,
@@ -125,7 +129,7 @@ fun HomeScreen(
             confirmedCount = triplet?.m ?: 0L,
             lastSuccessAt = triplet?.lastSuccessAt ?: 0L,
             pairingLost = pairingLost,
-            onBack = { showStorageDetail = false },
+            onBack = { showStorageDetail = false; onStorageDetailOpenChange(false) },
             onDisconnect = onDisconnect,
         )
         return
@@ -515,7 +519,7 @@ fun HomeScreen(
                 CellRow(
                     label = stringResource(R.string.storage_computer),
                     value = storageName,
-                    onClick = { showStorageDetail = true },
+                    onClick = { showStorageDetail = true; onStorageDetailOpenChange(true) },
                 )
                 HorizontalDivider(color = PPColor.Divider)
                 Row(
@@ -535,52 +539,11 @@ fun HomeScreen(
             }
         }
 
-        // ── "更多"（设计稿没画这几行，但都是现有功能，不能删——挪到
-        // 第三张卡，跟设计稿明确给的两张卡分开，视觉上次要）──
-        Spacer(Modifier.height(18.dp))
-        Text(
-            stringResource(R.string.more_section_title),
-            fontSize = 12.sp, fontWeight = FontWeight.Bold,
-            letterSpacing = 1.5.sp, color = PPColor.Ink40,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-        Spacer(Modifier.height(8.dp))
-        Surface(
-            color = PPColor.Paper,
-            shape = RoundedCornerShape(PPSize.RadiusCard),
-            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column {
-                RuleSwitchRow(
-                    label = stringResource(R.string.auto_backup_pause),
-                    hint = stringResource(R.string.auto_backup_pause_hint),
-                    checked = !autoBackupPaused,
-                    onCheckedChange = { on -> onToggleAutoBackup(!on) },
-                )
-                // MOB-02 §一: 设置页低调「立即备份」入口（测试/狗粮用，
-                // 不在首页）——跑前台管线，进度/暂停可见。部分授权下隐藏
-                // （部分授权态不落范围、不显示假数据，入口无意义）。
-                if (!partialAccess) {
-                    HorizontalDivider(color = PPColor.Divider)
-                    Row(
-                        Modifier.fillMaxWidth()
-                            .clickable(onClick = onBackupNow)
-                            .height(CellRowHeight)
-                            .padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            stringResource(R.string.manual_backup_entry),
-                            fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                            color = PPColor.Ink40,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text("›", fontSize = 16.sp, color = PPColor.Ink40)
-                    }
-                }
-            }
-        }
+        // "更多"卡（暂停自动备份 + 手动备份入口）先隐藏——用户实机反馈
+        // "默认自动备份，不提供手动触发"；底层机制（AutoBackupPrefs/
+        // pauseAutoBackup/onBackupNow）原样留着，onBackupNow 仍被失败
+        // 红卡"再试一次"、进行中"暂停"按钮复用，不是死代码，只是这张
+        // 卡片的 UI 先不露出。
 
         Spacer(Modifier.height(8.dp))
     }

@@ -166,12 +166,16 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // 裁剪只套在摄像头预览本身上——外层 Box 若也裁一次，
+                    // 240dp 方框的圆角遮罩会把 ViewfinderFrame 画在方框
+                    // 物理边缘（0,0 ~ w,h）上的四角括号尖角一并削掉，绿色
+                    // 取景框看起来"缺了角"（用户实机反馈"圆角被截断了"）。
                     Box(
-                        Modifier.size(240.dp).clip(RoundedCornerShape(20.dp)),
+                        Modifier.size(240.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         AndroidView(
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(20.dp)),
                             factory = { ctx ->
                                 val view = PreviewView(ctx)
                                 val future = ProcessCameraProvider.getInstance(ctx)

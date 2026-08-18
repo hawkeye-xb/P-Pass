@@ -144,6 +144,12 @@ fun PPassApp() {
     // MOB-02 §四事件①: 排队提示——触发时 Wi-Fi 要求不满足，WorkManager
     // 排队等网，首页显示「将在连上 Wi-Fi 后进行」。
     var wifiDeferred by remember { mutableStateOf(false) }
+    // Home 内 Photos/设置 tab——提到顶层是因为 Screen.Buckets 是独立的
+    // 顶层 Screen，从相册选择页返回时 `is Screen.Home ->` 分支会整个
+    // 重新进入组合，若这个变量还留在分支内部的 remember 里就会被重置回
+    // 0（Photos），导致「从选相册页回退后莫名跳去照片 tab」（用户实机
+    // 反馈的 history stack 错乱）。提到这里后跨 Screen 切换也不丢。
+    var tab by remember { mutableStateOf(0) } // 0=Photos 1=Backup
     // Paired phones: periodic backup + content trigger stay scheduled
     // (idempotent KEEP) and every app-open runs one catch-up — BUT only
     // if the last success is older than 24h (MOB-02 事件④, user-present
@@ -435,10 +441,14 @@ fun PPassApp() {
             var pendingWifiOff by remember { mutableStateOf(false) }
             // SYNC-06: TimelineLoader 由 timeline holder 按配对创建/重建
             // （PhotoScreen 用户交互共用 holder.loader）——这里不再各自建。
-            var tab by remember { mutableStateOf(0) } // 0=Photos 1=Backup
+            // tab 状态已提到 PPassApp 顶层（见上方声明），这里不再重复
+            // remember，否则从相册选择页返回时会被重置回 Photos。
             // 2026-08-17 大图查看页导航修复：正在全屏看大图/视频时，
             // 主 [照片]/[设置] tab 栏根本不进组合树（不是盖住看不见）。
             var photoViewerOpen by remember { mutableStateOf(false) }
+            // 存储电脑详情是二级页——打开时跟大图查看页一样把底部 tab
+            // 栏整体隐藏（用户实机反馈：进了二级页底部 tab 还杵在那）。
+            var storageDetailOpen by remember { mutableStateOf(false) }
             // UX-06: 暂停态持久化——重开 App 保持用户选择；恢复时重新排周期任务。
             val prefs = remember { AutoBackupPrefs(context.filesDir) }
             var autoBackupPaused by remember { mutableStateOf(prefs.paused()) }
@@ -457,7 +467,7 @@ fun PPassApp() {
             TwoTabs(
                 tab = tab,
                 onTab = { tab = it },
-                showTabBar = !photoViewerOpen,
+                showTabBar = !photoViewerOpen && !storageDetailOpen,
                 // M13 哨兵态：长期失联时设置图标角标红点，跟照片页的失联
                 // 红卡同一个信号源（holder.pairingLost），不额外判天数。
                 settingsAlert = holder.pairingLost.value,
@@ -544,6 +554,7 @@ fun PPassApp() {
                         // 回 Welcome 扫码，新 token 走 rejoin 门重建。
                         pairingLost = holder.pairingLost.value,
                         onRepair = onRepairPairing,
+                        onStorageDetailOpenChange = { storageDetailOpen = it },
                         // T6: 备份范围——「选择相册」与「发起备份」两个动作。
                         selectedBucketCount = remember {
                             BackupScopeStore(context).selectedBucketIds()?.size
