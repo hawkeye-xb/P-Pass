@@ -479,8 +479,9 @@ fun HomeScreen(
                     label = stringResource(R.string.setting_charge_only),
                     checked = chargeOnly,
                     onCheckedChange = onChargeOnlyChange,
-                    // MOB-02 §三: 「仅充电时备份」关闭的后果描述（用户定稿文案）。
-                    hint = if (!chargeOnly) stringResource(R.string.req_charge_off_consequence) else null,
+                    // MOB-11: 「仅充电时备份」的后果描述删除——用户实机反馈
+                    // "解释不清楚，白白占用空间"。仅 Wi-Fi 那行的提示保留
+                    // （流量后果是真金白银，值得占这个位置）。
                 )
                 HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(

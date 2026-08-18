@@ -128,10 +128,18 @@ class TriggerPolicyTest {
 
     @Test
     fun content_trigger_constraints_carry_burst_aggregation_delays() {
-        // 连拍聚合的机制证据：update delay（安静窗口 ~2min）+ max delay
-        // （~15min 兜底）是硬常量，且 request 能正常构建（接线 smoke）。
-        assertEquals(2L * 60 * 1000, CONTENT_UPDATE_DELAY_MS)
-        assertEquals(15L * 60 * 1000, CONTENT_MAX_DELAY_MS)
+        // 连拍聚合的机制证据：update delay（防抖窗口）+ max delay（封顶）
+        // 是硬常量，且 request 能正常构建（接线 smoke）。
+        // MOB-11：节奏从 2min/15min 收到 1s/30s——单张拍完 ~1s 就发起。
+        assertEquals(1L * 1000, CONTENT_UPDATE_DELAY_MS)
+        assertEquals(30L * 1000, CONTENT_MAX_DELAY_MS)
+        // MOB-11 回归锁：update delay 会被每次新变化重置（AOSP 语义），
+        // 所以 max delay 必须是同一数量级的封顶，不能留在分钟级——否则
+        // 连拍（远快于 1s）会把计时无限重置，反而要等满 max delay。
+        assertTrue(
+            "max delay 必须封住连拍（不得超过 update delay 的 60 倍）",
+            CONTENT_MAX_DELAY_MS <= CONTENT_UPDATE_DELAY_MS * 60,
+        )
         // ⚠️ 无法从 WorkSpec 读回 delay：mockable android.jar 的
         // Build.VERSION.SDK_INT=0，Constraints.build() 的 SDK≥24 门把
         // delay 强制 -1、triggers 清空（JVM 侧不可观察）——接线证据走
