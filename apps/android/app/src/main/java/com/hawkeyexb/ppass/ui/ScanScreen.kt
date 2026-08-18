@@ -1,6 +1,8 @@
-// T-052 scan screen — dark surface, one green frame, auto-detect only
-// (design: "No shutter, no focus tap"). CameraX analysis frames decode
-// through ZXing (pure Java, no Play Services — HarmonyOS-safe).
+// M2/M3（全页面状态稿）：暗底扫码页——顶部窄标题栏 + X 关闭（代替
+// "取消"按钮）；取景框是四角括号 + 中线，不是简单描边方框；底部只有
+// 一行文字链接切到独立的"输入配对串"子页（M3），不是内联展开。
+// CameraX analysis frames decode through ZXing (pure Java, no Play
+// Services — HarmonyOS-safe).
 package com.hawkeyexb.ppass.ui
 
 import androidx.camera.core.CameraSelector
@@ -9,9 +11,10 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,9 +24,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -33,6 +38,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
@@ -69,6 +76,33 @@ private fun decodeQr(image: ImageProxy, reader: MultiFormatReader): String? {
     }
 }
 
+/** M2 取景框：四角括号 + 中线（设计稿样式），不是简单描边方框。 */
+@Composable
+private fun ViewfinderFrame(modifier: Modifier = Modifier) {
+    Canvas(modifier.size(240.dp)) {
+        val arm = 36.dp.toPx()
+        val stroke = 3.5.dp.toPx()
+        val w = size.width
+        val h = size.height
+        val color = PPColor.Safe
+        // 四角 L 形括号
+        drawLine(color, Offset(0f, 0f), Offset(arm, 0f), stroke, cap = StrokeCap.Round)
+        drawLine(color, Offset(0f, 0f), Offset(0f, arm), stroke, cap = StrokeCap.Round)
+        drawLine(color, Offset(w, 0f), Offset(w - arm, 0f), stroke, cap = StrokeCap.Round)
+        drawLine(color, Offset(w, 0f), Offset(w, arm), stroke, cap = StrokeCap.Round)
+        drawLine(color, Offset(0f, h), Offset(arm, h), stroke, cap = StrokeCap.Round)
+        drawLine(color, Offset(0f, h), Offset(0f, h - arm), stroke, cap = StrokeCap.Round)
+        drawLine(color, Offset(w, h), Offset(w - arm, h), stroke, cap = StrokeCap.Round)
+        drawLine(color, Offset(w, h), Offset(w, h - arm), stroke, cap = StrokeCap.Round)
+        // 中线（设计稿的扫描线）
+        val inset = 16.dp.toPx()
+        drawLine(
+            color, Offset(inset, h / 2), Offset(w - inset, h / 2),
+            2.dp.toPx(), cap = StrokeCap.Round,
+        )
+    }
+}
+
 @Composable
 fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
@@ -80,83 +114,51 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
             setHints(mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE)))
         }
     }
-    // H-10b: 手动输入配对码（扫码扫不出的退路——二维码太密/摄像头差时）。
+    // H-10b/M3: 手动输入配对串（扫码扫不出的退路——二维码太密/摄像头差
+    // 时），M3 是独立子页，不是内联展开。
     var manual by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf("") }
     var inputError by remember { mutableStateOf(false) }
 
-    PPScreen(background = PPColor.SurfaceDark) {
-        Column(Modifier.fillMaxSize().padding(24.dp)) {
-        Text(
-            stringResource(R.string.scan_title),
-            fontSize = 30.sp, fontFamily = FontFamily.Serif, color = PPColor.Paper,
-        )
-        Spacer(Modifier.height(20.dp))
-
-        if (manual) {
-            // 手动输入区：粘贴配对码 → 提交（与扫码同一 onQr 入口）
-            Column(
-                Modifier.weight(1f).fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = {
-                        input = it
-                        inputError = false
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text(stringResource(R.string.scan_manual_hint), color = PPColor.PaperDim) },
-                    textStyle = androidx.compose.ui.text.TextStyle(
-                        color = PPColor.Paper, fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace,
-                    ),
-                    shape = RoundedCornerShape(PPSize.RadiusControl),
-                    minLines = 3, maxLines = 5,
-                )
-                if (inputError) {
-                    Text(
-                        stringResource(R.string.scan_manual_invalid),
-                        color = PPColor.Act, fontSize = 14.sp,
-                        modifier = Modifier.padding(top = 10.dp),
-                    )
+    if (manual) {
+        ManualPairScreen(
+            input = input,
+            onInputChange = { input = it; inputError = false },
+            error = inputError,
+            onBack = { manual = false },
+            onSubmit = {
+                if (input.trim().startsWith("ppf://pair")) {
+                    onQr(input.trim())
+                } else {
+                    inputError = true
                 }
-                Spacer(Modifier.height(16.dp))
-                OutlinedButton(
-                    onClick = {
-                        val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                                as? android.content.ClipboardManager
-                        clip?.primaryClip?.getItemAt(0)?.text?.toString()?.let {
-                            input = it
-                            inputError = false
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(54.dp),
-                    shape = RoundedCornerShape(PPSize.RadiusControl),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.PaperDim),
-                ) { Text(stringResource(R.string.scan_manual_paste), fontSize = 17.sp, color = PPColor.Paper) }
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = {
-                        if (input.trim().startsWith("ppf://pair")) {
-                            onQr(input.trim())
-                        } else {
-                            inputError = true
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth().height(58.dp),
-                    shape = RoundedCornerShape(PPSize.RadiusControl),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.Safe),
-                ) { Text(stringResource(R.string.scan_manual_submit), fontSize = 18.sp, color = PPColor.Safe) }
-            }
-        } else {
-            Box(
-                Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(28.dp)),
-                contentAlignment = Alignment.Center,
+            },
+        )
+        return
+    }
+
+    PPScreen(background = PPColor.SurfaceDark) {
+        Column(Modifier.fillMaxSize()) {
+            // M2 头部：X 关闭（代替"取消"按钮）+ 居中标题 + 对称占位。
+            Row(
+                Modifier.fillMaxWidth().padding(20.dp, 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
+                Text(
+                    "✕", fontSize = 18.sp, color = PPColor.Paper,
+                    modifier = Modifier.clickable(onClick = onCancel).padding(4.dp),
+                )
+                Text(
+                    stringResource(R.string.scan_header_title),
+                    fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Paper,
+                    modifier = Modifier.weight(1f), textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.width(20.dp))
+            }
+
+            Box(Modifier.weight(1f).fillMaxWidth()) {
                 AndroidView(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(0.dp)),
                     factory = { ctx ->
                         val view = PreviewView(ctx)
                         val future = ProcessCameraProvider.getInstance(ctx)
@@ -186,38 +188,112 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
                         view
                     },
                 )
-                // The one green frame — the only meaning colour on screen.
-                Box(Modifier.size(236.dp).border(3.dp, PPColor.Safe, RoundedCornerShape(24.dp)))
+                Column(
+                    Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    ViewfinderFrame()
+                    Spacer(Modifier.height(24.dp))
+                    Text(
+                        stringResource(R.string.scan_hint),
+                        fontSize = 15.sp, lineHeight = 24.sp,
+                        color = PPColor.PaperDim, textAlign = TextAlign.Center,
+                    )
+                }
+            }
+
+            // M2 底部：纯文字链接，不是按钮——切到 M3 独立子页。
+            Text(
+                stringResource(R.string.scan_manual_link),
+                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.PaperDim,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+                    .clickable { manual = true }
+                    .padding(26.dp, 8.dp, 26.dp, 28.dp),
+            )
+        }
+    }
+}
+
+/** M3（全页面状态稿）：独立子页——说明段 + 单行粘贴框 + 提示 + 主按钮。 */
+@Composable
+private fun ManualPairScreen(
+    input: String,
+    onInputChange: (String) -> Unit,
+    error: Boolean,
+    onBack: () -> Unit,
+    onSubmit: () -> Unit,
+) {
+    val context = LocalContext.current
+    PPScreen {
+        Column(Modifier.fillMaxSize().padding(24.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    stringResource(R.string.scan_hint),
-                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 26.dp),
-                    fontSize = PPSize.BodyMin, lineHeight = 25.sp,
-                    color = PPColor.PaperDim, textAlign = TextAlign.Center,
+                    "‹", fontSize = 24.sp, color = PPColor.Ink,
+                    modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 10.dp, 0.dp),
+                )
+                Text(
+                    stringResource(R.string.scan_manual_title),
+                    fontSize = 24.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
                 )
             }
-        }
-
-        Spacer(Modifier.height(18.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(
-                onClick = { manual = !manual },
-                modifier = Modifier.weight(1f).height(54.dp),
+            Spacer(Modifier.height(18.dp))
+            Text(
+                stringResource(R.string.scan_manual_body),
+                fontSize = 14.5.sp, lineHeight = 24.sp, color = PPColor.Ink60,
+            )
+            Spacer(Modifier.height(16.dp))
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(PPColor.Paper, RoundedCornerShape(PPSize.RadiusCard))
+                    .border(1.5.dp, PPColor.BorderStrong, RoundedCornerShape(PPSize.RadiusCard)),
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        input.ifEmpty { stringResource(R.string.scan_manual_placeholder) },
+                        fontSize = 15.sp, fontFamily = FontFamily.Monospace,
+                        color = if (input.isEmpty()) PPColor.Ink40 else PPColor.Ink,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            val clip = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                                    as? android.content.ClipboardManager
+                            clip?.primaryClip?.getItemAt(0)?.text?.toString()?.let(onInputChange)
+                        },
+                        modifier = Modifier.height(38.dp),
+                        shape = RoundedCornerShape(999.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.BorderStrong),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(14.dp, 0.dp),
+                    ) { Text(stringResource(R.string.scan_manual_paste), fontSize = 13.sp, color = PPColor.Ink60) }
+                }
+            }
+            if (error) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    stringResource(R.string.scan_manual_invalid),
+                    color = PPColor.Act, fontSize = 14.sp,
+                )
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(
+                stringResource(R.string.scan_manual_note),
+                fontSize = 13.sp, lineHeight = 20.sp, color = PPColor.Ink40,
+            )
+            Spacer(Modifier.weight(1f))
+            Button(
+                onClick = onSubmit,
+                modifier = Modifier.fillMaxWidth().height(60.dp),
                 shape = RoundedCornerShape(PPSize.RadiusControl),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.PaperDim),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = PPColor.Ink, contentColor = PPColor.Paper
+                ),
             ) {
                 Text(
-                    stringResource(if (manual) R.string.scan_manual_back else R.string.scan_manual),
-                    fontSize = 16.sp, color = PPColor.Paper,
+                    stringResource(R.string.scan_manual_submit),
+                    fontSize = 18.sp, fontWeight = FontWeight.Bold,
                 )
             }
-            OutlinedButton(
-                onClick = onCancel,
-                modifier = Modifier.weight(1f).height(54.dp),
-                shape = RoundedCornerShape(PPSize.RadiusControl),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.PaperDim),
-            ) { Text(stringResource(R.string.cancel), fontSize = 16.sp, color = PPColor.Paper) }
-        }
-        Spacer(Modifier.height(14.dp))
         }
     }
 }
