@@ -14,6 +14,24 @@ import org.junit.Test
 
 class TriggerPolicyTest {
 
+    /** 源码级断言的公共前处理：**剥掉注释行**。
+     *
+     *  教训（2026-08-19）：`src.contains("foo()")` 这种断言拦不住回归——
+     *  把那行代码注释掉，字符串照样在文件里，测试依旧绿。反证跑出来不红
+     *  才发现。所有源码级断言都必须先过这一道。 */
+    private fun codeOf(file: File): String =
+        file.readText().lines()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+
+    private fun repoRoot(): File {
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        return dir
+    }
+
     // ── 验收 1：两档条件（用户在场档忽略充电要求，后台档全查）──
 
     @Test
@@ -62,19 +80,58 @@ class TriggerPolicyTest {
     }
 
     @Test
+    fun process_start_catchup_is_wired_in_application() {
+        // MOB-15 回归锁：补捞必须挂在 Application.onCreate（进程因任何原因
+        // 被拉起都要检查一次），而不是只挂在 Activity。
+        // 用户原话："我肯定是需要 kill app 的啊，配置好了谁整天看你这个同步
+        // 备份用的 app？"——挂在 Activity 上的补捞对他等于不存在。
+                val app = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/PPassApplication.kt"))
+        assertTrue(
+            "Application.onCreate 必须触发进程启动补捞",
+            app.contains("triggerProcessStartCatchup(this)"),
+        )
+        assertTrue("未配对不跑", app.contains("PairingStore(filesDir).load() == null"))
+        assertTrue("暂停态不跑", app.contains("AutoBackupPrefs(filesDir).paused()"))
+
+        val manifest = codeOf(File(repoRoot(), "apps/android/app/src/main/AndroidManifest.xml"))
+        assertTrue(
+            "Application 子类必须在 manifest 注册，否则 onCreate 根本不会跑",
+            manifest.contains("android:name=\".PPassApplication\""),
+        )
+
+        // 补捞用后台档：进程被系统拉起 != 人在操作，不该享受在场档豁免。
+        val worker = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
+        val body = worker.substringAfter("fun triggerProcessStartCatchup(")
+            .substringBefore("\n}")
+        assertTrue("补捞必须用后台档约束", body.contains("BackupTier.BACKGROUND"))
+        assertTrue("补捞必须用独立 unique name", body.contains("PROCESS_CATCHUP_WORK_NAME"))
+        assertTrue("补捞必须 KEEP（同进程内重复调用不叠加）", body.contains("ExistingWorkPolicy.KEEP"))
+        assertNotEquals("补捞通道不能与 catchup 抢名字", CATCHUP_WORK_NAME, PROCESS_CATCHUP_WORK_NAME)
+    }
+
+    @Test
+    fun paused_state_blocks_every_channel() {
+        // UX-06 + MOB-15：暂停必须真的停住。进程启动补捞会在冷启时 enqueue，
+        // 所以 doWork 内部需要第二道闸——否则「暂停自动备份」被进程重启绕过。
+                val worker = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
+        assertTrue(
+            "doWork 必须有暂停态早退",
+            worker.contains("if (AutoBackupPrefs(ctx.filesDir).paused()) return Result.success()"),
+        )
+        val pauseBody = worker.substringAfter("fun pauseAutoBackup(").substringBefore("fun resumeAutoBackup(")
+        assertTrue(
+            "暂停必须取消进程启动补捞通道",
+            pauseBody.contains("cancelUniqueWork(PROCESS_CATCHUP_WORK_NAME)"),
+        )
+    }
+
+    @Test
     fun app_start_keeps_pending_content_trigger() {
         // MOB-14 回归锁：App 启动路径必须 KEEP。
         // REPLACE 会取消**正在等待触发**的 job，它已收到的 MediaStore 变化
         // 通知随之丢失、CONTENT_TRIGGER 从零重新计时——用户拍完照顺手开
         // App 看"传了没"就正好踩中，那张照片只能等 6h 周期兜底。
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "apps/android").isDirectory) {
-            dir = dir.parentFile ?: error("apps/android not found")
-        }
-        val src = File(
-            dir,
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
-        ).readText()
+                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
         val body = src.substringAfter("fun scheduleAutoBackup(").substringBefore("\n}")
         assertTrue(
             "App 启动路径必须 KEEP，不能打断正在等待的 content trigger",
@@ -89,14 +146,7 @@ class TriggerPolicyTest {
         // MOB-14 回归锁：打开 App 必须无条件补跑一次，不能再卡 24h 门槛。
         // 门槛的后果：任何通知丢失（进程被杀/job 重排窗口期拍的照片）都要
         // 干等 6h 周期兜底，而用户开 App 的意图正是"看照片到家没有"。
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "apps/android").isDirectory) {
-            dir = dir.parentFile ?: error("apps/android not found")
-        }
-        val src = File(
-            dir,
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/MainActivity.kt",
-        ).readText()
+                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/MainActivity.kt"))
         assertTrue(
             "不允许恢复 App 打开的时间门槛",
             !src.contains("MOB_APP_OPEN_GATE_MS"),
@@ -115,14 +165,7 @@ class TriggerPolicyTest {
         // REPLACE）已是新约束，周期任务却还是 charging=true，继续每 6h
         // 报一次 stopReason=CONSTRAINT_CHARGING(6)。
         // UPDATE 更新约束但保留下次执行时间，不像 REPLACE 重置 6h 计时。
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "apps/android").isDirectory) {
-            dir = dir.parentFile ?: error("apps/android not found")
-        }
-        val src = File(
-            dir,
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
-        ).readText()
+                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
         val body = src.substringAfter("fun scheduleAutoBackup(").substringBefore("}")
         assertTrue(
             "scheduleAutoBackup 必须用 UPDATE（KEEP 会让约束变更永远进不去）",
@@ -143,14 +186,7 @@ class TriggerPolicyTest {
         //   stopReason=CONSTRAINT_CHARGING(6)
         // 任何有充电上限功能的机器（三星/小米/OPPO）在满电常态下都会踩，
         // 「仅充电时备份」的实际语义是「永不备份」。
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "apps/android").isDirectory) {
-            dir = dir.parentFile ?: error("apps/android not found")
-        }
-        val worker = File(
-            dir,
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
-        ).readText()
+                val worker = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
         assertTrue(
             "不允许 setRequiresCharging——它在开着电池保护的设备上等于永不备份",
             !worker.contains("setRequiresCharging("),
@@ -262,14 +298,7 @@ class TriggerPolicyTest {
         // setTriggerContentUpdateDelay / setTriggerContentMaxDelay），
         // 不在 WorkRequest.Builder 上。JVM 无法从 WorkSpec 读回 delay，
         // 用源码级断言锁死接线——把 update delay 去掉 → 本测试必红。
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "apps/android").isDirectory) {
-            dir = dir.parentFile ?: error("apps/android not found")
-        }
-        val src = File(
-            dir,
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
-        ).readText()
+                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
         assertTrue(
             "update delay 必须接线（连拍聚合安静窗口）",
             src.contains("setTriggerContentUpdateDelay(CONTENT_UPDATE_DELAY_MS"),
@@ -303,14 +332,7 @@ class TriggerPolicyTest {
     fun content_trigger_rearms_after_every_run() {
         // 根因回归锁：content trigger 是 OneTimeWork，触发跑完监听就没了。
         // 只在 App 启动/改设置时挂 = 后台自动同步只在开过 App 那一次有效。
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "apps/android").isDirectory) {
-            dir = dir.parentFile ?: error("apps/android not found")
-        }
-        val src = File(
-            dir,
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
-        ).readText()
+                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
         assertTrue(
             "每轮备份结束必须排一次重挂",
             src.contains("enqueueContentTriggerRearm(ctx)"),
@@ -335,14 +357,7 @@ class TriggerPolicyTest {
     @Test
     fun pause_cancels_rearm_channel_too() {
         // UX-06 回归：暂停后如果 rearm 还在路上，监听会被悄悄装回去。
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "apps/android").isDirectory) {
-            dir = dir.parentFile ?: error("apps/android not found")
-        }
-        val src = File(
-            dir,
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
-        ).readText()
+                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
         val pauseBody = src.substringAfter("fun pauseAutoBackup(").substringBefore("fun resumeAutoBackup(")
         assertTrue(
             "暂停必须取消重挂中转",

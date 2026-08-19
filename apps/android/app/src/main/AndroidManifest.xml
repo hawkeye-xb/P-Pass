@@ -28,6 +28,7 @@
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
+        android:name=".PPassApplication"
         android:allowBackup="false"
         android:label="P-Pass"
         android:icon="@mipmap/ic_launcher"

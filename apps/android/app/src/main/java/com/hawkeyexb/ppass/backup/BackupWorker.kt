@@ -58,6 +58,8 @@ const val CONTENT_TRIGGER_WORK_NAME = "ppass-content-trigger"
 const val CATCHUP_WORK_NAME = "ppass-catchup-backup"
 // MOB-08: content trigger 重挂中转通道——见 ContentTriggerRearmWorker。
 const val CONTENT_REARM_WORK_NAME = "ppass-content-trigger-rearm"
+// MOB-15: 进程启动补捞通道——见 PPassApp 与 triggerProcessStartCatchup。
+const val PROCESS_CATCHUP_WORK_NAME = "ppass-process-catchup"
 private const val CHANNEL_ID = "ppass.backup"
 private const val NOTIFICATION_ID = 2026
 // UX-02: 失败通知（成功保持沉默——产品档案 §二.6）。
@@ -116,6 +118,26 @@ fun triggerUserPresentBackup(context: Context) {
     val spec = constraintsFor(BackupTier.USER_PRESENT, settings)
     WorkManager.getInstance(context).enqueueUniqueWork(
         CATCHUP_WORK_NAME,
+        ExistingWorkPolicy.KEEP,
+        backupWorkRequest(spec),
+    )
+}
+
+/** MOB-15 事件⑤：进程启动补捞——进程因**任何**原因被拉起时检查一次。
+ *
+ *  专治「通知丢失后无人补捞」：MediaStore 的变化通知落在「进程被杀 →
+ *  job 重排」的窗口里就没人接得住，重排后的 job 只监听**之后**的变化，
+ *  那批照片只能干等下一个触发事件（实测等了 4 分钟）。而进程被系统拉起
+ *  执行任何 work 时，本就有机会顺手扫一遍——这条就是把那次机会用上。
+ *
+ *  用**后台档**约束：进程被系统拉起不等于人在操作，不该享受用户在场档的
+ *  豁免。独立 unique name（不与 CATCHUP_WORK_NAME 抢）+ KEEP：同一进程
+ *  生命周期内重复调用不叠加，扫描无新照片时 doWork 立刻早退。 */
+fun triggerProcessStartCatchup(context: Context) {
+    val settings = BackupSettings(context.filesDir).load()
+    val spec = constraintsFor(BackupTier.BACKGROUND, settings)
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        PROCESS_CATCHUP_WORK_NAME,
         ExistingWorkPolicy.KEEP,
         backupWorkRequest(spec),
     )
@@ -288,6 +310,8 @@ fun pauseAutoBackup(context: Context) {
     // MOB-08: 重挂中转也要取消——否则暂停后还有一个 rearm 在路上把监听
     // 装回去（rearm 内部另有暂停态判断，这里是第二道闸）。
     WorkManager.getInstance(context).cancelUniqueWork(CONTENT_REARM_WORK_NAME)
+    // MOB-15: 进程启动补捞通道同样要停（PPassApp 里另有一道 paused 判断）。
+    WorkManager.getInstance(context).cancelUniqueWork(PROCESS_CATCHUP_WORK_NAME)
     AutoBackupPrefs(context.filesDir).setPaused(true)
 }
 
@@ -309,6 +333,9 @@ class BackupWorker(
         val startedAt = SystemClock.elapsedRealtime()
         val pairing = PairingStore(ctx.filesDir).load()
             ?: return Result.success() // not paired yet — nothing to do
+        // MOB-15: 暂停态下任何通道都不跑（进程启动补捞会在 App 冷启时
+        // enqueue，这里是第二道闸——UX-06 的「暂停」必须真的停住）。
+        if (AutoBackupPrefs(ctx.filesDir).paused()) return Result.success()
 
         // DOG-01c: 自动备份也走同一确认缓存（M 口径一致，不能只靠手动备份）。
         val confirmedStore = ConfirmedStore(
