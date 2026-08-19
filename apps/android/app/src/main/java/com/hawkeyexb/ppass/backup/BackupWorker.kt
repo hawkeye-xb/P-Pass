@@ -224,11 +224,21 @@ fun enqueueContentTriggerRearm(context: Context) {
     )
 }
 
-/** Schedule (or keep) the periodic backup + content trigger. Call after
- *  pairing and on every app start — idempotent (KEEP: existing work keeps
- *  its timing). Constraints come from [BackupSettings] (UX-03). */
+/** Schedule the periodic backup + content trigger. Call after pairing and
+ *  on every app start — idempotent. Constraints come from [BackupSettings].
+ *
+ *  MOB-12: 周期任务用 **UPDATE** 而不是 KEEP。KEEP 的语义是"已存在就完全
+ *  不动"，包括**不更新约束**——于是任何一次约束变更（改设置、或版本升级
+ *  改了默认约束）都进不了已经排好的周期任务，它会一直带着创建当天的约束
+ *  运行下去。真机实测到的后果：MOB-10 把 `requiresCharging` 删掉、重装
+ *  App 之后，content trigger（走 REPLACE）已经是新约束，周期任务却还是
+ *  `charging=true batteryNotLow=false`，继续每 6 小时报一次
+ *  `stopReason=CONSTRAINT_CHARGING(6)`。
+ *
+ *  UPDATE（work-runtime 2.8+）更新约束但**保留下次执行时间**，所以不像
+ *  REPLACE 那样重置 6h 计时——这正是这里要的语义。 */
 fun scheduleAutoBackup(context: Context) {
-    enqueueAutoBackup(context, ExistingPeriodicWorkPolicy.KEEP)
+    enqueueAutoBackup(context, ExistingPeriodicWorkPolicy.UPDATE)
     scheduleContentTriggerBackup(context)
 }
 
