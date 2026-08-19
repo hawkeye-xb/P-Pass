@@ -586,3 +586,39 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   隔离复跑 3/3×2 绿——与既有 blobs_resume 300s 同类并发偶发，CI（REV-01 推
   动 ci-rust 成功）未复现。
 | **桌面走查补漏（≥1440 居中）** | 2026-08-13 | 本 commit | ✅ 已实现（vite build 绿 176 modules；实测 1920px 右侧死区 486px→0） | 44f9a0b 的 `@media(min-width:1440px)` 给 `.page` 加 `max-width:1180px` 但漏了 `margin: 0 auto`——只限宽不居中，超宽窗口下内容左贴、右侧留死区（用户实测反馈「右边留死区」的同类症状，只是阈值从 880px 上移到了 1180px）。补 `margin: 0 auto` 后内容居中，1920px 死区从右侧 486px 变为对称留白。 |
+
+## 2026-08-19 MOB-27 监听与干活分家
+
+- **根因**：content trigger 绑在 `BackupWorker` 上，同一个 job 既是监听又是
+  干活。job 一执行监听即被消耗，直到 rearm 重挂前没有任何监听在接 MediaStore
+  通知——**监听空窗 = 备份时长**。旧补丁在系统之外自造队列（rearm 轮询 +
+  `catchUp = batchSize > 0`），依赖时间常数，且触发来自范围外的写时完全不补捞。
+- **方案**：content trigger 通道绕过 WorkManager 直连 JobScheduler。新增
+  `MediaWatchJob`（`MEDIA_WATCH_JOB_ID = 20260819` 稳定常量）：`onStartJob`
+  先派活、后 `schedule(同 ID)` 释放，毫秒级返回；备份走
+  `MEDIA_WATCH_BACKUP_WORK_NAME` + `APPEND_OR_REPLACE` 排队执行。依据是
+  `JobInfo.Builder#addTriggerContentUri` 的 javadoc 原文（本机 android-36
+  sources 逐字核对）：系统在 job 运行期间持续监听并把变更转交给下一个同 ID 的
+  job——**系统就是事件队列**。
+- **第二个洞（更严重）**：旧监听带 `UNMETERED` + `batteryNotLow` 约束，不连
+  Wi-Fi 时监听根本不被投递。现改为监听裸挂（永远在线），约束挂派出去的 work。
+- **删除**：`ContentTriggerRearmWorker` / `enqueueContentTriggerRearm` /
+  `KEY_REARM_CATCH_UP` / `REARM_*` 三常量 / `CONTENT_TRIGGER_WORK_NAME` /
+  `CONTENT_REARM_WORK_NAME` / `CONTENT_TRIGGER_POLICY` /
+  `buildContentTriggerRequest` / `scheduleContentTriggerBackup`。净减约 6 KB，
+  **一个时间常数都没剩下**。
+- **已知代价**：trigger URI 与 `setPersisted` 互斥，看门 job 每次重启必死，
+  靠"周期任务拉起进程 → `PPassApplication.onCreate` → `ensureMediaWatch`"复活；
+  监听空窗上限 = 周期任务首跑。数据不丢（照片仍在水位之上）。
+  连带 `PPassApplication` 的健康检查 early-return 删除（MOB-18 提示 UI 已
+  pending，不恢复 = 静默死亡），`isBackupScheduled` 从此无法区分重启与
+  force-stop——重做 MOB-18 前须换判据，已写进 `BackupHealth.kt` KDoc。
+- **验证**：`:app:testDebugUnitTest --rerun-tasks` 217/217（基线 207），
+  `:app:assembleDebug` 绿，versionCode 7→8。反证 9 条全红（去 forDescendants /
+  调换派活重挂顺序 / KEEP 换掉 APPEND / 去 ensure guard / 暂停不停监听 /
+  结束不自检 / 恢复 early-return / manifest 漏 BIND_JOB_SERVICE / 去重恒真）。
+- **教训**：`codeOf` 只剥 `//` 行不够——KDoc 块注释里引用 javadoc 写了
+  `jobFinished()`，把"不该出现 jobFinished"这条否定式断言判红。否定式源码
+  断言必须先剥块注释。
+- **真机验收 owed**：连拍只触发 1 次 / 备份期间拍照不用等下一个事件 /
+  重启后监听何时回来。三项做完本卡才能移入 `done/`。
