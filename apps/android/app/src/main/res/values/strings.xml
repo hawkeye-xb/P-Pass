@@ -198,4 +198,8 @@
     <!-- 2026-08-17: re-checked the design doc via the claude_design MCP —
          the tab/page name is a static "Settings", not state-dependent. -->
     <string name="tab_settings">Settings</string>
+    <!-- MOB-18: 调度体系被外力清空（最常见成因是系统设置里「强行停止」）
+         后的提示。不静默恢复——用户明确要求要提醒。 -->
+    <string name="backup_interrupted_body">Background backup has stopped. Photos are still safe on this phone — tap to restart it.</string>
+    <string name="backup_interrupted_action">Restart</string>
 </resources>

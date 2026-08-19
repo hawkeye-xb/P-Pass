@@ -72,6 +72,11 @@ fun HomeScreen(
     storageName: String,
     state: BackupUiState,
     onBackupNow: () -> Unit,
+    // MOB-18: 后台调度体系被外力清空过（最常见成因：系统设置里「强行停止」）。
+    // 权限和配对都还在，所以下面三张引导卡一张都不会亮——必须单独提示，
+    // 否则用户完全看不出备份已经停摆过。
+    backupInterrupted: Boolean = false,
+    onAcknowledgeInterruption: () -> Unit = {},
     // DOG-02: 电池白名单引导（未加白时显示，加白后消失）
     batteryWhitelisted: Boolean = true,
     onOpenBatterySettings: () -> Unit = {},
@@ -382,6 +387,36 @@ fun HomeScreen(
                             fontSize = 17.sp, fontWeight = FontWeight.Bold,
                         )
                     }
+                }
+            }
+        }
+
+        // ── MOB-18: 后台备份中断提示（同款琥珀底，放在最前——它比权限类
+        // 提示更严重：那些是"可能影响"，这条是"确实已经停过"）──
+        if (backupInterrupted) {
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                color = PPColor.WaitingBg,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(16.dp, 13.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.backup_interrupted_body),
+                        fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        stringResource(R.string.backup_interrupted_action),
+                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.clickable(onClick = onAcknowledgeInterruption)
+                            .padding(4.dp),
+                    )
                 }
             }
         }
