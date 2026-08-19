@@ -75,13 +75,18 @@ private const val WHITELIST_NUDGE_NOTIFICATION_ID = 2029
 // 原来 2min/15min 的组合意味着拍完一张要干等两分钟，用户实测两次都是
 // 2 分 03 秒——体感上就是"没反应"。
 //
-// ⚠️ 两个参数必须一起改，不能只改前者：`setTriggerContentUpdateDelay`
-// 的语义是**每次新变化都重置计时**（AOSP: "If there are more changes
-// during that time, the delay will be reset to start at the time of the
-// most recent change"）。连拍速度远快于 1s（三星连拍可达 10 张/秒），
-// 只把 update delay 改成 1s 而 max delay 仍是 15min 的话，计时会被连拍
-// 不断重置，最后要等满 15 分钟才触发——比改之前更慢。
-// 所以 max delay 同步收到 30s：单张 ~1s 就走，连拍最坏 30s 兜住。
+// `setTriggerContentUpdateDelay` 是**尾沿防抖**（AOSP: "If there are
+// more changes during that time, the delay will be reset to start at the
+// time of the most recent change"）：连拍期间计时不断重置，连拍结束后
+// 1s 只发**一次**。所以 1s 能聚合任意长度的连拍——防的是事件爆炸
+// （20 张跑 20 轮备份），不是推迟触发。有限连拍的实际时间线是
+// 「连拍时长 + 1s + 调度」，**永远到不了 max delay**。
+//
+// max delay 15min → 30s 是另一件事，别把它的理由记成"防连拍"：
+// 触发器挂在整个 images/video 集合上，截图、IM 收图、任何 App 写图都会
+// 重置计时。真有进程在持续写 MediaStore 时，1s 的静默窗口永远等不到，
+// max delay 是从**第一次变化**起算的强制触发闸，防的是这种 churn 把
+// 备份饿死。15min 对"尽快送达"来说太长，收到 30s。
 const val CONTENT_UPDATE_DELAY_MS = 1L * 1000           // 1s（防连拍抖动）
 const val CONTENT_MAX_DELAY_MS = 30L * 1000             // 30s（连拍封顶）
 // MOB-02: content trigger 用 REPLACE 去重——同一波变化只跑一次。

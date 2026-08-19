@@ -540,11 +540,30 @@ fun HomeScreen(
             }
         }
 
-        // "更多"卡（暂停自动备份 + 手动备份入口）先隐藏——用户实机反馈
-        // "默认自动备份，不提供手动触发"；底层机制（AutoBackupPrefs/
-        // pauseAutoBackup/onBackupNow）原样留着，onBackupNow 仍被失败
-        // 红卡"再试一次"、进行中"暂停"按钮复用，不是死代码，只是这张
-        // 卡片的 UI 先不露出。
+        // MOB-11: 「自动备份」总开关放回来——2026-08-18 上一轮按用户
+        // "默认自动备份，不提供手动触发"把整张"更多"卡隐藏了，暂停开关
+        // 被一起藏掉，于是桌面端有停止后台服务的入口、手机端没有（用户
+        // 实机反馈）。这里只放回总开关，**手动备份入口继续不露出**——
+        // 那才是用户当初真正不想要的东西。
+        //
+        // 位置：设置区最底部、与上面的「备份规则」卡分开成独立一张，
+        // 视觉上和常规规则拉开距离（关掉它 = 停掉全部后台备份，属于
+        // 高风险低频操作，跟「断开配对」同级；断开配对本身藏在存储电脑
+        // 二级详情页 + 三层防误触，暂停可逆、危险性低一档，放这里）。
+        Spacer(Modifier.height(18.dp))
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            RuleSwitchRow(
+                label = stringResource(R.string.auto_backup_pause),
+                // checked = 开着自动备份；关掉即 pauseAutoBackup。
+                checked = !autoBackupPaused,
+                onCheckedChange = { enabled -> onToggleAutoBackup(!enabled) },
+            )
+        }
 
         Spacer(Modifier.height(8.dp))
     }
