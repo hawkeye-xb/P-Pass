@@ -62,6 +62,52 @@ class TriggerPolicyTest {
     }
 
     @Test
+    fun app_start_keeps_pending_content_trigger() {
+        // MOB-14 回归锁：App 启动路径必须 KEEP。
+        // REPLACE 会取消**正在等待触发**的 job，它已收到的 MediaStore 变化
+        // 通知随之丢失、CONTENT_TRIGGER 从零重新计时——用户拍完照顺手开
+        // App 看"传了没"就正好踩中，那张照片只能等 6h 周期兜底。
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        val src = File(
+            dir,
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
+        ).readText()
+        val body = src.substringAfter("fun scheduleAutoBackup(").substringBefore("\n}")
+        assertTrue(
+            "App 启动路径必须 KEEP，不能打断正在等待的 content trigger",
+            body.contains("ExistingWorkPolicy.KEEP"),
+        )
+        // 改设置/备份跑完后的重挂仍然是 REPLACE——那两条路径没有待处理通知。
+        assertEquals("默认策略仍是 REPLACE", ExistingWorkPolicy.REPLACE, CONTENT_TRIGGER_POLICY)
+    }
+
+    @Test
+    fun app_open_has_no_time_gate() {
+        // MOB-14 回归锁：打开 App 必须无条件补跑一次，不能再卡 24h 门槛。
+        // 门槛的后果：任何通知丢失（进程被杀/job 重排窗口期拍的照片）都要
+        // 干等 6h 周期兜底，而用户开 App 的意图正是"看照片到家没有"。
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        val src = File(
+            dir,
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/MainActivity.kt",
+        ).readText()
+        assertTrue(
+            "不允许恢复 App 打开的时间门槛",
+            !src.contains("MOB_APP_OPEN_GATE_MS"),
+        )
+        assertTrue(
+            "App 启动仍必须触发一次用户在场档备份",
+            src.contains("triggerUserPresentBackup(context)"),
+        )
+    }
+
+    @Test
     fun periodic_work_uses_update_so_constraints_propagate() {
         // MOB-12 回归锁：周期任务必须用 UPDATE，不能用 KEEP。
         // KEEP = "已存在就完全不动"，包括不更新约束——真机实测后果：

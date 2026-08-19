@@ -161,11 +161,16 @@ fun buildContentTriggerRequest(
         .build()
 }
 
-fun scheduleContentTriggerBackup(context: Context) {
+/** [policy] 默认 REPLACE（约束立即生效）；**App 启动路径必须传 KEEP**，
+ *  见 [scheduleAutoBackup]。 */
+fun scheduleContentTriggerBackup(
+    context: Context,
+    policy: ExistingWorkPolicy = CONTENT_TRIGGER_POLICY,
+) {
     val settings = BackupSettings(context.filesDir).load()
     WorkManager.getInstance(context).enqueueUniqueWork(
         CONTENT_TRIGGER_WORK_NAME,
-        CONTENT_TRIGGER_POLICY,
+        policy,
         buildContentTriggerRequest(settings),
     )
 }
@@ -239,7 +244,15 @@ fun enqueueContentTriggerRearm(context: Context) {
  *  REPLACE 那样重置 6h 计时——这正是这里要的语义。 */
 fun scheduleAutoBackup(context: Context) {
     enqueueAutoBackup(context, ExistingPeriodicWorkPolicy.UPDATE)
-    scheduleContentTriggerBackup(context)
+    // MOB-14: content trigger 在 App 启动路径上必须 KEEP，不能 REPLACE。
+    // REPLACE 会把**正在等待触发**的那个 job 取消掉重挂，它已经收到的
+    // MediaStore 变化通知随之丢失，CONTENT_TRIGGER 从零开始重新计时。
+    // 用户拍完照顺手打开 App 看"传了没"——正好踩中 1s 防抖窗口，那张
+    // 照片就再也不会触发，只能等 6h 周期兜底。
+    // 约束变更不靠这条路径生效：改设置走 rescheduleAutoBackup（REPLACE），
+    // 每轮备份结束走 ContentTriggerRearmWorker（也是 REPLACE，且它只在
+    // 上一轮落终态后才动手，那时不存在待处理通知）。
+    scheduleContentTriggerBackup(context, ExistingWorkPolicy.KEEP)
 }
 
 /** UX-03: 设置变更后按新约束重建周期任务——KEEP 不会更新既有任务的

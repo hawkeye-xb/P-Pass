@@ -160,12 +160,14 @@ fun PPassApp() {
         if (pairing != null && !AutoBackupPrefs(context.filesDir).paused()) {
             scheduleAutoBackup(context)
             // MOB-02 §四事件④：App 进前台且距上次成功 >24h → 用户在场档。
-            val lastSuccess = ConfirmedStore(
-                java.io.File(context.filesDir, "backup-state/${pairing.daemonNodeId}")
-            ).lastSuccessAt()
-            if (System.currentTimeMillis() - lastSuccess > MOB_APP_OPEN_GATE_MS) {
-                triggerUserPresentBackup(context)
-            }
+            // MOB-14: 原来这里卡着 24h 门槛（距上次成功 >24h 才补跑）。
+            // 真机实测的后果：进程被杀/job 重排的窗口期里拍的照片，通知
+            // 无人接收就丢了，而用户打开 App 想看"传了没"时又被门槛挡住
+            // 不扫描，只能干等 6h 周期兜底。用户打开 App 的意图本来就是
+            // 看照片有没有到家——这时候就该扫一遍。增量扫描 + hash 缓存
+            // 很廉价，`triggerUserPresentBackup` 内部走 unique work KEEP，
+            // 连续切换也不会叠加任务。
+            triggerUserPresentBackup(context)
         }
         // 新会话重新评估排队提示（上一轮的排队状态随进程重开作废）。
         wifiDeferred = false
@@ -672,7 +674,6 @@ private fun requiredMediaPermissions(): List<String> =
     }
 
 // MOB-02 §四事件④: App 进前台且距上次成功 >24h → 用户在场档补跑。
-private const val MOB_APP_OPEN_GATE_MS = 24L * 60 * 60 * 1000
 
 /** 通知权限现状（API<33 恒真——那些版本装完就有，没有运行时权限这
  *  一说）；只喂 HomeScreen 的不堵路引导卡，不参与任何 onboarding 流程。 */
