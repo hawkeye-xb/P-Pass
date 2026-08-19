@@ -18,10 +18,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
-import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -36,7 +34,6 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
 import androidx.work.WorkerParameters
-import androidx.work.workDataOf
 import com.hawkeyexb.ppass.MainActivity
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
@@ -50,15 +47,12 @@ import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 const val BACKUP_WORK_NAME = "ppass-auto-backup"
-// MOB-02: 三个 unique work 通道（互不覆盖，各管一个触发族）。
-const val CONTENT_TRIGGER_WORK_NAME = "ppass-content-trigger"
+// MOB-02/27: unique work 通道（互不覆盖，各管一个触发族）。事件②的
+// 监听不在这里——它是 JobScheduler 上的看门 job，见 MediaWatchJob.kt。
 const val CATCHUP_WORK_NAME = "ppass-catchup-backup"
-// MOB-08: content trigger 重挂中转通道——见 ContentTriggerRearmWorker。
-const val CONTENT_REARM_WORK_NAME = "ppass-content-trigger-rearm"
 // MOB-15: 进程启动补捞通道——见 PPassApp 与 triggerProcessStartCatchup。
 const val PROCESS_CATCHUP_WORK_NAME = "ppass-process-catchup"
 // MOB-17: 周期兜底间隔。刻意不做高频——见 enqueueAutoBackup 注释。
@@ -94,9 +88,6 @@ private const val WHITELIST_NUDGE_NOTIFICATION_ID = 2029
 // 备份饿死。15min 对"尽快送达"来说太长，收到 30s。
 const val CONTENT_UPDATE_DELAY_MS = 1L * 1000           // 1s（防连拍抖动）
 const val CONTENT_MAX_DELAY_MS = 30L * 1000             // 30s（连拍封顶）
-// MOB-02: content trigger 用 REPLACE 去重——同一波变化只跑一次。
-val CONTENT_TRIGGER_POLICY: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE
-
 private fun constraintsOf(spec: BackupConstraintsSpec): Constraints =
     Constraints.Builder()
         .setRequiredNetworkType(
@@ -107,7 +98,7 @@ private fun constraintsOf(spec: BackupConstraintsSpec): Constraints =
         .setRequiresBatteryNotLow(spec.requiresBatteryNotLow)
         .build()
 
-private fun backupWorkRequest(spec: BackupConstraintsSpec): OneTimeWorkRequest =
+internal fun backupWorkRequest(spec: BackupConstraintsSpec): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<BackupWorker>()
         .setConstraints(constraintsOf(spec))
         // MOB-02 §五：短退避重试（扛网络瞬断；次数上限在 doWork 内裁决）。
@@ -146,147 +137,6 @@ fun triggerProcessStartCatchup(context: Context) {
     )
 }
 
-/** MOB-02 事件②（后台档）：新照片落库 → content trigger。
- *  ContentUriTrigger 监听 MediaStore 变化，update delay 安静窗口内连拍
- *  聚合成一次，max delay 兜底；unique work REPLACE 去重。零常驻监听、
- *  零轮询（WorkManager 系统级调度）。
- *  ⚠️ work-runtime 2.10 的 content trigger API 在 Constraints.Builder
- *  （addContentUriTrigger / setTriggerContentUpdateDelay / MaxDelay），
- *  不在 WorkRequest.Builder 上。
- *  [triggerUris] 可注入（测试用——mockable android.jar 下 MediaStore
- *  静态字段为 null，JVM 单测无法构造 Uri；生产恒用默认 MediaStore 两
- *  集合）。 */
-fun buildContentTriggerRequest(
-    settings: BackupSettingsState,
-    triggerUris: List<Uri> = listOf(
-        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-    ),
-): OneTimeWorkRequest {
-    val spec = constraintsFor(BackupTier.BACKGROUND, settings)
-    val constraints = Constraints.Builder()
-        .setRequiredNetworkType(
-            if (spec.requiresUnmetered) NetworkType.UNMETERED else NetworkType.CONNECTED
-        )
-        // MOB-10: 同 constraintsOf——充电要求换成「电量不低」。
-        .setRequiresBatteryNotLow(spec.requiresBatteryNotLow)
-        // MOB-08: forDescendants 必须为 true。MediaProvider 在 insert 后
-        // notifyChange 发的是带行 id 的 item URI（.../images/media/1000000299），
-        // 不是集合 URI——精确匹配（false）永远收不到通知，content trigger
-        // 从此不触发。AOSP 官方 MediaContentJob 示例用的正是
-        // FLAG_NOTIFY_FOR_DESCENDANTS；真机 dumpsys 里系统自家的 MediaStore
-        // 观察者也全是 0x1（descendants），只有我们是 0x0。
-        .apply { triggerUris.forEach { addContentUriTrigger(it, true) } }
-        .setTriggerContentUpdateDelay(CONTENT_UPDATE_DELAY_MS, TimeUnit.MILLISECONDS)
-        .setTriggerContentMaxDelay(CONTENT_MAX_DELAY_MS, TimeUnit.MILLISECONDS)
-        .build()
-    return OneTimeWorkRequestBuilder<BackupWorker>()
-        .setConstraints(constraints)
-        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-        .build()
-}
-
-/** [policy] 默认 REPLACE（约束立即生效）；**App 启动路径必须传 KEEP**，
- *  见 [scheduleAutoBackup]。 */
-fun scheduleContentTriggerBackup(
-    context: Context,
-    policy: ExistingWorkPolicy = CONTENT_TRIGGER_POLICY,
-) {
-    val settings = BackupSettings(context.filesDir).load()
-    WorkManager.getInstance(context).enqueueUniqueWork(
-        CONTENT_TRIGGER_WORK_NAME,
-        policy,
-        buildContentTriggerRequest(settings),
-    )
-}
-
-// MOB-23: rearm 是否要顺带补捞一次（见 ContentTriggerRearmWorker）。
-const val KEY_REARM_CATCH_UP = "ppass.rearm.catch_up"
-
-// MOB-08/23: 重挂中转的延迟与等待参数。
-//
-// 这三个数直接决定「监听空窗」有多长：work 一开始执行，content trigger
-// 就被消耗掉了，直到 rearm 重新挂上之前，**没有任何监听在接 MediaStore
-// 通知**。用户连拍正好撞在这段里（2026-08-19 实测："前面的出去了，后面
-// 的就没有同步"）。
-//
-// 用户定调：「一旦触发了这个事件，就尽快给它重新监听」——空窗越短越好，
-// 而且这段空窗本身就是天然的防抖窗口（连拍期间不会一张一张排任务）。
-// 所以初始延迟从 15s 压到 1s、轮询从 2s 收到 500ms：work 落终态后最快
-// ~1s 就能重挂，空窗基本等于 work 的实际执行时间，压无可压。
-//
-// 仍然保留延迟而不是 0：rearm 走 REPLACE，若在 work 还 RUNNING 时动手会
-// 取消掉正在传照片的自己（MOB-08 的老坑）。轮询上限 30×500ms = 15s，
-// 超长批次由 finally 再排一次 rearm 兜住。
-const val REARM_INITIAL_DELAY_SECONDS = 1L
-const val REARM_WAIT_TICKS = 30
-const val REARM_WAIT_TICK_MS = 500L
-
-/** MOB-08: content trigger 是 OneTimeWork——被 MediaStore 变化触发、跑完
- *  一轮之后监听就没了。旧实现只在 App 启动（scheduleAutoBackup）和改设置
- *  （rescheduleAutoBackup）时挂，于是「后台自动同步」实际只在开过 App 的
- *  那一次有效，第二张照片再也不会触发——用户看到的就是「不主动同步」。
- *
- *  为什么要中转一层而不是在 doWork 里直接重挂：CONTENT_TRIGGER_WORK_NAME
- *  是 unique work + REPLACE，在自己的 doWork 里 REPLACE 同名 work 会取消
- *  正在跑的自己，亲手制造 JobCancellationException（正是本卡现象 2 的形状）。
- *  所以交给一个独立 name 的无约束 work：等上一轮落终态后再 REPLACE。 */
-class ContentTriggerRearmWorker(
-    context: Context,
-    params: WorkerParameters,
-) : CoroutineWorker(context, params) {
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
-        val ctx = applicationContext
-        // UX-06: 暂停态下不重挂（否则「暂停自动备份」被 rearm 悄悄复活）。
-        if (AutoBackupPrefs(ctx.filesDir).paused()) return@withContext Result.success()
-        // 未配对时无事可做（与 doWork 同口径）。
-        if (PairingStore(ctx.filesDir).load() == null) return@withContext Result.success()
-        val wm = WorkManager.getInstance(ctx)
-        repeat(REARM_WAIT_TICKS) {
-            // 空列表也算「已终态」——没有活跃 work，直接挂新的。
-            if (wm.getWorkInfosForUniqueWork(CONTENT_TRIGGER_WORK_NAME).get()
-                    .all { it.state.isFinished }
-            ) {
-                scheduleContentTriggerBackup(ctx)
-                // MOB-23: 监听重挂好了，但**重挂之前那段时间是没有监听的**
-                // ——work 一开始执行监听就消耗掉了，直到这里才补上，中间隔着
-                // work 执行时间 + REARM_INITIAL_DELAY_SECONDS。用户连拍时正好
-                // 撞上：前几张触发了备份，之后继续拍的那些没有任何监听在接，
-                // 通知就丢了（2026-08-19 用户实测："前面的出去了，后面的就没
-                // 有同步"）。
-                //
-                // 那批照片并没有丢——水位没推过它们（压根没扫到），所以这里
-                // 补扫一次就能捞回来。
-                //
-                // ⚠️ 只在上一轮确实有照片时才补，否则会变成
-                // 「补捞 → 空扫描 → finally 又排 rearm → 再补捞」的无限循环。
-                // 有照片才补 ⇒ 连拍场景下一轮轮收敛，扫空即止。
-                if (inputData.getBoolean(KEY_REARM_CATCH_UP, false)) {
-                    triggerProcessStartCatchup(ctx)
-                }
-                return@withContext Result.success()
-            }
-            delay(REARM_WAIT_TICK_MS)
-        }
-        // 上一轮还在跑（超长批次）——它跑完自己也会排一次 rearm，这里放手，
-        // 不强行 REPLACE 掉一个正在传照片的 worker。
-        Result.success()
-    }
-}
-
-/** MOB-08: 每轮备份结束后排一次重挂（unique + REPLACE：一轮里多次调用
- *  只留最后一个）。无约束，不占用 charging/unmetered 条件。 */
-fun enqueueContentTriggerRearm(context: Context, catchUp: Boolean = false) {
-    WorkManager.getInstance(context).enqueueUniqueWork(
-        CONTENT_REARM_WORK_NAME,
-        ExistingWorkPolicy.REPLACE,
-        OneTimeWorkRequestBuilder<ContentTriggerRearmWorker>()
-            .setInitialDelay(REARM_INITIAL_DELAY_SECONDS, TimeUnit.SECONDS)
-            .setInputData(workDataOf(KEY_REARM_CATCH_UP to catchUp))
-            .build(),
-    )
-}
-
 /** Schedule the periodic backup + content trigger. Call after pairing and
  *  on every app start — idempotent. Constraints come from [BackupSettings].
  *
@@ -302,23 +152,26 @@ fun enqueueContentTriggerRearm(context: Context, catchUp: Boolean = false) {
  *  REPLACE 那样重置 6h 计时——这正是这里要的语义。 */
 fun scheduleAutoBackup(context: Context) {
     enqueueAutoBackup(context, ExistingPeriodicWorkPolicy.UPDATE)
-    // MOB-14: content trigger 在 App 启动路径上必须 KEEP，不能 REPLACE。
-    // REPLACE 会把**正在等待触发**的那个 job 取消掉重挂，它已经收到的
-    // MediaStore 变化通知随之丢失，CONTENT_TRIGGER 从零开始重新计时。
-    // 用户拍完照顺手打开 App 看"传了没"——正好踩中 1s 防抖窗口，那张
-    // 照片就再也不会触发，只能等 6h 周期兜底。
-    // 约束变更不靠这条路径生效：改设置走 rescheduleAutoBackup（REPLACE），
-    // 每轮备份结束走 ContentTriggerRearmWorker（也是 REPLACE，且它只在
-    // 上一轮落终态后才动手，那时不存在待处理通知）。
-    scheduleContentTriggerBackup(context, ExistingWorkPolicy.KEEP)
+    // MOB-27: 事件②的监听是 JobScheduler 上的看门 job，不再是 work。
+    // ensureMediaWatch 是 guard-then-schedule（已挂着就不动）——MOB-14 的
+    // 老坑原样适用：覆盖一个**正在 pending** 的 trigger job 会丢掉它已经
+    // 积累的变更并重置 1s 防抖。用户拍完照顺手打开 App 看"传了没"，正好
+    // 踩中防抖窗口，那张照片就再也不会触发。
+    //
+    // 这条路径同时是**重启后的复活链路**：trigger URI 与 setPersisted 互斥
+    // （javadoc 明文），看门 job 每次重启必死；重启后 WorkManager 拉起进程
+    // 跑周期任务 → PPassApplication.onCreate → 这里重挂。
+    ensureMediaWatch(context)
 }
 
 /** UX-03: 设置变更后按新约束重建周期任务——KEEP 不会更新既有任务的
  *  约束，必须 REPLACE（周期计时重置，但这是用户主动改设置的代价）。
- *  MOB-02: content trigger 同步重建（约束随设置走）。 */
+ *  MOB-27: 监听**不再随设置重建**——约束已经不挂在监听上了（监听是裸的、
+ *  永远在线，Wi-Fi/电量的要求在派出去的备份 work 上，每次派活现读设置）。
+ *  这里只做一次幂等的存在性确认。 */
 fun rescheduleAutoBackup(context: Context) {
     enqueueAutoBackup(context, ExistingPeriodicWorkPolicy.REPLACE)
-    scheduleContentTriggerBackup(context)
+    ensureMediaWatch(context)
 }
 
 private fun enqueueAutoBackup(context: Context, policy: ExistingPeriodicWorkPolicy) {
@@ -344,14 +197,13 @@ private fun enqueueAutoBackup(context: Context, policy: ExistingPeriodicWorkPoli
 
 // UX-06: 全局暂停开关——取消周期任务并落盘暂停态；恢复时重新调度。
 // scheduleAutoBackup 在暂停态下不排（重开 App 不自动恢复）。
-// MOB-02: content trigger 同属自动备份通道，暂停一并取消（否则
-// 「暂停自动备份」对事件②形同虚设）。
+// MOB-02/27: 事件②同属自动备份通道，暂停要连**监听**和**它派活的通道**
+// 一起停（否则「暂停自动备份」对事件②形同虚设）。
 fun pauseAutoBackup(context: Context) {
     WorkManager.getInstance(context).cancelUniqueWork(BACKUP_WORK_NAME)
-    WorkManager.getInstance(context).cancelUniqueWork(CONTENT_TRIGGER_WORK_NAME)
-    // MOB-08: 重挂中转也要取消——否则暂停后还有一个 rearm 在路上把监听
-    // 装回去（rearm 内部另有暂停态判断，这里是第二道闸）。
-    WorkManager.getInstance(context).cancelUniqueWork(CONTENT_REARM_WORK_NAME)
+    // MOB-27: 看门 job 在 JobScheduler 上，不是 work——cancelUniqueWork 管不着。
+    cancelMediaWatch(context)
+    WorkManager.getInstance(context).cancelUniqueWork(MEDIA_WATCH_BACKUP_WORK_NAME)
     // MOB-15: 进程启动补捞通道同样要停（PPassApp 里另有一道 paused 判断）。
     WorkManager.getInstance(context).cancelUniqueWork(PROCESS_CATCHUP_WORK_NAME)
     AutoBackupPrefs(context.filesDir).setPaused(true)
@@ -599,12 +451,17 @@ class BackupWorker(
             // NonCancellable 保证取消路径上的收尾照样执行。
             withContext(NonCancellable) {
                 client.close()
-                // MOB-08: content trigger 跑完就失效了，每轮结束重挂一次
-                // （周期/catchup 通道跑完也顺手挂——幂等，KEEP 语义在
-                // rearm 内部靠终态判断保证）。
-                // MOB-23: batchSize > 0 = 本轮确实有照片 ⇒ 重挂监听之前那段
-                // 空窗里很可能还有没被通知到的新照片，让 rearm 顺带补扫一次。
-                enqueueContentTriggerRearm(ctx, catchUp = batchSize > 0)
+                // MOB-27: 监听的重挂**不再是这里的责任**——看门 job 自己
+                // 在毫秒级派完活就重挂了（MediaWatchJob），备份跑多久都跟
+                // 监听无关。这里留一句幂等的存在性确认，是为了覆盖看门 job
+                // 因外力消失的场景（重启：trigger URI 与 setPersisted 互斥，
+                // 每次重启必死；OEM 清理；schedule 被系统拒绝）。已挂着就
+                // 是 no-op，代价为零；换来"每 5h 至少自检一次监听在不在"。
+                //
+                // ⚠️ 这里绝不能再做基于时间/批次大小的补捞判断。旧实现
+                // （catchUp = batchSize > 0）是在系统之外自己造队列，用户
+                // 定调："你强行用时间来做判断的话，是不太合适的。"
+                ensureMediaWatch(ctx)
                 // SENT-01: 搭便车检查——每次后台任务结束（成败都算）看
                 // 一次哨兵判定；该发则发（内部去重，发过 markNotified）。
                 maybeNotifySentinel(ctx)

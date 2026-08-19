@@ -44,18 +44,29 @@ import kotlinx.serialization.json.Json
  *  - 只查 WorkManager：force-stop 检测不到（初版的错）；
  *  - 只查 JobScheduler：未配对/已暂停时本来就没 job，会误报。
  *
+ *  ## ⚠️ MOB-27 之后这个判据变弱了（重做本能力前必须先解决）
+ *
+ *  事件②的监听从 WorkManager 迁到了 JobScheduler 上的看门 job
+ *  （[MEDIA_WATCH_JOB_ID]）。而 trigger URI 与 `setPersisted` 互斥是
+ *  平台硬约束（javadoc 明文），所以看门 job **每次重启都必然消失**——
+ *  "监听不在" 从此不再等价于 "被 force-stop 了"，正常重启也是这个状态。
+ *
+ *  要重做 MOB-18 就得换一个能区分两者的信号（例如落盘一个开机序号，
+ *  或者对账周期任务的 job 是否也一起没了）。当前实现只回答"调度体系是
+ *  不是完整的"，不回答"为什么不完整"。
+ *
  *  ⚠️ 阻塞调用（读 WorkManager 本地库），别在主线程用。 */
 fun isBackupScheduled(context: Context): Boolean {
     val hasWork = WorkManager.getInstance(context)
-        .getWorkInfosForUniqueWork(CONTENT_TRIGGER_WORK_NAME)
+        .getWorkInfosForUniqueWork(BACKUP_WORK_NAME)
         .get()
         .any { !it.state.isFinished }
     // 压根没排过（未配对 / 已暂停）——不是"被清空"，调用方另有前置判断。
     if (!hasWork) return false
     val js = context.getSystemService(JobScheduler::class.java) ?: return true
-    // 周期兜底任务是常驻的，所以正常运行时这里必定非空；全空只可能是
-    // 被外力清过（rearm 间隙也不会全空——周期任务还在）。
-    return js.allPendingJobs.isNotEmpty()
+    if (js.allPendingJobs.isEmpty()) return false
+    // MOB-27: 看门 job 单独查——它不在 WorkManager 的账上，两边都得对。
+    return isMediaWatchScheduled(context)
 }
 
 @Serializable
