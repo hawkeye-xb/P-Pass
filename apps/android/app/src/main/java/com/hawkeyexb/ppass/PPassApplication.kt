@@ -1,4 +1,4 @@
-// MOB-15: 进程启动补捞。
+// MOB-15/16/18: 后台备份的进程级入口。
 //
 // 背景（真机时间线，用户 2026-08-19 报"kill 掉 app 之后拍照要等好几分钟"）：
 //   10:39:50  用户从最近任务划掉 App，进程被杀
@@ -16,9 +16,12 @@ package com.hawkeyexb.ppass
 
 import android.app.Application
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
+import com.hawkeyexb.ppass.backup.BackupHealthPrefs
+import com.hawkeyexb.ppass.backup.isBackupScheduled
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.triggerProcessStartCatchup
 import com.hawkeyexb.ppass.transport.PairingStore
+import kotlin.concurrent.thread
 
 class PPassApplication : Application() {
     override fun onCreate() {
@@ -26,21 +29,40 @@ class PPassApplication : Application() {
         // 未配对 / 已暂停 → 什么都不做（doWork 内部还有第二道闸）。
         if (PairingStore(filesDir).load() == null) return
         if (AutoBackupPrefs(filesDir).paused()) return
-        // MOB-16（用户架构要求）：**监听的挂载不能依赖用户打开 App**。
-        // 在此之前 scheduleAutoBackup 只在 MainActivity 里调用，意味着
-        // content trigger 监听和周期任务的存在取决于"用户打开过 App"——
-        // 一旦它们因为任何原因丢失（系统清理、异常、装完没开过 App），
-        // 只有用户主动打开才能恢复。用户明确要求："App 它的一个作用是
-        // 做配置和查看，真正运行作用物的不是它。"
-        //
-        // 放在这里之后，进程因任何原因被拉起（系统调度 work、开机后
-        // WorkManager 的 RescheduleReceiver、其它组件唤醒）都会顺手确认
-        // 监听在位。两个调用都是幂等的：content trigger 走 KEEP（不打断
-        // 正在等待的那个，见 MOB-14），周期任务走 UPDATE（更新约束但保留
-        // 计时，见 MOB-12）。
-        scheduleAutoBackup(this)
-        // enqueue 本身是异步的，不阻塞主线程；扫描无新照片时 doWork 立刻
-        // 早退，所以「每次进程启动多一次检查」的代价很小。
-        triggerProcessStartCatchup(this)
+
+        // isBackupScheduled 会阻塞（读 WorkManager 本地库），不能占主线程；
+        // 后续两个 enqueue 本身是异步的，一起放进这条短命线程里最省事。
+        thread(name = "ppass-boot-check") {
+            // MOB-18: 先查再排——顺序不能反。调度体系整个不在（content
+            // trigger 监听没了）意味着 job 被外力清空过，最常见的成因是用户
+            // 在系统设置里「强行停止」。这件事必须让用户知道：权限还在、
+            // 配对还在，既有的三张引导卡一张都不会亮，用户完全看不出备份
+            // 已经停摆，只会觉得"照片怎么不同步了"。
+            //
+            // 用户定调（2026-08-19）："必须点了才恢复。你都提示了，就别
+            // 自作主张。"——所以检测到调度体系被清空时**只记录、不恢复**，
+            // 由设置页显示琥珀提示条，用户点「立即恢复」才真正重排。
+            // 悄悄恢复等于把提示变成马后炮，用户没有选择权。
+            if (!isBackupScheduled(this)) {
+                BackupHealthPrefs(filesDir).recordInterrupted(System.currentTimeMillis())
+                return@thread
+            }
+
+            // 走到这里 = 调度体系还在（进程是被系统正常拉起的）。
+            //
+            // MOB-16（用户架构要求）：**监听的挂载不能依赖用户打开 App**。
+            // 在此之前 scheduleAutoBackup 只在 MainActivity 里调用，意味着
+            // content trigger 监听和周期任务的存在取决于"用户打开过 App"——
+            // 一旦它们因为任何原因丢失，只有用户主动打开才能恢复。用户明确
+            // 要求："App 它的一个作用是做配置和查看，真正运行作用物的不是它。"
+            //
+            // 这里的两个调用都是幂等的**兜底确认**（不是恢复）：content
+            // trigger 走 KEEP（不打断正在等待的那个，见 MOB-14），周期任务
+            // 走 UPDATE（更新约束但保留计时，见 MOB-12）。
+            scheduleAutoBackup(this)
+            // MOB-15: 扫一遍补捞窗口期丢失的通知。扫描无新照片时 doWork 立刻
+            // 早退，所以「每次进程启动多一次检查」的代价很小。
+            triggerProcessStartCatchup(this)
+        }
     }
 }

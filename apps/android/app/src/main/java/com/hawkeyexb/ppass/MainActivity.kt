@@ -60,6 +60,7 @@ import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
+import com.hawkeyexb.ppass.backup.BackupHealthPrefs
 import com.hawkeyexb.ppass.backup.ConfirmedStore
 import com.hawkeyexb.ppass.backup.isPartialMediaAccess
 import com.hawkeyexb.ppass.backup.ReinstallHintPrefs
@@ -434,6 +435,12 @@ fun PPassApp() {
             val notifyOnFailurePrefs = remember {
                 com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir)
             }
+            // MOB-18: 后台调度被外力清空过（force-stop）的待确认提示。
+            // 检测在 PPassApplication 的后台线程做完并落盘，这里只读结果。
+            val healthPrefs = remember { BackupHealthPrefs(context.filesDir) }
+            var backupInterrupted by remember {
+                mutableStateOf(healthPrefs.load().interruptedUnacknowledged)
+            }
             var notifyOnFailure by remember { mutableStateOf(notifyOnFailurePrefs.enabled()) }
             // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页开关行已删；
             // device_hint 照发照存（pair.request 处直接读 pref，默认开，
@@ -486,6 +493,17 @@ fun PPassApp() {
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
                         triplet = holder.triplet.value,
+                        backupInterrupted = backupInterrupted,
+                        onAcknowledgeInterruption = {
+                            // MOB-18: 用户点了才恢复——Application 检测到调度
+                            // 被清空时只记录不重排（用户："必须点了才恢复，
+                            // 你都提示了，就别自作主张"）。这里是唯一的恢复
+                            // 入口，顺手补跑一次捞回停摆期间拍的照片。
+                            scheduleAutoBackup(context)
+                            triggerUserPresentBackup(context)
+                            healthPrefs.acknowledge()
+                            backupInterrupted = false
+                        },
                         batteryWhitelisted = batteryWhitelisted,
                         onOpenBatterySettings = {
                             openBatteryOptimizationSettings(context)
