@@ -165,6 +165,22 @@ class TriggerPolicyTest {
     }
 
     @Test
+    fun periodic_fallback_stays_low_frequency() {
+        // MOB-17 用户定稿：兜底 5h，**刻意不做高频**。
+        // "兜底太频繁会在系统的 log 里面被检测得到，反而没那么好，因为
+        // 我们有别的触发的事件。"——主路径是 content trigger，兜底只管
+        // 捞极少数漏网的，不该把自己搞成高频轮询进 OEM 省电黑名单。
+        assertEquals(5L, PERIODIC_FALLBACK_HOURS)
+        assertTrue("兜底不得高频化（至少 2h）", PERIODIC_FALLBACK_HOURS >= 2L)
+        val src = codeOf(File(repoRoot(),
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
+        assertTrue(
+            "周期必须用常量，不能写死数字（防止改一处漏一处）",
+            src.contains("PeriodicWorkRequestBuilder<BackupWorker>(PERIODIC_FALLBACK_HOURS"),
+        )
+    }
+
+    @Test
     fun periodic_work_uses_update_so_constraints_propagate() {
         // MOB-12 回归锁：周期任务必须用 UPDATE，不能用 KEEP。
         // KEEP = "已存在就完全不动"，包括不更新约束——真机实测后果：
