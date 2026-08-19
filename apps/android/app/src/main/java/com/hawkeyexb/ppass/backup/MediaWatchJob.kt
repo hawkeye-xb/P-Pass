@@ -165,6 +165,33 @@ fun cancelMediaWatch(context: Context) {
     runCatching { jobScheduler(context).cancel(MEDIA_WATCH_JOB_ID) }
 }
 
+/** MOB-27 升级清理：干掉 MOB-27 之前那套挂在 WorkManager 上的 content
+ *  trigger（及其重挂中转）。
+ *
+ *  **这是真机验出来的，不是理论风险。** `adb install -r` 保留应用数据，
+ *  于是 WorkManager 库里 `ppass-content-trigger` 那条 unique work 原封不动
+ *  活了下来，dumpsys 里能看到它还挂着旧的带约束 trigger：
+ *
+ *  ```
+ *  Requires: charging=false batteryNotLow=true deviceIdle=false
+ *  Trigger content URIs:
+ *    1 content://media/external/images/media
+ *  Network type: NetworkRequest [ ... NOT_METERED ... ]
+ *  ```
+ *
+ *  不清理的后果：升级窗口内**同一波 MediaStore 变化会同时唤醒新旧两个
+ *  监听**，跑两轮 BackupWorker——两条独立 unique 通道之间没有串行保证，
+ *  真会并行扫同一个水位、重复推字节。旧那个跑完就自然消亡（重挂机关已删），
+ *  但在它消亡之前每次变化都要重复一遍。
+ *
+ *  用字面量而不是常量：那两个常量已随 MOB-27 删除，这里刻意保留字符串副本
+ *  作为"历史遗留名"的唯一出处。老用户全部升过之后可以整段删掉。 */
+internal fun cancelLegacyContentTriggerWork(context: Context) {
+    val wm = WorkManager.getInstance(context)
+    wm.cancelUniqueWork("ppass-content-trigger")
+    wm.cancelUniqueWork("ppass-content-trigger-rearm")
+}
+
 /**
  * 队列去重：**已经有一个"等着跑"的就不必再排。**
  *

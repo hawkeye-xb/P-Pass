@@ -160,10 +160,10 @@ trigger job 会丢掉它已积累的变更并重置 1s 防抖（MOB-14 的老坑
 
 ## 八、验证记录
 
-- `:app:testDebugUnitTest --rerun-tasks` **217/217 绿**（4 skipped = 需活
+- `:app:testDebugUnitTest --rerun-tasks` **218/218 绿**（4 skipped = 需活
   daemon 的 assumeTrue 用例）。本卡前基线 207。
 - `:app:assembleDebug` 绿。versionCode 7→8，本地回退版本名 0.3.2→0.3.3。
-- **反证 9 条，全红**（家规必带）：
+- **反证 10 条，全红**（家规必带）：
 
 | # | 破坏 | 变红的测试 |
 |---|---|---|
@@ -176,15 +176,88 @@ trigger job 会丢掉它已积累的变更并重置 1s 防抖（MOB-14 的老坑
 | G | 恢复健康检查的 early-return | `process_start_must_rearm_the_listener` |
 | H | manifest 漏 `BIND_JOB_SERVICE` | `job_service_is_registered_in_manifest` |
 | I | 队列去重永远派活 | `skips_when_something_is_already_waiting` |
+| J | 不做升级清理 | `upgrade_kills_the_legacy_workmanager_trigger` |
 
 - ⚠️ **写测试时当场撞到一个恒真式**：`codeOf` 只剥 `//` 行，KDoc 块注释里
   引用 javadoc 原文写了 `jobFinished()`，于是"不该出现 jobFinished"这条
   断言被自己的注释判红。`MediaWatchJobTest.codeOf` 已改为**先剥块注释再剥
   行注释**，教训写在函数 KDoc 里。**否定式源码断言必须剥干净块注释。**
 
+## 八点五、⚠️ 真机装包时发现的升级路径 bug（已修，含证据）
+
+装 0.3.3(8) 之后 `dumpsys jobscheduler` 显示**旧的 content trigger 还活着**：
+
+```
+JOB androidx.work.systemjobscheduler:.../SystemJobService
+  Requires: charging=false batteryNotLow=true deviceIdle=false
+  Trigger content URIs:
+    1 content://media/external/images/media
+  Network type: NetworkRequest [ ... NOT_METERED ... ]
+```
+
+`adb install -r` 保留应用数据，WorkManager 库里 `ppass-content-trigger` 那条
+unique work 原封不动。而 MOB-27 把所有 cancel 它的代码都删了。后果：升级窗口内
+**同一波 MediaStore 变化同时唤醒新旧两个监听**，两条独立 unique 通道之间没有
+串行保证，会并行扫同一水位重复推字节。旧那个跑完自然消亡（重挂机关已删），
+但在此之前每次变化都要重复一遍。
+
+修法：`cancelLegacyContentTriggerWork()`（字面量字符串，常量已删），挂在
+`scheduleAutoBackup` 上（进程被系统拉起时也执行，不只靠用户开 App）。
+老用户全部升过之后可整段删掉。
+
+## 八点六、真机静态验证（RFCX1040SNE / 0.3.3(8)，2026-08-19）
+
+```
+JOB #u0a359/20260819: com.hawkeyexb.ppass/.backup.MediaWatchJob
+  Requires: charging=false batteryNotLow=false deviceIdle=false   ← 零约束 ✅
+  Trigger content URIs:
+    1 content://media/external/images/media                       ← flag=1 = FOR_DESCENDANTS ✅
+    1 content://media/external/video/media
+  Trigger update delay: +1s0ms                                    ← ✅
+  Trigger max delay: +30s0ms                                      ← ✅
+  Unsatisfied constraints: CONTENT_TRIGGER                        ← 在岗等变化 ✅
+（无 "Network type:" 行 = 第四节那个洞的直接证据 ✅）
+```
+
+P-Pass 名下 job 精确清点：**2 个**——周期兜底（无 content trigger）+ 看门 job。
+遗留的 4 个旧 content trigger job 已被清理干净 ✅
+
+### 完整循环的真机时间线（探针触发）
+
+用 `adb shell content insert` 造一条无实体文件的 MediaStore 记录（**不会真往
+daemon 推东西**，MOB-09 的跳过逻辑会拦下），观察 `dumpsys jobscheduler` 的
+job history：
+
+```
+-22s141ms   START: MediaWatchJob                    ← 监听被唤醒
+-22s114ms   START: SystemJobService (备份 work)      ← +27ms，活已派出去
+-22s109ms    STOP: MediaWatchJob canceled           ← +32ms，看门 job 结束
+-21s293ms    STOP: SystemJobService jobFinished     ← 备份跑完
+```
+
+- **看门 job 全程 32 毫秒**，且在它结束前备份 work 已经起来了（+27ms）。
+- `STOP: ... canceled` 正是 `schedule(同 job ID)` 终结当前 job 的表现，
+  对应 javadoc 的 "Scheduling the new job will cause the current job to be
+  stopped"——**这就是"释放"动作留下的痕迹**。
+- 之后看门 job id 立刻变成新的一个，`Unsatisfied constraints: CONTENT_TRIGGER`
+  = 已重新在岗等下一次变化。**空窗 = 32 毫秒**（旧实现 = 整个备份时长）。
+
+### 附带：MOB-09 的真机验收顺手补上了
+
+同一次探针的 logcat：
+
+```
+W PPassBackup: auto backup: skipped 1/1 unreadable media record(s): ppass-probe-mob27.jpg
+```
+
+坏记录被跳过，**无 ENOENT 导致的 RETRY/FAILURE**（logcat 里那两条 ENOENT 来自
+三星自带相册的 ExifUtils，不是我们）。这正是 `MOB-09` 卡 §未完成里 owed 的
+真机证据。探针记录已 `content delete` 清除。
+
 ## 九、⚠️ 真机验收 owed（本卡因此不能移入 `done/`）
 
-无设备接入，以下三项全部未做：
+静态接线与单次触发循环已在真机验完（见上节）。剩下三项是**动态行为**，
+需要真实拍照，留给用户：
 
 1. **连拍**：100ms 级连拍 5 秒 → 期望 logcat 只出现 **1 次**
    `auto backup: offered=…`（不是 50 次）；`dumpsys jobscheduler` 里

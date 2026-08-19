@@ -161,6 +161,10 @@ fun scheduleAutoBackup(context: Context) {
     // 这条路径同时是**重启后的复活链路**：trigger URI 与 setPersisted 互斥
     // （javadoc 明文），看门 job 每次重启必死；重启后 WorkManager 拉起进程
     // 跑周期任务 → PPassApplication.onCreate → 这里重挂。
+    // MOB-27 升级清理：老版本挂在 WorkManager 上的 content trigger 必须先
+    // 干掉，否则升级窗口内新旧两个监听会被同一波变化同时唤醒，跑两轮并行
+    // 备份（真机 dumpsys 实锤，见 cancelLegacyContentTriggerWork）。
+    cancelLegacyContentTriggerWork(context)
     ensureMediaWatch(context)
 }
 
