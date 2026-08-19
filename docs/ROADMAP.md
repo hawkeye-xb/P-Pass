@@ -459,7 +459,8 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       （文件作为内容/附件发给目标 app，分享面板：微信/邮件/云盘）；
       打开=`ACTION_VIEW`（目标 app 以打开模式处理文件，打开方式选择器）。
       底层共用 FileProvider + FLAG_GRANT_READ_URI_PERMISSION + 临时文件即用
-      即清。实现：`AssetActions.shareIntent` + 自绘 ic_share.xml + 照片/视频
+      即清。实现：`AssetActions.shareIntent` + 分享图标（原自绘 ic_share.xml，
+      **ICON-02 已换成 `Icons.Filled.Share`**）+ 照片/视频
       查看页右上角分享图标 + 动作枚举化（三动作共享下载管线）。android
       166/166 绿。挂账：真机分享到微信收到原图 + share 目录零残留（用户）。
 - [x] UX-11 daemon 请求无超时（真死机永久卡 loading） — **2026-08-12
