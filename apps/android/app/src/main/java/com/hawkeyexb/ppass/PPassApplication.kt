@@ -45,10 +45,19 @@ class PPassApplication : Application() {
             // 悄悄恢复等于把提示变成马后炮，用户没有选择权。
             if (!isBackupScheduled(this)) {
                 BackupHealthPrefs(filesDir).recordInterrupted(System.currentTimeMillis())
-                return@thread
             }
 
-            // 走到这里 = 调度体系还在（进程是被系统正常拉起的）。
+            // MOB-27: 这里**不能再 early-return**。事件②的监听现在是
+            // JobScheduler 上的看门 job，而 trigger URI 与 setPersisted 互斥
+            // （javadoc 明文）——**每次重启监听必然消失**。进程被拉起时不重挂，
+            // 监听就一直失联到用户主动打开 App 为止，比 MOB-18 想防的那个
+            // 问题严重得多。
+            //
+            // 与用户旧指令（"必须点了才恢复，你都提示了就别自作主张"）的关系：
+            // 那句话的前提是"你都提示了"。MOB-18 的提示 UI 已随功能一起 pending
+            // 进 backlog，现在没有任何提示——不恢复 = 静默死亡。所以 pend 掉这个
+            // 功能就意味着回到 always-ensure。上面那行 record 保留，将来重做
+            // MOB-18 时判据现成（但要先解决重启与 force-stop 无法区分的问题）。
             //
             // MOB-16（用户架构要求）：**监听的挂载不能依赖用户打开 App**。
             // 在此之前 scheduleAutoBackup 只在 MainActivity 里调用，意味着

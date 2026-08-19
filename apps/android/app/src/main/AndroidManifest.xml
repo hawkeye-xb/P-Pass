@@ -54,6 +54,15 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
+        <!-- MOB-27: 照片监听的看门 job。只派活 + 重挂，毫秒级返回，
+             备份本身在 WorkManager 那边异步跑（见 MediaWatchJob.kt）。
+             BIND_JOB_SERVICE 是 JobService 的硬要求——漏了系统拒绝 bind，
+             监听静默失效。 -->
+        <service
+            android:name=".backup.MediaWatchJob"
+            android:permission="android.permission.BIND_JOB_SERVICE"
+            android:exported="false" />
+
         <!-- UPD-01: update APK 安装走 FileProvider（cacheDir 临时文件） -->
         <provider
             android:name="androidx.core.content.FileProvider"

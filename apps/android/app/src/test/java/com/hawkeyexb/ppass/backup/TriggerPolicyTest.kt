@@ -130,59 +130,36 @@ class TriggerPolicyTest {
             "暂停必须取消进程启动补捞通道",
             pauseBody.contains("cancelUniqueWork(PROCESS_CATCHUP_WORK_NAME)"),
         )
+        // MOB-27: 看门 job 在 JobScheduler 上，cancelUniqueWork 管不着它——
+        // 漏了这一句，「暂停自动备份」对事件②完全失效（监听继续派活）。
+        assertTrue("暂停必须取消看门 job", pauseBody.contains("cancelMediaWatch(context)"))
+        assertTrue(
+            "暂停必须取消看门 job 派活的通道",
+            pauseBody.contains("cancelUniqueWork(MEDIA_WATCH_BACKUP_WORK_NAME)"),
+        )
     }
 
     @Test
-    fun rearm_window_stays_short() {
-        // MOB-23：监听空窗 = work 执行时间 + 重挂延迟。用户定调「一旦触发
-        // 就尽快重新监听」，且这段空窗本身就是天然防抖窗口。锁死它不许被
-        // 后人放大回分钟级——放大等于连拍丢通知的窗口同步放大。
-        assertTrue("重挂初始延迟必须是秒级", REARM_INITIAL_DELAY_SECONDS <= 2L)
-        assertTrue("轮询间隔必须亚秒级", REARM_WAIT_TICK_MS <= 1_000L)
-        // 但不许是 0：rearm 走 REPLACE，work 还 RUNNING 时动手会取消掉正在
-        // 传照片的自己（MOB-08 的老坑）。
-        assertTrue("延迟不许归零", REARM_INITIAL_DELAY_SECONDS >= 1L)
-    }
-
-    @Test
-    fun rearm_catches_up_only_when_previous_round_had_photos() {
-        // MOB-23 回归锁：监听重挂前有一段**没有监听**的空窗（work 一执行
-        // 监听就消耗掉，直到 rearm 才补上，中间隔着 work 执行时间 +
-        // REARM_INITIAL_DELAY_SECONDS）。连拍正好撞上：前几张触发了备份，
-        // 之后继续拍的那些没人接通知（用户实测"前面的出去了，后面的没同步"）。
-        // 那批照片没丢——水位没推过它们——所以 rearm 要顺带补扫一次。
+    fun app_start_does_not_clobber_a_pending_watch_job() {
+        // MOB-14 回归锁，MOB-27 后换了载体但**教训一字未改**：App 启动路径
+        // 不许覆盖一个正在 pending 的监听。覆盖会丢掉它已积累的 MediaStore
+        // 变化并重置 1s 防抖——用户拍完照顺手开 App 看"传了没"就正好踩中，
+        // 那张照片只能等 5h 周期兜底。
+        //
+        // javadoc 的"运行期间变更转交给下一个 job"只覆盖 job **running** 期，
+        // **不覆盖 pending 期**，所以这里必须是 guard-then-schedule。
         val src = codeOf(File(repoRoot(),
             "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
-        assertTrue(
-            "rearm 必须能按需补捞",
-            src.contains("if (inputData.getBoolean(KEY_REARM_CATCH_UP, false))") &&
-                src.contains("triggerProcessStartCatchup(ctx)"),
-        )
-        assertTrue(
-            "补捞标志必须由「本轮是否有照片」决定——无条件补捞会变成无限循环",
-            src.contains("enqueueContentTriggerRearm(ctx, catchUp = batchSize > 0)"),
-        )
-        // 补捞发生在重挂之后（先恢复监听，再扫空窗遗留）。
-        val body = src.substringAfter("class ContentTriggerRearmWorker")
-        val scheduleAt = body.indexOf("scheduleContentTriggerBackup(ctx)")
-        val catchUpAt = body.indexOf("triggerProcessStartCatchup(ctx)")
-        assertTrue("补捞必须在重挂之后", scheduleAt in 0 until catchUpAt)
-    }
-
-    @Test
-    fun app_start_keeps_pending_content_trigger() {
-        // MOB-14 回归锁：App 启动路径必须 KEEP。
-        // REPLACE 会取消**正在等待触发**的 job，它已收到的 MediaStore 变化
-        // 通知随之丢失、CONTENT_TRIGGER 从零重新计时——用户拍完照顺手开
-        // App 看"传了没"就正好踩中，那张照片只能等 6h 周期兜底。
-                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
         val body = src.substringAfter("fun scheduleAutoBackup(").substringBefore("\n}")
+        assertTrue("App 启动路径必须走 ensureMediaWatch（幂等 guard）", body.contains("ensureMediaWatch(context)"))
         assertTrue(
-            "App 启动路径必须 KEEP，不能打断正在等待的 content trigger",
-            body.contains("ExistingWorkPolicy.KEEP"),
+            "App 启动路径不许裸 schedule（会覆盖 pending 的监听）",
+            !body.contains("scheduleMediaWatchNow("),
         )
-        // 改设置/备份跑完后的重挂仍然是 REPLACE——那两条路径没有待处理通知。
-        assertEquals("默认策略仍是 REPLACE", ExistingWorkPolicy.REPLACE, CONTENT_TRIGGER_POLICY)
+        // 改设置同理：约束已不在监听上，没有任何重建监听的理由。
+        val reschedule = src.substringAfter("fun rescheduleAutoBackup(").substringBefore("\n}")
+        assertTrue("改设置也只做存在性确认", reschedule.contains("ensureMediaWatch(context)"))
+        assertTrue("改设置不许重建监听", !reschedule.contains("scheduleMediaWatchNow("))
     }
 
     @Test
@@ -321,116 +298,5 @@ class TriggerPolicyTest {
         )
     }
 
-    // ── 验收 2：content trigger 的 Constraints 含 update/max delay + 去重 ──
-
-    @Test
-    fun content_trigger_constraints_carry_burst_aggregation_delays() {
-        // 连拍聚合的机制证据：update delay（防抖窗口）+ max delay（封顶）
-        // 是硬常量，且 request 能正常构建（接线 smoke）。
-        // MOB-11：节奏从 2min/15min 收到 1s/30s——单张拍完 ~1s 就发起。
-        assertEquals(1L * 1000, CONTENT_UPDATE_DELAY_MS)
-        assertEquals(30L * 1000, CONTENT_MAX_DELAY_MS)
-        // MOB-11 回归锁：update delay 是尾沿防抖，持续不断的 MediaStore
-        // 写入（截图/IM 收图/其它 App 批量写）会让 1s 静默窗口永远等不到，
-        // 此时只有 max delay 这个从第一次变化起算的强制闸能救。它必须留在
-        // 与 update delay 同数量级的秒级，不能退回分钟级。
-        // （注意：有限连拍不会触到 max delay——连拍结束后 1s 就走。）
-        assertTrue(
-            "max delay 必须秒级封顶持续 churn（不得超过 update delay 的 60 倍）",
-            CONTENT_MAX_DELAY_MS <= CONTENT_UPDATE_DELAY_MS * 60,
-        )
-        // ⚠️ 无法从 WorkSpec 读回 delay：mockable android.jar 的
-        // Build.VERSION.SDK_INT=0，Constraints.build() 的 SDK≥24 门把
-        // delay 强制 -1、triggers 清空（JVM 侧不可观察）——接线证据走
-        // 文件级反证（下个测试）+ 真机连拍验收（卡面验收 8：连拍 20 张
-        // 只触发一次备份，观察 WorkManager 日志）。
-        val request = buildContentTriggerRequest(
-            BackupSettingsState(),
-            triggerUris = emptyList(),
-        )
-        assertTrue("request 必须能构建（接线 smoke）", request.workSpec.id.isNotBlank())
-    }
-
-    @Test
-    fun content_trigger_wires_delays_in_constraints_builder() {
-        // 文件级反证（DOG-01d 同款手法）：work-runtime 2.10 的 content
-        // trigger delay 接线在 Constraints.Builder（addContentUriTrigger /
-        // setTriggerContentUpdateDelay / setTriggerContentMaxDelay），
-        // 不在 WorkRequest.Builder 上。JVM 无法从 WorkSpec 读回 delay，
-        // 用源码级断言锁死接线——把 update delay 去掉 → 本测试必红。
-                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
-        assertTrue(
-            "update delay 必须接线（连拍聚合安静窗口）",
-            src.contains("setTriggerContentUpdateDelay(CONTENT_UPDATE_DELAY_MS"),
-        )
-        assertTrue(
-            "max delay 必须接线（持续变化兜底）",
-            src.contains("setTriggerContentMaxDelay(CONTENT_MAX_DELAY_MS"),
-        )
-        assertTrue(
-            "必须监听 MediaStore 两集合",
-            src.contains("MediaStore.Images.Media.EXTERNAL_CONTENT_URI") &&
-                src.contains("MediaStore.Video.Media.EXTERNAL_CONTENT_URI"),
-        )
-        // MOB-08 回归锁：forDescendants 必须为 true。MediaProvider 的
-        // notifyChange 发的是带行 id 的 item URI，精确匹配（false）永远
-        // 收不到——这正是「content trigger 从未触发」的根因，改回 false
-        // 本测试必红。
-        assertTrue(
-            "content trigger 必须 forDescendants=true（否则收不到 item URI 通知）",
-            src.contains("addContentUriTrigger(it, true)"),
-        )
-        assertTrue(
-            "不允许退回 forDescendants=false",
-            !src.contains("addContentUriTrigger(it, false)"),
-        )
-    }
-
-    // ── MOB-08：content trigger 跑完必须重挂 ──
-
-    @Test
-    fun content_trigger_rearms_after_every_run() {
-        // 根因回归锁：content trigger 是 OneTimeWork，触发跑完监听就没了。
-        // 只在 App 启动/改设置时挂 = 后台自动同步只在开过 App 那一次有效。
-                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
-        assertTrue(
-            "每轮备份结束必须排一次重挂",
-            src.contains("enqueueContentTriggerRearm(ctx"),
-        )
-        assertTrue(
-            "重挂中转必须用独立 unique name（同名 REPLACE 会取消正在跑的自己）",
-            CONTENT_REARM_WORK_NAME != CONTENT_TRIGGER_WORK_NAME &&
-                CONTENT_REARM_WORK_NAME != BACKUP_WORK_NAME &&
-                CONTENT_REARM_WORK_NAME != CATCHUP_WORK_NAME,
-        )
-        assertTrue(
-            "重挂前必须确认上一轮已终态（否则 REPLACE 掉正在传照片的 worker）",
-            src.contains("getWorkInfosForUniqueWork(CONTENT_TRIGGER_WORK_NAME)") &&
-                src.contains("all { it.state.isFinished }"),
-        )
-        assertTrue(
-            "取消路径上的收尾必须 NonCancellable（否则 client.close() 跑不到）",
-            src.contains("withContext(NonCancellable)"),
-        )
-    }
-
-    @Test
-    fun pause_cancels_rearm_channel_too() {
-        // UX-06 回归：暂停后如果 rearm 还在路上，监听会被悄悄装回去。
-                val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
-        val pauseBody = src.substringAfter("fun pauseAutoBackup(").substringBefore("fun resumeAutoBackup(")
-        assertTrue(
-            "暂停必须取消重挂中转",
-            pauseBody.contains("cancelUniqueWork(CONTENT_REARM_WORK_NAME)"),
-        )
-    }
-
-    @Test
-    fun content_trigger_uses_unique_replace_dedup() {
-        // unique work + REPLACE = 同一波 MediaStore 变化只跑一次
-        // （连拍 20 张不叠加 20 个任务）。
-        assertNotEquals("content trigger 独立 unique 名", BACKUP_WORK_NAME, CONTENT_TRIGGER_WORK_NAME)
-        assertEquals(ExistingWorkPolicy.REPLACE, CONTENT_TRIGGER_POLICY)
-    }
 
 }
