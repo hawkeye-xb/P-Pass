@@ -87,8 +87,12 @@ fun VideoScreen(
             try {
                 when (op) {
                     VideoOp.Save -> {
-                        saveToGallery(context, ready.file, asset)
-                        notice = context.getString(R.string.saved_to_gallery)
+                        val saved = saveToGallery(context, ready.file, asset)
+                        // MOB-24: 存过就直说，别让用户以为没生效又点一次。
+                        notice = context.getString(
+                            if (saved.alreadyExisted) R.string.already_in_gallery
+                            else R.string.saved_to_gallery
+                        )
                     }
                     VideoOp.OpenWith, VideoOp.Share -> {
                         val share = shareDir(context)
@@ -149,7 +153,12 @@ fun VideoScreen(
                 fontSize = 13.sp, color = PPColor.PaperDim,
                 modifier = Modifier.padding(horizontal = 10.dp),
             )
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            // MOB-22: 同 PhotosScreen——Column 里用 fillMaxSize 会把下面的
+            // 动作按钮顶出屏幕。改 weight(1f)：占剩余空间但给按钮让位。
+            Box(
+                Modifier.fillMaxWidth().weight(1f),
+                contentAlignment = Alignment.Center,
+            ) {
                 when (val s = state) {
                     is VideoState.Fetching -> Text(
                         stringResource(R.string.video_loading, s.percent),

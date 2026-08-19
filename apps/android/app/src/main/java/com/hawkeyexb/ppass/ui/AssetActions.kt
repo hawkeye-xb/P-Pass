@@ -7,6 +7,7 @@
 package com.hawkeyexb.ppass.ui
 
 import android.Manifest
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -90,7 +91,11 @@ fun mimeExtension(mime: String): String = when (mime) {
  * API 26-28：DATA 路径 + WRITE_EXTERNAL_STORAGE 权限，写后 MediaScanner
  * 广播。返回保存后的 Uri；失败抛异常（UI 层转人话）。
  */
-suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): Uri {
+/** MOB-24: 保存结果——[alreadyExisted] 为真表示这张之前就存过，本次没有
+ *  再写一份。UI 据此说人话（"已经在相册里了"而不是"已保存到相册"）。 */
+data class SaveResult(val uri: Uri, val alreadyExisted: Boolean)
+
+suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): SaveResult {
     val isVideo = asset.mediaType.startsWith("video")
     val mime = sniffMimeFromHeader(file, isVideo)
     val displayName = "P-Pass-${asset.hash.take(12)}.${mimeExtension(mime)}"
@@ -101,6 +106,26 @@ suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): Uri {
                 MediaStore.Video.Media.EXTERNAL_CONTENT_URI
             } else {
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+            }
+            // MOB-24: 先查存没存过。文件名带内容 hash 前 12 位，**同名即同图**，
+            // 所以查 DISPLAY_NAME 就够。不去重的后果是真机实测出来的：
+            //   P-Pass-c53d45e823e7.jpg
+            //   P-Pass-c53d45e823e7 (1).jpg   ← 同一张，系统自动加了后缀
+            // 用户点了两次（第一次没给足反馈，他以为没生效），相册里就多了
+            // 一份一模一样的照片。
+            resolver.query(
+                collection,
+                arrayOf(MediaStore.MediaColumns._ID),
+                "${MediaStore.MediaColumns.DISPLAY_NAME} = ?",
+                arrayOf(displayName),
+                null,
+            )?.use { c ->
+                if (c.moveToFirst()) {
+                    return@withContext SaveResult(
+                        ContentUris.withAppendedId(collection, c.getLong(0)),
+                        alreadyExisted = true,
+                    )
+                }
             }
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
@@ -123,7 +148,7 @@ suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): Uri {
                 values.clear()
                 values.put(MediaStore.MediaColumns.IS_PENDING, 0)
                 resolver.update(uri, values, null, null)
-                uri
+                SaveResult(uri, alreadyExisted = false)
             } catch (t: Throwable) {
                 runCatching { resolver.delete(uri, null, null) }
                 throw t
@@ -140,6 +165,10 @@ suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): Uri {
             )
             if (!dir.exists() && !dir.mkdirs()) error("cannot create $dir")
             val target = File(dir, displayName)
+            // MOB-24: 同 API29+ 分支——文件名带内容 hash，存在即同图，别再写一份。
+            if (target.isFile) {
+                return@withContext SaveResult(Uri.fromFile(target), alreadyExisted = true)
+            }
             file.inputStream().use { i ->
                 target.outputStream().use { o -> i.copyTo(o) }
             }
@@ -149,7 +178,7 @@ suspend fun saveToGallery(context: Context, file: File, asset: AssetMeta): Uri {
                 arrayOf(mime),
                 null,
             )
-            Uri.fromFile(target)
+            SaveResult(Uri.fromFile(target), alreadyExisted = false)
         }
     }
 }

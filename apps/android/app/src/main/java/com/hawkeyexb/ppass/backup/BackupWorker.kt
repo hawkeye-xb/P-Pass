@@ -36,6 +36,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import com.hawkeyexb.ppass.MainActivity
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
@@ -199,11 +200,27 @@ fun scheduleContentTriggerBackup(
     )
 }
 
-// MOB-08: 重挂中转的延迟与等待参数。延迟让本轮 BackupWorker 先落终态；
-// 等待轮询是防御——超长批次（首次全量备份）可能还没跑完。
-const val REARM_INITIAL_DELAY_SECONDS = 15L
+// MOB-23: rearm 是否要顺带补捞一次（见 ContentTriggerRearmWorker）。
+const val KEY_REARM_CATCH_UP = "ppass.rearm.catch_up"
+
+// MOB-08/23: 重挂中转的延迟与等待参数。
+//
+// 这三个数直接决定「监听空窗」有多长：work 一开始执行，content trigger
+// 就被消耗掉了，直到 rearm 重新挂上之前，**没有任何监听在接 MediaStore
+// 通知**。用户连拍正好撞在这段里（2026-08-19 实测："前面的出去了，后面
+// 的就没有同步"）。
+//
+// 用户定调：「一旦触发了这个事件，就尽快给它重新监听」——空窗越短越好，
+// 而且这段空窗本身就是天然的防抖窗口（连拍期间不会一张一张排任务）。
+// 所以初始延迟从 15s 压到 1s、轮询从 2s 收到 500ms：work 落终态后最快
+// ~1s 就能重挂，空窗基本等于 work 的实际执行时间，压无可压。
+//
+// 仍然保留延迟而不是 0：rearm 走 REPLACE，若在 work 还 RUNNING 时动手会
+// 取消掉正在传照片的自己（MOB-08 的老坑）。轮询上限 30×500ms = 15s，
+// 超长批次由 finally 再排一次 rearm 兜住。
+const val REARM_INITIAL_DELAY_SECONDS = 1L
 const val REARM_WAIT_TICKS = 30
-const val REARM_WAIT_TICK_MS = 2_000L
+const val REARM_WAIT_TICK_MS = 500L
 
 /** MOB-08: content trigger 是 OneTimeWork——被 MediaStore 变化触发、跑完
  *  一轮之后监听就没了。旧实现只在 App 启动（scheduleAutoBackup）和改设置
@@ -231,6 +248,22 @@ class ContentTriggerRearmWorker(
                     .all { it.state.isFinished }
             ) {
                 scheduleContentTriggerBackup(ctx)
+                // MOB-23: 监听重挂好了，但**重挂之前那段时间是没有监听的**
+                // ——work 一开始执行监听就消耗掉了，直到这里才补上，中间隔着
+                // work 执行时间 + REARM_INITIAL_DELAY_SECONDS。用户连拍时正好
+                // 撞上：前几张触发了备份，之后继续拍的那些没有任何监听在接，
+                // 通知就丢了（2026-08-19 用户实测："前面的出去了，后面的就没
+                // 有同步"）。
+                //
+                // 那批照片并没有丢——水位没推过它们（压根没扫到），所以这里
+                // 补扫一次就能捞回来。
+                //
+                // ⚠️ 只在上一轮确实有照片时才补，否则会变成
+                // 「补捞 → 空扫描 → finally 又排 rearm → 再补捞」的无限循环。
+                // 有照片才补 ⇒ 连拍场景下一轮轮收敛，扫空即止。
+                if (inputData.getBoolean(KEY_REARM_CATCH_UP, false)) {
+                    triggerProcessStartCatchup(ctx)
+                }
                 return@withContext Result.success()
             }
             delay(REARM_WAIT_TICK_MS)
@@ -243,12 +276,13 @@ class ContentTriggerRearmWorker(
 
 /** MOB-08: 每轮备份结束后排一次重挂（unique + REPLACE：一轮里多次调用
  *  只留最后一个）。无约束，不占用 charging/unmetered 条件。 */
-fun enqueueContentTriggerRearm(context: Context) {
+fun enqueueContentTriggerRearm(context: Context, catchUp: Boolean = false) {
     WorkManager.getInstance(context).enqueueUniqueWork(
         CONTENT_REARM_WORK_NAME,
         ExistingWorkPolicy.REPLACE,
         OneTimeWorkRequestBuilder<ContentTriggerRearmWorker>()
             .setInitialDelay(REARM_INITIAL_DELAY_SECONDS, TimeUnit.SECONDS)
+            .setInputData(workDataOf(KEY_REARM_CATCH_UP to catchUp))
             .build(),
     )
 }
@@ -568,7 +602,9 @@ class BackupWorker(
                 // MOB-08: content trigger 跑完就失效了，每轮结束重挂一次
                 // （周期/catchup 通道跑完也顺手挂——幂等，KEEP 语义在
                 // rearm 内部靠终态判断保证）。
-                enqueueContentTriggerRearm(ctx)
+                // MOB-23: batchSize > 0 = 本轮确实有照片 ⇒ 重挂监听之前那段
+                // 空窗里很可能还有没被通知到的新照片，让 rearm 顺带补扫一次。
+                enqueueContentTriggerRearm(ctx, catchUp = batchSize > 0)
                 // SENT-01: 搭便车检查——每次后台任务结束（成败都算）看
                 // 一次哨兵判定；该发则发（内部去重，发过 markNotified）。
                 maybeNotifySentinel(ctx)

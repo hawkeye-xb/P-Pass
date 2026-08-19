@@ -4,6 +4,7 @@ package com.hawkeyexb.ppass.backup
 
 import android.content.ContentResolver
 import android.content.Context
+import androidx.work.WorkManager
 import android.os.Build
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
@@ -49,6 +50,23 @@ class BackupUiStateHolder(
         scope.launch { refreshTriplet() }
         // DOG-01c: App 打开即做一次漂移校准（daemon 可达才跑，不可达跳过）。
         scope.launch { calibrateFromDaemon() }
+        // MOB-21: 跟住**后台** BackupWorker 的状态变化。
+        //
+        // 在此之前 refreshTriplet 只在三个时机跑：init、手动备份完成、
+        // MOB-13 的补齐之后——**后台自动备份跑完不通知 UI**。于是用户
+        // 打开 App（那一刻 M=0）、后台默默传完 142 张，界面上那个大字
+        // 一直停在 0，用户以为"备份成功了却显示 0"（2026-08-19 真机实测：
+        // 数据层 confirmed.json 有 165 条记录、范围内 142 条完全正确，
+        // 重启 App 立刻显示 142/142——纯粹是 UI 没刷新）。
+        //
+        // 按 tag 观察而不是按 unique name：自动备份有四条通道（周期兜底 /
+        // content trigger / 用户在场 catchup / 进程启动补捞），它们共用
+        // BackupWorker，逐个 name 订阅既啰嗦又容易漏。
+        scope.launch {
+            WorkManager.getInstance(context)
+                .getWorkInfosByTagFlow(BackupWorker::class.java.name)
+                .collect { refreshTriplet() }
+        }
     }
 
     /** DOG-01c: 漂移校准——电脑端库被删/换库时，缓存里的旧 hash 已不在
