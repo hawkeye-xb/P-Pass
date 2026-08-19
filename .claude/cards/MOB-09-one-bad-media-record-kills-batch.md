@@ -74,3 +74,67 @@ App 写坏的记录。用户看到的现象会是「备份莫名其妙从某天�
 
 Android 单测全绿 + PROGRESS.md 一行 + NEXT.md 状态更新 + 本卡移入
 `done/`。
+
+---
+
+## 实施记录（2026-08-19）
+
+### 决策点（卡面要求"实施时定并写进卡"）
+
+1. **坏记录只打日志，不发通知、不计入失败计数。** 用户对"相册里有几行脏
+   数据"无能为力，通知只制造焦虑；日志给排查用（不静默吞）。格式：
+   `W PPassBackup: auto backup: skipped <n>/<total> unreadable media record(s): <前 5 个文件名>`
+2. **部分跳过 → 水位照常推进**，坏行随之被永久跳过（这正是本卡要的：
+   一条脏数据不许挡住其余照片）。
+3. **整批都读不了 → 不 commit、不推进水位**，直接 `Result.success()` 返回。
+   理由：全批失败更可能是"暂时读不到"（权限被撤、外部存储卸载）而非
+   "这些行都是垃圾"；推进水位等于把这批照片永久跳过，那是真丢数据。
+   代价是每轮重试一次 open（便宜）。
+4. **跳过点顺带堵了缓存洞**：`hashWithCache` 命中缓存时不调 `open`
+   （PERF-01），"上一轮哈希过、之后文件被删"的记录会带着旧 hash 溜进候选，
+   直到 `BackupRunner.pushFile` 才抛 ENOENT——同样炸整批。候选构建里加了
+   一次探针 `open().use { }`（只开关流不读内容）。
+5. **`CancellationException` 必须原样上抛**，不算坏记录——吞掉它会把一次
+   系统 stop（MOB-08 的配额/约束/FGS 回收）伪装成"全部跳过"的成功批次。
+6. **与 MOB-13 的交叉不变量**：`fileEntriesOf` 要求文件列表与候选列表 1:1
+   同序，跳过坏记录天然打破"候选 == 扫描结果"。`CandidateBuild.kept` 就是
+   为此存在（产出候选的那些原始条目，与 candidates 1:1），调用处喂 `kept`
+   而不是 `scan.items`。未动 ConfirmedStore.kt。
+
+### 改动
+
+- `apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt`
+  新增 `CandidateBuild<T>` / `buildCandidates()`（逐条隔离），doWork 候选
+  构建改走它 + 探针 open + 跳过日志 + 全空早退 + `files = fileEntriesOf(built.kept…)`。
+- `apps/android/app/src/test/java/com/hawkeyexb/ppass/backup/BadMediaRecordTest.kt`（新）6 个测试。
+- MediaScanner.kt 未动（隔离放在候选构建层更合适：扫描层不碰文件内容）。
+
+### 证据
+
+- 全量：`./gradlew :app:testDebugUnitTest --rerun-tasks` → BUILD SUCCESSFUL，
+  206 tests / 0 failures / 4 skipped（skipped = 需要活 daemon 的 assumeTrue 用例）。
+  本卡改动前基线 193 / 0 failures / 4 skipped。
+- 反证 A（把 `buildCandidates` 的跳过逻辑去掉，改成无条件 rethrow）：
+  4 个行为测试全红——`one_unreadable_record_does_not_kill_the_batch`、
+  `every_record_unreadable_yields_empty_batch_without_throwing`、
+  `cached_hash_does_not_smuggle_a_deleted_file_into_the_batch` 抛
+  `java.io.FileNotFoundException`，`a_late_read_error_is_skipped_too` 抛
+  `java.io.IOException`。
+- 反证 B（把生产链路的探针 `open().use { }` 删掉）：
+  `doWork_builds_candidates_through_the_isolating_path` 红
+  （`候选构建必须先探一次 open（缓存命中不调 open，删掉的文件会溜进批次）`）。
+  ⚠️ 教训：反证 B 第一次跑是**绿**的——`cached_hash_…` 那个行为测试用的是
+  测试自己写的 build lambda，生产探针删了它照样绿。补了源码级断言才锁住。
+
+### 未完成（本卡不能移入 done/）
+
+- **真机验收未做**（无设备接入）：`adb shell content insert` 造坏记录 +
+  `adb push` 真 jpg → 触发一轮 → 期望 logcat 出现 `auto backup: offered=…`
+  且无 ENOENT 导致的 RETRY/FAILURE，另有 `skipped 1/2 unreadable media record(s)`。
+- PROGRESS.md / NEXT.md / ROADMAP.md 未更新（等真机验收过了一起收口）。
+
+### 顺手发现（不在本卡范围，建议另开卡）
+
+手动备份链路 `BackupUiStateHolder.kt` 的候选构建是同一形状的裸 map + open，
+同一条坏记录同样会炸掉整批手动备份。本卡范围写死只准动 BackupWorker/
+MediaScanner，未动它。

@@ -25,13 +25,34 @@ class ConfirmedStoreTest {
         java.nio.file.Files.createTempDirectory("ppass-confirmed-$tag").toFile()
 
     /** 造一个可被 BackupRunner 报告消费的候选（测试用，不真读内容）。 */
-    private fun candidate(i: Int): Candidate = Candidate(
-        hash = "hash-%05d".format(i),
+    private fun candidate(i: Int, hash: String = "hash-%05d".format(i)): Candidate = Candidate(
+        hash = hash,
         fileName = "photo-$i.jpg",
         mediaType = "image/jpeg",
         bytes = 1024,
         open = { ByteArrayInputStream(ByteArray(0)) },
     )
+
+    /** MOB-13: 生产口径的 fileKey（BackupWorker/BackupUiStateHolder 传的是
+     *  `MediaItem.uri.toString()`；JVM 单测起不了 android.net.Uri，用同形
+     *  字符串——fileEntriesOf 只当它是不透明 key）。 */
+    private fun fileKey(id: Int): String = "content://media/external/images/media/$id"
+
+    /** MOB-13: 源码级断言的公共前处理——**剥掉注释行**再判断。
+     *  （TriggerPolicyTest 同款：直接 contains 会被「把那行代码注释掉」
+     *  骗过去，反证跑不红。） */
+    private fun codeOf(file: File): String =
+        file.readText().lines()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+
+    private fun repoRoot(): File {
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        return dir
+    }
 
     @Test
     fun first_run_all_missing_pre_upload_then_all_success_m_equals_100() {
@@ -248,6 +269,201 @@ class ConfirmedStoreTest {
                 assertTrue("K 恒 ≥0", t.k >= 0)
             }
         }
+    }
+
+    // ── MOB-13：K 永远归不了零（M 按 hash 计数、N 按文件计数）──
+
+    @Test
+    fun duplicate_content_all_backed_up_gives_k_zero() {
+        // 卡面验收①：相册 5 个文件，其中 2 个**内容相同**（相机
+        // `xxx(0).jpg` / 微信保存过又收到一次），全部备份成功 → K 必须 = 0。
+        // 旧口径 M = confirmed.size = 4 个唯一 hash，N = MediaStore 文件
+        // COUNT = 5 → K = 1 永远消不掉（用户报告的现象）。
+        // 走生产调用链：fileEntriesOf + confirmedAfterCommit + recordRun +
+        // tripletOf（与 BackupUiStateHolder.runBackup / BackupWorker 同款）。
+        val dir = tempDir("mob13-dup")
+        val store = ConfirmedStore(dir)
+
+        // 文件 3 与文件 4 内容一致 → 同一个 hash（MediaStore 仍是两行）。
+        val candidates = listOf(
+            candidate(0), candidate(1), candidate(2),
+            candidate(3, hash = "hash-dup"), candidate(4, hash = "hash-dup"),
+        )
+        val scanned = (0..4).map { fileKey(it) to 1001L as Long? }
+        val report = BackupReport(
+            offered = 5, pushed = 4, ingested = 4, duplicates = 1,
+            missing = candidates.map { it.hash }.toSet(),
+        )
+        store.recordRun(
+            confirmed = confirmedAfterCommit(candidates, report),
+            lastSuccessAt = 1000,
+            bucketOf = candidates.associate { it.hash to 1001L },
+            files = fileEntriesOf(scanned, candidates),
+        )
+
+        assertEquals("内容 hash 只有 4 个（去重后）", 4, store.load().confirmed.size)
+        assertEquals("M 必须按文件数 = 5", 5, store.count())
+
+        val t = tripletOf(n = 5, confirmedCount = store.count().toLong(), lastSuccessAt = store.lastSuccessAt())
+        assertEquals(5L, t.n)
+        assertEquals(5L, t.m)
+        assertEquals("5 张全部备份成功 → K 必须 = 0（不能被内容重复卡住）", 0L, t.k)
+
+        // 范围口径同样按文件数（相册 1001 全选中）。
+        assertEquals("范围内 M 也必须 = 5", 5, store.countInScope(setOf(1001L)))
+        assertEquals("范围外 → 0", 0, store.countInScope(setOf(2002L)))
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun duplicate_content_with_one_unsynced_file_still_reports_k_one() {
+        // 反向：不能靠"把 K 压成 0"作弊——5 个文件里 2 个内容相同已备份、
+        // 另有 1 个真的没备份 → K 必须 = 1（真有没同步的必须报出来）。
+        val dir = tempDir("mob13-partial")
+        val store = ConfirmedStore(dir)
+        val done = listOf(
+            candidate(0), candidate(1),
+            candidate(3, hash = "hash-dup"), candidate(4, hash = "hash-dup"),
+        )
+        val scanned = listOf(0, 1, 3, 4).map { fileKey(it) to null as Long? }
+        store.recordRun(
+            confirmed = done.mapTo(mutableSetOf()) { it.hash },
+            lastSuccessAt = 1,
+            files = fileEntriesOf(scanned, done),
+        )
+        val t = tripletOf(n = 5, confirmedCount = store.count().toLong(), lastSuccessAt = 1)
+        assertEquals("已确认文件 4 个", 4L, t.m)
+        assertEquals("剩 1 个没备份 → K = 1", 1L, t.k)
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun file_entries_size_mismatch_degrades_to_empty() {
+        // fileEntriesOf 靠「scan.items 与 candidates 1:1 同序」配对。长度
+        // 对不上（候选构建被改成 filter 之类）时必须**整体降级为空**，
+        // 退回按 hash 计数的旧口径——绝不能错位写出 文件↔hash 的假对应。
+        val candidates = listOf(candidate(0), candidate(1), candidate(2))
+        assertEquals(
+            "长度不等 → 空 map（降级，不错位）",
+            emptyMap<String, ConfirmedFile>(),
+            fileEntriesOf(listOf(fileKey(0) to 1L, fileKey(1) to 1L), candidates),
+        )
+        val ok = fileEntriesOf((0..2).map { fileKey(it) to 7L as Long? }, candidates)
+        assertEquals(3, ok.size)
+        assertEquals(ConfirmedFile("hash-00001", 7L), ok[fileKey(1)])
+    }
+
+    @Test
+    fun legacy_hash_entries_without_file_records_still_count() {
+        // 迁移兼容：存量 confirmed.json 没有文件级记录（0.3.4 之前备份的），
+        // 这些 hash 仍按老口径一条算一个——升级后 M 不许突然掉下去。
+        val dir = tempDir("mob13-legacy")
+        val store = ConfirmedStore(dir)
+        store.recordRun(confirmed = hashes(10), lastSuccessAt = 1) // 旧版写法
+        assertEquals("升级后存量条目照旧计数", 10, store.count())
+
+        // 之后一次带文件级记录的运行：3 个存量 hash 补上了文件记录（其中
+        // 一个 hash 对应两个文件）→ 这 3 个不再按存量条目补记，改按文件数。
+        val old = hashes(10).sorted()
+        val migrated = listOf(
+            candidate(0, hash = old[0]), candidate(1, hash = old[1]),
+            candidate(2, hash = old[2]), candidate(3, hash = old[2]),
+        )
+        store.recordRun(
+            confirmed = migrated.mapTo(mutableSetOf()) { it.hash },
+            lastSuccessAt = 2,
+            files = fileEntriesOf((0..3).map { fileKey(it) to null as Long? }, migrated),
+        )
+        assertEquals(
+            "4 个已记录文件 + 7 个仍无文件记录的存量 hash",
+            11, store.count(),
+        )
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun out_of_scope_file_records_do_not_fall_back_to_legacy_counting() {
+        // 覆盖判定必须跨全部范围：某 hash 的文件全在范围外时，它已经"有
+        // 文件级记录"了，不能再当存量条目补记一条（那是别的相册的照片，
+        // 不该进 M）——否则缩范围后 M 又虚高。
+        val dir = tempDir("mob13-scope")
+        val store = ConfirmedStore(dir)
+        val inA = listOf(candidate(0, hash = "h-a"), candidate(1, hash = "h-a"))
+        val inB = listOf(candidate(2, hash = "h-b"))
+        store.recordRun(
+            confirmed = setOf("h-a", "h-b"),
+            lastSuccessAt = 1,
+            files = fileEntriesOf(listOf(fileKey(0) to 1001L, fileKey(1) to 1001L), inA) +
+                fileEntriesOf(listOf(fileKey(2) to 2002L), inB),
+        )
+        assertEquals("全量 = 3 个文件", 3, store.count())
+        assertEquals("只选相册 A → 2 个文件（B 的不补记）", 2, store.countInScope(setOf(1001L)))
+        assertEquals("只选相册 B → 1 个文件", 1, store.countInScope(setOf(2002L)))
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun drift_removes_file_records_of_missing_hashes() {
+        // 漂移校准（电脑端库被删/换库）：exist-check 回 missing hash →
+        // 指向它的文件级记录同时失效，M 必须跟着掉（内容重复的两个文件
+        // 一起掉）。lastSuccessAt 与别的相册归属不受影响。
+        val dir = tempDir("mob13-drift")
+        val store = ConfirmedStore(dir)
+        val cands = listOf(
+            candidate(0, hash = "keep"), candidate(1, hash = "gone"),
+            candidate(2, hash = "gone"),
+        )
+        store.recordRun(
+            confirmed = setOf("keep", "gone"),
+            lastSuccessAt = 42_000,
+            bucketOf = mapOf("keep" to 1001L, "gone" to 1001L),
+            files = fileEntriesOf((0..2).map { fileKey(it) to 1001L as Long? }, cands),
+        )
+        assertEquals(3, store.count())
+
+        store.removeMissing(setOf("gone"))
+        assertEquals("gone 的两个文件记录一起失效 → M = 1", 1, store.count())
+        assertEquals("范围口径同样 = 1", 1, store.countInScope(setOf(1001L)))
+        assertEquals("lastSuccessAt 不被漂移校准改写", 42_000L, store.lastSuccessAt())
+        assertEquals(
+            "MOB-13 顺带修正：漂移校准不再抹掉 bucketOf（原实现重建 state 时丢了）",
+            mapOf("keep" to 1001L), store.load().bucketOf,
+        )
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun production_call_sites_record_file_level_entries() {
+        // 源码级断言（**先剥注释行**，见 codeOf）：两条生产写入链路都必须
+        // 把文件级记录传给 recordRun。只改 ConfirmedStore 不改调用处 =
+        // files 表永远是空的，K 照样归不了零，单测却全绿。
+        val holder = codeOf(
+            File(
+                repoRoot(),
+                "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt",
+            )
+        )
+        val worker = codeOf(
+            File(
+                repoRoot(),
+                "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
+            )
+        )
+        assertTrue("手动备份必须记文件级确认", holder.contains("files = fileEntriesOf("))
+        assertTrue("自动备份必须记文件级确认", worker.contains("files = fileEntriesOf("))
+        // fileKey 口径 = MediaItem.uri.toString()（两端一致，否则同一文件
+        // 在自动/手动两条链路会各记一条，M 虚高）。喂的列表两端不同名
+        // （手动 scan.items / 自动 MOB-09 的 built.kept——跳过坏记录后
+        // 只有 kept 与候选 1:1），只钉住取值口径。
+        val key = ".map { it.uri.toString() to it.bucketId }"
+        assertTrue("手动备份 fileKey 口径", holder.contains(key))
+        assertTrue("自动备份 fileKey 口径", worker.contains(key))
+        // 迁移路径：全已确认早退分支也要补齐文件级记录，否则存量用户
+        // （每张都已备份）按几次备份都修不好 K。
+        assertEquals(
+            "runBackup 必须有两处 recordRun（正常提交 + 全已确认早退补齐）",
+            2, Regex("confirmedStore\\.recordRun\\(").findAll(holder).count(),
+        )
     }
 
     @Test

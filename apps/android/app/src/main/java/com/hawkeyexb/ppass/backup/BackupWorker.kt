@@ -328,6 +328,58 @@ fun resumeAutoBackup(context: Context) {
     scheduleAutoBackup(context)
 }
 
+/** MOB-09: 候选构建的结果——能读的候选 + 被跳过的原始条目（坏 MediaStore 行）。
+ *  跳过的条目留原始类型，调用方自己决定怎么记日志（这里不碰 android.util.Log，
+ *  纯函数才能在 JVM 单测里跑）。
+ *
+ *  [kept] 是**产出候选的那些原始条目**，与 [candidates] 严格 1:1 同序。
+ *  它存在的唯一理由是 MOB-13 的 `fileEntriesOf`：那里靠「文件列表与候选
+ *  列表同序等长」把 fileKey 配到 hash 上，长度对不上就整体降级成空 map
+ *  （K 又归不了零）。跳过坏记录天然破坏了「候选 == 扫描结果」这个等式，
+ *  所以调用方必须喂 [kept] 而不是原始扫描列表——两张卡的不变量都保住。 */
+internal data class CandidateBuild<T>(
+    val candidates: List<Candidate>,
+    val kept: List<T>,
+    val skipped: List<T>,
+)
+
+/**
+ * MOB-09: 逐条隔离的候选构建——一条打不开的 MediaStore 记录不许炸掉整批。
+ *
+ * 现场（2026-08-18 真机）：MediaStore 里存在「有行、没实体文件」的记录时，
+ * 旧实现的 `scan.items.map { … hashWithCache(…) }` 让 `FileNotFoundException`
+ * 冒泡到 doWork 的外层 catch，**整批**记失败走重试，重试再撞同一条，
+ * watermark 永不推进——一条坏记录永久卡死这台设备的所有后续备份。
+ * 成因不止 adb 造数据：文件管理器删文件但 MediaStore 行没同步、云相册
+ * 占位文件、外部存储卸载、第三方 App 写坏的行。
+ *
+ * [build] 抛任何异常 = 这一条读不了 → 跳过并记进 [CandidateBuild.skipped]，
+ * 其余条目照常成候选。唯一例外是 [CancellationException]：那是系统 stop
+ * （配额/约束/FGS 回收/执行超时，见 MOB-08），不是坏记录，必须原样上抛，
+ * 否则会把一次系统取消伪装成「全部跳过」的成功批次。
+ */
+internal fun <T> buildCandidates(
+    items: List<T>,
+    build: (T) -> Candidate,
+): CandidateBuild<T> {
+    val candidates = mutableListOf<Candidate>()
+    val kept = mutableListOf<T>()
+    val skipped = mutableListOf<T>()
+    for (item in items) {
+        val candidate = try {
+            build(item)
+        } catch (t: CancellationException) {
+            throw t
+        } catch (_: Throwable) {
+            skipped.add(item)
+            continue
+        }
+        candidates.add(candidate)
+        kept.add(item)
+    }
+    return CandidateBuild(candidates, kept, skipped)
+}
+
 class BackupWorker(
     context: Context,
     params: WorkerParameters,
@@ -394,11 +446,18 @@ class BackupWorker(
             val hashCache = HashCache(hashCacheFile(ctx))
             // FIX-T6: 记录每个候选 hash 的所属相册（自动备份同口径）。
             val hashToBucket = mutableMapOf<String, Long>()
-            val candidates = scan.items.map { item ->
+            // MOB-09: 逐条隔离——打不开的记录跳过，其余照常传（见 buildCandidates）。
+            val built = buildCandidates(scan.items) { item ->
                 val open = {
                     ctx.contentResolver.openInputStream(item.uri)
                         ?: error("cannot open ${item.displayName}")
                 }
+                // MOB-09: 先探一次流能不能开。PERF-01 的 hashWithCache 命中
+                // 缓存时**不调 open**，于是「上一轮哈希过、之后文件被删」的
+                // 记录会带着旧 hash 溜进候选，直到 BackupRunner.pushFile 才抛
+                // FileNotFoundException——同样炸掉整批。探针只开关一次流不读
+                // 内容，相对读流哈希+上传的代价可以忽略。
+                open().use { }
                 val key = hashCacheKey(
                     item.uri.toString(), item.generation, item.dateModified,
                     item.bytes, Build.VERSION.SDK_INT >= 30,
@@ -412,7 +471,29 @@ class BackupWorker(
                     bytes = item.bytes,
                     open = open,
                 )
-            }.also { hashCache.flush() }
+            }
+            hashCache.flush()
+            val candidates = built.candidates
+            // MOB-09 决策：坏记录只打日志、不发通知——用户对「相册里有几行
+            // 脏数据」无能为力，弹窗只会制造焦虑；日志给排查用（别静默吞）。
+            if (built.skipped.isNotEmpty()) {
+                android.util.Log.w(
+                    "PPassBackup",
+                    "auto backup: skipped ${built.skipped.size}/${scan.items.size} " +
+                        "unreadable media record(s): " +
+                        built.skipped.take(5).joinToString { it.displayName },
+                )
+            }
+            if (candidates.isEmpty()) {
+                // MOB-09: 整批都读不了（一批空记录、权限被撤、外部存储卸载）
+                // ——不 commit、不推进水位就返回。推进水位等于把这些行永久
+                // 跳过；万一是「暂时读不到」（卡没挂载/权限稍后恢复），那批
+                // 照片就再也不会被扫到。反过来只要还有一条能读，水位照常推进，
+                // 坏行随之被永久跳过——这正是本卡要的：一条脏数据不许挡住其余。
+                attempts.reset()
+                nudge.recordSuccess()
+                return Result.success()
+            }
             val report = BackupRunner(client).run(daemon, candidates, scan.nextWatermark)
             watermarks.save(scan.nextWatermark)
             // SENT-01: run 成功 = 确认 daemon 可达（即使校准阶段缓存空
@@ -421,10 +502,21 @@ class BackupWorker(
             // DOG-01c: commit 成功后本次候选全部确认——report.missing 是
             // 上传前集合，不参与减项（回归：旧实现把刚上传成功的照片从
             // 缓存删掉，首次全量备份后 M=0）；漂移校准走独立 exist-check。
+            // MOB-13: 顺带记文件级确认（M 与 N 同单位 = 文件数，否则内容
+            // 重复的照片让 K 永远归不了零）。**依赖「文件列表与候选列表
+            // 1:1 同序」**——见下面 files= 与 fileEntriesOf 的注释。
             confirmedStore.recordRun(
                 confirmed = confirmedAfterCommit(candidates, report),
                 lastSuccessAt = System.currentTimeMillis(),
                 bucketOf = hashToBucket,
+                // MOB-09: 喂 built.kept 而不是 scan.items——跳过坏记录后
+                // 候选比扫描结果短，喂原始列表会让 fileEntriesOf 长度对不上
+                // 整体降级成空 map（MOB-13 的 K 又归不了零）。kept 与
+                // candidates 严格 1:1 同序，1:1 前提原样成立。
+                files = fileEntriesOf(
+                    built.kept.map { it.uri.toString() to it.bucketId },
+                    candidates,
+                ),
             )
             android.util.Log.i(
                 "PPassBackup",
