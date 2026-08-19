@@ -62,6 +62,33 @@ class TriggerPolicyTest {
     }
 
     @Test
+    fun periodic_work_uses_update_so_constraints_propagate() {
+        // MOB-12 回归锁：周期任务必须用 UPDATE，不能用 KEEP。
+        // KEEP = "已存在就完全不动"，包括不更新约束——真机实测后果：
+        // MOB-10 删掉 requiresCharging、重装 App 后，content trigger（走
+        // REPLACE）已是新约束，周期任务却还是 charging=true，继续每 6h
+        // 报一次 stopReason=CONSTRAINT_CHARGING(6)。
+        // UPDATE 更新约束但保留下次执行时间，不像 REPLACE 重置 6h 计时。
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        val src = File(
+            dir,
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
+        ).readText()
+        val body = src.substringAfter("fun scheduleAutoBackup(").substringBefore("}")
+        assertTrue(
+            "scheduleAutoBackup 必须用 UPDATE（KEEP 会让约束变更永远进不去）",
+            body.contains("ExistingPeriodicWorkPolicy.UPDATE"),
+        )
+        assertTrue(
+            "不允许退回 KEEP",
+            !body.contains("ExistingPeriodicWorkPolicy.KEEP"),
+        )
+    }
+
+    @Test
     fun charging_constraint_is_gone_for_good() {
         // MOB-10 回归锁：绝不允许把 requiresCharging 加回来。
         // 用户的三星开着「保护电池」，充到上限即 NOT_CHARGING/DISCHARGING，
