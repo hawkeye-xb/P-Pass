@@ -184,6 +184,24 @@ class BackupUiStateHolder(
         val fresh = candidates.filter { !confirmedStore.contains(it.hash) }
         _state.value = BackupUiState.Sending(0, fresh.size)
         if (fresh.isEmpty()) {
+            // MOB-13 迁移路径：一张都不用传，但**文件级确认记录仍要补齐**。
+            // 存量安装的 confirmed.json 只有 hash 集合，内容重复的照片让
+            // K 永远归不了零；用户按下「备份」→ 走到这里（全已确认）→ 早
+            // 退前把本次全量扫描（since=0，覆盖范围内所有文件）的文件级
+            // 记录写进去，K 从此归零。lastSuccessAt 保持原值：这一趟没有
+            // 真的传输，不该改写「最后成功时间」。
+            withContext(Dispatchers.IO) {
+                confirmedStore.recordRun(
+                    confirmed = emptySet(),
+                    lastSuccessAt = confirmedStore.lastSuccessAt(),
+                    bucketOf = hashToBucket,
+                    files = fileEntriesOf(
+                        scan.items.map { it.uri.toString() to it.bucketId },
+                        candidates,
+                    ),
+                )
+            }
+            refreshTriplet() // 补齐后 UI 立刻显示新的 K（否则要等下次开 App）
             _state.value = BackupUiState.AllSafe(0, 0) // 全已确认 = 已是最新
             return
         }
@@ -209,6 +227,13 @@ class BackupUiStateHolder(
                 confirmed = confirmedAfterCommit(candidates, report),
                 lastSuccessAt = System.currentTimeMillis(),
                 bucketOf = hashToBucket,
+                // MOB-13: 文件级确认记录（M 与 N 同单位 = 文件数）。手动
+                // 备份是 since=0 全量扫描 → 这一次就把范围内所有文件补齐，
+                // 也是存量用户的迁移路径（见 fresh.isEmpty() 分支）。
+                files = fileEntriesOf(
+                    scan.items.map { it.uri.toString() to it.bucketId },
+                    candidates,
+                ),
             )
         }
         refreshTriplet()
