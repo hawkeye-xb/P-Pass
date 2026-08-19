@@ -16,6 +16,7 @@ package com.hawkeyexb.ppass
 
 import android.app.Application
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
+import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.triggerProcessStartCatchup
 import com.hawkeyexb.ppass.transport.PairingStore
 
@@ -25,6 +26,19 @@ class PPassApplication : Application() {
         // 未配对 / 已暂停 → 什么都不做（doWork 内部还有第二道闸）。
         if (PairingStore(filesDir).load() == null) return
         if (AutoBackupPrefs(filesDir).paused()) return
+        // MOB-16（用户架构要求）：**监听的挂载不能依赖用户打开 App**。
+        // 在此之前 scheduleAutoBackup 只在 MainActivity 里调用，意味着
+        // content trigger 监听和周期任务的存在取决于"用户打开过 App"——
+        // 一旦它们因为任何原因丢失（系统清理、异常、装完没开过 App），
+        // 只有用户主动打开才能恢复。用户明确要求："App 它的一个作用是
+        // 做配置和查看，真正运行作用物的不是它。"
+        //
+        // 放在这里之后，进程因任何原因被拉起（系统调度 work、开机后
+        // WorkManager 的 RescheduleReceiver、其它组件唤醒）都会顺手确认
+        // 监听在位。两个调用都是幂等的：content trigger 走 KEEP（不打断
+        // 正在等待的那个，见 MOB-14），周期任务走 UPDATE（更新约束但保留
+        // 计时，见 MOB-12）。
+        scheduleAutoBackup(this)
         // enqueue 本身是异步的，不阻塞主线程；扫描无新照片时 doWork 立刻
         // 早退，所以「每次进程启动多一次检查」的代价很小。
         triggerProcessStartCatchup(this)

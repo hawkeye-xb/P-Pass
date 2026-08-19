@@ -90,6 +90,13 @@ class TriggerPolicyTest {
             "Application.onCreate 必须触发进程启动补捞",
             app.contains("triggerProcessStartCatchup(this)"),
         )
+        // MOB-16：挂载不能依赖用户打开 App。scheduleAutoBackup 若只在
+        // MainActivity 调用，content trigger 监听和周期任务的存在就取决于
+        // "用户打开过 App"——监听一旦丢失只有手动打开才能恢复。
+        assertTrue(
+            "Application.onCreate 必须确保监听与周期任务在位（不依赖打开 App）",
+            app.contains("scheduleAutoBackup(this)"),
+        )
         assertTrue("未配对不跑", app.contains("PairingStore(filesDir).load() == null"))
         assertTrue("暂停态不跑", app.contains("AutoBackupPrefs(filesDir).paused()"))
 
