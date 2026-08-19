@@ -8,10 +8,12 @@ import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-/** 极简设置快照。默认值 = 产品默认：插电 + WiFi 才跑。 */
+/** 极简设置快照。默认值 = 产品默认：WiFi 才跑。
+ *  MOB-10: `chargeOnly` 已删除（见 TriggerPolicy.constraintsFor 注释）。
+ *  旧版本存过 `"chargeOnly": true/false` 的 json 由 `ignoreUnknownKeys`
+ *  安全忽略，不需要迁移。 */
 @Serializable
 data class BackupSettingsState(
-    val chargeOnly: Boolean = true,
     val wifiOnly: Boolean = true,
 )
 
@@ -29,13 +31,13 @@ class BackupSettings(private val dir: File) {
         } else BackupSettingsState()
 
     /** 幂等保存：tmp + rename 崩溃安全。 */
-    fun save(chargeOnly: Boolean, wifiOnly: Boolean) {
+    fun save(wifiOnly: Boolean) {
         dir.mkdirs()
         val tmp = File(dir, "backup-settings.json.tmp")
         tmp.writeText(
             json.encodeToString(
                 BackupSettingsState.serializer(),
-                BackupSettingsState(chargeOnly = chargeOnly, wifiOnly = wifiOnly),
+                BackupSettingsState(wifiOnly = wifiOnly),
             )
         )
         check(tmp.renameTo(file)) { "cannot persist backup settings" }

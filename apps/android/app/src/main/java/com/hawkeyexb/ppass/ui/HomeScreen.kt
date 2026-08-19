@@ -81,9 +81,10 @@ fun HomeScreen(
     onOpenNotificationSettings: () -> Unit = {},
     // DOG-01: 恒真三元组（持久缓存，断网/失败时仍显示）
     triplet: BackupTriplet? = null,
-    // UX-03: 极简设置——仅充电 / 仅 WiFi（写 WorkManager 约束）
-    chargeOnly: Boolean = true,
-    onChargeOnlyChange: (Boolean) -> Unit = {},
+    // UX-03: 极简设置——仅 WiFi（写 WorkManager 约束）。
+    // MOB-10: 「仅充电」开关整个删掉，后台档改用「电量不低」硬约束
+    // （见 TriggerPolicy.constraintsFor）——它在开着电池保护的设备上
+    // 等于「永不备份」，且局域网传照片的能耗根本不是瓶颈。
     wifiOnly: Boolean = true,
     onWifiOnlyChange: (Boolean) -> Unit = {},
     // M10（全页面状态稿）："备份失败时通知我"——真实开关，不是摆设，
@@ -473,15 +474,6 @@ fun HomeScreen(
                         selectedBucketCount ?: 0,
                     ),
                     onClick = onOpenBucketPicker,
-                )
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.setting_charge_only),
-                    checked = chargeOnly,
-                    onCheckedChange = onChargeOnlyChange,
-                    // MOB-11: 「仅充电时备份」的后果描述删除——用户实机反馈
-                    // "解释不清楚，白白占用空间"。仅 Wi-Fi 那行的提示保留
-                    // （流量后果是真金白银，值得占这个位置）。
                 )
                 HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(

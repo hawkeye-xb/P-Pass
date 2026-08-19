@@ -122,7 +122,6 @@
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
     <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
     <!-- M10 (full-page-states doc) exact copy — "back up only when...", not "require...". -->
-    <string name="setting_charge_only">Back up only while charging</string>
     <string name="setting_wifi_only">Back up only on Wi-Fi</string>
     <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
     <string name="wifi_off_confirm_title">Turn off the Wi-Fi requirement?</string>

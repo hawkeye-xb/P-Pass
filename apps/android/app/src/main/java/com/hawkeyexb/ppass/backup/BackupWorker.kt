@@ -97,7 +97,9 @@ private fun constraintsOf(spec: BackupConstraintsSpec): Constraints =
         .setRequiredNetworkType(
             if (spec.requiresUnmetered) NetworkType.UNMETERED else NetworkType.CONNECTED
         )
-        .setRequiresCharging(spec.requiresCharging)
+        // MOB-10: 原来是 setRequiresCharging——在开着电池保护的设备上
+        // （充到上限即 NOT_CHARGING）等于「永不备份」。见 TriggerPolicy。
+        .setRequiresBatteryNotLow(spec.requiresBatteryNotLow)
         .build()
 
 private fun backupWorkRequest(spec: BackupConstraintsSpec): OneTimeWorkRequest =
@@ -141,7 +143,8 @@ fun buildContentTriggerRequest(
         .setRequiredNetworkType(
             if (spec.requiresUnmetered) NetworkType.UNMETERED else NetworkType.CONNECTED
         )
-        .setRequiresCharging(spec.requiresCharging)
+        // MOB-10: 同 constraintsOf——充电要求换成「电量不低」。
+        .setRequiresBatteryNotLow(spec.requiresBatteryNotLow)
         // MOB-08: forDescendants 必须为 true。MediaProvider 在 insert 后
         // notifyChange 发的是带行 id 的 item URI（.../images/media/1000000299），
         // 不是集合 URI——精确匹配（false）永远收不到通知，content trigger

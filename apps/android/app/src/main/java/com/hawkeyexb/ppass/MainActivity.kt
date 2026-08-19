@@ -427,7 +427,6 @@ fun PPassApp() {
             // 按新约束重建周期任务。MOB-02 起语义为「需要充电/需要 Wi-Fi」
             // 两档运行条件（默认都开），设置页有后果描述 + 合成句。
             val backupSettings = remember { BackupSettings(context.filesDir) }
-            var chargeOnly by remember { mutableStateOf(backupSettings.load().chargeOnly) }
             var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
             // M10（全页面状态稿）："备份失败时通知我"真实开关。
             val notifyOnFailurePrefs = remember {
@@ -491,12 +490,6 @@ fun PPassApp() {
                         },
                         notificationSkipped = !notificationGrantedForHome,
                         onOpenNotificationSettings = { openAppDetailsSettings(context) },
-                        chargeOnly = chargeOnly,
-                        onChargeOnlyChange = {
-                            chargeOnly = it
-                            backupSettings.save(chargeOnly, wifiOnly)
-                            rescheduleAutoBackup(context)
-                        },
                         wifiOnly = wifiOnly,
                         onWifiOnlyChange = { enable ->
                             // MOB-02 §三: 关闭「需要 Wi-Fi」需二次确认
@@ -504,7 +497,7 @@ fun PPassApp() {
                             if (!enable) pendingWifiOff = true
                             else {
                                 wifiOnly = true
-                                backupSettings.save(chargeOnly, wifiOnly)
+                                backupSettings.save(wifiOnly)
                                 rescheduleAutoBackup(context)
                             }
                         },
@@ -592,7 +585,7 @@ fun PPassApp() {
                         TextButton(onClick = {
                             pendingWifiOff = false
                             wifiOnly = false
-                            backupSettings.save(chargeOnly, false)
+                            backupSettings.save(false)
                             rescheduleAutoBackup(context)
                         }) { Text(stringResource(R.string.wifi_off_confirm_ok)) }
                     },
