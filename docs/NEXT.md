@@ -2,7 +2,30 @@
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
-## 〇、2026-08-19（续二十一）：MOB-10 删除「仅充电」（当前状态）
+## 〇、2026-08-19（续二十二）：四卡批次代码完成，真机验收全部欠着（当前状态）
+
+三个 sub-agent 并行实施 + 验收人抽检复现反证，**代码全部落地、206/206
+绿，但真机验收一张都没做**（手机中途拔线），四张卡均未移入 `done/`。
+
+- **MOB-09** 坏 MediaStore 记录不再炸整批（`buildCandidates` 逐条隔离
+  + 探针 `open().use { }` 堵缓存洞 + 整批读不了不推水位）。
+- **MOB-13** 待备份数按文件计数（`ConfirmedState.files`），迁移期混合
+  口径回退。⚠️ **真机复验有前置**：升级后先手动按一次「备份」补齐文件级
+  记录，再验「复制一张已备份照片 → 待备份归零」，否则迁移窗口里 K 仍
+  可能 > 0，那不是修复失败。
+- **MOB-18** force-stop 检测 + 琥珀提示条，**用户点了才恢复**。
+- **ICON-02** 桌面端图标库迁移完成；Android 只换 `ic_share`，另两处有
+  硬理由不换（写在卡里）。
+
+**新开两张卡**：
+- `E2E-02`——你贴的那个 e2e 红：`DaemonHelloTest` 断言 QR 必须带 `a=`，
+  而 daemon 从 2026-08-08 的 H-10b 改造起就不再产出该字段。测试停在废弃
+  契约上，**从那天起就该红**，只因它靠 `assumeTrue` 自我跳过、只在
+  nightly + tag 触发才跑。**它会一直挡着 e2e 门禁，下次打 tag 还会红。**
+- `MOB-19`——手动备份链路 `BackupUiStateHolder` 是与 MOB-09 同形的裸
+  map + open，同一条坏记录照样炸掉整批手动备份。
+
+## 〇、2026-08-19（续二十一）：MOB-10 删除「仅充电」
 
 用户拍板删掉「仅充电」，后台档改用 `setRequiresBatteryNotLow(true)`。
 **拔掉电源、放电中实测 4.7 秒送达**（改前这个场景必被
@@ -848,7 +871,7 @@ daemon 全量测试 + arch-check + clippy + fmt 干净，android 166/166 绿。
 用户问「分享」和「其它 APP 打开」是不是一回事——**不是**（Android 里是
 两种 Intent：分享=ACTION_SEND 内容/附件语义走系统分享面板；打开=ACTION_VIEW
 文件处理语义走打开方式选择器；底层共用 FileProvider+即用即清管线）。已按
-常规做法实现：照片/视频查看页右上角分享图标（自绘 ic_share.xml 不引
+常规做法实现：照片/视频查看页右上角分享图标（原自绘 ic_share.xml 不引
 material-icons-extended）+ `AssetActions.shareIntent` + 三动作枚举化共享下载
 管线。android 166/166 绿 + assembleDebug 绿。**等用户**：①真机分享到微信
 收到原图；②面板关闭后 cacheDir/share/ 零残留；③这批改动（MOB-06 等）怎么
