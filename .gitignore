@@ -44,3 +44,4 @@ iroh-probe.key
 apps/android/.gradle/
 apps/android/local.properties
 apps/android/**/build/
+.gstack/

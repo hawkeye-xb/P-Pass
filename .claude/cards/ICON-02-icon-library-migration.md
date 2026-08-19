@@ -91,3 +91,226 @@ Code 去替换我们本地的一些图标"——当时不清楚现状是怎么�
 
 两端各自 `just` 全绿（如适用）+ PROGRESS.md 一行 + 完成后移
 `.claude/cards/done/`。
+
+---
+
+# 实施记录（2026-08-19）
+
+## 桌面端：✅ 已做完
+
+`apps/desktop/src/App.svelte`，5 个手写 SVG path 字符串 → `@lucide/svelte`
+组件（深路径 import，只打包用到的图标）：
+
+| 侧栏项 | 旧（手抄 path） | 新（lucide 组件） |
+|---|---|---|
+| 总览 overview | 房子轮廓 2 条 path | `@lucide/svelte/icons/house` |
+| 照片 photos | rect+circle+折线 | `@lucide/svelte/icons/image` |
+| 家人与设备 devices | 圆角 rect + 短横 | `@lucide/svelte/icons/smartphone` |
+| 活动记录 log | circle + 指针 path | `@lucide/svelte/icons/clock` |
+| 设置 settings | circle + 齿轮 path | `@lucide/svelte/icons/settings` |
+
+配套改动：
+- 删掉 `{@html n.icon}` 字符串注入 + 那个复用的 `<svg class="nav-icon">`
+  容器；改成 `{@const NavIcon = n.icon}` + `<NavIcon class="nav-icon"
+  size={20} />`。
+- CSS：`.nav-icon` 现在长在子组件的 svg 上，拿不到本组件的 scope 类，
+  三条规则改成 `.nav-item :global(.nav-icon)` / `.nav-item.active
+  :global(.nav-icon)`（限定在 nav-item 子树，不是裸全局）。
+- 关闭按钮 `×` 按卡里说的保留文本字符，没换。
+- `package.json` 没动。**订正卡里一处口径**：`@lucide/svelte` 在
+  `devDependencies` 不是 `dependencies`（vite 打包产物场景无害，本卡
+  不顺手改）。
+
+视觉：尺寸/线宽/对齐跟旧的完全一致（浏览器实测渲染属性
+`20x20 | stroke-width=2`，跟旧内联 svg 的 `width/height=20
+stroke-width=2` 逐项对齐）；形状只有 house 略有差异（lucide 的房子带
+门），其余 4 个几乎不可辨。
+
+## Android 端：部分做（1/3 可迁移点已换），其余有硬约束不迁
+
+### 已换
+
+- `ui/VideoScreen.kt:132` 分享图标：`painterResource(R.drawable.ic_share)`
+  → `Icons.Filled.Share`（`androidx.compose.material.icons`）。删掉
+  `res/drawable/ic_share.xml` 和已无用的 `painterResource` import。
+- `app/build.gradle.kts` 显式声明
+  `implementation("androidx.compose.material:material-icons-core")`（BOM
+  管版本）。
+
+**体积代价实测 = −759 字节（不是零，是负的）**：
+`material-icons-core-android:1.7.6` 本来就随 `material3` 传递进
+debugRuntimeClasspath，而且**它的 class 早就躺在 APK 的 dex 里了**（解包
+改动前的 APK，`classes*.dex` 里能直接搜到
+`androidx/compose/material/icons/filled/ShareKt`）——跟桌面端
+`@lucide/svelte` 一个剧本：库早就付过费了，只是从来没人用。显式声明
+只是把隐式依赖写明；净减的 759 字节来自删掉的 `ic_share.xml` 资源项。
+A/B 原始输出见下方证据。
+
+`ic_share.xml` 里那条 pathData 抄的就是 Material 官方 share glyph 的
+同一条路径，所以 `Icons.Filled.Share` 是**形状零差异**的纯机制替换。
+
+### 不迁：`ic_notification`（平台硬约束，不是取舍）
+
+`BackupWorker.kt` 4 处 `NotificationCompat.setSmallIcon(R.drawable.
+ic_notification)`。`setSmallIcon` 收的是 **resource id**，图标由 SystemUI
+在本进程之外渲染——任何 Compose `ImageVector` 都顶不上这个位置。
+自制 vector drawable 是这里唯一可行形态，本卡不改。
+
+### 不迁：`ui/TabIcons.kt`（**卡的现状调研漏了这个文件**）
+
+底部 tab 两个图标是手绘 Compose Canvas（`PhotosTabIcon` 相机、
+`SettingsTabIcon` 齿轮，文件头注释自己写了「ICON-02 卡另算」），也属
+本卡语义范围。这轮**故意不换**，理由：
+
+- `material-icons-core` 只有 49 个常用图标 × 5 风格，**没有相机/照片类
+  图标**（实测解包 aar 列全表：Home/Settings/Share/Search… 有，
+  Photo/Camera/Image 全无）。
+- 相机图标只能靠 `material-icons-extended`。但 **release 没开
+  `minifyEnabled`**（`app/build.gradle.kts` 的 buildTypes.release 只配了
+  签名），没有 R8 裁剪 → extended 会实打实往 APK 塞几 MB。照片备份 App
+  体积敏感，为一个相机图标不划算。
+- 只换齿轮不换相机 = 一对 tab 图标分属两套图标系统（Material 填充 vs
+  手绘描边），视觉上比现在这对同源手绘更糟。
+
+**留给后续**：哪天开了 `minifyEnabled`（R8 会把没用到的 extended 图标
+裁到近似 0），可重新评估把 TabIcons.kt 两个 + 未来新图标一起收编到
+`material-icons-extended`。在那之前 TabIcons.kt 保持现状。
+
+### 澄清一处历史决策（避免 review 时看岔）
+
+MOB-06 卡记的「自绘 ic_share.xml（不引 material-icons-extended 控体积）」
+前提是**以为要引 extended**。实际 `Share` 在 **core** 里，而 core 早就
+在 APK 中了——所以本次不是推翻当时的权衡，是当时的前提不成立。
+
+## 证据
+
+### 桌面端
+
+```
+$ cd apps/desktop && pnpm build
+✓ 205 modules transformed.
+dist/index.html                   1.01 kB │ gzip:  0.66 kB
+dist/assets/index-BHNkhk-g.css   35.75 kB │ gzip:  7.69 kB
+dist/assets/index-CdvYGMfI.js   220.59 kB │ gzip: 69.49 kB
+✓ built in 726ms
+```
+
+（3 条 `css_unused_selector` 警告全是既有的 `.qr-fallback *`，与本卡无关；
+`.nav-icon` 零警告。）
+
+grep 清空判据：
+
+```
+$ grep -rn "@html\|<svg\|<path \|<rect \|<circle " apps/desktop/src/
+apps/desktop/src/App.svelte:52:  // {@html} 注入」改成 @lucide/svelte 图标组件——标准图标库用法，形状
+```
+（唯一命中是注释里提到旧写法，代码里零残留。）
+
+浏览器实测（vite dev + headless Chromium，收起态 900px 宽）：
+
+```
+$ 每个 .nav-item svg 的 class|尺寸|线宽|display|color
+lucide-icon lucide lucide-house      nav-icon|20x20|sw=2|disp=block|color=rgb(251,248,242)  ← active
+lucide-icon lucide lucide-image      nav-icon|20x20|sw=2|disp=block|color=rgb(74,69,62)
+lucide-icon lucide lucide-smartphone nav-icon|20x20|sw=2|disp=block|color=rgb(74,69,62)
+lucide-icon lucide lucide-clock      nav-icon|20x20|sw=2|disp=block|color=rgb(74,69,62)
+lucide-icon lucide lucide-settings   nav-icon|20x20|sw=2|disp=block|color=rgb(74,69,62)
+```
+
+- 展开态 1280px：5 个 svg `display` 全 `none`，只显示文字 label——跟设计稿
+  交互原型一致，无布局位移。
+- active 态换页（`#/settings`）后颜色翻转正确（选中项 `--pp-paper`，
+  其余 `--pp-ink-60`），跟改动前行为一致。
+- 改动前/后侧栏截图逐项对照，尺寸/间距/对齐无差异。
+
+### Android 端
+
+⚠️ **验证环境说明（重要，看结果前先读）**：跑本卡时主工作区里有**另一个
+并行 session 未提交的在制品**（BackupHealth/ConfirmedStore/BackupWorker
+一线共 9 改 3 新，含 +220 行新测试），而且它跟我共用同一个
+`app/build/` 和 gradle 构建缓存——主工作区里跑出来的测试结果和 APK
+体积都被污染，不可用作判据（实测撞车：`Could not delete
+'.../caches-jvm'`；测试结果 XML 被对方的 run 覆盖）。
+
+所以 Android 的全部判据都在**隔离 worktree**（`git worktree add ... HEAD
+--detach`，纯 HEAD + 只打本卡这 3 个文件的补丁）里跑，并且加
+`--no-build-cache` + `clean` 断掉跨树缓存复用（第一次没加，被缓存喂了
+假数字，已作废重跑）。
+
+**APK 体积 A/B**（同一 worktree，先纯 HEAD 后打补丁，各自 clean +
+`--no-build-cache`）：
+
+```
+### A: pure HEAD (clean, no build cache)
+BUILD SUCCESSFUL in 4s
+A_BYTES=28267326
+### B: HEAD + ICON-02 (clean, no build cache)
+BUILD SUCCESSFUL in 4s
+B_BYTES=28266567
+DELTA=-759
+```
+
+**机制佐证**（解包两个 APK 查 dex + 资源表）：
+
+```
+A-head:    ShareKt_in_dex=1  ic_share_resource_entries=1
+B-icon02:  ShareKt_in_dex=1  ic_share_resource_entries=0
+```
+
+即：改动**之前**的 APK 里就已经有
+`androidx/compose/material/icons/filled/ShareKt` 了（material3 传递带进来
+的、没人用的库）。本卡只是开始用它，并删掉那份多余的自绘 drawable。
+
+**全量单测**（同一隔离 worktree，`--no-build-cache`）：
+
+```
+$ ./gradlew --no-build-cache :app:testDebugUnitTest
+> Task :app:testDebugUnitTest
+BUILD SUCCESSFUL in 2s
+
+$ 汇总 test-results/testDebugUnitTest/*.xml
+test classes=30  tests=187  skipped=4  failures+errors=0
+```
+
+（主工作区跑是 206 个用例——多出来的 19 个是并行 session 那批新测试，
+不属本卡基线。）
+
+**「4 秒构建 / 2 秒跑完全量单测，是不是又被缓存喂了假数字？」——不是，
+两条自证**：
+
+1. A/B 两个 APK 的**内容差**正好是本卡改的那一处（A 有 `ic_share` 资源
+   项、B 没有；`ShareKt` 两边都在）。缓存复用出来的陈旧产物不可能恰好
+   呈现这个内容差。
+2. 隔离 worktree 的测试结果是 **187** 个用例，主工作区是 **206** 个。
+   如果 XML 是从主工作区的 task 输出里恢复的，它只会是 206。187 这个数
+   本身就是「确实在这棵纯净树上真跑了」的判别式。
+
+**grep 清空判据**（隔离 worktree）：
+
+```
+--- ic_share refs in apps/android (excluding build/) ---
+apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/VideoScreen.kt:134:
+    // ic_share.xml 抄的就是同一条 pathData，形状零差异。
+--- material.icons imports ---
+VideoScreen.kt:17: import androidx.compose.material.icons.Icons
+VideoScreen.kt:18: import androidx.compose.material.icons.filled.Share
+```
+
+（唯一命中是注释，代码零残留；`ic_notification` 按上文平台约束照旧保留，
+是有意为之不是漏改。）
+
+**实机未做**：分享图标在真机上的显示由验收人挂账（按本项目当前阶段的
+验证纪律）。理由上风险极低——`Icons.Filled.Share` 与被删的
+`ic_share.xml` 是同一条 Material pathData，`Icon()` 的默认尺寸 24.dp 与
+tint 用法都没变。
+
+## 未做的收尾（**故意留给验收人**）
+
+用户明确要求本轮**不 commit / 不 push**，工作区留着人工 review。因此：
+
+- 卡**没有**移进 `.claude/cards/done/`（Android 端 TabIcons 部分本就
+  未完，卡应保持在队列里）。
+- **没有**动 `docs/PROGRESS.md` / `docs/ROADMAP.md` / `docs/NEXT.md`——
+  这三处跟着合并动作一起更，由验收人决定。
+- 注意：ROADMAP.md:462、NEXT.md:851、PROGRESS.md MOB-06 行都写了「自绘
+  ic_share.xml」，合并本卡时需要同步订正。
