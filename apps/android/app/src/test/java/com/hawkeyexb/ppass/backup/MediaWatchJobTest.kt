@@ -310,6 +310,31 @@ class MediaWatchJobTest {
     }
 
     @Test
+    fun upgrade_kills_the_legacy_workmanager_trigger() {
+        // 真机 dumpsys 实锤（2026-08-19，RFCX1040SNE 装 0.3.3(8) 之后）：
+        // `adb install -r` 保留应用数据，WorkManager 库里 `ppass-content-trigger`
+        // 那条 unique work 原封不动活着，还挂着旧的带约束 trigger
+        // （batteryNotLow=true + NOT_METERED + Trigger content URIs）。
+        // 不清理 → 升级窗口内同一波 MediaStore 变化同时唤醒新旧两个监听，
+        // 两条独立 unique 通道之间没有串行保证，会并行扫同一水位重复推字节。
+        val src = watchSrc()
+        assertTrue(
+            "必须取消历史遗留的 content trigger unique work",
+            src.contains("cancelUniqueWork(\"ppass-content-trigger\")"),
+        )
+        assertTrue(
+            "重挂中转的遗留通道也要取消",
+            src.contains("cancelUniqueWork(\"ppass-content-trigger-rearm\")"),
+        )
+        // 必须挂在 App 启动路径上——进程被系统拉起时也要清，不能只靠用户开 App。
+        val schedule = workerSrc().substringAfter("fun scheduleAutoBackup(").substringBefore("\n}")
+        assertTrue(
+            "升级清理必须在 scheduleAutoBackup 里（进程启动即执行）",
+            schedule.contains("cancelLegacyContentTriggerWork(context)"),
+        )
+    }
+
+    @Test
     fun job_service_is_registered_in_manifest() {
         // BIND_JOB_SERVICE 是 JobService 的硬要求——漏了系统拒绝 bind，
         // 监听静默失效（挂得上，但永远起不来）。

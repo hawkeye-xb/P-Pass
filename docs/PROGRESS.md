@@ -613,10 +613,21 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   连带 `PPassApplication` 的健康检查 early-return 删除（MOB-18 提示 UI 已
   pending，不恢复 = 静默死亡），`isBackupScheduled` 从此无法区分重启与
   force-stop——重做 MOB-18 前须换判据，已写进 `BackupHealth.kt` KDoc。
-- **验证**：`:app:testDebugUnitTest --rerun-tasks` 217/217（基线 207），
-  `:app:assembleDebug` 绿，versionCode 7→8。反证 9 条全红（去 forDescendants /
+- **装机时发现的升级路径 bug（已修）**：`adb install -r` 保留应用数据，旧的
+  `ppass-content-trigger` unique work 原封不动活着（dumpsys 实锤，还带着
+  `batteryNotLow=true` + `NOT_METERED`），而本卡把 cancel 它的代码全删了 →
+  升级窗口内新旧两个监听被同一波变化同时唤醒，并行扫同一水位重复推字节。
+  加 `cancelLegacyContentTriggerWork`（字面量，挂 `scheduleAutoBackup`）。
+- **真机证据**（RFCX1040SNE / 0.3.3(8)）：看门 job `Requires:
+  batteryNotLow=false` 且无 `Network type` 行（零约束实锤）；job history
+  显示 START→+27ms 派活→+32ms 释放重挂，**监听空窗 32 毫秒**（旧实现 =
+  整个备份时长）；P-Pass 名下 job 精确剩 2 个。同一次探针顺手补上 MOB-09
+  的真机验收（`skipped 1/1 unreadable media record(s)`，无 ENOENT 重试）。
+- **验证**：`:app:testDebugUnitTest --rerun-tasks` 218/218（基线 207），
+  `:app:assembleDebug` 绿，versionCode 7→8。反证 10 条全红（去 forDescendants /
   调换派活重挂顺序 / KEEP 换掉 APPEND / 去 ensure guard / 暂停不停监听 /
-  结束不自检 / 恢复 early-return / manifest 漏 BIND_JOB_SERVICE / 去重恒真）。
+  结束不自检 / 恢复 early-return / manifest 漏 BIND_JOB_SERVICE / 去重恒真 /
+  不做升级清理）。
 - **教训**：`codeOf` 只剥 `//` 行不够——KDoc 块注释里引用 javadoc 写了
   `jobFinished()`，把"不该出现 jobFinished"这条否定式断言判红。否定式源码
   断言必须先剥块注释。

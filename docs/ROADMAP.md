@@ -445,7 +445,10 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       `UNMETERED` 约束 = **不连 Wi-Fi 时压根收不到通知**，出门拍一天照全靠 5h
       兜底；现在监听裸挂永远在线，约束挂在派出去的备份 work 上。
       代价：trigger URI 与 `setPersisted` 互斥，**看门 job 每次重启必死**，
-      靠周期任务拉起进程时重挂（数据不丢，亏时延）。217/217 + 9 条反证全红。
+      靠周期任务拉起进程时重挂（数据不丢，亏时延）。装机时真机 dumpsys 又发现
+      升级路径 bug（旧 unique work 随 `install -r` 存活 → 新旧监听并行），已加
+      一次性清理。真机实测**监听空窗 32 毫秒**（旧实现 = 整个备份时长），看门
+      job `batteryNotLow=false` 且无 Network type 行。218/218 + 10 条反证全红。
 - [x] MOB-11 同步节奏改为「尽快送达」 — **2026-08-18（用户定稿，待验收）**:
       `CONTENT_UPDATE_DELAY_MS` 2min→1s、`CONTENT_MAX_DELAY_MS` 15min→30s；
       真机实测端到端 **1.6 秒**（改前 2 分 03 秒）。`setTriggerContentUpdateDelay`

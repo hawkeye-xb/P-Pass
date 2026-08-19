@@ -4,7 +4,20 @@
 
 ## 〇、2026-08-19（续二十四）：MOB-27 监听与干活分家（当前状态）
 
-**代码完成并已推送，真机验收 owed。**
+**代码完成、已推送、已装机（0.3.3(8)，RFCX1040SNE）。静态接线与单次触发
+循环已真机验过，动态行为（连拍/备份期间拍照/重启）留给用户验收。**
+
+真机时间线（探针触发，`dumpsys jobscheduler` job history）：
+```
+-22s141ms   START: MediaWatchJob                ← 监听被唤醒
+-22s114ms   START: SystemJobService (备份 work)   ← +27ms 活已派出去
+-22s109ms    STOP: MediaWatchJob canceled       ← +32ms 释放并重挂
+-21s293ms    STOP: SystemJobService jobFinished ← 备份跑完
+```
+**监听空窗 = 32 毫秒**（旧实现 = 整个备份时长）。看门 job 零约束（真机
+`Requires: batteryNotLow=false`、无 `Network type` 行），第四节那个"不连
+Wi-Fi 收不到通知"的洞实锤修好。同一次探针顺手补上了 **MOB-09 的真机验收**
+（`skipped 1/1 unreadable media record(s)`，无 ENOENT 重试）。
 
 用户提出用 event loop 的思路解决"备份期间监听断掉"：*"事件来了，我们执行完
 之后再释放，不 OK 吗？"* 核对 AOSP 文档后确认——**这就是 Android 官方模式**，
@@ -20,6 +33,15 @@
 顺手堵掉一个更严重的洞：旧监听带着 `UNMETERED` 约束 —— **不连 Wi-Fi 时压根
 收不到通知**，出门拍一天照全靠 5h 兜底。现在监听裸挂永远在线。
 
+### 装机时发现并修掉的升级路径 bug
+
+`adb install -r` 保留应用数据，旧的 `ppass-content-trigger` unique work 原封
+不动活着（dumpsys 实锤，还带着 `batteryNotLow=true` + `NOT_METERED`）。而
+MOB-27 把 cancel 它的代码全删了 → 升级窗口内新旧两个监听会被同一波变化同时
+唤醒，并行扫同一水位重复推字节。已加一次性 `cancelLegacyContentTriggerWork`，
+装机后复查：P-Pass 名下 job 精确剩 **2 个**（周期兜底 + 看门 job），遗留的
+4 个已清干净。
+
 ### ⚠️ 需要用户知晓的两件事
 
 1. **看门 job 每次重启必死**（trigger URI 与 `setPersisted` 互斥，平台硬约束）。
@@ -32,6 +54,8 @@
    MOB-18 前须换判据。**如果这不是你要的，说一声就改回去。**
 
 ### 真机验收 owed（做完 MOB-27 才能移入 done/）
+
+（静态接线与单次触发循环已验，见上。以下三项需要真实拍照。）
 
 1. **连拍**：100ms 级连拍 5 秒 → logcat 只出现 **1 次** `auto backup: offered=…`
 2. **备份期间拍照**（本卡原始问题）：大批量备份传输中拍 3 张 → 第一轮结束后
