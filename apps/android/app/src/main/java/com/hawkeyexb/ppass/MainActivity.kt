@@ -64,6 +64,7 @@ import com.hawkeyexb.ppass.backup.BackupHealthPrefs
 import com.hawkeyexb.ppass.backup.ConfirmedStore
 import com.hawkeyexb.ppass.backup.isPartialMediaAccess
 import com.hawkeyexb.ppass.backup.ReinstallHintPrefs
+import com.hawkeyexb.ppass.backup.isBackupScheduled
 import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.pauseAutoBackup
@@ -156,19 +157,24 @@ fun PPassApp() {
     // if the last success is older than 24h (MOB-02 事件④, user-present
     // tier). UX-06: 全局暂停态下两者都不跑（重开 App 不自动恢复，
     // 直到用户恢复开关）。
+    // MOB-14: 打开 App 无条件补跑一次（原来卡 24h 门槛，导致通知丢失只能
+    // 干等周期兜底，而用户开 App 的意图正是"看照片到家没有"）。
+    //
+    // MOB-18 已撤（2026-08-19 用户拍板 pending）：这里曾先查一次调度是否
+    // 被 force-stop 清空、清空则只提示不恢复。撤掉的原因是那个语义做不到
+    // ——WorkManager 的 ForceStopRunnable 跑在 androidx.startup 的
+    // ContentProvider 里，**比 Application.onCreate 还早**，它自己就把所有
+    // work 重排了，应用层拦不住。留着只会显示一条"点了才恢复"却其实早已
+    // 自愈的假提示。详见 .claude/cards/backlog/MOB-18-*。
+    LaunchedEffect(Unit) {
+        val pairing = pairings.load() ?: return@LaunchedEffect
+        if (AutoBackupPrefs(context.filesDir).paused()) return@LaunchedEffect
+        scheduleAutoBackup(context)
+        triggerUserPresentBackup(context)
+    }
     remember {
         val pairing = pairings.load()
         if (pairing != null && !AutoBackupPrefs(context.filesDir).paused()) {
-            scheduleAutoBackup(context)
-            // MOB-02 §四事件④：App 进前台且距上次成功 >24h → 用户在场档。
-            // MOB-14: 原来这里卡着 24h 门槛（距上次成功 >24h 才补跑）。
-            // 真机实测的后果：进程被杀/job 重排的窗口期里拍的照片，通知
-            // 无人接收就丢了，而用户打开 App 想看"传了没"时又被门槛挡住
-            // 不扫描，只能干等 6h 周期兜底。用户打开 App 的意图本来就是
-            // 看照片有没有到家——这时候就该扫一遍。增量扫描 + hash 缓存
-            // 很廉价，`triggerUserPresentBackup` 内部走 unique work KEEP，
-            // 连续切换也不会叠加任务。
-            triggerUserPresentBackup(context)
         }
         // 新会话重新评估排队提示（上一轮的排队状态随进程重开作废）。
         wifiDeferred = false
@@ -435,12 +441,6 @@ fun PPassApp() {
             val notifyOnFailurePrefs = remember {
                 com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir)
             }
-            // MOB-18: 后台调度被外力清空过（force-stop）的待确认提示。
-            // 检测在 PPassApplication 的后台线程做完并落盘，这里只读结果。
-            val healthPrefs = remember { BackupHealthPrefs(context.filesDir) }
-            var backupInterrupted by remember {
-                mutableStateOf(healthPrefs.load().interruptedUnacknowledged)
-            }
             var notifyOnFailure by remember { mutableStateOf(notifyOnFailurePrefs.enabled()) }
             // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页开关行已删；
             // device_hint 照发照存（pair.request 处直接读 pref，默认开，
@@ -493,17 +493,6 @@ fun PPassApp() {
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
                         triplet = holder.triplet.value,
-                        backupInterrupted = backupInterrupted,
-                        onAcknowledgeInterruption = {
-                            // MOB-18: 用户点了才恢复——Application 检测到调度
-                            // 被清空时只记录不重排（用户："必须点了才恢复，
-                            // 你都提示了，就别自作主张"）。这里是唯一的恢复
-                            // 入口，顺手补跑一次捞回停摆期间拍的照片。
-                            scheduleAutoBackup(context)
-                            triggerUserPresentBackup(context)
-                            healthPrefs.acknowledge()
-                            backupInterrupted = false
-                        },
                         batteryWhitelisted = batteryWhitelisted,
                         onOpenBatterySettings = {
                             openBatteryOptimizationSettings(context)
@@ -648,10 +637,26 @@ fun PPassApp() {
                         }
                         // MOB-02 §六: 保存范围 + 记录当前全部相册（新相册
                         // 基准）；新出现的相册默认不包含（不在 sel 里）。
+                        // MOB-20: 必须在 saveScope 覆盖旧集合**之前**算差集。
+                        val prevScope = BackupScopeStore(context).selectedBucketIds()
+                        val added = if (prevScope == null) emptySet()
+                            else sel - prevScope
+
                         scopeStore.saveScope(
                             selected = sel,
                             allCurrent = list.map { it.id }.toSet(),
                         )
+                        // MOB-20: 备份范围**扩大**时必须把水位归零。
+                        // 扫描是 scanSince(watermark) 增量的，而新勾选的相册
+                        // 里装的是**老照片**（generation 远小于当前水位）——
+                        // 不归零就永远扫不到它们，用户看到的是"选了相册却
+                        // 一张都不同步"（2026-08-19 真机实测）。
+                        // 只在集合真的新增时归零：范围不变或缩小不必重扫。
+                        // 代价是一次全量扫描，但有 hash 缓存 + daemon 侧去重
+                        // 兜着，且改范围本身是低频操作。
+                        if (added.isNotEmpty()) {
+                            WatermarkStore(context.filesDir).save(0)
+                        }
                         // MOB-02 §四事件①: 选完/改完备份范围返回 → 用户在场
                         // 档触发（只查 Wi-Fi 不查充电）；不满足则 WorkManager
                         // 排队，首页显示「将在连上 Wi-Fi 后进行」。

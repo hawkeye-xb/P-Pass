@@ -499,9 +499,14 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
                 val file = downloadToShare(loader, asset.hash, share)
                 when (op) {
                     ViewerOp.Save -> {
-                        saveToGallery(context, file, asset)
+                        val saved = saveToGallery(context, file, asset)
                         file.delete() // 保存走 MediaStore，临时文件即用即清
-                        notice = context.getString(R.string.saved_to_gallery)
+                        // MOB-24: 存过就直说，别让用户以为没生效又点一次
+                        // （那正是相册里多出 "xxx (1).jpg" 的来源）。
+                        notice = context.getString(
+                            if (saved.alreadyExisted) R.string.already_in_gallery
+                            else R.string.saved_to_gallery
+                        )
                     }
                     ViewerOp.Share -> {
                         // MOB-06: ACTION_SEND 系统分享面板（微信/邮件/云盘…）
@@ -543,7 +548,15 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
             modifier = Modifier.padding(horizontal = 10.dp),
         )
         Spacer(Modifier.height(8.dp))
-        Box(Modifier.fillMaxSize().clip(RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
+        // MOB-22: 图片区必须用 weight(1f) 而不是 fillMaxSize()。
+        // 在 Column 里 fillMaxSize 会吃掉全部剩余高度，把下面的
+        // 「保存到相册 / 分享」两个按钮整个顶出屏幕——按钮其实渲染了，
+        // 只是看不见（2026-08-19 真机实测：查看页只剩图片，没有任何动作）。
+        // weight(1f) = 占据剩余空间但先给同级的固定高度元素让位。
+        Box(
+            Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(20.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
             val b = bmp
             if (b != null) {
                 Image(

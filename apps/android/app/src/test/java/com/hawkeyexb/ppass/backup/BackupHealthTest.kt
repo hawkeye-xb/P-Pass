@@ -1,4 +1,10 @@
-// MOB-18: force-stop 检测与「不静默恢复」的落盘状态测试。
+// MOB-18: force-stop 中断记录的落盘状态测试。
+//
+// ⚠️ 功能本身 2026-08-19 由用户拍板 **pending 进 backlog**——WorkManager 的
+// ForceStopRunnable 跑在 androidx.startup 的 ContentProvider 里，比
+// Application.onCreate 还早就把 work 重排了，"检测到中断 → 只提示不恢复"
+// 这个语义应用层实现不了。UI 与接线已撤，本文件只保留数据结构本身的测试
+// （BackupHealthPrefs 是自洽的，将来若换判据可直接复用）。
 package com.hawkeyexb.ppass.backup
 
 import java.io.File
@@ -66,48 +72,20 @@ class BackupHealthTest {
     }
 
     @Test
-    fun application_checks_before_rescheduling() {
-        // MOB-18 回归锁：**顺序不能反**。scheduleAutoBackup 会把监听重新排上，
-        // 一旦先排后查，isBackupScheduled 永远返回 true，中断再也检测不到——
-        // 这条断言锁的就是这个先后关系。
-        val app = codeOf(File(repoRoot(),
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/PPassApplication.kt"))
-        val checkAt = app.indexOf("isBackupScheduled(this)")
-        val scheduleAt = app.indexOf("scheduleAutoBackup(this)")
-        assertTrue("必须调用 isBackupScheduled 做检测", checkAt >= 0)
-        assertTrue("调度体系正常时仍要幂等兜底确认", scheduleAt >= 0)
-        assertTrue("检测必须发生在重排之前，否则永远检测不到中断", checkAt < scheduleAt)
+    fun triplet_follows_background_worker() {
+        // MOB-21 回归锁：三元组必须跟住**后台** BackupWorker 的状态变化。
+        // 真机实测：数据层 confirmed.json 完全正确（范围内 142 条），但界面
+        // 上的大字一直停在打开 App 那一刻的 0——refreshTriplet 只在 init /
+        // 手动备份完成 / 补齐后跑，后台自动备份跑完不通知 UI。
+        val holder = codeOf(File(repoRoot(),
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt"))
         assertTrue(
-            "检测到中断必须落盘",
-            app.contains("recordInterrupted("),
+            "必须订阅 BackupWorker 的状态流（四条自动通道共用它，按 tag 订阅）",
+            holder.contains("getWorkInfosByTagFlow(BackupWorker::class.java.name)"),
         )
-        // 用户定调："必须点了才恢复。你都提示了，就别自作主张。"
-        // 检测到中断后必须**立即返回**，不能顺手把调度重排上——否则提示
-        // 变成马后炮，用户没有选择权。
-        val afterRecord = app.substringAfter("recordInterrupted(")
         assertTrue(
-            "检测到中断后必须直接返回，不得自作主张恢复调度",
-            afterRecord.substringBefore("}").contains("return@thread") ||
-                afterRecord.substringBefore("scheduleAutoBackup").contains("return@thread"),
+            "状态变化时必须刷新三元组",
+            holder.substringAfter("getWorkInfosByTagFlow").contains("refreshTriplet()"),
         )
-        // 不能在主线程做阻塞查询。
-        assertTrue("阻塞检测必须放后台线程", app.contains("thread("))
-    }
-
-    @Test
-    fun interruption_card_is_wired_in_ui() {
-        val home = codeOf(File(repoRoot(),
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt"))
-        assertTrue("设置页必须渲染中断提示条", home.contains("if (backupInterrupted) {"))
-        assertTrue("必须能被用户确认消除", home.contains("onAcknowledgeInterruption"))
-        val main = codeOf(File(repoRoot(),
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/MainActivity.kt"))
-        assertTrue("MainActivity 必须接线", main.contains("backupInterrupted = backupInterrupted"))
-        assertTrue("点确认必须落盘", main.contains("healthPrefs.acknowledge()"))
-        // 恢复调度的唯一入口就是这个按钮（Application 那边只记录不恢复）。
-        val handler = main.substringAfter("onAcknowledgeInterruption = {")
-            .substringBefore("},")
-        assertTrue("点击必须真正恢复调度", handler.contains("scheduleAutoBackup(context)"))
-        assertTrue("点击必须顺手补跑一次", handler.contains("triggerUserPresentBackup(context)"))
     }
 }

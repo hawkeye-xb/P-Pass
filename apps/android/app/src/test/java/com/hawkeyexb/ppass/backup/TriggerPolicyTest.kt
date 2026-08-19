@@ -133,6 +133,43 @@ class TriggerPolicyTest {
     }
 
     @Test
+    fun rearm_window_stays_short() {
+        // MOB-23：监听空窗 = work 执行时间 + 重挂延迟。用户定调「一旦触发
+        // 就尽快重新监听」，且这段空窗本身就是天然防抖窗口。锁死它不许被
+        // 后人放大回分钟级——放大等于连拍丢通知的窗口同步放大。
+        assertTrue("重挂初始延迟必须是秒级", REARM_INITIAL_DELAY_SECONDS <= 2L)
+        assertTrue("轮询间隔必须亚秒级", REARM_WAIT_TICK_MS <= 1_000L)
+        // 但不许是 0：rearm 走 REPLACE，work 还 RUNNING 时动手会取消掉正在
+        // 传照片的自己（MOB-08 的老坑）。
+        assertTrue("延迟不许归零", REARM_INITIAL_DELAY_SECONDS >= 1L)
+    }
+
+    @Test
+    fun rearm_catches_up_only_when_previous_round_had_photos() {
+        // MOB-23 回归锁：监听重挂前有一段**没有监听**的空窗（work 一执行
+        // 监听就消耗掉，直到 rearm 才补上，中间隔着 work 执行时间 +
+        // REARM_INITIAL_DELAY_SECONDS）。连拍正好撞上：前几张触发了备份，
+        // 之后继续拍的那些没人接通知（用户实测"前面的出去了，后面的没同步"）。
+        // 那批照片没丢——水位没推过它们——所以 rearm 要顺带补扫一次。
+        val src = codeOf(File(repoRoot(),
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
+        assertTrue(
+            "rearm 必须能按需补捞",
+            src.contains("if (inputData.getBoolean(KEY_REARM_CATCH_UP, false))") &&
+                src.contains("triggerProcessStartCatchup(ctx)"),
+        )
+        assertTrue(
+            "补捞标志必须由「本轮是否有照片」决定——无条件补捞会变成无限循环",
+            src.contains("enqueueContentTriggerRearm(ctx, catchUp = batchSize > 0)"),
+        )
+        // 补捞发生在重挂之后（先恢复监听，再扫空窗遗留）。
+        val body = src.substringAfter("class ContentTriggerRearmWorker")
+        val scheduleAt = body.indexOf("scheduleContentTriggerBackup(ctx)")
+        val catchUpAt = body.indexOf("triggerProcessStartCatchup(ctx)")
+        assertTrue("补捞必须在重挂之后", scheduleAt in 0 until catchUpAt)
+    }
+
+    @Test
     fun app_start_keeps_pending_content_trigger() {
         // MOB-14 回归锁：App 启动路径必须 KEEP。
         // REPLACE 会取消**正在等待触发**的 job，它已收到的 MediaStore 变化
@@ -358,7 +395,7 @@ class TriggerPolicyTest {
                 val src = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
         assertTrue(
             "每轮备份结束必须排一次重挂",
-            src.contains("enqueueContentTriggerRearm(ctx)"),
+            src.contains("enqueueContentTriggerRearm(ctx"),
         )
         assertTrue(
             "重挂中转必须用独立 unique name（同名 REPLACE 会取消正在跑的自己）",
