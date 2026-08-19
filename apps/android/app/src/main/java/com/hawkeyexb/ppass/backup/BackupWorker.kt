@@ -60,6 +60,8 @@ const val CATCHUP_WORK_NAME = "ppass-catchup-backup"
 const val CONTENT_REARM_WORK_NAME = "ppass-content-trigger-rearm"
 // MOB-15: 进程启动补捞通道——见 PPassApp 与 triggerProcessStartCatchup。
 const val PROCESS_CATCHUP_WORK_NAME = "ppass-process-catchup"
+// MOB-17: 周期兜底间隔。刻意不做高频——见 enqueueAutoBackup 注释。
+const val PERIODIC_FALLBACK_HOURS = 5L
 private const val CHANNEL_ID = "ppass.backup"
 private const val NOTIFICATION_ID = 2026
 // UX-02: 失败通知（成功保持沉默——产品档案 §二.6）。
@@ -289,7 +291,13 @@ private fun enqueueAutoBackup(context: Context, policy: ExistingPeriodicWorkPoli
     val settings = BackupSettings(context.filesDir).load()
     // MOB-02 §四事件③：周期兜底 4h → ~6h（事件②已接管新照片即时触发，
     // 周期任务退居兜底位——跑不到的照片、错过的触发、后台档条件补跑）。
-    val request = PeriodicWorkRequestBuilder<BackupWorker>(6, TimeUnit.HOURS)
+    // MOB-17（2026-08-19 用户定稿）：6h → 5h。**刻意不做得更频繁**——
+    // 用户原话："不用这么频繁地兜底，因为我觉得如果它需要很着急的同步，
+    // 它自己会打开。兜底太频繁会在系统的 log 里面被检测得到，反而没那么
+    // 好，因为我们有别的触发的事件。"即：主路径（事件②content trigger）
+    // 才是常态，兜底只管捞极少数漏网的，不该把自己搞成高频轮询、进 OEM
+    // 省电系统的黑名单。
+    val request = PeriodicWorkRequestBuilder<BackupWorker>(PERIODIC_FALLBACK_HOURS, TimeUnit.HOURS)
         .setConstraints(constraintsOf(constraintsFor(BackupTier.BACKGROUND, settings)))
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
         .build()
