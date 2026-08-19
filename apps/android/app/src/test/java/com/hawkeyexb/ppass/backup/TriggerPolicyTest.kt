@@ -17,14 +17,14 @@ class TriggerPolicyTest {
     // ── 验收 1：两档条件（用户在场档忽略充电要求，后台档全查）──
 
     @Test
-    fun user_present_ignores_charging_requirement() {
-        // 卡面 §四事件①④：人在操作，充电要求无意义——即使设置要求充电，
-        // 用户在场档也不查充电。
+    fun user_present_ignores_battery_requirement() {
+        // 卡面 §四事件①④：人在操作，电量门槛由用户自己判断——用户在场档
+        // 不设 batteryNotLow。
         val spec = constraintsFor(
             BackupTier.USER_PRESENT,
-            BackupSettingsState(chargeOnly = true, wifiOnly = true),
+            BackupSettingsState(wifiOnly = true),
         )
-        assertFalse("用户在场档必须豁免充电要求", spec.requiresCharging)
+        assertFalse("用户在场档必须豁免电量要求", spec.requiresBatteryNotLow)
         assertTrue("用户在场档仍查 Wi-Fi", spec.requiresUnmetered)
     }
 
@@ -32,32 +32,60 @@ class TriggerPolicyTest {
     fun user_present_wifi_requirement_follows_setting() {
         val wifiOn = constraintsFor(
             BackupTier.USER_PRESENT,
-            BackupSettingsState(chargeOnly = true, wifiOnly = true),
+            BackupSettingsState(wifiOnly = true),
         )
         assertTrue(wifiOn.requiresUnmetered)
         val wifiOff = constraintsFor(
             BackupTier.USER_PRESENT,
-            BackupSettingsState(chargeOnly = true, wifiOnly = false),
+            BackupSettingsState(wifiOnly = false),
         )
         assertFalse("关闭需要 Wi-Fi 后用户在场档也不查", wifiOff.requiresUnmetered)
     }
 
     @Test
-    fun background_checks_both_requirements() {
-        // 卡面 §四事件②③：后台档条件全查（充电 + Wi-Fi 都按设置来）。
-        val bothOn = constraintsFor(
+    fun background_requires_battery_not_low_unconditionally() {
+        // MOB-10: 后台档恒设 batteryNotLow——它不再是用户开关，而是硬约束。
+        // 反证：把 constraintsFor 的 BACKGROUND 分支改成 false → 本测试红。
+        val wifiOn = constraintsFor(
             BackupTier.BACKGROUND,
-            BackupSettingsState(chargeOnly = true, wifiOnly = true),
+            BackupSettingsState(wifiOnly = true),
         )
-        assertTrue(bothOn.requiresCharging)
-        assertTrue(bothOn.requiresUnmetered)
+        assertTrue("后台档必须要求电量不低", wifiOn.requiresBatteryNotLow)
+        assertTrue(wifiOn.requiresUnmetered)
 
-        val bothOff = constraintsFor(
+        val wifiOff = constraintsFor(
             BackupTier.BACKGROUND,
-            BackupSettingsState(chargeOnly = false, wifiOnly = false),
+            BackupSettingsState(wifiOnly = false),
         )
-        assertFalse(bothOff.requiresCharging)
-        assertFalse(bothOff.requiresUnmetered)
+        assertTrue("关掉仅 Wi-Fi 不影响电量约束", wifiOff.requiresBatteryNotLow)
+        assertFalse(wifiOff.requiresUnmetered)
+    }
+
+    @Test
+    fun charging_constraint_is_gone_for_good() {
+        // MOB-10 回归锁：绝不允许把 requiresCharging 加回来。
+        // 用户的三星开着「保护电池」，充到上限即 NOT_CHARGING/DISCHARGING，
+        // 插着墙充也一样——WorkManager 会在 job 起来的同一瞬间掐掉：
+        //   auto backup cancelled by system after 30ms,
+        //   stopReason=CONSTRAINT_CHARGING(6)
+        // 任何有充电上限功能的机器（三星/小米/OPPO）在满电常态下都会踩，
+        // 「仅充电时备份」的实际语义是「永不备份」。
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        val worker = File(
+            dir,
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
+        ).readText()
+        assertTrue(
+            "不允许 setRequiresCharging——它在开着电池保护的设备上等于永不备份",
+            !worker.contains("setRequiresCharging("),
+        )
+        assertTrue(
+            "后台档必须设 setRequiresBatteryNotLow",
+            worker.contains("setRequiresBatteryNotLow(spec.requiresBatteryNotLow)"),
+        )
     }
 
     // ── 验收 3：本轮最多短退避重试 2 次，之后放弃 ──

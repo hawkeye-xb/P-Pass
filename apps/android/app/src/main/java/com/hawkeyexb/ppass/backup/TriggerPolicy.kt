@@ -3,31 +3,54 @@
 // 全部纯函数、零 Android 框架依赖，JVM 单测直接可测（卡面验收 1/3/4/5）。
 package com.hawkeyexb.ppass.backup
 
-/** 备份触发档位：用户在场（人在操作，充电要求无意义）/ 后台（条件全查）。 */
+/** 备份触发档位：用户在场（人在操作）/ 后台。 */
 enum class BackupTier { USER_PRESENT, BACKGROUND }
 
 /** WorkManager Constraints 的纯数据描述（可测，不依赖 androidx.work）。 */
 data class BackupConstraintsSpec(
-    val requiresCharging: Boolean,
+    /** MOB-10: 取代原来的 requiresCharging，见 [constraintsFor] 注释。 */
+    val requiresBatteryNotLow: Boolean,
     val requiresUnmetered: Boolean,
 )
 
 /**
  * MOB-02 卡面 §四：两档条件。
- * - 用户在场档（事件①选完范围返回 / ④App 进前台）：只查 Wi-Fi 要求，
- *   不查充电——人在操作，充电要求无意义。
- * - 后台档（事件②新照片落库 / ③周期兜底）：条件全查。
+ * - 用户在场档（事件①选完范围返回 / ④App 进前台）：只查 Wi-Fi 要求。
+ * - 后台档（事件②新照片落库 / ③周期兜底）：加一条「电量不低」。
  *
- * 反证：把用户在场档的充电豁免去掉 → TriggerPolicyTest 必红（验收 1）。
+ * ## MOB-10（2026-08-19 用户定稿）：「仅充电」整个删掉，换成「电量不低」
+ *
+ * 原来后台档带 `requiresCharging = settings.chargeOnly`（默认 true）。
+ * 真机上这条约束是坏的——用户的三星开着「保护电池」
+ * （`settings get global protect_battery = 2`），电量充到上限后系统状态
+ * 就变成 `NOT_CHARGING`/`DISCHARGING`，**插着墙充也一样**。于是：
+ * JobScheduler 认为 CHARGING 满足、放行 job，WorkManager 自己的
+ * `BatteryChargingTracker` 认为没在充电，在 job 起来的同一瞬间掐掉：
+ *
+ * ```
+ * W PPassBackup: auto backup cancelled by system after 30ms,
+ *                stopReason=CONSTRAINT_CHARGING(6)
+ * ```
+ *
+ * 任何有充电上限功能的机器（三星/小米/OPPO 都有）在满电常态下都会踩，
+ * 「仅充电时备份」实际语义变成「永不备份」。而本项目是局域网 P2P 传
+ * 照片，几十秒的事，能耗根本不是瓶颈——为这点能耗牺牲可靠性不划算。
+ *
+ * `setRequiresBatteryNotLow` 判的是「电量不低」，**不受充电状态影响**，
+ * 才是「别在快没电时折腾」的真实意图；「必须正在充电」只是它的一个
+ * 坏代理。用户在场档不设这条（人在操作，用户自己说了算）。
+ *
+ * 反证：把后台档的 `requiresBatteryNotLow` 改成 false，或把用户在场档
+ * 改成 true → TriggerPolicyTest 必红。
  */
 fun constraintsFor(tier: BackupTier, settings: BackupSettingsState): BackupConstraintsSpec =
     when (tier) {
         BackupTier.USER_PRESENT -> BackupConstraintsSpec(
-            requiresCharging = false,
+            requiresBatteryNotLow = false,
             requiresUnmetered = settings.wifiOnly,
         )
         BackupTier.BACKGROUND -> BackupConstraintsSpec(
-            requiresCharging = settings.chargeOnly,
+            requiresBatteryNotLow = true,
             requiresUnmetered = settings.wifiOnly,
         )
     }

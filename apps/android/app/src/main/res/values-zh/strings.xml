@@ -122,7 +122,6 @@
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
     <string name="auto_backup_rule">插电 + WiFi 时自动备份，无需打开 App</string>
     <!-- M10 全页面状态稿原文——"仅...时备份"，不是"需要..."。 -->
-    <string name="setting_charge_only">仅充电时备份</string>
     <string name="setting_wifi_only">仅 Wi-Fi 时备份</string>
     <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
     <string name="wifi_off_confirm_title">关闭「需要 Wi-Fi」？</string>

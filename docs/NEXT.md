@@ -2,7 +2,30 @@
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
-## 〇、2026-08-18（续二十）：MOB-11 同步节奏 2min → 1.6 秒（当前状态）
+## 〇、2026-08-19（续二十一）：MOB-10 删除「仅充电」（当前状态）
+
+用户拍板删掉「仅充电」，后台档改用 `setRequiresBatteryNotLow(true)`。
+**拔掉电源、放电中实测 4.7 秒送达**（改前这个场景必被
+`stopReason=CONSTRAINT_CHARGING(6)` 掐死）。卡已归档
+`.claude/cards/done/MOB-10-charging-condition-invisible.md`。
+
+起因是用户报"连拍之后没有触发同步"——日志显示不是没触发，是触发后
+在 30~2362ms 内被反复掐掉：该机 `AC powered:true` 但 `status:3
+DISCHARGING`（三星保护电池到上限）。
+
+同批：锁定竖屏（`android:screenOrientation="portrait"`）。
+
+**待用户回答**：自动备份开关"需要授权了再展示"具体指哪个场景？
+`Screen.Home` 本就只在已配对时进入，所以开关不会在配对前出现——需要
+用户说明是"没给相册权限时"还是"没选相册时"看到的，再改。
+
+**队列**：
+1. **MOB-09**（一条坏 MediaStore 记录卡死整批备份）——现存最高优。
+2. MOB-11 观察项：1s 节奏下空扫描的 FGS 噪音（用户实测"没啥噪音"，
+   待进一步确认是否还需要处理）。
+3. ContentObserver 快路径——1.6 秒之后边际收益不大，建议搁置。
+
+## 〇、2026-08-18（续二十）：MOB-11 同步节奏 2min → 1.6 秒
 
 用户定稿把节奏从「省电优先」改成「尽快送达」：`CONTENT_UPDATE_DELAY_MS`
 2min→1s、`CONTENT_MAX_DELAY_MS` 15min→30s。真机实测端到端 **1.6 秒**
