@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,7 +28,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -129,7 +130,9 @@ fun VideoScreen(
                 // MOB-06: 右上角分享——ACTION_SEND 系统分享面板（微信/邮件/云盘…）。
                 // 仅 Ready 后可分享（未取到前无文件可发）。
                 Icon(
-                    painter = painterResource(R.drawable.ic_share),
+                    // ICON-02: 图标库现成的 Material「分享」glyph——旧的自绘
+                    // ic_share.xml 抄的就是同一条 pathData，形状零差异。
+                    imageVector = Icons.Filled.Share,
                     contentDescription = stringResource(R.string.share),
                     tint = PPColor.Paper,
                     modifier = Modifier

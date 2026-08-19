@@ -88,6 +88,13 @@ dependencies {
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
+    // ICON-02: 功能小图标走开源图标库，不再手抄 Material 的 pathData。
+    // core 集（49 个常用图标 × 5 种风格）本来就随 material3 传递进
+    // APK，显式声明只是把隐式依赖写明，体积零增量。**故意不引
+    // material-icons-extended**：release 没开 minifyEnabled（无 R8
+    // 裁剪），extended 会实打实往 APK 里塞几 MB——照片备份 App 体积
+    // 敏感，为一两个图标不划算。若将来开了 R8 可重新评估。
+    implementation("androidx.compose.material:material-icons-core")
 
     // T-052 camera scan: CameraX preview/analysis + ZXing core decode.
     // ZXing is pure Java — no Google Play Services, works on HarmonyOS

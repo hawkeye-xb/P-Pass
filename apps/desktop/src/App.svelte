@@ -13,6 +13,14 @@
   // 不是 node_modules 黑箱；Tailwind 工具类全局可用）
   import { Button } from "$lib/components/ui/button";
   import { Card } from "$lib/components/ui/card";
+  // ICON-02: 功能小图标走开源图标库（lucide），不再手抄设计稿的 SVG
+  // path。深路径 import（`@lucide/svelte/icons/<name>`）是官方推荐用法，
+  // 只打包用到的图标，不拉整个 barrel。
+  import HouseIcon from "@lucide/svelte/icons/house";
+  import ImageIcon from "@lucide/svelte/icons/image";
+  import SmartphoneIcon from "@lucide/svelte/icons/smartphone";
+  import ClockIcon from "@lucide/svelte/icons/clock";
+  import SettingsIcon from "@lucide/svelte/icons/settings";
   // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
   import { humanTime, needsAttention, daysSince, relativeTime } from "./lib/humanTime.js";
   // T-092: connection 四态 → 文案/点色；字节 → 人读容量（纯函数，
@@ -39,35 +47,19 @@
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
   // DESK-03: 新增「照片」页（照片墙）——侧边栏第五项，文案走 i18n。
   // 2026-08-13: icon 字段供 <1080px 收起态的 64px 图标轨使用（设计稿
-  // 离线版 v2「第 3 轮响应式」新增，图标形状原样照抄设计稿 SVG path）。
+  // 离线版 v2「第 3 轮响应式」新增）。
+  // ICON-02（2026-08-19）：icon 从「手抄设计稿 SVG path 字符串 +
+  // {@html} 注入」改成 @lucide/svelte 图标组件——标准图标库用法，形状
+  // 不再逐个手绘（功能驱动阶段：语义清楚、视觉不违和即可，不要求像素
+  // 复刻）。尺寸 20 + strokeWidth 2（lucide 默认）跟旧的内联 svg 一致。
   // ≥1080px 展开态不画图标，跟设计稿交互原型一致（原型的 nav 只有
   // label，没有 icon——图标是收起态专属，不是随时都显示的装饰）。
   const NAV = [
-    {
-      id: "overview",
-      label: "总览",
-      icon: '<path d="M3 10.5 12 3l9 7.5"></path><path d="M5 9.5V21h14V9.5"></path>',
-    },
-    {
-      id: "photos",
-      label: t("ui.nav_photos"),
-      icon: '<rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="9" cy="10" r="2"></circle><path d="m21 16-5-5-9 9"></path>',
-    },
-    {
-      id: "devices",
-      label: "家人与设备",
-      icon: '<rect x="6" y="2.5" width="12" height="19" rx="2.5"></rect><path d="M11 18.5h2"></path>',
-    },
-    {
-      id: "log",
-      label: "活动记录",
-      icon: '<circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3.5 2"></path>',
-    },
-    {
-      id: "settings",
-      label: "设置",
-      icon: '<circle cx="12" cy="12" r="3"></circle><path d="M19 12a7 7 0 0 0-.14-1.4l2.1-1.63-2-3.46-2.48 1a7 7 0 0 0-2.42-1.4L13.7 2.5h-3.4l-.36 2.61a7 7 0 0 0-2.42 1.4l-2.48-1-2 3.46 2.1 1.63A7 7 0 0 0 5 12c0 .48.05.94.14 1.4l-2.1 1.63 2 3.46 2.48-1a7 7 0 0 0 2.42 1.4l.36 2.61h3.4l.36-2.61a7 7 0 0 0 2.42-1.4l2.48 1 2-3.46-2.1-1.63c.09-.46.14-.92.14-1.4Z"></path>',
-    },
+    { id: "overview", label: "总览", icon: HouseIcon },
+    { id: "photos", label: t("ui.nav_photos"), icon: ImageIcon },
+    { id: "devices", label: "家人与设备", icon: SmartphoneIcon },
+    { id: "log", label: "活动记录", icon: ClockIcon },
+    { id: "settings", label: "设置", icon: SettingsIcon },
   ];
   const pageFromHash = () => {
     const m = (location.hash || "").match(/^#\/(overview|photos|devices|log|settings)$/);
@@ -1059,6 +1051,7 @@
       <div class="brand">P-Pass</div>
       <nav>
         {#each NAV as n}
+          {@const NavIcon = n.icon}
           <button
             class="nav-item"
             class:active={page === n.id}
@@ -1066,7 +1059,7 @@
             title={n.label}
             onclick={() => go(n.id)}
           >
-            <svg class="nav-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">{@html n.icon}</svg>
+            <NavIcon class="nav-icon" size={20} />
             <span class="nav-label">{n.label}</span>
           </button>
         {/each}
@@ -1731,8 +1724,11 @@
   .service-pill.bad .dot {
     background: var(--pp-act);
   }
-  /* 展开态（≥1080px，跟设计稿交互原型一致）：不画图标，只显示文字。 */
-  .nav-icon {
+  /* 展开态（≥1080px，跟设计稿交互原型一致）：不画图标，只显示文字。
+     ICON-02: 图标由 lucide 组件渲染，svg 拿不到本组件的 scope 类，
+     所以 .nav-icon 一律走 `.nav-item :global(...)`——限定在 nav-item
+     子树内，不是裸 :global 全局泄漏。 */
+  .nav-item :global(.nav-icon) {
     display: none;
   }
   .nav-label {
@@ -2134,11 +2130,11 @@
       justify-content: center;
       flex: none;
     }
-    .nav-icon {
+    .nav-item :global(.nav-icon) {
       display: block;
       color: var(--pp-ink-60);
     }
-    .nav-item.active .nav-icon {
+    .nav-item.active :global(.nav-icon) {
       color: var(--pp-paper);
     }
     .nav-label {
