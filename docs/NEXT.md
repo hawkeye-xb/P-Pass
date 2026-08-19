@@ -1,8 +1,61 @@
-# NEXT — 当前状态与下一步（2026-08-18，MOB-08 后台自动同步三根因定位 + 修复）
+# NEXT — 当前状态与下一步（2026-08-19，MOB-27 监听与干活分家）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
-## 〇、2026-08-19（续二十三）：真机验收一轮 + 六条修复（当前状态）
+## 〇、2026-08-19（续二十四）：MOB-27 监听与干活分家（当前状态）
+
+**代码完成并已推送，真机验收 owed。**
+
+用户提出用 event loop 的思路解决"备份期间监听断掉"：*"事件来了，我们执行完
+之后再释放，不 OK 吗？"* 核对 AOSP 文档后确认——**这就是 Android 官方模式**，
+`JobInfo.Builder#addTriggerContentUri` 的 javadoc 明写：用 `schedule(同 job ID)`
+代替 `jobFinished()`，系统会在 job 运行期间持续监听并把变更转交给下一个 job。
+**系统就是事件队列**；我们吃不到只因中间隔着 WorkManager（REPLACE 换 WorkSpec
+→ 换 job ID → 转交认不上人）。
+
+于是 content trigger 这一条通道绕过 WorkManager 直连 JobScheduler：新增
+`MediaWatchJob`，毫秒级返回（先派活、后重挂），备份走 `APPEND_OR_REPLACE`
+排队。整套 rearm 机关删除，**一个时间常数都没剩下**。
+
+顺手堵掉一个更严重的洞：旧监听带着 `UNMETERED` 约束 —— **不连 Wi-Fi 时压根
+收不到通知**，出门拍一天照全靠 5h 兜底。现在监听裸挂永远在线。
+
+### ⚠️ 需要用户知晓的两件事
+
+1. **看门 job 每次重启必死**（trigger URI 与 `setPersisted` 互斥，平台硬约束）。
+   靠"周期任务拉起进程 → `ensureMediaWatch`"复活，**监听空窗上限 = 周期任务
+   首跑**。数据不丢（照片仍在水位之上）。要压到 0 得加 `BOOT_COMPLETED`
+   receiver——等真机测出实际空窗再定。
+2. **`PPassApplication` 的健康检查 early-return 已删**。用户原话"必须点了才
+   恢复"的前提是"你都提示了"，而 MOB-18 提示 UI 已 pending——不恢复 = 静默
+   死亡。副作用：`isBackupScheduled` 从此无法区分重启与 force-stop，重做
+   MOB-18 前须换判据。**如果这不是你要的，说一声就改回去。**
+
+### 真机验收 owed（做完 MOB-27 才能移入 done/）
+
+1. **连拍**：100ms 级连拍 5 秒 → logcat 只出现 **1 次** `auto backup: offered=…`
+2. **备份期间拍照**（本卡原始问题）：大批量备份传输中拍 3 张 → 第一轮结束后
+   立刻接着传，不用等下一个事件
+3. **重启**：重启后不打开 App → `dumpsys jobscheduler` 看 job `20260819` 何时回来
+4. 附带：`adb shell dumpsys jobscheduler | grep -A5 ppass` 确认看门 job
+   **没有任何 constraint**
+
+### 队列
+
+**待讨论/实施**：
+- `MOB-19` 手动备份链路有与 MOB-09 同形的坏记录炸批问题
+- `E2E-02` DaemonHelloTest 断言 2026-08-08 就废弃的 `a=` 契约，**会一直
+  挡着 e2e 门禁，下次打 tag 还会红**
+- 新发现（未开卡）：四条备份通道是四个独立 unique name，理论上可并行跑两个
+  BackupWorker 扫同一水位、重复推字节。MOB-27 之前就存在，本卡未扩大也未修复。
+- 新发现（未开卡）：`BucketScreen.kt:81` lint 红（`ProduceStateDoesNotAssignValue`），
+  既有问题，CI 不跑 lint 所以一直没暴露。
+
+**backlog**（用户判定暂不做）：见下方续二十三小节。
+
+---
+
+## 一、2026-08-19（续二十三）：真机验收一轮 + 六条修复（当前状态）
 
 用户真机走了完整验收流程，报了 6 个问题，全部定位并修复（`51b18c5`）。
 **下个 session 的主话题：`MOB-27` 监听与干活解耦**——卡里有完整链路、

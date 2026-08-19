@@ -429,6 +429,23 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [x] MOB-27 监听与干活分家（content trigger → JobScheduler 看门 job） — **2026-08-19（代码完成，真机验收 owed）**:
+      监听 work 与干活 work 是同一个，**备份跑多久监听就断多久**——用户实测
+      "前面的出去了，后面的就没有同步"。上一轮的治标（重挂延迟 + 按批次大小
+      补捞）被用户当场否掉："你强行用时间来做判断的话，是不太合适的。"
+      根治方案由用户提出（"参照 JS 的 event loop：事件来了，执行完之后再释放"），
+      核对 AOSP 文档后确认**这就是官方模式**——`JobInfo.Builder#addTriggerContentUri`
+      的 javadoc 明写：用 `schedule(同一个 job ID)` 代替 `jobFinished()`，
+      "while your job is running, the system will continue monitoring for content
+      changes, and propagate any changes it sees over to the next job you schedule"。
+      **系统就是那个事件队列**，我们吃不到只因中间隔着 WorkManager（REPLACE 换
+      WorkSpec → 换 job ID → 转交认不上人）。新增 `MediaWatchJob`（毫秒级：
+      先派活、后重挂），备份走 `APPEND_OR_REPLACE` 排队；删掉整套 rearm 机关，
+      **一个时间常数都没剩下**。顺手堵掉更严重的第二个洞：旧监听带着
+      `UNMETERED` 约束 = **不连 Wi-Fi 时压根收不到通知**，出门拍一天照全靠 5h
+      兜底；现在监听裸挂永远在线，约束挂在派出去的备份 work 上。
+      代价：trigger URI 与 `setPersisted` 互斥，**看门 job 每次重启必死**，
+      靠周期任务拉起进程时重挂（数据不丢，亏时延）。217/217 + 9 条反证全红。
 - [x] MOB-11 同步节奏改为「尽快送达」 — **2026-08-18（用户定稿，待验收）**:
       `CONTENT_UPDATE_DELAY_MS` 2min→1s、`CONTENT_MAX_DELAY_MS` 15min→30s；
       真机实测端到端 **1.6 秒**（改前 2 分 03 秒）。`setTriggerContentUpdateDelay`
