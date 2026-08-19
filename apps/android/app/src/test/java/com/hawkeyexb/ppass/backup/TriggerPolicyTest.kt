@@ -133,11 +133,13 @@ class TriggerPolicyTest {
         // MOB-11：节奏从 2min/15min 收到 1s/30s——单张拍完 ~1s 就发起。
         assertEquals(1L * 1000, CONTENT_UPDATE_DELAY_MS)
         assertEquals(30L * 1000, CONTENT_MAX_DELAY_MS)
-        // MOB-11 回归锁：update delay 会被每次新变化重置（AOSP 语义），
-        // 所以 max delay 必须是同一数量级的封顶，不能留在分钟级——否则
-        // 连拍（远快于 1s）会把计时无限重置，反而要等满 max delay。
+        // MOB-11 回归锁：update delay 是尾沿防抖，持续不断的 MediaStore
+        // 写入（截图/IM 收图/其它 App 批量写）会让 1s 静默窗口永远等不到，
+        // 此时只有 max delay 这个从第一次变化起算的强制闸能救。它必须留在
+        // 与 update delay 同数量级的秒级，不能退回分钟级。
+        // （注意：有限连拍不会触到 max delay——连拍结束后 1s 就走。）
         assertTrue(
-            "max delay 必须封住连拍（不得超过 update delay 的 60 倍）",
+            "max delay 必须秒级封顶持续 churn（不得超过 update delay 的 60 倍）",
             CONTENT_MAX_DELAY_MS <= CONTENT_UPDATE_DELAY_MS * 60,
         )
         // ⚠️ 无法从 WorkSpec 读回 delay：mockable android.jar 的

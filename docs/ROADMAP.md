@@ -429,6 +429,31 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [x] MOB-11 同步节奏改为「尽快送达」 — **2026-08-18（用户定稿，待验收）**:
+      `CONTENT_UPDATE_DELAY_MS` 2min→1s、`CONTENT_MAX_DELAY_MS` 15min→30s；
+      真机实测端到端 **1.6 秒**（改前 2 分 03 秒）。`setTriggerContentUpdateDelay`
+      是尾沿防抖，1s 能聚合任意长度连拍——防的是事件爆炸不是推迟触发；
+      max delay 收到 30s 防的是截图/IM 收图这类**持续 churn** 把备份饿死
+      （不是防连拍，初版记错、2026-08-19 已更正）。同批：删「仅充电」后果
+      解释文案、把「自动备份」总开关放回设置页（桌面端有停止入口手机端没有）、
+      修 main 上被增量构建掩盖已久的 `DiagTextTest` i18n 漂移红。
+      ⚠️ 观察项：1s 节奏下任何 App 写 MediaStore 都会触发一次 run，而
+      `setForeground` 在 scan 之前，空扫描也会闪 FGS——待实测噪音量后再定。
+- [x] MOB-08 后台自动同步不生效 三根因 — **2026-08-18（用户真机验收通过）**:
+      三根因，前两个是自家代码 bug 与三星无关（"怀疑 One UI OEM 限制"被证据
+      否掉）。**A** `addContentUriTrigger(it, false)`——MediaProvider 通知的是
+      带行 id 的 item URI，精确匹配收不到，content trigger 从未触发。
+      **B** content trigger 是 OneTimeWork，跑完进终态监听即消失，`doWork()`
+      里没有重新 enqueue——后台自动同步只在开过 App 之后的第一张照片有效；
+      用独立 name 的中转 `ContentTriggerRearmWorker` 修（不能在 doWork 里
+      REPLACE 同名 unique work，那会取消正在跑的自己）。**C** 现象 2 的
+      `JobCancellationException` 是排查前提错了——插着 USB 但 `status:4
+      NOT_CHARGING`，JobScheduler 放行、WorkManager 的 BatteryChargingTracker
+      叫停；顺带修掉 `setForeground()` 在 try 之外、cancellation 被当业务失败
+      吞掉、`client.close()` 在取消路径跑不到三个真缺陷，并加 stopReason 仪器化。
+      真机验收：真实拍照两张端到端均 2 分 03 秒（当时还是 2min 节奏），第二张
+      全程未开 App 也送达。
+
 - [x] MOB-06 查看页右上角「分享」 — **2026-08-12（用户询问「分享 vs 用其他
       应用打开是不是一回事」，待推 main）**: 不是一回事——分享=`ACTION_SEND`
       （文件作为内容/附件发给目标 app，分享面板：微信/邮件/云盘）；
