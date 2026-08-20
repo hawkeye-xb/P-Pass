@@ -78,3 +78,9 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
+      # 照片墙窗口对账的回归锁（DESK-09）。这个函数已经回归两次——
+      # DESK-06 修"墙不失效"、8/17 去卡顿又开了三个口子（只拉第一页 /
+      # 已有条目不更新 / 删除不消失）。桌面端在此之前零测试。
+      - name: 单测（照片墙对账 + 接线断言）
+        working-directory: apps/desktop
+        run: pnpm test
