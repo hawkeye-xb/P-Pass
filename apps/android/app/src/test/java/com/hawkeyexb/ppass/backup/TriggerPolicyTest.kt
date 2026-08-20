@@ -86,19 +86,28 @@ class TriggerPolicyTest {
         // 用户原话："我肯定是需要 kill app 的啊，配置好了谁整天看你这个同步
         // 备份用的 app？"——挂在 Activity 上的补捞对他等于不存在。
                 val app = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/PPassApplication.kt"))
+        // MOB-28: 补捞与重挂已收进共用的 reconcileWatchOnProcessStart
+        // （Application 与开机 receiver 两个入口共用，避免两份判定漂移），
+        // 所以断言跟着搬家——Application 只负责"起线程调它"。
         assertTrue(
-            "Application.onCreate 必须触发进程启动补捞",
-            app.contains("triggerProcessStartCatchup(this)"),
+            "Application.onCreate 必须走共用对账（它内部含补捞）",
+            app.contains("reconcileWatchOnProcessStart("),
+        )
+        val health = codeOf(File(repoRoot(),
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupHealth.kt"))
+        assertTrue(
+            "共用对账必须触发进程启动补捞",
+            health.contains("triggerProcessStartCatchup(context)"),
         )
         // MOB-16：挂载不能依赖用户打开 App。scheduleAutoBackup 若只在
         // MainActivity 调用，content trigger 监听和周期任务的存在就取决于
         // "用户打开过 App"——监听一旦丢失只有手动打开才能恢复。
         assertTrue(
-            "Application.onCreate 必须确保监听与周期任务在位（不依赖打开 App）",
-            app.contains("scheduleAutoBackup(this)"),
+            "共用对账必须确保监听与周期任务在位（不依赖打开 App）",
+            health.contains("scheduleAutoBackup(context)"),
         )
-        assertTrue("未配对不跑", app.contains("PairingStore(filesDir).load() == null"))
-        assertTrue("暂停态不跑", app.contains("AutoBackupPrefs(filesDir).paused()"))
+        assertTrue("未配对不跑", health.contains("PairingStore(context.filesDir).load() == null"))
+        assertTrue("暂停态不跑", health.contains("AutoBackupPrefs(context.filesDir).paused()"))
 
         val manifest = codeOf(File(repoRoot(), "apps/android/app/src/main/AndroidManifest.xml"))
         assertTrue(
