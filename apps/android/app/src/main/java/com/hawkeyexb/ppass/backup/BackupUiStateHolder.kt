@@ -5,7 +5,6 @@ package com.hawkeyexb.ppass.backup
 import android.content.ContentResolver
 import android.content.Context
 import androidx.work.WorkManager
-import android.os.Build
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import com.hawkeyexb.ppass.transport.DaemonClient
@@ -16,7 +15,6 @@ import com.hawkeyexb.ppass.ui.BackupUiState
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -65,8 +63,29 @@ class BackupUiStateHolder(
         scope.launch {
             WorkManager.getInstance(context)
                 .getWorkInfosByTagFlow(BackupWorker::class.java.name)
-                .collect { refreshTriplet() }
+                .collect { infos ->
+                    refreshTriplet()
+                    // MOB-19: 状态行也从这条流里出。管线合并之后手动备份
+                    // 不再在前台跑，界面只能靠 work 的 progress/output 跟住
+                    // ——顺带自动备份也第一次有了实时进度（在此之前后台跑
+                    // 完只刷三元组，状态行全程不动）。
+                    observeBackupWork(infos)
+                }
         }
+    }
+
+    /** MOB-19: 从 work 列表里挑出"当前这一轮"并映射成界面状态。
+     *
+     *  为什么挑 RUNNING 优先：四条自动通道 + 手动通道共用 BackupWorker 的
+     *  tag，列表里会有多条（含已终结的历史）。正在跑的那条才是用户此刻
+     *  该看到的；都没跑就看最近一条终态。 */
+    private fun observeBackupWork(infos: List<androidx.work.WorkInfo>) {
+        val next = uiStateOf(infos) ?: return
+        // 配对失效是独立信号（红卡 + 重新扫码入口），不占状态行。
+        if (next is BackupUiState.Trouble && isPairingLostText(next.text)) {
+            _pairingLost.value = true
+        }
+        _state.value = next
     }
 
     /** DOG-01c: 漂移校准——电脑端库被删/换库时，缓存里的旧 hash 已不在
@@ -107,156 +126,36 @@ class BackupUiStateHolder(
         }
     }
 
-    // UX-01: 备份运行句柄——进行中再点 = 暂停（取消当前批，幂等管线安全）。
-    private var backupJob: Job? = null
-
+    /**
+     * MOB-19 事件⑥：用户手点「立即备份」。
+     *
+     * 在此之前这里是**另一份**扫描+哈希+传输的实现（约 130 行），与
+     * `BackupWorker` 并行存在。后果：MOB-09 的「一条坏记录不许炸整批」
+     * 只修了 worker 那一份，这里照旧一条读不了就整批失败、永久卡死。
+     *
+     * 用户定稿（2026-08-20）："不是说应该自动和手动触发的备份一样吗？……
+     * 手动就相当于第 5 种触发方式。你为什么这里弄了两条路径去做备份呢？"
+     *
+     * 所以现在这里只做一件事：**派活**。管线只有一条，手动与自动共用；
+     * 手动专属的两个语义（零约束、全量重扫）在 [triggerManualBackup] 里
+     * 靠 input data 表达，界面状态由 [observeBackupWork] 从这条 work 上读。
+     */
     fun backupNow() {
-        // UX-01: 备份进行中再点 = 暂停——中断当前批。幂等管线保证安全：
-        // 中断不 commit、水位不推进，已到家的 blob 下次 run 去重；再点
+        // UX-01: 进行中再点 = 暂停——取消这条 work。幂等管线保证安全：
+        // 中断不 commit、水位不推进，已到家的 blob 下次去重跳过；再点
         // 一次 = 续传（重新 offer 全部候选，dedup 收敛缺 0）。
-        if (backupJob?.isActive == true) {
-            backupJob?.cancel()
-            backupJob = null
+        val running = _state.value.let {
+            it is BackupUiState.Scanning || it is BackupUiState.Hashing ||
+                it is BackupUiState.Sending
+        }
+        if (running) {
+            cancelManualBackup(context)
             _state.value = BackupUiState.Idle
             return
         }
-        backupJob = scope.launch {
-            try {
-                runBackup()
-            } catch (t: Throwable) {
-                if (t is kotlinx.coroutines.CancellationException) throw t
-                // 存储端已移除/吊销本设备 → 备份被配对门拒——UI 切「配对已
-                // 失效」态，主按钮变重新扫码（rejoin 门：新 token 可重建）。
-                _pairingLost.value = isPairingLostError(t)
-                // T-083 红线：主文案永不带代码——人话正文由 HomeScreen 用
-                // 字符串资源出（run_failed，先说「照片没丢」）；Trouble 只携带
-                // 原始错误串，去处仅两个：默认收起的「查看技术详情」折叠区 +
-                // 这里的 Log.e（完整堆栈进 logcat/bugreport 诊断导出路径，
-                // tag 与 BackupWorker 同为 PPassBackup）。
-                android.util.Log.e("PPassBackup", "backup run failed", t)
-                _state.value = BackupUiState.Trouble(t.toString().take(500))
-            }
-        }
+        triggerManualBackup(context)
     }
 
-    private suspend fun runBackup() {
-        // DOG-01c: 备份前先做一次漂移校准（只查不传；daemon 不可达则跳过）。
-        calibrateFromDaemon()
-
-        // T6: 手动备份 = 重扫选中相册的**全部**（since=0，忽略水位）——
-        // "选择相册 → 主动发起备份"是两个动作。hash 全部候选后按确认
-        // 缓存过滤，只传新图。水位在 commit 后推进到本次扫描位置，自动
-        // 备份从此续跑。T2 语义：手动备份永远有反应（无新增/全已确认也
-        // 明确显示"已是最新"），不再被增量水位静默吞掉。
-        val watermarks = WatermarkStore(context.filesDir)
-        val bucketIds = scopeStore.selectedBucketIds()
-        // FIX-T6: 空集 = 一个都不备（用户全取消）——显式反馈，不扫不备。
-        if (bucketIds != null && bucketIds.isEmpty()) {
-            _state.value = BackupUiState.NoAlbums
-            return
-        }
-        val scan = withContext(Dispatchers.IO) {
-            MediaScanner(context.contentResolver).scanSince(0L, bucketIds)
-        }
-        _state.value = BackupUiState.Scanning(scan.items.size)
-        if (scan.items.isEmpty()) {
-            // T6: 明确反馈——选中相册里没有任何照片（含"一个相册都没选"）。
-            _state.value = BackupUiState.AllSafe(0, 0)
-            return
-        }
-
-        // Hash every candidate (streamed off the resolver). PERF-01:
-        // 哈希缓存——同一张没变过的照片只在第一次备份读流哈希一次；
-        // 之后 hash 阶段命中缓存（key = _ID + generation/dateModified+size），
-        // 秒级完成。open 工厂仍保留（传输阶段 pushFile 要重开流），但
-        // 缓存命中时 hash 阶段不再调用它。
-        val hashCache = HashCache(hashCacheFile(context))
-        // FIX-T6: 记录每个候选 hash 的所属相册——recordRun 写进
-        // ConfirmedStore.bucketOf，三元组 M 按范围口径数。
-        val hashToBucket = mutableMapOf<String, Long>()
-        val candidates = withContext(Dispatchers.IO) {
-            scan.items.mapIndexed { i, item ->
-                withContext(Dispatchers.Main) {
-                    _state.value = BackupUiState.Hashing(i + 1, scan.items.size)
-                }
-                val open = {
-                    context.contentResolver.openInputStream(item.uri)
-                        ?: error("cannot open ${item.displayName}")
-                }
-                val key = hashCacheKey(
-                    item.uri.toString(), item.generation, item.dateModified,
-                    item.bytes, Build.VERSION.SDK_INT >= 30,
-                )
-                val hash = hashWithCache(hashCache, key, open)
-                item.bucketId?.let { hashToBucket[hash] = it }
-                Candidate(
-                    hash = hash,
-                    fileName = item.displayName,
-                    mediaType = item.mimeType,
-                    bytes = item.bytes,
-                    open = open,
-                )
-            }.also { hashCache.flush() }
-        }
-        // T6: 只传未确认的（已到家照片不再重复 hash 阶段后的传输）。
-        val fresh = candidates.filter { !confirmedStore.contains(it.hash) }
-        _state.value = BackupUiState.Sending(0, fresh.size)
-        if (fresh.isEmpty()) {
-            // MOB-13 迁移路径：一张都不用传，但**文件级确认记录仍要补齐**。
-            // 存量安装的 confirmed.json 只有 hash 集合，内容重复的照片让
-            // K 永远归不了零；用户按下「备份」→ 走到这里（全已确认）→ 早
-            // 退前把本次全量扫描（since=0，覆盖范围内所有文件）的文件级
-            // 记录写进去，K 从此归零。lastSuccessAt 保持原值：这一趟没有
-            // 真的传输，不该改写「最后成功时间」。
-            withContext(Dispatchers.IO) {
-                confirmedStore.recordRun(
-                    confirmed = emptySet(),
-                    lastSuccessAt = confirmedStore.lastSuccessAt(),
-                    bucketOf = hashToBucket,
-                    files = fileEntriesOf(
-                        scan.items.map { it.uri.toString() to it.bucketId },
-                        candidates,
-                    ),
-                )
-            }
-            refreshTriplet() // 补齐后 UI 立刻显示新的 K（否则要等下次开 App）
-            _state.value = BackupUiState.AllSafe(0, 0) // 全已确认 = 已是最新
-            return
-        }
-
-        _state.value = BackupUiState.Sending(0, fresh.size)
-        withContext(Dispatchers.IO) { client.bind(identity.secretKey()) }
-        val daemon = parsePeerAddrToken(pairing.daemonAddrToken)
-        // 2026-08-14：真实进度——BackupRunner 每传完一个文件回调一次，
-        // 之前这里只在批次开始/结束各设一次状态，中途界面纹丝不动。
-        val report = BackupRunner(client).run(daemon, fresh, scan.nextWatermark) { sent, total, fileName ->
-            _state.value = BackupUiState.Sending(sent, total, fileName)
-        }
-
-        // Watermark only advances after a committed run (T-053 semantics).
-        withContext(Dispatchers.IO) { watermarks.save(scan.nextWatermark) }
-        // DOG-01c: commit 成功后本次候选**全部**确认——report.missing 是
-        // 上传前 manifest 应答的缺失集合，commit 成功后这些文件已在库，
-        // 不参与减项（回归：旧实现 confirmed = allHashes − missing 会把
-        // 刚上传成功的照片从缓存删掉，首次全量备份后 M=0 且永远为 0）。
-        // 漂移校准由独立的 exist-check（calibrateFromDaemon）负责。
-        withContext(Dispatchers.IO) {
-            confirmedStore.recordRun(
-                confirmed = confirmedAfterCommit(candidates, report),
-                lastSuccessAt = System.currentTimeMillis(),
-                bucketOf = hashToBucket,
-                // MOB-13: 文件级确认记录（M 与 N 同单位 = 文件数）。手动
-                // 备份是 since=0 全量扫描 → 这一次就把范围内所有文件补齐，
-                // 也是存量用户的迁移路径（见 fresh.isEmpty() 分支）。
-                files = fileEntriesOf(
-                    scan.items.map { it.uri.toString() to it.bucketId },
-                    candidates,
-                ),
-            )
-        }
-        refreshTriplet()
-        _state.value = BackupUiState.AllSafe(report.ingested, report.duplicates)
-    }
 }
 
 /**
@@ -296,3 +195,51 @@ internal fun isPairingLostError(t: Throwable): Boolean {
     val msg = t.message ?: return false
     return msg.contains("err.not_paired") || msg.contains("err.not_authorized")
 }
+
+/**
+ * MOB-19: work 状态 → 界面状态。**纯函数**，JVM 单测直接覆盖。
+ *
+ * 备份只有一条管线（`BackupWorker`），五种触发方式共用它。界面要显示的
+ * 「找照片 / 读取 x/y / 正在备份 x/y / 都存好了 / 出错了」全部从这条 work
+ * 的 progress 与 output 里读——**没有第二个状态源**，所以不会再出现
+ * 「数据层对了但界面停在旧值」（MOB-21 那次的形状）。
+ *
+ * 返回 null = 这批 work 里没有可展示的信息（还没跑过 / 全是无关历史），
+ * 调用方保持当前状态不动，绝不擅自改回 Idle（否则进度会闪回）。
+ */
+internal fun uiStateOf(infos: List<androidx.work.WorkInfo>): BackupUiState? {
+    // 正在跑的优先——那才是用户此刻该看到的。
+    infos.firstOrNull { it.state == androidx.work.WorkInfo.State.RUNNING }?.let { running ->
+        val p = running.progress
+        val phase = p.getString(KEY_PHASE)
+        val done = p.getInt(KEY_DONE, 0)
+        val total = p.getInt(KEY_TOTAL, 0)
+        return when (phase) {
+            PHASE_SCANNING -> BackupUiState.Scanning(total)
+            PHASE_HASHING -> BackupUiState.Hashing(done, total)
+            PHASE_SENDING -> BackupUiState.Sending(done, total, p.getString(KEY_FILE) ?: "")
+            // 已经在跑但还没发出第一条进度（绑定 daemon、校准阶段）——
+            // 说「找照片」而不是沉默，用户点了按钮必须立刻有反应。
+            else -> BackupUiState.Scanning(0)
+        }
+    }
+    // 没有在跑的，看最近一条终态。ENQUEUED（等约束）不改状态行——
+    // 手动触发是零约束不会排队；自动触发排队时界面另有「已排队」提示行。
+    val last = infos.lastOrNull { it.state.isFinished } ?: return null
+    return when {
+        last.state == androidx.work.WorkInfo.State.FAILED ->
+            BackupUiState.Trouble(last.outputData.getString(KEY_ERROR) ?: "")
+        last.state == androidx.work.WorkInfo.State.CANCELLED -> BackupUiState.Idle
+        last.outputData.getBoolean(KEY_NO_ALBUMS, false) -> BackupUiState.NoAlbums
+        else -> BackupUiState.AllSafe(
+            last.outputData.getInt(KEY_INGESTED, 0),
+            last.outputData.getInt(KEY_DUPLICATES, 0),
+        )
+    }
+}
+
+/** 存储端移除/吊销本设备后备份被配对门拒——从错误串里认出来。
+ *  与 [isPairingLostError] 同一套判据，只是这里拿到的是字符串
+ *  （work 的 outputData 只能带基本类型，异常对象过不来）。 */
+internal fun isPairingLostText(text: String): Boolean =
+    text.contains("err.not_paired") || text.contains("err.not_authorized")
