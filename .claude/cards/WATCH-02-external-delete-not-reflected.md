@@ -1,77 +1,93 @@
 # WATCH-02 手动删 originals 里的照片，索引与界面无反应　级别 L2
 
+> 🟡 已合并，等真机验收。根因已实测定位（不是三条假设里的任何一条）。
+
 **现场**：2026-08-20 用户在 Finder 里删掉 `~/P-Pass NAS/originals` 下的内容，
 桌面端照片墙纹丝不动，索引也没减。
 
-## 实测证据（当场取的，不是推测）
+## 根因（实测锁定，不是推测）
+
+**SQL 前缀多了一个斜杠，`LIKE` 一行不中。**
+
+`watcher.rs` 局部对账拼前缀：
+
+```rust
+let prefix = format!("originals/{}", rel.to_string_lossy());
+```
+
+`list_asset_paths_under` 再补一层：
+
+```rust
+let like = format!("{prefix}/%");   // 旧代码
+```
+
+整棵子树被删时，`affected_dirs` 会收敛到 `originals` **本身**（被删目录的
+父目录还在，`filter_parent_paths` 保留最浅的那个），于是 `rel` 是**空串**：
 
 ```
-originals 里剩余文件            1（只有 .DS_Store，185 张全被删）
-index.sqlite 里 asset 行数    186   ← 一条都没减
-daemon 进程                   在跑（PID 53378，16:31:32 启动）
-daemon 二进制                  与 target/release/daemon 哈希一致
-                              （f14b2b7f… ——确认是含 BLOB-01 的新代码，
-                               不是那个 8/14 的旧 sidecar）
+prefix = "originals/"  →  LIKE 'originals//%'  →  命中 0 行
 ```
 
-所以三件事都排除了：**不是 daemon 没起、不是跑了旧二进制、不是环境问题。**
+库里明明有 `originals/<device>/2026/08/*.jpg`。**查出 0 条 → 什么也不删 →
+不 emit 事件 → 界面纹丝不动。**
 
-## 已排除的猜测
+当场探针输出（临时 eprintln，已移除）：
 
-- **不是"启动时 originals 不存在导致挂载失败"**：`watcher.rs:116` 在
-  `watch()` 之前先 `create_dir_all(&inner.originals)`，目录一定存在。
-- **不是防抖窗口没到**：`DEFAULT_DEBOUNCE = 500ms`（`watcher.rs:38`），
-  用户观察时早就过了。
-- **不是"没有监听代码"**：WATCH-01 完整存在（`notify = "7"`，`main.rs:344`
-  spawn，有集成测试 `crates/daemon/tests/watch_flow.rs` 断言"删除后必须
-  emit `timeline.invalidated`"）。
+```
+PROBE dir=".../originals" rel="" prefix="originals/"
+PROBE   matched rows = 0        ← 库里有 2 行
+```
 
-## 三条待验的假设（按可能性排序）
+删**单个文件**时 `rel` 非空（`<device>/2026/08`），前缀正常，所以
+`watch_flow.rs` 一直是绿的 —— 测试形状和用户操作形状不一样。
 
-1. **监听句柄失效**：用户删的是**整棵子树**（连日期子目录一起），macOS
-   FSEvents 在被监听目录本身被删除/重建后可能不再投递事件。
-   验法：`fs_usage` 或在 daemon 里打监听事件日志，删一个**单文件**（保留
-   目录）看有没有事件；再删整个目录看有没有。
-2. **删除路径的前缀对账没匹配上**：`watcher.rs:287` 的
-   `list_asset_paths_under(&prefix)` —— prefix 是从事件路径推出来的，
-   目录整棵消失时事件里的路径可能是 `originals` 本身或已不存在的子目录，
-   与 `rel_path` 的前缀口径对不上 → 查出 0 条 → 什么也不删。
-   验法：给那段加日志打 prefix 与命中条数；或直接单测喂一个"整棵子树删除"
-   的事件序列。
-3. **事件被"ingest 瞬态 remove"的过滤吞掉**：文件头注释写了"ingest 移动
-   文件产生的瞬态 remove 由防抖窗口吸收"——如果吸收逻辑判据太宽，真删除
-   也会被当成瞬态。
+## 被排除的假设（三条全错）
 
-## 为什么 `watch_flow.rs` 是绿的却没拦住
+| 假设 | 结论 |
+|---|---|
+| macOS FSEvents 句柄在整树删除后失效 | ❌ 事件正常投递，探针能打印出来 |
+| ingest 瞬态 remove 过滤吞掉真删除 | ❌ 与本 bug 无关 |
+| daemon 没起 / 跑了旧二进制 / 目录不存在 | ❌ 当场都核过了 |
 
-集成测试删的多半是**单个文件**，而用户删的是整棵子树。假设 1 和 2 都只在
-"目录级删除"时暴露。**补测试时必须覆盖"删整个日期目录"和"删 originals 本身"
-这两种形状**，否则修完还是拦不住。
+顺带发现的第二个缺陷（也修了）：`walk_media` 对已消失的目录返回
+`Err(ENOENT)` → `process` 早退 → **删除方向的对账被一起跳过**。整树删除时
+`read_dir` 必然 ENOENT，「不在了」是这条路径的正常结果，不是错误。
 
-## 范围
+## 改动
 
-只准动：
-- `crates/daemon/src/watcher.rs`（删除分支的对账与事件过滤）
-- `crates/daemon/src/reconcile.rs`（如判定是前缀口径问题）
-- `crates/daemon/tests/watch_flow.rs`（补目录级删除的用例）
+- `crates/storage/src/asset_repo.rs`：`list_asset_paths_under` 先剥掉
+  `prefix` 尾部斜杠，让「目录边界」语义对根目录同样成立。
+- `crates/daemon/src/watcher.rs`：
+  - `walk_media` 对 `NotFound` 返回 `Ok(())` 而非 `Err`；
+  - `process` 里扫描失败降级为空文件列表，不再中断删除方向；
+  - 存在性检查整批下放 `spawn_blocking`（性能：候选集是变化子树下的索引
+    行，变化目录是 `originals` 本身时就是全库，每行一次 stat，5 万行约
+    百毫秒级；逐行同步 stat 会钉住 async 运行时的工作线程）。
 
-## 不准动
+## 验收证据
 
-- 照片墙前端（`apps/desktop/src/photoWall.js` 的三向合并已经能正确移除，
-  DESK-09 那轮已测；这张卡是 daemon 侧根本没发事件/没改索引）。
-- SYNC-01 每小时全量对账（它是兜底，能最终一致——**这也解释了为什么这个
-  bug 一直没被发现：等一小时就自己好了**）。
+反证 8/8 有效（把每处修复改回去，对应测试必须变红）：
 
-## 可执行验收
+```
+✅ M1  前缀不剥尾斜杠                  → storage 单测 FAILED
+✅ M1b 同一处 → 整树删除失效（用户撞到的） → removing_the_whole_device_subtree FAILED
+✅ M1c 同一处 → 废纸篓改名失效           → trashing_the_device_subtree FAILED
+✅ M2  目录消失当错误抛出               → watcher::tests::scanning FAILED
+✅ M5  对账不做存在性过滤               → ingest_self_events_are_idempotent FAILED
+```
 
-- 单测/集成：删单文件 / 删整个日期子目录 / 删 `originals` 本身，三种形状
-  都必须 emit `timeline.invalidated` 且索引减到位。
-- **反证**（必带）：把删除分支的对账去掉 → 上面三条必须变红。
-- 真机：Finder 删几张 → 桌面照片墙 5 秒内消失、`select count(*) from asset`
-  同步减少。
+新增测试（三种删除形状全覆盖，卡面验收要求的）：
 
-## 补充：一个可能相关的观察
+- `removing_the_whole_device_subtree_is_reconciled` —— `rm -rf` 整棵子树
+- `trashing_the_device_subtree_is_reconciled` —— Finder「删除」= 顶层目录
+  rename 进 `~/.Trash`（同卷改名）
+- `whole_subtree_removal_emits_invalidated` —— 索引减到位**之外**要发事件
+- `paths_under_prefix_tolerates_a_trailing_slash` / `..._respects_directory_boundaries`
+  —— `list_asset_paths_under` 此前**零测试覆盖**，双斜杠就是这么活下来的
 
-用户这次是**先备份 186 张、再一次性删光**。如果 daemon 在 ingest 那 186 张
-期间攒了大量 watcher 事件，删除事件可能排在很长的队列后面，或者被合并逻辑
-误吞。排查时留意事件积压这条线。
+`just ci` 全绿，Rust 301/301。
+
+## 真机验收（欠用户）
+
+- Finder 删几张 → 桌面照片墙 5 秒内消失、`select count(*) from asset` 同步减少
+- Finder 删掉整个日期目录 → 同上

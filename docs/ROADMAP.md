@@ -622,6 +622,43 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       重抛；⑤`wasLive` 计时起点从 effect 开始改为连接真正建立那一刻。
       daemon 全量绿 + arch-check + clippy 零警告 + fmt 干净，android
       166/166 绿。不涉及真机验收，SYNC-04 五条真机剧本挂账状态不变。
+- [x] **WATCH-02 手动删 originals 的照片索引无反应 — merged 2026-08-20（真机验收 owed）**:
+      用户 Finder 删光 185 张，索引 186 条一条没减。根因**不是**卡面三条假设
+      里的任何一条（FSEvents 句柄失效 / 瞬态 remove 过滤 / 环境问题），而是
+      **SQL 前缀多了一个斜杠**：整棵子树被删时 `affected_dirs` 收敛到
+      `originals` 本身 → `rel` 空串 → `prefix = "originals/"` →
+      `list_asset_paths_under` 再补 `/%` → `LIKE 'originals//%'` → **命中 0 行**
+      → 什么也不删、不发事件。删单文件时 `rel` 非空所以一直是绿的——
+      **测试形状和用户操作形状不一样**。`list_asset_paths_under` 此前零测试覆盖。
+      顺带修掉第二个缺陷：`walk_media` 对已消失目录返回 `Err(ENOENT)` →
+      `process` 早退 → 删除方向的对账被一起跳过（整树删除时 ENOENT 是必然结果，
+      不是错误）。性能口径：存在性检查整批下放 `spawn_blocking`（候选集在变化
+      目录是 `originals` 时就是全库，每行一次 stat，5 万行百毫秒级；逐行同步
+      stat 会钉住 async 工作线程）。三种删除形状（单文件 / rm -rf 整棵 / Finder
+      改名进废纸篓）全覆盖 + 事件断言。Rust 301/301，反证 8/8 全红。
+      挂账：真机 Finder 删几张 → 照片墙 5 秒内消失（用户）。
+- [x] **WATCH-03 Finder 挪动照片导致索引删行、照片凭空消失 — merged 2026-08-20（真机验收 owed）**:
+      修 WATCH-02 时挖出来的，比它更严重：WATCH-02 是「删了但没消失」，这条是
+      **「没删但消失了」**。用户把照片拖进自建目录 `originals/我的婚礼/`（就是
+      给照片分类这个最自然的动作）→ `ingest_new` 见 hash 已存在返回 `Duplicate`
+      **不更新 rel_path** → `reconcile_under` 见旧路径不存在 → 删行 + 删缩略图。
+      两步各自都"对"，合起来是数据不可见，而且**再也回不来**（没有新事件了）。
+      根本问题是身份口径：内容寻址系统里 hash 才是身份，`rel_path` 只是当前住址，
+      搬家不该销户。改法：hash 命中时**先看记录的文件还在不在**——还在 =
+      `Duplicate`（原样）；不在了 + 来源已在 `originals/` 树内 = `Moved`
+      **就地采纳用户摆的位置**；不在了 + 来源在库外（手机重传）= `Moved` 按
+      canonical 布局落位。新增 `IngestOutcome::Moved` + `update_asset_rel_path`
+      + 审计 `asset.relocated`。顺带补掉既有的洞：手机重传一张曾被外部删掉的
+      照片，旧代码返回 `Duplicate` → staged 被删、索引行指向不存在的文件 →
+      下轮对账把行也删掉，照片永远补不回来。
+      ⚠️ `rel_inside_originals` 两侧都必须 canonicalize（macOS `/var` →
+      `/private/var`，watcher 监听根做过而 library_root 没做，不规范化则
+      strip_prefix 永远失败 → 库内移动被误判成库外 → **文件被搬回日期目录，
+      用户的分类被抹掉**）。反证含这一条。
+      遗留（未做，等拍板）：①识别移动靠重算 hash，拖 5000 张 = 重读 5000 个
+      文件，省掉需要 `(dev,inode,size,mtime)` 身份缓存（schema 变更，另立卡）；
+      ②**用户新拖进来的照片（索引里还没有的）要不要被搬到日期目录** —— 现在
+      会搬，这是产品决定不是 bug，没动。
 - [x] **WATCH-01 本地目录监听 + 增量同步 — merged 2026-08-12（本 commit）**:
       metadata 秒级更新的第一跳（此前本地新增只有 backup 协议入口、
       删除靠每小时 reconcile——用户实测 metadata 不及时踩坑）。notify

@@ -1,6 +1,6 @@
 //! Ingest: hash → dedup → land under `originals/` → index row → audit.
 //!
-//! 契约 (T-011): `ingest(IncomingFile) -> IngestOutcome{New(rel_path)|Duplicate}`.
+//! 契约 (T-011): `ingest(IncomingFile) -> IngestOutcome{New|Duplicate|Moved}`.
 //! EXIF `DateTimeOriginal` is the timeline key; missing EXIF falls back to
 //! the file's mtime. Every ingest is audited to device granularity
 //! (审计裁决 2026-07-29).
@@ -34,8 +34,13 @@ pub struct IncomingFile {
 pub enum IngestOutcome {
     /// Landed and indexed; path relative to the library root.
     New(String),
-    /// Content already in the library — nothing was written.
+    /// Content already in the library **and the recorded file is still
+    /// there** — nothing was written.
     Duplicate,
+    /// WATCH-03：同一内容已在索引里，但记录的文件不在磁盘上了，而这份
+    /// 字节又出现在别处 —— 这是「移动」，不是新增也不是重复。索引改指
+    /// 新位置（hash 是身份，路径只是当前住址），行不删。
+    Moved(String),
 }
 
 /// Ingest façade over one library directory + its index.
@@ -58,15 +63,29 @@ impl Ingestor {
         let now_ms = unix_ms_now();
 
         if let Some(existing) = self.db.get_asset(&hash).await? {
-            self.audit(
-                now_ms,
-                f,
-                &hash,
-                "ingest.duplicate",
-                Some(existing.rel_path),
-            )
-            .await?;
-            return Ok(IngestOutcome::Duplicate);
+            if self.library_root.join(&existing.rel_path).exists() {
+                self.audit(
+                    now_ms,
+                    f,
+                    &hash,
+                    "ingest.duplicate",
+                    Some(existing.rel_path),
+                )
+                .await?;
+                return Ok(IngestOutcome::Duplicate);
+            }
+            // WATCH-03：记录的住址空了，同一内容又出现在 src_path。
+            // 这份内容早就属于这个库，只是搬了家——重新指向，不重复入库。
+            // 已经在 originals/ 树内 = 用户自己摆的位置，就地采纳（分类归
+            // 用户）；来自库外（staging）= 按 canonical 布局落位。
+            let new_rel = match self.rel_inside_originals(&f.src_path) {
+                Some(rel) => rel,
+                None => self.place(f, taken_at_ms(&f.src_path)?)?,
+            };
+            self.db.update_asset_rel_path(&hash, &new_rel).await?;
+            self.audit(now_ms, f, &hash, "asset.relocated", Some(new_rel.clone()))
+                .await?;
+            return Ok(IngestOutcome::Moved(new_rel));
         }
 
         let bytes = fs::metadata(&f.src_path)
@@ -112,6 +131,28 @@ impl Ingestor {
         self.audit(now_ms, f, &hash, "ingest.new", Some(rel_path.clone()))
             .await?;
         Ok(IngestOutcome::New(rel_path))
+    }
+
+    /// `src` 若已在本库的 `originals/` 树内，返回它的 rel_path（`/`
+    /// 分隔，与索引口径一致）；否则 `None`。
+    ///
+    /// ⚠️ 两侧都要 canonicalize：macOS 上 `/var` 是 `/private/var` 的
+    /// 符号链接，watcher 的监听根做过 canonicalize 而 `library_root` 通常
+    /// 没有，不规范化的话 `strip_prefix` 永远失败，库内移动会被误判成
+    /// 「来自库外」而被搬回日期目录。
+    fn rel_inside_originals(&self, src: &Path) -> Option<String> {
+        let root = self.library_root.canonicalize().ok()?;
+        let src = src.canonicalize().ok()?;
+        let rel = src.strip_prefix(&root).ok()?;
+        let parts: Option<Vec<&str>> = rel
+            .components()
+            .map(|c| c.as_os_str().to_str())
+            .collect::<Option<Vec<_>>>();
+        let parts = parts?;
+        if parts.first() != Some(&"originals") {
+            return None; // .ppf/staging 之类不是「用户摆的位置」
+        }
+        Some(parts.join("/"))
     }
 
     /// Move the source file to `originals/<device>/<yyyy>/<mm>/<name>`,

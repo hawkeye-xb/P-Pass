@@ -183,9 +183,12 @@ impl LibraryWatcher {
         let files =
             match tokio::task::spawn_blocking(move || collect_media_files(&dirs_for_scan)).await {
                 Ok(Ok(files)) => files,
+                // ⚠️ WATCH-02：整棵目录被删时 read_dir 必然 ENOENT。这里
+                // 早退会把「删除方向」一起跳掉——新增方向没东西可扫不等于
+                // 这一批没变化。降级为空文件列表，继续跑局部对账。
                 Ok(Err(e)) => {
-                    tracing::warn!("WATCH-01: 扫描失败: {e}");
-                    return;
+                    tracing::debug!("WATCH-01: 扫描 {:?} 失败（目录可能已删）: {e}", dirs);
+                    Vec::new()
                 }
                 Err(_) => return, // 任务被取消
             };
@@ -254,6 +257,8 @@ impl LibraryWatcher {
                 };
                 match ingestor.ingest(&incoming).await {
                     Ok(IngestOutcome::New(_)) => Some(()),
+                    // 库内移动：索引已改指新位置，时间线要刷。
+                    Ok(IngestOutcome::Moved(_)) => Some(()),
                     Ok(IngestOutcome::Duplicate) => None,
                     Err(e) => {
                         tracing::warn!("WATCH-01: ingest {:?} 失败: {e}", path);
@@ -287,15 +292,27 @@ impl LibraryWatcher {
             let Ok(paths) = self.inner.db.list_asset_paths_under(&prefix).await else {
                 continue; // 索引不可读——静默跳过，等下一轮/每小时兜底
             };
-            for (hash, rel_path) in paths {
-                let abs = self.inner.library_root.join(&rel_path);
-                if !abs.exists()
-                    && self
-                        .inner
-                        .reconcile
-                        .remove_asset(&hash, &rel_path)
-                        .await
-                        .is_ok()
+            // 性能口径：候选集 = 该子树下的索引行；变化目录是 originals
+            // 本身时就是全库。每行一次 stat，成本线性且可预估（5 万行约
+            // 百毫秒级），但必须整批下放 spawn_blocking——逐行同步 stat
+            // 会把 async 运行时的工作线程钉住。
+            let root = self.inner.library_root.clone();
+            let missing = tokio::task::spawn_blocking(move || {
+                paths
+                    .into_iter()
+                    .filter(|(_, rel_path)| !root.join(rel_path).exists())
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+
+            for (hash, rel_path) in missing {
+                if self
+                    .inner
+                    .reconcile
+                    .remove_asset(&hash, &rel_path)
+                    .await
+                    .is_ok()
                 {
                     removed += 1;
                     if let Some(t) = &self.inner.throttle {
@@ -336,7 +353,15 @@ fn collect_media_files(dirs: &[PathBuf]) -> std::io::Result<Vec<PathBuf>> {
 }
 
 fn walk_media(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        // ⚠️ WATCH-02：删除批次里目录本身就是刚消失的那个——「不在了」
+        // 是这条路径的正常结果，不是错误。往上冒会让整批 process 早退，
+        // 把删除方向的局部对账一起跳掉。
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in rd {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -396,6 +421,26 @@ fn notify_err(e: std::io::Error) -> notify::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scanning_a_vanished_dir_is_empty_not_an_error() {
+        // WATCH-02：整棵目录被删时扫描必须返回空集而不是 Err——Err 会让
+        // process 早退，删除方向的对账永远不跑。
+        let missing = PathBuf::from("/nonexistent-ppass-watch02/originals/2026/08");
+        let out = collect_media_files(&[missing]).expect("消失的目录不算错误");
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn scanning_mixes_existing_and_vanished_dirs() {
+        let tmp = std::env::temp_dir().join("ppass-watch02-probe");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("IMG_1.jpg"), b"x").unwrap();
+        let out = collect_media_files(&[tmp.clone(), tmp.join("gone")]).unwrap();
+        assert_eq!(out.len(), 1, "存在的目录照扫，消失的跳过");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn filter_parents_keeps_only_top_level() {
