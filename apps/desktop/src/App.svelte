@@ -1,4 +1,5 @@
 <script>
+  import { reconcilePhotoWall } from "./photoWall.js";
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
@@ -659,54 +660,56 @@
     photosNext = null;
   }
 
-  // 2026-08-17（用户复核纠正）：墙是按拍摄时间排的（daemon
-  // asset_repo.rs::timeline_page 「ORDER BY COALESCE(taken_at, 0) DESC,
-  // hash ASC」），不是按同步/到达时间——补录的老照片 taken_at 可能很
-  // 老，直接插到数组最前面会把它排到"最新"，弄错时间线顺序。这里跟
-  // 后端用同一个排序键做正确位置的插入，不是无脑塞最前面。
-  function comparePhotoOrder(a, b) {
-    const ta = a.taken_at ?? 0;
-    const tb = b.taken_at ?? 0;
-    if (ta !== tb) return tb - ta;
-    return a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0;
-  }
-  function insertPhotoSorted(arr, item) {
-    let lo = 0;
-    let hi = arr.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if (comparePhotoOrder(arr[mid], item) <= 0) lo = mid + 1;
-      else hi = mid;
-    }
-    arr.splice(lo, 0, item);
-  }
+  // 照片墙窗口对账 —— 判据全部在 src/photoWall.js（纯函数 + 单测）。
+  //
+  // 墙持有的是「按拍摄时间降序的前 K 条」这个**前缀窗口**。对账 = 重取同一个
+  // 窗口，按 hash 三向合并：新增插入 / 已有原地更新 / 窗口内消失的移除。
+  //
+  // 为什么不是"只拉第一页 + 只插新 hash"（2026-08-17 那版）：墙按拍摄时间排，
+  // 而到达顺序与拍摄时间无关（手机按 MediaStore 修改代号升序扫）。第一页被
+  // 较新的占满之后，后到的老照片永远不出现；已有条目的缩略图/尺寸到齐也刷
+  // 不出来；外部删除更是永不消失（DESK-06 修过的问题悄悄回来了）。用户
+  // 2026-08-20 用 186 张、拍摄时间跨 7 个月的库全撞上了。
+  //
+  // 为什么不卡：卡顿来自 `photos = []` 销毁全部缩略图 DOM，**不来自重取几十
+  // 条元数据**。reconcilePhotoWall 对没变的条目保持同一个对象引用，Svelte 的
+  // keyed each 不会重建 DOM，缩略图（按 hash 独立请求 + 缓存）也不会重发。
+  let photosSyncing = false;
 
-  // daemon 事件驱动的照片墙同步改成增量合并，不清空重拉——之前
-  // resetPhotosWall 把 photos 置空再整页重新拉取，Svelte 的
-  // {#each g.items as item (item.hash)} keyed diff 面对"先清空再填入"
-  // 这种中间态无从复用，等于把所有 PhotoThumb 组件实例（含已经拉到手的
-  // 缩略图）全部销毁重建，即使绝大多数照片压根没变——库大/事件密集时
-  // 就是用户反馈的"卡顿"。改法：拉一次最新第一页当真相，本地还没有的
-  // hash 按 comparePhotoOrder 插入正确位置，已经渲染的条目原样不动，
-  // 一次 IPC/PhotoThumb 请求都不多花。**已加载窗口之外**的补录老照片
-  // （page-1 压根拉不到，因为它按 taken_at 排且只取最新一页）这版不
-  // 处理——用户滚动到那个时间范围时，正常分页 loadPhotosPage 会照常
-  // 拉到，不需要特殊代码；深层分页内的删除同理靠 SYNC-01 每小时对账 +
-  // 手动"刷新"兜底，不是这次要解决的卡顿主因。
   async function syncPhotosWallIncremental() {
-    if (!photosLoaded) return; // 还没首次加载过，交给进页时的 $effect 首拉
+    if (!photosLoaded || photosSyncing) return; // 首拉交给进页时的 $effect
+    photosSyncing = true;
     try {
-      const r = await call("timeline.page", { cursor: null, limit: PHOTOS_PAGE_SIZE });
-      const fresh = r.items ?? [];
-      const known = new Set(photos.map((p) => p.hash));
-      const arrivals = fresh.filter((it) => !known.has(it.hash));
-      if (arrivals.length > 0) {
-        const next = [...photos];
-        for (const item of arrivals) insertPhotoSorted(next, item);
-        photos = next;
+      // 重取**当前已加载的整个窗口**，不是只取第一页。
+      const held = photos.length;
+      const fresh = [];
+      let cursor = null;
+      let reachedEnd = false;
+      // 上限 = 窗口 + 一页：给"同步中新到达"留出空间，同时防止用户滚很深时
+      // 每次事件都把整库拉一遍。超出上限就不 reachedEnd，移除判据自动收紧到
+      // "只删覆盖区间内缺席的"，不会误删深层分页的条目。
+      const cap = held + PHOTOS_PAGE_SIZE;
+      while (fresh.length < cap) {
+        const r = await call("timeline.page", { cursor, limit: PHOTOS_PAGE_SIZE });
+        const items = r.items ?? [];
+        fresh.push(...items);
+        cursor = r.next ?? null;
+        if (!cursor) {
+          reachedEnd = true;
+          break;
+        }
+        if (items.length === 0) break; // 防御：有 cursor 却空页，别转圈
+      }
+      const merged = reconcilePhotoWall(photos, fresh, reachedEnd);
+      if (merged.added || merged.updated || merged.removed) {
+        photos = merged.items;
+        // 窗口末尾可能因为新增/移除而移动——游标跟着走，否则往下滚会跳条或重条。
+        if (reachedEnd) photosNext = null;
       }
     } catch (_) {
       // 静默失败——不影响墙上已有内容，下次事件/60s 兜底再试。
+    } finally {
+      photosSyncing = false;
     }
   }
 
@@ -1438,10 +1441,16 @@
                     <span class="flex-1 text-[15px] text-ink"
                       ><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}{#if dur}<span class="text-ink-40"> · 用时 {dur}</span>{/if}</span
                     >
-                    <span class="ml-auto flex flex-none flex-col items-end gap-[2px] whitespace-nowrap text-[13px] text-ink-40">
-                      {#if at}<span>{at}</span>{/if}
-                      {#if exact}<span class="text-[11.5px] text-ink-40">{exact}</span>{/if}
-                    </span>
+                    <!-- 2026-08-20（用户反馈）：右侧原来堆两行——相对时间
+                         「3 分钟前」+ 精确时刻「2026-08-20 16:15」。两行指同一
+                         个瞬间，是重复表达；而左侧是 items-baseline 对齐第一行
+                         基线，第二行往下撑，左边就空出一块。
+                         改成只留相对时间，精确时刻进 title（悬停可见）——
+                         空白消失，信息一个不少。 -->
+                    <span
+                      class="ml-auto flex-none whitespace-nowrap text-[13px] text-ink-40"
+                      title={exact ?? ""}>{at ?? ""}</span
+                    >
                   </li>
                 {/each}
               </ul>
