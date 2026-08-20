@@ -1,4 +1,18 @@
-# MOB-18 force-stop 中断检测与提示　【BACKLOG · 2026-08-19 用户拍板 pending】
+# MOB-18 force-stop 中断检测与提示　【已被 MOB-28 取代 · 2026-08-20】
+
+> ## ⚠️ 本卡已实现，但不是按本卡的方案
+> 见 `.claude/cards/MOB-28-distinguish-interruption-and-ask-before-recovering.md`。
+>
+> 下面"为什么 pending"那一段的技术前提**已经不成立**：它假设监听是
+> WorkManager 的 work，所以 `ForceStopRunnable` 会在我们任何代码之前自愈。
+> MOB-27 把监听搬到我们自己注册的 JobScheduler job 之后，WorkManager 完全
+> 不知道它存在，"用户点了才恢复"于是成立。
+>
+> 判据也换了：不再是"WorkManager 与 JobScheduler 两边对账"（那套无法区分
+> 重启与被清），改成"直接查看门 job + 落盘开机时刻"。
+>
+> 保留本卡是因为下面那段真机数据和 `ForceStopRunnable` 的结论仍然正确、
+> 仍然是 MOB-28 判据选择的依据。**不要按本卡实施。**
 
 ## 为什么 pending
 
