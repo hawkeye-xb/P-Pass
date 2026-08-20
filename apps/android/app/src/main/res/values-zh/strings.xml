@@ -207,4 +207,7 @@
     <string name="tab_settings">设置</string>
     <!-- MOB-24: 重复保存时说人话，别再写一份重复文件。 -->
     <string name="already_in_gallery">这张已经在相册里了</string>
+    <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
+    <string name="backup_interrupted_body">后台备份被停掉了，这段时间没有在跑。照片都还在，一张没丢。</string>
+    <string name="backup_interrupted_action">恢复备份</string>
 </resources>

@@ -114,6 +114,10 @@ fun HomeScreen(
     onOpenAppSettings: () -> Unit = {},
     // MOB-02 §四事件①: Wi-Fi 要求不满足时触发已排队——显示提示行。
     wifiDeferred: Boolean = false,
+    // MOB-28: 后台备份被外力停过（force-stop / OEM 清理）——提示卡 +
+    // 「恢复备份」。**这是恢复的唯一入口**，别处一律不许悄悄重挂。
+    backupInterrupted: Boolean = false,
+    onResumeBackup: () -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -440,6 +444,42 @@ fun HomeScreen(
                         fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
                         textDecoration = TextDecoration.Underline,
                         modifier = Modifier.clickable(onClick = onOpenNotificationSettings)
+                            .padding(4.dp),
+                    )
+                }
+            }
+        }
+
+        // ── MOB-28: 后台备份被停过的提示卡。
+        //
+        // 放在这里（而不是设置页深处）是因为这是用户打开 App 后落地的第一屏，
+        // 而这条提示的整个价值就在于"被看见"——用户实测反馈过两次
+        // "还是没有提示"。用琥珀底（与电池白名单/通知引导同一族视觉），
+        // 不用红色：备份没坏，只是停了，点一下就回来。
+        //
+        // 用户定调："不要做静默恢复，就是要提醒。""必须点了才恢复。"
+        if (backupInterrupted) {
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                color = PPColor.WaitingBg,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    Modifier.padding(16.dp, 13.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        stringResource(R.string.backup_interrupted_body),
+                        fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        stringResource(R.string.backup_interrupted_action),
+                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.clickable(onClick = onResumeBackup)
                             .padding(4.dp),
                     )
                 }

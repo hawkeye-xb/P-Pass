@@ -24,6 +24,11 @@
         android:maxSdkVersion="28" />
     <!-- T-052 pairing by camera scan. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- MOB-28: 开机重挂照片监听。trigger URI 与 setPersisted 互斥（AOSP
+         javadoc 明文），看门 job 每次重启必死——没有这个权限就只能等 5h
+         周期任务把进程拉起来。注：这个权限本来就在合并 manifest 里
+         （WorkManager 带进来的），显式声明只是把意图写明，不增加用户可见权限。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- DOG-02: 请求系统"忽略电池优化"白名单对话框（杀后台防护引导）。 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
@@ -62,6 +67,16 @@
             android:name=".backup.MediaWatchJob"
             android:permission="android.permission.BIND_JOB_SERVICE"
             android:exported="false" />
+
+        <!-- MOB-28: 开机重挂。exported 必须为 true——BOOT_COMPLETED 是系统
+             发出的广播（受保护，只有系统能发），来源在应用之外。 -->
+        <receiver
+            android:name=".backup.BootWatchReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <!-- UPD-01: update APK 安装走 FileProvider（cacheDir 临时文件） -->
         <provider

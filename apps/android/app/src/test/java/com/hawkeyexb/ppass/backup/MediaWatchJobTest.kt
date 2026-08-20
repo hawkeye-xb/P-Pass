@@ -51,6 +51,25 @@ class MediaWatchJobTest {
         File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt")
     )
 
+    /** 源码切片——**必须先确认锚点存在**。
+     *
+     *  教训 C（2026-08-20，反证实测撞到）：Kotlin 的 `substringAfter` /
+     *  `substringBefore` 在**找不到分隔符时返回整个字符串**
+     *  （`missingDelimiterValue` 默认就是 receiver 本身）。于是
+     *  `sliceAfter(src, "finally").contains("pending.finish()")`
+     *  在把 finally 整块删掉之后**反而变成对全文求 contains，照样绿**——
+     *  反证跑出来不红才发现。切片类断言一律走这里。 */
+    private fun sliceAfter(src: String, marker: String): String {
+        assertTrue("源码锚点已消失，断言失效：$marker", src.contains(marker))
+        return src.substringAfter(marker)
+    }
+
+    private fun sliceBetween(src: String, from: String, to: String): String {
+        val tail = sliceAfter(src, from)
+        assertTrue("源码结束锚点已消失，断言失效：$to", tail.contains(to))
+        return tail.substringBefore(to)
+    }
+
     // ── 队列去重（纯逻辑，真单测）──
 
     @Test
@@ -164,9 +183,7 @@ class MediaWatchJobTest {
         //
         // 约束属于派出去的备份 work，不属于监听：有新照片立刻知道，能不能
         // 传是另一回事。
-        val body = watchSrc()
-            .substringAfter("fun buildMediaWatchJobInfo(")
-            .substringBefore("private fun jobScheduler(")
+        val body = sliceBetween(watchSrc(), "fun buildMediaWatchJobInfo(", "private fun jobScheduler(")
         for (forbidden in listOf(
             "setRequiredNetworkType",
             "setRequiresCharging",
@@ -180,9 +197,7 @@ class MediaWatchJobTest {
             )
         }
         // 反过来：约束必须出现在派活那一段。
-        val dispatch = watchSrc()
-            .substringAfter("internal fun dispatchWatchBackup(")
-            .substringBefore("\nclass MediaWatchJob")
+        val dispatch = sliceBetween(watchSrc(), "internal fun dispatchWatchBackup(", "\nclass MediaWatchJob")
         assertTrue(
             "备份 work 必须带后台档约束（Wi-Fi 随设置 + 电量不低）",
             dispatch.contains("constraintsFor(BackupTier.BACKGROUND, settings)"),
@@ -197,7 +212,7 @@ class MediaWatchJobTest {
         //    it will no longer be in a valid component lifecycle."
         // 先重挂的话，派活的代码可能根本跑不到——监听是活的，但这一波照片
         // 没人管。调换顺序 → 本测试必红。
-        val body = watchSrc().substringAfter("override fun onStartJob(")
+        val body = sliceAfter(watchSrc(), "override fun onStartJob(")
         val dispatchAt = body.indexOf("dispatchWatchBackup(ctx)")
         val rearmAt = body.indexOf("scheduleMediaWatchNow(ctx)")
         assertTrue("onStartJob 必须派活", dispatchAt >= 0)
@@ -205,7 +220,7 @@ class MediaWatchJobTest {
         assertTrue("必须先派活、后重挂", dispatchAt < rearmAt)
         // 重挂必须在 finally：派活抛异常最多丢一轮（水位没动，下个事件捞得
         // 回来），重挂没跑到是**监听永久消失**。
-        assertTrue("重挂必须在 finally 里", body.substringAfter("finally").contains("scheduleMediaWatchNow(ctx)"))
+        assertTrue("重挂必须在 finally 里", sliceAfter(body, "finally").contains("scheduleMediaWatchNow(ctx)"))
     }
 
     @Test
@@ -219,13 +234,13 @@ class MediaWatchJobTest {
         assertTrue("不该出现 jobFinished（schedule 同 ID 已经终结当前 job）", !src.contains("jobFinished("))
         assertTrue(
             "onStartJob 必须返回 true（派活要等落库，是异步工作）",
-            src.substringAfter("override fun onStartJob(").substringBefore("override fun onStopJob").contains("return true"),
+            sliceBetween(src, "override fun onStartJob(", "override fun onStopJob").contains("return true"),
         )
     }
 
     @Test
     fun dispatch_queues_instead_of_dropping_or_preempting() {
-        val dispatch = watchSrc().substringAfter("internal fun dispatchWatchBackup(")
+        val dispatch = sliceAfter(watchSrc(), "internal fun dispatchWatchBackup(")
         assertTrue(
             "派活必须排队（APPEND_OR_REPLACE）——KEEP 会吞掉事件，REPLACE 会打断正在传的照片",
             dispatch.contains("ExistingWorkPolicy.APPEND_OR_REPLACE"),
@@ -241,7 +256,7 @@ class MediaWatchJobTest {
         // MOB-14 的教训随载体搬家：覆盖一个**正在 pending** 的 trigger job
         // 会丢掉它已积累的变更并重置 1s 防抖。javadoc 承诺的"变更转交"只
         // 覆盖 job **running** 期，不覆盖 pending 期。
-        val body = watchSrc().substringAfter("fun ensureMediaWatch(").substringBefore("internal fun scheduleMediaWatchNow(")
+        val body = sliceBetween(watchSrc(), "fun ensureMediaWatch(", "internal fun scheduleMediaWatchNow(")
         assertTrue("必须先查再挂", body.contains("if (isMediaWatchScheduled(context)) return"))
         assertTrue("查过之后才 schedule", body.contains("scheduleMediaWatchNow(context)"))
     }
@@ -250,7 +265,7 @@ class MediaWatchJobTest {
     fun schedule_failure_is_not_silent() {
         // OEM 上 JobScheduler.schedule 会**返回失败而不抛异常**（配额/限制）。
         // 静默失败 = 监听没挂上，而日志里什么都看不到。
-        val body = watchSrc().substringAfter("internal fun scheduleMediaWatchNow(")
+        val body = sliceAfter(watchSrc(), "internal fun scheduleMediaWatchNow(")
         assertTrue(
             "schedule 的返回值必须检查并留痕",
             body.contains("JobScheduler.RESULT_SUCCESS") && body.contains("Log.w"),
@@ -286,7 +301,7 @@ class MediaWatchJobTest {
         // 看门 job 自己会重挂，这里是**外力清空后的复活路径**：
         // trigger URI 与 setPersisted 互斥（javadoc 明文），重启后监听必然
         // 消失；OEM 清理、schedule 被拒同理。幂等，已挂着就是 no-op。
-        val finallyBody = workerSrc().substringAfter("withContext(NonCancellable)")
+        val finallyBody = sliceAfter(workerSrc(), "withContext(NonCancellable)")
         assertTrue(
             "每轮备份结束必须确认监听在位（5h 周期任务因此成为兜底自检）",
             finallyBody.contains("ensureMediaWatch(ctx)"),
@@ -295,18 +310,25 @@ class MediaWatchJobTest {
 
     @Test
     fun process_start_must_rearm_the_listener() {
-        // 承重路径：重启后 WorkManager 拉起进程跑周期任务 →
-        // PPassApplication.onCreate → scheduleAutoBackup → ensureMediaWatch。
-        // 这里若 early-return，重启后监听会一直失联到用户主动打开 App。
+        // 承重路径：重启后 WorkManager 拉起进程跑周期任务（或 MOB-28 的开机
+        // receiver）→ 判定 → 重挂。看门 job 与 setPersisted 互斥，重启必死，
+        // 所以"进程起来时把监听挂回去"是唯一的复活途径。
+        //
+        // ⚠️ MOB-28 之后这里**不再是无条件重挂**：同一次开机内监听凭空消失
+        // （force-stop / OEM 清理）时要提示、等用户点。区分靠开机时刻，见
+        // WatchRecoveryTest。本测试只锁"重启这一支确实会重挂"。
+        val health = codeOf(File(repoRoot(),
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupHealth.kt"))
+        val branch = sliceBetween(health, "WatchRecovery.NORMAL, WatchRecovery.AUTO_REARM -> {", "}")
+        assertTrue(
+            "重启/正常这一支必须重挂监听（scheduleAutoBackup 内含 ensureMediaWatch）",
+            branch.contains("scheduleAutoBackup(context)"),
+        )
+        assertTrue("并补捞一次空窗期的照片", branch.contains("triggerProcessStartCatchup(context)"))
+        // 进程启动的两个入口都必须走这段共用判定，不许各写一份。
         val app = codeOf(File(repoRoot(),
             "apps/android/app/src/main/java/com/hawkeyexb/ppass/PPassApplication.kt"))
-        val guard = app.substringAfter("if (!isBackupScheduled(this)) {").substringBefore("}")
-        assertFalse(
-            "健康检查不许 early-return（监听重启必死，不重挂就是静默死亡）",
-            guard.contains("return@thread"),
-        )
-        assertTrue("仍要记录中断（将来重做 MOB-18 用）", guard.contains("recordInterrupted"))
-        assertTrue("必须走到重挂", app.contains("scheduleAutoBackup(this)"))
+        assertTrue(app.contains("reconcileWatchOnProcessStart("))
     }
 
     @Test
@@ -327,7 +349,7 @@ class MediaWatchJobTest {
             src.contains("cancelUniqueWork(\"ppass-content-trigger-rearm\")"),
         )
         // 必须挂在 App 启动路径上——进程被系统拉起时也要清，不能只靠用户开 App。
-        val schedule = workerSrc().substringAfter("fun scheduleAutoBackup(").substringBefore("\n}")
+        val schedule = sliceBetween(workerSrc(), "fun scheduleAutoBackup(", "\n}")
         assertTrue(
             "升级清理必须在 scheduleAutoBackup 里（进程启动即执行）",
             schedule.contains("cancelLegacyContentTriggerWork(context)"),
@@ -343,7 +365,7 @@ class MediaWatchJobTest {
             "看门 job 必须在 manifest 注册",
             manifest.contains("android:name=\".backup.MediaWatchJob\""),
         )
-        val service = manifest.substringAfter(".backup.MediaWatchJob").substringBefore("/>")
+        val service = sliceBetween(manifest, ".backup.MediaWatchJob", "/>")
         assertTrue(
             "必须声明 BIND_JOB_SERVICE，否则系统拒绝 bind",
             service.contains("android.permission.BIND_JOB_SERVICE"),

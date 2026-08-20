@@ -200,4 +200,7 @@
     <string name="tab_settings">Settings</string>
     <!-- MOB-24: 重复保存时说人话，别再写一份重复文件。 -->
     <string name="already_in_gallery">Already in your gallery</string>
+    <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
+    <string name="backup_interrupted_body">Background backup was stopped and hasn\'t been running. Your photos are safe — nothing was lost.</string>
+    <string name="backup_interrupted_action">Resume</string>
 </resources>

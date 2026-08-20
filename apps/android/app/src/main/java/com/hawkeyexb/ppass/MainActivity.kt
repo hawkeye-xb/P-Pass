@@ -64,7 +64,7 @@ import com.hawkeyexb.ppass.backup.BackupHealthPrefs
 import com.hawkeyexb.ppass.backup.ConfirmedStore
 import com.hawkeyexb.ppass.backup.isPartialMediaAccess
 import com.hawkeyexb.ppass.backup.ReinstallHintPrefs
-import com.hawkeyexb.ppass.backup.isBackupScheduled
+import com.hawkeyexb.ppass.backup.resumeAfterInterruption
 import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.pauseAutoBackup
@@ -166,9 +166,17 @@ fun PPassApp() {
     // ContentProvider 里，**比 Application.onCreate 还早**，它自己就把所有
     // work 重排了，应用层拦不住。留着只会显示一条"点了才恢复"却其实早已
     // 自愈的假提示。详见 .claude/cards/backlog/MOB-18-*。
-    LaunchedEffect(Unit) {
+    // MOB-28: 检测到监听被外力清过、用户还没点「恢复」时，**这里不许重挂**。
+    // 这条路径是"打开 App 就悄悄恢复"的那个漏子——用户实测原话："还是没有
+    // 提示，强行停止立即就恢复了。" 闸门必须同时立在 Application 的对账
+    // 和这里，缺一处就等于没有。
+    var backupInterrupted by remember {
+        mutableStateOf(BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged)
+    }
+    LaunchedEffect(backupInterrupted) {
         val pairing = pairings.load() ?: return@LaunchedEffect
         if (AutoBackupPrefs(context.filesDir).paused()) return@LaunchedEffect
+        if (backupInterrupted) return@LaunchedEffect
         scheduleAutoBackup(context)
         triggerUserPresentBackup(context)
     }
@@ -499,6 +507,12 @@ fun PPassApp() {
                         },
                         notificationSkipped = !notificationGrantedForHome,
                         onOpenNotificationSettings = { openAppDetailsSettings(context) },
+                        // MOB-28: 备份被外力停过的提示卡 + 唯一的恢复入口。
+                        backupInterrupted = backupInterrupted,
+                        onResumeBackup = {
+                            resumeAfterInterruption(context)
+                            backupInterrupted = false
+                        },
                         wifiOnly = wifiOnly,
                         onWifiOnlyChange = { enable ->
                             // MOB-02 §三: 关闭「需要 Wi-Fi」需二次确认
