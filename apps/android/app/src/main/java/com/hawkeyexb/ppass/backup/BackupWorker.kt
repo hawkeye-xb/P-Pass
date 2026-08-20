@@ -34,6 +34,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkInfo
 import androidx.work.WorkerParameters
+import androidx.work.workDataOf
 import com.hawkeyexb.ppass.MainActivity
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
@@ -55,6 +56,8 @@ const val BACKUP_WORK_NAME = "ppass-auto-backup"
 const val CATCHUP_WORK_NAME = "ppass-catchup-backup"
 // MOB-15: 进程启动补捞通道——见 PPassApp 与 triggerProcessStartCatchup。
 const val PROCESS_CATCHUP_WORK_NAME = "ppass-process-catchup"
+// MOB-19 事件⑥：用户手点「立即备份」——见 triggerManualBackup。
+const val MANUAL_BACKUP_WORK_NAME = "ppass-manual-backup"
 // MOB-17: 周期兜底间隔。刻意不做高频——见 enqueueAutoBackup 注释。
 const val PERIODIC_FALLBACK_HOURS = 5L
 private const val CHANNEL_ID = "ppass.backup"
@@ -88,6 +91,54 @@ private const val WHITELIST_NUDGE_NOTIFICATION_ID = 2029
 // 备份饿死。15min 对"尽快送达"来说太长，收到 30s。
 const val CONTENT_UPDATE_DELAY_MS = 1L * 1000           // 1s（防连拍抖动）
 const val CONTENT_MAX_DELAY_MS = 30L * 1000             // 30s（连拍封顶）
+// ── MOB-19（2026-08-20 用户定稿）：备份只有一条管线 ──
+//
+// 用户原话："不是说应该自动和手动触发的备份一样吗？一个就是机器自动去触发，
+// 一个是我们主动去触发。触发的种类不一样……手动就相当于第 5 种触发方式。
+// 你为什么这里弄了两条路径去做备份呢？"
+//
+// 在此之前手动备份是 BackupUiStateHolder 里**另一份**扫描+哈希实现，于是
+// MOB-09 的「一条坏记录不许炸整批」只修了自动那一份，手动那份照旧永久卡死。
+// 现在手动只是又一种触发方式：同一个 BackupWorker，只在 input data 上带两个
+// 手动专属语义。
+
+/** 手动触发专属：忽略水位、重扫选中相册的全部。
+ *  「选相册」与「发起备份」是两个动作——用户主动点按钮时期望的是"把这些
+ *  相册整个过一遍"，不是"接着上次的进度"。自动触发恒为增量。 */
+const val KEY_FULL_RESCAN = "ppass.backup.full_rescan"
+
+// 进度上报字段。手动备份的界面靠它跟住这条 work；自动备份顺带也有了实时
+// 进度（在此之前后台跑完只刷三元组，状态行全程不动）。
+const val KEY_PHASE = "ppass.backup.phase"
+const val KEY_DONE = "ppass.backup.done"
+const val KEY_TOTAL = "ppass.backup.total"
+const val KEY_FILE = "ppass.backup.file"
+const val PHASE_SCANNING = "scanning"
+const val PHASE_HASHING = "hashing"
+const val PHASE_SENDING = "sending"
+// 终态输出（成功/失败都要能让 UI 说人话）。
+const val KEY_INGESTED = "ppass.backup.ingested"
+const val KEY_DUPLICATES = "ppass.backup.duplicates"
+const val KEY_NO_ALBUMS = "ppass.backup.no_albums"
+const val KEY_ERROR = "ppass.backup.error"
+
+/**
+ * MOB-19: 进度上报节流。
+ *
+ * `setProgress` 每次是一条 IPC + 一次数据库写。千张库的哈希循环里逐张上报
+ * 会把 WorkManager 写爆。但**第一次和最后一次必须发**——MOB-11 的教训是
+ * "进度条像卡死然后突然全传完"（用户真机原话），节流不许把首尾吃掉。
+ */
+internal class ProgressThrottle(private val minIntervalMs: Long = 250L) {
+    private var lastAt = 0L
+
+    fun should(done: Int, total: Int, nowMs: Long): Boolean {
+        if (done <= 1 || done >= total) { lastAt = nowMs; return true }
+        if (nowMs - lastAt >= minIntervalMs) { lastAt = nowMs; return true }
+        return false
+    }
+}
+
 private fun constraintsOf(spec: BackupConstraintsSpec): Constraints =
     Constraints.Builder()
         .setRequiredNetworkType(
@@ -115,6 +166,37 @@ fun triggerUserPresentBackup(context: Context) {
         ExistingWorkPolicy.KEEP,
         backupWorkRequest(spec),
     )
+}
+
+/** MOB-19 事件⑥：用户手点「立即备份」（设置页低调入口）。
+ *
+ *  **零约束**（[BackupTier.MANUAL]）——人已经在场、亲手点的，这是当场的
+ *  明确指令，压过「仅 Wi-Fi 时备份」那条给自动备份定的规则。点了不动是
+ *  反直觉的。用户定稿（2026-08-20）："手动能不能在检测-发起之间，直接
+ *  人工点击-发起？"
+ *
+ *  **全量重扫**（[KEY_FULL_RESCAN]）——忽略水位，把选中相册整个过一遍。
+ *
+ *  KEEP 而不是 REPLACE：跑着的时候再点不打断正在传的那批（界面上进度条
+ *  正在动，用户看得见）。要停走 [cancelManualBackup]。 */
+fun triggerManualBackup(context: Context) {
+    val settings = BackupSettings(context.filesDir).load()
+    val spec = constraintsFor(BackupTier.MANUAL, settings)
+    WorkManager.getInstance(context).enqueueUniqueWork(
+        MANUAL_BACKUP_WORK_NAME,
+        ExistingWorkPolicy.KEEP,
+        OneTimeWorkRequestBuilder<BackupWorker>()
+            .setConstraints(constraintsOf(spec))
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .setInputData(workDataOf(KEY_FULL_RESCAN to true))
+            .build(),
+    )
+}
+
+/** UX-01: 备份进行中再点 = 暂停。中断不 commit、水位不推进，已到家的
+ *  blob 下次去重跳过；再点一次 = 续传（重新 offer 全部候选，收敛缺 0）。 */
+fun cancelManualBackup(context: Context) {
+    WorkManager.getInstance(context).cancelUniqueWork(MANUAL_BACKUP_WORK_NAME)
 }
 
 /** MOB-15 事件⑤：进程启动补捞——进程因**任何**原因被拉起时检查一次。
@@ -281,6 +363,8 @@ class BackupWorker(
         // 约束抖动）和「跑满执行时限」（10min JobScheduler 上限）——两者
         // 的修法完全不同，光看异常类型分不出来。
         val startedAt = SystemClock.elapsedRealtime()
+        // MOB-19: 手动触发（事件⑥）带的两个专属语义之一——见 KEY_FULL_RESCAN。
+        val fullRescan = inputData.getBoolean(KEY_FULL_RESCAN, false)
         val pairing = PairingStore(ctx.filesDir).load()
             ?: return Result.success() // not paired yet — nothing to do
         // MOB-15: 暂停态下任何通道都不跑（进程启动补捞会在 App 冷启时
@@ -321,13 +405,23 @@ class BackupWorker(
             if (reachable) sentinel.recordReachable() else sentinel.recordUnreachable()
 
             val watermarks = WatermarkStore(ctx.filesDir)
+            val bucketIds = BackupScopeStore(ctx).selectedBucketIds()
+            // FIX-T6: 空集 = 一个都不备（用户把相册全取消了）。必须显式
+            // 反馈——静默 success 会让界面说「照片都存好了」，那是假话。
+            if (bucketIds != null && bucketIds.isEmpty()) {
+                attempts.reset()
+                return Result.success(workDataOf(KEY_NO_ALBUMS to true))
+            }
+            // MOB-19 事件⑥：手动触发忽略水位、重扫选中相册全部（「选相册」
+            // 与「发起备份」是两个动作）。自动触发恒为增量。
+            val since = if (fullRescan) 0L else watermarks.load()
             // T6: 自动备份同样只扫选中相册（范围与手动一致）。
-            val scan = MediaScanner(ctx.contentResolver)
-                .scanSince(watermarks.load(), BackupScopeStore(ctx).selectedBucketIds())
+            val scan = MediaScanner(ctx.contentResolver).scanSince(since, bucketIds)
+            reportProgress(PHASE_SCANNING, scan.items.size, scan.items.size)
             if (scan.items.isEmpty()) {
                 attempts.reset() // 无新照片也算成功一轮——连续失败清零
                 nudge.recordSuccess() // DOG-02b: 成功一轮状态清零
-                return Result.success()
+                return Result.success(workDataOf(KEY_INGESTED to 0, KEY_DUPLICATES to 0))
             }
             batchSize = scan.items.size
 
@@ -337,7 +431,15 @@ class BackupWorker(
             // FIX-T6: 记录每个候选 hash 的所属相册（自动备份同口径）。
             val hashToBucket = mutableMapOf<String, Long>()
             // MOB-09: 逐条隔离——打不开的记录跳过，其余照常传（见 buildCandidates）。
+            // MOB-19: 哈希阶段逐条上报（节流），手动备份的界面靠它显示
+            // 「正在读取 x/y」。自动备份顺带也有了实时进度。
+            val hashProgress = ProgressThrottle()
+            var hashed = 0
             val built = buildCandidates(scan.items) { item ->
+                hashed += 1
+                if (hashProgress.should(hashed, scan.items.size, SystemClock.elapsedRealtime())) {
+                    reportProgress(PHASE_HASHING, hashed, scan.items.size)
+                }
                 val open = {
                     ctx.contentResolver.openInputStream(item.uri)
                         ?: error("cannot open ${item.displayName}")
@@ -384,7 +486,14 @@ class BackupWorker(
                 nudge.recordSuccess()
                 return Result.success()
             }
-            val report = BackupRunner(client).run(daemon, candidates, scan.nextWatermark)
+            val sendProgress = ProgressThrottle()
+            val report = BackupRunner(client).run(
+                daemon, candidates, scan.nextWatermark,
+            ) { sent, total, fileName ->
+                if (sendProgress.should(sent, total, SystemClock.elapsedRealtime())) {
+                    reportProgress(PHASE_SENDING, sent, total, fileName)
+                }
+            }
             watermarks.save(scan.nextWatermark)
             // SENT-01: run 成功 = 确认 daemon 可达（即使校准阶段缓存空
             // 没交互，这里才是硬证据）。
@@ -414,7 +523,10 @@ class BackupWorker(
             )
             attempts.reset() // 成功——连续失败清零
             nudge.recordSuccess() // DOG-02b: 成功一轮状态清零
-            Result.success()
+            // MOB-19: 终态带上数字——界面要说「新增 N 张」，不能只说"好了"。
+            Result.success(
+                workDataOf(KEY_INGESTED to report.ingested, KEY_DUPLICATES to report.duplicates)
+            )
         } catch (t: CancellationException) {
             // MOB-08: 系统 stop（配额耗尽/约束丢失/FGS 被收回/执行超时）
             // 不是业务失败——旧实现把它吞进下面的 Throwable 分支，记成一次
@@ -447,7 +559,9 @@ class BackupWorker(
                 if (batchSize > 0 && NotifyOnFailurePrefs(ctx.filesDir).enabled()) {
                     postFailureNotification(ctx, batchSize)
                 }
-                Result.failure()
+                // T-083 红线：主文案永不带代码——这串只去两个地方，默认收起
+                // 的「查看技术详情」折叠区，和上面那句 Log.w。
+                Result.failure(workDataOf(KEY_ERROR to t.toString().take(500)))
             }
         } finally {
             // MOB-08: client.close() 是 suspend——协程已被取消时直接抛
@@ -472,6 +586,33 @@ class BackupWorker(
                 // DOG-02b: 契机式白名单提醒（同 finally 时机，各自判定）。
                 maybeNudgeWhitelist(ctx)
             }
+        }
+    }
+
+    /** MOB-19: 进度上报。
+     *
+     *  用 `setProgressAsync` 而不是 suspend 的 `setProgress`：调用点在
+     *  `buildCandidates` 的 build lambda 和 `BackupRunner` 的进度回调里，
+     *  两者都不是 suspend 上下文（编译器直接顶回来）。不 await 返回的
+     *  future——上报是给界面看的，慢一拍无所谓，不该拖住备份。
+     *
+     *  抛异常（work 已终结/被取消）一律吞掉：**上报不是业务逻辑**，
+     *  绝不能因为界面刷新失败而让一批照片传不成。 */
+    private fun reportProgress(
+        phase: String,
+        done: Int,
+        total: Int,
+        file: String = "",
+    ) {
+        runCatching {
+            setProgressAsync(
+                workDataOf(
+                    KEY_PHASE to phase,
+                    KEY_DONE to done,
+                    KEY_TOTAL to total,
+                    KEY_FILE to file,
+                )
+            )
         }
     }
 

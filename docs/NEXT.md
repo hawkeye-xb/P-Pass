@@ -51,6 +51,19 @@ force-stop            → 已注册 job = 0
 3. **重启**：现在有开机 receiver 了 → 重启后**不打开 App**，
    `adb shell dumpsys jobscheduler` 看 job `20260819` 是否立刻回来（应该是）
 
+### 上线阻塞清单进展（2026-08-20）
+
+盘点见 `docs/product/2026-08-20-launch-blockers.md`。**三件必做已完成两件：**
+
+- ✅ `E2E-02` 发版门禁解红 —— 起临时 daemon 实跑通过（`HELLO OK`），不是只跑单测
+- ✅ `MOB-19` 备份管线合并 —— 手动成为又一种触发方式，第二条管线删除
+- ⬜ `BLOB-01` 占盘翻倍 —— **剩这一件**，Rust 侧
+
+另外把 5 张"活干完卡没归档"的收拾了，并在 `.claude/cards/README.md` 立了
+状态横幅规矩（它已经让我连续误报三次）。
+
+### 原清单（保留供对照）
+
 ### 上线阻塞清单（2026-08-20 实测盘点，见 docs/product/2026-08-20-launch-blockers.md）
 
 `just ci` 全绿、Android 234/234——代码健康度没问题。挡上线的是：

@@ -676,3 +676,37 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   `FAILED` 行会把编译失败当成绿；④用索引区间重写测试会连带切掉夹在中间的
   用例（`upgrade_kills_the_legacy_workmanager_trigger` 就这么丢过一次）；
   ⑤`grep -c` 数 dumpsys 的 job 会把历史记录算进去，必须按 `JOB ` 分块解析。
+
+## 2026-08-20 MOB-19 备份只有一条管线（手动 = 又一种触发方式）
+
+- **修法被用户改了方向**。卡面原方案是"照搬 MOB-09 的逐条隔离到
+  BackupUiStateHolder"，用户否掉："不是说应该自动和手动触发的备份一样吗？
+  ……手动就相当于第 5 种触发方式。**你为什么这里弄了两条路径去做备份呢？**"
+  ——两份实现必然漂移，MOB-09 只修了其中一份就是证据。所以是**删掉第二条**。
+- **手动 = 事件⑥**：`triggerManualBackup` / `cancelManualBackup` 入
+  `BackupWorker.kt`。两个手动专属语义靠触发档与 input data 表达，管线一行未改：
+  零约束（新增 `BackupTier.MANUAL`，唯一不读 settings 的档——用户定稿"手动
+  能不能在检测-发起之间直接人工点击-发起"）+ 全量重扫（`KEY_FULL_RESCAN`）
+  + `KEEP`（跑着的时候再点不打断）。
+- **删掉第二条管线**：`BackupUiStateHolder` 298→199 行，删的是它自己那份
+  `scanSince`/`hashWithCache`/`BackupRunner.run`/`WatermarkStore`。
+  **MOB-19 是靠删除修掉的，不是靠加错误处理。**
+- **界面状态改从 work 上读**：worker 新增 `setProgressAsync` 三阶段上报 +
+  终态输出，`uiStateOf(infos)` 纯函数映射。用 async 版是因为调用点在
+  `buildCandidates` 的 lambda 与 `BackupRunner` 回调里（非 suspend 上下文）；
+  `ProgressThrottle` 首末必发（MOB-11 教训：进度条别"卡死然后突然完成"）；
+  上报失败一律吞（上报不是业务逻辑）。**顺带收益**：自动备份第一次有了
+  实时进度。
+- **MOB-13 的特例分支消失**：旧手动链路"全已确认→早退+补齐"的分支不再需要，
+  全量重扫下正常路径就会 commit + `recordRun`。写入点从两处变一处。
+- ⚠️ **真机核实到的事实**：设置页里**早就没有「立即备份」**了
+  （0.3.5(10) 走查：备份哪些相册/仅 Wi-Fi/失败通知/存储电脑/版本/自动备份）。
+  `onBackupNow` 只剩两个触点——进行中的「暂停」和失败红卡的「再试一次」。
+  `R.string.manual_backup_entry` 是死文案（无代码引用）。所以本卡真正修的是
+  **「再试一次」那条路径**：用户在失败红卡上反复点而永远好不了，比隐藏入口
+  严重得多。
+- **验证**：247/247（`--rerun-tasks`，基线 234），`assembleDebug` 绿，
+  versionCode 9→10。反证 27 条全红（MOB-27/28 的 17 条一起复跑）。
+- **教训**：反证 U/AA 第一次是绿的——`sliceAfter` 把锚点之后的整个文件都带
+  进来，"这个函数里必须是 KEEP"实际在全文找 KEEP（`triggerProcessStartCatchup`
+  里正好有一个）。**函数级断言必须夹出函数体**，加了 `sliceBetween`。

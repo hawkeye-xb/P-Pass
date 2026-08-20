@@ -429,6 +429,21 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [x] MOB-19 备份只有一条管线（手动 = 又一种触发方式） — **2026-08-20（代码完成，真机验收 owed）**:
+      卡面原方案"照搬 MOB-09 的错误隔离到手动链路"被用户否掉——"你为什么这里
+      弄了两条路径去做备份呢？"两份实现必然漂移，MOB-09 只修一份就是证据。
+      改为**删掉第二条**：`triggerManualBackup` 入 BackupWorker 与既有五种触发
+      并列，手动专属语义靠新增的 `BackupTier.MANUAL`（零约束，唯一不读 settings
+      的档——用户定稿"手动能不能在检测-发起之间直接人工点击-发起"）+
+      `KEY_FULL_RESCAN`（忽略水位全量重扫）表达。`BackupUiStateHolder` 298→199 行，
+      界面状态改由 `uiStateOf(WorkInfo)` 纯函数从 work 的 progress/output 派生
+      （worker 新增 `setProgressAsync` 三阶段上报 + `ProgressThrottle` 首末必发）。
+      顺带收益：自动备份第一次有了实时进度。MOB-13 那个"全已确认早退+补齐"的
+      特例分支随之消失（全量重扫下正常路径就会 recordRun）。
+      ⚠️ 真机核实：设置页**早就没有「立即备份」**，`onBackupNow` 只剩「暂停」
+      与失败红卡「再试一次」两个触点，`manual_backup_entry` 是死文案——所以本卡
+      真正修的是"在失败红卡上反复点再试一次而永远好不了"。
+      247/247 + 27 条反证全红。
 - [x] MOB-28 区分「重启」与「被清」，被清了只提示不恢复 — **2026-08-20（真机端到端验过）**:
       取代 backlog 里的 MOB-18。用户要的语义一直是"检测到 → 提示 → 用户点了
       才恢复"，MOB-18 做不到是因为监听是 WorkManager 的 work，`ForceStopRunnable`

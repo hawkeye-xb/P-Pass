@@ -3,8 +3,28 @@
 // 全部纯函数、零 Android 框架依赖，JVM 单测直接可测（卡面验收 1/3/4/5）。
 package com.hawkeyexb.ppass.backup
 
-/** 备份触发档位：用户在场（人在操作）/ 后台。 */
-enum class BackupTier { USER_PRESENT, BACKGROUND }
+/** 备份触发档位。
+ *
+ *  MOB-19（2026-08-20 用户定稿）：备份只有**一条**管线，触发方式五种——
+ *  ①改完范围返回 ②新照片落库 ③周期兜底 ④App 进前台 ⑤用户手点「立即备份」。
+ *  前四种是机器自己决定要跑，第五种是人决定要跑。档位区别只在**条件检测**。 */
+enum class BackupTier {
+    /** 事件①④：人在操作但不是直接下令（打开 App / 改完范围返回）。 */
+    USER_PRESENT,
+
+    /** 事件②③：机器自己决定（新照片 / 周期兜底）。 */
+    BACKGROUND,
+
+    /** 事件⑤：用户手点「立即备份」。**不过任何条件检测。**
+     *
+     *  用户原话（2026-08-20）："ABCDE 种触发方式都会过 Wi-Fi 电量的监测，
+     *  那手动能不能在检测-发起之间，直接人工点击-发起？"
+     *
+     *  理由：人已经在场、亲手点的，这一下就是**当场的明确指令**，压过
+     *  「仅 Wi-Fi 时备份」这条**给自动备份定的规则**。点了不动是反直觉的
+     *  ——尤其这个入口在设置页深处，定位是狗粮/排障用。 */
+    MANUAL,
+}
 
 /** WorkManager Constraints 的纯数据描述（可测，不依赖 androidx.work）。 */
 data class BackupConstraintsSpec(
@@ -45,6 +65,12 @@ data class BackupConstraintsSpec(
  */
 fun constraintsFor(tier: BackupTier, settings: BackupSettingsState): BackupConstraintsSpec =
     when (tier) {
+        // MOB-19: 手动 = 零约束。这是唯一一档**不读 settings** 的，
+        // 因为「仅 Wi-Fi」是给自动备份定的规则，不是给当场指令定的。
+        BackupTier.MANUAL -> BackupConstraintsSpec(
+            requiresBatteryNotLow = false,
+            requiresUnmetered = false,
+        )
         BackupTier.USER_PRESENT -> BackupConstraintsSpec(
             requiresBatteryNotLow = false,
             requiresUnmetered = settings.wifiOnly,

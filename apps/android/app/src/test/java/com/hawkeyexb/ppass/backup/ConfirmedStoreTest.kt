@@ -12,6 +12,7 @@ package com.hawkeyexb.ppass.backup
 import java.io.ByteArrayInputStream
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -449,20 +450,34 @@ class ConfirmedStoreTest {
                 "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt",
             )
         )
-        assertTrue("手动备份必须记文件级确认", holder.contains("files = fileEntriesOf("))
-        assertTrue("自动备份必须记文件级确认", worker.contains("files = fileEntriesOf("))
-        // fileKey 口径 = MediaItem.uri.toString()（两端一致，否则同一文件
-        // 在自动/手动两条链路会各记一条，M 虚高）。喂的列表两端不同名
-        // （手动 scan.items / 自动 MOB-09 的 built.kept——跳过坏记录后
-        // 只有 kept 与候选 1:1），只钉住取值口径。
-        val key = ".map { it.uri.toString() to it.bucketId }"
-        assertTrue("手动备份 fileKey 口径", holder.contains(key))
-        assertTrue("自动备份 fileKey 口径", worker.contains(key))
-        // 迁移路径：全已确认早退分支也要补齐文件级记录，否则存量用户
-        // （每张都已备份）按几次备份都修不好 K。
+        // MOB-19（2026-08-20）：**写入链路已经从两条并成一条。**
+        // 手动备份不再自己跑管线（BackupUiStateHolder 里那 130 行删了），
+        // 它只是第 6 种触发方式，最终都落到 BackupWorker。所以文件级记录
+        // 的唯一写入点就是 worker——这正是本卡想要的（两份实现必然漂移，
+        // MOB-09 的修复只覆盖其中一份就是活生生的例子）。
+        assertFalse(
+            "手动链路不许再有自己的写入点（管线已合并，见 MOB-19）",
+            holder.contains("files = fileEntriesOf("),
+        )
+        assertTrue("唯一的写入点必须记文件级确认", worker.contains("files = fileEntriesOf("))
+        // fileKey 口径 = MediaItem.uri.toString()。合并之后只有一处，
+        // 也就再没有"两条链路口径漂移导致 M 虚高"的可能了。
+        assertTrue(
+            "fileKey 口径必须是 uri.toString()",
+            worker.contains(".map { it.uri.toString() to it.bucketId }"),
+        )
+        // MOB-13 的迁移路径（存量用户每张都已备份、K 却归不了零）现在由
+        // **手动触发的全量重扫**覆盖：MOB-19 之后手动带 KEY_FULL_RESCAN，
+        // 扫的是选中相册全部；这批候选即使一张都不用传（offered=N pushed=0），
+        // commit 照样成功、recordRun 照样把文件级记录写进去。
+        //
+        // 所以旧实现里那个专门的"全已确认早退 + 补齐"分支不需要了——它当初
+        // 存在只是因为手动链路自己会先按确认缓存过滤掉全部候选。少一个特例
+        // 分支就少一处会漂移的地方。
+        assertTrue("手动必须要求全量重扫（迁移路径靠它）", worker.contains("KEY_FULL_RESCAN"))
         assertEquals(
-            "runBackup 必须有两处 recordRun（正常提交 + 全已确认早退补齐）",
-            2, Regex("confirmedStore\\.recordRun\\(").findAll(holder).count(),
+            "唯一写入点只该有一处 recordRun（特例分支已随管线合并消失）",
+            1, Regex("confirmedStore\\.recordRun\\(").findAll(worker).count(),
         )
     }
 
