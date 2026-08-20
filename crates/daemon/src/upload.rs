@@ -9,12 +9,11 @@
 //! store accepts them — a lying uploader gets an error, not storage.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use proto::msgs::{methods, UploadHeader};
 use proto::{codes, Req, Resp, RespError};
 use storage::Db;
-use transport::{Blobs, Incoming};
+use transport::Incoming;
 
 use crate::authz;
 
@@ -25,13 +24,15 @@ const MAX_UPLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 #[derive(Clone)]
 pub struct UploadPlane {
     db: Db,
-    blobs: Arc<Blobs>,
+    // BLOB-01: 上传平面不再碰 blob store（校验自己做，文件留 staging 等
+    // ingest）。字段保留但不用会被 clippy 顶回来，所以直接去掉——回退路径
+    // （T-032 主动拉取）的 blob store 由 BackupEngine 持有。
     staging: PathBuf,
 }
 
 impl UploadPlane {
-    pub fn new(db: Db, blobs: Arc<Blobs>, staging: PathBuf) -> Self {
-        Self { db, blobs, staging }
+    pub fn new(db: Db, staging: PathBuf) -> Self {
+        Self { db, staging }
     }
 
     /// Serve one upload connection: streams arrive sequentially, one
@@ -106,7 +107,7 @@ impl UploadPlane {
         }
     }
 
-    /// Stream bytes to disk, verify BLAKE3, hand to the blob store.
+    /// Stream bytes to disk, verify BLAKE3, then rename it ready for ingest.
     async fn receive_file(
         &self,
         stream: &mut transport::BiStream,
@@ -151,12 +152,33 @@ impl UploadPlane {
             return Err("err.unsupported");
         }
 
-        // Into the blob store (push re-verifies the hash internally).
-        self.blobs
-            .push(expected, staged)
-            .await
-            .map_err(|_| "err.internal")?;
-        let _ = std::fs::remove_file(staged);
+        // ── BLOB-01（2026-08-20）：不再往 blob store 拷一份 ──
+        //
+        // 旧实现在这里 `blobs.push(expected, staged)` 然后删掉 staged。
+        // 那是同一份字节的**第二次全文件拷贝**（`add_path` 的默认导入模式
+        // 是 `ImportMode::Copy`），而 commit 阶段又要 `export_to` 把它**拷
+        // 第三次**回 staging 才能 ingest。用户机器实测的后果：
+        //
+        //   originals   549M   ← 照片库（真正要留的）
+        //   .ppf/blobs  554M   ← 同一批照片在收件箱里的第二份，永不回收
+        //   合计        1.1G   → 占盘 = 照片本身的 2.05 倍
+        //
+        // blob store 在这条路径上唯一的作用是"边收边验"，而**上面这段代码
+        // 已经自己做完了**：流式写盘 + 边写边算 BLAKE3 + 自己比对，不匹配
+        // 直接 reject。所以那一圈纯属多余往返。
+        //
+        // 用户定调："收到文件，文件都已经保存好了，我们就没必要在收件箱里面
+        // 保留这个文件了吧……它的独立功能就只有一项，一个是收件，一个是中转。"
+        //
+        // 现在改成**原地改名坐实**：`<hash>.upload` → `<hash>`。
+        // 后缀就是完整性契约——带 `.upload` = 还在写/没验过，不带 = 校验通过
+        // 可以 ingest。同目录 rename 是原子的，不存在"改了一半"的中间态。
+        //
+        // 续传能力零损失：上传协议本来就没有 offset/resume 字段
+        // （`UploadHeader` 只有 hash/bytes/file_name），`File::create` 直接
+        // 截断——断了从来都是整个文件重传，不是本卡丢的。
+        let ready = self.staging.join(&header.hash);
+        std::fs::rename(staged, &ready).map_err(|_| "err.internal")?;
         tracing::info!(
             "upload accepted: {} ({} bytes, {})",
             header.hash,

@@ -783,10 +783,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 ## Standing debts / 挂账
 
 - [ ] PPF_ADVERTISE_ADDR (QR carries LAN IP at boot on cloud boxes)
-- [ ] blob-store GC (originals currently duplicated in the blob store)
-      — **升级为 P0 上线阻塞，开卡 `BLOB-01`（2026-08-20）**：用户机器实测
-      originals 549M / .ppf/blobs 554M = **占盘 2.05 倍**，`crates/transport`
-      里没有任何 blob 删除路径。备份产品吃双倍盘会导致卸载，不是优化项。
+- [x] blob-store GC (originals currently duplicated in the blob store)
+      — **2026-08-20 由 `BLOB-01` 解决，实测占盘 2.05x → 1.00x**：根因不是
+      "忘了清"，是主路径绕了一圈根本不该绕（上传平面已自己流式校验，却还要
+      往 blob store 拷一份、commit 再拷回来）。改成校验通过原地改名坐实、
+      commit 直接吃 staging；blob store 降级为只服务回退路径，启动时清空。
+      不走 iroh 的 GC（单 blob delete 是 pub(crate)，gc_run_once 在私有模块，
+      GcConfig 默认关且只能定时轮询）。真实 daemon 端到端
+      `pushed=12 ingested=12; rerun pushed=0 dup=12`，占盘 1.00x。
 - [ ] background thumbnail batch generation after ingest
 - [ ] Windows smoke (T-040 will carry it)
 

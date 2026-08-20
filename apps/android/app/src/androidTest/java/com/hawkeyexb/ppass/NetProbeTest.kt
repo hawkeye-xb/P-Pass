@@ -55,7 +55,8 @@ class NetProbeTest {
             val client = DaemonClient()
             client.bind()
             try {
-                val addr = parsePairingQr(qr!!.trim()).addr!!
+                // E2E-02: 见 DaemonHelloTest——新码只带 r=。
+                val addr = addrOf(parsePairingQr(qr!!.trim()))
                 val resp = withTimeout(30_000) {
                     client.call(addr, Methods.HELLO, buildJsonObject {})
                 }

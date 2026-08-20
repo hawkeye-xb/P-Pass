@@ -296,6 +296,22 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // BLOB-01: 启动时把收件箱清空。
+    //
+    // blob store 现在只服务回退路径（T-032 主动拉取），而**启动这一刻不可能
+    // 有传输在飞**——所以 `.ppf/blobs` 里剩的一定是上个会话的垃圾。这同时是
+    // 老用户的迁移路径：升级前积累的那几百 MB（用户机器实测 554M）在这里
+    // 一次性归零，不依赖 iroh 的 GC（它的 `gc_run_once` 是 crate 私有的，
+    // 单个 blob 的 delete 也是 pub(crate)，官方只让走定时 GC）。
+    //
+    // 代价：回退路径若被打断，已拉到一半的部分数据不能跨重启续传。可以接受
+    // ——那条路是按 commit 批次重试的，最多重拉一个文件。
+    let blobs_dir = transport::Blobs::store_dir(&data_dir.join(".ppf"));
+    let reclaimed = daemon::reclaim_inbox(&blobs_dir, &data_dir.join(".ppf/staging"));
+    if reclaimed > 0 {
+        tracing::info!("BLOB-01: 收件箱回收 {} 字节", reclaimed);
+    }
+
     // One blob store handle, shared by backup (pulls) and query
     // (tickets); also serves fetches through the listen loop (T-033).
     let blobs = std::sync::Arc::new(
@@ -308,7 +324,7 @@ async fn main() -> anyhow::Result<()> {
     // DESK-03: 本地 IPC 也注入查询平面——桌面壳照片墙走同一 QueryEngine
     // （与手机同一数据源），timeline/thumb/asset.* 双平面可答。
     ipc.set_query(query.clone());
-    let upload = daemon::upload::UploadPlane::new(db.clone(), blobs, data_dir.join(".ppf/staging"));
+    let upload = daemon::upload::UploadPlane::new(db.clone(), data_dir.join(".ppf/staging"));
     let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
     // ── SYNC-01 外部删除对账 ──────────────────────────────

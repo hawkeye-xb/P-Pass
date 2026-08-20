@@ -39,12 +39,9 @@ class DaemonHelloTest {
             val parsed = parsePairingQr(qr!!.trim())
             // H-10b 之后的正路：新码只有 r=，从 node+relay 重建；旧码的
             // a= 仍兼容。与 PairFlow.pairWithQr 同一套判断，不许两边漂移。
-            val addr: PeerAddrParts = parsed.addr
-                ?: parsed.relayUrl?.let { PeerAddrParts(parsed.nodeIdHex, it, emptyList()) }
-                ?: error(
-                    "pairing code carries neither a= nor r= — " +
-                        "daemon and app versions disagree (see H-10b)"
-                )
+            // E2E-02: 重建逻辑抽进 addrOf（PairingQrAddr.kt）——四个 e2e
+            // 测试共用一份，下次协议变只改那里。
+            val addr: PeerAddrParts = addrOf(parsed)
 
             val client = DaemonClient()
             client.bind()

@@ -710,3 +710,39 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
 - **教训**：反证 U/AA 第一次是绿的——`sliceAfter` 把锚点之后的整个文件都带
   进来，"这个函数里必须是 KEEP"实际在全文找 KEEP（`triggerProcessStartCatchup`
   里正好有一个）。**函数级断言必须夹出函数体**，加了 `sliceBetween`。
+
+## 2026-08-20 BLOB-01 收件箱不回收，占盘翻倍（实测 2.05x → 1.00x）
+
+- **根因不是"忘了清"，是"绕了一圈根本不该绕"**。`upload.rs` 接收时本来就
+  流式算 BLAKE3 并自己比对（不匹配 reject），然后才 `blobs.push` 把这份
+  **已校验**的文件拷进 blob store（`add_path` 默认 `ImportMode::Copy`），
+  commit 时 `backup.rs` 又 `export_to` 拷回来才能 ingest。同一份字节拷三遍，
+  而 blob store 那份永不回收。用户机器实测：originals 549M + .ppf/blobs/data
+  553M = 占盘 2.05 倍。
+- **改动**：①`upload.rs` 校验通过后原地改名坐实（`<hash>.upload` → `<hash>`），
+  不再碰 blob store，`UploadPlane` 不再持有 `Blobs`；②`backup.rs` commit 优先
+  吃 staging 里现成的，blob store 降级为只服务回退路径（T-032 主动拉取）；
+  ③新增 `inbox.rs`：启动时清空 `.ppf/blobs`（那一刻不可能有传输在飞），
+  staging 只扫 `.upload` 半成品、完整文件一律保留。
+- **为什么不用 GC**：iroh-blobs 0.103 的单 blob `delete` 是 `pub(crate)`，
+  文档明写只让走 GC；而 `gc_run_once` 所在 `store::gc` 是私有模块，`GcConfig`
+  默认 `None` 只能配定时轮询。与其把回收交给控制不了的定时器，不如在可证明
+  安全的时刻（启动）自己动手。这同时是老用户的迁移路径。
+- **续传零损失**（查过）：`UploadHeader` 无 offset/resume 字段，`upload.rs`
+  零续传逻辑，`File::create` 直接截断——上传平面从来都是断了整个重传。
+- **验证**：真实 daemon 端到端 `BACKUP OK: pushed=12 ingested=12;
+  rerun pushed=0 dup=12`（`rerun pushed=0 dup=12` 正是卡面要的"同一 hash 再
+  offer 不重传也不报错"）；固定目录量占盘 **originals 2,400,078 B /
+  blobs/data 0 B / staging 0 B = 1.00x**。`just ci` 全绿。反证 4 条全红。
+- **集成断言**进 `upload_flow.rs`：commit 后 `blobs/data` 与 `staging` 必须为 0。
+  口径盯 `blobs/data/` 而非目录总量——store 的 redb 空库有 ~1MB 固定开销，
+  比小尺寸测试图还大（第一版就这么误报的；真机布局：data 553M / blobs.db 4.7M）。
+- **顺手修掉 E2E-02 的漏修**：跑 `just android-backup` 炸出
+  `DaemonBackupTest.kt:82` 也是 `parsePairingQr(qr).addr!!`——同一个 H-10b
+  死契约。全仓共**四处**（DaemonHello / DaemonBackup / NetProbe / DeviceBackup），
+  上一轮只修一处就宣布"解红"。已抽成共用 `addrOf(qr)`（`PairingQrAddr.kt`），
+  四处全走它。⚠️ 教训：**"这个测试挂了"要先问"还有几个同形的"**——一次契约
+  变更会同时打断所有依赖它的测试。
+- **用户数据处置**：按用户授权清理本地重装，用 `mv` 不用 `rm`——旧库移到
+  `~/P-Pass NAS.bak-blob01-20260820-1615`（1.1G，含 549M 照片），验收通过后
+  由用户删。
