@@ -769,6 +769,9 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 - [ ] PPF_ADVERTISE_ADDR (QR carries LAN IP at boot on cloud boxes)
 - [ ] blob-store GC (originals currently duplicated in the blob store)
+      — **升级为 P0 上线阻塞，开卡 `BLOB-01`（2026-08-20）**：用户机器实测
+      originals 549M / .ppf/blobs 554M = **占盘 2.05 倍**，`crates/transport`
+      里没有任何 blob 删除路径。备份产品吃双倍盘会导致卸载，不是优化项。
 - [ ] background thumbnail batch generation after ingest
 - [ ] Windows smoke (T-040 will carry it)
 
