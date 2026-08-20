@@ -4,6 +4,7 @@
 // Needs PPF_DAEMON_QR + PPF_DAEMON_IPC; `just android-backup` drives it.
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.transport.addrOf
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.PairOutcome
 import com.hawkeyexb.ppass.transport.pairWithQr
@@ -79,7 +80,9 @@ print('confirmed')
                 val outcome = paired.await()
                 assertTrue("pair: $outcome", outcome is PairOutcome.Joined)
 
-                val daemon = parsePairingQr(qr!!.trim()).addr!!
+                // E2E-02: 新码只有 r=（H-10b 2026-08-08 去掉了 a=），
+                // 从 node+relay 重建，与 PairFlow.pairWithQr 同源。
+                val daemon = addrOf(parsePairingQr(qr!!.trim()))
                 val files = (1..12).map { fakePhoto(it) }
                 val candidates = files.map { f ->
                     Candidate(

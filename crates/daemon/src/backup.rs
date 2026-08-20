@@ -176,24 +176,38 @@ impl BackupEngine {
                 continue; // already in the library — idempotent re-run
             }
             let staged = self.staging.join(&item.hash);
-            // Local-first: a phone that pushed over the upload plane
-            // (T-054) already put the blob in the store — export straight
-            // from disk, zero reverse dials. Fall back to the T-032 pull.
-            if self.blobs.export_to(hash, &staged).await.is_err() {
-                self.blobs
-                    .fetch_from(peer, hash)
-                    .await
-                    .map_err(|e| BackupError::Fetch {
-                        hash: item.hash.clone(),
-                        msg: e.to_string(),
-                    })?;
-                self.blobs
-                    .export_to(hash, &staged)
-                    .await
-                    .map_err(|e| BackupError::Fetch {
-                        hash: item.hash.clone(),
-                        msg: e.to_string(),
-                    })?;
+            // ── BLOB-01（2026-08-20）：主路径零往返 ──
+            //
+            // 手机推上来的文件（T-054 上传平面）已经**校验完毕、就躺在
+            // staging 里**（上传平面流式算 BLAKE3 并自己比对，通过后把
+            // `<hash>.upload` 原地改名成 `<hash>`）。直接 ingest 就行——
+            // 下面那次 rename 是同卷零拷贝。
+            //
+            // 旧实现在这里无条件 `export_to`，也就是把文件从 blob store 里
+            // **再拷一遍**出来；而它进 blob store 本身又是一次拷贝。同一份
+            // 字节拷三遍，且 blob store 那份永不回收（用户实测占盘 2.05 倍）。
+            //
+            // blob store 从此只服务**回退路径**（T-032：daemon 主动向手机
+            // 拉取）。那条路真的需要"边收边验+断点续传"，值得走它。
+            // 短路顺序即优先级：staging 有现成的就用；没有才碰 blob store；
+            // store 里也没有才向手机拉（T-032 回退路径）。
+            if !staged.is_file() && self.blobs.export_to(hash, &staged).await.is_err() {
+                {
+                    self.blobs
+                        .fetch_from(peer, hash)
+                        .await
+                        .map_err(|e| BackupError::Fetch {
+                            hash: item.hash.clone(),
+                            msg: e.to_string(),
+                        })?;
+                    self.blobs
+                        .export_to(hash, &staged)
+                        .await
+                        .map_err(|e| BackupError::Fetch {
+                            hash: item.hash.clone(),
+                            msg: e.to_string(),
+                        })?;
+                }
             }
             let incoming = IncomingFile {
                 src_path: staged.clone(),

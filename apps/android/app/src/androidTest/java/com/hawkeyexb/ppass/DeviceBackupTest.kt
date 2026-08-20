@@ -38,7 +38,8 @@ class DeviceBackupTest {
             val client = DaemonClient()
             client.bind(IdentityStore(dir).secretKey())
             try {
-                val daemon = parsePairingQr(qr!!.trim()).addr!!
+                // E2E-02: 见 DaemonHelloTest——新码只带 r=。
+                val daemon = addrOf(parsePairingQr(qr!!.trim()))
                 // Already paired (persistent identity)? backup.begin is
                 // member-gated — an ok means we're in, skip pairing.
                 val already = runCatching {

@@ -94,7 +94,9 @@ async fn fixture() -> Fixture {
     );
     blobs.attach_to_listener();
     let backup = BackupEngine::new(db.clone(), blobs.clone(), library.path());
-    let upload = UploadPlane::new(db.clone(), blobs, library.path().join(".ppf/staging"));
+    // BLOB-01: 上传平面不再碰 blob store——校验自己做，文件留 staging 等
+    // ingest。blobs 仍传给 BackupEngine（回退路径 T-032 用）。
+    let upload = UploadPlane::new(db.clone(), library.path().join(".ppf/staging"));
     let download = daemon::download::DownloadPlane::new(db.clone(), library.path().to_path_buf());
     let router = Router::new(db.clone(), "test-daemon")
         .with_backup(backup)
@@ -199,6 +201,48 @@ async fn pushed_files_commit_without_reverse_dial() {
         let on_disk = f.library.path().join(&asset.rel_path);
         assert_eq!(&std::fs::read(&on_disk).unwrap(), data, "{h} bit-identical");
     }
+
+    // ── BLOB-01（2026-08-20）：主路径一份都不许多留 ──
+    //
+    // 用户机器实测过的后果：originals 549M / .ppf/blobs 554M = 占盘 2.05 倍。
+    // 上传平面自己流式算 BLAKE3 并比对，blob store 在这条路上纯属多余往返，
+    // 而它那份**永不回收**。
+    //
+    // 断言只盯 `blobs/data/`——照片副本就落在那里（真机实测：data 553M、
+    // blobs.db 4.7M）。不盯目录总量，因为 store 的 redb 空库本身就有 ~1MB
+    // 固定开销，比小尺寸测试图还大，那不是照片的副本。
+    let blob_data = dir_bytes(&f.library.path().join(".ppf/blobs/data"));
+    let originals_bytes: u64 = files.iter().map(|d| d.len() as u64).sum();
+    assert_eq!(
+        0, blob_data,
+        "收件箱不许留照片的副本（照片本身 {originals_bytes}B）——\
+         blobs/data 非空说明主路径又往 blob store 拷了一遍",
+    );
+
+    // staging 也要交干净：commit 时 ingest 是 rename，文件应该已经搬走。
+    let staged = dir_bytes(&f.library.path().join(".ppf/staging"));
+    assert_eq!(
+        0, staged,
+        "commit 之后 staging 必须为空（ingest 是 rename）"
+    );
+}
+
+/// 目录占用字节数（递归）。BLOB-01 的断言口径。
+fn dir_bytes(dir: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                dir_bytes(&p)
+            } else {
+                e.metadata().map(|m| m.len()).unwrap_or(0)
+            }
+        })
+        .sum()
 }
 
 #[tokio::test(flavor = "multi_thread")]
