@@ -1,4 +1,12 @@
 # MOB-09 一条坏 MediaStore 记录让整批备份永久失败　级别 L1【单文件 bug + 反证】
+> ## 🟡 状态：代码已合并，等真机验收（2026-08-20 复核）
+>
+> `buildCandidates()` 逐条隔离 + 探针 open 已在 `BackupWorker.kt`。
+> 真机侧**部分完成**：2026-08-20 用 `content insert` 造探针记录时实测到
+> `W PPassBackup: auto backup: skipped 1/1 unreadable media record(s)`
+> 且无 ENOENT 导致的 RETRY/FAILURE。**未做**：坏记录与好记录同批的对照
+> （卡面原验收要的是 `skipped 1/2`）。
+
 
 **来源**：MOB-08 排查过程中实测撞到（2026-08-18）。不属于 MOB-08 范围，
 按 `docs/AGENT_PROTOCOL.md` §C.2 另开。

@@ -1,4 +1,19 @@
 # SYNC-04 Android 前台常驻订阅 + 整页覆盖 + 断线重连　级别 L2【依赖 SYNC-02+SYNC-03 已合并；真机验收挂用户】
+> ## ✅ 状态：代码已合并，2026-08-20 归档（真机验收挂用户）
+>
+> 三条要求逐条核对，全部在位：
+> 1. 常驻订阅取代轮询 — `DaemonClient.subscribeTimeline` +
+>    `TimelineSubscriptionHolder`（`PhotosScreen.kt:163/217`）
+> 2. 进后台断开 — `MainActivity` 的 `LifecycleEventObserver`（ON_RESUME 起 /
+>    ON_STOP 停）
+> 3. 退避重连 + 超限亮错误 — `SUBSCRIBE_RETRY_DELAYS_MS`
+>    （1/2/4/8/15/30s）+ `subscribeExhausted` / `subscribeConnected` /
+>    `subscribeHadFailure` 三个 UI 态（`PhotosScreen.kt:344/354`）
+>
+> ⚠️ **本卡也造成过一次误报**：2026-08-20 盘点时我用错了文件名去 grep
+> （查 `TimelineLoader.kt` 而订阅在 `PhotosScreen.kt`），报成"未实施"。
+> 教训同 DESK-06：核实要对着卡面要求逐条找，不能一个宽泛 grep 了事。
+
 
 背景与全部裁决点见 `docs/product/2026-08-12-metadata-sync-decisions.md`
 （§③④⑥，本卡实现这三条）。**前置条件**：SYNC-03 已合并进 main——本卡
