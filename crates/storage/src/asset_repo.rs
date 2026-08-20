@@ -98,8 +98,14 @@ impl Db {
     /// WATCH-01 局部对账（变化目录）数据源：只枚举受影响子树，不用
     /// 全量拉。`prefix` 按目录边界匹配（`originals/ab` 不误中
     /// `originals/abc`）。
+    ///
+    /// ⚠️ WATCH-02：`prefix` 尾部斜杠必须先剥掉。调用方用
+    /// `format!("originals/{rel}")` 拼前缀，整棵子树被删时 `rel` 为空串
+    /// → prefix = `"originals/"` → 拼出 `LIKE 'originals//%'` → 双斜杠
+    /// 命中 0 行 → 删除方向静默失效（用户 Finder 清空 originals 后索引
+    /// 一条不减）。剥斜杠让「目录边界」语义对根目录同样成立。
     pub async fn list_asset_paths_under(&self, prefix: &str) -> Result<Vec<(Vec<u8>, String)>> {
-        let like = format!("{prefix}/%");
+        let like = format!("{}/%", prefix.trim_end_matches('/'));
         let rows = sqlx::query("SELECT hash, rel_path FROM asset WHERE rel_path LIKE ?")
             .bind(like)
             .fetch_all(self.pool())
@@ -108,6 +114,19 @@ impl Db {
             .iter()
             .map(|r| (r.get("hash"), r.get("rel_path")))
             .collect())
+    }
+
+    /// 把一条资产重新指向新的 `rel_path` —— WATCH-03「库内移动」。
+    /// 用户在 Finder 里把照片拖进自建目录属于重新分类，内容没变（hash
+    /// 是身份），索引跟着走即可，绝不能删行让照片凭空消失。
+    /// 返回受影响行数（0 = 该 hash 不在索引里）。
+    pub async fn update_asset_rel_path(&self, hash: &[u8], rel_path: &str) -> Result<u64> {
+        Ok(sqlx::query("UPDATE asset SET rel_path = ? WHERE hash = ?")
+            .bind(rel_path)
+            .bind(hash)
+            .execute(self.pool())
+            .await?
+            .rows_affected())
     }
 
     /// Remove one asset row — SYNC-01 外部删除对账（索引是派生数据，
@@ -351,6 +370,75 @@ mod tests {
             .expect("query sqlite_master");
             assert_eq!(n, 1, "table {table} must exist after migration");
         }
+    }
+
+    #[tokio::test]
+    async fn paths_under_prefix_tolerates_a_trailing_slash() {
+        // WATCH-02 回归：调用方拼 `format!("originals/{rel}")`，整棵子树
+        // 被删时 rel 是空串 → prefix = "originals/"。剥不掉尾斜杠就会拼出
+        // `LIKE 'originals//%'`，一行不中，删除方向静默失效。
+        let db = Db::open_in_memory().await.unwrap();
+        db.insert_asset(&asset(1, None)).await.unwrap();
+        db.insert_asset(&asset(2, None)).await.unwrap();
+
+        assert_eq!(
+            db.list_asset_paths_under("originals").await.unwrap().len(),
+            2,
+            "无尾斜杠"
+        );
+        assert_eq!(
+            db.list_asset_paths_under("originals/").await.unwrap().len(),
+            2,
+            "带尾斜杠必须等价——这就是 WATCH-02"
+        );
+        assert_eq!(
+            db.list_asset_paths_under("originals/dev/2026")
+                .await
+                .unwrap()
+                .len(),
+            2,
+            "中间层前缀"
+        );
+    }
+
+    #[tokio::test]
+    async fn paths_under_prefix_respects_directory_boundaries() {
+        // `originals/dev` 不得误中 `originals/devil`——目录边界语义。
+        let db = Db::open_in_memory().await.unwrap();
+        db.insert_asset(&asset(1, None)).await.unwrap();
+        let mut sibling = asset(2, None);
+        sibling.rel_path = "originals/devil/2026/07/IMG_002.jpg".into();
+        db.insert_asset(&sibling).await.unwrap();
+
+        let under = db.list_asset_paths_under("originals/dev").await.unwrap();
+        assert_eq!(under.len(), 1, "前缀孪生目录不得混入");
+        assert_eq!(under[0].1, "originals/dev/2026/07/IMG_001.jpg");
+    }
+
+    #[tokio::test]
+    async fn rel_path_can_be_repointed_without_touching_identity() {
+        // WATCH-03：库内移动 = 改住址，hash（身份）不变，行不删。
+        let db = Db::open_in_memory().await.unwrap();
+        let a = asset(1, Some(1_700_000_000_000));
+        db.insert_asset(&a).await.unwrap();
+
+        let n = db
+            .update_asset_rel_path(&a.hash, "originals/我的婚礼/IMG_001.jpg")
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+        let back = db.get_asset(&a.hash).await.unwrap().unwrap();
+        assert_eq!(back.rel_path, "originals/我的婚礼/IMG_001.jpg");
+        assert_eq!(back.bytes, a.bytes, "改住址不得动其他字段");
+        assert_eq!(back.taken_at, a.taken_at);
+
+        assert_eq!(
+            db.update_asset_rel_path(&[9u8; 32], "originals/x.jpg")
+                .await
+                .unwrap(),
+            0,
+            "不存在的 hash 返回 0 行，不报错"
+        );
     }
 
     #[tokio::test]

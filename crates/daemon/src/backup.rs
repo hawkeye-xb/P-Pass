@@ -222,6 +222,14 @@ impl BackupEngine {
                         throttle.signal();
                     }
                 }
+                // WATCH-03：索引里有这份内容，但记录的文件早被外部删了。
+                // 这次上传把它补回来——staged 已被 place 移走，不能再删。
+                Ok(core_index::IngestOutcome::Moved(_)) => {
+                    outcome.ingested += 1;
+                    if let Some(throttle) = &self.throttle {
+                        throttle.signal();
+                    }
+                }
                 Ok(core_index::IngestOutcome::Duplicate) => {
                     outcome.duplicates += 1;
                     let _ = std::fs::remove_file(&staged);

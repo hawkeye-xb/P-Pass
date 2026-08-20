@@ -187,3 +187,91 @@ async fn traversal_file_name_cannot_escape_library() {
 fn blake3_of(content: &[u8]) -> [u8; 32] {
     *blake3::hash(content).as_bytes()
 }
+
+// ---------------------------------------------------------------------------
+// WATCH-03：hash 是身份，rel_path 只是当前住址。
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn move_inside_originals_repoints_the_row_in_place() {
+    // 用户在 Finder 里把照片拖进自建目录 = 重新分类。库内位置由用户说了
+    // 算，不搬回日期布局；索引改指新位置，行不删。
+    let (dir, db, ing) = setup().await;
+    let root = dir.path().join("library");
+    let content = jpeg_with_exif("2024:05:06 07:08:09");
+    let f1 = incoming(dir.path(), "IMG_M.jpg", &content);
+    let IngestOutcome::New(rel) = ing.ingest(&f1).await.unwrap() else {
+        panic!("first ingest must be New");
+    };
+
+    // 模拟 Finder 移动：文件搬到用户自建的相册目录。
+    let album = root.join("originals/我的婚礼");
+    fs::create_dir_all(&album).unwrap();
+    let dest = album.join("IMG_M.jpg");
+    fs::rename(root.join(&rel), &dest).unwrap();
+
+    // watcher 在新位置又发现了这份内容。
+    let f2 = IncomingFile {
+        src_path: dest.clone(),
+        file_name: "IMG_M.jpg".into(),
+        media_type: "image/jpeg".into(),
+        src_device: DEV_A.to_vec(),
+    };
+    let outcome = ing.ingest(&f2).await.unwrap();
+    assert_eq!(
+        outcome,
+        IngestOutcome::Moved("originals/我的婚礼/IMG_M.jpg".into()),
+        "记录的住址空了 + 同内容在库内别处 = 移动，不是重复"
+    );
+    assert!(dest.exists(), "用户摆的位置不得被搬走");
+
+    let page = core_index::timeline_page(&db, None, 100).await.unwrap();
+    assert_eq!(page.assets.len(), 1, "移动不产生第二行");
+    assert_eq!(page.assets[0].rel_path, "originals/我的婚礼/IMG_M.jpg");
+}
+
+#[tokio::test]
+async fn reupload_of_an_externally_deleted_photo_lands_in_canonical_layout() {
+    // 手机重传一张曾被外部删掉的照片：来源在库外（staging），按 canonical
+    // 布局落位，而不是就地采纳。
+    let (dir, db, ing) = setup().await;
+    let root = dir.path().join("library");
+    let content = jpeg_with_exif("2024:05:06 07:08:09");
+    let f1 = incoming(dir.path(), "IMG_R.jpg", &content);
+    let IngestOutcome::New(rel) = ing.ingest(&f1).await.unwrap() else {
+        panic!("first ingest must be New");
+    };
+    fs::remove_file(root.join(&rel)).unwrap(); // 用户在 Finder 删了
+
+    let f2 = incoming(dir.path(), "IMG_R.jpg", &content);
+    let outcome = ing.ingest(&f2).await.unwrap();
+    let IngestOutcome::Moved(new_rel) = outcome else {
+        panic!("expected Moved, got {outcome:?}");
+    };
+    assert!(
+        new_rel.starts_with(&format!("originals/{DEV_DIR_A}/")),
+        "库外来源必须按日期布局落位，got {new_rel}"
+    );
+    assert!(root.join(&new_rel).exists(), "文件必须真的落到新位置");
+    assert!(!f2.src_path.exists(), "staging 文件已被移走");
+
+    let page = core_index::timeline_page(&db, None, 100).await.unwrap();
+    assert_eq!(page.assets.len(), 1);
+    assert_eq!(page.assets[0].rel_path, new_rel);
+}
+
+#[tokio::test]
+async fn duplicate_stays_duplicate_while_the_recorded_file_is_present() {
+    // 反向守卫：文件还在位时必须仍然是 Duplicate——否则 Moved 分支会把
+    // 正常的重传路径吞掉，源文件被误移走。
+    let (dir, _db, ing) = setup().await;
+    let content = jpeg_with_exif("2022:03:04 05:06:07");
+    let f1 = incoming(dir.path(), "IMG_D.jpg", &content);
+    assert!(matches!(
+        ing.ingest(&f1).await.unwrap(),
+        IngestOutcome::New(_)
+    ));
+    let f2 = incoming(dir.path(), "IMG_D.jpg", &content);
+    assert_eq!(ing.ingest(&f2).await.unwrap(), IngestOutcome::Duplicate);
+    assert!(f2.src_path.exists(), "Duplicate 不得动来源文件");
+}
