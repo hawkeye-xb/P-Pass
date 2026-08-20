@@ -429,6 +429,26 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [x] MOB-28 区分「重启」与「被清」，被清了只提示不恢复 — **2026-08-20（真机端到端验过）**:
+      取代 backlog 里的 MOB-18。用户要的语义一直是"检测到 → 提示 → 用户点了
+      才恢复"，MOB-18 做不到是因为监听是 WorkManager 的 work，`ForceStopRunnable`
+      跑在 `androidx.startup` 的 ContentProvider 里、比 `Application.onCreate`
+      还早就自愈了。**MOB-27 把这个前提推翻**——监听现在是我们自己注册的
+      JobScheduler job，WorkManager 不知道它存在，碰不到它。
+      判据换成**开机时刻**（`currentTimeMillis - elapsedRealtime`，同一次开机内
+      稳定、重启后变，零权限）：重启 → 自动恢复；同一次开机内监听凭空消失
+      （force-stop / OEM 清理）→ 只记录 + 设置页琥珀提示卡，点「恢复备份」才重挂。
+      三处闸门（Application 对账 / MainActivity 的 LaunchedEffect / 开机 receiver）
+      缺一处等于没有——用户实测栽过两次的正是第二条。
+      顺带把 MOB-27 §五那个待定项做了：加开机 receiver。此前判断"性价比不明"
+      **是错的**——`RECEIVE_BOOT_COMPLETED` 本来就在合并 manifest 里（WorkManager
+      带进来的，不增加用户可见权限），且 manifest receiver 不常驻。重启后监听
+      立刻回来，不再等 5h 周期任务。
+      234/234 + 18 条反证全红（MOB-27 的 9 条一起复跑）。真机端到端：force-stop
+      → 打开 App → 看门 job **没有**被自动装回去、提示卡真的出现 → 点「恢复备份」
+      → job 回来 + 标志清除 + 立刻补跑。
+      已知边界：force-stop **再重启**再打开会被判成重启（那段时间我们一行代码
+      都跑不了，没人记下"被清过"），卡里如实记了。
 - [x] MOB-27 监听与干活分家（content trigger → JobScheduler 看门 job） — **2026-08-19（代码完成，真机验收 owed）**:
       监听 work 与干活 work 是同一个，**备份跑多久监听就断多久**——用户实测
       "前面的出去了，后面的就没有同步"。上一轮的治标（重挂延迟 + 按批次大小

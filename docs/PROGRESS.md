@@ -633,3 +633,46 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   断言必须先剥块注释。
 - **真机验收 owed**：连拍只触发 1 次 / 备份期间拍照不用等下一个事件 /
   重启后监听何时回来。三项做完本卡才能移入 `done/`。
+
+## 2026-08-20 MOB-28 区分「重启」与「被清」，被清了只提示不恢复
+
+- **取代 MOB-18**（backlog 卡已标注，不要按它实施）。用户原话是本卡的全部
+  理由："不要做静默恢复，就是要提醒。""必须点了才恢复。你都提示了，就别
+  自作主张。"
+- **为什么现在能做**：MOB-18 pending 的理由是 `ForceStopRunnable` 跑在
+  `androidx.startup` 的 ContentProvider 里、比 `Application.onCreate` 还早就
+  把 work 重排了。MOB-27 把监听搬到我们自己注册的 JobScheduler job 之后，
+  WorkManager 完全不知道它存在，碰不到它——语义于是成立。
+- **判据**：开机时刻 `currentTimeMillis() - elapsedRealtime()`（同一次开机内
+  稳定、重启后变，零权限，容差 60s 扛 NTP 校时）。判定表
+  `decideRecovery(watchScheduled, sameBoot, awaitingConsent)` 是纯函数，
+  八种组合全覆盖。`awaitingUserConsent` 必须排最前——已经在等用户点了，
+  重启也不许悄悄替他决定。
+- **三处闸门**：`PPassApplication` 对账 / `MainActivity` 的 `LaunchedEffect`
+  （用户实测栽过两次的那条"打开 App 就悄悄恢复"）/ `BootWatchReceiver`。
+  第 1、3 共用 `reconcileWatchOnProcessStart`，不许各写一份。恢复的唯一
+  入口是提示卡上的「恢复备份」→ `resumeAfterInterruption()`。
+- **开机 receiver**（MOB-27 §五的待定项，此前判断"性价比不明"是错的）：
+  `RECEIVE_BOOT_COMPLETED` 本来就在合并 manifest 里（WorkManager 带进来的），
+  加它不增加用户可见权限；WorkManager 自己的 `RescheduleReceiver` 是
+  `enabled=false`（只在 API<23 路径动态开启）救不了我们；manifest receiver
+  不常驻。`onReceive` 用 `goAsync()` + `finally { finish() }`。
+- **删除** `isBackupScheduled()`：MOB-27 之后它既不精确也会误导（看门 job
+  重启必死，两边对账无法区分重启与被清）。教训保留在注释里。
+- **验证**：234/234（`--rerun-tasks`，基线 218），`assembleDebug` 绿，
+  versionCode 8→9。反证 18 条全红（MOB-27 的 9 条一起复跑，确认旧锁未被削弱）。
+  真机端到端（0.3.4(9) / RFCX1040SNE）：force-stop → 已注册 job=0 → 打开 App
+  → 看门 job **仍为 0**（没被自动装回去）+ `interruptedUnacknowledged:true`
+  → UI 树里读到提示卡与「恢复备份」→ 点击 → job 回来 + 标志清除 + 卡消失
+  + 立刻补跑一次。
+- **已知边界**：force-stop **再重启**再打开会被判成"重启"而自动恢复——那段
+  时间我们一行代码都跑不了，"被清过"没人记下。主路径（force-stop → 打开 App）
+  已真机验过，那正是用户抱怨的那条。
+- **四条教训（都写进了测试注释）**：①Kotlin 的 `substringAfter` 找不到分隔符
+  时返回**整个字符串**，于是删掉 `finally` 之后断言反而对全文求 contains、
+  照样绿（反证跑出来不红才发现）——切片断言已全改走 `sliceAfter`/`sliceBetween`；
+  ②zsh 不对未加引号变量分词，反证脚本 `for f in $ALL` 让备份/还原静默失败、
+  18 次破坏叠加在工作区上，驱动已改成 Python 内存快照；③反证驱动只认
+  `FAILED` 行会把编译失败当成绿；④用索引区间重写测试会连带切掉夹在中间的
+  用例（`upgrade_kills_the_legacy_workmanager_trigger` 就这么丢过一次）；
+  ⑤`grep -c` 数 dumpsys 的 job 会把历史记录算进去，必须按 `JOB ` 分块解析。
