@@ -116,6 +116,22 @@ impl Db {
             .collect())
     }
 
+    /// 占着 `rel_path` 这个位置的那条资产的 hash（没有则 `None`）——
+    /// 「一个路径只能被一条索引行占用」这条不变量的查询侧。
+    ///
+    /// 为什么需要它：`hash` 是主键、`rel_path` **没有唯一约束**。用户在
+    /// Finder 里编辑一张我们收到的照片 → 内容变了 → hash 变了 → 在我们眼里
+    /// 是另一张照片 → 插新行；而老行还指着同一个路径（文件存在，对账不会
+    /// 清它）→ **同一个文件被两条行占着**，照片墙上出现两次，其中一张的
+    /// 缩略图取不出来（thumb 按 hash 存）。
+    pub async fn hash_at_rel_path(&self, rel_path: &str) -> Result<Option<Vec<u8>>> {
+        let row: Option<(Vec<u8>,)> = sqlx::query_as("SELECT hash FROM asset WHERE rel_path = ?")
+            .bind(rel_path)
+            .fetch_optional(self.pool())
+            .await?;
+        Ok(row.map(|r| r.0))
+    }
+
     /// 把一条资产重新指向新的 `rel_path` —— WATCH-03「库内移动」。
     /// 用户在 Finder 里把照片拖进自建目录属于重新分类，内容没变（hash
     /// 是身份），索引跟着走即可，绝不能删行让照片凭空消失。

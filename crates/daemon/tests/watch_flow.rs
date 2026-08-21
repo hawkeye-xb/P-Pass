@@ -78,22 +78,27 @@ async fn new_media_file_is_ingested_within_seconds() {
 
     wait_until(|| count_eq(&f, 1), "ingest of new file").await;
 
-    // 文件已被 ingest 移入 canonical 布局（originals/<device>/<yyyy>/<mm>/），
-    // 根下不再有原始文件。
+    // 宽容落位（2026-08-21 裁决）：originals/ 是**用户的**目录，已经在树内
+    // 的文件就地采纳，绝不搬走。canonical 布局只用于我们自己从手机收到的
+    // 文件（那些此刻还在 staging，没有家）。
     assert!(
-        !f.dir.path().join("originals/IMG_0001.jpg").exists(),
-        "ingest 应把文件移入 canonical 布局"
+        f.dir.path().join("originals/IMG_0001.jpg").exists(),
+        "库内文件必须留在用户放的位置"
     );
-    // 布局目录用完整 node_id hex（ADR-006）。
     let hex: String = NODE_ID.iter().map(|b| format!("{b:02x}")).collect();
-    let canonical = f.dir.path().join("originals").join(&hex);
-    assert!(canonical.exists(), "canonical 布局目录应存在");
+    assert!(
+        !f.dir.path().join("originals").join(&hex).exists(),
+        "不该为库内文件建 canonical 目录"
+    );
+    // 归属：watcher 发现的库内文件记本机 node_id（与 rebuild 的口径一致）。
+    let rows = f.db.list_asset_paths().await.unwrap();
+    assert_eq!(rows[0].1, "originals/IMG_0001.jpg");
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn delete_is_reconciled_and_invalidated_emitted() {
     let f = setup(Duration::from_millis(100)).await;
-    let path = write_media(&f, "IMG_0002.jpg", b"fake-jpeg-bytes-2").await;
+    let path = write_media(&f, "2026/08/IMG_0002.jpg", b"fake-jpeg-bytes-2").await;
     wait_until(|| count_eq(&f, 1), "initial ingest").await;
 
     // 从 canonical 布局删除（外部删除语义：用户在 Finder 删）。
@@ -104,11 +109,7 @@ async fn delete_is_reconciled_and_invalidated_emitted() {
     // broadcast 不保留历史——必须在删除前订阅，否则 reconcile 完成时
     // 的 invalidated 会被错过。
     let mut events = f.events.resubscribe();
-    let hex: String = NODE_ID.iter().map(|b| format!("{b:02x}")).collect();
-    let canonical_dir = f.dir.path().join("originals").join(&hex);
-    let canonical_file = find_first_jpg(&canonical_dir);
-    std::fs::remove_file(&canonical_file).unwrap();
-    let _ = path;
+    std::fs::remove_file(&path).unwrap();
 
     // 索引收敛到 0 + 收到 invalidated 事件。
     wait_until(|| count_eq(&f, 0), "reconcile of delete").await;
@@ -157,47 +158,6 @@ async fn ingest_self_events_are_idempotent() {
     );
 }
 
-fn find_first_jpg(dir: &std::path::Path) -> PathBuf {
-    let mut found = None;
-    for entry in std::fs::read_dir(dir).unwrap() {
-        let entry = entry.unwrap();
-        if entry.file_type().unwrap().is_dir() {
-            if let Some(p) = find_first_jpg_opt(&entry.path()) {
-                found = Some(p);
-                break;
-            }
-        } else if entry
-            .file_name()
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .ends_with(".jpg")
-        {
-            found = Some(entry.path());
-            break;
-        }
-    }
-    found.expect("canonical 目录下应找到 jpg")
-}
-
-fn find_first_jpg_opt(dir: &std::path::Path) -> Option<PathBuf> {
-    for entry in std::fs::read_dir(dir).ok()? {
-        let entry = entry.ok()?;
-        if entry.file_type().ok()?.is_dir() {
-            if let Some(p) = find_first_jpg_opt(&entry.path()) {
-                return Some(p);
-            }
-        } else if entry
-            .file_name()
-            .to_string_lossy()
-            .to_ascii_lowercase()
-            .ends_with(".jpg")
-        {
-            return Some(entry.path());
-        }
-    }
-    None
-}
-
 // ---------------------------------------------------------------------------
 // WATCH-02 探针：三种删除形状 + Finder 内部移动。
 // ---------------------------------------------------------------------------
@@ -207,34 +167,33 @@ async fn settle() {
     tokio::time::sleep(Duration::from_millis(1600)).await;
 }
 
-fn device_hex() -> String {
-    NODE_ID.iter().map(|b| format!("{b:02x}")).collect()
-}
+/// 用户自己建的日期目录——库内布局归用户，测试不该假设我们的 canonical 形状。
+const USER_TREE: &str = "2026/08";
 
 #[tokio::test(flavor = "multi_thread")]
-async fn removing_the_whole_device_subtree_is_reconciled() {
-    // 形状二：整棵设备子树被 remove_dir_all（rm -rf 语义）。
+async fn removing_a_whole_subtree_is_reconciled() {
+    // 形状二：整棵子树被 remove_dir_all（rm -rf 语义）。
     let f = setup(Duration::from_millis(100)).await;
-    write_media(&f, "IMG_A.jpg", b"bytes-a").await;
-    write_media(&f, "IMG_B.jpg", b"bytes-b").await;
+    write_media(&f, &format!("{USER_TREE}/IMG_A.jpg"), b"bytes-a").await;
+    write_media(&f, &format!("{USER_TREE}/IMG_B.jpg"), b"bytes-b").await;
     wait_until(|| count_eq(&f, 2), "initial ingest").await;
     settle().await;
 
-    std::fs::remove_dir_all(f.dir.path().join("originals").join(device_hex())).unwrap();
+    std::fs::remove_dir_all(f.dir.path().join("originals/2026")).unwrap();
     wait_until(|| count_eq(&f, 0), "reconcile of whole-subtree removal").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn trashing_the_device_subtree_is_reconciled() {
-    // 形状三：Finder「删除」= 把顶层目录 rename 进 ~/.Trash（同卷改名）。
+async fn trashing_a_subtree_is_reconciled() {
+    // 形状三：Finder「删除」= 把目录 rename 进 ~/.Trash（同卷改名）。
     let f = setup(Duration::from_millis(100)).await;
-    write_media(&f, "IMG_C.jpg", b"bytes-c").await;
-    write_media(&f, "IMG_D.jpg", b"bytes-d").await;
+    write_media(&f, &format!("{USER_TREE}/IMG_C.jpg"), b"bytes-c").await;
+    write_media(&f, &format!("{USER_TREE}/IMG_D.jpg"), b"bytes-d").await;
     wait_until(|| count_eq(&f, 2), "initial ingest").await;
     settle().await;
 
     let trash = f.dir.path().join("trash-outside-originals");
-    std::fs::rename(f.dir.path().join("originals").join(device_hex()), &trash).unwrap();
+    std::fs::rename(f.dir.path().join("originals/2026"), &trash).unwrap();
     wait_until(|| count_eq(&f, 0), "reconcile of trash-style rename").await;
 }
 
@@ -243,15 +202,14 @@ async fn moving_a_file_inside_originals_keeps_it_indexed() {
     // 用户在 Finder 里把照片拖进自建目录（分类）——文件还在库里，
     // 索引必须重新指向新位置，绝不能把行删掉让照片凭空消失。
     let f = setup(Duration::from_millis(100)).await;
-    write_media(&f, "IMG_E.jpg", b"bytes-e").await;
+    let start = write_media(&f, &format!("{USER_TREE}/IMG_E.jpg"), b"bytes-e").await;
     wait_until(|| count_eq(&f, 1), "initial ingest").await;
     settle().await;
 
-    let canonical = find_first_jpg(&f.dir.path().join("originals").join(device_hex()));
     let album = f.dir.path().join("originals").join("我的婚礼");
     std::fs::create_dir_all(&album).unwrap();
     let dest = album.join("IMG_E.jpg");
-    std::fs::rename(&canonical, &dest).unwrap();
+    std::fs::rename(&start, &dest).unwrap();
 
     // 给 watcher 两个防抖窗口收敛，然后断言：文件还在盘上，索引也还在。
     tokio::time::sleep(Duration::from_millis(1600)).await;
@@ -278,13 +236,13 @@ async fn moving_a_file_inside_originals_keeps_it_indexed() {
 async fn whole_subtree_removal_emits_invalidated() {
     // 索引减到位之外，前端要收到 timeline.invalidated 才会重画照片墙。
     let f = setup(Duration::from_millis(100)).await;
-    write_media(&f, "IMG_F.jpg", b"bytes-f").await;
+    write_media(&f, &format!("{USER_TREE}/IMG_F.jpg"), b"bytes-f").await;
     wait_until(|| count_eq(&f, 1), "initial ingest").await;
     settle().await;
 
     // broadcast 不留历史——删除前重新订阅。
     let mut events = f.events.resubscribe();
-    std::fs::remove_dir_all(f.dir.path().join("originals").join(device_hex())).unwrap();
+    std::fs::remove_dir_all(f.dir.path().join("originals/2026")).unwrap();
     wait_until(|| count_eq(&f, 0), "reconcile of whole-subtree removal").await;
 
     let got = tokio::time::timeout(Duration::from_secs(10), async {

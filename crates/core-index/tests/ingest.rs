@@ -275,3 +275,112 @@ async fn duplicate_stays_duplicate_while_the_recorded_file_is_present() {
     assert_eq!(ing.ingest(&f2).await.unwrap(), IngestOutcome::Duplicate);
     assert!(f2.src_path.exists(), "Duplicate 不得动来源文件");
 }
+
+// ---------------------------------------------------------------------------
+// 2026-08-21 宽容落位 + 路径唯一性
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_file_already_inside_originals_is_adopted_where_it_lies() {
+    // 用户在 Finder 里建了「我的婚礼」并把照片放进去 —— 我们只索引，不搬。
+    let (dir, db, ing) = setup().await;
+    let root = dir.path().join("library");
+    let album = root.join("originals/我的婚礼");
+    fs::create_dir_all(&album).unwrap();
+    let placed = album.join("IMG_W.jpg");
+    fs::write(&placed, jpeg_with_exif("2024:06:01 10:00:00")).unwrap();
+
+    let outcome = ing
+        .ingest(&IncomingFile {
+            src_path: placed.clone(),
+            file_name: "IMG_W.jpg".into(),
+            media_type: "image/jpeg".into(),
+            src_device: DEV_A.to_vec(),
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        outcome,
+        IngestOutcome::New("originals/我的婚礼/IMG_W.jpg".into()),
+        "库内文件就地采纳"
+    );
+    assert!(placed.exists(), "用户摆的位置不得被动");
+    assert!(
+        !root.join(format!("originals/{DEV_DIR_A}")).exists(),
+        "不该为库内文件建 canonical 目录"
+    );
+    let page = core_index::timeline_page(&db, None, 10).await.unwrap();
+    assert_eq!(page.assets[0].rel_path, "originals/我的婚礼/IMG_W.jpg");
+}
+
+#[tokio::test]
+async fn a_file_from_outside_still_lands_in_the_canonical_layout() {
+    // 反向守卫：手机上传落在 staging（库外），必须由我们找个家——否则
+    // 宽容落位会把「谁都不搬」当成默认，上传的文件永远留在中转区。
+    let (dir, _db, ing) = setup().await;
+    let f = incoming(
+        dir.path(),
+        "IMG_U.jpg",
+        &jpeg_with_exif("2024:06:02 10:00:00"),
+    );
+    let IngestOutcome::New(rel) = ing.ingest(&f).await.unwrap() else {
+        panic!("expected New");
+    };
+    assert!(
+        rel.starts_with(&format!("originals/{DEV_DIR_A}/")),
+        "库外来源必须按日期布局落位，got {rel}"
+    );
+    assert!(!f.src_path.exists(), "staging 文件已被移走");
+}
+
+#[tokio::test]
+async fn editing_an_indexed_file_leaves_exactly_one_row_at_that_path() {
+    // 用户在 Finder 里改了一张已入库的照片：内容变了 → hash 变了 → 在我们
+    // 眼里是另一张照片。老那条行还指着同一个路径（文件存在，对账不会清它）
+    // —— 必须让位，否则同一个文件被两条行占着，照片墙上出现两次，其中一张
+    // 的缩略图取不出来（thumb 按 hash 存）。
+    let (dir, db, ing) = setup().await;
+    let root = dir.path().join("library");
+    let originals = root.join("originals");
+    fs::create_dir_all(&originals).unwrap();
+    let path = originals.join("IMG_X.jpg");
+
+    fs::write(&path, jpeg_with_exif("2024:06:03 10:00:00")).unwrap();
+    let f = IncomingFile {
+        src_path: path.clone(),
+        file_name: "IMG_X.jpg".into(),
+        media_type: "image/jpeg".into(),
+        src_device: DEV_A.to_vec(),
+    };
+    assert!(matches!(
+        ing.ingest(&f).await.unwrap(),
+        IngestOutcome::New(_)
+    ));
+    let first_hash = db.list_asset_paths().await.unwrap()[0].0.clone();
+
+    // 就地编辑（内容变了，路径没变）。
+    // 改内容（换个合法的 EXIF 时间即可——字节不同就是另一份内容）。
+    fs::write(&path, jpeg_with_exif("2024:06:03 11:22:33")).unwrap();
+    assert!(matches!(
+        ing.ingest(&f).await.unwrap(),
+        IngestOutcome::New(_)
+    ));
+
+    let rows = db.list_asset_paths().await.unwrap();
+    assert_eq!(rows.len(), 1, "一个路径只能被一条索引行占用");
+    assert_eq!(rows[0].1, "originals/IMG_X.jpg");
+    assert_ne!(rows[0].0, first_hash, "留下的必须是新内容那条");
+    // 审计如实记「原地被替换」，不是「外部删除」。
+    let n: i64 = sqlx_count(&db, "asset.replaced_in_place").await;
+    assert_eq!(n, 1, "让位必须留审计");
+}
+
+async fn sqlx_count(db: &Db, action: &str) -> i64 {
+    db.list_audit(500)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|r| r.entry.action == action)
+        .count() as i64
+}
