@@ -1,5 +1,7 @@
 # MOB-07 部分授权全局提示（tab 红点 + 复用哨兵通知模式）　级别 L1【backlog，不排期——用户 2026-08-14 明确指示"现在先不做，在做 UI 重构"，等桌面壳 Tailwind 迁移(DESK-07)收尾后再看】
 
+> ⏸ **backlog，不排期**（用户 2026-08-14：「现在先不做」）。级别 L1。
+
 背景：2026-08-14 真机实测确认——手机只授权部分相册（Android 14+
 `READ_MEDIA_VISUAL_USER_SELECTED`）时，WorkManager 内容触发器照样会
 被唤醒（JobScheduler 实测证据：唤醒后 `app called jobFinished` 正常
