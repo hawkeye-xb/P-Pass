@@ -130,6 +130,13 @@ TTL 取一小时的下界理由：一轮备份里会话被 touch 的**最大间�
 需要会话（`manifest` 自己 `entry().or_default()`）。但**daemon 侧的修复必须
 独立成立**：旧版 APK 打新 daemon 也不能坏。
 
+⚠️ **`begin` 被当 ping 用的地方不止一处。** 收尾时 grep 出第三个调用点：
+`PairFlow.kt:76` 拿 `backup.begin` 当**成员权限探针**（注释原文：
+"backup.begin is member-gated: an ok means we're recognised"）。也就是说旧
+代码下「备份途中扫一次配对码」同样会清空会话。这条不动（daemon 侧已经非
+破坏化，它现在无害），但它正是**修必须落在 daemon 侧、不能只改手机**的证据：
+一个 RPC 一旦被当成「便宜的探针」，它有几个调用方就是不可知的。
+
 ### ①附带：commit 的拉取回退加 `provider` 门（审出来的回归）
 
 `begin` 不再清空会话之后，**新出现一条风险**：上一轮声明过、但手机上已经被
@@ -233,4 +240,14 @@ daemon 重启会丢 `delivered` 台账 → 重启前交付、重启后 commit �
 
 - 跑一次完整备份，**中途打开 App**（触发校准）→ 照片数必须全部到位
 - 收尾后 `du -sh "<库>/.ppf/staging"` 必须是 0
-- 存量孤儿：启动时 daemon 日志应有 `MOB-32: 回收 staging 孤儿 …`
+
+⚠️ **两条剧本上的实话，别拿它们当失败信号：**
+
+1. **不会看到「回收 staging 孤儿」那行日志。** 库已被 `reset-local.sh` 整体
+   删掉，白板环境没有存量孤儿。想看现场就人工造一个：daemon 启动前往
+   `.ppf/staging` 放个裸文件、`touch -t` 把 mtime 拨到一小时前。存量回收本身
+   由 `reclaim_sweeps_orphans_past_the_grace_window` 钉死。
+2. **真机踩不到 `begin` 保活那条路了。** 新 APK 的校准不再发 `begin`，所以
+   「备份途中打开 App」在真机上只会打一次 manifest-only 的校准。旧 APK 的
+   形状由 `a_calibration_mid_upload_does_not_lose_the_session` 钉死（那个测试
+   **特意照旧发 begin**）。⚠️ 不要为了让真机踩到就把 `begin` 加回去。
