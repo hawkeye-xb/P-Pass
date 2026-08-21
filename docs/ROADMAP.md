@@ -444,6 +444,24 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       与失败红卡「再试一次」两个触点，`manual_backup_entry` 是死文案——所以本卡
       真正修的是"在失败红卡上反复点再试一次而永远好不了"。
       247/247 + 27 条反证全红。
+- [x] DESK-08 活动流用时间戳当 each key，同毫秒的审计撞键把整块打挂 — **2026-08-21（真机确认 owed）**:
+      用户控制台刷屏 `each_key_duplicate: 1787292449250:asset.removed_external`。
+      一次在 Finder 删 5 张 → WATCH-02 的对账把 5 条 `asset.removed_external`
+      写在**同一毫秒** → `{#each visibleAudit as e (e.ts + ":" + e.action)}` 撞键
+      → **整个活动流渲染不出来**。**时间戳不是身份，主键才是**：`audit_log` 有
+      自增主键、`AuditRecord` 一直带着 `id`，只是 `ipc.rs` 的 `audit.list` 没往
+      外传。改法：IPC 每行加 `"id": r.id`，前端两处 each key + `backupDuration`
+      查表全换成 `e.id`。
+      ⚠️ **这个 bug 是 WATCH-02 的修复踩响的**——WATCH-02 修好之前整棵子树的删除
+      对账一行都查不出来，所以从来不会有 N 条同毫秒的删除审计。
+      **修好一个 bug 会让下游的 bug 第一次有机会发生。**
+      ⚠️ 按 E2E-02 的教训查了「还有几个同形的」：全文只有 3 处 keyed each，
+      另两处是 `g.key`（按月分组）和 `item.hash`（asset 主键），都唯一，没有第四处。
+      反证 3/3 全红。⚠️ D2 当场抓到我自己写窄的守卫：只断言了读侧
+      `backupDuration[e.ts`，写侧 `out[...]` 改回去照样绿 → 改成夹出函数体、
+      读写两侧一起断言（「函数级断言必须夹出函数体」第三次复发）。
+      `just ci` 全绿，Rust 314/314，前端 vitest 18/18（桌面端测试从 8 条涨到 18）。
+      挂账：真机删 N 张后活动记录页 N 条都在、控制台无报错（用户）。
 - [ ] MOB-29 「已备份」记录在两次备份之间说谎（墓碑 + 客户端常驻提示）— **⛔ 未实施，卡在一处用户裁决**:
       桌面端删掉手机备份的照片后，手机仍报「已备份」，下一轮又原样传回来。
       ⚠️ **2026-08-21 真机证实**：14:07 手动删 5 张 → 14:08 那轮 `ingested=11

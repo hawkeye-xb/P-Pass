@@ -800,3 +800,63 @@ fn now() -> i64 {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
+
+/// DESK-08：同一毫秒写进去的 N 条审计，`audit.list` 必须给出 **N 个互不相同
+/// 的 id**。
+///
+/// 现场：WATCH-02 一次删 5 张照片 → 5 条 `asset.removed_external` 全落在
+/// `ts=1787292449250`。桌面端活动流的 `#each` 用 `ts + ":" + action` 当 key，
+/// 撞键 → Svelte 抛 `each_key_duplicate` → **整个活动流挂掉**。
+/// 时间戳不是身份，主键才是。
+#[tokio::test(flavor = "multi_thread")]
+async fn audit_rows_in_the_same_millisecond_get_distinct_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "audit-ids").await;
+    let mut c = IpcClient::connect(&socket, &token).await;
+
+    // 五条一模一样的动作、一模一样的时间戳——就是用户撞到的那个形状。
+    const SAME_MS: i64 = 1_787_292_449_250;
+    for i in 0..5 {
+        db.append_audit(&storage::AuditEntry {
+            ts: SAME_MS,
+            actor: None,
+            action: "asset.removed_external".into(),
+            target_hash: None,
+            detail: Some(format!("originals missing: originals/x/{i}.jpg")),
+        })
+        .await
+        .unwrap();
+    }
+
+    let resp = c.call("audit.list", serde_json::Value::Null).await;
+    assert!(resp.ok, "{resp:?}");
+    let events = resp.result.unwrap()["events"].as_array().unwrap().clone();
+    let removed: Vec<_> = events
+        .iter()
+        .filter(|e| e["action"] == "asset.removed_external")
+        .collect();
+    assert_eq!(removed.len(), 5, "五条都该回来");
+
+    let mut ids: Vec<i64> = removed
+        .iter()
+        .map(|e| {
+            e["id"]
+                .as_i64()
+                .expect("每条审计都必须带 id——前端拿它做 each key")
+        })
+        .collect();
+    let before = ids.len();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        before,
+        "同毫秒的审计行 id 必须互不相同，否则前端 each key 撞键、活动流整块挂掉",
+    );
+
+    // 顺带钉死：ts 确实全都一样——否则这个测试根本没测到撞键的前提。
+    assert!(
+        removed.iter().all(|e| e["ts"].as_i64() == Some(SAME_MS)),
+        "前提失效：五条的 ts 必须相同，测试才在测撞键",
+    );
+}

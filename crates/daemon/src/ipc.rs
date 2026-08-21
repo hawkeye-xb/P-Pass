@@ -674,6 +674,13 @@ impl IpcServer {
                             .iter()
                             .map(|r| {
                                 serde_json::json!({
+                                    // DESK-08：审计行的**唯一身份**（audit_log 主键）。
+                                    // 之前不往外传，前端只能拿 `ts + action` 拼 key
+                                    // ——WATCH-02 一次删 N 张会在**同一毫秒**写 N 条
+                                    // `asset.removed_external`，key 立刻撞，Svelte 抛
+                                    // `each_key_duplicate` 整个活动流挂掉。
+                                    // 时间戳不是身份，主键才是。
+                                    "id": r.id,
                                     "ts": r.entry.ts,
                                     "action": r.entry.action,
                                     "actor": r.entry.actor.as_ref().map(|b| hex(b)),
