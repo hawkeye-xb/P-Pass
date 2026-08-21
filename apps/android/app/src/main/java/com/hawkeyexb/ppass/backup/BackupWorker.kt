@@ -112,6 +112,20 @@ const val KEY_FULL_RESCAN = "ppass.backup.full_rescan"
 const val KEY_PHASE = "ppass.backup.phase"
 const val KEY_DONE = "ppass.backup.done"
 const val KEY_TOTAL = "ppass.backup.total"
+
+/**
+ * MOB-31: 这次运行**结束的时刻**（`System.currentTimeMillis()`）。
+ *
+ * 存在的理由：备份有五条通道（auto / catchup / process-catchup / manual /
+ * media-watch），各自独立 unique name，**终态记录会同时躺在 WorkManager 里
+ * 最多五条**，而它们共用同一个 tag。`getWorkInfosByTagFlow` **不保证按时间
+ * 排序**（Room 查询顺序，实际按 UUID），所以「拿列表最后一个」等于随机挑
+ * 一条——用户 2026-08-21 真机撞到的正是这个：刚同步完 12 张，界面报
+ * 「186 张」，那是 8/20 那次全量运行留下的旧记录。
+ *
+ * 有了这个时间戳，[uiStateOf] 才能挑出**真正最近**的那一条。
+ */
+const val KEY_FINISHED_AT = "ppass.backup.finishedAt"
 const val KEY_FILE = "ppass.backup.file"
 const val PHASE_SCANNING = "scanning"
 const val PHASE_HASHING = "hashing"
@@ -366,10 +380,10 @@ class BackupWorker(
         // MOB-19: 手动触发（事件⑥）带的两个专属语义之一——见 KEY_FULL_RESCAN。
         val fullRescan = inputData.getBoolean(KEY_FULL_RESCAN, false)
         val pairing = PairingStore(ctx.filesDir).load()
-            ?: return Result.success() // not paired yet — nothing to do
+            ?: return successStamped() // not paired yet — nothing to do
         // MOB-15: 暂停态下任何通道都不跑（进程启动补捞会在 App 冷启时
         // enqueue，这里是第二道闸——UX-06 的「暂停」必须真的停住）。
-        if (AutoBackupPrefs(ctx.filesDir).paused()) return Result.success()
+        if (AutoBackupPrefs(ctx.filesDir).paused()) return successStamped()
 
         // DOG-01c: 自动备份也走同一确认缓存（M 口径一致，不能只靠手动备份）。
         val confirmedStore = ConfirmedStore(
@@ -410,7 +424,7 @@ class BackupWorker(
             // 反馈——静默 success 会让界面说「照片都存好了」，那是假话。
             if (bucketIds != null && bucketIds.isEmpty()) {
                 attempts.reset()
-                return Result.success(workDataOf(KEY_NO_ALBUMS to true))
+                return successStamped(KEY_NO_ALBUMS to true)
             }
             // MOB-19 事件⑥：手动触发忽略水位、重扫选中相册全部（「选相册」
             // 与「发起备份」是两个动作）。自动触发恒为增量。
@@ -421,7 +435,7 @@ class BackupWorker(
             if (scan.items.isEmpty()) {
                 attempts.reset() // 无新照片也算成功一轮——连续失败清零
                 nudge.recordSuccess() // DOG-02b: 成功一轮状态清零
-                return Result.success(workDataOf(KEY_INGESTED to 0, KEY_DUPLICATES to 0))
+                return successStamped(KEY_INGESTED to 0, KEY_DUPLICATES to 0)
             }
             batchSize = scan.items.size
 
@@ -484,7 +498,7 @@ class BackupWorker(
                 // 坏行随之被永久跳过——这正是本卡要的：一条脏数据不许挡住其余。
                 attempts.reset()
                 nudge.recordSuccess()
-                return Result.success()
+                return successStamped()
             }
             val sendProgress = ProgressThrottle()
             val report = BackupRunner(client).run(
@@ -524,8 +538,9 @@ class BackupWorker(
             attempts.reset() // 成功——连续失败清零
             nudge.recordSuccess() // DOG-02b: 成功一轮状态清零
             // MOB-19: 终态带上数字——界面要说「新增 N 张」，不能只说"好了"。
-            Result.success(
-                workDataOf(KEY_INGESTED to report.ingested, KEY_DUPLICATES to report.duplicates)
+            successStamped(
+                KEY_INGESTED to report.ingested,
+                KEY_DUPLICATES to report.duplicates,
             )
         } catch (t: CancellationException) {
             // MOB-08: 系统 stop（配额耗尽/约束丢失/FGS 被收回/执行超时）
@@ -561,7 +576,12 @@ class BackupWorker(
                 }
                 // T-083 红线：主文案永不带代码——这串只去两个地方，默认收起
                 // 的「查看技术详情」折叠区，和上面那句 Log.w。
-                Result.failure(workDataOf(KEY_ERROR to t.toString().take(500)))
+                Result.failure(
+                    workDataOf(
+                        KEY_ERROR to t.toString().take(500),
+                        KEY_FINISHED_AT to System.currentTimeMillis(),
+                    )
+                )
             }
         } finally {
             // MOB-08: client.close() 是 suspend——协程已被取消时直接抛
@@ -730,6 +750,13 @@ class BackupWorker(
      *  则静默跳过（三元组显示缓存值，下次再校准）。
      *  SENT-01: 返回是否确认可达（成功交互=true；不可达/无缓存可查
      *  =false——调用方据此记哨兵可达性）。 */
+    /** MOB-31: 所有成功终态都必须经过这里——[KEY_FINISHED_AT] 少盖一处，
+     *  [uiStateOf] 就会把那次运行当成"上古记录"永远选不中它。 */
+    private fun successStamped(vararg extras: Pair<String, Any?>): Result =
+        Result.success(
+            workDataOf(*extras, KEY_FINISHED_AT to System.currentTimeMillis())
+        )
+
     private suspend fun calibrateIfReachable(
         client: DaemonClient,
         daemon: PeerAddrParts,

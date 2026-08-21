@@ -223,9 +223,28 @@ internal fun uiStateOf(infos: List<androidx.work.WorkInfo>): BackupUiState? {
             else -> BackupUiState.Scanning(0)
         }
     }
-    // 没有在跑的，看最近一条终态。ENQUEUED（等约束）不改状态行——
+    // 没有在跑的，看**最近**一条终态。ENQUEUED（等约束）不改状态行——
     // 手动触发是零约束不会排队；自动触发排队时界面另有「已排队」提示行。
-    val last = infos.lastOrNull { it.state.isFinished } ?: return null
+    //
+    // ⚠️ MOB-31（2026-08-21 真机）：这里原本是 `infos.lastOrNull { … }`，
+    // 取的是**列表最后一个元素**。备份有五条通道（auto / catchup /
+    // process-catchup / manual / media-watch），各自独立 unique name，
+    // **终态记录会同时躺着最多五条**，而它们共用同一个 tag；
+    // `getWorkInfosByTagFlow` **不保证按时间排序**（Room 查询顺序，实际
+    // 按 UUID）。于是「拿最后一个」= 随机挑一条：用户刚同步完 12 张，
+    // 界面报「186 张」——那是前一天那次全量运行留下的旧记录。
+    //
+    // 现在按 worker 盖的 [KEY_FINISHED_AT] 选最大值。没有戳的记录
+    // （升级前的存量、CANCELLED 拿不到 outputData）视为最旧，只有在
+    // **一条戳都没有**时才退回旧的列表顺序口径（升级首帧不至于空白）。
+    val finished = infos.filter { it.state.isFinished }
+    if (finished.isEmpty()) return null
+    val stamped = finished.filter { it.outputData.getLong(KEY_FINISHED_AT, 0L) > 0L }
+    val last = if (stamped.isEmpty()) {
+        finished.last()
+    } else {
+        stamped.maxByOrNull { it.outputData.getLong(KEY_FINISHED_AT, 0L) }!!
+    }
     return when {
         last.state == androidx.work.WorkInfo.State.FAILED ->
             BackupUiState.Trouble(last.outputData.getString(KEY_ERROR) ?: "")

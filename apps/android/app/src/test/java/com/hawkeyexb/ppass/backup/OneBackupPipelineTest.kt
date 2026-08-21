@@ -152,9 +152,10 @@ class OneBackupPipelineTest {
         // 在终态里带 KEY_NO_ALBUMS，否则界面按"成功且 0 张"渲染成
         // 「照片都存好了」——那是假话（什么都没备，不是都备好了）。
         val w = src("backup/BackupWorker.kt")
+        // MOB-31 起所有成功终态都过 successStamped()（盖 KEY_FINISHED_AT）。
         assertTrue(
             "空相册必须显式发 NO_ALBUMS 终态",
-            w.contains("Result.success(workDataOf(KEY_NO_ALBUMS to true))"),
+            w.contains("successStamped(KEY_NO_ALBUMS to true)"),
         )
         assertTrue(
             "判据是空集而不是 null（null = 全量语义，不是没选）",
@@ -218,6 +219,102 @@ class OneBackupPipelineTest {
         // 界面必须立刻有反应，不能沉默（点了没动静 = 以为坏了）。
         val s = uiStateOf(listOf(info(WorkInfo.State.RUNNING)))
         assertTrue("必须已经在'动'", s is BackupUiState.Scanning)
+    }
+
+    // ── MOB-31: 终态必须按时间挑，不能拿列表最后一个 ──
+
+    private fun done(ingested: Int, finishedAt: Long) = info(
+        WorkInfo.State.SUCCEEDED,
+        output = Data.Builder()
+            .putInt(KEY_INGESTED, ingested)
+            .putInt(KEY_DUPLICATES, 0)
+            .putLong(KEY_FINISHED_AT, finishedAt)
+            .build(),
+    )
+
+    @Test
+    fun every_terminal_outcome_carries_a_finish_stamp() {
+        // MOB-31 的真正风险不是这次改错，是**以后有人加一个新的终态返回点
+        // 而忘了盖戳**——那条路径在 uiStateOf 眼里永远是"上古记录"，
+        // 永远选不中，界面就会继续显示别的通道的旧数字。
+        val w = src("backup/BackupWorker.kt")
+        // ⚠️ 断言必须夹在 successStamped 的函数体内。整文件 contains 是恒真式
+        // ——失败分支里也有同一串，把成功分支的戳删掉照样绿（反证抓到过）。
+        val body = sliceBetween(w, "private fun successStamped(", "private suspend fun calibrateIfReachable(")
+        assertTrue(
+            "successStamped 必须盖 KEY_FINISHED_AT",
+            body.contains("KEY_FINISHED_AT to System.currentTimeMillis()"),
+        )
+        // 除了 successStamped 自己那一处，正文里不许再出现裸 Result.success。
+        val bare = Regex("""(?<!fun )Result\.success\(""").findAll(w).count()
+        assertEquals(
+            "成功终态只能经由 successStamped()（裸 Result.success 只允许它内部那一处）",
+            1, bare,
+        )
+        assertTrue(
+            "失败终态也要盖戳（失败也是最近发生的事）",
+            w.contains("KEY_ERROR to t.toString().take(500),"),
+        )
+    }
+
+    @Test
+    fun the_most_recent_finished_run_wins_regardless_of_list_order() {
+        // 用户 2026-08-21 真机：刚同步完 12 张，界面报「186 张」——那是前一天
+        // 那次全量运行留下的旧记录。五条通道各有独立 unique name，终态同时
+        // 躺着最多五条，而 getWorkInfosByTagFlow 不保证按时间排序。
+        val old = done(ingested = 186, finishedAt = 1_000L)
+        val fresh = done(ingested = 12, finishedAt = 2_000L)
+
+        // 新的排在前面（旧的是列表最后一个）——旧口径会挑中 186。
+        assertEquals(
+            BackupUiState.AllSafe(12, 0),
+            uiStateOf(listOf(fresh, old)),
+        )
+        // 顺序反过来结果必须一样。
+        assertEquals(
+            BackupUiState.AllSafe(12, 0),
+            uiStateOf(listOf(old, fresh)),
+        )
+    }
+
+    @Test
+    fun five_channels_of_history_still_yield_the_newest() {
+        val infos = listOf(
+            done(ingested = 186, finishedAt = 1_000L),
+            done(ingested = 0, finishedAt = 1_500L),
+            done(ingested = 12, finishedAt = 9_000L), // 最近
+            done(ingested = 3, finishedAt = 2_000L),
+            done(ingested = 40, finishedAt = 500L),
+        )
+        assertEquals(BackupUiState.AllSafe(12, 0), uiStateOf(infos))
+    }
+
+    @Test
+    fun unstamped_history_never_beats_a_stamped_run() {
+        // 升级前的存量终态没有时间戳（也拿不到 CANCELLED 的 outputData）
+        // ——它们必须算最旧，否则一条上古记录会永久盖住新结果。
+        val legacy = info(
+            WorkInfo.State.SUCCEEDED,
+            output = Data.Builder().putInt(KEY_INGESTED, 186).putInt(KEY_DUPLICATES, 0).build(),
+        )
+        val fresh = done(ingested = 12, finishedAt = 2_000L)
+        assertEquals(BackupUiState.AllSafe(12, 0), uiStateOf(listOf(fresh, legacy)))
+        assertEquals(BackupUiState.AllSafe(12, 0), uiStateOf(listOf(legacy, fresh)))
+    }
+
+    @Test
+    fun all_unstamped_falls_back_to_list_order_not_null() {
+        // 升级后首帧可能全是没戳的存量记录——不能因此变空白。
+        // 两条而不是一条：只有一条时任何挑法结果都一样，那是弱断言。
+        fun legacy(n: Int) = info(
+            WorkInfo.State.SUCCEEDED,
+            output = Data.Builder().putInt(KEY_INGESTED, n).putInt(KEY_DUPLICATES, 0).build(),
+        )
+        assertEquals(
+            "全是存量记录时退回旧口径（列表最后一个），而不是空白",
+            BackupUiState.AllSafe(7, 0),
+            uiStateOf(listOf(legacy(186), legacy(7))),
+        )
     }
 
     @Test

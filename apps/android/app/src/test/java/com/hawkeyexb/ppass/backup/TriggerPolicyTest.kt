@@ -130,9 +130,10 @@ class TriggerPolicyTest {
         // UX-06 + MOB-15：暂停必须真的停住。进程启动补捞会在冷启时 enqueue，
         // 所以 doWork 内部需要第二道闸——否则「暂停自动备份」被进程重启绕过。
                 val worker = codeOf(File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"))
+        // MOB-31 起成功终态统一走 successStamped()（盖 KEY_FINISHED_AT）。
         assertTrue(
             "doWork 必须有暂停态早退",
-            worker.contains("if (AutoBackupPrefs(ctx.filesDir).paused()) return Result.success()"),
+            worker.contains("if (AutoBackupPrefs(ctx.filesDir).paused()) return successStamped()"),
         )
         val pauseBody = worker.substringAfter("fun pauseAutoBackup(").substringBefore("fun resumeAutoBackup(")
         assertTrue(
