@@ -810,3 +810,36 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   **测试不该假设我们的布局形状**，那正是 WATCH-02 里「测试形状 ≠ 用户操作形状」
   的同一个错。顺带删掉两个失去意义的辅助函数（clippy dead-code 报出来的）。
 - **验证**：Rust 305/305，`just ci` 全绿，反证 5/5 全红。
+
+## 真机三条反馈：MOB-29/30/31（2026-08-21）
+
+- **先证伪再修**。用户报「同步完成后执行了一个全量同步，不知道是显示问题还是
+  正在执行」。我先证明**不是在执行**：`WorkProgress` 表零行、存储端审计零
+  ingest、库里行数不变、`ppass-auto-backup` 从 11:22:05 排队至今一次没跑过。
+  确认是显示问题之后才动代码。**「是不是真在跑」比「为什么会这样」先回答。**
+- **MOB-31 的根因是一个集合语义误用**：`infos.lastOrNull { isFinished }` 取列表
+  最后一个，而 `getWorkInfosByTagFlow` 不保证按时间排序（Room 顺序，实际按
+  UUID），五条通道的终态同时躺着 → 随机挑一条历史记录。⚠️ **凡是"最近一条"
+  这种语义，都要问一句"按什么排序"** —— 集合 API 不给你时间顺序。
+- **adb 直读设备状态比看日志快一个数量级**。这轮全部证据都是这么拿的：
+  `confirmed.json`（手机的已备份集）、`backup_scope.xml`（相册范围）、
+  WorkManager 的 `androidx.work.workdb`（**在 `no_backup/` 不在 `databases/`**，
+  `WorkSpec.output` 能解出每次 run 真实上报的 ingested）、`content query` 数
+  相册张数。再把 `confirmed` 与 `select hex(hash) from asset` 求交集，
+  **直接量出「手机撒谎的张数」= 185**。这个手法记进 NEXT 了。
+- **MOB-30 的改法有一处不显眼的记账坑**：逐张入库之后，`commit` 循环里那句
+  「已在索引里 → duplicates++」会把上传阶段刚入库的**再数一遍**。所以 Session
+  除了 `ingested`/`duplicates` 还需要一个 `settled` 集合让 commit 跳过且不计数。
+  ⚠️ 改数据流时，**顺带检查所有依赖"索引里有没有"做判断的分支**。
+- **抽公共实现是硬要求不是洁癖**。`ingest_one` 让上传路径与 commit 路径共用
+  一份单条入库逻辑——MOB-19 手动/自动两条备份管线漂移的教训还热着。
+- **我又栽在 grep 过滤器上**。`./gradlew ... | grep -E "^e:|error:"` 没输出，
+  我报告「编译过了」；实际 gradle 打的是 `Unable to locate a Java Runtime`，
+  **根本没跑起来**。⚠️ **grep 没匹配到 ≠ 成功**，要看退出码或 BUILD SUCCESSFUL。
+  这与 8/20 那次「`grep -c` 数 dumpsys 把历史记录算进去」是同一类错误。
+- **反证又抓到我自己两个恒真式**：①「终态必须盖时间戳」原本对整个文件
+  `contains`，而失败分支里有同一串，把成功分支的戳删掉照样绿——改成夹在
+  `successStamped` 函数体内断言；②「全无戳退回列表顺序」原本只放**一条**存量
+  记录，一条时任何挑法结果都一样。⚠️ **断言要夹边界；样本要足以区分**。
+- **验证**：android 252/252、Rust 307/307、`just ci` 全绿，MOB-31 反证 4/4、
+  MOB-30 反证 4/4。
