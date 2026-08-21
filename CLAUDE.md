@@ -30,6 +30,24 @@
 
 速度优先阶段到有外部用户/第二个贡献者为止，届时恢复走 PR。
 
+## 凭据与构建归属（2026-08-21 用户定调）
+
+> 「我们构建的任务和需要的账号证书，都只在 GitHub，其它本地不保留，
+> 你也不用保留，本地能跑的就跑就好了。」
+
+- **账号 / 证书 / 签名密钥只以 GitHub Secrets 形式存在。** 不在开发机上装证书、
+  导密钥、配 keystore；不用 debug key 去签 release 产物凑数。
+- **本地只做跑得动的**：`just ci`、Android debug APK + 单测、桌面 dev 壳 +
+  vitest。**本地 release 构建不是目标**——macOS 缺
+  `TAURI_SIGNING_PRIVATE_KEY`、Android release APK 未签名，这些是"无凭据
+  路径"的**预期行为，不是待修的 bug**，别去修它。
+- 要可安装的正式产物 → `gh workflow run release.yml -f platforms=android,macos`，
+  由 CI 签名产出。
+- 当前槽位实况：`ANDROID_KEYSTORE_*` ✅、`UPDATE_SIGNING_KEY` ✅、
+  `APPLE_CERT_P12` / `APPLE_NOTARY_*` / `APPLE_TEAM_ID` ❌（补需用户本人操作，
+  操作单 `docs/runbook/h02-apple-signing.md`；没有 Apple 会员就先不做，
+  家人「右键→打开」过 Gatekeeper 完全可行）。
+
 ## 工具链纪律（2026-08-21 事故后加）
 
 - **版本只许有一个真相**：Rust 看 `rust-toolchain.toml`（已钉 `1.98.0`，

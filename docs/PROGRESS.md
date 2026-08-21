@@ -968,3 +968,19 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
 - ⚠️ 顺带一个操作失误：我同时起了后台和前台两个 `rustup update`，两者抢同一个
   下载目录，报 `could not rename downloaded file ... No such file or directory`。
   **看着像磁盘权限问题，其实是我自己制造的竞态。**
+
+## 2026-08-21（收口）凭据归属定调：只在 GitHub
+
+- 用户定调：**「构建的任务和需要的账号证书，都只在 GitHub，其它本地不保留，
+  你也不用保留，本地能跑的就跑就好了。」** 已写进 `CLAUDE.md`（新增「凭据与构建
+  归属」一节）、`docs/CHECKLIST.md`、以及 agent 的长期记忆。
+- ⚠️ **这条同时关掉了一整类假问题**：本地 release 构建出不了可安装产物
+  （macOS 缺 `TAURI_SIGNING_PRIVATE_KEY`、Android APK 未签名）**不是缺陷，
+  是设计**——以后别再去"修"它。`BUILD-01` 的范围据此收窄：只保「别让 JDK 漂移
+  把 debug 构建和单测搞坏」，`assembleRelease` 移出范围。
+- **顺手把 secret 实况从仓库历史里核实了**（不是猜）：`ANDROID_KEYSTORE_*` 与
+  `UPDATE_SIGNING_KEY` 已配（`v0.2.1-test.2` run 30950901275 四 job 全绿，
+  Android signed APK + Sign update manifest 两步都 success）；`APPLE_*` 未配
+  （T-071 原话「无凭据路径 codesign 步干净跳过」「凭据路径待 H-02」）。
+  ⚠️ **「有没有配」这种问题，答案往往就躺在自己的 PROGRESS 里**——比猜、比问
+  都快，而且有据。

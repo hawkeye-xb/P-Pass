@@ -202,17 +202,42 @@ gh run list --limit 12
 ⚠️ 按仓库 tag 纪律，测试构建**只用 `workflow_dispatch`**，不给它打真 tag
 （8/9 一个周末烧掉八个 test tag 是反面教材）。
 
-### 本地正式构建产物（2026-08-21 15:00 跑的）
+### 凭据与构建归属（2026-08-21 定调）
 
-| 平台 | 产物 | 能不能拿去测 |
+> 「构建的任务和需要的账号证书，都只在 GitHub，其它本地不保留，本地能跑的就跑
+> 就好了。」
+
+**本地只跑跑得动的**：`just ci` · Android debug APK + 单测 · 桌面 dev 壳 + vitest。
+**本地 release 构建不是目标** —— 下面这两条是"无凭据路径"的**预期行为，不是待修
+的 bug**：
+
+| 平台 | 本地跑出来的 | 说明 |
 |---|---|---|
-| macOS | `apps/desktop/src-tauri/target/release/bundle/macos/P-Pass.app` | ✅ 可以。内置 `ppf-daemon` 已核对含 MOB-32 + DESK-08 |
-| Android | `apps/android/app/build/outputs/apk/release/app-release-unsigned.apk` | ⚠️ **未签名，装不上**。真机测试继续用已装的 debug APK，或等 CI 的 release.yml 出签名包 |
+| macOS | `.../bundle/macos/P-Pass.app` 出得来，updater 的 `.tar.gz` 签名步报错 | 缺 `TAURI_SIGNING_PRIVATE_KEY`。`.app` 本身没问题，内置 `ppf-daemon` 已核对含 MOB-32 + DESK-08 |
+| Android | `app-release-unsigned.apk` | **未签名装不上**。真机继续用 debug APK |
 
-两个"报错"都是**无凭据路径**，不是构建坏了：macOS 缺
-`TAURI_SIGNING_PRIVATE_KEY`（只影响 updater 的 `.tar.gz`，`.app` 本身没问题），
-Android 缺 release 签名配置。Android 还额外踩了 `BUILD-01`（本地 JDK 25 让
-`lintVitalAnalyzeRelease` 炸，CI 钉 JDK 17 不受影响）。
+**要可安装的正式产物就走 CI**：`gh workflow run release.yml -f platforms=android,macos`。
+
+#### GitHub Secrets 实况（仓库历史记录里核实的，不是猜的）
+
+| 凭据 | 状态 | 证据 |
+|---|---|---|
+| `ANDROID_KEYSTORE_BASE64/ALIAS/PASSWORD` | ✅ 已配 | `v0.2.1-test.2`（run 30950901275）**Android signed APK** job success |
+| `UPDATE_SIGNING_KEY` | ✅ 已配 | 同一次 **Sign update manifest** step success |
+| `APPLE_CERT_P12` / `APPLE_NOTARY_*` / `APPLE_TEAM_ID` | ❌ 未配 | T-071 原话「无凭据路径 codesign 步干净跳过」「凭据路径待 H-02」 |
+| `VT_API_KEY` / `CLOUDFLARE_*` | ⚠️ 无记录 | 门控写的是缺就跳过 |
+
+所以**现在跑 release.yml**：Android 出**签名 APK 能直接装**；macOS 出 `.app`/`.dmg`
+但**未签名未公证**，家人装的时候「右键 → 打开」过 Gatekeeper。
+
+- [ ] **补 Apple 签名（需要你本人，可选）** —— 操作单
+      [`docs/runbook/h02-apple-signing.md`](runbook/h02-apple-signing.md)，
+      10–15 分钟，前提是 Apple Developer Program（$99/年）。
+      runbook 自己写着：没有会员就先不做，只在公开发布前是硬性的。
+      ⚠️ 导出证书需要钥匙串的交互授权弹窗，**agent 代不了**。
+- [ ] **确认 `release-signing` 审批门** —— macOS job 挂了
+      `environment: release-signing`。如果你加过 required reviewer，那个 job
+      会停下来等你点批准。
 
 ### 测试规模现状
 
