@@ -3,7 +3,7 @@
     <string name="app_name">P-Pass</string>
 
     <string name="welcome_headline">照片，\n自动回家。</string>
-    <string name="welcome_sub">手机照片自动备份到你家里的电脑。没有云端、没有账号、没有月费。</string>
+    <string name="welcome_sub">手机照片自动备份到你家里的电脑。没有云端、没有账号——回家备份永远免费。</string>
     <string name="welcome_scan">扫码连接家里的电脑</string>
     <!-- T-080 layout v1: 首屏三步说明 -->
     <string name="welcome_step1">1 · 在家里电脑上打开 P-Pass</string>
