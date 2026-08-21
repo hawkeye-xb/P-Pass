@@ -462,6 +462,13 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       读写两侧一起断言（「函数级断言必须夹出函数体」第三次复发）。
       `just ci` 全绿，Rust 314/314，前端 vitest 18/18（桌面端测试从 8 条涨到 18）。
       挂账：真机删 N 张后活动记录页 N 条都在、控制台无报错（用户）。
+- [ ] BUILD-01 本地 JDK 25 让 Android release 构建挂在 lint — **⛔ 未实施（L3，不影响 CI）**:
+      `brew --prefix openjdk` = openjdk 25.0.1，AGP 的 lint 吃不下，异常里只吐
+      一个 `> 25.0.1`——**看着完全不像版本问题**（我第一眼当成签名配置缺失）。
+      CI 钉 `java-version: "17"` 不受影响；debug 构建与单测在 25 上也正常，
+      只有 release 的 `lintVital` 会炸。`justfile` 的 `android-test` 写死
+      `JAVA_HOME=$(brew --prefix openjdk)`，等于本地工具链跟着 brew 最新版漂。
+      倾向改法：钉 `/usr/libexec/java_home -v 17` + 加前置检查报人话。
 - [ ] MOB-29 「已备份」记录在两次备份之间说谎（墓碑 + 客户端常驻提示）— **⛔ 未实施，卡在一处用户裁决**:
       桌面端删掉手机备份的照片后，手机仍报「已备份」，下一轮又原样传回来。
       ⚠️ **2026-08-21 真机证实**：14:07 手动删 5 张 → 14:08 那轮 `ingested=11
