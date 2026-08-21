@@ -3,7 +3,11 @@
 > **这个文件是干什么的**：把 `ROADMAP.md`（4000 行的全量历史）里跟"现在"有关的
 > 部分抽出来，做成你能逐条勾掉的动作清单。
 >
-> 最后更新：**2026-08-21**（对应 commit `056ce42`）
+> **这个文件是要维护的，不是一次性快照** —— 已进 `CLAUDE.md` 的「每批交付必更
+> 文档」清单（PROGRESS + NEXT + ROADMAP + 本文件）。任何一批交付改了卡的状态，
+> 这里必须跟着改；漏了就是事故。
+>
+> 最后更新：**2026-08-21**（`git log -1 --format=%h -- docs/CHECKLIST.md` 是当前版本）
 > 全量历史看 [`ROADMAP.md`](ROADMAP.md)，方法论教训看 [`PROGRESS.md`](PROGRESS.md)，
 > 交接状态看 [`NEXT.md`](NEXT.md)，任务卡在 [`.claude/cards/`](../.claude/cards/)。
 
