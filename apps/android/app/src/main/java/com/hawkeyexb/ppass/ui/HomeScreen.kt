@@ -145,13 +145,12 @@ fun HomeScreen(
             .verticalScroll(rememberScrollState())
             .padding(20.dp, 14.dp, 20.dp, 8.dp),
     ) {
-        // ── 标题：设计稿 = 仅「设置」28px serif，无副标题（T-083 目标 1；
-        // UX-09 改名，随 tab 同步）──
-        Text(
-            stringResource(R.string.tab_settings),
-            fontSize = 28.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
-        )
-        Spacer(Modifier.height(14.dp))
+        // ── 标题已删（2026-08-21 用户真机裁决）──
+        // 原本是「设置」28px serif（设计稿 layout-v1 / T-083 目标 1）。
+        // 用户：「顶部有必要有几个大字吗？占位置还没有什么意义。」底部 tab
+        // 已经写着「设置」，标题是同一句话说第二遍。
+        // ⚠️ 对设计稿的**有意偏离**，记在 UI-01 卡里。Column 自带 14dp 顶部
+        // 内边距，删掉标题后英雄卡不会贴边。
 
         // ── 英雄卡：恒真三元组（M / N 张已回家 · 最近成功 · 待备份 K）──
         // MOB-02 §二: 部分授权下不显示假 0/0——引导卡顶替三元组，
