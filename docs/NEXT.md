@@ -2,7 +2,45 @@
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
-## 〇、下个 session 从这里接（2026-08-21 收口）
+## 〇、下个 session 从这里接（2026-08-21 真机三条反馈）
+
+### ⚠️ 用户真机实测暴露三条，都已开卡，都未实施
+
+| 卡 | 问题 | 级别 |
+|---|---|---|
+| `MOB-29` | **「已备份」在两次备份之间是谎话** —— 实测手机说 188 张，库里真有 3 张，**185 张虚构** | L1 |
+| `MOB-30` | 收到的照片攒到 commit 才入库 → 进度不可见 + 中断要整批重传 | L2 |
+| `MOB-31` | 选了 12 张的相册，进度条显示 186 —— **机制未查明，先加可观测性** | L2 |
+
+**MOB-29 是三条里最严重的**：产品全部价值是「照片安全」这个承诺，显示虚高的
+「已备份 N 张」比显示「不知道」坏得多——用户会据此删掉手机原图。纠正机制
+（`existCheck` → `removeMissing`）**存在且有效**（强制跑一次备份，confirmed
+188 → 3 且全部真实），缺陷是**它只在备份开始时跑**，两次备份之间手机上那个
+数字对存储端的任何变化一无所知。
+
+**MOB-31 的纪律**：现场证据（`WorkProgress` 行）在 work 完成时被清掉了，
+**不许写一个「大概是因为…」的机制然后照着改**——WATCH-02 那轮三条「最可能」
+的假设全错，根因是一个斜杠。先加日志，再复现。
+
+### 真机取证的路子（这轮验证有效，记下来）
+
+手机连着 adb 就能直接读状态，比看日志快得多：
+
+```
+adb exec-out "run-as com.hawkeyexb.ppass cat \
+  /data/data/com.hawkeyexb.ppass/files/backup-state/<nodeid>/confirmed.json"
+adb shell "run-as com.hawkeyexb.ppass cat \
+  /data/data/com.hawkeyexb.ppass/shared_prefs/backup_scope.xml"
+adb exec-out "run-as com.hawkeyexb.ppass cat \
+  /data/data/com.hawkeyexb.ppass/no_backup/androidx.work.workdb" > /tmp/work.db
+  # ↑ WorkManager 的库在 no_backup/ 不在 databases/；WorkSpec.output 能解出
+  #   每次 run 真实上报的 ingested/duplicates
+adb shell "content query --uri content://media/external/images/media \
+  --projection _id --where 'bucket_id=<id>'" | wc -l
+```
+
+存储端对账（手机说的 vs 库里真有的）：把 `confirmed` 的 hash 集合与
+`select hex(hash) from asset` 求交集——这一步直接量出「撒谎的张数」。
 
 ### 刚做完（已推送）
 
