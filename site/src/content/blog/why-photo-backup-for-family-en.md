@@ -32,7 +32,7 @@ This decision sits at the very front of the project docs, as a data rule:
 
 In practice: photo bytes, thumbnails, filenames, and the timeline exist only on the family's own devices. The relay forwards encrypted data and never stores or decrypts it — even if the relay were seized, whoever took it would get ciphertext they cannot read.
 
-This stance isn't marketing. Every design decision revolves around it — including this website, which states exactly what it collects and what it never will.
+This stance isn't marketing; every design decision in the project answers to it.
 
 ## Designed for the 60-year-old in the family
 

@@ -38,7 +38,7 @@ export const ui = {
     'build.link': 'The code lives on GitHub',
     'privacy.h2': "Privacy is not a feature. It's a stance.",
     'privacy.body':
-      "Your photos never leave home: bytes, thumbnails, filenames, and the timeline move only between your family's devices, and the relay forwards ciphertext and nothing more. That floor is guaranteed by architecture — open source, so you can verify it. Above that floor, collection is planned and bounded: this site gathers only the aggregate numbers a commercial product needs (like download counts); the app sends crash reports only when you choose to, and the current build collects none. What's collected and what's never touched is always written down, in the open.",
+      "Your photos never leave home: the bytes, thumbnails, and filenames move only between your family's devices, and the relay forwards nothing but ciphertext. That's not a slogan, it's the architecture — the code is open, so go check. This site keeps count of things like downloads, because we need to know if anyone's actually using it. The app itself sends nothing today; if a crash log would ever help fix something, it'll ask you first.",
     closing: 'No cloud. No account. No us.',
     'footer.tag':
       'P-Pass — photo backup for families. Open source, end-to-end encrypted. Photos never leave home.',
@@ -80,7 +80,7 @@ export const ui = {
     'build.link': '代码在 GitHub 上',
     'privacy.h2': '隐私不是功能，是立场',
     'privacy.body':
-      '照片本身永远不出门：字节、缩略图、文件名、时间线只在你家的设备之间走，中继只转发密文——这条由架构保证，开源可验证。底线之上，收集是有规划、有边界的：官网只统计商业化必需的汇总数据（如下载量）；客户端崩溃信息只在你主动反馈时按需收集，当前版本不收集。收集什么、不收集什么，永远写在明处。',
+      '照片永远不出门：字节、缩略图、文件名只在你家的设备之间走，中继只转发密文。这不是口号，是架构，代码开源，谁都能查。官网会统计下载量这类汇总数字，做产品总得知道有没有人在用。客户端目前什么都不上报，哪天真需要你发一份崩溃日志，会先问过你。',
     closing: '照片只在你家的设备之间走——没有云，没有账号，也没有「我们」。',
     'footer.tag': 'P-Pass — 家人照片备份。开源，端到端加密，照片不出门。',
     'footer.repo': 'GitHub 仓库',
