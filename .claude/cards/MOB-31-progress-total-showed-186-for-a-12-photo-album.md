@@ -1,7 +1,7 @@
 # MOB-31 选了 12 张的相册，进度条显示 186 张　级别 L2
 
-> ⛔ 未实施。**机制未查明**——现场证据已被 WorkManager 清掉，本卡的首要任务
-> 是**先加可观测性**，不是猜。
+> 🟡 状态：代码已合并，等真机验收。**根因已查明并修复**——不是"正在执行
+> 全量同步"，是显示挑错了历史记录。
 
 ## 用户报告（2026-08-21）
 
@@ -21,7 +21,83 @@
 **所以传输是对的，186 是个显示问题。** 而 186 恰好等于 MOB-29 里那批陈旧
 「已备份」记录的条数——两条卡很可能同源。
 
-## 为什么查不下去
+## 根因（定位到行）
+
+`BackupUiStateHolder.kt` 的 `uiStateOf`：
+
+```kotlin
+val last = infos.lastOrNull { it.state.isFinished } ?: return null   // 旧代码
+```
+
+`lastOrNull` 取的是**列表最后一个元素**。而备份有**五条通道**，各自独立
+unique name：
+
+```
+ppass-auto-backup / ppass-catchup-backup / ppass-process-catchup
+ppass-manual-backup / ppass-media-watch-backup
+```
+
+它们**共用同一个 tag**，终态记录会同时躺在 WorkManager 里最多五条；而
+`getWorkInfosByTagFlow` **不保证按时间排序**（Room 查询顺序，实际按 UUID）。
+
+**所以「拿列表最后一个」= 随机挑一条历史记录。** 用户刚同步完 12 张，界面
+报「186 张」——那是 8/20 那次全量运行留下的旧终态（当时它的 WorkSpec 行还在
+库里，现在已被 WorkManager 清掉，所以事后查不到）。
+
+**不是在执行全量同步。** 当场核过：`WorkProgress` 表零行（没有任何 work 在跑）、
+存储端审计零 ingest、库里行数不变、`ppass-auto-backup` 从 11:22:05 排队至今
+一次都没跑过。
+
+## 改法
+
+worker 的**每一个**终态返回都盖 `KEY_FINISHED_AT`（`successStamped()` 统一出口
++ 失败分支单独盖），`uiStateOf` 按这个戳挑最大值。没有戳的记录（升级前存量、
+CANCELLED 拿不到 outputData）算最旧；**一条戳都没有**时才退回旧的列表顺序口径
+（升级首帧不至于空白）。
+
+## 验收证据
+
+反证 4/4 有效：
+
+```
+✅ N1 终态按列表顺序挑（回到旧口径）        → the_most_recent_finished_run_wins… FAILED
+                                            + five_channels_of_history_still_yield_the_newest FAILED
+✅ N2 worker 不盖时间戳                    → every_terminal_outcome_carries_a_finish_stamp FAILED
+✅ N3 没戳的记录按最新算（两处 0L 一起打）  → unstamped_history_never_beats_a_stamped_run FAILED
+✅ N4 全无戳时不退回列表顺序                → all_unstamped_falls_back_to_list_order_not_null FAILED
+```
+
+⚠️ 反证过程中抓到我自己两个恒真式，都已修：
+
+1. `every_terminal_outcome_carries_a_finish_stamp` 原本对**整个文件** contains
+   `KEY_FINISHED_AT to System.currentTimeMillis()`——失败分支里也有同一串，
+   把成功分支的戳删掉照样绿。改成夹在 `successStamped` 函数体内断言。
+2. `all_unstamped_falls_back_to_list_order_not_null` 原本只放**一条**存量记录
+   ——一条时任何挑法结果都一样。改成两条。
+
+守卫：`every_terminal_outcome_carries_a_finish_stamp` 还断言正文里**不许再出现
+裸 `Result.success(`**（只允许 `successStamped` 内部那一处）。真正的风险不是
+这次改错，是以后有人加一个新终态返回点忘了盖戳——那条路径在 `uiStateOf` 眼里
+永远是上古记录，永远选不中。
+
+android 单测 **252/252**。
+
+## 顺手记一笔：这轮我差点又误判
+
+第一次跑 `./gradlew :app:compileDebugKotlin` 时我 grep 的是 `^e:|error:`，而
+gradle 报的是 `Unable to locate a Java Runtime`——**根本没跑起来，我却报告
+"编译过了"**。`justfile` 里 `android-test` 是带 `JAVA_HOME=$(brew --prefix
+openjdk)` 的，直接调 gradlew 必须自己设。⚠️ **grep 过滤器没匹配到 ≠ 成功**，
+要看退出码或 BUILD SUCCESSFUL。
+
+## 尚未查明（不影响本卡结论）
+
+用户报告的「186」也可能同时来自另一条路：`MainActivity.kt` 保存相册范围后
+立刻 `triggerUserPresentBackup`，而 `refreshTriplet()` 只在 init / WorkInfo 流
+变化时跑，`saveScope` 之后**没有显式刷新**——那一刻英雄卡的 M/N 可能还是旧范围
+的数字。这条没有直接证据，且本卡的修复已经能解释现象，先不动。
+
+## 为什么当时查不下去
 
 `WorkProgress` 表在 work 完成时会被清空，**用户看到的那个进度数据已经不存在了**。
 `ppass-catchup-backup` 的第一次尝试（被重试掉的那次）读到的 `bucketIds` 是什么、
