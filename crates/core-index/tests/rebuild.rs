@@ -12,6 +12,8 @@ use common::jpeg_with_exif;
 use core_index::{rebuild, timeline_page, IncomingFile, Ingestor};
 use storage::Db;
 
+/// 本机身份——rebuild 把「不在 <deviceId>/ 布局里」的文件归给它。
+const LOCAL: [u8; 32] = [0xcc; 32];
 const DEV_A: [u8; 32] = [0xaa; 32];
 const DEV_B: [u8; 32] = [0xbb; 32];
 
@@ -140,7 +142,9 @@ async fn rebuild_reproduces_the_index_exactly() {
 
     // "删库": the index is gone; a brand-new empty database takes its place.
     let fresh = Db::open_in_memory().await.unwrap();
-    let report = rebuild(&fresh, &dir.path().join("library")).await.unwrap();
+    let report = rebuild(&fresh, &dir.path().join("library"), &LOCAL)
+        .await
+        .unwrap();
 
     let after = dump(&fresh).await;
     assert_eq!(report.indexed, before.len() as u64);
@@ -173,7 +177,7 @@ async fn hand_dropped_files_are_picked_up() {
     )
     .unwrap();
 
-    let report = rebuild(&db, dir.path().join("library").as_path())
+    let report = rebuild(&db, dir.path().join("library").as_path(), &LOCAL)
         .await
         .unwrap();
     assert_eq!(report.indexed, 3);
@@ -184,7 +188,11 @@ async fn hand_dropped_files_are_picked_up() {
         .find(|r| r.1 == "originals/dropped.jpg")
         .expect("hand-dropped file must be indexed");
     assert_eq!(dropped.2, "image/jpeg");
-    assert_eq!(dropped.7, Vec::<u8>::new(), "origin unknown → empty device");
+    // 2026-08-21 裁决：手放的文件归**本机**，不再留空。它没走过我们的上传
+    // 协议，出现在库里只能是有人用本机权限放进去的——归本机是诚实的推断，
+    // 而且这条规则目录树自己就能重现（ADR-006 不用破）。留空会让「只看我的」
+    // 筛选器算不出归属、把照片藏起来，对家庭相册是更坏的结果。
+    assert_eq!(dropped.7, LOCAL.to_vec(), "手放的文件归本机");
     assert!(
         dropped.4.is_some(),
         "mtime fallback still keys the timeline"
@@ -211,9 +219,9 @@ async fn rebuild_is_idempotent_on_a_live_index() {
         .await;
     }
     let root = dir.path().join("library");
-    let first = rebuild(&db, &root).await.unwrap();
+    let first = rebuild(&db, &root, &LOCAL).await.unwrap();
     let d1 = dump(&db).await;
-    let second = rebuild(&db, &root).await.unwrap();
+    let second = rebuild(&db, &root, &LOCAL).await.unwrap();
     let d2 = dump(&db).await;
     assert_eq!(first, second);
     assert_eq!(d1, d2);
@@ -230,7 +238,7 @@ async fn duplicate_content_on_disk_yields_one_row() {
     fs::write(originals.join("a-copy.jpg"), b"same bytes").unwrap();
     fs::write(originals.join("b-copy.jpg"), b"same bytes").unwrap();
 
-    let report = rebuild(&db, dir.path().join("library").as_path())
+    let report = rebuild(&db, dir.path().join("library").as_path(), &LOCAL)
         .await
         .unwrap();
     assert_eq!(report.indexed, 1);
@@ -245,7 +253,7 @@ async fn duplicate_content_on_disk_yields_one_row() {
 #[tokio::test]
 async fn rebuild_writes_an_unattributed_audit_row() {
     let (dir, db, _ing) = setup().await;
-    rebuild(&db, dir.path().join("library").as_path())
+    rebuild(&db, dir.path().join("library").as_path(), &LOCAL)
         .await
         .unwrap();
     let log = db.list_audit(10).await.unwrap();
@@ -264,7 +272,7 @@ async fn hidden_files_skipped_and_missing_originals_is_empty() {
     let (dir, db, _ing) = setup().await;
     let root = dir.path().join("library");
 
-    let empty = rebuild(&db, &root).await.unwrap();
+    let empty = rebuild(&db, &root, &LOCAL).await.unwrap();
     assert_eq!((empty.indexed, empty.duplicates), (0, 0));
 
     let originals = root.join("originals");
@@ -277,7 +285,7 @@ async fn hidden_files_skipped_and_missing_originals_is_empty() {
     .unwrap();
     fs::write(originals.join("real.jpg"), b"real photo").unwrap();
 
-    let report = rebuild(&db, &root).await.unwrap();
+    let report = rebuild(&db, &root, &LOCAL).await.unwrap();
     assert_eq!(report.indexed, 1);
     assert_eq!(dump(&db).await[0].1, "originals/real.jpg");
 }

@@ -101,7 +101,41 @@ impl Ingestor {
             Ok((w, h)) => (Some(w as i64), Some(h as i64)),
             Err(_) => (None, None),
         };
-        let rel_path = self.place(f, taken_at)?;
+        // 宽容落位（2026-08-21 用户裁决）：`originals/` 是**用户的**目录。
+        // 已经在树内的文件就地采纳（他在 Finder 里怎么摆就怎么留）；只有
+        // 来自库外（手机上传落在 staging）的文件才由我们按 canonical 布局
+        // 找个家——那些文件此刻还没有家。
+        //
+        // 理由（实测支撑见 docs/product/2026-08-21-macos-fs-events.md）：
+        // 系统分不清「拖进来」和「拖出去」，我们本来就必须 stat 每个路径，
+        // 宽容不多花一分钱；而备份工具最不该干的事就是把用户的文件从他放的
+        // 位置挪走。ADR-006 的重建路径本来就是宽容的（rebuild.rs 模块注释），
+        // 严格入库 + 宽容重建 = 重建一次库的语义就变了。
+        let (rel_path, we_moved_it) = match self.rel_inside_originals(&f.src_path) {
+            Some(rel) => (rel, false),
+            None => (self.place(f, taken_at)?, true),
+        };
+
+        // 「一个路径只能被一条索引行占用」：用户编辑了一张我们收到的照片，
+        // 内容变了 → hash 变了 → 走到这里是一条新行，而老行还指着同一个
+        // 路径。老行记的那份内容在磁盘上**确实已经不存在了**，让位。
+        // ⚠️ 已知欠账：老行的缩略图文件成为孤儿（thumb 按 hash 存，
+        // core-index 不掌握 .ppf/thumbs 布局——那是 daemon 侧 Reconcile 的
+        // 职责）。与 reconcile.rs 里已接受的孤儿 blob 同一类：内容寻址、
+        // 无任何产品路径引用它，惰性无害。
+        if let Some(evicted) = self.db.hash_at_rel_path(&rel_path).await? {
+            if evicted != hash {
+                self.db.delete_asset(&evicted).await?;
+                self.audit(
+                    now_ms,
+                    f,
+                    &hash,
+                    "asset.replaced_in_place",
+                    Some(rel_path.clone()),
+                )
+                .await?;
+            }
+        }
 
         let asset = Asset {
             hash: hash.to_vec(),
@@ -116,9 +150,11 @@ impl Ingestor {
             thumb_state: 0,
         };
         if let Err(e) = self.db.insert_asset(&asset).await {
-            // The file is already moved; roll it back out of the library
-            // so index and originals never disagree.
-            let _ = fs::remove_file(self.library_root.join(&rel_path));
+            // 只回滚**我们自己搬进来的**文件（来自库外）。就地采纳的文件是
+            // 用户放在那儿的，入库失败绝不能把它删掉——那是删用户数据。
+            if we_moved_it {
+                let _ = fs::remove_file(self.library_root.join(&rel_path));
+            }
             if is_unique_violation(&e) {
                 // Lost a race with a concurrent ingest of the same content.
                 self.audit(now_ms, f, &hash, "ingest.duplicate", None)

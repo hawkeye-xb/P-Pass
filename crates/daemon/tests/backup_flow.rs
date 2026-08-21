@@ -350,7 +350,7 @@ async fn interrupted_commit_rerun_converges_and_survives_rebuild() {
     // the T-012 guard doubles as the backup pipeline's consistency oracle.
     let before: Vec<_> = dump(&storage.db).await;
     let fresh = Db::open_in_memory().await.unwrap();
-    core_index::rebuild(&fresh, &dir.path().join("library"))
+    core_index::rebuild(&fresh, &dir.path().join("library"), &storage.tp.node_id().0)
         .await
         .unwrap();
     let rebuilt: Vec<_> = dump(&fresh).await;
