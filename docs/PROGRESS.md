@@ -926,3 +926,21 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   `backupDuration[e.ts`，而写侧是 `out[...]`——把写侧改回去测试照样绿，反证 D2
   当场抓到。夹出 `backupDuration` 函数体、读写两侧一起断言才对。
 - **桌面端测试基建从 8 条涨到 18 条**（`auditKey.test.js` 是第二个前端测试文件）。
+
+## 2026-08-21（收口）对照清单落地 + 本地正式构建
+
+- **新增 [`docs/CHECKLIST.md`](CHECKLIST.md)**：把 ROADMAP 4000 行里跟"现在"有关的
+  部分抽成用户能逐条勾掉的动作清单（真机验收 / 等拍板的决定 / 待做 / backlog /
+  命令速查）。⚠️ **ROADMAP 是历史账本，不是待办清单**——两者混在一个文件里的时候，
+  用户想"对照着做点事"就得自己从一千行里挑，这本身就是个可用性问题。
+- **本地正式构建两条都跑通了，但两个"报错"都是无凭据路径**：macOS 的 `.app` 出得来
+  （内置 `ppf-daemon` 已逐字节核对含 MOB-32 + DESK-08），只是 updater 的 `.tar.gz`
+  缺 `TAURI_SIGNING_PRIVATE_KEY`；Android release APK 未签名。
+- **`BUILD-01`（新卡）**：本地 JDK 25 让 `lintVitalAnalyzeRelease` 炸，异常信息里
+  只有一个 `> 25.0.1`。⚠️ **那不是错误码，是 Java 版本号**——我第一眼当成了签名
+  配置缺失。CI 钉 JDK 17 所以一直没暴露。**本地工具链跟着 `brew --prefix openjdk`
+  漂，而 CI 是钉住的**，这个不一致本身就是"本地绿 CI 红"和反向两个坑。
+- **远端 `workflow_dispatch` 触发不了**：`gh` 无认证态、环境里也没有
+  `GH_TOKEN`/`GITHUB_TOKEN`。路径过滤的 ci-rust / ci-android / ci-desktop 已被
+  今天 9 个 commit 自动触发，但结论看不到。⚠️ **纪律没履行就要说出来**，
+  不能因为"推上去了"就当 CI 绿了。
