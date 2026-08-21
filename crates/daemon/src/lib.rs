@@ -23,7 +23,7 @@ pub mod upload;
 pub mod watcher;
 
 pub use authz::Decision;
-pub use backup::{BackupEngine, CommitOutcome};
+pub use backup::{BackupEngine, CommitOutcome, SESSION_IDLE_TTL, STAGING_ORPHAN_GRACE};
 pub use config::{Config, TelemetryConfig};
 pub use diag_agg::DiagAgg;
 pub use inbox::reclaim_inbox;

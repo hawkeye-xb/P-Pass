@@ -110,6 +110,12 @@ impl UploadPlane {
                 // 失败不让这条流失败——文件已校验落在 staging 里，`commit`
                 // 会兜底重试；把 ACK 变成错误只会让手机把这张重传一遍。
                 // 但必须留日志（别静默吞）。
+                // ⚠️ MOB-32：**无条件**记一笔交付——绝不能塞进「入库成功」
+                // 的分支里。会话被顶掉时 `ingest_staged` 找不到 item 会静默
+                // 早退（返回 false，连错都不算），而这条台账是 commit 唯一
+                // 能发现「传上来 N 张、入库 0 张」的证据。它也故意不放在
+                // Session 里：session 会被顶掉，证据必须活得比它长。
+                self.engine.note_delivered(peer);
                 if let Err(e) = self.engine.ingest_staged(peer, &header.hash).await {
                     tracing::warn!(
                         "upload {}: 即时入库失败，留给 commit 兜底: {e}",

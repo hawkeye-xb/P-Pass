@@ -74,6 +74,9 @@ struct Fixture {
     phone_tp: IrohTransport,
     db: Db,
     library: tempfile::TempDir,
+    /// MOB-32：janitor 与 staging 回收是 engine 上的方法（daemon 的每小时
+    /// 循环调它们），测试要直接驱动。
+    backup: BackupEngine,
 }
 
 async fn fixture() -> Fixture {
@@ -104,7 +107,7 @@ async fn fixture() -> Fixture {
     );
     let download = daemon::download::DownloadPlane::new(db.clone(), library.path().to_path_buf());
     let router = Router::new(db.clone(), "test-daemon")
-        .with_backup(backup)
+        .with_backup(backup.clone())
         .with_upload(upload)
         .with_download(download);
     let tp2 = daemon_tp.clone();
@@ -129,6 +132,7 @@ async fn fixture() -> Fixture {
         phone_tp,
         db,
         library,
+        backup,
     }
 }
 
@@ -532,4 +536,239 @@ async fn a_session_cut_short_does_not_re_upload_what_already_landed() {
         vec![set[2].1.clone()],
         "已落地的两张不该再出现在 missing 里（否则手机会重传）",
     );
+}
+
+// ---------------------------------------------------------------------------
+// MOB-32：校准不许清掉正在跑的会话；commit 不许在丢了照片时报成功
+// ---------------------------------------------------------------------------
+
+/// 手机漂移校准的形状：`begin` + `manifest(items 空、只带 hashes 探测)`。
+/// 与 `BackupRunner.existCheck` 一一对应（那边的 begin 已经删了，但**旧版
+/// APK 打新 daemon 也必须安全**，所以这里照旧发 begin）。
+async fn calibrate(f: &Fixture, set: &[(Vec<u8>, String)]) {
+    let daemon_id = f.daemon_tp.node_id();
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    let probe = BackupManifest {
+        hashes: set.iter().map(|(_, h)| h.clone()).collect(),
+        items: Vec::new(),
+        provider: None,
+    };
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(probe).unwrap(),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_calibration_mid_upload_does_not_lose_the_session() {
+    // 用户真机 2026-08-21：备份途中打开 App（触发漂移校准）→ 186 张照片
+    // 传上来、通过校验、然后被静默丢弃（547MB 躺在 staging 里成孤儿），
+    // commit 报 `ingested=0` **却返回成功**，手机把整批标记「已备份」。
+    //
+    // 根因：`begin` 无条件 `insert(peer, Session::default())`，而校准也走
+    // 这条路，会话又是按设备 NodeId 索引的——同一把钥匙。
+    let f = fixture().await;
+    let daemon_id = f.daemon_tp.node_id();
+    let set = photos(3);
+
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(manifest_of(&set)).unwrap(),
+    )
+    .await;
+
+    // 传第一张 → 用户打开 App（校准）→ 再传剩下两张。
+    assert!(
+        upload(&f.phone_tp, daemon_id, &set[0].1, &set[0].0)
+            .await
+            .ok
+    );
+    calibrate(&f, &set).await;
+    for (data, h) in set.iter().skip(1) {
+        assert!(upload(&f.phone_tp, daemon_id, h, data).await.ok, "{h}");
+    }
+
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_COMMIT,
+        serde_json::json!({"generation": 7}),
+    )
+    .await;
+    assert!(resp.ok, "校准过的会话仍须能正常收尾: {:?}", resp.error);
+    let r = resp.result.unwrap();
+    assert_eq!(r["ingested"], 3, "三张都得入库并如实报数: {r}");
+    assert_eq!(f.db.count_assets().await.unwrap(), 3);
+    assert_eq!(
+        dir_bytes(&f.library.path().join(".ppf/staging")),
+        0,
+        "收尾后 staging 必须是空的——留下的每一个字节都是丢掉的照片",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn commit_refuses_to_report_success_when_a_delivered_file_never_landed() {
+    // ② 手机的判据是「调用没抛异常」。上传了 N 张、入库 0 张还报成功，
+    // 手机就把整批标记「已备份」，那批照片从此没人会再传一遍。
+    //
+    // 这里用**探测型 manifest**（items 空）构造出「交付了但没有 item 可
+    // 入库」的会话——不需要任何测试后门，公开 API 就能走到。
+    let f = fixture().await;
+    let daemon_id = f.daemon_tp.node_id();
+    let set = photos(1);
+
+    calibrate(&f, &set).await; // begin + manifest(items 空)
+    assert!(
+        upload(&f.phone_tp, daemon_id, &set[0].1, &set[0].0)
+            .await
+            .ok,
+        "上传平面自己校验 BLAKE3，这一步该成功",
+    );
+    assert_eq!(
+        f.db.count_assets().await.unwrap(),
+        0,
+        "没有 item 就无从入库——这正是要被 commit 抓住的矛盾",
+    );
+
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_COMMIT,
+        serde_json::json!({"generation": 9}),
+    )
+    .await;
+    assert!(
+        !resp.ok,
+        "交付了 1 个文件却入库 0 张，绝不许报成功: {:?}",
+        resp.result,
+    );
+    // 水位不许推进——推了下一轮连候选都不会再产生。
+    assert!(
+        f.db.get_watermark(&f.phone_tp.node_id().0)
+            .await
+            .unwrap()
+            .is_none(),
+        "失败的 commit 不许推水位",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_push_session_skips_an_item_the_phone_never_delivered() {
+    // ③ `begin` 不再清空会话之后新出现的风险：上一轮声明过、但手机上
+    // 已经被删掉的照片会作为「幽灵 item」留在 items 里。commit 若对它走
+    // 拉取回退，手机根本不 serve blobs（`provider = null` 就是这个契约）
+    // → 每次 commit 都报错 → 报错时会话删不掉、重试又把它 touch 活
+    // → janitor 也收不走 → 备份一直红。
+    //
+    // 幽灵 item 本来就该跳过：手机上没有这张照片了，没有东西可备份。
+    let f = fixture().await;
+    let daemon_id = f.daemon_tp.node_id();
+    let set = photos(1);
+
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(manifest_of(&set)).unwrap(),
+    )
+    .await;
+    // 一个字节都不传，直接 commit。
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_COMMIT,
+        serde_json::json!({"generation": 3}),
+    )
+    .await;
+    assert!(
+        resp.ok,
+        "推送型会话遇到无处可取的 item 应当跳过，不是报错: {:?}",
+        resp.error,
+    );
+    let r = resp.result.unwrap();
+    assert_eq!(
+        (r["ingested"].as_i64(), r["duplicates"].as_i64()),
+        (Some(0), Some(0))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn staging_orphans_are_reclaimed_but_claimed_files_are_not() {
+    // ③ 泄漏点：`is_partial_upload` 只认 `.upload` 后缀，**已校验完成**
+    // 的裸文件回收逻辑永远碰不到。BLOB-01 把 blobs 压到 0，泄漏原地搬到
+    // 了 staging（真机一次 547MB）。
+    let f = fixture().await;
+    let daemon_id = f.daemon_tp.node_id();
+    let set = photos(2);
+    let staging = f.library.path().join(".ppf/staging");
+    std::fs::create_dir_all(&staging).unwrap();
+
+    // 活会话声明了这两张（其中一张连传都还没传）。
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(manifest_of(&set)).unwrap(),
+    )
+    .await;
+
+    // 现场：一个有主的裸文件、一个没主的孤儿、一个正在写的半成品。
+    let claimed = staging.join(&set[1].1);
+    std::fs::write(&claimed, b"declared by the live session").unwrap();
+    let orphan = staging.join("deadbeef".repeat(8));
+    std::fs::write(&orphan, b"nobody claims me").unwrap();
+    let partial = staging.join("cafebabe.upload");
+    std::fs::write(&partial, b"still streaming").unwrap();
+
+    let freed = f.backup.reclaim_staging(std::time::Duration::ZERO);
+    assert_eq!(freed, 16, "只该收走那个孤儿，且如实报字节数");
+    assert!(
+        claimed.exists(),
+        "活会话声明过的 hash 一个都不能动（可能正在 ingest / 等 commit 兜底）",
+    );
+    assert!(!orphan.exists(), "没主的裸文件必须被回收");
+    assert!(partial.exists(), "正在上传的半成品不许被孤儿扫描误删");
+
+    // janitor 收走空闲会话之后，原本受保护的那份也就没主了。
+    assert_eq!(
+        f.backup
+            .sweep_sessions(std::time::Duration::from_secs(3600)),
+        0,
+        "刚碰过的会话不许被当成空闲收走",
+    );
+    assert_eq!(f.backup.sweep_sessions(std::time::Duration::ZERO), 1);
+    assert!(f.backup.reclaim_staging(std::time::Duration::ZERO) > 0);
+    assert!(!claimed.exists(), "会话没了，它保护的孤儿就该被回收");
 }

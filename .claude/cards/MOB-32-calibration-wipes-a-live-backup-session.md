@@ -1,7 +1,7 @@
 # MOB-32 校准把正在跑的备份 session 清空，186 张照片传上来后被静默丢弃　级别 **L0**
 
-> ⛔ 未实施。**这是整个项目目前最严重的缺陷**：用户的照片传到了存储端、
-> 通过了校验、然后被扔掉，而手机报告「已备份」。
+> 🟡 已合并，等真机验收。**这是整个项目目前最严重的缺陷**：用户的照片传到
+> 了存储端、通过了校验、然后被扔掉，而手机报告「已备份」。
 
 ## 实测证据（2026-08-21 用户真机，清场前当场取的）
 
@@ -110,3 +110,127 @@ MOB-30（逐张入库，2026-08-21 已合并）让文件在**上传完成的那�
 - 反证：每条都要有
 - 真机：跑一次完整备份，中途打开 App（触发校准）→ 照片数必须全部到位，
   staging 收尾为 0 字节
+
+## 改动（2026-08-21）
+
+### ① `begin` 不再破坏活会话
+
+`backup.rs`：`insert(peer, Session::default())` → `entry(peer).or_default().touch()`。
+
+会话的生命周期从此归两处，**都不是 `begin`**：
+
+- `commit` 成功收尾时 `remove`
+- janitor `sweep_sessions(SESSION_IDLE_TTL)` 收掉空闲超过一小时的
+
+`Session` 加 `touched_at: Instant`，begin / manifest / 逐张入库都续命。
+TTL 取一小时的下界理由：一轮备份里会话被 touch 的**最大间隔就是一个文件**，
+一段 4K 视频走慢速局域网是分钟级。
+
+手机端 `BackupRunner.existCheck` 里那次 `backup.BEGIN` 也删了——校准根本不
+需要会话（`manifest` 自己 `entry().or_default()`）。但**daemon 侧的修复必须
+独立成立**：旧版 APK 打新 daemon 也不能坏。
+
+### ①附带：commit 的拉取回退加 `provider` 门（审出来的回归）
+
+`begin` 不再清空会话之后，**新出现一条风险**：上一轮声明过、但手机上已经被
+删掉的照片会作为「幽灵 item」留在 items 里。commit 对它走 `fetch_from`，而
+手机从不 serve blobs（`provider = null` 就是这个契约）→ `BackupError::Fetch`
+→ **报错时 `sessions.remove` 走不到**（`?` 提前返回）→ 会话不死、重试又把它
+touch 活 → janitor 也收不走 → 备份一直红。
+
+这条今天不可达，**正因为 `begin` 会清空**。把清空拿掉它就可达了。
+
+修法：`provider.is_none()` 的推送型会话遇到「不在索引、不在 staging、blob
+store 也没有」的 item → 跳过 + warn，不报错不计数。手机上已经没有这张照片
+了，本来就没有东西可备份。
+
+### ② commit 报 0 入库时不许返回成功
+
+新增 `delivered` 台账：`Arc<Mutex<HashMap<NodeId, u32>>>`，上传平面校验通过
+就 `note_delivered(peer)`。
+
+**故意不放在 `Session` 里**——session 可能被顶掉（那正是本卡的事故），而
+「这台设备本轮确实交付了 N 个文件」这条证据必须活得比 session 长，否则
+commit 无从发现矛盾。
+
+```rust
+if delivered > 0 && outcome.ingested == 0 && outcome.duplicates == 0 {
+    return Err(BackupError::NothingIngested { delivered });
+}
+```
+
+水位也不推（推了下一轮连候选都不会再产生）。台账只在**成功收尾**时清。
+
+### ③ staging 孤儿回收
+
+`inbox::sweep_orphans(staging, protected, grace)`。孤儿判据 = 裸文件 ∧ 不在
+保护集 ∧ 落地超过 `grace`。三道保护缺一个都会误删用户的照片。
+
+- 启动（`main.rs`）：保护集恒为空——会话是内存态，重启后没有裸文件还有主
+- 每小时（挂进已有的 SYNC-01 循环）：`BackupEngine::reclaim_staging` 带上
+  所有活会话声明过的 hash
+
+**这是一次有记录的裁决反转。** BLOB-01 当时写的是「裸文件一律保留」，理由
+是「下一轮备份手机会重新 offer 同一个 hash，省一次上传」。这条推理有个没被
+验证的前提：**手机一定会再 offer 一次**。本卡的事故恰恰打掉了它——commit 报
+了个假的 `ok`，手机把 186 张全标记「已备份」，从此再也不 offer。547MB 成了
+永久孤儿。现在的权衡是**正确性优先于带宽**：崩溃重启后可能多传一次，认了。
+
+## 验收证据
+
+反证 9/9 有效（每处修复改回去，对应测试必须变红）：
+
+```
+✅ M1 begin 改回无条件重置          → a_calibration_mid_upload_does_not_lose_the_session FAILED
+✅ M2 删掉「交付 N 入库 0」检查      → commit_refuses_to_report_success_when_a_delivered_file_never_landed FAILED
+✅ M3 删掉 provider 门              → a_push_session_skips_an_item_the_phone_never_delivered FAILED
+✅ M4 孤儿判据不看活会话保护集       → staging_orphans_are_reclaimed_but_claimed_files_are_not FAILED
+✅ M5 孤儿判据不看落地宽限期         → inbox::tests::orphan_sweep_respects_every_guard FAILED
+✅ M6 上传平面不记交付台账           → commit_refuses_to_report_success…_never_landed FAILED
+✅ M7 janitor 判据取反               → staging_orphans_are_reclaimed_but_claimed_files_are_not FAILED
+✅ M8 启动回收不扫孤儿               → inbox::tests::reclaim_sweeps_orphans_past_the_grace_window FAILED
+✅ M9 existCheck 把 begin 加回去     → calibration_never_opens_a_backup_session FAILED（Kotlin）
+```
+
+新增测试：
+
+- `a_calibration_mid_upload_does_not_lose_the_session` —— 真机那次事故的形状：
+  传一张 → 校准（begin + manifest(items 空)）→ 传剩下两张 → commit 必须报
+  `ingested=3`，且 **staging 收尾为 0 字节**（留下的每个字节都是丢掉的照片）
+- `commit_refuses_to_report_success_when_a_delivered_file_never_landed` ——
+  用**探测型 manifest**（items 空）从公开 API 构造出「交付了但无从入库」的
+  会话，不需要任何测试后门
+- `a_push_session_skips_an_item_the_phone_never_delivered` —— 幽灵 item
+- `staging_orphans_are_reclaimed_but_claimed_files_are_not` —— 三道保护 +
+  「janitor 收走会话后，它保护的孤儿就该被回收」
+- `inbox` 单测：`orphan_sweep_respects_every_guard`、
+  `reclaim_sweeps_orphans_past_the_grace_window`
+- Kotlin：`calibration_never_opens_a_backup_session`（夹出 `existCheck`
+  函数体断言，不是全文 contains——全文一定命中 `run()` 里那个正当的 begin）
+
+`just ci` 全绿，Rust **313/313**，Android **253/253**。
+
+## ⚠️ 反证驱动第四次被同一个形状咬
+
+M5/M8 第一轮报「仍然绿 = 恒真式」。真相是
+`cargo test -p daemon --lib <短名> -- --exact` **一个测试都没匹配到**
+——`--exact` 对 lib 测试要写全模块路径（`inbox::tests::x`）。cargo 退 0，
+被我当成了「绿」。
+
+前三次分别是：`str.replace` 锚点不存在导致变异静默 no-op、`grep '^e:'`
+没匹配到 gradle 的 `Unable to locate a Java Runtime`、`sliceAfter` 把整个
+文件带进断言。**同一个根源：某种"没找到"被当成了"通过"。**
+
+驱动现在解析 `running (\d+) tests`，跑到 0 个测试直接判反证无效。
+
+## 已知不追（记一笔）
+
+daemon 重启会丢 `delivered` 台账 → 重启前交付、重启后 commit 会报 0/0 成功。
+不追：MOB-30 已让每张照片在**上传当刻**入库，重启前交付的都在索引里，手机
+标记「已备份」是真的，只是数字为 0。
+
+## 真机验收（欠用户）
+
+- 跑一次完整备份，**中途打开 App**（触发校准）→ 照片数必须全部到位
+- 收尾后 `du -sh "<库>/.ppf/staging"` 必须是 0
+- 存量孤儿：启动时 daemon 日志应有 `MOB-32: 回收 staging 孤儿 …`

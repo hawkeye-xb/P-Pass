@@ -115,6 +115,24 @@ class OneBackupPipelineTest {
     // ── 只有一份管线 ──
 
     @Test
+    fun calibration_never_opens_a_backup_session() {
+        // MOB-32：`existCheck` 原本先发一次 `backup.BEGIN`。校准根本不需要
+        // 会话（daemon 的 `manifest` 自己会建），而 daemon 侧会话是**按设备
+        // NodeId** 索引的——「备份途中打开 App」于是把正在跑的那一轮清空，
+        // 186 张照片传上来后被静默丢弃、commit 却报成功。
+        //
+        // 夹出 existCheck 的函数体再断言：全文找 BACKUP_BEGIN 一定命中
+        // `run()` 里那个**正当的** begin（2026-08-20 那次教训）。
+        val body = sliceBetween(
+            src("backup/BackupRunner.kt"),
+            "suspend fun existCheck(",
+            "private suspend fun pushFile(",
+        )
+        assertFalse("漂移校准不许开备份会话（MOB-32）", body.contains("BACKUP_BEGIN"))
+        assertTrue("但它仍然要问 manifest", body.contains("BACKUP_MANIFEST"))
+    }
+
+    @Test
     fun the_holder_no_longer_owns_a_second_pipeline() {
         val holder = src("backup/BackupUiStateHolder.kt")
         // "自己跑一遍备份"的标志物，一个都不许留。

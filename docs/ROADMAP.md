@@ -444,10 +444,32 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       与失败红卡「再试一次」两个触点，`manual_backup_entry` 是死文案——所以本卡
       真正修的是"在失败红卡上反复点再试一次而永远好不了"。
       247/247 + 27 条反证全红。
+- [x] MOB-32 校准把正在跑的备份会话清空，186 张照片被静默丢弃 — **2026-08-21（真机验收 owed，L0）**:
+      清场前 `du -sh` 抓到的：`.ppf/staging` 547M / 186 个已校验文件
+      （`.upload` = 0，全过了 BLAKE3），其中只有 1 个进了索引，**185 个纯孤儿**；
+      `originals` 只有 3.4M。审计对应段 `11:22:05 backup.finished ingested=0
+      duplicates=0`。根因：`backup.begin` 无条件 `insert(peer, Session::default())`，
+      而**漂移校准也走这条路**（`existCheck` = begin + manifest(items 空)），
+      会话又按设备 NodeId 索引——校准和备份同一把钥匙。用户备份途中打开 App →
+      会话被顶掉 → commit 循环零次报 0 张**却返回 ok** → 手机把整批标记「已备份」。
+      三处修：①`begin` 改成 `entry().or_default().touch()`，会话生命周期归
+      `commit` 与新的 janitor `sweep_sessions(1h)`；②新增独立于 session 的
+      `delivered` 台账（上传平面校验通过即记），commit 在「交付 N 张、入库 0 张」
+      时返回 `NothingIngested` 而非成功，水位也不推；③`inbox::sweep_orphans`
+      按「裸文件 ∧ 不在活会话保护集 ∧ 落地超宽限期」回收 staging 孤儿（启动
+      + 每小时各一次）。
+      ⚠️ 审出来的回归也一并修了：`begin` 不再清空会话后，上一轮声明过、手机上
+      已删掉的「幽灵 item」会让 commit 走 `fetch_from` 而手机从不 serve blobs
+      → 报错时 `sessions.remove` 走不到、重试又把会话 touch 活 → janitor 也收
+      不走 → 备份一直红。修法是拉取回退加 `provider.is_some()` 门。
+      ⚠️ 这也是一次**有记录的裁决反转**：BLOB-01 当时定「staging 裸文件一律
+      保留」，理由是「下一轮手机会重新 offer，省一次上传」——本卡的事故打掉了
+      这个前提（假 ok 让手机再也不 offer）。现在正确性优先于带宽。
+      反证 9/9 全红，`just ci` 全绿，Rust 313/313，Android 253/253。
+      挂账：真机跑一次完整备份、**中途打开 App**，照片必须全部到位且 staging
+      收尾为 0 字节（用户）。
 - [x] MOB-31 界面从历史终态里随机挑一条 — **2026-08-21（真机验收 owed）**:
-      用户真机：选了只有 12 张的相册，同步完成后界面显示「186 张」。先证明
-      **不是在跑全量**——`WorkProgress` 表零行、存储端审计零 ingest、库里行数
-      不变、`ppass-auto-backup` 从 11:22:05 排队至今一次没跑过。根因在
+      用户真机：选了只有 12 张的相册，同步完成后界面显示「186 张」。根因在
       `uiStateOf` 的 `infos.lastOrNull { it.state.isFinished }`：取的是**列表
       最后一个元素**，而备份有五条通道（auto/catchup/process-catchup/manual/
       media-watch）各自独立 unique name、终态记录同时躺着最多五条、共用同一
@@ -463,6 +485,12 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       ⚠️ 另记：第一次跑 gradlew 我 grep `^e:|error:`，而 gradle 报的是
       `Unable to locate a Java Runtime`——根本没跑起来我却报告"编译过了"。
       **grep 没匹配到 ≠ 成功。** `justfile` 的 `android-test` 带 JAVA_HOME。
+      ⚠️ **更正（同日）**：本卡当时的结论里有一句「不是在跑全量」，那句是错的。
+      我据以判断的事实都真（`WorkProgress` 零行、审计零 ingest、库里行数不变、
+      `ppass-auto-backup` 排队未跑），但那些只证明**我检查那一刻没有 work 在跑**，
+      我把它外推成了「那次全量没发生过」。真相见 MOB-32：11:18–11:22 确实上传了
+      186 张（547MB 进 staging），commit 报 `ingested=0` 却返回成功把它扔了，
+      所以入库审计里当然一条都没有。本卡只解释**数字为什么是 186**。
       挂账：真机选一个 12 张的相册，进度条与三元组分母都必须是 12（用户）。
 - [x] MOB-30 入库跟着上传走，不再攒到 commit — **2026-08-21（真机验收 owed）**:
       用户裁决「上传是主动的，我觉得入库也应该是主动的，而不是说批量」。
