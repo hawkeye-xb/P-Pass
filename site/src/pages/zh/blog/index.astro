@@ -1,29 +1,29 @@
 ---
-import Base from '../../layouts/Base.astro';
+import Base from '../../../layouts/Base.astro';
 import { getCollection } from 'astro:content';
-import { t } from '../../i18n/ui';
+import { t } from '../../../i18n/ui';
 
 const posts = (
   await getCollection('blog', ({ data }) => {
     // Drafts are visible in dev (review) but excluded from production builds.
-    return (import.meta.env.PROD ? data.draft !== true : true) && data.lang === 'en';
+    return (import.meta.env.PROD ? data.draft !== true : true) && data.lang === 'zh';
   })
 ).sort((a, b) => b.data.date.valueOf() - a.data.date.valueOf());
 ---
 
-<Base lang="en" title={`${t('en', 'blog.h1')} — P-Pass`} description={t('en', 'blog.description')} mirror="/zh/blog/">
+<Base lang="zh" title={`${t('zh', 'blog.h1')} — P-Pass`} description={t('zh', 'blog.description')} mirror="/blog/">
   <section class="blog">
-    <h1>{t('en', 'blog.h1')}</h1>
-    <p class="sub">{t('en', 'blog.sub')}</p>
+    <h1>{t('zh', 'blog.h1')}</h1>
+    <p class="sub">{t('zh', 'blog.sub')}</p>
 
     {
       posts.length === 0 ? (
-        <p class="empty">{t('en', 'blog.empty')}</p>
+        <p class="empty">{t('zh', 'blog.empty')}</p>
       ) : (
         <ul class="post-list">
           {posts.map((post) => (
             <li>
-              <a href={`/blog/${post.id.replace(/-en$/, '')}/`}>
+              <a href={`/zh/blog/${post.id}/`}>
                 <time datetime={post.data.date.toISOString()}>
                   {post.data.date.toISOString().slice(0, 10)}
                 </time>

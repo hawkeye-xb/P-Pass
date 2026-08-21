@@ -1,24 +1,21 @@
 ---
-import Base from '../../layouts/Base.astro';
+import Base from '../../../layouts/Base.astro';
 import { getCollection, render } from 'astro:content';
-import { t } from '../../i18n/ui';
+import { t } from '../../../i18n/ui';
 
 export async function getStaticPaths() {
   const visible = (data: { draft?: boolean; lang: string }) =>
     (import.meta.env.PROD ? data.draft !== true : true);
-  const posts = await getCollection('blog', ({ data }) => visible(data) && data.lang === 'en');
-  const zhIds = new Set(
-    (await getCollection('blog', ({ data }) => visible(data) && data.lang === 'zh')).map(
-      (p) => p.id,
+  const posts = await getCollection('blog', ({ data }) => visible(data) && data.lang === 'zh');
+  const enIds = new Set(
+    (await getCollection('blog', ({ data }) => visible(data) && data.lang === 'en')).map((p) =>
+      p.id.replace(/-en$/, ''),
     ),
   );
-  return posts.map((post) => {
-    const base = post.id.replace(/-en$/, '');
-    return {
-      params: { slug: base },
-      props: { post, mirror: zhIds.has(base) ? `/zh/blog/${base}/` : undefined },
-    };
-  });
+  return posts.map((post) => ({
+    params: { slug: post.id },
+    props: { post, mirror: enIds.has(post.id) ? `/blog/${post.id}/` : undefined },
+  }));
 }
 
 const { post, mirror } = Astro.props;
@@ -26,7 +23,7 @@ const { title, date, tags } = post.data;
 const { Content } = await render(post);
 ---
 
-<Base lang="en" title={`${title} — P-Pass`} mirror={mirror}>
+<Base lang="zh" title={`${title} — P-Pass`} mirror={mirror}>
   <article class="post">
     <header>
       <p class="meta">
@@ -39,7 +36,7 @@ const { Content } = await render(post);
       <Content />
     </div>
     <footer class="post-foot">
-      <a href="/blog/">{t('en', 'post.back')}</a>
+      <a href="/zh/blog/">{t('zh', 'post.back')}</a>
     </footer>
   </article>
 </Base>

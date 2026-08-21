@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://p-pass.hawkeye-xb.com/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://p-pass.hawkeye-xb.com/"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://p-pass.hawkeye-xb.com/zh/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://p-pass.hawkeye-xb.com/"/>
+  </url>
+  <url>
+    <loc>https://p-pass.hawkeye-xb.com/zh/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://p-pass.hawkeye-xb.com/"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://p-pass.hawkeye-xb.com/zh/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://p-pass.hawkeye-xb.com/"/>
+  </url>
+  <url>
+    <loc>https://p-pass.hawkeye-xb.com/blog/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://p-pass.hawkeye-xb.com/blog/"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://p-pass.hawkeye-xb.com/zh/blog/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://p-pass.hawkeye-xb.com/blog/"/>
+  </url>
+  <url>
+    <loc>https://p-pass.hawkeye-xb.com/zh/blog/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://p-pass.hawkeye-xb.com/blog/"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://p-pass.hawkeye-xb.com/zh/blog/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://p-pass.hawkeye-xb.com/blog/"/>
+  </url>
+  <url>
+    <loc>https://p-pass.hawkeye-xb.com/blog/why-photo-backup-for-family/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://p-pass.hawkeye-xb.com/blog/why-photo-backup-for-family/"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://p-pass.hawkeye-xb.com/zh/blog/why-photo-backup-for-family/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://p-pass.hawkeye-xb.com/blog/why-photo-backup-for-family/"/>
+  </url>
+  <url>
+    <loc>https://p-pass.hawkeye-xb.com/zh/blog/why-photo-backup-for-family/</loc>
+    <xhtml:link rel="alternate" hreflang="en" href="https://p-pass.hawkeye-xb.com/blog/why-photo-backup-for-family/"/>
+    <xhtml:link rel="alternate" hreflang="zh-CN" href="https://p-pass.hawkeye-xb.com/zh/blog/why-photo-backup-for-family/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://p-pass.hawkeye-xb.com/blog/why-photo-backup-for-family/"/>
+  </url>
+  <url><loc>https://p-pass.hawkeye-xb.com/zh/blog/icon-roof-guardian/</loc></url>
+  <url><loc>https://p-pass.hawkeye-xb.com/zh/blog/from-polling-to-events/</loc></url>
+  <url><loc>https://p-pass.hawkeye-xb.com/zh/blog/the-system-was-the-queue/</loc></url>
+</urlset>

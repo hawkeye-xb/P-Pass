@@ -1,48 +1,98 @@
 ---
 import '../styles/tokens.css';
 import '../styles/global.css';
-import { SITE_TITLE, SITE_DESCRIPTION } from '../consts';
+import { SITE_URL, GITHUB_URL, SITE_TITLE, SITE_DESCRIPTION } from '../consts';
+import { t, type Lang } from '../i18n/ui';
 
 interface Props {
+  lang: Lang;
   title?: string;
   description?: string;
+  /** Path of this page's mirror in the other language (e.g. '/zh/blog/').
+      Enables the nav language switcher and hreflang/og:locale alternates. */
+  mirror?: string;
+  /** For 404 and friends: no canonical, no og, noindex. */
+  noindex?: boolean;
 }
 
-const { title = SITE_TITLE, description = SITE_DESCRIPTION } = Astro.props;
+const {
+  lang,
+  title = SITE_TITLE[lang],
+  description = SITE_DESCRIPTION[lang],
+  mirror,
+  noindex = false,
+} = Astro.props;
+
+const home = lang === 'zh' ? '/zh/' : '/';
+const blogHome = lang === 'zh' ? '/zh/blog/' : '/blog/';
+const otherLang: Lang = lang === 'zh' ? 'en' : 'zh';
+
+const canonical = new URL(Astro.url.pathname, SITE_URL).toString();
+const mirrorUrl = mirror ? new URL(mirror, SITE_URL).toString() : undefined;
+const enUrl = lang === 'en' ? canonical : mirrorUrl;
+const zhUrl = lang === 'zh' ? canonical : mirrorUrl;
 ---
 
 <!doctype html>
-<html lang="zh-CN">
+<html lang={lang === 'zh' ? 'zh-CN' : 'en'}>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="generator" content={Astro.generator} />
     <meta name="description" content={description} />
+    {noindex && <meta name="robots" content="noindex" />}
+    {
+      !noindex && (
+        <>
+          <link rel="canonical" href={canonical} />
+          {mirrorUrl && <link rel="alternate" hreflang="en" href={enUrl} />}
+          {mirrorUrl && <link rel="alternate" hreflang="zh-CN" href={zhUrl} />}
+          {mirrorUrl && <link rel="alternate" hreflang="x-default" href={enUrl} />}
+          <meta property="og:title" content={title} />
+          <meta property="og:description" content={description} />
+          <meta property="og:type" content="website" />
+          <meta property="og:url" content={canonical} />
+          <meta property="og:image" content={`${SITE_URL}/og-cover.png`} />
+          <meta property="og:locale" content={lang === 'zh' ? 'zh_CN' : 'en_US'} />
+          {mirrorUrl && (
+            <meta property="og:locale:alternate" content={lang === 'zh' ? 'en_US' : 'zh_CN'} />
+          )}
+          <meta name="twitter:card" content="summary_large_image" />
+        </>
+      )
+    }
     <link rel="icon" type="image/svg+xml" href="/icons/icon-carbon.svg" />
-    <link rel="alternate" type="application/rss+xml" title={SITE_TITLE} href="/rss.xml" />
+    <link rel="alternate" type="application/rss+xml" title="P-Pass blog" href="/rss.xml" />
     <title>{title}</title>
   </head>
   <body>
     <header class="site-header">
       <nav class="site-nav">
-        <a class="brand" href="/">
+        <a class="brand" href={home}>
           <picture>
             <source media="(prefers-color-scheme: dark)" srcset="/icons/icon-carbon-night.svg" />
             <img src="/icons/icon-carbon.svg" alt="" width="36" height="36" />
           </picture>
           <span>P-Pass</span>
         </a>
-        <a href="/blog/">博客</a>
-        <a href="https://github.com/hawkeye-xb/P-Pass" rel="external">GitHub</a>
-        <a href="/rss.xml">RSS</a>
+        <a href={blogHome}>{t(lang, 'nav.blog')}</a>
+        <a href={GITHUB_URL} rel="external">GitHub</a>
+        <a href="/rss.xml" class="rss-link">RSS</a>
+        {
+          mirror && (
+            <a class="lang-switch" href={mirror} hreflang={otherLang === 'zh' ? 'zh-CN' : 'en'}>
+              {t(lang, 'nav.lang')}
+            </a>
+          )
+        }
       </nav>
     </header>
     <main>
       <slot />
     </main>
     <footer class="site-footer">
-      <p>P-Pass — 家人照片备份。开源，端到端加密，零追踪。</p>
-      <p><a href="https://github.com/hawkeye-xb/P-Pass" rel="external">GitHub 仓库</a></p>
+      <p>{t(lang, 'footer.tag')}</p>
+      <p><a href={GITHUB_URL} rel="external">{t(lang, 'footer.repo')}</a></p>
     </footer>
   </body>
 </html>
@@ -58,15 +108,18 @@ const { title = SITE_TITLE, description = SITE_DESCRIPTION } = Astro.props;
   .site-nav {
     max-width: 960px;
     margin: 0 auto;
-    padding: 0.6rem 1.25rem;
+    padding: 0.4rem 1.25rem;
     display: flex;
     align-items: center;
-    gap: 1.5rem;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
     font-size: 0.95rem;
   }
   .site-nav a {
     text-decoration: none;
     color: var(--text-secondary);
+    padding: 0.5rem 0.6rem;
+    border-radius: var(--radius-control-sm);
   }
   .site-nav a:hover { color: var(--text); }
   .site-nav .brand {
@@ -76,8 +129,19 @@ const { title = SITE_TITLE, description = SITE_DESCRIPTION } = Astro.props;
     gap: 0.5rem;
     color: var(--text);
     font-weight: 600;
+    padding-left: 0;
   }
   .brand img { display: block; }
+  /* Language switcher: same level as every other nav item, never a footnote. */
+  .lang-switch { color: var(--text); }
+  @media (max-width: 640px) {
+    .site-nav { gap: 0.1rem 0.15rem; font-size: 0.9rem; }
+    .site-nav a { padding: 0.7rem 0.45rem; }
+    .site-nav .brand { gap: 0.4rem; }
+    /* Keep the nav to one row on phones: RSS stays discoverable via the
+       <link> tag and desktop nav. */
+    .site-nav .rss-link { display: none; }
+  }
   .site-footer {
     max-width: 960px;
     margin: 0 auto;

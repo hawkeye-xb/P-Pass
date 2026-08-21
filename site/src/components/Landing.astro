@@ -1,0 +1,193 @@
+---
+import { RELEASES_URL, GITHUB_URL } from '../consts';
+import { t, type Lang } from '../i18n/ui';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+
+const pillars = [
+  { title: t(lang, 'pillar1.title'), body: t(lang, 'pillar1.body') },
+  { title: t(lang, 'pillar2.title'), body: t(lang, 'pillar2.body') },
+  { title: t(lang, 'pillar3.title'), body: t(lang, 'pillar3.body') },
+];
+---
+
+<section class="hero">
+  <picture class="beast">
+    <source media="(prefers-color-scheme: dark)" srcset="/icons/icon-carbon-night.svg" />
+    <img src="/icons/icon-carbon.svg" alt={t(lang, 'hero.icon.alt')} width="160" height="160" />
+  </picture>
+  <p class="overline">{t(lang, 'hero.overline')}</p>
+  <h1>{t(lang, 'hero.h1')}</h1>
+  <p class="lede">{t(lang, 'hero.lede')}</p>
+  <a class="cta" href={RELEASES_URL} rel="external">
+    {t(lang, 'hero.cta')}
+    <span class="cta-sub">{t(lang, 'hero.cta.sub')}</span>
+  </a>
+  <p class="testing">{t(lang, 'testing.note')}</p>
+</section>
+
+<section class="pillars">
+  {
+    pillars.map((p) => (
+      <article>
+        <h2>{p.title}</h2>
+        <p>{p.body}</p>
+      </article>
+    ))
+  }
+</section>
+
+<section class="build">
+  <h2>{t(lang, 'build.title')}</h2>
+  <p>
+    {t(lang, 'build.body')}
+    <a href={GITHUB_URL} rel="external">{t(lang, 'build.link')}</a>
+  </p>
+</section>
+
+<section class="privacy-note">
+  <h2>{t(lang, 'privacy.h2')}</h2>
+  <p>{t(lang, 'privacy.body')}</p>
+</section>
+
+<p class="closing">{t(lang, 'closing')}</p>
+
+<style>
+  .hero {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 4.5rem 1.25rem 3.5rem;
+    text-align: center;
+  }
+  .beast img {
+    width: 128px;
+    height: 128px;
+    margin-bottom: 1.5rem;
+  }
+  .overline {
+    font-size: 0.85rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-meta);
+    margin: 0 0 0.75rem;
+  }
+  h1 {
+    font-size: clamp(2rem, 6vw, 3rem);
+    margin: 0 0 1.25rem;
+    text-wrap: balance;
+  }
+  .lede {
+    max-width: 34em;
+    margin: 0 auto 2rem;
+    color: var(--text-secondary);
+    font-size: 1.1rem;
+  }
+  .cta {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    min-height: 56px;
+    box-sizing: border-box;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 0.9rem 2.2rem;
+    border-radius: var(--radius-control);
+    text-decoration: none;
+    font-weight: 600;
+    transition: background 0.15s ease;
+  }
+  .cta:hover { background: var(--ink-hover); color: var(--paper); }
+  .cta-sub {
+    font-size: 0.8rem;
+    font-weight: 400;
+    opacity: 0.75;
+  }
+  @media (prefers-color-scheme: dark) {
+    .cta { background: var(--paper); color: var(--ink); }
+    .cta:hover { background: var(--linen); color: var(--ink); }
+  }
+
+  /* Testing honesty note: amber = waiting (token meaning color). Green is
+     reserved for "photos safely stored" and never appears on this page. */
+  .testing {
+    display: block;
+    width: fit-content;
+    box-sizing: border-box;
+    margin: 1.5rem auto 0;
+    padding: 0.6rem 1.1rem;
+    background: var(--waiting-bg);
+    color: var(--waiting);
+    border-radius: var(--radius-control);
+    font-size: 0.85rem;
+    line-height: 1.55;
+    max-width: 38em;
+  }
+
+  .pillars {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 1.25rem 4rem;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.25rem;
+  }
+  .pillars article {
+    background: var(--canvas);
+    border-radius: var(--radius-card);
+    padding: 1.75rem 1.5rem;
+  }
+  .pillars h2 {
+    font-size: 1.35rem;
+    margin: 0 0 0.75rem;
+  }
+  .pillars p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 0.98rem;
+  }
+  @media (max-width: 760px) {
+    .pillars { grid-template-columns: 1fr; }
+  }
+
+  .build {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 1.25rem 4rem;
+    text-align: center;
+  }
+  .build h2 { font-size: 1.4rem; margin: 0 0 0.75rem; }
+  .build p {
+    max-width: 34em;
+    margin: 0 auto;
+    color: var(--text-secondary);
+  }
+
+  .privacy-note {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 1.25rem 4rem;
+    text-align: center;
+  }
+  .privacy-note h2 { font-size: 1.4rem; margin: 0 0 0.75rem; }
+  .privacy-note p {
+    max-width: 32em;
+    margin: 0 auto;
+    color: var(--text-meta);
+  }
+
+  .closing {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 1.25rem 4.5rem;
+    text-align: center;
+    font-family: var(--font-serif);
+    font-size: 1.5rem;
+    line-height: 1.4;
+  }
+</style>
