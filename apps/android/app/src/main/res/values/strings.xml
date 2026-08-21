@@ -4,7 +4,7 @@
 
     <!-- Welcome -->
     <string name="welcome_headline">Photos,\nfinding their way home.</string>
-    <string name="welcome_sub">Phone photos back up to your own computer at home. No cloud, no account, no monthly fee.</string>
+    <string name="welcome_sub">Phone photos back up to your own computer at home. No cloud, no account — backing up at home is free, forever.</string>
     <string name="welcome_scan">Scan to connect the home computer</string>
     <!-- T-080 layout v1: welcome three steps -->
     <string name="welcome_step1">1 · Open P-Pass on the home computer</string>
