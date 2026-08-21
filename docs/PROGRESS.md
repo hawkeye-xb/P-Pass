@@ -944,3 +944,27 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   `GH_TOKEN`/`GITHUB_TOKEN`。路径过滤的 ci-rust / ci-android / ci-desktop 已被
   今天 9 个 commit 自动触发，但结论看不到。⚠️ **纪律没履行就要说出来**，
   不能因为"推上去了"就当 CI 绿了。
+
+## 2026-08-21（夜）CI 红：本地 clippy 落后 7 个小版本，`just ci` 绿是假的
+
+- **`just ci` 绿不等于 CI 会绿**——除非本地工具链与 CI 同版本。本地 stable 停在
+  1.91.0（2025-10-28），CI 的 stable 已到 1.98.0；1.98 新增的
+  `chunks_exact_to_as_chunks` 在本地 clippy 里**根本不存在**，扫不出来。
+  ⚠️ 这是「本地验证过了」这句话第一次被证伪。**验证的有效性取决于验证工具与
+  目标环境同版本**，工具版本本身就是被验证对象的一部分。
+- **CI 只报了 1 处，实际全仓 7 处。** `-D warnings` 让 `transport` 先炸，
+  后面的 crate 根本没检查（`waiting for other jobs to finish`）。
+  ⚠️ **只修 CI 报的那一处必然换来第二次红**——这次主动 grep 了全仓，7 处一起改
+  （E2E-02 那条「还有几个同形的」教训，这次在正确的时机用上了）。
+- **根因是两侧都不钉**：`rust-toolchain.toml` 写的是 `channel = "stable"`，
+  CI 也用 `dtolnay/rust-toolchain@stable`。已钉成 `1.98.0`，升级从"某天 CI 突然红"
+  变成一次显式提交。
+- ⚠️ **`BUILD-02`：CI 侧能不能钉住我没核实**（`dtolnay/rust-toolchain` 是否导出
+  `RUSTUP_TOOLCHAIN` 会盖掉 toml，没 gh 认证验不了）。**不确定就不许当成已解决**
+  ——写成卡，别在回话里说"本地 == CI 构造上成立"。
+- **和 `BUILD-01` 是同一个病的两个方向**：本地落后 → CI 红（Rust）；本地超前 →
+  本地红（JDK 25 vs CI 钉 17）。结论不是"本地要跟上 CI"，而是
+  **工具链版本必须有唯一真相，且两侧都从它取**。
+- ⚠️ 顺带一个操作失误：我同时起了后台和前台两个 `rustup update`，两者抢同一个
+  下载目录，报 `could not rename downloaded file ... No such file or directory`。
+  **看着像磁盘权限问题，其实是我自己制造的竞态。**

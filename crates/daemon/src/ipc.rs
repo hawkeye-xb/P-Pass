@@ -1237,7 +1237,7 @@ fn parse_hex32(s: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut out = Vec::with_capacity(32);
-    for chunk in s.as_bytes().chunks_exact(2) {
+    for chunk in s.as_bytes().as_chunks::<2>().0 {
         let hi = (chunk[0] as char).to_digit(16)?;
         let lo = (chunk[1] as char).to_digit(16)?;
         out.push(((hi << 4) | lo) as u8);

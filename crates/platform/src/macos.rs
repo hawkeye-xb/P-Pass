@@ -237,7 +237,7 @@ impl KeyStore for KeychainStore {
         let hex = String::from_utf8_lossy(&out.stdout).trim().to_string();
         let mut bytes = Vec::with_capacity(hex.len() / 2);
         let raw = hex.as_bytes();
-        for chunk in raw.chunks_exact(2) {
+        for chunk in raw.as_chunks::<2>().0 {
             let hi = (chunk[0] as char).to_digit(16);
             let lo = (chunk[1] as char).to_digit(16);
             match (hi, lo) {

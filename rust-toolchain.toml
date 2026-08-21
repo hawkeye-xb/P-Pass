@@ -1,3 +1,12 @@
 [toolchain]
-channel = "stable"
+# ⚠️ 2026-08-21：这里原本是 `channel = "stable"`——**两边都不钉，就会漂开**。
+#
+# 本地 stable 停在 1.91.0（2025-10-28），CI 的 stable 已经是 1.98.0，
+# 差了 7 个小版本。于是 `just ci` 本地全绿、CI 上 clippy 直接红：
+# 1.98 新增的 `chunks_exact_to_as_chunks` 在本地根本不存在，扫不出来。
+# 全仓 7 处 `chunks_exact(2)` 全中，CI 只报了第一个（transport 先炸就停）。
+#
+# 钉死具体版本之后：本地 == CI 是**构造上**成立的，升级变成一次显式提交
+# （改这一行 + 跑 just ci + 修新 lint），而不是某天 CI 突然红。
+channel = "1.98.0"
 components = ["rustfmt", "clippy"]

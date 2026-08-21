@@ -166,7 +166,7 @@ fn corpus(dir: &Path, total: u32, duplicate_every: u32) -> HashMap<String, (Vec<
 async fn import_all(client: &Client, files: &HashMap<String, (Vec<u8>, BackupItem)>, dir: &Path) {
     for (hash_hex, (_, item)) in files {
         let mut hash = [0u8; 32];
-        for (i, chunk) in hash_hex.as_bytes().chunks_exact(2).enumerate() {
+        for (i, chunk) in hash_hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             hash[i] = u8::from_str_radix(std::str::from_utf8(chunk).unwrap(), 16).unwrap();
         }
         client

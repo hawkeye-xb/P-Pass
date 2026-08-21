@@ -47,7 +47,26 @@ debug 构建与单测在 JDK 25 上也正常 —— **只有 release 的 lintVit
 | macOS | `apps/desktop/src-tauri/target/release/bundle/macos/P-Pass.app` | ✅ 出得来。内置 `ppf-daemon` 已核对含 MOB-32 + DESK-08 的代码。updater 的 `.tar.gz` 签名步报错（`TAURI_SIGNING_PRIVATE_KEY` 缺失）——**无凭据路径，release.yml 上同样跳过**，不影响 `.app` 本身 |
 | Android | `app/build/outputs/apk/release/app-release-unsigned.apk` | ⚠️ 绕开 lint 才出得来；且**未签名**，装不上真机。正式真机测试继续用 debug APK，或由 CI 的 release.yml 出签名包 |
 
+## 2026-08-21 补记：同一个病在 Rust 侧真的咬了
+
+本卡开出来几小时后，**Rust 侧出了同形事故的反方向**：本地 stable 停在
+1.91.0、CI 的 stable 已到 1.98.0，`just ci` 本地全绿而 CI 上 clippy 直接红
+（1.98 新增的 `chunks_exact_to_as_chunks`，本地根本没这条 lint）。
+
+| | 本地 | CI | 症状 |
+|---|---|---|---|
+| Rust | 跟着 rustup stable 漂（停在 1.91） | 浮在最新 stable（1.98） | **本地绿 CI 红** |
+| JDK | 跟着 `brew --prefix openjdk` 漂（25） | 钉 `java-version: "17"` | **本地红**（本卡） |
+
+**两个方向都出过事。** 所以结论不是"本地要跟上 CI"，而是
+**工具链版本必须有唯一真相，且两侧都从它取**。
+
+Rust 侧已经钉了 `rust-toolchain.toml` → `1.98.0`；CI 侧能不能钉住另开
+`BUILD-02`（`dtolnay/rust-toolchain` 是否导出 `RUSTUP_TOOLCHAIN` 会盖掉 toml，
+没核实过）。JDK 侧就是本卡。
+
 ## 验收要求
 
 - 本机 `just android-test` 与 `assembleRelease` 都能在钉住的 JDK 上跑通
 - JDK 不匹配时报的是人话，不是 `> 25.0.1`
+- **版本号只许出现在一处**（与 `BUILD-02` 同一原则）

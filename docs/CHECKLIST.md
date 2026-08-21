@@ -127,7 +127,8 @@
 | 4 | `SYNC-05` | `AssetMeta` 补 `src_device`，消灭客户端影子状态 | L1 | 无，可做 |
 | 5 | — | 活动流把 `asset.replaced_in_place` 这类**机器串**直接显示给用户 | L2 | 还没开卡 |
 | 6 | `WATCH-05` | inode 身份缓存（stat 没变就不重算 hash） | L2 | **你说实施前重开讨论** |
-| 7 | `BUILD-01` | 本地 JDK 25 让 Android release 构建挂在 lint（CI 钉 17 不受影响） | L3 | 无，可做 |
+| 7 | `BUILD-02` | 工具链钉在本地了，但 CI 侧能不能钉住**没核实**（action 可能导出 `RUSTUP_TOOLCHAIN` 盖掉 toml） | L2 | 无，可做 |
+| 8 | `BUILD-01` | 本地 JDK 25 让 Android release 构建挂在 lint（CI 钉 17 不受影响） | L3 | 无，可做 |
 
 `WATCH-05` 的账：`stat` 4.6 µs/张 vs 全量 hash 2.8 ms/张 = **620 倍**（203 张
 真实照片 / 570MB 实测）。目标量级几万张，这条是必做的。
