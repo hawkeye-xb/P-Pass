@@ -131,12 +131,18 @@ class BackupRunner(private val client: DaemonClient) {
     }
 
     /** DOG-01c: 漂移校准的只查不传 exist-check——用缓存 hash 集问 daemon
-     *  「哪些已不在库」（begin + manifest，不 push 不 commit）。返回
+     *  「哪些已不在库」（只发 manifest，不 begin 不 push 不 commit）。返回
      *  missing 集合；daemon 不可达/未配对时抛错，由调用方跳过
-     *  （三元组显示缓存值，不归零不崩）。 */
+     *  （三元组显示缓存值，不归零不崩）。
+     *
+     *  ⚠️ MOB-32：这里原本先发一次 `backup.BEGIN`。校准根本不需要会话
+     *  （`manifest` 自己会 `entry().or_default()`），而 daemon 侧的会话是
+     *  **按设备 NodeId** 索引的——于是「备份途中打开 App」= 校准把正在跑
+     *  的那一轮清空，186 张照片传上来后被静默丢弃。daemon 侧已经修成
+     *  「begin 不破坏活会话」（旧版 APK 打新 daemon 也安全），这里顺手把
+     *  这次多余的往返也去掉。 */
     suspend fun existCheck(daemon: PeerAddrParts, hashes: Set<String>): Set<String> =
         withContext(Dispatchers.IO) {
-            callOk(daemon, Methods.BACKUP_BEGIN, buildJsonObject {})
             val manifest = BackupManifest(
                 hashes = hashes.toList(),
                 items = emptyList(),

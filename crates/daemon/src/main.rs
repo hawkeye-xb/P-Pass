@@ -307,7 +307,14 @@ async fn main() -> anyhow::Result<()> {
     // 代价：回退路径若被打断，已拉到一半的部分数据不能跨重启续传。可以接受
     // ——那条路是按 commit 批次重试的，最多重拉一个文件。
     let blobs_dir = transport::Blobs::store_dir(&data_dir.join(".ppf"));
-    let reclaimed = daemon::reclaim_inbox(&blobs_dir, &data_dir.join(".ppf/staging"));
+    // MOB-32：同一趟顺手收走 staging 里的孤儿——已校验落地但没人认领的
+    // 裸文件。启动这一刻会话表必空（内存态），所以保护集为空；宽限期仍然
+    // 给足，崩溃重启后刚落地那几个不至于白传。真机上这里要清的存量是 547MB。
+    let reclaimed = daemon::reclaim_inbox(
+        &blobs_dir,
+        &data_dir.join(".ppf/staging"),
+        daemon::STAGING_ORPHAN_GRACE,
+    );
     if reclaimed > 0 {
         tracing::info!("BLOB-01: 收件箱回收 {} 字节", reclaimed);
     }
@@ -344,12 +351,25 @@ async fn main() -> anyhow::Result<()> {
     );
     {
         let reconcile = reconcile.clone();
+        let backup = backup.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
                 let r = reconcile.run_once().await;
                 if r.removed > 0 {
                     tracing::info!("SYNC-01: 每小时对账移除幽灵资产 {} 条", r.removed);
+                }
+                // MOB-32 janitor：`begin` 不再重置会话之后，总得有人收走
+                // 中途死掉的那一轮（否则上一轮声明过、手机再也不会提供的
+                // 「幽灵 item」会一直留在 items 里）。会话收走了，它保护的
+                // staging 孤儿也就跟着能回收了——顺序有意如此。
+                let dropped = backup.sweep_sessions(daemon::SESSION_IDLE_TTL);
+                if dropped > 0 {
+                    tracing::info!("MOB-32: 清理空闲备份会话 {dropped} 个");
+                }
+                let freed = backup.reclaim_staging(daemon::STAGING_ORPHAN_GRACE);
+                if freed > 0 {
+                    tracing::info!("MOB-32: 回收 staging 孤儿 {freed} 字节");
                 }
             }
         });
