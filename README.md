@@ -4,9 +4,9 @@
 
 Peer-to-peer photo backup for families: phones back up automatically to
 a computer in your own home; everyone in the family browses across
-devices. No cloud storage, no accounts, no subscription — original
-files are the source of truth and the index can be rebuilt from them at
-any time.
+devices. No cloud storage, no accounts — and backing up at home is
+free, forever. Original files are the source of truth and the index
+can be rebuilt from them at any time.
 
 **Roadmap & status: [docs/ROADMAP.md](docs/ROADMAP.md)**
 
@@ -73,7 +73,9 @@ The app walks you through it — just click through:
 1. On the same [release page](https://github.com/hawkeye-xb/P-Pass/releases),
    download the phone app (**app-release.apk**, Android). Android may warn
    about installing from an unknown source — that's normal for a direct
-   download; allow it. (iPhone version is coming later.)
+   download; allow it. (iPhone version is coming later; iOS limits
+   background backup, so its experience will differ — we'll spell that
+   out when it ships.)
    在同一个 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)
    下载手机 App（**app-release.apk**，Android）。Android 会提示"未知来源
    安装"——直接下载的正常提示，允许即可。（iPhone 版后续推出。）

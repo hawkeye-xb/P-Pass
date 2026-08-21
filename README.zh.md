@@ -3,7 +3,7 @@
 [English version / 英文版](README.md)
 
 家庭照片的 P2P 备份：手机自动备份到自己家的电脑，全家跨设备浏览。
-无云端存储、无账号、无月费——原始文件即真相，索引可随时重建。
+无云端存储、无账号——回家自动同步永远免费。原始文件即真相，索引可随时重建。
 
 **里程碑与状态看板：[docs/ROADMAP.md](docs/ROADMAP.md)**
 
@@ -62,7 +62,8 @@
 
 1. 在同一个 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)
    下载手机 App（**app-release.apk**，Android）。Android 会提示"未知来源
-   安装"——直接下载的正常提示，允许即可。（iPhone 版后续推出。）
+   安装"——直接下载的正常提示，允许即可。（iPhone 版后续推出；受 iOS
+   系统限制，后台自动备份的体验会不同，发布时会说清楚。）
    Download the phone app on the same release page (**app-release.apk**,
    Android). Android's "unknown source" warning is normal for a direct
    download; allow it. (iPhone version later.)
@@ -141,3 +142,9 @@ tools/dogfood-smoke.sh     # 生产形态端到端冒烟（agent 可无人执行
   无人化驱动与验证——GUI 只是这些接口上的皮肤。
 - **架构门禁**：`iroh` 只准出现在 `transport`；平台 `#[cfg]` 只准出现在
   `platform`；由 `tools/arch-check.sh` 在 CI 强制。
+
+## License
+
+P-Pass 采用 **GNU Affero 通用公共许可证 v3**（AGPL-3.0）——许可证全文见
+[LICENSE](LICENSE)。全部 crate、Android App、桌面壳与官网（`site/`）
+均在其覆盖范围内。Copyright (C) 2026 Hawkeye XB。
