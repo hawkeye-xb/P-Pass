@@ -117,7 +117,12 @@ async fn fixture() -> Fixture {
     blobs.attach_to_listener();
     let backup = BackupEngine::new(db.clone(), blobs.clone(), library.path());
     let query = QueryEngine::new(db.clone(), blobs.clone(), library.path());
-    let upload = daemon::upload::UploadPlane::new(db.clone(), library.path().join(".ppf/staging"));
+    // MOB-30: 上传平面拿同一个 engine——收完一张立刻入库。
+    let upload = daemon::upload::UploadPlane::new(
+        db.clone(),
+        library.path().join(".ppf/staging"),
+        backup.clone(),
+    );
     let download = daemon::download::DownloadPlane::new(db.clone(), library.path().to_path_buf());
     let router = Router::new(db.clone(), "test-daemon")
         .with_backup(backup)

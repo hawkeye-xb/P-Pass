@@ -96,7 +96,12 @@ async fn fixture() -> Fixture {
     let backup = BackupEngine::new(db.clone(), blobs.clone(), library.path());
     // BLOB-01: 上传平面不再碰 blob store——校验自己做，文件留 staging 等
     // ingest。blobs 仍传给 BackupEngine（回退路径 T-032 用）。
-    let upload = UploadPlane::new(db.clone(), library.path().join(".ppf/staging"));
+    // MOB-30: 上传平面拿同一个 engine——收完一张立刻入库。
+    let upload = UploadPlane::new(
+        db.clone(),
+        library.path().join(".ppf/staging"),
+        backup.clone(),
+    );
     let download = daemon::download::DownloadPlane::new(db.clone(), library.path().to_path_buf());
     let router = Router::new(db.clone(), "test-daemon")
         .with_backup(backup)
@@ -385,4 +390,146 @@ async fn stranger_cannot_download() {
     let head: Resp = proto::codec::decode(&head).unwrap();
     assert!(!head.ok);
     assert_eq!(head.error.unwrap().code, proto::codes::NOT_AUTHORIZED);
+}
+
+// ---------------------------------------------------------------------------
+// MOB-30：入库跟着上传走，不攒到 commit
+// ---------------------------------------------------------------------------
+
+/// 造 N 张互不相同的"照片"，返回 (bytes, hash) 列表。
+fn photos(n: u8) -> Vec<(Vec<u8>, String)> {
+    (0..n)
+        .map(|i| {
+            let mut v = vec![i; 50_000 + i as usize];
+            v.extend_from_slice(format!("mob30-{i}").as_bytes());
+            let h = blake3::hash(&v).to_hex().to_string();
+            (v, h)
+        })
+        .collect()
+}
+
+fn manifest_of(items: &[(Vec<u8>, String)]) -> BackupManifest {
+    BackupManifest {
+        hashes: items.iter().map(|(_, h)| h.clone()).collect(),
+        items: items
+            .iter()
+            .enumerate()
+            .map(|(i, (_, h))| BackupItem {
+                hash: h.clone(),
+                file_name: format!("MOB30_{i}.jpg"),
+                media_type: "image/jpeg".into(),
+            })
+            .collect(),
+        provider: None,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn index_grows_with_each_upload_not_only_at_commit() {
+    // 用户 2026-08-21：「上传是主动的，我觉得入库也应该是主动的，而不是
+    // 说批量。」在此之前入库全挤在 commit 里——传 500 张时照片墙 8 分钟
+    // 毫无动静，最后一秒全部冒出来。
+    let f = fixture().await;
+    let daemon_id = f.daemon_tp.node_id();
+    let set = photos(3);
+
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(manifest_of(&set)).unwrap(),
+    )
+    .await;
+    assert!(resp.ok, "{:?}", resp.error);
+
+    // 逐张上传，每张之后索引都必须**已经**多一行——不能等 commit。
+    for (n, (data, h)) in set.iter().enumerate() {
+        let resp = upload(&f.phone_tp, daemon_id, h, data).await;
+        assert!(resp.ok, "upload {h}: {:?}", resp.error);
+        assert_eq!(
+            f.db.count_assets().await.unwrap(),
+            n as i64 + 1,
+            "第 {} 张传完时索引应有 {} 行（入库跟着上传走）",
+            n + 1,
+            n + 1,
+        );
+    }
+
+    // commit 只做收尾：数字仍然要如实报 3 张新增，不能因为"已在索引里"
+    // 就报成 duplicates。
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_COMMIT,
+        serde_json::json!({"generation": 11}),
+    )
+    .await;
+    assert!(resp.ok, "{:?}", resp.error);
+    let r = resp.result.unwrap();
+    assert_eq!(r["ingested"], 3, "上传阶段入库的必须算进 commit 的账: {r}");
+    assert_eq!(r["duplicates"], 0, "不许把自己刚入库的再数成重复: {r}");
+    assert_eq!(f.db.count_assets().await.unwrap(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_cut_short_does_not_re_upload_what_already_landed() {
+    // 传到一半断掉：已经落地的那些必须进索引，于是下一轮 manifest 报的
+    // missing 里不含它们，手机不会重新上传。
+    //
+    // 旧行为：manifest 算 missing 只查索引不看 staging，而入库全在 commit
+    // ——传到第 400 张断掉时 400 个文件安然躺在 staging 里而索引一条都没有，
+    // 下一轮手机把这 400 张重新传一遍。
+    let f = fixture().await;
+    let daemon_id = f.daemon_tp.node_id();
+    let set = photos(3);
+
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(manifest_of(&set)).unwrap(),
+    )
+    .await;
+    // 只传前两张，然后**不 commit**（模拟断线）。
+    for (data, h) in set.iter().take(2) {
+        assert!(upload(&f.phone_tp, daemon_id, h, data).await.ok);
+    }
+
+    // 新会话重来一轮：missing 必须只剩没传的那一张。
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(manifest_of(&set)).unwrap(),
+    )
+    .await;
+    assert!(resp.ok, "{:?}", resp.error);
+    let missing: Vec<String> =
+        serde_json::from_value(resp.result.unwrap()["hashes"].clone()).unwrap();
+    assert_eq!(
+        missing,
+        vec![set[2].1.clone()],
+        "已落地的两张不该再出现在 missing 里（否则手机会重传）",
+    );
 }
