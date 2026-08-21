@@ -324,7 +324,10 @@ async fn main() -> anyhow::Result<()> {
     // DESK-03: 本地 IPC 也注入查询平面——桌面壳照片墙走同一 QueryEngine
     // （与手机同一数据源），timeline/thumb/asset.* 双平面可答。
     ipc.set_query(query.clone());
-    let upload = daemon::upload::UploadPlane::new(db.clone(), data_dir.join(".ppf/staging"));
+    // MOB-30：上传平面拿同一个 BackupEngine——收完一张就走它入库，
+    // 单条入库的实现只有一份（BackupEngine::ingest_one）。
+    let upload =
+        daemon::upload::UploadPlane::new(db.clone(), data_dir.join(".ppf/staging"), backup.clone());
     let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
     // ── SYNC-01 外部删除对账 ──────────────────────────────

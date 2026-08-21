@@ -24,6 +24,10 @@ const MAX_UPLOAD_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 #[derive(Clone)]
 pub struct UploadPlane {
     db: Db,
+    /// MOB-30：收完一张就入库，不再攒到 `backup.commit`。
+    /// 拿 engine 而不是自己持有 Ingestor：单条入库的实现只能有一份
+    /// （`BackupEngine::ingest_one`），各写一遍必然漂移。
+    engine: crate::BackupEngine,
     // BLOB-01: 上传平面不再碰 blob store（校验自己做，文件留 staging 等
     // ingest）。字段保留但不用会被 clippy 顶回来，所以直接去掉——回退路径
     // （T-032 主动拉取）的 blob store 由 BackupEngine 持有。
@@ -31,8 +35,12 @@ pub struct UploadPlane {
 }
 
 impl UploadPlane {
-    pub fn new(db: Db, staging: PathBuf) -> Self {
-        Self { db, staging }
+    pub fn new(db: Db, staging: PathBuf, engine: crate::BackupEngine) -> Self {
+        Self {
+            db,
+            engine,
+            staging,
+        }
     }
 
     /// Serve one upload connection: streams arrive sequentially, one
@@ -96,6 +104,18 @@ impl UploadPlane {
 
         match outcome {
             Ok(()) => {
+                // MOB-30：收完一张**立刻入库**，不攒到 commit。
+                // 用户定调：「上传是主动的，我觉得入库也应该是主动的。」
+                //
+                // 失败不让这条流失败——文件已校验落在 staging 里，`commit`
+                // 会兜底重试；把 ACK 变成错误只会让手机把这张重传一遍。
+                // 但必须留日志（别静默吞）。
+                if let Err(e) = self.engine.ingest_staged(peer, &header.hash).await {
+                    tracing::warn!(
+                        "upload {}: 即时入库失败，留给 commit 兜底: {e}",
+                        header.hash
+                    );
+                }
                 let resp = Resp::ok(String::new(), serde_json::json!({"stored": header.hash}));
                 let _ = self.send(stream, &resp).await;
                 true
