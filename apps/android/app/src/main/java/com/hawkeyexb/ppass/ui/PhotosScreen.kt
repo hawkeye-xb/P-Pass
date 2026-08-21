@@ -272,13 +272,14 @@ internal fun PhotosScreen(
         // 2026-08-17 用户真机反馈："N 张 · 已去重"这行副标题对家人用户
         // 没有信息量（纯技术术语，桌面端才关心去重）——没有现成的"上次
         // 同步于 X 分钟前"这类数据源可用（TimelineSubscriptionHolder 不
-        // 追踪时间戳，硬加会是编数据），删掉这行副标题，标题单独站着，
-        // 不为了填内容硬凑一句没用的话。
-        Text(
-            stringResource(R.string.photos_title), fontSize = 30.sp,
-            fontFamily = FontFamily.Serif, color = PPColor.Ink,
-            modifier = Modifier.padding(24.dp, 18.dp, 24.dp, 10.dp),
-        )
+        // 追踪时间戳，硬加会是编数据），删掉这行副标题。
+        //
+        // 2026-08-21 用户真机裁决：**大标题「全家的照片」也删掉**——
+        // 「占位置还没有什么意义」。底部 tab 已经写着「照片」，30sp serif
+        // 标题是同一句话说第二遍，还吃掉手机上最金贵的首屏纵向空间。
+        // ⚠️ 这是对设计稿 layout-v1 的一处**有意偏离**（设计稿要求标题
+        // 单独站着），记在 UI-01 卡里，不是漏做。
+        Spacer(Modifier.height(8.dp))
 
         // 设计稿："和家里的电脑失去了联系"红色警示卡——配对被电脑端
         // 移除/吊销后，照片页也要露出（不能只藏在设置页才看得到）。
