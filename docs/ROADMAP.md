@@ -444,6 +444,45 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       与失败红卡「再试一次」两个触点，`manual_backup_entry` 是死文案——所以本卡
       真正修的是"在失败红卡上反复点再试一次而永远好不了"。
       247/247 + 27 条反证全红。
+- [x] MOB-31 界面从历史终态里随机挑一条 — **2026-08-21（真机验收 owed）**:
+      用户真机：选了只有 12 张的相册，同步完成后界面显示「186 张」。先证明
+      **不是在跑全量**——`WorkProgress` 表零行、存储端审计零 ingest、库里行数
+      不变、`ppass-auto-backup` 从 11:22:05 排队至今一次没跑过。根因在
+      `uiStateOf` 的 `infos.lastOrNull { it.state.isFinished }`：取的是**列表
+      最后一个元素**，而备份有五条通道（auto/catchup/process-catchup/manual/
+      media-watch）各自独立 unique name、终态记录同时躺着最多五条、共用同一
+      个 tag，且 `getWorkInfosByTagFlow` **不保证按时间排序**（Room 顺序，
+      实际按 UUID）。于是「拿最后一个」= 随机挑一条历史记录，186 是 8/20
+      那次全量运行留下的旧终态。改法：worker 每个终态都盖 `KEY_FINISHED_AT`
+      （`successStamped()` 统一出口 + 失败分支单独盖），`uiStateOf` 按戳挑
+      最大值；没戳的算最旧，一条戳都没有才退回列表顺序（升级首帧不空白）。
+      守卫断言正文里不许再出现裸 `Result.success(`——真正的风险是以后加新
+      终态返回点忘了盖戳。反证 4/4 全红，android 单测 252/252。
+      ⚠️ 反证抓到我自己两个恒真式：①盖戳断言原本对整个文件 contains，而失败
+      分支里有同一串；②「全无戳退回列表顺序」原本只放一条记录。都已修。
+      ⚠️ 另记：第一次跑 gradlew 我 grep `^e:|error:`，而 gradle 报的是
+      `Unable to locate a Java Runtime`——根本没跑起来我却报告"编译过了"。
+      **grep 没匹配到 ≠ 成功。** `justfile` 的 `android-test` 带 JAVA_HOME。
+      挂账：真机选一个 12 张的相册，进度条与三元组分母都必须是 12（用户）。
+- [x] MOB-30 入库跟着上传走，不再攒到 commit — **2026-08-21（真机验收 owed）**:
+      用户裁决「上传是主动的，我觉得入库也应该是主动的，而不是说批量」。
+      在此之前上传逐张校验落 staging，但 `place()` + 插索引行全在
+      `backup.commit`，即所有文件传完之后。后果①传 500 张时照片墙 8 分钟毫无
+      动静最后一秒全冒出来；②`manifest` 算 `missing` 只查索引不看 staging，
+      传到第 400 张断掉时那 400 个文件安然在 staging 而索引一条都没有 →
+      下一轮手机全部重新上传（BLOB-01 记的「断了整个重传」是单文件级别，
+      commit 的批量性把它放大成整批级别）。改法：抽出
+      `BackupEngine::ingest_one` 作为单条入库的**唯一**实现（上传路径与
+      commit 路径共用——各写一遍必然漂移，MOB-19 那两条管线就是这么烂的），
+      新增 `ingest_staged(peer, hash)` 供上传平面校验通过后立刻调。Session
+      加 `ingested`/`duplicates`/`settled` 三项记账：前两项让 commit 的数字把
+      上传阶段入库的算进去（否则 commit 只看到「已在索引里」报成 duplicates，
+      界面说「新增 0 张」），`settled` 让 commit 跳过且**不计数**已办的（否则
+      数第二遍）。即时入库失败不让上传流失败（文件已校验落盘，commit 兜底；
+      把 ACK 变错误只会让手机重传这张），但留 warn 不静默吞。**后果②顺带解掉**。
+      反证 4/4 全红，Rust 307/307，BLOB-01 两条性质与
+      `interrupted_commit_rerun_converges` 都仍绿。
+      挂账：真机传一批照片，照片墙必须逐张浮现而不是最后一跳（用户）。
 - [x] MOB-28 区分「重启」与「被清」，被清了只提示不恢复 — **2026-08-20（真机端到端验过）**:
       取代 backlog 里的 MOB-18。用户要的语义一直是"检测到 → 提示 → 用户点了
       才恢复"，MOB-18 做不到是因为监听是 WorkManager 的 work，`ForceStopRunnable`
