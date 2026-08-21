@@ -319,7 +319,8 @@
       if (e.action === "backup.started") openedAt[who] = e.ts;
       else if (e.action === "backup.finished") {
         const from = openedAt[who];
-        if (typeof from === "number" && e.ts >= from) out[e.ts + ":" + who] = e.ts - from;
+        // DESK-08: 用审计主键做 key，不用 ts+actor（同形的撞键风险）。
+        if (typeof from === "number" && e.ts >= from) out[e.id] = e.ts - from;
         delete openedAt[who];
       }
     }
@@ -1215,7 +1216,11 @@
                          行间不加分隔线），跟主活动记录页的双列卡片行是两种
                          密度，故意不共用 .log-rows。 -->
                     <ul class="m-0 flex list-none flex-col gap-[10px] p-0 text-[14px] text-ink">
-                      {#each visibleAudit.slice(0, 3) as e (e.ts + ":" + e.action)}
+                      <!-- DESK-08: key = 审计主键 e.id。原本是 `e.ts + ":" + e.action`
+                           ——WATCH-02 一次删 N 张会在同一毫秒写 N 条
+                           asset.removed_external，key 撞了 Svelte 直接抛
+                           each_key_duplicate。时间戳不是身份。 -->
+                      {#each visibleAudit.slice(0, 3) as e (e.id)}
                         {@const at = humanTime(e.ts, nowMs)}
                         <li><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
                       {/each}
@@ -1428,14 +1433,15 @@
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。</p>
             {:else}
               <ul class="m-0 list-none p-0">
-                {#each visibleAudit as e (e.ts + ":" + e.action)}
+                <!-- DESK-08: 同上——key 必须是审计主键，不是 ts+action。 -->
+                {#each visibleAudit as e (e.id)}
                   {@const at = humanTime(e.ts, nowMs)}
                   {@const exact = exactTime(e.ts)}
                   <!-- 2026-08-18（用户反馈④）：一行两层——主行是设备+事件
                        （+ 备份会话的耗时），次行是精确时刻。auditText 不动
                        （总览"最近动静"迷你卡共用它，只能是一句话）。 -->
                   {@const dur = e.action === "backup.finished"
-                    ? humanDuration(backupDuration[e.ts + ":" + (e.actor ?? "")])
+                    ? humanDuration(backupDuration[e.id])
                     : null}
                   <li class="flex items-baseline gap-[14px] border-b border-divider px-[22px] py-[16px] last:border-b-0">
                     <span class="flex-1 text-[15px] text-ink"
