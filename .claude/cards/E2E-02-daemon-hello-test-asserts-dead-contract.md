@@ -1,5 +1,12 @@
 # E2E-02 DaemonHelloTest 断言一个 2026-08-08 就废弃的契约，e2e 门禁常红　级别 L1
 
+> ✅ 已修（2026-08-20，见 PROGRESS）。⚠️ 修的时候发现**全仓四处同形**
+> （DaemonHello / DaemonBackup / NetProbe / DeviceBackup 都在断言死契约
+> `parsePairingQr(qr).addr!!`），上一轮只修一处就宣布"解红"。已抽成共用
+> `addrOf(qr)`（`PairingQrAddr.kt`），四处全走它。
+> **教训：「这个测试挂了」要先问「还有几个同形的」。**
+> 卡未移入 `done/` 是簿记漏项，2026-08-21 补横幅。
+
 **发现于**：用户打 `v0.3.3-test.7` 后 e2e 门禁红（2026-08-19）。
 
 ## 现象
