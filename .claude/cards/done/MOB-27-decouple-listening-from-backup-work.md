@@ -205,7 +205,7 @@ unique work 原封不动。而 MOB-27 把所有 cancel 它的代码都删了。�
 `scheduleAutoBackup` 上（进程被系统拉起时也执行，不只靠用户开 App）。
 老用户全部升过之后可整段删掉。
 
-## 八点六、真机静态验证（RFCX1040SNE / 0.3.3(8)，2026-08-19）
+## 八点六、真机静态验证（<测试机> / 0.3.3(8)，2026-08-19）
 
 ```
 JOB #u0a359/20260819: com.hawkeyexb.ppass/.backup.MediaWatchJob

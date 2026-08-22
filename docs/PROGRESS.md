@@ -4,6 +4,7 @@
 
 | 卡片 | 日期 | Commit | 状态 | 摘要 |
 |------|------|--------|------|------|
+| **文档卫生批次：任务卡模板化 + 本机状态移出 git** | 2026-08-22 | 本 commit | ✅ 已完成（纯文档，零 CI） | 用户批评两条成立：①TODO 条目「没头没脑」无标准格式；②本机路径/设备序列号混进远端仓库。整改：新建 `.claude/cards/TEMPLATE.md` 统一卡模板（问题/期望行为/验收标准/范围/阻塞五段必填 + 状态横幅三档），`AGENT_PROTOCOL.md` §C.2 与 cards README 联动更新；21 张活跃卡全部按模板重写；`docs/CHECKLIST.md` 重写为纯索引（卡是唯一事实源）；本机环境状态（库路径/NodeId/设备/旧副本/adb 取证命令/本机对账命令 + 三个本机待答问题）移到 `.claude/cards/../local-state.md`（已 gitignore，不进 git）；全仓脱敏：测试机序列号 → `<测试机>`、开发机用户名路径 → `~`、旧副本目录名泛化（含 done/ 归档卡与 MediaWatchJobTest 注释）。残留：jniLibs 里的 `libiroh_ffi.so` 二进制内嵌了本机构建路径，下次 CI 重建 ffi 库时自然消除。 |
 | **真机验收一轮：连拍空窗/查看页按钮/三元组刷新/保存去重 六条修复** | 2026-08-19 | 本 commit | ✅ 已实现（`--rerun-tasks` **207/207** 绿 + 逐条反证；真机截图确认） | 用户真机走完整验收流程报 6 个问题，逐条定位：**①连拍中途断**——监听 work 与干活 work 是同一个，备份跑多久监听就断多久（用户实测"前面的出去了，后面的就没有同步"）；当轮治标（重挂延迟 15s→1s、rearm 后按 `catchUp = batchSize > 0` 补捞，只在有照片时补以免无限循环），**用户当场指出这是治标**"你强行用时间来做判断的话不太合适，假设重挂超过 1-2 秒中间还是有 gap"——完全正确，根治方案已整理成 MOB-27 未实施。**②查看页只剩图片**——`Box(fillMaxSize())` 吃掉全部剩余高度把底部「保存/分享」顶出屏幕，按钮一直在只是看不见；照片页视频页同病均改 `weight(1f)`；与 ICON-02 无关（PhotosScreen 那轮没被动过）。**③「已回家」显示 0**——数据层一直正确（confirmed.json 165 条、范围内 142 条，设备实测 N=139图+3视频=142），根因是 `refreshTriplet` 只在 init/手动备份/补齐后跑，后台 worker 跑完不通知 UI；改为按 tag 订阅 BackupWorker 状态流（四条自动通道共用它）。**④新选相册不同步**——上一轮的水位归零验证通过。**⑤保存到相册重复写文件**——实测 `P-Pass-<hash>.jpg` 与 `P-Pass-<hash> (1).jpg` 同 hash 两份；文件名本就带内容 hash，保存前查 DISPLAY_NAME 去重，返回 `SaveResult(uri, alreadyExisted)` 并区分文案（用户"点一下闪了下没响应"正是他点第二次的原因）；顺带确认「保存→上传→保存」循环不存在（Pictures/P-Pass 是独立相册，新相册默认不勾选 + hash 去重两道）。**⑥force-stop 检测撤除**——用户拍板 pending：WorkManager 的 `ForceStopRunnable` 跑在 androidx.startup 的 ContentProvider 里、比 `Application.onCreate` 还早就重排了 work，"检测到中断→只提示不恢复"应用层实现不了，留着只会显示语义不诚实的提示；`BackupHealth.kt` 保留但无人调用（「两边对账」判据是真机验证过的正确结论）。新增 backlog：MOB-18/25/26；新增待办 MOB-27。 |
 | **MOB-09/13/18 + ICON-02 四卡批次（三个 sub-agent 并行 + 验收人抽检）** | 2026-08-19 | 本 commit | ✅ 代码完成（`--rerun-tasks` **206/206** 绿 + 逐卡反证复现；**真机验收全部欠着**，卡均未移入 done/） | **MOB-09** 一条「有记录没文件」的坏 MediaStore 条目会让整批备份 ENOENT 失败并无限重试、watermark 不推进 = 永久卡死该设备备份；新增 `buildCandidates()` 逐条隔离。实施中挖出卡面没写的两件：①缓存洞——`hashWithCache` 命中缓存时不调 open，「上轮哈希过、之后被删」的记录带旧 hash 溜到 `pushFile` 才炸，加探针 `open().use { }`；②整批读不了则不推水位（全批失败更可能是权限被撤/存储卸载，推水位=把这批照片永久跳过，真丢数据）。**MOB-13** `K = N - M` 单位不一致（M 数 hash、N 数文件），相册有内容重复照片时 K 恒 > 0；`ConfirmedState` 增记文件级标识，M 改按文件数，迁移期按「无文件记录的存量 hash 回退老口径」混合计数，补齐时机=一次手动备份（含 `fresh.isEmpty()` 早退分支，否则存量用户按几次都修不好）。两卡交叉不变量：MOB-09 的隔离打破 `candidates == scan.items` 1:1，MOB-13 的 `fileEntriesOf` 依赖它，解法是 `CandidateBuild.kept` + 长度不符时整体降级空 map。**MOB-18** force-stop 会清空全部 job 而权限/配对都还在（既有三张引导卡一张不亮），加 `isBackupScheduled` 主动查询 + 琥珀提示条；用户定调"必须点了才恢复，你都提示了就别自作主张"，故检测到即 `return@thread` 只记录不重排，恢复唯一入口是用户点按钮。**ICON-02** 桌面 5 个手写 SVG path → `@lucide/svelte`（headless Chromium 实测渲染属性与旧图逐项一致 + 截图对照）；Android 只换 `ic_share` → `Icons.Filled.Share`（隔离 worktree 实测 APK **小 759 字节**——core 集本就随 material3 进包），`ic_notification` 是平台硬约束（`setSmallIcon` 收 resource id，SystemUI 进程外渲染）、`TabIcons` 手绘相机+齿轮不换（core 集无相机类，extended 在无 R8 的 release 下要塞几 MB）。**验收人抽检**：MOB-09 隔离改回 rethrow → 3 测试红；MOB-13 退回 `M = confirmed.size` → 5 测试红且 FIX-T6 既有范围测试保持绿（证明判据不宽泛）。⚠️ 两处假绿教训：源码级断言 `src.contains(...)` 把生产代码注释掉照样通过，`BadMediaRecordTest.codeOf()` 因此连 KDoc/块注释一起剥。 |
 | **MOB-10 删除「仅充电」改用「电量不低」 + 锁定竖屏 + 自动备份开关放回** | 2026-08-19 | 本 commit | ✅ 已实现并真机验证（`--rerun-tasks` **181/181** 绿 + 反证；**拔掉电源放电中**实测 4.7 秒送达） | 用户拍板"因为我们能耗很低，如果不好实现，我们把仅充电删除"。`requiresCharging` 整个删掉（连同设置页开关与 `BackupSettingsState.chargeOnly` 字段），后台档改恒定 `setRequiresBatteryNotLow(true)`——`batteryNotLow` 不受充电状态影响，才是"别在快没电时折腾"的真实意图，"必须正在充电"只是坏代理；局域网 P2P 传照片能耗不是瓶颈。**触发本次改动的现场**：用户报"连拍之后没有触发同步"，日志显示不是没触发而是触发后被掐——`stopReason=CONSTRAINT_CHARGING(6)`，30~2362ms 内反复被杀，因为该机 `AC powered:true` 但 `status:3 DISCHARGING`（保护电池到上限）。**验收**：拔掉电源、放电中（改前必被掐的最严苛场景）拍照 10:20:31 → 10:20:35.769 `offered=5 pushed=5 ingested=5` SUCCESS，4.7 秒，并把此前被 charging 挡下的积压照片一并补传（印证"约束不满足只是排队等，照片不丢"）。反证：把 `setRequiresCharging` 加回 → `charging_constraint_is_gone_for_good` 立刻红。升级路径：旧 json 的 `chargeOnly` 由 `ignoreUnknownKeys` 忽略、`wifiOnly` 原样读出（有显式测试，防止悄悄把用户关掉的「仅 WiFi」打开）。同批：`android:screenOrientation="portrait"` 锁定竖屏（用户："不允许横屏，没有这个必要吧"）。 |
@@ -618,7 +619,7 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   `batteryNotLow=true` + `NOT_METERED`），而本卡把 cancel 它的代码全删了 →
   升级窗口内新旧两个监听被同一波变化同时唤醒，并行扫同一水位重复推字节。
   加 `cancelLegacyContentTriggerWork`（字面量，挂 `scheduleAutoBackup`）。
-- **真机证据**（RFCX1040SNE / 0.3.3(8)）：看门 job `Requires:
+- **真机证据**（<测试机> / 0.3.3(8)）：看门 job `Requires:
   batteryNotLow=false` 且无 `Network type` 行（零约束实锤）；job history
   显示 START→+27ms 派活→+32ms 释放重挂，**监听空窗 32 毫秒**（旧实现 =
   整个备份时长）；P-Pass 名下 job 精确剩 2 个。同一次探针顺手补上 MOB-09
@@ -661,7 +662,7 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   重启必死，两边对账无法区分重启与被清）。教训保留在注释里。
 - **验证**：234/234（`--rerun-tasks`，基线 218），`assembleDebug` 绿，
   versionCode 8→9。反证 18 条全红（MOB-27 的 9 条一起复跑，确认旧锁未被削弱）。
-  真机端到端（0.3.4(9) / RFCX1040SNE）：force-stop → 已注册 job=0 → 打开 App
+  真机端到端（0.3.4(9) / <测试机>）：force-stop → 已注册 job=0 → 打开 App
   → 看门 job **仍为 0**（没被自动装回去）+ `interruptedUnacknowledged:true`
   → UI 树里读到提示卡与「恢复备份」→ 点击 → job 回来 + 标志清除 + 卡消失
   + 立刻补跑一次。
@@ -744,7 +745,7 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   四处全走它。⚠️ 教训：**"这个测试挂了"要先问"还有几个同形的"**——一次契约
   变更会同时打断所有依赖它的测试。
 - **用户数据处置**：按用户授权清理本地重装，用 `mv` 不用 `rm`——旧库移到
-  `~/P-Pass NAS.bak-blob01-20260820-1615`（1.1G，含 549M 照片），验收通过后
+  `~/本地旧库副本`（1.1G，含 549M 照片），验收通过后
   由用户删。
 
 ## WATCH-02 / WATCH-03 —— Finder 与索引的双向真相（2026-08-20 晚）

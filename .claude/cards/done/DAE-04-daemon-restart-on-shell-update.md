@@ -130,7 +130,7 @@ SuccessfulExit=false`（`crates/platform/src/macos.rs` 第 36~37 行注释：
 
 ## 验收记录（2026-08-13）
 
-**实施**：@salamira（Hermes）。单测 4 项新增（`restart_outcome` 纯函数：
+**实施**：@Hermes-agent。单测 4 项新增（`restart_outcome` 纯函数：
 版本变化=真成功 / 同版本=未变更 / 杀前离线杀后起来=有进展 / 无新版本=未验证兜底）
 + 桌面 lib 6/6 绿 + diag i18n 对称 8/8（10 个 `ui.restart_service_*` 键注册，
 ALL 79→89）+ vite build 绿 176 modules + 桌面 clippy 零警告 + 主仓 fmt 干净。

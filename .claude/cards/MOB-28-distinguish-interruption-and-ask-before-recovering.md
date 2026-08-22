@@ -1,23 +1,64 @@
 # MOB-28 区分「重启」与「被清」，被清了只提示不恢复　级别 L2
 
-**取代 MOB-18**（`.claude/cards/backlog/MOB-18-force-stop-detection.md`）。
-MOB-18 当初 pending 的技术前提已被 MOB-27 推翻，详见 §二。
+> 🟡 状态：代码已合并，等真机验收
+> 级别：L2 · 阻塞：无
 
-**来源**：2026-08-20 用户追问。用户原话（2026-08-19，本卡的全部理由）：
-
-> "不要做静默恢复，就是要提醒。"
-> "必须点了才恢复。你都提示了，就别自作主张。"
-> "你先能让他不自动拉起，监测后我们提示，用户手动拉起了？"
-
-## 一、问题
+## 问题
 
 用户在系统设置里「强行停止」App 之后，JobScheduler 清空这个 App 名下的
 **全部** job——照片监听没了、周期兜底没了。这件事是**静默**的：权限还在、
 配对还在，既有三张引导卡一张都不亮，用户只会觉得"照片怎么不同步了"。
 
 用户要的语义很明确：**检测到 → 提示 → 用户点了才恢复。**
+用户原话（2026-08-19，本卡的全部理由）：
 
-## 二、为什么现在能做，MOB-18 当时不能
+> "不要做静默恢复，就是要提醒。"
+> "必须点了才恢复。你都提示了，就别自作主张。"
+> "你先能让他不自动拉起，监测后我们提示，用户手动拉起了？"
+
+**取代 MOB-18**（`.claude/cards/backlog/MOB-18-force-stop-detection.md`）。
+MOB-18 当初 pending 的技术前提已被 MOB-27 推翻，详见根因分析 §二。
+
+## 期望行为
+
+- 重启手机（用户没表达"停止"）：监听**自动恢复**。
+- force-stop / OEM 清理（用户表达了"停止"，或系统代他做了）：**必须问**——
+  设置页顶部出琥珀提示卡，用户点「恢复备份」才重挂监听并立刻补跑一次。
+- 已经在等用户点的时候，**重启也不许悄悄替他决定**。
+
+## 验收标准
+
+- [x] 单测：`decideRecovery` 纯函数八种组合全覆盖（2026-08-20 全量
+  234/234 绿，基线 218）
+- [x] **反证 18 条全红**（含 MOB-27 的 9 条一起复跑，确认旧锁没被削弱；
+  明细见根因分析 §九）
+- [x] 真机端到端（0.3.4(9) / <测试机>，2026-08-20）：force-stop → 相册
+  变化不拉起进程 → 打开 App 看门 job **不**自动装回 → 提示卡出现 → 点
+  「恢复备份」→ 看门 job 回来 + 标志清 + 提示卡消失 + 立刻补跑一次备份
+  （完整剧本与输出见 §九真机端到端）
+- [ ] 已知边界不验不修：force-stop → 重启 → 打开 App 被判成"重启"自动
+  恢复不提示（诚实记录于 §十，本卡不做）
+
+## 范围
+
+- 只准动：进程启动对账（`PPassApplication.onCreate` →
+  `reconcileWatchOnProcessStart`）、`MainActivity` 的 `LaunchedEffect` 闸门、
+  `BootWatchReceiver`、提示卡 UI 与文案、相关单测。（实施实动文件未逐条
+  记录，以 diff 为准。）
+- 不准动：MOB-27 的看门 job 机制本身（复用，不推翻）；WorkManager 自愈的
+  周期任务（拦不住也不必拦）。
+
+## 阻塞与依赖
+
+- 前置：MOB-27 已合并（照片监听是我们自己注册在 JobScheduler 上的 job，
+  WorkManager 的 `ForceStopRunnable` 碰不到它，"用户点了才恢复"才成立）。
+- 无其它阻塞。
+
+---
+
+## 根因分析
+
+### 二、为什么现在能做，MOB-18 当时不能
 
 MOB-18 pending 的理由是真机实测的：
 
@@ -36,7 +77,7 @@ ContentProvider 里——**比 `Application.onCreate` 还早**——检测到 Ap
 `ForceStopRunnable` 碰不到它。除了我们自己调 `ensureMediaWatch`，没有任何
 东西会把它装回去——"用户点了才恢复"于是成立。
 
-本轮真机实证（0.3.4(9)，RFCX1040SNE）：
+本轮真机实证（0.3.4(9)，<测试机>）：
 
 ```
 force-stop 后        已注册 job = 0
@@ -44,7 +85,7 @@ force-stop 后        已注册 job = 0
                                                         自愈的周期任务，拦不住也不必拦
 ```
 
-## 三、判据：怎么区分「重启」和「被清」
+### 三、判据：怎么区分「重启」和「被清」
 
 两种情况都表现为"监听不在"，但语义完全相反：
 
@@ -60,7 +101,7 @@ force-stop 后        已注册 job = 0
 容差 60 秒（`BOOT_STAMP_TOLERANCE_MS`）：NTP 校时会让墙上时钟小跳几秒，
 误判的后果是"被强停过"被当成"重启过"，提示就出不来。
 
-## 四、判定表
+### 四、判定表
 
 `decideRecovery(watchScheduled, sameBootAsLastRun, awaitingUserConsent)`
 是纯函数，八种组合全部单测覆盖。
@@ -79,7 +120,7 @@ else                -> ASK_USER      ← 同一次开机内凭空消失
 `lastBootStamp = 0`（首次安装）天然落进 `!sameBoot` → 自动挂上，不会给
 全新用户一上来就弹提示。
 
-## 五、三处闸门，缺一处等于没有
+### 五、三处闸门，缺一处等于没有
 
 用户实测栽过两次（"还是没有提示，强行停止立即就恢复了"），因为恢复路径
 不止一条：
@@ -96,7 +137,7 @@ else                -> ASK_USER      ← 同一次开机内凭空消失
 **恢复的唯一入口**是提示卡上的「恢复备份」→ `resumeAfterInterruption()`：
 清标志 + 重挂 + 立刻补跑一次（人在操作，用户在场档）。
 
-## 六、顺带做的：开机 receiver（MOB-27 §五那个待定项）
+### 六、顺带做的：开机 receiver（MOB-27 §五那个待定项）
 
 `JobInfo` 的 trigger URI 与 `setPersisted` **互斥**（AOSP javadoc 明文），
 看门 job 每次重启必死。MOB-27 里我判断"加开机 receiver 性价比不明"，
@@ -116,7 +157,7 @@ binder。`finish()` 必须在 `finally`——异常路径漏掉会挂住广播�
 **force-stop 之后收不到这个广播**（系统把 App 置为 stopped 态，重启也不
 清除，只有用户手动打开才解除）。这正是本卡要的语义，不是缺陷。
 
-## 七、UI
+### 七、UI
 
 琥珀提示卡放在**设置页顶部**（打开 App 落地的第一屏），与电池白名单 /
 通知引导同一族视觉。不用红色：备份没坏，只是停了，点一下就回来。
@@ -128,7 +169,7 @@ binder。`finish()` 必须在 `finally`——异常路径漏掉会挂住广播�
 "一张没丢"是实话，不是安慰：水位只在 commit 成功后推进，监听断掉期间的
 照片一直在水位之上等下一趟车。
 
-## 八、删掉的东西
+### 八、删掉的东西
 
 `isBackupScheduled()`——MOB-18 那套"WorkManager 与 JobScheduler 两边对账"
 的判据。MOB-27 之后它既不精确也会误导（看门 job 重启必死，它无法区分
@@ -138,7 +179,7 @@ binder。`finish()` 必须在 `finally`——异常路径漏掉会挂住广播�
 > WorkManager 自己的数据库，而 force-stop 清的是 JobScheduler 里的 job，
 > 两套存储。force-stop 后 work 记录纹丝不动，判据恒真。
 
-## 九、验证记录
+### 九、验证记录
 
 - `:app:testDebugUnitTest --rerun-tasks` **234/234 绿**（本卡前基线 218）。
 - `:app:assembleDebug` 绿。versionCode 8→9，本地回退版本名 0.3.3→0.3.4。
@@ -166,7 +207,7 @@ binder。`finish()` 必须在 `finally`——异常路径漏掉会挂住广播�
 | Q | manifest 漏开机 receiver | `boot_receiver_is_registered_and_survives_the_broadcast` |
 | R | Application 自己判定/自己重挂 | `process_start_goes_through_the_shared_reconcile` |
 
-### 真机端到端（0.3.4(9) / RFCX1040SNE，2026-08-20）
+#### 真机端到端（0.3.4(9) / <测试机>，2026-08-20）
 
 ```
 ① 正常状态                  看门 job 在岗
@@ -185,7 +226,7 @@ binder。`finish()` 必须在 `finally`——异常路径漏掉会挂住广播�
                            立刻补跑一次备份（logcat 有 auto backup 行）✓
 ```
 
-## 十、⚠️ 已知边界（诚实记录，本卡不做）
+### 十、⚠️ 已知边界（诚实记录，本卡不做）
 
 **force-stop → 重启 → 打开 App** 这条路径会被判成"重启"，自动恢复，
 不提示。原因：force-stop 之后我们的代码一行都跑不了（stopped 态），
@@ -196,7 +237,7 @@ binder。`finish()` 必须在 `finally`——异常路径漏掉会挂住广播�
 的语义本身可辩——重启之后 force-stop 的意图算不算过期，没有定论。
 主路径（force-stop → 打开 App）已经真机验过，那正是用户实测抱怨的那条。
 
-## 十一、教训（写进测试注释，防重犯）
+### 十一、教训（写进测试注释，防重犯）
 
 1. **Kotlin 的 `substringAfter` / `substringBefore` 找不到分隔符时返回
    整个字符串**（`missingDelimiterValue` 默认是 receiver 本身）。于是
