@@ -145,8 +145,17 @@ impl BackupEngine {
 
     /// SYNC-02：接上事件总线——之后每条新 ingest 经节流合并推
     /// `timeline.invalidated`，`commit` 收尾强制 flush 一次挂起信号。
-    pub fn with_events(mut self, events: EventBus) -> Self {
-        self.throttle = Some(Throttle::new(events, DEFAULT_THROTTLE_WINDOW));
+    pub fn with_events(self, events: EventBus) -> Self {
+        self.with_events_and_window(events, DEFAULT_THROTTLE_WINDOW)
+    }
+
+    /// 可注入节流窗口的变体：集成测试用它把窗口拉到「比整批还长」，
+    /// 把「批中不触发窗口 emit」从依赖墙钟运气变成结构性不可能——
+    /// 1 秒默认窗口在被打满的 CI runner 上会在批次中途到点，多 emit
+    /// 一次（对产品无害，但让「恰好一次」的断言变成薛定谔的红）。
+    /// 窗口语义本身由 events.rs 的 Throttle 单测钉住，这里不测机制。
+    pub fn with_events_and_window(mut self, events: EventBus, window: std::time::Duration) -> Self {
+        self.throttle = Some(Throttle::new(events, window));
         self
     }
 
