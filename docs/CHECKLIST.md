@@ -18,6 +18,7 @@
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [MOB-32](../.claude/cards/MOB-32-calibration-wipes-a-live-backup-session.md) | 大批量备份传到一半打开 App，照片一张都不能丢 | **L0** |
+| [WATCH-07](../.claude/cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏（同一文件复检不记审计） | L2 |
 | [WATCH-03](../.claude/cards/WATCH-03-finder-move-orphans-the-photo.md) | Finder 里挪动照片，照片不许消失 | L2 |
 | [WATCH-04](../.claude/cards/WATCH-04-tolerant-ingest-finder-owns-the-layout.md) | 手拷照片进库目录会被自动收录 | L2 |
 | [DESK-08](../.claude/cards/DESK-08-activity-each-key-collides.md) | 一次删多张照片，活动记录页不再整块打挂 | L1 |
@@ -48,11 +49,10 @@
 
 | # | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| 1 | [WATCH-07](../.claude/cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 每批备份后活动流被自己产生的「重复」审计刷屏 | L2 |
-| 2 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
-| 3 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
-| 4 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
-| 5 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
+| 1 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
+| 2 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
+| 3 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
+| 4 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 
 ## 四、backlog（你明确说过先不做）
 

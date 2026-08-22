@@ -58,20 +58,37 @@ impl Ingestor {
         }
     }
 
+    /// WATCH-07：被 ingest 的文件就是索引记录里的同一个文件（同一路径）时，
+    /// 这次 ingest 是「复检」而不是事件——备份管线 place() 之后 watcher 必然
+    /// 再报一遍这个路径，每个文件写一条 `ingest.duplicate` 会把活动流刷屏。
+    /// 审计只记「数据层面发生的事」：同一文件被看了第二遍 = 什么都没发生。
+    /// 而**不同路径**出现的同内容文件是用户真实放了一份拷贝，仍记审计。
+    /// canonicalize 双侧比较（/var vs /private/var 陷阱，WATCH-03 踩过）；
+    /// 任一侧失败保守按「不同」处理（宁可多记一行，不漏真实事件）。
+    fn is_recorded_file(&self, src_path: &Path, recorded_rel: &str) -> bool {
+        let recorded = self.library_root.join(recorded_rel);
+        match (src_path.canonicalize(), recorded.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        }
+    }
+
     pub async fn ingest(&self, f: &IncomingFile) -> Result<IngestOutcome> {
         let hash = dedup::hash_file(&f.src_path)?;
         let now_ms = unix_ms_now();
 
         if let Some(existing) = self.db.get_asset(&hash).await? {
             if self.library_root.join(&existing.rel_path).exists() {
-                self.audit(
-                    now_ms,
-                    f,
-                    &hash,
-                    "ingest.duplicate",
-                    Some(existing.rel_path),
-                )
-                .await?;
+                if !self.is_recorded_file(&f.src_path, &existing.rel_path) {
+                    self.audit(
+                        now_ms,
+                        f,
+                        &hash,
+                        "ingest.duplicate",
+                        Some(existing.rel_path),
+                    )
+                    .await?;
+                }
                 return Ok(IngestOutcome::Duplicate);
             }
             // WATCH-03：记录的住址空了，同一内容又出现在 src_path。

@@ -113,6 +113,61 @@ async fn same_content_different_name_is_duplicate_and_leaves_source() {
 }
 
 #[tokio::test]
+async fn watcher_recheck_of_the_recorded_file_is_not_an_audit_event() {
+    // WATCH-07：备份管线 place() 落位后，watcher 会对同一路径再 ingest 一遍。
+    // 这是「复检」不是事件——必须仍返回 Duplicate，但不许写 ingest.duplicate
+    // 审计行（每个文件一条会把活动流刷屏）。
+    // 反证：把 ingest.rs 里的 is_recorded_file 判定去掉，本测试立刻变红。
+    let (dir, db, ing) = setup().await;
+    let content = jpeg_with_exif("2024:05:06 07:08:09");
+    let f = incoming(dir.path(), "IMG_1.jpg", &content);
+    let IngestOutcome::New(rel) = ing.ingest(&f).await.unwrap() else {
+        panic!("first ingest must be New");
+    };
+
+    // watcher 视角：对已经落位的库内文件再发起一次 ingest
+    let recheck = IncomingFile {
+        src_path: dir.path().join("library").join(&rel),
+        file_name: "IMG_1.jpg".into(),
+        media_type: "image/jpeg".into(),
+        src_device: DEV_A.to_vec(),
+    };
+    assert_eq!(
+        ing.ingest(&recheck).await.unwrap(),
+        IngestOutcome::Duplicate
+    );
+
+    let log = db.list_audit(10).await.unwrap();
+    let actions: Vec<&str> = log.iter().map(|r| r.entry.action.as_str()).collect();
+    assert_eq!(
+        actions,
+        ["ingest.new"],
+        "同一文件的复检不许产生审计行, got {actions:?}"
+    );
+}
+
+#[tokio::test]
+async fn same_content_at_a_different_path_is_still_audited() {
+    // WATCH-07 的行为保留守卫：用户在**另一个路径**放了一份同内容文件，
+    // 这是真实发生的事，审计必须照记。
+    let (dir, db, ing) = setup().await;
+    let content = jpeg_with_exif("2023:01:02 03:04:05");
+    ing.ingest(&incoming(dir.path(), "a.jpg", &content))
+        .await
+        .unwrap();
+    ing.ingest(&incoming(dir.path(), "copy-elsewhere.jpg", &content))
+        .await
+        .unwrap();
+
+    let log = db.list_audit(10).await.unwrap();
+    let actions: Vec<&str> = log.iter().map(|r| r.entry.action.as_str()).collect();
+    assert!(
+        actions.contains(&"ingest.duplicate"),
+        "不同路径的重复内容必须记审计, got {actions:?}"
+    );
+}
+
+#[tokio::test]
 async fn name_conflicts_get_dash_suffixes() {
     let (dir, _db, ing) = setup().await;
     // Three different contents, same file name, no EXIF (all land in the

@@ -478,13 +478,14 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       **等拍板**：「已备份」数字口径——只数库里真有的（诚实，会从 188 掉到 3，
       配一句「另有 N 张已按你的要求删除」），还是数「已交代过的」= 库里有的 +
       墓碑里的（稳定但仍误导）。卡里倾向前者。
-- [ ] WATCH-07 每批备份后活动流被 N 条 `ingest.duplicate` 刷屏 — **⛔ 未实施（2026-08-21 真机发现）**:
-      12 张 → 12 条，7 张 → 7 条，累计 37 条。审计 `actor` 查实是**本机存储端
-      node id**（`1F1D1E38…`，不是手机）→ 备份管线 `place()` 进 `originals/` 后
-      FSEvents 立刻报告，文件监听再 ingest 一遍，全判 `Duplicate` 各写一条审计。
-      活动流是用户看的界面（IPC-02 直接喂桌面端），传 200 张就是 200 条「重复」
-      把有信息量的条目全冲走。倾向改法：**什么都没变的 Duplicate 不写审计行**。
-      ⚠️ 先复现、先证明 actor，再改（WATCH-02 三条假设全错的教训）。
+- [x] WATCH-07 每批备份后活动流被 N 条 `ingest.duplicate` 刷屏 — **2026-08-22 已修（方案 2），等真机验收**:
+      根因证实：备份管线 `place()` 进 `originals/` 后 FSEvents 立刻报告，
+      watcher 对同一文件再 ingest 一遍，全判 `Duplicate` 各写一条审计
+      （12 张 → 12 条）。修法：Duplicate 分支加 `is_recorded_file()` 判定
+      ——被 ingest 的路径 == 索引记录路径（canonicalize 双侧）→ 是复检，
+      不写审计；不同路径的同内容文件仍记（用户真实拷贝）。审计设计规矩
+      同批定稿（审计只记数据层面事件、语义稳定因为业务会读、防「展示对
+      实际错」靠对账不靠更详细审计），见卡内备注。反证：去掉判定测试即红。
 - [ ] SYNC-05 AssetMeta 补 `src_device`，消灭客户端影子状态 — **⛔ 未实施，无依赖可随时做（L1）**
 - [x] E2E-02 DaemonHelloTest 断言一个废弃契约，e2e 门禁常红 — **2026-08-20 已修**:
       ⚠️ 全仓**四处**同形（DaemonHello / DaemonBackup / NetProbe / DeviceBackup），
