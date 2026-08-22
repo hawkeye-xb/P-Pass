@@ -45,6 +45,13 @@ struct Fixture {
     event_bus: daemon::events::EventBus,
     #[allow(dead_code)]
     serve_task: tokio::task::JoinHandle<()>,
+    // 必须把 TempDir 活着存进 Fixture——它若在 setup() 末尾被 drop，临时目录
+    // 连带 index.sqlite 一起被删，之后连接池任何一次「新开连接/建 journal」
+    // 都会炸 SqliteError code 14 "unable to open database file"（2026-08-22
+    // CI ubuntu 实例：revoke 时恰好要开新连接；macOS 本地靠连接复用侥幸通过，
+    // 是薛定谔的绿）。
+    #[allow(dead_code)]
+    dir: tempfile::TempDir,
 }
 
 async fn setup() -> Fixture {
@@ -80,6 +87,7 @@ async fn setup() -> Fixture {
         subscriptions,
         event_bus,
         serve_task,
+        dir,
     }
 }
 
