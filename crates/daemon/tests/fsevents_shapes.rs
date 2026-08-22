@@ -5,6 +5,12 @@
 //!
 //! 2026-08-21 macOS 实测结论见 docs/product/2026-08-21-macos-fs-events.md。
 //! 一条被断言锁住的不变量单独留在下面（根目录被删重建后监听还活着）。
+//!
+//! ⚠️ 本文件钉的是 **macOS 专属**不变量：「根目录删掉重建，事件流不断」是
+//! FSEvents 的性质（句柄不绑 inode）；inotify 的 watch 绑 inode，根目录一删
+//! watch 即死，该不变量在 Linux 上**不成立**。整个文件只在 macOS 编译运行
+//! ——2026-08-22 之前没加这个门，CI（ubuntu runner）从 8/21 起一直红。
+#![cfg(target_os = "macos")]
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use std::sync::mpsc;
 use std::time::Duration;
