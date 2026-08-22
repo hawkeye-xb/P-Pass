@@ -17,3 +17,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Power",
   "Win32_Security_Cryptography",
 ] }
+
+[dev-dependencies]
+# fsevents_shapes 集成测试（macOS 目录监听平台行为实测）：直接驱动 notify。
+notify = "7"
+tempfile = "3"
