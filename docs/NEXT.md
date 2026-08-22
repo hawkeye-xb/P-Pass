@@ -1,6 +1,26 @@
-# NEXT — 当前状态与下一步（2026-08-21，MOB-32 已修，等真机验收）
+# NEXT — 当前状态与下一步（2026-08-22，文档卫生批次已落地）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-22：文档卫生批次（当前状态）
+
+用户批评 TODO「没头没脑」+ 本机信息上远端，两条成立，已整改：
+
+- **卡模板统一**：`.claude/cards/TEMPLATE.md`（问题/期望行为/验收标准/范围/
+  阻塞五段必填 + 状态横幅三档），§C.2 与 cards README 已联动。
+- **21 张活跃卡全部按模板重写**，CHECKLIST.md 重写为纯索引（卡是唯一事实源）。
+- **本机状态出 git**：路径/设备/旧副本/取证命令 → `.claude/local-state.md`
+  （已 gitignore）。三个本机待答问题（「更改…」按钮现象/常驻服务向导/
+  旧副本删不删）也在那边。
+- **全仓脱敏**：序列号/本机路径/用户名已清（含 done/ 归档）。残留：
+  `libiroh_ffi.so` 二进制内嵌本机构建路径，下次 CI 重建自然消除。
+
+**规矩变化（下轮起生效）**：新卡必须套 TEMPLATE.md；本机状态只写
+local-state.md；CHECKLIST 只写索引不展开细节。
+
+---
+
+# 以下为 2026-08-21 收口内容
 
 ## 〇、下个 session 从这里接
 
@@ -79,32 +99,19 @@ work 在跑），但我把「此刻没在跑」外推成了「那次没发生过
 - `WATCH-06` 相册 = 目录 —— 卡里写明**不要用软链物化视图**
 - **范围限定**：文件备份/文件同步整个不在范围内，**只做图片**
 
-### 环境（2026-08-21 12:10 清场后的白板）
+### 环境状态
 
-- **照片库 `~/P-Pass NAS` 已整体删除**（`tools/reset-local.sh -y`），
-  身份/配对/索引/缩略图/blob/originals 全清
-- daemon、桌面壳、tauri dev 进程全部停止
-- **手机 App 已由用户卸载**（`pm list packages` 零命中）
-- **旧数据副本 `~/P-Pass NAS.bak-blob01-20260820-1615`（1.1G，含 549M 照片）
-  还在，等用户确认后自己删** —— 我不动它
-- 下一步：重装桌面壳 + 手机 App，重新配对，从白板跑验证
+本机路径 / 设备 / 旧副本 / 取证命令全部移到 `.claude/local-state.md`
+（开发机本地文件，不进 git）。当前要点：库已清场成白板、手机 App 已卸载，
+下一步重装双端重新配对跑验证。
 
 ### 真机取证的路子（这轮验证有效，记下来）
 
-手机连着 adb 就能直接读状态，比看日志快得多：
-
-```
-adb exec-out "run-as com.hawkeyexb.ppass cat \
-  /data/data/com.hawkeyexb.ppass/files/backup-state/<nodeid>/confirmed.json"
-adb shell "run-as com.hawkeyexb.ppass cat \
-  /data/data/com.hawkeyexb.ppass/shared_prefs/backup_scope.xml"
-adb exec-out "run-as com.hawkeyexb.ppass cat \
-  /data/data/com.hawkeyexb.ppass/no_backup/androidx.work.workdb" > /tmp/work.db
-  # ↑ WorkManager 的库在 no_backup/ 不在 databases/；WorkSpec.output 能解出
-  #   每次 run 真实上报的 ingested/duplicates
-adb shell "content query --uri content://media/external/images/media \
-  --projection _id --where 'bucket_id=<id>'" | wc -l
-```
+手机连着 adb 就能直接读状态，比看日志快得多。具体命令见
+`.claude/local-state.md`（本机文件）。要点：手机 `confirmed.json` 与
+`shared_prefs/backup_scope.xml` 可直连读；WorkManager 的库在 `no_backup/`
+不在 `databases/`，`WorkSpec.output` 能解出每次 run 真实上报的
+ingested/duplicates。
 
 存储端对账（手机说的 vs 库里真有的）：把 `confirmed` 的 hash 集合与
 `select hex(hash) from asset` 求交集——这一步直接量出「撒谎的张数」。
@@ -152,10 +159,9 @@ adb shell "content query --uri content://media/external/images/media \
 ### 手上的环境状态
 
 - daemon 需要重新编译加载（本轮又改了 core-index/storage）
-- 手机：`0.3.5 (10)`，全新安装，需要重新扫码配对
-- 库：`~/P-Pass NAS`，空的
-- **旧数据副本 `~/P-Pass NAS.bak-blob01-20260820-1615`（1.1G，含 549M 照片）
-  还在，等你确认后自己删**
+- 手机：0.3.5 (10) 全新安装，需要重新扫码配对
+- 库是白板
+- 本地旧库副本（1.1G，含真实照片）还在，等用户确认后自己删
 
 ### 更早几轮的真机验收欠账
 
@@ -184,7 +190,7 @@ application 自动启动，这个不是先不做吗？你这搞什么？"）—�
 `ForceStopRunnable` 抢先自愈；MOB-27 把监听搬到我们自己的 JobScheduler job
 之后，WorkManager 碰不到它，这个语义才成立。
 
-### 真机端到端（0.3.4(9) / RFCX1040SNE）
+### 真机端到端（0.3.4(9) / <测试机>）
 
 ```
 force-stop            → 已注册 job = 0
@@ -220,7 +226,7 @@ force-stop            → 已注册 job = 0
 - ✅ `MOB-19` 备份管线合并 —— 手动成为又一种触发方式，第二条管线删除
 - ✅ `BLOB-01` 占盘翻倍 —— **实测 2.05x → 1.00x**。根因是主路径绕了一圈根本
   不该绕（上传平面已自己流式校验）。真实 daemon 端到端 `rerun pushed=0 dup=12`。
-  ⚠️ 旧库副本在 `~/P-Pass NAS.bak-blob01-20260820-1615`（1.1G，含你的 549M
+  ⚠️ 旧库副本在 `~/本地旧库副本`（1.1G，含你的 549M
   照片），**验收通过后你自己删**。
 
 **三件必做全部完成。** 剩下的都是可后置项（SYNC-05 已由用户降级、Windows 真机
@@ -264,7 +270,7 @@ M4 5–10 户私测两周。
 
 ## 一、2026-08-19（续二十四）：MOB-27 监听与干活分家（当前状态）
 
-**代码完成、已推送、已装机（0.3.3(8)，RFCX1040SNE）。静态接线与单次触发
+**代码完成、已推送、已装机（0.3.3(8)，<测试机>）。静态接线与单次触发
 循环已真机验过，动态行为（连拍/备份期间拍照/重启）留给用户验收。**
 
 真机时间线（探针触发，`dumpsys jobscheduler` job history）：

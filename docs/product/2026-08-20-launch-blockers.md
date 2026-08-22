@@ -7,8 +7,8 @@
 
 - `just ci`（fmt + lint + test + arch-check）→ **全绿**
 - Android `:app:testDebugUnitTest --rerun-tasks` → **234/234**
-- 在用户真机（RFCX1040SNE / 0.3.4(9)）上验监听链路
-- 在用户真机（macOS，`/Users/zhaowenli/P-Pass NAS`）上量占盘
+- 在用户真机（<测试机> / 0.3.4(9)）上验监听链路
+- 在用户真机（macOS，`本机照片库`）上量占盘
 - 逐张翻 `.claude/cards/*.md`（未完成 11 张）+ ROADMAP 挂账段
 
 **结论：代码健康度没问题，挡上线的是三件功能缺口 + 两件发布机制。**

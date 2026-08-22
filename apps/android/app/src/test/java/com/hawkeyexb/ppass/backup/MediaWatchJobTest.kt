@@ -333,7 +333,7 @@ class MediaWatchJobTest {
 
     @Test
     fun upgrade_kills_the_legacy_workmanager_trigger() {
-        // 真机 dumpsys 实锤（2026-08-19，RFCX1040SNE 装 0.3.3(8) 之后）：
+        // 真机 dumpsys 实锤（2026-08-19，<测试机> 装 0.3.3(8) 之后）：
         // `adb install -r` 保留应用数据，WorkManager 库里 `ppass-content-trigger`
         // 那条 unique work 原封不动活着，还挂着旧的带约束 trigger
         // （batteryNotLow=true + NOT_METERED + Trigger content URIs）。

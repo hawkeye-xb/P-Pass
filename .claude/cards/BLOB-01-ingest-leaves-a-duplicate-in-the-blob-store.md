@@ -1,14 +1,11 @@
-# BLOB-01 ingest 之后 blob 不回收，占盘翻倍　级别 L2
-> ## 🟡 状态：代码已合并，等真机验收（2026-08-20）
->
-> 修法比卡面两个方案都好——**主路径根本不进收件箱**（上传平面已经自己做完
-> 边收边验）。实测占盘 2.05x → **1.00x**。见文末实施记录。
+# BLOB-01 ingest 之后 blob 不回收，占盘翻倍
 
+> 🟡 状态：代码已合并（实测占盘 2.05x→1.00x），等真机验收
+> 级别：L2 · 阻塞：真机验收挂用户（手机重新配对备份一轮后核对占盘）
 
-**发现于**：2026-08-20 用户问"还有什么必做才能上线"，实测用户机器占盘时撞到。
-ROADMAP 挂账里的「blob-store GC」就是这条，但此前没有量级数据。
+## 问题
 
-## 现场证据（用户真机 macOS，`/Users/zhaowenli/P-Pass NAS`）
+2026-08-20 用户问"还有什么必做才能上线"，实测用户机器占盘时撞到：
 
 ```
 originals    549M   ← 照片库（真正要留的）
@@ -20,9 +17,9 @@ originals    549M   ← 照片库（真正要留的）
 originals 文件数: 213
 ```
 
-## 根因
+ROADMAP 挂账里的「blob-store GC」就是这条，但此前没有量级数据。
 
-`crates/daemon/src/backup.rs` 的 ingest 流程：
+根因：`crates/daemon/src/backup.rs` 的 ingest 流程：
 
 ```
 手机推 blob → 落 iroh blob store
@@ -34,23 +31,21 @@ originals 文件数: 213
 **blob store 里那份永久留着**。`crates/transport` 里 grep `delete` /
 `gc` / `untag` 零命中——没有任何回收路径。
 
-## 为什么必须上线前修
+## 期望行为
 
-这是**备份产品**。用户备 50G 照片要占 100G 盘，而且他不会理解为什么——
-`.ppf` 是隐藏目录，他看到的只是"这软件吃掉了双倍空间"。这是会导致卸载的
-那类问题，不是优化项。
+同一批照片在盘上只留一份：照片进 `originals`，`.ppf/blobs` 里不再保留
+已 ingest 的副本。占盘倍数回到 ~1.00x。这是**备份产品**——用户备 50G
+照片要占 100G 盘，且 `.ppf` 是隐藏目录，他只会看到"这软件吃掉了双倍
+空间"。这是会导致卸载的那类问题，不是优化项，必须上线前修。
 
-## 两条修法（实施时二选一，写进卡）
+## 验收标准
 
-**A. ingest 成功后删 blob。** 改动小，但要确认：iroh blobs 的删除语义
-（tag / GC）在我们这版是什么、删掉之后手机端重复 offer 同一 hash 会不会
-因为"store 里没有"而重新传（应该不会——去重是 daemon 查 `get_asset`
-数据库，不查 blob store，但必须有测试锁住）。
-
-**B. ingest 直接从 blob store 取，不落 staging 第二份。** 更彻底，但要动
-`core_index::ingest` 的入口契约（现在吃 `src_path`）。
-
-倾向 A：改动局限在 daemon/transport，B 会牵动 ingest 契约。
+- [ ] 单测：ingest 一个 blob → 断言 blob store 里不再持有该 hash，而照片库里文件存在
+- [ ] 幂等：同一 hash 再 offer 一次 → 期望 `duplicates+1`、**不重新传**、也不因 blob 已删而报错
+- [ ] 反证（必带）：把回收那一行去掉 → ①必红
+- [ ] 真机：`du -sh originals .ppf/blobs` → 期望 blobs 显著小于 originals（只剩传输中未 ingest 的）；备一批新照片后复测
+- [ ] 回归：`just ci` 全绿；`tools/android-backup.sh` 的 BACKUP OK 计数不变
+- [ ] 证据：单测输出 + 反证红的输出 + 真机 `du` 前后对照
 
 ## 范围
 
@@ -59,30 +54,14 @@ originals 文件数: 213
 - `crates/transport/src/`（暴露一个 blob 删除/untag 的方法）
 - 对应单测
 
-## 不准动
-
+不准动：
 - 备份协议（`crates/proto`）、手机端。回收是纯本地行为，不改线上格式。
 - 缩略图（`.ppf/thumbs` 22M 是必要的，不在本卡范围）。
 
-## 可执行验收
+## 阻塞与依赖
 
-1. **单测**：ingest 一个 blob → 断言 blob store 里不再持有该 hash，
-   而照片库里文件存在。
-2. **幂等**：同一 hash 再 offer 一次 → 期望 `duplicates+1`、**不重新传**、
-   也不因为 blob 已删而报错。这是 A 方案最容易踩的坑。
-3. **反证**（必带）：把回收那一行去掉 → ①必红。
-4. **真机**：`du -sh originals .ppf/blobs` → 期望 blobs 显著小于 originals
-   （只剩传输中未 ingest 的）。备一批新照片后复测。
-5. **回归**：`just ci` 全绿；`tools/android-backup.sh` 的 BACKUP OK 计数不变。
-
-## 证据要求
-
-单测输出 + 反证红的输出 + 真机 `du` 前后对照。
-
-## 收尾
-
-`just ci` 绿 + PROGRESS.md 一行 + NEXT.md 状态 + ROADMAP 挂账里那条
-「blob-store GC」勾掉 + 本卡移入 `done/`。
+真机验收挂用户：手机重新配对备份一轮 → `du -sh originals .ppf/blobs/data`
+确认收件箱不再增长。
 
 ---
 
@@ -90,8 +69,9 @@ originals 文件数: 213
 
 ### 修法比卡面两个方案都好：主路径根本不进收件箱
 
-卡面给的是「A. ingest 后删 blob」和「B. ingest 直接从 store 取」。读代码时
-发现第三条路——**主路径压根不需要 blob store**：
+卡面原给的是「A. ingest 后删 blob」和「B. ingest 直接从 store 取」（A 改动
+局限在 daemon/transport，B 要动 `core_index::ingest` 的入口契约，原倾向
+A）。读代码时发现第三条路——**主路径压根不需要 blob store**：
 
 `upload.rs` 的接收流程本来就已经做完了"边收边验"：
 
@@ -174,7 +154,7 @@ staging                 0 B  ← 中转桌
 跑 `just android-backup` 时炸了——`DaemonBackupTest.kt:82` 也是
 `parsePairingQr(qr).addr!!`，同一个 H-10b 死契约（NPE）。全仓一查**共四处**
 （`DaemonHelloTest` / `DaemonBackupTest` / `NetProbeTest` / `DeviceBackupTest`），
-我上一轮只修了一处就宣布"解红"了。
+上一轮只修了一处就宣布"解红"了。
 
 已抽成共用辅助 `transport/PairingQrAddr.kt` 的 `addrOf(qr)`，四处全部改走它，
 下次协议再变只改一处。⚠️ 教训：**"这个测试挂了"要先问"还有几个同形的"**
@@ -182,7 +162,10 @@ staging                 0 B  ← 中转桌
 
 ### 未完成
 
-- **真机验收挂用户**：手机重新配对备份一轮 → `du -sh originals .ppf/blobs/data`
-  确认收件箱不再增长。
-- 旧数据副本 `~/P-Pass NAS.bak-blob01-*`（1.1G）留着可回退，**验收通过后由
-  用户删**。
+- **真机验收挂用户**：见「阻塞与依赖」。
+- 旧数据副本 `本地旧库副本`（1.1G）留着可回退，**验收通过后由用户删**。
+
+### 收尾（验收通过后）
+
+PROGRESS.md 一行 + NEXT.md 状态 + ROADMAP 挂账里那条「blob-store GC」
+勾掉 + 本卡移入 `done/`。

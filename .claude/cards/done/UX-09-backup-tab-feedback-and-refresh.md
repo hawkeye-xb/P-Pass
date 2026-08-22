@@ -71,6 +71,6 @@ CI 待推 main 后盯 ci-android。
   与 hero 改版尤其需要真实使用场景下的主观感受反馈（是否够快/是否
   违和）。
 - CI：push `a65f868` → main，ci-android 绿（1m40s）。
-- debug 包已 `adb install -r` 装到用户日常用的真机（RFCX1040SNE，
+- debug 包已 `adb install -r` 装到用户日常用的真机（<测试机>，
   与 MOB-05 同一台、同一签名，覆盖安装不清配对状态），用户自行操作
   验证中。
