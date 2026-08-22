@@ -249,8 +249,12 @@ async fn commit_batch_emits_timeline_invalidated_exactly_once() {
             .unwrap(),
     );
     let (event_bus, mut rx) = daemon::events::bus();
-    let backup =
-        BackupEngine::new(db.clone(), blobs, dir.path().join("library")).with_events(event_bus);
+    // 窗口拉到 1 小时：本测试钉的是「commit 收尾立即 flush + 批中信号被
+    // 合并」的**接线**，不是 1 秒窗口的墙钟行为（后者由 Throttle 单测钉）。
+    // 用默认 1s 窗口时，被打满的 CI runner 上批次中途窗口到点会多 emit
+    // 一次，测试薛定谔红（2026-08-22 CI 实例）。
+    let backup = BackupEngine::new(db.clone(), blobs, dir.path().join("library"))
+        .with_events_and_window(event_bus, std::time::Duration::from_secs(3600));
     let router = Router::new(db.clone(), "storage").with_backup(backup);
     let tp2 = tp.clone();
     let serve_task = tokio::spawn(async move { router.serve(&tp2).await });
