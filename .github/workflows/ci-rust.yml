@@ -126,7 +126,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
+        uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
         with:
           tool: cargo-nextest
 
@@ -164,7 +164,7 @@ jobs:
           key: deny-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install cargo-deny
-        uses: taiki-e/install-action@67729d5c413db75907f0ad1e39bb04b9c868ff60 # v2
+        uses: taiki-e/install-action@a2a5f6e99e1a31540baa0468acfa302cff0f359f # v2
         with:
           tool: cargo-deny
 
