@@ -23,9 +23,8 @@ release 资产更新（`gh release view dogfood`）。
 - BUILD-02 工具链钉扎已核实（CI 日志实证 rustc 1.98.0）
 
 **待决策（挂账不动）**：
-1. **nightly 失败通知渠道**——e2e 凌晨 3:30 跑端到端（真 daemon + 真实协议栈，
-   抓单测抓不到的真 bug，发布 tag 前最后门禁），红了目前没人通知；渠道选项：
-   A. Discord 通知（推荐）/ B. 自动开 issue / C. 不弄。
+1. ~~nightly 失败通知~~ **用户拍板：不通知**——工作留痕靠 push 时更新
+   PROGRESS/NEXT（既有「每批交付必更文档」纪律），不建通知渠道。
 2. **ci-workers 审批门确认**——下次 infra/workers/** 改动时验证审批流程走通。
 3. **BUILD-02**（核实 CI 侧工具链钉扎生效）仍在队列，本次未动。
 

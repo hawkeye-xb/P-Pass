@@ -20,9 +20,19 @@
 #   cache key 各 job 带 job 名前缀，避免并行写 cache 竞争互相覆盖。
 # 2026-08-23（CI 重构⑤）：删 pull_request 触发——直推 main 阶段 PR 事件
 # 用不上，同一 commit 双触发白烧额度；只留 push。
+# 2026-08-23 修正（K3 评审抓到的自相矛盾）：删 PR 触发 + dependabot =
+# 升级 PR 零检查（dependabot.yml 里写的「PR → CI 绿 → 合」永远等不来绿）。
+# 加回 pull_request，但 paths 只含流水线文件 + 依赖清单——dependabot
+# 改什么就触发什么，业务代码 PR 依旧不跑，额度不多花。
 name: CI Rust
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
   push:
     branches: [main]
     paths:
