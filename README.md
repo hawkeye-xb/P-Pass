@@ -131,9 +131,10 @@ docs/         Engineering docs: ROADMAP, PROGRESS (log & decisions),
 
 - **Rust**: Cargo workspace gives incremental builds + a shared `target/`
   cache; CI caches the registry and build artifacts keyed on `Cargo.lock`.
-- **Binary distribution**: every push to main builds Linux binaries and
-  force-pushes them to the `bin-linux-x64` orphan branch — deploy boxes
-  run `git clone -b bin-linux-x64` instead of compiling.
+- **Binary distribution**: every push to main builds Linux/macOS
+  binaries and uploads them to the fixed `dogfood` release (prerelease,
+  tag created once, assets clobbered) — deploy boxes run
+  `gh release download dogfood` instead of compiling.
 - **Android** (future): Gradle incremental + build cache.
 - **Frontend/Workers** (future): pnpm workspace; turborepo only if the JS
   task graph ever warrants it — not introduced today.

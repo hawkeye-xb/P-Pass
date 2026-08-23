@@ -14,21 +14,22 @@
 2. github.com reachable / 网络可达 github.com
 3. If AV/Defender blocks daemon.exe — follow
    `docs/troubleshooting/blocked-by-av.md` three-step verification
-   (compare SHA-256 against SHA256SUMS on bin-win-x64), allow after it
-   matches, and note "blocked once, allowed" in the report
+   (compare SHA-256 against SHA256SUMS on the dogfood release), allow
+   after it matches, and note "blocked once, allowed" in the report
    如果杀软/Defender 拦截 daemon.exe —— **按
    docs/troubleshooting/blocked-by-av.md 三步验证**（SHA-256 对照
-   bin-win-x64 的 SHA256SUMS），确认一致后放行，并在回报里注明
+   dogfood release 的 SHA256SUMS-win-x64），确认一致后放行，并在回报里注明
    "被拦截过、已放行"
 
-## 1. Fetch binaries (pure git distribution, no auth) / 拉取二进制
+## 1. Fetch binaries (dogfood release, no auth) / 拉取二进制
 
 ```powershell
 cd $env:TEMP
-git clone --depth 1 --branch bin-win-x64 https://github.com/hawkeye-xb/P-Pass.git ppf-win-bin
+gh release download dogfood --repo hawkeye-xb/P-Pass --pattern 'daemon.exe' --pattern 'testclient.exe' --pattern 'win-smoke.ps1' --pattern 'SHA256SUMS-win-x64' --pattern 'BUILD_INFO-win-x64' --dir ppf-win-bin
 cd ppf-win-bin
-# Should contain: daemon.exe  testclient.exe  win-smoke.ps1  SHA256SUMS  BUILD_INFO
-Get-Content SHA256SUMS   # record hashes for later / 记录哈希备用
+# Should contain: daemon.exe  testclient.exe  win-smoke.ps1  SHA256SUMS-win-x64  BUILD_INFO-win-x64
+Get-Content SHA256SUMS-win-x64   # record hashes for later / 记录哈希备用
+# 无 gh 的机器：浏览器/curl 访问 https://github.com/hawkeye-xb/P-Pass/releases/download/dogfood/ 逐个下载同名资产
 ```
 
 ## 2. Verify hashes (optional but recommended) / 校验哈希

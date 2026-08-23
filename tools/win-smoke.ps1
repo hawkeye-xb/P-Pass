@@ -3,7 +3,9 @@
 # IPC 吊销 → revoke-check → logs.export。全部通过输出
 # "WIN SMOKE: ALL GREEN"，任一步失败退出非零。
 #
-# 用法（在拉取了 bin-win-x64 分支的机器上）:
+# 用法（在下载了 dogfood release win-x64 资产的机器上）:
+#   gh release download dogfood --pattern '*.exe' --pattern 'win-smoke.ps1' \
+#     --pattern 'SHA256SUMS-win-x64' --repo hawkeye-xb/P-Pass
 #   powershell -ExecutionPolicy Bypass -File win-smoke.ps1 [-WorkDir <dir>]
 #
 # 已知实证结论（2026-08-02 H-09 首跑，Win x64 / PS 5.1）:
@@ -39,7 +41,7 @@ $script:Bin = Split-Path -Parent $MyInvocation.MyCommand.Path
 $DAEMON = Join-Path $Bin "daemon.exe"
 $TC = Join-Path $Bin "testclient.exe"
 
-if (-not (Test-Path $DAEMON)) { Write-Error "daemon.exe 不在 $Bin —— 先 git fetch origin bin-win-x64 并取文件"; exit 1 }
+if (-not (Test-Path $DAEMON)) { Write-Error "daemon.exe 不在 $Bin —— 先 gh release download dogfood --pattern '*.exe' --pattern 'win-smoke.ps1'（见 docs/windows-smoke.md §1）"; exit 1 }
 if (-not (Test-Path $TC)) { Write-Error "testclient.exe 不在 $Bin"; exit 1 }
 
 New-Item -ItemType Directory -Force -Path $Work | Out-Null

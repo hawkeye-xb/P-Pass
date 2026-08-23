@@ -1,30 +1,33 @@
-# NEXT — 当前状态与下一步（2026-08-22，文档卫生批次已落地）
+# NEXT — 当前状态与下一步（2026-08-23，CI 重构批次）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
-## 〇、2026-08-22：文档卫生批次（当前状态）
+## 〇、2026-08-23：CI 重构（当前状态）
 
-用户批评 TODO「没头没脑」+ 本机信息上远端，两条成立，已整改：
+用户盘问「CI 跑的都是必要的吗？必要的都是对的吗？业内标准做法？」后拍板：
 
-- **卡模板统一**：`.claude/cards/TEMPLATE.md`（问题/期望行为/验收标准/范围/
-  阻塞五段必填 + 状态横幅三档），§C.2 与 cards README 已联动。
-- **21 张活跃卡全部按模板重写**，CHECKLIST.md 重写为纯索引（卡是唯一事实源）。
-- **本机状态出 git**：路径/设备/旧副本/取证命令 → `.claude/local-state.md`
-  （已 gitignore）。三个本机待答问题（「更改…」按钮现象/常驻服务向导/
-  旧副本删不删）也在那边。
-- **全仓脱敏**：序列号/本机路径/用户名已清（含 done/ 归档）。残留：
-  `libiroh_ffi.so` 二进制内嵌本机构建路径，下次 CI 重建自然消除。
+- **ci-rust.yml 拆并行 job**（fmt/clippy/test/arch-check/deny 各自独立）——
+  治「每次 push 红一次修一次」的根（8/22 四层洋葱 = fail-fast 串行的必然）。
+- **产物分发弃 git 孤儿分支，改固定 `dogfood` prerelease**（tag 只建一次、
+  资产每次 clobber）——旧 bin-* 分支保留不删；消费方改 `gh release download`。
+- 消费方已同步：win-smoke.ps1 / dogfood-deploy.md / windows-smoke.md /
+  README ×2 / CLAUDE.md 仓库卫生节。
 
-**规矩变化（下轮起生效）**：新卡必须套 TEMPLATE.md；本机状态只写
-local-state.md；CHECKLIST 只写索引不展开细节。
+**待验证**：push 后盯 CI Rust（5 job 并行）到全绿；下次 push 确认 dogfood
+release 资产更新（`gh release view dogfood`）。
 
-**同批第二张**：WATCH-07 已修（方案 2：同一文件复检不写审计），代码合并，
-等真机验收「传一批照片，活动流条目数 = 照片数」。审计设计规矩随卡定稿
-（卡内备注，适用于以后所有卡）。
+**待决策（挂账不动）**：
+1. **ci-workers push 即部署生产**——业界标准 CI/CD 分离（部署走独立
+   workflow + 环境审批门），个人项目可接受，要不要改由用户定。
+2. **nightly 失败通知**——e2e 凌晨 3:30 跑，红了早上才知道；可挂 issue
+   bot / Discord 通知（用户定渠道）。
+3. **action 版本 pin 统一**——release.yml 全 pin SHA（好），ci-desktop/site
+   用 @v4 标签，建议统一 SHA + dependabot。
+4. **BUILD-02**（核实 CI 侧工具链钉扎生效）仍在队列，本次未动。
 
 ---
 
-# 以下为 2026-08-21 收口内容
+# 以下为 2026-08-22 收口内容
 
 ## 〇、下个 session 从这里接
 
