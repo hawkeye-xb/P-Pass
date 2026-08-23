@@ -1,6 +1,12 @@
 name: site
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - 'site/package.json'
+      - 'site/package-lock.json'
   push:
     branches: [main]
     paths:
@@ -11,6 +17,10 @@ on:
 # Site line only: builds the Astro static site under site/ and deploys to
 # GitHub Pages. Fully isolated from the main CI (pr.yml / e2e.yml / release.yml)
 # — app code changes never trigger this workflow.
+#
+# 2026-08-23（CI 重构③修正）：加 pull_request——dependabot 升级 actions/
+# npm 依赖时 PR 必须能跑检查（K3 评审抓到的「删 PR 触发 + dependabot =
+# 升级零检查」），paths 只含流水线文件 + site 依赖清单，业务代码不触发。
 
 permissions:
   contents: read

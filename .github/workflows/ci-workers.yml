@@ -19,7 +19,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-workers-${{ github.ref }}
+  # 2026-08-23（K3 评审②修正）：group 按环境命名——同一环境的连续 push
+  # 取消旧 run（最新代码赢，等审批的旧 run 部署旧代码没意义）；不同环境
+  # group 不同，test 的部署永远不会 cancel prod 的（用户红线：环境隔离）。
+  # cancel-in-progress 对 workers 安全：wrangler deploy 原子（上传→切换），
+  # 中途取消最多是「上传了没切换」，下次 deploy 覆盖，不留半状态。
+  group: ci-workers-prod-${{ github.ref }}
   cancel-in-progress: true
 
 env:
