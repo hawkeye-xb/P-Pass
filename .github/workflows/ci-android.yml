@@ -8,9 +8,20 @@
 # 侧改动时重跑比对，两侧合起来全覆盖。
 # 2026-08-23（CI 重构⑤）：删 pull_request 触发——直推 main 阶段 PR 事件
 # 用不上，同一 commit 双触发白烧额度；只留 push。
+# 2026-08-23 修正（K3 评审抓到的自相矛盾）：删 PR 触发 + dependabot =
+# 升级 PR 零检查。加回 pull_request，paths 只含流水线文件 + gradle 依赖
+# 清单——dependabot 改什么就触发什么，业务代码 PR 依旧不跑。
 name: CI Android
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "apps/android/**/build.gradle.kts"
+      - "apps/android/**/libs.versions.toml"
+      - "apps/android/**/gradle-wrapper.properties"
+      - "apps/android/gradle.properties"
   push:
     branches: [main]
     paths:
