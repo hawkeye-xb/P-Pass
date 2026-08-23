@@ -89,10 +89,12 @@ jobs:
           # Race-safe: macos/linux jobs run in parallel; the loser of the
           # first-run create race just sees "already exists" and proceeds
           # to upload (|| true absorbs the race, upload fails loudly later).
-          gh release view dogfood >/dev/null 2>&1 || \
-            gh release create dogfood --prerelease --title "dogfood binaries" \
+          # NOTE: gh must be told the repo explicitly — the shell cwd here
+          # is /tmp/bin, not a git checkout, so gh can't infer it.
+          gh release view dogfood --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create dogfood --repo "$GITHUB_REPOSITORY" --prerelease --title "dogfood binaries" \
               --notes "continuous builds of main (macos-arm64 / linux-x64 / win-x64). Tag is fixed, assets are clobbered on each push." || true
-          gh release upload dogfood \
+          gh release upload dogfood --repo "$GITHUB_REPOSITORY" \
             /tmp/ppass-macos-arm64.tar.gz \
             /tmp/bin/SHA256SUMS-macos-arm64 \
             /tmp/bin/BUILD_INFO-macos-arm64 \
@@ -134,11 +136,12 @@ jobs:
           sha256sum daemon testclient > SHA256SUMS-linux-x64
           echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO-linux-x64
           # Fixed tag `dogfood`, created once, assets clobbered per push.
-          # Race-safe: see macos job comment.
-          gh release view dogfood >/dev/null 2>&1 || \
-            gh release create dogfood --prerelease --title "dogfood binaries" \
+          # Race-safe: see macos job comment. Same --repo necessity (cwd
+          # is /tmp/rel, not a git checkout).
+          gh release view dogfood --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create dogfood --repo "$GITHUB_REPOSITORY" --prerelease --title "dogfood binaries" \
               --notes "continuous builds of main (macos-arm64 / linux-x64 / win-x64). Tag is fixed, assets are clobbered on each push." || true
-          gh release upload dogfood \
+          gh release upload dogfood --repo "$GITHUB_REPOSITORY" \
             /tmp/rel/daemon \
             /tmp/rel/testclient \
             /tmp/rel/dogfood-smoke.sh \
@@ -193,11 +196,12 @@ jobs:
           sha256sum daemon.exe testclient.exe > SHA256SUMS-win-x64
           echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO-win-x64
           # Fixed tag `dogfood`, created once, assets clobbered per push.
-          # Race-safe: see macos job comment.
-          gh release view dogfood >/dev/null 2>&1 || \
-            gh release create dogfood --prerelease --title "dogfood binaries" \
+          # Race-safe: see macos job comment. Same --repo necessity (cwd
+          # is /tmp/rel, not a git checkout).
+          gh release view dogfood --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create dogfood --repo "$GITHUB_REPOSITORY" --prerelease --title "dogfood binaries" \
               --notes "continuous builds of main (macos-arm64 / linux-x64 / win-x64). Tag is fixed, assets are clobbered on each push." || true
-          gh release upload dogfood \
+          gh release upload dogfood --repo "$GITHUB_REPOSITORY" \
             /tmp/rel/daemon.exe \
             /tmp/rel/testclient.exe \
             /tmp/rel/win-smoke.ps1 \
