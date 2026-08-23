@@ -6,15 +6,11 @@
 # 反向依赖检查：desktop 工作区是独立 Cargo workspace（T-041 决定），
 # crates/** 改动不触发本 workflow（Rust 核心域由 ci-rust.yml 覆盖）——
 # src-tauri 只依赖已发布的 iroh 栈，与 crates/ 无编译级耦合。
+# 2026-08-23（CI 重构⑤）：删 pull_request 触发——直推 main 阶段 PR 事件
+# 用不上，同一 commit 双触发白烧额度；只留 push。
 name: CI Desktop
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "apps/desktop/**"
-      - "assets/**"
-      - ".github/workflows/ci-desktop.yml"
   push:
     branches: [main]
     paths:
@@ -35,11 +31,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      # 全 pin commit SHA（CI 重构③，2026-08-23）：供应链攻击面归零，
+      # dependabot 统一升级。
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
       - name: Cache cargo (desktop workspace)
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry/
@@ -68,7 +66,7 @@ jobs:
       # 消费新 token 时构建仍绿。desktop 用 pnpm（pnpm-lock.yaml，
       # 与 release.yml 的 pnpm tauri build 一致）。
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - name: Install pnpm

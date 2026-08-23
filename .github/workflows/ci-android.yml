@@ -6,15 +6,11 @@
 # 反向依赖检查：GoldenDriftTest 比对 crates/proto 金样本 snapshots.rs——
 # proto 侧改动由 ci-rust.yml（crates/**）触发，本 workflow 只在 Android
 # 侧改动时重跑比对，两侧合起来全覆盖。
+# 2026-08-23（CI 重构⑤）：删 pull_request 触发——直推 main 阶段 PR 事件
+# 用不上，同一 commit 双触发白烧额度；只留 push。
 name: CI Android
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "apps/android/**"
-      - "assets/i18n/**"
-      - ".github/workflows/ci-android.yml"
   push:
     branches: [main]
     paths:
