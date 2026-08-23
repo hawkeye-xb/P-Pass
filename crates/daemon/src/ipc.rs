@@ -443,11 +443,19 @@ impl IpcServer {
             // IPC-02: 事件订阅——握手应答后连接转为事件流（仍可应答
             // 其他请求），直到客户端断开或 events.unsubscribe。
             if req.method == "events.subscribe" {
+                // 订阅语义：Resp 应答 = 订阅已生效。receiver 必须先于
+                // 应答创建——broadcast 无订阅者时 send 直接丢弃（events.rs
+                // 契约），若先应答后 subscribe，客户端收到 Resp 立即 emit
+                // 的事件（如 pairing.start 的 pending_changed）会被丢弃，
+                // 订阅方永远等不到（CI 高负载下服务端 write_all 后未及时
+                // 被调度、emit 抢先，薛定谔红；2026-08-23 抓到的
+                // subscription_delivers_pending_change_under_100ms 挂起）。
+                let rx = self.events.subscribe();
                 let resp = Resp::ok(req.id.clone(), serde_json::json!({ "subscribed": true }));
                 let mut out = serde_json::to_string(&resp)?;
                 out.push('\n');
                 tx.write_all(out.as_bytes()).await?;
-                return self.serve_subscription(&mut lines, &mut tx, &req).await;
+                return self.serve_subscription(&mut lines, &mut tx, &req, rx).await;
             }
             let resp = self.dispatch(req).await;
             let mut out = serde_json::to_string(&resp)?;
@@ -467,6 +475,7 @@ impl IpcServer {
         lines: &mut tokio::io::Lines<BufReader<interprocess::local_socket::tokio::RecvHalf>>,
         tx: &mut interprocess::local_socket::tokio::SendHalf,
         req: &Req,
+        mut rx: tokio::sync::broadcast::Receiver<serde_json::Value>,
     ) -> anyhow::Result<()> {
         let filter: Option<HashSet<String>> = req
             .params
@@ -477,7 +486,6 @@ impl IpcServer {
                     .filter_map(|v| v.as_str().map(str::to_owned))
                     .collect()
             });
-        let mut rx = self.events.subscribe();
         loop {
             tokio::select! {
                 line = lines.next_line() => {
