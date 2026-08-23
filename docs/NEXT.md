@@ -22,10 +22,21 @@ release 资产更新（`gh release view dogfood`）。
 - 删 ci-rust/ci-android/ci-desktop 的 PR 触发（只留 push）
 - BUILD-02 工具链钉扎已核实（CI 日志实证 rustc 1.98.0）
 
+**第三波（2026-08-23 已完成，K3 评审驱动的修正）**：
+- 加回 PR 触发（K3 抓到的自相矛盾：删 PR + dependabot = 升级零检查），
+  paths 只含 .github/workflows/** + 依赖清单
+- ci-workers concurrency group 按环境命名（ci-workers-prod）
+- 合并 5 个 dependabot PR（#48-52，actions 全升最新大版本），全绿才合
+- 合并后 CI 抓出 `subscription_delivers_pending_change_under_100ms`
+  300s 挂起（薛定谔红）：events.subscribe 先应答后建 receiver，事件被
+  broadcast 丢弃——修 receiver 先于 Resp 创建
+- site workflow：concurrency group 带 ref + deploy 只在 push 跑
+
 **待决策（挂账不动）**：
 1. ~~nightly 失败通知~~ **用户拍板：不通知**——工作留痕靠 push 时更新
    PROGRESS/NEXT（既有「每批交付必更文档」纪律），不建通知渠道。
-2. **ci-workers 审批门确认**——下次 infra/workers/** 改动时验证审批流程走通。
+2. **ci-workers 审批门确认**——多次 push 触发的 workers run 停在审批门
+   （都是 actions 升级，无 worker 代码改动），等用户 GitHub 批准/忽略。
 3. **BUILD-02**（核实 CI 侧工具链钉扎生效）仍在队列，本次未动。
 
 ---
