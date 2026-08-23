@@ -117,9 +117,9 @@ docs/         工程文档：ROADMAP、PROGRESS（日志与决策）、网络矩
 
 - **Rust**：Cargo workspace 天然增量构建 + 共享 `target/` 缓存；
   CI 以 `Cargo.lock` 为键缓存 registry 与构建产物。
-- **产物分发**：push 到 main 自动构建 Linux 二进制并强推
-  `bin-linux-x64` 孤儿分支——部署机 `git clone -b bin-linux-x64`
-  秒级取货，不再编译。
+- **产物分发**：push 到 main 自动构建 Linux/macOS 二进制并上传到固定
+  `dogfood` release（prerelease，tag 只建一次、资产每次覆盖）——部署机
+  `gh release download dogfood` 秒级取货，不再编译。
 - **Android**（未来）：Gradle 自带增量 + build cache。
 - **前端/Workers**（未来）：pnpm workspace；JS 任务图规模需要时再评估
   turborepo——当前不引入。

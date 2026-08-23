@@ -11,17 +11,20 @@ agent 可执行。2026-07-30 已跨公网双机验证全绿（阿里云×办公 
 ## 0. Prerequisites / 前置
 
 **macOS (Apple Silicon)** — **zero dependencies** / **零依赖**：the
-`bin-macos-arm64` branch ships a self-contained bundle (binaries +
-bundled dylibs). No Homebrew, no Xcode, no Rust needed. `git` is
-optional too — download over HTTPS if the box lacks it:
-产物分支是自包含包（二进制+捆绑动态库），无需 Homebrew/Xcode/Rust；
-没有 git 的机器可直接 HTTPS 下载：
+`dogfood` release ships a self-contained bundle (binaries + bundled
+dylibs). No Homebrew, no Xcode, no Rust needed. `git` is optional too —
+download over HTTPS if the box lacks it:
+产物发布在 `dogfood` release（自包含包：二进制+捆绑动态库），无需
+Homebrew/Xcode/Rust；没有 git 的机器可直接 HTTPS 下载：
 
 ```bash
-# with git:
-git clone --depth 1 -b bin-macos-arm64 https://github.com/hawkeye-xb/P-Pass.git ppf-bin
-# without git (e.g. restricted sandboxes):
-curl -L https://github.com/hawkeye-xb/P-Pass/archive/refs/heads/bin-macos-arm64.tar.gz | tar xz && mv P-Pass-bin-macos-arm64 ppf-bin && chmod +x ppf-bin/daemon ppf-bin/testclient ppf-bin/dogfood-smoke.sh
+# with gh CLI:
+gh release download dogfood --repo hawkeye-xb/P-Pass --pattern 'ppass-macos-arm64.tar.gz'
+tar xzf ppass-macos-arm64.tar.gz && mv bin ppf-bin && chmod +x ppf-bin/daemon ppf-bin/testclient ppf-bin/dogfood-smoke.sh
+# without gh (e.g. restricted sandboxes), raw HTTPS:
+curl -L -o ppass-macos-arm64.tar.gz \
+  https://github.com/hawkeye-xb/P-Pass/releases/download/dogfood/ppass-macos-arm64.tar.gz
+tar xzf ppass-macos-arm64.tar.gz && mv bin ppf-bin && chmod +x ppf-bin/daemon ppf-bin/testclient ppf-bin/dogfood-smoke.sh
 ```
 
 Optional / 可选: `brew install ffmpeg`（缺则视频缩略图给占位图，照片不受影响）。
@@ -41,11 +44,14 @@ Network notes / 网络注意（H-04 实证教训）:
 ## 1. Get prebuilt binaries / 拿预构建二进制（免编译）
 
 ```bash
-# macOS Apple Silicon:
-git clone --depth 1 -b bin-macos-arm64 https://github.com/hawkeye-xb/P-Pass.git ppf-bin
-# Linux x86_64:
-#   git clone --depth 1 -b bin-linux-x64 https://github.com/hawkeye-xb/P-Pass.git ppf-bin
-cd ppf-bin && shasum -c SHA256SUMS && chmod +x daemon testclient && cat BUILD_INFO
+# macOS Apple Silicon（tar 包内含 lib/ 与 SHA256SUMS/BUILD_INFO）:
+gh release download dogfood --repo hawkeye-xb/P-Pass --pattern 'ppass-macos-arm64.tar.gz'
+tar xzf ppass-macos-arm64.tar.gz && mv bin ppf-bin
+# Linux x86_64（裸二进制 + 校验和，分资产）:
+gh release download dogfood --repo hawkeye-xb/P-Pass --pattern 'daemon' --pattern 'testclient' \
+  --pattern 'dogfood-smoke.sh' --pattern 'SHA256SUMS-linux-x64' --pattern 'BUILD_INFO-linux-x64' --dir ppf-bin
+# 无 gh 的机器用 curl 逐个拉（https://github.com/hawkeye-xb/P-Pass/releases/download/dogfood/<asset>）
+cd ppf-bin && shasum -c SHA256SUMS-* && chmod +x daemon testclient dogfood-smoke.sh && cat BUILD_INFO-*
 ```
 
 ## 2. Start the daemon / 启动
@@ -118,5 +124,4 @@ n0 relay 协调打洞。若跨网配对超时，那是 H-07（自建 relay）的
   / 崩溃重启：库与索引无恙，白名单在库里；QR 与 IPC 令牌每次启动新发。
 - Logs: `RUST_LOG=debug` for connection detail; `logs.export` over IPC
   produces a sanitized zip safe to share. / 日志与脱敏诊断包。
-- Update: `git -C ppf-bin pull` (binaries branch is rebuilt on every
-  push to main). / 更新：产物分支随主干自动重建，pull 即新版。
+- Update: `gh release download dogfood --repo hawkeye-xb/P-Pass --pattern 'ppass-macos-arm64.tar.gz' --clobber` 重拉（产物随每次 push 自动重建，tag 固定不挪）。/ 更新：dogfood release 资产随主干自动重建，重拉即新版（tag `dogfood` 固定，只 clobber 资产，不产生新 tag）。

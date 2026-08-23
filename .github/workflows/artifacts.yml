@@ -1,23 +1,29 @@
 name: Linux Artifacts
 
-# Push-to-main builds the Linux x86_64 daemon + testclient and force-pushes
-# them to the orphan branch `bin-linux-x64` — pure-git distribution for
-# cloud/dogfood machines (they `git fetch` instead of compiling for 40min
-# on a 2-core box). The branch is overwritten every time: no history on
-# the branch itself.
+# Push-to-main builds the Linux x86_64 / macOS arm64 daemon + testclient and
+# publishes them as assets of a FIXED GitHub Release `dogfood` (prerelease).
+# Consumer machines fetch via `gh release download` / curl — no git objects
+# polluted, no orphan branches, no force-push history loss (previously
+# bin-linux-x64 / bin-macos-arm64 orphan branches, retired 2026-08-23).
 #
-# macOS arm64 → bin-macos-arm64 (push-to-main); Windows x64 → bin-win-x64
-# (workflow_dispatch only — vcpkg static libheif is ~20min, not worth every
-# push; H-09 Windows smoke machine fetches it the same pure-git way).
+# Release/tag semantics:
+#   - Tag `dogfood` is created ONCE (first successful run) and NEVER moved /
+#     deleted — only its assets are clobbered on each push. This keeps the
+#     "tags are only for real releases" rule intact (v* is release.yml's).
+#   - Windows x64 → same `dogfood` release, workflow_dispatch only
+#     (vcpkg static libheif is ~20min, not worth every push; H-09 Windows
+#     smoke machine fetches it the same release-download way).
 #
-# ⚠️ Repo-bloat lessons (2026-08-10, dev machine .git hit 3.3GB):
-# 1. Force-pushed generations pile up as unreachable objects in every
-#    clone that fetches bin-*. Dev machines that never run these binaries
-#    MUST exclude them:  git config --add remote.origin.fetch '^refs/heads/bin-*'
-#    Consumer machines should fetch shallowly into a dedicated checkout.
-# 2. paths-filter below: docs/card-only pushes must not rebuild + repush
-#    ~100MB of identical binaries. Keep the filter in sync with what
-#    actually feeds the build.
+# ⚠️ Repo-bloat lessons (2026-08-10, dev machine .git hit 3.3GB): the old
+# force-pushed bin-* generations piled up as unreachable objects in every
+# clone that fetched them. Release assets do NOT enter git — no exclusion
+# config needed anymore. Existing dev-machine fetch exclusions are harmless
+# leftovers; old bin-* branches are left in place (not deleted) for anyone
+# mid-migration.
+#
+# paths-filter below: docs/card-only pushes must not rebuild + re-upload
+# ~100MB of identical binaries. Keep the filter in sync with what actually
+# feeds the build.
 
 on:
   push:
@@ -69,19 +75,28 @@ jobs:
       - name: Bundle self-contained (dylibs + rpath rewrite)
         run: tools/bundle-macos.sh /tmp/bin target/release/daemon target/release/testclient
 
-      - name: Push to bin-macos-arm64 orphan branch
+      - name: Package + upload to dogfood release (macos-arm64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           cp tools/dogfood-smoke.sh /tmp/bin/ || true
           cd /tmp/bin
-          shasum -a 256 daemon testclient lib/*.dylib > SHA256SUMS
-          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
-          git init -q -b bin-macos-arm64
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add -A
-          git commit -q -m "macos arm64 binaries @ ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-macos-arm64
+          shasum -a 256 daemon testclient lib/*.dylib > SHA256SUMS-macos-arm64
+          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO-macos-arm64
+          cd /tmp && tar -czf ppass-macos-arm64.tar.gz bin
+          # Fixed tag `dogfood`, created once, assets clobbered per push.
+          # Race-safe: macos/linux jobs run in parallel; the loser of the
+          # first-run create race just sees "already exists" and proceeds
+          # to upload (|| true absorbs the race, upload fails loudly later).
+          gh release view dogfood >/dev/null 2>&1 || \
+            gh release create dogfood --prerelease --title "dogfood binaries" \
+              --notes "continuous builds of main (macos-arm64 / linux-x64 / win-x64). Tag is fixed, assets are clobbered on each push." || true
+          gh release upload dogfood \
+            /tmp/ppass-macos-arm64.tar.gz \
+            /tmp/bin/SHA256SUMS-macos-arm64 \
+            /tmp/bin/BUILD_INFO-macos-arm64 \
+            --clobber
 
   linux-bin:
     runs-on: ubuntu-latest
@@ -99,7 +114,7 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/
             target/
-          key: ${{ runner.os }}-artifacts-${{ hashFiles('**/Cargo.lock') }}
+          key: linux-artifacts-${{ hashFiles('**/Cargo.lock') }}
 
       - name: System codecs (libheif + HEVC plugin, ffmpeg)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg
@@ -107,25 +122,33 @@ jobs:
       - name: Build release binaries
         run: cargo build --release -p daemon -p testclient
 
-      - name: Push to bin-linux-x64 orphan branch
+      - name: Upload to dogfood release (linux-x64)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/bin
-          cp target/release/daemon target/release/testclient /tmp/bin/
-          cp tools/dogfood-smoke.sh /tmp/bin/ || true
-          cd /tmp/bin
-          sha256sum daemon testclient > SHA256SUMS
-          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
-          git init -q -b bin-linux-x64
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add -A
-          git commit -q -m "linux x86_64 binaries @ ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-linux-x64
+          mkdir -p /tmp/rel
+          cp target/release/daemon target/release/testclient /tmp/rel/
+          cp tools/dogfood-smoke.sh /tmp/rel/ || true
+          cd /tmp/rel
+          sha256sum daemon testclient > SHA256SUMS-linux-x64
+          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO-linux-x64
+          # Fixed tag `dogfood`, created once, assets clobbered per push.
+          # Race-safe: see macos job comment.
+          gh release view dogfood >/dev/null 2>&1 || \
+            gh release create dogfood --prerelease --title "dogfood binaries" \
+              --notes "continuous builds of main (macos-arm64 / linux-x64 / win-x64). Tag is fixed, assets are clobbered on each push." || true
+          gh release upload dogfood \
+            /tmp/rel/daemon \
+            /tmp/rel/testclient \
+            /tmp/rel/dogfood-smoke.sh \
+            /tmp/rel/SHA256SUMS-linux-x64 \
+            /tmp/rel/BUILD_INFO-linux-x64 \
+            --clobber
 
   # H-09: Windows 真机冒烟分发通道。仅 workflow_dispatch 触发（vcpkg 静态
-  # libheif 构建 ~20 分钟，不值得每次 push 都跑）；产物推 bin-win-x64 孤儿
-  # 分支，Win 测试机器 git fetch 即得（公开仓免认证）。
+  # libheif 构建 ~20 分钟，不值得每次 push 都跑）；产物上传到同一 dogfood
+  # release，Win 测试机器 `gh release download` 即得（公开仓免认证）。
   windows-x64-bin:
     runs-on: windows-latest
     timeout-minutes: 45
@@ -156,20 +179,28 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
         run: cargo build --release -p daemon -p testclient
 
-      - name: Push to bin-win-x64 orphan branch
+      - name: Upload to dogfood release (win-x64)
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mkdir -p /tmp/bin
-          cp target/release/daemon.exe target/release/testclient.exe /tmp/bin/
+          mkdir -p /tmp/rel
+          cp target/release/daemon.exe target/release/testclient.exe /tmp/rel/
           # 冒烟脚本是 Win 真机验证的必需件——复制失败必须响（H-09b：不许 || true 吞掉）
-          cp tools/win-smoke.ps1 /tmp/bin/
-          cd /tmp/bin
-          sha256sum daemon.exe testclient.exe > SHA256SUMS
-          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO
-          git init -q -b bin-win-x64
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-          git add -A
-          git commit -q -m "windows x86_64 binaries @ ${GITHUB_SHA::7}"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" bin-win-x64
+          cp tools/win-smoke.ps1 /tmp/rel/
+          cd /tmp/rel
+          sha256sum daemon.exe testclient.exe > SHA256SUMS-win-x64
+          echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO-win-x64
+          # Fixed tag `dogfood`, created once, assets clobbered per push.
+          # Race-safe: see macos job comment.
+          gh release view dogfood >/dev/null 2>&1 || \
+            gh release create dogfood --prerelease --title "dogfood binaries" \
+              --notes "continuous builds of main (macos-arm64 / linux-x64 / win-x64). Tag is fixed, assets are clobbered on each push." || true
+          gh release upload dogfood \
+            /tmp/rel/daemon.exe \
+            /tmp/rel/testclient.exe \
+            /tmp/rel/win-smoke.ps1 \
+            /tmp/rel/SHA256SUMS-win-x64 \
+            /tmp/rel/BUILD_INFO-win-x64 \
+            --clobber

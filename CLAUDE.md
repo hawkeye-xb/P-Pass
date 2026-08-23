@@ -75,10 +75,11 @@
 
 ## 仓库卫生
 
-- **绝不把构建产物 commit 进 main**。bin-* 孤儿分支是唯一例外通道
-  （artifacts.yml 管理，带 paths 过滤）。
-- 开发机排除产物分支：`git config --add remote.origin.fetch '^refs/heads/bin-*'`
-  （2026-08-10 教训：不排除的话 .git 会膨胀到 GB 级）。
+- **绝不把构建产物 commit 进 main**。产物走固定 `dogfood` release
+  （artifacts.yml 管理，带 paths 过滤，tag 只建一次、资产 clobber）；
+  旧的 bin-* 孤儿分支已废弃保留（不删），开发机的
+  `git config --add remote.origin.fetch '^refs/heads/bin-*'` 排除配置
+  留作无害残留（2026-08-10 教训：不排除的话 .git 会膨胀到 GB 级）。
 
 ## 语言与文档
 
