@@ -16,14 +16,18 @@
 **待验证**：push 后盯 CI Rust（5 job 并行）到全绿；下次 push 确认 dogfood
 release 资产更新（`gh release view dogfood`）。
 
+**第二波（2026-08-23 已完成）**：
+- workers 部署挂 `workers-prod` 审批门（push 触发、部署前等批准）
+- 全 action pin commit SHA + dependabot（每周一自动检查升级）
+- 删 ci-rust/ci-android/ci-desktop 的 PR 触发（只留 push）
+- BUILD-02 工具链钉扎已核实（CI 日志实证 rustc 1.98.0）
+
 **待决策（挂账不动）**：
-1. **ci-workers push 即部署生产**——业界标准 CI/CD 分离（部署走独立
-   workflow + 环境审批门），个人项目可接受，要不要改由用户定。
-2. **nightly 失败通知**——e2e 凌晨 3:30 跑，红了早上才知道；可挂 issue
-   bot / Discord 通知（用户定渠道）。
-3. **action 版本 pin 统一**——release.yml 全 pin SHA（好），ci-desktop/site
-   用 @v4 标签，建议统一 SHA + dependabot。
-4. **BUILD-02**（核实 CI 侧工具链钉扎生效）仍在队列，本次未动。
+1. **nightly 失败通知渠道**——e2e 凌晨 3:30 跑端到端（真 daemon + 真实协议栈，
+   抓单测抓不到的真 bug，发布 tag 前最后门禁），红了目前没人通知；渠道选项：
+   A. Discord 通知（推荐）/ B. 自动开 issue / C. 不弄。
+2. **ci-workers 审批门确认**——下次 infra/workers/** 改动时验证审批流程走通。
+3. **BUILD-02**（核实 CI 侧工具链钉扎生效）仍在队列，本次未动。
 
 ---
 

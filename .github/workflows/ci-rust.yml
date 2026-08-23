@@ -18,19 +18,11 @@
 #   每层都要"修一次才知道下一个"，deny 层从未被跑到）。并行后一次 push
 #   所有层同时跑，红就全红、全显示，一次全修完。
 #   cache key 各 job 带 job 名前缀，避免并行写 cache 竞争互相覆盖。
+# 2026-08-23（CI 重构⑤）：删 pull_request 触发——直推 main 阶段 PR 事件
+# 用不上，同一 commit 双触发白烧额度；只留 push。
 name: CI Rust
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "config/**"
-      - "assets/i18n/**"
-      - "tools/arch-check.sh"
-      - ".github/workflows/ci-rust.yml"
   push:
     branches: [main]
     paths:

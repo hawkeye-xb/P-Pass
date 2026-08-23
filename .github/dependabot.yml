@@ -1,0 +1,14 @@
+# dependabot 统一升级 GitHub Actions（CI 重构③，2026-08-23）。
+# workflow 全部 pin commit SHA；这里每周检查一次官方 action 新版本，
+# 开 PR 升级（CI 全绿才合）。升级流程：PR → CI 跑 → 绿 → 合。
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - "ci"
