@@ -152,7 +152,7 @@ jobs:
           cat SHA256SUMS-macos-arm64
 
       - name: SLSA attestation
-        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
         with:
           subject-path: /tmp/rel/daemon, /tmp/rel/testclient
 
@@ -346,7 +346,7 @@ jobs:
           sha256sum apps/desktop/src-tauri/target/release/bundle/nsis/*.exe >> target/release/SHA256SUMS-windows-x64
 
       - name: SLSA attestation
-        uses: actions/attest-build-provenance@92c65d2898f1f53cfdc910b962cecff86e7f8fcc # v1
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018 # v1
         with:
           subject-path: target/release/daemon.exe, target/release/testclient.exe
 
