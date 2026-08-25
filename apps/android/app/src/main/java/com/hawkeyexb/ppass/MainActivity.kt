@@ -173,11 +173,22 @@ fun PPassApp() {
     var backupInterrupted by remember {
         mutableStateOf(BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged)
     }
+    // MOB-35（2026-08-25 真机）：`backupInterrupted` 只该挡**重挂后台监听**，
+    // 不该挡**用户在前台的补捞**。原来一个 `return` 把两件事一起挡了，于是
+    // force-stop 之后即使 App 摆在眼前也一张不传（实测：停止期间拍照 → 重开
+    // App 放前台 → 轮询 90 秒零上传）。
+    //
+    // 用户定调（2026-08-25）："重新启动之后，我依旧没有启动后台是合理的，但是
+    // 前台情况下，都无法上传，是不是不合理呢？" 给的状态模型是：**前台 = 人在
+    // 场 = 该传**。用户打开 App 本身就是意思表示，而且他看得见进度——不存在
+    // MOB-28 要防的那种"自作主张"。MOB-28 防的是"背着用户把后台监听装回去"。
     LaunchedEffect(backupInterrupted) {
-        val pairing = pairings.load() ?: return@LaunchedEffect
+        pairings.load() ?: return@LaunchedEffect
         if (AutoBackupPrefs(context.filesDir).paused()) return@LaunchedEffect
-        if (backupInterrupted) return@LaunchedEffect
-        scheduleAutoBackup(context)
+        // 后台监听：中断待确认时不许重挂（MOB-28 红线，唯一入口是
+        // resumeAfterInterruption）。
+        if (!backupInterrupted) scheduleAutoBackup(context)
+        // 前台补捞：无条件跑。人在场就该传。
         triggerUserPresentBackup(context)
     }
     remember {
