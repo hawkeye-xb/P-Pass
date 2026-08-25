@@ -58,25 +58,26 @@ App 打开那次）都接了队列。
 插入点已核实：`BackupWorker.kt:770-772` 校准算出 `missing` 后紧接
 `removeMissing`——提示天然一次性，连去重窗口都不用做。
 
-**DESK-09 + DESK-10 已实施（2026-08-25，commit 1e1359f · 🟡 等真机验收）**：
-同一场事故的两面——`DESK-09` 让 daemon 的真实启动错误**当场可见**（启动前记
-stderr 偏移、超时后只读新增那段、原文照登、超时不当结论），`DESK-10` 让它
-**可被带走**（导出改桌面壳本地组装，daemon 挂着照样出包，包里含 daemon 的
-stdout/stderr 日志 + 版本号 + 配置摘要 + README，daemon 活着时再附
-diag/devices/audit）。日志路径一律从 LaunchAgent plist 读，不硬编码。
-只做 macOS 这条，不为未定的 Windows/Linux 常驻方案预留抽象。
-欠**真机验收两条**：①旧版本包打开新版库 → 向导界面必须出现
-`migration ... missing in the resolved migrations` 原文；②daemon 挂着点
-「导出日志」→ 仍出 zip 且含 `.err`/`.log` 与版本号（见两张卡「还差什么」）。
-⚠️ **这次 push（`c60e303`）的 CI 结论同样欠一双眼睛**：受影响域是
-**ci-rust + ci-desktop**，本机 `gh auth status` 仍未登录（下面「等用户」第 1 条
-那条认证缺口），盯不到结论。本机等价证据：`just ci` nextest **319 passed**、
-src-tauri `cargo test --lib` **17 passed**、desktop vitest **31 passed**、
-`vite build` 208 modules。新增的 src-tauri 测试不含任何平台 cfg（`ExportEnv`
-注入 tempdir 假 plist），Linux runner 上没有理由变红。
-顺带开了 `CI-03`：桌面壳 workspace 全仓没有 fmt/clippy 门禁——本轮在
-`src-tauri` 跑一次 `cargo fmt` 就重排了两处与改动无关的既有代码（已还原，
-不夹带进本批次）。
+**DESK-10 已实施（2026-08-25，commit 1e1359f + 0e0521f · 🟡 等真机验收）**：「导出日志」
+改成**桌面壳本地组装**——不再是 daemon 的 `logs.export` IPC，daemon 挂着时按钮
+照样出包（那正是最需要日志的场景）。包里含 daemon 的 stdout/stderr 日志（路径
+从 LaunchAgent plist 读，不硬编码）、App + daemon 版本号（daemon 不可达时问内置
+服务 `--version`）、配置摘要、`log-sources.txt`、`README.txt`；daemon 活着时再
+附它那三份（daemon 侧 `export_logs` 顺带补上 `audit.json`）。脱敏加了长 hex 掩码
+（NodeId / 配对令牌只出前缀）。只做 macOS 这条（LaunchAgent 是 macOS 专属），
+不为未定的 Windows/Linux 常驻方案预留抽象。
+**不进 test.3 的关键路径**（验收人 2026-08-25 定调：它治的是"出问题时排查更快"，
+不挡回归本身）。欠**真机验收三条**：①daemon 正常时导出 → 包里 9 个文件都在；
+②daemon 挂着时导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip
+不许出现用户名。
+⚠️ **本次 push 的 CI 结论欠一双眼睛**：受影响域 **ci-rust + ci-desktop**，
+本机 `gh auth status` 未登录（见下面「等用户」第 1 条的认证缺口），盯不到结论。
+本机等价证据：`just ci` nextest **319 passed**、src-tauri `cargo test --lib`
+**14 passed**、desktop vitest **24 passed**、`vite build` 207 modules。
+`DESK-09`（向导吞掉 daemon 真实启动错误）**已撤出本批次、推后**，卡回到
+⬜ 未开工——验收人 2026-08-25 定调：它同样不挡回归。
+顺带开了 `CI-03`：桌面壳 workspace 全仓没有 fmt/clippy 门禁——在 `src-tauri`
+跑一次 `cargo fmt` 就重排了两处与改动无关的既有代码（已还原，不夹带）。
 
 **等用户（本轮新增）**：
 1. **下载安装包做真实模拟测试**被 `gh` 认证挡住——本机 `gh auth status`
