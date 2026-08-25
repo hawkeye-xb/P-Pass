@@ -1,7 +1,16 @@
-name: Linux Artifacts
+name: Dogfood Binaries
 
-# Push-to-main builds the Linux x86_64 / macOS arm64 daemon + testclient and
-# publishes them as assets of a FIXED GitHub Release `dogfood` (prerelease).
+# 自用（dogfood）裸二进制：daemon + testclient，发到固定的 GitHub Release
+# `dogfood`（prerelease）。**这里的产物不签名、不打包成 .app/.dmg/.apk**
+# ——要给测试人员用的、签名公证过的可分发包走 release.yml 的
+# workflow_dispatch（platforms 输入可只构 macos,android）。
+#
+# 触发节奏（2026-08-25 用户拍板「我需要构建的时候再构建」）：
+#   - Linux x86_64：push 到 main 自动（计费 1x，是「release profile 还能编、
+#     dogfood 产物在位」的日常证据）
+#   - macOS arm64：**只在 workflow_dispatch**（macOS runner 私有仓计费 10x；
+#     改一句 i18n 文案就烧一次 release 构建，代价与收益完全不成比例）
+#   - Windows x86_64：只在 workflow_dispatch（本来就是）
 # Consumer machines fetch via `gh release download` / curl — no git objects
 # polluted, no orphan branches, no force-push history loss (previously
 # bin-linux-x64 / bin-macos-arm64 orphan branches, retired 2026-08-23).
@@ -50,6 +59,9 @@ concurrency:
 jobs:
   macos-arm64-bin:
     runs-on: macos-14 # Apple Silicon
+    # 只手动触发：macOS runner 私有仓计费 10x，而这只是自用裸二进制。
+    # 需要 macOS 包时 `gh workflow run artifacts.yml`（或 Actions 页 Run workflow）。
+    if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

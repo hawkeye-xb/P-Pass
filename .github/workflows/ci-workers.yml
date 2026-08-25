@@ -11,8 +11,11 @@ on:
   push:
     branches: [main]
     paths:
+      # 2026-08-25：**刻意不含本文件自身**。含自身 = 每次改这个 workflow
+      # 都排一个「生产部署」去等审批，而 worker 代码一行没动（实测堆了 3 个
+      # Waiting run）。且 cancel-in-progress 收不掉 Waiting 状态，只会越堆
+      # 越多。改流水线走 workflow_dispatch 验证，不靠误触发。
       - "infra/workers/**"
-      - ".github/workflows/ci-workers.yml"
   workflow_dispatch:
 
 permissions:

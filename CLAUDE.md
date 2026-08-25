@@ -43,10 +43,18 @@
   路径"的**预期行为，不是待修的 bug**，别去修它。
 - 要可安装的正式产物 → `gh workflow run release.yml -f platforms=android,macos`，
   由 CI 签名产出。
-- 当前槽位实况：`ANDROID_KEYSTORE_*` ✅、`UPDATE_SIGNING_KEY` ✅、
-  `APPLE_CERT_P12` / `APPLE_NOTARY_*` / `APPLE_TEAM_ID` ❌（补需用户本人操作，
-  操作单 `docs/runbook/h02-apple-signing.md`；没有 Apple 会员就先不做，
-  家人「右键→打开」过 Gatekeeper 完全可行）。
+- **当前槽位实况（2026-08-25 逐个核实，勿照搬旧记录）**：
+  `ANDROID_KEYSTORE_ALIAS/BASE64/PASSWORD` ✅、`UPDATE_SIGNING_KEY` ✅、
+  `APPLE_CERT_P12` + `APPLE_CERT_PASSWORD` ✅、
+  `APPLE_ID` + `APPLE_APP_SPECIFIC_PASSWORD` + `APPLE_TEAM_ID` ✅、
+  `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` ✅。
+  **所以 macOS 签名 + 公证、Android 签名在 release.yml 里都会真的执行**
+  （门控 `HAS_APPLE_CERT` = `APPLE_CERT_P12 != ''`；`HAS_NOTARY` =
+  `APPLE_NOTARY_KEY != '' || APPLE_ID != ''`，走 Apple ID + 专用密码那条
+  分支）。未就位的只剩 `VT_API_KEY`（VirusTotal 提交步跳过）和 `GH_TOKEN`
+  （update worker 的 API 限额提升跳过），两者都不影响可分发产物。
+  ⚠️ gated 步骤在 secret 缺失时是**静默跳过**的——改动签名相关步骤后，
+  务必看 run 里那一步是 skipped 还是真跑了，别看 workflow 绿就当签了。
 
 ## 工具链纪律（2026-08-21 事故后加）
 
