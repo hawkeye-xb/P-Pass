@@ -41,6 +41,11 @@
    = 未登录，仓库私有，匿名拉 `dogfood` release 返回 404。用户跑一次
    `gh auth login` 后即可 `gh release download dogfood`。
    本地 release 构建不是替代方案（「凭据只在 GitHub」红线）。
+   ⚠️ **同一条认证缺口还挡住了「盯 CI」**：MOB-29 那次 push（`df24232`）
+   受影响的是 **ci-rust + ci-android + ci-desktop 三域**，`gh run list`
+   在未登录下直接报错，本机盯不到结论。本机等价证据全绿（`just ci` /
+   nextest 317 · Android 263 · desktop vitest 24 + `vite build`），
+   但按「CI 绿不过夜」这条底线，**这三域的结论还欠一双眼睛**。
 2. **旧库副本**（BLOB-01 遗留，1.1G）：独有的 9 个文件（3 张真照片 +
    6 个测试产物，共 11M）已救到库外暂存目录；移入废纸篓这一步被权限
    拦下，需用户自己执行（命令见本轮对话）。
