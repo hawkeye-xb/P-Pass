@@ -57,7 +57,8 @@
 | 7 | [REL-03](../.claude/cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | bump-version.sh 静默跳过桌面 crate 版本，漂移断言看不见 | L2 |
 | 8 | [REL-04](../.claude/cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
 | 9 | [DESK-09](../.claude/cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 向导把 daemon 的真实启动错误吞成「没有在 10 秒内就绪」 | **L1** |
-| 10 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
+| 10 | [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 | **L1** |
+| 11 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 
 ## 四、backlog（你明确说过先不做）
 
