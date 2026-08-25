@@ -113,13 +113,9 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 - Every workflow has `concurrency: cancel-in-progress`.
 - `release.yml` gained a `platforms` dispatch input (`android`/`macos`/
   `windows` comma list; empty = all). Tag pushes always build everything.
-- R2 mirror: assets are mirrored to `ppf-dl` bucket
-  (`dl.p-pass.hawkeye-xb.com/releases/<tag>/`) when `CLOUDFLARE_API_TOKEN`
-  is set; the update manifest's `--asset-base` switches to the mirror
-  domain (signatures are over asset bytes, so changing the download URL
-  never invalidates verification).
-- Nightly (e2e.yml schedule) runs full nextest + scenarios — a red nightly
-  is a real bug and is top priority next day.
+- R2 mirror: **removed 2026-08-25**. Assets are served from GitHub
+  release downloads only; the update manifest always points there.
+  Re-enabling it requires fixing the coupling first (see `REL-04`).
 
 ## 5. Version-overwrite guards (remember)
 
@@ -216,11 +212,10 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 - 每个 workflow 带 `concurrency: cancel-in-progress`（连续 push 取消旧 run）。
 - release.yml 加 `platforms` dispatch 输入（android/macos/windows 逗号
   组合，留空=all）；tag push 恒全量（发布完整性不许分块）。
-- R2 镜像：CLOUDFLARE_API_TOKEN 在位时资产镜像到 ppf-dl bucket
-  （dl.p-pass.hawkeye-xb.com/releases/<tag>/）；update manifest 的
-  asset-base 切镜像域（签名针对资产字节，换下载域名验签零变化）。
-- nightly（e2e.yml schedule）跑全量 nextest + scenarios——nightly 红
-  是实打实的 bug，次日第一优先修。
+- R2 镜像：**2026-08-25 已撤除**。资产只从 GitHub release 下载提供，
+  update manifest 恒指 GitHub 直链。撤除原因是耦合方向错（manifest 在
+  镜像之前就写死镜像地址，镜像失败则带着坏 manifest 出门且签名无法手改），
+  要重开必须先修 `REL-04`。
 
 ## 5. 版本覆盖禁令（记住）
 
