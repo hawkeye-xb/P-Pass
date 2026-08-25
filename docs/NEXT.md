@@ -46,6 +46,15 @@ diag/devices/audit）。日志路径一律从 LaunchAgent plist 读，不硬编�
 欠**真机验收两条**：①旧版本包打开新版库 → 向导界面必须出现
 `migration ... missing in the resolved migrations` 原文；②daemon 挂着点
 「导出日志」→ 仍出 zip 且含 `.err`/`.log` 与版本号（见两张卡「还差什么」）。
+⚠️ **这次 push（`c60e303`）的 CI 结论同样欠一双眼睛**：受影响域是
+**ci-rust + ci-desktop**，本机 `gh auth status` 仍未登录（下面「等用户」第 1 条
+那条认证缺口），盯不到结论。本机等价证据：`just ci` nextest **319 passed**、
+src-tauri `cargo test --lib` **17 passed**、desktop vitest **31 passed**、
+`vite build` 208 modules。新增的 src-tauri 测试不含任何平台 cfg（`ExportEnv`
+注入 tempdir 假 plist），Linux runner 上没有理由变红。
+顺带开了 `CI-03`：桌面壳 workspace 全仓没有 fmt/clippy 门禁——本轮在
+`src-tauri` 跑一次 `cargo fmt` 就重排了两处与改动无关的既有代码（已还原，
+不夹带进本批次）。
 
 **等用户（本轮新增）**：
 1. **下载安装包做真实模拟测试**被 `gh` 认证挡住——本机 `gh auth status`
