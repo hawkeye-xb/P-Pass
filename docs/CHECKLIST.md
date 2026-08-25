@@ -41,19 +41,19 @@
 
 | # | 事项 | 选项 / 卡 |
 |---|---|---|
-| 1 | **「已备份」数字口径**（MOB-29 墓碑的前置）。真机已证实：手动删的照片下一轮备份会原样回来，墓碑必须做 | [MOB-29](../.claude/cards/MOB-29-confirmed-store-lies-between-backups.md)：(A) 只数库里真有的（倾向）/ (B) 含墓碑 |
-| 2 | 两个本机问题（「更改…」按钮现象、常驻服务向导） | 见 `.claude/local-state.md`（本机文件） |
+| 1 | 两个本机问题（「更改…」按钮现象、常驻服务向导） | 见 `.claude/local-state.md`（本机文件） |
 
 ## 三、待做队列（无阻塞，可直接开工）
 
 | # | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| 1 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
-| 2 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
-| 3 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
-| 4 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 四条备份通道可并行跑两个 BackupWorker，重复推字节（浪费不损坏） | L2 |
-| 5 | [LINT-01](../.claude/cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
-| 6 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
+| 1 | [MOB-29](../.claude/cards/MOB-29-confirmed-store-lies-between-backups.md) | 删掉的照片被静默传回来 + 「已备份」数字说谎（2026-08-25 墓碑方案撤销，改「不拦重传，只告知 + 教顺序」，**已无待拍板项**） | **L1** |
+| 2 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
+| 3 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
+| 4 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
+| 5 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 四条备份通道可并行跑两个 BackupWorker，重复推字节（浪费不损坏） | L2 |
+| 6 | [LINT-01](../.claude/cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
+| 7 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 
 ## 四、backlog（你明确说过先不做）
 
