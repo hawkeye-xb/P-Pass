@@ -224,6 +224,75 @@ class MediaScanner(private val resolver: ContentResolver?) {
         }
         return uris
     }
+
+    /**
+     * MOB-34: **定向**取回这几条 MediaStore 记录（不是全量重扫）。
+     *
+     * [keys] 是 fileKey（`content://media/external/{images,video}/media/<_ID>`，
+     * 与 [ConfirmedState.files] 同 key）。按 collection 前缀分组、只查这几个
+     * `_ID`——查询代价与队列长度成正比，与相册规模无关。这是卡面第 3 条
+     * 「补偿只针对校准查出来缺的那些 hash，不退化成每轮全量重扫」的实现点。
+     *
+     * 重建出来的 uri 必须与原 fileKey **字符串全等**才算配上：_ID 撞车
+     * （images 与 video 各有自己的 _ID 序列）或 uri 格式漂移时，宁可当「查
+     * 无此行」丢掉队列条目，也绝不把一张不相干的照片传上去。
+     *
+     * 查不到的行不在返回值里——调用方据此把队列条目丢掉（[planReuploads]）。
+     */
+    fun itemsByKeys(keys: Set<String>): List<MediaItem> {
+        if (keys.isEmpty()) return emptyList()
+        val items = mutableListOf<MediaItem>()
+        for ((collection, isVideo) in listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI to false,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI to true,
+        )) {
+            val ids = mediaIdsOf(keys, collection.toString())
+            if (ids.isEmpty()) continue
+            val genCol = if (Build.VERSION.SDK_INT >= 30) {
+                MediaStore.MediaColumns.GENERATION_MODIFIED
+            } else {
+                MediaStore.MediaColumns.DATE_ADDED
+            }
+            val projection = arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.MIME_TYPE,
+                MediaStore.MediaColumns.SIZE,
+                genCol,
+                MediaStore.MediaColumns.DATE_MODIFIED,
+                MediaStore.MediaColumns.BUCKET_ID,
+            )
+            // _ID 是我们自己从 uri 里解析出来的**纯数字**（mediaIdsOf 只认
+            // 全数字），拼进 IN () 没有注入面。
+            val where = "${MediaStore.MediaColumns._ID} IN (${ids.joinToString(",")})"
+            requireResolver().query(collection, projection, where, null, null)?.use { cur ->
+                val idIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val nameIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                val mimeIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                val sizeIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                val genIdx = cur.getColumnIndexOrThrow(genCol)
+                val modifiedIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+                val bucketIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
+                while (cur.moveToNext()) {
+                    val uri = ContentUris.withAppendedId(collection, cur.getLong(idIdx))
+                    if (uri.toString() !in keys) continue
+                    items.add(
+                        MediaItem(
+                            uri = uri,
+                            displayName = cur.getString(nameIdx) ?: "unnamed",
+                            mimeType = cur.getString(mimeIdx)
+                                ?: if (isVideo) "video/*" else "image/*",
+                            bytes = cur.getLong(sizeIdx),
+                            generation = cur.getLong(genIdx),
+                            dateModified = cur.getLong(modifiedIdx),
+                            bucketId = if (cur.isNull(bucketIdx)) null else cur.getLong(bucketIdx),
+                        )
+                    )
+                }
+            }
+        }
+        return items
+    }
 }
 
 /** The committed watermark, one long, crash-safe on disk. */

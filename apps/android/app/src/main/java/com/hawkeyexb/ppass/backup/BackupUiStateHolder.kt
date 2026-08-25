@@ -35,6 +35,12 @@ class BackupUiStateHolder(
     private val confirmedStore = ConfirmedStore(
         File(context.filesDir, "backup-state/${pairing.daemonNodeId}")
     )
+    // MOB-34: 定向补偿队列（与 confirmed.json 同目录）。**这条校准路径也
+    // 必须登记**——App 打开时的这次校准同样会把「确认过、库里却没了」的
+    // hash 从缓存里剔除，少接一处就等于那批老照片在这条门里照样永远回不来。
+    private val reuploads = ReuploadQueue(
+        File(context.filesDir, "backup-state/${pairing.daemonNodeId}")
+    )
     private val _triplet = mutableStateOf<BackupTriplet?>(null)
     val triplet: State<BackupTriplet?> get() = _triplet
 
@@ -104,7 +110,17 @@ class BackupUiStateHolder(
                 BackupRunner(client).existCheck(daemon, cached)
             }
             if (missing.isNotEmpty()) {
-                withContext(Dispatchers.IO) { confirmedStore.removeMissing(missing) }
+                withContext(Dispatchers.IO) {
+                    // MOB-34: 登记定向补偿**必须在 removeMissing 之前**——
+                    // 那一步会把指向这些 hash 的文件级记录一起删掉，之后
+                    // 反查恒空、补偿永不发生（顺序是承重的）。
+                    enqueueReuploads(
+                        confirmedStore.load(),
+                        reuploads,
+                        lostFromLibrary(cached, missing),
+                    )
+                    confirmedStore.removeMissing(missing)
+                }
                 refreshTriplet()
             }
         } catch (_: Throwable) {
