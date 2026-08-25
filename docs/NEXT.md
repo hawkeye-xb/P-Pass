@@ -2,6 +2,28 @@
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
+## 〇、2026-08-25（收口）MOB-34 已实施（commit d592639 · 🟡 等真机验收）
+
+被删的**老**照片现在真的会被传回来：校准算出 `lost` 后按 `MOB-13` 的文件级
+记录反查 fileKey 入队（新 `ReuploadQueue`），下一轮按 `_ID` **定向**取回那几条
+MediaStore 记录进候选——**不是**每轮全量重扫（队列为空的轮次一次查询都不发）。
+补偿完成后 `K` 归零。两条校准门（`BackupWorker` + `BackupUiStateHolder` 的
+App 打开那次）都接了队列。
+
+- 绿：Android **37 类 / 283 tests / 0 failures**（`--rerun-tasks`，XML 时间戳
+  本次生成）+ `assembleDebug`。只动 `apps/android/**` → 受影响 CI 域只有
+  **ci-android**（`crates/`、`assets/` 一行未动，未跑 `just ci`）。
+- 反证两条真跑（不合并 → 4 红；`items` 退回 `scan.items` → 1 红），摘录在卡里。
+- ⚠️ 已知边界：`MOB-13`（0.3.4）之前备份的存量条目没有文件级记录，反查够不着；
+  判别法与绕法写在卡的「还差什么」里。**刻意不为此加自动全量重扫**（卡面约束）。
+- 顺带发现、**没顺手修、也没开卡**（属 `MOB-35` 那一族，交给做那张卡的人一起
+  处理）：`BackupWorker.doWork` 的 finally 与 `rescheduleAutoBackup` 都会无条件
+  `ensureMediaWatch`——一旦 `MOB-35` 放行前台补捞，这两处就成了「用户没点恢复、
+  后台监听自己回来」的破口，`MOB-28` 红线会破。
+- **等用户**：真机验收一条，见 `docs/CHECKLIST.md` §一新增的那行。
+
+---
+
 ## 〇、2026-08-25：主路径 = 真机验收（当前状态）
 
 代码侧健康：`just ci` 本机 **316 tests passed** 全绿，上线三件必做

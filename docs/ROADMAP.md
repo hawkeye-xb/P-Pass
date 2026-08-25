@@ -490,6 +490,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       只有 release 的 `lintVital` 会炸。`justfile` 的 `android-test` 写死
       `JAVA_HOME=$(brew --prefix openjdk)`，等于本地工具链跟着 brew 最新版漂。
       倾向改法：钉 `/usr/libexec/java_home -v 17` + 加前置检查报人话。
+- [ ] MOB-34 库里删掉的**老**照片永远不会被重传（水位把它们挡在扫描之外），「待备份 K」永远归不了零 — **🟡 2026-08-25 代码已合并（commit d592639），等真机验收**（MOB-29 的后半截：存储端报缺是对的，手机端断在增量扫描按水位只看新照片。落地：`ReuploadQueue` 定向补偿——校准算出 `lost` 后按 MOB-13 的文件级记录反查 fileKey 入队，下一轮 `MediaScanner.itemsByKeys` 按 `_ID` **定向**取回那几条记录进候选；查无此行/范围外/打不开一律出队，**不退化成每轮全量重扫**。两条校准门（`BackupWorker` + `BackupUiStateHolder`）都接了队列。已知边界：MOB-13 之前的存量条目没有文件级记录，反查够不着——见卡）。
 - [ ] MOB-29 库里删掉的照片被静默传回来 + 「已备份」在两次备份之间说谎 — **🟡 2026-08-25 代码已合并（commit 95f3c4f），等真机验收**（落地：手机端「资源在客户端丢失，正在重传」通知 + 桌面端总览页删除警告 + 校准搭 `doWork` finally 的便车；`manifest`/`missing` 与 proto 零改动，反墓碑判据 `deleted_asset_is_still_reported_missing_no_tombstone` 钉死「删掉的 hash 下一轮仍在 missing」）。原记录：**⛔ 未实施，但 2026-08-25 已解除阻塞**（墓碑方案整条撤销，改为「不拦重传，只告知 + 教『先删手机原图、再删库』的顺序」；不加 proto 字段、不做内置垃圾桶、不做恢复入口——访达废纸篓已是这三样。数字口径 A/B 那道裁决随墓碑一起消失。竞品对照：Immich `#4282`/`#22507`/`#23897` 同病未解，其回收站事实上是 30 天隐式墓碑）。原记录：
       桌面端删掉手机备份的照片后，手机仍报「已备份」，下一轮又原样传回来。
       ⚠️ **2026-08-21 真机证实**：14:07 手动删 5 张 → 14:08 那轮 `ingested=11

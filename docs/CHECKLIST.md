@@ -21,6 +21,7 @@
 | [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | ①daemon 正常时点「导出日志」→ 包里 9 个文件都在；②daemon 挂着时点导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip 不许出现你的用户名 | **L1** |
 | [MOB-32](../.claude/cards/MOB-32-calibration-wipes-a-live-backup-session.md) | 大批量备份传到一半打开 App，照片一张都不能丢 | **L0** |
 | [MOB-29](../.claude/cards/MOB-29-confirmed-store-lies-between-backups.md) | 访达删照片 → 桌面端出警告 + 手机端出「正在重传」通知，且照片真的被传回来（顺带：手机「已备份」数字不再在两次备份之间说谎） | **L1** |
+| [MOB-34](../.claude/cards/MOB-34-deleted-old-photos-never-re-uploaded.md) | 库里删 3 张**老**照片 → 不手动干预 → 它们自己回来，且「待备份 K」归零（⚠️ 先看卡里的「已知边界」判别法） | **L1** |
 | [WATCH-07](../.claude/cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏（同一文件复检不记审计） | L2 |
 | [WATCH-03](../.claude/cards/WATCH-03-finder-move-orphans-the-photo.md) | Finder 里挪动照片，照片不许消失 | L2 |
 | [WATCH-04](../.claude/cards/WATCH-04-tolerant-ingest-finder-owns-the-layout.md) | 手拷照片进库目录会被自动收录 | L2 |
@@ -59,9 +60,8 @@
 | 7 | [CI-02](../.claude/cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制（~300 Linux 分钟/月白烧） | L3 |
 | 8 | [REL-03](../.claude/cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | bump-version.sh 静默跳过桌面 crate 版本，漂移断言看不见 | L2 |
 | 9 | [REL-04](../.claude/cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
-| 10 | [MOB-34](../.claude/cards/MOB-34-deleted-old-photos-never-re-uploaded.md) | 库里删掉的老照片永不重传（水位挡住扫描），「待备份 K」永远归不了零 | **L1** |
-| 11 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | 中断待确认时连前台同步也被冻住（一个 return 挡了两件事） | **L1** |
-| 12 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
+| 10 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | 中断待确认时连前台同步也被冻住（一个 return 挡了两件事） | **L1** |
+| 11 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 
 ## 四、backlog（你明确说过先不做）
 
