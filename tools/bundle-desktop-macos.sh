@@ -66,26 +66,46 @@ hdiutil create -volname "P-Pass" -srcfolder /tmp/pp-dmg-stage \
   -ov -format UDRW /tmp/pp-dmg-rw.dmg
 hdiutil attach /tmp/pp-dmg-rw.dmg -mountpoint /Volumes/P-Pass -nobrowse
 ln -s /Applications /Volumes/P-Pass/Applications
-osascript <<'APPLESCRIPT'
+# 几何（2026-08-25 修）：窗口必须装得下两个图标 + 文字标签。
+# 旧值 bounds {100,100,520,400} = 420 宽，而 Applications 图标位置
+# x=390、图标 96px → 横跨 342..438，**溢出内容区 18px**，还没算比图标
+# 更宽的文字标签——真机观感就是"窗口太小，两个图标放不下"（验收人反馈）。
+# 现在 560×360：图标中心 x=150 / x=410，各占 102..198 / 362..458，
+# 两侧都留出余量；y=180 在 332 高的内容区里居中偏上，标签不贴底边。
+#   bounds = {left, top, right, bottom}（屏幕坐标，含标题栏 ~28px）
+#   position = 图标中心，内容区坐标系
+# 下面这四个数与 AppleScript 里的必须一致——单改一处就是这次的 bug 复发，
+# 所以先在 shell 里算一遍装不装得下，装不下直接失败，不许出一个观感坏掉
+# 的 dmg。半宽取文字标签宽度（比 96px 图标更宽，标签才是真正的溢出源）。
+DMG_W=560; ICON_X_APP=150; ICON_X_APPS=410; LABEL_HALF=70
+if [ $((ICON_X_APP - LABEL_HALF)) -lt 0 ] || [ $((ICON_X_APPS + LABEL_HALF)) -gt "$DMG_W" ]; then
+  echo "error: dmg 图标放不进 ${DMG_W}px 宽的窗口——" \
+       "app 横跨 $((ICON_X_APP - LABEL_HALF))..$((ICON_X_APP + LABEL_HALF))，" \
+       "Applications 横跨 $((ICON_X_APPS - LABEL_HALF))..$((ICON_X_APPS + LABEL_HALF))" >&2
+  exit 1
+fi
+osascript <<'APPLESCRIPT' || echo "warning: Finder layout skipped (headless/TCC) — Applications link still present"
 tell application "Finder"
   tell disk "P-Pass"
     open
     set current view of container window to icon view
     set toolbar visible of container window to false
     set statusbar visible of container window to false
-    set the bounds of container window to {100, 100, 520, 400}
+    set the bounds of container window to {100, 100, 660, 460}
     set viewOptions to the icon view options of container window
     set arrangement of viewOptions to not arranged
     set icon size of viewOptions to 96
-    set position of item "P-Pass.app" of container window to {130, 180}
-    set position of item "Applications" of container window to {390, 180}
+    set position of item "P-Pass.app" of container window to {150, 180}
+    set position of item "Applications" of container window to {410, 180}
     close
   end tell
 end tell
 APPLESCRIPT
-# 布局失败（无头 CI 的 TCC 可能拦 Apple Events）不致命：Applications
-# 链接已在，拖拽路径仍然成立；布局只是窗口观感。
-if [ $? -ne 0 ]; then echo "warning: Finder layout skipped (headless/TCC) — Applications link still present"; fi
+# ⚠️ 上面用 `|| echo` 而不是事后判 `$?`。本脚本开头是 `set -euo pipefail`，
+# osascript 一旦非零退出脚本当场就死，事后那句 `if [ $? -ne 0 ]` 永远
+# 执行不到——注释里写的「布局失败不致命」在旧写法下是假的，无头 CI 的
+# TCC 拦 Apple Events 就会连带炸掉整个打包步骤（2026-08-25 发现）。
+# 布局确实不致命：Applications 链接已在，拖拽路径仍然成立。
 hdiutil detach /Volumes/P-Pass -quiet
 hdiutil convert /tmp/pp-dmg-rw.dmg -format UDZO -o "$DMG_OUT/P-Pass-macos-arm64.dmg"
 rm -f /tmp/pp-dmg-rw.dmg
