@@ -467,7 +467,6 @@ jobs:
       HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
       # CI-01③a: R2 发布镜像门控——CLOUDFLARE_API_TOKEN 未就位时干净跳过
       #（卡面：secret 存在才启用）。
-      HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -563,10 +562,14 @@ jobs:
             APK_ARGS=(--asset android-arm64=artifacts/android/app-release-unsigned.apk)
           fi
           if [ "${#APK_ARGS[@]}" -gt 0 ]; then
+            # 2026-08-25 用户拍板撤掉 R2 镜像：manifest 恒指 GitHub 直链。
+            # 撤的原因不是「镜像没用」，是**耦合方向错**——原实现在镜像
+            # 发生**之前**就把 URL 写成镜像地址，镜像 403 挂掉时 manifest
+            # 已经签名上传进 release，指向不存在的文件 → 自动更新拿到一个
+            # 坏 manifest 且无法手改（签名会破）。要重开镜像必须先修这个
+            # 耦合（REL-04）：先镜像 → 据结果定 base → 签名 → 单独镜像
+            # manifest；镜像失败必须回落 GitHub 直链，不许带坏 manifest 出门。
             ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
-            if [ "${{ env.HAS_CF_TOKEN }}" = "true" ]; then
-              ASSET_BASE="https://dl.p-pass.hawkeye-xb.com/releases/${TAG}"
-            fi
             node tools/make-update-manifest.mjs \
               --tag "$TAG" --notes NOTES.md \
               --asset-base "$ASSET_BASE" \
@@ -656,43 +659,3 @@ jobs:
           gh release edit "$TAG" --draft=false --prerelease
           echo "test 通道已发布（prerelease，stable 不受影响）: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      # ── CI-01③a: R2 发布镜像（dl.p-pass.hawkeye-xb.com，国内下载
-      # 可达性）。manifest URL 改指镜像域——客户端从 R2 拉资产，验签
-      # 语义零变化（SHA256SUMS 一并镜像，notes 里给出镜像地址）。
-      # 门控：CLOUDFLARE_API_TOKEN secret 未就位 → 干净跳过并在 summary
-      # 标注（卡面：secret 存在才启用，缺 secret 不阻塞发布）。 ⚠️ 用
-      # wrangler@3（r2 子命令在 v4 改名）——CI 环境 npx 直装。
-      - name: Mirror release assets to R2 (gated, CI-01)
-        if: env.HAS_CF_TOKEN == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          # 2026-08-12 实测修复：wrangler 无 account_id 时先调 /memberships
-          # 探测账号——窄权限 token 无 memberships 读权限 → 10000
-          # Authentication error（R2 镜像步骤失败）。显式给 account_id
-          # 跳过探测。
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # 逐资产镜像（平台门控下只镜像实际产物——glob 不存在即跳过）。
-          for f in \
-            artifacts/macos-arm64/ppass-macos-arm64.zip \
-            artifacts/macos-arm64/P-Pass-macos-arm64.dmg \
-            artifacts/macos-arm64/SHA256SUMS-macos-arm64 \
-            artifacts/windows-x64/daemon.exe \
-            artifacts/windows-x64/testclient.exe \
-            artifacts/windows-x64/SHA256SUMS-windows-x64 \
-            artifacts/windows-x64-installer/*.exe \
-            artifacts/android/app-release.apk \
-            artifacts/android/app-release-unsigned.apk \
-            artifacts/manifest.json
-          do
-            [ -f "$f" ] || continue
-            npx --yes wrangler@3 r2 object put "ppf-dl/releases/${TAG}/$(basename "$f")" --file "$f"
-          done
-          {
-            echo ""
-            echo "### R2 镜像（dl.p-pass.hawkeye-xb.com，国内下载可达）"
-            echo "https://dl.p-pass.hawkeye-xb.com/releases/${TAG}/（同 release 资产，SHA256SUMS 一并镜像）"
-          } >> NOTES.md
-          echo "R2 镜像完成 → dl.p-pass.hawkeye-xb.com/releases/${TAG}/"
