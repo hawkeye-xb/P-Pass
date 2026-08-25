@@ -87,6 +87,26 @@ class HashCache(private val file: File) {
     /** 条目数（清理阈值判断用）。 */
     fun size(): Int = memory.size
 
+    /** MOB-34: 按内容 hash 反查 fileKey（= key 里的 uri 部分）。
+     *
+     *  这份缓存本身就是一张 `uri → hash` 表，**而且它跨版本、跨配对存活**
+     *  （文件头：不放 per-remote 目录、断开配对不清理）。所以定向补偿的反查
+     *  不必只依赖 `ConfirmedState.files`——那张表是 MOB-13 才加的，老版本
+     *  备份的存量条目没有它，而这里有。
+     *
+     *  key 的形状见 [hashCacheKey]：`uri|g<gen>` 或 `uri|m<mod>|s<size>`，
+     *  与 [prune] 用的是同一个提取法（`substringBefore('|')`）。
+     *
+     *  ⚠️ 可能命中**过期**条目（文件改过 → 新 key 另存一份，旧条目还在）。
+     *  不构成正确性风险：拿到 uri 之后要重查 MediaStore 并按**当前** key
+     *  重新哈希（`hashWithCache` 必然 miss），传上去的是文件现在的内容，
+     *  存储端按内容去重。最坏情况是多传一张已有的照片。 */
+    fun fileKeysOf(hashes: Set<String>): Set<String> =
+        if (hashes.isEmpty()) emptySet()
+        else memory.asSequence()
+            .filter { it.value in hashes }
+            .mapTo(mutableSetOf()) { it.key.substringBefore('|') }
+
     /** tmp+rename 落盘（hash 阶段末调用一次；重开 App 读盘恢复命中）。 */
     fun flush() {
         file.parentFile?.mkdirs()

@@ -114,10 +114,13 @@ class BackupUiStateHolder(
                     // MOB-34: 登记定向补偿**必须在 removeMissing 之前**——
                     // 那一步会把指向这些 hash 的文件级记录一起删掉，之后
                     // 反查恒空、补偿永不发生（顺序是承重的）。
+                    // 第二路见 reuploadTargetsOf：哈希缓存跨版本存活，
+                    // 覆盖安装后存量条目只有它查得到。
                     enqueueReuploads(
                         confirmedStore.load(),
                         reuploads,
                         lostFromLibrary(cached, missing),
+                        HashCache(hashCacheFile(context)),
                     )
                     confirmedStore.removeMissing(missing)
                 }

@@ -105,11 +105,48 @@ class ReuploadCompensationTest {
     }
 
     @Test
-    fun legacy_entries_without_file_records_are_a_known_gap_not_a_full_rescan() {
-        // MOB-13 之前备份的条目没有文件级记录 → 反查不到，定向补偿够不着。
-        // **不许**为此退化成全量重扫（卡面第 3 条）：空集就是空集。
+    fun legacy_entries_are_recovered_from_the_hash_cache_not_a_full_rescan() {
+        // 存量条目（MOB-13 之前备份的）没有文件级记录，但 PERF-01 的哈希缓存
+        // 本身就是 uri → hash，而且它跨版本、跨配对存活。所以**第二路查得到**。
+        //
+        // 这条曾经断言的是相反的东西（「查不到 = 已知边界」）。那个结论是错的：
+        // 「没存过某个方向的索引」不等于「数据没了」，那张表一直在盘上。
+        // 而且这个缺口偏偏只在**覆盖安装/自动更新**路径上出现（老格式
+        // confirmed.json 被原样保留），全新安装的用户碰不到——最难复现的那类。
+        //
+        // 依然**不许**退化成全量重扫（卡面第 3 条）：这里只是换一张现成的表反查。
         val state = ConfirmedState(confirmed = setOf("legacy"), files = emptyMap())
-        assertTrue(reuploadTargetsOf(state, setOf("legacy")).isEmpty())
+        assertTrue(
+            "只有 files 一路时确实查不到——这正是第二路存在的理由",
+            reuploadTargetsOf(state, setOf("legacy")).isEmpty(),
+        )
+
+        val cacheFile = File(tempDir("hashcache"), "hash-cache.json")
+        val cache = HashCache(cacheFile)
+        // 生产口径的 key 形状：uri|g<generation>（API 30+）。
+        cache.put("${imgKey(77)}|g5", "legacy")
+        cache.put("${imgKey(78)}|g9", "someone-else")
+        assertEquals(
+            "哈希缓存这一路必须把存量条目找回来",
+            setOf(imgKey(77)),
+            reuploadTargetsOf(state, setOf("legacy"), cache),
+        )
+    }
+
+    @Test
+    fun hash_cache_lookup_handles_the_pre_api30_key_shape() {
+        // API<30 的 key 是 uri|m<dateModified>|s<size>——提取 uri 用的是
+        // substringBefore('|')，两种形状都得对，否则老设备上第二路失效。
+        val cache = HashCache(File(tempDir("hashcache"), "hash-cache.json"))
+        cache.put("${imgKey(88)}|m1700000000|s4096", "old-api-hash")
+        assertEquals(
+            setOf(imgKey(88)),
+            reuploadTargetsOf(
+                ConfirmedState(confirmed = setOf("old-api-hash")),
+                setOf("old-api-hash"),
+                cache,
+            ),
+        )
     }
 
     // ── 2. 队列落盘 ──
@@ -367,9 +404,14 @@ class ReuploadCompensationTest {
         // 少接一处 = 那条门里的 hash 照样被剔除、永不补偿，bug 换个门重现。
         val worker = src("backup/BackupWorker.kt")
         val onLost = sliceBetween(worker, "onLost = { lost ->", "postReuploadNotification")
+        // 钉**不变量**，不钉参数表的字面形状：断言「登记发生了」+「读的是
+        // 校准前快照」。原来钉的是 `enqueueReuploads(store.load(), reuploads,
+        // lost)` 整串，于是给它多传一个 hashCache 参数（正当改动）就误伤变红，
+        // 而那串字面量并没有多守住任何东西。
+        assertTrue("BackupWorker 的校准必须登记补偿", onLost.contains("enqueueReuploads("))
         assertTrue(
-            "BackupWorker 的校准必须登记补偿",
-            onLost.contains("enqueueReuploads(store.load(), reuploads, lost)"),
+            "必须读校准前快照 store.load()——removeMissing 之后 files 就没了",
+            onLost.contains("store.load()"),
         )
 
         val holder = src("backup/BackupUiStateHolder.kt")
@@ -379,6 +421,30 @@ class ReuploadCompensationTest {
         assertTrue("App 打开时那次校准同样必须登记补偿", enqueueAt >= 0)
         assertTrue("登记必须在 removeMissing 之前（之后文件级记录就没了）",
             enqueueAt in 0 until removeAt)
+    }
+
+    @Test
+    fun both_calibration_doors_pass_the_hash_cache() {
+        // 第二路（哈希缓存反查）必须**两处都接**。少接一处的后果跟少接
+        // enqueueReuploads 一样：那条门上的存量条目照样补不回来，而且只在
+        // 覆盖安装/自动更新路径上才显形——全新安装的机器上永远复现不出来。
+        val worker = src("backup/BackupWorker.kt")
+        val onLost = sliceBetween(worker, "onLost = { lost ->", "postReuploadNotification")
+        assertTrue(
+            "BackupWorker 的校准必须把哈希缓存传进去（存量条目只有它查得到）",
+            onLost.contains("HashCache("),
+        )
+
+        val holder = src("backup/BackupUiStateHolder.kt")
+        val calib = sliceBetween(
+            holder,
+            "private suspend fun calibrateFromDaemon()",
+            "confirmedStore.removeMissing(missing)",
+        )
+        assertTrue(
+            "App 打开时那次校准同样必须把哈希缓存传进去",
+            calib.contains("HashCache("),
+        )
     }
 
     @Test

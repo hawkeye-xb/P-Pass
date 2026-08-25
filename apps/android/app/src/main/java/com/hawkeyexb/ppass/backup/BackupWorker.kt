@@ -866,7 +866,13 @@ class BackupWorker(
                 // （多数情况就是同一轮，登记发生在扫描之前）真的把它们传回。
                 // 必须读 store.load() 的**校准前**快照：calibrateConfirmed
                 // 的契约是先 onLost 再 removeMissing，之后文件级记录就没了。
-                val queued = enqueueReuploads(store.load(), reuploads, lost)
+                // MOB-34 第二路：哈希缓存（uri → hash）跨版本存活，专治
+                // 「覆盖安装保留老格式 confirmed.json」的存量条目——那些
+                // 没有文件级记录，但缓存里有。少这一路，自动更新上来的用户
+                // 补偿永远够不着存量照片。
+                val queued = enqueueReuploads(
+                    store.load(), reuploads, lost, HashCache(hashCacheFile(applicationContext)),
+                )
                 android.util.Log.i(
                     "PPassBackup",
                     "calibrate: ${lost.size} confirmed asset(s) vanished from the library, " +

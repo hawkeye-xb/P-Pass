@@ -14,8 +14,11 @@
 // 卡面硬约束：**只补「校准查出来缺的那些 hash」，不许退化成每轮全量重扫**
 // （全量重扫在大库上是几分钟的活，不能变成常态）。
 //
-// 抓手是 MOB-13 加的**文件级**确认记录（`ConfirmedState.files`：
-// fileKey = MediaStore uri 字符串 → hash）。校准算出 `lost` 之后、
+// 抓手有两路（见 [reuploadTargetsOf]）：MOB-13 加的**文件级**确认记录
+// （`ConfirmedState.files`：fileKey = MediaStore uri 字符串 → hash），以及
+// PERF-01 的**哈希缓存**（`uri → hash`，跨版本跨配对存活）。第二路专治
+// 「升级上来的用户」——覆盖安装保留老格式 confirmed.json，那些存量条目没有
+// 文件级记录，但哈希缓存里有。校准算出 `lost` 之后、
 // `removeMissing` 把这批记录抹掉**之前**，从 hash 反查出 fileKey 存进队列；
 // 下一轮（或同一轮）备份按 fileKey 定向查回那几条 MediaStore 记录，塞进
 // 候选，走同一条管线上传。commit 成功后 `recordRun` 把 hash 与文件级记录
@@ -41,13 +44,28 @@ import kotlinx.serialization.json.Json
  * MOB-34: 从「校准查出来缺的 hash」反查「本地是哪几个 MediaStore 条目」。
  *
  * 必须在 [ConfirmedStore.removeMissing] **之前**调用——那一步会把指向这些
- * hash 的文件级记录一起删掉，之后反查恒空。
+ * hash 的文件级记录一起删掉，之后 `files` 那一路反查恒空。
  *
- * 存量旧条目（MOB-13 之前备份的，没有文件级记录）反查不到 fileKey，定向
- * 补偿够不着它们——这是已知边界，**不为此加全量重扫**（卡面第 3 条）。
+ * **两路并集**：
+ * 1. `ConfirmedState.files`（MOB-13 加的文件级确认记录，fileKey → hash）；
+ * 2. [HashCache]（PERF-01 的哈希缓存，本身就是 `uri → hash`）。
+ *
+ * 第 2 路是必需的，不是冗余：`files` 是 MOB-13（0.3.4）才有的，**升级/覆盖
+ * 安装会原样保留老格式的 confirmed.json**，那些存量条目没有文件级记录。而
+ * 哈希缓存跨版本、跨配对存活（HashCache 文件头），老条目的 `uri → hash`
+ * 就在里面。少了第 2 路，「自动更新上来的用户」这条路径上补偿永远够不着
+ * 存量照片，而全新安装的用户没事——最难复现的那种 bug。
+ *
+ * 所以**不需要**为存量数据做「启动时一次性全量重扫迁移」：那张表已经在盘上了，
+ * 反过来查即可。卡面第 3 条（不许退化成每轮全量重扫）依然成立。
  */
-internal fun reuploadTargetsOf(state: ConfirmedState, lost: Set<String>): Set<String> =
-    state.files.filterValues { it.hash in lost }.keys.toSet()
+internal fun reuploadTargetsOf(
+    state: ConfirmedState,
+    lost: Set<String>,
+    hashCache: HashCache? = null,
+): Set<String> =
+    state.files.filterValues { it.hash in lost }.keys.toSet() +
+        (hashCache?.fileKeysOf(lost) ?: emptySet())
 
 /**
  * MOB-34: 两条校准路径共用的登记动作——BackupWorker 的
@@ -56,14 +74,15 @@ internal fun reuploadTargetsOf(state: ConfirmedState, lost: Set<String>): Set<St
  *
  * 少接一处 = 那条路径上的 hash 照样被剔除、永不补偿，bug 换个门重现。
  *
- * @return 实际登记的 fileKey（空集 = 这批 lost 全是存量旧条目，够不着）
+ * @return 实际登记的 fileKey（空集 = 两路都反查不到，例如手机上的原图也被删了）
  */
 internal fun enqueueReuploads(
     state: ConfirmedState,
     queue: ReuploadQueue,
     lost: Set<String>,
+    hashCache: HashCache? = null,
 ): Set<String> {
-    val targets = reuploadTargetsOf(state, lost)
+    val targets = reuploadTargetsOf(state, lost, hashCache)
     if (targets.isNotEmpty()) queue.add(targets)
     return targets
 }
