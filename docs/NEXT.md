@@ -36,6 +36,17 @@
 插入点已核实：`BackupWorker.kt:770-772` 校准算出 `missing` 后紧接
 `removeMissing`——提示天然一次性，连去重窗口都不用做。
 
+**DESK-09 + DESK-10 已实施（2026-08-25，commit 1e1359f · 🟡 等真机验收）**：
+同一场事故的两面——`DESK-09` 让 daemon 的真实启动错误**当场可见**（启动前记
+stderr 偏移、超时后只读新增那段、原文照登、超时不当结论），`DESK-10` 让它
+**可被带走**（导出改桌面壳本地组装，daemon 挂着照样出包，包里含 daemon 的
+stdout/stderr 日志 + 版本号 + 配置摘要 + README，daemon 活着时再附
+diag/devices/audit）。日志路径一律从 LaunchAgent plist 读，不硬编码。
+只做 macOS 这条，不为未定的 Windows/Linux 常驻方案预留抽象。
+欠**真机验收两条**：①旧版本包打开新版库 → 向导界面必须出现
+`migration ... missing in the resolved migrations` 原文；②daemon 挂着点
+「导出日志」→ 仍出 zip 且含 `.err`/`.log` 与版本号（见两张卡「还差什么」）。
+
 **等用户（本轮新增）**：
 1. **下载安装包做真实模拟测试**被 `gh` 认证挡住——本机 `gh auth status`
    = 未登录，仓库私有，匿名拉 `dogfood` release 返回 404。用户跑一次
