@@ -58,7 +58,9 @@
 | 8 | [REL-04](../.claude/cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
 | 9 | [DESK-09](../.claude/cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 向导把 daemon 的真实启动错误吞成「没有在 10 秒内就绪」 | **L1** |
 | 10 | [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 | **L1** |
-| 11 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
+| 11 | [MOB-34](../.claude/cards/MOB-34-deleted-old-photos-never-re-uploaded.md) | 库里删掉的老照片永不重传（水位挡住扫描），「待备份 K」永远归不了零 | **L1** |
+| 12 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | 中断待确认时连前台同步也被冻住（一个 return 挡了两件事） | **L1** |
+| 13 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 
 ## 四、backlog（你明确说过先不做）
 
