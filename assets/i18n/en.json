@@ -93,5 +93,9 @@
   "ui.photos_empty": "No photos yet. They'll appear here after a phone backup.",
   "ui.photos_open_in_finder": "Show in Finder",
   "ui.photos_open_library": "Show in Finder",
-  "ui.devices_paired_line": "Paired devices {n} · names can be changed to family nicknames, e.g. \"Mom's phone\""
+  "ui.devices_paired_line": "Paired devices {n} · names can be changed to family nicknames, e.g. \"Mom's phone\"",
+  "ui.mobile_reupload_title": "Files went missing on the storage computer — re-uploading",
+  "ui.mobile_reupload_body": "If you deleted them on purpose, delete them on this phone first.",
+  "ui.library_delete_warn": "{n} photo(s) were just deleted from the library. Any that still exist on a phone will be uploaded again on the next backup — to delete one for good, delete the original on the phone first, then delete it here.",
+  "ui.library_delete_warn_dismiss": "Got it"
 }

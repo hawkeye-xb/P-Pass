@@ -314,3 +314,137 @@ async fn external_deletion_reconciles_index_thumbs_and_audit() {
         .unwrap();
     assert_eq!(page.items.len(), 3, "timeline converged: {page:?}");
 }
+
+/// MOB-29 验收①（**反墓碑判据**）：库里删掉一条设备来源的资产之后，
+/// 下一轮 `backup.manifest` 里该 hash **仍在 `missing`** ——照片会被
+/// 传回来，而且这是**对的**。
+///
+/// 为什么这条断言必须存在：MOB-29 的原方案是「墓碑」（记住被删的 hash，
+/// 算 `missing` 时排除），2026-08-25 整条撤销——定调改成「存储端不该丢
+/// 数据，重传是正确行为，只是要让用户知道」。任何让照片「不再被传回来」
+/// 的改动都会让这条断言变红。反证是内建的：把 `missing` 语义改成排除
+/// 已删 hash（哪怕只是 30 天软删的隐式墓碑），`still_missing` 立刻变空。
+///
+/// 与 `external_deletion_reconciles_index_thumbs_and_audit` 分开一个
+/// test fn（不改动那条既有断言链，铁律 2）。
+#[tokio::test(flavor = "multi_thread")]
+async fn deleted_asset_is_still_reported_missing_no_tombstone() {
+    let f = fixture().await;
+    let daemon_id = f.daemon_tp.node_id();
+
+    let files: Vec<Vec<u8>> = (0u8..3)
+        .map(|i| {
+            let mut v = vec![i ^ 0x5a; 40_000 + i as usize];
+            v.extend_from_slice(format!("mob29-tail-{i}").as_bytes());
+            v
+        })
+        .collect();
+    let hashes: Vec<String> = files
+        .iter()
+        .map(|d| blake3::hash(d).to_hex().to_string())
+        .collect();
+    let manifest = BackupManifest {
+        hashes: hashes.clone(),
+        items: hashes
+            .iter()
+            .enumerate()
+            .map(|(i, h)| BackupItem {
+                hash: h.clone(),
+                file_name: format!("MOB29_{i}.jpg"),
+                media_type: "image/jpeg".into(),
+            })
+            .collect(),
+        provider: None,
+    };
+
+    // ── 一轮真备份：begin + manifest + upload ×3 + commit。
+    call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_BEGIN,
+        serde_json::json!({}),
+    )
+    .await;
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(&manifest).unwrap(),
+    )
+    .await;
+    assert!(resp.ok, "{:?}", resp.error);
+    for (h, data) in hashes.iter().zip(&files) {
+        assert!(upload(&f.phone_tp, daemon_id, h, data).await.ok);
+    }
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_COMMIT,
+        serde_json::json!({"generation": 29}),
+    )
+    .await;
+    assert!(resp.ok, "{:?}", resp.error);
+    assert_eq!(resp.result.unwrap()["ingested"], 3);
+
+    // 备份完的下一轮 manifest：一张都不缺（前提断言——没有这条，
+    // 下面的 "still missing" 可能只是因为入库根本没成功）。
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(&manifest).unwrap(),
+    )
+    .await;
+    let missing = resp.result.unwrap()["hashes"].as_array().unwrap().clone();
+    assert!(missing.is_empty(), "all three are home: {missing:?}");
+
+    // ── 访达式外部删除：库里干掉第 0 张的原图 + 对账。
+    let victim = parse_hash(&hashes[0]);
+    let asset = f.db.get_asset(&victim).await.unwrap().expect("indexed");
+    std::fs::remove_file(f.library.path().join(&asset.rel_path)).unwrap();
+    let report = Reconcile::new(f.db.clone(), f.library.path())
+        .run_once()
+        .await;
+    assert_eq!(report.removed, 1, "the one disk-missing asset goes");
+
+    // 审计留痕（桌面端警告的数据源；后端零改动）。
+    let audit = f.db.list_audit(100).await.unwrap();
+    let external: Vec<_> = audit
+        .iter()
+        .filter(|r| r.entry.action == "asset.removed_external")
+        .collect();
+    assert_eq!(external.len(), 1, "one audit row: {audit:?}");
+    assert!(
+        external[0].entry.actor.is_none(),
+        "external deletion has no actor"
+    );
+
+    // ── 核心断言：下一轮 manifest 里那个 hash **仍然缺**。
+    let resp = call(
+        &f.phone_tp,
+        daemon_id,
+        methods::BACKUP_MANIFEST,
+        serde_json::to_value(&manifest).unwrap(),
+    )
+    .await;
+    assert!(resp.ok, "{:?}", resp.error);
+    let still_missing: Vec<String> = resp.result.unwrap()["hashes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        still_missing,
+        vec![hashes[0].clone()],
+        "删掉的那一张必须仍被报 missing（不拦重传，无墓碑）"
+    );
+
+    // 活着的两张不许被顺手报缺（重传只针对真没了的那张）。
+    for h in &hashes[1..] {
+        assert!(
+            !still_missing.contains(h),
+            "surviving asset {h} must not be re-requested"
+        );
+    }
+}

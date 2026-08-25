@@ -29,6 +29,9 @@
   // PRES-01: presence 三档 → 文案/点色（connection 路径事实优先展示）
   import { presenceText } from "./lib/connection.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
+  // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
+  // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
+  import { externalDeleteNotice } from "./lib/externalDelete.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。直接从仓库根引用，
   // 零副本零漂移；按系统语言选语言表（UI 单语显示的既定决策）。
@@ -337,6 +340,15 @@
     const h = Math.floor(m / 60);
     return m % 60 === 0 ? `${h} 小时` : `${h} 小时 ${m % 60} 分`;
   }
+
+  // MOB-29: 用户点过「知道了」的时刻——**只压住这一刻及之前的删除**，
+  // 之后再删又会出来（一次 dismiss 不换来永久静默）。刻意只存在内存里：
+  // 落盘就得管迁移和过期，而警告本身只有 24h 寿命，重开 App 再看到一次
+  // 是可接受的（而漏掉一次删除警告不可接受）。
+  let deleteWarnDismissedAt = $state(0);
+  const deleteWarning = $derived(
+    externalDeleteNotice(auditEvents, nowMs, { dismissedAt: deleteWarnDismissedAt })
+  );
 
   // DESK-05: 活动表格只展示设备级事件——ingest.* 逐文件行是全路径噪音
   // （备份完成行的 ingested= 汇总已覆盖数量），不参与展示。数据层不动。
@@ -1131,6 +1143,29 @@
                 <div class="flex flex-none flex-wrap gap-[10px]">
                   <Button variant="outline" class="h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60" onclick={() => confirmPair(false)}>{t("ui.deny")}</Button>
                   <Button class="h-11 min-h-11 rounded-md border border-ink px-[18px] text-[15px] font-bold" onclick={() => confirmPair(true)}>{t("ui.allow")}</Button>
+                </div>
+              </div>
+            {/if}
+
+            <!-- MOB-29: 删除发生在这台电脑上，所以警告出在这里。告诉用户
+                 删了几张、还在手机上的那些会被传回来、想真删该先删手机上
+                 的原图。**只针对 delete**——add/move 对我们影响为零
+                 （收录 / 按 hash 重新认领），警告一旦对"挪个位置"也响，
+                 用户就会开始无视它。判据在 lib/externalDelete.js。 -->
+            {#if deleteWarning}
+              <div class="flex items-center gap-[16px] rounded-xl border border-border bg-act-bg px-[22px] py-[18px]">
+                <div class="flex flex-1 flex-col gap-[3px]">
+                  <span class="text-[14px] leading-[1.6] text-ink-60"
+                    >{t("ui.library_delete_warn", { n: deleteWarning.count })}</span
+                  >
+                </div>
+                <div class="flex flex-none">
+                  <Button
+                    variant="outline"
+                    class="h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60"
+                    onclick={() => (deleteWarnDismissedAt = deleteWarning.latestAt)}
+                    >{t("ui.library_delete_warn_dismiss")}</Button
+                  >
                 </div>
               </div>
             {/if}
