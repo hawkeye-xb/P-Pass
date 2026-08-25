@@ -1,6 +1,7 @@
 //! P-Pass tray shell (T-041, ADR-012): zero business logic — every
 //! command is a thin forward to the daemon's local IPC.
 
+mod daemon_logs;
 mod ipc;
 
 use serde_json::{json, Value};
@@ -191,10 +192,11 @@ enabled = false
 fn start_daemon() -> Result<String, String> {
     use platform::PlatformAdapter as _;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let sidecar = exe
-        .parent()
-        .ok_or("no parent dir")?
-        .join(if cfg!(windows) { "ppf-daemon.exe" } else { "ppf-daemon" });
+    let sidecar = exe.parent().ok_or("no parent dir")?.join(if cfg!(windows) {
+        "ppf-daemon.exe"
+    } else {
+        "ppf-daemon"
+    });
     if !sidecar.is_file() {
         return Err(format!("找不到内置后台服务：{}", sidecar.display()));
     }
@@ -342,6 +344,181 @@ fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>) -> Valu
     })
 }
 
+/// DESK-09 ①：启动 daemon **之前**记下 stderr 日志的长度。launchd 的
+/// StandardErrorPath 是 append 的、跨多次运行累积——不记这个偏移，超时后
+/// 去读文件就会把四天前的旧错误当成这次的原因（DESK-10 那个"包里只有一条
+/// 四天前的事件"就是同一种病）。plist 不存在（还没注册常驻服务）时返回 0。
+#[tauri::command]
+fn daemon_err_offset() -> u64 {
+    match daemon_stderr_path() {
+        Some(p) => daemon_logs::file_len(&p),
+        None => 0,
+    }
+}
+
+/// DESK-09 ②：超时后把 daemon **新写的**那段 stderr 里最像原因的一行捞
+/// 出来，原文奉还（不截断、不翻译——原文可搜索、可贴给开发者）。
+/// `captured=false` 时前端必须明说"没捕获到新的错误输出"，不许拿旧内容
+/// 顶上，也不许把超时当结论。
+#[tauri::command]
+fn daemon_startup_error(offset: u64) -> Value {
+    let path = daemon_stderr_path();
+    let appended = path
+        .as_ref()
+        .and_then(|p| daemon_logs::read_since(p, offset, 64 * 1024));
+    let line = appended
+        .as_deref()
+        .and_then(daemon_logs::extract_error_line);
+    json!({
+        "captured": line.is_some(),
+        "line": line,
+        // 用户找日志时用得上（原样，不脱敏——这是本机自己看的界面，
+        // 不是要发出去的导出件）。
+        "err_path": path.map(|p| p.display().to_string()),
+    })
+}
+
+/// LaunchAgent plist 里登记的 stderr 路径。**不硬编码 ~/Library/Logs**：
+/// plist 是唯一真相，读不到就是 None（调用方如实报"读不到"）。
+fn daemon_stderr_path() -> Option<std::path::PathBuf> {
+    let xml = std::fs::read_to_string(daemon_logs::plist_path()).ok()?;
+    let (_, err) = daemon_logs::parse_plist_log_paths(&xml);
+    err.map(std::path::PathBuf::from)
+}
+
+/// DESK-10：诊断包由**桌面壳本地组装**，不是 daemon 的 IPC 方法——
+/// daemon 起不来时这个按钮必须照样工作，那正是最需要日志的场景。
+/// daemon 活着时再附加它能提供的那三份（diag / devices / audit）；
+/// 不可达时包里放 `daemon-unreachable.txt` 说明，其余照常收集。
+/// 落盘位置与文件名沿用 daemon 原来的 `<库目录>/ppf-logs.zip`（验收人
+/// 已经习惯了，不动）。
+#[tauri::command]
+fn export_logs_bundle() -> Result<Value, String> {
+    use platform::PlatformAdapter as _;
+    let env = ExportEnv {
+        platform_dir: platform::adapter().data_dir(),
+        home: daemon_logs::home_dir(),
+        plist: daemon_logs::plist_path(),
+    };
+    // daemon 可达就把它那三份要过来（它写出来的 zip 先整份读进内存，
+    // 之后才允许覆盖同名文件）；不可达只记原因，收集继续。
+    let daemon = match ipc::DaemonHandle::discover() {
+        Ok(handle) => {
+            let version = handle
+                .call("status", json!({}))
+                .ok()
+                .and_then(|v| v["version"].as_str().map(str::to_string));
+            match handle.call("logs.export", json!({})) {
+                Ok(v) => {
+                    let daemon_zip = v["zip"].as_str().unwrap_or_default().to_string();
+                    match daemon_logs::read_zip_entries(std::path::Path::new(&daemon_zip)) {
+                        Ok(entries) => Ok(DaemonParts { version, entries }),
+                        Err(e) => Err(format!("后台服务的日志包读不出来：{e}")),
+                    }
+                }
+                Err(e) => Err(format!("后台服务拒绝了 logs.export：{e}")),
+            }
+        }
+        // 版本号仍然要有：直接问内置的服务程序自己（真机事故里正是
+        // `ppf-daemon --version` 一句话拿到了真相）。
+        Err(e) => Err(e),
+    };
+    assemble_export(&env, daemon, sidecar_daemon_version)
+}
+
+/// 收集时需要知道的几个目录（测试注入 tempdir——绝不碰真实照片库/真实
+/// LaunchAgent plist）。
+struct ExportEnv {
+    /// 平台数据目录（config.toml 在这里）。
+    platform_dir: std::path::PathBuf,
+    /// 家目录（脱敏基准）。
+    home: std::path::PathBuf,
+    /// LaunchAgent plist（日志路径的唯一真相）。
+    plist: std::path::PathBuf,
+}
+
+/// daemon 活着时它能给的那部分。
+struct DaemonParts {
+    version: Option<String>,
+    entries: Vec<(String, Vec<u8>)>,
+}
+
+/// 组装并落盘。**daemon 那部分是 `Result`，Err 不是失败路径**——它只是
+/// 少了三份文件、多一份 `daemon-unreachable.txt`，zip 照出。这个函数里
+/// 一行 `return Err` 都不能因为 daemon 不可达而触发（DESK-10 的核心）。
+fn assemble_export(
+    env: &ExportEnv,
+    daemon: Result<DaemonParts, String>,
+    sidecar_version: impl Fn() -> Option<String>,
+) -> Result<Value, String> {
+    let home = env.home.display().to_string();
+    // 日志路径：只从 plist 读，不硬编码 ~/Library/Logs。
+    let plist = std::fs::read_to_string(&env.plist).ok();
+    let (out_path, err_path) = plist
+        .as_deref()
+        .map(daemon_logs::parse_plist_log_paths)
+        .unwrap_or((None, None));
+
+    let mut inputs = daemon_logs::BundleInputs {
+        home: home.clone(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        plist_found: plist.is_some(),
+        config_toml: std::fs::read_to_string(env.platform_dir.join("config.toml")).ok(),
+        stdout_tail: out_path
+            .as_deref()
+            .and_then(|p| daemon_logs::tail(std::path::Path::new(p), 256 * 1024)),
+        stderr_tail: err_path
+            .as_deref()
+            .and_then(|p| daemon_logs::tail(std::path::Path::new(p), 256 * 1024)),
+        stdout_path: out_path,
+        stderr_path: err_path,
+        ..Default::default()
+    };
+    match daemon {
+        Ok(parts) => {
+            inputs.daemon_version = parts.version;
+            inputs.daemon_entries = parts.entries;
+        }
+        Err(reason) => {
+            inputs.daemon_unreachable = Some(reason);
+            inputs.daemon_version = sidecar_version();
+        }
+    }
+
+    // 库目录：config 里的 data_dir 优先（daemon 就是往那儿写 ppf-logs.zip
+    // 的），没有则退回平台数据目录。
+    let data_dir = ipc::read_config_data_dir(&env.platform_dir)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| env.platform_dir.clone());
+    let zip_path = data_dir.join("ppf-logs.zip");
+    let entries = daemon_logs::build_bundle(&inputs);
+    daemon_logs::write_zip(&zip_path, &entries)?;
+    Ok(json!({
+        "zip": zip_path.display().to_string(),
+        "daemon_reachable": inputs.daemon_unreachable.is_none(),
+    }))
+}
+
+/// 内置服务程序自报版本（daemon 不可达时的版本来源）。取不到 → None，
+/// 绝不因此让导出失败。
+fn sidecar_daemon_version() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let sidecar = exe.parent()?.join(if cfg!(windows) {
+        "ppf-daemon.exe"
+    } else {
+        "ppf-daemon"
+    });
+    if !sidecar.is_file() {
+        return None;
+    }
+    let out = std::process::Command::new(&sidecar)
+        .arg("--version")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -359,7 +536,10 @@ pub fn run() {
             write_config,
             start_daemon,
             stop_daemon,
-            restart_daemon_process
+            restart_daemon_process,
+            daemon_err_offset,
+            daemon_startup_error,
+            export_logs_bundle
         ])
         .setup(|app| {
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
@@ -371,8 +551,9 @@ pub fn run() {
             let menu = Menu::with_items(app, &[&show, &stop, &quit])?;
             // ICON-01: 托盘用 beast 全实线纯黑版 + 模板标记——macOS 系统按
             // 深浅色自动反色（碳纹版 22px 会糊，模板图标不渲染颜色）。
-            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
-                .expect("tray icon bytes");
+            let tray_icon =
+                tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+                    .expect("tray icon bytes");
             TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
                 .icon_as_template(cfg!(target_os = "macos"))
@@ -410,6 +591,139 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DESK-10 硬判据：**daemon 不可达时点导出也必须出 zip**，且包里有
+    /// daemon 的 .err/.log 与版本号。反证做法：把 `assemble_export` 改成
+    /// daemon 不可达就 `return Err`（= 退回"走 daemon IPC"的老行为），
+    /// 本测试立刻变红。
+    ///
+    /// 全程 tempdir：假 plist + 假日志 + 假 config，不碰真实照片库、
+    /// 不碰真实 LaunchAgent。
+    #[test]
+    fn export_bundles_logs_even_when_the_daemon_is_unreachable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let logs = home.join("Library/Logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let err_log = logs.join("p-pass-daemon.err");
+        // 那次真实事故的 stderr（launchd KeepAlive 重复了 8 次）。
+        std::fs::write(
+            &err_log,
+            "Error: migration: migration 2 was previously applied but is missing in the resolved migrations\n"
+                .repeat(8),
+        )
+        .unwrap();
+        let out_log = logs.join("p-pass-daemon.log");
+        std::fs::write(&out_log, format!("library {} ready\n", home.display())).unwrap();
+
+        let plist = tmp.path().join("com.p-pass.daemon.plist");
+        std::fs::write(
+            &plist,
+            format!(
+                "<plist><dict>\n<key>StandardOutPath</key><string>{}</string>\n\
+                 <key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
+                out_log.display(),
+                err_log.display()
+            ),
+        )
+        .unwrap();
+
+        let platform_dir = tmp.path().join("support");
+        let library = tmp.path().join("library");
+        std::fs::create_dir_all(&platform_dir).unwrap();
+        std::fs::write(
+            platform_dir.join("config.toml"),
+            format!(
+                "data_dir = {:?}\nbind_addr = \"0.0.0.0:41145\"\n",
+                library.display()
+            ),
+        )
+        .unwrap();
+
+        let env = ExportEnv {
+            platform_dir,
+            home: home.clone(),
+            plist,
+        };
+        let res = assemble_export(
+            &env,
+            Err("找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".into()),
+            || Some("0.3.0".into()),
+        )
+        .expect("daemon 不可达也必须出包");
+        assert_eq!(res["daemon_reachable"], false);
+
+        let zip_path = res["zip"].as_str().unwrap();
+        assert_eq!(zip_path, library.join("ppf-logs.zip").display().to_string());
+        let entries = daemon_logs::read_zip_entries(std::path::Path::new(zip_path)).unwrap();
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        for want in [
+            "README.txt",
+            "versions.txt",
+            "config-summary.txt",
+            "daemon-stderr.log",
+            "daemon-stdout.log",
+            "daemon-unreachable.txt",
+        ] {
+            assert!(names.contains(&want), "缺 {want}：{names:?}");
+        }
+        let text: String = entries
+            .iter()
+            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // 复现事故：真错误必须在包里，且是原文。
+        assert!(
+            text.contains(
+                "migration 2 was previously applied but is missing in the resolved migrations"
+            ),
+            "{text}"
+        );
+        // 版本号（App + daemon）都在。
+        assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+        assert!(text.contains("daemon_version = 0.3.0"), "{text}");
+        // 脱敏不回退：家目录不出现在包里。
+        assert!(!text.contains(&home.display().to_string()), "{text}");
+        assert!(text.contains("<DATA>"), "{text}");
+    }
+
+    /// daemon 活着时：它那三份原样进包，且不出现"不可达"说明文件。
+    #[test]
+    fn export_adds_daemon_parts_when_reachable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("support");
+        std::fs::create_dir_all(&platform_dir).unwrap();
+        let env = ExportEnv {
+            platform_dir: platform_dir.clone(),
+            home: tmp.path().join("home"),
+            // plist 不存在 → 如实记"未注册"，不猜 ~/Library/Logs。
+            plist: tmp.path().join("missing.plist"),
+        };
+        let parts = DaemonParts {
+            version: Some("0.4.0".into()),
+            entries: vec![
+                ("diag_events.json".into(), b"[]".to_vec()),
+                ("devices.json".into(), b"[]".to_vec()),
+                ("audit.json".into(), b"[]".to_vec()),
+            ],
+        };
+        let res = assemble_export(&env, Ok(parts), || None).unwrap();
+        assert_eq!(res["daemon_reachable"], true);
+        let entries =
+            daemon_logs::read_zip_entries(std::path::Path::new(res["zip"].as_str().unwrap()))
+                .unwrap();
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        for want in ["diag_events.json", "devices.json", "audit.json"] {
+            assert!(names.contains(&want), "缺 {want}：{names:?}");
+        }
+        assert!(!names.contains(&"daemon-unreachable.txt"), "{names:?}");
+        let sources = entries
+            .iter()
+            .find(|(n, _)| n == "log-sources.txt")
+            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+            .unwrap();
+        assert!(sources.contains("未注册"), "{sources}");
+    }
 
     // DAE-04: 版本真的变了 → changed=true（真成功，前端报「已重启」）。
     #[test]

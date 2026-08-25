@@ -647,6 +647,51 @@ async fn logs_export_zip_leaks_no_username() {
     );
 }
 
+/// DESK-10: 导出包里必须有 audit.json（审计事件——配对/吊销/外部删除
+/// 都在这条流里）。桌面壳把 daemon 这三份 JSON 原样搬进它本地组装的
+/// bundle，少一份就等于支持案子里少一段时间线。actor 只出前缀。
+#[tokio::test(flavor = "multi_thread")]
+async fn logs_export_zip_carries_audit_events() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "logs-audit").await;
+    db.append_audit(&storage::AuditEntry {
+        ts: 42,
+        actor: Some(vec![0xAB; 32]),
+        action: "device.revoked".into(),
+        target_hash: None,
+        detail: Some("测试吊销".into()),
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c.call("logs.export", serde_json::Value::Null).await;
+    assert!(resp.ok, "{resp:?}");
+    let zip_path = resp.result.unwrap()["zip"].as_str().unwrap().to_string();
+
+    let file = std::fs::File::open(&zip_path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "audit.json"),
+        "audit.json must be in the export: {names:?}"
+    );
+    let mut audit = String::new();
+    {
+        use std::io::Read as _;
+        zip.by_name("audit.json")
+            .unwrap()
+            .read_to_string(&mut audit)
+            .unwrap();
+    }
+    assert!(audit.contains("device.revoked"), "{audit}");
+    assert!(audit.contains("\"actor_prefix\": \"abababab\""), "{audit}");
+    // 全量 NodeId（64 hex）绝不进包。
+    assert!(!audit.contains(&"ab".repeat(32)), "{audit}");
+}
+
 // ── IPC-02: events.subscribe——事件订阅通道（桌面壳告别 3s 轮询）──
 
 /// 验收 1：订阅后注入配对请求 → pending_changed 事件帧 <100ms 到达
