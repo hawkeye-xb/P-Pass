@@ -609,9 +609,13 @@
     }
   }
 
+  // DESK-10: 导出走桌面壳本地组装的 export_logs_bundle（不是 daemon 的
+  // logs.export IPC）——daemon 起不来时这个按钮必须照样出包，那正是最
+  // 需要日志的场景。daemon 活着时壳会把它那三份（diag/devices/audit）
+  // 附进同一个包。
   async function exportLogs() {
     try {
-      const r = await call("logs.export");
+      const r = await invoke("export_logs_bundle");
       flashMessage(t("ui.logs_exported", { path: r.zip }));
       try {
         await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示

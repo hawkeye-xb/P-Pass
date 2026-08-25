@@ -1161,6 +1161,25 @@ impl IpcServer {
                 .collect::<Vec<_>>(),
         )?;
 
+        // DESK-10: 审计事件（配对/吊销/外部删除…）也进包——桌面壳把
+        // 这三份 JSON 原样搬进它本地组装的 bundle，daemon 侧只负责
+        // 「只有 daemon 拿得到」的那部分。actor 仍只出 NodeId 前缀。
+        let audit = self.db.list_audit(500).await?;
+        let audit_json = serde_json::to_string_pretty(
+            &audit
+                .iter()
+                .map(|r| {
+                    serde_json::json!({
+                        "id": r.id,
+                        "ts": r.entry.ts,
+                        "action": r.entry.action,
+                        "actor_prefix": r.entry.actor.as_ref().map(|a| hex(&a[..4.min(a.len())])),
+                        "detail": r.entry.detail.as_deref().map(|d| sanitize(d, &home)),
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )?;
+
         let zip_path = self.data_dir.join("ppf-logs.zip");
         let file = std::fs::File::create(&zip_path)?;
         let mut zip = zip::ZipWriter::new(file);
@@ -1170,6 +1189,8 @@ impl IpcServer {
         zip.write_all(diag_json.as_bytes())?;
         zip.start_file("devices.json", opts)?;
         zip.write_all(devices_json.as_bytes())?;
+        zip.start_file("audit.json", opts)?;
+        zip.write_all(audit_json.as_bytes())?;
         zip.finish()?;
         Ok(zip_path)
     }
