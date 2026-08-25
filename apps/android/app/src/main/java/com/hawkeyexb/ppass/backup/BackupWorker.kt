@@ -38,8 +38,10 @@ import androidx.work.workDataOf
 import com.hawkeyexb.ppass.MainActivity
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
+import com.hawkeyexb.ppass.i18n.DiagText
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
+import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.PeerAddrParts
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
@@ -49,6 +51,7 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 const val BACKUP_WORK_NAME = "ppass-auto-backup"
 // MOB-02/27: unique work 通道（互不覆盖，各管一个触发族）。事件②的
@@ -69,6 +72,14 @@ private const val FAIL_NOTIFICATION_ID = 2027
 private const val SENTINEL_NOTIFICATION_ID = 2028
 // DOG-02b: 契机式白名单提醒通知（同通道独立 id）。
 private const val WHITELIST_NUDGE_NOTIFICATION_ID = 2029
+// MOB-29: 「资源在客户端丢失，正在重传」提示（同通道独立 id）。
+// **固定 id 是刻意的**：手动通道与周期通道是两条独立 unique work，可以
+// 并发跑（各自校准），两轮都可能在对方 removeMissing 之前看到同一批
+// missing。固定 id 让这种双发在系统层面折叠成同一条通知。
+private const val REUPLOAD_NOTIFICATION_ID = 2030
+// MOB-29: 收尾补校准的硬超时——挂死的 exist-check 绝不许拖长一个
+// 已经结束（或已被系统取消）的 worker。
+private const val CALIBRATE_TAIL_TIMEOUT_MS = 15_000L
 
 // MOB-02 §四事件②：连拍聚合——update delay（安静窗口）内连续变化只
 // 触发一次；超过 max delay 强制跑（变化持续不断时不被饿死）。
@@ -402,6 +413,9 @@ class BackupWorker(
         val sentinel = SentinelStore(ctx.filesDir)
         // DOG-02b: 契机式白名单提醒——同套路独立 store，不耦合。
         val nudge = WhitelistNudgeStore(ctx.filesDir)
+        // MOB-29: 这一趟有没有真的校准过。false = 主路径压根没走到校准
+        // （setForeground 被拒、bind 失败、地址解析炸），收尾补一次。
+        var calibrated = false
         return try {
             // FGS promotion: the OS lets a dataSync foreground job finish
             // its segment even if the user leaves.
@@ -416,6 +430,7 @@ class BackupWorker(
             // SENT-01: 校准返回是否确认可达——false（含无交互/失败）也
             // 是一次失败尝试（否则连续 3 天「scan 空早退」会漏记）。
             val reachable = calibrateIfReachable(client, daemon, confirmedStore)
+            calibrated = true
             if (reachable) sentinel.recordReachable() else sentinel.recordUnreachable()
 
             val watermarks = WatermarkStore(ctx.filesDir)
@@ -600,6 +615,19 @@ class BackupWorker(
                 // （catchUp = batchSize > 0）是在系统之外自己造队列，用户
                 // 定调："你强行用时间来做判断的话，是不太合适的。"
                 ensureMediaWatch(ctx)
+                // MOB-29: 校准搭这一趟后台任务的便车——**无论这趟怎么结束**
+                // （早退、异常、被系统取消、setForeground 直接被拒）都补一次。
+                //
+                // 为什么需要：校准原来长在备份管线的开头，于是它继承了管线的
+                // 全部前置闸门——FGS 提升被拒（MOB-08 记录的最常见失败路径）、
+                // bind 失败、地址解析异常，任一条都会让这一趟一次校准都没跑，
+                // 而「已备份」那个大数字是用户判断照片安不安全的唯一依据。
+                // 补校准在这里，脱离了「备份开始」这个条件。
+                //
+                // 刻意**不**新开一趟周期任务：MOB-17 定调过兜底不该更频繁
+                // （"兜底太频繁会在系统的 log 里面被检测得到"）。搭便车不加
+                // 一次唤醒。
+                if (!calibrated) calibrateTail(ctx, pairing, confirmedStore, sentinel)
                 // SENT-01: 搭便车检查——每次后台任务结束（成败都算）看
                 // 一次哨兵判定；该发则发（内部去重，发过 markNotified）。
                 maybeNotifySentinel(ctx)
@@ -762,19 +790,94 @@ class BackupWorker(
         daemon: PeerAddrParts,
         store: ConfirmedStore,
     ): Boolean {
-        return try {
-            // PERF-01: 校准时刻顺手清 hash-cache 孤儿（跟随 MediaStore
-            // 现存 _ID 集合；查询失败内部跳过，不影响校准）。
-            pruneHashCache(applicationContext)
-            val cached = store.load().confirmed
-            if (cached.isEmpty()) return false // 无缓存可查——无结论
-            val missing = BackupRunner(client).existCheck(daemon, cached)
-            if (missing.isNotEmpty()) store.removeMissing(missing)
-            true // 交互成功 = 确认可达
-        } catch (_: Throwable) {
-            // 不可达/未配对/超时——保留缓存值。
-            false
+        // PERF-01: 校准时刻顺手清 hash-cache 孤儿（跟随 MediaStore
+        // 现存 _ID 集合；查询失败内部跳过，不影响校准）。
+        runCatching { pruneHashCache(applicationContext) }
+        // MOB-29: 判定与「谁丢了」的算法都在 calibrateConfirmed（纯，JVM
+        // 单测直接跑）；这里只做接线：exist-check 走真连接，onLost 发通知。
+        return calibrateConfirmed(
+            store = store,
+            existCheck = { BackupRunner(client).existCheck(daemon, it) },
+            onLost = { lost ->
+                android.util.Log.i(
+                    "PPassBackup",
+                    "calibrate: ${lost.size} confirmed asset(s) vanished from the library, " +
+                        "they will be re-uploaded",
+                )
+                postReuploadNotification(applicationContext)
+            },
+        )
+    }
+
+    /** MOB-29: 收尾补校准（见 finally 里的调用点注释）。
+     *
+     *  主路径那个 client 在 finally 里已经关掉了，这里开一个自己的；
+     *  整段带硬超时 + 全异常吞掉——**补校准绝不许让一趟任务的收尾挂住**。 */
+    private suspend fun calibrateTail(
+        context: Context,
+        pairing: Pairing,
+        store: ConfirmedStore,
+        sentinel: SentinelStore,
+    ) {
+        // 缓存空 = 没什么可校准的，连接都不必开。
+        if (store.load().confirmed.isEmpty()) return
+        val client = DaemonClient()
+        try {
+            val reachable = withTimeout(CALIBRATE_TAIL_TIMEOUT_MS) {
+                client.bind(IdentityStore(context.filesDir).secretKey())
+                calibrateIfReachable(
+                    client,
+                    parsePeerAddrToken(pairing.daemonAddrToken),
+                    store,
+                )
+            }
+            // SENT-01 同口径：这一趟主路径没记过可达性（压根没走到），
+            // 这次探测就是这趟唯一的一次尝试。
+            if (reachable) sentinel.recordReachable() else sentinel.recordUnreachable()
+        } catch (t: Throwable) {
+            android.util.Log.w("PPassBackup", "tail calibrate skipped", t)
+            sentinel.recordUnreachable()
+        } finally {
+            runCatching { client.close() }
         }
+    }
+
+    /** MOB-29: 「资源在客户端丢失，正在重传」——用户定稿文案（两句，
+     *  第二句教顺序：想真删就先删手机上的原图）。走 UX-02 那条通道，
+     *  文案取 i18n 字典（assets/i18n，en/zh 对称测试兜底）。
+     *
+     *  **不带张数**：定调是「不做精确归因」，一句在人删/换库两种成因下
+     *  都成立的话就够了；数字只会引出「哪几张」这个我们不回答的问题。 */
+    private fun postReuploadNotification(context: Context) {
+        val nm = context.getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    FAIL_CHANNEL_ID, "照片备份失败 Backup failed",
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                )
+            )
+        }
+        val open = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pi = PendingIntent.getActivity(
+            context, 3, open,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        // 字典缺键（理论上不可能——Rust 侧注册表测试兜底）也不许崩，
+        // 退回 key 本身只会难看，不会丢掉这次告知。
+        val title = DiagText.resolve(context, MSG_REUPLOAD_TITLE) ?: MSG_REUPLOAD_TITLE
+        val body = DiagText.resolve(context, MSG_REUPLOAD_BODY) ?: MSG_REUPLOAD_BODY
+        val notification = NotificationCompat.Builder(context, FAIL_CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setSmallIcon(R.drawable.ic_notification)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .build()
+        nm.notify(REUPLOAD_NOTIFICATION_ID, notification)
     }
 
     /** UX-02: 失败通知——「N 张照片没备份成功，打开看看」，点开进 App。 */

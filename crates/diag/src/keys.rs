@@ -153,6 +153,21 @@ msg_keys! {
     UI_PENDING_BANNER_TEXT => "ui.pending_banner_text",
     /// 设计稿 v2：设备页副标题——已配对 N 台 + 可改家人叫法的提示。
     UI_DEVICES_PAIRED_LINE => "ui.devices_paired_line",
+
+    // ── MOB-29: 删掉的照片会被传回来——两端各一句告知 ──────────────
+    // 定调（2026-08-25）：重传是正确行为，不拦；要做的只是让用户知道，
+    // 且不做精确归因（人删 / 换库 / 磁盘坏，同一句话都成立）。
+    /// Phone-side notice title: assets the phone had confirmed are gone
+    /// from the library, so they are being uploaded again.
+    UI_MOBILE_REUPLOAD_TITLE => "ui.mobile_reupload_title",
+    /// Phone-side notice body — teaches the delete order: kill the source
+    /// on the phone first, then delete from the library.
+    UI_MOBILE_REUPLOAD_BODY => "ui.mobile_reupload_body",
+    /// Desktop-side warning after originals were deleted from the library
+    /// in Finder: they come back unless the phone copy goes first.
+    UI_LIBRARY_DELETE_WARN => "ui.library_delete_warn",
+    /// Dismiss action for the warning above.
+    UI_LIBRARY_DELETE_WARN_DISMISS => "ui.library_delete_warn_dismiss",
 }
 
 #[cfg(test)]
@@ -257,10 +272,14 @@ mod tests {
             UI_PHOTOS_OPEN_LIBRARY,
             UI_PENDING_BANNER_TEXT,
             UI_DEVICES_PAIRED_LINE,
+            UI_MOBILE_REUPLOAD_TITLE,
+            UI_MOBILE_REUPLOAD_BODY,
+            UI_LIBRARY_DELETE_WARN,
+            UI_LIBRARY_DELETE_WARN_DISMISS,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 95);
+        assert_eq!(ALL.len(), 99);
     }
 
     #[test]
