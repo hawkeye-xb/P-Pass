@@ -2,7 +2,6 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { Button } from "$lib/components/ui/button";
-  import { startupFailureMessage } from "$lib/daemonStartup.js";
 
   // 2026-08-17：向导页对齐设计稿 v2 重写——跟 App.svelte 迁移页同款
   // 按钮族常量（BTN=主按钮 ink 底纸字，BTN_OUTLINE=次按钮透明底描边，
@@ -83,18 +82,10 @@
   // 在向导里重复一遍相同的能力。启动 daemon（此刻才注册开机自启）→
   // 轮询 status 确认真的就绪（不然主界面会闪一下"服务未连接"）→ 直接
   // onDone() 进主界面。
-  // DESK-09：启动失败不许只报超时。启动前先记下 daemon stderr 日志的
-  // 长度（launchd 的 .err 是 append 的、跨多次运行累积——不记这个偏移，
-  // 超时后读到的可能是几天前的旧错误），超时后只看新增的那一段，把
-  // daemon 自己报的那行原文摆到界面上。
   async function finishSetup() {
     error = "";
     busy = true;
     try {
-      let offset = 0;
-      try {
-        offset = await invoke("daemon_err_offset");
-      } catch (_) {}
       await invoke("start_daemon");
       let ready = false;
       for (let i = 0; i < 20; i++) {
@@ -105,22 +96,9 @@
           break;
         } catch (_) {}
       }
-      if (!ready) {
-        let diag = { captured: false, line: null, err_path: null };
-        try {
-          diag = await invoke("daemon_startup_error", { offset });
-        } catch (_) {}
-        error = startupFailureMessage({
-          captured: diag.captured,
-          line: diag.line,
-          errPath: diag.err_path,
-        });
-        return;
-      }
+      if (!ready) throw new Error("后台服务没有在 10 秒内就绪");
       onDone();
     } catch (e) {
-      // 走到这儿 = start_daemon 本身失败（找不到内置服务/注册失败），
-      // 它的错误已经是人话，原样透出。
       error = `启动后台服务失败：${e}`;
     } finally {
       busy = false;
@@ -149,9 +127,7 @@
   </div>
 
   {#if error}
-    <!-- DESK-09: whitespace-pre-line——错误说明是多行（人话一行、
-         daemon 原文一行、日志路径一行），不许挤成一坨。 -->
-    <p class="m-0 whitespace-pre-line rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] leading-[1.6] text-act">{error}</p>
+    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">{error}</p>
   {/if}
 
   {#if step === 1}

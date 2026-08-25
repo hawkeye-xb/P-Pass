@@ -1,16 +1,9 @@
-//! Daemon log access from the shell — DESK-09（启动失败时把 daemon 自己
-//! 打出来的那行错误捞出来）与 DESK-10（导出包本地组装，daemon 挂着照样
-//! 能导）共用的一层。
+//! Daemon log access from the shell — DESK-10（诊断包由桌面壳本地组装，
+//! daemon 挂着照样能导出）用的一层。
 //!
-//! 铁律两条，都是真机事故换来的：
-//!
-//! 1. **日志路径从 LaunchAgent plist 读，不硬编码**。plist 的
-//!    `StandardOutPath` / `StandardErrorPath` 是唯一真相；plist 不在
-//!    （没注册成常驻服务）就如实说"没注册"，不去猜 `~/Library/Logs`。
-//! 2. **只看新增的那段**。launchd 的 stderr 文件是 append 的，跨多次运行
-//!    累积。拿整个文件去找错误行，会把四天前的旧错误当成这次的原因——
-//!    那正是 DESK-10 要消灭的「导出包里只有一条四天前的事件」同一种病。
-//!    所以启动前记长度，超时后只读新增字节。
+//! 铁律一条，真机事故换来的：**日志路径从 LaunchAgent plist 读，不硬编码**。
+//! plist 的 `StandardOutPath` / `StandardErrorPath` 是唯一真相；plist 不在
+//! （没注册成常驻服务）就如实说"没注册"，不去猜 `~/Library/Logs`。
 
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -56,44 +49,16 @@ pub fn file_len(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
-/// 从 `offset` 起读到文件末尾，最多 `max_bytes`（超了取尾部）。
-/// 文件被 truncate/轮转（当前长度 < offset）时从 0 读——不返回空。
-pub fn read_since(path: &Path, offset: u64, max_bytes: u64) -> Option<String> {
+/// 文件尾部最多 `max_bytes` 字节——launchd 的日志是 append 的，一路累积，
+/// 整份塞进诊断包没意义（也可能很大），取尾部就够。
+pub fn tail(path: &Path, max_bytes: u64) -> Option<String> {
     let len = file_len(path);
-    let start = if len < offset { 0 } else { offset };
-    let start = start.max(len.saturating_sub(max_bytes));
     let mut f = std::fs::File::open(path).ok()?;
-    f.seek(SeekFrom::Start(start)).ok()?;
+    f.seek(SeekFrom::Start(len.saturating_sub(max_bytes)))
+        .ok()?;
     let mut buf = Vec::new();
     f.take(max_bytes).read_to_end(&mut buf).ok()?;
     Some(String::from_utf8_lossy(&buf).to_string())
-}
-
-/// 文件尾部最多 `max_bytes` 字节（导出用）。
-pub fn tail(path: &Path, max_bytes: u64) -> Option<String> {
-    read_since(path, 0, max_bytes)
-}
-
-/// 从 daemon 新增的输出里挑出"最像错误原因"的那一行。
-///
-/// 优先带错误标记的最后一行（anyhow 的 `Error:`、tracing 的 `ERROR`、
-/// panic）；没有标记就退回最后一行非空输出——有原文总比只报超时好。
-/// 完全没有新增输出 → None，调用方必须明说"没捕获到新输出"，不许拿
-/// 旧内容顶上。**返回的行是原文，不截断、不翻译**（验收判据要 grep
-/// `migration ... missing in the resolved migrations` 这串原文）。
-pub fn extract_error_line(appended: &str) -> Option<String> {
-    let lines: Vec<&str> = appended
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
-    const MARKERS: [&str; 5] = ["Error:", "error:", "ERROR", "panicked", "Caused by"];
-    lines
-        .iter()
-        .rev()
-        .find(|l| MARKERS.iter().any(|m| l.contains(m)))
-        .or_else(|| lines.last())
-        .map(|l| (*l).to_string())
 }
 
 /// 家目录 → `<DATA>`（与 daemon 侧 `sanitize()` 同语义：导出件绝不带
@@ -349,47 +314,6 @@ mod tests {
     fn plist_without_log_keys_reads_nothing() {
         let (out, err) = parse_plist_log_paths("<plist><dict></dict></plist>");
         assert!(out.is_none() && err.is_none());
-    }
-
-    // DESK-09: 只读新增的那段——旧内容不许冒充这次的错误。
-    #[test]
-    fn read_since_returns_only_appended_bytes() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = tmp.path().join("d.err");
-        std::fs::write(&p, "四天前的旧错误\n").unwrap();
-        let before = file_len(&p);
-        std::fs::write(
-            &p,
-            "四天前的旧错误\nError: migration: migration 2 was previously applied but is missing in the resolved migrations\n",
-        )
-        .unwrap();
-        let appended = read_since(&p, before, 64 * 1024).unwrap();
-        assert!(!appended.contains("四天前"), "{appended}");
-        assert!(
-            appended.contains("migration 2 was previously applied"),
-            "{appended}"
-        );
-    }
-
-    // DESK-09: 那次真实事故的原文行，必须原样被挑出来（不截断、不翻译）。
-    #[test]
-    fn extract_error_line_picks_the_migration_error_verbatim() {
-        let stderr = "2026-08-25 starting daemon\n\
-             Error: migration: migration 2 was previously applied but is missing in the resolved migrations\n";
-        assert_eq!(
-            extract_error_line(stderr).unwrap(),
-            "Error: migration: migration 2 was previously applied but is missing in the resolved migrations"
-        );
-    }
-
-    // 没有错误标记也别丢原文——最后一行非空输出仍然比"超时"有用。
-    #[test]
-    fn extract_error_line_falls_back_to_last_line() {
-        assert_eq!(
-            extract_error_line("bind 41145 busy\n").unwrap(),
-            "bind 41145 busy"
-        );
-        assert!(extract_error_line("   \n\n").is_none());
     }
 
     // DESK-10 硬判据：daemon 不可达时也必须出包，且含 .err/.log 与版本。
