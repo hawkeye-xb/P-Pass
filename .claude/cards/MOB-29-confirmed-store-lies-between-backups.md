@@ -1,6 +1,6 @@
 # MOB-29 库里删掉的照片会被传回来且用户不知情；「已备份」在两次备份之间是谎话　级别 L1
 
-> ⬜ 状态：未开工
+> 🟡 状态：代码已合并（commit 95f3c4f），等真机验收
 > 级别：L1 · 阻塞：无（2026-08-25 方向已定，墓碑方案撤销，无待拍板项）
 
 ## 问题
@@ -78,15 +78,15 @@ hash 发给存储端问「你还有吗」）→ `removeMissing`。强制跑一�
 
 ## 验收标准
 
-- [ ] 集成（daemon）：库里删掉一条设备来源的资产 → 审计出现
+- [x] 集成（daemon）：库里删掉一条设备来源的资产 → 审计出现
   `asset.removed_external`，且**下一轮 `manifest` 里该 hash 仍在 `missing`**
   （确认「不拦重传」这条定调被真的实现，不是顺手做成了墓碑）
-- [ ] 单测（android）：`confirmed` 里有、`existCheck` 说缺 → 触发提示一次；
+- [x] 单测（android）：`confirmed` 里有、`existCheck` 说缺 → 触发提示一次；
   同一批 hash 下一轮**不再**触发（`removeMissing` 已剔除，自然一次性）
-- [ ] 单测（android）：**新照片**（不在 `confirmed`）和**传输失败的照片**
+- [x] 单测（android）：**新照片**（不在 `confirmed`）和**传输失败的照片**
   （commit 未成功，从未进 `confirmed`）**都不触发**提示
-- [ ] 反证：去掉 `confirmed` 交集条件（改成对全部 missing 提示）→ 上一条变红
-- [ ] 单测（android）：校准脱离「备份开始」也能跑（搭背景便车），且
+- [x] 反证：去掉 `confirmed` 交集条件（改成对全部 missing 提示）→ 上一条变红
+- [x] 单测（android）：校准脱离「备份开始」也能跑（搭背景便车），且
   daemon 不可达时保留缓存不清零
 - [ ] 真机：复现本卡开头那组数字比对，改后「库里没有 = 0」；在 Finder 里
   删若干张 → 桌面端出现警告 + 手机端出现那句提示 + 照片确实被传回来
@@ -177,3 +177,89 @@ hash 表，这个坑不存在；「只想把照片挪个位置」那类诉求在
 
 清库重装是开发/测试期最常做的动作，每次都会触发那句「资源在客户端丢失，
 正在重传」。这是**预期行为**（措辞在换库场景下同样成立），不是 bug。
+
+## 实施记录（2026-08-25，commit 95f3c4f）
+
+### 改了哪几处
+
+| 处 | 改动 | 为什么 |
+|---|---|---|
+| `apps/android/.../backup/Calibration.kt`（新） | 校准内核 `calibrateConfirmed(store, existCheck, onLost)` + 判据 `lostFromLibrary(confirmed, missing)` | 判定与接线分家：判据是纯函数，JVM 单测直接跑，反证靶就在这里 |
+| `apps/android/.../backup/BackupWorker.kt` | `calibrateIfReachable` 改成薄接线（exist-check 走真连接、`onLost` 发通知）；新增 `postReuploadNotification`（UX-02 通道，固定 id 2030）；`doWork` 的 finally 里补一次 `calibrateTail` | 提示插在 `removeMissing` **之前**（顺序承重）；固定 id 让并发双发折叠成一条；补校准让校准不再继承备份管线的前置闸门 |
+| `apps/desktop/src/lib/externalDelete.js`（新）+ `App.svelte` | 审计流 → 警告判据（只认 `asset.removed_external`）+ 总览页一条警告 | 删除发生在电脑上，警告就出在电脑上；后端零改动，只消费既有审计 |
+| `assets/i18n/{en,zh}.json` + `crates/diag/src/keys.rs` + Android 捆绑副本 | 4 个 key（手机端两句 + 桌面端警告/知道了），`ALL.len()` 95→99 | 文案进字典是仓库惯例；四文件锁步，漂移由 `DiagTextTest` 守 |
+| `crates/daemon/tests/sync_flow.rs` | 新增 `deleted_asset_is_still_reported_missing_no_tombstone` | **反墓碑判据**：删掉的 hash 下一轮仍在 `missing`。daemon 生产代码零改动 |
+
+### 与卡面的一处诚实差异
+
+卡里写「校准只在备份开始时才跑……用户不拍照就可能好几天不校准」。按代码
+实况，**周期兜底任务（5h）本身就会跑 `calibrateIfReachable`**（它在 `doWork`
+里排在所有早退分支之前），所以「好几天不校准」只在这两种情况下成立：
+
+1. 这一趟在走到校准之前就死了——`setForeground` 被拒（MOB-08 记录的最常见
+   失败路径）、`client.bind` 失败、地址 token 解析抛；
+2. 周期任务的后台档约束（Wi-Fi / 电量不低）长期不满足，任务压根没跑。
+
+本次落地的是①：把校准提成独立单元 + 在 finally 补一次，于是**备份一步都没
+开始也能校准完**。②不是应用层能修的（约束不满足就是不该跑），而「daemon 不
+可达 → 保留缓存不清零」是卡明确要求的行为，不是缺陷。刻意**没有**新开一趟
+周期任务——MOB-17 定调过兜底不该更频繁。
+
+### 测试输出
+
+```
+$ cargo nextest run --all-features
+Summary [10.986s] 317 tests run: 317 passed, 1 skipped
+$ just ci
+==> CI pipeline: all green ✅   （fmt + clippy + test + arch-check B.1/B.2）
+
+$ cargo test -p daemon --test sync_flow
+test deleted_asset_is_still_reported_missing_no_tombstone ... ok
+test external_deletion_reconciles_index_thumbs_and_audit ... ok
+test result: ok. 2 passed; 0 failed
+
+$ ./gradlew :app:testDebugUnitTest --rerun-tasks      （36 个类）
+BUILD SUCCESSFUL — 263 tests, 0 failures
+  TEST-...CalibrationTest.xml  tests=10 failures=0
+
+$ npx vitest run   （apps/desktop）
+Test Files 3 passed (3) · Tests 24 passed (24)
+$ npx vite build
+✓ 208 modules transformed. ✓ built in 765ms
+```
+
+### 反证（都真跑了，不是声称）
+
+**①手机端：去掉 `confirmed` 交集**（`lostFromLibrary` 改成 `missing.toSet()`）：
+
+```
+CalibrationTest > transfer_failed_photos_never_trigger_the_notice FAILED
+  java.lang.AssertionError: 传输失败的照片不许触发提示: [half-sent, timed-out]
+CalibrationTest > new_photos_never_trigger_the_notice FAILED
+  java.lang.AssertionError: 新照片不许触发提示: [brand-new]
+10 tests completed, 2 failed
+```
+
+**②桌面端：去掉 action 过滤**（不再只认 `asset.removed_external`）：
+
+```
+✕ add_and_move_never_warn：收录与挪位置不警告
+  - Expected: null
+  + Received: { "count": 4, "latestAt": 1787299999500 }
+Tests 1 failed | 5 passed (6)
+```
+
+**③反墓碑判据的反证是内建的**：任何让「删掉的 hash 不再被报 missing」的改动
+（含 30 天软删式隐式墓碑）都会让 `still_missing` 变空，那条 `assert_eq!` 立刻红。
+
+### 还差什么
+
+- **真机验收（验收人自己跑，agent 做不了）**：验收标准最后一条。要看三样——
+  ①卡开头那组数字比对，改后「库里没有 = 0」；②访达里删若干张 → 桌面端总览页
+  出现警告条；③手机端出现「资源在客户端丢失，正在重传」那条通知，且照片确实
+  被传回来。
+- 一条已知边界（卡面「一条已知边界」那节原样成立）：提示**不是拦截点**，
+  校准与重传在同一趟里，中间没有让用户反应的窗口。
+- 一条顺带记下的并发边界：手动通道与周期通道可以并发跑（`MOB-33` 已开卡），
+  两轮都可能在对方 `removeMissing` 之前看到同一批 missing。通知用固定 id
+  收敛成一条，不另做去重状态。

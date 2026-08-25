@@ -991,3 +991,29 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
   （T-071 原话「无凭据路径 codesign 步干净跳过」「凭据路径待 H-02」）。
   ⚠️ **「有没有配」这种问题，答案往往就躺在自己的 PROGRESS 里**——比猜、比问
   都快，而且有据。
+
+## 2026-08-25 MOB-29：删掉的照片照旧传回来，但两端各给一句告知（commit 95f3c4f）
+
+- 定调（用户 2026-08-25）：**重传是正确行为，不拦**；删除的正确姿势是「先删
+  手机原图、再删库」；要做的只是让用户知道，**不做精确归因**。墓碑方案整条
+  撤销——本批**零改动 `manifest`/`missing`，零改动 proto**。
+- 手机端：新 `Calibration.kt`（校准内核 + 判据 `lostFromLibrary` = `confirmed`
+  交集），通知走 UX-02 通道固定 id 2030；提示插在 `removeMissing` **之前**
+  （顺序承重，反过来交集恒空）。提示天然一次性——那批 hash 随即被剔出
+  `confirmed`，**没有**新造去重窗口/时间戳状态。
+- 桌面端：`lib/externalDelete.js` 判据（只认 `asset.removed_external`，
+  `relocated`/`ingest.*` 一律不算）+ 总览页一条警告，后端零改动。
+- 反墓碑判据落成 daemon 集成测试：`deleted_asset_is_still_reported_missing_no_tombstone`
+  ——删掉的 hash 下一轮 `manifest` 里**仍在 `missing`**。任何隐式墓碑（含
+  Immich 那种 30 天软删）都会让它变红。
+- 绿：`just ci` all green（nextest 317 passed）· Android 263 tests / 36 类 0
+  failure（`--rerun-tasks`）· desktop vitest 24 passed + `vite build` ✓。
+  两个反证都真跑了（去掉 `confirmed` 交集 → 2 红；去掉 action 过滤 → 1 红），
+  输出摘录在卡的「实施记录」里。
+- ⚠️ **卡面根因描述与代码实况有一处差**，如实记在卡里而不是绕着它建东西：
+  周期兜底任务（5h）本来就会跑校准（它排在所有早退分支之前），所以「好几天
+  不校准」只在「这趟走到校准之前就死了」（`setForeground` 被拒是 MOB-08
+  记录的最常见路径）或「后台档约束长期不满足」时成立。本次修的是前者——
+  校准提成独立单元 + `doWork` 的 finally 补一次，于是**备份一步都没开始也能
+  校准完**。刻意没新开周期任务（MOB-17 定调兜底不该更频繁）。
+- 欠：真机验收（访达删照片 → 两端各出一句 + 照片真的回来），验收人自己跑。
