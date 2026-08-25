@@ -53,7 +53,8 @@
 | 4 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
 | 5 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 四条备份通道可并行跑两个 BackupWorker，重复推字节（浪费不损坏） | L2 |
 | 6 | [LINT-01](../.claude/cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
-| 7 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
+| 7 | [CI-02](../.claude/cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制（~300 Linux 分钟/月白烧） | L3 |
+| 8 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 
 ## 四、backlog（你明确说过先不做）
 
@@ -82,12 +83,21 @@ Apple 签名补齐需你本人操作（可选）：`docs/runbook/h02-apple-signi
 `CLOUDFLARE_ACCOUNT_ID` / `ANDROID_KEYSTORE_*` / `UPDATE_SIGNING_KEY` /
 `APPLE_*` **全部在位**。旧文档里「等用户加 CLOUDFLARE_API_TOKEN」的挂账已作废。
 
-**ci-workers 审批门待办**：`environment: workers-prod` 让部署 job 停在
-`Waiting` 等 owner 批准——**不占 runner、不计费**，挂 30 天自动作废。当前
-3 个 Waiting run 全部由「改 ci-workers.yml 自己」触发（paths 包含自身），
-worker 代码零改动。建议：旧的 Cancel，最新一个批一次以验证部署链路。
-待开卡：① paths 去掉自触发；② `cancel-in-progress` 收不掉 `Waiting` run，
-每次 push 会再堆一个。
+**触发节奏（2026-08-25 用户拍板「我需要构建的时候再构建」后的现状）**：
+
+| 流水线 | 自动触发 | 手动 |
+|---|---|---|
+| ci-rust / ci-android / ci-desktop / site build | push（paths 门控） | — |
+| e2e | nightly 03:30 + tag + PR 打标签 | dispatch |
+| **artifacts（dogfood 裸二进制）** | **仅 Linux** | **macOS / Windows 只手动** |
+| release（签名公证可分发包） | tag `v*` | dispatch（platforms 可选） |
+| ci-workers | push(infra/workers/**)，**不含自身** | dispatch |
+
+**ci-workers 审批门**：`environment: workers-prod` 让部署 job 停在 `Waiting`
+等 owner 批准——**不占 runner、不计费**，挂 30 天自动作废。当前 3 个 Waiting
+run 全部由「改 ci-workers.yml 自己」触发，worker 代码零改动 → **paths 已在
+2026-08-25 去掉自身**，不会再堆。存量那 3 个：旧的 Cancel，最新一个可批一次
+以验证部署链路。
 
 ## 六、相关文档
 
