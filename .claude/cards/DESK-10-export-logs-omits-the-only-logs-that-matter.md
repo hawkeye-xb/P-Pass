@@ -89,9 +89,8 @@ Windows/Linux 的日志位置不同（LaunchAgent 是 macOS 专属）。实施�
   本地组装**，daemon IPC 只是可选补充）。收集与落盘拆成 `assemble_export`，
   daemon 那部分以 `Result<DaemonParts, String>` 传进去：**Err 不是失败路径**，
   只是少三份文件、多一份 `daemon-unreachable.txt`，zip 照出。
-- `apps/desktop/src-tauri/src/daemon_logs.rs`（新，与 `DESK-09` 共用）——
-  plist 解析取日志路径、tail、脱敏（`sanitize` + 长 hex 掩码）、`build_bundle`
-  纯函数、zip 读写。
+- `apps/desktop/src-tauri/src/daemon_logs.rs`（新）——plist 解析取日志路径、
+  tail、脱敏（`sanitize` + 长 hex 掩码）、`build_bundle` 纯函数、zip 读写。
 - `apps/desktop/src/App.svelte`——「导出日志」从 `call("logs.export")` 改成
   `invoke("export_logs_bundle")`。
 - `crates/daemon/src/ipc.rs`——`export_logs` 补 `audit.json`（`actor` 只出
@@ -138,7 +137,7 @@ Windows/Linux 的日志位置不同（LaunchAgent 是 macOS 专属）。实施�
 ```
 test tests::export_bundles_logs_even_when_the_daemon_is_unreachable ... ok
 test tests::export_adds_daemon_parts_when_reachable ... ok
-test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ```
 
 不可达那条测的是真落盘：tempdir 造假 plist + 假 `.err`（内容就是那次事故的
@@ -156,8 +155,9 @@ Summary [  11.179s] 319 tests run: 319 passed, 1 skipped
 `device.revoked`、`actor_prefix` 只有前 4 字节、全长 NodeId 不在包里）；原有
 `logs_export_zip_leaks_no_username` 仍绿（脱敏没回退）。
 
-`cd apps/desktop && pnpm test`：`Test Files 4 passed / Tests 31 passed`；
-`pnpm build`：`✓ 208 modules transformed`。
+`cd apps/desktop && pnpm test`：`Test Files 3 passed / Tests 24 passed`（前端
+只改了「导出日志」那一个调用点，本卡的判据都在 Rust 侧）；`pnpm build`：
+`✓ 207 modules transformed`；`cargo clippy --all-targets` 零告警。
 
 ### 反证（真跑，红输出摘录）
 
@@ -165,15 +165,14 @@ Summary [  11.179s] 319 tests run: 319 passed, 1 skipped
 （= 退回「走 daemon IPC」的老行为）：
 
 ```
-running 17 tests
 test tests::export_bundles_logs_even_when_the_daemon_is_unreachable ... FAILED
 
 ---- tests::export_bundles_logs_even_when_the_daemon_is_unreachable stdout ----
-thread panicked at src/lib.rs:641:10:
+thread panicked at src/lib.rs:
 daemon 不可达也必须出包: "找不到运行中的 P-Pass 后台服务（ipc.token 不存在）"
 ```
 
-改回后 17 passed。
+改回后 14 passed。
 
 ### 还差什么（真机）
 

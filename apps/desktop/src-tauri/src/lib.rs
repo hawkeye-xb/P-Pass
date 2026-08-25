@@ -344,48 +344,6 @@ fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>) -> Valu
     })
 }
 
-/// DESK-09 ①：启动 daemon **之前**记下 stderr 日志的长度。launchd 的
-/// StandardErrorPath 是 append 的、跨多次运行累积——不记这个偏移，超时后
-/// 去读文件就会把四天前的旧错误当成这次的原因（DESK-10 那个"包里只有一条
-/// 四天前的事件"就是同一种病）。plist 不存在（还没注册常驻服务）时返回 0。
-#[tauri::command]
-fn daemon_err_offset() -> u64 {
-    match daemon_stderr_path() {
-        Some(p) => daemon_logs::file_len(&p),
-        None => 0,
-    }
-}
-
-/// DESK-09 ②：超时后把 daemon **新写的**那段 stderr 里最像原因的一行捞
-/// 出来，原文奉还（不截断、不翻译——原文可搜索、可贴给开发者）。
-/// `captured=false` 时前端必须明说"没捕获到新的错误输出"，不许拿旧内容
-/// 顶上，也不许把超时当结论。
-#[tauri::command]
-fn daemon_startup_error(offset: u64) -> Value {
-    let path = daemon_stderr_path();
-    let appended = path
-        .as_ref()
-        .and_then(|p| daemon_logs::read_since(p, offset, 64 * 1024));
-    let line = appended
-        .as_deref()
-        .and_then(daemon_logs::extract_error_line);
-    json!({
-        "captured": line.is_some(),
-        "line": line,
-        // 用户找日志时用得上（原样，不脱敏——这是本机自己看的界面，
-        // 不是要发出去的导出件）。
-        "err_path": path.map(|p| p.display().to_string()),
-    })
-}
-
-/// LaunchAgent plist 里登记的 stderr 路径。**不硬编码 ~/Library/Logs**：
-/// plist 是唯一真相，读不到就是 None（调用方如实报"读不到"）。
-fn daemon_stderr_path() -> Option<std::path::PathBuf> {
-    let xml = std::fs::read_to_string(daemon_logs::plist_path()).ok()?;
-    let (_, err) = daemon_logs::parse_plist_log_paths(&xml);
-    err.map(std::path::PathBuf::from)
-}
-
 /// DESK-10：诊断包由**桌面壳本地组装**，不是 daemon 的 IPC 方法——
 /// daemon 起不来时这个按钮必须照样工作，那正是最需要日志的场景。
 /// daemon 活着时再附加它能提供的那三份（diag / devices / audit）；
@@ -537,8 +495,6 @@ pub fn run() {
             start_daemon,
             stop_daemon,
             restart_daemon_process,
-            daemon_err_offset,
-            daemon_startup_error,
             export_logs_bundle
         ])
         .setup(|app| {
