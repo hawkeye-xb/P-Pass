@@ -165,3 +165,48 @@ ReuploadCompensationTest > doWork_feeds_the_merged_list_into_the_pipeline FAILED
   `confirmed.json` 里有没有指向那些 hash 的 `files` 条目；没有的话先手动触发
   一次备份（事件⑥ = 全量重扫，会把文件级记录补齐）再验。**刻意不为此加自动
   全量重扫**（卡面第 3 条的硬约束）。
+
+## 补记（同日）：那条「存量条目够不着」的已知边界是**错的**，已删
+
+第一版把「MOB-13 之前备份的条目没有文件级记录 → 反查不到」写成了已知边界，
+还配了一条测试去钉它。**这个结论站不住**，验收人当场质疑：「这不是一个 json 吗？
+为什么会丢失？重建的话 hash 算出来不一致吗？」
+
+两条都对：
+
+1. **没有丢失。** `confirmed.json` 一直在，hash 也在。缺的只是「hash → 本地
+   `_ID`」这**一个方向的索引**。「没存过某个方向的索引」不等于「数据没了」。
+2. **重算必然一致。** 内容哈希（blake3），同一个文件算出来一模一样。所以这
+   不是数据不兼容，只是一张表没存。
+
+**而且连重算都不用**：PERF-01 的哈希缓存 `hash-cache.json` 本身就是
+`uri → hash`，键里就带着 uri（`uri|g<gen>` / `uri|m<mod>|s<size>`），而它
+**跨版本、跨配对存活**（HashCache 文件头原话：「hash 是内容身份，跨 remote
+通用——不放 per-remote 目录，断开配对不清理它」）。把它反过来查即可。
+
+修法：`reuploadTargetsOf` 改成**两路并集**——`ConfirmedState.files` ∪
+`HashCache.fileKeysOf(lost)`；两处校准门都把哈希缓存传进去。新增
+`HashCache.fileKeysOf`。**删掉那条假边界的测试**，换成两条真判据：
+`legacy_entries_are_recovered_from_the_hash_cache_not_a_full_rescan`（存量条目
+必须被找回）与 `hash_cache_lookup_handles_the_pre_api30_key_shape`（两种 key
+形状都要认，否则老设备上第二路失效）。另加
+`both_calibration_doors_pass_the_hash_cache`——这次的漏正是「少接一处」那个模式。
+
+**并且原来推荐的「启动时一次性全量扫描迁移」方案作废**，不需要：表已经在盘上了。
+卡面第 3 条（不许退化成每轮全量重扫）依然成立。
+
+### 为什么这个缺口特别阴
+
+它**只在覆盖安装 / 自动更新路径上显形**——那条路径原样保留老格式的
+`confirmed.json`；而卸载重装的机器 `confirmed` 从零重建、每条都带文件级记录，
+**永远复现不出来**。验收人当前这台机器正好是清场重装的，所以 test.3 的回归不受
+影响，但靠自动更新升级上来的用户会撞。
+
+顺带修了一条同款的守卫测试：`both_calibration_doors_enqueue_before_the_cache_is_pruned`
+原来钉的是 `enqueueReuploads(store.load(), reuploads, lost)` 整串字面量，于是给
+它多传一个参数（正当改动）就误伤变红，而那串字面量并没有多守住任何东西 ——
+改成钉不变量（登记发生了 + 读的是校准前快照）。**这是同一天里第二次踩「守卫测试
+钉实现形状而不是不变量」。**
+
+最终计数：Android 全量 **38 类 / 290 tests / 0 failures**（XML 19:42:10），
+`assembleDebug` 绿。反证真跑：去掉第二路 → 2 条红。
