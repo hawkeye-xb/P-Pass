@@ -227,13 +227,17 @@ class BadMediaRecordTest {
         val buildBlock = src
             .substringAfter("val hashCache = HashCache(hashCacheFile(ctx))")
             .substringBefore("val report = BackupRunner(client)")
+        // MOB-34 起喂进去的是 `items`（增量扫描结果 + 定向补偿条目的合并
+        // 列表），不再是裸的 scan.items——本卡要钉的是「走 buildCandidates
+        // 这条逐条隔离的路」，喂哪个列表由 MOB-34 的 planReuploads 负责，
+        // 那一侧的 1:1 契约由 ReuploadCompensationTest 钉。
         assertTrue(
             "doWork 必须用逐条隔离的 buildCandidates 构建候选",
-            buildBlock.contains("buildCandidates(scan.items)"),
+            buildBlock.contains("buildCandidates(items)"),
         )
         assertTrue(
-            "不允许退回裸 scan.items.map 建候选（一条打不开就炸整批）",
-            !buildBlock.contains("scan.items.map"),
+            "不允许退回裸 items.map 建候选（一条打不开就炸整批）",
+            !buildBlock.contains("items.map"),
         )
         assertTrue(
             "被跳过的条目必须打 PPassBackup 日志（别静默吞）",

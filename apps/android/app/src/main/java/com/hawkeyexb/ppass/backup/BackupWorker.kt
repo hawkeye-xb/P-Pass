@@ -397,9 +397,13 @@ class BackupWorker(
         if (AutoBackupPrefs(ctx.filesDir).paused()) return successStamped()
 
         // DOG-01c: 自动备份也走同一确认缓存（M 口径一致，不能只靠手动备份）。
-        val confirmedStore = ConfirmedStore(
-            File(ctx.filesDir, "backup-state/${pairing.daemonNodeId}")
-        )
+        val stateDir = File(ctx.filesDir, "backup-state/${pairing.daemonNodeId}")
+        val confirmedStore = ConfirmedStore(stateDir)
+        // MOB-34: 定向补偿队列——校准查出「确认过、库里却没了」的 hash 时，
+        // 把它们对应的本地 MediaStore 条目登记在这里（水位之下的老照片
+        // 永远不会被增量扫描重新扫到，不登记就永远传不回去）。同目录 =
+        // 断开配对时随 clearConfirmedCacheForRemote 一起清掉。
+        val reuploads = ReuploadQueue(stateDir)
 
         val client = DaemonClient()
         // UX-02: 失败通知的批次数——scan 在 try 内（DOG-01c 时序），catch
@@ -429,7 +433,7 @@ class BackupWorker(
             // DOG-01c: 备份前漂移校准（只查不传；daemon 不可达则跳过）。
             // SENT-01: 校准返回是否确认可达——false（含无交互/失败）也
             // 是一次失败尝试（否则连续 3 天「scan 空早退」会漏记）。
-            val reachable = calibrateIfReachable(client, daemon, confirmedStore)
+            val reachable = calibrateIfReachable(client, daemon, confirmedStore, reuploads)
             calibrated = true
             if (reachable) sentinel.recordReachable() else sentinel.recordUnreachable()
 
@@ -445,14 +449,35 @@ class BackupWorker(
             // 与「发起备份」是两个动作）。自动触发恒为增量。
             val since = if (fullRescan) 0L else watermarks.load()
             // T6: 自动备份同样只扫选中相册（范围与手动一致）。
-            val scan = MediaScanner(ctx.contentResolver).scanSince(since, bucketIds)
-            reportProgress(PHASE_SCANNING, scan.items.size, scan.items.size)
-            if (scan.items.isEmpty()) {
+            val scanner = MediaScanner(ctx.contentResolver)
+            val scan = scanner.scanSince(since, bucketIds)
+            // MOB-34: 定向补偿——把队列里登记的老照片（水位之下，增量扫描
+            // 永远扫不到）按 fileKey **定向**查回来，与本轮增量结果合并成
+            // 一条列表往下走。查询只带队列里那几个 _ID，代价与队列长度成
+            // 正比、与相册规模无关——卡面第 3 条：不许退化成每轮全量重扫。
+            //
+            // 队列为空（绝大多数轮次）时一次查询都不发（itemsByKeys 空集
+            // 早退），这条路径对常态零成本。
+            val pending = reuploads.load()
+            val found = if (pending.isEmpty()) emptyList() else scanner.itemsByKeys(pending)
+            val plan = planReuploads(
+                pending = pending,
+                found = found,
+                scanned = scan.items,
+                keyOf = { it.uri.toString() },
+                // 范围外的不补（用户缩过备份范围，那些照片已不是我们的事）。
+                inScope = { bucketIds == null || it.bucketId == null || it.bucketId in bucketIds },
+            )
+            // 查无此行 / 范围外 → 立刻丢，绝不每轮重试（MOB-09 的老坑）。
+            reuploads.remove(plan.drop)
+            val items = plan.items
+            reportProgress(PHASE_SCANNING, items.size, items.size)
+            if (items.isEmpty()) {
                 attempts.reset() // 无新照片也算成功一轮——连续失败清零
                 nudge.recordSuccess() // DOG-02b: 成功一轮状态清零
                 return successStamped(KEY_INGESTED to 0, KEY_DUPLICATES to 0)
             }
-            batchSize = scan.items.size
+            batchSize = items.size
 
             // PERF-01: 自动备份同样走哈希缓存——增量扫描 mostly 命中，
             // hash 阶段不再全量读流（千张库从分钟级降到秒级）。
@@ -464,10 +489,10 @@ class BackupWorker(
             // 「正在读取 x/y」。自动备份顺带也有了实时进度。
             val hashProgress = ProgressThrottle()
             var hashed = 0
-            val built = buildCandidates(scan.items) { item ->
+            val built = buildCandidates(items) { item ->
                 hashed += 1
-                if (hashProgress.should(hashed, scan.items.size, SystemClock.elapsedRealtime())) {
-                    reportProgress(PHASE_HASHING, hashed, scan.items.size)
+                if (hashProgress.should(hashed, items.size, SystemClock.elapsedRealtime())) {
+                    reportProgress(PHASE_HASHING, hashed, items.size)
                 }
                 val open = {
                     ctx.contentResolver.openInputStream(item.uri)
@@ -500,10 +525,16 @@ class BackupWorker(
             if (built.skipped.isNotEmpty()) {
                 android.util.Log.w(
                     "PPassBackup",
-                    "auto backup: skipped ${built.skipped.size}/${scan.items.size} " +
+                    "auto backup: skipped ${built.skipped.size}/${items.size} " +
                         "unreadable media record(s): " +
                         built.skipped.take(5).joinToString { it.displayName },
                 )
+            }
+            // MOB-34: 读不了的补偿条目**立刻**丢出队列（在下面那个早退之前
+            // ——早退路径同样必须丢，否则一条打不开的老记录每轮都被查回来、
+            // 每轮都读失败，正是 MOB-09 要防的「一条坏记录卡死整批」）。
+            if (built.skipped.isNotEmpty() && pending.isNotEmpty()) {
+                reuploads.remove(built.skipped.mapTo(mutableSetOf()) { it.uri.toString() })
             }
             if (candidates.isEmpty()) {
                 // MOB-09: 整批都读不了（一批空记录、权限被撤、外部存储卸载）
@@ -546,6 +577,12 @@ class BackupWorker(
                     candidates,
                 ),
             )
+            // MOB-34: 传成功的补偿条目出队（confirmed/files 已经写回，K 归零）。
+            // 放在 recordRun **之后**：run 抛错就走不到这里，队列原样保留、
+            // 下一轮再试——网络瞬断不许把该补的照片悄悄丢掉。
+            if (pending.isNotEmpty()) {
+                reuploads.remove(built.kept.mapTo(mutableSetOf()) { it.uri.toString() })
+            }
             android.util.Log.i(
                 "PPassBackup",
                 "auto backup: offered=${report.offered} pushed=${report.pushed} ingested=${report.ingested}",
@@ -627,7 +664,7 @@ class BackupWorker(
                 // 刻意**不**新开一趟周期任务：MOB-17 定调过兜底不该更频繁
                 // （"兜底太频繁会在系统的 log 里面被检测得到"）。搭便车不加
                 // 一次唤醒。
-                if (!calibrated) calibrateTail(ctx, pairing, confirmedStore, sentinel)
+                if (!calibrated) calibrateTail(ctx, pairing, confirmedStore, reuploads, sentinel)
                 // SENT-01: 搭便车检查——每次后台任务结束（成败都算）看
                 // 一次哨兵判定；该发则发（内部去重，发过 markNotified）。
                 maybeNotifySentinel(ctx)
@@ -789,6 +826,7 @@ class BackupWorker(
         client: DaemonClient,
         daemon: PeerAddrParts,
         store: ConfirmedStore,
+        reuploads: ReuploadQueue,
     ): Boolean {
         // PERF-01: 校准时刻顺手清 hash-cache 孤儿（跟随 MediaStore
         // 现存 _ID 集合；查询失败内部跳过，不影响校准）。
@@ -799,10 +837,17 @@ class BackupWorker(
             store = store,
             existCheck = { BackupRunner(client).existCheck(daemon, it) },
             onLost = { lost ->
+                // MOB-34: 「会被传回来」在此之前只是**通知里的一句话**——
+                // 老照片在水位之下，增量扫描永远扫不到它，于是永远传不回去。
+                // 这里把这批 hash 对应的本地条目登记进定向补偿队列，下一轮
+                // （多数情况就是同一轮，登记发生在扫描之前）真的把它们传回。
+                // 必须读 store.load() 的**校准前**快照：calibrateConfirmed
+                // 的契约是先 onLost 再 removeMissing，之后文件级记录就没了。
+                val queued = enqueueReuploads(store.load(), reuploads, lost)
                 android.util.Log.i(
                     "PPassBackup",
                     "calibrate: ${lost.size} confirmed asset(s) vanished from the library, " +
-                        "they will be re-uploaded",
+                        "they will be re-uploaded (queued ${queued.size} local file(s))",
                 )
                 postReuploadNotification(applicationContext)
             },
@@ -817,6 +862,7 @@ class BackupWorker(
         context: Context,
         pairing: Pairing,
         store: ConfirmedStore,
+        reuploads: ReuploadQueue,
         sentinel: SentinelStore,
     ) {
         // 缓存空 = 没什么可校准的，连接都不必开。
@@ -829,6 +875,7 @@ class BackupWorker(
                     client,
                     parsePeerAddrToken(pairing.daemonAddrToken),
                     store,
+                    reuploads,
                 )
             }
             // SENT-01 同口径：这一趟主路径没记过可达性（压根没走到），
