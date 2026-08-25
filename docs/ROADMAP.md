@@ -448,23 +448,27 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       与失败红卡「再试一次」两个触点，`manual_backup_entry` 是死文案——所以本卡
       真正修的是"在失败红卡上反复点再试一次而永远好不了"。
       247/247 + 27 条反证全红。
-- [x] DESK-09 + DESK-10 桌面壳吞掉 daemon 的真实错误，且导出的日志带不走它 — **2026-08-25（commit 1e1359f，真机确认 owed）**:
-      验收人误装 0.3.0 的包，daemon 因迁移降级反复启动失败，stderr 上重复 8 次
-      `Error: migration: migration 2 was previously applied but is missing in the resolved migrations`。
-      界面只给「后台服务没有在 10 秒内就绪」，「导出日志」给回一个 489 字节、
-      只含一条四天前 diag 事件的 zip——**排查因此在 dmg 布局/只读卷/Gatekeeper/TCC
-      上绕了很久**。两条根因各自成卡：①向导把 daemon 的 stderr 整个丢掉，把
-      **超时当成了结论**；②`export_logs` 是 daemon 的 IPC 方法，**daemon 挂着
-      时导出按钮压根不工作**，而那正是最需要日志的场景。
-      修法：`daemon_err_offset` + `daemon_startup_error` 两个命令——**启动前记
-      stderr 长度，超时后只读新增字节**（launchd 的 `.err` 是 append 的，不记
-      偏移就会把几天前的旧错误当成这次的原因）；`export_logs_bundle` 把导出改成
-      桌面壳本地组装，daemon 那部分降级为可选补充（不可达 → `daemon-unreachable.txt`，
-      zip 照出）。日志路径只认 plist 的 `StandardOutPath`/`StandardErrorPath`，
-      不硬编码 `~/Library/Logs`；脱敏加了长 hex 掩码（NodeId/配对令牌只出前缀）。
-      nextest 319/319 + src-tauri 17/17 + vitest 31/31，两条反证真跑变红。
-      ⚠️ **两卡是同一场事故的两面**：一个让错误当场可见，一个让错误可被带走。
-      LaunchAgent 是 macOS 专属，本轮只把 macOS 做对，不为未定平台预留抽象。
+- [x] DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 — **2026-08-25（commit 1e1359f + 0e0521f，真机确认 owed）**:
+      验收人误装 0.3.0 的包，daemon 因迁移降级反复启动失败，按「导出日志」发来
+      求助的 zip **只有 489 字节、一条四天前的 diag 事件**，而真实错误
+      （`migration 2 was previously applied but is missing in the resolved migrations`）
+      一直躺在 LaunchAgent 的 `.err` 里、重复了 8 次。根因两层：①包里只有
+      `diag_events.json` + `devices.json`，没有 daemon 的进程日志、没有版本号、
+      没有配置；②`export_logs` 是 **daemon 的 IPC 方法**，daemon 起不来时这个
+      按钮压根不工作——而那正是最需要日志的场景。
+      修法：新增 `export_logs_bundle`（桌面壳本地组装），收集与落盘拆出
+      `assemble_export`，daemon 那部分以 `Result` 传入——**Err 不是失败路径**，
+      只是少三份文件、多一份 `daemon-unreachable.txt`，zip 照出。日志路径只认
+      plist 的 `StandardOutPath`/`StandardErrorPath`（不硬编码 `~/Library/Logs`）；
+      daemon 不可达时版本号问内置服务 `--version`（真机事故里正是这一句拿到真相）；
+      daemon 侧 `export_logs` 补 `audit.json`；脱敏加长 hex 掩码（NodeId/配对令牌
+      只出前缀），新加的文件全过同一道 scrub。文件名与落盘位置不变
+      （`<库目录>/ppf-logs.zip`——验收人已经习惯了）。
+      nextest 319/319 + src-tauri 14/14 + vitest 24/24 + vite build 207 modules；
+      反证（把不可达分支改回 `return Err`）真跑变红。
+      ⚠️ LaunchAgent 是 macOS 专属，本轮只把 macOS 做对，不为未定平台预留抽象。
+      ⚠️ 同一场事故的另一面（向导把真实启动错误吞成「没有在 10 秒内就绪」）
+      = `DESK-09`，**2026-08-25 撤出批次、推后**（不挡回归），卡为 ⬜ 未开工。
 - [x] DESK-08 活动流用时间戳当 each key，同毫秒的审计撞键把整块打挂 — **2026-08-21（真机确认 owed）**:
       用户控制台刷屏 `each_key_duplicate: 1787292449250:asset.removed_external`。
       一次在 Finder 删 5 张 → WATCH-02 的对账把 5 条 `asset.removed_external`

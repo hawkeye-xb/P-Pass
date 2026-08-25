@@ -17,7 +17,6 @@
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [DESK-09](../.claude/cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 拿旧版本包打开新版库（daemon 因迁移不兼容起不来）→ 向导界面必须出现 `migration ... missing in the resolved migrations` 这行原文 + 「装回新版本」那句人话 | **L1** |
 | [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | ①daemon 正常时点「导出日志」→ 包里 9 个文件都在；②daemon 挂着时点导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip 不许出现你的用户名 | **L1** |
 | [MOB-32](../.claude/cards/MOB-32-calibration-wipes-a-live-backup-session.md) | 大批量备份传到一半打开 App，照片一张都不能丢 | **L0** |
 | [MOB-29](../.claude/cards/MOB-29-confirmed-store-lies-between-backups.md) | 访达删照片 → 桌面端出警告 + 手机端出「正在重传」通知，且照片真的被传回来（顺带：手机「已备份」数字不再在两次备份之间说谎） | **L1** |
@@ -53,15 +52,16 @@
 |---|---|---|---|
 | 1 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 | 2 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
-| 3 | [CI-03](../.claude/cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁，格式漂移无人发现（⚠️ 要动 workflows，先确认由谁改） | L0 |
-| 4 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
-| 5 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 四条备份通道可并行跑两个 BackupWorker，重复推字节（浪费不损坏） | L2 |
-| 6 | [LINT-01](../.claude/cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
-| 7 | [CI-02](../.claude/cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制（~300 Linux 分钟/月白烧） | L3 |
-| 8 | [REL-03](../.claude/cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | bump-version.sh 静默跳过桌面 crate 版本，漂移断言看不见 | L2 |
-| 9 | [REL-04](../.claude/cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
-| 10 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | 中断待确认时连前台同步也被冻住（一个 return 挡了两件事） | **L1** |
-| 11 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
+| 3 | [DESK-09](../.claude/cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 向导把 daemon 的真实启动错误吞成「没有在 10 秒内就绪」（2026-08-25 撤出关键路径、推后） | **L1** |
+| 4 | [CI-03](../.claude/cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁，格式漂移无人发现（⚠️ 要动 workflows，先确认由谁改） | L0 |
+| 5 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
+| 6 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 四条备份通道可并行跑两个 BackupWorker，重复推字节（浪费不损坏） | L2 |
+| 7 | [LINT-01](../.claude/cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
+| 8 | [CI-02](../.claude/cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制（~300 Linux 分钟/月白烧） | L3 |
+| 9 | [REL-03](../.claude/cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | bump-version.sh 静默跳过桌面 crate 版本，漂移断言看不见 | L2 |
+| 10 | [REL-04](../.claude/cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
+| 11 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | 中断待确认时连前台同步也被冻住（一个 return 挡了两件事） | **L1** |
+| 12 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 
 ## 四、backlog（你明确说过先不做）
 
