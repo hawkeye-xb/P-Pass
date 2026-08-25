@@ -1,6 +1,35 @@
-# NEXT — 当前状态与下一步（2026-08-23，CI 重构批次）
+# NEXT — 当前状态与下一步（2026-08-25，进度盘点 + 文档漂移清理）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-25：主路径 = 真机验收（当前状态）
+
+代码侧健康：`just ci` 本机 **316 tests passed** 全绿，上线三件必做
+（`BLOB-01` / `MOB-19` / `E2E-02`）已清完。**卡住的不是代码，是验收**
+——十几张卡停在「代码绿、欠验收人一条」，见 `docs/CHECKLIST.md` §一。
+
+本轮做的（纯文档/卡片）：
+- 修三处文档漂移：CLOUDFLARE_API_TOKEN 假挂账（实际两周前就在位）、
+  `ROADMAP:7` 的 Now 行（还停在 M1）、`SITE-02` 降级 L3 进 backlog。
+- 按模板开两张一直挂在「未开卡」里的卡：`MOB-33`（四通道可并行跑两个
+  BackupWorker）、`LINT-01`（Android lint 不在 CI 里）。
+- 清 5 个已合入 main 的 `worktree-agent-*` 本地分支 + 0 差异的
+  `site/site-02`。
+
+**等用户（本轮新增）**：
+1. **下载安装包做真实模拟测试**被 `gh` 认证挡住——本机 `gh auth status`
+   = 未登录，仓库私有，匿名拉 `dogfood` release 返回 404。用户跑一次
+   `gh auth login` 后即可 `gh release download dogfood`。
+   本地 release 构建不是替代方案（「凭据只在 GitHub」红线）。
+2. **旧库副本**（BLOB-01 遗留，1.1G）：独有的 9 个文件（3 张真照片 +
+   6 个测试产物，共 11M）已救到库外暂存目录；移入废纸篓这一步被权限
+   拦下，需用户自己执行（命令见本轮对话）。
+3. **ci-workers 3 个 Waiting run**：旧的 Cancel、最新一个批一次以验证
+   部署链路（不占 runner、不计费，30 天自动作废）。
+4. 待开卡：ci-workers.yml 的 paths 去掉自触发；`cancel-in-progress`
+   收不掉 `Waiting` run 的堆积问题。
+
+---
 
 ## 〇、2026-08-23：CI 重构（当前状态）
 
@@ -1346,7 +1375,7 @@ android 全量绿（TriggerPolicyTest 11/11）+ WebFetch 官方文档核对检�
 
 **商业线**：BIZ-00 已入 P-Pass-buisness 私仓 biz/（不能公开的内容一律进该仓，规则固化）。
 
-**等用户**：①iroh issue 发不发/谁发；②GitHub secret 加 CLOUDFLARE_API_TOKEN（窄权限，见 CI-01 红线）→ R2 镜像+workers 自动部署即启用。
+**等用户**：①iroh issue 发不发/谁发；②~~GitHub secret 加 CLOUDFLARE_API_TOKEN~~ **已完成（2026-08-25 核实：Repository secrets 里 `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` 均在位）**。
 
 ## 〇、2026-08-12 链 2 批次（Salamira）：RET-01 → SENT-01 → DOG-02b → DESK-04 → CI-01 全部完成
 

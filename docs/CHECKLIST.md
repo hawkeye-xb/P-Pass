@@ -7,7 +7,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `.claude/local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后更新：**2026-08-22**
+> 最后更新：**2026-08-25**
 
 ---
 
@@ -42,8 +42,7 @@
 | # | 事项 | 选项 / 卡 |
 |---|---|---|
 | 1 | **「已备份」数字口径**（MOB-29 墓碑的前置）。真机已证实：手动删的照片下一轮备份会原样回来，墓碑必须做 | [MOB-29](../.claude/cards/MOB-29-confirmed-store-lies-between-backups.md)：(A) 只数库里真有的（倾向）/ (B) 含墓碑 |
-| 2 | **SITE-02 三篇博文**：草稿完成，待审稿后发布 | [SITE-02](../.claude/cards/SITE-02-first-posts.md) |
-| 3 | 三个本机问题（「更改…」按钮现象、常驻服务向导、旧数据副本删不删） | 见 `.claude/local-state.md`（本机文件） |
+| 2 | 两个本机问题（「更改…」按钮现象、常驻服务向导） | 见 `.claude/local-state.md`（本机文件） |
 
 ## 三、待做队列（无阻塞，可直接开工）
 
@@ -52,7 +51,9 @@
 | 1 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 | 2 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
 | 3 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
-| 4 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
+| 4 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 四条备份通道可并行跑两个 BackupWorker，重复推字节（浪费不损坏） | L2 |
+| 5 | [LINT-01](../.claude/cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
+| 6 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 
 ## 四、backlog（你明确说过先不做）
 
@@ -63,6 +64,7 @@
 | WATCH-06 | 相册 = 目录 | 卡里写明不要用软链物化视图 |
 | MOB-25 / MOB-26 | 查看页尺寸显示 0×0 / 缺翻页缩放 | 2026-08-19 拍板暂不做 |
 | MOB-18 | force-stop 检测 | 已被 MOB-28 取代 |
+| [SITE-02](../.claude/cards/SITE-02-first-posts.md) | 首批三篇博文（草稿已完成） | 2026-08-25 降级：「优先级没这么高，回头统一审稿」——不再催审，不算上线阻塞 |
 
 **范围红线**：文件备份 / 文件同步整个不在范围内，**只做图片**。
 
@@ -75,6 +77,17 @@
 调管线只用 workflow_dispatch，不打测试 tag（tag 纪律见根目录 CLAUDE.md）。
 
 Apple 签名补齐需你本人操作（可选）：`docs/runbook/h02-apple-signing.md`。
+
+**Secrets 实况（2026-08-25 核实）**：`CLOUDFLARE_API_TOKEN` /
+`CLOUDFLARE_ACCOUNT_ID` / `ANDROID_KEYSTORE_*` / `UPDATE_SIGNING_KEY` /
+`APPLE_*` **全部在位**。旧文档里「等用户加 CLOUDFLARE_API_TOKEN」的挂账已作废。
+
+**ci-workers 审批门待办**：`environment: workers-prod` 让部署 job 停在
+`Waiting` 等 owner 批准——**不占 runner、不计费**，挂 30 天自动作废。当前
+3 个 Waiting run 全部由「改 ci-workers.yml 自己」触发（paths 包含自身），
+worker 代码零改动。建议：旧的 Cancel，最新一个批一次以验证部署链路。
+待开卡：① paths 去掉自触发；② `cancel-in-progress` 收不掉 `Waiting` run，
+每次 push 会再堆一个。
 
 ## 六、相关文档
 

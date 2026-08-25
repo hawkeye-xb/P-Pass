@@ -4,10 +4,14 @@
 > 里程碑状态的唯一权威来源，每张卡完成即更新。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
-**Now / 当前位置**: **M1 closed** (verify-m1: 167 tests + dogfood
-ALL GREEN + desktop bundle, 2026-07-31) → next is M2 Android toward
-family dogfood. **M1 已收官**（总验收三连全绿）→ 下一步 M2 手机端，
-直奔自家狗粮。
+**Now / 当前位置**（2026-08-25）: M0/M1 closed; M2 Android shipped and
+in real-device dogfood; M3 hardening code all landed. Launch blockers
+cleared (`BLOB-01` disk 2.05x→1.00x, `MOB-19`, `E2E-02`). The critical
+path is now **real-device acceptance** — dozens of cards sit at "code
+green, owner verification owed". `just ci` green (316 tests, 2026-08-25).
+**当前位置**：M0/M1 已收官；M2 手机端已上真机狗粮；M3 硬化代码全部落地。
+上线三件必做已清完。**主路径已从「写代码」转为「真机验收」**——几十张卡
+停在「代码绿、欠验收人一条」。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 
@@ -994,7 +998,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [x] SENT-01 手机盯电脑哨兵 — **merged 2026-08-12 (29af0ff)**: 搭后台任务便车（非心跳）记 daemon 可达性；判定纯函数四条件（确认可达过/距今>72h/期间有失败尝试/去重窗口 72h）；「3 天没连上电脑了——照片没丢」走 UX-02 通道 id 2028。android 150/150。挂账（真机）：mock 全失败跨阈值→通知一次不重复、恢复可达清零。
 - [x] DOG-02b 契机式白名单提醒 — **merged 2026-08-12 (a0792fe)**: 独立 store + 纯函数五条件（未加白/有失败/≤2天/失败后无成功/去重 72h）；成功一轮清零；通知进 App 见 DOG-02 Home 引导条。android 161/161。挂账（真机）：mock 条件满足→通知+点开引导、加白后不再通知。
 - [x] DESK-04 桌面向导低成本对齐 — **merged 2026-08-12 (9072735)**: 文案按产品语言过一遍（去「常驻服务/访达」等词）；step3 接 T4 新配对流（daemon-event 事件驱动 + 3s 轮询兜底，pending 出现即时切确认列表）；全 token 化。vite build 绿。挂账（真机）：三步截图对照、走完向导→扫码→确认列表即时出现。
-- [x] CI-01 流水线分块重构 — **merged 2026-08-12 (5b8cb88)**: pr.yml 拆三域 workflow（ci-rust/ci-android/ci-desktop，paths 门控+concurrency 取消，纯 docs 零 CI）；release.yml platforms dispatch 输入（tag 恒全量）；T-070 scenarios 并轨 e2e nightly+tag；CF 联动门控（R2 镜像 ppf-dl/dl.p-pass.hawkeye-xb.com + ci-workers 自动部署，CLOUDFLARE_API_TOKEN 未就位跳过）；CLAUDE.md 底线①口径更新。actionlint 8 workflow 零告警。等用户：GitHub Secrets 加 CLOUDFLARE_API_TOKEN。
+- [x] CI-01 流水线分块重构 — **merged 2026-08-12 (5b8cb88)**: pr.yml 拆三域 workflow（ci-rust/ci-android/ci-desktop，paths 门控+concurrency 取消，纯 docs 零 CI）；release.yml platforms dispatch 输入（tag 恒全量）；T-070 scenarios 并轨 e2e nightly+tag；CF 联动门控（R2 镜像 ppf-dl/dl.p-pass.hawkeye-xb.com + ci-workers 自动部署，CLOUDFLARE_API_TOKEN 未就位跳过）；CLAUDE.md 底线①口径更新。actionlint 8 workflow 零告警。**2026-08-25 核实：`CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` 已在 Repository secrets（2 weeks ago），门控条件早已满足——此处「等用户」已作废，勿再照搬。**
 - [x] DESK-05 桌面走查反馈三项 — **merged 2026-08-12**: ①向导第一步默认填充路径（`configuredLibraryDir || defaultDir`）+ 路径 ≠ 默认时旁挂「↺ 回到默认」；②活动记录改真表格（设备/事件/时间三列，ingest.* 逐文件行过滤，auditLine 拆 auditWho/auditText）；③照片墙 staleness 修复（activity.appended/device.changed 事件重置 photos 强制重拉——备份落地后照片库立刻出新照片）。vite build 绿。挂账（真机）：向导第一步默认填充观感、活动表格布局、备份后照片墙自动刷新。
 - [x] DESK-07 桌面壳 Tailwind + shadcn-svelte 迁移（**第一轮：地基 + 家人与设备页**）— **merged 2026-08-14 (5507cf9)**（用户拍板拆多轮）：tailwindcss@4 + @tailwindcss/vite + shadcn-svelte 1.5（Vega preset）；`src/app.css` 用 `@theme inline` 把 Tailwind 工具类全部桥接到 tokens.css 的 `var(--pp-*)`（零平行调色板）；「家人与设备」页换 Button/Card + 工具类，19 项像素基准 DOM 实测迁移前后全等 + 反证有效 + 其余四页像素级 identical（preflight 两个副作用已在 base 层还原）。**其余页面（总览/照片/活动记录/设置）未迁，排后续卡**。挂账（真机）：Tauri 实际窗口观感。
 - [ ] NAME-01 设备改名（L0 排队尾，可砍）
@@ -1005,6 +1009,6 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 > Landing + blog 对外阵地，与 app 主线并行。内容 zh 先行，en 随开源节奏补。
 
 - [x] SITE-01 站点脚手架（landing v1 + blog 骨架 + RSS + GH Pages 部署）— **code landed 2026-08-11**: Astro 5 纯静态，tokens.css 构建期从 tokens.json 生成（脚本断言一致），图标从 docs/design/2026-08-11-icon-v1/ 同步，零 tracker（CI 断言）。site.yml paths 过滤 `site/**` 与主 CI 隔离。挂账：Pages 部署三路由 200 + Lighthouse ≥90 + DNS CNAME 改指 hawkeye-xb.github.io（当前指向旧 p-pass-landing.pages.dev 占位）。
-- [ ] SITE-02 首批三篇博文（定位故事 / 图标九轮 / IPC-02 重构）— 草稿完成待用户审稿，审后去 draft 发布
+- [ ] SITE-02 首批三篇博文（定位故事 / 图标九轮 / IPC-02 重构）— 草稿完成。**优先级 L3（2026-08-25 用户降级：「优先级没这么高，回头统一审稿」）**——不再列为上线阻塞，不主动催审；用户择期统一审完再去 draft 发布
 - [ ] DNS: p-pass.hawkeye-xb.com CNAME → hawkeye-xb.github.io（CF zone 65dec62bc61b00e5d22fedc40b774bdc）
 - [ ] T-073 one-page site + README polish（M4 原条目，站点线落地后待并轨）
