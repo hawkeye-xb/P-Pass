@@ -33,11 +33,29 @@ fn same_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// 严格大于在位实例的版本（patch +1）。
+/// 严格大于在位实例的版本（数字核心的 patch +1）。
+///
+/// ⚠️ 必须先剥掉预发布后缀再解析。此前直接 `split('.')` 全段 parse
+/// 成 u64，在 `0.4.0-test.1` 这类版本上最后一段是 `0-test`，parse 必
+/// panic——**test 通道那条跑道上 CI 恒红**（2026-08-25 出 0.4.0-test.1
+/// 时炸出来，三个用例同时挂）。预发布是发版流程的常规路径，不是边缘
+/// 情况：`tools/bump-version.sh` 的 SemVer 校验本来就接受 `-test.N`。
+///
+/// 剥后 patch +1 仍然严格更新：`0.4.0-test.1` → `0.4.1`，既大于数字
+/// 核心，也大于任何同核心的预发布（正式 > 预发布，与 daemon 的
+/// `version_cmp` 同语义）。
 fn newer_version() -> String {
-    let mut parts: Vec<u64> = env!("CARGO_PKG_VERSION")
+    bump_patch(env!("CARGO_PKG_VERSION"))
+}
+
+/// 剥预发布后缀 → patch +1。提成纯函数是为了能被下面那个钉子直接测到
+/// ——挂在 `CARGO_PKG_VERSION` 上的话，版本一旦回到纯数字三段，这个
+/// 缺陷就又藏回去了，下次出 `-test.N` 再炸一遍。
+fn bump_patch(v: &str) -> String {
+    let core = v.split(['-', '+']).next().expect("split 至少一段");
+    let mut parts: Vec<u64> = core
         .split('.')
-        .map(|p| p.parse().expect("CARGO_PKG_VERSION 是纯数字三段"))
+        .map(|p| p.parse().expect("版本的数字核心是纯数字三段"))
         .collect();
     *parts.last_mut().expect("非空") += 1;
     parts
@@ -45,6 +63,23 @@ fn newer_version() -> String {
         .map(u64::to_string)
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// 钉子：预发布版本不许再让 [bump_patch] panic（2026-08-25 回归）。
+#[test]
+fn bump_patch_survives_prerelease_versions() {
+    assert_eq!(bump_patch("0.4.0"), "0.4.1", "纯数字三段");
+    assert_eq!(bump_patch("0.4.0-test.1"), "0.4.1", "test 通道的常规版本");
+    assert_eq!(bump_patch("1.0.0-rc1"), "1.0.1", "无点号的预发布后缀");
+    assert_eq!(bump_patch("0.4.0+build.7"), "0.4.1", "构建元数据后缀");
+    // 产出必须是纯数字三段——它要喂给 daemon 的 version_cmp。
+    let out = bump_patch(env!("CARGO_PKG_VERSION"));
+    assert!(
+        out.split('.').all(|p| p.parse::<u64>().is_ok()),
+        "本 crate 当前版本 {} 推出的 newer={} 不是纯数字三段",
+        env!("CARGO_PKG_VERSION"),
+        out
+    );
 }
 
 /// 严格小于任何真实发布版本。
