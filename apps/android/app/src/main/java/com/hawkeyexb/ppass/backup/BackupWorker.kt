@@ -282,8 +282,27 @@ fun scheduleAutoBackup(context: Context) {
  *  这里只做一次幂等的存在性确认。 */
 fun rescheduleAutoBackup(context: Context) {
     enqueueAutoBackup(context, ExistingPeriodicWorkPolicy.REPLACE)
-    ensureMediaWatch(context)
+    if (mayRearmWatchIncidentally(context)) ensureMediaWatch(context)
 }
+
+/** MOB-35 + MOB-28：**「顺带」的监听重挂**在中断待确认时一律不许发生。
+ *
+ *  MOB-35 放行了「用户在前台时的补捞」，于是那趟 work 会跑到 `doWork` 的
+ *  `finally`，而那里有一句幂等的 `ensureMediaWatch`——后果是：用户
+ *  force-stop、提示还挂着、一次「恢复」都没点，**后台监听自己回来了**，
+ *  MOB-28 的红线当场破。同款第二处是 [rescheduleAutoBackup]（改备份设置
+ *  那条路径）。
+ *
+ *  这个门**只管顺带的重挂**。用户点「恢复备份」走的是
+ *  `resumeAfterInterruption` → [scheduleAutoBackup]，不经过这里——它是
+ *  MOB-28 定的唯一入口，必须无条件生效。
+ *
+ *  ⚠️ 发现经过：MOB-35 第一版只拆了 `MainActivity` 那个 `return` 就报绿，
+ *  漏了这两处。单元测试也没抓到——它们断言的是那个 `LaunchedEffect` 块，
+ *  而破线发生在下游 work 的 `finally` 里。**闸门必须立在每一条能重挂的
+ *  路径上，缺一处就等于没有**（MOB-28 卡面原话，这次轮到我踩）。 */
+internal fun mayRearmWatchIncidentally(context: Context): Boolean =
+    !BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged
 
 private fun enqueueAutoBackup(context: Context, policy: ExistingPeriodicWorkPolicy) {
     val settings = BackupSettings(context.filesDir).load()
@@ -651,7 +670,11 @@ class BackupWorker(
                 // ⚠️ 这里绝不能再做基于时间/批次大小的补捞判断。旧实现
                 // （catchUp = batchSize > 0）是在系统之外自己造队列，用户
                 // 定调："你强行用时间来做判断的话，是不太合适的。"
-                ensureMediaWatch(ctx)
+                //
+                // MOB-35：门控见 [mayRearmWatchIncidentally]。MOB-35 放行前台
+                // 补捞之后，这句「顺带的存在性确认」会在中断待确认时把监听
+                // 悄悄装回去——用户一次「恢复」都没点，MOB-28 红线就破了。
+                if (mayRearmWatchIncidentally(ctx)) ensureMediaWatch(ctx)
                 // MOB-29: 校准搭这一趟后台任务的便车——**无论这趟怎么结束**
                 // （早退、异常、被系统取消、setForeground 直接被拒）都补一次。
                 //

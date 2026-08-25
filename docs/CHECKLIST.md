@@ -18,6 +18,7 @@
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | ①daemon 正常时点「导出日志」→ 包里 9 个文件都在；②daemon 挂着时点导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip 不许出现你的用户名 | **L1** |
+| [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | force-stop 后重开 App，前台该传就传（后台仍等你点恢复） | **L1** |
 | [MOB-32](../.claude/cards/MOB-32-calibration-wipes-a-live-backup-session.md) | 大批量备份传到一半打开 App，照片一张都不能丢 | **L0** |
 | [MOB-29](../.claude/cards/MOB-29-confirmed-store-lies-between-backups.md) | 访达删照片 → 桌面端出警告 + 手机端出「正在重传」通知，且照片真的被传回来（顺带：手机「已备份」数字不再在两次备份之间说谎） | **L1** |
 | [MOB-34](../.claude/cards/MOB-34-deleted-old-photos-never-re-uploaded.md) | 库里删 3 张**老**照片 → 不手动干预 → 它们自己回来，且「待备份 K」归零（⚠️ 先看卡里的「已知边界」判别法） | **L1** |

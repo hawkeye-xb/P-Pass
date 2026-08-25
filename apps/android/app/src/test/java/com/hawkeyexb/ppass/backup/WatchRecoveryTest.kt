@@ -203,13 +203,26 @@ class WatchRecoveryTest {
         // 用户实测两次都栽在这条路径上："还是没有提示，强行停止立即就恢复了。"
         // Application 的对账和 MainActivity 的 LaunchedEffect 是两条独立入口，
         // 闸门缺一处就等于没有。
+        //
+        // MOB-35（2026-08-25）改了这条断言的**形状**，没改它守的**不变量**：
+        // 原来断言的是 `if (backupInterrupted) return@LaunchedEffect` 这个具体
+        // 写法，但那一个 return 同时挡住了「重挂后台监听」（该挡）和「用户在
+        // 前台的补捞」（不该挡）。用户定调："前台情况下，都无法上传，是不是
+        // 不合理呢？"——前台 = 人在场 = 该传。
+        // 于是断言改成盯不变量本身：**重挂必须受中断标志门控**。谁把门控去掉
+        // （写成裸的 scheduleAutoBackup），这条照样红。
         val s = src("MainActivity.kt")
         val effect = sliceBetween(s, "LaunchedEffect(backupInterrupted) {", "}")
         assertTrue(
-            "打开 App 的重挂路径必须被中断标志拦住",
-            effect.contains("if (backupInterrupted) return@LaunchedEffect"),
+            "打开 App 不许悄悄重挂后台监听——重挂必须受中断标志门控",
+            effect.contains("if (!backupInterrupted) scheduleAutoBackup"),
         )
-        assertTrue("拦住之后才允许重挂", effect.contains("scheduleAutoBackup(context)"))
+        // 反面：块内不许有「命中中断标志就整块早退」的写法，那会把前台补捞
+        // 一起冻住（MOB-35 回归）。
+        assertFalse(
+            "不许整块早退——那会连前台补捞一起冻住（MOB-35）",
+            effect.contains("if (backupInterrupted) return"),
+        )
         // 恢复的唯一入口：提示卡上的按钮。
         assertTrue("必须接上恢复入口", s.contains("resumeAfterInterruption(context)"))
     }
