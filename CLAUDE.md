@@ -68,6 +68,14 @@
   Android release 的 lint 炸而 CI 钉 17 没事（`BUILD-01`）。
 - 升级工具链是**一次显式提交**：改钉住的那一行 → 更新本地 → `just ci` →
   修新版本顶出来的 lint，标题写明升到哪个版本。
+- ⚠️ **`./gradlew` 找不到 Java 时退出码是 0**（2026-08-25 实测：非交互 shell
+  里没有 `JAVA_HOME`，只打印 "Unable to locate a Java Runtime" 就以 0 退出）。
+  于是「跑了 Android 单测、退出码 0」会被当成全绿，而一个测试都没跑。
+  **报 Android 测试绿必须给出测试计数**（从
+  `apps/android/app/build/test-results/testDebugUnitTest/*.xml` 数，
+  并核对 XML 时间戳是本次生成的），不许只凭退出码。
+  本机跑法：`export JAVA_HOME=/opt/homebrew/opt/openjdk`（当前是 JDK 25，
+  单测无碍；release lint 会挂，那是 `BUILD-01`，CI 钉的版本不受影响）。
 
 ## 提交与构建纪律
 
