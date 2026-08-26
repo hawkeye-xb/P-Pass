@@ -55,6 +55,7 @@
 | # | 卡 | 一句话 | 级别 |
 |---|---|---|---|
 | 0a | [MOB-38](../.claude/cards/MOB-38-foreground-catchup-never-fires-on-resume.md) | **回到前台不补捞**——切去相机再切回来，那张照片没人管 | **L0** |
+| 0c | [MOB-39](../.claude/cards/MOB-39-triggers-are-data-pipeline-is-one.md) | **触发层抽象**：触发是数据、管线只有一条——治「每次新增触发都漏接一处」这个病根（排 MOB-38 之后） | **L1** |
 | 0b | [UX-13](../.claude/cards/UX-13-no-resume-affordance-after-pause.md) | 暂停后按钮消失，首页没有续传入口（UX-01 卡面语义未实现） | **L1** |
 | 1 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 | 2 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
