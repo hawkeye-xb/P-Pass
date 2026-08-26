@@ -250,6 +250,66 @@ fn stop_daemon() -> Result<(), String> {
     Ok(())
 }
 
+/// W1 (2026-08-26 real-box run): the updater's downloadAndInstall() was
+/// failing on Windows because `ppf-daemon.exe` — a resident background
+/// process the user never explicitly stopped (closing the main window
+/// only hides it to tray, by design; see the on_window_event handler
+/// below) — kept the installer from overwriting its own file. Same
+/// class of bug as the manual-reinstall report ("退出desktop app主进程，
+/// 有后台进程，无法覆盖安装"). Unlike stop_daemon(), this must NOT
+/// touch autostart registration — the update is expected to succeed
+/// and the daemon should come back exactly as before, not require the
+/// user to re-run the wizard. Frontend calls this before
+/// update.downloadAndInstall() and calls resume_daemon_after_update()
+/// after a successful install (see App.svelte checkForUpdate()).
+/// Best-effort: NOT finding a running daemon is not an error (nothing
+/// to pause), and this must never block the update attempt itself —
+/// downloadAndInstall() still runs even if this errors, so a stuck
+/// pause degrades to the pre-existing failure mode (caught, surfaced
+/// with a human-readable hint) instead of blocking updates entirely.
+#[tauri::command]
+fn pause_daemon_for_update() -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", "ppf-daemon"])
+            .output();
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "ppf-daemon.exe"])
+            .output();
+    }
+    Ok(())
+}
+
+/// Counterpart to pause_daemon_for_update(): re-spawn the (now updated
+/// on disk) daemon after the installer finishes, one-shot (no
+/// autostart touch — it was never unregistered). Best-effort; the
+/// frontend degrades to "restart the app" guidance if this fails,
+/// rather than silently leaving the daemon down after an update the
+/// user believes succeeded.
+#[tauri::command]
+fn resume_daemon_after_update() -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let sidecar = exe.parent().ok_or("no parent dir")?.join(if cfg!(windows) {
+        "ppf-daemon.exe"
+    } else {
+        "ppf-daemon"
+    });
+    if !sidecar.is_file() {
+        return Err(format!("找不到内置后台服务：{}", sidecar.display()));
+    }
+    std::process::Command::new(&sidecar)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("重新启动后台服务失败：{e}"))?;
+    Ok(())
+}
+
 /// DAE-04: 桌面壳更新后手动重启后台服务——杀掉当前运行的旧 daemon 进程，
 /// 靠 launchd KeepAlive（SuccessfulExit=false，crates/platform/src/macos.rs
 /// 注释：崩溃/被杀照样复活）自动拉起磁盘上已是新版本的同一个文件。
@@ -500,6 +560,8 @@ pub fn run() {
             write_config,
             start_daemon,
             stop_daemon,
+            pause_daemon_for_update,
+            resume_daemon_after_update,
             restart_daemon_process,
             export_logs_bundle
         ])
