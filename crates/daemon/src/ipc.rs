@@ -1140,7 +1140,7 @@ impl IpcServer {
                     serde_json::json!({
                         "ts": e.ts,
                         "kind": e.kind,
-                        "detail": e.detail.as_deref().map(|d| sanitize(d, &home)),
+                        "detail": e.detail.as_deref().map(|d| scrub(d, &home)),
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -1153,7 +1153,7 @@ impl IpcServer {
                         // Only a prefix — the full NodeId is not needed to
                         // discuss a support case.
                         "node_id_prefix": hex(&d.node_id[..4.min(d.node_id.len())]),
-                        "name": sanitize(&d.name, &home),
+                        "name": scrub(&d.name, &home),
                         "role": d.role.as_str(),
                         "revoked": d.revoked,
                     })
@@ -1174,7 +1174,7 @@ impl IpcServer {
                         "ts": r.entry.ts,
                         "action": r.entry.action,
                         "actor_prefix": r.entry.actor.as_ref().map(|a| hex(&a[..4.min(a.len())])),
-                        "detail": r.entry.detail.as_deref().map(|d| sanitize(d, &home)),
+                        "detail": r.entry.detail.as_deref().map(|d| scrub(d, &home)),
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -1245,6 +1245,47 @@ fn sanitize(s: &str, home: &str) -> String {
     s.replace(home, "<DATA>")
 }
 
+/// 长 hex 串（NodeId 全长 64 hex、配对令牌 24 hex）只留前 8 位。
+///
+/// DESK-10 真机验收的教训：脱敏必须按**值的形状**做，不能按字段名
+/// 白名单。`actor` 有前缀掩码，但 `detail` 里的 `rel_path` 本身就以
+/// 全长 NodeId 开头（库布局 `originals/<nodeid>/YYYY/MM/<file>`），
+/// 于是完整 NodeId 照样进了支持包。短 hex（端口号、小 id）不动。
+/// 与桌面壳 `daemon_logs::mask_long_hex` 同语义（ADR-012：桌面壳是
+/// 独立 workspace，不依赖业务 crate），靠导出包「不许有 ≥24 位连续
+/// hex」的测试锁死两侧。
+fn mask_long_hex(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while !rest.is_empty() {
+        let start = match rest.find(|c: char| c.is_ascii_hexdigit()) {
+            Some(i) => i,
+            None => break,
+        };
+        out.push_str(&rest[..start]);
+        let tail = &rest[start..];
+        let len = tail
+            .find(|c: char| !c.is_ascii_hexdigit())
+            .unwrap_or(tail.len());
+        let run = &tail[..len];
+        if len >= 24 {
+            out.push_str(&run[..8]);
+            out.push_str("…<masked>");
+        } else {
+            out.push_str(run);
+        }
+        rest = &tail[len..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 导出件的统一脱敏：家目录 + 长 hex。导出包里的每个字段都过这里，
+/// 不挑字段名。
+fn scrub(s: &str, home: &str) -> String {
+    mask_long_hex(&sanitize(s, home))
+}
+
 fn state_name(s: &DaemonState) -> &'static str {
     match s {
         DaemonState::OnlineDirect => "ONLINE_DIRECT",
@@ -1290,6 +1331,27 @@ mod tests {
         let s = "/Users/alice/Pictures/x.jpg failed";
         assert_eq!(sanitize(s, "/Users/alice"), "<DATA>/Pictures/x.jpg failed");
         assert_eq!(sanitize(s, ""), s, "no home known → unchanged");
+    }
+
+    /// DESK-10 补漏：导出脱敏按值的形状做——任何字段里的长 hex 都掩到
+    /// 前 8 位，短 hex 不动。
+    #[test]
+    fn scrub_masks_long_hex_anywhere_in_the_value() {
+        let node = "ab".repeat(32);
+        let s = format!("/Users/alice/x originals/{node}/2026/08/a.jpg");
+        let out = scrub(&s, "/Users/alice");
+        assert!(
+            out.starts_with("<DATA>/x originals/abababab…<masked>/"),
+            "{out}"
+        );
+        assert!(!out.contains(&node), "{out}");
+        // 短 hex（端口号之类）不动；前缀（8 hex）也在阈值之下。
+        assert_eq!(
+            mask_long_hex("port 41145 beef abababab"),
+            "port 41145 beef abababab"
+        );
+        // 24 位配对令牌也算长 hex。
+        assert!(mask_long_hex(&"c".repeat(24)).contains("cccccccc…<masked>"));
     }
 
     #[test]

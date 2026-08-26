@@ -448,7 +448,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       与失败红卡「再试一次」两个触点，`manual_backup_entry` 是死文案——所以本卡
       真正修的是"在失败红卡上反复点再试一次而永远好不了"。
       247/247 + 27 条反证全红。
-- [x] DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 — **2026-08-25（commit 1e1359f + 0e0521f，真机确认 owed）**:
+- [x] DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 — **2026-08-25（commit 1e1359f + 0e0521f，真机确认 owed）· 2026-08-26 真机验收打回脱敏一处、当日补齐（🟡 其余项仍等真机复验）**:
       验收人误装 0.3.0 的包，daemon 因迁移降级反复启动失败，按「导出日志」发来
       求助的 zip **只有 489 字节、一条四天前的 diag 事件**，而真实错误
       （`migration 2 was previously applied but is missing in the resolved migrations`）
@@ -469,6 +469,18 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       ⚠️ LaunchAgent 是 macOS 专属，本轮只把 macOS 做对，不为未定平台预留抽象。
       ⚠️ 同一场事故的另一面（向导把真实启动错误吞成「没有在 10 秒内就绪」）
       = `DESK-09`，**2026-08-25 撤出批次、推后**（不挡回归），卡为 ⬜ 未开工。
+      **2026-08-26 补漏（脱敏按值的形状做）**：真机验收 9 份文件齐、真日志在、
+      版本号对、家目录脱敏全过，**只有「NodeId 仍只出前缀」这条没达到**——
+      `audit.json` 里出了完整 64 位 NodeId。根因是**掩码按字段名做**：`actor`
+      有前缀掩码，`detail` 只过 `sanitize()`，而库布局是
+      `originals/<nodeid>/YYYY/MM/<file>`，`detail` 里嵌的 `rel_path` 本身就以
+      全长 NodeId 开头。改成按值的形状：daemon 侧 `mask_long_hex()`（≥24 位连续
+      hex → 前 8 位）+ `scrub()`，三个出包字段全过；`diag_events.json` 的
+      `detail` 经自查是同一个洞的另一半，一起修。桌面壳的 `build_bundle` 也不再
+      「原样搬」daemon 的 JSON——新壳配旧 daemon 会再漏一次，保证做在 bundle
+      边界上。既有那条 audit 测试的 fixture 里 `detail` 一个 hex 都没有，断言
+      空转；判据已换成「扫整个包里最长连续 hex 串，超 24 位就红」。
+      nextest 320 passed / src-tauri 15 passed，两侧反证真跑。
 - [x] DESK-08 活动流用时间戳当 each key，同毫秒的审计撞键把整块打挂 — **2026-08-21（真机确认 owed）**:
       用户控制台刷屏 `each_key_duplicate: 1787292449250:asset.removed_external`。
       一次在 Finder 删 5 张 → WATCH-02 的对账把 5 条 `asset.removed_external`

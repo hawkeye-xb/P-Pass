@@ -58,7 +58,8 @@ App 打开那次）都接了队列。
 插入点已核实：`BackupWorker.kt:770-772` 校准算出 `missing` 后紧接
 `removeMissing`——提示天然一次性，连去重窗口都不用做。
 
-**DESK-10 已实施（2026-08-25，commit 1e1359f + 0e0521f · 🟡 等真机验收）**：「导出日志」
+**DESK-10 已实施（2026-08-25，commit 1e1359f + 0e0521f · 2026-08-26 补漏 ·
+🟡 等真机复验）**：「导出日志」
 改成**桌面壳本地组装**——不再是 daemon 的 `logs.export` IPC，daemon 挂着时按钮
 照样出包（那正是最需要日志的场景）。包里含 daemon 的 stdout/stderr 日志（路径
 从 LaunchAgent plist 读，不硬编码）、App + daemon 版本号（daemon 不可达时问内置
@@ -70,6 +71,25 @@ App 打开那次）都接了队列。
 不挡回归本身）。欠**真机验收三条**：①daemon 正常时导出 → 包里 9 个文件都在；
 ②daemon 挂着时导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip
 不许出现用户名。
+
+⚠️ **2026-08-26 真机验收：不通过，脱敏漏一处 → 当日补齐，卡维持 🟡。**
+上面三条里的家目录脱敏、文件齐备、真日志、版本号**都合格**，只有验收标准
+第 5 条「NodeId 仍只出前缀」没达到——`audit.json` 里出了完整 64 位 NodeId。
+根因是**掩码按字段名做**：`actor` 有前缀掩码，`detail` 只过 `sanitize()`
+（家目录替换），而库布局是 `originals/<nodeid>/YYYY/MM/<file>`，`detail` 里嵌
+的 `rel_path` 本身就以全长 NodeId 开头。已改成按**值的形状**做：daemon 侧
+`mask_long_hex()`（≥24 位连续 hex → 前 8 位）+ `scrub()`，`export_logs` 三个
+出包字段全过；`diag_events.json` 的 `detail` 自查确认是同一个洞的另一半，
+一起修；桌面壳 `build_bundle` 里 daemon 给的 JSON 也不再「原样搬」而是过同一道
+scrub（新壳配旧 daemon 会再漏一次，保证做在 bundle 边界上）。既有那条 audit
+测试的 fixture 里 `detail` 一个 hex 都没有，断言空转——判据已换成「扫整个包里
+最长连续 hex 串，超 24 位就红」，不认字段名。
+本机证据：`just ci` nextest **320 passed**、src-tauri **15 passed**、vitest
+**24 passed**、clippy 零告警；两侧反证真跑（先加强测试后改代码，红打在真漏的
+代码上）。
+**真机复验还欠**：①daemon 挂着时导出仍出包；②9 份文件都在；③grep 整个 zip
+不许出现用户名；④顺手看一眼 `audit.json`/`diag_events.json` 里的路径应是
+`originals/<8位前缀>…<masked>/2026/08/…`。
 ⚠️ **本次 push 的 CI 结论欠一双眼睛**：受影响域 **ci-rust + ci-desktop**，
 本机 `gh auth status` 未登录（见下面「等用户」第 1 条的认证缺口），盯不到结论。
 本机等价证据：`just ci` nextest **319 passed**、src-tauri `cargo test --lib`

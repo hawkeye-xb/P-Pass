@@ -237,8 +237,20 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
         );
         entries.push(("daemon-unreachable.txt".into(), text.into_bytes()));
     }
+    // daemon 给的那几份 JSON 也过同一道 scrub，不"原样搬"——
+    // DESK-10 真机验收：旧 daemon 只给 actor 做前缀掩码，`detail` 里
+    // 嵌的 `originals/<nodeid>/…` 把全长 NodeId 带进了包。daemon 侧已
+    // 修，但版本可以歪（新壳 + 旧 daemon），所以保证做在 bundle 边界上：
+    // 出包的每个字节都过 scrub。≥24 位 hex 串不可能跨越 JSON 的语法
+    // 字符，掩码只发生在字符串值内部，JSON 仍然合法；8 位前缀
+    // （actor_prefix / node_id_prefix）在阈值之下，不受影响。
     for (name, bytes) in &i.daemon_entries {
-        entries.push((name.clone(), bytes.clone()));
+        let scrubbed = match std::str::from_utf8(bytes) {
+            Ok(text) => scrub(text, home).into_bytes(),
+            // 非 UTF-8 就别乱动（现在这三份都是 JSON，留个安全兜底）。
+            Err(_) => bytes.clone(),
+        };
+        entries.push((name.clone(), scrubbed));
     }
     entries
 }
@@ -386,6 +398,38 @@ mod tests {
         }
         // daemon 可达 → 不该有"不可达"说明文件。
         assert!(!names.contains(&"daemon-unreachable.txt"), "{names:?}");
+    }
+
+    /// DESK-10 补漏：daemon 给的 JSON 也要过 scrub——新壳配旧 daemon
+    /// 时，`detail` 里嵌的全长 NodeId 不许出包；8 位前缀要留着。
+    #[test]
+    fn daemon_entries_are_scrubbed_at_the_bundle_boundary() {
+        let node = "c4".repeat(32);
+        let audit = format!(
+            "[{{\"actor_prefix\": \"abababab\", \"detail\": \
+             \"外部删除 /Users/someone/lib/originals/{node}/2026/08/a.jpg\"}}]"
+        );
+        let i = BundleInputs {
+            home: "/Users/someone".into(),
+            app_version: "0.4.0".into(),
+            daemon_version: Some("0.4.0".into()),
+            plist_found: true,
+            daemon_entries: vec![("audit.json".into(), audit.into_bytes())],
+            ..Default::default()
+        };
+        let entries = build_bundle(&i);
+        let (_, bytes) = entries
+            .iter()
+            .find(|(n, _)| n == "audit.json")
+            .expect("audit.json 必须在包里");
+        let text = String::from_utf8(bytes.clone()).unwrap();
+        assert!(!text.contains(&node), "全长 NodeId 泄漏了: {text}");
+        assert!(text.contains("c4c4c4c4…<masked>"), "{text}");
+        // 8 位前缀在阈值之下，必须原样保留（不然支持案子没法对话）。
+        assert!(text.contains("\"actor_prefix\": \"abababab\""), "{text}");
+        assert!(!text.contains("/Users/someone"), "家目录也要脱敏: {text}");
+        // 仍是合法 JSON——掩码只发生在字符串值内部。
+        serde_json::from_str::<serde_json::Value>(&text).expect("scrub 后仍是合法 JSON");
     }
 
     // 脱敏口径与 devices.json 一致：NodeId / 配对令牌只出前缀。
