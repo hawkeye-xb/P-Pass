@@ -2,7 +2,7 @@
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
 
-## 〇、2026-08-26（收口）MOB-37 已实施（commit PENDINGSHA · 🟡 等真机验收）
+## 〇、2026-08-26（收口）MOB-37 已实施（commit 94574b1 · 🟡 等真机验收）
 
 重传告知不再只活在一条系统通知里：状态**落盘**（新 `backup/ReuploadNotice.kt`）、
 App 内一条可 acknowledge 的提示读的就是盘上状态、**通知不重试**（只在
@@ -11,7 +11,8 @@ acknowledged→unacknowledged 的跃变时发一条）。两条校准门都落�
 看着 App）。张数记 hash 并集不是累加（MOB-33 并发双发不许把 3 张报成 6 张）。
 
 - 绿：Android **40 类 / 302 tests / 0 failures**（`--rerun-tasks`，XML 时间戳
-  本次生成）+ `assembleDebug`。只动 `apps/android/**` → 受影响 CI 域只有
+  本次生成）+ `assembleDebug`；rebase 到 `MOB-33` 之上后重跑 **41 类 /
+  310 tests / 0 failures** + `assembleDebug`。只动 `apps/android/**` → 受影响 CI 域只有
   **ci-android**（`crates/`、`assets/`、`apps/desktop/` 一行未动，未跑 `just ci`）。
 - 反证真跑：去掉落盘只发通知 → 5 条红（含「通知炸了 `removeMissing` 就被跳过 →
   下一轮又发一条」这条链），摘录在卡里。
