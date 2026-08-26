@@ -36,7 +36,13 @@
     "externalBin": [
       "binaries/ppf-daemon"
     ],
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "windows": {
+      "nsis": {
+        "languages": ["SimpChinese", "English"],
+        "installerHooks": "windows/installer-hooks.nsh"
+      }
+    }
   },
   "plugins": {
     "updater": {
