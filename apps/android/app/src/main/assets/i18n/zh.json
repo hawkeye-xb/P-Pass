@@ -45,6 +45,7 @@
   "ui.update_available": "发现新版本 {version}，是否下载并安装？",
   "ui.update_installed": "更新已安装，请重启应用以生效。",
   "ui.update_failed": "更新失败：{err}",
+  "ui.update_failed_file_locked": "更新失败：有后台进程仍占用着程序文件。请先完全退出 P-Pass（右键点系统托盘图标，选「停止后台服务」），再重试更新。",
   "ui.restart_service": "重启后台服务",
   "ui.restart_service_btn": "立即重启",
   "ui.restarting_service": "正在重启…",

@@ -45,6 +45,7 @@
   "ui.update_available": "Update {version} available — download and install?",
   "ui.update_installed": "Update installed — restart the app to apply it.",
   "ui.update_failed": "Update failed: {err}",
+  "ui.update_failed_file_locked": "Update failed: a background process is still holding the app's files. Please close P-Pass completely (right-click the tray icon and choose \"Stop background service\"), then try updating again.",
   "ui.restart_service": "Restart background service",
   "ui.restart_service_btn": "Restart now",
   "ui.restarting_service": "Restarting…",

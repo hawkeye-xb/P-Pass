@@ -81,6 +81,22 @@
 
   let wizard = $state(null); // null=检测中, {configured, default_dir}
   let starting = $state(false);
+  // W1 (2026-08-26 real-box run): the update flow pauses ppf-daemon.exe
+  // before downloadAndInstall() (see checkForUpdate() below) so the
+  // Windows installer can overwrite its file — but NSIS's silent
+  // installer terminates the calling process itself (CheckIfAppIsRunning
+  // macro) partway through, so the resume call queued right after
+  // downloadAndInstall() may never run: the shell that would call it is
+  // dead. Rather than depend on that one line of JS surviving, refresh()
+  // below self-heals on every tick — if the daemon is unreachable but a
+  // config already exists (post-wizard steady state, not "user hasn't
+  // finished onboarding yet"), try resuming it once per cooldown window.
+  // Silent: this must never surface a dialog on every 60s poll for a
+  // machine that's genuinely offline for another reason (resume_daemon_
+  // after_update itself no-ops safely if the daemon is already up,
+  // thanks to the single-instance claim protocol).
+  let lastSelfHealAttempt = 0;
+  const SELF_HEAL_COOLDOWN_MS = 30000;
 
   async function checkWizard() {
     wizard = await invoke("wizard_state");
@@ -227,6 +243,23 @@
     } catch (e) {
       online = false;
       status = null;
+      // Self-heal: only if onboarding already completed (wizard===null
+      // means "not checked yet", still fine to skip — checkWizard() runs
+      // on mount before the first refresh() anyway) — never try to
+      // resume a daemon on a machine that hasn't finished the wizard,
+      // that's a different, expected "not configured yet" offline state
+      // the overview page's "启动后台服务" button already handles.
+      const now = Date.now();
+      if (wizard?.configured && now - lastSelfHealAttempt > SELF_HEAL_COOLDOWN_MS) {
+        lastSelfHealAttempt = now;
+        try {
+          await invoke("resume_daemon_after_update");
+        } catch (_) {
+          // Best-effort — if this fails too, the existing offline banner
+          // + manual "启动后台服务" button on the overview page is still
+          // there as the fallback path; no need to surface a second error.
+        }
+      }
     }
   }
 
@@ -879,11 +912,52 @@
       title: "P-Pass",
     });
     if (!ok) return;
+    // W1 (2026-08-26 real-box run): downloadAndInstall() was failing on
+    // Windows because the resident ppf-daemon.exe (never stopped just
+    // by closing the window — it lives on in the tray by design) holds
+    // its own exe file open, so the installer can't overwrite it.
+    // Normal users shouldn't have to know "go stop the background
+    // service in the tray first" — pause it ourselves, then resume it
+    // after a successful install. Best-effort on both ends: pause/resume
+    // failures are logged but never block the update attempt or hide a
+    // real downloadAndInstall error behind a pause/resume error.
+    try {
+      await invoke("pause_daemon_for_update");
+    } catch (e) {
+      console.warn("[updater] pause_daemon_for_update failed (continuing anyway):", e);
+    }
     try {
       await update.downloadAndInstall();
+      // Bring the daemon back — on macOS launchd's KeepAlive would
+      // eventually do this on its own, but Windows has no such
+      // self-healing (plain Run key), so this must be explicit on
+      // every platform rather than relying on macOS's safety net to
+      // mask a Windows gap. Daemon's single-instance claim protocol
+      // makes a redundant spawn harmless if something already revived
+      // it first.
+      try {
+        await invoke("resume_daemon_after_update");
+      } catch (e) {
+        console.warn("[updater] resume_daemon_after_update failed after a successful install:", e);
+      }
       flashMessage(t("ui.update_installed"));
     } catch (e) {
-      flashMessage(t("ui.update_failed", { err: String(e) }));
+      // The daemon we paused above is still down — bring it back so a
+      // failed update doesn't also leave backups silently stopped.
+      try {
+        await invoke("resume_daemon_after_update");
+      } catch (_) {}
+      const msg = String(e);
+      // Heuristic for the Windows file-in-use class of failure (the one
+      // this pause/resume dance is meant to prevent) — if pause/resume
+      // itself couldn't clear it (third-party lock, AV scan holding the
+      // handle, etc.), tell the user the one concrete thing they can do
+      // instead of surfacing a raw OS error string.
+      if (/being used by another process|access is denied|拒绝访问|正被另一个进程使用/i.test(msg)) {
+        flashMessage(t("ui.update_failed_file_locked"));
+      } else {
+        flashMessage(t("ui.update_failed", { err: msg }));
+      }
     }
   }
 

@@ -122,6 +122,11 @@ msg_keys! {
     UI_UPDATE_AVAILABLE => "ui.update_available",
     UI_UPDATE_INSTALLED => "ui.update_installed",
     UI_UPDATE_FAILED => "ui.update_failed",
+    // W1 (2026-08-26): the Windows-specific "a background process still
+    // holds the file" failure mode of the update flow — see App.svelte
+    // checkForUpdate()'s pause_daemon_for_update/resume_daemon_after_update
+    // dance and its file-locked heuristic.
+    UI_UPDATE_FAILED_FILE_LOCKED => "ui.update_failed_file_locked",
     // ── Desktop daemon restart after shell update (DAE-04) ───────────
     UI_RESTART_SERVICE => "ui.restart_service",
     UI_RESTART_SERVICE_BTN => "ui.restart_service_btn",
@@ -246,6 +251,7 @@ mod tests {
             UI_UPDATE_AVAILABLE,
             UI_UPDATE_INSTALLED,
             UI_UPDATE_FAILED,
+            UI_UPDATE_FAILED_FILE_LOCKED,
             UI_RESTART_SERVICE,
             UI_RESTART_SERVICE_BTN,
             UI_RESTARTING_SERVICE,
@@ -279,7 +285,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 99);
+        assert_eq!(ALL.len(), 100);
     }
 
     #[test]
