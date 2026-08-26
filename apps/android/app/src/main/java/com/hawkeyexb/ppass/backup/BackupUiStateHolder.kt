@@ -85,7 +85,13 @@ class BackupUiStateHolder(
      *  为什么挑 RUNNING 优先：四条自动通道 + 手动通道共用 BackupWorker 的
      *  tag，列表里会有多条（含已终结的历史）。正在跑的那条才是用户此刻
      *  该看到的；都没跑就看最近一条终态。 */
+    /** MOB-33: 当前正在跑的那条 work（暂停要取消它，不认通道）。 */
+    private var runningWorkId: java.util.UUID? = null
+
     private fun observeBackupWork(infos: List<androidx.work.WorkInfo>) {
+        // MOB-33: 记住当前正在跑的那条 work 的 id——暂停要取消**它**，
+        // 而不是固定的手动通道（见 [backupNow]）。
+        runningWorkId = runningInfoOf(infos)?.id
         val next = uiStateOf(infos) ?: return
         // 配对失效是独立信号（红卡 + 重新扫码入口），不占状态行。
         if (next is BackupUiState.Trouble && isPairingLostText(next.text)) {
@@ -168,8 +174,26 @@ class BackupUiStateHolder(
                 it is BackupUiState.Sending
         }
         if (running) {
-            cancelManualBackup(context)
-            _state.value = BackupUiState.Idle
+            // MOB-33（2026-08-26 真机）：暂停是**管线级**动作，不是通道级。
+            // 验收人定的原则：「传输只有一个路径，暂停也得在一个路径。上传
+            // 不分自动手动，只有触发会区分。」——这与 MOB-19 的既有定调一致
+            // （备份只有一条管线，手动是第 6 种触发方式）。
+            //
+            // 原来这里调 cancelManualBackup，只取消 MANUAL_BACKUP_WORK_NAME。
+            // 而界面是按 tag 观察全部五条通道的，于是自动触发的备份也会显示
+            // 进度条、也会出现暂停按钮，点下去**取消不了它**。
+            val id = runningWorkId
+            if (id != null) {
+                WorkManager.getInstance(context).cancelWorkById(id)
+            } else {
+                // 兜底：拿不到 id（流还没送来第一帧）时退回按通道取消，
+                // 至少手动那条能停。
+                cancelManualBackup(context)
+            }
+            // ⚠️ 这里**不许**自己把状态置成 Idle。原来那句
+            // `_state.value = BackupUiState.Idle` 让界面当场假装停了，而字节
+            // 还在传——界面与传输脱钩。状态必须等 WorkManager 把 CANCELLED
+            // 回报回来（uiStateOf 会把它映射成 Idle）。
             return
         }
         triggerManualBackup(context)
@@ -226,9 +250,30 @@ internal fun isPairingLostError(t: Throwable): Boolean {
  * 返回 null = 这批 work 里没有可展示的信息（还没跑过 / 全是无关历史），
  * 调用方保持当前状态不动，绝不擅自改回 Idle（否则进度会闪回）。
  */
+/**
+ * MOB-33: 从 work 列表里挑出「当前正在跑的那一条」——**确定性的**。
+ *
+ * 原来是 `infos.firstOrNull { it.state == RUNNING }`。在**只有一条在跑**时它
+ * 是对的；但备份有五条独立 unique name 的通道，两条同时 RUNNING 是可能的
+ * （这正是 MOB-33 的本体），而 `getWorkInfosByTagFlow` **不保证按时间排序**
+ * （Room 查询顺序，实际按 UUID）——于是 `firstOrNull` 在两条之间随机挑，
+ * 每一帧挑的可能不是同一条，界面就在两轮进度之间来回跳。验收人看到的
+ * 「正在读文件 → 长时间 pending → 又展示读文件 → 上传」就是这个。
+ *
+ * `backupInFlight` 那道门（BackupWorker）保证正常情况下只有一条在跑，这里
+ * 是**第二道防线**：真出现多条时按 id 排序取第一条，保证同一批输入永远选出
+ * 同一条，界面不闪。
+ *
+ * 暂停也用这个判据（[BackupUiStateHolder.backupNow] 取消它的 id），这样
+ * 「界面在显示谁的进度」和「暂停会停掉谁」永远是同一条。
+ */
+internal fun runningInfoOf(infos: List<androidx.work.WorkInfo>): androidx.work.WorkInfo? =
+    infos.filter { it.state == androidx.work.WorkInfo.State.RUNNING }
+        .minByOrNull { it.id.toString() }
+
 internal fun uiStateOf(infos: List<androidx.work.WorkInfo>): BackupUiState? {
     // 正在跑的优先——那才是用户此刻该看到的。
-    infos.firstOrNull { it.state == androidx.work.WorkInfo.State.RUNNING }?.let { running ->
+    runningInfoOf(infos)?.let { running ->
         val p = running.progress
         val phase = p.getString(KEY_PHASE)
         val done = p.getInt(KEY_DONE, 0)
@@ -256,7 +301,11 @@ internal fun uiStateOf(infos: List<androidx.work.WorkInfo>): BackupUiState? {
     // 现在按 worker 盖的 [KEY_FINISHED_AT] 选最大值。没有戳的记录
     // （升级前的存量、CANCELLED 拿不到 outputData）视为最旧，只有在
     // **一条戳都没有**时才退回旧的列表顺序口径（升级首帧不至于空白）。
+    // MOB-33: 排除**空转**那一轮（抢不到互斥门、什么也没干）。它按 MOB-31 的
+    // 不变量盖了戳，但它不是一个结果——被选中就会显示「已备份 0 张」，还会盖过
+    // 用户暂停留下的 CANCELLED（取消拿不到 outputData → 无戳 → 被当最旧）。
     val finished = infos.filter { it.state.isFinished }
+        .filterNot { it.outputData.getBoolean(KEY_SKIPPED, false) }
     if (finished.isEmpty()) return null
     val stamped = finished.filter { it.outputData.getLong(KEY_FINISHED_AT, 0L) > 0L }
     val last = if (stamped.isEmpty()) {

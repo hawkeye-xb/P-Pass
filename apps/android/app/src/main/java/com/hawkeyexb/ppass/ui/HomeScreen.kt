@@ -246,11 +246,22 @@ fun HomeScreen(
                             val progress = progressOf(state)
                             if (progress != null) {
                                 Spacer(Modifier.height(8.dp))
+                                // MOB-33（2026-08-26 真机）：必须显式覆盖 M3 1.3
+                                // 的两个默认值，否则进度条不是一根标准直条。
+                                // 本仓用 compose-bom:2024.12.01（= material3 1.3.x），
+                                // 该版本给 LinearProgressIndicator 加了：
+                                //   gapSize = 4.dp        → 指示条与轨道之间留一道缝
+                                //   drawStopIndicator     → 末端画一个圆点
+                                // 验收人原话：「有断层，不知道是不是有一个和背景
+                                // 颜色一样的圆点在移动。反正看着不是标准的。」
+                                // ——那道缝跟着进度头走，看起来就像一个洞在移动。
                                 androidx.compose.material3.LinearProgressIndicator(
                                     progress = { progress },
                                     modifier = Modifier.fillMaxWidth().height(6.dp),
                                     color = PPColor.Safe,
                                     trackColor = PPColor.Safe.copy(alpha = 0.18f),
+                                    gapSize = 0.dp,
+                                    drawStopIndicator = {},
                                 )
                             }
                         } else {

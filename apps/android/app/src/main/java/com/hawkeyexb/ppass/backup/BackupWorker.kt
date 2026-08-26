@@ -47,6 +47,7 @@ import com.hawkeyexb.ppass.transport.PeerAddrParts
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import java.io.File
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -145,6 +146,17 @@ const val PHASE_SENDING = "sending"
 const val KEY_INGESTED = "ppass.backup.ingested"
 const val KEY_DUPLICATES = "ppass.backup.duplicates"
 const val KEY_NO_ALBUMS = "ppass.backup.no_albums"
+
+/** MOB-33: 这一轮是**空转**——抢不到 [backupInFlight] 的门，活正在被别人干。
+ *
+ *  它是一个终态返回（所以按 MOB-31 的不变量要盖 [KEY_FINISHED_AT]），但**不是
+ *  一个结果**：output 里没有 ingested/duplicates。所以 `uiStateOf` 必须把带这个
+ *  标记的记录排除掉，否则——
+ *
+ *  用户点暂停 → 那条 work 变 CANCELLED（WorkManager 取消时**拿不到 outputData**
+ *  → 无戳 → 被当成上古记录）→ 而空转那条有戳且更"新" → 界面选中它 → 显示
+ *  「已备份 0 张」而不是 Idle。盖戳与「别被选中」这两件事必须分开表达。 */
+const val KEY_SKIPPED = "ppass.backup.skipped"
 const val KEY_ERROR = "ppass.backup.error"
 
 /**
@@ -285,6 +297,29 @@ fun rescheduleAutoBackup(context: Context) {
     if (mayRearmWatchIncidentally(context)) ensureMediaWatch(context)
 }
 
+/**
+ * MOB-33: **一次只跑一轮备份。**
+ *
+ * 备份有五条触发通道（周期兜底 / content trigger / 用户在场 catchup /
+ * 进程启动补捞 / 手动），每条一个独立的 unique name。`ExistingWorkPolicy.KEEP`
+ * 只在**同一个 name 内部**去重，跨通道不管——于是「打开 App」撞上「周期任务
+ * 到点」会让两个 [BackupWorker] 同时跑。
+ *
+ * 后果不只是「浪费」（这是原卡的错误定性）：
+ * - 两条同时 RUNNING → `uiStateOf` 的 `firstOrNull { RUNNING }` 随机挑一条
+ *   → 进度条在两轮之间来回跳（验收人：「正在读文件后有长时间 pending，
+ *   然后又展示读文件，再上传」）
+ * - 暂停按钮只能取消一条 → 另一条继续传
+ *
+ * 用同一进程内的 CAS 门：抢不到就早退 `Result.success()`（**不是 retry**
+ * ——重排一轮没意义，那一轮的活正在被别人干）。WorkManager 的 worker 都在
+ * 同一进程，所以进程级标志就够；进程被杀标志随之消失，不会留下卡死的锁。
+ *
+ * ⚠️ 早退必须是 success：返回 retry 会让 WorkManager 按退避重排，制造一串
+ * 无意义的重试；返回 failure 会让界面报错。
+ */
+private val backupInFlight = AtomicBoolean(false)
+
 /** MOB-35 + MOB-28：**「顺带」的监听重挂**在中断待确认时一律不许发生。
  *
  *  MOB-35 放行了「用户在前台时的补捞」，于是那趟 work 会跑到 `doWork` 的
@@ -403,6 +438,22 @@ class BackupWorker(
 
     override suspend fun doWork(): Result {
         val ctx = applicationContext
+        // MOB-33: 抢门——同一时刻只允许一轮备份（见 [backupInFlight]）。
+        if (!backupInFlight.compareAndSet(false, true)) {
+            android.util.Log.i("PPassBackup", "another backup is in flight; skipping this run")
+            // 走 successStamped 而不是裸 Result.success：MOB-31 的不变量是
+            // 「每个终态都盖戳」（OneBackupPipelineTest 钉着）。同时打
+            // KEY_SKIPPED，让 uiStateOf 把这条空转记录排除——见常量注释。
+            return successStamped(KEY_SKIPPED to true)
+        }
+        try {
+            return runBackup(ctx)
+        } finally {
+            backupInFlight.set(false)
+        }
+    }
+
+    private suspend fun runBackup(ctx: android.content.Context): Result {
         // MOB-08: 被系统取消时要能区分「几秒内就被打断」（FGS 提升被拒/
         // 约束抖动）和「跑满执行时限」（10min JobScheduler 上限）——两者
         // 的修法完全不同，光看异常类型分不出来。
