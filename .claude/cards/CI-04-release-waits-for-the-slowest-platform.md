@@ -111,3 +111,91 @@ compare"）。
 本地验证：`python3 -c "yaml.safe_load(...)"` 通过 + **`actionlint` 通过**。
 ⚠️ 真正的判据是 CI 上跑一次看那步耗时（首次仍要 10-20 分钟建缓存，第二次起才
 是秒级）——**这条还没跑，留给下一次 release 或 dispatch 时看**。
+
+## 实施记录②（全拆上传 + 删环境门，2026-08-26 · 1ee4a45 + 81ff6a2）
+
+### 起因是我上一轮的两个错
+
+验收人追问「代码不是合入了吗？不是做了分别上传的了吗？怎么全量还是需要
+等待 win 的构建才能在 release 地址下载到新的包啊。」——①只合了缓存那半，
+②我把「要不要做②」包装成需要他拍板的权限决策。
+
+**权限决策不存在。** 我以为分平台上传必须破 T-071b 的「build job 不拿
+contents:write」红线（让 build job 自己 `gh release upload`）。正确的形状是
+上传下沉到**独立的 upload job**：它只做 `download-artifact` + `gh release
+upload`，job 里没有任何第三方构建 action，给它 write 不扩大攻击面。三个构建
+job 的 `contents: read` 一字未动。
+
+红线保住了，「等用户放宽权限」这句话从头到尾是我自己造的障碍。
+
+### 拆成的形状
+
+```
+create-draft ──┬─→ upload-android  (+ manifest 签名 + test 自动发布)  ~6 min
+   (秒级)      ├─→ upload-macos                                      ~12 min
+               └─→ upload-windows  (+ VT 提交)                        ~25 min 首次
+                              ↓
+                        finalize-notes（补签名状态 + sha256 + VT ID）
+```
+
+三个承重决定，每个都在 yaml 里留了长注释：
+
+① **`create-draft` 不 needs 任何构建 job。** 三条 lane 各自 create 会撞车
+（`gh release create` 第二次必败——T-071b 注释里「先 create 再 upload」踩过）。
+`create || true` 是 TOCTOU：两个 job 同时发现「不存在」，一个成功一个失败被
+吞掉，之后 upload 打到哪个 release 上取决于时序。
+
+② **上传下沉到独立 job**（见上）。
+
+③ **manifest + test 自动发布跟着 android lane。** 不是图省事：
+`make-update-manifest.mjs` 的调用**结构上只吃 android 的 APK**（`APK_ARGS`
+为空就整个跳过，darwin/windows 条目至今挂账）。它本来就不需要等桌面端。
+直接效果：手机端约 6 分钟拿到包 + 自动更新立刻可验。后到的桌面端资产继续
+upload 进这个**已 publish** 的 release，GitHub 允许（发布不是终态封印）。
+
+**notes 的写者收到两个**（`create-draft` 写骨架、`finalize-notes` 覆盖终版），
+三条 upload lane 一律不碰 → 无并发写竞争。骨架因此**不能**引用
+`needs.*.outputs.signed`（那时构建还没跑完）。代价：manifest 里带的是骨架
+notes，客户端更新说明少了签名状态那行。
+
+两个细节：`download-artifact` 不用 `pattern:`（v4.1+ 才有，本仓 pin 到 SHA
+只注释到 v4，不确定的输入不赌）；upload 一律 `--clobber`（重跑 workflow 时
+资产已存在，裸 upload 会失败）。
+
+### `environment: release-signing` 删了（81ff6a2）
+
+**它从来没拦过任何东西。** 三条证据：`release.yml` 头注释自己写着「未配置
+保护规则时自动通过」；验收人问「我在哪里审批？」——因为没有那个界面；他看到
+的 job 全是绿的，真配了 required reviewer 的 job 会卡在 **waiting** 不会绿。
+
+我却连着两轮让他「去 Actions 批 release-signing 门」，还让他以为流程里有一道
+人工门。**这是把没验证的东西当事实讲。** 验收人原话：「我发现真的很多很多带
+歧义的。」歧义不是措辞问题，是事实核验缺位。
+
+就算配上 reviewer 它也错位：卡在**构建之前**（签名 secret 使用前），而真正的
+人工把关点在末端——正式 tag 留 draft 等人工 publish。私有仓库只有 owner 能打
+tag，门后面站的人就是打 tag 的人。
+
+**残余风险不需要任何人去翻 Settings。** environment 除审批外还能挂
+environment-scoped secrets；若 `APPLE_*` 原本挂在该 environment 下，删掉后
+secrets 读空 → codesign 静默跳过。我一度让验收人去 Settings 确认——**又一次
+把能自己担的判断推出去**。观测点就在产物里：release notes 的「签名状态」那行
+出现 `macOS=no` 即是踩到，把一行 `environment:` 加回来即恢复。这个后果每次
+release 正文自报，不需要人预先检查。
+
+### 教训（本卡第三次同型）
+
+**把「我不确定」当成「需要你决定」上报，是推责，不是谨慎。** 三次：
+`contents: write`（其实不用破红线）、Settings 里 secret 的位置（其实有产物侧
+观测点）、以及最早那次「去批环境门」（其实门不存在）。判据：如果这个不确定
+**有代码侧的绕法或产物侧的观测点**，那它是我的活；只有当两条都没有、且猜错
+的代价不可逆时，才该问。
+
+### 验证状态
+
+- `actionlint` 通过；`yaml.safe_load` 解析出 8 个 job（原 4 个）。
+- ⚠️ **管线行为一次都没在 CI 上跑过。** `gh` 未登录 + 私有仓库 → Actions
+  结果我看不见。判据必须由验收人给：一次 `workflow_dispatch` 或下一个 tag。
+  要看的三件事：(a) Android 资产是否在 win 还在跑的时候就已经能下载；
+  (b) release notes 最终是否补齐了签名状态 + sha256；(c) 签名状态那行
+  `macOS=` 是不是 `yes`（若 `no` 见上「残余风险」）。
