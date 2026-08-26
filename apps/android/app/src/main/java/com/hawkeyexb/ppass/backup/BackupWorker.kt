@@ -147,6 +147,12 @@ const val KEY_INGESTED = "ppass.backup.ingested"
 const val KEY_DUPLICATES = "ppass.backup.duplicates"
 const val KEY_NO_ALBUMS = "ppass.backup.no_albums"
 
+// MOB-40: 用户**还没选过**备份范围（`selectedBucketIds() == null`）。
+// 与 KEY_NO_ALBUMS（空集 = 用户把相册全取消了）行为相同、语义不同：
+// 前者是「我还不知道你要备什么」，后者是「你说了都不备」。界面文案共用
+// （对用户是同一件事：去选相册），盖戳分开是为了诊断时能区分这两种。
+const val KEY_NO_SCOPE = "ppass.backup.no_scope"
+
 /** MOB-33: 这一轮是**空转**——抢不到 [backupInFlight] 的门，活正在被别人干。
  *
  *  它是一个终态返回（所以按 MOB-31 的不变量要盖 [KEY_FINISHED_AT]），但**不是
@@ -513,9 +519,26 @@ class BackupWorker(
 
             val watermarks = WatermarkStore(ctx.filesDir)
             val bucketIds = BackupScopeStore(ctx).selectedBucketIds()
+            // MOB-40（2026-08-26 真机实锤，L0）：**没选过范围 = 一张都不备。**
+            //
+            // `null` 的历史语义是「从未选过 = 全量」（T6 给升级用户留的兼容）。
+            // 代价在真机上兑现了：全新安装 15:53 → 配对 15:54:13 → 15:54:14
+            // 那一轮 `scanning 254/254` 把整库都传了，而用户此刻还没进选相册
+            // 页；选完之后那一轮才是正确的 `offered=11`。
+            //
+            // 一个备份产品最不该做的默认动作，就是在拿到用户选择之前把整个
+            // 相册库传出去。「我还不知道你要备什么」不等于「那就全备」。
+            //
+            // 闸门刻意放在**这里**而不是各个触发通道上：备份有五条触发通道，
+            // 每条各加一道门控就是把同一个判断写五遍——MOB-33/34/35/38 四个
+            // bug 全是「漏接一处」，那个形状不能再复制。触发侧的收拢归 MOB-39。
+            if (bucketIds == null) {
+                attempts.reset()
+                return successStamped(KEY_NO_SCOPE to true)
+            }
             // FIX-T6: 空集 = 一个都不备（用户把相册全取消了）。必须显式
             // 反馈——静默 success 会让界面说「照片都存好了」，那是假话。
-            if (bucketIds != null && bucketIds.isEmpty()) {
+            if (bucketIds.isEmpty()) {
                 attempts.reset()
                 return successStamped(KEY_NO_ALBUMS to true)
             }

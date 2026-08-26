@@ -199,10 +199,9 @@ fun PPassApp() {
     }
     LaunchedEffect(backupInterrupted) { foregroundCatchup() }
     remember {
-        val pairing = pairings.load()
-        if (pairing != null && !AutoBackupPrefs(context.filesDir).paused()) {
-        }
         // 新会话重新评估排队提示（上一轮的排队状态随进程重开作废）。
+        // MOB-40: 这里原本还有一个 MOB-38 重构掏空的空 `if (pairing != null…) {}`
+        // ——补捞逻辑已经全部搬进 foregroundCatchup，那具尸体删掉。
         wifiDeferred = false
         true
     }
@@ -694,8 +693,12 @@ fun PPassApp() {
                         // 基准）；新出现的相册默认不包含（不在 sel 里）。
                         // MOB-20: 必须在 saveScope 覆盖旧集合**之前**算差集。
                         val prevScope = BackupScopeStore(context).selectedBucketIds()
-                        val added = if (prevScope == null) emptySet()
-                            else sel - prevScope
+                        // MOB-40: `prevScope == null` = **从未选过范围**。旧语义下
+                        // 那意味着「已经全备过了」，所以差集算空；新语义下没选过
+                        // = 一张都没备过，首次选择就是**全部新增**，按 MOB-20 的
+                        // 规矩应当归零水位（否则得靠 MOB-36 的补齐兜底才收敛，
+                        // 语义不自洽）。
+                        val added = if (prevScope == null) sel else sel - prevScope
 
                         scopeStore.saveScope(
                             selected = sel,
