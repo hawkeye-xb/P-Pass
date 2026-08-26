@@ -1,6 +1,6 @@
 # MOB-38 回到前台不补捞——切去相机再切回来，那张照片没人管　级别 L0
 
-> ⬜ 状态：未开工
+> 🟡 状态：代码已合并，等真机验收
 > 级别：**L0** · 阻塞：无
 
 ## 问题
@@ -93,3 +93,55 @@ Activity 走 STOPPED → RESUMED（切去相机再切回来）**不会**让它�
 **「都跑」现在是安全的**，重复触发的代价降到一次 CAS。所以不需要在通道之间做
 优先级，覆盖面越大越好——每条通道都可能在某些场景下失效（监听被 OEM 清、
 force-stop 后不恢复、Doze 推迟周期任务），而它们失效的场景**不重叠**。
+
+## 实施记录（2026-08-26）
+
+**改了两处，核心是「只写一份」：**
+
+1. **`MainActivity.kt`：把「回到前台该做什么」提成共用闭包 `foregroundCatchup`**
+   —— 门控（配对 / 暂停 / 中断标志）只有这一份。
+2. **挂进那个已有的 `LifecycleEventObserver` 的 `ON_RESUME` 分支**，与既有四处
+   刷新（电池白名单 DOG-02、通知权限、失联天数 SENT-01、部分授权态 MOB-02）
+   和两处 start/stop（心跳 PRES-01、时间线订阅 SYNC-06）并列。
+   `LaunchedEffect(backupInterrupted)` 保留（冷启动也得补一次），但它现在只转调
+   共用闭包，不再自己持有逻辑。
+
+**为什么提成函数**：不是为了少打字，是**让「漏接一处」变得不可能**。两处各写
+一遍门控的话，下次改其中一条就又会漏——`MOB-33`/`34`/`35`/`38` 四个 bug 全是这个
+形状。测试里专门有一条 `the_catchup_logic_exists_in_exactly_one_place` 钉它。
+
+**为什么放心「每次 resume 都补」**：`MOB-33` 的 `backupInFlight` 互斥门在管线
+入口，重复触发的代价降到一次 CAS（抢不到就早退）。在 `MOB-33` 之前这么做会造出
+一串并行备份——那正是 `MOB-33` 的原症状。
+
+**测试**：新增 `ForegroundCatchupOnResumeTest` 4 例。判据刻意**不是**「
+`LaunchedEffect` 里有那行」——那正是这个 bug 的形状。Android 全量 `--rerun-tasks`
+**43 类 / 326 tests / 0 failures**（XML 14:43:13 确认本次生成），`assembleDebug` 绿。
+
+**反证两条真跑**：删掉 `ON_RESUME` 里那行 → 1 红；门控退回 `LaunchedEffect`
+内联（两处各写一遍的形状）→ 2 红。
+
+**真机验收还欠（验收人自己跑）**：从 App 切到相机 → 拍一张 → 切回 App 摆着不动
+→ 照片自动传上去，不用点任何东西。
+
+### 顺带修了三条被误伤的既有测试（本轮第四次同款）
+
+逻辑从 `LaunchedEffect` 块搬进 `foregroundCatchup` 之后，`MOB-35` 的三条源码断言
+（`ForegroundSyncNotFrozenTest` ×2、`WatchRecoveryTest` ×1）全红——**它们守的三条
+不变量一个没变，只是切片位置过时了**。改切片目标即可。
+
+**这已经是本仓第四次「逻辑正当搬家 → 源码文本断言误伤」。** 判据本身是对的
+（守的是真不变量），但**源码文本断言天生与位置耦合**。这条写进了
+`ForegroundSyncNotFrozenTest` 的注释里，专门提醒 `MOB-39` 的实施者：那次重构会
+搬动更多逻辑，这类断言会成批变红，届时要改的是切片位置，不是不变量。
+
+### 还有一条我自己当场踩的坑
+
+修那三条时我顺手加了一条正则断言「不许用 `!backupInterrupted` 把前台补捞包住」，
+**当场就误报了**：Kotlin 的单语句 `if` 没有花括号，
+`if (!backupInterrupted) scheduleAutoBackup(context)` 之后紧跟的
+`triggerUserPresentBackup(context)` 其实在 `if` 之外，而正则按「N 个字符内出现」
+判命中，**分不出作用域**。已删，并在原处留了注释：**别用正则去猜作用域，文本
+匹配做不到这件事**——真正守住那条的是姊妹断言
+`contains("if (!backupInterrupted) scheduleAutoBackup")`（单语句形式意味着门控
+只作用于那一句）。
