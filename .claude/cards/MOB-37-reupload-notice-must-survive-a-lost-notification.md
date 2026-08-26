@@ -1,6 +1,6 @@
 # MOB-37 重传告知只发一条通知，发失败就永久静默　级别 L1
 
-> 🟡 状态：代码已合并（commit PENDINGSHA），等真机验收
+> 🟡 状态：代码已合并（commit 94574b1），等真机验收
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -69,7 +69,7 @@
 
 ---
 
-## 实施记录（2026-08-26，commit PENDINGSHA）
+## 实施记录（2026-08-26，commit 94574b1）
 
 ### 改了哪几处
 
@@ -131,6 +131,16 @@ BUILD SUCCESSFUL
 
 $ ./gradlew :app:assembleDebug
 BUILD SUCCESSFUL
+```
+
+rebase 到 `MOB-33`（59ecab3，动了同两个文件）之上后**重跑一遍**（合并语义
+按派卡人交代手动确认：那边改的是暂停/选取与进度条，这边加的是提示呈现）：
+
+```
+$ ./gradlew :app:testDebugUnitTest :app:assembleDebug --rerun-tasks
+BUILD SUCCESSFUL
+  41 个类 / 310 tests / 0 failures / 0 errors / 4 skipped
+  （XML 全部于本次运行重新生成，最旧 = 最新 = 11:15:44；app-debug.apk 同刻产出）
 ```
 
 只动 `apps/android/**` → 受影响 CI 域只有 **ci-android**（`crates/`、
