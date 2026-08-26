@@ -71,3 +71,24 @@ apps/desktop/src-tauri/Cargo.toml   0.2.1     →   0.2.1       ❌ 静默跳过
 Tauri updater 读的那一份，**用户看到的版本号一直是对的**；漂移的是桌面壳
 Rust crate 的元数据版本。所以这不是「用户装了 dmg 看到旧版本」那级事故，
 但它是**同一个盲区**——下一次漂移的可能就是 `tauri.conf.json` 之外的哪一件。
+
+## 追加（2026-08-26 出 test.9 时发现）：第七处版本号，脚本同样不碰
+
+`apps/android/app/build.gradle.kts:25` 的**非 tag 回退版本号**钉着字面量：
+
+```kotlin
+versionName =
+    System.getenv("PPF_BUILD_VERSION")?.takeIf { it.isNotBlank() }?.removePrefix("v")
+        ?: "0.3.5"
+```
+
+`bump-version.sh` 只改 `versionCode`，这个回退串从 0.3.5 之后就没人动过。
+
+- **tag 构建不受影响**（`PPF_BUILD_VERSION` 由 release.yml 注入）。
+- **狗粮/本地构建会报错版本**——`artifacts.yml` 的 Dogfood Binaries 不打 tag，
+  装出来的 APK 自称 0.3.5。这与验收人 2026-08-19 那句「下载的安装包为啥是
+  0.3.0 的？！」是同一个形状的坑。
+
+修法与本卡主体一致：要么让 bump 脚本也改这一处，要么让回退值从**单一真相**
+（workspace 版本）派生，别在第七个地方抄同一个数。本卡的尾部断言（「没有改到
+不该改的文件」）照旧抓不到「该改的没改」——那是本卡的核心教训。
