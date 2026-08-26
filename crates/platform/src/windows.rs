@@ -44,6 +44,16 @@ impl PlatformAdapter for WindowsAdapter {
             .map_err(io_err("open HKCU Run key"))?;
         key.set_value(RUN_VALUE, &exec.display().to_string())
             .map_err(io_err("set Run value"))?;
+        // The Run key only takes effect on the NEXT login/boot — unlike
+        // macOS's `launchctl bootstrap` (RunAtLoad), writing the registry
+        // value alone does not start anything now. Without this, the
+        // wizard's finishSetup() polls daemon_call("status") for 10s,
+        // gets nothing, and reports "后台服务没有在 10 秒内就绪" — a real
+        // platform gap mis-surfaced as a generic timeout (found 2026-08-26
+        // W1 real-box run). Spawn once immediately, windowless, so the
+        // observable contract matches macOS: after install_autostart
+        // returns Ok, the daemon is already reachable.
+        spawn_windowless(exec).map_err(io_err("spawn daemon after registering autostart"))?;
         Ok(())
     }
 
@@ -94,20 +104,27 @@ impl PlatformAdapter for WindowsAdapter {
     }
 
     fn power_hint(&self) -> PowerHint {
-        let out = Command::new("powercfg")
-            .args([
-                "/query",
-                "SCHEME_CURRENT",
-                "238c9fa8-0aad-41ed-83f4-97be242c8f20", // SUB_SLEEP
-                "29f6c1db-86da-48c5-9fdb-f2b67b1f44da", // STANDBYIDLE
-            ])
-            .output();
-        match out {
-            Ok(o) if o.status.success() => {
-                crate::parse_powercfg(&String::from_utf8_lossy(&o.stdout))
-            }
-            _ => PowerHint::Unknown,
-        }
+        // NOTE (2026-08-26, W1 real-box run): `powercfg /query` output is
+        // localized (zh-CN Windows prints "当前交流电源设置索引" instead of
+        // "Current AC Power Setting Index"), so the English-only text
+        // parser in crate::parse_powercfg silently matched nothing and
+        // this always returned Unknown on non-English systems. Read the
+        // effective value straight from the registry instead — locale
+        // independent, and it's literally what powercfg itself reads.
+        // Path: HKLM\SYSTEM\CurrentControlSet\Control\Power\User\
+        //   PowerSchemes\<ActiveScheme>\238c9fa8...(SUB_SLEEP)\
+        //   29f6c1db...(STANDBYIDLE), value ACSettingIndex (seconds, 0 = never).
+        read_standby_idle_seconds()
+            .map(|seconds| {
+                if seconds == 0 {
+                    PowerHint::NeverSleeps
+                } else {
+                    PowerHint::SleepsWhenIdle {
+                        minutes: seconds.div_ceil(60),
+                    }
+                }
+            })
+            .unwrap_or(PowerHint::Unknown)
     }
 
     fn notify(&self, _title: &str, _body: &str) {
@@ -117,6 +134,44 @@ impl PlatformAdapter for WindowsAdapter {
     fn data_dir(&self) -> PathBuf {
         PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into())).join("P-Pass")
     }
+}
+
+/// Spawn `exec` detached, with no console window (equivalent to macOS's
+/// `launchctl bootstrap` giving the daemon an immediate first run instead
+/// of waiting for the next login). CREATE_NO_WINDOW keeps a bare console
+/// app from flashing a black window when spawned from the desktop shell.
+fn spawn_windowless(exec: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    Command::new(exec)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
+/// Read the active power scheme's AC standby-idle timeout (seconds; 0 =
+/// never) straight from the registry — locale-independent, unlike parsing
+/// `powercfg /query`'s localized text output.
+fn read_standby_idle_seconds() -> Option<u32> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+    const SUB_SLEEP: &str = "238c9fa8-0aad-41ed-83f4-97be242c8f20";
+    const STANDBYIDLE: &str = "29f6c1db-86da-48c5-9fdb-f2b67b1f44da";
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let schemes = hklm
+        .open_subkey(r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes")
+        .ok()?;
+    let active: String = schemes.get_value("ActivePowerScheme").ok()?;
+    let setting = schemes
+        .open_subkey(format!("{active}\\{SUB_SLEEP}\\{STANDBYIDLE}"))
+        .ok()?;
+    // AC (plugged in) is the relevant one for "will this backup session
+    // get interrupted" — mirrors the SCHEME_CURRENT/SUB_SLEEP/STANDBYIDLE
+    // AC query `powercfg` itself defaults to.
+    setting.get_value::<u32, _>("ACSettingIndex").ok()
 }
 
 /// RAII wrapper over the thread execution state.
