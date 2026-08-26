@@ -56,7 +56,10 @@
 | 3 | [DESK-09](../.claude/cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 向导把 daemon 的真实启动错误吞成「没有在 10 秒内就绪」（2026-08-25 撤出关键路径、推后） | **L1** |
 | 4 | [CI-03](../.claude/cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁，格式漂移无人发现（⚠️ 要动 workflows，先确认由谁改） | L0 |
 | 5 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
-| 6 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 四条备份通道可并行跑两个 BackupWorker，重复推字节（浪费不损坏） | L2 |
+| 6 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | **暂停按钮对自动备份无效 + 进度条乱跳**（四通道 unique name；2026-08-26 从 L2 升 L0） | **L0** |
+| 6b | [MOB-36](../.claude/cards/MOB-36-photos-moved-into-scope-are-never-scanned.md) | 移进备份范围的照片永不被扫到（水位同族，复用 MOB-34 的定向补偿） | **L1** |
+| 6c | [MOB-37](../.claude/cards/MOB-37-reupload-notice-must-survive-a-lost-notification.md) | 重传告知只发一条通知，发失败即永久静默——状态要落盘 + App 内可见 | **L1** |
+| 6d | [UI-04](../.claude/cards/UI-04-notice-presentation-three-defects.md) | 提示呈现三连：只在总览 / 改名用占布局的条 / 多条堆叠 | L2 |
 | 7 | [LINT-01](../.claude/cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
 | 8 | [CI-02](../.claude/cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制（~300 Linux 分钟/月白烧） | L3 |
 | 9 | [REL-03](../.claude/cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | bump-version.sh 静默跳过桌面 crate 版本，漂移断言看不见 | L2 |
