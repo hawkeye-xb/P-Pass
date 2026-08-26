@@ -17,6 +17,7 @@
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [UX-14](../.claude/cards/UX-14-a-failed-retry-is-rendered-as-paused.md) | 暂停 → 继续 → 传输中途关掉 desktop 的 daemon 制造一次连接中断 → 界面**不许**又显示「继续」（应该说它的真实状态：还有 N 张待备份 / 出错了） | **L1** |
 | [MOB-40](../.claude/cards/MOB-40-backup-runs-before-the-user-picks-albums.md) | **卸载重装 → 配对 → 只选那个 11 张的相册 → 全程只传 11 张**；配对到选完相册之间一张都不许传（这一条不过，别的都不用测） | **L0** |
 | [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | **复验**（8/26 你打回的脱敏漏已补：`detail` 里的全长 NodeId 现在也掩到前 8 位）：①daemon 正常时点「导出日志」→ 包里 9 个文件都在；②daemon 挂着时点导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip 不许出现你的用户名；④`audit.json`/`diag_events.json` 里的路径应是 `originals/<8位前缀>…<masked>/2026/08/…`，看不到完整 hex | **L1** |
 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | force-stop 后重开 App，前台该传就传（后台仍等你点恢复） | **L1** |
@@ -59,6 +60,9 @@
 |---|---|---|---|
 | 0c | [MOB-39](../.claude/cards/MOB-39-triggers-are-data-pipeline-is-one.md) | **触发层抽象**：触发是数据、管线只有一条——治「每次新增触发都漏接一处」这个病根（排 MOB-38 之后） | **L1** |
 | 0d | [MOB-41](../.claude/cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
+| 0e | [DOG-03](../.claude/cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | **L1** |
+| 0f | [NET-01](../.claude/cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 半小时内三次传输层失败，`backup.begin` 卡满 15 秒才超时（#18「等待较长时间才重传」大概率是这个） | L2 |
+| 0g | [I18N-01](../.claude/cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 选相册页空相册名的兜底文案硬编码成中文 | L3 |
 | 1 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 | 2 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
 | 3 | [DESK-09](../.claude/cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 向导把 daemon 的真实启动错误吞成「没有在 10 秒内就绪」（2026-08-25 撤出关键路径、推后） | **L1** |

@@ -121,9 +121,15 @@ class ResumeAfterPauseTest {
             "uiStateOf 必须用 pausedAfterOf 合成出被暂停态",
             pick.contains("pausedAfterOf(") && pick.contains("BackupUiState.Paused"),
         )
+        // ⚠️ 这里原本断言 `contains("uiStateOf(infos, pausedAt)")`——钉的是
+        // **参数列表的字面形状**。UX-14 给判据加了第二个锚点
+        // （lastStartedAt），调用变成 `uiStateOf(infos, pausedAt, lastStartedAt)`，
+        // 这条正当改动就把它顶红了。本仓这已经是第五次同型误伤。
+        // 改钉不变量：那次调用**带上了** pausedAt，参数列表长什么样随意。
+        val call = holder.substringAfter("uiStateOf(infos").substringBefore(")")
         assertTrue(
-            "holder 必须把用户按下暂停的时刻传给 uiStateOf",
-            holder.contains("uiStateOf(infos, pausedAt)"),
+            "holder 必须把用户按下暂停的时刻传给 uiStateOf（当前实参：$call）",
+            call.contains("pausedAt"),
         )
         assertTrue(
             "按下暂停的时刻必须落盘（杀 App 重开后「继续」还要在原地）",
