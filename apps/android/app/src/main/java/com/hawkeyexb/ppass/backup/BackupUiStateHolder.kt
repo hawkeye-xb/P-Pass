@@ -416,7 +416,11 @@ internal fun uiStateOf(
         last.state == androidx.work.WorkInfo.State.FAILED ->
             BackupUiState.Trouble(last.outputData.getString(KEY_ERROR) ?: "")
         last.state == androidx.work.WorkInfo.State.CANCELLED -> BackupUiState.Idle
-        last.outputData.getBoolean(KEY_NO_ALBUMS, false) -> BackupUiState.NoAlbums
+        // MOB-40: 两种「没东西可备」都不许落到下面的 AllSafe 分支——那会
+        // 渲染成「照片都存好了」，对着一个还没选过相册的用户说这句是假话。
+        // 文案共用（出路相同：去选相册），盖戳分开只为诊断。
+        last.outputData.getBoolean(KEY_NO_ALBUMS, false) ||
+            last.outputData.getBoolean(KEY_NO_SCOPE, false) -> BackupUiState.NoAlbums
         else -> BackupUiState.AllSafe(
             last.outputData.getInt(KEY_INGESTED, 0),
             last.outputData.getInt(KEY_DUPLICATES, 0),

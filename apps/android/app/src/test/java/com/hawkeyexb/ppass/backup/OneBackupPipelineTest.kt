@@ -175,9 +175,17 @@ class OneBackupPipelineTest {
             "空相册必须显式发 NO_ALBUMS 终态",
             w.contains("successStamped(KEY_NO_ALBUMS to true)"),
         )
+        // MOB-40: 这里原本钉的是字面 `if (bucketIds != null && bucketIds.isEmpty())`
+        // 外加一句「null = 全量语义，不是没选」——而「null = 全量」正是
+        // MOB-40 定性为 L0 缺陷并删掉的那条语义，所以那个断言只是把缺陷
+        // 钉住，一点东西也没守住。**改钉不变量**：空集这一路的早退必须发生
+        // 在扫描之前（那才是「一张都不备」的物理保证），判据长什么样随意。
+        val gate = w.indexOf("KEY_NO_ALBUMS to true")
+        val scan = w.indexOf("scanner.scanSince(")
+        assertTrue("源码锚点已消失：scanner.scanSince(", scan >= 0)
         assertTrue(
-            "判据是空集而不是 null（null = 全量语义，不是没选）",
-            w.contains("if (bucketIds != null && bucketIds.isEmpty())"),
+            "空相册的早退必须在扫描之前——否则整库已经被查出来了",
+            gate in 0 until scan,
         )
     }
 
