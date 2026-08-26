@@ -1,6 +1,6 @@
 # MOB-33 四条备份通道各自一个 unique name：暂停按钮对自动备份无效、进度条乱跳、可能并行　级别 L0
 
-> ⬜ 状态：未开工
+> 🟡 状态：代码已合并，等真机验收
 > 级别：**L0**（2026-08-26 从 L2 升级，理由见下）· 阻塞：无
 
 ## 问题
@@ -138,3 +138,54 @@ if (running) {
   `ui/HomeScreen.kt` 的进度条参数
 - 仍不准动：手动通道自己的取消语义（`UX-01` 定的「跑着的时候再点 = 暂停」
   这条**语义**不变，变的只是「取消谁」）
+
+## 实施记录（2026-08-26）
+
+**改了四处：**
+
+1. **`BackupWorker`：进程级互斥门 `backupInFlight`（AtomicBoolean）。**
+   `doWork` 入口 CAS 抢门，抢不到早退；原 `doWork` 的正文抽成 `runBackup(ctx)`，
+   门在 `finally` 里放（否则一次异常就永久卡死备份）。抢不到时返回**成功**而不是
+   retry——重排一轮没意义，那一轮的活正在被别人干。
+2. **`BackupUiStateHolder.backupNow()`：暂停按 id 取消正在跑的那条。**
+   `cancelWorkById(runningWorkId)`，拿不到 id 才退回 `cancelManualBackup` 兜底。
+   **删掉 `_state.value = BackupUiState.Idle`**——状态必须等 WorkManager 回报
+   CANCELLED，界面不许自己编。
+3. **提出 `runningInfoOf(infos)`：RUNNING 的选取确定化**（`filter { RUNNING }` +
+   `minByOrNull { id.toString() }`）。`uiStateOf` 与暂停共用它，保证「界面在显示
+   谁的进度」和「暂停会停掉谁」永远是同一条。
+4. **`ui/HomeScreen.kt`：进度条覆盖 M3 1.3 的两个默认值**——`gapSize = 0.dp`、
+   `drawStopIndicator = {}`。那道跟着进度头走的缝就是验收人说的「和背景颜色
+   一样的圆点在移动」。
+
+**顺带处理了一处冲突（值得记）：** 加互斥门等于新增一个终态返回点，撞上
+`OneBackupPipelineTest.every_terminal_outcome_carries_a_finish_stamp`（MOB-31 立的
+不变量：每个终态都要盖 `KEY_FINISHED_AT`，否则那条路径在 `uiStateOf` 眼里永远是
+上古记录）。**直接盖戳会引入新 bug**：空转那轮 output 里没有 ingested，盖了戳就
+可能盖过用户暂停留下的 CANCELLED（取消拿不到 outputData → 无戳 → 被当最旧），
+界面显示「已备份 0 张」而不是 Idle。
+解法是把两件事分开表达：新增 `KEY_SKIPPED`，空转走 `successStamped(KEY_SKIPPED to true)`
+（满足盖戳不变量），`uiStateOf` 把带这个标记的记录 `filterNot` 掉。
+
+**测试**：新增 `OnePipelineOnePauseTest` **8 例**。Android 全量 `--rerun-tasks`
+**39 类 / 298 tests / 0 failures**（XML 时间戳 11:11:11 确认本次生成），
+`assembleDebug` 绿。
+
+**反证四条真跑，全部命中：**
+- 暂停改回 `cancelManualBackup` + 自置 Idle → **2 红**
+- RUNNING 选取改回 `firstOrNull` → **1 红**
+- 去掉互斥门 → **1 红**
+- 进度条去掉两个覆盖 → **1 红**
+
+**真机验收还欠（验收人自己跑）**：自动触发的备份进行中点暂停 → 传输真的停下、
+进度条不再动；进度条是一根标准直条（无断层、无末端圆点）；连续操作下进度文本
+不再来回跳。
+
+### 一条方法论教训（本轮第三次踩）
+
+`only_one_backup_runs_at_a_time` 我自己写的时候钉的是 `return Result.success()`
+这个**字面形状**，于是把早退改成 `successStamped(…)`（为满足盖戳不变量的正当
+改动）就被自己的测试误伤变红。改成钉不变量：不许 retry / 不许 failure / 必须以
+成功收场。**今天同一个坑踩了三次**（MOB-28 那条钉 `if (backupInterrupted) return@LaunchedEffect`、
+MOB-34 那条钉整串参数表、以及这条）——**守卫测试要钉「不变量」，钉「形状」就会
+在正当重构时误伤，而它并没有多守住任何东西。**

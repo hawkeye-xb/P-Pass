@@ -19,6 +19,7 @@
 |---|---|---|
 | [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | ①daemon 正常时点「导出日志」→ 包里 9 个文件都在；②daemon 挂着时点导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip 不许出现你的用户名 | **L1** |
 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | force-stop 后重开 App，前台该传就传（后台仍等你点恢复） | **L1** |
+| [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 自动备份进行中点暂停要真的停下；进度条是标准直条、文本不跳 | **L0** |
 | [MOB-32](../.claude/cards/MOB-32-calibration-wipes-a-live-backup-session.md) | 大批量备份传到一半打开 App，照片一张都不能丢 | **L0** |
 | [MOB-29](../.claude/cards/MOB-29-confirmed-store-lies-between-backups.md) | 访达删照片 → 桌面端出警告 + 手机端出「正在重传」通知，且照片真的被传回来（顺带：手机「已备份」数字不再在两次备份之间说谎） | **L1** |
 | [MOB-34](../.claude/cards/MOB-34-deleted-old-photos-never-re-uploaded.md) | 库里删 3 张**老**照片 → 不手动干预 → 它们自己回来，且「待备份 K」归零（⚠️ 先看卡里的「已知边界」判别法） | **L1** |
@@ -56,7 +57,6 @@
 | 3 | [DESK-09](../.claude/cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 向导把 daemon 的真实启动错误吞成「没有在 10 秒内就绪」（2026-08-25 撤出关键路径、推后） | **L1** |
 | 4 | [CI-03](../.claude/cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁，格式漂移无人发现（⚠️ 要动 workflows，先确认由谁改） | L0 |
 | 5 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
-| 6 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | **暂停按钮对自动备份无效 + 进度条乱跳**（四通道 unique name；2026-08-26 从 L2 升 L0） | **L0** |
 | 6b | [MOB-36](../.claude/cards/MOB-36-photos-moved-into-scope-are-never-scanned.md) | 移进备份范围的照片永不被扫到（水位同族，复用 MOB-34 的定向补偿） | **L1** |
 | 6c | [MOB-37](../.claude/cards/MOB-37-reupload-notice-must-survive-a-lost-notification.md) | 重传告知只发一条通知，发失败即永久静默——状态要落盘 + App 内可见 | **L1** |
 | 6d | [UI-04](../.claude/cards/UI-04-notice-presentation-three-defects.md) | 提示呈现三连：只在总览 / 改名用占布局的条 / 多条堆叠 | L2 |
