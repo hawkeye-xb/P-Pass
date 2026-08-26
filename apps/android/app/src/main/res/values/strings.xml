@@ -203,4 +203,9 @@
     <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
     <string name="backup_interrupted_body">Automatic background backup was stopped. Photos sync while the app is open; tap to resume automatic backup. Your photos are safe — nothing was lost.</string>
     <string name="backup_interrupted_action">Resume</string>
+    <!-- MOB-37: 重传告知的 App 内呈现（系统通知发失败/没被看见时的兜底）。
+         措辞不做精确归因——手机端分不清「电脑上被删了」和「换了个库」，
+         带条件从句的第二句在两种成因下都成立（MOB-29 定调）。 -->
+    <string name="reupload_notice_body">%1$d backed-up photos are missing on your computer, so they are being uploaded again. If you meant to delete them, delete them on this phone first.</string>
+    <string name="reupload_notice_action">Got it</string>
 </resources>

@@ -21,6 +21,7 @@
 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | force-stop 后重开 App，前台该传就传（后台仍等你点恢复） | **L1** |
 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 自动备份进行中点暂停要真的停下；进度条是标准直条、文本不跳 | **L0** |
 | [MOB-32](../.claude/cards/MOB-32-calibration-wipes-a-live-backup-session.md) | 大批量备份传到一半打开 App，照片一张都不能丢 | **L0** |
+| [MOB-37](../.claude/cards/MOB-37-reupload-notice-must-survive-a-lost-notification.md) | **把 P-Pass 的通知权限关掉** → 访达里删几张已备份的照片 → 打开 App 的备份页，必须看到「有 N 张已备份的照片在电脑上不见了，正在重新传回」那条提示；点「知道了」它消失，再删几张会重新出现 | **L1** |
 | [MOB-29](../.claude/cards/MOB-29-confirmed-store-lies-between-backups.md) | 访达删照片 → 桌面端出警告 + 手机端出「正在重传」通知，且照片真的被传回来（顺带：手机「已备份」数字不再在两次备份之间说谎） | **L1** |
 | [MOB-34](../.claude/cards/MOB-34-deleted-old-photos-never-re-uploaded.md) | 库里删 3 张**老**照片 → 不手动干预 → 它们自己回来，且「待备份 K」归零（⚠️ 先看卡里的「已知边界」判别法） | **L1** |
 | [WATCH-07](../.claude/cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏（同一文件复检不记审计） | L2 |
@@ -58,7 +59,6 @@
 | 4 | [CI-03](../.claude/cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁，格式漂移无人发现（⚠️ 要动 workflows，先确认由谁改） | L0 |
 | 5 | [BUILD-01](../.claude/cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
 | 6b | [MOB-36](../.claude/cards/MOB-36-photos-moved-into-scope-are-never-scanned.md) | 移进备份范围的照片永不被扫到（水位同族，复用 MOB-34 的定向补偿） | **L1** |
-| 6c | [MOB-37](../.claude/cards/MOB-37-reupload-notice-must-survive-a-lost-notification.md) | 重传告知只发一条通知，发失败即永久静默——状态要落盘 + App 内可见 | **L1** |
 | 6d | [UI-04](../.claude/cards/UI-04-notice-presentation-three-defects.md) | 提示呈现三连：只在总览 / 改名用占布局的条 / 多条堆叠 | L2 |
 | 7 | [LINT-01](../.claude/cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
 | 8 | [CI-02](../.claude/cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制（~300 Linux 分钟/月白烧） | L3 |
