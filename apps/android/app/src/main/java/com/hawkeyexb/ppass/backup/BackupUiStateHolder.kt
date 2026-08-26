@@ -299,10 +299,20 @@ internal fun computeTripletSafe(
     store: ConfirmedStore,
     bucketIds: Set<Long>? = null,
 ): BackupTriplet? = try {
-    val n = MediaScanner(checkNotNull(resolver)).countAll(bucketIds)
-    // FIX-T6: M 必须按同一范围口径（范围外确认数不进 M），否则先全量
-    // 备份再缩范围会显示「手机 10 张 · 已备份 51」。
-    tripletOf(n, store.countInScope(bucketIds).toLong(), store.lastSuccessAt())
+    // MOB-40 收尾：**没选过范围时三元组不显示。** `countAll(null)` 是全库口径，
+    // 而 worker 现在一张都不传——两边一拼，状态条会走 `Pending(254)`，挂着一句
+    // 「还有 254 张待备份」永不收敛。那是 MOB-40 要杀的同一类谎话。
+    // 走 null（与 DOG-01d 的「查询失败 → 三元组不显示」同一个退化出口）：
+    // 还没告诉我要备什么，我就报不出待备份张数。
+    val scanner = MediaScanner(checkNotNull(resolver))
+    if (bucketIds == null) {
+        null
+    } else {
+        val n = scanner.countAll(bucketIds)
+        // FIX-T6: M 必须按同一范围口径（范围外确认数不进 M），否则先全量
+        // 备份再缩范围会显示「手机 10 张 · 已备份 51」。
+        tripletOf(n, store.countInScope(bucketIds).toLong(), store.lastSuccessAt())
+    }
 } catch (_: Throwable) {
     null
 }

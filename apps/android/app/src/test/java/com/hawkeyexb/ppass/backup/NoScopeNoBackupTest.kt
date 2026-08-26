@@ -124,7 +124,34 @@ class NoScopeNoBackupTest {
         assertTrue("两个戳必须是不同的 key", KEY_NO_SCOPE != KEY_NO_ALBUMS)
     }
 
-    // ── ③ 首次选择 = 全部新增 → 水位归零 ──
+    // ── ③ 三元组不许替 worker 编一个待备份数 ──
+
+    @Test
+    fun the_triplet_stays_hidden_until_a_scope_is_picked() {
+        // `MediaScanner.countAll(null)` 是**全库**口径，而 worker 现在一张都
+        // 不传。两边一拼，状态条会走 `Pending(254)`——挂着一句「还有 254 张
+        // 待备份」永不收敛，正是 MOB-40 要杀的同一类谎话。
+        //
+        // 出口与 DOG-01c/d 的「媒体查询失败 → 三元组不显示」同一个：还没告诉
+        // 我要备什么，我就报不出待备份张数。resolver 传 null 会让 MediaScanner
+        // 的 checkNotNull 抛出、被 Throwable 级兜底吞掉，所以这里只能验证
+        // 「null 范围不产出三元组」这一半；范围检查在源码上排在 resolver 之后，
+        // 由下面那条位置断言守住。
+        val worker = codeOf("backup/BackupUiStateHolder.kt")
+        val at = worker.indexOf("internal fun computeTripletSafe(")
+        assertTrue("源码锚点已消失：computeTripletSafe", at >= 0)
+        val body = worker.substring(at, minOf(at + 900, worker.length))
+        assertTrue(
+            "没选过范围时三元组必须退化为不显示，不许按全库口径算 K",
+            body.contains("if (bucketIds == null)"),
+        )
+        val nullBranch = body.indexOf("if (bucketIds == null)")
+        val count = body.indexOf("countAll(")
+        assertTrue("源码锚点已消失：countAll(", count >= 0)
+        assertTrue("范围检查必须在 countAll 之前", nullBranch in 0 until count)
+    }
+
+    // ── ④ 首次选择 = 全部新增 → 水位归零 ──
 
     @Test
     fun the_first_ever_selection_resets_the_watermark() {

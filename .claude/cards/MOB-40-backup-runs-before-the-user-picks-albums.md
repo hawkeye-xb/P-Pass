@@ -133,3 +133,20 @@ NoScopeNoBackupTest > a_null_scope_never_reaches_the_scanner FAILED
 
 **顺手开了 `MOB-41`**：重传提示发在范围过滤之前——清理这 243 张范围外的
 照片时，每轮校准都会弹一条「正在重传」然后什么也不传。
+
+### 收尾补一处（同一语义的另一半）
+
+`BackupUiStateHolder.computeTripletSafe` 把范围直接喂给
+`MediaScanner.countAll`，而 `countAll(null)` 是**全库**口径。修完 worker 之后
+两边一拼就出现一条新的假话：范围为 null 时三元组按全库算出 N=254 / M=0 →
+`statusLineOf` 走 `Pending(254)`，状态条挂着「还有 254 张待备份」而 worker
+一张都不传，**永不收敛**。
+
+可达路径：配对 → 进选相册页 → 部分授权（`MOB-02 §二` 不保存范围，直接回
+Home）→ 范围仍是 null。
+
+出口取 `DOG-01c/d` 的同一个退化点：**没选过范围 → 三元组不显示**。还没告诉
+我要备什么，我就报不出待备份张数。加一条测试钉「范围检查排在 `countAll`
+之前」。
+
+最终计数：**45 类 / 341 tests / 0 failures**（XML 16:14:56）。
