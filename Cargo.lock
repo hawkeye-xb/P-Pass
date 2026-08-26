@@ -714,7 +714,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "core-index"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "blake3",
  "core-media",
@@ -729,7 +729,7 @@ dependencies = [
 
 [[package]]
 name = "core-media"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "kamadak-exif",
  "tempfile",
@@ -902,7 +902,7 @@ dependencies = [
 
 [[package]]
 name = "daemon"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "anyhow",
  "base64",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "diag"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "serde_json",
 ]
@@ -2841,7 +2841,7 @@ dependencies = [
 
 [[package]]
 name = "media-codec"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "core-media",
  "image",
@@ -3614,7 +3614,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "platform"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "notify",
  "tempfile",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "proto"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "insta",
  "serde",
@@ -5089,7 +5089,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "storage"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "base64",
  "sqlx",
@@ -5267,7 +5267,7 @@ dependencies = [
 
 [[package]]
 name = "testclient"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "anyhow",
  "base64",
@@ -5688,7 +5688,7 @@ dependencies = [
 
 [[package]]
 name = "transport"
-version = "0.4.0-test.5"
+version = "0.4.0-test.6"
 dependencies = [
  "bao-tree",
  "base64",
