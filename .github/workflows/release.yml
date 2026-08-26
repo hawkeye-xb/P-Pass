@@ -1,5 +1,6 @@
 # Release pipeline (T-071 + T-071b supply-chain hardening) — tag v* →
-# 双平台构建 → SHA256 → 签名门控 → SLSA attestation → Release 草稿。
+# 三平台构建 → SHA256 → 签名门控 → SLSA attestation → Release 草稿
+# → 分平台上传（CI-04②，各 lane 独立，Android 最快到手）。
 #
 # T-071b 加固点（2026-08-03）：
 #   - Apple 签名 secret 只出现在 codesign / notarize 两个 step 的 env，
@@ -22,6 +23,11 @@
 #   - 环境批准门：macos job 挂 environment: release-signing —— 在
 #     Settings → Environments 把 owner 加为 required reviewer 后生效；
 #     未配置保护规则时自动通过，不阻塞无凭据路径。
+#     ⚠️ 2026-08-26：实际从未配置 reviewer，这个门**从来没拦过任何东西**。
+#     它一度被当成「发布前的人工审批」向验收人描述，是错的——它卡在构建
+#     **之前**（签名 secret 使用前），而真正的人工把关点是末端的 draft
+#     等人工 publish。验收人拍板删除（待确认 APPLE_* secrets 挂在 repo 级
+#     而非本 environment 下，否则删掉会让 codesign 静默走无凭据路径）。
 #
 # 测试验收：打一个测试 tag（如 v0.2.0-test.1）→ workflow 走通到"签名前"全链
 # → 生成带 SHA256SUMS 资产的 Release 草稿（无凭据时签名步跳过）。
@@ -36,8 +42,11 @@ on:
       tag:
         description: "手工触发的 tag 名（草稿发布用）"
         required: false
-      # CI-01②: 平台选择（只对 workflow_dispatch 生效；tag push 永远全量
-      # ——发布完整性不许分块）。
+      # CI-01②: 平台选择（只对 workflow_dispatch 生效；tag push 恒全量构建）。
+      # ⚠️ 原注释这里写的是「发布完整性不许分块」——CI-04② 已经把**上传**
+      # 分块了（三条 lane 各传各的，Android 先到手）。「不许分块」那条原则
+      # 现在只管**正式版的 publish 时机**：draft 等人工点发布，那一刻资产
+      # 必然已经齐了。构建仍恒全量，分块的是上传，不是发布。
       platforms:
         description: "构建平台（逗号组合：android / macos / windows；留空 = all）"
         required: false
@@ -470,52 +479,394 @@ jobs:
             apps/android/app/build/outputs/apk/release/app-release.apk
             apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
 
-  release:
-    name: "Release 草稿"
-    needs: [macos-arm64, windows-x64, android]
-    # DESK-05 实测修复：dispatch 单平台时其余构建 job skipped → 无 if
-    # 门控则本 job 连带 skipped（GitHub 默认：needs 中任一 skipped 且无
-    # always() → 下游跳过），草稿永远建不出。任一平台成功即出草稿，
-    # 缺失平台由下方各步骤 [ -f ] 容错。
-    if: ${{ !cancelled() && (needs.macos-arm64.result == 'success' || needs.windows-x64.result == 'success' || needs.android.result == 'success') }}
+  # ══════════════════════════════════════════════════════════════════
+  # CI-04②（2026-08-26 验收人拍板「全拆」）：发布解耦
+  #
+  # ## 拆之前的形状与它的代价
+  #
+  # 原本是**一个** release job `needs: [macos, windows, android]`：收全部
+  # 产物 → 建草稿 → 传资产。`needs` 不看下游 `if` 写成什么，都要等三个
+  # job **跑完**。Android 的 APK 5 分钟就躺在 artifact 里了，却要陪
+  # Windows 等到最后（vcpkg 从源码编 libheif 首次 10-20 分钟）。验收人
+  # 原话：「怎么全量还是需要等待 win 的构建才能在 release 地址下载到新的
+  # 包啊。」
+  #
+  # 旧设计的理由写在文件头：「tag push 永远全量——发布完整性不许分块」。
+  # 那个考虑对**正式版**成立（不让人装到只有手机端的半成品），对狗粮 test
+  # 版是纯拖累——test 版的唯一用途就是尽快到验收人手上。
+  #
+  # ## 拆成什么
+  #
+  #   create-draft ──┬─→ upload-android  (+ manifest 签名 + test 自动发布)
+  #      (秒级)      ├─→ upload-macos
+  #                  └─→ upload-windows  (+ VT 提交)
+  #                              ↓
+  #                        finalize-notes
+  #
+  # ## 三个承重决定
+  #
+  # ① **`create-draft` 不 needs 任何构建 job。** 三条 lane 各自建草稿会撞
+  #    车（`gh release create` 第二次必败，这是 T-071b 注释里「先 create 再
+  #    upload」踩过的坑）。用 `create || true` 掩盖是 TOCTOU：两个 job 同时
+  #    发现「不存在」，一个成功一个失败被吞掉，之后 upload 打到哪个 release
+  #    上取决于时序。所以让一个秒级 job 先把草稿建出来，其余全是 upload。
+  #
+  # ② **构建 job 的 `contents: read` 一字不动。** 让 build job 自己
+  #    `gh release upload` 是最短的改法，但那要破 T-071b 立的「build job 不拿
+  #    contents:write」红线——第三方 action（rust 工具链、pnpm、vcpkg）跑在
+  #    同一个 job 里，给它们一个能改 release 的 token 是白送的攻击面。上传
+  #    因此下沉到独立的 upload job：它只做 download-artifact + gh upload，
+  #    没有任何第三方构建 action。
+  #
+  # ③ **manifest 组装/签名 + test 自动发布跟着 android 走。** 不是图省事：
+  #    `make-update-manifest.mjs` 的调用**结构上只吃 android 的 APK**（见
+  #    upload-android 里的 APK_ARGS——没 APK 就整个跳过，darwin/windows 条目
+  #    至今挂账）。它本来就不需要等桌面端。搬过来的直接效果是手机端约 6
+  #    分钟拿到包、自动更新立刻可验，不必等 win。
+  #
+  # ## notes 的写者只有两个（并发写竞争的处置）
+  #
+  # `create-draft` 写骨架，`finalize-notes` 覆盖终版。三条 upload lane
+  # **一律不碰 notes**。骨架里因此**不能**引用 `needs.*.outputs.signed`
+  # ——那时候构建还没跑完。签名状态、H-10c 资产 sha256、VT 分析 ID 全部
+  # 由 finalize 收口。代价是 manifest 里带的是骨架 notes（客户端更新说明
+  # 少了签名状态那行）；换来的是资产不必等 notes 齐。
+  #
+  # finalize 晚到不拖任何资产——它只 `gh release edit --notes-file`，对已
+  # publish 的 release 同样合法。
+  # ══════════════════════════════════════════════════════════════════
+
+  create-draft:
+    name: "建 Release 草稿（骨架）"
+    # 不 needs 任何构建 job（见上 ①）——秒级跑完，三条 lane 之后只管上传。
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    env:
-      # 只放布尔（不含 secret 值）：job 级 env 会暴露给本 job 每个第三方
-      # action 的进程环境——secret 本体下沉到 VT step（Apple secrets 同款模式）。
-      HAS_VT: ${{ secrets.VT_API_KEY != '' }}
-      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
-      # CI-01③a: R2 发布镜像门控——CLOUDFLARE_API_TOKEN 未就位时干净跳过
-      #（卡面：secret 存在才启用）。
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Download artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          path: artifacts
-
-      - name: Compose notes
+      - name: Resolve tag
+        id: tag
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ inputs.tag }}"
           else
             TAG="${GITHUB_REF_NAME}"
           fi
           [ -n "$TAG" ] || { echo "TAG 缺失（dispatch 需 tag 输入）"; exit 1; }
-          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Compose skeleton notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # ⚠️ 骨架里不许出现 needs.*.outputs.signed——本 job 不 needs 构建
+          # job，那时候签名结果还不存在（见上「notes 的写者只有两个」）。
+          # 签名状态由 finalize-notes 补。
           cat > NOTES.md <<EOF
           ## P-Pass ${TAG#v}
 
           构建自 \`${GITHUB_SHA::7}\` · $(date -u +%FT%TZ)
 
-          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed }}（${{ needs.macos-arm64.outputs.signed == 'yes' && 'Developer ID 签名 + 公证 + staple' || '无凭据路径跳过' }})/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || 'yes' }}（keystore 签名）
+          > 各平台产物正在陆续上传（Android 最快，Windows 最慢——vcpkg 首次
+          > 从源码编 libheif）。签名状态与资产 SHA-256 在全部平台就绪后补齐。
+
+          ### 面向人类的资产（H-10c）
+          - **P-Pass-macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
+          - **app-release.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
+          - **P-Pass_*-setup.exe** — Windows 安装包（NSIS）
+          - daemon 层自包含 zip（ppass-macos-arm64.zip）继续提供，向后兼容
+
+          ### 验证（被拦截/不信任时先做这三步）
+          - 下载每平台的 SHA256SUMS-\<platform\> 资产（certutil/shasum 对照）
+          - \`gh attestation verify <下载的文件> -R ${GITHUB_REPOSITORY}\`
+            （SLSA provenance，macOS 对 zip 解出的 daemon/testclient 执行）
+          - 源码可查：构建流程 .github/workflows/release.yml
+
+          macOS 包为自包含 zip（含 lib/ 依赖库）——解压后整个 P-Pass
+          目录一起用，勿单独拷出二进制。
+
+          被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md
+          EOF
+
+      - name: Create draft release (幂等)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # 幂等：重跑 workflow 时 release 已存在，裸 create 会失败。已存在
+          # 就只更新骨架 notes，不动 draft/prerelease 标志——那两个标志可能
+          # 已经被 upload-android 的自动发布步清掉了，这里重设会把已发布的
+          # test 版打回草稿，手机端立刻 404。
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release 已存在 → 只刷新骨架 notes"
+            gh release edit "$TAG" --notes-file NOTES.md
+          else
+            gh release create "$TAG" --draft --title "P-Pass ${TAG#v}" --notes-file NOTES.md
+          fi
+          echo "草稿: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+  # ── lane 1: Android（最快，且带着自动更新链路） ──
+  upload-android:
+    name: "上传 Android + 更新 manifest"
+    needs: [create-draft, android]
+    if: ${{ !cancelled() && needs.android.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.create-draft.outputs.tag }}
+      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
+    steps:
+      # checkout 是为了 tools/make-update-manifest.mjs——三条 lane 里只有
+      # 这条需要仓库文件。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download android artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: android
+          path: artifacts/android
+
+      - name: Fetch skeleton notes (manifest 的更新说明取自 release 正文)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$TAG" --json body -q .body > NOTES.md
+
+      # ── UPD-01: tauri-style update manifest (compose → optional sign) ──
+      # 客户端（desktop updater / android 自研流）读 release 资产直链
+      # manifest.json；UPDATE_SIGNING_KEY 到位后签名（tauri signer,
+      # minisign hashed 格式），无凭据路径 signature 留空 + notes 标注。
+      # 只出 android-arm64 条目——darwin 需 .app.tar.gz（H-10c 衔接：
+      # createUpdaterArtifacts 的 tar.gz 须在塞 lib/ 后产出，挂账）；windows
+      # 桌面壳待建。**正是这个「只吃 android」的事实让 manifest 能搬进本
+      # lane**（CI-04② 决定③）。签名密钥由用户生成（已 2026-08-04 完成）。
+      - name: Compose update manifest (UPD-01)
+        run: |
+          set -euo pipefail
+          APK_ARGS=()
+          if [ -f artifacts/android/app-release.apk ]; then
+            APK_ARGS=(--asset android-arm64=artifacts/android/app-release.apk)
+          elif [ -f artifacts/android/app-release-unsigned.apk ]; then
+            APK_ARGS=(--asset android-arm64=artifacts/android/app-release-unsigned.apk)
+          fi
+          if [ "${#APK_ARGS[@]}" -gt 0 ]; then
+            # 2026-08-25 用户拍板撤掉 R2 镜像：manifest 恒指 GitHub 直链。
+            # 撤的原因不是「镜像没用」，是**耦合方向错**——原实现在镜像
+            # 发生**之前**就把 URL 写成镜像地址，镜像 403 挂掉时 manifest
+            # 已经签名上传进 release，指向不存在的文件 → 自动更新拿到一个
+            # 坏 manifest 且无法手改（签名会破）。要重开镜像必须先修这个
+            # 耦合（REL-04）：先镜像 → 据结果定 base → 签名 → 单独镜像
+            # manifest；镜像失败必须回落 GitHub 直链，不许带坏 manifest 出门。
+            ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+            node tools/make-update-manifest.mjs \
+              --tag "$TAG" --notes NOTES.md \
+              --asset-base "$ASSET_BASE" \
+              "${APK_ARGS[@]}"
+            mv manifest.json artifacts/manifest.json
+          else
+            echo "无 APK 产物——跳过 manifest 组装"
+          fi
+
+      - name: Sign update manifest (UPD-01, gated)
+        if: env.HAS_UPDATE_KEY == 'true' && hashFiles('artifacts/manifest.json') != ''
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
+          # rsign 私钥（base64 文本，tauri signer 格式）还原成文件；CI
+          # 非交互 → 空密码。签名走 tauri 官方 signer（minisign 格式，
+          # 与 tauri-plugin-updater 验证端同源）。
+          # ⚠️ echo 会追加尾换行，tauri signer 的 base64 解码不 trim →
+          #   Invalid symbol 10 at offset N（N=key 字节数）；必须 printf '%s'
+          #   逐字节还原（v0.2.1-test.1 实测踩坑）。
+          printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
+          chmod 600 /tmp/ppass-update.key
+          # UPD-01 返工：pin 版本（与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4
+          # 一致）——裸 npx @tauri-apps/cli 每次拉最新，signer 格式漂移会静默
+          # 产出坏签名。
+          npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" \
+            "artifacts/android/$APK"
+          mkdir -p /tmp/sigs
+          cp artifacts/android/*.sig /tmp/sigs/
+          node tools/make-update-manifest.mjs \
+            --sign artifacts/manifest.json --sig-dir /tmp/sigs
+
+      - name: Upload android assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          ASSETS=""
+          # 无凭据路径只产出 unsigned；有凭据路径产出 signed（unsigned 无）。
+          if [ -f android/app-release.apk ]; then
+            ASSETS="$ASSETS android/app-release.apk"
+          elif [ -f android/app-release-unsigned.apk ]; then
+            ASSETS="$ASSETS android/app-release-unsigned.apk"
+          fi
+          [ -f manifest.json ] && ASSETS="$ASSETS manifest.json"
+          # --clobber：重跑 workflow 时资产已存在，裸 upload 会失败。
+          # shellcheck disable=SC2086 # ASSETS 是刻意拆分
+          gh release upload "$TAG" $ASSETS --clobber
+          echo "android assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      # REL-02: test tag → 自动 publish 为 prerelease（GitHub latest 天然
+      # 忽略 prerelease，绝不会漏进 stable 通道）——开发/狗粮设备 test
+      # 通道自动更新，无需手动传包；正式 tag 保持 draft 等人工 publish
+      #（人工 publish 就是验收后的发布动作，零新基建）。
+      #
+      # CI-04②：这一步搬进 android lane 是本卡的主要收益——手机端约 6 分钟
+      # 就能收到自动更新，不再等 Windows。后到的桌面端资产继续 upload 进这个
+      # **已 publish** 的 release，GitHub 允许（发布不是终态封印）。
+      - name: Auto-publish test tags as prerelease
+        if: contains(env.TAG, '-test.')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # REL-02 补丁（2026-08-11）：gh release edit --prerelease 只设
+          # prerelease 标志、不清 draft——release 仍是 draft，GitHub API
+          # 默认不返回 draft，update Worker 的 latestPrereleaseTag 永远
+          # 找不到 → test 通道 404 → 手机收不到。必须显式清 draft。
+          gh release edit "$TAG" --draft=false --prerelease
+          echo "test 通道已发布（prerelease，stable 不受影响）: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+  # ── lane 2: macOS ──
+  upload-macos:
+    name: "上传 macOS"
+    needs: [create-draft, macos-arm64]
+    if: ${{ !cancelled() && needs.macos-arm64.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.create-draft.outputs.tag }}
+    steps:
+      - name: Download macos artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-arm64
+          path: artifacts/macos-arm64
+
+      - name: Upload macos assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          ASSETS=""
+          for f in \
+            macos-arm64/ppass-macos-arm64.zip \
+            macos-arm64/SHA256SUMS-macos-arm64 \
+            macos-arm64/P-Pass-macos-arm64.dmg; do
+            if [[ -e $f ]]; then ASSETS="$ASSETS $f"; fi
+          done
+          # shellcheck disable=SC2086 # ASSETS 是刻意拆分
+          gh release upload "$TAG" $ASSETS --clobber
+          echo "macos assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+  # ── lane 3: Windows（最慢的一条，现在只拖自己） ──
+  upload-windows:
+    name: "上传 Windows"
+    needs: [create-draft, windows-x64]
+    if: ${{ !cancelled() && needs.windows-x64.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.create-draft.outputs.tag }}
+      # 只放布尔（不含 secret 值）：job 级 env 会暴露给本 job 每个第三方
+      # action 的进程环境——secret 本体下沉到 VT step。
+      HAS_VT: ${{ secrets.VT_API_KEY != '' }}
+    outputs:
+      vt_id: ${{ steps.vt.outputs.vt_id }}
+    steps:
+      # 刻意用两个具名下载，不用 `pattern:`——那是 download-artifact v4.1+
+      # 才有的输入，而本仓把 action pin 到 SHA（T-071b 供应链要求），注释
+      # 只写了 v4。不确定的输入不赌，具名下载 v4 全系都支持。
+      - name: Download windows binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-x64
+          path: artifacts/windows-x64
+
+      - name: Download windows installer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-x64-installer
+          path: artifacts/windows-x64-installer
+
+      - name: Upload windows assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          # shellcheck disable=SC2086 # ASSETS/glob 是刻意拆分
+          ASSETS=""
+          for f in \
+            windows-x64/daemon.exe windows-x64/testclient.exe \
+            windows-x64/SHA256SUMS-windows-x64 windows-x64/BUILD_INFO-windows-x64 \
+            windows-x64-installer/P-Pass_*-setup.exe; do
+            if [[ -e $f ]]; then ASSETS="$ASSETS $f"; fi
+          done
+          # shellcheck disable=SC2086 # ASSETS 是刻意拆分
+          gh release upload "$TAG" $ASSETS --clobber
+          echo "windows assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      # VT 提交跟着 windows lane（提交的就是 daemon.exe）。分析 ID 经 job
+      # output 交给 finalize-notes 写进正文——本 lane 不碰 notes。
+      - name: VirusTotal 提交（gated，卡面 VT 步——支持 blocked-by-av 信誉建设）
+        id: vt
+        if: env.HAS_VT == 'true'
+        env:
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+        run: |
+          set -euo pipefail
+          EXE="artifacts/windows-x64/daemon.exe"
+          [ -f "$EXE" ] || exit 0
+          ID=$(curl -sf -X POST -H "x-apikey: $VT_API_KEY" \
+            -F "file=@$EXE" https://www.virustotal.com/api/v3/files \
+            | jq -r .data.id)
+          echo "vt_id=$ID" >> "$GITHUB_OUTPUT"
+
+  # ── 收口：补签名状态 + 资产 sha256（晚到不拖任何资产） ──
+  finalize-notes:
+    name: "补齐 Release 正文"
+    needs: [create-draft, macos-arm64, windows-x64, android, upload-windows]
+    # DESK-05 同款容错：dispatch 单平台时其余 job skipped，`needs` 里有
+    # skipped 且无 !cancelled() → 本 job 连带跳过，正文永远补不齐。
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.create-draft.outputs.tag }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Compose final notes
+        run: |
+          set -euo pipefail
+          cat > NOTES.md <<EOF
+          ## P-Pass ${TAG#v}
+
+          构建自 \`${GITHUB_SHA::7}\` · $(date -u +%FT%TZ)
+
+          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed || 'n/a' }}（${{ needs.macos-arm64.outputs.signed == 'yes' && 'Developer ID 签名 + 公证 + staple' || '无凭据路径跳过' }})/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || 'n/a' }}（keystore 签名）
           **更新 manifest**：${{ secrets.UPDATE_SIGNING_KEY != '' && 'UPDATE_SIGNING_KEY 在位 → manifest.json 已签名（tauri signer）' || 'UPDATE_SIGNING_KEY 未设置 → manifest.json 未签名（signature 空，客户端系统签名校验兜底——Android PackageInstaller 强制同签名）' }}
 
           ### 面向人类的资产（H-10c）
           - **P-Pass-macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
           - **app-release.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
+          - **P-Pass_*-setup.exe** — Windows 安装包（NSIS）
           - daemon 层自包含 zip（ppass-macos-arm64.zip）继续提供，向后兼容
 
           ### 验证（被拦截/不信任时先做这三步）
@@ -549,134 +900,17 @@ jobs:
             fi
           } >> NOTES.md
 
-      - name: VirusTotal 提交（gated，卡面 VT 步——支持 blocked-by-av 信誉建设）
-        if: env.HAS_VT == 'true'
-        env:
-          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+      - name: VT 分析 ID → notes
+        if: needs.upload-windows.outputs.vt_id != ''
         run: |
-          set -euo pipefail
-          EXE="artifacts/windows-x64/daemon.exe"
-          [ -f "$EXE" ] || exit 0
-          ID=$(curl -sf -X POST -H "x-apikey: $VT_API_KEY" \
-            -F "file=@$EXE" https://www.virustotal.com/api/v3/files \
-            | jq -r .data.id)
-          echo "VirusTotal 分析 ID: $ID（草稿发布后见扫描结果链接）" >> NOTES.md
+          echo "VirusTotal 分析 ID: ${{ needs.upload-windows.outputs.vt_id }}（草稿发布后见扫描结果链接）" >> NOTES.md
 
-      # ── UPD-01: tauri-style update manifest (compose → optional sign) ──
-      # 客户端（desktop updater / android 自研流）读 release 资产直链
-      # manifest.json；UPDATE_SIGNING_KEY 到位后签名（tauri signer,
-      # minisign hashed 格式），无凭据路径 signature 留空 + notes 标注。
-      # 本卡只出 android-arm64 条目——darwin 需 .app.tar.gz（H-10c 衔接：
-      # createUpdaterArtifacts 的 tar.gz 须在塞 lib/ 后产出，挂账）；windows
-      # 桌面壳待建。签名密钥由用户生成（已 2026-08-04 完成）。
-      # CI-01③a: CF token 在位时 asset-base 用 R2 镜像域（国内下载可达；
-      # 签名是对资产字节的，换域名验签零变化）；缺 token 保持 GitHub 直链。
-      - name: Compose update manifest (UPD-01)
-        run: |
-          set -euo pipefail
-          # DESK-05: 单平台 dispatch 容错——缺平台就没对应 asset，
-          # 全缺（纯 macos 无 android）时跳过 manifest 组装。
-          APK_ARGS=()
-          if [ -f artifacts/android/app-release.apk ]; then
-            APK_ARGS=(--asset android-arm64=artifacts/android/app-release.apk)
-          elif [ -f artifacts/android/app-release-unsigned.apk ]; then
-            APK_ARGS=(--asset android-arm64=artifacts/android/app-release-unsigned.apk)
-          fi
-          if [ "${#APK_ARGS[@]}" -gt 0 ]; then
-            # 2026-08-25 用户拍板撤掉 R2 镜像：manifest 恒指 GitHub 直链。
-            # 撤的原因不是「镜像没用」，是**耦合方向错**——原实现在镜像
-            # 发生**之前**就把 URL 写成镜像地址，镜像 403 挂掉时 manifest
-            # 已经签名上传进 release，指向不存在的文件 → 自动更新拿到一个
-            # 坏 manifest 且无法手改（签名会破）。要重开镜像必须先修这个
-            # 耦合（REL-04）：先镜像 → 据结果定 base → 签名 → 单独镜像
-            # manifest；镜像失败必须回落 GitHub 直链，不许带坏 manifest 出门。
-            ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
-            node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes NOTES.md \
-              --asset-base "$ASSET_BASE" \
-              "${APK_ARGS[@]}"
-            mv manifest.json artifacts/manifest.json
-          else
-            echo "无 android 资产（单平台 dispatch）——跳过 manifest 组装"
-          fi
-
-      - name: Sign update manifest (UPD-01, gated)
-        if: env.HAS_UPDATE_KEY == 'true' && hashFiles('artifacts/manifest.json') != ''
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          # DESK-05: 单平台 dispatch 容错——manifest 没组装（无 android）
-          # 就没得签，直接跳过（if 已用 hashFiles 门控）。
-          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
-          # rsign 私钥（base64 文本，tauri signer 格式）还原成文件；CI
-          # 非交互 → 空密码。签名走 tauri 官方 signer（minisign 格式，
-          # 与 tauri-plugin-updater 验证端同源）。
-          # ⚠️ echo 会追加尾换行，tauri signer 的 base64 解码不 trim →
-          #   Invalid symbol 10 at offset N（N=key 字节数）；必须 printf '%s'
-          #   逐字节还原（v0.2.1-test.1 实测踩坑）。
-          printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
-          chmod 600 /tmp/ppass-update.key
-          # UPD-01 返工：pin 版本（与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4
-          # 一致）——裸 npx @tauri-apps/cli 每次拉最新，signer 格式漂移会静默
-          # 产出坏签名。
-          npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" \
-            "artifacts/android/$APK"
-          mkdir -p /tmp/sigs
-          cp artifacts/android/*.sig /tmp/sigs/
-          node tools/make-update-manifest.mjs \
-            --sign artifacts/manifest.json --sig-dir /tmp/sigs
-
-      - name: Create draft release
+      - name: Rewrite release notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cd artifacts
-          gh release create "$TAG" --draft --title "P-Pass ${TAG#v}" --notes-file ../NOTES.md
-          echo "草稿: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
-
-      - name: Upload release assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # shellcheck disable=SC2086 # ASSETS/glob 是刻意拆分
-          cd artifacts
-          # DESK-05: 单平台 dispatch 容错——只上传实际存在的资产，
-          # 缺平台的文件不存在就跳过（此前硬编码全平台清单，单平台
-          # dispatch 时 gh release upload 会因文件缺失失败）。
-          ASSETS=""
-          for f in \
-            macos-arm64/ppass-macos-arm64.zip macos-arm64/SHA256SUMS-macos-arm64 \
-            macos-arm64/P-Pass-macos-arm64.dmg \
-            windows-x64/daemon.exe windows-x64/testclient.exe \
-            windows-x64/SHA256SUMS-windows-x64 windows-x64/BUILD_INFO-windows-x64 \
-            windows-x64-installer/P-Pass_*-setup.exe \
-            manifest.json; do
-            if [[ -e $f ]]; then ASSETS="$ASSETS $f"; fi
-          done
-          # 无凭据路径只产出 unsigned；有凭据路径产出 signed（unsigned 无）。
-          if [ -f android/app-release.apk ]; then
-            ASSETS="$ASSETS android/app-release.apk"
-          elif [ -f android/app-release-unsigned.apk ]; then
-            ASSETS="$ASSETS android/app-release-unsigned.apk"
-          fi
-          # shellcheck disable=SC2086 # ASSETS 是刻意拆分
-          gh release upload "$TAG" $ASSETS
-          echo "assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
-
-      # REL-02: test tag → 自动 publish 为 prerelease（GitHub latest 天然
-      # 忽略 prerelease，绝不会漏进 stable 通道）——开发/狗粮设备 test
-      # 通道自动更新，无需手动传包；正式 tag 保持 draft 等人工 publish
-      #（人工 publish 就是验收后的发布动作，零新基建）。
-      - name: Auto-publish test tags as prerelease
-        if: contains(env.TAG, '-test.')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # REL-02 补丁（2026-08-11）：gh release edit --prerelease 只设
-          # prerelease 标志、不清 draft——release 仍是 draft，GitHub API
-          # 默认不返回 draft，update Worker 的 latestPrereleaseTag 永远
-          # 找不到 → test 通道 404 → 手机收不到。必须显式清 draft。
-          gh release edit "$TAG" --draft=false --prerelease
-          echo "test 通道已发布（prerelease，stable 不受影响）: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
-
+          set -euo pipefail
+          # 只改正文，不动 draft/prerelease——test tag 可能已被 upload-android
+          # 发布出去了，这里重设标志会把它打回草稿，手机端立刻 404。
+          gh release edit "$TAG" --notes-file NOTES.md
+          echo "正文已补齐: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
