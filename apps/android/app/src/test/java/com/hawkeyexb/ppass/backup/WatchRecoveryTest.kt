@@ -212,7 +212,9 @@ class WatchRecoveryTest {
         // 于是断言改成盯不变量本身：**重挂必须受中断标志门控**。谁把门控去掉
         // （写成裸的 scheduleAutoBackup），这条照样红。
         val s = src("MainActivity.kt")
-        val effect = sliceBetween(s, "LaunchedEffect(backupInterrupted) {", "}")
+        // MOB-38：逻辑从 LaunchedEffect 块挪进共用函数 foregroundCatchup
+        // （ON_RESUME 也要调它）。守的不变量没变，切片位置跟着走。
+        val effect = sliceBetween(s, "val foregroundCatchup =", "LaunchedEffect(backupInterrupted)")
         assertTrue(
             "打开 App 不许悄悄重挂后台监听——重挂必须受中断标志门控",
             effect.contains("if (!backupInterrupted) scheduleAutoBackup"),

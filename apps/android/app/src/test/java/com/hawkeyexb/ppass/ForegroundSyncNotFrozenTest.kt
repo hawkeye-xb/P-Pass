@@ -44,12 +44,18 @@ class ForegroundSyncNotFrozenTest {
         val src = codeOf(
             File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/MainActivity.kt")
         )
-        val from = "LaunchedEffect(backupInterrupted) {"
+        // MOB-38 之后逻辑搬了家：从 `LaunchedEffect` 块内挪进共用函数
+        // `foregroundCatchup`（因为 ON_RESUME 也要调它，两处各写一遍就是
+        // 「漏接一处」的复发形状）。本卡三条不变量一个没变，只是位置变了。
+        //
+        // ⚠️ 这已经是本仓第四次「逻辑正当搬家 → 源码断言误伤」。判据本身
+        // 是对的（它守的是真不变量），但**源码文本断言天生与位置耦合**——
+        // 记在这里给 MOB-39 的实施者：那次重构会搬动更多逻辑，这类断言会
+        // 成批变红，届时要改的是切片位置，不是不变量。
+        val from = "val foregroundCatchup ="
         assertTrue("源码锚点已消失，断言失效：$from", src.contains(from))
         val tail = src.substringAfter(from)
-        // 块的右边界：紧跟其后的 `remember {`（MainActivity 里 LaunchedEffect
-        // 之后的下一个顶层块）。锚点变了要跟着改，别放宽成全文。
-        val to = "remember {"
+        val to = "LaunchedEffect(backupInterrupted)"
         assertTrue("源码结束锚点已消失，断言失效：$to", tail.contains(to))
         return tail.substringBefore(to)
     }
@@ -67,6 +73,16 @@ class ForegroundSyncNotFrozenTest {
             "中断待确认时不许整块早退——那会把前台补捞一起冻住（MOB-35）",
             body.contains("if (backupInterrupted) return"),
         )
+        // ⚠️ 这里曾加过一条「不许用 `!backupInterrupted` 把前台补捞包住」的
+        // 正则断言，**当场就误报了**：Kotlin 的单语句 `if` 没有花括号，
+        // `if (!backupInterrupted) scheduleAutoBackup(context)` 之后紧跟的
+        // `triggerUserPresentBackup(context)` 其实在 `if` 之外，而正则按
+        // 「N 个字符内出现」判命中，分不出作用域。已删。
+        //
+        // 真正守住这条的是姊妹测试 background_rearm_is_still_gated：它断言
+        // `if (!backupInterrupted) scheduleAutoBackup`——单语句形式意味着门控
+        // 只作用于那一句，前台补捞必然在门外。**别再用正则去猜作用域**，
+        // 文本匹配做不到这件事。
     }
 
     @Test

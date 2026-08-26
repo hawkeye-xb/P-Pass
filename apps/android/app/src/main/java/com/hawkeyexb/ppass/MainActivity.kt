@@ -182,15 +182,22 @@ fun PPassApp() {
     // 前台情况下，都无法上传，是不是不合理呢？" 给的状态模型是：**前台 = 人在
     // 场 = 该传**。用户打开 App 本身就是意思表示，而且他看得见进度——不存在
     // MOB-28 要防的那种"自作主张"。MOB-28 防的是"背着用户把后台监听装回去"。
-    LaunchedEffect(backupInterrupted) {
-        pairings.load() ?: return@LaunchedEffect
-        if (AutoBackupPrefs(context.filesDir).paused()) return@LaunchedEffect
-        // 后台监听：中断待确认时不许重挂（MOB-28 红线，唯一入口是
-        // resumeAfterInterruption）。
-        if (!backupInterrupted) scheduleAutoBackup(context)
-        // 前台补捞：无条件跑。人在场就该传。
-        triggerUserPresentBackup(context)
+    // MOB-38: 「回到前台该做什么」只写一份——`LaunchedEffect`（首次进入组合）
+    // 与 `ON_RESUME`（每次切回来）都调它。
+    //
+    // ⚠️ 提成函数不是为了少打字，是为了**让「漏接一处」变得不可能**。两处各写
+    // 一遍门控的话，下次改其中一条（比如再加一个「暂停中不补」的条件）就又会
+    // 漏——MOB-33/34/35/38 四个 bug 全是这个形状。
+    val foregroundCatchup = {
+        if (pairings.load() != null && !AutoBackupPrefs(context.filesDir).paused()) {
+            // 后台监听：中断待确认时不许重挂（MOB-28 红线，唯一入口是
+            // resumeAfterInterruption）。
+            if (!backupInterrupted) scheduleAutoBackup(context)
+            // 前台补捞：无条件跑。人在场就该传（MOB-35 的定调）。
+            triggerUserPresentBackup(context)
+        }
     }
+    LaunchedEffect(backupInterrupted) { foregroundCatchup() }
     remember {
         val pairing = pairings.load()
         if (pairing != null && !AutoBackupPrefs(context.filesDir).paused()) {
@@ -330,6 +337,26 @@ fun PPassApp() {
                     partialMedia = hasPartialMediaAccess(context)
                     heartbeat.start()
                     timeline.start()
+                    // MOB-38（2026-08-26 真机）：**每次回到前台都补捞一次。**
+                    //
+                    // 在此之前补捞只挂在 `LaunchedEffect(backupInterrupted)` 上，
+                    // 那个键只有一个 → composition 存活期间只跑一次。Activity 走
+                    // STOPPED → RESUMED（从 App 切去相机、拍照、再切回来）**不会**
+                    // 让它重跑，composition 本身没被销毁。于是用户人就在 App 里
+                    // 看着、期待它传，而那一刻没有任何补捞被发起——如果内容监听
+                    // 那次也没接住（被 OEM 清过、防抖窗口边界、force-stop 之后
+                    // 还没恢复），这张照片只能等 5h 周期兜底。
+                    //
+                    // 验收人原话：「在前台，一张照片很久也没有同步。……从我们
+                    // app 切换到相机，这样就不算前台了吗？我记得咱们针对不同的
+                    // app 状态有过讨论的啊。」——讨论过、也做了，上面那四行刷新
+                    // 就是；**唯独备份补捞漏了**。
+                    //
+                    // 为什么放心「每次 resume 都补」：MOB-33 的 `backupInFlight`
+                    // 互斥门在管线入口，重复触发的代价降到一次 CAS（抢不到就
+                    // 早退）。在 MOB-33 之前这么做会造出一串并行备份——那正是
+                    // MOB-33 的原症状。
+                    foregroundCatchup()
                 }
                 Lifecycle.Event.ON_STOP -> {
                     heartbeat.stop()
