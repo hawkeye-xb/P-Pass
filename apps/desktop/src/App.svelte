@@ -9,6 +9,7 @@
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
+  import WizardWindows from "./WizardWindows.svelte";
   import PhotoThumb from "./lib/PhotoThumb.svelte";
   // DESK-07: shadcn-svelte 组件（组件代码进仓库 src/lib/components/ui/，
   // 不是 node_modules 黑箱；Tailwind 工具类全局可用）
@@ -1059,11 +1060,22 @@
         <button class="message-close" aria-label="关闭提示" onclick={() => (message = "")}>×</button>
       </p>
     {/if}
-    <Wizard
-      defaultDir={wizard.default_dir}
-      configuredLibraryDir={wizard.configured_library_dir}
-      onDone={() => { checkWizard(); refresh(); }}
-    />
+    <!-- W1 (2026-08-26): 整块按平台选择组件渲染，不在单个 Wizard 内部
+         塞 if isWindows —— macOS/Windows 的 onboarding 是两条完全独立的
+         文案+流程分支，拆成两个组件更好维护、也不会互相牵连回归。 -->
+    {#if wizard.platform === "windows"}
+      <WizardWindows
+        defaultDir={wizard.default_dir}
+        configuredLibraryDir={wizard.configured_library_dir}
+        onDone={() => { checkWizard(); refresh(); }}
+      />
+    {:else}
+      <Wizard
+        defaultDir={wizard.default_dir}
+        configuredLibraryDir={wizard.configured_library_dir}
+        onDone={() => { checkWizard(); refresh(); }}
+      />
+    {/if}
   </main>
 {:else}
   <div class="shell">

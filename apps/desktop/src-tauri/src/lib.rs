@@ -80,6 +80,12 @@ fn wizard_state() -> Value {
         // the wizard prefills this so re-running it never orphans the
         // existing library (T-042b).
         "configured_library_dir": configured_dir,
+        // W1 (2026-08-26): wizard copy hard-coded macOS-only wording
+        // (Finder, TCC-protected 桌面/文稿, "macOS 拦截时右键打开") on
+        // every platform — a Windows real-box run surfaced this as
+        // "onboarding 说明都是 macOS 的". Expose the platform so the
+        // frontend can branch copy instead of guessing from user agent.
+        "platform": if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "macos" } else { "linux" },
     })
 }
 
