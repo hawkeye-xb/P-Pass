@@ -1039,7 +1039,7 @@
     try {
       await revealItemInDir(viewerPath);
     } catch (e) {
-      flashMessage(`无法在 Finder 中显示：${e}`);
+      flashMessage(`无法在文件管理器中显示：${e}`);
     }
   }
 </script>
@@ -1452,7 +1452,7 @@
               {/if}
             {/if}
           </Card>
-          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">缩略图只用来快速翻找；整理、导出、删除都在 Finder 里进行——文件就是普通文件。</p>
+          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">缩略图只用来快速翻找；整理、导出、删除都在文件管理器里进行——文件就是普通文件。</p>
         </section>
       {:else if page === "log"}
         <section class="page" data-testid="page-log">
@@ -1461,7 +1461,7 @@
           <div class="flex flex-wrap items-end justify-between gap-[20px]">
             <div>
               <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">活动记录</h2>
-              <p class="mt-[6px] text-[14px] text-ink-40">谁备份了什么，一目了然——不用去 Finder 里对账。</p>
+              <p class="mt-[6px] text-[14px] text-ink-40">谁备份了什么，一目了然——不用去文件管理器里对账。</p>
             </div>
             <!-- 设计稿"本周"统计条：只做能从真实审计数据推出来的两项，
                  见上方 weekStats 注释——不编造「重试成功」这类没有真实
