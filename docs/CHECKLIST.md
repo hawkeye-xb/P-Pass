@@ -7,7 +7,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `.claude/local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后更新：**2026-08-25**
+> 最后更新：**2026-08-26**
 
 ---
 
@@ -17,7 +17,7 @@
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | ①daemon 正常时点「导出日志」→ 包里 9 个文件都在；②daemon 挂着时点导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip 不许出现你的用户名 | **L1** |
+| [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | **复验**（8/26 你打回的脱敏漏已补：`detail` 里的全长 NodeId 现在也掩到前 8 位）：①daemon 正常时点「导出日志」→ 包里 9 个文件都在；②daemon 挂着时点导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip 不许出现你的用户名；④`audit.json`/`diag_events.json` 里的路径应是 `originals/<8位前缀>…<masked>/2026/08/…`，看不到完整 hex | **L1** |
 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | force-stop 后重开 App，前台该传就传（后台仍等你点恢复） | **L1** |
 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 自动备份进行中点暂停要真的停下；进度条是标准直条、文本不跳 | **L0** |
 | [MOB-32](../.claude/cards/MOB-32-calibration-wipes-a-live-backup-session.md) | 大批量备份传到一半打开 App，照片一张都不能丢 | **L0** |

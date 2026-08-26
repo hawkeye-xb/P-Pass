@@ -1,6 +1,7 @@
 # DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作　级别 L1
 
-> 🟡 代码已合并（commit 1e1359f + 0e0521f），等真机验收
+> 🟡 代码已合并（commit 1e1359f + 0e0521f），真机验收查出脱敏漏一处、
+> 2026-08-26 已补（见卡尾「补漏记录」），**其余项仍等真机复验**
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -58,6 +59,8 @@ resolved migrations`）一直躺在 `~/Library/Logs/p-pass-daemon.err` 里，重
   （本机以 tempdir 造出同样内容的 `.err` 验证；真机复现见「还差什么」）
 - [x] 脱敏不回退：家目录路径仍走 `sanitize()`，NodeId 仍只出前缀
   （现有行为，不许因为加文件而漏掉新加的那些）
+  ⚠️ 真机验收此条**曾不通过**——`detail` 里的路径漏了全长 NodeId，
+  2026-08-26 已补，见卡尾「补漏记录」
 
 ## 范围
 
@@ -107,7 +110,7 @@ Windows/Linux 的日志位置不同（LaunchAgent 是 macOS 专属）。实施�
 | `config-summary.txt` | `data_dir` / `bind_addr`（路径脱敏） |
 | `log-sources.txt` | plist 是否注册、两个日志路径的实际取值（脱敏） |
 | `daemon-unreachable.txt` | 仅 daemon 不可达时出现，写清为什么连不上、以及缺了哪三份 |
-| `diag_events.json` / `devices.json` / `audit.json` | 仅 daemon 可达时附加（daemon 侧已脱敏，原样搬进同一个包） |
+| `diag_events.json` / `devices.json` / `audit.json` | 仅 daemon 可达时附加（daemon 侧脱敏 + 桌面壳在 bundle 边界再过一道 scrub，见「补漏记录」） |
 
 落盘位置与文件名不变：`<库目录>/ppf-logs.zip`。
 
@@ -210,11 +213,107 @@ NodeId 开头**（库的布局是 `originals/<nodeid>/YYYY/MM/…`），那条�
 
 ### 还要补的
 
-- [ ] `audit.json` 的 `detail`（以及任何嵌了路径的字段）里的长 hex 也要掩到
+- [x] `audit.json` 的 `detail`（以及任何嵌了路径的字段）里的长 hex 也要掩到
       前 8 位——脱敏要按「值的形状」做，不能按「字段名」白名单
-- [ ] 反证：构造一条 `detail` 含 `originals/<64位hex>/…` 的审计 → 导出后包里
+- [x] 反证：构造一条 `detail` 含 `originals/<64位hex>/…` 的审计 → 导出后包里
       **不许**出现完整 hex
-- [ ] 顺带自查：`diag_events.json` 的 `detail` 是同一个问题的另一半吗？
-      （那边走的是 `sanitize()`，确认它也掩长 hex）
+- [x] 顺带自查：`diag_events.json` 的 `detail` 是同一个问题的另一半吗？
+      （那边走的是 `sanitize()`，确认它也掩长 hex）**是——它也漏，一起修了**
 
 **卡状态维持 🟡**——验收没过，不许移入 `done/`。
+
+---
+
+## 补漏记录（2026-08-26）：脱敏改成按「值的形状」做
+
+### 根因复述
+
+掩码是**按字段名**做的：`actor` 有前缀掩码，`detail` 只过 `sanitize()`（家目录
+替换）。而库布局是 `originals/<nodeid>/YYYY/MM/<file>`，`detail` 里嵌的
+`rel_path` **本身就以全长 NodeId 开头**，于是完整 64 位 hex 照样出包。
+`diag_events.json` 的 `detail` 是同一个洞的另一半——**已确认它也漏**，同一次
+一起修。
+
+### 改了什么
+
+- `crates/daemon/src/ipc.rs`——新增 `mask_long_hex()`（≥24 位连续 hex → 前 8 位
+  + `…<masked>`；短 hex 如端口号不动）与 `scrub() = mask_long_hex(sanitize())`。
+  `export_logs` 的**三个**出包字段全部从 `sanitize` 换成 `scrub`：
+  `diag_events.detail`、`devices.name`、`audit.detail`。
+  **`sanitize()` 本身语义不动**（卡的范围条款），家目录脱敏零改动。
+- `apps/desktop/src-tauri/src/daemon_logs.rs`——`build_bundle` 里 daemon 给的那
+  几份 JSON 不再「原样搬」，也过同一道 `scrub`。理由是**版本可以歪**：新壳配
+  旧 daemon（比如机上还装着 0.4.0-test.4）就会再漏一次，而验收标准是「**包**里
+  不许有全长 hex」——保证必须做在 bundle 边界上。≥24 位 hex 串不可能跨越 JSON
+  的语法字符，掩码只发生在字符串值内部，JSON 仍然合法（测试里真解析了一遍）；
+  8 位前缀（`actor_prefix` / `node_id_prefix`）在阈值之下，不受影响。
+
+### 既有那条测试为什么没抓到
+
+`logs_export_zip_carries_audit_events` 的 fixture 里 `detail` 是 `"测试吊销"`——
+**一个 hex 字符都没有**。它那句 `assert!(!audit.contains(&"ab".repeat(32)))` 于是
+**空转**：fixture 里唯一的全长 hex 在 `actor` 上，而 `actor` 早就有前缀掩码。
+判据本身也太窄——「某个已知常量不出现在某个字段里」，漏掉的字段永远测不到。
+
+判据已换成**扫整个包里最长的连续 hex 串，超过 24 位就红**（新增
+`longest_hex_run()` 辅助函数）。这条判据不认识字段名，所以下一个嵌了 NodeId
+的新字段进包时它会自己红。
+
+### 反证（真跑，红输出摘录；hex 是测试构造的合成值）
+
+**先加强测试再改代码**，所以红是打在真漏的代码上的。
+`cargo test -p daemon --test ipc_flow logs_export`：
+
+```
+test logs_export_zip_leaks_no_username ... FAILED
+test logs_export_zip_carries_audit_events ... FAILED
+
+---- logs_export_zip_leaks_no_username stdout ----
+panicked at crates/daemon/tests/ipc_flow.rs:657:5:
+diag detail 里的全长 NodeId 也不许进包: [
+  { "detail": "rel_path originals/<64位hex>/2026/08/a.jpg",
+    "kind": "backup.commit", "ts": 2 }, …]
+
+---- logs_export_zip_carries_audit_events stdout ----
+panicked at crates/daemon/tests/ipc_flow.rs:728:5:
+detail 里的全长 NodeId 泄漏了: [
+  { "action": "device.revoked", "actor_prefix": "abababab",
+    "detail": "外部删除 originals/<64位hex>/2026/08/IMG_0042.jpg", … }]
+```
+
+**两条都漏**——审计与 diag 同一个洞的两半，实测确认。改完 `2 passed`。
+
+桌面壳侧同样跑了反证：把 `build_bundle` 里那句 `scrub(text, home)` 改回
+`text.to_string()`（= 「原样搬」的老行为）：
+
+```
+test daemon_logs::tests::daemon_entries_are_scrubbed_at_the_bundle_boundary ... FAILED
+panicked at src/daemon_logs.rs:426:9:
+全长 NodeId 泄漏了: [{"actor_prefix": "abababab",
+  "detail": "外部删除 /Users/someone/lib/originals/<64位hex>/2026/08/a.jpg"}]
+```
+
+改回后 15 passed。
+
+### 绿的证据
+
+- `just ci`：`Summary [14.473s] 320 tests run: 320 passed, 1 skipped`
+  （319 → 320，新增 `scrub_masks_long_hex_anywhere_in_the_value`；既有
+  `sanitize_replaces_home_with_data_marker` 与两条导出脱敏测试全绿——**家目录
+  脱敏零回退**）
+- `cd apps/desktop/src-tauri && cargo test --lib`：`15 passed`（14 → 15）
+- `cd apps/desktop && pnpm test`：`Test Files 3 passed / Tests 24 passed`
+  （前端本次零改动）
+- `cargo clippy --all-targets`（src-tauri workspace）：零告警
+
+### 验收状态
+
+**脱敏已补齐**（上面三条 checkbox 全做完，反证真跑）。**其余项仍等真机复验**，
+卡维持 🟡、不进 `done/`：
+
+1. daemon 正常在跑时点「导出日志」→ 9 份文件都在；
+2. daemon 挂着时点导出 → 仍出 zip，含 `.err`/`.log` 与版本号；
+3. `grep` 整个 zip 不许出现用户名。
+
+顺手可以加第 4 条：`audit.json` / `diag_events.json` 里的路径应该长这样
+`originals/<8位前缀>…<masked>/2026/08/…`，看不到完整 hex。

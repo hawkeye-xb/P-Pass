@@ -621,6 +621,18 @@ async fn logs_export_zip_leaks_no_username() {
     })
     .await
     .unwrap();
+    // DESK-10 补漏：diag 的 detail 是同一个洞的另一半——它也只过
+    // 家目录替换，嵌在里面的全长 NodeId 会原样进包。
+    db.append_diag(&storage::DiagEvent {
+        ts: 2,
+        kind: "backup.commit".into(),
+        detail: Some(format!(
+            "rel_path originals/{}/2026/08/a.jpg",
+            "d7".repeat(32)
+        )),
+    })
+    .await
+    .unwrap();
 
     let mut c = IpcClient::connect(&socket, &token).await;
     let resp = c.call("logs.export", serde_json::Value::Null).await;
@@ -645,6 +657,14 @@ async fn logs_export_zip_leaks_no_username() {
         all_text.contains("<DATA>/Pictures/secret.jpg"),
         "the path must be present but sanitised: {all_text}"
     );
+    assert!(
+        !all_text.contains(&"d7".repeat(32)),
+        "diag detail 里的全长 NodeId 也不许进包: {all_text}"
+    );
+    assert!(
+        all_text.contains("d7d7d7d7…<masked>"),
+        "长 hex 应掩到前 8 位: {all_text}"
+    );
 }
 
 /// DESK-10: 导出包里必须有 audit.json（审计事件——配对/吊销/外部删除
@@ -659,7 +679,14 @@ async fn logs_export_zip_carries_audit_events() {
         actor: Some(vec![0xAB; 32]),
         action: "device.revoked".into(),
         target_hash: None,
-        detail: Some("测试吊销".into()),
+        // DESK-10 真机验收暴露的漏：库的布局是
+        // `originals/<nodeid>/YYYY/MM/<file>`，所以 detail 里嵌的
+        // rel_path 本身就以全长 NodeId 开头——脱敏必须按「值的形状」
+        // 做，不能只给 actor 这个字段名做前缀掩码。
+        detail: Some(format!(
+            "外部删除 originals/{}/2026/08/IMG_0042.jpg",
+            "c4".repeat(32)
+        )),
     })
     .await
     .unwrap();
@@ -688,8 +715,56 @@ async fn logs_export_zip_carries_audit_events() {
     }
     assert!(audit.contains("device.revoked"), "{audit}");
     assert!(audit.contains("\"actor_prefix\": \"abababab\""), "{audit}");
-    // 全量 NodeId（64 hex）绝不进包。
+    // 全量 NodeId（64 hex）绝不进包——actor 字段。
     assert!(!audit.contains(&"ab".repeat(32)), "{audit}");
+    // …也不许从 detail 里的路径漏出去（这条就是真机验收抓到的漏）。
+    // 判据加强：不看单个字段，而是扫整个包里有没有 ≥24 位连续 hex。
+    let mut all_text = String::new();
+    for i in 0..zip.len() {
+        use std::io::Read as _;
+        let mut f = zip.by_index(i).unwrap();
+        let mut s = String::new();
+        if f.read_to_string(&mut s).is_ok() {
+            all_text.push_str(&s);
+        }
+    }
+    assert!(
+        !all_text.contains(&"c4".repeat(32)),
+        "detail 里的全长 NodeId 泄漏了: {all_text}"
+    );
+    assert!(
+        all_text.contains("c4c4c4c4…<masked>"),
+        "路径应保留前 8 位便于对话: {all_text}"
+    );
+    if let Some(run) = longest_hex_run(&all_text) {
+        assert!(
+            run.len() < 24,
+            "包里还有 {} 位连续 hex，脱敏不按值的形状做就会漏: {run}",
+            run.len()
+        );
+    }
+}
+
+/// 扫出字符串里最长的一段连续 hex——导出包的脱敏判据用它，
+/// 而不是「某个字段名不含某个已知常量」（后者会因为漏掉的字段
+/// 而空转，DESK-10 真机验收就是这么漏的）。
+fn longest_hex_run(s: &str) -> Option<String> {
+    let mut best: Option<String> = None;
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_hexdigit() {
+            cur.push(ch);
+        } else {
+            if best.as_ref().is_none_or(|b| cur.len() > b.len()) {
+                best = Some(std::mem::take(&mut cur));
+            }
+            cur.clear();
+        }
+    }
+    if best.as_ref().is_none_or(|b| cur.len() > b.len()) {
+        best = Some(cur);
+    }
+    best.filter(|b| !b.is_empty())
 }
 
 // ── IPC-02: events.subscribe——事件订阅通道（桌面壳告别 3s 轮询）──
