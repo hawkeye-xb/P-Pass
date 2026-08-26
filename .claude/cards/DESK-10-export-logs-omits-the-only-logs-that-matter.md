@@ -183,3 +183,38 @@ daemon 不可达也必须出包: "找不到运行中的 P-Pass 后台服务（ip
    → 包里出现 `migration ... missing in the resolved migrations`，且有
    `daemon-unreachable.txt`。
 3. 抽查脱敏：`grep` 整个 zip，不许出现你的用户名。
+
+## 真机验收结果（2026-08-26）：**不通过**——脱敏漏了一处
+
+验收人导出的包我逐份看过了，绝大部分达标：
+
+```
+9 份文件齐         ✅  README/daemon-stderr/daemon-stdout/versions/
+                       config-summary/log-sources/diag_events/devices/audit
+真 daemon 日志在   ✅  39KB stderr，含 backup.commit / upload accepted 等真实行
+版本号             ✅  app_version = daemon_version = 0.4.0-test.4, daemon_reachable = yes
+配置摘要           ✅  data_dir = <DATA>/Pictures/…，bind_addr 在
+日志来源           ✅  从 plist 读，明确标注「已注册」
+家目录脱敏         ✅  全包 grep 不到用户名，无裸 /Users/<name> 路径
+```
+
+**但验收标准第 5 条没达到**（原文：「NodeId 仍只出前缀」）：
+
+```
+audit.json 里有完整 64 位 NodeId：
+f174deebb69e464e3eee8ed7a7b565c2ef0cbc8e42f56da782f54e99a61111bc
+```
+
+根因：掩码盖住了 `actor` 字段，但**`detail` 里的 `rel_path` 本身就以完整
+NodeId 开头**（库的布局是 `originals/<nodeid>/YYYY/MM/…`），那条路径没过掩码。
+
+### 还要补的
+
+- [ ] `audit.json` 的 `detail`（以及任何嵌了路径的字段）里的长 hex 也要掩到
+      前 8 位——脱敏要按「值的形状」做，不能按「字段名」白名单
+- [ ] 反证：构造一条 `detail` 含 `originals/<64位hex>/…` 的审计 → 导出后包里
+      **不许**出现完整 hex
+- [ ] 顺带自查：`diag_events.json` 的 `detail` 是同一个问题的另一半吗？
+      （那边走的是 `sanitize()`，确认它也掩长 hex）
+
+**卡状态维持 🟡**——验收没过，不许移入 `done/`。
