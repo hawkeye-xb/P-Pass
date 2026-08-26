@@ -42,7 +42,10 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
     is BackupUiState.Sending,
     -> StatusLine.Working(state)
     is BackupUiState.NoAlbums -> StatusLine.NoAlbums
+    // UX-13: 被暂停在状态**文案**上与空闲同档（Pending/Ready 照旧说欠账），
+    // 区别只在英雄区按钮——见 [heroActionOf]。
     is BackupUiState.Idle,
+    is BackupUiState.Paused,
     is BackupUiState.AllSafe,
     -> when {
         pendingK > 0 -> StatusLine.Pending(pendingK)
@@ -50,6 +53,44 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
         else -> StatusLine.Ready
     }
 }
+
+/**
+ * UX-13: 英雄区次级按钮的裁决——**同一个位置**在两种文案之间切换。
+ *
+ * `null` = 不显示（空闲、都存好了、没相册、出错了：出路在别处的卡上；
+ * 配对失效时也收起，出路在红卡的「重新扫码」）。
+ *
+ * 两个分支的点击**走同一条路**（`onBackupNow` → `BackupUiStateHolder
+ * .backupNow`）：进行中 = 暂停，被暂停 = 续传（重新 offer 全部候选，
+ * dedup 收敛缺 0）。MOB-19 红线：不新增第二条管线，所以这里只裁决**文案**，
+ * 不裁决动作。
+ *
+ * 为什么 [HeroAction.Resume] **不再加「待备份 K > 0」这道门**：`Paused`
+ * 的构造前提已经是「有一轮跑到一半被打断，之后没有任何一轮跑完」——那本身
+ * 就是「还有活没干完」。再拿三元组的 K 当门，会在三元组不可用（DOG-01d
+ * 退化为 null → K 传 0）时恰好把按钮藏起来，也就是把本卡要修的缺陷原样
+ * 放回去。K = 0 时点一下最坏是跑一轮零新增的空转，跑完 `Paused` 自动过期。
+ */
+enum class HeroAction { Pause, Resume }
+
+fun heroActionOf(state: BackupUiState, pairingLost: Boolean): HeroAction? = when {
+    pairingLost -> null
+    isBackupRunning(state) -> HeroAction.Pause
+    state is BackupUiState.Paused -> HeroAction.Resume
+    else -> null
+}
+
+/**
+ * 「这一刻有一轮备份在跑」——**点击的裁决也用它**：只有进行中那一下算
+ * 暂停，其余（含被暂停态下的「继续」）一律落到 `triggerManualBackup`
+ * 那一条管线（MOB-19 红线：不许有第二条）。
+ *
+ * `Paused` 刻意**不算**在跑：那正是「再点一次 = 续传」得以成立的判据。
+ */
+fun isBackupRunning(state: BackupUiState): Boolean =
+    state is BackupUiState.Scanning ||
+        state is BackupUiState.Hashing ||
+        state is BackupUiState.Sending
 
 /** 「最后成功时间」的裁决；UI 把每个分支映射到字符串资源。 */
 sealed class LastSuccess {

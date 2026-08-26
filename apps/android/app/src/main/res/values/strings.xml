@@ -61,6 +61,8 @@
     <string name="safe_detail_dup">%1$d new photos arrived home, %2$d were already there.</string>
     <string name="backup_now">Back up now</string>
     <string name="backup_pause">Pause</string>
+    <!-- UX-13: 被暂停后同一个位置的按钮文案（点它续传，同一条管线） -->
+    <string name="backup_resume">Resume</string>
     <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
     <string name="idle_auto_hint">Runs by itself while charging on Wi-Fi</string>
     <string name="state_no_albums">No albums selected — nothing to back up</string>

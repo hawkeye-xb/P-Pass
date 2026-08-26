@@ -59,6 +59,12 @@ sealed class BackupUiState {
     // 要求展示当前文件名，不只是计数；默认空串（还没传完第一个文件时）。
     data class Sending(val done: Int, val total: Int, val currentFile: String = "") : BackupUiState()
     data class AllSafe(val ingested: Int, val duplicates: Int) : BackupUiState()
+    /** UX-13: 用户主动暂停、还没续传——**与 Idle 是两种不同的空闲**。
+     *  在此之前两者都是 Idle，界面分不出来，于是暂停后英雄区按钮整个消失，
+     *  首页没有任何「继续」入口（验收人：「暂停之后，没有重新开始的
+     *  按钮？」）。判据见 backup/PausePrefs.kt 的 pausedAfterOf——是「按下
+     *  暂停的时刻」与 work 真实状态的合成，不是点击时就地写死的。 */
+    data object Paused : BackupUiState()
     /** FIX-T6: 一个相册都没选（空集 = 一个都不备）——显式「没有可
      *  备份的相册」，绝不显示假话「照片都存好了」。 */
     data object NoAlbums : BackupUiState()
@@ -276,11 +282,20 @@ fun HomeScreen(
                             )
                         }
                     }
-                    if (busy && !pairingLost) {
+                    // UX-13: 按钮**留在原地**，只换文案——进行中「暂停」，
+                    // 被暂停「继续」。原来这里是 `if (busy && !pairingLost)`，
+                    // 一暂停 busy 变 false，整个 if 块不渲染、按钮消失，
+                    // 首页再没有续传入口（验收人：「暂停之后，没有重新开始
+                    // 的按钮？」）。裁决在 heroActionOf（纯函数，有单测），
+                    // 两个分支共用 onBackupNow——MOB-19 红线：只有一条管线。
+                    val heroAction = heroActionOf(state, pairingLost)
+                    if (heroAction != null) {
                         Spacer(Modifier.width(12.dp))
-                        // UX-01 不动：进行中再点 = 暂停（幂等管线安全）。
                         HeroSecondaryButton(
-                            label = stringResource(R.string.backup_pause),
+                            label = when (heroAction) {
+                                HeroAction.Pause -> stringResource(R.string.backup_pause)
+                                HeroAction.Resume -> stringResource(R.string.backup_resume)
+                            },
                             onClick = onBackupNow,
                         )
                     }
@@ -791,8 +806,9 @@ private fun idleStatusText(line: StatusLine): String = when (line) {
 }
 
 /** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) +
- *  圆角 14 + 高 44——现仅「暂停」用（UX-09：空闲态「选择相册」已移除，
- *  入口在下方设置卡「备份范围」行）。 */
+ *  圆角 14 + 高 44——「暂停」/「继续」共用这一个（UX-13：同一个位置换文案，
+ *  不是两个按钮；UX-09：空闲态「选择相册」已移除，入口在下方设置卡
+ *  「备份范围」行）。 */
 @Composable
 private fun HeroSecondaryButton(label: String, onClick: () -> Unit) {
     Row(

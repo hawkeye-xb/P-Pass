@@ -12,6 +12,7 @@ import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.BackupUiState
+import com.hawkeyexb.ppass.ui.isBackupRunning
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +49,19 @@ class BackupUiStateHolder(
     private val reuploadNotice = ReuploadNoticePrefs(
         File(context.filesDir, "backup-state/${pairing.daemonNodeId}")
     )
+    // UX-13: 「用户按下暂停的那一刻」落盘（同目录，随配对一起清）。
+    // ⚠️ **同步读**（构造时读一次，见 [pausedAt]）：WorkManager 那条流的
+    // 首帧会立刻到，异步读盘会跟它抢跑——首帧赢了就按 pausedAt=0 算出 Idle，
+    // 而下一次重算要等下一个 work 事件（可能永远不来）。后果正是「暂停后
+    // 杀 App 重开，继续按钮不见了」。文件只有几十字节。
+    private val pausePrefs = PausePrefs(
+        File(context.filesDir, "backup-state/${pairing.daemonNodeId}")
+    )
+    /** 用户按下「暂停」的时刻（0 = 没有待续传的暂停）。内存里这一份是
+     *  权威值，落盘只为跨进程存活；写内存**同步**发生在点击那一刻，
+     *  好让紧随其后的 CANCELLED 那一帧就能算出被暂停态。 */
+    private var pausedAt: Long = runCatching { pausePrefs.pausedAt() }.getOrDefault(0L)
+
     private val _reuploadNoticeCount = mutableStateOf(0)
     /** MOB-37: App 内那条重传告知该显示几张（0 = 不显示）。读的是**落盘
      *  状态**，与系统通知是否送达无关。 */
@@ -110,7 +124,20 @@ class BackupUiStateHolder(
         // MOB-33: 记住当前正在跑的那条 work 的 id——暂停要取消**它**，
         // 而不是固定的手动通道（见 [backupNow]）。
         runningWorkId = runningInfoOf(infos)?.id
-        val next = uiStateOf(infos) ?: return
+        val next = uiStateOf(infos, pausedAt) ?: return
+        // UX-13: 这次暂停已被后来的运行覆盖 → 把标记清掉（内存 + 盘）。
+        // 不清的后果：WorkManager 迟早会把终态记录清理掉，届时盘上那个
+        // 陈年 pausedAt 面对一张空列表又会算出「被暂停」，「继续」按钮凭空
+        // 复活——跟本卡要修的那类幽灵状态同型。
+        // ⚠️ 不许在 next 还是「进行中」时清：点完暂停到 CANCELLED 回报之间
+        // 那几帧仍然是 Working（字节还在传，MOB-33 要的就是这个），清了就等于
+        // 这次暂停从没发生过。
+        if (pausedAt > 0L && next !is BackupUiState.Paused && !isBackupRunning(next)) {
+            pausedAt = 0L
+            scope.launch {
+                withContext(Dispatchers.IO) { runCatching { pausePrefs.setPausedAt(0L) } }
+            }
+        }
         // 配对失效是独立信号（红卡 + 重新扫码入口），不占状态行。
         if (next is BackupUiState.Trouble && isPairingLostText(next.text)) {
             _pairingLost.value = true
@@ -213,10 +240,11 @@ class BackupUiStateHolder(
         // UX-01: 进行中再点 = 暂停——取消这条 work。幂等管线保证安全：
         // 中断不 commit、水位不推进，已到家的 blob 下次去重跳过；再点
         // 一次 = 续传（重新 offer 全部候选，dedup 收敛缺 0）。
-        val running = _state.value.let {
-            it is BackupUiState.Scanning || it is BackupUiState.Hashing ||
-                it is BackupUiState.Sending
-        }
+        // UX-13: 判据抽成纯函数（ui/BackupStatus.kt 的 isBackupRunning），
+        // 与英雄区按钮的文案裁决共用同一份——「界面显示什么」和「点下去
+        // 干什么」永远对得上。`Paused` 不算在跑，所以「继续」落到下面那条
+        // triggerManualBackup（续传：重新 offer 全部候选，dedup 收敛缺 0）。
+        val running = isBackupRunning(_state.value)
         if (running) {
             // MOB-33（2026-08-26 真机）：暂停是**管线级**动作，不是通道级。
             // 验收人定的原则：「传输只有一个路径，暂停也得在一个路径。上传
@@ -226,6 +254,15 @@ class BackupUiStateHolder(
             // 原来这里调 cancelManualBackup，只取消 MANUAL_BACKUP_WORK_NAME。
             // 而界面是按 tag 观察全部五条通道的，于是自动触发的备份也会显示
             // 进度条、也会出现暂停按钮，点下去**取消不了它**。
+            // UX-13: 先记下「用户在这一刻按了暂停」，**再**取消 work——
+            // 顺序是承重的：cancelWorkById 会很快让流吐出 CANCELLED 那一帧，
+            // 标记要在那之前就位，否则那一帧算出的是 Idle（按钮消失一下再
+            // 冒出来）。内存同步写，落盘异步（跨进程存活用）。
+            pausedAt = System.currentTimeMillis()
+            val stamp = pausedAt
+            scope.launch {
+                withContext(Dispatchers.IO) { runCatching { pausePrefs.setPausedAt(stamp) } }
+            }
             val id = runningWorkId
             if (id != null) {
                 WorkManager.getInstance(context).cancelWorkById(id)
@@ -237,7 +274,8 @@ class BackupUiStateHolder(
             // ⚠️ 这里**不许**自己把状态置成 Idle。原来那句
             // `_state.value = BackupUiState.Idle` 让界面当场假装停了，而字节
             // 还在传——界面与传输脱钩。状态必须等 WorkManager 把 CANCELLED
-            // 回报回来（uiStateOf 会把它映射成 Idle）。
+            // 回报回来（此后 uiStateOf 按 pausedAt 与 work 真实状态合成出
+            // BackupUiState.Paused —— UX-13；没有 pausedAt 的取消仍是 Idle）。
             return
         }
         triggerManualBackup(context)
@@ -315,9 +353,14 @@ internal fun runningInfoOf(infos: List<androidx.work.WorkInfo>): androidx.work.W
     infos.filter { it.state == androidx.work.WorkInfo.State.RUNNING }
         .minByOrNull { it.id.toString() }
 
-internal fun uiStateOf(infos: List<androidx.work.WorkInfo>): BackupUiState? {
+internal fun uiStateOf(
+    infos: List<androidx.work.WorkInfo>,
+    // UX-13: 用户按下暂停的时刻（0 = 没暂停过）。默认值让既有调用点不变。
+    pausedAt: Long = 0L,
+): BackupUiState? {
     // 正在跑的优先——那才是用户此刻该看到的。
-    runningInfoOf(infos)?.let { running ->
+    val runningNow = runningInfoOf(infos)
+    runningNow?.let { running ->
         val p = running.progress
         val phase = p.getString(KEY_PHASE)
         val done = p.getInt(KEY_DONE, 0)
@@ -350,6 +393,18 @@ internal fun uiStateOf(infos: List<androidx.work.WorkInfo>): BackupUiState? {
     // 用户暂停留下的 CANCELLED（取消拿不到 outputData → 无戳 → 被当最旧）。
     val finished = infos.filter { it.state.isFinished }
         .filterNot { it.outputData.getBoolean(KEY_SKIPPED, false) }
+    // UX-13: 「被用户暂停」是与 Idle 并列的独立态——先于终态选取裁决。
+    // 判据（纯函数 pausedAfterOf）：没有在跑 + 用户按过暂停 + 这次暂停还没
+    // 被后来跑完的运行覆盖。**刻意不看那条 CANCELLED 记录**：取消拿不到
+    // outputData → 无戳 → 在按戳取最大的选取里恒被当上古记录，靠它判断
+    // 「刚被暂停」永远不成立（本卡最容易踩的坑）。
+    // newestFinishedAt 从**已排除空转轮**的 finished 里算——空转轮也盖戳
+    // 且常紧跟暂停落地，不排除它就会把刚发生的暂停当成已被覆盖。
+    val newestFinishedAt = finished
+        .maxOfOrNull { it.outputData.getLong(KEY_FINISHED_AT, 0L) } ?: 0L
+    if (pausedAfterOf(pausedAt, newestFinishedAt, anyRunning = runningNow != null)) {
+        return BackupUiState.Paused
+    }
     if (finished.isEmpty()) return null
     val stamped = finished.filter { it.outputData.getLong(KEY_FINISHED_AT, 0L) > 0L }
     val last = if (stamped.isEmpty()) {

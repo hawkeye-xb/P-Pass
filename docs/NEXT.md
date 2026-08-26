@@ -1,6 +1,37 @@
-# NEXT — 当前状态与下一步（2026-08-26，MOB-36 / MOB-37 收口）
+# NEXT — 当前状态与下一步（2026-08-26，UX-13 收口）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-26（收口）UX-13 已实施（commit PENDING · 🟡 等真机验收）
+
+暂停之后英雄区那个按钮**不再消失**：同一个位置换文案——进行中「暂停」，被暂停
+「继续」，点「继续」走的还是那条唯一的管线（`triggerManualBackup` → 续传，重新
+offer 全部候选、dedup 收敛缺 0）。
+
+根因不是 MOB-33 改出来的：**「用户主动暂停」与「本来就没事干」都映射到 `Idle`**，
+界面分不出来，而按钮只在 `busy` 时渲染。新增 `BackupUiState.Paused`，判据是落盘的
+「按下暂停的时刻」（新 `backup/PausePrefs.kt`，tmp+rename，随配对清）与 work 真实
+状态合成的纯函数 `pausedAfterOf(pausedAt, newestFinishedAt, anyRunning)`。
+
+- **刻意不看那条 CANCELLED 记录**：取消拿不到 `outputData` → 无戳 → 在 MOB-31 的
+  「按戳取最大」选取里恒被当上古记录，靠它判断「刚被暂停」永远不成立。
+- **没破 MOB-33 的「界面不许自己编状态」**：合成要求「没有 work 在跑」，所以点完
+  暂停而字节还在传的那几帧，界面照旧显示进行中 + 「暂停」。
+- **记时刻而不是布尔**：时刻不需要清除时机就能自证过期（出现更新的完成记录即失效）。
+- 两处易漏已处理：①构造时**同步**读 `pausedAt`（异步会跟 WorkManager 流首帧抢跑 →
+  暂停后杀 App 重开按钮不见）；②被后来的运行覆盖时清掉标记（不清则终态记录被
+  WorkManager 清理后「继续」凭空复活）。
+- 绿：Android **44 类 / 334 tests / 0 failures**（`--rerun-tasks`，XML 时间戳
+  2026-08-26T07:01Z 本次生成；基线 43 类 / 326）+ `assembleDebug`。只动
+  `apps/android/**` → 受影响 CI 域只有 **ci-android**。
+- 反证真跑：删掉 `uiStateOf` 里的合成 + `heroActionOf` 的 Resume 分支 → 3 条红，
+  摘录在卡里，之后已还原复跑绿。
+- ⚠️ 被迫多动一处：`ui/BackupStatus.kt`（卡面「只准动」没列）——`statusLineOf` 的
+  `when` 对 sealed class 穷尽，加变体必须处理。`Paused` 在状态**文案**上与空闲同档，
+  不破 T-080 的缺陷 (a)。
+- **等用户**：真机验收一条，见 `docs/CHECKLIST.md` §一新增的那行。
+
+---
 
 ## 〇、2026-08-26（收口）MOB-36 已实施（commit 55f8c43 · 🟡 等真机验收）
 

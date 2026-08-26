@@ -20,6 +20,7 @@
 | [DESK-10](../.claude/cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | **复验**（8/26 你打回的脱敏漏已补：`detail` 里的全长 NodeId 现在也掩到前 8 位）：①daemon 正常时点「导出日志」→ 包里 9 个文件都在；②daemon 挂着时点导出 → 仍出 zip 且含 `.err`/`.log` 与版本号；③grep 整个 zip 不许出现你的用户名；④`audit.json`/`diag_events.json` 里的路径应是 `originals/<8位前缀>…<masked>/2026/08/…`，看不到完整 hex | **L1** |
 | [MOB-35](../.claude/cards/MOB-35-interruption-prompt-freezes-foreground-sync-too.md) | force-stop 后重开 App，前台该传就传（后台仍等你点恢复） | **L1** |
 | [MOB-38](../.claude/cards/MOB-38-foreground-catchup-never-fires-on-resume.md) | 从 App 切到相机拍一张再切回来，照片自动传上去（不用点任何东西） | **L0** |
+| [UX-13](../.claude/cards/UX-13-no-resume-affordance-after-pause.md) | 备份中点「暂停」→ 按钮**留在原地**变「继续」→ 点它 → 传输接着跑、缺口收敛到 0（顺带两条：暂停后**杀掉 App 重开**，「继续」必须还在；一轮备份正常跑完后「继续」必须自己消失） | **L1** |
 | [MOB-33](../.claude/cards/MOB-33-four-channels-can-run-two-backups-in-parallel.md) | 自动备份进行中点暂停要真的停下；进度条是标准直条、文本不跳 | **L0** |
 | [MOB-32](../.claude/cards/MOB-32-calibration-wipes-a-live-backup-session.md) | 大批量备份传到一半打开 App，照片一张都不能丢 | **L0** |
 | [MOB-37](../.claude/cards/MOB-37-reupload-notice-must-survive-a-lost-notification.md) | **把 P-Pass 的通知权限关掉** → 访达里删几张已备份的照片 → 打开 App 的备份页，必须看到「有 N 张已备份的照片在电脑上不见了，正在重新传回」那条提示；点「知道了」它消失，再删几张会重新出现 | **L1** |
@@ -56,7 +57,6 @@
 | # | 卡 | 一句话 | 级别 |
 |---|---|---|---|
 | 0c | [MOB-39](../.claude/cards/MOB-39-triggers-are-data-pipeline-is-one.md) | **触发层抽象**：触发是数据、管线只有一条——治「每次新增触发都漏接一处」这个病根（排 MOB-38 之后） | **L1** |
-| 0b | [UX-13](../.claude/cards/UX-13-no-resume-affordance-after-pause.md) | 暂停后按钮消失，首页没有续传入口（UX-01 卡面语义未实现） | **L1** |
 | 1 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 | 2 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
 | 3 | [DESK-09](../.claude/cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 向导把 daemon 的真实启动错误吞成「没有在 10 秒内就绪」（2026-08-25 撤出关键路径、推后） | **L1** |
