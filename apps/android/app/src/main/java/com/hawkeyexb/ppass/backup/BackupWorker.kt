@@ -544,7 +544,42 @@ class BackupWorker(
             )
             // 查无此行 / 范围外 → 立刻丢，绝不每轮重试（MOB-09 的老坑）。
             reuploads.remove(plan.drop)
-            val items = plan.items
+            // PERF-01 的哈希缓存。MOB-36 的补齐判定要靠它把成本压成零，所以
+            // 提前到扫描阶段就构造（构造只是读一次盘，没有别的副作用）。
+            val hashCache = HashCache(hashCacheFile(ctx))
+            // MOB-36: 范围补齐——相册之间**移动**照片不改 _ID / date_added /
+            // date_modified，只改 bucket_id，于是「移进已选相册的老照片」的
+            // 水位值远在水位之下，增量扫描永远看不见它（真机现象：触发了、
+            // 什么也没传）。这里把「已选相册里、水位之下」的行捞回来，靠
+            // files / 哈希缓存两张现成的表筛掉已经备过的那些——**已确认的
+            // 一律不开流不哈希**，稳态下这一步返回空集、零成本（卡面第 3 条
+            // 与验收④）。范围为 null（全量模式）时一次查询都不发。
+            val confirmedState = confirmedStore.load()
+            val backfill = planScopeBackfill(
+                below = scanner.scanScopeBelow(since, bucketIds),
+                already = plan.items,
+                keyOf = { it.uri.toString() },
+                knownHashOf = { item ->
+                    knownHashOfFile(
+                        confirmedState,
+                        hashCache,
+                        item.uri.toString(),
+                        hashCacheKey(
+                            item.uri.toString(), item.generation, item.dateModified,
+                            item.bytes, Build.VERSION.SDK_INT >= 30,
+                        ),
+                    )
+                },
+                isConfirmed = { it in confirmedState.confirmed },
+            )
+            if (backfill.isNotEmpty()) {
+                android.util.Log.i(
+                    "PPassBackup",
+                    "scope backfill: ${backfill.size} in-scope item(s) below the watermark " +
+                        "were never confirmed (moved into an album / newly selected album)",
+                )
+            }
+            val items = plan.items + backfill
             reportProgress(PHASE_SCANNING, items.size, items.size)
             if (items.isEmpty()) {
                 attempts.reset() // 无新照片也算成功一轮——连续失败清零
@@ -554,8 +589,8 @@ class BackupWorker(
             batchSize = items.size
 
             // PERF-01: 自动备份同样走哈希缓存——增量扫描 mostly 命中，
-            // hash 阶段不再全量读流（千张库从分钟级降到秒级）。
-            val hashCache = HashCache(hashCacheFile(ctx))
+            // hash 阶段不再全量读流（千张库从分钟级降到秒级）。缓存实例在
+            // 上面（扫描阶段）就构造好了，MOB-36 的补齐判定要用它。
             // FIX-T6: 记录每个候选 hash 的所属相册（自动备份同口径）。
             val hashToBucket = mutableMapOf<String, Long>()
             // MOB-09: 逐条隔离——打不开的记录跳过，其余照常传（见 buildCandidates）。
