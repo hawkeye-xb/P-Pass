@@ -63,6 +63,7 @@
 | 0e | [DOG-03](../.claude/cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | **L1** |
 | 0f | [NET-01](../.claude/cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 半小时内三次传输层失败，`backup.begin` 卡满 15 秒才超时（#18「等待较长时间才重传」大概率是这个） | L2 |
 | 0g | [I18N-01](../.claude/cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 选相册页空相册名的兜底文案硬编码成中文 | L3 |
+| 0h | [CI-04](../.claude/cards/CI-04-release-waits-for-the-slowest-platform.md) | **先建草稿、各平台自己上传**（Windows 的 vcpkg 缓存已落，结构改造待做）——⚠️ 要放宽 build job 的 `contents: write` 最小权限，**这一处要你拍板**；且必须 workflow_dispatch 验证过才许合 main | **L1** |
 | 1 | [SYNC-05](../.claude/cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 | 2 | [BUILD-02](../.claude/cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
 | 3 | [DESK-09](../.claude/cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 向导把 daemon 的真实启动错误吞成「没有在 10 秒内就绪」（2026-08-25 撤出关键路径、推后） | **L1** |
