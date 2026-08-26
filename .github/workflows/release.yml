@@ -65,7 +65,24 @@ jobs:
   macos-arm64:
     name: "macOS arm64 (签名门控)"
     runs-on: macos-14
-    environment: release-signing
+    # CI-04②（2026-08-26）：删掉了 `environment: release-signing`。
+    #
+    # 它一直被当成「发布前的人工审批门」向验收人描述，验收人被反复要求
+    # 「去 Actions 批那道门」——**而 Settings 里从来没配 required
+    # reviewer，它从来没拦过任何东西**（三条证据：本文件头注释自己写着
+    # 「未配置保护规则时自动通过」；验收人问「我在哪里审批」；他看到的
+    # job 全是绿的，真配了 reviewer 的 job 会卡在 waiting 不会绿）。
+    #
+    # 就算配上 reviewer 它也是错位的：它卡在**构建之前**（签名 secret
+    # 使用前），而真正的人工把关点在末端——正式 tag 留 draft 等人工
+    # publish。私有仓库、只有 owner 能打 tag，门后面站的人就是打 tag 的人。
+    #
+    # ⚠️ 唯一的残余风险与回退：environment 除审批外还能挂 environment-scoped
+    # secrets。若 APPLE_CERT_P12 等原本挂在该 environment 下（而非 repo 级），
+    # 删掉这行后 secrets 读空 → codesign 走无凭据路径**跳过**。
+    # 观测点是 release notes 的「签名状态」那行——出现 `macOS=no` 就是踩到
+    # 了这一条，把 `environment: release-signing` 加回来即恢复（一行）。
+    # 不用任何人去翻 Settings：这个后果在每次 release 正文里自报。
     # CI-01②: 平台门控——tag push 恒跑；dispatch 按 platforms 输入。
     # 留空/all/含 macos 都跑。
     if: github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'macos') || (inputs.platforms == '' || inputs.platforms == 'all')
