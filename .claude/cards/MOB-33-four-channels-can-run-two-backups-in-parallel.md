@@ -1,7 +1,7 @@
-# MOB-33 四条备份通道各自一个 unique name，两个 BackupWorker 可以并行扫同一水位　级别 L2
+# MOB-33 四条备份通道各自一个 unique name：暂停按钮对自动备份无效、进度条乱跳、可能并行　级别 L0
 
 > ⬜ 状态：未开工
-> 级别：L2 · 阻塞：无
+> 级别：**L0**（2026-08-26 从 L2 升级，理由见下）· 阻塞：无
 
 ## 问题
 
@@ -69,3 +69,72 @@ Android 端把备份的四种触发各自排在**独立的 WorkManager unique na
 
 来源：`docs/NEXT.md`「未开卡」清单（2026-08-20 盘点），2026-08-25 按模板开卡，
 代码层已核实（四处 `enqueueUnique*` + `backup/` 包零互斥）。
+
+---
+
+## 2026-08-26 重定级 L2 → L0：它不是「浪费不损坏」
+
+原卡把后果写成「浪费而不是损坏：存储端会去重，索引不会脏」。**这个定性是错的。**
+真机走查暴露出两个直接影响主路径的症状，根因都是这四个 unique name。
+
+### 症状①：暂停按钮对自动触发的备份完全无效，而且界面会说谎
+
+```kotlin
+// BackupUiStateHolder.backupNow()
+if (running) {
+    cancelManualBackup(context)        // 只取消 MANUAL_BACKUP_WORK_NAME
+    _state.value = BackupUiState.Idle  // ← 界面当场置 Idle
+    return
+}
+```
+
+而进度条的数据源是 `getWorkInfosByTagFlow(BackupWorker::class.java.name)`
+——**按 tag 观察，覆盖全部四条通道**。于是自动触发的备份也会显示进度条、
+也会出现暂停按钮，点下去：
+
+- `cancelManualBackup` 取消不了它（它不在 MANUAL 通道上）
+- 但 `_state.value = Idle` 让界面**立刻假装停了**
+- **字节还在传**
+
+验收人原话：「暂停按钮没有任何用处」。
+
+### 症状②：进度条状态乱跳
+
+验收人原话：「正在读文件后，有长时间 pending，然后在展示读文件，再上传。」
+
+同一个根因：按 tag 观察会同时拿到多条通道的 `WorkInfo`，而
+**`getWorkInfosByTagFlow` 不保证按时间排序**——`BackupUiStateHolder` 自己的
+注释里就写着这句。列表里有两条 work（一条刚跑完、一条在跑）时，界面就在它们
+之间来回跳。
+
+### 验收人定的原则（2026-08-26）
+
+> 「咱们的传输不是只有一个路径吗？那暂停是不是也得在一个路径？你这还分什么
+> 自动手动？上传都不分自动手动了，只有触发会区分自动手动。」
+
+**这条是对的，而且是 `MOB-19` 的既有定调**（「备份只有一条管线，手动是第 6 种
+触发方式」）。所以：**暂停是管线级动作，不是通道级动作。**
+
+## 追加的验收标准（本卡新增，原有几条不变）
+
+- [ ] 单测：**自动触发**的备份进行中点暂停 → 那条 work 真的被取消
+      （判据：`cancelWorkById` 收到的是**当前 RUNNING 那条**的 id，而不是
+      固定的 MANUAL unique name）
+- [ ] 反证：改回 `cancelManualBackup` → 上一条变红
+- [ ] 单测：点暂停后**界面不许自己置 Idle**——状态必须来自 WorkManager 的
+      真实回报（否则界面与传输脱钩，就是现在这个"说谎"的 bug）
+- [ ] 单测：`uiStateOf` 在列表里有多条 work 时，选取**不依赖列表顺序**
+      （给它一个乱序列表 + 一条 RUNNING，必须选中 RUNNING 那条）
+- [ ] 反证：把选取改回「取列表第一条」→ 上一条变红
+- [ ] UI：`LinearProgressIndicator` 传 `gapSize = 0.dp` 且不画末端圆点
+      —— Material3 1.3（本仓 `compose-bom:2024.12.01`）的默认值是
+      `gapSize = 4.dp` + `drawStopIndicator` 画一个圆点，这正是验收人说的
+      「有断层，像有个和背景颜色一样的圆点在移动」
+- [ ] 真机：自动触发的备份进行中点暂停 → 传输真的停下，进度条不再动
+
+## 范围（追加）
+
+- 也准动：`BackupUiStateHolder`（暂停动作与 `uiStateOf` 的选取）、
+  `ui/HomeScreen.kt` 的进度条参数
+- 仍不准动：手动通道自己的取消语义（`UX-01` 定的「跑着的时候再点 = 暂停」
+  这条**语义**不变，变的只是「取消谁」）
