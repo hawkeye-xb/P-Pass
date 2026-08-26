@@ -474,6 +474,11 @@ class BackupWorker(
 
         // DOG-01c: 自动备份也走同一确认缓存（M 口径一致，不能只靠手动备份）。
         val stateDir = File(ctx.filesDir, "backup-state/${pairing.daemonNodeId}")
+        // UX-14: 落「这一轮开跑了」。位置是承重的——必须在**抢到互斥门之后**
+        // （空转那一轮走不到这里，它在 doWork 里就早退了：什么也没干的一轮
+        // 不算开跑，写了会把别人的暂停误判成已覆盖），并且在扫描/传输之前
+        // （失败重试留不下终态戳，只有开跑这个事实是一定能落下的）。
+        runCatching { RunStartPrefs(stateDir).setStartedAt(System.currentTimeMillis()) }
         val confirmedStore = ConfirmedStore(stateDir)
         // MOB-34: 定向补偿队列——校准查出「确认过、库里却没了」的 hash 时，
         // 把它们对应的本地 MediaStore 条目登记在这里（水位之下的老照片

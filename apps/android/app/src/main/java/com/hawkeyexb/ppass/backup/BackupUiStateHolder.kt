@@ -61,6 +61,12 @@ class BackupUiStateHolder(
      *  权威值，落盘只为跨进程存活；写内存**同步**发生在点击那一刻，
      *  好让紧随其后的 CANCELLED 那一帧就能算出被暂停态。 */
     private var pausedAt: Long = runCatching { pausePrefs.pausedAt() }.getOrDefault(0L)
+    // UX-14: 「最近一轮开跑的时刻」——暂停态判据的第二个锚点（见
+    // [pausedAfterOf]）。同样**同步读**，理由与 pausedAt 相同：与 work 流的
+    // 首帧抢跑会让判据用错值。每次重算前刷新（worker 在另一个进程语境里写）。
+    private val runStartPrefs = RunStartPrefs(
+        File(context.filesDir, "backup-state/${pairing.daemonNodeId}")
+    )
 
     private val _reuploadNoticeCount = mutableStateOf(0)
     /** MOB-37: App 内那条重传告知该显示几张（0 = 不显示）。读的是**落盘
@@ -124,7 +130,9 @@ class BackupUiStateHolder(
         // MOB-33: 记住当前正在跑的那条 work 的 id——暂停要取消**它**，
         // 而不是固定的手动通道（见 [backupNow]）。
         runningWorkId = runningInfoOf(infos)?.id
-        val next = uiStateOf(infos, pausedAt) ?: return
+        // UX-14: 每次重算现读——worker 写的是盘，界面这边没有别的通知路径。
+        val lastStartedAt = runCatching { runStartPrefs.startedAt() }.getOrDefault(0L)
+        val next = uiStateOf(infos, pausedAt, lastStartedAt) ?: return
         // UX-13: 这次暂停已被后来的运行覆盖 → 把标记清掉（内存 + 盘）。
         // 不清的后果：WorkManager 迟早会把终态记录清理掉，届时盘上那个
         // 陈年 pausedAt 面对一张空列表又会算出「被暂停」，「继续」按钮凭空
@@ -367,6 +375,8 @@ internal fun uiStateOf(
     infos: List<androidx.work.WorkInfo>,
     // UX-13: 用户按下暂停的时刻（0 = 没暂停过）。默认值让既有调用点不变。
     pausedAt: Long = 0L,
+    // UX-14: 最近一轮**开跑**的时刻（0 = 从没跑过）。同上，默认值保既有调用点。
+    lastStartedAt: Long = 0L,
 ): BackupUiState? {
     // 正在跑的优先——那才是用户此刻该看到的。
     val runningNow = runningInfoOf(infos)
@@ -412,7 +422,11 @@ internal fun uiStateOf(
     // 且常紧跟暂停落地，不排除它就会把刚发生的暂停当成已被覆盖。
     val newestFinishedAt = finished
         .maxOfOrNull { it.outputData.getLong(KEY_FINISHED_AT, 0L) } ?: 0L
-    if (pausedAfterOf(pausedAt, newestFinishedAt, anyRunning = runningNow != null)) {
+    if (pausedAfterOf(
+            pausedAt, newestFinishedAt,
+            anyRunning = runningNow != null, lastStartedAt = lastStartedAt,
+        )
+    ) {
         return BackupUiState.Paused
     }
     if (finished.isEmpty()) return null
