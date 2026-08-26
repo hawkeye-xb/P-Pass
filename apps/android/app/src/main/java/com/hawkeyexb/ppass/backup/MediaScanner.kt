@@ -168,6 +168,81 @@ class MediaScanner(private val resolver: ContentResolver?) {
         return ScanResult(items, maxGen)
     }
 
+    /**
+     * MOB-36: 已选相册里、水位**之下**的行——增量扫描 (`scanSince`) 的补集。
+     *
+     * 在相册之间移动一张照片不改 `_ID` / `date_added` / `date_modified`，只改
+     * `bucket_id`；于是「移进已选相册的老照片」的水位值远在当前水位之下，增量
+     * 扫描永远看不见它。这一查把范围内的水位下行捞回来，由
+     * [planScopeBackfill] 靠 `files` / 哈希缓存两张现成的表筛出真的没备过的
+     * 那些（**返回集不许全量哈希**——那是本方案成立的全部前提）。
+     *
+     * 只投影元数据（哈希缓存 key 需要 generation / dateModified / size），
+     * **一个 collection 一次查询**，不按条发查询；范围由
+     * `BUCKET_ID IN (…)` 约束——移**出**已选相册的照片天然不在结果里，
+     * 一行也不会被补（卡面验收⑤）。
+     *
+     * 两条零成本早退：范围为 null（从未选过 = 全量模式，没有「范围边界」
+     * 可跨，本卡的 bug 不存在）或空集；水位为 0（没有「之下」，且手动全量
+     * 重扫 `since=0` 时增量扫描已覆盖全部）——都一次查询都不发。
+     *
+     * **不返回 nextWatermark**：补齐条目在水位之下，不参与水位推进
+     * （`MOB-09` 的坏记录跳过语义原样保留）。返回类型就把这条钉死。
+     */
+    fun scanScopeBelow(watermark: Long, bucketIds: Set<Long>?): List<MediaItem> {
+        if (bucketIds.isNullOrEmpty() || watermark <= 0L) return emptyList()
+        val items = mutableListOf<MediaItem>()
+        for ((collection, isVideo) in listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI to false,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI to true,
+        )) {
+            val genCol = if (Build.VERSION.SDK_INT >= 30) {
+                MediaStore.MediaColumns.GENERATION_MODIFIED
+            } else {
+                MediaStore.MediaColumns.DATE_ADDED
+            }
+            val projection = arrayOf(
+                MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.MIME_TYPE,
+                MediaStore.MediaColumns.SIZE,
+                genCol,
+                MediaStore.MediaColumns.DATE_MODIFIED,
+                MediaStore.MediaColumns.BUCKET_ID,
+            )
+            // bucketIds 是我们自己解析出来的 Long（BackupScopeStore 只认
+            // toLongOrNull），拼进 IN () 没有注入面。
+            val where = "$genCol <= ? AND " +
+                "${MediaStore.MediaColumns.BUCKET_ID} IN (${bucketIds.joinToString(",")})"
+            requireResolver().query(
+                collection, projection, where, arrayOf(watermark.toString()), "$genCol ASC",
+            )?.use { cur ->
+                val idIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val nameIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
+                val mimeIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
+                val sizeIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
+                val genIdx = cur.getColumnIndexOrThrow(genCol)
+                val modifiedIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)
+                val bucketIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
+                while (cur.moveToNext()) {
+                    items.add(
+                        MediaItem(
+                            uri = ContentUris.withAppendedId(collection, cur.getLong(idIdx)),
+                            displayName = cur.getString(nameIdx) ?: "unnamed",
+                            mimeType = cur.getString(mimeIdx)
+                                ?: if (isVideo) "video/*" else "image/*",
+                            bytes = cur.getLong(sizeIdx),
+                            generation = cur.getLong(genIdx),
+                            dateModified = cur.getLong(modifiedIdx),
+                            bucketId = if (cur.isNull(bucketIdx)) null else cur.getLong(bucketIdx),
+                        )
+                    )
+                }
+            }
+        }
+        return items
+    }
+
     /** 当前扫描范围的全量 count（无 generation 过滤）——DOG-01b 三元组
      * 的分母 N。MediaStore COUNT 查询，便宜，不需要重 hash。口径常量
      * 一处定义（范围选择是另一张卡，改范围只动这里）。
