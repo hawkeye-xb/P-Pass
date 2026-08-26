@@ -474,6 +474,9 @@ class BackupWorker(
         // 永远不会被增量扫描重新扫到，不登记就永远传不回去）。同目录 =
         // 断开配对时随 clearConfirmedCacheForRemote 一起清掉。
         val reuploads = ReuploadQueue(stateDir)
+        // MOB-37: 重传告知的落盘（同目录，随配对一起清）。通知只是提醒，
+        // 载体是这条状态——发失败/没被看见时 App 内那条提示还在。
+        val reuploadNotice = ReuploadNoticePrefs(stateDir)
 
         val client = DaemonClient()
         // UX-02: 失败通知的批次数——scan 在 try 内（DOG-01c 时序），catch
@@ -503,7 +506,8 @@ class BackupWorker(
             // DOG-01c: 备份前漂移校准（只查不传；daemon 不可达则跳过）。
             // SENT-01: 校准返回是否确认可达——false（含无交互/失败）也
             // 是一次失败尝试（否则连续 3 天「scan 空早退」会漏记）。
-            val reachable = calibrateIfReachable(client, daemon, confirmedStore, reuploads)
+            val reachable =
+                calibrateIfReachable(client, daemon, confirmedStore, reuploads, reuploadNotice)
             calibrated = true
             if (reachable) sentinel.recordReachable() else sentinel.recordUnreachable()
 
@@ -738,7 +742,11 @@ class BackupWorker(
                 // 刻意**不**新开一趟周期任务：MOB-17 定调过兜底不该更频繁
                 // （"兜底太频繁会在系统的 log 里面被检测得到"）。搭便车不加
                 // 一次唤醒。
-                if (!calibrated) calibrateTail(ctx, pairing, confirmedStore, reuploads, sentinel)
+                if (!calibrated) {
+                    calibrateTail(
+                        ctx, pairing, confirmedStore, reuploads, reuploadNotice, sentinel,
+                    )
+                }
                 // SENT-01: 搭便车检查——每次后台任务结束（成败都算）看
                 // 一次哨兵判定；该发则发（内部去重，发过 markNotified）。
                 maybeNotifySentinel(ctx)
@@ -901,6 +909,7 @@ class BackupWorker(
         daemon: PeerAddrParts,
         store: ConfirmedStore,
         reuploads: ReuploadQueue,
+        notice: ReuploadNoticePrefs,
     ): Boolean {
         // PERF-01: 校准时刻顺手清 hash-cache 孤儿（跟随 MediaStore
         // 现存 _ID 集合；查询失败内部跳过，不影响校准）。
@@ -929,7 +938,13 @@ class BackupWorker(
                     "calibrate: ${lost.size} confirmed asset(s) vanished from the library, " +
                         "they will be re-uploaded (queued ${queued.size} local file(s))",
                 )
-                postReuploadNotification(applicationContext)
+                // MOB-37: **先落盘、再发通知**，而且通知的异常吞掉。
+                // 系统通知只是「提醒你去看」，告知的载体是盘上那条状态
+                // （权限没授/渠道被关/锁屏没看见时它照样在 App 里等着）。
+                // 顺序与吞异常的两条理由见 noteReuploadNotice 的 kdoc。
+                noteReuploadNotice(notice, lost, System.currentTimeMillis()) {
+                    postReuploadNotification(applicationContext)
+                }
             },
         )
     }
@@ -943,6 +958,7 @@ class BackupWorker(
         pairing: Pairing,
         store: ConfirmedStore,
         reuploads: ReuploadQueue,
+        notice: ReuploadNoticePrefs,
         sentinel: SentinelStore,
     ) {
         // 缓存空 = 没什么可校准的，连接都不必开。
@@ -956,6 +972,7 @@ class BackupWorker(
                     parsePeerAddrToken(pairing.daemonAddrToken),
                     store,
                     reuploads,
+                    notice,
                 )
             }
             // SENT-01 同口径：这一趟主路径没记过可达性（压根没走到），

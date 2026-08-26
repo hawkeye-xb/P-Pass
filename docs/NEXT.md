@@ -1,6 +1,28 @@
-# NEXT — 当前状态与下一步（2026-08-25，进度盘点 + 文档漂移清理）
+# NEXT — 当前状态与下一步（2026-08-26，MOB-37 收口）
 
 > 交接件，随每次收口更新。历史结论已并入 ROADMAP/PROGRESS。
+
+## 〇、2026-08-26（收口）MOB-37 已实施（commit PENDINGSHA · 🟡 等真机验收）
+
+重传告知不再只活在一条系统通知里：状态**落盘**（新 `backup/ReuploadNotice.kt`）、
+App 内一条可 acknowledge 的提示读的就是盘上状态、**通知不重试**（只在
+acknowledged→unacknowledged 的跃变时发一条）。两条校准门都落盘——`BackupWorker`
+（含收尾补校准，发通知）与 `BackupUiStateHolder` 的 App 打开那次（只落盘，人就在
+看着 App）。张数记 hash 并集不是累加（MOB-33 并发双发不许把 3 张报成 6 张）。
+
+- 绿：Android **40 类 / 302 tests / 0 failures**（`--rerun-tasks`，XML 时间戳
+  本次生成）+ `assembleDebug`。只动 `apps/android/**` → 受影响 CI 域只有
+  **ci-android**（`crates/`、`assets/`、`apps/desktop/` 一行未动，未跑 `just ci`）。
+- 反证真跑：去掉落盘只发通知 → 5 条红（含「通知炸了 `removeMissing` 就被跳过 →
+  下一轮又发一条」这条链），摘录在卡里。
+- **给 `UI-04` 留的接口**：`ui/HomeNotices.kt`（`HomeNoticeKind` +
+  `HomeNotice` + `HOME_NOTICE_PRIORITY` + 纯函数 `topNotice` + 复用的
+  `NoticeCard`，带单测）。既有几条提示**刻意没迁**——那是 UI-04 的活，且会跟
+  进行中的 HomeScreen 改动撞车。优先级排序是**提案**，UI-04 可重排。
+- **等用户**：真机验收一条（**先把通知权限关掉**再删照片，见
+  `docs/CHECKLIST.md` §一新增的那行）。
+
+---
 
 ## 〇、2026-08-25（收口）MOB-34 已实施（commit d592639 · 🟡 等真机验收）
 

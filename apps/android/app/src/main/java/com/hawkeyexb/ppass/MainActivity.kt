@@ -518,6 +518,9 @@ fun PPassApp() {
                         },
                         notificationSkipped = !notificationGrantedForHome,
                         onOpenNotificationSettings = { openAppDetailsSettings(context) },
+                        // MOB-37: 重传告知——落盘状态驱动，通知丢了也在。
+                        reuploadNoticeCount = holder.reuploadNoticeCount.value,
+                        onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
                         // MOB-28: 备份被外力停过的提示卡 + 唯一的恢复入口。
                         backupInterrupted = backupInterrupted,
                         onResumeBackup = {

@@ -118,6 +118,11 @@ fun HomeScreen(
     // 「恢复备份」。**这是恢复的唯一入口**，别处一律不许悄悄重挂。
     backupInterrupted: Boolean = false,
     onResumeBackup: () -> Unit = {},
+    // MOB-37: 重传告知（库里少了 N 张、正在传回来）。**读的是落盘状态**，
+    // 与那条系统通知是否送达无关；0 = 不显示。呈现走 HomeNotices.kt 的
+    // NoticeCard，好让 UI-04 的优先级框架直接接手。
+    reuploadNoticeCount: Int = 0,
+    onAcknowledgeReupload: () -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -494,6 +499,30 @@ fun HomeScreen(
                     )
                 }
             }
+        }
+
+        // ── MOB-37: 重传告知（库里少了 N 张、正在传回来）。
+        //
+        // 为什么 App 内要有这条：MOB-29 的告知只有一条系统通知，通知权限
+        // 没授/渠道被关/锁屏没看见，用户就永远不知道照片被传回来过
+        // （2026-08-26 真机：重传真的发生了，验收人什么也没看到）。
+        // 通知从此只是「提醒你去看」，这条才是载体。
+        //
+        // 措辞不做精确归因（MOB-29 定调）——手机端分不清「电脑上被删了」
+        // 和「换了个库」，第二句用条件从句，在两种成因下都成立。
+        //
+        // 呈现刻意走 NoticeCard 而不是又抄一段 Surface：UI-04 要给多条
+        // 提示做优先级，接口见 HomeNotices.kt 的 HomeNotice / topNotice。
+        if (reuploadNoticeCount > 0) {
+            Spacer(Modifier.height(12.dp))
+            NoticeCard(
+                HomeNotice(
+                    kind = HomeNoticeKind.REUPLOAD,
+                    body = stringResource(R.string.reupload_notice_body, reuploadNoticeCount),
+                    actionLabel = stringResource(R.string.reupload_notice_action),
+                    onAction = onAcknowledgeReupload,
+                )
+            )
         }
 
         // ── "备份"（M10，全页面状态稿）：4 行——第 1 行导航到选相册，

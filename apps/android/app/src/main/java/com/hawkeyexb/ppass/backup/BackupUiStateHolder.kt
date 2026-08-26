@@ -41,6 +41,18 @@ class BackupUiStateHolder(
     private val reuploads = ReuploadQueue(
         File(context.filesDir, "backup-state/${pairing.daemonNodeId}")
     )
+    // MOB-37: 重传告知的落盘（同目录，随配对一起清）。**这条校准门也必须
+    // 落盘**——它是「App 打开时」那一次校准，正是真机验收那个场景
+    // （通知权限关掉 → 电脑上删几张 → 打开 App 必须看得到）的发生地。
+    // 这里刻意**不发系统通知**：人就在看着 App，App 内那条提示就是呈现。
+    private val reuploadNotice = ReuploadNoticePrefs(
+        File(context.filesDir, "backup-state/${pairing.daemonNodeId}")
+    )
+    private val _reuploadNoticeCount = mutableStateOf(0)
+    /** MOB-37: App 内那条重传告知该显示几张（0 = 不显示）。读的是**落盘
+     *  状态**，与系统通知是否送达无关。 */
+    val reuploadNoticeCount: State<Int> get() = _reuploadNoticeCount
+
     private val _triplet = mutableStateOf<BackupTriplet?>(null)
     val triplet: State<BackupTriplet?> get() = _triplet
 
@@ -52,6 +64,9 @@ class BackupUiStateHolder(
     init {
         // 启动即算一次（MediaStore COUNT 便宜；扫描在 IO 线程）。
         scope.launch { refreshTriplet() }
+        // MOB-37: 进程/组合起来时先把盘上的告知读出来（上一轮后台任务
+        // 登记的那条——通知可能压根没送到，它只能从盘上来）。
+        refreshReuploadNotice()
         // DOG-01c: App 打开即做一次漂移校准（daemon 可达才跑，不可达跳过）。
         scope.launch { calibrateFromDaemon() }
         // MOB-21: 跟住**后台** BackupWorker 的状态变化。
@@ -71,6 +86,9 @@ class BackupUiStateHolder(
                 .getWorkInfosByTagFlow(BackupWorker::class.java.name)
                 .collect { infos ->
                     refreshTriplet()
+                    // MOB-37: 后台任务跑完可能刚登记了一条重传告知——
+                    // 重读一次盘，App 摆在眼前时那条提示才会自己出来。
+                    refreshReuploadNotice()
                     // MOB-19: 状态行也从这条流里出。管线合并之后手动备份
                     // 不再在前台跑，界面只能靠 work 的 progress/output 跟住
                     // ——顺带自动备份也第一次有了实时进度（在此之前后台跑
@@ -116,6 +134,15 @@ class BackupUiStateHolder(
                 BackupRunner(client).existCheck(daemon, cached)
             }
             if (missing.isNotEmpty()) {
+                val lost = lostFromLibrary(cached, missing)
+                // MOB-37: 落盘在 removeMissing **之前**（同 MOB-34 的理由：
+                // 那一步之后交集恒空）。不发通知——见 reuploadNotice 注释。
+                withContext(Dispatchers.IO) {
+                    noteReuploadNotice(
+                        reuploadNotice, lost, System.currentTimeMillis(), notify = {},
+                    )
+                }
+                refreshReuploadNotice()
                 withContext(Dispatchers.IO) {
                     // MOB-34: 登记定向补偿**必须在 removeMissing 之前**——
                     // 那一步会把指向这些 hash 的文件级记录一起删掉，之后
@@ -125,7 +152,7 @@ class BackupUiStateHolder(
                     enqueueReuploads(
                         confirmedStore.load(),
                         reuploads,
-                        lostFromLibrary(cached, missing),
+                        lost,
                         HashCache(hashCacheFile(context)),
                     )
                     confirmedStore.removeMissing(missing)
@@ -134,6 +161,23 @@ class BackupUiStateHolder(
             }
         } catch (_: Throwable) {
             // 不可达/未配对/超时——保留缓存值，下次再校准。
+        }
+    }
+
+    /** MOB-37: 用户在 App 里点了「知道了」——告知消失。新一批 lost
+     *  会重新登记、重新显示（acknowledge 只清当前这一批）。 */
+    fun acknowledgeReuploadNotice() {
+        scope.launch {
+            withContext(Dispatchers.IO) { reuploadNotice.acknowledge() }
+            refreshReuploadNotice()
+        }
+    }
+
+    private fun refreshReuploadNotice() {
+        scope.launch {
+            _reuploadNoticeCount.value = withContext(Dispatchers.IO) {
+                reuploadNoticeCountOf(reuploadNotice.load())
+            }
         }
     }
 
