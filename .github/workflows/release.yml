@@ -291,11 +291,32 @@ jobs:
             target/
           key: win-x64-release-${{ hashFiles('**/Cargo.lock') }}
 
+      # CI-04: 缓存 vcpkg 的 installed 树。libheif + 依赖（libde265 等）从源码
+      # 编要 10-20 分钟，是整条 release 管线的**长杆**——三平台并行时其余两个
+      # 早就跑完了，草稿却要等它（验收人 2026-08-26：「那为啥有一个没跑完，
+      # 我就下载不了？」）。
+      #
+      # 只缓存 `C:/vcpkg/installed`：`--clean-after-build` 已经把 buildtrees /
+      # packages 清掉了，installed 是唯一需要留的产物（含 vcpkg/status 数据库）。
+      #
+      # **刻意不加 `if: cache-hit != 'true'` 去跳过下面那步**：命中一个不完整的
+      # 缓存树时，跳过 install 会让编译在找不到头文件时才炸，错误现场离根因很远。
+      # 让 vcpkg 无条件跑一次——已装好时它几秒内识别并早退，缓存坏了它会自己修。
+      # 缓存只负责让它快，不负责让它可以不跑。
+      #
+      # **不设 restore-keys**：半个 vcpkg 树比没有更糟，只接受精确命中。
+      # key 里的 v1 是手动失效位——triplet 或包列表变了就 +1。
+      - name: Cache vcpkg (libheif)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:/vcpkg/installed
+          key: vcpkg-installed-x64-windows-static-md-libheif-v1
+
       # libheif via vcpkg（Windows 规范路径；windows-latest 预装 C:\vcpkg）。
       # triplet x64-windows-static-md 与 vcpkg crate 默认一致（实测 x64-windows
       # 动态版不匹配：报 "not installed for triplet x64-windows-static-md"）。
       # 静态链接 → 自包含 exe，发布无需带 DLL。首次从源码编 libheif+依赖
-      # （libde265 等），10-20 分钟，故 timeout 45。
+      # （libde265 等），10-20 分钟，故 timeout 45；命中缓存后是秒级。
       - name: Install libheif (vcpkg)
         shell: bash
         run: |
