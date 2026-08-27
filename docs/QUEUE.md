@@ -57,7 +57,7 @@
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
 | P3 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 | P3 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 照片查看器换成熟开源库（Telephoto/ZoomImage 等）+ 读 EXIF——2026-08-27 验收人重提解冻，从 backlog 移回 | L2 |
-| P3 | [UI-07](../cards/UI-07-lightning-badge-on-small-icon-missing.md) | 小图标闪电标消失——先考据它曾经是什么、何时没的，再谈恢复 | L3 |
+| P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本——当前引用了不带闪电标识的 icon（阻塞：等验收人给修改指示） | L3 |
 | P3 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册页长名称换行撑乱布局 + 缩略图模糊 | L3 |
 | P4（顺手做，不派活） | [CI-04](../cards/CI-04-release-waits-for-the-slowest-platform.md) | 代码①②都已合并（先建草稿、各平台自己上传），不存在权限拍板；剩的是下次你自己发版时顺手拿一次真实 workflow_dispatch/release 验证一下缓存和拆分是否真生效——2026-08-27 用户定为最低优先级 | L1 |
 
