@@ -376,3 +376,56 @@ val wifiOnly: Boolean = true,          // ← 默认开
   「没提示」，它在 5G 场景下**堵死了用户唯一的出路**
 - 需要验收人回答一个问题：8/26 22:36 之后到 8/27 早上，手机是在家里 Wi-Fi
   上还是已经切到移动网络？这决定「那一夜没跑」算约束还是算 H2
+
+---
+
+# 判决实验 v2（2026-08-27，实验设计修正）
+
+## v1 的实验没有判别力，作废
+
+v1 让家里 agent `tail -f` daemon 的 `.err`，用「有没有新增行」区分「手机
+没发起」和「发起了没到达」。**这个实验是坏的**：
+
+`crates/transport/src/iroh_impl.rs:326-328` —— inbound 连接的日志是
+`tracing::debug!`，而 `crates/daemon/src/main.rs:39` 的默认级别是 **`info`**。
+
+**默认配置下手机连进来 daemon 一行都不记。** 所以「`.err` 无新增」证明不了
+任何事。必须先把级别开到 debug。
+
+## 判别层次（三层，逐层缩小）
+
+`backup.started` 落在 `router.rs:478`，是 **`BACKUP_BEGIN` 请求处理**里的
+第一件事——即：连接已建立、流已打开、请求已送达并解析成功之后。
+
+所以三层信号对应三个结论：
+
+| 层 | 信号 | 结论 |
+|---|---|---|
+| 1 | debug 日志里有 `inbound <peer>: registering` | 手机**连上了 daemon** |
+| 2 | audit 里出现 `backup.started` | `backup.begin` 请求**送达了** |
+| 3 | 水位（`device.watermarks`）上涨 | 数据**真的传了** |
+
+- 1 无 → 手机压根没发起连接，或连接在握手阶段就死了（看 iroh 的 debug 日志）
+- 1 有 / 2 无 → **连上了但 ctrl 请求没到或超时**。这正是 NET-01 记的形状
+  （backup begin 超时 15s 后退避），也是验收人那句「打洞成功了但数据不一定
+  能传」指的方向
+- 2 有 / 3 无 → 请求到了但传输失败，看后续日志的 error
+- 全有 → 备份在走，问题只在手机界面不说话（UX-15）
+
+## 安全性前提（已核实）
+
+`crates/platform/src/macos.rs:119`：`autostart_installed()` 的判据是
+**plist 文件存在**，不是服务已加载。所以 `launchctl kickstart -k` 重启
+daemon **不会**让 `wizard.installed` 变 false，**不会**触发 DESK-12 的重走
+onboard。只要不删 plist 就安全。
+
+## 复现路径
+
+**故障可复现**：验收人杀掉 App 再打开 → 触发
+`triggerProcessStartCatchup` + `foregroundCatchup`（那是他目前唯一的触发
+手段，因为 MOB-43：手动备份没有入口）。
+
+所以**不需要保现场**，可以放开做可控实验。这是与 v1 的另一处不同——v1 还在
+按「一次性证据」设计。
+
+## 指令见下（可整段转发给家里 agent）
