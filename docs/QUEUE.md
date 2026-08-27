@@ -11,7 +11,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-08-27**（验收人 7 条反馈批次：+MOB-44/45/46、NET-03、UI-07/08，MOB-26 解冻）
+> 最后核对：**2026-08-27**（验收人第二批真机验收归档 9 张：MOB-32/37/29/34/36、WATCH-03/04、DESK-08、UI-03）
 
 ---
 
@@ -75,26 +75,20 @@
 | [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | **复验**（8/26 打回的脱敏漏已补）：①daemon 正常时导出日志 → 9 个文件都在；②daemon 挂着时导出 → 仍出 zip 含 `.err`/`.log`；③grep 整个 zip 不许出现用户名；④`audit.json`/`diag_events.json` 里路径应是 `originals/<8位前缀>…<masked>/…`，看不到完整 hex | L1 |
 | [MOB-38](../cards/MOB-38-foreground-catchup-never-fires-on-resume.md) | 从 App 切到相机拍一张再切回来，照片自动传上去 | L0 |
 | [UX-13](../cards/UX-13-no-resume-affordance-after-pause.md) | 备份中点「暂停」→ 按钮留在原地变「继续」→ 点它 → 传输接着跑；暂停后杀 App 重开「继续」还在；备份正常跑完「继续」自己消失 | L1 |
-| [MOB-32](../cards/MOB-32-calibration-wipes-a-live-backup-session.md) | 大批量备份传到一半打开 App，照片一张都不能丢 | L0 |
-| [MOB-37](../cards/MOB-37-reupload-notice-must-survive-a-lost-notification.md) | 关掉通知权限 → 访达删几张已备份照片 → 备份页必须出现「正在重新传回」提示 | L1 |
-| [MOB-29](../cards/MOB-29-confirmed-store-lies-between-backups.md) | 访达删照片 → 桌面出警告 + 手机出「正在重传」通知，照片真的传回来 | L1 |
-| [MOB-34](../cards/MOB-34-deleted-old-photos-never-re-uploaded.md) | 库里删 3 张老照片 → 不手动干预 → 自己回来，「待备份 K」归零（⚠️ 先看卡里「已知边界」判别法） | L1 |
-| [MOB-36](../cards/MOB-36-photos-moved-into-scope-are-never-scanned.md) | 把 1 月的老照片从别的相册移进已选相册 → 不手动干预 → 被备份 | L1 |
 | [WATCH-07](../cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏 | L2 |
-| [WATCH-03](../cards/WATCH-03-finder-move-orphans-the-photo.md) | Finder 里挪动照片，照片不许消失 | L2 |
-| [WATCH-04](../cards/WATCH-04-tolerant-ingest-finder-owns-the-layout.md) | 手拷照片进库目录会被自动收录 | L2 |
-| [DESK-08](../cards/DESK-08-activity-each-key-collides.md) | 一次删多张照片，活动记录页不再整块打挂 | L1 |
-| [UI-03](../cards/UI-03-mobile-top-titles-removed.md) | 手机端照片/设置页的顶部大标题已删 | L3 |
 | [MOB-19](../cards/MOB-19-manual-backup-same-bad-record-crash.md) | 手动「再试一次」与自动备份是同一条管线 | L2 |
 | [MOB-09](../cards/MOB-09-one-bad-media-record-kills-batch.md) | 一条坏相册记录不再炸掉整批备份（欠一半：好坏同批未验） | L2 |
 | [MOB-13](../cards/MOB-13-triplet-k-never-reaches-zero.md) | 「待备份 K」能归零（有前置，见卡） | L2 |
 | [BLOB-01](../cards/BLOB-01-ingest-leaves-a-duplicate-in-the-blob-store.md) | 备份占盘不再翻倍（实测 2.05x → 1.00x） | L2 |
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
 
-**已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-32 收尾判据、MOB-30、WATCH-02。
+**已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 
 **2026-08-27 验收人已批量关闭**（不要求逐条真机复核）：MOB-28、MOB-31、
 MOB-33、MOB-35 → 已移入 `done/`；MOB-43 → 判定不需要实现，已移入 `done/`。
+
+**2026-08-27 验收人第二批真机验收通过，已归档 `done/`**：MOB-32、MOB-37、
+MOB-29、MOB-34、MOB-36、WATCH-03、WATCH-04、DESK-08、UI-03。
 
 **验收建议**：15 分钟一批过，别攒。
 

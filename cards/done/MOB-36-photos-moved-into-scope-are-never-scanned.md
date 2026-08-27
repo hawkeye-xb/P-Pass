@@ -1,6 +1,6 @@
 # MOB-36 移进备份范围的照片永远不会被扫到——水位挡住了它　级别 L1
 
-> 🟡 状态：代码已合并（commit 55f8c43），等真机验收
+> ✅ 状态：代码已合并（commit 55f8c43），2026-08-27 真机验收通过，验收人认定归档
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -210,3 +210,7 @@ ScopeBackfillTest > moving_a_photo_out_of_scope_can_never_trigger_an_upload FAIL
   排查抓手：`adb logcat -s PPassBackup` 里那行 `scope backfill: N in-scope item(s)…`
   ——有它 = 补齐找到了活干；没有它而照片也没传 = 查范围（是不是真的勾了那个相册）
   与水位（`since=0` 的轮次补齐不发查询，因为增量扫描已覆盖全部）。
+
+## 验收记录（2026-08-27）
+
+验收人真机验收通过（批量清理 QUEUE 待验收区），归档。
