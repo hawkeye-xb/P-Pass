@@ -34,7 +34,6 @@
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P0 | [NET-02](../cards/NET-02-relay-handshake-failures-write-73mb-of-stderr.md) | relay 握手失败时 stderr 无节流狂写（实测 7 分钟 92211 行/73MB），持续发生会把磁盘写满；跟备份传输抢 IO、也把真正有用的日志埋掉。2026-08-27 用户定为最高优先级 | L2 |
 | P2 | [MOB-42](../cards/MOB-42-pause-leaves-two-channels-running.md) | 「暂停自动备份」的 `pauseAutoBackup` 漏取消 `CATCHUP_WORK_NAME` 通道——点了暂停,这条通道还在跑 | L2 |
 | P2 | [MOB-39](../cards/MOB-39-triggers-are-data-pipeline-is-one.md) | 触发层抽象：触发是数据、管线只有一条——治「每次新增触发都漏接一处」这个病根（MOB-33/34/35/38/42 反复复发的同一个病） | L1 |
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
