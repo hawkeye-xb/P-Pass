@@ -281,3 +281,98 @@ ipc audit.list
 
 实验 A/B 是「现在为什么不传」。上文 A~E 五段是「昨晚发生了什么」——两者不
 互相替代。日志会被轮转冲掉，**昨晚的日志优先级更高，先抢那个**。
+
+---
+
+# 取证结果（2026-08-27，家中 agent 执行 A~F 全部完成）
+
+## 拿到的硬事实
+
+| 项 | 结果 | 判定 |
+|---|---|---|
+| App 版本 | `0.4.0-test.9` | ✅ 是新版，第 2 步的版本混乱已解决 |
+| `identity.key` mtime | **Aug 8 16:16** | ✅ **身份没换**——H4 排除 |
+| `p-pass-daemon.err` | **73 MB / 24.7 万行**，`tls handshake eof` **92211 行**（8/26 22:22–22:29 的 7 分钟内） | → 新卡 **NET-02** |
+| 8/27 relay 错误 | **0** | relay 已恢复 |
+| watermarks | PFZM10=6，**ALN-AL00=13**，`last_backup_at` = **8/26 22:36:14** | 基线 |
+| 8/26 22:36 之后的 audit | 只有 `device.connected`，**零 `backup.started`** | 手机没发起 |
+| 8/27 06:16–10:00 | 手机连上 7 次，**零 backup** | 同上 |
+
+## 前半段：代理，已自愈
+
+22:22–22:29 传不动 = Clash（mihomo）把 iroh relay 的流量走了代理，TLS 握手
+失败 9 万次。验收人给 relay 域名/IP 加直连白名单 → **22:29 配对成功，
+22:29–22:36 连传 13 张**。
+
+**代理是前半段的根因，且已经解决。** 顺带暴露了 NET-02（错误日志无节流）。
+
+## 后半段（22:36 之后至今不传）：**根因在代码里找到了，不是网络**
+
+家中 agent 的结论「手机没发起备份」正确。它推测的三条原因里第 ② 条方向对了
+——我用代码确认，并且能精确到行。
+
+`TriggerPolicy.kt:66` 的三档约束：
+
+```kotlin
+BackupTier.MANUAL -> BackupConstraintsSpec(
+    requiresBatteryNotLow = false,
+    requiresUnmetered = false,          // ← 唯一零约束的一档
+)
+BackupTier.USER_PRESENT -> BackupConstraintsSpec(
+    requiresBatteryNotLow = false,
+    requiresUnmetered = settings.wifiOnly,
+)
+BackupTier.BACKGROUND -> BackupConstraintsSpec(
+    requiresBatteryNotLow = true,
+    requiresUnmetered = settings.wifiOnly,
+)
+```
+
+而 `BackupSettings.kt:17`：
+
+```kotlin
+val wifiOnly: Boolean = true,          // ← 默认开
+```
+
+**验收人 8/27 在外网 5G 上。`requiresUnmetered = true` 在移动网络下不满足
+→ WorkManager 把所有自动通道的 work 挂在 ENQUEUED 等约束，永不执行。**
+
+只有 `MANUAL` 档零约束能穿透。而验收人原话：「**我们没有主动触发上传的
+按钮**」——这就是第二个缺陷（UX-15）：界面状态是 `Idle`/`AllSafe` 时
+`heroActionOf` 返回 `null`，按钮**不渲染**。
+
+于是形成一个闭环死结：
+
+```
+5G 网络 + wifiOnly=true  →  自动通道全部被约束挡住（设计如此，正确）
+                          ↓
+界面不说「在等 Wi-Fi」，显示成正常/已完成    ← UX-15，缺陷①
+                          ↓
+英雄区按钮因此不渲染 → 唯一能穿透约束的 MANUAL 档没有入口  ← 缺陷②
+                          ↓
+        用户：连上了、状态正常、就是不传，且无处可点
+```
+
+**「仅 Wi-Fi 时在移动网络下不自动备份」本身是正确设计**，不改。缺陷是
+**它没有被说出来**，而且此时恰好剥夺了用户唯一的手动出路。
+
+## 判决实验（一步，验收人自己就能做）
+
+**连上任意 Wi-Fi**，然后看手机界面。
+
+- **开始传了** → 后半段完全由 `wifiOnly` 约束解释，代码层无传输缺陷，
+  待修的是 UX-15（把等待说出来 + 保留手动出路）
+- **仍然不传** → `wifiOnly` 不是全部解释，回到 H2（`Result.retry()` 退避
+  吞掉触发），需要手机侧 `dumpsys jobscheduler` 才能继续
+
+⚠️ 8/26 22:36 之后那一夜他**在家里 Wi-Fi 上**，理论上约束是满足的，却也没
+跑（周期兜底 5h，22:36 + 5h = 8/27 03:36 该跑一次）。所以**后半段可能是两个
+原因叠加**：那一夜是 H2，白天在 5G 是约束。这个未知只能靠手机侧日志分辨。
+
+## 待办产出
+
+- 新卡 **NET-02**：relay 握手失败 73MB stderr 无节流
+- **UX-15 建议提级 L1**（原为 backlog）：现在有了完整真机证据链——它不只是
+  「没提示」，它在 5G 场景下**堵死了用户唯一的出路**
+- 需要验收人回答一个问题：8/26 22:36 之后到 8/27 早上，手机是在家里 Wi-Fi
+  上还是已经切到移动网络？这决定「那一夜没跑」算约束还是算 H2
