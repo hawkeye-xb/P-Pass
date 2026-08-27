@@ -11,6 +11,7 @@ pub mod download;
 pub mod events;
 pub mod inbox;
 pub mod ipc;
+pub mod log_guard;
 pub mod pairing;
 pub mod presence;
 pub mod query;

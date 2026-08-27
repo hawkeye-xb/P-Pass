@@ -33,12 +33,17 @@ async fn main() -> anyhow::Result<()> {
     let eof_tx = if ephemeral { Some(eof_tx) } else { None };
 
     // Log to stderr; level via RUST_LOG (default info). 狗粮机排障的眼睛.
+    // NET-02: DedupGuard 折叠重复行 + 给这次运行的写入量设上限——
+    // 8/26 真机实锤 relay 握手失败 7 分钟写了 92211 行/73MB，见
+    // log_guard.rs 顶部注释。with_ansi(false) 是顺带的：ANSI 控制码在
+    // 落盘的 `.err` 里只会添乱，也让折叠的行匹配不必绕过颜色码。
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
-        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .with_writer(daemon::log_guard::DedupGuard::new())
         .init();
 
     // Default config file + data dir follow the platform convention
