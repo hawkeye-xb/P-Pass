@@ -386,14 +386,14 @@ work 在跑），但我把「此刻没在跑」外推成了「那次没发生过
 
 ### 环境状态
 
-本机路径 / 设备 / 旧副本 / 取证命令全部移到 `.claude/local-state.md`
+本机路径 / 设备 / 旧副本 / 取证命令全部移到 `local-state.md`
 （开发机本地文件，不进 git）。当前要点：库已清场成白板、手机 App 已卸载，
 下一步重装双端重新配对跑验证。
 
 ### 真机取证的路子（这轮验证有效，记下来）
 
 手机连着 adb 就能直接读状态，比看日志快得多。具体命令见
-`.claude/local-state.md`（本机文件）。要点：手机 `confirmed.json` 与
+`local-state.md`（本机文件）。要点：手机 `confirmed.json` 与
 `shared_prefs/backup_scope.xml` 可直连读；WorkManager 的库在 `no_backup/`
 不在 `databases/`，`WorkSpec.output` 能解出每次 run 真实上报的
 ingested/duplicates。
@@ -517,7 +517,7 @@ force-stop            → 已注册 job = 0
 **三件必做全部完成。** 剩下的都是可后置项（SYNC-05 已由用户降级、Windows 真机
 未验、视频缩略图灰块、几张卡的真机验收挂你那边）。
 
-另外把 5 张"活干完卡没归档"的收拾了，并在 `.claude/cards/README.md` 立了
+另外把 5 张"活干完卡没归档"的收拾了，并在 `cards/README.md` 立了
 状态横幅规矩（它已经让我连续误报三次）。
 
 ### 原清单（保留供对照）
@@ -697,7 +697,7 @@ MOB-09/13 的真机验收仍未做（当轮设备时断时续）。MOB-13 有前
 用户拍板删掉「仅充电」，后台档改用 `setRequiresBatteryNotLow(true)`。
 **拔掉电源、放电中实测 4.7 秒送达**（改前这个场景必被
 `stopReason=CONSTRAINT_CHARGING(6)` 掐死）。卡已归档
-`.claude/cards/done/MOB-10-charging-condition-invisible.md`。
+`cards/done/MOB-10-charging-condition-invisible.md`。
 
 起因是用户报"连拍之后没有触发同步"——日志显示不是没触发，是触发后
 在 30~2362ms 内被反复掐掉：该机 `AC powered:true` 但 `status:3
@@ -719,7 +719,7 @@ DISCHARGING`（三星保护电池到上限）。
 
 用户定稿把节奏从「省电优先」改成「尽快送达」：`CONTENT_UPDATE_DELAY_MS`
 2min→1s、`CONTENT_MAX_DELAY_MS` 15min→30s。真机实测端到端 **1.6 秒**
-（改前 2 分 03 秒）。卡见 `.claude/cards/done/MOB-11-sync-cadence-fast-path.md`。
+（改前 2 分 03 秒）。卡见 `cards/done/MOB-11-sync-cadence-fast-path.md`。
 
 ⚠️ **两个参数必须一起改**——`setTriggerContentUpdateDelay` 每次新变化
 都重置计时，连拍远快于 1s，只改前者会一直重置到 max delay 才触发，
@@ -745,7 +745,7 @@ DISCHARGING`（三星保护电池到上限）。
 用户报的"三星手机后台不主动同步"已定位、修复，并**通过用户真机验收**
 ——卸载重装的干净环境下用真实相机拍照两张，端到端延迟均 **2 分 03 秒**
 （= 2min 安静窗口 + ~3s 传输），第二张全程没开 App 也自动送达。卡片已
-移入 `.claude/cards/done/`。
+移入 `cards/done/`。
 
 ⚠️ **验收前必须关掉「仅充电」开关**：该机开着三星保护电池
 （`settings get global protect_battery = 2`），充到 80% 上限后系统状态
@@ -753,7 +753,7 @@ DISCHARGING`（三星保护电池到上限）。
 这类设备上等于「后台档永不满足」。这不是 MOB-08 没修完，是 MOB-10 的
 范围，**等用户拍板怎么解**。
 
-**三个根因**（详细证据见 `.claude/cards/MOB-08-background-sync-not-firing.md`
+**三个根因**（详细证据见 `cards/MOB-08-background-sync-not-firing.md`
 的《排查结论》和《验证记录》）：
 
 - **A · `addContentUriTrigger(it, false)`** —— MediaProvider 通知的是带
@@ -829,7 +829,7 @@ UI/导航层改动）+ `assembleDebug` 绿。已 `adb install -r` 装到三星
 卡不见了、进相册选择页回退看 tab 是否还留在设置页、点存储电脑详情
 看底部 tab 是否消失）。
 
-**新发现，挂新卡 `.claude/cards/MOB-08-background-sync-not-firing.md`**：
+**新发现，挂新卡 `cards/MOB-08-background-sync-not-firing.md`**：
 用户随后问"现在三星手机，后台不主动同步内容吗？"，现场用
 `dumpsys jobscheduler`/`dumpsys deviceidle`/`dumpsys connectivity`
 确认手机当时插电+连 Wi-Fi、电池优化白名单、standby bucket=ACTIVE，
@@ -1528,7 +1528,7 @@ md5 一致。**✅ 已出包 v0.3.3-test.4**（`3113f62`，macos 单平台 dispa
 review SYNC-03/04 时立的）。5 项：①register 竞态 ②60s 兜底轮询整页覆盖
 打断翻页（**真 bug**，已修）③反证固化为测试 + device.revoke 走完整 IPC
 链路的测试盲区 ④CancellationException 被吞 ⑤wasLive 计时起点。详见
-`.claude/cards/done/REV-01-sync0304-review-followups.md` 执行记录。
+`cards/done/REV-01-sync0304-review-followups.md` 执行记录。
 daemon 全量测试 + arch-check + clippy + fmt 干净，android 166/166 绿。
 **不影响** SYNC-04 五条真机剧本的挂账状态——本卡是纯代码级修复，真机
 验收仍等用户手机重新连回来再跑。
@@ -1854,7 +1854,7 @@ API 34 AVD 补验，不阻塞。**至此走查批次证据全闭环，test.3 出
 
 | 欠账 | 状态 |
 |---|---|
-| ①4 张卡移 done/ | ✅ MOB-03/ICON-01b/DESK-02/DEV-01b 全部移入 `.claude/cards/done/`（各附验收记录：巡检轮 PASS 结论 + commit + 测试数据） |
+| ①4 张卡移 done/ | ✅ MOB-03/ICON-01b/DESK-02/DEV-01b 全部移入 `cards/done/`（各附验收记录：巡检轮 PASS 结论 + commit + 测试数据） |
 | ②PROGRESS/NEXT 补记录 | ✅ PROGRESS.md 顶部补 4 卡行（完成时间倒序）；NEXT 本节即记录 |
 | ③MOB-03/ICON-01b 模拟器截图 | ⏳ **尝试受阻挂账**——本机 VM 无嵌套虚拟化（HVF 不可用），模拟器 TCG 纯软件渲染，App 启动即 ANR（P-Pass/Launcher 轮流弹窗），无法稳定走到权限弹窗/遮罩截图。APK 已重新构建（含全部修复）+ 安装成功、App 可启动至配对向导页（截图在 /tmp/mob03-*.png）。替代路径：三星真机卸载重装=全新零权限态，可补验收 1/2；或换有 HVF 的机器。挂验收人裁决 |
 
@@ -1924,7 +1924,7 @@ FIX-SC2 等第 2 步（卡点已锁定 restart 重拨）。
 **批次健全性**：本地全量复验绿——Rust 219/219 + Android 92/92 +
 fmt/arch-check 干净。功能方向对（都是 xixi 真机反馈驱动），**保留不 revert**。
 
-**review 实锤 4 个问题 → 已立卡**（队列新入口 `.claude/cards/`）：
+**review 实锤 4 个问题 → 已立卡**（队列新入口 `cards/`）：
 
 | 问题 | 卡 |
 |---|---|

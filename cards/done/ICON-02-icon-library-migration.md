@@ -96,7 +96,7 @@ Code 去替换我们本地的一些图标"——当时不清楚现状是怎么�
 ## 收尾
 
 两端各自 `just` 全绿（如适用）+ PROGRESS.md 一行 + 完成后移
-`.claude/cards/done/`。
+`cards/done/`。
 
 ---
 
@@ -314,7 +314,7 @@ tint 用法都没变。
 
 用户明确要求本轮**不 commit / 不 push**，工作区留着人工 review。因此：
 
-- 卡**没有**移进 `.claude/cards/done/`（Android 端 TabIcons 部分本就
+- 卡**没有**移进 `cards/done/`（Android 端 TabIcons 部分本就
   未完，卡应保持在队列里）。
 - **没有**动 `docs/PROGRESS.md` / `docs/ROADMAP.md` / `docs/NEXT.md`——
   这三处跟着合并动作一起更，由验收人决定。

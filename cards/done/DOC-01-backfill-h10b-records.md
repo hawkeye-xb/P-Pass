@@ -13,7 +13,7 @@ PROGRESS/ROADMAP/NEXT 全部零记录——验收人只能从 git log 反向考�
   **不许脑补验收结论**——没做过真机验收的一律写「待验收」。
 - ROADMAP.md：H-10b 相关行状态更新到当前事实（0.3.1 已出、Windows GUI
   安装包已进管线等）。
-- NEXT.md：「当前队列」指向 .claude/cards/，过时的「等 test.5 实测」类
+- NEXT.md：「当前队列」指向 cards/，过时的「等 test.5 实测」类
   段落按现状改写。
 
 ## 可执行验收

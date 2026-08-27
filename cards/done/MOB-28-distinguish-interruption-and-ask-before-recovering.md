@@ -16,7 +16,7 @@
 > "必须点了才恢复。你都提示了，就别自作主张。"
 > "你先能让他不自动拉起，监测后我们提示，用户手动拉起了？"
 
-**取代 MOB-18**（`.claude/cards/backlog/MOB-18-force-stop-detection.md`）。
+**取代 MOB-18**（`cards/backlog/MOB-18-force-stop-detection.md`）。
 MOB-18 当初 pending 的技术前提已被 MOB-27 推翻，详见根因分析 §二。
 
 ## 期望行为
