@@ -53,6 +53,10 @@ gen:
 arch-check:
   @./tools/arch-check.sh
 
+# docs/QUEUE.md must stay in sync with cards/ (no missing/dangling entries)
+queue-check:
+  @./tools/check-queue-sync.sh
+
 # ── Development ─────────────────────────────────────
 
 # Start daemon in development mode
@@ -62,7 +66,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint test arch-check
+ci: fmt lint test arch-check queue-check
   @echo "==> CI pipeline: all green ✅"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
