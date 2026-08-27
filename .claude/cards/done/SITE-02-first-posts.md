@@ -1,7 +1,14 @@
 # SITE-02 首批三篇博文
 
-> ⬜ 状态：草稿完成
-> 级别：L1 · 阻塞：等用户审稿后发布（发布前用户过目，草稿完成即停，NEXT 留「待用户审稿」）
+> ✅ 状态：代码已合并（`7f998ec` 三篇上线 + `75299d5` 内容修订），2026-08-27 归档
+> 级别：L1
+
+**归档核实**（2026-08-27 对账）：`site/src/content/blog/` 下
+`why-photo-backup-for-family.md`、`icon-roof-guardian.md`、
+`from-polling-to-events.md` 三篇（另有英文版 + 追加的
+`the-system-was-the-queue.md`）`draft:` 字段均为 `false`，`75299d5`
+"内容真实性修订（验收人）" 证明用户已审过。卡此前留在根目录是簿记漏项，
+不是代码/发布状态有问题。
 
 ## 问题
 

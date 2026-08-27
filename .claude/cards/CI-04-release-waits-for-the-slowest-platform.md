@@ -1,7 +1,13 @@
 # CI-04 三平台并行跑完才建草稿——一个没跑完就一个都下载不了　级别 L1
 
-> 🟡 状态：**Windows 缓存那一半已实施**（见「实施记录①」）；
-> **先建草稿那一半待实施 + 必须 workflow_dispatch 验证过才许合 main**
+> 🟡 状态：**①② 均已实施并已合入 main**（① `windows-x64` vcpkg 缓存；
+> ② 拆成 create-draft + 三条独立 upload job，见「实施记录①②」，
+> commit `1ee4a45` + `81ff6a2`，2026-08-27 独立核实两者都是 main 祖先）。
+> **不存在权限拍板**——实施记录②已交代清楚："放宽 contents:write" 是上一轮
+> 自己造的假障碍，正确形状是把上传下沉到独立 job，三个构建 job 的
+> `contents: read` 未动。**唯一还没做的是拿一次真实 workflow_dispatch/release
+> 跑一遍，看缓存是不是真的省时间、草稿是不是真的不用等 Windows**——这条读
+> 代码验不了，要看 GitHub Actions 运行记录。
 > 级别：**L1** · 阻塞：无
 
 ## 问题

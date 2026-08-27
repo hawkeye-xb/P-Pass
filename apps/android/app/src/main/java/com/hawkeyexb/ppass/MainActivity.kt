@@ -621,7 +621,8 @@ fun PPassApp() {
                         onOpenBucketPicker = { enterBucketPicker(s.pairing, firstTime = false) },
                         // MOB-02 §一: 首页主按钮删除——hero 空闲态按钮 =
                         // 「选择备份的相册」；onBackupNow 保留给：进行中暂停、
-                        // 失败红卡「再试一次」、设置页低调「立即备份」（狗粮）。
+                        // 失败红卡「再试一次」——不是常驻设置页入口，
+                        // MOB-43（2026-08-27）已拍板不建那个入口。
                         onBackupNow = {
                             val needed = requiredMediaPermissions().filter {
                                 ContextCompat.checkSelfPermission(context, it) !=
