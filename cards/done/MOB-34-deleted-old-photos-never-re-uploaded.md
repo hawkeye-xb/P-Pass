@@ -1,6 +1,6 @@
 # MOB-34 库里删掉的老照片永远不会被重传——水位把它们挡在扫描之外　级别 L1
 
-> 🟡 状态：代码已合并（commit d592639），等真机验收
+> ✅ 状态：代码已合并（commit d592639），2026-08-27 真机验收通过，验收人认定归档
 > 级别：L1 · 阻塞：无（`MOB-29` 的后续，方向已定）
 
 ## 问题
@@ -210,3 +210,7 @@ ReuploadCompensationTest > doWork_feeds_the_merged_list_into_the_pipeline FAILED
 
 最终计数：Android 全量 **38 类 / 290 tests / 0 failures**（XML 19:42:10），
 `assembleDebug` 绿。反证真跑：去掉第二路 → 2 条红。
+
+## 验收记录（2026-08-27）
+
+验收人真机验收通过（批量清理 QUEUE 待验收区），归档。
