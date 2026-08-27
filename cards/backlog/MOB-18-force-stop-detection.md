@@ -1,7 +1,7 @@
 # MOB-18 force-stop 中断检测与提示　【已被 MOB-28 取代 · 2026-08-20】
 
 > ## ⚠️ 本卡已实现，但不是按本卡的方案
-> 见 `.claude/cards/MOB-28-distinguish-interruption-and-ask-before-recovering.md`。
+> 见 `cards/MOB-28-distinguish-interruption-and-ask-before-recovering.md`。
 >
 > 下面"为什么 pending"那一段的技术前提**已经不成立**：它假设监听是
 > WorkManager 的 work，所以 `ForceStopRunnable` 会在我们任何代码之前自愈。

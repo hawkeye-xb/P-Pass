@@ -1,7 +1,7 @@
 # LIC-01 补 AGPL-3.0 LICENSE 文件　级别 L0
 
 用户 2026-08-12 指令：「LIC-01（队列里，L0）：补 AGPL-3.0 LICENSE 文件，
-照卡面做」。**卡面文件在队列目录缺失**（.claude/cards/ 无 LIC-01 卡；
+照卡面做」。**卡面文件在队列目录缺失**（cards/ 无 LIC-01 卡；
 git 历史、其他 worktree、记忆均无）——按用户指令的意图执行：项目
 Cargo.toml 已声明 `license = "AGPL-3.0"`（workspace 继承 + desktop
 独立声明），但仓库根缺 LICENSE 文件本身，site/（独立 Astro 项目，landing

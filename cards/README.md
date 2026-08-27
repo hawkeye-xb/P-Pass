@@ -5,7 +5,7 @@
 - 领卡即开工，做完把卡移到 `done/` 并在卡尾追加验收记录（证据/测试输出摘录）。
 - 优先级看卡内标注；无标注按文件名字典序。
 - **本机环境状态（路径/设备/本地副本/daemon 状态）不写在卡里、不写在
-  docs/ 里**——统一放 `.claude/local-state.md`（已 gitignore，不上远端）。
+  docs/ 里**——统一放 `local-state.md`（已 gitignore，不上远端）。
 - 流程纪律（直推 main 的三条底线、tag 纪律）见仓库根 `AGENTS.md`——先读它，
   它是模型无关的唯一规范（`CLAUDE.md` 只是指向它的指针）。
 - 现在该接哪张卡，看 [`docs/QUEUE.md`](../../docs/QUEUE.md)——唯一待办队列。

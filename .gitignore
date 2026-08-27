@@ -45,7 +45,7 @@ apps/android/.gradle/
 apps/android/local.properties
 apps/android/**/build/
 .gstack/
-.claude/local-state.md
+/local-state.md
 
 # agent worktrees（本地临时，不入库）
 .claude/worktrees/
