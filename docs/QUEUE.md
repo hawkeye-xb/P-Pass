@@ -11,7 +11,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-08-27**（commit `c843dd6`）
+> 最后核对：**2026-08-27**（验收人 7 条反馈批次：+MOB-44/45/46、NET-03、UI-07/08，MOB-26 解冻）
 
 ---
 
@@ -40,6 +40,10 @@
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 半小时内三次传输层失败，`backup.begin` 卡满 15 秒才超时；**还在定性阶段**，等下次复现时的 daemon 日志时间线才能定是客户端超时值（`DaemonClient.kt`）还是桌面端/relay 建连慢（`crates/daemon`） | L2 |
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
+| P2 | [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 相册计数虚高：选 3 显 7、选 4 显 8（恒 +4）——计数说谎，伤范围信任 | L1 |
+| P2 | [MOB-44](../cards/MOB-44-harmonyos-no-background-for-restore.md) | 鸿蒙上恢复备份退后台就不跑（需鸿蒙真机取证窗口，与 DOG-03 同族） | L1 |
+| P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
+| P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
 | P3 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 选相册页空相册名的兜底文案硬编码成中文 | L3 |
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 | P3 | [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
@@ -52,6 +56,9 @@
 | P3 | [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | bump-version.sh 静默跳过桌面 crate 版本，漂移断言看不见 | L2 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
 | P3 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
+| P3 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 照片查看器换成熟开源库（Telephoto/ZoomImage 等）+ 读 EXIF——2026-08-27 验收人重提解冻，从 backlog 移回 | L2 |
+| P3 | [UI-07](../cards/UI-07-lightning-badge-on-small-icon-missing.md) | 小图标闪电标消失——先考据它曾经是什么、何时没的，再谈恢复 | L3 |
+| P3 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册页长名称换行撑乱布局 + 缩略图模糊 | L3 |
 | P4（顺手做，不派活） | [CI-04](../cards/CI-04-release-waits-for-the-slowest-platform.md) | 代码①②都已合并（先建草稿、各平台自己上传），不存在权限拍板；剩的是下次你自己发版时顺手拿一次真实 workflow_dispatch/release 验证一下缓存和拆分是否真生效——2026-08-27 用户定为最低优先级 | L1 |
 
 **派活提示**：P1/P2 里的 L0/L1 卡属于「成本在做」，按 AGENTS.md 的派活姿势，
@@ -109,7 +116,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 | [MOB-07](../cards/MOB-07-partial-access-global-indicator.md) | 暂不做 | 2026-08-14 拍板 |
 | WATCH-05 | 已拍板需要做，实施前重开讨论 | inode 身份缓存（stat 没变就不重算 hash） |
 | WATCH-06 | 明确不做 | 卡里写明不要用软链物化视图 |
-| MOB-25 / MOB-26 | 暂不做 | 查看页尺寸显示 0×0 / 缺翻页缩放，2026-08-19 拍板 |
+| MOB-25 | 暂不做 | 查看页尺寸显示 0×0，2026-08-19 拍板（MOB-26 已于 2026-08-27 解冻移回可接队列） |
 | MOB-18 | superseded | 已被 MOB-28 取代，禁止按本卡实施 |
 | DESK-11 | 待确认 | 🔵 backlog，若确认露出完整 hex 则升级为 DESK-10 的脱敏漏 |
 | UI-05 / UI-06 | 用户暂时接受 | 展示细节问题，低优 |
