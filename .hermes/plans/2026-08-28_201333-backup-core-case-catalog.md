@@ -1,5 +1,7 @@
 # P-Pass 核心备份流程：行为 Case Catalog（仅设计）
 
+> **状态：历史 case 草案。** 当前核心语义以 `2026-08-29_114911-backup-core-flow-decision-record-zh-CN.md` 为准；本 case catalog 需在下一轮按 500 项窗口、消费者 Pause、外部删除待决策语义重整后才可作为测试依据。
+
 **目标：** 先用场景定义系统承诺，再让状态图、数据模型和实现从 case 推导；不从现有 WorkManager 入口或旧补丁反推需求。
 
 **本轮边界：** 不写生产代码、不写自动化测试、不改任务卡。本文是后续 TDD 的行为验收目录；实施时必须按垂直切片逐个 `RED → GREEN → REFACTOR`，不能一次堆完所有测试。
