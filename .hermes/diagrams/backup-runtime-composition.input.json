@@ -1,0 +1,29 @@
+{
+  "nodes": [
+    {"id":"wake","type":"ellipse","label":"Wake causes\nWatch / foreground / periodic\nmanual / reconcile"},
+    {"id":"controller","type":"rectangle","label":"BackupController\nSingle command entry"},
+    {"id":"admission","type":"diamond","label":"Admission allowed?\nvisibility + policy + scope + constraints"},
+    {"id":"wait","type":"ellipse","label":"Wait\nNo state is lost"},
+    {"id":"discover","type":"rectangle","label":"Discovery producer\nscan(cursor)"},
+    {"id":"reconcile","type":"rectangle","label":"Reconciliation producer\nremote presence check"},
+    {"id":"discoverTx","type":"database","label":"Discovery transaction\nupsert items + advance cursor"},
+    {"id":"consume","type":"rectangle","label":"Transfer consumer\nclaim next eligible item"},
+    {"id":"gateway","type":"rectangle","label":"RemoteArchiveGateway\ndeliver(item) / abort / reconcile"},
+    {"id":"daemon","type":"ellipse","label":"P-Pass daemon\nremote archive + staging"},
+    {"id":"resultTx","type":"database","label":"Result transaction\nconfirm / retry / failure\ncleanup state"}
+  ],
+  "edges": [
+    {"from":"wake","to":"controller"},
+    {"from":"controller","to":"admission"},
+    {"from":"admission","to":"wait","label":"not now"},
+    {"from":"admission","to":"discover","label":"discover"},
+    {"from":"admission","to":"reconcile","label":"reconcile due"},
+    {"from":"discover","to":"discoverTx","label":"atomic enqueue"},
+    {"from":"reconcile","to":"discoverTx","label":"requeue missing"},
+    {"from":"discoverTx","to":"consume","label":"eligible item"},
+    {"from":"consume","to":"gateway","label":"lease + deliver"},
+    {"from":"gateway","to":"daemon","label":"transport"},
+    {"from":"gateway","to":"resultTx","label":"durable result"}
+  ],
+  "options": {"direction":"TB","nodeSpacing":70}
+}
