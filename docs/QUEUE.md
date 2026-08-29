@@ -11,7 +11,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-08-27**（验收人第二批真机验收归档 9 张：MOB-32/37/29/34/36、WATCH-03/04、DESK-08、UI-03）
+> 最后核对：**2026-08-29**（ARCH-01 已将发现窗口、严格单张消费、Pause、对账与删除默认语义收口；下一轮只讨论当前上传项的 Desktop staging / 断点续传协议）
 
 ---
 
@@ -34,6 +34,7 @@
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P1 | [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 备份核心流程已收口：500 项发现窗口 + 严格单张 UploadCursor 消费；下一轮只定当前项 Pause 时的 Desktop staging / 断点续传协议，再拆实施卡 | L2 |
 | P2 | [MOB-42](../cards/MOB-42-pause-leaves-two-channels-running.md) | 「暂停自动备份」的 `pauseAutoBackup` 漏取消 `CATCHUP_WORK_NAME` 通道——点了暂停,这条通道还在跑 | L2 |
 | P2 | [MOB-39](../cards/MOB-39-triggers-are-data-pipeline-is-one.md) | 触发层抽象：触发是数据、管线只有一条——治「每次新增触发都漏接一处」这个病根（MOB-33/34/35/38/42 反复复发的同一个病） | L1 |
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |

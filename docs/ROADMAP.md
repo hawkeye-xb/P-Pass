@@ -448,6 +448,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       与失败红卡「再试一次」两个触点，`manual_backup_entry` 是死文案——所以本卡
       真正修的是"在失败红卡上反复点再试一次而永远好不了"。
       247/247 + 27 条反证全红。
+- [ ] **ARCH-01 备份核心流程：发现队列与严格单张消费** — **2026-08-29 设计收口，待拆实施卡**：单文件是最小交付单位；发现器用复合 DiscoveryCursor 按 500 项窗口原子入队，上传消费者用严格 UploadCursor 单张消费，Pause 只停消费者，hash 只在当前项上传时计算；远端对账独立低频分页，Desktop 外部缺失默认待用户决定，不自动补传或删除手机。下一轮先定当前上传项 Pause 时的 Desktop staging / offset / abort 协议，再按 ARCH-01 拆数据库、发现、消费者、协议和 UI 卡。
 - [x] DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 — **2026-08-25（commit 1e1359f + 0e0521f，真机确认 owed）· 2026-08-26 真机验收打回脱敏一处、当日补齐（🟡 其余项仍等真机复验）**:
       验收人误装 0.3.0 的包，daemon 因迁移降级反复启动失败，按「导出日志」发来
       求助的 zip **只有 489 字节、一条四天前的 diag 事件**，而真实错误
