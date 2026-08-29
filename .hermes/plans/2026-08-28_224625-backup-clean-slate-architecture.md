@@ -1,5 +1,7 @@
 # P-Pass 备份：从业务 Case 推导的干净架构（仅设计）
 
+> **状态：历史架构探索稿。** 当前核心流程规范请使用 `2026-08-29_114911-backup-core-flow-decision-record-zh-CN.md`；本稿中的队列补货、Pause 与远端缺失处理假设已在后续讨论中调整。
+
 > **边界：** 本文不实施、不改任务卡。它替代「先看五个 WorkManager 入口，再给每条补 pause/retry 判断」的思路。
 
 **目标：** 把备份定义为一个可恢复的本地交付账本；将 Android 调度、MediaStore、网络传输、UI 都降为可替换 adapter。每一条边界都由 case catalog 的某类行为证明其必要性。
