@@ -1,7 +1,7 @@
 # ARCH-01 备份核心流程：发现队列与严格单张消费（L2）
 
 > 🟡 状态：设计已收口，待拆实施卡
-> 级别：L2 · 阻塞：当前上传项暂停后的 Desktop staging / 断点续传协议尚待定
+> 级别：L2 · 传输裁决：单一原生 iroh-blobs fetch/resume；不新增 raw upload 重传协议
 
 ## 问题
 
@@ -13,7 +13,8 @@
 - 触发只合并为发现请求；发现器将 MediaStore 增量可靠写入手机本地队列。
 - 上传消费者用严格 UploadCursor 一张一张处理，只有当前项进入终态才前进。
 - 500 项发现窗口控制活跃表规模；窗口未完成时新触发只记录 `discoveryRequested`，窗口终态后才发现下一窗。
-- Pause 只暂停消费者；hash 仅在当前单项将要上传时计算/命中缓存。
+- 当前项只通过原生 iroh-blobs fetch/resume 传输；业务层不自定义 offset、chunk map 或第二套 raw 上传协议。
+- Pause、条件等待、范围修改与取消积压分别表达；hash 仅在当前单项将要传输时计算/命中缓存。
 - 远端对账独立低频分页，Desktop 外部缺失默认只产生待用户决定的事实，不自动补传或删除手机原图。
 
 ## 验收标准
@@ -21,7 +22,7 @@
 - [x] 当前核心流程决策已在本卡“已收口设计”逐条落库。
 - [x] `.hermes/` 仅保留指向本卡与 `docs/QUEUE.md` 的索引，不承载设计正文或任务事实。
 - [x] `docs/QUEUE.md`、`docs/PROGRESS.md`、`docs/ROADMAP.md` 同步本卡状态。
-- [ ] 下一轮先收口当前上传项暂停时的 Desktop staging / attempt / offset / abort 协议，再据此重整可执行 case。
+- [x] 当前项暂停、条件中断、范围修改、取消积压与恢复的业务语义已收口；传输统一为原生 iroh-blobs fetch/resume。
 - [ ] 以重整后的 case 为准，先写状态机与数据库事务的失败测试，再开始生产实现。
 
 ## 范围
@@ -31,8 +32,7 @@
 
 ## 阻塞与依赖
 
-- 当前上传项在 Pause 时，Desktop 是否具备稳定 `attemptId`、可验证 byte offset / chunk map、幂等 abort 与 staging cleanup 语义尚待讨论。
-- 本卡设计完成后，需按范围拆出数据库、发现器、消费者、传输协议、对账与 UI 的实施卡；禁止直接把整套重构塞进一张卡。
+- 设计无待拍板项。实施前须拆出数据库、发现器、消费者、原生 blob provider/fetch 准入、范围与取消边界、对账和 UI 卡；禁止直接把整套重构塞进一张卡。
 
 ---
 
@@ -72,6 +72,12 @@ UploadCursor
 
 DiscoveryRequested
 = 任意 Watch / 前台 / 周期 / 手动触发的合并标记
+
+ScopeRevision
+= 当前相册范围的版本；减少范围时替换旧版本
+
+CancelBarrier
+= 已取消历史积压的范围快照与发现边界；覆盖尚未物化为 TransferItem 的旧媒体版本
 ```
 
 发现查询按 `(GENERATION_MODIFIED, _ID)` 升序；复合游标避免分页边界遗漏同 generation 的媒体。
@@ -89,16 +95,16 @@ MediaStore 增量最多 500 条
 → 提交后唤醒消费者
 ```
 
-当前窗口未全部终态时，新触发只置 `discoveryRequested=true`。当前 500 项全部成为 `CONFIRMED`、`FAILED_NEEDS_USER`、`SKIPPED_BY_USER` 或 `CANCELLED_BY_SCOPE` 后，若仍有未发现增量或触发标记，再发现下一窗。
+当前窗口未全部终态时，新触发只置 `discoveryRequested=true`。当前 500 项全部成为 `CONFIRMED`、`FAILED_NEEDS_USER`、`SKIPPED_BY_USER`、`CANCELLED_BY_SCOPE` 或 `CANCELLED_BY_USER_BACKLOG` 后，若仍有未发现增量或触发标记，再发现下一窗。
 
 ### 4. TransferItem 手机本地表
 
 ```text
 稳定身份：
-itemId、pairingEpoch、sourceRef、sourceVersion、bucketId、createdAt
+itemId、pairingEpoch、scopeRevision、sourceRef、sourceVersion、bucketId、createdAt
 
 动态队列：
-queueSequence、deliveryState、attemptCount、nextAttemptAt、attemptId、hash、错误与时间
+queueSequence、deliveryState、attemptCount、nextAttemptAt、hash、错误与时间
 
 副本事实：
 sourcePresence、remotePresence、disposition
@@ -108,6 +114,8 @@ sourcePresence、remotePresence、disposition
 
 同一媒体版本重试不新建重复照片记录：保持 `itemId`，需要用户重试时更新 `queueSequence` 到下一窗队尾。
 
+一台手机只绑定当前 `pairingEpoch` 的一台 Desktop；一台 Desktop 可服务多台手机。每台手机的队列、游标、范围版本、取消边界和 fetch lease 相互隔离。当前不设计多 Desktop RBAC；手机 blob provider 只准入当前已配对 Desktop，Desktop 只对本地有效队列发起 fetch。
+
 ### 5. 单张上传
 
 ```text
@@ -115,14 +123,16 @@ UploadCursor 指向当前项
 → 确认 sourceRef 可读
 → 用 sourceRef + sourceVersion 查询 HashCache
 → 未命中时计算 hash
-→ 问 Desktop 是否已有正式 hash
-→ 已有则确认；缺失则上传
+→ 校验当前 pairingEpoch、ScopeRevision、消费者 gate 与 CancelBarrier
+→ Desktop 对手机的同一 content hash 发起原生 iroh-blobs fetch
+→ 已有 partial 时由原生协议续传；没有 partial 时同一协议自然从起点 fetch
+→ 完整 blob 经原生校验后 materialize / ingest
 → Desktop 正式确认后才 CONFIRMED
 ```
 
 发现阶段不计算 hash、不问远端、不读取完整文件。
 
-### 6. Pause、条件与重试
+### 6. 消费者门控、条件与重试
 
 ```text
 用户 Pause：
@@ -130,19 +140,76 @@ UploadCursor 指向当前项
 - UploadCursor 停在当前项
 - 后续项不开始
 - 新触发只合并，不发现下一窗
+- 当前 native fetch 立即停止，但有主 partial blob 保留
+- 网络恢复本身不得自动 Continue；只有用户 Continue 才恢复
 
-网络/电量/Desktop 不可达：
-- 消费者 WAITING_*
-- 条件恢复后自动从当前队头重试
-- 不消耗每项失败预算
+条件不满足（Wi-Fi 开关、电量低于阈值、Desktop 不可达等）：
+- 消费者 WAITING_FOR_CONSTRAINTS
+- 不改变范围、取消边界、队列归属或 UploadCursor
+- 当前 native fetch 停止；有效 partial 保留
+- 条件恢复后自动从当前队头继续；不消耗每项失败预算
+
+每次唤醒的准入顺序：
+backupEnabled + pairingEpoch + ScopeRevision + 无 CancelBarrier 覆盖
+→ consumerGate 非 PAUSED
+→ 条件满足
+→ 取得当前 #18 的 fetch lease
+→ 才允许 native fetch / finalise
 
 单文件问题：
+- 仅源不可读、完整性失败或协议永久错误消耗每项失败预算
 - 当前项指数退避（首次 + 2 次重试）
 - 耗尽后 FAILED_NEEDS_USER
 - UploadCursor 才进入下一项
 ```
 
-### 7. 远端对账与删除
+`WAITING_FOR_CONSTRAINTS` 不是 `PAUSED_BY_USER`。前者在条件恢复后自动继续；后者只响应用户 Continue。
+
+### 7. 修改范围
+
+```text
+增加相册：
+当前窗口与当前 #18 不变
+→ 为新增相册记录历史补扫请求
+→ 当前窗口终态后，按新增相册完整发现
+→ 结果追加到后续窗口
+
+减少相册：
+先停止消费者并提示影响
+→ 用户确认后 ScopeRevision: R1 → R2
+→ R1 全部未确认项 = CANCELLED_BY_SCOPE
+→ 撤销 R1 fetch lease，R1 partial 不得 finalise
+→ R2 保持 PAUSED，等待用户 Continue
+→ R2 对新范围完整发现，再从 R2 队头消费
+```
+
+增加相册不能沿用旧全局 DiscoveryCursor，否则新增相册中早于旧水位的媒体会漏掉。减少相册不逐项网络取消；先持久化新的 `ScopeRevision`，所有完成回调都必须在 finalise 前验证它仍匹配，防止被移出范围的当前项竞态确认。已 `CONFIRMED` 的副本不随改范围自动删除。
+
+### 8. 取消积压与恢复
+
+不提供逐文件 Cancel。`Cancel Backlog` 表达“放弃取消时刻以前的整批未确认积压，但继续接收以后新增量”。
+
+```text
+Cancel Backlog：
+→ 先持久化 CancelBarrier(scopeSnapshot, discovery cutoff)
+→ 停止当前 native fetch
+→ 已物化的未确认 TransferItem = CANCELLED_BY_USER_BACKLOG
+→ 尚未物化的旧媒体由 CancelBarrier 覆盖，不因后续发现而入队上传
+→ 保留原 consumerGate：OPEN 继续接收取消边界后的新增量；PAUSED 仍保持暂停
+
+Restore Cancelled Backlog（仅用户显式操作）：
+→ 解除对应 CancelBarrier
+→ 对其 scopeSnapshot 做完整重新发现
+→ 已确认内容去重，未确认内容按新窗口重新入队
+
+Discard Cancelled Backlog：
+→ 关闭该次快捷恢复入口，普通触发仍不复活旧积压
+→ 以后只有用户显式“重新扫描当前范围全部内容”才重新准入历史媒体
+```
+
+未物化的历史积压不强行突破 500 活跃窗口落成队列行；CancelBarrier 是其可观察、可恢复的持久事实。`Discard` 不等于永久逐媒体黑名单，永久忽略属于独立的范围/排除规则能力。
+
+### 9. 远端对账与删除
 
 ```text
 5 小时周期：本地 MediaStore 增量发现兜底
@@ -170,22 +237,16 @@ disposition=UNRECOVERABLE
 
 P-Pass 当前是单向备份，不是双向删除同步。Finder 外部删除只能被观察为 Desktop 缺失，不能被猜成明确删除意图；未来若提供 P-Pass 内删除，应通过回收站/tombstone 建立独立删除流程。
 
-## 下一 session 启动与关闭
-
-### 启动
-
-只讨论、不实施：先解决当前上传项 Pause 时的 Desktop staging 协议。
+## 后续拆卡入口
 
 ```text
-需要确认：
-- stable attemptId / stagingId
-- 已验证 offset / chunk map
-- 本地版本不变判定
-- 幂等 abort 与 cleanup
+按以下边界拆实施卡：
+- 手机数据库：ScopeRevision、CancelBarrier、消费者 gate、fetch lease 与状态迁移
+- 发现器：新增相册补扫、减少相册重建、取消边界的发现准入
+- 消费者：严格 UploadCursor、条件重验、Pause/Continue/Cancel Backlog
+- 传输 adapter：手机 blob provider、单配对 Desktop 准入、Desktop 原生 fetch/resume、完成证据
+- partial 生命周期：有主保留、失主回收、重启恢复与 finalise 竞态
+- UI：范围减少提示、暂停/等待差异、取消积压/恢复/丢弃入口
 ```
 
-有可靠 offset 才允许字节级续传；否则当前项仍为队头，但从文件起点重传，partial staging 只作为待清理残留。
-
-### 关闭
-
-本轮若有新结论，只更新本卡“已收口设计”并同步 `docs/QUEUE.md`；未得到用户明确许可前，不改生产代码、不提交、不推送。
+实施顺序仍是：先以失败测试锁定数据库事务与竞态，再接原生传输 adapter，最后接调度与 UI。不得在实现卡中重新定义本卡语义。
