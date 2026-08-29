@@ -1,0 +1,29 @@
+{
+  "nodes": [
+    {"id":"running","type":"ellipse","label":"Running / waiting\nUnpaused"},
+    {"id":"pause","type":"rectangle","label":"Pause command\nPersist control first"},
+    {"id":"paused","type":"database","label":"Paused(intentId)\nQueue preserved"},
+    {"id":"continue","type":"rectangle","label":"Continue\nClear pause + request wake"},
+    {"id":"cancel","type":"rectangle","label":"Cancel current intent\nMark unconfirmed items cancelled"},
+    {"id":"outbox","type":"database","label":"Cleanup outbox\ncleanup = Pending\nremote staging handle"},
+    {"id":"cleanup","type":"rectangle","label":"RemoteCleanupDispatcher\nabort staging"},
+    {"id":"ok","type":"ellipse","label":"Cleanup completed\nNo re-upload"},
+    {"id":"retry","type":"rectangle","label":"Cleanup retry\nonly abort is retried"},
+    {"id":"error","type":"rectangle","label":"Permanent file error\nKeep reason, continue later items"}
+  ],
+  "edges": [
+    {"from":"running","to":"pause"},
+    {"from":"pause","to":"paused","label":"then stop executor"},
+    {"from":"paused","to":"continue"},
+    {"from":"continue","to":"running","label":"original queue, not full scan"},
+    {"from":"paused","to":"cancel"},
+    {"from":"cancel","to":"outbox"},
+    {"from":"outbox","to":"cleanup"},
+    {"from":"cleanup","to":"ok","label":"abort confirmed / safely expired"},
+    {"from":"cleanup","to":"retry","label":"network failure"},
+    {"from":"retry","to":"cleanup"},
+    {"from":"running","to":"error","label":"unrecoverable item"},
+    {"from":"error","to":"outbox","label":"cleanup staging only"}
+  ],
+  "options": {"direction":"TB","nodeSpacing":65}
+}

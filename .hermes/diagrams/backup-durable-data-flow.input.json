@@ -1,0 +1,26 @@
+{
+  "nodes": [
+    {"id":"media","type":"ellipse","label":"MediaStore\nlocal media facts"},
+    {"id":"catalog","type":"rectangle","label":"MediaCatalog\nscan since cursor"},
+    {"id":"discovery","type":"database","label":"Discovery transaction\nTransferItem upsert\n+ DiscoveryCursor advance"},
+    {"id":"reconcile","type":"ellipse","label":"Reconcile tick\nchecks RemoteEvidence"},
+    {"id":"queue","type":"database","label":"TransferQueue\nall unconfirmed media versions"},
+    {"id":"lease","type":"rectangle","label":"Lease next eligible item\nretry does not block later item"},
+    {"id":"transfer","type":"rectangle","label":"Transport adapter\nhash / dedupe / push"},
+    {"id":"evidence","type":"database","label":"RemoteEvidence\nconfirmed hash + time"},
+    {"id":"retry","type":"rectangle","label":"RetryAt\nonly this item"},
+    {"id":"terminal","type":"rectangle","label":"Terminal reason\nfailed permanent / cancelled"}
+  ],
+  "edges": [
+    {"from":"media","to":"catalog"},
+    {"from":"catalog","to":"discovery"},
+    {"from":"discovery","to":"queue","label":"committed = safely discovered"},
+    {"from":"reconcile","to":"queue","label":"only missing items"},
+    {"from":"queue","to":"lease"},
+    {"from":"lease","to":"transfer"},
+    {"from":"transfer","to":"evidence","label":"durable remote confirmation"},
+    {"from":"transfer","to":"retry","label":"transient error"},
+    {"from":"transfer","to":"terminal","label":"permanent / user cancel"}
+  ],
+  "options": {"direction":"TB","nodeSpacing":70}
+}
