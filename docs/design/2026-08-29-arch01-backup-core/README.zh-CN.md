@@ -15,6 +15,13 @@
 
 SVG 是源文件，可直接在浏览器、Figma、Illustrator、Inkscape 或文本编辑器中打开和修改。
 
+## 测试合同
+
+- [失败 Case Matrix（中文）](04-case-matrix.zh-CN.md)
+- [Failure Case Matrix（English）](04-case-matrix.md)
+
+矩阵把每条业务规则映射为自动合同测试、反证和验收人可执行的真机步骤；实现前先 review 矩阵，不先写生产代码。
+
 ## 已定业务原则
 
 ```text
