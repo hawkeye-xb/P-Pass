@@ -15,6 +15,13 @@ This directory archives the agreed ARCH-01 product semantics, boundaries, and ed
 
 The SVG files are the source assets. They can be edited in a browser, Figma, Illustrator, Inkscape, or a text editor.
 
+## Test contract
+
+- [Failure Case Matrix — Chinese](04-case-matrix.zh-CN.md)
+- [Failure Case Matrix — English](04-case-matrix.md)
+
+The matrix maps each product rule to an automated contract test, negative proof, and reviewer-operated device acceptance. Review the matrix before writing production code.
+
 ## Agreed product rules
 
 ```text
