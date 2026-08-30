@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="2050" viewBox="0 0 1080 2050" role="img" aria-labelledby="title desc">
+  <title id="title">ARCH-01 runtime flow and cancel-current-round</title>
+  <desc id="desc">Bilingual normal backup and cancellation flow.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#6b655c"/></marker>
+    <style>.bg{fill:#fbf8f2}.ink{fill:#171512}.muted{fill:#6b655c}.safe{fill:#2e6b4f}.box{fill:#fffdf8;stroke:#3d3933;stroke-width:2}.green{fill:#e4f1e8;stroke:#2e6b4f;stroke-width:2}.amber{fill:#fff3cf;stroke:#9b6b00;stroke-width:2}.red{fill:#fbeaec;stroke:#a64b5d;stroke-width:2}.blue{fill:#e9f2f8;stroke:#46758c;stroke-width:2}.line{stroke:#6b655c;stroke-width:3;fill:none;marker-end:url(#arrow)}.dash{stroke:#9b6b00;stroke-width:3;fill:none;stroke-dasharray:10 8;marker-end:url(#arrow)}text{font-family:'PingFang SC','Noto Sans CJK SC',Arial,sans-serif}.h{font-size:34px;font-weight:700}.sub{font-size:21px}.t{font-size:25px;font-weight:700}.s{font-size:20px}.tiny{font-size:17px}</style>
+  </defs>
+  <rect class="bg" width="1080" height="2050"/>
+  <text x="70" y="75" class="ink h">ARCH-01 · 正常流程与取消本轮</text>
+  <text x="70" y="106" class="muted sub">Runtime flow &amp; Cancel Current Round · 所有路径回到同一本账本</text>
+
+  <!-- normal flow arrows -->
+  <path class="line" d="M540 245V315"/><path class="line" d="M540 440V510"/><path class="line" d="M540 635V705"/><path class="line" d="M540 830V900"/><path class="line" d="M540 1025V1095"/>
+  <path class="dash" d="M280 377H320"/><path class="dash" d="M800 377H765"/>
+  <path class="line" d="M540 1515V1585"/><path class="line" d="M540 1710V1780"/>
+
+  <rect x="170" y="145" width="740" height="100" rx="22" class="blue"/>
+  <text x="215" y="190" class="ink t">触发合并 / Coalesced trigger</text><text x="215" y="219" class="muted s">“可能有新照片” · 不等于立即上传</text>
+  <rect x="320" y="315" width="445" height="125" rx="22" class="box"/>
+  <text x="350" y="362" class="ink t">账本准入 / Ledger admission</text><text x="350" y="392" class="ink s">范围 · Pause · 取消轮 · 条件</text><text x="350" y="420" class="muted tiny">A wake never overrides a user command.</text>
+  <rect x="170" y="510" width="740" height="125" rx="22" class="green"/>
+  <text x="215" y="557" class="ink t">发现一页 / Discover one page (≤500)</text><text x="215" y="587" class="ink s">水位后的候选：可靠入待传列表，或在取消轮中直接取消</text><text x="215" y="615" class="muted tiny">Only then may the discovery watermark advance.</text>
+  <rect x="170" y="705" width="740" height="125" rx="22" class="box"/>
+  <text x="215" y="752" class="ink t">严格队头 / Strict queue head</text><text x="215" y="782" class="ink s">UploadCursor 指向当前照片；后续项不得抢跑</text><text x="215" y="810" class="muted tiny">No next item before the current item reaches a terminal outcome.</text>
+  <rect x="170" y="900" width="740" height="125" rx="22" class="green"/>
+  <text x="215" y="947" class="ink t">Desktop 原生 fetch / Native fetch-resume</text><text x="215" y="977" class="ink s">部分传输由原生 partial 续传；业务层不造第二套协议</text><text x="215" y="1005" class="muted tiny">No custom offset, chunk map, or raw upload path.</text>
+  <rect x="170" y="1095" width="740" height="125" rx="22" class="green"/>
+  <text x="215" y="1142" class="ink t">完成凭据 / Durable completion receipt</text><text x="215" y="1172" class="ink s">完整接收 + 验证 + 可靠保存 + Desktop 明确确认</text><text x="215" y="1200" class="muted tiny">This is the only transition to CONFIRMED.</text>
+
+  <rect x="50" y="315" width="230" height="160" rx="22" class="amber"/>
+  <text x="82" y="361" class="ink t">用户 Pause</text><text x="82" y="392" class="ink s">停当前 fetch</text><text x="82" y="420" class="ink s">保留 partial</text><text x="82" y="448" class="muted tiny">仅 Continue 恢复</text>
+  <rect x="800" y="315" width="230" height="160" rx="22" class="amber"/>
+  <text x="830" y="361" class="ink t">条件等待</text><text x="830" y="392" class="ink s">Wi‑Fi / 电量</text><text x="830" y="420" class="ink s">Desktop 不可达</text><text x="830" y="448" class="muted tiny">恢复后自动继续</text>
+
+  <text x="70" y="1315" class="ink h">取消本轮 / Cancel Current Round</text>
+  <text x="70" y="1345" class="muted sub">只在 Pause 后展示；取消的是本轮全部未完成待传项</text>
+  <rect x="170" y="1390" width="740" height="125" rx="22" class="red"/>
+  <text x="215" y="1437" class="ink t">1 · 开启取消轮 / Start CancellationRound</text><text x="215" y="1467" class="ink s">当前传输已停；已发现但未完成项直接标记取消</text><text x="215" y="1495" class="muted tiny">CONFIRMED items remain completed.</text>
+  <rect x="170" y="1585" width="740" height="125" rx="22" class="red"/>
+  <text x="215" y="1632" class="ink t">2 · 继续分页发现并取消 / Sweep remaining pages</text><text x="215" y="1662" class="ink s">每页最多 500；取消轮活动时入待传列表的项也直接取消</text><text x="215" y="1690" class="muted tiny">No item in this round may reach transport.</text>
+  <rect x="170" y="1780" width="740" height="125" rx="22" class="green"/>
+  <text x="215" y="1827" class="ink t">3 · 原子结束 / Atomically close the round</text><text x="215" y="1857" class="ink s">本轮待传列表为空；之后才入队的照片属于下一轮</text><text x="215" y="1885" class="muted tiny">Restore re-admits this round; Discard removes the shortcut only.</text>
+  <text x="70" y="1970" class="safe t">恢复与崩溃 / Recovery</text>
+  <text x="70" y="2000" class="muted s">取消中断后按已保存进度继续；不重传、不漏取消、不让已完成项倒退。</text>
+  <!-- Explicit user action: Pause → Cancel Current Round. Drawn above cards to attach to Pause. -->
+  <path class="dash" d="M50 460H30V1452H170"/>
+</svg>

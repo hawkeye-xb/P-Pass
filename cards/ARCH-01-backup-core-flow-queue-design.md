@@ -2,6 +2,7 @@
 
 > 🟡 状态：设计已收口，待拆实施卡
 > 级别：L2 · 传输裁决：单一原生 iroh-blobs fetch/resume；不新增 raw upload 重传协议
+> 中英文设计归档：[中文](../docs/design/2026-08-29-arch01-backup-core/README.zh-CN.md) · [English](../docs/design/2026-08-29-arch01-backup-core/README.md)
 
 ## 问题
 
@@ -27,7 +28,7 @@
 
 ## 范围
 
-- 只准动：本卡、`docs/QUEUE.md`、`docs/PROGRESS.md`、`docs/ROADMAP.md`、`.hermes/README.md`。
+- 只准动：本卡、`docs/QUEUE.md`、`docs/PROGRESS.md`、`docs/ROADMAP.md`、`docs/design/2026-08-29-arch01-backup-core/`、`.hermes/README.md`。
 - 不准动：`apps/`、`crates/`、现有备份实现、现有未提交任务卡。
 
 ## 阻塞与依赖

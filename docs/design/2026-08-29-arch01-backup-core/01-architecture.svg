@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1640" viewBox="0 0 1080 1640" role="img" aria-labelledby="title desc">
+  <title id="title">ARCH-01 architecture and responsibility map</title>
+  <desc id="desc">Bilingual architecture diagram for the P-Pass backup core.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6b655c"/></marker>
+    <style>
+      .bg{fill:#fbf8f2}.ink{fill:#171512}.muted{fill:#6b655c}.safe{fill:#2e6b4f}.box{fill:#fffdf8;stroke:#3d3933;stroke-width:2}.green{fill:#e4f1e8;stroke:#2e6b4f;stroke-width:2}.amber{fill:#fff3cf;stroke:#9b6b00;stroke-width:2}.blue{fill:#e9f2f8;stroke:#46758c;stroke-width:2}.line{stroke:#6b655c;stroke-width:3;fill:none;marker-end:url(#arrow)}.dash{stroke:#9b6b00;stroke-width:3;fill:none;stroke-dasharray:10 8;marker-end:url(#arrow)}text{font-family:'PingFang SC','Noto Sans CJK SC',Arial,sans-serif}.h{font-size:34px;font-weight:700}.sub{font-size:21px}.t{font-size:27px;font-weight:700}.s{font-size:21px}.tiny{font-size:18px}</style>
+  </defs>
+  <rect class="bg" width="1080" height="1640"/>
+  <text x="72" y="76" class="ink h">ARCH-01 · 备份核心架构</text>
+  <text x="72" y="108" class="muted sub">Architecture &amp; responsibilities · 一条处理管道，一本逻辑账本</text>
+
+  <!-- arrows first -->
+  <path class="line" d="M540 300V385"/>
+  <path class="line" d="M540 540V625"/>
+  <path class="line" d="M540 810V900"/>
+  <path class="line" d="M540 1055V1140"/>
+  <path class="line" d="M540 1300V1380"/>
+  <path class="line" d="M540 1540V1570"/>
+  <path class="dash" d="M920 715H790"/>
+  <path class="dash" d="M920 1180H790"/>
+
+  <rect x="110" y="150" width="860" height="150" rx="24" class="blue"/>
+  <text x="150" y="205" class="ink t">入口 / Inputs</text>
+  <text x="150" y="242" class="ink s">前台 UI · 后台唤醒 · 相册变化 · 周期检查</text>
+  <text x="150" y="270" class="muted tiny">UI / background wakes / media changes / periodic checks</text>
+
+  <rect x="110" y="385" width="860" height="155" rx="24" class="green"/>
+  <text x="150" y="442" class="ink t">统一控制器 / One core controller</text>
+  <text x="150" y="478" class="ink s">只读取并执行账本事实；入口不能各自改产品状态</text>
+  <text x="150" y="507" class="muted tiny">Every caller obeys one ledger; no separate UI or scheduler truth.</text>
+
+  <rect x="110" y="625" width="680" height="185" rx="24" class="box"/>
+  <text x="150" y="680" class="ink t">手机逻辑账本 / Phone logical ledger</text>
+  <text x="150" y="716" class="ink s">配置与范围 · Pause · 发现水位 · 单张队列</text>
+  <text x="150" y="747" class="ink s">取消本轮 · 当前配对与传输归属 · 完成凭据</text>
+  <text x="150" y="778" class="muted tiny">Logical facts only; storage mechanism is intentionally not chosen here.</text>
+
+  <rect x="825" y="625" width="145" height="185" rx="24" class="amber"/>
+  <text x="850" y="681" class="ink t">约束</text>
+  <text x="846" y="713" class="ink s">Wi‑Fi</text><text x="846" y="742" class="ink s">电量</text><text x="846" y="771" class="ink s">Desktop</text>
+
+  <rect x="110" y="900" width="860" height="155" rx="24" class="blue"/>
+  <text x="150" y="956" class="ink t">发现器 / Discoverer</text>
+  <text x="150" y="992" class="ink s">按 MediaStore 水位逐页发现；每页可靠入队或取消后，水位才前移</text>
+  <text x="150" y="1021" class="muted tiny">Discover incrementally; advance only after durable queue/cancel admission.</text>
+
+  <rect x="110" y="1140" width="680" height="160" rx="24" class="green"/>
+  <text x="150" y="1195" class="ink t">严格单张消费者 / Strict one-item consumer</text>
+  <text x="150" y="1232" class="ink s">UploadCursor 指向队头；只有当前项终态，才处理下一张</text>
+  <text x="150" y="1261" class="muted tiny">The head advances only after a terminal item outcome.</text>
+
+  <rect x="825" y="1105" width="145" height="230" rx="24" class="amber"/>
+  <text x="846" y="1162" class="ink t">控制</text>
+  <text x="846" y="1194" class="ink s">Pause</text><text x="846" y="1223" class="ink s">取消本轮</text><text x="846" y="1252" class="ink s">改范围</text><text x="846" y="1281" class="ink s">换配对</text>
+
+  <rect x="110" y="1380" width="860" height="160" rx="24" class="box"/>
+  <text x="150" y="1436" class="ink t">Desktop 原生接收 / Native Desktop fetch-resume</text>
+  <text x="150" y="1472" class="ink s">原生 iroh-blobs fetch/resume · partial 属于传输层 · 完整验证与可靠保存</text>
+  <text x="150" y="1501" class="muted tiny">A durable Desktop completion receipt is the only path to CONFIRMED.</text>
+
+  <text x="72" y="1595" class="safe t">完成边界 / Completion boundary</text>
+  <text x="72" y="1624" class="muted s">Desktop 明确确认完整拥有文件 = CONFIRMED；之后的控制动作不能推翻。</text>
+</svg>

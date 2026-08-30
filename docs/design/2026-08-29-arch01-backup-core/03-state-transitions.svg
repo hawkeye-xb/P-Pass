@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1880" viewBox="0 0 1080 1880" role="img" aria-labelledby="title desc">
+  <title id="title">ARCH-01 states and critical transitions</title>
+  <desc id="desc">Bilingual state transition diagram for user control, per-item delivery, scope changes, and Desktop changes.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="#6b655c"/></marker>
+    <style>.bg{fill:#fbf8f2}.ink{fill:#171512}.muted{fill:#6b655c}.safe{fill:#2e6b4f}.box{fill:#fffdf8;stroke:#3d3933;stroke-width:2}.green{fill:#e4f1e8;stroke:#2e6b4f;stroke-width:2}.amber{fill:#fff3cf;stroke:#9b6b00;stroke-width:2}.red{fill:#fbeaec;stroke:#a64b5d;stroke-width:2}.blue{fill:#e9f2f8;stroke:#46758c;stroke-width:2}.line{stroke:#6b655c;stroke-width:3;fill:none;marker-end:url(#arrow)}.dash{stroke:#9b6b00;stroke-width:3;fill:none;stroke-dasharray:10 8;marker-end:url(#arrow)}text{font-family:'PingFang SC','Noto Sans CJK SC',Arial,sans-serif}.h{font-size:34px;font-weight:700}.sub{font-size:21px}.t{font-size:25px;font-weight:700}.s{font-size:20px}.tiny{font-size:17px}</style>
+  </defs>
+  <rect class="bg" width="1080" height="1880"/>
+  <text x="70" y="75" class="ink h">ARCH-01 · 状态与重要转换</text>
+  <text x="70" y="106" class="muted sub">States &amp; critical transitions · 用户意图、环境、传输结果彼此独立</text>
+
+  <text x="70" y="170" class="safe t">A. 消费控制 / Consumer control</text>
+  <!-- control arrows -->
+  <path class="line" d="M540 315L300 430"/><path class="line" d="M300 550L480 315"/>
+  <path class="dash" d="M540 315L785 430"/><path class="dash" d="M785 550L600 315"/>
+  <path class="line" d="M540 315V645"/><path class="line" d="M540 765V315"/>
+  <text x="338" y="375" class="muted tiny">Pause</text><text x="360" y="515" class="muted tiny">Continue</text>
+  <text x="690" y="375" class="muted tiny">条件丢失</text><text x="670" y="515" class="muted tiny">条件恢复</text>
+  <text x="555" y="485" class="muted tiny">关闭</text><text x="555" y="615" class="muted tiny">重新开启</text>
+  <rect x="410" y="220" width="260" height="95" rx="22" class="green"/><text x="444" y="260" class="ink t">OPEN</text><text x="444" y="290" class="muted s">可消费队列 / eligible</text>
+  <rect x="70" y="430" width="230" height="120" rx="22" class="amber"/><text x="101" y="477" class="ink t">PAUSED_BY_USER</text><text x="101" y="508" class="muted s">仅 Continue 恢复</text><text x="101" y="534" class="muted tiny">durable user command</text>
+  <rect x="785" y="430" width="230" height="120" rx="22" class="blue"/><text x="816" y="477" class="ink t">WAITING</text><text x="816" y="508" class="muted s">条件等待</text><text x="816" y="534" class="muted tiny">automatic recovery</text>
+  <rect x="350" y="645" width="380" height="120" rx="22" class="box"/><text x="384" y="692" class="ink t">DISABLED</text><text x="384" y="723" class="muted s">关闭自动备份</text><text x="384" y="749" class="muted tiny">user must enable again</text>
+
+  <text x="70" y="875" class="safe t">B. 单张照片 / One transfer item</text>
+  <!-- item arrows -->
+  <path class="line" d="M270 1000H400"/><path class="line" d="M630 1000H770"/>
+  <path class="dash" d="M480 1120V1240"/><path class="dash" d="M600 1120H880V1240"/>
+  <path class="line" d="M510 1350V1410H170V1120"/>
+  <text x="470" y="1190" class="muted tiny">真实错误</text><text x="690" y="1160" class="muted tiny">范围 / 取消本轮</text><text x="190" y="1388" class="muted tiny">重试后回队列</text>
+  <rect x="70" y="940" width="200" height="120" rx="22" class="box"/><text x="102" y="987" class="ink t">QUEUED</text><text x="102" y="1018" class="muted s">等待队头</text><text x="102" y="1044" class="muted tiny">pending</text>
+  <rect x="400" y="940" width="230" height="120" rx="22" class="blue"/><text x="432" y="987" class="ink t">FETCHING</text><text x="432" y="1018" class="muted s">原生续传</text><text x="432" y="1044" class="muted tiny">partial owned</text>
+  <rect x="770" y="940" width="240" height="120" rx="22" class="green"/><text x="802" y="987" class="ink t">CONFIRMED</text><text x="802" y="1018" class="muted s">Desktop 完成凭据</text><text x="802" y="1044" class="muted tiny">immutable fact</text>
+  <rect x="315" y="1240" width="330" height="110" rx="22" class="amber"/><text x="347" y="1286" class="ink t">RETRY / FAILED</text><text x="347" y="1316" class="muted s">真实错误才计失败</text>
+  <rect x="755" y="1240" width="255" height="110" rx="22" class="red"/><text x="786" y="1286" class="ink t">CANCELLED</text><text x="786" y="1316" class="muted s">未完成项才可取消</text>
+
+  <text x="70" y="1470" class="safe t">C. 改范围与换 Desktop / Scope &amp; pairing</text>
+  <!-- scope branch arrows -->
+  <path class="line" d="M300 1605H430"/><path class="line" d="M300 1570V1515H915V1540"/>
+  <text x="335" y="1588" class="muted tiny">无完成凭据</text><text x="700" y="1498" class="muted tiny">已有 Desktop 完成凭据</text>
+  <rect x="70" y="1540" width="230" height="130" rx="22" class="box"/><text x="101" y="1588" class="ink t">范围减少</text><text x="101" y="1619" class="muted s">新 ScopeRevision</text><text x="101" y="1645" class="muted tiny">remove albums</text>
+  <rect x="430" y="1540" width="260" height="130" rx="22" class="amber"/><text x="462" y="1588" class="ink t">旧项取消</text><text x="462" y="1619" class="muted s">无完成凭据</text><text x="462" y="1645" class="muted tiny">cancel by scope</text>
+  <rect x="800" y="1540" width="210" height="130" rx="22" class="green"/><text x="831" y="1588" class="ink t">仍完成</text><text x="831" y="1619" class="muted s">有完成凭据</text><text x="831" y="1645" class="muted tiny">confirmed wins</text>
+  <rect x="130" y="1750" width="820" height="90" rx="22" class="red"/><text x="165" y="1788" class="ink t">换 Desktop / Change Desktop：保留配置</text><text x="165" y="1819" class="muted s">清队列 · 水位 · 取消轮 · partial · 运行归属；新 Desktop 从新传输历史开始</text>
+</svg>
