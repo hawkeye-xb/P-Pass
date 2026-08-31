@@ -11,7 +11,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-08-29**（ARCH-01 已收口严格单张消费、原生 iroh-blobs 续传、Pause/条件等待、范围修改与取消本轮；中英文图档与测试矩阵已归档；下一步拆实施卡）
+> 最后核对：**2026-08-31**（ARCH-02 已完成 D-01~D-04 手机账本/发现页原子提交；ARCH-03 现可接）
 
 ---
 
@@ -32,15 +32,19 @@
 
 ## 一、进行中（已认领，禁止重复接）
 
-| 卡 | 当前节点 | 下一步 | 协同分支 |
-|---|---|---|---|
-| [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | 为 D-01~D-04 建立新失败测试 | 最小账本与发现页原子提交 | `main` |
-
-认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
+**当前为空。**认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
 
 ---
 
-## 二、待 ARCH-01 重拆（旧实现卡冻结，agent 不许按旧卡实施）
+## 二、刚完成（推动下游，非可接）
+
+| 卡 | 结果 | 已释放 |
+|---|---|---|
+| [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
+
+---
+
+## 三、待 ARCH-01 重拆（旧实现卡冻结，agent 不许按旧卡实施）
 
 | 卡 | 冻结原因 | 正确下一步 |
 |---|---|---|
@@ -53,25 +57,24 @@
 
 ---
 
-## 三、待前置（首批 ARCH-01 实施卡，禁止提前认领）
+## 四、待前置（首批 ARCH-01 实施卡，禁止提前认领）
 
 | 卡 | 覆盖 case | 当前等待 |
 |---|---|---|
-| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | ARCH-02~05 依序实施 |
-| [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 | 等 ARCH-02 账本/发现原子提交 |
+| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | ARCH-03~05 依序实施 |
 | [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 | 等 ARCH-02、ARCH-03 |
 | [ARCH-05](../cards/ARCH-05-cancellation-round.md) | X-01~X-05 | 等 ARCH-02、ARCH-03、ARCH-04 |
 
 > self-review 已核对 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
-> 仅 ARCH-02 现在满足前置；后续仍按 D → C → E → X 顺序移入可接队列。
+> ARCH-02 已完成；仅 ARCH-03 现在满足前置。后续仍按 D → C → E → X 顺序移入可接队列。
 
 ---
 
-## 四、可接队列（无阻塞，可以直接分给任何 agent）
+## 五、可接队列（无阻塞，可以直接分给任何 agent）
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-
+| P1 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | 严格消费者、Pause 与条件等待：只消费 ARCH-02 账本事实，队头未终态不得越过 | L2 |
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
@@ -102,7 +105,7 @@
 
 ---
 
-## 五、待你真机验收（代码已合并，就差你动手）
+## 六、待你真机验收（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
@@ -130,7 +133,7 @@ MOB-29、MOB-34、MOB-36、WATCH-03、WATCH-04、DESK-08、UI-03。
 
 ---
 
-## 六、待你拍板（不定就动不了）
+## 七、待你拍板（不定就动不了）
 
 **当前为空。**2026-08-27 清空：Apple 签名/公证已确认早就补齐、CI 一直在
 真跑,不是待拍板；「两个本机问题」指向的 `local-state.md` 已不
@@ -139,7 +142,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 七、backlog（明确不做或暂缓，agent 不许碰）
+## 八、backlog（明确不做或暂缓，agent 不许碰）
 
 | 卡 | 状态 | 备注 |
 |---|---|---|
@@ -153,7 +156,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 八、发版现状（参考，非待办）
+## 九、发版现状（参考，非待办）
 
 - 正式产物走 CI：`gh workflow run release.yml -f platforms=android,macos`
   （Android 出签名 APK；macOS 未签名，「右键 → 打开」过 Gatekeeper）。
@@ -170,7 +173,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 九、相关文档指路
+## 十、相关文档指路
 
 - 规则层（agent 无关）：[`AGENTS.md`](../AGENTS.md) + [`AGENT_PROTOCOL.md`](AGENT_PROTOCOL.md)
 - 全量历史账本（只增不减）：[`ROADMAP.md`](ROADMAP.md)

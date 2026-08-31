@@ -1,6 +1,6 @@
 # ARCH-02 手机账本与发现页原子提交（L2）
 
-> 🟡 状态：进行中（已认领并同步至 main）
+> ✅ 状态：代码完成（已释放 ARCH-03）
 > 级别：L2 · 前置：ARCH-01 设计与 Case Matrix 已收口；无产品待拍板
 
 ## 问题
@@ -49,7 +49,10 @@
 
 ## 实施记录
 
-- 2026-08-31：认领。当前节点：先为 D-01~D-04 建立 `ARCH01DiscoveryLedgerTest` 并观察预期失败；下一步：依据失败测试实现最小账本与发现页原子提交；协同分支：`main`。
+- 2026-08-31：先建立 `ARCH01DiscoveryLedgerTest`，D-01~D-04 因账本符号尚不存在而按预期编译失败；随后实现最小持久账本与发现页单文件原子替换。
+- 账本持久化 `TransferItem`、`DiscoveryCursor`、`ScopeRevision`、`CancellationRound`，并为后续消费者保留 `UploadCursor`、consumer gate 与 fetch lease 边界；单页最多 500 项，稳定 `(sourceRef, sourceVersion)` 身份去重。
+- 验证：定向 D-01~D-04 4/4 通过；全量 Android JVM 单测 XML 为 351 tests / 0 failures / 0 errors。
+- 反证已实际执行后恢复：临时把游标先于页面替换落盘，D-02 在崩溃后游标断言失败；临时移除稳定身份去重，D-03 的 500 条目断言失败。
 
 ## 备注
 
