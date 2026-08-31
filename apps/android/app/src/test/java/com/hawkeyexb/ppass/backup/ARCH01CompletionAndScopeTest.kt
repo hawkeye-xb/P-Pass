@@ -85,4 +85,16 @@ class ARCH01CompletionAndScopeTest {
         assertTrue(store.load().cancellationRound != null)
         dir.deleteRecursively()
     }
+
+    @Test
+    fun scope_increase_records_a_separate_backfill_request_without_reusing_discovery_cursor() {
+        val dir = tempDir("scope-increase")
+        val store = seededStore(dir)
+
+        CompletionAndScope(store).requestScopeBackfill(ScopeRevision(2L))
+
+        assertEquals(listOf(ScopeBackfillRequest(ScopeRevision(2L))), store.load().backfillRequests)
+        assertEquals(DiscoveryCursor(7L, 19L), store.load().cursor)
+        dir.deleteRecursively()
+    }
 }
