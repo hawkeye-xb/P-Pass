@@ -1,6 +1,6 @@
 # ARCH-01 备份核心流程：发现队列与严格单张消费（L2）
 
-> 🟡 状态：设计已收口，待拆实施卡
+> 🟡 状态：设计已收口；ARCH-02~05 首批实施卡待验收人 review，未通过前禁止实施
 > 级别：L2 · 传输裁决：单一原生 iroh-blobs fetch/resume；不新增 raw upload 重传协议
 > 中英文设计归档：[中文](../docs/design/2026-08-29-arch01-backup-core/README.zh-CN.md) · [English](../docs/design/2026-08-29-arch01-backup-core/README.md) · [Case Matrix](../docs/design/2026-08-29-arch01-backup-core/04-case-matrix.zh-CN.md)
 
