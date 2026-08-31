@@ -32,22 +32,30 @@
 
 ## 一、进行中（已认领，禁止重复接）
 
-| 卡 | 当前节点 | 协同分支 |
-|---|---|---|
-| [MOB-42](../cards/MOB-42-pause-leaves-two-channels-running.md) | 已确认 `CATCHUP_WORK_NAME` 漏出自动取消；回归测试已红，尚未改生产代码 | `wip/MOB-42` |
-
-> 认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算
-> 认领。其他 agent fetch 后只从下一节接卡。
+**当前为空。**认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；
+未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
 
 ---
 
-## 二、可接队列（无阻塞，可以直接分给任何 agent）
+## 二、待 ARCH-01 重拆（旧实现卡冻结，agent 不许按旧卡实施）
+
+| 卡 | 冻结原因 | 正确下一步 |
+|---|---|---|
+| [MOB-39](../cards/MOB-39-triggers-are-data-pipeline-is-one.md) | 旧 `TriggerSpec` / WorkManager 管线形状已被 ARCH-01 取代 | 从 ARCH-01 case matrix 拆新实施卡 |
+| [MOB-42](../cards/MOB-42-pause-leaves-two-channels-running.md) | 旧 WorkManager 通道枚举不再是 Pause 的架构边界 | 从 ARCH-01 Pause / consumer gate case 拆新实施卡 |
+| [MOB-48](../cards/MOB-48-pause-resume-must-preserve-original-trigger-spec.md) | 依赖旧 `TriggerSpec` / enqueue facade 形状 | 从 ARCH-01 Continue / 条件等待 case 拆新实施卡 |
+
+> 旧测试不许阻塞新架构；保留的产品不变量必须从 ARCH-01 case matrix 重新写成
+> 失败用例。新卡未拆前，本节卡禁止认领和实施。
+
+---
+
+## 三、可接队列（无阻塞，可以直接分给任何 agent）
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
 | P1 | [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 备份核心流程已收口：500 项发现窗口 + 严格单张消费 + 原生 iroh-blobs fetch/resume；范围增加补扫、范围减少重建、取消本轮与恢复语义已定，中英文图档与测试矩阵已归档；下一步拆实施卡 | L2 |
-| P2 | [MOB-39](../cards/MOB-39-triggers-are-data-pipeline-is-one.md) | 触发层抽象：触发是数据、管线只有一条——治「每次新增触发都漏接一处」这个病根（MOB-33/34/35/38/42 反复复发的同一个病） | L1 |
-| P2 | [MOB-48](../cards/MOB-48-pause-resume-must-preserve-original-trigger-spec.md) | 暂停/继续/重试恢复原始触发策略，不能偷偷升级成零约束全量手动备份（依赖 MOB-39） | L2 |
+
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
@@ -78,7 +86,7 @@
 
 ---
 
-## 三、待你真机验收（代码已合并，就差你动手）
+## 四、待你真机验收（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
@@ -106,7 +114,7 @@ MOB-29、MOB-34、MOB-36、WATCH-03、WATCH-04、DESK-08、UI-03。
 
 ---
 
-## 四、待你拍板（不定就动不了）
+## 五、待你拍板（不定就动不了）
 
 **当前为空。**2026-08-27 清空：Apple 签名/公证已确认早就补齐、CI 一直在
 真跑,不是待拍板；「两个本机问题」指向的 `local-state.md` 已不
@@ -115,7 +123,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 五、backlog（明确不做或暂缓，agent 不许碰）
+## 六、backlog（明确不做或暂缓，agent 不许碰）
 
 | 卡 | 状态 | 备注 |
 |---|---|---|
@@ -129,7 +137,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 六、发版现状（参考，非待办）
+## 七、发版现状（参考，非待办）
 
 - 正式产物走 CI：`gh workflow run release.yml -f platforms=android,macos`
   （Android 出签名 APK；macOS 未签名，「右键 → 打开」过 Gatekeeper）。
@@ -146,7 +154,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 七、相关文档指路
+## 八、相关文档指路
 
 - 规则层（agent 无关）：[`AGENTS.md`](../AGENTS.md) + [`AGENT_PROTOCOL.md`](AGENT_PROTOCOL.md)
 - 全量历史账本（只增不减）：[`ROADMAP.md`](ROADMAP.md)
