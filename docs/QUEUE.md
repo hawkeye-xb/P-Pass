@@ -34,7 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 凭据/范围减少迁移已绿 | 补 backfill 合同、反证与全仓门禁 | `main` |
+| [ARCH-05](../cards/ARCH-05-cancellation-round.md) | 为 X-01~X-05 建立新失败测试 | 持久取消扫描、Restore/Discard 状态迁移 | `main` |
 
 认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
 
@@ -78,7 +78,7 @@
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P1 | [ARCH-05](../cards/ARCH-05-cancellation-round.md) | 取消本轮 saga：逐页取消未完成项，取消期间新发现项也不得传输 | L2 |
+
 
 
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
