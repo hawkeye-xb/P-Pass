@@ -1,6 +1,6 @@
 # ARCH-03 严格消费者、暂停与条件等待（L2）
 
-> ⬜ 状态：未开工
+> 🟡 状态：进行中（已认领并同步至 main）
 > 级别：L2 · 前置：ARCH-02 手机账本与发现页原子提交
 
 ## 问题
@@ -52,7 +52,7 @@ ARCH-02 必须先提供可恢复的 TransferItem、UploadCursor、消费者 gate
 
 ## 实施记录
 
-- 尚未实施。
+- 2026-08-31：认领。当前节点：先为 C-01~C-05 建立 `ARCH01StrictConsumerTest` 并观察预期失败；下一步：实现纯消费者状态机与 fake delivery port；协同分支：`main`。
 
 ## 备注
 

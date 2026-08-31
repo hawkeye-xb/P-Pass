@@ -53,6 +53,7 @@
 - 账本持久化 `TransferItem`、`DiscoveryCursor`、`ScopeRevision`、`CancellationRound`，并为后续消费者保留 `UploadCursor`、consumer gate 与 fetch lease 边界；单页最多 500 项，稳定 `(sourceRef, sourceVersion)` 身份去重。
 - 验证：定向 D-01~D-04 4/4 通过；全量 Android JVM 单测 XML 为 351 tests / 0 failures / 0 errors。
 - 反证已实际执行后恢复：临时把游标先于页面替换落盘，D-02 在崩溃后游标断言失败；临时移除稳定身份去重，D-03 的 500 条目断言失败。
+- 2026-08-31：验收人已确认 GitHub `CI Android #94`（commit `755108d`）为绿色成功。
 
 ## 备注
 
