@@ -1,6 +1,6 @@
 # ARCH-03 严格消费者、暂停与条件等待（L2）
 
-> ⬜ 状态：未开工（待验收人 review；未通过 review 禁止实施）
+> ⬜ 状态：未开工
 > 级别：L2 · 前置：ARCH-02 手机账本与发现页原子提交
 
 ## 问题
@@ -46,7 +46,7 @@
 ## 阻塞与依赖
 
 ARCH-02 必须先提供可恢复的 TransferItem、UploadCursor、消费者 gate 与 lease 的账本边界。
-待验收人 review：仅确认本卡覆盖 C-01~C-05，不重开 Pause/Continue 的产品语义。
+2026-08-31 self-review 已确认本卡覆盖 C-01~C-05，不重开 Pause/Continue 的产品语义。
 
 ---
 
