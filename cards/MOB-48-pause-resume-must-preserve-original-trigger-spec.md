@@ -1,6 +1,8 @@
 # MOB-48 暂停/继续/重试必须恢复原始触发策略（L2）
 
-> ⬜ 状态：未开工
+> ⏸ 状态：冻结——ARCH-01 已定义 Pause / Continue / 条件等待与严格消费者的
+> 新状态语义；本卡依赖的旧 `TriggerSpec` / enqueue facade 形状不许直接实施，
+> 待按 ARCH-01 case matrix 重拆实施卡。
 > 级别：L2 · 阻塞：依赖 MOB-39 的集中 `TriggerSpec` / enqueue facade
 
 ## 问题
