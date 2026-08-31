@@ -37,6 +37,12 @@ enum class ConsumerGate {
 }
 
 @Serializable
+enum class ConsumerStatus {
+    IDLE,
+    WAITING_FOR_CONSTRAINTS,
+}
+
+@Serializable
 data class FetchLease(
     val queueSequence: Long,
     val leaseToken: String,
@@ -44,6 +50,8 @@ data class FetchLease(
 
 enum class DeliveryState {
     QUEUED,
+    TRANSFERRING,
+    FAILED_NEEDS_USER,
     CANCELLED_BY_USER_ROUND,
 }
 
@@ -66,6 +74,8 @@ data class TransferItem(
     val scopeRevision: ScopeRevision,
     val queueSequence: Long,
     val deliveryState: DeliveryState,
+    val attemptCount: Int = 0,
+    val partialRetained: Boolean = false,
 )
 
 @Serializable
@@ -75,6 +85,7 @@ data class DiscoveryLedgerSnapshot(
     val cancellationRound: CancellationRound? = null,
     val uploadCursor: UploadCursor = UploadCursor.INITIAL,
     val consumerGate: ConsumerGate = ConsumerGate.OPEN,
+    val consumerStatus: ConsumerStatus = ConsumerStatus.IDLE,
     val fetchLease: FetchLease? = null,
     val items: List<TransferItem> = emptyList(),
     val nextQueueSequence: Long = 1L,
@@ -108,6 +119,11 @@ class DiscoveryLedgerStore(private val dir: File) {
         val current = load()
         require(current.cancellationRound == null) { "a cancellation round is already active" }
         persist(current.copy(cancellationRound = CancellationRound(id)))
+    }
+
+    /** ARCH-03 consumer transitions use the same durable snapshot boundary. */
+    fun update(transform: (DiscoveryLedgerSnapshot) -> DiscoveryLedgerSnapshot) {
+        persist(transform(load()))
     }
 
     fun commitDiscoveryPage(

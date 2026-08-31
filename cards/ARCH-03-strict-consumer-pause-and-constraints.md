@@ -1,6 +1,6 @@
 # ARCH-03 严格消费者、暂停与条件等待（L2）
 
-> 🟡 状态：进行中（已认领并同步至 main）
+> ✅ 状态：代码完成（已释放 ARCH-04）
 > 级别：L2 · 前置：ARCH-02 手机账本与发现页原子提交
 
 ## 问题
@@ -52,7 +52,9 @@ ARCH-02 必须先提供可恢复的 TransferItem、UploadCursor、消费者 gate
 
 ## 实施记录
 
-- 2026-08-31：认领。当前节点：先为 C-01~C-05 建立 `ARCH01StrictConsumerTest` 并观察预期失败；下一步：实现纯消费者状态机与 fake delivery port；协同分支：`main`。
+- 2026-08-31：先建立 `ARCH01StrictConsumerTest`，C-01~C-05 因纯消费者与 fake delivery port 尚不存在而按预期编译失败；随后实现独立于 WorkManager 的严格消费者状态机。
+- 仅 UploadCursor 队头能持有 fetch lease；Pause 持久化 consumer gate 并保留 partial，Continue 只重启原队头；条件等待不耗失败预算且自动恢复原队头；永久错误第 3 次才写 `FAILED_NEEDS_USER` 并推进至下一项。
+- 验证：定向 C-01~C-05 5/5 通过；全量 Android JVM 单测通过。反证实际执行后恢复：让后台/网络唤醒绕过 Pause → C-02 红；将条件等待计作失败 → C-04 红；改为选队尾 → C-04 红。
 
 ## 备注
 

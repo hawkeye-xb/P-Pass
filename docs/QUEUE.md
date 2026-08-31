@@ -11,7 +11,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-08-31**（ARCH-02 的 CI Android #94 已绿；ARCH-03 已认领，先写 C-01~C-05 失败测试）
+> 最后核对：**2026-08-31**（ARCH-03 已完成 C-01~C-05 严格消费者；ARCH-04 现可接）
 
 ---
 
@@ -32,11 +32,7 @@
 
 ## 一、进行中（已认领，禁止重复接）
 
-| 卡 | 当前节点 | 下一步 | 协同分支 |
-|---|---|---|---|
-| [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | 为 C-01~C-05 建立新失败测试 | 纯消费者状态机与 fake delivery port | `main` |
-
-认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
+**当前为空。**认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
 
 ---
 
@@ -45,6 +41,7 @@
 | 卡 | 结果 | 已释放 |
 |---|---|---|
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
+| [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |
 
 ---
 
@@ -65,12 +62,11 @@
 
 | 卡 | 覆盖 case | 当前等待 |
 |---|---|---|
-| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | ARCH-03~05 依序实施 |
-| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 | 等 ARCH-02、ARCH-03 |
+| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | ARCH-04~05 依序实施 |
 | [ARCH-05](../cards/ARCH-05-cancellation-round.md) | X-01~X-05 | 等 ARCH-02、ARCH-03、ARCH-04 |
 
 > self-review 已核对 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
-> ARCH-02 已完成；仅 ARCH-03 现在满足前置。后续仍按 D → C → E → X 顺序移入可接队列。
+> ARCH-02、ARCH-03 已完成；仅 ARCH-04 现在满足前置。后续仍按 D → C → E → X 顺序移入可接队列。
 
 ---
 
@@ -78,6 +74,7 @@
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P1 | [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | 完成凭据与范围竞争：只有 Desktop 完整保存凭据才能确认，范围变化不能覆盖已完成事实 | L2 |
 
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
