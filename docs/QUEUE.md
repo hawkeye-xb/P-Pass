@@ -50,12 +50,25 @@
 
 ---
 
-## 三、可接队列（无阻塞，可以直接分给任何 agent）
+## 三、待验收人 review（首批 ARCH-01 实施卡，未通过前禁止实施）
+
+| 卡 | 覆盖 case | review 只核对 |
+|---|---|---|
+| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | 新卡没有重开已定产品语义 |
+| [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 | 账本/发现原子边界与范围正确 |
+| [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 | Pause、Continue、条件等待严格区分 |
+| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 | 完成凭据与 ScopeRevision 竞态正确 |
+| [ARCH-05](../cards/ARCH-05-cancellation-round.md) | X-01~X-05 | 取消轮、重启、Restore/Discard 边界正确 |
+
+> review 只审 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
+> 通过后，按 D → C → E → X 顺序移入可接队列，仍先写新失败测试再写生产代码。
+
+---
+
+## 四、可接队列（无阻塞，可以直接分给任何 agent）
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P1 | [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 备份核心流程已收口：500 项发现窗口 + 严格单张消费 + 原生 iroh-blobs fetch/resume；范围增加补扫、范围减少重建、取消本轮与恢复语义已定，中英文图档与测试矩阵已归档；下一步拆实施卡 | L2 |
-
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
@@ -86,7 +99,7 @@
 
 ---
 
-## 四、待你真机验收（代码已合并，就差你动手）
+## 五、待你真机验收（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
@@ -114,7 +127,7 @@ MOB-29、MOB-34、MOB-36、WATCH-03、WATCH-04、DESK-08、UI-03。
 
 ---
 
-## 五、待你拍板（不定就动不了）
+## 六、待你拍板（不定就动不了）
 
 **当前为空。**2026-08-27 清空：Apple 签名/公证已确认早就补齐、CI 一直在
 真跑,不是待拍板；「两个本机问题」指向的 `local-state.md` 已不
@@ -123,7 +136,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 六、backlog（明确不做或暂缓，agent 不许碰）
+## 七、backlog（明确不做或暂缓，agent 不许碰）
 
 | 卡 | 状态 | 备注 |
 |---|---|---|
@@ -137,7 +150,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 七、发版现状（参考，非待办）
+## 八、发版现状（参考，非待办）
 
 - 正式产物走 CI：`gh workflow run release.yml -f platforms=android,macos`
   （Android 出签名 APK；macOS 未签名，「右键 → 打开」过 Gatekeeper）。
@@ -154,7 +167,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 八、相关文档指路
+## 九、相关文档指路
 
 - 规则层（agent 无关）：[`AGENTS.md`](../AGENTS.md) + [`AGENT_PROTOCOL.md`](AGENT_PROTOCOL.md)
 - 全量历史账本（只增不减）：[`ROADMAP.md`](ROADMAP.md)
