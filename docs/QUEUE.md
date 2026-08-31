@@ -37,8 +37,9 @@
 | P1 | [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 备份核心流程已收口：500 项发现窗口 + 严格单张消费 + 原生 iroh-blobs fetch/resume；范围增加补扫、范围减少重建、取消本轮与恢复语义已定，中英文图档与测试矩阵已归档；下一步拆实施卡 | L2 |
 | P2 | [MOB-42](../cards/MOB-42-pause-leaves-two-channels-running.md) | 「暂停自动备份」的 `pauseAutoBackup` 漏取消 `CATCHUP_WORK_NAME` 通道——点了暂停,这条通道还在跑 | L2 |
 | P2 | [MOB-39](../cards/MOB-39-triggers-are-data-pipeline-is-one.md) | 触发层抽象：触发是数据、管线只有一条——治「每次新增触发都漏接一处」这个病根（MOB-33/34/35/38/42 反复复发的同一个病） | L1 |
+| P2 | [MOB-48](../cards/MOB-48-pause-resume-must-preserve-original-trigger-spec.md) | 暂停/继续/重试恢复原始触发策略，不能偷偷升级成零约束全量手动备份（依赖 MOB-39） | L2 |
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
-| P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 半小时内三次传输层失败，`backup.begin` 卡满 15 秒才超时；**还在定性阶段**，等下次复现时的 daemon 日志时间线才能定是客户端超时值（`DaemonClient.kt`）还是桌面端/relay 建连慢（`crates/daemon`） | L2 |
+| P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
 | P2 | [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 相册计数虚高：选 3 显 7、选 4 显 8（恒 +4）——计数说谎，伤范围信任 | L1 |
 | P2 | [MOB-44](../cards/MOB-44-harmonyos-no-background-for-restore.md) | 鸿蒙上恢复备份退后台就不跑（需鸿蒙真机取证窗口，与 DOG-03 同族） | L1 |
