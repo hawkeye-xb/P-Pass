@@ -127,6 +127,37 @@ UX-15 + MOB-43 之后用户**没有任何出路**。而"在外面用手机备份
 **没跑成**——家中 agent 为开 debug 重启了 daemon，用户那次"杀 App 重开"正好
 落在重启竞赛期，手机连的是被杀掉的旧实例。要重跑。
 
+## 2026-08-27（另一轮真机会话）：三次静默复现,与本卡链条吻合
+
+用户当天用 ALN-AL00（鸿蒙，5G+公司网络）反复"选相册→触发同步"，服务端
+`audit_log` 显示：
+
+```
+11:41:06  pair.accepted（配对刚完成,当场前台操作）
+11:41:22  backup.started → 7 个文件 ingest → backup.finished（唯一成功一次）
+14:07:27  device.connected  ← 之后再无 backup.started
+14:33:15  device.connected  ← 之后再无 backup.started
+15:21:47  device.connected  ← 之后再无 backup.started（与 hilog 里 App 前台
+                              事件时间差 6 秒,对得上"打开 App 顺手 ping 了
+                              一下"）
+```
+
+`diag_event` 表全程零新增（没有 `authz.denied`，没有任何拒绝/报错记录）。
+
+这与本卡"connect 落到 relay → 15s 超时 → backup.begin 从未送达 daemon →
+零 backup.started"的链条**完全吻合**——服务端视角看到的就是"连上了、
+然后沉默"，跟这条链条预测的形状一致。
+
+**没能往前推进的部分**：daemon 侧只有 info 级日志，没能确认"连接尝试到底
+有没有到网络层"（本卡待验证节提到的判决实验，需要 debug 级 daemon 日志）；
+本轮也确认了鸿蒙这台机器上**拿不到 App 内部日志**（Anco 容器权限边界，
+详见 `local-state.md`），所以没法从手机侧 logcat 交叉验证是 connect
+阶段卡住还是别的原因。
+
+**下一步（已跟用户对齐）**：用户回家换 **OPPO Reno8**（原生 Android，
+`adb` 全功能）复测同一操作，拿到真实 logcat 后应该能直接看到
+`DaemonClient.kt` 那个 15 秒超时错误串,坐实或推翻这条链条。
+
 ## 修的方向（先不动手，等验收人拍板）
 
 三件事，独立可做：
