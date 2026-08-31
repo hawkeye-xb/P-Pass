@@ -46,6 +46,7 @@
 |---|---|---|
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |
+| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 完成凭据、范围竞争与 backfill 完成 | ARCH-05 |
 
 ---
 
@@ -66,11 +67,10 @@
 
 | 卡 | 覆盖 case | 当前等待 |
 |---|---|---|
-| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | ARCH-04~05 依序实施 |
-| [ARCH-05](../cards/ARCH-05-cancellation-round.md) | X-01~X-05 | 等 ARCH-02、ARCH-03、ARCH-04 |
+| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | ARCH-05 实施 |
 
 > self-review 已核对 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
-> ARCH-02、ARCH-03 已完成；仅 ARCH-04 现在满足前置。后续仍按 D → C → E → X 顺序移入可接队列。
+> ARCH-02、ARCH-03、ARCH-04 已完成；ARCH-05 现在满足前置。
 
 ---
 
@@ -78,6 +78,7 @@
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P1 | [ARCH-05](../cards/ARCH-05-cancellation-round.md) | 取消本轮 saga：逐页取消未完成项，取消期间新发现项也不得传输 | L2 |
 
 
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
