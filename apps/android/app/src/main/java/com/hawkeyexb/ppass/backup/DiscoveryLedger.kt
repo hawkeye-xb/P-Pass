@@ -52,6 +52,8 @@ enum class DeliveryState {
     QUEUED,
     TRANSFERRING,
     FAILED_NEEDS_USER,
+    CONFIRMED,
+    CANCELLED_BY_SCOPE,
     CANCELLED_BY_USER_ROUND,
 }
 
@@ -76,7 +78,11 @@ data class TransferItem(
     val deliveryState: DeliveryState,
     val attemptCount: Int = 0,
     val partialRetained: Boolean = false,
+    val completionReceiptId: String? = null,
 )
+
+@Serializable
+data class ScopeBackfillRequest(val scopeRevision: ScopeRevision)
 
 @Serializable
 data class DiscoveryLedgerSnapshot(
@@ -87,6 +93,7 @@ data class DiscoveryLedgerSnapshot(
     val consumerGate: ConsumerGate = ConsumerGate.OPEN,
     val consumerStatus: ConsumerStatus = ConsumerStatus.IDLE,
     val fetchLease: FetchLease? = null,
+    val backfillRequests: List<ScopeBackfillRequest> = emptyList(),
     val items: List<TransferItem> = emptyList(),
     val nextQueueSequence: Long = 1L,
 )

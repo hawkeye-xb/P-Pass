@@ -52,7 +52,7 @@ ARCH-02 提供持久账本与发现事务；ARCH-03 提供严格 lease / consume
 
 ## 实施记录
 
-- 2026-08-31：认领。当前节点：先为 E-01~E-04 建立 `ARCH01CompletionAndScopeTest` 并观察预期失败；下一步：实现完成凭据、ScopeRevision 与 backfill 的纯账本状态迁移；协同分支：`main`。
+- 2026-08-31：E-01~E-04 已先观察缺少账本状态迁移的预期失败，完成凭据与范围减少的纯账本状态迁移已实现并通过全量 Android JVM 测试。下一步：补范围增加/backfill 合同、反证与全仓门禁；协同分支：`main`。
 
 ## 备注
 
