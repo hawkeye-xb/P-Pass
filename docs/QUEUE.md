@@ -32,8 +32,11 @@
 
 ## 一、进行中（已认领，禁止重复接）
 
-**当前为空。**认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；
-未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
+| 卡 | 当前节点 | 下一步 | 协同分支 |
+|---|---|---|---|
+| [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | 为 D-01~D-04 建立新失败测试 | 最小账本与发现页原子提交 | `main` |
+
+认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
 
 ---
 
@@ -68,7 +71,7 @@
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P1 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | 手机账本 + 500 项发现页原子提交：队列与 DiscoveryCursor 同生共死，崩溃不漏项不重复 | L2 |
+
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
