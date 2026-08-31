@@ -34,7 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | 为 E-01~E-04 建立新失败测试 | 完成凭据、ScopeRevision 与 backfill 账本迁移 | `main` |
+| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 凭据/范围减少迁移已绿 | 补 backfill 合同、反证与全仓门禁 | `main` |
 
 认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
 
