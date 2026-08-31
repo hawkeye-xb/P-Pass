@@ -50,18 +50,17 @@
 
 ---
 
-## 三、待验收人 review（首批 ARCH-01 实施卡，未通过前禁止实施）
+## 三、待前置（首批 ARCH-01 实施卡，禁止提前认领）
 
-| 卡 | 覆盖 case | review 只核对 |
+| 卡 | 覆盖 case | 当前等待 |
 |---|---|---|
-| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | 新卡没有重开已定产品语义 |
-| [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 | 账本/发现原子边界与范围正确 |
-| [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 | Pause、Continue、条件等待严格区分 |
-| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 | 完成凭据与 ScopeRevision 竞态正确 |
-| [ARCH-05](../cards/ARCH-05-cancellation-round.md) | X-01~X-05 | 取消轮、重启、Restore/Discard 边界正确 |
+| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | ARCH-02~05 依序实施 |
+| [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 | 等 ARCH-02 账本/发现原子提交 |
+| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 | 等 ARCH-02、ARCH-03 |
+| [ARCH-05](../cards/ARCH-05-cancellation-round.md) | X-01~X-05 | 等 ARCH-02、ARCH-03、ARCH-04 |
 
-> review 只审 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
-> 通过后，按 D → C → E → X 顺序移入可接队列，仍先写新失败测试再写生产代码。
+> self-review 已核对 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
+> 仅 ARCH-02 现在满足前置；后续仍按 D → C → E → X 顺序移入可接队列。
 
 ---
 
@@ -69,6 +68,7 @@
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P1 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | 手机账本 + 500 项发现页原子提交：队列与 DiscoveryCursor 同生共死，崩溃不漏项不重复 | L2 |
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
