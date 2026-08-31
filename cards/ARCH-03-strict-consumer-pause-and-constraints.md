@@ -55,6 +55,7 @@ ARCH-02 必须先提供可恢复的 TransferItem、UploadCursor、消费者 gate
 - 2026-08-31：先建立 `ARCH01StrictConsumerTest`，C-01~C-05 因纯消费者与 fake delivery port 尚不存在而按预期编译失败；随后实现独立于 WorkManager 的严格消费者状态机。
 - 仅 UploadCursor 队头能持有 fetch lease；Pause 持久化 consumer gate 并保留 partial，Continue 只重启原队头；条件等待不耗失败预算且自动恢复原队头；永久错误第 3 次才写 `FAILED_NEEDS_USER` 并推进至下一项。
 - 验证：定向 C-01~C-05 5/5 通过；全量 Android JVM 单测通过。反证实际执行后恢复：让后台/网络唤醒绕过 Pause → C-02 红；将条件等待计作失败 → C-04 红；改为选队尾 → C-04 红。
+- 2026-08-31：验收人已确认 GitHub `CI Android #95`（commit `c7543ae`）为绿色成功。
 
 ## 备注
 

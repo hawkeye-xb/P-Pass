@@ -11,7 +11,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-08-31**（ARCH-03 已完成 C-01~C-05 严格消费者；ARCH-04 现可接）
+> 最后核对：**2026-08-31**（ARCH-03 的 CI Android #95 已绿；ARCH-04 已认领，先写 E-01~E-04 失败测试）
 
 ---
 
@@ -32,7 +32,11 @@
 
 ## 一、进行中（已认领，禁止重复接）
 
-**当前为空。**认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
+| 卡 | 当前节点 | 下一步 | 协同分支 |
+|---|---|---|---|
+| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | 为 E-01~E-04 建立新失败测试 | 完成凭据、ScopeRevision 与 backfill 账本迁移 | `main` |
+
+认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
 
 ---
 
@@ -74,7 +78,7 @@
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P1 | [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | 完成凭据与范围竞争：只有 Desktop 完整保存凭据才能确认，范围变化不能覆盖已完成事实 | L2 |
+
 
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
