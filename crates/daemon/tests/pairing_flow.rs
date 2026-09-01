@@ -78,6 +78,16 @@ async fn full_flow_pairs_the_device() {
     assert!(resp.ok, "pairing must succeed: {resp:?}");
     let accepted: proto::PairAccepted = serde_json::from_value(resp.result.unwrap()).unwrap();
     assert_eq!(accepted.storage_device_name, "客厅的电脑");
+    assert_eq!(
+        accepted.pairing_epoch.len(),
+        32,
+        "accepted pairing must carry a fresh epoch"
+    );
+    assert_eq!(
+        db.pairing_epoch(&ctp.node_id().0).await.unwrap().as_deref(),
+        Some(accepted.pairing_epoch.as_str()),
+        "the returned epoch must already be durable before Flow can use it"
+    );
 
     // The whitelist row is real — the same client is now authorized.
     let device = db
