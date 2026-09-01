@@ -111,6 +111,7 @@
     <string name="bucket_empty">No photos or videos found on this phone.</string>
     <string name="bucket_loading">Reading albums…</string>
     <string name="bucket_count">%1$d</string>
+    <string name="bucket_unnamed">Unnamed</string>
     <!-- M5 (full-page-states doc): summary sentence + single primary button. -->
     <string name="bucket_summary">%1$s photos will back up · runs automatically on power + Wi-Fi by default, change anytime in Settings</string>
     <string name="bucket_start">Start backup</string>

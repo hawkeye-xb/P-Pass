@@ -37,6 +37,9 @@ data class ScanResult(
     val nextWatermark: Long,
 )
 
+/** MediaStore may omit or blank an album name; preserve that missing metadata. */
+internal fun bucketNameOrNull(name: String?): String? = name?.takeIf { it.isNotBlank() }
+
 class MediaScanner(private val resolver: ContentResolver?) {
     // FIX-T6: resolver 可空——空集守卫路径（scanSince/countAll 的空集
     // 分支）在触碰 resolver 之前返回，JVM 单测用 null resolver 即可
@@ -53,15 +56,15 @@ class MediaScanner(private val resolver: ContentResolver?) {
      *  图片/视频两个 collection 取全局最新）——BucketScreen 拿它解码
      *  封面缩略图，模拟系统相册选择器的交互；取不到（老数据/异常）
      *  时为 null，UI 退化为空白封面，不阻塞选择流程。 */
-    data class Bucket(val id: Long, val name: String, val count: Int, val coverUri: Uri? = null)
+    data class Bucket(val id: Long, val name: String?, val count: Int, val coverUri: Uri? = null)
 
     /**
      * All albums, each with a total item count (photos+videos). T6:
      * the user picks which albums to back up — WeChat/QQ albums etc.
-     * can be left out. Empty name buckets are grouped as 未命名.
+     * can be left out. Empty bucket names remain null for the UI to localize.
      */
     fun listBuckets(): List<Bucket> {
-        val byId = LinkedHashMap<Long, MutableList<String>>()
+        val byId = LinkedHashMap<Long, MutableList<String?>>()
         val coverUri = mutableMapOf<Long, Uri>()
         val coverDate = mutableMapOf<Long, Long>()
         for ((collection, _) in listOf(
@@ -81,7 +84,7 @@ class MediaScanner(private val resolver: ContentResolver?) {
                 val dateIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
                 while (cur.moveToNext()) {
                     val id = cur.getLong(bucketIdx)
-                    val name = cur.getString(nameIdx)?.takeIf { it.isNotBlank() } ?: "未命名"
+                    val name = bucketNameOrNull(cur.getString(nameIdx))
                     byId.getOrPut(id) { mutableListOf() }.add(name)
                     val date = cur.getLong(dateIdx)
                     if (date > (coverDate[id] ?: -1L)) {
@@ -92,7 +95,7 @@ class MediaScanner(private val resolver: ContentResolver?) {
             }
         }
         return byId.map { (id, names) -> Bucket(id, names.first(), names.size, coverUri[id]) }
-            .sortedBy { it.name.lowercase() }
+            .sortedBy { it.name?.lowercase().orEmpty() }
     }
 
     /**
