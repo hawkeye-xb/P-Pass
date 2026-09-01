@@ -69,6 +69,10 @@ impl TransportConfig {
 pub struct PeerAddr(EndpointAddr);
 
 impl PeerAddr {
+    pub(crate) fn from_endpoint_addr(addr: EndpointAddr) -> Self {
+        Self(addr)
+    }
+
     pub fn node_id(&self) -> NodeId {
         NodeId(*self.0.id.as_bytes())
     }
