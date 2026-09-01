@@ -34,6 +34,10 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
+| [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 批次 A：版本脚本漂移断言 | 独立 RED→GREEN，提交 `batch/rel-03` | batch/rel-03 |
+| [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 批次 A：空相册名 i18n 分层 | 独立 RED→GREEN，提交 `batch/i18n-01` | batch/i18n-01 |
+| [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 批次 A：向导透出 daemon 启动原因 | 独立 RED→GREEN，提交 `batch/desk-09` | batch/desk-09 |
+| [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 批次 A：CI 工具链唯一真相 | 独立 RED→GREEN，提交 `batch/build-02` | batch/build-02 |
 
 
 
@@ -96,16 +100,15 @@
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
 | P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
 | P2 | [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 视频资产查看器不可预览——桌面 `<img>` 破图（原图 base64 错标 image/jpeg）、Android 仅 VideoView MVP；桌面 `<video>` 分流先行，Android 换 Media3 ExoPlayer（2026-08-29 验收人派单） | L2 |
-| P3 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 选相册页空相册名的兜底文案硬编码成中文 | L3 |
+
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
-| P3 | [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 核实 CI 侧工具链钉扎是否真的生效 | L2 |
-| P3 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 向导把 daemon 的真实启动错误吞成「没有在 10 秒内就绪」 | L1 |
+
 | P3 | [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁（⚠️ 要动 workflows，先确认由谁改） | L0 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
 | P3 | [UI-04](../cards/UI-04-notice-presentation-three-defects.md) | 提示呈现三连：只在总览 / 改名用占布局的条 / 多条堆叠 | L2 |
 | P3 | [LINT-01](../cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
 | P3 | [CI-02](../cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制（~300 Linux 分钟/月白烧） | L3 |
-| P3 | [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | bump-version.sh 静默跳过桌面 crate 版本，漂移断言看不见 | L2 |
+
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
 | P3 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
 | P3 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 照片查看器换成熟开源库（Telephoto/ZoomImage 等）+ 读 EXIF——2026-08-27 验收人重提解冻，从 backlog 移回 | L2 |
