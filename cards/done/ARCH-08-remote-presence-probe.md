@@ -45,6 +45,7 @@ ARCH-07 已提供持久内容身份及 `RemotePresence` / `SourcePresence` / `Re
 - 2026-09-01：远端复核：CI Rust #70 与 Dogfood Binaries #203 均绿色。Android RED→GREEN：`ARCH01RemotePresenceProbeTest` 先因页面构造器缺失失败，后以 2/2 验证 500 项上限、输入顺序、空页/501 项/非法 hash 拒绝；实际 `DaemonClient` 调用与 missing 解码仍待接线。
 - 2026-09-01：Android adapter 已接线为 `RemotePresenceProbe.missing()`：调用 `DaemonClient.call(..., backup.presence, ...)` 并解码 `BackupMissing`，不引用旧批次校准。`just ci` 全绿；本次 Android XML 53 files / 379 tests / 0 failures / 0 errors / 4 skipped。剩余只验证“若误委托给 manifest 会失败”的反证。
 - 2026-09-01：反证实际执行：临时将 router 的 `backup.presence` 处理改委托 `backup.manifest`，presence 集成测试因错误创建 session 而失败（实际 `left: 1`, expected `0`）；还原后定向 Rust 测试与 `just ci` 全绿。
+- 2026-09-01：远端 CI 复核：GitHub CI Rust #71 与 Dogfood Binaries #204（commit `9d5337e`）均成功。
 
 ## 备注
 
