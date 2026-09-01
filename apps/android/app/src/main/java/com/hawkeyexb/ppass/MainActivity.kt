@@ -537,6 +537,7 @@ fun PPassApp() {
                     HomeScreen(
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
+                        onCancelCurrentRound = { holder.cancelCurrentRound() },
                         triplet = holder.triplet.value,
                         batteryWhitelisted = batteryWhitelisted,
                         onOpenBatterySettings = {

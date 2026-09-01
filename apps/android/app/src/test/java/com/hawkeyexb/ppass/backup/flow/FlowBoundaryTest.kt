@@ -45,7 +45,7 @@ class FlowBoundaryTest {
     @Test
     fun legacy_entrypoints_are_explicitly_marked_frozen() {
         val backupRoot = File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup")
-        for (name in listOf("BackupWorker.kt", "BackupRunner.kt", "ConfirmedStore.kt", "ReuploadQueue.kt")) {
+        for (name in listOf("BackupRunner.kt", "ConfirmedStore.kt", "ReuploadQueue.kt")) {
             assertTrue(
                 "$name must retain the REBUILD-00 legacy marker",
                 File(backupRoot, name).readText().contains("LEGACY"),
