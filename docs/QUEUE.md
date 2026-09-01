@@ -34,6 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
+| [ARCH-06](../cards/ARCH-06-pairing-epoch-isolation.md) | 为 P-01/P-02 建立换 Desktop 的失败合同测试 | pairingEpoch 状态隔离与旧回执拒绝 | `main` |
 
 
 认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
@@ -68,7 +69,7 @@
 
 | 卡 | 覆盖 case | 当前等待 |
 |---|---|---|
-| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 后续拆卡边界 | ARCH-02~05 已完成；按既定边界开下一张实施卡 |
+| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 后续拆卡边界 | ARCH-06 已认领；按既定边界实施 P-01/P-02 |
 
 > self-review 已核对 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
 > ARCH-02、ARCH-03、ARCH-04、ARCH-05 已完成；后续只可从 ARCH-01 的既定拆卡边界继续。
