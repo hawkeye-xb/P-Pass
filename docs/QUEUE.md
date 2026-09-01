@@ -34,6 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
+| [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | 账本/严格消费者接入 Android provider 与 Desktop receipt adapter | 单一 Flow runner、触发接管与 debug 构建 | rebuild/rebuild-03-flow-runner |
 
 
 
@@ -94,7 +95,7 @@
 | R0 | [REBUILD-00](../cards/REBUILD-00-legacy-fence-and-flow-boundary.md) | — | ✅ 旧线冻结、新 Flow 边界 |
 | R1a | [REBUILD-01](../cards/REBUILD-01-android-iroh-blobs-provider-bridge.md) | R0 | ✅ Android blobs provider bridge |
 | R1b | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | R0 | ✅ Desktop fetch + completion receipt |
-| R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | 新生产 Flow runner |
+| R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | 🔄 新生产 Flow runner |
 | R3 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | R2 | debug APK + 三星首验 |
 
 ---
