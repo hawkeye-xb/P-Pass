@@ -1,8 +1,30 @@
+import org.gradle.api.tasks.Exec
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
+}
+
+val irohBlobsJniLibs = layout.buildDirectory.dir("generated/jniLibs")
+val buildIrohBlobsProviderBridge = tasks.register<Exec>("buildIrohBlobsProviderBridge") {
+    val repoRoot = rootProject.projectDir.resolve("../..").canonicalFile
+    val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME").orNull
+        ?: error("ANDROID_NDK_HOME must be set to build the native iroh-blobs provider")
+    workingDir(repoRoot)
+    commandLine(
+        "bash",
+        "tools/build-android-iroh-blobs-bridge.sh",
+        irohBlobsJniLibs.get().asFile.absolutePath,
+    )
+    environment("ANDROID_NDK_HOME", ndkHome)
+    inputs.files(
+        fileTree(repoRoot) {
+            include("Cargo.toml", "Cargo.lock", "crates/transport/**")
+        }
+    )
+    outputs.file(irohBlobsJniLibs.map { it.file("arm64-v8a/libtransport.so") })
 }
 
 android {
@@ -24,6 +46,10 @@ android {
                 ?.removePrefix("v")
                 ?: "0.3.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    sourceSets {
+        getByName("main").jniLibs.srcDir(irohBlobsJniLibs)
     }
 
     buildFeatures {
@@ -73,6 +99,10 @@ android {
             }
         }
     }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(buildIrohBlobsProviderBridge)
 }
 
 dependencies {

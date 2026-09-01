@@ -5696,11 +5696,14 @@ dependencies = [
  "futures-core",
  "iroh",
  "iroh-blobs",
+ "jni 0.21.1",
+ "libc",
  "proto",
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
