@@ -1,7 +1,8 @@
 # REBUILD-01 Android iroh-blobs Provider Bridge（L2）
 
-> ⬜ 状态：未开工 · 前置：REBUILD-00
+> 🟠 状态：进行中 · 协同分支：`rebuild/rebuild-01-iroh-blobs` · 前置：REBUILD-00
 > 级别：L2 · 阻塞：无
+> 当前节点：核实 Android binding 与 native bridge 可行接点 · 下一步：最小 provider 注册/撤销/停止 API 与 debug 编译
 
 ## 问题
 

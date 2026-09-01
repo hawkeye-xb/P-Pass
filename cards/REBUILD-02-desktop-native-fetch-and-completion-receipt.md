@@ -1,7 +1,8 @@
 # REBUILD-02 Desktop Native Fetch 与单项完成凭据（L2）
 
-> ⬜ 状态：未开工 · 前置：REBUILD-00
+> 🟠 状态：进行中 · 协同分支：`rebuild/rebuild-02-native-fetch` · 前置：REBUILD-00
 > 级别：L2 · 阻塞：无
+> 当前节点：梳理 daemon/transport 原生 fetch 与 durable receipt 接点 · 下一步：最小 fetch/resume + receipt adapter 与构建验证
 
 ## 问题
 
