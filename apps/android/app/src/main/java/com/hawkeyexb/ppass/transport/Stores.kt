@@ -42,6 +42,9 @@ data class Pairing(
      *  0 = 未知（老版本升级上来的存量 pairing，字段不存在，`ignoreUnknownKeys`
      *  兜底出默认值，不倒推瞎编一个日期）。 */
     val pairedAt: Long = 0L,
+    /** Owner-approved pairing generation for Flow delivery. Empty means this
+     * legacy pairing must be renewed before it can authorize a Flow item. */
+    val pairingEpoch: String = "",
 )
 
 class PairingStore(private val dir: File) {
