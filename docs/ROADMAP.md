@@ -454,6 +454,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [x] **ARCH-06 换 Desktop 的配对 epoch 隔离** — **2026-09-01 P-01/P-02 完成**：持久 `PairingEpoch` 绑定新账本与每个新发现 TransferItem；换 Desktop 单次替换清空旧 epoch 的发现/上传游标、队列、取消轮、lease 与 backfill，同时保留 ScopeRevision。完成回执必须匹配当前账本和 item epoch，旧 Desktop 的迟到回执无副作用；同 epoch 回执照常确认。目标 3/3、全量 Android JVM 374 tests / 0 failures / 4 skipped、`just ci` 全绿。后续按 P1 远端对账边界拆卡。
 - [ ] **ARCH-07 P1 远端对账事实与恢复裁决** — **2026-09-01 已认领，尚未写生产代码**：先为已确认项保存可对账内容身份，再将远端/源存在性和 `NEEDS_DECISION` / `UNRECOVERABLE` 持久化为账本事实。R-01/R-02 均禁止自动补传、删除手机原图或改写 `CONFIRMED`；低频分页探测、实际 daemon/proto 接线与 UI 提示另卡实施。
 - [x] **ARCH-07 P1 远端对账事实与恢复裁决** — **2026-09-01 R-01/R-02 完成**：完成凭据与账本项持久关联内容身份；当前 epoch 已确认项的远端缺失只写 `NEEDS_DECISION`（手机源仍在）或 `UNRECOVERABLE`（两端均缺），绝不自动补传或改写 `CONFIRMED`。Android JVM 377 tests / 0 failures / 4 skipped、`just ci` 全绿；低频 Desktop 存在性探测、实际接线和 UI 仍是下一边界。
+- [ ] **ARCH-08 P1 Desktop 存在性探测与分页协议** — **2026-09-01 已认领，尚未写生产代码**：以 side-effect-free `backup.presence` 替代会触碰上传 session 的旧 `backup.manifest` probe；每页最多 500 hash，只读索引并返回缺失集合。Android adapter 与 ARCH-07 账本裁决、MediaStore、WorkManager、UI 和旧 `BackupRunner` 校准隔离。
 - [x] DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 — **2026-08-25（commit 1e1359f + 0e0521f，真机确认 owed）· 2026-08-26 真机验收打回脱敏一处、当日补齐（🟡 其余项仍等真机复验）**:
       验收人误装 0.3.0 的包，daemon 因迁移降级反复启动失败，按「导出日志」发来
       求助的 zip **只有 489 字节、一条四天前的 diag 事件**，而真实错误
