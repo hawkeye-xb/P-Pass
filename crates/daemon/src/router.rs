@@ -337,7 +337,10 @@ impl Router {
         match req.method.as_str() {
             methods::PAIR_REQUEST => self.handle_pair(peer, req).await,
             methods::DEVICE_UNPAIR => self.handle_unpair(peer, req).await,
-            methods::BACKUP_BEGIN | methods::BACKUP_MANIFEST | methods::BACKUP_COMMIT => {
+            methods::BACKUP_BEGIN
+            | methods::BACKUP_MANIFEST
+            | methods::BACKUP_PRESENCE
+            | methods::BACKUP_COMMIT => {
                 self.handle_backup(peer, req).await
             }
             methods::TIMELINE_PAGE
@@ -497,6 +500,29 @@ impl Router {
                     },
                     Err(e) => {
                         tracing::warn!("backup.manifest from {peer:?} failed: {e}");
+                        internal_err(&req.id)
+                    }
+                }
+            }
+            methods::BACKUP_PRESENCE => {
+                let Ok(query) = serde_json::from_value::<proto::BackupPresenceQuery>(req.params.clone())
+                else {
+                    return Resp::err(
+                        req.id.clone(),
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                match backup.presence(&query.hashes).await {
+                    Ok(missing) => match serde_json::to_value(&missing) {
+                        Ok(v) => Resp::ok(req.id.clone(), v),
+                        Err(_) => internal_err(&req.id),
+                    },
+                    Err(crate::backup::BackupError::InvalidPresenceQuery) => Resp::err(
+                        req.id.clone(),
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    ),
+                    Err(e) => {
+                        tracing::warn!("backup.presence from {peer:?} failed: {e}");
                         internal_err(&req.id)
                     }
                 }

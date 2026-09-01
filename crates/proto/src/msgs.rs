@@ -296,6 +296,13 @@ pub struct BackupManifest {
     pub provider: Option<String>,
 }
 
+/// Read-only presence check for one bounded page of confirmed content hashes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct BackupPresenceQuery {
+    pub hashes: Vec<String>,
+}
+
 /// One file the client offers in a backup manifest (T-032).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -374,6 +381,7 @@ pub mod methods {
     pub const ASSET_BLOB_TICKET: &str = "asset.blob_ticket";
     pub const BACKUP_BEGIN: &str = "backup.begin";
     pub const BACKUP_MANIFEST: &str = "backup.manifest";
+    pub const BACKUP_PRESENCE: &str = "backup.presence";
     pub const BACKUP_COMMIT: &str = "backup.commit";
     pub const DIAG_STATUS: &str = "diag.status";
     /// Pseudo-method for the upload plane's authz check — role table

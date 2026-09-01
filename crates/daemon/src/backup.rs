@@ -111,6 +111,8 @@ pub struct CommitOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum BackupError {
+    #[error("invalid presence query")]
+    InvalidPresenceQuery,
     #[error("fetch {hash}: {msg}")]
     Fetch { hash: String, msg: String },
     #[error("ingest {hash}: {msg}")]
@@ -220,6 +222,25 @@ impl BackupEngine {
         }
         if m.provider.is_some() {
             session.provider = m.provider.clone();
+        }
+        Ok(BackupMissing { hashes: missing })
+    }
+
+    /// `backup.presence` is deliberately independent from backup sessions:
+    /// it only asks whether this bounded hash page is in the durable index.
+    pub async fn presence(&self, hashes: &[String]) -> Result<BackupMissing, BackupError> {
+        if hashes.is_empty()
+            || hashes.len() > 500
+            || hashes.iter().any(|hash| parse_hash(hash).is_none())
+        {
+            return Err(BackupError::InvalidPresenceQuery);
+        }
+        let mut missing = Vec::new();
+        for hash in hashes {
+            let parsed = parse_hash(hash).expect("presence validation already parsed hash");
+            if self.db.get_asset(&parsed).await?.is_none() {
+                missing.push(hash.clone());
+            }
         }
         Ok(BackupMissing { hashes: missing })
     }

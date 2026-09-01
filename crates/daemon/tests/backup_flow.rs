@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use daemon::{BackupEngine, Router};
-use proto::{BackupCommit, BackupItem, BackupManifest, BackupMissing, Req, Resp};
+use proto::{BackupCommit, BackupItem, BackupManifest, BackupMissing, BackupPresenceQuery, Req, Resp};
 use storage::{Db, Device, Role};
 use transport::{Blobs, IrohTransport, Transport, TransportConfig};
 
@@ -233,6 +233,48 @@ async fn backup_500_mixed_files_dedups_and_commits() {
     let missing = client.run_backup(&files).await;
     assert_eq!(missing, 0, "second run must be a no-op");
     assert_eq!(asset_count(&storage.db).await, unique);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn presence_returns_only_missing_hashes_without_changing_committed_backup_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = start_daemon(dir.path()).await;
+    let client = Client::new(dir.path(), &storage).await;
+    storage
+        .db
+        .upsert_device(&member(&client.tp.node_id()))
+        .await
+        .unwrap();
+
+    let src_dir = dir.path().join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    let files = corpus(&src_dir, 1, 0);
+    import_all(&client, &files, &src_dir).await;
+    client.run_backup(&files).await;
+    let known = files.keys().next().unwrap().clone();
+    let absent = "f".repeat(64);
+
+    let resp = client
+        .call(
+            "backup.presence",
+            serde_json::to_value(BackupPresenceQuery {
+                hashes: vec![known, absent.clone()],
+            })
+            .unwrap(),
+        )
+        .await;
+    assert!(resp.ok, "presence must be a member-only query: {resp:?}");
+    let missing: BackupMissing = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(missing.hashes, vec![absent]);
+    assert_eq!(asset_count(&storage.db).await, 1);
+    assert_eq!(
+        storage
+            .db
+            .get_watermark(&client.tp.node_id().0)
+            .await
+            .unwrap(),
+        Some(42),
+    );
 }
 
 /// SYNC-02：一次 commit 里 5 个文件逐条 ingest，节流合并 + 收尾强制
