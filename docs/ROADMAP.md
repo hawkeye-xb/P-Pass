@@ -463,6 +463,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [x] **REBUILD-00 旧备份线冻结与 Flow 边界** — **2026-09-01 完成**：ARCH-02～09 的状态骨架已物理归入 `backup/flow/`，其来源禁止依赖旧 `BackupWorker` / `BackupRunner` / `ConfirmedStore` / `ReuploadQueue` / `WatermarkStore`；旧入口/状态均显式标为 legacy。旧测试分类已落库：保留的用户语义待以 ARCH-01 case 重写，批次/WorkManager/manifest-push 机制冻结，hash 时序与配对错误文本留给 R1/R2 裁决。Android JVM 387 tests / 0 failures / 4 skipped，`just ci` 全绿。
 - [x] **REBUILD-01 Android iroh-blobs Provider Bridge** — **2026-09-01 完成**：Android native `cdylib` 以 `FsStore` / `BlobsProtocol` 注册单项 provider 并给出标准 ticket；Kotlin adapter 严格校验 pairing epoch、lease 与 token。撤销会关停 fetch/provider，但不删有效 partial；debug APK 含 `libtransport.so`，真实手机传输留 REBUILD-04。
 - [x] **REBUILD-02 Desktop Native Fetch 与完成凭据** — **2026-09-01 完成**：新 `flow.offer/fetch/cancel` 取代 manifest/push/commit；fetch/finalise 均验 epoch、lease、hash。独立 partial store 经 native fetch/resume 后仅在 `Ingestor` durable materialize 成功时写 immutable receipt；取消/失败不确认。
+- [x] **REBUILD-03 新 Backup Flow Runner 与触发接管** — **2026-09-01 完成**：新 `FlowRunner` 唯一协调触发 discovery request、原子页面入账、严格单项消费、native provider/fetch 与 completion receipt；Pause / Continue / constraints / Cancel 皆从同一账本状态转移。process wake 和 MediaWatch 只请求 Flow discovery；旧 Worker 的 framework wake-only 切换、UI projection 与三星测试相册验收留 REBUILD-04。
 - [x] DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 — **2026-08-25（commit 1e1359f + 0e0521f，真机确认 owed）· 2026-08-26 真机验收打回脱敏一处、当日补齐（🟡 其余项仍等真机复验）**:
       验收人误装 0.3.0 的包，daemon 因迁移降级反复启动失败，按「导出日志」发来
       求助的 zip **只有 489 字节、一条四天前的 diag 事件**，而真实错误
