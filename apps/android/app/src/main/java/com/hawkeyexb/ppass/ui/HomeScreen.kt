@@ -65,6 +65,10 @@ sealed class BackupUiState {
      *  按钮？」）。判据见 backup/PausePrefs.kt 的 pausedAfterOf——是「按下
      *  暂停的时刻」与 work 真实状态的合成，不是点击时就地写死的。 */
     data object Paused : BackupUiState()
+    /** The ledger remains open but the current environment is not admissible. */
+    data object WaitingForConstraints : BackupUiState()
+    /** A durable user cancellation round is active; confirmed items remain intact. */
+    data object CancelledCurrentRound : BackupUiState()
     /** FIX-T6: 一个相册都没选（空集 = 一个都不备）——显式「没有可
      *  备份的相册」，绝不显示假话「照片都存好了」。 */
     data object NoAlbums : BackupUiState()
@@ -78,6 +82,7 @@ fun HomeScreen(
     storageName: String,
     state: BackupUiState,
     onBackupNow: () -> Unit,
+    onCancelCurrentRound: () -> Unit = {},
     // DOG-02: 电池白名单引导（未加白时显示，加白后消失）
     batteryWhitelisted: Boolean = true,
     onOpenBatterySettings: () -> Unit = {},
@@ -297,6 +302,13 @@ fun HomeScreen(
                                 HeroAction.Resume -> stringResource(R.string.backup_resume)
                             },
                             onClick = onBackupNow,
+                        )
+                    }
+                    if (state is BackupUiState.Paused) {
+                        Spacer(Modifier.width(8.dp))
+                        HeroSecondaryButton(
+                            label = stringResource(R.string.backup_cancel_current_round),
+                            onClick = onCancelCurrentRound,
                         )
                     }
                 }
@@ -802,6 +814,8 @@ private fun idleStatusText(line: StatusLine): String = when (line) {
     is StatusLine.Pending -> stringResource(R.string.state_pending, line.k)
     is StatusLine.AllSafe -> stringResource(R.string.state_safe)
     is StatusLine.Ready -> stringResource(R.string.idle_auto_hint)
+    is StatusLine.WaitingForConstraints -> stringResource(R.string.backup_waiting_constraints)
+    is StatusLine.CancelledCurrentRound -> stringResource(R.string.backup_round_cancelled)
     is StatusLine.Working, is StatusLine.Trouble -> stringResource(R.string.idle_auto_hint) // unreachable
 }
 
