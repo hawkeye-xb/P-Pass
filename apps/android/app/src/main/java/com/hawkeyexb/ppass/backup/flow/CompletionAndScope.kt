@@ -8,6 +8,7 @@ data class CompletionReceipt(
     val receiptId: String,
     val pairingEpoch: PairingEpoch = PairingEpoch.INITIAL,
     val contentHash: String? = null,
+    val leaseToken: String = "",
 )
 
 class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
@@ -26,9 +27,14 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
     fun acceptCompletionReceipt(receipt: CompletionReceipt) {
         ledger.update { snapshot ->
             if (receipt.pairingEpoch != snapshot.pairingEpoch) return@update snapshot
+            val lease = snapshot.fetchLease
+            if (receipt.leaseToken.isNotEmpty() &&
+                (lease == null || lease.queueSequence != receipt.queueSequence || lease.leaseToken != receipt.leaseToken)
+            ) return@update snapshot
             val item = snapshot.items.singleOrNull {
                 it.queueSequence == receipt.queueSequence && it.pairingEpoch == receipt.pairingEpoch
             } ?: return@update snapshot
+            if (receipt.contentHash != null && item.contentHash != null && item.contentHash != receipt.contentHash) return@update snapshot
             if (item.deliveryState == DeliveryState.CANCELLED_BY_SCOPE) return@update snapshot
             val items = snapshot.items.map {
                 if (it.queueSequence == receipt.queueSequence) {

@@ -90,6 +90,8 @@ data class DiscoveryCandidate(
     val sourceRef: String,
     val sourceVersion: String,
     val bucketId: Long,
+    val fileName: String = "",
+    val mediaType: String = "application/octet-stream",
 ) {
     val stableId: String
         get() = "$sourceRef\u0000$sourceVersion"
@@ -101,6 +103,8 @@ data class TransferItem(
     val sourceRef: String,
     val sourceVersion: String,
     val bucketId: Long,
+    val fileName: String = "",
+    val mediaType: String = "application/octet-stream",
     val scopeRevision: ScopeRevision,
     val queueSequence: Long,
     val deliveryState: DeliveryState,
@@ -121,6 +125,8 @@ data class ScopeBackfillRequest(val scopeRevision: ScopeRevision)
 @Serializable
 data class DiscoveryLedgerSnapshot(
     val pairingEpoch: PairingEpoch = PairingEpoch.INITIAL,
+    /** Trigger coalescing fact. Only the Flow runner consumes it into discovery. */
+    val discoveryRequested: Boolean = false,
     val cursor: DiscoveryCursor = DiscoveryCursor.INITIAL,
     val scopeRevision: ScopeRevision = ScopeRevision(),
     val cancellationRound: CancellationRound? = null,
@@ -171,6 +177,7 @@ class DiscoveryLedgerStore(private val dir: File) {
     fun commitDiscoveryPage(
         candidates: List<DiscoveryCandidate>,
         nextCursor: DiscoveryCursor,
+        discoveryRequested: Boolean? = null,
         beforeCommit: () -> Unit = {},
     ) {
         require(candidates.size <= DISCOVERY_PAGE_SIZE) { "discovery page exceeds $DISCOVERY_PAGE_SIZE items" }
@@ -191,6 +198,8 @@ class DiscoveryLedgerStore(private val dir: File) {
                     sourceRef = candidate.sourceRef,
                     sourceVersion = candidate.sourceVersion,
                     bucketId = candidate.bucketId,
+                    fileName = candidate.fileName,
+                    mediaType = candidate.mediaType,
                     scopeRevision = current.scopeRevision,
                     pairingEpoch = current.pairingEpoch,
                     queueSequence = nextSequence++,
@@ -201,6 +210,7 @@ class DiscoveryLedgerStore(private val dir: File) {
         }
 
         val next = current.copy(
+            discoveryRequested = discoveryRequested ?: current.discoveryRequested,
             cursor = nextCursor,
             items = byStableId.values.sortedBy { it.queueSequence },
             nextQueueSequence = nextSequence,

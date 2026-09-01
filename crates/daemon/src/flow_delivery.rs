@@ -61,11 +61,20 @@ impl FlowDelivery {
         request: &FlowFetchRequest,
     ) -> Result<(), DeliveryError> {
         let grant = self.checked_request(peer, request).await?;
-        let provider = self
-            .blobs
-            .register_peer(&grant.provider)
-            .map_err(|e| DeliveryError::InvalidRequest(format!("provider: {e}")))?;
-        if provider != peer {
+        let (provider, ticket_hash) = match self.blobs.register_blob_ticket(&grant.provider) {
+            Ok((provider, ticket_hash)) => (provider, Some(ticket_hash)),
+            // Keep the existing Desktop-only fixture/address form valid while
+            // Android's provider supplies the stronger self-contained ticket.
+            Err(_) => (
+                self.blobs
+                    .register_peer(&grant.provider)
+                    .map_err(|e| DeliveryError::InvalidRequest(format!("provider: {e}")))?,
+                None,
+            ),
+        };
+        if provider != peer
+            || ticket_hash.is_some_and(|hash| hash.as_slice() != grant.content_hash.as_slice())
+        {
             return Err(DeliveryError::GuardMismatch);
         }
         self.db

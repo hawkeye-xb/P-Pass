@@ -104,7 +104,7 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
     let source = root.path().join("source.jpg");
     std::fs::write(&source, bytes).unwrap();
     let hash = *blake3::hash(bytes).as_bytes();
-    provider_blobs.import(hash, &source).await.unwrap();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
 
     let receiver_transport =
         IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
@@ -117,12 +117,7 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
     );
     let db = paired_db("epoch-current", provider_transport.node_id()).await;
     let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
-    let offer = request(
-        "epoch-current",
-        "lease-current",
-        hash,
-        provider_transport.local_addr().to_string(),
-    );
+    let offer = request("epoch-current", "lease-current", hash, ticket);
     delivery
         .offer(provider_transport.node_id(), &offer)
         .await

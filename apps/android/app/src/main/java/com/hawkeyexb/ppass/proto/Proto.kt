@@ -155,6 +155,31 @@ data class BlobTicketRequest(val hash: String = "")
 @Serializable
 data class BlobTicketResponse(val ticket: String = "")
 
+// ── Single-item Flow delivery ───────────────────────
+
+/** Kotlin mirror of proto::FlowFetchRequest. */
+@Serializable
+data class FlowFetchRequest(
+    @SerialName("queue_sequence") val queueSequence: Long = 0L,
+    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("lease_token") val leaseToken: String = "",
+    @SerialName("content_hash") val contentHash: String = "",
+    @SerialName("file_name") val fileName: String = "",
+    @SerialName("media_type") val mediaType: String = "",
+    /** Native iroh-blobs ticket for this exact hash. */
+    val provider: String = "",
+)
+
+/** Kotlin mirror of proto::FlowCompletionReceipt. */
+@Serializable
+data class FlowCompletionReceipt(
+    @SerialName("queue_sequence") val queueSequence: Long = 0L,
+    @SerialName("receipt_id") val receiptId: String = "",
+    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("lease_token") val leaseToken: String = "",
+    @SerialName("content_hash") val contentHash: String = "",
+)
+
 // ── Backup pipeline ─────────────────────────────────
 
 @Serializable
@@ -218,6 +243,9 @@ object Methods {
     const val ASSET_META = "asset.meta"
     const val THUMB_GET = "thumb.get"
     const val ASSET_BLOB_TICKET = "asset.blob_ticket"
+    const val FLOW_OFFER = "flow.offer"
+    const val FLOW_FETCH = "flow.fetch"
+    const val FLOW_CANCEL = "flow.cancel"
     const val BACKUP_BEGIN = "backup.begin"
     const val BACKUP_MANIFEST = "backup.manifest"
     const val BACKUP_PRESENCE = "backup.presence"
