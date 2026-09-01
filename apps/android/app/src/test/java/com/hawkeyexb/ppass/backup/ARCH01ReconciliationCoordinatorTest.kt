@@ -41,6 +41,27 @@ class ARCH01ReconciliationCoordinatorTest {
         }
     }
 
+    @Test
+    fun r02_remote_and_source_missing_records_unrecoverable_without_requeueing() {
+        runBlocking {
+            val dir = tempDir("r02")
+            val store = seededStore(dir)
+
+            ReconciliationCoordinator(store).reconcilePage(
+                remoteMissing = { setOf("b".repeat(64)) },
+                sourcePresence = { SourcePresence.MISSING },
+            )
+
+            val item = store.load().items[1]
+            assertEquals(RemotePresence.MISSING, item.remotePresence)
+            assertEquals(SourcePresence.MISSING, item.sourcePresence)
+            assertEquals(RecoveryDisposition.UNRECOVERABLE, item.disposition)
+            assertEquals(DeliveryState.CONFIRMED, item.deliveryState)
+            assertEquals(0, item.attemptCount)
+            dir.deleteRecursively()
+        }
+    }
+
     private fun seededStore(dir: File): DiscoveryLedgerStore = DiscoveryLedgerStore(dir).also { store ->
         store.commitDiscoveryPage(
             listOf(
