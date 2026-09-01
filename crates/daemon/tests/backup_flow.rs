@@ -26,6 +26,7 @@ async fn endpoint() -> IrohTransport {
 struct StorageSide {
     tp: IrohTransport,
     db: Db,
+    backup: BackupEngine,
     #[allow(dead_code)]
     serve_task: tokio::task::JoinHandle<()>,
 }
@@ -37,10 +38,15 @@ async fn start_daemon(dir: &Path) -> StorageSide {
     let tp = endpoint().await;
     let blobs = std::sync::Arc::new(Blobs::open(&tp, &dir.join("daemon-blobs")).await.unwrap());
     let backup = BackupEngine::new(db.clone(), blobs, dir.join("library"));
-    let router = Router::new(db.clone(), "storage").with_backup(backup);
+    let router = Router::new(db.clone(), "storage").with_backup(backup.clone());
     let tp2 = tp.clone();
     let serve_task = tokio::spawn(async move { router.serve(&tp2).await });
-    StorageSide { tp, db, serve_task }
+    StorageSide {
+        tp,
+        db,
+        backup,
+        serve_task,
+    }
 }
 
 /// The "phone": serves its files over blobs and speaks ctrl.
@@ -277,6 +283,11 @@ async fn presence_returns_only_missing_hashes_without_changing_committed_backup_
             .unwrap(),
         Some(42),
     );
+    assert_eq!(
+        storage.backup.sweep_sessions(std::time::Duration::ZERO),
+        0,
+        "presence must not create or touch a backup session",
+    );
 }
 
 /// SYNC-02：一次 commit 里 5 个文件逐条 ingest，节流合并 + 收尾强制
@@ -299,10 +310,15 @@ async fn commit_batch_emits_timeline_invalidated_exactly_once() {
     // 一次，测试薛定谔红（2026-08-22 CI 实例）。
     let backup = BackupEngine::new(db.clone(), blobs, dir.path().join("library"))
         .with_events_and_window(event_bus, std::time::Duration::from_secs(3600));
-    let router = Router::new(db.clone(), "storage").with_backup(backup);
+    let router = Router::new(db.clone(), "storage").with_backup(backup.clone());
     let tp2 = tp.clone();
     let serve_task = tokio::spawn(async move { router.serve(&tp2).await });
-    let storage = StorageSide { tp, db, serve_task };
+    let storage = StorageSide {
+        tp,
+        db,
+        backup,
+        serve_task,
+    };
 
     let client = Client::new(dir.path(), &storage).await;
     storage
