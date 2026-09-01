@@ -7,7 +7,9 @@ use std::fs;
 use std::path::Path;
 
 use daemon::{BackupEngine, Router};
-use proto::{BackupCommit, BackupItem, BackupManifest, BackupMissing, BackupPresenceQuery, Req, Resp};
+use proto::{
+    BackupCommit, BackupItem, BackupManifest, BackupMissing, BackupPresenceQuery, Req, Resp,
+};
 use storage::{Db, Device, Role};
 use transport::{Blobs, IrohTransport, Transport, TransportConfig};
 
