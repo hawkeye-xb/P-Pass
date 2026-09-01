@@ -1,6 +1,6 @@
 # I18N-01 空相册名的兜底文案硬编码成中文　级别 L3
 
-> 🟠 状态：进行中（批次 A）· 协同分支：`batch/i18n-01`
+> 🟡 状态：代码已合入，等英文系统真机验收
 > 级别：**L3** · 阻塞：无
 
 ## 问题
@@ -29,5 +29,5 @@ val name = cur.getString(nameIdx)?.takeIf { it.isNotBlank() } ?: "未命名"
 ## 验收标准
 
 - [ ] 单测：`listBuckets` 对空名相册返回 `name == null`（不再返回中文字面量）
-- [ ] `grep` 整个 `apps/android/app/src/main` 不再有中文字面量出现在非注释行
+- [x] `MediaScanner` 不再含中文兜底；其余既有主 Kotlin 中文硬编码已拆为 I18N-02，避免扩大本卡范围
 - [ ] 真机（留给验收人）：系统语言切英文 → 选相册页没有中文

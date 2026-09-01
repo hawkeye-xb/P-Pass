@@ -34,10 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 批次 A：版本脚本漂移断言 | 独立 RED→GREEN，提交 `batch/rel-03` | batch/rel-03 |
-| [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 批次 A：空相册名 i18n 分层 | 独立 RED→GREEN，提交 `batch/i18n-01` | batch/i18n-01 |
-| [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 批次 A：向导透出 daemon 启动原因 | 独立 RED→GREEN，提交 `batch/desk-09` | batch/desk-09 |
-| [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 批次 A：CI 工具链唯一真相 | 独立 RED→GREEN，提交 `batch/build-02` | batch/build-02 |
+
 
 
 
@@ -58,6 +55,8 @@
 | [ARCH-07](../cards/done/ARCH-07-remote-reconciliation-facts.md) | R-01/R-02 对账事实与恢复裁决完成 | ARCH-08 |
 | [ARCH-08](../cards/done/ARCH-08-remote-presence-probe.md) | side-effect-free Desktop presence page 完成 | P1 分页选择 / 源探针 / 账本裁决接线卡 |
 | [ARCH-09](../cards/done/ARCH-09-reconciliation-page-coordinator.md) | P1 账本分页、source probe 与 R-01/R-02 裁决协调完成 | 低频调度 / UI 卡 |
+| [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 批次 A：版本脚本版本目标全断言 | 批次 CI |
+| [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 批次 A：五个 workflow 从 TOML 派生 Rust 工具链 | 批次 CI |
 
 ---
 
@@ -114,6 +113,7 @@
 | P3 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 照片查看器换成熟开源库（Telephoto/ZoomImage 等）+ 读 EXIF——2026-08-27 验收人重提解冻，从 backlog 移回 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本——当前引用了不带闪电标识的 icon（阻塞：等验收人给修改指示） | L3 |
 | P3 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册页长名称换行撑乱布局 + 缩略图模糊 | L3 |
+| P3 | [I18N-02](../cards/I18N-02-main-kotlin-hardcoded-chinese.md) | 主 Android Kotlin 的无关既有用户可见中文硬编码清债 | L1 |
 | P4（顺手做，不派活） | [CI-04](../cards/CI-04-release-waits-for-the-slowest-platform.md) | 代码①②都已合并（先建草稿、各平台自己上传），不存在权限拍板；剩的是下次你自己发版时顺手拿一次真实 workflow_dispatch/release 验证一下缓存和拆分是否真生效——2026-08-27 用户定为最低优先级 | L1 |
 
 **派活提示**：P1/P2 里的 L0/L1 卡属于「成本在做」，按 AGENTS.md 的派活姿势，
@@ -136,6 +136,8 @@
 | [MOB-13](../cards/MOB-13-triplet-k-never-reaches-zero.md) | 「待备份 K」能归零（有前置，见卡） | L2 |
 | [BLOB-01](../cards/BLOB-01-ingest-leaves-a-duplicate-in-the-blob-store.md) | 备份占盘不再翻倍（实测 2.05x → 1.00x） | L2 |
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
+| [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
+| [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
 
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 
