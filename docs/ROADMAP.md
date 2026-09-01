@@ -452,6 +452,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [x] **ARCH-01 旧实现卡/测试冻结** — **2026-08-31**：`MOB-39`、`MOB-42`、`MOB-48` 的旧 TriggerSpec / WorkManager 通道模型已从可接队列移出，禁止按旧卡或旧测试实施；后续仅从 ARCH-01 Case Matrix 重拆并先写新失败用例。旧测试不再把新架构拉回旧管线。
 - [x] **ARCH-01 首批 P0 实施卡** — **2026-09-01 ARCH-02～ARCH-05 已完成**：D 账本/发现、C 严格消费者、E 完成凭据/范围竞争、X 取消本轮均已按失败测试落地。ARCH-05 将活动轮次、轮次归属、原子结束、Restore 与 Discard 写入手机账本；目标 10/10、全量 Android JVM 371 tests / 0 failures / 4 skipped、`just ci` 全绿。后续只能按 ARCH-01 已定边界继续拆卡，不重开产品语义。
 - [x] **ARCH-06 换 Desktop 的配对 epoch 隔离** — **2026-09-01 P-01/P-02 完成**：持久 `PairingEpoch` 绑定新账本与每个新发现 TransferItem；换 Desktop 单次替换清空旧 epoch 的发现/上传游标、队列、取消轮、lease 与 backfill，同时保留 ScopeRevision。完成回执必须匹配当前账本和 item epoch，旧 Desktop 的迟到回执无副作用；同 epoch 回执照常确认。目标 3/3、全量 Android JVM 374 tests / 0 failures / 4 skipped、`just ci` 全绿。后续按 P1 远端对账边界拆卡。
+- [ ] **ARCH-07 P1 远端对账事实与恢复裁决** — **2026-09-01 已认领，尚未写生产代码**：先为已确认项保存可对账内容身份，再将远端/源存在性和 `NEEDS_DECISION` / `UNRECOVERABLE` 持久化为账本事实。R-01/R-02 均禁止自动补传、删除手机原图或改写 `CONFIRMED`；低频分页探测、实际 daemon/proto 接线与 UI 提示另卡实施。
 - [x] DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 — **2026-08-25（commit 1e1359f + 0e0521f，真机确认 owed）· 2026-08-26 真机验收打回脱敏一处、当日补齐（🟡 其余项仍等真机复验）**:
       验收人误装 0.3.0 的包，daemon 因迁移降级反复启动失败，按「导出日志」发来
       求助的 zip **只有 489 字节、一条四天前的 diag 事件**，而真实错误
