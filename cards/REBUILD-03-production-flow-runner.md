@@ -1,7 +1,8 @@
 # REBUILD-03 新 Backup Flow Runner 与触发接管（L2）
 
-> ⬜ 状态：未开工 · 前置：REBUILD-01、REBUILD-02
-> 级别：L2 · 阻塞：等待 blobs bridge 与 Desktop receipt adapter
+> 🟠 状态：进行中 · 协同分支：`rebuild/rebuild-03-flow-runner` · 前置：REBUILD-01、REBUILD-02
+> 级别：L2 · 阻塞：无
+> 当前节点：将既有账本/strict consumer 接入 native delivery adapters · 下一步：建立单一 Flow runner 与失败 case、debug 构建
 
 ## 问题
 
