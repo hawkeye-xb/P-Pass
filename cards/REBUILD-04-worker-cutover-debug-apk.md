@@ -1,7 +1,8 @@
 # REBUILD-04 Worker 切换、最小状态呈现与首包验收（L2）
 
-> ⬜ 状态：未开工 · 前置：REBUILD-03
-> 级别：L2 · 阻塞：等待新 Flow runner
+> 🟠 状态：进行中 · 协同分支：`rebuild/rebuild-04-worker-cutover` · 前置：REBUILD-03
+> 级别：L2 · 阻塞：无（代码）；三星测试相册验收待 debug APK 后执行
+> 当前节点：Worker 降为 Flow wake adapter、最小账本状态呈现 · 下一步：debug APK 与三星测试相册首验
 
 ## 问题
 
