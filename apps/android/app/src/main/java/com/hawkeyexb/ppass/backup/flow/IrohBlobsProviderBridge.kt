@@ -36,7 +36,12 @@ internal class IrohBlobsProviderBridge(
             native.stopActiveFetch(it.queueSequence)
             native.revoke(it.hash)
         }
-        val ticket = native.register(hash, openSource(item.sourceRef))
+        val source = openSource(item.sourceRef)
+        val ticket = try {
+            native.register(hash, source)
+        } finally {
+            (source as? AutoCloseable)?.close()
+        }
         active = ActiveRegistration(item.queueSequence, lease.leaseToken, hash)
         return ticket
     }
