@@ -340,9 +340,7 @@ impl Router {
             methods::BACKUP_BEGIN
             | methods::BACKUP_MANIFEST
             | methods::BACKUP_PRESENCE
-            | methods::BACKUP_COMMIT => {
-                self.handle_backup(peer, req).await
-            }
+            | methods::BACKUP_COMMIT => self.handle_backup(peer, req).await,
             methods::TIMELINE_PAGE
             | methods::ASSET_META
             | methods::THUMB_GET
@@ -505,7 +503,8 @@ impl Router {
                 }
             }
             methods::BACKUP_PRESENCE => {
-                let Ok(query) = serde_json::from_value::<proto::BackupPresenceQuery>(req.params.clone())
+                let Ok(query) =
+                    serde_json::from_value::<proto::BackupPresenceQuery>(req.params.clone())
                 else {
                     return Resp::err(
                         req.id.clone(),
