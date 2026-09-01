@@ -109,6 +109,7 @@
     <string name="bucket_empty">手机上没有找到照片或视频。</string>
     <string name="bucket_loading">正在读取相册…</string>
     <string name="bucket_count">%1$d 张</string>
+    <string name="bucket_unnamed">未命名</string>
     <!-- M5 全页面状态稿：总结句 + 单个主按钮，取代"取消/备份N个相册"两按钮。 -->
     <string name="bucket_summary">将备份 %1$s 张 · 默认插电 + Wi-Fi 时自动进行，可在「设置」里更改</string>
     <string name="bucket_start">开始备份</string>

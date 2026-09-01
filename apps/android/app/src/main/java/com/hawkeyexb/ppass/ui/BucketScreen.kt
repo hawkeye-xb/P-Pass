@@ -147,7 +147,8 @@ private fun BucketCard(
         Column(Modifier.padding(12.dp, 9.dp, 12.dp, 11.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    bucket.name, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
+                    bucket.name ?: stringResource(R.string.bucket_unnamed),
+                    fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
                     color = PPColor.Ink, modifier = Modifier.weight(1f, fill = false),
                 )
                 if (isNew) {
