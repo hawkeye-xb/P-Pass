@@ -48,10 +48,16 @@ rm -rf "$APP/Contents/MacOS/lib"
 cp -R "$REL/lib" "$APP/Contents/MacOS/lib"
 
 echo "── 5. re-sign .app ($IDENTITY)"
-# H-02: 公证要求 hardened runtime + timestamp——ad-hoc 路径同样带上
-#（无害且与凭据路径行为一致），否则 .app 内可执行无 runtime 选项，
-# notarytool 提交 dmg 时可能被 Apple 拒。
-codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp "$APP"
+# Hardened runtime enforces library validation. An ad-hoc signature has no
+# Team ID, so a daemon with `runtime` cannot map the bundled Homebrew dylibs.
+# Use runtime + timestamp only for a real Developer ID identity; release CI
+# supplies that identity before notarization. Local dogfood must stay ad-hoc
+# and must not claim to be notarization-ready.
+if [ "$IDENTITY" = "-" ]; then
+  codesign --force --deep --sign - "$APP"
+else
+  codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp "$APP"
+fi
 codesign --verify --deep --strict "$APP"
 
 echo "── 6. dmg → $DMG_OUT/P-Pass-macos-arm64.dmg"
