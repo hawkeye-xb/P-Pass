@@ -6,10 +6,12 @@
 //! (ADR-001); the Phase-2 WebRTC read-only subset hangs off the same
 //! interface, at which point these concrete types become enums.
 
+mod android_blobs;
 mod blobs;
 mod conninfo;
 mod iroh_impl;
 
+pub use android_blobs::AndroidBlobsProvider;
 pub use blobs::Blobs;
 pub use conninfo::{ConnInfo, ConnectionStatus, PathKind};
 pub use iroh_impl::{
