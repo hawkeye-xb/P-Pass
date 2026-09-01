@@ -61,22 +61,7 @@ impl FlowDelivery {
         request: &FlowFetchRequest,
     ) -> Result<(), DeliveryError> {
         let grant = self.checked_request(peer, request).await?;
-        let (provider, ticket_hash) = match self.blobs.register_blob_ticket(&grant.provider) {
-            Ok((provider, ticket_hash)) => (provider, Some(ticket_hash)),
-            // Keep the existing Desktop-only fixture/address form valid while
-            // Android's provider supplies the stronger self-contained ticket.
-            Err(_) => (
-                self.blobs
-                    .register_peer(&grant.provider)
-                    .map_err(|e| DeliveryError::InvalidRequest(format!("provider: {e}")))?,
-                None,
-            ),
-        };
-        if provider != peer
-            || ticket_hash.is_some_and(|hash| hash.as_slice() != grant.content_hash.as_slice())
-        {
-            return Err(DeliveryError::GuardMismatch);
-        }
+        self.provider_for(&grant)?;
         self.db
             .upsert_flow_grant(&grant)
             .await
@@ -110,8 +95,9 @@ impl FlowDelivery {
         // content-addressed fetch verifies the requested BLAKE3 hash and
         // resumes from the dedicated retained store on retry/restart.
         let hash = array32(&grant.content_hash).expect("validated by checked_request");
+        let provider = self.provider_for(&grant)?;
         self.blobs
-            .fetch_from(peer, hash)
+            .fetch_from(provider, hash)
             .await
             .map_err(|e| DeliveryError::Fetch(e.to_string()))?;
 
@@ -238,6 +224,28 @@ impl FlowDelivery {
             return Err(DeliveryError::GuardMismatch);
         }
         Ok(stored)
+    }
+
+    /// The authenticated control peer owns the Flow grant, while Android's
+    /// native iroh-blobs provider owns its own endpoint and ticket. The ticket
+    /// is immutable inside the grant and its hash is rechecked before every
+    /// fetch, so accepting a distinct provider does not weaken the tuple gate.
+    fn provider_for(&self, grant: &FlowGrant) -> Result<NodeId, DeliveryError> {
+        let (provider, ticket_hash) = match self.blobs.register_blob_ticket(&grant.provider) {
+            Ok((provider, ticket_hash)) => (provider, Some(ticket_hash)),
+            // Keep the existing Desktop-only fixture/address form valid while
+            // Android's provider supplies the stronger self-contained ticket.
+            Err(_) => (
+                self.blobs
+                    .register_peer(&grant.provider)
+                    .map_err(|e| DeliveryError::InvalidRequest(format!("provider: {e}")))?,
+                None,
+            ),
+        };
+        if ticket_hash.is_some_and(|hash| hash.as_slice() != grant.content_hash.as_slice()) {
+            return Err(DeliveryError::GuardMismatch);
+        }
+        Ok(provider)
     }
 
     async fn require_active(&self, grant: &FlowGrant) -> Result<(), DeliveryError> {

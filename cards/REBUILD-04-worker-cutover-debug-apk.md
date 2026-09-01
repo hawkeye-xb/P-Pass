@@ -2,7 +2,7 @@
 
 > 🟡 状态：待真机验收 · 协同分支：`main` · 前置：REBUILD-03
 > 级别：L2 · 阻塞：三星测试相册首验
-> 当前节点：代码与 debug APK 已验证 · 下一步：三星 Pause → 杀 App → Continue → Cancel
+> 当前节点：三星首包已通过 Flow 原生 fetch/receipt 入库 · 下一步：Pause → 杀 App → Continue → Cancel
 
 ## 问题
 
@@ -38,3 +38,11 @@ REBUILD-03；代码已完成。这是首次需要三星设备的卡。
   `assembleDebug` 成功，APK 包含两个 native libs；`just ci` 与 `cargo deny` advisories 通过。
 - **待三星测试相册**：传输中 Pause → 杀 App 重开仍 Pause → Continue 原队头续传 →
   Cancel Current Round 不传剩余项。
+- **2026-09-01 首包实测**：三星测试相册发现 26 项；Desktop durable index 为 25 项（1
+  项内容去重），手机 ledger 26 项均 `CONFIRMED`。实测暴露并已修复三条生产断点：
+  native provider 是独立 endpoint，Desktop 改为以已鉴权 control peer 持有 grant、以
+  immutable ticket 的 provider endpoint fetch；completion receipt 回流 FlowRunner 自动推进
+  下一 strict head；legacy watch reconciliation 失败只记诊断，不能杀掉 Flow 进程。
+  `FAILED_NEEDS_USER` 现在在 UI 显示可重试状态，显式 Retry 会重开失败队头并重置该次预算。
+- 本轮验证：`just ci`、`cargo deny check advisories`、daemon flow delivery 4/4、Android
+  JVM **254 tests / 0 failures / 4 skipped**、debug APK；Desktop 和三星均已安装 **0.5.0**。

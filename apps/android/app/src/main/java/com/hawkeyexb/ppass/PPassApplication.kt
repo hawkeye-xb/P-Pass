@@ -16,6 +16,7 @@ package com.hawkeyexb.ppass
 
 import android.app.Application
 import android.os.SystemClock
+import android.util.Log
 import com.hawkeyexb.ppass.backup.reconcileWatchOnProcessStart
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import kotlin.concurrent.thread
@@ -30,13 +31,16 @@ class PPassApplication : Application() {
         // 未配对 / 已暂停的早退在对账函数内部（那是它的前置条件，不是
         // 调用方的责任），BackupWorker.doWork 里另有第二道闸。
         thread(name = "ppass-boot-check") {
-            reconcileWatchOnProcessStart(
-                this, System.currentTimeMillis(), SystemClock.elapsedRealtime(),
-            )
-            // REBUILD-03: process wake is a Flow discovery request, not a
-            // batch scan or transport operation. R4 will remove the legacy
-            // worker scheduling path; this bridge keeps its behavior unchanged.
+            // Flow 是当前生产路径；legacy watch reconciliation must never
+            // delay its discovery or strict-head delivery wake.
             requestFlowWake(this)
+            runCatching {
+                reconcileWatchOnProcessStart(
+                    this, System.currentTimeMillis(), SystemClock.elapsedRealtime(),
+                )
+            }.onFailure { error ->
+                Log.w("PPassLegacyWatch", "legacy watch reconciliation failed; Flow continues", error)
+            }
         }
     }
 }

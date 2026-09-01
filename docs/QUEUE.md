@@ -98,7 +98,7 @@
 | R1a | [REBUILD-01](../cards/REBUILD-01-android-iroh-blobs-provider-bridge.md) | R0 | ✅ Android blobs provider bridge |
 | R1b | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | R0 | ✅ Desktop fetch + completion receipt |
 | R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | ✅ 新生产 Flow runner |
-| R3 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | R2 | 🟡 debug APK 已就绪，待三星首验 |
+| R3 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | R2 | 🟡 三星首包已实传，待 Pause → 杀 App → Continue → Cancel |
 
 ---
 

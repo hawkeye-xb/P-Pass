@@ -148,6 +148,53 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
 }
 
 #[tokio::test]
+async fn authenticated_control_peer_may_offer_a_distinct_native_provider_ticket() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"separate Android provider endpoint";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let control_transport = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+        .await
+        .unwrap();
+    assert_ne!(provider_transport.node_id(), control_transport.node_id());
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", control_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+
+    delivery
+        .offer(control_transport.node_id(), &offer)
+        .await
+        .unwrap();
+    let receipt = delivery
+        .fetch(control_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    assert_eq!(receipt.content_hash, hex::encode(hash));
+    assert!(db.get_asset(&hash).await.unwrap().is_some());
+}
+
+#[tokio::test]
 async fn cancelled_active_item_never_receives_a_receipt() {
     let root = tempdir().unwrap();
     let provider_transport =

@@ -99,6 +99,12 @@ internal fun continueFlow(context: Context, constraintsSatisfied: Boolean = true
     }
 }
 
+internal fun retryFailedFlow(context: Context) {
+    runtimeFor(context.applicationContext)?.let {
+        synchronized(flowTriggerLock) { it.runner.retryFailedDeliveries() }
+    }
+}
+
 internal fun cancelCurrentFlowRound(context: Context) {
     runtimeFor(context.applicationContext)?.let {
         synchronized(flowTriggerLock) { it.runner.cancelCurrentRound(UUID.randomUUID().toString()) }
@@ -135,6 +141,7 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             pairing = { PairingStore(context.filesDir).load() },
             identityKey = { IdentityStore(context.filesDir).secretKey() },
             onPermanentFailure = { runner.recordPermanentFailure() },
+            onReceipt = { runner.acceptCompletionReceipt(it) },
         )
         runner = FlowRunner(
             ledger = ledger,

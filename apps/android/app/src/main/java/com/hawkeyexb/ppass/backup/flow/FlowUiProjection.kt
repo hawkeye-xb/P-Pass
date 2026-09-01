@@ -6,6 +6,8 @@ sealed interface FlowUiState {
     data object PausedByUser : FlowUiState
     data object WaitingForConstraints : FlowUiState
     data class Transferring(val queueSequence: Long, val fileName: String = "") : FlowUiState
+    /** The strict head exhausted its delivery attempts and needs an explicit retry. */
+    data object NeedsUserAttention : FlowUiState
     data object CancelledCurrentRound : FlowUiState
 }
 
@@ -19,5 +21,7 @@ fun flowUiStateOf(snapshot: DiscoveryLedgerSnapshot): FlowUiState = when {
     snapshot.consumerStatus == ConsumerStatus.WAITING_FOR_CONSTRAINTS -> FlowUiState.WaitingForConstraints
     else -> snapshot.items.firstOrNull { it.deliveryState == DeliveryState.TRANSFERRING }
         ?.let { FlowUiState.Transferring(it.queueSequence, it.fileName) }
+        ?: snapshot.items.firstOrNull { it.deliveryState == DeliveryState.FAILED_NEEDS_USER }
+            ?.let { FlowUiState.NeedsUserAttention }
         ?: FlowUiState.Idle
 }

@@ -52,4 +52,15 @@ class FlowBoundaryTest {
             )
         }
     }
+
+    @Test
+    fun process_flow_wake_is_not_blocked_behind_legacy_watch_reconciliation() {
+        val app = File(repoRoot(), "apps/android/app/src/main/java/com/hawkeyexb/ppass/PPassApplication.kt").readText()
+        val backgroundWake = app.substringAfter("thread(name = \"ppass-boot-check\") {")
+        val flowWake = backgroundWake.indexOf("requestFlowWake(this)")
+        val legacyReconcile = backgroundWake.indexOf("reconcileWatchOnProcessStart(")
+
+        assertTrue("process Flow wake must precede legacy watch reconciliation", flowWake in 0 until legacyReconcile)
+        assertTrue("legacy reconciliation failure must not kill the Flow process", backgroundWake.contains("runCatching {"))
+    }
 }

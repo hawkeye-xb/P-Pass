@@ -1,5 +1,7 @@
 package com.hawkeyexb.ppass.backup.flow
 
+import com.hawkeyexb.ppass.proto.FlowCompletionReceipt
+import com.hawkeyexb.ppass.proto.FlowFetchRequest
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,7 +41,8 @@ class REBUILD03FlowRunnerTest {
         val completed = ledger.load()
         assertEquals(DeliveryState.CONFIRMED, completed.items.single { it.queueSequence == 1L }.deliveryState)
         assertEquals(UploadCursor(2L), completed.uploadCursor)
-        assertFalse("a receipt never starts a second item by itself", 2L in delivery.starts)
+        assertEquals("a receipt advances the strict consumer to the next durable head", listOf(1L, 2L), delivery.starts)
+        assertEquals(DeliveryState.TRANSFERRING, completed.items.single { it.queueSequence == 2L }.deliveryState)
         dir.deleteRecursively()
     }
 
@@ -100,6 +103,56 @@ class REBUILD03FlowRunnerTest {
 
         assertEquals(DeliveryState.TRANSFERRING, ledger.load().items.single().deliveryState)
         assertEquals("a".repeat(64), ledger.load().items.single().contentHash)
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun native_completion_is_relayed_back_to_the_flow_runner() {
+        val request = FlowFetchRequest(
+            queueSequence = 2L,
+            pairingEpoch = "epoch-1",
+            leaseToken = "lease-2",
+            contentHash = "a".repeat(64),
+            fileName = "photo.jpg",
+            mediaType = "image/jpeg",
+            provider = "ticket",
+        )
+        val receipt = FlowCompletionReceipt(
+            queueSequence = 2L,
+            receiptId = "desktop-2",
+            pairingEpoch = "epoch-1",
+            leaseToken = "lease-2",
+            contentHash = "a".repeat(64),
+        )
+        var relayed: CompletionReceipt? = null
+
+        relayFlowCompletion(receipt, request) { relayed = it }
+
+        assertEquals(CompletionReceipt(2L, "desktop-2", PairingEpoch("epoch-1"), "a".repeat(64), "lease-2"), relayed)
+    }
+
+    @Test
+    fun explicit_retry_reopens_failed_heads_without_reusing_their_attempt_budget() {
+        val dir = tempDir("retry-failed")
+        val ledger = DiscoveryLedgerStore(dir)
+        ledger.commitDiscoveryPage(listOf(candidate(18), candidate(19)), DiscoveryCursor(7L, 19L))
+        ledger.update { snapshot ->
+            snapshot.copy(
+                uploadCursor = UploadCursor.INITIAL,
+                items = snapshot.items.map { it.copy(deliveryState = DeliveryState.FAILED_NEEDS_USER, attemptCount = 3) },
+            )
+        }
+        val delivery = RecordingDelivery()
+        val runner = FlowRunner(ledger, RecordingDiscovery(DiscoveryPage(emptyList(), DiscoveryCursor.INITIAL)), delivery)
+
+        runner.retryFailedDeliveries()
+
+        val retried = ledger.load()
+        assertEquals(listOf(1L), delivery.starts)
+        assertEquals(DeliveryState.TRANSFERRING, retried.items.single { it.queueSequence == 1L }.deliveryState)
+        assertEquals(0, retried.items.single { it.queueSequence == 1L }.attemptCount)
+        assertEquals(DeliveryState.QUEUED, retried.items.single { it.queueSequence == 2L }.deliveryState)
+        assertEquals(0, retried.items.single { it.queueSequence == 2L }.attemptCount)
         dir.deleteRecursively()
     }
 
