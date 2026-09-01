@@ -182,7 +182,7 @@ impl Pairing {
         peer: transport::NodeId,
         req: &proto::PairRequest,
         now_ms: i64,
-    ) -> Result<(), PairRejection> {
+    ) -> Result<String, PairRejection> {
         let role = match req.role.as_str() {
             "viewer" => Role::Viewer,
             // §2.2: joining devices are members unless explicitly viewer;
@@ -290,6 +290,18 @@ impl Pairing {
             // flag by design, so reinstate explicitly.
             let _ = self.db.unrevoke(&peer.0).await;
         }
+        // REBUILD-02: a newly accepted pairing replaces every old Flow
+        // grant. Persist the epoch before replying so the phone never starts
+        // a fetch against an epoch the Desktop cannot verify after restart.
+        let pairing_epoch = fresh_pairing_epoch().map_err(|_| PairRejection::OwnerDeclined)?;
+        if !self
+            .db
+            .set_pairing_epoch(&peer.0, &pairing_epoch)
+            .await
+            .map_err(|_| PairRejection::OwnerDeclined)?
+        {
+            return Err(PairRejection::OwnerDeclined);
+        }
 
         // DEV-01: owner picked "替换旧的" — migrate the old device's
         // assets/watermark into this fresh identity and delete it.
@@ -344,7 +356,7 @@ impl Pairing {
                 serde_json::json!({ "action": "pair.accepted" }),
             );
         }
-        Ok(())
+        Ok(pairing_epoch)
     }
 
     /// Drop expired/used tokens (housekeeping; daemon calls periodically).
@@ -368,6 +380,15 @@ fn safe_name(name: &str) -> String {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// 128 bits of OS entropy names an owner-approved pairing generation. It is
+/// persisted before `PairAccepted` is emitted, so Desktop and phone agree
+/// across daemon restart and a re-pair invalidates old delivery grants.
+fn fresh_pairing_epoch() -> Result<String, getrandom::Error> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)?;
+    Ok(hex(&bytes))
 }
 
 // H-10b v2 (2026-08-08): 配对 token 32B → 12B。一次性配对 + 10 分钟

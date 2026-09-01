@@ -71,6 +71,7 @@ fn snapshot_pair_request() {
 fn snapshot_pair_accepted() {
     let pa = PairAccepted {
         storage_device_name: "Home PC".into(),
+        pairing_epoch: "epoch-1".into(),
     };
     assert_roundtrip(&pa);
     snapshot_message("pair_accepted", &pa);

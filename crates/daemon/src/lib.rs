@@ -9,6 +9,7 @@ pub mod config;
 pub mod diag_agg;
 pub mod download;
 pub mod events;
+pub mod flow_delivery;
 pub mod inbox;
 pub mod ipc;
 pub mod log_guard;

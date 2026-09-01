@@ -330,6 +330,13 @@ async fn main() -> anyhow::Result<()> {
         transport::Blobs::open(&transport, &data_dir.join(".ppf/blobs")).await?,
     );
     blobs.attach_to_listener();
+    // REBUILD-02: independent retained store for new Flow pulls. The legacy
+    // inbox cleanup intentionally clears `.ppf/blobs`; this store must keep
+    // iroh-blobs partials so interrupted one-item fetches resume after restart.
+    let flow_blobs = std::sync::Arc::new(
+        transport::Blobs::open(&transport, &data_dir.join(".ppf/flow-blobs")).await?,
+    );
+    let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir);
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
         .with_events(event_bus.clone());
     let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir);
@@ -394,6 +401,7 @@ async fn main() -> anyhow::Result<()> {
         .with_subscriptions(subscriptions)
         .with_pairing(pairing)
         .with_backup(backup)
+        .with_flow_delivery(flow_delivery)
         .with_query(query)
         .with_upload(upload)
         .with_download(download);

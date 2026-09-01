@@ -3,5 +3,6 @@ source: crates/proto/tests/snapshots.rs
 expression: json
 ---
 {
-  "storage_device_name": "Home PC"
+  "storage_device_name": "Home PC",
+  "pairing_epoch": "epoch-1"
 }
