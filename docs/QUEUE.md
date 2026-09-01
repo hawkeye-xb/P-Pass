@@ -34,7 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [ARCH-09](../cards/ARCH-09-reconciliation-page-coordinator.md) | R-01 协调 tracer 已绿：present 零 source probe，missing 写 NEEDS_DECISION | 补 R-02、source adapter 与反证 | main |
+
 
 
 
@@ -53,6 +53,7 @@
 | [ARCH-06](../cards/done/ARCH-06-pairing-epoch-isolation.md) | P-01/P-02 换 Desktop 的 epoch 隔离完成 | ARCH-01 P1 对账拆卡 |
 | [ARCH-07](../cards/done/ARCH-07-remote-reconciliation-facts.md) | R-01/R-02 对账事实与恢复裁决完成 | ARCH-08 |
 | [ARCH-08](../cards/done/ARCH-08-remote-presence-probe.md) | side-effect-free Desktop presence page 完成 | P1 分页选择 / 源探针 / 账本裁决接线卡 |
+| [ARCH-09](../cards/done/ARCH-09-reconciliation-page-coordinator.md) | P1 账本分页、source probe 与 R-01/R-02 裁决协调完成 | 低频调度 / UI 卡 |
 
 ---
 

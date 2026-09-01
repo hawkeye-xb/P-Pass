@@ -1,6 +1,6 @@
 # ARCH-09 P1 对账分页协调与源存在性裁决接线（L2）
 
-> 🟠 状态：进行中（R-01 协调 tracer 已完成；R-02 / source adapter 待做）
+> ✅ 状态：代码完成；后续卡负责低频调度与 UI 呈现
 > 级别：L2 · 前置：ARCH-07、ARCH-08 · 协同分支：`main` · 基线：`e7269a4`
 > 当前节点：把已确认账本项接到 presence page 和 ARCH-07 裁决；下一步：先写 R-01/R-02 的协调器失败合同。
 
@@ -16,13 +16,13 @@ ARCH-07 能保存远端/源存在性与恢复裁决，ARCH-08 能查询一个只
 
 ## 验收标准
 
-- [ ] 新增 JVM 合同测试，覆盖 R-01/R-02 的完整协调路径与远端存在路径。
-- [ ] 只选当前 epoch、`CONFIRMED` 且有 `contentHash` 的项；按 queueSequence 升序，单页最多 500 项。
-- [ ] Desktop 返回 present 的项不触碰 source probe，写 `PRESENT` / 无恢复裁决。
-- [ ] Desktop 返回 missing 的项才探测 `sourceRef`；probe 仅尝试打开后立即关闭，不读/不 hash 内容。
-- [ ] source 可用 → `NEEDS_DECISION`；不可用 → `UNRECOVERABLE`；所有路径均保持 `CONFIRMED`、UploadCursor、lease、attemptCount 与 queueSequence。
-- [ ] 反证：让 present 项也读源，或让 missing 项改为 `QUEUED`/触发 fetch，测试必须变红。
-- [ ] Android 全量 JVM 与 `just ci` 通过，报告本次 XML 测试统计。
+- [x] 新增 JVM 合同测试，覆盖 R-01/R-02 的完整协调路径与远端存在路径。
+- [x] 只选当前 epoch、`CONFIRMED` 且有 `contentHash` 的项；按 queueSequence 升序，单页最多 500 项。
+- [x] Desktop 返回 present 的项不触碰 source probe，写 `PRESENT` / 无恢复裁决。
+- [x] Desktop 返回 missing 的项才探测 `sourceRef`；probe 仅尝试打开后立即关闭，不读/不 hash 内容。
+- [x] source 可用 → `NEEDS_DECISION`；不可用 → `UNRECOVERABLE`；所有路径均保持 `CONFIRMED`、UploadCursor、lease、attemptCount 与 queueSequence。
+- [x] 反证：让 present 项也读源，或让 missing 项改为 `QUEUED`/触发 fetch，测试必须变红。
+- [x] Android 全量 JVM 与 `just ci` 通过，报告本次 XML 测试统计。
 
 ## 范围
 
@@ -41,6 +41,7 @@ ARCH-07 的账本裁决与 ARCH-08 的 presence query 已完成。无外部阻�
 
 - 2026-09-01：从 ARCH-01 §9 与 R-01/R-02 拆出。既有 `BackupWorker` 的 `openInputStream(...).use {}` 是旧批次候选的可读探针，不能接入本卡；协调器改以独立 source-presence port 表达同样的“一次打开立即关闭、不读内容”事实，避免复用旧上传管线。
 - 2026-09-01：R-01 RED→GREEN：`ARCH01ReconciliationCoordinatorTest` 先因协调器缺失失败，随后以 1/1 确认 current epoch confirmed hash 按 queueSequence 成页；远端 present 项零 source probe，missing 项才探测 `sourceRef` 并持久 `NEEDS_DECISION`，两项均保持 `CONFIRMED` 和 `attemptCount=0`。
+- 2026-09-01：R-02 与 resolver adapter：source missing 写 `UNRECOVERABLE` 且不重入队；`ContentResolverSourcePresenceProbe` 仅 `openInputStream(...).use {}`，null/异常都记为 missing，不读内容。反证临时让 present 项也读源，R-01 实际失败；还原后本次 Android XML 54 files / 381 tests / 0 failures / 0 errors / 4 skipped，`just ci` 全绿。
 
 ## 备注
 
