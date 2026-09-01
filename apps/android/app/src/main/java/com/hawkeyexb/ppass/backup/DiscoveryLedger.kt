@@ -65,6 +65,27 @@ enum class DeliveryState {
 }
 
 @Serializable
+enum class RemotePresence {
+    UNKNOWN,
+    PRESENT,
+    MISSING,
+}
+
+@Serializable
+enum class SourcePresence {
+    UNKNOWN,
+    PRESENT,
+    MISSING,
+}
+
+@Serializable
+enum class RecoveryDisposition {
+    NONE,
+    NEEDS_DECISION,
+    UNRECOVERABLE,
+}
+
+@Serializable
 data class DiscoveryCandidate(
     val sourceRef: String,
     val sourceVersion: String,
@@ -86,6 +107,10 @@ data class TransferItem(
     val attemptCount: Int = 0,
     val partialRetained: Boolean = false,
     val completionReceiptId: String? = null,
+    val contentHash: String? = null,
+    val remotePresence: RemotePresence = RemotePresence.UNKNOWN,
+    val sourcePresence: SourcePresence = SourcePresence.UNKNOWN,
+    val disposition: RecoveryDisposition = RecoveryDisposition.NONE,
     val cancellationRoundId: String? = null,
     val pairingEpoch: PairingEpoch = PairingEpoch.INITIAL,
 )

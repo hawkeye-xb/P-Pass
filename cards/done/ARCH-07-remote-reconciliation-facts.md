@@ -1,8 +1,8 @@
 # ARCH-07 远端对账事实与恢复裁决（L2）
 
-> 🟠 状态：进行中（认领与拆卡已发布；尚未写生产代码）
+> ✅ 状态：代码完成；低频探测、实际 daemon/proto 接线与 UI 提示另卡实施
 > 级别：L2 · 前置：ARCH-02、ARCH-04、ARCH-06 · 协同分支：`main` · 基线：`faf31c7`
-> 当前节点：P1 本地账本事实 / 恢复裁决；下一步：先写 `ARCH01RemoteReconciliationTest` 的 R-01/R-02 失败合同。
+> 当前节点：P1 本地账本事实 / 恢复裁决已完成；下一步：按 Desktop 低频存在性探测边界拆后续卡。
 
 ## 问题
 
@@ -16,18 +16,18 @@ ARCH-04 的 `TransferItem` 只保存完成凭据 id，未保存 Desktop 已确�
 
 ## 验收标准
 
-- [ ] 新增 `ARCH01RemoteReconciliationTest`，先以失败合同覆盖 R-01/R-02；运行
+- [x] 新增 `ARCH01RemoteReconciliationTest`，先以失败合同覆盖 R-01/R-02；运行
       `cd apps/android && ./gradlew :app:testDebugUnitTest --tests '*ARCH01RemoteReconciliationTest'`
       → `BUILD SUCCESSFUL`。
-- [ ] 完成凭据与 `TransferItem` 持久关联内容身份；仅当前账本且当前 `pairingEpoch` 的 `CONFIRMED` 项可成为对账对象。
-- [ ] R-01：远端报告缺失且源探针报告存在 → 持久化
+- [x] 完成凭据与 `TransferItem` 持久关联内容身份；仅当前账本且当前 `pairingEpoch` 的 `CONFIRMED` 项可成为对账对象。
+- [x] R-01：远端报告缺失且源探针报告存在 → 持久化
       `remotePresence=MISSING`、`sourcePresence=PRESENT`、`disposition=NEEDS_DECISION`；
       `deliveryState=CONFIRMED`、UploadCursor、fetch lease、失败次数和队列序号均不变，且不触发上传。
-- [ ] R-02：远端报告缺失且源探针报告缺失 → 持久化
+- [x] R-02：远端报告缺失且源探针报告缺失 → 持久化
       `remotePresence=MISSING`、`sourcePresence=MISSING`、`disposition=UNRECOVERABLE`；不得向用户/调用方宣称可恢复。
-- [ ] 远端仍存在时不得读取完整手机源或重新 hash；只记录存在性，不制造恢复提示。
-- [ ] 反证：把远端缺失改为 `QUEUED`/启动 fetch 时 R-01 必须变红；把 R-02 裁成 `NEEDS_DECISION` 时 R-02 必须变红。两条反证实际执行后还原。
-- [ ] 全量 Android JVM 单测通过，并报告本次生成 XML 的测试总数与 0 failures。
+- [x] 远端仍存在时不得读取完整手机源或重新 hash；只记录存在性，不制造恢复提示。
+- [x] 反证：把远端缺失改为 `QUEUED`/启动 fetch 时 R-01 必须变红；把 R-02 裁成 `NEEDS_DECISION` 时 R-02 必须变红。两条反证实际执行后还原。
+- [x] 全量 Android JVM 单测通过，并报告本次生成 XML 的测试总数与 0 failures。
 
 ## 范围
 
@@ -46,6 +46,10 @@ ARCH-02 提供原子账本，ARCH-04 提供完成凭据，ARCH-06 提供 epoch �
 ## 实施记录
 
 - 2026-09-01：从 ARCH-01 P1 边界拆出并认领。代码勘查确认 `DiscoveryLedger.kt` 的 `TransferItem` 只有 `completionReceiptId`，`CompletionReceipt` 只有 `receiptId`，当前没有已确认内容的可对账身份或远端存在性字段；旧 `ConfirmedStore` / `ReuploadQueue` 属冻结的批次校准管线，不能作为 P1 实现基础。
+- 2026-09-01：R-01 RED 已确认：`ARCH01RemoteReconciliationTest` 因 `contentHash`、存在性字段和 `RemoteReconciliation` 均未实现而在 Kotlin 编译阶段失败；失败来源是本卡要求的新账本能力，不是环境或测试夹具错误。
+- 2026-09-01：R-01 GREEN：`./gradlew :app:testDebugUnitTest --tests '*ARCH01RemoteReconciliationTest'` 通过（1/1）；完成凭据现在可持久携带内容身份，远端缺失且手机源仍在时仅写 `MISSING` / `PRESENT` / `NEEDS_DECISION`，队列与消费者状态不变。
+- 2026-09-01：R-02 RED 后 GREEN：手机源缺失时先因未实现分支失败，补为 `UNRECOVERABLE` 后目标 3/3 通过。远端仍存在只写 `PRESENT`、清除恢复裁决，不接源探针或 hash。
+- 2026-09-01：反证实际执行后还原：临时把远端缺失项改回 `QUEUED`，R-01/R-02 共 2 条失败；临时把源缺失裁成 `NEEDS_DECISION`，R-02 单条失败。全量 Android JVM 本次 XML 52 files / 377 tests / 0 failures / 0 errors / 4 skipped；`just ci` 全绿。
 
 ## 备注
 
