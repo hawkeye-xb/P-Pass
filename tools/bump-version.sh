@@ -31,24 +31,55 @@ if [ -z "$CUR" ]; then
   exit 1
 fi
 
-# ── Desktop (Tauri standalone workspace) 版本漂移断言 ─────────────
-# 桌面壳是独立 workspace（src-tauri/Cargo.toml 自带 [workspace]），主仓
-# cargo update 够不着它；版本散在四件套必须一起动：
-#   tauri.conf.json "version"    <- bundle/About 对话框（用户可见）
-#   package.json "version"
-#   src-tauri/Cargo.toml version
-#   src-tauri/Cargo.lock         <- 在该目录内 cargo update -w 同步
-# 漂移断言放在动任何文件之前：桌面版本必须等于主仓版本，否则装出来的
-# dmg 显示旧版本（DOG-01d 姊妹 bug：桌面卡 0.1.0 而主仓已 0.2.1）。
-DCUR=$(awk -F'"' '/"version"/{print $4; exit}' apps/desktop/src-tauri/tauri.conf.json)
-if [ -z "$DCUR" ]; then
-  echo "error: 读不到 apps/desktop/src-tauri/tauri.conf.json 的 version" >&2
-  exit 1
-fi
-if [ "$DCUR" != "$CUR" ]; then
-  echo "error: 桌面版本 ${DCUR} != 主仓版本 ${CUR} - 桌面版本漂移（用户装 dmg 看不出版本）。先对齐再 bump。" >&2
-  exit 1
-fi
+# Every version target is read independently. Do not reuse a value from one
+# file as another file's sed pattern: a drift would turn that edit into a
+# silent no-op.
+read_json_version() {
+  awk -F'"' '/"version"/{print $4; exit}' "$1"
+}
+
+read_toml_version() {
+  awk '/^version = /{gsub(/"/,"",$3); print $3; exit}' "$1"
+}
+
+read_android_fallback_version() {
+  awk -F'"' '/\?: "/{print $2; exit}' "$1"
+}
+
+read_lock_package_version() {
+  awk '
+    $0 == "name = \"p-pass-desktop\"" { package = 1; next }
+    package && /^version = / { gsub(/"/, "", $3); print $3; exit }
+  ' "$1"
+}
+
+assert_version() {
+  local path="$1"
+  local actual="$2"
+  local expected="$3"
+  if [ -z "$actual" ]; then
+    echo "error: 读不到 ${path} 的 version" >&2
+    exit 1
+  fi
+  if [ "$actual" != "$expected" ]; then
+    echo "error: ${path} version drift: ${actual} != ${expected}; 先对齐再 bump。" >&2
+    exit 1
+  fi
+}
+
+# ── Version-drift preflight ────────────────────────────────────────
+# The standalone desktop workspace has its own Cargo.lock. Android local
+# builds use the versionName fallback when no release tag is injected.
+TCUR=$(read_json_version apps/desktop/src-tauri/tauri.conf.json)
+PCUR=$(read_json_version apps/desktop/package.json)
+DCCUR=$(read_toml_version apps/desktop/src-tauri/Cargo.toml)
+ALCUR=$(read_android_fallback_version apps/android/app/build.gradle.kts)
+DLLOCKCUR=$(read_lock_package_version apps/desktop/src-tauri/Cargo.lock)
+
+assert_version apps/desktop/src-tauri/tauri.conf.json "$TCUR" "$CUR"
+assert_version apps/desktop/package.json "$PCUR" "$CUR"
+assert_version apps/desktop/src-tauri/Cargo.toml "$DCCUR" "$CUR"
+assert_version 'apps/desktop/src-tauri/Cargo.lock (p-pass-desktop)' "$DLLOCKCUR" "$CUR"
 
 # 防覆盖 1：已打过精确 tag 的版本号绝不复用
 if git tag -l "v${NEW}" | grep -q .; then
@@ -80,26 +111,15 @@ if [ -z "$VCODE" ]; then
 fi
 NCODE=$((VCODE + 1))
 sed -i.bak "s/versionCode = $VCODE/versionCode = $NCODE/" apps/android/app/build.gradle.kts && rm apps/android/app/build.gradle.kts.bak
-sed -i.bak "s/versionName = \"$CUR\"/versionName = \"$NEW\"/" apps/android/app/build.gradle.kts && rm apps/android/app/build.gradle.kts.bak
+sed -i.bak "s/?: \"$ALCUR\"/?: \"$NEW\"/" apps/android/app/build.gradle.kts && rm apps/android/app/build.gradle.kts.bak
 
 # ── Desktop (Tauri standalone workspace) 四件套同步 ──────────────
-# DCUR/漂移断言已在脚本前段（读 CUR 后、动任何文件前）完成；这里只做同步。
 # 桌面四件套同步（JSON 引号 + TOML 裸值两种写法）
-sed -i.bak "s/\"version\": \"$DCUR\"/\"version\": \"$NEW\"/" apps/desktop/src-tauri/tauri.conf.json && rm apps/desktop/src-tauri/tauri.conf.json.bak
-sed -i.bak "s/\"version\": \"$DCUR\"/\"version\": \"$NEW\"/" apps/desktop/package.json && rm apps/desktop/package.json.bak
-sed -i.bak "s/^version = \"$DCUR\"/version = \"$NEW\"/" apps/desktop/src-tauri/Cargo.toml && rm apps/desktop/src-tauri/Cargo.toml.bak
+sed -i.bak "s/\"version\": \"$TCUR\"/\"version\": \"$NEW\"/" apps/desktop/src-tauri/tauri.conf.json && rm apps/desktop/src-tauri/tauri.conf.json.bak
+sed -i.bak "s/\"version\": \"$PCUR\"/\"version\": \"$NEW\"/" apps/desktop/package.json && rm apps/desktop/package.json.bak
+sed -i.bak "s/^version = \"$DCCUR\"/version = \"$NEW\"/" apps/desktop/src-tauri/Cargo.toml && rm apps/desktop/src-tauri/Cargo.toml.bak
 # 独立 workspace 的 lock 同步（与主仓 BUMP-01 同款：cargo update -w）
 ( cd apps/desktop/src-tauri && cargo update -w -q )
-
-echo "bumped: $CUR -> $NEW (android versionCode $VCODE -> $NCODE, desktop $DCUR -> $NEW)"
-echo "--- git diff（应只含版本号行）---"
-git diff --stat Cargo.toml apps/android/app/build.gradle.kts \
-  apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json \
-  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock
-git diff Cargo.toml apps/android/app/build.gradle.kts \
-  apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json \
-  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock \
-  | grep -E "^[+-]" | grep -vE "^(\+\+\+|---)" || true
 
 # BUMP-01 (2026-08-06): sync workspace-member versions into Cargo.lock.
 # bump-version.sh only edits Cargo.toml / build.gradle.kts / desktop files,
@@ -109,6 +129,25 @@ git diff Cargo.toml apps/android/app/build.gradle.kts \
 # untouched. Desktop is its own workspace: `cargo update -w` runs inside
 # apps/desktop/src-tauri for its lock.
 cargo update -w -q
+
+# The whitelist below only proves that no unrelated file changed. Verify that
+# every target actually reached NEW, including the generated desktop lock entry.
+assert_version Cargo.toml "$(read_toml_version Cargo.toml)" "$NEW"
+assert_version apps/android/app/build.gradle.kts "$(read_android_fallback_version apps/android/app/build.gradle.kts)" "$NEW"
+assert_version apps/desktop/src-tauri/tauri.conf.json "$(read_json_version apps/desktop/src-tauri/tauri.conf.json)" "$NEW"
+assert_version apps/desktop/package.json "$(read_json_version apps/desktop/package.json)" "$NEW"
+assert_version apps/desktop/src-tauri/Cargo.toml "$(read_toml_version apps/desktop/src-tauri/Cargo.toml)" "$NEW"
+assert_version 'apps/desktop/src-tauri/Cargo.lock (p-pass-desktop)' "$(read_lock_package_version apps/desktop/src-tauri/Cargo.lock)" "$NEW"
+
+echo "bumped: $CUR -> $NEW (android versionCode $VCODE -> $NCODE, desktop $TCUR -> $NEW)"
+echo "--- git diff（应只含版本号行）---"
+git diff --stat Cargo.toml Cargo.lock apps/android/app/build.gradle.kts \
+  apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json \
+  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock
+git diff Cargo.toml Cargo.lock apps/android/app/build.gradle.kts \
+  apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json \
+  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock \
+  | grep -E "^[+-]" | grep -vE "^(\+\+\+|---)" || true
 
 # BUMP-01: assert the tree is clean except the version files themselves.
 # Anything else dirty (stray build artifacts, accidental edits) fails the
