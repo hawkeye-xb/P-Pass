@@ -28,6 +28,7 @@ pub struct Router {
     device_name: String,
     pairing: Option<crate::pairing::Pairing>,
     backup: Option<crate::backup::BackupEngine>,
+    flow_delivery: Option<crate::flow_delivery::FlowDelivery>,
     query: Option<crate::query::QueryEngine>,
     upload: Option<crate::upload::UploadPlane>,
     download: Option<crate::download::DownloadPlane>,
@@ -50,6 +51,7 @@ impl Router {
             device_name: device_name.into(),
             pairing: None,
             backup: None,
+            flow_delivery: None,
             query: None,
             upload: None,
             download: None,
@@ -105,6 +107,12 @@ impl Router {
     /// `err.unsupported`.
     pub fn with_backup(mut self, backup: crate::backup::BackupEngine) -> Self {
         self.backup = Some(backup);
+        self
+    }
+
+    /// Attach the REBUILD-02 one-item native fetch/receipt adapter.
+    pub fn with_flow_delivery(mut self, flow_delivery: crate::flow_delivery::FlowDelivery) -> Self {
+        self.flow_delivery = Some(flow_delivery);
         self
     }
 
@@ -337,6 +345,9 @@ impl Router {
         match req.method.as_str() {
             methods::PAIR_REQUEST => self.handle_pair(peer, req).await,
             methods::DEVICE_UNPAIR => self.handle_unpair(peer, req).await,
+            methods::FLOW_OFFER | methods::FLOW_FETCH | methods::FLOW_CANCEL => {
+                self.handle_flow_delivery(peer, req).await
+            }
             methods::BACKUP_BEGIN
             | methods::BACKUP_MANIFEST
             | methods::BACKUP_PRESENCE
@@ -447,6 +458,51 @@ impl Router {
                     Ok(ticket) => ok_or(&req.id, serde_json::to_value(&ticket)),
                     Err(_) => not_found(),
                 }
+            }
+        }
+    }
+
+    /// New Flow control plane: offer → native fetch → durable receipt, or
+    /// exact cancellation. It does not call the frozen batch backup engine.
+    async fn handle_flow_delivery(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        let Some(delivery) = &self.flow_delivery else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let Ok(flow) = serde_json::from_value::<proto::FlowFetchRequest>(req.params.clone()) else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let result = match req.method.as_str() {
+            methods::FLOW_OFFER => delivery.offer(peer, &flow).await.map(|_| None),
+            methods::FLOW_FETCH => delivery.fetch(peer, &flow).await.map(Some),
+            methods::FLOW_CANCEL => delivery.cancel(peer, &flow).await.map(|_| None),
+            _ => unreachable!("dispatch only calls this for flow methods"),
+        };
+        match result {
+            Ok(Some(receipt)) => match serde_json::to_value(receipt) {
+                Ok(value) => Resp::ok(req.id.clone(), value),
+                Err(_) => Resp::err(
+                    req.id.clone(),
+                    RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+                ),
+            },
+            Ok(None) => Resp::ok(req.id.clone(), serde_json::Value::Null),
+            Err(crate::flow_delivery::DeliveryError::GuardMismatch)
+            | Err(crate::flow_delivery::DeliveryError::Cancelled) => Resp::err(
+                req.id.clone(),
+                RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
+            ),
+            Err(error) => {
+                tracing::warn!("flow delivery from {peer:?} failed: {error}");
+                Resp::err(
+                    req.id.clone(),
+                    RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+                )
             }
         }
     }
@@ -602,9 +658,10 @@ impl Router {
             );
         };
         match pairing.handle_request(peer, &pair_req, (self.now)()).await {
-            Ok(()) => {
+            Ok(pairing_epoch) => {
                 let accepted = proto::PairAccepted {
                     storage_device_name: self.device_name.clone(),
+                    pairing_epoch,
                 };
                 match serde_json::to_value(&accepted) {
                     Ok(v) => Resp::ok(req.id.clone(), v),

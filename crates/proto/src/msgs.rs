@@ -144,6 +144,9 @@ impl Default for PairRequest {
 pub struct PairAccepted {
     /// Storage-side information (device name, version, etc.).
     pub storage_device_name: String,
+    /// Fresh owner-approved pairing generation. New Flow delivery rejects
+    /// requests whose epoch is not this currently persisted value.
+    pub pairing_epoch: String,
 }
 
 // ── Timeline ────────────────────────────────────────
@@ -268,6 +271,36 @@ pub struct BlobTicketResponse {
     pub ticket: String,
 }
 
+// ── Single-item flow delivery ───────────────────────
+
+/// Register or execute one new-flow delivery. This is intentionally separate
+/// from the legacy batch manifest/push/commit protocol: one queue item has one
+/// pairing epoch, one lease, and one BLAKE3 hash.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct FlowFetchRequest {
+    pub queue_sequence: u64,
+    pub pairing_epoch: String,
+    pub lease_token: String,
+    /// BLAKE3 content hash as 64 lowercase-or-uppercase hex characters.
+    pub content_hash: String,
+    pub file_name: String,
+    pub media_type: String,
+    /// Provider endpoint address token, consumed only by iroh-blobs.
+    pub provider: String,
+}
+
+/// A durable Desktop acknowledgement for exactly one materialized item.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct FlowCompletionReceipt {
+    pub queue_sequence: u64,
+    pub receipt_id: String,
+    pub pairing_epoch: String,
+    pub lease_token: String,
+    pub content_hash: String,
+}
+
 // ── Backup pipeline ─────────────────────────────────
 
 /// Initiate a backup session. The client signals begin, then sends a
@@ -379,6 +412,15 @@ pub mod methods {
     pub const ASSET_META: &str = "asset.meta";
     pub const THUMB_GET: &str = "thumb.get";
     pub const ASSET_BLOB_TICKET: &str = "asset.blob_ticket";
+    /// REBUILD-02: creates the Desktop-side current item grant. It carries no
+    /// content and is not part of the frozen batch backup protocol.
+    pub const FLOW_OFFER: &str = "flow.offer";
+    /// REBUILD-02: fetches one offered item via native iroh-blobs and returns
+    /// a receipt only after durable materialization.
+    pub const FLOW_FETCH: &str = "flow.fetch";
+    /// REBUILD-02: invalidates one exact active tuple; cancellation never
+    /// emits a receipt.
+    pub const FLOW_CANCEL: &str = "flow.cancel";
     pub const BACKUP_BEGIN: &str = "backup.begin";
     pub const BACKUP_MANIFEST: &str = "backup.manifest";
     pub const BACKUP_PRESENCE: &str = "backup.presence";
@@ -502,6 +544,7 @@ mod tests {
         PairAccepted,
         PairAccepted {
             storage_device_name: "Home PC".into(),
+            pairing_epoch: "epoch-1".into(),
         }
     );
 
@@ -587,6 +630,32 @@ mod tests {
         BackupMissing,
         BackupMissing {
             hashes: vec!["hash1".into()],
+        }
+    );
+
+    roundtrip_test!(
+        flow_fetch_request_roundtrip,
+        FlowFetchRequest,
+        FlowFetchRequest {
+            queue_sequence: 7,
+            pairing_epoch: "epoch-1".into(),
+            lease_token: "lease-7".into(),
+            content_hash: "ab".repeat(32),
+            file_name: "IMG_0007.jpg".into(),
+            media_type: "image/jpeg".into(),
+            provider: "peer-address".into(),
+        }
+    );
+
+    roundtrip_test!(
+        flow_completion_receipt_roundtrip,
+        FlowCompletionReceipt,
+        FlowCompletionReceipt {
+            queue_sequence: 7,
+            receipt_id: "receipt-7".into(),
+            pairing_epoch: "epoch-1".into(),
+            lease_token: "lease-7".into(),
+            content_hash: "ab".repeat(32),
         }
     );
 
