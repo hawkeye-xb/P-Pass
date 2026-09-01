@@ -17,6 +17,7 @@ package com.hawkeyexb.ppass
 import android.app.Application
 import android.os.SystemClock
 import com.hawkeyexb.ppass.backup.reconcileWatchOnProcessStart
+import com.hawkeyexb.ppass.backup.flow.requestFlowDiscovery
 import kotlin.concurrent.thread
 
 class PPassApplication : Application() {
@@ -32,6 +33,10 @@ class PPassApplication : Application() {
             reconcileWatchOnProcessStart(
                 this, System.currentTimeMillis(), SystemClock.elapsedRealtime(),
             )
+            // REBUILD-03: process wake is a Flow discovery request, not a
+            // batch scan or transport operation. R4 will remove the legacy
+            // worker scheduling path; this bridge keeps its behavior unchanged.
+            requestFlowDiscovery(this)
         }
     }
 }

@@ -19,8 +19,8 @@ use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::ticket::BlobTicket;
 use iroh_blobs::{BlobFormat, BlobsProtocol, Hash};
 
-use crate::iroh_impl::IrohTransport;
-use crate::{Result, TransportError};
+use crate::iroh_impl::{IrohTransport, PeerAddr};
+use crate::{NodeId, Result, TransportError};
 
 /// Blob store + optional serving router for one endpoint.
 ///
@@ -163,6 +163,19 @@ impl Blobs {
             )));
         }
         Ok(())
+    }
+
+    /// Admit a native iroh-blobs ticket and return its provider identity and
+    /// hash. The caller must compare both values to its durable Flow grant.
+    pub fn register_blob_ticket(&self, ticket: &str) -> Result<(NodeId, [u8; 32])> {
+        let ticket = ticket
+            .parse::<BlobTicket>()
+            .map_err(|e| TransportError::Io(format!("invalid blob ticket: {e}")))?;
+        let hash = *ticket.hash().as_bytes();
+        let peer = self
+            .transport
+            .add_peer(PeerAddr::from_endpoint_addr(ticket.addr().clone()));
+        Ok((peer, hash))
     }
 
     /// Register a peer's self-declared address token (see
