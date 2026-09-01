@@ -1,6 +1,6 @@
 # ARCH-08 P1 Desktop 存在性探测与分页协议（L2）
 
-> 🟠 状态：进行中（认领与拆卡已发布；尚未写生产代码）
+> 🟠 状态：进行中（daemon presence tracer 已完成；Android adapter / 边界合同待做）
 > 级别：L2 · 前置：ARCH-07 · 协同分支：`main` · 基线：`12f2f63`
 > 当前节点：为 ARCH-07 的账本事实提供 side-effect-free Desktop presence page；下一步：先写 daemon 协议失败合同。
 
@@ -41,6 +41,7 @@ ARCH-07 已提供持久内容身份及 `RemotePresence` / `SourcePresence` / `Re
 ## 实施记录
 
 - 2026-09-01：从 ARCH-01 P1 的“低频分页检查已确认 hash 是否仍在 Desktop”边界拆出并认领。代码勘查确认 `backup.manifest` 的 bare-hash 分支会 `entry(peer).or_default()` 并 `touch()` session（`crates/daemon/src/backup.rs`），Android `BackupRunner.existCheck` 明确复用该旧批次校准路径，二者均不符合独立、只读的 P1 对账语义。
+- 2026-09-01：daemon RED：`backup_flow` presence 合同因 `BackupPresenceQuery` 未定义而失败。GREEN：新增 `backup.presence` / `BackupPresenceQuery`、只读 `BackupEngine::presence()` 和 router 分派；目标集成测试 1/1 通过，已确认已提交 hash 不返回 missing、缺失 hash 原序返回，asset count 与 watermark 保持不变。Android adapter、空页/超页/非法 hash 反证仍待本卡后续完成。
 
 ## 备注
 

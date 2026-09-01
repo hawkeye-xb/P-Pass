@@ -34,7 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [ARCH-08](../cards/ARCH-08-remote-presence-probe.md) | P1 Desktop presence 分页协议已拆卡；尚未写生产代码 | 先写 daemon presence 失败合同，再实现只读 query 与 Android adapter | main |
+| [ARCH-08](../cards/ARCH-08-remote-presence-probe.md) | daemon presence tracer 已绿：只读索引、已提交事实不变 | 补空页/超页/非法 hash 反证，再接 Android adapter | main |
 
 
 认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
