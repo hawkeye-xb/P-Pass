@@ -34,6 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
+| [REBUILD-00](../cards/REBUILD-00-legacy-fence-and-flow-boundary.md) | 冻结旧批次线，建立 `legacy` / `flow` 边界 | 完成边界后并行 REBUILD-01 / REBUILD-02 | main |
 
 
 
@@ -77,10 +78,20 @@
 
 | 卡 | 覆盖 case | 当前等待 |
 |---|---|---|
-| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 后续拆卡边界 | ARCH-02~07 已完成；ARCH-08 P1 存在性探测已认领 |
+| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 后续拆卡边界 | ARCH-02~09 仅为未接生产骨架；REBUILD-00~04 执行生产切换 |
 
 > self-review 已核对 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
 > ARCH-02、ARCH-03、ARCH-04、ARCH-05、ARCH-06 已完成；后续只可从 ARCH-01 的既定拆卡边界继续。
+
+### 重建主线（唯一开发优先级）
+
+| 阶段 | 卡 | 依赖 | 交付 |
+|---|---|---|---|
+| R0 | [REBUILD-00](../cards/REBUILD-00-legacy-fence-and-flow-boundary.md) | — | 旧线冻结、新 Flow 边界 |
+| R1a | [REBUILD-01](../cards/REBUILD-01-android-iroh-blobs-provider-bridge.md) | R0 | Android blobs provider bridge |
+| R1b | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | R0 | Desktop fetch + completion receipt |
+| R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | 新生产 Flow runner |
+| R3 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | R2 | debug APK + 三星首验 |
 
 ---
 
