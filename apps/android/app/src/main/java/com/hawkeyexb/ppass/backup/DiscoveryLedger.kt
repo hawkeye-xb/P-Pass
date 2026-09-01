@@ -21,6 +21,13 @@ data class DiscoveryCursor(
 data class ScopeRevision(val value: Long = 1L)
 
 @Serializable
+data class PairingEpoch(val value: String) {
+    companion object {
+        val INITIAL = PairingEpoch("")
+    }
+}
+
+@Serializable
 data class CancellationRound(val id: String)
 
 @Serializable
@@ -80,6 +87,7 @@ data class TransferItem(
     val partialRetained: Boolean = false,
     val completionReceiptId: String? = null,
     val cancellationRoundId: String? = null,
+    val pairingEpoch: PairingEpoch = PairingEpoch.INITIAL,
 )
 
 @Serializable
@@ -87,6 +95,7 @@ data class ScopeBackfillRequest(val scopeRevision: ScopeRevision)
 
 @Serializable
 data class DiscoveryLedgerSnapshot(
+    val pairingEpoch: PairingEpoch = PairingEpoch.INITIAL,
     val cursor: DiscoveryCursor = DiscoveryCursor.INITIAL,
     val scopeRevision: ScopeRevision = ScopeRevision(),
     val cancellationRound: CancellationRound? = null,
@@ -158,6 +167,7 @@ class DiscoveryLedgerStore(private val dir: File) {
                     sourceVersion = candidate.sourceVersion,
                     bucketId = candidate.bucketId,
                     scopeRevision = current.scopeRevision,
+                    pairingEpoch = current.pairingEpoch,
                     queueSequence = nextSequence++,
                     deliveryState = state,
                     cancellationRoundId = cancellationRoundId,
