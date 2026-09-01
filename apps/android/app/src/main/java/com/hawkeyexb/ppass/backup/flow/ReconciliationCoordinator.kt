@@ -1,5 +1,5 @@
 // ARCH-09: coordinate one bounded reconciliation page without transfer side effects.
-package com.hawkeyexb.ppass.backup
+package com.hawkeyexb.ppass.backup.flow
 
 class ReconciliationCoordinator(private val ledger: DiscoveryLedgerStore) {
     suspend fun reconcilePage(

@@ -1,6 +1,6 @@
 // ARCH-02: ARCH-01 P0 discovery contract.
 // These tests deliberately start before the ledger implementation exists.
-package com.hawkeyexb.ppass.backup
+package com.hawkeyexb.ppass.backup.flow
 
 import java.io.File
 import org.junit.Assert.assertEquals

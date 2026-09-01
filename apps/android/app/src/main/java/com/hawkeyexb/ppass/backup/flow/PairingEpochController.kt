@@ -1,5 +1,5 @@
 // ARCH-06: persistent boundary for replacing the paired Desktop.
-package com.hawkeyexb.ppass.backup
+package com.hawkeyexb.ppass.backup.flow
 
 class PairingEpochController(private val ledger: DiscoveryLedgerStore) {
     fun replaceDesktop(nextEpoch: PairingEpoch) {

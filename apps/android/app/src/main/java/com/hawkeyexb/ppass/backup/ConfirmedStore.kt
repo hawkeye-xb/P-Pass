@@ -1,3 +1,4 @@
+// LEGACY BATCH STATE — frozen by REBUILD-00; Flow confirmation lives in backup.flow.
 // DOG-01/DOG-01b: 备份恒真三元组「手机 N 张 · 已备份 M · 待备份 K + 最后
 // 成功时间」。
 //

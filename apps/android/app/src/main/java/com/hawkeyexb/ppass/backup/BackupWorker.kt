@@ -1,3 +1,4 @@
+// LEGACY BATCH PIPELINE — frozen by REBUILD-00; do not add Flow behavior here.
 // T-054b: unattended backup — a periodic WorkManager job, constrained
 // to charging + unmetered network, promoted to a dataSync foreground
 // service while a batch runs (S-04: FGS segmented sessions survive
