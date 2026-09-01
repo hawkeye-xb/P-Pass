@@ -50,6 +50,7 @@ ARCH-02 提供原子账本，ARCH-04 提供完成凭据，ARCH-06 提供 epoch �
 - 2026-09-01：R-01 GREEN：`./gradlew :app:testDebugUnitTest --tests '*ARCH01RemoteReconciliationTest'` 通过（1/1）；完成凭据现在可持久携带内容身份，远端缺失且手机源仍在时仅写 `MISSING` / `PRESENT` / `NEEDS_DECISION`，队列与消费者状态不变。
 - 2026-09-01：R-02 RED 后 GREEN：手机源缺失时先因未实现分支失败，补为 `UNRECOVERABLE` 后目标 3/3 通过。远端仍存在只写 `PRESENT`、清除恢复裁决，不接源探针或 hash。
 - 2026-09-01：反证实际执行后还原：临时把远端缺失项改回 `QUEUED`，R-01/R-02 共 2 条失败；临时把源缺失裁成 `NEEDS_DECISION`，R-02 单条失败。全量 Android JVM 本次 XML 52 files / 377 tests / 0 failures / 0 errors / 4 skipped；`just ci` 全绿。
+- 2026-09-01：远端 CI 复核：GitHub `CI Android #100`（commit `12f2f63`）绿色，耗时 1m46s。
 
 ## 备注
 
