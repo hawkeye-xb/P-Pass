@@ -55,7 +55,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.hawkeyexb.ppass.transport.PairingStore
-import com.hawkeyexb.ppass.backup.flow.requestFlowDiscovery
+import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import kotlin.concurrent.thread
 
 /** 看门 Job 的 job ID。**必须是稳定常量**——整个方案的支点就在这里：
@@ -265,7 +265,7 @@ class MediaWatchJob : JobService() {
                     // R3 keeps the existing watcher wake behavior for R4,
                     // while the production Flow receives only a discovery
                     // request and owns every subsequent state transition.
-                    requestFlowDiscovery(ctx)
+                    requestFlowWake(ctx)
                 }
             } catch (t: Throwable) {
                 android.util.Log.w(TAG, "dispatch failed", t)
