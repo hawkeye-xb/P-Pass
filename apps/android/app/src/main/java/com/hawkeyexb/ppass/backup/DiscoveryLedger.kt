@@ -79,6 +79,7 @@ data class TransferItem(
     val attemptCount: Int = 0,
     val partialRetained: Boolean = false,
     val completionReceiptId: String? = null,
+    val cancellationRoundId: String? = null,
 )
 
 @Serializable
@@ -147,6 +148,7 @@ class DiscoveryLedgerStore(private val dir: File) {
         } else {
             DeliveryState.CANCELLED_BY_USER_ROUND
         }
+        val cancellationRoundId = current.cancellationRound?.id
 
         candidates.forEach { candidate ->
             if (candidate.stableId !in byStableId) {
@@ -158,6 +160,7 @@ class DiscoveryLedgerStore(private val dir: File) {
                     scopeRevision = current.scopeRevision,
                     queueSequence = nextSequence++,
                     deliveryState = state,
+                    cancellationRoundId = cancellationRoundId,
                 )
             }
         }

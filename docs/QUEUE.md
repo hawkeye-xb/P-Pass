@@ -11,7 +11,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-08-31**（ARCH-03 的 CI Android #95 已绿；ARCH-04 已认领，先写 E-01~E-04 失败测试）
+> 最后核对：**2026-09-01**（ARCH-05 已完成；ARCH-01 首批 P0 实施卡全部完成）
 
 ---
 
@@ -34,7 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [ARCH-05](../cards/ARCH-05-cancellation-round.md) | 为 X-01~X-05 建立新失败测试 | 持久取消扫描、Restore/Discard 状态迁移 | `main` |
+
 
 认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
 
@@ -47,6 +47,7 @@
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |
 | [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 完成凭据、范围竞争与 backfill 完成 | ARCH-05 |
+| [ARCH-05](../cards/done/ARCH-05-cancellation-round.md) | X-01~X-05 取消本轮、恢复与丢弃完成 | ARCH-01 后续实施拆卡 |
 
 ---
 
@@ -63,14 +64,14 @@
 
 ---
 
-## 四、待前置（首批 ARCH-01 实施卡，禁止提前认领）
+## 四、ARCH-01 后续实施拆卡（按已收口边界开卡）
 
 | 卡 | 覆盖 case | 当前等待 |
 |---|---|---|
-| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 首批拆卡边界 | ARCH-05 实施 |
+| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 后续拆卡边界 | ARCH-02~05 已完成；按既定边界开下一张实施卡 |
 
 > self-review 已核对 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
-> ARCH-02、ARCH-03、ARCH-04 已完成；ARCH-05 现在满足前置。
+> ARCH-02、ARCH-03、ARCH-04、ARCH-05 已完成；后续只可从 ARCH-01 的既定拆卡边界继续。
 
 ---
 
