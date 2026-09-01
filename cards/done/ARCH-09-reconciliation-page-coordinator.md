@@ -42,6 +42,7 @@ ARCH-07 的账本裁决与 ARCH-08 的 presence query 已完成。无外部阻�
 - 2026-09-01：从 ARCH-01 §9 与 R-01/R-02 拆出。既有 `BackupWorker` 的 `openInputStream(...).use {}` 是旧批次候选的可读探针，不能接入本卡；协调器改以独立 source-presence port 表达同样的“一次打开立即关闭、不读内容”事实，避免复用旧上传管线。
 - 2026-09-01：R-01 RED→GREEN：`ARCH01ReconciliationCoordinatorTest` 先因协调器缺失失败，随后以 1/1 确认 current epoch confirmed hash 按 queueSequence 成页；远端 present 项零 source probe，missing 项才探测 `sourceRef` 并持久 `NEEDS_DECISION`，两项均保持 `CONFIRMED` 和 `attemptCount=0`。
 - 2026-09-01：R-02 与 resolver adapter：source missing 写 `UNRECOVERABLE` 且不重入队；`ContentResolverSourcePresenceProbe` 仅 `openInputStream(...).use {}`，null/异常都记为 missing，不读内容。反证临时让 present 项也读源，R-01 实际失败；还原后本次 Android XML 54 files / 381 tests / 0 failures / 0 errors / 4 skipped，`just ci` 全绿。
+- 2026-09-01：远端 CI 复核：GitHub CI Android #104（commit `af6f5cf`）成功。
 
 ## 备注
 
