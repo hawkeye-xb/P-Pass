@@ -49,3 +49,4 @@ apps/android/**/build/
 
 # agent worktrees（本地临时，不入库）
 .claude/worktrees/
+.worktrees/

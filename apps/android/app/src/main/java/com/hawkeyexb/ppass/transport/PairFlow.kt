@@ -120,6 +120,7 @@ suspend fun pairWithQr(
                     daemonAddrToken = addrToken,
                     storageDeviceName = accepted.storageDeviceName,
                     pairedAt = System.currentTimeMillis(),
+                    pairingEpoch = accepted.pairingEpoch,
                 )
             )
         } else {

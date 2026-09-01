@@ -83,6 +83,7 @@ data class PairRequest(
 @Serializable
 data class PairAccepted(
     @SerialName("storage_device_name") val storageDeviceName: String = "",
+    @SerialName("pairing_epoch") val pairingEpoch: String = "",
 )
 
 // ── Timeline ────────────────────────────────────────
