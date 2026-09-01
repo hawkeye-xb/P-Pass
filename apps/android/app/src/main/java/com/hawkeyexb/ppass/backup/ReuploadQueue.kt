@@ -1,3 +1,4 @@
+// LEGACY BATCH STATE — frozen by REBUILD-00; Flow reconciliation never reuses this queue.
 // MOB-34（2026-08-25 真机回归）：库里删掉的**老**照片永远不会被重传。
 //
 // ## 断在哪

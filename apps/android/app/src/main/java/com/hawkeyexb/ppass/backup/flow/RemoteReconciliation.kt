@@ -1,5 +1,5 @@
 // ARCH-07: durable remote-reconciliation facts without transfer side effects.
-package com.hawkeyexb.ppass.backup
+package com.hawkeyexb.ppass.backup.flow
 
 class RemoteReconciliation(private val ledger: DiscoveryLedgerStore) {
     fun recordRemotePresent(contentHash: String) {

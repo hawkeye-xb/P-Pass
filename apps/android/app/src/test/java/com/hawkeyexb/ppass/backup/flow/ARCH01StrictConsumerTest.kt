@@ -1,6 +1,6 @@
 // ARCH-03: ARCH-01 P0 strict consumer contract.
 // These cases define consumer behavior without WorkManager, UI, or native fetch.
-package com.hawkeyexb.ppass.backup
+package com.hawkeyexb.ppass.backup.flow
 
 import java.io.File
 import org.junit.Assert.assertEquals

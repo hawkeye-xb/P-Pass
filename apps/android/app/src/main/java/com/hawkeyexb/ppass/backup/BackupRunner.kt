@@ -1,3 +1,4 @@
+// LEGACY BATCH PIPELINE — frozen by REBUILD-00; do not add Flow behavior here.
 // T-054: the phone-side backup pipeline —
 // scan → hash → begin/manifest → push each missing file → commit →
 // persist watermark. Fully idempotent: rerunning after any failure

@@ -1,5 +1,5 @@
 // ARCH-07: remote reconciliation facts and recovery disposition contract.
-package com.hawkeyexb.ppass.backup
+package com.hawkeyexb.ppass.backup.flow
 
 import java.io.File
 import org.junit.Assert.assertEquals

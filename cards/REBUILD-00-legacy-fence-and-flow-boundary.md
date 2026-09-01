@@ -1,6 +1,6 @@
 # REBUILD-00 旧备份线冻结与新 Flow 边界（L2）
 
-> 🟠 状态：进行中 · 协同分支：`main`
+> ✅ 状态：已完成 · 协同分支：`main`
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -13,11 +13,11 @@
 
 ## 验收标准
 
-- [ ] 旧 Worker/Runner/ConfirmedStore/ReuploadQueue 与新 Flow 的职责清单落在代码边界说明中。
-- [ ] 新 `backup/flow` 包成为新核心唯一落点；任何新 Flow 文件不得 import legacy batch API。
-- [ ] 旧批次实现仍可编译，但新主线卡不再修改它。
-- [ ] 旧测试按三类列清，不删全仓无关测试。
-- [ ] `just ci` 通过。
+- [x] 旧 Worker/Runner/ConfirmedStore/ReuploadQueue 与新 Flow 的职责清单落在代码边界说明中。
+- [x] 新 `backup/flow` 包成为新核心唯一落点；任何新 Flow 文件不得 import legacy batch API。
+- [x] 旧批次实现仍可编译，但新主线卡不再修改它。
+- [x] 旧测试按三类列清，不删全仓无关测试。
+- [x] `just ci` 通过。
 
 ## 范围
 
@@ -26,4 +26,13 @@
 
 ## 阻塞与依赖
 
-无。完成后释放 REBUILD-01 / REBUILD-02 的并行开发。
+无。已释放 REBUILD-01 / REBUILD-02 的并行开发。
+
+## 验收记录
+
+- ARCH-02～09 的账本、消费者、completion、取消、epoch 与对账骨架已物理迁入
+  `backup/flow/`；`FlowBoundaryTest` 阻止该包引用旧 batch API。
+- `BackupWorker`、`BackupRunner`、`ConfirmedStore`、`ReuploadQueue` 已标为 `LEGACY`；
+  对应旧机制和需重写的产品不变量分类见
+  `docs/design/2026-08-29-arch01-backup-core/05-legacy-flow-boundary.zh-CN.md`。
+- 验证：Android JVM 387 tests / 0 failures / 4 skipped；`just ci` all green。

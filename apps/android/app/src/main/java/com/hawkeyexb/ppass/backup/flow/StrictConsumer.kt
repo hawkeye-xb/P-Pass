@@ -1,5 +1,5 @@
 // ARCH-03: strict single-head consumer over ARCH-02's durable ledger facts.
-package com.hawkeyexb.ppass.backup
+package com.hawkeyexb.ppass.backup.flow
 
 /** A controllable seam for the later native fetch adapter. */
 interface DeliveryPort {

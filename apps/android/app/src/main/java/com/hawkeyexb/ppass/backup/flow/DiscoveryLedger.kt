@@ -1,7 +1,7 @@
 // ARCH-02: durable phone-side facts for discovery admission.
 // A page of candidates and its DiscoveryCursor always live in one snapshot:
 // write a replacement file, then atomically rename it into place.
-package com.hawkeyexb.ppass.backup
+package com.hawkeyexb.ppass.backup.flow
 
 import java.io.File
 import kotlinx.serialization.Serializable

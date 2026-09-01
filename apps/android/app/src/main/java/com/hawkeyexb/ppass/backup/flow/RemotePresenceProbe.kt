@@ -1,5 +1,5 @@
 // ARCH-08: validate one bounded, read-only Desktop presence page.
-package com.hawkeyexb.ppass.backup
+package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.proto.BackupPresenceQuery
 import com.hawkeyexb.ppass.proto.BackupMissing
