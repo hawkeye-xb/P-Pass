@@ -54,7 +54,31 @@ class FlowRunner(
         cancellation.startPausedRound(roundId)
     }
 
-    fun acceptCompletionReceipt(receipt: CompletionReceipt) = completion.acceptCompletionReceipt(receipt)
+    fun acceptCompletionReceipt(receipt: CompletionReceipt) {
+        completion.acceptCompletionReceipt(receipt)
+        // Receipt persistence is the strict-head boundary: only after it is
+        // durable may the next queued item acquire a new lease.
+        consumer.wake(constraintsSatisfied = true)
+    }
+
+    /** A user retry reopens terminal delivery failures as a new strict round. */
+    fun retryFailedDeliveries() {
+        ledger.update { snapshot ->
+            val items = snapshot.items.map { item ->
+                if (item.deliveryState == DeliveryState.FAILED_NEEDS_USER) {
+                    item.copy(deliveryState = DeliveryState.QUEUED, attemptCount = 0)
+                } else item
+            }
+            snapshot.copy(
+                uploadCursor = UploadCursor(items.firstOrNull { it.deliveryState == DeliveryState.QUEUED }?.queueSequence),
+                consumerGate = ConsumerGate.OPEN,
+                consumerStatus = ConsumerStatus.IDLE,
+                fetchLease = null,
+                items = items,
+            )
+        }
+        consumer.wake(constraintsSatisfied = true)
+    }
 
     fun recordPermanentFailure() = consumer.recordPermanentFailure()
 

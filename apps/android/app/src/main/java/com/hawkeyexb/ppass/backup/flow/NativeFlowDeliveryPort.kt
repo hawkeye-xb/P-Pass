@@ -3,6 +3,7 @@ package com.hawkeyexb.ppass.backup.flow
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.util.Log
 import com.hawkeyexb.ppass.proto.FlowCompletionReceipt
 import com.hawkeyexb.ppass.proto.FlowFetchRequest
 import com.hawkeyexb.ppass.proto.Methods
@@ -22,6 +23,27 @@ internal interface FlowReceiptClient {
     suspend fun offer(request: FlowFetchRequest)
     suspend fun fetch(request: FlowFetchRequest): FlowCompletionReceipt
     suspend fun cancel(request: FlowFetchRequest)
+}
+
+/** Validates a Desktop receipt then routes it through the owning Flow runner. */
+internal fun relayFlowCompletion(
+    receipt: FlowCompletionReceipt,
+    request: FlowFetchRequest,
+    onReceipt: (CompletionReceipt) -> Unit,
+) {
+    require(receipt.queueSequence == request.queueSequence)
+    require(receipt.pairingEpoch == request.pairingEpoch)
+    require(receipt.leaseToken == request.leaseToken)
+    require(receipt.contentHash == request.contentHash)
+    onReceipt(
+        CompletionReceipt(
+            queueSequence = receipt.queueSequence,
+            receiptId = receipt.receiptId,
+            pairingEpoch = PairingEpoch(receipt.pairingEpoch),
+            leaseToken = receipt.leaseToken,
+            contentHash = receipt.contentHash,
+        ),
+    )
 }
 
 /** Ctrl-plane adapter; data stays on native iroh-blobs through the ticket. */
@@ -58,6 +80,7 @@ internal class NativeFlowDeliveryPort(
     private val pairing: () -> Pairing?,
     private val identityKey: () -> ByteArray,
     private val onPermanentFailure: () -> Unit,
+    private val onReceipt: (CompletionReceipt) -> Unit,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : DeliveryPort {
     private var active: ActiveDelivery? = null
@@ -92,7 +115,8 @@ internal class NativeFlowDeliveryPort(
                 desktop.offer(request)
                 val receipt = desktop.fetch(request)
                 acceptReceipt(receipt, request)
-            } catch (_: Throwable) {
+            } catch (failure: Throwable) {
+                Log.e("PPassFlow", "Native Flow delivery failed; preserving the strict head for retry", failure)
                 onPermanentFailure()
             }
         }
@@ -116,19 +140,7 @@ internal class NativeFlowDeliveryPort(
     }
 
     private fun acceptReceipt(receipt: FlowCompletionReceipt, request: FlowFetchRequest) {
-        require(receipt.queueSequence == request.queueSequence)
-        require(receipt.pairingEpoch == request.pairingEpoch)
-        require(receipt.leaseToken == request.leaseToken)
-        require(receipt.contentHash == request.contentHash)
-        CompletionAndScope(ledger).acceptCompletionReceipt(
-            CompletionReceipt(
-                queueSequence = receipt.queueSequence,
-                receiptId = receipt.receiptId,
-                pairingEpoch = PairingEpoch(receipt.pairingEpoch),
-                leaseToken = receipt.leaseToken,
-                contentHash = receipt.contentHash,
-            ),
-        )
+        relayFlowCompletion(receipt, request, onReceipt)
     }
 
     private fun hashSource(sourceRef: String): String {

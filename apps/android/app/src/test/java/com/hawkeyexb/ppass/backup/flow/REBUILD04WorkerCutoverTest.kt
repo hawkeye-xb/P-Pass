@@ -2,6 +2,7 @@ package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.backup.BackupWorker
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class REBUILD04WorkerCutoverTest {
@@ -27,6 +28,15 @@ class REBUILD04WorkerCutoverTest {
     }
 
     @Test
+    fun terminal_delivery_failure_is_not_projected_as_idle() {
+        val state = flowUiStateOf(
+            DiscoveryLedgerSnapshot(items = listOf(item(1L, DeliveryState.FAILED_NEEDS_USER))),
+        )
+
+        assertFalse("a failed durable head must surface an actionable status", state is FlowUiState.Idle)
+    }
+
+    @Test
     fun continue_reopens_only_the_durable_head_and_cancel_keeps_confirmed_items() {
         val dir = java.nio.file.Files.createTempDirectory("ppass-rebuild04-continue-cancel").toFile()
         val ledger = DiscoveryLedgerStore(dir)
@@ -48,7 +58,7 @@ class REBUILD04WorkerCutoverTest {
         runner.pause()
         runner.continueFlow(constraintsSatisfied = true)
 
-        assertEquals("Continue starts the unconfirmed durable head only", listOf(1L, 2L), delivery.starts)
+        assertEquals("receipt advances once and Continue resumes only the same durable head", listOf(1L, 2L, 2L), delivery.starts)
         assertEquals(DeliveryState.TRANSFERRING, ledger.load().items.single { it.queueSequence == 2L }.deliveryState)
 
         runner.cancelCurrentRound("round-1")

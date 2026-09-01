@@ -12,6 +12,7 @@ import com.hawkeyexb.ppass.backup.flow.flowLedgerSnapshot
 import com.hawkeyexb.ppass.backup.flow.flowUiStateOf
 import com.hawkeyexb.ppass.backup.flow.pauseFlow
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
+import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
@@ -67,6 +68,7 @@ class BackupUiStateHolder(
                 when (flowUiStateOf(flowLedgerSnapshot(context))) {
                     is FlowUiState.Transferring -> pauseFlow(context)
                     FlowUiState.PausedByUser -> continueFlow(context)
+                    FlowUiState.NeedsUserAttention -> retryFailedFlow(context)
                     else -> requestFlowWake(context)
                 }
             }
@@ -92,6 +94,7 @@ class BackupUiStateHolder(
             FlowUiState.PausedByUser -> BackupUiState.Paused
             FlowUiState.WaitingForConstraints -> BackupUiState.WaitingForConstraints
             is FlowUiState.Transferring -> BackupUiState.Sending(0, 0, state.fileName)
+            FlowUiState.NeedsUserAttention -> BackupUiState.Trouble("Flow delivery exhausted its retry limit")
             FlowUiState.CancelledCurrentRound -> BackupUiState.CancelledCurrentRound
         }
     }
