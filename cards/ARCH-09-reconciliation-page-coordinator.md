@@ -1,6 +1,6 @@
 # ARCH-09 P1 对账分页协调与源存在性裁决接线（L2）
 
-> 🟠 状态：进行中（认领与拆卡已发布；尚未写生产代码）
+> 🟠 状态：进行中（R-01 协调 tracer 已完成；R-02 / source adapter 待做）
 > 级别：L2 · 前置：ARCH-07、ARCH-08 · 协同分支：`main` · 基线：`e7269a4`
 > 当前节点：把已确认账本项接到 presence page 和 ARCH-07 裁决；下一步：先写 R-01/R-02 的协调器失败合同。
 
@@ -40,6 +40,7 @@ ARCH-07 的账本裁决与 ARCH-08 的 presence query 已完成。无外部阻�
 ## 实施记录
 
 - 2026-09-01：从 ARCH-01 §9 与 R-01/R-02 拆出。既有 `BackupWorker` 的 `openInputStream(...).use {}` 是旧批次候选的可读探针，不能接入本卡；协调器改以独立 source-presence port 表达同样的“一次打开立即关闭、不读内容”事实，避免复用旧上传管线。
+- 2026-09-01：R-01 RED→GREEN：`ARCH01ReconciliationCoordinatorTest` 先因协调器缺失失败，随后以 1/1 确认 current epoch confirmed hash 按 queueSequence 成页；远端 present 项零 source probe，missing 项才探测 `sourceRef` 并持久 `NEEDS_DECISION`，两项均保持 `CONFIRMED` 和 `attemptCount=0`。
 
 ## 备注
 

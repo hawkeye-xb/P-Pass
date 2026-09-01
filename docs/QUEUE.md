@@ -34,7 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [ARCH-09](../cards/ARCH-09-reconciliation-page-coordinator.md) | P1 账本分页 / presence / source probe 协调已拆卡；尚未写生产代码 | 先写 R-01/R-02 协调器失败合同 | main |
+| [ARCH-09](../cards/ARCH-09-reconciliation-page-coordinator.md) | R-01 协调 tracer 已绿：present 零 source probe，missing 写 NEEDS_DECISION | 补 R-02、source adapter 与反证 | main |
 
 
 
