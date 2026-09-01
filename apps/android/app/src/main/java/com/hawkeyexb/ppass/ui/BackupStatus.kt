@@ -25,6 +25,8 @@ sealed class StatusLine {
 
     /** 失败才说话。 */
     data object Trouble : StatusLine()
+    data object WaitingForConstraints : StatusLine()
+    data object CancelledCurrentRound : StatusLine()
 }
 
 /**
@@ -42,6 +44,8 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
     is BackupUiState.Sending,
     -> StatusLine.Working(state)
     is BackupUiState.NoAlbums -> StatusLine.NoAlbums
+    is BackupUiState.WaitingForConstraints -> StatusLine.WaitingForConstraints
+    is BackupUiState.CancelledCurrentRound -> StatusLine.CancelledCurrentRound
     // UX-13: 被暂停在状态**文案**上与空闲同档（Pending/Ready 照旧说欠账），
     // 区别只在英雄区按钮——见 [heroActionOf]。
     is BackupUiState.Idle,
