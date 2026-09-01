@@ -5,11 +5,17 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 # ADR-001 / §B.1: iroh is allowed in this crate ONLY. Declared here (not in
 # workspace.dependencies) to keep the isolation visible at a glance.
 iroh = "1"
-tokio.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "fs", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
+jni = "0.21"
+libc = "0.2"
 futures-core.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
