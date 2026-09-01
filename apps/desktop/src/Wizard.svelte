@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { Button } from "$lib/components/ui/button";
+  import { startupFailureText } from "$lib/daemonStartupError.js";
 
   // 2026-08-17：向导页对齐设计稿 v2 重写——跟 App.svelte 迁移页同款
   // 按钮族常量（BTN=主按钮 ink 底纸字，BTN_OUTLINE=次按钮透明底描边，
@@ -96,7 +97,15 @@
           break;
         } catch (_) {}
       }
-      if (!ready) throw new Error("后台服务没有在 10 秒内就绪");
+      if (!ready) {
+        let stderr = null;
+        try {
+          stderr = await invoke("daemon_startup_error");
+        } catch (_) {}
+        throw new Error(
+          startupFailureText(stderr) || "后台服务未能启动。请检查后台服务日志。",
+        );
+      }
       onDone();
     } catch (e) {
       error = `启动后台服务失败：${e}`;

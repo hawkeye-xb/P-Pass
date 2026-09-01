@@ -223,6 +223,28 @@ fn start_daemon() -> Result<String, String> {
     }
 }
 
+/// The last non-empty line written by the sidecar to the LaunchAgent stderr
+/// log. The plist names the log location; if it is absent or unreadable, do
+/// not guess a path or invent a failure reason.
+fn daemon_startup_stderr_from(plist: &std::path::Path) -> Option<String> {
+    let plist = std::fs::read_to_string(plist).ok()?;
+    let (_, stderr_path) = daemon_logs::parse_plist_log_paths(&plist);
+    let stderr = daemon_logs::tail(std::path::Path::new(stderr_path.as_deref()?), 64 * 1024)?;
+    stderr
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// The wizard asks only after its existing readiness wait has elapsed. This
+/// exposes the daemon's own stderr unchanged, so the UI can explain known
+/// failures without replacing actionable diagnostic text.
+#[tauri::command]
+fn daemon_startup_error() -> Option<String> {
+    daemon_startup_stderr_from(&daemon_logs::plist_path())
+}
+
 /// Stop the resident service the way a user means it: unregister the
 /// autostart entry FIRST (so launchd won't respawn it), then ask the
 /// running daemon to shut down. "能优雅退出"与"崩溃自动恢复"必须并存
@@ -559,6 +581,7 @@ pub fn run() {
             disable_auto_sleep,
             write_config,
             start_daemon,
+            daemon_startup_error,
             stop_daemon,
             pause_daemon_for_update,
             resume_daemon_after_update,
@@ -615,6 +638,29 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_failure_reads_the_latest_sidecar_stderr_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stderr = tmp.path().join("ppf-daemon.err");
+        let daemon_error =
+            "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
+        std::fs::write(&stderr, format!("starting daemon\n{daemon_error}\n")).unwrap();
+        let plist = tmp.path().join("com.p-pass.daemon.plist");
+        std::fs::write(
+            &plist,
+            format!(
+                "<plist><dict><key>StandardErrorPath</key><string>{}</string></dict></plist>",
+                stderr.display()
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            daemon_startup_stderr_from(&plist).as_deref(),
+            Some(daemon_error)
+        );
+    }
 
     /// DESK-10 硬判据：**daemon 不可达时点导出也必须出 zip**，且包里有
     /// daemon 的 .err/.log 与版本号。反证做法：把 `assemble_export` 改成
