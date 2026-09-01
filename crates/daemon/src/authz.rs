@@ -24,8 +24,8 @@ pub enum Decision {
 /// (`hello` is capability negotiation and carries no data.)
 const UNPAIRED_METHODS: &[&str] = &[methods::HELLO, methods::PAIR_REQUEST];
 
-/// 权限表 (T-030 卡面): viewer 只许浏览/诊断; member 加 backup.*;
-/// owner 全部（pair 确认走 IPC 而非网络方法，见 T-034）.
+/// 权限表 (T-030): viewer 只许浏览/诊断; member 加 backup.* 和新 Flow
+/// delivery; owner 全部（pair 确认走 IPC 而非网络方法，见 T-034）。
 fn role_allows(role: Role, method: &str) -> bool {
     let viewer_ok = matches!(
         method,
@@ -41,14 +41,12 @@ fn role_allows(role: Role, method: &str) -> bool {
     // UX-06: 任一端可单方停止——任何已配对角色都可以撤销自己
     // （device.unpair 只作用于调用者自身，无需 owner 在场）。
     let self_unpair = method == methods::DEVICE_UNPAIR;
+    let member_delivery = method.starts_with("backup.") || method.starts_with("flow.");
     match role {
         Role::Viewer => viewer_ok || self_unpair,
-        Role::Member => viewer_ok || self_unpair || method.starts_with("backup."),
+        Role::Member => viewer_ok || self_unpair || member_delivery,
         Role::Owner => {
-            viewer_ok
-                || self_unpair
-                || method.starts_with("backup.")
-                || method == methods::PAIR_REQUEST
+            viewer_ok || self_unpair || member_delivery || method == methods::PAIR_REQUEST
         }
     }
 }
@@ -168,6 +166,9 @@ mod tests {
             methods::BACKUP_BEGIN,
             methods::BACKUP_MANIFEST,
             methods::BACKUP_COMMIT,
+            methods::FLOW_OFFER,
+            methods::FLOW_FETCH,
+            methods::FLOW_CANCEL,
             methods::PAIR_REQUEST,
         ] {
             assert!(!allowed(Some(&d), m), "viewer must not reach {m}");
@@ -180,6 +181,9 @@ mod tests {
         assert!(allowed(Some(&d), methods::BACKUP_BEGIN));
         assert!(allowed(Some(&d), methods::BACKUP_MANIFEST));
         assert!(allowed(Some(&d), methods::BACKUP_COMMIT));
+        assert!(allowed(Some(&d), methods::FLOW_OFFER));
+        assert!(allowed(Some(&d), methods::FLOW_FETCH));
+        assert!(allowed(Some(&d), methods::FLOW_CANCEL));
         assert!(!allowed(Some(&d), methods::PAIR_REQUEST));
     }
 
