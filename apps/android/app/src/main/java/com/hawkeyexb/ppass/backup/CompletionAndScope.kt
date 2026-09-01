@@ -7,6 +7,7 @@ data class CompletionReceipt(
     val queueSequence: Long,
     val receiptId: String,
     val pairingEpoch: PairingEpoch = PairingEpoch.INITIAL,
+    val contentHash: String? = null,
 )
 
 class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
@@ -31,7 +32,12 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
             if (item.deliveryState == DeliveryState.CANCELLED_BY_SCOPE) return@update snapshot
             val items = snapshot.items.map {
                 if (it.queueSequence == receipt.queueSequence) {
-                    it.copy(deliveryState = DeliveryState.CONFIRMED, completionReceiptId = receipt.receiptId, partialRetained = false)
+                    it.copy(
+                        deliveryState = DeliveryState.CONFIRMED,
+                        completionReceiptId = receipt.receiptId,
+                        contentHash = receipt.contentHash,
+                        partialRetained = false,
+                    )
                 } else it
             }
             val next = items.firstOrNull { it.deliveryState == DeliveryState.QUEUED }?.queueSequence
