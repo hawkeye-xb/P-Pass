@@ -174,6 +174,11 @@ data class BackupManifest(
 )
 
 @Serializable
+data class BackupPresenceQuery(
+    val hashes: List<String> = emptyList(),
+)
+
+@Serializable
 data class BackupMissing(
     val hashes: List<String> = emptyList(),
 )
@@ -214,6 +219,7 @@ object Methods {
     const val ASSET_BLOB_TICKET = "asset.blob_ticket"
     const val BACKUP_BEGIN = "backup.begin"
     const val BACKUP_MANIFEST = "backup.manifest"
+    const val BACKUP_PRESENCE = "backup.presence"
     const val BACKUP_COMMIT = "backup.commit"
     const val DIAG_STATUS = "diag.status"
     const val BACKUP_UPLOAD = "backup.upload"

@@ -42,6 +42,7 @@ ARCH-07 已提供持久内容身份及 `RemotePresence` / `SourcePresence` / `Re
 
 - 2026-09-01：从 ARCH-01 P1 的“低频分页检查已确认 hash 是否仍在 Desktop”边界拆出并认领。代码勘查确认 `backup.manifest` 的 bare-hash 分支会 `entry(peer).or_default()` 并 `touch()` session（`crates/daemon/src/backup.rs`），Android `BackupRunner.existCheck` 明确复用该旧批次校准路径，二者均不符合独立、只读的 P1 对账语义。
 - 2026-09-01：daemon RED：`backup_flow` presence 合同因 `BackupPresenceQuery` 未定义而失败。GREEN：新增 `backup.presence` / `BackupPresenceQuery`、只读 `BackupEngine::presence()` 和 router 分派；目标集成测试 1/1 通过，已确认已提交 hash 不返回 missing、缺失 hash 原序返回，asset count 与 watermark 保持不变。Android adapter、空页/超页/非法 hash 反证仍待本卡后续完成。
+- 2026-09-01：远端复核：CI Rust #70 与 Dogfood Binaries #203 均绿色。Android RED→GREEN：`ARCH01RemotePresenceProbeTest` 先因页面构造器缺失失败，后以 2/2 验证 500 项上限、输入顺序、空页/501 项/非法 hash 拒绝；实际 `DaemonClient` 调用与 missing 解码仍待接线。
 
 ## 备注
 
