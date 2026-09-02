@@ -17,6 +17,31 @@ use tauri::Manager;
 // 需内联注册（独立函数标注单参数类型会类型不匹配）。
 
 /// Forward one IPC method. The frontend does the rest.
+// MOB-47: 视频弹窗走 asset 协议从磁盘直接 streaming 播放，避免把整段
+// 视频 base64 拉进内存。asset 协议 scope 在 runtime 打开：视频在
+// originals/ 下、不递归（asset.rel_path 是 <node>/YYYY/MM/<file> 的
+// 平铺相对路径），授权目录 = 视频文件所在的那一层（<node>/YYYY/MM）。
+// 前端传的是 `asset.path` 返回的原始文件系统路径（不做任何编码）。
+//
+// 授权范围收敛到「打开过的视频所在的 <node>/YYYY/MM 那层」，只放开不比
+// 打开视频本身更宽的路径；用户从未点开的路径一律拒绝。
+//
+// 注意：tauri::Manager::asset_protocol_scope 是 #[cfg(feature =
+// "protocol-asset")]（不在 default），需在 src-tauri/Cargo.toml 显式
+// 声明该 feature（已在 MOB-47 加）。
+#[tauri::command]
+fn allow_media_scope(app: tauri::AppHandle, path: String) -> Result<(), String> {
+    use tauri::Manager;
+    let parent = std::path::Path::new(&path)
+        .parent()
+        .ok_or_else(|| "路径无父目录".to_string())?;
+    // 只放开视频文件所在的那一层目录，不递归到更深、也不放开整库。
+    app.asset_protocol_scope()
+        .allow_directory(parent, false)
+        .map_err(|e| format!("授权媒体目录失败：{e}"))
+}
+
+/// Forward one IPC method. The frontend does the rest.
 #[tauri::command]
 fn daemon_call(method: String, params: Value) -> Result<Value, String> {
     ipc::DaemonHandle::discover()?.call(&method, params)
@@ -586,7 +611,8 @@ pub fn run() {
             pause_daemon_for_update,
             resume_daemon_after_update,
             restart_daemon_process,
-            export_logs_bundle
+            export_logs_bundle,
+            allow_media_scope
         ])
         .setup(|app| {
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
