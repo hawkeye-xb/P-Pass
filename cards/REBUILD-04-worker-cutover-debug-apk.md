@@ -1,8 +1,8 @@
 # REBUILD-04 Worker 切换、最小状态呈现与首包验收（L2）
 
 > 🟡 状态：待真机验收 · 协同分支：`main` · 前置：REBUILD-03
-> 级别：L2 · 阻塞：三星测试相册首验
-> 当前节点：三星首包已通过 Flow 原生 fetch/receipt 入库 · 下一步：Pause → 杀 App → Continue → Cancel
+> 级别：L2 · 阻塞：REBUILD-05 范围扩展补扫；当前无可传队头，不能开始精确 Pause 验收
+> 当前节点：三星首包已通过 Flow 原生 fetch/receipt 入库 · 下一步：REBUILD-05 后以测试相册完成 Pause → 杀 App → Continue → Cancel
 
 ## 问题
 
@@ -17,7 +17,7 @@
 - [x] Worker 不再执行旧 scan/hash/manifest/push/commit 主路径。
 - [x] UI 可区分用户 Pause 与条件等待；Continue 只恢复队头；Cancel Current Round 不影响 confirmed。
 - [x] `assembleDebug` 成功；只用测试相册安装验证。
-- [ ] 三星真机：传输中 Pause → 杀 App 重开仍 Pause → Continue 队头续传 → Cancel 不传剩余项。
+- [ ] 三星真机：传输中 Pause → 杀 App 重开仍 Pause → Continue 队头续传 → Cancel 不传剩余项（被 REBUILD-05 阻塞）。
 
 ## 范围
 
@@ -46,3 +46,9 @@ REBUILD-03；代码已完成。这是首次需要三星设备的卡。
   `FAILED_NEEDS_USER` 现在在 UI 显示可重试状态，显式 Retry 会重开失败队头并重置该次预算。
 - 本轮验证：`just ci`、`cargo deny check advisories`、daemon flow delivery 4/4、Android
   JVM **254 tests / 0 failures / 4 skipped**、debug APK；Desktop 和三星均已安装 **0.5.0**。
+- **2026-09-02 真机验收前置**：已选测试相册共 30 项，手机 Flow ledger 只有 26 项且
+  均 `CONFIRMED`；26 项为 25 个内容 hash，Desktop durable index 也是 25 个不同 hash。
+  因而 26→25 是预期内容去重。另有 4 项属于已选范围、但位于持久 DiscoveryCursor 之前，
+  没有进入 ledger（不是范围外、不是重复）；当前没有 `QUEUED`/`TRANSFERRING` 队头，
+  不能伪造 Pause → Continue → Cancel 的真机验收。范围保存未接入 Flow 的 ScopeRevision /
+  backfill，已开 REBUILD-05；本卡保持待验收，未宣告通过。
