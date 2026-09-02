@@ -36,7 +36,7 @@
 |---|---|---|---|
 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 三星 scope backfill 已使 26→30 confirmed | REBUILD-06 处理新队头 flow.offer 授权/回执，再对账并验 REBUILD-04 | `main` |
 | [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | 真机已定位 completed grant 的 lease rebind 缺口 | 更新 Desktop daemon 后不清数据复验三星 Pause | `main` |
-| [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 追踪相册选择计数恒 +4 的数据来源 | 写反证、修复全部展示位并跑 Android 验证 | `batch/mob-46` |
+
 | [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | L2 审查拒绝候选：asset scope 可受任意前端路径扩张，视频失败未降级；stale 回写已修 | 后端按 hash 精确授权单文件、补错误降级与回归验证后重新审查 | `batch/mob-47-security-fix` |
 
 
@@ -178,9 +178,12 @@ MOB-29、MOB-34、MOB-36、WATCH-03、WATCH-04、DESK-08、UI-03。
 
 ## 七、待你拍板（不定就动不了）
 
-**当前为空。**2026-08-27 清空：Apple 签名/公证已确认早就补齐、CI 一直在
-真跑,不是待拍板；「两个本机问题」指向的 `local-state.md` 已不
-存在、内容丢失，不再挂账——有新的本机问题请直接口述，我会重新建这个文件；
+| 卡 | 待确认事实 | 需要的裁决 |
+|---|---|---|
+| [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 卡面称选 3 个相册显示 7 是虚高；但现有 UI 明示“将备份 7 张照片”，实现也只累计照片数 | 提供原始截图/复现，或确认此处应改为显示相册数并重写文案与验收 |
+
+Apple 签名/公证已确认早就补齐、CI 一直在真跑,不是待拍板；「两个本机问题」指向的
+`local-state.md` 已不存在、内容丢失，不再挂账——有新的本机问题请直接口述，我会重新建这个文件；
 MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
