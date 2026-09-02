@@ -35,7 +35,7 @@
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 三星 scope backfill 已使 26→30 confirmed | REBUILD-06 处理新队头 flow.offer 授权/回执，再对账并验 REBUILD-04 | `main` |
-| [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | 已认领；对齐 `flow.offer` authz 与 receipt 时间线 | 写失败回归并修复，随后复验三星 Pause 流程 | `main` |
+| [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | stale Flow epoch guard + 回归测试已绿 | 补 delivery 层兜底、全量 Android 验证后复验三星 Pause | `main` |
 
 
 

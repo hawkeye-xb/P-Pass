@@ -203,7 +203,7 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
     synchronized(flowRuntimeLock) {
         flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let { return it }
         val ledger = DiscoveryLedgerStore(File(context.filesDir, "flow-state/$key"))
-        if (ledger.load().pairingEpoch != epoch) PairingEpochController(ledger).replaceDesktop(epoch)
+        PairingEpochController(ledger).ensureCurrentEpoch(epoch)
         lateinit var runner: FlowRunner
         val native = AndroidNativeIrohBlobsProvider.open(context.filesDir)
         val bridge = IrohBlobsProviderBridge(native) { source ->
