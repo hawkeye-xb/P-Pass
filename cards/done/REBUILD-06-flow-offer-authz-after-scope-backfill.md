@@ -1,8 +1,8 @@
 # REBUILD-06 新 Flow 对新媒体的 offer/fetch 授权与回执一致性（L2）
 
-> 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-05
-> 级别：L2 · 阻塞：需要三星与 Desktop 已配对会话
-> 当前节点：真机已将拒绝收敛到 completed grant 的 lease 不同；receipt rebind 回归已绿 · 下一步：更新 Desktop daemon 后，不清数据重验三星
+> ✅ 状态：归档 · 协同分支：`main` · 前置：REBUILD-05
+> 级别：L2 · 阻塞：无
+> 当前节点：三星新队头完成、Pause / 重启 / Continue / Cancel 验收通过
 
 ## 问题
 
@@ -21,12 +21,12 @@
 
 ## 验收标准
 
-- [ ] Desktop 日志与手机 Flow ledger 时间线给出 `err.not_authorized` 的具体授权判据；不以
+- [x] Desktop 日志与手机 Flow ledger 时间线给出 `err.not_authorized` 的具体授权判据；不以
   重新配对或清库掩盖根因。
-- [ ] 一项新增测试媒体在有效配对下得到 `CONFIRMED`，或以可见、可重试的失败终态收敛；
+- [x] 一项新增测试媒体在有效配对下得到 `CONFIRMED`，或以可见、可重试的失败终态收敛；
   手机与 Desktop 的 distinct content hash 数可解释一致。
-- [ ] 只用独立测试相册验证，不删除真实照片或重置既有测试账本。
-- [ ] REBUILD-04 的 Pause → 杀 App → 重开仍 Pause → Continue → Cancel 流程使用该修复后的
+- [x] 只用独立测试相册验证，不删除真实照片或重置既有测试账本。
+- [x] REBUILD-04 的 Pause → 杀 App → 重开仍 Pause → Continue → Cancel 流程使用该修复后的
   可传队头完成。
 
 ## 范围
@@ -59,3 +59,10 @@ REBUILD-05 的 scope backfill 已在三星测试相册实测；需要当前三�
   lease token 不同。完成回执的 identity 不可变，但恢复后的同 epoch + hash 允许原 receipt
   rebind 到新 lease/provider；不同 epoch/hash 仍严格拒绝。RED：recovered lease `offer` 返回
   `GuardMismatch`；GREEN：`verified_native_fetch_materializes_before_a_durable_receipt` 回放原 receipt。
+- **最终三星验收**：更新 Desktop daemon 与 Android debug APK 后，新队头从 30 到 31
+  `CONFIRMED`，`PPassFlow` 仅记录 epoch preflight 成功、无 `err.not_authorized`。Phone 当前
+  32 个 `CONFIRMED` 的 31 个不同 hash 全部在 Desktop completed grants / assets 中；Desktop
+  额外的 1 个同 epoch completed grant 是此前手机不再持有的历史 Flow 行，不影响当前队列
+  或 receipt 收敛。随后用隔离测试相册生成的 512MB 文件复验 REBUILD-04 全流程：Pause、
+  强杀重开仍 Pause、Continue 原队头、再次 Pause 后 Cancel Current Round；最终
+  32 `CONFIRMED` + 1 `CANCELLED_BY_USER_ROUND`。
