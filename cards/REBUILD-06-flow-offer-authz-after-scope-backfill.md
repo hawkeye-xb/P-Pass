@@ -1,8 +1,8 @@
 # REBUILD-06 新 Flow 对新媒体的 offer/fetch 授权与回执一致性（L2）
 
-> ⬜ 状态：未开工 · 协同分支：待认领 · 前置：REBUILD-05
+> 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-05
 > 级别：L2 · 阻塞：需要三星与 Desktop 已配对会话
-> 当前节点：REBUILD-05 真机后发现 · 下一步：对齐 Desktop authz / receipt 时间线并修复
+> 当前节点：已认领，先对齐 `flow.offer` authz 与 receipt 时间线 · 下一步：写失败回归、修复后重验三星 Pause 流程
 
 ## 问题
 
