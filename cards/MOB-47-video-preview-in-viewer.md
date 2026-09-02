@@ -1,6 +1,6 @@
 # MOB-47 视频资产在查看器中不可预览——桌面破图、Android 仅 MVP，换成熟播放方案
 
-> 🟡 状态：代码已合并，等真机验收 · 协同分支：`batch/mob-47-video-preview` · 当前节点：双端代码完成（桌面 `<video>` 分流 / Android Media3 ExoPlayer），真机验收欠账
+> 🟡 状态：代码完成，待合并与真机验收 · 协同分支：`batch/mob-47-video-preview` · 当前节点：双端代码完成（桌面 `<video>` 分流 / Android Media3 ExoPlayer）且已通过本地复核 · 下一步：合并 `main` 后做双端真机验收
 > 级别：L2 · 阻塞：无（与 MOB-26 的手势层有衔接，见「阻塞与依赖」）
 
 ## 问题

@@ -37,6 +37,7 @@
 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 三星 scope backfill 已使 26→30 confirmed | REBUILD-06 处理新队头 flow.offer 授权/回执，再对账并验 REBUILD-04 | `main` |
 | [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | runtime / delivery epoch guard + 回归测试已绿 | 全量 Android 验证后复验三星 Pause | `main` |
 | [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 追踪相册选择计数恒 +4 的数据来源 | 写反证、修复全部展示位并跑 Android 验证 | `batch/mob-46` |
+| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 双端代码完成且本地复核通过，等待与 R6 不冲突的合并窗口 | 合并 `main` 后做桌面和 Android 真机验收 | `batch/mob-47-video-preview` |
 
 
 
@@ -148,7 +149,7 @@
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 点视频 → 桌面弹窗直接播放（画面/声音/进度条可拖）+ Android 播放控制（播放/暂停/进度/seek）；退出无泄漏；APK +4.72 MiB（ICON-02 体积对照已在卡内） | L2 |
+
 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | **阻塞：**已选范围 30 项中 4 项未入 Flow、当前无可传队头；REBUILD-05 后才验 Pause → kill → Continue → Cancel | L2 |
 | [UX-14](../cards/UX-14-a-failed-retry-is-rendered-as-paused.md) | 暂停 → 继续 → 传输中途关掉 desktop 的 daemon 制造一次连接中断 → 界面**不许**又显示「继续」（应该说它的真实状态：还有 N 张待备份 / 出错了） | L1 |
 | [MOB-40](../cards/MOB-40-backup-runs-before-the-user-picks-albums.md) | **卸载重装 → 配对 → 只选那个 11 张的相册 → 全程只传 11 张**；配对到选完相册之间一张都不许传（这一条不过，别的都不用测） | L0 |
