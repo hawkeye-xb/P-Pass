@@ -126,6 +126,15 @@ dependencies {
     // 敏感，为一两个图标不划算。若将来开了 R8 可重新评估。
     implementation("androidx.compose.material:material-icons-core")
 
+    // MOB-47: 成熟播放器替代 VideoView——Media3 ExoPlayer（官方标准）。
+    // PlayerView 自带播放/暂停/进度条/seek/错误态；Compose 用 AndroidView
+    // 桥接 + DisposableEffect 释放。media3-ui 提供 PlayerView，media3-exoplayer
+    // 提供 ExoPlayer 本体（media3-common 由其传递）。
+    // 版本钉 1.9.4：1.10+ 要求 compileSdk 36，而本仓钉 compileSdk 35
+    // （AGP 8.7.3 上限 35）——升 compileSdk 是独立卡的范围，不在本卡动。
+    implementation("androidx.media3:media3-exoplayer:1.9.4")
+    implementation("androidx.media3:media3-ui:1.9.4")
+
     // T-052 camera scan: CameraX preview/analysis + ZXing core decode.
     // ZXing is pure Java — no Google Play Services, works on HarmonyOS
     // compatibility layers (卓易通) where GMS is absent.

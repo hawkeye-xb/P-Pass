@@ -1,11 +1,14 @@
 // T-056: video playback — fetch the original over the download plane
-// into the cache dir, then hand it to the system player view. MVP is
-// download-then-play; streaming DataSource is an M3 refinement.
+// into the cache dir, then play it in-app. MOB-47 upgraded the MVP:
+// the system `VideoView` is replaced by the official Media3 ExoPlayer /
+// PlayerView, which ships real playback controls (play/pause, progress
+// bar, seek) and error state, and is released on dispose so nothing leaks.
+// Still download-then-play: a streaming progressive DataSource that reads
+// the transfer plane with range requests is a deliberate out-of-scope
+// enhancement (the card pins `loader.download` semantics unchanged).
 package com.hawkeyexb.ppass.ui
 
 import android.net.Uri
-import android.widget.VideoView
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +22,7 @@ import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -32,6 +36,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.proto.AssetMeta
 import java.io.File
@@ -134,8 +141,6 @@ fun VideoScreen(
                 // MOB-06: 右上角分享——ACTION_SEND 系统分享面板（微信/邮件/云盘…）。
                 // 仅 Ready 后可分享（未取到前无文件可发）。
                 Icon(
-                    // ICON-02: 图标库现成的 Material「分享」glyph——旧的自绘
-                    // ic_share.xml 抄的就是同一条 pathData，形状零差异。
                     imageVector = Icons.Filled.Share,
                     contentDescription = stringResource(R.string.share),
                     tint = PPColor.Paper,
@@ -168,15 +173,11 @@ fun VideoScreen(
                         stringResource(R.string.video_failed),
                         color = PPColor.PaperDim, fontSize = 16.sp,
                     )
-                    is VideoState.Ready -> AndroidView(
-                        modifier = Modifier.fillMaxSize(),
-                        factory = { ctx ->
-                            VideoView(ctx).apply {
-                                setVideoURI(Uri.fromFile(s.file))
-                                setOnPreparedListener { it.isLooping = true; start() }
-                            }
-                        },
-                    )
+                    // MOB-47: 播放器层换 Media3 ExoPlayer/PlayerView——
+                    // PlayerView 自带播放/暂停/进度条/seek/错误态，播放器在
+                    // onDispose 里 release，退出查看器不泄漏（logcat 无
+                    // MediaCodec/ExoPlayer 泄漏即验收项）。
+                    is VideoState.Ready -> VideoPlayer(s.file)
                 }
             }
             // RET-01: 视频 Ready 才显示动作（未取到前无原图可存/可开）。
@@ -208,4 +209,35 @@ fun VideoScreen(
             }
         }
     }
+}
+
+/** MOB-47: 单个视频文件的 Media3 播放器。player 的生命周期绑定在
+ *  composition 上——[DisposableEffect] onDispose 里 `release()`，退出查看器
+ *  / 切 asset 时播放器立即释放（不依赖 AndroidView 的 destroy）。 */
+@Composable
+private fun VideoPlayer(file: File) {
+    val context = LocalContext.current
+    // 按文件实例记住 player：同一 asset 的 Ready 文件对象稳定，切走即随
+    // composition 销毁。download-then-play：文件已完整落在 cacheDir，播放
+    // 不阻塞主线程（ExoPlayer 内部线程）。
+    val player = remember(file) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(Uri.fromFile(file)))
+            prepare()
+            playWhenReady = true
+        }
+    }
+    DisposableEffect(player) {
+        onDispose { player.release() }
+    }
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = { ctx ->
+            PlayerView(ctx).apply {
+                useController = true // 播放/暂停/进度条/seek/错误态
+                this.player = player
+            }
+        },
+        update = { it.player = player },
+    )
 }
