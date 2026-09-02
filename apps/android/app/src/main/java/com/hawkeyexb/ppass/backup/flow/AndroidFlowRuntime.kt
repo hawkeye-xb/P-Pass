@@ -71,6 +71,74 @@ internal class AndroidFlowDiscoveryPort(
         return DiscoveryPage(candidates, next)
     }
 
+    override fun backfill(request: ScopeBackfillRequest): ScopeBackfillPage {
+        if (request.boundary == DiscoveryCursor.INITIAL) {
+            return ScopeBackfillPage(emptyList(), request.cursor, complete = true)
+        }
+        val generation = if (android.os.Build.VERSION.SDK_INT >= 30) {
+            android.provider.MediaStore.MediaColumns.GENERATION_MODIFIED
+        } else {
+            android.provider.MediaStore.MediaColumns.DATE_MODIFIED
+        }
+        val collection = android.provider.MediaStore.Files.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL)
+        val buckets = selectedBuckets() ?: return ScopeBackfillPage(emptyList(), request.cursor, complete = true)
+        if (buckets.isEmpty()) return ScopeBackfillPage(emptyList(), request.cursor, complete = true)
+        val projection = arrayOf(
+            android.provider.MediaStore.MediaColumns._ID,
+            android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
+            android.provider.MediaStore.MediaColumns.MIME_TYPE,
+            android.provider.MediaStore.MediaColumns.SIZE,
+            generation,
+            android.provider.MediaStore.MediaColumns.DATE_MODIFIED,
+            android.provider.MediaStore.MediaColumns.BUCKET_ID,
+        )
+        val selection = buildString {
+            append("${android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?, ?)")
+            append(" AND ($generation > ? OR ($generation = ? AND ${android.provider.MediaStore.MediaColumns._ID} > ?))")
+            append(" AND ($generation < ? OR ($generation = ? AND ${android.provider.MediaStore.MediaColumns._ID} <= ?))")
+            append(" AND ${android.provider.MediaStore.MediaColumns.BUCKET_ID} IN (${buckets.joinToString(",")})")
+        }
+        val args = arrayOf(
+            android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
+            android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
+            request.cursor.lastGeneration.toString(),
+            request.cursor.lastGeneration.toString(),
+            request.cursor.lastMediaId.toString(),
+            request.boundary.lastGeneration.toString(),
+            request.boundary.lastGeneration.toString(),
+            request.boundary.lastMediaId.toString(),
+        )
+        val candidates = mutableListOf<DiscoveryCandidate>()
+        var next = request.cursor
+        var complete = true
+        resolver.query(collection, projection, selection, args, "$generation ASC, ${android.provider.MediaStore.MediaColumns._ID} ASC")?.use { rows ->
+            val id = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
+            val name = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DISPLAY_NAME)
+            val mime = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.MIME_TYPE)
+            val size = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.SIZE)
+            val gen = rows.getColumnIndexOrThrow(generation)
+            val modified = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_MODIFIED)
+            val bucket = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_ID)
+            while (rows.moveToNext()) {
+                if (candidates.size == DISCOVERY_PAGE_SIZE) {
+                    complete = false
+                    break
+                }
+                val rowId = rows.getLong(id)
+                val rowGeneration = rows.getLong(gen)
+                candidates += DiscoveryCandidate(
+                    sourceRef = Uri.withAppendedPath(collection, rowId.toString()).toString(),
+                    sourceVersion = "$rowGeneration:${rows.getLong(modified)}:${rows.getLong(size)}",
+                    bucketId = rows.getLong(bucket),
+                    fileName = rows.getString(name).orEmpty(),
+                    mediaType = rows.getString(mime) ?: "application/octet-stream",
+                )
+                next = DiscoveryCursor(rowGeneration, rowId)
+            }
+        }
+        return ScopeBackfillPage(candidates, next, complete)
+    }
+
     private companion object { const val DISCOVERY_PAGE_SIZE = 500 }
 }
 
@@ -78,6 +146,13 @@ internal class AndroidFlowDiscoveryPort(
 internal fun requestFlowWake(context: Context, constraintsSatisfied: Boolean = true) {
     val app = context.applicationContext
     thread(name = "ppass-flow-wake") { runFlowWake(app, constraintsSatisfied) }
+}
+
+/** Scope changes only record durable Flow work; the scheduled wake enforces runtime constraints. */
+internal fun requestFlowScopeBackfill(context: Context) {
+    runtimeFor(context.applicationContext)?.let {
+        synchronized(flowTriggerLock) { it.runner.requestScopeBackfill() }
+    }
 }
 
 internal fun runFlowWake(context: Context, constraintsSatisfied: Boolean = true) {

@@ -74,6 +74,7 @@ import com.hawkeyexb.ppass.backup.BACKUP_WORK_NAME
 import com.hawkeyexb.ppass.backup.WatermarkStore
 import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
+import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfill
 import com.hawkeyexb.ppass.ui.BackupStartedScreen
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
@@ -706,16 +707,11 @@ fun PPassApp() {
                             selected = sel,
                             allCurrent = list.map { it.id }.toSet(),
                         )
-                        // MOB-20: 备份范围**扩大**时必须把水位归零。
-                        // 扫描是 scanSince(watermark) 增量的，而新勾选的相册
-                        // 里装的是**老照片**（generation 远小于当前水位）——
-                        // 不归零就永远扫不到它们，用户看到的是"选了相册却
-                        // 一张都不同步"（2026-08-19 真机实测）。
-                        // 只在集合真的新增时归零：范围不变或缩小不必重扫。
-                        // 代价是一次全量扫描，但有 hash 缓存 + daemon 侧去重
-                        // 兜着，且改范围本身是低频操作。
+                        // REBUILD-05: 范围扩大不再重置 legacy watermark。
+                        // 新 Flow 以当前 discovery cursor 为上界持久化历史补扫；
+                        // 它不扰动当前严格队头，结果只会追加到后续队列。
                         if (added.isNotEmpty()) {
-                            WatermarkStore(context.filesDir).save(0)
+                            requestFlowScopeBackfill(context)
                         }
                         // MOB-02 §四事件①: 选完/改完备份范围返回 → 用户在场
                         // 档触发（只查 Wi-Fi 不查充电）；不满足则 WorkManager

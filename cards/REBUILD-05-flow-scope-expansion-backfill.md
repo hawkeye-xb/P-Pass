@@ -2,7 +2,7 @@
 
 > 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-04 代码切换
 > 级别：L2 · 阻塞：无
-> 当前节点：已认领，先写范围扩展游标前补扫的失败回归测试 · 下一步：最小接线 ScopeRevision / backfill 后跑 Android JVM 与三星验收
+> 当前节点：Flow ScopeRevision / 历史补扫已接线并完成 Android JVM + debug APK 验证 · 下一步：安装到三星，仅测试相册验证补扫与 REBUILD-04 精确流程
 
 ## 问题
 
@@ -23,8 +23,8 @@ DiscoveryCursor 之前、但新进入已选范围的媒体也必须原子入账�
   `CONFIRMED` 项不重复入队或传输。
 - [ ] 自动测试覆盖 ScopeRevision / backfill 与 cursor 的组合；移除 Flow backfill
   接线时测试必须失败。
-- [ ] 三星独立测试相册中，已选范围 30 项全部得到可解释状态：26 项经确认，1 项
-  内容去重，另 3 项进入后续 Flow 队列或具有明确终态；不触碰真实照片库。
+- [ ] 三星独立测试相册中，已选范围 30 项全部得到可解释状态；Desktop index 数量等于
+  Flow `CONFIRMED` 项的不同内容 hash 数，不触碰真实照片库。
 - [ ] REBUILD-04 的传输中 Pause → 杀 App → 重开仍 Pause → Continue 原队头续传 →
   Cancel Current Round 不传剩余项真机验收通过。
 
@@ -49,3 +49,15 @@ DiscoveryCursor 之前，当前无 backfill 请求，且 Flow scope revision 仍
 `MainActivity` 的范围保存只更新 `BackupScopeStore` / legacy watermarks；
 `CompletionAndScope.requestScopeBackfill` 存在但没有该生产接线。此卡只修这个
 新 Flow 范围扩展缺口，不把旧扫描机制带回生产路径。
+
+## 实施记录
+
+- `ScopeBackfillRequest` 现在持久化 immutable boundary 与分页 progress；范围扩大时
+  新 revision 与请求同一快照写入。历史页只追加新 stableId，不移动 live cursor，也不
+  改写当前 strict head。
+- `AndroidFlowDiscoveryPort` 在已保存 boundary 以内分页查询当前已选相册；范围保存
+  只登记 Flow backfill，随后仍由现有受约束 wake 消费，不再重置 legacy watermark。
+- RED：`scope_increase_records_a_separate_backfill_request_without_reusing_discovery_cursor`
+  在 revision 未前移时失败；`scope_expansion_backfills_cursor_predecessors_after_the_current_strict_head`
+  因 Flow 尚无 backfill API 而编译失败。GREEN：两类测试通过；Android JVM **255 tests /
+  0 failures / 4 skipped**（48 XML），`assembleDebug` 成功。

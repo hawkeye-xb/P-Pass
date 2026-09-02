@@ -4,6 +4,7 @@
 
 | 卡片 | 日期 | Commit | 状态 | 摘要 |
 |------|------|--------|------|------|
+| **REBUILD-05（L2）Flow 范围扩展补扫接线** | 2026-09-02 | 本 commit | 🟡 代码/JVM/debug APK 已验证，待三星测试相册 | 保存范围扩大时，持久 ScopeRevision + historical-backfill boundary/progress；Flow 在不移动 live cursor、不打断 strict head 的前提下追加游标前媒体，stableId 去重不重传既有 confirmed。RED 分别证明 revision 未前移与 Flow 缺 backfill API；GREEN：Android JVM **255 tests / 0 failures / 4 skipped**、debug APK。下一步安装三星，验证 30 项对账后再完成 REBUILD-04 Pause → kill → Continue → Cancel。 |
 | **REBUILD-04（L2）Worker Flow cutover 与最小状态呈现** | 2026-09-02 | 本 commit | 🟡 真机精确验收阻塞，未宣告通过 | 真机聚合对账：已选测试相册 30 项；Flow ledger 26 项均 `CONFIRMED`，其内容为 25 个不同 hash；Desktop index 也是 25 个不同 hash，故 26→25 为预期去重。另 4 项在已选第三相册、位于持久游标之前却未入 Flow，当前没有可传队头，不能伪造 Pause → kill → Continue → Cancel。范围保存未接入 Flow scope backfill，已开 REBUILD-05。 |
 | **REBUILD-03（L2）新生产 Flow runner 与触发接管** | 2026-09-01 | `75e3503` | ✅ 代码完成（Android JVM **392 tests / 0 failures / 4 skipped**；debug APK；`just ci` + deny） | `FlowRunner` 将 discovery request、原子入账、严格单头、Android native provider、Desktop fetch/receipt 与账本确认接成同一新路径。process wake / MediaWatch 只请求 Flow discovery；旧 Worker 未承载任何新 Flow 逻辑，R4 再降为 framework wake adapter 并接 UI/三星验收。 |
 | **REBUILD-01（L2）Android iroh-blobs provider bridge** | 2026-09-01 | `3f4066e` | ✅ 代码完成（provider 1/1；Android focused 2/2；debug APK） | `transport` 以 Android `cdylib` JNI 实装 `FsStore` / `BlobsProtocol` 的标准 ticket provider；Kotlin gate 只接受匹配 pairing epoch、lease 与 token 的当前项。revoke 停止活动 fetch / 关闭 provider 而不删除接收端 partial；APK 同时含 `libiroh_ffi.so` 与 `libtransport.so`。 |

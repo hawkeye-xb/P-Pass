@@ -7,9 +7,20 @@ data class DiscoveryPage(
     val nextCursor: DiscoveryCursor,
 )
 
+/** One historical page for a scope expansion; it never advances the live cursor. */
+data class ScopeBackfillPage(
+    val candidates: List<DiscoveryCandidate>,
+    val nextCursor: DiscoveryCursor,
+    val complete: Boolean,
+)
+
 /** Android's MediaStore adapter implements this port; tests use a deterministic page. */
 interface FlowDiscoveryPort {
     fun discover(cursor: DiscoveryCursor, scope: ScopeRevision): DiscoveryPage
+
+    /** Reads only the historical interval recorded by a durable scope-expansion request. */
+    fun backfill(request: ScopeBackfillRequest): ScopeBackfillPage =
+        ScopeBackfillPage(emptyList(), request.cursor, complete = true)
 }
 
 /**
@@ -30,12 +41,19 @@ class FlowRunner(
         ledger.update { it.copy(discoveryRequested = true) }
     }
 
+    /** Scope expansion is durable and coexists with the current strict window. */
+    fun requestScopeBackfill() {
+        val snapshot = ledger.load()
+        completion.requestScopeBackfill(ScopeRevision(snapshot.scopeRevision.value + 1L))
+    }
+
     /**
      * Consume at most one requested discovery page, then offer exactly the
      * durable strict head to the delivery port. Repeated triggers coalesce in
      * the ledger; active windows never receive another discovery page.
      */
     fun run(constraintsSatisfied: Boolean) {
+        backfillIfAdmitted()
         discoverIfAdmitted()
         consumer.wake(constraintsSatisfied)
     }
@@ -81,6 +99,13 @@ class FlowRunner(
     }
 
     fun recordPermanentFailure() = consumer.recordPermanentFailure()
+
+    private fun backfillIfAdmitted() {
+        val snapshot = ledger.load()
+        if (snapshot.consumerGate != ConsumerGate.OPEN) return
+        val request = snapshot.backfillRequests.firstOrNull() ?: return
+        ledger.commitScopeBackfill(request, discovery.backfill(request))
+    }
 
     private fun discoverIfAdmitted() {
         val snapshot = ledger.load()
