@@ -1,8 +1,8 @@
 # REBUILD-05 Flow 范围扩展补扫接线（L2）
 
-> ⬜ 状态：未开工 · 协同分支：待认领 · 前置：REBUILD-04 代码切换
+> 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-04 代码切换
 > 级别：L2 · 阻塞：无
-> 当前节点：REBUILD-04 真机验收前置发现 · 下一步：将范围保存接入 Flow 的 ScopeRevision / backfill，并补齐真实验收
+> 当前节点：已认领，先写范围扩展游标前补扫的失败回归测试 · 下一步：最小接线 ScopeRevision / backfill 后跑 Android JVM 与三星验收
 
 ## 问题
 
