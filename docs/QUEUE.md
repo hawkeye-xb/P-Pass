@@ -35,7 +35,9 @@
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 三星 scope backfill 已使 26→30 confirmed | REBUILD-06 处理新队头 flow.offer 授权/回执，再对账并验 REBUILD-04 | `main` |
-| [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | stale Flow epoch guard + 回归测试已绿 | 补 delivery 层兜底、全量 Android 验证后复验三星 Pause | `main` |
+| [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | runtime / delivery epoch guard + 回归测试已绿 | 全量 Android 验证后复验三星 Pause | `main` |
+| [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 追踪相册选择计数恒 +4 的数据来源 | 写反证、修复全部展示位并跑 Android 验证 | `batch/mob-46` |
+| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 核对桌面视频本地加载路径与 Android 播放器替换面 | 实现图片/视频分流并做双端验证 | `batch/mob-47-video-preview` |
 
 
 
@@ -116,11 +118,11 @@
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
-| P2 | [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 相册计数虚高：选 3 显 7、选 4 显 8（恒 +4）——计数说谎，伤范围信任 | L1 |
+
 | P2 | [MOB-44](../cards/MOB-44-harmonyos-no-background-for-restore.md) | 鸿蒙上恢复备份退后台就不跑（需鸿蒙真机取证窗口，与 DOG-03 同族） | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
 | P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
-| P2 | [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 视频资产查看器不可预览——桌面 `<img>` 破图（原图 base64 错标 image/jpeg）、Android 仅 VideoView MVP；桌面 `<video>` 分流先行，Android 换 Media3 ExoPlayer（2026-08-29 验收人派单） | L2 |
+
 
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 
