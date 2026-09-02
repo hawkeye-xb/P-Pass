@@ -34,7 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | scope backfill 三星通过；当前手机 confirmed hash 均在 Desktop | 单独裁决 1 条历史 completed grant 的对账呈现，不阻塞 REBUILD-04 / 06 | `main` |
+| [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 对账缺口根因已定位并修复（迟到回执被误判为 lease 取代而丢弃）；代码验证全绿 | 三星真机构造同类 Pause→Cancel 竞态验证迟到回执收敛正确 | `main` |
 
 
 
@@ -101,7 +101,7 @@
 | R1b | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | R0 | ✅ Desktop fetch + completion receipt |
 | R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | ✅ 新生产 Flow runner |
 | R3 | [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | R2 | ✅ 三星 Pause → kill → reopen → Continue → Cancel 通过 |
-| R4 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | 🟡 scope backfill 真机通过；跨端对账与 REBUILD-04 等 REBUILD-06 |
+| R4 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | 🟡 对账缺口根因已修复（迟到回执误判为 lease 取代），代码验证全绿；待三星真机构造同类竞态验收 |
 | R5 | [REBUILD-06](../cards/done/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | R4 | ✅ completed receipt 的 recovered lease rebind 已在三星通过 |
 
 ---

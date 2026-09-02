@@ -1,8 +1,11 @@
 # REBUILD-05 Flow 范围扩展补扫接线（L2）
 
 > 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-04 代码切换
-> 级别：L2 · 阻塞：REBUILD-06（新媒体 `flow.offer` 被 Desktop 拒绝）
-> 当前节点：三星已确认游标前 4 项经 scope backfill 入账并传完 · 下一步：REBUILD-06 修复有效配对下的新队头授权/回执，再完成跨端对账与 REBUILD-04 精确流程
+> 级别：L2 · 阻塞：REBUILD-06（新媒体 `flow.offer` 被 Desktop 拒绝，已解）
+> 当前节点：定位并修复"Desktop 侧完成回执被本地取消竞态丢弃"的对账缺口（代码
+> 已验证：JVM 260/0/4 skip、`assembleDebug`、`just ci` 全绿）；下一步：三星
+> 真机上主动构造一次同类 Pause→Cancel 竞态，确认迟到回执被正确确认，再收尾
+> 剩余验收标准
 
 ## 问题
 
@@ -67,3 +70,21 @@ DiscoveryCursor 之前，当前无 backfill 请求，且 Flow scope revision 仍
 - 为制造 Pause 队头加入的大测试图片触发 `flow.fetch` 15 秒无响应，随后 `flow.offer`
   收到 Desktop `err.not_authorized`。这使后续跨端 hash 对账无法收敛，已分出 REBUILD-06；
   不重置或清除既有测试数据掩盖此失败。
+- **2026-09-02 对账语义诊断与修复**：只读比对 Desktop `flow_delivery`（sqlite）与手机
+  `discovery-ledger.json`（adb run-as，无写操作）发现根因——三星 queue_sequence=33 项
+  在 Desktop 为 `completed`（有 receipt），手机侧却是 `CANCELLED_BY_USER_ROUND`。追踪
+  `CompletionAndScope.acceptCompletionReceipt` 发现：旧逻辑把"当前 fetchLease 已被
+  Pause/Cancel 清空"误判为"被更新尝试取代"，直接丢弃 Desktop 迟到的完成回执，产生了
+  卡面所述的"Desktop 多 1 条历史 completed grant"。
+  RED：新增 `rebuild05_late_receipt_after_pause_and_user_cancel_still_confirms_the_same_content`
+  （Pause→Cancel 后模拟 Desktop 迟到回执，断言必须变 `CONFIRMED`）先跑出
+  `AssertionError`（真实失败输出已核对）。GREEN：仅当当前存在**另一个活跃 lease**（同
+  队列位、不同 token）才算被取代拒绝；lease 已清空不再算取代，迟到回执正常确认并清除
+  `cancellationRoundId`。反证 `rebuild05_receipt_from_a_superseded_active_lease_is_still_rejected`
+  确认真正被新尝试取代时仍必须拒绝（防止把修复写成恒真式）。
+  验证：Android JVM **260 tests / 0 failures / 4 skipped**（48 XML，时间戳核对为本次跑出）、
+  `assembleDebug` 成功、`just ci` 全绿（fmt/clippy/nextest/arch-check/queue-check）。
+  新 debug APK 已装三星 S9210（`adb install -r` Success）。
+  **待验收**：三星上主动构造一次新的同类 Pause→Cancel 竞态（旧的 33 号项已是终态，
+  改不动，需要新造场景验证），确认迟到回执正确收敛为 `CONFIRMED` 而非留死账；不清手机
+  或 Desktop 现有数据。

@@ -27,10 +27,18 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
     fun acceptCompletionReceipt(receipt: CompletionReceipt) {
         ledger.update { snapshot ->
             if (receipt.pairingEpoch != snapshot.pairingEpoch) return@update snapshot
+            // REBUILD-05: a lease only blocks a receipt when it is a *different*,
+            // still-active attempt for this exact queue slot (a genuine
+            // supersession). A cleared lease (Pause / user-cancel already ran)
+            // is not a competing attempt — it must not silently drop Desktop's
+            // durable completion evidence, or Desktop ends up with a completed
+            // grant the phone can never reconcile against (REBUILD-05 finding).
             val lease = snapshot.fetchLease
-            if (receipt.leaseToken.isNotEmpty() &&
-                (lease == null || lease.queueSequence != receipt.queueSequence || lease.leaseToken != receipt.leaseToken)
-            ) return@update snapshot
+            val supersededByActiveLease = receipt.leaseToken.isNotEmpty() &&
+                lease != null &&
+                lease.queueSequence == receipt.queueSequence &&
+                lease.leaseToken != receipt.leaseToken
+            if (supersededByActiveLease) return@update snapshot
             val item = snapshot.items.singleOrNull {
                 it.queueSequence == receipt.queueSequence && it.pairingEpoch == receipt.pairingEpoch
             } ?: return@update snapshot
@@ -43,6 +51,10 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
                         completionReceiptId = receipt.receiptId,
                         contentHash = receipt.contentHash,
                         partialRetained = false,
+                        // A user-cancel round raced Desktop's already-in-flight
+                        // completion; the durable receipt wins, so this item no
+                        // longer belongs to that round.
+                        cancellationRoundId = null,
                     )
                 } else it
             }
