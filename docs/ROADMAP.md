@@ -119,6 +119,11 @@ P4 desktop shell / 桌面壳
       fixed, Samsung now plays the user's own 7/31 recording pulled
       from the Mac library. Known debt: video thumbs fail on the daemon
       (thumb_state=2 → gray placeholder tiles)
+- [~] MOB-47 cross-platform video preview — **code merged 2026-09-02; real-device
+      acceptance pending**: desktop routes video through a hash-resolved canonical
+      exact-file asset-protocol grant and native `<video>`, with thumbnail fallback
+      and generation-scoped stale-DOM-error guard; Android uses Media3 ExoPlayer /
+      PlayerView with disposal. Independent L2 review and local desktop/Android gates pass.
 - [x] `just verify-m2` ALL GREEN 2026-08-03: 185 Rust tests + Android
       unit suite + debug APK + live hello/pair/backup scripts
       (BACKUP OK 12/12, idempotent rerun 0). Fixed on the way: the

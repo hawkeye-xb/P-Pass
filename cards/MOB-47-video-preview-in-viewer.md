@@ -1,6 +1,6 @@
 # MOB-47 视频资产在查看器中不可预览——桌面破图、Android 仅 MVP，换成熟播放方案
 
-> 🟡 状态：进行中 · 协同分支：`batch/mob-47-security-fix` · 当前节点：二次 L2 审查拒绝候选——旧 `<video>` 的 late error 可读取新 viewer 的可变 hash 并把 B 误降级为缩略图 · 下一步：事件处理绑定单调 viewer generation，补 A→B late-error 回归后重新审查
+> 🟡 状态：代码已合并，待双端真机验收 · 当前节点：三轮实现/独立 L2 审查均通过，已覆盖 scope、降级与 late-DOM-error generation race · 下一步：按验收标准实测桌面播放与 Android 播放器/释放日志
 > 级别：L2 · 阻塞：无（与 MOB-26 的手势层有衔接，见「阻塞与依赖」）
 
 ## 问题
@@ -104,3 +104,17 @@
   视频 base64 拉进内存——实施时评估改为 `asset.path`（返回磁盘路径）+
   WebView 直接 load 本地文件（Tauri `convertFileSrc` 或自定义 protocol），
   避免大视频内存爆炸。这是本卡的一个关键实施点，不是可选项。
+
+## 实施记录（2026-09-02）
+
+- 桌面：视频不再走 `asset.original` 的 base64 图片路径；Tauri 命令只接收
+  asset hash，由 daemon 解析、canonicalize 并确认常规文件后用 `allow_file`
+  精确授权，前端不能把任意文件路径扩张到 asset scope。协议或播放器失败时回退
+  到现有 `thumb.get` 缩略图。
+- 视频元素以单调 viewer generation + hash 快照绑定，并按 generation 重挂载；旧
+  A 的 late DOM error 在切到 B 后会在缩略图请求前后两次拒绝，不能把 B 误降级。
+- Android 将 `VideoView` 换为 Media3 ExoPlayer + PlayerView，播放控制和
+  `DisposableEffect` 释放已接入；图片路径与下载语义未改。
+- 验证：desktop Vitest 40 passed、src-tauri lib 18 passed、`cargo clippy --lib
+  -- -D warnings` 通过、vite build 通过；Android 强制重跑 261 tests / 0 failures /
+  0 errors / 4 skipped。独立 L2 复审通过；真实桌面窗口和 Android 真机验收尚欠。
