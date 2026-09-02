@@ -47,6 +47,7 @@ fn snapshot_hello() {
         proto_ver: 1,
         capabilities: vec!["thumbnail.v1".into(), "video.range.v1".into()],
         device_name: "Salamira's Phone".into(),
+        pairing_epoch: None,
     };
     assert_roundtrip(&hello);
     snapshot_message("hello", &hello);

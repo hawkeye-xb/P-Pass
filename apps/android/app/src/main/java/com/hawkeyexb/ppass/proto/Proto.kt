@@ -64,6 +64,7 @@ data class Hello(
     @SerialName("proto_ver") val protoVer: Int = PROTO_VER,
     val capabilities: List<String> = emptyList(),
     @SerialName("device_name") val deviceName: String = "",
+    @SerialName("pairing_epoch") val pairingEpoch: String? = null,
 )
 
 // ── Pair ────────────────────────────────────────────

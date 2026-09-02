@@ -92,6 +92,10 @@ pub struct Hello {
     pub capabilities: Vec<String>,
     /// Human-readable device name for UI display.
     pub device_name: String,
+    /// Current Flow authorization generation for this authenticated member.
+    /// Omitted for unpaired peers so hello remains a zero-data handshake there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pairing_epoch: Option<String>,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -101,6 +105,7 @@ impl Default for Hello {
             proto_ver: super::PROTO_VER,
             capabilities: Vec::new(),
             device_name: String::new(),
+            pairing_epoch: None,
         }
     }
 }
@@ -498,6 +503,7 @@ mod tests {
             proto_ver: 1,
             capabilities: vec!["thumbnail.v1".into()],
             device_name: "Salamira's Phone".into(),
+            pairing_epoch: None,
         }
     );
 

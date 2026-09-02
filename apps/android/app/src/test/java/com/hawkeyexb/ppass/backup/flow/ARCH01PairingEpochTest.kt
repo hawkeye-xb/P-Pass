@@ -85,6 +85,16 @@ class ARCH01PairingEpochTest {
     }
 
     @Test
+    fun delivery_epoch_guard_adopts_only_a_nonempty_new_epoch_from_the_authenticated_desktop() {
+        val guard = FlowDeliveryEpochGuard { pairing("epoch-a") }
+
+        assertNull(guard.refreshedEpoch(null))
+        assertNull(guard.refreshedEpoch(""))
+        assertNull(guard.refreshedEpoch("epoch-a"))
+        assertEquals(PairingEpoch("epoch-b"), guard.refreshedEpoch("epoch-b"))
+    }
+
+    @Test
     fun p02_late_receipt_from_old_desktop_cannot_confirm_the_new_epoch_item() {
         val dir = tempDir("p02")
         val store = DiscoveryLedgerStore(dir)
