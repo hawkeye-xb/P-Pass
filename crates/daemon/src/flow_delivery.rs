@@ -62,6 +62,14 @@ impl FlowDelivery {
     ) -> Result<(), DeliveryError> {
         let grant = self.checked_request(peer, request).await?;
         self.provider_for(&grant)?;
+        if self
+            .db
+            .rebind_completed_flow_grant(&grant)
+            .await
+            .map_err(storage_error)?
+        {
+            return Ok(());
+        }
         self.db
             .upsert_flow_grant(&grant)
             .await

@@ -114,6 +114,27 @@ impl Db {
         Ok(())
     }
 
+    /// A completed asset may be rediscovered after the phone lost only its
+    /// local lease. The receipt stays immutable, but an authenticated caller
+    /// with the same epoch and content hash may bind a fresh lease/provider to
+    /// replay that receipt without re-fetching the bytes.
+    pub async fn rebind_completed_flow_grant(&self, grant: &FlowGrant) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE flow_delivery SET lease_token = ?, provider = ?
+             WHERE node_id = ? AND queue_sequence = ? AND pairing_epoch = ?
+               AND content_hash = ? AND state = 'completed'",
+        )
+        .bind(&grant.lease_token)
+        .bind(&grant.provider)
+        .bind(&grant.node_id)
+        .bind(grant.queue_sequence)
+        .bind(&grant.pairing_epoch)
+        .bind(&grant.content_hash)
+        .execute(self.pool())
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
     pub async fn flow_grant(
         &self,
         node_id: &[u8],

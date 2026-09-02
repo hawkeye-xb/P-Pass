@@ -2,7 +2,7 @@
 
 > 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-05
 > 级别：L2 · 阻塞：需要三星与 Desktop 已配对会话
-> 当前节点：runtime / delivery guard 与已认证 member epoch refresh 已绿；真机现存会话证实 Android 请求 epoch 落后 Desktop grant · 下一步：更新 Desktop daemon 后，不清数据重验三星
+> 当前节点：真机已将拒绝收敛到 completed grant 的 lease 不同；receipt rebind 回归已绿 · 下一步：更新 Desktop daemon 后，不清数据重验三星
 
 ## 问题
 
@@ -53,6 +53,9 @@ REBUILD-05 的 scope backfill 已在三星测试相册实测；需要当前三�
   `ARCH01PairingEpochTest` 通过。
 - 真机聚合证据：当前 Android ledger 为 30 `CONFIRMED` + 1 `QUEUED`，新队头两次
   `flow.offer` 均 `err.not_authorized`；Desktop 有 1 个有效 member、31 个 completed Flow
-  grant，均匹配 Desktop 当前 grant epoch。根因是已认证手机缺少读取当前 member epoch 的
-  恢复通道，不是 scope 或数据清理问题。`hello` 现仅向已认证 member 回传其 epoch；delivery
+  grant，均匹配 Desktop 当前 grant epoch。`hello` 现仅向已认证 member 回传其 epoch；delivery
   preflight 发现差异即持久刷新 pairing、清退旧 Flow 状态并重新唤醒，不调用 re-pair 或清库。
+- 进一步真机字段对账：queued #31 与 Desktop completed grant 的 epoch/content hash 相同，只有
+  lease token 不同。完成回执的 identity 不可变，但恢复后的同 epoch + hash 允许原 receipt
+  rebind 到新 lease/provider；不同 epoch/hash 仍严格拒绝。RED：recovered lease `offer` 返回
+  `GuardMismatch`；GREEN：`verified_native_fetch_materializes_before_a_durable_receipt` 回放原 receipt。

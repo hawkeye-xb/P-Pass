@@ -117,7 +117,7 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
     );
     let db = paired_db("epoch-current", provider_transport.node_id()).await;
     let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
-    let offer = request("epoch-current", "lease-current", hash, ticket);
+    let offer = request("epoch-current", "lease-current", hash, ticket.clone());
     delivery
         .offer(provider_transport.node_id(), &offer)
         .await
@@ -145,6 +145,18 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
         persisted.receipt_id, receipt.receipt_id,
         "receipt must be durable before returning"
     );
+
+    let resumed = request("epoch-current", "lease-recovered", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &resumed)
+        .await
+        .expect("same epoch and hash may rebind a recovered lease");
+    let resumed_receipt = delivery
+        .fetch(provider_transport.node_id(), &resumed)
+        .await
+        .expect("completed content must replay its durable receipt");
+    assert_eq!(resumed_receipt.receipt_id, receipt.receipt_id);
+    assert_eq!(resumed_receipt.lease_token, "lease-recovered");
 }
 
 #[tokio::test]
