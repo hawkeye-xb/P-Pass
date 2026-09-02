@@ -2,7 +2,7 @@
 
 > 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-05
 > 级别：L2 · 阻塞：需要三星与 Desktop 已配对会话
-> 当前节点：已确认 stale Flow epoch 可让旧队头越过授权边界；epoch 对齐 guard 与回归测试已绿 · 下一步：补 delivery 层兜底、全量 Android 验证后重验三星
+> 当前节点：runtime 与 delivery 双层 epoch guard 已绿；运行中换 epoch 会撤销旧 provider，不再把旧 delivery 误记为当前队头失败 · 下一步：全量 Android 验证后重验三星
 
 ## 问题
 
@@ -47,3 +47,7 @@ REBUILD-05 的 scope backfill 已在三星测试相册实测；需要当前三�
 - 新增 `ensureCurrentEpoch`，runtime 建立时强制以当前 pairing epoch 清退旧队列、partial
   与 lease；失败回归 `stale_runtime_epoch_is_replaced_before_an_old_head_can_be_delivered`
   已通过，随后 pairing/runner focused JVM tests 与 debug APK 均成功。
+- delivery 启动后再次在 offer、fetch 与 receipt 之前核对当前 pairing epoch；若运行中切换
+  Desktop，旧 native provider 会撤销且不再把旧失败写入新 epoch ledger。RED：
+  `FlowDeliveryEpochGuard` 缺失导致 pairing epoch 测试编译失败；GREEN：
+  `ARCH01PairingEpochTest` 通过。

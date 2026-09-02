@@ -25,6 +25,11 @@ internal interface FlowReceiptClient {
     suspend fun cancel(request: FlowFetchRequest)
 }
 
+/** Keeps an in-flight delivery from crossing into a newly paired Desktop epoch. */
+internal class FlowDeliveryEpochGuard(private val pairing: () -> Pairing?) {
+    fun isCurrent(expectedEpoch: PairingEpoch): Boolean = pairing()?.pairingEpoch == expectedEpoch.value
+}
+
 /** Validates a Desktop receipt then routes it through the owning Flow runner. */
 internal fun relayFlowCompletion(
     receipt: FlowCompletionReceipt,
@@ -84,6 +89,7 @@ internal class NativeFlowDeliveryPort(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : DeliveryPort {
     private var active: ActiveDelivery? = null
+    private val epochGuard = FlowDeliveryEpochGuard(pairing)
 
     override fun start(item: TransferItem, resumePartial: Boolean, lease: FetchLease) {
         val currentPairing = requireNotNull(pairing()) { "Flow delivery requires an active pairing" }
@@ -108,14 +114,23 @@ internal class NativeFlowDeliveryPort(
         active = ActiveDelivery(lease, request)
         scope.launch {
             try {
+                require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before offer" }
                 val desktop = DaemonFlowReceiptClient(
                     DaemonClient().also { it.bind(identityKey()) },
                     parsePeerAddrToken(currentPairing.daemonAddrToken),
                 )
                 desktop.offer(request)
+                require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before fetch" }
                 val receipt = desktop.fetch(request)
+                require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before receipt" }
                 acceptReceipt(receipt, request)
             } catch (failure: Throwable) {
+                if (!epochGuard.isCurrent(epoch)) {
+                    Log.i("PPassFlow", "Discarding stale Flow delivery after pairing epoch changed")
+                    bridge.pause(lease)
+                    active = null
+                    return@launch
+                }
                 Log.e("PPassFlow", "Native Flow delivery failed; preserving the strict head for retry", failure)
                 onPermanentFailure()
             }
