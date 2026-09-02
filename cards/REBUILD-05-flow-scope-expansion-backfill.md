@@ -1,8 +1,8 @@
 # REBUILD-05 Flow 范围扩展补扫接线（L2）
 
 > 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-04 代码切换
-> 级别：L2 · 阻塞：无
-> 当前节点：Flow ScopeRevision / 历史补扫已接线并完成 Android JVM + debug APK 验证 · 下一步：安装到三星，仅测试相册验证补扫与 REBUILD-04 精确流程
+> 级别：L2 · 阻塞：REBUILD-06（新媒体 `flow.offer` 被 Desktop 拒绝）
+> 当前节点：三星已确认游标前 4 项经 scope backfill 入账并传完 · 下一步：REBUILD-06 修复有效配对下的新队头授权/回执，再完成跨端对账与 REBUILD-04 精确流程
 
 ## 问题
 
@@ -19,10 +19,10 @@ DiscoveryCursor 之前、但新进入已选范围的媒体也必须原子入账�
 
 ## 验收标准
 
-- [ ] 范围扩大后，游标之前且属于新增测试相册的媒体进入新 Flow ledger；现有
+- [x] 范围扩大后，游标之前且属于新增测试相册的媒体进入新 Flow ledger；现有
   `CONFIRMED` 项不重复入队或传输。
-- [ ] 自动测试覆盖 ScopeRevision / backfill 与 cursor 的组合；移除 Flow backfill
-  接线时测试必须失败。
+- [x] 自动测试覆盖 ScopeRevision / backfill 与 cursor 的组合；移除 Flow backfill
+  接线时测试失败。
 - [ ] 三星独立测试相册中，已选范围 30 项全部得到可解释状态；Desktop index 数量等于
   Flow `CONFIRMED` 项的不同内容 hash 数，不触碰真实照片库。
 - [ ] REBUILD-04 的传输中 Pause → 杀 App → 重开仍 Pause → Continue 原队头续传 →
@@ -61,3 +61,9 @@ DiscoveryCursor 之前，当前无 backfill 请求，且 Flow scope revision 仍
   在 revision 未前移时失败；`scope_expansion_backfills_cursor_predecessors_after_the_current_strict_head`
   因 Flow 尚无 backfill API 而编译失败。GREEN：两类测试通过；Android JVM **255 tests /
   0 failures / 4 skipped**（48 XML），`assembleDebug` 成功。
+- 三星实测：经一次测试相册范围重选，ledger 从 26 项推进到 30 项；补扫后先见 27
+  `CONFIRMED` + 3 `QUEUED`，恢复备份后为 30 `CONFIRMED`，scope revision=2、无遗留
+  backfill request。说明游标前 4 项已进入新 Flow 并由严格消费者处理。
+- 为制造 Pause 队头加入的大测试图片触发 `flow.fetch` 15 秒无响应，随后 `flow.offer`
+  收到 Desktop `err.not_authorized`。这使后续跨端 hash 对账无法收敛，已分出 REBUILD-06；
+  不重置或清除既有测试数据掩盖此失败。
