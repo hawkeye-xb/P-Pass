@@ -2,7 +2,7 @@
 
 > 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-05
 > 级别：L2 · 阻塞：需要三星与 Desktop 已配对会话
-> 当前节点：已认领，先对齐 `flow.offer` authz 与 receipt 时间线 · 下一步：写失败回归、修复后重验三星 Pause 流程
+> 当前节点：已确认 stale Flow epoch 可让旧队头越过授权边界；epoch 对齐 guard 与回归测试已绿 · 下一步：补 delivery 层兜底、全量 Android 验证后重验三星
 
 ## 问题
 
@@ -39,3 +39,11 @@
 REBUILD-05 的 scope backfill 已在三星测试相册实测；需要当前三星与 Desktop 已配对会话的
 可观察日志。`NET-01` 的 relay 15 秒超时是相关既有调查项，但本卡额外记录了 Desktop
 明确返回 `err.not_authorized` 的授权拒绝，不能合并为单纯网络超时。
+
+## 实施记录
+
+- 真机状态证据：Android 当前 pairing epoch 与 ledger/item epoch 不一致；Desktop 当前
+  grant 与 Android pairing epoch 一致，旧队头因此不具备再次 offer 的授权前提。
+- 新增 `ensureCurrentEpoch`，runtime 建立时强制以当前 pairing epoch 清退旧队列、partial
+  与 lease；失败回归 `stale_runtime_epoch_is_replaced_before_an_old_head_can_be_delivered`
+  已通过，随后 pairing/runner focused JVM tests 与 debug APK 均成功。

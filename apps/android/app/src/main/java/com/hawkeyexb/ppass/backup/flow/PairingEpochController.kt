@@ -2,6 +2,10 @@
 package com.hawkeyexb.ppass.backup.flow
 
 class PairingEpochController(private val ledger: DiscoveryLedgerStore) {
+    fun ensureCurrentEpoch(nextEpoch: PairingEpoch) {
+        if (ledger.load().pairingEpoch != nextEpoch) replaceDesktop(nextEpoch)
+    }
+
     fun replaceDesktop(nextEpoch: PairingEpoch) {
         require(nextEpoch != PairingEpoch.INITIAL) { "a paired Desktop requires an epoch" }
         ledger.update { snapshot ->

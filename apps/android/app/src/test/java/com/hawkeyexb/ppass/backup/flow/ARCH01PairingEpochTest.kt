@@ -55,6 +55,23 @@ class ARCH01PairingEpochTest {
     }
 
     @Test
+    fun stale_runtime_epoch_is_replaced_before_an_old_head_can_be_delivered() {
+        val dir = tempDir("stale-runtime")
+        val store = DiscoveryLedgerStore(dir)
+        PairingEpochController(store).replaceDesktop(PairingEpoch("old-epoch"))
+        store.commitDiscoveryPage(listOf(candidate(4)), DiscoveryCursor(7L, 4L))
+        CompletionAndScope(store).recordTransferStarted(1L)
+
+        PairingEpochController(store).ensureCurrentEpoch(PairingEpoch("new-epoch"))
+
+        val repaired = store.load()
+        assertEquals(PairingEpoch("new-epoch"), repaired.pairingEpoch)
+        assertTrue(repaired.items.isEmpty())
+        assertNull(repaired.fetchLease)
+        dir.deleteRecursively()
+    }
+
+    @Test
     fun p02_late_receipt_from_old_desktop_cannot_confirm_the_new_epoch_item() {
         val dir = tempDir("p02")
         val store = DiscoveryLedgerStore(dir)
