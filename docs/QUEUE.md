@@ -35,6 +35,7 @@
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 三星 scope backfill 已使 26→30 confirmed | REBUILD-06 处理新队头 flow.offer 授权/回执，再对账并验 REBUILD-04 | `main` |
+| [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | 已认领；对齐 `flow.offer` authz 与 receipt 时间线 | 写失败回归并修复，随后复验三星 Pause 流程 | `main` |
 
 
 
@@ -101,7 +102,7 @@
 | R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | ✅ 新生产 Flow runner |
 | R3 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | R2 | 🟡 scope backfill 已使原 4 项入账；新媒体 `flow.offer` 授权失败，Pause 验收转由 REBUILD-06 阻塞 |
 | R4 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | 🟡 scope backfill 真机通过；跨端对账与 REBUILD-04 等 REBUILD-06 |
-| R5 | [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | R4 | ⬜ 定位并修复新 Flow 项 `flow.offer` 授权/回执不收敛 |
+| R5 | [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | R4 | 🟡 已认领：定位并修复新 Flow 项 `flow.offer` 授权/回执不收敛 |
 
 ---
 
