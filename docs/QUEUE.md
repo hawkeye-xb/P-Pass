@@ -36,7 +36,6 @@
 |---|---|---|---|
 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | scope backfill 三星通过；当前手机 confirmed hash 均在 Desktop | 单独裁决 1 条历史 completed grant 的对账呈现，不阻塞 REBUILD-04 / 06 | `main` |
 
-| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 二次 L2 审查拒绝候选：旧视频 DOM error 可误把新 viewer 降级为缩略图 | 绑定 viewer generation、补 A→B late-error 回归后重新审查 | `batch/mob-47-security-fix` |
 
 
 
@@ -162,6 +161,7 @@
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
+| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 桌面视频应直接播放且可降级缩略图；Android 有播放/seek 控制且退出无 MediaCodec/ExoPlayer 泄漏 | L2 |
 
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 

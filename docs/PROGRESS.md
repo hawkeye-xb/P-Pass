@@ -4,6 +4,7 @@
 
 | 卡片 | 日期 | Commit | 状态 | 摘要 |
 |------|------|--------|------|------|
+| **MOB-47（L2）跨端视频预览** | 2026-09-02 | `b3cc0fd` | 🟡 代码合并，待真机 | 桌面以 hash→daemon 记录→canonical regular file→精确 `allow_file` 加载原视频，拒绝任意前端路径；视频失败回退 `thumb.get`。generation + keyed remount 阻止旧 video error 覆盖新 viewer。Android 换 Media3 ExoPlayer/PlayerView 并在 `DisposableEffect` 释放。独立 L2 复审通过；桌面 Vitest 40、Tauri lib 18、Android JVM 261/0/0/4，欠双端真机。 |
 | **REBUILD-06（L2）Flow offer/fetch 授权与 receipt 一致性** | 2026-09-02 | `6cfe80c` + `16df428` + `927b52c` | ✅ 三星通过 | 真机将 `err.not_authorized` 精确收敛为 completed grant 的 recovered lease 不同；同 epoch + content hash 才可 rebind lease/provider 并回放同一 durable receipt，epoch/hash 不同仍拒绝。已认证 member 的 `hello` 返回当前 epoch，Android delivery preflight 可刷新陈旧 pairing。新队头 30→31 `CONFIRMED`，并以 512MB 隔离测试媒体通过 Pause → kill → reopen → Continue → Cancel。Rust flow/pairing/proto 全绿；Android JVM + debug APK 全绿。 |
 | **REBUILD-05（L2）Flow 范围扩展补扫接线** | 2026-09-02 | `6f54d96` | 🟡 scope backfill 真机通过；跨端收敛待 REBUILD-06 | 保存范围扩大时，持久 ScopeRevision + historical-backfill boundary/progress；Flow 不移动 live cursor、不打断 strict head，stableId 去重。三星将原 26 ledger 项补到 30 `CONFIRMED`（revision=2、无遗留请求）；随后为 Pause 加入的测试媒体暴露 `flow.fetch` 15s timeout 与 `flow.offer err.not_authorized`，不清数据掩盖，已开 REBUILD-06。Android JVM **255 / 0 / 4**、debug APK。 |
 | **REBUILD-04（L2）Worker Flow cutover 与最小状态呈现** | 2026-09-02 | `927b52c` | ✅ 三星通过 | 修复后新队头得到确认；512MB 隔离测试媒体传输中 Pause 后强杀 App，重开仍为 `PAUSED_BY_USER` 且无 lease；Continue 取得原队头，第二次 Pause 后 Cancel 仅写 `CANCELLED_BY_USER_ROUND`，32 项 `CONFIRMED` 未变。 |
