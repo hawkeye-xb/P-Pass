@@ -134,10 +134,16 @@ internal class NativeFlowDeliveryPort(
                     DaemonClient().also { it.bind(identityKey()) },
                     parsePeerAddrToken(currentPairing.daemonAddrToken),
                 )
-                epochGuard.refreshedEpoch(desktop.currentPairingEpoch())?.let { refreshedEpoch ->
+                val advertisedEpoch = desktop.currentPairingEpoch()
+                val refreshedEpoch = epochGuard.refreshedEpoch(advertisedEpoch)
+                Log.i(
+                    "PPassFlow",
+                    "Flow epoch preflight: advertised=${!advertisedEpoch.isNullOrBlank()} refresh=${refreshedEpoch != null}",
+                )
+                refreshedEpoch?.let {
                     bridge.pause(lease)
                     active = null
-                    onPairingEpochRefreshed(refreshedEpoch)
+                    onPairingEpochRefreshed(it)
                     return@launch
                 }
                 desktop.offer(request)
