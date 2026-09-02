@@ -36,6 +36,8 @@
 |---|---|---|---|
 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | scope backfill 三星通过；当前手机 confirmed hash 均在 Desktop | 单独裁决 1 条历史 completed grant 的对账呈现，不阻塞 REBUILD-04 / 06 | `main` |
 
+| [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 底部已选相册汇总误用照片数口径；相册卡照片数与 onboarding 照片数不动 | 汇总改选中集合大小、修正文案并跑 Android 回归 | `batch/mob-46` |
+
 | [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | L2 审查拒绝候选：asset scope 可受任意前端路径扩张，视频失败未降级；stale 回写已修 | 后端按 hash 精确授权单文件、补错误降级与回归验证后重新审查 | `batch/mob-47-security-fix` |
 
 
@@ -177,12 +179,9 @@ MOB-29、MOB-34、MOB-36、WATCH-03、WATCH-04、DESK-08、UI-03。
 
 ## 七、待你拍板（不定就动不了）
 
-| 卡 | 待确认事实 | 需要的裁决 |
-|---|---|---|
-| [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 卡面称选 3 个相册显示 7 是虚高；但现有 UI 明示“将备份 7 张照片”，实现也只累计照片数 | 提供原始截图/复现，或确认此处应改为显示相册数并重写文案与验收 |
-
-Apple 签名/公证已确认早就补齐、CI 一直在真跑,不是待拍板；「两个本机问题」指向的
-`local-state.md` 已不存在、内容丢失，不再挂账——有新的本机问题请直接口述，我会重新建这个文件；
+**当前为空。**2026-08-27 清空：Apple 签名/公证已确认早就补齐、CI 一直在
+真跑,不是待拍板；「两个本机问题」指向的 `local-state.md` 已不
+存在、内容丢失，不再挂账——有新的本机问题请直接口述，我会重新建这个文件；
 MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
