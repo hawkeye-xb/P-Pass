@@ -1,6 +1,6 @@
 # MOB-47 视频资产在查看器中不可预览——桌面破图、Android 仅 MVP，换成熟播放方案
 
-> 🟡 状态：进行中 · 协同分支：`batch/mob-47-security-fix` · 当前节点：L2 审查拒绝候选——asset scope 接受任意前端路径、视频失败无缩略图降级；stale 加载回写已修 · 下一步：后端按 hash 精确授权单文件、补视频错误降级与回归验证后重新审查
+> 🟡 状态：进行中 · 协同分支：`batch/mob-47-security-fix` · 当前节点：二次 L2 审查拒绝候选——旧 `<video>` 的 late error 可读取新 viewer 的可变 hash 并把 B 误降级为缩略图 · 下一步：事件处理绑定单调 viewer generation，补 A→B late-error 回归后重新审查
 > 级别：L2 · 阻塞：无（与 MOB-26 的手势层有衔接，见「阻塞与依赖」）
 
 ## 问题

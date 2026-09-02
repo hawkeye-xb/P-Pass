@@ -36,7 +36,7 @@
 |---|---|---|---|
 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | scope backfill 三星通过；当前手机 confirmed hash 均在 Desktop | 单独裁决 1 条历史 completed grant 的对账呈现，不阻塞 REBUILD-04 / 06 | `main` |
 
-| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | L2 审查拒绝候选：asset scope 可受任意前端路径扩张，视频失败未降级；stale 回写已修 | 后端按 hash 精确授权单文件、补错误降级与回归验证后重新审查 | `batch/mob-47-security-fix` |
+| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 二次 L2 审查拒绝候选：旧视频 DOM error 可误把新 viewer 降级为缩略图 | 绑定 viewer generation、补 A→B late-error 回归后重新审查 | `batch/mob-47-security-fix` |
 
 
 
