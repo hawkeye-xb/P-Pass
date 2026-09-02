@@ -2,7 +2,7 @@
 
 > 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-05
 > 级别：L2 · 阻塞：需要三星与 Desktop 已配对会话
-> 当前节点：runtime 与 delivery 双层 epoch guard 已绿；运行中换 epoch 会撤销旧 provider，不再把旧 delivery 误记为当前队头失败 · 下一步：全量 Android 验证后重验三星
+> 当前节点：runtime / delivery guard 与已认证 member epoch refresh 已绿；真机现存会话证实 Android 请求 epoch 落后 Desktop grant · 下一步：更新 Desktop daemon 后，不清数据重验三星
 
 ## 问题
 
@@ -51,3 +51,8 @@ REBUILD-05 的 scope backfill 已在三星测试相册实测；需要当前三�
   Desktop，旧 native provider 会撤销且不再把旧失败写入新 epoch ledger。RED：
   `FlowDeliveryEpochGuard` 缺失导致 pairing epoch 测试编译失败；GREEN：
   `ARCH01PairingEpochTest` 通过。
+- 真机聚合证据：当前 Android ledger 为 30 `CONFIRMED` + 1 `QUEUED`，新队头两次
+  `flow.offer` 均 `err.not_authorized`；Desktop 有 1 个有效 member、31 个 completed Flow
+  grant，均匹配 Desktop 当前 grant epoch。根因是已认证手机缺少读取当前 member epoch 的
+  恢复通道，不是 scope 或数据清理问题。`hello` 现仅向已认证 member 回传其 epoch；delivery
+  preflight 发现差异即持久刷新 pairing、清退旧 Flow 状态并重新唤醒，不调用 re-pair 或清库。

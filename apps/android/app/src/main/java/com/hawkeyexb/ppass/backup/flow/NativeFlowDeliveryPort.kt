@@ -6,6 +6,7 @@ import android.net.Uri
 import android.util.Log
 import com.hawkeyexb.ppass.proto.FlowCompletionReceipt
 import com.hawkeyexb.ppass.proto.FlowFetchRequest
+import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
 import com.hawkeyexb.ppass.transport.DaemonClient
@@ -17,9 +18,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.buildJsonObject
 
 /** The only Desktop interaction accepted by the Android Flow delivery port. */
 internal interface FlowReceiptClient {
+    suspend fun currentPairingEpoch(): String?
     suspend fun offer(request: FlowFetchRequest)
     suspend fun fetch(request: FlowFetchRequest): FlowCompletionReceipt
     suspend fun cancel(request: FlowFetchRequest)
@@ -28,6 +31,11 @@ internal interface FlowReceiptClient {
 /** Keeps an in-flight delivery from crossing into a newly paired Desktop epoch. */
 internal class FlowDeliveryEpochGuard(private val pairing: () -> Pairing?) {
     fun isCurrent(expectedEpoch: PairingEpoch): Boolean = pairing()?.pairingEpoch == expectedEpoch.value
+
+    fun refreshedEpoch(advertisedEpoch: String?): PairingEpoch? {
+        val currentEpoch = pairing()?.pairingEpoch ?: return null
+        return advertisedEpoch?.takeIf { it.isNotBlank() && it != currentEpoch }?.let(::PairingEpoch)
+    }
 }
 
 /** Validates a Desktop receipt then routes it through the owning Flow runner. */
@@ -56,6 +64,12 @@ internal class DaemonFlowReceiptClient(
     private val client: DaemonClient,
     private val peer: PeerAddrParts,
 ) : FlowReceiptClient {
+    override suspend fun currentPairingEpoch(): String? {
+        val response = client.call(peer, Methods.HELLO, buildJsonObject {})
+        check(response.ok) { "hello: ${response.error?.msgKey}" }
+        return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
+    }
+
     override suspend fun offer(request: FlowFetchRequest) {
         val response = client.call(peer, Methods.FLOW_OFFER, ProtoJson.encodeToJsonElement(FlowFetchRequest.serializer(), request))
         check(response.ok) { "flow.offer: ${response.error?.msgKey}" }
@@ -86,6 +100,7 @@ internal class NativeFlowDeliveryPort(
     private val identityKey: () -> ByteArray,
     private val onPermanentFailure: () -> Unit,
     private val onReceipt: (CompletionReceipt) -> Unit,
+    private val onPairingEpochRefreshed: (PairingEpoch) -> Unit,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
 ) : DeliveryPort {
     private var active: ActiveDelivery? = null
@@ -119,6 +134,12 @@ internal class NativeFlowDeliveryPort(
                     DaemonClient().also { it.bind(identityKey()) },
                     parsePeerAddrToken(currentPairing.daemonAddrToken),
                 )
+                epochGuard.refreshedEpoch(desktop.currentPairingEpoch())?.let { refreshedEpoch ->
+                    bridge.pause(lease)
+                    active = null
+                    onPairingEpochRefreshed(refreshedEpoch)
+                    return@launch
+                }
                 desktop.offer(request)
                 require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before fetch" }
                 val receipt = desktop.fetch(request)

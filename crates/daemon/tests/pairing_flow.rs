@@ -105,6 +105,26 @@ async fn full_flow_pairs_the_device() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn paired_member_hello_returns_its_current_flow_epoch() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db, true).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    let qr = pairing.start([0x46; 12], now());
+    let paired = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "恢复中的手机").await;
+    let accepted: proto::PairAccepted = serde_json::from_value(paired.result.unwrap()).unwrap();
+
+    let hello = send_method(&ctp, dtp.node_id(), methods::HELLO, serde_json::json!({})).await;
+    assert!(hello.ok, "paired member hello must succeed: {hello:?}");
+    let response: proto::Hello = serde_json::from_value(hello.result.unwrap()).unwrap();
+    assert_eq!(
+        response.pairing_epoch.as_deref(),
+        Some(accepted.pairing_epoch.as_str())
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn expired_token_is_rejected() {
     let db = Db::open_in_memory().await.unwrap();
     let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;

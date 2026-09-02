@@ -370,6 +370,7 @@ impl Router {
                     proto_ver: PROTO_VER,
                     capabilities: SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect(),
                     device_name: self.device_name.clone(),
+                    pairing_epoch: self.db.pairing_epoch(&peer.0).await.ok().flatten(),
                 };
                 match serde_json::to_value(&ours) {
                     Ok(v) => Resp::ok(req.id.clone(), v),

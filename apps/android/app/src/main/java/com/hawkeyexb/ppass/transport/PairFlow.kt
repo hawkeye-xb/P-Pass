@@ -79,15 +79,17 @@ suspend fun pairWithQr(
             val hello = withTimeout(20_000) {
                 client.call(addr, Methods.HELLO, buildJsonObject {})
             }
-            val name = if (hello.ok) {
-                ProtoJson.decodeFromJsonElement(Hello.serializer(), hello.result!!).deviceName
-            } else "P-Pass 存储端"
+            val helloInfo = hello.result?.let {
+                ProtoJson.decodeFromJsonElement(Hello.serializer(), it)
+            }
+            val name = helloInfo?.deviceName?.takeIf { it.isNotBlank() } ?: "P-Pass 存储端"
             return PairOutcome.Joined(
                 Pairing(
                     daemonNodeId = parsed.nodeIdHex,
                     daemonAddrToken = addrToken,
                     storageDeviceName = name,
                     pairedAt = System.currentTimeMillis(),
+                    pairingEpoch = helloInfo?.pairingEpoch.orEmpty(),
                 )
             )
         }

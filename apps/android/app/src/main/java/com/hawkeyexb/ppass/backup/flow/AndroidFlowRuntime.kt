@@ -217,6 +217,15 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             identityKey = { IdentityStore(context.filesDir).secretKey() },
             onPermanentFailure = { runner.recordPermanentFailure() },
             onReceipt = { runner.acceptCompletionReceipt(it) },
+            onPairingEpochRefreshed = { refreshedEpoch ->
+                val pairings = PairingStore(context.filesDir)
+                val current = pairings.load()
+                if (current != null && current.pairingEpoch != refreshedEpoch.value) {
+                    pairings.save(current.copy(pairingEpoch = refreshedEpoch.value))
+                    PairingEpochController(ledger).ensureCurrentEpoch(refreshedEpoch)
+                    requestFlowWake(context.applicationContext)
+                }
+            },
         )
         runner = FlowRunner(
             ledger = ledger,
