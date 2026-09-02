@@ -1,6 +1,6 @@
 <script>
   import { reconcilePhotoWall } from "./photoWall.js";
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import { open as openDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
@@ -999,6 +999,10 @@
   let photoViewer = $state(null); // {hash, taken_at, media_type} 大图目标
   let viewerSrc = $state(null); // 大图 data URL（原图或 1024 降级）
   let viewerPath = $state(null); // 原文件绝对路径（Finder 揭示）
+  // MOB-47: 视频走 asset 协议磁盘 streaming 的 src；video 资产打开时设置，
+  // 图片资产永远为 null（图片仍走 viewerSrc 的 <img> data URL 路径）。
+  let viewerVideoSrc = $state(null);
+  let viewerFailed = $state(false); // 取原图/原片都失败 → 显示降级提示
 
   async function loadPhotosPage() {
     if (photosLoading || !photosNext) return;
@@ -1082,12 +1086,45 @@
 
   // 大图：原图内存展示（asset.original）；>12MiB/视频/失败 → 1024 缩略图
   // 降级。关闭即清引用——「不长期落盘」由不写任何临时文件天然满足。
+  // MOB-47: 视频资产不走 base64（会把整段视频拉进内存），改走 asset
+  // 协议（Tauri convertFileSrc）从磁盘 streaming 播放。图片分支完全不变。
   $effect(() => {
     const v = photoViewer;
     viewerSrc = null;
     viewerPath = null;
+    viewerVideoSrc = null;
+    viewerFailed = false;
     if (!v) return;
     let cancelled = false;
+
+    const isVideo = String(v.media_type || "").startsWith("video");
+
+    if (isVideo) {
+      // 视频：asset.path 取原文件绝对路径 → convertFileSrc 流式播放。
+      // 首次授权让 Rust 打开该视频所在的目录层（<node>/YYYY/MM），
+      // 然后才把 asset:// URL 交给 <video>；失败回到下方降级提示。
+      (async () => {
+        try {
+          const p = await call("asset.path", { hash: v.hash });
+          if (cancelled) return;
+          const abs = p.path;
+          viewerPath = abs;
+          try {
+            await invoke("allow_media_scope", { path: abs });
+          } catch (e) {
+            // 授权失败只影响 asset 协议播放，不影响 Finder 揭示；继续尝试
+            // 播放，<video> onerror 会落入降级提示。
+            console.warn("MOB-47: allow_media_scope failed", e);
+          }
+          if (!cancelled) viewerVideoSrc = convertFileSrc(abs);
+        } catch (_) {
+          if (!cancelled) viewerFailed = true;
+        }
+      })();
+      return;
+    }
+
+    // 图片：原图 data URL，失败 → 1024 缩略图（与改动前完全一致）。
     (async () => {
       try {
         const o = await call("asset.original", { hash: v.hash });
@@ -1728,8 +1765,14 @@
       <div class="modal-backdrop" onclick={() => (photoViewer = null)}>
         <div class="modal photo-modal" onclick={(e) => e.stopPropagation()}>
           <div class="photo-viewer-wrap">
-            {#if viewerSrc}
+            {#if viewerVideoSrc}
+              <!-- MOB-47: 视频走原生 <video>（磁盘 streaming），平台默认控件
+                   即带播放/暂停/进度/seek。src 由 convertFileSrc 生成。 -->
+              <video class="photo-viewer-video" src={viewerVideoSrc} controls></video>
+            {:else if viewerSrc}
               <img class="photo-viewer-img" src={viewerSrc} alt="" />
+            {:else if viewerFailed}
+              <div class="photo-viewer-loading">无法加载此视频</div>
             {:else}
               <div class="photo-viewer-loading">加载中…</div>
             {/if}
@@ -2234,6 +2277,13 @@
     max-width: 100%;
     max-height: 70vh;
     object-fit: contain;
+  }
+  /* MOB-47: 视频元素与图片同框约束——填满弹窗可用宽度、限高、保持比例。 */
+  .photo-viewer-video {
+    max-width: 100%;
+    max-height: 70vh;
+    width: 100%;
+    outline: none;
   }
   .photo-viewer-loading {
     color: #cbbfa8;

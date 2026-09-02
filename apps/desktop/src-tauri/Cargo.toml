@@ -15,7 +15,7 @@ publish = false
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png", "devtools"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 # UPD-01: desktop self-update via the official updater plugin (manifest
 # served as release asset; pubkey in tauri.conf.json, minisign format)

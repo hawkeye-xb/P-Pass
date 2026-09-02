@@ -1,6 +1,6 @@
 # MOB-47 视频资产在查看器中不可预览——桌面破图、Android 仅 MVP，换成熟播放方案
 
-> 🟡 状态：进行中 · 协同分支：`batch/mob-47-video-preview` · 当前节点：分别核对桌面本地视频加载路径与 Android 播放器替换面 · 下一步：按图片/视频分流实现并做双端验证
+> 🟡 状态：代码已合并，等真机验收 · 协同分支：`batch/mob-47-video-preview` · 当前节点：双端代码完成（桌面 `<video>` 分流 / Android Media3 ExoPlayer），真机验收欠账
 > 级别：L2 · 阻塞：无（与 MOB-26 的手势层有衔接，见「阻塞与依赖」）
 
 ## 问题
@@ -104,3 +104,61 @@
   视频 base64 拉进内存——实施时评估改为 `asset.path`（返回磁盘路径）+
   WebView 直接 load 本地文件（Tauri `convertFileSrc` 或自定义 protocol），
   避免大视频内存爆炸。这是本卡的一个关键实施点，不是可选项。
+
+## 实施记录（2026-09-03）
+
+### 桌面端（apps/desktop）
+
+- `App.svelte` 大图查看器按 `media_type` 分流：`video` 资产不再走
+  `asset.original`（base64），改走 `asset.path` 拿原文件绝对路径 →
+  `convertFileSrc(abs)` → 原生 `<video controls>`（自带播放/暂停/进度/seek）。
+  图片分支一字未动（仍是 `asset.original` → `<img>` data URL，失败降级 1024 缩略图）。
+- 新增 `viewerVideoSrc` / `viewerFailed` 状态；打开视频取 `asset.path` 失败
+  显示「无法加载此视频」，不残留进程（关闭即清全部引用 + `<video>` 无 src）。
+- **local-file-safe 协议**：启用 Tauri `asset` 协议（`src-tauri/Cargo.toml`
+  加 `protocol-asset` feature + `tauri.conf.json` `security.assetProtocol.enable=true`，
+  scope 留空），新增命令 `allow_media_scope(app, path)`——**只在用户点开某个视频时**
+  把该视频所在的 `<node>/YYYY/MM` 那一层目录授权进 asset 协议 scope（`allow_directory(parent, false)`
+  非递归、不放开整库）。convertFileSrc 把绝对路径 encode 成 `asset://localhost/<percent-encoded>`
+  后由 asset 协议 percent-decode 回原路径并流式供档（支持 Range，所以能 seek）。
+- 桌面验证：`src-tauri cargo test --lib` 16 passed / 0 failed；`pnpm test`
+  （vitest）26 passed；`pnpm build`（vite）绿。
+
+### Android 端（apps/android）
+
+- `VideoScreen.kt` 播放器层从系统 `VideoView` 换成官方 Media3
+  `ExoPlayer` + `PlayerView`（`media3-exoplayer:1.9.4` + `media3-ui:1.9.4`，
+  钉 1.9.4 因为 1.10+ 要求 compileSdk 36、本仓钉 35）。
+- 播放器生命周期绑定 composition：`remember(file)` 建 ExoPlayer、
+  `DisposableEffect` onDispose 里 `release()`——退出查看器/切 asset 立即释放
+  （验收项「logcat 无 MediaCodec/ExoPlayer 泄漏」的代码面）。
+- `PlayerView.useController = true` 即自带播放/暂停/进度条/seek/错误态。
+  仍为 download-then-play（`loader.download` 语义不变；流式 DataSource 是
+  卡内增强项，未做）。保存到相册 / 打开 / 分享动作零改动。
+- 新增 `VideoScreenTest.kt`（3 条源码守卫，跟进 CacheRedlineTest 的源码扫描
+  手法）：`videoViewMvpIsGone`（不再引用 android.widget.VideoView）、
+  `playsThroughMedia3ExoPlayer`（ExoPlayer.Builder + MediaItem.fromUri + PlayerView）、
+  `playerIsReleasedOnDispose`（DisposableEffect + player.release()）。
+
+### 测试计数（本机，2026-09-03 全绿）
+
+- `just ci` all green（fmt / lint / nextest / arch-check / queue-check）
+- Rust nextest：**332 passed / 1 skipped**（基线 320，增长来自 REBUILD 主线新增测试，非本卡）
+- 桌面 `src-tauri cargo test --lib`：**16 passed**
+- 桌面 vitest：**26 passed**（含 photoWall 既有 4 文件）
+- Android JVM：**260 tests / 0 failures / 0 errors / 4 skipped**
+  （49 个 XML，全本次生成，时间戳 16:28；含本卡新增 VideoScreenTest 3 条）
+
+### APK 体积对照（ICON-02 纪律）
+
+- before（引入 media3 前，同一 NDK 27 构建链）：`app-debug.apk` 45,655,913 B（43.54 MiB）
+- after（引入 media3-exoplayer + media3-ui 1.9.4）：`app-debug.apk` 50,608,204 B（48.26 MiB）
+- **+4,952,291 B ≈ +4.72 MiB ≈ +10.85%**
+- APK 仍含 `lib/arm64-v8a/libiroh_ffi.so`（13.90 MB）与 `libtransport.so`（17.27 MB），打包完整性未破。
+
+### 剩余欠账（唯真机/真窗验收，卡不进 done/）
+
+1. 桌面：点视频缩略图 → 弹窗内直接播放（有画面/声音/进度条可拖），关弹窗无残留进程；
+   反证：点图片缩略图仍是 `<img>` 路径，行为与改动前一致。
+2. Android：点视频 → 播放控制（播放/暂停/进度/seek）、不阻塞主线程、退出查看器
+   logcat 无 `MediaCodec`/`ExoPlayer` 泄漏。
