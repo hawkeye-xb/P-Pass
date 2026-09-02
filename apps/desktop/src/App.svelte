@@ -1,6 +1,6 @@
 <script>
   import { reconcilePhotoWall } from "./photoWall.js";
-  import { invoke } from "@tauri-apps/api/core";
+  import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import { open as openDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
@@ -33,6 +33,9 @@
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
   import { externalDeleteNotice } from "./lib/externalDelete.js";
+  // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
+  // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
+  import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./lib/viewerVideo.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。直接从仓库根引用，
   // 零副本零漂移；按系统语言选语言表（UI 单语显示的既定决策）。
@@ -999,6 +1002,17 @@
   let photoViewer = $state(null); // {hash, taken_at, media_type} 大图目标
   let viewerSrc = $state(null); // 大图 data URL（原图或 1024 降级）
   let viewerPath = $state(null); // 原文件绝对路径（Finder 揭示）
+  // MOB-47: 视频走 asset 协议磁盘 streaming 的 src；video 资产打开时设置，
+  // 图片资产永远为 null（图片仍走 viewerSrc 的 <img> data URL 路径）。
+  let viewerVideoSrc = $state(null);
+  let viewerFailed = $state(false); // 取原图/原片都失败 → 显示降级提示
+  // MOB-47: 视频 viewer 的「代际」标记——每次打开/重开 viewer 单调递增，
+  // 随 <video> 元素一起渲染为不可变身份。`<video>` onerror 异步兜底时
+  // 据此判断错误是否仍属于「发起它的那一次渲染」，而不是读可变全局
+  // viewer 状态（旧 A 的迟到错误不能覆盖已换人的 B；关闭重开同 hash
+  // 也不能威胁新代）。
+  let viewerVideoGen = 0; // 非响应式计数器，只在打开 viewer 时 +1 并快照
+  let viewerVideoToken = $state(null); // {gen, hash} 当前活跃 video 的身份
 
   async function loadPhotosPage() {
     if (photosLoading || !photosNext) return;
@@ -1082,27 +1096,68 @@
 
   // 大图：原图内存展示（asset.original）；>12MiB/视频/失败 → 1024 缩略图
   // 降级。关闭即清引用——「不长期落盘」由不写任何临时文件天然满足。
+  // MOB-47: 视频资产不走 base64（会把整段视频拉进内存），改走 asset
+  // 协议 streaming 播放（后端只收 hash，见 allow_media_scope）。
+  // 编排逻辑在 lib/viewerVideo.js（可单测），这里只做接线。
   $effect(() => {
     const v = photoViewer;
     viewerSrc = null;
     viewerPath = null;
+    viewerVideoSrc = null;
+    viewerVideoToken = null;
+    viewerFailed = false;
     if (!v) return;
     let cancelled = false;
-    (async () => {
-      try {
-        const o = await call("asset.original", { hash: v.hash });
-        if (!cancelled) viewerSrc = `data:image/jpeg;base64,${o.data_base64}`;
-      } catch (_) {
+    // 每次打开设一个本代 viewer 的闸；异步加载每步都要过闸，防止旧
+    // 请求回来覆盖已关闭/已换人的 viewer。
+    const isCancelled = () => cancelled;
+    const isVideo = String(v.media_type || "").startsWith("video");
+    if (isVideo) {
+      // 本代 viewer 的身份快照：gen 单调递增（关闭重开同 hash 也不同代），
+      // hash 是本代目标 asset。这个 token 要和 <video> 元素一起渲染，
+      // 让 onerror 拿到的是「元素自己那代」的 gen/hash，而不是全局。
+      viewerVideoGen += 1;
+      viewerVideoToken = { gen: viewerVideoGen, hash: v.hash };
+    }
+
+    if (isVideo) {
+      // 视频：asset 协议（hash 授权 + 单文件 scope）→ 失败走 thumb.get。
+      (async () => {
+        const r = await loadVideoViewer(
+          { invoke, call, convertFileSrc, isCancelled },
+          { hash: v.hash }
+        );
+        if (isCancelled()) return;
+        if (r.kind === "video") {
+          viewerPath = r.path;
+          viewerVideoSrc = r.src;
+        } else if (r.kind === "thumb") {
+          viewerSrc = r.src; // 缩略图走 <img>（图片路径不变）
+        } else {
+          viewerFailed = true; // 缩略图也失败 → 才真正降级提示
+        }
+      })();
+    } else {
+      // 图片：原图 data URL，失败 → 1024 缩略图（与改动前完全一致）。
+      (async () => {
         try {
-          const t = await call("thumb.get", { hash: v.hash, size: 1024 });
-          if (!cancelled) viewerSrc = `data:image/jpeg;base64,${t.jpeg_base64}`;
+          const o = await call("asset.original", { hash: v.hash });
+          if (!cancelled) viewerSrc = `data:image/jpeg;base64,${o.data_base64}`;
+        } catch (_) {
+          try {
+            const t = await call("thumb.get", { hash: v.hash, size: 1024 });
+            if (!cancelled) viewerSrc = `data:image/jpeg;base64,${t.jpeg_base64}`;
+          } catch (_) {}
+        }
+        try {
+          const p = await call("asset.path", { hash: v.hash });
+          if (!cancelled) viewerPath = p.path;
         } catch (_) {}
-      }
-      try {
-        const p = await call("asset.path", { hash: v.hash });
-        if (!cancelled) viewerPath = p.path;
-      } catch (_) {}
-    })();
+      })();
+    }
+    // The request can finish after the user closes the viewer or opens a
+    // different asset.  Cancel this generation just like the image path;
+    // otherwise a late video response can overwrite the next viewer state.
     return () => {
       cancelled = true;
     };
@@ -1114,6 +1169,34 @@
       await revealItemInDir(viewerPath);
     } catch (e) {
       flashMessage(`无法在文件管理器中显示：${e}`);
+    }
+  }
+
+  // MOB-47: `<video>` 元素级错误（源不被支持 / 解码失败 / 文件在授权后被
+  // 外删）——按文档化回退落到 thumb.get 缩略图，缩略图也失败才亮降级提示。
+  // 错误事件必须归属于「发起它的那一次渲染」：从事件元素的 data-* 读出该
+  // 元素自己渲染时的 gen/hash（不可变快照），而不是读可变全局；这样旧 A
+  // 的迟到错误（即使 hash 与 B 不同、或关闭重开同 hash）都不会覆盖新 viewer。
+  async function onVideoError(event) {
+    const el = event?.currentTarget;
+    const rawGen = el?.dataset?.videoGen;
+    const gen = rawGen != null ? Number(rawGen) : NaN;
+    const hash = el?.dataset?.videoHash;
+    if (!Number.isInteger(gen) || !hash) return;
+    const token = { gen, hash };
+    const isActive = () => viewerVideoToken?.gen === gen && viewerVideoToken?.hash === hash;
+    const out = await handleVideoError({
+      token,
+      isActive,
+      loadThumb: (h) => loadVideoThumbnail({ call, isCancelled: () => false }, { hash: h }),
+    });
+    if (out === "ignored" || out.kind !== "applied") return;
+    const r = out.result;
+    if (r.kind === "thumb") {
+      viewerVideoSrc = null;
+      viewerSrc = r.src;
+    } else {
+      viewerFailed = true;
     }
   }
 </script>
@@ -1728,8 +1811,25 @@
       <div class="modal-backdrop" onclick={() => (photoViewer = null)}>
         <div class="modal photo-modal" onclick={(e) => e.stopPropagation()}>
           <div class="photo-viewer-wrap">
-            {#if viewerSrc}
+            {#if viewerVideoSrc}
+              <!-- MOB-47: 视频走原生 <video>（磁盘 streaming），平台默认控件
+                   即带播放/暂停/进度/seek。src 由 convertFileSrc 生成。
+                   {#key viewerVideoToken.gen} 让每次打开/重开 viewer 都换一块
+                   全新 <video> DOM：旧元素的媒体错误事件仍归旧代（其 data-*
+                   快照不变），不会借新 viewer 的 onerror 误伤新代。 -->
+              {#key viewerVideoToken.gen}
+                <video
+                  class="photo-viewer-video"
+                  src={viewerVideoSrc}
+                  controls
+                  data-video-gen={viewerVideoToken.gen}
+                  data-video-hash={viewerVideoToken.hash}
+                  onerror={onVideoError}></video>
+              {/key}
+            {:else if viewerSrc}
               <img class="photo-viewer-img" src={viewerSrc} alt="" />
+            {:else if viewerFailed}
+              <div class="photo-viewer-loading">无法加载此视频</div>
             {:else}
               <div class="photo-viewer-loading">加载中…</div>
             {/if}
@@ -2234,6 +2334,13 @@
     max-width: 100%;
     max-height: 70vh;
     object-fit: contain;
+  }
+  /* MOB-47: 视频元素与图片同框约束——填满弹窗可用宽度、限高、保持比例。 */
+  .photo-viewer-video {
+    max-width: 100%;
+    max-height: 70vh;
+    width: 100%;
+    outline: none;
   }
   .photo-viewer-loading {
     color: #cbbfa8;

@@ -17,6 +17,49 @@ use tauri::Manager;
 // 需内联注册（独立函数标注单参数类型会类型不匹配）。
 
 /// Forward one IPC method. The frontend does the rest.
+// MOB-47: 视频弹窗走 asset 协议从磁盘直接 streaming 播放，避免把整段
+// 视频 base64 拉进内存。安全契约（L2 审查修）：
+// - 渲染进程只传资产 hash，绝不传文件系统路径；
+// - 后端用该 hash 走 daemon 可信的 `asset.path`（记录查找 → 库根 + rel_path），
+//   拿到路径后 canonicalize（解析软链）并核对是真实存在的普通文件；
+// - 只授权这一个文件（`allow_file`），不授权目录、不授权父目录，
+//   不留任意路径提权口子。
+// 返回值是 canonicalized 后的绝对路径（前端 convertFileSrc 用）。
+// 失败返回 Err → 前端落到 thumb.get 缩略图兜底。
+//
+// 注意：tauri::Manager::asset_protocol_scope 是 #[cfg(feature =
+// "protocol-asset")]（不在 default），需在 src-tauri/Cargo.toml 显式
+// 声明该 feature（已在 MOB-47 加）。
+#[tauri::command]
+fn allow_media_scope(app: tauri::AppHandle, hash: String) -> Result<String, String> {
+    use tauri::Manager;
+    // 路径只能来自 daemon 按 hash 的记录查找，杜绝渲染进程传入任意路径。
+    let resp = ipc::DaemonHandle::discover()?
+        .call("asset.path", json!({ "hash": hash }))
+        .map_err(|e| format!("取资产路径失败：{e}"))?;
+    let raw = resp
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "后台服务未返回资产路径".to_string())?;
+    let file = validate_asset_file(std::path::Path::new(raw))?;
+    // 只放开这一个文件（不是目录层、不是父目录）。
+    app.asset_protocol_scope()
+        .allow_file(&file)
+        .map_err(|e| format!("授权媒体文件失败：{e}"))?;
+    Ok(file.to_string_lossy().into_owned())
+}
+
+/// 授权前校验：canonicalize（解析软链）+ 必须是普通文件。路径必须来自
+/// daemon 的 `asset.path`（记录查找），本函数从不接受渲染进程直接给的路径。
+fn validate_asset_file(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let canon = std::fs::canonicalize(path).map_err(|e| format!("资产文件不可达：{e}"))?;
+    if !canon.is_file() {
+        return Err("资产路径不是普通文件".to_string());
+    }
+    Ok(canon)
+}
+
+/// Forward one IPC method. The frontend does the rest.
 #[tauri::command]
 fn daemon_call(method: String, params: Value) -> Result<Value, String> {
     ipc::DaemonHandle::discover()?.call(&method, params)
@@ -586,7 +629,8 @@ pub fn run() {
             pause_daemon_for_update,
             resume_daemon_after_update,
             restart_daemon_process,
-            export_logs_bundle
+            export_logs_bundle,
+            allow_media_scope
         ])
         .setup(|app| {
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
@@ -828,5 +872,39 @@ mod tests {
         let v = restart_outcome(Some("0.3.3"), None);
         assert_eq!(v["changed"], false);
         assert_eq!(v["new_version"], Value::Null);
+    }
+
+    // MOB-47 安全契约（L2 审查）：授权前校验只认「真实存在的普通文件」。
+    // 目录、软链指向的目录、不存在的路径都必须拒绝——asset scope 绝不
+    // 放开一个目录层（那会让同一层其它文件可被读取）。
+    #[test]
+    fn validate_asset_file_accepts_only_real_regular_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("clip.mp4");
+        std::fs::write(&file, b"fake video bytes").unwrap();
+        // 存在的普通文件 → 通过，且返回 canonicalized 路径。
+        let canon = validate_asset_file(&file).expect("regular file must pass");
+        assert!(canon.is_file());
+        assert_eq!(canon, file.canonicalize().unwrap());
+
+        // 目录 → 拒绝（这正是提权点：目录授权会让同层文件可读）。
+        assert!(validate_asset_file(tmp.path()).is_err());
+
+        // 不存在的路径 → 拒绝。
+        assert!(validate_asset_file(&tmp.path().join("missing.mp4")).is_err());
+    }
+
+    // MOB-47 安全契约：软链可指向目录——canonicalize 后必须仍判普通文件，
+    // 不能用「resolve 前是文件」这类假判据放行。
+    #[cfg(unix)]
+    #[test]
+    fn validate_asset_file_rejects_symlink_to_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("realdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = tmp.path().join("tricky.mp4");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        // 软链指向目录 → 即使按名字像个文件，也必须拒绝。
+        assert!(validate_asset_file(&link).is_err());
     }
 }
