@@ -34,7 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | Flow 历史补扫接线、JVM 255/0/4 与 debug APK 已验证 | 安装三星，只用测试相册补扫并验 REBUILD-04 | `main` |
+| [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 三星 scope backfill 已使 26→30 confirmed | REBUILD-06 处理新队头 flow.offer 授权/回执，再对账并验 REBUILD-04 | `main` |
 
 
 
@@ -99,8 +99,9 @@
 | R1a | [REBUILD-01](../cards/REBUILD-01-android-iroh-blobs-provider-bridge.md) | R0 | ✅ Android blobs provider bridge |
 | R1b | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | R0 | ✅ Desktop fetch + completion receipt |
 | R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | ✅ 新生产 Flow runner |
-| R3 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | R2 | 🟡 首包已实传；30 项对账发现 4 项已选范围未入 Flow，Pause 验收阻塞 |
-| R4 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | 🟡 历史补扫代码/JVM/debug APK 已绿；待三星测试相册验收后释放 REBUILD-04 |
+| R3 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | R2 | 🟡 scope backfill 已使原 4 项入账；新媒体 `flow.offer` 授权失败，Pause 验收转由 REBUILD-06 阻塞 |
+| R4 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | 🟡 scope backfill 真机通过；跨端对账与 REBUILD-04 等 REBUILD-06 |
+| R5 | [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | R4 | ⬜ 定位并修复新 Flow 项 `flow.offer` 授权/回执不收敛 |
 
 ---
 
