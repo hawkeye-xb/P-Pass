@@ -37,7 +37,7 @@
 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 三星 scope backfill 已使 26→30 confirmed | REBUILD-06 处理新队头 flow.offer 授权/回执，再对账并验 REBUILD-04 | `main` |
 | [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | 真机已定位 completed grant 的 lease rebind 缺口 | 更新 Desktop daemon 后不清数据复验三星 Pause | `main` |
 | [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 追踪相册选择计数恒 +4 的数据来源 | 写反证、修复全部展示位并跑 Android 验证 | `batch/mob-46` |
-| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 核对桌面视频本地加载路径与 Android 播放器替换面 | 实现图片/视频分流并做双端验证 | `batch/mob-47-video-preview` |
+| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | L2 审查拒绝候选：asset scope 可受任意前端路径扩张，视频失败未降级；stale 回写已修 | 后端按 hash 精确授权单文件、补错误降级与回归验证后重新审查 | `batch/mob-47-video-preview` |
 
 
 
