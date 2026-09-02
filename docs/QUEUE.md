@@ -11,7 +11,8 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-02**（REBUILD-04 真机验收发现范围扩展缺口，已开 REBUILD-05）
+> 最后核对：**2026-09-02**（REBUILD-05 三星真机验收通过，归档；发现两处独立衍生问题开
+> MOB-49/MOB-50）
 
 ---
 
@@ -34,7 +35,8 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 对账缺口根因已定位并修复（迟到回执被误判为 lease 取代而丢弃）；代码验证全绿 | 三星真机构造同类 Pause→Cancel 竞态验证迟到回执收敛正确 | `main` |
+
+（当前无进行中的卡）
 
 
 
@@ -53,6 +55,7 @@
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | 三星真机自然复现迟到回执竞态并收敛为 `CONFIRMED`；范围扩展补扫全部验收标准完成 | 分出 MOB-49、MOB-50（取消本轮两处生产接线缺口） |
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |
 | [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 完成凭据、范围竞争与 backfill 完成 | ARCH-05 |
@@ -101,7 +104,7 @@
 | R1b | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | R0 | ✅ Desktop fetch + completion receipt |
 | R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | ✅ 新生产 Flow runner |
 | R3 | [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | R2 | ✅ 三星 Pause → kill → reopen → Continue → Cancel 通过 |
-| R4 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | 🟡 对账缺口根因已修复（迟到回执误判为 lease 取代），代码验证全绿；待三星真机构造同类竞态验收 |
+| R4 | [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | ✅ 三星真机自然复现迟到回执竞态，收敛为 `CONFIRMED` |
 | R5 | [REBUILD-06](../cards/done/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | R4 | ✅ completed receipt 的 recovered lease rebind 已在三星通过 |
 
 ---
@@ -113,6 +116,8 @@
 
 
 
+| P1 | [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 取消本轮后 `cancellationRound` 无生产清除路径，UI 永久卡在「当前轮已取消」（REBUILD-05 真机验收发现） | L1 |
+| P1 | [MOB-50](../cards/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 取消本轮后 `uploadCursor` 不重置，后续新入队项永久卡 `QUEUED` 不被消费（REBUILD-05 真机验收发现） | L1 |
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |

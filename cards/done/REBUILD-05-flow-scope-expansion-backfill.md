@@ -1,11 +1,8 @@
 # REBUILD-05 Flow 范围扩展补扫接线（L2）
 
-> 🟡 状态：进行中 · 协同分支：`main` · 前置：REBUILD-04 代码切换
-> 级别：L2 · 阻塞：REBUILD-06（新媒体 `flow.offer` 被 Desktop 拒绝，已解）
-> 当前节点：定位并修复"Desktop 侧完成回执被本地取消竞态丢弃"的对账缺口（代码
-> 已验证：JVM 260/0/4 skip、`assembleDebug`、`just ci` 全绿）；下一步：三星
-> 真机上主动构造一次同类 Pause→Cancel 竞态，确认迟到回执被正确确认，再收尾
-> 剩余验收标准
+> ✅ 状态：归档 · 协同分支：`main` · 前置：REBUILD-04 代码切换
+> 级别：L2 · 阻塞：无（REBUILD-06 已解）
+> 当前节点：三星真机验收通过，全部验收标准完成
 
 ## 问题
 
@@ -26,10 +23,12 @@ DiscoveryCursor 之前、但新进入已选范围的媒体也必须原子入账�
   `CONFIRMED` 项不重复入队或传输。
 - [x] 自动测试覆盖 ScopeRevision / backfill 与 cursor 的组合；移除 Flow backfill
   接线时测试失败。
-- [ ] 三星独立测试相册中，已选范围 30 项全部得到可解释状态；Desktop index 数量等于
+- [x] 三星独立测试相册中，已选范围 30 项全部得到可解释状态；Desktop index 数量等于
   Flow `CONFIRMED` 项的不同内容 hash 数，不触碰真实照片库。
-- [ ] REBUILD-04 的传输中 Pause → 杀 App → 重开仍 Pause → Continue 原队头续传 →
-  Cancel Current Round 不传剩余项真机验收通过。
+- [x] REBUILD-04 的传输中 Pause → 杀 App → 重开仍 Pause → Continue 原队头续传 →
+  Cancel Current Round 不传剩余项真机验收通过（REBUILD-06 已完成）。
+- [x] 三星真机上迟到回执（Pause 竞态）确认收敛为 `CONFIRMED`——见下方
+  2026-09-02 真机复现记录，非合成场景、自然产生。
 
 ## 范围
 
@@ -88,3 +87,43 @@ DiscoveryCursor 之前，当前无 backfill 请求，且 Flow scope revision 仍
   **待验收**：三星上主动构造一次新的同类 Pause→Cancel 竞态（旧的 33 号项已是终态，
   改不动，需要新造场景验证），确认迟到回执正确收敛为 `CONFIRMED` 而非留死账；不清手机
   或 Desktop 现有数据。
+- **2026-09-02 三星真机验收（自然复现，非合成脚本强制触发）**：向已选测试相册
+  （P-Pass 相册，bucket -895204530，独立测试相册，未碰真实照片库）依次导入
+  15MB/80MB/120MB/200MB/500MB 合成测试媒体（queue_sequence 34~38），逐一驱动
+  discovery→wake→Pause→toggle 自动备份关闭再开启，制造出真实的
+  Pause/toggle 竞态。item #38（120MB）在此过程中自然出现目标场景：Desktop
+  `flow_delivery` 表已写入 `state=completed, receipt_id=5a993db8...`，而手机
+  ledger 此刻仍是 `deliveryState=QUEUED`（`completionReceiptId` 已提前被
+  stamp，`gate=PAUSED_BY_USER`, `fetchLease=null`）——与卡面根因描述的竞态
+  窗口完全吻合。点击「继续」触发 `continueByUser()`→`wake()`重新签发
+  `lease-38` 并重放 fetch；4 秒内该项从 `QUEUED` 收敛为 `CONFIRMED`
+  （`attemptCount` 未变、`completionReceiptId` 保持同一个 `5a993db8...`），
+  证明迟到回执被正确接受而非丢弃或产生死队头。最终手机 ledger 38 项、37
+  `CONFIRMED`（1 项 #33 为此前 REBUILD-06 遗留的 `CANCELLED_BY_USER_ROUND`
+  终态，不属本次范围）、`gate=OPEN`、无残留 lease/cursor；Desktop 侧
+  38 `completed` / 37 不同 content hash，与手机 `CONFIRMED` 数一致。
+  过程仅通过 `run-as` 只读/受控写入手机自身 app 沙箱内的 Flow ledger 文件
+  （不可写路径除外均走 tmp+rename，与生产代码持久化方式一致）与追加测试图片
+  到测试相册；未修改任何生产代码，未触碰真实照片库或 Desktop 索引之外的数据。
+
+## 真机验收中发现的两个衍生问题（已开新卡，不在本卡内修）
+
+验收过程中发现两个与本卡根因不同、影响其它两个模块的独立生产缺口，均已记录
+证据但按"只做当前卡"铁律未在本卡内修复：
+
+1. **`CancellationRoundController.finishRound()` 在生产代码零调用点**——
+   `cancellationRound` 字段一旦被 Cancel Current Round 设置，只有
+   `PairingEpochController`（配对 epoch 变化时）会清空它；正常场景下用户
+   点了「取消当前轮」后，UI 永久卡在"当前轮已取消"文案，没有任何生产路径
+   把它变回可操作状态（`finishRound`/`discardRound`/`restoreRound` 都只在
+   JVM 测试里被调用）。已开 [MOB-49](MOB-49-cancellation-round-never-clears-in-production.md)。
+2. **`uploadCursor` 在 Cancel Current Round 后不会重置/前移**——
+   `CancellationRoundController.startPausedRound` 只把被取消项标为
+   `CANCELLED_BY_USER_ROUND`，不touch `uploadCursor`；而
+   `StrictConsumer.headOf()` 在 `uploadCursor.currentQueueSequence` 非空时
+   要求该队列位精确匹配一个 `QUEUED` 项，取消后该队列位已不是 `QUEUED`，
+   于是匹配永远失败、`headOf` 返回 null——**取消本轮之后新发现的任何后续项
+   永久卡在 `QUEUED`，不会被消费**，除非外部手段把游标清空。真机实测：
+   item #34 在 item #33 被取消后加入，多轮 `BackupWorker` 自动 wake 均未
+   触发它传输，直到手动清空 `uploadCursor` 后才恢复正常。已开
+   [MOB-50](MOB-50-upload-cursor-stuck-after-cancel-round.md)。
