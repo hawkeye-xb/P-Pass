@@ -433,6 +433,8 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
+- [ ] MOB-47 视频资产在查看器不可预览——桌面破图、Android 仅 MVP — **🟡 2026-09-03 代码已合并（commit 见 PROGRESS），等真机验收**：桌面大图查看器按 `media_type` 分流——视频不再走 `asset.original` base64（会把整段视频拉进内存），改走 `asset.path` 原文件绝对路径 + Tauri `asset` 协议（`convertFileSrc`，新命令 `allow_media_scope` 只授权被点开视频所在 `<node>/YYYY/MM` 目录层、非递归）+ 原生 `<video controls>`；图片分支零改动。Android 播放器层从系统 `VideoView` 换成官方 Media3 `ExoPlayer`/`PlayerView`（钉 1.9.4，1.10+ 需 compileSdk 36），生命周期绑 composition `DisposableEffect` 释放，自带播放/暂停/进度/seek/错误态；download-then-play 语义不变。验证：桌面 src-tauri 16 passed + vitest 26 passed + vite build 绿；Android JVM **260 / 0 / 4 skipped**（新增 VideoScreenTest 3 条源码守卫）；`just ci` all green；Rust nextest 332 passed / 1 skipped。APK 体积对照（ICON-02 纪律）：**45,655,913 B → 50,608,204 B，+4.72 MiB ≈ +10.85%**（media3-exoplayer + media3-ui）。剩余欠账唯真机/真窗验收。
+
 - [x] MOB-19 备份只有一条管线（手动 = 又一种触发方式） — **2026-08-20（代码完成，真机验收 owed）**:
       卡面原方案"照搬 MOB-09 的错误隔离到手动链路"被用户否掉——"你为什么这里
       弄了两条路径去做备份呢？"两份实现必然漂移，MOB-09 只修一份就是证据。
