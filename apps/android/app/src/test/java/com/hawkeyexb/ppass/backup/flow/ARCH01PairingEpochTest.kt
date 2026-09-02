@@ -3,9 +3,11 @@ package com.hawkeyexb.ppass.backup.flow
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.hawkeyexb.ppass.transport.Pairing
 
 class ARCH01PairingEpochTest {
     private fun tempDir(case: String): File =
@@ -72,6 +74,17 @@ class ARCH01PairingEpochTest {
     }
 
     @Test
+    fun delivery_epoch_guard_refuses_a_pairing_that_changes_while_the_old_delivery_is_running() {
+        var pairing: Pairing? = pairing("epoch-a")
+        val guard = FlowDeliveryEpochGuard { pairing }
+
+        assertTrue(guard.isCurrent(PairingEpoch("epoch-a")))
+        pairing = pairing("epoch-b")
+
+        assertFalse(guard.isCurrent(PairingEpoch("epoch-a")))
+    }
+
+    @Test
     fun p02_late_receipt_from_old_desktop_cannot_confirm_the_new_epoch_item() {
         val dir = tempDir("p02")
         val store = DiscoveryLedgerStore(dir)
@@ -111,4 +124,11 @@ class ARCH01PairingEpochTest {
         assertEquals("current-desktop-receipt", store.load().items.single().completionReceiptId)
         dir.deleteRecursively()
     }
+
+    private fun pairing(epoch: String) = Pairing(
+        daemonNodeId = "desktop-$epoch",
+        daemonAddrToken = "addr-$epoch",
+        storageDeviceName = "Desktop",
+        pairingEpoch = epoch,
+    )
 }
