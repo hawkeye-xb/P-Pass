@@ -120,7 +120,13 @@ data class TransferItem(
 )
 
 @Serializable
-data class ScopeBackfillRequest(val scopeRevision: ScopeRevision)
+data class ScopeBackfillRequest(
+    val scopeRevision: ScopeRevision,
+    /** Progress within the historical scan; never replaces the live discovery cursor. */
+    val cursor: DiscoveryCursor = DiscoveryCursor.INITIAL,
+    /** Immutable upper bound captured when the scope grew. */
+    val boundary: DiscoveryCursor = DiscoveryCursor.INITIAL,
+)
 
 @Serializable
 data class DiscoveryLedgerSnapshot(
@@ -217,6 +223,55 @@ class DiscoveryLedgerStore(private val dir: File) {
         )
         beforeCommit()
         persist(next)
+    }
+
+    /**
+     * Appends one historical scope-expansion page without moving the live
+     * discovery cursor or disturbing the current strict head.
+     */
+    fun commitScopeBackfill(request: ScopeBackfillRequest, page: ScopeBackfillPage) {
+        val current = load()
+        val index = current.backfillRequests.indexOf(request)
+        require(index >= 0) { "scope backfill request is no longer active" }
+        val byStableId = current.items.associateBy { it.stableId }.toMutableMap()
+        var nextSequence = current.nextQueueSequence
+        val state = if (current.cancellationRound == null) {
+            DeliveryState.QUEUED
+        } else {
+            DeliveryState.CANCELLED_BY_USER_ROUND
+        }
+        val cancellationRoundId = current.cancellationRound?.id
+        page.candidates.forEach { candidate ->
+            if (candidate.stableId !in byStableId) {
+                byStableId[candidate.stableId] = TransferItem(
+                    stableId = candidate.stableId,
+                    sourceRef = candidate.sourceRef,
+                    sourceVersion = candidate.sourceVersion,
+                    bucketId = candidate.bucketId,
+                    fileName = candidate.fileName,
+                    mediaType = candidate.mediaType,
+                    scopeRevision = request.scopeRevision,
+                    pairingEpoch = current.pairingEpoch,
+                    queueSequence = nextSequence++,
+                    deliveryState = state,
+                    cancellationRoundId = cancellationRoundId,
+                )
+            }
+        }
+        val requests = current.backfillRequests.toMutableList()
+        if (page.complete) {
+            requests.removeAt(index)
+        } else {
+            require(page.nextCursor != request.cursor) { "incomplete scope backfill must advance" }
+            requests[index] = request.copy(cursor = page.nextCursor)
+        }
+        persist(
+            current.copy(
+                backfillRequests = requests,
+                items = byStableId.values.sortedBy { it.queueSequence },
+                nextQueueSequence = nextSequence,
+            ),
+        )
     }
 
     private fun persist(snapshot: DiscoveryLedgerSnapshot) {

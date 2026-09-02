@@ -156,17 +156,60 @@ class REBUILD03FlowRunnerTest {
         dir.deleteRecursively()
     }
 
+    @Test
+    fun scope_expansion_backfills_cursor_predecessors_after_the_current_strict_head() {
+        val dir = tempDir("scope-backfill")
+        val ledger = DiscoveryLedgerStore(dir)
+        val discovery = RecordingDiscovery(
+            page = DiscoveryPage(listOf(candidate(18)), DiscoveryCursor(7L, 18L)),
+            backfill = listOf(candidate(17)),
+        )
+        val delivery = RecordingDelivery()
+        val runner = FlowRunner(ledger, discovery, delivery)
+
+        runner.requestDiscovery()
+        runner.run(constraintsSatisfied = true)
+        runner.requestScopeBackfill()
+        runner.run(constraintsSatisfied = true)
+
+        val expanded = ledger.load()
+        assertEquals(DiscoveryCursor(7L, 18L), expanded.cursor)
+        assertEquals(ScopeRevision(2L), expanded.scopeRevision)
+        assertEquals(emptyList<ScopeBackfillRequest>(), expanded.backfillRequests)
+        assertEquals(listOf(1L), delivery.starts)
+        assertEquals(DeliveryState.TRANSFERRING, expanded.items.single { it.queueSequence == 1L }.deliveryState)
+        assertEquals(DeliveryState.QUEUED, expanded.items.single { it.queueSequence == 2L }.deliveryState)
+        assertEquals(ScopeRevision(2L), expanded.items.single { it.queueSequence == 2L }.scopeRevision)
+        assertEquals(listOf(DiscoveryCursor(7L, 18L)), discovery.backfillCursors)
+        assertEquals(listOf(ScopeRevision(2L)), discovery.backfillScopes)
+
+        runner.acceptCompletionReceipt(CompletionReceipt(queueSequence = 1L, receiptId = "desktop-1"))
+        assertEquals(listOf(1L, 2L), delivery.starts)
+        dir.deleteRecursively()
+    }
+
     private fun candidate(id: Long) = DiscoveryCandidate(
         sourceRef = "content://media/external/images/media/$id",
         sourceVersion = "generation-7",
         bucketId = 42L,
     )
 
-    private class RecordingDiscovery(private val page: DiscoveryPage) : FlowDiscoveryPort {
+    private class RecordingDiscovery(
+        private val page: DiscoveryPage,
+        private val backfill: List<DiscoveryCandidate> = emptyList(),
+    ) : FlowDiscoveryPort {
         val cursors = mutableListOf<DiscoveryCursor>()
+        val backfillCursors = mutableListOf<DiscoveryCursor>()
+        val backfillScopes = mutableListOf<ScopeRevision>()
         override fun discover(cursor: DiscoveryCursor, scope: ScopeRevision): DiscoveryPage {
             cursors += cursor
             return page
+        }
+
+        override fun backfill(request: ScopeBackfillRequest): ScopeBackfillPage {
+            backfillCursors += request.boundary
+            backfillScopes += request.scopeRevision
+            return ScopeBackfillPage(backfill, request.boundary, complete = true)
         }
     }
 

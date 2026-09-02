@@ -93,8 +93,13 @@ class ARCH01CompletionAndScopeTest {
 
         CompletionAndScope(store).requestScopeBackfill(ScopeRevision(2L))
 
-        assertEquals(listOf(ScopeBackfillRequest(ScopeRevision(2L))), store.load().backfillRequests)
-        assertEquals(DiscoveryCursor(7L, 19L), store.load().cursor)
+        val snapshot = store.load()
+        assertEquals(ScopeRevision(2L), snapshot.scopeRevision)
+        assertEquals(
+            listOf(ScopeBackfillRequest(ScopeRevision(2L), boundary = DiscoveryCursor(7L, 19L))),
+            snapshot.backfillRequests,
+        )
+        assertEquals(DiscoveryCursor(7L, 19L), snapshot.cursor)
         dir.deleteRecursively()
     }
 }

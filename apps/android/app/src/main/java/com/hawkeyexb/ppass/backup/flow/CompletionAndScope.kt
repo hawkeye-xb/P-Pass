@@ -73,7 +73,14 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
 
     fun requestScopeBackfill(scopeRevision: ScopeRevision) {
         ledger.update { snapshot ->
-            snapshot.copy(backfillRequests = snapshot.backfillRequests + ScopeBackfillRequest(scopeRevision))
+            require(scopeRevision.value > snapshot.scopeRevision.value) { "scope revision must increase" }
+            snapshot.copy(
+                scopeRevision = scopeRevision,
+                backfillRequests = snapshot.backfillRequests + ScopeBackfillRequest(
+                    scopeRevision = scopeRevision,
+                    boundary = snapshot.cursor,
+                ),
+            )
         }
     }
 
