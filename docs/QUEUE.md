@@ -34,6 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
+| [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 已认领；补写范围扩展、游标前媒体的 Flow 回归测试 | 接入 ScopeRevision / backfill，随后三星验 REBUILD-04 | `main` |
 
 
 
@@ -99,7 +100,7 @@
 | R1b | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | R0 | ✅ Desktop fetch + completion receipt |
 | R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | ✅ 新生产 Flow runner |
 | R3 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | R2 | 🟡 首包已实传；30 项对账发现 4 项已选范围未入 Flow，Pause 验收阻塞 |
-| R4 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | ⬜ 范围扩大时将游标前旧项补入 Flow，再释放 REBUILD-04 真机验收 |
+| R4 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | 🟡 已认领：范围扩大时将游标前旧项补入 Flow，再释放 REBUILD-04 真机验收 |
 
 ---
 
