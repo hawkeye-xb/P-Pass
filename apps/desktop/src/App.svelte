@@ -35,7 +35,7 @@
   import { externalDeleteNotice } from "./lib/externalDelete.js";
   // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
   // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
-  import { loadVideoViewer, loadVideoThumbnail } from "./lib/viewerVideo.js";
+  import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./lib/viewerVideo.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。直接从仓库根引用，
   // 零副本零漂移；按系统语言选语言表（UI 单语显示的既定决策）。
@@ -1006,9 +1006,13 @@
   // 图片资产永远为 null（图片仍走 viewerSrc 的 <img> data URL 路径）。
   let viewerVideoSrc = $state(null);
   let viewerFailed = $state(false); // 取原图/原片都失败 → 显示降级提示
-  // MOB-47: 当前视频 viewer 的目标 hash——`<video>` onerror 异步兜底时
-  // 据此判断 viewer 是否已被关闭/切换，避免旧错误覆盖新 viewer。
-  let viewerVideoHash = $state(null);
+  // MOB-47: 视频 viewer 的「代际」标记——每次打开/重开 viewer 单调递增，
+  // 随 <video> 元素一起渲染为不可变身份。`<video>` onerror 异步兜底时
+  // 据此判断错误是否仍属于「发起它的那一次渲染」，而不是读可变全局
+  // viewer 状态（旧 A 的迟到错误不能覆盖已换人的 B；关闭重开同 hash
+  // 也不能威胁新代）。
+  let viewerVideoGen = 0; // 非响应式计数器，只在打开 viewer 时 +1 并快照
+  let viewerVideoToken = $state(null); // {gen, hash} 当前活跃 video 的身份
 
   async function loadPhotosPage() {
     if (photosLoading || !photosNext) return;
@@ -1100,7 +1104,7 @@
     viewerSrc = null;
     viewerPath = null;
     viewerVideoSrc = null;
-    viewerVideoHash = null;
+    viewerVideoToken = null;
     viewerFailed = false;
     if (!v) return;
     let cancelled = false;
@@ -1108,7 +1112,13 @@
     // 请求回来覆盖已关闭/已换人的 viewer。
     const isCancelled = () => cancelled;
     const isVideo = String(v.media_type || "").startsWith("video");
-    if (isVideo) viewerVideoHash = v.hash;
+    if (isVideo) {
+      // 本代 viewer 的身份快照：gen 单调递增（关闭重开同 hash 也不同代），
+      // hash 是本代目标 asset。这个 token 要和 <video> 元素一起渲染，
+      // 让 onerror 拿到的是「元素自己那代」的 gen/hash，而不是全局。
+      viewerVideoGen += 1;
+      viewerVideoToken = { gen: viewerVideoGen, hash: v.hash };
+    }
 
     if (isVideo) {
       // 视频：asset 协议（hash 授权 + 单文件 scope）→ 失败走 thumb.get。
@@ -1164,15 +1174,24 @@
 
   // MOB-47: `<video>` 元素级错误（源不被支持 / 解码失败 / 文件在授权后被
   // 外删）——按文档化回退落到 thumb.get 缩略图，缩略图也失败才亮降级提示。
-  // 兜底是异步的，回来时目标 hash 变了（已关闭/切换）就丢弃，不覆盖新 viewer。
-  async function onVideoError() {
-    const hash = viewerVideoHash;
-    if (!hash) return;
-    const r = await loadVideoThumbnail(
-      { call, isCancelled: () => photoViewer?.hash !== hash },
-      { hash }
-    );
-    if (photoViewer?.hash !== hash) return; // 已换人/关闭 → 丢弃
+  // 错误事件必须归属于「发起它的那一次渲染」：从事件元素的 data-* 读出该
+  // 元素自己渲染时的 gen/hash（不可变快照），而不是读可变全局；这样旧 A
+  // 的迟到错误（即使 hash 与 B 不同、或关闭重开同 hash）都不会覆盖新 viewer。
+  async function onVideoError(event) {
+    const el = event?.currentTarget;
+    const rawGen = el?.dataset?.videoGen;
+    const gen = rawGen != null ? Number(rawGen) : NaN;
+    const hash = el?.dataset?.videoHash;
+    if (!Number.isInteger(gen) || !hash) return;
+    const token = { gen, hash };
+    const isActive = () => viewerVideoToken?.gen === gen && viewerVideoToken?.hash === hash;
+    const out = await handleVideoError({
+      token,
+      isActive,
+      loadThumb: (h) => loadVideoThumbnail({ call, isCancelled: () => false }, { hash: h }),
+    });
+    if (out === "ignored" || out.kind !== "applied") return;
+    const r = out.result;
     if (r.kind === "thumb") {
       viewerVideoSrc = null;
       viewerSrc = r.src;
@@ -1794,8 +1813,19 @@
           <div class="photo-viewer-wrap">
             {#if viewerVideoSrc}
               <!-- MOB-47: 视频走原生 <video>（磁盘 streaming），平台默认控件
-                   即带播放/暂停/进度/seek。src 由 convertFileSrc 生成。 -->
-              <video class="photo-viewer-video" src={viewerVideoSrc} controls onerror={onVideoError}></video>
+                   即带播放/暂停/进度/seek。src 由 convertFileSrc 生成。
+                   {#key viewerVideoToken.gen} 让每次打开/重开 viewer 都换一块
+                   全新 <video> DOM：旧元素的媒体错误事件仍归旧代（其 data-*
+                   快照不变），不会借新 viewer 的 onerror 误伤新代。 -->
+              {#key viewerVideoToken.gen}
+                <video
+                  class="photo-viewer-video"
+                  src={viewerVideoSrc}
+                  controls
+                  data-video-gen={viewerVideoToken.gen}
+                  data-video-hash={viewerVideoToken.hash}
+                  onerror={onVideoError}></video>
+              {/key}
             {:else if viewerSrc}
               <img class="photo-viewer-img" src={viewerSrc} alt="" />
             {:else if viewerFailed}

@@ -1,6 +1,6 @@
 // MOB-47 视频查看器加载编排的回归锁（L2 审查三契约）。
 import { describe, expect, it } from "vitest";
-import { loadVideoViewer } from "./viewerVideo.js";
+import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./viewerVideo.js";
 
 /** 立即成功/失败的假 invoke/convertFileSrc/call。 */
 const okInvoke = async () => "/canon/clip.mp4";
@@ -107,6 +107,85 @@ describe("竞态契约", () => {
   });
 });
 
+describe("onerror 代际守卫（handleVideoError）", () => {
+  // A→B 迟到的 DOM 错误：A 的媒体错误事件在「活跃代已经换成 B」之后才
+  // 到达，它绝不允许把 B 的视频变成 A 的缩略图。这里用「行为」锁，不是
+  // 源码字符串比对——直接跑 A 的 token 对 B 的活跃代发守护，断言输出。
+  it("旧代 A 的错误在 B 活跃后到达 → ignored，且绝不请求 B 的缩略图", async () => {
+    // 活跃代：B（gen=2, hash=B）。
+    let active = { gen: 2, hash: "hashB" };
+    const requested = [];
+    const out = await handleVideoError({
+      token: { gen: 1, hash: "hashA" }, // 旧 A 元素自己那代的快照
+      isActive: () => active.gen === 1 && active.hash === "hashA", // B 活跃 → false
+      loadThumb: async (hash) => {
+        requested.push(hash);
+        return { kind: "thumb", src: `data:image/jpeg;base64,${hash}` };
+      },
+    });
+    expect(out).toBe("ignored");
+    // 关键：B 的缩略图不允许被请求，A 的图更不允许落到 B 头上。
+    expect(requested).toEqual([]);
+  });
+
+  it("await thumb.get 期间切换成新代 → ignored，丢弃晚到的缩略图", async () => {
+    let active = { gen: 1, hash: "hashA" };
+    let resolveThumb;
+    const thumb = new Promise((res) => (resolveThumb = res));
+    const requested = [];
+    const outP = handleVideoError({
+      token: { gen: 1, hash: "hashA" },
+      isActive: () => active.gen === 1 && active.hash === "hashA",
+      loadThumb: async (hash) => {
+        requested.push(hash);
+        return thumb;
+      },
+    });
+    // thumb.get 返回前，用户切换到了新代 B。
+    active = { gen: 2, hash: "hashB" };
+    resolveThumb({ kind: "thumb", src: "data:image/jpeg;base64,AAA=" });
+    const out = await outP;
+    expect(out).toBe("ignored");
+    expect(requested).toEqual(["hashA"]);
+  });
+
+  it("仍活跃（gen/hash 都匹配）→ applied，缩略图可落地", async () => {
+    const active = { gen: 1, hash: "hashA" };
+    const out = await handleVideoError({
+      token: { gen: 1, hash: "hashA" },
+      isActive: () => active.gen === 1 && active.hash === "hashA",
+      loadThumb: async (hash) => ({ kind: "thumb", src: `thumb-of-${hash}` }),
+    });
+    expect(out).toEqual({ kind: "applied", result: { kind: "thumb", src: "thumb-of-hashA" } });
+  });
+
+  it("关闭重开同一个 hash 的旧代（gen 不同）→ ignored，不误伤新代", async () => {
+    // 同一 asset 关闭再重开：新代 gen=2，旧 video 元素的错误仍带 gen=1。
+    let active = { gen: 2, hash: "same" };
+    const requested = [];
+    const out = await handleVideoError({
+      token: { gen: 1, hash: "same" },
+      isActive: () => active.gen === 1 && active.hash === "same",
+      loadThumb: async (hash) => {
+        requested.push(hash);
+        return { kind: "thumb", src: `data:image/jpeg;base64,${hash}` };
+      },
+    });
+    expect(out).toBe("ignored");
+    expect(requested).toEqual([]);
+  });
+
+  it("缩略图也失败 → applied 且 result.kind=failed（调用方去亮降级提示）", async () => {
+    const active = { gen: 1, hash: "hashA" };
+    const out = await handleVideoError({
+      token: { gen: 1, hash: "hashA" },
+      isActive: () => active.gen === 1 && active.hash === "hashA",
+      loadThumb: async () => ({ kind: "failed" }),
+    });
+    expect(out).toEqual({ kind: "applied", result: { kind: "failed" } });
+  });
+});
+
 // ── 接线（源码级，App.svelte）──
 import { readFileSync } from "node:fs";
 
@@ -142,13 +221,22 @@ describe("App.svelte 视频分支的接线", () => {
 
   it("<video> 承接 asset 协议 src，缩略图兜底落 <img>，双失败才落降级提示", () => {
     expect(src).toContain("viewerVideoSrc");
-    expect(src).toContain('src={viewerVideoSrc}');
+    expect(src).toContain("src={viewerVideoSrc}");
   });
 
-  it("<video> onerror 走 loadVideoThumbnail 兜底，且按 hash 判是否已换人", () => {
+  it("<video> onerror 按元素自己的 gen/hash 代际守卫，且 key 随代重挂载", () => {
     expect(viewerEffect).not.toContain("onVideoError"); // handler 定义在 effect 之外
     expect(src).toContain("onVideoError");
-    expect(src).toContain("photoViewer?.hash !== hash");
+    // 错误处理必须走代际守卫纯函数，而不是直接读全局 hash 再硬判。
+    expect(src).toContain("handleVideoError(");
     expect(src).toContain("loadVideoThumbnail(");
+    // 只比 hash 的旧守卫必须消失：换成「同 gen 同 hash 才是活跃代」。
+    expect(src).not.toContain("viewerVideoHash");
+    expect(src).not.toContain("photoViewer?.hash !== hash");
+    // DOM 边界：元素以 gen 为身份快照，且 key 随代重挂载，旧元素的媒体
+    // 错误仍可归因于它原来的代（data-video-gen/data-video-hash）。
+    expect(src).toContain("data-video-gen={viewerVideoToken.gen}");
+    expect(src).toContain("data-video-hash={viewerVideoToken.hash}");
+    expect(src).toContain("{#key viewerVideoToken.gen}");
   });
 });
