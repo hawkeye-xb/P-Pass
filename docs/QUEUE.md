@@ -34,8 +34,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | 三星 scope backfill 已使 26→30 confirmed | REBUILD-06 处理新队头 flow.offer 授权/回执，再对账并验 REBUILD-04 | `main` |
-| [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | 真机已定位 completed grant 的 lease rebind 缺口 | 更新 Desktop daemon 后不清数据复验三星 Pause | `main` |
+| [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | scope backfill 三星通过；当前手机 confirmed hash 均在 Desktop | 单独裁决 1 条历史 completed grant 的对账呈现，不阻塞 REBUILD-04 / 06 | `main` |
 
 | [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | L2 审查拒绝候选：asset scope 可受任意前端路径扩张，视频失败未降级；stale 回写已修 | 后端按 hash 精确授权单文件、补错误降级与回归验证后重新审查 | `batch/mob-47-security-fix` |
 
@@ -102,9 +101,9 @@
 | R1a | [REBUILD-01](../cards/REBUILD-01-android-iroh-blobs-provider-bridge.md) | R0 | ✅ Android blobs provider bridge |
 | R1b | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | R0 | ✅ Desktop fetch + completion receipt |
 | R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | ✅ 新生产 Flow runner |
-| R3 | [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | R2 | 🟡 scope backfill 已使原 4 项入账；新媒体 `flow.offer` 授权失败，Pause 验收转由 REBUILD-06 阻塞 |
+| R3 | [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | R2 | ✅ 三星 Pause → kill → reopen → Continue → Cancel 通过 |
 | R4 | [REBUILD-05](../cards/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | 🟡 scope backfill 真机通过；跨端对账与 REBUILD-04 等 REBUILD-06 |
-| R5 | [REBUILD-06](../cards/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | R4 | 🟡 已认领：定位并修复新 Flow 项 `flow.offer` 授权/回执不收敛 |
+| R5 | [REBUILD-06](../cards/done/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | R4 | ✅ completed receipt 的 recovered lease rebind 已在三星通过 |
 
 ---
 
@@ -149,7 +148,7 @@
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [REBUILD-04](../cards/REBUILD-04-worker-cutover-debug-apk.md) | **阻塞：**已选范围 30 项中 4 项未入 Flow、当前无可传队头；REBUILD-05 后才验 Pause → kill → Continue → Cancel | L2 |
+| [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | ✅ 已归档：三星 Pause → kill → reopen → Continue → Cancel 通过 | L2 |
 | [UX-14](../cards/UX-14-a-failed-retry-is-rendered-as-paused.md) | 暂停 → 继续 → 传输中途关掉 desktop 的 daemon 制造一次连接中断 → 界面**不许**又显示「继续」（应该说它的真实状态：还有 N 张待备份 / 出错了） | L1 |
 | [MOB-40](../cards/MOB-40-backup-runs-before-the-user-picks-albums.md) | **卸载重装 → 配对 → 只选那个 11 张的相册 → 全程只传 11 张**；配对到选完相册之间一张都不许传（这一条不过，别的都不用测） | L0 |
 | [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | **复验**（8/26 打回的脱敏漏已补）：①daemon 正常时导出日志 → 9 个文件都在；②daemon 挂着时导出 → 仍出 zip 含 `.err`/`.log`；③grep 整个 zip 不许出现用户名；④`audit.json`/`diag_events.json` 里路径应是 `originals/<8位前缀>…<masked>/…`，看不到完整 hex | L1 |

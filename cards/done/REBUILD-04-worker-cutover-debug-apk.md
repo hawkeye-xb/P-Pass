@@ -1,8 +1,8 @@
 # REBUILD-04 Worker 切换、最小状态呈现与首包验收（L2）
 
-> 🟡 状态：待真机验收 · 协同分支：`main` · 前置：REBUILD-03
-> 级别：L2 · 阻塞：REBUILD-06（新测试媒体 `flow.offer` 被 Desktop `err.not_authorized` 拒绝）
-> 当前节点：REBUILD-05 已将游标前 4 项补入并传完 · 下一步：REBUILD-06 使新队头可传后，执行 Pause → 杀 App → Continue → Cancel
+> ✅ 状态：归档 · 协同分支：`main` · 前置：REBUILD-03
+> 级别：L2 · 阻塞：无
+> 当前节点：三星首包及 Pause / 重启 / Continue / Cancel 验收通过
 
 ## 问题
 
@@ -17,7 +17,7 @@
 - [x] Worker 不再执行旧 scan/hash/manifest/push/commit 主路径。
 - [x] UI 可区分用户 Pause 与条件等待；Continue 只恢复队头；Cancel Current Round 不影响 confirmed。
 - [x] `assembleDebug` 成功；只用测试相册安装验证。
-- [ ] 三星真机：传输中 Pause → 杀 App 重开仍 Pause → Continue 队头续传 → Cancel 不传剩余项（被 REBUILD-06 阻塞）。
+- [x] 三星真机：传输中 Pause → 杀 App 重开仍 Pause → Continue 队头续传 → Cancel 不传剩余项。
 
 ## 范围
 
@@ -56,3 +56,9 @@ REBUILD-03；代码已完成。这是首次需要三星设备的卡。
   （scope revision=2、无遗留 backfill request），游标前 4 项已补入并传完。为 Pause 新增
   测试媒体时，先出现 `flow.fetch` 15 秒无响应、后出现 Desktop `err.not_authorized`；严格
   队头保持可重试，不能把它当作 Pause 成功。已转 REBUILD-06，不清数据掩盖。
+- **2026-09-02 REBUILD-06 后三星验收**：同 epoch / content hash 的 completed Desktop grant
+  在恢复 lease 后回放其 durable receipt；不清手机或 Desktop 数据。新增测试媒体先得到
+  `CONFIRMED`，随后 512MB 合成测试媒体传输中 Pause：ledger 为 32 `CONFIRMED` + 1
+  `QUEUED`、gate=`PAUSED_BY_USER`、无 lease。强杀 App 重开后状态不变；Continue 仍取得
+  同一队头 lease；再次 Pause 后 Cancel Current Round 只将该项改为
+  `CANCELLED_BY_USER_ROUND`，32 个已确认项保持不变。
