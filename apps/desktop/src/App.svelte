@@ -33,6 +33,9 @@
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
   import { externalDeleteNotice } from "./lib/externalDelete.js";
+  // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
+  // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
+  import { loadVideoViewer, loadVideoThumbnail } from "./lib/viewerVideo.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。直接从仓库根引用，
   // 零副本零漂移；按系统语言选语言表（UI 单语显示的既定决策）。
@@ -1003,6 +1006,9 @@
   // 图片资产永远为 null（图片仍走 viewerSrc 的 <img> data URL 路径）。
   let viewerVideoSrc = $state(null);
   let viewerFailed = $state(false); // 取原图/原片都失败 → 显示降级提示
+  // MOB-47: 当前视频 viewer 的目标 hash——`<video>` onerror 异步兜底时
+  // 据此判断 viewer 是否已被关闭/切换，避免旧错误覆盖新 viewer。
+  let viewerVideoHash = $state(null);
 
   async function loadPhotosPage() {
     if (photosLoading || !photosNext) return;
@@ -1087,64 +1093,61 @@
   // 大图：原图内存展示（asset.original）；>12MiB/视频/失败 → 1024 缩略图
   // 降级。关闭即清引用——「不长期落盘」由不写任何临时文件天然满足。
   // MOB-47: 视频资产不走 base64（会把整段视频拉进内存），改走 asset
-  // 协议（Tauri convertFileSrc）从磁盘 streaming 播放。图片分支完全不变。
+  // 协议 streaming 播放（后端只收 hash，见 allow_media_scope）。
+  // 编排逻辑在 lib/viewerVideo.js（可单测），这里只做接线。
   $effect(() => {
     const v = photoViewer;
     viewerSrc = null;
     viewerPath = null;
     viewerVideoSrc = null;
+    viewerVideoHash = null;
     viewerFailed = false;
     if (!v) return;
     let cancelled = false;
-
+    // 每次打开设一个本代 viewer 的闸；异步加载每步都要过闸，防止旧
+    // 请求回来覆盖已关闭/已换人的 viewer。
+    const isCancelled = () => cancelled;
     const isVideo = String(v.media_type || "").startsWith("video");
+    if (isVideo) viewerVideoHash = v.hash;
 
     if (isVideo) {
-      // 视频：asset.path 取原文件绝对路径 → convertFileSrc 流式播放。
-      // 首次授权让 Rust 打开该视频所在的目录层（<node>/YYYY/MM），
-      // 然后才把 asset:// URL 交给 <video>；失败回到下方降级提示。
+      // 视频：asset 协议（hash 授权 + 单文件 scope）→ 失败走 thumb.get。
       (async () => {
-        try {
-          const p = await call("asset.path", { hash: v.hash });
-          if (cancelled) return;
-          const abs = p.path;
-          viewerPath = abs;
-          try {
-            await invoke("allow_media_scope", { path: abs });
-          } catch (e) {
-            // 授权失败只影响 asset 协议播放，不影响 Finder 揭示；继续尝试
-            // 播放，<video> onerror 会落入降级提示。
-            console.warn("MOB-47: allow_media_scope failed", e);
-          }
-          if (!cancelled) viewerVideoSrc = convertFileSrc(abs);
-        } catch (_) {
-          if (!cancelled) viewerFailed = true;
+        const r = await loadVideoViewer(
+          { invoke, call, convertFileSrc, isCancelled },
+          { hash: v.hash }
+        );
+        if (isCancelled()) return;
+        if (r.kind === "video") {
+          viewerPath = r.path;
+          viewerVideoSrc = r.src;
+        } else if (r.kind === "thumb") {
+          viewerSrc = r.src; // 缩略图走 <img>（图片路径不变）
+        } else {
+          viewerFailed = true; // 缩略图也失败 → 才真正降级提示
         }
       })();
-      // The request can finish after the user closes the viewer or opens a
-      // different asset.  Cancel this generation just like the image path;
-      // otherwise a late video response can overwrite the next viewer state.
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    // 图片：原图 data URL，失败 → 1024 缩略图（与改动前完全一致）。
-    (async () => {
-      try {
-        const o = await call("asset.original", { hash: v.hash });
-        if (!cancelled) viewerSrc = `data:image/jpeg;base64,${o.data_base64}`;
-      } catch (_) {
+    } else {
+      // 图片：原图 data URL，失败 → 1024 缩略图（与改动前完全一致）。
+      (async () => {
         try {
-          const t = await call("thumb.get", { hash: v.hash, size: 1024 });
-          if (!cancelled) viewerSrc = `data:image/jpeg;base64,${t.jpeg_base64}`;
+          const o = await call("asset.original", { hash: v.hash });
+          if (!cancelled) viewerSrc = `data:image/jpeg;base64,${o.data_base64}`;
+        } catch (_) {
+          try {
+            const t = await call("thumb.get", { hash: v.hash, size: 1024 });
+            if (!cancelled) viewerSrc = `data:image/jpeg;base64,${t.jpeg_base64}`;
+          } catch (_) {}
+        }
+        try {
+          const p = await call("asset.path", { hash: v.hash });
+          if (!cancelled) viewerPath = p.path;
         } catch (_) {}
-      }
-      try {
-        const p = await call("asset.path", { hash: v.hash });
-        if (!cancelled) viewerPath = p.path;
-      } catch (_) {}
-    })();
+      })();
+    }
+    // The request can finish after the user closes the viewer or opens a
+    // different asset.  Cancel this generation just like the image path;
+    // otherwise a late video response can overwrite the next viewer state.
     return () => {
       cancelled = true;
     };
@@ -1156,6 +1159,25 @@
       await revealItemInDir(viewerPath);
     } catch (e) {
       flashMessage(`无法在文件管理器中显示：${e}`);
+    }
+  }
+
+  // MOB-47: `<video>` 元素级错误（源不被支持 / 解码失败 / 文件在授权后被
+  // 外删）——按文档化回退落到 thumb.get 缩略图，缩略图也失败才亮降级提示。
+  // 兜底是异步的，回来时目标 hash 变了（已关闭/切换）就丢弃，不覆盖新 viewer。
+  async function onVideoError() {
+    const hash = viewerVideoHash;
+    if (!hash) return;
+    const r = await loadVideoThumbnail(
+      { call, isCancelled: () => photoViewer?.hash !== hash },
+      { hash }
+    );
+    if (photoViewer?.hash !== hash) return; // 已换人/关闭 → 丢弃
+    if (r.kind === "thumb") {
+      viewerVideoSrc = null;
+      viewerSrc = r.src;
+    } else {
+      viewerFailed = true;
     }
   }
 </script>
@@ -1773,7 +1795,7 @@
             {#if viewerVideoSrc}
               <!-- MOB-47: 视频走原生 <video>（磁盘 streaming），平台默认控件
                    即带播放/暂停/进度/seek。src 由 convertFileSrc 生成。 -->
-              <video class="photo-viewer-video" src={viewerVideoSrc} controls></video>
+              <video class="photo-viewer-video" src={viewerVideoSrc} controls onerror={onVideoError}></video>
             {:else if viewerSrc}
               <img class="photo-viewer-img" src={viewerSrc} alt="" />
             {:else if viewerFailed}
