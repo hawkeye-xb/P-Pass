@@ -53,3 +53,37 @@ export async function loadVideoThumbnail(deps, { hash, size = 1024 }) {
     return { kind: "failed" };
   }
 }
+
+/**
+ * `<video>` onerror 的生成代际守卫：错误事件只能落在「发起它的那一次
+ * 渲染」的 viewer 上，而不是读可变全局。token 是随 `<video>` 元素一起
+ * 渲染的不可变身份快照（gen 单调递增，hash 是当前 asset），错误到达时
+ * 用它同时在 thumb.get 前后校验：只要活跃代不再等于这个 token，就丢弃。
+ *
+ * 为什么不能只比 hash：关闭再打开同一个 hash（或 A 的迟到错误在 B 已
+ * 打开后到达）都要求「错误归属于它自己那次渲染」而不是「任一相同 hash」。
+ * gen 是在打开 viewer 时就定死的标记，关闭重开会递增，旧 DOM 元素随
+ * `{#key}` 卸载后它的错误事件仍带着旧 gen，自然被判为过期。
+ *
+ * @param {{
+ *   token: {gen: number, hash: string},
+ *   isActive: () => boolean,
+ *   loadThumb: (hash: string) => Promise<
+ *     {kind: "thumb", src: string} | {kind: "failed"} | {kind: "cancelled"}
+ *   >,
+ * }} deps
+ * @returns {Promise<
+ *   "ignored" | {kind: "applied", result:
+ *     {kind: "thumb", src: string} | {kind: "failed"} | {kind: "cancelled"}
+ *   }
+ * >}
+ */
+export async function handleVideoError({ token, isActive, loadThumb }) {
+  // 错误事件的来源元素必须仍是当前 viewer 的那一次渲染；不是则根本
+  // 不用发 thumb.get 请求（早期短路，也挡掉同 hash 的旧代错误）。
+  if (!token || !isActive()) return "ignored";
+  const r = await loadThumb(token.hash);
+  // await 之后重判一次：请求期间 viewer 又换人/关闭了 → 丢弃，不许覆盖。
+  if (!isActive()) return "ignored";
+  return { kind: "applied", result: r };
+}
