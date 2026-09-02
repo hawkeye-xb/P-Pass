@@ -1121,7 +1121,12 @@
           if (!cancelled) viewerFailed = true;
         }
       })();
-      return;
+      // The request can finish after the user closes the viewer or opens a
+      // different asset.  Cancel this generation just like the image path;
+      // otherwise a late video response can overwrite the next viewer state.
+      return () => {
+        cancelled = true;
+      };
     }
 
     // 图片：原图 data URL，失败 → 1024 缩略图（与改动前完全一致）。
