@@ -36,7 +36,7 @@
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
 
-| [MOB-50](../cards/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 取消轮次原子提交后复位失效的 upload cursor | FlowRunner RED 测试：取消后新发现项可被 wake 消费 | `main` |
+
 
 
 
@@ -153,6 +153,7 @@
 |---|---|---|
 | [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | ✅ 已归档：三星 Pause → kill → reopen → Continue → Cancel 通过 | L2 |
 | [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 代码完成：取消后 UI 回到暂停态；待 MOB-50 合入后，以隔离测试相册验证新增媒体可完整发现、传输、确认 | L1 |
+| [MOB-50](../cards/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 代码完成：取消后复位 upload cursor；与 MOB-49 一起以隔离测试相册验证新增媒体发现、传输、确认 | L1 |
 | [UX-14](../cards/UX-14-a-failed-retry-is-rendered-as-paused.md) | 暂停 → 继续 → 传输中途关掉 desktop 的 daemon 制造一次连接中断 → 界面**不许**又显示「继续」（应该说它的真实状态：还有 N 张待备份 / 出错了） | L1 |
 | [MOB-40](../cards/MOB-40-backup-runs-before-the-user-picks-albums.md) | **卸载重装 → 配对 → 只选那个 11 张的相册 → 全程只传 11 张**；配对到选完相册之间一张都不许传（这一条不过，别的都不用测） | L0 |
 | [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | **复验**（8/26 打回的脱敏漏已补）：①daemon 正常时导出日志 → 9 个文件都在；②daemon 挂着时导出 → 仍出 zip 含 `.err`/`.log`；③grep 整个 zip 不许出现用户名；④`audit.json`/`diag_events.json` 里路径应是 `originals/<8位前缀>…<masked>/…`，看不到完整 hex | L1 |

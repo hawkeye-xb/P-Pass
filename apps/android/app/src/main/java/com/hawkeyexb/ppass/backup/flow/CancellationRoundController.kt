@@ -6,18 +6,22 @@ class CancellationRoundController(private val ledger: DiscoveryLedgerStore) {
             require(snapshot.consumerGate == ConsumerGate.PAUSED_BY_USER) { "cancellation requires a user pause" }
             require(snapshot.fetchLease == null) { "cancellation requires the active fetch to stop first" }
             require(snapshot.cancellationRound == null) { "a cancellation round is already active" }
+            val items = snapshot.items.map { item ->
+                if (item.deliveryState == DeliveryState.QUEUED || item.deliveryState == DeliveryState.FAILED_NEEDS_USER) {
+                    item.copy(
+                        deliveryState = DeliveryState.CANCELLED_BY_USER_ROUND,
+                        cancellationRoundId = id,
+                    )
+                } else {
+                    item
+                }
+            }
             snapshot.copy(
                 cancellationRound = CancellationRound(id),
-                items = snapshot.items.map { item ->
-                    if (item.deliveryState == DeliveryState.QUEUED || item.deliveryState == DeliveryState.FAILED_NEEDS_USER) {
-                        item.copy(
-                            deliveryState = DeliveryState.CANCELLED_BY_USER_ROUND,
-                            cancellationRoundId = id,
-                        )
-                    } else {
-                        item
-                    }
-                },
+                uploadCursor = items.firstOrNull { it.deliveryState == DeliveryState.QUEUED }
+                    ?.let { UploadCursor(it.queueSequence) }
+                    ?: UploadCursor.INITIAL,
+                items = items,
             )
         }
     }

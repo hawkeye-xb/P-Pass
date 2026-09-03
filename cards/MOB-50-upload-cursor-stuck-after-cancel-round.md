@@ -1,6 +1,6 @@
 # MOB-50 取消本轮后 uploadCursor 未重置，后续新项永久卡在 QUEUED（L1）
 
-> 🟠 状态：进行中 · 当前节点：在取消轮次的原子账本提交中复位失效 cursor；下一步：先写「取消→新发现→wake」RED 测试 · 协同分支：`main` · 前置：无
+> 🟡 状态：代码完成，待真机验收 · 当前节点：取消轮次原子提交复位失效 cursor；下一步：以隔离测试相册执行 Pause→Cancel→新增媒体→确认 · 协同分支：`main` · 前置：无
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -51,17 +51,15 @@ Cancel Current Round 完成后，`uploadCursor` 应当能够指向下一个真�
 
 ## 阻塞与依赖
 
-无。发现于 REBUILD-05 真机验收过程，与该卡根因（迟到回执处理）无关，是
-Cancel Current Round 完成后队列游标推进的独立生产缺口。与 MOB-49
-（cancellationRound 字段本身不清除）是同一次真机验收发现的两个不同层面
-问题：MOB-49 是 UI/状态呈现层，本卡是消费者游标推进层；两者互相独立，
-任一张单独修复都不依赖另一张。
+无代码依赖。按队列真机策略，验收人以隔离测试相册执行本卡及 MOB-49 的组合
+端到端验证；不得通过 ADB 写入或清空应用状态替代。
 
 ---
 
 ## 实施记录
 
 - 2026-09-03：认领。保持 `StrictConsumer.headOf` 的严格游标契约；在 `CancellationRoundController.startPausedRound` 的同一原子提交中，将 cursor 改为映射后第一个 `QUEUED` 项，或无项时 `UploadCursor.INITIAL`。MOB-49 已使取消扫描完成后回到用户暂停态；本卡只处理其独立游标推进缺口。
+- 2026-09-03：RED：新增 `FlowRunner` 路径「取消→新候选经账本发现→Continue/wake」测试，未复位 cursor 时新项不能成为严格队头，失败于断言。GREEN：取消的同一原子账本提交从映射后队列计算第一个 `QUEUED` cursor，无项则 `UploadCursor.INITIAL`。反证：暂时删除 cursor 重算后，同一测试再次失败；已恢复。全量 Android JVM 264 tests / 0 failures / 0 errors / 4 skipped，debug APK 与 `just ci` 通过。
 
 ## 备注
 
