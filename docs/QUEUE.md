@@ -35,8 +35,8 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
+| [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 按 ARCH-01 已定语义接线取消扫描完成后的原子结束 | FlowRunner RED 测试：取消后清除 `cancellationRound` 且 UI 为 `PausedByUser` | `main` |
 
-（当前无进行中的卡）
 
 
 
@@ -116,7 +116,6 @@
 
 
 
-| P1 | [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 取消本轮后 `cancellationRound` 无生产清除路径，UI 永久卡在「当前轮已取消」（REBUILD-05 真机验收发现） | L1 |
 | P1 | [MOB-50](../cards/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 取消本轮后 `uploadCursor` 不重置，后续新入队项永久卡 `QUEUED` 不被消费（REBUILD-05 真机验收发现） | L1 |
 | P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |

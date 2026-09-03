@@ -1,6 +1,6 @@
 # MOB-49 取消本轮后 UI 永久卡死，无生产路径清除 cancellationRound（L1）
 
-> ⬜ 状态：未开工 · 协同分支：`main` · 前置：无
+> 🟠 状态：进行中 · 当前节点：按 ARCH-01 已定语义接线取消扫描完成后的原子结束；下一步：先写 FlowRunner 生产接线 RED 测试 · 协同分支：`main` · 前置：无
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -52,7 +52,7 @@ discovery+wake 循环、或显式的"知道了"确认）把 `cancellationRound` 
 
 ## 实施记录
 
-<待实施 agent 填写>
+- 2026-09-03：认领。ARCH-01 §8 已明确取消扫描完成后原子结束 `CancellationRound`；本卡不新增用户确认，也不等待下一次成功传输。先以 `FlowRunner` 的生产接线测试证明取消后 UI 回到 `PausedByUser`；MOB-50 继续负责独立的 `uploadCursor` 复位。
 
 ## 备注
 
