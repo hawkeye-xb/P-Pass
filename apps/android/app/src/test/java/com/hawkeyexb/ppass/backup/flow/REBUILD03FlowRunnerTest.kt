@@ -75,7 +75,16 @@ class REBUILD03FlowRunnerTest {
         val cancelled = ledger.load()
         assertEquals(ConsumerGate.PAUSED_BY_USER, cancelled.consumerGate)
         assertEquals(DeliveryState.CANCELLED_BY_USER_ROUND, cancelled.items.single().deliveryState)
-        assertEquals("round-1", cancelled.cancellationRound?.id)
+        assertEquals(
+            "the completed cancellation scan must release the production cancellation marker",
+            null,
+            cancelled.cancellationRound,
+        )
+        assertEquals(
+            "after cancellation completes, the user-controlled pause remains in force",
+            FlowUiState.PausedByUser,
+            flowUiStateOf(cancelled),
+        )
         dir.deleteRecursively()
     }
 
