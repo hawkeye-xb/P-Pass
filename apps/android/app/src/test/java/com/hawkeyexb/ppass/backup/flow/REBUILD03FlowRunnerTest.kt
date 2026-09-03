@@ -89,6 +89,35 @@ class REBUILD03FlowRunnerTest {
     }
 
     @Test
+    fun cancelled_round_releases_cursor_so_next_discovered_candidate_wakes() {
+        val dir = tempDir("cancel-then-discover")
+        val ledger = DiscoveryLedgerStore(dir)
+        val delivery = RecordingDelivery()
+        val runner = FlowRunner(
+            ledger,
+            RecordingDiscovery(DiscoveryPage(listOf(candidate(18)), DiscoveryCursor(7L, 18L))),
+            delivery,
+        )
+
+        runner.requestDiscovery()
+        runner.run(constraintsSatisfied = true)
+        runner.cancelCurrentRound("round-1")
+        ledger.commitDiscoveryPage(listOf(candidate(19)), DiscoveryCursor(7L, 19L))
+
+        runner.continueFlow(constraintsSatisfied = true)
+
+        val resumed = ledger.load()
+        assertEquals(
+            "a new candidate admitted after cancellation must become the strict head",
+            listOf(1L, 2L),
+            delivery.starts,
+        )
+        assertEquals(UploadCursor(2L), resumed.uploadCursor)
+        assertEquals(DeliveryState.TRANSFERRING, resumed.items.single { it.queueSequence == 2L }.deliveryState)
+        dir.deleteRecursively()
+    }
+
+    @Test
     fun receipt_with_stale_lease_or_wrong_hash_never_confirms_the_current_head() {
         val dir = tempDir("receipt-guards")
         val ledger = DiscoveryLedgerStore(dir)

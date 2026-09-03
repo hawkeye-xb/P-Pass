@@ -6,13 +6,12 @@
 
 **Now / 当前位置**（2026-09-03）: M0/M1 closed; M2 Android is in
 real-device dogfood. REBUILD-05 passed on a Samsung test device; its
-cancel-current-round regressions are now the critical path. MOB-49 code is
-green; MOB-50 must reset the upload cursor before one controlled real-device
-end-to-end check. `just ci` green; Android JVM 263 tests / 0 failures.
+cancel-current-round regressions are now the critical path. MOB-49 and MOB-50
+code are green; one controlled real-device end-to-end check remains. `just ci`
+green; Android JVM 264 tests / 0 failures.
 **当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。REBUILD-05 已在三星测试机
-通过，当前主路径是其取消本轮的两个回归：MOB-49 代码已绿；待 MOB-50 复位上传
-游标后，用隔离测试相册做一次端到端真机验收。`just ci` 已绿；Android JVM 263
-tests / 0 failures。
+通过，当前主路径是其取消本轮的两个回归：MOB-49/MOB-50 代码均已绿；待用隔离
+测试相册做一次端到端真机验收。`just ci` 已绿；Android JVM 264 tests / 0 failures。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 
