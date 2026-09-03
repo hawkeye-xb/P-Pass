@@ -1,6 +1,6 @@
 # MOB-50 取消本轮后 uploadCursor 未重置，后续新项永久卡在 QUEUED（L1）
 
-> ⬜ 状态：未开工 · 协同分支：`main` · 前置：无
+> 🟠 状态：进行中 · 当前节点：在取消轮次的原子账本提交中复位失效 cursor；下一步：先写「取消→新发现→wake」RED 测试 · 协同分支：`main` · 前置：无
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -61,7 +61,7 @@ Cancel Current Round 完成后队列游标推进的独立生产缺口。与 MOB-
 
 ## 实施记录
 
-<待实施 agent 填写>
+- 2026-09-03：认领。保持 `StrictConsumer.headOf` 的严格游标契约；在 `CancellationRoundController.startPausedRound` 的同一原子提交中，将 cursor 改为映射后第一个 `QUEUED` 项，或无项时 `UploadCursor.INITIAL`。MOB-49 已使取消扫描完成后回到用户暂停态；本卡只处理其独立游标推进缺口。
 
 ## 备注
 
