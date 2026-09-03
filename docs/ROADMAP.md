@@ -4,14 +4,15 @@
 > 里程碑状态的唯一权威来源，每张卡完成即更新。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
-**Now / 当前位置**（2026-08-25）: M0/M1 closed; M2 Android shipped and
-in real-device dogfood; M3 hardening code all landed. Launch blockers
-cleared (`BLOB-01` disk 2.05x→1.00x, `MOB-19`, `E2E-02`). The critical
-path is now **real-device acceptance** — dozens of cards sit at "code
-green, owner verification owed". `just ci` green (316 tests, 2026-08-25).
-**当前位置**：M0/M1 已收官；M2 手机端已上真机狗粮；M3 硬化代码全部落地。
-上线三件必做已清完。**主路径已从「写代码」转为「真机验收」**——几十张卡
-停在「代码绿、欠验收人一条」。
+**Now / 当前位置**（2026-09-03）: M0/M1 closed; M2 Android is in
+real-device dogfood. REBUILD-05 passed on a Samsung test device; its
+cancel-current-round regressions are now the critical path. MOB-49 code is
+green; MOB-50 must reset the upload cursor before one controlled real-device
+end-to-end check. `just ci` green; Android JVM 263 tests / 0 failures.
+**当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。REBUILD-05 已在三星测试机
+通过，当前主路径是其取消本轮的两个回归：MOB-49 代码已绿；待 MOB-50 复位上传
+游标后，用隔离测试相册做一次端到端真机验收。`just ci` 已绿；Android JVM 263
+tests / 0 failures。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 

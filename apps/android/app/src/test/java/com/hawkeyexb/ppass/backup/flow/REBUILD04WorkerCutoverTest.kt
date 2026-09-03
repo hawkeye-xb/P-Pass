@@ -37,7 +37,7 @@ class REBUILD04WorkerCutoverTest {
     }
 
     @Test
-    fun continue_reopens_only_the_durable_head_and_cancel_keeps_confirmed_items() {
+    fun continue_reopens_only_the_durable_head_and_cancel_returns_to_user_pause() {
         val dir = java.nio.file.Files.createTempDirectory("ppass-rebuild04-continue-cancel").toFile()
         val ledger = DiscoveryLedgerStore(dir)
         val delivery = RecordingDelivery()
@@ -63,7 +63,8 @@ class REBUILD04WorkerCutoverTest {
 
         runner.cancelCurrentRound("round-1")
         val cancelled = ledger.load()
-        assertEquals(FlowUiState.CancelledCurrentRound, flowUiStateOf(cancelled))
+        assertEquals(FlowUiState.PausedByUser, flowUiStateOf(cancelled))
+        assertEquals(null, cancelled.cancellationRound)
         assertEquals(DeliveryState.CONFIRMED, cancelled.items.single { it.queueSequence == 1L }.deliveryState)
         assertEquals(DeliveryState.CANCELLED_BY_USER_ROUND, cancelled.items.single { it.queueSequence == 2L }.deliveryState)
         dir.deleteRecursively()

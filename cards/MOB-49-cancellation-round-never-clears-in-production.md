@@ -1,7 +1,7 @@
 # MOB-49 取消本轮后 UI 永久卡死，无生产路径清除 cancellationRound（L1）
 
-> 🟠 状态：进行中 · 当前节点：按 ARCH-01 已定语义接线取消扫描完成后的原子结束；下一步：先写 FlowRunner 生产接线 RED 测试 · 协同分支：`main` · 前置：无
-> 级别：L1 · 阻塞：无
+> 🟡 状态：代码完成，待真机验收 · 当前节点：取消扫描完成后生产路径原子清除 `CancellationRound` 并保留用户暂停；下一步：MOB-50 合入后以隔离测试相册完成端到端验收 · 协同分支：`main` · 前置：MOB-50
+> 级别：L1 · 阻塞：MOB-50
 
 ## 问题
 
@@ -45,14 +45,16 @@ discovery+wake 循环、或显式的"知道了"确认）把 `cancellationRound` 
 
 ## 阻塞与依赖
 
-无。发现于 REBUILD-05 真机验收过程，与该卡根因（迟到回执处理）无关，
-是取消本轮流程自身的生产接线缺口。
+MOB-50：本卡的 UI 恢复已可由自动测试验证；但验收中的「新增测试媒体可发现、
+传输、确认」会被已知的 `uploadCursor` 缺口阻断。待 MOB-50 合入后，以隔离测试
+相册一次完成两卡端到端真机验收。
 
 ---
 
 ## 实施记录
 
 - 2026-09-03：认领。ARCH-01 §8 已明确取消扫描完成后原子结束 `CancellationRound`；本卡不新增用户确认，也不等待下一次成功传输。先以 `FlowRunner` 的生产接线测试证明取消后 UI 回到 `PausedByUser`；MOB-50 继续负责独立的 `uploadCursor` 复位。
+- 2026-09-03：RED：`REBUILD03FlowRunnerTest` 新增断言后，在未接线时失败于 `cancellationRound` 仍非空。GREEN：`FlowRunner.cancelCurrentRound` 在当前账本窗口终态化后调用 `finishRound()`；取消项仍为 `CANCELLED_BY_USER_ROUND`，UI 回到 `PausedByUser`。反证：暂时删除该唯一调用，目标测试再次失败；已恢复。全量 Android JVM 263 tests / 0 failures / 0 errors / 4 skipped，debug APK 与 `just ci` 均通过。全量测试同步发现并改正 REBUILD-04 对永久 `CancelledCurrentRound` 的旧预期。
 
 ## 备注
 

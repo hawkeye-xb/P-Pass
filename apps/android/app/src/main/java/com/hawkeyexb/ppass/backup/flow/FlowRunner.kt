@@ -70,6 +70,10 @@ class FlowRunner(
     fun cancelCurrentRound(roundId: String) {
         pause()
         cancellation.startPausedRound(roundId)
+        // startPausedRound terminally marks every cancellable item in the
+        // current durable window, so this production cancellation scan ends
+        // atomically before future discovery admits the next round.
+        cancellation.finishRound()
     }
 
     fun acceptCompletionReceipt(receipt: CompletionReceipt) {
