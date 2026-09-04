@@ -26,7 +26,7 @@ Android JNI blobs provider 只在 Android target 编译和导出；其余 transp
 
 ## 范围
 
-- 只准动：`crates/transport/src/lib.rs` 及 Android-only 模块编译边界所需的测试。
+- 只准动：`crates/transport/` 的 Android JNI feature 编译边界、`tools/build-android-iroh-blobs-bridge.sh` 及所需测试。
 - 不准动：iroh-blobs 传输协议、Android provider 的单 lease / revoke 语义、Release 签名与上传逻辑。
 
 ## 阻塞与依赖

@@ -570,6 +570,11 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
     steps:
+      # `gh release` resolves the repository from the checked-out remote; this
+      # job intentionally has no build dependency, but it still needs that
+      # context before creating the skeleton release.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Resolve tag
         id: tag
         run: |

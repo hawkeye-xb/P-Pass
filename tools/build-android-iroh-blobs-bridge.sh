@@ -27,7 +27,7 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CLANG"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="$TOOLCHAIN_ROOT/bin/llvm-ar"
 export CC_aarch64_linux_android="$CLANG"
 export AR_aarch64_linux_android="$TOOLCHAIN_ROOT/bin/llvm-ar"
-cargo build -p transport --release --target "$TARGET"
+cargo build -p transport --features android-jni --release --target "$TARGET"
 
 OUT="$1/arm64-v8a"
 mkdir -p "$OUT"
