@@ -785,6 +785,7 @@ jobs:
       - name: Upload macos assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           cd artifacts
@@ -833,6 +834,7 @@ jobs:
       - name: Upload windows assets
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           cd artifacts
@@ -938,6 +940,7 @@ jobs:
       - name: Rewrite release notes
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           # 只改正文，不动 draft/prerelease——test tag 可能已被 upload-android
