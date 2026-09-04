@@ -70,6 +70,14 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@748248ddd2a24f49513d8f472f81c3a07d4d50e1 # v4
 
+      # REBUILD-01: Android JVM scenarios load the native iroh-blobs provider.
+      # Mirror ci-android/release: Gradle builds this bridge on demand, so the
+      # Rust target and NDK must exist before any scenario invokes Gradle.
+      - name: Build Android-native iroh-blobs provider
+        run: |
+          rustup target add aarch64-linux-android
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME}" >> "$GITHUB_ENV"
+
       - name: Build release daemon
         run: cargo build --release -p daemon
 
