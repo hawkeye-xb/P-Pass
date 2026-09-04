@@ -35,6 +35,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
+| [E2E-03](../cards/E2E-03-tag-e2e-missing-android-rust-target.md) | tag E2E #73 的 Android native provider 缺 Rust target，Gradle 预构建 E0463 | 补齐 `aarch64-linux-android` + NDK 前置，以新 test tag 复核 | `main` |
 
 
 
