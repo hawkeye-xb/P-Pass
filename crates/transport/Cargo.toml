@@ -8,6 +8,11 @@ publish = false
 [lib]
 crate-type = ["rlib", "cdylib"]
 
+[features]
+# Enabled only by the Android bridge build. This keeps JNI descriptor APIs out
+# of non-Android release targets without platform cfg outside crates/platform/.
+android-jni = []
+
 [dependencies]
 # ADR-001 / §B.1: iroh is allowed in this crate ONLY. Declared here (not in
 # workspace.dependencies) to keep the isolation visible at a glance.

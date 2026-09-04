@@ -6,18 +6,25 @@
 //! next ticket fetch.
 
 use std::collections::HashMap;
+#[cfg(feature = "android-jni")]
 use std::fs::File;
+#[cfg(feature = "android-jni")]
 use std::os::fd::{FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+#[cfg(feature = "android-jni")]
+use std::sync::OnceLock;
+use std::sync::{Arc, Mutex};
 
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::{BlobFormat, BlobsProtocol, Hash};
+#[cfg(feature = "android-jni")]
 use jni::objects::{JClass, JString};
+#[cfg(feature = "android-jni")]
 use jni::sys::{jint, jlong, jstring};
+#[cfg(feature = "android-jni")]
 use jni::JNIEnv;
 
 use crate::{IrohTransport, Result, TransportConfig, TransportError, ALPN_BLOBS};
@@ -149,6 +156,7 @@ impl AndroidBlobsProvider {
     /// Imports an Android ParcelFileDescriptor without relying on a filesystem
     /// path. The caller retains ownership of [fd]; this method duplicates it and
     /// completes the import before returning.
+    #[cfg(feature = "android-jni")]
     fn register_fd(&self, declared_hash: [u8; 32], fd: RawFd) -> Result<String> {
         self.revoke();
         let duplicated = unsafe { libc::dup(fd) };
@@ -192,6 +200,7 @@ impl AndroidBlobsProvider {
             .await
     }
 
+    #[cfg(feature = "android-jni")]
     async fn register_file_async(&self, declared_hash: [u8; 32], source: File) -> Result<String> {
         let (store, transport) = self.open_session().await?;
         let stream = tokio_util::io::ReaderStream::new(tokio::fs::File::from_std(source));
@@ -262,13 +271,17 @@ impl AndroidBlobsProvider {
     }
 }
 
+#[cfg(feature = "android-jni")]
 static PROVIDERS: OnceLock<Mutex<HashMap<jlong, Arc<AndroidBlobsProvider>>>> = OnceLock::new();
+#[cfg(feature = "android-jni")]
 static NEXT_PROVIDER_HANDLE: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(feature = "android-jni")]
 fn providers() -> &'static Mutex<HashMap<jlong, Arc<AndroidBlobsProvider>>> {
     PROVIDERS.get_or_init(Mutex::default)
 }
 
+#[cfg(feature = "android-jni")]
 fn provider(handle: jlong) -> Result<Arc<AndroidBlobsProvider>> {
     providers()
         .lock()
@@ -278,10 +291,12 @@ fn provider(handle: jlong) -> Result<Arc<AndroidBlobsProvider>> {
         .ok_or_else(|| TransportError::Io("unknown Android provider handle".into()))
 }
 
+#[cfg(feature = "android-jni")]
 fn throw(env: &mut JNIEnv<'_>, error: impl std::fmt::Display) {
     let _ = env.throw_new("java/lang/IllegalStateException", error.to_string());
 }
 
+#[cfg(feature = "android-jni")]
 #[no_mangle]
 pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeOpen(
     mut env: JNIEnv<'_>,
@@ -311,6 +326,7 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
     }
 }
 
+#[cfg(feature = "android-jni")]
 #[no_mangle]
 pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeRegister(
     mut env: JNIEnv<'_>,
@@ -347,6 +363,7 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
     }
 }
 
+#[cfg(feature = "android-jni")]
 #[no_mangle]
 pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeStopActiveFetch(
     mut env: JNIEnv<'_>,
@@ -359,6 +376,7 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
     }
 }
 
+#[cfg(feature = "android-jni")]
 #[no_mangle]
 pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeRevoke(
     mut env: JNIEnv<'_>,
@@ -371,6 +389,7 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
     }
 }
 
+#[cfg(feature = "android-jni")]
 #[no_mangle]
 pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeClose(
     mut env: JNIEnv<'_>,
