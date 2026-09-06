@@ -62,3 +62,77 @@ fun flowAggregateOf(snapshot: DiscoveryLedgerSnapshot): FlowAggregate {
  */
 fun flowIsAllDone(snapshot: DiscoveryLedgerSnapshot, aggregate: FlowAggregate): Boolean =
     snapshot.items.isNotEmpty() && aggregate.confirmed == snapshot.items.size.toLong()
+
+/**
+ * MOB-51: the durable round-active fact. A round is running while the gate
+ * is open AND the ledger still owns deliverable work (a leased or queued
+ * item). This survives the between-files gap that the per-file Transferring
+ * projection cannot see (head confirmed, next queued, lease momentarily
+ * null) — which made the Pause button practically unreachable on real
+ * devices where LAN transfers finish a file in hundreds of milliseconds.
+ * A user pause ends the round (paused shows Resume, not Pause); a terminal
+ * failed head with no queued backing is "stalled", not "running" — showing
+ * Pause there would lie about work happening.
+ */
+fun flowRoundActive(snapshot: DiscoveryLedgerSnapshot): Boolean =
+    snapshot.consumerGate == ConsumerGate.OPEN &&
+        (
+            snapshot.fetchLease != null ||
+                snapshot.items.any {
+                    it.deliveryState == DeliveryState.QUEUED || it.deliveryState == DeliveryState.TRANSFERRING
+                }
+            )
+
+/**
+ * MOB-51: the single snapshot -> home-screen state mapping (shared by the
+ * production holder and tests; production-chain rule). A round that is
+ * active but momentarily between files still renders as work in progress,
+ * so the Pause affordance stays reachable for the whole round. The gap
+ * render is `Sending` with no file and total == 0 — the UI shows a plain
+ * "round running" line, never a fabricated 0/0 or fake file progress.
+ */
+fun backupUiStateOf(snapshot: DiscoveryLedgerSnapshot): com.hawkeyexb.ppass.ui.BackupUiState {
+    val aggregate = flowAggregateOf(snapshot)
+    return when (val state = flowUiStateOf(snapshot)) {
+        FlowUiState.Idle -> when {
+            flowIsAllDone(snapshot, aggregate) ->
+                com.hawkeyexb.ppass.ui.BackupUiState.AllSafe(ingested = aggregate.confirmed.toInt(), duplicates = 0)
+            flowRoundActive(snapshot) ->
+                com.hawkeyexb.ppass.ui.BackupUiState.Sending(
+                    done = aggregate.confirmed.toInt(),
+                    total = (aggregate.confirmed + aggregate.pending).toInt(),
+                    currentFile = "",
+                )
+            else -> com.hawkeyexb.ppass.ui.BackupUiState.Idle
+        }
+        FlowUiState.PausedByUser -> com.hawkeyexb.ppass.ui.BackupUiState.Paused
+        FlowUiState.WaitingForConstraints -> com.hawkeyexb.ppass.ui.BackupUiState.WaitingForConstraints
+        is FlowUiState.Transferring -> com.hawkeyexb.ppass.ui.BackupUiState.Sending(
+            done = aggregate.confirmed.toInt(),
+            total = (aggregate.confirmed + aggregate.pending).toInt(),
+            currentFile = state.fileName,
+        )
+        FlowUiState.NeedsUserAttention -> com.hawkeyexb.ppass.ui.BackupUiState.Trouble("Flow delivery exhausted its retry limit")
+        FlowUiState.CancelledCurrentRound -> com.hawkeyexb.ppass.ui.BackupUiState.CancelledCurrentRound
+    }
+}
+
+/** MOB-51: the durable command behind the single hero button click. */
+enum class FlowCommand { Pause, Continue, Retry, Wake }
+
+/**
+ * MOB-51: routing the hero click on the SAME durable facts the button label
+ * came from. Before this, the label said "Pause" in the between-files gap
+ * while the click re-read the ledger, saw Idle, and fired a wake instead —
+ * the button lied twice. Now a visible Pause click always pauses: an open
+ * round with a lease, a transferring item, or a gap is pausable.
+ */
+fun flowCommandOf(snapshot: DiscoveryLedgerSnapshot): FlowCommand =
+    when (flowUiStateOf(snapshot)) {
+        FlowUiState.PausedByUser -> FlowCommand.Continue
+        FlowUiState.NeedsUserAttention -> FlowCommand.Retry
+        is FlowUiState.Transferring -> FlowCommand.Pause
+        // Idle / WaitingForConstraints / CancelledCurrentRound: pause while
+        // the round is durably active, otherwise wake a stopped engine.
+        else -> if (flowRoundActive(snapshot)) FlowCommand.Pause else FlowCommand.Wake
+    }
