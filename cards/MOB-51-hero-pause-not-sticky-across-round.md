@@ -1,7 +1,7 @@
 # MOB-51 英雄区暂停/继续只在单文件传输瞬间可达，整轮进行中没有粘性（L1）
 
-> ⬜ 状态：未开工 · 当前节点：2026-09-06 真机实证（test.5，UI-09 修复后）；下一步：以轮级粘性进行中语义重定义按钮门（RED 先行） · 协同分支：`main`
-> 级别：L1 · 阻塞：无（挡 MOB-49/MOB-50 组合真机验收）
+> 🟡 状态：代码完成（本机全绿），等真机验收 · 当前节点：RED 2 条缝隙用例真红 → 粘性实现合入；下一步：真机连续备份全程有「暂停」、点暂停→「继续」→「取消」→ 同轮完成 MOB-49/50 组合验收 · 协同分支：`main`
+> 级别：L1 · 阻塞：无（本卡挡 MOB-49/50 组合真机验收）
 
 ## 问题
 
@@ -54,7 +54,31 @@ v0.5.0-test.5 真机（三星）：备份进行中，首页进度数字正常跳
 
 ## 实施记录
 
-（待填）
+- 2026-09-06 RED：`MOB51HeroStickyTest` 以 RED stub（复刻今日「仅 TRANSFERRING
+  可达」行为）跑 → **2 条缝隙用例真红**（`a_running_round_keeps_the_Pause_
+  affordance_visible_in_the_gap`、`the_per_file_projection_is_idle_...`），
+  4 条现状用例绿——精确命中缺陷不牵连。
+- 2026-09-06 实现：
+  - `flowRoundActive`：**只从持久账本事实**推导的轮级粘性——gate OPEN 且
+    （有 lease ∨ 有 QUEUED/TRANSFERRING 项）。用户暂停=轮次结束（转 Resume，
+    不显示 Pause）；仅有耗尽失败的队头=停滞不是运行（不撒谎说在传）。**不新增
+    调度真相字段**——缝隙本就是 gate OPEN + QUEUED 未清零，直接可读。
+  - `backupUiStateOf`：单一共享 snapshot→首页态映射（holder 与测试同走生产
+    链）；缝隙态渲染为带真实计数的 Sending（confirmed / confirmed+pending），
+    不编 0/0 假进度。
+  - `flowCommandOf`：按钮点击路由与按钮文案**读同一批事实**——此前文案显示
+    Pause、点击却重读到 Idle 而 fire wake，「按钮撒两次谎」；现在可见 Pause
+    必暂停（含缝隙）。
+- 2026-09-06 反证（实现已 commit `d030bc3` 之后才做，安全）：`flowRoundActive`
+  改恒 false → 3 条用例真红，`git checkout` 单文件还原（工作区只有破坏 diff，
+  教训落地）。
+- 2026-09-06 基线：Android JVM 全量 **274 tests / 0 failures / 4 skipped**
+  （51 类；基线 268 + 本卡 6），XML 时间戳为本次生成；just ci / assembleDebug
+  结果见下条追加。
+- 2026-09-06 过程记录：反证脚手架脚本第二次在同一处崩溃（`subprocess.run`
+  未加 capture → `.stdout` None）。**根因是脚本健壮性、非纪律问题**；纪律
+  改进（先 commit 再反证）本次生效——工作区仅 1 行破坏 diff，checkout 干净
+  还原，实现无恙。
 
 ## 备注
 
