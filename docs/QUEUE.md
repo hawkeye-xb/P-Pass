@@ -11,8 +11,8 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-06**（验收人真机实证聚合 UI 全挂 → 开 UI-09 并认领、UI-10 挂账；
-> UX-13/UX-14/MOB-13 真机验收挂起，阻塞 UI-09）
+> 最后核对：**2026-09-06**（test.5 真机反馈 5 条 → 派生 MOB-51/52、DESK-11/12 四张卡，
+> MOB-45 补侧滑样本；UI-09 部分通过进「刚完成」，余项挂 MOB-51）
 
 ---
 
@@ -39,7 +39,17 @@
 | [REL-05](../cards/REL-05-release-create-draft-must-checkout.md) | Release #46 的 create-draft 无 checkout，`gh release` 无仓库上下文 | 补 checkout，以新 test tag 验证草稿和上传 | `main` |
 | [BUILD-03](../cards/BUILD-03-windows-release-must-not-compile-android-blobs.md) | Release #46 的 Windows lane 编译 Android-only `std::os::fd` bridge | Android target gate + Windows cross-check，以新 test tag 验证 | `main` |
 | [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
-| [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 代码完成本机全绿（JVM 268/0/4、just ci、APK、反证真红），**push 卡 GitHub 写凭据过期** | 凭据恢复后 push 两个本地 commit（卡片认领 + 实现）；真机验收聚合状态流转 | `main`（本地领先 2） |
+
+---
+
+## 一之二、本轮真机反馈派生（test.5 @ 234a53f，2026-09-06，按优先级）
+
+| 卡 | 一句话 | 状态 |
+|---|---|---|
+| [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
+| [MOB-51](../cards/MOB-51-hero-pause-not-sticky-across-round.md) | 英雄区暂停/继续只在单文件瞬间可达，整轮进行中无粘性入口 | 可接（P1，挡 MOB-49/50 组合验收） |
+| [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | 传完的照片桌面不及时出现——watcher/事件链未覆盖 Flow 摄入 | 可接（取证先行） |
+| [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入未保留拍摄时间，老照片在桌面归到当月 | 可接（与 DESK-11 串行，11 先） |
 
 
 
@@ -61,6 +71,7 @@
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 聚合状态换源 Flow 账本合并（`234a53f`，v0.5.0-test.5）；真机实证进度数字实时跳动 | 余项（AllSafe/K 归零流转）被 MOB-51 挡，随其一并验 |
 | [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | 三星真机自然复现迟到回执竞态并收敛为 `CONFIRMED`；范围扩展补扫全部验收标准完成 | 分出 MOB-49、MOB-50（取消本轮两处生产接线缺口） |
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |
