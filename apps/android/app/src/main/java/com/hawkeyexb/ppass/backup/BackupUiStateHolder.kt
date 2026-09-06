@@ -5,10 +5,13 @@ import android.content.ContentResolver
 import android.content.Context
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import com.hawkeyexb.ppass.backup.flow.FlowCommand
 import com.hawkeyexb.ppass.backup.flow.FlowUiState
+import com.hawkeyexb.ppass.backup.flow.backupUiStateOf
 import com.hawkeyexb.ppass.backup.flow.cancelCurrentFlowRound
 import com.hawkeyexb.ppass.backup.flow.continueFlow
 import com.hawkeyexb.ppass.backup.flow.flowAggregateOf
+import com.hawkeyexb.ppass.backup.flow.flowCommandOf
 import com.hawkeyexb.ppass.backup.flow.flowIsAllDone
 import com.hawkeyexb.ppass.backup.flow.flowLedgerSnapshot
 import com.hawkeyexb.ppass.backup.flow.flowUiStateOf
@@ -74,11 +77,14 @@ class BackupUiStateHolder(
     fun backupNow() {
         scope.launch {
             withContext(Dispatchers.IO) {
-                when (flowUiStateOf(flowLedgerSnapshot(context))) {
-                    is FlowUiState.Transferring -> pauseFlow(context)
-                    FlowUiState.PausedByUser -> continueFlow(context)
-                    FlowUiState.NeedsUserAttention -> retryFailedFlow(context)
-                    else -> requestFlowWake(context)
+                // MOB-51: route the click on the same durable facts the button
+                // label came from — a visible "Pause" always pauses, including
+                // in the between-files gap where the per-file state is Idle.
+                when (flowCommandOf(flowLedgerSnapshot(context))) {
+                    FlowCommand.Pause -> pauseFlow(context)
+                    FlowCommand.Continue -> continueFlow(context)
+                    FlowCommand.Retry -> retryFailedFlow(context)
+                    FlowCommand.Wake -> requestFlowWake(context)
                 }
             }
             refreshFlowState()
@@ -98,23 +104,11 @@ class BackupUiStateHolder(
     }
 
     private fun refreshFlowState() {
-        // UI-09: one ledger read for the six-state surface. The aggregate
-        // (K/M/last-success) is derived from the same durable facts by the
-        // slower refreshTriplet loop.
-        val snapshot = flowLedgerSnapshot(context)
-        val aggregate = flowAggregateOf(snapshot)
-        _state.value = when (val state = flowUiStateOf(snapshot)) {
-            FlowUiState.Idle -> if (flowIsAllDone(snapshot, aggregate)) {
-                BackupUiState.AllSafe(ingested = aggregate.confirmed.toInt(), duplicates = 0)
-            } else {
-                BackupUiState.Idle
-            }
-            FlowUiState.PausedByUser -> BackupUiState.Paused
-            FlowUiState.WaitingForConstraints -> BackupUiState.WaitingForConstraints
-            is FlowUiState.Transferring -> BackupUiState.Sending(0, 0, state.fileName)
-            FlowUiState.NeedsUserAttention -> BackupUiState.Trouble("Flow delivery exhausted its retry limit")
-            FlowUiState.CancelledCurrentRound -> BackupUiState.CancelledCurrentRound
-        }
+        // UI-09/MOB-51: the home screen state is the single shared production
+        // mapping from the durable snapshot (backupUiStateOf). The aggregate
+        // (K/M/last-success) is derived from the same facts by the slower
+        // refreshTriplet loop.
+        _state.value = backupUiStateOf(flowLedgerSnapshot(context))
     }
 
     /**
