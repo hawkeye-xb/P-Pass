@@ -117,6 +117,8 @@ data class TransferItem(
     val disposition: RecoveryDisposition = RecoveryDisposition.NONE,
     val cancellationRoundId: String? = null,
     val pairingEpoch: PairingEpoch = PairingEpoch.INITIAL,
+    /** UI-09: unix ms of the durable completion receipt (0 = never completed). */
+    val completedAt: Long = 0L,
 )
 
 @Serializable

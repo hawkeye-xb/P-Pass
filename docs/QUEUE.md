@@ -39,7 +39,7 @@
 | [REL-05](../cards/REL-05-release-create-draft-must-checkout.md) | Release #46 的 create-draft 无 checkout，`gh release` 无仓库上下文 | 补 checkout，以新 test tag 验证草稿和上传 | `main` |
 | [BUILD-03](../cards/BUILD-03-windows-release-must-not-compile-android-blobs.md) | Release #46 的 Windows lane 编译 Android-only `std::os::fd` bridge | Android target gate + Windows cross-check，以新 test tag 验证 | `main` |
 | [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
-| [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 09-06 验收人实证换内核后首页聚合状态（K/M/上次成功/暂停按钮窗口）全挂——聚合层仍读 LEGACY ConfirmedStore，新内核零写入 | RED 集成用例先行（20 项传完 K 必须归零），账本派生投影 + `completedAt` 字段 + 换源 | `main` |
+| [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 代码完成本机全绿（JVM 268/0/4、just ci、APK、反证真红），**push 卡 GitHub 写凭据过期** | 凭据恢复后 push 两个本地 commit（卡片认领 + 实现）；真机验收聚合状态流转 | `main`（本地领先 2） |
 
 
 
