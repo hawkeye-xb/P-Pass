@@ -8,6 +8,8 @@ import androidx.compose.runtime.mutableStateOf
 import com.hawkeyexb.ppass.backup.flow.FlowUiState
 import com.hawkeyexb.ppass.backup.flow.cancelCurrentFlowRound
 import com.hawkeyexb.ppass.backup.flow.continueFlow
+import com.hawkeyexb.ppass.backup.flow.flowAggregateOf
+import com.hawkeyexb.ppass.backup.flow.flowIsAllDone
 import com.hawkeyexb.ppass.backup.flow.flowLedgerSnapshot
 import com.hawkeyexb.ppass.backup.flow.flowUiStateOf
 import com.hawkeyexb.ppass.backup.flow.pauseFlow
@@ -34,14 +36,14 @@ class BackupUiStateHolder(
     private val scopeStore: BackupScopeStore = BackupScopeStore(context),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val tripletScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val _state = mutableStateOf<BackupUiState>(BackupUiState.Idle)
     val state: State<BackupUiState> get() = _state
 
-    // Existing aggregate presentation remains independent of the new per-item
-    // status surface. R3 deliberately does not change reconciliation/triplet UI.
-    private val confirmedStore = ConfirmedStore(
-        File(context.filesDir, "backup-state/${pairing.daemonNodeId}"),
-    )
+    // UI-09: K/M/last-success now derive from the durable Flow ledger. The
+    // LEGACY ConfirmedStore had no production writer after REBUILD-00 froze
+    // the batch pipeline — reading it froze the home screen while transfers
+    // actually succeeded (verifier observation, 2026-09-06).
     private val _triplet = mutableStateOf<BackupTriplet?>(null)
     val triplet: State<BackupTriplet?> get() = _triplet
     private val _reuploadNoticeCount = mutableStateOf(0)
@@ -50,11 +52,18 @@ class BackupUiStateHolder(
     val pairingLost: State<Boolean> get() = _pairingLost
 
     init {
-        scope.launch { refreshTriplet() }
         scope.launch {
             while (isActive) {
                 refreshFlowState()
                 delay(500)
+            }
+        }
+        // The triplet's N is a MediaStore count — too heavy for the 500ms
+        // status tick, so it refreshes on its own slower IO loop.
+        tripletScope.launch {
+            while (isActive) {
+                withContext(Dispatchers.IO) { refreshTriplet() }
+                delay(2_000)
             }
         }
     }
@@ -89,8 +98,17 @@ class BackupUiStateHolder(
     }
 
     private fun refreshFlowState() {
-        _state.value = when (val state = flowUiStateOf(flowLedgerSnapshot(context))) {
-            FlowUiState.Idle -> BackupUiState.Idle
+        // UI-09: one ledger read for the six-state surface. The aggregate
+        // (K/M/last-success) is derived from the same durable facts by the
+        // slower refreshTriplet loop.
+        val snapshot = flowLedgerSnapshot(context)
+        val aggregate = flowAggregateOf(snapshot)
+        _state.value = when (val state = flowUiStateOf(snapshot)) {
+            FlowUiState.Idle -> if (flowIsAllDone(snapshot, aggregate)) {
+                BackupUiState.AllSafe(ingested = aggregate.confirmed.toInt(), duplicates = 0)
+            } else {
+                BackupUiState.Idle
+            }
             FlowUiState.PausedByUser -> BackupUiState.Paused
             FlowUiState.WaitingForConstraints -> BackupUiState.WaitingForConstraints
             is FlowUiState.Transferring -> BackupUiState.Sending(0, 0, state.fileName)
@@ -99,9 +117,21 @@ class BackupUiStateHolder(
         }
     }
 
-    private suspend fun refreshTriplet() {
-        _triplet.value = withContext(Dispatchers.IO) {
-            computeTripletSafe(context.contentResolver, confirmedStore, scopeStore.selectedBucketIds())
+    /**
+     * UI-09: the displayed triplet. N stays a live MediaStore count (the
+     * selected-scope total); M and last-success come from the durable Flow
+     * ledger. Runs on the IO dispatcher; the media query keeps the same
+     * Throwable guard as before (a scoped provider failure must hide the
+     * triplet, never crash — see MediaQueryFailureTest).
+     */
+    private fun refreshTriplet() {
+        _triplet.value = try {
+            val bucketIds = scopeStore.selectedBucketIds() ?: return
+            val aggregate = flowAggregateOf(flowLedgerSnapshot(context))
+            val n = MediaScanner(context.contentResolver).countAll(bucketIds)
+            tripletOf(n, aggregate.confirmed, aggregate.lastSuccessAt)
+        } catch (_: Throwable) {
+            null
         }
     }
 }

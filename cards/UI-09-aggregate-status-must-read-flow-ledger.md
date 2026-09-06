@@ -1,7 +1,7 @@
 # UI-09 聚合状态条/三元组仍读 LEGACY ConfirmedStore，换内核后 UI 全挂（L2）
 
-> 🟠 状态：进行中 · 当前节点：已认领，RED 用例先行（传完 N 项 → K 必须归零）；下一步：账本派生投影 + 换源 + 补 completedAt · 协同分支：`main`
-> 级别：L2 · 阻塞：无
+> 🟠 状态：代码完成（本机全绿），等待 push 通道恢复 · 当前节点：JVM 268/0/4、`just ci` 全绿、debug APK 出包、反证 3 用例真红；下一步：凭据恢复后 push（含 `925b0b6` 卡片 commit），真机验收「20 项传完 K 归零 + 状态流转」 · 协同分支：`main`
+> 级别：L2 · 阻塞：无（push 卡 GitHub 凭据过期，见协同状态节）
 
 ## 问题
 
@@ -73,9 +73,41 @@
   注释 REBUILD-00 冻结）；`Holder._reuploadNoticeCount` 无任何生产写入方
   （恒 0，死 UI——移交 UI-10 处置）；`MainActivity.kt` 仅读 SentinelStore，
   主源码内未找到写入方（→ UI-10 核实）。
+- 2026-09-06 RED：`UI09LedgerAggregateTest` 4 用例经生产 `FlowRunner` 链路
+  驱动，空壳投影下 4/4 `AssertionError` 真红（含「20 项传完 K 归零」复现
+  验收人观察）。
+- 2026-09-06 GREEN 实现：
+  - `TransferItem.completedAt`（声明位最后，默认 0，`encodeDefaults`+
+    `ignoreUnknownKeys` 兼容旧账本——有剥字段重载入用例锁死）。
+  - **时间戳唯一落点 = `CompletionAndScope.acceptCompletionReceipt`**（账本
+    提交点）：首次确认盖 `System.currentTimeMillis()`；已有戳不覆盖（REBUILD-06
+    的 receipt 回放不漂移时间）。协议 `FlowCompletionReceipt` 与 Desktop 侧
+    零改动。
+  - `flowAggregateOf` / `flowIsAllDone` 纯函数投影（取消轮/范围取消不计欠账；
+    空账本不算 all-done）。
+  - `BackupUiStateHolder` 换源：六态与 aggregate 同一快照读取；Idle+allDone →
+    `AllSafe`（新内核下首次可达）；triplet 的 N 仍为 MediaStore 实时计数、
+    M/lastSuccess 来自账本，2s 独立 IO 循环（N 查询不进 500ms tick）；
+    `ConfirmedStore` 读路径在本文件清零。
+- 2026-09-06 反证：临时把 `flowAggregateOf` 改回恒零（模拟坏数据源），UI09
+  3 条断言用例立即变红，还原后复绿——证明数字真从账本来。
+  ⚠️ 过程教训：反证脚本异常退出导致自动还原未执行，人工用 `git checkout`
+  还原时把本卡未提交实现一并回退，靠完整实现记录重放恢复。**反证必须在
+  实现已 commit 之后做，或只允许改临时副本**（写进 AGENTS 候选纪律，见备注）。
+- 2026-09-06 测试基线：Android JVM 全量 **268 tests / 0 failures / 4 skipped**
+  （50 类；基线 264+本卡 4），XML 时间戳为本次生成；assembleDebug、`just ci`
+  结果见下一条追加。
+- 2026-09-06 环境事实：本机跑 Android 测试现需
+  `ANDROID_NDK_HOME=~/Library/Android/sdk/ndk/27.0.12077973` +
+  `rustup target add aarch64-linux-android`（REBUILD-01 起 Gradle 无条件前置
+  native bridge——即 E2E-03 卡的本地形态）；本机 JDK 注册表现仅剩 17
+  （旧记录「本机 JDK 25」作废）。
 
 ## 备注
 
 - 验收人观察「暂停/取消没有展示机会」有两种解释：单头逐项传输时
   Transferring 窗口短、500ms 轮询可能错过（正常），或 runtime 空快照使 UI
   失明（缺陷，见 UI-10）。本卡修好后若仍无暂停窗口，按 UI-10 的可见性项追查。
+- 建议向验收人提一条流程纪律（AGENTS 候选）：**故障类卡的反证操作不得直接
+  改工作区未提交文件**——先 commit 实现再做反证，或反证用副本目录。本次
+  差点丢实现，靠文档救回，属于运气。

@@ -44,19 +44,25 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
             } ?: return@update snapshot
             if (receipt.contentHash != null && item.contentHash != null && item.contentHash != receipt.contentHash) return@update snapshot
             if (item.deliveryState == DeliveryState.CANCELLED_BY_SCOPE) return@update snapshot
-            val items = snapshot.items.map {
-                if (it.queueSequence == receipt.queueSequence) {
-                    it.copy(
+            val items = snapshot.items.map { item ->
+                if (item.queueSequence == receipt.queueSequence) {
+                    item.copy(
                         deliveryState = DeliveryState.CONFIRMED,
                         completionReceiptId = receipt.receiptId,
                         contentHash = receipt.contentHash,
                         partialRetained = false,
+                        // UI-09: the single clock for "last success" is the
+                        // moment the durable ledger first accepts a receipt
+                        // for this item; a REBUILD-06 receipt replay keeps the
+                        // original stamp instead of drifting it forward.
+                        completedAt = item.completedAt.takeIf { stamped -> stamped > 0L }
+                            ?: System.currentTimeMillis(),
                         // A user-cancel round raced Desktop's already-in-flight
                         // completion; the durable receipt wins, so this item no
                         // longer belongs to that round.
                         cancellationRoundId = null,
                     )
-                } else it
+                } else item
             }
             val next = items.firstOrNull { it.deliveryState == DeliveryState.QUEUED }?.queueSequence
             snapshot.copy(
