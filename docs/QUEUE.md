@@ -11,8 +11,8 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-02**（REBUILD-05 三星真机验收通过，归档；发现两处独立衍生问题开
-> MOB-49/MOB-50）
+> 最后核对：**2026-09-06**（验收人真机实证聚合 UI 全挂 → 开 UI-09 并认领、UI-10 挂账；
+> UX-13/UX-14/MOB-13 真机验收挂起，阻塞 UI-09）
 
 ---
 
@@ -39,6 +39,7 @@
 | [REL-05](../cards/REL-05-release-create-draft-must-checkout.md) | Release #46 的 create-draft 无 checkout，`gh release` 无仓库上下文 | 补 checkout，以新 test tag 验证草稿和上传 | `main` |
 | [BUILD-03](../cards/BUILD-03-windows-release-must-not-compile-android-blobs.md) | Release #46 的 Windows lane 编译 Android-only `std::os::fd` bridge | Android target gate + Windows cross-check，以新 test tag 验证 | `main` |
 | [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
+| [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 09-06 验收人实证换内核后首页聚合状态（K/M/上次成功/暂停按钮窗口）全挂——聚合层仍读 LEGACY ConfirmedStore，新内核零写入 | RED 集成用例先行（20 项传完 K 必须归零），账本派生投影 + `completedAt` 字段 + 换源 | `main` |
 
 
 
@@ -128,6 +129,7 @@
 | P2 | [MOB-44](../cards/MOB-44-harmonyos-no-background-for-restore.md) | 鸿蒙上恢复备份退后台就不跑（需鸿蒙真机取证窗口，与 DOG-03 同族） | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
 | P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
+| P3 | [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | Flow runtime 空快照装死 + 旧数据源 UI 尾巴（重传死提示/归属过滤/失联哨兵）——**阻塞：UI-09**（同文件），勿提前接 | L3 |
 
 
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
