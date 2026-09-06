@@ -47,7 +47,7 @@
 | 卡 | 一句话 | 状态 |
 |---|---|---|
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
-| [MOB-51](../cards/MOB-51-hero-pause-not-sticky-across-round.md) | 英雄区暂停/继续只在单文件瞬间可达，整轮进行中无粘性入口 | 可接（P1，挡 MOB-49/50 组合验收） |
+| [MOB-51](../cards/MOB-51-hero-pause-not-sticky-across-round.md) | 英雄区暂停/继续只在单文件瞬间可达，整轮进行中无粘性入口 | 🟡 代码完成（JVM 274/0/4、just ci、APK、反证 3 红）；等真机：全程有暂停 → 暂停/继续/取消 → 同轮带过 MOB-49/50 |
 | [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | 传完的照片桌面不及时出现——watcher/事件链未覆盖 Flow 摄入 | 可接（取证先行） |
 | [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入未保留拍摄时间，老照片在桌面归到当月 | 可接（与 DESK-11 串行，11 先） |
 
