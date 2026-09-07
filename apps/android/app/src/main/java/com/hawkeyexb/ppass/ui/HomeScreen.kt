@@ -138,6 +138,10 @@ fun HomeScreen(
     // 只是还没等到下一次 500ms tick 刷新出结果；这里禁用按钮 + 换处理中
     // 文案，同一命令没跑完不接受下一次点击。
     commandPending: Boolean = false,
+    // MOB-58: X-05 的 Restore/Discard——null = 没有待决定的取消轮。
+    cancelledRoundNotice: com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice? = null,
+    onRestoreCancelledRound: () -> Unit = {},
+    onDiscardCancelledRound: () -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -535,6 +539,50 @@ fun HomeScreen(
                         modifier = Modifier.clickable(onClick = onResumeBackup)
                             .padding(4.dp),
                     )
+                }
+            }
+        }
+
+        // ── MOB-58: 取消轮的 Restore/Discard（X-05，之前只在测试里存在）。
+        //
+        // 为什么这条要单独一块 Surface 而不是复用 NoticeCard 的单动作栏：
+        // 这是唯一需要**两个**动作（重新传输 / 不用了）的提示，NoticeCard
+        // 目前只留了一个 actionLabel 的位置（UI-04 之后要重排优先级时可以
+        // 一并把它规整进 HomeNotice，这里先保证功能对得上）。
+        if (cancelledRoundNotice != null) {
+            Spacer(Modifier.height(12.dp))
+            Surface(
+                color = PPColor.WaitingBg,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(Modifier.padding(16.dp, 13.dp)) {
+                    Text(
+                        stringResource(R.string.cancelled_round_notice_body, cancelledRoundNotice.count),
+                        fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row {
+                        Text(
+                            stringResource(R.string.cancelled_round_notice_restore),
+                            fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                            textDecoration = TextDecoration.Underline,
+                            modifier = Modifier.clickable(
+                                enabled = !commandPending,
+                                onClick = onRestoreCancelledRound,
+                            ).padding(4.dp),
+                        )
+                        Spacer(Modifier.width(20.dp))
+                        Text(
+                            stringResource(R.string.cancelled_round_notice_discard),
+                            fontSize = 14.sp, color = PPColor.Ink60,
+                            textDecoration = TextDecoration.Underline,
+                            modifier = Modifier.clickable(
+                                enabled = !commandPending,
+                                onClick = onDiscardCancelledRound,
+                            ).padding(4.dp),
+                        )
+                    }
                 }
             }
         }

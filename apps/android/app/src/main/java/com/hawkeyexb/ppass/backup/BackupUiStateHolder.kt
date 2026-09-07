@@ -10,7 +10,9 @@ import com.hawkeyexb.ppass.backup.flow.FlowUiState
 import com.hawkeyexb.ppass.backup.flow.backupUiStateOf
 import com.hawkeyexb.ppass.backup.flow.cancelCurrentFlowRound
 import com.hawkeyexb.ppass.backup.flow.continueFlow
+import com.hawkeyexb.ppass.backup.flow.discardCancelledFlowRound
 import com.hawkeyexb.ppass.backup.flow.flowAggregateOf
+import com.hawkeyexb.ppass.backup.flow.flowCancelledRoundNotice
 import com.hawkeyexb.ppass.backup.flow.flowCommandOf
 import com.hawkeyexb.ppass.backup.flow.flowIsAllDone
 import com.hawkeyexb.ppass.backup.flow.flowLedgerSnapshot
@@ -18,6 +20,7 @@ import com.hawkeyexb.ppass.backup.flow.flowReuploadNoticeCount
 import com.hawkeyexb.ppass.backup.flow.flowUiStateOf
 import com.hawkeyexb.ppass.backup.flow.pauseFlow
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
+import com.hawkeyexb.ppass.backup.flow.restoreCancelledFlowRound
 import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
@@ -72,6 +75,11 @@ class BackupUiStateHolder(
     // 并显示处理中文案，同一命令处理完才能再点下一次。
     private val _commandPending = mutableStateOf(false)
     val commandPending: State<Boolean> get() = _commandPending
+    // MOB-58: X-05's Restore/Discard, finally surfaced. Null = no cancelled
+    // round is awaiting a decision (either nothing was ever cancelled, or
+    // the user already restored/discarded it).
+    private val _cancelledRoundNotice = mutableStateOf<com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice?>(null)
+    val cancelledRoundNotice: State<com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice?> get() = _cancelledRoundNotice
 
     init {
         scope.launch {
@@ -178,6 +186,38 @@ class BackupUiStateHolder(
         // UI-10 item 2: ledger-derived reupload count replaces the dead
         // LEGACY ReuploadQueue read (see flowReuploadNoticeCount doc).
         _reuploadNoticeCount.value = flowReuploadNoticeCount(snapshot)
+        // MOB-58: X-05's cancelled-round decision, read from the same tick.
+        _cancelledRoundNotice.value = flowCancelledRoundNotice(snapshot)
+    }
+
+    /** MOB-58: re-admit the cancelled round's items as QUEUED and wake the consumer. */
+    fun restoreCancelledRound() {
+        val roundId = _cancelledRoundNotice.value?.roundId ?: return
+        if (_commandPending.value) return
+        _commandPending.value = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { restoreCancelledFlowRound(context, roundId) }
+                refreshFlowState()
+            } finally {
+                _commandPending.value = false
+            }
+        }
+    }
+
+    /** MOB-58: dismiss the notice without re-queueing. */
+    fun discardCancelledRound() {
+        val roundId = _cancelledRoundNotice.value?.roundId ?: return
+        if (_commandPending.value) return
+        _commandPending.value = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { discardCancelledFlowRound(context, roundId) }
+                refreshFlowState()
+            } finally {
+                _commandPending.value = false
+            }
+        }
     }
 
     /**

@@ -153,3 +153,27 @@ fun flowCommandOf(snapshot: DiscoveryLedgerSnapshot): FlowCommand =
 fun flowReuploadNoticeCount(snapshot: DiscoveryLedgerSnapshot): Int =
     snapshot.items.count { it.disposition == RecoveryDisposition.NEEDS_DECISION }
 
+/**
+ * MOB-58: X-05 ("Restore/Discard 都是显式用户动作") was decided in ARCH-01 but
+ * never wired past `CancellationRoundController`'s JVM tests — the real-device
+ * complaint ("取消当前轮没有反应"、"没有重新传输的入口") traces to exactly this
+ * gap. `cancelCurrentRound` still ends the scan atomically (unchanged; that
+ * atomic close is what lets X-04 admit genuinely-new candidates normally), so
+ * the only durable trace of "there is a cancelled batch waiting on a user
+ * decision" is the `cancellationRoundId` tag `CancellationRoundController`
+ * already leaves on each cancelled item. This reads that tag — no new ledger
+ * field, no change to the already-verified X-01~X-04 state machine.
+ *
+ * Ties to the *latest* round (by queueSequence) so only one notice shows even
+ * if the user cancelled more than once without ever restoring or discarding.
+ */
+data class CancelledRoundNotice(val roundId: String, val count: Int)
+
+fun flowCancelledRoundNotice(snapshot: DiscoveryLedgerSnapshot): CancelledRoundNotice? {
+    val cancelled = snapshot.items.filter {
+        it.deliveryState == DeliveryState.CANCELLED_BY_USER_ROUND && it.cancellationRoundId != null
+    }
+    val latestRoundId = cancelled.maxByOrNull { it.queueSequence }?.cancellationRoundId ?: return null
+    return CancelledRoundNotice(latestRoundId, cancelled.count { it.cancellationRoundId == latestRoundId })
+}
+

@@ -553,6 +553,10 @@ fun PPassApp() {
                         onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
                         // 2026-09-07 真机反馈：命令处理中禁用暂停/取消按钮。
                         commandPending = holder.commandPending.value,
+                        // MOB-58: X-05 的 Restore/Discard。
+                        cancelledRoundNotice = holder.cancelledRoundNotice.value,
+                        onRestoreCancelledRound = { holder.restoreCancelledRound() },
+                        onDiscardCancelledRound = { holder.discardCancelledRound() },
                         // MOB-28: 备份被外力停过的提示卡 + 唯一的恢复入口。
                         backupInterrupted = backupInterrupted,
                         onResumeBackup = {

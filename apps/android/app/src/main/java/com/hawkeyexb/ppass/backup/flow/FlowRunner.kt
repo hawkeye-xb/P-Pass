@@ -112,6 +112,27 @@ class FlowRunner(
         consumer.wake(constraintsSatisfied = true)
     }
 
+    /**
+     * MOB-58: X-05's explicit user action, finally wired to production.
+     * `cancelCurrentRound` already ends the scan atomically (finishRound)
+     * and leaves the user-controlled pause in force (MOB-49), so by the
+     * time a user could click Restore, [roundId] only survives as the
+     * `cancellationRoundId` tag on the items themselves — restoreRound
+     * tolerates that (its guard accepts a null live `cancellationRound`).
+     * Restoring must also reopen the gate and wake the consumer — the same
+     * gate `continueFlow` reopens — otherwise the re-admitted QUEUED items
+     * sit inert behind the still-active user pause.
+     */
+    fun restoreCancelledRound(roundId: String) {
+        cancellation.restoreRound(roundId)
+        continueFlow(constraintsSatisfied = true)
+    }
+
+    /** MOB-58: X-05's Discard — permanently drops this round's restore offer. */
+    fun discardCancelledRound(roundId: String) {
+        cancellation.discardRound(roundId)
+    }
+
     private fun backfillIfAdmitted() {
         val snapshot = ledger.load()
         if (snapshot.consumerGate != ConsumerGate.OPEN) return
