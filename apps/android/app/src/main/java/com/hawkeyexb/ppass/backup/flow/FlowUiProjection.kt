@@ -136,3 +136,20 @@ fun flowCommandOf(snapshot: DiscoveryLedgerSnapshot): FlowCommand =
         // the round is durably active, otherwise wake a stopped engine.
         else -> if (flowRoundActive(snapshot)) FlowCommand.Pause else FlowCommand.Wake
     }
+
+/**
+ * UI-10 item 2: the reupload notice's LEGACY data source (`ReuploadQueue`)
+ * is frozen (REBUILD-00) and `BackupUiStateHolder._reuploadNoticeCount` has
+ * no production writer — `reuploadNoticeCount > 0` is permanently false, so
+ * the notice card can never appear (source-read finding, 2026-09-06).
+ *
+ * The durable ledger already carries the exact fact this notice describes:
+ * a CONFIRMED item whose remote copy went missing while the phone's own
+ * source is still present (`RecoveryDisposition.NEEDS_DECISION`, written by
+ * `RemoteReconciliation.recordRemoteMissing`) — that IS "library lost N,
+ * bringing them back". Counting it directly retires the dead LEGACY path
+ * without inventing a new signal.
+ */
+fun flowReuploadNoticeCount(snapshot: DiscoveryLedgerSnapshot): Int =
+    snapshot.items.count { it.disposition == RecoveryDisposition.NEEDS_DECISION }
+

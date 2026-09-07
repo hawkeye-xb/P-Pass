@@ -48,8 +48,6 @@
 |---|---|---|
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
 | [MOB-51](../cards/MOB-51-hero-pause-not-sticky-across-round.md) | 英雄区暂停/继续只在单文件瞬间可达，整轮进行中无粘性入口 | 🟡 代码完成（JVM 274/0/4、just ci、APK、反证 3 红）；等真机：全程有暂停 → 暂停/继续/取消 → 同轮带过 MOB-49/50 |
-| [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | 传完的照片桌面不及时出现——watcher/事件链未覆盖 Flow 摄入 | 可接（取证先行） |
-| [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入未保留拍摄时间，老照片在桌面归到当月 | 可接（与 DESK-11 串行，11 先） |
 
 
 
@@ -71,6 +69,9 @@
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | 四项全做完：epoch 静默补齐（自愈优先于重新扫码）、重传提示换源账本 `NEEDS_DECISION`、照片页归属过滤换源、失联心跳接线；JVM 288/0/4、just ci、debug APK 均绿 | 无——四项均在本卡范围内闭环 |
+| [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | 手机传完照片桌面不实时出现——`FlowDelivery` 补 `with_events`/throttle 接线（对齐 `BackupEngine` 既有模式）；Rust 336/336 passed、just ci 均绿 | 无——事件链闭环 |
+| [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | 老照片桌面归错月——`taken_at_ms` 加 EXIF>capture_at_ms_hint>mtime 优先级，`FlowFetchRequest` 补 `capture_at_ms` 走 wire；Rust 336/336 passed、Android JVM 288/0/4、just ci 均绿 | 存量已错分照片未批量重刷，留给验收人真机确认后按需再开卡 |
 | [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 三星真机 2026-09-07 实证：两条并发传输失败日志相差 322ms；`onPermanentFailure`/`onReceipt` 补齐 `flowTriggerLock`（L0，违反 ARCH-03 单活跃租约不变量）；JVM 277/0/4、just ci 均绿 | 无——修复即完整闭环 |
 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星真机 2026-09-07 实证：队尾照片卡在 QUEUED/attemptCount=1 传不完；`FlowRunner.recordPermanentFailure()` 补齐对称 `wake()`；JVM 276/0/4、just ci 均绿 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md)（同一轮回归观察到的取消按钮无反馈，证据不足未合并处理）、[MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md)（同一改动放大了一处早已存在的并发缺口） |
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 三星真机 2026-09-07 实证「37/38 已回家」+「从未成功备份过」永久矛盾；`DiscoveryLedgerStore.load()` 回填旧账本 CONFIRMED 项的 completedAt；JVM 275/0/4、just ci、debug APK 均绿 | 无——纯数据迁移，不产出下游卡；真机复核为可选项 |
@@ -144,7 +145,6 @@
 | P2 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md) | 「取消当前轮」点击无可见反馈——2026-09-07 三星真机观察，logcat 已轮转丢失当时日志，等下次真机复现时同步取证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
 | P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
-| P3 | [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | Flow runtime 空快照装死 + 旧数据源 UI 尾巴（重传死提示/归属过滤/失联哨兵）——UI-09 已合并，阻塞已解除，可接 | L3 |
 
 
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |

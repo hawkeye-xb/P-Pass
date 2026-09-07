@@ -24,6 +24,7 @@ fn incoming(dir: &Path, name: &str, content: &[u8]) -> IncomingFile {
         file_name: name.into(),
         media_type: "image/jpeg".into(),
         src_device: DEV_A.to_vec(),
+        capture_at_ms_hint: None,
     }
 }
 
@@ -93,6 +94,78 @@ async fn no_exif_falls_back_to_mtime() {
     assert_eq!(asset.taken_at, Some(mtime_ms));
 }
 
+// DESK-12 RED: a Flow-delivered file with no EXIF (e.g. a screenshot) must
+// use the phone's own capture-time hint, NOT the local mtime — the mtime of
+// a file exported by iroh-blobs is the export/ingest moment, not the real
+// capture moment (real-device symptom: old photos landing in "this month").
+// Content WITH EXIF is unaffected — the hint is a no-EXIF fallback only,
+// asserted separately below.
+#[tokio::test]
+async fn no_exif_prefers_the_uploader_capture_hint_over_mtime() {
+    let (dir, db, ing) = setup().await;
+    let content = b"screenshot bytes, no exif".to_vec();
+    let src = dir.path().join("staging-screenshot.png");
+    fs::write(&src, &content).unwrap();
+    // A capture time far from "now" — if this test passes with the ingest
+    // wall-clock or the file's mtime instead, the assertion below fails.
+    let hint_ms = PrimitiveDateTime::new(
+        Date::from_calendar_date(2019, Month::March, 3).unwrap(),
+        Time::from_hms(1, 2, 3).unwrap(),
+    )
+    .assume_utc()
+    .unix_timestamp()
+        * 1000;
+    let f = IncomingFile {
+        src_path: src,
+        file_name: "screenshot.png".into(),
+        media_type: "image/png".into(),
+        src_device: DEV_A.to_vec(),
+        capture_at_ms_hint: Some(hint_ms),
+    };
+
+    ing.ingest(&f).await.unwrap();
+    let asset = db.get_asset(&blake3_of(&content)).await.unwrap().unwrap();
+    assert_eq!(
+        asset.taken_at,
+        Some(hint_ms),
+        "DESK-12: no-EXIF content must use the uploader's capture hint, not local mtime"
+    );
+}
+
+#[tokio::test]
+async fn exif_still_wins_over_an_uploader_capture_hint() {
+    let (dir, db, ing) = setup().await;
+    let content = jpeg_with_exif("2024:05:06 07:08:09");
+    let src = dir.path().join("staging-exif-vs-hint.jpg");
+    fs::write(&src, &content).unwrap();
+    // A deliberately different hint — if EXIF is bypassed, this value would
+    // win instead, and the assertion below (comparing to the EXIF-derived
+    // timestamp) fails.
+    let wrong_hint_ms = 1_000_000_000_000i64;
+    let f = IncomingFile {
+        src_path: src,
+        file_name: "IMG_hint.jpg".into(),
+        media_type: "image/jpeg".into(),
+        src_device: DEV_A.to_vec(),
+        capture_at_ms_hint: Some(wrong_hint_ms),
+    };
+
+    ing.ingest(&f).await.unwrap();
+    let expected = PrimitiveDateTime::new(
+        Date::from_calendar_date(2024, Month::May, 6).unwrap(),
+        Time::from_hms(7, 8, 9).unwrap(),
+    )
+    .assume_utc()
+    .unix_timestamp()
+        * 1000;
+    let asset = db.get_asset(&blake3_of(&content)).await.unwrap().unwrap();
+    assert_eq!(
+        asset.taken_at,
+        Some(expected),
+        "DESK-12: EXIF must still win even when an uploader hint is present"
+    );
+}
+
 #[tokio::test]
 async fn same_content_different_name_is_duplicate_and_leaves_source() {
     let (dir, db, ing) = setup().await;
@@ -131,6 +204,7 @@ async fn watcher_recheck_of_the_recorded_file_is_not_an_audit_event() {
         file_name: "IMG_1.jpg".into(),
         media_type: "image/jpeg".into(),
         src_device: DEV_A.to_vec(),
+        capture_at_ms_hint: None,
     };
     assert_eq!(
         ing.ingest(&recheck).await.unwrap(),
@@ -217,6 +291,7 @@ async fn missing_source_error_names_the_path() {
         file_name: "does-not-exist.jpg".into(),
         media_type: "image/jpeg".into(),
         src_device: DEV_A.to_vec(),
+        capture_at_ms_hint: None,
     };
     let msg = ing.ingest(&f).await.unwrap_err().to_string();
     assert!(
@@ -271,6 +346,7 @@ async fn move_inside_originals_repoints_the_row_in_place() {
         file_name: "IMG_M.jpg".into(),
         media_type: "image/jpeg".into(),
         src_device: DEV_A.to_vec(),
+        capture_at_ms_hint: None,
     };
     let outcome = ing.ingest(&f2).await.unwrap();
     assert_eq!(
@@ -351,6 +427,7 @@ async fn a_file_already_inside_originals_is_adopted_where_it_lies() {
             file_name: "IMG_W.jpg".into(),
             media_type: "image/jpeg".into(),
             src_device: DEV_A.to_vec(),
+            capture_at_ms_hint: None,
         })
         .await
         .unwrap();
@@ -407,6 +484,7 @@ async fn editing_an_indexed_file_leaves_exactly_one_row_at_that_path() {
         file_name: "IMG_X.jpg".into(),
         media_type: "image/jpeg".into(),
         src_device: DEV_A.to_vec(),
+        capture_at_ms_hint: None,
     };
     assert!(matches!(
         ing.ingest(&f).await.unwrap(),

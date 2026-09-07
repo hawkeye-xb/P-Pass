@@ -81,7 +81,7 @@ pub async fn rebuild(db: &Db, library_root: &Path, local_node_id: &[u8]) -> Resu
             rel_path: rel_path.clone(),
             media_type: media_type_for(path),
             bytes: meta.len() as i64,
-            taken_at: Some(ingest::taken_at_ms(path)?),
+            taken_at: Some(ingest::taken_at_ms(path, None)?),
             width: None,
             height: None,
             src_device: device_of(&rel_path, local_node_id),

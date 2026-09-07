@@ -293,6 +293,13 @@ pub struct FlowFetchRequest {
     pub media_type: String,
     /// Provider endpoint address token, consumed only by iroh-blobs.
     pub provider: String,
+    /// DESK-12: MediaStore `DATE_TAKEN` (or EXIF fallback) as unix ms — the
+    /// phone's fact about when the photo was actually taken. 0 = unknown
+    /// (old client, or the phone itself never resolved a capture time);
+    /// Desktop must fall back to its own EXIF/mtime probe, never to the
+    /// ingest wall-clock. `#[serde(default)]` on this struct makes the field
+    /// backward compatible with an older phone build that never sends it.
+    pub capture_at_ms: i64,
 }
 
 /// A durable Desktop acknowledgement for exactly one materialized item.
@@ -650,6 +657,7 @@ mod tests {
             file_name: "IMG_0007.jpg".into(),
             media_type: "image/jpeg".into(),
             provider: "peer-address".into(),
+            capture_at_ms: 1_700_000_000_000,
         }
     );
 

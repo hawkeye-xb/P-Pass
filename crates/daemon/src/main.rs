@@ -336,7 +336,8 @@ async fn main() -> anyhow::Result<()> {
     let flow_blobs = std::sync::Arc::new(
         transport::Blobs::open(&transport, &data_dir.join(".ppf/flow-blobs")).await?,
     );
-    let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir);
+    let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir)
+        .with_events(event_bus.clone());
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
         .with_events(event_bus.clone());
     let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir);

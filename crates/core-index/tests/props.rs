@@ -35,6 +35,7 @@ proptest! {
                     file_name: format!("{name}.jpg"),
                     media_type: "image/jpeg".into(),
                     src_device: vec![7u8; 32],
+                    capture_at_ms_hint: None,
                 }
             };
             let first = ing.ingest(&file("a", &name_a)).await.unwrap();

@@ -356,6 +356,7 @@ impl BackupEngine {
             file_name: item.file_name.clone(),
             media_type: item.media_type.clone(),
             src_device: peer.0.to_vec(),
+            capture_at_ms_hint: None,
         };
         match self.ingestor.ingest(&incoming).await {
             // WATCH-03：Moved = 索引里有这份内容但记录的文件早被外部删了，

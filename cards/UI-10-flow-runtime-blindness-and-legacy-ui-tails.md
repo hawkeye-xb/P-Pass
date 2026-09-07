@@ -1,7 +1,8 @@
 # UI-10 Flow runtime 空快照静默 + 旧数据源 UI 尾巴（重传提示/归属过滤/失联哨兵）（L3）
 
-> ⬜ 状态：未开工 · 当前节点：等 UI-09 合并（同文件 `BackupUiStateHolder` 冲突面）；下一步：按卡内三项逐条换源或下线 · 协同分支：`main`
-> 级别：L3 · 阻塞：UI-09
+> 🟢 状态：代码已合并（四项全做完），本地验证通过 · 当前节点：等真机复核 ·
+> 下一步：配对失效/重传/归属过滤/失联天数四项真机各走一遍 · 协同分支：`main`
+> 级别：L3 · 阻塞：无
 
 ## 问题
 
@@ -61,7 +62,38 @@
 
 ## 实施记录
 
-（待填）
+- **第 1 项（runtime 空快照静默）**：`needsEpochRepair`/`EpochRepairResult`/
+  `applyEpochRepairOutcome`（纯函数，`EpochRepairTest` 4 用例）+
+  `BackupUiStateHolder.repairEpochIfNeeded()` 接线——检测到
+  `pairing.pairingEpoch` 为空时，静默发一次 `hello` 找 Desktop 要当前
+  epoch；成功就写回 `PairingStore` 自愈（下一轮 tick 起 Flow runtime 正常
+  可用）；失败（真吊销/真联不上）才置 `pairingLost=true`，走已有的「配对
+  已失效」红卡。每个 holder 实例只尝试一次（`epochRepairAttempted` 门），
+  不会对一次性失败反复重试刷屏。
+  ⚠️ 分支决策：未采用「直接复用配对已失效红卡不做区分」的简化方案——
+  空 epoch 与真吊销是两种不同故障，前者可自愈，验收人拍板按此实施
+  （2026-09-07）。
+- **第 2 项（重传提示死 UI）**：`flowReuploadNoticeCount`（纯函数，
+  `UI10ReuploadNoticeTest` 2 用例，反证过）——账本里
+  `disposition == NEEDS_DECISION` 的项计数（`RemoteReconciliation
+  .recordRemoteMissing` 已经在写这个字段，只是没人读）；
+  `BackupUiStateHolder.refreshFlowState()` 接上，`acknowledgeReuploadNotice()`
+  保持空操作（语义是「知道了」，通知随下次对账` recordRemotePresent`
+  自然消失，不需要额外已读状态）。LEGACY `ReuploadQueue` 按范围保留不删
+  （只冻结）。
+- **第 3 项（归属过滤读旧源）+ 第 4 项（失联哨兵接线）**：
+  `PhotosScreen.flowConfirmedHashesUnder`（读 Flow 账本 CONFIRMED 项的
+  `contentHash`，`PhotosScreenAttributionTest` 2 用例）；
+  `ForegroundHeartbeat.applyHeartbeatOutcome` 把 30 秒心跳的成功/失败写回
+  `SentinelStore`（`ForegroundHeartbeatSentinelWiringTest` 3 用例）——
+  这两项在本卡开工前已由前序会话完成，本轮补齐了第 1/2 项后一并验证收尾。
+- 全量测试：Android JVM 288 tests / 0 failures / 4 skipped（XML 本次生成）；
+  `just ci` 全绿；debug APK 构建成功。
+- 反证：第 2 项临时把 `flowReuploadNoticeCount` 改回恒 0，
+  `UI10ReuploadNoticeTest` 立即变红，还原后复绿。
+- 未做：四项均未做真机复核（本次会话未接可用测试相册/未触发真实配对
+  失效场景），交给验收人黑盒回归确认。
+
 
 ## 备注
 

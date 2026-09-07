@@ -87,6 +87,7 @@ async fn query_plane_over_ipc_and_three_way_count() {
             file_name: format!("IMG_{i:04}.jpg"),
             media_type: "image/jpeg".into(),
             src_device: vec![0x10 + i as u8; 32],
+            capture_at_ms_hint: None,
         })
         .await
         .unwrap();

@@ -206,10 +206,26 @@ class TimelineLoader(
 
 /** T-080: 本机确认缓存的 hash 并集（backup-state/<remote>/confirmed.json，
  *  只读不写）——照片页轻过滤器用它区分「仅本机 / 家人的」。proto 无
- *  owner 字段（本卡不准动 proto），这是数据允许的最诚实近似。 */
+ *  owner 字段（本卡不准动 proto），这是数据允许的最诚实近似。
+ *  ⚠️ UI-10: LEGACY 数据源——`ConfirmedStore` 在 REBUILD-00 冻结批处理
+ *  管线后没有生产写入方，新内核（Flow）传的照片这里恒查不到，全部误判
+ *  成「家人的」。仅保留供 UI-10 反证/历史对照，生产路径见
+ *  [flowConfirmedHashesUnder]。 */
 internal fun confirmedHashesUnder(stateRoot: java.io.File): Set<String> =
     stateRoot.listFiles()?.filter { it.isDirectory }
         ?.flatMap { com.hawkeyexb.ppass.backup.ConfirmedStore(it).load().confirmed }
+        ?.toSet() ?: emptySet()
+
+/** UI-10: 归属过滤的生产数据源——Flow 账本里已 CONFIRMED 的
+ *  `contentHash` 并集（`flow-state/<daemonNodeId>/discovery-ledger.json`）。
+ *  新内核是唯一的生产写入方，换源后「本机确认」判断才能对新传的照片生效。 */
+internal fun flowConfirmedHashesUnder(flowStateRoot: java.io.File): Set<String> =
+    flowStateRoot.listFiles()?.filter { it.isDirectory }
+        ?.flatMap { dir ->
+            com.hawkeyexb.ppass.backup.flow.DiscoveryLedgerStore(dir).load().items
+                .filter { it.deliveryState == com.hawkeyexb.ppass.backup.flow.DeliveryState.CONFIRMED }
+                .mapNotNull { it.contentHash }
+        }
         ?.toSet() ?: emptySet()
 
 @Composable
@@ -249,7 +265,7 @@ internal fun PhotosScreen(
     val mine by produceState(initialValue = emptySet<String>()) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             runCatching {
-                confirmedHashesUnder(java.io.File(context.filesDir, "backup-state"))
+                flowConfirmedHashesUnder(java.io.File(context.filesDir, "flow-state"))
             }.getOrDefault(emptySet())
         }
     }

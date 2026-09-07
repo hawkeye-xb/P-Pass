@@ -92,6 +92,10 @@ data class DiscoveryCandidate(
     val bucketId: Long,
     val fileName: String = "",
     val mediaType: String = "application/octet-stream",
+    // DESK-12: MediaStore DATE_TAKEN as unix ms (0 = unknown/not queried).
+    // Carried through to Desktop only as a fallback for files with no EXIF
+    // — content that has EXIF keeps using it, unaffected by this field.
+    val captureAtMs: Long = 0L,
 ) {
     val stableId: String
         get() = "$sourceRef\u0000$sourceVersion"
@@ -119,6 +123,10 @@ data class TransferItem(
     val pairingEpoch: PairingEpoch = PairingEpoch.INITIAL,
     /** UI-09: unix ms of the durable completion receipt (0 = never completed). */
     val completedAt: Long = 0L,
+    /** DESK-12: MediaStore DATE_TAKEN as unix ms (0 = unknown), admitted from
+     *  the discovering [DiscoveryCandidate.captureAtMs]. Sent on the wire so
+     *  Desktop can use it as a fallback when the file has no EXIF. */
+    val captureAtMs: Long = 0L,
 )
 
 @Serializable
@@ -236,6 +244,7 @@ class DiscoveryLedgerStore(private val dir: File) {
                     queueSequence = nextSequence++,
                     deliveryState = state,
                     cancellationRoundId = cancellationRoundId,
+                    captureAtMs = candidate.captureAtMs,
                 )
             }
         }
@@ -280,6 +289,7 @@ class DiscoveryLedgerStore(private val dir: File) {
                     queueSequence = nextSequence++,
                     deliveryState = state,
                     cancellationRoundId = cancellationRoundId,
+                    captureAtMs = candidate.captureAtMs,
                 )
             }
         }

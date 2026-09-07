@@ -1,6 +1,7 @@
 # DESK-12 Flow 摄入未保留拍摄时间——老照片在桌面被分到当月（L1）
 
-> ⬜ 状态：未开工 · 当前节点：2026-09-06 真机观察（test.5）；下一步：源码比对旧管线与 flow 落盘的时间戳处理，取证定性 · 协同分支：`main`
+> 🟢 状态：代码已合并，本地验证通过 · 当前节点：等真机复核 ·
+> 下一步：抽查 5 张跨年照片（含无 EXIF 截图）归月是否对 · 协同分支：`main`
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -43,7 +44,28 @@
 
 ## 实施记录
 
-（待填）
+- 取证（源码核实）：`sourceVersion` 的 `DATE_MODIFIED` 早已跟着 wire 到
+  账本，但没人在摄入侧读它；`taken_at_ms(path)` 只读 EXIF + 本地 mtime，
+  而 Flow 落盘用 iroh-blobs `export_to`，其 mtime 是导出时刻，不是拍摄
+  时刻——这就是老照片/无 EXIF 截图归到"本月"的直接成因。
+- 协议：`FlowFetchRequest` 新增 `capture_at_ms`（手机 MediaStore
+  `DATE_TAKEN`，0=未知，`#[serde(default)]` 向后兼容老手机构建）；Android
+  discovery/backfill 查询补上 `DATE_TAKEN` 列，写入 `DiscoveryCandidate`/
+  `TransferItem.captureAtMs`，`NativeFlowDeliveryPort` 传上 wire。
+- 核心逻辑：`core_index::taken_at_ms(path, capture_at_ms_hint)`——优先级
+  EXIF > hint（hint>0 时）> 本地 mtime；`FlowDelivery::fetch` 摄入时把
+  `request.capture_at_ms` 作为 hint 传入（不读 durable grant，避免为一次性
+  用途做 schema 迁移）。
+- RED→GREEN：`core-index/tests/ingest.rs` 两条新用例——
+  `no_exif_prefers_the_uploader_capture_hint_over_mtime`（无 EXIF 截图必须
+  用 hint，不是 mtime）、`exif_still_wins_over_an_uploader_capture_hint`
+  （有 EXIF 时 hint 不得覆盖）。
+- 存量数据：本卡未做批量重刷（不在验收标准强制"必须自动修复"的范围内，
+  且需要逐条重新对账手机端 MediaStore——留给验收人真机确认后按需再开卡）。
+- 全量测试：`cargo nextest run --all-features` 336/336 passed；`just ci`
+  全绿；Android JVM 288/0/4。
+- 未做：真机抽查 5 张跨年照片（本次会话未接可用测试相册，交给验收人）。
+
 
 ## 备注
 

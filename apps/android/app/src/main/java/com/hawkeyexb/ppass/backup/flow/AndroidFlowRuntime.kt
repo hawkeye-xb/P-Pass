@@ -30,6 +30,11 @@ internal class AndroidFlowDiscoveryPort(
             generation,
             android.provider.MediaStore.MediaColumns.DATE_MODIFIED,
             android.provider.MediaStore.MediaColumns.BUCKET_ID,
+            // DESK-12: the phone's own capture-time fact — carried to
+            // Desktop as a fallback for files with no EXIF (screenshots,
+            // some video codecs), which otherwise landed under the
+            // Flow-delivered file's export moment instead of its real date.
+            android.provider.MediaStore.MediaColumns.DATE_TAKEN,
         )
         val buckets = selectedBuckets() ?: return DiscoveryPage(emptyList(), cursor)
         if (buckets.isEmpty()) return DiscoveryPage(emptyList(), cursor)
@@ -55,6 +60,7 @@ internal class AndroidFlowDiscoveryPort(
             val gen = rows.getColumnIndexOrThrow(generation)
             val modified = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_MODIFIED)
             val bucket = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_ID)
+            val taken = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_TAKEN)
             while (rows.moveToNext() && candidates.size < DISCOVERY_PAGE_SIZE) {
                 val rowId = rows.getLong(id)
                 val rowGeneration = rows.getLong(gen)
@@ -64,6 +70,7 @@ internal class AndroidFlowDiscoveryPort(
                     bucketId = rows.getLong(bucket),
                     fileName = rows.getString(name).orEmpty(),
                     mediaType = rows.getString(mime) ?: "application/octet-stream",
+                    captureAtMs = rows.getLong(taken),
                 )
                 next = DiscoveryCursor(rowGeneration, rowId)
             }
@@ -91,6 +98,7 @@ internal class AndroidFlowDiscoveryPort(
             generation,
             android.provider.MediaStore.MediaColumns.DATE_MODIFIED,
             android.provider.MediaStore.MediaColumns.BUCKET_ID,
+            android.provider.MediaStore.MediaColumns.DATE_TAKEN,
         )
         val selection = buildString {
             append("${android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?, ?)")
@@ -119,6 +127,7 @@ internal class AndroidFlowDiscoveryPort(
             val gen = rows.getColumnIndexOrThrow(generation)
             val modified = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_MODIFIED)
             val bucket = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_ID)
+            val taken = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_TAKEN)
             while (rows.moveToNext()) {
                 if (candidates.size == DISCOVERY_PAGE_SIZE) {
                     complete = false
@@ -132,6 +141,7 @@ internal class AndroidFlowDiscoveryPort(
                     bucketId = rows.getLong(bucket),
                     fileName = rows.getString(name).orEmpty(),
                     mediaType = rows.getString(mime) ?: "application/octet-stream",
+                    captureAtMs = rows.getLong(taken),
                 )
                 next = DiscoveryCursor(rowGeneration, rowId)
             }

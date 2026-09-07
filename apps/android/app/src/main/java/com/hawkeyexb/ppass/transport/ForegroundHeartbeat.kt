@@ -22,6 +22,12 @@ class ForegroundHeartbeat(
     private val client: DaemonClient,
     private val pairings: PairingStore,
     private val scope: CoroutineScope,
+    // UI-10 item 4: SentinelStore had `recordReachable`/`recordUnreachable`
+    // but no production caller anywhere in the app — the home/photos "失联
+    // N 天" field was frozen data, never updated. This heartbeat is the
+    // natural, already-scheduled connectivity signal (30s while foreground);
+    // wiring its outcome here is the fix, not a new mechanism.
+    private val sentinel: com.hawkeyexb.ppass.backup.SentinelStore? = null,
 ) {
     private var job: Job? = null
     private var active = false
@@ -53,12 +59,29 @@ class ForegroundHeartbeat(
         } catch (_: Exception) {
             return // token 损坏：静默跳过，配对流程会重建
         }
-        // hello 无业务参数；失败（断网/存储端关机）静默，下一拍再说。
-        runCatching { client.call(peer, Methods.HELLO, buildJsonObject {}) }
+        // hello 无业务参数；结果写回 SentinelStore（UI-10：这是唯一实际
+        // 跑着的连通性检测，之前静默丢弃结果导致「失联天数」恒定不更新）。
+        applyHeartbeatOutcome(
+            sentinel,
+            runCatching { client.call(peer, Methods.HELLO, buildJsonObject {}) },
+        )
     }
 
     companion object {
         /** 30s 轻心跳——daemon 侧 2 分钟窗口能容 4 拍，锁屏瞬间不误判离线。 */
         const val HEARTBEAT_MS = 30_000L
     }
+}
+
+/** UI-10: the pure outcome→SentinelStore mapping, split out of [ForegroundHeartbeat.beat]
+ *  so it is testable without a real network call (`DaemonClient` is concrete,
+ *  not fakeable). `null` sentinel (default constructor arg) is a no-op —
+ *  covers any caller that hasn't been updated to pass one. */
+internal fun applyHeartbeatOutcome(
+    sentinel: com.hawkeyexb.ppass.backup.SentinelStore?,
+    outcome: Result<*>,
+) {
+    outcome
+        .onSuccess { sentinel?.recordReachable() }
+        .onFailure { sentinel?.recordUnreachable() }
 }
