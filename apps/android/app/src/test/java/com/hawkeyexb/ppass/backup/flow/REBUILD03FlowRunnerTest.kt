@@ -269,15 +269,15 @@ class REBUILD03FlowRunnerTest {
         dir.deleteRecursively()
     }
 
-    // MOB-58: X-05's Restore/Discard, decided in ARCH-01 but never wired past
+    // MOB-59: X-05's Restore, decided in ARCH-01 but never wired past
     // CancellationRoundController's own JVM tests. Real device: "取消当前轮
     // 没有反应"、"这些照片也没有个重新传输的入口" (2026-09-07). FlowRunner
-    // must expose the same restore/discard the controller already offers,
-    // and restoring must also wake the consumer — nothing else notices new
+    // must expose the same restore the controller already offers, and
+    // restoring must also wake the consumer — nothing else notices new
     // QUEUED work materialized outside the normal discovery path.
     @Test
     fun restoring_a_cancelled_round_re_queues_its_items_and_wakes_the_consumer() {
-        val dir = tempDir("mob58-restore")
+        val dir = tempDir("mob59-restore")
         val ledger = DiscoveryLedgerStore(dir)
         val delivery = RecordingDelivery()
         val runner = FlowRunner(
@@ -291,7 +291,7 @@ class REBUILD03FlowRunnerTest {
         runner.cancelCurrentRound("round-1")
         assertEquals(DeliveryState.CANCELLED_BY_USER_ROUND, ledger.load().items.single().deliveryState)
 
-        runner.restoreCancelledRound("round-1")
+        runner.restoreAllCancelledRounds()
 
         val restored = ledger.load()
         assertEquals(
@@ -303,29 +303,38 @@ class REBUILD03FlowRunnerTest {
         dir.deleteRecursively()
     }
 
+    // MOB-59: the real-device bug. Cancelling twice without ever restoring
+    // must not orphan the first round's items — restoring must recover
+    // every distinct cancelled round in one action, not just the latest.
     @Test
-    fun discarding_a_cancelled_round_leaves_items_cancelled_and_does_not_wake() {
-        val dir = tempDir("mob58-discard")
+    fun restoring_recovers_every_distinct_cancelled_round_not_just_the_latest() {
+        val dir = tempDir("mob59-multi-round")
         val ledger = DiscoveryLedgerStore(dir)
         val delivery = RecordingDelivery()
         val runner = FlowRunner(
             ledger,
-            RecordingDiscovery(DiscoveryPage(listOf(candidate(18)), DiscoveryCursor(7L, 18L))),
+            RecordingDiscovery(DiscoveryPage(emptyList(), DiscoveryCursor(7L, 18L))),
             delivery,
         )
-        runner.requestDiscovery()
-        runner.run(constraintsSatisfied = true)
+        ledger.commitDiscoveryPage(listOf(candidate(18)), DiscoveryCursor(7L, 18L))
         runner.pause()
         runner.cancelCurrentRound("round-1")
+        ledger.commitDiscoveryPage(listOf(candidate(19)), DiscoveryCursor(7L, 19L))
+        runner.pause()
+        runner.cancelCurrentRound("round-2")
+        assertEquals(
+            "both rounds must still be cancelled before restoring",
+            2,
+            ledger.load().items.count { it.deliveryState == DeliveryState.CANCELLED_BY_USER_ROUND },
+        )
 
-        runner.discardCancelledRound("round-1")
+        runner.restoreAllCancelledRounds()
 
         assertEquals(
-            "discard must not resurrect the cancelled item",
-            DeliveryState.CANCELLED_BY_USER_ROUND,
-            ledger.load().items.single().deliveryState,
+            "restoring must recover round-1's item too, not just round-2's",
+            2,
+            ledger.load().items.count { it.deliveryState == DeliveryState.QUEUED || it.deliveryState == DeliveryState.TRANSFERRING },
         )
-        assertEquals("discard must not start any delivery", listOf(1L), delivery.starts)
         dir.deleteRecursively()
     }
 

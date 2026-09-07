@@ -154,26 +154,48 @@ fun flowReuploadNoticeCount(snapshot: DiscoveryLedgerSnapshot): Int =
     snapshot.items.count { it.disposition == RecoveryDisposition.NEEDS_DECISION }
 
 /**
- * MOB-58: X-05 ("Restore/Discard 都是显式用户动作") was decided in ARCH-01 but
- * never wired past `CancellationRoundController`'s JVM tests — the real-device
- * complaint ("取消当前轮没有反应"、"没有重新传输的入口") traces to exactly this
- * gap. `cancelCurrentRound` still ends the scan atomically (unchanged; that
- * atomic close is what lets X-04 admit genuinely-new candidates normally), so
- * the only durable trace of "there is a cancelled batch waiting on a user
- * decision" is the `cancellationRoundId` tag `CancellationRoundController`
- * already leaves on each cancelled item. This reads that tag — no new ledger
- * field, no change to the already-verified X-01~X-04 state machine.
- *
- * Ties to the *latest* round (by queueSequence) so only one notice shows even
- * if the user cancelled more than once without ever restoring or discarding.
+ * MOB-59: the first cut only counted the *latest* round's items, so cancelling
+ * twice without ever restoring silently orphaned the earlier batch — real
+ * device: "重复点取消当前轮，已跳过 20 张的提示消失了，那批再也找不到"
+ * (2026-09-07). This now sums every still-cancelled item across every round,
+ * and the notice has no roundId of its own: [restoreAllCancelledFlowRounds]
+ * (FlowRunner) restores every distinct cancelled round in one action, so the
+ * UI never needs to track which specific round is "current".
  */
-data class CancelledRoundNotice(val roundId: String, val count: Int)
+data class CancelledRoundNotice(val count: Int)
 
 fun flowCancelledRoundNotice(snapshot: DiscoveryLedgerSnapshot): CancelledRoundNotice? {
-    val cancelled = snapshot.items.filter {
+    val count = snapshot.items.count {
         it.deliveryState == DeliveryState.CANCELLED_BY_USER_ROUND && it.cancellationRoundId != null
     }
-    val latestRoundId = cancelled.maxByOrNull { it.queueSequence }?.cancellationRoundId ?: return null
-    return CancelledRoundNotice(latestRoundId, cancelled.count { it.cancellationRoundId == latestRoundId })
+    return if (count > 0) CancelledRoundNotice(count) else null
+}
+
+/**
+ * MOB-59: the progress bar must show *this round's* progress, not the
+ * lifetime M/N the hero stat above it already shows — otherwise the two
+ * numbers are a redundant echo of each other (user's own argument: adding
+ * more albums mid-transfer made the bar jump to "15/15"-ish territory
+ * instead of showing the newly-added work at 0, 2026-09-07). This is
+ * inherently a *running* quantity (it needs to remember what was already
+ * confirmed since the round started), so it cannot live in the pure
+ * snapshot->state mapping ([backupUiStateOf]) the way K/M/N do — the holder
+ * calls this once per tick and keeps the returned state itself.
+ *
+ * Rule: an item completing (pending drops) advances `done`; new pending
+ * work materializing (album added mid-round, pending rises) only grows
+ * `total` and never resets `done` — mid-round album additions do not lose
+ * credit for what already finished. A round that fully drains (pending
+ * hits 0) resets the baseline so the *next* round starts at a clean 0.
+ */
+data class RoundProgress(val done: Long, val total: Long)
+
+fun advanceRoundProgress(previousPending: Long?, previousDone: Long, currentPending: Long): RoundProgress {
+    val done = when {
+        previousPending == null || previousPending == 0L -> 0L
+        currentPending < previousPending -> previousDone + (previousPending - currentPending)
+        else -> previousDone
+    }
+    return RoundProgress(done = done, total = done + currentPending)
 }
 

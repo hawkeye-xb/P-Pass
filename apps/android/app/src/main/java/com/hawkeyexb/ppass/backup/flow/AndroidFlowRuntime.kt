@@ -196,17 +196,10 @@ internal fun cancelCurrentFlowRound(context: Context) {
     }
 }
 
-/** MOB-58: the notice's only action — re-admit the cancelled round's items as QUEUED. */
-internal fun restoreCancelledFlowRound(context: Context, roundId: String) {
+/** MOB-59: the notice's only action — re-admit every cancelled round's items as QUEUED. */
+internal fun restoreAllCancelledFlowRounds(context: Context) {
     runtimeFor(context.applicationContext)?.let {
-        synchronized(flowTriggerLock) { it.runner.restoreCancelledRound(roundId) }
-    }
-}
-
-/** MOB-58: dismiss the notice without re-queueing — items keep their final CANCELLED state. */
-internal fun discardCancelledFlowRound(context: Context, roundId: String) {
-    runtimeFor(context.applicationContext)?.let {
-        synchronized(flowTriggerLock) { it.runner.discardCancelledRound(roundId) }
+        synchronized(flowTriggerLock) { it.runner.restoreAllCancelledRounds() }
     }
 }
 

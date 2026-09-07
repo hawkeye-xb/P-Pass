@@ -138,10 +138,15 @@ fun HomeScreen(
     // 只是还没等到下一次 500ms tick 刷新出结果；这里禁用按钮 + 换处理中
     // 文案，同一命令没跑完不接受下一次点击。
     commandPending: Boolean = false,
-    // MOB-58: X-05 的 Restore/Discard——null = 没有待决定的取消轮。
+    // MOB-59: X-05 的常驻 Restore 入口——null = 没有待恢复的取消批次。
+    // 不再有 Discard：真机反馈明确指出"点了不用了就没法处理了"是死路，
+    // 所以这条提示只有一个动作，且在有取消批次时永远显示，不会消失。
     cancelledRoundNotice: com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice? = null,
-    onRestoreCancelledRound: () -> Unit = {},
-    onDiscardCancelledRound: () -> Unit = {},
+    onRestoreCancelledRounds: () -> Unit = {},
+    // MOB-59: 本轮自己的进度（0 起算），与上方 hero 的终身 M/N 三元组
+    // 是两回事——真机反馈：中途加相册后进度条直接跳到"15/15"附近，
+    // 混进了之前已经传完的历史，应该只看这一轮还要传的。
+    roundProgress: com.hawkeyexb.ppass.backup.flow.RoundProgress? = null,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -267,7 +272,9 @@ fun HomeScreen(
                                 fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
                                 color = PPColor.Ink60,
                             )
-                            val progress = progressOf(state)
+                            val progress = roundProgress?.let {
+                                if (it.total > 0) it.done.toFloat() / it.total else null
+                            }
                             if (progress != null) {
                                 Spacer(Modifier.height(8.dp))
                                 // MOB-33（2026-08-26 真机）：必须显式覆盖 M3 1.3
@@ -543,48 +550,22 @@ fun HomeScreen(
             }
         }
 
-        // ── MOB-58: 取消轮的 Restore/Discard（X-05，之前只在测试里存在）。
+        // ── MOB-59: 取消轮的常驻 Restore 入口（X-05，之前只在测试里存在）。
         //
-        // 为什么这条要单独一块 Surface 而不是复用 NoticeCard 的单动作栏：
-        // 这是唯一需要**两个**动作（重新传输 / 不用了）的提示，NoticeCard
-        // 目前只留了一个 actionLabel 的位置（UI-04 之后要重排优先级时可以
-        // 一并把它规整进 HomeNotice，这里先保证功能对得上）。
+        // 只有一个动作（重新传输）——真机反馈明确指出"不用了"这个按钮点了
+        // 之后就没法处理了，是死路；所以这里改用跟重传告知一样的单动作
+        // NoticeCard，只要还有未恢复的取消批次就一直显示，不会消失，也
+        // 不会因为重复点"取消当前轮"而丢失早期批次（count 汇总全部轮次）。
         if (cancelledRoundNotice != null) {
             Spacer(Modifier.height(12.dp))
-            Surface(
-                color = PPColor.WaitingBg,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column(Modifier.padding(16.dp, 13.dp)) {
-                    Text(
-                        stringResource(R.string.cancelled_round_notice_body, cancelledRoundNotice.count),
-                        fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row {
-                        Text(
-                            stringResource(R.string.cancelled_round_notice_restore),
-                            fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
-                            textDecoration = TextDecoration.Underline,
-                            modifier = Modifier.clickable(
-                                enabled = !commandPending,
-                                onClick = onRestoreCancelledRound,
-                            ).padding(4.dp),
-                        )
-                        Spacer(Modifier.width(20.dp))
-                        Text(
-                            stringResource(R.string.cancelled_round_notice_discard),
-                            fontSize = 14.sp, color = PPColor.Ink60,
-                            textDecoration = TextDecoration.Underline,
-                            modifier = Modifier.clickable(
-                                enabled = !commandPending,
-                                onClick = onDiscardCancelledRound,
-                            ).padding(4.dp),
-                        )
-                    }
-                }
-            }
+            NoticeCard(
+                HomeNotice(
+                    kind = HomeNoticeKind.CANCELLED_ROUND,
+                    body = stringResource(R.string.cancelled_round_notice_body, cancelledRoundNotice.count),
+                    actionLabel = stringResource(R.string.cancelled_round_notice_restore),
+                    onAction = onRestoreCancelledRounds,
+                )
+            )
         }
 
         // ── MOB-37: 重传告知（库里少了 N 张、正在传回来）。
@@ -922,15 +903,6 @@ private fun lastSuccessText(ts: Long): String =
 /** 千分位分组（设计稿"1,180 / 1,234"）——用户当前 locale 的分组符号。 */
 internal fun groupThousands(n: Long): String =
     java.text.NumberFormat.getIntegerInstance().format(n)
-
-/** 进行中的确定进度（0..1）；扫描/无总数时 null = 不画进度条。 */
-private fun progressOf(state: BackupUiState): Float? = when (state) {
-    is BackupUiState.Hashing ->
-        if (state.total > 0) state.done.toFloat() / state.total else null
-    is BackupUiState.Sending ->
-        if (state.total > 0) state.done.toFloat() / state.total else null
-    else -> null
-}
 
 /** M10（全页面状态稿）：cell 行高 52dp——设计稿原文数值，带 hint 的
  *  两行开关自然长过这个下限，是合理例外，不受这条线约束。 */

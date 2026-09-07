@@ -69,10 +69,9 @@
     <!-- 2026-09-07 real-device feedback: disable the button while a command
          is in flight so repeated taps don't queue behind it. -->
     <string name="backup_command_processing">Working…</string>
-    <!-- MOB-58: X-05 Restore/Discard notice card -->
-    <string name="cancelled_round_notice_body">Skipped %1$d photo(s) from a cancelled round. Send them again?</string>
+    <!-- MOB-59: X-05 persistent Restore notice (no Discard — see HomeScreen.kt) -->
+    <string name="cancelled_round_notice_body">Skipped %1$d photo(s) from cancelled rounds.</string>
     <string name="cancelled_round_notice_restore">Send again</string>
-    <string name="cancelled_round_notice_discard">No thanks</string>
     <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
     <string name="idle_auto_hint">Runs by itself while charging on Wi-Fi</string>
     <string name="state_no_albums">No albums selected — nothing to back up</string>

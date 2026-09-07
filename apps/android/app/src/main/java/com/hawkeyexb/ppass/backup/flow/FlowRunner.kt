@@ -113,24 +113,23 @@ class FlowRunner(
     }
 
     /**
-     * MOB-58: X-05's explicit user action, finally wired to production.
-     * `cancelCurrentRound` already ends the scan atomically (finishRound)
-     * and leaves the user-controlled pause in force (MOB-49), so by the
-     * time a user could click Restore, [roundId] only survives as the
-     * `cancellationRoundId` tag on the items themselves — restoreRound
-     * tolerates that (its guard accepts a null live `cancellationRound`).
+     * MOB-59: X-05's explicit user action, finally wired to production, and
+     * corrected to survive repeated cancels (2026-09-07 real device: cancelling
+     * twice orphaned the first batch behind a notice that only knew the
+     * latest round id). There is no Discard: the notice is meant to be a
+     * permanent, always-there entry, not a dismissible one with a dead end —
+     * so this restores every distinct cancelled round in one atomic action.
      * Restoring must also reopen the gate and wake the consumer — the same
      * gate `continueFlow` reopens — otherwise the re-admitted QUEUED items
-     * sit inert behind the still-active user pause.
+     * sit inert behind the still-active user pause (MOB-49).
      */
-    fun restoreCancelledRound(roundId: String) {
-        cancellation.restoreRound(roundId)
+    fun restoreAllCancelledRounds() {
+        val roundIds = ledger.load().items
+            .mapNotNull { if (it.deliveryState == DeliveryState.CANCELLED_BY_USER_ROUND) it.cancellationRoundId else null }
+            .distinct()
+        if (roundIds.isEmpty()) return
+        roundIds.forEach { cancellation.restoreRound(it) }
         continueFlow(constraintsSatisfied = true)
-    }
-
-    /** MOB-58: X-05's Discard — permanently drops this round's restore offer. */
-    fun discardCancelledRound(roundId: String) {
-        cancellation.discardRound(roundId)
     }
 
     private fun backfillIfAdmitted() {

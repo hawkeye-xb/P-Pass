@@ -1,10 +1,8 @@
-# MOB-58 取消当前轮无可见反馈 + 无重传入口，X-05 从未接入生产（L1）
+# MOB-58 取消轮无常驻反馈/汇总入口 + 传输进度条混用终身口径（L1）
 
-> 🟢 状态：代码已合并，本地验证通过 · 当前节点：等真机复核 ·
-> 下一步：真机确认取消有反馈、Restore/Discard 两个动作都生效 ·
-> 协同分支：`main`
-> 级别：**L1**（ARCH-01 §8/X-05 明确要求的用户显式操作从未接入生产，
-> 缺口在 REBUILD-05 就记录过，一直没人接）· 阻塞：无
+> 🟢 状态：代码已合并（含同日二次真机反馈的 3 处修正），本地验证通过 ·
+> 当前节点：等真机复核 · 下一步：真机确认——重复取消不丢批次、"重新传输"入口常驻、进度条中途加相册后从正确位置起算 · 协同分支：`main`
+> 级别：**L1**（ARCH-01 §8/X-05 明确要求的用户显式操作从未接入生产，缺口在 REBUILD-05 就记录过，一直没人接）· 阻塞：无
 
 ## 问题（2026-09-07 三星真机第三次反馈，用户原话：「这个问题提了三次」）
 
@@ -87,7 +85,60 @@ Restore/Discard 缺口留在原地一直没人接，用户三次反馈的正是�
   X-01~X-04 不动）、`StrictConsumer`/`DiscoveryLedger` 的账本结构（不新增
   字段，只读已有的 `cancellationRoundId`）。
 
-## 备注
+## 修正记录（2026-09-07，同日二次真机反馈）
+
+首版实现本身有两个真实缺陷，用户当场复测就发现了：
+
+### 修正 1：重复取消会丢失早期批次
+
+`flowCancelledRoundNotice` 首版只看\"最新一轮\"的 `cancellationRoundId`，
+连续点两次\"取消当前轮\"（第二次针对新一批照片）会让提示卡的 `roundId`
+被覆盖，第一批取消的照片从此在 UI 上找不到、也点不到——`restoreRound`
+需要精确的 `roundId` 才能调用，界面只保留了最新一个。改为**汇总所有
+仍处于 `CANCELLED_BY_USER_ROUND` 的项**，不再挂在单个 `roundId` 上；
+`FlowRunner.restoreAllCancelledRounds()` 一次性收集账本里全部不重复的
+`cancellationRoundId` 并逐个调用 `restoreRound`，一个动作恢复全部历史
+批次。
+
+### 修正 2：去掉"不用了"这个死路按钮
+
+用户原话：\"你就不能直接思考一下吗……如果你有一个长期的入口，你只提示
+它从哪里能够恢复就可以了……你这个逻辑就没法闭环了。\"——`discardRound()`
+一旦调用，账本上再没有任何字段能找回这批照片，UI 也没有历史页/设置页
+入口去承接\"discard 之后想反悔\"的场景。既然做不出完整闭环，就不该有这
+个按钮。改为**只保留一个常驻的\"重新传输\"入口**：复用 `NoticeCard`
+统一样式（跟 MOB-37 重传提示同款），只要账本里还有未恢复的取消项就一直
+显示，不会消失，`CancellationRoundController.discardRound()` 方法本身
+保留（内部状态机不动，ARCH-05 语义不受影响），只是生产代码不再调用它。
+
+### 修正 3：进度条改为本轮独立计数（用户当场追加的第二个问题）
+
+原进度条直接用 `BackupUiState.Sending.done/total`，这组数字来自
+`flowAggregateOf` 的**终身**统计（`confirmed`/`pending`），传完 15 张后
+再新选一批共 50 张的相册，进度条会从\"15/15\"附近起跳，而不是新任务该有
+的\"0/35\"。首页顶部的\"M/N 已回家\"大字沿用终身口径不变（这是既有裁决，
+不受影响）；进度条改为独立的 `RoundProgress`（`advanceRoundProgress`
+纯函数）：由 `BackupUiStateHolder` 每 500ms tick 记住上一次的 `pending`，
+`pending` 下降就把差值计入 `done`（不看 `confirmed` 绝对值，避免终身
+计数污染）；`pending` 上升（中途加相册）只增大 `total`，不清空已挣的
+`done`；`pending` 归零（本轮真正传完）才把基线清零，下一轮从 0 开始。
+
+## 验收标准（补充）
+
+- [x] `flowCancelledRoundNotice` 汇总全部未恢复轮次，不再只认最新一个
+      （`MOB59CancelledRoundNoticeTest.two_unresolved_cancelled_rounds_are_both_counted_in_the_notice`）
+- [x] `FlowRunner.restoreAllCancelledRounds()` 一次操作恢复多个历史轮次
+      （`REBUILD03FlowRunnerTest.restoring_recovers_every_distinct_cancelled_round_not_just_the_latest`）
+- [x] 移除 Discard 按钮/触发函数，`CancellationRoundController.discardRound()`
+      方法本身不删（保留供未来真正做历史页入口时复用）
+- [x] `advanceRoundProgress` 纯函数 4 个用例覆盖：首次观测基线为 0、单项
+      完成推进 done、中途加相册只增 total 不清 done、本轮清空后下一轮
+      归零起算
+- [x] 反证两处：`flowCancelledRoundNotice` 临时改回\"只认最新轮\"确认
+      变红；`advanceRoundProgress` 临时去掉推进逻辑确认变红；均已恢复
+- [x] 全量 Android JVM 298/0/4（净增 3：删 4 加 7），`just ci` 全绿
+
+
 
 来源：`REBUILD-05`（2026-09-02）验收记录已提前预警这个缺口存在，当时按
 "只做当前卡"铁律记录证据但未处理；`MOB-49` 落地时又一次明确排除了这部分
