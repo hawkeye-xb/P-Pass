@@ -11,8 +11,10 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-06**（test.5 真机反馈 5 条 → 派生 MOB-51/52、DESK-11/12 四张卡，
-> MOB-45 补侧滑样本；UI-09 部分通过进「刚完成」，余项挂 MOB-51）
+> 最后核对：**2026-09-07**（E2E-03/REL-05/BUILD-03/CI-04 逐条核实关闭；
+> MOB-39/MOB-42/MOB-48/MOB-41 核实已被生产架构取代，关闭；DOG-03 用户拍板
+> 不做；MOB-46 用户拍板不追；MOB-44 用户拍板删除——鸿蒙 NEXT 不支持后台运行；
+> UI-04 按用户要求拆成 UI-04a~d 四张独立卡）
 
 ---
 
@@ -100,16 +102,16 @@
 
 ---
 
-## 三、待 ARCH-01 重拆（旧实现卡冻结，agent 不许按旧卡实施）
+## 三、（原 ARCH-01 冻结区，2026-09-07 已清空）
 
-| 卡 | 冻结原因 | 正确下一步 |
-|---|---|---|
-| [MOB-39](../cards/MOB-39-triggers-are-data-pipeline-is-one.md) | 旧 `TriggerSpec` / WorkManager 管线形状已被 ARCH-01 取代 | 从 ARCH-01 case matrix 拆新实施卡 |
-| [MOB-42](../cards/MOB-42-pause-leaves-two-channels-running.md) | 旧 WorkManager 通道枚举不再是 Pause 的架构边界 | 从 ARCH-01 Pause / consumer gate case 拆新实施卡 |
-| [MOB-48](../cards/MOB-48-pause-resume-must-preserve-original-trigger-spec.md) | 依赖旧 `TriggerSpec` / enqueue facade 形状 | 从 ARCH-01 Continue / 条件等待 case 拆新实施卡 |
-
-> 旧测试不许阻塞新架构；保留的产品不变量必须从 ARCH-01 case matrix 重新写成
-> 失败用例。新卡未拆前，本节卡禁止认领和实施。
+> 原 MOB-39/MOB-42/MOB-48 三张卡：2026-09-07 复核确认 ARCH-01 + REBUILD-00~05
+> 的生产切换已经落地并跑在生产上，这三张卡描述的旧 WorkManager/TriggerSpec
+> 问题域在当前代码里已不存在（源码走查逐条核实：`BackupWorker` 已降级为纯
+> framework wake adapter；`pauseAutoBackup` 已覆盖全部通道；`Pause`/`Continue`
+> 语义已转移到 `backup/flow/` 的 `DiscoveryLedger`/`consumerGate`）。不是"待
+> 重拆"，是已经被新架构解决，三张卡移入 `cards/done/`，不留在这里等待。
+> 同批次一并核实关闭的还有 MOB-41（同一根因：点名的函数在生产代码里已零
+> 调用，只剩单测引用旧 legacy 路径）。
 
 ---
 
@@ -143,20 +145,21 @@
 
 
 
-| P2 | [DOG-03](../cards/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 三星退到后台 20 秒就冻进程、看门 job 直接丢——把「加电池白名单」提成 onboarding 必经一步 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
-| P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
 
-| P2 | [MOB-44](../cards/MOB-44-harmonyos-no-background-for-restore.md) | 鸿蒙上恢复备份退后台就不跑（需鸿蒙真机取证窗口，与 DOG-03 同族） | L1 |
+
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
 | P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
 
 
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 
-| P3 | [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁（⚠️ 要动 workflows，先确认由谁改） | L0 |
-| P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（CI 钉 17 不受影响） | L3 |
-| P3 | [UI-04](../cards/UI-04-notice-presentation-three-defects.md) | 提示呈现三连：只在总览 / 改名用占布局的条 / 多条堆叠 | L2 |
+| P3 | [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁（2026-09-07 复核仍未开工，⚠️ 要动 workflows，先确认由谁改） | L0 |
+| P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（2026-09-07 现场复现确认仍存在；CI 钉 17 不受影响） | L3 |
+| P3 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 中断提示只在总览页可见，切 tab 就看不到（原 UI-04 拆分①） | L2 |
+| P3 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 设备改名反馈占布局空间，该用浮层（原 UI-04 拆分②） | L2 |
+| P3 | [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 多条提示同时出现平铺堆叠，无优先级取舍（原 UI-04 拆分③） | L2 |
+| P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对（原 UI-04 拆分④） | L2 |
 | P3 | [LINT-01](../cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
 | P3 | [CI-02](../cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制（~300 Linux 分钟/月白烧） | L3 |
 
@@ -209,9 +212,8 @@ MOB-29、MOB-34、MOB-36、WATCH-03、WATCH-04、DESK-08、UI-03。
 
 ## 七、待你复现或拍板（agent 不许编码）
 
-| 卡 | 当前事实 | 需要的证据 |
-|---|---|---|
-| [MOB-46](../cards/MOB-46-album-selection-count-inflated.md) | 当前 M5 UI 的 footer 已是“将备份 N 张照片”，设置页的 N 相册也正确；旧卡所述计数控件已不存在 | 用当前 APK 录屏/截图“选 3 显 7”的具体页面与文案，才能定位真实回归 |
+（本节 2026-09-07 已清空——原 MOB-46 用户已拍板"上一代问题，关掉"，移入
+`cards/done/`。若未来真机再现相册计数异常，需用当前 APK 重新取证开新卡。）
 
 Apple 签名/公证已确认早就补齐、CI 一直在真跑,不是待拍板；「两个本机问题」指向的 `local-state.md` 已不
 存在、内容丢失，不再挂账——有新的本机问题请直接口述，我会重新建这个文件；
@@ -224,6 +226,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 | 卡 | 状态 | 备注 |
 |---|---|---|
 | [MOB-07](../cards/MOB-07-partial-access-global-indicator.md) | 暂不做 | 2026-08-14 拍板 |
+| [DOG-03](../cards/backlog/DOG-03-battery-whitelist-must-be-on-the-onboarding-path.md) | 明确不做 | 2026-09-07 用户拍板：不把「加电池白名单」做成 onboarding 必经步骤；根因（三星 Freecess 冻结看门 job）仍然成立，接受该场景下后台自动备份不工作 |
 | WATCH-05 | 已拍板需要做，实施前重开讨论 | inode 身份缓存（stat 没变就不重算 hash） |
 | WATCH-06 | 明确不做 | 卡里写明不要用软链物化视图 |
 | MOB-25 | 暂不做 | 查看页尺寸显示 0×0，2026-08-19 拍板（MOB-26 已于 2026-08-27 解冻移回可接队列） |

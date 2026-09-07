@@ -1,6 +1,9 @@
 # BUILD-01 本地 JDK 25 让 Android release 构建挂在 lint
 
-> ⬜ 状态：未开工
+> ⬜ 状态：**仍然存在，2026-09-07 现场复现确认**（`JAVA_HOME=$(brew --prefix
+> openjdk)` 即 25.0.1，`./gradlew :app:assembleRelease` 的
+> `lintVitalAnalyzeRelease` 仍报同一个 `> 25.0.1` 报错；CI 钉 17 不受影响，
+> debug 构建/单测不受影响）
 > 级别：L3 · 阻塞：无（范围已按用户定调收窄，见下）
 
 ## 问题

@@ -1,9 +1,12 @@
 # MOB-48 暂停/继续/重试必须恢复原始触发策略（L2）
 
-> ⏸ 状态：冻结——ARCH-01 已定义 Pause / Continue / 条件等待与严格消费者的
-> 新状态语义；本卡依赖的旧 `TriggerSpec` / enqueue facade 形状不许直接实施，
-> 待按 ARCH-01 case matrix 重拆实施卡。
-> 级别：L2 · 阻塞：依赖 MOB-39 的集中 `TriggerSpec` / enqueue facade
+> ✅ 状态：**已被生产架构取代，归档**（2026-09-07）。ARCH-01 + REBUILD-00~05
+> 已切换生产：`FlowRunner.continueFlow`/`retryFailedDeliveries` 不再需要"保存
+> 并恢复原始 TriggerSpec"——新架构里只有一条常驻发现队列 + 严格单消费者，
+> `Pause`/`Continue` 是对同一条队列的开关，没有"这轮是哪种触发"的状态要保存。
+> 本卡依赖的 MOB-39 旧 `TriggerSpec`/enqueue facade 形状已不存在，问题域本身
+> 被新设计消解，不需要重拆实施卡。
+> 级别：L2 · 阻塞：无
 
 ## 问题
 

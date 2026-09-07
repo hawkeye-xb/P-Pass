@@ -1,7 +1,14 @@
 # MOB-41 重传提示发在范围过滤之前——删掉范围外的照片会弹一条假通知　级别 L2
 
-> 🔴 状态：待实施
-> 级别：**L2**（假通知，不丢数据）· 阻塞：无
+> ✅ 状态：**已被生产架构取代，归档**（2026-09-07）。本卡点名的
+> `BackupWorker.runBackup`/`calibrateIfReachable` 函数在当前代码里**已不存在**；
+> 它依赖的 `calibrateConfirmed`/`planReuploads`/`noteReuploadNotice` 三个函数
+> 虽然还在源码里，但生产代码（`apps/android/app/src/main`）里**零调用**——
+> 只有单元测试还在引用，属于 REBUILD-00 冻结的旧批处理管线遗留代码，与
+> MOB-39/42/48 同族。真正的重传/校准语义已转移到 `backup/flow/` 包
+> （`RemoteReconciliation`/`CompletionAndScope`），走的是发现队列 + 严格单
+> 消费者的新架构，不存在"通知发在范围过滤之前"这个旧时序问题。
+> 级别：L2 · 阻塞：无
 
 ## 问题
 
