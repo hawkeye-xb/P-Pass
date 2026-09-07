@@ -165,11 +165,34 @@ class DiscoveryLedgerStore(private val dir: File) {
             DiscoveryLedgerSnapshot()
         } else {
             try {
-                json.decodeFromString(DiscoveryLedgerSnapshot.serializer(), file.readText())
+                backfillMissingCompletedAt(json.decodeFromString(DiscoveryLedgerSnapshot.serializer(), file.readText()))
             } catch (_: Exception) {
                 DiscoveryLedgerSnapshot()
             }
         }
+
+    // MOB-53: items that reached CONFIRMED before UI-09 added `completedAt`
+    // are terminal — no receipt will ever replay for them again — so a 0
+    // default is not "not yet completed", it is "we never recorded when".
+    // Stamp them once with the load-time clock (the only honest value left;
+    // there is no earlier recoverable fact) and persist so the backfill runs
+    // exactly once per item, matching CompletionAndScope's own "stamp once,
+    // never overwrite" rule for completedAt.
+    private fun backfillMissingCompletedAt(snapshot: DiscoveryLedgerSnapshot): DiscoveryLedgerSnapshot {
+        var changed = false
+        val backfilled = snapshot.items.map { item ->
+            if (item.deliveryState == DeliveryState.CONFIRMED && item.completedAt <= 0L) {
+                changed = true
+                item.copy(completedAt = System.currentTimeMillis())
+            } else {
+                item
+            }
+        }
+        if (!changed) return snapshot
+        val migrated = snapshot.copy(items = backfilled)
+        persist(migrated)
+        return migrated
+    }
 
     fun startCancellationRound(id: String) {
         val current = load()

@@ -110,9 +110,15 @@ class UI09LedgerAggregateTest {
     }
 
     @Test
-    fun old_ledger_json_without_completedAt_loads_as_zero_and_stays_compatible() {
+    fun old_ledger_json_without_completedAt_loads_and_backfills_confirmed_items() {
         // Schema compatibility: a ledger written before UI-09 has no
-        // completedAt field; kotlinx defaults must let it load with 0.
+        // completedAt field; kotlinx defaults must let it load without
+        // crashing. MOB-53: a CONFIRMED item with no recorded completion
+        // time is not "not yet completed" (it is terminal, no receipt will
+        // ever replay for it again) — load() must backfill it to a positive
+        // stamp, not leave it at the schema default 0 (that produced a
+        // permanent "M confirmed" + "从未成功备份过" contradiction on a real
+        // Samsung device, see MOB-53).
         val dir = tempDir("schema-compat")
         val storeDir = File(dir, "flow-state/node").apply { mkdirs() }
         val ledger = DiscoveryLedgerStore(storeDir)
@@ -126,7 +132,7 @@ class UI09LedgerAggregateTest {
         assertTrue(withTime.completedAt > 0L)
 
         // Strip completedAt from the persisted JSON (simulating a pre-UI-09
-        // file) and reload: it must parse and report completedAt == 0.
+        // file) and reload: it must parse without crashing.
         val file = File(storeDir, "discovery-ledger.json")
         // completedAt is the declared-last field, so it appears either as
         // ,"completedAt":N (mid-object) or "completedAt":N} (object end).
@@ -136,7 +142,65 @@ class UI09LedgerAggregateTest {
         assertTrue("the test must actually strip the field", !stripped.contains("completedAt"))
         file.writeText(stripped)
         val reloaded = ledger.load()
-        assertEquals(0L, reloaded.items.single { it.queueSequence == head.queueSequence }.completedAt)
+        assertTrue(
+            "MOB-53: a CONFIRMED item missing completedAt must be backfilled, not left at 0",
+            reloaded.items.single { it.queueSequence == head.queueSequence }.completedAt > 0L,
+        )
+        dir.deleteRecursively()
+    }
+
+    // MOB-53 RED: a ledger written before UI-09 has CONFIRMED items whose
+    // completedAt field is absent from the JSON (pre-migration schema). After
+    // UI-09 added the field with a 0 default, these items load as
+    // completedAt == 0 forever — no receipt replay will ever touch them again
+    // (they are already terminal) — so the home screen shows real M/N counts
+    // side by side with "从未成功备份过" (LastSuccess.Never), a permanent
+    // self-contradiction observed on a real Samsung device 2026-09-07.
+    @Test
+    fun pre_ui09_confirmed_items_without_completedAt_are_backfilled_on_load() {
+        val dir = tempDir("mob53-backfill")
+        val storeDir = File(dir, "flow-state/node").apply { mkdirs() }
+        val ledger = DiscoveryLedgerStore(storeDir)
+        val delivery = RecordingDelivery()
+        val runner = FlowRunner(
+            ledger,
+            RecordingDiscovery(DiscoveryPage(listOf(candidate(18), candidate(19)), DiscoveryCursor(7L, 19L))),
+            delivery,
+        )
+        runner.requestDiscovery()
+        runner.run(constraintsSatisfied = true)
+        var head = ledger.load().items.single { it.deliveryState == DeliveryState.TRANSFERRING }
+        runner.acceptCompletionReceipt(CompletionReceipt(queueSequence = head.queueSequence, receiptId = "desktop-1"))
+        head = ledger.load().items.single { it.deliveryState == DeliveryState.TRANSFERRING }
+        runner.acceptCompletionReceipt(CompletionReceipt(queueSequence = head.queueSequence, receiptId = "desktop-2"))
+        val confirmed = ledger.load()
+        assertEquals(2L, confirmed.items.count { it.deliveryState == DeliveryState.CONFIRMED }.toLong())
+
+        // Simulate the pre-UI-09 on-disk shape: strip completedAt from both
+        // CONFIRMED items (they were terminal before the field existed).
+        val file = File(storeDir, "discovery-ledger.json")
+        val stripped = file.readText()
+            .replace(Regex(""""completedAt":\s*\d+,\s*"""), "")
+            .replace(Regex(""",\s*"completedAt":\s*\d+"""), "")
+        assertTrue("the test must actually strip the field", !stripped.contains("completedAt"))
+        file.writeText(stripped)
+
+        // RED (pre-fix): a naive load() reports completedAt == 0 for both,
+        // so flowAggregateOf(...).lastSuccessAt == 0 and lastSuccessOf(0, now)
+        // renders "从未成功备份过" — even though M == 2 confirmed items exist.
+        val migrated = ledger.load()
+        assertTrue(
+            "every CONFIRMED item must have a positive completedAt after load-time backfill",
+            migrated.items.filter { it.deliveryState == DeliveryState.CONFIRMED }.all { it.completedAt > 0L },
+        )
+        val aggregate = flowAggregateOf(migrated)
+        assertTrue("lastSuccessAt must be positive once M > 0", aggregate.lastSuccessAt > 0L)
+
+        // Idempotency: reloading again (backfill already persisted) must not
+        // change the stamps a second time.
+        val stamps = migrated.items.associate { it.stableId to it.completedAt }
+        val reloaded = ledger.load()
+        assertEquals(stamps, reloaded.items.associate { it.stableId to it.completedAt })
         dir.deleteRecursively()
     }
 
