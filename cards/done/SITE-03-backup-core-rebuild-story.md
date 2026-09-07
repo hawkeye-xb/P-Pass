@@ -1,8 +1,8 @@
 # SITE-03 为什么重建备份核心：从批处理到有账本的单张流程（L1）
 
-> 🟠 状态：已认领 · 协同分支：`main`
+> ✅ 状态：代码已合并（`40917dc`），2026-09-07 归档
 > 级别：L1 · 阻塞：无
-> 当前节点：基于 ARCH-01 / REBUILD-00~06 已公开归档撰写中文博文；下一步：构建、发布并核对静态产物。
+> 结论：中文文章、sitemap 与 RSS 已由 Pages 发布并在线核对。
 
 ## 问题
 
@@ -14,11 +14,11 @@ P-Pass 的备份核心已从旧 `scan → hash → manifest → push → commit 
 
 ## 验收标准
 
-- [ ] `site/src/content/blog/` 新增一篇 `draft: false` 的中文文章，标题、日期、标签与现有集合格式一致。
-- [ ] 文章正确区分：用户 Pause 与条件等待、完成凭据与开始传输、取消本轮与逐文件取消、外部缺失事实与自动恢复意图。
-- [ ] 不宣称未完成的真机/发布验证，不暴露本机路径、设备标识或任何照片内容。
-- [ ] `npm run build` 成功，产物包含新文章路由与 RSS 项。
-- [ ] `just queue-check` 通过；`docs/QUEUE.md`、`docs/PROGRESS.md`、`docs/ROADMAP.md` 同步。
+- [x] `site/src/content/blog/` 新增一篇 `draft: false` 的中文文章，标题、日期、标签与现有集合格式一致。
+- [x] 文章正确区分：用户 Pause 与条件等待、完成凭据与开始传输、取消本轮与逐文件取消、外部缺失事实与自动恢复意图。
+- [x] 不宣称未完成的真机/发布验证，不暴露本机路径、设备标识或任何照片内容。
+- [x] `npm run build` 成功，产物包含新文章路由与 RSS 项。
+- [x] `just queue-check` 通过；`docs/QUEUE.md`、`docs/PROGRESS.md`、`docs/ROADMAP.md` 同步。
 
 ## 范围
 
@@ -28,3 +28,9 @@ P-Pass 的备份核心已从旧 `scan → hash → manifest → push → commit 
 ## 阻塞与依赖
 
 无。用户已明确要求将本次核心重建的“为什么”写入 blog；公开素材仅取仓内 ARCH-01 / REBUILD 归档。
+
+## 实施记录
+
+- 文章：`site/src/content/blog/why-we-rebuilt-backup-core.md`；静态 sitemap 已登记其中文 URL。
+- 本地验证：`npm ci && npm run build` 成功；新文章静态页、RSS 项、sitemap URL 均在 `dist/` 中存在。
+- 发布：`40917dc` 触发的 Pages workflow `34102057353` 为 `completed/success`；线上文章、sitemap、RSS 均返回 HTTP 200。
