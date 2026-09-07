@@ -140,7 +140,8 @@
 | P2 | [MOB-44](../cards/MOB-44-harmonyos-no-background-for-restore.md) | 鸿蒙上恢复备份退后台就不跑（需鸿蒙真机取证窗口，与 DOG-03 同族） | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
 | P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
-| P3 | [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | Flow runtime 空快照装死 + 旧数据源 UI 尾巴（重传死提示/归属过滤/失联哨兵）——**阻塞：UI-09**（同文件），勿提前接 | L3 |
+| P2 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 三星真机 2026-09-07 实证：UI-09 上线前已 CONFIRMED 的旧账本条目 completedAt 永远 0，首页「37/38 已回家」与「从未成功备份过」同屏矛盾，永久不自愈 | L1 |
+| P3 | [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | Flow runtime 空快照装死 + 旧数据源 UI 尾巴（重传死提示/归属过滤/失联哨兵）——UI-09 已合并，阻塞已解除，可接 | L3 |
 
 
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
