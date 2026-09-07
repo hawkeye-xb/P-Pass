@@ -1075,6 +1075,8 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 > Landing + blog 对外阵地，与 app 主线并行。内容 zh 先行，en 随开源节奏补。
 
+- [x] SITE-03 备份核心重建故事 — **published 2026-09-07 (`40917dc`)**：中文工程复盘《为什么我们把备份核心整个换掉了》，只据 ARCH-01 / REBUILD-00~06 公开档案解释旧批次模型为何不能表达单张照片的状态、新 Flow 如何以账本/原子发现/严格队头/完成凭据收敛语义；手写 sitemap 与 RSS 同步，Pages workflow `34102057353` 成功并线上核对三项 HTTP 200。
+
 - [x] SITE-01 站点脚手架（landing v1 + blog 骨架 + RSS + GH Pages 部署）— **code landed 2026-08-11**: Astro 5 纯静态，tokens.css 构建期从 tokens.json 生成（脚本断言一致），图标从 docs/design/2026-08-11-icon-v1/ 同步，零 tracker（CI 断言）。site.yml paths 过滤 `site/**` 与主 CI 隔离。挂账：Pages 部署三路由 200 + Lighthouse ≥90 + DNS CNAME 改指 hawkeye-xb.github.io（当前指向旧 p-pass-landing.pages.dev 占位）。
 - [ ] SITE-02 首批三篇博文（定位故事 / 图标九轮 / IPC-02 重构）— 草稿完成。**优先级 L3（2026-08-25 用户降级：「优先级没这么高，回头统一审稿」）**——不再列为上线阻塞，不主动催审；用户择期统一审完再去 draft 发布
 - [ ] DNS: p-pass.hawkeye-xb.com CNAME → hawkeye-xb.github.io（CF zone 65dec62bc61b00e5d22fedc40b774bdc）

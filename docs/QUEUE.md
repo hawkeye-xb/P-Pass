@@ -39,7 +39,6 @@
 | [REL-05](../cards/REL-05-release-create-draft-must-checkout.md) | Release #46 的 create-draft 无 checkout，`gh release` 无仓库上下文 | 补 checkout，以新 test tag 验证草稿和上传 | `main` |
 | [BUILD-03](../cards/BUILD-03-windows-release-must-not-compile-android-blobs.md) | Release #46 的 Windows lane 编译 Android-only `std::os::fd` bridge | Android target gate + Windows cross-check，以新 test tag 验证 | `main` |
 | [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
-| [SITE-03](../cards/SITE-03-backup-core-rebuild-story.md) | 将 ARCH-01 / REBUILD-00~06 的备份核心重建原因写为公开中文工程复盘 | 构建、发布并核对静态产物 | `main` |
 
 ---
 
@@ -70,6 +69,7 @@
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [SITE-03](../cards/done/SITE-03-backup-core-rebuild-story.md) | 中文工程复盘《为什么我们把备份核心整个换掉了》已发布；手写 sitemap 与 RSS 同步收录，Pages workflow `34102057353` 成功，线上三项均 200 | 无——文章只记录已公开 ARCH-01 / REBUILD 事实 |
 | [MOB-60](../cards/MOB-60-cancel-round-leaves-stale-pause.md) | 用户复测 MOB-58/59 追问坐实：取消当前轮完成后仍展示暂停/继续，点继续等于传空气；`FlowRunner.cancelCurrentRound()` 补 `continueFlow()` 归位闸门，取消完落到已有的 Idle 判断，不新增状态；JVM 298/0/4、just ci 均绿 | 无——闸门归位即完整闭环 |
 | [MOB-58](../cards/MOB-58-cancel-round-no-feedback-no-restore-entry.md) | 三星真机 2026-09-07 两轮反馈：取消轮无常驻反馈+重复取消丢批次+进度条混用终身口径；`FlowRunner.restoreAllCancelledRounds()` 汇总恢复、`NoticeCard` 常驻入口（去 Discard 死路）、`advanceRoundProgress` 本轮独立 0 起算；JVM 298/0/4、just ci 均绿 | 无——同时收敛 MOB-55（同一根因，取消存档） |
 | [DESK-13](../cards/DESK-13-ingest-blocks-tokio-runtime-freezes-desktop-ui.md) | 三星真机 2026-09-07 实证「桌面传输中不实时展示、手动刷新卡死很久」；`Ingestor::ingest()`/`place()` 大文件哈希/拷贝套 `block_in_place`（另一会话已埋的修复）+ 补齐 3 个测试文件的 multi-thread runtime flavor（此前配套缺失导致 24 个测试全 panic）；Rust 全绿、just ci 均绿 | 无——补测试闭环，真机复核大文件传输是否仍卡顿 |
