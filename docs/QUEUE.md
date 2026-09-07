@@ -166,7 +166,7 @@
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本——当前引用了不带闪电标识的 icon（阻塞：等验收人给修改指示） | L3 |
 | P3 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册页长名称换行撑乱布局 + 缩略图模糊 | L3 |
 | P3 | [I18N-02](../cards/I18N-02-main-kotlin-hardcoded-chinese.md) | 主 Android Kotlin 的无关既有用户可见中文硬编码清债 | L1 |
-| P4（顺手做，不派活） | [CI-04](../cards/CI-04-release-waits-for-the-slowest-platform.md) | 代码①②都已合并（先建草稿、各平台自己上传），不存在权限拍板；剩的是下次你自己发版时顺手拿一次真实 workflow_dispatch/release 验证一下缓存和拆分是否真生效——2026-08-27 用户定为最低优先级 | L1 |
+| P4（顺手做，不派活） | [CI-04](../cards/done/CI-04-release-waits-for-the-slowest-platform.md) | ✅ 已归档：2026-09-07 用 Release #51 实测验证缓存与拆分上传均生效 | L1 |
 
 **派活提示**：P1/P2 里的 L0/L1 卡属于「成本在做」，按 AGENTS.md 的派活姿势，
 把根因/文件/行号内联进指令即可，不必要求 agent 先通读协议文档。
