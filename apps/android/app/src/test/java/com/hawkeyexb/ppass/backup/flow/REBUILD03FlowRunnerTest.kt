@@ -226,6 +226,49 @@ class REBUILD03FlowRunnerTest {
         dir.deleteRecursively()
     }
 
+    // MOB-54 RED: recordPermanentFailure() re-queues a non-terminal item
+    // (attemptCount < 3) but never wakes the strict consumer again — unlike
+    // acceptCompletionReceipt(), which explicitly calls consumer.wake() after
+    // a success. A transient failure (network blip, one retryable error)
+    // leaves the head QUEUED with an open gate and no lease, and nothing
+    // will pick it up again except an external trigger (album reselect, app
+    // restart, the 5h periodic WorkManager fallback). Real device: last
+    // queue item stuck QUEUED/attemptCount=1 indefinitely (2026-09-07,
+    // Samsung SM-S9210, 12/13 confirmed, 1 stuck).
+    @Test
+    fun transient_failure_retries_automatically_without_an_external_trigger() {
+        val dir = tempDir("mob54-retry-wake")
+        val ledger = DiscoveryLedgerStore(dir)
+        val discovery = RecordingDiscovery(
+            DiscoveryPage(candidates = listOf(candidate(18)), nextCursor = DiscoveryCursor(7L, 18L)),
+        )
+        val delivery = RecordingDelivery()
+        val runner = FlowRunner(ledger, discovery, delivery)
+
+        runner.requestDiscovery()
+        runner.run(constraintsSatisfied = true)
+        assertEquals(listOf(1L), delivery.starts)
+
+        // One transient failure — attemptCount goes to 1, still short of the
+        // 3-attempt terminal threshold, so the item is re-queued and (after
+        // the fix) immediately re-leased for another attempt in the same
+        // call — TRANSFERRING again, not stuck at QUEUED.
+        runner.recordPermanentFailure()
+        val afterFailure = ledger.load()
+        assertEquals(DeliveryState.TRANSFERRING, afterFailure.items.single().deliveryState)
+        assertEquals(1, afterFailure.items.single().attemptCount)
+
+        // RED: without any external trigger, the strict consumer must retry
+        // the still-open head on its own — the delivery port must see a
+        // second start for queueSequence 1.
+        assertEquals(
+            "a non-terminal failure must retry automatically, not stall until an external trigger",
+            listOf(1L, 1L),
+            delivery.starts,
+        )
+        dir.deleteRecursively()
+    }
+
     private fun candidate(id: Long) = DiscoveryCandidate(
         sourceRef = "content://media/external/images/media/$id",
         sourceVersion = "generation-7",
