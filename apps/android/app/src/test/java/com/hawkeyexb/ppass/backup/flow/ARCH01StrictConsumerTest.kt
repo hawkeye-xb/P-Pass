@@ -37,6 +37,75 @@ class ARCH01StrictConsumerTest {
         }
     }
 
+    // MOB-56 RED: StrictConsumer.wake() is read-check-write (load lease,
+    // check null, persist a new lease) with no internal locking — by design,
+    // ARCH-03 pushes serialization to the caller (every Android trigger site
+    // wraps calls in `synchronized(flowTriggerLock)`; see AndroidFlowRuntime.kt).
+    // This test proves why that external lock is load-bearing: without it,
+    // two threads racing wake() (e.g. a delivery failure callback and a
+    // concurrent receipt/pause/wake trigger) can both observe fetchLease ==
+    // null before either persists, so both can start a delivery for the same
+    // strict head, and/or their concurrent persist() calls corrupt each
+    // other's atomic rename. Real device: two independent "Native Flow
+    // delivery failed" log lines 322ms apart from different threads
+    // (2026-09-07, Samsung SM-S9210) after MOB-54 added a second wake() call
+    // path (recordPermanentFailure) alongside the pre-existing
+    // acceptCompletionReceipt wake() — neither callback was synchronized
+    // (fixed in AndroidFlowRuntime.kt by wrapping both in flowTriggerLock).
+    // The exact symptom (double start vs. a corrupted-persist exception)
+    // depends on OS thread scheduling, so this repeats the race across
+    // several trials and accepts either as proof of the hazard.
+    @Test
+    fun concurrent_wake_without_external_synchronization_is_unsafe() {
+        var sawDoubleStart = false
+        var sawPersistCorruption = false
+        repeat(20) { trial ->
+            if (sawDoubleStart || sawPersistCorruption) return@repeat
+            val dir = tempDir("mob56-race-$trial")
+            val port = SlowFakeDeliveryPort()
+            val consumer = StrictConsumer(seededStore(dir), port)
+            val threadExceptions = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+
+            val ready = java.util.concurrent.CyclicBarrier(2)
+            val threads = (1..2).map {
+                Thread {
+                    ready.await()
+                    try {
+                        consumer.wake(constraintsSatisfied = true)
+                    } catch (t: Throwable) {
+                        threadExceptions += t
+                    }
+                }.apply {
+                    setUncaughtExceptionHandler { _, t -> threadExceptions += t }
+                }
+            }
+            threads.forEach { it.start() }
+            threads.forEach { it.join(2_000) }
+
+            if (port.starts.count { it == 1L } >= 2) sawDoubleStart = true
+            if (threadExceptions.any { it.message?.contains("atomically persist") == true }) {
+                sawPersistCorruption = true
+            }
+            dir.deleteRecursively()
+        }
+        assertTrue(
+            "MOB-56: unsynchronized concurrent wake() must be unsafe (double-start the " +
+                "same head, or corrupt the concurrent persist) across repeated trials — " +
+                "this is the race the production flowTriggerLock closes",
+            sawDoubleStart || sawPersistCorruption,
+        )
+    }
+
+    /** Holds start() open briefly so two racing wake() calls can both observe no lease. */
+    private class SlowFakeDeliveryPort : DeliveryPort {
+        val starts = java.util.Collections.synchronizedList(mutableListOf<Long>())
+        override fun start(item: TransferItem, resumePartial: Boolean, lease: FetchLease) {
+            Thread.sleep(20)
+            starts += item.queueSequence
+        }
+        override fun stop(queueSequence: Long): PartialDisposition = PartialDisposition.RETAINED
+    }
+
     @Test
     fun c01_pause_stops_current_item_keeps_partial_and_never_starts_next_item() {
         val dir = tempDir("c01")

@@ -215,8 +215,19 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             resolver = context.contentResolver,
             pairing = { PairingStore(context.filesDir).load() },
             identityKey = { IdentityStore(context.filesDir).secretKey() },
-            onPermanentFailure = { runner.recordPermanentFailure() },
-            onReceipt = { runner.acceptCompletionReceipt(it) },
+            // MOB-56: every other Flow trigger (pause/continue/wake/cancel/
+            // retry) serializes through flowTriggerLock — these two native
+            // delivery callbacks were the only entry points that called
+            // straight into the runner. On an unstable connection, a failed
+            // fetch's wake() could race a concurrent trigger's wake(), both
+            // grabbing the strict head and starting two overlapping native
+            // deliveries for the SAME item — a StrictConsumer (ARCH-03)
+            // single-active-lease violation. Real device: two independent
+            // delivery failures logged 322ms apart from different threads
+            // (2026-09-07, Samsung SM-S9210, after MOB-54 made a failed
+            // fetch's retry synchronous with the next wake).
+            onPermanentFailure = { synchronized(flowTriggerLock) { runner.recordPermanentFailure() } },
+            onReceipt = { receipt -> synchronized(flowTriggerLock) { runner.acceptCompletionReceipt(receipt) } },
             onPairingEpochRefreshed = { refreshedEpoch ->
                 val pairings = PairingStore(context.filesDir)
                 val current = pairings.load()

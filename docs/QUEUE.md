@@ -71,7 +71,8 @@
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
-| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星真机 2026-09-07 实证：队尾照片卡在 QUEUED/attemptCount=1 传不完；`FlowRunner.recordPermanentFailure()` 补齐对称 `wake()`；JVM 276/0/4、just ci 均绿 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md)（同一轮回归观察到的取消按钮无反馈，证据不足未合并处理） |
+| [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 三星真机 2026-09-07 实证：两条并发传输失败日志相差 322ms；`onPermanentFailure`/`onReceipt` 补齐 `flowTriggerLock`（L0，违反 ARCH-03 单活跃租约不变量）；JVM 277/0/4、just ci 均绿 | 无——修复即完整闭环 |
+| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星真机 2026-09-07 实证：队尾照片卡在 QUEUED/attemptCount=1 传不完；`FlowRunner.recordPermanentFailure()` 补齐对称 `wake()`；JVM 276/0/4、just ci 均绿 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md)（同一轮回归观察到的取消按钮无反馈，证据不足未合并处理）、[MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md)（同一改动放大了一处早已存在的并发缺口） |
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 三星真机 2026-09-07 实证「37/38 已回家」+「从未成功备份过」永久矛盾；`DiscoveryLedgerStore.load()` 回填旧账本 CONFIRMED 项的 completedAt；JVM 275/0/4、just ci、debug APK 均绿 | 无——纯数据迁移，不产出下游卡；真机复核为可选项 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 聚合状态换源 Flow 账本合并（`234a53f`，v0.5.0-test.5）；真机实证进度数字实时跳动 | 余项（AllSafe/K 归零流转）被 MOB-51 挡，随其一并验 |
 | [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | 三星真机自然复现迟到回执竞态并收敛为 `CONFIRMED`；范围扩展补扫全部验收标准完成 | 分出 MOB-49、MOB-50（取消本轮两处生产接线缺口） |
