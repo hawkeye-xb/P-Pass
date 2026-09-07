@@ -1,6 +1,8 @@
 # E2E-03 tag 触发的 Android live scenarios 缺 Android Rust target，门禁在 Gradle 预构建失败（L1）
 
-> 🟠 状态：进行中 · 当前节点：`v0.5.0-test.1` 的 E2E #73 已复现 target 缺失；下一步：在 e2e workflow 补齐与 CI Android / release 相同的 native provider 前置，再以新 tag 复核 · 协同分支：`main`
+> ✅ 状态：完成 · 当前节点：`v0.5.0-test.2`（Release #46、E2E #74）起已补齐
+> `aarch64-linux-android` + `ANDROID_NDK_HOME` 前置；`v0.5.0-test.7`（E2E #82）
+> 与今日 main 定时 E2E #83 均绿，安卓三项 live 测试通过 · 协同分支：`main`
 > 级别：L1 · 阻塞：无
 
 ## 问题

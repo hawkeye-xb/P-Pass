@@ -35,10 +35,11 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [E2E-03](../cards/E2E-03-tag-e2e-missing-android-rust-target.md) | tag E2E #73 的 Android native provider 缺 Rust target，Gradle 预构建 E0463 | 补齐 `aarch64-linux-android` + NDK 前置，以新 test tag 复核 | `main` |
-| [REL-05](../cards/REL-05-release-create-draft-must-checkout.md) | Release #46 的 create-draft 无 checkout，`gh release` 无仓库上下文 | 补 checkout，以新 test tag 验证草稿和上传 | `main` |
-| [BUILD-03](../cards/BUILD-03-windows-release-must-not-compile-android-blobs.md) | Release #46 的 Windows lane 编译 Android-only `std::os::fd` bridge | Android target gate + Windows cross-check，以新 test tag 验证 | `main` |
 | [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
+
+> 2026-09-07 复核：E2E-03 / REL-05 / BUILD-03 已在 `v0.5.0-test.2~test.7`
+> 的 Release/E2E 真实运行中验证通过（GitHub Actions 逐条核实），移入
+> `cards/done/`，不再是待办。
 
 ---
 

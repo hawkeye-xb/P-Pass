@@ -1,6 +1,8 @@
 # BUILD-03 Windows Release 编译 Android 专属 blobs bridge，跨平台 build 被 `std::os::fd` 阻断（L1）
 
-> 🟠 状态：进行中 · 当前节点：`v0.5.0-test.2` Release #46 Windows lane 已实证失败；下一步：把 Android FFI bridge 严格隔离为 Android target 模块，并在 Windows cross-check 与新 test Release 验证 · 协同分支：`main`
+> ✅ 状态：完成 · 当前节点：Android FFI bridge 已收进 `android-jni` feature（默认关闭，
+> 仅 `tools/build-android-iroh-blobs-bridge.sh` 显式开启）；`v0.5.0-test.7`（Release #51）
+> Windows x64 lane 已绿，无 `std::os::fd` 报错 · 协同分支：`main`
 > 级别：L1 · 阻塞：无
 
 ## 问题
