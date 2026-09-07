@@ -85,7 +85,18 @@ impl Ingestor {
     }
 
     pub async fn ingest(&self, f: &IncomingFile) -> Result<IngestOutcome> {
-        let hash = dedup::hash_file(&f.src_path)?;
+        // block_in_place: hashing and (cross-volume) copying a large file
+        // are CPU/IO-bound synchronous work whose cost scales with file
+        // size — running them inline on a tokio worker thread starves every
+        // other task scheduled on that thread for the duration. Traced to a
+        // real symptom: a multi-hundred-MB Flow transfer's ingest froze the
+        // desktop UI (photo wall refresh, pause/cancel clicks queued behind
+        // the same local IPC handling) for as long as the hash+copy took
+        // (2026-09-07). `block_in_place` moves this call off the runtime's
+        // async scheduling for its duration without needing a dedicated
+        // thread pool; it requires a multi-thread runtime, which every
+        // production call site (the daemon binary) already uses.
+        let hash = tokio::task::block_in_place(|| dedup::hash_file(&f.src_path))?;
         let now_ms = unix_ms_now();
 
         if let Some(existing) = self.db.get_asset(&hash).await? {
@@ -221,7 +232,17 @@ impl Ingestor {
 
     /// Move the source file to `originals/<device>/<yyyy>/<mm>/<name>`,
     /// suffixing `-1`, `-2`, … on name collisions. Returns the rel path.
+    ///
+    /// `block_in_place`: a cross-volume move falls back to a full-file copy
+    /// (`move_file`) — for a large Flow-delivered video this can run for
+    /// seconds, and without this it runs inline on the async runtime the
+    /// same way the hash above did (2026-09-07 real-device symptom: desktop
+    /// UI froze for the duration).
     fn place(&self, f: &IncomingFile, taken_at_ms: i64) -> Result<String> {
+        tokio::task::block_in_place(|| self.place_blocking(f, taken_at_ms))
+    }
+
+    fn place_blocking(&self, f: &IncomingFile, taken_at_ms: i64) -> Result<String> {
         let name = sanitize_file_name(&f.file_name);
         let (yyyy, mm) = year_month(taken_at_ms);
         let dir_rel = format!("originals/{}/{yyyy:04}/{mm:02}", device_dir(&f.src_device));

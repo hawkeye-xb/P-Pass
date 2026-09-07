@@ -65,6 +65,13 @@ class BackupUiStateHolder(
     // most once per held instance — a repeated blank epoch after a failed
     // repair means the pairing is genuinely lost, not a transient race.
     private var epochRepairAttempted = false
+    // 2026-09-07 真机反馈：暂停/取消/取消当前轮连点几下会各自往协程里排
+    // 一个命令，但按钮从点击到下一次 500ms tick 刷新之间没有任何禁用/
+    // 处理中反馈——用户看不出点击生效了没有，于是接着点，命令排队执行，
+    // 表现为「按钮卡死」。这里加一个「命令处理中」标记，UI 据此禁用按钮
+    // 并显示处理中文案，同一命令处理完才能再点下一次。
+    private val _commandPending = mutableStateOf(false)
+    val commandPending: State<Boolean> get() = _commandPending
 
     init {
         scope.launch {
@@ -88,31 +95,43 @@ class BackupUiStateHolder(
 
     /** Pause/Continue/trigger commands operate on the same persisted Flow ledger. */
     fun backupNow() {
+        if (_commandPending.value) return
+        _commandPending.value = true
         scope.launch {
-            withContext(Dispatchers.IO) {
-                // MOB-51: route the click on the same durable facts the button
-                // label came from — a visible "Pause" always pauses, including
-                // in the between-files gap where the per-file state is Idle.
-                when (flowCommandOf(flowLedgerSnapshot(context))) {
-                    FlowCommand.Pause -> pauseFlow(context)
-                    FlowCommand.Continue -> continueFlow(context)
-                    FlowCommand.Retry -> retryFailedFlow(context)
-                    FlowCommand.Wake -> requestFlowWake(context)
+            try {
+                withContext(Dispatchers.IO) {
+                    // MOB-51: route the click on the same durable facts the button
+                    // label came from — a visible "Pause" always pauses, including
+                    // in the between-files gap where the per-file state is Idle.
+                    when (flowCommandOf(flowLedgerSnapshot(context))) {
+                        FlowCommand.Pause -> pauseFlow(context)
+                        FlowCommand.Continue -> continueFlow(context)
+                        FlowCommand.Retry -> retryFailedFlow(context)
+                        FlowCommand.Wake -> requestFlowWake(context)
+                    }
                 }
+                refreshFlowState()
+            } finally {
+                _commandPending.value = false
             }
-            refreshFlowState()
         }
     }
 
     /** Cancel is intentionally offered only from a durable user-paused state. */
     fun cancelCurrentRound() {
+        if (_commandPending.value) return
+        _commandPending.value = true
         scope.launch {
-            withContext(Dispatchers.IO) {
-                if (flowUiStateOf(flowLedgerSnapshot(context)) == FlowUiState.PausedByUser) {
-                    cancelCurrentFlowRound(context)
+            try {
+                withContext(Dispatchers.IO) {
+                    if (flowUiStateOf(flowLedgerSnapshot(context)) == FlowUiState.PausedByUser) {
+                        cancelCurrentFlowRound(context)
+                    }
                 }
+                refreshFlowState()
+            } finally {
+                _commandPending.value = false
             }
-            refreshFlowState()
         }
     }
 
