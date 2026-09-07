@@ -1,7 +1,9 @@
 # REL-05 Release 的无 checkout upload/finalize job 未显式声明仓库，`gh release` 发布链断裂（L1）
 
-> 🟠 状态：进行中 · 当前节点：`v0.5.0-test.3` 已建草稿并完成 Android 上传，但 macOS/Windows upload 与 finalize 仍缺仓库上下文；下一步：为所有无 checkout 的 `gh release` step 显式传 `GH_REPO`，以新 test tag 验证三端资产与正文 · 协同分支：`main`
-> 级别：L1 · 阻塞：BUILD-03 必须修复 Windows lane，才能把同一新 test tag 作为完整 Release 验收。
+> ✅ 状态：完成 · 当前节点：`v0.5.0-test.4`（Release #48）起全部 `gh release`
+> 调用已显式传 `GH_REPO`；`v0.5.0-test.7`（Release #51）建草稿/三端构建/三端上传/
+> 补正文共 8 步全绿，无 `not a git repository` · 协同分支：`main`
+> 级别：L1 · 阻塞：无（BUILD-03 已同批解决）
 
 ## 问题
 
