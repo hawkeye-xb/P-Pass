@@ -56,6 +56,9 @@ enum class HomeNoticeKind {
 
     /** MOB-37: 库里少了照片、正在传回来。补充信息类：用户不动手也没事。 */
     REUPLOAD,
+
+    /** MOB-59: X-05——取消轮次的重传常驻入口，不是可关闭的提示。 */
+    CANCELLED_ROUND,
 }
 
 /** 优先级**提案**（越靠前越要紧）。UI-04 可重排，见文件头注释。 */
@@ -65,6 +68,7 @@ val HOME_NOTICE_PRIORITY: List<HomeNoticeKind> = listOf(
     HomeNoticeKind.PARTIAL_ACCESS,
     HomeNoticeKind.BATTERY_WHITELIST,
     HomeNoticeKind.NOTIFICATION_PERMISSION,
+    HomeNoticeKind.CANCELLED_ROUND,
     HomeNoticeKind.REUPLOAD,
 )
 
