@@ -14,6 +14,8 @@ use proto::{FlowCompletionReceipt, FlowFetchRequest};
 use storage::{Db, FlowGrant, FlowGrantState};
 use transport::{Blobs, NodeId};
 
+use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
+
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryError {
     #[error("request does not match the current pairing epoch, lease, and hash")]
@@ -37,6 +39,11 @@ pub struct FlowDelivery {
     blobs: Arc<Blobs>,
     ingestor: Ingestor,
     staging: PathBuf,
+    /// DESK-11: mirrors `BackupEngine`'s throttle — a completed fetch signals
+    /// the desktop timeline the same way a legacy batch ingest does. `None`
+    /// (the pre-fix default) means "no one is listening", matching how
+    /// `main.rs` constructs this port today.
+    throttle: Option<Throttle>,
 }
 
 impl FlowDelivery {
@@ -51,7 +58,24 @@ impl FlowDelivery {
             db,
             blobs,
             staging: root.join(".ppf/flow-staging"),
+            throttle: None,
         }
+    }
+
+    /// DESK-11: wire the desktop timeline event bus, same contract as
+    /// `BackupEngine::with_events` — a completed fetch's ingest schedules a
+    /// throttled `timeline.invalidated` instead of leaving the desktop to
+    /// wait for the next batch/hourly reconcile.
+    pub fn with_events(self, events: EventBus) -> Self {
+        self.with_events_and_window(events, DEFAULT_THROTTLE_WINDOW)
+    }
+
+    /// Variant with an injectable throttle window — same rationale as
+    /// `BackupEngine::with_events_and_window` (tests need a deterministic,
+    /// short window rather than relying on wall-clock timing).
+    pub fn with_events_and_window(mut self, events: EventBus, window: std::time::Duration) -> Self {
+        self.throttle = Some(Throttle::new(events, window));
+        self
     }
 
     /// Persist the current exact grant. This method transfers no bytes.
@@ -129,6 +153,11 @@ impl FlowDelivery {
                 file_name: grant.file_name.clone(),
                 media_type: grant.media_type.clone(),
                 src_device: grant.node_id.clone(),
+                // DESK-12: the phone's own capture-time fact travels on the
+                // wire in this same request — reading it here (not from the
+                // durable `grant`) avoids a schema migration for a value
+                // that is only ever needed once, at this ingest call.
+                capture_at_ms_hint: Some(request.capture_at_ms),
             })
             .await
         {
@@ -136,6 +165,12 @@ impl FlowDelivery {
                 // Duplicate leaves the staging export in place; it is not a
                 // durable source and must not survive as a false partial.
                 let _ = std::fs::remove_file(&staged);
+                // DESK-11: signal the desktop timeline the same way a legacy
+                // batch ingest does — without this, a materialized Flow item
+                // is invisible until the next batch/hourly reconcile.
+                if let Some(throttle) = &self.throttle {
+                    throttle.signal();
+                }
             }
             Err(e) => return Err(DeliveryError::Materialize(e.to_string())),
         }

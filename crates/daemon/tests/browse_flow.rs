@@ -38,6 +38,7 @@ async fn seed_library(dir: &Path, db: &Db, n: u32) -> Vec<([u8; 32], Vec<u8>)> {
             file_name: format!("IMG_{i:04}.jpg"),
             media_type: "image/jpeg".into(),
             src_device: vec![9u8; 32],
+            capture_at_ms_hint: None,
         })
         .await
         .unwrap();

@@ -254,6 +254,7 @@ impl LibraryWatcher {
                     file_name: name.clone(),
                     media_type: media_type_for(&name).to_string(),
                     src_device,
+                    capture_at_ms_hint: None,
                 };
                 match ingestor.ingest(&incoming).await {
                     Ok(IngestOutcome::New(_)) => Some(()),

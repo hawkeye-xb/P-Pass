@@ -28,6 +28,17 @@ pub struct IncomingFile {
     pub media_type: String,
     /// Uploading device NodeId (32 bytes) — audit actor + layout dir.
     pub src_device: Vec<u8>,
+    /// DESK-12: the uploader's own capture-time fact (phone MediaStore
+    /// `DATE_TAKEN`, unix ms), used only when the file carries no EXIF.
+    /// `None` for callers that have no such fact (legacy batch pipeline,
+    /// local directory watcher) — those keep the pre-existing mtime
+    /// fallback. This must NEVER override embedded EXIF: EXIF travels with
+    /// the bytes through content-addressed transfer and is already correct;
+    /// only the *local mtime* is untrustworthy for Flow-delivered files
+    /// (iroh-blobs `export_to` stamps the export moment, not the original
+    /// capture moment — the mtime silently becomes "when this daemon wrote
+    /// the file to disk", not "when the photo was taken").
+    pub capture_at_ms_hint: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -97,7 +108,7 @@ impl Ingestor {
             // 用户）；来自库外（staging）= 按 canonical 布局落位。
             let new_rel = match self.rel_inside_originals(&f.src_path) {
                 Some(rel) => rel,
-                None => self.place(f, taken_at_ms(&f.src_path)?)?,
+                None => self.place(f, taken_at_ms(&f.src_path, f.capture_at_ms_hint)?)?,
             };
             self.db.update_asset_rel_path(&hash, &new_rel).await?;
             self.audit(now_ms, f, &hash, "asset.relocated", Some(new_rel.clone()))
@@ -111,7 +122,7 @@ impl Ingestor {
                 source,
             })?
             .len() as i64;
-        let taken_at = taken_at_ms(&f.src_path)?;
+        let taken_at = taken_at_ms(&f.src_path, f.capture_at_ms_hint)?;
         // Header-only probe; videos and exotic codecs are honest None
         // (the timeline shows them without dimensions).
         let (width, height) = match image::image_dimensions(&f.src_path) {
@@ -268,12 +279,22 @@ impl Ingestor {
 }
 
 /// EXIF `DateTimeOriginal` (fallback `DateTime`) as unix ms — read via
-/// core-media (T-013) — with the file's mtime as last resort. EXIF wall
-/// clock carries no zone; core-media interprets it as UTC so the key is
-/// stable across machines.
-pub(crate) fn taken_at_ms(path: &Path) -> Result<i64> {
+/// core-media (T-013) — first choice always. DESK-12: when the file has no
+/// EXIF, an uploader-supplied capture-time hint (phone MediaStore
+/// `DATE_TAKEN`) is preferred over the local file's mtime — Flow-delivered
+/// files land via iroh-blobs `export_to`, whose mtime is the export moment,
+/// not the original capture moment (screenshots/some videos have no EXIF
+/// and were landing in "this month" instead of their real date). The local
+/// mtime remains the last-resort fallback for callers with no hint (legacy
+/// batch pipeline, local directory watcher) and for a hint of 0 (unknown).
+pub(crate) fn taken_at_ms(path: &Path, capture_at_ms_hint: Option<i64>) -> Result<i64> {
     if let Some(ms) = core_media::read_meta(path).taken_at_ms {
         return Ok(ms);
+    }
+    if let Some(hint) = capture_at_ms_hint {
+        if hint > 0 {
+            return Ok(hint);
+        }
     }
     let io_err = |source| IndexError::Io {
         path: path.to_path_buf(),

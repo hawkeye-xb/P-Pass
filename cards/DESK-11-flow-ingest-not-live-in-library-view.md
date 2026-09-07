@@ -1,6 +1,7 @@
 # DESK-11 手机传完的照片桌面库不及时出现（watcher/事件链未覆盖 Flow 摄入）（L1）
 
-> ⬜ 状态：未开工 · 当前节点：2026-09-06 真机观察（test.5，OPPO+三星）；下一步：取证定性断点（watcher 未触发 vs 前端未订阅 vs 展示刷新节流） · 协同分支：`main`
+> 🟢 状态：代码已合并，本地验证通过 · 当前节点：等真机复核 ·
+> 下一步：连传 ≥20 张，逐张确认 2 秒内出现在桌面时间轴 · 协同分支：`main`
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -39,7 +40,21 @@
 
 ## 实施记录
 
-（待填）
+- 根因确认（源码读取）：`FlowDelivery` 结构体没有 throttle/events 字段，
+  `main.rs` 构造它时从未调用等价的 `.with_events(...)`（对照
+  `BackupEngine::new(...).with_events(event_bus.clone())`）——旧批处理管线
+  有事件通知，新 Flow 管线没有。
+- RED：`daemon/tests/flow_delivery.rs::successful_flow_fetch_notifies_the_desktop_timeline`
+  用真实 iroh 传输链路（bind→push→offer→fetch）驱动，断言 1 秒内收到
+  `TIMELINE_INVALIDATED` 事件；未接线前该用例超时真红。
+- GREEN：`FlowDelivery` 加 `throttle: Option<Throttle>` 字段（镜像
+  `BackupEngine` 的 throttle 用法）+ `with_events`/`with_events_and_window`
+  构造方法；`fetch()` 材料化成功后调用 `throttle.signal()`；`main.rs` 在
+  构造 `flow_delivery` 时补上 `.with_events(event_bus.clone())`。
+- 全量测试：`cargo nextest run --all-features` 336 tests / 336 passed /
+  1 skipped；`just ci` 全绿。
+- 未做：真机连传验证（本次会话未连接可用测试相册，交给验收人做黑盒回归）。
+
 
 ## 备注
 

@@ -169,6 +169,11 @@ data class FlowFetchRequest(
     @SerialName("media_type") val mediaType: String = "",
     /** Native iroh-blobs ticket for this exact hash. */
     val provider: String = "",
+    // DESK-12: MediaStore DATE_TAKEN (unix ms; 0 = unknown) — Desktop uses
+    // this only when the file itself has no EXIF, instead of falling back
+    // to its own local mtime (which for a Flow-delivered file is the
+    // export/ingest moment, not the real capture moment).
+    @SerialName("capture_at_ms") val captureAtMs: Long = 0L,
 )
 
 /** Kotlin mirror of proto::FlowCompletionReceipt. */

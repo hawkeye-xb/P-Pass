@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use daemon::events;
 use daemon::flow_delivery::{DeliveryError, FlowDelivery};
 use proto::FlowFetchRequest;
 use storage::{Db, Device, Role};
@@ -15,6 +16,7 @@ fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFe
         file_name: "IMG_0007.jpg".into(),
         media_type: "image/jpeg".into(),
         provider,
+        capture_at_ms: 0,
     }
 }
 
@@ -263,4 +265,62 @@ async fn cancelled_active_item_never_receives_a_receipt() {
         .await
         .unwrap()
         .is_none());
+}
+
+// DESK-11 RED: a successful Flow fetch materializes and receipts a phone's
+// photo, but FlowDelivery (unlike BackupEngine, which wires `with_events`)
+// carries no event bus — the desktop timeline is never told to refresh.
+// Real-device symptom: "photo arrived, confirmed on phone, but desktop
+// library doesn't show it until the next batch/hourly reconcile"
+// (2026-09-06, test.5). Root cause confirmed by source read: `FlowDelivery`
+// struct has no throttle/events field and `main.rs` never calls an
+// equivalent `.with_events(...)` on it (contrast with
+// `BackupEngine::new(...).with_events(event_bus.clone())`).
+#[tokio::test]
+async fn successful_flow_fetch_notifies_the_desktop_timeline() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"DESK-11 timeline notification fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let (event_bus, mut event_rx) = events::bus();
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path())
+        .with_events_and_window(event_bus, std::time::Duration::from_millis(20));
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    delivery
+        .fetch(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    // RED: without the fix, no event is ever emitted and this times out.
+    let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+        .await
+        .expect("DESK-11: a completed Flow fetch must notify the desktop timeline")
+        .unwrap();
+    assert_eq!(event["event"], events::TIMELINE_INVALIDATED);
 }

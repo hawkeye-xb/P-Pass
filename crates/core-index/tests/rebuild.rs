@@ -100,6 +100,7 @@ async fn ingest_one(
         file_name: name.into(),
         media_type: media_type.into(),
         src_device: dev.to_vec(),
+        capture_at_ms_hint: None,
     })
     .await
     .unwrap();

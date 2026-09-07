@@ -125,6 +125,7 @@ internal class NativeFlowDeliveryPort(
             fileName = hashed.fileName.ifBlank { hashed.sourceRef.substringAfterLast('/') },
             mediaType = hashed.mediaType,
             provider = ticket,
+            captureAtMs = hashed.captureAtMs,
         )
         active = ActiveDelivery(lease, request)
         scope.launch {

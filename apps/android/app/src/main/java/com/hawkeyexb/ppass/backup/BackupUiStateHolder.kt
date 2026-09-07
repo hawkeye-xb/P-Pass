@@ -14,13 +14,19 @@ import com.hawkeyexb.ppass.backup.flow.flowAggregateOf
 import com.hawkeyexb.ppass.backup.flow.flowCommandOf
 import com.hawkeyexb.ppass.backup.flow.flowIsAllDone
 import com.hawkeyexb.ppass.backup.flow.flowLedgerSnapshot
+import com.hawkeyexb.ppass.backup.flow.flowReuploadNoticeCount
 import com.hawkeyexb.ppass.backup.flow.flowUiStateOf
 import com.hawkeyexb.ppass.backup.flow.pauseFlow
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
+import com.hawkeyexb.ppass.proto.Hello
+import com.hawkeyexb.ppass.proto.Methods
+import com.hawkeyexb.ppass.proto.ProtoJson
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
+import com.hawkeyexb.ppass.transport.PairingStore
+import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.BackupUiState
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -30,12 +36,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.buildJsonObject
 
 class BackupUiStateHolder(
     private val context: Context,
-    @Suppress("UNUSED_PARAMETER") client: DaemonClient,
+    private val client: DaemonClient,
     @Suppress("UNUSED_PARAMETER") identity: IdentityStore,
-    pairing: Pairing,
+    private val pairing: Pairing,
     private val scopeStore: BackupScopeStore = BackupScopeStore(context),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -53,10 +61,15 @@ class BackupUiStateHolder(
     val reuploadNoticeCount: State<Int> get() = _reuploadNoticeCount
     private val _pairingLost = mutableStateOf(false)
     val pairingLost: State<Boolean> get() = _pairingLost
+    // UI-10 item 1: guards the silent epoch-repair attempt so it fires at
+    // most once per held instance — a repeated blank epoch after a failed
+    // repair means the pairing is genuinely lost, not a transient race.
+    private var epochRepairAttempted = false
 
     init {
         scope.launch {
             while (isActive) {
+                repairEpochIfNeeded()
                 refreshFlowState()
                 delay(500)
             }
@@ -103,12 +116,49 @@ class BackupUiStateHolder(
         }
     }
 
+    /**
+     * UI-10 item 1: `AndroidFlowRuntime.runtimeFor()` needs a non-blank
+     * `pairingEpoch` to do anything — a blank one (legacy pairing, or a
+     * pre-epoch app version) otherwise makes the home screen render Idle
+     * forever with dead buttons. One silent `hello` attempt tries to recover
+     * the current epoch from Desktop before ever showing the pairing-lost
+     * red card; a real revoke still surfaces normally once the repair fails.
+     */
+    private suspend fun repairEpochIfNeeded() {
+        if (epochRepairAttempted || !needsEpochRepair(pairing.pairingEpoch)) return
+        epochRepairAttempted = true
+        val outcome = runCatching {
+            withContext(Dispatchers.IO) {
+                withTimeout(5_000) {
+                    val response = client.call(
+                        parsePeerAddrToken(pairing.daemonAddrToken),
+                        Methods.HELLO,
+                        buildJsonObject {},
+                    )
+                    check(response.ok) { "hello: ${response.error?.msgKey}" }
+                    ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
+                }
+            }
+        }
+        when (val result = applyEpochRepairOutcome(outcome)) {
+            is EpochRepairResult.Repaired -> {
+                val store = PairingStore(context.filesDir)
+                store.load()?.let { store.save(it.copy(pairingEpoch = result.epoch)) }
+            }
+            EpochRepairResult.Lost -> _pairingLost.value = true
+        }
+    }
+
     private fun refreshFlowState() {
         // UI-09/MOB-51: the home screen state is the single shared production
         // mapping from the durable snapshot (backupUiStateOf). The aggregate
         // (K/M/last-success) is derived from the same facts by the slower
         // refreshTriplet loop.
-        _state.value = backupUiStateOf(flowLedgerSnapshot(context))
+        val snapshot = flowLedgerSnapshot(context)
+        _state.value = backupUiStateOf(snapshot)
+        // UI-10 item 2: ledger-derived reupload count replaces the dead
+        // LEGACY ReuploadQueue read (see flowReuploadNoticeCount doc).
+        _reuploadNoticeCount.value = flowReuploadNoticeCount(snapshot)
     }
 
     /**
@@ -148,3 +198,42 @@ internal fun isPairingLostError(t: Throwable): Boolean =
 
 internal fun isPairingLostText(text: String): Boolean =
     text.contains("err.not_paired") || text.contains("err.not_authorized")
+
+/**
+ * UI-10 item 1: `AndroidFlowRuntime.runtimeFor()` returns null when a stored
+ * pairing has a blank `pairingEpoch` (legacy pairing.json from before
+ * ARCH-06, or one written by a pre-epoch app version). The home screen then
+ * fell back to an empty Flow ledger snapshot — rendering plain `Idle` with a
+ * fully clickable Pause/Continue/Cancel that silently did nothing, and no
+ * explanation to the user (source-read finding, 2026-09-06: this is a
+ * candidate root cause for "暂停/取消没有展示机会").
+ *
+ * The fix is a silent, one-shot repair attempt, not an immediate "重新扫码"
+ * demand: a blank epoch is recoverable (the Desktop still knows this device
+ * and answers `hello` with its current epoch) whenever the pairing itself
+ * was never actually revoked — only escalate to the pairing-lost red card
+ * when the repair attempt itself fails.
+ */
+internal fun needsEpochRepair(pairingEpoch: String): Boolean = pairingEpoch.isBlank()
+
+/** The pure outcome mapping for a silent epoch-repair `hello` attempt. */
+internal sealed class EpochRepairResult {
+    data class Repaired(val epoch: String) : EpochRepairResult()
+    data object Lost : EpochRepairResult()
+}
+
+/**
+ * `outcome` is the result of asking Desktop for its current epoch (via the
+ * same `hello` the Flow delivery preflight already uses — no new protocol).
+ * A blank/null epoch in a successful response is treated the same as a
+ * failure: Desktop itself has nothing to offer, so there is nothing to
+ * repair to.
+ */
+internal fun applyEpochRepairOutcome(outcome: Result<String?>): EpochRepairResult {
+    val epoch = outcome.getOrNull()
+    return if (outcome.isSuccess && !epoch.isNullOrBlank()) {
+        EpochRepairResult.Repaired(epoch)
+    } else {
+        EpochRepairResult.Lost
+    }
+}
