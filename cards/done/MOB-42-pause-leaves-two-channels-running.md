@@ -1,8 +1,12 @@
 # MOB-42 「暂停自动备份」漏掉两条通道（L2）
 
-**状态**：⏸ 冻结——ARCH-01 已重定义发现队列、消费者 gate 与 Pause；本卡按
-`CATCHUP_WORK_NAME` 枚举旧 WorkManager 通道的修法不许直接实施，待按 ARCH-01
-case matrix 重拆实施卡。
+**状态**：✅ **已被生产架构取代，归档**（2026-09-07）。本卡点名的
+`pauseAutoBackup` 函数目前源码已实测覆盖全部通道（`BACKUP_WORK_NAME` /
+`CATCHUP_WORK_NAME` / `PROCESS_CATCHUP_WORK_NAME` / `MANUAL_BACKUP_WORK_NAME` /
+`MEDIA_WATCH_BACKUP_WORK_NAME`），且真正的暂停语义已转移到
+`pauseFlow`/`DiscoveryLedger` 的 `consumerGate`（ARCH-03 严格单消费者 +
+REBUILD-00~05 生产切换）——WorkManager 现在只是「防止唤醒」的框架层，不再是
+暂停语义的权威来源。本卡"遍历常量防漏"这个验收标准所针对的旧架构已不存在。
 
 > 2026-08-31 曾在 `wip/MOB-42` 写过一条旧通道枚举红测；它只钉住旧管线机制，
 > 已明确废弃，不会合入 main，也不作为新架构门禁。

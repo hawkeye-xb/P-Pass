@@ -1,9 +1,13 @@
 # MOB-39 触发层抽象：触发是数据，管线只有一条　级别 L1
 
-> ⏸ 状态：冻结——ARCH-01 已重定义发现队列与严格单张消费者；本卡的旧
-> `TriggerSpec` / WorkManager 管线形状不许直接实施，待按 ARCH-01 case matrix 重拆
-> 实施卡。
-> 级别：L1 · 阻塞：无（但**排在 `MOB-38` 之后**，理由见「阻塞与依赖」）
+> ✅ 状态：**已被生产架构取代，归档**（2026-09-07）。ARCH-01 设计 +
+> REBUILD-00~05 已切换生产：`FlowRunner`/`DiscoveryLedger`/`StrictConsumer`
+> 统一了所有触发入口（`AndroidFlowRuntime.kt` 的 `runFlowWake` 等），本卡
+> 描述的"七个入口各自手写 unique name/约束/策略"这个旧形状在当前生产代码里
+> 已不存在——`BackupWorker` 现在只是一个 framework wake adapter
+> （见其文件头注释），真正状态机在 `backup/flow/` 包。不再等待"按 ARCH-01
+> 重拆"，因为重拆已经发生并已上生产。
+> 级别：L1 · 阻塞：无
 
 ## 问题
 
