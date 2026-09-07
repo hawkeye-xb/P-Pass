@@ -22,7 +22,7 @@ P-Pass 的备份核心已从旧 `scan → hash → manifest → push → commit 
 
 ## 范围
 
-- 只准动：`site/src/content/blog/`、本卡、`docs/QUEUE.md`、`docs/PROGRESS.md`、`docs/ROADMAP.md`。
+- 只准动：`site/src/content/blog/`、`site/public/sitemap.xml`、本卡、`docs/QUEUE.md`、`docs/PROGRESS.md`、`docs/ROADMAP.md`。
 - 不准动：Android/Rust/Desktop 生产代码、ARCH-01 既定设计、旧批次实现、站点视觉与部署配置。
 
 ## 阻塞与依赖
