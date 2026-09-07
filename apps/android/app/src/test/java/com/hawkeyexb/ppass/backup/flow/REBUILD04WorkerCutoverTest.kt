@@ -63,7 +63,10 @@ class REBUILD04WorkerCutoverTest {
 
         runner.cancelCurrentRound("round-1")
         val cancelled = ledger.load()
-        assertEquals(FlowUiState.PausedByUser, flowUiStateOf(cancelled))
+        // MOB-60: cancellation is a terminal end to the round, not a return
+        // to the pre-cancel pause — with nothing left queued/transferring
+        // this must resolve to Idle, so "Continue"/"Cancel" both disappear.
+        assertEquals(FlowUiState.Idle, flowUiStateOf(cancelled))
         assertEquals(null, cancelled.cancellationRound)
         assertEquals(DeliveryState.CONFIRMED, cancelled.items.single { it.queueSequence == 1L }.deliveryState)
         assertEquals(DeliveryState.CANCELLED_BY_USER_ROUND, cancelled.items.single { it.queueSequence == 2L }.deliveryState)

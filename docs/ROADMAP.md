@@ -4,14 +4,15 @@
 > 里程碑状态的唯一权威来源，每张卡完成即更新。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
-**Now / 当前位置**（2026-09-03）: M0/M1 closed; M2 Android is in
-real-device dogfood. REBUILD-05 passed on a Samsung test device; its
-cancel-current-round regressions are now the critical path. MOB-49 and MOB-50
-code are green; one controlled real-device end-to-end check remains. `just ci`
-green; Android JVM 264 tests / 0 failures.
-**当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。REBUILD-05 已在三星测试机
-通过，当前主路径是其取消本轮的两个回归：MOB-49/MOB-50 代码均已绿；待用隔离
-测试相册做一次端到端真机验收。`just ci` 已绿；Android JVM 264 tests / 0 failures。
+**Now / 当前位置**（2026-09-07）: M0/M1 closed; M2 Android is in
+real-device dogfood. MOB-58/59 (cancelled-round notice/restore entry) and
+MOB-60 (cancel-round leaving a stale pause) code green on JVM; real-device
+recheck of the full pause→cancel→idle flow is the critical path. `just ci`
+green; Android JVM 298 tests / 0 failures / 4 skipped.
+**当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。MOB-58/59（取消轮常驻
+提示/恢复入口）与 MOB-60（取消轮遗留假暂停）代码在 JVM 已绿；当前主路径
+是真机复核完整的"暂停→取消→回到空闲"链路。`just ci` 已绿；Android JVM
+298 tests / 0 failures / 4 skipped。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 
