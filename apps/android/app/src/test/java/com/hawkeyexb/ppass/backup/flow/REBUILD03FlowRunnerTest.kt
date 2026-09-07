@@ -269,6 +269,66 @@ class REBUILD03FlowRunnerTest {
         dir.deleteRecursively()
     }
 
+    // MOB-58: X-05's Restore/Discard, decided in ARCH-01 but never wired past
+    // CancellationRoundController's own JVM tests. Real device: "取消当前轮
+    // 没有反应"、"这些照片也没有个重新传输的入口" (2026-09-07). FlowRunner
+    // must expose the same restore/discard the controller already offers,
+    // and restoring must also wake the consumer — nothing else notices new
+    // QUEUED work materialized outside the normal discovery path.
+    @Test
+    fun restoring_a_cancelled_round_re_queues_its_items_and_wakes_the_consumer() {
+        val dir = tempDir("mob58-restore")
+        val ledger = DiscoveryLedgerStore(dir)
+        val delivery = RecordingDelivery()
+        val runner = FlowRunner(
+            ledger,
+            RecordingDiscovery(DiscoveryPage(listOf(candidate(18)), DiscoveryCursor(7L, 18L))),
+            delivery,
+        )
+        runner.requestDiscovery()
+        runner.run(constraintsSatisfied = true)
+        runner.pause()
+        runner.cancelCurrentRound("round-1")
+        assertEquals(DeliveryState.CANCELLED_BY_USER_ROUND, ledger.load().items.single().deliveryState)
+
+        runner.restoreCancelledRound("round-1")
+
+        val restored = ledger.load()
+        assertEquals(
+            "restoring must re-admit the item and let the consumer pick it up again",
+            DeliveryState.TRANSFERRING,
+            restored.items.single().deliveryState,
+        )
+        assertEquals(listOf(1L, 1L), delivery.starts)
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun discarding_a_cancelled_round_leaves_items_cancelled_and_does_not_wake() {
+        val dir = tempDir("mob58-discard")
+        val ledger = DiscoveryLedgerStore(dir)
+        val delivery = RecordingDelivery()
+        val runner = FlowRunner(
+            ledger,
+            RecordingDiscovery(DiscoveryPage(listOf(candidate(18)), DiscoveryCursor(7L, 18L))),
+            delivery,
+        )
+        runner.requestDiscovery()
+        runner.run(constraintsSatisfied = true)
+        runner.pause()
+        runner.cancelCurrentRound("round-1")
+
+        runner.discardCancelledRound("round-1")
+
+        assertEquals(
+            "discard must not resurrect the cancelled item",
+            DeliveryState.CANCELLED_BY_USER_ROUND,
+            ledger.load().items.single().deliveryState,
+        )
+        assertEquals("discard must not start any delivery", listOf(1L), delivery.starts)
+        dir.deleteRecursively()
+    }
+
     private fun candidate(id: Long) = DiscoveryCandidate(
         sourceRef = "content://media/external/images/media/$id",
         sourceVersion = "generation-7",

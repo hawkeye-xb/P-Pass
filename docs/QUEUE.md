@@ -69,8 +69,9 @@
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [MOB-58](../cards/MOB-58-cancel-round-no-feedback-no-restore-entry.md) | 三星真机 2026-09-07 第三次实证「取消当前轮无反应、没有重传入口」；`FlowRunner` 接线 `restoreCancelledRound`/`discardCancelledRound`（ARCH-01 X-05 首次落地）+ `HomeScreen` 加持久提示卡；JVM 295/0/4（+7）、just ci 均绿 | 无——同时收敛 MOB-55（同一根因，取消存档） |
 | [DESK-13](../cards/DESK-13-ingest-blocks-tokio-runtime-freezes-desktop-ui.md) | 三星真机 2026-09-07 实证「桌面传输中不实时展示、手动刷新卡死很久」；`Ingestor::ingest()`/`place()` 大文件哈希/拷贝套 `block_in_place`（另一会话已埋的修复）+ 补齐 3 个测试文件的 multi-thread runtime flavor（此前配套缺失导致 24 个测试全 panic）；Rust 全绿、just ci 均绿 | 无——补测试闭环，真机复核大文件传输是否仍卡顿 |
-| [MOB-57](../cards/MOB-57-pause-cancel-buttons-lack-pending-state.md) | 三星真机 2026-09-07 实证「暂停/取消连点几次后卡死」；暂停/取消按钮加 `commandPending` 重入守卫 + 禁用态/处理中文案；JVM 288/0/4、just ci 均绿 | 无——「取消轮恢复传输」按 MOB-49 既定语义不做，非本卡范围 |
+| [MOB-57](../cards/MOB-57-pause-cancel-buttons-lack-pending-state.md) | 三星真机 2026-09-07 实证「暂停/取消连点几次后卡死」；暂停/取消按钮加 `commandPending` 重入守卫 + 禁用态/处理中文案；JVM 288/0/4、just ci 均绿 | [MOB-58](../cards/MOB-58-cancel-round-no-feedback-no-restore-entry.md)（"取消轮恢复传输"当时按 MOB-49 既定语义排除在外，后续用户明确要求才补上） |
 | [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | 四项全做完：epoch 静默补齐（自愈优先于重新扫码）、重传提示换源账本 `NEEDS_DECISION`、照片页归属过滤换源、失联心跳接线；JVM 288/0/4、just ci、debug APK 均绿 | 无——四项均在本卡范围内闭环 |
 | [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | 手机传完照片桌面不实时出现——`FlowDelivery` 补 `with_events`/throttle 接线（对齐 `BackupEngine` 既有模式）；Rust 336/336 passed、just ci 均绿 | 无——事件链闭环 |
 | [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | 老照片桌面归错月——`taken_at_ms` 加 EXIF>capture_at_ms_hint>mtime 优先级，`FlowFetchRequest` 补 `capture_at_ms` 走 wire；Rust 336/336 passed、Android JVM 288/0/4、just ci 均绿 | 存量已错分照片未批量重刷，留给验收人真机确认后按需再开卡 |
@@ -144,7 +145,6 @@
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
 
 | P2 | [MOB-44](../cards/MOB-44-harmonyos-no-background-for-restore.md) | 鸿蒙上恢复备份退后台就不跑（需鸿蒙真机取证窗口，与 DOG-03 同族） | L1 |
-| P2 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md) | 「取消当前轮」点击无可见反馈——2026-09-07 三星真机观察，logcat 已轮转丢失当时日志，等下次真机复现时同步取证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
 | P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
 
