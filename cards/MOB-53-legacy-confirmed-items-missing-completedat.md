@@ -1,7 +1,8 @@
 # MOB-53 UI-09 上线前已 CONFIRMED 的旧账本条目 completedAt 永远为 0，首页永久显示「从未成功备份过」（L1）
 
-> 🟡 状态：开工中（本 agent 认领，2026-09-07 三星真机验证顺带发现即接） ·
-> 当前节点：写 RED 用例 · 下一步：GREEN 实现 + JVM 全量 + APK · 协同分支：`main`
+> 🟢 状态：代码已合并，本地验证通过 · 当前节点：等真机复核（可选，非阻塞）·
+> 下一步：无强制下一步——已达标准，若你愿意可装最新 APK 到触发过本 bug 的
+> 设备上确认「M/N 已回家」与「最近成功」不再矛盾 · 协同分支：`main`
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -77,3 +78,29 @@
   的安装包滞后，已在本次验证中用新构建覆盖）。账本文件路径：
   `files/flow-state/<daemonNodeId>/discovery-ledger.json`，38 项中 37
   `CONFIRMED` / 1 `CANCELLED_BY_USER_ROUND`，全部 `completedAt: 0`。
+- 2026-09-07 RED：`UI09LedgerAggregateTest` 新增
+  `pre_ui09_confirmed_items_without_completedAt_are_backfilled_on_load`——
+  用生产 `FlowRunner` 链路走完两次 receipt 确认后，剥离 JSON 里的
+  `completedAt` 字段（模拟真机存量文件），断言 load() 后必须回填正值；
+  改前用例真红（`AssertionError` 在断言行），复现验收人观察。
+- 2026-09-07 GREEN：`DiscoveryLedgerStore.load()` 新增
+  `backfillMissingCompletedAt`——对 `deliveryState==CONFIRMED &&
+  completedAt<=0` 的条目盖 `System.currentTimeMillis()` 并 `persist()`
+  写回（复用 `CompletionAndScope.kt:58` 已确立的「无戳记就盖 now()」模式），
+  幂等：无变更条目时不重复 persist，同一条目回填一次后再加载不会再变。
+  同时更新了 UI-09 时代的旧测试
+  `old_ledger_json_without_completedAt_loads_as_zero_and_stays_compatible`
+  →改名为 `..._loads_and_backfills_confirmed_items`，断言从「必须停在 0」
+  改为「必须被回填为正值」——这条旧断言描述的正是本卡要修的 bug 本身，
+  按 AGENTS.md「架构重定义后的测试纪律」判定为已被新设计取代，不是新实现
+  的门禁。
+- 2026-09-07 反证：临时把 `backfillMissingCompletedAt` 调用去掉，两条用例
+  （新增 + 改写后的旧用例）均变红，还原后复绿。
+- 2026-09-07 测试基线：Android JVM 全量 **275 tests / 0 failures / 4
+  skipped**（基线 274 + 本卡 1 条新用例；XML 时间戳为本次生成）；
+  `just ci` 全绿（含 arch-check、queue-sync）；debug APK 构建成功
+  （`assembleDebug` BUILD SUCCESSFUL）。
+- 未装真机验证：本次连接的两台设备（三星 SM-S9210 已在诊断阶段验证过
+  bug 现象；华为 ALN-AL00 装的是另一项目 `com.hawkeyexb.ha`，与 P-Pass
+  无关，未触碰）。修复本身是纯数据迁移逻辑，已用生产代码路径的 JVM 用例
+  完整覆盖 RED→GREEN→反证，真机复核为可选项，不阻塞本卡关闭。
