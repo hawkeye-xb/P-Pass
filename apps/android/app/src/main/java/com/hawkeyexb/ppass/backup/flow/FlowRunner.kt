@@ -102,7 +102,15 @@ class FlowRunner(
         consumer.wake(constraintsSatisfied = true)
     }
 
-    fun recordPermanentFailure() = consumer.recordPermanentFailure()
+    fun recordPermanentFailure() {
+        consumer.recordPermanentFailure()
+        // MOB-54: a transient (non-terminal) failure re-queues the head but
+        // must not stall there — same rule as acceptCompletionReceipt: only
+        // after the outcome is durable may the consumer look for its next
+        // action (retry the same head if still QUEUED, or move on if this
+        // attempt made it terminal).
+        consumer.wake(constraintsSatisfied = true)
+    }
 
     private fun backfillIfAdmitted() {
         val snapshot = ledger.load()

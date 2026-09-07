@@ -71,6 +71,7 @@
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星真机 2026-09-07 实证：队尾照片卡在 QUEUED/attemptCount=1 传不完；`FlowRunner.recordPermanentFailure()` 补齐对称 `wake()`；JVM 276/0/4、just ci 均绿 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md)（同一轮回归观察到的取消按钮无反馈，证据不足未合并处理） |
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 三星真机 2026-09-07 实证「37/38 已回家」+「从未成功备份过」永久矛盾；`DiscoveryLedgerStore.load()` 回填旧账本 CONFIRMED 项的 completedAt；JVM 275/0/4、just ci、debug APK 均绿 | 无——纯数据迁移，不产出下游卡；真机复核为可选项 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 聚合状态换源 Flow 账本合并（`234a53f`，v0.5.0-test.5）；真机实证进度数字实时跳动 | 余项（AllSafe/K 归零流转）被 MOB-51 挡，随其一并验 |
 | [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | 三星真机自然复现迟到回执竞态并收敛为 `CONFIRMED`；范围扩展补扫全部验收标准完成 | 分出 MOB-49、MOB-50（取消本轮两处生产接线缺口） |
@@ -139,6 +140,7 @@
 | P2 | [MOB-41](../cards/MOB-41-reupload-notice-fires-before-the-scope-filter.md) | 重传提示发在范围过滤之前——删掉范围外的照片会弹「正在重传」然后什么也不传 | L2 |
 
 | P2 | [MOB-44](../cards/MOB-44-harmonyos-no-background-for-restore.md) | 鸿蒙上恢复备份退后台就不跑（需鸿蒙真机取证窗口，与 DOG-03 同族） | L1 |
+| P2 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md) | 「取消当前轮」点击无可见反馈——2026-09-07 三星真机观察，logcat 已轮转丢失当时日志，等下次真机复现时同步取证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
 | P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
 | P3 | [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | Flow runtime 空快照装死 + 旧数据源 UI 尾巴（重传死提示/归属过滤/失联哨兵）——UI-09 已合并，阻塞已解除，可接 | L3 |
