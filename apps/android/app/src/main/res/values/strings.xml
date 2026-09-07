@@ -66,6 +66,9 @@
     <string name="backup_waiting_constraints">Waiting for backup conditions</string>
     <string name="backup_round_cancelled">Current round cancelled</string>
     <string name="backup_cancel_current_round">Cancel current round</string>
+    <!-- 2026-09-07 real-device feedback: disable the button while a command
+         is in flight so repeated taps don't queue behind it. -->
+    <string name="backup_command_processing">Working…</string>
     <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
     <string name="idle_auto_hint">Runs by itself while charging on Wi-Fi</string>
     <string name="state_no_albums">No albums selected — nothing to back up</string>

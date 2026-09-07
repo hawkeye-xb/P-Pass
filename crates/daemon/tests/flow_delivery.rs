@@ -37,7 +37,7 @@ async fn paired_db(epoch: &str, peer: transport::NodeId) -> Db {
     db
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn mismatched_epoch_lease_or_hash_never_starts_a_native_fetch() {
     let root = tempdir().unwrap();
     let provider_transport =
@@ -90,7 +90,7 @@ async fn mismatched_epoch_lease_or_hash_never_starts_a_native_fetch() {
         .is_none());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn verified_native_fetch_materializes_before_a_durable_receipt() {
     let root = tempdir().unwrap();
     let provider_transport =
@@ -161,7 +161,7 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
     assert_eq!(resumed_receipt.lease_token, "lease-recovered");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn authenticated_control_peer_may_offer_a_distinct_native_provider_ticket() {
     let root = tempdir().unwrap();
     let provider_transport =
@@ -208,7 +208,7 @@ async fn authenticated_control_peer_may_offer_a_distinct_native_provider_ticket(
     assert!(db.get_asset(&hash).await.unwrap().is_some());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn cancelled_active_item_never_receives_a_receipt() {
     let root = tempdir().unwrap();
     let provider_transport =
@@ -276,7 +276,7 @@ async fn cancelled_active_item_never_receives_a_receipt() {
 // struct has no throttle/events field and `main.rs` never calls an
 // equivalent `.with_events(...)` on it (contrast with
 // `BackupEngine::new(...).with_events(event_bus.clone())`).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn successful_flow_fetch_notifies_the_desktop_timeline() {
     let root = tempdir().unwrap();
     let provider_transport =

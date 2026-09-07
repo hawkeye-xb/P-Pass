@@ -7,7 +7,11 @@ use proptest::prelude::*;
 use storage::{Asset, Db};
 
 fn rt() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_current_thread()
+    // 2026-09-07: ingest() now uses `block_in_place` for the hash/copy work
+    // (fix for a real-device desktop-UI freeze during large-file ingest),
+    // which panics off a current-thread runtime — this must be multi-thread
+    // to actually exercise ingest() the way production does.
+    tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap()

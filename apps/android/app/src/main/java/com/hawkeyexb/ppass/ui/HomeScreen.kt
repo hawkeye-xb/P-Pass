@@ -134,6 +134,10 @@ fun HomeScreen(
     // NoticeCard，好让 UI-04 的优先级框架直接接手。
     reuploadNoticeCount: Int = 0,
     onAcknowledgeReupload: () -> Unit = {},
+    // 2026-09-07 真机反馈：暂停/取消连点几下按钮像卡死——命令已经提交、
+    // 只是还没等到下一次 500ms tick 刷新出结果；这里禁用按钮 + 换处理中
+    // 文案，同一命令没跑完不接受下一次点击。
+    commandPending: Boolean = false,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -297,17 +301,24 @@ fun HomeScreen(
                     if (heroAction != null) {
                         Spacer(Modifier.width(12.dp))
                         HeroSecondaryButton(
-                            label = when (heroAction) {
-                                HeroAction.Pause -> stringResource(R.string.backup_pause)
-                                HeroAction.Resume -> stringResource(R.string.backup_resume)
+                            label = when {
+                                commandPending -> stringResource(R.string.backup_command_processing)
+                                heroAction == HeroAction.Pause -> stringResource(R.string.backup_pause)
+                                else -> stringResource(R.string.backup_resume)
                             },
+                            enabled = !commandPending,
                             onClick = onBackupNow,
                         )
                     }
                     if (state is BackupUiState.Paused) {
                         Spacer(Modifier.width(8.dp))
                         HeroSecondaryButton(
-                            label = stringResource(R.string.backup_cancel_current_round),
+                            label = if (commandPending) {
+                                stringResource(R.string.backup_command_processing)
+                            } else {
+                                stringResource(R.string.backup_cancel_current_round)
+                            },
+                            enabled = !commandPending,
                             onClick = onCancelCurrentRound,
                         )
                     }
@@ -824,18 +835,19 @@ private fun idleStatusText(line: StatusLine): String = when (line) {
  *  不是两个按钮；UX-09：空闲态「选择相册」已移除，入口在下方设置卡
  *  「备份范围」行）。 */
 @Composable
-private fun HeroSecondaryButton(label: String, onClick: () -> Unit) {
+private fun HeroSecondaryButton(label: String, onClick: () -> Unit, enabled: Boolean = true) {
+    val tint = if (enabled) PPColor.Ink else PPColor.Ink40
     Row(
         modifier = Modifier
             .height(44.dp)
             .clip(RoundedCornerShape(14.dp))
             .background(PPColor.Paper)
-            .border(1.dp, PPColor.BorderStrong, RoundedCornerShape(14.dp))
-            .clickable(onClick = onClick)
+            .border(1.dp, if (enabled) PPColor.BorderStrong else PPColor.BorderStrong.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 18.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink)
+        Text(label, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = tint)
     }
 }
 

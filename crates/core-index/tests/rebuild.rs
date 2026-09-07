@@ -107,7 +107,7 @@ async fn ingest_one(
 }
 
 /// 契约测试: 随机 50 文件库 → ingest → dump → 删库 → rebuild → dump 一致。
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn rebuild_reproduces_the_index_exactly() {
     let (dir, db, ing) = setup().await;
     let mut rng = Rng(0x5EED_2026_0730_0012);
@@ -156,7 +156,7 @@ async fn rebuild_reproduces_the_index_exactly() {
 }
 
 /// 验收点: 用户手工塞进 originals 的文件（不在规范布局里）rebuild 能收录。
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn hand_dropped_files_are_picked_up() {
     let (dir, db, ing) = setup().await;
     ingest_one(
@@ -205,7 +205,7 @@ async fn hand_dropped_files_are_picked_up() {
 
 /// Rebuild over a live index is a full reconciliation — clear then rescan,
 /// so running it twice is idempotent.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn rebuild_is_idempotent_on_a_live_index() {
     let (dir, db, ing) = setup().await;
     for i in 0..3u32 {
@@ -231,7 +231,7 @@ async fn rebuild_is_idempotent_on_a_live_index() {
 
 /// Two on-disk copies of the same content collapse to one row — the
 /// lexicographically first path wins, deterministically.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn duplicate_content_on_disk_yields_one_row() {
     let (dir, db, _ing) = setup().await;
     let originals = dir.path().join("library/originals");
@@ -251,7 +251,7 @@ async fn duplicate_content_on_disk_yields_one_row() {
 
 /// The reconciliation is audited with actor = None — the filesystem cannot
 /// say who (审计裁决 2026-07-29).
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn rebuild_writes_an_unattributed_audit_row() {
     let (dir, db, _ing) = setup().await;
     rebuild(&db, dir.path().join("library").as_path(), &LOCAL)
@@ -268,7 +268,7 @@ async fn rebuild_writes_an_unattributed_audit_row() {
 
 /// Hidden files (`.DS_Store` and friends) never enter the index; a library
 /// with no `originals/` at all is empty, not an error.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn hidden_files_skipped_and_missing_originals_is_empty() {
     let (dir, db, _ing) = setup().await;
     let root = dir.path().join("library");

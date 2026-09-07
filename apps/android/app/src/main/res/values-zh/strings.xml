@@ -64,6 +64,8 @@
     <string name="backup_waiting_constraints">正在等待备份条件满足</string>
     <string name="backup_round_cancelled">当前轮已取消</string>
     <string name="backup_cancel_current_round">取消当前轮</string>
+    <!-- 2026-09-07 真机反馈：命令处理中禁用按钮，避免连点排队 -->
+    <string name="backup_command_processing">处理中…</string>
     <!-- T-083: hero 空闲态（设计稿未画，卡内裁决的最小延伸） -->
     <string name="idle_auto_hint">插电 + Wi-Fi 时自动进行</string>
     <string name="state_no_albums">没有可备份的相册（一个都没选）</string>

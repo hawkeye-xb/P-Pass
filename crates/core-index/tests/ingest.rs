@@ -35,7 +35,7 @@ async fn setup() -> (tempfile::TempDir, Db, Ingestor) {
     (dir, db, ing)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn new_file_lands_moved_and_indexed() {
     let (dir, db, ing) = setup().await;
     let content = jpeg_with_exif("2024:05:06 07:08:09");
@@ -60,7 +60,7 @@ async fn new_file_lands_moved_and_indexed() {
     assert_eq!(asset.src_device, DEV_A.to_vec());
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn exif_datetime_original_becomes_taken_at() {
     let (dir, db, ing) = setup().await;
     let content = jpeg_with_exif("2024:05:06 07:08:09");
@@ -78,7 +78,7 @@ async fn exif_datetime_original_becomes_taken_at() {
     assert_eq!(asset.taken_at, Some(expected), "EXIF wins over mtime");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn no_exif_falls_back_to_mtime() {
     let (dir, db, ing) = setup().await;
     let content = b"plain bytes, no exif".to_vec();
@@ -100,7 +100,7 @@ async fn no_exif_falls_back_to_mtime() {
 // capture moment (real-device symptom: old photos landing in "this month").
 // Content WITH EXIF is unaffected — the hint is a no-EXIF fallback only,
 // asserted separately below.
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn no_exif_prefers_the_uploader_capture_hint_over_mtime() {
     let (dir, db, ing) = setup().await;
     let content = b"screenshot bytes, no exif".to_vec();
@@ -132,7 +132,7 @@ async fn no_exif_prefers_the_uploader_capture_hint_over_mtime() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn exif_still_wins_over_an_uploader_capture_hint() {
     let (dir, db, ing) = setup().await;
     let content = jpeg_with_exif("2024:05:06 07:08:09");
@@ -166,7 +166,7 @@ async fn exif_still_wins_over_an_uploader_capture_hint() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn same_content_different_name_is_duplicate_and_leaves_source() {
     let (dir, db, ing) = setup().await;
     let content = jpeg_with_exif("2023:01:02 03:04:05");
@@ -185,7 +185,7 @@ async fn same_content_different_name_is_duplicate_and_leaves_source() {
     assert_eq!(page.assets.len(), 1, "one content, one row");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn watcher_recheck_of_the_recorded_file_is_not_an_audit_event() {
     // WATCH-07：备份管线 place() 落位后，watcher 会对同一路径再 ingest 一遍。
     // 这是「复检」不是事件——必须仍返回 Duplicate，但不许写 ingest.duplicate
@@ -220,7 +220,7 @@ async fn watcher_recheck_of_the_recorded_file_is_not_an_audit_event() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn same_content_at_a_different_path_is_still_audited() {
     // WATCH-07 的行为保留守卫：用户在**另一个路径**放了一份同内容文件，
     // 这是真实发生的事，审计必须照记。
@@ -241,7 +241,7 @@ async fn same_content_at_a_different_path_is_still_audited() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn name_conflicts_get_dash_suffixes() {
     let (dir, _db, ing) = setup().await;
     // Three different contents, same file name, no EXIF (all land in the
@@ -258,7 +258,7 @@ async fn name_conflicts_get_dash_suffixes() {
     assert_eq!(names, ["IMG_9.jpg", "IMG_9-1.jpg", "IMG_9-2.jpg"]);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn ingest_is_audited_to_device_granularity() {
     let (dir, db, ing) = setup().await;
     let content = b"audited content".to_vec();
@@ -283,7 +283,7 @@ async fn ingest_is_audited_to_device_granularity() {
     }
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn missing_source_error_names_the_path() {
     let (dir, _db, ing) = setup().await;
     let f = IncomingFile {
@@ -300,7 +300,7 @@ async fn missing_source_error_names_the_path() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn traversal_file_name_cannot_escape_library() {
     let (dir, _db, ing) = setup().await;
     let f = incoming(dir.path(), "../../escape.jpg", b"traversal attempt");
@@ -322,7 +322,7 @@ fn blake3_of(content: &[u8]) -> [u8; 32] {
 // WATCH-03：hash 是身份，rel_path 只是当前住址。
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn move_inside_originals_repoints_the_row_in_place() {
     // 用户在 Finder 里把照片拖进自建目录 = 重新分类。库内位置由用户说了
     // 算，不搬回日期布局；索引改指新位置，行不删。
@@ -361,7 +361,7 @@ async fn move_inside_originals_repoints_the_row_in_place() {
     assert_eq!(page.assets[0].rel_path, "originals/我的婚礼/IMG_M.jpg");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn reupload_of_an_externally_deleted_photo_lands_in_canonical_layout() {
     // 手机重传一张曾被外部删掉的照片：来源在库外（staging），按 canonical
     // 布局落位，而不是就地采纳。
@@ -391,7 +391,7 @@ async fn reupload_of_an_externally_deleted_photo_lands_in_canonical_layout() {
     assert_eq!(page.assets[0].rel_path, new_rel);
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn duplicate_stays_duplicate_while_the_recorded_file_is_present() {
     // 反向守卫：文件还在位时必须仍然是 Duplicate——否则 Moved 分支会把
     // 正常的重传路径吞掉，源文件被误移走。
@@ -411,7 +411,7 @@ async fn duplicate_stays_duplicate_while_the_recorded_file_is_present() {
 // 2026-08-21 宽容落位 + 路径唯一性
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_file_already_inside_originals_is_adopted_where_it_lies() {
     // 用户在 Finder 里建了「我的婚礼」并把照片放进去 —— 我们只索引，不搬。
     let (dir, db, ing) = setup().await;
@@ -446,7 +446,7 @@ async fn a_file_already_inside_originals_is_adopted_where_it_lies() {
     assert_eq!(page.assets[0].rel_path, "originals/我的婚礼/IMG_W.jpg");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn a_file_from_outside_still_lands_in_the_canonical_layout() {
     // 反向守卫：手机上传落在 staging（库外），必须由我们找个家——否则
     // 宽容落位会把「谁都不搬」当成默认，上传的文件永远留在中转区。
@@ -466,7 +466,7 @@ async fn a_file_from_outside_still_lands_in_the_canonical_layout() {
     assert!(!f.src_path.exists(), "staging 文件已被移走");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn editing_an_indexed_file_leaves_exactly_one_row_at_that_path() {
     // 用户在 Finder 里改了一张已入库的照片：内容变了 → hash 变了 → 在我们
     // 眼里是另一张照片。老那条行还指着同一个路径（文件存在，对账不会清它）
