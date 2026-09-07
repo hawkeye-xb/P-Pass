@@ -66,7 +66,25 @@ class FlowRunner(
         run(constraintsSatisfied)
     }
 
-    /** Cancel is deliberately only available after pausing the current head. */
+    /**
+     * Cancel is deliberately only available after pausing the current head —
+     * the pre-cancel [pause] exists solely to bring the consumer to a safe,
+     * quiescent point before the cancellation scan runs.
+     *
+     * MOB-60: once that scan finishes, there is no in-flight round left for
+     * "Continue" to resume — every cancellable item in the window was just
+     * marked [DeliveryState.CANCELLED_BY_USER_ROUND]. Leaving the gate on
+     * [ConsumerGate.PAUSED_BY_USER] after that point is a leftover safety
+     * artifact masquerading as a durable state: the home screen kept showing
+     * Paused/Continue/Cancel for a round that no longer existed (real
+     * device, 2026-09-07: "取消完了怎么还是暂停"). Reopening the gate the
+     * same way [continueFlow]/[restoreAllCancelledRounds] already do lets
+     * the existing snapshot -> UI projection do its job: with nothing left
+     * QUEUED/TRANSFERRING it resolves to Idle on its own, no new UI state
+     * needed. Any still-pending discovery request is free to admit the
+     * *next* round's candidates immediately, exactly as it would after any
+     * other terminal window.
+     */
     fun cancelCurrentRound(roundId: String) {
         pause()
         cancellation.startPausedRound(roundId)
@@ -74,6 +92,7 @@ class FlowRunner(
         // current durable window, so this production cancellation scan ends
         // atomically before future discovery admits the next round.
         cancellation.finishRound()
+        continueFlow(constraintsSatisfied = true)
     }
 
     fun acceptCompletionReceipt(receipt: CompletionReceipt) {

@@ -73,7 +73,11 @@ class REBUILD03FlowRunnerTest {
 
         runner.cancelCurrentRound("round-1")
         val cancelled = ledger.load()
-        assertEquals(ConsumerGate.PAUSED_BY_USER, cancelled.consumerGate)
+        // MOB-60: the pre-cancel pause was only a safety point to reach
+        // before the cancellation scan runs — once every cancellable item
+        // in the window is terminally marked, there is no round left for
+        // "Continue" to resume, so the gate must reopen on its own.
+        assertEquals(ConsumerGate.OPEN, cancelled.consumerGate)
         assertEquals(DeliveryState.CANCELLED_BY_USER_ROUND, cancelled.items.single().deliveryState)
         assertEquals(
             "the completed cancellation scan must release the production cancellation marker",
@@ -81,8 +85,8 @@ class REBUILD03FlowRunnerTest {
             cancelled.cancellationRound,
         )
         assertEquals(
-            "after cancellation completes, the user-controlled pause remains in force",
-            FlowUiState.PausedByUser,
+            "with nothing left queued or transferring, cancellation must land on Idle, not a stale pause",
+            FlowUiState.Idle,
             flowUiStateOf(cancelled),
         )
         dir.deleteRecursively()
