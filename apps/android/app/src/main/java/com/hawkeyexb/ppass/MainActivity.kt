@@ -79,6 +79,7 @@ import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfill
 import com.hawkeyexb.ppass.ui.BackupStartedScreen
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
+import com.hawkeyexb.ppass.ui.NoticeHost
 import com.hawkeyexb.ppass.ui.LoaderTimelineChannel
 import com.hawkeyexb.ppass.ui.PhotosScreen
 import com.hawkeyexb.ppass.ui.TimelineLoader
@@ -548,6 +549,26 @@ fun PPassApp() {
                 // M13 哨兵态：长期失联时设置图标角标红点，跟照片页的失联
                 // 红卡同一个信号源（holder.pairingLost），不额外判天数。
                 settingsAlert = holder.pairingLost.value,
+                // UI-04a/c: 全局唯一提示宿主——把五条提示的输入集中到
+                // NoticeHost，只渲染最高优先级的一条，Photos/Backup 两页
+                // 都可见（不再只有总览页）。
+                notice = {
+                    NoticeHost(
+                        backupInterrupted = backupInterrupted,
+                        batteryWhitelisted = batteryWhitelisted,
+                        notificationSkipped = !notificationGrantedForHome,
+                        cancelledRoundCount = holder.cancelledRoundNotice.value?.count,
+                        reuploadCount = holder.reuploadNoticeCount.value,
+                        onResumeBackup = {
+                            resumeAfterInterruption(context)
+                            backupInterrupted = false
+                        },
+                        onOpenBatterySettings = { openBatteryOptimizationSettings(context) },
+                        onOpenNotificationSettings = { openAppDetailsSettings(context) },
+                        onRestoreCancelledRounds = { holder.restoreCancelledRounds() },
+                        onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
+                    )
+                },
                 photos = {
                     PhotosScreen(
                         timeline,
@@ -563,29 +584,12 @@ fun PPassApp() {
                         state = holder.state.value,
                         onCancelCurrentRound = { holder.cancelCurrentRound() },
                         triplet = holder.triplet.value,
-                        batteryWhitelisted = batteryWhitelisted,
-                        onOpenBatterySettings = {
-                            openBatteryOptimizationSettings(context)
-                        },
-                        notificationSkipped = !notificationGrantedForHome,
-                        onOpenNotificationSettings = { openAppDetailsSettings(context) },
-                        // MOB-37: 重传告知——落盘状态驱动，通知丢了也在。
-                        reuploadNoticeCount = holder.reuploadNoticeCount.value,
-                        onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
                         // 2026-09-07 真机反馈：命令处理中禁用暂停/取消按钮。
                         commandPending = holder.commandPending.value,
-                        // MOB-59: X-05 的常驻 Restore（无 Discard）。
-                        cancelledRoundNotice = holder.cancelledRoundNotice.value,
+                        // MOB-61: 缺源只读告知仍留在 HomeScreen（信息类，无动作）。
                         missingSourceNotice = holder.missingSourceNotice.value,
-                        onRestoreCancelledRounds = { holder.restoreCancelledRounds() },
                         // MOB-59: 本轮自己的进度（0 起算，见 HomeScreen.kt 说明）。
                         roundProgress = holder.roundProgress.value,
-                        // MOB-28: 备份被外力停过的提示卡 + 唯一的恢复入口。
-                        backupInterrupted = backupInterrupted,
-                        onResumeBackup = {
-                            resumeAfterInterruption(context)
-                            backupInterrupted = false
-                        },
                         wifiOnly = wifiOnly,
                         onWifiOnlyChange = { enable ->
                             // MOB-02 §三: 关闭「需要 Wi-Fi」需二次确认

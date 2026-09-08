@@ -84,13 +84,6 @@ fun HomeScreen(
     state: BackupUiState,
     onBackupNow: () -> Unit,
     onCancelCurrentRound: () -> Unit = {},
-    // DOG-02: 电池白名单引导（未加白时显示，加白后消失）
-    batteryWhitelisted: Boolean = true,
-    onOpenBatterySettings: () -> Unit = {},
-    // 通知权限未授予的不堵路引导卡（同 DOG-02 电池白名单卡风格）——
-    // 已授予或本来就不需要（API<33）时不显示。
-    notificationSkipped: Boolean = false,
-    onOpenNotificationSettings: () -> Unit = {},
     // DOG-01: 恒真三元组（持久缓存，断网/失败时仍显示）
     triplet: BackupTriplet? = null,
     // UX-03: 极简设置——仅 WiFi（写 WorkManager 约束）。
@@ -126,26 +119,12 @@ fun HomeScreen(
     onOpenAppSettings: () -> Unit = {},
     // MOB-02 §四事件①: Wi-Fi 要求不满足时触发已排队——显示提示行。
     wifiDeferred: Boolean = false,
-    // MOB-28: 后台备份被外力停过（force-stop / OEM 清理）——提示卡 +
-    // 「恢复备份」。**这是恢复的唯一入口**，别处一律不许悄悄重挂。
-    backupInterrupted: Boolean = false,
-    onResumeBackup: () -> Unit = {},
-    // MOB-37: 重传告知（库里少了 N 张、正在传回来）。**读的是落盘状态**，
-    // 与那条系统通知是否送达无关；0 = 不显示。呈现走 HomeNotices.kt 的
-    // NoticeCard，好让 UI-04 的优先级框架直接接手。
-    reuploadNoticeCount: Int = 0,
-    onAcknowledgeReupload: () -> Unit = {},
     // 2026-09-07 真机反馈：暂停/取消连点几下按钮像卡死——命令已经提交、
     // 只是还没等到下一次 500ms tick 刷新出结果；这里禁用按钮 + 换处理中
     // 文案，同一命令没跑完不接受下一次点击。
     commandPending: Boolean = false,
-    // MOB-59: X-05 的常驻 Restore 入口——null = 没有待恢复的取消批次。
-    // 不再有 Discard：真机反馈明确指出"点了不用了就没法处理了"是死路，
-    // 所以这条提示只有一个动作，且在有取消批次时永远显示，不会消失。
-    cancelledRoundNotice: com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice? = null,
     // MOB-61: a source deleted from the phone is terminal, with no retry action.
     missingSourceNotice: com.hawkeyexb.ppass.backup.flow.MissingSourceNotice? = null,
-    onRestoreCancelledRounds: () -> Unit = {},
     // MOB-59: 本轮自己的进度（0 起算），与上方 hero 的终身 M/N 三元组
     // 是两回事——真机反馈：中途加相册后进度条直接跳到"15/15"附近，
     // 混进了之前已经传完的历史，应该只看这一轮还要传的。
@@ -458,105 +437,11 @@ fun HomeScreen(
             }
         }
 
-        // ── DOG-02: 电池白名单建议条（设计稿：琥珀底一句话 + 去设置）──
-        if (!batteryWhitelisted) {
-            Spacer(Modifier.height(12.dp))
-            Surface(
-                color = PPColor.WaitingBg,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    Modifier.padding(16.dp, 13.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.dog_battery_body),
-                        fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        stringResource(R.string.dog_battery_action),
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier.clickable(onClick = onOpenBatterySettings)
-                            .padding(4.dp),
-                    )
-                }
-            }
-        }
-
-        // ── Onboarding 通知权限跳过引导（同款琥珀底一句话 + 去设置，
-        // 跟电池白名单卡视觉一致，出现时机由 shouldOfferNotificationPermission
-        // 之外的「已跳过但仍未授权」态决定，调用方传入）──
-        if (notificationSkipped) {
-            Spacer(Modifier.height(12.dp))
-            Surface(
-                color = PPColor.WaitingBg,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    Modifier.padding(16.dp, 13.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.notif_nudge_body),
-                        fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        stringResource(R.string.notif_nudge_action),
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier.clickable(onClick = onOpenNotificationSettings)
-                            .padding(4.dp),
-                    )
-                }
-            }
-        }
-
-        // ── MOB-28: 后台备份被停过的提示卡。
-        //
-        // 放在这里（而不是设置页深处）是因为这是用户打开 App 后落地的第一屏，
-        // 而这条提示的整个价值就在于"被看见"——用户实测反馈过两次
-        // "还是没有提示"。用琥珀底（与电池白名单/通知引导同一族视觉），
-        // 不用红色：备份没坏，只是停了，点一下就回来。
-        //
-        // 用户定调："不要做静默恢复，就是要提醒。""必须点了才恢复。"
-        if (backupInterrupted) {
-            Spacer(Modifier.height(12.dp))
-            Surface(
-                color = PPColor.WaitingBg,
-                shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Row(
-                    Modifier.padding(16.dp, 13.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        stringResource(R.string.backup_interrupted_body),
-                        fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        stringResource(R.string.backup_interrupted_action),
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier.clickable(onClick = onResumeBackup)
-                            .padding(4.dp),
-                    )
-                }
-            }
-        }
-
-        // ── MOB-61: a photo removed from the phone after discovery cannot be
+// ── MOB-61: a photo removed from the phone after discovery cannot be
         // recovered by retry. Keep the fact visible, but deliberately provide
         // no "send again" action and never reuse the cancelled-round notice.
+        // (UI-04a/c moved the five amber one-liners into NoticeHost; this
+        // SOURCE_MISSING notice is informational-only and stays here.)
         if (missingSourceNotice != null) {
             Spacer(Modifier.height(12.dp))
             NoticeCard(
@@ -566,49 +451,6 @@ fun HomeScreen(
                 )
             )
         }
-
-        // ── MOB-59: 取消轮的常驻 Restore 入口（X-05，之前只在测试里存在）。
-        //
-        // 只有一个动作（重新传输）——真机反馈明确指出"不用了"这个按钮点了
-        // 之后就没法处理了，是死路；所以这里改用跟重传告知一样的单动作
-        // NoticeCard，只要还有未恢复的取消批次就一直显示，不会消失，也
-        // 不会因为重复点"取消当前轮"而丢失早期批次（count 汇总全部轮次）。
-        if (cancelledRoundNotice != null) {
-            Spacer(Modifier.height(12.dp))
-            NoticeCard(
-                HomeNotice(
-                    kind = HomeNoticeKind.CANCELLED_ROUND,
-                    body = stringResource(R.string.cancelled_round_notice_body, cancelledRoundNotice.count),
-                    actionLabel = stringResource(R.string.cancelled_round_notice_restore),
-                    onAction = onRestoreCancelledRounds,
-                )
-            )
-        }
-
-        // ── MOB-37: 重传告知（库里少了 N 张、正在传回来）。
-        //
-        // 为什么 App 内要有这条：MOB-29 的告知只有一条系统通知，通知权限
-        // 没授/渠道被关/锁屏没看见，用户就永远不知道照片被传回来过
-        // （2026-08-26 真机：重传真的发生了，验收人什么也没看到）。
-        // 通知从此只是「提醒你去看」，这条才是载体。
-        //
-        // 措辞不做精确归因（MOB-29 定调）——手机端分不清「电脑上被删了」
-        // 和「换了个库」，第二句用条件从句，在两种成因下都成立。
-        //
-        // 呈现刻意走 NoticeCard 而不是又抄一段 Surface：UI-04 要给多条
-        // 提示做优先级，接口见 HomeNotices.kt 的 HomeNotice / topNotice。
-        if (reuploadNoticeCount > 0) {
-            Spacer(Modifier.height(12.dp))
-            NoticeCard(
-                HomeNotice(
-                    kind = HomeNoticeKind.REUPLOAD,
-                    body = stringResource(R.string.reupload_notice_body, reuploadNoticeCount),
-                    actionLabel = stringResource(R.string.reupload_notice_action),
-                    onAction = onAcknowledgeReupload,
-                )
-            )
-        }
-
         // ── "备份"（M10，全页面状态稿）：4 行——第 1 行导航到选相册，
         // 后 3 行是直接开关（不折进子页——用户实机反馈上一轮把充电/
         // WiFi 折进"什么时候备份"子页是自己想当然加的一层，设计稿就是
