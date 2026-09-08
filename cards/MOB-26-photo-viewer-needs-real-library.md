@@ -1,9 +1,9 @@
 # MOB-26 统一 Android 媒体查看器：翻页、缩放与系统边缘返回
 
-> 🟡 状态：代码完成，待 Mate 60 真机验收
-> 级别：L2 · 阻塞：真机交互实证
-> Owner: Hermes · 协同分支：`batch/mob-26-45-media-viewer` · Base: `dd4251c`
-> 当前节点：MOB-45 已合并；页序快照、Pager、Telephoto 缩放/下拉关闭与 Android 返回 reducer 已落地
+> 🟡 状态：代码已合并（`ddee8ac`），待 Mate 60 真机验收
+> 级别：L2 · 阻塞：无（待验收）
+> 协同分支：`main`
+> 当前节点：MOB-45 已合并；页序快照、Pager、Telephoto 缩放/下拉关闭与 Android 返回 reducer 已进入 `main`
 > 下一步：Mate 60 录屏按验收矩阵走边缘返回、内容翻页、缩放拖动、未缩放下拉和视频页
 
 ## 问题
