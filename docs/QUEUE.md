@@ -35,7 +35,11 @@
 
 ## 一、进行中（已上云认领）
 
-无。UI-04a/UI-04b/UI-04c/UI-08 均已合入 `main`，转入下方共享回归队列。
+| 卡 | 一句话 | 分支 |
+|---|---|---|
+| [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 断开重扫必须删除旧 Flow runtime、账本和全部 wake，禁止旧任务重放 | `main` |
+
+其余 UI-04a/UI-04b/UI-04c/UI-08 均已合入 `main`，转入下方共享回归队列。
 
 ---
 
