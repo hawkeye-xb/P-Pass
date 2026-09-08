@@ -38,7 +38,6 @@
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
 | [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
-| [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | Android Flow delivery 已复用 App 级 Endpoint（JVM 4/4）；daemon 待建 `(NodeId, ALPN)` `ConnectionCache` | 写 transport 缓存 RED→GREEN 测试，接入 `blobs::fetch_from` 并验证 daemon 语义 | `work/net-04` |
 
 > 2026-09-07 复核：E2E-03 / REL-05 / BUILD-03 已在 `v0.5.0-test.2~test.7`
 > 的 Release/E2E 真实运行中验证通过（GitHub Actions 逐条核实），移入
@@ -181,6 +180,7 @@
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 连接缓存与 Android 全局 Endpoint 已合入；真机连续 ≥5 文件应只见一次 NAT 打洞，且暂停/取消/失败重试不变 | L2 |
 | [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | ✅ 已归档：三星 Pause → kill → reopen → Continue → Cancel 通过 | L2 |
 | [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 代码完成：取消后 UI 回到暂停态；待 MOB-50 合入后，以隔离测试相册验证新增媒体可完整发现、传输、确认 | L1 |
 | [MOB-50](../cards/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 代码完成：取消后复位 upload cursor；与 MOB-49 一起以隔离测试相册验证新增媒体发现、传输、确认 | L1 |

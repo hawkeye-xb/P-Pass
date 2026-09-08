@@ -3,6 +3,7 @@
 //! Runs fully offline (no relays, no address lookup).
 
 use std::pin::Pin;
+use std::time::Duration;
 
 use futures_core::Stream;
 use transport::{ConnInfo, IrohTransport, NodeId, PathKind, Transport, TransportConfig, ALPN_CTRL};
@@ -98,5 +99,60 @@ async fn conn_info_for_unknown_peer_is_none() {
         .await
         .expect("bind");
     assert_eq!(t.conn_info(NodeId([7u8; 32])), ConnInfo::NONE);
-    t.close().await;
+    t.close().await
+}
+
+#[tokio::test]
+async fn connection_cache_reuses_a_key_but_keeps_alpns_separate() {
+    let alpns = vec![ALPN_CTRL.to_string(), transport::ALPN_BLOBS.to_string()];
+    let server = IrohTransport::bind(TransportConfig::loopback(alpns.clone()))
+        .await
+        .expect("bind server");
+    let client = IrohTransport::bind(TransportConfig::loopback(alpns))
+        .await
+        .expect("bind client");
+    let server_id = client.add_peer(server.local_addr());
+    let server_for_task = server.clone();
+    let server_task = tokio::spawn(async move {
+        let mut incoming = server_for_task.listen().await;
+        let ctrl = next(&mut incoming).await.expect("ctrl connection");
+        assert_eq!(ctrl.alpn(), ALPN_CTRL);
+        let _first_stream = ctrl.accept_bi().await.expect("first ctrl stream");
+        tokio::time::timeout(Duration::from_secs(1), ctrl.accept_bi()).await
+    });
+
+    let mut first = client
+        .connect(server_id, ALPN_CTRL)
+        .await
+        .expect("first ctrl stream");
+    first
+        .send_frame(&[0, 0, 0, 0])
+        .await
+        .expect("start first stream");
+    let mut second = client
+        .connect(server_id, ALPN_CTRL)
+        .await
+        .expect("second ctrl stream");
+    second
+        .send_frame(&[0, 0, 0, 0])
+        .await
+        .expect("start second stream");
+    let _blobs = client
+        .connect(server_id, transport::ALPN_BLOBS)
+        .await
+        .expect("blobs stream");
+
+    assert!(
+        server_task.await.expect("server task").is_ok(),
+        "a second stream on the same (peer, ALPN) must arrive on the original connection"
+    );
+    let ctrl_path = client.path_of(server_id, ALPN_CTRL).expect("ctrl path");
+    let blobs_path = client
+        .path_of(server_id, transport::ALPN_BLOBS)
+        .expect("blobs path");
+    assert_eq!(ctrl_path.path, Some(PathKind::Lan));
+    assert_eq!(blobs_path.path, Some(PathKind::Lan));
+
+    client.close().await;
+    server.close().await;
 }

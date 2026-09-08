@@ -192,13 +192,16 @@ impl Router {
             // (Parallel streams per connection can land later if a card
             // needs them — the protocol allows it.)
             if !router.serve_stream(peer, &mut stream).await {
-                return;
+                // The rejected stream is terminal, but the connection stays
+                // reusable. Every later stream enters authz again, so a
+                // revoked peer remains denied until an owner re-pairs it.
+                continue;
             }
         }
     }
 
-    /// One request/response on one stream. Returns `false` when the
-    /// connection should be dropped (authz denial closes the door).
+    /// One request/response on one stream. A rejected stream does not carry
+    /// on; the caller may accept another stream, which must pass authz again.
     async fn serve_stream(&self, peer: transport::NodeId, stream: &mut BiStream) -> bool {
         let req = match stream.recv_frame().await {
             Ok(Some(frame)) => match proto::codec::decode::<Req>(&frame) {
