@@ -1,7 +1,7 @@
 # UI-04a 中断提示只在总览页可见，切到别的 tab 就看不到　级别 L2
 
-> 🟠 状态：已认领，等待 CI-03/I18N-02 批次合入 main 后开发（2026-09-08）
-> 当前节点：复用 `HomeNotices.kt` 的全局呈现骨架；下一步：把中断提示迁出 `HomeScreen` 的局部布局。
+> 🟡 状态：代码完成，待共享真机回归（2026-09-08）
+> 当前节点：中断提示已迁出 `HomeScreen` 局部布局，统一进 `NoticeHost`（`ui/HomeNotices.kt`）→ `TwoTabs` 顶部 slot，Photos/Backup 两页都可见。
 > 协同分支：`batch/ui-04a-c`
 > 级别：L2 · 阻塞：本批 main 集成
 

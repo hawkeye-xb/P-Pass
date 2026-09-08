@@ -582,6 +582,17 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       设置页 T-083 目标 1「仅『设置』28px serif」两条都被推翻）——设计稿要跟着
       改，否则下次 UI 走查会把这里判成「未实现」。已 grep 确认没有测试钉这两个
       标题的样式。挂账：真机确认两页顶部无大字、不贴状态栏（用户）。
+- [ ] UI-04a + UI-04c 全局提示容器与最高优先级单条呈现 — **🟡 2026-09-08 代码完成（batch/ui-04a-c），待共享真机回归**：
+      两张卡共享同一提示呈现层，合并落地。`ui/HomeNotices.kt` 新增 `NoticeHost`
+      （电池白名单/通知引导/中断恢复/取消轮入口/重传告知五条输入集中构造候选 →
+      `topNotice` 只渲染最高优先级一条，其余收起），`TwoTabs` 顶部加 `notice` slot
+      让提示在 Photos/Backup 两页都可见（中断提示不再只有总览页），`MainActivity`
+      接进五条输入，`HomeScreen` 删掉五段局部渲染块（触发条件逐字保留，只迁呈现）。
+      优先级口径：阻塞备份 > 需要授权 > 补充信息。反证单测
+      `priority_selection_is_not_list_order` 锁死「选择行为」而非「列表顺序」。
+      Android JVM 309/0/0/4（59 XML 本次生成，HomeNoticesTest 6/0/0），
+      `just queue-check` 通过。真机欠账：所有 tab 见中断提示、同时多条件只显示
+      一条最高优先级——不移动卡片到 done/。
 - [x] MOB-32 校准把正在跑的备份会话清空，186 张照片被静默丢弃 — **2026-08-21（真机验收 owed，L0）**:
       清场前 `du -sh` 抓到的：`.ppf/staging` 547M / 186 个已校验文件
       （`.upload` = 0，全过了 BLAKE3），其中只有 1 个进了索引，**185 个纯孤儿**；
