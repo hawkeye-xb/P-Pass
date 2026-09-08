@@ -121,6 +121,7 @@ P4 desktop shell / 桌面壳
       fixed, Samsung now plays the user's own 7/31 recording pulled
       from the Mac library. Known debt: video thumbs fail on the daemon
       (thumb_state=2 → gray placeholder tiles)
+- [~] **MOB-26（合并 MOB-45）统一 Android 媒体查看器与系统返回** — **2026-09-08 代码完成，待 Mate 60 验收**：冻结过滤后的页序，`HorizontalPager` 跨图片与既有 Media3 视频页；Telephoto `zoomable` 负责图片缩放/嵌套横向手势，未缩放下拉 ≥96dp 才关闭；查看器/手动配对/存储详情各自优先消费系统返回，顶层 reducer 仅让二级 Screen 返回，根页仍交给 Android 退出。Android JVM 307/0/4（强制重跑）、debug APK 48,934,824→49,642,264 bytes（+707,440/+1.4457%）、`just ci` 全绿；`lintDebug` 受本机 JDK25 的既有 BUILD-01 阻断。MOB-45 已归档为合并索引，真实边缘返回/翻页/缩放/下拉/视频释放录屏未完成。
 - [~] MOB-47 cross-platform video preview — **code merged 2026-09-02; real-device
       acceptance pending**: desktop routes video through a hash-resolved canonical
       exact-file asset-protocol grant and native `<video>`, with thumbnail fallback

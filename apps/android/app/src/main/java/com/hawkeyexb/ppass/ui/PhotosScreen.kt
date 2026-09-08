@@ -8,11 +8,13 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.LruCache
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +29,8 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -42,8 +46,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
@@ -61,6 +68,8 @@ import com.hawkeyexb.ppass.proto.TimelineQuery
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.PeerAddrParts
 import kotlinx.coroutines.launch
+import me.saket.telephoto.zoomable.rememberZoomableState
+import me.saket.telephoto.zoomable.zoomable
 
 /**
  * MOB-04 红线②：缩略图缓存 = 内存 LruCache，**绝不落盘**（手机是减负端，
@@ -258,7 +267,7 @@ internal fun PhotosScreen(
     val subscribeConnected = holder.state.subscribeConnected
     val subscribeHadFailure = holder.state.subscribeHadFailure
 
-    var opened by remember { mutableStateOf<AssetMeta?>(null) }
+    var viewer by remember { mutableStateOf<MediaViewerSession?>(null) }
     // T-080: 轻过滤器（设计稿：全部 / 仅本机 / 家人的）。
     var filter by remember { mutableStateOf(TimelineFilter.All) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -269,18 +278,19 @@ internal fun PhotosScreen(
             }.getOrDefault(emptySet())
         }
     }
-
-    val current = opened
-    LaunchedEffect(current) { onViewerOpenChange(current != null) }
-    if (current != null && loader != null) {
-        // Wire format is the normalized "video"/"photo" (golden snapshot),
-        // not a MIME type — keep the prefix check so a raw "video/mp4" from
-        // an older daemon routes correctly too.
-        if (current.mediaType.startsWith("video")) {
-            VideoScreen(loader, current, isMine = current.hash in mine) { opened = null }
-        } else {
-            PhotoViewer(loader, current, isMine = current.hash in mine) { opened = null }
+    // 查看器页序是打开瞬间的过滤结果快照，不受订阅的后续刷新重排。
+    val shown = filterTimeline(items, filter, mine) { it.hash }
+    val currentViewer = viewer
+    LaunchedEffect(currentViewer) { onViewerOpenChange(currentViewer != null) }
+    if (currentViewer != null && loader != null) {
+        // Android 系统边缘返回先到这里；HorizontalPager 只处理内容区域横滑。
+        // 查看器关闭后本 Handler 不在 composition，根页面的系统返回继续由 Activity 接管。
+        BackHandler(
+            enabled = viewerBackAction(viewerOpen = viewer != null) == ViewerBackAction.CloseViewer,
+        ) {
+            viewer = null
         }
+        MediaViewer(loader, currentViewer, mine) { viewer = null }
         return
     }
 
@@ -386,7 +396,6 @@ internal fun PhotosScreen(
             }
         }
 
-        val shown = filterTimeline(items, filter, mine) { it.hash }
         when {
             // SYNC-06: loader 尚未就绪（换配对后的极短窗口）——不渲染交互。
             loader == null -> Center(stringResource(R.string.photos_loading))
@@ -413,7 +422,9 @@ internal fun PhotosScreen(
                         )
                     }
                     items(group, key = { it.hash }) { asset ->
-                        ThumbCell(loader, asset) { opened = asset }
+                        ThumbCell(loader, asset) {
+                            viewer = MediaViewerSession.open(shown, asset.hash)
+                        }
                     }
                 }
                 if (next != null) {
@@ -480,6 +491,32 @@ internal fun attributionText(isMine: Boolean, takenAtSeconds: Long): String {
 }
 
 @Composable
+private fun MediaViewer(
+    loader: TimelineLoader,
+    session: MediaViewerSession,
+    mine: Set<String>,
+    onClose: () -> Unit,
+) {
+    val pagerState = rememberPagerState(
+        initialPage = session.initialPage,
+        pageCount = { session.assets.size },
+    )
+    HorizontalPager(
+        state = pagerState,
+        modifier = Modifier.fillMaxSize(),
+    ) { page ->
+        val asset = session.assets[page]
+        // Wire format is normalized "video"/"photo"; retain the prefix for
+        // older daemons that might send a MIME type such as video/mp4.
+        if (asset.mediaType.startsWith("video")) {
+            VideoScreen(loader, asset, isMine = asset.hash in mine, onClose = onClose)
+        } else {
+            PhotoViewer(loader, asset, isMine = asset.hash in mine, onClose = onClose)
+        }
+    }
+}
+
+@Composable
 private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolean, onClose: () -> Unit) {
     // MOB-04 红线③（大图）：当前查看 = 1024 缩略图走内存缓存（见下）；
     // 未来加原图查看时——拉原图只走**临时文件即看即清或纯内存流式**，
@@ -490,6 +527,37 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
     val bmp by produceState<Bitmap?>(initialValue = null, asset.hash) {
         value = runCatching { loader.thumb(asset.hash, ThumbSize.S1024) }.getOrNull()
             ?: thumbCache.get("${asset.hash}/256")
+    }
+    // Telephoto 处理缩放后的平移和与 Pager 的 nested scrolling 协商：图片放大后
+    // 水平拖动留在图片本身，未放大时剩余的横向手势才交给 HorizontalPager。
+    val zoomableState = rememberZoomableState()
+    var pullDownPx by remember(asset.hash) { mutableStateOf(0f) }
+    val pullThresholdPx = with(LocalDensity.current) { 96.dp.toPx() }
+    val atMinimumZoom = (zoomableState.zoomFraction ?: 0f) <= 0f
+    LaunchedEffect(atMinimumZoom) {
+        if (!atMinimumZoom) pullDownPx = 0f
+    }
+    val pullToDismissModifier = Modifier.pointerInput(asset.hash, atMinimumZoom) {
+        if (atMinimumZoom) {
+            detectVerticalDragGestures(
+                onDragStart = { pullDownPx = 0f },
+                onVerticalDrag = { change, dragAmount ->
+                    pullDownPx = (pullDownPx + dragAmount).coerceAtLeast(0f)
+                    change.consume()
+                },
+                onDragCancel = { pullDownPx = 0f },
+                onDragEnd = {
+                    if (canDismissFromPull(
+                        zoomFraction = zoomableState.zoomFraction ?: 0f,
+                        dragPx = pullDownPx,
+                        thresholdPx = pullThresholdPx,
+                    )) {
+                        onClose()
+                    }
+                    pullDownPx = 0f
+                },
+            )
+        }
     }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -578,7 +646,12 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
             if (b != null) {
                 Image(
                     bitmap = b.asImageBitmap(), contentDescription = null,
-                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer { translationY = pullDownPx }
+                        .then(pullToDismissModifier)
+                        .zoomable(zoomableState),
+                    contentScale = ContentScale.Fit,
                 )
             } else {
                 Text(stringResource(R.string.photos_loading), color = PPColor.PaperDim, fontSize = 16.sp)

@@ -135,6 +135,11 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.9.4")
     implementation("androidx.media3:media3-ui:1.9.4")
 
+    // MOB-26: Telephoto handles image pan/zoom and cooperates with nested scrolling.
+    // Only the gesture module is used: current thumbnails stay in the single in-memory
+    // cache, so no Coil/Glide loader or disk cache is introduced on the phone.
+    implementation("me.saket.telephoto:zoomable:0.19.0")
+
     // T-052 camera scan: CameraX preview/analysis + ZXing core decode.
     // ZXing is pure Java — no Google Play Services, works on HarmonyOS
     // compatibility layers (卓易通) where GMS is absent.

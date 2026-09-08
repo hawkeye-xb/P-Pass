@@ -5,6 +5,7 @@
 // 有单测锁死缺陷 a/b），本文件只做裁决 → 字符串资源的映射。
 package com.hawkeyexb.ppass.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -157,6 +158,7 @@ fun HomeScreen(
     // 折进子页是上一轮自己想当然加的一层，设计稿没有）。
     var showStorageDetail by remember { mutableStateOf(false) }
     if (showStorageDetail) {
+        BackHandler { showStorageDetail = false; onStorageDetailOpenChange(false) }
         StorageComputerDetail(
             storageName = storageName,
             pairedAt = pairedAt,
