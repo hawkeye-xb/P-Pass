@@ -3,6 +3,7 @@
 > M0 Gate 输入之一。对照可行性报告 §4 判定。
 > 每场景 ≥20 次连接尝试。记录 ConnInfo（path + rtt_ms + throughput_mbps）。
 > 测试工具：Android Probe App（最新 APK）连桌面 iroh-probe CLI。
+> **相关产品传输链路取证**：NET-04 的单一 data-plane connection 真机证据与复现路径见 [2026-09-08 记录](evidence/2026-09-08-net-04-connection-reuse-samsung.md)。
 
 ## 场景表
 

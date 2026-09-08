@@ -176,7 +176,7 @@
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；单一 blobs NodeId/连接完成全部请求 | 待回归 Pause / Cancel / 失败重试 | L2 |
+| [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；单一 blobs NodeId/连接完成全部请求；待回归 Pause / Cancel / 失败 Retry | L2 |
 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | MOB-45 已并入并合入 `main`：页序、Telephoto 缩放/下拉关闭、系统返回层级；Android JVM 307/0/4 | L2 |
 | [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | ✅ 已归档：三星 Pause → kill → reopen → Continue → Cancel 通过 | L2 |
 | [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 代码完成：取消后 UI 回到暂停态；待 MOB-50 合入后，以隔离测试相册验证新增媒体可完整发现、传输、确认 | L1 |
