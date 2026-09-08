@@ -1,23 +1,12 @@
-// MOB-37: 常驻提示的最小骨架——**给 UI-04 留的接口**，不是完整框架。
+// UI-04a/c: 全局唯一提示呈现层（batch/ui-04a-c）。
 //
-// ## 为什么在这里放一个骨架而不是直接写进 HomeScreen
+// 既有提示已迁入：电池白名单 / 通知引导 / 中断恢复 / 取消轮入口 /
+// 重传告知五条，统一在 [NoticeHost] 里构造候选列表 → [topNotice]
+// 只渲染最高优先级的一条，其余全部收起。
 //
-// UI-04 要做的正是「多条提示堆叠没有优先级 / 提示只出现在总览」。两张卡
-// 都会动提示的呈现层，卡面写明「谁先落地谁把优先级框架搭好」。本卡先到，
-// 于是把新增的这条重传告知做成**数据**（[HomeNotice]）+ 一个统一渲染的
-// 卡片（[NoticeCard]）+ 一个纯函数挑选器（[topNotice]），而不是又在
-// HomeScreen 里硬编码一段 Surface。
-//
-// ## 刻意没做的事
-//
-// **既有的四条提示（部分授权 / 配对失效 / 电池白名单 / 通知引导 /
-// 中断恢复）没有迁进来。** 迁移是 UI-04 的活，且会跟正在进行中的
-// HomeScreen 改动撞车。本卡只保证：新增的这条从第一天就是可接入的形状，
-// UI-04 把其余几条包成 [HomeNotice] 丢进 [topNotice] 即可，不用返工。
-//
-// [HOME_NOTICE_PRIORITY] 的排序是**提案**，UI-04 可以重排：那张卡建议的
-// 口径是「阻塞备份的 > 需要授权的 > 补充信息的」，重传告知属于补充信息
-// （照片已经在传回来了，用户不做任何动作也没事）。
+// [HOME_NOTICE_PRIORITY] 的排序：
+//   PAIRING_LOST (阻塞) 在最前，底下的 REUPLOAD (补充) 在最后——按
+//   UI-04c 口径「阻塞备份的 > 需要授权的 > 补充信息的」。
 package com.hawkeyexb.ppass.ui
 
 import androidx.compose.foundation.clickable
@@ -32,10 +21,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hawkeyexb.ppass.R
 
 /** 一条常驻提示是哪一类（优先级排序的依据，见 [HOME_NOTICE_PRIORITY]）。 */
 enum class HomeNoticeKind {
@@ -61,7 +52,8 @@ enum class HomeNoticeKind {
     CANCELLED_ROUND,
 }
 
-/** 优先级**提案**（越靠前越要紧）。UI-04 可重排，见文件头注释。 */
+/** 优先级（越靠前越要紧）。UI-04c 口径：阻塞备份的 > 需要授权的 >
+ *  补充信息的。 */
 val HOME_NOTICE_PRIORITY: List<HomeNoticeKind> = listOf(
     HomeNoticeKind.PAIRING_LOST,
     HomeNoticeKind.BACKUP_INTERRUPTED,
@@ -121,4 +113,75 @@ fun NoticeCard(notice: HomeNotice) {
             }
         }
     }
+}
+
+/**
+ * UI-04a/c: the single, global notice presentation host.
+ *
+ * Reads the full set of user-facing notice inputs, builds every active
+ * candidate as a [HomeNotice] (no presentation anywhere else), and renders
+ * only `topNotice(candidates)` — the highest-priority active notice. All
+ * others stay queued/off-screen. The trigger condition for each notice is a
+ * verbatim copy of what used to live in HomeScreen; nothing about the
+ * conditions changed, only where they are collected and how rendered.
+ *
+ * `pairingLost` / partial-access are intentionally NOT here: they have their
+ * own dedicated hero / red-card presentation and are not amber one-liners.
+ */
+@Composable
+fun NoticeHost(
+    backupInterrupted: Boolean,
+    batteryWhitelisted: Boolean,
+    notificationSkipped: Boolean,
+    cancelledRoundCount: Int?,
+    reuploadCount: Int,
+    onResumeBackup: () -> Unit,
+    onOpenBatterySettings: () -> Unit,
+    onOpenNotificationSettings: () -> Unit,
+    onRestoreCancelledRounds: () -> Unit,
+    onAcknowledgeReupload: () -> Unit,
+) {
+    val candidates = buildList {
+        if (backupInterrupted) add(
+            HomeNotice(
+                kind = HomeNoticeKind.BACKUP_INTERRUPTED,
+                body = stringResource(R.string.backup_interrupted_body),
+                actionLabel = stringResource(R.string.backup_interrupted_action),
+                onAction = onResumeBackup,
+            )
+        )
+        if (!batteryWhitelisted) add(
+            HomeNotice(
+                kind = HomeNoticeKind.BATTERY_WHITELIST,
+                body = stringResource(R.string.dog_battery_body),
+                actionLabel = stringResource(R.string.dog_battery_action),
+                onAction = onOpenBatterySettings,
+            )
+        )
+        if (notificationSkipped) add(
+            HomeNotice(
+                kind = HomeNoticeKind.NOTIFICATION_PERMISSION,
+                body = stringResource(R.string.notif_nudge_body),
+                actionLabel = stringResource(R.string.notif_nudge_action),
+                onAction = onOpenNotificationSettings,
+            )
+        )
+        if (cancelledRoundCount != null) add(
+            HomeNotice(
+                kind = HomeNoticeKind.CANCELLED_ROUND,
+                body = stringResource(R.string.cancelled_round_notice_body, cancelledRoundCount),
+                actionLabel = stringResource(R.string.cancelled_round_notice_restore),
+                onAction = onRestoreCancelledRounds,
+            )
+        )
+        if (reuploadCount > 0) add(
+            HomeNotice(
+                kind = HomeNoticeKind.REUPLOAD,
+                body = stringResource(R.string.reupload_notice_body, reuploadCount),
+                actionLabel = stringResource(R.string.reupload_notice_action),
+                onAction = onAcknowledgeReupload,
+            )
+        )
+    }
+    topNotice(candidates)?.let { NoticeCard(it) }
 }
