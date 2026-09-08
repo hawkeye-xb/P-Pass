@@ -585,6 +585,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       设置页 T-083 目标 1「仅『设置』28px serif」两条都被推翻）——设计稿要跟着
       改，否则下次 UI 走查会把这里判成「未实现」。已 grep 确认没有测试钉这两个
       标题的样式。挂账：真机确认两页顶部无大字、不贴状态栏（用户）。
+- [~] UI-08 选相册长名称截断与缩略图清晰度链路 — **2026-09-08 代码完成，待共享真机回归**：根因是 `BucketScreen` 原先固定请求 `loadThumbnail(Size(200, 200))`，而封面卡按实际网格显示像素绘制，低分辨率位图随后被放大；长名称 `Text` 没有单行溢出约束且使用非填满权重，Row 可换行撑高。修复为用 `onSizeChanged` 读取封面 Box 的实际 `IntSize`，请求与缓存 key 均带显示宽高；名称改 `weight(1f)`、`maxLines = 1`、`TextOverflow.Ellipsis`，不动选中集合/桶计数语义。新增源码守卫 2 条，Android JVM **313/0/0/4 ignored**（`--rerun-tasks`，60 个 fresh XML）；截图和真实视觉清晰度证据留给共享回归。
 - [x] MOB-32 校准把正在跑的备份会话清空，186 张照片被静默丢弃 — **2026-08-21（真机验收 owed，L0）**:
       清场前 `du -sh` 抓到的：`.ppf/staging` 547M / 186 个已校验文件
       （`.upload` = 0，全过了 BLAKE3），其中只有 1 个进了索引，**185 个纯孤儿**；
