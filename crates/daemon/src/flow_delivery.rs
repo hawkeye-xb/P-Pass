@@ -6,13 +6,14 @@
 //! Desktop checks the persisted current pairing epoch and the persisted grant
 //! both before native fetch and before it writes a receipt.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use core_index::{IncomingFile, Ingestor};
 use proto::{FlowCompletionReceipt, FlowFetchRequest};
 use storage::{Db, FlowGrant, FlowGrantState};
-use transport::{Blobs, NodeId};
+use transport::{Blobs, ConnectionStatus, NodeId};
 
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
 
@@ -32,6 +33,146 @@ pub enum DeliveryError {
     Storage(String),
 }
 
+/// NET-05: process-local route fact for an active Flow data fetch. The map is
+/// keyed by the paired control peer because desktop device rows are keyed that
+/// way; the stored status itself is read from the possibly-distinct blobs
+/// provider. It is neither history nor a billing source.
+#[derive(Clone, Default)]
+pub struct FlowPathRegistry {
+    entries: Arc<Mutex<HashMap<[u8; 32], ActiveFlowPath>>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ActiveFlowPath {
+    queue_sequence: i64,
+    lease_token: String,
+    status: ConnectionStatus,
+}
+
+impl FlowPathRegistry {
+    /// A request has been admitted but its data-plane connection is not ready.
+    /// `Unknown` means exactly that; it never guesses a route.
+    pub fn begin(&self, peer: NodeId, queue_sequence: i64, lease_token: &str) -> bool {
+        self.replace_if_changed(
+            peer,
+            ActiveFlowPath {
+                queue_sequence,
+                lease_token: lease_token.to_owned(),
+                status: ConnectionStatus::Unknown,
+            },
+        )
+    }
+
+    /// Update only the exact strict item that is still active for this peer.
+    pub fn set_if_current(
+        &self,
+        peer: NodeId,
+        queue_sequence: i64,
+        lease_token: &str,
+        status: ConnectionStatus,
+    ) -> bool {
+        let mut entries = self.entries.lock().expect("flow path registry lock");
+        let Some(current) = entries.get_mut(&peer.0) else {
+            return false;
+        };
+        if current.queue_sequence != queue_sequence || current.lease_token != lease_token {
+            return false;
+        }
+        if current.status == status {
+            return false;
+        }
+        current.status = status;
+        true
+    }
+
+    /// A late old request cannot remove a newer item's route: both lease and
+    /// sequence must match. The boolean tells the caller whether to refresh UI.
+    pub fn clear_if_current(&self, peer: NodeId, queue_sequence: i64, lease_token: &str) -> bool {
+        let mut entries = self.entries.lock().expect("flow path registry lock");
+        let Some(current) = entries.get(&peer.0) else {
+            return false;
+        };
+        if current.queue_sequence != queue_sequence || current.lease_token != lease_token {
+            return false;
+        }
+        entries.remove(&peer.0);
+        true
+    }
+
+    /// `None` means no active Flow fetch, not that the device is offline.
+    pub fn get(&self, peer: NodeId) -> Option<ConnectionStatus> {
+        self.entries
+            .lock()
+            .expect("flow path registry lock")
+            .get(&peer.0)
+            .map(|entry| entry.status)
+    }
+
+    fn replace_if_changed(&self, peer: NodeId, next: ActiveFlowPath) -> bool {
+        let mut entries = self.entries.lock().expect("flow path registry lock");
+        if entries.get(&peer.0) == Some(&next) {
+            return false;
+        }
+        entries.insert(peer.0, next);
+        true
+    }
+}
+
+/// Clears a transient route on every terminal branch, including `?` returns.
+struct FlowPathGuard {
+    paths: FlowPathRegistry,
+    events: Option<EventBus>,
+    peer: NodeId,
+    queue_sequence: i64,
+    lease_token: String,
+}
+
+impl FlowPathGuard {
+    fn start(
+        paths: FlowPathRegistry,
+        events: Option<EventBus>,
+        peer: NodeId,
+        grant: &FlowGrant,
+    ) -> Self {
+        if paths.begin(peer, grant.queue_sequence, &grant.lease_token) {
+            emit_device_changed(events.as_ref());
+        }
+        Self {
+            paths,
+            events,
+            peer,
+            queue_sequence: grant.queue_sequence,
+            lease_token: grant.lease_token.clone(),
+        }
+    }
+
+    fn set_path(&self, status: ConnectionStatus) {
+        if self
+            .paths
+            .set_if_current(self.peer, self.queue_sequence, &self.lease_token, status)
+        {
+            emit_device_changed(self.events.as_ref());
+        }
+    }
+}
+
+impl Drop for FlowPathGuard {
+    fn drop(&mut self) {
+        if self
+            .paths
+            .clear_if_current(self.peer, self.queue_sequence, &self.lease_token)
+        {
+            emit_device_changed(self.events.as_ref());
+        }
+    }
+}
+
+fn emit_device_changed(events: Option<&EventBus>) {
+    if let Some(events) = events {
+        crate::events::emit(events, crate::events::DEVICE_CHANGED, serde_json::json!({}));
+    }
+}
+
 /// Adapter from a current flow item to the native iroh-blobs receiver.
 #[derive(Clone)]
 pub struct FlowDelivery {
@@ -44,6 +185,11 @@ pub struct FlowDelivery {
     /// (the pre-fix default) means "no one is listening", matching how
     /// `main.rs` constructs this port today.
     throttle: Option<Throttle>,
+    /// NET-05: process-local path state for currently-active Flow data streams.
+    paths: FlowPathRegistry,
+    /// Path mutations notify the desktop device rows independently of the
+    /// ingestion throttle above.
+    events: Option<EventBus>,
 }
 
 impl FlowDelivery {
@@ -59,6 +205,8 @@ impl FlowDelivery {
             blobs,
             staging: root.join(".ppf/flow-staging"),
             throttle: None,
+            paths: FlowPathRegistry::default(),
+            events: None,
         }
     }
 
@@ -74,8 +222,20 @@ impl FlowDelivery {
     /// `BackupEngine::with_events_and_window` (tests need a deterministic,
     /// short window rather than relying on wall-clock timing).
     pub fn with_events_and_window(mut self, events: EventBus, window: std::time::Duration) -> Self {
-        self.throttle = Some(Throttle::new(events, window));
+        self.throttle = Some(Throttle::new(events.clone(), window));
+        self.events = Some(events);
         self
+    }
+
+    /// Main injects the same registry into IPC, so `devices.list` can expose
+    /// only an active Flow's real data-plane path without persisting it.
+    pub fn with_path_registry(mut self, paths: FlowPathRegistry) -> Self {
+        self.paths = paths;
+        self
+    }
+
+    pub fn path_registry(&self) -> FlowPathRegistry {
+        self.paths.clone()
     }
 
     /// Persist the current exact grant. This method transfers no bytes.
@@ -123,13 +283,19 @@ impl FlowDelivery {
             return Err(DeliveryError::Cancelled);
         }
 
+        // The visible path is scoped to this exact strict item and cleared by
+        // its guard on every terminal branch. Start as unknown before opening
+        // data-plane bytes; never infer direct/relay from the ctrl connection.
+        let path_guard =
+            FlowPathGuard::start(self.paths.clone(), self.events.clone(), peer, &grant);
+
         // The only data transport in this flow: native iroh-blobs fetch. Its
         // content-addressed fetch verifies the requested BLAKE3 hash and
         // resumes from the dedicated retained store on retry/restart.
         let hash = array32(&grant.content_hash).expect("validated by checked_request");
         let provider = self.provider_for(&grant)?;
         self.blobs
-            .fetch_from(provider, hash)
+            .fetch_from_observing_path(provider, hash, |status| path_guard.set_path(status))
             .await
             .map_err(|e| DeliveryError::Fetch(e.to_string()))?;
 
@@ -203,6 +369,12 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         {
+            if self
+                .paths
+                .clear_if_current(peer, grant.queue_sequence, &grant.lease_token)
+            {
+                emit_device_changed(self.events.as_ref());
+            }
             Ok(())
         } else {
             Err(DeliveryError::GuardMismatch)

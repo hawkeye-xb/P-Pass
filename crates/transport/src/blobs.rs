@@ -125,11 +125,28 @@ impl Blobs {
     /// Inbound peers are dialable because the transport registers their
     /// observed addresses on accept.
     pub async fn fetch_from(&self, peer: crate::NodeId, hash: [u8; 32]) -> Result<()> {
+        self.fetch_from_observing_path(peer, hash, |_| {}).await
+    }
+
+    /// Same data-plane operation, with one synchronous snapshot immediately
+    /// after the cached blobs connection is ready and before a stream is
+    /// opened. This reports iroh's selected path for *this exact ALPN*, not a
+    /// ctrl-plane or remembered peer-level connection.
+    pub async fn fetch_from_observing_path<F>(
+        &self,
+        peer: crate::NodeId,
+        hash: [u8; 32],
+        on_connected: F,
+    ) -> Result<()>
+    where
+        F: FnOnce(crate::ConnectionStatus),
+    {
         let conn = self
             .transport
             .connect_raw(peer, crate::ALPN_BLOBS)
             .await
             .map_err(|e| TransportError::Io(format!("connect for fetch: {e}")))?;
+        on_connected(self.transport.path_status_of(peer, crate::ALPN_BLOBS));
         self.store
             .remote()
             .fetch(conn, Hash::from_bytes(hash))

@@ -388,6 +388,15 @@ impl IrohTransport {
         Some(classify(&path_facts(&conn)))
     }
 
+    /// Exact route verdict for one live `(peer, ALPN)` cache entry. Absence
+    /// after a successful connect is represented as `Unknown`, never as
+    /// `Offline`: callers use this while a higher-level operation is active.
+    pub fn path_status_of(&self, peer: NodeId, alpn: &str) -> ConnectionStatus {
+        self.path_of(peer, alpn)
+            .map(status_of_live)
+            .unwrap_or(ConnectionStatus::Unknown)
+    }
+
     /// Crate-internal endpoint access (blobs.rs shares the endpoint).
     pub(crate) fn endpoint(&self) -> &Endpoint {
         &self.ep

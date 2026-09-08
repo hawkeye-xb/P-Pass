@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use daemon::events;
-use daemon::flow_delivery::{DeliveryError, FlowDelivery};
+use daemon::flow_delivery::{DeliveryError, FlowDelivery, FlowPathRegistry};
 use proto::FlowFetchRequest;
 use storage::{Db, Device, Role};
 use tempfile::tempdir;
-use transport::{Blobs, IrohTransport, TransportConfig, ALPN_BLOBS};
+use transport::{Blobs, ConnectionStatus, IrohTransport, TransportConfig, ALPN_BLOBS};
 
 fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFetchRequest {
     FlowFetchRequest {
@@ -317,10 +317,48 @@ async fn successful_flow_fetch_notifies_the_desktop_timeline() {
         .await
         .unwrap();
 
-    // RED: without the fix, no event is ever emitted and this times out.
-    let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
-        .await
-        .expect("DESK-11: a completed Flow fetch must notify the desktop timeline")
-        .unwrap();
-    assert_eq!(event["event"], events::TIMELINE_INVALIDATED);
+    // NET-05 adds three device refreshes around the pre-existing timeline
+    // signal: admitted/unknown, exact blobs route, and terminal clear. The
+    // timeline event must still arrive; device refreshes must not mask it.
+    let mut device_changes = 0;
+    let mut saw_timeline = false;
+    for _ in 0..4 {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("Flow events must reach the desktop")
+            .unwrap();
+        match event["event"].as_str() {
+            Some(events::DEVICE_CHANGED) => device_changes += 1,
+            Some(events::TIMELINE_INVALIDATED) => saw_timeline = true,
+            other => panic!("unexpected Flow desktop event: {other:?}"),
+        }
+    }
+    assert_eq!(
+        device_changes, 3,
+        "begin, ready, and terminal clear must each refresh devices"
+    );
+    assert!(
+        saw_timeline,
+        "a completed Flow fetch must still refresh the timeline"
+    );
+}
+
+// NET-05 RED: an old request finishing after the next strict item has started
+// must not erase the new item's data-plane path. The key is the exact Flow
+// lease, not only the paired control peer.
+#[test]
+fn old_flow_lease_cannot_clear_a_newer_data_plane_path() {
+    let paths = FlowPathRegistry::default();
+    let peer = transport::NodeId([0x5a; 32]);
+
+    paths.begin(peer, 7, "lease-old");
+    paths.set_if_current(peer, 7, "lease-old", ConnectionStatus::Direct);
+    paths.begin(peer, 8, "lease-new");
+    paths.set_if_current(peer, 8, "lease-new", ConnectionStatus::Relay);
+
+    assert!(
+        !paths.clear_if_current(peer, 7, "lease-old"),
+        "stale completion must not clear the newer active transfer"
+    );
+    assert_eq!(paths.get(peer), Some(ConnectionStatus::Relay));
 }

@@ -50,6 +50,9 @@ pub struct IpcServer {
     /// main injects a closure over the transport slot; the default says
     /// `Unknown` — 拿不到实况就如实报 unknown，绝不用 last_seen 推断.
     conn_status: ConnStatusFn,
+    /// NET-05: path of the currently-active Flow blobs fetch, keyed by the
+    /// paired control device. `None` is an inactive transfer, not offline.
+    flow_connection: FlowConnectionFn,
     /// DESK-03: query plane（timeline/thumb/asset.*）——桌面壳与 daemon
     /// 同机，照片墙直接走本地 IPC 消费查询平面（与手机同一数据源）。
     /// OnceLock：main 在 transport bind 之后才建 QueryEngine（blobs 依赖
@@ -64,6 +67,8 @@ pub struct IpcServer {
 
 /// See [`IpcServer::set_conn_status_provider`].
 type ConnStatusFn = Arc<dyn Fn(&[u8]) -> transport::ConnectionStatus + Send + Sync>;
+/// See [`IpcServer::set_flow_connection_provider`].
+type FlowConnectionFn = Arc<dyn Fn(&[u8]) -> Option<transport::ConnectionStatus> + Send + Sync>;
 
 /// `activity.list` batch window: assets from one device arriving within
 /// this gap of each other belong to one backup batch (卡片建议 10 分钟).
@@ -253,6 +258,7 @@ impl IpcServer {
             started_at: now_ms(),
             step_down_exit: Arc::new(|| std::process::exit(0)),
             conn_status: Arc::new(|_| transport::ConnectionStatus::Unknown),
+            flow_connection: Arc::new(|_| None),
             query: std::sync::OnceLock::new(),
             subscriptions: SubscriptionRegistry::new(),
         }
@@ -284,6 +290,16 @@ impl IpcServer {
         f: impl Fn(&[u8]) -> transport::ConnectionStatus + Send + Sync + 'static,
     ) {
         self.conn_status = Arc::new(f);
+    }
+
+    /// NET-05: inject the currently-active Flow's exact blobs-plane route.
+    /// Unlike `connection`, absence means there is no active transfer and is
+    /// intentionally serialized as JSON null.
+    pub fn set_flow_connection_provider(
+        &mut self,
+        f: impl Fn(&[u8]) -> Option<transport::ConnectionStatus> + Send + Sync + 'static,
+    ) {
+        self.flow_connection = Arc::new(f);
     }
 
     /// DAE-01 single-instance claim — run BEFORE binding the socket.
@@ -614,21 +630,28 @@ impl IpcServer {
                         let list: Vec<_> = devices
                             .iter()
                             .map(|d| {
+                                // Read both sources exactly once so a response cannot combine
+                                // a pre-transition `connection` with a post-transition
+                                // `presence`. Flow state stays a distinct nullable field:
+                                // `null` means no active transfer, not offline.
+                                let connection = (self.conn_status)(&d.node_id);
+                                let flow_connection = (self.flow_connection)(&d.node_id);
                                 serde_json::json!({
                                     "node_id": hex(&d.node_id),
                                     "name": d.name,
                                     "role": d.role.as_str(),
                                     "revoked": d.revoked,
                                     "last_seen": d.last_seen,
-                                    // T-090: live transport verdict only —
-                                    // "unknown" when no live info exists;
-                                    // never derived from last_seen.
-                                    "connection": (self.conn_status)(&d.node_id).as_str(),
-                                    // PRES-01: 三档在线态（纯函数，单测覆盖
-                                    // 边界）——在线 / x 分钟前在线 / 离线。
-                                    // 展示口径，不参与鉴权。
+                                    // T-090: generic live transport verdict only; this
+                                    // remains intentionally independent from the Flow plane.
+                                    "connection": connection.as_str(),
+                                    // NET-05: actual active blobs route for the current Flow
+                                    // item, keyed back to this paired control device.
+                                    "flow_connection": flow_connection.map(|s| s.as_str()),
+                                    // PRES-01: 三档在线态只用既有泛连接/心跳口径，
+                                    // 不让短暂文件传输改写在线语义。
                                     "presence": crate::presence::presence(
-                                        (self.conn_status)(&d.node_id).as_str(),
+                                        connection.as_str(),
                                         d.last_seen,
                                         now_ms(),
                                     ),

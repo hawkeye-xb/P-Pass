@@ -47,6 +47,24 @@ export function connectionDot(connection) {
 }
 
 /**
+ * NET-05: only an active Flow fetch supplies this nullable field. The wording
+ * names a transfer rather than claiming a device is generally direct/relay.
+ * null means fall back to the established presence projection.
+ */
+export function flowConnectionText(flowConnection) {
+  switch (flowConnection) {
+    case "direct":
+      return { sub: "正在直连传输", dot: "safe" };
+    case "relay":
+      return { sub: "正在经中继传输（内容加密，中继无法读取）", dot: "wait" };
+    case "unknown":
+      return { sub: "正在连接/传输（路径尚未确认）", dot: "wait" };
+    default:
+      return null;
+  }
+}
+
+/**
  * PRES-01: presence 三档 → 设备行 sub 文案 + 点色。
  * 契约（crates/daemon/src/presence.rs）：presence = "online" | "recent" |
  * "offline"。online 优先展示连接路径事实（已直连/经中继）；心跳新鲜但

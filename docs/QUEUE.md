@@ -37,7 +37,6 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
-| [NET-05](../cards/NET-05-flow-data-path-status-follows-transfer-lifecycle.md) | Flow 数据面路径状态随生命周期上报：先 `unknown`，连接就绪后按 blobs 实况显示直连/中继，终态清除 | `work/net-05-flow-path` |
 
 其余 UI-04a/UI-04b/UI-04c/UI-08 均已合入 `main`，转入下方共享回归队列。
 
@@ -55,6 +54,7 @@
 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 本轮三星已过：主动断开→新串→立即授权→选相册，无 ANR/旧 offer；统一回归补“开始一轮新备份” | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
+| [NET-05](../cards/NET-05-flow-data-path-status-follows-transfer-lifecycle.md) | 代码完成：active Flow 先显示连接中，随后显示 blobs 数据面直连/中继；待慢速传输及 Pause/Cancel/失败真机回归 | L2 |
 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 页序、Telephoto 缩放/下拉关闭、系统返回层级 | L2 |
 | [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 取消后 UI 回到暂停态；与 MOB-50 一起验证新增媒体完整发现、传输、确认 | L1 |
 | [MOB-50](../cards/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 取消后复位 upload cursor；与 MOB-49 一起验证新增媒体完整发现、传输、确认 | L1 |
