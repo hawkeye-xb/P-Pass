@@ -2279,13 +2279,22 @@
 
 
 
+  /* UI-04b: 提示条脱离文档流——fixed 浮层，出现/消失不顶动下方内容。
+     改名成功/失败、复制成功等瞬时反馈都走这里；错误反馈同样可见
+     （5s 自动消失 + 手动 ×），只是不再占布局空间。 */
   .message {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 60; /* 高于 modal-backdrop(50)：模态打开时提示仍可见 */
+    max-width: min(90vw, 560px);
+    box-shadow: 0 4px 16px rgba(23, 21, 18, 0.12);
     background: var(--pp-waiting-bg);
     border: 1px solid var(--pp-waiting);
     border-radius: var(--pp-radius-control);
     padding: 10px 14px;
     font-size: 15px;
-    margin: 0 0 18px;
     display: flex;
     align-items: center;
     justify-content: space-between;
