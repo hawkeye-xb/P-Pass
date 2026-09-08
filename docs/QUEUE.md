@@ -33,7 +33,16 @@
 
 ---
 
-## 一、待你真机验收（代码已合并，就差你动手）
+## 一、进行中（已上云认领）
+
+| 卡 | 一句话 | 分支 |
+|---|---|---|
+| [I18N-02](../cards/I18N-02-main-kotlin-hardcoded-chinese.md) | 主 Android Kotlin 的既有用户可见中文迁入 en/zh 资源 | `batch/i18n-02` |
+| [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 补 fmt/clippy CI 门禁与既有格式修正 | `batch/ci-03` |
+
+---
+
+## 二、待你真机验收（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
@@ -64,14 +73,13 @@
 
 ---
 
-## 二、可接队列（无阻塞，可以直接分给任何 agent）
+## 三、可接队列（无阻塞，可以直接分给任何 agent）
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
-| P3 | [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁 | L0 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 中断提示只在总览页可见 | L2 |
 | P3 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 设备改名反馈占布局空间 | L2 |
@@ -83,11 +91,10 @@
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
 | P3 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册页长名称换行撑乱布局 + 缩略图模糊 | L3 |
-| P3 | [I18N-02](../cards/I18N-02-main-kotlin-hardcoded-chinese.md) | 主 Android Kotlin 的无关既有用户可见中文硬编码清债 | L1 |
 
 ---
 
-## 三、待你复现或拍板（agent 不许编码）
+## 四、待你复现或拍板（agent 不许编码）
 
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
@@ -95,7 +102,7 @@
 
 ---
 
-## 四、已完成 / 已归档（历史，非待办）
+## 五、已完成 / 已归档（历史，非待办）
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
@@ -129,7 +136,7 @@
 
 ---
 
-## 五、（原 ARCH-01 冻结区，2026-09-07 已清空）
+## 六、（原 ARCH-01 冻结区，2026-09-07 已清空）
 
 > 原 MOB-39/MOB-42/MOB-48 三张卡：2026-09-07 复核确认 ARCH-01 + REBUILD-00~05
 > 的生产切换已经落地并跑在生产上，这三张卡描述的旧 WorkManager/TriggerSpec
@@ -142,7 +149,7 @@
 
 ---
 
-## 六、ARCH-01 后续实施拆卡（按已收口边界开卡）
+## 七、ARCH-01 后续实施拆卡（按已收口边界开卡）
 
 | 卡 | 覆盖 case | 当前等待 |
 |---|---|---|
@@ -165,7 +172,7 @@
 
 ---
 
-## 七、backlog（明确不做或暂缓，agent 不许碰）
+## 八、backlog（明确不做或暂缓，agent 不许碰）
 
 | 卡 | 状态 | 备注 |
 |---|---|---|
@@ -180,7 +187,7 @@
 
 ---
 
-## 八、发版现状（参考，非待办）
+## 九、发版现状（参考，非待办）
 
 - 正式产物走 CI：`gh workflow run release.yml -f platforms=android,macos`
   （Android 出签名 APK；macOS 未签名，「右键 → 打开」过 Gatekeeper）。
@@ -197,7 +204,7 @@
 
 ---
 
-## 九、相关文档指路
+## 十、相关文档指路
 
 - 规则层（agent 无关）：[`AGENTS.md`](../AGENTS.md) + [`AGENT_PROTOCOL.md`](AGENT_PROTOCOL.md)
 - 全量历史账本（只增不减）：[`ROADMAP.md`](ROADMAP.md)

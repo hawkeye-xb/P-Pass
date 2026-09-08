@@ -1,7 +1,8 @@
 # CI-03 桌面壳 workspace 没有 fmt/clippy 门禁，格式漂移无人发现　级别 L0
 
-> ⬜ 状态：**仍然未开工**（2026-09-07 复核：`.github/workflows/ci-desktop.yml`
-> 里仍只有 `cargo test --lib`，没有 `cargo fmt --check`/`cargo clippy` 步骤）
+> 🟠 状态：进行中（2026-09-08）
+> 当前节点：核对独立 workspace 的现状并以故意未格式化代码做本地反证；下一步：提交 workflow 门禁和最小格式化结果。
+> 协同分支：`batch/ci-03`
 > 级别：L0 · 阻塞：无
 
 ## 问题
