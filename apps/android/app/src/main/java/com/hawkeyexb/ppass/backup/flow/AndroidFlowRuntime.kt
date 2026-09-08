@@ -3,6 +3,7 @@ package com.hawkeyexb.ppass.backup.flow
 
 import android.content.Context
 import android.net.Uri
+import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairingStore
@@ -213,6 +214,7 @@ private data class AndroidFlowRuntime(
 )
 
 private fun runtimeFor(context: Context): AndroidFlowRuntime? {
+    val app = context.applicationContext as PPassApplication
     val pairing = PairingStore(context.filesDir).load() ?: return null
     if (pairing.pairingEpoch.isBlank()) return null
     val epoch = PairingEpoch(pairing.pairingEpoch)
@@ -232,6 +234,7 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             resolver = context.contentResolver,
             pairing = { PairingStore(context.filesDir).load() },
             identityKey = { IdentityStore(context.filesDir).secretKey() },
+            client = app.daemonClient,
             // MOB-56: every other Flow trigger (pause/continue/wake/cancel/
             // retry) serializes through flowTriggerLock — these two native
             // delivery callbacks were the only entry points that called

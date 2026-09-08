@@ -98,6 +98,7 @@ internal class NativeFlowDeliveryPort(
     private val resolver: ContentResolver,
     private val pairing: () -> Pairing?,
     private val identityKey: () -> ByteArray,
+    private val client: DaemonClient,
     private val onPermanentFailure: () -> Unit,
     private val onReceipt: (CompletionReceipt) -> Unit,
     private val onPairingEpochRefreshed: (PairingEpoch) -> Unit,
@@ -131,8 +132,9 @@ internal class NativeFlowDeliveryPort(
         scope.launch {
             try {
                 require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before offer" }
+                client.bind(identityKey())
                 val desktop = DaemonFlowReceiptClient(
-                    DaemonClient().also { it.bind(identityKey()) },
+                    client,
                     parsePeerAddrToken(currentPairing.daemonAddrToken),
                 )
                 val advertisedEpoch = desktop.currentPairingEpoch()
@@ -171,8 +173,9 @@ internal class NativeFlowDeliveryPort(
         scope.launch {
             runCatching {
                 val currentPairing = pairing() ?: return@runCatching
+                client.bind(identityKey())
                 val desktop = DaemonFlowReceiptClient(
-                    DaemonClient().also { it.bind(identityKey()) },
+                    client,
                     parsePeerAddrToken(currentPairing.daemonAddrToken),
                 )
                 desktop.cancel(current.request)

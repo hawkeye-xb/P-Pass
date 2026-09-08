@@ -38,7 +38,7 @@
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
 | [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
-| [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | Android Flow delivery 改复用 App 全局 Endpoint，daemon 建 `(NodeId, ALPN)` `ConnectionCache` 复用连接并追踪路径 | 先完成 Android 注入与 JVM 验证，再写 daemon 连接复用 RED→GREEN 测试 | `work/net-04` |
+| [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | Android Flow delivery 已复用 App 级 Endpoint（JVM 4/4）；daemon 待建 `(NodeId, ALPN)` `ConnectionCache` | 写 transport 缓存 RED→GREEN 测试，接入 `blobs::fetch_from` 并验证 daemon 语义 | `work/net-04` |
 
 > 2026-09-07 复核：E2E-03 / REL-05 / BUILD-03 已在 `v0.5.0-test.2~test.7`
 > 的 Release/E2E 真实运行中验证通过（GitHub Actions 逐条核实），移入
