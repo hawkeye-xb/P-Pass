@@ -1,7 +1,7 @@
 # CI-03 桌面壳 workspace 没有 fmt/clippy 门禁，格式漂移无人发现　级别 L0
 
-> 🟠 状态：进行中（2026-09-08）
-> 当前节点：核对独立 workspace 的现状并以故意未格式化代码做本地反证；下一步：提交 workflow 门禁和最小格式化结果。
+> ✅ 状态：完成（2026-09-08）
+> 当前节点：已提交 workflow 门禁和最小格式化结果（`4f941dc`，分支 `batch/ci-03`）。
 > 协同分支：`batch/ci-03`
 > 级别：L0 · 阻塞：无
 
@@ -24,14 +24,14 @@
 
 ## 验收标准
 
-- [ ] `ci-desktop.yml` 在 `cargo test --lib` 之前加两步（working-directory
+- [x] `ci-desktop.yml` 在 `cargo test --lib` 之前加两步（working-directory
       `apps/desktop/src-tauri`）：`cargo fmt -- --check`、
       `cargo clippy --all-targets -- -D warnings`
-- [ ] 先把现存漂移一次性修掉（单独一次 `cargo fmt` 提交），否则新门禁第一次
+- [x] 先把现存漂移一次性修掉（单独一次 `cargo fmt` 提交），否则新门禁第一次
       跑就红
-- [ ] 反证：在 `src-tauri` 里故意写一行未格式化代码 → 新加的 fmt 步骤变红
+- [x] 反证：在 `src-tauri` 里故意写一行未格式化代码 → 新加的 fmt 步骤变红
       （证明门禁真的在看这个 workspace，不是看主 workspace）
-- [ ] `just ci` 的语义不变（主 workspace 不去编译 Tauri 树——那正是分开的
+- [x] `just ci` 的语义不变（主 workspace 不去编译 Tauri 树——那正是分开的
       理由，不许为了统一门禁把桌面壳并回主 workspace）
 
 ## 范围
