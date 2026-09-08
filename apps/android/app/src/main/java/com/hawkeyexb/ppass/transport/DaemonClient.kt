@@ -24,6 +24,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonElement
@@ -65,6 +67,7 @@ private suspend fun Endpoint.connectBounded(addr: EndpointAddr, alpn: ByteArray)
  */
 class DaemonClient {
     private var endpoint: Endpoint? = null
+    private val bindLock = Mutex()
 
     /**
      * Bind the endpoint. Pass the device's persistent 32-byte secret so
@@ -72,13 +75,15 @@ class DaemonClient {
      * the NodeId, a fresh key would demote us to a stranger.
      */
     suspend fun bind(secretKey: ByteArray? = null): Unit = withContext(Dispatchers.IO) {
-        if (endpoint != null) return@withContext
-        val opts = EndpointOptions(
-            preset = presetN0(),
-            alpns = listOf(ALPN_CTRL.toByteArray()),
-        )
-        if (secretKey != null) opts.secretKey = secretKey
-        endpoint = Endpoint.bind(opts)
+        bindLock.withLock {
+            if (endpoint != null) return@withLock
+            val opts = EndpointOptions(
+                preset = presetN0(),
+                alpns = listOf(ALPN_CTRL.toByteArray()),
+            )
+            if (secretKey != null) opts.secretKey = secretKey
+            endpoint = Endpoint.bind(opts)
+        }
     }
 
     fun nodeIdHex(): String? = endpoint?.addr()?.id()?.toString()

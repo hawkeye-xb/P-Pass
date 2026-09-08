@@ -17,11 +17,15 @@ package com.hawkeyexb.ppass
 import android.app.Application
 import android.os.SystemClock
 import android.util.Log
+import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.backup.reconcileWatchOnProcessStart
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import kotlin.concurrent.thread
 
 class PPassApplication : Application() {
+    /** One iroh Endpoint for every foreground and Flow delivery connection in this process. */
+    val daemonClient = DaemonClient()
+
     override fun onCreate() {
         super.onCreate()
         // MOB-28: 判定与重挂全部收进 reconcileWatchOnProcessStart（开机

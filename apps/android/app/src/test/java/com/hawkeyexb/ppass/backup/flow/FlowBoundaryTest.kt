@@ -63,4 +63,19 @@ class FlowBoundaryTest {
         assertTrue("process Flow wake must precede legacy watch reconciliation", flowWake in 0 until legacyReconcile)
         assertTrue("legacy reconciliation failure must not kill the Flow process", backgroundWake.contains("runCatching {"))
     }
+
+    @Test
+    fun native_flow_delivery_uses_the_process_daemon_client_instead_of_creating_an_endpoint() {
+        val delivery = File(
+            repoRoot(),
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/NativeFlowDeliveryPort.kt",
+        ).readText()
+        val runtime = File(
+            repoRoot(),
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/AndroidFlowRuntime.kt",
+        ).readText()
+
+        assertFalse("Flow delivery must not allocate its own DaemonClient", delivery.contains("DaemonClient()"))
+        assertTrue("Flow runtime must inject the process client", runtime.contains("client = app.daemonClient"))
+    }
 }

@@ -3,8 +3,8 @@
 > 🟠 状态：进行中
 > 级别：**L2**（新协议/校验/架构类，需强 agent + 真机验证）· 阻塞：无
 > Owner: Hermes · 协同分支：`work/net-04` · Base: `3ad6248`
-> 当前节点：Android 全局 Endpoint 接线 → daemon `ConnectionCache`
-> 下一步：先完成 Android 注入路径并以 JVM 测试验证，再建立 daemon 侧 RED→GREEN 连接复用测试。
+> 当前节点：Android 已改用进程级 `DaemonClient`（JVM 4/4）→ daemon `ConnectionCache` RED→GREEN
+> 下一步：实现 `(NodeId, ALPN)` 连接缓存、路径查询与空闲回收，并完成 transport/daemon 验收。
 > ⚠️ 本卡只做 Rust daemon + Android 传输层改造，不碰任何 UI 组件。
 > UI 展示是衍生卡 NET-05（本卡未开出前不建；本卡完成后再开，
 > parents 挂本卡），不要在本卡里顺手加 UI 代码。

@@ -129,7 +129,8 @@ fun PPassApp() {
     val scope = rememberCoroutineScope()
     val identity = remember { IdentityStore(context.filesDir) }
     val pairings = remember { PairingStore(context.filesDir) }
-    val client = remember { DaemonClient() }
+    val app = context.applicationContext as PPassApplication
+    val client = remember { app.daemonClient }
 
     var screen by remember {
         mutableStateOf<Screen>(pairings.load()?.let { Screen.Home(it) } ?: Screen.Welcome)
