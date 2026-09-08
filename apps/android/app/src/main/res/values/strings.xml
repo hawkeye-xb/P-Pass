@@ -38,6 +38,12 @@
     <string name="backup_started_body">Nothing else to do. Open the app anytime to see your photos are safe.</string>
     <string name="backup_started_enter">Enter app</string>
     <string name="not_a_code">This is not a P-Pass pairing code.</string>
+    <string name="pair_unparseable_code">The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.</string>
+    <string name="storage_device_default">P-Pass storage</string>
+    <string name="update_available_title">New version v%1$s</string>
+    <string name="update_available_body">Download and install it?</string>
+    <string name="update_download_install">Download and install</string>
+    <string name="update_later">Later</string>
     <!-- Nudge card for the notification permission when not granted, same style as the battery whitelist card. -->
     <string name="notif_nudge_body">Tip: allow notifications so P-Pass can tell you if a backup fails.</string>
     <string name="notif_nudge_action">Open settings</string>
