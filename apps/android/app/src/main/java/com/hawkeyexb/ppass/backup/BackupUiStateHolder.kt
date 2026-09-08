@@ -17,6 +17,7 @@ import com.hawkeyexb.ppass.backup.flow.flowCancelledRoundNotice
 import com.hawkeyexb.ppass.backup.flow.flowCommandOf
 import com.hawkeyexb.ppass.backup.flow.flowIsAllDone
 import com.hawkeyexb.ppass.backup.flow.flowLedgerSnapshot
+import com.hawkeyexb.ppass.backup.flow.flowMissingSourceNotice
 import com.hawkeyexb.ppass.backup.flow.flowReuploadNoticeCount
 import com.hawkeyexb.ppass.backup.flow.flowUiStateOf
 import com.hawkeyexb.ppass.backup.flow.pauseFlow
@@ -63,6 +64,8 @@ class BackupUiStateHolder(
     val triplet: State<BackupTriplet?> get() = _triplet
     private val _reuploadNoticeCount = mutableStateOf(0)
     val reuploadNoticeCount: State<Int> get() = _reuploadNoticeCount
+    private val _missingSourceNotice = mutableStateOf<com.hawkeyexb.ppass.backup.flow.MissingSourceNotice?>(null)
+    val missingSourceNotice: State<com.hawkeyexb.ppass.backup.flow.MissingSourceNotice?> get() = _missingSourceNotice
     private val _pairingLost = mutableStateOf(false)
     val pairingLost: State<Boolean> get() = _pairingLost
     // UI-10 item 1: guards the silent epoch-repair attempt so it fires at
@@ -198,6 +201,7 @@ class BackupUiStateHolder(
         // UI-10 item 2: ledger-derived reupload count replaces the dead
         // LEGACY ReuploadQueue read (see flowReuploadNoticeCount doc).
         _reuploadNoticeCount.value = flowReuploadNoticeCount(snapshot)
+        _missingSourceNotice.value = flowMissingSourceNotice(snapshot)
         // MOB-59: X-05's cancelled-round notice, read from the same tick.
         _cancelledRoundNotice.value = flowCancelledRoundNotice(snapshot)
         // MOB-59: this round's own progress, not the lifetime M/N triplet.

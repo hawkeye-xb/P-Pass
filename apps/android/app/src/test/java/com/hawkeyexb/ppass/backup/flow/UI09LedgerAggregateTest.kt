@@ -110,6 +110,34 @@ class UI09LedgerAggregateTest {
     }
 
     @Test
+    fun missing_source_is_terminal_not_pending_and_does_not_block_all_safe_for_remaining_media() {
+        fun item(id: Long, state: DeliveryState) = TransferItem(
+            stableId = "content://media/external/images/media/$id\u0000generation-7",
+            sourceRef = "content://media/external/images/media/$id",
+            sourceVersion = "generation-7",
+            bucketId = 42L,
+            scopeRevision = ScopeRevision(),
+            queueSequence = id,
+            deliveryState = state,
+        )
+        val skipped = item(18, DeliveryState.SKIPPED_SOURCE_MISSING).copy(
+            sourcePresence = SourcePresence.MISSING,
+            disposition = RecoveryDisposition.UNRECOVERABLE,
+        )
+        val confirmed = item(19, DeliveryState.CONFIRMED).copy(
+            completionReceiptId = "desktop-19",
+            completedAt = 42L,
+        )
+        val snapshot = DiscoveryLedgerSnapshot(items = listOf(skipped, confirmed))
+
+        assertEquals(0L, flowAggregateOf(snapshot).pending)
+        assertEquals(1L, flowAggregateOf(snapshot).confirmed)
+        assertEquals(1, flowMissingSourceNotice(snapshot)?.count)
+        assertTrue(flowIsAllDone(snapshot, flowAggregateOf(snapshot)))
+        assertTrue(backupUiStateOf(snapshot) is com.hawkeyexb.ppass.ui.BackupUiState.AllSafe)
+    }
+
+    @Test
     fun old_ledger_json_without_completedAt_loads_and_backfills_confirmed_items() {
         // Schema compatibility: a ledger written before UI-09 has no
         // completedAt field; kotlinx defaults must let it load without

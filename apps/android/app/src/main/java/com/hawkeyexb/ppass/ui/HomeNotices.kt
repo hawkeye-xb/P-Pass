@@ -57,6 +57,9 @@ enum class HomeNoticeKind {
     /** MOB-37: 库里少了照片、正在传回来。补充信息类：用户不动手也没事。 */
     REUPLOAD,
 
+    /** A phone-deleted source cannot be sent again; informational only. */
+    SOURCE_MISSING,
+
     /** MOB-59: X-05——取消轮次的重传常驻入口，不是可关闭的提示。 */
     CANCELLED_ROUND,
 }
@@ -68,6 +71,7 @@ val HOME_NOTICE_PRIORITY: List<HomeNoticeKind> = listOf(
     HomeNoticeKind.PARTIAL_ACCESS,
     HomeNoticeKind.BATTERY_WHITELIST,
     HomeNoticeKind.NOTIFICATION_PERMISSION,
+    HomeNoticeKind.SOURCE_MISSING,
     HomeNoticeKind.CANCELLED_ROUND,
     HomeNoticeKind.REUPLOAD,
 )

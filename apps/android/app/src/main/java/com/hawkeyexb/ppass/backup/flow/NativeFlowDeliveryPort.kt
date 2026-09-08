@@ -19,6 +19,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
+import java.io.FileNotFoundException
+
+/** A discovered MediaStore URI disappeared; retrying cannot recreate it. */
+internal class SourceMissingException(cause: Throwable? = null) : Exception(cause)
 
 /** The only Desktop interaction accepted by the Android Flow delivery port. */
 internal interface FlowReceiptClient {
@@ -99,6 +103,7 @@ internal class NativeFlowDeliveryPort(
     private val pairing: () -> Pairing?,
     private val identityKey: () -> ByteArray,
     private val client: DaemonClient,
+    private val onMissingSource: () -> Unit,
     private val onPermanentFailure: () -> Unit,
     private val onReceipt: (CompletionReceipt) -> Unit,
     private val onPairingEpochRefreshed: (PairingEpoch) -> Unit,
@@ -111,13 +116,25 @@ internal class NativeFlowDeliveryPort(
         val currentPairing = requireNotNull(pairing()) { "Flow delivery requires an active pairing" }
         val epoch = PairingEpoch(currentPairing.pairingEpoch)
         require(epoch == item.pairingEpoch) { "item is not in the current pairing epoch" }
-        val hashed = item.copy(contentHash = item.contentHash ?: hashSource(item.sourceRef))
-        ledger.update { snapshot ->
-            snapshot.copy(items = snapshot.items.map { candidate ->
-                if (candidate.queueSequence == item.queueSequence) hashed else candidate
-            })
+        val hashed: TransferItem
+        val ticket: String
+        try {
+            hashed = item.copy(contentHash = item.contentHash ?: hashSource(item.sourceRef))
+            ledger.update { snapshot ->
+                snapshot.copy(items = snapshot.items.map { candidate ->
+                    if (candidate.queueSequence == item.queueSequence) hashed else candidate
+                })
+            }
+            ticket = bridge.register(hashed, epoch, lease)
+        } catch (_: SourceMissingException) {
+            Log.i("PPassFlow", "Flow source disappeared before it could be sent; skipping strict head")
+            onMissingSource()
+            return
+        } catch (failure: Throwable) {
+            Log.e("PPassFlow", "Could not prepare native Flow delivery; preserving the strict head for retry", failure)
+            onPermanentFailure()
+            return
         }
-        val ticket = bridge.register(hashed, epoch, lease)
         val request = FlowFetchRequest(
             queueSequence = hashed.queueSequence,
             pairingEpoch = epoch.value,
@@ -191,14 +208,18 @@ internal class NativeFlowDeliveryPort(
 
     private fun hashSource(sourceRef: String): String {
         val hasher = Blake3.newInstance()
-        resolver.openInputStream(Uri.parse(sourceRef)).use { input ->
-            requireNotNull(input) { "cannot open Flow source" }
-            val buffer = ByteArray(256 * 1024)
-            while (true) {
-                val count = input.read(buffer)
-                if (count < 0) break
-                hasher.update(if (count == buffer.size) buffer else buffer.copyOf(count))
+        try {
+            resolver.openInputStream(Uri.parse(sourceRef)).use { input ->
+                val presentInput = input ?: throw SourceMissingException()
+                val buffer = ByteArray(256 * 1024)
+                while (true) {
+                    val count = presentInput.read(buffer)
+                    if (count < 0) break
+                    hasher.update(if (count == buffer.size) buffer else buffer.copyOf(count))
+                }
             }
+        } catch (failure: FileNotFoundException) {
+            throw SourceMissingException(failure)
         }
         return hasher.hexdigest()
     }

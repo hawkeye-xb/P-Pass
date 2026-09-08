@@ -69,6 +69,7 @@
     <!-- MOB-59: X-05 常驻 Restore 提示（无 Discard——见 HomeScreen.kt 说明） -->
     <string name="cancelled_round_notice_body">已跳过 %1$d 张照片（取消了这些轮次）。</string>
     <string name="cancelled_round_notice_restore">重新传输</string>
+    <string name="missing_source_notice_body">已跳过 %1$d 张已从手机相册删除的照片，不会再重传。</string>
     <!-- T-083: hero 空闲态（设计稿未画，卡内裁决的最小延伸） -->
     <string name="idle_auto_hint">插电 + Wi-Fi 时自动进行</string>
     <string name="state_no_albums">没有可备份的相册（一个都没选）</string>

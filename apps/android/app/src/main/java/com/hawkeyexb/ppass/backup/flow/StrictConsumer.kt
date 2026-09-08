@@ -83,6 +83,37 @@ class StrictConsumer(
         wake(constraintsSatisfied = true)
     }
 
+    /**
+     * A discovered MediaStore URI disappeared before its bytes could be offered.
+     * This is terminal local fact, not a retryable transport failure: a retry
+     * cannot recreate a photo the user deleted.
+     */
+    fun skipMissingSource() {
+        val current = ledger.load()
+        val lease = current.fetchLease ?: return
+        ledger.update { snapshot ->
+            val items = snapshot.items.map { item ->
+                if (item.queueSequence == lease.queueSequence) {
+                    item.copy(
+                        deliveryState = DeliveryState.SKIPPED_SOURCE_MISSING,
+                        sourcePresence = SourcePresence.MISSING,
+                        disposition = RecoveryDisposition.UNRECOVERABLE,
+                        partialRetained = false,
+                    )
+                } else item
+            }
+            val nextCursor = items.firstOrNull { it.deliveryState == DeliveryState.QUEUED }
+                ?.let { UploadCursor(it.queueSequence) }
+                ?: UploadCursor.INITIAL
+            snapshot.copy(
+                uploadCursor = nextCursor,
+                consumerStatus = ConsumerStatus.IDLE,
+                fetchLease = null,
+                items = items,
+            )
+        }
+    }
+
     fun recordPermanentFailure() {
         val current = ledger.load()
         val lease = current.fetchLease ?: return

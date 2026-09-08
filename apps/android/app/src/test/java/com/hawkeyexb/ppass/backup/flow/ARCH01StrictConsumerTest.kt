@@ -187,6 +187,28 @@ class ARCH01StrictConsumerTest {
     }
 
     @Test
+    fun c06_deleted_source_is_terminal_unrecoverable_and_advances_without_retry() {
+        val dir = tempDir("c06")
+        val port = FakeDeliveryPort()
+        val consumer = StrictConsumer(seededStore(dir), port)
+
+        consumer.wake(constraintsSatisfied = true)
+        consumer.skipMissingSource()
+
+        val skipped = DiscoveryLedgerStore(dir).load()
+        val missing = skipped.items.single { it.queueSequence == 1L }
+        assertEquals(DeliveryState.SKIPPED_SOURCE_MISSING, missing.deliveryState)
+        assertEquals(SourcePresence.MISSING, missing.sourcePresence)
+        assertEquals(RecoveryDisposition.UNRECOVERABLE, missing.disposition)
+        assertEquals(UploadCursor(2L), skipped.uploadCursor)
+        assertEquals(null, skipped.fetchLease)
+
+        StrictConsumer(DiscoveryLedgerStore(dir), port).wake(constraintsSatisfied = true)
+        assertEquals("the next available source starts; the deleted source is never retried", listOf(1L, 2L), port.starts)
+        dir.deleteRecursively()
+    }
+
+    @Test
     fun c05_only_terminal_permanent_failure_advances_strict_head_to_next_item() {
         val dir = tempDir("c05")
         val port = FakeDeliveryPort()
