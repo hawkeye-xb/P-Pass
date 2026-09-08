@@ -38,6 +38,7 @@
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
 | [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
+| [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | MOB-45 已并入：页序、Telephoto 缩放/下拉关闭、全屏返回 reducer 代码完成；Android JVM 307/0/4、debug APK +707,440 bytes | Mate 60 录屏验收：边缘返回、内容翻页、缩放拖动、未缩放下拉、视频页资源释放 | `batch/mob-26-45-media-viewer` |
 
 > 2026-09-07 复核：E2E-03 / REL-05 / BUILD-03 已在 `v0.5.0-test.2~test.7`
 > 的 Release/E2E 真实运行中验证通过（GitHub Actions 逐条核实），移入
@@ -149,9 +150,6 @@
 
 
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
-| P2 | [MOB-45](../cards/MOB-45-android-swipe-back-gesture.md) | Android 侧滑返回手势 + 查看页手势分层（与 MOB-26 交集已互相标注） | L2 |
-
-
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 
 | P3 | [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁（2026-09-07 复核仍未开工，⚠️ 要动 workflows，先确认由谁改） | L0 |
@@ -165,7 +163,6 @@
 
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
 | P3 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
-| P3 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 照片查看器换成熟开源库（Telephoto/ZoomImage 等）+ 读 EXIF——2026-08-27 验收人重提解冻，从 backlog 移回 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本——当前引用了不带闪电标识的 icon（阻塞：等验收人给修改指示） | L3 |
 | P3 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册页长名称换行撑乱布局 + 缩略图模糊 | L3 |
 | P3 | [I18N-02](../cards/I18N-02-main-kotlin-hardcoded-chinese.md) | 主 Android Kotlin 的无关既有用户可见中文硬编码清债 | L1 |
