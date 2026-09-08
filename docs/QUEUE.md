@@ -38,7 +38,6 @@
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
 | [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
-| [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | MOB-45 已并入：页序、Telephoto 缩放/下拉关闭、全屏返回 reducer 代码完成；Android JVM 307/0/4、debug APK +707,440 bytes | Mate 60 录屏验收：边缘返回、内容翻页、缩放拖动、未缩放下拉、视频页资源释放 | `batch/mob-26-45-media-viewer` |
 
 > 2026-09-07 复核：E2E-03 / REL-05 / BUILD-03 已在 `v0.5.0-test.2~test.7`
 > 的 Release/E2E 真实运行中验证通过（GitHub Actions 逐条核实），移入
@@ -178,6 +177,7 @@
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 连接缓存与 Android 全局 Endpoint 已合入；真机连续 ≥5 文件应只见一次 NAT 打洞，且暂停/取消/失败重试不变 | L2 |
+| [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | MOB-45 已并入并合入 `main`：页序、Telephoto 缩放/下拉关闭、系统返回层级；Android JVM 307/0/4 | L2 |
 | [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | ✅ 已归档：三星 Pause → kill → reopen → Continue → Cancel 通过 | L2 |
 | [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 代码完成：取消后 UI 回到暂停态；待 MOB-50 合入后，以隔离测试相册验证新增媒体可完整发现、传输、确认 | L1 |
 | [MOB-50](../cards/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 代码完成：取消后复位 upload cursor；与 MOB-49 一起以隔离测试相册验证新增媒体发现、传输、确认 | L1 |
