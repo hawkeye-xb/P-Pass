@@ -28,7 +28,7 @@
   // T-092: connection 四态 → 文案/点色；字节 → 人读容量（纯函数，
   // apps/desktop/scripts/check-wire-fns.mjs 断言）
   // PRES-01: presence 三档 → 文案/点色（connection 路径事实优先展示）
-  import { presenceText } from "./lib/connection.js";
+  import { presenceText, flowConnectionText } from "./lib/connection.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
@@ -442,6 +442,18 @@
         dot: "act",
         sub: `${daysSince(lastBackupAt, now)} 天没备份了——去那台手机上打开一次 App 就会自动补上`,
         right: "需要看看",
+      };
+    }
+    // NET-05 has priority over generic presence only while this exact device
+    // owns an active Flow fetch. On every terminal path flow_connection=null,
+    // so the established presence display immediately resumes.
+    const flow = flowConnectionText(d.flow_connection);
+    if (flow) {
+      return {
+        alert: false,
+        dot: flow.dot,
+        sub: flow.sub,
+        right: backupTime ? `最近备份 ${backupTime}` : "还没备份过",
       };
     }
     const pres = presenceText(

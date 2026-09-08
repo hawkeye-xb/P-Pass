@@ -1,6 +1,6 @@
 # NET-05 Flow 数据面路径状态随传输生命周期上报　级别 L2
 
-> 🟠 状态：进行中
+> 🟡 状态：代码完成，待共享真机回归
 > 级别：L2 · 阻塞：无
 > Owner: Hermes · 分支：`work/net-05-flow-path` · Base: `6fc1748`
 > 前置：NET-04 的连接缓存与 `path_of(provider, ALPN_BLOBS)` 已在 main；**不等待**其 Pause / Cancel / Retry 真机回归后才开始本卡。
@@ -58,12 +58,12 @@ relay   → 正在经中继传输（内容加密，中继无法读取）
 
 ## 可执行验收
 
-- [ ] RED：同一控制 peer 的旧 lease 终止不得清掉新 lease 的 `flow_connection`；修正 lease 守卫前测试必须失败。
-- [ ] transport：同一 provider 的 blobs 连接建立后，回调值来自 `path_of(provider, ALPN_BLOBS)`；不同 ALPN 不混用。
-- [ ] daemon：进入 fetch 先 `unknown`，连接就绪后更新为 transport 事实，成功/错误/cancel 清回 `null`；每次有效变化各发一次 `device.changed`。
-- [ ] IPC：`devices.list` 同时保留既有 `connection` 和新的 `flow_connection`，缺活跃 fetch 时后者为 JSON null。
-- [ ] desktop：Flow 状态文案/颜色纯函数测试覆盖 null、unknown、direct、relay，且 null 回退到既有 presence 文案。
-- [ ] `cargo test -p transport`、`cargo test -p daemon --test flow_delivery`、相关 desktop tests/build、`just queue-check` 通过。
+- [x] RED：同一控制 peer 的旧 lease 终止不得清掉新 lease 的 `flow_connection`；修正 lease 守卫前测试失败。
+- [x] transport：同一 provider 的 blobs 连接建立后，回调值来自 `path_of(provider, ALPN_BLOBS)`；不同 ALPN 不混用。
+- [x] daemon：进入 fetch 先 `unknown`，连接就绪后更新为 transport 事实，成功/错误/cancel 清回 `null`；每次有效变化各发一次 `device.changed`。
+- [x] IPC：`devices.list` 同时保留既有 `connection` 和新的 `flow_connection`，缺活跃 fetch 时后者为 JSON null。
+- [x] desktop：Flow 状态文案/颜色纯函数测试覆盖 null、unknown、direct、relay，且 null 回退到既有 presence 文案。
+- [x] `cargo test -p transport`、`cargo test -p daemon --test flow_delivery`、相关 desktop tests/build、`just queue-check` 通过（本地 `just ci` 全绿）。
 - [ ] 真机验收另列于共享回归：慢速/大文件传输时，设备行先显示「正在连接/传输」，随后显示真实直连或中继；暂停/取消/失败后不残留「正在…」。
 
 ## 后续精准阶段（不在本卡）

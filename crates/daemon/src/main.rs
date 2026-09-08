@@ -132,6 +132,19 @@ async fn main() -> anyhow::Result<()> {
             t.connection_status(transport::NodeId(bytes))
         });
     }
+    // NET-05: Flow's data provider can have a different NodeId from the paired
+    // control peer. The delivery adapter maps that exact ALPN_BLOBS snapshot
+    // back to this device-keyed registry; IPC exposes null when no fetch lives.
+    let flow_paths = daemon::flow_delivery::FlowPathRegistry::default();
+    {
+        let paths = flow_paths.clone();
+        ipc.set_flow_connection_provider(move |node_id| {
+            let Ok(bytes) = <[u8; 32]>::try_from(node_id) else {
+                return None;
+            };
+            paths.get(transport::NodeId(bytes))
+        });
+    }
     ipc.set_subscriptions(subscriptions.clone());
     let ipc = std::sync::Arc::new(ipc);
     // DAE-01 单实例纪律：先试连接、版本握手（newest wins）——旧逻辑
@@ -337,6 +350,7 @@ async fn main() -> anyhow::Result<()> {
         transport::Blobs::open(&transport, &data_dir.join(".ppf/flow-blobs")).await?,
     );
     let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir)
+        .with_path_registry(flow_paths)
         .with_events(event_bus.clone());
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
         .with_events(event_bus.clone());

@@ -240,6 +240,9 @@ async fn devices_list_presence_three_tiers() {
             transport::ConnectionStatus::Unknown
         }
     });
+    ipc.set_flow_connection_provider(move |node| {
+        (node == [0xAA; 32]).then_some(transport::ConnectionStatus::Relay)
+    });
     let ipc = Arc::new(ipc);
 
     let socket = format!("ppf-test-{}-presence", std::process::id());
@@ -318,6 +321,15 @@ async fn devices_list_presence_three_tiers() {
         by_node[&hex(0xAA)]["presence"],
         "online",
         "活跃连接 = 在线（无视旧 last_seen）"
+    );
+    assert_eq!(
+        by_node[&hex(0xAA)]["flow_connection"],
+        "relay",
+        "active Flow must expose its exact blobs-plane route separately"
+    );
+    assert!(
+        by_node[&hex(0xBB)]["flow_connection"].is_null(),
+        "no active Flow is null, not an invented offline/unknown route"
     );
     assert_eq!(
         by_node[&hex(0xBB)]["presence"],

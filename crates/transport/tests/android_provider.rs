@@ -1,8 +1,11 @@
 use std::fs;
+use std::sync::{Arc, Mutex};
 
 use iroh_blobs::ticket::BlobTicket;
 use tempfile::tempdir;
-use transport::{AndroidBlobsProvider, Blobs, IrohTransport, TransportConfig, ALPN_BLOBS};
+use transport::{
+    AndroidBlobsProvider, Blobs, ConnectionStatus, IrohTransport, TransportConfig, ALPN_BLOBS,
+};
 
 #[test]
 fn provider_registration_serves_native_ticket_then_revoke_stops_it() {
@@ -69,9 +72,20 @@ fn provider_keeps_one_endpoint_for_serial_flow_items() {
         .block_on(Blobs::open(&receiver, &dir.path().join("receiver-store")))
         .unwrap();
     let provider_id = receiver.add_peer(transport::PeerAddr::from_endpoint_addr(first_addr));
+    let observed = Arc::new(Mutex::new(None));
+    let observed_by_callback = Arc::clone(&observed);
     runtime
-        .block_on(blobs.fetch_from(provider_id, first_hash))
+        .block_on(
+            blobs.fetch_from_observing_path(provider_id, first_hash, move |status| {
+                *observed_by_callback.lock().unwrap() = Some(status);
+            }),
+        )
         .unwrap();
+    assert_eq!(
+        *observed.lock().unwrap(),
+        Some(ConnectionStatus::Direct),
+        "the callback must report the selected blobs-plane path, not ctrl state"
+    );
 
     // This registration happens after the first fetch completed, mirroring
     // Flow's strict one-item progression. It must retain the provider NodeId

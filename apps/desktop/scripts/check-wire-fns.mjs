@@ -1,7 +1,7 @@
 // T-092 验收脚本：node 直跑 formatBytes / diskUsedPercent / connectionText /
 // connectionDot 边界断言。用法：node apps/desktop/scripts/check-wire-fns.mjs
 import { formatBytes, diskUsedPercent } from "../src/lib/formatBytes.js";
-import { connectionText, connectionDot, presenceText } from "../src/lib/connection.js";
+import { connectionText, connectionDot, flowConnectionText, presenceText } from "../src/lib/connection.js";
 
 let failed = 0;
 function eq(label, actual, expected) {
@@ -62,6 +62,20 @@ const eqObj = (label, actual, expected) => {
   if (!ok) failed++;
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}: got ${JSON.stringify(actual)}, want ${JSON.stringify(expected)}`);
 };
+
+// ---- NET-05 Flow 数据面生命周期状态（只在 active fetch 时覆盖既有设备态） ----
+eqObj("flow null -> null（回退既有 presence）", flowConnectionText(null), null);
+eqObj(
+  "flow unknown -> 正在连接/传输",
+  flowConnectionText("unknown"),
+  { sub: "正在连接/传输（路径尚未确认）", dot: "wait" }
+);
+eqObj("flow direct -> 正在直连传输", flowConnectionText("direct"), { sub: "正在直连传输", dot: "safe" });
+eqObj(
+  "flow relay -> 正在经中继传输",
+  flowConnectionText("relay"),
+  { sub: "正在经中继传输（内容加密，中继无法读取）", dot: "wait" }
+);
 eqObj("online+direct -> 已直连/safe", presenceText("online", "direct"), { sub: "已直连", dot: "safe" });
 eqObj(
   "online+relay -> 中继话术/wait",
