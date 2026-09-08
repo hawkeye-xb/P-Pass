@@ -2,8 +2,8 @@
 
 > 🟡 状态：代码完成，待共享真机回归（2026-09-08）
 > 当前节点：`topNotice()` 已接入真实渲染路径（`NoticeHost`），只渲染最高优先级一条；反证单测已加（`priority_selection_is_not_list_order`）。
-> 协同分支：`batch/ui-04a-c`
-> 级别：L2 · 阻塞：本批 main 集成
+> 协同分支：`main`
+> 级别：L2 · 阻塞：共享真机回归
 
 ## 问题
 

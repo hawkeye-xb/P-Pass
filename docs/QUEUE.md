@@ -35,17 +35,16 @@
 
 ## 一、进行中（已上云认领）
 
-| 卡 | 一句话 | 分支 |
-|---|---|---|
-| [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | `batch/ui-04a-c` |
-| [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 桌面改名反馈已改 fixed 浮层（代码完成），待并批后共享回归 | `batch/ui-04b` |
+无。UI-04a/UI-04b/UI-04c/UI-08 均已合入 `main`，转入下方共享回归队列。
 
 ---
 
-## 二、待你真机验收（代码已合并，就差你动手）
+## 二、待共享回归（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
+| [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 桌面改名反馈已改 fixed 浮层（代码完成），待共享桌面回归 | L2 |
 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 代码完成：长名称单行省略、封面按显示像素请求；待共享回归截图与清晰度实证 | L3 |
 | [MOB-51](../cards/MOB-51-hero-pause-not-sticky-across-round.md) | 连续备份 ≥20 张，任意时刻首页都有「暂停」；暂停 → 继续 → 取消；同轮带过 MOB-49/50 | L1 |
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |

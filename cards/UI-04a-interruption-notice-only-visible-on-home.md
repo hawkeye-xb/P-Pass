@@ -2,8 +2,8 @@
 
 > 🟡 状态：代码完成，待共享真机回归（2026-09-08）
 > 当前节点：中断提示已迁出 `HomeScreen` 局部布局，统一进 `NoticeHost`（`ui/HomeNotices.kt`）→ `TwoTabs` 顶部 slot，Photos/Backup 两页都可见。
-> 协同分支：`batch/ui-04a-c`
-> 级别：L2 · 阻塞：本批 main 集成
+> 协同分支：`main`
+> 级别：L2 · 阻塞：共享真机回归
 
 ## 问题
 
