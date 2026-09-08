@@ -37,7 +37,6 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
-| [I18N-02](../cards/I18N-02-main-kotlin-hardcoded-chinese.md) | 主 Android Kotlin 的既有用户可见中文迁入 en/zh 资源 | `batch/i18n-02` |
 | [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 补 fmt/clippy CI 门禁与既有格式修正 | `batch/ci-03` |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现 | `batch/ui-04a-c` |
 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 桌面改名反馈改为脱离文档流的 transient overlay | `batch/ui-04b` |
