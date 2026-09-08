@@ -1,9 +1,11 @@
 # UI-04b 设备改名成功用了占布局空间的提示条，该用脱离文档流的浮层　级别 L2
 
-> 🟠 状态：已认领，等待 CI-03/I18N-02 批次合入 main 后开发（2026-09-08）
-> 当前节点：已核实改名反馈实际在桌面端 `App.svelte` 的 `flashMessage()`；下一步：改为不参与布局的 transient overlay。
+> 🟡 状态：代码完成，待共享真机回归（2026-09-08）
+> 当前节点：`App.svelte` 的 `.message` 已改为 `position: fixed` 浮层（脱离文档流），
+> 改名成功/失败等瞬时反馈出现/消失不再顶动下方内容；错误反馈同机制仍可见。
+> 下一步：并入 UI 回归批次后做共享桌面回归（无布局位移走查）。
 > 协同分支：`batch/ui-04b`
-> 级别：L2 · 阻塞：本批 main 集成
+> 级别：L2 · 阻塞：本批 main 集成 + 共享回归
 
 ## 问题
 
@@ -22,7 +24,19 @@ Snackbar），不参与布局。
 
 ## 验收标准
 
-- [ ] 走查：改名反馈出现与消失时，**下方内容不发生位移**
+- [ ] 走查：改名反馈出现与消失时，**下方内容不发生位移**（共享桌面回归项，代码侧已改为 fixed 浮层）
+
+## 实施记录（2026-09-08）
+
+- `flashMessage()` 机制复用：同一 `message` 状态 + 5s 自动消失 + 手动 ×，零改动。
+- `.message` 呈现改为 `position: fixed` 浮层（top 16px 居中，z-index 60 高于
+  modal-backdrop 50），脱离文档流，出现/消失不参与布局。
+- 错误反馈（`ui.rename_failed` 等）同机制仍可见，无回归。
+- 新增 `src/renameFeedback.test.js` 源码级守卫（photoWall.test.js 同款约定）：
+  断言 `.message` 必须 `position: fixed`、不得有 `margin: 0 0 18px` 占位、
+  z-index 60 > modal-backdrop 50、改名成功/失败仍走 `flashMessage`。
+  反证：临时改回 in-flow（margin 占位）→ 2 条断言真红。
+- 桌面 Vitest 6 文件 / 43 tests 全绿（基线 5/40 + 新增 3）；`pnpm build`（vite build）成功。
 
 ## 范围
 
