@@ -37,7 +37,7 @@
 
 | 卡 | 当前节点 | 下一步 | 协同分支 |
 |---|---|---|---|
-| [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在 | 恢复其 Draft Release 与原始 9 个资产，不改 tag / current prerelease / dogfood | `main` |
+| [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在；2026-09-07 复核 Release 页面实际只剩 2 个文件（应有 9 个） | 从 Release #24 的 Actions artifact 逐一下载补齐缺失的 7 个资产，不改 tag / current prerelease / dogfood | `main` |
 
 > 2026-09-07 复核：E2E-03 / REL-05 / BUILD-03 已在 `v0.5.0-test.2~test.7`
 > 的 Release/E2E 真实运行中验证通过（GitHub Actions 逐条核实），移入
