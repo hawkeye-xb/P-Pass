@@ -7,8 +7,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use iroh::endpoint::{presets, Connection, ReadExactError, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
@@ -119,15 +120,140 @@ impl std::str::FromStr for PeerAddr {
     }
 }
 
-/// The iroh transport: one QUIC endpoint plus bookkeeping for
-/// [`Transport::conn_info`] lookups.
+/// Connections unused for this duration are explicitly closed by the cache reaper.
+const CONNECTION_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ConnectionKey {
+    peer: NodeId,
+    alpn: String,
+}
+
+impl ConnectionKey {
+    fn new(peer: NodeId, alpn: &str) -> Self {
+        Self {
+            peer,
+            alpn: alpn.to_owned(),
+        }
+    }
+}
+
+struct CachedConnection {
+    conn: Connection,
+    last_stream_at: Instant,
+}
+
+/// One live QUIC connection per `(NodeId, ALPN)`. QUIC multiplexes streams,
+/// so callers share the connection instead of building a traditional pool.
+#[derive(Default)]
+struct ConnectionCache {
+    entries: HashMap<ConnectionKey, CachedConnection>,
+}
+
+impl ConnectionCache {
+    fn get_live(&mut self, peer: NodeId, alpn: &str) -> Option<Connection> {
+        let key = ConnectionKey::new(peer, alpn);
+        let entry = self.entries.get_mut(&key)?;
+        if entry.conn.close_reason().is_some() {
+            self.entries.remove(&key);
+            return None;
+        }
+        entry.last_stream_at = Instant::now();
+        Some(entry.conn.clone())
+    }
+
+    fn insert(&mut self, peer: NodeId, alpn: &str, conn: Connection) {
+        self.entries.insert(
+            ConnectionKey::new(peer, alpn),
+            CachedConnection {
+                conn,
+                last_stream_at: Instant::now(),
+            },
+        );
+    }
+
+    fn latest_live(&mut self, peer: NodeId) -> Option<Connection> {
+        let now = Instant::now();
+        let key = self
+            .entries
+            .iter()
+            .filter(|(key, entry)| key.peer == peer && entry.conn.close_reason().is_none())
+            .max_by_key(|(_, entry)| entry.last_stream_at)
+            .map(|(key, _)| key.clone())?;
+        let entry = self.entries.get_mut(&key).expect("cache key exists");
+        entry.last_stream_at = now;
+        Some(entry.conn.clone())
+    }
+
+    fn evict_idle(&mut self, now: Instant) -> Vec<Connection> {
+        let mut stale = Vec::new();
+        self.entries.retain(|_, entry| {
+            let closed = entry.conn.close_reason().is_some();
+            let idle = now.duration_since(entry.last_stream_at) >= CONNECTION_IDLE_TIMEOUT;
+            if !closed && idle {
+                stale.push(entry.conn.clone());
+            }
+            !closed && !idle
+        });
+        stale
+    }
+
+    fn remove_if_same(&mut self, key: &ConnectionKey, conn: &Connection) {
+        if self
+            .entries
+            .get(key)
+            .is_some_and(|entry| entry.conn.stable_id() == conn.stable_id())
+        {
+            self.entries.remove(key);
+        }
+    }
+}
+
+fn spawn_connection_reaper(cache: Weak<Mutex<ConnectionCache>>) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(CONNECTION_IDLE_TIMEOUT);
+        loop {
+            tick.tick().await;
+            let Some(cache) = cache.upgrade() else {
+                return;
+            };
+            let stale = cache
+                .lock()
+                .expect("connection cache lock")
+                .evict_idle(Instant::now());
+            for conn in stale {
+                conn.close(0u32.into(), b"connection cache idle");
+            }
+        }
+    });
+}
+
+fn watch_connection_close(
+    cache: Weak<Mutex<ConnectionCache>>,
+    key: ConnectionKey,
+    conn: Connection,
+) {
+    tokio::spawn(async move {
+        let _ = conn.closed().await;
+        if let Some(cache) = cache.upgrade() {
+            cache
+                .lock()
+                .expect("connection cache lock")
+                .remove_if_same(&key, &conn);
+        }
+    });
+}
+
+/// The iroh transport: one QUIC endpoint plus its keyed connection cache.
 #[derive(Clone)]
 pub struct IrohTransport {
     ep: Endpoint,
     /// Peer address book, fed by [`Self::add_peer`] (pairing/tickets).
     peers: Arc<Mutex<HashMap<NodeId, EndpointAddr>>>,
-    /// Live connections per peer — latest wins. Sole consumer: `conn_info`.
-    conns: Arc<Mutex<HashMap<NodeId, Connection>>>,
+    connections: Arc<Mutex<ConnectionCache>>,
+    /// Serializes cache misses so concurrent requests for one key cannot
+    /// perform duplicate handshakes before either inserts its connection.
+    connect_gate: Arc<tokio::sync::Mutex<()>>,
     /// Optional blobs handler: `listen` routes `ALPN_BLOBS` connections
     /// here instead of the ctrl stream (one endpoint = one accept queue;
     /// a daemon serving both planes shares the loop, T-033).
@@ -181,10 +307,13 @@ impl IrohTransport {
             .await
             .map_err(|e| TransportError::Bind(e.to_string()))?;
 
+        let connections = Arc::<Mutex<ConnectionCache>>::default();
+        spawn_connection_reaper(Arc::downgrade(&connections));
         Ok(Self {
             ep,
             peers: Arc::default(),
-            conns: Arc::default(),
+            connections,
+            connect_gate: Arc::default(),
             blobs_handler: Arc::default(),
         })
     }
@@ -237,21 +366,26 @@ impl IrohTransport {
 
     /// T-090: neutral connection status of one peer, for `devices.list`.
     ///
-    /// Evidence source is the live [`Connection`]'s `paths()` — iroh 1.x's
-    /// per-path facts (`is_selected` / `is_relay` / `remote_addr`), the
-    /// successor of the old `Endpoint::remote_info` / `conn_type` surface.
-    /// No open connection (or a closed one) = `Offline`; a live connection
-    /// with no readable path yet = `Unknown`. `last_seen` is never
-    /// consulted — history must not masquerade as liveness (T-090 契约).
+    /// This legacy peer-only projection selects the most recently used live
+    /// cached connection. New transport callers that need ALPN-specific facts
+    /// use [`Self::path_of`].
     pub fn connection_status(&self, peer: NodeId) -> ConnectionStatus {
-        let conns = self.conns.lock().expect("conns lock");
-        let Some(conn) = conns.get(&peer) else {
+        let mut cache = self.connections.lock().expect("connection cache lock");
+        let Some(conn) = cache.latest_live(peer) else {
             return ConnectionStatus::Offline;
         };
-        if conn.close_reason().is_some() {
-            return ConnectionStatus::Offline;
-        }
-        status_of_live(classify(&path_facts(conn)))
+        status_of_live(classify(&path_facts(&conn)))
+    }
+
+    /// Return the current path facts for one cached `(peer, ALPN)` connection.
+    /// No cache entry or a connection closed by either endpoint yields `None`.
+    pub fn path_of(&self, peer: NodeId, alpn: &str) -> Option<ConnInfo> {
+        let conn = self
+            .connections
+            .lock()
+            .expect("connection cache lock")
+            .get_live(peer, alpn)?;
+        Some(classify(&path_facts(&conn)))
     }
 
     /// Crate-internal endpoint access (blobs.rs shares the endpoint).
@@ -265,26 +399,61 @@ impl IrohTransport {
         *self.blobs_handler.lock().expect("blobs handler lock") = Some(handler);
     }
 
-    /// Crate-internal: raw connection to a peer (blobs.rs fetches over
-    /// its own ALPN). Uses the address book — which includes addresses
-    /// observed from inbound connections — falling back to id-only.
-    pub(crate) async fn connect_raw(
-        &self,
-        peer: NodeId,
-        alpn: &str,
-    ) -> Result<iroh::endpoint::Connection> {
+    fn discard_if_same(&self, peer: NodeId, alpn: &str, conn: &Connection) {
+        self.connections
+            .lock()
+            .expect("connection cache lock")
+            .remove_if_same(&ConnectionKey::new(peer, alpn), conn);
+    }
+
+    /// Crate-internal: fetch or create the single live connection for one
+    /// `(peer, ALPN)` key. A live connection returns immediately; a closed
+    /// one is removed before reconnecting.
+    pub(crate) async fn get_or_connect(&self, peer: NodeId, alpn: &str) -> Result<Connection> {
+        if let Some(conn) = self
+            .connections
+            .lock()
+            .expect("connection cache lock")
+            .get_live(peer, alpn)
+        {
+            return Ok(conn);
+        }
+
+        let _connect_gate = self.connect_gate.lock().await;
+        if let Some(conn) = self
+            .connections
+            .lock()
+            .expect("connection cache lock")
+            .get_live(peer, alpn)
+        {
+            return Ok(conn);
+        }
+
         let known = self.peers.lock().expect("peers lock").get(&peer).cloned();
         let addr = match known {
-            Some(a) => a,
+            Some(addr) => addr,
             None => EndpointAddr::from(endpoint_id(peer)?),
         };
-        self.ep
-            .connect(addr, alpn.as_bytes())
-            .await
-            .map_err(|e| TransportError::Connect {
-                peer,
-                reason: e.to_string(),
-            })
+        let conn =
+            self.ep
+                .connect(addr, alpn.as_bytes())
+                .await
+                .map_err(|e| TransportError::Connect {
+                    peer,
+                    reason: e.to_string(),
+                })?;
+        let key = ConnectionKey::new(peer, alpn);
+        self.connections
+            .lock()
+            .expect("connection cache lock")
+            .insert(peer, alpn, conn.clone());
+        watch_connection_close(Arc::downgrade(&self.connections), key, conn.clone());
+        Ok(conn)
+    }
+
+    /// Crate-internal raw connection for the blobs fetch path.
+    pub(crate) async fn connect_raw(&self, peer: NodeId, alpn: &str) -> Result<Connection> {
+        self.get_or_connect(peer, alpn).await
     }
 }
 
@@ -294,7 +463,7 @@ impl Transport for IrohTransport {
     async fn listen(&self) -> impl futures_core::Stream<Item = Incoming> {
         let (tx, rx) = tokio::sync::mpsc::channel(16);
         let ep = self.ep.clone();
-        let conns = Arc::clone(&self.conns);
+        let connections = Arc::clone(&self.connections);
 
         let peers = Arc::clone(&self.peers);
         let blobs_handler = Arc::clone(&self.blobs_handler);
@@ -304,7 +473,7 @@ impl Transport for IrohTransport {
                     continue;
                 };
                 let tx = tx.clone();
-                let conns = Arc::clone(&conns);
+                let connections = Arc::clone(&connections);
                 let peers = Arc::clone(&peers);
                 let blobs_handler = Arc::clone(&blobs_handler);
                 // Finish each handshake off the accept loop so one slow
@@ -317,7 +486,14 @@ impl Transport for IrohTransport {
                         return;
                     };
                     let peer = NodeId(*conn.remote_id().as_bytes());
-                    conns.lock().expect("conns lock").insert(peer, conn.clone());
+                    let alpn = String::from_utf8_lossy(&alpn).into_owned();
+                    let key = ConnectionKey::new(peer, &alpn);
+                    connections.lock().expect("connection cache lock").insert(
+                        peer,
+                        &alpn,
+                        conn.clone(),
+                    );
+                    watch_connection_close(Arc::downgrade(&connections), key, conn.clone());
                     // Register the dialer's observed addresses so this side
                     // can dial BACK (e.g. blobs pull during backup, T-032) —
                     // inbound peers are reachable without discovery services.
@@ -336,7 +512,6 @@ impl Transport for IrohTransport {
                         };
                         peers.lock().expect("peers lock").insert(peer, ep_addr);
                     }
-                    let alpn = String::from_utf8_lossy(&alpn).into_owned();
                     // Data-plane connections go straight to the blobs
                     // handler; only ctrl-plane connections reach the app.
                     if alpn == crate::ALPN_BLOBS {
@@ -356,43 +531,30 @@ impl Transport for IrohTransport {
     }
 
     async fn connect(&self, peer: NodeId, alpn: &str) -> Result<BiStream> {
-        let known = self.peers.lock().expect("peers lock").get(&peer).cloned();
-        let addr = match known {
-            Some(a) => a,
-            // Not in the address book: fall back to identity-only dialing,
-            // which needs address lookup services to resolve.
-            None => EndpointAddr::from(endpoint_id(peer)?),
+        let conn = self.get_or_connect(peer, alpn).await?;
+        let (send, recv) = match conn.open_bi().await {
+            Ok(streams) => streams,
+            Err(_) => {
+                // A remote close can be in flight before `close_reason()` is
+                // observable locally. Drop this cache entry and retry once on
+                // a fresh connection rather than handing callers a dead stream.
+                self.discard_if_same(peer, alpn, &conn);
+                let fresh = self.get_or_connect(peer, alpn).await?;
+                fresh
+                    .open_bi()
+                    .await
+                    .map_err(|e| TransportError::Io(e.to_string()))?
+            }
         };
-
-        let conn =
-            self.ep
-                .connect(addr, alpn.as_bytes())
-                .await
-                .map_err(|e| TransportError::Connect {
-                    peer,
-                    reason: e.to_string(),
-                })?;
-        self.conns
-            .lock()
-            .expect("conns lock")
-            .insert(peer, conn.clone());
-
-        let (send, recv) = conn
-            .open_bi()
-            .await
-            .map_err(|e| TransportError::Io(e.to_string()))?;
         Ok(BiStream { send, recv })
     }
 
     fn conn_info(&self, peer: NodeId) -> ConnInfo {
-        let conns = self.conns.lock().expect("conns lock");
-        let Some(conn) = conns.get(&peer) else {
+        let mut cache = self.connections.lock().expect("connection cache lock");
+        let Some(conn) = cache.latest_live(peer) else {
             return ConnInfo::NONE;
         };
-        if conn.close_reason().is_some() {
-            return ConnInfo::NONE;
-        }
-        classify(&path_facts(conn))
+        classify(&path_facts(&conn))
     }
 }
 

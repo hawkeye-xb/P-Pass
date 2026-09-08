@@ -45,6 +45,7 @@ P1 index / 索引
 P2 transport / 传输
 - [x] T-020 Transport trait + iroh impl (1000-message loopback)
 - [x] T-021 iroh-blobs + disconnect injection (5× zero-flake)
+- [x] **NET-04 connection cache + path tracking (2026-09-08)** — daemon caches one live connection per `(NodeId, ALPN)`, reuses it for streams and exposes ALPN-keyed path facts; Android Flow delivery now shares the process `DaemonClient` Endpoint. Local Rust/Android checks passed; real-device ≥5-file reuse and pause/cancel/retry regression remain explicitly in the true-device queue.
 
 P3 daemon
 - [x] T-030 ALPN router + whitelist authz checkpoint
