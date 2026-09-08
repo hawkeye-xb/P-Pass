@@ -11,6 +11,7 @@ import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -121,6 +122,7 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
     var inputError by remember { mutableStateOf(false) }
 
     if (manual) {
+        BackHandler { manual = false }
         ManualPairScreen(
             input = input,
             onInputChange = { input = it; inputError = false },

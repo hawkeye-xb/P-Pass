@@ -10,6 +10,7 @@ import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -95,7 +96,7 @@ import com.hawkeyexb.ppass.update.channelFromVersion
 import com.hawkeyexb.ppass.update.downloadAndInstall
 import com.hawkeyexb.ppass.update.fetchUpdate
 
-private sealed class Screen {
+internal sealed class Screen {
     data object Welcome : Screen()
     data object Scan : Screen()
     data class Waiting(val qr: String) : Screen()
@@ -110,6 +111,15 @@ private sealed class Screen {
     // M6 完成页（全页面状态稿）：选相册→触发首次备份之后、落到 Home 之前
     // 的安心收尾页。
     data class Started(val pairing: Pairing, val photoCount: Int) : Screen()
+}
+
+/** System back for secondary app screens; null leaves the root gesture to Android. */
+internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
+    Screen.Welcome, is Screen.Home -> null
+    Screen.Scan -> Screen.Welcome
+    is Screen.Waiting, is Screen.Trouble -> Screen.Scan
+    is Screen.Buckets -> Screen.Home(screen.pairing)
+    is Screen.Started -> Screen.Home(screen.pairing)
 }
 
 class MainActivity : ComponentActivity() {
@@ -400,6 +410,10 @@ fun PPassApp() {
                 firstTime,
             )
         }
+    }
+
+    systemBackTarget(screen)?.let { target ->
+        BackHandler { screen = target }
     }
 
     when (val s = screen) {
