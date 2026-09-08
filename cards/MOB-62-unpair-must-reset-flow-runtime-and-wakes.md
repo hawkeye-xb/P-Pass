@@ -1,6 +1,6 @@
 # MOB-62 断开后重扫必须清空旧 Flow 运行态（L2）
 
-> 🟠 状态：进行中（2026-09-08）· 当前节点：三星真机实证断开→重扫后 ANR；旧 Flow runtime、账本及多个 wake work 未随配对清除，重连同一 daemon NodeId 时旧任务继续 offer · 下一步：断开路径原子取消全部 wake、释放 runtime/provider、删除该 remote Flow ledger，再写回归用例 · 协同分支：`main`
+> 🟡 状态：代码完成（本机验证通过），等真机验收 · 当前节点：断开会取消全部 wake、关闭 native provider、删除该 remote Flow ledger · 下一步：三星断开→重扫→首页，确认无 ANR/旧 offer · 协同分支：`main`
 > 级别：L2 · 阻塞：无
 
 ## 问题
