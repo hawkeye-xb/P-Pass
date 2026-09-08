@@ -1,6 +1,6 @@
 # MOB-62 断开后重扫必须清空旧 Flow 运行态（L2）
 
-> 🟡 状态：代码完成（本机验证通过），等真机验收 · 当前节点：断开会取消全部 wake、关闭 native provider、删除该 remote Flow ledger · 下一步：三星断开→重扫→首页，确认无 ANR/旧 offer · 协同分支：`main`
+> 🟡 状态：本轮三星断开→重配对验证通过，待共享回归 · 当前节点：断开会取消全部 wake、关闭 native provider、删除该 remote Flow ledger · 下一步：统一回归时选择隔离相册并开始一轮新备份，确认首次 wake 只读新 runtime/new ledger · 协同分支：`main`
 > 级别：L2 · 阻塞：无
 
 ## 问题
