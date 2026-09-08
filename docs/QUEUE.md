@@ -37,6 +37,7 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
+| [NET-05](../cards/NET-05-flow-data-path-status-follows-transfer-lifecycle.md) | Flow 数据面路径状态随生命周期上报：先 `unknown`，连接就绪后按 blobs 实况显示直连/中继，终态清除 | `work/net-05-flow-path` |
 
 其余 UI-04a/UI-04b/UI-04c/UI-08 均已合入 `main`，转入下方共享回归队列。
 
