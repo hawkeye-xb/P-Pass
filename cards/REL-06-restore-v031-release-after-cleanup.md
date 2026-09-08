@@ -38,3 +38,7 @@ Windows 与 Windows installer artifacts 仍可从 Actions 获取。
 ## 实施记录
 
 - 2026-09-04：确认远端保留 `v0.3.1 -> 9c66c76` 与 `dogfood`、`v0.5.0-test.4`。Release #24 为 Success，四个 Actions artifact 仍在，含恢复所需九个资产。
+- 2026-09-07：现场复核 `v0.3.1` Release 页面，实际只剩 **2 个文件**，应有 9
+  个（原始 Android/macOS/Windows 全平台资产）——恢复动作尚未执行，只是
+  确认了缺口范围比 2026-09-04 记录时更明确。下一步：从 Release #24 的四个
+  Actions artifact 里把缺失的 7 个资产逐一下载后上传补齐到 `v0.3.1` Draft。
