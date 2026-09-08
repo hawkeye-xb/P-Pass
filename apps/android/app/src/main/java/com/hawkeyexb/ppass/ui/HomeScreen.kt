@@ -143,6 +143,8 @@ fun HomeScreen(
     // 不再有 Discard：真机反馈明确指出"点了不用了就没法处理了"是死路，
     // 所以这条提示只有一个动作，且在有取消批次时永远显示，不会消失。
     cancelledRoundNotice: com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice? = null,
+    // MOB-61: a source deleted from the phone is terminal, with no retry action.
+    missingSourceNotice: com.hawkeyexb.ppass.backup.flow.MissingSourceNotice? = null,
     onRestoreCancelledRounds: () -> Unit = {},
     // MOB-59: 本轮自己的进度（0 起算），与上方 hero 的终身 M/N 三元组
     // 是两回事——真机反馈：中途加相册后进度条直接跳到"15/15"附近，
@@ -550,6 +552,19 @@ fun HomeScreen(
                     )
                 }
             }
+        }
+
+        // ── MOB-61: a photo removed from the phone after discovery cannot be
+        // recovered by retry. Keep the fact visible, but deliberately provide
+        // no "send again" action and never reuse the cancelled-round notice.
+        if (missingSourceNotice != null) {
+            Spacer(Modifier.height(12.dp))
+            NoticeCard(
+                HomeNotice(
+                    kind = HomeNoticeKind.SOURCE_MISSING,
+                    body = stringResource(R.string.missing_source_notice_body, missingSourceNotice.count),
+                )
+            )
         }
 
         // ── MOB-59: 取消轮的常驻 Restore 入口（X-05，之前只在测试里存在）。

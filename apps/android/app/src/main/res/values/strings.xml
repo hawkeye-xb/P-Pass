@@ -72,6 +72,7 @@
     <!-- MOB-59: X-05 persistent Restore notice (no Discard — see HomeScreen.kt) -->
     <string name="cancelled_round_notice_body">Skipped %1$d photo(s) from cancelled rounds.</string>
     <string name="cancelled_round_notice_restore">Send again</string>
+    <string name="missing_source_notice_body">Skipped %1$d photo(s) deleted from this phone. They will not be retried.</string>
     <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
     <string name="idle_auto_hint">Runs by itself while charging on Wi-Fi</string>
     <string name="state_no_albums">No albums selected — nothing to back up</string>

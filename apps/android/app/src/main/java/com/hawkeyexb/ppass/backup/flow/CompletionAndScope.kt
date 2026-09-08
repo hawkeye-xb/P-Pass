@@ -43,7 +43,9 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
                 it.queueSequence == receipt.queueSequence && it.pairingEpoch == receipt.pairingEpoch
             } ?: return@update snapshot
             if (receipt.contentHash != null && item.contentHash != null && item.contentHash != receipt.contentHash) return@update snapshot
-            if (item.deliveryState == DeliveryState.CANCELLED_BY_SCOPE) return@update snapshot
+            if (item.deliveryState == DeliveryState.CANCELLED_BY_SCOPE ||
+                item.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING
+            ) return@update snapshot
             val items = snapshot.items.map { item ->
                 if (item.queueSequence == receipt.queueSequence) {
                     item.copy(

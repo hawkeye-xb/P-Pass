@@ -570,6 +570,7 @@ fun PPassApp() {
                         commandPending = holder.commandPending.value,
                         // MOB-59: X-05 的常驻 Restore（无 Discard）。
                         cancelledRoundNotice = holder.cancelledRoundNotice.value,
+                        missingSourceNotice = holder.missingSourceNotice.value,
                         onRestoreCancelledRounds = { holder.restoreCancelledRounds() },
                         // MOB-59: 本轮自己的进度（0 起算，见 HomeScreen.kt 说明）。
                         roundProgress = holder.roundProgress.value,

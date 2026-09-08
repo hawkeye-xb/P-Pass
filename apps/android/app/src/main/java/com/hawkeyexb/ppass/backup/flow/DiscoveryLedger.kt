@@ -60,6 +60,8 @@ enum class DeliveryState {
     TRANSFERRING,
     FAILED_NEEDS_USER,
     CONFIRMED,
+    /** The phone source vanished after discovery; no retry can recover it. */
+    SKIPPED_SOURCE_MISSING,
     CANCELLED_BY_SCOPE,
     CANCELLED_BY_USER_ROUND,
 }

@@ -5,13 +5,13 @@
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
 **Now / 当前位置**（2026-09-08）: M0/M1 closed; M2 Android is in
-real-device dogfood. The first validation item is MOB-51: through a full
-round, the home hero must keep Pause reachable, then support Pause → Resume
-→ Cancel; the same run also validates MOB-49/50 and UI-09's final flow.
-Historical `v0.3.1` Release assets are explicitly not being restored.
-**当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。当前首项是 MOB-51：
-完整一轮备份中首页英雄区必须始终可暂停，再验暂停 → 继续 → 取消；同轮带过
-MOB-49/50 与 UI-09 的最终流转。历史 `v0.3.1` Release 产物已明确不恢复。
+real-device dogfood. MOB-61 is code-complete: a phone photo deleted after
+Flow discovery is now terminally skipped, never retried; the Samsung
+isolated-photo check remains. NET-04 pause/cancel/retry remains blocked by
+the separate `flow.fetch` 15-second RPC-deadline investigation.
+**当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。MOB-61 已代码完成：
+手机照片在 Flow 发现后被删除会终态跳过，绝不重传；三星隔离照片验收仍欠。
+NET-04 的暂停/取消/重试仍被独立的 `flow.fetch` 15 秒 RPC 截止问题阻塞。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 

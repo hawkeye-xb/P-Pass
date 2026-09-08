@@ -42,7 +42,6 @@
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现 | `batch/ui-04a-c` |
 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 桌面改名反馈改为脱离文档流的 transient overlay | `batch/ui-04b` |
 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册长名称截断与缩略图清晰度链路修复 | `batch/ui-08` |
-| [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 手机相册源已删除时落不可恢复跳过，不崩溃、不循环重传 | `main` |
 
 ---
 
@@ -51,6 +50,7 @@
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [MOB-51](../cards/MOB-51-hero-pause-not-sticky-across-round.md) | 连续备份 ≥20 张，任意时刻首页都有「暂停」；暂停 → 继续 → 取消；同轮带过 MOB-49/50 | L1 |
+| [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 页序、Telephoto 缩放/下拉关闭、系统返回层级 | L2 |

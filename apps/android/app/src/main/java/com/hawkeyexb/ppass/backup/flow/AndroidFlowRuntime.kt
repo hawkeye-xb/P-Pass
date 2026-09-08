@@ -8,6 +8,7 @@ import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairingStore
 import java.io.File
+import java.io.FileNotFoundException
 import java.util.UUID
 import kotlin.concurrent.thread
 
@@ -226,7 +227,12 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
         lateinit var runner: FlowRunner
         val native = AndroidNativeIrohBlobsProvider.open(context.filesDir)
         val bridge = IrohBlobsProviderBridge(native) { source ->
-            requireNotNull(context.contentResolver.openFileDescriptor(Uri.parse(source), "r"))
+            try {
+                context.contentResolver.openFileDescriptor(Uri.parse(source), "r")
+                    ?: throw SourceMissingException()
+            } catch (failure: FileNotFoundException) {
+                throw SourceMissingException(failure)
+            }
         }
         val delivery = NativeFlowDeliveryPort(
             ledger = ledger,
@@ -246,6 +252,10 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             // delivery failures logged 322ms apart from different threads
             // (2026-09-07, Samsung SM-S9210, after MOB-54 made a failed
             // fetch's retry synchronous with the next wake).
+            // A deleted MediaStore URI is a terminal local fact, unlike a network
+            // failure. It must skip exactly this head and advance, never reset a
+            // retry budget or surface "try again" for a photo that no longer exists.
+            onMissingSource = { synchronized(flowTriggerLock) { runner.skipMissingSource() } },
             onPermanentFailure = { synchronized(flowTriggerLock) { runner.recordPermanentFailure() } },
             onReceipt = { receipt -> synchronized(flowTriggerLock) { runner.acceptCompletionReceipt(receipt) } },
             onPairingEpochRefreshed = { refreshedEpoch ->

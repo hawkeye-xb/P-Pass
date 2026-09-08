@@ -131,6 +131,12 @@ class FlowRunner(
         consumer.wake(constraintsSatisfied = true)
     }
 
+    /** A deleted phone source is terminal; immediately advance past it. */
+    fun skipMissingSource() {
+        consumer.skipMissingSource()
+        consumer.wake(constraintsSatisfied = true)
+    }
+
     /**
      * MOB-59: X-05's explicit user action, finally wired to production, and
      * corrected to survive repeated cancels (2026-09-07 real device: cancelling
@@ -174,6 +180,7 @@ class FlowRunner(
         snapshot.items.all { item ->
             item.deliveryState == DeliveryState.CONFIRMED ||
                 item.deliveryState == DeliveryState.FAILED_NEEDS_USER ||
+                item.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING ||
                 item.deliveryState == DeliveryState.CANCELLED_BY_SCOPE ||
                 item.deliveryState == DeliveryState.CANCELLED_BY_USER_ROUND
         }

@@ -49,7 +49,10 @@ fun flowAggregateOf(snapshot: DiscoveryLedgerSnapshot): FlowAggregate {
                 confirmed += 1
                 if (item.completedAt > lastSuccessAt) lastSuccessAt = item.completedAt
             }
-            DeliveryState.CANCELLED_BY_SCOPE, DeliveryState.CANCELLED_BY_USER_ROUND -> Unit
+            DeliveryState.CANCELLED_BY_SCOPE,
+            DeliveryState.CANCELLED_BY_USER_ROUND,
+            DeliveryState.SKIPPED_SOURCE_MISSING,
+            -> Unit
         }
     }
     return FlowAggregate(pending = pending, confirmed = confirmed, lastSuccessAt = lastSuccessAt)
@@ -61,7 +64,10 @@ fun flowAggregateOf(snapshot: DiscoveryLedgerSnapshot): FlowAggregate {
  * (nothing discovered yet) is deliberately NOT all-done; it renders Ready.
  */
 fun flowIsAllDone(snapshot: DiscoveryLedgerSnapshot, aggregate: FlowAggregate): Boolean =
-    snapshot.items.isNotEmpty() && aggregate.confirmed == snapshot.items.size.toLong()
+    aggregate.confirmed > 0L && snapshot.items.all {
+        it.deliveryState == DeliveryState.CONFIRMED ||
+            it.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING
+    }
 
 /**
  * MOB-51: the durable round-active fact. A round is running while the gate
@@ -152,6 +158,18 @@ fun flowCommandOf(snapshot: DiscoveryLedgerSnapshot): FlowCommand =
  */
 fun flowReuploadNoticeCount(snapshot: DiscoveryLedgerSnapshot): Int =
     snapshot.items.count { it.disposition == RecoveryDisposition.NEEDS_DECISION }
+
+/** A phone-deleted source was skipped; it is informative and never retryable. */
+data class MissingSourceNotice(val count: Int)
+
+fun flowMissingSourceNotice(snapshot: DiscoveryLedgerSnapshot): MissingSourceNotice? {
+    val count = snapshot.items.count {
+        it.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING &&
+            it.sourcePresence == SourcePresence.MISSING &&
+            it.disposition == RecoveryDisposition.UNRECOVERABLE
+    }
+    return if (count > 0) MissingSourceNotice(count) else null
+}
 
 /**
  * MOB-59: the first cut only counted the *latest* round's items, so cancelling
