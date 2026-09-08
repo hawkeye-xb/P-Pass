@@ -8,13 +8,13 @@
 real-device dogfood. MOB-61 is code-complete: a phone photo deleted after
 Flow discovery is now terminally skipped, never retried; the Samsung
 isolated-photo check remains. NET-04 pause/cancel/retry remains blocked by
-the separate `flow.fetch` 15-second RPC-deadline investigation. UI-04b is
-code-complete: desktop rename feedback is now a fixed overlay (out of
-document flow), pending the shared desktop regression walkthrough.
+the separate `flow.fetch` 15-second RPC-deadline investigation. The
+UI-04a/UI-04b/UI-04c/UI-08 batch is code-complete and pending the shared
+Android/desktop regression walkthroughs.
 **当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。MOB-61 已代码完成：
 手机照片在 Flow 发现后被删除会终态跳过，绝不重传；三星隔离照片验收仍欠。
 NET-04 的暂停/取消/重试仍被独立的 `flow.fetch` 15 秒 RPC 截止问题阻塞。
-UI-04b 已代码完成：桌面改名反馈改为 fixed 浮层（脱离文档流），待共享桌面回归走查。
+UI-04a/UI-04b/UI-04c/UI-08 批次均已代码完成，待共享 Android/桌面回归走查。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 
@@ -586,7 +586,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       改，否则下次 UI 走查会把这里判成「未实现」。已 grep 确认没有测试钉这两个
       标题的样式。挂账：真机确认两页顶部无大字、不贴状态栏（用户）。
 - [~] UI-08 选相册长名称截断与缩略图清晰度链路 — **2026-09-08 代码完成，待共享真机回归**：根因是 `BucketScreen` 原先固定请求 `loadThumbnail(Size(200, 200))`，而封面卡按实际网格显示像素绘制，低分辨率位图随后被放大；长名称 `Text` 没有单行溢出约束且使用非填满权重，Row 可换行撑高。修复为用 `onSizeChanged` 读取封面 Box 的实际 `IntSize`，请求与缓存 key 均带显示宽高；名称改 `weight(1f)`、`maxLines = 1`、`TextOverflow.Ellipsis`，不动选中集合/桶计数语义。新增源码守卫 2 条，Android JVM **313/0/0/4 ignored**（`--rerun-tasks`，60 个 fresh XML）；截图和真实视觉清晰度证据留给共享回归。
-- [ ] UI-04a + UI-04c 全局提示容器与最高优先级单条呈现 — **🟡 2026-09-08 代码完成（batch/ui-04a-c），待共享真机回归**：
+- [~] UI-04a + UI-04c 全局提示容器与最高优先级单条呈现 — **🟡 2026-09-08 代码完成（已合入 main），待共享真机回归**：
       两张卡共享同一提示呈现层，合并落地。`ui/HomeNotices.kt` 新增 `NoticeHost`
       （电池白名单/通知引导/中断恢复/取消轮入口/重传告知五条输入集中构造候选 →
       `topNotice` 只渲染最高优先级一条，其余收起），`TwoTabs` 顶部加 `notice` slot
@@ -597,6 +597,10 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       Android JVM 309/0/0/4（59 XML 本次生成，HomeNoticesTest 6/0/0），
       `just queue-check` 通过。真机欠账：所有 tab 见中断提示、同时多条件只显示
       一条最高优先级——不移动卡片到 done/。
+- [~] UI-04b 设备改名反馈浮层 — **🟡 2026-09-08 代码完成（已合入 main），待共享桌面回归**：
+      `App.svelte` 的 `.message` 改为 fixed 浮层，脱离文档流且保留成功/失败反馈；
+      桌面 Vitest 6 文件 / 43 tests 与 `pnpm build` 全绿。真机欠账：反馈出现/消失
+      时下方内容不发生位移。
 - [x] MOB-32 校准把正在跑的备份会话清空，186 张照片被静默丢弃 — **2026-08-21（真机验收 owed，L0）**:
       清场前 `du -sh` 抓到的：`.ppf/staging` 547M / 186 个已校验文件
       （`.upload` = 0，全过了 BLAKE3），其中只有 1 个进了索引，**185 个纯孤儿**；
