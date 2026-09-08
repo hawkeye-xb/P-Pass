@@ -38,7 +38,6 @@
 | 卡 | 一句话 | 分支 |
 |---|---|---|
 | [I18N-02](../cards/I18N-02-main-kotlin-hardcoded-chinese.md) | 主 Android Kotlin 的既有用户可见中文迁入 en/zh 资源 | `batch/i18n-02` |
-| [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 补 fmt/clippy CI 门禁与既有格式修正 | `batch/ci-03` |
 
 ---
 
