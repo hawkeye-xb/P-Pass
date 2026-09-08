@@ -11,7 +11,7 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-07**（E2E-03/REL-05/BUILD-03/CI-04 逐条核实关闭；
+> 最后核对：**2026-09-08**（REL-06 按验收人决定归档、不恢复历史测试期 Release 资产；E2E-03/REL-05/BUILD-03/CI-04 逐条核实关闭；
 > MOB-39/MOB-42/MOB-48/MOB-41 核实已被生产架构取代，关闭；DOG-03 用户拍板
 > 不做；MOB-46 用户拍板不追；MOB-44 用户拍板删除——鸿蒙 NEXT 不支持后台运行；
 > UI-04 按用户要求拆成 UI-04a~d 四张独立卡）
@@ -33,45 +33,73 @@
 
 ---
 
-## 一、进行中（已认领，禁止重复接）
+## 一、待你真机验收（代码已合并，就差你动手）
 
-| 卡 | 当前节点 | 下一步 | 协同分支 |
-|---|---|---|---|
-| [REL-06](../cards/REL-06-restore-v031-release-after-cleanup.md) | 历史清理误删 `v0.3.1` Release；tag 与 Release #24 artifacts 仍在；2026-09-07 复核 Release 页面实际只剩 2 个文件（应有 9 个） | 从 Release #24 的 Actions artifact 逐一下载补齐缺失的 7 个资产，不改 tag / current prerelease / dogfood | `main` |
+| 卡 | 一句话 | 级别 |
+|---|---|---|
+| [MOB-51](../cards/MOB-51-hero-pause-not-sticky-across-round.md) | 连续备份 ≥20 张，任意时刻首页都有「暂停」；暂停 → 继续 → 取消；同轮带过 MOB-49/50 | L1 |
+| [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
+| [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
+| [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 页序、Telephoto 缩放/下拉关闭、系统返回层级 | L2 |
+| [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 取消后 UI 回到暂停态；与 MOB-50 一起验证新增媒体完整发现、传输、确认 | L1 |
+| [MOB-50](../cards/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 取消后复位 upload cursor；与 MOB-49 一起验证新增媒体完整发现、传输、确认 | L1 |
+| [UX-14](../cards/UX-14-a-failed-retry-is-rendered-as-paused.md) | 暂停 → 继续 → 中断连接；界面不许又显示「继续」，应如实显示待备份或错误 | L1 |
+| [MOB-40](../cards/MOB-40-backup-runs-before-the-user-picks-albums.md) | **卸载重装 → 配对 → 只选 11 张相册 → 全程只传这 11 张**；选相册前一张也不许传 | L0 |
+| [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | **复验**：两种导出均含预期日志；整个 zip 不得含用户名 | L1 |
+| [MOB-38](../cards/MOB-38-foreground-catchup-never-fires-on-resume.md) | 从 App 切到相机拍一张再切回来，照片自动传上去 | L0 |
+| [UX-13](../cards/UX-13-no-resume-affordance-after-pause.md) | 暂停后原地变「继续」；杀 App 重开仍在；正常跑完自己消失 | L1 |
+| [WATCH-07](../cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏 | L2 |
+| [MOB-19](../cards/MOB-19-manual-backup-same-bad-record-crash.md) | 手动「再试一次」与自动备份是同一条管线 | L2 |
+| [MOB-09](../cards/MOB-09-one-bad-media-record-kills-batch.md) | 一条坏相册记录不再炸掉整批备份（好坏同批仍待验） | L2 |
+| [MOB-13](../cards/MOB-13-triplet-k-never-reaches-zero.md) | 「待备份 K」能归零（有前置，见卡） | L2 |
+| [BLOB-01](../cards/BLOB-01-ingest-leaves-a-duplicate-in-the-blob-store.md) | 备份占盘不再翻倍（实测 2.05x → 1.00x） | L2 |
+| [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
+| [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
+| [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
+| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 桌面视频应直接播放且可降级缩略图；Android 有播放/seek 控制且退出无播放器泄漏 | L2 |
 
-> 2026-09-07 复核：E2E-03 / REL-05 / BUILD-03 已在 `v0.5.0-test.2~test.7`
-> 的 Release/E2E 真实运行中验证通过（GitHub Actions 逐条核实），移入
-> `cards/done/`，不再是待办。
+**已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
+
+**验收建议**：15 分钟一批过，别攒。
 
 ---
 
-## 一之二、本轮真机反馈派生（test.5 @ 234a53f，2026-09-06，按优先级）
+## 二、可接队列（无阻塞，可以直接分给任何 agent）
 
-| 卡 | 一句话 | 状态 |
+| 优先级 | 卡 | 一句话 | 级别 |
+|---|---|---|---|
+| P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
+| P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
+| P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
+| P3 | [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁 | L0 |
+| P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
+| P3 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 中断提示只在总览页可见 | L2 |
+| P3 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 设备改名反馈占布局空间 | L2 |
+| P3 | [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 多条提示同时出现平铺堆叠，无优先级取舍 | L2 |
+| P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
+| P3 | [LINT-01](../cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑 | L3 |
+| P3 | [CI-02](../cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制 | L3 |
+| P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死 | L2 |
+| P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
+| P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
+| P3 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册页长名称换行撑乱布局 + 缩略图模糊 | L3 |
+| P3 | [I18N-02](../cards/I18N-02-main-kotlin-hardcoded-chinese.md) | 主 Android Kotlin 的无关既有用户可见中文硬编码清债 | L1 |
+
+---
+
+## 三、待你复现或拍板（agent 不许编码）
+
+| 卡 | 一句话 | 当前等待 |
 |---|---|---|
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
-| [MOB-51](../cards/MOB-51-hero-pause-not-sticky-across-round.md) | 英雄区暂停/继续只在单文件瞬间可达，整轮进行中无粘性入口 | 🟡 代码完成（JVM 274/0/4、just ci、APK、反证 3 红）；等真机：全程有暂停 → 暂停/继续/取消 → 同轮带过 MOB-49/50 |
-
-
-
-
-
-
-
-
-
-
-
-
-
-认领、暂停、交接必须先更新本节对应卡的横幅与下一步并 push；未上云的状态不算认领。其他 agent fetch 后只从下一节接卡。
 
 ---
 
-## 二、刚完成（推动下游，非可接）
+## 四、已完成 / 已归档（历史，非待办）
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [REL-06](../cards/done/REL-06-restore-v031-release-after-cleanup.md) | 验收人拍板：历史测试期 `v0.3.1` Release 产物无需恢复；保留 tag，现有 2 个资产维持现状 | 无——不下载/上传缺失资产，不改其他 Release |
 | [SITE-03](../cards/done/SITE-03-backup-core-rebuild-story.md) | 中文工程复盘《为什么我们把备份核心整个换掉了》已发布；手写 sitemap 与 RSS 同步收录，Pages workflow `34102057353` 成功，线上三项均 200 | 无——文章只记录已公开 ARCH-01 / REBUILD 事实 |
 | [MOB-60](../cards/MOB-60-cancel-round-leaves-stale-pause.md) | 用户复测 MOB-58/59 追问坐实：取消当前轮完成后仍展示暂停/继续，点继续等于传空气；`FlowRunner.cancelCurrentRound()` 补 `continueFlow()` 归位闸门，取消完落到已有的 Idle 判断，不新增状态；JVM 298/0/4、just ci 均绿 | 无——闸门归位即完整闭环 |
 | [MOB-58](../cards/MOB-58-cancel-round-no-feedback-no-restore-entry.md) | 三星真机 2026-09-07 两轮反馈：取消轮无常驻反馈+重复取消丢批次+进度条混用终身口径；`FlowRunner.restoreAllCancelledRounds()` 汇总恢复、`NoticeCard` 常驻入口（去 Discard 死路）、`advanceRoundProgress` 本轮独立 0 起算；JVM 298/0/4、just ci 均绿 | 无——同时收敛 MOB-55（同一根因，取消存档） |
@@ -83,7 +111,6 @@
 | [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 三星真机 2026-09-07 实证：两条并发传输失败日志相差 322ms；`onPermanentFailure`/`onReceipt` 补齐 `flowTriggerLock`（L0，违反 ARCH-03 单活跃租约不变量）；JVM 277/0/4、just ci 均绿 | 无——修复即完整闭环 |
 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星真机 2026-09-07 实证：队尾照片卡在 QUEUED/attemptCount=1 传不完；`FlowRunner.recordPermanentFailure()` 补齐对称 `wake()`；JVM 276/0/4、just ci 均绿 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md)（同一轮回归观察到的取消按钮无反馈，证据不足未合并处理）、[MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md)（同一改动放大了一处早已存在的并发缺口） |
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 三星真机 2026-09-07 实证「37/38 已回家」+「从未成功备份过」永久矛盾；`DiscoveryLedgerStore.load()` 回填旧账本 CONFIRMED 项的 completedAt；JVM 275/0/4、just ci、debug APK 均绿 | 无——纯数据迁移，不产出下游卡；真机复核为可选项 |
-| [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 聚合状态换源 Flow 账本合并（`234a53f`，v0.5.0-test.5）；真机实证进度数字实时跳动 | 余项（AllSafe/K 归零流转）被 MOB-51 挡，随其一并验 |
 | [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | 三星真机自然复现迟到回执竞态并收敛为 `CONFIRMED`；范围扩展补扫全部验收标准完成 | 分出 MOB-49、MOB-50（取消本轮两处生产接线缺口） |
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |
@@ -102,7 +129,7 @@
 
 ---
 
-## 三、（原 ARCH-01 冻结区，2026-09-07 已清空）
+## 五、（原 ARCH-01 冻结区，2026-09-07 已清空）
 
 > 原 MOB-39/MOB-42/MOB-48 三张卡：2026-09-07 复核确认 ARCH-01 + REBUILD-00~05
 > 的生产切换已经落地并跑在生产上，这三张卡描述的旧 WorkManager/TriggerSpec
@@ -115,7 +142,7 @@
 
 ---
 
-## 四、ARCH-01 后续实施拆卡（按已收口边界开卡）
+## 六、ARCH-01 后续实施拆卡（按已收口边界开卡）
 
 | 卡 | 覆盖 case | 当前等待 |
 |---|---|---|
@@ -138,88 +165,7 @@
 
 ---
 
-## 五、可接队列（无阻塞，可以直接分给任何 agent）
-
-| 优先级 | 卡 | 一句话 | 级别 |
-|---|---|---|---|
-
-
-
-| P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达），卡内建议提级 L0 等验收人拍板；2026-08-27 鸿蒙三次静默复现与该链条吻合，下一步等验收人换 OPPO Reno8 真机 logcat 交叉验证 | L2 |
-
-
-| P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记（PRES-01 在读 device.connected，口径不能乱动） | L2 |
-| P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
-
-| P3 | [CI-03](../cards/CI-03-src-tauri-workspace-has-no-fmt-gate.md) | 桌面壳 workspace 没有 fmt/clippy 门禁（2026-09-07 复核仍未开工，⚠️ 要动 workflows，先确认由谁改） | L0 |
-| P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint（2026-09-07 现场复现确认仍存在；CI 钉 17 不受影响） | L3 |
-| P3 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 中断提示只在总览页可见，切 tab 就看不到（原 UI-04 拆分①） | L2 |
-| P3 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 设备改名反馈占布局空间，该用浮层（原 UI-04 拆分②） | L2 |
-| P3 | [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 多条提示同时出现平铺堆叠，无优先级取舍（原 UI-04 拆分③） | L2 |
-| P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对（原 UI-04 拆分④） | L2 |
-| P3 | [LINT-01](../cards/LINT-01-android-lint-not-in-ci.md) | Android lint 不在 CI 里跑，红了没人看见 | L3 |
-| P3 | [CI-02](../cards/CI-02-e2e-compiles-release-binaries-twice.md) | e2e nightly 两个 job 各自编译一遍 release 二进制（~300 Linux 分钟/月白烧） | L3 |
-
-| P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死（R2 镜像已撤，本卡是重开镜像的前置） | L2 |
-| P3 | 未开卡 | 活动流把机器原文（`asset.replaced_in_place` 等）直接显示给用户，需改文案 | L2 |
-| P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本——当前引用了不带闪电标识的 icon（阻塞：等验收人给修改指示） | L3 |
-| P3 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册页长名称换行撑乱布局 + 缩略图模糊 | L3 |
-| P3 | [I18N-02](../cards/I18N-02-main-kotlin-hardcoded-chinese.md) | 主 Android Kotlin 的无关既有用户可见中文硬编码清债 | L1 |
-| P4（顺手做，不派活） | [CI-04](../cards/done/CI-04-release-waits-for-the-slowest-platform.md) | ✅ 已归档：2026-09-07 用 Release #51 实测验证缓存与拆分上传均生效 | L1 |
-
-**派活提示**：P1/P2 里的 L0/L1 卡属于「成本在做」，按 AGENTS.md 的派活姿势，
-把根因/文件/行号内联进指令即可，不必要求 agent 先通读协议文档。
-
----
-
-## 六、待你真机验收（代码已合并，就差你动手）
-
-| 卡 | 一句话 | 级别 |
-|---|---|---|
-| [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；单一 blobs NodeId/连接完成全部请求；待回归 Pause / Cancel / 失败 Retry | L2 |
-| [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | MOB-45 已并入并合入 `main`：页序、Telephoto 缩放/下拉关闭、系统返回层级；Android JVM 307/0/4 | L2 |
-| [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | ✅ 已归档：三星 Pause → kill → reopen → Continue → Cancel 通过 | L2 |
-| [MOB-49](../cards/MOB-49-cancellation-round-never-clears-in-production.md) | 代码完成：取消后 UI 回到暂停态；待 MOB-50 合入后，以隔离测试相册验证新增媒体可完整发现、传输、确认 | L1 |
-| [MOB-50](../cards/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 代码完成：取消后复位 upload cursor；与 MOB-49 一起以隔离测试相册验证新增媒体发现、传输、确认 | L1 |
-| [UX-14](../cards/UX-14-a-failed-retry-is-rendered-as-paused.md) | 暂停 → 继续 → 传输中途关掉 desktop 的 daemon 制造一次连接中断 → 界面**不许**又显示「继续」（应该说它的真实状态：还有 N 张待备份 / 出错了） | L1 |
-| [MOB-40](../cards/MOB-40-backup-runs-before-the-user-picks-albums.md) | **卸载重装 → 配对 → 只选那个 11 张的相册 → 全程只传 11 张**；配对到选完相册之间一张都不许传（这一条不过，别的都不用测） | L0 |
-| [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | **复验**（8/26 打回的脱敏漏已补）：①daemon 正常时导出日志 → 9 个文件都在；②daemon 挂着时导出 → 仍出 zip 含 `.err`/`.log`；③grep 整个 zip 不许出现用户名；④`audit.json`/`diag_events.json` 里路径应是 `originals/<8位前缀>…<masked>/…`，看不到完整 hex | L1 |
-| [MOB-38](../cards/MOB-38-foreground-catchup-never-fires-on-resume.md) | 从 App 切到相机拍一张再切回来，照片自动传上去 | L0 |
-| [UX-13](../cards/UX-13-no-resume-affordance-after-pause.md) | 备份中点「暂停」→ 按钮留在原地变「继续」→ 点它 → 传输接着跑；暂停后杀 App 重开「继续」还在；备份正常跑完「继续」自己消失 | L1 |
-| [WATCH-07](../cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏 | L2 |
-| [MOB-19](../cards/MOB-19-manual-backup-same-bad-record-crash.md) | 手动「再试一次」与自动备份是同一条管线 | L2 |
-| [MOB-09](../cards/MOB-09-one-bad-media-record-kills-batch.md) | 一条坏相册记录不再炸掉整批备份（欠一半：好坏同批未验） | L2 |
-| [MOB-13](../cards/MOB-13-triplet-k-never-reaches-zero.md) | 「待备份 K」能归零（有前置，见卡） | L2 |
-| [BLOB-01](../cards/BLOB-01-ingest-leaves-a-duplicate-in-the-blob-store.md) | 备份占盘不再翻倍（实测 2.05x → 1.00x） | L2 |
-| [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
-| [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
-| [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
-| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 桌面视频应直接播放且可降级缩略图；Android 有播放/seek 控制且退出无 MediaCodec/ExoPlayer 泄漏 | L2 |
-
-**已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
-
-**2026-08-27 验收人已批量关闭**（不要求逐条真机复核）：MOB-28、MOB-31、
-MOB-33、MOB-35 → 已移入 `done/`；MOB-43 → 判定不需要实现，已移入 `done/`。
-
-**2026-08-27 验收人第二批真机验收通过，已归档 `done/`**：MOB-32、MOB-37、
-MOB-29、MOB-34、MOB-36、WATCH-03、WATCH-04、DESK-08、UI-03。
-
-**验收建议**：15 分钟一批过，别攒。
-
----
-
-## 七、待你复现或拍板（agent 不许编码）
-
-（本节 2026-09-07 已清空——原 MOB-46 用户已拍板"上一代问题，关掉"，移入
-`cards/done/`。若未来真机再现相册计数异常，需用当前 APK 重新取证开新卡。）
-
-Apple 签名/公证已确认早就补齐、CI 一直在真跑,不是待拍板；「两个本机问题」指向的 `local-state.md` 已不
-存在、内容丢失，不再挂账——有新的本机问题请直接口述，我会重新建这个文件；
-MOB-43 已判定不需要实现,不再是拍板项。
-
----
-
-## 八、backlog（明确不做或暂缓，agent 不许碰）
+## 七、backlog（明确不做或暂缓，agent 不许碰）
 
 | 卡 | 状态 | 备注 |
 |---|---|---|
@@ -234,7 +180,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 九、发版现状（参考，非待办）
+## 八、发版现状（参考，非待办）
 
 - 正式产物走 CI：`gh workflow run release.yml -f platforms=android,macos`
   （Android 出签名 APK；macOS 未签名，「右键 → 打开」过 Gatekeeper）。
@@ -251,7 +197,7 @@ MOB-43 已判定不需要实现,不再是拍板项。
 
 ---
 
-## 十、相关文档指路
+## 九、相关文档指路
 
 - 规则层（agent 无关）：[`AGENTS.md`](../AGENTS.md) + [`AGENT_PROTOCOL.md`](AGENT_PROTOCOL.md)
 - 全量历史账本（只增不减）：[`ROADMAP.md`](ROADMAP.md)

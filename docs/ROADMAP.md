@@ -4,15 +4,14 @@
 > 里程碑状态的唯一权威来源，每张卡完成即更新。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
-**Now / 当前位置**（2026-09-07）: M0/M1 closed; M2 Android is in
-real-device dogfood. MOB-58/59 (cancelled-round notice/restore entry) and
-MOB-60 (cancel-round leaving a stale pause) code green on JVM; real-device
-recheck of the full pause→cancel→idle flow is the critical path. `just ci`
-green; Android JVM 298 tests / 0 failures / 4 skipped.
-**当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。MOB-58/59（取消轮常驻
-提示/恢复入口）与 MOB-60（取消轮遗留假暂停）代码在 JVM 已绿；当前主路径
-是真机复核完整的"暂停→取消→回到空闲"链路。`just ci` 已绿；Android JVM
-298 tests / 0 failures / 4 skipped。
+**Now / 当前位置**（2026-09-08）: M0/M1 closed; M2 Android is in
+real-device dogfood. The first validation item is MOB-51: through a full
+round, the home hero must keep Pause reachable, then support Pause → Resume
+→ Cancel; the same run also validates MOB-49/50 and UI-09's final flow.
+Historical `v0.3.1` Release assets are explicitly not being restored.
+**当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。当前首项是 MOB-51：
+完整一轮备份中首页英雄区必须始终可暂停，再验暂停 → 继续 → 取消；同轮带过
+MOB-49/50 与 UI-09 的最终流转。历史 `v0.3.1` Release 产物已明确不恢复。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 
