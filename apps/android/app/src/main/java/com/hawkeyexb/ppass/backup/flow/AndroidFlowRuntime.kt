@@ -208,10 +208,23 @@ internal fun restoreAllCancelledFlowRounds(context: Context) {
 internal fun flowLedgerSnapshot(context: Context): DiscoveryLedgerSnapshot =
     runtimeFor(context.applicationContext)?.ledger?.load() ?: DiscoveryLedgerSnapshot()
 
+/**
+ * Unpair/rejoin is a lifetime boundary: no old native provider, durable Flow
+ * ledger, or in-memory runtime may survive and contaminate a new pairing.
+ * This must run off the UI thread because native shutdown and filesystem
+ * cleanup can block. */
+internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
+    synchronized(flowRuntimeLock) {
+        flowRuntimes.remove(daemonNodeId)?.nativeProvider?.close()
+    }
+    File(context.filesDir, "flow-state/$daemonNodeId").deleteRecursively()
+}
+
 private data class AndroidFlowRuntime(
     val epoch: PairingEpoch,
     val ledger: DiscoveryLedgerStore,
     val runner: FlowRunner,
+    val nativeProvider: AndroidNativeIrohBlobsProvider,
 )
 
 private fun runtimeFor(context: Context): AndroidFlowRuntime? {
@@ -273,7 +286,7 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             discovery = AndroidFlowDiscoveryPort(context.contentResolver) { BackupScopeStore(context).selectedBucketIds() },
             delivery = delivery,
         )
-        return AndroidFlowRuntime(epoch, ledger, runner).also { flowRuntimes[key] = it }
+        return AndroidFlowRuntime(epoch, ledger, runner, native).also { flowRuntimes[key] = it }
     }
 }
 

@@ -72,10 +72,15 @@ import com.hawkeyexb.ppass.backup.pauseAutoBackup
 import com.hawkeyexb.ppass.backup.resumeAutoBackup
 import com.hawkeyexb.ppass.backup.triggerUserPresentBackup
 import com.hawkeyexb.ppass.backup.BACKUP_WORK_NAME
+import com.hawkeyexb.ppass.backup.CATCHUP_WORK_NAME
+import com.hawkeyexb.ppass.backup.PROCESS_CATCHUP_WORK_NAME
+import com.hawkeyexb.ppass.backup.MANUAL_BACKUP_WORK_NAME
+import com.hawkeyexb.ppass.backup.cancelMediaWatch
 import com.hawkeyexb.ppass.backup.WatermarkStore
 import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfill
+import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
 import com.hawkeyexb.ppass.ui.BackupStartedScreen
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
@@ -539,8 +544,11 @@ fun PPassApp() {
             // 本就不认本设备），回 Welcome 扫码，新 token 走 rejoin 门
             // 重建——备份页、照片页的失联红卡按同一个动作走。
             val onRepairPairing = {
-                clearLocalPairing(context, pairings, s.pairing)
-                screen = Screen.Welcome
+                scope.launch {
+                    withContext(Dispatchers.IO) { clearLocalPairing(context, pairings, s.pairing) }
+                    screen = Screen.Welcome
+                }
+                Unit
             }
             TwoTabs(
                 tab = tab,
@@ -638,9 +646,10 @@ fun PPassApp() {
                                         // 尽力而为——本地照断，重扫用新 token 重建。
                                     }
                                 }
-                                clearLocalPairing(context, pairings, s.pairing)
+                                withContext(Dispatchers.IO) { clearLocalPairing(context, pairings, s.pairing) }
                                 screen = Screen.Welcome
                             }
+                            Unit
                         },
                         // 存储端移除/吊销本设备后：主按钮变「重新扫码连接」——
                         // 本地照清（无需 unpair，daemon 端本就不认本设备），
@@ -845,11 +854,17 @@ private fun clearLocalPairing(
     pairing: Pairing,
 ) {
     pairings.clear()
+    // A rejoin to the same NodeId must not resurrect its old strict head,
+    // native provider, or receipt facts.
+    clearFlowRuntime(context, pairing.daemonNodeId)
     // UX-06b: 清该 remote 的确认缓存（backup-state/<daemonNodeId>/）——
     // 重配对到同一台电脑后 M 从 0 重新计数，不沿用旧缓存
     // （电脑端删过库时 M 虚高，首屏是错的）。
     clearConfirmedCacheForRemote(context.filesDir, pairing.daemonNodeId)
     WatermarkStore(context.filesDir).save(0)
     AutoBackupPrefs(context.filesDir).setPaused(false)
-    WorkManager.getInstance(context).cancelUniqueWork(BACKUP_WORK_NAME)
+    val work = WorkManager.getInstance(context)
+    listOf(BACKUP_WORK_NAME, CATCHUP_WORK_NAME, PROCESS_CATCHUP_WORK_NAME, MANUAL_BACKUP_WORK_NAME)
+        .forEach(work::cancelUniqueWork)
+    cancelMediaWatch(context)
 }

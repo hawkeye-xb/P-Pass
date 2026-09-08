@@ -37,7 +37,6 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
-| [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 断开重扫必须删除旧 Flow runtime、账本和全部 wake，禁止旧任务重放 | `main` |
 
 其余 UI-04a/UI-04b/UI-04c/UI-08 均已合入 `main`，转入下方共享回归队列。
 
@@ -52,6 +51,7 @@
 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 代码完成：长名称单行省略、封面按显示像素请求；待共享回归截图与清晰度实证 | L3 |
 | [MOB-51](../cards/MOB-51-hero-pause-not-sticky-across-round.md) | 连续备份 ≥20 张，任意时刻首页都有「暂停」；暂停 → 继续 → 取消；同轮带过 MOB-49/50 | L1 |
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
+| [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 主动断开→重扫同一电脑→进入首页：无 ANR、无旧 offer/旧传输重放 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 页序、Telephoto 缩放/下拉关闭、系统返回层级 | L2 |
