@@ -8,6 +8,7 @@ import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
+import android.util.Size
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -41,11 +42,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
@@ -61,14 +65,19 @@ import kotlinx.coroutines.withContext
  * 的全 App 唯一内存缓存（CacheRedlineTest 断言只准一处 LruCache 声明），
  * key 加 `"bucket:"` 前缀避免和远端缩略图的 hash key 撞车。
  */
-private fun bucketCoverCacheKey(bucketId: Long) = "bucket:$bucketId"
+private fun bucketCoverCacheKey(bucketId: Long, displaySize: IntSize) =
+    "bucket:$bucketId:${displaySize.width}x${displaySize.height}"
 
 /** API 29+ 用官方 loadThumbnail（图片/视频统一接口）；更早的 API 让
  *  封面留空——这是纯视觉锚点，不是必需功能，不为老设备多维护一条
  *  解码路径。 */
-private fun decodeBucketCover(resolver: ContentResolver, uri: Uri): Bitmap? = runCatching {
+private fun decodeBucketCover(
+    resolver: ContentResolver,
+    uri: Uri,
+    displaySize: IntSize,
+): Bitmap? = runCatching {
     if (Build.VERSION.SDK_INT >= 29) {
-        resolver.loadThumbnail(uri, android.util.Size(200, 200), null)
+        resolver.loadThumbnail(uri, Size(displaySize.width, displaySize.height), null)
     } else {
         null
     }
@@ -77,18 +86,26 @@ private fun decodeBucketCover(resolver: ContentResolver, uri: Uri): Bitmap? = ru
 @Composable
 private fun BucketCoverImage(bucketId: Long, coverUri: Uri?, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val cacheKey = bucketCoverCacheKey(bucketId)
+    var displaySize by remember { mutableStateOf(IntSize.Zero) }
+    val cacheKey = bucketCoverCacheKey(bucketId, displaySize)
     val bmp by produceState(
         initialValue = thumbCache.get(cacheKey),
         key1 = coverUri,
+        key2 = displaySize,
     ) {
-        if (value == null && coverUri != null) {
+        if (value == null && coverUri != null && displaySize != IntSize.Zero) {
             value = withContext(Dispatchers.IO) {
-                runCatching { decodeBucketCover(context.contentResolver, coverUri) }.getOrNull()
+                runCatching {
+                    decodeBucketCover(context.contentResolver, coverUri, displaySize)
+                }.getOrNull()
             }?.also { thumbCache.put(cacheKey, it) }
         }
     }
-    Box(modifier.background(PPColor.Linen)) {
+    Box(
+        modifier
+            .onSizeChanged { displaySize = it }
+            .background(PPColor.Linen),
+    ) {
         val b = bmp
         if (b != null) {
             Image(
@@ -149,7 +166,10 @@ private fun BucketCard(
                 Text(
                     bucket.name ?: stringResource(R.string.bucket_unnamed),
                     fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
-                    color = PPColor.Ink, modifier = Modifier.weight(1f, fill = false),
+                    color = PPColor.Ink,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
                 if (isNew) {
                     Text(
