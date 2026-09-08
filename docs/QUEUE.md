@@ -38,7 +38,7 @@
 | 卡 | 一句话 | 分支 |
 |---|---|---|
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现 | `batch/ui-04a-c` |
-| [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 桌面改名反馈改为脱离文档流的 transient overlay | `batch/ui-04b` |
+| [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 桌面改名反馈已改 fixed 浮层（代码完成），待并批后共享回归 | `batch/ui-04b` |
 | [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 选相册长名称截断与缩略图清晰度链路修复 | `batch/ui-08` |
 
 ---

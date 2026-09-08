@@ -8,10 +8,13 @@
 real-device dogfood. MOB-61 is code-complete: a phone photo deleted after
 Flow discovery is now terminally skipped, never retried; the Samsung
 isolated-photo check remains. NET-04 pause/cancel/retry remains blocked by
-the separate `flow.fetch` 15-second RPC-deadline investigation.
+the separate `flow.fetch` 15-second RPC-deadline investigation. UI-04b is
+code-complete: desktop rename feedback is now a fixed overlay (out of
+document flow), pending the shared desktop regression walkthrough.
 **当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。MOB-61 已代码完成：
 手机照片在 Flow 发现后被删除会终态跳过，绝不重传；三星隔离照片验收仍欠。
 NET-04 的暂停/取消/重试仍被独立的 `flow.fetch` 15 秒 RPC 截止问题阻塞。
+UI-04b 已代码完成：桌面改名反馈改为 fixed 浮层（脱离文档流），待共享桌面回归走查。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 
