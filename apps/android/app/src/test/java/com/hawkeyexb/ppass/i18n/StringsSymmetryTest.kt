@@ -59,6 +59,59 @@ class StringsSymmetryTest {
         }
     }
 
+    @Test
+    fun main_kotlin_has_no_chinese_outside_comments() {
+        val app = appRes().parentFile!!.parentFile!!.parentFile!!
+        val files = listOf(
+            File(app, "src/main/java/com/hawkeyexb/ppass/MainActivity.kt"),
+            File(app, "src/main/java/com/hawkeyexb/ppass/transport/PairFlow.kt"),
+            File(app, "src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt"),
+        )
+        for (file in files) {
+            val offending = codeLines(file.readText()).filter(::hasChinese).toList()
+            assertTrue(
+                "${file.name} 的非注释代码不得硬编码中文: $offending",
+                offending.isEmpty(),
+            )
+        }
+    }
+
+    private fun codeLines(source: String): Sequence<String> = sequence {
+        var inBlockComment = false
+        for (raw in source.lineSequence()) {
+            var line = raw
+            val code = StringBuilder()
+            while (line.isNotEmpty()) {
+                if (inBlockComment) {
+                    val end = line.indexOf("*/")
+                    if (end < 0) {
+                        line = ""
+                    } else {
+                        inBlockComment = false
+                        line = line.substring(end + 2)
+                    }
+                } else {
+                    val block = line.indexOf("/*")
+                    val lineComment = line.indexOf("//")
+                    if (lineComment >= 0 && (block < 0 || lineComment < block)) {
+                        code.append(line.substring(0, lineComment))
+                        line = ""
+                    } else if (block < 0) {
+                        code.append(line)
+                        line = ""
+                    } else {
+                        code.append(line.substring(0, block))
+                        inBlockComment = true
+                        line = line.substring(block + 2)
+                    }
+                }
+            }
+            yield(code.toString())
+        }
+    }
+
+    private fun hasChinese(line: String): Boolean = line.any { it in '\u4e00'..'\u9fff' }
+
     /**
      * T-042b 回归：带属性（translatable/formatted）或多行内容的条目必须被
      * 解析器抓到——旧正则静默跳过它们。构造一个带属性 + CDATA 的临时

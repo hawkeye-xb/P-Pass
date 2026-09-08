@@ -1082,3 +1082,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] SITE-02 首批三篇博文（定位故事 / 图标九轮 / IPC-02 重构）— 草稿完成。**优先级 L3（2026-08-25 用户降级：「优先级没这么高，回头统一审稿」）**——不再列为上线阻塞，不主动催审；用户择期统一审完再去 draft 发布
 - [ ] DNS: p-pass.hawkeye-xb.com CNAME → hawkeye-xb.github.io（CF zone 65dec62bc61b00e5d22fedc40b774bdc）
 - [ ] T-073 one-page site + README polish（M4 原条目，站点线落地后待并轨）
+
+---
+
+2026-09-08 交付记录：I18N-02 完成。`MainActivity.kt` 的更新提示、`PairFlow.kt` 的配对失败/不可解析/默认存储端文案迁入对称 Android `values/` 与 `values-zh/` 资源；`BackupWorker.kt` 逐处确认无用户可见中文。新增 `StringsSymmetryTest` 非注释代码守卫，Android JVM **309 tests / 0 failures / 0 errors / 4 ignored**（i18n focused 3/3），`just ci` 全绿。
