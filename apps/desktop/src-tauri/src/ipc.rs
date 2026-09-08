@@ -134,10 +134,7 @@ impl DaemonHandle {
     /// 阻塞直到连接断开（daemon 退出/重启/网络错误），返回 Err 后由
     /// 调用方决定重连。握手失败（老 daemon 无 events.subscribe）也返回
     /// Err——上层据此降级（前端 60s 兜底轮询仍在）。
-    pub fn subscribe_events(
-        &self,
-        mut on_event: impl FnMut(Value),
-    ) -> Result<(), String> {
+    pub fn subscribe_events(&self, mut on_event: impl FnMut(Value)) -> Result<(), String> {
         let name = self
             .socket_name
             .clone()
@@ -198,8 +195,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let cfg_dir = tmp.path().join("cfg");
         std::fs::create_dir_all(&cfg_dir).unwrap();
-        std::fs::write(cfg_dir.join("config.toml"), "data_dir = \"/tmp/ppf-wizard-lib\"\n")
-            .unwrap();
+        std::fs::write(
+            cfg_dir.join("config.toml"),
+            "data_dir = \"/tmp/ppf-wizard-lib\"\n",
+        )
+        .unwrap();
 
         let candidates = token_candidates_from(&cfg_dir);
         assert!(
