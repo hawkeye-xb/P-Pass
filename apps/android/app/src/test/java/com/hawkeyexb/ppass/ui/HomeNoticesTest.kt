@@ -2,6 +2,7 @@
 package com.hawkeyexb.ppass.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -47,5 +48,22 @@ class HomeNoticesTest {
     fun a_single_notice_is_shown_as_is() {
         val only = notice(HomeNoticeKind.REUPLOAD)
         assertEquals(only, topNotice(listOf(only)))
+    }
+
+    @Test
+    fun priority_selection_is_not_list_order() {
+        // 负向证明：候选按「优先级从低到高」排列（REUPLOAD 在最前），
+        // 若 topNotice 只是「取第一条」而非按 HOME_NOTICE_PRIORITY 挑，
+        // 这条断言会失败——它锁死的是「选择行为」，不是「列表顺序」。
+        val candidates = listOf(
+            notice(HomeNoticeKind.REUPLOAD),
+            notice(HomeNoticeKind.CANCELLED_ROUND),
+            notice(HomeNoticeKind.NOTIFICATION_PERMISSION),
+            notice(HomeNoticeKind.BATTERY_WHITELIST),
+            notice(HomeNoticeKind.BACKUP_INTERRUPTED),
+        )
+        assertEquals(HomeNoticeKind.BACKUP_INTERRUPTED, topNotice(candidates)?.kind)
+        // 反证：若实现退化成 firstOrNull，会拿到 REUPLOAD（最低优先级）。
+        assertNotEquals(HomeNoticeKind.REUPLOAD, topNotice(candidates)?.kind)
     }
 }

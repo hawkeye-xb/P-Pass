@@ -586,6 +586,17 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       改，否则下次 UI 走查会把这里判成「未实现」。已 grep 确认没有测试钉这两个
       标题的样式。挂账：真机确认两页顶部无大字、不贴状态栏（用户）。
 - [~] UI-08 选相册长名称截断与缩略图清晰度链路 — **2026-09-08 代码完成，待共享真机回归**：根因是 `BucketScreen` 原先固定请求 `loadThumbnail(Size(200, 200))`，而封面卡按实际网格显示像素绘制，低分辨率位图随后被放大；长名称 `Text` 没有单行溢出约束且使用非填满权重，Row 可换行撑高。修复为用 `onSizeChanged` 读取封面 Box 的实际 `IntSize`，请求与缓存 key 均带显示宽高；名称改 `weight(1f)`、`maxLines = 1`、`TextOverflow.Ellipsis`，不动选中集合/桶计数语义。新增源码守卫 2 条，Android JVM **313/0/0/4 ignored**（`--rerun-tasks`，60 个 fresh XML）；截图和真实视觉清晰度证据留给共享回归。
+- [ ] UI-04a + UI-04c 全局提示容器与最高优先级单条呈现 — **🟡 2026-09-08 代码完成（batch/ui-04a-c），待共享真机回归**：
+      两张卡共享同一提示呈现层，合并落地。`ui/HomeNotices.kt` 新增 `NoticeHost`
+      （电池白名单/通知引导/中断恢复/取消轮入口/重传告知五条输入集中构造候选 →
+      `topNotice` 只渲染最高优先级一条，其余收起），`TwoTabs` 顶部加 `notice` slot
+      让提示在 Photos/Backup 两页都可见（中断提示不再只有总览页），`MainActivity`
+      接进五条输入，`HomeScreen` 删掉五段局部渲染块（触发条件逐字保留，只迁呈现）。
+      优先级口径：阻塞备份 > 需要授权 > 补充信息。反证单测
+      `priority_selection_is_not_list_order` 锁死「选择行为」而非「列表顺序」。
+      Android JVM 309/0/0/4（59 XML 本次生成，HomeNoticesTest 6/0/0），
+      `just queue-check` 通过。真机欠账：所有 tab 见中断提示、同时多条件只显示
+      一条最高优先级——不移动卡片到 done/。
 - [x] MOB-32 校准把正在跑的备份会话清空，186 张照片被静默丢弃 — **2026-08-21（真机验收 owed，L0）**:
       清场前 `du -sh` 抓到的：`.ppf/staging` 547M / 186 个已校验文件
       （`.upload` = 0，全过了 BLAKE3），其中只有 1 个进了索引，**185 个纯孤儿**；
