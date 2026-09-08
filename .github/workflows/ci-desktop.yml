@@ -74,6 +74,15 @@ jobs:
           mkdir -p binaries
           touch binaries/ppf-daemon-x86_64-unknown-linux-gnu
           chmod +x binaries/ppf-daemon-x86_64-unknown-linux-gnu
+      # CI-03: src-tauri 是独立 workspace（ADR-012），主 workspace 的
+      # just ci（fmt + clippy）覆盖不到它——这里补上同档门禁，否则格式
+      # 漂移无人发现（2026-08-25 实测 ipc.rs 两处既有代码被重排）。
+      - name: rustfmt check (src-tauri)
+        working-directory: apps/desktop/src-tauri
+        run: cargo fmt -- --check
+      - name: clippy (src-tauri, deny warnings)
+        working-directory: apps/desktop/src-tauri
+        run: cargo clippy --all-targets -- -D warnings
       - name: src-tauri lib tests
         working-directory: apps/desktop/src-tauri
         run: cargo test --lib
