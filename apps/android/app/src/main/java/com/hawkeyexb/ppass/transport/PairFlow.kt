@@ -46,11 +46,15 @@ suspend fun pairWithQr(
     // DEV-01: 重装识别开关——关掉时不发指纹，行为回到 DEV-01 前
     // （重装后出新设备行）。默认开。
     reinstallHintEnabled: Boolean = true,
+    invalidCodeMessage: String = "This is not a P-Pass pairing code.",
+    unparseableCodeMessage: String =
+        "The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.",
+    storageDeviceNameFallback: String = "P-Pass storage",
 ): PairOutcome {
     val parsed = try {
         parsePairingQr(qr)
     } catch (e: Exception) {
-        return PairOutcome.Failed("这不是 P-Pass 配对码")
+        return PairOutcome.Failed(invalidCodeMessage)
     }
     // H-10b: 新 QR 只有 r=（relay URL）——从 node+relay 重建可连接地址；
     // 旧 QR 的 a= 完整解析仍兼容。
@@ -59,7 +63,7 @@ suspend fun pairWithQr(
     } ?: return PairOutcome.Failed(
         // FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，新码
         // 只带 r=；a=/r= 都缺 = 配对码无法解析。明确引导升级而非静默失败。
-        "配对码无法解析，请把电脑端和手机 App 都升级到最新版"
+        unparseableCodeMessage
     )
     // 存储 token：旧码存原 a= 串；新码从 node+relay 重建（backup 的
     // parsePeerAddrToken 兼容）。
@@ -82,7 +86,7 @@ suspend fun pairWithQr(
             val helloInfo = hello.result?.let {
                 ProtoJson.decodeFromJsonElement(Hello.serializer(), it)
             }
-            val name = helloInfo?.deviceName?.takeIf { it.isNotBlank() } ?: "P-Pass 存储端"
+            val name = helloInfo?.deviceName?.takeIf { it.isNotBlank() } ?: storageDeviceNameFallback
             return PairOutcome.Joined(
                 Pairing(
                     daemonNodeId = parsed.nodeIdHex,

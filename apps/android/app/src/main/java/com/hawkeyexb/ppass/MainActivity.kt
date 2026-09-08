@@ -261,10 +261,11 @@ fun PPassApp() {
     updateInfo?.let { info ->
         AlertDialog(
             onDismissRequest = { updateInfo = null },
-            title = { Text("发现新版本 v${info.version}") },
+            title = { Text(stringResource(R.string.update_available_title, info.version)) },
             text = {
                 Text(
-                    if (info.notes.isBlank()) "是否下载并安装？" else info.notes.take(200)
+                    if (info.notes.isBlank()) stringResource(R.string.update_available_body)
+                    else info.notes.take(200)
                 )
             },
             confirmButton = {
@@ -273,10 +274,12 @@ fun PPassApp() {
                         downloadAndInstall(context, info.url)
                         updateInfo = null
                     }
-                }) { Text("下载安装") }
+                }) { Text(stringResource(R.string.update_download_install)) }
             },
             dismissButton = {
-                TextButton(onClick = { updateInfo = null }) { Text("以后再说") }
+                TextButton(onClick = { updateInfo = null }) {
+                    Text(stringResource(R.string.update_later))
+                }
             },
         )
     }
@@ -452,6 +455,9 @@ fun PPassApp() {
                         s.qr,
                         deviceName(),
                         reinstallHintEnabled = ReinstallHintPrefs(context.filesDir).enabled(),
+                        invalidCodeMessage = context.getString(R.string.not_a_code),
+                        unparseableCodeMessage = context.getString(R.string.pair_unparseable_code),
+                        storageDeviceNameFallback = context.getString(R.string.storage_device_default),
                     )
                 } catch (t: Throwable) {
                     PairOutcome.Failed(t.toString())
