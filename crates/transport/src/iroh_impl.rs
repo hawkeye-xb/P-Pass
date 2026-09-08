@@ -70,7 +70,7 @@ impl TransportConfig {
 pub struct PeerAddr(EndpointAddr);
 
 impl PeerAddr {
-    pub(crate) fn from_endpoint_addr(addr: EndpointAddr) -> Self {
+    pub fn from_endpoint_addr(addr: EndpointAddr) -> Self {
         Self(addr)
     }
 

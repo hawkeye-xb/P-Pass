@@ -41,6 +41,24 @@ class IrohBlobsProviderBridgeTest {
         assertEquals(listOf("stop:7", "revoke:${hashFor(7L)}"), native.events)
     }
 
+    @Test
+    fun `next completed item keeps the native endpoint alive`() {
+        val native = RecordingNativeProvider()
+        val bridge = IrohBlobsProviderBridge(native) { sourceRef -> "fd:$sourceRef" }
+        val epoch = PairingEpoch("desktop-b")
+        bridge.register(item(queueSequence = 7L, epoch = epoch), epoch, FetchLease(7L, "lease-7"))
+        bridge.register(item(queueSequence = 8L, epoch = epoch), epoch, FetchLease(8L, "lease-8"))
+
+        assertEquals(emptyList<String>(), native.events)
+        assertEquals(
+            listOf(
+                "${hashFor(7L)}:fd:content://media/7",
+                "${hashFor(8L)}:fd:content://media/8",
+            ),
+            native.registrations,
+        )
+    }
+
     private inline fun assertIllegalArgument(block: () -> Unit) {
         try {
             block()

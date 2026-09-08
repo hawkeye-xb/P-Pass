@@ -39,3 +39,56 @@ fn provider_registration_serves_native_ticket_then_revoke_stops_it() {
     provider.revoke();
     assert!(!provider.is_active());
 }
+
+#[test]
+fn provider_keeps_one_endpoint_for_serial_flow_items() {
+    let dir = tempdir().unwrap();
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+    let first = b"first Android Flow item";
+    let second = b"second Android Flow item";
+    let first_path = dir.path().join("first.jpg");
+    let second_path = dir.path().join("second.jpg");
+    fs::write(&first_path, first).unwrap();
+    fs::write(&second_path, second).unwrap();
+    let first_hash = *blake3::hash(first).as_bytes();
+    let second_hash = *blake3::hash(second).as_bytes();
+    let first_ticket = provider.register_path(first_hash, &first_path).unwrap();
+    let (first_addr, ticket_hash, _) = first_ticket.parse::<BlobTicket>().unwrap().into_parts();
+    assert_eq!(ticket_hash.as_bytes(), &first_hash);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let receiver = runtime
+        .block_on(IrohTransport::bind(TransportConfig::loopback(vec![
+            ALPN_BLOBS.into(),
+        ])))
+        .unwrap();
+    let blobs = runtime
+        .block_on(Blobs::open(&receiver, &dir.path().join("receiver-store")))
+        .unwrap();
+    let provider_id = receiver.add_peer(transport::PeerAddr::from_endpoint_addr(first_addr));
+    runtime
+        .block_on(blobs.fetch_from(provider_id, first_hash))
+        .unwrap();
+
+    // This registration happens after the first fetch completed, mirroring
+    // Flow's strict one-item progression. It must retain the provider NodeId
+    // so the receiver's `(NodeId, ALPN)` cache can open its next stream there.
+    let second_ticket = provider.register_path(second_hash, &second_path).unwrap();
+    let (second_addr, ticket_hash, _) = second_ticket.parse::<BlobTicket>().unwrap().into_parts();
+    assert_eq!(ticket_hash.as_bytes(), &second_hash);
+    assert_eq!(provider_id, transport::NodeId(*second_addr.id.as_bytes()));
+    runtime
+        .block_on(blobs.fetch_from(provider_id, second_hash))
+        .unwrap();
+
+    let destination = dir.path().join("second-received.jpg");
+    runtime
+        .block_on(blobs.export_to(second_hash, &destination))
+        .unwrap();
+    assert_eq!(fs::read(destination).unwrap(), second);
+    runtime.block_on(blobs.close());
+    runtime.block_on(receiver.close());
+}

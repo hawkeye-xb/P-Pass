@@ -3,8 +3,8 @@
 > 🟡 状态：代码完成，待真机验收
 > 级别：**L2**（新协议/校验/架构类，需强 agent + 真机验证）· 阻塞：无
 > Owner: Hermes · 协同分支：`work/net-04` · Base: `3ad6248`
-> 当前节点：Android App 全局 Endpoint + daemon `(NodeId, ALPN)` `ConnectionCache` 已合入
-> 下一步：真机连续传输 ≥5 文件，确认仅一次 NAT 打洞；回归暂停/取消/失败重试。
+> 当前节点：Android App 全局 Endpoint + daemon `(NodeId, ALPN)` `ConnectionCache` 已合入；三星真机 5 文件连接复用已通过
+> 下一步：仍欠暂停/取消/失败重试真机回归。
 > ⚠️ 本卡只做 Rust daemon + Android 传输层改造，不碰任何 UI 组件。
 > UI 展示是衍生卡 NET-05（本卡未开出前不建；本卡完成后再开，
 > parents 挂本卡），不要在本卡里顺手加 UI 代码。

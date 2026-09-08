@@ -32,10 +32,10 @@ internal class IrohBlobsProviderBridge(
             "provider requires a 32-byte lowercase-hex content hash"
         }
 
-        active?.let {
-            native.stopActiveFetch(it.queueSequence)
-            native.revoke(it.hash)
-        }
+        // StrictConsumer only calls register after the prior one-item fetch has
+        // completed. Keep the native endpoint and its ALPN handler alive here:
+        // stopping it between ordinary items would close the daemon's cached
+        // `(NodeId, ALPN)` connection and force a new handshake per file.
         val source = openSource(item.sourceRef)
         val ticket = try {
             native.register(hash, source)
