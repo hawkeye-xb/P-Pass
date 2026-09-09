@@ -1,7 +1,9 @@
 # DESK-14 Overlay 标题栏隐藏后主窗口拖拽区域过小
 
-> ⬜ 状态：未开工
+> 🟠 状态：进行中
 > 级别：L3 · 阻塞：无
+> Owner：Hermes / `desk-14-overlay-drag` · Base：`300a8a8`
+> 当前节点：调查现有 Overlay 清边与动态拖拽标记；下一步：确定不吞交互的专用拖拽带 DOM/CSS 边界。
 
 ## 问题
 
@@ -52,7 +54,7 @@ macOS 桌面端使用 Tauri `titleBarStyle: "Overlay"`，原生红绿灯悬浮�
 
 ## 实施记录
 
-待实施。
+已认领：先追踪现有 `titlebar.js`、主界面和向导的布局/测试，再以失败 DOM 用例锁定专用拖拽元素与交互边界。
 
 ## 备注
 

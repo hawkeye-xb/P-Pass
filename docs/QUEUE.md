@@ -37,6 +37,7 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
+| [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS Overlay 补主界面与首启向导连续顶部拖拽带，交互元素保持非拖拽目标 | `desk-14-overlay-drag` |
 
 
 
@@ -78,7 +79,7 @@ UI-08 已通过归档。
 |---|---|---|---|
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
-| P2 | [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS Overlay 隐藏传统标题栏后，主界面与首启向导只有零碎拖拽空白；补连续顶部拖拽带且不吞交互 | L3 |
+
 | P2 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 脱离文档流方向正确但视觉验收不通过；现为 App.svelte 裸 `<p>`，需重做为紧凑且视觉居中的瞬时反馈 | L2 |
 
 
