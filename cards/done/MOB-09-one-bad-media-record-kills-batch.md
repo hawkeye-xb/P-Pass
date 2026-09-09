@@ -1,6 +1,9 @@
 # MOB-09 一条坏 MediaStore 记录让整批备份永久失败　级别 L1【单文件 bug + 反证】
 
-> 🟡 状态：代码已合并，等真机验收
+> ✅ 状态：已被生产架构取代，归档（2026-09-09）。本卡的 `BackupWorker`
+> 批处理候选构建已不在生产备份路径；当前 `BackupWorker` 只是 Flow wake adapter。
+> 现行等价风险由 MOB-61 负责：`NativeFlowDeliveryPort` 将缺源
+> `FileNotFoundException` 转为 `SKIPPED_SOURCE_MISSING`，而非整批 RETRY。
 > 级别：L1 · 阻塞：无
 
 ## 问题
