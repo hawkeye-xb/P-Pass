@@ -61,6 +61,11 @@ fun VideoScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
+    // LINT-01: ProduceStateDoesNotAssignValue 误报——赋值裹在
+    // `if (cache.isFile...) { ...; return@produceState }` 提前返回分支和
+    // try/catch 分支里，lint 的静态检查看不穿这类控制流（实际每条路径
+    // 都有赋值：命中缓存直接 return，否则下载成功/失败各赋一次值）。
+    @Suppress("ProduceStateDoesNotAssignValue")
     val state by produceState<VideoState>(VideoState.Fetching(0), asset.hash) {
         val cache = File(context.cacheDir, "video-${asset.hash.take(16)}.mp4")
         if (cache.isFile && cache.length() > 0) {

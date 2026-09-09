@@ -55,6 +55,9 @@ jobs:
       - name: Unit tests (golden drift vs crates/proto snapshots)
         working-directory: apps/android
         run: ./gradlew :app:testDebugUnitTest
+      - name: Lint (LINT-01 门禁；baseline 冻结存量，新增违规必红)
+        working-directory: apps/android
+        run: ./gradlew :app:lintDebug
       - name: Assemble debug APK
         working-directory: apps/android
         run: ./gradlew :app:assembleDebug

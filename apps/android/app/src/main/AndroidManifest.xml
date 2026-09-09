@@ -32,6 +32,11 @@
     <!-- DOG-02: 请求系统"忽略电池优化"白名单对话框（杀后台防护引导）。 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- LINT-01: CAMERA 权限会被 Play 隐含推断为"需要摄像头硬件"，导致
+         ChromeOS/平板等无摄像头设备被商店过滤掉——扫码配对只是可选功能
+         之一，显式声明 required="false" 澄清这一点（真实 lint 报错，非误报）。 -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
     <application
         android:name=".PPassApplication"
         android:allowBackup="false"

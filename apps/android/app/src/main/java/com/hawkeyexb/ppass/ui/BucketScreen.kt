@@ -88,6 +88,10 @@ private fun BucketCoverImage(bucketId: Long, coverUri: Uri?, modifier: Modifier 
     val context = LocalContext.current
     var displaySize by remember { mutableStateOf(IntSize.Zero) }
     val cacheKey = bucketCoverCacheKey(bucketId, displaySize)
+    // LINT-01: ProduceStateDoesNotAssignValue 误报——`value = ...` 裹在
+    // `if (value == null && ...)` 条件分支里，lint 的静态检查器看不出
+    // 条件分支内的赋值（缓存命中时本来就不该重新赋值，这是有意为之）。
+    @Suppress("ProduceStateDoesNotAssignValue")
     val bmp by produceState(
         initialValue = thumbCache.get(cacheKey),
         key1 = coverUri,
