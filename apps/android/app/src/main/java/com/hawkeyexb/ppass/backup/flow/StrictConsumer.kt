@@ -55,25 +55,43 @@ class StrictConsumer(
     fun pauseByUser() {
         val current = ledger.load()
         val lease = current.fetchLease ?: run {
-            ledger.update { it.copy(consumerGate = ConsumerGate.PAUSED_BY_USER) }
+            ledger.update { snapshot ->
+                // MOB-63: a receipt can clear the final lease just before the
+                // user Pause reaches this branch. Pausing an already-drained
+                // round must not invent resumable work or a stale Resume UI.
+                val hasDeliverableWork = snapshot.items.any {
+                    it.deliveryState == DeliveryState.QUEUED ||
+                        it.deliveryState == DeliveryState.TRANSFERRING
+                }
+                if (hasDeliverableWork) {
+                    snapshot.copy(consumerGate = ConsumerGate.PAUSED_BY_USER)
+                } else {
+                    snapshot.copy(
+                        consumerGate = ConsumerGate.OPEN,
+                        consumerStatus = ConsumerStatus.IDLE,
+                        fetchLease = null,
+                    )
+                }
+            }
             return
         }
         val partial = delivery.stop(lease.queueSequence)
         ledger.update { snapshot ->
+            val items = snapshot.items.map { item ->
+                if (item.queueSequence == lease.queueSequence) {
+                    item.copy(
+                        deliveryState = DeliveryState.QUEUED,
+                        partialRetained = partial == PartialDisposition.RETAINED,
+                    )
+                } else {
+                    item
+                }
+            }
             snapshot.copy(
                 consumerGate = ConsumerGate.PAUSED_BY_USER,
                 consumerStatus = ConsumerStatus.IDLE,
                 fetchLease = null,
-                items = snapshot.items.map { item ->
-                    if (item.queueSequence == lease.queueSequence) {
-                        item.copy(
-                            deliveryState = DeliveryState.QUEUED,
-                            partialRetained = partial == PartialDisposition.RETAINED,
-                        )
-                    } else {
-                        item
-                    }
-                },
+                items = items,
             )
         }
     }

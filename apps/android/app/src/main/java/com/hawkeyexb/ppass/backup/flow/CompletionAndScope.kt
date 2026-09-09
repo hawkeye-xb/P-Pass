@@ -67,8 +67,19 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
                 } else item
             }
             val next = items.firstOrNull { it.deliveryState == DeliveryState.QUEUED }?.queueSequence
+            val pausedRoundDrained = snapshot.consumerGate == ConsumerGate.PAUSED_BY_USER &&
+                items.none {
+                    it.deliveryState == DeliveryState.QUEUED ||
+                        it.deliveryState == DeliveryState.TRANSFERRING
+                }
             snapshot.copy(
                 uploadCursor = UploadCursor(next),
+                // MOB-63: Pause may have already returned this final item to
+                // QUEUED when an in-flight Desktop receipt arrives. Once the
+                // receipt persists and no deliverable item remains, preserve
+                // the existing Idle ledger semantics instead of a false Resume.
+                consumerGate = if (pausedRoundDrained) ConsumerGate.OPEN else snapshot.consumerGate,
+                consumerStatus = if (pausedRoundDrained) ConsumerStatus.IDLE else snapshot.consumerStatus,
                 fetchLease = null,
                 items = items,
             )
