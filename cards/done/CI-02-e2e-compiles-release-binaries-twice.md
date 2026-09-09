@@ -1,6 +1,6 @@
 # CI-02 e2e nightly 两个 job 各自编译一遍 release 二进制　级别 L3
 
-> ⬜ 状态：未开工
+> ✅ 状态：已完成（2026-09-09）
 > 级别：L3 · 阻塞：无
 
 ## 问题
@@ -33,12 +33,12 @@ release 二进制在一次 nightly 里**只编译一次**，两个测试 job 都
 
 ## 验收标准
 
-- [ ] `e2e.yml` 里 `cargo build --release` 只出现一次
-- [ ] `e2e` 与 `scenarios` 仍是两个独立 job，一个红不影响另一个出结论
-- [ ] `actionlint .github/workflows/*.yml` 零告警
-- [ ] 实跑一次 `workflow_dispatch` 确认两个 job 都拿到二进制且都跑到结论
+- [x] `e2e.yml` 里 `cargo build --release` 只出现一次
+- [x] `e2e` 与 `scenarios` 仍是两个独立 job，一个红不影响另一个出结论
+- [x] `actionlint .github/workflows/*.yml` 零告警
+- [x] 实跑一次 `workflow_dispatch` 确认两个 job 都拿到二进制且都跑到结论
       （**这条必须真跑，不许只读 yml 就报绿**——本卡改的是 nightly 门禁本身）
-- [ ] 二进制的可执行位在 upload/download 往返后仍在（artifact 打包会丢
+- [x] 二进制的可执行位在 upload/download 往返后仍在（artifact 打包会丢
       权限位，需 `chmod +x` 或打 tar 保权限——这是这类改动最常见的坑）
 
 ## 范围
@@ -58,3 +58,19 @@ release 二进制在一次 nightly 里**只编译一次**，两个测试 job 都
 同一轮盘点已落地两项：`artifacts.yml` 的 macOS job 改只手动触发（10x 计费，
 自用裸二进制不值），`ci-workers.yml` 的 paths 去掉自身（防误触发生产部署
 去等审批）。本条因为要改 nightly 门禁本身、且必须实跑验证，单独开卡不顺手做。
+
+## 验收记录（2026-09-09）
+
+- 改法：`.github/workflows/e2e.yml` 新增 `build` job（`cargo build --release
+  -p daemon -p testclient` 只跑一次），打包为 `release-bins.tar.gz`（tar 保留
+  可执行位，规避 upload-artifact zip 打包丢 +x 的已知坑），`e2e`/`scenarios`
+  两个 job 各自 `needs: build` + `download-artifact` + `tar -xzf` 解包，解包
+  步骤各自加 `test -x` 断言可执行位存活。两个 job 保持独立、互不阻塞对方结论。
+- `actionlint .github/workflows/*.yml` 本地跑：exit 0，零告警。
+- 实跑 `workflow_dispatch`：run
+  https://github.com/hawkeye-xb/P-Pass/actions/runs/34317704548
+  （commit `f7bb429`）。三个 job 全部 `completed / success`：
+  `build` → `e2e`（含 `Unpack release binaries` 步骤成功、`test -x
+  target/release/daemon` 通过）→ `scenarios`（`Unpack release binaries` 步骤
+  成功、`test -x target/release/daemon` 与 `testclient` 均通过）。
+  `Build release binaries` 步骤在整个 run 里只出现一次（在 `build` job）。
