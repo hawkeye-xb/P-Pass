@@ -68,8 +68,8 @@ import com.hawkeyexb.ppass.backup.ReinstallHintPrefs
 import com.hawkeyexb.ppass.backup.resumeAfterInterruption
 import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
-import com.hawkeyexb.ppass.backup.pauseAutoBackup
-import com.hawkeyexb.ppass.backup.resumeAutoBackup
+import com.hawkeyexb.ppass.backup.disableAutoBackup
+import com.hawkeyexb.ppass.backup.enableAutoBackup
 import com.hawkeyexb.ppass.backup.triggerUserPresentBackup
 import com.hawkeyexb.ppass.backup.BACKUP_WORK_NAME
 import com.hawkeyexb.ppass.backup.CATCHUP_WORK_NAME
@@ -207,7 +207,7 @@ fun PPassApp() {
     // 一遍门控的话，下次改其中一条（比如再加一个「暂停中不补」的条件）就又会
     // 漏——MOB-33/34/35/38 四个 bug 全是这个形状。
     val foregroundCatchup = {
-        if (pairings.load() != null && !AutoBackupPrefs(context.filesDir).paused()) {
+        if (pairings.load() != null && AutoBackupPrefs(context.filesDir).enabled()) {
             // 后台监听：中断待确认时不许重挂（MOB-28 红线，唯一入口是
             // resumeAfterInterruption）。
             if (!backupInterrupted) scheduleAutoBackup(context)
@@ -532,9 +532,9 @@ fun PPassApp() {
             // 存储电脑详情是二级页——打开时跟大图查看页一样把底部 tab
             // 栏整体隐藏（用户实机反馈：进了二级页底部 tab 还杵在那）。
             var storageDetailOpen by remember { mutableStateOf(false) }
-            // UX-06: 暂停态持久化——重开 App 保持用户选择；恢复时重新排周期任务。
+            // MOB-65: 自动触发策略持久化；它不参与当前 Flow 轮的暂停/继续。
             val prefs = remember { AutoBackupPrefs(context.filesDir) }
-            var autoBackupPaused by remember { mutableStateOf(prefs.paused()) }
+            var autoBackupEnabled by remember { mutableStateOf(prefs.enabled()) }
             val scope = rememberCoroutineScope()
             LaunchedEffect(Unit) { client.bind(identity.secretKey()) }
             val mediaPermission = rememberLauncherForActivityResult(
@@ -615,11 +615,11 @@ fun PPassApp() {
                             notifyOnFailurePrefs.setEnabled(it)
                         },
                         pairedAt = s.pairing.pairedAt,
-                        autoBackupPaused = autoBackupPaused,
-                        onToggleAutoBackup = { paused ->
-                            autoBackupPaused = paused
-                            if (paused) pauseAutoBackup(context)
-                            else resumeAutoBackup(context)
+                        autoBackupEnabled = autoBackupEnabled,
+                        onToggleAutoBackup = { enabled ->
+                            autoBackupEnabled = enabled
+                            if (enabled) enableAutoBackup(context)
+                            else disableAutoBackup(context)
                         },
                         // UX-06 单方停止：本地断开不依赖 daemon 回应。确认
                         // 交互（三层防误触）在 StorageComputerDetail 内部
@@ -862,7 +862,7 @@ private fun clearLocalPairing(
     // （电脑端删过库时 M 虚高，首屏是错的）。
     clearConfirmedCacheForRemote(context.filesDir, pairing.daemonNodeId)
     WatermarkStore(context.filesDir).save(0)
-    AutoBackupPrefs(context.filesDir).setPaused(false)
+    AutoBackupPrefs(context.filesDir).setEnabled(true)
     val work = WorkManager.getInstance(context)
     listOf(BACKUP_WORK_NAME, CATCHUP_WORK_NAME, PROCESS_CATCHUP_WORK_NAME, MANUAL_BACKUP_WORK_NAME)
         .forEach(work::cancelUniqueWork)

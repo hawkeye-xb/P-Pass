@@ -96,8 +96,8 @@ fun HomeScreen(
     // 默认开，落地到 NotifyOnFailurePrefs，BackupWorker 发通知前会读。
     notifyOnFailure: Boolean = true,
     onNotifyOnFailureChange: (Boolean) -> Unit = {},
-    // UX-06: 全局暂停自动备份开关 + 断开连接（警示页确认在 MainActivity）
-    autoBackupPaused: Boolean = false,
+    // MOB-65: 自动触发策略开关；它不表示当前 Flow 轮次是否暂停。
+    autoBackupEnabled: Boolean = true,
     onToggleAutoBackup: (Boolean) -> Unit = {},
     onDisconnect: () -> Unit = {},
     // 存储端移除/吊销本设备后备份被拒——「配对已失效」红卡 + 重新扫码。
@@ -556,9 +556,8 @@ fun HomeScreen(
         ) {
             RuleSwitchRow(
                 label = stringResource(R.string.auto_backup_pause),
-                // checked = 开着自动备份；关掉即 pauseAutoBackup。
-                checked = !autoBackupPaused,
-                onCheckedChange = { enabled -> onToggleAutoBackup(!enabled) },
+                checked = autoBackupEnabled,
+                onCheckedChange = onToggleAutoBackup,
             )
         }
 

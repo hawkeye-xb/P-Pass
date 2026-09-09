@@ -161,7 +161,7 @@ internal fun scheduleMediaWatchNow(context: Context) {
     }
 }
 
-/** UX-06: 暂停自动备份时连监听一起停（否则"暂停"对事件②形同虚设）。 */
+/** MOB-65: 关闭自动备份时取消监听；这不等同于暂停当前 Flow 轮次。 */
 fun cancelMediaWatch(context: Context) {
     runCatching { jobScheduler(context).cancel(MEDIA_WATCH_JOB_ID) }
 }
@@ -257,10 +257,10 @@ class MediaWatchJob : JobService() {
         val ctx = applicationContext
         thread(name = "ppass-media-watch") {
             try {
-                // 未配对 / 已暂停 → 不派活（doWork 内部还有第二道闸）。
-                val paused = AutoBackupPrefs(ctx.filesDir).paused()
+                // 未配对 / 自动策略关闭 → 不派活（Worker 内部还有第二道闸）。
+                val autoEnabled = AutoBackupPrefs(ctx.filesDir).enabled()
                 val paired = PairingStore(ctx.filesDir).load() != null
-                if (paired && !paused) {
+                if (paired && autoEnabled) {
                     dispatchWatchBackup(ctx)
                     // R3 keeps the existing watcher wake behavior for R4,
                     // while the production Flow receives only a discovery
@@ -273,9 +273,9 @@ class MediaWatchJob : JobService() {
                 // 释放。**无论派活成败都要重挂**——派活失败最多丢一轮
                 // （水位没动，下个事件捞得回来），重挂失败是监听永久消失。
                 //
-                // 暂停态下不重挂：否则「暂停自动备份」被这里悄悄复活
-                // （pauseAutoBackup 的 cancel 与这里可能撞上，所以再查一次）。
-                if (!AutoBackupPrefs(ctx.filesDir).paused()) scheduleMediaWatchNow(ctx)
+                // 自动策略关闭时不重挂：disableAutoBackup 的 cancel 与这里
+                // 可能撞上，所以在释放前重新读同一条策略事实。
+                if (AutoBackupPrefs(ctx.filesDir).enabled()) scheduleMediaWatchNow(ctx)
             }
         }
         return true

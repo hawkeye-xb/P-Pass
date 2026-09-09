@@ -152,7 +152,7 @@ class BackupHealthPrefs(private val dir: File) {
  */
 fun reconcileWatchOnProcessStart(context: Context, nowMs: Long, elapsedMs: Long) {
     if (PairingStore(context.filesDir).load() == null) return
-    if (AutoBackupPrefs(context.filesDir).paused()) return
+    if (!AutoBackupPrefs(context.filesDir).enabled()) return
 
     val prefs = BackupHealthPrefs(context.filesDir)
     val state = prefs.load()
