@@ -37,6 +37,8 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
+| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | `ERR_NOT_PAIRED` 业务拒绝复用既有 pairingLost 红卡；仅 Flow delivery / holder，先补 JVM RED 用例 | `main` |
+| [MOB-63](../cards/MOB-63-pause-racing-final-completion-must-set-idle.md) | 暂停与最后完成回执竞态：仅在账本无可传项时收敛 Idle；否则保留继续入口 | `main` |
 
 
 UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 视觉验收不通过，已退回重做；
@@ -77,8 +79,8 @@ UI-08 已通过归档。
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS Overlay 隐藏传统标题栏后，主界面与首启向导只有零碎拖拽空白；补连续顶部拖拽带且不吞交互 | L3 |
 | P2 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 脱离文档流方向正确但视觉验收不通过；现为 App.svelte 裸 `<p>`，需重做为紧凑且视觉居中的瞬时反馈 | L2 |
-| P2 | [MOB-63](../cards/MOB-63-pause-racing-final-completion-must-set-idle.md) | 暂停恰逢最后一张完成：检测到轮次已清空后直接归位 Idle；正常有待传项的暂停仍保留「继续」 | L1 |
-| P2 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 桌面移除设备后手机端在下次尝试前毫无反馈；应主动感知并提示「连不上电脑了」 | L2 |
+
+
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
