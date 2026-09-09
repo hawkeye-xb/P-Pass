@@ -61,6 +61,10 @@ queue-check:
 md-check:
   @python3 ./tools/check-markdown-tables.py
 
+# DESK-15: assets/design/tokens.css must not drift from tokens.json
+token-check:
+  @python3 ./tools/check-token-drift.py
+
 # ── Development ─────────────────────────────────────
 
 # Start daemon in development mode
@@ -70,7 +74,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint test arch-check queue-check md-check
+ci: fmt lint test arch-check queue-check md-check token-check
   @echo "==> CI pipeline: all green ✅"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）

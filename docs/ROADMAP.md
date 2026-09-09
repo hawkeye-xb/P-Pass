@@ -21,7 +21,12 @@ now gets a transparent 32px direct Tauri drag hit area without a visual bar or
 layout shift; default and <1080px native window regression remain. MOB-65 is
 code-complete: the automatic-backup switch now controls only automatic wake
 producers, leaving the current Flow round and its Pause/Continue/Cancel state
-untouched; shared-device verification remains.
+untouched; shared-device verification remains. DESK-15 is code-complete:
+desktop Button/Card/Dialog/Notice/NavItem now each own a single visual
+contract (token-backed variants) instead of each page hand-rolling styles,
+with a tokens.css/tokens.json drift check wired into `just ci`;
+cross-breakpoint automated visual regression is explicitly deferred, not
+missing.
 **当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。MOB-61 已代码完成：
 手机照片在 Flow 发现后被删除会终态跳过，绝不重传；三星隔离照片验收仍欠。
 NET-04 的暂停/取消/重试仍被独立的 `flow.fetch` 15 秒 RPC 截止问题阻塞。
@@ -33,6 +38,10 @@ DESK-14 已代码完成：macOS Overlay 获得透明 32px、直接命中的 Taur
 不新增色带或布局位移；默认与 <1080px 原生窗口回归仍待完成。
 MOB-65 已代码完成：自动备份开关现只控制自动 wake，不再改当前 Flow 轮及其
 暂停/继续/取消状态；待共享真机验证。
+DESK-15 已代码完成：桌面 Button/Card/Dialog/Notice/NavItem 五个组件各自
+收口成唯一的视觉合同（token 驱动的 variant），不再由页面各写各的样式；
+`tokens.css`/`tokens.json` 派生漂移检查已接进 `just ci`；跨断点自动化
+视觉回归明确暂缓，不是遗漏。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 

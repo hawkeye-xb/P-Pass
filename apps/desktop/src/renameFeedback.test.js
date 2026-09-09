@@ -17,19 +17,23 @@ function codeOf(path) {
 
 describe("UI-04b 改名反馈浮层", () => {
   const src = codeOf(new URL("./App.svelte", import.meta.url).pathname);
+  // DESK-15：.message/.message-close 的视觉定义已从 App.svelte 挪进
+  // Notice 组件（Tailwind class，不是原始 CSS），下面两条断言跟着挪过去。
+  const noticeSrc = codeOf(new URL("./lib/components/ui/notice/notice.svelte", import.meta.url).pathname);
 
-  it(".message 必须 position: fixed——脱离文档流，不占布局", () => {
-    const css = src.slice(src.indexOf(".message {"), src.indexOf(".message-close"));
-    expect(css).toContain("position: fixed");
+  const pStart = noticeSrc.indexOf("<p");
+  const pTag = noticeSrc.slice(pStart, noticeSrc.indexOf(">", pStart) + 1);
+
+  it("Notice 必须 fixed 定位——脱离文档流，不占布局", () => {
+    expect(pTag).toMatch(/class="[^"]*\bfixed\b[^"]*"/);
     // 反证：旧实现用 margin 占位（margin: 0 0 18px）把内容顶下去。
-    expect(css).not.toMatch(/margin:\s*0\s+0\s+18px/);
+    expect(pTag).not.toMatch(/\bm-\[?0[^"]*18px/);
   });
 
-  it("浮层必须高于模态背板（z-index 60 > modal-backdrop 50），模态打开时提示仍可见", () => {
-    const css = src.slice(src.indexOf(".message {"), src.indexOf(".message-close"));
-    expect(css).toContain("z-index: 60");
-    const backdrop = src.slice(src.indexOf(".modal-backdrop {"), src.indexOf(".modal {"));
-    expect(backdrop).toContain("z-index: 50");
+  it("浮层必须高于模态背板（Notice z-[60] > Dialog 组件遮罩 z-50），模态打开时提示仍可见", () => {
+    expect(pTag).toMatch(/class="[^"]*\bz-\[60\][^"]*"/);
+    const dialogSrc = codeOf(new URL("./lib/components/ui/dialog/dialog.svelte", import.meta.url).pathname);
+    expect(dialogSrc).toMatch(/class="[^"]*\bz-50\b[^"]*"/);
   });
 
   it("改名成功/失败反馈仍走 flashMessage——机制复用，不另起炉灶", () => {

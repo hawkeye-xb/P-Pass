@@ -24,9 +24,10 @@
 - **最新可测版本**：working tree 已 bump 到 `0.5.0-test.8`（2026-09-07 `e5d7a28`），
   已打 tag 到 `v0.5.0-test.7`；本行此前长期滞后写着 v0.4.0-test.9，2026-09-09
   核实修正——改版本号后务必同步这里，别让下次汇报又抄错。
-- **本机全绿基线**：`just ci` all green · nextest 320 passed / 1 skipped ·
-  Android 46 类 / 347 tests / 0 failures · 桌面 `pnpm test 24` +
-  `src-tauri cargo test --lib 15`。
+- **本机全绿基线**：`just ci` all green · nextest 345 passed / 1 skipped ·
+  Android 46 类 / 347 tests / 0 failures · 桌面 `pnpm test 58`（DESK-15
+  新增 Button/Card 组件合同测试）+ `src-tauri cargo test --lib 18`。
+  （2026-09-09 核实更新，此前长期滞后写着 320/24/15。）
 - **环境事实**：验收人照片库 `~/Pictures/P-Pass 家庭照片库`（**真实数据，
   一个字节都不许碰**）；测试机三星 SM-S9210，**不许做 adb 写操作**；
   `gh` 未登录、仓库私有 → 看不到 Actions 结论，push 后要验收人自己扫 CI。
@@ -44,6 +45,7 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | 32px 透明顶部 hit area 已实现（不改色/布局）；待默认与 <1080px macOS 窗口拖拽/视觉回归 | L3 |
+| [DESK-15](../cards/DESK-15-desktop-design-system-convergence.md) | Button/Card/Dialog/Notice/NavItem 五个组件收口 + token 派生检查已完成，本地 `just ci`/浏览器验证全绿；待在真实 Tauri 窗口（不是 headless 浏览器预览）里过一遍五个组件 | L2 |
 | [MOB-63](../cards/MOB-63-pause-racing-final-completion-must-set-idle.md) | 最后回执与暂停的双向竞态均收敛 Idle；存在待传项时仍保留「继续」 | L1 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
 | [MOB-65](../cards/MOB-65-auto-backup-switch-must-not-pause-current-round.md) | 自动开关现只取消自动 wake；空闲不造「继续/取消」，在传当前轮不被中断 | L2 |
@@ -75,7 +77,6 @@ UI-08 已通过归档。
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 脱离文档流方向正确但视觉验收不通过；现为 App.svelte 裸 `<p>`，需重做为紧凑且视觉居中的瞬时反馈 | L2 |
-| P2 | [DESK-15](../cards/DESK-15-desktop-design-system-convergence.md) | 保留现有设计与技术栈；将 v3、既有 token、shadcn 源码收口为桌面 P-Pass 组件合同 | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死 | L2 |
@@ -185,6 +186,7 @@ UI-08 已通过归档。
 | MOB-18 | superseded | 已被 MOB-28 取代，禁止按本卡实施 |
 | DESK-11 | 待确认 | 🔵 backlog，若确认露出完整 hex 则升级为 DESK-10 的脱敏漏 |
 | UI-05 / UI-06 | 用户暂时接受 | 展示细节问题，低优 |
+| [DESK-15](../cards/DESK-15-desktop-design-system-convergence.md) | 暂缓，低优先级 | 2026-09-09 拍板：Button 组件缺「图标动作」(icon-only) 变体——验收标准列了，但目前代码没有真实调用场景，不凭空加；等出现实际需要图标按钮的页面时再补 |
 
 ---
 

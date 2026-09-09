@@ -4,15 +4,10 @@
   import { Button } from "$lib/components/ui/button";
   import { startupFailureText } from "$lib/daemonStartupError.js";
 
-  // 2026-08-17：向导页对齐设计稿 v2 重写——跟 App.svelte 迁移页同款
-  // 按钮族常量（BTN=主按钮 ink 底纸字，BTN_OUTLINE=次按钮透明底描边，
-  // BTN_LINK=纯文字链接），保证全站按钮视觉一致，不重复定义新样式。
-  const BTN =
-    "h-11 min-h-11 rounded-md border border-ink px-[26px] text-[15px] font-bold hover:bg-ink-hover";
-  const BTN_OUTLINE =
-    "h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60";
-  const BTN_LINK =
-    "h-auto min-h-0 rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px]";
+  // DESK-15：按钮视觉合同收进 Button 组件本身（primary/secondary/danger/
+  // link variant），本页只保留一个真实的版式例外——向导主按钮比全站其它
+  // 主按钮更宽（px-[26px] vs 组件默认 18px），两个向导页一致，是有意的。
+  const WIZARD_PRIMARY_WIDE = "px-[26px]";
 
   let { defaultDir, configuredLibraryDir, onDone } = $props();
 
@@ -148,10 +143,10 @@
            路径 = 默认时不显示（没有可回退的目标）。 -->
       <div class="flex items-center gap-[10px]">
         <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{libraryDir}</code>
-        <Button variant="outline" class="{BTN_OUTLINE} flex-none" onclick={chooseFolder}>更改…</Button>
+        <Button variant="secondary" class="flex-none" onclick={chooseFolder}>更改…</Button>
       </div>
       {#if libraryDir !== defaultDir}
-        <button class="self-start {BTN_LINK} text-safe hover:text-safe" onclick={useDefault} title="回到默认位置">↺ 回到默认位置</button>
+        <Button variant="link" tone="safe" class="self-start" onclick={useDefault} title="回到默认位置">↺ 回到默认位置</Button>
       {/if}
       <!-- 设计稿 v2：TCC 保护目录提醒——「桌面」「文稿」受 macOS 保护会
            额外弹一次权限申请，放不下时也更难搬家。 -->
@@ -159,7 +154,7 @@
     </div>
     <div class="mt-auto flex items-center justify-between">
       <span></span>
-      <Button class={BTN} disabled={!libraryDir || busy} onclick={toStep2}>继续</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} disabled={!libraryDir || busy} onclick={toStep2}>继续</Button>
     </div>
   {:else if step === 2}
     <div class="flex flex-col gap-4">
@@ -187,10 +182,10 @@
                不同 macOS 版本/机型入口还不一样，与其让人自己找菜单，不如
                弹系统授权直接帮着改；不想授权的人保留手动入口退路。 -->
           <div class="flex items-center gap-[10px]">
-            <Button class="{BTN} h-10 min-h-10 flex-none text-[14px]" disabled={sleepFixBusy} onclick={fixAutoSleep}>
+            <Button size="compact" disabled={sleepFixBusy} onclick={fixAutoSleep}>
               {sleepFixBusy ? "设置中…" : "一键设置"}
             </Button>
-            <Button variant="outline" class="{BTN_OUTLINE} h-10 min-h-10 flex-none text-[14px]" onclick={() => invoke("open_power_settings")}>去系统设置</Button>
+            <Button variant="secondary" size="compact" onclick={() => invoke("open_power_settings")}>去系统设置</Button>
           </div>
           {#if sleepFixError}
             <p class="m-0 text-[13px] text-act">{sleepFixError}——你也可以点「去系统设置」自己关：打开后在右上角搜索框搜「睡眠」最快，不同 macOS 版本菜单位置不一样。</p>
@@ -201,8 +196,8 @@
       {/if}
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <button class={BTN_LINK} onclick={() => (step = 1)}>‹ 上一步</button>
-      <Button class={BTN} onclick={toStep3}>继续</Button>
+      <Button variant="link" onclick={() => (step = 1)}>‹ 上一步</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} onclick={toStep3}>继续</Button>
     </div>
   {:else if step === 3}
     <!-- 设计稿 v2：第 3 步 = 「设为常驻服务」——先讲清会申请什么/不会
@@ -229,8 +224,8 @@
       </div>
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <button class={BTN_LINK} onclick={() => (step = 2)}>‹ 上一步</button>
-      <Button class={BTN} disabled={busy} onclick={finishSetup}>
+      <Button variant="link" onclick={() => (step = 2)}>‹ 上一步</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} disabled={busy} onclick={finishSetup}>
         {busy ? "正在启动…" : "完成"}
       </Button>
     </div>
