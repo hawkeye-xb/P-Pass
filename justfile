@@ -107,3 +107,11 @@ verify-m2:
     tools/android-hello.sh
     tools/android-pair.sh
     tools/android-backup.sh
+
+# Local disk recovery. No arguments only previews; deletion needs --apply plus a scope.
+cleanup-local *args:
+    bash tools/clean-local-builds.sh {{args}}
+
+# Safety integration test; it creates and destroys only a temporary Git repository.
+test-cleanup-local:
+    bash tools/test-clean-local-builds.sh
