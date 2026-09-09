@@ -9,12 +9,12 @@ real-device dogfood. MOB-61 is code-complete: a phone photo deleted after
 Flow discovery is now terminally skipped, never retried; the Samsung
 isolated-photo check remains. NET-04 pause/cancel/retry remains blocked by
 the separate `flow.fetch` 15-second RPC-deadline investigation. The
-UI-04a/UI-04b/UI-04c/UI-08 batch is code-complete and pending the shared
-Android/desktop regression walkthroughs.
+UI-04a/UI-04c remain pending shared Android regression; UI-04b failed visual
+acceptance and is queued for redesign; UI-08 passed and is archived.
 **当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。MOB-61 已代码完成：
 手机照片在 Flow 发现后被删除会终态跳过，绝不重传；三星隔离照片验收仍欠。
 NET-04 的暂停/取消/重试仍被独立的 `flow.fetch` 15 秒 RPC 截止问题阻塞。
-UI-04a/UI-04b/UI-04c/UI-08 批次均已代码完成，待共享 Android/桌面回归走查。
+UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 视觉验收不通过、退回重做；UI-08 已通过归档。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 
@@ -124,8 +124,8 @@ P4 desktop shell / 桌面壳
       from the Mac library. Known debt: video thumbs fail on the daemon
       (thumb_state=2 → gray placeholder tiles)
 - [~] **MOB-26（合并 MOB-45）统一 Android 媒体查看器与系统返回** — **2026-09-08 代码完成，待 Mate 60 验收**：冻结过滤后的页序，`HorizontalPager` 跨图片与既有 Media3 视频页；Telephoto `zoomable` 负责图片缩放/嵌套横向手势，未缩放下拉 ≥96dp 才关闭；查看器/手动配对/存储详情各自优先消费系统返回，顶层 reducer 仅让二级 Screen 返回，根页仍交给 Android 退出。Android JVM 307/0/4（强制重跑）、debug APK 48,934,824→49,642,264 bytes（+707,440/+1.4457%）、`just ci` 全绿；`lintDebug` 受本机 JDK25 的既有 BUILD-01 阻断。MOB-45 已归档为合并索引，真实边缘返回/翻页/缩放/下拉/视频释放录屏未完成。
-- [~] MOB-47 cross-platform video preview — **code merged 2026-09-02; real-device
-      acceptance pending**: desktop routes video through a hash-resolved canonical
+- [x] MOB-47 cross-platform video preview — **real-device acceptance passed 2026-09-09**:
+      desktop routes video through a hash-resolved canonical
       exact-file asset-protocol grant and native `<video>`, with thumbnail fallback
       and generation-scoped stale-DOM-error guard; Android uses Media3 ExoPlayer /
       PlayerView with disposal. Independent L2 review and local desktop/Android gates pass.
@@ -443,7 +443,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## MOB 移动端批次（2026-08-11 三星真机反馈驱动，队列按 MOB-01 → MOB-02 → UX-08 → REL-02 → DEV-01）
 
-- [x] MOB-19 备份只有一条管线（手动 = 又一种触发方式） — **2026-08-20（代码完成，真机验收 owed）**:
+- [x] MOB-19 备份只有一条管线（手动 = 又一种触发方式） — **2026-09-09 已被 Flow 生产架构取代并归档**：
       卡面原方案"照搬 MOB-09 的错误隔离到手动链路"被用户否掉——"你为什么这里
       弄了两条路径去做备份呢？"两份实现必然漂移，MOB-09 只修一份就是证据。
       改为**删掉第二条**：`triggerManualBackup` 入 BackupWorker 与既有五种触发
@@ -479,7 +479,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [x] **REBUILD-05 Flow 范围扩展补扫接线** — **2026-09-02 三星 scope backfill 通过，跨端对账 REBUILD-06 已解**：范围扩大时，持久 ScopeRevision 与 historical-backfill boundary/progress；历史页追加新 stableId 而不移动 live cursor 或打断 strict head，已确认项不重复入队。三星 ledger 从 26 项收敛至 30 `CONFIRMED`（revision=2、无遗留请求）；为 Pause 加入的新测试媒体随后暴露 `flow.fetch` 15 秒无响应与 `flow.offer err.not_authorized`，已由 REBUILD-06 修复。
 - [x] **REBUILD-05 对账语义：迟到完成回执被 Pause/Cancel 竞态误判丢弃** — **2026-09-02 三星真机自然复现通过**：只读比对 Desktop `flow_delivery` 与手机 `discovery-ledger.json` 定位到 `CompletionAndScope.acceptCompletionReceipt` 把 lease 清空误判为被取代，丢弃 Desktop 迟到回执（即卡面所述"多 1 条历史 completed grant"）；修复后仅当存在另一活跃 lease 才拒绝，反证覆盖真实取代场景。Android JVM 260/0/4 skip、`assembleDebug`、`just ci` 全绿。真机验收向测试相册连续导入 15~500MB 合成媒体制造真实 Pause/toggle 竞态，item #38 自然出现「Desktop 已 completed、手机仍 QUEUED」的目标场景，Continue 后 4 秒内正确收敛为 `CONFIRMED`。验收中发现两处独立衍生问题（不在本卡修复，已开 MOB-49/MOB-50）：取消本轮后 UI 状态与消费者游标均无生产清除路径。
 - [x] **REBUILD-06 新 Flow 对新媒体的 offer/fetch 授权与回执一致性** — **2026-09-02 完成**：运行中 epoch 切换会撤销旧 delivery；已认证 member 可从 hello 刷新当前 epoch。真机将拒绝精确定位为同 epoch/hash 的 completed grant 具有旧 lease；Desktop 现原子 rebind recovered lease/provider 并回放原 durable receipt，epoch/hash 不同仍拒绝。三星新队头确认与 REBUILD-04 真机流程均通过。
-- [x] DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 — **2026-08-25（commit 1e1359f + 0e0521f，真机确认 owed）· 2026-08-26 真机验收打回脱敏一处、当日补齐（🟡 其余项仍等真机复验）**:
+- [x] DESK-10 「导出日志」不含 daemon 日志，且 daemon 挂了它自己也不工作 — **2026-09-09 正常 daemon 可达导出已通过；不可达分支仍待隔离实证**:
       验收人误装 0.3.0 的包，daemon 因迁移降级反复启动失败，按「导出日志」发来
       求助的 zip **只有 489 字节、一条四天前的 diag 事件**，而真实错误
       （`migration 2 was previously applied but is missing in the resolved migrations`）
@@ -511,7 +511,10 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       「原样搬」daemon 的 JSON——新壳配旧 daemon 会再漏一次，保证做在 bundle
       边界上。既有那条 audit 测试的 fixture 里 `detail` 一个 hex 都没有，断言
       空转；判据已换成「扫整个包里最长连续 hex 串，超 24 位就红」。
-      nextest 320 passed / src-tauri 15 passed，两侧反证真跑。
+      nextest 320 passed / src-tauri 15 passed，两侧反证真跑。2026-09-09 的真实
+      `ppf-logs.zip` 含 9 个预期文件、App/daemon 同为 0.5.0-test.8、daemon reachable；
+      全包扫描未检出原始家目录或 ≥24 位连续 hex。这个包只能验正常分支，不能代替
+      daemon 不可达实证。
 - [x] DESK-08 活动流用时间戳当 each key，同毫秒的审计撞键把整块打挂 — **2026-08-21（真机确认 owed）**:
       用户控制台刷屏 `each_key_duplicate: 1787292449250:asset.removed_external`。
       一次在 Finder 删 5 张 → WATCH-02 的对账把 5 条 `asset.removed_external`
@@ -566,7 +569,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       ⚠️ 全仓**四处**同形（DaemonHello / DaemonBackup / NetProbe / DeviceBackup），
       上一轮只修一处就宣布"解红"。已抽成共用 `addrOf(qr)`。
       **教训：「这个测试挂了」要先问「还有几个同形的」。**
-- [x] MOB-09 一条坏 MediaStore 记录让整批备份永久失败 — **2026-08-20（真机部分验过）**:
+- [x] MOB-09 一条坏 MediaStore 记录让整批备份永久失败 — **2026-09-09 已被 Flow 生产架构取代并归档**：
       `buildCandidates()` 逐条隔离 + 探针 open 已在 `BackupWorker.kt`。真机实测到
       `skipped 1/1 unreadable media record(s)` 且无 ENOENT 导致的 RETRY。
       **未做**：坏记录与好记录同批的对照（卡面原验收要 `skipped 1/2`）。
@@ -586,7 +589,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       设置页 T-083 目标 1「仅『设置』28px serif」两条都被推翻）——设计稿要跟着
       改，否则下次 UI 走查会把这里判成「未实现」。已 grep 确认没有测试钉这两个
       标题的样式。挂账：真机确认两页顶部无大字、不贴状态栏（用户）。
-- [~] UI-08 选相册长名称截断与缩略图清晰度链路 — **2026-09-08 代码完成，待共享真机回归**：根因是 `BucketScreen` 原先固定请求 `loadThumbnail(Size(200, 200))`，而封面卡按实际网格显示像素绘制，低分辨率位图随后被放大；长名称 `Text` 没有单行溢出约束且使用非填满权重，Row 可换行撑高。修复为用 `onSizeChanged` 读取封面 Box 的实际 `IntSize`，请求与缓存 key 均带显示宽高；名称改 `weight(1f)`、`maxLines = 1`、`TextOverflow.Ellipsis`，不动选中集合/桶计数语义。新增源码守卫 2 条，Android JVM **313/0/0/4 ignored**（`--rerun-tasks`，60 个 fresh XML）；截图和真实视觉清晰度证据留给共享回归。
+- [x] UI-08 选相册长名称截断与缩略图清晰度链路 — **2026-09-09 验收通过并归档**：根因是 `BucketScreen` 原先固定请求 `loadThumbnail(Size(200, 200))`，而封面卡按实际网格显示像素绘制，低分辨率位图随后被放大；长名称 `Text` 没有单行溢出约束且使用非填满权重，Row 可换行撑高。修复为用 `onSizeChanged` 读取封面 Box 的实际 `IntSize`，请求与缓存 key 均带显示宽高；名称改 `weight(1f)`、`maxLines = 1`、`TextOverflow.Ellipsis`，不动选中集合/桶计数语义。新增源码守卫 2 条，Android JVM **313/0/0/4 ignored**（`--rerun-tasks`，60 个 fresh XML）；验收人已确认真实视觉清晰度与长名称呈现。
 - [~] UI-04a + UI-04c 全局提示容器与最高优先级单条呈现 — **🟡 2026-09-08 代码完成（已合入 main），待共享真机回归**：
       两张卡共享同一提示呈现层，合并落地。`ui/HomeNotices.kt` 新增 `NoticeHost`
       （电池白名单/通知引导/中断恢复/取消轮入口/重传告知五条输入集中构造候选 →
@@ -598,7 +601,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       Android JVM 309/0/0/4（59 XML 本次生成，HomeNoticesTest 6/0/0），
       `just queue-check` 通过。真机欠账：所有 tab 见中断提示、同时多条件只显示
       一条最高优先级——不移动卡片到 done/。
-- [~] UI-04b 设备改名反馈浮层 — **🟡 2026-09-08 代码完成（已合入 main），待共享桌面回归**：
+- [ ] UI-04b 设备改名反馈浮层 — **🟠 2026-09-09 视觉验收不通过，退回重做**：
       `App.svelte` 的 `.message` 改为 fixed 浮层，脱离文档流且保留成功/失败反馈；
       桌面 Vitest 6 文件 / 43 tests 与 `pnpm build` 全绿。真机欠账：反馈出现/消失
       时下方内容不发生位移。

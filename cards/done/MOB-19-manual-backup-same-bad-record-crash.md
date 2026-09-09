@@ -1,6 +1,9 @@
 # MOB-19 手动备份链路有与 MOB-09 同形的坏记录炸批问题　级别 L1
 
-> 🟡 状态：代码已合并，等真机验收
+> ✅ 状态：已被生产架构取代，归档（2026-09-09）。本卡点名的“手动第二条
+> 批处理管线”已被 REBUILD Flow 取代；`triggerManualBackup()` 现仅 enqueue
+> 同一个 Flow wake，`BackupWorker` 不扫描、哈希或传输。缺源终态由 MOB-61 的
+> `SKIPPED_SOURCE_MISSING` 统一负责，不能再让验收人复现旧批处理场景。
 > 级别：L1 · 阻塞：无
 
 ## 问题

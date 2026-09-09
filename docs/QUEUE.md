@@ -39,7 +39,8 @@
 |---|---|---|
 
 
-其余 UI-04a/UI-04b/UI-04c/UI-08 均已合入 `main`，转入下方共享回归队列。
+UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 视觉验收不通过，已退回重做；
+UI-08 已通过归档。
 
 ---
 
@@ -48,24 +49,22 @@
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
-| [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 桌面改名反馈已改 fixed 浮层（代码完成），待共享桌面回归 | L2 |
-| [UI-08](../cards/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 代码完成：长名称单行省略、封面按显示像素请求；待共享回归截图与清晰度实证 | L3 |
+
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
 | [NET-05](../cards/NET-05-flow-data-path-status-follows-transfer-lifecycle.md) | 代码完成：active Flow 先显示连接中，随后显示 blobs 数据面直连/中继；待慢速传输及 Pause/Cancel/失败真机回归 | L2 |
 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 页序、Telephoto 缩放/下拉关闭、系统返回层级 | L2 |
 | [UX-14](../cards/UX-14-a-failed-retry-is-rendered-as-paused.md) | 暂停 → 继续 → 中断连接；界面不许又显示「继续」，应如实显示待备份或错误 | L1 |
-| [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | **复验**：两种导出均含预期日志；整个 zip 不得含用户名 | L1 |
+| [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | 正常 daemon 可达包已通过；不可达分支必须由 agent 以隔离故障环境实证，不能要求验收人造故障 | L1 |
 | [WATCH-07](../cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏 | L2 |
-| [MOB-19](../cards/MOB-19-manual-backup-same-bad-record-crash.md) | 手动「再试一次」与自动备份是同一条管线 | L2 |
-| [MOB-09](../cards/MOB-09-one-bad-media-record-kills-batch.md) | 一条坏相册记录不再炸掉整批备份（好坏同批仍待验） | L2 |
+
 | [MOB-13](../cards/MOB-13-triplet-k-never-reaches-zero.md) | 「待备份 K」能归零（有前置，见卡） | L2 |
 | [BLOB-01](../cards/BLOB-01-ingest-leaves-a-duplicate-in-the-blob-store.md) | 备份占盘不再翻倍（实测 2.05x → 1.00x） | L2 |
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
-| [MOB-47](../cards/MOB-47-video-preview-in-viewer.md) | 桌面视频应直接播放且可降级缩略图；Android 有播放/seek 控制且退出无播放器泄漏 | L2 |
+
 
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 
@@ -81,6 +80,7 @@
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS Overlay 隐藏传统标题栏后，主界面与首启向导只有零碎拖拽空白；补连续顶部拖拽带且不吞交互 | L3 |
+| P2 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 脱离文档流方向正确但视觉验收不通过；现为 App.svelte 裸 `<p>`，需重做为紧凑且视觉居中的瞬时反馈 | L2 |
 | P2 | [MOB-63](../cards/MOB-63-pause-racing-final-completion-must-set-idle.md) | 暂停恰逢最后一张完成：检测到轮次已清空后直接归位 Idle；正常有待传项的暂停仍保留「继续」 | L1 |
 | P2 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 桌面移除设备后手机端在下次尝试前毫无反馈；应主动感知并提示「连不上电脑了」 | L2 |
 | P3 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭客户端影子状态 | L1 |
@@ -113,6 +113,9 @@
 | [UX-13](../cards/done/UX-13-no-resume-affordance-after-pause.md) | 三星真机 2026-09-09：暂停后按钮原地变「继续」，多轮暂停/继续验证正常，最终跑完全部备份 | 无——续传入口已闭环 |
 | [MOB-51](../cards/done/MOB-51-hero-pause-not-sticky-across-round.md) | 三星真机 2026-09-09：连续备份多张照片全程可点「暂停」，与 MOB-49/50 组合验收完成 | 无——英雄区粘性已闭环 |
 | [MOB-62](../cards/done/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 三星真机 2026-09-09：桌面移除+手机主动断开→重新扫码→选相册→开始新一轮备份，全程无崩溃/ANR | 无——断开重置已闭环；衍生 MOB-64（移除后手机端无主动感知） |
+| [UI-08](../cards/done/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 验收人 2026-09-09 确认：长名称呈现与缩略图清晰度均通过 | 无——选相册视觉缺陷关闭 |
+| [MOB-47](../cards/done/MOB-47-video-preview-in-viewer.md) | 验收人 2026-09-09 确认双端视频预览通过 | 无——视频查看器验收关闭 |
+| [MOB-09](../cards/done/MOB-09-one-bad-media-record-kills-batch.md) + [MOB-19](../cards/done/MOB-19-manual-backup-same-bad-record-crash.md) | 旧批处理验收已被 Flow 生产路径取代；`BackupWorker` 仅 wake，缺源终态由 MOB-61 处理 | 无——不再让验收人构造旧 MediaStore 批处理故障 |
 | [REL-06](../cards/done/REL-06-restore-v031-release-after-cleanup.md) | 验收人拍板：历史测试期 `v0.3.1` Release 产物无需恢复；保留 tag，现有 2 个资产维持现状 | 无——不下载/上传缺失资产，不改其他 Release |
 | [SITE-03](../cards/done/SITE-03-backup-core-rebuild-story.md) | 中文工程复盘《为什么我们把备份核心整个换掉了》已发布；手写 sitemap 与 RSS 同步收录，Pages workflow `34102057353` 成功，线上三项均 200 | 无——文章只记录已公开 ARCH-01 / REBUILD 事实 |
 | [MOB-60](../cards/MOB-60-cancel-round-leaves-stale-pause.md) | 用户复测 MOB-58/59 追问坐实：取消当前轮完成后仍展示暂停/继续，点继续等于传空气；`FlowRunner.cancelCurrentRound()` 补 `continueFlow()` 归位闸门，取消完落到已有的 Idle 判断，不新增状态；JVM 298/0/4、just ci 均绿 | 无——闸门归位即完整闭环 |
