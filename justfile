@@ -57,6 +57,10 @@ arch-check:
 queue-check:
   @./tools/check-queue-sync.sh
 
+# Markdown tables in docs/ and cards/ must not be split by a stray blank line
+md-check:
+  @python3 ./tools/check-markdown-tables.py
+
 # ── Development ─────────────────────────────────────
 
 # Start daemon in development mode
@@ -66,7 +70,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint test arch-check queue-check
+ci: fmt lint test arch-check queue-check md-check
   @echo "==> CI pipeline: all green ✅"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
