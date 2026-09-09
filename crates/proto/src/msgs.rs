@@ -203,6 +203,12 @@ pub struct AssetMeta {
     pub height: u32,
     /// File size in bytes.
     pub bytes: u64,
+    /// Full hex NodeId of the device that contributed this asset.
+    ///
+    /// `None` is the wire-compatible representation of legacy/rebuilt rows
+    /// whose source identity is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src_device: Option<String>,
 }
 
 // ── Thumbnail ───────────────────────────────────────
@@ -581,6 +587,9 @@ mod tests {
                 width: 4032,
                 height: 3024,
                 bytes: 3_500_000,
+                src_device: Some(
+                    "0101010101010101010101010101010101010101010101010101010101010101".into()
+                ),
             }],
             next: Some("next-cursor".into()),
         }
@@ -596,8 +605,31 @@ mod tests {
             width: 1920,
             height: 1080,
             bytes: 50_000_000,
+            src_device: Some("a1b2c3d4".into()),
         }
     );
+
+    #[test]
+    fn asset_meta_source_roundtrip_and_old_frame_defaults_to_none() {
+        let current = AssetMeta {
+            hash: "abcdef1234567890".into(),
+            taken_at: 1690000000,
+            media_type: "photo".into(),
+            width: 4032,
+            height: 3024,
+            bytes: 3_500_000,
+            src_device: Some("a1b2c3d4".into()),
+        };
+        let json = serde_json::to_string(&current).unwrap();
+        assert!(json.contains("\"src_device\":\"a1b2c3d4\""));
+        assert_eq!(serde_json::from_str::<AssetMeta>(&json).unwrap(), current);
+
+        let old = r#"{"hash":"abcdef1234567890","taken_at":1690000000,"media_type":"photo","width":4032,"height":3024,"bytes":3500000}"#;
+        assert_eq!(
+            serde_json::from_str::<AssetMeta>(old).unwrap().src_device,
+            None
+        );
+    }
 
     roundtrip_test!(
         thumb_get_roundtrip,

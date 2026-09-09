@@ -211,31 +211,31 @@ class TimelineLoader(
         thumbCache.put(key, bmp)
         return bmp
     }
+
+    /** The phone's persistent NodeId, after [ensureBound] has completed. */
+    fun localNodeIdHex(): String? = client.nodeIdHex()
 }
 
-/** T-080: 本机确认缓存的 hash 并集（backup-state/<remote>/confirmed.json，
- *  只读不写）——照片页轻过滤器用它区分「仅本机 / 家人的」。proto 无
- *  owner 字段（本卡不准动 proto），这是数据允许的最诚实近似。
- *  ⚠️ UI-10: LEGACY 数据源——`ConfirmedStore` 在 REBUILD-00 冻结批处理
- *  管线后没有生产写入方，新内核（Flow）传的照片这里恒查不到，全部误判
- *  成「家人的」。仅保留供 UI-10 反证/历史对照，生产路径见
- *  [flowConfirmedHashesUnder]。 */
-internal fun confirmedHashesUnder(stateRoot: java.io.File): Set<String> =
-    stateRoot.listFiles()?.filter { it.isDirectory }
-        ?.flatMap { com.hawkeyexb.ppass.backup.ConfirmedStore(it).load().confirmed }
-        ?.toSet() ?: emptySet()
+/**
+ * Timeline attribution is solely the server's per-asset source NodeId.
+ * Missing source identity is intentionally unclassified: it remains visible
+ * only in All and never receives a guessed local/family attribution.
+ */
+internal fun filterAssetsBySource(
+    assets: List<AssetMeta>,
+    filter: TimelineFilter,
+    localNodeId: String?,
+): List<AssetMeta> = when (filter) {
+    TimelineFilter.All -> assets
+    TimelineFilter.LocalOnly -> localNodeId?.let { local ->
+        assets.filter { it.sourceDeviceOrNull() == local }
+    } ?: emptyList()
+    TimelineFilter.Family -> localNodeId?.let { local ->
+        assets.filter { it.sourceDeviceOrNull()?.let { source -> source != local } == true }
+    } ?: emptyList()
+}
 
-/** UI-10: 归属过滤的生产数据源——Flow 账本里已 CONFIRMED 的
- *  `contentHash` 并集（`flow-state/<daemonNodeId>/discovery-ledger.json`）。
- *  新内核是唯一的生产写入方，换源后「本机确认」判断才能对新传的照片生效。 */
-internal fun flowConfirmedHashesUnder(flowStateRoot: java.io.File): Set<String> =
-    flowStateRoot.listFiles()?.filter { it.isDirectory }
-        ?.flatMap { dir ->
-            com.hawkeyexb.ppass.backup.flow.DiscoveryLedgerStore(dir).load().items
-                .filter { it.deliveryState == com.hawkeyexb.ppass.backup.flow.DeliveryState.CONFIRMED }
-                .mapNotNull { it.contentHash }
-        }
-        ?.toSet() ?: emptySet()
+private fun AssetMeta.sourceDeviceOrNull(): String? = srcDevice?.takeIf { it.isNotBlank() }
 
 @Composable
 internal fun PhotosScreen(
@@ -270,16 +270,9 @@ internal fun PhotosScreen(
     var viewer by remember { mutableStateOf<MediaViewerSession?>(null) }
     // T-080: 轻过滤器（设计稿：全部 / 仅本机 / 家人的）。
     var filter by remember { mutableStateOf(TimelineFilter.All) }
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val mine by produceState(initialValue = emptySet<String>()) {
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching {
-                flowConfirmedHashesUnder(java.io.File(context.filesDir, "flow-state"))
-            }.getOrDefault(emptySet())
-        }
-    }
     // 查看器页序是打开瞬间的过滤结果快照，不受订阅的后续刷新重排。
-    val shown = filterTimeline(items, filter, mine) { it.hash }
+    val localNodeId = loader?.localNodeIdHex()
+    val shown = filterAssetsBySource(items, filter, localNodeId)
     val currentViewer = viewer
     LaunchedEffect(currentViewer) { onViewerOpenChange(currentViewer != null) }
     if (currentViewer != null && loader != null) {
@@ -290,7 +283,7 @@ internal fun PhotosScreen(
         ) {
             viewer = null
         }
-        MediaViewer(loader, currentViewer, mine) { viewer = null }
+        MediaViewer(loader, currentViewer, localNodeId) { viewer = null }
         return
     }
 
@@ -477,12 +470,8 @@ private enum class ViewerOp { Save, Share }
 
 /**
  * 大图页归因文案（2026-08-17 用户拍板）：网格不标来源，只有大图才显示
- * 「来自 XX的手机 · 日期」。**诚实挂账**：proto `AssetMeta` 目前没有
- * `src_device` 字段（SYNC-05 待做——它是独立卡，proto/daemon 改动不在
- * 本次改动范围内），拿不到具体设备名；用已有的 `mine`（本机确认缓存，
- * T-080 轻过滤器同款数据源）近似区分「我自己传的」与「不是我传的」，
- * 后者笼统标「家人的手机」——等 SYNC-05 落地后把这里换成真实设备名，
- * 不在这之前编造一个具体名字。 */
+ * 「来自 XX的手机 · 日期」。`src_device` 只提供身份，不提供设备显示名；
+ * 因此目前只据它诚实地区分本机与外部来源，未知来源不擅自归因。 */
 @Composable
 internal fun attributionText(isMine: Boolean, takenAtSeconds: Long): String {
     val date = java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault())
@@ -498,7 +487,7 @@ internal fun attributionText(isMine: Boolean, takenAtSeconds: Long): String {
 private fun MediaViewer(
     loader: TimelineLoader,
     session: MediaViewerSession,
-    mine: Set<String>,
+    localNodeId: String?,
     onClose: () -> Unit,
 ) {
     val pagerState = rememberPagerState(
@@ -510,12 +499,13 @@ private fun MediaViewer(
         modifier = Modifier.fillMaxSize(),
     ) { page ->
         val asset = session.assets[page]
+        val isMine = localNodeId?.let { asset.sourceDeviceOrNull() == it } == true
         // Wire format is normalized "video"/"photo"; retain the prefix for
         // older daemons that might send a MIME type such as video/mp4.
         if (asset.mediaType.startsWith("video")) {
-            VideoScreen(loader, asset, isMine = asset.hash in mine, onClose = onClose)
+            VideoScreen(loader, asset, isMine = isMine, onClose = onClose)
         } else {
-            PhotoViewer(loader, asset, isMine = asset.hash in mine, onClose = onClose)
+            PhotoViewer(loader, asset, isMine = isMine, onClose = onClose)
         }
     }
 }

@@ -101,6 +101,9 @@ fn snapshot_timeline_page() {
                 width: 4032,
                 height: 3024,
                 bytes: 3_500_000,
+                src_device: Some(
+                    "0101010101010101010101010101010101010101010101010101010101010101".into(),
+                ),
             },
             AssetMeta {
                 hash: "c3d2e1f0a0000000000000000000000000000000000000000000000000000000".into(),
@@ -109,6 +112,9 @@ fn snapshot_timeline_page() {
                 width: 1920,
                 height: 1080,
                 bytes: 50_000_000,
+                src_device: Some(
+                    "0202020202020202020202020202020202020202020202020202020202020202".into(),
+                ),
             },
         ],
         next: Some("next-cursor-002".into()),

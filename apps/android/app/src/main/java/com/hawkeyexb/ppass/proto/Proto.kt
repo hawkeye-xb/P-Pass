@@ -109,6 +109,7 @@ data class AssetMeta(
     val width: Int = 0,
     val height: Int = 0,
     val bytes: Long = 0,
+    @SerialName("src_device") val srcDevice: String? = null,
 )
 
 // ── Thumbnail ───────────────────────────────────────

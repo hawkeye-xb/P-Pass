@@ -1,6 +1,6 @@
 # SYNC-05 AssetMeta 补 src_device，消灭客户端影子状态
 
-> 🟠 状态：进行中（main；下一步：先补 src_device 的协议/筛选 RED 用例，再替换本地影子状态）
+> ✅ 状态：代码已合并（本 commit），2026-09-09 归档
 > 级别：L1 · 阻塞：无（独立，无依赖，随时可先做）
 
 ## 问题
@@ -21,21 +21,27 @@ Android 的"仅本机/家人的"筛选器目前靠客户端自己攒的本地影
 
 ## 验收标准
 
-- [ ] proto 单测：`AssetMeta` 序列化/反序列化包含 `src_device`，且缺省时（旧数据/旧协议）有明确的空值行为，不 panic
-- [ ] Android 单测：筛选器逻辑改用 `src_device` 判断后，给定一组 `AssetMeta`（包含本机/家人/空值三类）→ 断言各筛选器分类结果跟「备注」里的安全默认一致（空值只在"全部"露出，不进"仅本机"/"仅家人"）
-- [ ] 反证：删掉本地 `backup-state` 目录（模拟这份本地状态从未存在过）→ 筛选器依然能正确分类本机/家人（证明筛选器真的不再依赖这份本地影子状态，不是"两份数据凑巧一致导致测试碰巧通过"）
-- [ ] 证据：单测输出摘要 + 反证的实际输出
-- [ ] 收尾：Rust 全量测试绿 + android 全量单测绿 + PROGRESS.md 一行 + 本卡移入 `done/`
+- [x] proto 单测：`AssetMeta` 序列化/反序列化包含 `src_device`，且缺省时（旧数据/旧协议）有明确的空值行为，不 panic
+- [x] Android 单测：筛选器逻辑改用 `src_device` 判断后，给定一组 `AssetMeta`（包含本机/家人/空值三类）→ 断言各筛选器分类结果跟「备注」里的安全默认一致（空值只在"全部"露出，不进"仅本机"/"仅家人"）
+- [x] 反证：删掉本地 `backup-state` 目录（模拟这份本地状态从未存在过）→ 筛选器依然能正确分类本机/家人（证明筛选器真的不再依赖这份本地影子状态，不是"两份数据凑巧一致导致测试碰巧通过"）
+- [x] 证据：单测输出摘要 + 反证的实际输出
+- [x] 收尾：Rust 全量测试绿 + android 全量单测绿 + PROGRESS.md 一行 + 本卡移入 `done/`
 
 ## 范围
 
 只准动：
 - `crates/proto/src/msgs.rs`（`AssetMeta` 加字段，走 wire 兼容——新字段
   旧客户端忽略即可，不是破坏性变更）
+- `crates/proto/tests/snapshots.rs` 及其 `tests/snapshots/` 金样（扩展后的
+  wire contract）
 - `crates/daemon/src/query.rs`（`asset_meta` 映射函数补上这个字段）
+- `apps/android/app/src/main/java/com/hawkeyexb/ppass/proto/Proto.kt`（Android
+  wire mirror 同步可选字段）
 - `apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/PhotosScreen.kt`
   （筛选器逻辑：`mine`/`Local`/`Family` 判断改读 `src_device`，删掉
   现在读本地 `backup-state` 目录重建 hash 集合那段逻辑）
+- `apps/android/app/src/test/java/com/hawkeyexb/ppass/ui/PhotosScreenAttributionTest.kt`
+  （分类与删除 `backup-state` 的反证）
 
 不准动：
 - SYNC-02/03/04 涉及的任何文件（协议加字段是纯扩展，跟订阅机制无关）
@@ -45,6 +51,20 @@ Android 的"仅本机/家人的"筛选器目前靠客户端自己攒的本地影
 无。跟 SYNC-02/03/04 完全解耦，不依赖它们也不被它们依赖，可以最先合并。
 
 ---
+
+## 实施记录（2026-09-09）
+
+- `AssetMeta.src_device` 以可选全长十六进制 NodeId 上线；缺字段/空或非法长度的
+  storage 值均为 `None`，序列化时省略字段，保持旧 frame 兼容。
+- Android 的 `filterAssetsBySource` 只消费线上 `src_device` 与手机本机 NodeId：
+  本机、家人、未知（`null`/空字符串）三类明确分开；未知仅在「全部」可见。
+  原 `backup-state`/`flow-state` hash 集合读取已删除，无 fallback。
+- RED：新增 proto 测试在字段未实现时出现 3 个 `AssetMeta has no field
+  src_device` 编译错误；新增 Android 测试随后转绿。
+- GREEN：`just test` 退出 0；`./gradlew :app:testDebugUnitTest` 成功，60 个
+  fresh XML 合计 **314 tests / 0 failures / 0 errors / 4 skipped**。
+- 反证：`source_filters_do_not_need_backup_state_directory` 先实际删除测试中的
+  `backup-state`，再断言本机/家人仍正确分类；同轮 Android 全量测试通过。
 
 ## 备注
 

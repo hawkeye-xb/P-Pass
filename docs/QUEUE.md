@@ -39,8 +39,6 @@
 |---|---|---|
 
 
-| [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭 PhotosScreen 本地归属影子状态 | `main` |
-
 
 UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 视觉验收不通过，已退回重做；
 UI-08 已通过归档。
@@ -105,6 +103,7 @@ UI-08 已通过归档。
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [SYNC-05](../cards/done/SYNC-05-asset-meta-src-device.md) | `AssetMeta.src_device` 已经由 daemon 映射到线上协议；PhotosScreen 只按该字段和本机 NodeId 分类，未知来源只在「全部」显示 | 无——本地 `backup-state`/`flow-state` 归属影子状态及 fallback 已删除；Rust 全量、Android JVM 314/0/0/4 均绿 |
 | [MOB-40](../cards/done/MOB-40-backup-runs-before-the-user-picks-albums.md) | 三星真机 2026-09-09 实证：扫码配对到选相册之间零传输迹象（通知/进度/流量均无）；选相册后正常同步 | 无——闸门生效，L0 红线关闭 |
 | [MOB-38](../cards/done/MOB-38-foreground-catchup-never-fires-on-resume.md) | 三星真机 2026-09-09 多次复现：切出 App 再切回，无需任何点击即自动发起并完成传输 | 无——回到前台补捞已闭环 |
 | [MOB-49](../cards/done/MOB-49-cancellation-round-never-clears-in-production.md) | 三星真机 2026-09-09：取消当前轮后 UI 恢复正常操作，不再永久卡在「已取消」文案 | 无——与 MOB-50 同轮组合验收完成 |
