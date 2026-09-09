@@ -1,7 +1,7 @@
 # BUILD-04 本地构建缓存与已合入 worktree 可审计回收（L1）
 
-> 当前节点：已认领，实施中；先交付只预览、显式执行、拒绝不安全 worktree 的清理脚本。
-> 协同分支：`work/BUILD-04-local-build-cache-cleanup`
+> ✅ 状态：代码已合并（commit `186a9df`），2026-09-09 归档
+> 协同分支：`main`
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -33,7 +33,9 @@
 
 ## 实施记录
 
-待实现。
+- 新增 `tools/clean-local-builds.sh` 与 `just cleanup-local`：默认只预览；删除必须同时写 `--apply` 和 `--targets`、`--worktrees` 或 `--all`。
+- `--worktrees` 只移除已注册、clean、其 `HEAD` 已合入 `origin/main`、不是当前 worktree 且没有活动 Cargo/Rustc/Gradle/Node 构建的目录；任何不满足条件的目录明确输出 `SKIP` 原因。`--targets` 只删非符号链接的 `target/`，同样跳过活动构建。
+- `just test-cleanup-local` 在临时 Git fixture 实测：默认预览不删；显式缓存清理保留所有源码；已合入 clean worktree 被移除；dirty、未合入与活动构建 worktree 均保留。另以 `--apply` 无 scope 退出 2 验证显式范围门。
 
 ## 备注
 
