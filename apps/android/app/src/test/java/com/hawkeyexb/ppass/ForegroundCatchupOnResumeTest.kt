@@ -62,10 +62,10 @@ class ForegroundCatchupOnResumeTest {
         // 下次改其中一条就又会漏——所以门控必须只有一份。
         val s = code()
         assertTrue("必须提成一个共用的补捞函数", s.contains("val foregroundCatchup ="))
-        // 门控（配对、暂停、中断）只允许出现在那个函数体内。
+        // 门控（配对、自动策略、中断）只允许出现在那个函数体内。
         val fn = sliceBetween(s, "val foregroundCatchup =", "LaunchedEffect(backupInterrupted)")
         assertTrue("配对判定在函数体内", fn.contains("pairings.load()"))
-        assertTrue("暂停判定在函数体内", fn.contains("paused()"))
+        assertTrue("自动策略判定在函数体内", fn.contains("enabled()"))
         assertTrue(
             "后台重挂仍受中断标志门控（MOB-28 红线）",
             fn.contains("if (!backupInterrupted) scheduleAutoBackup"),
@@ -77,7 +77,7 @@ class ForegroundCatchupOnResumeTest {
         val resume = onResumeBlock()
         assertFalse(
             "ON_RESUME 里不许重复写门控，只该调 foregroundCatchup()",
-            resume.contains("paused()") || resume.contains("scheduleAutoBackup"),
+            resume.contains("enabled()") || resume.contains("scheduleAutoBackup"),
         )
     }
 
@@ -91,7 +91,7 @@ class ForegroundCatchupOnResumeTest {
         assertTrue("首次进入组合仍要补一次", body.contains("foregroundCatchup()"))
         assertFalse(
             "LaunchedEffect 里不许再持有门控逻辑",
-            body.contains("paused()") || body.contains("scheduleAutoBackup"),
+            body.contains("enabled()") || body.contains("scheduleAutoBackup"),
         )
     }
 

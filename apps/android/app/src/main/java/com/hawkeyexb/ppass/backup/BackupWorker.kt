@@ -13,8 +13,6 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.hawkeyexb.ppass.backup.flow.continueFlow
-import com.hawkeyexb.ppass.backup.flow.pauseFlow
 import com.hawkeyexb.ppass.backup.flow.runFlowWake
 import java.util.concurrent.TimeUnit
 
@@ -25,6 +23,15 @@ const val MANUAL_BACKUP_WORK_NAME = "ppass-manual-backup"
 const val PERIODIC_FALLBACK_HOURS = 5L
 const val CONTENT_UPDATE_DELAY_MS = 1_000L
 const val CONTENT_MAX_DELAY_MS = 30_000L
+private const val KEY_AUTOMATIC_WAKE = "automatic_wake"
+
+/** The switch owns these producers, and deliberately does not own Manual. */
+internal fun autoBackupWorkNames(): List<String> = listOf(
+    BACKUP_WORK_NAME,
+    CATCHUP_WORK_NAME,
+    PROCESS_CATCHUP_WORK_NAME,
+    MEDIA_WATCH_BACKUP_WORK_NAME,
+)
 
 private fun constraintsOf(spec: BackupConstraintsSpec): Constraints =
     Constraints.Builder()
@@ -32,10 +39,14 @@ private fun constraintsOf(spec: BackupConstraintsSpec): Constraints =
         .setRequiresBatteryNotLow(spec.requiresBatteryNotLow)
         .build()
 
-internal fun backupWorkRequest(spec: BackupConstraintsSpec): OneTimeWorkRequest =
+internal fun backupWorkRequest(
+    spec: BackupConstraintsSpec,
+    automatic: Boolean = true,
+): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<BackupWorker>()
         .setConstraints(constraintsOf(spec))
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+        .setInputData(androidx.work.workDataOf(KEY_AUTOMATIC_WAKE to automatic))
         .build()
 
 fun triggerUserPresentBackup(context: Context) = enqueueFlowWake(
@@ -43,7 +54,7 @@ fun triggerUserPresentBackup(context: Context) = enqueueFlowWake(
 )
 
 fun triggerManualBackup(context: Context) = enqueueFlowWake(
-    context, MANUAL_BACKUP_WORK_NAME, BackupTier.MANUAL, ExistingWorkPolicy.KEEP,
+    context, MANUAL_BACKUP_WORK_NAME, BackupTier.MANUAL, ExistingWorkPolicy.KEEP, automatic = false,
 )
 
 fun cancelManualBackup(context: Context) {
@@ -59,20 +70,24 @@ private fun enqueueFlowWake(
     name: String,
     tier: BackupTier,
     policy: ExistingWorkPolicy,
+    automatic: Boolean = true,
 ) {
+    if (automatic && !AutoBackupPrefs(context.filesDir).enabled()) return
     val settings = BackupSettings(context.filesDir).load()
     WorkManager.getInstance(context).enqueueUniqueWork(
         name,
         policy,
-        backupWorkRequest(constraintsFor(tier, settings)),
+        backupWorkRequest(constraintsFor(tier, settings), automatic),
     )
 }
 
 fun scheduleAutoBackup(context: Context) {
+    if (!AutoBackupPrefs(context.filesDir).enabled()) return
     val settings = BackupSettings(context.filesDir).load()
     val request = PeriodicWorkRequestBuilder<BackupWorker>(PERIODIC_FALLBACK_HOURS, TimeUnit.HOURS)
         .setConstraints(constraintsOf(constraintsFor(BackupTier.BACKGROUND, settings)))
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+        .setInputData(androidx.work.workDataOf(KEY_AUTOMATIC_WAKE to true))
         .build()
     WorkManager.getInstance(context).enqueueUniquePeriodicWork(
         BACKUP_WORK_NAME,
@@ -87,21 +102,17 @@ fun rescheduleAutoBackup(context: Context) {
     scheduleAutoBackup(context)
 }
 
-/** Global pause persists in the Flow ledger; WorkManager is only prevented from waking it. */
-fun pauseAutoBackup(context: Context) {
-    pauseFlow(context)
-    AutoBackupPrefs(context.filesDir).setPaused(true)
-    WorkManager.getInstance(context).cancelUniqueWork(BACKUP_WORK_NAME)
-    WorkManager.getInstance(context).cancelUniqueWork(CATCHUP_WORK_NAME)
-    WorkManager.getInstance(context).cancelUniqueWork(PROCESS_CATCHUP_WORK_NAME)
-    WorkManager.getInstance(context).cancelUniqueWork(MANUAL_BACKUP_WORK_NAME)
-    WorkManager.getInstance(context).cancelUniqueWork(MEDIA_WATCH_BACKUP_WORK_NAME)
+/** Disables future automatic producers; it never mutates the current Flow round. */
+fun disableAutoBackup(context: Context) {
+    AutoBackupPrefs(context.filesDir).setEnabled(false)
+    val workManager = WorkManager.getInstance(context)
+    autoBackupWorkNames().forEach(workManager::cancelUniqueWork)
     cancelMediaWatch(context)
 }
 
-fun resumeAutoBackup(context: Context) {
-    AutoBackupPrefs(context.filesDir).setPaused(false)
-    continueFlow(context)
+/** Re-enables normal automatic producers; it never means "continue this round". */
+fun enableAutoBackup(context: Context) {
+    AutoBackupPrefs(context.filesDir).setEnabled(true)
     scheduleAutoBackup(context)
 }
 
@@ -114,7 +125,8 @@ class BackupWorker(
     params: WorkerParameters,
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = try {
-        if (!AutoBackupPrefs(applicationContext.filesDir).paused()) {
+        val automatic = inputData.getBoolean(KEY_AUTOMATIC_WAKE, true)
+        if (!automatic || AutoBackupPrefs(applicationContext.filesDir).enabled()) {
             runFlowWake(applicationContext, constraintsSatisfied = true)
         }
         Result.success()
