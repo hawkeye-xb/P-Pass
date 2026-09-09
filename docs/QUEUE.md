@@ -49,7 +49,6 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
-
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
@@ -58,14 +57,11 @@ UI-08 已通过归档。
 | [UX-14](../cards/UX-14-a-failed-retry-is-rendered-as-paused.md) | 暂停 → 继续 → 中断连接；界面不许又显示「继续」，应如实显示待备份或错误 | L1 |
 | [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | 正常 daemon 可达包已通过；不可达分支必须由 agent 以隔离故障环境实证，不能要求验收人造故障 | L1 |
 | [WATCH-07](../cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏 | L2 |
-
 | [MOB-13](../cards/MOB-13-triplet-k-never-reaches-zero.md) | 「待备份 K」能归零（有前置，见卡） | L2 |
 | [BLOB-01](../cards/BLOB-01-ingest-leaves-a-duplicate-in-the-blob-store.md) | 备份占盘不再翻倍（实测 2.05x → 1.00x） | L2 |
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
-
-
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 
 **验收建议**：15 分钟一批过，别攒。
