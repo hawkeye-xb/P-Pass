@@ -65,6 +65,7 @@ UI-08 已通过归档。
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
+| [BLOB-02](../cards/BLOB-02-flow-blobs-store-never-reclaimed.md) | flow-blobs 周期 GC 已接线（commit `c6c0bb6`），反证与真实 iroh 传输单测全绿；待真机 `du -sh .ppf/flow-blobs` 峰值→回落观测 | L2 |
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 
 **验收建议**：15 分钟一批过，别攒。
@@ -75,7 +76,6 @@ UI-08 已通过归档。
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P1 | [BLOB-02](../cards/BLOB-02-flow-blobs-store-never-reclaimed.md) | 新 Flow 收件仓 `.ppf/flow-blobs` 无回收逻辑，占盘随传输量持续膨胀（实测已到数 GB） | L2 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS Overlay 隐藏传统标题栏后，主界面与首启向导只有零碎拖拽空白；补连续顶部拖拽带且不吞交互 | L3 |
