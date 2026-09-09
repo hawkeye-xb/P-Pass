@@ -37,6 +37,7 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
+| [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS Overlay 增加不改变视觉的透明顶部拖拽命中区，交互元素保持非拖拽目标 | `desk-14-overlay-drag` |
 
 
 
@@ -97,7 +98,7 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
-| [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | Overlay 拖拽面积不足；首次有色顶部带方案已撤回 | **等透明连续底色前提下的拖拽交互方案拍板** |
+
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
 
 ---
