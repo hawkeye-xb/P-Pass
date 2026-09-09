@@ -34,15 +34,6 @@
 
 ---
 
-## 一、进行中（已上云认领）
-
-| 卡 | 一句话 | 分支 |
-|---|---|---|
-| [MOB-65](../cards/MOB-65-auto-backup-switch-must-not-pause-current-round.md) | 自动备份开关只管自动触发，不得写 Flow 的「用户暂停当前轮」状态 | `work/MOB-65-auto-backup-policy` |
-
-
-
-
 UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 视觉验收不通过，已退回重做；
 UI-08 已通过归档。
 
@@ -55,6 +46,7 @@ UI-08 已通过归档。
 | [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | 32px 透明顶部 hit area 已实现（不改色/布局）；待默认与 <1080px macOS 窗口拖拽/视觉回归 | L3 |
 | [MOB-63](../cards/MOB-63-pause-racing-final-completion-must-set-idle.md) | 最后回执与暂停的双向竞态均收敛 Idle；存在待传项时仍保留「继续」 | L1 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
+| [MOB-65](../cards/MOB-65-auto-backup-switch-must-not-pause-current-round.md) | 自动开关现只取消自动 wake；空闲不造「继续/取消」，在传当前轮不被中断 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |

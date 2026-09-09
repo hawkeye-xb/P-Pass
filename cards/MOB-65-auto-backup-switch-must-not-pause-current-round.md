@@ -1,8 +1,8 @@
 # MOB-65 自动备份开关不得伪装成「暂停当前轮」（L2）
 
-> 🟡 状态：进行中（已认领）
+> 🟡 状态：代码完成（commit `717e4a2`），待共享真机验收
 > 级别：**L2** · 阻塞：无
-> 协同分支：`work/MOB-65-auto-backup-policy` · 当前节点：开卡认领已完成，下一步写 RED 用例。
+> 协同分支：`main` · 当前节点：实现与本地验证完成，下一步进行真机回归。
 
 ## 问题
 
@@ -58,3 +58,27 @@
 开关与当前轮是两条状态轴：`autoEnabled` 只能控制自动 producer（周期、前台
 补捞、进程补捞、媒体监听）；`ConsumerGate.PAUSED_BY_USER` 只属于用户对当前轮的
 暂停。禁止用 UI 隐藏条件掩盖仍被错误写入的 Flow 状态。
+
+## 实施记录
+
+- `AutoBackupPrefs` 从 `paused` 改为唯一策略事实 `autoEnabled`；旧 JSON 的
+  `paused` 字段按反义兼容读取，下一次保存写新字段。
+- `disableAutoBackup` 只持久化策略、取消自动 work / media watcher；删除
+  `pauseFlow` / `continueFlow` 接线，也不取消 `MANUAL_BACKUP_WORK_NAME`。
+  自动 worker 用 input data 标注；策略关闭后旧的自动 wake 无操作，显式 manual
+  wake 仍可进入同一 Flow。
+- 设置 UI 改传 `autoBackupEnabled`；前台/进程补捞、周期、媒体监听和 health
+  对账均只读该策略。Flow ledger、英雄区暂停/继续/取消投影未改。
+- RED：新偏好 API 尚不存在时 `AutoBackupPrefsTest` 编译失败（10 个
+  `enabled` / `setEnabled` unresolved references）。反证：在关闭路径临时加入
+  `pauseFlow(` 标记，`disabling_automatic_backup_never_turns_into_a_current_round_pause`
+  实测 **8 tests / 1 failed**；已还原。
+- GREEN：Android JVM **62 XML / 322 tests / 0 failures / 0 errors / 4 skipped**；
+  `:app:assembleDebug`、`just ci` 均通过。
+
+## 真机验收
+
+- 空闲关闭/开启自动备份：英雄区不出现「继续 / 取消当前轮」。
+- 自动传输中关闭开关：当前轮继续收尾；之后新增照片不得由自动通道启动。
+- 仅点英雄区「暂停」：才出现「继续 / 取消当前轮」；关闭再开启自动开关不得
+  制造或清掉该用户暂停。
