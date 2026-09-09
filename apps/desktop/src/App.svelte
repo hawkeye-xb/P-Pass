@@ -1218,6 +1218,7 @@
        就要在这一步才被拉起，提前暴露只有困惑（xixi 实测反馈 1）。
        配置写了但服务没注册 = wizard 中途退出，重进继续走 wizard
        （xixi 实测反馈 3），而不是丢到"启动后台服务"裸界面。 -->
+  <div class="titlebar-drag-region wizard-titlebar-drag-region" aria-hidden="true"></div>
   <main class="wizard-shell">
     <header>
       <h1>P-Pass</h1>
@@ -1247,6 +1248,7 @@
     {/if}
   </main>
 {:else}
+  <div class="titlebar-drag-region shell-titlebar-drag-region" aria-hidden="true"></div>
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">P-Pass</div>

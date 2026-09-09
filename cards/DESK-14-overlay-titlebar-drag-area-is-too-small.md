@@ -1,9 +1,8 @@
 # DESK-14 Overlay 标题栏隐藏后主窗口拖拽区域过小
 
-> 🟠 状态：进行中
-> 级别：L3 · 阻塞：无
-> Owner：Hermes / `desk-14-overlay-drag` · Base：`22decda`
-> 当前节点：按已确认的透明 hit area 方案实施；下一步：用 DOM 用例锁定 32px 安全区、直接标记与交互边界。
+> 🟡 状态：待共享回归
+> 级别：L3 · 阻塞：仅缺 macOS 原生窗口视觉/拖拽实证（本机自动化截图权限未授予）
+> 当前节点：透明 hit area 已实现并通过测试/构建；下一步：默认及 <1080px 两种宽度真机走查。
 
 ## 问题
 
@@ -32,9 +31,9 @@ macOS 桌面端使用 Tauri `titleBarStyle: "Overlay"`，原生红绿灯悬浮�
 - [ ] 首启向导：同样提供顶部连续空白拖拽带，且不会遮挡 `P-Pass` 标题或向导步骤。
 - [ ] 交互回归：导航、服务状态、页面按钮、输入控件和内容区滚动均保持原行为；
       可交互子元素本身不得成为 `data-tauri-drag-region` 目标。
-- [ ] 自动化：为拖拽区选择/标记逻辑增加或更新 Vitest 覆盖，断言主界面与向导都
+- [x] 自动化：为拖拽区选择/标记逻辑增加或更新 Vitest 覆盖，断言主界面与向导都
       有专用拖拽元素，交互元素不被标记；`cd apps/desktop && pnpm test` 通过。
-- [ ] 构建：`cd apps/desktop && pnpm build` 通过。
+- [x] 构建：`cd apps/desktop && pnpm build` 通过。
 - [ ] macOS 桌面回归：在默认尺寸与收起侧栏（<1080px）两种宽度下各走查主界面、
       设置页和首启向导，记录截图；确认没有红绿灯遮挡、内容跳动或死区。
 
@@ -54,7 +53,7 @@ macOS 桌面端使用 Tauri `titleBarStyle: "Overlay"`，原生红绿灯悬浮�
 
 ## 实施记录
 
-首次有色布局带方案已撤回。现已确认行业通用的透明 hit area：绝对定位、无背景、不占布局，只覆盖现有 32px 顶部安全区；直接标记为 Tauri 拖拽目标，交互元素保持未标记。
+首次有色布局带方案已撤回。现已改为行业通用的透明 hit area：`#app` 直系、绝对定位、无背景、不占布局，只覆盖现有 32px 顶部安全区；仅 macOS 将其直接标记为 Tauri 拖拽目标，交互元素保持未标记。Vitest 47/47 与 Vite build 已通过；`pnpm tauri dev` 已启动到运行态，但 macOS Accessibility/Screen Recording 权限未授予，无法取得真实视觉/拖拽截图，未将其冒充为已验收。
 
 ## 备注
 
