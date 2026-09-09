@@ -1,9 +1,9 @@
 # MOB-63 暂停恰逢最后一张完成时直接归位 Idle（L1）
 
-> 🟠 状态：进行中
+> 🟡 状态：代码完成，待共享真机验收
 > 级别：**L1** · 阻塞：无
-> 协同分支：`main` · 当前节点：认领后定位账本写入边界
-> 下一步：补两种到达顺序与未完成项反证的 JVM RED 用例
+> 协同分支：`main` · 当前节点：JVM 与 CI 已绿
+> 下一步：验收人以隔离相册复现回执先后两种暂停时机
 
 ## 问题
 
@@ -34,17 +34,17 @@ lease 后，随后的 `pauseByUser()` 目前会在无 lease 分支无条件写�
 
 ## 验收标准
 
-- [ ] JVM RED→GREEN：构造单项传输，先 `pause()` 再接收该项的有效
+- [x] JVM RED→GREEN：构造单项传输，先 `pause()` 再接收该项的有效
       `CompletionReceipt`；最终账本为 `consumerGate == OPEN`、
       `consumerStatus == IDLE`、无 lease、唯一项为 `CONFIRMED`，并且
       `flowUiStateOf(...) == Idle`、`backupUiStateOf(...) == AllSafe`。
-- [ ] JVM RED→GREEN：构造相同单项传输，先接收有效完成回执、再执行暂停；最终
+- [x] JVM RED→GREEN：构造相同单项传输，先接收有效完成回执、再执行暂停；最终
       仍是上述 Idle 收敛，证明两种允许的到达顺序语义一致。
-- [ ] JVM：两项轮次中第一项完成、第二项仍 `QUEUED` 时暂停，闸门仍为
+- [x] JVM：两项轮次中第一项完成、第二项仍 `QUEUED` 时暂停，闸门仍为
       `PAUSED_BY_USER`，投影仍为 `PausedByUser`；不许开启下一项或丢掉「继续」。
-- [ ] 反证：把「确认后已无 `QUEUED`/`TRANSFERRING` 项」的终态判定去掉、改成
+- [x] 反证：把「确认后已无 `QUEUED`/`TRANSFERRING` 项」的终态判定去掉、改成
       暂停后总是归位 Idle，上一条两项暂停用例必须变红。
-- [ ] 跑受影响 Android JVM 测试，记录实际测试计数；再跑 `just ci`，均通过。
+- [x] 跑受影响 Android JVM 测试，记录实际测试计数；再跑 `just ci`，均通过。
 - [ ] 真机：对隔离相册的最后一张传输连点暂停，覆盖回执先后两个可操作时机；
       完成后首页没有「继续」/「取消当前轮」，已完成数量正确且不会再启动空传输。
 
@@ -64,7 +64,13 @@ lease 后，随后的 `pauseByUser()` 目前会在无 lease 分支无条件写�
 
 ## 实施记录
 
-2026-09-09：已认领；实现与 JVM 验收进行中，真机验收留给验收人。
+2026-09-09：`StrictConsumer.pauseByUser()` 的无 lease 分支仅在账本无
+`QUEUED`/`TRANSFERRING` 项时归位 `OPEN + IDLE`；
+`CompletionAndScope.acceptCompletionReceipt()` 在暂停后的最后迟到回执落库时做同一
+原子收敛。新增 `MOB63PauseCompletionRaceTest` 覆盖 pause→receipt、receipt→pause，
+并以两项轮次反证锁住「仍有可续传项必须保留 PausedByUser」。RED：3 项中 2 项失败；
+GREEN：定向 JVM XML 3/0/0，全量 Android JVM XML 317/0/0/4 skipped（61 文件，均为
+本次生成），`just ci` 全绿。真机验收留给验收人。
 
 ## 备注
 
