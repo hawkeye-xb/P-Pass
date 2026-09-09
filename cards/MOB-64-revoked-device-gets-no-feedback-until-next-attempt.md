@@ -1,7 +1,10 @@
 # MOB-64 桌面移除设备后，手机端在下次尝试前毫无反馈（L2）
 
-> ⬜ 状态：未开工
+> 🟠 状态：进行中
 > 级别：**L2** · 阻塞：无
+> 协同分支：`main` · 基线：`6de7bd4`
+> 当前节点：定位 Flow delivery 的 `ERR_NOT_PAIRED` 拒绝路径并先写 JVM RED 用例。
+> 下一步：仅在 `BackupUiStateHolder.kt` 与该 delivery 错误处理路径接线既有 `pairingLost`。
 
 ## 问题
 
