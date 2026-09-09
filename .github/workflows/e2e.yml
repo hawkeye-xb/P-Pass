@@ -8,6 +8,17 @@
 # tag 前门禁（它抓真 bug 但不该每推都烧 release 构建）。e2e job 触发
 # 条件不动（nightly/tag/labeled/dispatch），scenarios job 同门禁。
 #
+# CI-02（2026-09-09）：daemon/testclient release 二进制在同一个 run 里被
+# e2e 和 scenarios 两个并行 job 各自从零编译一遍（并行 job 之间 cache 互相
+# 看不见），nightly 每天白烧一份编译时间。改法：加一个 build job 编译一次，
+# upload-artifact 供两个测试 job download-artifact 复用。失败隔离不变——
+# e2e 与 scenarios 仍是两个独立 job，各自 needs: build，一个红不影响另一个
+# 出结论（不许合并成一个 job，见下方卡片链接）。
+# actions/upload-artifact 的 zip 打包会丢可执行位（已知问题），因此二进制
+# 打包为 tar.gz 上传，下游 job `tar -xzf` 解包后天然恢复 +x（tar 格式本身
+# 记录 mode bit，无需额外 chmod）。
+# 详见 cards/CI-02-e2e-compiles-release-binaries-twice.md（已归档 done/）。
+#
 # 运行时机（2026-08-04 用户裁决：自动化测试不前置）：
 #   - nightly 定时（schedule）
 #   - release tag 时并行跑（不阻塞 release 构建——tag 触发与 release.yml
@@ -31,8 +42,51 @@ permissions:
   contents: read
 
 jobs:
+  # CI-02: 两个测试 job 共用的 release 二进制，只编一次。
+  build:
+    name: Build release binaries (daemon + testclient)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: tools/setup-rust-toolchain.sh
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # daemon/testclient release 构建需要 libheif-dev（vendored 编译）+
+      # HEVC 解码插件；ffmpeg 供视频首帧测试（下游 job 运行时也要，各自装）。
+      - name: System codecs (libheif + HEVC plugin, ffmpeg)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+
+      - name: Build release binaries (daemon + testclient)
+        run: cargo build --release -p daemon -p testclient
+
+      # actions/upload-artifact 的 zip 打包会丢失可执行位（已知问题）；
+      # tar 格式自带 mode bit，下游 tar -xzf 后天然恢复 +x。
+      - name: Package release binaries (tar preserves exec bit)
+        run: tar -czf release-bins.tar.gz -C target/release daemon testclient
+
+      - name: Upload release binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-bins
+          path: release-bins.tar.gz
+          retention-days: 1
+
   e2e:
     name: android live (hello/pair/backup)
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 50
     # PR 只有打了 e2e label 才跑（labeled 事件但 label 不在 = 移除，跳过）
@@ -53,9 +107,9 @@ jobs:
             target/
           key: e2e-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
-      # 抄 scenarios job：daemon release 构建需要 libheif-dev（vendored
-      # 编译）+ HEVC 解码插件；ffmpeg 供视频首帧测试。ubuntu-latest runner
-      # 自带 Android SDK，JVM 测试无需额外安装。
+      # 抄 scenarios job：daemon 运行时需要 libheif 运行时库 + HEVC 解码
+      # 插件；ffmpeg 供视频首帧测试。ubuntu-latest runner 自带 Android
+      # SDK，JVM 测试无需额外安装。
       - name: System codecs (libheif + HEVC plugin, ffmpeg)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
 
@@ -78,8 +132,16 @@ jobs:
           rustup target add aarch64-linux-android
           echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME}" >> "$GITHUB_ENV"
 
-      - name: Build release daemon
-        run: cargo build --release -p daemon
+      - name: Download release binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-bins
+
+      - name: Unpack release binaries (tar restores exec bit)
+        run: |
+          mkdir -p target/release
+          tar -xzf release-bins.tar.gz -C target/release
+          test -x target/release/daemon
 
       # 三剧本 = T-051/T-052/T-054 live 验收脚本：起临时 daemon（127.0.0.1
       # 随机端口，无 relay），JVM 测试经真实 iroh-ffi 栈连它。
@@ -95,26 +157,24 @@ jobs:
   # nightly/tag/labeled/dispatch，纯 docs/卡片提交零触发。
   scenarios:
     name: T-070 failure scenarios (process-level)
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 40
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set Rust toolchain from rust-toolchain.toml
-        shell: bash
-        run: tools/setup-rust-toolchain.sh
-      - name: Cache cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/
-            ~/.cargo/git/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - name: System codecs
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
-      - name: Build release binaries
-        run: cargo build --release -p daemon -p testclient
+      - name: Download release binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-bins
+      - name: Unpack release binaries (tar restores exec bit)
+        run: |
+          mkdir -p target/release
+          tar -xzf release-bins.tar.gz -C target/release
+          test -x target/release/daemon
+          test -x target/release/testclient
       - name: Run scenarios (huge file / crash recovery / disk full)
         run: |
           bash tools/scenarios/huge_file.sh
