@@ -77,6 +77,7 @@ UI-08 已通过归档。
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P1 | [CI-05](../cards/CI-05-rust-toolchain-checker-rejects-artifact-e2e-jobs.md) | Rust 工具链检查仍要求 CI-02 的 e2e/scenarios 下游 artifact consumer 自己跑 Cargo，导致 CI Rust 红 | L1 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 
