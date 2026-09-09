@@ -13,8 +13,11 @@
 //!    made deterministic), and the follow-up pull fetches only the
 //!    missing remainder and verifies.
 
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use transport::{Blobs, IrohTransport, TransportConfig};
 
@@ -292,6 +295,109 @@ async fn push_rejects_hash_mismatch() {
         err.to_string().contains("no longer matches"),
         "wrong-hash push must fail loudly: {err}"
     );
+}
+
+/// BLOB-02 RED: a Flow receiver must release a completed native transfer on
+/// iroh-blobs' periodic GC, rather than keeping every received photo forever.
+/// This uses the actual provider/router/fetch path, not a store mock.
+#[tokio::test(flavor = "multi_thread")]
+async fn periodic_gc_reclaims_a_completed_remote_blob() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_provider_transport, _provider_blobs, hash, ticket, _data) = provider(dir.path()).await;
+    let protected = Arc::new(Mutex::new(HashSet::from([hash])));
+    let callback_protected = Arc::clone(&protected);
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(
+            vec![transport::ALPN_BLOBS.into()],
+        ))
+        .await
+        .unwrap();
+    let receiver = Blobs::open_with_periodic_gc(
+        &receiver_transport,
+        &dir.path().join("flow-blobs"),
+        Duration::from_millis(20),
+        move || {
+            let protected = Arc::clone(&callback_protected);
+            Box::pin(async move { Ok(protected.lock().unwrap().clone()) })
+        },
+    )
+    .await
+    .unwrap();
+
+    receiver
+        .pull(&ticket, &dir.path().join("materialized-photo.jpg"))
+        .await
+        .unwrap();
+    assert!(
+        receiver.local_bytes(hash).await.unwrap() > 0,
+        "the real iroh fetch must have reached the receiver before GC"
+    );
+
+    // FlowDelivery marks the durable grant completed only after this fetch
+    // and materialization boundary; the production callback then returns no
+    // protection for this hash on the following GC cycle.
+    protected.lock().unwrap().clear();
+    wait_for_local_bytes(&receiver, hash, 0).await;
+    receiver.close().await;
+    receiver_transport.close().await;
+}
+
+/// BLOB-02 adversarial proof: an otherwise collectible blob remains while
+/// the public protected-hash callback names it, then is collected once that
+/// callback returns the empty set. This proves the callback affects iroh GC
+/// rather than being decorative wiring.
+#[tokio::test(flavor = "multi_thread")]
+async fn periodic_gc_respects_then_rechecks_protected_hashes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_provider_transport, _provider_blobs, hash, ticket, _data) = provider(dir.path()).await;
+    let protected = Arc::new(Mutex::new(HashSet::from([hash])));
+    let callback_protected = Arc::clone(&protected);
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(
+            vec![transport::ALPN_BLOBS.into()],
+        ))
+        .await
+        .unwrap();
+    let receiver = Blobs::open_with_periodic_gc(
+        &receiver_transport,
+        &dir.path().join("flow-blobs"),
+        Duration::from_millis(20),
+        move || {
+            let protected = Arc::clone(&callback_protected);
+            Box::pin(async move { Ok(protected.lock().unwrap().clone()) })
+        },
+    )
+    .await
+    .unwrap();
+
+    receiver
+        .pull(&ticket, &dir.path().join("active-flow-photo.jpg"))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert!(
+        receiver.local_bytes(hash).await.unwrap() > 0,
+        "an active Flow hash named by the callback must survive GC"
+    );
+
+    protected.lock().unwrap().clear();
+    wait_for_local_bytes(&receiver, hash, 0).await;
+    receiver.close().await;
+    receiver_transport.close().await;
+}
+
+async fn wait_for_local_bytes(blobs: &Blobs, hash: [u8; 32], expected: u64) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        if blobs.local_bytes(hash).await.unwrap() == expected {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "GC did not converge to {expected} local bytes within 3 seconds"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 /// Total bytes under a directory tree (the receiver store's partial data).

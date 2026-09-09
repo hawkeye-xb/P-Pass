@@ -161,6 +161,85 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
     assert_eq!(resumed_receipt.lease_token, "lease-recovered");
 }
 
+/// BLOB-02: the production Flow sequence uses the durable active-grant query
+/// to protect the actual iroh fetch, then releases the fetched hash after the
+/// receipt makes that grant completed.
+#[tokio::test(flavor = "multi_thread")]
+async fn completed_flow_fetch_is_reclaimed_by_periodic_gc() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"BLOB-02 real Flow GC fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let callback_db = db.clone();
+    let receiver_blobs = Arc::new(
+        Blobs::open_with_periodic_gc(
+            &receiver_transport,
+            &root.path().join("flow-blobs"),
+            std::time::Duration::from_millis(20),
+            move || {
+                let db = callback_db.clone();
+                Box::pin(async move {
+                    db.active_flow_content_hashes().await.map_err(|error| {
+                        transport::TransportError::Io(format!(
+                            "query active Flow hashes for GC protection: {error}"
+                        ))
+                    })
+                })
+                    as std::pin::Pin<
+                        Box<
+                            dyn std::future::Future<
+                                    Output = transport::Result<std::collections::HashSet<[u8; 32]>>,
+                                > + Send,
+                        >,
+                    >
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+    delivery
+        .fetch(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+    assert!(db
+        .flow_receipt(provider_transport.node_id().0.as_slice(), 7)
+        .await
+        .unwrap()
+        .is_some());
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while receiver_blobs.local_bytes(hash).await.unwrap() != 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the completed Flow hash was not reclaimed within one GC test window"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn authenticated_control_peer_may_offer_a_distinct_native_provider_ticket() {
     let root = tempdir().unwrap();

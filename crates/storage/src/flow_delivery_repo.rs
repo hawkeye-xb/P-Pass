@@ -5,6 +5,8 @@
 //! phone-side retry cannot be mistaken for the current item. Completion is a
 //! separate durable transition made only after materialization.
 
+use std::collections::HashSet;
+
 use sqlx::Row;
 
 use crate::{Db, Result};
@@ -151,6 +153,20 @@ impl Db {
         Ok(row.map(flow_grant_from_row))
     }
 
+    /// Hashes of Flow items whose durable state still permits/resumes a native
+    /// fetch. This is the sole storage-backed protection source for the
+    /// flow-blobs GC callback.
+    pub async fn active_flow_content_hashes(&self) -> Result<HashSet<[u8; 32]>> {
+        let hashes: Vec<Vec<u8>> =
+            sqlx::query_scalar("SELECT content_hash FROM flow_delivery WHERE state = 'active'")
+                .fetch_all(self.pool())
+                .await?;
+        Ok(hashes
+            .into_iter()
+            .filter_map(|hash| hash.try_into().ok())
+            .collect())
+    }
+
     /// Record cancellation only if this still is the exact current item.
     pub async fn cancel_flow_grant(&self, grant: &FlowGrant) -> Result<bool> {
         let result = sqlx::query(
@@ -226,5 +242,48 @@ fn flow_grant_from_row(row: sqlx::sqlite::SqliteRow) -> FlowGrant {
         provider: row.get("provider"),
         state: FlowGrantState::from_db(row.get::<String, _>("state").as_str()),
         receipt_id: row.get("receipt_id"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::{FlowGrant, FlowGrantState};
+    use crate::Db;
+
+    fn grant(hash: u8, state: FlowGrantState, sequence: i64) -> FlowGrant {
+        FlowGrant {
+            node_id: vec![9; 32],
+            queue_sequence: sequence,
+            pairing_epoch: "epoch".into(),
+            lease_token: format!("lease-{sequence}"),
+            content_hash: vec![hash; 32],
+            file_name: format!("{sequence}.jpg"),
+            media_type: "image/jpeg".into(),
+            provider: "provider".into(),
+            state,
+            receipt_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn active_flow_content_hashes_excludes_completed_and_cancelled_grants() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_flow_grant(&grant(1, FlowGrantState::Active, 1))
+            .await
+            .unwrap();
+        db.upsert_flow_grant(&grant(2, FlowGrantState::Cancelled, 2))
+            .await
+            .unwrap();
+        db.upsert_flow_grant(&grant(3, FlowGrantState::Completed, 3))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            db.active_flow_content_hashes().await.unwrap(),
+            HashSet::from([[1; 32]]),
+            "only an active Flow grant may keep a flow-blobs hash alive"
+        );
     }
 }
