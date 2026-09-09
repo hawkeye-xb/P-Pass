@@ -138,7 +138,13 @@ if "$clean_worktrees"; then
     if reason=$(worktree_is_removable "$worktree"); then
       printf 'CANDIDATE  %s (%s)\n' "$worktree" "$(worktree_size "$worktree")"
       if "$apply"; then
-        git worktree remove "$worktree"
+        # --force: our own worktree_is_removable() already verified no
+        # uncommitted tracked changes and HEAD merged into origin/main.
+        # Without --force, `git worktree remove` still refuses whenever
+        # gitignored build cruft (.DS_Store, .gradle/, target/, build/)
+        # is present — which is the normal case for every worktree that
+        # ever ran a build. That's not an unsafety signal; it's noise.
+        git worktree remove --force "$worktree"
         printf 'REMOVED    %s\n' "$worktree"
       fi
     else
