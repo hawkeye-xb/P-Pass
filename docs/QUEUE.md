@@ -22,7 +22,9 @@
 
 - **阶段**：真机回归驱动的修 bug 循环。代码侧健康（本机全绿），**卡住的
   是真机验收**，不是代码没写。
-- **最新可测版本**：`v0.4.0-test.9`（含 MOB-38 + UX-13 + MOB-40 + UX-14 + CI-04①）。
+- **最新可测版本**：working tree 已 bump 到 `0.5.0-test.8`（2026-09-07 `e5d7a28`），
+  已打 tag 到 `v0.5.0-test.7`；本行此前长期滞后写着 v0.4.0-test.9，2026-09-09
+  核实修正——改版本号后务必同步这里，别让下次汇报又抄错。
 - **本机全绿基线**：`just ci` all green · nextest 320 passed / 1 skipped ·
   Android 46 类 / 347 tests / 0 failures · 桌面 `pnpm test 24` +
   `src-tauri cargo test --lib 15`。
