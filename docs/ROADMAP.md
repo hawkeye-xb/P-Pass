@@ -1079,6 +1079,16 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       不走 iroh 的 GC（单 blob delete 是 pub(crate)，gc_run_once 在私有模块，
       GcConfig 默认关且只能定时轮询）。真实 daemon 端到端
       `pushed=12 ingested=12; rerun pushed=0 dup=12`，占盘 1.00x。
+- [~] `.ppf/flow-blobs`（REBUILD-02 新 Flow 收件仓）永不回收 — **2026-09-09
+      `BLOB-02` 代码完成（commit `c6c0bb6`）**：与 BLOB-01 同构泄漏但发生在
+      新生产管线，且不能照搬"启动清空"（会连同断点续传 partial 一起清）。
+      改用 iroh-blobs 原生 `GcConfig` 周期性 GC，`transport::Blobs::open_with_periodic_gc`
+      对外只暴露 `[u8;32]` 哈希集合回调（不泄漏 `iroh_blobs` 类型），
+      `storage::Db::active_flow_content_hashes()` 查 `flow_delivery` 表
+      `state='active'` 的 `content_hash` 作唯一保护判据，`main.rs` 60s 周期接入。
+      真实 iroh 传输链路单测 + 反证（回调清空后中途 Active grant 被判定
+      应删）均绿，`just ci` 全绿。真机 `du -sh .ppf/flow-blobs` 峰值→GC 后
+      回落的观测留给共享真机回归。
 - [ ] background thumbnail batch generation after ingest
 - [ ] Windows smoke (T-040 will carry it)
 
