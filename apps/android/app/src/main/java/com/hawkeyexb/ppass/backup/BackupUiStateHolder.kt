@@ -6,7 +6,9 @@ import android.content.Context
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import com.hawkeyexb.ppass.backup.flow.FlowCommand
+import com.hawkeyexb.ppass.backup.flow.FlowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.FlowUiState
+import com.hawkeyexb.ppass.backup.flow.PairingEpoch
 import com.hawkeyexb.ppass.backup.flow.RoundProgress
 import com.hawkeyexb.ppass.backup.flow.advanceRoundProgress
 import com.hawkeyexb.ppass.backup.flow.backupUiStateOf
@@ -15,6 +17,7 @@ import com.hawkeyexb.ppass.backup.flow.continueFlow
 import com.hawkeyexb.ppass.backup.flow.flowAggregateOf
 import com.hawkeyexb.ppass.backup.flow.flowCancelledRoundNotice
 import com.hawkeyexb.ppass.backup.flow.flowCommandOf
+import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.flowIsAllDone
 import com.hawkeyexb.ppass.backup.flow.flowLedgerSnapshot
 import com.hawkeyexb.ppass.backup.flow.flowMissingSourceNotice
@@ -66,8 +69,8 @@ class BackupUiStateHolder(
     val reuploadNoticeCount: State<Int> get() = _reuploadNoticeCount
     private val _missingSourceNotice = mutableStateOf<com.hawkeyexb.ppass.backup.flow.MissingSourceNotice?>(null)
     val missingSourceNotice: State<com.hawkeyexb.ppass.backup.flow.MissingSourceNotice?> get() = _missingSourceNotice
-    private val _pairingLost = mutableStateOf(false)
-    val pairingLost: State<Boolean> get() = _pairingLost
+    private val pairingLostState = HolderPairingLostState()
+    val pairingLost: State<Boolean> get() = pairingLostState.value
     // UI-10 item 1: guards the silent epoch-repair attempt so it fires at
     // most once per held instance — a repeated blank epoch after a failed
     // repair means the pairing is genuinely lost, not a transient race.
@@ -187,11 +190,12 @@ class BackupUiStateHolder(
                 val store = PairingStore(context.filesDir)
                 store.load()?.let { store.save(it.copy(pairingEpoch = result.epoch)) }
             }
-            EpochRepairResult.Lost -> _pairingLost.value = true
+            EpochRepairResult.Lost -> pairingLostState.markLost()
         }
     }
 
     private fun refreshFlowState() {
+        pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
         // UI-09/MOB-51: the home screen state is the single shared production
         // mapping from the durable snapshot (backupUiStateOf). The aggregate
         // (K/M/last-success) is derived from the same facts by the slower
@@ -244,6 +248,20 @@ class BackupUiStateHolder(
         } catch (_: Throwable) {
             null
         }
+    }
+}
+
+/** The holder's existing pairing-lost UI state, factored for Flow error projection. */
+internal class HolderPairingLostState {
+    private val _value = mutableStateOf(false)
+    val value: State<Boolean> get() = _value
+
+    fun markLost() {
+        _value.value = true
+    }
+
+    fun syncFrom(deliveryLoss: FlowDeliveryPairingLoss, epoch: PairingEpoch) {
+        if (deliveryLoss.isLost(epoch)) markLost()
     }
 }
 

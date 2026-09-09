@@ -1,10 +1,10 @@
 # MOB-64 桌面移除设备后，手机端在下次尝试前毫无反馈（L2）
 
-> 🟠 状态：进行中
+> 🟡 状态：代码完成，待共享真机验收
 > 级别：**L2** · 阻塞：无
-> 协同分支：`main` · 基线：`6de7bd4`
-> 当前节点：定位 Flow delivery 的 `ERR_NOT_PAIRED` 拒绝路径并先写 JVM RED 用例。
-> 下一步：仅在 `BackupUiStateHolder.kt` 与该 delivery 错误处理路径接线既有 `pairingLost`。
+> 协同分支：`main` · 实现基线：待本卡提交
+> 当前节点：JVM RED→GREEN 已完成；真机验收尚未执行。
+> 下一步：验收人撤销设备后在手机发起一次 Flow 业务调用，确认既有 pairingLost 红卡出现。
 
 ## 问题
 
@@ -41,13 +41,13 @@
 
 ## 验收标准
 
-- [ ] 找到手机侧收到 `ERR_NOT_PAIRED`（或等价拒绝）的现有处理点（Flow
+- [x] 找到手机侧收到 `ERR_NOT_PAIRED`（或等价拒绝）的现有处理点（Flow
       delivery 的 hello/backup.begin 失败路径），确认当前该错误码是否已经
       被丢弃在通用失败处理里，还是从未被识别过。
-- [ ] 收到该拒绝码时置位 `_pairingLost`（复用既有红卡渲染，不新增 UI 状态）。
-- [ ] JVM 单测：模拟业务调用返回 `ERR_NOT_PAIRED` → holder 的
+- [x] 收到该拒绝码时置位 `pairingLost`（复用既有红卡渲染，不新增 UI 状态）。
+- [x] JVM 单测：模拟业务调用返回 `ERR_NOT_PAIRED` → holder 的
       `pairingLost` 变为 true。
-- [ ] 反证：把该识别去掉 → 上一条变红。
+- [x] 反证：非配对拒绝不置位；移除 `err.not_paired` 识别会使上一条失败。
 - [ ] 真机：桌面移除设备后，手机端**不需要用户自己操作**，下一次尝试
       传输/心跳时首页出现「连不上客户端」提示（不要求瞬时/主动轮询探测）。
 
@@ -69,3 +69,13 @@
 来源：2026-09-09 真机回归（0.5.0-test.8）。桌面移除设备后手机端毫无反馈，
 用户随后自己在手机点「移除设备」主动断开——本卡不是崩溃，是缺失的被动
 识别，按验收人定性为优化项，L2。
+
+## 实施记录
+
+2026-09-09：`NativeFlowDeliveryPort` 的既有通用失败 catch 保留原永久失败账本
+处理，同时仅将 `err.not_paired` 记录为当前 pairing epoch 的失效事实；
+`BackupUiStateHolder` 在既有状态刷新中投影该事实到原有 `pairingLost` 红卡。
+未改 daemon/authz、未新增 UI 状态或主动轮询。`MOB64RevokedFlowDeliveryTest`：
+`ERR_NOT_PAIRED` → holder backing flag 为 true，普通网络错误保持 false；定向 JVM
+XML 为 2/0/0/0。隔离副本 `just ci` 绿；共享主工作树同期的 SYNC-05 未完成 JVM
+测试未计入本卡验收。真机验收留给验收人。

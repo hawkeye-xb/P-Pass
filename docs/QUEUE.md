@@ -37,7 +37,7 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
-| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | `ERR_NOT_PAIRED` 业务拒绝复用既有 pairingLost 红卡；仅 Flow delivery / holder，先补 JVM RED 用例 | `main` |
+
 
 | [SYNC-05](../cards/SYNC-05-asset-meta-src-device.md) | AssetMeta 补来源设备字段，消灭 PhotosScreen 本地归属影子状态 | `main` |
 
@@ -52,6 +52,7 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [MOB-63](../cards/MOB-63-pause-racing-final-completion-must-set-idle.md) | 最后回执与暂停的双向竞态均收敛 Idle；存在待传项时仍保留「继续」 | L1 |
+| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |

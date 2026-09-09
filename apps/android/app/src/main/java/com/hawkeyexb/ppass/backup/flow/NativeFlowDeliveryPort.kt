@@ -42,6 +42,21 @@ internal class FlowDeliveryEpochGuard(private val pairing: () -> Pairing?) {
     }
 }
 
+/** Process-local pairing-loss fact from an authenticated Flow delivery rejection. */
+internal class FlowDeliveryPairingLoss {
+    @Volatile private var lostEpoch: String? = null
+
+    fun record(epoch: PairingEpoch, failure: Throwable) {
+        if (failure.message?.contains("err.not_paired") == true) {
+            lostEpoch = epoch.value
+        }
+    }
+
+    fun isLost(epoch: PairingEpoch): Boolean = lostEpoch == epoch.value
+}
+
+internal val flowDeliveryPairingLoss = FlowDeliveryPairingLoss()
+
 /** Validates a Desktop receipt then routes it through the owning Flow runner. */
 internal fun relayFlowCompletion(
     receipt: FlowCompletionReceipt,
@@ -179,6 +194,7 @@ internal class NativeFlowDeliveryPort(
                     return@launch
                 }
                 Log.e("PPassFlow", "Native Flow delivery failed; preserving the strict head for retry", failure)
+                flowDeliveryPairingLoss.record(epoch, failure)
                 onPermanentFailure()
             }
         }

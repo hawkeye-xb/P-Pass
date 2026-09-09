@@ -13,12 +13,17 @@ UI-04a/UI-04c remain pending shared Android regression; UI-04b failed visual
 acceptance and is queued for redesign; UI-08 passed and is archived. MOB-63 is
 code-complete: a final durable completion receipt and user Pause now converge
 to Idle in either arrival order, while remaining queued work stays paused; the
-isolated-album device check remains.
+isolated-album device check remains. MOB-64 is code-complete: a Flow
+`err.not_paired` rejection now reaches the existing pairing-lost red card with
+no active probe; device revocation plus the next phone-side business call
+remains for shared-device validation.
 **当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。MOB-61 已代码完成：
 手机照片在 Flow 发现后被删除会终态跳过，绝不重传；三星隔离照片验收仍欠。
 NET-04 的暂停/取消/重试仍被独立的 `flow.fetch` 15 秒 RPC 截止问题阻塞。
 UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 视觉验收不通过、退回重做；UI-08 已通过归档。MOB-63
 已代码完成：最后完成回执和用户暂停任一先到都归位 Idle，仍有待传项则保持暂停；隔离相册真机验收仍欠。
+MOB-64 已代码完成：Flow 的 `err.not_paired` 拒绝会复用既有 pairingLost 红卡，无主动探测；
+待共享设备撤销后由手机发起下一次业务调用验证。
 
 ## M0 — Feasibility spikes / 可行性验证 ✅ (gate signed 2026-07-30)
 
