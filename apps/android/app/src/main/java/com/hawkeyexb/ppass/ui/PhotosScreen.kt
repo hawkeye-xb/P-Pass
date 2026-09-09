@@ -450,6 +450,10 @@ private fun groupByMonth(items: List<AssetMeta>): List<Pair<String, List<AssetMe
 
 @Composable
 private fun ThumbCell(loader: TimelineLoader, asset: AssetMeta, onOpen: () -> Unit) {
+    // LINT-01: ProduceStateDoesNotAssignValue 误报——赋值裹在
+    // `if (value == null)` 条件分支里，lint 静态检查看不出（缓存命中时
+    // 本来就不该重新赋值，是有意为之）。
+    @Suppress("ProduceStateDoesNotAssignValue")
     val bmp by produceState<Bitmap?>(initialValue = thumbCache.get("${asset.hash}/256"), asset.hash) {
         if (value == null) value = runCatching { loader.thumb(asset.hash, ThumbSize.S256) }.getOrNull()
     }
@@ -524,6 +528,10 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
     // docs/product/2026-08-12-cache-redlines.md。
     // RET-01: 取回=使用动作。原图按需下载到 cacheDir/share/（即用即清），
     // 不落任何长期缓存。
+    // LINT-01: ProduceStateDoesNotAssignValue 误报——本函数确实在
+    // producer lambda 顶层赋值了一次（`value = ...`），lint 对
+    // `?:` 兜底表达式的赋值路径分析仍然把它标记为“未赋值”。
+    @Suppress("ProduceStateDoesNotAssignValue")
     val bmp by produceState<Bitmap?>(initialValue = null, asset.hash) {
         value = runCatching { loader.thumb(asset.hash, ThumbSize.S1024) }.getOrNull()
             ?: thumbCache.get("${asset.hash}/256")

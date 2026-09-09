@@ -538,6 +538,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       `just ci` 全绿，Rust 314/314，前端 vitest 18/18（桌面端测试从 8 条涨到 18）。
       挂账：真机删 N 张后活动记录页 N 条都在、控制台无报错（用户）。
 - [x] BUILD-04 本地构建缓存与已合入 worktree 回收 — **2026-09-09 完成**：新增 `just cleanup-local` / `tools/clean-local-builds.sh`。默认只有预览；删除要求 `--apply` + 明确 scope。`--targets` 仅清再生 `target/`，`--worktrees` 只移除已注册、clean、已合入 `origin/main`、非当前且无活动 Cargo/Rustc/Gradle/Node 构建的 worktree；逐项输出候选或跳过理由。临时 Git fixture 覆盖默认不删、cache-only 保留源码、clean+merged 删除及 dirty/unmerged/active build 保留。
+- [x] LINT-01 Android lint 补 CI 门禁 — **2026-09-09 完成**：`ci-android.yml` 新增 `lintDebug` 步骤。BucketScreen.kt 点名及另 3 处同模式 `ProduceStateDoesNotAssignValue` 误报（赋值裹在条件分支/提前返回里，lint 看不穿）显式 `@Suppress` 并写理由；AndroidManifest 的 `PermissionImpliesUnsupportedChromeOsHardware` 真错误已修（CAMERA 权限补 `uses-feature required=false`）。首次开门禁 0 errors/72 warnings，72 条存量按规则分类记原因后收进 `lint-baseline.xml`（详见 `cards/done/LINT-01-android-lint-not-in-ci.md`）。反证：临时插入 API 31+ 无守卫引用 → `BUILD FAILED`，撤回后 `BUILD SUCCESSFUL`。
 - [ ] BUILD-01 本地 JDK 25 让 Android release 构建挂在 lint — **⛔ 未实施（L3，不影响 CI）**:
       `brew --prefix openjdk` = openjdk 25.0.1，AGP 的 lint 吃不下，异常里只吐
       一个 `> 25.0.1`——**看着完全不像版本问题**（我第一眼当成签名配置缺失）。

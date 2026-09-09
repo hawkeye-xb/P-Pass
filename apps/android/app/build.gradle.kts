@@ -99,6 +99,18 @@ android {
             }
         }
     }
+
+    // LINT-01: lint 在 CI 里门禁——真报当场修（本卡已修：BucketScreen/
+    // PhotosScreen/VideoScreen 的 ProduceStateDoesNotAssignValue 误报显式
+    // @Suppress 并写理由；AndroidManifest 的 camera uses-feature 真错误已
+    // 修）。首次开门禁时顶出的存量告警（GradleDependency 依赖版本落后、
+    // Recycle 游标/流未显式 close、PluralsCandidate 复数格式等——修复需要
+    // 碰业务代码，本卡范围明确不含业务逻辑改动）逐条记录进
+    // lint-baseline.xml，理由见该文件顶部注释与本卡「备注」。baseline 只
+    // 冻结存量，新增的同类违规仍会让 CI 变红。
+    lint {
+        baseline = file("lint-baseline.xml")
+    }
 }
 
 tasks.named("preBuild").configure {
