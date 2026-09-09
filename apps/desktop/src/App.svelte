@@ -15,6 +15,9 @@
   // 不是 node_modules 黑箱；Tailwind 工具类全局可用）
   import { Button } from "$lib/components/ui/button";
   import { Card } from "$lib/components/ui/card";
+  import { Dialog } from "$lib/components/ui/dialog";
+  import { Notice } from "$lib/components/ui/notice";
+  import { NavItem } from "$lib/components/ui/nav-item";
   // ICON-02: 功能小图标走开源图标库（lucide），不再手抄设计稿的 SVG
   // path。深路径 import（`@lucide/svelte/icons/<name>`）是官方推荐用法，
   // 只打包用到的图标，不拉整个 barrel。
@@ -418,18 +421,6 @@
   // DESK-07: 设备行状态点色 map（语义色仅 safe/wait/idle/act 四种，
   // 颜色值全来自 tokens.css，见其注释）
   const DOT_BG = { idle: "bg-idle", act: "bg-act", safe: "bg-safe", wait: "bg-waiting" };
-
-  /* DESK-08: 迁移后的按钮族常量——原手写 button 规则的 Tailwind 等价
-     （base=透明底+1.5px border-strong；primary=ink 底纸字；danger=透明底
-     act 字 act 边；link=纯文字）。所有迁移页共用，保证全站按钮一致。 */
-  const BTN =
-    "h-11 min-h-11 rounded-md border border-ink px-[18px] text-[15px] font-bold hover:bg-ink-hover";
-  const BTN_OUTLINE =
-    "h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60";
-  const BTN_DANGER =
-    "h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-paper px-[18px] text-[15px] font-semibold text-act hover:border-act hover:bg-act-bg hover:text-act";
-  const BTN_LINK =
-    "h-auto min-h-0 rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px]";
 
   function deviceRow(d, now) {
     const wm = watermarks[d.node_id];
@@ -1224,11 +1215,7 @@
       <h1>P-Pass</h1>
     </header>
     {#if message}
-      <p class="message">
-        {message}
-        <!-- UX-08: 提示条右侧 × 手动关闭（5s 自动消失之外的第二条路） -->
-        <button class="message-close" aria-label="关闭提示" onclick={() => (message = "")}>×</button>
-      </p>
+      <Notice {message} onClose={() => (message = "")} />
     {/if}
     <!-- W1 (2026-08-26): 整块按平台选择组件渲染，不在单个 Wizard 内部
          塞 if isWindows —— macOS/Windows 的 onboarding 是两条完全独立的
@@ -1254,17 +1241,7 @@
       <div class="brand">P-Pass</div>
       <nav>
         {#each NAV as n}
-          {@const NavIcon = n.icon}
-          <button
-            class="nav-item"
-            class:active={page === n.id}
-            aria-current={page === n.id ? "page" : undefined}
-            title={n.label}
-            onclick={() => go(n.id)}
-          >
-            <NavIcon class="nav-icon" size={20} />
-            <span class="nav-label">{n.label}</span>
-          </button>
+          <NavItem icon={n.icon} label={n.label} active={page === n.id} onclick={() => go(n.id)} />
         {/each}
       </nav>
       <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊；<1080px
@@ -1277,11 +1254,7 @@
 
     <main class="content" data-page={page}>
       {#if message}
-        <p class="message">
-          {message}
-          <!-- UX-08: 提示条右侧 × 手动关闭（5s 自动消失之外的第二条路） -->
-          <button class="message-close" aria-label="关闭提示" onclick={() => (message = "")}>×</button>
-        </p>
+        <Notice {message} onClose={() => (message = "")} />
       {/if}
 
       {#if page === "overview"}
@@ -1307,9 +1280,9 @@
           </div>
 
           {#if !online}
-            <Card class="gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+            <Card class="text-[16px]">
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.offline_action")}</p>
-              <Button class="mt-[12px] self-start {BTN}" disabled={starting} onclick={startDaemonNow}>
+              <Button class="mt-[12px] self-start" disabled={starting} onclick={startDaemonNow}>
                 {starting ? t("ui.starting") : t("ui.start_service")}
               </Button>
               <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
@@ -1328,8 +1301,8 @@
                   {/if}
                 </div>
                 <div class="flex flex-none flex-wrap gap-[10px]">
-                  <Button variant="outline" class="h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60" onclick={() => confirmPair(false)}>{t("ui.deny")}</Button>
-                  <Button class="h-11 min-h-11 rounded-md border border-ink px-[18px] text-[15px] font-bold" onclick={() => confirmPair(true)}>{t("ui.allow")}</Button>
+                  <Button variant="secondary" onclick={() => confirmPair(false)}>{t("ui.deny")}</Button>
+                  <Button onclick={() => confirmPair(true)}>{t("ui.allow")}</Button>
                 </div>
               </div>
             {/if}
@@ -1348,8 +1321,7 @@
                 </div>
                 <div class="flex flex-none">
                   <Button
-                    variant="outline"
-                    class="h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60"
+                    variant="secondary"
                     onclick={() => (deleteWarnDismissedAt = deleteWarning.latestAt)}
                     >{t("ui.library_delete_warn_dismiss")}</Button
                   >
@@ -1375,7 +1347,7 @@
                  中屏两栏并排时"添加设备"卡内容天然比"备份状态"空
                  状态多，不等高会让水位卡下面露出一大块空白背景。 -->
             <div class="grid grid-cols-1 gap-[22px] min-[1080px]:grid-cols-2 min-[1440px]:grid-cols-3">
-              <Card class="gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+              <Card class="text-[16px]">
                 <h3 class="mb-[12px] text-[15px] font-semibold">备份状态</h3>
                 {#if devices.filter((d) => !d.revoked).length === 0}
                   <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
@@ -1397,8 +1369,8 @@
                     {/each}
                   </ul>
                   {#if waterRows.moreOk > 0}
-                    <button class="h-auto min-h-0 rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] mt-px self-start text-safe hover:text-safe" onclick={() => go("devices")}
-                      >一切正常的还有 {waterRows.moreOk} 台 ›</button
+                    <Button variant="link" tone="safe" class="mt-px self-start" onclick={() => go("devices")}
+                      >一切正常的还有 {waterRows.moreOk} 台 ›</Button
                     >
                   {/if}
                 {/if}
@@ -1409,13 +1381,13 @@
                    「无法扫码」退路是居中的。 -->
               <!-- T4 (H-10b): 二维码不再是常驻卡片——点按钮弹窗出码，配对完
                    状态消失；扫码后的允许/拒绝也走模态。 -->
-              <Card class="flex flex-col gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+              <Card class="gap-[12px] text-[16px]">
                 <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
                 <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">点击后会放大显示一个配对二维码，用家人手机上的 P-Pass 扫一下；扫到后二维码自动收起，回到这里确认「允许加入」。</p>
-                <Button class="h-11 min-h-11 w-full rounded-md border border-ink px-[18px] text-[15px] font-bold" onclick={startPairing}>{t("ui.generate_qr")}</Button>
+                <Button class="w-full" onclick={startPairing}>{t("ui.generate_qr")}</Button>
                 <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
                      能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
-                <button class="h-auto min-h-0 w-full rounded-md border-none bg-transparent px-0 py-[2px] text-center text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] text-safe hover:text-safe" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</button>
+                <Button variant="link" tone="safe" class="w-full" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</Button>
               </Card>
 
               <!-- 「最近动静」摘要卡——不再靠 hidden+断点整卡消失。中屏
@@ -1423,7 +1395,7 @@
                    回到第三栏；小屏（<1080px）跟其它卡一样单栏竖排。数据
                    是活动记录前 3 条，复用同一套 auditWho/auditText，不是
                    另开一套数据源。 -->
-              <Card class="flex flex-col gap-[12px] rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px] min-[1080px]:col-span-2 min-[1440px]:col-span-1">
+              <Card class="gap-[12px] text-[16px] min-[1080px]:col-span-2 min-[1440px]:col-span-1">
                 <h3 class="mb-0 text-[15px] font-semibold">最近动静</h3>
                 <!-- 2026-08-17：内容包一层 flex-1——大屏三栏等高时这张卡
                      内容天然比左边两张少（最多 3 行），没有这层撑底的话
@@ -1449,7 +1421,7 @@
                     </ul>
                   {/if}
                 </div>
-                <button class="h-auto min-h-0 self-start rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px] text-safe hover:text-safe" onclick={() => go("log")}>全部活动记录 ›</button>
+                <Button variant="link" tone="safe" class="self-start" onclick={() => go("log")}>全部活动记录 ›</Button>
               </Card>
             </div>
           {/if}
@@ -1467,7 +1439,7 @@
           <!-- 2026-08-18（用户反馈③）：设备列表在卡内自己滚，标题/副标题和
                底部说明不跟着长——与活动记录页/照片页同一套 min-h-0 flex-1
                overflow-y-auto 处理（那两页踩过"整个右侧内容区跟着长高"的坑）。 -->
-          <Card class="min-h-0 flex-1 gap-0 overflow-y-auto rounded-xl border border-border py-0 shadow-none ring-0 ring-transparent">
+          <Card size="flush" class="min-h-0 flex-1 overflow-y-auto">
             {#if devices.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
             {:else}
@@ -1583,8 +1555,8 @@
             <!-- 设计稿 v2：lede 右侧「在 Finder 中打开」（openLibrary 揭示
                  originals/）；「刷新」是 DESK-06 的事件驱动失效兜底，保留。 -->
             <div class="flex flex-none items-center gap-[10px]">
-              <Button variant="outline" class="{BTN_OUTLINE} mt-[2px] flex-none" onclick={openLibrary}>{t("ui.photos_open_library")}</Button>
-              <Button variant="outline" class="{BTN_OUTLINE} mt-[2px] flex-none" onclick={resetPhotosWall}>
+              <Button variant="secondary" class="mt-[2px] flex-none" onclick={openLibrary}>{t("ui.photos_open_library")}</Button>
+              <Button variant="secondary" class="mt-[2px] flex-none" onclick={resetPhotosWall}>
                 {photosLoading ? "刷新中…" : "刷新"}
               </Button>
             </div>
@@ -1593,7 +1565,7 @@
                overflow-y-auto 弄丢了，变回整个右侧内容区跟着长高再滚动
                （回归到 2026-08-13 已经修过一次的老问题）——照活动记录页
                同款处理补回来，照片格子在卡内自己滚，标题/工具栏不跟着走。 -->
-          <Card class="min-h-0 flex-1 gap-0 overflow-y-auto rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+          <Card class="min-h-0 flex-1 overflow-y-auto text-[16px]">
             {#if photosLoaded && photos.length === 0}
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_empty")}</p>
             {:else if !photosLoaded}
@@ -1650,7 +1622,7 @@
                （DESK-05 当时改真表格的顾虑是"内容超长"，但 ingest.*
                噪音行本来就被过滤掉了，跟表格与否无关；卡片行是 flex
                布局，长文本本来就会自然换行，不会重新踩那个坑）。 -->
-          <Card class="min-h-0 flex-1 gap-0 overflow-y-auto rounded-xl border border-border p-0 shadow-none ring-0 ring-transparent text-[16px]">
+          <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
             {#if visibleAudit.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。</p>
             {:else}
@@ -1694,14 +1666,14 @@
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.settings")}</h2>
           </div>
           <div class="flex items-start gap-[22px] max-[1079px]:flex-col">
-            <Card class="flex-[1.2_1_0%] gap-0 rounded-xl border border-border px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+            <Card class="flex-[1.2_1_0%] text-[16px]">
               <h3 class="mb-[12px] text-[15px] font-semibold">照片库</h3>
               {#if status?.library_dir}
                 <code class="block rounded-sm bg-linen px-[16px] py-[12px] text-[14px] break-all">{status.library_dir}</code>
               {/if}
               <div class="mt-[12px] flex flex-wrap gap-[10px]">
-                <Button class="{BTN}" onclick={openLibrary}>{t("ui.open_library")}</Button>
-                <Button variant="outline" class="{BTN_OUTLINE}" onclick={chooseFolder}>{t("ui.change_library")}</Button>
+                <Button onclick={openLibrary}>{t("ui.open_library")}</Button>
+                <Button variant="secondary" onclick={chooseFolder}>{t("ui.change_library")}</Button>
               </div>
               <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
                    「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
@@ -1716,19 +1688,19 @@
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">更改位置重启后台服务后生效；已备份的照片不会自动搬家。</p>
             </Card>
             <div class="flex flex-1 flex-col gap-[22px]">
-              <Card class="min-h-0 flex-1 gap-0 overflow-y-auto rounded-xl border border-border p-0 shadow-none ring-0 ring-transparent text-[16px]">
+              <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
                 <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
                      test），旧 REL-02 通道选择行已删。 -->
                 <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                   <span>软件更新</span>
-                  <Button variant="outline" class="{BTN_OUTLINE}" onclick={() => checkForUpdate(true)}>检查更新</Button>
+                  <Button variant="secondary" onclick={() => checkForUpdate(true)}>检查更新</Button>
                 </div>
                 <!-- DAE-04: 桌面壳更新后 daemon 还是旧版（版本不一致）才
                      显示——一致时不出现，避免误杀正常运行的服务。 -->
                 {#if daemonStale}
                   <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                     <span>{t("ui.restart_service")}</span>
-                    <Button variant="outline" class="{BTN_OUTLINE}" onclick={restartDaemonProcess} disabled={restartingService}>
+                    <Button variant="secondary" onclick={restartDaemonProcess} disabled={restartingService}>
                       {restartingService ? t("ui.restarting_service") : t("ui.restart_service_btn")}
                     </Button>
                   </div>
@@ -1736,13 +1708,13 @@
                 {/if}
                 <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                   <span>遇到问题？导出诊断包</span>
-                  <Button variant="outline" class="{BTN_OUTLINE}" onclick={exportLogs}>{t("ui.export_logs")}</Button>
+                  <Button variant="secondary" onclick={exportLogs}>{t("ui.export_logs")}</Button>
                 </div>
               </Card>
-              <Card class="gap-0 rounded-xl border border-act bg-act-bg px-[22px] py-5 shadow-none ring-0 ring-transparent text-[16px]">
+              <Card variant="danger" class="text-[16px]">
                 <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
                 <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.stop_hint")}</p>
-                <Button variant="outline" class="self-start {BTN_DANGER}" onclick={stopService}>{t("ui.stop_service")}</Button>
+                <Button variant="danger" class="self-start" onclick={stopService}>{t("ui.stop_service")}</Button>
               </Card>
             </div>
           </div>
@@ -1750,81 +1722,73 @@
       {/if}
     </main>
     <!-- T4 (H-10b): 配对状态机模态——二维码弹窗 + 允许/拒绝弹窗。 -->
-    {#if showPairModal}
-      <div class="modal-backdrop" onclick={closePairModal}>
-        <div class="modal" onclick={(e) => e.stopPropagation()}>
-          <!-- 设计稿 v2：弹窗标题「配对二维码 · 放大版」——亮码用途一目了然 -->
-          <h3>配对二维码</h3>
-          {#if qrDataUrl}
-            <img class="qr-lg" src={qrDataUrl} alt="配对二维码" />
-            <!-- FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，
-                 新码只带 r=，旧手机扫新码静默失败。把话说清：先升手机 App。 -->
-            <p class="hint modal-hint modal-upgrade-note">
-              {t("ui.qr_phone_version")}
-            </p>
-            <p class="hint modal-hint">
-              用家人手机上的 P-Pass 扫这个码；手机发来的加入请求会自动出现在这里。
-            </p>
-            <div class="modal-actions">
-              <button onclick={startPairing}>刷新二维码</button>
-              <button class="primary" onclick={closePairModal}>关闭</button>
-            </div>
-            <!-- 设计稿离线版 v2：扫码有困难的退路——复制配对串手动传给
-                 手机（比如隔空投送/微信发给家人自己粘）。 -->
-            <button class="link-more safe" onclick={copyPairString}>无法扫码？复制配对串</button>
-          {:else}
-            <p class="hint modal-hint">正在生成配对码…</p>
-          {/if}
+    <Dialog open={showPairModal} onClose={closePairModal}>
+      <!-- 设计稿 v2：弹窗标题「配对二维码 · 放大版」——亮码用途一目了然 -->
+      <h3>配对二维码</h3>
+      {#if qrDataUrl}
+        <img class="qr-lg" src={qrDataUrl} alt="配对二维码" />
+        <!-- FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，
+             新码只带 r=，旧手机扫新码静默失败。把话说清：先升手机 App。 -->
+        <p class="hint modal-hint modal-upgrade-note">
+          {t("ui.qr_phone_version")}
+        </p>
+        <p class="hint modal-hint">
+          用家人手机上的 P-Pass 扫这个码；手机发来的加入请求会自动出现在这里。
+        </p>
+        <div class="modal-actions">
+          <Button variant="secondary" onclick={startPairing}>刷新二维码</Button>
+          <Button onclick={closePairModal}>关闭</Button>
         </div>
-      </div>
-    {/if}
+        <!-- 设计稿离线版 v2：扫码有困难的退路——复制配对串手动传给
+             手机（比如隔空投送/微信发给家人自己粘）。 -->
+        <Button variant="link" tone="safe" onclick={copyPairString}>无法扫码？复制配对串</Button>
+      {:else}
+        <p class="hint modal-hint">正在生成配对码…</p>
+      {/if}
+    </Dialog>
 
-    {#if showConfirmModal && pendingList.length > 0}
-      <div class="modal-backdrop">
-        <div class="modal">
-          <!-- UX-08: 多台同时扫码 → 一屏全列，逐行允许/拒绝，处理完该行
-               消失，全清后列表关闭——不挤牙膏式顺序弹窗。 -->
-          <h3>{pendingList.length > 1 ? `有 ${pendingList.length} 台设备请求加入` : "有设备请求加入"}</h3>
-          <p class="hint modal-hint">确认是家人的手机吗？允许后它会出现在设备列表里。</p>
-          <div class="pending-list">
-            {#each pendingList as item}
-              <!-- DEV-01: item 可能带 hint_match——这台手机以前配对过
-                   （重装/清数据后重扫）。DEV-01b: 入口先隐藏——flag 关时
-                   hint_match 分支不渲染，对话框与 DEV-01 之前完全一致
-                   （主按钮「允许」= 作为新设备）；打开 flag 即恢复
-                   「替换旧的」主按钮 + 「作为新设备」次级按钮。 -->
-              <div class="pending-row">
-                <div class="pending-info">
-                  <span class="pending-name">{item.name}</span>
-                  {#if MERGE_ENTRY_ENABLED && item.hint_match}
-                    <span class="pending-hint">
-                      这台手机重装过——可以替换原来的「{item.hint_match.name}」，保留它的备份记录
-                    </span>
-                  {/if}
-                </div>
-                <div class="pending-actions">
-                  <button onclick={() => confirmPair(false, item.name)}>{t("ui.deny")}</button>
-                  {#if MERGE_ENTRY_ENABLED && item.hint_match}
-                    <button onclick={() => confirmPair(true, item.name)}>{t("ui.allow_new")}</button>
-                    <button class="primary" onclick={() => confirmPair(true, item.name, item.hint_match.node_id)}>
-                      {t("ui.allow_replace")}
-                    </button>
-                  {:else}
-                    <button class="primary" onclick={() => confirmPair(true, item.name)}>{t("ui.allow")}</button>
-                  {/if}
-                </div>
-              </div>
-            {/each}
+    <!-- UX-08: 待确认加入列表——不传 onClose，必须显式允许/拒绝，
+         不能靠点背景遮罩误关。 -->
+    <Dialog open={showConfirmModal && pendingList.length > 0}>
+      <!-- UX-08: 多台同时扫码 → 一屏全列，逐行允许/拒绝，处理完该行
+           消失，全清后列表关闭——不挤牙膏式顺序弹窗。 -->
+      <h3>{pendingList.length > 1 ? `有 ${pendingList.length} 台设备请求加入` : "有设备请求加入"}</h3>
+      <p class="hint modal-hint">确认是家人的手机吗？允许后它会出现在设备列表里。</p>
+      <div class="pending-list">
+        {#each pendingList as item}
+          <!-- DEV-01: item 可能带 hint_match——这台手机以前配对过
+               （重装/清数据后重扫）。DEV-01b: 入口先隐藏——flag 关时
+               hint_match 分支不渲染，对话框与 DEV-01 之前完全一致
+               （主按钮「允许」= 作为新设备）；打开 flag 即恢复
+               「替换旧的」主按钮 + 「作为新设备」次级按钮。 -->
+          <div class="pending-row">
+            <div class="pending-info">
+              <span class="pending-name">{item.name}</span>
+              {#if MERGE_ENTRY_ENABLED && item.hint_match}
+                <span class="pending-hint">
+                  这台手机重装过——可以替换原来的「{item.hint_match.name}」，保留它的备份记录
+                </span>
+              {/if}
+            </div>
+            <div class="pending-actions">
+              <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item.name)}>{t("ui.deny")}</Button>
+              {#if MERGE_ENTRY_ENABLED && item.hint_match}
+                <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(true, item.name)}>{t("ui.allow_new")}</Button>
+                <Button class="min-w-[64px]" onclick={() => confirmPair(true, item.name, item.hint_match.node_id)}>
+                  {t("ui.allow_replace")}
+                </Button>
+              {:else}
+                <Button class="min-w-[64px]" onclick={() => confirmPair(true, item.name)}>{t("ui.allow")}</Button>
+              {/if}
+            </div>
           </div>
-        </div>
+        {/each}
       </div>
-    {/if}
+    </Dialog>
     <!-- DESK-03: 大图查看——原图内存展示（不落盘），关闭即弃；
          「在 Finder 中显示」揭示 originals 里的原文件。 -->
-    {#if photoViewer}
-      <div class="modal-backdrop" onclick={() => (photoViewer = null)}>
-        <div class="modal photo-modal" onclick={(e) => e.stopPropagation()}>
-          <div class="photo-viewer-wrap">
+    <Dialog open={!!photoViewer} onClose={() => (photoViewer = null)} class="w-[min(88vw,880px)]">
+      <div class="photo-viewer-wrap">
             {#if viewerVideoSrc}
               <!-- MOB-47: 视频走原生 <video>（磁盘 streaming），平台默认控件
                    即带播放/暂停/进度/seek。src 由 convertFileSrc 生成。
@@ -1848,15 +1812,13 @@
               <div class="photo-viewer-loading">加载中…</div>
             {/if}
           </div>
-          <div class="modal-actions">
-            <button onclick={revealPhotoInFinder} disabled={!viewerPath}>
-              {t("ui.photos_open_in_finder")}
-            </button>
-            <button class="primary" onclick={() => (photoViewer = null)}>关闭</button>
-          </div>
-        </div>
+      <div class="modal-actions">
+        <Button variant="secondary" onclick={revealPhotoInFinder} disabled={!viewerPath}>
+          {t("ui.photos_open_in_finder")}
+        </Button>
+        <Button onclick={() => (photoViewer = null)}>关闭</Button>
       </div>
-    {/if}
+    </Dialog>
     <!-- T1: 版本号——报问题/排查时先知道装的是什么版本。 -->
     {#if displayVersion}
       <footer class="version-footer">
@@ -1924,27 +1886,8 @@
     flex-direction: column;
     gap: 2px;
   }
-  .nav-item {
-    text-align: left;
-    padding: 10px 12px;
-    border: none;
-    border-radius: var(--pp-radius-control-sm);
-    background: transparent;
-    color: var(--pp-ink-60);
-    font-family: inherit;
-    font-size: 15px;
-    font-weight: 500;
-    cursor: pointer;
-    min-height: 0;
-  }
-  .nav-item:hover {
-    background: var(--pp-hairline);
-  }
-  .nav-item.active {
-    background: var(--pp-ink);
-    color: var(--pp-paper);
-    font-weight: 700;
-  }
+  /* DESK-15：.nav-item/.nav-icon/.nav-label（含 <1080px 收起覆盖）已收进
+     NavItem 组件（lib/components/ui/nav-item/nav-item.svelte）。 */
   .service-pill {
     margin-top: auto;
     display: flex;
@@ -1977,16 +1920,6 @@
   }
   .service-pill.bad .dot {
     background: var(--pp-act);
-  }
-  /* 展开态（≥1080px，跟设计稿交互原型一致）：不画图标，只显示文字。
-     ICON-02: 图标由 lucide 组件渲染，svg 拿不到本组件的 scope 类，
-     所以 .nav-icon 一律走 `.nav-item :global(...)`——限定在 nav-item
-     子树内，不是裸 :global 全局泄漏。 */
-  .nav-item :global(.nav-icon) {
-    display: none;
-  }
-  .nav-label {
-    display: inline;
   }
   .content {
     flex: 1;
@@ -2096,66 +2029,9 @@
 
 
 
-  button {
-    min-height: var(--pp-tap-min);
-    border: 1.5px solid var(--pp-border-strong);
-    background: transparent;
-    border-radius: var(--pp-radius-control);
-    padding: 0 18px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--pp-ink-60);
-  }
-  button:hover {
-    background: var(--pp-linen);
-  }
-  button.primary {
-    background: var(--pp-ink);
-    border-color: var(--pp-ink);
-    color: var(--pp-paper);
-    font-weight: 700;
-  }
-  button.primary:hover {
-    background: var(--pp-ink-hover);
-  }
-
-
-  button:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  /* 跟 .dev-name-btn/.dev-remove-btn 同族的极简文字链接——次要跳转
-     不该是实心按钮，这条规则以后别的「看全部」链接也可以直接复用。 */
-  .link-more {
-    align-self: flex-start;
-    font-size: 13.5px;
-    font-weight: 600;
-    color: var(--pp-ink-60);
-    background: transparent;
-    border: none;
-    padding: 2px 0;
-    cursor: pointer;
-    min-height: 0;
-    font-family: inherit;
-  }
-  .link-more:hover {
-    color: var(--pp-ink);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-  /* 设计稿离线版："一切正常还有 N 台"/"全部活动记录" 这类"一切都好，
-     只是还有更多"的次要跳转用安全绿，不是中性灰——跟危险动作的红形成
-     对照，颜色本身就是语义。 */
-  .link-more.safe {
-    color: var(--pp-safe);
-  }
-  .link-more.safe:hover {
-    color: var(--pp-safe);
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
+  /* DESK-15：原生 button/.primary/.link-more 视觉规则已删——全部收编进
+     Button 组件（variant=primary/secondary/danger/link，tone=safe），
+     不再有第二套按钮视觉实现。 */
   .qr-fallback {
     align-self: stretch;
     text-align: center;
@@ -2206,25 +2082,8 @@
     font-weight: 700;
     letter-spacing: 0.02em;
   }
-  /* T4: 配对状态机模态 */
-  .modal-backdrop {
-    position: fixed;
-    inset: 0;
-    background: rgba(23, 21, 18, 0.45);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 50;
-  }
-  .modal {
-    background: var(--pp-paper);
-    border-radius: var(--pp-radius-card);
-    padding: 26px 30px 22px;
-    width: 420px;
-    max-width: 92vw;
-    text-align: center;
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
-  }
+  /* DESK-15：弹窗外壳（遮罩+面板）已收进 Dialog 组件，这里只留内容级
+     class（qr-lg / modal-hint / modal-actions / pending-row 等 / photo-viewer-wrap 等）。 */
   .qr-lg {
     width: 360px;
     max-width: 100%;
@@ -2281,9 +2140,6 @@
     gap: 8px;
     flex: none;
   }
-  .pending-actions button {
-    min-width: 64px;
-  }
   .hint {
     color: var(--pp-ink-40);
     font-size: 13px;
@@ -2296,40 +2152,8 @@
   /* UI-04b: 提示条脱离文档流——fixed 浮层，出现/消失不顶动下方内容。
      改名成功/失败、复制成功等瞬时反馈都走这里；错误反馈同样可见
      （5s 自动消失 + 手动 ×），只是不再占布局空间。 */
-  .message {
-    position: fixed;
-    top: 16px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 60; /* 高于 modal-backdrop(50)：模态打开时提示仍可见 */
-    max-width: min(90vw, 560px);
-    box-shadow: 0 4px 16px rgba(23, 21, 18, 0.12);
-    background: var(--pp-waiting-bg);
-    border: 1px solid var(--pp-waiting);
-    border-radius: var(--pp-radius-control);
-    padding: 10px 14px;
-    font-size: 15px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-  }
-  /* UX-08: 提示条右侧 × 手动关闭——弱化小按钮，不抢正文 */
-  .message-close {
-    background: none;
-    border: none;
-    color: var(--pp-ink-40);
-    font-size: 18px;
-    line-height: 1;
-    padding: 2px 6px;
-    cursor: pointer;
-    flex: none;
-    border-radius: 6px;
-  }
-  .message-close:hover {
-    color: var(--pp-ink);
-    background: var(--pp-linen);
-  }
+  /* DESK-15：提示条（.message/.message-close）已收进 Notice 组件
+     （lib/components/ui/notice/notice.svelte），这里不再重复定义。 */
 
   
 
@@ -2339,10 +2163,8 @@
 
 
 
-  /* 大图 modal：图片区域限高、object-contain 保完整（大图看全貌优先） */
-  .photo-modal {
-    width: min(88vw, 880px);
-  }
+  /* 大图 modal：图片区域限高、object-contain 保完整（大图看全貌优先）；
+     弹窗本身加宽已经在调用处用 Dialog 的 class="w-[min(88vw,880px)]" 传入。 */
   .photo-viewer-wrap {
     display: flex;
     align-items: center;
@@ -2390,25 +2212,6 @@
     nav {
       align-items: center;
       gap: 4px;
-    }
-    .nav-item {
-      width: 44px;
-      height: 44px;
-      padding: 0;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex: none;
-    }
-    .nav-item :global(.nav-icon) {
-      display: block;
-      color: var(--pp-ink-60);
-    }
-    .nav-item.active :global(.nav-icon) {
-      color: var(--pp-paper);
-    }
-    .nav-label {
-      display: none;
     }
     /* 服务状态缩成一个纯色点（设计稿原文），不再是文字胶囊。 */
     .service-pill {

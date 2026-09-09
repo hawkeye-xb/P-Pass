@@ -13,12 +13,8 @@
   // machine mirror Wizard.svelte on purpose so the two stay easy to
   // diff when a shared behavior (e.g. finishSetup's readiness poll)
   // changes on one side and needs porting to the other.
-  const BTN =
-    "h-11 min-h-11 rounded-md border border-ink px-[26px] text-[15px] font-bold hover:bg-ink-hover";
-  const BTN_OUTLINE =
-    "h-11 min-h-11 rounded-md border-[1.5px] border-border-strong bg-transparent px-[18px] text-[15px] font-semibold text-ink-60 hover:bg-linen hover:text-ink-60";
-  const BTN_LINK =
-    "h-auto min-h-0 rounded-md border-none bg-transparent px-0 py-[2px] text-[13.5px] font-semibold hover:bg-transparent hover:underline hover:underline-offset-[3px]";
+  // DESK-15：按钮视觉合同收进 Button 组件本身，见 Wizard.svelte 同条注释。
+  const WIZARD_PRIMARY_WIDE = "px-[26px]";
 
   let { defaultDir, configuredLibraryDir, onDone } = $props();
 
@@ -131,10 +127,10 @@
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">选一个文件夹当「照片库」。照片会按原始文件存进去，你随时能在文件资源管理器里翻到它们。</p>
       <div class="flex items-center gap-[10px]">
         <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{libraryDir}</code>
-        <Button variant="outline" class="{BTN_OUTLINE} flex-none" onclick={chooseFolder}>更改…</Button>
+        <Button variant="secondary" class="flex-none" onclick={chooseFolder}>更改…</Button>
       </div>
       {#if libraryDir !== defaultDir}
-        <button class="self-start {BTN_LINK} text-safe hover:text-safe" onclick={useDefault} title="回到默认位置">↺ 回到默认位置</button>
+        <Button variant="link" tone="safe" class="self-start" onclick={useDefault} title="回到默认位置">↺ 回到默认位置</Button>
       {/if}
       <!-- Windows 没有 macOS TCC 那样的系统级保护目录弹窗；真正的坑是系统盘
            受保护路径（Program Files 等）权限受限、云盘同步目录（OneDrive
@@ -144,7 +140,7 @@
     </div>
     <div class="mt-auto flex items-center justify-between">
       <span></span>
-      <Button class={BTN} disabled={!libraryDir || busy} onclick={toStep2}>继续</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} disabled={!libraryDir || busy} onclick={toStep2}>继续</Button>
     </div>
   {:else if step === 2}
     <div class="flex flex-col gap-4">
@@ -168,10 +164,10 @@
             </div>
           </div>
           <div class="flex items-center gap-[10px]">
-            <Button class="{BTN} h-10 min-h-10 flex-none text-[14px]" disabled={sleepFixBusy} onclick={fixAutoSleep}>
+            <Button size="compact" disabled={sleepFixBusy} onclick={fixAutoSleep}>
               {sleepFixBusy ? "设置中…" : "一键设置"}
             </Button>
-            <Button variant="outline" class="{BTN_OUTLINE} h-10 min-h-10 flex-none text-[14px]" onclick={() => invoke("open_power_settings")}>去系统设置</Button>
+            <Button variant="secondary" size="compact" onclick={() => invoke("open_power_settings")}>去系统设置</Button>
           </div>
           {#if sleepFixError}
             <p class="m-0 text-[13px] text-act">{sleepFixError}——你也可以点「去系统设置」自己关：打开「电源和睡眠设置」，把「屏幕和睡眠」都改成「从不」。</p>
@@ -182,8 +178,8 @@
       {/if}
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <button class={BTN_LINK} onclick={() => (step = 1)}>‹ 上一步</button>
-      <Button class={BTN} onclick={toStep3}>继续</Button>
+      <Button variant="link" onclick={() => (step = 1)}>‹ 上一步</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} onclick={toStep3}>继续</Button>
     </div>
   {:else if step === 3}
     <div class="flex flex-col gap-4">
@@ -205,8 +201,8 @@
       </div>
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <button class={BTN_LINK} onclick={() => (step = 2)}>‹ 上一步</button>
-      <Button class={BTN} disabled={busy} onclick={finishSetup}>
+      <Button variant="link" onclick={() => (step = 2)}>‹ 上一步</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} disabled={busy} onclick={finishSetup}>
         {busy ? "正在启动…" : "完成"}
       </Button>
     </div>

@@ -15,6 +15,7 @@ has to figure anything out.
 |---|---|
 | `tokens.json` | canonical definitions + design rules — **edit this first** |
 | `tokens.css` | desktop shell (`apps/desktop`, imported by the Svelte app) |
+| `token-reuse-checklist.md` | DESK-15 audit: what's already reused, what gaps are real, what was decided not to tokenize |
 | *(future)* `Tokens.kt` | Android app (M2 T-055) — generate from `tokens.json` |
 
 Rules that are not colours (body ≥17px on phone, tap targets ≥56px,
@@ -25,5 +26,7 @@ and engineers equally.
 非颜色规则（正文/点击区下限、每屏字数、术语带白话、危险操作只在桌面等）
 在 `tokens.json → rules`，对设计与工程同等生效。
 
-Keep `tokens.css` in sync by hand for now — the two files are small.
-When Android lands, promote generation to a `just` recipe.
+`tokens.css` is still hand-maintained, but `just token-check`
+(`tools/check-token-drift.py`, wired into `just ci`) fails loudly if it
+drifts from `tokens.json` — added by DESK-15, 2026-09-09. When Android
+lands, promote generation to a `just` recipe.
