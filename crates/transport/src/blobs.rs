@@ -12,10 +12,16 @@
 //! A daemon that serves both planes (ctrl + blobs) moves its ctrl accept
 //! loop into the same Router at T-030 — an endpoint has one accept queue.
 
+use std::collections::HashSet;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::Duration;
 
 use iroh::protocol::Router;
-use iroh_blobs::store::fs::FsStore;
+use iroh_blobs::store::fs::{options::Options, FsStore};
+use iroh_blobs::store::{GcConfig, ProtectCb, ProtectOutcome};
 use iroh_blobs::ticket::BlobTicket;
 use iroh_blobs::{BlobFormat, BlobsProtocol, Hash};
 
@@ -37,6 +43,62 @@ impl Blobs {
     /// Open (or create) the blob store at `store_dir` for this endpoint.
     pub async fn open(transport: &IrohTransport, store_dir: &Path) -> Result<Self> {
         let store = FsStore::load(store_dir)
+            .await
+            .map_err(|e| TransportError::Io(format!("blob store {store_dir:?}: {e}")))?;
+        Ok(Self {
+            store,
+            transport: transport.clone(),
+            router: None,
+        })
+    }
+
+    /// Open a blob store with periodic iroh GC. `protected_hashes` is queried
+    /// immediately before every collection run; only the hashes it returns
+    /// are retained. A query error aborts that run rather than risking an
+    /// active transfer's partial data.
+    pub async fn open_with_periodic_gc<F>(
+        transport: &IrohTransport,
+        store_dir: &Path,
+        interval: Duration,
+        protected_hashes: F,
+    ) -> Result<Self>
+    where
+        F: Fn() -> Pin<Box<dyn Future<Output = Result<HashSet<[u8; 32]>>> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        let protected_hashes = Arc::new(protected_hashes);
+        let callback: ProtectCb = Arc::new(move |live| {
+            let protected_hashes = Arc::clone(&protected_hashes);
+            let query = tokio::spawn(async move { protected_hashes().await });
+            Box::pin(async move {
+                match query.await {
+                    Ok(Ok(hashes)) => {
+                        live.extend(hashes.into_iter().map(Hash::from_bytes));
+                        ProtectOutcome::Continue
+                    }
+                    Ok(Err(error)) => {
+                        tracing::warn!(
+                            "BLOB-02: skipping flow-blobs GC because protected hash query failed: {error}"
+                        );
+                        ProtectOutcome::Abort
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            "BLOB-02: skipping flow-blobs GC because protected hash task failed: {error}"
+                        );
+                        ProtectOutcome::Abort
+                    }
+                }
+            })
+        });
+        let mut options = Options::new(store_dir);
+        options.gc = Some(GcConfig {
+            interval,
+            add_protected: Some(callback),
+        });
+        let store = FsStore::load_with_opts(store_dir.join("blobs.db"), options)
             .await
             .map_err(|e| TransportError::Io(format!("blob store {store_dir:?}: {e}")))?;
         Ok(Self {

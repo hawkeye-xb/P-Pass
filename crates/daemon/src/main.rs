@@ -346,8 +346,32 @@ async fn main() -> anyhow::Result<()> {
     // REBUILD-02: independent retained store for new Flow pulls. The legacy
     // inbox cleanup intentionally clears `.ppf/blobs`; this store must keep
     // iroh-blobs partials so interrupted one-item fetches resume after restart.
+    let flow_gc_db = db.clone();
+    let flow_gc_protected = move || {
+        let db = flow_gc_db.clone();
+        Box::pin(async move {
+            db.active_flow_content_hashes().await.map_err(|error| {
+                transport::TransportError::Io(format!(
+                    "query active Flow hashes for GC protection: {error}"
+                ))
+            })
+        })
+            as std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = transport::Result<std::collections::HashSet<[u8; 32]>>,
+                        > + Send,
+                >,
+            >
+    };
     let flow_blobs = std::sync::Arc::new(
-        transport::Blobs::open(&transport, &data_dir.join(".ppf/flow-blobs")).await?,
+        transport::Blobs::open_with_periodic_gc(
+            &transport,
+            &data_dir.join(".ppf/flow-blobs"),
+            std::time::Duration::from_secs(60),
+            flow_gc_protected,
+        )
+        .await?,
     );
     let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir)
         .with_path_registry(flow_paths)
