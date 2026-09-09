@@ -25,7 +25,9 @@ with toolchain_file.open("rb") as fh:
 expected_jobs = {
     ".github/workflows/ci-rust.yml": {"fmt", "clippy", "test", "deny"},
     ".github/workflows/ci-desktop.yml": {"desktop"},
-    ".github/workflows/e2e.yml": {"e2e", "scenarios"},
+    # CI-02: release 二进制只在 build job 里编译一次；e2e/scenarios 只
+    # download-artifact 后运行已构建二进制，不跑 Cargo，不需要工具链 setup。
+    ".github/workflows/e2e.yml": {"build"},
     ".github/workflows/release.yml": {"macos-arm64", "windows-x64"},
     ".github/workflows/artifacts.yml": {
         "macos-arm64-bin",
