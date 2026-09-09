@@ -179,6 +179,8 @@ fn asset_meta(a: &storage::Asset) -> AssetMeta {
         width: a.width.unwrap_or(0) as u32,
         height: a.height.unwrap_or(0) as u32,
         bytes: a.bytes.max(0) as u64,
+        src_device: (a.src_device.len() == 32)
+            .then(|| a.src_device.iter().map(|b| format!("{b:02x}")).collect()),
     }
 }
 
@@ -194,4 +196,33 @@ fn parse_hash(hex: &str) -> Option<[u8; 32]> {
         out[i] = ((hi << 4) | lo) as u8;
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn asset(src_device: Vec<u8>) -> storage::Asset {
+        storage::Asset {
+            hash: vec![0x11; 32],
+            rel_path: "originals/test.jpg".into(),
+            media_type: "image/jpeg".into(),
+            bytes: 42,
+            taken_at: Some(1_690_000_000_000),
+            width: Some(4032),
+            height: Some(3024),
+            src_device,
+            added_at: 1_690_000_000_000,
+            thumb_state: 1,
+        }
+    }
+
+    #[test]
+    fn asset_meta_exposes_full_source_node_id_and_hides_empty_source() {
+        assert_eq!(
+            asset_meta(&asset(vec![0xab; 32])).src_device,
+            Some("ab".repeat(32))
+        );
+        assert_eq!(asset_meta(&asset(vec![])).src_device, None);
+    }
 }

@@ -574,7 +574,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       不写审计；不同路径的同内容文件仍记（用户真实拷贝）。审计设计规矩
       同批定稿（审计只记数据层面事件、语义稳定因为业务会读、防「展示对
       实际错」靠对账不靠更详细审计），见卡内备注。反证：去掉判定测试即红。
-- [ ] SYNC-05 AssetMeta 补 `src_device`，消灭客户端影子状态 — **⛔ 未实施，无依赖可随时做（L1）**
+- [x] SYNC-05 AssetMeta 补 `src_device`，消灭客户端影子状态 — **2026-09-09 已完成**：daemon 将 32-byte storage NodeId 映射为可选 hex `src_device`；Android 按该字段和本机 NodeId 分类，未知来源仅在「全部」展示。`backup-state`/`flow-state` 归属 hash 重建及 fallback 已删除；Rust 全量与 Android JVM **314/0/0/4** 绿。
 - [x] E2E-02 DaemonHelloTest 断言一个废弃契约，e2e 门禁常红 — **2026-08-20 已修**:
       ⚠️ 全仓**四处**同形（DaemonHello / DaemonBackup / NetProbe / DeviceBackup），
       上一轮只修一处就宣布"解红"。已抽成共用 `addrOf(qr)`。
