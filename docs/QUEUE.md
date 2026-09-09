@@ -37,7 +37,6 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
-| [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS Overlay 增加不改变视觉的透明顶部拖拽命中区，交互元素保持非拖拽目标 | `desk-14-overlay-drag` |
 
 
 
@@ -51,6 +50,7 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | 32px 透明顶部 hit area 已实现（不改色/布局）；待默认与 <1080px macOS 窗口拖拽/视觉回归 | L3 |
 | [MOB-63](../cards/MOB-63-pause-racing-final-completion-must-set-idle.md) | 最后回执与暂停的双向竞态均收敛 Idle；存在待传项时仍保留「继续」 | L1 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |

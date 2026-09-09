@@ -132,3 +132,23 @@
 #app .wizard-shell {
   padding-top: 44px;
 }
+
+/* DESK-14: Overlay 视觉必须连续。拖拽命中区是 #app 的直系透明层：
+ * 不占布局、不上色，只覆盖比内容 34px 留白更小的 32px 顶部安全区。
+ * macOS 之外 display:none，避免改变其它平台的鼠标语义。 */
+.titlebar-drag-region {
+  display: none;
+}
+#app.macos-overlay-titlebar {
+  position: relative;
+}
+#app.macos-overlay-titlebar .titlebar-drag-region {
+  display: block;
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  height: 32px;
+  background: transparent;
+}
