@@ -37,7 +37,7 @@
 
 | 卡 | 一句话 | 分支 |
 |---|---|---|
-| [BUILD-04](../cards/BUILD-04-local-build-cache-cleanup.md) | 本地构建缓存与已合入 worktree 的受限、可审计清理入口（默认预览，显式执行） | `work/BUILD-04-local-build-cache-cleanup` |
+
 
 其余 UI-04a/UI-04b/UI-04c/UI-08 均已合入 `main`，转入下方共享回归队列。
 
