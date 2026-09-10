@@ -35,8 +35,7 @@
 
 ---
 
-UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 的紧凑 `Toast` 已完成源码/构建验证，
-待真实 Tauri 窗口走查；
+UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 已完成真实 Tauri 视觉验收并归档；
 UI-08 已通过归档。
 
 ---
@@ -45,6 +44,7 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
+
 
 
 ---
@@ -84,13 +84,7 @@ UI-08 已通过归档。
 | P1 | [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 已实证：开“备份失败时通知我”后真实失败仍没有系统通知；待接通失败事件发送 | L2 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
-<<<<<<< HEAD
-| P2 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 脱离文档流方向正确但视觉验收不通过；现为 App.svelte 裸 `<p>`，需重做为紧凑且视觉居中的瞬时反馈 | L2 |
-=======
 
-
-
->>>>>>> 785a9d7 (docs(ui-04b): claim toast feedback redesign)
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死 | L2 |
@@ -122,6 +116,7 @@ UI-08 已通过归档。
 | [TEL-03](../cards/done/TEL-03-error-event-taxonomy.md) | error 事件已接线：`DeliveryError` 细分 8 个固定 code（Materialize 拆三个子系统变体）+ stage=offer/fetch/cancel；GuardMismatch/Cancelled 不上报（正常控制流非问题）；Telemetry 加 5min 去重窗口（同 code+stage 只记一次）；`cargo test --lib telemetry` 6/6 + `--test flow_delivery` 13/13、nextest 365/365、just ci 全绿 | 遥测五件套（daemon_alive/conn/flow_item/first_byte/error）全部闭环 |
 | [DESK-14](../cards/done/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS 真机 2026-09-10：32px 透明顶部拖拽区正常；顺带发现并修复原生标题文字与侧栏品牌重复显示（加 `hiddenTitle: true`） | 无——拖拽区与标题重复均已闭环 |
 | [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | macOS 真机 2026-09-10：Button/Card/Dialog/Notice/NavItem 五组件在真实 Tauri 窗口视觉正常、无错位闪烁 | 无——五组件收口验收关闭 |
+| [UI-04b](../cards/done/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 验收人 2026-09-10 确认：改名反馈改用 shadcn-svelte 官方 Sonner，右上角不占布局；成功/等待/错误映射 safe/waiting/act 三态色 | 无——手写 Toast/Message 已删除，通知呈现统一收口为官方原语 |
 | [MOB-63](../cards/done/MOB-63-pause-racing-final-completion-must-set-idle.md) | 三星真机 2026-09-10：暂停与最后完成回执交错的两种时机均收敛 Idle | 无——竞态收敛已闭环 |
 | [MOB-65](../cards/done/MOB-65-auto-backup-switch-must-not-pause-current-round.md) | 三星真机 2026-09-10：传输中关闭自动备份不中断当前轮，仅停止后续自动唤醒，重新打开恢复自动 | 无——自动开关与轮次暂停解耦已闭环 |
 | [SYNC-05](../cards/done/SYNC-05-asset-meta-src-device.md) | `AssetMeta.src_device` 已经由 daemon 映射到线上协议；PhotosScreen 只按该字段和本机 NodeId 分类，未知来源只在「全部」显示 | 无——本地 `backup-state`/`flow-state` 归属影子状态及 fallback 已删除；Rust 全量、Android JVM 314/0/0/4 均绿 |

@@ -16,8 +16,9 @@
   import { Button } from "$lib/components/ui/button";
   import { Card } from "$lib/components/ui/card";
   import { Dialog } from "$lib/components/ui/dialog";
-  import { Toast } from "$lib/components/ui/toast";
+  import { Toaster } from "$lib/components/ui/sonner";
   import { NavItem } from "$lib/components/ui/nav-item";
+  import { toast } from "svelte-sonner";
   // ICON-02: 功能小图标走开源图标库（lucide），不再手抄设计稿的 SVG
   // path。深路径 import（`@lucide/svelte/icons/<name>`）是官方推荐用法，
   // 只打包用到的图标，不拉整个 barrel。
@@ -116,9 +117,9 @@
     if (!yes) return;
     try {
       await invoke("stop_daemon");
-      flashMessage(t("ui.service_stopped"));
+      flashMessage(t("ui.service_stopped"), "warning");
     } catch (e) {
-      flashMessage(t("ui.stop_failed", { err: String(e) }));
+      flashMessage(t("ui.stop_failed", { err: String(e) }), "error");
     }
   }
 
@@ -127,7 +128,7 @@
     try {
       await invoke("start_daemon");
     } catch (e) {
-      flashMessage(t("ui.start_failed", { err: String(e) }));
+      flashMessage(t("ui.start_failed", { err: String(e) }), "error");
     } finally {
       setTimeout(() => (starting = false), 3000);
     }
@@ -138,13 +139,11 @@
   let devices = $state([]);
   let qrDataUrl = $state("");
   let qrText = $state("");
-  let message = $state("");
   let pendingCount = $state(0);
   // UX-08: 待确认配对请求全量列表（pairing.pending）——一屏一行，逐行
   // 允许/拒绝；处理完该行消失，全清后模态关闭，无残留状态。
   let pendingList = $state([]);
-  // UX-08: 提示条 5s 自动消失（右侧 × 手动关闭）的定时器句柄。
-  let messageTimer = null;
+
   // T4 (H-10b): 配对状态机——二维码是弹窗模块，不是常驻卡片。有人扫码
   // （pending 出现）→ 关二维码弹窗 → 切「允许/拒绝」模态 → 处理完关闭，
   // 状态消失（不再一直占空间）。审计记录在 T5。
@@ -190,12 +189,11 @@
     return await invoke("daemon_call", { method, params });
   }
 
-  // UX-08: 提示条——5s 自动消失 + 右侧 × 手动关闭，两者都要。
-  // 反证：把自动消失定时器去掉 → 验收 2 必挂（提示条常驻）。
-  function flashMessage(msg) {
-    message = msg;
-    clearTimeout(messageTimer);
-    messageTimer = setTimeout(() => (message = ""), 5000);
+  // UI-04b：所有短反馈统一委托官方 Sonner；成功/等待/错误分别走三种含义色。
+  function flashMessage(msg, tone = "success") {
+    if (tone === "error") toast.error(msg);
+    else if (tone === "warning") toast.warning(msg);
+    else toast.success(msg);
   }
 
   async function refresh() {
@@ -473,7 +471,7 @@
         errorCorrectionLevel: "L",
       });
     } catch (e) {
-      flashMessage(t("ui.pair_failed", { err: String(e) }));
+      flashMessage(t("ui.pair_failed", { err: String(e) }), "error");
     }
   }
 
@@ -523,12 +521,13 @@
         merge_node_id: mergeNodeId ?? null,
       });
       flashMessage(
-        accept ? t("ui.pair_allowed", { name: r.device }) : t("ui.pair_denied", { name: r.device })
+        accept ? t("ui.pair_allowed", { name: r.device }) : t("ui.pair_denied", { name: r.device }),
+        accept ? "success" : "warning"
       );
       // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.confirm_failed", { err: String(e) }));
+      flashMessage(t("ui.confirm_failed", { err: String(e) }), "error");
     }
   }
 
@@ -540,10 +539,10 @@
     if (!yes) return;
     try {
       await call("device.revoke", { node_id: nodeId });
-      flashMessage(t("ui.revoked", { name }));
+      flashMessage(t("ui.revoked", { name }), "warning");
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.revoke_failed", { err: String(e) }));
+      flashMessage(t("ui.revoke_failed", { err: String(e) }), "error");
     }
   }
 
@@ -568,10 +567,10 @@
         node_id: target.nodeId,
         name: trimmed,
       });
-      flashMessage(t("ui.rename_saved", { name: r.name ?? trimmed }));
+      toast.success(t("ui.rename_saved", { name: r.name ?? trimmed }));
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.rename_failed", { err: String(e) }));
+      toast.error(t("ui.rename_failed", { err: String(e) }));
     }
   }
 
@@ -587,7 +586,7 @@
         await revealItemInDir(dir);
       }
     } catch (e) {
-      flashMessage(t("ui.open_failed", { err: String(e) }));
+      flashMessage(t("ui.open_failed", { err: String(e) }), "error");
     }
   }
 
@@ -603,7 +602,7 @@
       await call("folder.set", { path: dir });
       flashMessage(t("ui.change_saved", { dir }));
     } catch (e) {
-      flashMessage(t("ui.save_failed", { err: String(e) }));
+      flashMessage(t("ui.save_failed", { err: String(e) }), "error");
     }
   }
 
@@ -619,7 +618,7 @@
         await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示
       } catch (_) {}
     } catch (e) {
-      flashMessage(t("ui.export_failed", { err: String(e) }));
+      flashMessage(t("ui.export_failed", { err: String(e) }), "error");
     }
   }
 
@@ -809,10 +808,10 @@
             : t("ui.restart_service_started", { version: r.new_version })
         );
       } else {
-        flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }));
+        flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }), "warning");
       }
     } catch (e) {
-      flashMessage(t("ui.restart_service_failed", { err: String(e) }));
+      flashMessage(t("ui.restart_service_failed", { err: String(e) }), "error");
     } finally {
       restartingService = false;
     }
@@ -827,12 +826,12 @@
     try {
       const resp = await fetch(WORKER_TEST_URL);
       if (!resp.ok) {
-        if (manual) flashMessage("没有发现新版本。");
+        if (manual) flashMessage("没有发现新版本。", "warning");
         return;
       }
       const m = await resp.json();
       if (!m?.version || !isNewerVersion(m.version, version)) {
-        if (manual) flashMessage("没有发现新版本。");
+        if (manual) flashMessage("没有发现新版本。", "warning");
         return;
       }
       const ok = await confirmDialog(t("ui.update_available", { version: m.version }), {
@@ -849,7 +848,7 @@
       await openUrl(url);
     } catch (e) {
       console.warn("[updater] test channel check failed (silent):", e);
-      if (manual) flashMessage("没有发现新版本。");
+      if (manual) flashMessage("没有发现新版本。", "warning");
     }
   }
 
@@ -865,11 +864,11 @@
       update = await checkUpdate();
     } catch (e) {
       console.warn("[updater] check failed (silent — 404/draft/network = no update):", e);
-      if (manual) flashMessage("没有发现新版本。");
+      if (manual) flashMessage("没有发现新版本。", "warning");
       return;
     }
     if (!update) {
-      if (manual) flashMessage("没有发现新版本。");
+      if (manual) flashMessage("没有发现新版本。", "warning");
       return;
     }
     const ok = await confirmDialog(t("ui.update_available", { version: update.version }), {
@@ -918,9 +917,9 @@
       // handle, etc.), tell the user the one concrete thing they can do
       // instead of surfacing a raw OS error string.
       if (/being used by another process|access is denied|拒绝访问|正被另一个进程使用/i.test(msg)) {
-        flashMessage(t("ui.update_failed_file_locked"));
+        flashMessage(t("ui.update_failed_file_locked"), "error");
       } else {
-        flashMessage(t("ui.update_failed", { err: msg }));
+        flashMessage(t("ui.update_failed", { err: msg }), "error");
       }
     }
   }
@@ -1129,7 +1128,7 @@
     try {
       await revealItemInDir(viewerPath);
     } catch (e) {
-      flashMessage(`无法在文件管理器中显示：${e}`);
+      flashMessage(`无法在文件管理器中显示：${e}`, "error");
     }
   }
 
@@ -1162,6 +1161,8 @@
   }
 </script>
 
+<Toaster position="top-right" />
+
 {#if wizard && (!wizard.configured || !wizard.installed) && !online}
   <!-- T-042: onboarding 进行中不展示"后台服务未运行"终态——服务本来
        就要在这一步才被拉起，提前暴露只有困惑（xixi 实测反馈 1）。
@@ -1172,9 +1173,7 @@
     <header>
       <h1>P-Pass</h1>
     </header>
-    {#if message}
-      <Toast {message} onClose={() => (message = "")} />
-    {/if}
+
     <!-- W1 (2026-08-26): 整块按平台选择组件渲染，不在单个 Wizard 内部
          塞 if isWindows —— macOS/Windows 的 onboarding 是两条完全独立的
          文案+流程分支，拆成两个组件更好维护、也不会互相牵连回归。 -->
@@ -1211,9 +1210,6 @@
     </aside>
 
     <main class="content" data-page={page}>
-      {#if message}
-        <Toast {message} onClose={() => (message = "")} />
-      {/if}
 
       {#if page === "overview"}
         <section class="page" data-testid="page-overview">

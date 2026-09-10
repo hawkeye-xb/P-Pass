@@ -1,16 +1,14 @@
 # UI-04b 设备改名成功用了占布局空间的提示条，该用脱离文档流的浮层　级别 L2
 
-> 🟠 状态：进行中（2026-09-10）
-> 当前节点：`DESK-15` 已将两处呈现收进独立 `Notice` 组件；卡片原先称「裸
-> `<p>`」已过期。但该组件仍是宽大的黄色提示条，语义与视觉都不适合瞬时反馈。
-> 实施决定：不再在 `App.svelte` 拼页面级样式；将现有单一用途的 `Notice` 收敛为
-> `Toast` 组件，保留 `flashMessage()` 的 5 秒自动消失与手动关闭机制，改由组件拥有
-> 固定定位、紧凑尺寸、视觉居中与可访问状态语义。
-> 下一步：源码合同、构建与 Tauri dev 启动已通过；macOS CUA 的辅助功能/屏幕录制权限
-> 尚未授予，无法捕获或操作窗口，因此仍需真实 Tauri 窗口走查；不能只凭
-> `left: 50%` / `translateX(-50%)` 声称居中。
+> ✅ 状态：验收完成（2026-09-10）
+> 当前节点：验收人在真实 Tauri 窗口反复改名走查通过，确认标准 Sonner 通知不占布局、
+> 位置与形态可接受，且成功/等待/错误三态颜色符合产品 token。
+> 最终实现：使用 shadcn-svelte 官方 `Sonner` 组件与 `svelte-sonner` 通知原语；不再复用
+> `Notice`，也没有保留手写 `Toast` / `Message`。`safe` / `waiting` / `act` token 分别映射
+> 成功 / 等待提醒 / 错误需处理。
+> 验收：用户实窗视觉通过；桌面 Vitest **57/57**（26 files，0 failed）与 `pnpm build` 通过。
 > 协同分支：`work/UI-04b-toast`
-> 级别：L2 · 阻塞：无
+> 级别：L2 · 已关闭
 
 ## 问题
 
@@ -30,7 +28,7 @@ Snackbar），不参与布局。
 
 ## 验收标准
 
-- [ ] 走查：改名反馈出现与消失时，**下方内容不发生位移**，且视觉上居中、紧凑，
+- [x] 走查：改名反馈出现与消失时，**下方内容不发生位移**，且视觉上居中、紧凑，
       不再是当前被验收人拒绝的宽大提示条。
 
 ## 验收回退记录（2026-09-09；DESK-15 后已校正实现描述）
@@ -64,9 +62,18 @@ Snackbar），不参与布局。
 - 已用当前分支 sidecar 启动 Tauri dev；但 CUA 的 macOS 辅助功能/屏幕录制权限 pending，
   未能捕获窗口或触发改名反馈。验收标准的真实视觉走查仍未完成，本卡不得关闭。
 
+## 最终验收记录（2026-09-10）
+
+- 验收人用当前分支的真实 Tauri 窗口反复修改设备名称，先否决手写黑色 `Toast` 与锚在
+  设备行旁的手写 `Message`；随后明确接受 shadcn-svelte 官方 Sonner 的右上角形态。
+- 最终只保留官方 Sonner 的行为/动效：`toast.success`（绿）、`toast.warning`（黄）、
+  `toast.error`（红）。三种背景、描边和文字色直接覆盖为 `safe` / `waiting` / `act`
+  token；所有既有短反馈按成功、等待提醒、错误分类接入，不再出现普通色通知。
+- 验收人确认最新热更新窗口的绿色改名成功通知显示正确；反馈不占文档流、不挤标题或设备行。
+
 ## 范围
 
-- 只准动：`apps/desktop/src/App.svelte`（`flashMessage()` 的呈现与改名成功反馈调用处）、`apps/desktop/src/lib/components/ui/{notice,toast}/`（将现有单一用途 `Notice` 收敛为 `Toast` 组件）及相邻桌面测试。
+- 实际动到：`apps/desktop/src/App.svelte`、`src/app.css`、官方 `src/lib/components/ui/sonner/`、`package.json`/锁文件、`assets/design/tokens.json` 与相邻桌面测试；未改 `NAME-01` 的改名业务语义或 Android UI。
 - 不准动：`NAME-01`（设备改名）功能本身、Android UI——本卡只管桌面端这个反馈**怎么呈现**
 
 ## 阻塞与依赖

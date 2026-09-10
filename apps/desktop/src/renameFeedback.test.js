@@ -15,44 +15,29 @@ function codeOf(path) {
     .join("\n");
 }
 
-describe("UI-04b 改名反馈浮层", () => {
+describe("UI-04b 改名反馈", () => {
   const src = codeOf(new URL("./App.svelte", import.meta.url).pathname);
-  // UI-04b：瞬时反馈的视觉与状态语义由 Toast 组件独占，页面只接线。
-  const toastSrc = codeOf(new URL("./lib/components/ui/toast/toast.svelte", import.meta.url).pathname);
-
-  const pStart = toastSrc.indexOf("<p");
-  const pTag = toastSrc.slice(pStart, toastSrc.indexOf(">", pStart) + 1);
-
-  it("瞬时反馈必须走语义明确的 Toast 组件，而不是复用 Notice", () => {
-    expect(src).toContain('import { Toast } from "$lib/components/ui/toast"');
-    expect(src).toContain('<Toast {message} onClose={() => (message = "")} />');
-  });
-
-  it("Toast 必须 fixed 定位——脱离文档流，不占布局", () => {
-    expect(pTag).toMatch(/class="[^"]*\bfixed\b[^"]*"/);
-    // 反证：旧实现用 margin 占位（margin: 0 0 18px）把内容顶下去。
-    expect(pTag).not.toMatch(/\bm-\[?0[^"]*18px/);
-  });
-
-  it("Toast 必须内容定宽、深色高对比且带状态语义，不能退回宽大的黄色提示条", () => {
-    expect(pTag).toMatch(/class="[^"]*\bw-fit\b[^"]*"/);
-    expect(pTag).toMatch(/class="[^"]*max-w-\[min\(90vw,360px\)\][^"]*"/);
-    expect(pTag).toMatch(/class="[^"]*\bbg-ink\b[^"]*"/);
-    expect(pTag).toMatch(/class="[^"]*\btext-paper\b[^"]*"/);
-    expect(pTag).not.toMatch(/\bbg-waiting-bg\b/);
-    expect(pTag).toContain('role="status"');
-    expect(pTag).toContain('aria-live="polite"');
-  });
-
-  it("浮层必须高于模态背板（Toast z-[60] > Dialog 组件遮罩 z-50），模态打开时提示仍可见", () => {
-    expect(pTag).toMatch(/class="[^"]*\bz-\[60\][^"]*"/);
-    const dialogSrc = codeOf(new URL("./lib/components/ui/dialog/dialog.svelte", import.meta.url).pathname);
-    expect(dialogSrc).toMatch(/class="[^"]*\bz-50\b[^"]*"/);
-  });
-
-  it("改名成功/失败反馈仍走 flashMessage——机制复用，不另起炉灶", () => {
+  const sonnerSrc = codeOf(new URL("./lib/components/ui/sonner/sonner.svelte", import.meta.url).pathname);
+  const appCss = readFileSync(new URL("./app.css", import.meta.url), "utf8");
+  it("改名成功/失败必须走官方 Sonner 通知原语，而不是手写 Message/Toast", () => {
     const rename = src.slice(src.indexOf("async function commitRename()"), src.indexOf("async function openLibrary()"));
-    expect(rename).toContain('flashMessage(t("ui.rename_saved"');
-    expect(rename).toContain('flashMessage(t("ui.rename_failed"');
+    expect(src).toContain('import { Toaster } from "$lib/components/ui/sonner"');
+    expect(src).toContain('import { toast } from "svelte-sonner"');
+    expect(rename).toContain('toast.success(t("ui.rename_saved"');
+    expect(rename).toContain('toast.error(t("ui.rename_failed"');
+    expect(rename).not.toContain("showRenameMessage(");
+  });
+
+  it("应用只挂一个标准 Toaster，放在右上角而不侵占页面标题或设备行", () => {
+    expect(src).toContain('<Toaster position="top-right" />');
+    expect(src).not.toContain('<Toast {message}');
+    expect(src).not.toContain("<Message message={renameMessage.message}");
+  });
+
+  it("官方 Sonner 必须映射产品三种含义 token：safe / waiting / act", () => {
+    expect(sonnerSrc).toContain("richColors");
+    expect(appCss).toContain("--success-bg: var(--color-safe-bg)");
+    expect(appCss).toContain("--warning-bg: var(--color-waiting-bg)");
+    expect(appCss).toContain("--error-bg: var(--color-act-bg)");
   });
 });
