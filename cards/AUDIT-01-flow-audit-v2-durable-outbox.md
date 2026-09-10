@@ -1,10 +1,8 @@
 # AUDIT-01 Flow 审计 v2：持久 outbox 与直接切换（L2）
 
-> 🟡 状态：Flow 数据链真机通过，待 Desktop 活动文案视觉验收 · 协同分支：`main` ·
-> 当前节点：全链路（Android ledger/outbox → daemon 投递 → v2 audit_event →
-> Desktop）实现 + 本地全量测试通过；review 发现的投递管线缺口已补齐。
-> 真机验收单列后续批次，不阻塞本次实现完成。
-> 级别：L2 · 阻塞：无（NET-04/05 的路径观测明确不作为前置）
+> ⚪ 状态：冻结（AUDIT-04 已直接替换 `audit_event` 合同）· 协同分支：`main`
+> 当前节点：不得做旧 `audit_event` 的 Desktop 文案视觉验收或投影；狗粮周后由 AUDIT-05 只读审查 canonical 四表再决定后续 UI
+> 级别：L2 · 阻塞：等待狗粮周真实审计样本
 
 ## 问题
 
