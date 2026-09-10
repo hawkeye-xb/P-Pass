@@ -1,6 +1,6 @@
 # AUDIT-01 Flow 审计 v2：持久 outbox 与直接切换（L2）
 
-> 🟢 状态：代码完成，待真机回归 · 协同分支：`audit/audit-01-flow-v2` ·
+> 🟡 状态：Flow 数据链真机通过，待 Desktop 活动文案视觉验收 · 协同分支：`main` ·
 > 当前节点：全链路（Android ledger/outbox → daemon 投递 → v2 audit_event →
 > Desktop）实现 + 本地全量测试通过；review 发现的投递管线缺口已补齐。
 > 真机验收单列后续批次，不阻塞本次实现完成。
@@ -47,8 +47,21 @@ ARCH-01 的生产 Flow 已将发现、单项传输、receipt、范围和取消�
   `backup.started`/`backup.finished` 会话级审计（旧 batch 事件矩阵外）
   随 router.rs 一并移除，依赖它的「本周新备份/去重跳过」统计与
   「备份耗时」两处派生 UI 一并下线（不伪造无对应数据源的数字）。
-- 真机验证（新活动文案在真实设备上的呈现、Flow 真实终态）显式列为
-  后续批次，按卡片原定范围不阻塞本次实现完成。
+- 真机验证分两层：Flow 数据链与 Desktop 活动文案视觉呈现；前者已通过，后者仍待独立确认。
+
+### 真机数据链验收（2026-09-10）
+
+- 三星测试机更新到本卡 Android debug APK；Desktop 壳与 sidecar daemon 均从当前 `main`
+  重启，排除了同版本旧 daemon 继续驻留的假验收。
+- 在已选的 `P-Pass` 测试相册生成一张隔离测试图片并发起备份：手机状态由 21/21
+  收敛为 22/22，最近成功显示“刚刚”。
+- 只读核对手机 ledger：22 项均为 `CONFIRMED`、consumer 为 `IDLE/OPEN`、
+  `auditOutbox` 为 0；说明本轮终态已被确认后从 outbox 摘除，而非在发送时丢弃。
+- 只读核对 Desktop SQLite：`audit_event` 有本轮 1 条 `flow.round.finished`，资产总数为
+  22，`audit_log` 表不存在。证明 Flow ledger → daemon `flow.audit.submit` → v2 审计库
+  的真实跨端闭环成立，且正常项未逐张刷审计。
+- 未把 Desktop 活动页的实际中文文案说成已验：本轮未取得可读的 Desktop 画面，仍需
+  打开活动记录确认它把该 v2 事件渲染为一条轮次汇总，而不是回退或逐项行。
 
 ### 补齐记录（2026-09-10，review 后追加）
 
