@@ -1,7 +1,7 @@
 # AUDIT-04 审计核心重建：操作、对象证据、决定与 tombstone（L2）
 
-> 🟢 状态：代码完成，本地全量 `just ci` 绿；待真机验收 · 协同分支：`audit/audit-04-core-contract`
-> 当前节点：四张canonical表（audit_operation/audit_item_evidence/audit_tombstone/audit_decision）+ 全部生产路径接线均已落地，等待真机走查验收标准最后一条
+> 🟠 状态：进行中（当前会话接手集成与三星真机验收）· 协同分支：`main`
+> 当前节点：`audit/audit-04-core-contract` 已完整合入 main（无未合并 diff）；现以 main 构建 Android/daemon，验证 operation+item evidence 与外部删除 tombstone
 > 级别：L2 · 阻塞：无
 > 前置：[AUDIT-03](AUDIT-03-audit-contract-case-matrix.md)（矩阵与可信/保留/访问边界已定）
 
