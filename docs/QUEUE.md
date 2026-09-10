@@ -63,12 +63,10 @@ UI-08 已通过归档。
 | [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | 正常 daemon 可达包已通过；不可达分支必须由 agent 以隔离故障环境实证，不能要求验收人造故障 | L1 |
 | [WATCH-07](../cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏 | L2 |
 | [MOB-13](../cards/MOB-13-triplet-k-never-reaches-zero.md) | 「待备份 K」能归零（有前置，见卡） | L2 |
-| [BLOB-01](../cards/BLOB-01-ingest-leaves-a-duplicate-in-the-blob-store.md) | 备份占盘不再翻倍（实测 2.05x → 1.00x） | L2 |
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
-| [REBUILD-07](../cards/REBUILD-07-repair-same-device-repair-flow-receipts.md) | 同一 NodeId 重配对后，新 epoch 的 Flow 序号不再与历史 receipt 冲突；待现场升级后重扫复验 | L2 |
-| [BLOB-02](../cards/BLOB-02-flow-blobs-store-never-reclaimed.md) | flow-blobs 周期 GC 已接线（commit `c6c0bb6`），反证与真实 iroh 传输单测全绿；待真机 `du -sh .ppf/flow-blobs` 峰值→回落观测 | L2 |
+
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 
 **验收建议**：15 分钟一批过，别攒。

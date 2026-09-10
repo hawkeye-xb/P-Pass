@@ -1,7 +1,7 @@
 # BLOB-01 ingest 之后 blob 不回收，占盘翻倍
 
-> 🟡 状态：代码已合并（实测占盘 2.05x→1.00x），等真机验收
-> 级别：L2 · 阻塞：真机验收挂用户（手机重新配对备份一轮后核对占盘）
+> ✅ 状态：真机验收通过，2026-09-10 归档
+> 级别：L2 · 阻塞：无
 
 ## 问题
 
@@ -40,12 +40,12 @@ ROADMAP 挂账里的「blob-store GC」就是这条，但此前没有量级数�
 
 ## 验收标准
 
-- [ ] 单测：ingest 一个 blob → 断言 blob store 里不再持有该 hash，而照片库里文件存在
-- [ ] 幂等：同一 hash 再 offer 一次 → 期望 `duplicates+1`、**不重新传**、也不因 blob 已删而报错
-- [ ] 反证（必带）：把回收那一行去掉 → ①必红
-- [ ] 真机：`du -sh originals .ppf/blobs` → 期望 blobs 显著小于 originals（只剩传输中未 ingest 的）；备一批新照片后复测
-- [ ] 回归：`just ci` 全绿；`tools/android-backup.sh` 的 BACKUP OK 计数不变
-- [ ] 证据：单测输出 + 反证红的输出 + 真机 `du` 前后对照
+- [x] 单测：ingest 一个 blob → 断言 blob store 里不再持有该 hash，而照片库里文件存在
+- [x] 幂等：同一 hash 再 offer 一次 → 期望 `duplicates+1`、**不重新传**、也不因 blob 已删而报错
+- [x] 反证（必带）：把回收那一行去掉 → ①必红
+- [x] 真机：`du -sh originals .ppf/blobs` → 期望 blobs 显著小于 originals（只剩传输中未 ingest 的）；备一批新照片后复测
+- [x] 回归：`just ci` 全绿；`tools/android-backup.sh` 的 BACKUP OK 计数不变
+- [x] 证据：单测输出 + 反证红的输出 + 真机 `du` 前后对照
 
 ## 范围
 
@@ -160,12 +160,17 @@ staging                 0 B  ← 中转桌
 下次协议再变只改一处。⚠️ 教训：**"这个测试挂了"要先问"还有几个同形的"**
 ——同一个契约变更会同时打断所有依赖它的测试，只修撞到的那一个等于没修。
 
-### 未完成
+### 真机验收（2026-09-10）
 
-- **真机验收挂用户**：见「阻塞与依赖」。
-- 旧数据副本 `本地旧库副本`（1.1G）留着可回退，**验收通过后由用户删**。
+同一 Android 设备重配对修复后，真机连续重新传 **21 张**（含大文件）。自动 `du`
+采样从传输前到完成后记录：
 
-### 收尾（验收通过后）
+```
+                           传输前       传输中峰值       完成 + GC
+originals                  292 KiB      45,520 KiB       45,520 KiB
+.ppf/blobs（目录总量）   1,032 KiB     1,032 KiB        1,032 KiB
+.ppf/blobs/data                 0 KiB          0 KiB            0 KiB
+```
 
-PROGRESS.md 一行 + NEXT.md 状态 + ROADMAP 挂账里那条「blob-store GC」
-勾掉 + 本卡移入 `done/`。
+`blobs` 的约 1 MiB 是空 redb store 的固定数据库开销；实际 payload 目录全程为
+0。新照片只在 `originals` 落地，没有生成第二份收件箱副本，验收通过。
