@@ -17,8 +17,6 @@
 pub const ONLINE_HEARTBEAT_MS: i64 = 2 * 60 * 1000;
 /// 哨兵口径：超过 5 天 = 离线（与设计稿「>5 天亮红」同源，改不得）。
 pub const OFFLINE_SENTINEL_MS: i64 = 5 * 24 * 3600 * 1000;
-/// device.connected 审计去重窗口：同设备 10 分钟内只记一条。
-pub const CONNECTED_AUDIT_DEDUPE_MS: i64 = 10 * 60 * 1000;
 
 /// 三档在线态字符串（devices.list 直出的 wire 值）。
 pub fn presence(conn: &str, last_seen: Option<i64>, now_ms: i64) -> &'static str {

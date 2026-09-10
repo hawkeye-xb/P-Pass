@@ -1,6 +1,7 @@
 # AUDIT-04 审计核心重建：操作、对象证据、决定与 tombstone（L2）
 
-> 🟠 状态：进行中 · 协同分支：`audit/audit-04-core-contract` · 当前节点：按 AUDIT-03 Case Matrix 直接替换 AUDIT-01 的泛用事件表与错误投影
+> 🟢 状态：代码完成，本地全量 `just ci` 绿；待真机验收 · 协同分支：`audit/audit-04-core-contract`
+> 当前节点：四张canonical表（audit_operation/audit_item_evidence/audit_tombstone/audit_decision）+ 全部生产路径接线均已落地，等待真机走查验收标准最后一条
 > 级别：L2 · 阻塞：无
 > 前置：[AUDIT-03](AUDIT-03-audit-contract-case-matrix.md)（矩阵与可信/保留/访问边界已定）
 
@@ -24,13 +25,13 @@ AUDIT-01 只解决了 Android outbox 到 Desktop `audit_event` 的可靠投递�
 
 ## 验收标准
 
-- [ ] RED：receipt 被 ledger 接受时，`audit_item_evidence` 与对象确认事实同一持久边界生成；崩溃/重放不重复。
-- [ ] RED：operation 完成时只生成一条 `audit_operation` 终态，且它能关联完整的 item evidence 集合摘要；不能只存 `confirmed=N` 而无对象证据。
-- [ ] RED：Desktop 外部删除后 asset 主记录可移除，但对应 `audit_tombstone` 与此前 item evidence 仍可查询；去掉 tombstone 写入测试必红。
-- [ ] RED：取消、恢复、放弃恢复、撤销授权均写 `audit_decision`，并引用 operation/object/tombstone 的因果来源；普通 hello/retry 不会产生长期审计行。
-- [ ] Android outbox → daemon 接收 → Desktop 新合同表仍具 event-id 幂等；未确认事件重启后继续重放。
-- [ ] `audit_event` / `device.connected` 旧泛用审计读写、旧 action/detail 投影均不存在；presence/online 语义回归通过。
-- [ ] Rust/Android focused tests、desktop build、`just ci` 全绿；Android 报告本次 XML 测试计数。
+- [x] RED：receipt 被 ledger 接受时，`audit_item_evidence` 与对象确认事实同一持久边界生成；崩溃/重放不重复。
+- [x] RED：operation 完成时只生成一条 `audit_operation` 终态，且它能关联完整的 item evidence 集合摘要；不能只存 `confirmed=N` 而无对象证据。
+- [x] RED：Desktop 外部删除后 asset 主记录可移除，但对应 `audit_tombstone` 与此前 item evidence 仍可查询；去掉 tombstone 写入测试必红。
+- [x] RED：取消、恢复、放弃恢复、撤销授权均写 `audit_decision`，并引用 operation/object/tombstone 的因果来源；普通 hello/retry 不会产生长期审计行。
+- [x] Android outbox → daemon 接收 → Desktop 新合同表仍具 event-id 幂等；未确认事件重启后继续重放。
+- [x] `audit_event` / `device.connected` 旧泛用审计读写、旧 action/detail 投影均不存在；presence/online 语义回归通过。
+- [x] Rust/Android focused tests、desktop build、`just ci` 全绿；Android 报告本次 XML 测试计数。
 - [ ] 真机：隔离测试图进入【本地】后，有 operation + item evidence；再从【本地】外部删除，资产消失但 tombstone/历史证据仍在。
 
 ## 范围

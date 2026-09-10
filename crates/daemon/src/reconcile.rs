@@ -99,6 +99,14 @@ impl Reconcile {
     /// 清理单个幽灵资产：thumb 文件 + asset 行 + 审计。
     /// WATCH-01: `pub(crate)`——目录监听的局部对账复用同一清理逻辑
     /// （thumb 路径约定 + 审计口径只此一份，不复制）。
+    ///
+    /// AUDIT-04: an external delete is exactly case matrix §5's
+    /// "Desktop 外部删除" — it must leave a durable `audit_tombstone`
+    /// (asset_ref = the removed hash, discoverer = None because the
+    /// filesystem cannot say who), NOT just a plain audit_operation row.
+    /// Deleting the `asset` row must never delete this tombstone or any
+    /// prior item evidence for the same hash (card decision #3) — the
+    /// `asset_ref` column is intentionally not a foreign key.
     pub(crate) async fn remove_asset(&self, hash: &[u8], rel_path: &str) -> storage::Result<()> {
         // thumb 文件（.ppf/thumbs/<2hex>/<hex>.{256,1024}.jpg）——纯文件，
         // 直接删；不存在（从未生成过缩略图）也正常。
@@ -109,7 +117,25 @@ impl Reconcile {
         }
         // asset 行（索引是派生数据，文件没了行就没意义）。
         self.db.delete_asset(hash).await?;
-        // 审计：外部删除无法归因（actor=NULL，文件系统不背锅）。
+        // AUDIT-04: tombstone first — this is the case-matrix "外部删除"
+        // fact, unattributable by design (filesystem cannot say who).
+        self.db
+            .append_tombstone(&storage::TombstoneEntry {
+                tombstone_id: fresh_id(),
+                item_ref: None,
+                asset_ref: hash.to_vec(),
+                evidence_ref: None,
+                reason: "external_delete".into(),
+                discoverer: None,
+                occurred_at: now_ms(),
+                recoverable: false,
+                payload: Some(serde_json::json!({ "relPath": rel_path }).to_string()),
+            })
+            .await?;
+        // 审计：外部删除无法归因（actor=NULL，文件系统不背锅）——保留
+        // AUDIT-01 的 `asset.removed_external` operation 行以兼容既有
+        // activity 消费者；tombstone 是本卡新增的、随资产行删除仍存活
+        // 的权威证据。
         self.db
             .append_audit(&AuditEntry::local(
                 now_ms(),
@@ -121,6 +147,12 @@ impl Reconcile {
             .await?;
         Ok(())
     }
+}
+
+fn fresh_id() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("OS randomness for tombstone id");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn now_ms() -> i64 {
@@ -159,5 +191,52 @@ mod tests {
         let reconcile = Reconcile::new(db, dir.path()); // 没接 with_events
 
         reconcile.run_once().await;
+    }
+
+    // AUDIT-04 RED: an external delete must leave a durable tombstone that
+    // survives the asset row's own deletion (card decision #3). Comment
+    // out the `append_tombstone` call above and this test goes red.
+    #[tokio::test]
+    async fn external_delete_leaves_a_tombstone_that_outlives_the_asset_row() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let hash = vec![0x42u8; 32];
+        db.insert_asset(&storage::Asset {
+            hash: hash.clone(),
+            rel_path: "originals/gone.jpg".into(),
+            media_type: "image/jpeg".into(),
+            bytes: 1,
+            taken_at: Some(1),
+            width: None,
+            height: None,
+            src_device: vec![1u8; 32],
+            added_at: 1,
+            thumb_state: 0,
+        })
+        .await
+        .unwrap();
+        // The file was never actually written to disk under `dir` — this
+        // simulates the Finder-style external delete reconcile detects.
+        let reconcile = Reconcile::new(db.clone(), dir.path());
+
+        let report = reconcile.run_once().await;
+        assert_eq!(report.removed, 1);
+
+        assert!(
+            db.get_asset(&hash).await.unwrap().is_none(),
+            "the asset row must actually be gone"
+        );
+        let tombstones = db.list_tombstones_for_asset(&hash).await.unwrap();
+        assert_eq!(
+            tombstones.len(),
+            1,
+            "tombstone must survive the asset row's own deletion"
+        );
+        assert_eq!(tombstones[0].entry.reason, "external_delete");
+        assert!(
+            tombstones[0].entry.discoverer.is_none(),
+            "filesystem-detected deletion is unattributable by design"
+        );
+        assert!(!tombstones[0].entry.recoverable);
     }
 }

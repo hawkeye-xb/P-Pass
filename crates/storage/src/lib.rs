@@ -14,7 +14,10 @@ mod diag_repo;
 mod flow_delivery_repo;
 
 pub use asset_repo::{ActivityBatch, Asset, TimelinePage};
-pub use audit_repo::{AuditEntry, AuditRecord};
+pub use audit_repo::{
+    AuditEntry, AuditOperationEntry, AuditOperationRecord, AuditRecord, DecisionEntry,
+    DecisionRecord, ItemEvidenceEntry, ItemEvidenceRecord, TombstoneEntry, TombstoneRecord,
+};
 pub use db::Db;
 pub use device_repo::{Device, Role};
 pub use diag_repo::DiagEvent;

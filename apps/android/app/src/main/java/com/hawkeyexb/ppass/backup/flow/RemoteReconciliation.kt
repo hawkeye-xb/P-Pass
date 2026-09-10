@@ -48,10 +48,16 @@ class RemoteReconciliation(private val ledger: DiscoveryLedgerStore) {
                     item
                 }
             }
+            // AUDIT-04: contentHash travels in the payload — the daemon needs
+            // it to route a `disposition=UNRECOVERABLE` fact into a tombstone
+            // keyed by asset_ref (which is content-addressed, not item-ref).
             snapshot.copy(items = items).appendAudit(
                 AuditKinds.RECONCILIATION_RESOLVED,
                 roundId = roundId,
-                payload = mapOf("disposition" to disposition.name),
+                payload = mapOf(
+                    "disposition" to disposition.name,
+                    "contentHash" to contentHash,
+                ),
             )
         }
     }

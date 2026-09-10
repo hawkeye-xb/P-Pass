@@ -1,9 +1,12 @@
-//! PRES-01 acceptance: hello 轻心跳 → last_seen 刷新 + 三档在线态 +
-//! device.connected 审计（同设备 10 分钟去重）。
+//! PRES-01 acceptance: hello 轻心跳 → last_seen 刷新 + 三档在线态。
 //!
-//! 覆盖卡面验收 1（三档判定纯函数边界，见 presence.rs 单测）与验收 2
-//! （hello → device.connected，10 分钟内重复 hello 不重复记；反证：
-//! 去掉去重 → 本文件断言必红）。
+//! 覆盖卡面验收 1（三档判定纯函数边界，见 presence.rs 单测）。
+//!
+//! AUDIT-04 card decision #5 supersedes this file's original verification
+//! 2 (`hello → device.connected` 长期审计 + 10 分钟去重)：`device.connected`
+//! 从不写任何长期审计表。The tests below now assert the opposite —
+//! repeated hello only ever refreshes `last_seen` and never appends any
+//! `audit_operation` row for this actor, at any cadence.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -98,32 +101,33 @@ async fn router_harness(_dir: &std::path::Path, db: Db, now: i64) -> RouterHarne
 async fn connected_audits(db: &Db, node: &[u8]) -> Vec<storage::AuditRecord> {
     let all = db.list_audit(1000).await.unwrap();
     all.into_iter()
-        .filter(|r| r.entry.kind == "device.connected" && r.entry.actor.as_deref() == Some(node))
+        .filter(|r| r.entry.actor.as_deref() == Some(node))
         .collect()
 }
 
-// ── 验收 2：hello → device.connected；10 分钟内去重；去重窗口过后再记 ──
+// ── 验收 2 (AUDIT-04 supersedes): hello 只刷新 last_seen，
+// 从不写任何长期审计行——不管多频繁 ────────────────────────────
 
 #[tokio::test(flavor = "multi_thread")]
-async fn hello_records_connected_once_then_dedupes_then_records_again() {
+async fn hello_refreshes_last_seen_and_never_writes_any_audit_row() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open_in_memory().await.unwrap();
     let now = 1_800_000_000_000;
     let h = router_harness(dir.path(), db.clone(), now).await;
     let node = h.client_tp.node_id().0;
 
-    // 第一次 hello：应答 ok + last_seen 更新 + 1 条 device.connected。
+    // 第一次 hello：应答 ok + last_seen 更新 + 零条审计。
     let resp = h.call("hello", serde_json::json!({})).await;
     assert!(resp.ok, "hello must succeed: {resp:?}");
     let dev = db.get_device(&node).await.unwrap().unwrap();
     assert_eq!(dev.last_seen, Some(now), "hello must refresh last_seen");
     assert_eq!(
         connected_audits(&db, &node).await.len(),
-        1,
-        "first hello records one device.connected"
+        0,
+        "AUDIT-04 card decision #5: hello/connectivity never writes audit_operation"
     );
 
-    // 第二次 hello（同 10 分钟窗口，时钟走 5 分钟）：不再记。
+    // 反复 hello（哪怕很密集）：last_seen 继续刷新，审计依旧零条。
     h.clock.store(now + 5 * 60 * 1000, Ordering::Relaxed);
     let resp = h.call("hello", serde_json::json!({})).await;
     assert!(resp.ok);
@@ -133,20 +137,15 @@ async fn hello_records_connected_once_then_dedupes_then_records_again() {
         Some(now + 5 * 60 * 1000),
         "last_seen keeps refreshing"
     );
-    assert_eq!(
-        connected_audits(&db, &node).await.len(),
-        1,
-        "second hello inside the 10-min window must NOT record again"
-    );
+    assert_eq!(connected_audits(&db, &node).await.len(), 0);
 
-    // 时钟跨过 10 分钟窗口 → 第三条记录出现（防「永不重记」）。
     h.clock.store(now + 11 * 60 * 1000, Ordering::Relaxed);
     let resp = h.call("hello", serde_json::json!({})).await;
     assert!(resp.ok);
     assert_eq!(
         connected_audits(&db, &node).await.len(),
-        2,
-        "hello after the dedupe window records a new device.connected"
+        0,
+        "no cadence of hello ever produces a long-term audit row"
     );
 }
 

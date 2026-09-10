@@ -123,10 +123,12 @@ impl Router {
         self
     }
 
-    /// PRES-01: hello 的心跳落点——已配对未吊销设备刷新 last_seen +
-    /// 记 device.connected 审计（同设备 10 分钟去重防刷屏，防「锁屏
-    /// 重连」刷爆活动流）。失败静默：心跳是尽力而为的加速器，不是
-    /// 承诺——写库失败不影响 hello 应答。
+    /// PRES-01: hello 的心跳落点——已配对未吊销设备刷新 last_seen。
+    /// AUDIT-04 card decision #5: `device.connected`/hello/连接性从不写
+    /// 任何长期审计表（audit_operation 及其余三张）；presence 完全由
+    /// `last_seen` + 实时连接状态派生，不需要、也不允许一条持久审计行。
+    /// 失败静默：心跳是尽力而为的加速器，不是承诺——写库失败不影响
+    /// hello 应答。
     async fn record_presence(&self, peer: transport::NodeId) {
         let Ok(Some(device)) = self.db.get_device(&peer.0).await else {
             return; // 未配对节点：hello 只是能力握手，不产生副作用
@@ -136,23 +138,6 @@ impl Router {
         }
         let now = (self.now)();
         let _ = self.db.touch_last_seen(&peer.0, now).await;
-        let last = self
-            .db
-            .last_audit_ts(&peer.0, "device.connected")
-            .await
-            .unwrap_or(None);
-        if last.is_none_or(|t| now - t > crate::presence::CONNECTED_AUDIT_DEDUPE_MS) {
-            let _ = self
-                .db
-                .append_audit(&storage::AuditEntry::local(
-                    now,
-                    Some(peer.0.to_vec()),
-                    "device.connected",
-                    None,
-                    Some(serde_json::json!({ "deviceName": device.name.clone() }).to_string()),
-                ))
-                .await;
-        }
     }
 
     /// Accept-loop over inbound connections. Runs until the transport
@@ -512,13 +497,17 @@ impl Router {
         }
     }
 
-    /// AUDIT-01: batch delivery for the phone's durable Flow audit outbox.
+    /// AUDIT-04: batch delivery for the phone's durable Flow audit outbox.
     /// Each event carries its own event_id (minted once on the phone),
     /// so appending it here is idempotent — a retransmitted batch after a
-    /// lost response never duplicates a row. Returns exactly the ids that
-    /// are now durably present (freshly inserted or already there from an
-    /// earlier delivery) so the phone acknowledges only those and keeps
-    /// anything else queued for the next flush.
+    /// lost response never duplicates a row. Every event is routed onto the
+    /// canonical `audit_operation`/`audit_item_evidence`/`audit_tombstone`/
+    /// `audit_decision` tables by [`crate::audit_route::route`] — this
+    /// method itself no longer decides where a fact lands (card decision
+    /// #2/#9 supersede AUDIT-01's single-bucket `audit_event`). Returns
+    /// exactly the ids that are now durably present (freshly inserted or
+    /// already there from an earlier delivery) so the phone acknowledges
+    /// only those and keeps anything else queued for the next flush.
     async fn handle_flow_audit_submit(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Ok(submit) = serde_json::from_value::<proto::FlowAuditSubmit>(req.params.clone())
         else {
@@ -532,28 +521,20 @@ impl Router {
             if event.event_id.is_empty() || event.kind.is_empty() {
                 continue;
             }
-            let payload = if event.payload.is_empty() {
-                None
+            let fact = crate::audit_route::FlowAuditFact {
+                event_id: &event.event_id,
+                kind: &event.kind,
+                round_id: event.round_id.as_deref(),
+                occurred_at_ms: event.occurred_at_ms,
+                payload: &event.payload,
+            };
+            if crate::audit_route::route(&self.db, &peer.0, &fact).await {
+                accepted.push(event.event_id.clone());
             } else {
-                serde_json::to_string(&event.payload).ok()
-            };
-            let entry = storage::AuditEntry {
-                event_id: event.event_id.clone(),
-                ts: event.occurred_at_ms,
-                actor: Some(peer.0.to_vec()),
-                kind: event.kind.clone(),
-                round_id: event.round_id.clone(),
-                target_hash: None,
-                payload,
-            };
-            match self.db.append_audit(&entry).await {
-                // Either this call inserted it, or an earlier delivery
-                // already did (INSERT OR IGNORE) — both mean the fact is
-                // now durable, so the phone may drop it from its outbox.
-                Ok(_) => accepted.push(event.event_id.clone()),
-                Err(e) => {
-                    tracing::warn!("flow.audit.submit append failed for {peer:?}: {e}");
-                }
+                tracing::warn!(
+                    "flow.audit.submit routing failed for {peer:?}: kind={}",
+                    event.kind
+                );
             }
         }
         if !accepted.is_empty() {

@@ -4,9 +4,14 @@
 //  - A user action / durable fact and its outbox event commit in the SAME
 //    atomic snapshot write; the event id persists and survives restart.
 //  - Every ordinary window with a persistent roundId writes exactly one
-//    `flow.round.finished` summary on the round's terminal transition —
-//    not one row per item.
+//    `flow.round.finished` summary on the round's terminal transition.
 //  - Pause/continue/cancel/retry/restore write `flow.round.controlled`.
+//
+// AUDIT-04 supersedes the "per-item confirmations never reach the audit
+// outbox" assumption below: each confirmed item now ALSO writes its own
+// `flow.item.confirmed` fact (routed into the daemon's canonical
+// audit_item_evidence table), alongside the round's one aggregate summary —
+// see the third test in this file for the updated assertion.
 package com.hawkeyexb.ppass.backup.flow
 
 import java.io.File
@@ -112,7 +117,21 @@ class AUDIT01LedgerOutboxTest {
         assertEquals(null, finished.currentRoundId)
 
         val itemLevelAudit = finished.auditOutbox.filter { it.roundId == roundId && it.kind != AuditKinds.ROUND_FINISHED }
-        assertTrue("ordinary per-item confirmations must never reach the audit outbox", itemLevelAudit.isEmpty())
+        // AUDIT-04 supersedes this AUDIT-01 assumption (case matrix requires
+        // per-item evidence that survives independently of the round's
+        // aggregate summary — e.g. after a later external delete, only the
+        // item's own evidence row can prove *that specific object* was once
+        // confirmed). Each of the 3 completions now also writes its own
+        // flow.item.confirmed fact alongside the one round summary.
+        assertEquals(
+            "each confirmed item still gets its own durable evidence fact",
+            3,
+            itemLevelAudit.count { it.kind == AuditKinds.ITEM_CONFIRMED },
+        )
+        assertTrue(
+            "no other per-item audit kind besides item.confirmed is expected here",
+            itemLevelAudit.all { it.kind == AuditKinds.ITEM_CONFIRMED },
+        )
         dir.deleteRecursively()
     }
 

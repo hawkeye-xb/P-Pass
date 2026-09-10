@@ -113,6 +113,7 @@ class StrictConsumer(
         val current = ledger.load()
         val lease = current.fetchLease ?: return
         ledger.update { snapshot ->
+            val item = snapshot.items.single { it.queueSequence == lease.queueSequence }
             val items = snapshot.items.map { item ->
                 if (item.queueSequence == lease.queueSequence) {
                     item.copy(
@@ -126,11 +127,21 @@ class StrictConsumer(
             val nextCursor = items.firstOrNull { it.deliveryState == DeliveryState.QUEUED }
                 ?.let { UploadCursor(it.queueSequence) }
                 ?: UploadCursor.INITIAL
+            // AUDIT-04: a discovered source vanishing before it could be sent
+            // is a durable, terminal object fact (case matrix §3) — commit it
+            // in the same atomic snapshot as the state transition.
             snapshot.copy(
                 uploadCursor = nextCursor,
                 consumerStatus = ConsumerStatus.IDLE,
                 fetchLease = null,
                 items = items,
+            ).appendAudit(
+                AuditKinds.ITEM_SOURCE_MISSING,
+                roundId = item.roundId,
+                payload = mapOf(
+                    "itemRef" to item.sourceRef,
+                    "queueSequence" to lease.queueSequence.toString(),
+                ),
             )
         }
     }
@@ -171,7 +182,11 @@ class StrictConsumer(
                 next.appendAudit(
                     AuditKinds.ITEM_ATTENTION,
                     roundId = currentItem.roundId,
-                    payload = mapOf("reason" to "delivery_failed", "queueSequence" to lease.queueSequence.toString()),
+                    payload = mapOf(
+                        "reason" to "delivery_failed",
+                        "queueSequence" to lease.queueSequence.toString(),
+                        "itemRef" to currentItem.sourceRef,
+                    ),
                 )
             } else {
                 next

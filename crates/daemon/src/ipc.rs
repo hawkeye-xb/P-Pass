@@ -771,6 +771,23 @@ impl IpcServer {
                                     Some(serde_json::json!({ "nodeId": node_hex }).to_string()),
                                 ))
                                 .await;
+                            // AUDIT-04 card decision #4: 撤销授权是用户决定，
+                            // 必须落 audit_decision（causal_object_ref = 被撤销
+                            // 设备），不能只靠上面兼容层的 audit_operation 行。
+                            let _ = self
+                                .db
+                                .append_decision(&storage::DecisionEntry {
+                                    decision_id: fresh_audit_id(),
+                                    decision_kind: "revoke_authorization".into(),
+                                    actor: None, // 本机 owner 经 IPC 操作
+                                    causal_operation_id: None,
+                                    causal_object_ref: Some(node_hex.to_string()),
+                                    occurred_at: now_ms(),
+                                    payload: Some(
+                                        serde_json::json!({ "nodeId": node_hex }).to_string(),
+                                    ),
+                                })
+                                .await;
                             // IPC-02: 设备移除——桌面设备行即时消失。
                             events::emit(
                                 &self.events,
@@ -1356,6 +1373,16 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// AUDIT-04: idempotency key for daemon-minted `audit_decision` rows this
+/// IPC surface writes directly (device.revoke). This process is the sole
+/// writer — no phone retry can resend it — so a fresh random id is exactly
+/// as good as one generated anywhere else in the codebase.
+fn fresh_audit_id() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("OS randomness for audit decision id");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]

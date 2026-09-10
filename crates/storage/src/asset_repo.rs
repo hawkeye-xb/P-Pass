@@ -375,7 +375,10 @@ mod tests {
             "device",
             "backup_watermark",
             "diag_event",
-            "audit_event",
+            "audit_operation",
+            "audit_item_evidence",
+            "audit_tombstone",
+            "audit_decision",
         ] {
             let n: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",

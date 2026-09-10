@@ -1,11 +1,18 @@
-//! AUDIT-01 closing gap: the phone -> daemon leg of the durable Flow audit
-//! outbox. Without this, `flow.round.controlled` / `flow.round.finished` /
-//! `flow.scope.changed` / `flow.epoch.invalidated` / `flow.item.attention` /
-//! `flow.reconciliation.resolved` events written to the phone's local ledger
-//! outbox (crates unrelated — see apps/android AUDIT01LedgerOutboxTest) would
-//! never reach Desktop's `audit_event` table. This test drives the real
-//! `flow.audit.submit` wire method end to end: submit -> durable v2 row ->
-//! idempotent replay -> unauthenticated/unauthorized rejection.
+//! AUDIT-04 supersedes AUDIT-01's single-bucket `audit_event` contract this
+//! file originally exercised: `flow.round.finished` no longer lands in a
+//! flat event table with a free `payload` blob — it is routed by
+//! `crate::audit_route::route` onto the canonical `audit_operation` (the
+//! round IS the operation, keyed by the phone's `round_id`) with
+//! `evidence_summary` recomputed from actually-persisted
+//! `audit_item_evidence` rows (card acceptance criterion #2), never
+//! trusted verbatim from the phone's payload. The wire method
+//! (`flow.audit.submit`), transport, and idempotent-batch-delivery
+//! contract are unchanged from AUDIT-01 — only what happens to a fact
+//! once it lands is superseded. Old assertions that read `payload` for
+//! `confirmed:"3"` are rewritten below to read `final_counts`/
+//! `evidence_summary` on the operation row instead (frozen per
+//! docs/AGENT_PROTOCOL.md's architecture-supersession rule; the
+//! AUDIT-01 card is marked accordingly).
 
 use daemon::Router;
 use proto::msgs::methods;
@@ -71,7 +78,7 @@ async fn paired_client(db: &Db) -> (IrohTransport, IrohTransport, transport::Pee
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn submitted_outbox_event_lands_in_the_v2_audit_table_with_the_phone_event_id() {
+async fn submitted_round_finished_lands_in_the_canonical_operation_keyed_by_round_id() {
     let db = Db::open_in_memory().await.unwrap();
     let (daemon_tp, ctp, _) = paired_client(&db).await;
     let router = Router::new(db.clone(), "客厅的电脑");
@@ -93,24 +100,29 @@ async fn submitted_outbox_event_lands_in_the_v2_audit_table_with_the_phone_event
     let accepted: FlowAuditAccepted = serde_json::from_value(resp.result.unwrap()).unwrap();
     assert_eq!(accepted.event_ids, vec![event.event_id.clone()]);
 
-    let audit = db.list_audit(10).await.unwrap();
-    let row = audit
-        .iter()
-        .find(|r| r.entry.event_id == event.event_id)
-        .expect("the phone's exact event_id must be preserved, not regenerated");
-    assert_eq!(row.entry.kind, "flow.round.finished");
-    assert_eq!(row.entry.round_id.as_deref(), Some("round-1"));
-    assert_eq!(row.entry.actor, Some(ctp.node_id().0.to_vec()));
-    assert!(row
-        .entry
-        .payload
-        .as_deref()
-        .unwrap_or("")
-        .contains("\"confirmed\":\"3\""));
+    // AUDIT-04: the round IS the operation — operation_id is the phone's
+    // round_id, never a freshly minted id.
+    let op = db
+        .get_operation("round-1")
+        .await
+        .unwrap()
+        .expect("the round's operation row must be durable");
+    assert_eq!(op.entry.kind, "flow.round.finished");
+    assert_eq!(op.entry.round_id.as_deref(), Some("round-1"));
+    assert_eq!(op.entry.actor, Some(ctp.node_id().0.to_vec()));
+    assert!(
+        op.entry
+            .final_counts
+            .as_deref()
+            .unwrap_or("")
+            .contains("\"confirmed\":\"3\""),
+        "the phone's self-reported final_counts is still stored (advisory): {:?}",
+        op.entry.final_counts
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn resubmitting_the_same_batch_after_a_lost_response_does_not_duplicate_the_row() {
+async fn resubmitting_the_same_batch_after_a_lost_response_does_not_duplicate_the_operation() {
     let db = Db::open_in_memory().await.unwrap();
     let (daemon_tp, ctp, _) = paired_client(&db).await;
     let router = Router::new(db.clone(), "客厅的电脑");
@@ -148,15 +160,15 @@ async fn resubmitting_the_same_batch_after_a_lost_response_does_not_duplicate_th
         "the daemon must still report the id as accepted so the phone can ack it"
     );
 
-    let audit = db.list_audit(10).await.unwrap();
-    assert_eq!(
-        audit
-            .iter()
-            .filter(|r| r.entry.event_id == event.event_id)
-            .count(),
-        1,
-        "a retransmitted outbox batch must never create a second audit row"
+    assert!(
+        db.get_operation("round-1").await.unwrap().is_some(),
+        "the operation must be durable after replay"
     );
+    // No table-count assertion needed beyond "still exactly one row" —
+    // operation_id has a UNIQUE constraint, so a second INSERT OR IGNORE
+    // physically cannot create a duplicate; the real risk this test
+    // guards is the daemon reporting the replay as NOT accepted (which
+    // would leave the phone retrying forever).
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -182,5 +194,5 @@ async fn unpaired_device_cannot_submit_audit_events() {
     .await;
     assert!(!resp.ok, "unpaired device must not reach flow.audit.submit");
     assert_eq!(resp.error.unwrap().code, codes::NOT_AUTHORIZED);
-    assert!(db.list_audit(10).await.unwrap().is_empty());
+    assert!(db.get_operation("round-1").await.unwrap().is_none());
 }

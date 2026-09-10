@@ -125,7 +125,12 @@ class FlowRunner(
         consumer.wake(constraintsSatisfied = true)
     }
 
-    /** A user retry reopens terminal delivery failures as a new strict round. */
+    /** A user retry reopens terminal delivery failures as a new strict round.
+     *  AUDIT-04: retry does not write a canonical audit fact — card acceptance
+     *  criterion #4 groups it with hello as routine, not a long-term audit
+     *  event (unlike cancel/restore, which ARE decisions); the case matrix
+     *  also has no "用户重试" case. The terminal failure itself is already
+     *  durable object evidence via [AuditKinds.ITEM_ATTENTION]. */
     fun retryFailedDeliveries() {
         ledger.update { snapshot ->
             val items = snapshot.items.map { item ->
@@ -139,7 +144,7 @@ class FlowRunner(
                 consumerStatus = ConsumerStatus.IDLE,
                 fetchLease = null,
                 items = items,
-            ).appendAudit(AuditKinds.ROUND_CONTROLLED, roundId = snapshot.currentRoundId, payload = mapOf("action" to "retry"))
+            )
         }
         consumer.wake(constraintsSatisfied = true)
     }
