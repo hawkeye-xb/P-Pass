@@ -1,10 +1,18 @@
-//! Telemetry client (T-035, 手册 §8 事件字典 v1 原样实施).
+//! Telemetry client (T-035, dictionary v2 — OBS-02 裁决 2026-09-10).
 //!
-//! Four events, common fields `anon_id`/`ver`/`ts` on every one. The
+//! Five events, common fields `anon_id`/`ver`/`ts` on every one. The
 //! anon_id is random at first launch and persisted — never derived from
 //! anything identifying. **`enabled = false` means ZERO network calls**
 //! (契约): events are dropped at the door, not queued, not sent.
 //! No IPs stored server-side, no paths, no file names in any field.
+//!
+//! v2 删除了 v1（手册 §8，2026-07-24）里的 `ipver`/`country`/`isp_hash`
+//! （对应"按地区扩容 relay"决策，但 `relay_urls` 现在是空列表，没有决策
+//!可支撑）与 `backup_session` 的 `files`/`trigger`（架构已从"批次会话"
+//! 变成单文件 Flow，`files` 恒为 1；`trigger` 现在的账本里拿不到，硬填
+//! 是假数据）；`backup_session` 改名 `flow_item`；新增 `error`（只报
+//! 错误码+阶段，不带堆栈/路径）。OBS-02 裁决记录：
+//! `cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md`。
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -15,23 +23,18 @@ use serde_json::{json, Value};
 /// Batch flush cadence (契约: 每 5min).
 pub const FLUSH_INTERVAL: Duration = Duration::from_secs(300);
 
-/// 手册 §8 的四个事件——字段逐字典实施.
+/// 遥测字典 v2（OBS-02 裁决）——字段逐一对应生产决策，不照抄 v1。
 #[derive(Debug, Clone)]
 pub enum Event {
     Conn {
-        path: &'static str, // lan | direct | relay
-        ipver: &'static str,
+        path: &'static str, // lan | direct | relay | unknown
         ms: u64,
         fail_stage: Option<&'static str>,
-        country: Option<String>,
-        isp_hash: Option<String>,
     },
-    BackupSession {
-        files: u32,
+    FlowItem {
         bytes: u64,
         dur_s: u64,
         resumed: bool,
-        trigger: &'static str, // periodic | uidt
     },
     FirstByte {
         ms: u64,
@@ -42,6 +45,10 @@ pub enum Event {
         os: String,
         ver: String,
     },
+    Error {
+        code: &'static str,
+        stage: &'static str,
+    },
 }
 
 impl Event {
@@ -49,33 +56,26 @@ impl Event {
         let (event, mut fields) = match self {
             Event::Conn {
                 path,
-                ipver,
                 ms,
                 fail_stage,
-                country,
-                isp_hash,
             } => (
                 "conn",
-                json!({ "path": path, "ipver": ipver, "ms": ms,
-                        "fail_stage": fail_stage, "country": country,
-                        "isp_hash": isp_hash }),
+                json!({ "path": path, "ms": ms, "fail_stage": fail_stage }),
             ),
-            Event::BackupSession {
-                files,
+            Event::FlowItem {
                 bytes,
                 dur_s,
                 resumed,
-                trigger,
             } => (
-                "backup_session",
-                json!({ "files": files, "bytes": bytes, "dur_s": dur_s,
-                        "resumed": resumed, "trigger": trigger }),
+                "flow_item",
+                json!({ "bytes": bytes, "dur_s": dur_s, "resumed": resumed }),
             ),
             Event::FirstByte { ms, kind } => ("first_byte", json!({ "ms": ms, "kind": kind })),
             Event::DaemonAlive { uptime_h, os, ver } => (
                 "daemon_alive",
                 json!({ "uptime_h": uptime_h, "os": os, "ver": ver }),
             ),
+            Event::Error { code, stage } => ("error", json!({ "code": code, "stage": stage })),
         };
         let obj = fields.as_object_mut().expect("built as object");
         obj.insert("event".into(), json!(event));
@@ -213,18 +213,13 @@ mod tests {
         let events = [
             Event::Conn {
                 path: "direct",
-                ipver: "v6",
                 ms: 120,
                 fail_stage: None,
-                country: None,
-                isp_hash: None,
             },
-            Event::BackupSession {
-                files: 10,
+            Event::FlowItem {
                 bytes: 1024,
                 dur_s: 5,
                 resumed: false,
-                trigger: "periodic",
             },
             Event::FirstByte {
                 ms: 80,
@@ -235,11 +230,15 @@ mod tests {
                 os: "macos".into(),
                 ver: "0.1.0".into(),
             },
+            Event::Error {
+                code: "fetch_failed",
+                stage: "materialize",
+            },
         ];
         for (event, name) in
             events
                 .into_iter()
-                .zip(["conn", "backup_session", "first_byte", "daemon_alive"])
+                .zip(["conn", "flow_item", "first_byte", "daemon_alive", "error"])
         {
             let v = event.into_value("cafebabe", "0.1.0", 42);
             assert_eq!(v["event"], name);

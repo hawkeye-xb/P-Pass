@@ -224,6 +224,13 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       `/ingest` (asserted in config tests), toDataPoint switch is
       exhaustiveness-guarded with assertNever (negative-tested), stale
       header comment fixed — review PASS (claims independently re-run)
+- [x] TEL-01 telemetry dictionary v2 (OBS-02 verdict) — **DONE 2026-09-10**
+      (daemon `telemetry.rs` + Worker `schema.ts` synced: `conn` drops
+      ipver/country/isp_hash, `backup_session`→`flow_item` drops
+      files/trigger, new `error{code,stage}` event; no compat layer, only
+      `daemon_alive` was live in production. `cargo test -p daemon
+      telemetry` 3/3 + telemetry_flow 2/2, Worker `npm test` 14/14 +
+      typecheck green, `just ci` all green — nextest 345/1 skipped)
 - [x] T-062b update artifact verification + pinned pubkey — **DONE
       2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
       parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY
