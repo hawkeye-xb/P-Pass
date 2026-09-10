@@ -1,6 +1,6 @@
 # TEL-02 接线 conn/flow_item 到生产代码（L2）
 
-> ⬜ 状态：未开工 · 级别：**L2** · 阻塞：**TEL-01（先要有新 Event 变体）**
+> ✅ 状态：已完成（2026-09-10）· 级别：**L2**
 
 **目标**：`crates/daemon/src/flow_delivery.rs` 的 `FlowDelivery::fetch()`
 真正记录 `conn` 和 `flow_item` 遥测事件——这是当前唯一的生产数据传输
@@ -55,3 +55,36 @@
 ## 阻塞与依赖
 
 - 依赖 TEL-01 先落地新 `Event::Conn`/`Event::FlowItem` 变体。
+
+---
+
+## 验收记录（2026-09-10）
+
+- 挂载点与卡片描述一致，`fetch()` 内联记录，无需新建独立模块：
+  - `conn`：`fetch_from_observing_path` 回调里同时捕获 `ConnectionStatus`
+    （用于已有的 `path_guard.set_path`）与遥测 `path` 字段；整个 fetch
+    调用计时；失败分支 `fail_stage="fetch"`，成功分支 `fail_stage=None`。
+  - `flow_item`：计时起点提到 `fetch()` 函数最开头（覆盖 `checked_request`
+    + `matching_grant` + 实际 fetch + materialize 全部耗时，不只是网络
+    传输段）；`bytes` 从暂存文件 `std::fs::metadata` 取（导出后、入库前，
+    不需要额外磁盘 IO）；仅在成功持久化 receipt 前记录一次，失败/取消
+    路径不产生 `flow_item`。
+  - `path` 字段实测发现卡片草稿里的 `lan` 值在 `ConnectionStatus` 实际
+    枚举里不存在（真实值是 `direct`/`relay`/`offline`/`unknown`）——顺带
+    改了 TEL-01 落下的 schema（daemon 侧枚举注释 + Worker `connSchema`
+    的 `z.enum` + 两侧测试），没有另开卡。
+  - `resumed` 按卡片允许，暂恒为 `false`，注释写明真实断点续传检测是
+    独立后续工作，不编造。
+- 新增 2 个测试（`crates/daemon/tests/flow_delivery.rs`）：
+  - `successful_fetch_records_one_conn_and_one_flow_item_event`：真实
+    iroh-blobs fetch 后断言恰好 1 个 `conn` + 1 个 `flow_item`，`bytes`
+    等于源文件大小、`resumed=false`、`fail_stage=null`。
+  - `disabled_telemetry_means_zero_network_calls_from_flow_delivery`：
+    `enabled=false` 的 Telemetry 走同一 `fetch()` 路径，反证零网络请求
+    （复用 T-035 既有"关闭=零调用"契约，未因新增调用点破例）。
+- `cargo test -p daemon --test flow_delivery` → 10/10 passed（8 个既有 +
+  2 个新增，无回归）。
+- `cargo nextest run --all-features` → 356/356 passed, 1 skipped（较
+  TEL-01 完成时的 345 净增 11，含本卡 2 个 + TEL-01 遗留字段修正带来的
+  测试变动）。
+- `just ci`：fmt/clippy -D warnings/nextest/arch-check/queue-check 全绿。

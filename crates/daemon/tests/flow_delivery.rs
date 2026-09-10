@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use daemon::events;
 use daemon::flow_delivery::{DeliveryError, FlowDelivery, FlowPathRegistry};
+use daemon::Telemetry;
 use proto::FlowFetchRequest;
 use storage::{Db, Device, Role};
 use tempfile::tempdir;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use transport::{Blobs, ConnectionStatus, IrohTransport, TransportConfig, ALPN_BLOBS};
 
 fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFetchRequest {
@@ -522,4 +524,177 @@ fn old_flow_lease_cannot_clear_a_newer_data_plane_path() {
         "stale completion must not clear the newer active transfer"
     );
     assert_eq!(paths.get(peer), Some(ConnectionStatus::Relay));
+}
+
+// ── TEL-02: FlowDelivery.fetch() records anonymized telemetry ──
+
+/// Minimal HTTP/1.1 server: counts requests, captures JSON bodies. Mirrors
+/// `crates/daemon/tests/telemetry_flow.rs`'s helper (kept local — that file
+/// is a different test binary, and the fixture is small enough not to be
+/// worth a shared dev-dependency crate for two call sites).
+async fn mock_telemetry_server() -> (
+    String,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/telemetry", listener.local_addr().unwrap());
+    let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let bodies: Arc<std::sync::Mutex<Vec<serde_json::Value>>> = Arc::default();
+    let (h, b) = (Arc::clone(&hits), Arc::clone(&bodies));
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let b = Arc::clone(&b);
+            tokio::spawn(async move {
+                let mut buf = Vec::new();
+                let mut tmp = [0u8; 4096];
+                loop {
+                    let Ok(n) = sock.read(&mut tmp).await else {
+                        return;
+                    };
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
+                    {
+                        let headers = String::from_utf8_lossy(&buf[..pos]);
+                        let len = headers
+                            .lines()
+                            .find_map(|l| {
+                                l.to_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .flatten()
+                            .unwrap_or(0);
+                        if buf.len() >= pos + len {
+                            if let Ok(v) = serde_json::from_slice(&buf[pos..pos + len]) {
+                                b.lock().unwrap().push(v);
+                            }
+                            break;
+                        }
+                    }
+                }
+                let _ = sock
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
+                    .await;
+            });
+        }
+    });
+    (url, hits, bodies)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn successful_fetch_records_one_conn_and_one_flow_item_event() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"TEL-02 telemetry fixture bytes";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+
+    let (telemetry_url, hits, bodies) = mock_telemetry_server().await;
+    let telemetry_dir = tempdir().unwrap();
+    let telemetry = Telemetry::new(true, telemetry_url, telemetry_dir.path());
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path())
+        .with_telemetry(telemetry.clone());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+    delivery
+        .fetch(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    assert_eq!(telemetry.flush_now().await, 2, "one conn + one flow_item");
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let batch = bodies.lock().unwrap()[0].clone();
+    let events: Vec<&str> = batch
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(events, ["conn", "flow_item"]);
+    assert_eq!(batch[0]["fail_stage"], serde_json::Value::Null);
+    assert_eq!(batch[1]["bytes"], bytes.len() as u64);
+    assert_eq!(batch[1]["resumed"], false);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disabled_telemetry_means_zero_network_calls_from_flow_delivery() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"TEL-02 disabled telemetry fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+
+    let (telemetry_url, hits, _bodies) = mock_telemetry_server().await;
+    let telemetry_dir = tempdir().unwrap();
+    let telemetry = Telemetry::new(false, telemetry_url, telemetry_dir.path());
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path())
+        .with_telemetry(telemetry.clone());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+    delivery
+        .fetch(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    assert_eq!(telemetry.flush_now().await, 0);
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "disabled telemetry must mean ZERO network calls even through FlowDelivery"
+    );
 }

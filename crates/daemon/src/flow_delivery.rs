@@ -16,6 +16,7 @@ use storage::{Db, FlowGrant, FlowGrantState};
 use transport::{Blobs, ConnectionStatus, NodeId};
 
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
+use crate::telemetry::{Event as TelemetryEvent, Telemetry};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryError {
@@ -190,6 +191,12 @@ pub struct FlowDelivery {
     /// Path mutations notify the desktop device rows independently of the
     /// ingestion throttle above.
     events: Option<EventBus>,
+    /// TEL-02: optional anonymized telemetry sink for `conn`/`flow_item`.
+    /// `None` (main.rs default before wiring) means no telemetry client
+    /// is attached; `Telemetry::record` itself is also a no-op when
+    /// disabled, so this is a second independent off switch, not a
+    /// replacement for it.
+    telemetry: Option<Telemetry>,
 }
 
 impl FlowDelivery {
@@ -207,6 +214,7 @@ impl FlowDelivery {
             throttle: None,
             paths: FlowPathRegistry::default(),
             events: None,
+            telemetry: None,
         }
     }
 
@@ -236,6 +244,16 @@ impl FlowDelivery {
 
     pub fn path_registry(&self) -> FlowPathRegistry {
         self.paths.clone()
+    }
+
+    /// TEL-02: wire an anonymized telemetry sink so `fetch()` records one
+    /// `conn` (path/latency/failure stage) and, on success, one `flow_item`
+    /// (bytes/duration/resumed) per request. `Telemetry::record` is already
+    /// a no-op when the client itself is disabled — this builder only
+    /// controls whether `FlowDelivery` has a sink to call at all.
+    pub fn with_telemetry(mut self, telemetry: Telemetry) -> Self {
+        self.telemetry = Some(telemetry);
+        self
     }
 
     /// Persist the current exact grant. This method transfers no bytes.
@@ -274,6 +292,7 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowFetchRequest,
     ) -> Result<FlowCompletionReceipt, DeliveryError> {
+        let item_started = std::time::Instant::now();
         let grant = self.checked_request(peer, request).await?;
         let stored = self.matching_grant(&grant).await?;
         if stored.state == FlowGrantState::Completed {
@@ -294,10 +313,21 @@ impl FlowDelivery {
         // resumes from the dedicated retained store on retry/restart.
         let hash = array32(&grant.content_hash).expect("validated by checked_request");
         let provider = self.provider_for(&grant)?;
-        self.blobs
-            .fetch_from_observing_path(provider, hash, |status| path_guard.set_path(status))
-            .await
-            .map_err(|e| DeliveryError::Fetch(e.to_string()))?;
+        let fetch_started = std::time::Instant::now();
+        let mut conn_path: &'static str = "unknown";
+        let fetch_result = self
+            .blobs
+            .fetch_from_observing_path(provider, hash, |status| {
+                conn_path = status.as_str();
+                path_guard.set_path(status);
+            })
+            .await;
+        let fetch_ms = fetch_started.elapsed().as_millis() as u64;
+        if let Err(e) = fetch_result {
+            self.record_conn(conn_path, fetch_ms, Some("fetch"));
+            return Err(DeliveryError::Fetch(e.to_string()));
+        }
+        self.record_conn(conn_path, fetch_ms, None);
 
         // A concurrent cancel/superseding offer may have landed while the
         // fetch was in flight. Do not materialize or finalize old work.
@@ -311,6 +341,7 @@ impl FlowDelivery {
             .await
             .map_err(|e| DeliveryError::Materialize(e.to_string()))?;
         self.require_active(&grant).await?;
+        let item_bytes = std::fs::metadata(&staged).map(|m| m.len()).unwrap_or(0);
 
         match self
             .ingestor
@@ -353,6 +384,12 @@ impl FlowDelivery {
         {
             return Err(DeliveryError::Cancelled);
         }
+        // TEL-02: `resumed` has no cheap signal yet from this call path —
+        // iroh-blobs resume detection would need a store-level query this
+        // card does not add. Hardcoded false per the card's explicit
+        // allowance; a real resume-detection signal is separate follow-up
+        // work, not silently invented here.
+        self.record_flow_item(item_bytes, item_started.elapsed().as_secs(), false);
         Ok(receipt_from(&grant, receipt_id))
     }
 
@@ -499,6 +536,31 @@ impl FlowDelivery {
             grant.queue_sequence,
             hex::encode(&grant.content_hash)
         ))
+    }
+
+    /// TEL-02: `conn` — one per `fetch()` attempt, terminal state only
+    /// (success or the `fetch` failure stage). `path` is never a raw error
+    /// string, only `ConnectionStatus::as_str()`'s fixed vocabulary.
+    fn record_conn(&self, path: &'static str, ms: u64, fail_stage: Option<&'static str>) {
+        if let Some(telemetry) = &self.telemetry {
+            telemetry.record(TelemetryEvent::Conn {
+                path,
+                ms,
+                fail_stage,
+            });
+        }
+    }
+
+    /// TEL-02: `flow_item` — one per successful `fetch()`, after the
+    /// receipt is durable. Never called on a failed or cancelled request.
+    fn record_flow_item(&self, bytes: u64, dur_s: u64, resumed: bool) {
+        if let Some(telemetry) = &self.telemetry {
+            telemetry.record(TelemetryEvent::FlowItem {
+                bytes,
+                dur_s,
+                resumed,
+            });
+        }
     }
 }
 

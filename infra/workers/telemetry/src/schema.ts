@@ -35,7 +35,7 @@ const commonFields = {
 const connSchema = z
   .object({
     event: z.literal("conn"),
-    path: z.enum(["lan", "direct", "relay", "unknown"]),
+    path: z.enum(["direct", "relay", "offline", "unknown"]),
     ms: z.number().int().nonnegative(),
     fail_stage: z.string().max(32).nullable().optional(),
     ...commonFields,

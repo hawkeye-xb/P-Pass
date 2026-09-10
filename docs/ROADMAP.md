@@ -231,6 +231,13 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       `daemon_alive` was live in production. `cargo test -p daemon
       telemetry` 3/3 + telemetry_flow 2/2, Worker `npm test` 14/14 +
       typecheck green, `just ci` all green — nextest 345/1 skipped)
+- [x] TEL-02 wire conn/flow_item into FlowDelivery.fetch() — **DONE
+      2026-09-10** (Telemetry now flows through the only live production
+      transfer path; also fixed a TEL-01 schema mismatch — `conn.path`'s
+      draft `lan` value does not exist in `ConnectionStatus::as_str()`,
+      corrected to direct/relay/offline/unknown on both daemon and Worker.
+      `cargo test -p daemon --test flow_delivery` 10/10, nextest 356/356
+      passed 1 skipped, `just ci` all green)
 - [x] T-062b update artifact verification + pinned pubkey — **DONE
       2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
       parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY

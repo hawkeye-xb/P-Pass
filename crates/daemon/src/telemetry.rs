@@ -27,7 +27,7 @@ pub const FLUSH_INTERVAL: Duration = Duration::from_secs(300);
 #[derive(Debug, Clone)]
 pub enum Event {
     Conn {
-        path: &'static str, // lan | direct | relay | unknown
+        path: &'static str, // direct | relay | offline | unknown (ConnectionStatus::as_str())
         ms: u64,
         fail_stage: Option<&'static str>,
     },

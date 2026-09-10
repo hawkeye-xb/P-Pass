@@ -375,7 +375,11 @@ async fn main() -> anyhow::Result<()> {
     );
     let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir)
         .with_path_registry(flow_paths)
-        .with_events(event_bus.clone());
+        .with_events(event_bus.clone())
+        // TEL-02: same telemetry client as the daemon_alive heartbeat —
+        // `Telemetry::record` is already a no-op when disabled, so this
+        // wiring is unconditional regardless of the config switch.
+        .with_telemetry(telemetry.clone());
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
         .with_events(event_bus.clone());
     let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir);
