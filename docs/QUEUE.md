@@ -40,6 +40,14 @@ UI-08 已通过归档。
 
 ---
 
+## 一、进行中
+
+| 卡 | 一句话 | 当前节点 |
+|---|---|---|
+| [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2：手机 ledger outbox → Desktop 幂等事件库，直接取代旧文本 audit；正常项按 round 汇总，网络路径不进长期审计 | 先做无 UI 文件的 ledger/schema/IPC RED→GREEN；`App.svelte` 投影等 MOB-47 上游改动 rebase 后接入 |
+
+---
+
 ## 二、待共享回归（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
