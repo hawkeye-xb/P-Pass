@@ -314,9 +314,7 @@ fun PPassApp() {
     // 加白后卡片消失；拒绝授权时保持卡片）
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     var batteryWhitelisted by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
-    // Onboarding「通知」权限——Home 页跳过引导卡用（同款「未加白就一直
-    // 显示」风格，跟电池白名单卡对称，不额外记「是否已经跳过过」）。
-    var notificationGrantedForHome by remember { mutableStateOf(hasNotificationPermission(context)) }
+
     // 设计稿"失联多少天"——复用 SENT-01 既有的 SentinelStore（不是新
     // 造的判定），距上次确认可达的天数；从未确认可达过（lastReachableAt
     // <= 0）时为 null，调用方（PhotosScreen）走不编造天数的兜底文案。
@@ -354,7 +352,7 @@ fun PPassApp() {
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
                     batteryWhitelisted = isIgnoringBatteryOptimizations(context)
-                    notificationGrantedForHome = hasNotificationPermission(context)
+
                     daysUnreachable = computeDaysUnreachable()
                     partialMedia = hasPartialMediaAccess(context)
                     heartbeat.start()
@@ -516,7 +514,17 @@ fun PPassApp() {
             val notifyOnFailurePrefs = remember {
                 com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir)
             }
-            var notifyOnFailure by remember { mutableStateOf(notifyOnFailurePrefs.enabled()) }
+            var notifyOnFailure by remember {
+                mutableStateOf(notifyOnFailurePrefs.enabled() && hasNotificationPermission(context))
+            }
+            var notificationRequestInFlight by remember { mutableStateOf(false) }
+            val notificationPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) { granted ->
+                notificationRequestInFlight = false
+                notifyOnFailure = granted
+                notifyOnFailurePrefs.setEnabled(granted)
+            }
             // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页开关行已删；
             // device_hint 照发照存（pair.request 处直接读 pref，默认开，
             // 数据继续积累，未来打开入口即用）。
@@ -534,7 +542,17 @@ fun PPassApp() {
             var storageDetailOpen by remember { mutableStateOf(false) }
             // MOB-65: 自动触发策略持久化；它不参与当前 Flow 轮的暂停/继续。
             val prefs = remember { AutoBackupPrefs(context.filesDir) }
-            var autoBackupEnabled by remember { mutableStateOf(prefs.enabled()) }
+            var autoBackupEnabled by remember {
+                mutableStateOf(prefs.enabled() && batteryWhitelisted)
+            }
+            var batteryRequestInFlight by remember { mutableStateOf(false) }
+            LaunchedEffect(batteryWhitelisted, batteryRequestInFlight) {
+                if (batteryRequestInFlight && batteryWhitelisted) {
+                    batteryRequestInFlight = false
+                    autoBackupEnabled = true
+                    enableAutoBackup(context)
+                }
+            }
             val scope = rememberCoroutineScope()
             LaunchedEffect(Unit) { client.bind(identity.secretKey()) }
             val mediaPermission = rememberLauncherForActivityResult(
@@ -563,16 +581,12 @@ fun PPassApp() {
                 notice = {
                     NoticeHost(
                         backupInterrupted = backupInterrupted,
-                        batteryWhitelisted = batteryWhitelisted,
-                        notificationSkipped = !notificationGrantedForHome,
                         cancelledRoundCount = holder.cancelledRoundNotice.value?.count,
                         reuploadCount = holder.reuploadNoticeCount.value,
                         onResumeBackup = {
                             resumeAfterInterruption(context)
                             backupInterrupted = false
                         },
-                        onOpenBatterySettings = { openBatteryOptimizationSettings(context) },
-                        onOpenNotificationSettings = { openAppDetailsSettings(context) },
                         onRestoreCancelledRounds = { holder.restoreCancelledRounds() },
                         onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
                     )
@@ -610,16 +624,32 @@ fun PPassApp() {
                             }
                         },
                         notifyOnFailure = notifyOnFailure,
-                        onNotifyOnFailureChange = {
-                            notifyOnFailure = it
-                            notifyOnFailurePrefs.setEnabled(it)
+                        onNotifyOnFailureChange = { enabled ->
+                            if (!enabled) {
+                                notifyOnFailure = false
+                                notifyOnFailurePrefs.setEnabled(false)
+                            } else if (hasNotificationPermission(context)) {
+                                notifyOnFailure = true
+                                notifyOnFailurePrefs.setEnabled(true)
+                            } else if (!notificationRequestInFlight) {
+                                notificationRequestInFlight = true
+                                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
                         },
                         pairedAt = s.pairing.pairedAt,
                         autoBackupEnabled = autoBackupEnabled,
                         onToggleAutoBackup = { enabled ->
-                            autoBackupEnabled = enabled
-                            if (enabled) enableAutoBackup(context)
-                            else disableAutoBackup(context)
+                            if (!enabled) {
+                                batteryRequestInFlight = false
+                                autoBackupEnabled = false
+                                disableAutoBackup(context)
+                            } else if (batteryWhitelisted) {
+                                autoBackupEnabled = true
+                                enableAutoBackup(context)
+                            } else if (!batteryRequestInFlight) {
+                                batteryRequestInFlight = true
+                                openBatteryOptimizationSettings(context)
+                            }
                         },
                         // UX-06 单方停止：本地断开不依赖 daemon 回应。确认
                         // 交互（三层防误触）在 StorageComputerDetail 内部
