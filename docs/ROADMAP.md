@@ -33,6 +33,10 @@ contract (token-backed variants) instead of each page hand-rolling styles,
 with a tokens.css/tokens.json drift check wired into `just ci`;
 cross-breakpoint automated visual regression is explicitly deferred, not
 missing.
+MOB-68 passed Samsung device acceptance: media scope completes before optional
+battery-whitelist and notification permissions run after “Enter app”; the
+first transfer starts only afterward. The background-backup toggle passed on/off
+behavior. Actual failure notifications remain MOB-67.
 **当前位置**（2026-09-10 更新）：DESK-14、DESK-15、MOB-63、MOB-65 均已通过
 macOS/三星真机验收并移入 `cards/done/`。DESK-14 回归时顺带发现并修复
 macOS 原生标题文字与侧栏品牌重复显示的问题（`hiddenTitle: true`）；

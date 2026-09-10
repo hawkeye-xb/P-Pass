@@ -79,7 +79,6 @@ UI-08 已通过归档。
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
 | P1 | [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 已实证：开“备份失败时通知我”后真实失败仍没有系统通知；待接通失败事件发送 | L2 |
-| P1 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 授权流程与后台备份开关已真机通过；授权代码等待从协同分支合入 main | L2 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 脱离文档流方向正确但视觉验收不通过；现为 App.svelte 裸 `<p>`，需重做为紧凑且视觉居中的瞬时反馈 | L2 |
@@ -108,6 +107,7 @@ UI-08 已通过归档。
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [MOB-68](../cards/done/MOB-68-optional-permissions-map-to-backup-settings.md) | 首装按“媒体范围 → 点进入 App → 电池白名单 → 通知权限 → 首轮传输”串行；后台备份开关移入备份设置，开关后台行为已三星真机通过 | MOB-67 独立处理真实失败系统通知 |
 | [AUDIT-03](../cards/done/AUDIT-03-audit-contract-case-matrix.md) | 审计 Case Matrix、【本地】/名称+短指纹、支持级可信、全库保留与无专用导出边界均已收口 | 释放 AUDIT-04 审计核心重建 |
 | [TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md) | 遥测字典 v2 落地：`conn` 删 ipver/country/isp_hash，`backup_session`→`flow_item` 精简字段，新增 `error`；daemon+Worker 同步改，`cargo test` 5/5 + `npm test` 14/14 + `just ci` 全绿 | 释放 TEL-02/03/04 接线卡 |
 | [TEL-02](../cards/done/TEL-02-wire-conn-and-flow-item-events.md) | conn/flow_item 已接线 `flow_delivery.rs::fetch()`；顺带修正 TEL-01 遗留的 conn.path 枚举值（lan 不存在，改为 direct/relay/offline/unknown）；`cargo test -p daemon --test flow_delivery` 10/10、nextest 356/356、just ci 全绿 | 释放 TEL-03/04 的 TEL-01 依赖已满足 |
