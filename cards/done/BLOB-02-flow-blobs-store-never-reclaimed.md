@@ -1,6 +1,6 @@
 # BLOB-02 flow-blobs 收件仓永不回收，占盘持续膨胀
 
-> 🟡 状态：代码已合并（commit `c6c0bb6`，已在 `main`），待共享真机回归（2026-09-09）
+> ✅ 状态：真机验收通过，2026-09-10 归档
 > 当前节点：`transport::Blobs::open_with_periodic_gc` 新增带 GC 的构造路径，只对外
 > 暴露 `[u8;32]` 哈希集合回调（未泄漏 `iroh_blobs` 类型）；`storage::Db::active_flow_content_hashes()`
 > 查询 `flow_delivery` 表 `state = 'active'` 的 `content_hash` 集合作为唯一保护判据；
@@ -65,9 +65,12 @@ partial（`main.rs:333-335` 注释原话），粗暴清空会连同正在传输�
       同一 hash 被回收到 0；`storage` 侧另有
       `active_flow_content_hashes_excludes_completed_and_cancelled_grants`
       反证 completed/cancelled 不会被误判为受保护。
-- [ ] 真机：连续传一批照片，中途 `du -sh .ppf/flow-blobs` 记录峰值；等
+- [x] 真机：连续传一批照片，中途 `du -sh .ppf/flow-blobs` 记录峰值；等
       GC 跑过至少一轮后复测，应回落到仅剩"正在传输中"的量级，不再随
-      已完成的传输持续累积。——**留给共享真机回归**。
+      已完成的传输持续累积。——2026-09-10 真机重配对后连续传 21 张：
+      `flow-blobs` **564 KiB → 47,788 KiB 峰值 → 492 KiB**；实际 payload
+      `.ppf/flow-blobs/data/*.data` **0 → 47,468 KiB → 0**。完成态 44/44，
+      只余 19 个 `.obao4` iroh outboard 索引/校验块（136,832 B），不含照片内容。
 - [x] `just ci` 全绿（本次复核：clippy/fmt/arch-check/queue-check/nextest 全过，
       另单独跑通 3 项 BLOB-02 专属测试，见「代码完成记录」）。
 
@@ -88,6 +91,13 @@ partial（`main.rs:333-335` 注释原话），粗暴清空会连同正在传输�
   外加对应测试文件；未越界改动 `FlowGrantState`、`.ppf/blobs`、proto、手机端。
 - 唯一未闭合项：真机 `du -sh .ppf/flow-blobs` 峰值 → GC 后回落的观测，
   按范围红线交给共享真机回归，不由本次实施代劳。
+
+## 真机验收记录（2026-09-10）
+
+共享实机自动每 2 秒采样。21 张大批量的 Flow 收件仓峰值为 47,788 KiB；所有
+新 epoch Flow 完成后等待 70 秒（超过配置的 60 秒 GC 周期），仓体回到 492 KiB。
+payload `.data` 归零，剩余只有不随照片大小增长的 outboard 元数据。GC 已回收
+完成项的实际内容，验收通过。
 
 ## 范围
 

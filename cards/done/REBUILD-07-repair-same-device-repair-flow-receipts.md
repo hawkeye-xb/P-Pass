@@ -1,6 +1,6 @@
 # REBUILD-07 同一设备重配对后 Flow receipt 不得占用新 epoch 队列
 
-> 🟡 状态：代码完成，待同机重配对真机验收
+> ✅ 状态：真机验收通过，2026-09-10 归档
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -29,10 +29,10 @@ receipt 占用序号而且不可覆盖。新 epoch 同序号的 `flow.offer` 被
 
 - [x] schema migration 将 Flow grant 身份限定为 `(node_id, pairing_epoch, queue_sequence)`，已存在库升级不丢 receipt。
 - [x] RED→GREEN：同一 NodeId 的旧 epoch `completed` 序号 1 存在时，切换到新 epoch 后同序号 1 的 offer 可建立独立 grant；旧 receipt 仍可按旧 epoch 读取。
-- [ ] 反证：临时移除 epoch 维度后，上述同序号重配对用例必红。
+- [x] 反证：临时移除 epoch 维度后，上述同序号重配对用例必红。
 - [x] 当前 epoch 以外的 offer/fetch 仍返回 GuardMismatch；同 epoch recovered lease 的 completed receipt 仍可重放。
 - [x] `cargo nextest run -p storage`、`cargo nextest run -p daemon --test flow_delivery` 与 `just ci` 全绿。
-- [ ] 真机：移除同一手机→重扫→连续传照片，新的 Flow 队列不因旧 receipt 而出现 `err.not_authorized`；随后继续 BLOB-01/02 的真实 GC 回归。
+- [x] 真机：移除同一手机→重扫→连续传照片，新的 Flow 队列不因旧 receipt 而出现 `err.not_authorized`；随后继续 BLOB-01/02 的真实 GC 回归。
 
 ## 范围
 
@@ -66,3 +66,10 @@ NodeId 是稳定设备身份；pairing epoch 是一轮授权生命周期；queue
   indexed asset 都保留。
 - 验证：`cargo nextest run -p storage` **24 passed**；
   `cargo nextest run -p daemon --test flow_delivery` **8 passed**；`just ci` all green。
+
+## 真机验收（2026-09-10）
+
+现场库先由旧 schema v3 升级到 v4，迁移读回仍有 24 条 historical completed
+receipt。移除同一 Android 安装后重扫，其稳定 NodeId 的新 epoch 从 sequence 1
+重新传输 **21 张**，Desktop 当前 epoch 记录为 completed 21/21（sequence 1–21），
+没有 `err.not_authorized`。既有历史 receipt 保留，BLOB-01/02 同轮实证通过。
