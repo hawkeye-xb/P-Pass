@@ -90,7 +90,6 @@ UI-08 已通过归档。
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
 | P3 | [MOB-66](../cards/MOB-66-android-brand-font-newsreader-manrope.md) | Android 端标题/正文仍是系统默认字体，未接 Newsreader/Manrope，与桌面品牌不一致 | L2 |
 | P3 | [TEL-03](../cards/TEL-03-error-event-taxonomy.md) | `error` 事件 taxonomy 设计+接线；[TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md)/[TEL-02](../cards/done/TEL-02-wire-conn-and-flow-item-events.md) 均已完成，仍需先跟验收人过一遍错误码粒度 | L2 |
-| P3 | [TEL-04](../cards/TEL-04-wire-first-byte-event.md) | 接线 `first_byte` 到 query.rs 缩略图/大图服务路径；[TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md) 已完成 | L1 |
 
 ---
 
@@ -109,6 +108,7 @@ UI-08 已通过归档。
 |---|---|---|
 | [TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md) | 遥测字典 v2 落地：`conn` 删 ipver/country/isp_hash，`backup_session`→`flow_item` 精简字段，新增 `error`；daemon+Worker 同步改，`cargo test` 5/5 + `npm test` 14/14 + `just ci` 全绿 | 释放 TEL-02/03/04 接线卡 |
 | [TEL-02](../cards/done/TEL-02-wire-conn-and-flow-item-events.md) | conn/flow_item 已接线 `flow_delivery.rs::fetch()`；顺带修正 TEL-01 遗留的 conn.path 枚举值（lan 不存在，改为 direct/relay/offline/unknown）；`cargo test -p daemon --test flow_delivery` 10/10、nextest 356/356、just ci 全绿 | 释放 TEL-03/04 的 TEL-01 依赖已满足 |
+| [TEL-04](../cards/done/TEL-04-wire-first-byte-event.md) | first_byte 已接线 `query.rs::thumb()`/`original()`（仅成功交付字节的路径记录）；新增 `query_telemetry.rs` 3 个测试；nextest 359/359、just ci 全绿 | 无——TEL-01/02/04 均已闭环，仅剩 TEL-03（error taxonomy，待与验收人过错误码粒度） |
 | [DESK-14](../cards/done/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS 真机 2026-09-10：32px 透明顶部拖拽区正常；顺带发现并修复原生标题文字与侧栏品牌重复显示（加 `hiddenTitle: true`） | 无——拖拽区与标题重复均已闭环 |
 | [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | macOS 真机 2026-09-10：Button/Card/Dialog/Notice/NavItem 五组件在真实 Tauri 窗口视觉正常、无错位闪烁 | 无——五组件收口验收关闭 |
 | [MOB-63](../cards/done/MOB-63-pause-racing-final-completion-must-set-idle.md) | 三星真机 2026-09-10：暂停与最后完成回执交错的两种时机均收敛 Idle | 无——竞态收敛已闭环 |

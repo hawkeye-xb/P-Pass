@@ -382,7 +382,10 @@ async fn main() -> anyhow::Result<()> {
         .with_telemetry(telemetry.clone());
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
         .with_events(event_bus.clone());
-    let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir);
+    let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir)
+        // TEL-04: same telemetry client as daemon_alive/conn/flow_item —
+        // `Telemetry::record` is already a no-op when disabled.
+        .with_telemetry(telemetry.clone());
     // DESK-03: 本地 IPC 也注入查询平面——桌面壳照片墙走同一 QueryEngine
     // （与手机同一数据源），timeline/thumb/asset.* 双平面可答。
     ipc.set_query(query.clone());

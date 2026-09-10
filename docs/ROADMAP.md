@@ -238,6 +238,17 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       corrected to direct/relay/offline/unknown on both daemon and Worker.
       `cargo test -p daemon --test flow_delivery` 10/10, nextest 356/356
       passed 1 skipped, `just ci` all green)
+- [x] TEL-04 wire first_byte into QueryEngine (thumb/original) — **DONE
+      2026-09-10** (`thumb()` records on every path since each one truly
+      returns bytes; `original()` only records on a successful read —
+      NotFound/oversize/non-image never emit bytes, so timing them would
+      not measure what the card asks. New `query_telemetry.rs`, 3 tests.
+      `cargo test -p daemon --test query_telemetry` 3/3, existing
+      browse/desk/sync_flow 5/5 zero regressions, nextest 359/359 passed
+      1 skipped, `just ci` all green. Telemetry quartet (daemon_alive/
+      conn/flow_item/first_byte) now fully wired; only TEL-03 (error
+      taxonomy) remains, pending a short check-in on error code
+      granularity)
 - [x] T-062b update artifact verification + pinned pubkey — **DONE
       2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
       parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY

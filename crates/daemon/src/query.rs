@@ -12,6 +12,8 @@ use proto::{AssetMeta, BlobTicketResponse, ThumbGet, ThumbSize, TimelineQuery};
 use storage::Db;
 use transport::Blobs;
 
+use crate::telemetry::{Event as TelemetryEvent, Telemetry};
+
 /// The 5 s thumb-generation budget (契约).
 const THUMB_BUDGET: Duration = Duration::from_secs(5);
 
@@ -32,6 +34,8 @@ pub struct QueryEngine {
     blobs: Arc<Blobs>,
     library_root: PathBuf,
     thumbs_root: PathBuf,
+    /// TEL-04: optional anonymized telemetry sink for `first_byte`.
+    telemetry: Option<Telemetry>,
 }
 
 impl QueryEngine {
@@ -42,6 +46,26 @@ impl QueryEngine {
             blobs,
             thumbs_root: root.join(".ppf/thumbs"),
             library_root: root,
+            telemetry: None,
+        }
+    }
+
+    /// TEL-04: wire an anonymized telemetry sink so `thumb()`/`original()`
+    /// each record one `first_byte` event (ms/kind) per request.
+    /// `Telemetry::record` is already a no-op when the client itself is
+    /// disabled — this builder only controls whether `QueryEngine` has a
+    /// sink to call at all.
+    pub fn with_telemetry(mut self, telemetry: Telemetry) -> Self {
+        self.telemetry = Some(telemetry);
+        self
+    }
+
+    fn record_first_byte(&self, started: std::time::Instant, kind: &'static str) {
+        if let Some(telemetry) = &self.telemetry {
+            telemetry.record(TelemetryEvent::FirstByte {
+                ms: started.elapsed().as_millis() as u64,
+                kind,
+            });
         }
     }
 
@@ -69,8 +93,10 @@ impl QueryEngine {
     /// budget; over-budget (or unknown asset) answers the placeholder —
     /// a grid never blocks on a slow decode.
     pub async fn thumb(&self, t: &ThumbGet) -> Result<Vec<u8>, QueryError> {
+        let started = std::time::Instant::now();
         let size = t.size;
         let Some(hash) = parse_hash(&t.hash) else {
+            self.record_first_byte(started, "thumb");
             return Ok(media_codec::placeholder_jpeg(size as u32));
         };
         let paths = media_codec::thumb_paths(&self.thumbs_root, &hash);
@@ -79,11 +105,13 @@ impl QueryEngine {
             ThumbSize::S1024 => paths.t1024.clone(),
         };
         if let Ok(bytes) = tokio::fs::read(&path).await {
+            self.record_first_byte(started, "thumb");
             return Ok(bytes);
         }
 
         // Miss: the asset must exist; generate on the spot, bounded.
         let Some(asset) = self.db.get_asset(&hash).await? else {
+            self.record_first_byte(started, "thumb");
             return Ok(media_codec::placeholder_jpeg(size as u32));
         };
         let src = self.library_root.join(&asset.rel_path);
@@ -91,7 +119,7 @@ impl QueryEngine {
         let generate = tokio::task::spawn_blocking(move || {
             media_codec::make_thumbs(&hash, &src, &thumbs_root)
         });
-        match tokio::time::timeout(THUMB_BUDGET, generate).await {
+        let result = match tokio::time::timeout(THUMB_BUDGET, generate).await {
             Ok(Ok(result)) => {
                 let state = match &result.outcome {
                     media_codec::ThumbOutcome::Generated => 1,
@@ -105,7 +133,9 @@ impl QueryEngine {
             // Budget blown or the task died: placeholder now; the file
             // may still land on disk for the next request.
             _ => Ok(media_codec::placeholder_jpeg(size as u32)),
-        }
+        };
+        self.record_first_byte(started, "thumb");
+        result
     }
 
     /// `asset.blob_ticket`: make the original fetchable and hand out a
@@ -147,6 +177,7 @@ impl QueryEngine {
     /// 只服务 photo（video 原片体量必然超限，桌面大图只看照片）。
     pub async fn original(&self, hash_hex: &str) -> Result<Vec<u8>, QueryError> {
         const ORIGINAL_CAP: i64 = 12 * 1024 * 1024; // base64(12MiB) ≈ 16MiB 帧上限
+        let started = std::time::Instant::now();
         let hash = parse_hash(hash_hex).ok_or(QueryError::NotFound)?;
         let asset = self
             .db
@@ -160,9 +191,15 @@ impl QueryEngine {
             return Err(QueryError::NotFound);
         }
         let abs = self.library_root.join(&asset.rel_path);
-        tokio::fs::read(&abs)
+        let bytes = tokio::fs::read(&abs)
             .await
-            .map_err(|_| QueryError::NotFound)
+            .map_err(|_| QueryError::NotFound)?;
+        // Only a successful read actually delivers a first byte to the
+        // viewer; NotFound/oversize/non-image paths never emit bytes, so
+        // recording latency for them would not measure what the card asks
+        // for ("翻相册卡不卡").
+        self.record_first_byte(started, "blob");
+        Ok(bytes)
     }
 }
 
