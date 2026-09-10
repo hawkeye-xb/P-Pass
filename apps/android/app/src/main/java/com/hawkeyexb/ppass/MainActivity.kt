@@ -4,11 +4,14 @@ package com.hawkeyexb.ppass
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -264,7 +267,9 @@ fun PPassApp() {
     LaunchedEffect(updateChannel) {
         updateInfo = fetchUpdate(BuildConfig.VERSION_NAME, updateChannel)
     }
-    updateInfo?.let { info ->
+    // 首次选完相册后的两项系统授权必须串行独占屏幕；更新可以等用户完成
+    // onboarding 后再说，绝不压在系统权限框上。
+    if (screen !is Screen.Started) updateInfo?.let { info ->
         AlertDialog(
             onDismissRequest = { updateInfo = null },
             title = { Text(stringResource(R.string.update_available_title, info.version)) },
@@ -472,7 +477,6 @@ fun PPassApp() {
                 when (outcome) {
                     is PairOutcome.Joined -> {
                         pairings.save(outcome.pairing)
-                        scheduleAutoBackup(context)
                         // M4（全页面状态稿）：桌面点"允许"之后不再停一个要
                         // 点按钮的 Joined 中间页——直接进选相册（用户实机
                         // 反馈"扫完等 desktop 允许自己跳选择相册页面不行？"）；
@@ -809,10 +813,54 @@ fun PPassApp() {
             }
         }
 
-        is Screen.Started -> BackupStartedScreen(
-            photoCount = s.photoCount,
-            onEnter = { screen = Screen.Home(s.pairing) },
-        )
+        is Screen.Started -> {
+            // 媒体范围已完成，才开始两个非必需授权；二者始终串行，任何一个
+            // 系统框仍在前台时都不会启动另一个。拒绝并不阻断进入 App。
+            val onboardingNotifyPrefs = remember {
+                com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir)
+            }
+            var optionalPermissionStep by remember { mutableStateOf(0) }
+            val batteryPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.StartActivityForResult(),
+            ) {
+                if (isIgnoringBatteryOptimizations(context)) enableAutoBackup(context)
+                else disableAutoBackup(context)
+                optionalPermissionStep = 1
+            }
+            val notificationPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) { granted ->
+                onboardingNotifyPrefs.setEnabled(granted)
+                optionalPermissionStep = 2
+            }
+            LaunchedEffect(optionalPermissionStep) {
+                when (optionalPermissionStep) {
+                    0 -> {
+                        if (isIgnoringBatteryOptimizations(context)) {
+                            enableAutoBackup(context)
+                            optionalPermissionStep = 1
+                        } else {
+                            batteryPermission.launch(
+                                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                                    .setData(Uri.parse("package:${context.packageName}")),
+                            )
+                        }
+                    }
+                    1 -> {
+                        if (hasNotificationPermission(context)) {
+                            onboardingNotifyPrefs.setEnabled(true)
+                            optionalPermissionStep = 2
+                        } else {
+                            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                    }
+                }
+            }
+            BackupStartedScreen(
+                photoCount = s.photoCount,
+                onEnter = { screen = Screen.Home(s.pairing) },
+            )
+        }
     }
 }
 
