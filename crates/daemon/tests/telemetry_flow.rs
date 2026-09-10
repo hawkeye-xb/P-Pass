@@ -77,18 +77,13 @@ async fn batch_arrives_and_schema_is_valid() {
 
     t.record(TelemetryEvent::Conn {
         path: "direct",
-        ipver: "v6",
         ms: 210,
         fail_stage: None,
-        country: None,
-        isp_hash: None,
     });
-    t.record(TelemetryEvent::BackupSession {
-        files: 500,
+    t.record(TelemetryEvent::FlowItem {
         bytes: 123_456,
         dur_s: 42,
         resumed: true,
-        trigger: "periodic",
     });
     t.record(TelemetryEvent::FirstByte {
         ms: 90,
@@ -99,17 +94,21 @@ async fn batch_arrives_and_schema_is_valid() {
         os: "macos".into(),
         ver: "0.1.0".into(),
     });
-    assert_eq!(t.flush_now().await, 4);
+    t.record(TelemetryEvent::Error {
+        code: "fetch_failed",
+        stage: "fetch",
+    });
+    assert_eq!(t.flush_now().await, 5);
 
-    // One POST, body = array of 4, every item schema-complete.
+    // One POST, body = array of 5, every item schema-complete.
     assert_eq!(hits.load(Ordering::SeqCst), 1);
     let first_body = bodies.lock().unwrap()[0].clone();
     let batch = first_body.as_array().expect("batch is a JSON array");
-    assert_eq!(batch.len(), 4);
+    assert_eq!(batch.len(), 5);
     let names: Vec<&str> = batch.iter().map(|e| e["event"].as_str().unwrap()).collect();
     assert_eq!(
         names,
-        ["conn", "backup_session", "first_byte", "daemon_alive"]
+        ["conn", "flow_item", "first_byte", "daemon_alive", "error"]
     );
     for e in batch {
         // 公共字段 (手册 §8): anon_id + ver + ts on every event.
@@ -128,6 +127,7 @@ async fn batch_arrives_and_schema_is_valid() {
     assert_eq!(batch[1]["resumed"], true);
     assert_eq!(batch[2]["kind"], "thumb");
     assert_eq!(batch[3]["uptime_h"], 24);
+    assert_eq!(batch[4]["code"], "fetch_failed");
 
     // Queue drained: nothing further goes out.
     assert_eq!(t.flush_now().await, 0);

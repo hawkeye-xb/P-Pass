@@ -1,6 +1,6 @@
 # TEL-01 遥测字典 v2 schema（破坏性变更，L1）
 
-> ⬜ 状态：未开工 · 级别：**L1** · 阻塞：无（OBS-02 裁决已定案）
+> ✅ 状态：已完成（2026-09-10）· 级别：**L1**
 
 **目标**：把 `crates/daemon/src/telemetry.rs` 与
 `infra/workers/telemetry/src/schema.ts` 同步改成 OBS-02 裁决的字典 v2，
@@ -48,3 +48,18 @@
 
 - 无阻塞，可立即开工。
 - TEL-02（接线）依赖本卡先落地新 `Event` 变体。
+
+---
+
+## 验收记录（2026-09-10）
+
+- `cargo test -p daemon telemetry` → 3/3 passed（`anon_id_is_stable...`、
+  `every_event_carries_the_common_fields`、`disabled_never_mints_an_anon_id`）
+- `cargo test -p daemon --test telemetry_flow` → 2/2 passed
+  （`batch_arrives_and_schema_is_valid`、`disabled_switch_means_zero_requests`）
+- `infra/workers/telemetry`: `npm test` → 14/14 passed；`npm run typecheck` → 绿
+- `just ci`：`cargo fmt --check` / `clippy --all-targets --all-features -D
+  warnings` / `cargo nextest` 345 passed 1 skipped / `arch-check` / queue-sync
+  均绿，all green
+- grep 确认 `ipver`/`isp_hash`/`backup_session`（作为字段名）在生产代码里
+  已清零，仅存在于说明 v1→v2 变更历史的注释中
