@@ -51,7 +51,7 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [BLOB-03](../cards/BLOB-03-android-provider-store-never-reclaimed.md) | Android 发送端 provider store 回收：代码已实现（iroh 原生周期 GC + 仅当前 lease TempTag 保护）并推送，自动化反证全绿；差三星真机重装后 60s GC 周期的 data blob 数只读核对 | L2 |
+| [BLOB-03](../cards/BLOB-03-android-provider-store-never-reclaimed.md) | Android provider store 升级迁移已三星真机通过：旧 7 个已确认来源 blob 经 60s GC 归零且 ledger 不变；待下一张自然新增来源的机会性回归 | L2 |
 | [AUDIT-04](../cards/AUDIT-04-audit-core-operation-evidence-tombstone.md) | 审计核心重建（operation/item evidence/tombstone/decision 四表 + 全部生产路径接线）代码完成，本地全量 `just ci` 绿；待真机验收隔离测试图 operation+evidence 落地与外部删除后 tombstone 存活 | L2 |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2 已真机验证手机 ledger → daemon → Desktop `audit_event` 的一条轮次汇总闭环；待 Desktop 活动记录实际中文文案视觉确认 | L2 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |

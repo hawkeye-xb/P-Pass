@@ -1,9 +1,9 @@
 # BLOB-03 Android 发送端 iroh-blobs-provider 仓确认不回收
 
-> 🟡 状态：待共享回归（代码已实现并推送，差三星真机验收）· 协同分支：`main`
+> 🟡 状态：迁移回收已三星真机通过；待下一张新来源 Flow 的机会回归 · 协同分支：`main`
 > 级别：L2 · 阻塞：无
-> 当前节点：实现完成——接入 iroh 原生周期 GC + 仅当前 lease 的 `TempTag` 保护；成功/撤销边界下的自动化反证全绿；debug APK 已含 `libtransport.so`
-> 下一步：三星 RFCX1040SNE 干净重装后重新配对 → 选相册 → 普通 Flow 同步，`adb shell run-as` 只读测 `iroh-blobs-provider` 在 ≥1 个 60s GC 周期前后的 data blob 数，确认已确认来源 blob 不再残留、正常传输仍 CONFIRMED
+> 当前节点：三星已覆盖安装修复版并重启；升级前遗留的 7 个 `CONFIRMED` source blob（4,100,446 bytes）在一个 60 秒 GC 周期后归零，ledger 的 7 条确认记录不变
+> 下一步：在下一张正常新增测试照片完成 Flow 时，只读复核新来源也在 receipt 后一个 GC 周期内回收；不得为此伪造媒体或重置现有配对
 
 ## 问题
 
@@ -33,19 +33,22 @@ bytes。因而这不是纯代码推测：成功 receipt 后的手机副本确实
 
 ## 修复目标与验收标准
 
-- [ ] 复用 `iroh-blobs` 原生周期 GC（与桌面 `flow-blobs` 同一机制，60 秒
+- [x] 复用 `iroh-blobs` 原生周期 GC（与桌面 `flow-blobs` 同一机制，60 秒
       周期），而不是手删 store 文件或改造 blobs wire protocol。
-- [ ] provider 只保护正在持有 Flow lease 的来源 hash；导入期间也不得让 GC
+- [x] provider 只保护正在持有 Flow lease 的来源 hash；导入期间也不得让 GC
       误删正在注册的 blob。暂停/取消/失败可丢弃该保护：手机原始 MediaStore
       文件仍是可重新导入的权威来源，Desktop 端 partial 仍按既有机制保留。
-- [ ] 只有 daemon 已完成 native fetch、materialize，并持久化匹配 tuple 的
+- [x] 只有 daemon 已完成 native fetch、materialize，并持久化匹配 tuple 的
       `FlowCompletionReceipt` 后，才撤销该 lease 的 provider handler/保护；
       该 receipt 是当前协议中唯一安全的成功回收边界。receipt 被验证拒绝或
       未到达时不得释放。
-- [ ] 自动化反证：当前 active lease 的 blob 在 GC 轮次中不得被删除；撤销后
+- [x] 自动化反证：当前 active lease 的 blob 在 GC 轮次中不得被删除；撤销后
       会被 GC 回收；中断后重新注册同一源仍可完成传输并复用 Desktop partial。
-- [ ] 三星真机：从干净安装完成一批确认同步，等待至少一个 GC 周期后 provider
-      store 不再保留已确认来源 blob；同步、Pause/Continue 均未回归。
+- [x] 三星真机升级迁移：原先 7 个已确认来源 blob 在修复版重启后一个 GC 周期
+      内由 4,100,446 bytes / 7 文件变为 0 bytes / 0 文件，且 7 条 ledger
+      `CONFIRMED` 保持不变。
+- [ ] 下一张新增来源的普通 Flow 完成后，复核新 TempTag 路径也在 receipt 后
+      一个 GC 周期内回收；该机会性回归不应靠伪造媒体或重置现有配对制造。
 
 ## 范围
 
@@ -78,7 +81,14 @@ bytes。因而这不是纯代码推测：成功 receipt 后的手机副本确实
 endpoint，保住决策 5 的连接复连。Kotlin 侧成功边界在
 `NativeFlowDeliveryPort.acceptReceipt` 里、`relayFlowCompletion` 四字段校验通过
 之后、`onReceipt`（推进 strict head）之前调 `bridge.releaseRetention`。自动化
-反证：Rust `android_provider` 4/4（active lease 多轮 GC 存活 + release 后回收且
-endpoint 保活可复用）；Android JVM `IrohBlobsProviderBridgeTest` 4/4、
-`REBUILD03FlowRunnerTest` 10/10。真机验收未完成（需重新扫码配对 + 选相册，
-agent 无法 headless 造真媒体，且 adb 禁止伪造）。
+反证：Rust `android_provider` 5/5（active lease 多轮 GC 存活、release 后回收且
+endpoint 保活可复用，以及旧 named tag 升级迁移回收）；Android JVM
+`IrohBlobsProviderBridgeTest` 4/4、`REBUILD03FlowRunnerTest` 10/10。升级迁移
+三星真机已通过；正常新增来源的机会性回归保留在卡头，不靠伪造媒体制造。
+
+升级迁移实证（2026-09-10）：为避免“只防后续增长、旧副本永留”的假修复，provider
+启动时清掉此专用 store 内旧版 `with_tag()` 留下的 named tags；新版本只创建
+lease 生命周期内的 `TempTag`。Rust `android_provider` 用户实跑 **5/5**（含旧版
+named tag → 新版 provider → GC 回收）。三星覆盖安装修复 APK、强制重启后，5 秒
+快照仍为 7 文件 / 4,100,446 bytes；等待 70 秒后为 **0 文件 / 0 bytes**，索引
+`blobs.db` 留 561,152 bytes 属空仓元数据，ledger 仍为 7 `CONFIRMED`。

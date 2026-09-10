@@ -15,8 +15,9 @@ real-device dogfood. MOB-61 is code-complete: a phone photo deleted after
 Flow discovery is now terminally skipped, never retried; the Samsung
 isolated-photo check remains. NET-04 pause/cancel/retry remains blocked by
 the separate `flow.fetch` 15-second RPC-deadline investigation. The
-UI-04a/UI-04c remain pending shared Android regression; UI-04b failed visual
-acceptance and is queued for redesign; UI-08 passed and is archived. MOB-63 is
+UI-04a/UI-04c remain pending shared Android regression; UI-04b passed real Tauri
+visual acceptance with the official Sonner notification primitive and is archived;
+UI-08 passed and is archived. MOB-63 is
 code-complete: a final durable completion receipt and user Pause now converge
 to Idle in either arrival order, while remaining queued work stays paused; the
 isolated-album device check remains. MOB-64 is code-complete: a Flow
@@ -44,7 +45,7 @@ macOS 原生标题文字与侧栏品牌重复显示的问题（`hiddenTitle: tru
 M0/M1 已收官；M2 手机端持续真机狗粮。MOB-61 已代码完成：
 手机照片在 Flow 发现后被删除会终态跳过，绝不重传；三星隔离照片验收仍欠。
 NET-04 的暂停/取消/重试仍被独立的 `flow.fetch` 15 秒 RPC 截止问题阻塞。
-UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 视觉验收不通过、退回重做；UI-08 已通过归档。MOB-63
+UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 已通过真实 Tauri 视觉验收并归档；UI-08 已通过归档。MOB-63
 已代码完成：最后完成回执和用户暂停任一先到都归位 Idle，仍有待传项则保持暂停；隔离相册真机验收仍欠。
 MOB-64 已代码完成：Flow 的 `err.not_paired` 拒绝会复用既有 pairingLost 红卡，无主动探测；
 待共享设备撤销后由手机发起下一次业务调用验证。
@@ -273,7 +274,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       skipped, `just ci` all green. Telemetry quintet (daemon_alive/conn/
       flow_item/first_byte/error) now fully wired — OBS-02's dictionary v2
       is completely landed)
-- [ ] BLOB-03 Android 发送端 provider store 回收 — **2026-09-10 代码完成，待三星真机验收**：
+- [ ] BLOB-03 Android 发送端 provider store 回收 — **2026-09-10 升级迁移三星真机通过，待下一张自然新增来源机会性回归**：
       根因是导入走 `AddProgress::with_tag()`（`add_path(...).await` /
       `add_stream(...).await.await` 都解析到它），每次注册给 store 落一个持久
       named tag，GC 永不回收。修复：`with_config` 用 `FsStore::load_with_opts`
@@ -283,11 +284,10 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       lease 的 tag、保住 endpoint/ALPN 复连（决策 5）。Kotlin 成功边界在
       `NativeFlowDeliveryPort.acceptReceipt` 内、四字段校验通过后、推进 strict
       head 前调 `bridge.releaseRetention`。自动化反证：Rust `android_provider`
-      4/4（active lease 多轮 GC 存活 + release 后回收且 endpoint 可复用），
-      Android JVM 4/4 + 10/10。真机验收未完成：需重新扫码配对 + 选相册后普通
-      Flow 同步，再 `adb shell run-as` 只读核对 `iroh-blobs-provider/data`
-      在 ≥1 个 60s GC 周期前后的 blob 数；agent 无法 headless 造真媒体、adb
-      禁止伪造。
+      5/5（新增旧 named tag 升级迁移回收），Android JVM 4/4 + 10/10。三星
+      覆盖安装修复版并重启后，原 7 个 `CONFIRMED` provider data 文件在 70 秒内
+      由 4,100,446 bytes 归零，ledger 7 条确认不变；只余下次自然新增来源的
+      机会性回归，禁止伪造媒体制造样本。
 - [x] T-062b update artifact verification + pinned pubkey — **DONE
       2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
       parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY
@@ -708,10 +708,10 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       Android JVM 309/0/0/4（59 XML 本次生成，HomeNoticesTest 6/0/0），
       `just queue-check` 通过。真机欠账：所有 tab 见中断提示、同时多条件只显示
       一条最高优先级——不移动卡片到 done/。
-- [ ] UI-04b 设备改名反馈浮层 — **🟠 2026-09-09 视觉验收不通过，退回重做**：
-      `App.svelte` 的 `.message` 改为 fixed 浮层，脱离文档流且保留成功/失败反馈；
-      桌面 Vitest 6 文件 / 43 tests 与 `pnpm build` 全绿。真机欠账：反馈出现/消失
-      时下方内容不发生位移。
+- [x] UI-04b 设备改名反馈浮层 — **✅ 2026-09-10 真实 Tauri 视觉验收通过**：
+      手写 Toast/Message 均已删除，统一使用 shadcn-svelte 官方 Sonner；成功/等待/错误
+      直接映射 safe/waiting/act 三态 token，通知不占文档流。验收人确认改名成功的绿色通知
+      形态、位置及内容不位移；桌面 Vitest **57/57**（26 files）与 `pnpm build` 通过。
 - [x] MOB-32 校准把正在跑的备份会话清空，186 张照片被静默丢弃 — **2026-08-21（真机验收 owed，L0）**:
       清场前 `du -sh` 抓到的：`.ppf/staging` 547M / 186 个已校验文件
       （`.upload` = 0，全过了 BLAKE3），其中只有 1 个进了索引，**185 个纯孤儿**；
