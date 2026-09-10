@@ -233,9 +233,7 @@ impl AndroidBlobsProvider {
                 TransportError::Io(format!("clear legacy Android provider tags: {error}"))
             })?;
             if removed > 0 {
-                tracing::info!(
-                    "BLOB-03: released {removed} legacy Android provider blob tags"
-                );
+                tracing::info!("BLOB-03: released {removed} legacy Android provider blob tags");
             }
             let transport = IrohTransport::bind(config.clone()).await?;
             let router = Router::builder(transport.endpoint().clone())
