@@ -351,6 +351,7 @@ impl Router {
             methods::FLOW_OFFER | methods::FLOW_FETCH | methods::FLOW_CANCEL => {
                 self.handle_flow_delivery(peer, req).await
             }
+            methods::FLOW_AUDIT_SUBMIT => self.handle_flow_audit_submit(peer, req).await,
             methods::BACKUP_BEGIN
             | methods::BACKUP_MANIFEST
             | methods::BACKUP_PRESENCE
@@ -508,6 +509,70 @@ impl Router {
                     RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
                 )
             }
+        }
+    }
+
+    /// AUDIT-01: batch delivery for the phone's durable Flow audit outbox.
+    /// Each event carries its own event_id (minted once on the phone),
+    /// so appending it here is idempotent — a retransmitted batch after a
+    /// lost response never duplicates a row. Returns exactly the ids that
+    /// are now durably present (freshly inserted or already there from an
+    /// earlier delivery) so the phone acknowledges only those and keeps
+    /// anything else queued for the next flush.
+    async fn handle_flow_audit_submit(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        let Ok(submit) = serde_json::from_value::<proto::FlowAuditSubmit>(req.params.clone())
+        else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let mut accepted = Vec::with_capacity(submit.events.len());
+        for event in &submit.events {
+            if event.event_id.is_empty() || event.kind.is_empty() {
+                continue;
+            }
+            let payload = if event.payload.is_empty() {
+                None
+            } else {
+                serde_json::to_string(&event.payload).ok()
+            };
+            let entry = storage::AuditEntry {
+                event_id: event.event_id.clone(),
+                ts: event.occurred_at_ms,
+                actor: Some(peer.0.to_vec()),
+                kind: event.kind.clone(),
+                round_id: event.round_id.clone(),
+                target_hash: None,
+                payload,
+            };
+            match self.db.append_audit(&entry).await {
+                // Either this call inserted it, or an earlier delivery
+                // already did (INSERT OR IGNORE) — both mean the fact is
+                // now durable, so the phone may drop it from its outbox.
+                Ok(_) => accepted.push(event.event_id.clone()),
+                Err(e) => {
+                    tracing::warn!("flow.audit.submit append failed for {peer:?}: {e}");
+                }
+            }
+        }
+        if !accepted.is_empty() {
+            if let Some(bus) = &self.events {
+                events::emit(
+                    bus,
+                    events::ACTIVITY_APPENDED,
+                    serde_json::json!({ "node_id": peer.to_string() }),
+                );
+            }
+        }
+        match serde_json::to_value(proto::FlowAuditAccepted {
+            event_ids: accepted,
+        }) {
+            Ok(v) => Resp::ok(req.id.clone(), v),
+            Err(_) => Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+            ),
         }
     }
 

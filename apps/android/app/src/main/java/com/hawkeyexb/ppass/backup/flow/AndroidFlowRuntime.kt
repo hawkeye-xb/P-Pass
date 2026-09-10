@@ -11,6 +11,10 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.util.UUID
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /** Reads one ordered MediaStore window; it never hashes or contacts Desktop. */
 internal class AndroidFlowDiscoveryPort(
@@ -174,28 +178,33 @@ internal fun runFlowWake(context: Context, constraintsSatisfied: Boolean = true)
             runtime.runner.run(constraintsSatisfied)
         }
     }
+    flushAuditOutbox(context)
 }
 
 internal fun pauseFlow(context: Context) {
     runtimeFor(context.applicationContext)?.let { synchronized(flowTriggerLock) { it.runner.pause() } }
+    flushAuditOutbox(context)
 }
 
 internal fun continueFlow(context: Context, constraintsSatisfied: Boolean = true) {
     runtimeFor(context.applicationContext)?.let {
         synchronized(flowTriggerLock) { it.runner.continueFlow(constraintsSatisfied) }
     }
+    flushAuditOutbox(context)
 }
 
 internal fun retryFailedFlow(context: Context) {
     runtimeFor(context.applicationContext)?.let {
         synchronized(flowTriggerLock) { it.runner.retryFailedDeliveries() }
     }
+    flushAuditOutbox(context)
 }
 
 internal fun cancelCurrentFlowRound(context: Context) {
     runtimeFor(context.applicationContext)?.let {
         synchronized(flowTriggerLock) { it.runner.cancelCurrentRound(UUID.randomUUID().toString()) }
     }
+    flushAuditOutbox(context)
 }
 
 /** MOB-59: the notice's only action — re-admit every cancelled round's items as QUEUED. */
@@ -203,6 +212,7 @@ internal fun restoreAllCancelledFlowRounds(context: Context) {
     runtimeFor(context.applicationContext)?.let {
         synchronized(flowTriggerLock) { it.runner.restoreAllCancelledRounds() }
     }
+    flushAuditOutbox(context)
 }
 
 internal fun flowLedgerSnapshot(context: Context): DiscoveryLedgerSnapshot =
@@ -225,7 +235,20 @@ private data class AndroidFlowRuntime(
     val ledger: DiscoveryLedgerStore,
     val runner: FlowRunner,
     val nativeProvider: AndroidNativeIrohBlobsProvider,
+    val auditDispatcher: AuditOutboxDispatcher,
+    val auditScope: CoroutineScope,
 )
+
+/** AUDIT-01: best-effort drain of the ledger's durable audit outbox after
+ *  every trigger. Every other Flow trigger already serializes state
+ *  mutation through [flowTriggerLock] synchronously; the network hop to
+ *  the daemon must not block that path, so this fires on its own
+ *  coroutine and simply retries from the next trigger on any failure. */
+private fun flushAuditOutbox(context: Context) {
+    runtimeFor(context.applicationContext)?.let { runtime ->
+        runtime.auditScope.launch { runtime.auditDispatcher.flush() }
+    }
+}
 
 private fun runtimeFor(context: Context): AndroidFlowRuntime? {
     val app = context.applicationContext as PPassApplication
@@ -268,9 +291,9 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             // A deleted MediaStore URI is a terminal local fact, unlike a network
             // failure. It must skip exactly this head and advance, never reset a
             // retry budget or surface "try again" for a photo that no longer exists.
-            onMissingSource = { synchronized(flowTriggerLock) { runner.skipMissingSource() } },
-            onPermanentFailure = { synchronized(flowTriggerLock) { runner.recordPermanentFailure() } },
-            onReceipt = { receipt -> synchronized(flowTriggerLock) { runner.acceptCompletionReceipt(receipt) } },
+            onMissingSource = { synchronized(flowTriggerLock) { runner.skipMissingSource() }; flushAuditOutbox(context) },
+            onPermanentFailure = { synchronized(flowTriggerLock) { runner.recordPermanentFailure() }; flushAuditOutbox(context) },
+            onReceipt = { receipt -> synchronized(flowTriggerLock) { runner.acceptCompletionReceipt(receipt) }; flushAuditOutbox(context) },
             onPairingEpochRefreshed = { refreshedEpoch ->
                 val pairings = PairingStore(context.filesDir)
                 val current = pairings.load()
@@ -286,7 +309,15 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             discovery = AndroidFlowDiscoveryPort(context.contentResolver) { BackupScopeStore(context).selectedBucketIds() },
             delivery = delivery,
         )
-        return AndroidFlowRuntime(epoch, ledger, runner, native).also { flowRuntimes[key] = it }
+        val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val auditDispatcher = AuditOutboxDispatcher(
+            ledger = ledger,
+            pairing = { PairingStore(context.filesDir).load() },
+            identityKey = { IdentityStore(context.filesDir).secretKey() },
+            client = app.daemonClient,
+        )
+        return AndroidFlowRuntime(epoch, ledger, runner, native, auditDispatcher, auditScope)
+            .also { flowRuntimes[key] = it }
     }
 }
 
