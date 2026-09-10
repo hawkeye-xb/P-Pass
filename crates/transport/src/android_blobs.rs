@@ -221,6 +221,22 @@ impl AndroidBlobsProvider {
                 .map_err(|error| {
                     TransportError::Io(format!("open Android provider store {root:?}: {error}"))
                 })?;
+            // BLOB-03 migration: versions before this card used the default
+            // `AddProgress` await, which creates a persistent named tag for
+            // every source blob. This store is dedicated to the Android
+            // provider, and a fresh process has no active Flow lease, so all
+            // named tags here are stale provider retention. Remove them before
+            // serving anything; the following GC pass reclaims their payloads.
+            // Current registrations use TempTag exclusively, so this is
+            // idempotent and never clears an active source.
+            let removed = store.tags().delete_all().await.map_err(|error| {
+                TransportError::Io(format!("clear legacy Android provider tags: {error}"))
+            })?;
+            if removed > 0 {
+                tracing::info!(
+                    "BLOB-03: released {removed} legacy Android provider blob tags"
+                );
+            }
             let transport = IrohTransport::bind(config.clone()).await?;
             let router = Router::builder(transport.endpoint().clone())
                 .accept(

@@ -2,6 +2,7 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::ticket::BlobTicket;
 use tempfile::tempdir;
 use transport::{
@@ -199,6 +200,41 @@ fn released_blob_is_reclaimed_but_endpoint_survives_for_reuse() {
     provider.revoke();
     runtime.block_on(blobs.close());
     runtime.block_on(receiver.close());
+}
+
+/// BLOB-03 migration: old builds awaited AddProgress directly, leaving a
+/// persistent named tag in the provider-only store. Opening a repaired
+/// provider must release that legacy tag so its data is eligible for GC; an
+/// upgrade must not merely prevent future growth while preserving old copies.
+#[test]
+fn opening_provider_releases_legacy_named_tag_for_gc() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("legacy-source.jpg");
+    let bytes = b"legacy Android provider blob";
+    fs::write(&source, bytes).unwrap();
+    let hash = blake3_of(bytes);
+    let provider_root = dir.path().join("iroh-blobs-provider");
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let store = FsStore::load(&provider_root).await.unwrap();
+        // Intentionally reproduce the pre-BLOB-03 default: IntoFuture calls
+        // AddProgress::with_tag(), which creates a persistent named tag.
+        store.blobs().add_path(&source).await.unwrap();
+        assert!(store.blobs().has(hash).await.unwrap());
+        // An app update starts a new process. Explicitly shut down this
+        // old-version store before the upgraded provider reopens its database,
+        // rather than hanging the test on an intentional exclusive store lock.
+        store.shutdown().await.unwrap();
+    });
+    drop(runtime);
+
+    let provider =
+        AndroidBlobsProvider::new_loopback_with_gc(dir.path(), Duration::from_millis(20)).unwrap();
+    wait_until_gone(&provider, hash);
 }
 
 fn wait_until_gone(provider: &AndroidBlobsProvider, hash: [u8; 32]) {
