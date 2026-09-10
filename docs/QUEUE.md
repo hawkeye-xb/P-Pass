@@ -11,9 +11,9 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-09**（三星真机组合回归验证通过并关卡 8 张：MOB-38/40/
-> 49/50/51/58/62/UX-13；MOB-64 待撤销反馈真机验收；新开 MOB-65——自动备份
-> 开关与当前轮暂停状态混淆）
+> 最后核对：**2026-09-10**（macOS + 三星真机验证通过并关卡 4 张：DESK-14/15、
+> MOB-63/65；DESK-14 顺带修复原生标题与侧栏品牌重复显示；MOB-64 待补充首次
+> 拒绝时机的失联识别澄清；UI-04a/c 需要用户后续统一给出移动端具体现象）
 
 ---
 
@@ -44,11 +44,7 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [DESK-14](../cards/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | 32px 透明顶部 hit area 已实现（不改色/布局）；待默认与 <1080px macOS 窗口拖拽/视觉回归 | L3 |
-| [DESK-15](../cards/DESK-15-desktop-design-system-convergence.md) | Button/Card/Dialog/Notice/NavItem 五个组件收口 + token 派生检查已完成，本地 `just ci`/浏览器验证全绿；待在真实 Tauri 窗口（不是 headless 浏览器预览）里过一遍五个组件 | L2 |
-| [MOB-63](../cards/MOB-63-pause-racing-final-completion-must-set-idle.md) | 最后回执与暂停的双向竞态均收敛 Idle；存在待传项时仍保留「继续」 | L1 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
-| [MOB-65](../cards/MOB-65-auto-backup-switch-must-not-pause-current-round.md) | 自动开关现只取消自动 wake；空闲不造「继续/取消」，在传当前轮不被中断 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
@@ -77,11 +73,13 @@ UI-08 已通过归档。
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 脱离文档流方向正确但视觉验收不通过；现为 App.svelte 裸 `<p>`，需重做为紧凑且视觉居中的瞬时反馈 | L2 |
+| P2 | [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 「备份失败时通知我」开关已勾选但从未真正发送系统通知（死开关，2026-09-10 发现） | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死 | L2 |
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
+| P3 | [MOB-66](../cards/MOB-66-android-brand-font-newsreader-manrope.md) | Android 端标题/正文仍是系统默认字体，未接 Newsreader/Manrope，与桌面品牌不一致 | L2 |
 
 ---
 
@@ -97,6 +95,10 @@ UI-08 已通过归档。
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [DESK-14](../cards/done/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS 真机 2026-09-10：32px 透明顶部拖拽区正常；顺带发现并修复原生标题文字与侧栏品牌重复显示（加 `hiddenTitle: true`） | 无——拖拽区与标题重复均已闭环 |
+| [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | macOS 真机 2026-09-10：Button/Card/Dialog/Notice/NavItem 五组件在真实 Tauri 窗口视觉正常、无错位闪烁 | 无——五组件收口验收关闭 |
+| [MOB-63](../cards/done/MOB-63-pause-racing-final-completion-must-set-idle.md) | 三星真机 2026-09-10：暂停与最后完成回执交错的两种时机均收敛 Idle | 无——竞态收敛已闭环 |
+| [MOB-65](../cards/done/MOB-65-auto-backup-switch-must-not-pause-current-round.md) | 三星真机 2026-09-10：传输中关闭自动备份不中断当前轮，仅停止后续自动唤醒，重新打开恢复自动 | 无——自动开关与轮次暂停解耦已闭环 |
 | [SYNC-05](../cards/done/SYNC-05-asset-meta-src-device.md) | `AssetMeta.src_device` 已经由 daemon 映射到线上协议；PhotosScreen 只按该字段和本机 NodeId 分类，未知来源只在「全部」显示 | 无——本地 `backup-state`/`flow-state` 归属影子状态及 fallback 已删除；Rust 全量、Android JVM 314/0/0/4 均绿 |
 | [MOB-40](../cards/done/MOB-40-backup-runs-before-the-user-picks-albums.md) | 三星真机 2026-09-09 实证：扫码配对到选相册之间零传输迹象（通知/进度/流量均无）；选相册后正常同步 | 无——闸门生效，L0 红线关闭 |
 | [MOB-38](../cards/done/MOB-38-foreground-catchup-never-fires-on-resume.md) | 三星真机 2026-09-09 多次复现：切出 App 再切回，无需任何点击即自动发起并完成传输 | 无——回到前台补捞已闭环 |
@@ -186,7 +188,7 @@ UI-08 已通过归档。
 | MOB-18 | superseded | 已被 MOB-28 取代，禁止按本卡实施 |
 | DESK-11 | 待确认 | 🔵 backlog，若确认露出完整 hex 则升级为 DESK-10 的脱敏漏 |
 | UI-05 / UI-06 | 用户暂时接受 | 展示细节问题，低优 |
-| [DESK-15](../cards/DESK-15-desktop-design-system-convergence.md) | 暂缓，低优先级 | 2026-09-09 拍板：Button 组件缺「图标动作」(icon-only) 变体——验收标准列了，但目前代码没有真实调用场景，不凭空加；等出现实际需要图标按钮的页面时再补 |
+| [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | 暂缓，低优先级 | 2026-09-09 拍板：Button 组件缺「图标动作」(icon-only) 变体——验收标准列了，但目前代码没有真实调用场景，不凭空加；等出现实际需要图标按钮的页面时再补 |
 
 ---
 

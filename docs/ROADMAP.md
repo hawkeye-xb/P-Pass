@@ -4,7 +4,13 @@
 > 里程碑状态的唯一权威来源，每张卡完成即更新。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
-**Now / 当前位置**（2026-09-09）: M0/M1 closed; M2 Android is in
+**Now / 当前位置**（2026-09-10）: DESK-14, DESK-15, MOB-63, and MOB-65 have
+all passed real-device acceptance (macOS + Samsung) and moved to
+`cards/done/`. DESK-14's regression also surfaced and fixed a side issue: the
+native macOS window title text duplicated the sidebar brand text; adding
+`hiddenTitle: true` to `tauri.conf.json` resolved it. A new dead-switch issue
+was opened as MOB-67 ("notify me on backup failure" toggle never actually
+sends a system notification). M0/M1 closed; M2 Android is in
 real-device dogfood. MOB-61 is code-complete: a phone photo deleted after
 Flow discovery is now terminally skipped, never retried; the Samsung
 isolated-photo check remains. NET-04 pause/cancel/retry remains blocked by
@@ -27,7 +33,11 @@ contract (token-backed variants) instead of each page hand-rolling styles,
 with a tokens.css/tokens.json drift check wired into `just ci`;
 cross-breakpoint automated visual regression is explicitly deferred, not
 missing.
-**当前位置**：M0/M1 已收官；M2 手机端持续真机狗粮。MOB-61 已代码完成：
+**当前位置**（2026-09-10 更新）：DESK-14、DESK-15、MOB-63、MOB-65 均已通过
+macOS/三星真机验收并移入 `cards/done/`。DESK-14 回归时顺带发现并修复
+macOS 原生标题文字与侧栏品牌重复显示的问题（`hiddenTitle: true`）；
+新开 MOB-67（"备份失败时通知我"开关从未真正发送系统通知）。
+M0/M1 已收官；M2 手机端持续真机狗粮。MOB-61 已代码完成：
 手机照片在 Flow 发现后被删除会终态跳过，绝不重传；三星隔离照片验收仍欠。
 NET-04 的暂停/取消/重试仍被独立的 `flow.fetch` 15 秒 RPC 截止问题阻塞。
 UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 视觉验收不通过、退回重做；UI-08 已通过归档。MOB-63
