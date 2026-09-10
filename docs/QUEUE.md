@@ -78,10 +78,11 @@ UI-08 已通过归档。
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P1 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md)（合并 [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md)） | 媒体范围先完成；后台备份/失败通知各自按用户操作申请白名单/通知权限，禁止授权叠弹窗 | L2 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 脱离文档流方向正确但视觉验收不通过；现为 App.svelte 裸 `<p>`，需重做为紧凑且视觉居中的瞬时反馈 | L2 |
-| P2 | [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 「备份失败时通知我」开关已勾选但从未真正发送系统通知（死开关，2026-09-10 发现） | L2 |
+
 | P2 | [BLOB-03](../cards/BLOB-03-android-provider-store-never-reclaimed.md) | Android 发送端 iroh-blobs-provider 仓可能永不回收（代码走读发现，需真机排查再定性） | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
