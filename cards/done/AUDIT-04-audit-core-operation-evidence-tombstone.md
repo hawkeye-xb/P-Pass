@@ -1,7 +1,7 @@
 # AUDIT-04 审计核心重建：操作、对象证据、决定与 tombstone（L2）
 
-> 🟠 状态：进行中（当前会话接手集成与三星真机验收）· 协同分支：`main`
-> 当前节点：`audit/audit-04-core-contract` 已完整合入 main（无未合并 diff）；现以 main 构建 Android/daemon，验证 operation+item evidence 与外部删除 tombstone
+> ✅ 状态：验收完成（2026-09-10）· 已归档
+> 最终验收：当前 main 重建安装的 Android 与 current-main daemon 跑隔离 Screenshots Flow；新增 item 的 receipt 已到，`audit_item_evidence` 为 1 且关联 1 条 `audit_operation`。精确删除该 Desktop test asset 后，asset 行为 0，evidence 仍为 1，`external_delete` tombstone 为 1。
 > 级别：L2 · 阻塞：无
 > 前置：[AUDIT-03](AUDIT-03-audit-contract-case-matrix.md)（矩阵与可信/保留/访问边界已定）
 
@@ -32,7 +32,7 @@ AUDIT-01 只解决了 Android outbox 到 Desktop `audit_event` 的可靠投递�
 - [x] Android outbox → daemon 接收 → Desktop 新合同表仍具 event-id 幂等；未确认事件重启后继续重放。
 - [x] `audit_event` / `device.connected` 旧泛用审计读写、旧 action/detail 投影均不存在；presence/online 语义回归通过。
 - [x] Rust/Android focused tests、desktop build、`just ci` 全绿；Android 报告本次 XML 测试计数。
-- [ ] 真机：隔离测试图进入【本地】后，有 operation + item evidence；再从【本地】外部删除，资产消失但 tombstone/历史证据仍在。
+- [x] 真机：隔离测试图进入【本地】后，有 operation + item evidence；再从【本地】外部删除，资产消失但 tombstone/历史证据仍在。当前 main 重建 Android/daemon 实测：新增 item receipt 后 evidence=1、关联 operation=1；精确外部删除后 asset=0、evidence=1、`external_delete` tombstone=1。
 
 ## 范围
 

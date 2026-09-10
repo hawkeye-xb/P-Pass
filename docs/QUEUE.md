@@ -36,7 +36,7 @@
 ---
 
 UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 已完成真实 Tauri 视觉验收并归档；
-UI-08 与 BLOB-03 已通过归档。
+UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ---
 
@@ -44,7 +44,6 @@ UI-08 与 BLOB-03 已通过归档。
 
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
-| [AUDIT-04](../cards/AUDIT-04-audit-core-operation-evidence-tombstone.md) | 审计核心真实验收 | 以 main 重建 Android/daemon；隔离图 Flow 后核 operation/evidence，外部删除后核 tombstone 存活 |
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
