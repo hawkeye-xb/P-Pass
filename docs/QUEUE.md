@@ -50,7 +50,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2 已真机验证手机 ledger → daemon → Desktop `audit_event` 的一条轮次汇总闭环；待 Desktop 活动记录实际中文文案视觉确认 | L2 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
@@ -94,6 +93,8 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 |---|---|---|
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 错误地从 UI 文案切入审计，未编码；被 AUDIT-03 审计合同重定义取代 | **冻结**；不得恢复，等 AUDIT-03 后重新拆实现卡 |
+| [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
+| [AUDIT-05](../cards/AUDIT-05-dogfood-week-audit-content-review.md) | 狗粮周后只读复核真实审计内容，再决定活动/详情投影 | **等狗粮周样本**；此前不编码 |
 | [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关，承诺（手册+技术可行性报告）未兑现；[OBS-02](../cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md) 已裁决字典 v2，TEL-01~04 均已落地，当前仅自建自用，暂不算合规危机但欠账真实 | 字段列表已定，可以设计隐私页/开关 UI |
 
 ---
