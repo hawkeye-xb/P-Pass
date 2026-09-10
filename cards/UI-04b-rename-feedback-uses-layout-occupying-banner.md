@@ -6,7 +6,8 @@
 > 实施决定：不再在 `App.svelte` 拼页面级样式；将现有单一用途的 `Notice` 收敛为
 > `Toast` 组件，保留 `flashMessage()` 的 5 秒自动消失与手动关闭机制，改由组件拥有
 > 固定定位、紧凑尺寸、视觉居中与可访问状态语义。
-> 下一步：先写组件合同的失败测试，再实现并在真实 Tauri 窗口走查；不能只凭
+> 下一步：源码合同、构建与 Tauri dev 启动已通过；macOS CUA 的辅助功能/屏幕录制权限
+> 尚未授予，无法捕获或操作窗口，因此仍需真实 Tauri 窗口走查；不能只凭
 > `left: 50%` / `translateX(-50%)` 声称居中。
 > 协同分支：`work/UI-04b-toast`
 > 级别：L2 · 阻塞：无
@@ -51,6 +52,17 @@ Snackbar），不参与布局。
   z-index 60 > modal-backdrop 50、改名成功/失败仍走 `flashMessage`。
   反证：临时改回 in-flow（margin 占位）→ 2 条断言真红。
 - 桌面 Vitest 6 文件 / 43 tests 全绿（基线 5/40 + 新增 3）；`pnpm build`（vite build）成功。
+
+## 实施记录（2026-09-10，进行中）
+
+- `App.svelte` 的两处瞬时反馈调用改为 `Toast`；原 `Notice` 不再被拿来承载这类
+  成功/失败反馈。`Toast` 独占固定定位、内容定宽（最长 360px）、深色高对比外观、
+  `role="status"` / `aria-live="polite"` 与关闭按钮可见性。
+- 先后完成两轮 RED：先证明页面未接 `Toast`，再证明初始迁移仍保留宽大黄色条；随后
+  组件接线和视觉合同转绿。完整桌面 Vitest 由 JSON 报告确认 **59/59** 通过（26 files，
+  0 failed），`pnpm build` 通过。
+- 已用当前分支 sidecar 启动 Tauri dev；但 CUA 的 macOS 辅助功能/屏幕录制权限 pending，
+  未能捕获窗口或触发改名反馈。验收标准的真实视觉走查仍未完成，本卡不得关闭。
 
 ## 范围
 
