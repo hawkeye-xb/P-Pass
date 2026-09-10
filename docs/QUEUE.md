@@ -44,7 +44,7 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
-| [AUDIT-03](../cards/AUDIT-03-audit-contract-case-matrix.md) | 重新定义审计合同：操作、对象证据、安全/决定与监控分层；Case Matrix 已建立 | 只等可信等级、保留规则、详情/导出权限三项裁决，之后才拆代码卡 |
+| [AUDIT-03](../cards/AUDIT-03-audit-contract-case-matrix.md) | 重新定义审计合同：操作、对象证据、安全/决定与监控分层；Case Matrix 与本机可信/保留/访问边界已定 | 推导正式数据合同、对象 tombstone 与失败 case，随后拆实现卡 |
 
 ---
 
