@@ -172,7 +172,7 @@
     <string name="photos_lost_body_unknown">Backups have been paused. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</string>
     <string name="photos_lost_action">Scan the code again to reconnect</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
-    <string name="auto_backup_pause">Auto backup</string>
+    <string name="auto_backup_pause">Background backup</string>
     <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>
     <string name="disconnect">Disconnect from this computer…</string>
     <string name="disconnect_armed_title">Disconnect for real?</string>

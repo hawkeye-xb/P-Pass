@@ -1,7 +1,7 @@
 // UI-04a/c: 全局唯一提示呈现层（batch/ui-04a-c）。
 //
-// 既有提示已迁入：电池白名单 / 通知引导 / 中断恢复 / 取消轮入口 /
-// 重传告知五条，统一在 [NoticeHost] 里构造候选列表 → [topNotice]
+// 既有提示已迁入：中断恢复 / 取消轮入口 / 重传告知三条，统一在
+// [NoticeHost] 里构造候选列表 → [topNotice]
 // 只渲染最高优先级的一条，其余全部收起。
 //
 // [HOME_NOTICE_PRIORITY] 的排序：
@@ -39,11 +39,6 @@ enum class HomeNoticeKind {
     /** 只授权了部分照片——范围被悄悄削掉。 */
     PARTIAL_ACCESS,
 
-    /** 电池优化没加白——后台可能被杀。 */
-    BATTERY_WHITELIST,
-
-    /** 通知权限没授——告知送不到。 */
-    NOTIFICATION_PERMISSION,
 
     /** MOB-37: 库里少了照片、正在传回来。补充信息类：用户不动手也没事。 */
     REUPLOAD,
@@ -61,8 +56,7 @@ val HOME_NOTICE_PRIORITY: List<HomeNoticeKind> = listOf(
     HomeNoticeKind.PAIRING_LOST,
     HomeNoticeKind.BACKUP_INTERRUPTED,
     HomeNoticeKind.PARTIAL_ACCESS,
-    HomeNoticeKind.BATTERY_WHITELIST,
-    HomeNoticeKind.NOTIFICATION_PERMISSION,
+
     HomeNoticeKind.SOURCE_MISSING,
     HomeNoticeKind.CANCELLED_ROUND,
     HomeNoticeKind.REUPLOAD,
@@ -135,13 +129,9 @@ fun NoticeCard(notice: HomeNotice) {
 @Composable
 fun NoticeHost(
     backupInterrupted: Boolean,
-    batteryWhitelisted: Boolean,
-    notificationSkipped: Boolean,
     cancelledRoundCount: Int?,
     reuploadCount: Int,
     onResumeBackup: () -> Unit,
-    onOpenBatterySettings: () -> Unit,
-    onOpenNotificationSettings: () -> Unit,
     onRestoreCancelledRounds: () -> Unit,
     onAcknowledgeReupload: () -> Unit,
 ) {
@@ -154,22 +144,7 @@ fun NoticeHost(
                 onAction = onResumeBackup,
             )
         )
-        if (!batteryWhitelisted) add(
-            HomeNotice(
-                kind = HomeNoticeKind.BATTERY_WHITELIST,
-                body = stringResource(R.string.dog_battery_body),
-                actionLabel = stringResource(R.string.dog_battery_action),
-                onAction = onOpenBatterySettings,
-            )
-        )
-        if (notificationSkipped) add(
-            HomeNotice(
-                kind = HomeNoticeKind.NOTIFICATION_PERMISSION,
-                body = stringResource(R.string.notif_nudge_body),
-                actionLabel = stringResource(R.string.notif_nudge_action),
-                onAction = onOpenNotificationSettings,
-            )
-        )
+
         if (cancelledRoundCount != null) add(
             HomeNotice(
                 kind = HomeNoticeKind.CANCELLED_ROUND,
