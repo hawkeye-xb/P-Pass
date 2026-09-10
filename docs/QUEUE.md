@@ -45,6 +45,7 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2：手机 ledger outbox → Desktop 幂等事件库，直接取代旧文本 audit；正常项按 round 汇总，网络路径不进长期审计 | 先做无 UI 文件的 ledger/schema/IPC RED→GREEN；`App.svelte` 投影等 MOB-47 上游改动 rebase 后接入 |
+| [REBUILD-07](../cards/REBUILD-07-repair-same-device-repair-flow-receipts.md) | 同一 NodeId 重配对时，以 epoch 隔离 Flow receipt，避免旧完成项占住新队列序号 | 先写旧 epoch completed sequence 与新 epoch 同序号可并存的 RED，再做 SQLite 主键迁移与 repo 精确查询 |
 
 ---
 
