@@ -36,7 +36,7 @@
 ---
 
 UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 已完成真实 Tauri 视觉验收并归档；
-UI-08 已通过归档。
+UI-08 与 BLOB-03 已通过归档。
 
 ---
 
@@ -44,7 +44,6 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
-| [BLOB-03](../cards/BLOB-03-android-provider-store-never-reclaimed.md) | Android provider store 回收最终真机验收 | 已授权隔离 Screenshots 测试项；完整 Flow receipt 后等待 60 秒 GC 并核对回收 |
 
 ---
 
