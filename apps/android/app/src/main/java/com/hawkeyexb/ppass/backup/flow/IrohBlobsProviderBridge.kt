@@ -9,6 +9,7 @@ package com.hawkeyexb.ppass.backup.flow
 internal interface NativeIrohBlobsProvider {
     fun register(hash: String, source: Any): String
     fun stopActiveFetch(queueSequence: Long)
+    fun releaseRetention(hash: String)
     fun revoke(hash: String)
 }
 
@@ -58,6 +59,20 @@ internal class IrohBlobsProviderBridge(
         native.stopActiveFetch(current.queueSequence)
         native.revoke(current.hash)
         active = null
+    }
+
+    /**
+     * BLOB-03: release provider retention of the completed item's blob without
+     * revoking the native provider or dropping the endpoint. Called only after
+     * a validated receipt is durable; the phone's MediaStore source remains
+     * authoritative for re-registration. Keeps the endpoint + ALPN handler so
+     * the daemon's cached connection is reused for the next serial item.
+     */
+    fun releaseRetention(lease: FetchLease) {
+        val current = active ?: return
+        require(current.queueSequence == lease.queueSequence) { "lease does not own the active provider" }
+        require(current.leaseToken == lease.leaseToken) { "lease token does not own the active provider" }
+        native.releaseRetention(current.hash)
     }
 
     private data class ActiveRegistration(

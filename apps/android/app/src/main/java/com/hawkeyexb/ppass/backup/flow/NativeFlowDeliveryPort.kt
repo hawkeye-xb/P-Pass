@@ -300,7 +300,18 @@ internal class NativeFlowDeliveryPort(
     }
 
     private fun acceptReceipt(receipt: FlowCompletionReceipt, request: FlowFetchRequest) {
-        relayFlowCompletion(receipt, request, onReceipt)
+        val current = active
+        relayFlowCompletion(receipt, request) { completed ->
+            // BLOB-03: the receipt's four fields are already validated by
+            // relayFlowCompletion (a mismatch throws before this point), so
+            // this is the exact safe success boundary. Release provider
+            // retention of the served blob BEFORE the runner callback advances
+            // strict head to the next item; the endpoint + ALPN handler stay
+            // alive for connection reuse. A rejected/unvalidated receipt never
+            // reaches here, so no success release fires on failure.
+            current?.let { bridge.releaseRetention(it.lease) }
+            onReceipt(completed)
+        }
     }
 
     private fun hashSource(sourceRef: String): String {

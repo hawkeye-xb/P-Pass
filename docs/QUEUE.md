@@ -45,7 +45,6 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
 | [AUDIT-04](../cards/AUDIT-04-audit-core-operation-evidence-tombstone.md) | 重建审计核心：操作、对象 evidence、数据离开 tombstone 与决定合同，直接淘汰 AUDIT-01 泛用事件 | Android/Rust/daemon 先落新事实合同；Desktop 投影等待后续 AUDIT-05 |
-| [BLOB-03](../cards/BLOB-03-android-provider-store-never-reclaimed.md) | Android 发送端 provider store 已三星真机实证：成功同步后来源副本不回收 | 接入当前 lease 保护的 iroh 原生周期 GC；completion receipt 后释放保护 |
 
 ---
 
@@ -53,6 +52,7 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [BLOB-03](../cards/BLOB-03-android-provider-store-never-reclaimed.md) | Android 发送端 provider store 回收：代码已实现（iroh 原生周期 GC + 仅当前 lease TempTag 保护）并推送，自动化反证全绿；差三星真机重装后 60s GC 周期的 data blob 数只读核对 | L2 |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2 已真机验证手机 ledger → daemon → Desktop `audit_event` 的一条轮次汇总闭环；待 Desktop 活动记录实际中文文案视觉确认 | L2 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |

@@ -42,6 +42,23 @@ class IrohBlobsProviderBridgeTest {
     }
 
     @Test
+    fun `releaseRetention drops retention without revoking and verifies the lease`() {
+        val native = RecordingNativeProvider()
+        val bridge = IrohBlobsProviderBridge(native) { sourceRef -> "fd:$sourceRef" }
+        val epoch = PairingEpoch("desktop-b")
+        val lease = FetchLease(queueSequence = 7L, leaseToken = "lease-7")
+        bridge.register(item(queueSequence = 7L, epoch = epoch), epoch, lease)
+
+        assertIllegalArgument {
+            bridge.releaseRetention(FetchLease(queueSequence = 7L, leaseToken = "stale-lease"))
+        }
+        assertEquals(emptyList<String>(), native.events)
+
+        bridge.releaseRetention(lease)
+        assertEquals(listOf("release:${hashFor(7L)}"), native.events)
+    }
+
+    @Test
     fun `next completed item keeps the native endpoint alive`() {
         val native = RecordingNativeProvider()
         val bridge = IrohBlobsProviderBridge(native) { sourceRef -> "fd:$sourceRef" }
@@ -93,6 +110,10 @@ class IrohBlobsProviderBridgeTest {
 
         override fun stopActiveFetch(queueSequence: Long) {
             events += "stop:$queueSequence"
+        }
+
+        override fun releaseRetention(hash: String) {
+            events += "release:$hash"
         }
 
         override fun revoke(hash: String) {
