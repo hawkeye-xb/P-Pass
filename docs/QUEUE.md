@@ -78,7 +78,8 @@ UI-08 已通过归档。
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P1 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md)（合并 [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md)） | 授权流程、后台备份开关均已真机通过；真实失败仍未发系统通知，待接通发送链路 | L2 |
+| P1 | [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 已实证：开“备份失败时通知我”后真实失败仍没有系统通知；待接通失败事件发送 | L2 |
+| P1 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 授权流程与后台备份开关已真机通过；授权代码等待从协同分支合入 main | L2 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [UI-04b](../cards/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 脱离文档流方向正确但视觉验收不通过；现为 App.svelte 裸 `<p>`，需重做为紧凑且视觉居中的瞬时反馈 | L2 |
