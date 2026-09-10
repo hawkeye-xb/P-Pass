@@ -84,7 +84,11 @@ async fn mismatched_epoch_lease_or_hash_never_starts_a_native_fetch() {
     }
     assert_eq!(receiver_blobs.local_bytes(hash).await.unwrap(), 0);
     assert!(db
-        .flow_receipt(provider_transport.node_id().0.as_slice(), 7)
+        .flow_receipt(
+            provider_transport.node_id().0.as_slice(),
+            "epoch-current",
+            7
+        )
         .await
         .unwrap()
         .is_none());
@@ -139,7 +143,11 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
         "receipt requires indexed materialization"
     );
     let persisted = db
-        .flow_receipt(provider_transport.node_id().0.as_slice(), 7)
+        .flow_receipt(
+            provider_transport.node_id().0.as_slice(),
+            "epoch-current",
+            7,
+        )
         .await
         .unwrap()
         .unwrap();
@@ -159,6 +167,72 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
         .expect("completed content must replay its durable receipt");
     assert_eq!(resumed_receipt.receipt_id, receipt.receipt_id);
     assert_eq!(resumed_receipt.lease_token, "lease-recovered");
+}
+
+/// REBUILD-07 RED: a phone keeps its NodeId across a revoke/rejoin, but a
+/// rejoin rotates the pairing epoch and Android restarts its durable sequence
+/// at 1. Old completed receipts must remain history, never occupy the new
+/// epoch's sequence namespace.
+#[tokio::test(flavor = "multi_thread")]
+async fn rejoined_device_reuses_a_sequence_in_its_new_pairing_epoch() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let provider_blobs = Arc::new(provider_blobs);
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-before-rejoin", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
+
+    let old_bytes = b"REBUILD-07 original photo";
+    let old_source = root.path().join("old.jpg");
+    std::fs::write(&old_source, old_bytes).unwrap();
+    let old_hash = *blake3::hash(old_bytes).as_bytes();
+    let old_ticket = provider_blobs.push(old_hash, &old_source).await.unwrap();
+    let old_request = request("epoch-before-rejoin", "old-lease", old_hash, old_ticket);
+    delivery
+        .offer(provider_transport.node_id(), &old_request)
+        .await
+        .unwrap();
+    delivery
+        .fetch(provider_transport.node_id(), &old_request)
+        .await
+        .unwrap();
+    assert!(db.get_asset(&old_hash).await.unwrap().is_some());
+
+    db.set_pairing_epoch(&provider_transport.node_id().0, "epoch-after-rejoin")
+        .await
+        .unwrap();
+    let new_bytes = b"REBUILD-07 photo after rejoin";
+    let new_source = root.path().join("new.jpg");
+    std::fs::write(&new_source, new_bytes).unwrap();
+    let new_hash = *blake3::hash(new_bytes).as_bytes();
+    let new_ticket = provider_blobs.push(new_hash, &new_source).await.unwrap();
+    let new_request = request("epoch-after-rejoin", "new-lease", new_hash, new_ticket);
+
+    delivery
+        .offer(provider_transport.node_id(), &new_request)
+        .await
+        .expect("the new pairing epoch owns a fresh sequence namespace");
+    delivery
+        .fetch(provider_transport.node_id(), &new_request)
+        .await
+        .expect("newly authorised work with the reused sequence must complete");
+    assert!(db.get_asset(&old_hash).await.unwrap().is_some());
+    assert!(db.get_asset(&new_hash).await.unwrap().is_some());
 }
 
 /// BLOB-02: the production Flow sequence uses the durable active-grant query
@@ -225,7 +299,11 @@ async fn completed_flow_fetch_is_reclaimed_by_periodic_gc() {
         .await
         .unwrap();
     assert!(db
-        .flow_receipt(provider_transport.node_id().0.as_slice(), 7)
+        .flow_receipt(
+            provider_transport.node_id().0.as_slice(),
+            "epoch-current",
+            7
+        )
         .await
         .unwrap()
         .is_some());
@@ -340,7 +418,11 @@ async fn cancelled_active_item_never_receives_a_receipt() {
         "cancelled work must not fetch"
     );
     assert!(db
-        .flow_receipt(provider_transport.node_id().0.as_slice(), 7)
+        .flow_receipt(
+            provider_transport.node_id().0.as_slice(),
+            "epoch-current",
+            7
+        )
         .await
         .unwrap()
         .is_none());

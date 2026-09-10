@@ -91,7 +91,7 @@ impl Db {
             "INSERT INTO flow_delivery
                 (node_id, queue_sequence, pairing_epoch, lease_token, content_hash, file_name, media_type, provider, state, receipt_id)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
-             ON CONFLICT(node_id, queue_sequence) DO UPDATE SET
+             ON CONFLICT(node_id, pairing_epoch, queue_sequence) DO UPDATE SET
                 pairing_epoch = excluded.pairing_epoch,
                 lease_token = excluded.lease_token,
                 content_hash = excluded.content_hash,
@@ -140,13 +140,15 @@ impl Db {
     pub async fn flow_grant(
         &self,
         node_id: &[u8],
+        pairing_epoch: &str,
         queue_sequence: i64,
     ) -> Result<Option<FlowGrant>> {
         let row = sqlx::query(
             "SELECT node_id, queue_sequence, pairing_epoch, lease_token, content_hash, file_name, media_type, provider, state, receipt_id
-             FROM flow_delivery WHERE node_id = ? AND queue_sequence = ?",
+             FROM flow_delivery WHERE node_id = ? AND pairing_epoch = ? AND queue_sequence = ?",
         )
         .bind(node_id)
+        .bind(pairing_epoch)
         .bind(queue_sequence)
         .fetch_optional(self.pool())
         .await?;
@@ -211,13 +213,15 @@ impl Db {
     pub async fn flow_receipt(
         &self,
         node_id: &[u8],
+        pairing_epoch: &str,
         queue_sequence: i64,
     ) -> Result<Option<FlowReceipt>> {
         let row = sqlx::query(
             "SELECT receipt_id, pairing_epoch, lease_token, content_hash
-             FROM flow_delivery WHERE node_id = ? AND queue_sequence = ? AND state = 'completed'",
+             FROM flow_delivery WHERE node_id = ? AND pairing_epoch = ? AND queue_sequence = ? AND state = 'completed'",
         )
         .bind(node_id)
+        .bind(pairing_epoch)
         .bind(queue_sequence)
         .fetch_optional(self.pool())
         .await?;
@@ -284,6 +288,37 @@ mod tests {
             db.active_flow_content_hashes().await.unwrap(),
             HashSet::from([[1; 32]]),
             "only an active Flow grant may keep a flow-blobs hash alive"
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_grants_from_a_previous_epoch_do_not_occupy_a_rejoin_sequence() {
+        let db = Db::open_in_memory().await.unwrap();
+        let mut old = grant(1, FlowGrantState::Completed, 1);
+        old.pairing_epoch = "epoch-before-rejoin".into();
+        db.upsert_flow_grant(&old).await.unwrap();
+
+        let mut renewed = grant(2, FlowGrantState::Active, 1);
+        renewed.pairing_epoch = "epoch-after-rejoin".into();
+        db.upsert_flow_grant(&renewed).await.unwrap();
+
+        assert_eq!(
+            db.flow_grant(&old.node_id, &old.pairing_epoch, old.queue_sequence)
+                .await
+                .unwrap(),
+            Some(old),
+            "old completion remains durable history for the stable device"
+        );
+        assert_eq!(
+            db.flow_grant(
+                &renewed.node_id,
+                &renewed.pairing_epoch,
+                renewed.queue_sequence
+            )
+            .await
+            .unwrap(),
+            Some(renewed),
+            "the new pairing epoch owns an independent sequence namespace"
         );
     }
 }
