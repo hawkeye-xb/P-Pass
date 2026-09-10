@@ -89,7 +89,6 @@ UI-08 已通过归档。
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
 | P3 | [MOB-66](../cards/MOB-66-android-brand-font-newsreader-manrope.md) | Android 端标题/正文仍是系统默认字体，未接 Newsreader/Manrope，与桌面品牌不一致 | L2 |
-| P3 | [TEL-03](../cards/TEL-03-error-event-taxonomy.md) | `error` 事件 taxonomy 设计+接线；[TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md)/[TEL-02](../cards/done/TEL-02-wire-conn-and-flow-item-events.md) 均已完成，仍需先跟验收人过一遍错误码粒度 | L2 |
 
 ---
 
@@ -98,7 +97,7 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
-| [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关，承诺（手册+技术可行性报告）未兑现；[OBS-02](../cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md) 已裁决字典 v2，当前仅自建自用，暂不算合规危机但欠账真实 | 待 TEL-01~04 落地后，字段列表定了再设计隐私页/开关 UI |
+| [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关，承诺（手册+技术可行性报告）未兑现；[OBS-02](../cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md) 已裁决字典 v2，TEL-01~04 均已落地，当前仅自建自用，暂不算合规危机但欠账真实 | 字段列表已定，可以设计隐私页/开关 UI |
 
 ---
 
@@ -108,7 +107,8 @@ UI-08 已通过归档。
 |---|---|---|
 | [TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md) | 遥测字典 v2 落地：`conn` 删 ipver/country/isp_hash，`backup_session`→`flow_item` 精简字段，新增 `error`；daemon+Worker 同步改，`cargo test` 5/5 + `npm test` 14/14 + `just ci` 全绿 | 释放 TEL-02/03/04 接线卡 |
 | [TEL-02](../cards/done/TEL-02-wire-conn-and-flow-item-events.md) | conn/flow_item 已接线 `flow_delivery.rs::fetch()`；顺带修正 TEL-01 遗留的 conn.path 枚举值（lan 不存在，改为 direct/relay/offline/unknown）；`cargo test -p daemon --test flow_delivery` 10/10、nextest 356/356、just ci 全绿 | 释放 TEL-03/04 的 TEL-01 依赖已满足 |
-| [TEL-04](../cards/done/TEL-04-wire-first-byte-event.md) | first_byte 已接线 `query.rs::thumb()`/`original()`（仅成功交付字节的路径记录）；新增 `query_telemetry.rs` 3 个测试；nextest 359/359、just ci 全绿 | 无——TEL-01/02/04 均已闭环，仅剩 TEL-03（error taxonomy，待与验收人过错误码粒度） |
+| [TEL-04](../cards/done/TEL-04-wire-first-byte-event.md) | first_byte 已接线 `query.rs::thumb()`/`original()`（仅成功交付字节的路径记录）；新增 `query_telemetry.rs` 3 个测试；nextest 359/359、just ci 全绿 | 释放 TEL-03 |
+| [TEL-03](../cards/done/TEL-03-error-event-taxonomy.md) | error 事件已接线：`DeliveryError` 细分 8 个固定 code（Materialize 拆三个子系统变体）+ stage=offer/fetch/cancel；GuardMismatch/Cancelled 不上报（正常控制流非问题）；Telemetry 加 5min 去重窗口（同 code+stage 只记一次）；`cargo test --lib telemetry` 6/6 + `--test flow_delivery` 13/13、nextest 365/365、just ci 全绿 | 遥测五件套（daemon_alive/conn/flow_item/first_byte/error）全部闭环 |
 | [DESK-14](../cards/done/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS 真机 2026-09-10：32px 透明顶部拖拽区正常；顺带发现并修复原生标题文字与侧栏品牌重复显示（加 `hiddenTitle: true`） | 无——拖拽区与标题重复均已闭环 |
 | [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | macOS 真机 2026-09-10：Button/Card/Dialog/Notice/NavItem 五组件在真实 Tauri 窗口视觉正常、无错位闪烁 | 无——五组件收口验收关闭 |
 | [MOB-63](../cards/done/MOB-63-pause-racing-final-completion-must-set-idle.md) | 三星真机 2026-09-10：暂停与最后完成回执交错的两种时机均收敛 Idle | 无——竞态收敛已闭环 |

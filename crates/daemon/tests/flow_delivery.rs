@@ -698,3 +698,154 @@ async fn disabled_telemetry_means_zero_network_calls_from_flow_delivery() {
         "disabled telemetry must mean ZERO network calls even through FlowDelivery"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_request_records_an_error_event_tagged_with_its_stage() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&provider_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+
+    let (telemetry_url, _hits, bodies) = mock_telemetry_server().await;
+    let telemetry_dir = tempdir().unwrap();
+    let telemetry = Telemetry::new(true, telemetry_url, telemetry_dir.path());
+    let delivery =
+        FlowDelivery::new(db, receiver_blobs, root.path()).with_telemetry(telemetry.clone());
+
+    // Empty file_name trips checked_request's field presence guard —
+    // InvalidRequest, no network involved at all.
+    let mut bad = request(
+        "epoch-current",
+        "lease-current",
+        [0x11; 32],
+        "unused".into(),
+    );
+    bad.file_name = String::new();
+    assert!(matches!(
+        delivery.offer(provider_transport.node_id(), &bad).await,
+        Err(DeliveryError::InvalidRequest(_))
+    ));
+
+    assert_eq!(telemetry.flush_now().await, 1, "one error event");
+    let batch = bodies.lock().unwrap()[0].clone();
+    let event = &batch.as_array().unwrap()[0];
+    assert_eq!(event["event"], "error");
+    assert_eq!(event["code"], "invalid_request");
+    assert_eq!(event["stage"], "offer");
+    // 隐私红线：code/stage 只能是固定词汇，绝不能带原始错误文本/路径。
+    let raw = event.to_string();
+    assert!(!raw.contains("missing required item field"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"TEL-03 network failure fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+    let provider_node = provider_transport.node_id();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_node).await;
+
+    let (telemetry_url, _hits, bodies) = mock_telemetry_server().await;
+    let telemetry_dir = tempdir().unwrap();
+    let telemetry = Telemetry::new(true, telemetry_url, telemetry_dir.path());
+    let delivery =
+        FlowDelivery::new(db, receiver_blobs, root.path()).with_telemetry(telemetry.clone());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery.offer(provider_node, &offer).await.unwrap();
+
+    // Take the provider fully offline after the ticket is issued but
+    // before the fetch runs — a real network failure, not a fabricated
+    // error variant.
+    provider_transport.close().await;
+    drop(provider_blobs);
+    drop(provider_transport);
+
+    assert!(matches!(
+        delivery.fetch(provider_node, &offer).await,
+        Err(DeliveryError::Fetch(_))
+    ));
+
+    assert_eq!(telemetry.flush_now().await, 2, "one conn + one error");
+    let batch = bodies.lock().unwrap()[0].clone();
+    let events: Vec<&str> = batch
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["event"].as_str().unwrap())
+        .collect();
+    assert_eq!(events, ["conn", "error"]);
+    let error_event = &batch.as_array().unwrap()[1];
+    assert_eq!(error_event["code"], "fetch_failed");
+    assert_eq!(error_event["stage"], "fetch");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn repeated_same_error_is_deduped_within_the_flush_window() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&provider_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+
+    let (telemetry_url, _hits, bodies) = mock_telemetry_server().await;
+    let telemetry_dir = tempdir().unwrap();
+    let telemetry = Telemetry::new(true, telemetry_url, telemetry_dir.path());
+    let delivery =
+        FlowDelivery::new(db, receiver_blobs, root.path()).with_telemetry(telemetry.clone());
+
+    let mut bad = request(
+        "epoch-current",
+        "lease-current",
+        [0x22; 32],
+        "unused".into(),
+    );
+    bad.file_name = String::new();
+    for _ in 0..5 {
+        assert!(matches!(
+            delivery.offer(provider_transport.node_id(), &bad).await,
+            Err(DeliveryError::InvalidRequest(_))
+        ));
+    }
+
+    assert_eq!(
+        telemetry.flush_now().await,
+        1,
+        "5 identical (code, stage) failures must collapse to 1 event within the dedup window"
+    );
+    let batch = bodies.lock().unwrap()[0].clone();
+    assert_eq!(batch.as_array().unwrap().len(), 1);
+}

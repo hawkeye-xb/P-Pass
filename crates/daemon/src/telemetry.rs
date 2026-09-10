@@ -14,14 +14,21 @@
 //! 错误码+阶段，不带堆栈/路径）。OBS-02 裁决记录：
 //! `cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md`。
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
 /// Batch flush cadence (契约: 每 5min).
 pub const FLUSH_INTERVAL: Duration = Duration::from_secs(300);
+
+/// TEL-03: dedup window for `error` events — same rationale as the flush
+/// cadence: one flush window's worth of repetition adds no diagnostic
+/// value over the first occurrence, so the same `(code, stage)` reports
+/// at most once per window.
+pub const ERROR_DEDUP_WINDOW: Duration = FLUSH_INTERVAL;
 
 /// 遥测字典 v2（OBS-02 裁决）——字段逐一对应生产决策，不照抄 v1。
 #[derive(Debug, Clone)]
@@ -95,6 +102,11 @@ pub struct Telemetry {
     ver: String,
     queue: Arc<Mutex<Vec<Value>>>,
     http: reqwest::Client,
+    /// TEL-03: last-recorded instant per `(code, stage)`, so a repeating
+    /// failure (e.g. a relay outage) reports once per window instead of
+    /// flooding the batch — the same "don't flood with routine events"
+    /// lesson as NET-03's audit-log dedup, applied here to telemetry.
+    error_dedup: Arc<Mutex<HashMap<(&'static str, &'static str), Instant>>>,
 }
 
 impl Telemetry {
@@ -112,6 +124,7 @@ impl Telemetry {
             ver: env!("CARGO_PKG_VERSION").to_string(),
             queue: Arc::default(),
             http: reqwest::Client::new(),
+            error_dedup: Arc::default(),
         }
     }
 
@@ -119,10 +132,26 @@ impl Telemetry {
         self.enabled
     }
 
-    /// Queue one event (dropped unless enabled).
+    /// Queue one event (dropped unless enabled). `Event::Error` is
+    /// additionally deduped: the same `(code, stage)` pair records at
+    /// most once per [`ERROR_DEDUP_WINDOW`] — a repeating failure (a
+    /// downed relay, a persistently unreachable peer) must not flood the
+    /// batch, and the first occurrence already carries the diagnostic
+    /// signal.
     pub fn record(&self, event: Event) {
         if !self.enabled {
             return;
+        }
+        if let Event::Error { code, stage } = &event {
+            let key = (*code, *stage);
+            let now = Instant::now();
+            let mut dedup = self.error_dedup.lock().expect("telemetry error dedup");
+            if let Some(last) = dedup.get(&key) {
+                if now.duration_since(*last) < ERROR_DEDUP_WINDOW {
+                    return;
+                }
+            }
+            dedup.insert(key, now);
         }
         let value = event.into_value(&self.anon_id, &self.ver, now_ms());
         self.queue.lock().expect("telemetry queue").push(value);
@@ -256,6 +285,64 @@ mod tests {
         assert!(
             !dir.path().join("anon_id").exists(),
             "disabled telemetry must not even create an id"
+        );
+    }
+
+    #[test]
+    fn repeated_error_within_the_dedup_window_is_dropped_at_the_door() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = Telemetry::new(true, "http://127.0.0.1:1/x".into(), dir.path());
+        for _ in 0..10 {
+            t.record(Event::Error {
+                code: "fetch_failed",
+                stage: "fetch",
+            });
+        }
+        assert_eq!(
+            t.queue.lock().unwrap().len(),
+            1,
+            "10 identical (code, stage) errors must queue only 1 event"
+        );
+    }
+
+    #[test]
+    fn distinct_code_or_stage_are_not_deduped_against_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = Telemetry::new(true, "http://127.0.0.1:1/x".into(), dir.path());
+        t.record(Event::Error {
+            code: "fetch_failed",
+            stage: "fetch",
+        });
+        t.record(Event::Error {
+            code: "storage_failed", // different code, same stage
+            stage: "fetch",
+        });
+        t.record(Event::Error {
+            code: "fetch_failed", // same code, different stage
+            stage: "offer",
+        });
+        assert_eq!(
+            t.queue.lock().unwrap().len(),
+            3,
+            "dedup key is the (code, stage) pair, not either field alone"
+        );
+    }
+
+    #[test]
+    fn non_error_events_are_never_deduped() {
+        let dir = tempfile::tempdir().unwrap();
+        let t = Telemetry::new(true, "http://127.0.0.1:1/x".into(), dir.path());
+        for _ in 0..5 {
+            t.record(Event::Conn {
+                path: "direct",
+                ms: 10,
+                fail_stage: None,
+            });
+        }
+        assert_eq!(
+            t.queue.lock().unwrap().len(),
+            5,
+            "dedup is Error-specific; conn/flow_item/first_byte/daemon_alive queue every call"
         );
     }
 }

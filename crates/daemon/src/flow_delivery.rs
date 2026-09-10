@@ -28,10 +28,36 @@ pub enum DeliveryError {
     InvalidRequest(String),
     #[error("native iroh-blobs fetch: {0}")]
     Fetch(String),
-    #[error("materialize fetched item: {0}")]
-    Materialize(String),
+    #[error("create flow staging directory: {0}")]
+    MaterializeStaging(String),
+    #[error("export fetched item from blob store: {0}")]
+    MaterializeExport(String),
+    #[error("ingest materialized item into the index: {0}")]
+    MaterializeIngest(String),
     #[error("durable delivery state: {0}")]
     Storage(String),
+}
+
+impl DeliveryError {
+    /// TEL-03: fixed, anonymized telemetry code — one per distinct failure
+    /// class. Never the wrapped `String` (that text comes from
+    /// `e.to_string()` on third-party errors and may carry a path or other
+    /// unknown content); only this fixed vocabulary crosses into
+    /// telemetry. Materialize is split into staging/export/ingest instead
+    /// of one generic code because those are three different subsystems
+    /// (filesystem, blob store, index) with different fix-it implications.
+    fn telemetry_code(&self) -> &'static str {
+        match self {
+            DeliveryError::GuardMismatch => "guard_mismatch",
+            DeliveryError::Cancelled => "cancelled",
+            DeliveryError::InvalidRequest(_) => "invalid_request",
+            DeliveryError::Fetch(_) => "fetch_failed",
+            DeliveryError::MaterializeStaging(_) => "materialize_staging_failed",
+            DeliveryError::MaterializeExport(_) => "materialize_export_failed",
+            DeliveryError::MaterializeIngest(_) => "materialize_ingest_failed",
+            DeliveryError::Storage(_) => "storage_failed",
+        }
+    }
 }
 
 /// NET-05: process-local route fact for an active Flow data fetch. The map is
@@ -262,6 +288,18 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowFetchRequest,
     ) -> Result<(), DeliveryError> {
+        let result = self.offer_inner(peer, request).await;
+        if let Err(error) = &result {
+            self.record_error("offer", error);
+        }
+        result
+    }
+
+    async fn offer_inner(
+        &self,
+        peer: NodeId,
+        request: &FlowFetchRequest,
+    ) -> Result<(), DeliveryError> {
         let grant = self.checked_request(peer, request).await?;
         self.provider_for(&grant)?;
         if self
@@ -288,6 +326,18 @@ impl FlowDelivery {
     /// receipt; a retry of an already completed exact tuple returns its stored
     /// receipt without another fetch.
     pub async fn fetch(
+        &self,
+        peer: NodeId,
+        request: &FlowFetchRequest,
+    ) -> Result<FlowCompletionReceipt, DeliveryError> {
+        let result = self.fetch_inner(peer, request).await;
+        if let Err(error) = &result {
+            self.record_error("fetch", error);
+        }
+        result
+    }
+
+    async fn fetch_inner(
         &self,
         peer: NodeId,
         request: &FlowFetchRequest,
@@ -333,13 +383,13 @@ impl FlowDelivery {
         // fetch was in flight. Do not materialize or finalize old work.
         self.require_active(&grant).await?;
         std::fs::create_dir_all(&self.staging)
-            .map_err(|e| DeliveryError::Materialize(format!("create staging: {e}")))?;
+            .map_err(|e| DeliveryError::MaterializeStaging(format!("create staging: {e}")))?;
         let staged = self.staged_path(&grant);
         let _ = std::fs::remove_file(&staged);
         self.blobs
             .export_to(hash, &staged)
             .await
-            .map_err(|e| DeliveryError::Materialize(e.to_string()))?;
+            .map_err(|e| DeliveryError::MaterializeExport(e.to_string()))?;
         self.require_active(&grant).await?;
         let item_bytes = std::fs::metadata(&staged).map(|m| m.len()).unwrap_or(0);
 
@@ -369,7 +419,7 @@ impl FlowDelivery {
                     throttle.signal();
                 }
             }
-            Err(e) => return Err(DeliveryError::Materialize(e.to_string())),
+            Err(e) => return Err(DeliveryError::MaterializeIngest(e.to_string())),
         }
 
         // This update is the receipt adapter's irreversible boundary. It
@@ -395,6 +445,18 @@ impl FlowDelivery {
 
     /// Cancel only the exact active tuple. This has no success receipt path.
     pub async fn cancel(
+        &self,
+        peer: NodeId,
+        request: &FlowFetchRequest,
+    ) -> Result<(), DeliveryError> {
+        let result = self.cancel_inner(peer, request).await;
+        if let Err(error) = &result {
+            self.record_error("cancel", error);
+        }
+        result
+    }
+
+    async fn cancel_inner(
         &self,
         peer: NodeId,
         request: &FlowFetchRequest,
@@ -559,6 +621,33 @@ impl FlowDelivery {
                 bytes,
                 dur_s,
                 resumed,
+            });
+        }
+    }
+
+    /// TEL-03: `error` — one per terminal failure returned to the caller,
+    /// tagged with which public method produced it (`offer`/`fetch`/
+    /// `cancel`) plus the fine-grained failure class from
+    /// `DeliveryError::telemetry_code`. `GuardMismatch`/`Cancelled` are
+    /// deliberately excluded: they are routine control-flow outcomes (a
+    /// stale retry after a superseding offer, an intentional user cancel),
+    /// not diagnosable problems — recording them as "errors" would dilute
+    /// the signal this event exists to carry, even with dedup capping
+    /// their volume. `Telemetry::record` itself deduplicates repeats of
+    /// the same `(code, stage)` within one flush window, so a persistent
+    /// real failure (e.g. an unreachable peer) reports once instead of
+    /// flooding the batch.
+    fn record_error(&self, stage: &'static str, error: &DeliveryError) {
+        if matches!(
+            error,
+            DeliveryError::GuardMismatch | DeliveryError::Cancelled
+        ) {
+            return;
+        }
+        if let Some(telemetry) = &self.telemetry {
+            telemetry.record(TelemetryEvent::Error {
+                code: error.telemetry_code(),
+                stage,
             });
         }
     }

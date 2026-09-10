@@ -249,6 +249,26 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       conn/flow_item/first_byte) now fully wired; only TEL-03 (error
       taxonomy) remains, pending a short check-in on error code
       granularity)
+- [x] TEL-03 error event taxonomy: fine-grained codes + dedup — **DONE
+      2026-09-10** (user verdict: finer-grained codes over generic ones,
+      plus rate-limiting for repeats. `DeliveryError::Materialize` split
+      into MaterializeStaging/MaterializeExport/MaterializeIngest — three
+      distinct subsystems, not one bucket. `telemetry_code()` maps 8
+      variants to a fixed vocabulary, never the wrapped String (may carry
+      a path). GuardMismatch/Cancelled excluded — routine control flow,
+      not problems. `stage` = the public method that raised it
+      (offer/fetch/cancel). Telemetry gained a 5-minute (code, stage)
+      dedup window so a persistent failure reports once, not every call.
+      6 new tests: 3 in telemetry.rs (dedup collapses repeats, distinct
+      code-or-stage don't cross-dedupe, non-Error events unaffected), 3 in
+      flow_delivery.rs (InvalidRequest tagged offer + redline scan for
+      leaked text, a real closed-connection Fetch failure tagged fetch,
+      5 identical failures through the full FlowDelivery path still
+      produce 1 event). `cargo test --lib telemetry` 6/6, `--test
+      flow_delivery` 13/13 zero regressions, nextest 365/365 passed 1
+      skipped, `just ci` all green. Telemetry quintet (daemon_alive/conn/
+      flow_item/first_byte/error) now fully wired — OBS-02's dictionary v2
+      is completely landed)
 - [x] T-062b update artifact verification + pinned pubkey — **DONE
       2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
       parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY
