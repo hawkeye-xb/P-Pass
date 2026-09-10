@@ -1,7 +1,8 @@
 # AUDIT-01 Flow 审计 v2：持久 outbox 与直接切换（L2）
 
 > 🟢 状态：代码完成，待真机回归 · 协同分支：`audit/audit-01-flow-v2` ·
-> 当前节点：全链路（Android/Rust/Desktop）实现 + 本地全量测试通过；
+> 当前节点：全链路（Android ledger/outbox → daemon 投递 → v2 audit_event →
+> Desktop）实现 + 本地全量测试通过；review 发现的投递管线缺口已补齐。
 > 真机验收单列后续批次，不阻塞本次实现完成。
 > 级别：L2 · 阻塞：无（NET-04/05 的路径观测明确不作为前置）
 
@@ -48,6 +49,37 @@ ARCH-01 的生产 Flow 已将发现、单项传输、receipt、范围和取消�
   「备份耗时」两处派生 UI 一并下线（不伪造无对应数据源的数字）。
 - 真机验证（新活动文案在真实设备上的呈现、Flow 真实终态）显式列为
   后续批次，按卡片原定范围不阻塞本次实现完成。
+
+### 补齐记录（2026-09-10，review 后追加）
+
+首轮实现遗漏了实施顺序第 3 步——手机 outbox → daemon 的投递/落库管线
+本身；`acknowledgeAuditEvents` 只在单测里被调用，生产代码没有任何调用点
+把 `auditOutbox` 发给 daemon。已补齐最小闭环：
+
+- `crates/proto`：新增 `FlowAuditEvent` / `FlowAuditSubmit` /
+  `FlowAuditAccepted` 消息类型与 `flow.audit.submit` 方法常量；
+  event_id/kind/round_id/occurred_at_ms/payload 与手机 ledger 的
+  `AuditOutboxEvent` 字段一一对应，不重塑形状。
+- `crates/daemon`：`Router::handle_flow_audit_submit` 接收一批 outbox
+  事件，逐条按手机传来的 event_id（不重新生成）调用既有
+  `append_audit`（`INSERT OR IGNORE` 天然幂等），返回被接受的
+  event_id 列表供手机侧 ack；`flow.` 前缀已覆盖 authz（member+）。
+- Android：新增 `AuditOutboxDispatcher`（`FlowAuditTransport` 接口 +
+  `DaemonFlowAuditTransport` 生产实现），在每个 Flow 触发点
+  （wake/pause/continue/retry/cancel/restore 及原生投递的
+  missingSource/permanentFailure/receipt 回调）之后异步 flush 一次；
+  daemon 确认的 event_id 才调用 `acknowledgeAuditEvents` 摘除，未确认
+  的（网络失败、未配对、daemon 部分失败）留在 outbox 里等下次触发
+  重放——不在发送时清空，只在确认落库后清空。
+- 端到端合同测试：`crates/daemon/tests/flow_audit_submit.rs`（提交→
+  落库→event_id 保留、重放批次幂等、未配对拒绝）；Android
+  `AuditOutboxDispatcherTest`（accepted 摘除、部分接受时未确认的留存
+  重试、传输失败整批不动、空 outbox/未配对不发起连接）。
+- 复测：Rust `cargo nextest run --all-features` 354 passed（较首轮
+  346 + 本次新增 8 个用例）1 skipped；`just ci` 全绿；Android
+  `./gradlew :app:testDebugUnitTest` 333 passed（较首轮 328 + 本次
+  新增 5 个用例），0 failed；desktop `cargo test --lib` 18 passed、
+  `vitest run` 57 passed，均未回归。
 
 ## 范围
 

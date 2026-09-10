@@ -5,6 +5,9 @@ import android.content.ContentResolver
 import android.net.Uri
 import android.util.Log
 import com.hawkeyexb.ppass.proto.FlowCompletionReceipt
+import com.hawkeyexb.ppass.proto.FlowAuditAccepted
+import com.hawkeyexb.ppass.proto.FlowAuditEvent
+import com.hawkeyexb.ppass.proto.FlowAuditSubmit
 import com.hawkeyexb.ppass.proto.FlowFetchRequest
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
@@ -30,6 +33,84 @@ internal interface FlowReceiptClient {
     suspend fun offer(request: FlowFetchRequest)
     suspend fun fetch(request: FlowFetchRequest): FlowCompletionReceipt
     suspend fun cancel(request: FlowFetchRequest)
+}
+
+/** AUDIT-01: the one daemon interaction the audit outbox dispatcher needs. */
+internal interface FlowAuditTransport {
+    suspend fun submit(events: List<AuditOutboxEvent>): FlowAuditAccepted
+}
+
+/** Ctrl-plane adapter for [FlowAuditTransport] — no native transport involved. */
+internal class DaemonFlowAuditTransport(
+    private val client: DaemonClient,
+    private val peer: PeerAddrParts,
+) : FlowAuditTransport {
+    override suspend fun submit(events: List<AuditOutboxEvent>): FlowAuditAccepted {
+        val response = client.call(
+            peer,
+            Methods.FLOW_AUDIT_SUBMIT,
+            ProtoJson.encodeToJsonElement(
+                FlowAuditSubmit.serializer(),
+                FlowAuditSubmit(
+                    events = events.map {
+                        FlowAuditEvent(
+                            eventId = it.eventId,
+                            kind = it.kind,
+                            roundId = it.roundId,
+                            occurredAtMs = it.occurredAtMs,
+                            payload = it.payload,
+                        )
+                    },
+                ),
+            ),
+        )
+        check(response.ok) { "flow.audit.submit: ${response.error?.msgKey}" }
+        return ProtoJson.decodeFromJsonElement(FlowAuditAccepted.serializer(), checkNotNull(response.result))
+    }
+}
+
+/**
+ * AUDIT-01: the phone-side delivery leg for the durable ledger audit
+ * outbox. Drains [DiscoveryLedgerStore]'s `auditOutbox` to the daemon over
+ * `flow.audit.submit`, acknowledging exactly the event ids the daemon
+ * confirmed durable — anything the daemon didn't report back (network
+ * failure, malformed event, connection never established) is left in the
+ * outbox for the next flush to retry, per the card's durable-outbox
+ * contract (never drop on send, only on confirmed daemon receipt).
+ */
+internal class AuditOutboxDispatcher(
+    private val ledger: DiscoveryLedgerStore,
+    private val pairing: () -> Pairing?,
+    private val identityKey: () -> ByteArray,
+    private val client: DaemonClient,
+    /** Seam for tests: production binds the real client and builds a
+     *  [DaemonFlowAuditTransport]; tests supply a fake transport without
+     *  ever touching [DaemonClient.bind] (which opens a real iroh
+     *  endpoint and is unsafe to call unconditionally in a JVM test). */
+    private val transportFor: suspend (Pairing) -> FlowAuditTransport = { currentPairing ->
+        client.bind(identityKey())
+        DaemonFlowAuditTransport(client, parsePeerAddrToken(currentPairing.daemonAddrToken))
+    },
+) {
+    /** Best-effort: any failure (offline, unpaired, IO) leaves the outbox
+     *  untouched — there is always a next trigger to retry from. */
+    suspend fun flush() {
+        val outbox = ledger.load().auditOutbox
+        if (outbox.isEmpty()) return
+        val currentPairing = pairing() ?: return
+        runCatching {
+            transportFor(currentPairing).submit(outbox)
+        }.onSuccess { accepted ->
+            if (accepted.eventIds.isNotEmpty()) {
+                ledger.acknowledgeAuditEvents(accepted.eventIds.toSet())
+            }
+        }
+        // A failed flush (offline, transient daemon error, epoch stale)
+        // intentionally logs nothing here: the outbox is untouched and the
+        // next trigger retries it, so there is no new fact to record. This
+        // also keeps the method callable from a JVM unit test without a
+        // mocked android.util.Log.
+    }
 }
 
 /** Keeps an in-flight delivery from crossing into a newly paired Desktop epoch. */

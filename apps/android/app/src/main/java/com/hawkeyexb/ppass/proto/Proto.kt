@@ -187,6 +187,32 @@ data class FlowCompletionReceipt(
     @SerialName("content_hash") val contentHash: String = "",
 )
 
+// ── Flow audit outbox delivery (AUDIT-01) ────────────
+
+/** Kotlin mirror of proto::FlowAuditEvent — the wire shape of one durable
+ *  phone-side outbox event (see backup.flow.AuditOutboxEvent, the ledger's
+ *  own domain type this is built from at the delivery boundary). */
+@Serializable
+data class FlowAuditEvent(
+    @SerialName("event_id") val eventId: String = "",
+    val kind: String = "",
+    @SerialName("round_id") val roundId: String? = null,
+    @SerialName("occurred_at_ms") val occurredAtMs: Long = 0L,
+    val payload: Map<String, String> = emptyMap(),
+)
+
+/** Kotlin mirror of proto::FlowAuditSubmit. */
+@Serializable
+data class FlowAuditSubmit(
+    val events: List<FlowAuditEvent> = emptyList(),
+)
+
+/** Kotlin mirror of proto::FlowAuditAccepted. */
+@Serializable
+data class FlowAuditAccepted(
+    @SerialName("event_ids") val eventIds: List<String> = emptyList(),
+)
+
 // ── Backup pipeline ─────────────────────────────────
 
 @Serializable
@@ -253,6 +279,8 @@ object Methods {
     const val FLOW_OFFER = "flow.offer"
     const val FLOW_FETCH = "flow.fetch"
     const val FLOW_CANCEL = "flow.cancel"
+    /** AUDIT-01: phone-side durable outbox events -> daemon v2 audit repo. */
+    const val FLOW_AUDIT_SUBMIT = "flow.audit.submit"
     const val BACKUP_BEGIN = "backup.begin"
     const val BACKUP_MANIFEST = "backup.manifest"
     const val BACKUP_PRESENCE = "backup.presence"
