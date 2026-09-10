@@ -425,7 +425,7 @@ impl FlowDelivery {
     async fn matching_grant(&self, grant: &FlowGrant) -> Result<FlowGrant, DeliveryError> {
         let Some(stored) = self
             .db
-            .flow_grant(&grant.node_id, grant.queue_sequence)
+            .flow_grant(&grant.node_id, &grant.pairing_epoch, grant.queue_sequence)
             .await
             .map_err(storage_error)?
         else {
@@ -477,7 +477,7 @@ impl FlowDelivery {
     ) -> Result<FlowCompletionReceipt, DeliveryError> {
         let Some(receipt) = self
             .db
-            .flow_receipt(&grant.node_id, grant.queue_sequence)
+            .flow_receipt(&grant.node_id, &grant.pairing_epoch, grant.queue_sequence)
             .await
             .map_err(storage_error)?
         else {

@@ -45,7 +45,6 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2：手机 ledger outbox → Desktop 幂等事件库，直接取代旧文本 audit；正常项按 round 汇总，网络路径不进长期审计 | 先做无 UI 文件的 ledger/schema/IPC RED→GREEN；`App.svelte` 投影等 MOB-47 上游改动 rebase 后接入 |
-| [REBUILD-07](../cards/REBUILD-07-repair-same-device-repair-flow-receipts.md) | 同一 NodeId 重配对时，以 epoch 隔离 Flow receipt，避免旧完成项占住新队列序号 | 先写旧 epoch completed sequence 与新 epoch 同序号可并存的 RED，再做 SQLite 主键迁移与 repo 精确查询 |
 
 ---
 
@@ -68,6 +67,7 @@ UI-08 已通过归档。
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
+| [REBUILD-07](../cards/REBUILD-07-repair-same-device-repair-flow-receipts.md) | 同一 NodeId 重配对后，新 epoch 的 Flow 序号不再与历史 receipt 冲突；待现场升级后重扫复验 | L2 |
 | [BLOB-02](../cards/BLOB-02-flow-blobs-store-never-reclaimed.md) | flow-blobs 周期 GC 已接线（commit `c6c0bb6`），反证与真实 iroh 传输单测全绿；待真机 `du -sh .ppf/flow-blobs` 峰值→回落观测 | L2 |
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 
