@@ -44,8 +44,7 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
-
-
+| [BLOB-03](../cards/BLOB-03-android-provider-store-never-reclaimed.md) | Android provider store 回收最终真机验收 | 已授权隔离 Screenshots 测试项；完整 Flow receipt 后等待 60 秒 GC 并核对回收 |
 
 ---
 
@@ -53,7 +52,6 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [BLOB-03](../cards/BLOB-03-android-provider-store-never-reclaimed.md) | 当前设备无 Flow ledger/provider data，尚无自然样本；下次正常新增照片完成后，receipt 前后等待 60 秒 GC 并只读核对回收 | L2 |
 | [AUDIT-04](../cards/AUDIT-04-audit-core-operation-evidence-tombstone.md) | 审计核心重建（operation/item evidence/tombstone/decision 四表 + 全部生产路径接线）代码完成，本地全量 `just ci` 绿；待真机验收隔离测试图 operation+evidence 落地与外部删除后 tombstone 存活 | L2 |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2 已真机验证手机 ledger → daemon → Desktop `audit_event` 的一条轮次汇总闭环；待 Desktop 活动记录实际中文文案视觉确认 | L2 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
