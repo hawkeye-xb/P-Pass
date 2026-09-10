@@ -1,7 +1,7 @@
 # DESK-15 桌面设计系统收口：现有风格映射为组件与 token
 
-> 🟢 状态：基准/token 链 + Button/Card/Dialog/Notice/NavItem 组件合同 +
-> 轻量门禁（Button/Card 变体锁测试）+ token 复用清单已完成，全量
+> 🟢 状态：✅ 已通过验收（2026-09-10 macOS 真机 Tauri 窗口走查）——
+> Button/Card/Dialog/Notice/NavItem 五组件 + token 派生检查已完成，全量
 > `just ci`（含 Rust fmt/clippy/nextest 345 passed）本地验证全绿 ·
 > 当前节点：跨断点/Dialog 的自动化布局回归基础设施明确暂不做（2026-09-09
 > 用户拍板"没到那个时候"，不是遗漏）；Button 图标动作变体移入 backlog
@@ -186,3 +186,11 @@
 （需要引入 Playwright 之类工具）——2026-09-09 用户拍板"没到那个时候"，
 先不动；桌面部分现有的验证手段是浏览器面板手动核对 + 组件合同测试，
 对当前体量够用。
+
+## 真机验收
+
+2026-09-10 macOS 真机（`/Applications/P-Pass.app`，commit `889ec06`
+即时构建）：走查 Button/Card/Dialog/Notice/NavItem 五个组件的真实渲染
+（重命名相册 Dialog、断连 Notice、侧栏 NavItem 切页），在真实 Tauri 窗口
+（非 headless 浏览器预览）里视觉正常、无错位闪烁，符合本卡"收口不改变
+外观"的预期。验收人确认通过。

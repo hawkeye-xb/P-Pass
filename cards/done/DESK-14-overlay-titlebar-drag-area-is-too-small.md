@@ -1,8 +1,8 @@
 # DESK-14 Overlay 标题栏隐藏后主窗口拖拽区域过小
 
-> 🟡 状态：待共享回归
-> 级别：L3 · 阻塞：仅缺 macOS 原生窗口视觉/拖拽实证（本机自动化截图权限未授予）
-> 当前节点：透明 hit area 已实现并通过测试/构建；下一步：默认及 <1080px 两种宽度真机走查。
+> ✅ 状态：已通过验收（2026-09-10 macOS 真机）
+> 级别：L3 · 阻塞：无
+> 当前节点：完成。透明 hit area + `hiddenTitle: true` 均已验证。
 
 ## 问题
 
@@ -54,6 +54,19 @@ macOS 桌面端使用 Tauri `titleBarStyle: "Overlay"`，原生红绿灯悬浮�
 ## 实施记录
 
 首次有色布局带方案已撤回。现已改为行业通用的透明 hit area：`#app` 直系、绝对定位、无背景、不占布局，只覆盖现有 32px 顶部安全区；仅 macOS 将其直接标记为 Tauri 拖拽目标，交互元素保持未标记。Vitest 47/47 与 Vite build 已通过；`pnpm tauri dev` 已启动到运行态，但 macOS Accessibility/Screen Recording 权限未授予，无法取得真实视觉/拖拽截图，未将其冒充为已验收。
+
+2026-09-10 真机回归发现新问题：macOS 原生窗口标题文字「P-Pass」与侧栏品牌
+文字同屏出现，视觉重复。根因是 `tauri.conf.json` 未隐藏原生标题（Overlay
+模式下标题默认仍绘制）。修法：`"hiddenTitle": true`（Tauri 2 原生字段，
+`app.windows[]` 下与 `titleBarStyle` 同级），只隐藏原生标题文字渲染，红绿灯
+与拖拽区不受影响，无需改 titlebar.js/app.css。重建 macOS bundle 后验证通过。
+
+## 真机验收
+
+2026-09-10 macOS 真机（`/Applications/P-Pass.app`，commit 后即时构建）：
+- 默认宽度：顶部拖拽带可用，红绿灯右侧到主内容区可拖拽窗口。
+- 原生标题文字已隐藏，侧栏品牌区不再重复出现「P-Pass」。
+- 验收人确认通过。
 
 ## 备注
 
