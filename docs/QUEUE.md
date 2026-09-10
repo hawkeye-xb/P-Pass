@@ -52,6 +52,7 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2 已真机验证手机 ledger → daemon → Desktop `audit_event` 的一条轮次汇总闭环；待 Desktop 活动记录实际中文文案视觉确认 | L2 |
+| [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 活动记录去除「连接了 / 一批传输完成」等技术流水账，改为数据结果与需处理事项 | L2 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
