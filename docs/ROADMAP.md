@@ -274,7 +274,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       skipped, `just ci` all green. Telemetry quintet (daemon_alive/conn/
       flow_item/first_byte/error) now fully wired — OBS-02's dictionary v2
       is completely landed)
-- [ ] BLOB-03 Android 发送端 provider store 回收 — **2026-09-10 升级迁移三星真机通过，待下一张自然新增来源机会性回归**：
+- [x] BLOB-03 Android 发送端 provider store 回收 — **2026-09-10 三星真机验收通过并归档**：
       根因是导入走 `AddProgress::with_tag()`（`add_path(...).await` /
       `add_stream(...).await.await` 都解析到它），每次注册给 store 落一个持久
       named tag，GC 永不回收。修复：`with_config` 用 `FsStore::load_with_opts`
@@ -286,8 +286,9 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       head 前调 `bridge.releaseRetention`。自动化反证：Rust `android_provider`
       5/5（新增旧 named tag 升级迁移回收），Android JVM 4/4 + 10/10。三星
       覆盖安装修复版并重启后，原 7 个 `CONFIRMED` provider data 文件在 70 秒内
-      由 4,100,446 bytes 归零，ledger 7 条确认不变；只余下次自然新增来源的
-      机会性回归，禁止伪造媒体制造样本。
+      由 4,100,446 bytes 归零，ledger 7 条确认不变；最终授权隔离 Screenshots
+      测试走正常 Flow 后 ledger 7→9、9 项均确认并有 receipt，receipt 后与 75 秒
+      后 provider `data` 均为 0 文件，三张测试截图已清理。
 - [x] T-062b update artifact verification + pinned pubkey — **DONE
       2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
       parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY

@@ -1,9 +1,8 @@
 # BLOB-03 Android 发送端 iroh-blobs-provider 仓确认不回收
 
-> 🟠 状态：进行中（验收人已授权隔离测试截图）· 协同分支：`main`
+> ✅ 状态：验收完成（2026-09-10）· 已归档
 > 级别：L2 · 阻塞：无
-> 当前节点：当前设备无自然新增样本；验收人已授权在已选 Screenshots 相册生成一张无个人内容的设备原生截图，走完整正常发现/Flow/receipt 路径
-> 下一步：记录 provider baseline，传输该唯一测试项，receipt 后等待至少一个 60 秒 GC 周期；仅清理这张明确命名的测试截图
+> 最终验收：验收人授权的隔离 Screenshots 测试项走正常 Flow；ledger 从 7 增至 9，9 项均 `CONFIRMED` 且均有 receipt；receipt 后 provider `data` 为 0 文件，等待 75 秒（超过 60 秒周期）仍为 0 文件。三张明确测试截图已清理，ledger 确认不倒退
 
 ## 问题
 
@@ -47,8 +46,7 @@ bytes。因而这不是纯代码推测：成功 receipt 后的手机副本确实
 - [x] 三星真机升级迁移：原先 7 个已确认来源 blob 在修复版重启后一个 GC 周期
       内由 4,100,446 bytes / 7 文件变为 0 bytes / 0 文件，且 7 条 ledger
       `CONFIRMED` 保持不变。
-- [ ] 下一张新增来源的普通 Flow 完成后，复核新 TempTag 路径也在 receipt 后
-      一个 GC 周期内回收；该机会性回归不应靠伪造媒体或重置现有配对制造。
+- [x] 新增来源的普通 Flow 完成后，复核新 TempTag 路径在 receipt 后一个 GC 周期内回收：验收人授权隔离 Screenshots 测试，ledger 7→9 且 9 项均 `CONFIRMED`/有 receipt；receipt 后与 75 秒后 provider `data` 均为 0 文件，测试截图已清理。
 
 ## 范围
 
