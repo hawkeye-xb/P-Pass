@@ -44,6 +44,18 @@ object AuditKinds {
     const val ROUND_FINISHED = "flow.round.finished"
     const val ITEM_ATTENTION = "flow.item.attention"
     const val RECONCILIATION_RESOLVED = "flow.reconciliation.resolved"
+    /** AUDIT-04: per-item confirmation evidence, generated in the same
+     *  atomic snapshot as [CompletionAndScope.acceptCompletionReceipt] —
+     *  the durable "object证据" a `flow.round.finished` summary must be
+     *  able to point to (card acceptance criterion #1/#2). Never
+     *  projected to the activity page (normal success is not long-term
+     *  activity noise); only queryable through the operation it belongs to. */
+    const val ITEM_CONFIRMED = "flow.item.confirmed"
+    /** AUDIT-04: a discovered source vanished before it could be sent
+     *  (case matrix §3 "有源图消失"). Previously this terminal fact wrote
+     *  no audit trail at all — [StrictConsumer.skipMissingSource] now
+     *  emits this in the same atomic snapshot as the state transition. */
+    const val ITEM_SOURCE_MISSING = "flow.item.source_missing"
 }
 
 @Serializable

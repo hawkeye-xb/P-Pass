@@ -2,6 +2,7 @@
 //!
 //! No `unwrap`/`expect` allowed in production code (CI-enforced).
 
+pub mod audit_route;
 pub mod authz;
 pub mod backup;
 pub mod cli;

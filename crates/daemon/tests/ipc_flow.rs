@@ -164,6 +164,17 @@ async fn status_devices_and_revoke_roundtrip() {
         .await;
     assert_eq!(resp.result.unwrap()["revoked"], true);
     assert!(db.get_device(&[0xAA; 32]).await.unwrap().unwrap().revoked);
+    // AUDIT-04 card decision #4: revoking authorization is a user decision
+    // and must land in audit_decision, referencing the revoked device.
+    let decisions = db.list_decisions(10).await.unwrap();
+    let revoke_decision = decisions
+        .iter()
+        .find(|d| d.entry.decision_kind == "revoke_authorization")
+        .expect("device.revoke must write an audit_decision row");
+    assert_eq!(
+        revoke_decision.entry.causal_object_ref.as_deref(),
+        Some("aa".repeat(32).as_str())
+    );
 }
 
 // ── NAME-01: device.rename（ID 与显示名分离，decisions ②）──────────

@@ -46,6 +46,10 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
             if (item.deliveryState == DeliveryState.CANCELLED_BY_SCOPE ||
                 item.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING
             ) return@update snapshot
+            // AUDIT-04: a replayed receipt for an item already CONFIRMED must
+            // not mint a second audit_item_evidence fact — the guard is the
+            // pre-transition state, checked once, before the copy below.
+            val firstConfirmation = item.deliveryState != DeliveryState.CONFIRMED
             val items = snapshot.items.map { item ->
                 if (item.queueSequence == receipt.queueSequence) {
                     item.copy(
@@ -72,7 +76,7 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
                     it.deliveryState == DeliveryState.QUEUED ||
                         it.deliveryState == DeliveryState.TRANSFERRING
                 }
-            snapshot.copy(
+            val updated = snapshot.copy(
                 uploadCursor = UploadCursor(next),
                 // MOB-63: Pause may have already returned this final item to
                 // QUEUED when an in-flight Desktop receipt arrives. Once the
@@ -83,6 +87,24 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
                 fetchLease = null,
                 items = items,
             )
+            // AUDIT-04: object confirmation evidence commits in the SAME
+            // atomic snapshot as the state transition (card acceptance
+            // criterion #1) — never a separate "append after commit" step.
+            if (firstConfirmation) {
+                updated.appendAudit(
+                    AuditKinds.ITEM_CONFIRMED,
+                    roundId = item.roundId,
+                    payload = mapOf(
+                        "itemRef" to item.sourceRef,
+                        "sourceVersion" to item.sourceVersion,
+                        "contentHash" to (receipt.contentHash ?: item.contentHash ?: ""),
+                        "receiptRef" to receipt.receiptId,
+                        "queueSequence" to receipt.queueSequence.toString(),
+                    ),
+                )
+            } else {
+                updated
+            }
         }
     }
 
