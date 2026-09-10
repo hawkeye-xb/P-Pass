@@ -40,14 +40,6 @@ UI-08 已通过归档。
 
 ---
 
-## 一、进行中
-
-| 卡 | 一句话 | 当前节点 |
-|---|---|---|
-| [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2：手机 ledger outbox → Desktop 幂等事件库，直接取代旧文本 audit；正常项按 round 汇总，网络路径不进长期审计 | 先做无 UI 文件的 ledger/schema/IPC RED→GREEN；`App.svelte` 投影等 MOB-47 上游改动 rebase 后接入 |
-
----
-
 ## 二、待共享回归（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
@@ -89,6 +81,10 @@ UI-08 已通过归档。
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
 | P3 | [MOB-66](../cards/MOB-66-android-brand-font-newsreader-manrope.md) | Android 端标题/正文仍是系统默认字体，未接 Newsreader/Manrope，与桌面品牌不一致 | L2 |
+| P2 | [TEL-01](../cards/TEL-01-telemetry-dictionary-v2-schema.md) | 遥测字典 v2 schema（[OBS-02](../cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md) 已裁决，破坏性变更，daemon+Worker 同步改） | L1 |
+| P2 | [TEL-02](../cards/TEL-02-wire-conn-and-flow-item-events.md) | 接线 `conn`/`flow_item` 到 `flow_delivery.rs`（挂载点已确认）；阻塞于 TEL-01 | L2 |
+| P3 | [TEL-03](../cards/TEL-03-error-event-taxonomy.md) | `error` 事件 taxonomy 设计+接线；阻塞于 TEL-01，且需先跟验收人过一遍错误码粒度 | L2 |
+| P3 | [TEL-04](../cards/TEL-04-wire-first-byte-event.md) | 接线 `first_byte` 到 query.rs 缩略图/大图服务路径；阻塞于 TEL-01 | L1 |
 
 ---
 
@@ -97,8 +93,7 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
-| [OBS-02](../cards/OBS-02-telemetry-event-dictionary-usefulness-review.md) | 遥测默认已开、只有 `daemon_alive` 真在跑，`conn`/`backup_session`/`first_byte` 定义完整但零调用；手册 2026-07 定的字段（含 country/isp_hash）是否仍有用需重新裁决，不许照抄接线 | **等你拍板新事件字典 v2**，定了才拆实施卡 |
-| [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关，承诺（手册+技术可行性报告）未兑现；当前仅自建自用，暂不算合规危机但欠账真实 | 阻塞于 OBS-02（字段定了才知道隐私页该写什么） |
+| [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关，承诺（手册+技术可行性报告）未兑现；[OBS-02](../cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md) 已裁决字典 v2，当前仅自建自用，暂不算合规危机但欠账真实 | 待 TEL-01~04 落地后，字段列表定了再设计隐私页/开关 UI |
 
 ---
 
@@ -106,6 +101,7 @@ UI-08 已通过归档。
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [OBS-02](../cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md) | 验收人裁决遥测字典 v2（删 ipver/country/isp_hash，`backup_session`→`flow_item` 精简字段，新增 `error`）；不是代码交付，是产品裁决记录 | 拆出 TEL-01~04 实施卡 |
 | [DESK-14](../cards/done/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS 真机 2026-09-10：32px 透明顶部拖拽区正常；顺带发现并修复原生标题文字与侧栏品牌重复显示（加 `hiddenTitle: true`） | 无——拖拽区与标题重复均已闭环 |
 | [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | macOS 真机 2026-09-10：Button/Card/Dialog/Notice/NavItem 五组件在真实 Tauri 窗口视觉正常、无错位闪烁 | 无——五组件收口验收关闭 |
 | [MOB-63](../cards/done/MOB-63-pause-racing-final-completion-must-set-idle.md) | 三星真机 2026-09-10：暂停与最后完成回执交错的两种时机均收敛 Idle | 无——竞态收敛已闭环 |
