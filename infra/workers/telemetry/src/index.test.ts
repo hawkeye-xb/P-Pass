@@ -93,7 +93,7 @@ describe("schema + ingest (unit)", () => {
     // Object.entries order would drop columns on absence.
     const sparse = {
       event: "conn",
-      path: "lan",
+      path: "direct",
       ms: 99,
       ...COMMON,
     };
