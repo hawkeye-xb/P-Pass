@@ -152,3 +152,22 @@
   height: 32px;
   background: transparent;
 }
+
+/* UI-04b: Sonner 负责通知的行为与形态；颜色只从 P-Pass 三个语义 token 取。
+ * richColors 在每个 toast 上声明同名变量，故此处用 !important 覆盖库默认色，
+ * 不复制 Sonner 的布局/动效，也不另造通知组件。 */
+[data-sonner-toast][data-rich-colors='true'][data-type='success'] {
+  --success-bg: var(--color-safe-bg) !important;
+  --success-border: var(--color-safe) !important;
+  --success-text: var(--color-safe) !important;
+}
+[data-sonner-toast][data-rich-colors='true'][data-type='warning'] {
+  --warning-bg: var(--color-waiting-bg) !important;
+  --warning-border: var(--color-waiting) !important;
+  --warning-text: var(--color-waiting) !important;
+}
+[data-sonner-toast][data-rich-colors='true'][data-type='error'] {
+  --error-bg: var(--color-act-bg) !important;
+  --error-border: var(--color-act) !important;
+  --error-text: var(--color-act) !important;
+}
