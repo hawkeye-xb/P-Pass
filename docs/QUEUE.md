@@ -44,7 +44,7 @@ UI-08 已通过归档。
 
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
-| [AUDIT-03](../cards/AUDIT-03-audit-contract-case-matrix.md) | 重新定义审计合同：操作、对象证据、安全/决定与监控分层；Case Matrix 与本机可信/保留/访问边界已定 | 推导正式数据合同、对象 tombstone 与失败 case，随后拆实现卡 |
+| [AUDIT-04](../cards/AUDIT-04-audit-core-operation-evidence-tombstone.md) | 重建审计核心：操作、对象 evidence、数据离开 tombstone 与决定合同，直接淘汰 AUDIT-01 泛用事件 | Android/Rust/daemon 先落新事实合同；Desktop 投影等待后续 AUDIT-05 |
 
 ---
 
@@ -106,6 +106,7 @@ UI-08 已通过归档。
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [AUDIT-03](../cards/done/AUDIT-03-audit-contract-case-matrix.md) | 审计 Case Matrix、【本地】/名称+短指纹、支持级可信、全库保留与无专用导出边界均已收口 | 释放 AUDIT-04 审计核心重建 |
 | [TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md) | 遥测字典 v2 落地：`conn` 删 ipver/country/isp_hash，`backup_session`→`flow_item` 精简字段，新增 `error`；daemon+Worker 同步改，`cargo test` 5/5 + `npm test` 14/14 + `just ci` 全绿 | 释放 TEL-02/03/04 接线卡 |
 | [TEL-02](../cards/done/TEL-02-wire-conn-and-flow-item-events.md) | conn/flow_item 已接线 `flow_delivery.rs::fetch()`；顺带修正 TEL-01 遗留的 conn.path 枚举值（lan 不存在，改为 direct/relay/offline/unknown）；`cargo test -p daemon --test flow_delivery` 10/10、nextest 356/356、just ci 全绿 | 释放 TEL-03/04 的 TEL-01 依赖已满足 |
 | [TEL-04](../cards/done/TEL-04-wire-first-byte-event.md) | first_byte 已接线 `query.rs::thumb()`/`original()`（仅成功交付字节的路径记录）；新增 `query_telemetry.rs` 3 个测试；nextest 359/359、just ci 全绿 | 释放 TEL-03 |
