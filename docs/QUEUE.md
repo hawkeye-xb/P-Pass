@@ -44,14 +44,13 @@ UI-08 与 BLOB-03 已通过归档。
 
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
-
+| [AUDIT-04](../cards/AUDIT-04-audit-core-operation-evidence-tombstone.md) | 审计核心真实验收 | 以 main 重建 Android/daemon；隔离图 Flow 后核 operation/evidence，外部删除后核 tombstone 存活 |
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [AUDIT-04](../cards/AUDIT-04-audit-core-operation-evidence-tombstone.md) | 审计核心重建（operation/item evidence/tombstone/decision 四表 + 全部生产路径接线）代码完成，本地全量 `just ci` 绿；待真机验收隔离测试图 operation+evidence 落地与外部删除后 tombstone 存活 | L2 |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | Flow 审计 v2 已真机验证手机 ledger → daemon → Desktop `audit_event` 的一条轮次汇总闭环；待 Desktop 活动记录实际中文文案视觉确认 | L2 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
