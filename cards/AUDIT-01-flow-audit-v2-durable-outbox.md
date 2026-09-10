@@ -1,6 +1,8 @@
 # AUDIT-01 Flow 审计 v2：持久 outbox 与直接切换（L2）
 
-> 🟠 状态：进行中 · 协同分支：`audit/audit-01-flow-v2` · 当前节点：定义并实现新的唯一审计事实链
+> 🟢 状态：代码完成，待真机回归 · 协同分支：`audit/audit-01-flow-v2` ·
+> 当前节点：全链路（Android/Rust/Desktop）实现 + 本地全量测试通过；
+> 真机验收单列后续批次，不阻塞本次实现完成。
 > 级别：L2 · 阻塞：无（NET-04/05 的路径观测明确不作为前置）
 
 ## 问题
@@ -20,13 +22,32 @@ ARCH-01 的生产 Flow 已将发现、单项传输、receipt、范围和取消�
 
 ## 验收标准
 
-- [ ] RED：手机 ledger 的一个用户动作或 receipt 接受若不随同一次原子 snapshot 生成 outbox event，合同测试失败；写入后重启仍能取到同一 event id。
-- [ ] RED：同一 outbox event 投递两次、或同一 Desktop receipt 重放，Desktop 仅有一条 `audit_event`；移除唯一 id/幂等约束后测试变红。
-- [ ] RED：三项正常确认的同一 `roundId` 只产生一条 `flow.round.finished` 汇总；逐项 `flow.item.confirmed` 或把普通 transport transition 写入长期审计时测试变红。
-- [ ] 用户动作（pause/continue/cancel/restore/retry）、范围变更、源缺失、`FAILED_NEEDS_USER`、远端缺失裁决、epoch 清退均有固定 kind、最小结构化 payload、关联 `roundId`/epoch，并只从已经持久化的事实生成。
-- [ ] Desktop SQLite 直接升级到 v2：旧 `audit_log` 不再被读取或暴露；新 `audit_event` schema 含 event id 唯一约束、发生时间、actor、kind、关联 id 与 JSON payload。历史 v1 行不迁移、不伪造为 v2 事实。
-- [ ] 配对、吊销、外部删除等仍在生产路径的审计写入改为 v2；`audit.list` 返回 v2 结构，Desktop 活动页不再正则解析 `backup.finished` 或读取旧 action/detail。
-- [ ] Android JVM、Rust focused tests、desktop tests/build、`just ci` 均通过；Android 测试从本次 XML 统计真实测试数。真机验证另列为后续批次，不阻塞本地实现完成。
+- [x] RED：手机 ledger 的一个用户动作或 receipt 接受若不随同一次原子 snapshot 生成 outbox event，合同测试失败；写入后重启仍能取到同一 event id。
+- [x] RED：同一 outbox event 投递两次、或同一 Desktop receipt 重放，Desktop 仅有一条 `audit_event`；移除唯一 id/幂等约束后测试变红。
+- [x] RED：三项正常确认的同一 `roundId` 只产生一条 `flow.round.finished` 汇总；逐项 `flow.item.confirmed` 或把普通 transport transition 写入长期审计时测试变红。
+- [x] 用户动作（pause/continue/cancel/restore/retry）、范围变更、源缺失、`FAILED_NEEDS_USER`、远端缺失裁决、epoch 清退均有固定 kind、最小结构化 payload、关联 `roundId`/epoch，并只从已经持久化的事实生成。
+- [x] Desktop SQLite 直接升级到 v2：旧 `audit_log` 不再被读取或暴露；新 `audit_event` schema 含 event id 唯一约束、发生时间、actor、kind、关联 id 与 JSON payload。历史 v1 行不迁移、不伪造为 v2 事实。
+- [x] 配对、吊销、外部删除等仍在生产路径的审计写入改为 v2；`audit.list` 返回 v2 结构，Desktop 活动页不再正则解析 `backup.finished` 或读取旧 action/detail。
+- [x] Android JVM、Rust focused tests、desktop tests/build、`just ci` 均通过；Android 测试从本次 XML 统计真实测试数。真机验证另列为后续批次，不阻塞本地实现完成。
+
+### 验收记录（2026-09-10）
+
+- Android：`./gradlew :app:testDebugUnitTest` → 328 个测试，0 失败（含新增
+  `AUDIT01LedgerOutboxTest` 6 个用例，锁定 ledger↔outbox 原子提交契约）。
+- Rust 工作区：`cargo nextest run --all-features` → 346 个测试通过（1 个
+  预先存在的 skip），`just ci`（fmt/clippy/arch-check/queue-check/
+  md-check/token-check）全绿。
+- Desktop：`cargo test --lib`（p-pass-desktop crate）18 个测试通过；
+  `vitest run` 57 个测试通过。
+- `audit_log` 表随 migration `0005_audit_event_v2.sql` 整表 DROP，未做
+  任何读取兼容或历史行迁移；`crates/storage/src/audit_repo.rs` 是唯一
+  审计写入/查询入口。
+- Desktop 活动页（`App.svelte`）改读 v2 `kind`/`payload` 字段；
+  `backup.started`/`backup.finished` 会话级审计（旧 batch 事件矩阵外）
+  随 router.rs 一并移除，依赖它的「本周新备份/去重跳过」统计与
+  「备份耗时」两处派生 UI 一并下线（不伪造无对应数据源的数字）。
+- 真机验证（新活动文案在真实设备上的呈现、Flow 真实终态）显式列为
+  后续批次，按卡片原定范围不阻塞本次实现完成。
 
 ## 范围
 
