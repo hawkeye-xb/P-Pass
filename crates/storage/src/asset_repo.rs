@@ -375,7 +375,7 @@ mod tests {
             "device",
             "backup_watermark",
             "diag_event",
-            "audit_log",
+            "audit_event",
         ] {
             let n: i64 = sqlx::query_scalar(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",

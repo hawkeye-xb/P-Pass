@@ -144,13 +144,13 @@ impl Router {
         if last.is_none_or(|t| now - t > crate::presence::CONNECTED_AUDIT_DEDUPE_MS) {
             let _ = self
                 .db
-                .append_audit(&storage::AuditEntry {
-                    ts: now,
-                    actor: Some(peer.0.to_vec()),
-                    action: "device.connected".into(),
-                    target_hash: None,
-                    detail: Some(device.name.clone()),
-                })
+                .append_audit(&storage::AuditEntry::local(
+                    now,
+                    Some(peer.0.to_vec()),
+                    "device.connected",
+                    None,
+                    Some(serde_json::json!({ "deviceName": device.name.clone() }).to_string()),
+                ))
                 .await;
         }
     }
@@ -530,17 +530,9 @@ impl Router {
         match req.method.as_str() {
             methods::BACKUP_BEGIN => {
                 backup.begin(peer);
-                // T5: 备份会话开始（会话级审计——与资产级 commit 互补）。
-                let _ = self
-                    .db
-                    .append_audit(&storage::AuditEntry {
-                        ts: unix_ms_now(),
-                        actor: Some(peer.0.to_vec()),
-                        action: "backup.started".into(),
-                        target_hash: None,
-                        detail: None,
-                    })
-                    .await;
+                // AUDIT-01: legacy batch backup sessions are explicitly out
+                // of the v2 event matrix (card decision #4/#5) — no longer
+                // written to the long-term audit trail.
                 Resp::ok(req.id.clone(), serde_json::Value::Null)
             }
             methods::BACKUP_MANIFEST => {
@@ -597,20 +589,12 @@ impl Router {
                             outcome.ingested,
                             outcome.duplicates
                         );
-                        // T5: 备份会话结束 + 结果（几张/去重几张）。
-                        let _ = self
-                            .db
-                            .append_audit(&storage::AuditEntry {
-                                ts: unix_ms_now(),
-                                actor: Some(peer.0.to_vec()),
-                                action: "backup.finished".into(),
-                                target_hash: None,
-                                detail: Some(format!(
-                                    "ingested={} duplicates={}",
-                                    outcome.ingested, outcome.duplicates
-                                )),
-                            })
-                            .await;
+                        // AUDIT-01: legacy batch backup completions are
+                        // explicitly out of the v2 event matrix (card
+                        // decision #4/#5) — no longer written to the
+                        // long-term audit trail; the activity stream event
+                        // below still carries the ingested/duplicates count
+                        // for the UI.
                         // IPC-02: 备份批次落地——桌面活动流/水位即时更新。
                         if let Some(bus) = &self.events {
                             events::emit(
@@ -695,13 +679,13 @@ impl Router {
             Ok(_) => {
                 let _ = self
                     .db
-                    .append_audit(&storage::AuditEntry {
-                        ts: unix_ms_now(),
-                        actor: Some(peer.0.to_vec()), // 设备自我撤销（UX-06）
-                        action: "device.unpaired".into(),
-                        target_hash: None,
-                        detail: None,
-                    })
+                    .append_audit(&storage::AuditEntry::local(
+                        unix_ms_now(),
+                        Some(peer.0.to_vec()), // 设备自我撤销（UX-06）
+                        "device.unpaired",
+                        None,
+                        None,
+                    ))
                     .await;
                 // IPC-02: 设备自我断开——桌面设备行即时消失。
                 if let Some(bus) = &self.events {

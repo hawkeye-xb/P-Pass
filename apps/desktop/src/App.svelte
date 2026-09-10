@@ -155,8 +155,9 @@
   // T-092: activity.list 批次（{node_id,name,at,asset_count}，at=unix 毫秒，
   // name 可能 null）——活动记录页数据源
   let activity = $state([]);
-  // T5: 审计事件流（{ts, action, actor, detail}）——配对请求/允许/拒绝、
-  // 备份会话、吊销，活动页的主数据源。
+  // AUDIT-01: 审计事件流 v2（{ts, kind, actor, roundId, payload}）——
+  // 配对请求/允许/拒绝、吊销、外部删除、Flow 用户操作/终态，活动页的
+  // 主数据源。v1 的 action/detail 自由文本已随 audit_log 一并移除。
   let auditEvents = $state([]);
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
@@ -236,8 +237,8 @@
         const a = await call("activity.list", { limit: 100 });
         activity = (a.batches ?? []).slice().sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
       } catch (_) {}
-      // T5: 审计事件流（配对/会话/吊销）——活动页主数据源。
-      // 2026-08-18（用户反馈④）：limit 200 → 500。audit_log 里 ingest.*
+      // AUDIT-01: 审计事件流 v2（配对/吊销/外部删除/Flow 事实）——活动页
+      // 主数据源。2026-08-18（用户反馈④）：limit 200 → 500。ingest.*
       // 逐文件行占绝大多数（每张照片一行），但展示层把它们过滤掉——
       // 200 条上限下，一次几百张的备份就能把全部设备级事件挤出窗口，
       // 活动记录页看着"没几条"其实是被饿死的。IPC 侧 clamp 上限 1000
@@ -269,51 +270,39 @@
     }
   }
 
-  // T5: 审计事件 → 人话行文案（未知 action 兜底显示原始类型，绝不吞）。
+  // AUDIT-01: 审计事件 v2 → 人话行文案（未知 kind 兜底显示原始类型，绝不吞）。
   // DESK-05: 拆成 设备/事件 两列喂表格——设备列解析 actor 名称，事件列
   // 只留动作文本（原「<设备名> 备份完成」式前缀并入设备列）。
-  // 照片墙同步卡: detail 里机器可读字段（ingested= duplicates=）翻译成
-  // 人话；asset.removed_external 只留文件名（全路径是噪音）。
+  // payload 是结构化 JSON（v1 的机器可读 detail 字符串已随 audit_log 移除）。
   function auditWho(e) {
-    const d = e.detail ?? "";
+    const p = e.payload ?? {};
     const who = devices.find((x) => x.node_id === e.actor)?.name ?? null;
     if (who) return who;
-    // 配对类事件 detail 里是设备名（actor 为 null 时兜底）。
-    if (e.action.startsWith("pair.") && d) return d;
+    // 配对类事件 payload.deviceName 是设备名（actor 为 null 时兜底）。
+    if (e.kind.startsWith("pair.") && p.deviceName) return p.deviceName;
     if (e.actor) return `${e.actor.slice(0, 8)}…`;
     return "本机";
   }
   function auditText(e) {
-    const d = e.detail ?? "";
-    switch (e.action) {
+    const p = e.payload ?? {};
+    switch (e.kind) {
       case "pair.requested":
         return "请求加入";
       case "pair.accepted":
         return "已加入";
       case "pair.denied":
         return "加入被拒绝";
-      case "backup.started":
-        return "开始备份";
-      case "backup.finished": {
-        // detail 是机器可读 "ingested=N duplicates=M"（router.rs 备份
-        // 提交审计）——翻译成人话；解析失败回退原文（绝不吞）。
-        const m = /ingested=(\d+)\s+duplicates=(\d+)/.exec(d);
-        if (m) return `备份完成：新增 ${m[1]} 张，去重 ${m[2]} 张`;
-        return `备份完成（${d}）`;
-      }
       case "asset.removed_external":
-        // detail "originals missing: <rel_path>"（SYNC-01 对账/WATCH-01
-        // 秒级监听清索引）——只留文件名，全路径是噪音。
-        return `外部删除（${shortName(d)}）`;
-      case "device.renamed": {
-        // detail "{旧名} -> {新名} ({64位hex node_id})"（ipc.rs 改名审计
-        // 写入）——node_id 是取证用的，不给用户看，只留改名前后的名字，
-        // 不然一条动态挤进 64 位十六进制字符串，总览摘要卡/活动记录页
-        // 都会被撑爆换行（用户实测反馈）。
-        const m = /^(.*) -> (.*) \([0-9a-f]{64}\)$/.exec(d);
-        if (m) return `改名：${m[1]} → ${m[2]}`;
-        return `已改名（${d}）`;
-      }
+        // payload.relPath（SYNC-01 对账/WATCH-01 秒级监听清索引）——
+        // 只留文件名，全路径是噪音。
+        return `外部删除（${shortName(p.relPath)}）`;
+      case "device.renamed":
+        // payload { oldName, newName, nodeId }（ipc.rs 改名审计写入）——
+        // nodeId 是取证用的，不给用户看，只留改名前后的名字，不然一条
+        // 动态挤进 64 位十六进制字符串，总览摘要卡/活动记录页都会被撑
+        // 爆换行（用户实测反馈）。
+        if (p.oldName && p.newName) return `改名：${p.oldName} → ${p.newName}`;
+        return "已改名";
       case "device.revoked":
         return "已移除设备";
       case "device.unpaired":
@@ -322,15 +311,25 @@
         // PRES-01: hello 心跳进活动流——「小红 连接了」（10 分钟去重，
         // 防锁屏重连刷屏）。
         return "连接了";
-      case "backup.commit":
-        return `备份提交（${shortName(d)}）`;
-      case "external.delete":
-        return `外部删除（${shortName(d)}）`;
+      case "device.merged":
+        return "合并旧设备（重装恢复）";
+      case "flow.round.controlled":
+        return "调整了传输";
+      case "flow.scope.changed":
+        return "调整了备份范围";
+      case "flow.epoch.invalidated":
+        return "旧的传输授权已失效";
+      case "flow.round.finished":
+        return "一批传输完成";
+      case "flow.item.attention":
+        return "有一项需要处理";
+      case "flow.reconciliation.resolved":
+        return "对账裁决完成";
       default:
-        return `${e.action} ${d}`.trim();
+        return e.kind;
     }
   }
-  // 审计 detail 常带全路径/机器前缀——只留最后一段文件名（噪音过滤，
+  // 审计 payload 常带全路径/机器前缀——只留最后一段文件名（噪音过滤，
   // 与 visibleAudit 的 ingest.* 过滤同一原则）。没有路径就原样返回。
   function shortName(d) {
     const s = String(d ?? "");
@@ -347,39 +346,10 @@
     const p = (n) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   }
-  // 2026-08-18（用户反馈④）：备份耗时——daemon 只记 backup.started /
-  // backup.finished 两条会话事件（router.rs），没有 duration 字段，这里
-  // 按 actor 把 finished 配到它前面最近的一条 started 上算差值。配不到
-  // （daemon 重启丢了 started / 窗口外）就不显示，不猜。
-  const backupDuration = $derived.by(() => {
-    const out = {};
-    // auditEvents 是时间倒序——倒着扫等于按时间正序遇到 started 再遇到
-    // finished，同一 actor 后来的 started 覆盖前一个（会话不嵌套）。
-    const openedAt = {};
-    for (let i = auditEvents.length - 1; i >= 0; i--) {
-      const e = auditEvents[i];
-      const who = e.actor ?? "";
-      if (e.action === "backup.started") openedAt[who] = e.ts;
-      else if (e.action === "backup.finished") {
-        const from = openedAt[who];
-        // DESK-08: 用审计主键做 key，不用 ts+actor（同形的撞键风险）。
-        if (typeof from === "number" && e.ts >= from) out[e.id] = e.ts - from;
-        delete openedAt[who];
-      }
-    }
-    return out;
-  });
-  // 毫秒 → 人话时长（秒 / 分秒 / 小时分）。0 秒也如实说"不到 1 秒"。
-  function humanDuration(ms) {
-    if (typeof ms !== "number" || !Number.isFinite(ms) || ms < 0) return null;
-    if (ms < 1000) return "不到 1 秒";
-    const s = Math.round(ms / 1000);
-    if (s < 60) return `${s} 秒`;
-    const m = Math.floor(s / 60);
-    if (m < 60) return s % 60 === 0 ? `${m} 分钟` : `${m} 分 ${s % 60} 秒`;
-    const h = Math.floor(m / 60);
-    return m % 60 === 0 ? `${h} 小时` : `${h} 小时 ${m % 60} 分`;
-  }
+  // AUDIT-01: 批次备份的 backup.started/backup.finished 会话审计已经
+  // 随本卡移除（card 决定：旧 batch backup.* 不再作为任何活动页或统计
+  // 来源）——耗时统计随之一起下线，不用 activity.list 的批次时间伪造
+  // 一个「耗时」出来（那张表只有到达时间，没有会话起止）。
 
   // MOB-29: 用户点过「知道了」的时刻——**只压住这一刻及之前的删除**，
   // 之后再删又会出来（一次 dismiss 不换来永久静默）。刻意只存在内存里：
@@ -390,29 +360,17 @@
     externalDeleteNotice(auditEvents, nowMs, { dismissedAt: deleteWarnDismissedAt })
   );
 
-  // DESK-05: 活动表格只展示设备级事件——ingest.* 逐文件行是全路径噪音
-  // （备份完成行的 ingested= 汇总已覆盖数量），不参与展示。数据层不动。
+  // DESK-05: 活动表格只展示设备级事件——ingest.* 逐文件行是全路径噪音，
+  // 不参与展示（这类逐文件事件本就只在批处理路径写入，AUDIT-01 之后
+  // Flow 路径不再逐项写长期审计）。数据层不动。
   const visibleAudit = $derived(
-    auditEvents.filter((e) => !e.action.startsWith("ingest."))
+    auditEvents.filter((e) => !e.kind.startsWith("ingest."))
   );
-  // 设计稿"本周"统计条：只取真实能从审计里推出来的两项（新备份/去重
-  // 跳过，backup.finished 的 ingested=/duplicates= 汇总，过去 7 天）；
-  // 设计稿画的第三项「重试成功」在当前审计事件里没有对应的真实语义
-  // （没有 retry 相关的 action），不编造数字，先只做这两项。
-  const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-  const weekStats = $derived.by(() => {
-    let added = 0, dup = 0;
-    const cutoff = nowMs - WEEK_MS;
-    for (const e of auditEvents) {
-      if (e.action !== "backup.finished" || e.ts < cutoff) continue;
-      const m = /ingested=(\d+)\s+duplicates=(\d+)/.exec(e.detail ?? "");
-      if (m) {
-        added += Number(m[1]);
-        dup += Number(m[2]);
-      }
-    }
-    return { added, dup };
-  });
+  // AUDIT-01: 本周「新备份/去重跳过」统计原本读 backup.finished 的
+  // ingested=/duplicates= 汇总；该审计事件已随本卡移除（card 决定：
+  // 旧 batch backup.* 不再作为任何活动页或统计来源），且 Flow 路径的
+  // `flow.round.finished` payload 口径尚未约定同名字段——不编造数字，
+  // 这张统计条本身随之下线（模板同步移除，见 log 页头部）。
 
   // PRES-01: sub 槽接 devices.list[].presence 三档（online 优先展示连接
   // 路径事实：已直连/经中继；心跳新鲜无活连接 → 「在线」；recent →
@@ -1599,47 +1557,30 @@
         </section>
       {:else if page === "log"}
         <section class="page" data-testid="page-log">
-          <!-- DESK-08: 活动记录页已迁 Tailwind + Card；审计流数据与过滤
-               （ingest.* 噪音行剔除）一字未动。 -->
+          <!-- AUDIT-01: 活动记录页数据源改读 audit_event v2（kind/payload）；
+               本周统计条（新备份/去重跳过）随旧 batch backup.* 审计一并
+               下线，Flow 侧尚无同口径汇总字段，不编造数字。 -->
           <div class="flex flex-wrap items-end justify-between gap-[20px]">
             <div>
               <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">活动记录</h2>
               <p class="mt-[6px] text-[14px] text-ink-40">谁备份了什么，一目了然——不用去文件管理器里对账。</p>
             </div>
-            <!-- 设计稿"本周"统计条：只做能从真实审计数据推出来的两项，
-                 见上方 weekStats 注释——不编造「重试成功」这类没有真实
-                 语义支撑的数字。 -->
-            <div class="flex flex-none items-center gap-[18px] rounded-full bg-linen px-[22px] py-[10px] text-[14px] text-ink-60">
-              <span class="text-[13px] font-semibold text-ink-40">本周</span>
-              <span>新备份 <b class="text-ink">{weekStats.added}</b></span>
-              <span>去重跳过 <b class="text-ink">{weekStats.dup}</b></span>
-            </div>
           </div>
-          <!-- T5: 活动记录页展示审计事件流——配对请求/允许/拒绝、备份会话
-               （开始/结束+数量）、设备吊销/断开，全部带时间倒序。
-               ingest.* 逐文件行过滤不展示（全路径噪音），备份完成行
-               保留 ingested 汇总。2026-08-13: 改回设计稿的卡片行列表
-               （DESK-05 当时改真表格的顾虑是"内容超长"，但 ingest.*
-               噪音行本来就被过滤掉了，跟表格与否无关；卡片行是 flex
-               布局，长文本本来就会自然换行，不会重新踩那个坑）。 -->
+          <!-- AUDIT-01: 活动记录页展示审计事件流 v2——配对请求/允许/拒绝、
+               设备吊销/断开/改名、外部删除、Flow 用户操作与终态，全部带
+               时间倒序。ingest.* 逐文件行过滤不展示（全路径噪音）。 -->
           <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
             {#if visibleAudit.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。</p>
             {:else}
               <ul class="m-0 list-none p-0">
-                <!-- DESK-08: 同上——key 必须是审计主键，不是 ts+action。 -->
+                <!-- DESK-08: 同上——key 必须是审计主键，不是 ts+kind。 -->
                 {#each visibleAudit as e (e.id)}
                   {@const at = humanTime(e.ts, nowMs)}
                   {@const exact = exactTime(e.ts)}
-                  <!-- 2026-08-18（用户反馈④）：一行两层——主行是设备+事件
-                       （+ 备份会话的耗时），次行是精确时刻。auditText 不动
-                       （总览"最近动静"迷你卡共用它，只能是一句话）。 -->
-                  {@const dur = e.action === "backup.finished"
-                    ? humanDuration(backupDuration[e.id])
-                    : null}
                   <li class="flex items-baseline gap-[14px] border-b border-divider px-[22px] py-[16px] last:border-b-0">
                     <span class="flex-1 text-[15px] text-ink"
-                      ><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}{#if dur}<span class="text-ink-40"> · 用时 {dur}</span>{/if}</span
+                      ><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}</span
                     >
                     <!-- 2026-08-20（用户反馈）：右侧原来堆两行——相对时间
                          「3 分钟前」+ 精确时刻「2026-08-20 16:15」。两行指同一

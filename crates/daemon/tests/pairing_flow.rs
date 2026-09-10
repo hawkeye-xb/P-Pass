@@ -101,7 +101,7 @@ async fn full_flow_pairs_the_device() {
 
     // And the audit trail names the pairing (审计裁决).
     let audit = db.list_audit(10).await.unwrap();
-    assert!(audit.iter().any(|r| r.entry.action == "pair.accepted"));
+    assert!(audit.iter().any(|r| r.entry.kind == "pair.accepted"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -203,9 +203,12 @@ async fn revoked_device_rejoins_with_fresh_token() {
 
     // …and the audit trail says it was a rejoin.
     let audit = db.list_audit(10).await.unwrap();
-    assert!(audit
-        .iter()
-        .any(|r| r.entry.detail.as_deref().unwrap_or("").contains("rejoined")));
+    assert!(audit.iter().any(|r| r
+        .entry
+        .payload
+        .as_deref()
+        .unwrap_or("")
+        .contains("rejoined")));
 }
 
 // ── UX-06: device.unpair — unilateral stop ────────────────
@@ -283,7 +286,7 @@ async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
 
     // Audit names the self-revocation.
     let audit = db.list_audit(20).await.unwrap();
-    assert!(audit.iter().any(|r| r.entry.action == "device.unpaired"));
+    assert!(audit.iter().any(|r| r.entry.kind == "device.unpaired"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -414,7 +417,12 @@ async fn reinstall_merge_replaces_old_device_keeps_assets_watermark() {
     // Audit records the merge with both NodeIds.
     let audit = db.list_audit(20).await.unwrap();
     assert!(audit.iter().any(|r| {
-        r.entry.action == "device.merged" && r.entry.detail.as_deref().unwrap_or("").contains("to ")
+        r.entry.kind == "device.merged"
+            && r.entry
+                .payload
+                .as_deref()
+                .unwrap_or("")
+                .contains("toNodeId")
     }));
 }
 
@@ -454,7 +462,7 @@ async fn reinstall_accept_as_new_keeps_old_row_untouched() {
     assert_eq!(new.name, "新手机");
     // No merge audit.
     let audit = db.list_audit(20).await.unwrap();
-    assert!(!audit.iter().any(|r| r.entry.action == "device.merged"));
+    assert!(!audit.iter().any(|r| r.entry.kind == "device.merged"));
 }
 
 #[tokio::test(flavor = "multi_thread")]

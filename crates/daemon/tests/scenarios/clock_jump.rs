@@ -154,7 +154,7 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
     assert!(!d.revoked);
     let audit = db.list_audit(10).await.unwrap();
     assert!(
-        audit.iter().any(|r| r.entry.action == "pair.accepted"),
+        audit.iter().any(|r| r.entry.kind == "pair.accepted"),
         "audit must record the accepted pairing: {audit:?}"
     );
 

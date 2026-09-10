@@ -289,7 +289,7 @@ async fn external_deletion_reconciles_index_thumbs_and_audit() {
     let audit = f.db.list_audit(100).await.unwrap();
     let external: Vec<_> = audit
         .iter()
-        .filter(|r| r.entry.action == "asset.removed_external")
+        .filter(|r| r.entry.kind == "asset.removed_external")
         .collect();
     assert_eq!(external.len(), 2, "two audit rows: {audit:?}");
     for r in &external {
@@ -411,7 +411,7 @@ async fn deleted_asset_is_still_reported_missing_no_tombstone() {
     let audit = f.db.list_audit(100).await.unwrap();
     let external: Vec<_> = audit
         .iter()
-        .filter(|r| r.entry.action == "asset.removed_external")
+        .filter(|r| r.entry.kind == "asset.removed_external")
         .collect();
     assert_eq!(external.len(), 1, "one audit row: {audit:?}");
     assert!(

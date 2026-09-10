@@ -98,7 +98,7 @@ async fn router_harness(_dir: &std::path::Path, db: Db, now: i64) -> RouterHarne
 async fn connected_audits(db: &Db, node: &[u8]) -> Vec<storage::AuditRecord> {
     let all = db.list_audit(1000).await.unwrap();
     all.into_iter()
-        .filter(|r| r.entry.action == "device.connected" && r.entry.actor.as_deref() == Some(node))
+        .filter(|r| r.entry.kind == "device.connected" && r.entry.actor.as_deref() == Some(node))
         .collect()
 }
 

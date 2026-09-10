@@ -260,10 +260,13 @@ async fn rebuild_writes_an_unattributed_audit_row() {
     let log = db.list_audit(10).await.unwrap();
     let row = log
         .iter()
-        .find(|r| r.entry.action == "index.rebuild")
+        .find(|r| r.entry.kind == "index.rebuild")
         .expect("rebuild must be audited");
     assert_eq!(row.entry.actor, None);
-    assert_eq!(row.entry.detail.as_deref(), Some("indexed=0 duplicates=0"));
+    assert_eq!(
+        row.entry.payload.as_deref(),
+        Some(r#"{"duplicates":0,"indexed":0}"#)
+    );
 }
 
 /// Hidden files (`.DS_Store` and friends) never enter the index; a library

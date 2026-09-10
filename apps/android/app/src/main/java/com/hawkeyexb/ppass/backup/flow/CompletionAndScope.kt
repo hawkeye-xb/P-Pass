@@ -98,6 +98,10 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
                     if (item.deliveryState == DeliveryState.CONFIRMED) item
                     else item.copy(deliveryState = DeliveryState.CANCELLED_BY_SCOPE)
                 },
+            ).appendAudit(
+                AuditKinds.SCOPE_CHANGED,
+                roundId = snapshot.currentRoundId,
+                payload = mapOf("scopeRevision" to nextRevision.value.toString()),
             )
         }
     }

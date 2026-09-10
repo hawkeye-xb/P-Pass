@@ -62,8 +62,26 @@ class FlowRunner(
 
     /** User Continue reopens the durable gate; a false constraint remains waiting. */
     fun continueFlow(constraintsSatisfied: Boolean) {
-        ledger.update { it.copy(consumerGate = ConsumerGate.OPEN, consumerStatus = ConsumerStatus.IDLE) }
+        reopenGate(auditAction = "continue")
         run(constraintsSatisfied)
+    }
+
+    /**
+     * Reopen the consumer gate without a dedicated audit entry — used by
+     * [cancelCurrentRound] and [restoreAllCancelledRounds], whose own cancel/
+     * restore audit event already covers the user action; a second
+     * `flow.round.controlled` "continue" entry right after would be a
+     * duplicate description of the same click, not a second fact.
+     */
+    private fun reopenGate(auditAction: String?) {
+        ledger.update { snapshot ->
+            val reopened = snapshot.copy(consumerGate = ConsumerGate.OPEN, consumerStatus = ConsumerStatus.IDLE)
+            if (auditAction != null) {
+                reopened.appendAudit(AuditKinds.ROUND_CONTROLLED, roundId = snapshot.currentRoundId, payload = mapOf("action" to auditAction))
+            } else {
+                reopened
+            }
+        }
     }
 
     /**
@@ -87,12 +105,17 @@ class FlowRunner(
      */
     fun cancelCurrentRound(roundId: String) {
         pause()
+        val cancelledRoundId = ledger.load().currentRoundId
         cancellation.startPausedRound(roundId)
         // startPausedRound terminally marks every cancellable item in the
         // current durable window, so this production cancellation scan ends
         // atomically before future discovery admits the next round.
         cancellation.finishRound()
-        continueFlow(constraintsSatisfied = true)
+        ledger.update { snapshot ->
+            snapshot.appendAudit(AuditKinds.ROUND_CONTROLLED, roundId = cancelledRoundId, payload = mapOf("action" to "cancel"))
+        }
+        reopenGate(auditAction = null)
+        run(constraintsSatisfied = true)
     }
 
     fun acceptCompletionReceipt(receipt: CompletionReceipt) {
@@ -116,7 +139,7 @@ class FlowRunner(
                 consumerStatus = ConsumerStatus.IDLE,
                 fetchLease = null,
                 items = items,
-            )
+            ).appendAudit(AuditKinds.ROUND_CONTROLLED, roundId = snapshot.currentRoundId, payload = mapOf("action" to "retry"))
         }
         consumer.wake(constraintsSatisfied = true)
     }
@@ -154,7 +177,11 @@ class FlowRunner(
             .distinct()
         if (roundIds.isEmpty()) return
         roundIds.forEach { cancellation.restoreRound(it) }
-        continueFlow(constraintsSatisfied = true)
+        ledger.update { snapshot ->
+            snapshot.appendAudit(AuditKinds.ROUND_CONTROLLED, roundId = snapshot.currentRoundId, payload = mapOf("action" to "restore"))
+        }
+        reopenGate(auditAction = null)
+        run(constraintsSatisfied = true)
     }
 
     private fun backfillIfAdmitted() {
