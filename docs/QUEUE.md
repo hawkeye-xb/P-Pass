@@ -88,6 +88,8 @@ UI-08 已通过归档。
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
+| [OBS-02](../cards/OBS-02-telemetry-event-dictionary-usefulness-review.md) | 遥测默认已开、只有 `daemon_alive` 真在跑，`conn`/`backup_session`/`first_byte` 定义完整但零调用；手册 2026-07 定的字段（含 country/isp_hash）是否仍有用需重新裁决，不许照抄接线 | **等你拍板新事件字典 v2**，定了才拆实施卡 |
+| [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关，承诺（手册+技术可行性报告）未兑现；当前仅自建自用，暂不算合规危机但欠账真实 | 阻塞于 OBS-02（字段定了才知道隐私页该写什么） |
 
 ---
 
