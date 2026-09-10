@@ -788,23 +788,18 @@ fun PPassApp() {
                         // REBUILD-05: 范围扩大不再重置 legacy watermark。
                         // 新 Flow 以当前 discovery cursor 为上界持久化历史补扫；
                         // 它不扰动当前严格队头，结果只会追加到后续队列。
-                        if (added.isNotEmpty()) {
-                            requestFlowScopeBackfill(context)
-                        }
-                        // MOB-02 §四事件①: 选完/改完备份范围返回 → 用户在场
-                        // 档触发（只查 Wi-Fi 不查充电）；不满足则 WorkManager
-                        // 排队，首页显示「将在连上 Wi-Fi 后进行」。
-                        val settings = BackupSettings(context.filesDir).load()
-                        wifiDeferred = settings.wifiOnly && !isOnUnmetered(context)
-                        triggerUserPresentBackup(context)
                         // M6 完成页（全页面状态稿，用户实机反馈"只有首次
-                        // onboarding 才需要"）：只有 firstTime（配对成功后
-                        // 第一次选相册）才过这页；设置页重选直接回 Home，
-                        // 不重复打扰。重建时重新读范围，三元组/扫描随之生效。
+                        // onboarding 才需要"）。首次选择只保存范围：没有点
+                        // 「进入 App」就绝不 discovery/传输。设置页重选不经过
+                        // 收尾页，仍按用户在场操作立即补扫。
                         if (s.firstTime) {
                             val selectedCount = list.filter { it.id in sel }.sumOf { it.count }
                             screen = Screen.Started(s.pairing, selectedCount)
                         } else {
+                            if (added.isNotEmpty()) requestFlowScopeBackfill(context)
+                            val settings = BackupSettings(context.filesDir).load()
+                            wifiDeferred = settings.wifiOnly && !isOnUnmetered(context)
+                            triggerUserPresentBackup(context)
                             screen = Screen.Home(s.pairing)
                         }
                     },
@@ -819,7 +814,9 @@ fun PPassApp() {
             val onboardingNotifyPrefs = remember {
                 com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir)
             }
-            var optionalPermissionStep by remember { mutableStateOf(0) }
+            // -1 = 仍在「进入 App」确认页；0/1 = 两个可选系统授权；2 =
+            // 用户已经完成选择和确认，此时才允许第一次 discovery/传输。
+            var optionalPermissionStep by remember { mutableStateOf(-1) }
             val batteryPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult(),
             ) {
@@ -854,11 +851,18 @@ fun PPassApp() {
                             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
                         }
                     }
+                    2 -> {
+                        requestFlowScopeBackfill(context)
+                        val settings = BackupSettings(context.filesDir).load()
+                        wifiDeferred = settings.wifiOnly && !isOnUnmetered(context)
+                        triggerUserPresentBackup(context)
+                        screen = Screen.Home(s.pairing)
+                    }
                 }
             }
             BackupStartedScreen(
                 photoCount = s.photoCount,
-                onEnter = { screen = Screen.Home(s.pairing) },
+                onEnter = { optionalPermissionStep = 0 },
             )
         }
     }
