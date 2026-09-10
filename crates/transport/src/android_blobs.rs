@@ -15,10 +15,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(feature = "android-jni")]
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
+use iroh_blobs::api::TempTag;
+use iroh_blobs::store::fs::options::Options;
 use iroh_blobs::store::fs::FsStore;
+use iroh_blobs::store::GcConfig;
 use iroh_blobs::ticket::BlobTicket;
 use iroh_blobs::{BlobFormat, BlobsProtocol, Hash};
 #[cfg(feature = "android-jni")]
@@ -33,6 +37,13 @@ use crate::{IrohTransport, Result, TransportConfig, TransportError, ALPN_BLOBS};
 /// A process-local provider that exposes the current Flow item over one
 /// long-lived iroh endpoint. The returned ticket is the only network
 /// capability handed to the desktop.
+///
+/// BLOB-03: the store is opened with periodic GC. Imports complete without a
+/// named tag — the only thing keeping the active lease's blob alive between a
+/// register and its revoke is the [`TempTag`] held in [`ActiveProvider`]. The
+/// tag is dropped when the lease is revoked, so a validated completion receipt
+/// (or a pause/cancel) releases the blob to the next 60s GC pass while a
+/// still-active lease stays protected through any number of GC cycles.
 pub struct AndroidBlobsProvider {
     runtime: tokio::runtime::Runtime,
     store: FsStore,
@@ -45,11 +56,14 @@ pub struct AndroidBlobsProvider {
 
 struct ActiveProvider {
     handler: StopAwareBlobsProtocol,
+    retained: Option<TempTag>,
 }
 
 impl ActiveProvider {
     fn revoke(self) {
         self.handler.stop_active_fetch();
+        // `retained` drops here, releasing its temp tag so the served blob
+        // becomes eligible for the store's periodic GC.
     }
 }
 
@@ -158,15 +172,34 @@ impl AndroidBlobsProvider {
         Self::with_config(
             root,
             TransportConfig::from_endpoints(Vec::new(), vec![ALPN_BLOBS.to_owned()]),
+            Some(Duration::from_secs(60)),
         )
     }
 
     /// Loopback-only constructor for native-provider protocol verification.
     pub fn new_loopback(root: impl AsRef<Path>) -> Result<Self> {
-        Self::with_config(root, TransportConfig::loopback(vec![ALPN_BLOBS.to_owned()]))
+        Self::with_config(
+            root,
+            TransportConfig::loopback(vec![ALPN_BLOBS.to_owned()]),
+            None,
+        )
     }
 
-    fn with_config(root: impl AsRef<Path>, config: TransportConfig) -> Result<Self> {
+    /// Loopback constructor with an injected GC interval, for BLOB-03 tests
+    /// that need to observe reclamation without waiting the production 60s.
+    pub fn new_loopback_with_gc(root: impl AsRef<Path>, gc_interval: Duration) -> Result<Self> {
+        Self::with_config(
+            root,
+            TransportConfig::loopback(vec![ALPN_BLOBS.to_owned()]),
+            Some(gc_interval),
+        )
+    }
+
+    fn with_config(
+        root: impl AsRef<Path>,
+        config: TransportConfig,
+        gc_interval: Option<Duration>,
+    ) -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -176,9 +209,18 @@ impl AndroidBlobsProvider {
         let root = root.as_ref().join("iroh-blobs-provider");
         let dispatch: Arc<Mutex<Option<StopAwareBlobsProtocol>>> = Arc::default();
         let (store, transport, router) = runtime.block_on(async {
-            let store = FsStore::load(&root).await.map_err(|error| {
-                TransportError::Io(format!("open Android provider store {root:?}: {error}"))
-            })?;
+            let mut options = Options::new(&root);
+            if let Some(interval) = gc_interval {
+                options.gc = Some(GcConfig {
+                    interval,
+                    add_protected: None,
+                });
+            }
+            let store = FsStore::load_with_opts(root.join("blobs.db"), options)
+                .await
+                .map_err(|error| {
+                    TransportError::Io(format!("open Android provider store {root:?}: {error}"))
+                })?;
             let transport = IrohTransport::bind(config.clone()).await?;
             let router = Router::builder(transport.endpoint().clone())
                 .accept(
@@ -246,15 +288,56 @@ impl AndroidBlobsProvider {
         }
     }
 
+    /// BLOB-03: release provider retention of the current lease's blob WITHOUT
+    /// stopping the handler or discarding the endpoint. This is the success
+    /// boundary — a validated completion receipt means the daemon has the
+    /// original, so the source copy may be GC'd. The endpoint and its ALPN
+    /// handler stay alive (decision 5: connection reuse across serial items is
+    /// intact); only the `TempTag` keeping the blob alive is dropped.
+    pub fn release_retention(&self) {
+        if let Some(active) = self.active.lock().expect("active provider lock").as_mut() {
+            active.retained = None;
+        }
+    }
+
     pub fn is_active(&self) -> bool {
         self.active.lock().expect("active provider lock").is_some()
     }
 
+    /// BLOB-03 test hook: whether a complete blob is still present in the
+    /// provider store (a named tag or an un-released TempTag keeps it there;
+    /// periodic GC removes it once the lease's TempTag is dropped).
+    pub fn has_blob(&self, hash: [u8; 32]) -> bool {
+        self.runtime
+            .block_on(self.store.blobs().has(Hash::from_bytes(hash)))
+            .unwrap_or(false)
+    }
+
+    /// Async variant of [`Self::has_blob`], callable from inside a tokio test
+    /// runtime (where `has_blob`'s nested `block_on` would panic).
+    pub async fn has_blob_async(&self, hash: [u8; 32]) -> bool {
+        self.store
+            .blobs()
+            .has(Hash::from_bytes(hash))
+            .await
+            .unwrap_or(false)
+    }
+
     async fn register_path_async(&self, declared_hash: [u8; 32], path: &Path) -> Result<String> {
-        let tag = self.store.blobs().add_path(path).await.map_err(|error| {
-            TransportError::Io(format!("import Android provider path {path:?}: {error}"))
-        })?;
-        self.activate(declared_hash, tag.hash).await
+        // BLOB-03: import with `temp_tag` (ephemeral liveness), never a named
+        // tag. The TempTag is carried into the active lease and dropped on
+        // revoke, so once the lease is released the blob is reclaimable by the
+        // store's periodic GC instead of lingering forever under a named tag.
+        let tag = self
+            .store
+            .blobs()
+            .add_path(path)
+            .temp_tag()
+            .await
+            .map_err(|error| {
+                TransportError::Io(format!("import Android provider path {path:?}: {error}"))
+            })?;
+        self.activate(declared_hash, tag).await
     }
 
     #[cfg(feature = "android-jni")]
@@ -265,11 +348,12 @@ impl AndroidBlobsProvider {
             .blobs()
             .add_stream(stream)
             .await
+            .temp_tag()
             .await
             .map_err(|error| {
                 TransportError::Io(format!("import Android provider descriptor: {error}"))
             })?;
-        self.activate(declared_hash, tag.hash).await
+        self.activate(declared_hash, tag).await
     }
 
     fn ensure_active_handler(&self) {
@@ -281,10 +365,14 @@ impl AndroidBlobsProvider {
             .dispatch
             .lock()
             .expect("Android provider dispatch lock") = Some(handler.clone());
-        *self.active.lock().expect("active provider lock") = Some(ActiveProvider { handler });
+        *self.active.lock().expect("active provider lock") = Some(ActiveProvider {
+            handler,
+            retained: None,
+        });
     }
 
-    async fn activate(&self, declared_hash: [u8; 32], imported_hash: Hash) -> Result<String> {
+    async fn activate(&self, declared_hash: [u8; 32], tag: TempTag) -> Result<String> {
+        let imported_hash = tag.hash();
         if imported_hash != Hash::from_bytes(declared_hash) {
             return Err(TransportError::Io(
                 "Android provider source does not match its declared content hash".into(),
@@ -303,6 +391,15 @@ impl AndroidBlobsProvider {
         }
 
         self.ensure_active_handler();
+        // BLOB-03: retain only the current lease's blob. A later register (in
+        // the real Flow every strict-head advance is preceded by a revoke that
+        // drops this tag, but the loopback tests register back-to-back) drops
+        // the previous lease's tag, so it becomes reclaimable at the next GC.
+        let mut active = self.active.lock().expect("active provider lock");
+        active
+            .as_mut()
+            .expect("ensure_active_handler installed an active provider")
+            .retained = Some(tag);
         Ok(BlobTicket::new(
             self.transport.endpoint().addr(),
             imported_hash,
@@ -413,6 +510,22 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
 ) {
     match provider(handle) {
         Ok(provider) => provider.stop_active_fetch(),
+        Err(error) => throw(&mut env, error),
+    }
+}
+
+/// BLOB-03: release the current lease's provider retention (drop its
+/// `TempTag`) so the served blob is reclaimable by the periodic GC, while
+/// keeping the endpoint + ALPN handler alive for the next item.
+#[cfg(feature = "android-jni")]
+#[no_mangle]
+pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeReleaseRetention(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) {
+    match provider(handle) {
+        Ok(provider) => provider.release_retention(),
         Err(error) => throw(&mut env, error),
     }
 }

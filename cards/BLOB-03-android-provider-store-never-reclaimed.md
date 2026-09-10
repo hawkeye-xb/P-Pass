@@ -1,9 +1,9 @@
 # BLOB-03 Android 发送端 iroh-blobs-provider 仓确认不回收
 
-> 🟡 状态：进行中 · 协同分支：`main`
+> 🟡 状态：待共享回归（代码已实现并推送，差三星真机验收）· 协同分支：`main`
 > 级别：L2 · 阻塞：无
-> 当前节点：三星真机从卸载后的空 App 数据开始同步 7 张，7 个均 `CONFIRMED` 后 provider 仍留 7 个数据文件（4,100,446 bytes）和索引（561,152 bytes）
-> 下一步：在不改变 Flow 协议/状态机的前提下，接入 iroh 原生周期 GC，并只保护当前 lease 的来源 blob；持久 completion receipt 后撤销保护
+> 当前节点：实现完成——接入 iroh 原生周期 GC + 仅当前 lease 的 `TempTag` 保护；成功/撤销边界下的自动化反证全绿；debug APK 已含 `libtransport.so`
+> 下一步：三星 RFCX1040SNE 干净重装后重新配对 → 选相册 → 普通 Flow 同步，`adb shell run-as` 只读测 `iroh-blobs-provider` 在 ≥1 个 60s GC 周期前后的 data blob 数，确认已确认来源 blob 不再残留、正常传输仍 CONFIRMED
 
 ## 问题
 
@@ -67,3 +67,18 @@ bytes。因而这不是纯代码推测：成功 receipt 后的手机副本确实
 发现路径：2026-09-10 讨论 BLOB-02（flow-blobs GC 60 秒轮询）触发机制时，
 用户追问桌面端之外是否还有类似风险，顺藤查到手机发送端这个独立 store。
 2026-09-10 已完成三星真机定性，见「问题」与「修复目标与验收标准」。
+
+实现记录（2026-09-10）：根因不是「没接 GC」，而是导入走了
+`AddProgress::with_tag()`（`add_path(...).await` / `add_stream(...).await.await`
+都解析到它）——每次注册给 provider store 落一个**持久 named tag**，GC 永远
+不回收。修复：`with_config` 接 `FsStore::load_with_opts` 打开 60s 周期 GC；
+`register_path_async`/`register_file_async` 改用 `.temp_tag()`（ephemeral），
+`ActiveProvider` 持有 `retained: Option<TempTag>`，`activate` 时写入、`revoke()`
+掉 tag 时 release。新 `release_retention()` 只掉 lease 的 tag、不掉 handler/
+endpoint，保住决策 5 的连接复连。Kotlin 侧成功边界在
+`NativeFlowDeliveryPort.acceptReceipt` 里、`relayFlowCompletion` 四字段校验通过
+之后、`onReceipt`（推进 strict head）之前调 `bridge.releaseRetention`。自动化
+反证：Rust `android_provider` 4/4（active lease 多轮 GC 存活 + release 后回收且
+endpoint 保活可复用）；Android JVM `IrohBlobsProviderBridgeTest` 4/4、
+`REBUILD03FlowRunnerTest` 10/10。真机验收未完成（需重新扫码配对 + 选相册，
+agent 无法 headless 造真媒体，且 adb 禁止伪造）。

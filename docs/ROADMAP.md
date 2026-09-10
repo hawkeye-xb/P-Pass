@@ -273,6 +273,21 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       skipped, `just ci` all green. Telemetry quintet (daemon_alive/conn/
       flow_item/first_byte/error) now fully wired — OBS-02's dictionary v2
       is completely landed)
+- [ ] BLOB-03 Android 发送端 provider store 回收 — **2026-09-10 代码完成，待三星真机验收**：
+      根因是导入走 `AddProgress::with_tag()`（`add_path(...).await` /
+      `add_stream(...).await.await` 都解析到它），每次注册给 store 落一个持久
+      named tag，GC 永不回收。修复：`with_config` 用 `FsStore::load_with_opts`
+      打开 iroh 原生 60s 周期 GC；`register_path_async`/`register_file_async`
+      改 `.temp_tag()`（ephemeral），`ActiveProvider.retained: Option<TempTag>`
+      在 `activate` 写入、`revoke()` 释放；新增 `release_retention()` 只掉
+      lease 的 tag、保住 endpoint/ALPN 复连（决策 5）。Kotlin 成功边界在
+      `NativeFlowDeliveryPort.acceptReceipt` 内、四字段校验通过后、推进 strict
+      head 前调 `bridge.releaseRetention`。自动化反证：Rust `android_provider`
+      4/4（active lease 多轮 GC 存活 + release 后回收且 endpoint 可复用），
+      Android JVM 4/4 + 10/10。真机验收未完成：需重新扫码配对 + 选相册后普通
+      Flow 同步，再 `adb shell run-as` 只读核对 `iroh-blobs-provider/data`
+      在 ≥1 个 60s GC 周期前后的 blob 数；agent 无法 headless 造真媒体、adb
+      禁止伪造。
 - [x] T-062b update artifact verification + pinned pubkey — **DONE
       2026-08-03** (verify_artifact hash+sig enforcement; sha256 64-hex
       parse check; signature required non-empty; OFFICIAL_PUBLIC_KEY

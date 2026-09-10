@@ -21,6 +21,10 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
         nativeStopActiveFetch(handle)
     }
 
+    override fun releaseRetention(hash: String) {
+        nativeReleaseRetention(handle)
+    }
+
     override fun revoke(hash: String) {
         nativeRevoke(handle)
     }
@@ -42,6 +46,9 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
 
         @JvmStatic
         external fun nativeStopActiveFetch(handle: Long)
+
+        @JvmStatic
+        external fun nativeReleaseRetention(handle: Long)
 
         @JvmStatic
         external fun nativeRevoke(handle: Long)
