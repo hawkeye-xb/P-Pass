@@ -211,14 +211,13 @@ async fn device_rename_updates_list_and_appends_audit() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|a| a["action"] == "device.renamed")
+        .filter(|a| a["kind"] == "device.renamed")
         .collect();
     assert_eq!(renamed.len(), 1, "audit 必须有 device.renamed 记录");
-    let detail = renamed[0]["detail"].as_str().unwrap();
-    assert!(
-        detail.contains("默认名字 -> 爸爸的手机") && detail.contains(&"bb".repeat(32)),
-        "detail 应含旧名→新名+node_id, got: {detail}",
-    );
+    let payload = &renamed[0]["payload"];
+    assert_eq!(payload["oldName"], "默认名字");
+    assert_eq!(payload["newName"], "爸爸的手机");
+    assert_eq!(payload["nodeId"], "bb".repeat(32));
 
     // 反证：audit 断言删掉必红——改名没审计 = 本测试第一个 assert 挂。
     //（验收要求显式反证；此处通过上面 renamed.len()==1 锁死。）
@@ -674,20 +673,25 @@ async fn logs_export_zip_leaks_no_username() {
 async fn logs_export_zip_carries_audit_events() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "logs-audit").await;
-    db.append_audit(&storage::AuditEntry {
-        ts: 42,
-        actor: Some(vec![0xAB; 32]),
-        action: "device.revoked".into(),
-        target_hash: None,
+    db.append_audit(&storage::AuditEntry::local(
+        42,
+        Some(vec![0xAB; 32]),
+        "device.revoked",
+        None,
         // DESK-10 真机验收暴露的漏：库的布局是
-        // `originals/<nodeid>/YYYY/MM/<file>`，所以 detail 里嵌的
+        // `originals/<nodeid>/YYYY/MM/<file>`，所以 payload 里嵌的
         // rel_path 本身就以全长 NodeId 开头——脱敏必须按「值的形状」
         // 做，不能只给 actor 这个字段名做前缀掩码。
-        detail: Some(format!(
-            "外部删除 originals/{}/2026/08/IMG_0042.jpg",
-            "c4".repeat(32)
-        )),
-    })
+        Some(
+            serde_json::json!({
+                "detail": format!(
+                    "外部删除 originals/{}/2026/08/IMG_0042.jpg",
+                    "c4".repeat(32)
+                ),
+            })
+            .to_string(),
+        ),
+    ))
     .await
     .unwrap();
 
@@ -937,13 +941,13 @@ async fn audit_rows_in_the_same_millisecond_get_distinct_ids() {
     // 五条一模一样的动作、一模一样的时间戳——就是用户撞到的那个形状。
     const SAME_MS: i64 = 1_787_292_449_250;
     for i in 0..5 {
-        db.append_audit(&storage::AuditEntry {
-            ts: SAME_MS,
-            actor: None,
-            action: "asset.removed_external".into(),
-            target_hash: None,
-            detail: Some(format!("originals missing: originals/x/{i}.jpg")),
-        })
+        db.append_audit(&storage::AuditEntry::local(
+            SAME_MS,
+            None,
+            "asset.removed_external",
+            None,
+            Some(serde_json::json!({ "relPath": format!("originals/x/{i}.jpg") }).to_string()),
+        ))
         .await
         .unwrap();
     }
@@ -953,7 +957,7 @@ async fn audit_rows_in_the_same_millisecond_get_distinct_ids() {
     let events = resp.result.unwrap()["events"].as_array().unwrap().clone();
     let removed: Vec<_> = events
         .iter()
-        .filter(|e| e["action"] == "asset.removed_external")
+        .filter(|e| e["kind"] == "asset.removed_external")
         .collect();
     assert_eq!(removed.len(), 5, "五条都该回来");
 

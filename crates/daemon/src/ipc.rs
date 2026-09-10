@@ -690,7 +690,7 @@ impl IpcServer {
                     Err(_) => internal(id),
                 }
             }
-            // T5: 审计事件流——配对请求/允许/拒绝、备份会话、吊销、传输，
+            // AUDIT-01: audit_event v2 is the sole long-term audit source
             // 桌面「活动记录」页展示（时间倒序由 UI 兜底）。与 activity.list
             // （资产聚合批次）互补：这里看"发生了什么"，那里看"传了多少"。
             "audit.list" => {
@@ -705,17 +705,19 @@ impl IpcServer {
                             .iter()
                             .map(|r| {
                                 serde_json::json!({
-                                    // DESK-08：审计行的**唯一身份**（audit_log 主键）。
-                                    // 之前不往外传，前端只能拿 `ts + action` 拼 key
-                                    // ——WATCH-02 一次删 N 张会在**同一毫秒**写 N 条
+                                    // DESK-08：审计行的**唯一身份**——WATCH-02 一次
+                                    // 删 N 张会在**同一毫秒**写 N 条
                                     // `asset.removed_external`，key 立刻撞，Svelte 抛
                                     // `each_key_duplicate` 整个活动流挂掉。
-                                    // 时间戳不是身份，主键才是。
+                                    // 时间戳不是身份，主键才是；event_id 是跨端幂等键。
                                     "id": r.id,
+                                    "eventId": r.entry.event_id,
                                     "ts": r.entry.ts,
-                                    "action": r.entry.action,
+                                    "kind": r.entry.kind,
                                     "actor": r.entry.actor.as_ref().map(|b| hex(b)),
-                                    "detail": r.entry.detail,
+                                    "roundId": r.entry.round_id,
+                                    "targetHash": r.entry.target_hash.as_ref().map(|b| hex(b)),
+                                    "payload": r.entry.payload.as_ref().and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok()),
                                 })
                             })
                             .collect();
@@ -761,13 +763,13 @@ impl IpcServer {
                         if revoked {
                             let _ = self
                                 .db
-                                .append_audit(&storage::AuditEntry {
-                                    ts: now_ms(),
-                                    actor: None, // 本机 owner 经 IPC 操作
-                                    action: "device.revoked".into(),
-                                    target_hash: None,
-                                    detail: Some(node_hex.into()),
-                                })
+                                .append_audit(&storage::AuditEntry::local(
+                                    now_ms(),
+                                    None, // 本机 owner 经 IPC 操作
+                                    "device.revoked",
+                                    None,
+                                    Some(serde_json::json!({ "nodeId": node_hex }).to_string()),
+                                ))
                                 .await;
                             // IPC-02: 设备移除——桌面设备行即时消失。
                             events::emit(
@@ -826,13 +828,20 @@ impl IpcServer {
                         // device.renamed 旧名→新名+node_id」）。
                         let _ = self
                             .db
-                            .append_audit(&storage::AuditEntry {
-                                ts: now_ms(),
-                                actor: None, // 本机 owner 经 IPC 操作
-                                action: "device.renamed".into(),
-                                target_hash: None,
-                                detail: Some(format!("{old_name} -> {new_name} ({node_hex})")),
-                            })
+                            .append_audit(&storage::AuditEntry::local(
+                                now_ms(),
+                                None, // 本机 owner 经 IPC 操作
+                                "device.renamed",
+                                None,
+                                Some(
+                                    serde_json::json!({
+                                        "nodeId": node_hex,
+                                        "oldName": old_name,
+                                        "newName": new_name,
+                                    })
+                                    .to_string(),
+                                ),
+                            ))
                             .await;
                         // IPC-02: 改名后设备行即时刷新。
                         events::emit(
@@ -1187,6 +1196,9 @@ impl IpcServer {
         // DESK-10: 审计事件（配对/吊销/外部删除…）也进包——桌面壳把
         // 这三份 JSON 原样搬进它本地组装的 bundle，daemon 侧只负责
         // 「只有 daemon 拿得到」的那部分。actor 仍只出 NodeId 前缀。
+        // event_id 是内部幂等键（32 位随机 hex）——纯内部用途，不对
+        // 支持场景有意义，且会撞上「≥24 位连续 hex 不许进包」的脱敏
+        // 判据，所以显式排除在导出字段之外。
         let audit = self.db.list_audit(500).await?;
         let audit_json = serde_json::to_string_pretty(
             &audit
@@ -1195,9 +1207,10 @@ impl IpcServer {
                     serde_json::json!({
                         "id": r.id,
                         "ts": r.entry.ts,
-                        "action": r.entry.action,
+                        "kind": r.entry.kind,
                         "actor_prefix": r.entry.actor.as_ref().map(|a| hex(&a[..4.min(a.len())])),
-                        "detail": r.entry.detail.as_deref().map(|d| scrub(d, &home)),
+                        "roundId": r.entry.round_id,
+                        "payload": r.entry.payload.as_deref().map(|p| scrub(p, &home)),
                     })
                 })
                 .collect::<Vec<_>>(),

@@ -212,11 +212,11 @@ async fn watcher_recheck_of_the_recorded_file_is_not_an_audit_event() {
     );
 
     let log = db.list_audit(10).await.unwrap();
-    let actions: Vec<&str> = log.iter().map(|r| r.entry.action.as_str()).collect();
+    let kinds: Vec<&str> = log.iter().map(|r| r.entry.kind.as_str()).collect();
     assert_eq!(
-        actions,
+        kinds,
         ["ingest.new"],
-        "同一文件的复检不许产生审计行, got {actions:?}"
+        "同一文件的复检不许产生审计行, got {kinds:?}"
     );
 }
 
@@ -234,10 +234,10 @@ async fn same_content_at_a_different_path_is_still_audited() {
         .unwrap();
 
     let log = db.list_audit(10).await.unwrap();
-    let actions: Vec<&str> = log.iter().map(|r| r.entry.action.as_str()).collect();
+    let kinds: Vec<&str> = log.iter().map(|r| r.entry.kind.as_str()).collect();
     assert!(
-        actions.contains(&"ingest.duplicate"),
-        "不同路径的重复内容必须记审计, got {actions:?}"
+        kinds.contains(&"ingest.duplicate"),
+        "不同路径的重复内容必须记审计, got {kinds:?}"
     );
 }
 
@@ -270,9 +270,9 @@ async fn ingest_is_audited_to_device_granularity() {
         .unwrap();
 
     let log = db.list_audit(10).await.unwrap();
-    let actions: Vec<&str> = log.iter().map(|r| r.entry.action.as_str()).collect();
-    assert!(actions.contains(&"ingest.new"), "got {actions:?}");
-    assert!(actions.contains(&"ingest.duplicate"), "got {actions:?}");
+    let kinds: Vec<&str> = log.iter().map(|r| r.entry.kind.as_str()).collect();
+    assert!(kinds.contains(&"ingest.new"), "got {kinds:?}");
+    assert!(kinds.contains(&"ingest.duplicate"), "got {kinds:?}");
     for r in &log {
         assert_eq!(
             r.entry.actor,
@@ -514,6 +514,6 @@ async fn sqlx_count(db: &Db, action: &str) -> i64 {
         .await
         .unwrap()
         .iter()
-        .filter(|r| r.entry.action == action)
+        .filter(|r| r.entry.kind == action)
         .count() as i64
 }

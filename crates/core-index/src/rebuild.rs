@@ -92,16 +92,19 @@ pub async fn rebuild(db: &Db, library_root: &Path, local_node_id: &[u8]) -> Resu
         report.indexed += 1;
     }
 
-    db.append_audit(&AuditEntry {
-        ts: unix_ms_now(),
-        actor: None,
-        action: "index.rebuild".into(),
-        target_hash: None,
-        detail: Some(format!(
-            "indexed={} duplicates={}",
-            report.indexed, report.duplicates
-        )),
-    })
+    db.append_audit(&AuditEntry::local(
+        unix_ms_now(),
+        None,
+        "index.rebuild",
+        None,
+        Some(
+            serde_json::json!({
+                "indexed": report.indexed,
+                "duplicates": report.duplicates,
+            })
+            .to_string(),
+        ),
+    ))
     .await?;
     Ok(report)
 }

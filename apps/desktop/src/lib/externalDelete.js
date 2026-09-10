@@ -27,7 +27,7 @@ export const EXTERNAL_DELETE_WINDOW_MS = 24 * 60 * 60 * 1000;
 /**
  * 审计事件流 → 该不该出警告。
  *
- * @param events 审计行（`audit.list` 的 `{ action, ts }`，ts = unix ms）
+ * @param events 审计行（`audit.list` 的 `{ kind, ts }`，ts = unix ms）
  * @param nowMs 现在（unix ms）
  * @param opts.windowMs 时间窗（默认 [EXTERNAL_DELETE_WINDOW_MS]）
  * @param opts.dismissedAt 用户点过「知道了」的时刻——**该时刻及之前**的
@@ -41,7 +41,7 @@ export function externalDeleteNotice(events, nowMs, opts = {}) {
   let count = 0;
   let latestAt = 0;
   for (const e of events ?? []) {
-    if (!e || e.action !== "asset.removed_external") continue;
+    if (!e || e.kind !== "asset.removed_external") continue;
     const ts = Number(e.ts);
     if (!Number.isFinite(ts)) continue;
     // 窗外的旧记录不警告；已 dismiss 的那一批也不再警告。

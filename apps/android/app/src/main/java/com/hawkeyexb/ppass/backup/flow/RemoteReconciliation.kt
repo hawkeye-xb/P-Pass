@@ -31,22 +31,27 @@ class RemoteReconciliation(private val ledger: DiscoveryLedgerStore) {
             SourcePresence.UNKNOWN -> error("a missing remote requires a source-presence result")
         }
         ledger.update { snapshot ->
-            snapshot.copy(
-                items = snapshot.items.map { item ->
-                    if (
-                        item.pairingEpoch == snapshot.pairingEpoch &&
-                        item.deliveryState == DeliveryState.CONFIRMED &&
-                        item.contentHash == contentHash
-                    ) {
-                        item.copy(
-                            remotePresence = RemotePresence.MISSING,
-                            sourcePresence = sourcePresence,
-                            disposition = disposition,
-                        )
-                    } else {
-                        item
-                    }
-                },
+            var roundId: String? = null
+            val items = snapshot.items.map { item ->
+                if (
+                    item.pairingEpoch == snapshot.pairingEpoch &&
+                    item.deliveryState == DeliveryState.CONFIRMED &&
+                    item.contentHash == contentHash
+                ) {
+                    roundId = item.roundId
+                    item.copy(
+                        remotePresence = RemotePresence.MISSING,
+                        sourcePresence = sourcePresence,
+                        disposition = disposition,
+                    )
+                } else {
+                    item
+                }
+            }
+            snapshot.copy(items = items).appendAudit(
+                AuditKinds.RECONCILIATION_RESOLVED,
+                roundId = roundId,
+                payload = mapOf("disposition" to disposition.name),
             )
         }
     }

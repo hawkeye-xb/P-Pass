@@ -1,6 +1,6 @@
 // MOB-29: 桌面端「刚从库里删掉照片」警告的判据。
 //
-// 反证（判据不是恒真式）：把 `if (!e || e.action !== "asset.removed_external")`
+// 反证（判据不是恒真式）：把 `if (!e || e.kind !== "asset.removed_external")`
 // 那条过滤去掉，`add_and_move_never_warn` 立刻变红——它喂的全是
 // `asset.relocated` / `ingest.*` 行。
 import { describe, expect, it } from "vitest";
@@ -10,7 +10,7 @@ import {
 } from "./lib/externalDelete.js";
 
 const NOW = 1_787_300_000_000;
-const del = (ts) => ({ action: "asset.removed_external", ts, detail: "originals missing: a.jpg" });
+const del = (ts) => ({ kind: "asset.removed_external", ts, payload: { detail: "originals missing: a.jpg" } });
 
 describe("externalDeleteNotice", () => {
   it("数出窗口内的外部删除条数 + 最近时刻", () => {
@@ -28,10 +28,10 @@ describe("externalDeleteNotice", () => {
     // WATCH-04「访达是布局的主人」——add/move 对我们影响为零，警告只
     // 出在唯一有代价的那个动作上。
     const events = [
-      { action: "asset.relocated", ts: NOW - 500 },
-      { action: "ingest.new", ts: NOW - 600 },
-      { action: "ingest.duplicate", ts: NOW - 700 },
-      { action: "backup.finished", ts: NOW - 800 },
+      { kind: "asset.relocated", ts: NOW - 500 },
+      { kind: "ingest.new", ts: NOW - 600 },
+      { kind: "ingest.duplicate", ts: NOW - 700 },
+      { kind: "backup.finished", ts: NOW - 800 },
     ];
     expect(externalDeleteNotice(events, NOW)).toBe(null);
   });
@@ -56,7 +56,7 @@ describe("externalDeleteNotice", () => {
   });
 
   it("坏时间戳不算数，也不崩", () => {
-    const events = [{ action: "asset.removed_external" }, { action: "asset.removed_external", ts: "x" }, null];
+    const events = [{ kind: "asset.removed_external" }, { kind: "asset.removed_external", ts: "x" }, null];
     expect(externalDeleteNotice(events, NOW)).toBe(null);
   });
 });

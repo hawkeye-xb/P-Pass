@@ -4,6 +4,7 @@
 package com.hawkeyexb.ppass.backup.flow
 
 import java.io.File
+import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -29,6 +30,50 @@ data class PairingEpoch(val value: String) {
 
 @Serializable
 data class CancellationRound(val id: String)
+
+// AUDIT-01: audit_event v2 is the sole long-term audit source. A phone-side
+// fact that must be audited is written into this durable outbox in the SAME
+// atomic snapshot as the fact itself — never as a separate "append after
+// commit" step, which is exactly the crash window this replaces (see card).
+// The event id is generated once and persists; it is the idempotency key the
+// Desktop repository uniques on, so retransmission never duplicates.
+object AuditKinds {
+    const val ROUND_CONTROLLED = "flow.round.controlled"
+    const val SCOPE_CHANGED = "flow.scope.changed"
+    const val EPOCH_INVALIDATED = "flow.epoch.invalidated"
+    const val ROUND_FINISHED = "flow.round.finished"
+    const val ITEM_ATTENTION = "flow.item.attention"
+    const val RECONCILIATION_RESOLVED = "flow.reconciliation.resolved"
+}
+
+@Serializable
+data class AuditOutboxEvent(
+    val eventId: String,
+    val kind: String,
+    val roundId: String? = null,
+    val occurredAtMs: Long = 0L,
+    val payload: Map<String, String> = emptyMap(),
+)
+
+/**
+ * AUDIT-01: append one durable outbox event to this snapshot. Callers pass
+ * the pre-mutation `this` receiver from inside a `ledger.update { ... }`
+ * transform, so the audit fact commits in the exact same atomic write as the
+ * state change it describes — never a second, separate write.
+ */
+internal fun DiscoveryLedgerSnapshot.appendAudit(
+    kind: String,
+    roundId: String? = null,
+    payload: Map<String, String> = emptyMap(),
+): DiscoveryLedgerSnapshot = copy(
+    auditOutbox = auditOutbox + AuditOutboxEvent(
+        eventId = UUID.randomUUID().toString(),
+        kind = kind,
+        roundId = roundId,
+        occurredAtMs = System.currentTimeMillis(),
+        payload = payload,
+    ),
+)
 
 @Serializable
 data class UploadCursor(val currentQueueSequence: Long? = null) {
@@ -129,6 +174,10 @@ data class TransferItem(
      *  the discovering [DiscoveryCandidate.captureAtMs]. Sent on the wire so
      *  Desktop can use it as a fallback when the file has no EXIF. */
     val captureAtMs: Long = 0L,
+    /** AUDIT-01: the persistent window this item was admitted into. Every
+     *  ordinary window gets exactly one `flow.round.finished` summary keyed
+     *  by this id once every item in the round reaches a terminal state. */
+    val roundId: String? = null,
 )
 
 @Serializable
@@ -155,6 +204,22 @@ data class DiscoveryLedgerSnapshot(
     val backfillRequests: List<ScopeBackfillRequest> = emptyList(),
     val items: List<TransferItem> = emptyList(),
     val nextQueueSequence: Long = 1L,
+    /** AUDIT-01: the currently-open window's persistent id, or null between
+     *  windows (right after the previous one's `flow.round.finished` fired,
+     *  before the next discovery admits new candidates). */
+    val currentRoundId: String? = null,
+    /** AUDIT-01: durable outbox of audit facts awaiting delivery to the
+     *  daemon. A dispatcher drains it with [DiscoveryLedgerStore.acknowledgeAuditEvents]
+     *  after a durable ack; entries are never mutated, only appended or removed. */
+    val auditOutbox: List<AuditOutboxEvent> = emptyList(),
+)
+
+private val TERMINAL_DELIVERY_STATES = setOf(
+    DeliveryState.CONFIRMED,
+    DeliveryState.FAILED_NEEDS_USER,
+    DeliveryState.SKIPPED_SOURCE_MISSING,
+    DeliveryState.CANCELLED_BY_SCOPE,
+    DeliveryState.CANCELLED_BY_USER_ROUND,
 )
 
 /**
@@ -215,6 +280,17 @@ class DiscoveryLedgerStore(private val dir: File) {
         persist(transform(load()))
     }
 
+    /**
+     * AUDIT-01: drop acknowledged outbox events. Calling this twice with the
+     * same ids (a repeated ack after the daemon confirmed receipt but the
+     * phone crashed before recording it locally) is a no-op the second time
+     * — idempotent by construction, since a missing id simply matches nothing.
+     */
+    fun acknowledgeAuditEvents(eventIds: Set<String>) {
+        if (eventIds.isEmpty()) return
+        update { snapshot -> snapshot.copy(auditOutbox = snapshot.auditOutbox.filterNot { it.eventId in eventIds }) }
+    }
+
     fun commitDiscoveryPage(
         candidates: List<DiscoveryCandidate>,
         nextCursor: DiscoveryCursor,
@@ -231,9 +307,16 @@ class DiscoveryLedgerStore(private val dir: File) {
             DeliveryState.CANCELLED_BY_USER_ROUND
         }
         val cancellationRoundId = current.cancellationRound?.id
+        // AUDIT-01: every ordinary window carries one persistent roundId for
+        // its whole lifetime. Admitting into an already-open window reuses
+        // it; admitting into a closed/empty ledger opens a fresh one.
+        var roundId = current.currentRoundId
+        var admittedAny = false
 
         candidates.forEach { candidate ->
             if (candidate.stableId !in byStableId) {
+                if (roundId == null) roundId = UUID.randomUUID().toString()
+                admittedAny = true
                 byStableId[candidate.stableId] = TransferItem(
                     stableId = candidate.stableId,
                     sourceRef = candidate.sourceRef,
@@ -247,6 +330,7 @@ class DiscoveryLedgerStore(private val dir: File) {
                     deliveryState = state,
                     cancellationRoundId = cancellationRoundId,
                     captureAtMs = candidate.captureAtMs,
+                    roundId = roundId,
                 )
             }
         }
@@ -256,6 +340,7 @@ class DiscoveryLedgerStore(private val dir: File) {
             cursor = nextCursor,
             items = byStableId.values.sortedBy { it.queueSequence },
             nextQueueSequence = nextSequence,
+            currentRoundId = if (admittedAny) roundId else current.currentRoundId,
         )
         beforeCommit()
         persist(next)
@@ -277,8 +362,12 @@ class DiscoveryLedgerStore(private val dir: File) {
             DeliveryState.CANCELLED_BY_USER_ROUND
         }
         val cancellationRoundId = current.cancellationRound?.id
+        var roundId = current.currentRoundId
+        var admittedAny = false
         page.candidates.forEach { candidate ->
             if (candidate.stableId !in byStableId) {
+                if (roundId == null) roundId = UUID.randomUUID().toString()
+                admittedAny = true
                 byStableId[candidate.stableId] = TransferItem(
                     stableId = candidate.stableId,
                     sourceRef = candidate.sourceRef,
@@ -292,6 +381,7 @@ class DiscoveryLedgerStore(private val dir: File) {
                     deliveryState = state,
                     cancellationRoundId = cancellationRoundId,
                     captureAtMs = candidate.captureAtMs,
+                    roundId = roundId,
                 )
             }
         }
@@ -307,14 +397,42 @@ class DiscoveryLedgerStore(private val dir: File) {
                 backfillRequests = requests,
                 items = byStableId.values.sortedBy { it.queueSequence },
                 nextQueueSequence = nextSequence,
+                currentRoundId = if (admittedAny) roundId else current.currentRoundId,
             ),
         )
     }
 
+    /**
+     * AUDIT-01: once every item in the currently-open window reaches a
+     * terminal delivery state, close the window with exactly one
+     * `flow.round.finished` summary and free `currentRoundId` so the next
+     * discovered window gets a fresh persistent id. Runs on every persisted
+     * snapshot so it fires exactly once, from whichever call site drove the
+     * last item to a terminal state.
+     */
+    private fun finalizeRoundIfComplete(snapshot: DiscoveryLedgerSnapshot): DiscoveryLedgerSnapshot {
+        val roundId = snapshot.currentRoundId ?: return snapshot
+        val roundItems = snapshot.items.filter { it.roundId == roundId }
+        if (roundItems.isEmpty() || !roundItems.all { it.deliveryState in TERMINAL_DELIVERY_STATES }) {
+            return snapshot
+        }
+        val summary = mapOf(
+            "confirmed" to roundItems.count { it.deliveryState == DeliveryState.CONFIRMED }.toString(),
+            "failed" to roundItems.count { it.deliveryState == DeliveryState.FAILED_NEEDS_USER }.toString(),
+            "cancelled" to roundItems.count {
+                it.deliveryState == DeliveryState.CANCELLED_BY_USER_ROUND || it.deliveryState == DeliveryState.CANCELLED_BY_SCOPE
+            }.toString(),
+            "skippedSourceMissing" to roundItems.count { it.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING }.toString(),
+        )
+        return snapshot.copy(currentRoundId = null)
+            .appendAudit(AuditKinds.ROUND_FINISHED, roundId = roundId, payload = summary)
+    }
+
     private fun persist(snapshot: DiscoveryLedgerSnapshot) {
+        val finalized = finalizeRoundIfComplete(snapshot)
         dir.mkdirs()
         val temporary = File(dir, "${file.name}.tmp")
-        temporary.writeText(json.encodeToString(DiscoveryLedgerSnapshot.serializer(), snapshot))
+        temporary.writeText(json.encodeToString(DiscoveryLedgerSnapshot.serializer(), finalized))
         check(temporary.renameTo(file)) { "cannot atomically persist discovery ledger" }
     }
 

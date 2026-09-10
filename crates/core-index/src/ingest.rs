@@ -85,6 +85,21 @@ impl Ingestor {
     }
 
     pub async fn ingest(&self, f: &IncomingFile) -> Result<IngestOutcome> {
+        self.ingest_inner(f, true).await
+    }
+
+    /// AUDIT-01: Flow item materialization must not create a per-item
+    /// long-term audit row — a Flow window writes exactly one
+    /// `flow.round.finished` summary, never one row per file (card decision
+    /// #3). This variant is otherwise byte-identical to [`Self::ingest`];
+    /// only the audit side effect is suppressed. Legacy batch backup,
+    /// rebuild, and the directory watcher keep calling the audited
+    /// [`Self::ingest`] — their per-file audit trail is unaffected.
+    pub async fn ingest_unaudited(&self, f: &IncomingFile) -> Result<IngestOutcome> {
+        self.ingest_inner(f, false).await
+    }
+
+    async fn ingest_inner(&self, f: &IncomingFile, audited: bool) -> Result<IngestOutcome> {
         // block_in_place: hashing and (cross-volume) copying a large file
         // are CPU/IO-bound synchronous work whose cost scales with file
         // size — running them inline on a tokio worker thread starves every
@@ -101,7 +116,7 @@ impl Ingestor {
 
         if let Some(existing) = self.db.get_asset(&hash).await? {
             if self.library_root.join(&existing.rel_path).exists() {
-                if !self.is_recorded_file(&f.src_path, &existing.rel_path) {
+                if audited && !self.is_recorded_file(&f.src_path, &existing.rel_path) {
                     self.audit(
                         now_ms,
                         f,
@@ -122,8 +137,10 @@ impl Ingestor {
                 None => self.place(f, taken_at_ms(&f.src_path, f.capture_at_ms_hint)?)?,
             };
             self.db.update_asset_rel_path(&hash, &new_rel).await?;
-            self.audit(now_ms, f, &hash, "asset.relocated", Some(new_rel.clone()))
-                .await?;
+            if audited {
+                self.audit(now_ms, f, &hash, "asset.relocated", Some(new_rel.clone()))
+                    .await?;
+            }
             return Ok(IngestOutcome::Moved(new_rel));
         }
 
@@ -165,14 +182,16 @@ impl Ingestor {
         if let Some(evicted) = self.db.hash_at_rel_path(&rel_path).await? {
             if evicted != hash {
                 self.db.delete_asset(&evicted).await?;
-                self.audit(
-                    now_ms,
-                    f,
-                    &hash,
-                    "asset.replaced_in_place",
-                    Some(rel_path.clone()),
-                )
-                .await?;
+                if audited {
+                    self.audit(
+                        now_ms,
+                        f,
+                        &hash,
+                        "asset.replaced_in_place",
+                        Some(rel_path.clone()),
+                    )
+                    .await?;
+                }
             }
         }
 
@@ -196,15 +215,19 @@ impl Ingestor {
             }
             if is_unique_violation(&e) {
                 // Lost a race with a concurrent ingest of the same content.
-                self.audit(now_ms, f, &hash, "ingest.duplicate", None)
-                    .await?;
+                if audited {
+                    self.audit(now_ms, f, &hash, "ingest.duplicate", None)
+                        .await?;
+                }
                 return Ok(IngestOutcome::Duplicate);
             }
             return Err(e.into());
         }
 
-        self.audit(now_ms, f, &hash, "ingest.new", Some(rel_path.clone()))
-            .await?;
+        if audited {
+            self.audit(now_ms, f, &hash, "ingest.new", Some(rel_path.clone()))
+                .await?;
+        }
         Ok(IngestOutcome::New(rel_path))
     }
 
@@ -283,17 +306,17 @@ impl Ingestor {
         ts: i64,
         f: &IncomingFile,
         hash: &[u8; 32],
-        action: &str,
+        kind: &str,
         detail: Option<String>,
     ) -> Result<()> {
         self.db
-            .append_audit(&AuditEntry {
+            .append_audit(&AuditEntry::local(
                 ts,
-                actor: Some(f.src_device.clone()),
-                action: action.into(),
-                target_hash: Some(hash.to_vec()),
-                detail,
-            })
+                Some(f.src_device.clone()),
+                kind,
+                Some(hash.to_vec()),
+                detail.map(|d| serde_json::json!({ "detail": d }).to_string()),
+            ))
             .await?;
         Ok(())
     }

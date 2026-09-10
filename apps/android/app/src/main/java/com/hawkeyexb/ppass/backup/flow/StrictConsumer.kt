@@ -63,7 +63,7 @@ class StrictConsumer(
                     it.deliveryState == DeliveryState.QUEUED ||
                         it.deliveryState == DeliveryState.TRANSFERRING
                 }
-                if (hasDeliverableWork) {
+                val paused = if (hasDeliverableWork) {
                     snapshot.copy(consumerGate = ConsumerGate.PAUSED_BY_USER)
                 } else {
                     snapshot.copy(
@@ -72,6 +72,9 @@ class StrictConsumer(
                         fetchLease = null,
                     )
                 }
+                // AUDIT-01: pause is a durable user action even when there is
+                // nothing in flight to actually stop.
+                paused.appendAudit(AuditKinds.ROUND_CONTROLLED, roundId = snapshot.currentRoundId, payload = mapOf("action" to "pause"))
             }
             return
         }
@@ -92,7 +95,7 @@ class StrictConsumer(
                 consumerStatus = ConsumerStatus.IDLE,
                 fetchLease = null,
                 items = items,
-            )
+            ).appendAudit(AuditKinds.ROUND_CONTROLLED, roundId = snapshot.currentRoundId, payload = mapOf("action" to "pause"))
         }
     }
 
@@ -156,12 +159,23 @@ class StrictConsumer(
             } else {
                 snapshot.uploadCursor
             }
-            snapshot.copy(
+            val next = snapshot.copy(
                 uploadCursor = nextCursor,
                 consumerStatus = ConsumerStatus.IDLE,
                 fetchLease = null,
                 items = items,
             )
+            // AUDIT-01: the retry budget is exhausted — this is now a
+            // durable "needs a user decision" fact, not a silent retry.
+            if (terminal) {
+                next.appendAudit(
+                    AuditKinds.ITEM_ATTENTION,
+                    roundId = currentItem.roundId,
+                    payload = mapOf("reason" to "delivery_failed", "queueSequence" to lease.queueSequence.toString()),
+                )
+            } else {
+                next
+            }
         }
     }
 

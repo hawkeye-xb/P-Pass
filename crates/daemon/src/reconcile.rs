@@ -111,13 +111,13 @@ impl Reconcile {
         self.db.delete_asset(hash).await?;
         // 审计：外部删除无法归因（actor=NULL，文件系统不背锅）。
         self.db
-            .append_audit(&AuditEntry {
-                ts: now_ms(),
-                actor: None,
-                action: "asset.removed_external".to_string(),
-                target_hash: Some(hash.to_vec()),
-                detail: Some(format!("originals missing: {rel_path}")),
-            })
+            .append_audit(&AuditEntry::local(
+                now_ms(),
+                None,
+                "asset.removed_external",
+                Some(hash.to_vec()),
+                Some(serde_json::json!({ "relPath": rel_path }).to_string()),
+            ))
             .await?;
         Ok(())
     }
