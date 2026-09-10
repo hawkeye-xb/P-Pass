@@ -35,8 +35,8 @@
 
 ---
 
-UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 正在将 DESK-15 收编的黄色 `Notice`
-重做为紧凑 `Toast` 瞬时反馈；
+UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 的紧凑 `Toast` 已完成源码/构建验证，
+待真实 Tauri 窗口走查；
 UI-08 已通过归档。
 
 ---

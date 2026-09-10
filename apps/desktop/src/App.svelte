@@ -16,7 +16,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Card } from "$lib/components/ui/card";
   import { Dialog } from "$lib/components/ui/dialog";
-  import { Notice } from "$lib/components/ui/notice";
+  import { Toast } from "$lib/components/ui/toast";
   import { NavItem } from "$lib/components/ui/nav-item";
   // ICON-02: 功能小图标走开源图标库（lucide），不再手抄设计稿的 SVG
   // path。深路径 import（`@lucide/svelte/icons/<name>`）是官方推荐用法，
@@ -1173,7 +1173,7 @@
       <h1>P-Pass</h1>
     </header>
     {#if message}
-      <Notice {message} onClose={() => (message = "")} />
+      <Toast {message} onClose={() => (message = "")} />
     {/if}
     <!-- W1 (2026-08-26): 整块按平台选择组件渲染，不在单个 Wizard 内部
          塞 if isWindows —— macOS/Windows 的 onboarding 是两条完全独立的
@@ -1212,7 +1212,7 @@
 
     <main class="content" data-page={page}>
       {#if message}
-        <Notice {message} onClose={() => (message = "")} />
+        <Toast {message} onClose={() => (message = "")} />
       {/if}
 
       {#if page === "overview"}
