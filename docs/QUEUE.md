@@ -44,7 +44,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
-| [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星蜂窝热点 288 MB Flow 视频三次 `flow.fetch` 15 秒超时，进入终态失败 | 已复现；拆分建连/控制 RPC/长 fetch deadline，禁止盲改单一常数 |
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
@@ -90,6 +89,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
+| [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星热点大视频已复现 `flow.fetch` 15 秒超时；不能靠小文件成功掩盖 | **等可持续的蜂窝热点 / relay 窗口后再改并跑大视频回归** |
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 错误地从 UI 文案切入审计，未编码；被 AUDIT-03 审计合同重定义取代 | **冻结**；不得恢复，等 AUDIT-03 后重新拆实现卡 |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
