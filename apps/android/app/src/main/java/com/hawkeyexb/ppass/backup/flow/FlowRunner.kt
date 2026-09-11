@@ -32,6 +32,11 @@ class FlowRunner(
     private val ledger: DiscoveryLedgerStore,
     private val discovery: FlowDiscoveryPort,
     delivery: DeliveryPort,
+    // MOB-67: the UX-02 failure notification, re-connected to the new Flow
+    // core. Default = no-op so existing construction/tests are untouched;
+    // AndroidFlowRuntime wires the real system-notification implementation.
+    private val failureNotifier: com.hawkeyexb.ppass.backup.FailureNotifier =
+        com.hawkeyexb.ppass.backup.NoopFailureNotifier,
 ) {
     private val consumer = StrictConsumer(ledger, delivery)
     private val completion = CompletionAndScope(ledger)
@@ -150,7 +155,16 @@ class FlowRunner(
     }
 
     fun recordPermanentFailure() {
-        consumer.recordPermanentFailure()
+        val becameTerminal = consumer.recordPermanentFailure()
+        if (becameTerminal && failureNotifier.enabled()) {
+            // MOB-67: post after the durable transition, count from the
+            // ledger — the honest total of items waiting on a user decision
+            // (fixed notification id folds a repeat into an update, never a
+            // second buzz). Best-effort: a throwing send must not break the
+            // consumer's retry path below.
+            val failedItems = ledger.load().items.count { it.deliveryState == DeliveryState.FAILED_NEEDS_USER }
+            runCatching { failureNotifier.postFailure(failedItems) }
+        }
         // MOB-54: a transient (non-terminal) failure re-queues the head but
         // must not stall there — same rule as acceptCompletionReceipt: only
         // after the outcome is durable may the consumer look for its next

@@ -146,13 +146,25 @@ class StrictConsumer(
         }
     }
 
-    fun recordPermanentFailure() {
+    /**
+     * MOB-67: returns whether THIS call drove the leased head into the
+     * terminal FAILED_NEEDS_USER state (attempt 3 of 3). The caller may not
+     * re-derive it from a post-update read — a concurrent restore or receipt
+     * could change the picture between write and read; the transition itself
+     * is the fact.
+     */
+    fun recordPermanentFailure(): Boolean {
         val current = ledger.load()
-        val lease = current.fetchLease ?: return
+        val lease = current.fetchLease ?: return false
+        var becameTerminal = false
         ledger.update { snapshot ->
             val currentItem = snapshot.items.single { it.queueSequence == lease.queueSequence }
             val attempts = currentItem.attemptCount + 1
             val terminal = attempts >= MAX_PERMANENT_ATTEMPTS
+            // MOB-67: captured inside the mutation itself — the exact
+            // transition into FAILED_NEEDS_USER is the durable fact the
+            // failure notification hooks (a transient retry stays silent).
+            becameTerminal = terminal
             val items = snapshot.items.map { item ->
                 if (item.queueSequence == lease.queueSequence) {
                     item.copy(
@@ -192,6 +204,7 @@ class StrictConsumer(
                 next
             }
         }
+        return becameTerminal
     }
 
     private fun waitForConstraints(current: DiscoveryLedgerSnapshot) {
