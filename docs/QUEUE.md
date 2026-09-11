@@ -42,7 +42,9 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ## 一、进行中
 
-（当前没有进行中的卡。）
+| 卡 | 当前节点 | 下一步 | 级别 |
+|---|---|---|---|
+| [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | UI 状态快照懒创建 native runtime 导致 ANR，根因已有 trace | 先写快照只读 RED，再移动 runtime 初始化边界 | L2 |
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
@@ -82,7 +84,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P0 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 断开后重扫再次触发主线程 ANR：状态读取懒创建 native runtime，必须移出 UI 线程 | L2 |
 | P1 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | onboarding 未请求通知权限，却在失败后的后续操作中突发索权；必须恢复既定授权顺序 | L2 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 真实活动记录遗漏/误投影本轮照片与视频结果；必须按 canonical evidence 分列并准确汇总 | L2 |
 | P1 | [MOB-74](../cards/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | 两个视频在照片墙显示空白格；必须从真实视频抽首帧并端到端渲染 | L2 |
