@@ -395,7 +395,6 @@
   });
 
   async function startPairing() {
-    message = "";
     showPairModal = true; // T4: 二维码是弹窗模块，不是常驻卡片
     try {
       const r = await call("pairing.start");
