@@ -38,7 +38,10 @@ to Idle in either arrival order, while remaining queued work stays paused; the
 isolated-album device check remains. MOB-64 is code-complete: Flow `err.not_paired` and the real revoke
 `err.not_authorized` rejection both reach the existing pairing-lost red card with
 no active probe; device revocation plus the next phone-side business call
-remains for shared-device validation. DESK-14 is code-complete: macOS Overlay
+remains for shared-device validation. MOB-71 is code-complete: turning off the
+Wi-Fi restriction clears its transient wait marker, and the waiting hint also
+requires Wi-Fi-only to remain enabled; cellular pause/continue and re-enable
+regression remain. DESK-14 is code-complete: macOS Overlay
 now gets a transparent 32px direct Tauri drag hit area without a visual bar or
 layout shift; default and <1080px native window regression remain. MOB-65 is
 code-complete: the automatic-backup switch now controls only automatic wake

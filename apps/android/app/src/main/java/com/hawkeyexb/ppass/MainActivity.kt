@@ -624,6 +624,7 @@ fun PPassApp() {
                             else {
                                 wifiOnly = true
                                 backupSettings.save(wifiOnly)
+                                wifiDeferred = !isOnUnmetered(context)
                                 rescheduleAutoBackup(context)
                             }
                         },
@@ -730,6 +731,7 @@ fun PPassApp() {
                             pendingWifiOff = false
                             wifiOnly = false
                             backupSettings.save(false)
+                            wifiDeferred = false
                             rescheduleAutoBackup(context)
                         }) { Text(stringResource(R.string.wifi_off_confirm_ok)) }
                     },

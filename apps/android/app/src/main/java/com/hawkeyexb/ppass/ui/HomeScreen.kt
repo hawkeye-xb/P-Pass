@@ -323,7 +323,13 @@ fun HomeScreen(
 
         // MOB-02 §四事件①: 触发已排队（Wi-Fi 要求不满足）——「将在连上
         // Wi-Fi 后进行」，不假装已经开跑。
-        if (wifiDeferred && !busy && !partialAccess) {
+        if (shouldShowWifiDeferredHint(
+                wifiOnly = wifiOnly,
+                wifiDeferred = wifiDeferred,
+                busy = busy,
+                partialAccess = partialAccess,
+            )
+        ) {
             Spacer(Modifier.height(10.dp))
             Text(
                 stringResource(R.string.wifi_deferred_hint),
@@ -743,6 +749,14 @@ private fun lastSuccessText(ts: Long): String =
 /** 千分位分组（设计稿"1,180 / 1,234"）——用户当前 locale 的分组符号。 */
 internal fun groupThousands(n: Long): String =
     java.text.NumberFormat.getIntegerInstance().format(n)
+
+/** A waiting hint is valid only while the user still requires Wi-Fi. */
+internal fun shouldShowWifiDeferredHint(
+    wifiOnly: Boolean,
+    wifiDeferred: Boolean,
+    busy: Boolean,
+    partialAccess: Boolean,
+): Boolean = wifiOnly && wifiDeferred && !busy && !partialAccess
 
 /** M10（全页面状态稿）：cell 行高 52dp——设计稿原文数值，带 hint 的
  *  两行开关自然长过这个下限，是合理例外，不受这条线约束。 */
