@@ -4,7 +4,9 @@
 > 里程碑状态的唯一权威来源，每张卡完成即更新。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
-**Now / 当前位置**（2026-09-11）: MOB-61 has passed Samsung real-device
+**Now / 当前位置**（2026-09-11）: MOB-70 has passed Samsung real-device
+acceptance: concurrent retries for one phone now serialize daemon materialization,
+so a 72 MB Flow video confirms instead of losing its shared staging source. MOB-61 has passed Samsung real-device
 acceptance: after durable Flow admission, deleting the isolated phone source
 lands `SKIPPED_SOURCE_MISSING` / `MISSING` / `UNRECOVERABLE`, clears its lease,
 continues the next item, and presents a read-only skip notice. DESK-14, DESK-15, MOB-63, and MOB-65 have

@@ -10,6 +10,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::Mutex as AsyncMutex;
+
 use core_index::{IncomingFile, Ingestor};
 use proto::{FlowCompletionReceipt, FlowFetchRequest};
 use storage::{Db, FlowGrant, FlowGrantState};
@@ -17,6 +19,9 @@ use transport::{Blobs, ConnectionStatus, NodeId};
 
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
 use crate::telemetry::{Event as TelemetryEvent, Telemetry};
+
+type PeerFetchLock = Arc<AsyncMutex<()>>;
+type FetchLocks = Arc<Mutex<HashMap<[u8; 32], PeerFetchLock>>>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryError {
@@ -223,6 +228,10 @@ pub struct FlowDelivery {
     /// disabled, so this is a second independent off switch, not a
     /// replacement for it.
     telemetry: Option<Telemetry>,
+    /// Android can retry an item after its RPC times out while the daemon is
+    /// still materializing that same fetch. One lock per paired phone prevents
+    /// the retry from deleting or moving the first fetch's staging path.
+    fetch_locks: FetchLocks,
 }
 
 impl FlowDelivery {
@@ -241,6 +250,7 @@ impl FlowDelivery {
             paths: FlowPathRegistry::default(),
             events: None,
             telemetry: None,
+            fetch_locks: Arc::default(),
         }
     }
 
@@ -344,6 +354,11 @@ impl FlowDelivery {
     ) -> Result<FlowCompletionReceipt, DeliveryError> {
         let item_started = std::time::Instant::now();
         let grant = self.checked_request(peer, request).await?;
+        // Re-read state while holding the per-phone lock. A retry that waited
+        // for a predecessor to finish can replay its durable receipt instead
+        // of re-fetching the same active grant concurrently.
+        let fetch_lock = self.fetch_lock(peer);
+        let _fetch_guard = fetch_lock.lock().await;
         let stored = self.matching_grant(&grant).await?;
         if stored.state == FlowGrantState::Completed {
             return self.persisted_receipt(&grant).await;
@@ -598,6 +613,15 @@ impl FlowDelivery {
             grant.queue_sequence,
             hex::encode(&grant.content_hash)
         ))
+    }
+
+    fn fetch_lock(&self, peer: NodeId) -> PeerFetchLock {
+        self.fetch_locks
+            .lock()
+            .expect("flow fetch lock registry")
+            .entry(peer.0)
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
     }
 
     /// TEL-02: `conn` — one per `fetch()` attempt, terminal state only
