@@ -1,6 +1,8 @@
 # AUDIT-02 活动记录只展示用户有意义的结果（L2）
 
-> ⬜ 状态：可接 · 当前节点：AUDIT-04 canonical 四表与兼容 `audit.list` 已落地；立即实现首版活动记录投影
+> 🟡 状态：进行中 · 协同分支：`work/audit-02-activity-ui`
+> 当前节点：确认 `audit.list` 缺少可信 evidence summary；先为只读 IPC/投影写失败用例
+> 下一步：将既有 canonical evidence summary 暴露给活动页，改为用户结果文案并跑 focused + desktop + `just ci`
 > 级别：L2 · 阻塞：无
 
 ## 问题
