@@ -4,6 +4,7 @@
 
 | 卡片 | 日期 | Commit | 状态 | 摘要 |
 |------|------|--------|------|------|
+| **真机狗粮记录（MOB-68 / MOB-71~75 / UI-11 / AUDIT-02）** | 2026-09-11 | 本 commit | 🟡 已开卡、未修复 | 真实路径发现：关掉「需要 Wi‑Fi」后暂停又显示 Wi‑Fi 等待；取消轮后新选相册只在重开 App 才触发；通知权限未在 onboarding 出现却在失败后的后续操作突发请求；本机源仍在时查看仍走远端；顶部系统栏视觉对比度异常；活动记录与本轮照片/视频事实不一致；两个视频缩略图为空。另有 HarmonyOS 4.2 在相册变更后约 1 分钟无后台传输、重开 App 才触发；MOB-68、AUDIT-02 的旧通过结论已撤回；relay 限流等均未当作根因。 |
 | **队列历史审计（MOB-64 / UX-14 / MOB-13 / OBS-01）** | 2026-09-11 | 本 commit | ✅ 状态索引已校正 | 历史提交与 current source 对账：MOB-64 的真实 `err.not_authorized` 反证表明它是待修复 P1，不是待验收；UX-14 的 `RunStartPrefs`/`pausedAfterOf` 在现生产 Flow 路径零调用，MOB-13 的 ConfirmedStore 计数同样不再供首页生产读，二者归档为被 Flow/UI-09 取代而非伪列真机欠账；OBS-02/TEL-01~04 已完成，OBS-01 不再错误阻塞于字典，改为等待用户决定默认值与入口。 |
 | **MOB-62（L2）断开重扫 ANR 回归，重新打开** | 2026-09-11 | 本 commit | 🔴 未修复 | 重新扫码场景再次出现 Android ANR。系统 trace 锁定为主线程 500ms 状态刷新经 `flowLedgerSnapshot()` 懒创建 Flow runtime，在 `flowRuntimeLock` 内执行 native provider `open()`；此前 `11a2885` 的旧 ledger/runtime/wake 清理仍在，但没有隔离「状态读取」与「native 初始化」。MOB-62 已从归档移回可接 P0；下一步先写状态快照不创建 native runtime、初始化仅在 IO 的失败用例，再修边界并重做真机验收。 |
 | **AUDIT-02（L2）活动记录用户投影** | 2026-09-11 | 本 commit | 🟡 待真实桌面验收 | `audit.list` 直接读取 canonical operation，向 Desktop 返回由 `audit_item_evidence` 重算的 `evidenceSummary`，不再让 UI 采用手机自报 final counts。活动页将 Flow 终态显示为「已备份 N 张照片」并过滤连接/控制/逐项诊断噪音；本机显示【本地】，其它设备显示名称与短指纹。新增 daemon IPC 反证（phone 声称 5、canonical evidence 为 2/1/1 时只返回 2/1/1）及桌面投影测试 5 条。focused Rust、desktop Vitest **62/62**、Vite build、`just ci` 全绿；欠 current-main Desktop 隔离 Flow 实窗验收。 |

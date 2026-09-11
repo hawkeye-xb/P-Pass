@@ -5,6 +5,15 @@
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
 **Now / 当前位置**（2026-09-11）: MOB-70 has passed Samsung real-device
+New real-device dogfood has reopened MOB-68 (notification permission ordering)
+and AUDIT-02 (activity evidence projection), and opened MOB-71~75 plus UI-11:
+Wi-Fi deferral must not reappear after the setting is disabled; scope selection
+must wake Flow without an app relaunch; on-device source viewing should avoid a
+remote read when the verified original is still present; Android system-bar
+contrast and video thumbnails need real-device fixes; HarmonyOS background media
+change needs scheduler evidence before assigning a root cause. These are observation
+cards, not diagnosed root causes.
+MOB-70 has passed Samsung real-device
 acceptance: concurrent retries for one phone now serialize daemon materialization,
 so a 72 MB Flow video confirms instead of losing its shared staging source. MOB-61 has passed Samsung real-device
 acceptance: after durable Flow admission, deleting the isolated phone source
