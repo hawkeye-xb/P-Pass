@@ -75,7 +75,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星蜂窝热点已实证 relay 单文件成功，未复现旧 15s 超时；原始失败仍等 OPPO Reno8 logcat 判决，不能盲改超时 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
@@ -91,6 +90,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
+| [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星蜂窝热点 relay 已单文件成功，未复现 15 秒超时；不因此宣称已修 | **等 OPPO Reno8 到场后用原生 Android logcat 复现，或新的真实失败** |
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 错误地从 UI 文案切入审计，未编码；被 AUDIT-03 审计合同重定义取代 | **冻结**；不得恢复，等 AUDIT-03 后重新拆实现卡 |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
