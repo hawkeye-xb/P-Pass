@@ -170,3 +170,16 @@ UX-15 + MOB-43 之后用户**没有任何出路**。而"在外面用手机备份
 3. **H-07 自建 relay** 从"独立价值"升级为"与本故障直接相关"——**我此前说它
    与本次故障无关，那个判断错了**。relay 路径的质量直接决定 connect 能不能
    在超时内完成。但它不是唯一解：超时分开之后，即使走 n0 公共 relay 也能连上。
+
+## 2026-09-11：三星连手机蜂窝热点的 relay 对照通过（本卡仍不关闭）
+
+- 三星 SM-S9210 的默认路由切到热点 Wi-Fi；Mac 保持原网络。当前 main debug
+  daemon 用 `RUST_LOG=info,transport=debug` 记录到同一手机的 inbound 注册为
+  `Relay(https://aps1-1.relay.n0.iroh.link./)`，不是 LAN 对照。
+- 在已选 Screenshots 范围新增一张隔离照片，强制运行生产 `MediaWatchJob` 后，
+  Flow 项 `CONFIRMED`、`attemptCount=0`；daemon 审计出现 `ingest.new`，Android
+  logcat 与 daemon 日志均无 `DaemonUnreachableException`、`ConnectionLost` 或
+  timeout。
+- 这证明「三星 + 此热点 + n0 relay」当前可完成一次 Flow，**不**证明 8/26 的
+  15 秒失败已经修复，也不能据此改超时值。原始失败仍需 OPPO 原生 Android 的
+  失败日志判定；手机测试源已清，后台备份开关和 device-idle 白名单均恢复原状。
