@@ -11,9 +11,9 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-10**（macOS + 三星真机验证通过并关卡 4 张：DESK-14/15、
-> MOB-63/65；DESK-14 顺带修复原生标题与侧栏品牌重复显示；MOB-64 待补充首次
-> 拒绝时机的失联识别澄清；UI-04a/c 需要用户后续统一给出移动端具体现象）
+> 最后核对：**2026-09-11**（历史提交与 current `main` 重新对账：所有分支已收拢，
+> 但 MOB-62 在重新扫码场景出现新的主线程 ANR，已从归档重新打开；此前“代码完成、
+> 等真机复核”的卡不再混入已完成区。）
 
 ---
 
@@ -63,6 +63,15 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
+| [MOB-60](../cards/MOB-60-cancel-round-leaves-stale-pause.md) | 取消当前轮完成后必须落 Idle，不显示暂停/继续/取消 | L1 |
+| [DESK-13](../cards/DESK-13-ingest-blocks-tokio-runtime-freezes-desktop-ui.md) | 大文件/视频传输时桌面照片墙与暂停/取消不应冻结 | L0 |
+| [MOB-57](../cards/MOB-57-pause-cancel-buttons-lack-pending-state.md) | 暂停/取消连点只接受一次命令并有处理中反馈 | L1 |
+| [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | epoch 自愈、重传提示、归属过滤与失联提示的组合回归 | L3 |
+| [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | Flow 摄入后桌面库实时出现照片 | L1 |
+| [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄日期而非归入当月 | L1 |
+| [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 并发失败/收据回调不触发同一队头双发 | L0 |
+| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 临时失败后队列自动重试并继续后续项 | L1 |
+| [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 旧账本已确认项补 completedAt，首页不再永久显示从未成功 | L1 |
 
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 
@@ -75,6 +84,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
+| P0 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 断开后重扫再次触发主线程 ANR：状态读取懒创建 native runtime，必须移出 UI 线程 | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死 | L2 |
@@ -122,22 +132,12 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [MOB-50](../cards/done/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 三星真机 2026-09-09：取消轮后新增照片无需 ADB/重启即被正常发现、传输、确认 | 无——upload cursor 复位已闭环 |
 | [UX-13](../cards/done/UX-13-no-resume-affordance-after-pause.md) | 三星真机 2026-09-09：暂停后按钮原地变「继续」，多轮暂停/继续验证正常，最终跑完全部备份 | 无——续传入口已闭环 |
 | [MOB-51](../cards/done/MOB-51-hero-pause-not-sticky-across-round.md) | 三星真机 2026-09-09：连续备份多张照片全程可点「暂停」，与 MOB-49/50 组合验收完成 | 无——英雄区粘性已闭环 |
-| [MOB-62](../cards/done/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 三星真机 2026-09-09：桌面移除+手机主动断开→重新扫码→选相册→开始新一轮备份，全程无崩溃/ANR | 无——断开重置已闭环；衍生 MOB-64（移除后手机端无主动感知） |
 | [UI-08](../cards/done/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 验收人 2026-09-09 确认：长名称呈现与缩略图清晰度均通过 | 无——选相册视觉缺陷关闭 |
 | [MOB-47](../cards/done/MOB-47-video-preview-in-viewer.md) | 验收人 2026-09-09 确认双端视频预览通过 | 无——视频查看器验收关闭 |
 | [MOB-09](../cards/done/MOB-09-one-bad-media-record-kills-batch.md) + [MOB-19](../cards/done/MOB-19-manual-backup-same-bad-record-crash.md) | 旧批处理验收已被 Flow 生产路径取代；`BackupWorker` 仅 wake，缺源终态由 MOB-61 处理 | 无——不再让验收人构造旧 MediaStore 批处理故障 |
 | [REL-06](../cards/done/REL-06-restore-v031-release-after-cleanup.md) | 验收人拍板：历史测试期 `v0.3.1` Release 产物无需恢复；保留 tag，现有 2 个资产维持现状 | 无——不下载/上传缺失资产，不改其他 Release |
 | [SITE-03](../cards/done/SITE-03-backup-core-rebuild-story.md) | 中文工程复盘《为什么我们把备份核心整个换掉了》已发布；手写 sitemap 与 RSS 同步收录，Pages workflow `34102057353` 成功，线上三项均 200 | 无——文章只记录已公开 ARCH-01 / REBUILD 事实 |
-| [MOB-60](../cards/MOB-60-cancel-round-leaves-stale-pause.md) | 用户复测 MOB-58/59 追问坐实：取消当前轮完成后仍展示暂停/继续，点继续等于传空气；`FlowRunner.cancelCurrentRound()` 补 `continueFlow()` 归位闸门，取消完落到已有的 Idle 判断，不新增状态；JVM 298/0/4、just ci 均绿 | 无——闸门归位即完整闭环 |
 | [MOB-58](../cards/done/MOB-58-cancel-round-no-feedback-no-restore-entry.md) | 三星真机 2026-09-07 两轮反馈：取消轮无常驻反馈+重复取消丢批次+进度条混用终身口径；`FlowRunner.restoreAllCancelledRounds()` 汇总恢复、`NoticeCard` 常驻入口（去 Discard 死路）、`advanceRoundProgress` 本轮独立 0 起算；JVM 298/0/4、just ci 均绿。2026-09-09 三星真机组合回归验证通过（顶部「重新传输」提示常驻可点，点击后继续完成备份） | 无——同时收敛 MOB-55（同一根因，取消存档），本卡关闭 |
-| [DESK-13](../cards/DESK-13-ingest-blocks-tokio-runtime-freezes-desktop-ui.md) | 三星真机 2026-09-07 实证「桌面传输中不实时展示、手动刷新卡死很久」；`Ingestor::ingest()`/`place()` 大文件哈希/拷贝套 `block_in_place`（另一会话已埋的修复）+ 补齐 3 个测试文件的 multi-thread runtime flavor（此前配套缺失导致 24 个测试全 panic）；Rust 全绿、just ci 均绿 | 无——补测试闭环，真机复核大文件传输是否仍卡顿 |
-| [MOB-57](../cards/MOB-57-pause-cancel-buttons-lack-pending-state.md) | 三星真机 2026-09-07 实证「暂停/取消连点几次后卡死」；暂停/取消按钮加 `commandPending` 重入守卫 + 禁用态/处理中文案；JVM 288/0/4、just ci 均绿 | [MOB-58](../cards/done/MOB-58-cancel-round-no-feedback-no-restore-entry.md)（"取消轮恢复传输"当时按 MOB-49 既定语义排除在外，后续用户明确要求才补上） |
-| [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | 四项全做完：epoch 静默补齐（自愈优先于重新扫码）、重传提示换源账本 `NEEDS_DECISION`、照片页归属过滤换源、失联心跳接线；JVM 288/0/4、just ci、debug APK 均绿 | 无——四项均在本卡范围内闭环 |
-| [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | 手机传完照片桌面不实时出现——`FlowDelivery` 补 `with_events`/throttle 接线（对齐 `BackupEngine` 既有模式）；Rust 336/336 passed、just ci 均绿 | 无——事件链闭环 |
-| [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | 老照片桌面归错月——`taken_at_ms` 加 EXIF>capture_at_ms_hint>mtime 优先级，`FlowFetchRequest` 补 `capture_at_ms` 走 wire；Rust 336/336 passed、Android JVM 288/0/4、just ci 均绿 | 存量已错分照片未批量重刷，留给验收人真机确认后按需再开卡 |
-| [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 三星真机 2026-09-07 实证：两条并发传输失败日志相差 322ms；`onPermanentFailure`/`onReceipt` 补齐 `flowTriggerLock`（L0，违反 ARCH-03 单活跃租约不变量）；JVM 277/0/4、just ci 均绿 | 无——修复即完整闭环 |
-| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星真机 2026-09-07 实证：队尾照片卡在 QUEUED/attemptCount=1 传不完；`FlowRunner.recordPermanentFailure()` 补齐对称 `wake()`；JVM 276/0/4、just ci 均绿 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md)（同一轮回归观察到的取消按钮无反馈，证据不足未合并处理）、[MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md)（同一改动放大了一处早已存在的并发缺口） |
-| [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 三星真机 2026-09-07 实证「37/38 已回家」+「从未成功备份过」永久矛盾；`DiscoveryLedgerStore.load()` 回填旧账本 CONFIRMED 项的 completedAt；JVM 275/0/4、just ci、debug APK 均绿 | 无——纯数据迁移，不产出下游卡；真机复核为可选项 |
 | [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | 三星真机自然复现迟到回执竞态并收敛为 `CONFIRMED`；范围扩展补扫全部验收标准完成 | 分出 MOB-49、MOB-50（取消本轮两处生产接线缺口） |
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |

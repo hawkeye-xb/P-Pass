@@ -1,6 +1,6 @@
 # MOB-62 断开后重扫必须清空旧 Flow 运行态（L2）
 
-> 🟢 状态：真机验证通过（2026-09-09 三星，含开始新一轮备份），待关卡
+> 🔴 状态：2026-09-11 回归失败；先前的旧 Flow 清理已合并，但同场景仍触发主线程 ANR，需修复后重新真机验收
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -14,14 +14,14 @@
 ## 验收标准
 
 - [ ] 断开后所有 unique Flow wake work 与 media watch 均取消；旧 runtime/provider 关闭并从 map 移除，旧 remote Flow ledger 删除。
-- [ ] 重扫同一 NodeId 后首次 wake 只读新 runtime/new ledger；无旧 offer、无 ANR/崩溃。
+- [ ] 重扫同一 NodeId 后首次 wake 只读新 runtime/new ledger；无旧 offer、无 ANR/崩溃；状态读取不得在主线程创建 native runtime。
 - [ ] JVM 覆盖 reset 语义；Android build/test 与 `just ci` 通过。
 - [x] 三星真机（2026-09-09）：桌面移除+手机主动断开→重新扫码→允许连接→
       进入首页，全程不崩溃；随后选择相册开始新一轮备份，正常传输。
 
 ## 范围
 
-- 只准动：Android pairing cleanup、Flow runtime 生命周期、work/media-watch cancel 与测试、卡/队列/进度。
+- 只准动：Android pairing cleanup、Flow runtime 生命周期、`BackupUiStateHolder` 的状态读取/初始化边界、work/media-watch cancel 与测试、卡/队列/进度。
 - 不准动：daemon pairing auth、照片库/用户媒体、传输协议。
 
 ## 阻塞与依赖
@@ -35,3 +35,4 @@
 - 2026-09-08 三星系统记录 `MainActivity` ANR；logcat 同时可见旧 `flow.fetch` offer 密集重放。
 - 2026-09-08 Samsung SM-S9210 真机回归：从当前 `main` 重建、覆盖安装 debug APK 后，手机主动断开 → 手动输入新的单次配对串 → 桌面 daemon 检出 pending 后立即允许；手机稳定进入「选择要备份的相册」，没有 ANR、崩溃或旧 offer UI。未点「开始备份」，避免向真实照片库发起传输；"进入首页后开始一轮新备份"仍待单独验收。
 - 2026-09-09 Samsung SM-S9210 组合回归：桌面移除设备 + 手机主动断开 → 重新扫码 → 允许连接 → 选相册 → 开始一轮新备份，全程无崩溃/ANR/旧 offer，正常传输完成。余项已闭环。
+- 2026-09-11 回归：同一业务场景再次出现 Android ANR。系统 DropBox trace 显示主线程的 500ms `BackupUiStateHolder.refreshFlowState()` 经 `flowLedgerSnapshot()` 进入 `runtimeFor()`，在持有 `flowRuntimeLock` 时首次调用 `AndroidNativeIrohBlobsProvider.open()` / `nativeOpen()`；native 初始化阻塞超过 ANR 门限。此前清旧 runtime/ledger/wake 的修复仍在，但它没有禁止 UI 状态读取懒创建 runtime，故本卡重新打开。下一步：先写「状态快照不创建 native runtime / 初始化只能在 IO」失败用例，再修生产边界。
