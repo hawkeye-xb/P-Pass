@@ -1,6 +1,6 @@
 # MOB-72 新选相册后必须立即唤醒 Flow，不能靠重开 App（L2）
 
-> 🟡 状态：进行中
+> 🟡 状态：代码完成，待三星真机验收
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -35,3 +35,4 @@
 
 - 2026-09-11：仅记录真机回归失败。当前设置页保存范围后依次调用 `requestFlowScopeBackfill(context)` 与 `triggerUserPresentBackup(context)`；需追踪二者在既有 runtime、取消轮历史与当前网络条件下是否实际形成一次 `runner.run(...)`，不能仅凭调用点断言已唤醒。
 - 2026-09-11：已认领。源码初读确认范围保存确实调用 backfill + WorkManager 用户在场 wake；下一步从 runtime 是否存在、`KEEP` work 是否吞掉新 wake、以及取消轮 gate 三处构造生产复现，不凭调用点猜根因。
+- 2026-09-11：根因确认：范围保存只靠 `CATCHUP_WORK_NAME` 的 `ExistingWorkPolicy.KEEP`；旧 Wi-Fi 受限 Work 尚在时，关闭限制后的新触发被吞掉。新增后台原子 `requestFlowScopeBackfillAndWake`，在同一 runtime 锁内提交 backfill 并以当前网络约束 `run`，不在主线程创建 runtime；原 WorkManager wake 保留作后续恢复。RED→GREEN 接线测试 1/0/0/0；Android JVM/debug APK 与 `just ci` 全绿。待真机：取消轮后新选含照片相册，不退出 App 即传输；重开不重复。

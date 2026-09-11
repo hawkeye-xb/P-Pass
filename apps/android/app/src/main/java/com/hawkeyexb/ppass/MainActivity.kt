@@ -82,7 +82,7 @@ import com.hawkeyexb.ppass.backup.cancelMediaWatch
 import com.hawkeyexb.ppass.backup.WatermarkStore
 import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
-import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfill
+import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfillAndWake
 import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
 import com.hawkeyexb.ppass.ui.BackupStartedScreen
 import com.hawkeyexb.ppass.ui.BackupUiState
@@ -798,9 +798,12 @@ fun PPassApp() {
                             val selectedCount = list.filter { it.id in sel }.sumOf { it.count }
                             screen = Screen.Started(s.pairing, selectedCount)
                         } else {
-                            if (added.isNotEmpty()) requestFlowScopeBackfill(context)
                             val settings = BackupSettings(context.filesDir).load()
-                            wifiDeferred = settings.wifiOnly && !isOnUnmetered(context)
+                            val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
+                            wifiDeferred = !constraintsSatisfied
+                            if (added.isNotEmpty()) {
+                                requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
+                            }
                             triggerUserPresentBackup(context)
                             screen = Screen.Home(s.pairing)
                         }
@@ -854,9 +857,10 @@ fun PPassApp() {
                         }
                     }
                     2 -> {
-                        requestFlowScopeBackfill(context)
                         val settings = BackupSettings(context.filesDir).load()
-                        wifiDeferred = settings.wifiOnly && !isOnUnmetered(context)
+                        val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
+                        wifiDeferred = !constraintsSatisfied
+                        requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
                         triggerUserPresentBackup(context)
                         screen = Screen.Home(s.pairing)
                     }
