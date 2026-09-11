@@ -171,6 +171,53 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
     assert_eq!(resumed_receipt.lease_token, "lease-recovered");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_retries_of_one_grant_share_the_durable_receipt() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let provider_blobs = Arc::new(provider_blobs);
+    // Big enough that the two loopback fetches overlap without relying on a
+    // timing sleep in the production code.
+    let bytes = vec![0x5a; 8 * 1024 * 1024];
+    let source = root.path().join("large-source.jpg");
+    std::fs::write(&source, &bytes).unwrap();
+    let hash = *blake3::hash(&bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    let (first, second) = tokio::join!(
+        delivery.fetch(provider_transport.node_id(), &offer),
+        delivery.fetch(provider_transport.node_id(), &offer),
+    );
+    let first = first.expect("first fetch must materialize");
+    let second = second.expect("concurrent retry must replay receipt");
+    assert_eq!(first.receipt_id, second.receipt_id);
+    assert!(db.get_asset(&hash).await.unwrap().is_some());
+}
+
 /// REBUILD-07 RED: a phone keeps its NodeId across a revoke/rejoin, but a
 /// rejoin rotates the pairing epoch and Android restarts its durable sequence
 /// at 1. Old completed receipts must remain history, never occupy the new

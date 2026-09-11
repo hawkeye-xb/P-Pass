@@ -105,6 +105,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [MOB-68](../cards/done/MOB-68-optional-permissions-map-to-backup-settings.md) | 首装按“媒体范围 → 点进入 App → 电池白名单 → 通知权限 → 首轮传输”串行；后台备份开关移入备份设置，开关后台行为已三星真机通过 | MOB-67 独立处理真实失败系统通知 |
 | [MOB-61](../cards/done/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 三星真机：Flow 入队后删源 → `SKIPPED_SOURCE_MISSING` / `MISSING` / `UNRECOVERABLE`，lease 清空；后续项 2 秒确认，首页只读跳过提示无重试动作 | 无——缺源不再走失败重传或崩溃 |
 | [MOB-67](../cards/done/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 三星真机：开关开时第三次真实失败发固定 id 2027 系统通知；关时同一终态仍落账本但通知栏无 P-Pass 通知 | 无——失败通知开关不再是死开关 |
+| [MOB-70](../cards/done/MOB-70-flow-ingest-moves-staging-source-before-metadata.md) | 三星 72 MB 视频确认：同手机 retry 按 peer 串行，避免并发 fetch 删除同一 staging 源 | 无——大文件不再三次重试终态失败 |
 | [AUDIT-03](../cards/done/AUDIT-03-audit-contract-case-matrix.md) | 审计 Case Matrix、【本地】/名称+短指纹、支持级可信、全库保留与无专用导出边界均已收口 | 释放 AUDIT-04 审计核心重建 |
 | [TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md) | 遥测字典 v2 落地：`conn` 删 ipver/country/isp_hash，`backup_session`→`flow_item` 精简字段，新增 `error`；daemon+Worker 同步改，`cargo test` 5/5 + `npm test` 14/14 + `just ci` 全绿 | 释放 TEL-02/03/04 接线卡 |
 | [TEL-02](../cards/done/TEL-02-wire-conn-and-flow-item-events.md) | conn/flow_item 已接线 `flow_delivery.rs::fetch()`；顺带修正 TEL-01 遗留的 conn.path 枚举值（lan 不存在，改为 direct/relay/offline/unknown）；`cargo test -p daemon --test flow_delivery` 10/10、nextest 356/356、just ci 全绿 | 释放 TEL-03/04 的 TEL-01 依赖已满足 |
