@@ -995,3 +995,39 @@ async fn audit_rows_in_the_same_millisecond_get_distinct_ids() {
         "前提失效：五条的 ts 必须相同，测试才在测撞键",
     );
 }
+
+/// AUDIT-02：活动记录的「已备份 N 张」只能来自 daemon 由 item evidence
+/// 重算的 summary，不能读取手机上报的 final_counts。`audit.list` 必须把这
+/// 个 canonical 值原样给 Desktop。
+#[tokio::test(flavor = "multi_thread")]
+async fn audit_list_exposes_canonical_evidence_summary_for_activity_projection() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "audit-evidence-summary").await;
+    db.append_operation(&storage::AuditOperationEntry {
+        operation_id: "round-for-activity".into(),
+        occurred_at: 1_700_000_000_000,
+        kind: "flow.round.finished".into(),
+        evidence_summary: Some(
+            serde_json::json!({ "confirmed": 2, "failed": 1, "source_missing": 1 }).to_string(),
+        ),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c.call("audit.list", serde_json::Value::Null).await;
+    assert!(resp.ok, "{resp:?}");
+    let result = resp.result.unwrap();
+    let event = result["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["eventId"] == "round-for-activity")
+        .expect("audit.list must return the stored operation");
+    assert_eq!(
+        event["evidenceSummary"],
+        serde_json::json!({ "confirmed": 2, "failed": 1, "source_missing": 1 }),
+        "the activity projection must receive canonical evidence counts, not phone final_counts",
+    );
+}

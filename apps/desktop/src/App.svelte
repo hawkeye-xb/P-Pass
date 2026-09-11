@@ -37,6 +37,7 @@
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
   import { externalDeleteNotice } from "./lib/externalDelete.js";
+  import { auditText, auditWho, isVisibleAudit } from "./auditProjection.js";
   // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
   // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
   import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./lib/viewerVideo.js";
@@ -268,72 +269,9 @@
     }
   }
 
-  // AUDIT-01: 审计事件 v2 → 人话行文案（未知 kind 兜底显示原始类型，绝不吞）。
-  // DESK-05: 拆成 设备/事件 两列喂表格——设备列解析 actor 名称，事件列
-  // 只留动作文本（原「<设备名> 备份完成」式前缀并入设备列）。
-  // payload 是结构化 JSON（v1 的机器可读 detail 字符串已随 audit_log 移除）。
-  function auditWho(e) {
-    const p = e.payload ?? {};
-    const who = devices.find((x) => x.node_id === e.actor)?.name ?? null;
-    if (who) return who;
-    // 配对类事件 payload.deviceName 是设备名（actor 为 null 时兜底）。
-    if (e.kind.startsWith("pair.") && p.deviceName) return p.deviceName;
-    if (e.actor) return `${e.actor.slice(0, 8)}…`;
-    return "本机";
-  }
-  function auditText(e) {
-    const p = e.payload ?? {};
-    switch (e.kind) {
-      case "pair.requested":
-        return "请求加入";
-      case "pair.accepted":
-        return "已加入";
-      case "pair.denied":
-        return "加入被拒绝";
-      case "asset.removed_external":
-        // payload.relPath（SYNC-01 对账/WATCH-01 秒级监听清索引）——
-        // 只留文件名，全路径是噪音。
-        return `外部删除（${shortName(p.relPath)}）`;
-      case "device.renamed":
-        // payload { oldName, newName, nodeId }（ipc.rs 改名审计写入）——
-        // nodeId 是取证用的，不给用户看，只留改名前后的名字，不然一条
-        // 动态挤进 64 位十六进制字符串，总览摘要卡/活动记录页都会被撑
-        // 爆换行（用户实测反馈）。
-        if (p.oldName && p.newName) return `改名：${p.oldName} → ${p.newName}`;
-        return "已改名";
-      case "device.revoked":
-        return "已移除设备";
-      case "device.unpaired":
-        return "主动断开连接";
-      case "device.connected":
-        // PRES-01: hello 心跳进活动流——「小红 连接了」（10 分钟去重，
-        // 防锁屏重连刷屏）。
-        return "连接了";
-      case "device.merged":
-        return "合并旧设备（重装恢复）";
-      case "flow.round.controlled":
-        return "调整了传输";
-      case "flow.scope.changed":
-        return "调整了备份范围";
-      case "flow.epoch.invalidated":
-        return "旧的传输授权已失效";
-      case "flow.round.finished":
-        return "一批传输完成";
-      case "flow.item.attention":
-        return "有一项需要处理";
-      case "flow.reconciliation.resolved":
-        return "对账裁决完成";
-      default:
-        return e.kind;
-    }
-  }
-  // 审计 payload 常带全路径/机器前缀——只留最后一段文件名（噪音过滤，
-  // 与 visibleAudit 的 ingest.* 过滤同一原则）。没有路径就原样返回。
-  function shortName(d) {
-    const s = String(d ?? "");
-    const i = Math.max(s.lastIndexOf("/"), s.lastIndexOf("\\"));
-    return i >= 0 ? s.slice(i + 1) : s;
-  }
+  // AUDIT-02：操作结果、身份和诊断噪音过滤由 auditProjection.js 统一
+  // 处理，页面只传当前设备索引，避免各页面重新实现审计合同。
+
   // 2026-08-18（用户反馈④）：精确时刻——humanTime 的相对说法（"昨天
   // 14:32"/"周三"/"08-11"）读起来舒服，但超过 7 天就只剩日期没有钟点，
   // 排查"到底几点传的"时不够用。活动记录页给每行补一条精确时间小字，
@@ -358,11 +296,10 @@
     externalDeleteNotice(auditEvents, nowMs, { dismissedAt: deleteWarnDismissedAt })
   );
 
-  // DESK-05: 活动表格只展示设备级事件——ingest.* 逐文件行是全路径噪音，
-  // 不参与展示（这类逐文件事件本就只在批处理路径写入，AUDIT-01 之后
-  // Flow 路径不再逐项写长期审计）。数据层不动。
+  // AUDIT-02：活动表只展示用户结果、数据风险和安全事实。连接、控制、
+  // 路径/逐项 ingest 噪音仍留在诊断层，不伪装成用户历史。
   const visibleAudit = $derived(
-    auditEvents.filter((e) => !e.kind.startsWith("ingest."))
+    auditEvents.filter(isVisibleAudit)
   );
   // AUDIT-01: 本周「新备份/去重跳过」统计原本读 backup.finished 的
   // ingested=/duplicates= 汇总；该审计事件已随本卡移除（card 决定：
@@ -1370,7 +1307,7 @@
                            each_key_duplicate。时间戳不是身份。 -->
                       {#each visibleAudit.slice(0, 3) as e (e.id)}
                         {@const at = humanTime(e.ts, nowMs)}
-                        <li><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
+                        <li><b class="font-semibold">{auditWho(e, devices)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
                       {/each}
                     </ul>
                   {/if}
@@ -1576,7 +1513,7 @@
                   {@const exact = exactTime(e.ts)}
                   <li class="flex items-baseline gap-[14px] border-b border-divider px-[22px] py-[16px] last:border-b-0">
                     <span class="flex-1 text-[15px] text-ink"
-                      ><b class="font-semibold">{auditWho(e)}</b> {auditText(e)}</span
+                      ><b class="font-semibold">{auditWho(e, devices)}</b> {auditText(e)}</span
                     >
                     <!-- 2026-08-20（用户反馈）：右侧原来堆两行——相对时间
                          「3 分钟前」+ 精确时刻「2026-08-20 16:15」。两行指同一

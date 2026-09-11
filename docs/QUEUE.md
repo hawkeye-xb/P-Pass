@@ -42,15 +42,14 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ## 一、进行中
 
-| 卡 | 一句话 | 当前节点 |
-|---|---|---|
-| [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 活动记录立即投影 canonical 审计为用户结果，去除连接/重试噪音 | `work/audit-02-activity-ui`：先补可信 evidence summary 的只读 IPC 与 RED 测试 |
+（当前没有进行中的卡。）
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | canonical evidence summary 已投影为「已备份 N 张照片」并过滤连接/控制噪音；待 current-main Desktop 隔离 Flow 真验 | L2 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 三星真机撤销后实际收到 `err.not_authorized`，仍显示普通重试而非 pairingLost 红卡 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
