@@ -1,6 +1,6 @@
 # MOB-62 断开后重扫必须清空旧 Flow 运行态（L2）
 
-> 🟡 状态：进行中；先前的旧 Flow 清理已合并，但同场景仍触发主线程 ANR，需修复后重新真机验收
+> 🟡 状态：代码完成，待三星真机验收；先前的旧 Flow 清理已合并，但同场景仍触发主线程 ANR，需修复后重新真机验收
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -33,6 +33,7 @@
 ## 实施记录
 
 - 2026-09-11：已认领。DropBox trace 已把根因收敛到 UI 轮询经 `flowLedgerSnapshot()` 懒创建 native runtime；先以快照只读合同写 RED，再把 runtime 创建移出 UI 线程。
+- 2026-09-11：RED：`MOB62SnapshotReadOnlyTest` 证明快照路径调用 `runtimeFor()`。GREEN：快照只读同 epoch 的现有 runtime ledger；没有 runtime 时直接读取 `flow-state/<nodeId>`，不初始化 native provider。focused JVM、Android JVM 343/0/0/4（68 XML）、debug APK 与 `just ci` 全绿。待三星重扫同机验证无 ANR/旧 offer、并完成新轮传输。
 - 2026-09-08 三星系统记录 `MainActivity` ANR；logcat 同时可见旧 `flow.fetch` offer 密集重放。
 - 2026-09-08 Samsung SM-S9210 真机回归：从当前 `main` 重建、覆盖安装 debug APK 后，手机主动断开 → 手动输入新的单次配对串 → 桌面 daemon 检出 pending 后立即允许；手机稳定进入「选择要备份的相册」，没有 ANR、崩溃或旧 offer UI。未点「开始备份」，避免向真实照片库发起传输；"进入首页后开始一轮新备份"仍待单独验收。
 - 2026-09-09 Samsung SM-S9210 组合回归：桌面移除设备 + 手机主动断开 → 重新扫码 → 允许连接 → 选相册 → 开始一轮新备份，全程无崩溃/ANR/旧 offer，正常传输完成。余项已闭环。

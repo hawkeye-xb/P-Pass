@@ -235,8 +235,17 @@ internal fun restoreAllCancelledFlowRounds(context: Context) {
     flushAuditOutbox(context)
 }
 
-internal fun flowLedgerSnapshot(context: Context): DiscoveryLedgerSnapshot =
-    runtimeFor(context.applicationContext)?.ledger?.load() ?: DiscoveryLedgerSnapshot()
+internal fun flowLedgerSnapshot(context: Context): DiscoveryLedgerSnapshot {
+    val pairing = PairingStore(context.filesDir).load() ?: return DiscoveryLedgerSnapshot()
+    if (pairing.pairingEpoch.isBlank()) return DiscoveryLedgerSnapshot()
+    val epoch = PairingEpoch(pairing.pairingEpoch)
+    val key = pairing.daemonNodeId
+    val liveLedger = synchronized(flowRuntimeLock) {
+        flowRuntimes[key]?.takeIf { it.epoch == epoch }?.ledger
+    }
+    return liveLedger?.load()
+        ?: DiscoveryLedgerStore(File(context.filesDir, "flow-state/$key")).load()
+}
 
 /**
  * Unpair/rejoin is a lifetime boundary: no old native provider, durable Flow
