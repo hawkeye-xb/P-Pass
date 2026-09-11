@@ -1,10 +1,10 @@
 # MOB-64 桌面移除设备后，手机端在下次尝试前毫无反馈（L2）
 
-> 🟡 状态：进行中；三星真机失败，待修正真实拒绝码到 pairingLost 的投影
+> 🟡 状态：代码完成，待三星真机验收
 > 级别：**L2** · 阻塞：无
 > 协同分支：`main` · 实现提交：`c1c5803`
-> 当前节点：已确认 `FlowDeliveryPairingLoss.record()` 只记录 `err.not_paired`；真实 `hello: err.not_authorized` 因而无法投影到 holder 的 pairingLost 红卡。
-> 下一步：先补 Flow delivery 的 `err.not_authorized` RED 用例，再最小扩展记录判据并做 Android JVM/真机回归。
+> 当前节点：Flow delivery 已复用 holder 的 `isPairingLostText` 判据，`err.not_paired` 与真实 `err.not_authorized` 都会投影到既有 pairingLost 红卡；Android JVM、debug APK、`just ci` 已通过。
+> 下一步：三星真机重配对后桌面移除设备；手机下一次 Flow 调用应显示「连不上客户端」红卡，而不是普通重试。
 
 ## 问题
 
@@ -44,10 +44,11 @@
 - [x] 找到手机侧收到 `ERR_NOT_PAIRED`（或等价拒绝）的现有处理点（Flow
       delivery 的 hello/backup.begin 失败路径），确认当前该错误码是否已经
       被丢弃在通用失败处理里，还是从未被识别过。
-- [x] 收到该拒绝码时置位 `pairingLost`（复用既有红卡渲染，不新增 UI 状态）。
-- [x] JVM 单测：模拟业务调用返回 `ERR_NOT_PAIRED` → holder 的
-      `pairingLost` 变为 true。
-- [x] 反证：非配对拒绝不置位；移除 `err.not_paired` 识别会使上一条失败。
+- [x] Flow delivery 收到 `ERR_NOT_PAIRED` 或真实 `ERR_NOT_AUTHORIZED` 时置位
+      `pairingLost`（复用既有红卡渲染，不新增 UI 状态）。
+- [x] JVM 单测：模拟业务调用返回 `ERR_NOT_PAIRED` 与 `ERR_NOT_AUTHORIZED` →
+      holder 的 `pairingLost` 变为 true。
+- [x] 反证：普通 delivery 拒绝不置位；去掉共享拒绝码判据会使真实拒绝码用例失败。
 - [ ] 真机：桌面移除设备后，手机端**不需要用户自己操作**，下一次尝试
       传输/心跳时首页出现「连不上客户端」提示（不要求瞬时/主动轮询探测）。
 
@@ -84,3 +85,9 @@ XML 为 2/0/0/0。隔离副本 `just ci` 绿；共享主工作树同期的 SYNC-
 `hello` 实际返回 `err.not_authorized`（不是测试钉住的 `err.not_paired`）。页面只显示
 普通「需要再试一次」，没有既有 pairingLost 红卡。故本卡不得保持“代码完成待验收”；
 需按真实拒绝码重新修复并从已清除数据的三星完成重新配对回归。
+
+2026-09-11：RED 新增 `notAuthorizedFlowDeliverySetsTheHolderPairingLostFlag`，改前定向
+JVM 测试真实失败；根因确认是 `FlowDeliveryPairingLoss.record()` 自行只匹配
+`err.not_paired`，而 holder 的共享判据已同时覆盖 `err.not_paired` / `err.not_authorized`。
+GREEN 后 Flow delivery 复用该共享判据；定向 JVM 3/0/0/0、Android 全量 JVM
+338/0/0/4、debug APK 与 `just ci` 均通过。当前无 ADB 连接设备，三星真机验收未执行。

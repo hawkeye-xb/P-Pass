@@ -42,9 +42,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ## 一、进行中
 
-| 卡 | 当前节点 | 下一步 | 级别 |
-|---|---|---|---|
-| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 已确认 Flow delivery 只把 `err.not_paired` 记录为 pairingLost；真机撤销实际返回 `err.not_authorized` | 先补 RED 用例，再扩展判据并回归 | L2 |
+（当前没有进行中的卡。）
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
@@ -53,6 +51,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 |---|---|---|
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
+| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 真实 `err.not_authorized` 已与 `err.not_paired` 一并投影到 pairingLost 红卡；待三星重配对后撤销设备并验证下一次 Flow 调用 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
 | [NET-05](../cards/NET-05-flow-data-path-status-follows-transfer-lifecycle.md) | 代码完成：active Flow 先显示连接中，随后显示 blobs 数据面直连/中继；待慢速传输及 Pause/Cancel/失败真机回归 | L2 |
 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 页序、Telephoto 缩放/下拉关闭、系统返回层级 | L2 |
@@ -83,7 +82,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 |---|---|---|---|
 | P0 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 断开后重扫再次触发主线程 ANR：状态读取懒创建 native runtime，必须移出 UI 线程 | L2 |
 | P0 | [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 取消轮后新选相册有待传项却不启动，只有重开 App 才触发；范围变更必须在当前 runtime 唤醒 Flow | L2 |
-
 | P1 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | onboarding 未请求通知权限，却在失败后的后续操作中突发索权；必须恢复既定授权顺序 | L2 |
 | P1 | [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭需要 Wi‑Fi 后传输已开始，暂停却重新显示 Wi‑Fi 等待；状态不得复活已关闭条件 | L1 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 真实活动记录遗漏/误投影本轮照片与视频结果；必须按 canonical evidence 分列并准确汇总 | L2 |

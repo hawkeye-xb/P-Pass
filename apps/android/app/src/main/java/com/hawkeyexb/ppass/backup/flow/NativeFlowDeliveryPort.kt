@@ -4,6 +4,7 @@ package com.hawkeyexb.ppass.backup.flow
 import android.content.ContentResolver
 import android.net.Uri
 import android.util.Log
+import com.hawkeyexb.ppass.backup.isPairingLostText
 import com.hawkeyexb.ppass.proto.FlowCompletionReceipt
 import com.hawkeyexb.ppass.proto.FlowAuditAccepted
 import com.hawkeyexb.ppass.proto.FlowAuditEvent
@@ -128,7 +129,7 @@ internal class FlowDeliveryPairingLoss {
     @Volatile private var lostEpoch: String? = null
 
     fun record(epoch: PairingEpoch, failure: Throwable) {
-        if (failure.message?.contains("err.not_paired") == true) {
+        if (failure.message?.let(::isPairingLostText) == true) {
             lostEpoch = epoch.value
         }
     }
