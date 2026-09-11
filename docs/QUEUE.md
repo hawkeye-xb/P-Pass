@@ -42,7 +42,9 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ## 一、进行中
 
-（当前没有进行中的卡。）
+| 卡 | 当前节点 | 下一步 | 级别 |
+|---|---|---|---|
+| [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭 Wi-Fi 限制后暂停态错误投影为 Wi-Fi 等待；根因尚未假定 | 先写生产投影 RED 用例并追踪 `wifiDeferred` | L1 |
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
@@ -83,7 +85,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | P0 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 断开后重扫再次触发主线程 ANR：状态读取懒创建 native runtime，必须移出 UI 线程 | L2 |
 | P0 | [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 取消轮后新选相册有待传项却不启动，只有重开 App 才触发；范围变更必须在当前 runtime 唤醒 Flow | L2 |
 | P1 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | onboarding 未请求通知权限，却在失败后的后续操作中突发索权；必须恢复既定授权顺序 | L2 |
-| P1 | [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭需要 Wi‑Fi 后传输已开始，暂停却重新显示 Wi‑Fi 等待；状态不得复活已关闭条件 | L1 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 真实活动记录遗漏/误投影本轮照片与视频结果；必须按 canonical evidence 分列并准确汇总 | L2 |
 | P1 | [MOB-74](../cards/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | 两个视频在照片墙显示空白格；必须从真实视频抽首帧并端到端渲染 | L2 |
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 白色页面顶部状态栏图标对比度不足，需实证统一安全区/system-bar 外观是否生效 | L1 |
