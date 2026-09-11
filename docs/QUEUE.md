@@ -50,16 +50,13 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | canonical evidence summary 已投影为「已备份 N 张照片」并过滤连接/控制噪音；待 current-main Desktop 隔离 Flow 真验 | L2 |
-| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 三星真机撤销后实际收到 `err.not_authorized`，仍显示普通重试而非 pairingLost 红卡 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
 | [NET-05](../cards/NET-05-flow-data-path-status-follows-transfer-lifecycle.md) | 代码完成：active Flow 先显示连接中，随后显示 blobs 数据面直连/中继；待慢速传输及 Pause/Cancel/失败真机回归 | L2 |
 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 页序、Telephoto 缩放/下拉关闭、系统返回层级 | L2 |
-| [UX-14](../cards/UX-14-a-failed-retry-is-rendered-as-paused.md) | 暂停 → 继续 → 中断连接；界面不许又显示「继续」，应如实显示待备份或错误 | L1 |
 | [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | 正常 daemon 可达包已通过；不可达分支必须由 agent 以隔离故障环境实证，不能要求验收人造故障 | L1 |
 | [WATCH-07](../cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏 | L2 |
-| [MOB-13](../cards/MOB-13-triplet-k-never-reaches-zero.md) | 「待备份 K」能归零（有前置，见卡） | L2 |
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
 | [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
@@ -85,6 +82,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 |---|---|---|---|
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P0 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 断开后重扫再次触发主线程 ANR：状态读取懒创建 native runtime，必须移出 UI 线程 | L2 |
+| P1 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 真实撤销返回 `err.not_authorized`，现有实现只识别 `err.not_paired`，未投影 pairingLost 红卡 | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死 | L2 |
@@ -103,7 +101,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
 | [AUDIT-05](../cards/AUDIT-05-dogfood-week-audit-content-review.md) | 狗粮周后只读复核真实审计内容，验证既定预设的覆盖与字段关联 | **等狗粮周样本**；不阻塞 AUDIT-02 的首版 UI |
-| [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关，承诺（手册+技术可行性报告）未兑现；[OBS-02](../cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md) 已裁决字典 v2，TEL-01~04 均已落地，当前仅自建自用，暂不算合规危机但欠账真实 | 字段列表已定，可以设计隐私页/开关 UI |
+| [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关；OBS-02 字典与 TEL-01~04 已落地，当前仅自建自用，欠账真实但非合规危机 | **等默认值（opt-in / opt-out）与入口的产品拍板** |
 
 ---
 
@@ -138,6 +136,8 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [REL-06](../cards/done/REL-06-restore-v031-release-after-cleanup.md) | 验收人拍板：历史测试期 `v0.3.1` Release 产物无需恢复；保留 tag，现有 2 个资产维持现状 | 无——不下载/上传缺失资产，不改其他 Release |
 | [SITE-03](../cards/done/SITE-03-backup-core-rebuild-story.md) | 中文工程复盘《为什么我们把备份核心整个换掉了》已发布；手写 sitemap 与 RSS 同步收录，Pages workflow `34102057353` 成功，线上三项均 200 | 无——文章只记录已公开 ARCH-01 / REBUILD 事实 |
 | [MOB-58](../cards/done/MOB-58-cancel-round-no-feedback-no-restore-entry.md) | 三星真机 2026-09-07 两轮反馈：取消轮无常驻反馈+重复取消丢批次+进度条混用终身口径；`FlowRunner.restoreAllCancelledRounds()` 汇总恢复、`NoticeCard` 常驻入口（去 Discard 死路）、`advanceRoundProgress` 本轮独立 0 起算；JVM 298/0/4、just ci 均绿。2026-09-09 三星真机组合回归验证通过（顶部「重新传输」提示常驻可点，点击后继续完成备份） | 无——同时收敛 MOB-55（同一根因，取消存档），本卡关闭 |
+| [UX-14](../cards/done/UX-14-a-failed-retry-is-rendered-as-paused.md) | 原 WorkManager retry 的「失败被渲染成暂停」修复仍保留为历史；当前生产 UI 改由 Flow 账本投影，原真机用例不再是生产验收 | UI-09 继续承担当前 Flow 的状态语义验收 |
+| [MOB-13](../cards/done/MOB-13-triplet-k-never-reaches-zero.md) | 原 ConfirmedStore 文件计数修复仍保留为历史；当前首页 K/M 由 Flow 账本聚合，原真机用例不再是生产验收 | UI-09 继续承担当前 Flow 的 K=0/AllSafe 验收 |
 | [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | 三星真机自然复现迟到回执竞态并收敛为 `CONFIRMED`；范围扩展补扫全部验收标准完成 | 分出 MOB-49、MOB-50（取消本轮两处生产接线缺口） |
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |
