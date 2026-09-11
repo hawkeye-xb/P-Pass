@@ -1,10 +1,10 @@
 # MOB-64 桌面移除设备后，手机端在下次尝试前毫无反馈（L2）
 
-> 🔴 状态：三星真机失败，待修正真实拒绝码到 pairingLost 的投影
+> 🟡 状态：进行中；三星真机失败，待修正真实拒绝码到 pairingLost 的投影
 > 级别：**L2** · 阻塞：无
 > 协同分支：`main` · 实现提交：`c1c5803`
-> 当前节点：真机撤销后 `hello: err.not_authorized` 仍被渲染为普通“再试一次”，没有 pairingLost 红卡。
-> 下一步：以真实 `err.not_authorized` 走完整手机 UI 修复/回归；当前三星 App 数据已清除，需重新配对后复测。
+> 当前节点：已确认 `FlowDeliveryPairingLoss.record()` 只记录 `err.not_paired`；真实 `hello: err.not_authorized` 因而无法投影到 holder 的 pairingLost 红卡。
+> 下一步：先补 Flow delivery 的 `err.not_authorized` RED 用例，再最小扩展记录判据并做 Android JVM/真机回归。
 
 ## 问题
 
