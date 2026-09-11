@@ -86,7 +86,8 @@
     <string name="try_again">Try again</string>
     <string name="trouble_details_show">Show technical details</string>
     <string name="trouble_details_hide">Hide technical details</string>
-    <!-- UX-02: 失败通知（成功保持沉默） -->
+    <!-- UX-02: 失败通知（成功保持沉默）；MOB-67 渠道名进字典（旧代码硬编码双语） -->
+    <string name="notif_channel_backup_failed">Backup failed</string>
     <string name="notif_backup_failed_title">Backup didn\'t finish</string>
     <string name="notif_backup_failed_body">%1$d photos didn\'t make it home — open to see</string>
     <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->

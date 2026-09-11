@@ -83,7 +83,8 @@
     <string name="try_again">再试一次</string>
     <string name="trouble_details_show">查看技术详情</string>
     <string name="trouble_details_hide">收起技术详情</string>
-    <!-- UX-02: 失败通知（成功保持沉默） -->
+    <!-- UX-02: 失败通知（成功保持沉默）；MOB-67 渠道名进字典（旧代码硬编码双语） -->
+    <string name="notif_channel_backup_failed">照片备份失败</string>
     <string name="notif_backup_failed_title">照片备份没成功</string>
     <string name="notif_backup_failed_body">%1$d 张照片没备份成功，打开看看</string>
     <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->

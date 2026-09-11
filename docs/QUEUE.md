@@ -50,6 +50,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 失败系统通知已接回 Flow 终态跃迁（UX-02 语义，JVM 337/0）；待三星真机：开→失败收通知、关→不收 | L2 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
@@ -75,7 +76,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P1 | [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 已实证：开“备份失败时通知我”后真实失败仍没有系统通知；待接通失败事件发送 | L2 |
 | P2 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 根因链已闭合（relay 15s 超时→backup.begin 从未送达）；下一步等 OPPO Reno8 真机 logcat 交叉验证 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
@@ -84,6 +84,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
 | P3 | [MOB-66](../cards/MOB-66-android-brand-font-newsreader-manrope.md) | Android 端标题/正文仍是系统默认字体，未接 Newsreader/Manrope，与桌面品牌不一致 | L2 |
+| P2 | [MOB-69](../cards/MOB-69-rebuild04-deleted-notification-senders.md) | REBUILD-04 批次删除带走哨兵/白名单/重传三条通知发送端（判定逻辑成死代码）；先定性再接线或显式下线 | L2 |
 
 ---
 

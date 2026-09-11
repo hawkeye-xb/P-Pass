@@ -5,6 +5,8 @@ import android.content.Context
 import android.net.Uri
 import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.BackupScopeStore
+import com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs
+import com.hawkeyexb.ppass.backup.SystemFailureNotifier
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairingStore
 import java.io.File
@@ -308,6 +310,13 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             ledger = ledger,
             discovery = AndroidFlowDiscoveryPort(context.contentResolver) { BackupScopeStore(context).selectedBucketIds() },
             delivery = delivery,
+            // MOB-67: re-connect the UX-02 failure notification that REBUILD-04
+            // deleted with the legacy worker. Reads NotifyOnFailurePrefs live,
+            // so the settings toggle takes effect from the next failure.
+            failureNotifier = SystemFailureNotifier(
+                context.applicationContext,
+                NotifyOnFailurePrefs(context.filesDir),
+            ),
         )
         val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val auditDispatcher = AuditOutboxDispatcher(
