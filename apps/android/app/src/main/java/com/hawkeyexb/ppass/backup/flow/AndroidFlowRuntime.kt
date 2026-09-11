@@ -173,6 +173,24 @@ internal fun requestFlowScopeBackfill(context: Context) {
     }
 }
 
+/**
+ * A scope save is an explicit foreground action, not just a future WorkManager
+ * eligibility change.  Keep the durable backfill request and its first run in
+ * one background critical section so an older KEEP work request cannot delay it.
+ */
+internal fun requestFlowScopeBackfillAndWake(context: Context, constraintsSatisfied: Boolean) {
+    val app = context.applicationContext
+    thread(name = "ppass-flow-scope-wake") {
+        runtimeFor(app)?.let { runtime ->
+            synchronized(flowTriggerLock) {
+                runtime.runner.requestScopeBackfill()
+                runtime.runner.run(constraintsSatisfied)
+            }
+        }
+        flushAuditOutbox(app)
+    }
+}
+
 internal fun runFlowWake(context: Context, constraintsSatisfied: Boolean = true) {
     runtimeFor(context.applicationContext)?.let { runtime ->
         synchronized(flowTriggerLock) {

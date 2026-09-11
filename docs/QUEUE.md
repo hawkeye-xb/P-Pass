@@ -42,9 +42,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ## 一、进行中
 
-| 卡 | 当前节点 | 下一步 | 级别 |
-|---|---|---|---|
-| [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 范围保存已有 backfill + 用户在场 wake 调用，尚未证明实际 runner 执行 | 从 runtime、WorkManager KEEP 与取消轮 gate 构造 RED 路径 | L2 |
+（当前没有进行中的卡。）
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
@@ -53,6 +51,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 |---|---|---|
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
+| [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 新增范围在后台原子 backfill + 当前约束 Flow wake；待三星取消轮后新相册不重启传输回归 | L2 |
 | [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭 Wi-Fi 限制后暂停不会复活 Wi-Fi 等待；待三星蜂窝网络回归暂停/继续与重新开启限制 | L1 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 真实 `err.not_authorized` 已与 `err.not_paired` 一并投影到 pairingLost 红卡；待三星重配对后撤销设备并验证下一次 Flow 调用 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
