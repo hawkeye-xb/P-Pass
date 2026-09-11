@@ -690,16 +690,16 @@ impl IpcServer {
                     Err(_) => internal(id),
                 }
             }
-            // AUDIT-01: audit_event v2 is the sole long-term audit source
-            // 桌面「活动记录」页展示（时间倒序由 UI 兜底）。与 activity.list
-            // （资产聚合批次）互补：这里看"发生了什么"，那里看"传了多少"。
+            // AUDIT-02: expose canonical audit_operation rows to the Desktop
+            // activity projection.  evidenceSummary is the daemon-recomputed
+            // item-evidence count; never substitute phone final_counts here.
             "audit.list" => {
                 let limit = req
                     .params
                     .get("limit")
                     .and_then(|v| v.as_u64())
                     .map_or(100, |v| v.min(1000) as u32);
-                match self.db.list_audit(limit).await {
+                match self.db.list_operations(limit).await {
                     Ok(records) => {
                         let list: Vec<_> = records
                             .iter()
@@ -711,13 +711,14 @@ impl IpcServer {
                                     // `each_key_duplicate` 整个活动流挂掉。
                                     // 时间戳不是身份，主键才是；event_id 是跨端幂等键。
                                     "id": r.id,
-                                    "eventId": r.entry.event_id,
-                                    "ts": r.entry.ts,
+                                    "eventId": r.entry.operation_id,
+                                    "ts": r.entry.occurred_at,
                                     "kind": r.entry.kind,
                                     "actor": r.entry.actor.as_ref().map(|b| hex(b)),
                                     "roundId": r.entry.round_id,
                                     "targetHash": r.entry.target_hash.as_ref().map(|b| hex(b)),
                                     "payload": r.entry.payload.as_ref().and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok()),
+                                    "evidenceSummary": r.entry.evidence_summary.as_ref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
                                 })
                             })
                             .collect();
