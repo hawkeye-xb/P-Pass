@@ -74,6 +74,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 立即把 canonical 审计投影为用户结果：`已备份 N 张照片`、数据风险与安全事实；过滤连接/重试等诊断噪音 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
@@ -91,9 +92,8 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 |---|---|---|
 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星热点大视频已复现 `flow.fetch` 15 秒超时；不能靠小文件成功掩盖 | **等可持续的蜂窝热点 / relay 窗口后再改并跑大视频回归** |
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
-| [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 错误地从 UI 文案切入审计，未编码；被 AUDIT-03 审计合同重定义取代 | **冻结**；不得恢复，等 AUDIT-03 后重新拆实现卡 |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
-| [AUDIT-05](../cards/AUDIT-05-dogfood-week-audit-content-review.md) | 狗粮周后只读复核真实审计内容，再决定活动/详情投影 | **等狗粮周样本**；此前不编码 |
+| [AUDIT-05](../cards/AUDIT-05-dogfood-week-audit-content-review.md) | 狗粮周后只读复核真实审计内容，验证既定预设的覆盖与字段关联 | **等狗粮周样本**；不阻塞 AUDIT-02 的首版 UI |
 | [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关，承诺（手册+技术可行性报告）未兑现；[OBS-02](../cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md) 已裁决字典 v2，TEL-01~04 均已落地，当前仅自建自用，暂不算合规危机但欠账真实 | 字段列表已定，可以设计隐私页/开关 UI |
 
 ---
