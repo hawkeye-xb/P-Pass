@@ -35,8 +35,8 @@ visual acceptance with the official Sonner notification primitive and is archive
 UI-08 passed and is archived. MOB-63 is
 code-complete: a final durable completion receipt and user Pause now converge
 to Idle in either arrival order, while remaining queued work stays paused; the
-isolated-album device check remains. MOB-64 is code-complete: a Flow
-`err.not_paired` rejection now reaches the existing pairing-lost red card with
+isolated-album device check remains. MOB-64 is code-complete: Flow `err.not_paired` and the real revoke
+`err.not_authorized` rejection both reach the existing pairing-lost red card with
 no active probe; device revocation plus the next phone-side business call
 remains for shared-device validation. DESK-14 is code-complete: macOS Overlay
 now gets a transparent 32px direct Tauri drag hit area without a visual bar or

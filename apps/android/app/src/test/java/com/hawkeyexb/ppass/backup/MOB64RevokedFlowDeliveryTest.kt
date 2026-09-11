@@ -20,6 +20,19 @@ class MOB64RevokedFlowDeliveryTest {
     }
 
     @Test
+    fun notAuthorizedFlowDeliverySetsTheHolderPairingLostFlag() {
+        val epoch = PairingEpoch("paired-epoch")
+        val deliveryLoss = FlowDeliveryPairingLoss()
+        val holderFlag = HolderPairingLostState()
+
+        // Real Samsung revoke returns this at hello before any Flow offer/fetch.
+        deliveryLoss.record(epoch, IllegalStateException("hello: err.not_authorized"))
+        holderFlag.syncFrom(deliveryLoss, epoch)
+
+        assertTrue("ERR_NOT_AUTHORIZED delivery must show the existing pairing-lost card", holderFlag.value.value)
+    }
+
+    @Test
     fun ordinaryDeliveryFailureDoesNotSetTheHolderPairingLostFlag() {
         val epoch = PairingEpoch("paired-epoch")
         val deliveryLoss = FlowDeliveryPairingLoss()
