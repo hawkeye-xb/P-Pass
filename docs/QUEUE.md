@@ -44,6 +44,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 卡 | 一句话 | 当前节点 |
 |---|---|---|
+| [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 活动记录立即投影 canonical 审计为用户结果，去除连接/重试噪音 | `work/audit-02-activity-ui`：先补可信 evidence summary 的只读 IPC 与 RED 测试 |
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
@@ -74,7 +75,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 立即把 canonical 审计投影为用户结果：`已备份 N 张照片`、数据风险与安全事实；过滤连接/重试等诊断噪音 | L2 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
 | P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
