@@ -50,7 +50,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
+| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 三星真机撤销后实际收到 `err.not_authorized`，仍显示普通重试而非 pairingLost 红卡 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |

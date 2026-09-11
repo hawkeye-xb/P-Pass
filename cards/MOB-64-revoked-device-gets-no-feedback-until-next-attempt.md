@@ -1,10 +1,10 @@
 # MOB-64 桌面移除设备后，手机端在下次尝试前毫无反馈（L2）
 
-> 🟡 状态：代码完成，待共享真机验收
+> 🔴 状态：三星真机失败，待修正真实拒绝码到 pairingLost 的投影
 > 级别：**L2** · 阻塞：无
 > 协同分支：`main` · 实现提交：`c1c5803`
-> 当前节点：JVM RED→GREEN 已完成；真机验收尚未执行。
-> 下一步：验收人撤销设备后在手机发起一次 Flow 业务调用，确认既有 pairingLost 红卡出现。
+> 当前节点：真机撤销后 `hello: err.not_authorized` 仍被渲染为普通“再试一次”，没有 pairingLost 红卡。
+> 下一步：以真实 `err.not_authorized` 走完整手机 UI 修复/回归；当前三星 App 数据已清除，需重新配对后复测。
 
 ## 问题
 
@@ -79,3 +79,8 @@
 `ERR_NOT_PAIRED` → holder backing flag 为 true，普通网络错误保持 false；定向 JVM
 XML 为 2/0/0/0。隔离副本 `just ci` 绿；共享主工作树同期的 SYNC-05 未完成 JVM
 测试未计入本卡验收。真机验收留给验收人。
+
+2026-09-11 真机反证：桌面真实 `device.revoke` 后，手机下一次 Flow 调用的
+`hello` 实际返回 `err.not_authorized`（不是测试钉住的 `err.not_paired`）。页面只显示
+普通「需要再试一次」，没有既有 pairingLost 红卡。故本卡不得保持“代码完成待验收”；
+需按真实拒绝码重新修复并从已清除数据的三星完成重新配对回归。
