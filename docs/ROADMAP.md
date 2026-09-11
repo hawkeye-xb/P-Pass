@@ -11,9 +11,9 @@ continues the next item, and presents a read-only skip notice. DESK-14, DESK-15,
 all passed real-device acceptance (macOS + Samsung) and moved to
 `cards/done/`. DESK-14's regression also surfaced and fixed a side issue: the
 native macOS window title text duplicated the sidebar brand text; adding
-`hiddenTitle: true` to `tauri.conf.json` resolved it. A new dead-switch issue
-was opened as MOB-67 ("notify me on backup failure" toggle never actually
-sends a system notification). M0/M1 closed; M2 Android is in
+`hiddenTitle: true` to `tauri.conf.json` resolved it. MOB-67 has passed Samsung
+real-device acceptance: its failure-notification preference now gates id-2027
+system notification posting at Flow's third-attempt terminal transition. M0/M1 closed; M2 Android is in
 real-device dogfood. A Samsung-on-cellular-hotspot relay control completed one
 isolated Flow without a timeout; it does not settle NET-01's historical failure.
 With OPPO absent and no fresh failure, NET-01 is deferred to the device-evidence
