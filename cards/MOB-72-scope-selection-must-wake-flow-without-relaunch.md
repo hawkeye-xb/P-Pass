@@ -1,6 +1,6 @@
 # MOB-72 新选相册后必须立即唤醒 Flow，不能靠重开 App（L2）
 
-> ⬜ 状态：未开工
+> 🟡 状态：进行中
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -34,3 +34,4 @@
 ## 实施记录
 
 - 2026-09-11：仅记录真机回归失败。当前设置页保存范围后依次调用 `requestFlowScopeBackfill(context)` 与 `triggerUserPresentBackup(context)`；需追踪二者在既有 runtime、取消轮历史与当前网络条件下是否实际形成一次 `runner.run(...)`，不能仅凭调用点断言已唤醒。
+- 2026-09-11：已认领。源码初读确认范围保存确实调用 backfill + WorkManager 用户在场 wake；下一步从 runtime 是否存在、`KEEP` work 是否吞掉新 wake、以及取消轮 gate 三处构造生产复现，不凭调用点猜根因。
