@@ -53,7 +53,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [MOB-67](../cards/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 失败系统通知已接回 Flow 终态跃迁（UX-02 语义，JVM 337/0）；待三星真机：开→失败收通知、关→不收 | L2 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | Flow `ERR_NOT_PAIRED` 已复用既有 pairingLost 红卡；待撤销后下一次手机业务调用真机回归 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
-| [MOB-61](../cards/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 入队后从系统相册删除隔离测试照片：App 不闪退、不重传，后续继续，展示只读跳过告知 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
 | [NET-05](../cards/NET-05-flow-data-path-status-follows-transfer-lifecycle.md) | 代码完成：active Flow 先显示连接中，随后显示 blobs 数据面直连/中继；待慢速传输及 Pause/Cancel/失败真机回归 | L2 |
@@ -105,6 +104,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | 卡 | 结果 | 已释放 |
 |---|---|---|
 | [MOB-68](../cards/done/MOB-68-optional-permissions-map-to-backup-settings.md) | 首装按“媒体范围 → 点进入 App → 电池白名单 → 通知权限 → 首轮传输”串行；后台备份开关移入备份设置，开关后台行为已三星真机通过 | MOB-67 独立处理真实失败系统通知 |
+| [MOB-61](../cards/done/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 三星真机：Flow 入队后删源 → `SKIPPED_SOURCE_MISSING` / `MISSING` / `UNRECOVERABLE`，lease 清空；后续项 2 秒确认，首页只读跳过提示无重试动作 | 无——缺源不再走失败重传或崩溃 |
 | [AUDIT-03](../cards/done/AUDIT-03-audit-contract-case-matrix.md) | 审计 Case Matrix、【本地】/名称+短指纹、支持级可信、全库保留与无专用导出边界均已收口 | 释放 AUDIT-04 审计核心重建 |
 | [TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md) | 遥测字典 v2 落地：`conn` 删 ipver/country/isp_hash，`backup_session`→`flow_item` 精简字段，新增 `error`；daemon+Worker 同步改，`cargo test` 5/5 + `npm test` 14/14 + `just ci` 全绿 | 释放 TEL-02/03/04 接线卡 |
 | [TEL-02](../cards/done/TEL-02-wire-conn-and-flow-item-events.md) | conn/flow_item 已接线 `flow_delivery.rs::fetch()`；顺带修正 TEL-01 遗留的 conn.path 枚举值（lan 不存在，改为 direct/relay/offline/unknown）；`cargo test -p daemon --test flow_delivery` 10/10、nextest 356/356、just ci 全绿 | 释放 TEL-03/04 的 TEL-01 依赖已满足 |
