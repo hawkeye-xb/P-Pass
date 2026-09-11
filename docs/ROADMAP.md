@@ -16,10 +16,9 @@ native macOS window title text duplicated the sidebar brand text; adding
 `hiddenTitle: true` to `tauri.conf.json` resolved it. MOB-67 has passed Samsung
 real-device acceptance: its failure-notification preference now gates id-2027
 system notification posting at Flow's third-attempt terminal transition. M0/M1 closed; M2 Android is in
-real-device dogfood. A Samsung-on-cellular-hotspot relay control completed one
-isolated Flow without a timeout; it does not settle NET-01's historical failure.
-With OPPO absent and no fresh failure, NET-01 is deferred to the device-evidence
-queue rather than occupying the current development slot. NET-04 pause/cancel/retry remains
+real-device dogfood. Samsung-on-cellular-hotspot testing now reproduces NET-01:
+a 288 MB Flow video hits `flow.fetch`'s shared 15-second deadline three times,
+despite a 72 MB control succeeding; NET-01 is back in the active slot. NET-04 pause/cancel/retry remains
 blocked by the separate `flow.fetch` 15-second RPC-deadline investigation. The
 UI-04a/UI-04c remain pending shared Android regression; UI-04b passed real Tauri
 visual acceptance with the official Sonner notification primitive and is archived;

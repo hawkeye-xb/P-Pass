@@ -1,7 +1,7 @@
 # NET-01 半小时内三次传输层失败——`backup.begin` 卡满 15 秒才超时　级别 L2
 
-> 🟡 状态：待 OPPO 真机复现（2026-09-11 降级，不占当前开发槽位）
-> 级别：**L2** · 阻塞：OPPO Reno8 不在场；需原生 Android 失败 logcat 或新的真实失败
+> 🔴 状态：三星蜂窝热点已复现 15 秒 `flow.fetch` 超时，调查进行中
+> 级别：**L2** · 阻塞：无
 
 ## 现象
 
@@ -183,3 +183,16 @@ UX-15 + MOB-43 之后用户**没有任何出路**。而"在外面用手机备份
 - 这证明「三星 + 此热点 + n0 relay」当前可完成一次 Flow，**不**证明 8/26 的
   15 秒失败已经修复，也不能据此改超时值。原始失败仍需 OPPO 原生 Android 的
   失败日志判定；手机测试源已清，后台备份开关和 device-idle 白名单均恢复原状。
+
+## 2026-09-11：三星热点大视频重新复现（恢复当前槽位）
+
+- 当前 main daemon + 三星 SM-S9210，手机连蜂窝热点、Mac 保持原网络。72 MB
+  视频曾三秒确认；随后 288 MB 隔离视频的真实 Flow 在手机端连续三次报
+  `DaemonUnreachableException: flow.fetch: no response from the computer within 15000ms`，
+  进入 `FAILED_NEEDS_USER`。
+- daemon debug 日志在这三次期间没有对应的成功或失败 `flow delivery` 记录；目前
+  只能确定手机在 daemon 交付完成前耗尽 15 秒，尚不能把“请求未到达”与“到达后
+  长 fetch 未完成”混为一谈。它与原卡“把建连、RPC、长数据 fetch 共用 15 秒”的
+  缺口同类，但证据已从 `backup.begin` 扩展到 `flow.fetch`。
+- 因此不能再以“三星小文件 relay 成功”降级本卡；OPPO 不再是前置。下一步应拆分
+  建连、普通控制 RPC 与长 fetch 的 deadline，并用这条三星热点大视频回归验证。
