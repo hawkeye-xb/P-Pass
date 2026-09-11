@@ -4,16 +4,17 @@
 > 里程碑状态的唯一权威来源，每张卡完成即更新。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
-**Now / 当前位置**（2026-09-10）: DESK-14, DESK-15, MOB-63, and MOB-65 have
+**Now / 当前位置**（2026-09-11）: MOB-61 has passed Samsung real-device
+acceptance: after durable Flow admission, deleting the isolated phone source
+lands `SKIPPED_SOURCE_MISSING` / `MISSING` / `UNRECOVERABLE`, clears its lease,
+continues the next item, and presents a read-only skip notice. DESK-14, DESK-15, MOB-63, and MOB-65 have
 all passed real-device acceptance (macOS + Samsung) and moved to
 `cards/done/`. DESK-14's regression also surfaced and fixed a side issue: the
 native macOS window title text duplicated the sidebar brand text; adding
 `hiddenTitle: true` to `tauri.conf.json` resolved it. A new dead-switch issue
 was opened as MOB-67 ("notify me on backup failure" toggle never actually
 sends a system notification). M0/M1 closed; M2 Android is in
-real-device dogfood. MOB-61 is code-complete: a phone photo deleted after
-Flow discovery is now terminally skipped, never retried; the Samsung
-isolated-photo check remains. NET-04 pause/cancel/retry remains blocked by
+real-device dogfood. NET-04 pause/cancel/retry remains blocked by
 the separate `flow.fetch` 15-second RPC-deadline investigation. The
 UI-04a/UI-04c remain pending shared Android regression; UI-04b passed real Tauri
 visual acceptance with the official Sonner notification primitive and is archived;
