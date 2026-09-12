@@ -21,9 +21,10 @@
 
 - **阶段**：真机回归驱动的修 bug 循环。代码侧健康（本机全绿），**卡住的
   是真机验收**，不是代码没写。
-- **最新可测版本**：working tree 已 bump 到 `0.5.0-test.8`（2026-09-07 `e5d7a28`），
-  已打 tag 到 `v0.5.0-test.7`；本行此前长期滞后写着 v0.4.0-test.9，2026-09-09
-  核实修正——改版本号后务必同步这里，别让下次汇报又抄错。
+- **最新可测版本**：`v0.5.1-test.1`（2026-09-12，含 test.7 之后的 MOB-62/64/71/72
+  真机回归修复、AUDIT-02/04、BLOB-03、UI-04b）。上一轮 working tree 停在
+  `0.5.0-test.8`（`e5d7a28`）但从未打 test.8 tag，已随 0.5.1 一并带上——
+  改版本号后务必同步这里，别让下次汇报又抄错。
 - **本机全绿基线**：`just ci` all green · nextest 345 passed / 1 skipped ·
   Android 46 类 / 347 tests / 0 failures · 桌面 `pnpm test 58`（DESK-15
   新增 Button/Card 组件合同测试）+ `src-tauri cargo test --lib 18`。
