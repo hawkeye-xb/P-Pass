@@ -11,7 +11,10 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-11**（真实狗粮新增 MOB-71~75、UI-11；MOB-68 与 AUDIT-02
+> 最后核对：**2026-09-12**（OPPO / v0.5.1 真机走查
+> `docs/evidence/2026-09-12-oppo-051-dogfood.md`：新开 MOB-76；MOB-52/54/64/71/74
+> 证据入账（MOB-54 真机复核失败重开定位）。上一轮 2026-09-11：真实狗粮新增
+> MOB-71~75、UI-11；MOB-68 与 AUDIT-02
 > 的既有“真机/真实数据通过”结论被新观察推翻，均已重新打开。所有描述均以卡片
 > 横幅为准，不把 relay 限流等未证实推测写成根因。）
 
@@ -54,8 +57,8 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 状态快照不再创建 native runtime；待三星重扫同机无 ANR/旧 offer 且新轮可传输 | L2 |
 | [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 新增范围在后台原子 backfill + 当前约束 Flow wake；待三星取消轮后新相册不重启传输回归 | L2 |
-| [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭 Wi-Fi 限制后暂停不会复活 Wi-Fi 等待；待三星蜂窝网络回归暂停/继续与重新开启限制 | L1 |
-| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 真实 `err.not_authorized` 已与 `err.not_paired` 一并投影到 pairingLost 红卡；待三星重配对后撤销设备并验证下一次 Flow 调用 | L2 |
+| [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭 Wi-Fi 限制后暂停不会复活 Wi-Fi 等待；待三星蜂窝网络回归暂停/继续与重新开启限制；09-12 OPPO 另见「重开再关限制不唤醒、需再选相册」并入回归 | L1 |
+| [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 真实 `err.not_authorized` 已与 `err.not_paired` 一并投影到 pairingLost 红卡；待三星重配对后撤销设备并验证下一次 Flow 调用。09-12 OPPO 入账：手机残留配对/桌面无记录时冷启动「尝试传输」长期零提示，拒绝码待取证 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
 | [NET-05](../cards/NET-05-flow-data-path-status-follows-transfer-lifecycle.md) | 代码完成：active Flow 先显示连接中，随后显示 blobs 数据面直连/中继；待慢速传输及 Pause/Cancel/失败真机回归 | L2 |
 | [MOB-26](../cards/MOB-26-photo-viewer-needs-real-library.md) | 页序、Telephoto 缩放/下拉关闭、系统返回层级 | L2 |
@@ -71,7 +74,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | Flow 摄入后桌面库实时出现照片 | L1 |
 | [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄日期而非归入当月 | L1 |
 | [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 并发失败/收据回调不触发同一队头双发 | L0 |
-| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 临时失败后队列自动重试并继续后续项 | L1 |
+| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | ~~真机复核（可选）~~ **2026-09-12 OPPO 复核失败**：传约 10 张停摆、剩 16 张无提示不续传，选第三个相册才唤醒；先取证停点失败码再定位 | L1 |
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 旧账本已确认项补 completedAt，首页不再永久显示从未成功 | L1 |
 
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
@@ -86,7 +89,8 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 |---|---|---|---|
 | P1 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | onboarding 未请求通知权限，却在失败后的后续操作中突发索权；必须恢复既定授权顺序 | L2 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 真实活动记录遗漏/误投影本轮照片与视频结果；必须按 canonical evidence 分列并准确汇总 | L2 |
-| P1 | [MOB-74](../cards/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | 两个视频在照片墙显示空白格；必须从真实视频抽首帧并端到端渲染 | L2 |
+| P1 | [MOB-74](../cards/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | 两个视频在照片墙显示空白格；必须从真实视频抽首帧并端到端渲染（09-12 OPPO 再现，跨设备复现） | L2 |
+| P1 | [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 「仅 Wi-Fi 时备份」开启时 5G 蜂窝下仍发起传输；约束必须是硬闸门（与 MOB-71 呈现层不重叠） | L1 |
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 白色页面顶部状态栏图标对比度不足，需实证统一安全区/system-bar 外观是否生效 | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [MOB-73](../cards/MOB-73-local-source-first-viewing.md) | 本机仍有原图时查看/保存/分享应读本地并验证 hash，远端仅作缺源回退 | L2 |
@@ -105,7 +109,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星热点大视频已复现 `flow.fetch` 15 秒超时；不能靠小文件成功掩盖 | **等可持续的蜂窝热点 / relay 窗口后再改并跑大视频回归** |
-| [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0） | **等崩溃证据**，拿不到不编码 |
+| [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0）；09-12 v0.5.1 复测同族症状再现（后台 1 分钟零同步/进 App 卡崩溃/断开卡顿），崩溃栈仍未到手 | **等崩溃证据**，拿不到不编码 |
 | [MOB-75](../cards/MOB-75-harmonyos-media-change-must-wake-flow-in-background.md) | HarmonyOS 4.2：已授权后台管理但相册变更等约 1 分钟不传，重开 App 才补捞 | **等同一设备的 MediaWatch/JobScheduler/ledger 证据，不能把系统归咎当根因** |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
 | [AUDIT-05](../cards/AUDIT-05-dogfood-week-audit-content-review.md) | 狗粮周后只读复核真实审计内容，验证既定预设的覆盖与字段关联 | **等狗粮周样本**；不阻塞 AUDIT-02 的首版 UI |

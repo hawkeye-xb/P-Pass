@@ -1249,3 +1249,5 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 ---
 
 2026-09-08 交付记录：I18N-02 完成。`MainActivity.kt` 的更新提示、`PairFlow.kt` 的配对失败/不可解析/默认存储端文案迁入对称 Android `values/` 与 `values-zh/` 资源；`BackupWorker.kt` 逐处确认无用户可见中文。新增 `StringsSymmetryTest` 非注释代码守卫，Android JVM **309 tests / 0 failures / 0 errors / 4 ignored**（i18n focused 3/3），`just ci` 全绿。
+
+2026-09-12 交付记录（纯文档/卡）：OPPO / v0.5.1 真机走查入账（`docs/evidence/2026-09-12-oppo-051-dogfood.md`）。新开 MOB-76（L1，Wi-Fi 闸门在蜂窝下未执行）；MOB-54 真机复核失败重开定位；MOB-52/64/71/74 证据追加。`docs/QUEUE.md`/`docs/PROGRESS.md` 同步。
