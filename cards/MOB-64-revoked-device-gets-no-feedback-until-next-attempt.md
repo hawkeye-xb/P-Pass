@@ -91,3 +91,10 @@ JVM 测试真实失败；根因确认是 `FlowDeliveryPairingLoss.record()` 自�
 `err.not_paired`，而 holder 的共享判据已同时覆盖 `err.not_paired` / `err.not_authorized`。
 GREEN 后 Flow delivery 复用该共享判据；定向 JVM 3/0/0/0、Android 全量 JVM
 338/0/0/4、debug APK 与 `just ci` 均通过。当前无 ADB 连接设备，三星真机验收未执行。
+
+2026-09-12 OPPO 真机新场景入账（走查记录
+`docs/evidence/2026-09-12-oppo-051-dogfood.md` 观察 1）：手机残留旧配对记录、
+桌面端**没有**该配对记录（非 device.revoke 路径）。App 冷启动即处于
+「尝试传输」态且长期无任何状态/错误提示——左侧连接指示已显示未连接电脑，
+右侧聚合状态仍转「尝试传输」。真机验收时此场景未通过；它与卡面的吊销场景
+是否共用同一投影断点，需以当次 Flow 调用的实际拒绝码取证后定，不凭症状合并。

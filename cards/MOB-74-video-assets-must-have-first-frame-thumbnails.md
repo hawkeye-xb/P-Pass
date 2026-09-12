@@ -34,3 +34,4 @@
 ## 实施记录
 
 - 2026-09-11：仅记录真机回归失败。源码可见 `media-codec` 有 ffmpeg 首帧提取与 `ThumbSize` 双尺寸生成，Android 网格统一调用 `loader.thumb(hash, S256)`；需从真实视频资产的入库记录、缩略图文件、daemon `thumb` 响应到 Bitmap 解码逐段取证，不能预设故障在任一端。
+- 2026-09-12：OPPO 真机 v0.5.1 再现：照片墙视频卡为空白框、无首帧封面；点开可自动播放、控制正常（`docs/evidence/2026-09-12-oppo-051-dogfood.md` 观察 8）。症状跨设备复现，非三星个案。
