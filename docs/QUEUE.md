@@ -66,7 +66,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [DESK-10](../cards/DESK-10-export-logs-omits-the-only-logs-that-matter.md) | 正常 daemon 可达包已通过；不可达分支必须由 agent 以隔离故障环境实证，不能要求验收人造故障 | L1 |
 | [WATCH-07](../cards/WATCH-07-self-inflicted-duplicate-audit-noise.md) | 备份后活动流不再被「重复」审计刷屏 | L2 |
 | [E2E-02](../cards/E2E-02-daemon-hello-test-asserts-dead-contract.md) | e2e 门禁已解红，下次打 tag 复核 | L1 |
-| [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 英文系统下空相册名显示 Unnamed | L3 |
+| [I18N-01](../cards/I18N-01-unnamed-album-fallback-is-hardcoded-chinese.md) | 空相册名兜底已本地化（纯函数+渲染合同 4 例测试齐），英文系统真机过一眼 | L3 |
 | [DESK-09](../cards/DESK-09-wizard-swallows-daemon-startup-error.md) | 旧 daemon 打开新版库时向导显示真实 stderr 与升级提示 | L1 |
 | [MOB-60](../cards/MOB-60-cancel-round-leaves-stale-pause.md) | 取消当前轮完成后必须落 Idle，不显示暂停/继续/取消 | L1 |
 | [DESK-13](../cards/DESK-13-ingest-blocks-tokio-runtime-freezes-desktop-ui.md) | 大文件/视频传输时桌面照片墙与暂停/取消不应冻结 | L0 |
