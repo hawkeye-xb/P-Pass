@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.BackupScopeStore
+import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs
 import com.hawkeyexb.ppass.backup.SystemFailureNotifier
 import com.hawkeyexb.ppass.transport.IdentityStore
@@ -160,8 +161,32 @@ internal class AndroidFlowDiscoveryPort(
     private companion object { const val DISCOVERY_PAGE_SIZE = 500 }
 }
 
+/**
+ * MOB-76: the live delivery gate —「仅 Wi-Fi 时备份」× current network.
+ * This answers 「往哪条网络发」 and is deliberately separate from the
+ * WorkManager scheduling constraints in TriggerPolicy (「什么时候允许跑」):
+ * even a MANUAL-tier worker that the scheduler let run on cellular must not
+ * push a delivery onto a metered network while the switch is on (09-12 OPPO
+ * real device, card: 任何触发路径都不例外).
+ */
+internal fun flowConstraintsSatisfied(context: Context): Boolean {
+    val settings = BackupSettings(context.filesDir).load()
+    return !settings.wifiOnly || isOnUnmetered(context)
+}
+
+/** 是否在不计流量网络（Wi-Fi）上——从 MainActivity 的私有实现上移共用。 */
+internal fun isOnUnmetered(context: Context): Boolean {
+    val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+        as? android.net.ConnectivityManager ?: return false
+    val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
+    return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+}
+
 /** Framework wake path. The Worker invokes [runFlowWake] synchronously. */
-internal fun requestFlowWake(context: Context, constraintsSatisfied: Boolean = true) {
+internal fun requestFlowWake(
+    context: Context,
+    constraintsSatisfied: Boolean = flowConstraintsSatisfied(context),
+) {
     val app = context.applicationContext
     thread(name = "ppass-flow-wake") { runFlowWake(app, constraintsSatisfied) }
 }
@@ -191,7 +216,10 @@ internal fun requestFlowScopeBackfillAndWake(context: Context, constraintsSatisf
     }
 }
 
-internal fun runFlowWake(context: Context, constraintsSatisfied: Boolean = true) {
+internal fun runFlowWake(
+    context: Context,
+    constraintsSatisfied: Boolean = flowConstraintsSatisfied(context),
+) {
     runtimeFor(context.applicationContext)?.let { runtime ->
         synchronized(flowTriggerLock) {
             runtime.runner.requestDiscovery()
@@ -206,7 +234,10 @@ internal fun pauseFlow(context: Context) {
     flushAuditOutbox(context)
 }
 
-internal fun continueFlow(context: Context, constraintsSatisfied: Boolean = true) {
+internal fun continueFlow(
+    context: Context,
+    constraintsSatisfied: Boolean = flowConstraintsSatisfied(context),
+) {
     runtimeFor(context.applicationContext)?.let {
         synchronized(flowTriggerLock) { it.runner.continueFlow(constraintsSatisfied) }
     }
@@ -344,6 +375,9 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
                 context.applicationContext,
                 NotifyOnFailurePrefs(context.filesDir),
             ),
+            // MOB-76: every event-driven wake (receipt/requeue/retry/
+            // cancel-restore) reads the live Wi-Fi gate through this port.
+            constraintsProvider = { flowConstraintsSatisfied(context) },
         )
         val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val auditDispatcher = AuditOutboxDispatcher(

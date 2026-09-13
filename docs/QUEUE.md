@@ -46,9 +46,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ## 一、进行中
 
-| 卡 | 一句话 | 级别 |
-|---|---|---|
-| [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 进行中（Hermes）：断点已定位——FlowRunner 8 处 `constraintsSatisfied = true` 硬编码使一切事件后 wake（回执推进、失败重排、重试、取消/恢复收尾）无视 Wi-Fi 闸门；RED→GREEN 实现中 | L1 |
+（当前没有进行中的卡。）
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
@@ -59,6 +57,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 状态快照不再创建 native runtime；待三星重扫同机无 ANR/旧 offer 且新轮可传输 | L2 |
 | [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 新增范围在后台原子 backfill + 当前约束 Flow wake；待三星取消轮后新相册不重启传输回归 | L2 |
+| [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 代码完成：Wi-Fi 闸门改读实时网络（FlowRunner 6 处事件后 wake 硬编码放行 + Worker 调度放行误当业务闸门）；待真机蜂窝回归——限制开启发起备份应零传输+Wi-Fi 等待，连回 Wi-Fi 自动续传 | L1 |
 | [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭 Wi-Fi 限制后暂停不会复活 Wi-Fi 等待；待三星蜂窝网络回归暂停/继续与重新开启限制；09-12 OPPO 另见「重开再关限制不唤醒、需再选相册」并入回归 | L1 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 真实 `err.not_authorized` 已与 `err.not_paired` 一并投影到 pairingLost 红卡；待三星重配对后撤销设备并验证下一次 Flow 调用。09-12 OPPO 入账：手机残留配对/桌面无记录时冷启动「尝试传输」长期零提示，拒绝码待取证 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |

@@ -37,6 +37,15 @@ class FlowRunner(
     // AndroidFlowRuntime wires the real system-notification implementation.
     private val failureNotifier: com.hawkeyexb.ppass.backup.FailureNotifier =
         com.hawkeyexb.ppass.backup.NoopFailureNotifier,
+    // MOB-76: the live business gate (「仅 Wi-Fi」× current network). Every
+    // event-driven wake — receipt, requeue, retry, cancel/restore wrap-up —
+    // must read this instead of a constant, or a single cellular receipt
+    // silently pushes the next head onto the metered network (09-12 OPPO
+    // real device: transfers kept dialing out on 5G with the switch on).
+    // Default = satisfied so JVM tests that pass an explicit
+    // constraintsSatisfied stay untouched; AndroidFlowRuntime wires the
+    // real computation.
+    private val constraintsProvider: () -> Boolean = { true },
 ) {
     private val consumer = StrictConsumer(ledger, delivery)
     private val completion = CompletionAndScope(ledger)
@@ -120,14 +129,19 @@ class FlowRunner(
             snapshot.appendAudit(AuditKinds.ROUND_CONTROLLED, roundId = cancelledRoundId, payload = mapOf("action" to "cancel"))
         }
         reopenGate(auditAction = null)
-        run(constraintsSatisfied = true)
+        // MOB-76: the wrap-up wake reads the live gate — cancelling a round
+        // on cellular must not immediately start the next head on it.
+        run(constraintsSatisfied = constraintsProvider())
     }
 
     fun acceptCompletionReceipt(receipt: CompletionReceipt) {
         completion.acceptCompletionReceipt(receipt)
         // Receipt persistence is the strict-head boundary: only after it is
-        // durable may the next queued item acquire a new lease.
-        consumer.wake(constraintsSatisfied = true)
+        // durable may the next queued item acquire a new lease. MOB-76:
+        // advance only onto a network the live gate allows — a receipt
+        // arriving over cellular parks the consumer in the existing
+        // WAITING_FOR_CONSTRAINTS state instead of dialing the next head.
+        consumer.wake(constraintsSatisfied = constraintsProvider())
     }
 
     /** A user retry reopens terminal delivery failures as a new strict round.
@@ -151,7 +165,7 @@ class FlowRunner(
                 items = items,
             )
         }
-        consumer.wake(constraintsSatisfied = true)
+        consumer.wake(constraintsSatisfied = constraintsProvider())
     }
 
     fun recordPermanentFailure() {
@@ -169,14 +183,14 @@ class FlowRunner(
         // must not stall there — same rule as acceptCompletionReceipt: only
         // after the outcome is durable may the consumer look for its next
         // action (retry the same head if still QUEUED, or move on if this
-        // attempt made it terminal).
-        consumer.wake(constraintsSatisfied = true)
+        // attempt made it terminal). MOB-76: through the live gate.
+        consumer.wake(constraintsSatisfied = constraintsProvider())
     }
 
     /** A deleted phone source is terminal; immediately advance past it. */
     fun skipMissingSource() {
         consumer.skipMissingSource()
-        consumer.wake(constraintsSatisfied = true)
+        consumer.wake(constraintsSatisfied = constraintsProvider())
     }
 
     /**
@@ -200,7 +214,7 @@ class FlowRunner(
             snapshot.appendAudit(AuditKinds.ROUND_CONTROLLED, roundId = snapshot.currentRoundId, payload = mapOf("action" to "restore"))
         }
         reopenGate(auditAction = null)
-        run(constraintsSatisfied = true)
+        run(constraintsSatisfied = constraintsProvider())
     }
 
     private fun backfillIfAdmitted() {
