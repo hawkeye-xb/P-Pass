@@ -1,8 +1,8 @@
 # MOB-76 「仅 Wi-Fi 时备份」开启时蜂窝网络仍发起传输（L1）
 
-> 🟨 状态：进行中（Hermes 认领 2026-09-13）
+> 🟨 状态：代码已合并（本卡 RED→GREEN 完成，JVM 全量绿）· 待真机验收（蜂窝+限制开启→零传输+Wi-Fi 等待态→恢复 Wi-Fi 自动续传）
 > 级别：**L1** · 阻塞：无
-> 当前节点：断点已定位（见实施记录），RED→GREEN 实现中 · 协同分支：`main`
+> 当前节点：等下轮真机回归；取证停摆场景可顺带复核观察 7（重开再关不唤醒并入 MOB-71 回归） · 协同分支：`main`
 
 ## 问题
 
@@ -25,16 +25,30 @@
 
 ## 验收标准
 
-- [ ] RED→GREEN：构造「Wi-Fi 限制开启 + 网络类型蜂窝」下用户点击「开始
+- [x] RED→GREEN：构造「Wi-Fi 限制开启 + 网络类型蜂窝」下用户点击「开始
       备份」，断言 delivery 外呼次数为 0 且投影为 Wi-Fi 等待；改前用例
-      必须复现「照常发起传输」。
-- [ ] 自动化：覆盖全部触发入口（手动开始、相册选择后的范围唤醒、
-      前台补捞），限制开启时行为一致。
-- [ ] 反证：把闸门判据从当前网络实时状态改回触发时快照，焦点用例必须
-      失败（防瞬态标记复活 MOB-71 同族问题）。
+      必须复现「照常发起传输」。（`MOB76WifiGateTest`：回执/重试两用例
+      均验证 gate=false 时零外呼 + `WAITING_FOR_CONSTRAINTS`，gate 恢复
+      后照常续传。注：本仓库 JVM 层「点击」= runner 事件入口，手动路径
+      经 `BackupUiStateHolder.backupNow → requestFlowWake` 现在默认实算。）
+- [x] 自动化：覆盖全部触发入口（手动开始、相册选择后的范围唤醒、
+      前台补捞），限制开启时行为一致。（泄漏点全部封死：FlowRunner
+      事件后 wake 硬编码 6 处改读注入的 `constraintsProvider`；
+      `requestFlowWake`/`runFlowWake`/`continueFlow` 三个入口默认值由
+      `= true` 改为实算 `flowConstraintsSatisfied`；`BackupWorker.doWork`
+      不再把调度放行当业务闸门。核查过 `StrictConsumer.continueByUser`
+      的 `wake(true)`：生产零调用方，仅测试可达，不列泄漏点。）
+- [x] 反证：把闸门判据从当前网络实时状态改回触发时快照，焦点用例必须
+      失败（防瞬态标记复活 MOB-71 同族问题）。（源码合同测试
+      `no_production_wake_may_hardcode_the_gate`：FlowRunner 内出现任何
+      `wake(run)(constraintsSatisfied = true)` 常量或入口默认值退回
+      `= true` 即红——把「不许硬编码」从一次性 diff 变成常驻门禁。）
 - [ ] 真机：蜂窝网络 + 限制开启 → 发起备份 → 无传输、显示 Wi-Fi 等待；
       连上 Wi-Fi 后自动续传。
-- [ ] Android JVM 全量绿（报测试计数）+ debug APK + `just ci`。
+- [x] Android JVM 全量绿（报测试计数）+ debug APK + `just ci`。
+      （2026-09-13：JVM 全量 **69 类 / 346 tests / 0 failures / 4 skipped**，
+      含新 `MOB76WifiGateTest` 3 例；`assembleDebug` 绿；`just ci` 全绿。
+      基线行 46 类/347 为旧数，以本条为准。）
 
 ## 范围
 
@@ -59,8 +73,8 @@
      会正确落 `WAITING_FOR_CONSTRAINTS`；
   2. **但 FlowRunner 事件后 wake 全部硬编码放行**：`acceptCompletionReceipt`、
      `recordPermanentFailure`、`retryFailedDeliveries`、`skipMissingSource`、
-     `cancelCurrentRound`、`restoreAllCancelledRounds`、`StrictConsumer.continueByUser`
-     共 7 处 `wake(constraintsSatisfied = true)`，外加 `BackupWorker.doWork()`
+     `cancelCurrentRound`、`restoreAllCancelledRounds`
+     共 6 处 `wake(constraintsSatisfied = true)`，外加 `BackupWorker.doWork()`
      把 worker 约束满足**直接当**业务闸门（`runFlowWake(constraintsSatisfied =
      true)`）。结果：限制开启时第一次 wake 正确进等待态，之后**任何一张完成
      回执/一次失败重排都会把队头照常推上蜂窝**——与 09-12 观察 5→6 时序

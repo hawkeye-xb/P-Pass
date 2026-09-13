@@ -83,6 +83,7 @@ import com.hawkeyexb.ppass.backup.WatermarkStore
 import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfillAndWake
+import com.hawkeyexb.ppass.backup.flow.isOnUnmetered
 import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
 import com.hawkeyexb.ppass.ui.BackupStartedScreen
 import com.hawkeyexb.ppass.ui.BackupUiState
@@ -907,14 +908,6 @@ private fun hasPartialMediaAccess(context: Context): Boolean =
         ) == PackageManager.PERMISSION_GRANTED,
         sdkInt = Build.VERSION.SDK_INT,
     )
-
-/** MOB-02 §四事件①: 是否在不计流量网络（Wi-Fi）上——排队提示的判据。 */
-private fun isOnUnmetered(context: Context): Boolean {
-    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        ?: return false
-    val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
-    return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
-}
 
 /** MOB-02 §二: 一键去系统设置（应用详情页）改完整相册权限。 */
 private fun openAppDetailsSettings(context: Context) {

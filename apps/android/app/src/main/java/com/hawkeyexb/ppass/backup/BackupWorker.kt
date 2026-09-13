@@ -127,7 +127,10 @@ class BackupWorker(
     override suspend fun doWork(): Result = try {
         val automatic = inputData.getBoolean(KEY_AUTOMATIC_WAKE, true)
         if (!automatic || AutoBackupPrefs(applicationContext.filesDir).enabled()) {
-            runFlowWake(applicationContext, constraintsSatisfied = true)
+            // MOB-76: 「WorkManager 把 job 放行了」≠「Wi-Fi 闸门满足」——
+            // MANUAL 档的 worker 约束是零，旧代码在这里把调度放行直接当
+            // 交付闸门，等于给所有手动路径开了后门。交付闸门一律实时算。
+            runFlowWake(applicationContext)
         }
         Result.success()
     } catch (t: Throwable) {
