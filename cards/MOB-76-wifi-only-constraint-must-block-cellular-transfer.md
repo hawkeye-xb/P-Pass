@@ -1,8 +1,8 @@
 # MOB-76 「仅 Wi-Fi 时备份」开启时蜂窝网络仍发起传输（L1）
 
-> ⬜ 状态：未开工
+> 🟨 状态：进行中（Hermes 认领 2026-09-13）
 > 级别：**L1** · 阻塞：无
-> 协同分支：`main`
+> 当前节点：断点已定位（见实施记录），RED→GREEN 实现中 · 协同分支：`main`
 
 ## 问题
 
@@ -52,4 +52,25 @@
 
 ## 实施记录
 
-（待填）
+- 2026-09-13（Hermes 认领，卡面前置取证完成）：无需口述回忆，代码考古直接
+  钉死断点链——
+  1. **触发入口的 `constraintsSatisfied` 确实实算**（MainActivity 选相册/
+     进入 App 两处 `!settings.wifiOnly || isOnUnmetered(context)`），走这一次
+     会正确落 `WAITING_FOR_CONSTRAINTS`；
+  2. **但 FlowRunner 事件后 wake 全部硬编码放行**：`acceptCompletionReceipt`、
+     `recordPermanentFailure`、`retryFailedDeliveries`、`skipMissingSource`、
+     `cancelCurrentRound`、`restoreAllCancelledRounds`、`StrictConsumer.continueByUser`
+     共 7 处 `wake(constraintsSatisfied = true)`，外加 `BackupWorker.doWork()`
+     把 worker 约束满足**直接当**业务闸门（`runFlowWake(constraintsSatisfied =
+     true)`）。结果：限制开启时第一次 wake 正确进等待态，之后**任何一张完成
+     回执/一次失败重排都会把队头照常推上蜂窝**——与 09-12 观察 5→6 时序
+     （先传 10 张、期间开关开着）完全同形。
+  3. 与 MOB-19「手点零约束」的关系：本卡卡面（09-12，晚于 MOB-19）明确
+     把「前台手动『开始备份』」列为**必须过闸门**的触发路径——即验收人已
+     拍板在**交付层**覆盖 MOB-19（手点不再豁免 Wi-Fi 限制）；`constraintsFor(MANUAL)`
+     的 WorkManager 调度约束不动（何时允许跑 vs 往哪条网络发是两层）。
+- 修复方案（结构性消除，不留特征补丁）：`FlowRunner` 注入实时约束端口
+  `constraintsProvider: () -> Boolean`，AndroidFlowRuntime 以
+  `wifiOnly → isOnUnmetered` 实算接线（注入点默认 true，JVM 测试构造不动）；
+  全部事件后 wake 改走该端口。RED 覆盖「限制开启 + 蜂窝下完成回执不得推进
+  下一张」与「retry/continue 同闸」；反证 = 把端口调用退回常量 true 必红。

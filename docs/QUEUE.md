@@ -46,7 +46,9 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ## 一、进行中
 
-（当前没有进行中的卡。）
+| 卡 | 一句话 | 级别 |
+|---|---|---|
+| [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 进行中（Hermes）：断点已定位——FlowRunner 8 处 `constraintsSatisfied = true` 硬编码使一切事件后 wake（回执推进、失败重排、重试、取消/恢复收尾）无视 Wi-Fi 闸门；RED→GREEN 实现中 | L1 |
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
@@ -90,7 +92,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | P1 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | onboarding 未请求通知权限，却在失败后的后续操作中突发索权；必须恢复既定授权顺序 | L2 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 真实活动记录遗漏/误投影本轮照片与视频结果；必须按 canonical evidence 分列并准确汇总 | L2 |
 | P1 | [MOB-74](../cards/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | 两个视频在照片墙显示空白格；必须从真实视频抽首帧并端到端渲染（09-12 OPPO 再现，跨设备复现） | L2 |
-| P1 | [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 「仅 Wi-Fi 时备份」开启时 5G 蜂窝下仍发起传输；约束必须是硬闸门（与 MOB-71 呈现层不重叠） | L1 |
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 白色页面顶部状态栏图标对比度不足，需实证统一安全区/system-bar 外观是否生效 | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [MOB-73](../cards/MOB-73-local-source-first-viewing.md) | 本机仍有原图时查看/保存/分享应读本地并验证 hash，远端仅作缺源回退 | L2 |
