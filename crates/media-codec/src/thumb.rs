@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use image::DynamicImage;
 
-use crate::{decode, ffmpeg, CodecError, Result};
+use crate::{decode, ffmpeg, quicklook, CodecError, Result};
 
 pub const THUMB_SIZES: [u32; 2] = [256, 1024];
 const JPEG_QUALITY: u8 = 85;
@@ -99,16 +99,36 @@ fn is_video(path: &Path) -> bool {
 }
 
 fn first_frame(src: &Path) -> Result<DynamicImage> {
-    let ffmpeg = ffmpeg::ffmpeg_path().ok_or(CodecError::FfmpegMissing)?;
-    let tmp = tempfile::Builder::new()
-        .suffix(".jpg")
-        .tempfile()
-        .map_err(|source| CodecError::Io {
-            path: src.to_path_buf(),
-            source,
-        })?;
-    ffmpeg::extract_frame(&ffmpeg, src, tmp.path())?;
-    decode::decode_image(tmp.path())
+    // MOB-74 B (user decision 2026-09-13: 「能用系统的就先用系统的」):
+    // ffmpeg keeps priority when the release pipeline ships or the operator
+    // configures one (PPF_FFMPEG / bundled / PATH); otherwise macOS videos
+    // fall through to the system Quick Look thumbnailer — zero bundle size,
+    // zero license. Both fail -> Err -> make_thumbs writes the placeholder,
+    // and thumb_state=2 stays the durable evidence of that.
+    match ffmpeg::ffmpeg_path() {
+        Some(ff) => {
+            let tmp = tempfile::Builder::new()
+                .suffix(".jpg")
+                .tempfile()
+                .map_err(|source| CodecError::Io {
+                    path: src.to_path_buf(),
+                    source,
+                })?;
+            ffmpeg::extract_frame(&ff, src, tmp.path())?;
+            decode::decode_image(tmp.path())
+        }
+        None => {
+            let ql = quicklook::qlmanage_path().ok_or(CodecError::FfmpegMissing)?;
+            let dir = tempfile::Builder::new()
+                .tempdir()
+                .map_err(|source| CodecError::Io {
+                    path: src.to_path_buf(),
+                    source,
+                })?;
+            let png = quicklook::extract_frame(&ql, src, dir.path())?;
+            decode::decode_image(&png)
+        }
+    }
 }
 
 /// Downscale to `size` longest edge (never upscale) and write atomically:

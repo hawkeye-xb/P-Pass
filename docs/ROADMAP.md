@@ -1253,3 +1253,5 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 2026-09-12 交付记录（纯文档/卡）：OPPO / v0.5.1 真机走查入账（`docs/evidence/2026-09-12-oppo-051-dogfood.md`）。新开 MOB-76（L1，Wi-Fi 闸门在蜂窝下未执行）；MOB-54 真机复核失败重开定位；MOB-52/64/71/74 证据追加。`docs/QUEUE.md`/`docs/PROGRESS.md` 同步。
 
 2026-09-13 交付记录：MOB-76 代码完成。根因=FlowRunner 事件后 wake 6 处硬编码放行 + Worker 把调度满足当业务闸门；`constraintsProvider` 实时闸门注入 + 入口默认值实算化，新 `MOB76WifiGateTest` 3 例含源码合同反证。JVM 346/0/4、`just ci` 全绿，待真机回归。
+
+2026-09-13 交付记录：MOB-74 方案 B 落地（验收人拍板「能用系统的就先用系统的」）。视频首帧在 ffmpeg 不可用时走 macOS 系统 qlmanage 兜底（含 4s deadline+kill 防挂起），`thumb.get`/缓存/账本合同零改动；`ql_fallback` 端到端在无 ffmpeg 环境断言 Generated。nextest 217/217、`just ci` 全绿，待真机照片墙回归；Windows 降级态挂账。

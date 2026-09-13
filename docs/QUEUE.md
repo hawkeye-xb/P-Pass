@@ -58,6 +58,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 状态快照不再创建 native runtime；待三星重扫同机无 ANR/旧 offer 且新轮可传输 | L2 |
 | [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 新增范围在后台原子 backfill + 当前约束 Flow wake；待三星取消轮后新相册不重启传输回归 | L2 |
 | [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 代码完成：Wi-Fi 闸门改读实时网络（FlowRunner 6 处事件后 wake 硬编码放行 + Worker 调度放行误当业务闸门）；待真机蜂窝回归——限制开启发起备份应零传输+Wi-Fi 等待，连回 Wi-Fi 自动续传 | L1 |
+| [MOB-74](../cards/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | 方案 B（macOS 系统 qlmanage 兜底）已实现，JVM 侧 nextest 217 绿、just ci 绿；待验收人 Mac 覆盖安装看照片墙视频封面 | L2 |
 | [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭 Wi-Fi 限制后暂停不会复活 Wi-Fi 等待；待三星蜂窝网络回归暂停/继续与重新开启限制；09-12 OPPO 另见「重开再关限制不唤醒、需再选相册」并入回归 | L1 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 真实 `err.not_authorized` 已与 `err.not_paired` 一并投影到 pairingLost 红卡；待三星重配对后撤销设备并验证下一次 Flow 调用。09-12 OPPO 入账：手机残留配对/桌面无记录时冷启动「尝试传输」长期零提示，拒绝码待取证 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
@@ -109,7 +110,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 |---|---|---|
 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星热点大视频已复现 `flow.fetch` 15 秒超时；不能靠小文件成功掩盖 | **等可持续的蜂窝热点 / relay 窗口后再改并跑大视频回归** |
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0）；09-12 v0.5.1 复测同族症状再现（后台 1 分钟零同步/进 App 卡崩溃/断开卡顿），崩溃栈仍未到手 | **等崩溃证据**，拿不到不编码 |
-| [MOB-74](../cards/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | 视频白框根因锁定：发布管线从未携带 ffmpeg（CI 绿是 runner apt 装的假象），缩略图恒静默降级占位图 | **等 A（ffmpeg 进包 ~25MB+GPL 声明）/ B（macOS qlmanage 零依赖兜底）/ C（显式「视频·无封面」降级态，建议必做）拍板**，菜单在卡内 |
 | [MOB-75](../cards/MOB-75-harmonyos-media-change-must-wake-flow-in-background.md) | HarmonyOS 4.2：已授权后台管理但相册变更等约 1 分钟不传，重开 App 才补捞 | **等同一设备的 MediaWatch/JobScheduler/ledger 证据，不能把系统归咎当根因** |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
 | [AUDIT-05](../cards/AUDIT-05-dogfood-week-audit-content-review.md) | 狗粮周后只读复核真实审计内容，验证既定预设的覆盖与字段关联 | **等狗粮周样本**；不阻塞 AUDIT-02 的首版 UI |
