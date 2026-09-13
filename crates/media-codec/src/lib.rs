@@ -9,6 +9,7 @@ use std::path::PathBuf;
 mod decode;
 mod ffmpeg;
 mod pool;
+mod quicklook;
 mod thumb;
 
 pub use decode::decode_image;
@@ -37,6 +38,12 @@ pub enum CodecError {
 
     #[error("ffmpeg on {path}: {msg}")]
     Ffmpeg { path: PathBuf, msg: String },
+
+    // MOB-74 B: the macOS system thumbnailer (Quick Look) — the fallback
+    // when no ffmpeg binary is discoverable. Distinct from Ffmpeg so the
+    // diagnostic says which tool actually failed.
+    #[error("quicklook on {path}: {msg}")]
+    QuickLook { path: PathBuf, msg: String },
 }
 
 pub type Result<T> = std::result::Result<T, CodecError>;

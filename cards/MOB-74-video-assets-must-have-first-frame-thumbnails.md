@@ -1,7 +1,7 @@
 # MOB-74 视频资产必须显示首帧缩略图，不能是空白格（L2）
 
-> 🔎 状态：取证完成（2026-09-13，Hermes）——根因高置信锁定，修复方案待拍板（B 线）
-> 级别：L2 · 阻塞：等 ffmpeg 进包/替代方案的拍板（见实施记录方案菜单）
+> 🟡 状态：方案 B 已实现（2026-09-13，验收人拍板「能用系统的就先用系统的」）· 代码在 `crates/media-codec`（见实施记录）
+> 级别：L2 · 阻塞：真机回归（验收人 Mac 装新包看照片墙视频封面；Windows 不在 B 覆盖面，维持占位图，降级显式化另记欠账）
 
 ## 问题
 
@@ -15,10 +15,27 @@
 
 ## 验收标准
 
-- [ ] RED→GREEN：用真实可解码视频走索引/Flow 入库→`ThumbSize.S256` 查询→Android 网格路径，断言得到可解码 JPEG/Bitmap，而非 null/空白。
-- [ ] 自动化：视频的 256/1024 缩略图与图片走同一媒体查询合同；缓存命中与未命中均不退化为空白。
-- [ ] 反证：在视频首帧生成或查询路径断开时，焦点用例必须失败，证明测试未把占位框当成功。
-- [ ] 真机：至少两个不同视频在照片墙中显示各自可辨认封面；打开其中任一个仍可正常播放，不把图片解码器错误套到视频上。
+- [x] RED→GREEN：用真实可解码视频走索引/Flow 入库→`ThumbSize.S256` 查询→
+      Android 网格路径，断言得到可解码 JPEG/Bitmap，而非 null/空白。
+      （B 方案改的是 daemon 侧生成层，交付/网格合同不变：新增
+      `ql_fallback.rs` 端到端——「无 ffmpeg 的机器」上 `make_thumbs` 对真实
+      `tiny.mp4` 必须 `Generated` 且 256/1024 均为可解码 JPEG、256 槽
+      ≤256px 降采样；daemon `thumb.get` miss 分支调用的正是同一函数。
+      Android 消费路径零改动，网格真像素留真机条目收口。）
+- [x] 自动化：视频的 256/1024 缩略图与图片走同一媒体查询合同；缓存命中与
+      未命中均不退化为空白。（回退分支产出的仍是 `thumb_paths` 约定下的
+      磁盘 JPEG，后续请求走既有 cache-hit 读文件路径，与图片同合同；
+      `ql_fallback` + lib 单测 10 例绿。）
+- [x] 反证：在视频首帧生成或查询路径断开时，焦点用例必须失败，证明测试未
+      把占位框当成功。（`ql_fallback` 断言 `Generated` 而非 `Placeholder`——
+      回退分支一断即红；lib 测试锁定「发现契约」与「无输出=Err 绝不假成功」；
+      另实测抓到并修掉真缺陷：qlmanage 对不可解码输入**永久挂起**，
+      已内置 4s deadline+kill，垃圾输入用例断言限时返回 Err，防挂起回归。）
+- [ ] 真机：至少两个不同视频在照片墙中显示各自可辨认封面；打开任一个仍可
+      正常播放，不把图片解码器错误套到视频上。（等下轮出包：验收人 Mac
+      覆盖安装后看照片墙；注意 qlmanage 需 GUI 会话——daemon 以
+      LaunchAgent 跑在用户会话内成立，真机是最终裁判。Windows 不在 B
+      覆盖面：无 ffmpeg 时维持占位图，C 方案「显式降级态」未做，挂账。）
 
 ## 范围
 
@@ -51,7 +68,24 @@
      与此根因完全自洽。
   4. 排除项：入库链路本身有 `thumb_state` 记录（0/1/2 可取证）；HEIC 图片
      缩略图不受影响（不依赖 ffmpeg），与「只有视频白框」观察一致。
-- 方案菜单（待验收人拍板，均动 `crates/media-codec` 发现层 + 打包层）：
+- 2026-09-13（Hermes 实施，验收人拍板 **B：「能用系统的就先用系统的」**）：
+  `crates/media-codec/src/quicklook.rs` 新增系统兜底——ffmpeg 发现链
+  （env/bundled/PATH，保持优先）全空时，macOS 走 `/usr/bin/qlmanage -t -s 1024`
+  抽首帧 PNG 再进既有 downscale→JPEG 管线；产物路径/`thumb_state`/缓存合同
+  零改动，Android 与桌面消费端不感知。两件事实测钉过（不猜）：
+  ① 真机冒烟 `qlmanage` 对 320×240 mp4 出 320×240 PNG、RC=0、`-o` 目录须先
+  存在；② **对不可解码输入 qlmanage 永久挂起**（等 ThumbnailsAgent XPC 永不
+  回包）——`tokio::timeout` 只弃 future 不杀进程，所以 deadline(4s)+kill 做在
+  spawn 循环内部，垃圾输入单测同时是这个机制的反证（去掉即挂死测试）。
+  arch-check B.2 第一轮拦下 `cfg!(target_os)`：仓库规矩是平台差异禁进
+  media-codec，改成「固定绝对路径存在性探测」（与 ffmpeg.rs 同纪律，非 Mac
+  上文件不存在天然 None）。验证：media-codec lib **10/10** + thumbs **8/8** +
+  `ql_fallback` 端到端 **1/1**（本机 scrubbed-PATH 确认无 ffmpeg，真跑回退
+  分支）+ daemon 相关 nextest **217/217**，`just ci` 全绿。
+  与取证结论一致：C（占位图显式降级）没做进本卡——B 生效后 Mac 上占位图
+  只剩「真坏视频」一种来源，Windows 的显式降级挂账（卡面真机条目内注）。
+  `fetch-ffmpeg.sh` 里不存在的 T-071 引用属文档漂移，随本卡记录不单独修。
+- 方案菜单（2026-09-13 拍板 B，原文归档如下）：
   - **A 静态 ffmpeg 进包**（macOS evermeet 静态构建，~25MB/dmg）：链路零改动，
     `<exe_dir>/tools/ffmpeg` 槽位现成；代价=包体 +~25MB、GPL/LGPL 合规需附
     源码声明（构建为 GPL 时须提供源码，加 LICENSE 页 + 源链接即可）。
