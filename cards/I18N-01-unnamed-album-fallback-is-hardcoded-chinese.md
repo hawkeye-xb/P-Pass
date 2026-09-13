@@ -1,7 +1,7 @@
 # I18N-01 空相册名的兜底文案硬编码成中文　级别 L3
 
-> 🟡 状态：代码已合入，等英文系统真机验收
-> 级别：**L3** · 阻塞：无
+> 🟡 状态：代码与自动化均已闭环（2026-09-13 核对：纯函数+渲染合同 4 例测试齐、双语值齐）· 仅剩验收人真机：英文系统 → 选相册页无中文
+> 级别：**L3** · 阻塞：等下轮真机走查顺带过一眼
 
 ## 问题
 
@@ -28,6 +28,9 @@ val name = cur.getString(nameIdx)?.takeIf { it.isNotBlank() } ?: "未命名"
 
 ## 验收标准
 
-- [ ] 单测：`listBuckets` 对空名相册返回 `name == null`（不再返回中文字面量）
+- [x] 单测：`listBuckets` 对空名相册返回 `name == null`（不再返回中文字面量）
+      （`bucketNameOrNull` 纯函数 + `MediaScannerBucketNameTest` 2 例，2026-09-13
+      核对：`listBuckets` 生产路径 87 行用的正是该函数；渲染合同由
+      `BucketScreenI18nTest` 2 例锁定，双语值齐备）
 - [x] `MediaScanner` 不再含中文兜底；其余既有主 Kotlin 中文硬编码已拆为 I18N-02，避免扩大本卡范围
 - [ ] 真机（留给验收人）：系统语言切英文 → 选相册页没有中文
