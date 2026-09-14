@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.BuildConfig
 import com.hawkeyexb.ppass.backup.BackupTriplet
+import com.hawkeyexb.ppass.backup.BackgroundBackupState
 import com.hawkeyexb.ppass.update.UpdateChannel
 import kotlinx.coroutines.launch
 
@@ -99,6 +100,8 @@ fun HomeScreen(
     // MOB-65: 自动触发策略开关；它不表示当前 Flow 轮次是否暂停。
     autoBackupEnabled: Boolean = true,
     onToggleAutoBackup: (Boolean) -> Unit = {},
+    backgroundBackupState: BackgroundBackupState = BackgroundBackupState.OffByUser,
+    onResolveBackgroundBackup: () -> Unit = {},
     onDisconnect: () -> Unit = {},
     // 存储端移除/吊销本设备后备份被拒——「配对已失效」红卡 + 重新扫码。
     pairingLost: Boolean = false,
@@ -510,6 +513,22 @@ fun HomeScreen(
                     checked = autoBackupEnabled,
                     onCheckedChange = onToggleAutoBackup,
                 )
+                if (backgroundBackupState != BackgroundBackupState.OffByUser && !autoBackupEnabled) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.auto_backup_pause),
+                        value = stringResource(
+                            when (backgroundBackupState) {
+                                BackgroundBackupState.NeedsSystemAuthorization ->
+                                    R.string.background_backup_needs_authorization
+                                BackgroundBackupState.SystemStoppedWatcher ->
+                                    R.string.background_backup_system_stopped
+                                else -> error("enabled background backup does not need remediation")
+                            },
+                        ),
+                        onClick = onResolveBackgroundBackup,
+                    )
+                }
                 HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(
                     label = stringResource(R.string.setting_wifi_only),

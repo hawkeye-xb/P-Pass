@@ -95,7 +95,11 @@ fun WelcomeScreen(onScan: () -> Unit) {
  * onboarding 还是设置里改范围,统一过一遍,不额外分叉判断来源。
  */
 @Composable
-fun BackupStartedScreen(photoCount: Int, onEnter: () -> Unit) {
+fun BackupStartedScreen(
+    photoCount: Int,
+    onEnableBackgroundBackup: () -> Unit,
+    onEnter: () -> Unit,
+) {
     PPScreen(background = PPColor.SafeBg) {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
@@ -116,7 +120,7 @@ fun BackupStartedScreen(photoCount: Int, onEnter: () -> Unit) {
             )
             Spacer(Modifier.height(28.dp))
             Button(
-                onClick = onEnter,
+                onClick = onEnableBackgroundBackup,
                 modifier = Modifier.fillMaxWidth().height(60.dp),
                 shape = RoundedCornerShape(PPSize.RadiusControl),
                 colors = ButtonDefaults.buttonColors(
@@ -124,8 +128,19 @@ fun BackupStartedScreen(photoCount: Int, onEnter: () -> Unit) {
                 ),
             ) {
                 Text(
-                    stringResource(R.string.backup_started_enter),
+                    stringResource(R.string.background_backup_enable),
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                )
+            }
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(
+                onClick = onEnter,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+            ) {
+                Text(
+                    stringResource(R.string.backup_started_enter),
+                    fontSize = 16.sp, fontWeight = FontWeight.Bold,
                 )
             }
         }

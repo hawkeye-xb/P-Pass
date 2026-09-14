@@ -101,7 +101,7 @@ class ForegroundCatchupOnResumeTest {
         // 因为锚点消失而红（sliceBetween 自带断言）。这条额外确认「那四处
         // 既有刷新还在」，避免有人为了加补捞而误删旁边的东西。
         val resume = onResumeBlock()
-        assertTrue("电池白名单刷新还在", resume.contains("isIgnoringBatteryOptimizations"))
+        assertTrue("电池白名单刷新仍经授权 adapter", resume.contains("backgroundAuthorization.isGranted"))
         assertTrue("部分授权态刷新还在", resume.contains("hasPartialMediaAccess"))
         assertTrue("前台心跳还在", resume.contains("heartbeat.start()"))
         assertTrue("时间线订阅还在", resume.contains("timeline.start()"))

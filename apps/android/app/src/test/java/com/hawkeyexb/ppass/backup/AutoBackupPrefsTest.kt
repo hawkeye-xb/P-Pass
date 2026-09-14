@@ -16,8 +16,9 @@ class AutoBackupPrefsTest {
     val tmp = TemporaryFolder()
 
     @Test
-    fun defaults_to_automatic_backup_enabled() {
-        assertTrue(AutoBackupPrefs(tmp.root).enabled())
+    fun defaults_to_automatic_backup_disabled_until_the_user_chooses_it() {
+        assertFalse(AutoBackupPrefs(tmp.root).enabled())
+        assertFalse(AutoBackupPrefs(tmp.root).requested())
     }
 
     @Test
@@ -39,9 +40,10 @@ class AutoBackupPrefsTest {
     }
 
     @Test
-    fun corrupt_file_falls_back_to_automatic_backup_enabled() {
+    fun corrupt_file_falls_back_to_automatic_backup_disabled() {
         File(tmp.root, "auto_backup_prefs.json").writeText("{not json!!")
-        assertTrue(AutoBackupPrefs(tmp.root).enabled())
+        assertFalse(AutoBackupPrefs(tmp.root).enabled())
+        assertFalse(AutoBackupPrefs(tmp.root).requested())
     }
 
     @Test
@@ -57,7 +59,18 @@ class AutoBackupPrefsTest {
         val prefs = AutoBackupPrefs(tmp.root)
         prefs.setEnabled(false)
         val raw = File(tmp.root, "auto_backup_prefs.json").readText()
-        assertEquals("""{"autoEnabled":false}""", raw)
+        assertTrue(raw.isNotBlank())
+        assertFalse(AutoBackupPrefs(tmp.root).enabled())
+    }
+
+    @Test
+    fun authorization_loss_can_stop_producers_without_losing_the_users_choice() {
+        val prefs = AutoBackupPrefs(tmp.root)
+        prefs.setRequested(true)
+        prefs.setEnabled(false)
+
+        assertTrue(prefs.requested())
+        assertFalse(prefs.enabled())
     }
 
     @Test

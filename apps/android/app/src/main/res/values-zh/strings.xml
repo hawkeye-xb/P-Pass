@@ -36,6 +36,7 @@
     <string name="backup_started_title">%1$s 张照片，正在回家。</string>
     <string name="backup_started_body">之后什么都不用做。任何时候打开 App，都能看到照片安不安全。</string>
     <string name="backup_started_enter">进入 App</string>
+    <string name="background_backup_enable">开启后台备份</string>
     <string name="not_a_code">这不是 P-Pass 配对码。</string>
     <string name="pair_unparseable_code">配对码无法解析，请把电脑端和手机 App 都升级到最新版</string>
     <string name="storage_device_default">P-Pass 存储端</string>
@@ -182,6 +183,8 @@
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">后台备份</string>
     <string name="auto_backup_pause_hint">插电 + WiFi 时，新照片自动到家</string>
+    <string name="background_backup_needs_authorization">允许系统后台运行</string>
+    <string name="background_backup_system_stopped">系统已停止后台监听 · 检查并重新开启</string>
     <!-- 三层防误触第二层——存储电脑详情页最底部的红色描边入口按钮。 -->
     <string name="disconnect">断开与这台电脑的连接…</string>
     <!-- 三层防误触第三层——点了上面那个按钮后展开的确认卡（不是弹窗，

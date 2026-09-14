@@ -104,7 +104,10 @@ fun rescheduleAutoBackup(context: Context) {
 
 /** Disables future automatic producers; it never mutates the current Flow round. */
 fun disableAutoBackup(context: Context) {
-    AutoBackupPrefs(context.filesDir).setEnabled(false)
+    AutoBackupPrefs(context.filesDir).apply {
+        setRequested(false)
+        setEnabled(false)
+    }
     val workManager = WorkManager.getInstance(context)
     autoBackupWorkNames().forEach(workManager::cancelUniqueWork)
     cancelMediaWatch(context)
@@ -112,8 +115,22 @@ fun disableAutoBackup(context: Context) {
 
 /** Re-enables normal automatic producers; it never means "continue this round". */
 fun enableAutoBackup(context: Context) {
-    AutoBackupPrefs(context.filesDir).setEnabled(true)
+    AutoBackupPrefs(context.filesDir).apply {
+        setRequested(true)
+        setEnabled(true)
+    }
     scheduleAutoBackup(context)
+}
+
+/** Keep the user's choice, but stop automatic producers until authorization returns. */
+fun suspendAutoBackupUntilAuthorized(context: Context) {
+    AutoBackupPrefs(context.filesDir).apply {
+        setRequested(true)
+        setEnabled(false)
+    }
+    val workManager = WorkManager.getInstance(context)
+    autoBackupWorkNames().forEach(workManager::cancelUniqueWork)
+    cancelMediaWatch(context)
 }
 
 /**
