@@ -52,6 +52,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，历史 cancel 已 restore；重放 receipt 与 discovery wake 交错并对账未确认项，禁止沿用旧瞬态失败根因 | L1 / P0 |
+| [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 三星断开重扫后 UI 快照在主线程等待 Flow native runtime 初始化锁，触发 ANR；必须彻底隔离读取与初始化 | L2 |
 
 ---
 
@@ -62,7 +63,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 后台备份以用户选择、标准白名单和 MediaWatch 健康三项裁决；通知权限不进 onboarding，后台异常仅在设置呈现；待 HarmonyOS 4.2 真机验证 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 两 tab 都能看到中断提示，但用户真机复核后反馈"状态不对"，待用户说明具体哪里不对 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
-| [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 状态快照不再创建 native runtime；待三星重扫同机无 ANR/旧 offer 且新轮可传输 | L2 |
 | [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 新增范围在后台原子 backfill + 当前约束 Flow wake；待三星取消轮后新相册不重启传输回归 | L2 |
 | [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 代码完成：Wi-Fi 闸门改读实时网络（FlowRunner 6 处事件后 wake 硬编码放行 + Worker 调度放行误当业务闸门）；待真机蜂窝回归——限制开启发起备份应零传输+Wi-Fi 等待，连回 Wi-Fi 自动续传 | L1 |
 | [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭 Wi-Fi 限制后暂停不会复活 Wi-Fi 等待；待三星蜂窝网络回归暂停/继续与重新开启限制；09-12 OPPO 另见「重开再关限制不唤醒、需再选相册」并入回归 | L1 |
