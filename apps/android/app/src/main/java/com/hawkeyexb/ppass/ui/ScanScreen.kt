@@ -1,5 +1,5 @@
 // M2/M3（全页面状态稿）：暗底扫码页——顶部窄标题栏 + X 关闭（代替
-// "取消"按钮）；取景框是四角括号 + 中线，不是简单描边方框；底部只有
+// "取消"按钮）；取景窗口只显示圆角相机画面，不加额外装饰边框；底部只有
 // 一行文字链接切到独立的"输入配对串"子页（M3），不是内联展开。
 // CameraX analysis frames decode through ZXing (pure Java, no Play
 // Services — HarmonyOS-safe).
@@ -12,7 +12,6 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,8 +38,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
@@ -74,33 +71,6 @@ private fun decodeQr(image: ImageProxy, reader: MultiFormatReader): String? {
         null
     } finally {
         reader.reset()
-    }
-}
-
-/** M2 取景框：四角括号 + 中线（设计稿样式），不是简单描边方框。 */
-@Composable
-private fun ViewfinderFrame(modifier: Modifier = Modifier) {
-    Canvas(modifier.size(240.dp)) {
-        val arm = 36.dp.toPx()
-        val stroke = 3.5.dp.toPx()
-        val w = size.width
-        val h = size.height
-        val color = PPColor.Safe
-        // 四角 L 形括号
-        drawLine(color, Offset(0f, 0f), Offset(arm, 0f), stroke, cap = StrokeCap.Round)
-        drawLine(color, Offset(0f, 0f), Offset(0f, arm), stroke, cap = StrokeCap.Round)
-        drawLine(color, Offset(w, 0f), Offset(w - arm, 0f), stroke, cap = StrokeCap.Round)
-        drawLine(color, Offset(w, 0f), Offset(w, arm), stroke, cap = StrokeCap.Round)
-        drawLine(color, Offset(0f, h), Offset(arm, h), stroke, cap = StrokeCap.Round)
-        drawLine(color, Offset(0f, h), Offset(0f, h - arm), stroke, cap = StrokeCap.Round)
-        drawLine(color, Offset(w, h), Offset(w - arm, h), stroke, cap = StrokeCap.Round)
-        drawLine(color, Offset(w, h), Offset(w, h - arm), stroke, cap = StrokeCap.Round)
-        // 中线（设计稿的扫描线）
-        val inset = 16.dp.toPx()
-        drawLine(
-            color, Offset(inset, h / 2), Offset(w - inset, h / 2),
-            2.dp.toPx(), cap = StrokeCap.Round,
-        )
     }
 }
 
@@ -171,10 +141,7 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // 裁剪只套在摄像头预览本身上——外层 Box 若也裁一次，
-                    // 240dp 方框的圆角遮罩会把 ViewfinderFrame 画在方框
-                    // 物理边缘（0,0 ~ w,h）上的四角括号尖角一并削掉，绿色
-                    // 取景框看起来"缺了角"（用户实机反馈"圆角被截断了"）。
+                    // 裁剪只套在摄像头预览本身上，窗口外保持纯黑背景。
                     Box(
                         Modifier.size(240.dp),
                         contentAlignment = Alignment.Center,
@@ -210,7 +177,7 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
                                 view
                             },
                         )
-                        ViewfinderFrame()
+
                     }
                     Spacer(Modifier.height(24.dp))
                     Text(
