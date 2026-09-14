@@ -46,7 +46,46 @@ iroh 层不是哑巴：endpoint 有连接事件，iroh-blobs 有字节级进度�
    NET-07 的 fetch 宽限档；旧手机 + 新桌面 → 旧 `flow.fetch` 保留现行为
    （内部改为等 spawn 的任务，返回语义不变）。两个方向都不许静默失败。
 
-## 验收标准
+## 控制面语义：暂停 / 继续 / 取消当前轮（2026-09-14 外部 review 指出缺口后补全）
+
+同步模型把三个概念焊在一条连接寿命上：租约（fetch_lock 在=活是我的）、
+执行（连接在=还在传）、意图（超时/挂断≈别干了）。rebuild-05「迟到回执竞态」、
+MOB-54「回队无人唤醒」都是这副焊接的毛刺。异步化后三者必须各归各位：
+**意图=改账本（围栏/状态），观察=查状态，租约=lease token（已有）**，
+没有任何控制语义再依赖「这通电话活着吗」来推断「这件活什么状态」。
+
+四动词语义表（协议只有这四个动词，round/暂停/恢复全是手机侧账本概念，
+daemon 不新增 round 状态）：
+
+| 操作 | 语义 |
+|---|---|
+| 暂停 | 手机停止签发新 offer。当前张政策**待验收人拍板**：(a) drain——让本张跑完拿回执；(b) abort——对当前张发 cancel，字节由 iroh-blobs 保留（T-021 resume 测试实证续传可用），恢复时从断点续。实现按 (b) 做（含 cancel handle），政策若要 (a) 只是不调用 handle。 |
+| 继续 | 无新协议：重新 offer 同一 tuple。桌面已 completed → status 直接指路领幂等回执（字节没浪费，照片已算备份成功）；未 completed → 数据面续传。 |
+| 取消当前轮 | 手机停发 + 对当前张 cancel + 其余本地标记 skipped。**竞态规则先定死：先过 irreversible 边界（complete_flow_grant）者赢**——已 completed 的算 CONFIRMED 收进回执，不许事后改 skipped；cancel 先赢的 materialize 被 require_active 拒绝、零入库。规则必须是数据（账本状态），不许是时序（rebuild-05 竞态在异步模型里无生存空间）。 |
+| 崩溃/断网恢复 | 醒来先 status 再决定动作：active 且无运行任务→桌面重拉（本卡期望行为④）；completed→领回执；cancelled→按 skipped。手机任何状态下不凭超时重发 offer（NET-01 病根）。 |
+
+随之必须实做的两件（原方案缺的）：
+- **cancel 真中断**：`fetch_inner` 现状只在 materialize 边界检查 cancelled，
+  字节流本身不掐。spawn 化后任务须持有 iroh-blobs 下载的中断句柄（abort
+  tokio task + 释放数据面），否则「暂停=drain」是唯一选项、政策菜单( b )
+  名存实亡。
+- **status 词表补全**：`active(+bytes_done)/completed(receipt)/cancelled/
+  failed(错误码)/not_found`——failed 码复用 `DeliveryError::telemetry_code`
+  词表，禁止裸字符串。
+
+## 验收标准（控制面增补，接上表编号执行）
+
+- [ ] 竞态用例：item 数据面拉取中途发 cancel → 断言 cancelled 且不 materialize；
+      改「先 materialize 再 cancel」顺序 → 断言回执已定、item 终 CONFIRMED
+      （两个方向都必须确定，不许靠 sleep 运气）。
+- [ ] 暂停-续传用例（政策 b）：abort 后重新 offer → 断言 daemon 侧字节从
+      保留 partial 续传（对齐 T-021 断言手法）、最终同一 content_hash 完成。
+- [ ] 暂停-恢复免传用例：abort 前桌面其实已 completed → 重新 offer 后 status
+      指路、claim 直接拿回执、零重传。
+- [ ] 取消轮+迟到回执：JVM 侧断言手机账本对「cancel 后到达的 completed
+      status」收敛为 CONFIRMED（规则=先过边界者赢），不弹 skipped。
+
+## 验收标准（主案）
 
 - [ ] RED 先行（daemon 集成 scenario）：注入「数据面拉取耗时 > 控制类超时」
       的延迟 → 手机状态机（JVM 侧用假 DeliveryPort 对等场景）必须经 status
@@ -70,7 +109,7 @@ iroh 层不是哑巴：endpoint 有连接事件，iroh-blobs 有字节级进度�
 
 - 只准动：`crates/proto/src/msgs.rs`（新方法/类型，serde default 演进）、
   `crates/daemon/src/flow_delivery.rs`（spawn 任务、status、active-entry
-  进度、崩溃重拉）、`crates/daemon/src/router.rs` + `authz.rs`（新方法的
+  进度、崩溃重拉、cancel 持中断句柄真断字节流）、`crates/daemon/src/router.rs` + `authz.rs`（新方法的
   分发与门禁，照 FLOW_* 现有条目）、`crates/transport`（blobs 进度事件按
   NET-05 口径暴露为非 iroh 类型）、`apps/android/.../transport/DaemonClient.kt`
   （subscribe 事件类型）、`apps/android/.../backup/flow/`（投递状态机 +
