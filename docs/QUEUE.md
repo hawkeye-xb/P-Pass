@@ -115,6 +115,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
 | [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星热点大视频已复现 `flow.fetch` 15 秒超时；不能靠小文件成功掩盖 | **等可持续的蜂窝热点 / relay 窗口后再改并跑大视频回归** |
+| [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | 暂停/恢复的当前张政策：(a) drain 跑完本张 vs (b) abort 掐断续传（实现按 b 备好句柄，政策可改 a） | **等验收人拍板政策**，不阻塞其余编码 |
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0）；09-12 v0.5.1 复测同族症状再现（后台 1 分钟零同步/进 App 卡崩溃/断开卡顿），崩溃栈仍未到手 | **等崩溃证据**，拿不到不编码 |
 | [MOB-75](../cards/MOB-75-harmonyos-media-change-must-wake-flow-in-background.md) | HarmonyOS 4.2：已授权后台管理但相册变更等约 1 分钟不传，重开 App 才补捞 | **等同一设备的 MediaWatch/JobScheduler/ledger 证据，不能把系统归咎当根因** |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
