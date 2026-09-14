@@ -95,6 +95,9 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P1 | [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | NET-01 根治：Flow 交付 202 异步化 + `flow.status` 对账门；编码无阻塞，归档等 relay 真机窗口 | L2 |
+| P1 | [NET-07](../cards/NET-07-split-timeouts-by-call-kind-transitional.md) | 过渡止血：超时按 建连/控制/fetch 分档（NET-06 合入后评估回退）；与 NET-06 并行 | L1 |
+| P1 | [NET-08](../cards/NET-08-audit-repo-for-sync-wait-weld-points.md) | 全仓普查「同步等长任务」焊点（只读审计，产卡不改码），可与其他卡并行 | L2 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 真实活动记录遗漏/误投影本轮照片与视频结果；必须按 canonical evidence 分列并准确汇总 | L2 |
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 白色页面顶部状态栏图标对比度不足，需实证统一安全区/system-bar 外观是否生效 | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
