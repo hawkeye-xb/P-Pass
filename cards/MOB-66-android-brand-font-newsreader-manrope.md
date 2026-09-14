@@ -1,6 +1,6 @@
 # MOB-66 Android 品牌字体接入：Newsreader/Manrope 替换系统默认字体
 
-> ⬜ 状态：未开工
+> 🟡 状态：代码完成，待真机/模拟器截图走查
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -75,7 +75,30 @@ Sans SC 后备），视觉上与桌面一致；`Tokens.kt` 是字体 token 的�
 
 ## 实施记录
 
-未开工。
+2026-09-14 完成：
+
+- `res/font/` 新增 6 个静态字重文件（Newsreader 400/500/600 +
+  Manrope 400/500/700），来源 `github.com/google/fonts` 的
+  `ofl/newsreader` / `ofl/manrope`（可变字体），用 `fonttools
+  varLib.instancer` 切出静态实例，SIL OFL 1.1（OFL.txt 已核对，与卡片
+  一致）。
+- `ui/Tokens.kt` 新增 `PPFont` object：`PPFont.Serif`
+  (Font(newsreader_regular/medium/semibold, Normal/Medium/SemiBold))、
+  `PPFont.Sans` (Font(manrope_regular/medium/bold,
+  Normal/Medium/Bold))，字重映射对齐 `tokens.json` 的
+  `font.serif`/`font.sans`。
+- 5 个消费文件（BucketScreen/ScanScreen/PhotosScreen/HomeScreen/
+  Onboarding）全部 11 处 `FontFamily.Serif` → `PPFont.Serif`；同时给
+  每个页面顶层套一层 `ProvideTextStyle(LocalTextStyle.current.copy
+  (fontFamily = PPFont.Sans))`，让原本隐式吃系统默认字体的正文 `Text`
+  显式改用 Manrope（验收标准第 3 条要求）。
+- `FontFamily.Monospace` 调用点（配对码输入框、诊断详情）未改动。
+- 单测：`just android-test` → 69 个测试类 / 346 tests / 0 failures /
+  0 errors / 4 skipped（真实生成，见
+  `apps/android/app/build/test-results/testDebugUnitTest/`）。
+- `just ci`：见 PROGRESS.md 对应记录。
+- **未做**：真机/模拟器截图对比（本卡验收标准第 5 条）——需要用户或
+  后续走查补上，本次交付不包含视觉验收。
 
 ## 备注
 

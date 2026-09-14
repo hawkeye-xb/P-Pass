@@ -138,6 +138,9 @@ fun HomeScreen(
     // "什么时候备份"子页（用户实机反馈：设计稿 M10 就是直接开关行，
     // 折进子页是上一轮自己想当然加的一层，设计稿没有）。
     var showStorageDetail by remember { mutableStateOf(false) }
+    androidx.compose.material3.ProvideTextStyle(
+        androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+    ) {
     if (showStorageDetail) {
         BackHandler { showStorageDetail = false; onStorageDetailOpenChange(false) }
         StorageComputerDetail(
@@ -149,8 +152,7 @@ fun HomeScreen(
             onBack = { showStorageDetail = false; onStorageDetailOpenChange(false) },
             onDisconnect = onDisconnect,
         )
-        return
-    }
+    } else {
 
     Column(
         Modifier.fillMaxSize().background(PPColor.Paper)
@@ -205,12 +207,12 @@ fun HomeScreen(
                         // 三位数以内跟纯数字一样，大库才看得出差别。
                         Text(
                             groupThousands(t.m),
-                            fontSize = 40.sp, fontFamily = FontFamily.Serif,
+                            fontSize = 40.sp, fontFamily = PPFont.Serif,
                             color = PPColor.Safe,
                         )
                         Text(
                             stringResource(R.string.hero_of_n, groupThousands(t.n)),
-                            fontSize = 18.sp, fontFamily = FontFamily.Serif,
+                            fontSize = 18.sp, fontFamily = PPFont.Serif,
                             color = PPColor.Safe,
                             modifier = Modifier.padding(start = 6.dp, bottom = 4.dp),
                         )
@@ -551,6 +553,8 @@ fun HomeScreen(
 
         Spacer(Modifier.height(8.dp))
     }
+    }
+    }
 }
 
 /** "存储电脑"详情子页（M11/M12，全页面状态稿）——信息卡是状态点+
@@ -578,7 +582,7 @@ private fun StorageComputerDetail(
             )
             Text(
                 stringResource(R.string.storage_computer),
-                fontSize = 24.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
+                fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
             )
         }
         Spacer(Modifier.height(16.dp))

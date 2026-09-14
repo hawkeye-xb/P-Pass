@@ -4,7 +4,14 @@
 > 里程碑状态的唯一权威来源，每张卡完成即更新。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
-**Now / 当前位置**（2026-09-11）: MOB-70 has passed Samsung real-device
+**Now / 当前位置**（2026-09-14）: MOB-66 (Android brand-font wiring:
+Newsreader for headlines, Manrope for body/UI, replacing the system default
+serif/sans) is code-complete — `res/font/` carries 6 static-weight files
+downloaded from Google Fonts (SIL OFL 1.1) and instanced offline via
+`fonttools`, `Tokens.kt` gained a `PPFont` object, and all 11 hardcoded
+`FontFamily.Serif` call sites plus the previously-implicit body text now
+route through it; real-device/emulator screenshot comparison is still
+outstanding. MOB-70 has passed Samsung real-device
 New real-device dogfood has reopened MOB-68 (notification permission ordering)
 and AUDIT-02 (activity evidence projection), and opened MOB-71~75 plus UI-11:
 Wi-Fi deferral must not reappear after the setting is disabled; scope selection

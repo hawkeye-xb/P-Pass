@@ -78,6 +78,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 并发失败/收据回调不触发同一队头双发 | L0 |
 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | ~~真机复核（可选）~~ **2026-09-12 OPPO 复核失败**：传约 10 张停摆、剩 16 张无提示不续传，选第三个相册才唤醒；先取证停点失败码再定位 | L1 |
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 旧账本已确认项补 completedAt，首页不再永久显示从未成功 | L1 |
+| [MOB-66](../cards/MOB-66-android-brand-font-newsreader-manrope.md) | 代码完成：`res/font/` 已装 Newsreader/Manrope 静态字重（OFL 授权离线打包），`Tokens.kt` 新增 `PPFont`，11 处硬编码 `FontFamily.Serif` 与隐式正文字体已全部替换；待真机/模拟器截图对比确认渲染 | L2 |
 
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 
@@ -98,7 +99,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死 | L2 |
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
-| P3 | [MOB-66](../cards/MOB-66-android-brand-font-newsreader-manrope.md) | Android 端标题/正文仍是系统默认字体，未接 Newsreader/Manrope，与桌面品牌不一致 | L2 |
 | P2 | [MOB-69](../cards/MOB-69-rebuild04-deleted-notification-senders.md) | REBUILD-04 批次删除带走哨兵/白名单/重传三条通知发送端（判定逻辑成死代码）；先定性再接线或显式下线 | L2 |
 
 ---

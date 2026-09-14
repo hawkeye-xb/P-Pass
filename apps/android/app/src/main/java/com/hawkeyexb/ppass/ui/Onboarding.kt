@@ -45,6 +45,9 @@ private fun PrimaryButton(text: String, onClick: () -> Unit) {
 @Composable
 fun WelcomeScreen(onScan: () -> Unit) {
     PPScreen {
+        androidx.compose.material3.ProvideTextStyle(
+            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        ) {
         Column(
             Modifier.fillMaxSize().padding(32.dp),
         ) {
@@ -57,7 +60,7 @@ fun WelcomeScreen(onScan: () -> Unit) {
             Text(
                 stringResource(R.string.welcome_headline),
                 fontSize = 36.sp, lineHeight = 44.sp,
-                fontFamily = FontFamily.Serif, color = PPColor.Ink,
+                fontFamily = PPFont.Serif, color = PPColor.Ink,
             )
             Spacer(Modifier.height(12.dp))
             Text(
@@ -82,6 +85,7 @@ fun WelcomeScreen(onScan: () -> Unit) {
             PrimaryButton(stringResource(R.string.welcome_scan), onScan)
             Spacer(Modifier.height(24.dp))
         }
+        }
     }
 }
 
@@ -93,6 +97,9 @@ fun WelcomeScreen(onScan: () -> Unit) {
 @Composable
 fun BackupStartedScreen(photoCount: Int, onEnter: () -> Unit) {
     PPScreen(background = PPColor.SafeBg) {
+        androidx.compose.material3.ProvideTextStyle(
+            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        ) {
         Column(
             Modifier.fillMaxSize().padding(30.dp, 0.dp, 30.dp, 40.dp),
             verticalArrangement = Arrangement.Center,
@@ -100,7 +107,7 @@ fun BackupStartedScreen(photoCount: Int, onEnter: () -> Unit) {
             Text(
                 stringResource(R.string.backup_started_title, groupThousands(photoCount.toLong())),
                 fontSize = 34.sp, lineHeight = 42.sp,
-                fontFamily = FontFamily.Serif, color = PPColor.Safe,
+                fontFamily = PPFont.Serif, color = PPColor.Safe,
             )
             Spacer(Modifier.height(14.dp))
             Text(
@@ -122,6 +129,7 @@ fun BackupStartedScreen(photoCount: Int, onEnter: () -> Unit) {
                 )
             }
         }
+        }
     }
 }
 
@@ -129,13 +137,16 @@ fun BackupStartedScreen(photoCount: Int, onEnter: () -> Unit) {
 @Composable
 fun PairStatusScreen(title: String, body: String, action: Pair<String, () -> Unit>?) {
     PPScreen {
+        androidx.compose.material3.ProvideTextStyle(
+            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        ) {
         Column(
             Modifier.fillMaxSize().padding(34.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
             Text(
-                title, fontSize = 30.sp, fontFamily = FontFamily.Serif,
+                title, fontSize = 30.sp, fontFamily = PPFont.Serif,
                 color = PPColor.Ink, textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(14.dp))
@@ -152,6 +163,7 @@ fun PairStatusScreen(title: String, body: String, action: Pair<String, () -> Uni
                     border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
                 ) { Text(action.first, fontSize = 18.sp, color = PPColor.Ink60) }
             }
+        }
         }
     }
 }

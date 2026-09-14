@@ -140,6 +140,9 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
     }
 
     PPScreen(background = PPColor.SurfaceDark) {
+        androidx.compose.material3.ProvideTextStyle(
+            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        ) {
         Column(Modifier.fillMaxSize()) {
             // M2 头部：X 关闭（代替"取消"按钮）+ 居中标题 + 对称占位。
             Row(
@@ -228,6 +231,7 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
                     .padding(26.dp, 8.dp, 26.dp, 28.dp),
             )
         }
+        }
     }
 }
 
@@ -242,6 +246,9 @@ private fun ManualPairScreen(
 ) {
     val context = LocalContext.current
     PPScreen {
+        androidx.compose.material3.ProvideTextStyle(
+            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        ) {
         Column(Modifier.fillMaxSize().padding(24.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -250,7 +257,7 @@ private fun ManualPairScreen(
                 )
                 Text(
                     stringResource(R.string.scan_manual_title),
-                    fontSize = 24.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
+                    fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
                 )
             }
             Spacer(Modifier.height(18.dp))
@@ -330,6 +337,7 @@ private fun ManualPairScreen(
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                 )
             }
+        }
         }
     }
 }

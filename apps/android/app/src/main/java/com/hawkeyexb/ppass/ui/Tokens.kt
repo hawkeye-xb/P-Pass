@@ -4,8 +4,12 @@
 package com.hawkeyexb.ppass.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hawkeyexb.ppass.R
 
 object PPColor {
     val Paper = Color(0xFFFBF8F2)
@@ -42,4 +46,21 @@ object PPSize {
     val TapMin = 56.dp
     val RadiusCard = 20.dp
     val RadiusControl = 20.dp
+}
+
+// Brand fonts (MOB-66): Newsreader for headlines/conclusion sentences,
+// Manrope for body/UI text. Bundled offline from Google Fonts (SIL OFL 1.1)
+// under res/font/ — no runtime download. Weight mapping mirrors
+// assets/design/tokens.json font.serif / font.sans.
+object PPFont {
+    val Serif = FontFamily(
+        Font(R.font.newsreader_regular, FontWeight.Normal),
+        Font(R.font.newsreader_medium, FontWeight.Medium),
+        Font(R.font.newsreader_semibold, FontWeight.SemiBold),
+    )
+    val Sans = FontFamily(
+        Font(R.font.manrope_regular, FontWeight.Normal),
+        Font(R.font.manrope_medium, FontWeight.Medium),
+        Font(R.font.manrope_bold, FontWeight.Bold),
+    )
 }
