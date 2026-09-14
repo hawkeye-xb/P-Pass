@@ -72,9 +72,10 @@
     <string name="backup_cancel_current_round">取消当前轮</string>
     <!-- 2026-09-07 真机反馈：命令处理中禁用按钮，避免连点排队 -->
     <string name="backup_command_processing">处理中…</string>
-    <!-- MOB-59: X-05 常驻 Restore 提示（无 Discard——见 HomeScreen.kt 说明） -->
-    <string name="cancelled_round_notice_body">已跳过 %1$d 张照片（取消了这些轮次）。</string>
-    <string name="cancelled_round_notice_restore">重新传输</string>
+    <!-- 2026-09-14（用户拍板，取代 MOB-59/X-05）：恢复入口从常驻警告条
+         挪进备份设置卡的一行，不再是打断式提示，故文案不再叫 notice。 -->
+    <string name="cancelled_round_cell_label">已跳过的照片</string>
+    <string name="cancelled_round_cell_value">%1$d 张 · 点击恢复</string>
     <string name="missing_source_notice_body">已跳过 %1$d 张已从手机相册删除的照片，不会再重传。</string>
     <!-- T-083: hero 空闲态（设计稿未画，卡内裁决的最小延伸） -->
     <string name="idle_auto_hint">插电 + Wi-Fi 时自动进行</string>
@@ -110,9 +111,11 @@
     <string name="last_mins_ago">%1$d 分钟前</string>
     <string name="last_hours_ago">%1$d 小时前</string>
     <!-- T-080 layout v1: 备份规则卡 -->
-    <!-- M10 全页面状态稿原文——section 标签就是"备份"两字，不是"备份规则"。 -->
-    <string name="rules_title">备份</string>
-    <string name="other_section_title">其他</string>
+    <!-- 2026-09-14（用户拍板）：section 标签"备份"已删除——整页就是备份
+         设置页，标签是重复信息（原键 rules_title 已整体移除）。
+         "其他"换成更具体的"关于"，仍保留：存储电脑+版本两行需要标签跟
+         上面的备份卡区分开。 -->
+    <string name="other_section_title">关于</string>
     <string name="more_section_title">更多</string>
     <!-- M10 全页面状态稿原文——真实开关行(NotifyOnFailurePrefs)，不再是
          导航到系统设置的展示行。 -->

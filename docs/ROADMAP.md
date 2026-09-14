@@ -1262,3 +1262,5 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 2026-09-13 交付记录：MOB-76 代码完成。根因=FlowRunner 事件后 wake 6 处硬编码放行 + Worker 把调度满足当业务闸门；`constraintsProvider` 实时闸门注入 + 入口默认值实算化，新 `MOB76WifiGateTest` 3 例含源码合同反证。JVM 346/0/4、`just ci` 全绿，待真机回归。
 
 2026-09-13 交付记录：MOB-74 方案 B 落地（验收人拍板「能用系统的就先用系统的」）。视频首帧在 ffmpeg 不可用时走 macOS 系统 qlmanage 兜底（含 4s deadline+kill 防挂起），`thumb.get`/缓存/账本合同零改动；`ql_fallback` 端到端在无 ffmpeg 环境断言 Generated。nextest 217/217、`just ci` 全绿，待真机照片墙回归；Windows 降级态挂账。
+
+2026-09-14 交付记录：MOB-77 代码完成（用户拍板）。取消轮次恢复入口从常驻不可关闭的琥珀警告条（`HomeNoticeKind.CANCELLED_ROUND`）挪进「备份」设置卡的一行 `CellRow`，null 时不渲染，不再常驻提醒；用户主动取消是正常操作，不该被塑造成待处理警告。同批删除「备份」section 标签（信息增量为 0）、「其他」改「关于」。Android JVM 69 类/346 tests/0 failures/0 errors/4 skipped（真实生成），待真机/模拟器截图走查。

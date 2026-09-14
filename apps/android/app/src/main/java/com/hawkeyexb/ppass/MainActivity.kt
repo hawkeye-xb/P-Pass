@@ -586,13 +586,11 @@ fun PPassApp() {
                 notice = {
                     NoticeHost(
                         backupInterrupted = backupInterrupted,
-                        cancelledRoundCount = holder.cancelledRoundNotice.value?.count,
                         reuploadCount = holder.reuploadNoticeCount.value,
                         onResumeBackup = {
                             resumeAfterInterruption(context)
                             backupInterrupted = false
                         },
-                        onRestoreCancelledRounds = { holder.restoreCancelledRounds() },
                         onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
                     )
                 },
@@ -617,6 +615,11 @@ fun PPassApp() {
                         missingSourceNotice = holder.missingSourceNotice.value,
                         // MOB-59: 本轮自己的进度（0 起算，见 HomeScreen.kt 说明）。
                         roundProgress = holder.roundProgress.value,
+                        // 2026-09-14（用户拍板）：取消轮次恢复入口从常驻琥珀
+                        // 警告条挪进「备份」设置卡，做成一行 CellRow——用户
+                        // 主动取消不该被塑造成待处理的警告。
+                        cancelledRoundCount = holder.cancelledRoundNotice.value?.count,
+                        onRestoreCancelledRounds = { holder.restoreCancelledRounds() },
                         wifiOnly = wifiOnly,
                         onWifiOnlyChange = { enable ->
                             // MOB-02 §三: 关闭「需要 Wi-Fi」需二次确认
