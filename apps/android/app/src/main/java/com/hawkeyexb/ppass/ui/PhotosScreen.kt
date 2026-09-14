@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -465,6 +466,31 @@ private fun ThumbCell(loader: TimelineLoader, asset: AssetMeta, onOpen: () -> Un
                 modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop,
             )
         }
+        // MOB-79: 网格里视频和照片长得一模一样，用户点进去才知道是视频。
+        // Wire format 是规范化过的 "video"/"photo"（见 PhotosScreen.kt:508
+        // 的注释），但也兼容旧 daemon 可能发送的 MIME 值如 "video/mp4"。
+        if (asset.mediaType.startsWith("video")) {
+            VideoBadge(Modifier.align(Alignment.BottomEnd).padding(6.dp))
+        }
+    }
+}
+
+/** MOB-79: 网格缩略图角标——半透明深底 + 白色播放三角，右下角，跟系统
+ *  相册/主流图库同一套视觉语言，一眼区分视频和照片。 */
+@Composable
+private fun VideoBadge(modifier: Modifier = Modifier) {
+    androidx.compose.foundation.Canvas(modifier.size(22.dp)) {
+        val r = size.minDimension / 2f
+        drawCircle(color = androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f), radius = r)
+        val triSize = r * 0.9f
+        val cx = center.x + r * 0.08f // 视觉居中：三角形重心偏左，右移一点点更居中
+        val path = androidx.compose.ui.graphics.Path().apply {
+            moveTo(cx - triSize * 0.45f, center.y - triSize * 0.55f)
+            lineTo(cx - triSize * 0.45f, center.y + triSize * 0.55f)
+            lineTo(cx + triSize * 0.55f, center.y)
+            close()
+        }
+        drawPath(path, color = androidx.compose.ui.graphics.Color.White)
     }
 }
 
