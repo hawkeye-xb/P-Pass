@@ -103,6 +103,36 @@ abort task → future drop 释放数据面连接 → iroh-blobs 停止字节流�
 FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 登记+
 拒绝新拉取 ✅——**只差这最后一个中断入口**。
 
+### 三条实施前必读补丁（2026-09-14 第三轮 review，源码核实，非空想）
+
+1. **任务追踪表的清理必须走 `Drop`，不能是顺序代码**：`abort()` 会在
+   *任意*一个 await 点把 future 直接砍断，不会跑完"往下一行"的收尾代码。
+   同文件已有的 `FlowPathGuard`（`flow_delivery.rs:154-191`）就是为同一个
+   问题设的——照抄它的模式：新增的任务句柄登记表必须由一个 Drop 守卫负责
+   摘除自己的登记项，不能指望 `complete_flow_grant` 成功之后"再往下走一行
+   代码去清理"。反证窗口：abort 恰好砸在 `complete_flow_grant` 写完、清理
+   代码还没跑到之间——这个窗口 Drop 守卫必须仍然正确摘除登记（哪怕账本已经
+   是 Completed），顺序代码写法做不到。
+2. **取消当前轮批量处理 N 项，只有曾经拿到过真实 grant 的那一项才需要真的
+   发 `flow.cancel`**：`CancellationRoundController.startPausedRound()`
+   批量标记的是 `QUEUED`/`FAILED_NEEDS_USER` 两类项，但按 ARCH-03 严格
+   单头语义，同一时刻 daemon 只对**当前头**发过 offer；轮里其余排队项从未
+   跟 daemon 打过交道，daemon 侧查无此 grant。不需要新状态字段：现有
+   `deliveryState` 已隐含这个事实（`FAILED_NEEDS_USER` 或"当前被打断退回
+   QUEUED 的那一项"才可能有真实 grant，纯 `QUEUED` 且未曾失败过的项没有）。
+   按这个已有信号决定发不发 `flow.cancel`，没有真实 grant 的项直接跳过
+   网络调用，不必对空 grant 也发一次再吞掉 `GuardMismatch`。
+3. **新增的任务中断表键值范围必须照抄 `FlowPathRegistry`（设备身份 +
+   queue_sequence + lease_token 三者一起校验），不能只按 `content_hash`
+   键**：GC 保护名单按哈希键是对的（它问"这份内容该不该留"，与谁在传无关，
+   多台设备传同一张照片时任一台在传都要保留）；但任务中断问的是"该打断
+   哪台设备的哪一次具体传输"，`content_hash` 不是 grant 表的唯一键
+   （主键是设备身份 + pairing_epoch + queue_sequence），三台设备完全可能
+   各自独立持有同一哈希的 grant（各自备份同一张照片/截图）。若中断表图省事
+   只按哈希查，A 设备 suspend 会误杀 B/C 设备正在进行的独立传输。去重只
+   发生在 `complete_flow_grant` 那个终态边界之后，过程中即便哈希已知也
+   仍是独立的传输，必须按设备+序号+租约精确定位，不能借用去重用的哈希键。
+
 ## 验收标准（主案）
 
 - [ ] RED 先行（daemon 集成 scenario）：注入「数据面拉取耗时 > 控制类超时」
@@ -120,6 +150,17 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       不许靠 sleep 运气。
 - [ ] **暂停不观察用例**（JVM）：暂停路径断言零 status/网络查询调用（原则 1
       反证：谁把"等桌面确认停了"做进暂停，此用例变红）。
+- [ ] **abort 竞态用 Drop 守卫用例**：注入 abort 恰好砸在
+      `complete_flow_grant` 成功之后、清理代码前的窗口 → 断言任务追踪表
+      仍被正确摘除登记（不留僵尸项）；改成非 Drop 的顺序清理写法必须让此
+      用例变红。
+- [ ] **取消当前轮不打无谓 grant 查询用例**：批量取消 N 项（仅 1 项曾有
+      真实 grant）→ 断言只对那 1 项发出 `flow.cancel`，其余项零网络调用、
+      零 `GuardMismatch` 噪音。
+- [ ] **跨设备同哈希隔离用例**：两台不同设备各自持有同一 `content_hash`
+      的独立 grant（各自备份同一张照片）→ 一台 suspend/cancel → 断言另一台
+      的传输任务与 grant 状态不受影响（反证：任务中断表若只按 content_hash
+      键，此用例必须变红）。
 - [ ] 反证：移除 status 查询分支/恢复同步等待形状 → 新用例必须变红。
 - [ ] 幂等：completed 后重复 status/fetch 返回同一 receipt_id，零重传
       （daemon 集成测试，复用 `persisted_receipt` 既有语义）。
