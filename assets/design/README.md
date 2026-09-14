@@ -16,7 +16,7 @@ has to figure anything out.
 | `tokens.json` | canonical definitions + design rules — **edit this first** |
 | `tokens.css` | desktop shell (`apps/desktop`, imported by the Svelte app) |
 | `token-reuse-checklist.md` | DESK-15 audit: what's already reused, what gaps are real, what was decided not to tokenize |
-| *(future)* `Tokens.kt` | Android app (M2 T-055) — generate from `tokens.json` |
+| `Tokens.kt` (`apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/`) | Android app — hand-maintained from `tokens.json` (colours + PPFont brand fonts, MOB-66) |
 
 Rules that are not colours (body ≥17px on phone, tap targets ≥56px,
 ≤40 words per screen, no jargon without a plain sentence, destructive

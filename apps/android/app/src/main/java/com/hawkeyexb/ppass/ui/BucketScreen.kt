@@ -45,7 +45,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -208,6 +207,9 @@ fun BucketScreen(
     val selectedCount = buckets.filter { it.id in checked }.sumOf { it.count }
 
     PPScreen {
+        androidx.compose.material3.ProvideTextStyle(
+            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        ) {
         Column(Modifier.fillMaxSize().padding(24.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -217,7 +219,7 @@ fun BucketScreen(
                 Column {
                     Text(
                         stringResource(R.string.bucket_title),
-                        fontSize = 24.sp, fontFamily = FontFamily.Serif, color = PPColor.Ink,
+                        fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
                     )
                 }
             }
@@ -277,6 +279,7 @@ fun BucketScreen(
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                 )
             }
+        }
         }
     }
 }

@@ -51,7 +51,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -288,6 +287,9 @@ internal fun PhotosScreen(
     }
 
     Column(Modifier.fillMaxSize().background(PPColor.Paper)) {
+        androidx.compose.material3.ProvideTextStyle(
+            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        ) {
         // 2026-08-17 用户真机反馈："N 张 · 已去重"这行副标题对家人用户
         // 没有信息量（纯技术术语，桌面端才关心去重）——没有现成的"上次
         // 同步于 X 分钟前"这类数据源可用（TimelineSubscriptionHolder 不
@@ -409,7 +411,7 @@ internal fun PhotosScreen(
                     item(key = "hdr-$month", span = { GridItemSpan(3) }) {
                         Text(
                             month,
-                            fontSize = 18.sp, fontFamily = FontFamily.Serif,
+                            fontSize = 18.sp, fontFamily = PPFont.Serif,
                             color = PPColor.Ink,
                             modifier = Modifier.padding(8.dp, 16.dp, 8.dp, 6.dp),
                         )
@@ -430,6 +432,7 @@ internal fun PhotosScreen(
                     }
                 }
             }
+        }
         }
     }
 }
@@ -612,6 +615,9 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
     }
 
     PPScreen(background = PPColor.SurfaceDark) {
+        androidx.compose.material3.ProvideTextStyle(
+            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        ) {
         Column(Modifier.fillMaxSize().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
@@ -679,6 +685,7 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
                 onClick = { runAssetAction(ViewerOp.Share) },
                 modifier = Modifier.weight(1f),
             )
+        }
         }
         }
     }
