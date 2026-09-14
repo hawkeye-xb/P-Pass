@@ -49,8 +49,7 @@ import kotlinx.coroutines.withTimeout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.work.WorkManager
-import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
-import com.hawkeyexb.ppass.battery.openBatteryOptimizationSettings
+import com.hawkeyexb.ppass.battery.AndroidBackgroundAuthorizationAdapter
 import com.hawkeyexb.ppass.i18n.DiagText
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.ForegroundHeartbeat
@@ -73,6 +72,9 @@ import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.disableAutoBackup
 import com.hawkeyexb.ppass.backup.enableAutoBackup
+import com.hawkeyexb.ppass.backup.suspendAutoBackupUntilAuthorized
+import com.hawkeyexb.ppass.backup.BackgroundBackupState
+import com.hawkeyexb.ppass.backup.backgroundBackupStateOf
 import com.hawkeyexb.ppass.backup.triggerUserPresentBackup
 import com.hawkeyexb.ppass.backup.BACKUP_WORK_NAME
 import com.hawkeyexb.ppass.backup.CATCHUP_WORK_NAME
@@ -319,7 +321,8 @@ fun PPassApp() {
     // DOG-02: 电池白名单状态——ON_RESUME 刷新（从系统设置返回立即更新，
     // 加白后卡片消失；拒绝授权时保持卡片）
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    var batteryWhitelisted by remember { mutableStateOf(isIgnoringBatteryOptimizations(context)) }
+    val backgroundAuthorization = remember { AndroidBackgroundAuthorizationAdapter(context) }
+    var batteryWhitelisted by remember { mutableStateOf(backgroundAuthorization.isGranted()) }
 
     // 设计稿"失联多少天"——复用 SENT-01 既有的 SentinelStore（不是新
     // 造的判定），距上次确认可达的天数；从未确认可达过（lastReachableAt
@@ -357,7 +360,7 @@ fun PPassApp() {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
-                    batteryWhitelisted = isIgnoringBatteryOptimizations(context)
+                    batteryWhitelisted = backgroundAuthorization.isGranted()
 
                     daysUnreachable = computeDaysUnreachable()
                     partialMedia = hasPartialMediaAccess(context)
@@ -523,12 +526,30 @@ fun PPassApp() {
                 mutableStateOf(notifyOnFailurePrefs.enabled() && hasNotificationPermission(context))
             }
             var notificationRequestInFlight by remember { mutableStateOf(false) }
+            // Explicit user intent is separate from whether Android can currently run it.
+            val prefs = remember { AutoBackupPrefs(context.filesDir) }
+            var userRequestedBackgroundBackup by remember { mutableStateOf(prefs.requested()) }
+            var batteryRequestInFlight by remember { mutableStateOf(false) }
             val notificationPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission(),
             ) { granted ->
                 notificationRequestInFlight = false
                 notifyOnFailure = granted
                 notifyOnFailurePrefs.setEnabled(granted)
+            }
+            val batteryPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.StartActivityForResult(),
+            ) {
+                batteryRequestInFlight = false
+                batteryWhitelisted = backgroundAuthorization.isGranted()
+                if (batteryWhitelisted) {
+                    if (backupInterrupted) {
+                        resumeAfterInterruption(context)
+                        backupInterrupted = false
+                    } else enableAutoBackup(context)
+                } else {
+                    suspendAutoBackupUntilAuthorized(context)
+                }
             }
             // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页开关行已删；
             // device_hint 照发照存（pair.request 处直接读 pref，默认开，
@@ -545,19 +566,19 @@ fun PPassApp() {
             // 存储电脑详情是二级页——打开时跟大图查看页一样把底部 tab
             // 栏整体隐藏（用户实机反馈：进了二级页底部 tab 还杵在那）。
             var storageDetailOpen by remember { mutableStateOf(false) }
-            // MOB-65: 自动触发策略持久化；它不参与当前 Flow 轮的暂停/继续。
-            val prefs = remember { AutoBackupPrefs(context.filesDir) }
-            var autoBackupEnabled by remember {
-                mutableStateOf(prefs.enabled() && batteryWhitelisted)
-            }
-            var batteryRequestInFlight by remember { mutableStateOf(false) }
-            LaunchedEffect(batteryWhitelisted, batteryRequestInFlight) {
-                if (batteryRequestInFlight && batteryWhitelisted) {
-                    batteryRequestInFlight = false
-                    autoBackupEnabled = true
-                    enableAutoBackup(context)
+            LaunchedEffect(batteryWhitelisted) {
+                userRequestedBackgroundBackup = prefs.requested()
+                if (!batteryWhitelisted && userRequestedBackgroundBackup) {
+                    suspendAutoBackupUntilAuthorized(context)
                 }
             }
+            val backgroundBackupState = backgroundBackupStateOf(
+                userEnabled = userRequestedBackgroundBackup,
+                systemWhitelisted = batteryWhitelisted,
+                watcherScheduled = !backupInterrupted,
+                watcherInterrupted = backupInterrupted,
+            )
+            val backgroundBackupEnabled = backgroundBackupState == BackgroundBackupState.Armed
             val scope = rememberCoroutineScope()
             LaunchedEffect(Unit) { client.bind(identity.secretKey()) }
             val mediaPermission = rememberLauncherForActivityResult(
@@ -579,21 +600,19 @@ fun PPassApp() {
                 showTabBar = !photoViewerOpen && !storageDetailOpen,
                 // M13 哨兵态：长期失联时设置图标角标红点，跟照片页的失联
                 // 红卡同一个信号源（holder.pairingLost），不额外判天数。
-                settingsAlert = holder.pairingLost.value,
+                settingsAlert = holder.pairingLost.value ||
+                    backgroundBackupState != BackgroundBackupState.OffByUser,
                 // UI-04a/c: 全局唯一提示宿主——把五条提示的输入集中到
                 // NoticeHost，只渲染最高优先级的一条，Photos/Backup 两页
                 // 都可见（不再只有总览页）。
-                notice = {
-                    NoticeHost(
-                        backupInterrupted = backupInterrupted,
-                        reuploadCount = holder.reuploadNoticeCount.value,
-                        onResumeBackup = {
-                            resumeAfterInterruption(context)
-                            backupInterrupted = false
-                        },
-                        onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
-                    )
-                },
+                notice = if (!photoViewerOpen && !storageDetailOpen) {
+                    {
+                        NoticeHost(
+                            reuploadCount = holder.reuploadNoticeCount.value,
+                            onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
+                        )
+                    }
+                } else null,
                 photos = {
                     PhotosScreen(
                         timeline,
@@ -646,18 +665,35 @@ fun PPassApp() {
                             }
                         },
                         pairedAt = s.pairing.pairedAt,
-                        autoBackupEnabled = autoBackupEnabled,
+                        autoBackupEnabled = backgroundBackupEnabled,
+                        backgroundBackupState = backgroundBackupState,
+                        onResolveBackgroundBackup = {
+                            if (batteryWhitelisted) {
+                                resumeAfterInterruption(context)
+                                backupInterrupted = false
+                            } else if (!batteryRequestInFlight) {
+                                batteryRequestInFlight = true
+                                batteryPermission.launch(backgroundAuthorization.requestIntent())
+                            }
+                        },
                         onToggleAutoBackup = { enabled ->
                             if (!enabled) {
                                 batteryRequestInFlight = false
-                                autoBackupEnabled = false
+                                userRequestedBackgroundBackup = false
+                                BackupHealthPrefs(context.filesDir).acknowledge()
+                                backupInterrupted = false
                                 disableAutoBackup(context)
                             } else if (batteryWhitelisted) {
-                                autoBackupEnabled = true
-                                enableAutoBackup(context)
+                                userRequestedBackgroundBackup = true
+                                if (backupInterrupted) {
+                                    resumeAfterInterruption(context)
+                                    backupInterrupted = false
+                                } else enableAutoBackup(context)
                             } else if (!batteryRequestInFlight) {
                                 batteryRequestInFlight = true
-                                openBatteryOptimizationSettings(context)
+                                prefs.setRequested(true)
+                                userRequestedBackgroundBackup = true
+                                batteryPermission.launch(backgroundAuthorization.requestIntent())
                             }
                         },
                         // UX-06 单方停止：本地断开不依赖 daemon 回应。确认
@@ -818,61 +854,35 @@ fun PPassApp() {
         }
 
         is Screen.Started -> {
-            // 媒体范围已完成，才开始两个非必需授权；二者始终串行，任何一个
-            // 系统框仍在前台时都不会启动另一个。拒绝并不阻断进入 App。
-            val onboardingNotifyPrefs = remember {
-                com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir)
+            // 后台备份是用户可选能力；通知权限不属于 onboarding，必须由设置页
+            // 的对应开关主动请求。首次传输不依赖任何可选授权。
+            val finishOnboarding = {
+                val settings = BackupSettings(context.filesDir).load()
+                val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
+                wifiDeferred = !constraintsSatisfied
+                requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
+                triggerUserPresentBackup(context)
+                screen = Screen.Home(s.pairing)
             }
-            // -1 = 仍在「进入 App」确认页；0/1 = 两个可选系统授权；2 =
-            // 用户已经完成选择和确认，此时才允许第一次 discovery/传输。
-            var optionalPermissionStep by remember { mutableStateOf(-1) }
             val batteryPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult(),
             ) {
-                if (isIgnoringBatteryOptimizations(context)) enableAutoBackup(context)
-                else disableAutoBackup(context)
-                optionalPermissionStep = 1
-            }
-            val notificationPermission = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission(),
-            ) { granted ->
-                onboardingNotifyPrefs.setEnabled(granted)
-                optionalPermissionStep = 2
-            }
-            LaunchedEffect(optionalPermissionStep) {
-                when (optionalPermissionStep) {
-                    0 -> {
-                        if (isIgnoringBatteryOptimizations(context)) {
-                            enableAutoBackup(context)
-                            optionalPermissionStep = 1
-                        } else {
-                            batteryPermission.launch(
-                                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                                    .setData(Uri.parse("package:${context.packageName}")),
-                            )
-                        }
-                    }
-                    1 -> {
-                        if (hasNotificationPermission(context)) {
-                            onboardingNotifyPrefs.setEnabled(true)
-                            optionalPermissionStep = 2
-                        } else {
-                            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
-                    }
-                    2 -> {
-                        val settings = BackupSettings(context.filesDir).load()
-                        val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
-                        wifiDeferred = !constraintsSatisfied
-                        requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
-                        triggerUserPresentBackup(context)
-                        screen = Screen.Home(s.pairing)
-                    }
-                }
+                if (backgroundAuthorization.isGranted()) enableAutoBackup(context)
+                else suspendAutoBackupUntilAuthorized(context)
+                finishOnboarding()
             }
             BackupStartedScreen(
                 photoCount = s.photoCount,
-                onEnter = { optionalPermissionStep = 0 },
+                onEnableBackgroundBackup = {
+                    if (backgroundAuthorization.isGranted()) {
+                        enableAutoBackup(context)
+                        finishOnboarding()
+                    } else {
+                        AutoBackupPrefs(context.filesDir).setRequested(true)
+                        batteryPermission.launch(backgroundAuthorization.requestIntent())
+                    }
+                },
+                onEnter = finishOnboarding,
             )
         }
     }

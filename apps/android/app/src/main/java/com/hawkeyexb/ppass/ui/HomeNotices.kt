@@ -129,21 +129,10 @@ fun NoticeCard(notice: HomeNotice) {
  */
 @Composable
 fun NoticeHost(
-    backupInterrupted: Boolean,
     reuploadCount: Int,
-    onResumeBackup: () -> Unit,
     onAcknowledgeReupload: () -> Unit,
 ) {
     val candidates = buildList {
-        if (backupInterrupted) add(
-            HomeNotice(
-                kind = HomeNoticeKind.BACKUP_INTERRUPTED,
-                body = stringResource(R.string.backup_interrupted_body),
-                actionLabel = stringResource(R.string.backup_interrupted_action),
-                onAction = onResumeBackup,
-            )
-        )
-
         if (reuploadCount > 0) add(
             HomeNotice(
                 kind = HomeNoticeKind.REUPLOAD,

@@ -49,15 +49,15 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 ## 一、进行中
 
-| 卡 | 一句话 | 级别 |
-|---|---|---|
-| [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 后台备份开关必须同时对齐用户选择、标准系统白名单与后台监听健康；通知权限移出 onboarding，后台异常归属设置页而非全局黄条 | L2 |
+（当前没有进行中的卡。）
+
 ---
 
 ## 二、待共享回归（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 后台备份以用户选择、标准白名单和 MediaWatch 健康三项裁决；通知权限不进 onboarding，后台异常仅在设置呈现；待 HarmonyOS 4.2 真机验证 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 两 tab 都能看到中断提示，但用户真机复核后反馈"状态不对"，待用户说明具体哪里不对 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 状态快照不再创建 native runtime；待三星重扫同机无 ANR/旧 offer 且新轮可传输 | L2 |
@@ -93,7 +93,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 真实活动记录遗漏/误投影本轮照片与视频结果；必须按 canonical evidence 分列并准确汇总 | L2 |
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 白色页面顶部状态栏图标对比度不足，需实证统一安全区/system-bar 外观是否生效 | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |

@@ -12,7 +12,10 @@ import kotlinx.serialization.json.jsonPrimitive
 
 @Serializable
 data class AutoBackupPrefsData(
-    val autoEnabled: Boolean = true,
+    /** Actual producer state. It may be false while the user still wants it on. */
+    val autoEnabled: Boolean = false,
+    /** Explicit user intent; old files fall back to their former active value. */
+    val userRequested: Boolean? = null,
 )
 
 /** Policy store for automatic producer wakes. Distinct from Flow's round gate. */
@@ -22,10 +25,20 @@ class AutoBackupPrefs(private val dir: File) {
 
     fun enabled(): Boolean = load().autoEnabled
 
+    fun requested(): Boolean = load().userRequested ?: load().autoEnabled
+
     fun setEnabled(enabled: Boolean) {
+        save(load().copy(autoEnabled = enabled))
+    }
+
+    fun setRequested(requested: Boolean) {
+        save(load().copy(userRequested = requested))
+    }
+
+    private fun save(data: AutoBackupPrefsData) {
         dir.mkdirs()
         val tmp = File(dir, "auto_backup_prefs.json.tmp")
-        tmp.writeText(json.encodeToString(AutoBackupPrefsData.serializer(), AutoBackupPrefsData(enabled)))
+        tmp.writeText(json.encodeToString(AutoBackupPrefsData.serializer(), data))
         check(tmp.renameTo(file)) { "cannot persist auto_backup_prefs.json" }
     }
 
@@ -35,8 +48,9 @@ class AutoBackupPrefs(private val dir: File) {
                 val fields = json.parseToJsonElement(file.readText()).jsonObject
                 val enabled = fields["autoEnabled"]?.jsonPrimitive?.booleanOrNull
                     ?: fields["paused"]?.jsonPrimitive?.booleanOrNull?.not()
-                    ?: true
-                AutoBackupPrefsData(autoEnabled = enabled)
+                    ?: false
+                val requested = fields["userRequested"]?.jsonPrimitive?.booleanOrNull
+                AutoBackupPrefsData(autoEnabled = enabled, userRequested = requested)
             }.getOrDefault(AutoBackupPrefsData())
         } else {
             AutoBackupPrefsData()
