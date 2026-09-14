@@ -1,11 +1,14 @@
 # NET-06 Flow 交付异步化（202 模式）+ 两端账本强制对账——NET-01 根治　级别 L2
 
-> 🔄 状态：开工中 · 当前节点：daemon 侧核心机制已完成（协议层
-> `flow.status`/`flow.suspend` + 可 abort 的 fetch 任务 + Drop 守卫
-> 清理，真实 RED→GREEN→反证跑通，`just ci` 全绿）；下一步是 daemon
-> 侧崩溃自动重拉（期望行为④）、旧手机/旧桌面兼容路径（期望行为⑥）、
-> Android 侧接线（DeliveryPort/StrictConsumer/AndroidFlowRuntime）、
-> L3 真机硬门 · 协同分支：`main`
+> 🔄 状态：开工中 · 当前节点：daemon 侧核心机制升级完成——**`offer` 现在
+> 直接 spawn 后台传输任务，不再依赖手机发一次长阻塞 `fetch` 才启动**
+> （新用例 `offer_immediately_starts_the_background_fetch_task` 实测：
+> `offer()` <1s 内返回、后台任务独立跑完并 completed，proto/daemon/
+> `just ci` 全绿）；下一步是 daemon 侧崩溃自动重拉（期望行为④）、旧
+> 手机/旧桌面兼容路径（期望行为⑥）、**Android 侧完全接线**
+> （DaemonClient/NativeFlowDeliveryPort/StrictConsumer/
+> AndroidFlowRuntime/CancellationRoundController 五个文件都要改成
+> offer→盯 status 的模型，目前一行未动）、L3 真机硬门 · 协同分支：`main`
 > 级别：L2 · 阻塞：编码无阻塞；归档需 NET-01 的蜂窝热点/relay 真机窗口
 
 ## 问题
@@ -318,3 +321,35 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       按「只对曾有真实 grant 的项发 cancel」改造、对应 JVM 测试。这是本卡
       验收标准里标注「Android 侧未接线，本条留白」的全部条目的落地处。
     - L3 真机硬门（等 NET-01 的蜂窝热点窗口）。
+- 2026-09-14（同日续）：**补关键遗漏——`offer` 现在自己启动传输**。
+  上一条记录里的实现有个方向性偏差：`flow.suspend`能中断一次正在跑的
+  传输，但没有解决 NET-01 的核心问题——手机侧发起 `flow.fetch` 仍然是
+  同步阻塞、仍然受控制类超时管着。重构 `fetch_inner`：把「启动后台
+  传输任务」这一步从 `fetch()` 挪进 `offer_inner()`，`offer()` 现在
+  立刻 `tokio::spawn` 交付任务后马上返回（不等数据面完成）；`fetch()`
+  改为纯粹的「轮询看它跑到哪了」——如果任务已经在跑就等它，如果已经
+  completed 就直接回执，不再是发起传输的唯一入口。
+  - 新增用例 `offer_immediately_starts_the_background_fetch_task`
+    （8MB payload）：断言 `offer()` 在 1 秒内返回、且没有任何后续调用
+    的情况下，后台任务自己跑完并让 `status()` 报告 `completed`。
+  - `DeliveryError::Suspended` 和独立的 `FlowTaskGuard` 类型在这次
+    重构中被简化掉——中断信号改用 `tokio_util::sync::CancellationToken`
+    （同 `SubscriptionRegistry` 先例），比手搓 `AbortHandle`+Drop 守卫
+    更贴近本仓已验证的 idiom。
+  - 测试基线：`cargo test -p daemon --test flow_delivery` **23 passed /
+    0 failed**（22 之前 + 1 新增，`status_reports_active_with_no_task_
+    running_before_any_fetch_starts` 断言随行为改变同步更新——offer 现在
+    会自动完成传输，旧断言「offer 后不该有任务」已经是过时行为，不是
+    回归）；`cargo test -p daemon` 全部集成测试二进制 **0 failed**；
+    `just ci` 全绿（fmt/clippy -D warnings/arch-check/queue-sync）。
+  - **仍未做，跟上一条记录一样诚实标注**：daemon 崩溃自动重拉、旧手机
+    兼容验证、幂等零重传直接断言、迟到边界竞态用例——这几条不受这次
+    重构影响，状态不变。
+  - **Android 侧仍是零改动**：这次的 daemon 重构解决的是"NET-01 那个
+    根因"（提交≠等待被焊死），但手机侧现在还是用老代码同步调用
+    `flow.fetch`——不改手机侧代码，用户在真机上不会看到任何行为变化。
+    下一步要做且量级不小：`DaemonClient.kt` 加 status/suspend 调用、
+    `NativeFlowDeliveryPort`/`StrictConsumer`/`AndroidFlowRuntime` 从
+    "发起 fetch 并等它" 改造成 "offer 一下，然后轮询 status"，外加
+    对应 JVM 测试，然后才能编译安装到三星真机、造 30+ 张隔离测试照片
+    复现并验证原始症状是否解决。这轮会话未完成这部分，留给下一轮。
