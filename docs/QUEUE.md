@@ -51,7 +51,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，而有持久 cancel 与自动唤醒关闭；重放并对账未确认项，禁止沿用旧瞬态失败根因 | L1 / P0 |
+| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，历史 cancel 已 restore；重放 receipt 与 discovery wake 交错并对账未确认项，禁止沿用旧瞬态失败根因 | L1 / P0 |
 
 ---
 
