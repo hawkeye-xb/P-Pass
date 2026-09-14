@@ -318,10 +318,13 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
     val key = pairing.daemonNodeId
     synchronized(flowRuntimeLock) {
         flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let { return it }
-        val ledger = DiscoveryLedgerStore(File(context.filesDir, "flow-state/$key"))
-        PairingEpochController(ledger).ensureCurrentEpoch(epoch)
-        lateinit var runner: FlowRunner
-        val native = AndroidNativeIrohBlobsProvider.open(context.filesDir)
+    }
+    // Native open can take seconds on a newly paired device. It must never
+    // occupy flowRuntimeLock: UI snapshots acquire that lock every 500ms.
+    val ledger = DiscoveryLedgerStore(File(context.filesDir, "flow-state/$key"))
+    PairingEpochController(ledger).ensureCurrentEpoch(epoch)
+    lateinit var runner: FlowRunner
+    val native = AndroidNativeIrohBlobsProvider.open(context.filesDir)
         val bridge = IrohBlobsProviderBridge(native) { source ->
             try {
                 context.contentResolver.openFileDescriptor(Uri.parse(source), "r")
@@ -386,8 +389,20 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             identityKey = { IdentityStore(context.filesDir).secretKey() },
             client = app.daemonClient,
         )
-        return AndroidFlowRuntime(epoch, ledger, runner, native, auditDispatcher, auditScope)
-            .also { flowRuntimes[key] = it }
+    val candidate = AndroidFlowRuntime(epoch, ledger, runner, native, auditDispatcher, auditScope)
+    return synchronized(flowRuntimeLock) {
+        flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let {
+            native.close()
+            return@synchronized it
+        }
+        val current = PairingStore(context.filesDir).load()
+        if (current?.daemonNodeId != key || current.pairingEpoch != epoch.value) {
+            native.close()
+            null
+        } else {
+            flowRuntimes[key] = candidate
+            candidate
+        }
     }
 }
 

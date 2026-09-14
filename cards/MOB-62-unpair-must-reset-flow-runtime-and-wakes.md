@@ -1,6 +1,6 @@
 # MOB-62 断开后重扫必须清空旧 Flow 运行态（L2）
 
-> 🟠 状态：进行中 · 当前节点：三星 2026-09-14 断开→重扫后 ANR 实证，主线程等待 `flowRuntimeLock`；下一步：将 UI 快照读取与 native runtime 初始化彻底隔离 · 协同分支：`main`
+> 🟡 状态：代码完成，待完整断开→重扫三星回归 · 当前节点：native 初始化已移出 `flowRuntimeLock`；下一步：重扫同机后验证无 ANR/旧 offer 且新轮传输 · 协同分支：`main`
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -39,3 +39,4 @@
 - 2026-09-09 Samsung SM-S9210 组合回归：桌面移除设备 + 手机主动断开 → 重新扫码 → 允许连接 → 选相册 → 开始一轮新备份，全程无崩溃/ANR/旧 offer，正常传输完成。余项已闭环。
 - 2026-09-11 回归：同一业务场景再次出现 Android ANR。系统 DropBox trace 显示主线程的 500ms `BackupUiStateHolder.refreshFlowState()` 经 `flowLedgerSnapshot()` 进入 `runtimeFor()`，在持有 `flowRuntimeLock` 时首次调用 `AndroidNativeIrohBlobsProvider.open()` / `nativeOpen()`；native 初始化阻塞超过 ANR 门限。此前清旧 runtime/ledger/wake 的修复仍在，但它没有禁止 UI 状态读取懒创建 runtime，故本卡重新打开。下一步：先写「状态快照不创建 native runtime / 初始化只能在 IO」失败用例，再修生产边界。
 - 2026-09-14 三星重现：断开后重扫同一电脑、重新应用范围时，系统报 `Input dispatching timed out`。bugreport 的当前进程栈显示 `MainActivity` 主线程在 `flowLedgerSnapshot(AndroidFlowRuntime.kt:274)` 等 `flowRuntimeLock`；持锁线程为 `ppass-flow-scope-wake`，正在 `AndroidNativeIrohBlobsProvider.nativeOpen()`。这证明前次“快照不懒创建 runtime”修复不足：即使初始化在后台，UI 仍不得同步等待其锁。
+- 2026-09-14 修复：`runtimeFor()` 先在短锁内只读现有 runtime；耗时的 native provider 初始化完全在锁外完成，最后再以短锁发布候选 runtime（若另一线程已发布或配对 epoch 已变化则关闭候选）。新增 RED→GREEN 合同测试锁定“native open 必须发生在第一段 runtime-map 锁之后”。三星在修复版上选择一张隔离相册图片并开始备份，`1/1` 成功、无 ANR；随后取消选择并删掉测试图片。完整断开→重扫仍待回归。
