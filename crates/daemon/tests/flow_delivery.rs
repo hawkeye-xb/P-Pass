@@ -933,6 +933,109 @@ async fn status_reports_not_found_for_an_unknown_tuple() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn offer_immediately_starts_the_background_fetch_task() {
+    // NET-06 core fix: `offer` must itself trigger the transfer instead of
+    // waiting for the phone to call the long-blocking `fetch` RPC — that
+    // "submit and wait in one round trip" shape was NET-01's root cause.
+    // Uses a payload large enough that the background task is still
+    // running when `status` is polled right after `offer` returns.
+    const PAYLOAD: usize = 8 * 1024 * 1024;
+    let mut payload = Vec::with_capacity(PAYLOAD);
+    let mut s: u64 = 0x0FFE_2026_0914_0001;
+    while payload.len() < PAYLOAD {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        payload.extend_from_slice(&s.to_le_bytes());
+    }
+    payload.truncate(PAYLOAD);
+
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let source = root.path().join("source.bin");
+    std::fs::write(&source, &payload).unwrap();
+    let hash = *blake3::hash(&payload).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db, receiver_blobs.clone(), root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+
+    // offer() itself must return promptly (it never awaits the transfer).
+    let offer_started = std::time::Instant::now();
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+    assert!(
+        offer_started.elapsed() < std::time::Duration::from_secs(1),
+        "offer() must return promptly and never block on the data plane"
+    );
+
+    // Poll status until either the task is observed running, or the
+    // transfer already completed (a fast loopback transfer can beat the
+    // poll) — either outcome proves offer triggered work without a
+    // separate fetch() call from the caller.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut saw_active_or_completed = false;
+    while std::time::Instant::now() < deadline {
+        let reply = delivery
+            .status(
+                provider_transport.node_id(),
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+        if reply.state == "completed" || (reply.state == "active" && reply.task_running) {
+            saw_active_or_completed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        saw_active_or_completed,
+        "offer() must have started the transfer without any fetch() call from the caller"
+    );
+
+    // It must actually finish on its own, with zero further calls from us.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let reply = delivery
+            .status(
+                provider_transport.node_id(),
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+        if reply.state == "completed" {
+            assert!(reply.receipt.is_some());
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "offer-triggered background fetch did not complete within 5s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn status_reports_active_with_no_task_running_before_any_fetch_starts() {
     let root = tempdir().unwrap();
     let provider_transport =
@@ -966,19 +1069,32 @@ async fn status_reports_active_with_no_task_running_before_any_fetch_starts() {
         .await
         .unwrap();
 
-    let reply = delivery
-        .status(
-            provider_transport.node_id(),
-            &tuple_ref("epoch-current", "lease-current", 7),
-        )
-        .await
-        .unwrap();
-    assert_eq!(reply.state, "active");
-    assert!(reply.receipt.is_none());
-    assert!(
-        !reply.task_running,
-        "no fetch() call has run yet — no task should be registered"
-    );
+    // NET-06: offer() now triggers the background fetch itself, so for a
+    // tiny payload it may already have completed by the time this polls —
+    // the only thing this test still asserts is that `status` never lies
+    // about a task still running once it has certainly stopped.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let reply = delivery
+            .status(
+                provider_transport.node_id(),
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+        if reply.state == "completed" {
+            assert!(
+                !reply.task_running,
+                "a completed grant must never report a running task"
+            );
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "offer-triggered background fetch for a tiny fixture did not complete within 5s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1246,8 +1362,8 @@ async fn suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active() {
             .expect("suspend must interrupt the fetch task within 2s, not wait for it to finish naturally")
             .expect("the spawned test task itself must not panic/be cancelled");
         assert!(
-            matches!(outcome, Err(DeliveryError::Suspended)),
-            "a suspended fetch must resolve as Suspended, got: {outcome:?}"
+            matches!(outcome, Err(DeliveryError::Fetch(_))),
+            "a suspended fetch's poll must resolve as an error (task ended without completing), got: {outcome:?}"
         );
 
         // The grant must still be active — suspend never touches durable

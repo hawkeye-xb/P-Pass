@@ -5,15 +5,27 @@
 //! offers one exact tuple, then asks the Desktop to fetch that same tuple. The
 //! Desktop checks the persisted current pairing epoch and the persisted grant
 //! both before native fetch and before it writes a receipt.
+//!
+//! NET-06: `offer` used to only persist the grant — the phone then had to
+//! call the long-blocking `fetch` RPC itself, which welded "submit the job"
+//! and "wait for the result" into one round trip (NET-01's root cause). Now
+//! `offer` durably persists the grant AND immediately spawns the native
+//! fetch in the background (`spawn_fetch_task`); `fetch` itself becomes a
+//! polling legacy-compat shim over the exact same background task instead
+//! of doing the work inline. New phones never call `fetch` at all — they
+//! poll `status` (a short, control-plane-only RPC) and pull the receipt
+//! once it reports `completed`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
 
 use core_index::{IncomingFile, Ingestor};
-use proto::{FlowCompletionReceipt, FlowFetchRequest};
+use proto::{FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowTupleRef};
 use storage::{Db, FlowGrant, FlowGrantState};
 use transport::{Blobs, ConnectionStatus, NodeId};
 
@@ -29,15 +41,6 @@ pub enum DeliveryError {
     GuardMismatch,
     #[error("delivery was cancelled before completion")]
     Cancelled,
-    /// NET-06: the in-progress native fetch task was interrupted by a
-    /// concurrent `flow.suspend` (or `flow.cancel`) before it finished — the
-    /// grant's durable state is untouched by this error itself (suspend
-    /// keeps it `active`; cancel already wrote `cancelled` before
-    /// interrupting). Distinct from `Cancelled`: that variant means the
-    /// durable grant is gone; this one means "try again, from where the
-    /// partial data left off."
-    #[error("native fetch task was interrupted before completion")]
-    Suspended,
     #[error("invalid flow delivery request: {0}")]
     InvalidRequest(String),
     #[error("native iroh-blobs fetch: {0}")]
@@ -64,7 +67,6 @@ impl DeliveryError {
         match self {
             DeliveryError::GuardMismatch => "guard_mismatch",
             DeliveryError::Cancelled => "cancelled",
-            DeliveryError::Suspended => "suspended",
             DeliveryError::InvalidRequest(_) => "invalid_request",
             DeliveryError::Fetch(_) => "fetch_failed",
             DeliveryError::MaterializeStaging(_) => "materialize_staging_failed",
@@ -216,15 +218,29 @@ fn emit_device_changed(events: Option<&EventBus>) {
 }
 
 /// NET-06: process-local registry of the native-fetch task currently running
-/// for one exact grant tuple, so `flow.suspend`/`flow.cancel` can interrupt it
-/// from a concurrent RPC. Keyed by (peer, queue_sequence, lease_token) —
-/// deliberately NOT by content_hash: distinct devices (or a retried lease on
-/// the same device) can independently hold a grant for the same content, and
-/// suspending one must never abort another device's unrelated transfer. Same
-/// tuple-identity discipline as [`FlowPathRegistry`].
+/// for one exact grant tuple, so `flow.suspend`/`flow.cancel` (or a
+/// superseding retry) can interrupt it from a concurrent RPC. Keyed by
+/// (peer, queue_sequence, lease_token) — deliberately NOT by content_hash:
+/// distinct devices (or a retried lease on the same device) can independently
+/// hold a grant for the same content, and suspending one must never abort
+/// another device's unrelated transfer. Same tuple-identity discipline as
+/// [`FlowPathRegistry`].
+///
+/// Uses `tokio_util::sync::CancellationToken` — the same primitive
+/// `SubscriptionRegistry` (SYNC-03) already established in this codebase for
+/// "cancel a task from outside" — instead of `JoinHandle::abort()`. This is a
+/// deliberate choice over raw abort: `abort()` drops the task's future at an
+/// arbitrary await point, so any cleanup code that runs *after* the awaited
+/// work needs a `Drop`-based guard to survive that (a real trap; see the
+/// card's review history). A `CancellationToken` observed through
+/// `tokio::select!` is cooperative — the surrounding async block always
+/// finishes executing past the `select!`, so ordinary sequential cleanup
+/// code after it is never skipped. This sidesteps the abort/Drop-guard
+/// problem architecturally instead of working around it.
 #[derive(Clone, Default)]
 pub struct FlowTaskRegistry {
-    entries: Arc<Mutex<HashMap<TaskKey, tokio::task::AbortHandle>>>,
+    entries: Arc<Mutex<HashMap<TaskKey, TaskEntry>>>,
+    next_generation: Arc<AtomicU64>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -244,6 +260,11 @@ impl TaskKey {
     }
 }
 
+struct TaskEntry {
+    token: CancellationToken,
+    generation: u64,
+}
+
 impl FlowTaskRegistry {
     /// True if a task is currently registered (running) for this exact tuple.
     fn is_running(&self, peer: NodeId, grant: &FlowGrant) -> bool {
@@ -253,65 +274,57 @@ impl FlowTaskRegistry {
             .contains_key(&TaskKey::of(peer, grant))
     }
 
-    /// Abort the task registered for this exact tuple, if any. Returns
-    /// whether a task was found and aborted. `abort()` on a Tokio task is an
-    /// in-process cancellation that drops the task's future at its next
-    /// await point — the same primitive `blobs_resume.rs` validates for
-    /// interrupting a live iroh-blobs transfer.
+    /// Register a fresh task for this exact tuple. Returns the token the
+    /// spawned task must race via `tokio::select!`, plus a generation the
+    /// task must present back to [`Self::unregister`] so it never clobbers
+    /// a newer registration for a reused key (same discipline as
+    /// `SubscriptionRegistry::register`/`unregister`).
+    fn register(&self, peer: NodeId, grant: &FlowGrant) -> (CancellationToken, u64) {
+        let token = CancellationToken::new();
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+        self.entries
+            .lock()
+            .expect("flow task registry lock")
+            .insert(
+                TaskKey::of(peer, grant),
+                TaskEntry {
+                    token: token.clone(),
+                    generation,
+                },
+            );
+        (token, generation)
+    }
+
+    /// Called by the spawned task itself once it exits (completed, failed,
+    /// or was cancelled) — removes its own entry, but only if it is still
+    /// *this* task's registration (a concurrent `interrupt()` may already
+    /// have removed it, or a newer spawn for the same reused key may have
+    /// replaced it; either way this is then a safe no-op).
+    fn unregister(&self, key: &TaskKey, generation: u64) {
+        let mut entries = self.entries.lock().expect("flow task registry lock");
+        if entries
+            .get(key)
+            .is_some_and(|entry| entry.generation == generation)
+        {
+            entries.remove(key);
+        }
+    }
+
+    /// `flow.suspend`/`flow.cancel`: cancel and remove the task registered
+    /// for this exact tuple, if any. Returns whether one was found.
     fn interrupt(&self, peer: NodeId, grant: &FlowGrant) -> bool {
-        let handle = self
+        let entry = self
             .entries
             .lock()
             .expect("flow task registry lock")
             .remove(&TaskKey::of(peer, grant));
-        match handle {
-            Some(handle) => {
-                handle.abort();
+        match entry {
+            Some(entry) => {
+                entry.token.cancel();
                 true
             }
             None => false,
         }
-    }
-}
-
-/// Registers one task's abort handle for the tuple's duration and
-/// unregisters it on every exit path, including `?` returns and abort
-/// itself — same rationale as [`FlowPathGuard`]: cleanup must be a `Drop`
-/// impl, not a line of code after the awaited work, because `abort()` can
-/// land at any await point and skip straight past sequential cleanup code.
-struct FlowTaskGuard {
-    tasks: FlowTaskRegistry,
-    key: TaskKey,
-}
-
-impl FlowTaskGuard {
-    fn register(
-        tasks: FlowTaskRegistry,
-        peer: NodeId,
-        grant: &FlowGrant,
-        handle: tokio::task::AbortHandle,
-    ) -> Self {
-        let key = TaskKey::of(peer, grant);
-        tasks
-            .entries
-            .lock()
-            .expect("flow task registry lock")
-            .insert(key.clone(), handle);
-        Self { tasks, key }
-    }
-}
-
-impl Drop for FlowTaskGuard {
-    fn drop(&mut self) {
-        // Only remove the entry if it is still *this* guard's handle. A
-        // concurrent `interrupt()` may have already removed it (the abort
-        // path removes-then-aborts), so this is a no-op in that case rather
-        // than a risk of clobbering a newer registration for a reused key.
-        self.tasks
-            .entries
-            .lock()
-            .expect("flow task registry lock")
-            .remove(&self.key);
     }
 }
 
@@ -342,8 +355,9 @@ pub struct FlowDelivery {
     /// still materializing that same fetch. One lock per paired phone prevents
     /// the retry from deleting or moving the first fetch's staging path.
     fetch_locks: FetchLocks,
-    /// NET-06: process-local task registry so `suspend`/`cancel` can abort
-    /// an in-progress native fetch for the exact tuple they name.
+    /// NET-06: process-local registry of the background native-fetch task
+    /// per exact tuple, so `suspend`/`cancel` can interrupt it and `status`/
+    /// the legacy `fetch` poll can tell "still working" from "stopped".
     tasks: FlowTaskRegistry,
 }
 
@@ -396,17 +410,20 @@ impl FlowDelivery {
         self.paths.clone()
     }
 
-    /// TEL-02: wire an anonymized telemetry sink so `fetch()` records one
-    /// `conn` (path/latency/failure stage) and, on success, one `flow_item`
-    /// (bytes/duration/resumed) per request. `Telemetry::record` is already
-    /// a no-op when the client itself is disabled — this builder only
-    /// controls whether `FlowDelivery` has a sink to call at all.
+    /// TEL-02: wire an anonymized telemetry sink so a background fetch task
+    /// records one `conn` (path/latency/failure stage) and, on success, one
+    /// `flow_item` (bytes/duration/resumed) per attempt. `Telemetry::record`
+    /// is already a no-op when the client itself is disabled — this builder
+    /// only controls whether `FlowDelivery` has a sink to call at all.
     pub fn with_telemetry(mut self, telemetry: Telemetry) -> Self {
         self.telemetry = Some(telemetry);
         self
     }
 
-    /// Persist the current exact grant. This method transfers no bytes.
+    /// Persist the current exact grant, then immediately start the native
+    /// fetch in the background (idempotent: a no-op if one is already
+    /// running for this exact tuple). This method itself never touches the
+    /// data plane and always returns promptly — "offer秒回" per the card.
     pub async fn offer(
         &self,
         peer: NodeId,
@@ -441,14 +458,20 @@ impl FlowDelivery {
         // A completed receipt is immutable. Verify the upsert really made
         // this tuple current rather than silently acknowledging a different
         // completed item at the same queue sequence.
-        let _ = self.matching_grant(&grant).await?;
+        let stored = self.matching_grant(&grant).await?;
+        // NET-06: this is the async-202 trigger — offer's job ends here; the
+        // actual transfer runs on its own task, tracked by `self.tasks` so
+        // `suspend`/`cancel`/`status` can observe or interrupt it.
+        self.spawn_fetch_task(peer, stored, request.clone());
         Ok(())
     }
 
-    /// Fetch via `iroh-blobs`, materialize into the index, then atomically
-    /// persist and return a receipt. A failed or cancelled request returns no
-    /// receipt; a retry of an already completed exact tuple returns its stored
-    /// receipt without another fetch.
+    /// Legacy-compatible synchronous fetch: ensures a background task is
+    /// running for this exact tuple (a no-op if `offer` already started
+    /// one), then polls durable state until it reaches a terminal outcome.
+    /// New phones never call this — they poll [`Self::status`] instead and
+    /// never block a request on the data plane. Kept for old-phone/
+    /// old-desktop compatibility (NET-06 期望行为⑥).
     pub async fn fetch(
         &self,
         peer: NodeId,
@@ -466,65 +489,110 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowFetchRequest,
     ) -> Result<FlowCompletionReceipt, DeliveryError> {
-        let item_started = std::time::Instant::now();
         let grant = self.checked_request(peer, request).await?;
         // Re-read state while holding the per-phone lock. A retry that waited
         // for a predecessor to finish can replay its durable receipt instead
         // of re-fetching the same active grant concurrently.
         let fetch_lock = self.fetch_lock(peer);
         let _fetch_guard = fetch_lock.lock().await;
-        let stored = self.matching_grant(&grant).await?;
+        let mut stored = self.matching_grant(&grant).await?;
         if stored.state == FlowGrantState::Completed {
             return self.persisted_receipt(&grant).await;
         }
         if stored.state != FlowGrantState::Active {
             return Err(DeliveryError::Cancelled);
         }
+        // Legacy safety net: `spawn_fetch_task` is idempotent, so this is a
+        // no-op when `offer` already started the transfer (the normal case
+        // for any phone built after this card).
+        self.spawn_fetch_task(peer, stored.clone(), request.clone());
+        loop {
+            stored = self.matching_grant(&grant).await?;
+            match stored.state {
+                FlowGrantState::Completed => return self.persisted_receipt(&grant).await,
+                FlowGrantState::Cancelled => return Err(DeliveryError::Cancelled),
+                FlowGrantState::Active => {
+                    if !self.tasks.is_running(peer, &stored) {
+                        // The task ended without writing a durable terminal
+                        // state — a transient network/materialize failure or
+                        // a concurrent suspend. Either way this exact call
+                        // has nothing further to wait on; the caller's own
+                        // retry (or the next `offer`) starts a fresh attempt.
+                        return Err(DeliveryError::Fetch(
+                            "fetch task ended without completing".into(),
+                        ));
+                    }
+                    tokio::time::sleep(FETCH_POLL_INTERVAL).await;
+                }
+            }
+        }
+    }
 
-        // NET-06: the actual data-plane wait (`fetch_from_observing_path`) is
-        // the one long, network-bound await with no internal checkpoint — a
-        // large file over a relay path can run for minutes. Run it in its
-        // own spawned task so `flow.suspend`/`flow.cancel` on a concurrent
-        // RPC can abort it mid-flight (`FlowTaskRegistry::interrupt`)
-        // instead of blocking until it finishes or times out naturally.
-        // `FlowPathGuard` moves into the task so its NET-05 route entry is
-        // cleared exactly when this fetch attempt ends, aborted or not.
-        let hash = array32(&grant.content_hash).expect("validated by checked_request");
-        let provider = self.provider_for(&grant)?;
-        let path_guard =
-            FlowPathGuard::start(self.paths.clone(), self.events.clone(), peer, &grant);
-        let blobs = self.blobs.clone();
-        let handle = tokio::spawn(async move {
-            let fetch_started = std::time::Instant::now();
-            let mut conn_path: &'static str = "unknown";
-            let result = blobs
-                .fetch_from_observing_path(provider, hash, |status| {
-                    conn_path = status.as_str();
-                    path_guard.set_path(status);
-                })
-                .await;
-            (
-                result,
-                conn_path,
-                fetch_started.elapsed().as_millis() as u64,
-            )
+    /// NET-06: idempotently ensure exactly one background native-fetch task
+    /// is running for this exact tuple. Fire-and-forget from the caller's
+    /// perspective — completion is observed later via durable state
+    /// (`status`/`fetch`/the legacy poll above), never via this task's
+    /// return value directly.
+    fn spawn_fetch_task(&self, peer: NodeId, grant: FlowGrant, request: FlowFetchRequest) {
+        if self.tasks.is_running(peer, &grant) {
+            return;
+        }
+        let (token, generation) = self.tasks.register(peer, &grant);
+        let key = TaskKey::of(peer, &grant);
+        let delivery = self.clone();
+        tokio::spawn(async move {
+            let outcome = tokio::select! {
+                result = delivery.run_fetch_body(peer, &grant, &request) => Some(result),
+                _ = token.cancelled() => None,
+            };
+            match outcome {
+                Some(Ok(_)) => {} // the durable receipt was already written inside run_fetch_body
+                Some(Err(error)) => {
+                    tracing::warn!("flow delivery background task for {peer:?} failed: {error}");
+                }
+                None => {
+                    tracing::debug!(
+                        "flow delivery background task for {peer:?} suspended or cancelled"
+                    );
+                }
+            }
+            delivery.tasks.unregister(&key, generation);
         });
-        let _task_guard =
-            FlowTaskGuard::register(self.tasks.clone(), peer, &grant, handle.abort_handle());
-        let (fetch_result, conn_path, fetch_ms) = match handle.await {
-            Ok(outcome) => outcome,
-            Err(join_error) if join_error.is_cancelled() => {
-                // Suspended by a concurrent flow.suspend/flow.cancel: the
-                // grant's durable state was already decided by that call
-                // (untouched for suspend, `cancelled` for cancel), not here.
-                return Err(DeliveryError::Suspended);
-            }
-            Err(join_error) => {
-                return Err(DeliveryError::Fetch(format!(
-                    "fetch task did not finish cleanly: {join_error}"
-                )))
-            }
-        };
+    }
+
+    /// The actual native-fetch → materialize → ingest → durable-receipt
+    /// pipeline for one exact tuple. Runs entirely inside the task
+    /// `spawn_fetch_task` spawns; interruption is handled by the caller's
+    /// `tokio::select!` racing this future against a `CancellationToken`,
+    /// not by anything inside this method.
+    async fn run_fetch_body(
+        &self,
+        peer: NodeId,
+        grant: &FlowGrant,
+        request: &FlowFetchRequest,
+    ) -> Result<FlowCompletionReceipt, DeliveryError> {
+        let item_started = std::time::Instant::now();
+        let hash = array32(&grant.content_hash).expect("validated by checked_request");
+        let provider = self.provider_for(grant)?;
+
+        // The visible path is scoped to this exact strict item and cleared by
+        // its guard on every terminal branch. Start as unknown before opening
+        // data-plane bytes; never infer direct/relay from the ctrl connection.
+        let path_guard = FlowPathGuard::start(self.paths.clone(), self.events.clone(), peer, grant);
+
+        // The only data transport in this flow: native iroh-blobs fetch. Its
+        // content-addressed fetch verifies the requested BLAKE3 hash and
+        // resumes from the dedicated retained store on retry/restart.
+        let fetch_started = std::time::Instant::now();
+        let mut conn_path: &'static str = "unknown";
+        let fetch_result = self
+            .blobs
+            .fetch_from_observing_path(provider, hash, |status| {
+                conn_path = status.as_str();
+                path_guard.set_path(status);
+            })
+            .await;
+        let fetch_ms = fetch_started.elapsed().as_millis() as u64;
         if let Err(e) = fetch_result {
             self.record_conn(conn_path, fetch_ms, Some("fetch"));
             return Err(DeliveryError::Fetch(e.to_string()));
@@ -533,16 +601,16 @@ impl FlowDelivery {
 
         // A concurrent cancel/superseding offer may have landed while the
         // fetch was in flight. Do not materialize or finalize old work.
-        self.require_active(&grant).await?;
+        self.require_active(grant).await?;
         std::fs::create_dir_all(&self.staging)
             .map_err(|e| DeliveryError::MaterializeStaging(format!("create staging: {e}")))?;
-        let staged = self.staged_path(&grant);
+        let staged = self.staged_path(grant);
         let _ = std::fs::remove_file(&staged);
         self.blobs
             .export_to(hash, &staged)
             .await
             .map_err(|e| DeliveryError::MaterializeExport(e.to_string()))?;
-        self.require_active(&grant).await?;
+        self.require_active(grant).await?;
         let item_bytes = std::fs::metadata(&staged).map(|m| m.len()).unwrap_or(0);
 
         match self
@@ -580,7 +648,7 @@ impl FlowDelivery {
         let receipt_id = receipt_id()?;
         if !self
             .db
-            .complete_flow_grant(&grant, &receipt_id)
+            .complete_flow_grant(grant, &receipt_id)
             .await
             .map_err(storage_error)?
         {
@@ -592,7 +660,7 @@ impl FlowDelivery {
         // allowance; a real resume-detection signal is separate follow-up
         // work, not silently invented here.
         self.record_flow_item(item_bytes, item_started.elapsed().as_secs(), false);
-        Ok(receipt_from(&grant, receipt_id))
+        Ok(receipt_from(grant, receipt_id))
     }
 
     /// Cancel only the exact active tuple. This has no success receipt path.
@@ -622,9 +690,9 @@ impl FlowDelivery {
         {
             // NET-06: cancel interrupts the in-progress fetch task, if any —
             // the durable state above already moved to `cancelled` before
-            // this, so the interrupted task's own `Suspended` error path is
-            // harmless: whichever branch of the fetch call observes the
-            // cancellation, the grant is already gone from GC protection.
+            // this, so it doesn't matter whether the task was mid-flight or
+            // already finished: the grant is already out of GC protection
+            // either way, and any partial bytes are now reclaimable.
             self.tasks.interrupt(peer, &grant);
             if self
                 .paths
@@ -639,35 +707,35 @@ impl FlowDelivery {
     }
 
     /// NET-06: read-only status query. Never touches the data plane and
-    /// never blocks on it — this is the control-plane answer the phone
-    /// polls instead of inferring task state from an RPC round-trip timing
+    /// never blocks on it — this is the control-plane answer new phones
+    /// poll instead of inferring task state from an RPC round-trip timing
     /// out (NET-01's root cause).
     pub async fn status(
         &self,
         peer: NodeId,
-        tuple: &proto::FlowTupleRef,
-    ) -> Result<proto::FlowStatusReply, DeliveryError> {
+        tuple: &FlowTupleRef,
+    ) -> Result<FlowStatusReply, DeliveryError> {
         let Some(grant) = self.tuple_grant(peer, tuple).await? else {
-            return Ok(proto::FlowStatusReply {
+            return Ok(FlowStatusReply {
                 state: "not_found".into(),
                 receipt: None,
                 task_running: false,
             });
         };
         match grant.state {
-            FlowGrantState::Active => Ok(proto::FlowStatusReply {
+            FlowGrantState::Active => Ok(FlowStatusReply {
                 state: "active".into(),
                 receipt: None,
                 task_running: self.tasks.is_running(peer, &grant),
             }),
-            FlowGrantState::Cancelled => Ok(proto::FlowStatusReply {
+            FlowGrantState::Cancelled => Ok(FlowStatusReply {
                 state: "cancelled".into(),
                 receipt: None,
                 task_running: false,
             }),
             FlowGrantState::Completed => {
                 let receipt = self.persisted_receipt(&grant).await?;
-                Ok(proto::FlowStatusReply {
+                Ok(FlowStatusReply {
                     state: "completed".into(),
                     receipt: Some(receipt),
                     task_running: false,
@@ -681,13 +749,11 @@ impl FlowDelivery {
     /// WITHOUT touching the durable grant state, so it stays `active` and
     /// therefore stays in the GC protection set (`active_flow_content_hashes`).
     /// A later `flow.offer` on the same tuple resumes from the retained
-    /// partial instead of restarting. Distinct from `cancel`, which marks
-    /// the grant `cancelled` and lets the partial fall out of protection.
-    pub async fn suspend(
-        &self,
-        peer: NodeId,
-        tuple: &proto::FlowTupleRef,
-    ) -> Result<(), DeliveryError> {
+    /// partial instead of restarting (`spawn_fetch_task` starts a fresh
+    /// attempt; iroh-blobs itself resumes by content hash). Distinct from
+    /// `cancel`, which marks the grant `cancelled` and lets the partial fall
+    /// out of protection.
+    pub async fn suspend(&self, peer: NodeId, tuple: &FlowTupleRef) -> Result<(), DeliveryError> {
         let Some(grant) = self.tuple_grant(peer, tuple).await? else {
             return Err(DeliveryError::GuardMismatch);
         };
@@ -698,7 +764,7 @@ impl FlowDelivery {
         Ok(())
     }
 
-    /// Looks up the exact grant a [`proto::FlowTupleRef`] names, or `None` if
+    /// Looks up the exact grant a [`FlowTupleRef`] names, or `None` if
     /// no grant exists for this (peer, pairing_epoch, queue_sequence) or if
     /// the stored lease_token no longer matches (a newer offer has already
     /// superseded this exact lease — from the caller's perspective, this
@@ -706,7 +772,7 @@ impl FlowDelivery {
     async fn tuple_grant(
         &self,
         peer: NodeId,
-        tuple: &proto::FlowTupleRef,
+        tuple: &FlowTupleRef,
     ) -> Result<Option<FlowGrant>, DeliveryError> {
         let Some(stored) = self
             .db
@@ -851,9 +917,9 @@ impl FlowDelivery {
             .clone()
     }
 
-    /// TEL-02: `conn` — one per `fetch()` attempt, terminal state only
-    /// (success or the `fetch` failure stage). `path` is never a raw error
-    /// string, only `ConnectionStatus::as_str()`'s fixed vocabulary.
+    /// TEL-02: `conn` — one per background fetch attempt, terminal state
+    /// only (success or the `fetch` failure stage). `path` is never a raw
+    /// error string, only `ConnectionStatus::as_str()`'s fixed vocabulary.
     fn record_conn(&self, path: &'static str, ms: u64, fail_stage: Option<&'static str>) {
         if let Some(telemetry) = &self.telemetry {
             telemetry.record(TelemetryEvent::Conn {
@@ -864,7 +930,7 @@ impl FlowDelivery {
         }
     }
 
-    /// TEL-02: `flow_item` — one per successful `fetch()`, after the
+    /// TEL-02: `flow_item` — one per successful background fetch, after the
     /// receipt is durable. Never called on a failed or cancelled request.
     fn record_flow_item(&self, bytes: u64, dur_s: u64, resumed: bool) {
         if let Some(telemetry) = &self.telemetry {
@@ -888,6 +954,12 @@ impl FlowDelivery {
     /// the same `(code, stage)` within one flush window, so a persistent
     /// real failure (e.g. an unreachable peer) reports once instead of
     /// flooding the batch.
+    ///
+    /// Note: a background fetch task spawned from `offer` that fails
+    /// without any caller polling `fetch` is logged via `tracing::warn!`
+    /// inside `spawn_fetch_task`, not through this telemetry path — a known
+    /// gap versus the old synchronous shape, logged honestly rather than
+    /// silently accepted (see the card's implementation record).
     fn record_error(&self, stage: &'static str, error: &DeliveryError) {
         if matches!(
             error,
@@ -903,6 +975,13 @@ impl FlowDelivery {
         }
     }
 }
+
+/// Legacy `fetch()` poll interval. Short enough that old-phone callers see a
+/// prompt result once the background task finishes; long enough not to
+/// hammer the DB. Not a timeout — the caller's own RPC-level deadline (or
+/// NET-07's fetch grace window on the phone side) is what eventually gives
+/// up on a single call, independent of this loop.
+const FETCH_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(20);
 
 fn receipt_from(grant: &FlowGrant, receipt_id: String) -> FlowCompletionReceipt {
     FlowCompletionReceipt {
