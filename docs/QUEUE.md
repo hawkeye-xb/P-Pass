@@ -52,6 +52,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | 卡 | 一句话 | 级别 |
 |---|---|---|
 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，历史 cancel 已 restore；重放 receipt 与 discovery wake 交错并对账未确认项，禁止沿用旧瞬态失败根因 | L1 / P0 |
+| [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | NET-01 根治：Flow 交付 202 异步化 + `flow.status`/`flow.suspend` 对账门 + 暂停/继续/取消控制面语义；三轮 review 后开工 | L2 |
 
 ---
 
@@ -94,7 +95,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
-| P1 | [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | NET-01 根治：Flow 交付 202 异步化 + `flow.status` 对账门；编码无阻塞，归档等 relay 真机窗口 | L2 |
 | P1 | [NET-07](../cards/NET-07-split-timeouts-by-call-kind-transitional.md) | 过渡止血：超时按 建连/控制/fetch 分档（NET-06 合入后评估回退）；与 NET-06 并行 | L1 |
 | P1 | [NET-08](../cards/NET-08-audit-repo-for-sync-wait-weld-points.md) | 全仓普查「同步等长任务」焊点（只读审计，产卡不改码），可与其他卡并行 | L2 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 真实活动记录遗漏/误投影本轮照片与视频结果；必须按 canonical evidence 分列并准确汇总 | L2 |
