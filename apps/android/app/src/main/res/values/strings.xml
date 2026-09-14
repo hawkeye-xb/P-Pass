@@ -92,6 +92,13 @@
     <string name="notif_channel_backup_failed">Backup failed</string>
     <string name="notif_backup_failed_title">Backup didn\'t finish</string>
     <string name="notif_backup_failed_body">%1$d photos didn\'t make it home — open to see</string>
+    <!-- NET-12: transfer foreground service — keeps the process out of the
+         cached-process range while a Flow round is actively sending, so
+         the system cannot reclaim it mid-transfer (real device: it did,
+         twice, on 2026-09-14). Silent/low-importance — it's status, not
+         an alert. -->
+    <string name="notif_channel_transfer">Backing up</string>
+    <string name="notif_transfer_title">Backing up photos</string>
     <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->
     <string name="notif_sentinel_title">Haven\'t connected in 3 days</string>
     <string name="notif_sentinel_body">Your photos are safe — check that P-Pass is still running on your computer.</string>

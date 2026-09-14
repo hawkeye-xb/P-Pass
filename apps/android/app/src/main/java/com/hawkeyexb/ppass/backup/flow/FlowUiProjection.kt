@@ -217,3 +217,26 @@ fun advanceRoundProgress(previousPending: Long?, previousDone: Long, currentPend
     return RoundProgress(done = done, total = done + currentPending)
 }
 
+/**
+ * NET-12: REBUILD-04 (commit a325208) deleted `BackupWorker`'s
+ * `setForeground()`/`ForegroundInfo` when it cut the worker down to a pure
+ * wake adapter — the new Flow transport (`NativeFlowDeliveryPort`'s
+ * coroutine `scope.launch`) never registered a replacement. Real device
+ * (Samsung SM-S9210, 2026-09-14): `oom_score_adj` sampled every 10s during a
+ * live 35-photo transfer stayed at 700-900 (cached-process range) the whole
+ * time — the exact range the system killed the process from twice that same
+ * day ("one-time permission revoked", adj=915 and adj=900). A foreground
+ * service is the only thing that moves a process out of that range while
+ * work is in flight.
+ *
+ * [flowRoundActive] is already the durable, ledger-derived fact for "is a
+ * round in flight" (MOB-51). This is the pure decision the Android layer
+ * dispatches on — never call platform Service APIs from here, so the
+ * decision itself stays JVM-testable without a Robolectric/instrumented
+ * harness.
+ */
+enum class ForegroundAction { START, STOP }
+
+fun foregroundActionFor(snapshot: DiscoveryLedgerSnapshot): ForegroundAction =
+    if (flowRoundActive(snapshot)) ForegroundAction.START else ForegroundAction.STOP
+
