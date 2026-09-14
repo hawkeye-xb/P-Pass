@@ -96,7 +96,11 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
 | P1 | [NET-07](../cards/NET-07-split-timeouts-by-call-kind-transitional.md) | 过渡止血：超时按 建连/控制/fetch 分档（NET-06 合入后评估回退）；与 NET-06 并行 | L1 |
-| P1 | [NET-08](../cards/NET-08-audit-repo-for-sync-wait-weld-points.md) | 全仓普查「同步等长任务」焊点（只读审计，产卡不改码），可与其他卡并行 | L2 |
+| P1 | [NET-08](../cards/NET-08-audit-repo-for-sync-wait-weld-points.md) | 🟡 普查完成（2026-09-14，清单在卡内）：焊点全登记，衍生 NET-09/10/11、TEL-05 四张后续卡；本卡待后续卡闭环后归档，不再可领 | L2 |
+| P1 | [NET-09](../cards/NET-09-data-plane-stall-watchdog-for-long-transfers.md) | 长数据面加字节停滞看门狗（downloadAsset 无界挂起 / APK 下载死因不可辨 / daemon upload 收流）；NET-08 产出 | L1 |
+| P1 | [NET-11](../cards/NET-11-desktop-shell-ipc-read-timeout-fuse.md) | 桌面壳 IPC call 无读超时——daemon 挂死拖整壳冻死；固定保险丝+方法名报错；NET-08 产出 | L1 |
+| P1 | [TEL-05](../cards/TEL-05-telemetry-http-timeout-and-queue-cap.md) | 遥测 reqwest 无超时：半死端点挂死 flush 循环、队列只进不出；NET-08 产出 | L1 |
+| P2 | [NET-10](../cards/NET-10-pair-request-accept-then-poll-status.md) | 配对「提交≠等人」拆解（pair.request 硬等 120s、daemon 无限挂流）；复用 NET-06 status 形状，等其合入；NET-08 产出 | L2 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 真实活动记录遗漏/误投影本轮照片与视频结果；必须按 canonical evidence 分列并准确汇总 | L2 |
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 白色页面顶部状态栏图标对比度不足，需实证统一安全区/system-bar 外观是否生效 | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
