@@ -1264,3 +1264,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 2026-09-13 交付记录：MOB-74 方案 B 落地（验收人拍板「能用系统的就先用系统的」）。视频首帧在 ffmpeg 不可用时走 macOS 系统 qlmanage 兜底（含 4s deadline+kill 防挂起），`thumb.get`/缓存/账本合同零改动；`ql_fallback` 端到端在无 ffmpeg 环境断言 Generated。nextest 217/217、`just ci` 全绿，待真机照片墙回归；Windows 降级态挂账。
 
 2026-09-14 交付记录：MOB-77 代码完成（用户拍板）。取消轮次恢复入口从常驻不可关闭的琥珀警告条（`HomeNoticeKind.CANCELLED_ROUND`）挪进「备份」设置卡的一行 `CellRow`，null 时不渲染，不再常驻提醒；用户主动取消是正常操作，不该被塑造成待处理警告。同批删除「备份」section 标签（信息增量为 0）、「其他」改「关于」。Android JVM 69 类/346 tests/0 failures/0 errors/4 skipped（真实生成），待真机/模拟器截图走查。
+
+2026-09-14 交付记录：MOB-66、MOB-77 三星 SM-S9210 真机验收通过。字体：标题（欢迎页、备份页大数字）确认为 Newsreader 衬线体，正文/汉字为 Manrope/Noto Sans SC 无衬线体，视觉差异明显。取消轮次恢复：常驻警告条消失，点击卡内新恢复行后 4 张跳过照片真实重传完成、该行自动隐藏。两卡移入 `cards/done/`。
+
+2026-09-14 交付记录：MOB-74 真机验收通过。macOS 本机重新构建 daemon（`cargo build --release` + `bundle-macos.sh` + `bundle-desktop-macos.sh`）覆盖安装 `/Applications/P-Pass.app`，此前运行中的旧 daemon（`0.5.0-test.8`）不含本卡修复，`launchctl` 确认新二进制 `0.5.1-test.1` 已接管。删除库内两个真实视频的缩略图缓存、重置 `thumb_state=0` 触发重新生成后，三星真机确认从空白灰框变为可辨认首帧且正常播放。移入 `cards/done/`。顺带发现照片墙一张白框实为 `MOB-67` 测试残留的 59 字节假文件混入生产库，开 MOB-78 单独跟踪，不影响本卡结论。
