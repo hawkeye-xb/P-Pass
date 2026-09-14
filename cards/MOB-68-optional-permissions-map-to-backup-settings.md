@@ -118,3 +118,6 @@ App 对话框又可与系统授权流程重叠。设置页的「自动备份」�
   debug APK 与 `just ci` 通过。新增 `BackgroundAuthorizationAdapter` 作为读取设备
   画像/标准白名单/请求 intent 的 Android 边界；尚未把未实证的鸿蒙或 OPPO 私有设置
   页面写进生产路径。
+- 2026-09-14 三星首装回归发现：断开清理仍把 `AutoBackupPrefs.autoEnabled` 写回 true，
+  重扫后即使用户选「暂不开启」也会假亮。新增 RED→GREEN 合同测试；断开现在同时清除
+  用户意图与实际 producer 状态，重连必须重新由用户选择。
