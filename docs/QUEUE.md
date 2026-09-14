@@ -49,7 +49,9 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 ## 一、进行中
 
-（当前没有进行中的卡。）
+| 卡 | 一句话 | 级别 |
+|---|---|---|
+| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，而有持久 cancel 与自动唤醒关闭；重放并对账未确认项，禁止沿用旧瞬态失败根因 | L1 / P0 |
 
 ---
 
@@ -80,7 +82,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | Flow 摄入后桌面库实时出现照片 | L1 |
 | [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄日期而非归入当月 | L1 |
 | [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 并发失败/收据回调不触发同一队头双发 | L0 |
-| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | ~~真机复核（可选）~~ **2026-09-12 OPPO 复核失败**：传约 10 张停摆、剩 16 张无提示不续传，选第三个相册才唤醒；先取证停点失败码再定位 | L1 |
+
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 旧账本已确认项补 completedAt，首页不再永久显示从未成功 | L1 |
 
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
