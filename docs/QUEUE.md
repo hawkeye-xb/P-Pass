@@ -39,8 +39,8 @@
 
 ---
 
-UI-04a/UI-04c 仍待共享 Android 回归；UI-04b 已完成真实 Tauri 视觉验收并归档；
-UI-08、BLOB-03 与 AUDIT-04 已通过归档。
+UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，重新打开；UI-04b/UI-04c
+已确认组件统一并归档；UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ---
 
@@ -53,7 +53,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) + [UI-04c](../cards/UI-04c-multiple-notices-stack-without-priority.md) | 全局提示容器与最高优先级单条呈现（代码完成，待共享真机回归） | L2 |
+| [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 两 tab 都能看到中断提示，但用户真机复核后反馈"状态不对"，待用户说明具体哪里不对 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 状态快照不再创建 native runtime；待三星重扫同机无 ANR/旧 offer 且新轮可传输 | L2 |
 | [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 新增范围在后台原子 backfill + 当前约束 Flow wake；待三星取消轮后新相册不重启传输回归 | L2 |
@@ -95,7 +95,6 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 手机闲置时审计被连接事件刷屏——先取证定性真抖动 vs 误记 | L2 |
 | P2 | [MOB-73](../cards/MOB-73-local-source-first-viewing.md) | 本机仍有原图时查看/保存/分享应读本地并验证 hash，远端仅作缺源回退 | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 让 Android release 构建挂 lint；CI 钉 17 不受影响 | L3 |
-| P3 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道下，分类名不对 | L2 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前就写死 | L2 |
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
@@ -114,6 +113,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
 | [AUDIT-05](../cards/AUDIT-05-dogfood-week-audit-content-review.md) | 狗粮周后只读复核真实审计内容，验证既定预设的覆盖与字段关联 | **等狗粮周样本**；不阻塞 AUDIT-02 的首版 UI |
 | [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/可见开关；OBS-02 字典与 TEL-01~04 已落地，当前仅自建自用，欠账真实但非合规危机 | **等默认值（opt-in / opt-out）与入口的产品拍板** |
+| [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道——但发送函数已被 REBUILD-04 删除、生产零调用 | **等 MOB-69 拍板「重传要不要接回系统通知」，不是等用户** |
 
 ---
 
@@ -132,6 +132,7 @@ UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 | [DESK-14](../cards/done/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS 真机 2026-09-10：32px 透明顶部拖拽区正常；顺带发现并修复原生标题文字与侧栏品牌重复显示（加 `hiddenTitle: true`） | 无——拖拽区与标题重复均已闭环 |
 | [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | macOS 真机 2026-09-10：Button/Card/Dialog/Notice/NavItem 五组件在真实 Tauri 窗口视觉正常、无错位闪烁 | 无——五组件收口验收关闭 |
 | [UI-04b](../cards/done/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 验收人 2026-09-10 确认：改名反馈改用 shadcn-svelte 官方 Sonner，右上角不占布局；成功/等待/错误映射 safe/waiting/act 三态色 | 无——手写 Toast/Message 已删除，通知呈现统一收口为官方原语 |
+| [UI-04c](../cards/done/UI-04c-multiple-notices-stack-without-priority.md) | 用户 2026-09-14 确认提示组件已统一收口至 `NoticeHost`/`topNotice()`，多条同时满足时只渲染最高优先级一条 | 无——反证测试 `priority_selection_is_not_list_order` 钉住 |
 | [MOB-63](../cards/done/MOB-63-pause-racing-final-completion-must-set-idle.md) | 三星真机 2026-09-10：暂停与最后完成回执交错的两种时机均收敛 Idle | 无——竞态收敛已闭环 |
 | [MOB-65](../cards/done/MOB-65-auto-backup-switch-must-not-pause-current-round.md) | 三星真机 2026-09-10：传输中关闭自动备份不中断当前轮，仅停止后续自动唤醒，重新打开恢复自动 | 无——自动开关与轮次暂停解耦已闭环 |
 | [SYNC-05](../cards/done/SYNC-05-asset-meta-src-device.md) | `AssetMeta.src_device` 已经由 daemon 映射到线上协议；PhotosScreen 只按该字段和本机 NodeId 分类，未知来源只在「全部」显示 | 无——本地 `backup-state`/`flow-state` 归属影子状态及 fallback 已删除；Rust 全量、Android JVM 314/0/0/4 均绿 |
