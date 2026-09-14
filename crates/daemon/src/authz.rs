@@ -169,6 +169,8 @@ mod tests {
             methods::FLOW_OFFER,
             methods::FLOW_FETCH,
             methods::FLOW_CANCEL,
+            methods::FLOW_STATUS,
+            methods::FLOW_SUSPEND,
             methods::FLOW_AUDIT_SUBMIT,
             methods::PAIR_REQUEST,
         ] {
@@ -185,6 +187,8 @@ mod tests {
         assert!(allowed(Some(&d), methods::FLOW_OFFER));
         assert!(allowed(Some(&d), methods::FLOW_FETCH));
         assert!(allowed(Some(&d), methods::FLOW_CANCEL));
+        assert!(allowed(Some(&d), methods::FLOW_STATUS));
+        assert!(allowed(Some(&d), methods::FLOW_SUSPEND));
         assert!(allowed(Some(&d), methods::FLOW_AUDIT_SUBMIT));
         assert!(!allowed(Some(&d), methods::PAIR_REQUEST));
     }

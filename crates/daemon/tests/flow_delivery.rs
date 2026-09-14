@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use daemon::events;
@@ -895,4 +896,632 @@ async fn repeated_same_error_is_deduped_within_the_flush_window() {
     );
     let batch = bodies.lock().unwrap()[0].clone();
     assert_eq!(batch.as_array().unwrap().len(), 1);
+}
+
+// ── NET-06: flow.status / flow.suspend (control-plane, async 202 model) ──
+
+fn tuple_ref(epoch: &str, lease: &str, queue_sequence: u64) -> proto::FlowTupleRef {
+    proto::FlowTupleRef {
+        queue_sequence,
+        pairing_epoch: epoch.into(),
+        lease_token: lease.into(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_not_found_for_an_unknown_tuple() {
+    let root = tempdir().unwrap();
+    let peer = transport::NodeId([0x33; 32]);
+    let db = paired_db("epoch-current", peer).await;
+    let transport = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+        .await
+        .unwrap();
+    let blobs = Arc::new(
+        Blobs::open(&transport, &root.path().join("store"))
+            .await
+            .unwrap(),
+    );
+    let delivery = FlowDelivery::new(db, blobs, root.path());
+
+    let reply = delivery
+        .status(peer, &tuple_ref("epoch-current", "lease-current", 7))
+        .await
+        .unwrap();
+    assert_eq!(reply.state, "not_found");
+    assert!(reply.receipt.is_none());
+    assert!(!reply.task_running);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_active_with_no_task_running_before_any_fetch_starts() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let bytes = b"NET-06 status active fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    let reply = delivery
+        .status(
+            provider_transport.node_id(),
+            &tuple_ref("epoch-current", "lease-current", 7),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.state, "active");
+    assert!(reply.receipt.is_none());
+    assert!(
+        !reply.task_running,
+        "no fetch() call has run yet — no task should be registered"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_completed_with_the_durable_receipt() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"NET-06 status completed fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+    let receipt = delivery
+        .fetch(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    let reply = delivery
+        .status(
+            provider_transport.node_id(),
+            &tuple_ref("epoch-current", "lease-current", 7),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.state, "completed");
+    assert!(!reply.task_running);
+    let got = reply
+        .receipt
+        .expect("completed status must carry a receipt");
+    assert_eq!(got.receipt_id, receipt.receipt_id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_cancelled_after_cancel() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let bytes = b"NET-06 status cancelled fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+    delivery
+        .cancel(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    let reply = delivery
+        .status(
+            provider_transport.node_id(),
+            &tuple_ref("epoch-current", "lease-current", 7),
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.state, "cancelled");
+}
+
+/// Core NET-06 review fix #3: the task-interrupt registry must be keyed by
+/// (peer, queue_sequence, lease_token), never by content_hash alone — two
+/// distinct devices independently holding a grant for the *same* content
+/// (e.g. both backing up the same screenshot) must not let one device's
+/// suspend abort the other device's unrelated in-flight transfer.
+#[tokio::test(flavor = "multi_thread")]
+async fn suspend_on_one_device_does_not_touch_another_devices_grant_for_the_same_hash() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let bytes = b"NET-06 cross-device isolation fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+
+    let device_a = transport::NodeId([0xAA; 32]);
+    let device_b = transport::NodeId([0xBB; 32]);
+    let db = Db::open_in_memory().await.unwrap();
+    for (peer, name) in [(device_a, "phone-a"), (device_b, "phone-b")] {
+        db.upsert_device(&Device {
+            node_id: peer.0.to_vec(),
+            name: name.into(),
+            role: Role::Member,
+            paired_at: 1,
+            last_seen: None,
+            revoked: false,
+            device_hint: None,
+        })
+        .await
+        .unwrap();
+        db.set_pairing_epoch(&peer.0, "epoch-current")
+            .await
+            .unwrap();
+    }
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
+
+    let offer_a = request("epoch-current", "lease-a", hash, ticket.clone());
+    let offer_b = request("epoch-current", "lease-b", hash, ticket);
+    delivery.offer(device_a, &offer_a).await.unwrap();
+    delivery.offer(device_b, &offer_b).await.unwrap();
+
+    // Suspending device A's tuple must be a no-op for device B's grant: B
+    // is untouched (still active, no interruption reported as an error).
+    delivery
+        .suspend(device_a, &tuple_ref("epoch-current", "lease-a", 7))
+        .await
+        .unwrap();
+    let status_b = delivery
+        .status(device_b, &tuple_ref("epoch-current", "lease-b", 7))
+        .await
+        .unwrap();
+    assert_eq!(
+        status_b.state, "active",
+        "device B's independent grant for the same content hash must be unaffected by device A's suspend"
+    );
+
+    // Both fetches must still be able to complete independently.
+    delivery.fetch(device_a, &offer_a).await.unwrap();
+    delivery.fetch(device_b, &offer_b).await.unwrap();
+}
+
+/// Core NET-06 review fix #1 + suspend acceptance: interrupting the
+/// in-progress native fetch task must actually stop it quickly (not wait
+/// for the transfer to finish naturally), and must leave the grant `active`
+/// so a later offer resumes from the partial instead of restarting —
+/// contrasted with `cancel`, which marks the grant `cancelled` and lets the
+/// partial fall out of GC protection. Uses the same kill/retry idiom as
+/// `transport::tests::blobs_resume` (`abort()` racing a live transfer).
+#[tokio::test(flavor = "multi_thread")]
+async fn suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active() {
+    const PAYLOAD: usize = 24 * 1024 * 1024;
+    let mut payload = Vec::with_capacity(PAYLOAD);
+    let mut s: u64 = 0xC0FF_EE00_1234_5678;
+    while payload.len() < PAYLOAD {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        payload.extend_from_slice(&s.to_le_bytes());
+    }
+    payload.truncate(PAYLOAD);
+
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let source = root.path().join("source.bin");
+    std::fs::write(&source, &payload).unwrap();
+    let hash = *blake3::hash(&payload).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+    let provider_node = provider_transport.node_id();
+
+    let db = paired_db("epoch-current", provider_node).await;
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    let receiver_store = root.path().join("receiver-store");
+
+    const KILL_THRESHOLD: u64 = 2 * 1024 * 1024;
+    let mut suspended_mid_flight = false;
+    for attempt in 0..8 {
+        let _ = std::fs::remove_dir_all(&receiver_store);
+        let receiver_transport =
+            IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+                .await
+                .unwrap();
+        let receiver_blobs = Arc::new(
+            Blobs::open(&receiver_transport, &receiver_store)
+                .await
+                .unwrap(),
+        );
+        let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+        delivery.offer(provider_node, &offer).await.unwrap();
+
+        let fetch_delivery = delivery.clone();
+        let fetch_offer = offer.clone();
+        let fetch =
+            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
+
+        let started = std::time::Instant::now();
+        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(60),
+                "fetch moved no bytes toward the kill threshold in 60s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        if fetch.is_finished() {
+            eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
+            continue;
+        }
+
+        delivery
+            .suspend(
+                provider_node,
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), fetch)
+            .await
+            .expect("suspend must interrupt the fetch task within 2s, not wait for it to finish naturally")
+            .expect("the spawned test task itself must not panic/be cancelled");
+        assert!(
+            matches!(outcome, Err(DeliveryError::Suspended)),
+            "a suspended fetch must resolve as Suspended, got: {outcome:?}"
+        );
+
+        // The grant must still be active — suspend never touches durable
+        // state — so status must NOT report cancelled/not_found.
+        let status = delivery
+            .status(
+                provider_node,
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            status.state, "active",
+            "suspend must leave the grant active, unlike cancel"
+        );
+        assert!(
+            !status.task_running,
+            "the interrupted task must be gone from the registry"
+        );
+
+        suspended_mid_flight = true;
+        break;
+    }
+    assert!(
+        suspended_mid_flight,
+        "never managed to suspend mid-flight across 8 attempts — transfer kept outrunning the kill threshold"
+    );
+}
+
+/// Suspend→resume: after an interrupted fetch, a fresh `flow.offer` +
+/// `flow.fetch` on the same tuple must complete using the partial bytes
+/// already on disk (iroh-blobs' own resume, same guarantee `blobs_resume.rs`
+/// validates), not restart the transfer from zero.
+#[tokio::test(flavor = "multi_thread")]
+async fn suspend_then_resume_completes_from_the_retained_partial() {
+    const PAYLOAD: usize = 24 * 1024 * 1024;
+    let mut payload = Vec::with_capacity(PAYLOAD);
+    let mut s: u64 = 0xABCD_1234_9876_0001;
+    while payload.len() < PAYLOAD {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        payload.extend_from_slice(&s.to_le_bytes());
+    }
+    payload.truncate(PAYLOAD);
+
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let source = root.path().join("source.bin");
+    std::fs::write(&source, &payload).unwrap();
+    let hash = *blake3::hash(&payload).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+    let provider_node = provider_transport.node_id();
+
+    let db = paired_db("epoch-current", provider_node).await;
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    let receiver_store = root.path().join("receiver-store");
+
+    const KILL_THRESHOLD: u64 = 2 * 1024 * 1024;
+    let mut resumed_successfully = false;
+    for attempt in 0..8 {
+        let _ = std::fs::remove_dir_all(&receiver_store);
+        let receiver_transport =
+            IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+                .await
+                .unwrap();
+        let receiver_blobs = Arc::new(
+            Blobs::open(&receiver_transport, &receiver_store)
+                .await
+                .unwrap(),
+        );
+        let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+        delivery.offer(provider_node, &offer).await.unwrap();
+
+        let fetch_delivery = delivery.clone();
+        let fetch_offer = offer.clone();
+        let fetch =
+            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
+
+        let started = std::time::Instant::now();
+        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+            assert!(started.elapsed() < std::time::Duration::from_secs(60));
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        if fetch.is_finished() {
+            eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
+            continue;
+        }
+
+        delivery
+            .suspend(
+                provider_node,
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), fetch).await;
+        let partial_bytes_on_disk = receiver_blobs.local_bytes(hash).await.unwrap();
+        assert!(
+            partial_bytes_on_disk > 0 && partial_bytes_on_disk < PAYLOAD as u64,
+            "expected a genuine partial on disk after suspend, got {partial_bytes_on_disk} of {PAYLOAD}"
+        );
+
+        // Fresh delivery handle (simulates the phone re-offering after a
+        // "continue" tap) — resume must not restart from zero.
+        let resume_delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+        resume_delivery.offer(provider_node, &offer).await.unwrap();
+        let receipt = resume_delivery
+            .fetch(provider_node, &offer)
+            .await
+            .expect("resume after suspend must complete, not restart-and-fail");
+        assert_eq!(receipt.content_hash, hex::encode(hash));
+        assert_eq!(
+            receiver_blobs.local_bytes(hash).await.unwrap(),
+            PAYLOAD as u64,
+            "resumed transfer must end with the full byte count, not the partial"
+        );
+
+        resumed_successfully = true;
+        break;
+    }
+    assert!(
+        resumed_successfully,
+        "never captured a genuine partial to resume from across 8 attempts"
+    );
+}
+
+/// Contrast with suspend: `cancel` marks the grant `cancelled`, so its
+/// partial is NOT GC-protected and gets reclaimed — the opposite of
+/// suspend's "keep it for resume" contract. Reuses the periodic-GC harness
+/// from `completed_flow_fetch_is_reclaimed_by_periodic_gc`.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection() {
+    const PAYLOAD: usize = 24 * 1024 * 1024;
+    let mut payload = Vec::with_capacity(PAYLOAD);
+    let mut s: u64 = 0x5EAF_00D1_2345_6789;
+    while payload.len() < PAYLOAD {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        payload.extend_from_slice(&s.to_le_bytes());
+    }
+    payload.truncate(PAYLOAD);
+
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let source = root.path().join("source.bin");
+    std::fs::write(&source, &payload).unwrap();
+    let hash = *blake3::hash(&payload).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+    let provider_node = provider_transport.node_id();
+
+    let db = paired_db("epoch-current", provider_node).await;
+    let callback_db = db.clone();
+    let receiver_store = root.path().join("receiver-store");
+
+    const KILL_THRESHOLD: u64 = 2 * 1024 * 1024;
+    let mut cancelled_and_reclaimed = false;
+    for attempt in 0..8 {
+        let _ = std::fs::remove_dir_all(&receiver_store);
+        let receiver_transport =
+            IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+                .await
+                .unwrap();
+        let gc_db = callback_db.clone();
+        let receiver_blobs = Arc::new(
+            Blobs::open_with_periodic_gc(
+                &receiver_transport,
+                &receiver_store,
+                std::time::Duration::from_millis(20),
+                move || {
+                    let db = gc_db.clone();
+                    Box::pin(async move {
+                        db.active_flow_content_hashes().await.map_err(|error| {
+                            transport::TransportError::Io(format!(
+                                "query active Flow hashes for GC protection: {error}"
+                            ))
+                        })
+                    })
+                        as std::pin::Pin<
+                            Box<
+                                dyn std::future::Future<
+                                        Output = transport::Result<
+                                            std::collections::HashSet<[u8; 32]>,
+                                        >,
+                                    > + Send,
+                            >,
+                        >
+                },
+            )
+            .await
+            .unwrap(),
+        );
+        let offer = request("epoch-current", "lease-current", hash, ticket.clone());
+        let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+        delivery.offer(provider_node, &offer).await.unwrap();
+
+        let fetch_delivery = delivery.clone();
+        let fetch_offer = offer.clone();
+        let fetch =
+            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
+
+        let started = std::time::Instant::now();
+        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+            assert!(started.elapsed() < std::time::Duration::from_secs(60));
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        if fetch.is_finished() {
+            eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
+            continue;
+        }
+
+        delivery.cancel(provider_node, &offer).await.unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), fetch).await;
+
+        let status = delivery
+            .status(
+                provider_node,
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            status.state, "cancelled",
+            "cancel must mark the grant cancelled, unlike suspend"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while receiver_blobs.local_bytes(hash).await.unwrap() != 0 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "cancelled partial was not reclaimed by periodic GC within the window"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        cancelled_and_reclaimed = true;
+        break;
+    }
+    assert!(
+        cancelled_and_reclaimed,
+        "never captured a genuine partial to cancel across 8 attempts"
+    );
+}
+
+fn dir_bytes(dir: &Path) -> u64 {
+    fn walk(dir: &Path, total: &mut u64) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, total);
+            } else if let Ok(meta) = entry.metadata() {
+                *total += meta.len();
+            }
+        }
+    }
+    let mut total = 0u64;
+    walk(dir, &mut total);
+    total
 }
