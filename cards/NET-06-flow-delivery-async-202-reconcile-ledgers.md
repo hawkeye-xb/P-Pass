@@ -45,51 +45,81 @@ iroh 层不是哑巴：endpoint 有连接事件，iroh-blobs 有字节级进度�
 6. **兼容**：新手机 + 旧桌面（不认 flow.status）→ 降级走旧同步 fetch，配合
    NET-07 的 fetch 宽限档；旧手机 + 新桌面 → 旧 `flow.fetch` 保留现行为
    （内部改为等 spawn 的任务，返回语义不变）。两个方向都不许静默失败。
+7. **新增 `flow.suspend`（暂停专用，验收人裁定 (b) 后加入）**：语义 =
+   中断该 tuple 正在进行中的拉取任务（abort task handle），**不改 grant
+   状态**（保持 active，GC 保护名单继续护 partial）。与 cancel 共用中断
+   机制、落账相反：cancel 标 Cancelled（放弃→partial 随保护失效被 GC 清理）。
+   两者都是尽力而为的通知：发送失败不阻塞手机本地状态切换（原则 1）。
 
-## 控制面语义：暂停 / 继续 / 取消当前轮（2026-09-14 外部 review 指出缺口后补全）
+## 控制面语义：暂停 / 继续 / 取消当前轮（2026-09-14 验收人裁决定稿）
 
 同步模型把三个概念焊在一条连接寿命上：租约（fetch_lock 在=活是我的）、
 执行（连接在=还在传）、意图（超时/挂断≈别干了）。rebuild-05「迟到回执竞态」、
-MOB-54「回队无人唤醒」都是这副焊接的毛刺。异步化后三者必须各归各位：
-**意图=改账本（围栏/状态），观察=查状态，租约=lease token（已有）**，
-没有任何控制语义再依赖「这通电话活着吗」来推断「这件活什么状态」。
+MOB-54「回队无人唤醒」都是这副焊接的毛刺。异步化后三者各归各位：
+**意图=改账本，观察=查账本，租约=lease token（已有）**，没有任何控制语义
+依赖「这通电话活着吗」推断「这件活什么状态」。
 
-四动词语义表（协议只有这四个动词，round/暂停/恢复全是手机侧账本概念，
-daemon 不新增 round 状态）：
+### 设计原则（验收人 2026-09-14 定调，逐条落地）
 
-| 操作 | 语义 |
-|---|---|
-| 暂停 | 手机停止签发新 offer。当前张政策**待验收人拍板**：(a) drain——让本张跑完拿回执；(b) abort——对当前张发 cancel，字节由 iroh-blobs 保留（T-021 resume 测试实证续传可用），恢复时从断点续。实现按 (b) 做（含 cancel handle），政策若要 (a) 只是不调用 handle。 |
-| 继续 | 无新协议：重新 offer 同一 tuple。桌面已 completed → status 直接指路领幂等回执（字节没浪费，照片已算备份成功）；未 completed → 数据面续传。 |
-| 取消当前轮 | 手机停发 + 对当前张 cancel + 其余本地标记 skipped。**竞态规则先定死：先过 irreversible 边界（complete_flow_grant）者赢**——已 completed 的算 CONFIRMED 收进回执，不许事后改 skipped；cancel 先赢的 materialize 被 require_active 拒绝、零入库。规则必须是数据（账本状态），不许是时序（rebuild-05 竞态在异步模型里无生存空间）。 |
-| 崩溃/断网恢复 | 醒来先 status 再决定动作：active 且无运行任务→桌面重拉（本卡期望行为④）；completed→领回执；cancelled→按 skipped。手机任何状态下不凭超时重发 offer（NET-01 病根）。 |
+1. **意图先行，不等回声**：暂停/取消是手机本地立即生效的状态切换 + 一个
+   尽力而为的桌面通知；**暂停期间不监控对端状态**（只有继续/取消两条出路，
+   观察推迟到真正需要的那一刻）。
+2. **暂停 ≠ 取消，账本语义相反**（202 模式下必须区分，否则互相摧毁）：
+   - 暂停的中断：任务被打断但 **grant 保持 Active** → GC 保护名单
+     （`active_flow_content_hashes()`，daemon 启动时接线，main.rs 现状）
+     继续护住 partial → 恢复才能断点续传；
+   - 取消：**grant 标 Cancelled** → 保护失效 → partial 被下一轮 GC 自然
+     清理（放弃的数据不该占桌面磁盘），无需手机确认。
+   两者共享「打断进行中的拉取」这同一个能力，落账动作不同。
+3. **观察只发生在需要它的路上**：继续 = 那一刻才查账/重 offer；恢复（崩溃/
+   断网醒来）= 先 status 再动作，绝不凭超时重发。
 
-随之必须实做的两件（原方案缺的）：
-- **cancel 真中断**：`fetch_inner` 现状只在 materialize 边界检查 cancelled，
-  字节流本身不掐。spawn 化后任务须持有 iroh-blobs 下载的中断句柄（abort
-  tokio task + 释放数据面），否则「暂停=drain」是唯一选项、政策菜单( b )
-  名存实亡。
-- **status 词表补全**：`active(+bytes_done)/completed(receipt)/cancelled/
-  failed(错误码)/not_found`——failed 码复用 `DeliveryError::telemetry_code`
-  词表，禁止裸字符串。
+### 操作语义表（协议动词只有 offer/status/claim/cancel/suspend 五个；
+### round/暂停/恢复是手机账本概念，daemon 不新增 round 状态）
 
-## 验收标准（控制面增补，接上表编号执行）
+| 操作 | 手机账本 | 桌面动作 | 字节命运 |
+|---|---|---|---|
+| **暂停（当场生效）** | 本地立即 PAUSED_BY_USER（现有 StrictConsumer 语义不动），不等桌面回音 | 尽力而为发 `flow.suspend`（新方法，见期望行为⑦）：**中断当前张拉取任务，grant 留 Active** | partial 保留、GC 持续保护 |
+| **继续** | 门打开 + wake（现有 continueByUser 行为不动） | 重新 offer 同一 tuple：grant 已 completed → status 指路领幂等回执；active 无任务 → **复用期望行为④的 respawn 机制自动续传** | 从断点续，零浪费 |
+| **取消当前轮** | 本地标 CANCELLED_BY_USER_ROUND，下次发现跳过（现有语义不动），不查对端 | 尽力而为 `flow.cancel`：grant 标 Cancelled + 中断任务 | partial 随保护失效被 GC 清理 |
+| **崩溃/断网恢复** | 醒来先 status 再决定 | active 无任务→重拉；completed→领回执；cancelled→skipped | iroh-blobs FsStore 天然续传（blobs_resume 测试实证） |
 
-- [ ] 竞态用例：item 数据面拉取中途发 cancel → 断言 cancelled 且不 materialize；
-      改「先 materialize 再 cancel」顺序 → 断言回执已定、item 终 CONFIRMED
-      （两个方向都必须确定，不许靠 sleep 运气）。
-- [ ] 暂停-续传用例（政策 b）：abort 后重新 offer → 断言 daemon 侧字节从
-      保留 partial 续传（对齐 T-021 断言手法）、最终同一 content_hash 完成。
-- [ ] 暂停-恢复免传用例：abort 前桌面其实已 completed → 重新 offer 后 status
-      指路、claim 直接拿回执、零重传。
-- [ ] 取消轮+迟到回执：JVM 侧断言手机账本对「cancel 后到达的 completed
-      status」收敛为 CONFIRMED（规则=先过边界者赢），不弹 skipped。
+竞态规则统一：**先过 irreversible 边界（complete_flow_grant）者赢，规则
+是账本数据不是时序**——cancel/suspend 后迟到的 completed status 收敛为
+CONFIRMED（字节没白传，照片确实已备份），不弹 skipped。
+
+### 原「暂停政策 a/b」已裁决
+
+验收人拍板 (b)：暂停=当场掐断，恢复从断点续；不做「下一张才生效」——
+「传 1GB 的文件你暂停了它还在跑，暂停就没作用」。实现不再需要双政策开关。
+
+### 唯一真实缺口（另一 agent 2026-09-14 源码核实，其余地基全对）
+
+`fetch_from_observing_path` 是一次阻塞 await、**中途无检查点**：标数据库、
+清路径注册表都拦不住正在进行的那一次拉取自然结束才走到 `require_active`。
+spawn 化后的修法即本卡既有设计：任务持有 JoinHandle，suspend/cancel 时
+abort task → future drop 释放数据面连接 → iroh-blobs 停止字节流，partial
+留在 FsStore。地基核查结论（实施 agent 不必复查）：GC 保护名单机制 ✅、
+FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 登记+
+拒绝新拉取 ✅——**只差这最后一个中断入口**。
 
 ## 验收标准（主案）
 
 - [ ] RED 先行（daemon 集成 scenario）：注入「数据面拉取耗时 > 控制类超时」
       的延迟 → 手机状态机（JVM 侧用假 DeliveryPort 对等场景）必须经 status
       轮询走到 CONFIRMED、拿到幂等回执；改前该场景必须真红。
+- [ ] **suspend 中断用例**：数据面拉取进行中发 `flow.suspend` → 断言拉取任务
+      在 <2s 内真停（字节计数不再增长，反证 await 无检查点的旧形状）、
+      grant 仍 Active、GC 一轮后 partial 仍在盘上；改前必须真红。
+- [ ] **suspend→继续用例**：suspend 后重新 offer → 断言从保留 partial 续传
+      （对齐 blobs_resume 断言手法）、最终同一 content_hash 完成、零从头重传。
+- [ ] **cancel 清理用例**：cancel 后 grant=Cancelled → 越过 GC 保护名单 →
+      partial 被清理（明确断言与 suspend 的相反落账，防两路混用）。
+- [ ] **迟到边界竞态用例**：materialize 前后各发一次 cancel/suspend → 两方向
+      终态都确定：先过 complete_flow_grant 者赢，item 终 CONFIRMED 收回执，
+      不许靠 sleep 运气。
+- [ ] **暂停不观察用例**（JVM）：暂停路径断言零 status/网络查询调用（原则 1
+      反证：谁把"等桌面确认停了"做进暂停，此用例变红）。
 - [ ] 反证：移除 status 查询分支/恢复同步等待形状 → 新用例必须变红。
 - [ ] 幂等：completed 后重复 status/fetch 返回同一 receipt_id，零重传
       （daemon 集成测试，复用 `persisted_receipt` 既有语义）。
@@ -108,8 +138,8 @@ daemon 不新增 round 状态）：
 ## 范围
 
 - 只准动：`crates/proto/src/msgs.rs`（新方法/类型，serde default 演进）、
-  `crates/daemon/src/flow_delivery.rs`（spawn 任务、status、active-entry
-  进度、崩溃重拉、cancel 持中断句柄真断字节流）、`crates/daemon/src/router.rs` + `authz.rs`（新方法的
+  `crates/daemon/src/flow_delivery.rs`（spawn 任务、status、suspend/cancel
+  共享的中断句柄、active-entry 进度、崩溃重拉）、`crates/daemon/src/router.rs` + `authz.rs`（新方法的
   分发与门禁，照 FLOW_* 现有条目）、`crates/transport`（blobs 进度事件按
   NET-05 口径暴露为非 iroh 类型）、`apps/android/.../transport/DaemonClient.kt`
   （subscribe 事件类型）、`apps/android/.../backup/flow/`（投递状态机 +
