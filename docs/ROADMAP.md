@@ -1268,3 +1268,5 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 2026-09-14 交付记录：MOB-66、MOB-77 三星 SM-S9210 真机验收通过。字体：标题（欢迎页、备份页大数字）确认为 Newsreader 衬线体，正文/汉字为 Manrope/Noto Sans SC 无衬线体，视觉差异明显。取消轮次恢复：常驻警告条消失，点击卡内新恢复行后 4 张跳过照片真实重传完成、该行自动隐藏。两卡移入 `cards/done/`。
 
 2026-09-14 交付记录：MOB-74 真机验收通过。macOS 本机重新构建 daemon（`cargo build --release` + `bundle-macos.sh` + `bundle-desktop-macos.sh`）覆盖安装 `/Applications/P-Pass.app`，此前运行中的旧 daemon（`0.5.0-test.8`）不含本卡修复，`launchctl` 确认新二进制 `0.5.1-test.1` 已接管。删除库内两个真实视频的缩略图缓存、重置 `thumb_state=0` 触发重新生成后，三星真机确认从空白灰框变为可辨认首帧且正常播放。移入 `cards/done/`。顺带发现照片墙一张白框实为 `MOB-67` 测试残留的 59 字节假文件混入生产库，开 MOB-78 单独跟踪，不影响本卡结论。
+
+2026-09-14 交付记录：MOB-79 完成并真机验收通过（用户实机反馈发现）。照片网格里视频和照片此前长得一模一样，`ThumbCell` 新增按 `mediaType` 判断的播放三角角标——`Canvas` 手绘半透明黑底圆+白色实心三角，右下角，跟系统相册/主流图库同一套视觉语言，不引入图标库依赖。Android JVM 69 类/346 tests/0 failures/0 errors/4 skipped（与改动前一致，纯 UI 叠加不影响既有断言）。三星真机确认两个视频缩略图均出现角标、同屏照片无角标，视觉可清晰区分。移入 `cards/done/`。附带讨论：iPhone Live Photo（HEIC+MOV 双文件靠 content identifier 配对）与 Android Motion Photo（单 JPEG 内嵌 MP4）格式完全不同、不能直接互放；现有 asset 表是单文件模型，若未来支持保留跨平台 Live Photo 效果需新增资产关联数据模型，属架构级决策，暂不处理。

@@ -126,6 +126,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [MOB-66](../cards/done/MOB-66-android-brand-font-newsreader-manrope.md) | 三星 SM-S9210 真机 2026-09-14：标题（欢迎页、备份页大数字）为 Newsreader 衬线体，正文/汉字为 Manrope/Noto Sans SC 无衬线体，两者视觉差异明显；11 处硬编码 `FontFamily.Serif` 全部替换 | 无——品牌字体缺口已闭环 |
 | [MOB-77](../cards/done/MOB-77-cancelled-round-restore-leaves-notice-channel.md) | 三星 SM-S9210 真机 2026-09-14：取消轮次恢复入口从常驻警告条移入「备份」设置卡一行 CellRow，点击后 4 张跳过照片真实重传完成且该行自动隐藏，全程无弹窗/警告条 | 无——MOB-59/X-05 的常驻警告条设计已被取代 |
 | [MOB-74](../cards/done/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | macOS 本机重新构建覆盖安装 daemon 0.5.1-test.1（qlmanage 系统兜底），删缓存重触发生成，三星真机确认两个真实视频（考拉/地图）从空白灰框变为可辨认首帧且正常播放 | 无——视频缩略图静默降级为占位图的根因已修复 |
+| [MOB-79](../cards/done/MOB-79-photo-grid-video-badge.md) | 三星 SM-S9210 真机 2026-09-14：`ThumbCell` 新增按 `mediaType` 判断的播放三角角标（Canvas 手绘，半透明黑底+白色三角），网格里视频与照片可视觉区分；截图确认两个视频缩略图均出现角标、照片无 | 无——视频与照片在网格里区分不出的缺口已闭环 |
 | [MOB-61](../cards/done/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 三星真机：Flow 入队后删源 → `SKIPPED_SOURCE_MISSING` / `MISSING` / `UNRECOVERABLE`，lease 清空；后续项 2 秒确认，首页只读跳过提示无重试动作 | 无——缺源不再走失败重传或崩溃 |
 | [MOB-67](../cards/done/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 三星真机：开关开时第三次真实失败发固定 id 2027 系统通知；关时同一终态仍落账本但通知栏无 P-Pass 通知 | 无——失败通知开关不再是死开关 |
 | [MOB-70](../cards/done/MOB-70-flow-ingest-moves-staging-source-before-metadata.md) | 三星 72 MB 视频确认：同手机 retry 按 peer 串行，避免并发 fetch 删除同一 staging 源 | 无——大文件不再三次重试终态失败 |
