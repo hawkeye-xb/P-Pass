@@ -32,8 +32,11 @@
   Android 46 类 / 347 tests / 0 failures · 桌面 `pnpm test 58`（DESK-15
   新增 Button/Card 组件合同测试）+ `src-tauri cargo test --lib 18`。
   （2026-09-09 核实更新，此前长期滞后写着 320/24/15。）
-- **环境事实**：验收人照片库 `~/Pictures/P-Pass 家庭照片库`（**真实数据，
-  一个字节都不许碰**）；测试机三星 SM-S9210，**不许做 adb 写操作**；
+- **环境事实**：验收人照片库 `~/Pictures/P-Pass 家庭照片库`（**原始照片
+  文件不许碰**；缩略图缓存 `.ppf/thumbs/`、`index.sqlite` 里可重新生成
+  的派生字段如 `thumb_state` 属于派生数据，验证/调试时可以动，2026-09-14
+  用户已明确拍板不用逐次确认）；测试机三星 SM-S9210，**不许做 adb 写
+  操作**（截图/点击/App 生命周期控制/安装本身不算写操作）。
   `gh` 未登录、仓库私有 → 看不到 Actions 结论，push 后要验收人自己扫 CI。
 - **范围红线**：文件备份 / 文件同步整个不在范围内，**只做图片**。
 
@@ -58,7 +61,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | 状态快照不再创建 native runtime；待三星重扫同机无 ANR/旧 offer 且新轮可传输 | L2 |
 | [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 新增范围在后台原子 backfill + 当前约束 Flow wake；待三星取消轮后新相册不重启传输回归 | L2 |
 | [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 代码完成：Wi-Fi 闸门改读实时网络（FlowRunner 6 处事件后 wake 硬编码放行 + Worker 调度放行误当业务闸门）；待真机蜂窝回归——限制开启发起备份应零传输+Wi-Fi 等待，连回 Wi-Fi 自动续传 | L1 |
-| [MOB-74](../cards/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | 方案 B（macOS 系统 qlmanage 兜底）已实现，JVM 侧 nextest 217 绿、just ci 绿；待验收人 Mac 覆盖安装看照片墙视频封面 | L2 |
 | [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭 Wi-Fi 限制后暂停不会复活 Wi-Fi 等待；待三星蜂窝网络回归暂停/继续与重新开启限制；09-12 OPPO 另见「重开再关限制不唤醒、需再选相册」并入回归 | L1 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 真实 `err.not_authorized` 已与 `err.not_paired` 一并投影到 pairingLost 红卡；待三星重配对后撤销设备并验证下一次 Flow 调用。09-12 OPPO 入账：手机残留配对/桌面无记录时冷启动「尝试传输」长期零提示，拒绝码待取证 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
@@ -99,6 +101,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
 | P2 | [MOB-69](../cards/MOB-69-rebuild04-deleted-notification-senders.md) | REBUILD-04 批次删除带走哨兵/白名单/重传三条通知发送端（判定逻辑成死代码）；先定性再接线或显式下线 | L2 |
+| P3 | [MOB-78](../cards/MOB-78-mob67-test-residue-in-production-library.md) | 生产照片库混入 MOB-67 测试残留假 JPEG（59 字节，显示白框），需清理并排查是否还有其他遗留测试文件 | L1 |
 
 ---
 
@@ -122,6 +125,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 |---|---|---|
 | [MOB-66](../cards/done/MOB-66-android-brand-font-newsreader-manrope.md) | 三星 SM-S9210 真机 2026-09-14：标题（欢迎页、备份页大数字）为 Newsreader 衬线体，正文/汉字为 Manrope/Noto Sans SC 无衬线体，两者视觉差异明显；11 处硬编码 `FontFamily.Serif` 全部替换 | 无——品牌字体缺口已闭环 |
 | [MOB-77](../cards/done/MOB-77-cancelled-round-restore-leaves-notice-channel.md) | 三星 SM-S9210 真机 2026-09-14：取消轮次恢复入口从常驻警告条移入「备份」设置卡一行 CellRow，点击后 4 张跳过照片真实重传完成且该行自动隐藏，全程无弹窗/警告条 | 无——MOB-59/X-05 的常驻警告条设计已被取代 |
+| [MOB-74](../cards/done/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | macOS 本机重新构建覆盖安装 daemon 0.5.1-test.1（qlmanage 系统兜底），删缓存重触发生成，三星真机确认两个真实视频（考拉/地图）从空白灰框变为可辨认首帧且正常播放 | 无——视频缩略图静默降级为占位图的根因已修复 |
 | [MOB-61](../cards/done/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 三星真机：Flow 入队后删源 → `SKIPPED_SOURCE_MISSING` / `MISSING` / `UNRECOVERABLE`，lease 清空；后续项 2 秒确认，首页只读跳过提示无重试动作 | 无——缺源不再走失败重传或崩溃 |
 | [MOB-67](../cards/done/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 三星真机：开关开时第三次真实失败发固定 id 2027 系统通知；关时同一终态仍落账本但通知栏无 P-Pass 通知 | 无——失败通知开关不再是死开关 |
 | [MOB-70](../cards/done/MOB-70-flow-ingest-moves-staging-source-before-metadata.md) | 三星 72 MB 视频确认：同手机 retry 按 peer 串行，避免并发 fetch 删除同一 staging 源 | 无——大文件不再三次重试终态失败 |
