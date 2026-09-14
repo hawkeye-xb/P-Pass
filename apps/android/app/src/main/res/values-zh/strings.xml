@@ -36,7 +36,7 @@
     <string name="backup_started_title">%1$s 张照片，正在回家。</string>
     <string name="backup_started_body">之后什么都不用做。任何时候打开 App，都能看到照片安不安全。</string>
     <string name="background_backup_enable">开启后台备份</string>
-    <string name="background_backup_not_now">暂不开启</string>
+    <string name="background_backup_not_now">不开启后台备份</string>
     <string name="not_a_code">这不是 P-Pass 配对码。</string>
     <string name="pair_unparseable_code">配对码无法解析，请把电脑端和手机 App 都升级到最新版</string>
     <string name="storage_device_default">P-Pass 存储端</string>
@@ -112,11 +112,9 @@
     <string name="last_mins_ago">%1$d 分钟前</string>
     <string name="last_hours_ago">%1$d 小时前</string>
     <!-- T-080 layout v1: 备份规则卡 -->
-    <!-- 2026-09-14（用户拍板）：section 标签"备份"已删除——整页就是备份
-         设置页，标签是重复信息（原键 rules_title 已整体移除）。
-         "其他"换成更具体的"关于"，仍保留：存储电脑+版本两行需要标签跟
-         上面的备份卡区分开。 -->
-    <string name="other_section_title">关于</string>
+    <!-- 2026-09-14（用户拍板）：section 标签"备份"和"关于"均已删除——整页
+         就是备份设置页，卡片边框已把各行分组，标签是信息增量为 0 的
+         重复（原键 rules_title、other_section_title 已整体移除）。 -->
     <string name="more_section_title">更多</string>
     <!-- M10 全页面状态稿原文——真实开关行(NotifyOnFailurePrefs)，不再是
          导航到系统设置的展示行。 -->

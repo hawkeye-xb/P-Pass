@@ -37,7 +37,7 @@
     <string name="backup_started_title">%1$s photos, on their way home.</string>
     <string name="backup_started_body">Nothing else to do. Open the app anytime to see your photos are safe.</string>
     <string name="background_backup_enable">Enable background backup</string>
-    <string name="background_backup_not_now">Not now</string>
+    <string name="background_backup_not_now">Don’t enable background backup</string>
     <string name="not_a_code">This is not a P-Pass pairing code.</string>
     <string name="pair_unparseable_code">The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.</string>
     <string name="storage_device_default">P-Pass storage</string>
@@ -115,11 +115,10 @@
     <string name="last_mins_ago">%1$d min ago</string>
     <string name="last_hours_ago">%1$d h ago</string>
     <!-- T-080 layout v1: backup rules card -->
-    <!-- 2026-09-14（用户拍板）：section 标签"Backup"/"备份"已删除——整页
-         就是备份设置页，标签是重复信息（原键 rules_title 已整体移除）。
-         "Other"/"其他" 换成更具体的"About"/"关于"，仍保留：存储电脑+
-         版本两行需要标签跟上面的备份卡区分开。 -->
-    <string name="other_section_title">About</string>
+    <!-- 2026-09-14（用户拍板）：section 标签"Backup"/"备份"和"About"/"关于"
+         均已删除——整页就是备份设置页，卡片边框已把各行分组，标签是
+         信息增量为 0 的重复（原键 rules_title、other_section_title 已
+         整体移除）。 -->
     <string name="more_section_title">More</string>
     <!-- M10 (full-page-states doc) exact copy — a real toggle row
          (NotifyOnFailurePrefs), no longer a nav row to system settings. -->
