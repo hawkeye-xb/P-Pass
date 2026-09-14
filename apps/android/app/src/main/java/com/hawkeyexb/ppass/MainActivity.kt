@@ -956,7 +956,12 @@ private fun clearLocalPairing(
     // （电脑端删过库时 M 虚高，首屏是错的）。
     clearConfirmedCacheForRemote(context.filesDir, pairing.daemonNodeId)
     WatermarkStore(context.filesDir).save(0)
-    AutoBackupPrefs(context.filesDir).setEnabled(true)
+    // A new pairing starts from a new user's choice. Do not carry the prior
+    // pairing's automatic-backup intent into the next onboarding.
+    AutoBackupPrefs(context.filesDir).apply {
+        setRequested(false)
+        setEnabled(false)
+    }
     val work = WorkManager.getInstance(context)
     listOf(BACKUP_WORK_NAME, CATCHUP_WORK_NAME, PROCESS_CATCHUP_WORK_NAME, MANUAL_BACKUP_WORK_NAME)
         .forEach(work::cancelUniqueWork)
