@@ -1,7 +1,11 @@
 # NET-06 Flow 交付异步化（202 模式）+ 两端账本强制对账——NET-01 根治　级别 L2
 
-> 🔄 状态：开工中 · 当前节点：daemon 侧 flow.status/flow.suspend 协议与实现
-> · 协同分支：`main`
+> 🔄 状态：开工中 · 当前节点：daemon 侧核心机制已完成（协议层
+> `flow.status`/`flow.suspend` + 可 abort 的 fetch 任务 + Drop 守卫
+> 清理，真实 RED→GREEN→反证跑通，`just ci` 全绿）；下一步是 daemon
+> 侧崩溃自动重拉（期望行为④）、旧手机/旧桌面兼容路径（期望行为⑥）、
+> Android 侧接线（DeliveryPort/StrictConsumer/AndroidFlowRuntime）、
+> L3 真机硬门 · 协同分支：`main`
 > 级别：L2 · 阻塞：编码无阻塞；归档需 NET-01 的蜂窝热点/relay 真机窗口
 
 ## 问题
@@ -138,41 +142,70 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
 
 - [ ] RED 先行（daemon 集成 scenario）：注入「数据面拉取耗时 > 控制类超时」
       的延迟 → 手机状态机（JVM 侧用假 DeliveryPort 对等场景）必须经 status
-      轮询走到 CONFIRMED、拿到幂等回执；改前该场景必须真红。
-- [ ] **suspend 中断用例**：数据面拉取进行中发 `flow.suspend` → 断言拉取任务
+      轮询走到 CONFIRMED、拿到幂等回执；改前该场景必须真红。**Android 侧
+      未接线，本条留白。**
+- [x] **suspend 中断用例**：数据面拉取进行中发 `flow.suspend` → 断言拉取任务
       在 <2s 内真停（字节计数不再增长，反证 await 无检查点的旧形状）、
       grant 仍 Active、GC 一轮后 partial 仍在盘上；改前必须真红。
-- [ ] **suspend→继续用例**：suspend 后重新 offer → 断言从保留 partial 续传
+      `suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active`
+      ——真实反证：注释掉 `FlowTaskGuard::register` 后此用例立即真红
+      （断言失败：suspend 后 fetch 悄悄传完返回了 `Ok(receipt)`，不是
+      `Err(Suspended)`），恢复注册后复绿。
+- [x] **suspend→继续用例**：suspend 后重新 offer → 断言从保留 partial 续传
       （对齐 blobs_resume 断言手法）、最终同一 content_hash 完成、零从头重传。
-- [ ] **cancel 清理用例**：cancel 后 grant=Cancelled → 越过 GC 保护名单 →
+      `suspend_then_resume_completes_from_the_retained_partial`。
+- [x] **cancel 清理用例**：cancel 后 grant=Cancelled → 越过 GC 保护名单 →
       partial 被清理（明确断言与 suspend 的相反落账，防两路混用）。
+      `cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection`。
 - [ ] **迟到边界竞态用例**：materialize 前后各发一次 cancel/suspend → 两方向
       终态都确定：先过 complete_flow_grant 者赢，item 终 CONFIRMED 收回执，
-      不许靠 sleep 运气。
+      不许靠 sleep 运气。**未写，留给下一步。**
 - [ ] **暂停不观察用例**（JVM）：暂停路径断言零 status/网络查询调用（原则 1
-      反证：谁把"等桌面确认停了"做进暂停，此用例变红）。
-- [ ] **abort 竞态用 Drop 守卫用例**：注入 abort 恰好砸在
-      `complete_flow_grant` 成功之后、清理代码前的窗口 → 断言任务追踪表
-      仍被正确摘除登记（不留僵尸项）；改成非 Drop 的顺序清理写法必须让此
-      用例变红。
+      反证：谁把"等桌面确认停了"做进暂停，此用例变红）。**Android 侧未接线，
+      本条留白。**
+- [x] **abort 竞态用 Drop 守卫用例**：`FlowTaskGuard`（`flow_delivery.rs`）
+      照抄 `FlowPathGuard` 的 Drop 模式；`unregister`/`interrupt` 均用
+      generation 比对避免摘掉更新的登记（同 `SubscriptionRegistry` 先例）。
+      未写独立的「abort 恰砸在 complete_flow_grant 之后」竞态注入用例——
+      `suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active`
+      验证的是 abort 发生在 fetch 完成*之前*的主路径，这条更窄的竞态窗口
+      仍是缺口。
 - [ ] **取消当前轮不打无谓 grant 查询用例**：批量取消 N 项（仅 1 项曾有
       真实 grant）→ 断言只对那 1 项发出 `flow.cancel`，其余项零网络调用、
-      零 `GuardMismatch` 噪音。
-- [ ] **跨设备同哈希隔离用例**：两台不同设备各自持有同一 `content_hash`
+      零 `GuardMismatch` 噪音。**Android 侧 `CancellationRoundController`
+      未接线，本条留白。**
+- [x] **跨设备同哈希隔离用例**：两台不同设备各自持有同一 `content_hash`
       的独立 grant（各自备份同一张照片）→ 一台 suspend/cancel → 断言另一台
       的传输任务与 grant 状态不受影响（反证：任务中断表若只按 content_hash
       键，此用例必须变红）。
+      `suspend_on_one_device_does_not_touch_another_devices_grant_for_the_same_hash`
+      ——`FlowTaskRegistry` 键为 `(NodeId, queue_sequence, lease_token)`，
+      不含 content_hash，与 `FlowPathRegistry` 同一键值范围。
 - [ ] 反证：移除 status 查询分支/恢复同步等待形状 → 新用例必须变红。
+      **daemon 侧 status 本身已有 4 个直接用例覆盖 active/completed/
+      cancelled/not_found；"手机侧不再靠回声推断"这条反证要等 Android
+      接线才能写。**
 - [ ] 幂等：completed 后重复 status/fetch 返回同一 receipt_id，零重传
-      （daemon 集成测试，复用 `persisted_receipt` 既有语义）。
+      （daemon 集成测试，复用 `persisted_receipt` 既有语义）。**未写——
+      现有 `status_reports_completed_with_the_durable_receipt` 只验证了
+      status 读到收据，没有验证重复 fetch 零重传字节，是相邻但不同的断言，
+      留给下一步。**
 - [ ] 崩溃恢复：active grant + 无运行任务 → status 触发重拉，最终 completed
-      （daemon 集成测试模拟 task 丢失）。
+      （daemon 集成测试模拟 task 丢失）。**未实现——当前 `status()` 只读
+      durable 状态 + `tasks` 登记表是否有活跃任务，`task_running=false` 时
+      不会主动重新拉起交付；这是期望行为④明确要求的部分，尚未做。**
 - [ ] 重试不互踩：手机侧超时后先 status 见 active → 不重发 offer（JVM 测试
-      断言 offer 调用次数）。
+      断言 offer 调用次数）。**Android 侧未接线，本条留白。**
 - [ ] 旧 fetch 行为兼容：旧手机形状的用例（直接同步 fetch 拿回执）在新桌面
-      仍绿。
-- [ ] Android JVM 全量（报测试计数）+ `just ci` 全绿；proto 金样本演进不破
-      （旧帧字节不变，同 DEV-01 device_hint 的纪律）。
+      仍绿。`fetch()` 的公开签名/行为未变（旧 14 个 `flow_delivery.rs`
+      集成测试全部保持绿），但没有专门验证「旧手机从不调用 status/suspend」
+      这条路径的用例，留给下一步确认式补齐。
+- [x] Android JVM 全量（报测试计数）+ `just ci` 全绿；proto 金样本演进不破
+      （旧帧字节不变，同 DEV-01 device_hint 的纪律）。**`just ci` 全绿
+      （fmt/clippy -D warnings/arch-check/queue-sync/nextest 397 passed，
+      1 skipped——较认领前的 345/1 基线净增 52，含本卡新增）；13 个
+      proto snapshot 测试全绿，证明旧帧字节未破坏。Android 侧未接线，
+      JVM 计数无变化（不在本次改动范围）。**
 - [ ] L3 真机硬门（NET-01 窗口，等验收人）：三星热点 288MB 视频跨 relay 完整
       CONFIRMED；LAN 直连回归不破；拔网线中途 → status 报 failed 带码 →
       自动重试最终完成或终态可见（不许哑火）。
@@ -220,3 +253,68 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
   回归轮里一起跑。
 - 进度展示的 UI 卡（hero 显示「第 N 张 · x% · 直连/中继」）待本卡 status
   字段稳定后另开。
+
+## 实施记录
+
+- 2026-09-14：**daemon 侧核心机制完成**。
+  - 协议层（`crates/proto/src/msgs.rs`）：`FlowTupleRef`（新的轻量 tuple
+    标识，只带 queue_sequence/pairing_epoch/lease_token，不像
+    `FlowFetchRequest` 那样带 file_name/media_type/provider）、
+    `FlowStatusReply`（state + 可选 receipt + task_running）、
+    `methods::FLOW_STATUS`/`FLOW_SUSPEND` 常量；5 个新 roundtrip 测试 +
+    既有 13 个 snapshot 测试全绿（旧帧字节未破坏）。
+  - daemon 核心（`crates/daemon/src/flow_delivery.rs`）：
+    - `fetch_inner` 的数据面拉取（`fetch_from_observing_path`，此前唯一
+      无检查点的长阻塞 await）改为 `tokio::spawn` 出去的任务，返回
+      `AbortHandle`。
+    - 新增 `FlowTaskRegistry`/`FlowTaskGuard`：登记表键为
+      `(NodeId, queue_sequence, lease_token)`——**照抄 review 钉死的规则，
+      不含 content_hash**——`FlowTaskGuard` 照抄 `FlowPathGuard` 的 Drop
+      清理模式，`unregister`/`interrupt` 用 generation 比对防止摘掉更新的
+      登记（同 `SubscriptionRegistry` 先例）。
+    - 新增 `status()`：读 `matching_grant`/`flow_receipt` 组合出
+      active/completed/cancelled/not_found 四态 + 进程内 `task_running`
+      事实，不触碰数据面，任何网络条件下都在控制类超时内返回。
+    - 新增 `suspend()`：只调用 `tasks.interrupt(...)`（abort 对应
+      handle），**不改 grant 状态**——与 `cancel_inner`（额外调用
+      `db.cancel_flow_grant` 把状态写成 Cancelled）形成对照，这正是
+      review 钉死的「暂停≠取消，账本语义相反」。
+    - `DeliveryError::Suspended` 新增变体：`fetch()` 内部
+      `handle.await` 命中 `JoinError::is_cancelled()` 时返回，与
+      `Cancelled`（durable 状态已改变）语义分离。
+  - 路由/鉴权（`router.rs`/`authz.rs`）：新增 `handle_flow_control`
+    分发 `flow.status`/`flow.suspend`；`authz.rs` 的
+    `member_delivery = method.starts_with("flow.")` 已自动覆盖新方法，
+    只补了两个方法到 viewer 拒绝/member 允许的既有测试列表。
+  - 新增 8 个 daemon 集成测试（`crates/daemon/tests/flow_delivery.rs`）：
+    4 个 status 状态测试 + 1 个跨设备隔离测试（复用同一 content_hash，
+    验证 suspend 不误杀另一台设备）+ suspend 中断/suspend→resume/
+    cancel→GC 清理三个大文件（24MB）kill-race 测试，手法照抄
+    `transport::tests::blobs_resume` 的 kill-threshold 循环重试模式。
+  - **真实反证**：临时注释掉 `FlowTaskGuard::register(...)` 那一行，
+    `suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active`
+    立即真红（`suspend()` 因为找不到 handle 而是 no-op，fetch 悄悄传完，
+    断言「必须是 Err(Suspended)」失败，实际拿到 `Ok(receipt)`）；恢复
+    注册后复绿。证明这条用例真的锁住了核心机制，不是摆设。
+  - 测试基线：`cargo test -p daemon --test flow_delivery` **22 passed /
+    0 failed**（14 既有 + 8 新增）；`cargo test -p daemon`（lib + 全部
+    集成测试二进制）**0 failed**；`just ci` 全绿（fmt/clippy -D warnings/
+    arch-check/queue-sync/`cargo nextest run --all-features`
+    **397 tests run: 397 passed, 1 skipped**，较认领前基线 345/1 净增
+    52——含本卡 daemon 8 个 + proto 5 个新用例，其余为同批次其他 agent
+    的并发提交）。
+  - **未完成，留给下一步**（诚实标注，不假装做完）：
+    - 崩溃自动重拉（期望行为④）：`status()` 目前只报告
+      `task_running=false`，不会主动重新拉起交付——这是本卡明确要求的
+      一部分，尚未实现。
+    - 旧手机/旧桌面兼容降级路径（期望行为⑥）的专门验证用例。
+    - 幂等重复 fetch 零重传字节的直接断言（现有测试只验证 status 读到
+      receipt，未验证重复 fetch 不二次拉取字节）。
+    - 迟到边界竞态用例（materialize 前后发 cancel/suspend 的确定性
+      终态）。
+    - Android 侧全部接线：`DaemonClient.kt` 新增 status/suspend 调用、
+      `NativeFlowDeliveryPort`/`StrictConsumer`/`AndroidFlowRuntime` 改造
+      成 offer→盯 status→completed 领回执的模型、`CancellationRoundController`
+      按「只对曾有真实 grant 的项发 cancel」改造、对应 JVM 测试。这是本卡
+      验收标准里标注「Android 侧未接线，本条留白」的全部条目的落地处。
+    - L3 真机硬门（等 NET-01 的蜂窝热点窗口）。

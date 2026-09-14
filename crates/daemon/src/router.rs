@@ -336,6 +336,9 @@ impl Router {
             methods::FLOW_OFFER | methods::FLOW_FETCH | methods::FLOW_CANCEL => {
                 self.handle_flow_delivery(peer, req).await
             }
+            methods::FLOW_STATUS | methods::FLOW_SUSPEND => {
+                self.handle_flow_control(peer, req).await
+            }
             methods::FLOW_AUDIT_SUBMIT => self.handle_flow_audit_submit(peer, req).await,
             methods::BACKUP_BEGIN
             | methods::BACKUP_MANIFEST
@@ -494,6 +497,64 @@ impl Router {
                     RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
                 )
             }
+        }
+    }
+
+    /// NET-06: control-plane methods for one exact grant tuple. Unlike
+    /// `handle_flow_delivery`, these never touch the data plane — `status`
+    /// answers from durable state (+ a process-local task fact); `suspend`
+    /// only aborts a task handle if one is running. Both must always answer
+    /// within the ordinary control RPC timeout, on any network condition.
+    async fn handle_flow_control(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        let Some(delivery) = &self.flow_delivery else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let Ok(tuple) = serde_json::from_value::<proto::FlowTupleRef>(req.params.clone()) else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        match req.method.as_str() {
+            methods::FLOW_STATUS => match delivery.status(peer, &tuple).await {
+                Ok(reply) => match serde_json::to_value(reply) {
+                    Ok(value) => Resp::ok(req.id.clone(), value),
+                    Err(_) => Resp::err(
+                        req.id.clone(),
+                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+                    ),
+                },
+                // status is read-only and has no GuardMismatch path in
+                // practice (a missing/mismatched tuple resolves to
+                // `not_found` inside `status()`, not an error) — this arm
+                // exists for exhaustiveness against DeliveryError's other
+                // variants (storage failure, etc.).
+                Err(error) => {
+                    tracing::warn!("flow status from {peer:?} failed: {error}");
+                    Resp::err(
+                        req.id.clone(),
+                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+                    )
+                }
+            },
+            methods::FLOW_SUSPEND => match delivery.suspend(peer, &tuple).await {
+                Ok(()) => Resp::ok(req.id.clone(), serde_json::Value::Null),
+                Err(crate::flow_delivery::DeliveryError::GuardMismatch) => Resp::err(
+                    req.id.clone(),
+                    RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
+                ),
+                Err(error) => {
+                    tracing::warn!("flow suspend from {peer:?} failed: {error}");
+                    Resp::err(
+                        req.id.clone(),
+                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+                    )
+                }
+            },
+            _ => unreachable!("dispatch only calls this for flow.status/flow.suspend"),
         }
     }
 

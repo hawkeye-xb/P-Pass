@@ -319,6 +319,41 @@ pub struct FlowCompletionReceipt {
     pub content_hash: String,
 }
 
+// ── NET-06: async status query + suspend (control-plane, no bytes) ─
+
+/// Identifies one exact grant tuple for `flow.status`/`flow.suspend`.
+/// Deliberately lighter than [`FlowFetchRequest`]: it carries only the
+/// fields that name a tuple, not the transfer metadata (`file_name`,
+/// `media_type`, `provider`) that only `offer`/`fetch` need to start a
+/// native fetch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct FlowTupleRef {
+    pub queue_sequence: u64,
+    pub pairing_epoch: String,
+    pub lease_token: String,
+}
+
+/// `flow.status` reply. The phone polls this instead of inferring task
+/// state from whether an RPC round-trip returned in time (NET-01/NET-06:
+/// "回声即状态" is the bug this replaces).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct FlowStatusReply {
+    /// One of: `"active"`, `"completed"`, `"cancelled"`, `"not_found"`.
+    pub state: String,
+    /// Present only when `state == "completed"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<FlowCompletionReceipt>,
+    /// Whether a native fetch task is currently running for this exact
+    /// tuple *in this daemon process*. This is a process-local fact, not
+    /// a durable one — a daemon restart clears it independently of the
+    /// durable grant `state` above, which is what drives crash-recovery
+    /// respawn logic (a caller sees `state == "active"` with
+    /// `task_running == false` and knows to re-offer).
+    pub task_running: bool,
+}
+
 // ── Flow audit outbox delivery (AUDIT-01) ───────────
 
 /// One phone-side durable outbox event awaiting delivery to the daemon.
@@ -483,6 +518,18 @@ pub mod methods {
     /// REBUILD-02: invalidates one exact active tuple; cancellation never
     /// emits a receipt.
     pub const FLOW_CANCEL: &str = "flow.cancel";
+    /// NET-06: read-only status query for one exact tuple. Any network
+    /// condition must answer within a short control-plane timeout — it
+    /// never waits on the data plane. Replaces "RPC timed out" as a
+    /// failure signal (NET-01's root cause).
+    pub const FLOW_STATUS: &str = "flow.status";
+    /// NET-06: pause semantics — interrupts the in-progress native fetch
+    /// task for this exact tuple WITHOUT changing the durable grant state
+    /// (stays `active`). Distinct from `flow.cancel` (which marks the
+    /// grant `cancelled` and lets partial bytes fall out of GC
+    /// protection): suspend keeps the partial protected so a later
+    /// `flow.offer` on the same tuple resumes instead of restarting.
+    pub const FLOW_SUSPEND: &str = "flow.suspend";
     /// AUDIT-01: phone-side durable outbox events → daemon v2 audit
     /// repository. Carries no data-plane content and is authorized the
     /// same as the other Flow methods (member+); the daemon appends each
@@ -752,6 +799,42 @@ mod tests {
             pairing_epoch: "epoch-1".into(),
             lease_token: "lease-7".into(),
             content_hash: "ab".repeat(32),
+        }
+    );
+
+    roundtrip_test!(
+        flow_tuple_ref_roundtrip,
+        FlowTupleRef,
+        FlowTupleRef {
+            queue_sequence: 7,
+            pairing_epoch: "epoch-1".into(),
+            lease_token: "lease-7".into(),
+        }
+    );
+
+    roundtrip_test!(
+        flow_status_reply_active_roundtrip,
+        FlowStatusReply,
+        FlowStatusReply {
+            state: "active".into(),
+            receipt: None,
+            task_running: true,
+        }
+    );
+
+    roundtrip_test!(
+        flow_status_reply_completed_roundtrip,
+        FlowStatusReply,
+        FlowStatusReply {
+            state: "completed".into(),
+            receipt: Some(FlowCompletionReceipt {
+                queue_sequence: 7,
+                receipt_id: "receipt-7".into(),
+                pairing_epoch: "epoch-1".into(),
+                lease_token: "lease-7".into(),
+                content_hash: "ab".repeat(32),
+            }),
+            task_running: false,
         }
     );
 
