@@ -1,8 +1,9 @@
 # MOB-54 可重试传输失败后卡死在 QUEUED，不会自动重试（L1）
 
-> 🟢 状态：代码已合并，本地验证通过 · 当前节点：**2026-09-12 OPPO 真机复核
-> 失败**——传约 10 张后停摆、剩 16 张无提示不自动续传，选第三个相册才唤醒；
-> 下一步：取证当次停点的 delivery 失败码与队列态，再定位 · 协同分支：`main`
+> 🔄 状态：取证进行中 · 当前节点：**2026-09-14 三星真机本次无 delivery
+> 失败；审计里的 pause/cancel 已在 82 秒后 restore，不能解释后续停摆**；
+> 下一步：重放「最后 receipt 到达时已有 discovery wake」竞态，并以账本/
+> 审计/MediaStore 三方对账定位未入队项 · 协同分支：`main`
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -84,6 +85,14 @@
   「临时失败后卡住、需外部触发才复活」一致，但停在 10 张那一次的底层
   失败码未取证（不能排除 NET-01 家族）——开工先对齐 daemon/flow 日志的
   时间线，不许凭症状直接认领旧根因。横幅已改「真机复核失败待定位」。
+- 2026-09-14 三星真机新证据：同日审计的三个 Flow round 分别为
+  `4 confirmed`、`5 confirmed + 4 cancelled`、`12 confirmed`；没有本次
+  delivery failed。此前把第二轮的 cancel 当成本次停摆原因是错误归因：审计
+  还显示该 cancel 在 82 秒后已 restore，因此不能解释之后仍未自动继续的
+  行为。手机账本快照为 `21 CONFIRMED`、`consumerGate=OPEN`、
+  `consumerStatus=IDLE`、无 fetch lease，且 `discoveryRequested=true`。
+  这个「已请求发现但窗口终态后没有运行者」状态才是当前待复现的断点；先写
+  receipt/wake 交错的失败用例并用三方对账核清未入队项，再决定修复点。
 
 ## 备注
 
