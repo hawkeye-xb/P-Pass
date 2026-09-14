@@ -1,9 +1,9 @@
 # MOB-54 可重试传输失败后卡死在 QUEUED，不会自动重试（L1）
 
-> 🔄 状态：取证进行中 · 当前节点：**2026-09-14 三星真机证据显示本次停摆
-> 没有 delivery 失败，而是持久化 `cancel` 决定与自动唤醒关闭同时出现**；
-> 下一步：用账本/审计/MediaStore 三方对账重放「暂停→取消→剩余项」并定性
-> 意外取消的来源与未入队项 · 协同分支：`main`
+> 🔄 状态：取证进行中 · 当前节点：**2026-09-14 三星真机本次无 delivery
+> 失败；审计里的 pause/cancel 已在 82 秒后 restore，不能解释后续停摆**；
+> 下一步：重放「最后 receipt 到达时已有 discovery wake」竞态，并以账本/
+> 审计/MediaStore 三方对账定位未入队项 · 协同分支：`main`
 > 级别：L1 · 阻塞：无
 
 ## 问题
@@ -87,12 +87,12 @@
   时间线，不许凭症状直接认领旧根因。横幅已改「真机复核失败待定位」。
 - 2026-09-14 三星真机新证据：同日审计的三个 Flow round 分别为
   `4 confirmed`、`5 confirmed + 4 cancelled`、`12 confirmed`；没有本次
-  delivery failed。手机账本快照为 `21 CONFIRMED`、`consumerGate=OPEN`、
-  `consumerStatus=IDLE`、无 fetch lease，且 `discoveryRequested=true`。审计的
-  `cancel` 决定与自动备份策略转为关闭同在第二轮完成时刻附近；因此这次不能
-  沿用「瞬态失败未 wake」结论。当前源码中 cancel 只有在 `PausedByUser` 状态
-  由 UI 调用，自动备份关闭则会撤销全部自动 producer；需先重放并核清两者的
-  先后与剩余候选的发现边界，再决定修复点。
+  delivery failed。此前把第二轮的 cancel 当成本次停摆原因是错误归因：审计
+  还显示该 cancel 在 82 秒后已 restore，因此不能解释之后仍未自动继续的
+  行为。手机账本快照为 `21 CONFIRMED`、`consumerGate=OPEN`、
+  `consumerStatus=IDLE`、无 fetch lease，且 `discoveryRequested=true`。
+  这个「已请求发现但窗口终态后没有运行者」状态才是当前待复现的断点；先写
+  receipt/wake 交错的失败用例并用三方对账核清未入队项，再决定修复点。
 
 ## 备注
 
