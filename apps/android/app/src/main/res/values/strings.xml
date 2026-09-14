@@ -75,9 +75,10 @@
     <!-- 2026-09-07 real-device feedback: disable the button while a command
          is in flight so repeated taps don't queue behind it. -->
     <string name="backup_command_processing">Working…</string>
-    <!-- MOB-59: X-05 persistent Restore notice (no Discard — see HomeScreen.kt) -->
-    <string name="cancelled_round_notice_body">Skipped %1$d photo(s) from cancelled rounds.</string>
-    <string name="cancelled_round_notice_restore">Send again</string>
+    <!-- 2026-09-14（用户拍板，取代 MOB-59/X-05）：恢复入口从常驻警告条
+         挪进备份设置卡的一行，不再是打断式提示，故文案不再叫 notice。 -->
+    <string name="cancelled_round_cell_label">Skipped photos</string>
+    <string name="cancelled_round_cell_value">%1$d · restore</string>
     <string name="missing_source_notice_body">Skipped %1$d photo(s) deleted from this phone. They will not be retried.</string>
     <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
     <string name="idle_auto_hint">Runs by itself while charging on Wi-Fi</string>
@@ -113,9 +114,11 @@
     <string name="last_mins_ago">%1$d min ago</string>
     <string name="last_hours_ago">%1$d h ago</string>
     <!-- T-080 layout v1: backup rules card -->
-    <!-- M10 (full-page-states doc) exact copy — section label is just "Backup". -->
-    <string name="rules_title">Backup</string>
-    <string name="other_section_title">Other</string>
+    <!-- 2026-09-14（用户拍板）：section 标签"Backup"/"备份"已删除——整页
+         就是备份设置页，标签是重复信息（原键 rules_title 已整体移除）。
+         "Other"/"其他" 换成更具体的"About"/"关于"，仍保留：存储电脑+
+         版本两行需要标签跟上面的备份卡区分开。 -->
+    <string name="other_section_title">About</string>
     <string name="more_section_title">More</string>
     <!-- M10 (full-page-states doc) exact copy — a real toggle row
          (NotifyOnFailurePrefs), no longer a nav row to system settings. -->

@@ -20,7 +20,7 @@ class HomeNoticesTest {
         // UI-04 的场景：重启后「后台进程有问题」与「去授权」同时成立。
         val top = topNotice(
             listOf(
-                notice(HomeNoticeKind.CANCELLED_ROUND),
+                notice(HomeNoticeKind.SOURCE_MISSING),
                 notice(HomeNoticeKind.BACKUP_INTERRUPTED),
                 notice(HomeNoticeKind.REUPLOAD),
             )
@@ -57,7 +57,7 @@ class HomeNoticesTest {
         // 这条断言会失败——它锁死的是「选择行为」，不是「列表顺序」。
         val candidates = listOf(
             notice(HomeNoticeKind.REUPLOAD),
-            notice(HomeNoticeKind.CANCELLED_ROUND),
+            notice(HomeNoticeKind.SOURCE_MISSING),
             notice(HomeNoticeKind.BACKUP_INTERRUPTED),
         )
         assertEquals(HomeNoticeKind.BACKUP_INTERRUPTED, topNotice(candidates)?.kind)

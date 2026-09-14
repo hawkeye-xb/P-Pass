@@ -79,6 +79,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | ~~真机复核（可选）~~ **2026-09-12 OPPO 复核失败**：传约 10 张停摆、剩 16 张无提示不续传，选第三个相册才唤醒；先取证停点失败码再定位 | L1 |
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 旧账本已确认项补 completedAt，首页不再永久显示从未成功 | L1 |
 | [MOB-66](../cards/MOB-66-android-brand-font-newsreader-manrope.md) | 代码完成：`res/font/` 已装 Newsreader/Manrope 静态字重（OFL 授权离线打包），`Tokens.kt` 新增 `PPFont`，11 处硬编码 `FontFamily.Serif` 与隐式正文字体已全部替换；待真机/模拟器截图对比确认渲染 | L2 |
+| [MOB-77](../cards/MOB-77-cancelled-round-restore-leaves-notice-channel.md) | 代码完成：取消轮次恢复入口从常驻警告条挪进「备份」设置卡（CellRow，null 时不渲染）；`HomeNoticeKind.CANCELLED_ROUND` 已删除；「备份」section 标签删除，「其他」改「关于」；Android JVM 69 类/346 测试全绿；待真机/模拟器截图走查 | L2 |
 
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
 

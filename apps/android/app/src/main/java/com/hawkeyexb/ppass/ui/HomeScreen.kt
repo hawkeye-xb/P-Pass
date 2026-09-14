@@ -129,6 +129,12 @@ fun HomeScreen(
     // 是两回事——真机反馈：中途加相册后进度条直接跳到"15/15"附近，
     // 混进了之前已经传完的历史，应该只看这一轮还要传的。
     roundProgress: com.hawkeyexb.ppass.backup.flow.RoundProgress? = null,
+    // 2026-09-14（用户拍板，取代 MOB-59/X-05 的常驻警告条设计）：取消
+    // 轮次的恢复入口不再是打断式提示，改为「备份」设置卡里的一行——
+    // null = 没有可恢复的取消轮次，这一行不渲染；非 null 时显示跳过
+    // 张数，点击即恢复（同一条 restoreCancelledRounds 管线，未改动）。
+    cancelledRoundCount: Int? = null,
+    onRestoreCancelledRounds: () -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -463,15 +469,10 @@ fun HomeScreen(
         // 后 3 行是直接开关（不折进子页——用户实机反馈上一轮把充电/
         // WiFi 折进"什么时候备份"子页是自己想当然加的一层，设计稿就是
         // 摆开的开关行；"备份失败时通知我"落地成真实偏好，见
-        // NotifyOnFailurePrefs）。──
+        // NotifyOnFailurePrefs）。2026-09-14（用户拍板）：去掉"备份"
+        // 这个 section 标签——整页就是备份设置页，标签是信息增量为 0
+        // 的重复；卡片边框本身已把这些行圈成一组。
         Spacer(Modifier.height(18.dp))
-        Text(
-            stringResource(R.string.rules_title),
-            fontSize = 12.sp, fontWeight = FontWeight.Bold,
-            letterSpacing = 1.5.sp, color = PPColor.Ink40,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-        Spacer(Modifier.height(8.dp))
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -488,6 +489,21 @@ fun HomeScreen(
                     ),
                     onClick = onOpenBucketPicker,
                 )
+                // 2026-09-14（用户拍板，取代 MOB-59/X-05 常驻警告条）：
+                // 用户主动取消传输后，恢复入口不再是打断式琥珀提示，
+                // 改为这里一行——跟"备份哪些相册"同属"这次备份包含
+                // 什么"的语义线，平时不显眼，想找的时候在。
+                if (cancelledRoundCount != null) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.cancelled_round_cell_label),
+                        value = stringResource(
+                            R.string.cancelled_round_cell_value,
+                            cancelledRoundCount,
+                        ),
+                        onClick = onRestoreCancelledRounds,
+                    )
+                }
                 HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(
                     label = stringResource(R.string.auto_backup_pause),
@@ -509,7 +525,9 @@ fun HomeScreen(
             }
         }
 
-        // ── "其他"（M10）：存储电脑 + 版本，两行。──
+        // ──「关于」（M10 原文"其他"——2026-09-14 用户拍板换成更具体的
+        // 标签：存储电脑 + 版本这两行仍需要一个标签把它们和上面的备份
+        // 规则卡区分开，"其他"本身不解释是什么，"关于"更贴近实际内容。──
         Spacer(Modifier.height(18.dp))
         Text(
             stringResource(R.string.other_section_title),

@@ -1,8 +1,13 @@
 // UI-04a/c: 全局唯一提示呈现层（batch/ui-04a-c）。
 //
-// 既有提示已迁入：中断恢复 / 取消轮入口 / 重传告知三条，统一在
-// [NoticeHost] 里构造候选列表 → [topNotice]
-// 只渲染最高优先级的一条，其余全部收起。
+// 既有提示已迁入：中断恢复 / 重传告知，统一在 [NoticeHost] 里构造候选
+// 列表 → [topNotice]，只渲染最高优先级的一条，其余全部收起。
+//
+// 2026-09-14（用户拍板）：取消轮次的「重新传输」不再走这条常驻琥珀警告
+// 条——用户主动取消是正常操作，不该被塑造成"未处理的问题"。该入口已
+// 移到 HomeScreen 的「备份」设置卡里，做成一行可点的 CellRow（见
+// HomeScreen.kt 的 cancelledRoundCount 参数），跟"备份哪些相册"并列，
+// 平时不显眼，想找的时候在。CANCELLED_ROUND 这个 kind 已删除。
 //
 // [HOME_NOTICE_PRIORITY] 的排序：
 //   PAIRING_LOST (阻塞) 在最前，底下的 REUPLOAD (补充) 在最后——按
@@ -45,9 +50,6 @@ enum class HomeNoticeKind {
 
     /** A phone-deleted source cannot be sent again; informational only. */
     SOURCE_MISSING,
-
-    /** MOB-59: X-05——取消轮次的重传常驻入口，不是可关闭的提示。 */
-    CANCELLED_ROUND,
 }
 
 /** 优先级（越靠前越要紧）。UI-04c 口径：阻塞备份的 > 需要授权的 >
@@ -58,7 +60,6 @@ val HOME_NOTICE_PRIORITY: List<HomeNoticeKind> = listOf(
     HomeNoticeKind.PARTIAL_ACCESS,
 
     HomeNoticeKind.SOURCE_MISSING,
-    HomeNoticeKind.CANCELLED_ROUND,
     HomeNoticeKind.REUPLOAD,
 )
 
@@ -129,10 +130,8 @@ fun NoticeCard(notice: HomeNotice) {
 @Composable
 fun NoticeHost(
     backupInterrupted: Boolean,
-    cancelledRoundCount: Int?,
     reuploadCount: Int,
     onResumeBackup: () -> Unit,
-    onRestoreCancelledRounds: () -> Unit,
     onAcknowledgeReupload: () -> Unit,
 ) {
     val candidates = buildList {
@@ -145,14 +144,6 @@ fun NoticeHost(
             )
         )
 
-        if (cancelledRoundCount != null) add(
-            HomeNotice(
-                kind = HomeNoticeKind.CANCELLED_ROUND,
-                body = stringResource(R.string.cancelled_round_notice_body, cancelledRoundCount),
-                actionLabel = stringResource(R.string.cancelled_round_notice_restore),
-                onAction = onRestoreCancelledRounds,
-            )
-        )
         if (reuploadCount > 0) add(
             HomeNotice(
                 kind = HomeNoticeKind.REUPLOAD,
