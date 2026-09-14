@@ -544,17 +544,10 @@ fun HomeScreen(
             }
         }
 
-        // ──「关于」（M10 原文"其他"——2026-09-14 用户拍板换成更具体的
-        // 标签：存储电脑 + 版本这两行仍需要一个标签把它们和上面的备份
-        // 规则卡区分开，"其他"本身不解释是什么，"关于"更贴近实际内容。──
+        // 2026-09-14（用户拍板，与「备份」section 标签同一决策）：去掉
+        // "关于"标签——卡片边框已把存储电脑+版本这两行圈成一组，标签是
+        // 信息增量为 0 的重复。
         Spacer(Modifier.height(18.dp))
-        Text(
-            stringResource(R.string.other_section_title),
-            fontSize = 12.sp, fontWeight = FontWeight.Bold,
-            letterSpacing = 1.5.sp, color = PPColor.Ink40,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-        Spacer(Modifier.height(8.dp))
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
