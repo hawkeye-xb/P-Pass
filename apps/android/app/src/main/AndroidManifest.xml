@@ -64,6 +64,16 @@
             android:foregroundServiceType="dataSync"
             tools:node="merge" />
 
+        <!-- NET-12: transfer foreground service — REBUILD-04 deleted the
+             legacy BackupWorker's FGS promotion; the new Flow transport
+             never had a replacement, leaving live transfers with zero
+             protection from being reclaimed as a cached process (real
+             device, 2026-09-14: killed twice mid-transfer). -->
+        <service
+            android:name=".backup.flow.FlowTransferForegroundService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
         <!-- MOB-27: 照片监听的看门 job。只派活 + 重挂，毫秒级返回，
              备份本身在 WorkManager 那边异步跑（见 MediaWatchJob.kt）。
              BIND_JOB_SERVICE 是 JobService 的硬要求——漏了系统拒绝 bind，

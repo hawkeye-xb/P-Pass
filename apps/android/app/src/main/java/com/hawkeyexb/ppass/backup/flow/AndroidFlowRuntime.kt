@@ -303,9 +303,18 @@ private data class AndroidFlowRuntime(
  *  every trigger. Every other Flow trigger already serializes state
  *  mutation through [flowTriggerLock] synchronously; the network hop to
  *  the daemon must not block that path, so this fires on its own
- *  coroutine and simply retries from the next trigger on any failure. */
+ *  coroutine and simply retries from the next trigger on any failure.
+ *
+ *  NET-12: also the single postcondition hook for the transfer foreground
+ *  service — every ledger-mutating trigger (wake/pause/continue/retry/
+ *  cancel/restore/receipt/failure) already reaches this exact point, so
+ *  syncing the service here means no call site can forget it. This part
+ *  is synchronous and cheap (ContextCompat.startForegroundService /
+ *  stopService are non-blocking Binder calls) — it must not wait on the
+ *  audit network hop above. */
 private fun flushAuditOutbox(context: Context) {
     runtimeFor(context.applicationContext)?.let { runtime ->
+        FlowTransferForeground.sync(context, runtime.ledger.load())
         runtime.auditScope.launch { runtime.auditDispatcher.flush() }
     }
 }

@@ -60,6 +60,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [NET-12](../cards/NET-12-flow-transfer-lacks-foreground-service-protection.md) | 三星真机实锤 2026-09-14 两次真实 killed（adj=900/915）：REBUILD-04 删除的前台服务保护已接回（`FlowTransferForegroundService` + `FlowTransferForeground.sync`），三星真机复测 adj 锁定在 200（不再降到 700-900 杀档），35 张全部 CONFIRMED；待长期真机回归观察 | L2 |
 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 后台备份以用户选择、标准白名单和 MediaWatch 健康三项裁决；通知权限不进 onboarding，后台异常仅在设置呈现；待 HarmonyOS 4.2 真机验证 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 两 tab 都能看到中断提示，但用户真机复核后反馈"状态不对"，待用户说明具体哪里不对 | L2 |
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |

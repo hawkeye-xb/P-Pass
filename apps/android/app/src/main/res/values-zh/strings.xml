@@ -89,6 +89,11 @@
     <string name="notif_channel_backup_failed">照片备份失败</string>
     <string name="notif_backup_failed_title">照片备份没成功</string>
     <string name="notif_backup_failed_body">%1$d 张照片没备份成功，打开看看</string>
+    <!-- NET-12: 传输前台服务——传输期间把进程留在系统不会随便回收的档位，
+         防止像 2026-09-14 那样在传输中途被系统直接杀掉。低优先级/静音，
+         这是状态提示不是告警。 -->
+    <string name="notif_channel_transfer">正在备份</string>
+    <string name="notif_transfer_title">正在备份照片</string>
     <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->
     <string name="notif_sentinel_title">3 天没连上电脑了</string>
     <string name="notif_sentinel_body">照片没丢——看看电脑上的 P-Pass 还开着吗</string>
