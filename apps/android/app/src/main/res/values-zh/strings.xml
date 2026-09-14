@@ -35,8 +35,8 @@
     <!-- M6 完成页（全页面状态稿）：选完相册、真正触发首次备份之后的收尾。 -->
     <string name="backup_started_title">%1$s 张照片，正在回家。</string>
     <string name="backup_started_body">之后什么都不用做。任何时候打开 App，都能看到照片安不安全。</string>
-    <string name="backup_started_enter">进入 App</string>
     <string name="background_backup_enable">开启后台备份</string>
+    <string name="background_backup_not_now">暂不开启</string>
     <string name="not_a_code">这不是 P-Pass 配对码。</string>
     <string name="pair_unparseable_code">配对码无法解析，请把电脑端和手机 App 都升级到最新版</string>
     <string name="storage_device_default">P-Pass 存储端</string>

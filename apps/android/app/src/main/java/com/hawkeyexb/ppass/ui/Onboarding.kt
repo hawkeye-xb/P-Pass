@@ -135,12 +135,15 @@ fun BackupStartedScreen(
             Spacer(Modifier.height(12.dp))
             OutlinedButton(
                 onClick = onEnter,
-                modifier = Modifier.fillMaxWidth().height(52.dp),
+                modifier = Modifier.fillMaxWidth().height(60.dp),
                 shape = RoundedCornerShape(PPSize.RadiusControl),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Ink60),
             ) {
                 Text(
-                    stringResource(R.string.backup_started_enter),
-                    fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                    stringResource(R.string.background_backup_not_now),
+                    fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                    color = PPColor.Ink60,
                 )
             }
         }
