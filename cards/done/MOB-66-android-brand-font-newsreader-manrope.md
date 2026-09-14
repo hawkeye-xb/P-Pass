@@ -1,6 +1,6 @@
 # MOB-66 Android 品牌字体接入：Newsreader/Manrope 替换系统默认字体
 
-> 🟡 状态：代码完成，待真机/模拟器截图走查
+> ✅ 状态：真机验收通过（2026-09-14，三星 SM-S9210，versionCode 22）
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -24,19 +24,19 @@ Sans SC 后备），视觉上与桌面一致；`Tokens.kt` 是字体 token 的�
 
 ## 验收标准
 
-- [ ] `apps/android/app/src/main/res/font/` 下有 Newsreader（400/500/600）
+- [x] `apps/android/app/src/main/res/font/` 下有 Newsreader（400/500/600）
       与 Manrope（400/500/700）字体文件，来源 Google Fonts、协议 SIL
       OFL 1.1（可免费商用、可打包分发，已在讨论中核实）
-- [ ] `ui/Tokens.kt` 新增 `PPFont` object：`PPFont.Serif` / `PPFont.Sans`
+- [x] `ui/Tokens.kt` 新增 `PPFont` object：`PPFont.Serif` / `PPFont.Sans`
       （Compose `FontFamily`，由 `Font(R.font.xxx, FontWeight.xxx)` 组
       成），字重映射对齐 `tokens.json` 的 `font.serif`/`font.sans`
-- [ ] 5 个文件里全部 11 处 `FontFamily.Serif` 调用点改用 `PPFont.Serif`；
+- [x] 5 个文件里全部 11 处 `FontFamily.Serif` 调用点改用 `PPFont.Serif`；
       当前隐式吃系统默认字体的正文 `Text` 改显式 `PPFont.Sans`
-- [ ] `FontFamily.Monospace` 调用点（配对码/日志片段等技术信息展示）
+- [x] `FontFamily.Monospace` 调用点（配对码/日志片段等技术信息展示）
       保留不动——这是故意的等宽语义，不属于品牌字体范围，不要连带改掉
-- [ ] 真机或模拟器截图对比标题/正文渲染前后差异，确认不再是系统默认
+- [x] 真机或模拟器截图对比标题/正文渲染前后差异，确认不再是系统默认
       宋体/黑体
-- [ ] `assets/design/README.md` 里 "*(future)* `Tokens.kt` | Android
+- [x] `assets/design/README.md` 里 "*(future)* `Tokens.kt` | Android
       app (M2 T-055) — generate from `tokens.json`" 这行已经跟代码现状
       脱节（`Tokens.kt` 早已存在并被消费），本卡完成后一并改成如实的
       完成状态描述
@@ -97,8 +97,11 @@ Sans SC 后备），视觉上与桌面一致；`Tokens.kt` 是字体 token 的�
   0 errors / 4 skipped（真实生成，见
   `apps/android/app/build/test-results/testDebugUnitTest/`）。
 - `just ci`：见 PROGRESS.md 对应记录。
-- **未做**：真机/模拟器截图对比（本卡验收标准第 5 条）——需要用户或
-  后续走查补上，本次交付不包含视觉验收。
+- **真机验收（2026-09-14，三星 SM-S9210，versionCode 22）**：安装当前
+  main 构建，欢迎页"照片，自动回家。"标题与备份页大数字"5"/"9"均为
+  明显衬线字体（笔画粗细变化+装饰线，Newsreader），正文/汉字为无衬线
+  黑体（Manrope/Noto Sans SC），中西文混排字体切换正确；截图证据见
+  会话记录。
 
 ## 备注
 
