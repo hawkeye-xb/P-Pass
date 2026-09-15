@@ -1714,6 +1714,7 @@
                   class="photo-viewer-video"
                   src={viewerVideoSrc}
                   controls
+                  muted
                   data-video-gen={viewerVideoToken.gen}
                   data-video-hash={viewerVideoToken.hash}
                   onerror={onVideoError}></video>
