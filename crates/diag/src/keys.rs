@@ -173,6 +173,11 @@ msg_keys! {
     UI_LIBRARY_DELETE_WARN => "ui.library_delete_warn",
     /// Dismiss action for the warning above.
     UI_LIBRARY_DELETE_WARN_DISMISS => "ui.library_delete_warn_dismiss",
+    // ── NET-13: 设备页——打开该设备存储目录 ────────────────────────
+    /// 设备行「打开文件夹」按钮的 title——揭示 originals/<node_id>/。
+    UI_DEVICE_OPEN_FOLDER => "ui.device_open_folder",
+    /// 打开设备文件夹失败时的错误提示。
+    UI_DEVICE_OPEN_FOLDER_FAILED => "ui.device_open_folder_failed",
 }
 
 #[cfg(test)]
@@ -282,10 +287,12 @@ mod tests {
             UI_MOBILE_REUPLOAD_BODY,
             UI_LIBRARY_DELETE_WARN,
             UI_LIBRARY_DELETE_WARN_DISMISS,
+            UI_DEVICE_OPEN_FOLDER,
+            UI_DEVICE_OPEN_FOLDER_FAILED,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 100);
+        assert_eq!(ALL.len(), 102);
     }
 
     #[test]
