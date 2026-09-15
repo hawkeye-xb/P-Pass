@@ -292,11 +292,29 @@ impl Db {
     /// `ipc device.watermarks` data source — dogfood daily reports, desktop
     /// activity log, phone-side "last success" all read the same table.
     pub async fn list_device_watermarks(&self) -> Result<Vec<DeviceWatermark>> {
+        // NET-13: `backup_watermark.updated_at` is written only by the
+        // legacy batch-scan path (`backup.commit` → `set_watermark`,
+        // `crates/daemon/src/backup.rs`). The Flow delivery path
+        // (`flow_delivery.rs::run_fetch_body`) never touches that table —
+        // it only inserts an `asset` row. A device that only ever backed up
+        // via Flow therefore had `last_backup_at = NULL` forever, and the
+        // desktop showed "从未备份过" even while `asset_count` kept
+        // climbing. Fold in `MAX(asset.added_at)` per device (real ingest
+        // fact, works for both paths) and take the greater of the two
+        // sources so a still-newer legacy scan timestamp is never
+        // regressed by an older asset row.
         let rows = sqlx::query(
-            "SELECT d.node_id, d.name, w.updated_at,
-                    (SELECT COUNT(*) FROM asset a WHERE a.src_device = d.node_id) AS asset_count
+            "SELECT d.node_id, d.name,
+                    NULLIF(MAX(COALESCE(w.updated_at, 0), COALESCE(la.last_added_at, 0)), 0)
+                        AS last_backup_at,
+                    COALESCE(la.asset_count, 0) AS asset_count
              FROM device d
              LEFT JOIN backup_watermark w ON w.node_id = d.node_id
+             LEFT JOIN (
+                 SELECT src_device, MAX(added_at) AS last_added_at, COUNT(*) AS asset_count
+                 FROM asset
+                 GROUP BY src_device
+             ) la ON la.src_device = d.node_id
              WHERE d.revoked = 0
              ORDER BY d.paired_at ASC",
         )
@@ -307,7 +325,7 @@ impl Db {
             .map(|r| DeviceWatermark {
                 node_id: r.get("node_id"),
                 name: r.get("name"),
-                last_backup_at: r.get("updated_at"),
+                last_backup_at: r.get("last_backup_at"),
                 asset_count: r.get("asset_count"),
             })
             .collect())
@@ -474,6 +492,50 @@ mod tests {
         let d2 = wm.iter().find(|w| w.node_id == [2u8; 32]).unwrap();
         assert_eq!(d2.last_backup_at, None);
         assert_eq!(d2.asset_count, 0);
+    }
+
+    /// NET-13 RED: Flow 交付路径（flow_delivery.rs::run_fetch_body）从不
+    /// 调用 `set_watermark`——那是遗留批量扫描口径（Android MediaStore
+    /// generation），Flow 路径只会真的 `ingest()` 一条 asset 行。改前
+    /// `last_backup_at` 对这种设备永远是 None，desktop 显示「还没备份
+    /// 过」，即便 asset_count 已经在涨——用户明确报告的状态不对就是这个。
+    /// 水位应取 `backup_watermark.updated_at` 与该设备最新 `asset.added_at`
+    /// 两者较大值，不能只认前者。
+    #[tokio::test]
+    async fn watermark_falls_back_to_latest_asset_ingest_time_without_legacy_scan_row() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+        // 没有调用 set_watermark——模拟纯 Flow 路径设备：从未跑过旧批量扫描。
+        let mut a = asset(&[1u8; 32], 1);
+        a.added_at = 1_800_000_000_000;
+        db.insert_asset(&a).await.unwrap();
+
+        let wm = db.list_device_watermarks().await.unwrap();
+        let d1 = wm.iter().find(|w| w.node_id == [1u8; 32]).unwrap();
+        assert_eq!(
+            d1.last_backup_at,
+            Some(1_800_000_000_000),
+            "Flow 路径入库的资产必须让设备显示已备份，不能因为没有旧扫描水位行就报 None"
+        );
+        assert_eq!(d1.asset_count, 1);
+    }
+
+    /// 两个来源都存在时取较大值——旧扫描水位比最新资产还新（例如刚跑完一次
+    /// 空扫描更新了 generation，但没有新照片）时不能倒退成更旧的资产时间。
+    #[tokio::test]
+    async fn watermark_prefers_the_more_recent_of_scan_and_ingest_times() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+        db.set_watermark(&[1u8; 32], 500, 2_000_000_000_000)
+            .await
+            .unwrap();
+        let mut a = asset(&[1u8; 32], 1);
+        a.added_at = 1_000_000_000_000; // 早于扫描水位
+        db.insert_asset(&a).await.unwrap();
+
+        let wm = db.list_device_watermarks().await.unwrap();
+        let d1 = wm.iter().find(|w| w.node_id == [1u8; 32]).unwrap();
+        assert_eq!(d1.last_backup_at, Some(2_000_000_000_000));
     }
 
     #[tokio::test]

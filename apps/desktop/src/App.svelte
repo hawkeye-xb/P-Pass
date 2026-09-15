@@ -27,6 +27,7 @@
   import SmartphoneIcon from "@lucide/svelte/icons/smartphone";
   import ClockIcon from "@lucide/svelte/icons/clock";
   import SettingsIcon from "@lucide/svelte/icons/settings";
+  import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
   import { humanTime, needsAttention, daysSince, relativeTime } from "./lib/humanTime.js";
   // T-092: connection 四态 → 文案/点色；字节 → 人读容量（纯函数，
@@ -523,6 +524,26 @@
       }
     } catch (e) {
       flashMessage(t("ui.open_failed", { err: String(e) }), "error");
+    }
+  }
+
+  // NET-13: 打开某台设备自己的存储目录——`originals/<node_id 全量 hex>/`
+  // 与 ingest 落位口径完全一致（crates/core-index/src/ingest.rs
+  // device_dir()：node_id 字节逐位 hex，devices.list 返回的 node_id 已经是
+  // 同一份 hex 字符串，不需要额外转换）。该设备还没备份过时目录不存在，
+  // 退回打开 originals/ 根目录，不假装有内容。
+  async function openDeviceFolder(nodeId) {
+    try {
+      const s = await call("status");
+      const dir = s.library_dir;
+      if (!dir) throw new Error(t("ui.library_dir_unknown"));
+      try {
+        await revealItemInDir(`${dir}/originals/${nodeId}`);
+      } catch (_) {
+        await revealItemInDir(`${dir}/originals`);
+      }
+    } catch (e) {
+      flashMessage(t("ui.device_open_folder_failed", { err: String(e) }), "error");
     }
   }
 
@@ -1353,7 +1374,7 @@
                       <!-- T-091: 哨兵行 ACT 色 + 「需要看看」；T-092: 连接态点色
                            （direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
                       <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
-                      <span class="flex flex-1 flex-col items-start gap-[2px]">
+                      <span class="flex flex-1 flex-col items-start gap-[2px] min-w-0">
                         {#if renameTarget?.nodeId === d.node_id}
                           <!-- NAME-01: 改名输入框——回车保存 / Esc 取消 /
                                失焦保存（空名与未改动不提交）。 -->
@@ -1382,9 +1403,29 @@
                             onclick={() => startRename(d)}
                           >{d.name}</Button>
                         {/if}
-                        <span class="text-[13.5px] leading-[1.5] text-ink-40">{row.sub}</span>
                       </span>
-                      <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
+                      <!-- NET-13: 设备 ID 独立列——8 位短指纹，与活动记录页
+                           auditProjection.js 的 #xxxxxxx 风格一致；title 原生
+                           tooltip 悬停看 64 位全量（devices.list 返回的
+                           node_id 已经是全量 hex，不需要额外转换）。 -->
+                      <span
+                        class="w-[76px] flex-none truncate font-mono text-[12.5px] text-ink-40"
+                        title={d.node_id}
+                      >#{d.node_id.slice(0, 8)}</span>
+                      <!-- NET-13: 在线状态从名字下面的行内文案挪成独立固定
+                           位置的一列（用户反馈：混在标题里不好扫）。 -->
+                      <span class="w-[168px] flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.sub}</span>
+                      <span class="w-[140px] flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
+                      <!-- NET-13: 打开该设备存储目录（originals/<node_id>/），
+                           与照片页「在文件管理器中打开」同一 revealItemInDir
+                           机制；该设备还没落过任何照片时目录不存在，退回
+                           打开 originals/ 根目录（openDeviceFolder 内部处理）。 -->
+                      <Button
+                        variant="link"
+                        class="h-auto min-h-0 flex-none rounded-sm border-0 border-none px-[4px] py-[8px] text-ink-40 no-underline hover:bg-linen hover:text-ink"
+                        title={t("ui.device_open_folder")}
+                        onclick={() => openDeviceFolder(d.node_id)}
+                      ><FolderOpenIcon size={16} /></Button>
                       <Button
                         variant="link"
                         class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"

@@ -98,5 +98,7 @@
   "ui.mobile_reupload_title": "资源在客户端丢失，正在重传",
   "ui.mobile_reupload_body": "如果是主动删除，请先删除移动端的数据。",
   "ui.library_delete_warn": "刚从照片库里删掉 {n} 张照片。还在手机上的那些，下次备份会被自动传回来——想彻底删掉，先删手机上的原图，再删库里的。",
-  "ui.library_delete_warn_dismiss": "知道了"
+  "ui.library_delete_warn_dismiss": "知道了",
+  "ui.device_open_folder": "打开文件夹",
+  "ui.device_open_folder_failed": "打开设备文件夹失败：{err}"
 }

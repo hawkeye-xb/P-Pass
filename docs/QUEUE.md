@@ -11,7 +11,9 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-12**（OPPO / v0.5.1 真机走查
+> 最后核对：**2026-09-15**（新增 NET-13：桌面设备列表备份状态误报根因
+> 修复 + ID 列 + 打开目录 + 在线态独立列，本机全绿，入「待共享回归」。
+> 上一轮 2026-09-12：OPPO / v0.5.1 真机走查
 > `docs/evidence/2026-09-12-oppo-051-dogfood.md`：新开 MOB-76；MOB-52/54/64/71/74
 > 证据入账（MOB-54 真机复核失败重开定位）。上一轮 2026-09-11：真实狗粮新增
 > MOB-71~75、UI-11；MOB-68 与 AUDIT-02
@@ -60,6 +62,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [NET-13](../cards/NET-13-device-list-status-id-column-open-folder.md) | 桌面「家人与设备」页备份状态误报根因修复（Flow 路径从不写遗留水位表，last_backup_at 改读真实 asset ingest 时间）+ 设备 ID 列（8位短指纹+悬停全量）+ 打开设备目录按钮 + 在线状态独立列；本机全绿，待真机/真实多设备回归 | L1 |
 | [NET-12](../cards/NET-12-flow-transfer-lacks-foreground-service-protection.md) | 三星真机实锤 2026-09-14 两次真实 killed（adj=900/915）：REBUILD-04 删除的前台服务保护已接回（`FlowTransferForegroundService` + `FlowTransferForeground.sync`），三星真机复测 adj 锁定在 200（不再降到 700-900 杀档），35 张全部 CONFIRMED；待长期真机回归观察 | L2 |
 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 后台备份以用户选择、标准白名单和 MediaWatch 健康三项裁决；通知权限不进 onboarding，后台异常仅在设置呈现；待 HarmonyOS 4.2 真机验证 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 两 tab 都能看到中断提示，但用户真机复核后反馈"状态不对"，待用户说明具体哪里不对 | L2 |
