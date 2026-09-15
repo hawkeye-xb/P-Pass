@@ -578,7 +578,12 @@ fun PPassApp() {
                 watcherScheduled = !backupInterrupted,
                 watcherInterrupted = backupInterrupted,
             )
-            val backgroundBackupEnabled = backgroundBackupState == BackgroundBackupState.Armed
+            // UI-12 追加修正（2026-09-15，用户判断成立）：开关必须绑定
+            // 用户真实意图（userRequestedBackgroundBackup），不能绑 Armed——
+            // 否则系统一撤白名单，开关会在 UI 上自己跳回关闭，用户会误以为
+            // 是自己手滑关的，或者以为 App 把设置清空了。系统层面的失效
+            // 只改状态提示（见 HomeScreen 的 RuleSwitchRow hint），不改
+            // 开关本身显示值；唯一能让开关变灰的只有用户自己点关。
             // UI-12: "知道了" 是对**当前这个状态**的暂时性忽略，不是永久
             // 偏好——状态发生新的跃变（比如恢复又再次被系统停掉）必须重新
             // 提醒，所以 key 在 backgroundBackupState 上：状态一变这个
@@ -694,7 +699,7 @@ fun PPassApp() {
                             }
                         },
                         pairedAt = s.pairing.pairedAt,
-                        autoBackupEnabled = backgroundBackupEnabled,
+                        autoBackupEnabled = userRequestedBackgroundBackup,
                         backgroundBackupState = backgroundBackupState,
                         onResolveBackgroundBackup = resolveBackgroundBackup,
                         onToggleAutoBackup = { enabled ->
