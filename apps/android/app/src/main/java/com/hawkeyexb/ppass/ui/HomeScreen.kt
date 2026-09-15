@@ -43,6 +43,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
@@ -512,23 +513,22 @@ fun HomeScreen(
                     label = stringResource(R.string.auto_backup_pause),
                     checked = autoBackupEnabled,
                     onCheckedChange = onToggleAutoBackup,
-                )
-                if (backgroundBackupState != BackgroundBackupState.OffByUser && !autoBackupEnabled) {
-                    HorizontalDivider(color = PPColor.Divider)
-                    CellRow(
-                        label = stringResource(R.string.auto_backup_pause),
-                        value = stringResource(
+                    hint = if (backgroundBackupState != BackgroundBackupState.OffByUser &&
+                        backgroundBackupState != BackgroundBackupState.Armed
+                    ) {
+                        stringResource(
                             when (backgroundBackupState) {
                                 BackgroundBackupState.NeedsSystemAuthorization ->
                                     R.string.background_backup_needs_authorization
                                 BackgroundBackupState.SystemStoppedWatcher ->
                                     R.string.background_backup_system_stopped
-                                else -> error("enabled background backup does not need remediation")
+                                else -> error("unreachable: OffByUser/Armed excluded above")
                             },
-                        ),
-                        onClick = onResolveBackgroundBackup,
-                    )
-                }
+                        )
+                    } else null,
+                    hintColor = PPColor.Waiting,
+                    onHintClick = onResolveBackgroundBackup,
+                )
                 HorizontalDivider(color = PPColor.Divider)
                 RuleSwitchRow(
                     label = stringResource(R.string.setting_wifi_only),
@@ -811,13 +811,21 @@ internal fun shouldShowWifiDeferredHint(
  *  `ListItem`。 */
 private val CellRowHeight = 52.dp
 
-/** 备份规则卡里的开关行——label（可带 hint）左、Switch 右。 */
+/** 备份规则卡里的开关行——label（可带 hint）左、Switch 右。
+ *  UI-12 追加（2026-09-15）：hint 现在可以是系统层面的运行状态描述
+ *  （比如"系统已停止后台监听"），跟 label（用户配置的名字）是两个不同
+ *  的信息位，不冲突——label 永远只说"这是什么配置"，hint 永远只说
+ *  "这个配置眼下的真实运行情况"。hintColor 让状态类 hint 能用琥珀色
+ *  跟静态说明文字（Ink40）区分；onHintClick 让状态行本身可点，去处理
+ *  异常，不需要在开关行外面再叠一个 CellRow。 */
 @Composable
 private fun RuleSwitchRow(
     label: String,
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit,
     hint: String? = null,
+    hintColor: Color = PPColor.Ink40,
+    onHintClick: (() -> Unit)? = null,
 ) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = CellRowHeight).padding(horizontal = 16.dp),
@@ -826,7 +834,15 @@ private fun RuleSwitchRow(
         Column(Modifier.weight(1f)) {
             Text(label, fontSize = 15.sp, color = PPColor.Ink)
             if (hint != null) {
-                Text(hint, fontSize = 12.sp, lineHeight = 17.sp, color = PPColor.Ink40)
+                Text(
+                    hint,
+                    fontSize = 12.sp, lineHeight = 17.sp, color = hintColor,
+                    modifier = if (onHintClick != null) {
+                        Modifier.clickable(onClick = onHintClick)
+                    } else {
+                        Modifier
+                    },
+                )
             }
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
