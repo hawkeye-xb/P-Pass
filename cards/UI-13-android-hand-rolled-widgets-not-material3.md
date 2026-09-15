@@ -1,6 +1,6 @@
 # UI-13 移动端多处手写控件应换成 Material3 标准组件（L2）
 
-> ⬜ 状态：未开工
+> 🟡 状态：代码已合并，等真机验收
 > 级别：L2 · 阻塞：无
 
 ## 问题
@@ -86,4 +86,14 @@ diff 截图确认与设计稿目视一致，再合入。
 
 ## 实施记录
 
-（留空，实施 agent 追加）
+- 2026-09-15：已实现（`TwoTabs` 的 `NavigationBar` 一项按卡内退路条款处理，见下）。
+  - `TabIcons.kt` 里的 `SettingsTabIcon`（Canvas 手绘齿轮）删除；`TwoTabs.kt` 改用 `androidx.compose.material.icons.filled.Settings`（`material-icons-core`，`build.gradle.kts` 已声明依赖，随 material3 传递引入，零新增体积）。`PhotosTabIcon`（相机机身+镜头+取景线）保留手绘——核对过 `material-icons-core` 的完整 49 图标集（`unzip -l` 实测枚举），没有相机/相册类图标，material-icons-extended 卡里明确注释过"未启用（release 未开 R8，体积代价太大）"，不在本卡范围内引入。
+  - 设置图标角标改用 `BadgedBox`/`Badge`（Material3 组件），触发条件不变（仍是 `settingsAlert` 参数直传，MOB-68 红线未动）；`Badge` 自带 `contentDescription` 语义，读屏可读"有未处理事项"。
+  - `TwoTabs.kt` 底部导航**保留手写实现，未换 `NavigationBar`**——退路条款：`NavigationBar` 默认高度 80dp + 强制 `NavigationBarItem` 的 indicator 胶囊高亮，与设计稿 `layout-v3` 的 64dp 高、2dp 顶部指示线扁平风格冲突明显，属于卡里"视觉差距过大"的例外条款范围。保留 `TabCell` 手写 `Row+Column+clickable`，只替换了里面的图标（Canvas→`Icons.Filled.Settings`）和角标（手写圆点→`Badge`）两处组件级别的东西，容器本身继续手写。
+  - `PhotosScreen.kt` 私有 `FilterChip` 删除，改名 `PhotoFilterChip`（避免与 Material3 同名组件混淆），内部委托给 `androidx.compose.material3.FilterChip`，用 `FilterChipDefaults.filterChipColors` 定制 `containerColor`/`selectedContainerColor`/`labelColor`/`selectedLabelColor` 四个颜色还原设计稿墨底纸字/亚麻底墨字视觉，`shape = RoundedCornerShape(999.dp)` 保持胶囊形状。
+  - `HomeScreen.kt` 的 `HeroSecondaryButton` 手写 `Row+clip+background+border+clickable` 删除，改用 Material3 `OutlinedButton`，`colors = ButtonDefaults.outlinedButtonColors(...)` 定制三个颜色还原视觉，`enabled` 参数直传组件（真正的 disabled 语义，非手动改透明度）。
+  - `CellRow`/`RuleSwitchRow` **评估后保留现状，未套 `ListItem`**——量出的冲突：Material3 `ListItem` 默认单行最小高度 56dp、两行 72dp，均高于设计稿 `CellRowHeight = 52.dp`；套用会让整张设置卡片明显变高变松散，偏离设计稿的紧凑列表观感。冲突点已写入 `HomeScreen.kt` 里 `CellRowHeight` 的 KDoc 注释，不是静默跳过。
+  - RED→GREEN：本卡属于纯组件替换，未新增業務判据，靠既有测试反证——`BackgroundBackupPresentationContractTest` 里对 `settingsAlert` 判据的字符串匹配测试未受影响（角标触发条件字面量不变）；组件删除后编译期即会暴露断链（`TabIcons.kt` 里被删除的 `SettingsTabIcon` 若仍被引用会编译失败），比字符串匹配更强的反证形式。
+  - 测试：`./gradlew :app:compileDebugKotlin :app:compileDebugUnitTestKotlin` 干净通过（零 warning 新增）；`./gradlew :app:testDebugUnitTest --rerun-tasks` **378/378 绿**（与 UI-12 同一次全量跑批，`app/build/test-results/testDebugUnitTest/*.xml`，78 个测试类，时间戳本次生成）；`:app:assembleDebug` 绿。
+  - 真机验收（三星 SM-S9210，`0.5.2-test.1`，`adb install -r` 覆盖安装后 force-stop 重启验证真实运行的是新构建）：截图确认——底部设置图标是清晰的 Material3 齿轮符号（非手绘 Canvas），角标红点渲染正常且位置未变；Photos tab 的"全部/仅本机/家人的"三个过滤胶囊视觉与替换前一致（选中态墨底纸字、未选中亚麻底墨字）；设置页"暂停/继续"按钮（`OutlinedButton`）外观与替换前一致，无渲染异常；切换 Photos/Backup 两个 tab 反复验证图标、角标、通知条状态保持一致。未做的：底部导航栏涟漪点击反馈的真机手感未逐帧录制确认（视觉截图无法证明触感），后续如需更强验证需录屏。
+  - 未做的（诚实记录）：`NavigationBar` 替换（按退路条款保留现状，已附理由）；`ListItem` 替换（按冲突记录保留现状，已附理由）。

@@ -4,6 +4,7 @@ package com.hawkeyexb.ppass.ui
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HomeNoticesTest {
@@ -63,5 +64,32 @@ class HomeNoticesTest {
         assertEquals(HomeNoticeKind.BACKUP_INTERRUPTED, topNotice(candidates)?.kind)
         // 反证：若实现退化成 firstOrNull，会拿到 REUPLOAD（最低优先级）。
         assertNotEquals(HomeNoticeKind.REUPLOAD, topNotice(candidates)?.kind)
+    }
+
+    // UI-12: HomeNotice 新增字段的默认值与语义——不引入运行时依赖，
+    // 纯数据类可以直接在 JVM 测试里断言，不需要 stringResource/Compose。
+    @Test
+    fun a_notice_is_not_critical_and_has_no_dismiss_by_default() {
+        val n = notice(HomeNoticeKind.REUPLOAD)
+        assertTrue("default critical must be false", !n.critical)
+        assertNull("default dismissLabel must be null (no dismiss action)", n.dismissLabel)
+    }
+
+    @Test
+    fun a_notice_can_carry_a_separate_dismiss_action_from_its_primary_action() {
+        var dismissed = false
+        var resolved = false
+        val n = HomeNotice(
+            kind = HomeNoticeKind.BACKUP_INTERRUPTED,
+            body = "body",
+            actionLabel = "去处理",
+            onAction = { resolved = true },
+            dismissLabel = "知道了",
+            onDismiss = { dismissed = true },
+        )
+        n.onAction()
+        n.onDismiss()
+        assertTrue("primary action must fire independently of dismiss", resolved)
+        assertTrue("dismiss action must fire independently of primary", dismissed)
     }
 }

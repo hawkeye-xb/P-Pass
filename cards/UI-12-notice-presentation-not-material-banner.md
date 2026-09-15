@@ -1,6 +1,6 @@
 # UI-12 移动端常驻提示条不符合 Material Banner 语义（L2）
 
-> ⬜ 状态：未开工
+> 🟡 状态：代码已合并，等真机验收
 > 级别：L2 · 阻塞：无（呈现方案已由用户 2026-09-15 定调，见下）
 
 ## 问题
@@ -90,4 +90,21 @@ Material Banner 规范的标准形状（对照见下表）：
 
 ## 实施记录
 
-（留空，实施 agent 追加）
+- 2026-09-15：已实现。`HomeNotice` 新增 `critical`/`dismissLabel`/`onDismiss` 三个字段（`HomeNotices.kt`），`NoticeCard` 按 `critical` 切换强色/温和色两套视觉，非阻断类渲染独立的"知道了"文字按钮（`dismissLabel`），阻断类（`PAIRING_LOST`）不传 `dismissLabel` 即无该动作。`NoticeHost` 新增参数消费 `BackgroundBackupState`，`NeedsSystemAuthorization`/`SystemStoppedWatcher` 两个状态构造 `HomeNoticeKind.BACKUP_INTERRUPTED` 候选加入 `topNotice` 排序（复用已有优先级登记，未改排序表）。`resolveBackgroundBackup` 在 `MainActivity.kt` 提炼为单一 lambda，`NoticeHost` 的"去处理"与设置页 `CellRow` 的 `onResolveBackgroundBackup` 共用同一份闭包，不再各写一遍（AGENTS.md「漏一处」教训同款）。"知道了"落地为 `backgroundBackupNoticeDismissed`（`remember(backgroundBackupState) { mutableStateOf(false) }`——按状态本身做 key，状态跃迁自动重置为 false，符合"暂时忽略、非永久偏好、新的跃变必须重新提醒"的设计）。`strings.xml` en/zh 新增 `background_backup_notice_action`（"去处理"/"Fix it"）与 `notice_dismiss_label`（"知道了"/"Got it"），复用已有 `reupload_notice_action` 会导致语义耦合，故拆开单独一对。设置页 `CellRow`（`HomeScreen.kt:516-531`）保留不动——横幅是可忽略的主动提醒，CellRow 是"当前仍为真"的常驻状态记录，两者语义不同、不是重复展示。
+  - RED→GREEN：`BackgroundBackupPresentationContractTest` 新增
+    `ui12_background_backup_states_are_wired_into_the_global_notice_host`
+    （改前 `NoticeHost` 函数体不引用 `BackgroundBackupState`，断言必然失败；
+    改后通过）与
+    `ui12_non_blocking_notices_get_a_dismiss_action_distinct_from_the_primary_action`。
+    `HomeNoticesTest` 新增两条纯函数测试覆盖 `HomeNotice` 新字段的默认值与
+    动作独立性，不依赖 Compose/Robolectric。
+  - 测试：`./gradlew :app:testDebugUnitTest --rerun-tasks` **378/378
+    绿**（`app/build/test-results/testDebugUnitTest/*.xml`，78 个测试类，
+    时间戳本次生成），`:app:assembleDebug` 绿。
+  - 真机验收（三星 SM-S9210，`0.5.2-test.1`）：强制关闭电池白名单触发
+    `SystemStoppedWatcher` 后，Photos 与 Backup 两个 tab 顶部均出现琥珀
+    通知条"系统已停止后台监听 · 检查并重新开启"，右侧"知道了"+"去处理"
+    两个独立动作；点"知道了"后横幅消失，切换 tab 验证跨 tab 保持一致
+    （同一状态源），设置页 `CellRow` 仍照常显示（未被误删）；点"去处理"
+    走原有 `onResolveBackgroundBackup` 流程，弹出系统权限页。截图已交给
+    用户核对，观感与设计基调一致。

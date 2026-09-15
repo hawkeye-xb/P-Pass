@@ -187,6 +187,13 @@
     <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>
     <string name="background_backup_needs_authorization">Allow background access</string>
     <string name="background_backup_system_stopped">The system stopped background monitoring · check and restart</string>
+    <!-- UI-12: shared amber-banner action label for both background-backup
+         states above (distinct from the CellRow-only wording, since this one
+         now also appears on the Photos tab via NoticeHost). -->
+    <string name="background_backup_notice_action">Fix it</string>
+    <!-- UI-12: dismiss action — "I know, don\'t ask again for this state",
+         distinct from turning auto-backup off entirely. -->
+    <string name="notice_dismiss_label">Got it</string>
     <string name="disconnect">Disconnect from this computer…</string>
     <string name="disconnect_armed_title">Disconnect for real?</string>
     <string name="disconnect_armed_body">Backups will stop. Photos on both sides stay put — nothing is deleted. Scan again anytime to reconnect; anything already backed up won\'t re-upload.</string>
