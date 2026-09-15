@@ -579,6 +579,26 @@ fun PPassApp() {
                 watcherInterrupted = backupInterrupted,
             )
             val backgroundBackupEnabled = backgroundBackupState == BackgroundBackupState.Armed
+            // UI-12: "知道了" 是对**当前这个状态**的暂时性忽略，不是永久
+            // 偏好——状态发生新的跃变（比如恢复又再次被系统停掉）必须重新
+            // 提醒，所以 key 在 backgroundBackupState 上：状态一变这个
+            // remember 就重置为 false。
+            var backgroundBackupNoticeDismissed by remember(backgroundBackupState) {
+                mutableStateOf(false)
+            }
+            // UI-12: 唯一入口，NoticeHost 的横幅动作与设置页 CellRow 共用
+            // 同一个 lambda——两处各写一遍就是 MOB-33/34/35/38 那种「漏一处」
+            // 的形状（AGENTS.md 提炼函数的理由同款）。
+            val resolveBackgroundBackup = {
+                if (batteryWhitelisted) {
+                    resumeAfterInterruption(context)
+                    backupInterrupted = false
+                } else if (!batteryRequestInFlight) {
+                    batteryRequestInFlight = true
+                    batteryPermission.launch(backgroundAuthorization.requestIntent())
+                }
+                Unit
+            }
             val scope = rememberCoroutineScope()
             LaunchedEffect(Unit) { client.bind(identity.secretKey()) }
             val mediaPermission = rememberLauncherForActivityResult(
@@ -615,6 +635,10 @@ fun PPassApp() {
                         NoticeHost(
                             reuploadCount = holder.reuploadNoticeCount.value,
                             onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
+                            backgroundBackupState = backgroundBackupState,
+                            backgroundBackupNoticeDismissed = backgroundBackupNoticeDismissed,
+                            onResolveBackgroundBackup = resolveBackgroundBackup,
+                            onDismissBackgroundBackupNotice = { backgroundBackupNoticeDismissed = true },
                         )
                     }
                 } else null,
@@ -672,15 +696,7 @@ fun PPassApp() {
                         pairedAt = s.pairing.pairedAt,
                         autoBackupEnabled = backgroundBackupEnabled,
                         backgroundBackupState = backgroundBackupState,
-                        onResolveBackgroundBackup = {
-                            if (batteryWhitelisted) {
-                                resumeAfterInterruption(context)
-                                backupInterrupted = false
-                            } else if (!batteryRequestInFlight) {
-                                batteryRequestInFlight = true
-                                batteryPermission.launch(backgroundAuthorization.requestIntent())
-                            }
-                        },
+                        onResolveBackgroundBackup = resolveBackgroundBackup,
                         onToggleAutoBackup = { enabled ->
                             if (!enabled) {
                                 batteryRequestInFlight = false

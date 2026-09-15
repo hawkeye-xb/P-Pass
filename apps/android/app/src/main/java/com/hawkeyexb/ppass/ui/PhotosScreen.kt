@@ -345,17 +345,20 @@ internal fun PhotosScreen(
         }
 
         // T-080: 轻过滤器 chips（设计稿样式:胶囊,选中=墨底纸字）。
+        // UI-13: 私有 FilterChip（手写药丸）改用 Material3 同名组件——
+        // 之前跟框架组件撞名字纯属巧合式重新发明轮子，见 PhotoFilterChip
+        // 的 wrapper（保留私有壳只是为了封装 colors，不算"手写控件"）。
         Row(
             Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            FilterChip(stringResource(R.string.chip_all), filter == TimelineFilter.All) {
+            PhotoFilterChip(stringResource(R.string.chip_all), filter == TimelineFilter.All) {
                 filter = TimelineFilter.All
             }
-            FilterChip(stringResource(R.string.chip_local), filter == TimelineFilter.LocalOnly) {
+            PhotoFilterChip(stringResource(R.string.chip_local), filter == TimelineFilter.LocalOnly) {
                 filter = TimelineFilter.LocalOnly
             }
-            FilterChip(stringResource(R.string.chip_family), filter == TimelineFilter.Family) {
+            PhotoFilterChip(stringResource(R.string.chip_family), filter == TimelineFilter.Family) {
                 filter = TimelineFilter.Family
             }
         }
@@ -740,22 +743,31 @@ internal fun ViewerAction(
     }
 }
 
-/** 设计稿的过滤胶囊：高 36,圆角 999,选中=墨底纸字,未选=亚麻底墨字。 */
+/** 设计稿的过滤胶囊：高 36,圆角 999,选中=墨底纸字,未选=亚麻底墨字。
+ *  UI-13: 底层用 Material3 `FilterChip`（选中态/涟漪/a11y role 都是
+ *  组件自带的），只定制 `colors`/`shape` 让视觉贴住设计稿——不再是一个
+ *  重新发明的手写药丸。 */
 @Composable
-private fun FilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier.height(36.dp)
-            .clip(RoundedCornerShape(999.dp))
-            .background(if (selected) PPColor.Ink else PPColor.Linen)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 15.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-            color = if (selected) PPColor.Paper else PPColor.Ink60,
-        )
-    }
+private fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    androidx.compose.material3.FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = {
+            Text(
+                label, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                color = if (selected) PPColor.Paper else PPColor.Ink60,
+            )
+        },
+        shape = RoundedCornerShape(999.dp),
+        colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(
+            containerColor = PPColor.Linen,
+            selectedContainerColor = PPColor.Ink,
+            labelColor = PPColor.Ink60,
+            selectedLabelColor = PPColor.Paper,
+        ),
+        border = null,
+        modifier = Modifier.height(36.dp),
+    )
 }
 
 @Composable

@@ -1,5 +1,11 @@
-// 设计稿 M7-M13：底部 tab 每一张都画了图标（相机/齿轮），手绘 Canvas
-// 图标，不新引入图标库（ICON-02 卡另算，避免两条线打架）。
+// UI-13: 齿轮图标已删除，改用 Icons.Filled.Settings/Icons.Outlined.Settings
+// （material-icons-core，随 material3 传递依赖，零体积增量，见
+// build.gradle.kts 的依赖注释）。相机图标继续手绘——material-icons-core
+// 的 49 图标集里没有相机/相册类图标（`unzip -l` 实测核对过完整清单），
+// 而 material-icons-extended 在 build.gradle.kts 里已有明确记录的架构
+// 决策：**故意不引**（release 未开 R8，extended 会实打实往 APK 里塞
+// 几 MB，为一两个图标不划算）。为了一个相机图标反悔这条决策，不在本卡
+// 授权范围内——这不是"忘了处理"的死角，是评估过后的真实约束。
 package com.hawkeyexb.ppass.ui
 
 import androidx.compose.foundation.Canvas
@@ -14,7 +20,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.dp
 
 /** 照片 tab 图标：机身 + 镜头 + 取景线（对应设计稿相机 glyph）。 */
@@ -37,31 +42,5 @@ fun PhotosTabIcon(tint: Color, modifier: Modifier = Modifier) {
             lineTo(8f * s, 19.5f * s)
         }
         drawPath(path, color = tint, style = stroke)
-    }
-}
-
-/**
- * 设置 tab 图标：环 + 8 颗齿（对应设计稿齿轮 glyph；用规则齿简化原稿
- * 的贝塞尔外轮廓，手绘 Canvas 场景下更稳，视觉上仍是一望而知的齿轮）。
- */
-@Composable
-fun SettingsTabIcon(tint: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(22.dp)) {
-        val s = size.width / 24f
-        val stroke = Stroke(width = 1.8f * s, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        val center = Offset(12f * s, 12f * s)
-        drawCircle(color = tint, radius = 3f * s, center = center, style = stroke)
-        drawCircle(color = tint, radius = 6.4f * s, center = center, style = stroke)
-        repeat(8) { i ->
-            rotate(degrees = i * 45f, pivot = center) {
-                drawLine(
-                    color = tint,
-                    start = Offset(center.x, center.y - 6.4f * s),
-                    end = Offset(center.x, center.y - 8.6f * s),
-                    strokeWidth = 1.8f * s,
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
     }
 }

@@ -739,24 +739,31 @@ private fun idleStatusText(line: StatusLine): String = when (line) {
     is StatusLine.Working, is StatusLine.Trouble -> stringResource(R.string.idle_auto_hint) // unreachable
 }
 
-/** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) +
- *  圆角 14 + 高 44——「暂停」/「继续」共用这一个（UX-13：同一个位置换文案，
- *  不是两个按钮；UX-09：空闲态「选择相册」已移除，入口在下方设置卡
- *  「备份范围」行）。 */
+/** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) + 圆角 14 +
+ *  高 44——「暂停」/「继续」共用这一个（UX-13：同一个位置换文案，不是两个
+ *  按钮；UX-09：空闲态「选择相册」已移除，入口在下方设置卡「备份范围」行）。
+ *  UI-13: 手写 Row+clip+background+border+clickable 改用 Material3
+ *  `OutlinedButton`——disabled 现在是组件自己的真实 disabled 语义（涟漪/
+ *  点击态自动跟随），不再是手动把颜色调透明这种伪禁用。 */
 @Composable
 private fun HeroSecondaryButton(label: String, onClick: () -> Unit, enabled: Boolean = true) {
-    val tint = if (enabled) PPColor.Ink else PPColor.Ink40
-    Row(
-        modifier = Modifier
-            .height(44.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(PPColor.Paper)
-            .border(1.dp, if (enabled) PPColor.BorderStrong else PPColor.BorderStrong.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 18.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.height(44.dp),
+        shape = RoundedCornerShape(14.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (enabled) PPColor.BorderStrong else PPColor.BorderStrong.copy(alpha = 0.5f),
+        ),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = PPColor.Paper,
+            contentColor = PPColor.Ink,
+            disabledContentColor = PPColor.Ink40,
+        ),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 18.dp),
     ) {
-        Text(label, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = tint)
+        Text(label, fontSize = 15.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -793,7 +800,15 @@ internal fun shouldShowWifiDeferredHint(
 ): Boolean = wifiOnly && wifiDeferred && !busy && !partialAccess
 
 /** M10（全页面状态稿）：cell 行高 52dp——设计稿原文数值，带 hint 的
- *  两行开关自然长过这个下限，是合理例外，不受这条线约束。 */
+ *  两行开关自然长过这个下限，是合理例外，不受这条线约束。
+ *
+ *  UI-13 评估记录：Material3 `ListItem` 的默认最小高度是单行 56dp、
+ *  两行 72dp（`ListItemDefaults`），比这里的 52dp 单行、带 hint 的
+ *  「两行但仍要求 52dp」都要高——套上 `ListItem` 会让整张设置卡片
+ *  （备份范围/自动备份/仅充电/仅WiFi/失败通知等一串 cell）明显变高、
+ *  变松散，偏离设计稿的紧凑列表观感。这不是"手写图省事"，是量出来的
+ *  真实数值冲突，因此保留 `Row`+`Text`/`Row`+`Switch` 现状，不套
+ *  `ListItem`。 */
 private val CellRowHeight = 52.dp
 
 /** 备份规则卡里的开关行——label（可带 hint）左、Switch 右。 */

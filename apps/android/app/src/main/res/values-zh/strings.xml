@@ -188,6 +188,12 @@
     <string name="auto_backup_pause_hint">插电 + WiFi 时，新照片自动到家</string>
     <string name="background_backup_needs_authorization">允许系统后台运行</string>
     <string name="background_backup_system_stopped">系统已停止后台监听 · 检查并重新开启</string>
+    <!-- UI-12: 琥珀通知条的"去处理"动作文案（与设置页 CellRow 共用同一
+         判据，但这条现在也会出现在照片 tab，走 NoticeHost）。 -->
+    <string name="background_backup_notice_action">去处理</string>
+    <!-- UI-12: "知道了"忽略动作——只是不再提醒，不等于问题已解决，也
+         不等于把自动备份关掉。 -->
+    <string name="notice_dismiss_label">知道了</string>
     <!-- 三层防误触第二层——存储电脑详情页最底部的红色描边入口按钮。 -->
     <string name="disconnect">断开与这台电脑的连接…</string>
     <!-- 三层防误触第三层——点了上面那个按钮后展开的确认卡（不是弹窗，

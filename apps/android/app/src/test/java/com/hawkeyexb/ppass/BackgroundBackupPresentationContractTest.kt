@@ -48,4 +48,51 @@ class BackgroundBackupPresentationContractTest {
         assertTrue(tabsCall.contains("BackgroundBackupState.NeedsSystemAuthorization"))
         assertTrue(tabsCall.contains("BackgroundBackupState.SystemStoppedWatcher"))
     }
+
+    @Test
+    fun ui12_background_backup_states_are_wired_into_the_global_notice_host() {
+        // UI-12: 后台备份被系统限制这件事此前只埋在设置页 CellRow 里，
+        // 跟 NoticeHost 自己声明的"全局唯一提示宿主"契约矛盾（用户反馈
+        // "起不到通知作用"）。RED（改前）：NoticeHost 函数体不引用
+        // BackgroundBackupState；GREEN（改后）：NoticeHost 消费该状态并
+        // 生成 BACKUP_INTERRUPTED 候选，MainActivity 的调用点把状态传进去。
+        val notices = source("ui/HomeNotices.kt")
+        val noticeHostBody = notices.substringAfter("fun NoticeHost(")
+
+        assertTrue(
+            "NoticeHost must consume BackgroundBackupState, not just reupload count",
+            noticeHostBody.contains("backgroundBackupState"),
+        )
+        assertTrue(noticeHostBody.contains("BackgroundBackupState.NeedsSystemAuthorization"))
+        assertTrue(noticeHostBody.contains("BackgroundBackupState.SystemStoppedWatcher"))
+        assertTrue(
+            "the background-backup candidate must join BACKUP_INTERRUPTED, the kind already ranked in HOME_NOTICE_PRIORITY",
+            noticeHostBody.contains("HomeNoticeKind.BACKUP_INTERRUPTED"),
+        )
+
+        val mainActivityNoticeCall = source("MainActivity.kt")
+            .substringAfter("NoticeHost(")
+            .substringBefore("}\n                } else null,")
+        assertTrue(
+            "MainActivity's NoticeHost call site must pass the resolved background-backup state through",
+            mainActivityNoticeCall.contains("backgroundBackupState = backgroundBackupState"),
+        )
+    }
+
+    @Test
+    fun ui12_non_blocking_notices_get_a_dismiss_action_distinct_from_the_primary_action() {
+        // UI-12: 之前只有一个 actionLabel（"处理"），逼用户要么处理要么
+        // 把整个自动备份开关关掉。新增 dismissLabel/onDismiss 是独立的
+        // "知道了、暂不处理"语义。
+        val notices = source("ui/HomeNotices.kt")
+        assertTrue(
+            "HomeNotice must carry a dismiss action distinct from actionLabel",
+            notices.contains("val dismissLabel: String? = null"),
+        )
+        val noticeHostBody = notices.substringAfter("fun NoticeHost(")
+        assertTrue(
+            "the background-backup candidate must wire a dismiss action",
+            noticeHostBody.contains("dismissLabel = stringResource(R.string.notice_dismiss_label)"),
+        )
+    }
 }
