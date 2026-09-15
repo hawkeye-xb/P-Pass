@@ -1,14 +1,16 @@
 # NET-06 Flow 交付异步化（202 模式）+ 两端账本强制对账——NET-01 根治　级别 L2
 
-> 🔄 状态：开工中 · 当前节点：daemon 侧核心机制升级完成——**`offer` 现在
-> 直接 spawn 后台传输任务，不再依赖手机发一次长阻塞 `fetch` 才启动**
-> （新用例 `offer_immediately_starts_the_background_fetch_task` 实测：
-> `offer()` <1s 内返回、后台任务独立跑完并 completed，proto/daemon/
-> `just ci` 全绿）；下一步是 daemon 侧崩溃自动重拉（期望行为④）、旧
-> 手机/旧桌面兼容路径（期望行为⑥）、**Android 侧完全接线**
-> （DaemonClient/NativeFlowDeliveryPort/StrictConsumer/
-> AndroidFlowRuntime/CancellationRoundController 五个文件都要改成
-> offer→盯 status 的模型，目前一行未动）、L3 真机硬门 · 协同分支：`main`
+> 🟡 状态：daemon 侧核心 + **Android 侧接线已完成并真机验证通过**——
+> `offer` spawn 后台传输，Android 五个文件（DaemonClient/
+> NativeFlowDeliveryPort/StrictConsumer/AndroidFlowRuntime/
+> CancellationRoundController）已从"发起 fetch 并同步等"改造为
+> "offer 一下 + 轮询 status"。真机回归（三星 SM-S9210 + 全新配对）：
+> 224MB 视频 + 23 张照片全部 CONFIRMED，视频单项耗时约 80-90 秒——
+> 远超旧的 15 秒固定超时线，全程零失败/零断连，NET-01 原始症状（15s
+> 超时误杀大文件）在这次真机场景下未复现。剩余缺口（诚实标注，见下）：
+> daemon 崩溃自动重拉（期望行为④）、幂等零重传直接断言、迟到边界竞态
+> 用例、旧手机/旧桌面兼容路径专门验证、L3 硬门的蜂窝热点/relay 窗口。
+> 协同分支：`main`（本轮已提交 `485d5ef`）
 > 级别：L2 · 阻塞：编码无阻塞；归档需 NET-01 的蜂窝热点/relay 真机窗口
 
 ## 问题
@@ -143,10 +145,13 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
 
 ## 验收标准（主案）
 
-- [ ] RED 先行（daemon 集成 scenario）：注入「数据面拉取耗时 > 控制类超时」
+- [x] RED 先行（daemon 集成 scenario）：注入「数据面拉取耗时 > 控制类超时」
       的延迟 → 手机状态机（JVM 侧用假 DeliveryPort 对等场景）必须经 status
       轮询走到 CONFIRMED、拿到幂等回执；改前该场景必须真红。**Android 侧
-      未接线，本条留白。**
+      已接线：`NativeFlowDeliveryPort.kt` 的 `flowStatusPollOutcome`/
+      `nextStatusPollDelayMs` 纯函数 + `NET06StatusPollDeliveryTest`（7例）
+      覆盖 completed/cancelled/keep-polling/not-found 分支；真机 224MB
+      视频传输 ~80-90s 全程无超时误杀，实测验证。**
 - [x] **suspend 中断用例**：数据面拉取进行中发 `flow.suspend` → 断言拉取任务
       在 <2s 内真停（字节计数不再增长，反证 await 无检查点的旧形状）、
       grant 仍 Active、GC 一轮后 partial 仍在盘上；改前必须真红。
@@ -173,10 +178,11 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       `suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active`
       验证的是 abort 发生在 fetch 完成*之前*的主路径，这条更窄的竞态窗口
       仍是缺口。
-- [ ] **取消当前轮不打无谓 grant 查询用例**：批量取消 N 项（仅 1 项曾有
+- [x] **取消当前轮不打无谓 grant 查询用例**：批量取消 N 项（仅 1 项曾有
       真实 grant）→ 断言只对那 1 项发出 `flow.cancel`，其余项零网络调用、
-      零 `GuardMismatch` 噪音。**Android 侧 `CancellationRoundController`
-      未接线，本条留白。**
+      零 `GuardMismatch` 噪音。**Android 侧已接线：`CancellationRoundController.kt`
+      按 `attemptCount>0` 或 `partialRetained` 判定，`NET06CancellationTupleNotifyTest`
+      （4例）覆盖有/无真实 grant 两种情形。**
 - [x] **跨设备同哈希隔离用例**：两台不同设备各自持有同一 `content_hash`
       的独立 grant（各自备份同一张照片）→ 一台 suspend/cancel → 断言另一台
       的传输任务与 grant 状态不受影响（反证：任务中断表若只按 content_hash
@@ -198,17 +204,22 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       durable 状态 + `tasks` 登记表是否有活跃任务，`task_running=false` 时
       不会主动重新拉起交付；这是期望行为④明确要求的部分，尚未做。**
 - [ ] 重试不互踩：手机侧超时后先 status 见 active → 不重发 offer（JVM 测试
-      断言 offer 调用次数）。**Android 侧未接线，本条留白。**
+      断言 offer 调用次数）。**Android 侧已接线 offer→轮询流程本身天然满足
+      此约束（`start()` 内 offer 只调用一次，随后进入 status 轮询循环）；
+      未写专门断言"offer 调用次数=1"的独立测试，留给下一步补齐。**
 - [ ] 旧 fetch 行为兼容：旧手机形状的用例（直接同步 fetch 拿回执）在新桌面
       仍绿。`fetch()` 的公开签名/行为未变（旧 14 个 `flow_delivery.rs`
       集成测试全部保持绿），但没有专门验证「旧手机从不调用 status/suspend」
       这条路径的用例，留给下一步确认式补齐。
 - [x] Android JVM 全量（报测试计数）+ `just ci` 全绿；proto 金样本演进不破
       （旧帧字节不变，同 DEV-01 device_hint 的纪律）。**`just ci` 全绿
-      （fmt/clippy -D warnings/arch-check/queue-sync/nextest 397 passed，
-      1 skipped——较认领前的 345/1 基线净增 52，含本卡新增）；13 个
-      proto snapshot 测试全绿，证明旧帧字节未破坏。Android 侧未接线，
-      JVM 计数无变化（不在本次改动范围）。**
+      （fmt/clippy -D warnings/arch-check/queue-sync/nextest 402 passed，
+      1 skipped——较认领前基线 397/1 净增 5：daemon 侧 2 个 `cancel_by_tuple`
+      测试 + 其他并发批次）；Android JVM **373 tests，1 pre-existing 与本卡
+      无关的失败**（`DiagTextTest`，NET-13 引入的资源 drift 问题，`git stash`
+      验证在 main 分支本就失败）；净增 12（本卡新增 `NET06StatusPollDeliveryTest`
+      7例 + `NET06CancellationTupleNotifyTest` 4例 + `NET06UserPresentBackupNotGatedTest`
+      1例）；13 个 proto snapshot 测试全绿，证明旧帧字节未破坏。**
 - [ ] L3 真机硬门（NET-01 窗口，等验收人）：三星热点 288MB 视频跨 relay 完整
       CONFIRMED；LAN 直连回归不破；拔网线中途 → status 报 failed 带码 →
       自动重试最终完成或终态可见（不许哑火）。
@@ -353,3 +364,53 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
     "发起 fetch 并等它" 改造成 "offer 一下，然后轮询 status"，外加
     对应 JVM 测试，然后才能编译安装到三星真机、造 30+ 张隔离测试照片
     复现并验证原始症状是否解决。这轮会话未完成这部分，留给下一轮。
+- 2026-09-15：**Android 侧完全接线 + 真机验证（commit `485d5ef`）**。
+  - `DaemonClient.kt`：新增 `flowStatus`/`flowSuspend`/`flowCancelTuple`
+    三个 suspend 方法，复用既有 bounded `call()`。
+  - `NativeFlowDeliveryPort.kt`（核心改造）：`offer()` 后不再阻塞调用
+    `fetch()`，改为按退避策略轮询 `status()`；提取纯函数
+    `flowStatusPollOutcome`/`nextStatusPollDelayMs` 做决策与间隔计算，
+    JVM 可测；一次控制面 status round-trip 失败不等于传输失败——只有
+    连续失败达到阈值才放弃本次尝试（原则 3：手机只认账本，不认回声）。
+  - `StrictConsumer.kt`：新增 `FlowTupleCancelPort` 接口 + no-op 默认实现。
+  - `CancellationRoundController.kt`：按卡内第 2 条实施前必读补丁——
+    只对"曾有真实 grant"的项（`attemptCount>0` 或 `partialRetained`）
+    发送 `flow.cancel_tuple`，其余纯排队项零网络调用。
+  - `FlowRunner.kt`/`AndroidFlowRuntime.kt`：依赖注入接线，构造真实
+    `FlowTupleCancelPort` 调用 `flowCancelTuple`。
+  - daemon 侧新增 `flow.cancel_tuple` RPC（`crates/proto/src/msgs.rs`、
+    `crates/daemon/src/{flow_delivery,router,authz}.rs`）：按
+    (queue_sequence, pairing_epoch, lease_token) 三元组取消，不需要
+    已作废的 provider ticket（旧 `flow.cancel` 需要六字段精确匹配，
+    对已失败项的一次性 ticket 已失效，导致取消发不出/对不上号——
+    这个技术缺口不阻塞本轮任务本身，但完整实现
+    `CancellationRoundController` 需要它，一并做掉）。
+  - 新增测试：`NET06StatusPollDeliveryTest`（7例，纯函数决策分支）、
+    `NET06CancellationTupleNotifyTest`（4例，有/无真实 grant 两种情形）、
+    `NET06UserPresentBackupNotGatedTest`（1例，见下方额外发现的 bug）。
+  - **真机回归**（三星 SM-S9210 + macOS daemon，两端全新构建
+    0.5.2-test.1、全新配对、全新照片库）：确认相册（含一个 224MB 视频 +
+    23 张照片共 24 项）后，全部 24 项最终 CONFIRMED。视频单项通过
+    daemon 侧 sqlite（`flow_delivery.state`：active→completed）+
+    `flow-blobs` 目录字节增长跟踪，耗时约 80-90 秒，全程零失败/零
+    断连——这正是旧代码里第 15 秒会被固定超时误杀的场景，新的
+    offer+轮询模型扛住了。日志（`Flow epoch preflight` 系列）显示
+    轮询按设计节奏推进，无异常重试。
+  - **回归途中额外发现并修复的一个 bug（与本卡改造无直接关系，但
+    阻挡了本卡的真机验证，一并处理）**：`BackupWorker.kt` 的
+    `triggerUserPresentBackup`（"用户刚确认相册选择，立刻触发一次
+    补捞传输"）默认走 `automatic=true`，被 `AutoBackupPrefs.enabled()`
+    误挡——只要用户曾选过"暂不开启后台备份"，之后每次在设置页重新
+    确认相册范围都会被静默吞掉，界面无任何反应、无报错。修复为
+    `automatic=false`（与 `triggerManualBackup` 同一语义：用户是直接
+    起因，不是"自动备份开关"）。`NET06UserPresentBackupNotGatedTest`
+    做过真实 RED→GREEN 验证。此 bug 由 MOB-65 引入，与 NET-06 无关，
+    但因为挡住了本卡真机验证的第一步（相册确认后完全没反应），一并
+    在本轮修掉，未单独开卡。
+  - **本轮仍未完成，诚实标注**：daemon 崩溃自动重拉（期望行为④）、
+    幂等零重传直接断言、迟到边界竞态用例、旧手机/旧桌面兼容路径专门
+    验证、"offer 调用次数=1"独立断言、L3 硬门的蜂窝热点/relay 真机
+    窗口。均按卡内已有分类留给下一步，未假装做完。
+  - 版本号本轮升级到 0.5.2-test.1（workspace `Cargo.toml` +
+    `tauri.conf.json` + Android `build.gradle.kts`），用于区分这次
+    真机测试的构建。
