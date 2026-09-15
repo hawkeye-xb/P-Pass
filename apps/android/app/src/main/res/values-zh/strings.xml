@@ -188,6 +188,12 @@
     <string name="auto_backup_pause_hint">插电 + WiFi 时，新照片自动到家</string>
     <string name="background_backup_needs_authorization">允许系统后台运行</string>
     <string name="background_backup_system_stopped">系统已停止后台监听 · 检查并重新开启</string>
+    <!-- UI-12（2026-09-15，二次修正）："去处理"点击后的 Snackbar 反馈——
+         本代码库第一个非持久反馈机制。只覆盖能诚实上报的信号（为什么
+         没有"失败"文案，见 MainActivity.kt 的注释）。 -->
+    <string name="background_backup_resuming">正在重新连接后台监听…</string>
+    <string name="background_backup_authorized">已获得后台运行权限</string>
+    <string name="background_backup_authorization_denied">未获得授权，后台备份暂时无法自动运行</string>
     <!-- UI-12: 琥珀通知条的"去处理"动作文案（与设置页 CellRow 共用同一
          判据，但这条现在也会出现在照片 tab，走 NoticeHost）。 -->
     <string name="background_backup_notice_action">去处理</string>

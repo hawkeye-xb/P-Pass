@@ -80,19 +80,25 @@ class BackgroundBackupPresentationContractTest {
     }
 
     @Test
-    fun ui12_non_blocking_notices_get_a_dismiss_action_distinct_from_the_primary_action() {
-        // UI-12: 之前只有一个 actionLabel（"处理"），逼用户要么处理要么
-        // 把整个自动备份开关关掉。新增 dismissLabel/onDismiss 是独立的
-        // "知道了、暂不处理"语义。
+    fun ui12_backup_interrupted_notice_has_no_dismiss_action() {
+        // UI-12 二次修正（2026-09-15，用户判断）：横幅和设置页 hint 描述
+        // 同一个事实，不能给两个不同的承诺（横幅"已读不打扰" vs hint
+        // "问题还在"）。RED（改前）：BACKUP_INTERRUPTED 候选带 dismissLabel；
+        // GREEN（改后）：唯一退出路径是把配置改成跟现状一致（关开关），
+        // 不维护独立的"已忽略"状态。
         val notices = source("ui/HomeNotices.kt")
-        assertTrue(
-            "HomeNotice must carry a dismiss action distinct from actionLabel",
-            notices.contains("val dismissLabel: String? = null"),
-        )
         val noticeHostBody = notices.substringAfter("fun NoticeHost(")
-        assertTrue(
-            "the background-backup candidate must wire a dismiss action",
-            noticeHostBody.contains("dismissLabel = stringResource(R.string.notice_dismiss_label)"),
+        val backupInterruptedBlock = noticeHostBody
+            .substringAfter("kind = HomeNoticeKind.BACKUP_INTERRUPTED,")
+            .substringBefore(")\n        )")
+
+        assertFalse(
+            "BACKUP_INTERRUPTED must not carry an independent dismiss action",
+            backupInterruptedBlock.contains("dismissLabel"),
+        )
+        assertFalse(
+            "NoticeHost must not carry a separate dismissed-state parameter",
+            noticeHostBody.contains("backgroundBackupNoticeDismissed"),
         )
     }
 }
