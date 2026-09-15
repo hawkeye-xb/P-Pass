@@ -121,3 +121,7 @@ App 对话框又可与系统授权流程重叠。设置页的「自动备份」�
 - 2026-09-14 三星首装回归发现：断开清理仍把 `AutoBackupPrefs.autoEnabled` 写回 true，
   重扫后即使用户选「暂不开启」也会假亮。新增 RED→GREEN 合同测试；断开现在同时清除
   用户意图与实际 producer 状态，重连必须重新由用户选择。
+- 2026-09-15 用户反馈：设置图标红点常年不消失。`settingsAlert` 判据误写成
+  `!= BackgroundBackupState.OffByUser`，把正常运行中的 `Armed` 也算需要提示；
+  改为只在 `NeedsSystemAuthorization`/`SystemStoppedWatcher` 两个真出问题的状态
+  触发，新增源码合同测试反证。与本卡设计的三态裁决语义一致，非新决定。

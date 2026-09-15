@@ -237,6 +237,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | DESK-11 | 待确认 | 🔵 backlog，若确认露出完整 hex 则升级为 DESK-10 的脱敏漏 |
 | UI-05 / UI-06 | 用户暂时接受 | 展示细节问题，低优 |
 | [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | 暂缓，低优先级 | 2026-09-09 拍板：Button 组件缺「图标动作」(icon-only) 变体——验收标准列了，但目前代码没有真实调用场景，不凭空加；等出现实际需要图标按钮的页面时再补 |
+| [MOB-80](../cards/backlog/MOB-80-video-preview-should-default-muted.md) | 暂缓，等换播放器 | 2026-09-15 用户拍板：移动端视频预览默认静音 + 音量控制入口，等下次评估/更换视频播放器组件时一并设计；现有 Media3 PlayerView 默认控件无音量滑块/静音按钮，不单独定制 |
 
 ---
 

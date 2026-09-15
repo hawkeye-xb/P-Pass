@@ -98,5 +98,7 @@
   "ui.mobile_reupload_title": "Files went missing on the storage computer — re-uploading",
   "ui.mobile_reupload_body": "If you deleted them on purpose, delete them on this phone first.",
   "ui.library_delete_warn": "{n} photo(s) were just deleted from the library. Any that still exist on a phone will be uploaded again on the next backup — to delete one for good, delete the original on the phone first, then delete it here.",
-  "ui.library_delete_warn_dismiss": "Got it"
+  "ui.library_delete_warn_dismiss": "Got it",
+  "ui.device_open_folder": "Open folder",
+  "ui.device_open_folder_failed": "Failed to open device folder: {err}"
 }
