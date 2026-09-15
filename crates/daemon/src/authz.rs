@@ -171,6 +171,7 @@ mod tests {
             methods::FLOW_CANCEL,
             methods::FLOW_STATUS,
             methods::FLOW_SUSPEND,
+            methods::FLOW_CANCEL_TUPLE,
             methods::FLOW_AUDIT_SUBMIT,
             methods::PAIR_REQUEST,
         ] {
@@ -189,6 +190,7 @@ mod tests {
         assert!(allowed(Some(&d), methods::FLOW_CANCEL));
         assert!(allowed(Some(&d), methods::FLOW_STATUS));
         assert!(allowed(Some(&d), methods::FLOW_SUSPEND));
+        assert!(allowed(Some(&d), methods::FLOW_CANCEL_TUPLE));
         assert!(allowed(Some(&d), methods::FLOW_AUDIT_SUBMIT));
         assert!(!allowed(Some(&d), methods::PAIR_REQUEST));
     }

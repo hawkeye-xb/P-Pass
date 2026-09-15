@@ -530,6 +530,17 @@ pub mod methods {
     /// protection): suspend keeps the partial protected so a later
     /// `flow.offer` on the same tuple resumes instead of restarting.
     pub const FLOW_SUSPEND: &str = "flow.suspend";
+    /// NET-06: cancel by tuple identity alone (queue_sequence +
+    /// pairing_epoch + lease_token) instead of `flow.cancel`'s full
+    /// `FlowFetchRequest` (which additionally requires `content_hash` and
+    /// `provider` to match the stored row exactly). A phone that already
+    /// gave up on an item after exhausting its local retry budget has
+    /// discarded that item's one-shot provider ticket — it cannot
+    /// reconstruct a `flow.cancel` request for it. This method looks up
+    /// the stored grant by tuple first (same as `flow.status`/
+    /// `flow.suspend`) and cancels using the daemon's own recollection of
+    /// content_hash/provider, so the phone never needs to supply them.
+    pub const FLOW_CANCEL_TUPLE: &str = "flow.cancel_tuple";
     /// AUDIT-01: phone-side durable outbox events → daemon v2 audit
     /// repository. Carries no data-plane content and is authorized the
     /// same as the other Flow methods (member+); the daemon appends each

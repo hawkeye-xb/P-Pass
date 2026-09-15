@@ -187,6 +187,31 @@ data class FlowCompletionReceipt(
     @SerialName("content_hash") val contentHash: String = "",
 )
 
+// ── NET-06: async status query + suspend/cancel by tuple (control-plane) ──
+
+/** Kotlin mirror of proto::FlowTupleRef — identifies one exact grant
+ *  tuple for `flow.status`/`flow.suspend`/`flow.cancel_tuple`. Deliberately
+ *  lighter than [FlowFetchRequest]: no content_hash/provider, so it stays
+ *  valid even after the phone has discarded that item's one-shot ticket
+ *  (e.g. an item that already failed out to FAILED_NEEDS_USER). */
+@Serializable
+data class FlowTupleRef(
+    @SerialName("queue_sequence") val queueSequence: Long = 0L,
+    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("lease_token") val leaseToken: String = "",
+)
+
+/** Kotlin mirror of proto::FlowStatusReply. `state` is one of:
+ *  "active" / "completed" / "cancelled" / "not_found". The phone polls
+ *  this instead of inferring task state from an RPC round-trip timing out
+ *  (NET-01/NET-06: "回声即状态" is the bug this replaces). */
+@Serializable
+data class FlowStatusReply(
+    val state: String = "",
+    val receipt: FlowCompletionReceipt? = null,
+    @SerialName("task_running") val taskRunning: Boolean = false,
+)
+
 // ── Flow audit outbox delivery (AUDIT-01) ────────────
 
 /** Kotlin mirror of proto::FlowAuditEvent — the wire shape of one durable
@@ -279,6 +304,14 @@ object Methods {
     const val FLOW_OFFER = "flow.offer"
     const val FLOW_FETCH = "flow.fetch"
     const val FLOW_CANCEL = "flow.cancel"
+    /** NET-06: read-only status query for one exact tuple. */
+    const val FLOW_STATUS = "flow.status"
+    /** NET-06: pause — interrupts the in-progress native fetch task
+     *  WITHOUT changing the durable grant state (stays active). */
+    const val FLOW_SUSPEND = "flow.suspend"
+    /** NET-06: cancel by tuple identity alone — no content_hash/provider
+     *  required, unlike [FLOW_CANCEL]. */
+    const val FLOW_CANCEL_TUPLE = "flow.cancel_tuple"
     /** AUDIT-01: phone-side durable outbox events -> daemon v2 audit repo. */
     const val FLOW_AUDIT_SUBMIT = "flow.audit.submit"
     const val BACKUP_BEGIN = "backup.begin"

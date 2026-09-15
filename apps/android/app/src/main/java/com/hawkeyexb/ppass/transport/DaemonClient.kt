@@ -12,6 +12,9 @@ import com.hawkeyexb.ppass.proto.Resp
 import com.hawkeyexb.ppass.proto.encodeFrame
 import com.hawkeyexb.ppass.proto.decodePayload
 import com.hawkeyexb.ppass.proto.frameLen
+import com.hawkeyexb.ppass.proto.FlowTupleRef
+import com.hawkeyexb.ppass.proto.FlowStatusReply
+import com.hawkeyexb.ppass.proto.ProtoJson
 import computer.iroh.Connection
 import computer.iroh.Endpoint
 import computer.iroh.EndpointAddr
@@ -147,6 +150,48 @@ class DaemonClient {
                 )
             }
         }
+
+    /**
+     * NET-06: read-only status query for one exact tuple — a short
+     * control-plane RPC that never blocks on the data plane and always
+     * answers within [CONNECT_TIMEOUT_MS], on any network condition. This
+     * is what NativeFlowDeliveryPort polls instead of inferring the
+     * transfer's outcome from whether a long `flow.fetch` round trip
+     * returned in time (NET-01's root cause).
+     */
+    suspend fun flowStatus(peer: PeerAddrParts, tuple: FlowTupleRef): FlowStatusReply {
+        val resp = call(peer, Methods.FLOW_STATUS, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
+        check(resp.ok) { "flow.status: ${resp.error?.msgKey}" }
+        return ProtoJson.decodeFromJsonElement(FlowStatusReply.serializer(), resp.result ?: error("flow.status: empty result"))
+    }
+
+    /**
+     * NET-06: pause — interrupts the daemon's in-progress native fetch
+     * task for this exact tuple WITHOUT changing the durable grant state
+     * (stays active, so a later offer resumes instead of restarting).
+     * Best-effort per the card's principle 1 (意图先行，不等回声): a
+     * failure here must not block the phone's own local pause — callers
+     * swallow exceptions from this call.
+     */
+    suspend fun flowSuspend(peer: PeerAddrParts, tuple: FlowTupleRef) {
+        val resp = call(peer, Methods.FLOW_SUSPEND, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
+        check(resp.ok) { "flow.suspend: ${resp.error?.msgKey}" }
+    }
+
+    /**
+     * NET-06: cancel by tuple identity alone — no content_hash/provider
+     * needed, unlike [call]-based `flow.cancel`. This is what
+     * CancellationRoundController must use for an item that already
+     * exhausted its retry budget and discarded its one-shot provider
+     * ticket, where a full `flow.cancel` request can no longer be built.
+     * Best-effort, same as [flowSuspend]: callers swallow exceptions —
+     * cancellation is a local state change first, the daemon notification
+     * is a courtesy (卡片原则 1).
+     */
+    suspend fun flowCancelTuple(peer: PeerAddrParts, tuple: FlowTupleRef) {
+        val resp = call(peer, Methods.FLOW_CANCEL_TUPLE, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
+        check(resp.ok) { "flow.cancel_tuple: ${resp.error?.msgKey}" }
+    }
 
     /**
      * SYNC-04: 前台常驻订阅——发一次 `timeline.subscribe`，之后只管读

@@ -10,6 +10,7 @@ import com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs
 import com.hawkeyexb.ppass.backup.SystemFailureNotifier
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairingStore
+import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import java.io.File
 import java.io.FileNotFoundException
 import java.util.UUID
@@ -376,6 +377,30 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
                 }
             },
         )
+        val tupleCanceller = FlowTupleCancelPort { item ->
+            // NET-06: best-effort — the local cancellation state change
+            // already happened in the ledger before this fires (卡片原则1:
+            // 意图先行，不等回声). A failure here just leaves a stale
+            // "active" row in the daemon's ledger for that one tuple,
+            // which is a separate cleanup concern (see NET-06 card), not a
+            // reason to block or retry the phone's own state transition.
+            val currentPairing = PairingStore(context.filesDir).load()
+            if (currentPairing != null) {
+                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                    runCatching {
+                        app.daemonClient.bind(IdentityStore(context.filesDir).secretKey())
+                        app.daemonClient.flowCancelTuple(
+                            parsePeerAddrToken(currentPairing.daemonAddrToken),
+                            com.hawkeyexb.ppass.proto.FlowTupleRef(
+                                queueSequence = item.queueSequence,
+                                pairingEpoch = item.pairingEpoch.value,
+                                leaseToken = "lease-${item.queueSequence}",
+                            ),
+                        )
+                    }
+                }
+            }
+        }
         runner = FlowRunner(
             ledger = ledger,
             discovery = AndroidFlowDiscoveryPort(context.contentResolver) { BackupScopeStore(context).selectedBucketIds() },
@@ -390,6 +415,7 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             // MOB-76: every event-driven wake (receipt/requeue/retry/
             // cancel-restore) reads the live Wi-Fi gate through this port.
             constraintsProvider = { flowConstraintsSatisfied(context) },
+            tupleCanceller = tupleCanceller,
         )
         val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val auditDispatcher = AuditOutboxDispatcher(

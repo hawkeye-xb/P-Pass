@@ -13,6 +13,29 @@ enum class PartialDisposition {
 }
 
 /**
+ * NET-06: notifies the daemon that one exact tuple should stop being
+ * waited on. Used by [CancellationRoundController] for items that already
+ * made real contact with the daemon (a `flow.offer` was sent for them at
+ * some point) — plain QUEUED items that were never offered have nothing
+ * to tell the daemon about and must not call this.
+ *
+ * Best-effort per NET-06's card principle 1 (意图先行，不等回声): the
+ * phone's own local cancellation state change (already durable before
+ * this is called) must never be blocked or rolled back by a failure here.
+ * Implementations must swallow their own exceptions — this is a courtesy
+ * notification, not a two-phase commit.
+ */
+fun interface FlowTupleCancelPort {
+    fun cancel(item: TransferItem)
+}
+
+/** Default seam for existing production wiring and tests that don't care
+ *  about tuple cancellation — a silent no-op. */
+object NoopFlowTupleCancelPort : FlowTupleCancelPort {
+    override fun cancel(item: TransferItem) = Unit
+}
+
+/**
  * Consumes exactly one queued item at a time. Scheduler wakes call [wake]; they
  * never decide Pause/Continue semantics or bypass the durable upload cursor.
  */

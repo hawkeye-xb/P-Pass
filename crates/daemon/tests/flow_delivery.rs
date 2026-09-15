@@ -1198,7 +1198,99 @@ async fn status_reports_cancelled_after_cancel() {
     assert_eq!(reply.state, "cancelled");
 }
 
-/// Core NET-06 review fix #3: the task-interrupt registry must be keyed by
+/// NET-06 Android wiring gap: `CancellationRoundController` batch-cancels
+/// items whose local one-shot provider ticket is already gone (a phone
+/// that exhausted its retry budget discards `content_hash`/`provider`
+/// before moving on). `cancel_tuple` must cancel using only the tuple
+/// identity — no ticket/content_hash/provider round-trip required.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_by_tuple_cancels_without_content_hash_or_provider() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let bytes = b"NET-06 cancel_tuple fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    // The phone has already discarded `offer` (content_hash/provider) —
+    // only the tuple identity survives. `cancel_tuple` must still work.
+    delivery
+        .cancel_by_tuple(
+            provider_transport.node_id(),
+            &tuple_ref("epoch-current", "lease-current", 7),
+        )
+        .await
+        .unwrap();
+
+    let reply = delivery
+        .status(
+            provider_transport.node_id(),
+            &tuple_ref("epoch-current", "lease-current", 7),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.state, "cancelled",
+        "cancel_by_tuple must mark the grant cancelled, same terminal state as flow.cancel"
+    );
+}
+
+/// Counterexample: a tuple with no matching grant (never offered, or a
+/// stale lease_token from a superseded offer) must not be silently
+/// accepted — it is a guard mismatch, same as `flow.cancel` against an
+/// unknown tuple.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_by_tuple_rejects_an_unknown_tuple() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&provider_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
+
+    let result = delivery
+        .cancel_by_tuple(
+            provider_transport.node_id(),
+            &tuple_ref("epoch-current", "never-offered", 99),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(DeliveryError::GuardMismatch)),
+        "an unknown tuple must be rejected, not silently accepted as a no-op"
+    );
+}
+
 /// (peer, queue_sequence, lease_token), never by content_hash alone — two
 /// distinct devices independently holding a grant for the *same* content
 /// (e.g. both backing up the same screenshot) must not let one device's
