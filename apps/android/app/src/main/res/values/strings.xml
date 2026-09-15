@@ -187,6 +187,13 @@
     <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>
     <string name="background_backup_needs_authorization">Allow background access</string>
     <string name="background_backup_system_stopped">The system stopped background monitoring · check and restart</string>
+    <!-- UI-12 (2026-09-15, second pass): Snackbar feedback for "Fix it" —
+         the first non-persistent feedback mechanism in this codebase. Only
+         covers signals that can be honestly reported (see MainActivity.kt
+         comments for why there is no "failed" variant). -->
+    <string name="background_backup_resuming">Reconnecting background monitoring…</string>
+    <string name="background_backup_authorized">Background access granted</string>
+    <string name="background_backup_authorization_denied">Authorization not granted — background backup stays paused</string>
     <!-- UI-12: shared amber-banner action label for both background-backup
          states above (distinct from the CellRow-only wording, since this one
          now also appears on the Photos tab via NoticeHost). -->

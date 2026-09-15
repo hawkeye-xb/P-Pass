@@ -45,6 +45,16 @@ internal class AndroidFlowDiscoveryPort(
             // some video codecs), which otherwise landed under the
             // Flow-delivered file's export moment instead of its real date.
             android.provider.MediaStore.MediaColumns.DATE_TAKEN,
+            // 2026-09-15 用户实测：飞书(Lark)等第三方 App 保存的图片既没有
+            // EXIF DateTimeOriginal 也没有 DATE_TAKEN（两者都为 null/0）——
+            // 手机自己的相册 App 遇到这批素材也拿不到"拍摄时间"，但
+            // MediaStore 仍然记得 DATE_ADDED（这个 App 把文件写入相册库的
+            // 那一刻，单位是秒不是毫秒）。这是手机上唯一还剩的、比 Desktop
+            // 端"daemon 收到文件的时刻"更接近真相的时间信号，缺 DATE_TAKEN
+            // 时必须退到它，否则这批素材会被扣上"落地时刻"这个跟内容本身
+            // 毫无关系的时间戳（Google 相册等主流相册处理无 EXIF 素材就是
+            // 这个优先级，不是我们发明的口径）。
+            android.provider.MediaStore.MediaColumns.DATE_ADDED,
         )
         val buckets = selectedBuckets() ?: return DiscoveryPage(emptyList(), cursor)
         if (buckets.isEmpty()) return DiscoveryPage(emptyList(), cursor)
@@ -71,6 +81,7 @@ internal class AndroidFlowDiscoveryPort(
             val modified = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_MODIFIED)
             val bucket = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_ID)
             val taken = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_TAKEN)
+            val added = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_ADDED)
             while (rows.moveToNext() && candidates.size < DISCOVERY_PAGE_SIZE) {
                 val rowId = rows.getLong(id)
                 val rowGeneration = rows.getLong(gen)
@@ -80,7 +91,7 @@ internal class AndroidFlowDiscoveryPort(
                     bucketId = rows.getLong(bucket),
                     fileName = rows.getString(name).orEmpty(),
                     mediaType = rows.getString(mime) ?: "application/octet-stream",
-                    captureAtMs = rows.getLong(taken),
+                    captureAtMs = captureAtMsOrDateAdded(rows.getLong(taken), rows.getLong(added)),
                 )
                 next = DiscoveryCursor(rowGeneration, rowId)
             }
@@ -109,6 +120,7 @@ internal class AndroidFlowDiscoveryPort(
             android.provider.MediaStore.MediaColumns.DATE_MODIFIED,
             android.provider.MediaStore.MediaColumns.BUCKET_ID,
             android.provider.MediaStore.MediaColumns.DATE_TAKEN,
+            android.provider.MediaStore.MediaColumns.DATE_ADDED,
         )
         val selection = buildString {
             append("${android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?, ?)")
@@ -138,6 +150,7 @@ internal class AndroidFlowDiscoveryPort(
             val modified = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_MODIFIED)
             val bucket = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_ID)
             val taken = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_TAKEN)
+            val added = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_ADDED)
             while (rows.moveToNext()) {
                 if (candidates.size == DISCOVERY_PAGE_SIZE) {
                     complete = false
@@ -151,7 +164,7 @@ internal class AndroidFlowDiscoveryPort(
                     bucketId = rows.getLong(bucket),
                     fileName = rows.getString(name).orEmpty(),
                     mediaType = rows.getString(mime) ?: "application/octet-stream",
-                    captureAtMs = rows.getLong(taken),
+                    captureAtMs = captureAtMsOrDateAdded(rows.getLong(taken), rows.getLong(added)),
                 )
                 next = DiscoveryCursor(rowGeneration, rowId)
             }
@@ -160,6 +173,17 @@ internal class AndroidFlowDiscoveryPort(
     }
 
     private companion object { const val DISCOVERY_PAGE_SIZE = 500 }
+}
+
+/**
+ * MediaStore `DATE_TAKEN` 优先（毫秒，多数相机 App 的真实拍摄时间）；
+ * 为 0（列缺失/未知）时退到 `DATE_ADDED`（秒，第三方 App —— 实测飞书 —— 保存
+ * 图片时唯一还留着的时间信号，见调用处注释）。两者都拿不到才是真的 0，
+ * 交给 Desktop 端的 EXIF/mtime 兜底链继续处理。
+ */
+private fun captureAtMsOrDateAdded(dateTakenMs: Long, dateAddedSec: Long): Long {
+    if (dateTakenMs > 0) return dateTakenMs
+    return if (dateAddedSec > 0) dateAddedSec * 1000 else 0L
 }
 
 /**

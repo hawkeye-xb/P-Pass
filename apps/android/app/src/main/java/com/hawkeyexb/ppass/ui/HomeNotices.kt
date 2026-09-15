@@ -160,43 +160,36 @@ fun NoticeCard(notice: HomeNotice) {
  * `pairingLost` / partial-access are intentionally NOT here: they have their
  * own dedicated hero / red-card presentation and are not amber one-liners.
  *
- * UI-12: [backgroundBackupState] adds the `BACKUP_INTERRUPTED` candidate
- * when the state is `NeedsSystemAuthorization`/`SystemStoppedWatcher` — this
- * used to live only in a `HomeScreen` settings-page `CellRow`, invisible on
- * the Photos tab and easy to miss. [backgroundBackupNoticeDismissed] lets the
- * caller hide it after the user taps "Got it" without resolving the
- * underlying condition (a genuine "acknowledged, not fixed" state, distinct
- * from turning auto-backup off entirely).
+ * UI-12（2026-09-15，用户判断二次修正）：[backgroundBackupState] 的横幅
+ * **不再提供"知道了"**——它和设置页那行琥珀 hint 描述的是同一个事实，两个
+ * 入口不能给出两个不同的承诺（横幅说"已读不打扰"、hint 说"问题还在"）。
+ * 唯一的退出路径是把"自动备份"配置改成跟现状一致（关掉开关），不维护
+ * 一个独立的"已忽略"状态。REUPLOAD（补充信息类，用户不动手也没事）不
+ * 受影响，继续保留自己的一次性确认语义。
  */
 @Composable
 fun NoticeHost(
     reuploadCount: Int,
     onAcknowledgeReupload: () -> Unit,
     backgroundBackupState: BackgroundBackupState = BackgroundBackupState.OffByUser,
-    backgroundBackupNoticeDismissed: Boolean = false,
     onResolveBackgroundBackup: () -> Unit = {},
-    onDismissBackgroundBackupNotice: () -> Unit = {},
 ) {
     val candidates = buildList {
-        if (!backgroundBackupNoticeDismissed) {
-            val bodyRes = when (backgroundBackupState) {
-                BackgroundBackupState.NeedsSystemAuthorization ->
-                    R.string.background_backup_needs_authorization
-                BackgroundBackupState.SystemStoppedWatcher ->
-                    R.string.background_backup_system_stopped
-                else -> null
-            }
-            if (bodyRes != null) add(
-                HomeNotice(
-                    kind = HomeNoticeKind.BACKUP_INTERRUPTED,
-                    body = stringResource(bodyRes),
-                    actionLabel = stringResource(R.string.background_backup_notice_action),
-                    onAction = onResolveBackgroundBackup,
-                    dismissLabel = stringResource(R.string.notice_dismiss_label),
-                    onDismiss = onDismissBackgroundBackupNotice,
-                )
-            )
+        val bodyRes = when (backgroundBackupState) {
+            BackgroundBackupState.NeedsSystemAuthorization ->
+                R.string.background_backup_needs_authorization
+            BackgroundBackupState.SystemStoppedWatcher ->
+                R.string.background_backup_system_stopped
+            else -> null
         }
+        if (bodyRes != null) add(
+            HomeNotice(
+                kind = HomeNoticeKind.BACKUP_INTERRUPTED,
+                body = stringResource(bodyRes),
+                actionLabel = stringResource(R.string.background_backup_notice_action),
+                onAction = onResolveBackgroundBackup,
+            )
+        )
         if (reuploadCount > 0) add(
             HomeNotice(
                 kind = HomeNoticeKind.REUPLOAD,

@@ -19,12 +19,16 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Snackbar
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -100,6 +104,7 @@ import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.BucketScreen
 import com.hawkeyexb.ppass.ui.PPColor
+import com.hawkeyexb.ppass.ui.PPSize
 import com.hawkeyexb.ppass.ui.ScanScreen
 import com.hawkeyexb.ppass.ui.WelcomeScreen
 import com.hawkeyexb.ppass.update.UpdateInfo
@@ -149,6 +154,14 @@ fun PPassApp() {
     val context = LocalContext.current
     // UPD-01: 下载安装是 suspend（IO 线程下载）——按钮 onClick 从协程调。
     val scope = rememberCoroutineScope()
+    // UI-12 追加（2026-09-15，用户拍板）：后台备份"去处理"的短暂反馈用
+    // Snackbar——这是本代码库第一个"转瞬即逝、非持久"的反馈机制（此前
+    // 所有反馈都是改一个持久状态、界面自己重组合）。只覆盖两条真实存在
+    // 的信号：①点击发起重挂监听的确认（"正在重新连接…"，无失败态——
+    // WorkManager 入队不会抛错，真失败已由 Trouble 状态/系统通知覆盖）；
+    // ②系统授权弹窗的结果回调（同意/拒绝，各一句文案）。不做"报错"
+    // Snackbar：点击这个动作本身没有可诚实上报的失败信号，编一个是假的。
+    val snackbarHostState = remember { SnackbarHostState() }
     val identity = remember { IdentityStore(context.filesDir) }
     val pairings = remember { PairingStore(context.filesDir) }
     val app = context.applicationContext as PPassApplication
@@ -432,6 +445,7 @@ fun PPassApp() {
         BackHandler { screen = target }
     }
 
+    Box(Modifier.fillMaxSize()) {
     when (val s = screen) {
         is Screen.Welcome -> WelcomeScreen(onScan = {
             if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
@@ -547,8 +561,21 @@ fun PPassApp() {
                         resumeAfterInterruption(context)
                         backupInterrupted = false
                     } else enableAutoBackup(context)
+                    // UI-12: 系统授权弹窗的结果——这个 launcher 被「去处理」
+                    // 和「首次开启开关」两条路径共用，两者都是同一个系统
+                    // 权限请求，结果反馈理应一致，不用按入口拆分。
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            context.getString(R.string.background_backup_authorized),
+                        )
+                    }
                 } else {
                     suspendAutoBackupUntilAuthorized(context)
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            context.getString(R.string.background_backup_authorization_denied),
+                        )
+                    }
                 }
             }
             // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页开关行已删；
@@ -584,20 +611,24 @@ fun PPassApp() {
             // 是自己手滑关的，或者以为 App 把设置清空了。系统层面的失效
             // 只改状态提示（见 HomeScreen 的 RuleSwitchRow hint），不改
             // 开关本身显示值；唯一能让开关变灰的只有用户自己点关。
-            // UI-12: "知道了" 是对**当前这个状态**的暂时性忽略，不是永久
-            // 偏好——状态发生新的跃变（比如恢复又再次被系统停掉）必须重新
-            // 提醒，所以 key 在 backgroundBackupState 上：状态一变这个
-            // remember 就重置为 false。
-            var backgroundBackupNoticeDismissed by remember(backgroundBackupState) {
-                mutableStateOf(false)
-            }
-            // UI-12: 唯一入口，NoticeHost 的横幅动作与设置页 CellRow 共用
-            // 同一个 lambda——两处各写一遍就是 MOB-33/34/35/38 那种「漏一处」
-            // 的形状（AGENTS.md 提炼函数的理由同款）。
+            // UI-12 二次修正（用户判断成立）：不再维护"知道了"这个独立的
+            // 忽略状态——横幅和设置页 hint 说的是同一件事，两个入口不能给
+            // 两个不同承诺。见 HomeNotices.kt 的 NoticeHost 文档。
+            // UI-12: 唯一入口，NoticeHost 的横幅动作与设置页 RuleSwitchRow
+            // hint 共用同一个 lambda——两处各写一遍就是 MOB-33/34/35/38
+            // 那种「漏一处」的形状（AGENTS.md 提炼函数的理由同款）。
             val resolveBackgroundBackup = {
                 if (batteryWhitelisted) {
                     resumeAfterInterruption(context)
                     backupInterrupted = false
+                    // UI-12: 本地重挂 WorkManager 监听，没有会失败的路径——
+                    // 真正传不传得出去要等这轮 Flow 跑完，那是 Trouble 状态/
+                    // SystemFailureNotifier 的地盘，这里只诚实说"已发起"。
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            context.getString(R.string.background_backup_resuming),
+                        )
+                    }
                 } else if (!batteryRequestInFlight) {
                     batteryRequestInFlight = true
                     batteryPermission.launch(backgroundAuthorization.requestIntent())
@@ -641,9 +672,7 @@ fun PPassApp() {
                             reuploadCount = holder.reuploadNoticeCount.value,
                             onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
                             backgroundBackupState = backgroundBackupState,
-                            backgroundBackupNoticeDismissed = backgroundBackupNoticeDismissed,
                             onResolveBackgroundBackup = resolveBackgroundBackup,
-                            onDismissBackgroundBackupNotice = { backgroundBackupNoticeDismissed = true },
                         )
                     }
                 } else null,
@@ -911,6 +940,21 @@ fun PPassApp() {
                 onEnter = finishOnboarding,
             )
         }
+    }
+    // UI-12: 自定义 Snackbar 视觉——用 PPColor（墨底纸字），跟横幅/红卡
+    // 同一套语义色系，不用 M3 默认的 surfaceInverse 配色。
+    SnackbarHost(
+        hostState = snackbarHostState,
+        modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+    ) { data ->
+        Snackbar(
+            containerColor = PPColor.Ink,
+            contentColor = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusControl),
+        ) {
+            Text(data.visuals.message, fontSize = 14.sp)
+        }
+    }
     }
 }
 
