@@ -600,8 +600,13 @@ fun PPassApp() {
                 showTabBar = !photoViewerOpen && !storageDetailOpen,
                 // M13 哨兵态：长期失联时设置图标角标红点，跟照片页的失联
                 // 红卡同一个信号源（holder.pairingLost），不额外判天数。
+                // 后台备份只在真出问题（待授权白名单 / 监听被系统清掉）时
+                // 才亮红点——此前误写成 != OffByUser，导致正常 Armed（用户
+                // 开着、白名单已过、监听健康）也常年亮红点，即使一切正常
+                // 用户也永远看到红点，是个逻辑 bug（2026-09-15 用户反馈）。
                 settingsAlert = holder.pairingLost.value ||
-                    backgroundBackupState != BackgroundBackupState.OffByUser,
+                    backgroundBackupState == BackgroundBackupState.NeedsSystemAuthorization ||
+                    backgroundBackupState == BackgroundBackupState.SystemStoppedWatcher,
                 // UI-04a/c: 全局唯一提示宿主——把五条提示的输入集中到
                 // NoticeHost，只渲染最高优先级的一条，Photos/Backup 两页
                 // 都可见（不再只有总览页）。
