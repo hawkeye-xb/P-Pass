@@ -46,10 +46,17 @@ class FlowRunner(
     // constraintsSatisfied stay untouched; AndroidFlowRuntime wires the
     // real computation.
     private val constraintsProvider: () -> Boolean = { true },
+    // NET-06: best-effort daemon notification for `flow.cancel_tuple`
+    // (queue_sequence + pairing_epoch + lease_token, no content_hash/
+    // provider required — unlike `flow.cancel`, this still works for an
+    // item whose one-shot provider ticket has already been discarded).
+    // Default = no-op so existing construction/tests are untouched;
+    // AndroidFlowRuntime wires the real daemon-backed implementation.
+    private val tupleCanceller: FlowTupleCancelPort = NoopFlowTupleCancelPort,
 ) {
     private val consumer = StrictConsumer(ledger, delivery)
     private val completion = CompletionAndScope(ledger)
-    private val cancellation = CancellationRoundController(ledger)
+    private val cancellation = CancellationRoundController(ledger, tupleCanceller)
 
     fun requestDiscovery() {
         ledger.update { it.copy(discoveryRequested = true) }

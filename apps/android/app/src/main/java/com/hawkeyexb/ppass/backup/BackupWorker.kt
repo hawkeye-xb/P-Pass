@@ -49,12 +49,22 @@ internal fun backupWorkRequest(
         .setInputData(androidx.work.workDataOf(KEY_AUTOMATIC_WAKE to automatic))
         .build()
 
+// NET-06: this fires only when the user is looking at the screen right
+// now (scope confirm / app foreground) — it must run regardless of the
+// *background* auto-backup switch. `automatic=true` (the default) means
+// "skip if the user turned auto-backup off", which is the correct guard
+// for the periodic/process-catchup producers but wrongly silenced this
+// one too: confirming a scope while "后台备份" was off left the picker
+// screen with no visible reaction at all (found during NET-06 real-device
+// regression, 2026-09-15). `automatic=false` here means what it means for
+// triggerManualBackup below — "the user is the direct cause", not
+// "auto-backup enabled".
 fun triggerUserPresentBackup(context: Context) = enqueueFlowWake(
-    context, CATCHUP_WORK_NAME, BackupTier.USER_PRESENT, ExistingWorkPolicy.KEEP,
+    context, CATCHUP_WORK_NAME, BackupTier.USER_PRESENT, ExistingWorkPolicy.KEEP, automatic = false,
 )
 
 fun triggerManualBackup(context: Context) = enqueueFlowWake(
-    context, MANUAL_BACKUP_WORK_NAME, BackupTier.MANUAL, ExistingWorkPolicy.KEEP, automatic = false,
+    context, MANUAL_BACKUP_WORK_NAME, BackupTier.MANUAL, ExistingWorkPolicy.KEEP,
 )
 
 fun cancelManualBackup(context: Context) {

@@ -706,6 +706,54 @@ impl FlowDelivery {
         }
     }
 
+    /// NET-06: cancel by tuple identity alone — same lookup path as
+    /// `status`/`suspend` (`tuple_grant`, which needs only queue_sequence +
+    /// pairing_epoch + lease_token). Reuses the daemon's own stored
+    /// content_hash/provider instead of requiring the caller to supply
+    /// them, so a phone that already discarded a failed item's one-shot
+    /// provider ticket can still cancel the daemon's matching grant.
+    /// Behavior mirrors `cancel_inner` from that point on: mark the grant
+    /// Cancelled, interrupt any in-progress task, clear the active path
+    /// entry.
+    pub async fn cancel_by_tuple(
+        &self,
+        peer: NodeId,
+        tuple: &FlowTupleRef,
+    ) -> Result<(), DeliveryError> {
+        let result = self.cancel_by_tuple_inner(peer, tuple).await;
+        if let Err(error) = &result {
+            self.record_error("cancel_tuple", error);
+        }
+        result
+    }
+
+    async fn cancel_by_tuple_inner(
+        &self,
+        peer: NodeId,
+        tuple: &FlowTupleRef,
+    ) -> Result<(), DeliveryError> {
+        let Some(grant) = self.tuple_grant(peer, tuple).await? else {
+            return Err(DeliveryError::GuardMismatch);
+        };
+        if self
+            .db
+            .cancel_flow_grant(&grant)
+            .await
+            .map_err(storage_error)?
+        {
+            self.tasks.interrupt(peer, &grant);
+            if self
+                .paths
+                .clear_if_current(peer, grant.queue_sequence, &grant.lease_token)
+            {
+                emit_device_changed(self.events.as_ref());
+            }
+            Ok(())
+        } else {
+            Err(DeliveryError::GuardMismatch)
+        }
+    }
+
     /// NET-06: read-only status query. Never touches the data plane and
     /// never blocks on it — this is the control-plane answer new phones
     /// poll instead of inferring task state from an RPC round-trip timing

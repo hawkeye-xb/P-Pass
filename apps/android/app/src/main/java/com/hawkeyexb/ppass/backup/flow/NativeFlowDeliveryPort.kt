@@ -10,6 +10,8 @@ import com.hawkeyexb.ppass.proto.FlowAuditAccepted
 import com.hawkeyexb.ppass.proto.FlowAuditEvent
 import com.hawkeyexb.ppass.proto.FlowAuditSubmit
 import com.hawkeyexb.ppass.proto.FlowFetchRequest
+import com.hawkeyexb.ppass.proto.FlowStatusReply
+import com.hawkeyexb.ppass.proto.FlowTupleRef
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
@@ -21,6 +23,7 @@ import io.github.rctcwyvrn.blake3.Blake3
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.buildJsonObject
 import java.io.FileNotFoundException
@@ -32,6 +35,15 @@ internal class SourceMissingException(cause: Throwable? = null) : Exception(caus
 internal interface FlowReceiptClient {
     suspend fun currentPairingEpoch(): String?
     suspend fun offer(request: FlowFetchRequest)
+    /**
+     * NET-06: read-only control-plane query for one exact tuple. Every
+     * network condition answers within the ordinary control RPC timeout
+     * — this never waits on the data plane, unlike the old blocking
+     * [fetch]. [NativeFlowDeliveryPort] polls this instead of betting an
+     * entire transfer's outcome on one long round trip returning in time
+     * (NET-01's root cause).
+     */
+    suspend fun status(tuple: FlowTupleRef): FlowStatusReply
     suspend fun fetch(request: FlowFetchRequest): FlowCompletionReceipt
     suspend fun cancel(request: FlowFetchRequest)
 }
@@ -176,6 +188,12 @@ internal class DaemonFlowReceiptClient(
         check(response.ok) { "flow.offer: ${response.error?.msgKey}" }
     }
 
+    override suspend fun status(tuple: FlowTupleRef): FlowStatusReply {
+        val response = client.call(peer, Methods.FLOW_STATUS, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
+        check(response.ok) { "flow.status: ${response.error?.msgKey}" }
+        return ProtoJson.decodeFromJsonElement(FlowStatusReply.serializer(), checkNotNull(response.result))
+    }
+
     override suspend fun fetch(request: FlowFetchRequest): FlowCompletionReceipt {
         val response = client.call(peer, Methods.FLOW_FETCH, ProtoJson.encodeToJsonElement(FlowFetchRequest.serializer(), request))
         check(response.ok) { "flow.fetch: ${response.error?.msgKey}" }
@@ -205,6 +223,15 @@ internal class NativeFlowDeliveryPort(
     private val onReceipt: (CompletionReceipt) -> Unit,
     private val onPairingEpochRefreshed: (PairingEpoch) -> Unit,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
+    /** Seam for tests: production binds the real client and builds a
+     *  [DaemonFlowReceiptClient]; tests supply a fake that never touches
+     *  [DaemonClient.bind] (which opens a real iroh endpoint and is unsafe
+     *  to call unconditionally in a JVM test). Same pattern as
+     *  [AuditOutboxDispatcher.transportFor]. */
+    private val desktopFor: suspend (Pairing) -> FlowReceiptClient = { currentPairing ->
+        client.bind(identityKey())
+        DaemonFlowReceiptClient(client, parsePeerAddrToken(currentPairing.daemonAddrToken))
+    },
 ) : DeliveryPort {
     private var active: ActiveDelivery? = null
     private val epochGuard = FlowDeliveryEpochGuard(pairing)
@@ -246,11 +273,7 @@ internal class NativeFlowDeliveryPort(
         scope.launch {
             try {
                 require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before offer" }
-                client.bind(identityKey())
-                val desktop = DaemonFlowReceiptClient(
-                    client,
-                    parsePeerAddrToken(currentPairing.daemonAddrToken),
-                )
+                val desktop = desktopFor(currentPairing)
                 val advertisedEpoch = desktop.currentPairingEpoch()
                 val refreshedEpoch = epochGuard.refreshedEpoch(advertisedEpoch)
                 Log.i(
@@ -264,8 +287,75 @@ internal class NativeFlowDeliveryPort(
                     return@launch
                 }
                 desktop.offer(request)
-                require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before fetch" }
-                val receipt = desktop.fetch(request)
+                // NET-06: offer() now spawns the background transfer on the
+                // daemon and returns immediately — it no longer blocks on
+                // the data plane, so this used to be immediately followed
+                // by a single long-blocking fetch() call gambling the whole
+                // transfer's outcome on one control-plane timeout (NET-01's
+                // root cause). Instead, poll status() with backoff until it
+                // reaches a terminal state. A status round trip itself
+                // timing out (a real but transient network hiccup) must
+                // NOT be read as "the transfer failed" — the daemon's
+                // ledger, not an RPC echo, is what decides that (card
+                // principle 3: 手机只认账本，不认回声). This loop never
+                // calls offer() again, so a flaky network never causes two
+                // competing grants for the same tuple. The decision on each
+                // reply is a pure function ([flowStatusPollOutcome]) so it
+                // is JVM-testable without a coroutine dispatcher.
+                val tuple = FlowTupleRef(
+                    queueSequence = request.queueSequence,
+                    pairingEpoch = request.pairingEpoch,
+                    leaseToken = request.leaseToken,
+                )
+                var pollDelayIndex = 0
+                var consecutiveStatusFailures = 0
+                lateinit var receipt: FlowCompletionReceipt
+                while (true) {
+                    require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed while polling status" }
+                    val reply = try {
+                        desktop.status(tuple)
+                    } catch (failure: Throwable) {
+                        // A dead connection or a daemon that is momentarily
+                        // unreachable is not the same fact as "the transfer
+                        // is over" — only a bounded run of consecutive
+                        // failures gives up on THIS attempt (the outer
+                        // attemptCount budget in StrictConsumer decides
+                        // whether the item gets a fresh attempt later).
+                        consecutiveStatusFailures += 1
+                        if (consecutiveStatusFailures >= STATUS_POLL_MAX_CONSECUTIVE_FAILURES) throw failure
+                        delay(nextStatusPollDelayMs(pollDelayIndex))
+                        pollDelayIndex += 1
+                        continue
+                    }
+                    consecutiveStatusFailures = 0
+                    when (val outcome = flowStatusPollOutcome(reply)) {
+                        is FlowStatusPollOutcome.Completed -> {
+                            receipt = outcome.receipt
+                        }
+                        FlowStatusPollOutcome.Cancelled -> {
+                            // Someone (this device's own pause/cancel path,
+                            // or a superseding offer) already told the
+                            // daemon to stop waiting on this exact tuple.
+                            // That is not a failed attempt to retry — the
+                            // local state change already happened wherever
+                            // the cancel originated; just stop tracking it.
+                            Log.i("PPassFlow", "Flow status reports cancelled; abandoning this delivery attempt")
+                            active = null
+                            return@launch
+                        }
+                        FlowStatusPollOutcome.KeepPolling -> {
+                            // Still genuinely in flight. Keep polling — an
+                            // intentionally slow relay path or a large file
+                            // transferring for minutes is exactly the case
+                            // NET-06 exists to no longer punish with a
+                            // fixed timeout.
+                            delay(nextStatusPollDelayMs(pollDelayIndex))
+                            pollDelayIndex += 1
+                            continue
+                        }
+                    }
+                    break
+                }
                 require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before receipt" }
                 acceptReceipt(receipt, request)
             } catch (failure: Throwable) {
@@ -288,12 +378,7 @@ internal class NativeFlowDeliveryPort(
         scope.launch {
             runCatching {
                 val currentPairing = pairing() ?: return@runCatching
-                client.bind(identityKey())
-                val desktop = DaemonFlowReceiptClient(
-                    client,
-                    parsePeerAddrToken(currentPairing.daemonAddrToken),
-                )
-                desktop.cancel(current.request)
+                desktopFor(currentPairing).cancel(current.request)
             }
         }
         active = null
@@ -335,3 +420,49 @@ internal class NativeFlowDeliveryPort(
 
     private data class ActiveDelivery(val lease: FetchLease, val request: FlowFetchRequest)
 }
+
+/**
+ * NET-06: pure decision over one [FlowStatusReply] — extracted so the poll
+ * loop's branching is JVM-testable without a coroutine dispatcher or a
+ * fake DaemonClient. "not_found" is treated as a genuine failure (the
+ * daemon has no record of a grant this same device just offered — that is
+ * a real inconsistency, not a transient blip) by throwing, matching the
+ * old inline `error(...)` behavior exactly.
+ */
+internal sealed interface FlowStatusPollOutcome {
+    data class Completed(val receipt: FlowCompletionReceipt) : FlowStatusPollOutcome
+    object Cancelled : FlowStatusPollOutcome
+    object KeepPolling : FlowStatusPollOutcome
+}
+
+internal fun flowStatusPollOutcome(reply: FlowStatusReply): FlowStatusPollOutcome =
+    when (reply.state) {
+        "completed" -> FlowStatusPollOutcome.Completed(
+            reply.receipt ?: error("flow.status: completed with no receipt"),
+        )
+        "cancelled" -> FlowStatusPollOutcome.Cancelled
+        "not_found" -> error("flow.status: daemon has no record of our own grant")
+        else -> FlowStatusPollOutcome.KeepPolling
+    }
+
+/**
+ * NET-06: status-poll backoff for [NativeFlowDeliveryPort]. Card §期望行为⑤
+ * calls for a 5-10s poll interval when no push event has arrived — this is
+ * the pure decision function (JVM-testable without a coroutine dispatcher).
+ * Starts fast (large files often finish inside the first couple of polls
+ * for small items) and settles at the card's target ceiling, never
+ * growing unbounded — an hours-long relay transfer must still be checked
+ * on periodically, not effectively abandoned to a runaway backoff.
+ */
+internal fun nextStatusPollDelayMs(pollIndex: Int): Long =
+    STATUS_POLL_DELAYS_MS.getOrElse(pollIndex) { STATUS_POLL_DELAYS_MS.last() }
+
+private val STATUS_POLL_DELAYS_MS = longArrayOf(1_000, 2_000, 3_000, 5_000, 8_000)
+
+/** A run of this many consecutive status round-trip failures (not "active"
+ *  replies — genuine exceptions from [FlowReceiptClient.status] itself,
+ *  e.g. the daemon is fully unreachable) gives up on this attempt and lets
+ *  it fail up to the ordinary retry path, rather than polling forever
+ *  against a daemon that may never come back for this app process's
+ *  lifetime. */
+internal const val STATUS_POLL_MAX_CONSECUTIVE_FAILURES = 5
