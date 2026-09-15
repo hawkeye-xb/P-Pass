@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarHost
@@ -945,7 +946,10 @@ fun PPassApp() {
     // 同一套语义色系，不用 M3 默认的 surfaceInverse 配色。
     SnackbarHost(
         hostState = snackbarHostState,
-        modifier = Modifier.align(Alignment.BottomCenter).padding(16.dp),
+        modifier = Modifier
+            .align(Alignment.BottomCenter)
+            .safeDrawingPadding()
+            .padding(16.dp),
     ) { data ->
         Snackbar(
             containerColor = PPColor.Ink,
