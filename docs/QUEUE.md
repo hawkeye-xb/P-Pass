@@ -87,7 +87,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄日期而非归入当月 | L1 |
 | [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 并发失败/收据回调不触发同一队头双发 | L0 |
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 旧账本已确认项补 completedAt，首页不再永久显示从未成功 | L1 |
-| [UI-12](../cards/UI-12-notice-presentation-not-material-banner.md) | 后台备份降级状态已接入全局 `NoticeHost`，非阻断类通知加"知道了"忽略动作，阻断/非阻断视觉分级；378/378 JVM 绿 + 三星真机截图确认；待你复核忽略语义符合预期 | L2 |
+| [UI-12](../cards/UI-12-notice-presentation-not-material-banner.md) | 后台备份降级状态已接入全局 `NoticeHost`；本轮追加 Snackbar 安全区适配（三键导航不再遮挡）+ 版本 bump `0.5.3-test.1`；三星真机复测开关/hint/横幅/授权同意拒绝分支全通过，378/378 JVM 绿；`SystemStoppedWatcher` legacy 判据未能真机复现已拆 MOB-81 backlog；待你鸿蒙 OPPO 二次核对 | L2 |
 | [UI-13](../cards/UI-13-android-hand-rolled-widgets-not-material3.md) | tab 图标/角标/FilterChip/Button 改用 Material3 标准组件（`NavigationBar`/`ListItem` 因视觉冲突记录理由保留现状）；378/378 JVM 绿 + 三星真机截图确认视觉未走样；待你复核 | L2 |
 
 **已有真机证据的**（2026-08-21 审计，仅供复核）：MOB-30、WATCH-02。
@@ -240,6 +240,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | UI-05 / UI-06 | 用户暂时接受 | 展示细节问题，低优 |
 | [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | 暂缓，低优先级 | 2026-09-09 拍板：Button 组件缺「图标动作」(icon-only) 变体——验收标准列了，但目前代码没有真实调用场景，不凭空加；等出现实际需要图标按钮的页面时再补 |
 | [MOB-80](../cards/backlog/MOB-80-video-preview-should-default-muted.md) | 暂缓，等换播放器 | 2026-09-15 用户拍板：移动端视频预览默认静音 + 音量控制入口，等下次评估/更换视频播放器组件时一并设计；现有 Media3 PlayerView 默认控件无音量滑块/静音按钮，不单独定制 |
+| [MOB-81](../cards/backlog/MOB-81-legacy-watch-job-detached-from-flow-truth.md) | 待用户回头确认方向 | 2026-09-15：UI-12 真机验证发现 `SystemStoppedWatcher` 判据查的是 legacy JobScheduler（`MediaWatchJob`），非当前 Flow 主链路，真机 force-stop 后系统自动重排该 job 导致无法稳定复现该状态；判据本身有 16 个单测覆盖非回归风险，只是信号源脱节；影响面小（不影响真实备份，只影响这条提示是否准确弹出），不紧急 |
 
 ---
 

@@ -1,6 +1,6 @@
 # UI-12 移动端常驻提示条不符合 Material Banner 语义（L2）
 
-> 🟡 状态：代码已合并，等真机验收
+> 🟢 状态：已完成，三星 SM-S9210 真机验收通过；待用户鸿蒙/OPPO 二次核对
 > 级别：L2 · 阻塞：无（呈现方案已由用户 2026-09-15 定调，见下）
 
 ## 问题
@@ -89,6 +89,21 @@ Material Banner 规范的标准形状（对照见下表）：
 ---
 
 ## 实施记录
+
+- 2026-09-15（补充，本轮）：Snackbar 安全区适配（`MainActivity.kt` 的
+  `SnackbarHost` 加 `safeDrawingPadding()`，之前三键导航手机会被导航栏
+  遮挡）+ 版本号 bump 至 `0.5.3-test.1`（versionCode 23），commit
+  `423482e`，CI Android 绿。三星 SM-S9210 真机逐个复测完整 case 矩阵：
+  `OffByUser`（用户主动关，提示同步清空）/ `Armed`（健康态无提示）/
+  `NeedsSystemAuthorization`（撤白名单，开关不误跳灰、hint+横幅正确
+  出现）/ 授权同意分支（Snackbar"已获得后台运行权限"）/ 授权拒绝分支
+  （Snackbar"未获得授权…"）全部通过，Snackbar 底部与三键导航栏之间
+  有清晰留白、不遮挡。378/378 JVM 单测绿。
+  - 未能真机复现 `SystemStoppedWatcher`（legacy watch job 被系统杀后
+    重排的判据，非当前 Flow 主链路）——已拆为独立 backlog 卡
+    `MOB-81` 跟踪，不阻塞本卡验收（判据本身有 16 个单测覆盖，
+    非回归风险，只是真机上难以稳定触发）。
+  - 待用户回家用鸿蒙 OPPO 设备二次核对上述真机验收结果。
 
 - 2026-09-15：已实现。`HomeNotice` 新增 `critical`/`dismissLabel`/`onDismiss` 三个字段（`HomeNotices.kt`），`NoticeCard` 按 `critical` 切换强色/温和色两套视觉，非阻断类渲染独立的"知道了"文字按钮（`dismissLabel`），阻断类（`PAIRING_LOST`）不传 `dismissLabel` 即无该动作。`NoticeHost` 新增参数消费 `BackgroundBackupState`，`NeedsSystemAuthorization`/`SystemStoppedWatcher` 两个状态构造 `HomeNoticeKind.BACKUP_INTERRUPTED` 候选加入 `topNotice` 排序（复用已有优先级登记，未改排序表）。`resolveBackgroundBackup` 在 `MainActivity.kt` 提炼为单一 lambda，`NoticeHost` 的"去处理"与设置页 `CellRow` 的 `onResolveBackgroundBackup` 共用同一份闭包，不再各写一遍（AGENTS.md「漏一处」教训同款）。"知道了"落地为 `backgroundBackupNoticeDismissed`（`remember(backgroundBackupState) { mutableStateOf(false) }`——按状态本身做 key，状态跃迁自动重置为 false，符合"暂时忽略、非永久偏好、新的跃变必须重新提醒"的设计）。`strings.xml` en/zh 新增 `background_backup_notice_action`（"去处理"/"Fix it"）与 `notice_dismiss_label`（"知道了"/"Got it"），复用已有 `reupload_notice_action` 会导致语义耦合，故拆开单独一对。设置页 `CellRow`（`HomeScreen.kt:516-531`）保留不动——横幅是可忽略的主动提醒，CellRow 是"当前仍为真"的常驻状态记录，两者语义不同、不是重复展示。
   - RED→GREEN：`BackgroundBackupPresentationContractTest` 新增
