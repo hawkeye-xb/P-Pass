@@ -114,6 +114,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | P3 | [UI-07](../cards/UI-07-wrong-small-icon-has-no-lightning-mark.md) | 小 icon 用错版本，等验收人给修改指示 | L3 |
 | P2 | [MOB-69](../cards/MOB-69-rebuild04-deleted-notification-senders.md) | REBUILD-04 批次删除带走哨兵/白名单/重传三条通知发送端（判定逻辑成死代码）；先定性再接线或显式下线 | L2 |
 | P3 | [MOB-78](../cards/MOB-78-mob67-test-residue-in-production-library.md) | 生产照片库混入 MOB-67 测试残留假 JPEG（59 字节，显示白框），需清理并排查是否还有其他遗留测试文件 | L1 |
+| P2 | [CI-03](../cards/CI-03-e2e-scenarios-test-frozen-legacy-flow.md) | `e2e.yml` 的 e2e/scenarios 两个 job 全在验证已冻结的 legacy 备份路径（`DaemonBackupTest`/`testclient backup`），新 Flow 核心零黑盒剧本覆盖；需先拍板标注/砍/换三选一 | L2 |
 
 ---
 
