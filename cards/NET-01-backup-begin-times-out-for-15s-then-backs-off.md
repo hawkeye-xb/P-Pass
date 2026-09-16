@@ -213,3 +213,36 @@ UX-15 + MOB-43 之后用户**没有任何出路**。而"在外面用手机备份
 NET-04/NET-05/NET-13）部分缓解。若要把这次窗口用满，需要在同一次 5G
 会话里补拿：`devices.list` connection 值、大文件传输实测秒数、
 daemon debug 日志三项之一。
+
+## 2026-09-16：判决实验补齐——三星 5G ↔ Mac 家庭 Wi-Fi，daemon debug 日志实证
+
+本卡此前"待验证"节要的判决实验（debug 级 daemon 日志里手机的 inbound
+连接尝试）本次补齐。三星 SM-S9210 切 5G 蜂窝（关 Wi-Fi），Mac 保持家庭
+Wi-Fi 不动（跨网络场景），daemon 手动以
+`RUST_LOG=info,transport=debug,daemon=debug,iroh=debug` 启动并持久化
+日志（非轮询采样，全程无遗漏）。结果：
+
+- **有 inbound，连接确实建立，但全程卡在 relay，反复打洞失败**：
+  多次 `iroh::socket::remote_map::remote_state: connections are not
+  good enough, triggering holepunching`，每次约 5 秒一轮，`AddConnection`
+  的 `network_path` 始终是 `Relay(https://aps1-1.relay.n0.iroh.link./)`，
+  从未观察到升级为 direct 路径。
+- 对照本卡"待验证"节两个分支：命中的是**"有 inbound、无法升级为
+  direct"**这个分支，不是"连 inbound 都没有"——即 connect 阶段确实能
+  触达 daemon，问题在路径协商，不在 15 秒超时把请求彻底挡在门外这一
+  更早的环节。
+- 传输本身**没有卡死**：`flow.fetch` 走 relay 路径完成了多个文件的
+  传输（含约 220MB 视频），只是速度明显慢于直连——这与卡内 2026-09-11
+  记录的"三星热点大视频三次 15 秒超时进 `FAILED_NEEDS_USER`"不完全一致，
+  本次未复现那三次超时失败，需要注意两次实验的网络路径不同（本次是
+  5G↔家庭Wi-Fi，此前是热点↔Mac），不能互相替代对方的结论。
+- 判定依据：`connection`/`flow_connection` 字段全程为 `relay`，坐实了
+  跨网络场景确实会落到 relay 且打洞不成功，这是本卡因果链的核心环节
+  首次有 debug 日志实证（此前只有 `devices.list` 的 `connection` 字段
+  间接推断）。
+
+**仍未解决**：本次网络路径下没有复现 2026-09-11 记录的三次 15 秒超时，
+所以本卡"connect 超时与 RPC 超时分开"这条修复方向仍未被证明是必需的
+或已经被后续改动缓解——只能确认"跨网络会落 relay"这一半，不能确认
+"15 秒超时本身是否仍是用户可感知的痛点"。建议下次窗口专门针对"热点+
+Mac"这个此前触发过超时失败的具体网络组合复测，而不是泛化的"跨网络"。
