@@ -11,7 +11,10 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-15**（NET-13 完成并本机真机验证通过：桌面设备
+> 最后核对：**2026-09-16**（NET-14 同 WiFi 真机冒烟通过，移入「待共享
+> 回归」等三星热点/relay/NET-12 长期存活三项硬门；同轮真机会话新发现
+> 相册选择页渲染错乱开卡 MOB-84，入「可接队列」。上一轮 2026-09-15：
+> NET-13 完成并本机真机验证通过：桌面设备
 > 列表备份状态误报根因修复 + ID 列 + 打开目录 + 在线态独立列，移入
 > 已完成。上一轮 2026-09-12：OPPO / v0.5.1 真机走查
 > `docs/evidence/2026-09-12-oppo-051-dogfood.md`：新开 MOB-76；MOB-52/54/64/71/74
@@ -55,7 +58,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 |---|---|---|
 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，历史 cancel 已 restore；重放 receipt 与 discovery wake 交错并对账未确认项，禁止沿用旧瞬态失败根因 | L1 / P0 |
 | [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | NET-01 根治：Flow 交付 202 异步化 + `flow.status`/`flow.suspend` 对账门 + 暂停/继续/取消控制面语义；三轮 review 后开工 | L2 |
-| [NET-14](../cards/NET-14-desktop-completion-must-push-not-poll-local-transfer-is-ground-truth.md) | 代码完成+同 WiFi 冒烟通过（证据：`docs/evidence/2026-09-16-net14-same-wifi-smoke.md`）；**待三星热点大视频跨 relay + 本地信号 idle 兜底 + NET-12 长期存活**三项真机硬门 | L2 |
 
 ---
 
@@ -63,6 +65,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [NET-14](../cards/NET-14-desktop-completion-must-push-not-poll-local-transfer-is-ground-truth.md) | 代码完成+同 WiFi 冒烟通过（证据：`docs/evidence/2026-09-16-net14-same-wifi-smoke.md`）；**待三星热点大视频跨 relay + 本地信号 idle 兜底 + NET-12 长期存活**三项真机硬门 | L2 |
 | [NET-12](../cards/NET-12-flow-transfer-lacks-foreground-service-protection.md) | 三星真机实锤 2026-09-14 两次真实 killed（adj=900/915）：REBUILD-04 删除的前台服务保护已接回（`FlowTransferForegroundService` + `FlowTransferForeground.sync`），三星真机复测 adj 锁定在 200（不再降到 700-900 杀档），35 张全部 CONFIRMED；待长期真机回归观察 | L2 |
 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 后台备份以用户选择、标准白名单和 MediaWatch 健康三项裁决；通知权限不进 onboarding，后台异常仅在设置呈现；待 HarmonyOS 4.2 真机验证 | L2 |
 | [UI-04a](../cards/UI-04a-interruption-notice-only-visible-on-home.md) | 两 tab 都能看到中断提示，但用户真机复核后反馈"状态不对"，待用户说明具体哪里不对 | L2 |
@@ -118,6 +121,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | P2 | [MOB-69](../cards/MOB-69-rebuild04-deleted-notification-senders.md) | REBUILD-04 批次删除带走哨兵/白名单/重传三条通知发送端（判定逻辑成死代码）；先定性再接线或显式下线 | L2 |
 | P3 | [MOB-78](../cards/MOB-78-mob67-test-residue-in-production-library.md) | 生产照片库混入 MOB-67 测试残留假 JPEG（59 字节，显示白框），需清理并排查是否还有其他遗留测试文件 | L1 |
 | P2 | [CI-03](../cards/CI-03-e2e-scenarios-test-frozen-legacy-flow.md) | `e2e.yml` 的 e2e/scenarios 两个 job 全在验证已冻结的 legacy 备份路径（`DaemonBackupTest`/`testclient backup`），新 Flow 核心零黑盒剧本覆盖；需先拍板标注/砍/换三选一 | L2 |
+| P1 | [MOB-84](../cards/MOB-84-album-picker-renders-stale-overlay-and-taps-produce-no-visible-response.md) | 相册选择页设置开关残留叠加 + 点击相册卡片无可见响应（触屏事件已送达但界面装死），阻断发起备份；2026-09-16 NET-14 真机会话同轮发现 | L1 |
 
 ---
 
