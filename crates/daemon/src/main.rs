@@ -336,6 +336,25 @@ async fn main() -> anyhow::Result<()> {
     if reclaimed > 0 {
         tracing::info!("BLOB-01: 收件箱回收 {} 字节", reclaimed);
     }
+    // NET-20: `.ppf/flow-staging` 同样该在启动时收一遍存量孤儿——与旧
+    // 收件箱不同，Flow 的保护集（`active_flow_content_hashes`）是持久表
+    // 而非内存态会话，启动这一刻查到的就是真值，不必像旧路径那样在
+    // 启动时把保护集当成空集。
+    match db.active_flow_content_hashes().await {
+        Ok(protected) => {
+            let freed = daemon::sweep_flow_staging_orphans(
+                &data_dir.join(".ppf/flow-staging"),
+                &protected,
+                daemon::STAGING_ORPHAN_GRACE,
+            );
+            if freed > 0 {
+                tracing::info!("NET-20: 启动时回收 flow-staging 孤儿 {} 字节", freed);
+            }
+        }
+        Err(error) => {
+            tracing::warn!("NET-20: 查询活跃 Flow 哈希失败，跳过启动时 flow-staging 回收: {error}");
+        }
+    }
 
     // One blob store handle, shared by backup (pulls) and query
     // (tickets); also serves fetches through the listen loop (T-033).
@@ -410,6 +429,12 @@ async fn main() -> anyhow::Result<()> {
     {
         let reconcile = reconcile.clone();
         let backup = backup.clone();
+        // NET-20: flow-staging 孤儿回收复用同一份 db/data_dir——
+        // 保护集判据与 flow-blobs 的 iroh GC 回调（上面的
+        // `flow_gc_protected`）同一张表（`active_flow_content_hashes`），
+        // 两个装卸台该有的巡检不能只给旧管线接上。
+        let flow_staging_db = db.clone();
+        let flow_staging_dir = data_dir.join(".ppf/flow-staging");
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
@@ -428,6 +453,26 @@ async fn main() -> anyhow::Result<()> {
                 let freed = backup.reclaim_staging(daemon::STAGING_ORPHAN_GRACE);
                 if freed > 0 {
                     tracing::info!("MOB-32: 回收 staging 孤儿 {freed} 字节");
+                }
+                // NET-20: `.ppf/flow-staging` 是 Flow 单通道自己的装卸台，
+                // 不在 `backup.reclaim_staging` 的职责范围内——查询失败就
+                // 跳过本轮（宁可漏收，不可在保护集不可信时误删）。
+                match flow_staging_db.active_flow_content_hashes().await {
+                    Ok(protected) => {
+                        let freed = daemon::sweep_flow_staging_orphans(
+                            &flow_staging_dir,
+                            &protected,
+                            daemon::STAGING_ORPHAN_GRACE,
+                        );
+                        if freed > 0 {
+                            tracing::info!("NET-20: 回收 flow-staging 孤儿 {freed} 字节");
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            "NET-20: 查询活跃 Flow 哈希失败，跳过本轮 flow-staging 回收: {error}"
+                        );
+                    }
                 }
             }
         });

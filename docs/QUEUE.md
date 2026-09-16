@@ -161,6 +161,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [NET-21](../cards/done/NET-21-flow-staging-orphan-sweep.md) | flow-staging 装卸台无孤儿回收（materialize 失败/cancel/崩溃留下的中转文件无人清）；复用旧 `sweep_orphans` 模式接 `active_flow_content_hashes` 保护集，启动+每小时巡检；本地单测 10/10（5 新增+反证成立）+ `just ci` 全绿；未做真机长跑验证 | 无——磁盘泄漏点已堵，真机验证欠账见卡内 |
 | [DESK-12](../cards/done/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄时间；2026-09-15 真机复核追加两轮修复（EXIF OffsetTime 时区解析、飞书图无 EXIF/DATE_TAKEN 时退到 DATE_ADDED），验收人实测通过 | 无——摄入时间归属问题已闭环 |
 | [NET-13](../cards/done/NET-13-device-list-status-id-column-open-folder.md) | 桌面「家人与设备」备份状态误报根因修复（Flow 路径从不写遗留水位表，last_backup_at 改读真实 asset ingest 时间）+ ID 列 + 打开设备目录 + 在线态独立列；本机重装真机验证，真实库 5 台设备中 4 台 `asset_cnt>0` 但 `backup_watermark` 全空，改前会误判、改后显示真实备份时间，截图核实 | 无——设备状态误报根因已修复 |
 | [MOB-66](../cards/done/MOB-66-android-brand-font-newsreader-manrope.md) | 三星 SM-S9210 真机 2026-09-14：标题（欢迎页、备份页大数字）为 Newsreader 衬线体，正文/汉字为 Manrope/Noto Sans SC 无衬线体，两者视觉差异明显；11 处硬编码 `FontFamily.Serif` 全部替换 | 无——品牌字体缺口已闭环 |
