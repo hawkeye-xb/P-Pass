@@ -212,6 +212,7 @@ class DaemonClient {
     suspend fun subscribeTimeline(
         peer: PeerAddrParts,
         onConnected: suspend () -> Unit = {},
+        onFlowEvent: suspend (String, JsonObject) -> Unit = { _, _ -> },
         onInvalidated: suspend () -> Unit,
     ): Unit = withContext(Dispatchers.IO) {
         val ep = endpoint ?: error("bind() first")
@@ -245,8 +246,17 @@ class DaemonClient {
                 }
                 val event = (payload as? JsonObject)?.get("event")
                     ?.let { (it as? JsonPrimitive)?.content }
-                if (event == "timeline.invalidated") {
-                    onInvalidated()
+                when (event) {
+                    "timeline.invalidated" -> onInvalidated()
+                    // NET-14: flow.delivered/flow.failed — the daemon already
+                    // filters these to only the phone they name (router.rs),
+                    // so every frame that arrives here on this connection is
+                    // already this phone's own event; no further filtering
+                    // by node_id is needed at this layer.
+                    "flow.delivered", "flow.failed" -> {
+                        val data = (payload as? JsonObject)?.get("data") as? JsonObject
+                        if (data != null) onFlowEvent(event, data)
+                    }
                 }
                 // 没有 "event" 键的帧是订阅确认本身（{"ok":true,...}）——忽略。
             }

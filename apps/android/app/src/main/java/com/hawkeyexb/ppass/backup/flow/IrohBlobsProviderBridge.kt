@@ -1,6 +1,49 @@
 // REBUILD-01: lease-gated adapter over the Android-native iroh-blobs provider.
 package com.hawkeyexb.ppass.backup.flow
 
+import com.hawkeyexb.ppass.proto.ProtoJson
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+
+/**
+ * NET-14: local ground truth for one lease's transfer, decoded from the
+ * JSON [NativeIrohBlobsProvider.transferStatus] returns. This is the
+ * receiver-independent fact the phone (as the iroh-blobs *sender* in
+ * Flow) can observe about its own connection/event state — never a guess
+ * derived from whether the daemon answered a control-plane RPC in time.
+ */
+internal sealed interface TransferStatus {
+    object NoLease : TransferStatus
+    data class Completed(val hash: String) : TransferStatus
+    data class Aborted(val hash: String) : TransferStatus
+    data class InProgress(val connected: Boolean, val idleForMs: Long?) : TransferStatus
+}
+
+@Serializable
+private data class WireTransferStatus(
+    val state: String = "",
+    val hash: String? = null,
+    val connected: Boolean? = null,
+    @SerialName("idle_for_ms") val idleForMs: Long? = null,
+)
+
+/**
+ * Pure decode — JVM-testable without touching the native library. An
+ * unrecognized `state` (a future native build the phone doesn't
+ * understand yet) degrades to [TransferStatus.NoLease] rather than
+ * throwing: this is a local convenience signal, not a durable contract,
+ * so the caller should fall back to asking the daemon rather than crash.
+ */
+internal fun parseTransferStatus(json: String): TransferStatus {
+    val wire = ProtoJson.decodeFromString(WireTransferStatus.serializer(), json)
+    return when (wire.state) {
+        "completed" -> wire.hash?.let(TransferStatus::Completed) ?: TransferStatus.NoLease
+        "aborted" -> wire.hash?.let(TransferStatus::Aborted) ?: TransferStatus.NoLease
+        "in_progress" -> TransferStatus.InProgress(wire.connected ?: false, wire.idleForMs)
+        else -> TransferStatus.NoLease
+    }
+}
+
 /**
  * The native provider imports the source under its declared BLAKE3 hash and
  * serves it through iroh-blobs. Implementations must complete [register]
@@ -11,6 +54,14 @@ internal interface NativeIrohBlobsProvider {
     fun stopActiveFetch(queueSequence: Long)
     fun releaseRetention(hash: String)
     fun revoke(hash: String)
+    /**
+     * NET-14: local ground truth for what is happening to the current
+     * lease's transfer right now — sourced from iroh-blobs' own provider
+     * events plus the live connection table, never by asking the remote
+     * peer. Returns the raw JSON string the native side serialized
+     * ([com.hawkeyexb.ppass.backup.flow.parseTransferStatus] decodes it).
+     */
+    fun transferStatus(): String
 }
 
 /**
@@ -73,6 +124,19 @@ internal class IrohBlobsProviderBridge(
         require(current.queueSequence == lease.queueSequence) { "lease does not own the active provider" }
         require(current.leaseToken == lease.leaseToken) { "lease token does not own the active provider" }
         native.releaseRetention(current.hash)
+    }
+
+    /**
+     * NET-14: local ground truth for the current lease's transfer, or
+     * [TransferStatus.NoLease] when nothing is registered right now (the
+     * bridge itself, not just the native side, may have no active
+     * registration — e.g. between items). Callers use this instead of
+     * treating a stalled-looking `flow.status` round trip as evidence the
+     * transfer itself has stopped.
+     */
+    fun transferStatus(): TransferStatus {
+        if (active == null) return TransferStatus.NoLease
+        return parseTransferStatus(native.transferStatus())
     }
 
     private data class ActiveRegistration(

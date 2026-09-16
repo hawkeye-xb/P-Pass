@@ -194,6 +194,85 @@ pub enum ActiveTransferStatus {
     },
 }
 
+/// Wire shape for [`ActiveTransferStatus`] over the JNI boundary — the
+/// same `state`/`hash`/`connected`/`idle_for_ms` field vocabulary the
+/// daemon's own `FlowStatusReply` uses for the analogous cross-process
+/// concept. Built directly as a `serde_json::Value` (this crate depends
+/// on `serde_json` alone, not `serde` — adding it just for one derive
+/// pulled in a dependency-tree reresolution that broke iroh-blobs'
+/// pinned `irpc` version; see NET-14 card notes).
+impl ActiveTransferStatus {
+    fn to_wire(&self) -> serde_json::Value {
+        match self {
+            ActiveTransferStatus::NoLease => serde_json::json!({ "state": "no_lease" }),
+            ActiveTransferStatus::Completed { hash } => serde_json::json!({
+                "state": "completed",
+                "hash": hex_of(hash),
+            }),
+            ActiveTransferStatus::Aborted { hash } => serde_json::json!({
+                "state": "aborted",
+                "hash": hex_of(hash),
+            }),
+            ActiveTransferStatus::InProgress {
+                connected,
+                idle_for,
+            } => serde_json::json!({
+                "state": "in_progress",
+                "connected": connected,
+                "idle_for_ms": idle_for.map(|d| d.as_millis() as u64),
+            }),
+        }
+    }
+}
+
+fn hex_of(bytes: &[u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+#[cfg(test)]
+mod wire_status_tests {
+    use super::*;
+
+    #[test]
+    fn no_lease_has_only_a_state_field() {
+        assert_eq!(
+            ActiveTransferStatus::NoLease.to_wire(),
+            serde_json::json!({ "state": "no_lease" }),
+        );
+    }
+
+    #[test]
+    fn completed_carries_lowercase_hex_hash() {
+        let hash = [0xabu8; 32];
+        let wire = ActiveTransferStatus::Completed { hash }.to_wire();
+        assert_eq!(wire["state"], "completed");
+        assert_eq!(wire["hash"], "ab".repeat(32));
+    }
+
+    #[test]
+    fn in_progress_reports_connected_and_idle_ms() {
+        let wire = ActiveTransferStatus::InProgress {
+            connected: true,
+            idle_for: Some(Duration::from_millis(1234)),
+        }
+        .to_wire();
+        assert_eq!(wire["state"], "in_progress");
+        assert_eq!(wire["connected"], true);
+        assert_eq!(wire["idle_for_ms"], 1234);
+    }
+
+    #[test]
+    fn in_progress_with_no_activity_yet_reports_null_idle() {
+        let wire = ActiveTransferStatus::InProgress {
+            connected: false,
+            idle_for: None,
+        }
+        .to_wire();
+        assert_eq!(wire["connected"], false);
+        assert!(wire["idle_for_ms"].is_null());
+    }
+}
+
 /// Wraps iroh-blobs' protocol handler to retain/close active QUIC
 /// connections and to record [`TransferActivity`] from iroh-blobs' own
 /// provider events (NET-14: local ground truth, not a derived guess). The
@@ -750,6 +829,32 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
     match provider(handle) {
         Ok(provider) => provider.revoke(),
         Err(error) => throw(&mut env, error),
+    }
+}
+
+#[cfg(feature = "android-jni")]
+#[no_mangle]
+pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeTransferStatus(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jstring {
+    let result = provider(handle).map(|provider| provider.transfer_status());
+    match result.and_then(|status| {
+        serde_json::to_string(&status.to_wire())
+            .map_err(|error| TransportError::Io(error.to_string()))
+    }) {
+        Ok(json) => match env.new_string(json) {
+            Ok(s) => s.into_raw(),
+            Err(error) => {
+                throw(&mut env, error);
+                std::ptr::null_mut()
+            }
+        },
+        Err(error) => {
+            throw(&mut env, error);
+            std::ptr::null_mut()
+        }
     }
 }
 

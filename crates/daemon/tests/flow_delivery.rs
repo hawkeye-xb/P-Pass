@@ -531,9 +531,12 @@ async fn successful_flow_fetch_notifies_the_desktop_timeline() {
     // NET-05 adds three device refreshes around the pre-existing timeline
     // signal: admitted/unknown, exact blobs route, and terminal clear. The
     // timeline event must still arrive; device refreshes must not mask it.
+    // NET-14 adds one more: a completed fetch also pushes `flow.delivered`
+    // for the phone's subscribed status.
     let mut device_changes = 0;
     let mut saw_timeline = false;
-    for _ in 0..4 {
+    let mut saw_delivered = false;
+    for _ in 0..5 {
         let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
             .await
             .expect("Flow events must reach the desktop")
@@ -541,6 +544,18 @@ async fn successful_flow_fetch_notifies_the_desktop_timeline() {
         match event["event"].as_str() {
             Some(events::DEVICE_CHANGED) => device_changes += 1,
             Some(events::TIMELINE_INVALIDATED) => saw_timeline = true,
+            Some(events::FLOW_DELIVERED) => {
+                saw_delivered = true;
+                assert_eq!(
+                    event["data"]["node_id"].as_str(),
+                    Some(provider_transport.node_id().to_string()).as_deref(),
+                    "flow.delivered must name the phone it belongs to"
+                );
+                assert!(
+                    event["data"]["receipt"]["receipt_id"].as_str().is_some(),
+                    "flow.delivered must carry the same receipt the phone would get from status()"
+                );
+            }
             other => panic!("unexpected Flow desktop event: {other:?}"),
         }
     }
@@ -552,9 +567,85 @@ async fn successful_flow_fetch_notifies_the_desktop_timeline() {
         saw_timeline,
         "a completed Flow fetch must still refresh the timeline"
     );
+    assert!(
+        saw_delivered,
+        "NET-14: a completed Flow fetch must push flow.delivered, not rely solely on the phone's next status() poll"
+    );
 }
 
-// NET-05 RED: an old request finishing after the next strict item has started
+// NET-14 RED: a background fetch task that ends in a real (not suspended/
+// cancelled) failure must push `flow.failed` — the phone must learn this
+// from a push, not only by noticing its next status() poll still says
+// "in progress" forever.
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_background_fetch_pushes_flow_failed_with_node_id_and_tuple() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"NET-14 flow.failed push fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+    let provider_node = provider_transport.node_id();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_node).await;
+    let (event_bus, mut event_rx) = events::bus();
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path())
+        .with_events_and_window(event_bus, std::time::Duration::from_millis(20));
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+
+    // Take the provider fully offline BEFORE offer() spawns the background
+    // fetch task — mirrors network_fetch_failure_records_a_fetch_failed_
+    // error_at_fetch_stage's proven pattern for a real (not fabricated)
+    // network failure.
+    provider_transport.close().await;
+    drop(provider_blobs);
+    drop(provider_transport);
+    delivery.offer(provider_node, &offer).await.unwrap();
+
+    // Drain events until flow.failed arrives (device_changed/timeline
+    // events may interleave; this test only cares that flow.failed shows
+    // up with the right shape).
+    let failed = tokio::time::timeout(std::time::Duration::from_secs(45), async {
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if event["event"].as_str() == Some(events::FLOW_FAILED) {
+                return event;
+            }
+        }
+    })
+    .await
+    .expect("a background fetch failure must push flow.failed within a few seconds");
+
+    assert_eq!(
+        failed["data"]["node_id"].as_str(),
+        Some(provider_node.to_string()).as_deref(),
+        "flow.failed must name the phone whose fetch failed"
+    );
+    assert_eq!(failed["data"]["queue_sequence"].as_u64(), Some(7));
+    assert_eq!(
+        failed["data"]["lease_token"].as_str(),
+        Some("lease-current")
+    );
+    assert_eq!(failed["data"]["code"].as_str(), Some("fetch_failed"));
+}
+
 // must not erase the new item's data-plane path. The key is the exact Flow
 // lease, not only the paired control peer.
 #[test]
