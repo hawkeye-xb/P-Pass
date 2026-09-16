@@ -49,6 +49,82 @@ fn provider_registration_serves_native_ticket_then_revoke_stops_it() {
     assert!(!provider.is_active());
 }
 
+/// NET-14 RED→GREEN: the phone (acting as the iroh-blobs sender/provider
+/// here — the daemon pulls from it) must have a LOCAL fact for "did the
+/// peer actually finish pulling my bytes", sourced from iroh-blobs' own
+/// provider events, not from asking the remote peer anything. Before a
+/// pull: no lease = `NoLease`. After a full pull completes: `Completed`
+/// with the exact hash — this must flip on its own, the test never calls
+/// any completion API on the provider side.
+#[test]
+fn transfer_status_reports_no_lease_then_completed_after_a_real_pull() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.jpg");
+    let contents = b"net-14-local-ground-truth-completion";
+    fs::write(&source, contents).unwrap();
+    let hash = blake3_of(contents);
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+
+    assert_eq!(
+        provider.transfer_status(),
+        transport::ActiveTransferStatus::NoLease,
+        "before any registration there is no lease to report on"
+    );
+
+    let ticket = provider.register_path(hash, &source).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+        let receiver_store = dir.path().join("receiver-store");
+        let blobs = Blobs::open(&receiver, &receiver_store).await.unwrap();
+        let destination = dir.path().join("received.jpg");
+        assert_eq!(blobs.pull(&ticket, &destination).await.unwrap(), hash);
+        blobs.close().await;
+        receiver.close().await;
+    });
+
+    assert_eq!(
+        provider.transfer_status(),
+        transport::ActiveTransferStatus::Completed { hash },
+        "a real completed pull must flip local status without anyone asking the remote peer"
+    );
+}
+
+/// NET-14 RED→GREEN: while nobody has connected yet, status must say so
+/// honestly (`InProgress { connected: false, .. }`), never `Completed` and
+/// never silently indistinguishable from a lease that's actually being
+/// pulled right now.
+#[test]
+fn transfer_status_before_any_connection_is_in_progress_not_connected() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.jpg");
+    let contents = b"net-14-nobody-has-connected-yet";
+    fs::write(&source, contents).unwrap();
+    let hash = blake3_of(contents);
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+    provider.register_path(hash, &source).unwrap();
+
+    match provider.transfer_status() {
+        transport::ActiveTransferStatus::InProgress {
+            connected,
+            idle_for,
+        } => {
+            assert!(!connected, "nobody has dialed in yet");
+            assert!(
+                idle_for.is_none(),
+                "no iroh-blobs event has fired yet, so there is no idle duration to report"
+            );
+        }
+        other => panic!("expected InProgress{{connected:false}}, got {other:?}"),
+    }
+}
+
 #[test]
 fn provider_keeps_one_endpoint_for_serial_flow_items() {
     let dir = tempdir().unwrap();

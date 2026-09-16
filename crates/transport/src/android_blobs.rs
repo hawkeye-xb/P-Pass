@@ -15,11 +15,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(feature = "android-jni")]
 use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh_blobs::api::TempTag;
+use iroh_blobs::provider::events::{
+    EventMask, EventSender, ProviderMessage, RequestMode, RequestUpdate,
+};
 use iroh_blobs::store::fs::options::Options;
 use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::store::GcConfig;
@@ -102,24 +105,119 @@ impl ProtocolHandler for ActiveBlobsDispatch {
     }
 }
 
-/// Wraps iroh-blobs' protocol handler only to retain/close active QUIC
-/// connections. The blob wire protocol itself remains entirely upstream
-/// iroh-blobs; no chunk or offset protocol is introduced here.
+/// Local ground truth for "is anyone actually pulling bytes right now, and
+/// did the last one finish or die". NET-14: the phone must never treat
+/// "desktop hasn't answered yet" as equivalent to "nothing is happening" —
+/// this comes from iroh-blobs' own provider events (get/notify), not a
+/// derived guess, so a slow-but-alive relay transfer is never mistaken for a
+/// stalled one.
+#[derive(Debug, Default)]
+struct ActivityState {
+    last_progress_at: Option<Instant>,
+    completed_hash: Option<Hash>,
+    aborted_hash: Option<Hash>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct TransferActivity(Arc<Mutex<ActivityState>>);
+
+impl TransferActivity {
+    fn touch(&self) {
+        self.0
+            .lock()
+            .expect("transfer activity lock")
+            .last_progress_at = Some(Instant::now());
+    }
+
+    fn mark_completed(&self, hash: Hash) {
+        let mut state = self.0.lock().expect("transfer activity lock");
+        state.completed_hash = Some(hash);
+        state.last_progress_at = Some(Instant::now());
+    }
+
+    fn mark_aborted(&self, hash: Hash) {
+        let mut state = self.0.lock().expect("transfer activity lock");
+        state.aborted_hash = Some(hash);
+        state.last_progress_at = Some(Instant::now());
+    }
+
+    /// How long since the last progress signal (started/progress/completed/
+    /// aborted) for the current handler's lifetime. `None` = never any
+    /// activity yet (nobody has connected to pull anything).
+    fn idle_for(&self) -> Option<Duration> {
+        self.0
+            .lock()
+            .expect("transfer activity lock")
+            .last_progress_at
+            .map(|at| at.elapsed())
+    }
+
+    /// Non-consuming read: has the peer's pull for this lease completed.
+    /// Deliberately not "take" — [`StopAwareBlobsProtocol::status`] is a
+    /// read-only query the caller may poll any number of times, and every
+    /// call must see the same terminal fact until the lease itself is
+    /// replaced (a fresh handler gets a fresh `TransferActivity`).
+    fn completed_hash(&self) -> Option<Hash> {
+        self.0
+            .lock()
+            .expect("transfer activity lock")
+            .completed_hash
+    }
+
+    /// Non-consuming read, mirrors [`Self::completed_hash`].
+    fn aborted_hash(&self) -> Option<Hash> {
+        self.0.lock().expect("transfer activity lock").aborted_hash
+    }
+}
+
+/// The caller-facing summary of [`TransferActivity`] + the connection table,
+/// read together under `AndroidBlobsProvider::active`'s lock so the two
+/// never observe inconsistent halves of the same instant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ActiveTransferStatus {
+    /// No lease is currently registered — nothing to report on.
+    NoLease,
+    /// The peer's pull for the current lease's hash completed.
+    Completed { hash: [u8; 32] },
+    /// iroh-blobs itself aborted the peer's request (rate limit/permission —
+    /// see `AbortReason`), not a network condition.
+    Aborted { hash: [u8; 32] },
+    /// Still open: nobody has completed or been aborted yet.
+    InProgress {
+        /// At least one QUIC connection is currently accepted for this
+        /// lease's ALPN (does not by itself prove bytes are moving, but
+        /// rules out "nobody is even attempting to connect").
+        connected: bool,
+        /// Time since the last iroh-blobs get-request/progress/completed/
+        /// aborted event, if any has ever fired for this lease.
+        idle_for: Option<Duration>,
+    },
+}
+
+/// Wraps iroh-blobs' protocol handler to retain/close active QUIC
+/// connections and to record [`TransferActivity`] from iroh-blobs' own
+/// provider events (NET-14: local ground truth, not a derived guess). The
+/// blob wire protocol itself remains entirely upstream iroh-blobs; no chunk
+/// or offset protocol is introduced here.
 #[derive(Debug, Clone)]
 struct StopAwareBlobsProtocol {
     inner: BlobsProtocol,
     accepting: Arc<AtomicBool>,
     next_connection: Arc<AtomicU64>,
     active: Arc<Mutex<HashMap<u64, Connection>>>,
+    activity: TransferActivity,
 }
 
 impl StopAwareBlobsProtocol {
     fn new(store: &FsStore) -> Self {
+        let activity = TransferActivity::default();
+        let events = spawn_activity_event_sink(activity.clone());
         Self {
-            inner: BlobsProtocol::new(store, None),
+            inner: BlobsProtocol::new(store, Some(events)),
             accepting: Arc::new(AtomicBool::new(true)),
             next_connection: Arc::new(AtomicU64::new(1)),
             active: Arc::default(),
+            activity,
         }
     }
 
@@ -136,6 +234,91 @@ impl StopAwareBlobsProtocol {
             connection.close(0u32.into(), b"provider revoked");
         }
     }
+
+    /// NET-14: the local, iroh-blobs-sourced fact for "what is happening to
+    /// this exact lease's blob right now" — never derived from whether a
+    /// remote peer has answered anything.
+    fn status(&self) -> ActiveTransferStatus {
+        if let Some(hash) = self.activity.completed_hash() {
+            return ActiveTransferStatus::Completed {
+                hash: *hash.as_bytes(),
+            };
+        }
+        if let Some(hash) = self.activity.aborted_hash() {
+            return ActiveTransferStatus::Aborted {
+                hash: *hash.as_bytes(),
+            };
+        }
+        let connected = !self
+            .active
+            .lock()
+            .expect("active provider connections lock")
+            .is_empty();
+        ActiveTransferStatus::InProgress {
+            connected,
+            idle_for: self.activity.idle_for(),
+        }
+    }
+}
+
+/// Builds the event channel iroh-blobs pushes `Notify` provider events
+/// into, and spawns the task that turns them into [`TransferActivity`].
+/// Deliberately uses the `Notify` request modes, not `Intercept` — the
+/// transfer must never wait on this task's scheduling to proceed; this is
+/// pure observation, not a permission gate (AGENTS.md 设计纪律 4: iroh 事实
+/// 以库事件为唯一来源，这里就是把库已经在发、此前被 `None` 关掉的事件接上，
+/// 不是发明新协议).
+fn spawn_activity_event_sink(activity: TransferActivity) -> EventSender {
+    let mask = EventMask {
+        connected: iroh_blobs::provider::events::ConnectMode::Notify,
+        get: RequestMode::NotifyLog,
+        get_many: RequestMode::None,
+        push: RequestMode::Disabled,
+        observe: iroh_blobs::provider::events::ObserveMode::None,
+        throttle: iroh_blobs::provider::events::ThrottleMode::None,
+    };
+    let (tx, mut rx) = EventSender::channel(64, mask);
+    tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            match message {
+                ProviderMessage::ClientConnectedNotify(_) => activity.touch(),
+                ProviderMessage::GetRequestReceivedNotify(msg) => {
+                    activity.touch();
+                    // Inlined (not a separate typed fn): the update
+                    // receiver's concrete type is irpc's, and this crate
+                    // deliberately does not take irpc as a direct
+                    // dependency — inference through `msg.rx` avoids
+                    // spelling that type out, which is what triggered a
+                    // transitive re-resolve incompatible with the pinned
+                    // iroh-blobs 0.103.0 build (2026-09-16, NET-14).
+                    let activity = activity.clone();
+                    let mut updates = msg.rx;
+                    tokio::spawn(async move {
+                        let mut current_hash: Option<Hash> = None;
+                        while let Ok(Some(update)) = updates.recv().await {
+                            match update {
+                                RequestUpdate::Started(started) => {
+                                    current_hash = Some(started.hash);
+                                    activity.touch();
+                                }
+                                RequestUpdate::Progress(_) => activity.touch(),
+                                RequestUpdate::Completed(_) => match current_hash {
+                                    Some(hash) => activity.mark_completed(hash),
+                                    None => activity.touch(),
+                                },
+                                RequestUpdate::Aborted(_) => match current_hash {
+                                    Some(hash) => activity.mark_aborted(hash),
+                                    None => activity.touch(),
+                                },
+                            }
+                        }
+                    });
+                }
+                _ => {}
+            }
+        }
+    });
+    tx
 }
 
 impl ProtocolHandler for StopAwareBlobsProtocol {
@@ -316,6 +499,19 @@ impl AndroidBlobsProvider {
 
     pub fn is_active(&self) -> bool {
         self.active.lock().expect("active provider lock").is_some()
+    }
+
+    /// NET-14: local ground truth for "what is happening to the current
+    /// lease's transfer right now" — sourced from iroh-blobs' own provider
+    /// events plus the live connection table, never from asking the remote
+    /// peer. Callers (the Android delivery loop) use this to decide whether
+    /// a stalled-looking `flow.status` round trip is actually still fine
+    /// (the local connection is alive and moving) or genuinely abandoned.
+    pub fn transfer_status(&self) -> ActiveTransferStatus {
+        match self.active.lock().expect("active provider lock").as_ref() {
+            Some(active) => active.handler.status(),
+            None => ActiveTransferStatus::NoLease,
+        }
     }
 
     /// BLOB-03 test hook: whether a complete blob is still present in the
