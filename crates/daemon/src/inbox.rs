@@ -80,6 +80,81 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
+/// NET-20: `.ppf/flow-staging` 是 Flow 单通道（`flow_delivery.rs`）导出
+/// 中转文件落盘的目录——`export_to(hash, &staged)` 把字节从
+/// `.ppf/flow-blobs`（iroh 自管、有自己的周期 GC）复制成普通文件之后，
+/// 才能喂给 `Ingestor::ingest`。这份复制品从落盘那一刻起就跟 iroh 的 GC
+/// 无关了：iroh 只认自己仓库里的哈希，看不见这道门外的中转文件。
+///
+/// 只有"成功 ingest（含判重）"这一条路径会删它
+/// （`flow_delivery.rs` 的 `Ok(_)` 分支）。ingest 真失败、或
+/// materialize 中途被 cancel（`require_active` 提前返回 `Err`）、或
+/// daemon 在这两步之间崩溃，文件都会原地留下——没有任何定时任务扫过
+/// 这个目录，是复用旧上传收件箱（`sweep_orphans`）这套机制时漏掉的
+/// 第二个装卸台，跟 MOB-32 是同一类根因（有主的留，没主的收），只是
+/// 发生在新管线里。
+///
+/// 文件名形如 `{node_hex}-{queue_sequence}-{content_hash_hex}`
+/// （见 `FlowDelivery::staged_path`）。"有主"的判据是：文件名里的
+/// content_hash 命中 `protected`（`Db::active_flow_content_hashes()`——
+/// 当前仍是 Active 状态的 Flow grant，与 iroh GC 保护集同一份数据来源,
+/// 是持久表而非内存态，所以启动时和运行期都能查真值,不必像旧会话那样
+/// 在启动时把保护集当成空集）。
+pub fn sweep_flow_staging_orphans(
+    staging_dir: &Path,
+    protected: &HashSet<[u8; 32]>,
+    grace: Duration,
+) -> u64 {
+    let protected_hex: HashSet<String> = protected.iter().map(hex::encode).collect();
+    let mut freed = 0u64;
+    let Ok(entries) = std::fs::read_dir(staging_dir) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let Some(hash_hex) = flow_staged_file_hash_hex(name) else {
+            continue; // 命名对不上契约，不在本函数职责内，宁可漏收
+        };
+        if protected_hex.contains(hash_hex) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let aged = meta
+            .modified()
+            .ok()
+            .and_then(|m| m.elapsed().ok())
+            .map(|age| age >= grace)
+            .unwrap_or(false); // 读不出时间就别删——宁可漏收，不可误删
+        if !aged {
+            continue;
+        }
+        let size = meta.len();
+        if std::fs::remove_file(&path).is_ok() {
+            freed += size;
+            tracing::info!("NET-20: 回收 flow-staging 孤儿 {name}（{size} 字节）");
+        }
+    }
+    freed
+}
+
+/// 从 `{node_hex}-{queue_sequence}-{content_hash_hex}` 里取出最后一段
+/// （content_hash 是 32 字节 BLAKE3 → 64 hex 字符，且 hex 字母表里没有
+/// `-`，取最后一个 `-` 之后的部分永远是它，与 queue_sequence 的位数无关）。
+/// 纯函数，单测直接覆盖；名字不合契约（例如遗留/损坏文件）一律返回
+/// `None`，调用方按"不认识，不碰"处理。
+fn flow_staged_file_hash_hex(name: &str) -> Option<&str> {
+    let hash_hex = name.rsplit_once('-').map(|(_, tail)| tail)?;
+    (hash_hex.len() == 64 && hash_hex.bytes().all(|b| b.is_ascii_hexdigit())).then_some(hash_hex)
+}
+
 /// 清空 blob store 目录、扫掉 staging 里的半成品与孤儿。返回释放的字节数。
 ///
 /// 启动专用：`protected` 恒为空集，因为会话是内存态，重启后没有任何裸文件
@@ -304,6 +379,76 @@ mod tests {
         let root = tmp("clean");
         let freed = reclaim_inbox(&root.join("nope"), &root.join("also-nope"), Duration::ZERO);
         assert_eq!(0, freed, "首次启动/目录不存在时不许虚报");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ── NET-20: flow-staging 孤儿回收 ──────────────────────────────
+
+    #[test]
+    fn flow_staged_file_hash_hex_extracts_the_trailing_64_hex_segment() {
+        let hash = "ab".repeat(32);
+        let name = format!("deadbeef-7-{hash}");
+        assert_eq!(flow_staged_file_hash_hex(&name), Some(hash.as_str()));
+        // 命名对不上契约（截断、缺段、非 hex）一律 None，不误删。
+        assert_eq!(
+            flow_staged_file_hash_hex("no-dashes-at-all-but-short"),
+            None
+        );
+        assert_eq!(
+            flow_staged_file_hash_hex(&format!("only-{}", "zz".repeat(32))),
+            None
+        );
+        assert_eq!(flow_staged_file_hash_hex("noseparatorhere"), None);
+    }
+
+    #[test]
+    fn flow_staging_orphan_sweep_respects_every_guard() {
+        let d = tmp("flow-staging-guards");
+        let claimed_hash = [0x11u8; 32];
+        let claimed_hex = hex::encode(claimed_hash);
+        let orphan_hex = hex::encode([0x22u8; 32]);
+        std::fs::write(d.join(format!("aa-1-{claimed_hex}")), b"claimed").unwrap();
+        std::fs::write(d.join(format!("bb-2-{orphan_hex}")), b"orphaned!").unwrap(); // 9
+        std::fs::write(d.join("garbage-name"), b"unrelated").unwrap();
+
+        let protected: HashSet<[u8; 32]> = [claimed_hash].into_iter().collect();
+        let freed = sweep_flow_staging_orphans(&d, &protected, Duration::ZERO);
+
+        assert_eq!(freed, 9, "只该收走没有活 grant 认领的那一个");
+        assert!(
+            d.join(format!("aa-1-{claimed_hex}")).exists(),
+            "活 grant 引用的 content_hash 一个都不能动"
+        );
+        assert!(!d.join(format!("bb-2-{orphan_hex}")).exists());
+        assert!(
+            d.join("garbage-name").exists(),
+            "命名不合契约的文件不在本函数职责内，宁可漏收"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn flow_staging_orphan_sweep_respects_the_grace_window() {
+        let d = tmp("flow-staging-grace");
+        let hex = hex::encode([0x33u8; 32]);
+        std::fs::write(d.join(format!("cc-3-{hex}")), b"just-landed").unwrap();
+
+        assert_eq!(
+            0,
+            sweep_flow_staging_orphans(&d, &HashSet::new(), Duration::from_secs(3600)),
+            "落地不足宽限期的裸文件一律保留，哪怕没有活 grant 认领"
+        );
+        assert!(d.join(format!("cc-3-{hex}")).exists());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn flow_staging_orphan_sweep_on_missing_dir_is_a_noop() {
+        let root = tmp("flow-staging-missing");
+        assert_eq!(
+            0,
+            sweep_flow_staging_orphans(&root.join("nope"), &HashSet::new(), Duration::ZERO)
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

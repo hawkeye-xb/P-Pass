@@ -29,7 +29,7 @@ pub use authz::Decision;
 pub use backup::{BackupEngine, CommitOutcome, SESSION_IDLE_TTL, STAGING_ORPHAN_GRACE};
 pub use config::{Config, TelemetryConfig};
 pub use diag_agg::DiagAgg;
-pub use inbox::reclaim_inbox;
+pub use inbox::{reclaim_inbox, sweep_flow_staging_orphans};
 pub use ipc::daemon_version;
 pub use ipc::Claim;
 pub use ipc::IpcServer;
