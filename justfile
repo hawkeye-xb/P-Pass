@@ -54,8 +54,10 @@ arch-check:
   @./tools/arch-check.sh
 
 # docs/QUEUE.md must stay in sync with cards/ (no missing/dangling entries)
+# 第二行是 3/3 归档出口门禁的反证（证明它不是恒真式），跟门禁同生共死
 queue-check:
   @./tools/check-queue-sync.sh
+  @./tools/test-queue-archive-gate.sh
 
 # Markdown tables in docs/ and cards/ must not be split by a stray blank line
 md-check:

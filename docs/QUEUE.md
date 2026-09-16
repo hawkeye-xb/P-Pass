@@ -162,66 +162,32 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 ---
 
-## 五、已完成 / 已归档（历史，非待办）
+## 五、已完成但卡文件仍在 `cards/` 根目录（只剩归档动作）
+
+> **已归档卡的账不在本文件。** 完成记录见 [PROGRESS.md](PROGRESS.md)（每卡一行 +
+> 验收输出摘录）与 [ROADMAP.md](ROADMAP.md)（里程碑账本），卡文件在 `cards/done/`。
+>
+> 本节只剩一类残留：**卡已完成、但文件还留在 `cards/` 根目录**，所以
+> `check-queue-sync.sh` 的「根卡必须在队列里」仍要求它们在此登记。把文件
+> `git mv` 进 `cards/done/` 后，对应行从本节删掉即可，本节清空后整节删除。
+>
+> 归档出口由 `tools/check-queue-sync.sh` 3/3 段强制：活分区（一~四）不许出现
+> 指向 `cards/done/` 的行，且分区集合固定。2026-09-16 清理前，原「已完成 /
+> 已归档」分区有 45 行、14.1KB，是全文件最大的一块——而本文件头部自己写着
+> 「只写跟"现在"有关的」。
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
-| [NET-20](../cards/done/NET-20-flow-offer-must-presence-check-before-fetching-bytes.md) | Flow 单通道 `offer` 补传输前哈希对齐：`Ingestor::has_durable_copy` + `offer_inner` 短路，命中已存在内容不再发起 iroh-blobs 抓取，直接复用现有 `complete_flow_grant` 完成路径（不新增协议字段，手机侧零改动）；RED 先行 2 条集成测试+1 条反证（去掉短路后状态从"立即 completed"变"active"）；`cargo test -p daemon --test flow_delivery` 28/28、`cargo test -p core-index` 全绿、`just ci` 全绿 | 无——大文件/重复内容白传的效率缺口已堵，未做真机验证 |
-| [NET-21](../cards/done/NET-21-flow-staging-orphan-sweep.md) | flow-staging 装卸台无孤儿回收（materialize 失败/cancel/崩溃留下的中转文件无人清）；复用旧 `sweep_orphans` 模式接 `active_flow_content_hashes` 保护集，启动+每小时巡检；本地单测 10/10（5 新增+反证成立）+ `just ci` 全绿；新增 `tools/verify-flow-staging-gc.sh` 供用户自行验证（只读检查真实库 + `--dry-run` 隔离沙盒调用生产函数）；未做真机长跑验证 | 无——磁盘泄漏点已堵，验证脚本已附，真机长跑欠账见卡内 |
-| [NET-22](../cards/done/NET-22-flow-rebind-completed-grant-must-push.md) | rebind 一个已完成的 Flow grant（新 lease 重新 offer 同一 tuple）时补发 `flow.delivered` 推送，行为与 NET-20 的 `complete_without_fetch` 分支一致；新增集成测试，`cargo test -p daemon --test flow_delivery` 29/29 | 无——rebind 路径缺推送的缺口已堵 |
-| [NET-23](../cards/done/NET-23-flow-wait-loop-must-not-hang-forever-when-local-signal-never-fires.md) | 三星真机复现：断链重连后 11 张全部命中 NET-20 去重，手机等待循环因本地 iroh 从未有活动（`idle_for_ms` 永远 null）而没有兜底出口，永久卡在「正在备份...0/11」；补一条基于调用方自身挂钟耗时的兜底超时分支；`NET14PushFirstDeliveryTest`/`ARCH01StrictConsumerTest` 全绿；真机复测同一批 11 张从 0/11 推进到 11/11 | 无——推送缺失时的永久挂起已堵；推送为何缺失拆 NET-24 |
-| [DESK-12](../cards/done/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄时间；2026-09-15 真机复核追加两轮修复（EXIF OffsetTime 时区解析、飞书图无 EXIF/DATE_TAKEN 时退到 DATE_ADDED），验收人实测通过 | 无——摄入时间归属问题已闭环 |
-| [NET-13](../cards/done/NET-13-device-list-status-id-column-open-folder.md) | 桌面「家人与设备」备份状态误报根因修复（Flow 路径从不写遗留水位表，last_backup_at 改读真实 asset ingest 时间）+ ID 列 + 打开设备目录 + 在线态独立列；本机重装真机验证，真实库 5 台设备中 4 台 `asset_cnt>0` 但 `backup_watermark` 全空，改前会误判、改后显示真实备份时间，截图核实 | 无——设备状态误报根因已修复 |
-| [MOB-66](../cards/done/MOB-66-android-brand-font-newsreader-manrope.md) | 三星 SM-S9210 真机 2026-09-14：标题（欢迎页、备份页大数字）为 Newsreader 衬线体，正文/汉字为 Manrope/Noto Sans SC 无衬线体，两者视觉差异明显；11 处硬编码 `FontFamily.Serif` 全部替换 | 无——品牌字体缺口已闭环 |
-| [MOB-77](../cards/done/MOB-77-cancelled-round-restore-leaves-notice-channel.md) | 三星 SM-S9210 真机 2026-09-14：取消轮次恢复入口从常驻警告条移入「备份」设置卡一行 CellRow，点击后 4 张跳过照片真实重传完成且该行自动隐藏，全程无弹窗/警告条 | 无——MOB-59/X-05 的常驻警告条设计已被取代 |
-| [MOB-74](../cards/done/MOB-74-video-assets-must-have-first-frame-thumbnails.md) | macOS 本机重新构建覆盖安装 daemon 0.5.1-test.1（qlmanage 系统兜底），删缓存重触发生成，三星真机确认两个真实视频（考拉/地图）从空白灰框变为可辨认首帧且正常播放 | 无——视频缩略图静默降级为占位图的根因已修复 |
-| [MOB-79](../cards/done/MOB-79-photo-grid-video-badge.md) | 三星 SM-S9210 真机 2026-09-14：`ThumbCell` 新增按 `mediaType` 判断的播放三角角标（Canvas 手绘，半透明黑底+白色三角），网格里视频与照片可视觉区分；截图确认两个视频缩略图均出现角标、照片无 | 无——视频与照片在网格里区分不出的缺口已闭环 |
-| [MOB-61](../cards/done/MOB-61-deleted-phone-source-must-skip-not-retry-or-crash.md) | 三星真机：Flow 入队后删源 → `SKIPPED_SOURCE_MISSING` / `MISSING` / `UNRECOVERABLE`，lease 清空；后续项 2 秒确认，首页只读跳过提示无重试动作 | 无——缺源不再走失败重传或崩溃 |
-| [MOB-67](../cards/done/MOB-67-notify-on-failure-switch-never-sends-notification.md) | 三星真机：开关开时第三次真实失败发固定 id 2027 系统通知；关时同一终态仍落账本但通知栏无 P-Pass 通知 | 无——失败通知开关不再是死开关 |
-| [MOB-70](../cards/done/MOB-70-flow-ingest-moves-staging-source-before-metadata.md) | 三星 72 MB 视频确认：同手机 retry 按 peer 串行，避免并发 fetch 删除同一 staging 源 | 无——大文件不再三次重试终态失败 |
-| [AUDIT-03](../cards/done/AUDIT-03-audit-contract-case-matrix.md) | 审计 Case Matrix、【本地】/名称+短指纹、支持级可信、全库保留与无专用导出边界均已收口 | 释放 AUDIT-04 审计核心重建 |
-| [TEL-01](../cards/done/TEL-01-telemetry-dictionary-v2-schema.md) | 遥测字典 v2 落地：`conn` 删 ipver/country/isp_hash，`backup_session`→`flow_item` 精简字段，新增 `error`；daemon+Worker 同步改，`cargo test` 5/5 + `npm test` 14/14 + `just ci` 全绿 | 释放 TEL-02/03/04 接线卡 |
-| [TEL-02](../cards/done/TEL-02-wire-conn-and-flow-item-events.md) | conn/flow_item 已接线 `flow_delivery.rs::fetch()`；顺带修正 TEL-01 遗留的 conn.path 枚举值（lan 不存在，改为 direct/relay/offline/unknown）；`cargo test -p daemon --test flow_delivery` 10/10、nextest 356/356、just ci 全绿 | 释放 TEL-03/04 的 TEL-01 依赖已满足 |
-| [TEL-04](../cards/done/TEL-04-wire-first-byte-event.md) | first_byte 已接线 `query.rs::thumb()`/`original()`（仅成功交付字节的路径记录）；新增 `query_telemetry.rs` 3 个测试；nextest 359/359、just ci 全绿 | 释放 TEL-03 |
-| [TEL-03](../cards/done/TEL-03-error-event-taxonomy.md) | error 事件已接线：`DeliveryError` 细分 8 个固定 code（Materialize 拆三个子系统变体）+ stage=offer/fetch/cancel；GuardMismatch/Cancelled 不上报（正常控制流非问题）；Telemetry 加 5min 去重窗口（同 code+stage 只记一次）；`cargo test --lib telemetry` 6/6 + `--test flow_delivery` 13/13、nextest 365/365、just ci 全绿 | 遥测五件套（daemon_alive/conn/flow_item/first_byte/error）全部闭环 |
-| [DESK-14](../cards/done/DESK-14-overlay-titlebar-drag-area-is-too-small.md) | macOS 真机 2026-09-10：32px 透明顶部拖拽区正常；顺带发现并修复原生标题文字与侧栏品牌重复显示（加 `hiddenTitle: true`） | 无——拖拽区与标题重复均已闭环 |
-| [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | macOS 真机 2026-09-10：Button/Card/Dialog/Notice/NavItem 五组件在真实 Tauri 窗口视觉正常、无错位闪烁 | 无——五组件收口验收关闭 |
-| [UI-04b](../cards/done/UI-04b-rename-feedback-uses-layout-occupying-banner.md) | 验收人 2026-09-10 确认：改名反馈改用 shadcn-svelte 官方 Sonner，右上角不占布局；成功/等待/错误映射 safe/waiting/act 三态色 | 无——手写 Toast/Message 已删除，通知呈现统一收口为官方原语 |
-| [UI-04c](../cards/done/UI-04c-multiple-notices-stack-without-priority.md) | 用户 2026-09-14 确认提示组件已统一收口至 `NoticeHost`/`topNotice()`，多条同时满足时只渲染最高优先级一条 | 无——反证测试 `priority_selection_is_not_list_order` 钉住 |
-| [MOB-63](../cards/done/MOB-63-pause-racing-final-completion-must-set-idle.md) | 三星真机 2026-09-10：暂停与最后完成回执交错的两种时机均收敛 Idle | 无——竞态收敛已闭环 |
-| [MOB-65](../cards/done/MOB-65-auto-backup-switch-must-not-pause-current-round.md) | 三星真机 2026-09-10：传输中关闭自动备份不中断当前轮，仅停止后续自动唤醒，重新打开恢复自动 | 无——自动开关与轮次暂停解耦已闭环 |
-| [SYNC-05](../cards/done/SYNC-05-asset-meta-src-device.md) | `AssetMeta.src_device` 已经由 daemon 映射到线上协议；PhotosScreen 只按该字段和本机 NodeId 分类，未知来源只在「全部」显示 | 无——本地 `backup-state`/`flow-state` 归属影子状态及 fallback 已删除；Rust 全量、Android JVM 314/0/0/4 均绿 |
-| [MOB-40](../cards/done/MOB-40-backup-runs-before-the-user-picks-albums.md) | 三星真机 2026-09-09 实证：扫码配对到选相册之间零传输迹象（通知/进度/流量均无）；选相册后正常同步 | 无——闸门生效，L0 红线关闭 |
-| [MOB-38](../cards/done/MOB-38-foreground-catchup-never-fires-on-resume.md) | 三星真机 2026-09-09 多次复现：切出 App 再切回，无需任何点击即自动发起并完成传输 | 无——回到前台补捞已闭环 |
-| [MOB-49](../cards/done/MOB-49-cancellation-round-never-clears-in-production.md) | 三星真机 2026-09-09：取消当前轮后 UI 恢复正常操作，不再永久卡在「已取消」文案 | 无——与 MOB-50 同轮组合验收完成 |
-| [MOB-50](../cards/done/MOB-50-upload-cursor-stuck-after-cancel-round.md) | 三星真机 2026-09-09：取消轮后新增照片无需 ADB/重启即被正常发现、传输、确认 | 无——upload cursor 复位已闭环 |
-| [UX-13](../cards/done/UX-13-no-resume-affordance-after-pause.md) | 三星真机 2026-09-09：暂停后按钮原地变「继续」，多轮暂停/继续验证正常，最终跑完全部备份 | 无——续传入口已闭环 |
-| [MOB-51](../cards/done/MOB-51-hero-pause-not-sticky-across-round.md) | 三星真机 2026-09-09：连续备份多张照片全程可点「暂停」，与 MOB-49/50 组合验收完成 | 无——英雄区粘性已闭环 |
-| [UI-08](../cards/done/UI-08-album-picker-long-name-wraps-and-thumb-blurry.md) | 验收人 2026-09-09 确认：长名称呈现与缩略图清晰度均通过 | 无——选相册视觉缺陷关闭 |
-| [MOB-47](../cards/done/MOB-47-video-preview-in-viewer.md) | 验收人 2026-09-09 确认双端视频预览通过 | 无——视频查看器验收关闭 |
-| [MOB-09](../cards/done/MOB-09-one-bad-media-record-kills-batch.md) + [MOB-19](../cards/done/MOB-19-manual-backup-same-bad-record-crash.md) | 旧批处理验收已被 Flow 生产路径取代；`BackupWorker` 仅 wake，缺源终态由 MOB-61 处理 | 无——不再让验收人构造旧 MediaStore 批处理故障 |
-| [REL-06](../cards/done/REL-06-restore-v031-release-after-cleanup.md) | 验收人拍板：历史测试期 `v0.3.1` Release 产物无需恢复；保留 tag，现有 2 个资产维持现状 | 无——不下载/上传缺失资产，不改其他 Release |
-| [SITE-03](../cards/done/SITE-03-backup-core-rebuild-story.md) | 中文工程复盘《为什么我们把备份核心整个换掉了》已发布；手写 sitemap 与 RSS 同步收录，Pages workflow `34102057353` 成功，线上三项均 200 | 无——文章只记录已公开 ARCH-01 / REBUILD 事实 |
-| [MOB-58](../cards/done/MOB-58-cancel-round-no-feedback-no-restore-entry.md) | 三星真机 2026-09-07 两轮反馈：取消轮无常驻反馈+重复取消丢批次+进度条混用终身口径；`FlowRunner.restoreAllCancelledRounds()` 汇总恢复、`NoticeCard` 常驻入口（去 Discard 死路）、`advanceRoundProgress` 本轮独立 0 起算；JVM 298/0/4、just ci 均绿。2026-09-09 三星真机组合回归验证通过（顶部「重新传输」提示常驻可点，点击后继续完成备份） | 无——同时收敛 MOB-55（同一根因，取消存档），本卡关闭 |
-| [UX-14](../cards/done/UX-14-a-failed-retry-is-rendered-as-paused.md) | 原 WorkManager retry 的「失败被渲染成暂停」修复仍保留为历史；当前生产 UI 改由 Flow 账本投影，原真机用例不再是生产验收 | UI-09 继续承担当前 Flow 的状态语义验收 |
-| [MOB-13](../cards/done/MOB-13-triplet-k-never-reaches-zero.md) | 原 ConfirmedStore 文件计数修复仍保留为历史；当前首页 K/M 由 Flow 账本聚合，原真机用例不再是生产验收 | UI-09 继续承担当前 Flow 的 K=0/AllSafe 验收 |
-| [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | 三星真机自然复现迟到回执竞态并收敛为 `CONFIRMED`；范围扩展补扫全部验收标准完成 | 分出 MOB-49、MOB-50（取消本轮两处生产接线缺口） |
+| [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md) | 卡内横幅：已被 [MOB-58](../cards/done/MOB-58-cancel-round-no-feedback-no-restore-entry.md) 收敛，不再独立开工 | — |
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |
 | [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | E-01~E-04 完成凭据、范围竞争与 backfill 完成 | ARCH-05 |
-| [ARCH-05](../cards/done/ARCH-05-cancellation-round.md) | X-01~X-05 取消本轮、恢复与丢弃完成 | ARCH-01 后续实施拆卡 |
-| [ARCH-06](../cards/done/ARCH-06-pairing-epoch-isolation.md) | P-01/P-02 换 Desktop 的 epoch 隔离完成 | ARCH-01 P1 对账拆卡 |
-| [ARCH-07](../cards/done/ARCH-07-remote-reconciliation-facts.md) | R-01/R-02 对账事实与恢复裁决完成 | ARCH-08 |
-| [ARCH-08](../cards/done/ARCH-08-remote-presence-probe.md) | side-effect-free Desktop presence page 完成 | P1 分页选择 / 源探针 / 账本裁决接线卡 |
-| [ARCH-09](../cards/done/ARCH-09-reconciliation-page-coordinator.md) | P1 账本分页、source probe 与 R-01/R-02 裁决协调完成 | 低频调度 / UI 卡 |
 | [REBUILD-00](../cards/REBUILD-00-legacy-fence-and-flow-boundary.md) | `backup/flow` 边界、legacy 标记与旧测试三类分类完成 | REBUILD-01 / REBUILD-02 |
 | [REBUILD-01](../cards/REBUILD-01-android-iroh-blobs-provider-bridge.md) | Android native blobs provider / JNI / debug APK 接线完成 | REBUILD-03 |
 | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | Desktop native fetch/resume 与 durable receipt 完成 | REBUILD-03 |
 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | Flow runner、trigger bridge、native receipt 接线完成 | REBUILD-04 |
 | [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 批次 A：版本脚本版本目标全断言 | 批次 CI |
 | [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 批次 A：五个 workflow 从 TOML 派生 Rust 工具链 | 批次 CI |
-
----
 
 ## 六、（原 ARCH-01 冻结区，2026-09-07 已清空）
 
