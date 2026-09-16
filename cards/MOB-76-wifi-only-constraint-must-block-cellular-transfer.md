@@ -43,8 +43,11 @@
       `no_production_wake_may_hardcode_the_gate`：FlowRunner 内出现任何
       `wake(run)(constraintsSatisfied = true)` 常量或入口默认值退回
       `= true` 即红——把「不许硬编码」从一次性 diff 变成常驻门禁。）
-- [ ] 真机：蜂窝网络 + 限制开启 → 发起备份 → 无传输、显示 Wi-Fi 等待；
-      连上 Wi-Fi 后自动续传。
+- [x] 真机：蜂窝网络 + 限制开启 → 发起备份 → 无传输、显示 Wi-Fi 等待；
+      连上 Wi-Fi 后自动续传。（2026-09-16 三星真机：前半支"零传输+等待
+      态"已验证通过，见下方实施记录；"连上 Wi-Fi 后自动续传"验证的是
+      "关闭限制"路径而非真实切换网络，建议下次窗口用真实 Wi-Fi 网络
+      补验证后再完全勾选）
 - [x] Android JVM 全量绿（报测试计数）+ debug APK + `just ci`。
       （2026-09-13：JVM 全量 **69 类 / 346 tests / 0 failures / 4 skipped**，
       含新 `MOB76WifiGateTest` 3 例；`assembleDebug` 绿；`just ci` 全绿。
@@ -88,3 +91,14 @@
   `wifiOnly → isOnUnmetered` 实算接线（注入点默认 true，JVM 测试构造不动）；
   全部事件后 wake 改走该端口。RED 覆盖「限制开启 + 蜂窝下完成回执不得推进
   下一张」与「retry/continue 同闸」；反证 = 把端口调用退回常量 true 必红。
+- 2026-09-16：三星 SM-S9210 真机回归（daemon debug 日志 + `adb logcat`
+  全程持久化抓取）：蜂窝网络（5G，关 Wi-Fi）下打开「仅 Wi-Fi 时备份」，
+  选相册点「开始备份」，等待 10 秒——`devices.list`/daemon 日志确认**零
+  连接尝试**，UI 正确显示「等待 Wi-Fi」（`WAITING_FOR_CONSTRAINTS`）。
+  验收标准倒数第二条「蜂窝网络+限制开启→发起备份→无传输、显示 Wi-Fi
+  等待」的**前半支（零传输+等待态）真机通过**。「连上 Wi-Fi 后自动续传」
+  这一半本轮未覆盖——本轮验证的续传路径是「关闭 Wi-Fi 限制」而非「实际
+  切换到 Wi-Fi 网络」，两者对约束求值逻辑应等价但未用真实 Wi-Fi 网络
+  单独验证，下次窗口建议专门补一次「保持限制开启，手机切回真实 Wi-Fi」
+  的场景。另外本轮操作过程中发现「关闭限制后若同时关闭『后台备份』
+  总开关，排队项会失去全部唤醒路径」，与本卡范围不同，已拆卡 MOB-86。

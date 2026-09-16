@@ -11,7 +11,10 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-16**（用户反馈"进行中"卡挂僵尸——NET-06 讨论中拆出
+> 最后核对：**2026-09-16**（三星真机跨网络（5G↔家庭WiFi）回归一轮：NET-01 补齐 relay 判决实验证据；MOB-71/MOB-76 各验证通过部分
+> 核心场景并更新真机进度；新发现两张卡 MOB-85（三星
+> MARs 策略绕过 NET-12 前台服务保护）、MOB-86（关闭后台备份总开关后排队
+> 项失去全部唤醒路径），均入可接队列。此前一轮：用户反馈"进行中"卡挂僵尸——NET-06 讨论中拆出
 > NET-14 处理后，NET-06 自身仍挂「进行中」但无人认领，导致下次对齐反复
 > 撞见同一张卡。已按新增的 AGENTS.md「任务状态诚实与拆分纪律」全面整改：
 > 「进行中」区清空为常态空表；NET-06 剩余 5 项验收缺口拆成独立子卡
@@ -83,8 +86,8 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [UI-09](../cards/UI-09-aggregate-status-must-read-flow-ledger.md) | 在 MOB-51 同轮验收中，确认传完后 AllSafe 与「待备份 K」归零流转 | L2 |
 | [MOB-62](../cards/MOB-62-unpair-must-reset-flow-runtime-and-wakes.md) | Flow native 初始化不再持 runtime-map 锁；三星隔离图片 scope wake 已无 ANR，待完整断开重扫回归 | L2 |
 | [MOB-72](../cards/MOB-72-scope-selection-must-wake-flow-without-relaunch.md) | 新增范围在后台原子 backfill + 当前约束 Flow wake；待三星取消轮后新相册不重启传输回归 | L2 |
-| [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 代码完成：Wi-Fi 闸门改读实时网络（FlowRunner 6 处事件后 wake 硬编码放行 + Worker 调度放行误当业务闸门）；待真机蜂窝回归——限制开启发起备份应零传输+Wi-Fi 等待，连回 Wi-Fi 自动续传 | L1 |
-| [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 关闭 Wi-Fi 限制后暂停不会复活 Wi-Fi 等待；待三星蜂窝网络回归暂停/继续与重新开启限制；09-12 OPPO 另见「重开再关限制不唤醒、需再选相册」并入回归 | L1 |
+| [MOB-76](../cards/MOB-76-wifi-only-constraint-must-block-cellular-transfer.md) | 代码完成：Wi-Fi 闸门改读实时网络（FlowRunner 6 处事件后 wake 硬编码放行 + Worker 调度放行误当业务闸门）；2026-09-16 三星真机验证前半支通过（限制开启+纯蜂窝→零传输+等待态），"连上 Wi-Fi 自动续传"待用真实网络切换补验证 | L1 |
+| [MOB-71](../cards/MOB-71-paused-flow-must-not-show-wifi-wait-when-wifi-only-off.md) | 2026-09-16 三星真机验证核心场景通过（关闭限制后暂停/继续期间 Wi-Fi 等待不复活）；「重新开启限制后恢复等待提示」待补验证；09-12 OPPO 另见「重开再关限制不唤醒、需再选相册」并入回归 | L1 |
 | [MOB-64](../cards/MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md) | 真实 `err.not_authorized` 已与 `err.not_paired` 一并投影到 pairingLost 红卡；待三星重配对后撤销设备并验证下一次 Flow 调用。09-12 OPPO 入账：手机残留配对/桌面无记录时冷启动「尝试传输」长期零提示，拒绝码待取证 | L2 |
 | [NET-04](../cards/NET-04-connection-path-tracking-for-transfer-and-billing.md) | 三星真机 5 个 `NET04-test-e` 文件已全部 `CONFIRMED`；待回归 Pause / Cancel / 失败 Retry | L2 |
 | [NET-05](../cards/NET-05-flow-data-path-status-follows-transfer-lifecycle.md) | 代码完成：active Flow 先显示连接中，随后显示 blobs 数据面直连/中继；待慢速传输及 Pause/Cancel/失败真机回归 | L2 |
@@ -140,6 +143,8 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | P3 | [MOB-78](../cards/MOB-78-mob67-test-residue-in-production-library.md) | 生产照片库混入 MOB-67 测试残留假 JPEG（59 字节，显示白框），需清理并排查是否还有其他遗留测试文件 | L1 |
 | P2 | [CI-03](../cards/CI-03-e2e-scenarios-test-frozen-legacy-flow.md) | `e2e.yml` 的 e2e/scenarios 两个 job 全在验证已冻结的 legacy 备份路径（`DaemonBackupTest`/`testclient backup`），新 Flow 核心零黑盒剧本覆盖；需先拍板标注/砍/换三选一 | L2 |
 | P1 | [MOB-84](../cards/MOB-84-album-picker-renders-stale-overlay-and-taps-produce-no-visible-response.md) | 相册选择页设置开关残留叠加 + 点击相册卡片无可见响应（触屏事件已送达但界面装死），阻断发起备份；2026-09-16 NET-14 真机会话同轮发现 | L1 |
+| P1 | [MOB-86](../cards/MOB-86-auto-backup-toggle-blocks-waiting-item-wakeup.md) | 关闭「后台备份」总开关后，等待中的排队项失去全部唤醒路径（切前后台/强退重开/重新开关约束均无效，唯一出路是重开总开关）；2026-09-16 真机回归发现 | L1 |
+| P2 | [MOB-85](../cards/MOB-85-samsung-mars-policy-interrupts-foreground-service-protection.md) | 三星 MARs 资源策略在 NET-12 前台服务保护生效期间仍两次主动杀进程/降级服务；待排除与频繁卸装重装操作的相关性再定性 | L1 |
 
 ---
 
@@ -147,7 +152,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 一句话 | 当前等待 |
 |---|---|---|
-| [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星热点大视频已复现 `flow.fetch` 15 秒超时；不能靠小文件成功掩盖 | **等可持续的蜂窝热点 / relay 窗口后再改并跑大视频回归** |
+| [NET-01](../cards/NET-01-backup-begin-times-out-for-15s-then-backs-off.md) | 三星热点大视频已复现 `flow.fetch` 15 秒超时；2026-09-16 补齐判决实验（三星5G↔Mac家庭WiFi debug日志实证：确认落 relay + 反复打洞失败，但本次未复现15秒超时失败，传输走 relay 慢速完成）——"跨网络会落relay"已证实，"15秒超时是否仍是痛点"待专门复测原触发组合 | **等可持续的蜂窝热点 / relay 窗口后再改并跑大视频回归** |
 | [MOB-52](../cards/MOB-52-oppo-bg-wake-fail-and-launch-crash.md) | OPPO Reno8 后台不触发上传 + 点开 App 闪退（L0）；09-12 v0.5.1 复测同族症状再现（后台 1 分钟零同步/进 App 卡崩溃/断开卡顿），崩溃栈仍未到手 | **等崩溃证据**，拿不到不编码 |
 | [MOB-75](../cards/MOB-75-harmonyos-media-change-must-wake-flow-in-background.md) | HarmonyOS 4.2：已授权后台管理但相册变更等约 1 分钟不传，重开 App 才补捞 | **等同一设备的 MediaWatch/JobScheduler/ledger 证据，不能把系统归咎当根因** |
 | [AUDIT-01](../cards/AUDIT-01-flow-audit-v2-durable-outbox.md) | `audit_event` v2 已被 AUDIT-04 canonical 四表直接替换 | **冻结**；不验旧 UI，不恢复旧模型 |
