@@ -7,20 +7,32 @@
 > "offer 一下 + 轮询 status"。真机回归（三星 SM-S9210 + 全新配对）：
 > 224MB 视频 + 23 张照片全部 CONFIRMED，视频单项耗时约 80-90 秒——
 > 远超旧的 15 秒固定超时线，全程零失败/零断连，NET-01 原始症状（15s
-> 超时误杀大文件）在这次真机场景下未复现。剩余缺口（诚实标注，见下）：
-> daemon 崩溃自动重拉（期望行为④）、幂等零重传直接断言、迟到边界竞态
-> 用例、旧手机/旧桌面兼容路径专门验证、L3 硬门的蜂窝热点/relay 窗口。
+> 超时误杀大文件）在这次真机场景下未复现。
+> ⚠️ **2026-09-16：本卡当前无人认领处理，不是"进行中"**（AGENTS.md
+> 「任务状态诚实与拆分纪律」）。剩余 5 项验收缺口已全部拆成独立子卡，
+> 各自可独立认领、独立验收，完成后各自回写勾掉本卡对应项：
+> [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
+> （崩溃自动重拉）、
+> [NET-16](NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)
+> （幂等零重传断言）、
+> [NET-17](NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md)
+> （迟到边界竞态）、
+> [NET-18](NET-18-legacy-phone-and-desktop-fallback-path-verification.md)
+> （旧手机/旧桌面兼容验证）、
+> [NET-19](NET-19-android-no-competing-offer-and-pause-does-not-observe.md)
+> （offer 只调一次 + 暂停不观察对端）。本卡本身待这 5 张子卡全部归档后
+> 再一并归档，本卡不再单独可接（不要在本卡里重做这 5 项，去认领对应
+> 子卡）。
 > ⚠️ **2026-09-16：「手机怎么发现传输完成」这一件事已被 [NET-14]
 > （../cards/NET-14-desktop-completion-must-push-not-poll-local-transfer-is-ground-truth.md）
 > 接管并重做**——本卡「期望行为⑤ 推送为加速、轮询为兜底」当初只落地了
 > 轮询那一半，NET-14 把推送补上、并把发现循环从固定间隔轮询换成
-> "推送优先+本地 iroh 信号判活+超时兜底问一次"。**下面本卡遗留的
-> daemon 崩溃自动重拉/幂等零重传/迟到竞态三项验收缺口仍然是本卡范围
-> （控制面/账本语义，不是发现机制），继续在本卡里做；但如果要理解
+> "推送优先+本地 iroh 信号判活+超时兜底问一次"。如果要理解
 > "手机现在怎么知道 completed 了"，请先读 NET-14，不要在本卡内重新
-> 设计发现机制。**
+> 设计发现机制。
 > 协同分支：`main`（本轮已提交 `485d5ef`）
-> 级别：L2 · 阻塞：编码无阻塞；归档需 NET-01 的蜂窝热点/relay 真机窗口
+> 级别：L2 · 阻塞：等 NET-15~19 五张子卡全部归档；归档还需 NET-01 的
+> 蜂窝热点/relay 真机窗口
 
 ## 问题
 
@@ -176,10 +188,10 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       `cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection`。
 - [ ] **迟到边界竞态用例**：materialize 前后各发一次 cancel/suspend → 两方向
       终态都确定：先过 complete_flow_grant 者赢，item 终 CONFIRMED 收回执，
-      不许靠 sleep 运气。**未写，留给下一步。**
+      不许靠 sleep 运气。**已拆出 [NET-17](NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md)。**
 - [ ] **暂停不观察用例**（JVM）：暂停路径断言零 status/网络查询调用（原则 1
-      反证：谁把"等桌面确认停了"做进暂停，此用例变红）。**Android 侧未接线，
-      本条留白。**
+      反证：谁把"等桌面确认停了"做进暂停，此用例变红）。**已并入
+      [NET-19](NET-19-android-no-competing-offer-and-pause-does-not-observe.md)。**
 - [x] **abort 竞态用 Drop 守卫用例**：`FlowTaskGuard`（`flow_delivery.rs`）
       照抄 `FlowPathGuard` 的 Drop 模式；`unregister`/`interrupt` 均用
       generation 比对避免摘掉更新的登记（同 `SubscriptionRegistry` 先例）。
@@ -204,22 +216,19 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       cancelled/not_found；"手机侧不再靠回声推断"这条反证要等 Android
       接线才能写。**
 - [ ] 幂等：completed 后重复 status/fetch 返回同一 receipt_id，零重传
-      （daemon 集成测试，复用 `persisted_receipt` 既有语义）。**未写——
-      现有 `status_reports_completed_with_the_durable_receipt` 只验证了
-      status 读到收据，没有验证重复 fetch 零重传字节，是相邻但不同的断言，
-      留给下一步。**
+      （daemon 集成测试，复用 `persisted_receipt` 既有语义）。**已拆出
+      [NET-16](NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)。**
 - [ ] 崩溃恢复：active grant + 无运行任务 → status 触发重拉，最终 completed
-      （daemon 集成测试模拟 task 丢失）。**未实现——当前 `status()` 只读
-      durable 状态 + `tasks` 登记表是否有活跃任务，`task_running=false` 时
-      不会主动重新拉起交付；这是期望行为④明确要求的部分，尚未做。**
+      （daemon 集成测试模拟 task 丢失）。**已拆出
+      [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)。**
 - [ ] 重试不互踩：手机侧超时后先 status 见 active → 不重发 offer（JVM 测试
-      断言 offer 调用次数）。**Android 侧已接线 offer→轮询流程本身天然满足
-      此约束（`start()` 内 offer 只调用一次，随后进入 status 轮询循环）；
-      未写专门断言"offer 调用次数=1"的独立测试，留给下一步补齐。**
+      断言 offer 调用次数）。**已并入
+      [NET-19](NET-19-android-no-competing-offer-and-pause-does-not-observe.md)。**
 - [ ] 旧 fetch 行为兼容：旧手机形状的用例（直接同步 fetch 拿回执）在新桌面
       仍绿。`fetch()` 的公开签名/行为未变（旧 14 个 `flow_delivery.rs`
       集成测试全部保持绿），但没有专门验证「旧手机从不调用 status/suspend」
-      这条路径的用例，留给下一步确认式补齐。
+      这条路径的用例。**已拆出
+      [NET-18](NET-18-legacy-phone-and-desktop-fallback-path-verification.md)。**
 - [x] Android JVM 全量（报测试计数）+ `just ci` 全绿；proto 金样本演进不破
       （旧帧字节不变，同 DEV-01 device_hint 的纪律）。**`just ci` 全绿
       （fmt/clippy -D warnings/arch-check/queue-sync/nextest 402 passed，
