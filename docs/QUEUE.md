@@ -11,9 +11,11 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-16**（NET-14 同 WiFi 真机冒烟通过，移入「待共享
-> 回归」等三星热点/relay/NET-12 长期存活三项硬门；同轮真机会话新发现
-> 相册选择页渲染错乱开卡 MOB-84，入「可接队列」。上一轮 2026-09-15：
+> 最后核对：**2026-09-16**（核对远端最近提交发现 DESK-12 卡内已标「已关闭」
+> 但队列未同步，已挪入已完成区并移卡到 `cards/done/`。NET-14 同 WiFi 真机
+> 冒烟通过，移入「待共享回归」等三星热点/relay/NET-12 长期存活三项硬门；
+> 同轮真机会话新发现相册选择页渲染错乱开卡 MOB-84，入「可接队列」。上一轮
+> 2026-09-15：
 > NET-13 完成并本机真机验证通过：桌面设备
 > 列表备份状态误报根因修复 + ID 列 + 打开目录 + 在线态独立列，移入
 > 已完成。上一轮 2026-09-12：OPPO / v0.5.1 真机走查
@@ -88,7 +90,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [MOB-57](../cards/MOB-57-pause-cancel-buttons-lack-pending-state.md) | 暂停/取消连点只接受一次命令并有处理中反馈 | L1 |
 | [UI-10](../cards/UI-10-flow-runtime-blindness-and-legacy-ui-tails.md) | epoch 自愈、重传提示、归属过滤与失联提示的组合回归 | L3 |
 | [DESK-11](../cards/DESK-11-flow-ingest-not-live-in-library-view.md) | Flow 摄入后桌面库实时出现照片 | L1 |
-| [DESK-12](../cards/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄日期而非归入当月 | L1 |
 | [MOB-56](../cards/MOB-56-unsynchronized-delivery-callbacks-race-strict-head.md) | 并发失败/收据回调不触发同一队头双发 | L0 |
 | [MOB-53](../cards/MOB-53-legacy-confirmed-items-missing-completedat.md) | 旧账本已确认项补 completedAt，首页不再永久显示从未成功 | L1 |
 | [UI-12](../cards/UI-12-notice-presentation-not-material-banner.md) | 后台备份降级状态已接入全局 `NoticeHost`；本轮追加 Snackbar 安全区适配（三键导航不再遮挡）+ 版本 bump `0.5.3-test.1`；三星真机复测开关/hint/横幅/授权同意拒绝分支全通过，378/378 JVM 绿；`SystemStoppedWatcher` legacy 判据未能真机复现已拆 MOB-81 backlog；待你鸿蒙 OPPO 二次核对 | L2 |
@@ -143,6 +144,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [DESK-12](../cards/done/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄时间；2026-09-15 真机复核追加两轮修复（EXIF OffsetTime 时区解析、飞书图无 EXIF/DATE_TAKEN 时退到 DATE_ADDED），验收人实测通过 | 无——摄入时间归属问题已闭环 |
 | [NET-13](../cards/done/NET-13-device-list-status-id-column-open-folder.md) | 桌面「家人与设备」备份状态误报根因修复（Flow 路径从不写遗留水位表，last_backup_at 改读真实 asset ingest 时间）+ ID 列 + 打开设备目录 + 在线态独立列；本机重装真机验证，真实库 5 台设备中 4 台 `asset_cnt>0` 但 `backup_watermark` 全空，改前会误判、改后显示真实备份时间，截图核实 | 无——设备状态误报根因已修复 |
 | [MOB-66](../cards/done/MOB-66-android-brand-font-newsreader-manrope.md) | 三星 SM-S9210 真机 2026-09-14：标题（欢迎页、备份页大数字）为 Newsreader 衬线体，正文/汉字为 Manrope/Noto Sans SC 无衬线体，两者视觉差异明显；11 处硬编码 `FontFamily.Serif` 全部替换 | 无——品牌字体缺口已闭环 |
 | [MOB-77](../cards/done/MOB-77-cancelled-round-restore-leaves-notice-channel.md) | 三星 SM-S9210 真机 2026-09-14：取消轮次恢复入口从常驻警告条移入「备份」设置卡一行 CellRow，点击后 4 张跳过照片真实重传完成且该行自动隐藏，全程无弹窗/警告条 | 无——MOB-59/X-05 的常驻警告条设计已被取代 |
