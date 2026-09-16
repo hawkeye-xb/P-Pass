@@ -115,6 +115,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
 | P0 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，历史 cancel 已 restore；重放 receipt 与 discovery wake 交错并对账未确认项，禁止沿用旧瞬态失败根因 | L1 |
+| P1 | [NET-20](../cards/NET-20-flow-offer-must-presence-check-before-fetching-bytes.md) | Flow 单通道 `offer` 缺传输前哈希对齐：内容已存在也整份重传字节，事后才靠 ingest 去重；2026-09-16 对话核实为 NET-06 重构漏项，直接影响传输体验 | L1 |
 | P1 | [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | 🟡 剩余 5 项验收缺口已全部拆成独立子卡（NET-15~19），本卡待子卡全部归档后才能一并归档；**不再可单独领取**，去认领对应子卡 | L2 |
 | P1 | [NET-15](../cards/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md) | daemon 崩溃后 grant Active 但无运行任务，`status()` 需检测并重新拉起交付（断点续传，非从零）；NET-06 拆出 | L1 |
 | P1 | [NET-16](../cards/NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md) | completed 后重复 status/fetch 必须零重传字节的直接断言（防未来防御性代码悄悄二次拉取）；NET-06 拆出 | L1 |
