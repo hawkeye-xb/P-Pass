@@ -1,38 +1,16 @@
-# P-Pass 唯一待办队列
+# P-Pass 待办队列（验收人仪表盘）
 
-> **这是唯一的"现在该干什么"入口**，取代原来各写一半、状态会漂移的
-> `docs/CHECKLIST.md` 和 `docs/HANDOFF-*.md`（已删除）。
+> **这份文件是给验收人看的决策仪表盘，不是 agent 的工作入口。**
+> agent 开工只读 `AGENTS.md` + 指定卡；本文件只在验收人决定
+> "下一张做什么 / 验收什么 / 发版前盘点"时使用。
 >
-> **规则**：本文件的每一条只能从 `cards/` 的卡片横幅"读出"，
-> 不允许在这里加人工新判断——卡仍是唯一事实源，本文件只是它**唯一**的
-> 对外索引。卡的状态变了，本文件必须跟着改（AGENTS.md「每批交付必更
-> 文档」清单的一项）。
+> 本文件的每一条只能从 `cards/` 的卡面"读出"，不允许在这里加人工新判断。
+> 本机路径/设备状态在 `local-state.md`（不进 git）。
+> 历史核对编年史与已完成的拆卡主线不再保留在本文件——旧版全文见
+> 分支 `archive/rules-v1-2026-09-16`；完成账本在 `PROGRESS.md` / `ROADMAP.md`。
 >
-> 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
-> （开发机本地文件，不进 git）。
->
-> 最后核对：**2026-09-16**（三星真机跨网络（5G↔家庭WiFi）回归一轮：NET-01 补齐 relay 判决实验证据；MOB-71/MOB-76 各验证通过部分
-> 核心场景并更新真机进度；新发现两张卡 MOB-85（三星
-> MARs 策略绕过 NET-12 前台服务保护）、MOB-86（关闭后台备份总开关后排队
-> 项失去全部唤醒路径），均入可接队列。此前一轮：用户反馈"进行中"卡挂僵尸——NET-06 讨论中拆出
-> NET-14 处理后，NET-06 自身仍挂「进行中」但无人认领，导致下次对齐反复
-> 撞见同一张卡。已按新增的 AGENTS.md「任务状态诚实与拆分纪律」全面整改：
-> 「进行中」区清空为常态空表；NET-06 剩余 5 项验收缺口拆成独立子卡
-> NET-15~19，各自可独立认领验收，完成后回写勾掉 NET-06 对应项，NET-06
-> 待全部子卡归档后再一并归档；MOB-54 同样从「进行中」移入「可接队列」，
-> 横幅注明当前无人认领。此前一轮：核对远端最近提交发现 DESK-12 卡内已标「已关闭」
-> 但队列未同步，已挪入已完成区并移卡到 `cards/done/`。NET-14 同 WiFi 真机
-> 冒烟通过，移入「待共享回归」等三星热点/relay/NET-12 长期存活三项硬门；
-> 同轮真机会话新发现相册选择页渲染错乱开卡 MOB-84，入「可接队列」。上一轮
-> 2026-09-15：
-> NET-13 完成并本机真机验证通过：桌面设备
-> 列表备份状态误报根因修复 + ID 列 + 打开目录 + 在线态独立列，移入
-> 已完成。上一轮 2026-09-12：OPPO / v0.5.1 真机走查
-> `docs/evidence/2026-09-12-oppo-051-dogfood.md`：新开 MOB-76；MOB-52/54/64/71/74
-> 证据入账（MOB-54 真机复核失败重开定位）。上一轮 2026-09-11：真实狗粮新增
-> MOB-71~75、UI-11；MOB-68 与 AUDIT-02
-> 的既有“真机/真实数据通过”结论被新观察推翻，均已重新打开。所有描述均以卡片
-> 横幅为准，不把 relay 限流等未证实推测写成根因。）
+> 最近一轮：2026-09-16 三星真机跨网络回归（NET-01 补 relay 判决证据；
+> MOB-71/76 各过部分核心场景；新发现 MOB-85/86 入可接队列）。
 
 ---
 
@@ -62,7 +40,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 已确认组件统一并归档；UI-08、BLOB-03 与 AUDIT-04 已通过归档。
 
 ---
-
 ## 一、进行中
 
 | 卡 | 一句话 | 级别 |
@@ -74,7 +51,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 > 「进行中」实际无人处理，导致下次对齐反复撞见同一张卡）。
 
 ---
-
 ## 二、待共享回归（代码已合并，就差你动手）
 
 | 卡 | 一句话 | 级别 |
@@ -112,7 +88,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 **验收建议**：15 分钟一批过，别攒。
 
 ---
-
 ## 三、可接队列（无阻塞，可以直接分给任何 agent）
 
 | 优先级 | 卡 | 一句话 | 级别 |
@@ -147,7 +122,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | P2 | [MOB-85](../cards/MOB-85-samsung-mars-policy-interrupts-foreground-service-protection.md) | 三星 MARs 资源策略在 NET-12 前台服务保护生效期间仍两次主动杀进程/降级服务；待排除与频繁卸装重装操作的相关性再定性 | L1 |
 
 ---
-
 ## 四、待你复现或拍板（agent 不许编码）
 
 | 卡 | 一句话 | 当前等待 |
@@ -161,8 +135,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知挂在「失败」渠道——但发送函数已被 REBUILD-04 删除、生产零调用 | **等 MOB-69 拍板「重传要不要接回系统通知」，不是等用户** |
 
 ---
-
-## 五、已完成但卡文件仍在 `cards/` 根目录（只剩归档动作）
+## 五、待归档动作（卡已完成，文件待 `git mv` 进 `cards/done/`）
 
 > **已归档卡的账不在本文件。** 完成记录见 [PROGRESS.md](PROGRESS.md)（每卡一行 +
 > 验收输出摘录）与 [ROADMAP.md](ROADMAP.md)（里程碑账本），卡文件在 `cards/done/`。
@@ -178,6 +151,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 拆卡主线全部完成（ARCH-02~06、REBUILD-00~06 ✅），设计卡待归档 | — |
 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md) | 卡内横幅：已被 [MOB-58](../cards/done/MOB-58-cancel-round-no-feedback-no-restore-entry.md) 收敛，不再独立开工 | — |
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | D-01~D-04 账本/发现页原子提交完成 | ARCH-03 |
 | [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | C-01~C-05 严格消费者、Pause 与条件等待完成 | ARCH-04 |
@@ -188,44 +162,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | Flow runner、trigger bridge、native receipt 接线完成 | REBUILD-04 |
 | [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 批次 A：版本脚本版本目标全断言 | 批次 CI |
 | [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 批次 A：五个 workflow 从 TOML 派生 Rust 工具链 | 批次 CI |
-
-## 六、（原 ARCH-01 冻结区，2026-09-07 已清空）
-
-> 原 MOB-39/MOB-42/MOB-48 三张卡：2026-09-07 复核确认 ARCH-01 + REBUILD-00~05
-> 的生产切换已经落地并跑在生产上，这三张卡描述的旧 WorkManager/TriggerSpec
-> 问题域在当前代码里已不存在（源码走查逐条核实：`BackupWorker` 已降级为纯
-> framework wake adapter；`pauseAutoBackup` 已覆盖全部通道；`Pause`/`Continue`
-> 语义已转移到 `backup/flow/` 的 `DiscoveryLedger`/`consumerGate`）。不是"待
-> 重拆"，是已经被新架构解决，三张卡移入 `cards/done/`，不留在这里等待。
-> 同批次一并核实关闭的还有 MOB-41（同一根因：点名的函数在生产代码里已零
-> 调用，只剩单测引用旧 legacy 路径）。
-
----
-
-## 七、ARCH-01 后续实施拆卡（按已收口边界开卡）
-
-| 卡 | 覆盖 case | 当前等待 |
-|---|---|---|
-| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 后续拆卡边界 | ARCH-02~09 仅为未接生产骨架；REBUILD-00~04 执行生产切换 |
-
-> self-review 已核对 case 覆盖、依赖顺序、范围与反证；ARCH-01 已定的产品语义不重开。
-> ARCH-02、ARCH-03、ARCH-04、ARCH-05、ARCH-06 已完成；后续只可从 ARCH-01 的既定拆卡边界继续。
-
-### 重建主线（唯一开发优先级）
-
-| 阶段 | 卡 | 依赖 | 交付 |
-|---|---|---|---|
-| R0 | [REBUILD-00](../cards/REBUILD-00-legacy-fence-and-flow-boundary.md) | — | ✅ 旧线冻结、新 Flow 边界 |
-| R1a | [REBUILD-01](../cards/REBUILD-01-android-iroh-blobs-provider-bridge.md) | R0 | ✅ Android blobs provider bridge |
-| R1b | [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | R0 | ✅ Desktop fetch + completion receipt |
-| R2 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | R1a、R1b | ✅ 新生产 Flow runner |
-| R3 | [REBUILD-04](../cards/done/REBUILD-04-worker-cutover-debug-apk.md) | R2 | ✅ 三星 Pause → kill → reopen → Continue → Cancel 通过 |
-| R4 | [REBUILD-05](../cards/done/REBUILD-05-flow-scope-expansion-backfill.md) | R3 代码切换 | ✅ 三星真机自然复现迟到回执竞态，收敛为 `CONFIRMED` |
-| R5 | [REBUILD-06](../cards/done/REBUILD-06-flow-offer-authz-after-scope-backfill.md) | R4 | ✅ completed receipt 的 recovered lease rebind 已在三星通过 |
-
----
-
-## 八、backlog（明确不做或暂缓，agent 不许碰）
+## 六、backlog（明确不做或暂缓，agent 不许碰）
 
 | 卡 | 状态 | 备注 |
 |---|---|---|
@@ -242,28 +179,10 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | [MOB-81](../cards/backlog/MOB-81-legacy-watch-job-detached-from-flow-truth.md) | 待用户回头确认方向 | 2026-09-15：UI-12 真机验证发现 `SystemStoppedWatcher` 判据查的是 legacy JobScheduler（`MediaWatchJob`），非当前 Flow 主链路，真机 force-stop 后系统自动重排该 job 导致无法稳定复现该状态；判据本身有 16 个单测覆盖非回归风险，只是信号源脱节；影响面小（不影响真实备份，只影响这条提示是否准确弹出），不紧急 |
 
 ---
+## 七、相关文档指路
 
-## 九、发版现状（参考，非待办）
-
-- 正式产物走 CI：`gh workflow run release.yml -f platforms=android,macos`
-  （Android 出签名 APK；macOS 未签名，「右键 → 打开」过 Gatekeeper）。
-- 调管线只用 workflow_dispatch，不打测试 tag（tag 纪律见 `AGENTS.md`）。
-- **Secrets 实况（2026-08-25 核实）**：`CLOUDFLARE_API_TOKEN` /
-  `CLOUDFLARE_ACCOUNT_ID` / `ANDROID_KEYSTORE_*` / `UPDATE_SIGNING_KEY` /
-  `APPLE_*` 全部在位。
-- **触发节奏**：ci-rust/ci-android/ci-desktop/site build 随 push（paths 门控）；
-  e2e 走 nightly 03:30 + tag + PR 标签，也可 dispatch；artifacts（dogfood
-  裸二进制）仅 Linux 自动，macOS/Windows 只手动；release 走 tag `v*` 或
-  dispatch；ci-workers 随 infra/workers/** push 或 dispatch。
-- **ci-workers 审批门**：`environment: workers-prod` 让部署 job 停在
-  Waiting，不占 runner、不计费，挂 30 天自动作废。
-
----
-
-## 十、相关文档指路
-
-- 规则层（agent 无关）：[`AGENTS.md`](../AGENTS.md) + [`AGENT_PROTOCOL.md`](AGENT_PROTOCOL.md)
-- 全量历史账本（只增不减）：[`ROADMAP.md`](ROADMAP.md)
-- 方法论教训：[`PROGRESS.md`](PROGRESS.md)
-- 交接背景日志（只读，不是待办来源）：[`NEXT.md`](NEXT.md)
-- 卡格式规范：`cards/TEMPLATE.md` + `AGENT_PROTOCOL.md` §C.2
+- agent 规范（唯一必读）：[`AGENTS.md`](../AGENTS.md)
+- 验收协议细则：[`AGENT_PROTOCOL.md`](AGENT_PROTOCOL.md)
+- 发版/签名/部署：[`RELEASING.md`](RELEASING.md)
+- 完成账本：[`PROGRESS.md`](PROGRESS.md) · [`ROADMAP.md`](ROADMAP.md)
+- 历史教训归档：[`lessons/`](lessons/) 与分支 `archive/rules-v1-2026-09-16`

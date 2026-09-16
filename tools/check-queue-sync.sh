@@ -64,7 +64,7 @@ echo "==> queue-sync 3/3: 归档出口——历史不许回到待办队列"
 #   b. 没有分区标题含「已归档」—— 历史账本是 PROGRESS.md / ROADMAP.md，
 #      不是待办队列。
 #   c. 活分区（一~四）不许出现指向 cards/done/ 的行 —— 完成的卡不许占
-#      待办分区的行。分区七（拆卡索引）和八（backlog）可以引用 done 卡，
+#      待办分区的行。分区五（待归档）和六（backlog）可以引用 done 卡，
 #      那是引用不是登记，故不在此列。
 if ! python3 - "$QUEUE" <<'PYGATE'
 import re, sys
@@ -73,7 +73,7 @@ queue = sys.argv[1]
 lines = open(queue, encoding="utf-8").read().split("\n")
 heads = [(i, l) for i, l in enumerate(lines) if l.startswith("## ")]
 
-EXPECTED = ["〇", "一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
+EXPECTED = ["〇", "一", "二", "三", "四", "五", "六", "七"]
 LIVE = {"一", "二", "三", "四"}
 
 def num(h):

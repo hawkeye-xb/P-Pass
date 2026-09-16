@@ -52,7 +52,7 @@ python3 - "$REAL" "$TMP/c.md" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 lines = open(src, encoding="utf-8").read().split("\n")
-i = next(k for k, l in enumerate(lines) if l.startswith("## 九、"))
+i = next(k for k, l in enumerate(lines) if l.startswith("## 七、"))
 j = next(k for k, l in enumerate(lines[i + 1:], i + 1) if l.startswith("## "))
 del lines[i:j]
 open(dst, "w", encoding="utf-8").write("\n".join(lines))
