@@ -223,3 +223,20 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   后缀。
 - 旧 tag 永不删除/挪动（挪 tag 会破坏已发产物的可复现性）。
 - `CHANGELOG.md` 段落只追加：发布后不再重写过去版本。
+
+---
+
+## 附录：发版实况（2026-09-16 从 QUEUE.md 迁入）
+
+- 正式产物走 CI：`gh workflow run release.yml -f platforms=android,macos`
+  （Android 出签名 APK；macOS 未签名，「右键 → 打开」过 Gatekeeper）。
+- 调管线只用 workflow_dispatch，不打测试 tag（tag 纪律见 `AGENTS.md`）。
+- **Secrets 实况（2026-08-25 核实）**：`CLOUDFLARE_API_TOKEN` /
+  `CLOUDFLARE_ACCOUNT_ID` / `ANDROID_KEYSTORE_*` / `UPDATE_SIGNING_KEY` /
+  `APPLE_*` 全部在位。
+- **触发节奏**：ci-rust/ci-android/ci-desktop/site build 随 push（paths 门控）；
+  e2e 走 nightly 03:30 + tag + PR 标签，也可 dispatch；artifacts（dogfood
+  裸二进制）仅 Linux 自动，macOS/Windows 只手动；release 走 tag `v*` 或
+  dispatch；ci-workers 随 infra/workers/** push 或 dispatch。
+- **ci-workers 审批门**：`environment: workers-prod` 让部署 job 停在
+  Waiting，不占 runner、不计费，挂 30 天自动作废。
