@@ -79,6 +79,10 @@ class FlowRunner(
         consumer.wake(constraintsSatisfied)
     }
 
+    /** See [StrictConsumer.reconcileProcessStart] — must be called exactly
+     *  once per fresh process life, before the first [run]. */
+    fun reconcileProcessStart() = consumer.reconcileProcessStart()
+
     fun pause() = consumer.pauseByUser()
 
     /** User Continue reopens the durable gate; a false constraint remains waiting. */

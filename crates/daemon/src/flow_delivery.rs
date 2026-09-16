@@ -449,6 +449,22 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         {
+            // NET-22: this tuple was already completed under a DIFFERENT
+            // lease_token/provider (a restarted discovery cursor re-offering
+            // the exact same queue_sequence — the ordinary re-pairing/
+            // re-install case, not NET-20's cross-tuple content match).
+            // Historically this just silently rebound the row and returned
+            // Ok — no push, no wake for the caller. NET-20's sibling branch
+            // (complete_without_fetch) already emits flow.delivered on a
+            // fresh completion; this branch is the SAME "already have it,
+            // just tell them" fact and must behave identically, not leave
+            // the phone's poll-on-local-idle fallback as the only way out
+            // (real device, 2026-09-16: a 30s local-idle stall before the
+            // phone's own flow.status() fallback kicked in, for a receipt
+            // the daemon had known about the entire time).
+            let rebound = self.matching_grant(&grant).await?;
+            let receipt = self.persisted_receipt(&rebound).await?;
+            self.emit_flow_delivered(peer, &rebound, &receipt);
             return Ok(());
         }
         self.db

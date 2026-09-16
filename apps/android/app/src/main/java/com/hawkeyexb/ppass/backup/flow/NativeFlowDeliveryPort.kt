@@ -3,6 +3,7 @@ package com.hawkeyexb.ppass.backup.flow
 
 import android.content.ContentResolver
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import com.hawkeyexb.ppass.backup.isPairingLostText
 import com.hawkeyexb.ppass.proto.FlowCompletionReceipt
@@ -333,13 +334,17 @@ internal class NativeFlowDeliveryPort(
                 var pollDelayIndex = 0
                 var consecutiveStatusFailures = 0
                 lateinit var receipt: FlowCompletionReceipt
+                val attemptStartedAtMs = SystemClock.elapsedRealtime()
                 try {
                     while (true) {
                         require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed while waiting for completion" }
                         val pushed = pushChannel.tryReceive().getOrNull()
                             ?.let { (kind, data) -> parseFlowPushOutcome(kind, data, tuple) }
                         val localStatus = bridge.transferStatus()
-                        when (val step = flowWaitStep(pushed, localStatus, LOCAL_IDLE_STALL_THRESHOLD_MS)) {
+                        val attemptElapsedMs = SystemClock.elapsedRealtime() - attemptStartedAtMs
+                        when (
+                            val step = flowWaitStep(pushed, localStatus, LOCAL_IDLE_STALL_THRESHOLD_MS, attemptElapsedMs)
+                        ) {
                             is FlowWaitStep.Resolved -> {
                                 when (val outcome = step.outcome) {
                                     is FlowStatusPollOutcome.Completed -> {
@@ -547,6 +552,25 @@ internal fun flowWaitStep(
     pushed: FlowPushOutcome?,
     localStatus: TransferStatus,
     idleStallThresholdMs: Long,
+    // NET: idle_for_ms is `None`/null on the native side not just at the
+    // very start of an ordinary transfer, but FOREVER for a grant the
+    // daemon completed without ever touching the data plane (NET-20's
+    // content-already-exists dedup shortcut, or a rebind of an
+    // already-completed tuple) — no iroh-blobs get-request/progress/
+    // completed/aborted event ever fires for a lease nobody ever
+    // connected for, so there is no "idle since last event" to measure.
+    // Previously a null idleForMs fell into the same `else` branch as
+    // "disconnected but still under the threshold", so with connected
+    // always false and idleForMs always null this attempt looped on
+    // KeepWaitingForPush forever whenever the one and only recovery
+    // path — the `flow.delivered` push — was missed for any reason
+    // (real device, 2026-09-16: exactly this hang, confirmed by the
+    // daemon's own database already holding a completed receipt for the
+    // tuple while the phone waited with zero further network activity).
+    // The caller's own wall-clock since THIS attempt's wait loop started
+    // is the only clock that still advances in that case, so it is the
+    // fallback measure for "nothing local will ever tell us more".
+    attemptElapsedMs: Long,
 ): FlowWaitStep {
     when (pushed) {
         is FlowPushOutcome.Delivered -> return FlowWaitStep.Resolved(FlowStatusPollOutcome.Completed(pushed.receipt))
@@ -565,6 +589,8 @@ internal fun flowWaitStep(
         is TransferStatus.InProgress -> when {
             localStatus.connected -> FlowWaitStep.KeepWaitingForPush
             localStatus.idleForMs != null && localStatus.idleForMs >= idleStallThresholdMs ->
+                FlowWaitStep.CheckStatusNow
+            localStatus.idleForMs == null && attemptElapsedMs >= idleStallThresholdMs ->
                 FlowWaitStep.CheckStatusNow
             else -> FlowWaitStep.KeepWaitingForPush
         }

@@ -58,21 +58,33 @@ class StrictConsumer(
             return
         }
         val lease = FetchLease(queueSequence = head.queueSequence, leaseToken = "lease-${head.queueSequence}")
+        val transferring = head.copy(deliveryState = DeliveryState.TRANSFERRING)
         ledger.update { snapshot ->
             snapshot.copy(
                 uploadCursor = UploadCursor(head.queueSequence),
                 consumerStatus = ConsumerStatus.IDLE,
                 fetchLease = lease,
                 items = snapshot.items.map { item ->
-                    if (item.queueSequence == head.queueSequence) {
-                        item.copy(deliveryState = DeliveryState.TRANSFERRING)
-                    } else {
-                        item
-                    }
+                    if (item.queueSequence == head.queueSequence) transferring else item
                 },
             )
         }
-        delivery.start(head, resumePartial = head.partialRetained, lease = lease)
+        // NET: `head` is the pre-update snapshot (deliveryState == QUEUED).
+        // delivery.start() persists its own follow-up ledger.update (e.g.
+        // NativeFlowDeliveryPort filling in contentHash) by copying the
+        // `item` it was handed and writing that copy back whole — passing
+        // the stale `head` here made that follow-up write clobber the
+        // TRANSFERRING we just persisted above back to QUEUED. fetchLease
+        // stayed correct (nothing here touches it), so the transfer itself
+        // was never double-started or lost — only the item's own
+        // deliveryState field lied. But FlowUiProjection reads exactly this
+        // field to pick the "currently uploading" item for the progress UI,
+        // so the user-visible symptom was indistinguishable from a stuck
+        // transfer: no file ever showed as transferring while one was
+        // genuinely in flight (real device, 2026-09-16, Samsung SM-S9210).
+        // Passing the already-TRANSFERRING copy means start()'s own
+        // ledger.update writes TRANSFERRING back, not QUEUED.
+        delivery.start(transferring, resumePartial = head.partialRetained, lease = lease)
     }
 
     fun pauseByUser() {
@@ -125,6 +137,45 @@ class StrictConsumer(
     fun continueByUser() {
         ledger.update { it.copy(consumerGate = ConsumerGate.OPEN, consumerStatus = ConsumerStatus.IDLE) }
         wake(constraintsSatisfied = true)
+    }
+
+    /**
+     * A [FetchLease] recorded by an earlier process life is not evidence of
+     * a live transfer in THIS one — the coroutine that held it (and the
+     * native provider registration behind it) died with that process, or
+     * the daemon serving it was restarted out from under it. [wake]'s
+     * `fetchLease != null` short-circuit has no way to tell that apart
+     * from a genuinely in-flight lease from earlier in the SAME process
+     * life, so it never re-offers — every future wake spins straight to
+     * IDLE forever with the item stuck QUEUED/TRANSFERRING (real device,
+     * 2026-09-16: `am force-stop` mid-offer left exactly this orphan;
+     * `adb install -r` preserves app data, so the stale lease survived
+     * the reinstall too).
+     *
+     * Call exactly once, when [AndroidFlowRuntime] is first constructed
+     * for a process life (never on every wake, or an in-flight lease from
+     * earlier in the SAME process life would be reset out from under its
+     * own delivery). Demotes the leased item back to QUEUED so the very
+     * next [wake] can lease and (re)send it — same shape as
+     * [waitForConstraints], minus the `delivery.stop()` call, since there
+     * is no live delivery object in this fresh process to stop.
+     */
+    fun reconcileProcessStart() {
+        val current = ledger.load()
+        val lease = current.fetchLease ?: return
+        ledger.update { snapshot ->
+            snapshot.copy(
+                consumerStatus = ConsumerStatus.IDLE,
+                fetchLease = null,
+                items = snapshot.items.map { item ->
+                    if (item.queueSequence == lease.queueSequence && item.deliveryState == DeliveryState.TRANSFERRING) {
+                        item.copy(deliveryState = DeliveryState.QUEUED)
+                    } else {
+                        item
+                    }
+                },
+            )
+        }
     }
 
     /**

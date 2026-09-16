@@ -124,6 +124,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | P1 | [NET-17](../cards/NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md) | materialize 前后各发一次 cancel/suspend，两方向终态需确定性验证（先过 complete_flow_grant 者赢）；NET-06 拆出 | L1 |
 | P1 | [NET-18](../cards/NET-18-legacy-phone-and-desktop-fallback-path-verification.md) | 旧手机（只用 fetch）+ 旧桌面（不认 flow.status）两条降级路径专门验证；NET-06 拆出 | L1 |
 | P1 | [NET-19](../cards/NET-19-android-no-competing-offer-and-pause-does-not-observe.md) | offer 只调一次的断言 + 暂停路径零查询对端的断言；NET-06 拆出 | L1 |
+| P1 | [NET-24](../cards/NET-24-flow-delivered-push-not-reaching-phone.md) | `flow.delivered` 推送在断链重连后真机场景里始终没送达手机，去重命中项要等满 30 秒兜底超时才被轮询捞回，而非瞬时完成；NET-23 拆出，根因未查 | L1 |
 | P1 | [NET-07](../cards/NET-07-split-timeouts-by-call-kind-transitional.md) | 过渡止血：超时按 建连/控制/fetch 分档（NET-06 合入后评估回退）；与 NET-06 并行 | L1 |
 | P1 | [NET-08](../cards/NET-08-audit-repo-for-sync-wait-weld-points.md) | 🟡 普查完成（2026-09-14，清单在卡内）：焊点全登记，衍生 NET-09/10/11、TEL-05 四张后续卡；本卡待后续卡闭环后归档，不再可领 | L2 |
 | P1 | [NET-09](../cards/NET-09-data-plane-stall-watchdog-for-long-transfers.md) | 长数据面加字节停滞看门狗（downloadAsset 无界挂起 / APK 下载死因不可辨 / daemon upload 收流）；NET-08 产出 | L1 |
@@ -167,6 +168,8 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 |---|---|---|
 | [NET-20](../cards/done/NET-20-flow-offer-must-presence-check-before-fetching-bytes.md) | Flow 单通道 `offer` 补传输前哈希对齐：`Ingestor::has_durable_copy` + `offer_inner` 短路，命中已存在内容不再发起 iroh-blobs 抓取，直接复用现有 `complete_flow_grant` 完成路径（不新增协议字段，手机侧零改动）；RED 先行 2 条集成测试+1 条反证（去掉短路后状态从"立即 completed"变"active"）；`cargo test -p daemon --test flow_delivery` 28/28、`cargo test -p core-index` 全绿、`just ci` 全绿 | 无——大文件/重复内容白传的效率缺口已堵，未做真机验证 |
 | [NET-21](../cards/done/NET-21-flow-staging-orphan-sweep.md) | flow-staging 装卸台无孤儿回收（materialize 失败/cancel/崩溃留下的中转文件无人清）；复用旧 `sweep_orphans` 模式接 `active_flow_content_hashes` 保护集，启动+每小时巡检；本地单测 10/10（5 新增+反证成立）+ `just ci` 全绿；新增 `tools/verify-flow-staging-gc.sh` 供用户自行验证（只读检查真实库 + `--dry-run` 隔离沙盒调用生产函数）；未做真机长跑验证 | 无——磁盘泄漏点已堵，验证脚本已附，真机长跑欠账见卡内 |
+| [NET-22](../cards/done/NET-22-flow-rebind-completed-grant-must-push.md) | rebind 一个已完成的 Flow grant（新 lease 重新 offer 同一 tuple）时补发 `flow.delivered` 推送，行为与 NET-20 的 `complete_without_fetch` 分支一致；新增集成测试，`cargo test -p daemon --test flow_delivery` 29/29 | 无——rebind 路径缺推送的缺口已堵 |
+| [NET-23](../cards/done/NET-23-flow-wait-loop-must-not-hang-forever-when-local-signal-never-fires.md) | 三星真机复现：断链重连后 11 张全部命中 NET-20 去重，手机等待循环因本地 iroh 从未有活动（`idle_for_ms` 永远 null）而没有兜底出口，永久卡在「正在备份...0/11」；补一条基于调用方自身挂钟耗时的兜底超时分支；`NET14PushFirstDeliveryTest`/`ARCH01StrictConsumerTest` 全绿；真机复测同一批 11 张从 0/11 推进到 11/11 | 无——推送缺失时的永久挂起已堵；推送为何缺失拆 NET-24 |
 | [DESK-12](../cards/done/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄时间；2026-09-15 真机复核追加两轮修复（EXIF OffsetTime 时区解析、飞书图无 EXIF/DATE_TAKEN 时退到 DATE_ADDED），验收人实测通过 | 无——摄入时间归属问题已闭环 |
 | [NET-13](../cards/done/NET-13-device-list-status-id-column-open-folder.md) | 桌面「家人与设备」备份状态误报根因修复（Flow 路径从不写遗留水位表，last_backup_at 改读真实 asset ingest 时间）+ ID 列 + 打开设备目录 + 在线态独立列；本机重装真机验证，真实库 5 台设备中 4 台 `asset_cnt>0` 但 `backup_watermark` 全空，改前会误判、改后显示真实备份时间，截图核实 | 无——设备状态误报根因已修复 |
 | [MOB-66](../cards/done/MOB-66-android-brand-font-newsreader-manrope.md) | 三星 SM-S9210 真机 2026-09-14：标题（欢迎页、备份页大数字）为 Newsreader 衬线体，正文/汉字为 Manrope/Noto Sans SC 无衬线体，两者视觉差异明显；11 处硬编码 `FontFamily.Serif` 全部替换 | 无——品牌字体缺口已闭环 |

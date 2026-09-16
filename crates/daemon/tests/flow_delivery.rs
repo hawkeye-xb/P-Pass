@@ -1126,6 +1126,102 @@ async fn offer_immediately_starts_the_background_fetch_task() {
     }
 }
 
+// NET-22 RED: rebind_completed_flow_grant's branch (a DIFFERENT
+// lease_token/provider re-offering the SAME already-completed queue_sequence
+// — e.g. a restarted discovery cursor, not NET-20's cross-tuple content
+// match) historically rebound the row and returned Ok silently: no push,
+// no wake. The phone was left with only its 30s local-idle-stall fallback
+// to discover a receipt the daemon had known about the entire time (real
+// device, 2026-09-16). This must behave identically to NET-20's sibling
+// branch (complete_without_fetch): same fact ("already have it"), same
+// flow.delivered push.
+#[tokio::test(flavor = "multi_thread")]
+async fn reoffering_an_already_completed_tuple_under_a_new_lease_still_pushes_flow_delivered() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"NET-22 re-offer after completion fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let (event_bus, mut event_rx) = events::bus();
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path())
+        .with_events_and_window(event_bus, std::time::Duration::from_millis(20));
+
+    // First pass: genuinely complete the tuple (same shape as
+    // successful_flow_fetch_notifies_the_desktop_timeline).
+    let first_offer = request("epoch-current", "lease-first", hash, ticket.clone());
+    delivery
+        .offer(provider_transport.node_id(), &first_offer)
+        .await
+        .unwrap();
+    delivery
+        .fetch(provider_transport.node_id(), &first_offer)
+        .await
+        .unwrap();
+    // Drain the first pass's events (device changes x3, timeline, delivered)
+    // — already covered by successful_flow_fetch_notifies_the_desktop_timeline.
+    for _ in 0..5 {
+        tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("first pass events must arrive")
+            .unwrap();
+    }
+
+    // Second pass: the SAME queue_sequence re-offered under a new
+    // lease_token/provider (the tuple key request() always uses is
+    // queue_sequence=1, pairing_epoch="epoch-current" — see request()).
+    // This must hit rebind_completed_flow_grant, not complete_without_fetch.
+    let reoffer = request("epoch-current", "lease-second", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &reoffer)
+        .await
+        .unwrap();
+
+    let mut saw_delivered = false;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline {
+        let Ok(Ok(event)) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), event_rx.recv()).await
+        else {
+            continue;
+        };
+        if event["event"].as_str() == Some(events::FLOW_DELIVERED) {
+            assert_eq!(
+                event["data"]["lease_token"].as_str(),
+                Some("lease-second"),
+                "the pushed receipt must reflect the rebound (new) lease, not the stale first one"
+            );
+            saw_delivered = true;
+            break;
+        }
+    }
+    assert!(
+        saw_delivered,
+        "NET-22: re-offering an already-completed tuple under a new lease must still push \
+         flow.delivered — the phone must not be left waiting on its local-idle-stall fallback \
+         for a receipt the daemon already had"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn offer_skips_the_network_fetch_when_content_already_has_a_durable_copy() {
     // NET-20: content already in the library (a different tuple, or a
