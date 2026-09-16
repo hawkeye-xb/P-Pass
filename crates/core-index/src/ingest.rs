@@ -84,6 +84,23 @@ impl Ingestor {
         }
     }
 
+    /// NET-20: true iff `hash` already has a durable, on-disk copy in this
+    /// library. A caller about to fetch bytes over the network can skip that
+    /// fetch entirely when this returns true.
+    ///
+    /// Deliberately NOT just `db.get_asset(hash).is_some()` — an index row
+    /// whose recorded file no longer exists on disk (WATCH-03: the file was
+    /// externally deleted, then the same content reappeared elsewhere) is
+    /// not a durable copy; `ingest_inner`'s own duplicate check makes this
+    /// exact distinction (`existing.rel_path` must still resolve), and this
+    /// method mirrors it so the two duplicate judgements never diverge.
+    pub async fn has_durable_copy(&self, hash: &[u8; 32]) -> Result<bool> {
+        let Some(existing) = self.db.get_asset(hash).await? else {
+            return Ok(false);
+        };
+        Ok(self.library_root.join(&existing.rel_path).exists())
+    }
+
     pub async fn ingest(&self, f: &IncomingFile) -> Result<IngestOutcome> {
         self.ingest_inner(f, true).await
     }

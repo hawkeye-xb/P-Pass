@@ -5,7 +5,7 @@ use daemon::events;
 use daemon::flow_delivery::{DeliveryError, FlowDelivery, FlowPathRegistry};
 use daemon::Telemetry;
 use proto::FlowFetchRequest;
-use storage::{Db, Device, Role};
+use storage::{Asset, Db, Device, Role};
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use transport::{Blobs, ConnectionStatus, IrohTransport, TransportConfig, ALPN_BLOBS};
@@ -1124,6 +1124,143 @@ async fn offer_immediately_starts_the_background_fetch_task() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offer_skips_the_network_fetch_when_content_already_has_a_durable_copy() {
+    // NET-20: content already in the library (a different tuple, or a
+    // rediscovered/re-offered item) must never trigger a real iroh-blobs
+    // fetch — it should complete immediately from the presence check.
+    let root = tempdir().unwrap();
+    let peer = transport::NodeId([0x55; 32]);
+    let db = paired_db("epoch-current", peer).await;
+    let bytes = b"NET-20 presence check fixture";
+    let hash = *blake3::hash(bytes).as_bytes();
+    // Seed the library with a durable copy under this hash — the file must
+    // actually exist on disk (has_durable_copy checks existence, not just
+    // the index row) at the rel_path the row claims.
+    std::fs::create_dir_all(root.path().join("originals")).unwrap();
+    let rel_path = "originals/existing.jpg".to_string();
+    std::fs::write(root.path().join(&rel_path), bytes).unwrap();
+    db.insert_asset(&Asset {
+        hash: hash.to_vec(),
+        rel_path: rel_path.clone(),
+        media_type: "image/jpeg".into(),
+        bytes: bytes.len() as i64,
+        taken_at: Some(1),
+        width: None,
+        height: None,
+        src_device: vec![9u8; 32],
+        added_at: 1,
+        thumb_state: 0,
+    })
+    .await
+    .unwrap();
+
+    let transport = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+        .await
+        .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let delivery = FlowDelivery::new(db, receiver_blobs.clone(), root.path());
+    // A syntactically valid provider address that is never dialed — the
+    // presence check must short-circuit before any fetch attempt touches
+    // it. Uses the receiver's own address only because `provider_for` just
+    // parses/registers it (no dial happens here); if the code under test
+    // ever did dial it, this would still be a harmless loopback no-op, not
+    // a false pass.
+    let never_dialed_provider = transport.local_addr().to_string();
+    let offer = request(
+        "epoch-current",
+        "lease-new-tuple",
+        hash,
+        never_dialed_provider,
+    );
+
+    delivery.offer(peer, &offer).await.unwrap();
+
+    // Must resolve to completed promptly without ever needing a task poll —
+    // there is no background fetch task to wait on.
+    let reply = delivery
+        .status(peer, &tuple_ref("epoch-current", "lease-new-tuple", 7))
+        .await
+        .unwrap();
+    assert_eq!(
+        reply.state, "completed",
+        "presence-checked content must complete without a network fetch"
+    );
+    assert!(!reply.task_running);
+    let receipt = reply
+        .receipt
+        .expect("completed status must carry a receipt");
+    assert_eq!(receipt.content_hash, hex::encode(hash));
+    // Nothing was ever pulled into the flow-blobs store for this hash.
+    assert_eq!(receiver_blobs.local_bytes(hash).await.unwrap(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offer_still_fetches_when_content_is_not_yet_in_the_library() {
+    // NET-20 regression guard: the presence check must not swallow the
+    // normal "content genuinely missing" path — this is byte-for-byte the
+    // pre-existing `verified_native_fetch_materializes_before_a_durable_receipt`
+    // shape, just re-asserted here to pin it against the new short-circuit.
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"NET-20 genuine miss fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let reply = delivery
+            .status(
+                provider_transport.node_id(),
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+        if reply.state == "completed" {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "genuinely missing content must still be fetched and complete"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert!(
+        db.get_asset(&hash).await.unwrap().is_some(),
+        "a real fetch must still land the asset in the index"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

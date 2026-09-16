@@ -459,10 +459,56 @@ impl FlowDelivery {
         // this tuple current rather than silently acknowledging a different
         // completed item at the same queue sequence.
         let stored = self.matching_grant(&grant).await?;
+        // NET-20: the content may already have a durable copy in the
+        // library under a different (or even the same) tuple — a restarted
+        // discovery cursor re-offering, the same photo arriving from a
+        // second device, or a retried offer after a dropped reply all hit
+        // this. Skip the network fetch entirely instead of pulling bytes we
+        // already have only to discard them at ingest time (NET-20).
+        let hash = array32(&grant.content_hash).expect("validated by checked_request");
+        if self
+            .ingestor
+            .has_durable_copy(&hash)
+            .await
+            .map_err(|e| DeliveryError::MaterializeIngest(e.to_string()))?
+        {
+            return self.complete_without_fetch(peer, &stored).await;
+        }
         // NET-06: this is the async-202 trigger — offer's job ends here; the
         // actual transfer runs on its own task, tracked by `self.tasks` so
         // `suspend`/`cancel`/`status` can observe or interrupt it.
         self.spawn_fetch_task(peer, stored, request.clone());
+        Ok(())
+    }
+
+    /// NET-20: the presence-checked path — content already has a durable
+    /// copy, so there is nothing to fetch. Writes the exact same durable
+    /// receipt shape a real transfer would (`complete_flow_grant`), so
+    /// `status()`/`fetch()` callers cannot tell this apart from an ordinary
+    /// completed transfer — this deliberately reuses the existing complete
+    /// path instead of inventing a new "skipped/duplicate" wire state
+    /// (the card's own default: don't add protocol fields without deciding
+    /// to).
+    async fn complete_without_fetch(
+        &self,
+        peer: NodeId,
+        grant: &FlowGrant,
+    ) -> Result<(), DeliveryError> {
+        let receipt_id = receipt_id()?;
+        if !self
+            .db
+            .complete_flow_grant(grant, &receipt_id)
+            .await
+            .map_err(storage_error)?
+        {
+            // Lost a race with cancel/suspend or a concurrent completion —
+            // `offer` is fire-and-forget by contract (NET-06); `status()`
+            // reports whichever outcome actually won, so this is not an
+            // error the caller needs to see.
+            return Ok(());
+        }
+        let receipt = receipt_from(grant, receipt_id);
+        self.emit_flow_delivered(peer, grant, &receipt);
         Ok(())
     }
 
