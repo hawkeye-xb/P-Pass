@@ -25,6 +25,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.io.FileNotFoundException
 
@@ -287,74 +290,112 @@ internal class NativeFlowDeliveryPort(
                     return@launch
                 }
                 desktop.offer(request)
-                // NET-06: offer() now spawns the background transfer on the
-                // daemon and returns immediately — it no longer blocks on
-                // the data plane, so this used to be immediately followed
-                // by a single long-blocking fetch() call gambling the whole
-                // transfer's outcome on one control-plane timeout (NET-01's
-                // root cause). Instead, poll status() with backoff until it
-                // reaches a terminal state. A status round trip itself
-                // timing out (a real but transient network hiccup) must
-                // NOT be read as "the transfer failed" — the daemon's
-                // ledger, not an RPC echo, is what decides that (card
-                // principle 3: 手机只认账本，不认回声). This loop never
-                // calls offer() again, so a flaky network never causes two
-                // competing grants for the same tuple. The decision on each
-                // reply is a pure function ([flowStatusPollOutcome]) so it
-                // is JVM-testable without a coroutine dispatcher.
+                // NET-06/NET-14: offer() spawns the background transfer on
+                // the daemon and returns immediately. This attempt now
+                // waits for one of three signals, in priority order:
+                //   1. A `flow.delivered`/`flow.failed` push over a
+                //      dedicated timeline.subscribe connection opened just
+                //      for this attempt (primary signal — no network call
+                //      per check).
+                //   2. The phone's OWN local iroh-blobs sender-side event
+                //      state (bridge.transferStatus()) — ground truth for
+                //      "is anyone still connected / did MY send finish",
+                //      sourced from this device's own connection table,
+                //      never a guess (NET-14 card).
+                //   3. Only when local status shows no live connection and
+                //      no push has arrived — a bounded `flow.status()`
+                //      control-plane check, exactly the same call the old
+                //      pure-polling loop used, kept as the fallback so a
+                //      dropped push subscription or a desktop that hasn't
+                //      wired events yet still resolves correctly.
+                // This loop never calls offer() again, so a flaky network
+                // never causes two competing grants for the same tuple.
                 val tuple = FlowTupleRef(
                     queueSequence = request.queueSequence,
                     pairingEpoch = request.pairingEpoch,
                     leaseToken = request.leaseToken,
                 )
+                val pushChannel = Channel<Pair<String, JsonObject>>(capacity = 8)
+                val subscriptionJob = launch {
+                    runCatching {
+                        client.subscribeTimeline(
+                            parsePeerAddrToken(currentPairing.daemonAddrToken),
+                            onFlowEvent = { kind, data -> pushChannel.trySend(kind to data) },
+                            onInvalidated = {},
+                        )
+                    }
+                    // A dropped/failed subscription is not fatal here — the
+                    // local-status-driven fallback below still resolves
+                    // this attempt; the daemon is just no longer able to
+                    // hurry it along with a push (principle: 推送为加速，
+                    // 不是唯一路径).
+                }
                 var pollDelayIndex = 0
                 var consecutiveStatusFailures = 0
                 lateinit var receipt: FlowCompletionReceipt
-                while (true) {
-                    require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed while polling status" }
-                    val reply = try {
-                        desktop.status(tuple)
-                    } catch (failure: Throwable) {
-                        // A dead connection or a daemon that is momentarily
-                        // unreachable is not the same fact as "the transfer
-                        // is over" — only a bounded run of consecutive
-                        // failures gives up on THIS attempt (the outer
-                        // attemptCount budget in StrictConsumer decides
-                        // whether the item gets a fresh attempt later).
-                        consecutiveStatusFailures += 1
-                        if (consecutiveStatusFailures >= STATUS_POLL_MAX_CONSECUTIVE_FAILURES) throw failure
-                        delay(nextStatusPollDelayMs(pollDelayIndex))
-                        pollDelayIndex += 1
-                        continue
+                try {
+                    while (true) {
+                        require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed while waiting for completion" }
+                        val pushed = pushChannel.tryReceive().getOrNull()
+                            ?.let { (kind, data) -> parseFlowPushOutcome(kind, data, tuple) }
+                        val localStatus = bridge.transferStatus()
+                        when (val step = flowWaitStep(pushed, localStatus, LOCAL_IDLE_STALL_THRESHOLD_MS)) {
+                            is FlowWaitStep.Resolved -> {
+                                when (val outcome = step.outcome) {
+                                    is FlowStatusPollOutcome.Completed -> {
+                                        receipt = outcome.receipt
+                                    }
+                                    FlowStatusPollOutcome.Cancelled -> {
+                                        Log.i("PPassFlow", "Flow status reports cancelled; abandoning this delivery attempt")
+                                        active = null
+                                        return@launch
+                                    }
+                                    FlowStatusPollOutcome.KeepPolling -> continue
+                                }
+                            }
+                            FlowWaitStep.KeepWaitingForPush -> {
+                                // Cheap local-only wait — no network call,
+                                // just re-check the local signal shortly.
+                                delay(LOCAL_STATUS_RECHECK_MS)
+                                continue
+                            }
+                            FlowWaitStep.CheckStatusNow -> {
+                                val reply = try {
+                                    desktop.status(tuple)
+                                } catch (failure: Throwable) {
+                                    // A dead connection or a daemon that is
+                                    // momentarily unreachable is not the
+                                    // same fact as "the transfer is over" —
+                                    // only a bounded run of consecutive
+                                    // failures gives up on THIS attempt.
+                                    consecutiveStatusFailures += 1
+                                    if (consecutiveStatusFailures >= STATUS_POLL_MAX_CONSECUTIVE_FAILURES) throw failure
+                                    delay(nextStatusPollDelayMs(pollDelayIndex))
+                                    pollDelayIndex += 1
+                                    continue
+                                }
+                                consecutiveStatusFailures = 0
+                                when (val outcome = flowStatusPollOutcome(reply)) {
+                                    is FlowStatusPollOutcome.Completed -> {
+                                        receipt = outcome.receipt
+                                    }
+                                    FlowStatusPollOutcome.Cancelled -> {
+                                        Log.i("PPassFlow", "Flow status reports cancelled; abandoning this delivery attempt")
+                                        active = null
+                                        return@launch
+                                    }
+                                    FlowStatusPollOutcome.KeepPolling -> {
+                                        delay(nextStatusPollDelayMs(pollDelayIndex))
+                                        pollDelayIndex += 1
+                                        continue
+                                    }
+                                }
+                            }
+                        }
+                        break
                     }
-                    consecutiveStatusFailures = 0
-                    when (val outcome = flowStatusPollOutcome(reply)) {
-                        is FlowStatusPollOutcome.Completed -> {
-                            receipt = outcome.receipt
-                        }
-                        FlowStatusPollOutcome.Cancelled -> {
-                            // Someone (this device's own pause/cancel path,
-                            // or a superseding offer) already told the
-                            // daemon to stop waiting on this exact tuple.
-                            // That is not a failed attempt to retry — the
-                            // local state change already happened wherever
-                            // the cancel originated; just stop tracking it.
-                            Log.i("PPassFlow", "Flow status reports cancelled; abandoning this delivery attempt")
-                            active = null
-                            return@launch
-                        }
-                        FlowStatusPollOutcome.KeepPolling -> {
-                            // Still genuinely in flight. Keep polling — an
-                            // intentionally slow relay path or a large file
-                            // transferring for minutes is exactly the case
-                            // NET-06 exists to no longer punish with a
-                            // fixed timeout.
-                            delay(nextStatusPollDelayMs(pollDelayIndex))
-                            pollDelayIndex += 1
-                            continue
-                        }
-                    }
-                    break
+                } finally {
+                    subscriptionJob.cancel()
                 }
                 require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before receipt" }
                 acceptReceipt(receipt, request)
@@ -446,6 +487,91 @@ internal fun flowStatusPollOutcome(reply: FlowStatusReply): FlowStatusPollOutcom
     }
 
 /**
+ * NET-14: a `flow.delivered`/`flow.failed` push, decoded and matched
+ * against the exact tuple this delivery attempt cares about. `null`
+ * means "not for us" (kind unrecognized, or the tuple identity in the
+ * push doesn't match this attempt's own tuple — e.g. a stale push for a
+ * previous attempt still draining through a subscription this attempt
+ * inherited) — the caller must keep waiting, not treat it as a signal.
+ */
+internal sealed interface FlowPushOutcome {
+    data class Delivered(val receipt: FlowCompletionReceipt) : FlowPushOutcome
+    data class Failed(val code: String) : FlowPushOutcome
+}
+
+/** Thrown when the daemon pushes a terminal failure for this exact tuple
+ *  (as opposed to a transient status()/connect failure) — carries the
+ *  daemon's fixed telemetry code so the log at least names the failure
+ *  class instead of a bare generic message. */
+internal class FlowPushedFailureException(val code: String) :
+    Exception("desktop pushed a terminal flow.failed: $code")
+
+internal fun parseFlowPushOutcome(kind: String, data: JsonObject, tuple: FlowTupleRef): FlowPushOutcome? {
+    val queueSequence = (data["queue_sequence"] as? JsonPrimitive)?.content?.toLongOrNull() ?: return null
+    val pairingEpoch = (data["pairing_epoch"] as? JsonPrimitive)?.content ?: return null
+    val leaseToken = (data["lease_token"] as? JsonPrimitive)?.content ?: return null
+    if (queueSequence != tuple.queueSequence ||
+        pairingEpoch != tuple.pairingEpoch ||
+        leaseToken != tuple.leaseToken
+    ) {
+        return null
+    }
+    return when (kind) {
+        "flow.delivered" -> {
+            val receiptElement = data["receipt"] ?: return null
+            FlowPushOutcome.Delivered(
+                ProtoJson.decodeFromJsonElement(FlowCompletionReceipt.serializer(), receiptElement),
+            )
+        }
+        "flow.failed" -> FlowPushOutcome.Failed((data["code"] as? JsonPrimitive)?.content ?: "unknown")
+        else -> null
+    }
+}
+
+/**
+ * NET-14: the wait loop's next action. Pushes are the primary signal
+ * (default: [KeepWaitingForPush], no network call); [CheckStatusNow] is
+ * the bounded fallback — taken only when the *local* iroh-blobs signal
+ * itself shows no evidence of an in-flight connection, never on a fixed
+ * clock. A slow-but-alive relay/large-file transfer must never be
+ * mistaken for a stalled one just because a push hasn't arrived yet
+ * (card principle: 本地判活优先于任何远端回声).
+ */
+internal sealed interface FlowWaitStep {
+    data class Resolved(val outcome: FlowStatusPollOutcome) : FlowWaitStep
+    object KeepWaitingForPush : FlowWaitStep
+    object CheckStatusNow : FlowWaitStep
+}
+
+internal fun flowWaitStep(
+    pushed: FlowPushOutcome?,
+    localStatus: TransferStatus,
+    idleStallThresholdMs: Long,
+): FlowWaitStep {
+    when (pushed) {
+        is FlowPushOutcome.Delivered -> return FlowWaitStep.Resolved(FlowStatusPollOutcome.Completed(pushed.receipt))
+        is FlowPushOutcome.Failed -> throw FlowPushedFailureException(pushed.code)
+        null -> {}
+    }
+    return when (localStatus) {
+        // The phone's own sender-side event already reached a terminal
+        // fact — confirm it against the daemon's durable receipt (never
+        // trust the local signal alone as a receipt substitute) instead
+        // of waiting out the full push-timeout window for no reason.
+        is TransferStatus.Completed, is TransferStatus.Aborted -> FlowWaitStep.CheckStatusNow
+        // No lease registered locally is itself an inconsistency this
+        // attempt should resolve via the daemon rather than sit on.
+        TransferStatus.NoLease -> FlowWaitStep.CheckStatusNow
+        is TransferStatus.InProgress -> when {
+            localStatus.connected -> FlowWaitStep.KeepWaitingForPush
+            localStatus.idleForMs != null && localStatus.idleForMs >= idleStallThresholdMs ->
+                FlowWaitStep.CheckStatusNow
+            else -> FlowWaitStep.KeepWaitingForPush
+        }
+    }
+}
+
+/**
  * NET-06: status-poll backoff for [NativeFlowDeliveryPort]. Card §期望行为⑤
  * calls for a 5-10s poll interval when no push event has arrived — this is
  * the pure decision function (JVM-testable without a coroutine dispatcher).
@@ -466,3 +592,18 @@ private val STATUS_POLL_DELAYS_MS = longArrayOf(1_000, 2_000, 3_000, 5_000, 8_00
  *  against a daemon that may never come back for this app process's
  *  lifetime. */
 internal const val STATUS_POLL_MAX_CONSECUTIVE_FAILURES = 5
+
+/** NET-14: how long the local iroh-blobs signal may show "in progress,
+ *  nobody connected yet" before this attempt gives up waiting on it and
+ *  checks the daemon directly. This is NOT a transfer-duration timeout —
+ *  a connected, actively-moving transfer never hits this regardless of
+ *  how long it runs (card principle: 耐心给活着的传输，不给挂起的等待).
+ *  30s mirrors NET-09's stall-watchdog window for the same reason: it is
+ *  "no local evidence of life", not a size/speed-based guess. */
+internal const val LOCAL_IDLE_STALL_THRESHOLD_MS = 30_000L
+
+/** NET-14: how often the wait loop re-reads the local iroh-blobs signal
+ *  while no push has arrived and no stall is detected. This never touches
+ *  the network — it is a local field read — so it can be far more
+ *  frequent than the network-bound status-poll backoff without any cost. */
+internal const val LOCAL_STATUS_RECHECK_MS = 500L

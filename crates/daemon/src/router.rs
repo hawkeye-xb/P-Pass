@@ -304,6 +304,25 @@ impl Router {
                                 break; // 写失败 = 连接真的断了
                             }
                         }
+                        // NET-14: 完成/失败推送——只转发给这条订阅所属的那台
+                        // 手机（按 node_id 过滤），不是广播给所有订阅者。
+                        // 这条流原本只推 timeline.invalidated（决策档案 §⑦：
+                        // 不传照片内容），完成回执/失败码不是照片内容，是
+                        // 控制面事实，符合这条流的既有边界。
+                        Ok(v) if matches!(
+                            v.get("event").and_then(|e| e.as_str()),
+                            Some(events::FLOW_DELIVERED) | Some(events::FLOW_FAILED)
+                        ) =>
+                        {
+                            let for_this_peer = v
+                                .get("data")
+                                .and_then(|d| d.get("node_id"))
+                                .and_then(|n| n.as_str())
+                                == Some(peer.to_string().as_str());
+                            if for_this_peer && self.send_push(stream, &v).await.is_err() {
+                                break;
+                            }
+                        }
                         Ok(_) => continue, // 只推 timeline.invalidated，别的事件不转发
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,

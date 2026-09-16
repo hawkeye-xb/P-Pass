@@ -138,6 +138,61 @@ async fn subscribe_relays_a_real_broadcast_event() {
     assert_eq!(v["event"], TIMELINE_INVALIDATED);
 }
 
+// NET-14: `flow.delivered`/`flow.failed` must reach exactly the phone the
+// event names — this test exercises the real QUIC subscribe stream (not
+// just the router's internal decision) and a second, unrelated phone that
+// must see neither of these two events on its own subscription.
+#[tokio::test(flavor = "multi_thread")]
+async fn flow_delivered_reaches_only_the_named_phone() {
+    let f = setup().await;
+    let mut mine = subscribe(&f).await;
+
+    let other_tp = endpoint().await;
+    other_tp.add_peer(f.storage_tp.local_addr());
+    f.db.upsert_device(&member(&other_tp.node_id()))
+        .await
+        .unwrap();
+    let other_fixture = Fixture {
+        storage_tp: f.storage_tp.clone(),
+        client_tp: other_tp,
+        db: f.db.clone(),
+        subscriptions: f.subscriptions.clone(),
+        event_bus: f.event_bus.clone(),
+        serve_task: tokio::spawn(async {}),
+        dir: tempfile::tempdir().unwrap(),
+    };
+    let mut theirs = subscribe(&other_fixture).await;
+
+    daemon::events::emit(
+        &f.event_bus,
+        daemon::events::FLOW_DELIVERED,
+        serde_json::json!({
+            "node_id": f.client_tp.node_id().to_string(),
+            "queue_sequence": 7,
+        }),
+    );
+
+    let frame = mine
+        .recv_frame()
+        .await
+        .unwrap()
+        .expect("the named phone must see flow.delivered");
+    let v: serde_json::Value = proto::codec::decode(&frame).unwrap();
+    assert_eq!(v["event"], daemon::events::FLOW_DELIVERED);
+    assert_eq!(v["data"]["node_id"], f.client_tp.node_id().to_string());
+
+    // The other phone's subscription must NOT receive this event — give it
+    // a bounded window with nothing else on the bus, then confirm the read
+    // times out (still open, just nothing arrived) rather than delivering
+    // someone else's flow.delivered.
+    let leaked =
+        tokio::time::timeout(std::time::Duration::from_millis(300), theirs.recv_frame()).await;
+    assert!(
+        leaked.is_err(),
+        "an unrelated phone's subscription must not receive another phone's flow.delivered"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn revoke_actively_closes_an_open_subscription() {
     let f = setup().await;

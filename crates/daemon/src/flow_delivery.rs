@@ -546,9 +546,17 @@ impl FlowDelivery {
                 _ = token.cancelled() => None,
             };
             match outcome {
-                Some(Ok(_)) => {} // the durable receipt was already written inside run_fetch_body
+                Some(Ok(receipt)) => {
+                    // NET-14: push the completion fact instead of waiting for
+                    // the phone's next status() poll to discover it — the
+                    // durable receipt was already written inside
+                    // run_fetch_body; this is purely a "hurry up and tell
+                    // the phone" notification, never the source of truth.
+                    delivery.emit_flow_delivered(peer, &grant, &receipt);
+                }
                 Some(Err(error)) => {
                     tracing::warn!("flow delivery background task for {peer:?} failed: {error}");
+                    delivery.emit_flow_failed(peer, &grant, &error);
                 }
                 None => {
                     tracing::debug!(
@@ -558,6 +566,46 @@ impl FlowDelivery {
             }
             delivery.tasks.unregister(&key, generation);
         });
+    }
+
+    /// NET-14: best-effort push — `self.events` is `None` in tests/single-
+    /// component construction (same contract as `emit_device_changed`), and
+    /// even in production a dropped subscription just means the phone falls
+    /// back to its next `status()` poll (the recipient-side rule this card
+    /// establishes: push accelerates, it is never the only path).
+    fn emit_flow_delivered(
+        &self,
+        peer: NodeId,
+        grant: &FlowGrant,
+        receipt: &FlowCompletionReceipt,
+    ) {
+        let Some(events) = &self.events else { return };
+        crate::events::emit(
+            events,
+            crate::events::FLOW_DELIVERED,
+            serde_json::json!({
+                "node_id": peer.to_string(),
+                "queue_sequence": grant.queue_sequence,
+                "pairing_epoch": grant.pairing_epoch,
+                "lease_token": grant.lease_token,
+                "receipt": receipt,
+            }),
+        );
+    }
+
+    fn emit_flow_failed(&self, peer: NodeId, grant: &FlowGrant, error: &DeliveryError) {
+        let Some(events) = &self.events else { return };
+        crate::events::emit(
+            events,
+            crate::events::FLOW_FAILED,
+            serde_json::json!({
+                "node_id": peer.to_string(),
+                "queue_sequence": grant.queue_sequence,
+                "pairing_epoch": grant.pairing_epoch,
+                "lease_token": grant.lease_token,
+                "code": error.telemetry_code(),
+            }),
+        );
     }
 
     /// The actual native-fetch → materialize → ingest → durable-receipt

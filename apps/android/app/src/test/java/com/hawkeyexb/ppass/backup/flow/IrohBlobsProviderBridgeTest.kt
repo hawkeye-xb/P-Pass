@@ -119,5 +119,7 @@ class IrohBlobsProviderBridgeTest {
         override fun revoke(hash: String) {
             events += "revoke:$hash"
         }
+
+        override fun transferStatus(): String = "{\"state\":\"no_lease\"}"
     }
 }

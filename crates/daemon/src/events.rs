@@ -34,6 +34,16 @@ pub const DEVICE_CHANGED: &str = "device.changed";
 /// 时间线可能已变化（ingest/对账）——不带数据，只是"该刷新了"的 ping。
 /// SYNC-02（docs/product/2026-08-12-metadata-sync-decisions.md §②③④⑤）。
 pub const TIMELINE_INVALIDATED: &str = "timeline.invalidated";
+/// NET-14: 一次 Flow 交付任务真正完成——desktop 已经写完账本、有回执。
+/// 携带 `node_id`（forwarding 时按此过滤，只推给订阅的那一台手机）+ 完整
+/// tuple + receipt。手机侧订阅这个事件，不必再靠轮询 `flow.status` 发现
+/// 完成——轮询只作为这个推送丢失时的兜底（AGENTS.md 设计纪律：推送为主，
+/// 轮询为加速器/兜底，不是反过来）。
+pub const FLOW_DELIVERED: &str = "flow.delivered";
+/// NET-14: 一次 Flow 交付任务终态失败（`spawn_fetch_task` 的后台任务返回
+/// Err，且不是被 suspend/cancel 打断）。携带 `node_id` + tuple + 错误码，
+/// 语义与 `FLOW_DELIVERED` 对称。
+pub const FLOW_FAILED: &str = "flow.failed";
 
 /// [`Throttle`] 默认合并窗口——窗口内多次 [`Throttle::signal`] 只发一次，
 /// 窗口到点必发（不是防抖：防抖会在持续到达场景下让用户整批传输期间

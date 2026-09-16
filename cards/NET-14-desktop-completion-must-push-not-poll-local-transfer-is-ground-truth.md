@@ -158,3 +158,52 @@ L3 真机硬门可与 NET-06 的蜂窝热点窗口合并执行，同一验收人
 - NET-06 卡内「期望行为⑤」的原文已经写了"推送为加速、轮询为兜底"，
   本卡不是新方向，是把当初漏掉的一半接上，同时把"轮询"的语义从"定期
   主动问"收窄为"仅在本地信号异常时问一次"。
+
+## 实施记录
+
+- 2026-09-16：三步全部代码完成，`just ci` 全绿,Android JVM 全量绿。
+
+  **步骤①（Rust 本地活性信号）**：`crates/transport/src/android_blobs.rs`
+  新增 `ActiveTransferStatus`（`NoLease`/`InProgress{connected,idle_for}`/
+  `Completed{hash}`/`Aborted{hash}`）+ `TransferActivity` 从 iroh-blobs
+  自身 provider 事件（`GetRequestReceivedNotify`/`RequestUpdate` 流）填充，
+  `BlobsProtocol::new(store, None)` 的 `None` 改为真实接入。新增 JNI 导出
+  `nativeTransferStatus`（JSON 字符串）。测试：2 个真实 loopback 传输集成
+  测试（`crates/transport/tests/android_provider.rs`），含反证（临时关闭
+  完成检测确认真红）。
+
+  **步骤②（daemon → 手机推送）**：`crates/daemon/src/events.rs` 新增
+  `FLOW_DELIVERED`/`FLOW_FAILED` 常量；`flow_delivery.rs` 的
+  `spawn_fetch_task` 后台任务终态时调用 `emit_flow_delivered`/
+  `emit_flow_failed`（带 `node_id`/tuple/receipt 或错误码）；
+  `router.rs` 的 `serve_subscription` 按 `node_id` 过滤转发（只推给事件
+  所属的那台手机,不广播）。测试：`flow_delivery.rs` 新增
+  `failed_background_fetch_pushes_flow_failed_with_node_id_and_tuple`
+  （真实网络失败场景）+ 更新 `successful_flow_fetch_notifies_the_desktop_timeline`
+  断言新事件；`subscribe_flow.rs` 新增
+  `flow_delivered_reaches_only_the_named_phone`（两台真实手机的 QUIC
+  订阅连接，验证不会互相看到对方的事件）。两处均做过反证（临时禁用
+  emit/过滤，确认真红）。daemon 侧合计 26+4=30 个测试全绿。
+
+  **步骤③（Android 发现循环重写）**：`IrohBlobsProviderBridge.kt` 新增
+  `TransferStatus` 密封类 + `parseTransferStatus()` 纯解码函数 +
+  `transferStatus()` 桥接方法；`DaemonClient.subscribeTimeline` 新增
+  `onFlowEvent` 回调（复用同一条 `timeline.subscribe` 连接，daemon 侧已经
+  按 node_id 过滤，这里不需要二次过滤）。`NativeFlowDeliveryPort.kt` 的
+  `start()` 循环整体重写：新增 `FlowPushOutcome`/`parseFlowPushOutcome`
+  （推送与本次 tuple 匹配)、`FlowWaitStep`/`flowWaitStep`（推送优先 >
+  本地信号判活 > 超时兜底问一次的纯决策函数)。实际循环：并行开一条
+  订阅连接接收推送，每次判断都读本地 `bridge.transferStatus()`；
+  `connected=true` 时无限期耐心等待（不受任何固定时钟约束)；本地信号
+  转为"空闲超过 30s 阈值"或推送到达时才解决/兜底问一次 `status()`。
+  测试：新增 `NET14PushFirstDeliveryTest.kt`（17 个用例，覆盖
+  `parseTransferStatus`/`parseFlowPushOutcome`/`flowWaitStep` 全部分支，
+  含"connected 时哪怕 idle 到 999999ms 也绝不判定异常"这条核心反直觉
+  用例)，`IrohBlobsProviderBridgeTest.kt` 补充 fixture。反证：临时注释
+  掉"本地 completed/aborted 状态应兜底核实"分支，确认新测试真红后
+  恢复。Android JVM 全量 **395 tests / 0 failures**（基线 378 + 本卡
+  17 条新用例，79 个 XML 时间戳为本次生成）；`assembleDebug` 绿。
+
+  **未做（下一步，真机回归前置）**：真机验证（三星热点大文件、拔线/
+  断网中途场景）、NET-12 后台存活期间订阅连接是否稳定的长时验证——
+  这些是本卡验收标准里的真机项，代码侧已具备验证条件，等验收人窗口。

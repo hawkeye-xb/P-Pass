@@ -171,7 +171,7 @@ class TimelineLoader(
      */
     suspend fun subscribe(onConnected: suspend () -> Unit = {}, onInvalidated: suspend () -> Unit) {
         ensureBound()
-        client.subscribeTimeline(daemon, onConnected, onInvalidated)
+        client.subscribeTimeline(daemon, onConnected = onConnected, onInvalidated = onInvalidated)
     }
 
     suspend fun page(cursor: String?): TimelinePage {

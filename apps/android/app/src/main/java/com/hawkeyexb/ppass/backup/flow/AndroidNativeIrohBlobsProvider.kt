@@ -29,6 +29,8 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
         nativeRevoke(handle)
     }
 
+    override fun transferStatus(): String = nativeTransferStatus(handle)
+
     override fun close() {
         nativeClose(handle)
     }
@@ -52,6 +54,9 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
 
         @JvmStatic
         external fun nativeRevoke(handle: Long)
+
+        @JvmStatic
+        external fun nativeTransferStatus(handle: Long): String
 
         @JvmStatic
         external fun nativeClose(handle: Long)
