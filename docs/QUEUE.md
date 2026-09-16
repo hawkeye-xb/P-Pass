@@ -118,7 +118,6 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
 | P0 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，历史 cancel 已 restore；重放 receipt 与 discovery wake 交错并对账未确认项，禁止沿用旧瞬态失败根因 | L1 |
-| P1 | [NET-20](../cards/NET-20-flow-offer-must-presence-check-before-fetching-bytes.md) | Flow 单通道 `offer` 缺传输前哈希对齐：内容已存在也整份重传字节，事后才靠 ingest 去重；2026-09-16 对话核实为 NET-06 重构漏项，直接影响传输体验 | L1 |
 | P1 | [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | 🟡 剩余 5 项验收缺口已全部拆成独立子卡（NET-15~19），本卡待子卡全部归档后才能一并归档；**不再可单独领取**，去认领对应子卡 | L2 |
 | P1 | [NET-15](../cards/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md) | daemon 崩溃后 grant Active 但无运行任务，`status()` 需检测并重新拉起交付（断点续传，非从零）；NET-06 拆出 | L1 |
 | P1 | [NET-16](../cards/NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md) | completed 后重复 status/fetch 必须零重传字节的直接断言（防未来防御性代码悄悄二次拉取）；NET-06 拆出 | L1 |
@@ -166,7 +165,8 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
-| [NET-21](../cards/done/NET-21-flow-staging-orphan-sweep.md) | flow-staging 装卸台无孤儿回收（materialize 失败/cancel/崩溃留下的中转文件无人清）；复用旧 `sweep_orphans` 模式接 `active_flow_content_hashes` 保护集，启动+每小时巡检；本地单测 10/10（5 新增+反证成立）+ `just ci` 全绿；未做真机长跑验证 | 无——磁盘泄漏点已堵，真机验证欠账见卡内 |
+| [NET-20](../cards/done/NET-20-flow-offer-must-presence-check-before-fetching-bytes.md) | Flow 单通道 `offer` 补传输前哈希对齐：`Ingestor::has_durable_copy` + `offer_inner` 短路，命中已存在内容不再发起 iroh-blobs 抓取，直接复用现有 `complete_flow_grant` 完成路径（不新增协议字段，手机侧零改动）；RED 先行 2 条集成测试+1 条反证（去掉短路后状态从"立即 completed"变"active"）；`cargo test -p daemon --test flow_delivery` 28/28、`cargo test -p core-index` 全绿、`just ci` 全绿 | 无——大文件/重复内容白传的效率缺口已堵，未做真机验证 |
+| [NET-21](../cards/done/NET-21-flow-staging-orphan-sweep.md) | flow-staging 装卸台无孤儿回收（materialize 失败/cancel/崩溃留下的中转文件无人清）；复用旧 `sweep_orphans` 模式接 `active_flow_content_hashes` 保护集，启动+每小时巡检；本地单测 10/10（5 新增+反证成立）+ `just ci` 全绿；新增 `tools/verify-flow-staging-gc.sh` 供用户自行验证（只读检查真实库 + `--dry-run` 隔离沙盒调用生产函数）；未做真机长跑验证 | 无——磁盘泄漏点已堵，验证脚本已附，真机长跑欠账见卡内 |
 | [DESK-12](../cards/done/DESK-12-flow-ingest-loses-capture-date.md) | Flow 摄入保留照片拍摄时间；2026-09-15 真机复核追加两轮修复（EXIF OffsetTime 时区解析、飞书图无 EXIF/DATE_TAKEN 时退到 DATE_ADDED），验收人实测通过 | 无——摄入时间归属问题已闭环 |
 | [NET-13](../cards/done/NET-13-device-list-status-id-column-open-folder.md) | 桌面「家人与设备」备份状态误报根因修复（Flow 路径从不写遗留水位表，last_backup_at 改读真实 asset ingest 时间）+ ID 列 + 打开设备目录 + 在线态独立列；本机重装真机验证，真实库 5 台设备中 4 台 `asset_cnt>0` 但 `backup_watermark` 全空，改前会误判、改后显示真实备份时间，截图核实 | 无——设备状态误报根因已修复 |
 | [MOB-66](../cards/done/MOB-66-android-brand-font-newsreader-manrope.md) | 三星 SM-S9210 真机 2026-09-14：标题（欢迎页、备份页大数字）为 Newsreader 衬线体，正文/汉字为 Manrope/Noto Sans SC 无衬线体，两者视觉差异明显；11 处硬编码 `FontFamily.Serif` 全部替换 | 无——品牌字体缺口已闭环 |

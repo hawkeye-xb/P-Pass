@@ -6,6 +6,25 @@
 > 「为什么不能按整个 `.ppf` 目录巡检」的追问促成本次快速修复，非真机验收，
 > 仅本地测试 + `just ci`。
 
+## 验证脚本（用户可自行确认，不必等真机回归）
+
+`tools/verify-flow-staging-gc.sh` 提供两种验证方式：
+
+- **只读检查真实库**（默认）：`./tools/verify-flow-staging-gc.sh` ——
+  报告 `~/Library/Application Support/P-Pass/.ppf/flow-staging` 现有
+  文件数、大小，标出哪些已超过 1 小时宽限期理论上该被下一轮巡检收走。
+  可加 `--library-root <path>` 指向别的库（比如
+  `~/Pictures/P-Pass 家庭照片库`）。
+- **隔离沙盒模拟全流程**：`./tools/verify-flow-staging-gc.sh --dry-run`——
+  在 `/tmp` 下建一个临时目录，放 3 个文件（孤儿/有主/刚落地各一个），
+  直接调用生产代码里的 `daemon::sweep_flow_staging_orphans`（不是重新
+  写一遍判据去测），断言：孤儿被清、有主的和刚落地的都保留。全程不碰
+  真实库或运行中的 daemon 进程，退出码 0 = 全部符合预期。
+
+日常怀疑"是不是又开始泄漏了"时，先跑只读检查；怀疑"回收逻辑本身是不是
+坏了"时跑 `--dry-run`（它验证的是生产函数本身，不是脚本自己糊的逻辑）。
+本地已跑通两种模式，输出附在卡片实施记录。
+
 ## 问题
 
 Flow 单通道（`flow_delivery.rs`）把 iroh-blobs 拉到的字节先 `export_to`
