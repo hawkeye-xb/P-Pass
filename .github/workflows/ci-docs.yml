@@ -1,0 +1,54 @@
+# CI-01③c: docs 域——队列索引完整性 + 归档出口门禁。
+#
+# 为什么要单开这条 lane（2026-09-16）：`just ci` 里的 queue-check 一直只在
+# **本地**跑。CI 的域分块 paths 全部指向代码目录（crates/** / apps/** /
+# infra/workers/**），没有任何 workflow 监听 docs/** 或 cards/**——于是
+# 「纯文档/卡片提交零 CI 触发」这条便利同时意味着：**动 docs/QUEUE.md 和
+# cards/ 的提交，队列门禁一次都不会跑**。归档出口（check-queue-sync.sh 的
+# 3/3 段）如果只有本地约束，就又回到「靠人记得跑 just ci」，与它想解决的
+# 问题同型。本 lane 把它变成真门禁。
+#
+# 成本：无编译、无缓存、只有 bash + python3，秒级。所以 paths **刻意包含
+# 本文件自身**（与 ci-workers.yml 相反——那条含自身会堆积等审批的生产部署
+# run，本条没有审批门也没有副作用，含自身才能让改门禁的提交自己被门禁跑到）。
+name: CI Docs
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/QUEUE.md"
+      - "cards/**"
+      - "tools/check-queue-sync.sh"
+      - "tools/test-queue-archive-gate.sh"
+      - ".github/workflows/ci-docs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/QUEUE.md"
+      - "cards/**"
+      - "tools/check-queue-sync.sh"
+      - "tools/test-queue-archive-gate.sh"
+      - ".github/workflows/ci-docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  queue:
+    name: queue-sync + 归档出口门禁
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # 全 pin commit SHA（CI 重构③，2026-08-23）：供应链攻击面归零。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: queue-sync（根卡登记 / 悬空链接 / 归档出口）
+        run: bash tools/check-queue-sync.sh
+      # 反证与门禁同生共死：门禁退化成恒真式时这一步必须先红。
+      - name: 归档出口门禁的反证
+        run: bash tools/test-queue-archive-gate.sh
