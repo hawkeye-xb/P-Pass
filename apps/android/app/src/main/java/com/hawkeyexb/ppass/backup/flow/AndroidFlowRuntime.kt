@@ -441,6 +441,11 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
             constraintsProvider = { flowConstraintsSatisfied(context) },
             tupleCanceller = tupleCanceller,
         )
+        // A lease left over from a previous process life (this process was
+        // just constructed for this epoch) cannot be trusted as a live
+        // transfer — see reconcileProcessStart's doc for why wake() alone
+        // can never recover from it.
+        runner.reconcileProcessStart()
         val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val auditDispatcher = AuditOutboxDispatcher(
             ledger = ledger,

@@ -143,6 +143,7 @@ class NET14PushFirstDeliveryTest {
             pushed = FlowPushOutcome.Delivered(receipt),
             localStatus = TransferStatus.InProgress(connected = false, idleForMs = 99_999L),
             idleStallThresholdMs = 30_000L,
+            attemptElapsedMs = 0L,
         )
         assertEquals(
             FlowWaitStep.Resolved(FlowStatusPollOutcome.Completed(receipt)),
@@ -157,6 +158,7 @@ class NET14PushFirstDeliveryTest {
                 pushed = FlowPushOutcome.Failed("fetch_failed"),
                 localStatus = TransferStatus.InProgress(connected = true, idleForMs = 0L),
                 idleStallThresholdMs = 30_000L,
+                attemptElapsedMs = 0L,
             )
             throw AssertionError("expected FlowPushedFailureException")
         } catch (failure: FlowPushedFailureException) {
@@ -173,6 +175,7 @@ class NET14PushFirstDeliveryTest {
             pushed = null,
             localStatus = TransferStatus.InProgress(connected = true, idleForMs = 999_999L),
             idleStallThresholdMs = 30_000L,
+            attemptElapsedMs = 999_999L,
         )
         assertEquals(FlowWaitStep.KeepWaitingForPush, step)
     }
@@ -183,6 +186,7 @@ class NET14PushFirstDeliveryTest {
             pushed = null,
             localStatus = TransferStatus.InProgress(connected = false, idleForMs = 10_000L),
             idleStallThresholdMs = 30_000L,
+            attemptElapsedMs = 10_000L,
         )
         assertEquals(FlowWaitStep.KeepWaitingForPush, step)
     }
@@ -193,6 +197,41 @@ class NET14PushFirstDeliveryTest {
             pushed = null,
             localStatus = TransferStatus.InProgress(connected = false, idleForMs = 30_001L),
             idleStallThresholdMs = 30_000L,
+            attemptElapsedMs = 30_001L,
+        )
+        assertEquals(FlowWaitStep.CheckStatusNow, step)
+    }
+
+    @Test
+    fun disconnected_with_no_activity_ever_but_still_under_the_stall_threshold_keeps_waiting() {
+        // A brand-new transfer starts exactly here: connected=false,
+        // idleForMs=null (no iroh-blobs event has fired yet because the
+        // daemon has not connected yet). Must NOT be treated as stalled
+        // just because idleForMs is null — only the attempt's own elapsed
+        // time may promote this to a status check.
+        val step = flowWaitStep(
+            pushed = null,
+            localStatus = TransferStatus.InProgress(connected = false, idleForMs = null),
+            idleStallThresholdMs = 30_000L,
+            attemptElapsedMs = 5_000L,
+        )
+        assertEquals(FlowWaitStep.KeepWaitingForPush, step)
+    }
+
+    @Test
+    fun disconnected_with_no_activity_ever_past_the_stall_threshold_falls_back_to_status_check() {
+        // NET: a grant the daemon completed without ever touching the data
+        // plane (content-already-exists dedup, or a rebind of an
+        // already-completed tuple) never fires a single iroh-blobs event on
+        // this phone's sender side — idleForMs stays null forever, not just
+        // at the start. Without this branch the attempt hangs forever
+        // whenever the flow.delivered push is also missed (real device,
+        // 2026-09-16).
+        val step = flowWaitStep(
+            pushed = null,
+            localStatus = TransferStatus.InProgress(connected = false, idleForMs = null),
+            idleStallThresholdMs = 30_000L,
+            attemptElapsedMs = 30_001L,
         )
         assertEquals(FlowWaitStep.CheckStatusNow, step)
     }
@@ -201,7 +240,12 @@ class NET14PushFirstDeliveryTest {
     fun no_lease_locally_falls_back_to_status_check() {
         // No local registration at all is itself an inconsistency this
         // attempt should resolve via the daemon, not sit on indefinitely.
-        val step = flowWaitStep(pushed = null, localStatus = TransferStatus.NoLease, idleStallThresholdMs = 30_000L)
+        val step = flowWaitStep(
+            pushed = null,
+            localStatus = TransferStatus.NoLease,
+            idleStallThresholdMs = 30_000L,
+            attemptElapsedMs = 0L,
+        )
         assertEquals(FlowWaitStep.CheckStatusNow, step)
     }
 
@@ -214,6 +258,7 @@ class NET14PushFirstDeliveryTest {
             pushed = null,
             localStatus = TransferStatus.Completed("d".repeat(64)),
             idleStallThresholdMs = 30_000L,
+            attemptElapsedMs = 0L,
         )
         assertEquals(FlowWaitStep.CheckStatusNow, step)
     }

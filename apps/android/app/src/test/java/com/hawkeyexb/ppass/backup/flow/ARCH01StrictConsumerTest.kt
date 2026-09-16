@@ -25,10 +25,12 @@ class ARCH01StrictConsumerTest {
 
     private class FakeDeliveryPort : DeliveryPort {
         val starts = mutableListOf<Long>()
+        val startedItems = mutableListOf<TransferItem>()
         val stops = mutableListOf<Long>()
 
         override fun start(item: TransferItem, resumePartial: Boolean, lease: FetchLease) {
             starts += item.queueSequence
+            startedItems += item
         }
 
         override fun stop(queueSequence: Long): PartialDisposition {
@@ -230,6 +232,86 @@ class ARCH01StrictConsumerTest {
 
         StrictConsumer(DiscoveryLedgerStore(dir), port).wake(constraintsSatisfied = true)
         assertEquals("C-05 may start #19 only after #18 is terminal", listOf(1L, 1L, 1L, 2L), port.starts)
+        dir.deleteRecursively()
+    }
+
+    // 2026-09-16 real device (Samsung SM-S9210): a mid-offer `am force-stop`
+    // left a FetchLease durably persisted with no live delivery behind it.
+    // `adb install -r` preserves app data, so the orphan survived a reinstall
+    // too — wake()'s `fetchLease != null` short-circuit spun to IDLE forever,
+    // no PPassFlow log line, no offer, no retry. reconcileProcessStart() is
+    // the fix: called once per fresh process life, before the first wake(),
+    // it treats any lease found at that moment as unproven and demotes it
+    // back to QUEUED so the very next wake() can lease and (re)send it.
+    @Test
+    fun net_orphan_lease_from_a_dead_process_life_is_reclaimed_on_next_process_start() {
+        val dir = tempDir("net-orphan-lease")
+        val port = FakeDeliveryPort()
+        val diedMidOffer = StrictConsumer(seededStore(dir), port)
+        diedMidOffer.wake(constraintsSatisfied = true) // leases #18, "starts" it, then this process dies
+
+        val orphaned = DiscoveryLedgerStore(dir).load()
+        assertEquals("sanity: the dead process left a lease behind", FetchLease(1L, "lease-1"), orphaned.fetchLease)
+        assertEquals(DeliveryState.TRANSFERRING, orphaned.items.single { it.queueSequence == 1L }.deliveryState)
+
+        // A fresh process life reconstructs AndroidFlowRuntime and must call
+        // this before its first wake() — see AndroidFlowRuntime.runtimeFor.
+        val revived = StrictConsumer(DiscoveryLedgerStore(dir), port)
+        revived.reconcileProcessStart()
+        val reconciled = DiscoveryLedgerStore(dir).load()
+        assertEquals("the orphan lease is cleared, not left to block forever", null, reconciled.fetchLease)
+        assertEquals(DeliveryState.QUEUED, reconciled.items.single { it.queueSequence == 1L }.deliveryState)
+
+        revived.wake(constraintsSatisfied = true)
+        assertEquals("the reconciled head is re-offered, not skipped", listOf(1L, 1L), port.starts)
+        dir.deleteRecursively()
+    }
+
+    // reconcileProcessStart cannot tell an orphan (dead process) apart from a
+    // genuinely in-flight lease by ledger state alone — both look identical
+    // (fetchLease present, item TRANSFERRING). Its safety comes entirely from
+    // WHEN production calls it: exactly once, at AndroidFlowRuntime
+    // construction, strictly before that process life's first wake() — see
+    // AndroidFlowRuntime.runtimeFor. It must never be called again during
+    // that same process life.
+    @Test
+    fun net_reconcile_process_start_with_no_lease_is_a_pure_noop() {
+        val dir = tempDir("net-no-lease")
+        val port = FakeDeliveryPort()
+        val consumer = StrictConsumer(seededStore(dir), port)
+        val before = DiscoveryLedgerStore(dir).load()
+
+        consumer.reconcileProcessStart()
+
+        assertEquals(before, DiscoveryLedgerStore(dir).load())
+        dir.deleteRecursively()
+    }
+
+    // 2026-09-16 real device (Samsung SM-S9210): wake() persisted
+    // deliveryState=TRANSFERRING for the leased item, then handed
+    // DeliveryPort.start() the pre-update `head` (still QUEUED, data
+    // classes are immutable). NativeFlowDeliveryPort.start() does its own
+    // ledger.update, copying the `item` it was given and writing that
+    // whole copy back — clobbering the TRANSFERRING back to QUEUED right
+    // after wake() set it. fetchLease itself stayed correct, so the
+    // transfer was never double-started, but FlowUiProjection reads
+    // deliveryState to pick the "currently uploading" item for the
+    // progress UI — so a genuinely in-flight transfer never showed as
+    // transferring, indistinguishable from stuck.
+    @Test
+    fun net_wake_hands_delivery_start_the_already_transferring_item_not_the_stale_queued_snapshot() {
+        val dir = tempDir("net-transferring-handoff")
+        val port = FakeDeliveryPort()
+        val consumer = StrictConsumer(seededStore(dir), port)
+
+        consumer.wake(constraintsSatisfied = true)
+
+        assertEquals(
+            "delivery.start() must see TRANSFERRING, or its own ledger.update " +
+                "silently clobbers wake()'s TRANSFERRING write back to QUEUED",
+            DeliveryState.TRANSFERRING,
+            port.startedItems.single().deliveryState,
+        )
         dir.deleteRecursively()
     }
 }
