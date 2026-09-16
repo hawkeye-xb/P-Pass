@@ -11,7 +11,13 @@
 > 本机路径 / 设备 / 本地命令不在这里——它们在 `local-state.md`
 > （开发机本地文件，不进 git）。
 >
-> 最后核对：**2026-09-16**（核对远端最近提交发现 DESK-12 卡内已标「已关闭」
+> 最后核对：**2026-09-16**（用户反馈"进行中"卡挂僵尸——NET-06 讨论中拆出
+> NET-14 处理后，NET-06 自身仍挂「进行中」但无人认领，导致下次对齐反复
+> 撞见同一张卡。已按新增的 AGENTS.md「任务状态诚实与拆分纪律」全面整改：
+> 「进行中」区清空为常态空表；NET-06 剩余 5 项验收缺口拆成独立子卡
+> NET-15~19，各自可独立认领验收，完成后回写勾掉 NET-06 对应项，NET-06
+> 待全部子卡归档后再一并归档；MOB-54 同样从「进行中」移入「可接队列」，
+> 横幅注明当前无人认领。此前一轮：核对远端最近提交发现 DESK-12 卡内已标「已关闭」
 > 但队列未同步，已挪入已完成区并移卡到 `cards/done/`。NET-14 同 WiFi 真机
 > 冒烟通过，移入「待共享回归」等三星热点/relay/NET-12 长期存活三项硬门；
 > 同轮真机会话新发现相册选择页渲染错乱开卡 MOB-84，入「可接队列」。上一轮
@@ -58,8 +64,11 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，历史 cancel 已 restore；重放 receipt 与 discovery wake 交错并对账未确认项，禁止沿用旧瞬态失败根因 | L1 / P0 |
-| [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | NET-01 根治：Flow 交付 202 异步化 + `flow.status`/`flow.suspend` 对账门 + 暂停/继续/取消控制面语义；三轮 review 后开工 | L2 |
+
+> 空表是常态，不是漏填：本节只在**当前会话里真的有人在盯着改**时才填一行；
+> 会话结束/转做别的卡后必须清空挪回下面对应分区，不许挂着「进行中」但无人
+> 认领（AGENTS.md「任务状态诚实与拆分纪律」，2026-09-16 事故：NET-06 挂
+> 「进行中」实际无人处理，导致下次对齐反复撞见同一张卡）。
 
 ---
 
@@ -105,6 +114,13 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P0 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，历史 cancel 已 restore；重放 receipt 与 discovery wake 交错并对账未确认项，禁止沿用旧瞬态失败根因 | L1 |
+| P1 | [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | 🟡 剩余 5 项验收缺口已全部拆成独立子卡（NET-15~19），本卡待子卡全部归档后才能一并归档；**不再可单独领取**，去认领对应子卡 | L2 |
+| P1 | [NET-15](../cards/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md) | daemon 崩溃后 grant Active 但无运行任务，`status()` 需检测并重新拉起交付（断点续传，非从零）；NET-06 拆出 | L1 |
+| P1 | [NET-16](../cards/NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md) | completed 后重复 status/fetch 必须零重传字节的直接断言（防未来防御性代码悄悄二次拉取）；NET-06 拆出 | L1 |
+| P1 | [NET-17](../cards/NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md) | materialize 前后各发一次 cancel/suspend，两方向终态需确定性验证（先过 complete_flow_grant 者赢）；NET-06 拆出 | L1 |
+| P1 | [NET-18](../cards/NET-18-legacy-phone-and-desktop-fallback-path-verification.md) | 旧手机（只用 fetch）+ 旧桌面（不认 flow.status）两条降级路径专门验证；NET-06 拆出 | L1 |
+| P1 | [NET-19](../cards/NET-19-android-no-competing-offer-and-pause-does-not-observe.md) | offer 只调一次的断言 + 暂停路径零查询对端的断言；NET-06 拆出 | L1 |
 | P1 | [NET-07](../cards/NET-07-split-timeouts-by-call-kind-transitional.md) | 过渡止血：超时按 建连/控制/fetch 分档（NET-06 合入后评估回退）；与 NET-06 并行 | L1 |
 | P1 | [NET-08](../cards/NET-08-audit-repo-for-sync-wait-weld-points.md) | 🟡 普查完成（2026-09-14，清单在卡内）：焊点全登记，衍生 NET-09/10/11、TEL-05 四张后续卡；本卡待后续卡闭环后归档，不再可领 | L2 |
 | P1 | [NET-09](../cards/NET-09-data-plane-stall-watchdog-for-long-transfers.md) | 长数据面加字节停滞看门狗（downloadAsset 无界挂起 / APK 下载死因不可辨 / daemon upload 收流）；NET-08 产出 | L1 |
