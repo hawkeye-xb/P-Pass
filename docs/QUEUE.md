@@ -55,6 +55,7 @@ UI-04a 真机回归后用户反馈"状态不对"、具体点待用户说明，�
 |---|---|---|
 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：当前没有 delivery failed，历史 cancel 已 restore；重放 receipt 与 discovery wake 交错并对账未确认项，禁止沿用旧瞬态失败根因 | L1 / P0 |
 | [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | NET-01 根治：Flow 交付 202 异步化 + `flow.status`/`flow.suspend` 对账门 + 暂停/继续/取消控制面语义；三轮 review 后开工 | L2 |
+| [NET-14](../cards/NET-14-desktop-completion-must-push-not-poll-local-transfer-is-ground-truth.md) | 传输完成发现机制返工：本地 iroh 连接活性判活/判异常 + desktop 完成事件走推送 + 超时才兜底问一次，替换 NET-06 现有纯轮询实现；2026-09-16 验收人逐层讨论定稿，本次会话已开工 | L2 |
 
 ---
 
