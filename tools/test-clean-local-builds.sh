@@ -7,16 +7,43 @@ cleanup_script="$script_dir/clean-local-builds.sh"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/ppass-clean-local.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
+# DEV-03: 断言必须真的能让测试失败。
+# 原来每条断言都是裸 `[[ ... ]]`，依赖 `set -e` 中断——但在 macOS 自带的
+# bash 3.2 下，失败的裸 `[[ ]]` **不触发 errexit**，脚本照常往下跑并以 0
+# 退出。实测：本文件的全部断言一直是空转的，连「正在构建的 worktree 被
+# 删掉」这种安全回归都照样报 ok。与 QA-02 记录的「变异 C 空转」同型。
+fail() { printf 'ASSERT FAILED: %s\n' "$1" >&2; exit 1; }
+
+
 remote="$tmp/remote.git"
 repo="$tmp/repo"
 
 git init --bare "$remote" >/dev/null
-git clone "$remote" "$repo" >/dev/null
+# --template= forces an empty hook template. Without it the fixture inherits
+# whatever init.templateDir points at on the developer's machine, and a
+# machine-local identity-allowlist pre-commit hook then rejects the fixture's
+# deliberately fake identity below — the test would fail for reasons that have
+# nothing to do with what it tests. Fixture commits also pass --no-verify for
+# the same reason: they are test data, not contributions.
+git clone --template= "$remote" "$repo" >/dev/null
+# macOS 的 $TMPDIR 是 /var/folders/...，而 /var 是指向 /private/var 的符号
+# 链接。git worktree list 和 pwd -P 都返回解析后的 /private/var/... 形式，
+# mktemp 返回未解析的 /var/... 形式。夹具必须统一到解析后的路径，否则
+# ①断言里的 $repo 和实际输出对不上 ②has_active_build 拿进程命令行里的
+# /var/... 去匹配 worktree 的 /private/var/...，永远匹配不上——测试会把
+# 「正在构建的 worktree 被删」当成正常。这是夹具的路径问题，不是被测脚本
+# 在真实仓库（/Users/... 无符号链接）里的行为。
+repo=$(cd "$repo" && pwd -P)
 git -C "$repo" config user.name 'P-Pass test'
 git -C "$repo" config user.email 'test@example.invalid'
 printf 'fixture\n' > "$repo/README.md"
-git -C "$repo" add README.md
-git -C "$repo" commit -m 'fixture' >/dev/null
+# 真实的 Cargo target 旁边一定有 Cargo.toml。夹具必须长得像真的：判据一旦
+# 开始按「这是不是真的 Cargo target」筛选，不像的夹具会整批落选，而空转的
+# 断言不会告诉你。放进初始提交，所有 worktree 继承且保持干净（写成未跟踪
+# 文件会让 worktree 变成「有未提交改动」而被跳过，那是另一种假失败）。
+printf '[package]\nname = "fixture"\nversion = "0.0.0"\n' > "$repo/Cargo.toml"
+git -C "$repo" add README.md Cargo.toml
+git -C "$repo" commit --no-verify -m 'fixture' >/dev/null
 git -C "$repo" branch -M main
 git -C "$repo" push -u origin main >/dev/null
 
@@ -30,21 +57,21 @@ mkdir -p "$repo/target" "$repo/.worktrees/merged/target" \
 printf 'keep source, not cache\n' > "$repo/.worktrees/dirty/DIRTY"
 printf 'not yet merged\n' > "$repo/.worktrees/pending/PENDING"
 git -C "$repo/.worktrees/pending" add PENDING
-git -C "$repo/.worktrees/pending" commit -m 'pending' >/dev/null
+git -C "$repo/.worktrees/pending" commit --no-verify -m 'pending' >/dev/null
 
 # Default mode is a non-destructive preview.
 preview=$(cd "$repo" && bash "$cleanup_script")
-[[ "$preview" == *'Mode: PREVIEW'* ]]
-[[ -d "$repo/target" ]]
-[[ -d "$repo/.worktrees/merged/target" ]]
+[[ "$preview" == *'Mode: PREVIEW'* ]] || fail "[[ \"$preview\" == *'Mode: PREVIEW'* ]]"
+[[ -d "$repo/target" ]] || fail "[[ -d \"$repo/target\" ]]"
+[[ -d "$repo/.worktrees/merged/target" ]] || fail "[[ -d \"$repo/.worktrees/merged/target\" ]]"
 
 # Explicit cache cleanup does not remove any worktree source directory.
 (cd "$repo" && bash "$cleanup_script" --apply --targets >/dev/null)
-[[ ! -e "$repo/target" ]]
-[[ ! -e "$repo/.worktrees/merged/target" ]]
-[[ -d "$repo/.worktrees/merged" ]]
-[[ -d "$repo/.worktrees/dirty" ]]
-[[ -d "$repo/.worktrees/pending" ]]
+[[ ! -e "$repo/target" ]] || fail "[[ ! -e \"$repo/target\" ]]"
+[[ ! -e "$repo/.worktrees/merged/target" ]] || fail "[[ ! -e \"$repo/.worktrees/merged/target\" ]]"
+[[ -d "$repo/.worktrees/merged" ]] || fail "[[ -d \"$repo/.worktrees/merged\" ]]"
+[[ -d "$repo/.worktrees/dirty" ]] || fail "[[ -d \"$repo/.worktrees/dirty\" ]]"
+[[ -d "$repo/.worktrees/pending" ]] || fail "[[ -d \"$repo/.worktrees/pending\" ]]"
 
 # A process whose command line represents a build in this worktree blocks removal.
 mkdir -p "$repo/.worktrees/active/target"
@@ -54,16 +81,16 @@ trap 'kill "$active_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
 sleep 1
 
 worktree_apply=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees)
-[[ "$worktree_apply" == *"REMOVED    $repo/.worktrees/merged"* ]]
-[[ ! -d "$repo/.worktrees/merged" ]]
-[[ -d "$repo/.worktrees/dirty" ]]
-[[ -f "$repo/.worktrees/dirty/DIRTY" ]]
-[[ -d "$repo/.worktrees/pending" ]]
-[[ -f "$repo/.worktrees/pending/PENDING" ]]
-[[ -d "$repo/.worktrees/active" ]]
-[[ -d "$repo/.worktrees/active/target" ]]
-[[ "$worktree_apply" == *"SKIP       $repo/.worktrees/pending — HEAD is not merged into origin/main"* ]]
-[[ "$worktree_apply" == *"SKIP       $repo/.worktrees/active — active build:"* ]]
+[[ "$worktree_apply" == *"REMOVED    $repo/.worktrees/merged"* ]] || fail "[[ \"$worktree_apply\" == *\"REMOVED    $repo/.worktrees/merged\"* ]]"
+[[ ! -d "$repo/.worktrees/merged" ]] || fail "[[ ! -d \"$repo/.worktrees/merged\" ]]"
+[[ -d "$repo/.worktrees/dirty" ]] || fail "[[ -d \"$repo/.worktrees/dirty\" ]]"
+[[ -f "$repo/.worktrees/dirty/DIRTY" ]] || fail "[[ -f \"$repo/.worktrees/dirty/DIRTY\" ]]"
+[[ -d "$repo/.worktrees/pending" ]] || fail "[[ -d \"$repo/.worktrees/pending\" ]]"
+[[ -f "$repo/.worktrees/pending/PENDING" ]] || fail "[[ -f \"$repo/.worktrees/pending/PENDING\" ]]"
+[[ -d "$repo/.worktrees/active" ]] || fail "[[ -d \"$repo/.worktrees/active\" ]]"
+[[ -d "$repo/.worktrees/active/target" ]] || fail "[[ -d \"$repo/.worktrees/active/target\" ]]"
+[[ "$worktree_apply" == *"SKIP       $repo/.worktrees/pending — HEAD is neither merged into origin/main nor tracking an upstream"* ]] || fail "[[ \"$worktree_apply\" == *\"SKIP       $repo/.worktrees/pending — HEAD is not merged into origin/main\"* ]]"
+[[ "$worktree_apply" == *"SKIP       $repo/.worktrees/active — active build:"* ]] || fail "[[ \"$worktree_apply\" == *\"SKIP       $repo/.worktrees/active — active build:\"* ]]"
 
 kill "$active_pid"
 wait "$active_pid" 2>/dev/null || true
