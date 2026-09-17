@@ -102,6 +102,8 @@
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 闲置审计刷屏：先取证定性真抖动 vs 误记 | L2 |
 | P2 | [MOB-73](../cards/MOB-73-local-source-first-viewing.md) | 本机有原图时读本地并验 hash，远端仅回退 | L2 |
 | P3 | [NET-25](../cards/NET-25-flow-delivered-push-unverified-on-the-real-transfer-path.md) | 🟥 挂号：真实传输路径的推送是否送达从未正面验证（NET-24 拆出，有本地事件兜底） | L2 |
+| P1 | [IDX-01](../cards/IDX-01-index-rebuild-has-no-runtime-entry-point.md) | 🟥 挂号：rebuild() 有实现有契约测试但零生产调用点，索引一丢照片就永久不可见（现库 10 张） | L2 |
+| P3 | [DEV-02](../cards/DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) | 🟥 挂号：merge_device 物理删设备行，验收人要求只标记「已断开授权」（入口当前被 DEV-01b 藏起，潜伏） | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 挂 release lint；CI 钉 17 不受影响 | L3 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前写死 | L2 |
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
