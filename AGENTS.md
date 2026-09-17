@@ -66,6 +66,13 @@ agent 有挂号权和建议权，没有改道权——优先级由验收人裁�
 - **本机 `gh` 不用于本仓**（未绑定本仓账号）：agent 不许调 `gh` 看 CI、建 PR、
   触发 workflow、发 Release——这些一律在 GitHub 网页上由验收人自己做，agent
   只负责把结论问清楚。git 只走个人 SSH remote。
+- **例外（2026-09-17 起）**：带 GitHub MCP 插件的 Kimi 会话已绑定协作者账号
+  `690591397`（SEC-02 白名单内）——这类会话**自己把 PR 全程做完**：推分支、
+  开 PR、盯受影响 lane 到结论、squash 合并（合并 committer 是
+  `GitHub <noreply@github.com>`，也在白名单内），不再停在预填链接。
+  未绑定该账号的其它 agent 维持上面的旧流程。已知限制：Contents API 按整
+  文件传输，`docs/PROGRESS.md`（420KB）的账本行更新超不出通道，仍由验收人
+  在网页贴入（行文本 agent 附在 PR 描述里）。
   （`.github/workflows/` 里的 `gh` 跑在 runner 上用 `GITHUB_TOKEN`，不在此列。）
 - 一批交付 = 卡横幅（含 commit）+ 卡尾验收记录 + `docs/PROGRESS.md` 一行，
   同批 push。会话结束汇报 = 卡结果 + 本次挂号清单（每张一行 + 建议优先级）。
