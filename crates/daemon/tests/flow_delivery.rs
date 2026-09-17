@@ -927,12 +927,47 @@ async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
     drop(provider_blobs);
     drop(provider_transport);
 
+    // Determinism fix (2026-09-17, NET-16 CI run): `fetch_inner`'s legacy
+    // safety net re-spawns a fetch task whenever none is running for the
+    // grant. Whether offer's task is still dialing (slow loopback refusal
+    // on this machine, ~30s) or already dead (fast refusal on CI runners)
+    // decided between ONE and TWO `conn` events — the old flat "2 events"
+    // assertion only encoded the local timing and went red the first time
+    // CI landed on the other side. Wait for offer's task to die first, so
+    // fetch provably starts exactly one fresh attempt: the contract under
+    // test is "each fetch attempt records one conn terminal, the failed
+    // call records one error" = two attempts, two conns, one error.
+    let task_death = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        loop {
+            let reply = delivery
+                .status(
+                    provider_node,
+                    &tuple_ref("epoch-current", "lease-current", 7),
+                )
+                .await
+                .unwrap();
+            if !reply.task_running {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await;
+    assert!(
+        task_death.is_ok(),
+        "offer's fetch task must reach a terminal state after the provider died"
+    );
+
     assert!(matches!(
         delivery.fetch(provider_node, &offer).await,
         Err(DeliveryError::Fetch(_))
     ));
 
-    assert_eq!(telemetry.flush_now().await, 2, "one conn + one error");
+    assert_eq!(
+        telemetry.flush_now().await,
+        3,
+        "one conn per fetch attempt + one error"
+    );
     let batch = bodies.lock().unwrap()[0].clone();
     let events: Vec<&str> = batch
         .as_array()
@@ -940,8 +975,8 @@ async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
         .iter()
         .map(|e| e["event"].as_str().unwrap())
         .collect();
-    assert_eq!(events, ["conn", "error"]);
-    let error_event = &batch.as_array().unwrap()[1];
+    assert_eq!(events, ["conn", "conn", "error"]);
+    let error_event = &batch.as_array().unwrap()[2];
     assert_eq!(error_event["code"], "fetch_failed");
     assert_eq!(error_event["stage"], "fetch");
 }
