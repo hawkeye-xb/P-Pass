@@ -55,29 +55,92 @@ iroh-blobs 永远不会有任何 get-request/progress/completed 事件，
 多等一个兜底窗口"。对 224MB 视频仍是大赢；对小照片很可能是**净亏**——
 改前是浪费字节但信令及时，改后是省了字节但每张卡一个兜底窗口。
 
-**修法方向（未实施，等拍板）**：把订阅移到 `offer` **之前**建立并确认
-就绪，再发 offer。这是标准的"先订阅后触发"顺序，不需要协议改动，也不
-需要 daemon 侧补发/重放机制。剩余候选（daemon 侧订阅者表残留失效连接、
-`peer: NodeId` 对应关系）在本根因修复后若仍复现再查。
+## 修法（2026-09-17 验收人拍板）
+
+**`flow.offer` 的应答改为返回 `FlowStatusReply`——即"你 offer 完立刻调
+一次 `flow.status` 会得到什么，我直接给你什么"。**
+
+验收人明确否掉了"调订阅/offer 顺序"那条：**靠时序组合去赢一场竞态不是
+合适的修法**。并拍板测试阶段**不考虑旧手机兼容**，可以非兼容迭代。
+
+### 为什么是这个形状（先找标准答案，非发明）
+
+`offer` 是 HTTP-202 那套（提交任务 + 去轮询）。而 202 的标准用法里，
+**200/201 与 202 是按每次请求决定的，不是按端点固定死的**：活当场干完
+就返回结果，只有真要异步才回 202 + 任务句柄。现在的代码是知道答案也
+坚持回 202。业界同形先例：
+
+- **Docker Registry v2 blob 上传**（最贴近：同为内容 digest 寻址 + 去重
+  短路）：`POST /v2/<name>/blobs/uploads/?mount=<digest>&from=<repo>`
+  —— 已有则 **`201 Created`，零字节传输，终态就在这个应答里**；没有则
+  `202 Accepted` + upload location 走正常上传。`201` vs `202` 就是判别式。
+- **HTTP 条件请求 / `304 Not Modified`**：客户端报 ETag，服务端答"你已经
+  有了"，同一个应答里给终态，不传 body。
+- **Git smart protocol 的 have/want 协商**：客户端先报 `have <sha>`，
+  重复对象根本不进传输阶段；去重发生在传输之前、同一次交换之内。
+- **rsync**：先换校验和，只传差异。
+
+共同点：**"我已经有了"这个事实一律在发起方还在等的那个应答里回答，
+从不推给带外通知或轮询。** 这也正是 NET-14 卡自己写的原则——
+「推送为加速，不是唯一路径」——本卡是回到该原则，不是引入新规矩。
+
+### 本仓已有范式，零新类型
+
+`proto/msgs.rs:342` 的 `FlowStatusReply` 形状正好：
+`state`（`active`/`completed`/`cancelled`/`not_found`）+
+`receipt: Option<_>`（仅 completed 有）+ `task_running`。
+
+- 命中去重 → `state:"completed"` + 手里已有的 receipt → 手机零等待
+- 正常起传 → `state:"active", task_running:true` → 走现有等待循环
+- 输给并发 cancel/suspend（`complete_flow_grant` 返回 false）→ 据实回
+  当前状态，**不伪造 receipt**
+
+手机侧连解析都不用新写：`NativeFlowDeliveryPort.kt:383` 已有纯函数
+`flowStatusPollOutcome(reply)`，正是轮询路径在用的那个。
+
+### 已核实的顾虑（不是推测）
+
+- **重复 receipt 安全**：应答给一次 + 推送可能再来一次。
+  `CompletionAndScope.kt:49-52` 明写「AUDIT-04: a replayed receipt for an
+  item already CONFIRMED must not mint a second audit_item_evidence
+  fact」——幂等是设计好的，无需额外去重。
+- **本卡不解决全部推送丢失**：只关"offer 时已终态"这一个洞。真实传输
+  中途丢推送时本地 iroh 有事件、`idleForMs` 非 null，停滞检测正常工作，
+  降级为"稍慢"而非"卡 30 秒"。原卡剩余候选（daemon 侧订阅者表残留失效
+  连接、`peer: NodeId` 对应关系）若修完仍复现再单独查。
+- **代价**：proto 快照测试会红，需显式重新生成；新手机配旧 daemon 拿到
+  `null` 时必须**明确失败**，不许静默挂住。
 
 ## 期望行为
 
-同 hash 去重命中时，手机应在推送到达的毫秒级时间内看到该项完成，而
-不是等到 30 秒兜底轮询。
+同 hash 去重命中时，手机在 `offer` 的应答里当场拿到终态 receipt，该项
+立即完成——不依赖推送是否送达，也不等 30 秒兜底轮询。
 
 ## 验收标准
 
-- [ ] 复现「断链重连后同 hash 批量去重」场景，用 daemon 侧日志/DB
-      时间戳与手机侧收到 `flow.delivered` 的时间戳对比，定位推送
-      从 daemon 发出到手机接收之间具体在哪一步丢失或延迟。
-- [ ] 修复后同一场景里，去重命中的每一项应在推送到达后立刻完成
-      （不再等到 30 秒超时），真机计时验证。
-- [ ] 反证：临时恢复丢失前的状态，上述计时验证必须变红。
+- [ ] **[E2]** daemon 单测：`offer` 命中 `has_durable_copy` 时返回
+      `state=="completed"` 且 `receipt` 非空；未命中时返回
+      `state=="active"`、`task_running==true`
+- [ ] **[E2]** daemon 单测：`complete_flow_grant` 输给并发 cancel 时，
+      `offer` 不返回 completed、不伪造 receipt
+- [ ] **[E2]** Android 单测：`offer` 应答为 completed 时，交付流程不进
+      等待循环直接落 receipt
+- [ ] **[E2]** 反证：把 completed 分支的 receipt 摘掉（退回恒 null），
+      上述用例必须变红
+- [ ] **[E1]** `just ci` 全绿（含 proto 快照重新生成后的 roundtrip）
+- [ ] **[E3]** 真机计时：同一批照片连发两次，第二次每张**毫秒级**完成，
+      不再是 30 秒/张；对照改动前的同场景计时
 
 ## 范围
 
-待定——需要先定位根因（daemon 侧订阅管理 / 手机侧订阅时机 / 两者
-之间的连接标识对应关系），范围由根因决定。
+- 只准动：`crates/proto/src/msgs.rs`（offer 应答类型）、
+  `crates/daemon/src/flow_delivery.rs`（`offer`/`offer_inner`/
+  `complete_without_fetch` 返回值）、`crates/daemon/src/router.rs`
+  （FLOW_OFFER 分支）、`apps/android/.../transport/DaemonClient.kt`、
+  `apps/android/.../backup/flow/NativeFlowDeliveryPort.kt`
+- 不准动：`flow.fetch` 的既有应答形状（旧桌面降级路径，NET-18 的范围）；
+  `emit_flow_delivered` 推送本身（保留为加速路径，不删）；
+  `flowWaitStep` 的兜底逻辑（NET-23 的资产，本卡只是让它不再是唯一出路）
 
 ## 阻塞与依赖
 
