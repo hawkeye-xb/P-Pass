@@ -1,7 +1,9 @@
-# NET-24 `flow.delivered` 推送在真机断链重连场景下始终没有送达手机　级别 L1
+# NET-24 NET-20 去重命中时 `flow.delivered` 推送必然丢失——订阅晚于 offer　级别 L1
 
-> ⬜ 状态：未开工
+> ⬜ 状态：未开工（**根因已定位并经源码核实，2026-09-17**）
 > 级别：L1 · 阻塞：无（从 NET-23 拆出）
+> ⚠️ **卡名/范围已更正**：原标题写「断链重连场景」，实测范围更大且是
+> **确定性**的——任何 NET-20 去重命中都必丢推送，与断链重连无关。
 
 ## 问题
 
@@ -13,16 +15,50 @@
 `flowWaitStep` 会在 `pushed is FlowPushOutcome.Delivered` 分支立刻返回，
 不会等到超时）。
 
-根因未查。候选方向（未验证，不得直接采信）：
-- `NativeFlowDeliveryPort.start()` 里每次尝试都新开一条
-  `client.subscribeTimeline` 订阅——断链重连后旧订阅的清理时机、新
-  订阅真正建立完成的时机，与 `desktop.offer(request)` 发出的时机之间
-  是否存在竞态（offer 发出后 daemon 几乎立即完成并推送，但这条新
-  订阅可能还没建立好）。
-- 断链重连是否导致 daemon 侧的 timeline 订阅者列表里还挂着一个已经
-  失效的旧连接，新连接的推送被发到了错误的/失效的通道。
-- `emit_flow_delivered` 本身的推送目标（`peer: NodeId`）在断链重连后
-  是否仍然对应当前这条活跃连接。
+## 根因（2026-09-17 源码核实，非推测；原三条候选中第一条成立且范围更大）
+
+**订阅建立晚于 offer 发出，而 NET-20 的去重完成是同步且瞬时的，所以这场
+竞态是确定性输，不是偶发。**
+
+调用顺序（`NativeFlowDeliveryPort.kt`，同一个 `scope.launch` 块内）：
+
+| 行 | 动作 |
+|---|---|
+| `:293` | `desktop.offer(request)` —— **await，先发 offer** |
+| `:320` | `val pushChannel = Channel(...)` |
+| `:321` | `launch { client.subscribeTimeline(...) }` —— **offer 之后才订阅，且异步 launch，返回时订阅尚未建立** |
+
+daemon 侧在 offer 的处理过程中**同步**走完全程：
+
+- `flow_delivery.rs:485-492` `has_durable_copy` 命中 → `complete_without_fetch`
+- `flow_delivery.rs:519-527` `complete_flow_grant` 落 receipt → 紧接着
+  `emit_flow_delivered`
+
+而事件总线是 live-only 广播，`events.rs:23` `pub type EventBus =
+broadcast::Sender<Value>`，模块头注释自己写着「**无订阅者时 send 直接
+丢弃**」（`events.rs:4`），`emit` 是 `let _ = bus.send(...)`，错误被吞。
+
+→ 推送在手机订阅上线**之前**就被发出并丢弃，永远不会补发。
+
+**为什么只有去重命中才暴露**：真实传输时 `spawn_fetch_task` 要建连 + 搬
+字节，这段延迟足够订阅抢先建立；而 NET-20 把这段延迟**降到零**，窗口从
+"几乎不可能命中"变成"每次必中"。
+
+**为什么之后只能干等 30 秒**：去重命中意味着数据面一个字节没走，本地
+iroh-blobs 永远不会有任何 get-request/progress/completed 事件，
+`idleForMs` 恒为 null（`NativeFlowDeliveryPort.kt:555-573` 的长注释已经
+写明这一点）。于是唯一还在走的时钟只剩调用方自己的挂钟，走到
+`LOCAL_IDLE_STALL_THRESHOLD_MS = 30_000`（`:629`）才 `CheckStatusNow`，
+靠 `flow.status()` 把早已完成的状态捞回来。
+
+**代价评估（值得在修法里一并拍板）**：NET-20 用"零字节重传"换来了"每张
+多等一个兜底窗口"。对 224MB 视频仍是大赢；对小照片很可能是**净亏**——
+改前是浪费字节但信令及时，改后是省了字节但每张卡一个兜底窗口。
+
+**修法方向（未实施，等拍板）**：把订阅移到 `offer` **之前**建立并确认
+就绪，再发 offer。这是标准的"先订阅后触发"顺序，不需要协议改动，也不
+需要 daemon 侧补发/重放机制。剩余候选（daemon 侧订阅者表残留失效连接、
+`peer: NodeId` 对应关系）在本根因修复后若仍复现再查。
 
 ## 期望行为
 
