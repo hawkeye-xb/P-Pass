@@ -2,7 +2,7 @@
 
 状态：✅ 已归档（实现 `0cc668d`，真机验收 2026-09-17）——**结论：推送在真实传输路径上确实送达，无需修复**
 级别：L2（猜测；真出问题也只是"稍慢"，有本地 iroh 事件兜底，不卡死）
-关联: 从 [NET-24](done/NET-24-flow-delivered-push-not-reaching-phone.md) 分出
+关联: 从 [NET-24](NET-24-flow-delivered-push-not-reaching-phone.md) 分出
 
 ## 挂号段
 
