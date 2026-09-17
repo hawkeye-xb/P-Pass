@@ -37,13 +37,28 @@ async fn main() -> anyhow::Result<()> {
     // 8/26 真机实锤 relay 握手失败 7 分钟写了 92211 行/73MB，见
     // log_guard.rs 顶部注释。with_ansi(false) 是顺带的：ANSI 控制码在
     // 落盘的 `.err` 里只会添乱，也让折叠的行匹配不必绕过颜色码。
+    // DEVLOG-01：`PPF_LOG_FILE` 设了就把这同一个折叠器接到持久文件上
+    // （开发期前台起 daemon 没有 launchd 托管，日志只在终端一闪而过）。
+    // 不设 = 原行为，只写 stderr，生产 launchd 路径一行未变。
+    // 打不开就照 DAE-03 那条「绝不静默忽略」的先例报错退出——用户显式
+    // 指定了日志文件，悄悄退回 stderr 等于让他以为日志在写而其实没有。
+    let log_writer = match daemon::log_guard::persistent_log_path_from_env() {
+        Some(path) => match daemon::log_guard::DedupGuard::for_file(&path) {
+            Ok(guard) => guard,
+            Err(e) => {
+                eprintln!("PPF_LOG_FILE={} 打不开：{e}", path.display());
+                std::process::exit(2);
+            }
+        },
+        None => daemon::log_guard::DedupGuard::new(),
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .with_ansi(false)
-        .with_writer(daemon::log_guard::DedupGuard::new())
+        .with_writer(log_writer)
         .init();
 
     // Default config file + data dir follow the platform convention
