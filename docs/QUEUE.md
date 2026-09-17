@@ -98,6 +98,7 @@
 | P2 | [NET-10](../cards/NET-10-pair-request-accept-then-poll-status.md) | 配对「提交≠等人」拆解；等 NET-06 合入 | L2 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 活动记录按 canonical evidence 分列准确汇总 | L2 |
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 状态栏图标对比度：实证安全区/system-bar 外观生效 | L1 |
+| P3 | [QA-05](../cards/QA-05-md-check-blind-to-mid-row-hard-wrap.md) | 🟥 挂号：md-check 只认「整行 `\|`…`\|`」，表格行被**行中**硬换行切断时两半都不匹配 → 账本静默切坏而 `ci-docs` 全绿（与 QA-02 同型） | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 闲置审计刷屏：先取证定性真抖动 vs 误记 | L2 |
 | P2 | [MOB-73](../cards/MOB-73-local-source-first-viewing.md) | 本机有原图时读本地并验 hash，远端仅回退 | L2 |
 | P2 | [MOB-87](../cards/MOB-87-repairing-does-not-wake-flow-until-app-restart.md) | 🟥 挂号：会话内重新配对成功后不自动开传，杀 App 重开才动（MOB-72 同形状的第二例） | L2 |
@@ -129,6 +130,7 @@
 | [AUDIT-05](../cards/AUDIT-05-dogfood-week-audit-content-review.md) | 狗粮周后只读复核真实审计内容 | 等狗粮周样本 |
 | [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/开关 | 等产品拍板（默认值与入口） |
 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知发送函数已被删、生产零调用 | 等 MOB-69 拍板 |
+| [DOC-02](../cards/DOC-02-progress-ledger-rows-too-fat.md) | 🟥 挂号：PROGRESS.md 237k 字符/单个单元格最长 4785 字符，顶部表格已读不动；三条歧路已在卡内排除 | 等拍板账本格式（拆一卡一文件 vs 只约束新增 vs 不动） |
 
 ---
 
