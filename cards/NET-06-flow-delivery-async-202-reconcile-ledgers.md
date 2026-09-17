@@ -215,9 +215,11 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       **daemon 侧 status 本身已有 4 个直接用例覆盖 active/completed/
       cancelled/not_found；"手机侧不再靠回声推断"这条反证要等 Android
       接线才能写。**
-- [ ] 幂等：completed 后重复 status/fetch 返回同一 receipt_id，零重传
+- [x] 幂等：completed 后重复 status/fetch 返回同一 receipt_id，零重传
       （daemon 集成测试，复用 `persisted_receipt` 既有语义）。**已拆出
-      [NET-16](NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)。**
+      [NET-16](NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)
+      并于 2026-09-17 完成：反证真跑（撤短路分支 → 用例红），
+      `flow_delivery` 32/32。**
 - [ ] 崩溃恢复：active grant + 无运行任务 → status 触发重拉，最终 completed
       （daemon 集成测试模拟 task 丢失）。**已拆出
       [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)。**
