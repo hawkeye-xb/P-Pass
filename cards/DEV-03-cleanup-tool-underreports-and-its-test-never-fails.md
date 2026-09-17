@@ -1,6 +1,6 @@
 # DEV-03 清理工具漏报一半，而它的测试从来不会失败　级别 L1
 
-状态：🟡 代码完成待你过目
+状态：✅ 代码完成，全部验收项闭环，待归档（commit 9da51b6b / PR #72）
 级别：L1（只动 tools/ 与 justfile/AGENTS.md，不碰产品代码）
 关联：与 QA-02 同型——都是「门禁/测试在空转，绿色不代表通过」。
 
@@ -30,7 +30,7 @@ context:
   - [x] [E1] 预览同时列出根 `target`（18G）与 `apps/desktop/src-tauri/target`（2.6G）——改前只有前者
   - [x] [E2] **测试真的会失败**：本轮修复过程中它连续 4 次以 `ASSERT FAILED: …` 中断（根 target 未删 / worktree 因未跟踪 Cargo.toml 被跳过 / 文案不匹配 / 路径不匹配），全部修掉后才转绿。这就是「判据有效」的直接证据。
   - [x] [E1] `bash -n` 两个脚本语法通过；`just cleanup-local` 预览在真实仓库跑通
-  - [ ] [E1] 验收人本机跑一次 `just cleanup-local` 确认输出与本机实际占用相符
+  - [x] [E1] 验收人本机实跑：预览同时列出 18G 与 2.6G 两个 target，`--apply --targets` 后仓库 **22G → 1.9G**、磁盘可用 80Gi → 100Gi。被回收的 2.6G 正是改前版本看不见的那个。
 
 范围:
   只准动：`tools/clean-local-builds.sh`、`tools/test-clean-local-builds.sh`、`justfile`、`AGENTS.md`、本卡、`docs/QUEUE.md`。
@@ -54,5 +54,5 @@ context:
 
 ## 留白 / 挂号
 
-- **`node_modules` 与 Android `build/` 不在工具覆盖范围内**（实测分别 257M 与 695M）。它们的重建代价与 Cargo target 不同（要重装依赖 / 要 gradle），是否纳入同一个 `--targets` scope 需要单独决定，本卡不擅自扩。
+- **`node_modules` 与 Android `build/` 不纳入——2026-09-17 拍板：维持现状。**（实测分别 257M 与 695M。）它们的重建代价与 Cargo target 不同（要重装依赖 / 要 gradle），而体量只占 Cargo target 的 4%——2026-09-17 实测清理：22G → 1.9G，光 `--targets` 一档就回收 20.6G，再扩 scope 的边际收益很小、风险却上升。
 - **bash 3.2 的 errexit 陷阱可能不止这一处。** 本仓其他测试脚本若同样用裸 `[[ ]]` 断言，就同样是空转的。没有逐个排查，建议单开一张卡全仓扫一遍 `^\[\[ ` 开头的断言行。

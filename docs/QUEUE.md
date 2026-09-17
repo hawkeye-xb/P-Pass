@@ -105,9 +105,6 @@
 | P1 | [QA-02](../cards/QA-02-queue-archive-gate-section-7-mutation-broken.md) | 🟥 挂号：归档门禁变异 C 空转——分区七成末节后 `next()` 抛 StopIteration，反证从未真正执行且 `just ci` 照绿（NET-16 分出） | L1 |
 | P3 | [QA-03](../cards/QA-03-archived-cards-relative-links-break-and-no-gate-catches-it.md) | 🟡 代码完成待你过目：卡内链接门禁上线（抓到 8 处断链，已全修）+ `just ci-docs` 快车道；union 合并两次证伪后撤掉 | L1 |
 | P1 | [QA-04](../cards/QA-04-no-written-rules-for-parallel-sessions-on-main.md) | 🟡 代码完成待你过目：AGENTS.md 落地一卡一分支+PR、红线5 口径统一、新增 PR 模板；CI 一字未动（push 本来就只盯 main）；三项仓库设置待你在网页定 | L1 |
-| P1 | [SEC-02](../cards/SEC-02-commit-identity-allowlist-gate.md) | 🟡 代码完成待你过目：提交身份白名单门禁（新 lane `ci-identity`，不加 paths 全量触发）+ 六变异反证；对真实越界提交实测命中、全史 1065 提交不误伤；`dependabot[bot]` 留不留待你拍板 | L1 |
-| P0 | [SITE-04](../cards/SITE-04-site-lane-red-for-a-week-on-stale-generated-tokens.md) | 🟡 代码完成待你过目：site lane 自 09-11 红了 6 天（`5abb8acb` 只改文案没重生成，根 `token-check` 只比数值故看不见）；被卡死的后四步已在本地逐个补跑；`just site-check` 是否挂进 `ci` 待你拍板 | L1 |
-| P2 | [DEV-03](../cards/DEV-03-cleanup-tool-underreports-and-its-test-never-fails.md) | 🟡 代码完成待你过目：清理工具漏报嵌套 target（2.6G 从没被提及）、squash 合并的 worktree 永不放行；其测试 18 条断言在 bash 3.2 下全空转（与 QA-02 同型） | L1 |
 | P3 | [DEV-02](../cards/DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) | 🟥 挂号：merge_device 物理删设备行，验收人要求只标记「已断开授权」（入口当前被 DEV-01b 藏起，潜伏） | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 挂 release lint；CI 钉 17 不受影响 | L3 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前写死 | L2 |
@@ -134,7 +131,6 @@
 | [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/开关 | 等产品拍板（默认值与入口） |
 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知发送函数已被删、生产零调用 | 等 MOB-69 拍板 |
 | [DOC-02](../cards/DOC-02-progress-ledger-rows-too-fat.md) | 🟥 挂号：PROGRESS.md 237k 字符/单个单元格最长 4785 字符，顶部表格已读不动；三条歧路已在卡内排除 | 等拍板账本格式（拆一卡一文件 vs 只约束新增 vs 不动） |
-| [SEC-01](../cards/SEC-01-six-readonly-pr-refs-still-pin-pre-rewrite-commits.md) | ⬜ 全史已改写强推、分支与 tag 清零，但 6 个只读 `refs/pull/*` 仍钉着重写前的旧提交，本地推不动 | 等你以所有者账号提 GitHub 工单；一周后按卡内命令核查（现应为 6，处理完应为 0） |
 
 ---
 
@@ -146,6 +142,9 @@
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
+| [SEC-02](../cards/SEC-02-commit-identity-allowlist-gate.md) | 提交身份白名单门禁上线，`ci-identity` 已在真实 PR 与 main 上 success；`dependabot[bot]` 拍板保留 | — |
+| [SITE-04](../cards/SITE-04-site-lane-red-for-a-week-on-stale-generated-tokens.md) | site lane 连红 6 天后转绿（main run success）；`site-check` 拍板不挂进 `ci`，保留独立 recipe | — |
+| [DEV-03](../cards/DEV-03-cleanup-tool-underreports-and-its-test-never-fails.md) | 清理工具两个漏洞修复 + 18 条空转断言改真；本机实跑 22G→1.9G；`node_modules`/Android `build/` 拍板不纳入 | — |
 | [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 拆卡主线全部完成（ARCH-02~06、REBUILD-00~06 ✅），设计卡待归档 | — |
 | [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md) | 已被 [MOB-58](../cards/done/MOB-58-cancel-round-no-feedback-no-restore-entry.md) 收敛 | — |
 | [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | 账本/发现页原子提交完成 | ARCH-03 |
@@ -176,6 +175,7 @@
 | UI-05 / UI-06 | 用户暂时接受 | 展示细节，低优 |
 | [DESK-15](../cards/done/DESK-15-desktop-design-system-convergence.md) | 暂缓 | Button 图标变体等真实调用场景出现再补 |
 | [MOB-80](../cards/backlog/MOB-80-video-preview-should-default-muted.md) | 暂缓，等换播放器 | 视频预览默认静音，随播放器评估一并设计 |
+| [SEC-01](../cards/SEC-01-six-readonly-pr-refs-still-pin-pre-rewrite-commits.md) | 暂缓 | 2026-09-17 拍板：不提 GitHub 工单。6 个只读 `refs/pull/*` 仍钉着改写前的提交，明确接受；提工单的代价是 60 个 PR 的 diff 永久消失，不划算。重启条件与修正后的数字见卡 |
 | [MOB-81](../cards/backlog/MOB-81-legacy-watch-job-detached-from-flow-truth.md) | 待确认方向 | SystemStoppedWatcher 判据信号源脱节，影响面小不紧急 |
 
 ---
