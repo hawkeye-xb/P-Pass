@@ -324,6 +324,10 @@ internal class NativeFlowDeliveryPort(
                 when (val immediate = flowStatusPollOutcome(offerReply)) {
                     is FlowStatusPollOutcome.Completed -> {
                         require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before receipt" }
+                        // NET-25: 三条结账路径各打一条同格式的判别行。没有它，
+                        // 三条路最终走的是同一行 receipt 赋值，跑多少轮都分不出
+                        // 是谁结的账（NET-24 验收就栽在这里）。
+                        Log.i("PPassFlow", "Flow resolved by=offer_reply seq=${request.queueSequence}")
                         acceptReceipt(immediate.receipt, request)
                         return@launch
                     }
@@ -392,6 +396,12 @@ internal class NativeFlowDeliveryPort(
                             is FlowWaitStep.Resolved -> {
                                 when (val outcome = step.outcome) {
                                     is FlowStatusPollOutcome.Completed -> {
+                                        // NET-25: `flowWaitStep` 里唯一产出
+                                        // Resolved(Completed) 的分支就是
+                                        // `is FlowPushOutcome.Delivered`——本地
+                                        // 事件一律走 CheckStatusNow。所以走到
+                                        // 这里就等于推送真的送达了。
+                                        Log.i("PPassFlow", "Flow resolved by=push seq=${request.queueSequence}")
                                         receipt = outcome.receipt
                                     }
                                     FlowStatusPollOutcome.Cancelled -> {
@@ -426,6 +436,14 @@ internal class NativeFlowDeliveryPort(
                                 consecutiveStatusFailures = 0
                                 when (val outcome = flowStatusPollOutcome(reply)) {
                                     is FlowStatusPollOutcome.Completed -> {
+                                        // NET-25: 带上本地信号与本轮已耗时——
+                                        // 区分「本地 iroh 终态事件把我们叫来问」
+                                        // 和「挂钟兜底熬到点了才来问」。
+                                        Log.i(
+                                            "PPassFlow",
+                                            "Flow resolved by=status seq=${request.queueSequence} " +
+                                                "local=$localStatus elapsedMs=$attemptElapsedMs",
+                                        )
                                         receipt = outcome.receipt
                                     }
                                     FlowStatusPollOutcome.Cancelled -> {

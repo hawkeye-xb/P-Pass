@@ -30,6 +30,7 @@ use storage::{Db, FlowGrant, FlowGrantState};
 use transport::{Blobs, ConnectionStatus, NodeId};
 
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
+use crate::subscriptions::SubscriptionRegistry;
 use crate::telemetry::{Event as TelemetryEvent, Telemetry};
 
 type PeerFetchLock = Arc<AsyncMutex<()>>;
@@ -359,6 +360,9 @@ pub struct FlowDelivery {
     /// per exact tuple, so `suspend`/`cancel` can interrupt it and `status`/
     /// the legacy `fetch` poll can tell "still working" from "stopped".
     tasks: FlowTaskRegistry,
+    /// NET-25: 只用来在推送发出时记一句"这台手机此刻在不在订阅表里"。
+    /// `None`（测试/单组件构造）= 不记这一维，推送行为完全不变。
+    subscriptions: Option<SubscriptionRegistry>,
 }
 
 impl FlowDelivery {
@@ -379,7 +383,15 @@ impl FlowDelivery {
             telemetry: None,
             fetch_locks: Arc::default(),
             tasks: FlowTaskRegistry::default(),
+            subscriptions: None,
         }
+    }
+
+    /// NET-25: 接上按 `NodeId` 登记的订阅表，**只读**，只为 `emit_flow_delivered`
+    /// 那行日志服务——推送本身发不发、发给谁，一概不受影响。
+    pub fn with_subscriptions(mut self, subscriptions: SubscriptionRegistry) -> Self {
+        self.subscriptions = Some(subscriptions);
+        self
     }
 
     /// DESK-11: wire the desktop timeline event bus, same contract as
@@ -674,6 +686,17 @@ impl FlowDelivery {
         receipt: &FlowCompletionReceipt,
     ) {
         let Some(events) = &self.events else { return };
+        // NET-25: 推送发出的那一刻，这台手机在不在订阅表里。broadcast 无订阅
+        // 者时 send 直接丢弃，所以 subscribed=false 就是"这条推送被丢掉了"的
+        // 直接证据。带上 seq——DedupGuard 会折叠完全相同的行。
+        tracing::info!(
+            "flow.delivered push seq={} peer_subscribed={} peer={peer:?}",
+            grant.queue_sequence,
+            self.subscriptions.as_ref().map_or_else(
+                || "unwired".to_string(),
+                |r| r.is_subscribed(peer).to_string()
+            ),
+        );
         crate::events::emit(
             events,
             crate::events::FLOW_DELIVERED,
