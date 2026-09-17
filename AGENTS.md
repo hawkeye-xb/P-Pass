@@ -2,12 +2,14 @@
 
 唯一必读。其余一切按需从文末索引获取，读到不代表要用。
 
-## 开工
+## 入口（按 session 类型分）
 
-1. `git fetch origin --prune`，确认不落后于远端。
-2. 任务由验收人指定卡号；读 `cards/<卡号>.md` 即全部任务上下文。
-   卡是唯一事实源：干什么、怎么算完、不许碰什么，都在卡里。
-   卡声明了 `requires:` 才去读对应文档，否则不读。
+- **执行卡**（验收人给了卡号）：`git fetch origin --prune`，确认不落后于远端，
+  读 `cards/<卡号>.md` 即全部任务上下文。卡是唯一事实源：干什么、怎么算完、
+  不许碰什么，都在卡里。卡声明了 `requires:` 才去读对应文档，否则不读。
+- **状态对齐**（问进度 / 下一张做什么 / 该验收什么）：`git fetch`，读
+  `docs/QUEUE.md`（当前状态）+ `docs/PROGRESS.md` 末尾（最近交付）。
+  对齐完要执行某张卡时，回到上一行。
 
 ## 红线（违反=事故）
 
@@ -65,10 +67,9 @@ agent 有挂号权和建议权，没有改道权——优先级由验收人裁�
 | 你要做什么 | 去哪 |
 |---|---|
 | 开卡/补卡 | `cards/TEMPLATE.md` |
+| 状态对齐（进度/下一张/待验收） | `docs/QUEUE.md` + `docs/PROGRESS.md` 末尾 |
 | 本地跑测试、可用命令 | `just --list`（入口 `justfile`） |
 | 发版、签名、版本纪律 | `docs/RELEASING.md` |
 | 验收协议细则（L 分级由来、抽检法） | `docs/AGENT_PROTOCOL.md` |
 | UI/设计基准 | `docs/design/` 当前版（见目录 README 指针） |
 | 历史事故与教训 | `docs/lessons/` |
-
-> 待办与待验收队列在 `docs/QUEUE.md`——验收人的仪表盘，agent 不需要读。
