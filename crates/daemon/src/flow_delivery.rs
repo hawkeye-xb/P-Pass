@@ -275,25 +275,34 @@ impl FlowTaskRegistry {
             .contains_key(&TaskKey::of(peer, grant))
     }
 
-    /// Register a fresh task for this exact tuple. Returns the token the
-    /// spawned task must race via `tokio::select!`, plus a generation the
-    /// task must present back to [`Self::unregister`] so it never clobbers
-    /// a newer registration for a reused key (same discipline as
-    /// `SubscriptionRegistry::register`/`unregister`).
-    fn register(&self, peer: NodeId, grant: &FlowGrant) -> (CancellationToken, u64) {
-        let token = CancellationToken::new();
-        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
-        self.entries
-            .lock()
-            .expect("flow task registry lock")
-            .insert(
-                TaskKey::of(peer, grant),
-                TaskEntry {
-                    token: token.clone(),
-                    generation,
-                },
-            );
-        (token, generation)
+    /// NET-15: atomic "register only if absent". The spawn path's check-
+    /// then-register used to be two separate lock acquisitions, so two
+    /// concurrent spawns for the same tuple could both pass the check and
+    /// double-spawn competing fetch tasks. `status()`'s restart respawn
+    /// adds a new concurrent spawn source, making the atomic form
+    /// structural rather than theoretical. Does not change the key
+    /// structure or any existing semantics.
+    fn try_register(&self, peer: NodeId, grant: &FlowGrant) -> Option<(CancellationToken, u64)> {
+        let mut entries = self.entries.lock().expect("flow task registry lock");
+        if entries.contains_key(&TaskKey::of(peer, grant)) {
+            return None;
+        }
+        let (token, generation) = self.fresh_entry();
+        entries.insert(
+            TaskKey::of(peer, grant),
+            TaskEntry {
+                token: token.clone(),
+                generation,
+            },
+        );
+        Some((token, generation))
+    }
+
+    fn fresh_entry(&self) -> (CancellationToken, u64) {
+        (
+            CancellationToken::new(),
+            self.next_generation.fetch_add(1, Ordering::Relaxed),
+        )
     }
 
     /// Called by the spawned task itself once it exits (completed, failed,
@@ -640,10 +649,12 @@ impl FlowDelivery {
     /// (`status`/`fetch`/the legacy poll above), never via this task's
     /// return value directly.
     fn spawn_fetch_task(&self, peer: NodeId, grant: FlowGrant, request: FlowFetchRequest) {
-        if self.tasks.is_running(peer, &grant) {
+        // NET-15: `try_register` makes the idempotency check atomic — a
+        // concurrent `offer`/`fetch`/`status` respawn can no longer both
+        // pass the "not running" check and double-spawn for this tuple.
+        let Some((token, generation)) = self.tasks.try_register(peer, &grant) else {
             return;
-        }
-        let (token, generation) = self.tasks.register(peer, &grant);
+        };
         let key = TaskKey::of(peer, &grant);
         let delivery = self.clone();
         tokio::spawn(async move {
@@ -935,6 +946,19 @@ impl FlowDelivery {
                 task_running: false,
             });
         };
+        // NET-15: a daemon restart wipes the in-memory task registry while
+        // the durable grant stays Active, orphaning the delivery: the phone
+        // keeps polling and this kept answering "active, nothing running"
+        // forever. The poll is the only signal a restarted daemon gets from
+        // a waiting phone, so the poll itself must respawn the lost task.
+        // `spawn_fetch_task` is idempotent (atomic `try_register`), so a
+        // poll racing a running task is a no-op. A deliberately suspended
+        // grant is safe here as well: polling this exact tuple means a
+        // phone is actively waiting on it — the same fact a resuming
+        // `flow.offer` carries, which is the documented resume trigger.
+        if grant.state == FlowGrantState::Active && !self.tasks.is_running(peer, &grant) {
+            self.spawn_fetch_task(peer, grant.clone(), resume_request(&grant));
+        }
         self.reply_for_grant(peer, &grant).await
     }
 
@@ -1200,6 +1224,25 @@ impl FlowDelivery {
                 stage,
             });
         }
+    }
+}
+
+/// NET-15: rebuild the offer-shaped request from the durable grant so a
+/// restart respawn goes through the one existing `spawn_fetch_task` path
+/// instead of inventing a second startup path. `capture_at_ms` is not
+/// persisted on the grant row; `0` (unknown) is the protocol's documented
+/// old-client value, and ingest then falls back EXIF → mtime (see
+/// core-index `taken_at_ms`) — the same behavior an old phone build gets.
+fn resume_request(grant: &FlowGrant) -> FlowFetchRequest {
+    FlowFetchRequest {
+        queue_sequence: grant.queue_sequence as u64,
+        pairing_epoch: grant.pairing_epoch.clone(),
+        lease_token: grant.lease_token.clone(),
+        content_hash: hex::encode(&grant.content_hash),
+        file_name: grant.file_name.clone(),
+        media_type: grant.media_type.clone(),
+        provider: grant.provider.clone(),
+        capture_at_ms: 0,
     }
 }
 
