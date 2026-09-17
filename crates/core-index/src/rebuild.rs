@@ -45,6 +45,20 @@ pub struct RebuildReport {
     pub duplicates: u64,
 }
 
+/// IDX-01: what one orphan-adoption pass did. Deliberately **not**
+/// [`RebuildReport`]: after a wipe, "skipped" can only mean "a second
+/// on-disk copy of content this very run already indexed"; incrementally
+/// it overwhelmingly means "already in the index, nothing to do". Same
+/// number, different fact — reusing the field name would make every
+/// reader of the hourly report draw the wrong conclusion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdoptReport {
+    /// Files on disk that had no index row and now have one.
+    pub adopted: u64,
+    /// Files whose content was already indexed — the healthy steady state.
+    pub already_indexed: u64,
+}
+
 /// Clear the asset table and re-index everything under
 /// `<library_root>/originals`. A missing `originals/` yields an empty
 /// index, not an error (a fresh library is a valid library). Hidden
@@ -53,44 +67,11 @@ pub struct RebuildReport {
 pub async fn rebuild(db: &Db, library_root: &Path, local_node_id: &[u8]) -> Result<RebuildReport> {
     db.clear_assets().await?;
 
-    let originals = library_root.join("originals");
-    let mut files = Vec::new();
-    if originals.is_dir() {
-        collect_files(&originals, &mut files)?;
-    }
-    // Lexicographic order makes the duplicate-content winner deterministic.
-    files.sort();
-
-    let mut report = RebuildReport {
-        indexed: 0,
-        duplicates: 0,
+    let (indexed, duplicates) = index_missing_files(db, library_root, local_node_id).await?;
+    let report = RebuildReport {
+        indexed,
+        duplicates,
     };
-    for path in &files {
-        let hash = crate::hash_file(path)?;
-        if db.get_asset(&hash).await?.is_some() {
-            report.duplicates += 1;
-            continue;
-        }
-        let meta = fs::metadata(path).map_err(|source| IndexError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let rel_path = rel_path_of(library_root, path)?;
-        db.insert_asset(&Asset {
-            hash: hash.to_vec(),
-            rel_path: rel_path.clone(),
-            media_type: media_type_for(path),
-            bytes: meta.len() as i64,
-            taken_at: Some(ingest::taken_at_ms(path, None)?),
-            width: None,
-            height: None,
-            src_device: device_of(&rel_path, local_node_id),
-            added_at: unix_ms_now(),
-            thumb_state: 0,
-        })
-        .await?;
-        report.indexed += 1;
-    }
 
     db.append_audit(&AuditEntry::local(
         unix_ms_now(),
@@ -107,6 +88,110 @@ pub async fn rebuild(db: &Db, library_root: &Path, local_node_id: &[u8]) -> Resu
     ))
     .await?;
     Ok(report)
+}
+
+/// IDX-01: adopt files that are on disk under `originals/` but have no
+/// index row — **without touching the rows that are already there**.
+///
+/// 这是 ADR-006「originals 是真相」缺失的那一半。`Reconcile`（SYNC-01）
+/// 早就在做另一半（行在、文件没了 → 删行），但没有人做「文件在、行没了
+/// → 补行」，于是索引一旦丢失，照片就永久看不见——真实事故见 IDX-01 卡。
+///
+/// 与 [`rebuild`] 共用同一个扫描循环，唯一的差别就是**不清表**：
+/// `added_at` / `width` / `height` / `thumb_state` 对现存行一字不动，
+/// 所以这个函数可以每小时跑、可以开机跑，而 `rebuild` 不行。
+///
+/// ⚠️ 安全前提（IDX-01 卡里逐条核实过）：本仓**没有**任何「删索引行但把
+/// 文件留在 `originals/` 里」的产品路径——三处删除全部先确认文件已消失。
+/// 哪天新增了这种功能（产品级删除/隐藏），这个函数会在下次收编时把它
+/// 复活，届时必须先给它接上墓碑判据再继续自动跑。
+pub async fn adopt_orphans(
+    db: &Db,
+    library_root: &Path,
+    local_node_id: &[u8],
+) -> Result<AdoptReport> {
+    let (adopted, already_indexed) = index_missing_files(db, library_root, local_node_id).await?;
+    let report = AdoptReport {
+        adopted,
+        already_indexed,
+    };
+
+    // WATCH-07 的噪声纪律：这个函数每小时跑一轮，稳态就是「一条没收」——
+    // 那种情况写审计等于每小时刷一行屏。只有真收编了才记。
+    if report.adopted > 0 {
+        db.append_audit(&AuditEntry::local(
+            unix_ms_now(),
+            None,
+            "index.adopted",
+            None,
+            Some(
+                serde_json::json!({
+                    "adopted": report.adopted,
+                    "already_indexed": report.already_indexed,
+                })
+                .to_string(),
+            ),
+        ))
+        .await?;
+    }
+    Ok(report)
+}
+
+/// The scan shared by [`rebuild`] and [`adopt_orphans`]: walk
+/// `<library_root>/originals` and insert a row for every file whose
+/// content is not indexed yet. Returns `(inserted, skipped)`.
+async fn index_missing_files(
+    db: &Db,
+    library_root: &Path,
+    local_node_id: &[u8],
+) -> Result<(u64, u64)> {
+    let originals = library_root.join("originals");
+    let mut files = Vec::new();
+    if originals.is_dir() {
+        collect_files(&originals, &mut files)?;
+    }
+    // Lexicographic order makes the duplicate-content winner deterministic.
+    files.sort();
+
+    let mut inserted = 0u64;
+    let mut skipped = 0u64;
+    for path in &files {
+        let hash = crate::hash_file(path)?;
+        if db.get_asset(&hash).await?.is_some() {
+            skipped += 1;
+            continue;
+        }
+        let meta = fs::metadata(path).map_err(|source| IndexError::Io {
+            path: path.clone(),
+            source,
+        })?;
+        let rel_path = rel_path_of(library_root, path)?;
+        let insert = db
+            .insert_asset(&Asset {
+                hash: hash.to_vec(),
+                rel_path: rel_path.clone(),
+                media_type: media_type_for(path),
+                bytes: meta.len() as i64,
+                taken_at: Some(ingest::taken_at_ms(path, None)?),
+                width: None,
+                height: None,
+                src_device: device_of(&rel_path, local_node_id),
+                added_at: unix_ms_now(),
+                thumb_state: 0,
+            })
+            .await;
+        match insert {
+            Ok(()) => inserted += 1,
+            // IDX-01: `insert_asset` 撞主键就报错（它的契约是"重复 = 逻辑
+            // bug"），对一次性的 rebuild 成立，但 adopt 要和 ingest 长期
+            // 并存——`get_asset` 与 insert 之间真有窗口。窗口输了不是错误，
+            // 是"别人先落库了"，按跳过处理；**只有确认对方真的落了行才
+            // 咽下这个错**，否则原样上抛，不拿竞态当万能借口。
+            Err(_) if db.get_asset(&hash).await?.is_some() => skipped += 1,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    Ok((inserted, skipped))
 }
 
 /// Depth-first listing of regular files, skipping hidden names.

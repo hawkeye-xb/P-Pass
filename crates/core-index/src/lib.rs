@@ -15,7 +15,7 @@ mod timeline;
 
 pub use dedup::hash_file;
 pub use ingest::{IncomingFile, IngestOutcome, Ingestor};
-pub use rebuild::{rebuild, RebuildReport};
+pub use rebuild::{adopt_orphans, rebuild, AdoptReport, RebuildReport};
 pub use timeline::timeline_page;
 
 /// Index-layer errors. Every I/O failure names the path it happened on —

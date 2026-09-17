@@ -1,6 +1,6 @@
 # IDX-01 索引重建没有任何运行时入口——索引一丢，照片就永久看不见
 
-状态：⬜ 可接（验收人 2026-09-17 派活：「重建入口吧，IDX-01 开工」）
+状态：🟡 代码完成，待真库 E3 验收（实现见本次 commit）
 级别：L2（猜测；字节没丢，缺的是"把它们找回来"的路径）
 关联: 与 [DEV-02](DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) 互相放大
 
@@ -178,3 +178,58 @@
 **阻塞与依赖**
 
 - 无。验收人已明示本期数据可删、可重装，真库 E3 取证不受限。
+
+
+## 实施记录
+
+**改了什么**
+
+- `rebuild.rs`：把扫描循环抽成私有 `index_missing_files`，`rebuild()` =
+  `clear_assets()` + 循环（**对外行为一字未改**，T-012 六条全绿），新增
+  `adopt_orphans()` = 只跑循环、不清表，独立的 `AdoptReport
+  { adopted, already_indexed }`（没有复用 `RebuildReport.duplicates`：清表后
+  "跳过"只可能是"本轮已索引过的同内容副本"，增量下压倒性地是"早就在册"，
+  同一个数字两种事实，共用字段名会让每个读小时报的人得出错误结论）。
+  竞态处理：`insert_asset` 撞主键时**先回查** `get_asset`，确认对方真落了行
+  才咽下这个错并计入跳过，否则原样上抛——不拿竞态当万能借口。
+- `reconcile.rs`：`run_once` 补上收编方向，`ReconcileReport` 加 `adopted`；
+  新建造者 `with_local_node_id` 作为开关（`watcher.rs` 借用 `remove_asset`
+  的那一份不接，不该顺带扫全库）。收编失败只 `warn!` 不中断——与既有
+  `list_asset_paths` 失败同一条纪律，对账绝不把 daemon 启动搞挂。
+- `main.rs`：常驻对账器接上 `with_local_node_id(node_id.0)`。
+- 版本 `0.5.4-test.6` → `0.5.4-test.7`，versionCode 27 → 28。
+
+**为什么不查 `audit_tombstone`**（代码里也写了）：墓碑记的是"这份内容离开过
+库"，而能走到收编这一步说明文件此刻确实躺在 `originals/` 里——那是有人把它
+放回来了。按墓碑永久拉黑，会让"删了又放回来"的照片再也进不了库，比本卡要修
+的问题更糟。
+
+**测试（新增 9 条）**
+
+- `core-index/tests/adopt.rs` 5 条：孤儿带原归属回来、第二遍空跑不改任何字段、
+  在册行逐字段不动、空跑不写审计（WATCH-07 噪声纪律）、同内容两份只占一行且
+  计入 `already_indexed`。**5 passed**
+- `daemon` `reconcile::tests` 新增 3 条（共 6 passed）：收编生效、没接开关就
+  一行不写、在册行不被重写。
+- `daemon/tests/idx01_wiring.rs` 1 条：断言 `main.rs` 真的接了
+  `with_local_node_id`——**这条专堵 DEVLOG-01 那个坑**（函数写好测好但生产没调，
+  单测全绿而生产是死代码）。**1 passed**
+- `core-index/tests/rebuild.rs`（T-012）**6 passed**，证明重构没动 `rebuild()`。
+
+**反证三组，全部真跑**
+
+| 反证 | 做法 | 结果 |
+|---|---|---|
+| ① 故障判据 | 停掉 `run_once` 里的收编调用 | `run_once_adopts_a_file…` + `adoption_never_rewrites…` **2 条变红** |
+| ② 不越界 | 让 `adopt_orphans` 偷偷先 `clear_assets()`（退化成 rebuild） | adopt 5 条里 **3 条变红** + daemon 侧 1 条变红 |
+| ③ 死代码 | `main.rs` 摘掉 `with_local_node_id` | 接线断言变红，报错原文即"否则只剩删幽灵那一半" |
+
+三处均已还原，`git diff --stat` 复核只剩预期的 4 个文件。`just ci` 在版本 bump
+之后跑过一遍，**all green**。
+
+**未完成：真库 E3**
+
+卡里那条「daemon 重启后桌面照片列表**肉眼可见**多出那 10 张」还没做——需要
+重新打包安装 daemon，而本机磁盘当时已到 88%（`target/` 98G），验收人要求先
+清构建产物。**清完后必须补做这一条才算完**，只有单测不足以结案（前置核实里
+第 2 条说的就是"可能查得到但渲染不出来"）。

@@ -38,6 +38,8 @@ use crate::events::{self, EventBus};
 pub struct ReconcileReport {
     /// 移除的幽灵资产条数（0 = 磁盘与索引一致）。
     pub removed: usize,
+    /// IDX-01: 收编的孤儿文件条数（磁盘上有、索引里没有）。
+    pub adopted: u64,
 }
 
 /// 磁盘 ↔ 索引对账器。只依赖 Db + library_root（blob 删除见模块注释）。
@@ -48,6 +50,9 @@ pub struct Reconcile {
     /// 累计移除计数（诊断用；Arc 使 clone 实例共享同一统计）。
     total_removed: std::sync::Arc<AtomicUsize>,
     events: Option<EventBus>,
+    /// IDX-01: 本机 NodeId。`None` = 不跑收编方向——`watcher.rs` 构造的
+    /// 那一份只借用 [`Reconcile::remove_asset`]，不该顺带扫全库。
+    local_node_id: Option<Vec<u8>>,
 }
 
 impl Reconcile {
@@ -57,7 +62,17 @@ impl Reconcile {
             library_root: library_root.into(),
             total_removed: std::sync::Arc::new(AtomicUsize::new(0)),
             events: None,
+            local_node_id: None,
         }
+    }
+
+    /// IDX-01: 接上本机 NodeId 即打开「收孤儿」方向。只有 `main.rs` 那份
+    /// 常驻对账器该接——接了才会每轮扫 `originals/` 补索引缺失的行。
+    /// 归属规则由 `core_index` 决定（`originals/<64hex>/` 反推来源设备，
+    /// 否则算本机），这里只负责把本机身份递进去。
+    pub fn with_local_node_id(mut self, node_id: impl Into<Vec<u8>>) -> Self {
+        self.local_node_id = Some(node_id.into());
+        self
     }
 
     /// SYNC-02：接上事件总线后，每跑完一轮就直发一次
@@ -90,6 +105,26 @@ impl Reconcile {
                 self.total_removed.fetch_add(1, Ordering::Relaxed);
             }
         }
+
+        // IDX-01: 另一半方向——文件在、索引行没了就补回来。
+        //
+        // 为什么先删后收：两个方向的作用集天然不相交（删的是"行在文件没了"，
+        // 收的是"文件在行没了"），顺序不影响结果；先删只是让同一轮里被判为
+        // 外部删除的那条不会白白参与下面的 hash 计算。
+        //
+        // 为什么不看 `audit_tombstone`：墓碑记的是"这份内容离开过库"，而能走
+        // 到这里说明文件此刻**确实躺在 originals/ 里**——那是有人把它放回来
+        // 了。按墓碑把它永久拉黑，会让"删了又放回来"的照片再也进不了库，
+        // 比本卡要修的问题更糟。
+        if let Some(node_id) = &self.local_node_id {
+            match core_index::adopt_orphans(&self.db, &self.library_root, node_id).await {
+                Ok(adopted) => report.adopted = adopted.adopted,
+                // 与上面 `list_asset_paths` 失败同一条纪律：对账是收敛手段，
+                // 一轮收编失败就等下一轮，绝不把 daemon 启动搞挂。
+                Err(e) => tracing::warn!("IDX-01: 孤儿收编本轮失败，等下一轮：{e}"),
+            }
+        }
+
         if let Some(bus) = &self.events {
             events::emit(bus, events::TIMELINE_INVALIDATED, serde_json::json!({}));
         }
@@ -182,6 +217,100 @@ mod tests {
             rx.try_recv().is_err(),
             "单轮 reconcile 只应触发一次，不是零次也不是多次"
         );
+    }
+
+    // IDX-01 RED: 对账必须有「收孤儿」这一半——文件躺在 originals/ 里、
+    // 索引却没有它的行时，跑一轮必须把它补回来。去掉 run_once 里那段
+    // adopt_orphans 调用，这条立刻变红（本卡的故障判据）。
+    #[tokio::test]
+    async fn run_once_adopts_a_file_that_has_no_index_row() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let local = [0xccu8; 32];
+        let src_dev = "aa".repeat(32);
+        let month = dir.path().join(format!("originals/{src_dev}/2026/09"));
+        std::fs::create_dir_all(&month).unwrap();
+        std::fs::write(month.join("orphan.jpg"), b"orphan bytes").unwrap();
+
+        let reconcile = Reconcile::new(db.clone(), dir.path()).with_local_node_id(local);
+        let report = reconcile.run_once().await;
+
+        assert_eq!(report.adopted, 1, "磁盘上有、索引里没有 → 必须收编");
+        assert_eq!(report.removed, 0, "没有幽灵行可删");
+        let page = db.timeline_page(None, 10).await.unwrap();
+        assert_eq!(page.assets.len(), 1, "收编完必须能从时间线读出来");
+        assert_eq!(
+            page.assets[0].src_device,
+            hex_to_bytes(&src_dev),
+            "归属必须从 originals/<64hex>/ 反推到来源设备，不是记成本机"
+        );
+    }
+
+    // IDX-01: 没接 with_local_node_id 就不许扫全库——watcher.rs 借用
+    // remove_asset 的那一份走的就是这条路，它不该顺带做全库收编。
+    #[tokio::test]
+    async fn adoption_stays_off_until_the_local_node_id_is_wired() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let month = dir.path().join("originals/aa/2026/09");
+        std::fs::create_dir_all(&month).unwrap();
+        std::fs::write(month.join("orphan.jpg"), b"orphan bytes").unwrap();
+
+        let report = Reconcile::new(db.clone(), dir.path()).run_once().await;
+
+        assert_eq!(report.adopted, 0);
+        assert_eq!(
+            db.timeline_page(None, 10).await.unwrap().assets.len(),
+            0,
+            "没打开收编开关就一行都不许写"
+        );
+    }
+
+    // IDX-01 反证②（不越界）：收编**不是**清表重建。已经在册的行，
+    // added_at / thumb_state 必须一字不动——真走了 clear+rebuild 这条必红。
+    #[tokio::test]
+    async fn adoption_never_rewrites_rows_that_are_already_indexed() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let month = dir.path().join("originals/aa/2026/09");
+        std::fs::create_dir_all(&month).unwrap();
+        let kept = month.join("kept.jpg");
+        std::fs::write(&kept, b"kept bytes").unwrap();
+        let kept_hash = core_index::hash_file(&kept).unwrap().to_vec();
+        db.insert_asset(&storage::Asset {
+            hash: kept_hash.clone(),
+            rel_path: "originals/aa/2026/09/kept.jpg".into(),
+            media_type: "image/jpeg".into(),
+            bytes: 10,
+            taken_at: Some(111),
+            width: Some(640),
+            height: Some(480),
+            src_device: vec![7u8; 32],
+            added_at: 12345,
+            thumb_state: 1,
+        })
+        .await
+        .unwrap();
+        std::fs::write(month.join("new.jpg"), b"new bytes").unwrap();
+
+        let report = Reconcile::new(db.clone(), dir.path())
+            .with_local_node_id([0xccu8; 32])
+            .run_once()
+            .await;
+
+        assert_eq!(report.adopted, 1, "只该收那一个没入册的");
+        let kept_row = db.get_asset(&kept_hash).await.unwrap().expect("原行还在");
+        assert_eq!(kept_row.added_at, 12345, "added_at 不许被重写");
+        assert_eq!(kept_row.thumb_state, 1, "thumb_state 不许被归零");
+        assert_eq!(kept_row.width, Some(640), "width 不许被抹成 NULL");
+        assert_eq!(kept_row.src_device, vec![7u8; 32], "归属不许被改写");
+    }
+
+    fn hex_to_bytes(hex: &str) -> Vec<u8> {
+        (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect()
     }
 
     #[tokio::test]
