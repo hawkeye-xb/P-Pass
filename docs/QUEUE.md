@@ -105,6 +105,7 @@
 | P1 | [QA-02](../cards/QA-02-queue-archive-gate-section-7-mutation-broken.md) | 🟥 挂号：归档门禁变异 C 空转——分区七成末节后 `next()` 抛 StopIteration，反证从未真正执行且 `just ci` 照绿（NET-16 分出） | L1 |
 | P3 | [QA-03](../cards/QA-03-archived-cards-relative-links-break-and-no-gate-catches-it.md) | 🟡 代码完成待你过目：卡内链接门禁上线（抓到 8 处断链，已全修）+ `just ci-docs` 快车道；union 合并两次证伪后撤掉 | L1 |
 | P1 | [QA-04](../cards/QA-04-no-written-rules-for-parallel-sessions-on-main.md) | 🟡 代码完成待你过目：AGENTS.md 落地一卡一分支+PR、红线5 口径统一、新增 PR 模板；CI 一字未动（push 本来就只盯 main）；三项仓库设置待你在网页定 | L1 |
+| P1 | [SEC-02](../cards/SEC-02-commit-identity-allowlist-gate.md) | 🟡 代码完成待你过目：提交身份白名单门禁（新 lane `ci-identity`，不加 paths 全量触发）+ 六变异反证；对真实越界提交实测命中、全史 1065 提交不误伤；`dependabot[bot]` 留不留待你拍板 | L1 |
 | P3 | [DEV-02](../cards/DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) | 🟥 挂号：merge_device 物理删设备行，验收人要求只标记「已断开授权」（入口当前被 DEV-01b 藏起，潜伏） | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 挂 release lint；CI 钉 17 不受影响 | L3 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前写死 | L2 |

@@ -1,0 +1,26 @@
+# 允许向本仓提交的身份白名单（SEC-02）
+#
+# 门禁逻辑是**白名单**而不是黑名单：只有下列身份能提交，其余一律拒绝。
+# 这样做的原因——黑名单要把「禁止什么」写进仓库，那串字符本身就会被
+# 提交上来，等于为了防泄漏反而主动泄漏一次。白名单只描述「允许谁」，
+# 不含任何需要保密的内容。
+#
+# 格式：每行一条 `Name <email>`，name 与 email 都必须逐字符匹配。
+# 以 # 开头的行和空行会被忽略。
+#
+# 需要新增身份？请在本仓开一个 issue 说明用途，由仓库所有者
+# @hawkeye-xb 增行；不要绕过门禁（`--no-verify` / 改门禁文件）提交。
+
+# --- 人类身份 ---
+lizhaowen <lizhaowen0722@gmail.com>
+lizhaowen <lizhaowen_xixi@163.com>
+690591397 <690591397@qq.com>
+
+# --- 平台机器人（GitHub 侧生成，非人为设置，删掉会导致对应流程全红）---
+# GitHub：网页点 Merge 生成的合并提交，committer 恒为它
+GitHub <noreply@github.com>
+# github-actions：workflow 内产生的提交（bin-* 构建产物分支等）
+github-actions <actions@github.com>
+# dependabot：依赖升级 PR。删掉此行 = dependabot 的 PR 从此全部红灯，
+# 需要改为人工重做依赖升级。保留与否是策略选择，不是安全问题。
+dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>
