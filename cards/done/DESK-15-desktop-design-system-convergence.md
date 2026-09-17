@@ -189,7 +189,7 @@
 
 ## 真机验收
 
-2026-09-10 macOS 真机（`/Applications/P-Pass.app`，commit `889ec06`
+2026-09-10 macOS 真机（`/Applications/P-Pass.app`，commit `3729fb6`
 即时构建）：走查 Button/Card/Dialog/Notice/NavItem 五个组件的真实渲染
 （重命名相册 Dialog、断连 Notice、侧栏 NavItem 切页），在真实 Tauri 窗口
 （非 headless 浏览器预览）里视觉正常、无错位闪烁，符合本卡"收口不改变

@@ -7,7 +7,7 @@
 
 ## 工件与运行态先验（按 AGENTS.md §0 要求核实,不是只看编译）
 
-1. `cargo build --release -p daemon` 用当前 `main`（含 fbeb7ba）重建，
+1. `cargo build --release -p daemon` 用当前 `main`（含 30e1dc7）重建，
    `target/release/daemon` mtime `Sep 16 12:37`（晚于该 commit 12:15:57）。
 2. 旧 launchd agent `com.p-pass.daemon`（指向 9/15 旧 daemon 二进制）先
    `launchctl bootout` 清除，避免新装 App 内置 daemon 被旧常驻进程抢注册。

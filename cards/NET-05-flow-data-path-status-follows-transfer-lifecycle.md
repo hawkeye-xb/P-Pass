@@ -2,7 +2,7 @@
 
 > 🟡 状态：代码完成，待共享真机回归
 > 级别：L2 · 阻塞：无
-> Owner: Hermes · 分支：`work/net-05-flow-path` · Base: `6fc1748`
+> Owner: Hermes · 分支：`work/net-05-flow-path` · Base: `774acc8`
 > 前置：NET-04 的连接缓存与 `path_of(provider, ALPN_BLOBS)` 已在 main；**不等待**其 Pause / Cancel / Retry 真机回归后才开始本卡。
 
 ## 问题

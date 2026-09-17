@@ -6,7 +6,7 @@
 
 ## 目标
 
-在最新 main（`ea3bbf4`，含 T-071b 全部修复；任务卡写的 `9a4f9ae` 为祖先 commit）上打 tag `v0.2.0-test.3`，端到端验证发布流水线。
+在最新 main（`84bc12e`，含 T-071b 全部修复；任务卡写的 `b0ef595` 为祖先 commit）上打 tag `v0.2.0-test.3`，端到端验证发布流水线。
 
 ## 验收结果
 
@@ -69,7 +69,7 @@ daemon: OK
 testclient: OK
 # ③ BUILD_INFO 指向与 tag 一致的构建源
 $ cat BUILD_INFO
-built from ea3bbf491252f9b1212533c51e8c1b253ed1ced7 on 2026-08-03T11:47:51Z
+built from 84bc12ef0877c59aa65c37cca4fe09b47167c49a on 2026-08-03T11:47:51Z
 ```
 
 **二进制属性验证**（file + codesign，隔离目录 `/tmp/ppf-daemon-verify` 实测）：
@@ -118,12 +118,12 @@ Options:
 ## 备注 / 观察项
 
 1. **`--help` 行为**：daemon 无 clap 参数解析，`--help` 被忽略直接启动服务。卡面写「`./P-Pass/daemon --help` 能起」，实测行为为「直接启动成功」——符合验收意图（能起）。若希望 `--help` 打印用法，需后续给 daemon 加 cli 参数层（非本卡范围，记录待议）。
-2. **BUILD_INFO 确认**：`built from ea3bbf491252f9b1212533c51e8c1b253ed1ced7 on 2026-08-03T11:47:51Z` —— 构建源 commit 与 tag 所指向的 main HEAD 一致。
+2. **BUILD_INFO 确认**：`built from 84bc12ef0877c59aa65c37cca4fe09b47167c49a on 2026-08-03T11:47:51Z` —— 构建源 commit 与 tag 所指向的 main HEAD 一致。
 3. **测试残留**：验证用 daemon 进程已 kill，无残留；验证全程用 `PPF_DATA_DIR=/tmp/ppf-daemon-verify` 隔离目录，**未触碰**真实库目录（`~/Library/Application Support/P-Pass`），无任何污染。
 
 ## 复验（2026-08-03 21:5x，卡 4 pending 项闭环）
 
-审核文档 `docs/NEXT.md`（commit `cace31a`）标记「③ zip 自包含实测 ⏳ pending，需登录态下载 draft 资产」。
+审核文档 `docs/NEXT.md`（commit `dda8bc4`）标记「③ zip 自包含实测 ⏳ pending，需登录态下载 draft 资产」。
 **此 pending 由 Salamira 用本地 gh CLI 登录态（PAT: repo+workflow+read:org）直接闭环，无需人类补证：**
 
 ```bash

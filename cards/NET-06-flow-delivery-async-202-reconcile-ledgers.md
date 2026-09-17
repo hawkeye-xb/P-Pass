@@ -30,7 +30,7 @@
 > "推送优先+本地 iroh 信号判活+超时兜底问一次"。如果要理解
 > "手机现在怎么知道 completed 了"，请先读 NET-14，不要在本卡内重新
 > 设计发现机制。
-> 协同分支：`main`（本轮已提交 `485d5ef`）
+> 协同分支：`main`（本轮已提交 `2e84213`）
 > 级别：L2 · 阻塞：等 NET-15~19 五张子卡全部归档；归档还需 NET-01 的
 > 蜂窝热点/relay 真机窗口
 
@@ -223,7 +223,7 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
 - [x] 崩溃恢复：active grant + 无运行任务 → status 触发重拉，最终 completed
       （daemon 集成测试模拟 task 丢失）。**已由
       [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
-      完成（`5bdbae4`+`bbdfbdb`，2026-09-17）：status() 重拉分支 + 原子 try_register +
+      完成（`c01a02f`+`b67b0a7`，2026-09-17）：status() 重拉分支 + 原子 try_register +
       33/33 全绿 + 反证真跑。**
 - [ ] 重试不互踩：手机侧超时后先 status 见 active → 不重发 offer（JVM 测试
       断言 offer 调用次数）。**已并入
@@ -386,7 +386,7 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
     "发起 fetch 并等它" 改造成 "offer 一下，然后轮询 status"，外加
     对应 JVM 测试，然后才能编译安装到三星真机、造 30+ 张隔离测试照片
     复现并验证原始症状是否解决。这轮会话未完成这部分，留给下一轮。
-- 2026-09-15：**Android 侧完全接线 + 真机验证（commit `485d5ef`）**。
+- 2026-09-15：**Android 侧完全接线 + 真机验证（commit `2e84213`）**。
   - `DaemonClient.kt`：新增 `flowStatus`/`flowSuspend`/`flowCancelTuple`
     三个 suspend 方法，复用既有 bounded `call()`。
   - `NativeFlowDeliveryPort.kt`（核心改造）：`offer()` 后不再阻塞调用

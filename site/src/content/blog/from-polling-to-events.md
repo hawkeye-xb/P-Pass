@@ -71,6 +71,6 @@ IPC 新增一个方法 `events.subscribe`。客户端发订阅请求，daemon �
 这个重构没有引入任何新依赖，tokio broadcast 是现成的，协议是既有 IPC 框架的一个新方法。改动的核心其实是**想清楚一件事**：状态推送是"通知"不是"状态本身"，通知可以丢，状态不能错。想清楚这个，实现就只是顺着写。
 
 相关材料：
-- 实现提交：[f6f734a](https://github.com/hawkeye-xb/P-Pass/commit/f6f734a02d3e5ac71b99c43c65035a69797adb4f)
+- 实现提交：[97596ca](https://github.com/hawkeye-xb/P-Pass/commit/97596caed717d1dffb33b68d6c8ebfd6f2e35da4)
 - daemon 事件总线：[crates/daemon/src/events.rs](https://github.com/hawkeye-xb/P-Pass/blob/main/crates/daemon/src/events.rs)
 - 订阅协议实现：[crates/daemon/src/ipc.rs](https://github.com/hawkeye-xb/P-Pass/blob/main/crates/daemon/src/ipc.rs)

@@ -2,7 +2,7 @@
 
 > ✅ 状态：**①②③ 全部验证完成**（① `windows-x64` vcpkg 缓存；
 > ② 拆成 create-draft + 三条独立 upload job，见「实施记录①②」，
-> commit `1ee4a45` + `81ff6a2`；③ 2026-09-07 用 Release #51（`v0.5.0-test.7`）
+> commit `802ff11` + `4adc411`；③ 2026-09-07 用 Release #51（`v0.5.0-test.7`）
 > 实测验证：Android 构建 4m45s 完成、17s 内即上传完毕，Windows 仍在跑到
 > 30m35s；最终 Release 正文补齐完整签名状态 `macOS=yes/Windows=no/Android=yes`
 > 与 sha256 清单，无需再等一次 dispatch）。
@@ -91,7 +91,7 @@ draft ──┬── macos-arm64 ──┐
 它的 token 只有常规 `repo` 读写，所以读文件/建分支/建 issue 都正常，写
 workflow 被单独拦下。
 
-分支 `ci/release-draft-first-and-win-cache` 因此指向 `217149f`——main 历史里
+分支 `ci/release-draft-first-and-win-cache` 因此指向 `7cb031a`——main 历史里
 一个已有的 commit，**diff 为空**，PR 自然建不出来（"There isn't anything to
 compare"）。
 
@@ -116,7 +116,7 @@ compare"）。
 ⚠️ 真正的判据是 CI 上跑一次看那步耗时（首次仍要 10-20 分钟建缓存，第二次起才
 是秒级）——**这条还没跑，留给下一次 release 或 dispatch 时看**。
 
-## 实施记录②（全拆上传 + 删环境门，2026-08-26 · 1ee4a45 + 81ff6a2）
+## 实施记录②（全拆上传 + 删环境门，2026-08-26 · 802ff11 + 4adc411）
 
 ### 起因是我上一轮的两个错
 
@@ -166,7 +166,7 @@ notes，客户端更新说明少了签名状态那行。
 只注释到 v4，不确定的输入不赌）；upload 一律 `--clobber`（重跑 workflow 时
 资产已存在，裸 upload 会失败）。
 
-### `environment: release-signing` 删了（81ff6a2）
+### `environment: release-signing` 删了（4adc411）
 
 **它从来没拦过任何东西。** 三条证据：`release.yml` 头注释自己写着「未配置
 保护规则时自动通过」；验收人问「我在哪里审批？」——因为没有那个界面；他看到

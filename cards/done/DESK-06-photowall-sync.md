@@ -1,5 +1,5 @@
 # DESK-06 照片墙同步补漏（L1）
-> ## ✅ 状态：代码已合并（commit `983483e`），2026-08-20 归档
+> ## ✅ 状态：代码已合并（commit `0871f8d`），2026-08-20 归档
 >
 > 三条修法逐条核对，全部在位：
 > 1. `App.svelte:645` — `onDaemonEvent` 已含 `name === "timeline.invalidated"`

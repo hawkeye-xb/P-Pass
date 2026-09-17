@@ -86,7 +86,7 @@ Windows/Linux 的日志位置不同（LaunchAgent 是 macOS 专属）。实施�
 
 ---
 
-## 实施记录（1e1359f + 0e0521f）
+## 实施记录（0e370fe + 5f51cbd）
 
 ### 改了什么
 

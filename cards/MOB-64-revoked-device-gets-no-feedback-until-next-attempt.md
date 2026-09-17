@@ -2,7 +2,7 @@
 
 > 🟡 状态：代码完成，待三星真机验收
 > 级别：**L2** · 阻塞：无
-> 协同分支：`main` · 实现提交：`c1c5803`
+> 协同分支：`main` · 实现提交：`c60b7e5`
 > 当前节点：Flow delivery 已复用 holder 的 `isPairingLostText` 判据，`err.not_paired` 与真实 `err.not_authorized` 都会投影到既有 pairingLost 红卡；Android JVM、debug APK、`just ci` 已通过。
 > 下一步：三星真机重配对后桌面移除设备；手机下一次 Flow 调用应显示「连不上客户端」红卡，而不是普通重试。
 

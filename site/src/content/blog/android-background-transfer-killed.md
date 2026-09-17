@@ -93,6 +93,6 @@ setForeground(foregroundInfo())
 这次我们的教训就是第 4 条本身。以后写保护性调用，挂流程必经的收口点，别指望下一个接手的人认得它。
 
 相关材料：
-- 删掉保护的重构：[a325208](https://github.com/hawkeye-xb/P-Pass/commit/a325208)（1147 行削到 125 行）
-- 修复提交：[56514e3](https://github.com/hawkeye-xb/P-Pass/commit/56514e3)
+- 删掉保护的重构：[d72ea44](https://github.com/hawkeye-xb/P-Pass/commit/d72ea44)（1147 行削到 125 行）
+- 修复提交：[f985df4](https://github.com/hawkeye-xb/P-Pass/commit/f985df4)
 - 前台服务实现：[FlowTransferForegroundService.kt](https://github.com/hawkeye-xb/P-Pass/blob/main/apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowTransferForegroundService.kt)

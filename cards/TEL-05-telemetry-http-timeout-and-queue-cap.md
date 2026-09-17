@@ -1,6 +1,6 @@
 # TEL-05 遥测外呼加超时与队列封顶（reqwest 无超时 = flush 循环可挂死）　级别 L1
 
-> ✅ 状态：代码完成 `436ddbd`（2026-09-17），全部门禁绿；L1 无需真机，待验收人复核归档
+> ✅ 状态：代码完成 `413f9d1`（2026-09-17），全部门禁绿；L1 无需真机，待验收人复核归档
 > 级别：L1 · 阻塞：无
 > **AGENTS.md 设计纪律登记：本卡是终态方案；无需另开根治卡。**
 
@@ -55,7 +55,7 @@ NET-01 教训的镜像：错误处理按「回声回来了但说不好」设计�
 
 ## 实施记录
 
-2026-09-17 · `436ddbd` · 执行 agent（Salamira），分支 `fix/TEL-05-telemetry-timeout-queue-cap`
+2026-09-17 · `413f9d1` · 执行 agent（Salamira），分支 `fix/TEL-05-telemetry-timeout-queue-cap`
 
 - **改动**（与卡面四条期望行为一一对应）：
   1. `Telemetry::new` → `Client::builder().timeout(20s)`（新常量

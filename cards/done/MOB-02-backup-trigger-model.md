@@ -94,7 +94,7 @@ CI 绿；PROGRESS/NEXT/ROADMAP 各一行；卡移 done/。
 - 本地：`./gradlew :app:assembleDebug :app:testDebugUnitTest` BUILD SUCCESSFUL，
   **121/121** 绿（107 既有 + TriggerPolicyTest 9 + BackupAttemptStoreTest 3 +
   TroubleTextTest 文案断言随定稿更新）。
-- CI：PR Checks run 31368510611（commit e3931ba）。
+- CI：PR Checks run 31368510611（commit 9e6aebe）。
 - 技术坑记录：work-runtime 2.10 content trigger API 在 Constraints.Builder
   （javap 反编译确认）；mockable android.jar SDK_INT=0 → Constraints.build()
   SDK<24 分支把 delay 强制 -1 → WorkSpec 读不回 → 验收 2 用文件级接线反证

@@ -1,6 +1,6 @@
 # MOB-26 统一 Android 媒体查看器：翻页、缩放与系统边缘返回
 
-> 🟡 状态：代码已合并（`ddee8ac`），待 Mate 60 真机验收
+> 🟡 状态：代码已合并（`aabbc32`），待 Mate 60 真机验收
 > 级别：L2 · 阻塞：无（待验收）
 > 协同分支：`main`
 > 当前节点：MOB-45 已合并；页序快照、Pager、Telephoto 缩放/下拉关闭与 Android 返回 reducer 已进入 `main`

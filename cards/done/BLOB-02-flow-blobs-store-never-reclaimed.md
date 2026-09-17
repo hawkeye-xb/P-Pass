@@ -76,7 +76,7 @@ partial（`main.rs:333-335` 注释原话），粗暴清空会连同正在传输�
 
 ## 代码完成记录（2026-09-09）
 
-- 提交 `c6c0bb6`（fix(blobs): reclaim completed Flow stores），已在 `main`。
+- 提交 `a123688`（fix(blobs): reclaim completed Flow stores），已在 `main`。
 - 本次复核实测命令与输出：
   - `cargo nextest run -p transport --test blobs_resume periodic_gc` →
     `2 tests run: 2 passed`（`periodic_gc_reclaims_a_completed_remote_blob`、

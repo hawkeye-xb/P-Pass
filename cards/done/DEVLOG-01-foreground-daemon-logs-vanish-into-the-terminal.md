@@ -1,6 +1,6 @@
 # DEVLOG-01 开发期前台起的 daemon 日志只在终端一闪而过
 
-状态：✅ 已归档（commit `0943c95`）
+状态：✅ 已归档（commit `2dd3443`）
 级别：L3（开发期工具；`PPF_LOG_FILE` 不设时生产路径一行未变）
 关联: 泛化 NET-02 建立的折叠 + 上限逻辑（NET-02 已归档，本卡不改动它）；
   与 DESK-10 零交互（已核实，见实施记录）
@@ -100,7 +100,7 @@ test result: FAILED. 0 passed; 1 failed
    作者跑过。改成固定行数上界（`SINK_CAP_BYTES / 行长 + 2`），chunk 从
    1KB 放大到 1MB，用例从死循环变成 0.35s。
 4. **范围外但阻塞门禁的一处**（已在同批提交记录，非本卡范围）：
-   `4a4181e` 删掉了 `tools/check-queue-sync.sh` 与
+   `1968008` 删掉了 `tools/check-queue-sync.sh` 与
    `tools/test-queue-archive-gate.sh` 的执行位（`:100755 → 100644`），
    `justfile:59-60` 用 `./tools/...` 调用 → 本地 `just ci` 在 queue-check
    步 `Permission denied`（exit 126）；`ci-docs.yml:51,54` 用

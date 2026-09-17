@@ -39,7 +39,7 @@
 
 当前源码与卡面验收不一致，已由 Git 历史确认：
 
-- 旧版 footer（`c433d92` 之前）是 `bucket_done = checked.size`，展示“`N albums`”；
+- 旧版 footer（`6dc6550` 之前）是 `bucket_done = checked.size`，展示“`N albums`”；
 - M5 重做后改为 `bucket_summary = sumOf { it.count }`，文案明确是
   “`N photos will back up` / `将备份 N 张`”，这是照片汇总，不是相册数；
 - 设置页 `backup_scope_n` 仍以 `BackupScopeStore.selectedBucketIds()?.size` 显示

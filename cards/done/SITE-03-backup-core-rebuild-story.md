@@ -1,6 +1,6 @@
 # SITE-03 为什么重建备份核心：从批处理到有账本的单张流程（L1）
 
-> ✅ 状态：代码已合并（`40917dc`），2026-09-07 归档
+> ✅ 状态：代码已合并（`07f7a97`），2026-09-07 归档
 > 级别：L1 · 阻塞：无
 > 结论：中文文章、sitemap 与 RSS 已由 Pages 发布并在线核对。
 
@@ -33,4 +33,4 @@ P-Pass 的备份核心已从旧 `scan → hash → manifest → push → commit 
 
 - 文章：`site/src/content/blog/why-we-rebuilt-backup-core.md`；静态 sitemap 已登记其中文 URL。
 - 本地验证：`npm ci && npm run build` 成功；新文章静态页、RSS 项、sitemap URL 均在 `dist/` 中存在。
-- 发布：`40917dc` 触发的 Pages workflow `34102057353` 为 `completed/success`；线上文章、sitemap、RSS 均返回 HTTP 200。
+- 发布：`07f7a97` 触发的 Pages workflow `34102057353` 为 `completed/success`；线上文章、sitemap、RSS 均返回 HTTP 200。

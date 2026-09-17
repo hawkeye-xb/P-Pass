@@ -37,7 +37,7 @@ t=+10s ~ +60s（传输仍在进行）  adj=700（不变）
 `SystemForegroundService` 的 `dataSync` 类型声明都还在（历史遗留），
 但**没有任何生产代码调用它们**——manifest 声明是空的承诺。
 
-根因考古（`git show a325208`，2026-09-01 "feat(backup): cut worker over
+根因考古（`git show d72ea44`，2026-09-01 "feat(backup): cut worker over
 to flow wake adapter"）：旧 `BackupWorker.kt`（1147 行）里
 `foregroundInfo()` 私有函数 + `doWork()` 开头的
 `setForeground(foregroundInfo())` 调用，随着这次重构把 Worker 削到
@@ -127,7 +127,7 @@ MOB-69 是终态/提醒类通知（失败、哨兵、白名单、重传），本
   in foreground`。测试完成后已恢复 `backup_scope.xml` 原始内容
   （已备份 `/tmp/backup_scope_orig.xml`），设备端测试相册待清理
   （`/sdcard/DCIM/NET12Test/`，桌面 daemon 库中对应测试文件待清理）。
-- 源码交叉核实：`git show a325208^:.../BackupWorker.kt` 的
+- 源码交叉核实：`git show d72ea44^:.../BackupWorker.kt` 的
   `foregroundInfo()`（第 1122-1146 行）与 `doWork()` 开头的
   `setForeground(foregroundInfo())` 调用（第 517 行）确认为本次改动
   删除的原始实现；新架构 `NativeFlowDeliveryPort.kt`/`FlowRunner.kt`/

@@ -36,7 +36,7 @@
 
 **并行会话已经把测试改绿了，改法是把断言反过来**
 
-`21b2eba` 把那条断言从 `!status.task_running` 改成 `status.task_running`，
+`b8c98a6` 把那条断言从 `!status.task_running` 改成 `status.task_running`，
 即正式接受「status() 会把被 suspend 打断的任务重拉起来」。鉴于上面那条
 （接口零调用），这个改法是站得住的——它给一个没人调的接口定了新语义。
 截至本卡写成时 **main 是绿的**：`cargo nextest run --workspace` → 440 passed /

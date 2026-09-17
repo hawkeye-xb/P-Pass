@@ -74,6 +74,6 @@ daemon 侧加了个测试，在数据面拉取里注入一段远超控制超时�
 这条超时线前前后后被调过好几轮，每轮都在两个错误之间摆钟。直到有人回头问这个数字到底在同时回答哪两个问题，才算找到出口。
 
 相关材料：
-- 实现提交：[b3b002d](https://github.com/hawkeye-xb/P-Pass/commit/b3b002d3cde21d5f9cf55b36a6ae0ec2425057ad)（daemon 侧）、[485d5ef](https://github.com/hawkeye-xb/P-Pass/commit/485d5ef903743635776b7c1b1749b99f69588815)（手机侧接线 + 真机验证）
+- 实现提交：[908baee](https://github.com/hawkeye-xb/P-Pass/commit/908baee8409f71bfd5517d8152e037ef9f1120b6)（daemon 侧）、[2e84213](https://github.com/hawkeye-xb/P-Pass/commit/2e842132669ecf0b6079f1da69321c316eae0ebe)（手机侧接线 + 真机验证）
 - 状态查询实现：[crates/daemon/src/flow_delivery.rs](https://github.com/hawkeye-xb/P-Pass/blob/main/crates/daemon/src/flow_delivery.rs)
 - 手机侧轮询决策：[NativeFlowDeliveryPort.kt](https://github.com/hawkeye-xb/P-Pass/blob/main/apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/NativeFlowDeliveryPort.kt)

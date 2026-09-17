@@ -93,7 +93,7 @@ Material Banner 规范的标准形状（对照见下表）：
 - 2026-09-15（补充，本轮）：Snackbar 安全区适配（`MainActivity.kt` 的
   `SnackbarHost` 加 `safeDrawingPadding()`，之前三键导航手机会被导航栏
   遮挡）+ 版本号 bump 至 `0.5.3-test.1`（versionCode 23），commit
-  `423482e`，CI Android 绿。三星 SM-S9210 真机逐个复测完整 case 矩阵：
+  `f516dc2`，CI Android 绿。三星 SM-S9210 真机逐个复测完整 case 矩阵：
   `OffByUser`（用户主动关，提示同步清空）/ `Armed`（健康态无提示）/
   `NeedsSystemAuthorization`（撤白名单，开关不误跳灰、hint+横幅正确
   出现）/ 授权同意分支（Snackbar"已获得后台运行权限"）/ 授权拒绝分支

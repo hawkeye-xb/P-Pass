@@ -9,7 +9,7 @@
 Release 也被误纳入删除范围。远端 `v0.3.1` tag 仍存在，但 Releases 页面只剩
 `v0.5.0-test.4` 与 `dogfood`，不符合保留正式版的决定。
 
-原始 Release #24 成功（2026-08-09，commit `9c66c76`），其 Android、macOS、
+原始 Release #24 成功（2026-08-09，commit `1242b64`），其 Android、macOS、
 Windows 与 Windows installer artifacts 仍可从 Actions 获取。
 
 ## 关闭决定
@@ -27,7 +27,7 @@ Windows 与 Windows installer artifacts 仍可从 Actions 获取。
 ## 原验收标准（已废弃）
 
 - [ ] GitHub Releases 页面同时列出 `v0.5.0-test.4`、`v0.3.1` Draft 与 `dogfood`。
-- [ ] `v0.3.1` Release 绑定原 tag `9c66c76`，保留 Draft；不设 prerelease/不发布。
+- [ ] `v0.3.1` Release 绑定原 tag `1242b64`，保留 Draft；不设 prerelease/不发布。
 - [ ] 原 Actions #24 的 9 个资产全部恢复：Android APK、macOS DMG/zip/SUMS、Windows daemon/testclient/SUMS/build info/installer。
 - [ ] 逐项下载或页面核对文件名与原 Actions #24 artifact 清单一致；`v0.5.0-test.4` 和 `dogfood` 不被修改。
 
@@ -44,7 +44,7 @@ Windows 与 Windows installer artifacts 仍可从 Actions 获取。
 
 ## 实施记录
 
-- 2026-09-04：确认远端保留 `v0.3.1 -> 9c66c76` 与 `dogfood`、`v0.5.0-test.4`。Release #24 为 Success，四个 Actions artifact 仍在，含恢复所需九个资产。
+- 2026-09-04：确认远端保留 `v0.3.1 -> 1242b64` 与 `dogfood`、`v0.5.0-test.4`。Release #24 为 Success，四个 Actions artifact 仍在，含恢复所需九个资产。
 - 2026-09-07：现场复核 `v0.3.1` Release 页面，实际只剩 **2 个文件**，应有 9
   个（原始 Android/macOS/Windows 全平台资产）——恢复动作尚未执行，只是
   确认了缺口范围比 2026-09-04 记录时更明确。下一步：从 Release #24 的四个
