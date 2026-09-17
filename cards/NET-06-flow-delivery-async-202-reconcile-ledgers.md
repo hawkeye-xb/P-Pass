@@ -13,7 +13,7 @@
 > 各自可独立认领、独立验收，完成后各自回写勾掉本卡对应项：
 > [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
 > （崩溃自动重拉）、
-> [NET-16](NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)
+> [NET-16](done/NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)
 > （幂等零重传断言）、
 > [NET-17](NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md)
 > （迟到边界竞态）、
@@ -217,7 +217,7 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       接线才能写。**
 - [x] 幂等：completed 后重复 status/fetch 返回同一 receipt_id，零重传
       （daemon 集成测试，复用 `persisted_receipt` 既有语义）。**已拆出
-      [NET-16](NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)
+      [NET-16](done/NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)
       并于 2026-09-17 完成：反证真跑（撤短路分支 → 用例红），
       `flow_delivery` 32/32。**
 - [ ] 崩溃恢复：active grant + 无运行任务 → status 触发重拉，最终 completed

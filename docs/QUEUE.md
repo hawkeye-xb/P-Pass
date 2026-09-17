@@ -150,7 +150,6 @@
 | [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 版本脚本版本目标全断言 | — |
 | [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 五个 workflow 从 TOML 派生 Rust 工具链 | — |
 | [TEL-05](../cards/TEL-05-telemetry-http-timeout-and-queue-cap.md) | 遥测超时+封顶完成 `436ddbd`，L1 无需真机 | — |
-| [NET-16](../cards/NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md) | 零重传断言完成（纯测试卡，零生产 diff），反证真跑，L1 无需真机 | — |
 
 ---
 
