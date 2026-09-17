@@ -39,8 +39,13 @@
 4. **Tag**: `git tag v<version>` + push. Tag pushes run the Release
    workflow (release.yml) → draft Release with platform assets.
 5. **Human publish**: review the draft (signing status, asset list,
-   E2E live scenarios result if the tag ran one), then
-   `gh release edit <tag> --draft=false`.
+   E2E live scenarios result if the tag ran one), then publish it from the
+   GitHub web UI (Releases → the draft → Publish release).
+   > **Do not use the local `gh` CLI for this repo** — it is not bound to
+   > this repo's account. Triggering workflows, reading CI results and
+   > publishing releases all happen in the browser; git goes over the
+   > personal SSH remote only. (`gh` *inside* `.github/workflows/` runs on
+   > the runner with `GITHUB_TOKEN` and is unaffected.)
 
 ## 3.5 Update channel (UPD-01) — current scope & known gaps
 
@@ -165,7 +170,12 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 4. **打 tag**：`git tag v<版本>` + push。tag 触发 Release workflow →
    draft Release（三平台资产）。
 5. **人工 publish**：核对 draft（签名状态、资产清单、e2e 结果若本次
-   tag 跑了），然后 `gh release edit <tag> --draft=false`。
+   tag 跑了），然后在 GitHub 网页上发布（Releases → 该 draft → Publish
+   release）。
+   > **本仓不用本机 `gh` CLI**（未绑定本仓账号）：触发 workflow、看 CI
+   > 结论、发 Release 一律在浏览器里做，git 只走个人 SSH remote。
+   > （`.github/workflows/` 里的 `gh` 跑在 runner 上用 `GITHUB_TOKEN`，
+   > 不在此列。）
 
 ## 3.6 更新通道（REL-02）— test / stable
 
@@ -228,8 +238,9 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 
 ## 附录：发版实况（2026-09-16 从 QUEUE.md 迁入）
 
-- 正式产物走 CI：`gh workflow run release.yml -f platforms=android,macos`
-  （Android 出签名 APK；macOS 未签名，「右键 → 打开」过 Gatekeeper）。
+- 正式产物走 CI：GitHub 网页 Actions → Release → Run workflow，`platforms`
+  填 `android,macos`（Android 出签名 APK；macOS 未签名，「右键 → 打开」
+  过 Gatekeeper）。**不用本机 `gh`**，理由同 §3 步骤 5。
 - 调管线只用 workflow_dispatch，不打测试 tag（tag 纪律见 `AGENTS.md`）。
 - **Secrets 实况（2026-08-25 核实）**：`CLOUDFLARE_API_TOKEN` /
   `CLOUDFLARE_ACCOUNT_ID` / `ANDROID_KEYSTORE_*` / `UPDATE_SIGNING_KEY` /

@@ -53,9 +53,15 @@ agent 有挂号权和建议权，没有改道权——优先级由验收人裁�
 ## 交付
 
 - 可直推 main；push 后盯受影响域 CI 到结论，红了立刻修或 revert。
+- **本机 `gh` 不用于本仓**（未绑定本仓账号）：agent 不许调 `gh` 看 CI、建 PR、
+  触发 workflow、发 Release——这些一律在 GitHub 网页上由验收人自己做，agent
+  只负责把结论问清楚。git 只走个人 SSH remote。
+  （`.github/workflows/` 里的 `gh` 跑在 runner 上用 `GITHUB_TOKEN`，不在此列。）
 - 一批交付 = 卡横幅（含 commit）+ 卡尾验收记录 + `docs/PROGRESS.md` 一行，
   同批 push。会话结束汇报 = 卡结果 + 本次挂号清单（每张一行 + 建议优先级）。
-- tag 只给真发版本；调发布管线用 `gh workflow run release.yml`。
+- tag 只给真发版本（tag push 触发 release.yml）。**调管线不发版**走 GitHub 网页
+  Actions → Release → Run workflow（`workflow_dispatch`，入参 `tag` /
+  `platforms`），别拿正式 tag 试错。
 - 构建产物、日志不进 main。
 
 ## 机器兜底（不用背，`just ci` 会挡）
