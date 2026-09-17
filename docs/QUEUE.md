@@ -91,7 +91,7 @@
 | P1 | [NET-17](../cards/NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md) | materialize 前后 cancel/suspend 双向终态确定性验证 | L1 |
 | P1 | [NET-18](../cards/NET-18-legacy-phone-and-desktop-fallback-path-verification.md) | 旧手机（只 fetch）+ 旧桌面（不认 flow.status）降级路径验证 | L1 |
 | P1 | [NET-19](../cards/NET-19-android-no-competing-offer-and-pause-does-not-observe.md) | offer 只调一次 + 暂停路径零查询对端断言 | L1 |
-| P1 | [NET-24](../cards/NET-24-flow-delivered-push-not-reaching-phone.md) | flow.delivered 推送断链重连后送不达手机，根因未查（NET-23 拆出） | L1 |
+| P1 | [NET-24](../cards/NET-24-flow-delivered-push-not-reaching-phone.md) | NET-20 去重命中必丢 flow.delivered 推送（订阅晚于 offer），每张干等 30s 兜底；根因已定位待修 | L1 |
 | P1 | [NET-07](../cards/NET-07-split-timeouts-by-call-kind-transitional.md) | 过渡止血：超时按建连/控制/fetch 分档 | L1 |
 | P1 | [NET-08](../cards/NET-08-audit-repo-for-sync-wait-weld-points.md) | 🟡 普查完成，衍生 NET-09/10/11、TEL-05；待后续卡闭环，不再可领 | L2 |
 | P1 | [NET-09](../cards/NET-09-data-plane-stall-watchdog-for-long-transfers.md) | 长数据面字节停滞看门狗 | L1 |
