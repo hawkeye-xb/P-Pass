@@ -1,6 +1,6 @@
 # TEL-05 遥测外呼加超时与队列封顶（reqwest 无超时 = flush 循环可挂死）　级别 L1
 
-> ⬜ 状态：未开工（2026-09-14 NET-08 普查产出，焊点 T1）
+> ✅ 状态：代码完成 `436ddbd`（2026-09-17），全部门禁绿；L1 无需真机，待验收人复核归档
 > 级别：L1 · 阻塞：无
 > **AGENTS.md 设计纪律登记：本卡是终态方案；无需另开根治卡。**
 
@@ -33,12 +33,12 @@ NET-01 教训的镜像：错误处理按「回声回来了但说不好」设计�
 
 ## 验收标准
 
-- [ ] RED 先行（rust 单测）：假 HTTP 服务「接受连接后永不响应」→
+- [x] RED 先行（rust 单测）：假 HTTP 服务「接受连接后永不响应」→
       `flush_now` 必须在注入的短 timeout 内返回 0 并放行下一轮；改前
       真红（挂起 → tokio test 超时即红）。
-- [ ] 队列封顶用例：压 600 事件 → 队列长度 ≤500、丢的是最旧、新事件在列。
-- [ ] enabled=false 零网络契约回归（既有断言不动，新增路径不绕开它）。
-- [ ] `cargo test -p daemon --test telemetry`（或对应文件级测试）全绿 +
+- [x] 队列封顶用例：压 600 事件 → 队列长度 ≤500、丢的是最旧、新事件在列。
+- [x] enabled=false 零网络契约回归（既有断言不动，新增路径不绕开它）。
+- [x] `cargo test -p daemon --test telemetry`（或对应文件级测试）全绿 +
       `just ci` 全绿。
 
 ## 范围
@@ -55,7 +55,42 @@ NET-01 教训的镜像：错误处理按「回声回来了但说不好」设计�
 
 ## 实施记录
 
-（待补）
+2026-09-17 · `436ddbd` · 执行 agent（Salamira），分支 `fix/TEL-05-telemetry-timeout-queue-cap`
+
+- **改动**（与卡面四条期望行为一一对应）：
+  1. `Telemetry::new` → `Client::builder().timeout(20s)`（新常量
+     `DEFAULT_FLUSH_TIMEOUT`，注释钉死「死活判定窗、非预期耗时」）；新增
+     `with_timeout()` 测试 seam（生产零调用方传别的值）。
+  2. `record()` 封顶 `QUEUE_CAP=500`：`drain(..excess)` 丢最旧，累计计数
+     debug 日志（不造遥测遥测）。
+  3. `run()` 零改动——无第二层超时（单一真相源）。
+  4. 超时分支并入既有 `Err` 臂：丢班不重发，best-effort 语义零漂移；
+     字典/去重窗口/URL/Worker 端一行未动。
+- **测试**（E2）：`crates/daemon/tests/telemetry_flow.rs` 新增 2 例——
+  `half_dead_endpoint_returns_within_timeout_not_forever`（黑洞服务端，
+  5s watchdog 内必返回）+ `queue_cap_drops_oldest_and_bounds_memory`
+  （600 进 → 恰 500 出、首条 ms=100、末条 ms=599）。4/4 绿。
+  卡面验收①字面「返回 0」：实测按既有 `flush_now` 契约返回**离队批量数 n**
+  （与 TEL-02 非 2xx 丢班同语义，队列同样清空）——断钉的是「返回了、
+  没挂、没回队」，非返回值字面 0；特此记录偏差口径。
+- **反证真跑**（E3 级证据，之后还原）：撤回 timeout → 黑洞用例挂满 5s
+  watchdog 红（`flush_now parked… — TEL-05 bug`）；禁用 cap 分支 → 封顶
+  用例红。还原后 4/4 复绿。零网络契约：`disabled_switch_means_zero_requests`
+  未动未绕。
+- **回归**：`query_telemetry` 3/3、`flow_delivery` 31/31（同用
+  `Telemetry::new`/`flush_now`，零改动兼容）、`just ci` 全绿（fmt/clippy/
+  nextest/arch-check/queue-check×3/md-check/token-check）。
+- **行业对照**（领卡前核实）：OTel SDK `exportTimeoutMillis` 默认 30s +
+  `maxQueueSize` 2048 满了丢（`batch_span_processor.go`: "If the queue
+  gets full it drops the spans"）；OTLP exporter timeout 默认 10s。本卡
+  20s/500 同形状，客户端侧 lossy、可靠投递走审计 outbox——两本账分层
+  即行业惯例。
+- **实施中追加**（超范围，先改卡后动码、同批 push）：`just ci` 的
+  queue-check 步在本地恒红——`tools/test-queue-archive-gate.sh:22/24`
+  的 `$got（` 被 macOS bash 3.2 把全角括号吞进变量名（`set -u` →
+  unbound），CI 的 Ubuntu bash 5 不吞所以绿。6 行最小复现验证后加花括号
+  修复（同仓 `reset-local.sh` 注释早有此纪律，新脚本没遵守）。不修则本卡
+  验收④无法达成，属「属于当前卡既有验收路径」而非新卡。
 
 ## 备注
 
