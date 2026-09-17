@@ -220,9 +220,11 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       [NET-16](done/NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)
       并于 2026-09-17 完成：反证真跑（撤短路分支 → 用例红），
       `flow_delivery` 32/32。**
-- [ ] 崩溃恢复：active grant + 无运行任务 → status 触发重拉，最终 completed
-      （daemon 集成测试模拟 task 丢失）。**已拆出
-      [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)。**
+- [x] 崩溃恢复：active grant + 无运行任务 → status 触发重拉，最终 completed
+      （daemon 集成测试模拟 task 丢失）。**已由
+      [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
+      完成（`5bdbae4`+`bbdfbdb`，2026-09-17）：status() 重拉分支 + 原子 try_register +
+      33/33 全绿 + 反证真跑。**
 - [ ] 重试不互踩：手机侧超时后先 status 见 active → 不重发 offer（JVM 测试
       断言 offer 调用次数）。**已并入
       [NET-19](NET-19-android-no-competing-offer-and-pause-does-not-observe.md)。**
