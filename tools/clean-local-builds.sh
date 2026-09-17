@@ -108,9 +108,27 @@ worktree_is_removable() {
     printf 'origin/main is unavailable'
     return 1
   fi
+  # DEV-03: "merged" cannot be decided by ancestry alone. This repo merges
+  # every PR with Squash and merge, which rewrites the branch into a single
+  # new commit on main — the worktree's own commits are therefore NEVER
+  # ancestors of origin/main, and an ancestry-only test rejects every
+  # squash-merged worktree forever. Measured: two fully merged branches were
+  # still reported as unmerged by this check.
+  #
+  # Second accepted signal: the upstream branch is gone from the remote.
+  # GitHub deletes the head branch when a PR merges, so "upstream configured
+  # but no longer on the remote" means merged-and-cleaned-up. It requires a
+  # pruned remote to be accurate, hence the fetch --prune below.
   if ! git -C "$worktree" merge-base --is-ancestor HEAD origin/main; then
-    printf 'HEAD is not merged into origin/main'
-    return 1
+    upstream=$(git -C "$worktree" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null || true)
+    if [[ -z "$upstream" ]]; then
+      printf 'HEAD is neither merged into origin/main nor tracking an upstream'
+      return 1
+    fi
+    if git rev-parse --verify --quiet "$upstream" >/dev/null; then
+      printf 'HEAD is not merged into origin/main (upstream %s still exists)' "$upstream"
+      return 1
+    fi
   fi
   active=$(has_active_build "$worktree" || true)
   if [[ -n "$active" ]]; then
@@ -156,26 +174,50 @@ fi
 if "$clean_targets"; then
   printf '\n== Build caches ==\n'
   for worktree in "${worktrees[@]}"; do
-    target="$worktree/target"
     [[ -d "$worktree" ]] || continue  # A selected worktree may have just gone away.
-    if [[ ! -e "$target" ]]; then
-      printf 'ABSENT     %s\n' "$target"
-      continue
-    fi
-    if [[ -L "$target" ]]; then
-      printf 'SKIP       %s — target/ is a symlink\n' "$target"
-      continue
-    fi
+
     active=$(has_active_build "$worktree" || true)
     if [[ -n "$active" ]]; then
-      printf 'SKIP       %s — active build: %s\n' "$target" "$active"
+      printf 'SKIP       %s — active build: %s\n' "$worktree" "$active"
       continue
     fi
-    printf 'CANDIDATE  %s (%s)\n' "$target" "$(target_size "$worktree")"
-    if "$apply"; then
-      rm -rf "$target"
-      printf 'REMOVED    %s\n' "$target"
-    fi
+
+    # DEV-03: the old code looked at "$worktree/target" and nothing else, so
+    # every nested Cargo target was invisible. Measured in this repo: the root
+    # target reported 18G while apps/desktop/src-tauri/target held another
+    # 2.6G that no preview ever mentioned.
+    #
+    # Discovery rule: a directory named `target` whose *parent* holds a
+    # Cargo.toml. That is precisely what a Cargo output directory is, so it
+    # neither misses one nor sweeps up an unrelated source directory that
+    # happens to be called `target`.
+    #
+    # Rejected alternative — matching CACHEDIR.TAG, the marker Cargo writes
+    # into target dirs: measured in this repo, the 18G root target has no
+    # CACHEDIR.TAG at all while the 2.6G desktop one does, so that rule
+    # silently drops the single largest directory. A marker that is only
+    # usually present is worse than no marker, because the failure is a
+    # quiet under-report rather than an error.
+    found_any=false
+    while IFS= read -r target; do
+      # 同级 Cargo.toml（Cargo target 的定义）或目录内 CACHEDIR.TAG（Cargo
+      # 自己写的标记）任一成立即认。两个都要求会漏报——实测本仓 18G 的根
+      # target 就没有 CACHEDIR.TAG；只认后者会把最大的那个整个漏掉。
+      [[ -f "$(dirname "$target")/Cargo.toml" || -f "$target/CACHEDIR.TAG" ]] || continue
+      found_any=true
+      if [[ -L "$target" ]]; then
+        printf 'SKIP       %s — target/ is a symlink\n' "$target"
+        continue
+      fi
+      printf 'CANDIDATE  %s (%s)\n' "$target" "$(du -sh "$target" 2>/dev/null | awk '{print $1}')"
+      if "$apply"; then
+        rm -rf "$target"
+        printf 'REMOVED    %s\n' "$target"
+      fi
+    done < <(find "$worktree" \( -type d -name node_modules -o -type d -name .git \) -prune -o \
+                  -type d -name target -print 2>/dev/null | sort)
+
+    "$found_any" || printf 'ABSENT     %s — no Cargo target directory\n' "$worktree"
   done
 fi
 

@@ -73,6 +73,10 @@ agent 有挂号权和建议权，没有改道权——优先级由验收人裁�
   Actions → Release → Run workflow（`workflow_dispatch`，入参 `tag` /
   `platforms`），别拿正式 tag 试错。
 - 构建产物、日志不进 main。
+- **PR 合并后清本地**：`just cleanup-local`（默认只预览，删除要 `--apply` 加显式 scope）。它会列出可移除的 worktree 与全部 Cargo target 占用。**注意本仓用 Squash and merge，`git branch --merged` 检测不
+  到已合并的分支**（squash 后提交不是 main 的祖先），别拿它判断能不能删——
+  看「上游 `: gone]`」，且删除要用 `-D` 不是 `-d`。构建产物实测能占到 20G+，
+  而 `.git` 只有几百 M：占地方的从来不是历史。
 
 ## 机器兜底（不用背，`just ci` 会挡）
 
