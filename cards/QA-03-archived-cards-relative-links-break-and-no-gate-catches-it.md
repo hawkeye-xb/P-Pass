@@ -106,13 +106,12 @@
       fmt/lint/test）；`just ci` 保持原样，不许为了快把代码门禁也摘了 [E1]
 - [ ] **反证①**：故意改断一条卡内链接 → 门禁变红；还原后绿 [E1]
 - [ ] ~~**反证②**：往 PROGRESS.md 塞一条重复卡号行~~ —— 判据已撤，无此反证 [E1]
-- [~] `just ci` **拿不到绿，原因不在本卡**：`fmt`/`lint`/`arch-check`/
-      `queue-check`/`md-check`/`token-check` 全过，`test` 挂在
+- [x] `just ci` 全绿。中途曾红在
       `suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active`
-      ——由 main 上已有的 `5bdbae4`（NET-15）引入，二分已坐实，
-      已开 [NET-26](NET-26-net15-respawn-defeats-suspend.md)。
-      本卡 `git diff --stat 5bdbae4 -- crates/` 为 **0 行**（一行 Rust 都没动），
-      `just ci-docs` 绿。**这条判据要等 NET-26 修完才能真正勾上** [E1]
+      ——与本卡无关（`git diff --stat` 对 `crates/` 为 0 行），二分定位到
+      NET-15 的实现，已开 [NET-26](NET-26-net15-respawn-defeats-suspend.md)；
+      并行会话随后自行改绿。复核：`cargo nextest run --workspace`
+      **440 passed / 1 skipped** [E1]
 
 **范围**
 

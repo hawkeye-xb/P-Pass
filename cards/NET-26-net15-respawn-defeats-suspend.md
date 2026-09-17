@@ -1,71 +1,69 @@
-# NET-26 NET-15 的「重启后重拉丢失任务」把 `flow.suspend` 打坏了（main 现在是红的）
+# NET-26 `status()` 的重拉与 `flow.suspend` 语义相撞——目前无生产影响，但装着一个静默陷阱
 
 状态：🟥 挂号
-级别：L1（两个功能的语义撞在一起，不是测试写法问题）
+级别：L2（降级过一次，理由见「更正记录」；接口当前零调用，接上就会踩）
 关联: 由 [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
-的实现 `5bdbae4` 引入 · 打坏的是 `flow.suspend`（邻居
-[NET-19](NET-19-android-no-competing-offer-and-pause-does-not-observe.md) 管暂停的手机侧）
+的实现引入并由其后续提交定型 · 邻居
+[NET-19](NET-19-android-no-competing-offer-and-pause-does-not-observe.md)（暂停的手机侧）
 
 ## 挂号段
 
-- **现象**：`cargo test -p daemon --test flow_delivery
-  suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active`
-  **确定性失败**，`flow_delivery.rs:2021` 断言
-  `!status.task_running`（"the interrupted task must be gone from the
-  registry"）不成立。**`5bdbae4` 已经在 main 上，所以 main 当前 `just ci` 是红的。**
-- **发现场景**：2026-09-17 做 QA-03（门禁）时跑 `just ci` 撞见。QA-03 的改动
-  是文档 + `tools/` + `justfile`，**一行 Rust 都没动**，所以这条红与它无关。
-- **严重度猜测**：高，而且不是"测试太严"。见下方分析——`status()` 会把用户
-  刚暂停的传输**自动恢复**，而手机在等待循环里一直调 `status()`。
+- **现象**：`flow.suspend` 的契约是「打断正在跑的 fetch 任务、但 grant 留在
+  `active`」（`flow_delivery.rs:1011` 起，`tasks.interrupt`）；NET-15 给
+  `status()` 加的重拉条件是「grant 为 `active` 且没有任务在跑 → 任务丢了，
+  重拉」。**suspend 刻意制造的稳定状态，恰好就是重拉判据认定"需要重拉"的那一个**
+  ——两者在现有信息下不可区分。
+- **发现场景**：2026-09-17 做 QA-03（门禁）时跑 `just ci` 撞见
+  `suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active`
+  确定性失败（3/3）。二分坐实是 NET-15 那个提交引入：只把
+  `crates/daemon/src/flow_delivery.rs` 取回父提交版本后 2/2 转绿，测完原样还原。
+- **严重度猜测**：中。**当前没有生产影响**——`flow.suspend` 全仓零生产调用方
+  （见备注）。风险是latent：哪天有人把暂停按钮接到 `flow.suspend` 上，它会
+  静默地不起作用，而现在的测试还会为这个行为背书。
 
 ## 备注（挂号时已核实，供接卡人省一次考古）
 
-**二分坐实，不是偶发**
+**`flow.suspend` 目前没有任何生产调用方**
 
-    带 5bdbae4（NET-15）        FAILED  3/3
-    回退到父提交 8865ea0        ok      2/2
+    crates/proto/src/msgs.rs:532          方法常量定义
+    crates/daemon/src/router.rs:571       daemon 侧实现（在跑）
+    apps/android/.../DaemonClient.kt:176  客户端方法 flowSuspend()
+    → 全仓 grep `flowSuspend` 只有定义那一行，**零调用**
 
-回退方式是只把 `crates/daemon/src/flow_delivery.rs` 取回父提交版本
-（`5bdbae4` 只改了这一个文件），测完已原样还原，NET-15 的代码一个字没动。
+手机的暂停走的是另一条路：`NativeFlowDeliveryPort.stop()`（`:483`）调
+`desktopFor(currentPairing).cancel(current.request)`，然后 `active = null`
+结束等待循环。**是 `cancel`，不是 `suspend`。**
 
-**根因：两个功能对「active 且没有任务在跑」这个状态的解读正好相反**
+**并行会话已经把测试改绿了，改法是把断言反过来**
 
-- `suspend`（`flow_delivery.rs:1011` 起）的契约是**打断任务、但不碰持久状态**：
-  grant 留在 `Active`，`tasks.interrupt(peer, &grant)` 把任务从注册表摘掉。
-  于是暂停后的稳定状态就是 **active + 无任务**。
-- NET-15 给 `status()` 加的是（`5bdbae4` 的第三个 hunk）：
+`21b2eba` 把那条断言从 `!status.task_running` 改成 `status.task_running`，
+即正式接受「status() 会把被 suspend 打断的任务重拉起来」。鉴于上面那条
+（接口零调用），这个改法是站得住的——它给一个没人调的接口定了新语义。
+截至本卡写成时 **main 是绿的**：`cargo nextest run --workspace` → 440 passed /
+1 skipped；`cargo test -p daemon --test flow_delivery` → 33 passed。
 
-      if grant.state == FlowGrantState::Active && !self.tasks.is_running(peer, &grant) {
-          // daemon 重启会清空内存里的任务注册表 → 重拉丢失的任务
+**留给接卡人的真问题**（不是"修红测"，红已经没了）
 
-  也就是把 **active + 无任务** 判定为"任务丢了，重拉"。
+`status()` 从纯查询变成了**带副作用**的接口——手机在等待循环里高频调它。
+两个方向，验收人裁决：
 
-**这两个状态在现有信息下不可区分**——suspend 刻意制造的，恰好就是 NET-15
-认定为"需要重拉"的那一个。后果不止是测试红：
+1. **接受现状**，但把「`active` + 无任务 = 需要重拉」这条判据的**前提**写进
+   代码注释与卡面：它成立的唯一理由是"没有任何东西会故意制造这个状态"。
+   并在 `flow.suspend` 的 daemon 实现处加一条反向提示：要把它接到产品上之前，
+   必须先解决这个歧义。
+2. **让两种状态可区分**，把重拉挪出 `status()`：改成 daemon 启动时扫一遍
+   active grant——与 NET-15 卡面写的"daemon 重启"场景严格对齐，`status()` 回到
+   纯查询。这条更干净，但要动 NET-15 刚验收完的实现。
 
-- 手机在等待循环里**持续调 `status()`**（`NativeFlowDeliveryPort` 的
-  `CheckStatusNow` 分支）。用户点暂停之后，下一次 status 轮询就会把传输**自动
-  恢复**，暂停在产品上失效。
-- 这也不是"测试写得太死"：那条断言写的正是 suspend 的产品契约
-  （"suspend must leave the grant active, unlike cancel" + 任务必须真的停下）。
+## 更正记录（2026-09-17，本卡开出后当天自查更正）
 
-**接卡人要拿的拍板（本卡不替验收人决定）**
+本卡初版把严重度写成「高」，并断言「手机在等待循环里持续调 `status()`，
+用户点暂停后下一次轮询就会把传输自动恢复，暂停在产品上失效」。
 
-NET-15 想解决的问题（daemon 重启后任务丢了没人重拉）是真的，不能简单回退。
-需要一个能把两种「active + 无任务」区分开的判据，候选方向（都未验证）：
+**那条断言是错的，已删。** 我当时只读了 daemon 侧的状态语义，**没查
+`flow.suspend` 有没有调用方**就下了产品级结论。查完发现它零调用、手机暂停走
+`cancel`，所以"暂停被自动恢复"这件事今天不可能发生。
 
-1. 让 suspend 在持久状态里留痕（新增 grant 状态或一个 `suspended_at` 字段），
-   `status()` 的重拉条件排除它。改存储 schema。
-2. 重拉只在**本进程生命周期内没见过这个 grant** 时才做（进程启动时间 vs
-   grant 的 `updated_at`），suspend 是本进程内发生的所以不触发。不改 schema，
-   但判据更绕、更容易再撞。
-3. 重拉挪出 `status()`，改成 daemon 启动时扫一遍 active grant——与 NET-15
-   卡面说的"daemon 重启"场景严格对齐，而 `status()` 回到纯查询。**这条最像
-   正解**：`status()` 是手机高频调用的查询接口，让它产生副作用本身就是
-   NET-15 引入的新耦合。
-
-## 对 main 的处置建议（当场汇报，等验收人裁决）
-
-main 现在红着，另一个会话可能正在它上面继续开发。建议先按第 3 条方向修
-NET-15，或者暂时回退 `5bdbae4` 让 main 转绿再重做——**哪条都由验收人定，
-本卡不动别人的代码**。
+二分与根因分析本身是对的（确定性失败、提交定位、状态歧义都成立），错的是
+从"存在歧义"直接跳到"产品已坏"。留作教训：**涉及产品影响的判断，必须先把
+调用链走通**。
