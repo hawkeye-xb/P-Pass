@@ -438,7 +438,11 @@ async fn main() -> anyhow::Result<()> {
     // asset.removed_external（actor=NULL）。启动即跑一轮（重启即收敛），
     // 之后每小时 re-diff——低频轮询而非目录监听的理由见 reconcile.rs
     // 模块注释（收敛延迟最多 1 小时 vs FSEvents/inotify 双平台复杂度）。
-    let reconcile = daemon::Reconcile::new(db.clone(), &data_dir).with_events(event_bus.clone());
+    // IDX-01: `with_local_node_id` 是「收孤儿」方向的开关——不接就只剩
+    // SYNC-01 的删幽灵那一半，索引一丢照片就永远回不来。
+    let reconcile = daemon::Reconcile::new(db.clone(), &data_dir)
+        .with_events(event_bus.clone())
+        .with_local_node_id(node_id.0);
     let startup = reconcile.run_once().await;
     tracing::info!(
         "SYNC-01: 启动对账完成（移除幽灵资产 {} 条）",
