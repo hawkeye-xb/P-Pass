@@ -87,7 +87,6 @@
 | P3 | [NET-26](../cards/NET-26-net15-respawn-defeats-suspend.md) | 🟥 挂号：status() 重拉与 flow.suspend 语义相撞；**接口零调用故无生产影响**，接上就会静默失效（我初版把严重度写高了，已更正） | L2 |
 | P0 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：重放 receipt 与 discovery wake 交错对账，禁止沿用旧根因 | L1 |
 | P1 | [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | 🟡 已拆 NET-15~19 子卡；本卡不再可领，去认领子卡 | L2 |
-| P1 | [NET-15](../cards/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md) | daemon 重启后 status() 检测并重新拉起丢失的交付（断点续传） | L1 |
 | P1 | [NET-17](../cards/NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md) | materialize 前后 cancel/suspend 双向终态确定性验证 | L1 |
 | P1 | [NET-18](../cards/NET-18-legacy-phone-and-desktop-fallback-path-verification.md) | 旧手机（只 fetch）+ 旧桌面（不认 flow.status）降级路径验证 | L1 |
 | P1 | [NET-19](../cards/NET-19-android-no-competing-offer-and-pause-does-not-observe.md) | offer 只调一次 + 暂停路径零查询对端断言 | L1 |
@@ -152,6 +151,7 @@
 | [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 版本脚本版本目标全断言 | — |
 | [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 五个 workflow 从 TOML 派生 Rust 工具链 | — |
 | [TEL-05](../cards/TEL-05-telemetry-http-timeout-and-queue-cap.md) | 遥测超时+封顶完成 `436ddbd`，L1 无需真机 | — |
+| [NET-15](../cards/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md) | daemon 重启后 status() 重拉丢失交付完成 `5bdbae4`+`bbdfbdb`，L1 无需真机 | — |
 
 ---
 

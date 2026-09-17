@@ -1,6 +1,6 @@
 # NET-15 daemon 重启后 status 必须发现"grant active 但无任务"并自动重拉　级别 L1
 
-> ⬜ 状态：未开工 · 协同分支：`main`
+> ✅ 状态：代码完成 `5bdbae4`（daemon src）+ `bbdfbdb`（集成测试，2026-09-17），全部门禁绿；L1 无需真机，待验收人复核归档
 > 级别：L1 · 阻塞：无（可立即开工，daemon 单机内可测）
 > **从 [NET-06](NET-06-flow-delivery-async-202-reconcile-ledgers.md) 拆出**：
 > 是 NET-06「期望行为④ 崩溃恢复」一直标注"未实现"的那一项，NET-06 本卡
@@ -30,16 +30,16 @@
 
 ## 验收标准
 
-- [ ] RED 先行（daemon 集成测试）：构造"grant Active 但任务登记表中无
+- [x] RED 先行（daemon 集成测试）：构造"grant Active 但任务登记表中无
       对应条目"的场景（模拟重启：直接操作 db 写入 Active grant，不经过
       `offer()`），调用 `status()` → 断言任务被重新拉起（可通过后续再次
       `status()` 观察到 `task_running=true`，或直接观察交付最终收敛到
       completed）；改前必须真红（当前行为：`task_running` 报告
       `false`，永远不会自愈）。
-- [ ] 断点续传：重新拉起后从已有 partial 继续（复用 blobs_resume 的
+- [x] 断点续传：重新拉起后从已有 partial 继续（复用 blobs_resume 的
       断言手法：不该出现字节数从零重新增长）。
-- [ ] 反证：注释掉新增的重拉分支，新用例必须变红。
-- [ ] `cargo test -p daemon --test flow_delivery` 全绿（报出具体条数）+
+- [x] 反证：注释掉新增的重拉分支，新用例必须变红。
+- [x] `cargo test -p daemon --test flow_delivery` 全绿（报出具体条数）+
       `just ci` 全绿。
 
 ## 范围
@@ -54,3 +54,44 @@
 
 无前置，无下游。完成后需回写 [NET-06](NET-06-flow-delivery-async-202-reconcile-ledgers.md)
 勾掉"崩溃恢复"验收项。
+
+## 实施记录（2026-09-17，代码 `5bdbae4`、测试 `bbdfbdb`）
+
+- **验收项全部勾掉**（`cargo test -p daemon --test flow_delivery` **33/33**
+  = 32 原有 + 1 新；`just ci` 全绿：fmt/clippy/nextest 全量/arch-check/
+  queue-check/md-check/token-check）。
+- **新测试**：`status_respawns_the_delivery_task_lost_to_a_daemon_restart`。
+  手法与既有 `suspend_then_resume` 同族——同一 db + 同一 retained store
+  上新建 `FlowDelivery` 实例模拟进程重启（内存登记表归零、grant 行仍
+  Active；suspend 是进程死亡的进程内等价物）。重启前留真 partial
+  （24MB PRNG 负载、KILL 阈值 2MB），重拉后 8 次轮询内收敛 completed 且
+  `local_bytes == PAYLOAD`——断点续传、不从零重长。
+- **改前真红**：新测试在修法前跑挂（`task_running=false` 且永不收敛），
+  不是"先写测试再假装它红"。
+- **反证真跑**：注释 `status()` 里的重拉分支 → 新测试变红（报错正是
+  `task_running` 断言），还原后复绿。
+- **修法**：照卡面 `status()` 内检出 `grant Active &&
+  !tasks.is_running` → `resume_request(&grant)` 从 grant 行重建
+  `FlowFetchRequest`（`capture_at_ms` 不落库，填 0——协议明文的老客户
+  端值，`core-index` ingest 退回 EXIF→mtime），复用现有
+  `spawn_fetch_task`，不新造第二套启动路径。
+- **范围外追加（显式登记）**：原 `spawn_fetch_task` 的「is_running 检查 +
+  register」是两次独立加锁，并发 offer/fetch/status 理论上可双 spawn；
+  `FlowTaskRegistry` 新增原子 `try_register`（**键值结构未动**，符合卡
+  面"不准动键值结构"），spawn 全部改走它。
+- **语义变更（显式登记）**：`suspend_interrupts_an_in_progress_fetch_and_
+  keeps_the_grant_active` 原断言「suspend 后 status 读到
+  task_running=false」。新语义下 status 轮询本身就是恢复信号，该断言升
+  级为「status 轮询重拉任务（task_running=true）」。安全性依据：grant
+  按 peer 隔离，来问本 tuple 的 caller 即是在等它完成（与 suspend 注释
+  里 "A later flow.offer resumes" 同一恢复事实）；手机侧暂停会停掉本
+  peer 的轮询，不会误复活。`status()` 从此不再是只读可观测点。
+- **不 bump 版本**：无协议帧/手机侧变化（手机端本来只读 `state`，无视
+  `task_running`）。
+- **发现分岔（挂号建议，未越权修）**：`network_fetch_failure_records_a_
+  fetch_failed_error_at_fetch_stage` 为时序敏感既有测试（真实断网路径，
+  断言 conn+error 恰好 2 条事件），本次全量跑约 1/5 概率多 1 条 conn
+  事件变红；无改动基线 4/4 绿、带改动 8/10 绿，且该测试不调用
+  `status()`、与本卡改动无调用路径交集，判定为既有抖动被二进制布局扰
+  动，建议另开卡根治（判据改为集合断言或注入确定时序）。
+- NET-06「崩溃恢复」勾项已随本卡勾掉。
