@@ -1,9 +1,9 @@
 # NET-16 completed 后重复 status/fetch 必须零重传字节的直接断言　级别 L1
 
-> ✅ 状态：代码完成（2026-09-17），零生产代码 diff（短路分支 `flow_delivery.rs:606/618`
-> 本已存在，与卡面预判一致）；反证真跑红→绿；`just ci` 全绿。L1 无需真机，待验收人复核归档
+> ✅ 状态：已归档（2026-09-17 验收人 CI 复核通过）。代码完成（零生产代码 diff，短路分支
+> `flow_delivery.rs:606/618` 本已存在，与卡面预判一致）；反证真跑红→绿；`just ci` 全绿；L1 无需真机
 > 级别：L1 · 阻塞：无
-> **从 [NET-06](NET-06-flow-delivery-async-202-reconcile-ledgers.md) 拆出**：
+> **从 [NET-06](../NET-06-flow-delivery-async-202-reconcile-ledgers.md) 拆出**：
 > NET-06 已有 `status_reports_completed_with_the_durable_receipt` 验证了
 > "status 读到 receipt"，但从未验证"重复调用不会二次拉取字节"——这是
 > 相邻但不同的断言，本卡单独补齐。完成后回 NET-06 勾掉对应项。
@@ -48,7 +48,7 @@
 
 ## 阻塞与依赖
 
-无前置，无下游。完成后需回写 [NET-06](NET-06-flow-delivery-async-202-reconcile-ledgers.md)
+无前置，无下游。完成后需回写 [NET-06](../NET-06-flow-delivery-async-202-reconcile-ledgers.md)
 勾掉"幂等"验收项。
 
 ## 实施记录（做完填）
