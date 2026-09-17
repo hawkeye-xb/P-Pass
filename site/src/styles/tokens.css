@@ -3,7 +3,7 @@
  * Source of truth: assets/design/tokens.json (edit there, run `npm run tokens`).
  *
  * Only 3 colours carry meaning: green=safe, amber=waiting, red=act. 只有三种含义色。
- * Green appears when, and only when, photos are safely stored. 绿色只在照片确实存好时出现。
+ * Green appears only for confirmed success or safely stored data; it never marks pending work. 绿色只表示已确认成功或数据已安全存好，绝不表示进行中。
  * Body text: >=17px on phone, >=16px on desktop. 正文下限。
  * Tap targets: >=56px on phone, >=44px on desktop. 点击区下限。
  * <=40 words per screen: one conclusion, one explanation. 每屏一个结论一句解释。

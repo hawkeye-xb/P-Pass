@@ -67,6 +67,16 @@ md-check:
 token-check:
   @python3 ./tools/check-token-drift.py
 
+# SITE-04: site 有自己一套生成物（tokens.css / icons），由 site/scripts/*.mjs
+# 从 assets/design/ 生成，**不在 token-check 的覆盖范围内**——后者只比数值，
+# 而 site 的生成器连文案一起嵌进产物。漏掉的后果实测过：一次只改文案的提交
+# 让 site lane 红了 6 天没人发现。
+#
+# 需要 site/node_modules 就位，所以刻意**没有**挂进 ci / ci-docs（见 SITE-04
+# 卡的留白）。动了 assets/design/ 或 site/ 就手动跑一次。
+site-check:
+  @cd site && npm run tokens:check && npm run icons:check
+
 # SEC-02: 提交身份必须在 .github/allowed-identities.txt 白名单内。
 # 第二行是反证（证明门禁在该红时真的红），跟门禁同生共死。
 # 本地跑的是 origin/main..HEAD；远端 ci-identity.yml 按 PR/push 各自算区间。
