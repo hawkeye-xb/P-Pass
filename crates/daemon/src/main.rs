@@ -445,8 +445,9 @@ async fn main() -> anyhow::Result<()> {
         .with_local_node_id(node_id.0);
     let startup = reconcile.run_once().await;
     tracing::info!(
-        "SYNC-01: 启动对账完成（移除幽灵资产 {} 条）",
-        startup.removed
+        "SYNC-01/IDX-01: 启动对账完成（移除幽灵资产 {} 条，收编孤儿文件 {} 条）",
+        startup.removed,
+        startup.adopted
     );
     {
         let reconcile = reconcile.clone();
@@ -463,6 +464,11 @@ async fn main() -> anyhow::Result<()> {
                 let r = reconcile.run_once().await;
                 if r.removed > 0 {
                     tracing::info!("SYNC-01: 每小时对账移除幽灵资产 {} 条", r.removed);
+                }
+                // IDX-01: 稳态是一条不收，所以只在真收编了才记——与
+                // `adopt_orphans` 里那条审计同一条噪声纪律（WATCH-07）。
+                if r.adopted > 0 {
+                    tracing::info!("IDX-01: 每小时对账收编孤儿文件 {} 条", r.adopted);
                 }
                 // MOB-32 janitor：`begin` 不再重置会话之后，总得有人收走
                 // 中途死掉的那一轮（否则上一轮声明过、手机再也不会提供的
