@@ -46,6 +46,7 @@
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
+| [NET-24](../cards/NET-24-flow-delivered-push-not-reaching-phone.md) | offer 应答已带终态，去重命中不再等 30s；待真机连发两次计时对照 | L1 |
 | [NET-14](../cards/NET-14-desktop-completion-must-push-not-poll-local-transfer-is-ground-truth.md) | 同 WiFi 冒烟已过；待三星热点大视频跨 relay、idle 兜底、NET-12 长期存活三项真机硬门 | L2 |
 | [NET-12](../cards/NET-12-flow-transfer-lacks-foreground-service-protection.md) | 前台服务保护已接回，三星 adj 锁定 200；待长期真机观察 | L2 |
 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 待 HarmonyOS 4.2 真机验证 | L2 |
@@ -91,7 +92,6 @@
 | P1 | [NET-17](../cards/NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md) | materialize 前后 cancel/suspend 双向终态确定性验证 | L1 |
 | P1 | [NET-18](../cards/NET-18-legacy-phone-and-desktop-fallback-path-verification.md) | 旧手机（只 fetch）+ 旧桌面（不认 flow.status）降级路径验证 | L1 |
 | P1 | [NET-19](../cards/NET-19-android-no-competing-offer-and-pause-does-not-observe.md) | offer 只调一次 + 暂停路径零查询对端断言 | L1 |
-| P1 | [NET-24](../cards/NET-24-flow-delivered-push-not-reaching-phone.md) | NET-20 去重命中每张干等 30s；修法已拍板（offer 应答返回 FlowStatusReply），进行中 | L1 |
 | P1 | [NET-07](../cards/NET-07-split-timeouts-by-call-kind-transitional.md) | 过渡止血：超时按建连/控制/fetch 分档 | L1 |
 | P1 | [NET-08](../cards/NET-08-audit-repo-for-sync-wait-weld-points.md) | 🟡 普查完成，衍生 NET-09/10/11、TEL-05；待后续卡闭环，不再可领 | L2 |
 | P1 | [NET-09](../cards/NET-09-data-plane-stall-watchdog-for-long-transfers.md) | 长数据面字节停滞看门狗 | L1 |

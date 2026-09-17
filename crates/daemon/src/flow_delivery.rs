@@ -424,11 +424,21 @@ impl FlowDelivery {
     /// fetch in the background (idempotent: a no-op if one is already
     /// running for this exact tuple). This method itself never touches the
     /// data plane and always returns promptly — "offer秒回" per the card.
+    /// NET-24: replies with the same [`FlowStatusReply`] a `flow.status`
+    /// call issued right now would return. The async-202 shape stays for
+    /// work that really is async (`state == "active"`), but when the grant
+    /// is already terminal at offer time — NET-20's content dedup, NET-22's
+    /// rebind of an already-completed tuple — the terminal state travels
+    /// back on the reply the caller is already blocked on. Standard 202
+    /// practice: 200/201-with-the-result and 202-go-poll are chosen per
+    /// response, not fixed per endpoint (cf. Docker Registry v2 blob mount:
+    /// 201 when the digest is already present, 202 when an upload is
+    /// actually needed).
     pub async fn offer(
         &self,
         peer: NodeId,
         request: &FlowFetchRequest,
-    ) -> Result<(), DeliveryError> {
+    ) -> Result<FlowStatusReply, DeliveryError> {
         let result = self.offer_inner(peer, request).await;
         if let Err(error) = &result {
             self.record_error("offer", error);
@@ -440,7 +450,7 @@ impl FlowDelivery {
         &self,
         peer: NodeId,
         request: &FlowFetchRequest,
-    ) -> Result<(), DeliveryError> {
+    ) -> Result<FlowStatusReply, DeliveryError> {
         let grant = self.checked_request(peer, request).await?;
         self.provider_for(&grant)?;
         if self
@@ -464,8 +474,15 @@ impl FlowDelivery {
             // the daemon had known about the entire time).
             let rebound = self.matching_grant(&grant).await?;
             let receipt = self.persisted_receipt(&rebound).await?;
+            // NET-24: the push stays (it is the acceleration path for any
+            // caller already subscribed), but it is no longer the ONLY way
+            // out — the terminal state also rides back on this reply.
             self.emit_flow_delivered(peer, &rebound, &receipt);
-            return Ok(());
+            return Ok(FlowStatusReply {
+                state: "completed".into(),
+                receipt: Some(receipt),
+                task_running: false,
+            });
         }
         self.db
             .upsert_flow_grant(&grant)
@@ -494,7 +511,14 @@ impl FlowDelivery {
         // actual transfer runs on its own task, tracked by `self.tasks` so
         // `suspend`/`cancel`/`status` can observe or interrupt it.
         self.spawn_fetch_task(peer, stored, request.clone());
-        Ok(())
+        // NET-24: the genuinely-async case, and the only one that still
+        // answers "202 — go wait". `task_running` is asserted rather than
+        // queried: `spawn_fetch_task` just registered this tuple.
+        Ok(FlowStatusReply {
+            state: "active".into(),
+            receipt: None,
+            task_running: true,
+        })
     }
 
     /// NET-20: the presence-checked path — content already has a durable
@@ -509,7 +533,7 @@ impl FlowDelivery {
         &self,
         peer: NodeId,
         grant: &FlowGrant,
-    ) -> Result<(), DeliveryError> {
+    ) -> Result<FlowStatusReply, DeliveryError> {
         let receipt_id = receipt_id()?;
         if !self
             .db
@@ -517,15 +541,23 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         {
-            // Lost a race with cancel/suspend or a concurrent completion —
-            // `offer` is fire-and-forget by contract (NET-06); `status()`
-            // reports whichever outcome actually won, so this is not an
-            // error the caller needs to see.
-            return Ok(());
+            // Lost a race with cancel/suspend or a concurrent completion.
+            // NET-24: never fabricate a receipt here — re-read whichever
+            // outcome actually won and report that, exactly as `status()`
+            // would. The caller then sees `cancelled` (or a completion it
+            // did not mint) instead of a completion that never happened.
+            let current = self.matching_grant(grant).await?;
+            return self.reply_for_grant(peer, &current).await;
         }
         let receipt = receipt_from(grant, receipt_id);
+        // NET-24: push kept as the acceleration path; the reply below is
+        // the guaranteed one.
         self.emit_flow_delivered(peer, grant, &receipt);
-        Ok(())
+        Ok(FlowStatusReply {
+            state: "completed".into(),
+            receipt: Some(receipt),
+            task_running: false,
+        })
     }
 
     /// Legacy-compatible synchronous fetch: ensures a background task is
@@ -880,11 +912,25 @@ impl FlowDelivery {
                 task_running: false,
             });
         };
+        self.reply_for_grant(peer, &grant).await
+    }
+
+    /// NET-24: the durable-state → `FlowStatusReply` mapping, shared by
+    /// [`Self::status`] and by [`Self::offer`]'s own reply. `offer`
+    /// answering with "what `status()` would say right now" is the whole
+    /// point of NET-24: when the work is already done at offer time, the
+    /// caller must learn it from the reply it is already awaiting, not
+    /// from an out-of-band push it may not be subscribed for yet.
+    async fn reply_for_grant(
+        &self,
+        peer: NodeId,
+        grant: &FlowGrant,
+    ) -> Result<FlowStatusReply, DeliveryError> {
         match grant.state {
             FlowGrantState::Active => Ok(FlowStatusReply {
                 state: "active".into(),
                 receipt: None,
-                task_running: self.tasks.is_running(peer, &grant),
+                task_running: self.tasks.is_running(peer, grant),
             }),
             FlowGrantState::Cancelled => Ok(FlowStatusReply {
                 state: "cancelled".into(),
@@ -892,7 +938,7 @@ impl FlowDelivery {
                 task_running: false,
             }),
             FlowGrantState::Completed => {
-                let receipt = self.persisted_receipt(&grant).await?;
+                let receipt = self.persisted_receipt(grant).await?;
                 Ok(FlowStatusReply {
                     state: "completed".into(),
                     receipt: Some(receipt),
