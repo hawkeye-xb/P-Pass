@@ -1,7 +1,7 @@
 # QA-03 卡归档进 done/ 时相对链接集体失效，且没有门禁能发现
 
-状态：⬜ 可接（验收人 2026-09-17 派活：「门禁这块顺手做一下」，并追加协同冲突/CI 过严两问）
-级别：L1（机械修 5 处 + 两条门禁断言 + 合并策略 + 本地快车道；改 `tools/` 与 `.gitattributes` 会影响所有会话）
+状态：🟡 代码完成，待验收人过目（实现 `87f89a6`；本卡两次自我证伪，最终结论与派活时的计划不同，见「实施中的范围更正」）
+级别：L1（实际落地：修 8 处断链 + 一条门禁断言 + 本地快车道；合并策略经证伪后未做，`.gitattributes` 未建）
 关联: 从 [IDX-01](done/IDX-01-index-rebuild-has-no-runtime-entry-point.md) 收尾时自查发现 ·
 同域 [QA-02](QA-02-queue-archive-gate-section-7-mutation-broken.md)（同样是门禁本身失灵）
 
