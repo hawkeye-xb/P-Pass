@@ -1,0 +1,60 @@
+# SEC-02: 提交身份白名单门禁。
+#
+# 为什么必须是服务端 lane、而且**不加 paths 过滤**：
+# 身份问题与改了哪些文件无关——任何一个提交都可能带错身份，所以每个 PR、
+# 每次进 main 的推送都必须过。本机 git hook 只能约束装了它的机器，真实
+# 发生过的一次越界就来自另一台没装 hook 的机器；服务端是唯一覆盖所有
+# 机器的位置。
+#
+# 成本：无编译、无缓存，只有 bash + git，秒级。因此 paths 刻意留空
+# （全量触发），与 ci-docs.yml 的取舍相同——没有审批门也没有副作用。
+name: CI Identity
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  identity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 必须取全史：PR 要算 base..head，push 要算 before..sha，
+          # 浅克隆会让区间解析失败（且失败方向是「查不到=放行」，最危险）。
+          fetch-depth: 0
+
+      # 门禁自己的反证：证明判据在该红的时候真的红。
+      # 与门禁同生共死——反证挂了就不该相信门禁的绿。
+      - name: 反证（六个变异必须全部符合期望）
+        run: bash tools/test-commit-identity-gate.sh
+
+      - name: 检查本次改动引入的提交身份
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          ZERO=0000000000000000000000000000000000000000
+          if [ "$EVENT" = "pull_request" ]; then
+            git fetch -q origin "$GITHUB_BASE_REF"
+            # 两个点：只要「从 HEAD 可达、从 base 不可达」的提交，也就是
+            # 这个 PR 自己引入的。三个点是对称差，会把 base 侧的提交也算
+            # 进来，那是另一回事。
+            RANGE="origin/$GITHUB_BASE_REF..$SHA"
+          elif [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "$ZERO" ] \
+               && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            RANGE="$BEFORE..$SHA"
+          else
+            # 新分支 / 强推后 before 不可用：退化为查全史。
+            # 宁可多查（几秒）也不要静默放行。
+            RANGE="$(git rev-list --max-parents=0 "$SHA" | tail -1)..$SHA"
+          fi
+          echo "检查区间: $RANGE"
+          bash tools/check-commit-identity.sh "$RANGE"

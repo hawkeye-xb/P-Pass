@@ -67,6 +67,13 @@ md-check:
 token-check:
   @python3 ./tools/check-token-drift.py
 
+# SEC-02: 提交身份必须在 .github/allowed-identities.txt 白名单内。
+# 第二行是反证（证明门禁在该红时真的红），跟门禁同生共死。
+# 本地跑的是 origin/main..HEAD；远端 ci-identity.yml 按 PR/push 各自算区间。
+identity-check:
+  @./tools/test-commit-identity-gate.sh
+  @./tools/check-commit-identity.sh
+
 # ── Development ─────────────────────────────────────
 
 # Start daemon in development mode
@@ -76,7 +83,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint test arch-check queue-check md-check token-check
+ci: fmt lint test arch-check queue-check md-check token-check identity-check
   @echo "==> CI pipeline: all green ✅"
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
@@ -87,7 +94,7 @@ ci: fmt lint test arch-check queue-check md-check token-check
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: queue-check md-check token-check
+ci-docs: queue-check md-check token-check identity-check
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
