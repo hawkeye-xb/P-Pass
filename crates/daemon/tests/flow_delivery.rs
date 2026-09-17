@@ -1617,6 +1617,87 @@ async fn status_reports_completed_with_the_durable_receipt() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn repeated_fetch_and_status_on_a_completed_grant_never_retouch_the_data_plane() {
+    // NET-16 (split from NET-06): `status_reports_completed_with_the_durable_receipt`
+    // proves a status() *reads* the receipt; nothing proved that repeated
+    // calls are *pure* receipt reads. Cut the provider's endpoint dead right
+    // after the one genuine completion, then call fetch()/status() again:
+    // any defensive re-fetch or re-spawn would now hit a dead network, and
+    // removing the completed short-circuit in fetch_inner() turns the repeat
+    // fetch() into Err(Cancelled) — either way the case below goes red.
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"NET-16 zero-retransmit fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db, receiver_blobs.clone(), root.path());
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    let peer = provider_transport.node_id();
+
+    delivery.offer(peer, &offer).await.unwrap();
+    let first = delivery.fetch(peer, &offer).await.unwrap();
+    // The first fetch really did run the data plane — bytes landed locally.
+    assert_eq!(
+        receiver_blobs.local_bytes(hash).await.unwrap(),
+        bytes.len() as u64,
+        "the initial fetch must have pulled the content"
+    );
+
+    // Sever the data plane: the provider endpoint no longer accepts any
+    // connection, so any later network attempt cannot silently succeed.
+    provider_transport.close().await;
+
+    for round in 1..=3 {
+        let again = delivery
+            .fetch(peer, &offer)
+            .await
+            .unwrap_or_else(|error| {
+                panic!("repeat fetch #{round} on a completed grant must replay the durable receipt, got {error:?}")
+            });
+        assert_eq!(
+            again.receipt_id, first.receipt_id,
+            "repeat fetch #{round} must return the same durable receipt"
+        );
+        let reply = delivery
+            .status(peer, &tuple_ref("epoch-current", "lease-current", 7))
+            .await
+            .unwrap();
+        assert_eq!(reply.state, "completed");
+        assert!(
+            !reply.task_running,
+            "repeat fetch/status #{round} must never register a new fetch task",
+        );
+        assert_eq!(
+            reply
+                .receipt
+                .expect("completed status must carry a receipt")
+                .receipt_id,
+            first.receipt_id
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn status_reports_cancelled_after_cancel() {
     let root = tempdir().unwrap();
     let provider_transport =

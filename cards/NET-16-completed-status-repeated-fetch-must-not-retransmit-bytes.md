@@ -1,6 +1,7 @@
 # NET-16 completed 后重复 status/fetch 必须零重传字节的直接断言　级别 L1
 
-> ⬜ 状态：未开工 · 协同分支：`main`
+> ✅ 状态：代码完成（2026-09-17），零生产代码 diff（短路分支 `flow_delivery.rs:606/618`
+> 本已存在，与卡面预判一致）；反证真跑红→绿；`just ci` 全绿。L1 无需真机，待验收人复核归档
 > 级别：L1 · 阻塞：无
 > **从 [NET-06](NET-06-flow-delivery-async-202-reconcile-ledgers.md) 拆出**：
 > NET-06 已有 `status_reports_completed_with_the_durable_receipt` 验证了
@@ -26,15 +27,15 @@
 
 ## 验收标准
 
-- [ ] RED 先行：新增 daemon 集成测试——grant 完成后连续调用 `fetch()`
+- [x] RED 先行：新增 daemon 集成测试——grant 完成后连续调用 `fetch()`
       3 次，断言只有第一次真正触发数据面（若已完成则直接走 receipt 路径，
       不再进 `spawn_fetch_task`），且三次返回的 `receipt_id` 完全相同。
       改前如果这条路径本就正确应保持绿；若引入回归（重复调用又拉一次）
       必须能被此用例抓到——用临时改坏 `fetch()`（去掉"已完成直接返回
       receipt"的短路分支）来验证反证成立。
-- [ ] 反证：临时去掉"completed 直接返回 receipt 不重新 spawn"的短路
+- [x] 反证：临时去掉"completed 直接返回 receipt 不重新 spawn"的短路
       分支，新用例必须变红；恢复后复绿。
-- [ ] `cargo test -p daemon --test flow_delivery` 全绿（报出具体条数）+
+- [x] `cargo test -p daemon --test flow_delivery` 全绿（报出具体条数）+
       `just ci` 全绿。
 
 ## 范围
@@ -49,3 +50,29 @@
 
 无前置，无下游。完成后需回写 [NET-06](NET-06-flow-delivery-async-202-reconcile-ledgers.md)
 勾掉"幂等"验收项。
+
+## 实施记录（做完填）
+
+2026-09-17 · 执行 agent（Salamira），分支 `main`
+
+- **改动**：仅新增测试 `repeated_fetch_and_status_on_a_completed_grant_never_retouch_the_data_plane`
+  （`crates/daemon/tests/flow_delivery.rs`）。**零生产代码 diff**——
+  `fetch_inner` 的 completed 短路分支（`flow_delivery.rs:606`）与
+  `status`→`persisted_receipt` 路径本已存在，与卡面预判一致。
+- **测试设计（E2）**：grant 完成、确认字节真实落进本地 blob store 后，
+  `provider_transport.close()` 把数据面掐死，再对同一 grant 连续
+  fetch()+status() 三轮：任何一次重新触碰网络（重拉字节/重 spawn
+  任务）都只会打到已关闭的端点。断言 receipt_id 三轮不变、
+  `task_running` 恒 false、status 回 completed。
+- **反证真跑（E3 级证据，之后还原）**：临时删除 `fetch_inner` 的
+  `Completed → return persisted_receipt` 短路分支 → 新用例即红
+  （`repeat fetch #1 … got Cancelled`——去掉短路后重复 fetch 落进
+  `state != Active` 的 Cancelled 臂）；`git checkout` 还原复绿。
+  证明本卡要堵的"防御性重拉"式回归确能被抓到。
+- **回归**：`cargo test -p daemon --test flow_delivery` **32 passed**
+  （31 原有 + 1 新）；`cargo nextest run --all-features`
+  **430 passed / 1 skipped**；`just ci` 全绿。
+- **发现分岔**：跑 `just ci` 时 queue-check 步 stderr 有既存
+  `StopIteration` traceback（归档门禁变异 C 自 4a4181e 起空转），与本卡
+  无关、不顺手修，挂号 **QA-02**。另：本机磁盘 100% 满导致首跑 CI
+  编译失败，清理 `target/debug/incremental`（12G）后恢复，非仓库问题。
