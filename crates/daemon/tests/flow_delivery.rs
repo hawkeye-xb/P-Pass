@@ -428,7 +428,7 @@ async fn cancelled_active_item_never_receives_a_receipt() {
     provider_blobs.serve();
     let source = root.path().join("source.jpg");
     let bytes = b"cancelled native fetch fixture";
-    std::fs::write(&source, &bytes).unwrap();
+    std::fs::write(&source, bytes).unwrap();
     let hash = *blake3::hash(bytes).as_bytes();
     provider_blobs.import(hash, &source).await.unwrap();
 
