@@ -35,3 +35,30 @@
 - **取证思路**（未验证，不得直接采信）：给推送送达补一条手机侧日志，跑一批
   **全新内容**（确保不命中去重）的真实传输，看 `FlowPushOutcome.Delivered`
   分支是否被走到过；若一次都没有，才说明推送在真实路径上同样从未送达。
+
+## 验证前必须先补的判别手段（2026-09-17 验收人问「换个相册跑一遍行不行」）
+
+换个没传过的相册是**必要**的（保证内容全新、不落进 NET-20 去重），但**不充分**：
+当前源码里三条信号解析成功后走的是同一行 `receipt = outcome.receipt`
+（`NativeFlowDeliveryPort.kt` 的 `FlowPushOutcome.Delivered` 分支与
+`CheckStatusNow` → `desktop.status()` 分支），**没有任何日志说明这一轮是谁
+结的账**。不补判别就跑，只会再拿到一次"都很快"——正是 NET-24 那种不作数的
+非证据。
+
+所以跑之前至少要补上其一（两条都补最干净，都是纯可观测性改动、不改行为）：
+
+1. **手机侧**：三个终结点各打一条 `resolved_by=` 日志——
+   `offer_reply`（NET-24 那段应答判别）、`push`（`FlowPushOutcome.Delivered`）、
+   `status`（`CheckStatusNow` 回来的 `Completed`）。
+2. **daemon 侧**（更直接）：`emit_flow_delivered`（`flow_delivery.rs:670`）
+   发推送时，打一条"此刻 `peer` 这台手机在不在订阅表里"。
+   ⚠️ **不要用 `broadcast::Sender::receiver_count()`**——手机的
+   `timeline.subscribe`（`router.rs:serve_subscription`）和桌面壳的
+   `events.subscribe` 挂的是**同一条** `EventBus`，桌面常驻订阅会让这个
+   计数恒大于 0，测不出手机在不在。要查的是按 peer 登记的那张表：
+   `Subscriptions`（`subscriptions.rs:44` `register(peer)`）现在只有
+   register/unregister/close，补一个只读的"这个 peer 有没有登记"即可。
+   读到"没有"就是推送被丢弃的直接证据，不需要任何推断。
+
+两条都有的话，一次真实传输就能同时给出"daemon 推的那一刻这台手机在不在线"和
+"手机最终是被谁叫醒的"，本卡可以一轮结案。
