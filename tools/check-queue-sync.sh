@@ -16,7 +16,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 QUEUE="${QUEUE_FILE:-$ROOT/docs/QUEUE.md}"
 FAIL=0
 
-echo "==> queue-sync 1/2: every root card must appear in docs/QUEUE.md"
+echo "==> queue-sync 1/4: every root card must appear in docs/QUEUE.md"
 
 for f in "$ROOT"/cards/*.md; do
   base="$(basename "$f")"
@@ -38,7 +38,7 @@ if [ "$FAIL" -eq 0 ]; then
   echo "   ✅ 根目录卡全部在 QUEUE.md 里"
 fi
 
-echo "==> queue-sync 2/2: docs/QUEUE.md 里的卡链接不许悬空"
+echo "==> queue-sync 2/4: docs/QUEUE.md 里的卡链接不许悬空"
 
 # Extract every relative link that points at a card file, e.g. (../cards/FOO.md)
 LINKS="$(grep -oE '\(\.\./cards/[A-Za-z0-9._-]+\.md\)' "$QUEUE" | tr -d '()' || true)"
@@ -55,7 +55,7 @@ if [ "$FAIL" -eq 0 ]; then
   echo "   ✅ QUEUE.md 里没有悬空的卡链接"
 fi
 
-echo "==> queue-sync 3/3: 归档出口——历史不许回到待办队列"
+echo "==> queue-sync 3/4: 归档出口——历史不许回到待办队列"
 
 # 2026-09-16 归档出口门禁。三条断言，各自针对一个真实漂移模式：
 #   a. 分区集合固定 —— 原「五、已完成 / 已归档」分区曾长到 45 行 / 14.1KB，
@@ -109,6 +109,59 @@ if bad:
     sys.exit(1)
 print("   ✅ 分区集合固定、无已归档分区、活分区无 done 卡登记")
 PYGATE
+then
+  FAIL=1
+fi
+
+echo "==> queue-sync 4/4: 卡里写的相对链接必须指得到东西"
+
+# QA-03：卡从 cards/ 移进 cards/done/ 时，卡内写死的相对链接深了一层却没人
+# 改，于是集体失效。2026-09-17 实测 done/ 下有 5 处这种断链，跨好几张卡、
+# 好几个时间点——不是手误，是"靠人在移文件时记得改路径"这个机制本身不成立。
+#
+# ⚠️ 判据必须按**含该链接的文件自己所在的目录**解析，不能按仓根：按仓根解析
+# 的话那 5 处断链会全部通过，这条断言等于白写（本卡的整个 bug 类就是相对
+# 深度错了）。
+# ⚠️ 不按后缀过滤：AUDIT-03 / DESK-15 指的是 docs/ 与 assets/ 下的文件，
+# 同样会因为少一层 ../ 而断。
+if ! python3 - "$ROOT" <<'PYLINKS'
+import pathlib, re, sys
+
+root = pathlib.Path(sys.argv[1])
+# 只取 markdown 行内链接的目标；协议链接与纯锚点不是文件。
+link_re = re.compile(r"\]\(([^)\s]+)\)")
+# 代码里长得像链接的东西不是链接：卡面经常用 `](相对路径)` 这种写法讲规矩
+# （本卡自己就踩了一次误报）。围栏块整段跳过，行内 `...` 先剥掉再匹配。
+code_span_re = re.compile(r"`[^`]*`")
+bad = []
+checked = 0
+for card in sorted((root / "cards").rglob("*.md")):
+    in_fence = False
+    for lineno, line in enumerate(card.read_text(encoding="utf-8").split("\n"), 1):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        line = code_span_re.sub("", line)
+        for target in link_re.findall(line):
+            if target.startswith(("http://", "https://", "mailto:", "#")):
+                continue
+            path = target.split("#", 1)[0]          # 剥掉 #anchor
+            if not path:
+                continue
+            checked += 1
+            # 关键：相对于这张卡自己所在的目录
+            if not (card.parent / path).exists():
+                bad.append((card.relative_to(root), lineno, target))
+
+for rel, lineno, target in bad:
+    print(f"   FAIL dangling-card-link: {rel}:{lineno} -> {target}")
+if bad:
+    print("     卡移进/移出 done/ 时相对深度会变——链接要跟着改（QA-03）。")
+    sys.exit(1)
+print(f"   ✅ {checked} 条卡内相对链接全部可达")
+PYLINKS
 then
   FAIL=1
 fi

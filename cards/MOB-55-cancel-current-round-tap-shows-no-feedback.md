@@ -1,13 +1,13 @@
 # MOB-55 「取消当前轮」点击无可见反馈（已被 MOB-58 坐实并修复）（L2）
 
-> ✅ 状态：已被 [MOB-58](MOB-58-cancel-round-no-feedback-no-restore-entry.md) 收敛 · 不再独立开工
+> ✅ 状态：已被 [MOB-58](done/MOB-58-cancel-round-no-feedback-no-restore-entry.md) 收敛 · 不再独立开工
 > 级别：L2 · 阻塞：无
 
 ## 结论（2026-09-07）
 
 用户在同一根因上反馈了三次，第三次给出的证据（"点完之后靠继续才能终止，
 且没有重传入口"）与本卡当时的候选根因 1（前置条件/中间态不可见）完全
-吻合，已在 [MOB-58](MOB-58-cancel-round-no-feedback-no-restore-entry.md)
+吻合，已在 [MOB-58](done/MOB-58-cancel-round-no-feedback-no-restore-entry.md)
 坐实并修复：取消瞬间的中间态确实转瞬即逝（`pause()` + `startPausedRound()`
 + `finishRound()` 是同一原子提交），不是异常被吞或前置条件跳过——MOB-58
 加了持久可见的提示卡替代这个不可感知的中间态，同时补上了一直缺失的

@@ -77,4 +77,4 @@ NET-20 的内容去重（`complete_without_fetch`）和 NET-22 的 rebind 分支
 超时才被轮询捞回（11 张耗时约 3 分钟），不是预期的"推送到达后瞬时
 完成"。说明这次真机复现里 `flow.delivered` 推送**始终没有成功送达
 手机**，根因未查——本卡只保证了"送不到时不会永久卡死"，没有解决
-"为什么送不到"。跟踪见 [NET-24](../NET-24-flow-delivered-push-not-reaching-phone.md)（待开）。
+"为什么送不到"。跟踪见 [NET-24](NET-24-flow-delivered-push-not-reaching-phone.md)（待开）。

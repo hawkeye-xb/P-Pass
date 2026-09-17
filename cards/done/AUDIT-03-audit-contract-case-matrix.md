@@ -2,7 +2,7 @@
 
 > ✅ 状态：设计已收口 · 当前节点：Case Matrix 与可信/保留/访问边界已定；实现前置已转入 AUDIT-04
 > 级别：L2 · 阻塞：无
-> 设计矩阵：[中文 Case Matrix](../docs/design/2026-09-10-audit-contract/case-matrix.zh-CN.md)
+> 设计矩阵：[中文 Case Matrix](../../docs/design/2026-09-10-audit-contract/case-matrix.zh-CN.md)
 
 ## 问题
 

@@ -168,7 +168,7 @@
    但目前代码里没有真实的 icon-only 按钮用例，不凭空加。见
    `docs/QUEUE.md` 八、backlog 区新增行。
 2. **token 复用清单整理成独立文档**：新增
-   [`assets/design/token-reuse-checklist.md`](../assets/design/token-reuse-checklist.md)——
+   [`assets/design/token-reuse-checklist.md`](../../assets/design/token-reuse-checklist.md)——
    逐类核对 `tokens.json` 的复用情况：已复用的（颜色/字体/圆角/
    tap-min/body-min）、判断不需要新增的（spacing 走 Tailwind 默认刻度、
    840/400/360px 暂不建布局别名）、组件自己的结构决定（不是 token

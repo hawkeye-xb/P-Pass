@@ -2,7 +2,7 @@
 
 状态：✅ 已归档（commit `f70cfae`），2026-09-17 真机验收通过
 级别：L1
-关联: 从 [NET-23](done/NET-23-flow-wait-loop-must-not-hang-forever-when-local-signal-never-fires.md) 分出；
+关联: 从 [NET-23](NET-23-flow-wait-loop-must-not-hang-forever-when-local-signal-never-fires.md) 分出；
   触发条件由 NET-20 的去重短路造成（NET-20 已归档，本卡不改动它）
 
 > ⚠️ **卡名/范围已更正**：原标题写「断链重连场景」，实测范围更大且是
@@ -147,7 +147,7 @@ iroh-blobs 永远不会有任何 get-request/progress/completed 事件，
 
 ## 阻塞与依赖
 
-无前置。从 [NET-23](done/NET-23-flow-wait-loop-must-not-hang-forever-when-local-signal-never-fires.md)
+无前置。从 [NET-23](NET-23-flow-wait-loop-must-not-hang-forever-when-local-signal-never-fires.md)
 真机验证中观察到的现象拆出——NET-23 保证了"推送缺失时不会永久卡死"，
 本卡负责修"为什么推送会缺失"，两者独立。
 
