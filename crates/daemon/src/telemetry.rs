@@ -24,6 +24,22 @@ use serde_json::{json, Value};
 /// Batch flush cadence (契约: 每 5min).
 pub const FLUSH_INTERVAL: Duration = Duration::from_secs(300);
 
+/// TEL-05: total request timeout (connect + response,全程). This is an
+/// **endpoint-aliveness decision window**, NOT an expected duration — a
+/// healthy flush completes in well under a second. Without it, a
+/// half-dead endpoint (TCP accepted, never responds) parks `flush_now`
+/// forever, which kills the periodic loop and lets `queue` grow
+/// unbounded. Same-shape defaults in the industry: OTel SDK
+/// `exportTimeoutMillis` 30s / OTLP exporter timeout 10s.
+pub const DEFAULT_FLUSH_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// TEL-05: hard cap on the in-memory queue. On overflow the OLDEST
+/// events are dropped — the newest ones describe the current failure,
+/// the oldest are already stale by definition. Bounded memory beats
+/// "we'll probably deliver everything". (OTel `maxQueueSize` = 2048,
+/// same drop-on-full shape; our volume is a tiny fraction of that.)
+pub const QUEUE_CAP: usize = 500;
+
 /// TEL-03: dedup window for `error` events — same rationale as the flush
 /// cadence: one flush window's worth of repetition adds no diagnostic
 /// value over the first occurrence, so the same `(code, stage)` reports
@@ -101,6 +117,10 @@ pub struct Telemetry {
     anon_id: String,
     ver: String,
     queue: Arc<Mutex<Vec<Value>>>,
+    /// TEL-05: cumulative count of events dropped by the queue cap —
+    /// debug log only, telemetry itself never emits telemetry (that would
+    /// be the tail wagging the dog).
+    dropped: Arc<std::sync::atomic::AtomicUsize>,
     http: reqwest::Client,
     /// TEL-03: last-recorded instant per `(code, stage)`, so a repeating
     /// failure (e.g. a relay outage) reports once per window instead of
@@ -113,6 +133,16 @@ impl Telemetry {
     /// `enabled=false` builds a no-op client: `record` drops events at
     /// the door and no flush task should be spawned.
     pub fn new(enabled: bool, url: String, data_dir: &Path) -> Self {
+        Self::with_timeout(enabled, url, data_dir, DEFAULT_FLUSH_TIMEOUT)
+    }
+
+    /// TEL-05 seam: production always takes [`DEFAULT_FLUSH_TIMEOUT`] via
+    /// `new`; tests inject a short window to prove the send path cannot
+    /// park on a half-dead endpoint. The timeout is a total request budget
+    /// (connect + response) on the reqwest client — the single source of
+    /// truth; the `run()` loop deliberately adds NO second timeout (two
+    /// numbers would have to guess about each other, NET-07 red line).
+    pub fn with_timeout(enabled: bool, url: String, data_dir: &Path, timeout: Duration) -> Self {
         Self {
             enabled,
             url,
@@ -123,7 +153,11 @@ impl Telemetry {
             },
             ver: env!("CARGO_PKG_VERSION").to_string(),
             queue: Arc::default(),
-            http: reqwest::Client::new(),
+            dropped: Arc::default(),
+            http: reqwest::Client::builder()
+                .timeout(timeout) // TEL-05: endpoint-aliveness decision window
+                .build()
+                .expect("reqwest client with a total timeout is always valid"),
             error_dedup: Arc::default(),
         }
     }
@@ -154,7 +188,21 @@ impl Telemetry {
             dedup.insert(key, now);
         }
         let value = event.into_value(&self.anon_id, &self.ver, now_ms());
-        self.queue.lock().expect("telemetry queue").push(value);
+        // TEL-05: the queue must stay bounded even if flushes keep failing
+        // (a parked or erroring endpoint must not turn a best-effort side
+        // channel into a memory leak). Drop the OLDEST on overflow: they
+        // describe a past that the newest events already supersede.
+        let mut q = self.queue.lock().expect("telemetry queue");
+        q.push(value);
+        if q.len() > QUEUE_CAP {
+            let excess = q.len() - QUEUE_CAP;
+            q.drain(..excess);
+            let total = self
+                .dropped
+                .fetch_add(excess, std::sync::atomic::Ordering::Relaxed)
+                + excess;
+            tracing::debug!("telemetry queue capped at {QUEUE_CAP}: dropped {excess} oldest ({total} cumulative)");
+        }
     }
 
     /// Send the queued batch now. Returns how many events went out.

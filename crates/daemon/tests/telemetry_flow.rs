@@ -158,3 +158,81 @@ async fn disabled_switch_means_zero_requests() {
         "enabled=false must mean ZERO network calls"
     );
 }
+
+/// TEL-05 RED proof: a half-dead endpoint (TCP accepted, NEVER responds)
+/// must not park `flush_now` forever. Pre-TEL-05 this test hangs until the
+/// outer 5s watchdog fires (reqwest had no total timeout) — that hang is
+/// exactly the bug: the periodic loop parks here and the queue grows
+/// unbounded. Post-fix the client's injected 100ms budget must surface as
+/// a returned 0, letting the next scheduled flush proceed.
+#[tokio::test(flavor = "multi_thread")]
+async fn half_dead_endpoint_returns_within_timeout_not_forever() {
+    // Black-hole server: accept, keep the socket, never write a response.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/telemetry", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            held.push(sock); // never read, never answer — half-dead endpoint
+        }
+    });
+
+    let dir = tempfile::tempdir().unwrap();
+    let t = Telemetry::with_timeout(true, url, dir.path(), std::time::Duration::from_millis(100));
+    t.record(TelemetryEvent::FirstByte {
+        ms: 1,
+        kind: "thumb",
+    });
+
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), t.flush_now()).await;
+    match outcome {
+        // flush_now returns the batch size LEAVING the queue, not the count
+        // accepted — timeout shares the TEL-02 drop-not-requeue semantics
+        // (1 event was discarded, nothing re-queued). The point of this
+        // test is that the call RETURNS at all within the budget.
+        Ok(n) => assert_eq!(
+            n, 1,
+            "timed-out batch is discarded, not parked or re-queued"
+        ),
+        Err(_) => panic!("flush_now parked on a non-responding endpoint — TEL-05 bug"),
+    }
+
+    // The loop is not dead: a second flush still proceeds (returns 0 events
+    // quickly — the batch was dropped, not re-queued, best-effort unchanged).
+    let again = tokio::time::timeout(std::time::Duration::from_secs(5), t.flush_now())
+        .await
+        .expect("second flush must not park either");
+    assert_eq!(again, 0);
+}
+
+/// TEL-05: bounded queue. Overflow drops the OLDEST events; the newest
+/// must survive. 600 distinct events in ⇒ exactly QUEUE_CAP (500) out,
+/// and the batch starts at event #100, not #0.
+#[tokio::test(flavor = "multi_thread")]
+async fn queue_cap_drops_oldest_and_bounds_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let (url, _hits, bodies) = mock_server().await;
+    let t = Telemetry::new(true, url, dir.path());
+
+    for i in 0..600u64 {
+        t.record(TelemetryEvent::FirstByte {
+            ms: i,
+            kind: "thumb",
+        });
+    }
+    let sent = t.flush_now().await;
+    assert_eq!(sent, daemon::telemetry::QUEUE_CAP, "batch capped at 500");
+
+    let batch = bodies.lock().unwrap()[0].clone();
+    let events = batch.as_array().unwrap();
+    assert_eq!(events.len(), daemon::telemetry::QUEUE_CAP);
+    assert_eq!(
+        events[0]["ms"].as_u64().unwrap(),
+        100,
+        "the 100 oldest events were dropped, not the newest"
+    );
+    assert_eq!(events.last().unwrap()["ms"].as_u64().unwrap(), 599);
+}
