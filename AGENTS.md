@@ -8,7 +8,9 @@
   读 `cards/<卡号>.md` 即全部任务上下文。卡是唯一事实源：干什么、怎么算完、
   不许碰什么，都在卡里。卡声明了 `requires:` 才去读对应文档，否则不读。
 - **状态对齐**（问进度 / 下一张做什么 / 该验收什么）：`git fetch`，读
-  `docs/QUEUE.md`（当前状态）+ `docs/PROGRESS.md` 末尾（最近交付）。
+  `docs/QUEUE.md`（当前状态）+ `docs/PROGRESS.md` **顶部表格**（最近交付——
+  该文件按完成时间倒序，最新一条在第一行；*末尾*是 2026-08-26 就停了的
+  旧编年段落）。
   对齐完要执行某张卡时，回到上一行。
 
 ## 红线（违反=事故）
@@ -67,7 +69,7 @@ agent 有挂号权和建议权，没有改道权——优先级由验收人裁�
 | 你要做什么 | 去哪 |
 |---|---|
 | 开卡/补卡 | `cards/TEMPLATE.md` |
-| 状态对齐（进度/下一张/待验收） | `docs/QUEUE.md` + `docs/PROGRESS.md` 末尾 |
+| 状态对齐（进度/下一张/待验收） | `docs/QUEUE.md` + `docs/PROGRESS.md` 顶部表格 |
 | 本地跑测试、可用命令 | `just --list`（入口 `justfile`） |
 | 发版、签名、版本纪律 | `docs/RELEASING.md` |
 | 验收协议细则（L 分级由来、抽检法） | `docs/AGENT_PROTOCOL.md` |
