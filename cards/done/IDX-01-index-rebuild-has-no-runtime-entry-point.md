@@ -2,7 +2,7 @@
 
 状态：✅ 已归档——真库 E3 通过（2026-09-17，10 张照片自己回来了）
 级别：L2（猜测；字节没丢，缺的是"把它们找回来"的路径）
-关联: 与 [DEV-02](DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) 互相放大
+关联: 与 [DEV-02](../DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) 互相放大
 
 ## 挂号段
 
@@ -116,7 +116,7 @@
    这是本卡敢做成自动的前提，接卡人若发现新增了删除功能必须回头重估。
 2. `timeline_page`（`asset_repo.rs:260`）是纯 `FROM asset`，**不 join `device`**
    ——收编出来的 `src_device` 在 `device` 表里查无此人也照常渲染（这正是
-   [DEV-02](DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) 那条
+   [DEV-02](../DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) 那条
    互相放大的关系，本卡这边不受阻）。
 3. 缩略图**按需生成**（`query.rs:112-128` miss 时现场生成并回写 `thumb_state`），
    `thumb_state=0` 只是缓存提示，不会显示成碎图。
