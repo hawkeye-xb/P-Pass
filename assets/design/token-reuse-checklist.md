@@ -3,7 +3,7 @@
 对照 `tokens.json` 的每一类数值，核实桌面端组件是否已经复用、是否存在
 真实缺口。**结论优先于过程**——这份清单是判断结果，不是调研记录；调研
 证据（v3 设计稿像素值统计、App.svelte 现状扫描）见
-[DESK-15 实施记录](../../cards/DESK-15-desktop-design-system-convergence.md#实施记录)。
+[DESK-15 实施记录](../../cards/done/DESK-15-desktop-design-system-convergence.md#实施记录)。
 
 ## 已有 token，已复用（不重复定义）
 

@@ -1,7 +1,7 @@
 # ARCH-01 Backup Core Design Archive
 
 > English companion · 2026-08-29  
-> Canonical task card: [`ARCH-01`](../../../cards/ARCH-01-backup-core-flow-queue-design.md) · Chinese primary archive: [`README.zh-CN.md`](README.zh-CN.md)
+> Canonical task card: [`ARCH-01`](../../../cards/done/ARCH-01-backup-core-flow-queue-design.md) · Chinese primary archive: [`README.zh-CN.md`](README.zh-CN.md)
 
 This directory archives the agreed ARCH-01 product semantics, boundaries, and editable SVG diagrams. It intentionally does **not** choose a database, file format, Iroh FFI, or UI layout. Implementation cards must not redefine these business rules.
 

@@ -101,5 +101,5 @@
   - 「点击暂停反应迟钝」——按架构分析，是 `refreshFlowState()` 500ms 轮询
     + IO 调用耗时叠加的**已知量级延迟**，不是功能性 bug，本卡不处理；
     若验收人认为延迟不可接受需要产品判断是否值得优化轮询间隔，另开卡。
-  - 「点击取消当前轮没有任何反应」——已开 [MOB-55](MOB-55-cancel-current-round-tap-shows-no-feedback.md)
+  - 「点击取消当前轮没有任何反应」——已开 [MOB-55](done/MOB-55-cancel-current-round-tap-shows-no-feedback.md)
     单独追踪（证据不足以在本卡定论，logcat 环缓冲区已轮转丢失当时记录）。

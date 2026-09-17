@@ -1,7 +1,7 @@
 # ARCH-01 失败 Case Matrix 与验收矩阵
 
 > 中文主档 · 2026-08-29  
-> 业务规则来源：[ARCH-01](../../../cards/ARCH-01-backup-core-flow-queue-design.md) · [设计归档](README.zh-CN.md)
+> 业务规则来源：[ARCH-01](../../../cards/done/ARCH-01-backup-core-flow-queue-design.md) · [设计归档](README.zh-CN.md)
 
 本文件是生产实现前的测试合同。每一项先写成会失败的自动行为测试，确认失败原因正确后才写最小实现。它不引入新产品语义，也不决定 DB、文件或 UI。
 
