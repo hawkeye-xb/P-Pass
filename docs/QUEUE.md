@@ -95,7 +95,6 @@
 | P1 | [NET-08](../cards/NET-08-audit-repo-for-sync-wait-weld-points.md) | 🟡 普查完成，衍生 NET-09/10/11、TEL-05；待后续卡闭环，不再可领 | L2 |
 | P1 | [NET-09](../cards/NET-09-data-plane-stall-watchdog-for-long-transfers.md) | 长数据面字节停滞看门狗 | L1 |
 | P1 | [NET-11](../cards/NET-11-desktop-shell-ipc-read-timeout-fuse.md) | 桌面壳 IPC call 读超时保险丝 | L1 |
-| P1 | [TEL-05](../cards/TEL-05-telemetry-http-timeout-and-queue-cap.md) | 遥测 reqwest 超时 + 队列上限 | L1 |
 | P2 | [NET-10](../cards/NET-10-pair-request-accept-then-poll-status.md) | 配对「提交≠等人」拆解；等 NET-06 合入 | L2 |
 | P1 | [AUDIT-02](../cards/AUDIT-02-activity-record-meaningful-projection.md) | 活动记录按 canonical evidence 分列准确汇总 | L2 |
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 状态栏图标对比度：实证安全区/system-bar 外观生效 | L1 |
@@ -150,6 +149,7 @@
 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | 新生产 Flow runner 完成 | REBUILD-04 |
 | [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 版本脚本版本目标全断言 | — |
 | [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 五个 workflow 从 TOML 派生 Rust 工具链 | — |
+| [TEL-05](../cards/TEL-05-telemetry-http-timeout-and-queue-cap.md) | 遥测超时+封顶完成 `436ddbd`，L1 无需真机 | — |
 
 ---
 
