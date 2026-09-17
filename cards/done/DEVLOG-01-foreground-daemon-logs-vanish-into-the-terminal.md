@@ -84,7 +84,7 @@ test result: FAILED. 0 passed; 1 failed
 ```
 
 **端到端验证**（隔离 `HOME` 到临时目录，全程未接触生产库；验证期间生产
-daemon PID 86519 正常存活）：
+daemon 进程全程正常存活，已核对）：
 
 | 分支 | 命令 | 结果 |
 |---|---|---|
