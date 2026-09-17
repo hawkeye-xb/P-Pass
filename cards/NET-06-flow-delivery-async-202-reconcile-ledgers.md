@@ -11,7 +11,7 @@
 > ⚠️ **2026-09-16：本卡当前无人认领处理，不是"进行中"**（AGENTS.md
 > 「任务状态诚实与拆分纪律」）。剩余 5 项验收缺口已全部拆成独立子卡，
 > 各自可独立认领、独立验收，完成后各自回写勾掉本卡对应项：
-> [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
+> [NET-15](done/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
 > （崩溃自动重拉）、
 > [NET-16](done/NET-16-completed-status-repeated-fetch-must-not-retransmit-bytes.md)
 > （幂等零重传断言）、
@@ -222,7 +222,7 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
       `flow_delivery` 32/32。**
 - [x] 崩溃恢复：active grant + 无运行任务 → status 触发重拉，最终 completed
       （daemon 集成测试模拟 task 丢失）。**已由
-      [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
+      [NET-15](done/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
       完成（`c01a02f`+`b67b0a7`，2026-09-17）：status() 重拉分支 + 原子 try_register +
       33/33 全绿 + 反证真跑。**
 - [ ] 重试不互踩：手机侧超时后先 status 见 active → 不重发 offer（JVM 测试

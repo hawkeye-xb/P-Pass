@@ -1,7 +1,7 @@
 # ARCH-01 备份核心设计归档
 
 > 中文主档 · 2026-08-29  
-> 对应任务卡：[`ARCH-01`](../../../cards/ARCH-01-backup-core-flow-queue-design.md)
+> 对应任务卡：[`ARCH-01`](../../../cards/done/ARCH-01-backup-core-flow-queue-design.md)
 
 本目录保存 ARCH-01 已收口的业务语义、系统边界与可编辑 SVG 图。它不定义具体数据库、文件格式、Iroh FFI 或 UI 细节；实现卡不得改写这里的业务规则。
 

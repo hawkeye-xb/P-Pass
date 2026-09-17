@@ -137,27 +137,15 @@
 ## 五、待归档动作（卡已完成，文件待 `git mv` 进 `cards/done/`）
 
 > 卡已完成但文件还留在 `cards/` 根目录的在此登记（门禁要求根卡必须
-> 在队列里）；`git mv` 进 `done/` 后删行即可，本节清空后整节删除。
+> 在队列里）；`git mv` 进 `done/` 后删行即可。
+> **本节清空后保留空表，不要整节删除**——分区集合由
+> `tools/check-queue-sync.sh` 的 `EXPECTED` 固定，删掉分区会让
+> `queue-sync 3/4` 直接红（2026-09-17 实测）。真要删得连同那份
+> `EXPECTED` 一起显式改。
 > 完成账本在 [PROGRESS.md](PROGRESS.md) / [ROADMAP.md](ROADMAP.md)。
 
 | 卡 | 结果 | 已释放 |
 |---|---|---|
-| [SEC-02](../cards/SEC-02-commit-identity-allowlist-gate.md) | 提交身份白名单门禁上线，`ci-identity` 已在真实 PR 与 main 上 success；`dependabot[bot]` 拍板保留 | — |
-| [SITE-04](../cards/SITE-04-site-lane-red-for-a-week-on-stale-generated-tokens.md) | site lane 连红 6 天后转绿（main run success）；`site-check` 拍板不挂进 `ci`，保留独立 recipe | — |
-| [DEV-03](../cards/DEV-03-cleanup-tool-underreports-and-its-test-never-fails.md) | 清理工具两个漏洞修复 + 18 条空转断言改真；本机实跑 22G→1.9G；`node_modules`/Android `build/` 拍板不纳入 | — |
-| [ARCH-01](../cards/ARCH-01-backup-core-flow-queue-design.md) | 拆卡主线全部完成（ARCH-02~06、REBUILD-00~06 ✅），设计卡待归档 | — |
-| [MOB-55](../cards/MOB-55-cancel-current-round-tap-shows-no-feedback.md) | 已被 [MOB-58](../cards/done/MOB-58-cancel-round-no-feedback-no-restore-entry.md) 收敛 | — |
-| [ARCH-02](../cards/ARCH-02-mobile-ledger-and-atomic-discovery.md) | 账本/发现页原子提交完成 | ARCH-03 |
-| [ARCH-03](../cards/ARCH-03-strict-consumer-pause-and-constraints.md) | 严格消费者、Pause 与条件等待完成 | ARCH-04 |
-| [ARCH-04](../cards/ARCH-04-completion-evidence-and-scope-revision.md) | 完成凭据、范围竞争与 backfill 完成 | ARCH-05 |
-| [REBUILD-00](../cards/REBUILD-00-legacy-fence-and-flow-boundary.md) | 旧线冻结、新 Flow 边界完成 | REBUILD-01 / REBUILD-02 |
-| [REBUILD-01](../cards/REBUILD-01-android-iroh-blobs-provider-bridge.md) | Android blobs provider bridge 完成 | REBUILD-03 |
-| [REBUILD-02](../cards/REBUILD-02-desktop-native-fetch-and-completion-receipt.md) | Desktop fetch/resume 与 durable receipt 完成 | REBUILD-03 |
-| [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | 新生产 Flow runner 完成 | REBUILD-04 |
-| [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 版本脚本版本目标全断言 | — |
-| [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 五个 workflow 从 TOML 派生 Rust 工具链 | — |
-| [TEL-05](../cards/TEL-05-telemetry-http-timeout-and-queue-cap.md) | 遥测超时+封顶完成 `413f9d1`，L1 无需真机 | — |
-| [NET-15](../cards/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md) | daemon 重启后 status() 重拉丢失交付完成 `c01a02f`+`b67b0a7`，L1 无需真机 | — |
 
 ---
 

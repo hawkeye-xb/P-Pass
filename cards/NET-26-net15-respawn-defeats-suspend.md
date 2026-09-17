@@ -2,7 +2,7 @@
 
 状态：🟥 挂号
 级别：L2（降级过一次，理由见「更正记录」；接口当前零调用，接上就会踩）
-关联: 由 [NET-15](NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
+关联: 由 [NET-15](done/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md)
 的实现引入并由其后续提交定型 · 邻居
 [NET-19](NET-19-android-no-competing-offer-and-pause-does-not-observe.md)（暂停的手机侧）
 

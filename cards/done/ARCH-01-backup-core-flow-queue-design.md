@@ -2,7 +2,7 @@
 
 > 🟠 状态：设计已收口；ARCH-02~09 是未接生产的骨架，REBUILD-00 已认领进入生产切换
 > 级别：L2 · 传输裁决：单一原生 iroh-blobs fetch/resume；不新增 raw upload 重传协议
-> 中英文设计归档：[中文](../docs/design/2026-08-29-arch01-backup-core/README.zh-CN.md) · [English](../docs/design/2026-08-29-arch01-backup-core/README.md) · [Case Matrix](../docs/design/2026-08-29-arch01-backup-core/04-case-matrix.zh-CN.md)
+> 中英文设计归档：[中文](../../docs/design/2026-08-29-arch01-backup-core/README.zh-CN.md) · [English](../../docs/design/2026-08-29-arch01-backup-core/README.md) · [Case Matrix](../../docs/design/2026-08-29-arch01-backup-core/04-case-matrix.zh-CN.md)
 
 ## 问题
 
