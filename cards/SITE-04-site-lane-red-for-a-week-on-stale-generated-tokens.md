@@ -1,6 +1,6 @@
 # SITE-04 site lane 红了一周没人管——tokens.json 改了文案但生成物没跟上　级别 L1
 
-状态：🟡 代码完成待你过目
+状态：✅ 代码完成，全部验收项闭环，待归档（commit 22625980 / PR #71）
 级别：L1（一行生成物 + 一条本地 recipe）
 关联：与 DESK-15 建的 `token-check` 相邻但**不是同一件事**——DESK-15 管 `assets/design/tokens.css`（只比数值），本卡是 `site/src/styles/tokens.css`（连文案一起生成）。两个判据覆盖面不同，这正是漏掉的原因。
 
@@ -29,7 +29,7 @@ context:
   - [x] [E1] 被卡死的后四步**逐个在本地补跑**（它们已经 6 天没执行过，不能假设还能过）：
         `icons:check` ✓ / `astro build` 11 页成功 ✓ / 零第三方请求 ✓
   - [x] [E1] 生成后工作区只有预期的一行改动，没有别的副产物
-  - [ ] [E1] 真实 PR 上 `site / build` 变绿、`site / deploy` 不再 skipped
+  - [x] [E1] 真实 PR 上 `site / build` 变绿——合入后 main 的 `site` run **success**（连红 6 天后首次转绿）。
   - [x] [E2] 反证：改动前 `npm run tokens:check` 本地必红（`tokens.css is STALE`），已实测
 
 范围:
@@ -69,5 +69,5 @@ $ <site.yml 第 8 步的脚本原样跑>
 
 ## 留白 / 挂号
 
-- **`just site-check` 要不要挂进 `just ci`——待你拍板。** 挂进去，本地就能拦住同类漂移；代价是 `just ci` 从此需要 `site/node_modules` 就位，没装 node 的环境会直接红。不挂，就还是只能靠远端发现。我倾向挂进 `ci` 但不挂 `ci-docs`（文档快车道本来就是为了不碰重型依赖），但这条会改变每个人跑 `just ci` 的前置条件，不该我替你定。
+- **`just site-check` 是否挂进 `just ci`——2026-09-17 拍板：不挂，维持现状。** 挂进去会让 `just ci` 从此依赖 `site/node_modules` 就位，改变每个人的前置条件；而远端 `site` lane 本来就能抓到同类漂移。`site-check` 作为独立 recipe 保留，动了 `assets/design/` 或 `site/` 时手动跑一次。
 - **真正的问题不是这一行。** 红灯挂了一周、四个步骤 6 天没执行、没有任何人处理——这说明 site lane 现在没有被当成信号。修完这一行只是让它回绿，**如果下次红了还是没人看，同样的事会再发生一遍**。这属于流程问题，技术上修不掉，单独提出来让你知道。

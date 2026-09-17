@@ -1,6 +1,6 @@
 # SEC-02 提交身份没有任何门禁——只靠每台机器自己配得对　级别 L1
 
-状态：🟡 代码完成待你过目
+状态：✅ 代码完成，全部验收项闭环，待归档（commit b19d6c1e / PR #70）
 级别：L1（只动门禁脚本 + 一条新 workflow，不碰产品代码）
 关联：从 SEC-01 分出——SEC-01 是清理已经发生的越界，本卡是防止再次发生。两件事、两个修法。
 （此处刻意**不写相对链接**：SEC-01 的卡还在它自己的 PR 分支上、尚未进 main，写了链接会被 `queue-check 4/4` 判为悬空——这正是 QA-03 挂号的那类问题。SEC-01 合入后再补链接。）
@@ -33,7 +33,7 @@ context:
   - [x] [E1] 全史 1065 个提交过白名单全绿——不会把既有历史判红。
   - [x] [E1] 本机 hook 四条实测：陌生身份拦 / name 对 email 错拦 / email 对 name 错拦 / 白名单身份放行。
   - [x] [E1] 门禁脚本在 **bash 3.2**（macOS 自带）下可跑——不能出现「本地红 CI 绿」的隐身分歧。
-  - [ ] [E1] 合并后观察一次真实 PR 上 `CI Identity` lane 变绿（本卡自己的 PR 就是第一例）。
+  - [x] [E1] 合并后观察一次真实 PR 上 `CI Identity` lane 变绿——PR #70 上 `CI Identity` **success**，合入 main 后 push lane 同样 success。
 
 范围:
   只准动：`.github/allowed-identities.txt`、`tools/check-commit-identity.sh`、`tools/test-commit-identity-gate.sh`、`.github/workflows/ci-identity.yml`、`justfile`、本卡、`docs/QUEUE.md`。
@@ -90,7 +90,7 @@ ok: 内 1065 个提交的 author/committer 全部在白名单内
 
 **待你拍板：`dependabot[bot]` 留不留**
 
-现在留着。删掉那一行 = dependabot 的 PR 从此全部红灯，依赖升级要改人工做。留着不构成安全风险（它是 GitHub 侧生成的固定机器人身份，不是人为可设置的），但与「历史里已经把 dependabot 归并掉了」在观感上不一致。一行的事，你说删我就删。
+**2026-09-17 拍板：留。** 它是 GitHub 侧生成的固定机器人身份、不是人为可设置的，不构成安全风险；删掉的代价是 dependabot 的 PR 从此全部红灯、依赖升级要改人工做，不划算。与「历史里已把 dependabot 归并掉」的观感不一致是可接受的——历史清理针对的是身份泄漏，与未来是否允许机器人提交是两件事。
 
 **留白**
 
