@@ -100,7 +100,7 @@
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 状态栏图标对比度：实证安全区/system-bar 外观生效 | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 闲置审计刷屏：先取证定性真抖动 vs 误记 | L2 |
 | P2 | [MOB-73](../cards/MOB-73-local-source-first-viewing.md) | 本机有原图时读本地并验 hash，远端仅回退 | L2 |
-| P3 | [NET-25](../cards/NET-25-flow-delivered-push-unverified-on-the-real-transfer-path.md) | 🟥 挂号：真实传输路径的推送是否送达从未正面验证（NET-24 拆出，有本地事件兜底） | L2 |
+| P2 | [MOB-87](../cards/MOB-87-repairing-does-not-wake-flow-until-app-restart.md) | 🟥 挂号：会话内重新配对成功后不自动开传，杀 App 重开才动（MOB-72 同形状的第二例） | L2 |
 | P1 | [IDX-01](../cards/IDX-01-index-rebuild-has-no-runtime-entry-point.md) | 🟥 挂号（**影响高**，L2 是工作量不是严重度）：rebuild() 有实现有契约测试但零生产调用点，索引一丢照片就永久不可见（现库 10 张待救） | L2 |
 | P3 | [DEV-02](../cards/DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) | 🟥 挂号：merge_device 物理删设备行，验收人要求只标记「已断开授权」（入口当前被 DEV-01b 藏起，潜伏） | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 挂 release lint；CI 钉 17 不受影响 | L3 |
