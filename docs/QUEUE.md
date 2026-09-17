@@ -84,6 +84,7 @@
 
 | 优先级 | 卡 | 一句话 | 级别 |
 |---|---|---|---|
+| P0 | [NET-26](../cards/NET-26-net15-respawn-defeats-suspend.md) | 🟥 挂号：**main 现在红的**——NET-15 的 status() 重拉把 flow.suspend 打坏（暂停会被下次轮询自动恢复），二分已坐实 | L1 |
 | P0 | [MOB-54](../cards/MOB-54-transient-failure-does-not-auto-retry.md) | 三星 32 张相册停摆取证：重放 receipt 与 discovery wake 交错对账，禁止沿用旧根因 | L1 |
 | P1 | [NET-06](../cards/NET-06-flow-delivery-async-202-reconcile-ledgers.md) | 🟡 已拆 NET-15~19 子卡；本卡不再可领，去认领子卡 | L2 |
 | P1 | [NET-15](../cards/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md) | daemon 重启后 status() 检测并重新拉起丢失的交付（断点续传） | L1 |
@@ -101,7 +102,7 @@
 | P2 | [MOB-73](../cards/MOB-73-local-source-first-viewing.md) | 本机有原图时读本地并验 hash，远端仅回退 | L2 |
 | P2 | [MOB-87](../cards/MOB-87-repairing-does-not-wake-flow-until-app-restart.md) | 🟥 挂号：会话内重新配对成功后不自动开传，杀 App 重开才动（MOB-72 同形状的第二例） | L2 |
 | P1 | [QA-02](../cards/QA-02-queue-archive-gate-section-7-mutation-broken.md) | 🟥 挂号：归档门禁变异 C 空转——分区七成末节后 `next()` 抛 StopIteration，反证从未真正执行且 `just ci` 照绿（NET-16 分出） | L1 |
-| P3 | [QA-03](../cards/QA-03-archived-cards-relative-links-break-and-no-gate-catches-it.md) | 🟥 挂号：卡归档进 done/ 时相对链接集体失效（现存 5 处），且门禁只查 QUEUE→卡、不查卡内链接 | L0 |
+| P3 | [QA-03](../cards/QA-03-archived-cards-relative-links-break-and-no-gate-catches-it.md) | 🟡 代码完成待你过目：卡内链接门禁上线（抓到 8 处断链，已全修）+ `just ci-docs` 快车道；union 合并两次证伪后撤掉 | L1 |
 | P3 | [DEV-02](../cards/DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) | 🟥 挂号：merge_device 物理删设备行，验收人要求只标记「已断开授权」（入口当前被 DEV-01b 藏起，潜伏） | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 挂 release lint；CI 钉 17 不受影响 | L3 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前写死 | L2 |

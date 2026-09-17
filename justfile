@@ -79,6 +79,17 @@ dev-daemon:
 ci: fmt lint test arch-check queue-check md-check token-check
   @echo "==> CI pipeline: all green ✅"
 
+# QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
+#
+# 为什么要这条：`ci` 里的 fmt/lint/test 是全量 Rust 构建 + clippy + nextest，
+# 而改一个字的卡也要跑一遍——远端 CI 反倒早就按 paths 分好了 lane
+# （纯文档提交只点起 ci-docs）。本地缺的就是同一件事。
+#
+# ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
+# 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
+ci-docs: queue-check md-check token-check
+  @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
+
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
 platform-smoke:
     cargo run -p platform --example smoke

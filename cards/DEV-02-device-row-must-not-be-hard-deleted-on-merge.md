@@ -3,7 +3,7 @@
 状态：🟥 挂号
 级别：L2（猜测；改存储语义 + UI 要能显示这个新状态）
 关联: 收紧 [DEV-01](done/DEV-01-identity-survival-and-merge.md) 的合并语义 ·
-与 [IDX-01](IDX-01-index-rebuild-has-no-runtime-entry-point.md) 互相放大 ·
+与 [IDX-01](done/IDX-01-index-rebuild-has-no-runtime-entry-point.md) 互相放大 ·
 邻居 [MOB-64](MOB-64-revoked-device-gets-no-feedback-until-next-attempt.md)（同一事实的手机侧反馈）
 
 ## 挂号段
