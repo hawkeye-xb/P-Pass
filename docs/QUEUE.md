@@ -46,7 +46,6 @@
 
 | 卡 | 一句话 | 级别 |
 |---|---|---|
-| [NET-24](../cards/NET-24-flow-delivered-push-not-reaching-phone.md) | offer 应答已带终态，去重命中不再等 30s；待真机连发两次计时对照 | L1 |
 | [NET-14](../cards/NET-14-desktop-completion-must-push-not-poll-local-transfer-is-ground-truth.md) | 同 WiFi 冒烟已过；待三星热点大视频跨 relay、idle 兜底、NET-12 长期存活三项真机硬门 | L2 |
 | [NET-12](../cards/NET-12-flow-transfer-lacks-foreground-service-protection.md) | 前台服务保护已接回，三星 adj 锁定 200；待长期真机观察 | L2 |
 | [MOB-68](../cards/MOB-68-optional-permissions-map-to-backup-settings.md) | 待 HarmonyOS 4.2 真机验证 | L2 |
@@ -102,6 +101,7 @@
 | P1 | [UI-11](../cards/UI-11-android-system-bar-safe-area-contrast.md) | 状态栏图标对比度：实证安全区/system-bar 外观生效 | L1 |
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 闲置审计刷屏：先取证定性真抖动 vs 误记 | L2 |
 | P2 | [MOB-73](../cards/MOB-73-local-source-first-viewing.md) | 本机有原图时读本地并验 hash，远端仅回退 | L2 |
+| P3 | [NET-25](../cards/NET-25-flow-delivered-push-unverified-on-the-real-transfer-path.md) | 🟥 挂号：真实传输路径的推送是否送达从未正面验证（NET-24 拆出，有本地事件兜底） | L2 |
 | P3 | [BUILD-01](../cards/BUILD-01-local-jdk25-breaks-release-lint.md) | 本机 JDK 25 挂 release lint；CI 钉 17 不受影响 | L3 |
 | P3 | [REL-04](../cards/REL-04-manifest-url-decided-before-mirror-succeeds.md) | manifest 地址在镜像成功前写死 | L2 |
 | P3 | 未开卡 | 活动流把机器原文直接显示给用户，需改文案 | L2 |
