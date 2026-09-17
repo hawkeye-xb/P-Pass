@@ -489,21 +489,27 @@ impl Router {
                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
             );
         };
+        // NET-24: `flow.offer` used to be hard-wired to a null reply
+        // (`.map(|_| None)`), which threw away a terminal receipt the
+        // daemon was already holding — the phone then had to learn about
+        // it from a push it had not subscribed for yet, and fell back to a
+        // 30s local-idle timeout. It now answers with the same
+        // `FlowStatusReply` a `status()` call would give.
         let result = match req.method.as_str() {
-            methods::FLOW_OFFER => delivery.offer(peer, &flow).await.map(|_| None),
-            methods::FLOW_FETCH => delivery.fetch(peer, &flow).await.map(Some),
-            methods::FLOW_CANCEL => delivery.cancel(peer, &flow).await.map(|_| None),
+            methods::FLOW_OFFER => delivery.offer(peer, &flow).await.map(serde_json::to_value),
+            methods::FLOW_FETCH => delivery.fetch(peer, &flow).await.map(serde_json::to_value),
+            methods::FLOW_CANCEL => delivery
+                .cancel(peer, &flow)
+                .await
+                .map(|_| Ok(serde_json::Value::Null)),
             _ => unreachable!("dispatch only calls this for flow methods"),
         };
         match result {
-            Ok(Some(receipt)) => match serde_json::to_value(receipt) {
-                Ok(value) => Resp::ok(req.id.clone(), value),
-                Err(_) => Resp::err(
-                    req.id.clone(),
-                    RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                ),
-            },
-            Ok(None) => Resp::ok(req.id.clone(), serde_json::Value::Null),
+            Ok(Ok(value)) => Resp::ok(req.id.clone(), value),
+            Ok(Err(_)) => Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+            ),
             Err(crate::flow_delivery::DeliveryError::GuardMismatch)
             | Err(crate::flow_delivery::DeliveryError::Cancelled) => Resp::err(
                 req.id.clone(),

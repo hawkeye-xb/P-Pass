@@ -1191,10 +1191,21 @@ async fn reoffering_an_already_completed_tuple_under_a_new_lease_still_pushes_fl
     // queue_sequence=1, pairing_epoch="epoch-current" — see request()).
     // This must hit rebind_completed_flow_grant, not complete_without_fetch.
     let reoffer = request("epoch-current", "lease-second", hash, ticket);
-    delivery
+    let rebind_reply = delivery
         .offer(provider_transport.node_id(), &reoffer)
         .await
         .unwrap();
+    // NET-24: the rebind branch is terminal at offer time too — its reply
+    // must carry the receipt, not leave the caller waiting on the push.
+    assert_eq!(
+        rebind_reply.state, "completed",
+        "NET-24: re-offering an already-completed tuple must report the terminal \
+         state on the offer reply itself"
+    );
+    assert!(
+        rebind_reply.receipt.is_some(),
+        "NET-24: a completed offer reply must carry the durable receipt"
+    );
 
     let mut saw_delivered = false;
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -1295,6 +1306,137 @@ async fn offer_skips_the_network_fetch_when_content_already_has_a_durable_copy()
     assert_eq!(receipt.content_hash, hex::encode(hash));
     // Nothing was ever pulled into the flow-blobs store for this hash.
     assert_eq!(receiver_blobs.local_bytes(hash).await.unwrap(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offer_reply_carries_the_terminal_receipt_when_content_already_exists() {
+    // NET-24: the fix itself. NET-20's dedup completes synchronously inside
+    // the offer handler, so `emit_flow_delivered` fires before a caller that
+    // subscribes *after* offer can possibly be listening — and the event bus
+    // drops a broadcast with no subscribers outright. The reply the caller is
+    // already awaiting is therefore the only guaranteed channel, and it must
+    // carry the terminal state. Real device 2026-09-16: without this the
+    // phone sat out a 30s local-idle timeout per photo for receipts the
+    // daemon had the whole time.
+    let root = tempdir().unwrap();
+    let peer = transport::NodeId([0x5A; 32]);
+    let db = paired_db("epoch-current", peer).await;
+    let bytes = b"NET-24 offer-reply terminal fixture";
+    let hash = *blake3::hash(bytes).as_bytes();
+    std::fs::create_dir_all(root.path().join("originals")).unwrap();
+    let rel_path = "originals/net24-existing.jpg".to_string();
+    std::fs::write(root.path().join(&rel_path), bytes).unwrap();
+    db.insert_asset(&Asset {
+        hash: hash.to_vec(),
+        rel_path: rel_path.clone(),
+        media_type: "image/jpeg".into(),
+        bytes: bytes.len() as i64,
+        taken_at: Some(1),
+        width: None,
+        height: None,
+        src_device: vec![9u8; 32],
+        added_at: 1,
+        thumb_state: 0,
+    })
+    .await
+    .unwrap();
+
+    let transport = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+        .await
+        .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let delivery = FlowDelivery::new(db, receiver_blobs.clone(), root.path());
+    let offer = request(
+        "epoch-current",
+        "lease-net24",
+        hash,
+        transport.local_addr().to_string(),
+    );
+
+    // The assertion that matters: no status() poll, no push subscription —
+    // the offer call alone hands back the completed receipt.
+    let reply = delivery.offer(peer, &offer).await.unwrap();
+
+    assert_eq!(
+        reply.state, "completed",
+        "NET-24: a dedup hit must report `completed` on the offer reply itself, \
+         not force the caller onto the push/timeout path"
+    );
+    assert!(
+        !reply.task_running,
+        "nothing was spawned — there is no fetch task for a dedup hit"
+    );
+    let receipt = reply
+        .receipt
+        .expect("NET-24: a completed offer reply must carry the durable receipt");
+    assert_eq!(receipt.content_hash, hex::encode(hash));
+    // And it is the same receipt a later status() reports — the reply is not
+    // a separate, weaker fact invented for this path.
+    let polled = delivery
+        .status(peer, &tuple_ref("epoch-current", "lease-net24", 7))
+        .await
+        .unwrap();
+    assert_eq!(
+        polled.receipt.map(|r| r.receipt_id),
+        Some(receipt.receipt_id)
+    );
+    assert_eq!(receiver_blobs.local_bytes(hash).await.unwrap(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn offer_reply_is_active_when_a_real_fetch_must_run() {
+    // NET-24 counterpart: the genuinely-async case must still answer "202 —
+    // go wait". If this regressed to `completed` the caller would accept a
+    // receipt for bytes that never moved.
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let payload = vec![7u8; 4 * 1024 * 1024];
+    let source = root.path().join("net24-source.bin");
+    std::fs::write(&source, &payload).unwrap();
+    let hash = *blake3::hash(&payload).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
+    let offer = request("epoch-current", "lease-net24-miss", hash, ticket);
+
+    let reply = delivery
+        .offer(provider_transport.node_id(), &offer)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        reply.state, "active",
+        "NET-24: content the library does not have must still be the async case"
+    );
+    assert!(
+        reply.task_running,
+        "spawn_fetch_task just registered this tuple, so the reply must say so"
+    );
+    assert!(
+        reply.receipt.is_none(),
+        "NET-24: an active reply must never carry a receipt — nothing completed yet"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

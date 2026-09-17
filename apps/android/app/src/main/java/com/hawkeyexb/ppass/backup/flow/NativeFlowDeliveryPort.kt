@@ -27,6 +27,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.Channel
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -38,7 +39,17 @@ internal class SourceMissingException(cause: Throwable? = null) : Exception(caus
 /** The only Desktop interaction accepted by the Android Flow delivery port. */
 internal interface FlowReceiptClient {
     suspend fun currentPairingEpoch(): String?
-    suspend fun offer(request: FlowFetchRequest)
+
+    /**
+     * NET-24: returns the same [FlowStatusReply] a [status] call issued
+     * right now would return. `state == "active"` is the genuinely-async
+     * case (go wait); a terminal state means the daemon already finished
+     * — NET-20 content dedup or NET-22 rebind — and the caller must take
+     * it from here rather than waiting on a `flow.delivered` push it was
+     * not yet subscribed for (which the broadcast bus drops outright when
+     * nobody is listening).
+     */
+    suspend fun offer(request: FlowFetchRequest): FlowStatusReply
     /**
      * NET-06: read-only control-plane query for one exact tuple. Every
      * network condition answers within the ordinary control RPC timeout
@@ -187,9 +198,18 @@ internal class DaemonFlowReceiptClient(
         return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
     }
 
-    override suspend fun offer(request: FlowFetchRequest) {
+    override suspend fun offer(request: FlowFetchRequest): FlowStatusReply {
         val response = client.call(peer, Methods.FLOW_OFFER, ProtoJson.encodeToJsonElement(FlowFetchRequest.serializer(), request))
         check(response.ok) { "flow.offer: ${response.error?.msgKey}" }
+        // NET-24: a null result means the peer daemon predates this change
+        // and still answers offer with `null`. Fail loudly — silently
+        // falling back to the push/timeout path is exactly the 30s stall
+        // this card exists to remove, and it would be invisible.
+        val result = response.result
+        check(result != null && result !is JsonNull) {
+            "flow.offer: empty reply — peer daemon predates NET-24 and cannot report terminal state on offer"
+        }
+        return ProtoJson.decodeFromJsonElement(FlowStatusReply.serializer(), result)
     }
 
     override suspend fun status(tuple: FlowTupleRef): FlowStatusReply {
@@ -290,7 +310,31 @@ internal class NativeFlowDeliveryPort(
                     onPairingEpochRefreshed(it)
                     return@launch
                 }
-                desktop.offer(request)
+                val offerReply = desktop.offer(request)
+                // NET-24: the daemon may already be DONE at offer time —
+                // NET-20's content dedup and NET-22's rebind both complete
+                // synchronously inside the offer handler. In that case the
+                // `flow.delivered` push is emitted before the subscription
+                // below even exists, and the event bus drops it outright
+                // (无订阅者时 send 直接丢弃), leaving the 30s local-idle
+                // timeout as the only way out — for a receipt the daemon
+                // had in hand the whole time. The offer reply is the one
+                // channel guaranteed to reach us, so terminal states are
+                // taken from it and this attempt ends right here.
+                when (val immediate = flowStatusPollOutcome(offerReply)) {
+                    is FlowStatusPollOutcome.Completed -> {
+                        require(epochGuard.isCurrent(epoch)) { "Flow delivery pairing epoch changed before receipt" }
+                        acceptReceipt(immediate.receipt, request)
+                        return@launch
+                    }
+                    FlowStatusPollOutcome.Cancelled -> {
+                        Log.i("PPassFlow", "flow.offer reports cancelled; abandoning this delivery attempt")
+                        active = null
+                        return@launch
+                    }
+                    // "active" — the genuinely-async case; wait as before.
+                    FlowStatusPollOutcome.KeepPolling -> {}
+                }
                 // NET-06/NET-14: offer() spawns the background transfer on
                 // the daemon and returns immediately. This attempt now
                 // waits for one of three signals, in priority order:
