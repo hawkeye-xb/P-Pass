@@ -64,6 +64,19 @@ impl SubscriptionRegistry {
         }
     }
 
+    /// NET-25：这台设备此刻有没有挂着订阅流。**只读**，不改任何状态。
+    ///
+    /// 为什么不用 `EventBus`（`broadcast::Sender`）的 `receiver_count()`：
+    /// 手机的 `timeline.subscribe` 和桌面壳的 `events.subscribe` 挂的是同一条
+    /// 总线，桌面常驻订阅让那个计数恒大于 0，回答不了"**这一台**在不在"。
+    /// 本表是按 `NodeId` 登记的，才是这个问题的正确出处。
+    pub fn is_subscribed(&self, peer: transport::NodeId) -> bool {
+        self.inner
+            .lock()
+            .expect("registry lock")
+            .contains_key(&peer)
+    }
+
     /// `device.revoke`/`device.unpair`：命中就主动取消，不等自然掉线。
     /// 没有活跃订阅（大多数情况）什么都不做。
     pub fn close(&self, peer: transport::NodeId) {
@@ -88,6 +101,25 @@ mod tests {
         assert!(!token.is_cancelled());
         reg.close(peer(1));
         assert!(token.is_cancelled(), "revoke 必须主动取消");
+    }
+
+    #[test]
+    fn is_subscribed_tracks_registration_lifecycle() {
+        let reg = SubscriptionRegistry::new();
+        assert!(!reg.is_subscribed(peer(1)), "没登记过就不该说在线");
+        let (_token, generation) = reg.register(peer(1));
+        assert!(reg.is_subscribed(peer(1)), "登记之后必须认得出来");
+        assert!(!reg.is_subscribed(peer(2)), "别的设备不该被算进来");
+        reg.unregister(peer(1), generation);
+        assert!(!reg.is_subscribed(peer(1)), "摘掉之后必须回到不在线");
+    }
+
+    #[test]
+    fn is_subscribed_is_false_after_close() {
+        let reg = SubscriptionRegistry::new();
+        let (_token, _generation) = reg.register(peer(3));
+        reg.close(peer(3));
+        assert!(!reg.is_subscribed(peer(3)), "close 摘表之后不该还报在线");
     }
 
     #[test]

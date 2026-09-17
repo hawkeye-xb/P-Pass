@@ -410,6 +410,9 @@ async fn main() -> anyhow::Result<()> {
     let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir)
         .with_path_registry(flow_paths)
         .with_events(event_bus.clone())
+        // NET-25: 同一张按 NodeId 登记的订阅表（Router 也拿同一份）——
+        // 只读，只为推送日志里那句 peer_subscribed= 服务。
+        .with_subscriptions(subscriptions.clone())
         // TEL-02: same telemetry client as the daemon_alive heartbeat —
         // `Telemetry::record` is already a no-op when disabled, so this
         // wiring is unconditional regardless of the config switch.
