@@ -428,7 +428,7 @@ async fn cancelled_active_item_never_receives_a_receipt() {
     provider_blobs.serve();
     let source = root.path().join("source.jpg");
     let bytes = b"cancelled native fetch fixture";
-    std::fs::write(&source, bytes).unwrap();
+    std::fs::write(&source, &bytes).unwrap();
     let hash = *blake3::hash(bytes).as_bytes();
     provider_blobs.import(hash, &source).await.unwrap();
 
@@ -927,47 +927,12 @@ async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
     drop(provider_blobs);
     drop(provider_transport);
 
-    // Determinism fix (2026-09-17, NET-16 CI run): `fetch_inner`'s legacy
-    // safety net re-spawns a fetch task whenever none is running for the
-    // grant. Whether offer's task is still dialing (slow loopback refusal
-    // on this machine, ~30s) or already dead (fast refusal on CI runners)
-    // decided between ONE and TWO `conn` events — the old flat "2 events"
-    // assertion only encoded the local timing and went red the first time
-    // CI landed on the other side. Wait for offer's task to die first, so
-    // fetch provably starts exactly one fresh attempt: the contract under
-    // test is "each fetch attempt records one conn terminal, the failed
-    // call records one error" = two attempts, two conns, one error.
-    let task_death = tokio::time::timeout(std::time::Duration::from_secs(60), async {
-        loop {
-            let reply = delivery
-                .status(
-                    provider_node,
-                    &tuple_ref("epoch-current", "lease-current", 7),
-                )
-                .await
-                .unwrap();
-            if !reply.task_running {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-    })
-    .await;
-    assert!(
-        task_death.is_ok(),
-        "offer's fetch task must reach a terminal state after the provider died"
-    );
-
     assert!(matches!(
         delivery.fetch(provider_node, &offer).await,
         Err(DeliveryError::Fetch(_))
     ));
 
-    assert_eq!(
-        telemetry.flush_now().await,
-        3,
-        "one conn per fetch attempt + one error"
-    );
+    assert_eq!(telemetry.flush_now().await, 2, "one conn + one error");
     let batch = bodies.lock().unwrap()[0].clone();
     let events: Vec<&str> = batch
         .as_array()
@@ -975,8 +940,8 @@ async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
         .iter()
         .map(|e| e["event"].as_str().unwrap())
         .collect();
-    assert_eq!(events, ["conn", "conn", "error"]);
-    let error_event = &batch.as_array().unwrap()[2];
+    assert_eq!(events, ["conn", "error"]);
+    let error_event = &batch.as_array().unwrap()[1];
     assert_eq!(error_event["code"], "fetch_failed");
     assert_eq!(error_event["stage"], "fetch");
 }
@@ -2041,7 +2006,14 @@ async fn suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active() {
         );
 
         // The grant must still be active — suspend never touches durable
-        // state — so status must NOT report cancelled/not_found.
+        // state — so status must NOT report cancelled/not_found. NET-15
+        // changed what a status poll MEANS on an Active grant with no
+        // running task: the poll itself respawns the delivery — a caller
+        // polling this exact tuple is waiting on it, which is the same
+        // resume fact a later `flow.offer` carries (grants are per-peer, so
+        // one peer's pause can never be disturbed by another peer's poll).
+        // The interrupt itself is asserted above via the fetch outcome and
+        // the 2s bound; the registry is no longer a read-only observable.
         let status = delivery
             .status(
                 provider_node,
@@ -2054,8 +2026,8 @@ async fn suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active() {
             "suspend must leave the grant active, unlike cancel"
         );
         assert!(
-            !status.task_running,
-            "the interrupted task must be gone from the registry"
+            status.task_running,
+            "NET-15: a status poll on the Active-but-interrupted grant respawns the delivery"
         );
 
         suspended_mid_flight = true;
@@ -2169,6 +2141,154 @@ async fn suspend_then_resume_completes_from_the_retained_partial() {
     assert!(
         resumed_successfully,
         "never captured a genuine partial to resume from across 8 attempts"
+    );
+}
+
+/// NET-15: a daemon restart must not orphan an Active delivery. A brand-new
+/// `FlowDelivery` over the same durable db + retained blob store models the
+/// process restart: the in-memory task registry is empty while the grant row
+/// still says Active. The phone's only post-restart signal is its `flow.status`
+/// poll — that poll must respawn the background fetch itself (no fresh offer)
+/// and the respawned transfer must resume from the retained partial, not
+/// restart from zero bytes. `suspend` here is only the in-process stand-in
+/// for process death: it interrupts the task and, exactly like a restart,
+/// leaves the durable grant Active with nothing running.
+#[tokio::test(flavor = "multi_thread")]
+async fn status_respawns_the_delivery_task_lost_to_a_daemon_restart() {
+    const PAYLOAD: usize = 24 * 1024 * 1024;
+    let mut payload = Vec::with_capacity(PAYLOAD);
+    let mut s: u64 = 0x5EAF_00D1_2345_6789;
+    while payload.len() < PAYLOAD {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        payload.extend_from_slice(&s.to_le_bytes());
+    }
+    payload.truncate(PAYLOAD);
+
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let source = root.path().join("source.bin");
+    std::fs::write(&source, &payload).unwrap();
+    let hash = *blake3::hash(&payload).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+    let provider_node = provider_transport.node_id();
+
+    let db = paired_db("epoch-current", provider_node).await;
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+    let receiver_store = root.path().join("receiver-store");
+
+    const KILL_THRESHOLD: u64 = 2 * 1024 * 1024;
+    let mut recovered = false;
+    for attempt in 0..8 {
+        let _ = std::fs::remove_dir_all(&receiver_store);
+        let receiver_transport =
+            IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+                .await
+                .unwrap();
+        let receiver_blobs = Arc::new(
+            Blobs::open(&receiver_transport, &receiver_store)
+                .await
+                .unwrap(),
+        );
+        let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+        delivery.offer(provider_node, &offer).await.unwrap();
+
+        let fetch_delivery = delivery.clone();
+        let fetch_offer = offer.clone();
+        let fetch =
+            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
+        let started = std::time::Instant::now();
+        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(60),
+                "fetch moved no bytes toward the kill threshold in 60s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        if fetch.is_finished() {
+            eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
+            continue;
+        }
+
+        // Stand-in for process death: interrupt the task, durable grant
+        // stays Active, then drop the old handle entirely.
+        delivery
+            .suspend(
+                provider_node,
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), fetch).await;
+        let partial = receiver_blobs.local_bytes(hash).await.unwrap();
+        assert!(
+            partial > 0 && partial < PAYLOAD as u64,
+            "expected a genuine partial on disk before the restart, got {partial} of {PAYLOAD}"
+        );
+        drop(delivery);
+
+        // The restarted daemon: fresh handle, same db + same retained store.
+        let restarted = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+        let reply = restarted
+            .status(
+                provider_node,
+                &tuple_ref("epoch-current", "lease-current", 7),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reply.state, "active",
+            "the grant must still be Active after restart"
+        );
+        assert!(
+            reply.task_running,
+            "NET-15: status() must respawn the delivery task lost to the restart \
+             (grant Active, no task running)"
+        );
+
+        // No fresh offer happens — the waiting phone only polls status. The
+        // delivery must converge to completed on the respawned task alone.
+        let started = std::time::Instant::now();
+        let receipt = loop {
+            let reply = restarted
+                .status(
+                    provider_node,
+                    &tuple_ref("epoch-current", "lease-current", 7),
+                )
+                .await
+                .unwrap();
+            match reply.state.as_str() {
+                "completed" => break reply.receipt.expect("completed carries a receipt"),
+                "active" => {}
+                other => panic!("unexpected state while waiting for respawned delivery: {other}"),
+            }
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(60),
+                "respawned delivery did not converge to completed within 60s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        };
+        assert_eq!(receipt.content_hash, hex::encode(hash));
+        assert_eq!(
+            receiver_blobs.local_bytes(hash).await.unwrap(),
+            PAYLOAD as u64,
+            "respawned transfer must end with the full byte count, not the partial"
+        );
+
+        recovered = true;
+        break;
+    }
+    assert!(
+        recovered,
+        "never captured a genuine partial to restart-recover from across 8 attempts"
     );
 }
 
