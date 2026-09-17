@@ -43,7 +43,7 @@ CI 绿；PROGRESS/NEXT 一行；卡移 done/。
   VideoScreen。
 - 本地：`./gradlew :app:assembleDebug :app:testDebugUnitTest` BUILD SUCCESSFUL，
   **107/107** 绿（唯一 warning 为既有 LocalLifecycleOwner 弃用，非本次引入）。
-- CI：PR Checks run 31366637154 **success**（commit 8d0b4b4）。
+- CI：PR Checks run 31366637154 **success**（commit c84f81a）。
 - 模拟器项（验收 1/2/反证）未做：本机 VM 无嵌套虚拟化（HVF: HV_UNSUPPORTED），
   TCG 软件模拟冷启动 >10min 未完成；按用户指令「验证不了的话可以先跳过，我来
   验证」挂验收人。

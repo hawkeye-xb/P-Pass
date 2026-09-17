@@ -1,6 +1,6 @@
 # Windows Desktop 任务规划与独立验证门禁（2026-08-26）
 
-> Base：`main@24b02ed5f3b18db6103a8a301982fe93d2abf500`（开工前必须重新 fetch；验证前再确认 HEAD）。
+> Base：`main@1954288f444315e64ed59e99ec896c6ee146b6fe`（开工前必须重新 fetch；验证前再确认 HEAD）。
 > 执行边界：Kimi 在远端 Linux 沙箱/GitHub 侧做代码、脚本、文档、CI 触发与判据；Windows 真机 L3 验证由本机执行并回贴原始输出。
 > 明确跳过：SmartScreen / 杀软信誉建设暂不纳入验收，只记录状态，不作为通过条件。
 > 纪律：不基于旧 `bin-*` 分支；不把 CI 绿当真机绿；不把计划写成已完成事实；平台 `cfg` 仍只许进 `crates/platform/`；桌面壳保持零业务逻辑。
@@ -86,4 +86,4 @@ Gate G4：产品一页纸写清 Windows 现在能做什么、不能做什么、�
 
 `W0 → Win 本跑 env-check → 修环境缺口 → CI windows 出包 → W1 安装闭环 → W2 服务模型拍板后实施 → W3 更新 → W4 收口`
 
-下一动作：先做 W0，基于 `main@24b02ed5` 开 `feat/win-desk-01-baseline`；Win 本随后跑 `env-check.ps1` 并回贴原始输出。
+下一动作：先做 W0，基于 `main@1954288f` 开 `feat/win-desk-01-baseline`；Win 本随后跑 `env-check.ps1` 并回贴原始输出。

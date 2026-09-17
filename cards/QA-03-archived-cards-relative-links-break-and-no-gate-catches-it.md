@@ -1,6 +1,6 @@
 # QA-03 卡归档进 done/ 时相对链接集体失效，且没有门禁能发现
 
-状态：🟡 代码完成，待验收人过目（实现 `87f89a6`；本卡两次自我证伪，最终结论与派活时的计划不同，见「实施中的范围更正」）
+状态：🟡 代码完成，待验收人过目（实现 `5eee5ad`；本卡两次自我证伪，最终结论与派活时的计划不同，见「实施中的范围更正」）
 级别：L1（实际落地：修 8 处断链 + 一条门禁断言 + 本地快车道；合并策略经证伪后未做，`.gitattributes` 未建）
 关联: 从 [IDX-01](done/IDX-01-index-rebuild-has-no-runtime-entry-point.md) 收尾时自查发现 ·
 同域 [QA-02](QA-02-queue-archive-gate-section-7-mutation-broken.md)（同样是门禁本身失灵）
@@ -15,7 +15,7 @@
     （文件**存在**，只是从 `done/` 出去要 `../../`）
   - `DESK-15…md` → `../assets/design/token-reuse-checklist.md`（同上，少一层）
 - **发现场景**：2026-09-17 IDX-01 归档后自查，发现**我自己刚造了同样的 2 处**
-  （IDX-01 → DEV-02 ×2，已在 `3c98f08` 修掉）。查完才知道这不是个例，是每次
+  （IDX-01 → DEV-02 ×2，已在 `6e0b045` 修掉）。查完才知道这不是个例，是每次
   归档都会发生的系统性问题。
 - **严重度猜测**：低（只坏文档跳转，不影响代码与验收），但**会一直复发**——
   只要还靠人在移动文件时记得改路径。
@@ -77,7 +77,7 @@
   检查卡内部的链接**；`QUEUE_FILE` 环境变量是 `test-queue-archive-gate.sh`
   注入变异副本做反证用的，新断言不要破坏这个注入口。
 - **撞车风险已查**：并行会话最近动的是
-  `tools/test-queue-archive-gate.sh`（QA-02 的地盘，`436ddbd`），本卡动
+  `tools/test-queue-archive-gate.sh`（QA-02 的地盘，`413f9d1`），本卡动
   `tools/check-queue-sync.sh` + `.gitattributes` + `justfile`，不同文件。
 
 **期望行为**

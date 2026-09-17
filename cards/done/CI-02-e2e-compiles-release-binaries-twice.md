@@ -69,7 +69,7 @@ release 二进制在一次 nightly 里**只编译一次**，两个测试 job 都
 - `actionlint .github/workflows/*.yml` 本地跑：exit 0，零告警。
 - 实跑 `workflow_dispatch`：run
   https://github.com/hawkeye-xb/P-Pass/actions/runs/34317704548
-  （commit `f7bb429`）。三个 job 全部 `completed / success`：
+  （commit `c4c2394`）。三个 job 全部 `completed / success`：
   `build` → `e2e`（含 `Unpack release binaries` 步骤成功、`test -x
   target/release/daemon` 通过）→ `scenarios`（`Unpack release binaries` 步骤
   成功、`test -x target/release/daemon` 与 `testclient` 均通过）。

@@ -103,7 +103,7 @@ NET-01/06 的教训不是"一个超时值设错了"，而是一个**可复发的
 
 | # | 位置 | 命中 | 覆盖 | 处置 |
 |---|---|---|---|---|
-| N1 | `apps/android/.../transport/DaemonClient.kt:44`（`CONNECT_TIMEOUT_MS=15_000` 一值三用：`:56` 建连、`:121` 整轮往返含长活、错误文案 `:59/:146` 同一异常） | **W1 W2 W4**（UX-11 `971c0e5` 加保险丝、NET-01 摆钟史） | **NET-07（止血分档）+ NET-06（根治）** | 已覆盖，勿动 |
+| N1 | `apps/android/.../transport/DaemonClient.kt:44`（`CONNECT_TIMEOUT_MS=15_000` 一值三用：`:56` 建连、`:121` 整轮往返含长活、错误文案 `:59/:146` 同一异常） | **W1 W2 W4**（UX-11 `d4116e0` 加保险丝、NET-01 摆钟史） | **NET-07（止血分档）+ NET-06（根治）** | 已覆盖，勿动 |
 | N2 | `apps/android/.../backup/flow/NativeFlowDeliveryPort.kt:180`（`flow.fetch` 同步 RPC，成功回执=唯一信息来源）+ `StrictConsumer.kt:163` `recordPermanentFailure` 3 次计数回队**不先查桌面账本** | **W2 W3**（超时→`DaemonUnreachableException`→回队重发 offer/fetch，与仍持 `fetch_lock` 的桌面互踩，NET-06 问题链实证） | **NET-06**（status 门 + 「重试前先查账」条款） | 已覆盖，勿动 |
 | N3 | `crates/daemon/src/flow_delivery.rs:385`（`fetch_from_observing_path` 一次阻塞 await、fetch RPC 内部无中断检查点）+ `router.rs:472`（`FLOW_FETCH => delivery.fetch(...)` 同步等等结果） | **W1 W2**（桌面账本有 active/completed 却无查询门——NET-06「唯一真实缺口」节源码核实过） | **NET-06**（spawn + suspend/cancel 中断） | 已覆盖，勿动 |
 | N4 | `apps/android/.../ui/PhotosScreen.kt:190`（`download` → `DaemonClient.kt:241` `downloadAsset`：拨号有 `connectBounded` 闸，**数据面 `recv.readExact` 循环（`:280`）无任何 idle/总时长上限**——半开连接让查看大图的协程永久挂起，UI 停在进度百分比且无「死活」信号） | **W1（无值=另一种单值缺失）W2**（挂 vs 慢不可区分） | 未覆盖 | **开卡 NET-09**（与 daemon 侧 `upload.rs:148`/`download.rs:102` 数据面同形，一卡收口） |

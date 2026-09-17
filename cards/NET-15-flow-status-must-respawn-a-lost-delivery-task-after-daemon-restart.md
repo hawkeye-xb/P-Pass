@@ -1,6 +1,6 @@
 # NET-15 daemon 重启后 status 必须发现"grant active 但无任务"并自动重拉　级别 L1
 
-> ✅ 状态：代码完成 `5bdbae4`（daemon src）+ `bbdfbdb`（集成测试，2026-09-17），全部门禁绿；L1 无需真机，待验收人复核归档
+> ✅ 状态：代码完成 `c01a02f`（daemon src）+ `b67b0a7`（集成测试，2026-09-17），全部门禁绿；L1 无需真机，待验收人复核归档
 > 级别：L1 · 阻塞：无（可立即开工，daemon 单机内可测）
 > **从 [NET-06](NET-06-flow-delivery-async-202-reconcile-ledgers.md) 拆出**：
 > 是 NET-06「期望行为④ 崩溃恢复」一直标注"未实现"的那一项，NET-06 本卡
@@ -55,7 +55,7 @@
 无前置，无下游。完成后需回写 [NET-06](NET-06-flow-delivery-async-202-reconcile-ledgers.md)
 勾掉"崩溃恢复"验收项。
 
-## 实施记录（2026-09-17，代码 `5bdbae4`、测试 `bbdfbdb`）
+## 实施记录（2026-09-17，代码 `c01a02f`、测试 `b67b0a7`）
 
 - **验收项全部勾掉**（`cargo test -p daemon --test flow_delivery` **33/33**
   = 32 原有 + 1 新；`just ci` 全绿：fmt/clippy/nextest 全量/arch-check/

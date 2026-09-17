@@ -8,7 +8,7 @@
 不是"从未实现"，是**被生产切换删掉的**：UX-02（2026-08-05, PR #36）曾在
 BackupWorker 里有完整实现（`ppass.backup.failed` 渠道、固定 id 2027、
 `NotifyOnFailurePrefs.enabled()` 闸控、点开进 MainActivity）；REBUILD-04
-切换（commit `a325208`，Worker 降级为纯 wake adapter）删除 1124 行时整套
+切换（commit `d72ea44`，Worker 降级为纯 wake adapter）删除 1124 行时整套
 通知设施随批次管线一起消失，新 Flow 的失败链路从未接回。同批被删的还有
 SENT-01 哨兵（id 2028）、DOG-02b 白名单提醒（id 2029）、MOB-29 重传通知
 （id 2030）的发送端——字符串资源全部还在字典里，发送代码没了。本卡只按

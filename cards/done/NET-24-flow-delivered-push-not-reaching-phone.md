@@ -1,6 +1,6 @@
 # NET-24 NET-20 去重命中时 `flow.delivered` 推送必然丢失——订阅晚于 offer　级别 L1
 
-状态：✅ 已归档（commit `f70cfae`），2026-09-17 真机验收通过
+状态：✅ 已归档（commit `496cf68`），2026-09-17 真机验收通过
 级别：L1
 关联: 从 [NET-23](NET-23-flow-wait-loop-must-not-hang-forever-when-local-signal-never-fires.md) 分出；
   触发条件由 NET-20 的去重短路造成（NET-20 已归档，本卡不改动它）
@@ -206,7 +206,7 @@ iroh-blobs 永远不会有任何 get-request/progress/completed 事件，
 
 `tools/bump-version.sh` 拒绝执行：`apps/desktop/src-tauri/Cargo.lock
 (p-pass-desktop) version drift: 0.5.4-test.3 != 0.5.4-test.4`。核实为既有
-漂移——该 lock 最后一次更新停在 `2f6241d`（test.3），09-16 那次 bump 到
+漂移——该 lock 最后一次更新停在 `f3f81d8`（test.3），09-16 那次 bump 到
 test.4 没带上它（脚本的断言本身是好的，是那次 bump 绕过了它）。用
 `cargo metadata` 让 cargo 自己重算而不是手改 lock（手改正是这类漂移的来源），
 diff 确认只动两个本地包的版本行、零依赖变动，然后才 bump。

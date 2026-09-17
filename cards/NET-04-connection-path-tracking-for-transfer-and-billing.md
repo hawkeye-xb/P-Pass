@@ -2,7 +2,7 @@
 
 > 🟡 状态：连接复用真机已验，待 Pause / Cancel / 失败 Retry 回归
 > 级别：**L2**（新协议/校验/架构类，需强 agent + 真机验证）· 阻塞：无
-> Owner: Hermes · 协同分支：`work/net-04` · Base: `3ad6248`
+> Owner: Hermes · 协同分支：`work/net-04` · Base: `476c08d`
 > 当前节点：Android App 全局 Endpoint + daemon `(NodeId, ALPN)` `ConnectionCache` 已合入；三星真机 5 文件连接复用已通过
 > 下一步：仍欠暂停/取消/失败重试真机回归。
 > ⚠️ 本卡只做 Rust daemon + Android 传输层改造，不碰任何 UI 组件。

@@ -1,7 +1,7 @@
 # M3 review fix cards / M3 评审修复卡
 
 > Source: full four-track code review of the 2026-08-01~02 batch
-> (fefa8ce..1d792f9, 21 commits), 2026-08-03. Every finding below was
+> (fefa8ce..1a94e54, 21 commits), 2026-08-03. Every finding below was
 > verified against code or reproduced; nothing here is speculation.
 > 来源：对周末批次的四路代码评审（2026-08-03），每条发现都经代码核实
 > 或实测复现，无猜测项。

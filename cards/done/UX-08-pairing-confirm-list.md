@@ -48,7 +48,7 @@ CI 绿；PROGRESS/NEXT 一行；卡移 done/。UI 走查欠账照记（真窗口
   confirm_by_name——三台独立 token 入队→列表三行→按名确认中间→剩两台→
   全清后 pending 空 + status.pending_pairs=0 + 设备表含被允许的 B）；
   vite build 绿（173 modules）；cargo fmt clean。
-- CI：run 31368612144 等待中（commit 07cd1b9）。
+- CI：run 31368612144 等待中（commit d18b917）。
 - 挂验收人：①模拟 3 台同时扫码真窗口一屏三行逐行处理截图；②提示条
   5s 自动消失 + × 手动关闭实机观感；③反证：去掉自动消失定时器 →
   提示条常驻（贴对照后还原）。

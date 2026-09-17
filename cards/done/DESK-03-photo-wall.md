@@ -34,7 +34,7 @@ SYNC-01 合并后，被外删的照片自然从墙上消失——两卡各自独
 ## 收尾
 CI 绿；PROGRESS/NEXT 一行 + ROADMAP 状态；卡移 done/。
 
-## 验收记录（2026-08-12 队列卫生补录；代码于 2026-08-11 完成，PROGRESS 行 71a34da）
+## 验收记录（2026-08-12 队列卫生补录；代码于 2026-08-11 完成，PROGRESS 行 ba357e8）
 
 **实现**：桌面照片墙（L2，与手机同一数据源——终结 Finder 对账）。
 daemon 本地 IPC 查询平面落地（timeline.page/thumb.get/asset.meta 与

@@ -73,6 +73,6 @@
   （31 原有 + 1 新）；`cargo nextest run --all-features`
   **430 passed / 1 skipped**；`just ci` 全绿。
 - **发现分岔**：跑 `just ci` 时 queue-check 步 stderr 有既存
-  `StopIteration` traceback（归档门禁变异 C 自 4a4181e 起空转），与本卡
+  `StopIteration` traceback（归档门禁变异 C 自 1968008 起空转），与本卡
   无关、不顺手修，挂号 **QA-02**。另：本机磁盘 100% 满导致首跑 CI
   编译失败，清理 `target/debug/incremental`（12G）后恢复，非仓库问题。

@@ -52,6 +52,6 @@ Android CI、release job 一致的 Rust Android target 与 NDK 环境；失败�
 
 ## 实施记录
 
-- 2026-09-04：`v0.5.0-test.1` 已指向 `056dc0f` 并触发 Release #45 与 E2E #73。
+- 2026-09-04：`v0.5.0-test.1` 已指向 `2920b43` 并触发 Release #45 与 E2E #73。
   E2E #73 的 daemon 已启动，Android Gradle 在 12 秒内失败于缺 Rust target；根因不是
   daemon relay 日志，也不是 MOB-49/MOB-50 的 Flow 语义。

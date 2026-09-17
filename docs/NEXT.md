@@ -84,7 +84,7 @@ bug 了，我都不用往下测试了！后续的移动和拍照意义不大了�
 
 ---
 
-## 〇bis、2026-08-26 UX-13 已实施（commit 2315259 · 🟡 等真机验收）
+## 〇bis、2026-08-26 UX-13 已实施（commit 95fd3be · 🟡 等真机验收）
 
 暂停之后英雄区那个按钮**不再消失**：同一个位置换文案——进行中「暂停」，被暂停
 「继续」，点「继续」走的还是那条唯一的管线（`triggerManualBackup` → 续传，重新
@@ -115,7 +115,7 @@ offer 全部候选、dedup 收敛缺 0）。
 
 ---
 
-## 〇、2026-08-26（收口）MOB-36 已实施（commit 55f8c43 · 🟡 等真机验收）
+## 〇、2026-08-26（收口）MOB-36 已实施（commit 57a8ff0 · 🟡 等真机验收）
 
 **移进**已选相册的老照片现在真的会被备份。与 `MOB-34` 同族根因：相册之间移动照片
 不改 `_ID` / `date_added` / `date_modified`，只改 `bucket_id`，于是它的水位值远在
@@ -145,7 +145,7 @@ offer 全部候选、dedup 收敛缺 0）。
 
 ---
 
-## 〇、2026-08-26（收口）MOB-37 已实施（commit 94574b1 · 🟡 等真机验收）
+## 〇、2026-08-26（收口）MOB-37 已实施（commit 00befa6 · 🟡 等真机验收）
 
 重传告知不再只活在一条系统通知里：状态**落盘**（新 `backup/ReuploadNotice.kt`）、
 App 内一条可 acknowledge 的提示读的就是盘上状态、**通知不重试**（只在
@@ -168,7 +168,7 @@ acknowledged→unacknowledged 的跃变时发一条）。两条校准门都落�
 
 ---
 
-## 〇、2026-08-25（收口）MOB-34 已实施（commit d592639 · 🟡 等真机验收）
+## 〇、2026-08-25（收口）MOB-34 已实施（commit d879008 · 🟡 等真机验收）
 
 被删的**老**照片现在真的会被传回来：校准算出 `lost` 后按 `MOB-13` 的文件级
 记录反查 fileKey 入队（新 `ReuploadQueue`），下一轮按 `_ID` **定向**取回那几条
@@ -204,7 +204,7 @@ App 打开那次）都接了队列。
 - 清 5 个已合入 main 的 `worktree-agent-*` 本地分支 + 0 差异的
   `site/site-02`。
 
-**MOB-29 已实施（2026-08-25，commit 95f3c4f · 🟡 等真机验收）**：手机端
+**MOB-29 已实施（2026-08-25，commit 561dd2d · 🟡 等真机验收）**：手机端
 「资源在客户端丢失，正在重传。如果是主动删除，请先删除移动端的数据。」通知
 （UX-02 通道，判据 = `confirmed` 交集，所以新照片和传输失败的照片不触发）+
 桌面端总览页删除警告（只针对 delete）+ 校准搭 `doWork` finally 的便车（备份
@@ -224,7 +224,7 @@ App 打开那次）都接了队列。
 插入点已核实：`BackupWorker.kt:770-772` 校准算出 `missing` 后紧接
 `removeMissing`——提示天然一次性，连去重窗口都不用做。
 
-**DESK-10 已实施（2026-08-25，commit 1e1359f + 0e0521f · 2026-08-26 补漏 ·
+**DESK-10 已实施（2026-08-25，commit 0e370fe + 5f51cbd · 2026-08-26 补漏 ·
 🟡 等真机复验）**：「导出日志」
 改成**桌面壳本地组装**——不再是 daemon 的 `logs.export` IPC，daemon 挂着时按钮
 照样出包（那正是最需要日志的场景）。包里含 daemon 的 stdout/stderr 日志（路径
@@ -270,7 +270,7 @@ scrub（新壳配旧 daemon 会再漏一次，保证做在 bundle 边界上）�
    = 未登录，仓库私有，匿名拉 `dogfood` release 返回 404。用户跑一次
    `gh auth login` 后即可 `gh release download dogfood`。
    本地 release 构建不是替代方案（「凭据只在 GitHub」红线）。
-   ⚠️ **同一条认证缺口还挡住了「盯 CI」**：MOB-29 那次 push（`df24232`）
+   ⚠️ **同一条认证缺口还挡住了「盯 CI」**：MOB-29 那次 push（`4a7826a`）
    受影响的是 **ci-rust + ci-android + ci-desktop 三域**，`gh run list`
    在未登录下直接报错，本机盯不到结论。本机等价证据全绿（`just ci` /
    nextest 317 · Android 263 · desktop vitest 24 + `vite build`），
@@ -651,7 +651,7 @@ MOB-27 把 cancel 它的代码全删了 → 升级窗口内新旧两个监听会
 
 ## 一、2026-08-19（续二十三）：真机验收一轮 + 六条修复（当前状态）
 
-用户真机走了完整验收流程，报了 6 个问题，全部定位并修复（`51b18c5`）。
+用户真机走了完整验收流程，报了 6 个问题，全部定位并修复（`df4959e`）。
 **下个 session 的主话题：`MOB-27` 监听与干活解耦**——卡里有完整链路、
 问题机理、议定方案和三个争议点，可以直接接着讨论或实施。
 
@@ -1411,7 +1411,7 @@ bash 3.2 处理 `$VAR` 紧跟多字节字符的解析缺陷）。**当前状态*
 设计稿 v2（`docs/design/2026-08-14-layout-v2/`，xixi Discord 附件 P-Pass_3.html 原样落库）
 取代 v1 成为 UI 唯一基准。桌面端逐屏对照完成：总览/照片/家人与设备/活动记录/设置/首启向导/
 配对弹窗全部核过一遍——可落地项（照片页 Finder 入口+副标题路径、添加设备卡文案+卡内复制配对串、
-配对横幅点名设备、向导 4 步化+「设为常驻服务」步、弹窗标题）已实现并合入（2769157/bfcf6d4，CI 绿）。
+配对横幅点名设备、向导 4 步化+「设为常驻服务」步、弹窗标题）已实现并合入（4e5d701/8d1d5f8，CI 绿）。
 
 **等用户拍板（4 项）**：
 1. **开机自动运行开关**（设置页，设计稿有）——daemon 有 autostart 注册（launchd，启动时 TookOver 安装）
@@ -1539,7 +1539,7 @@ macOS Big Sur+ 图标规范（主图形居中占 ~60-66%）。修法：generate.
 步骤 0 生成安全区缩排版（画布中心 scale 0.77，纸底铺满不透明，系统圆角
 遮罩负责形状），icns/ico/Tauri PNG 各档全切缩排版。验证：兽面墨色宽度
 65.8%、高度 48.5%、居中；幂等 PASS；本地 tauri build 后 bundle icns 与源
-md5 一致。**✅ 已出包 v0.3.3-test.4**（`3113f62`，macos 单平台 dispatch，GitHub 直链可用；R2 镜像仍 403 挂账）。**等用户**：装 v0.3.3-test.4 看 Cmd+Tab / Dock 图标观感（dmg: https://github.com/hawkeye-xb/P-Pass/releases/tag/v0.3.3-test.4）。
+md5 一致。**✅ 已出包 v0.3.3-test.4**（`4ff1c44`，macos 单平台 dispatch，GitHub 直链可用；R2 镜像仍 403 挂账）。**等用户**：装 v0.3.3-test.4 看 Cmd+Tab / Dock 图标观感（dmg: https://github.com/hawkeye-xb/P-Pass/releases/tag/v0.3.3-test.4）。
 
 ## 〇、2026-08-13：REV-01（SYNC-03/04 review 遗留 5 项）全部修完
 
@@ -1638,11 +1638,11 @@ android 全量绿（TriggerPolicyTest 11/11）+ WebFetch 官方文档核对检�
 
 | 卡 | commit | 验证 | 真机挂账 |
 |----|--------|------|---------|
-| RET-01 取回=使用动作 | 4a92aae | android 140/140 | 保存到相册可见+时间元数据；打开面板+临时目录零残留；断网人话错误 |
-| SENT-01 手机哨兵 | 29af0ff | android 150/150 | mock 全失败→通知一次不重复；恢复可达清零 |
-| DOG-02b 白名单提醒 | a0792fe | android 161/161 | mock 条件满足→通知+点开引导；加白后不再通知 |
-| DESK-04 向导对齐 | 9072735 | vite build 绿 | 三步截图对照；扫码→确认列表即时出现 |
-| CI-01 流水线分块 | 5b8cb88 | actionlint 8/8 | CI 实跑验收（纯 docs 零 run/单域触发/platforms 门控/取消旧 run）留推后确认 |
+| RET-01 取回=使用动作 | 111e3bb | android 140/140 | 保存到相册可见+时间元数据；打开面板+临时目录零残留；断网人话错误 |
+| SENT-01 手机哨兵 | 7515734 | android 150/150 | mock 全失败→通知一次不重复；恢复可达清零 |
+| DOG-02b 白名单提醒 | 064361a | android 161/161 | mock 条件满足→通知+点开引导；加白后不再通知 |
+| DESK-04 向导对齐 | b2b4873 | vite build 绿 | 三步截图对照；扫码→确认列表即时出现 |
+| CI-01 流水线分块 | 912a8a0 | actionlint 8/8 | CI 实跑验收（纯 docs 零 run/单域触发/platforms 门控/取消旧 run）留推后确认 |
 
 **✅ issue 已发（2026-08-12）**：
 https://github.com/n0-computer/iroh/issues/4468 —— iroh-blobs 0.103
@@ -1689,7 +1689,7 @@ Read=account 级——CF 平台限制无法细化到单 script）+ `CLOUDFLARE_A
 
 | commit | bug | 修法 |
 |---|---|---|
-| `2a762e0` | release 汇总 job 无 if 门控——dispatch 单平台时其余构建 job skipped → 汇总 job 连带 skipped，**草稿永远建不出**（GitHub 默认：needs 任一非 success 且无 always() → 下游跳过） | release job 加 `if: !cancelled() && (任一平台 success)`；H-10c sha256/manifest 组装/签名/资产上传全步骤单平台 `[ -f ]` 容错；`[[ -e ]]` 根治 SC2086 |
+| `0acf1bb` | release 汇总 job 无 if 门控——dispatch 单平台时其余构建 job skipped → 汇总 job 连带 skipped，**草稿永远建不出**（GitHub 默认：needs 任一非 success 且无 always() → 下游跳过） | release job 加 `if: !cancelled() && (任一平台 success)`；H-10c sha256/manifest 组装/签名/资产上传全步骤单平台 `[ -f ]` 容错；`[[ -e ]]` 根治 SC2086 |
 | `3b05791` | R2 镜像步骤 403/10000——wrangler 无 account_id 先探测 /memberships（窄权限 token 无读权限 → 10000），补 account_id 后又遇 403（token 的 R2 写权限实际未生效？） | 已补 `CLOUDFLARE_ACCOUNT_ID` env（10000 解决）；**403 未解决，R2 镜像仍失败——挂账** |
 
 **✅ 包已交付**：`v0.3.3-test.3`（draft=false, prerelease=true，含 DESK-05）——P-Pass-macos-arm64.dmg（22M）+ ppass-macos-arm64.zip + SHA256SUMS；本地下载对照 notes 声明的 H-10c sha256 **逐字节一致**。test.2 同批产物（R2 失败不影响 GitHub 直链）。
@@ -1745,7 +1745,7 @@ iroh-blobs 0.103 上游 bug（Actor::new 错误路径 drop 捕获的 RtWrapper
 
 ## 〇、2026-08-11 SITE-02 轮（Salamira）：三篇博文草稿待审
 
-**三篇草稿已写好，推在分支 `site/site-02`（46b4edc，未合并 main、未发布）**，
+**三篇草稿已写好，推在分支 `site/site-02`（c9732e4，未合并 main、未发布）**，
 本地渲染验证通过（三篇 200、过程图全出、生产构建正确排除草稿、零第三方断言绿）：
 
 1. 《为什么给家人做一个照片备份》——docs/product/ 定位+体验差距档案改写
@@ -1761,8 +1761,8 @@ logo/favicon，亮/夜双版）。
 
 ## 〇、2026-08-11 PRES-01 + DESK-03 轮（Salamira）：在线状态三档 + 桌面照片墙 + 出包
 
-**PRES-01 + DESK-03 + 三笔小债已推 main**（71a34da，CI 4/4 绿；bump
-0f4b2ab → **v0.3.3-test.1 prerelease 已 publish**，update Worker test 通道
+**PRES-01 + DESK-03 + 三笔小债已推 main**（ba357e8，CI 4/4 绿；bump
+78b44c6 → **v0.3.3-test.1 prerelease 已 publish**，update Worker test 通道
 返回 0.3.3-test.1 manifest、stable 通道仍 0.2.1-test.4 隔离正确）：
 
 - **PRES-01**：前台 30s 轻心跳（复用 hello，Android ON_RESUME~ON_STOP，
@@ -1803,7 +1803,7 @@ unsubscribe 反证。**挂账（验收人）**：扫码即时切弹窗时序、�
 订阅失效兜底轮询可用。
 
 **队列剩余**：PRES-01 → DESK-03；FIX-SC2 等第 2 步（卡点已锁定
-restart 重拨）；MOB-04 已提前完成（14b8353，缓存红线落地）。
+restart 重拨）；MOB-04 已提前完成（32181d6，缓存红线落地）。
 
 **等用户**：无新增硬项。Android 测试已移交别的 Agent（xixi 安排），
 本 VM 不跑模拟器。
@@ -1820,7 +1820,7 @@ restart 重拨）；MOB-04 已提前完成（14b8353，缓存红线落地）。
 （手机 exist-check 回落链，卡验收 2）。
 
 **队列剩余**：IPC-02 → PRES-01 → DESK-03；FIX-SC2 等第 2 步（卡点已
-锁定 restart 重拨）；MOB-04 已提前完成（14b8353，缓存红线落地）。
+锁定 restart 重拨）；MOB-04 已提前完成（32181d6，缓存红线落地）。
 
 **等用户**：无新增硬项。Android 测试已移交别的 Agent（xixi 安排），
 本 VM 不跑模拟器。
@@ -1841,8 +1841,8 @@ restart 重拨）；MOB-04 已提前完成（14b8353，缓存红线落地）。
 
 | 交付 | 裁决 |
 |---|---|
-| **IPC-02 事件订阅**（f6f734a） | ✅ **PASS**——三个死角全查过：①订阅分支在 token 认证之后（未认证连接进不了事件流）；②慢订阅者 broadcast Lagged → skip，绝不阻塞 daemon；③壳侧 2s 退避重连 + 60s 兜底对账在位、无高频 setInterval 残留。36ms 对照 3s 的实测在案 |
-| **SYNC-01 外删对账**（62912da） | ✅ **PASS**——启动+每小时 re-diff、单条失败不中断、索引不可读静默跳过设计对；集成测试 5入2删3剩 + 双反证。**两条观察**：①对账-vs-ingest 竞态天然安全**依赖 T-011「先落文件后插行」的顺序**——建议在 reconcile 模块注释补一句这层依赖（防未来改 ingest 顺序踩雷，一行注释的事，下轮顺手）；②folder.set 换库后首轮对账会批量清老索引 = UX-05「新位置从零开始」语义一致，属预期，但审计会刷一批 removed_external，知悉即可 |
+| **IPC-02 事件订阅**（97596ca） | ✅ **PASS**——三个死角全查过：①订阅分支在 token 认证之后（未认证连接进不了事件流）；②慢订阅者 broadcast Lagged → skip，绝不阻塞 daemon；③壳侧 2s 退避重连 + 60s 兜底对账在位、无高频 setInterval 残留。36ms 对照 3s 的实测在案 |
+| **SYNC-01 外删对账**（e2c4748） | ✅ **PASS**——启动+每小时 re-diff、单条失败不中断、索引不可读静默跳过设计对；集成测试 5入2删3剩 + 双反证。**两条观察**：①对账-vs-ingest 竞态天然安全**依赖 T-011「先落文件后插行」的顺序**——建议在 reconcile 模块注释补一句这层依赖（防未来改 ingest 顺序踩雷，一行注释的事，下轮顺手）；②folder.set 换库后首轮对账会批量清老索引 = UX-05「新位置从零开始」语义一致，属预期，但审计会刷一批 removed_external，知悉即可 |
 
 **GUI 级挂账**（QR 即时关时序/断 daemon 重连恢复/兜底轮询可用）并入
 真窗口走查轮，与 UX-08/DESK-02 的桌面目视项一起清。
@@ -1869,7 +1869,7 @@ API 34 AVD 补验，不阻塞。**至此走查批次证据全闭环，test.3 出
 
 ## 〇、2026-08-11 收尾轮（Salamira）：批次三欠账清账
 
-**巡检轮（f12cfd8）留的三欠账**：
+**巡检轮（c2ee128）留的三欠账**：
 
 | 欠账 | 状态 |
 |---|---|
@@ -1884,7 +1884,7 @@ ICON-01b/DESK-02/DEV-01b/MOB-04 全部修复；用户手机 test 通道自动收
 - v0.3.2-test.2 tag 已被 8/10 20:24 的中间包占用（只含 MOB-03+ICON-01b），
   tag 纪律不允许覆盖 → 改打 **v0.3.2-test.3**（含全部 5 修复，run
   31451793169）。
-- **release.yml draft bug 修复**（`0610943`）：Auto-publish test tag 只设
+- **release.yml draft bug 修复**（`fdebd3d`）：Auto-publish test tag 只设
   `--prerelease` 不清 draft → GitHub API 不返回 draft → Worker 永远 404。
   改为 `--draft=false --prerelease`。
 - **update Worker 已部署**（ppass-update，custom domain
@@ -1908,10 +1908,10 @@ FIX-SC2 等第 2 步（卡点已锁定 restart 重拨）。
 
 | 交付 | 裁决 |
 |---|---|
-| **MOB-03 权限链**（1216eaa） | ✅ **代码 PASS**——Home 与 onboarding 两入口统一走 enterBucketPicker 权限链，完整/部分/拒绝三分支齐、无白屏路径，launcher 回调即时重读状态。**模拟器"全新安装零权限"截图证据未交**（卡面验收 1/2），补上才算闭环 |
-| **ICON-01b 图标安全区**（fb2f6fd） | ✅ **PASS（像素级实测）**——验收人直接量前景 PNG：内容占比 0.52×0.39，落在 0.61 安全区内；纸底正确剥离给背景层。遮罩截图证据仍欠 |
-| **DESK-02 桌面三项**（2c4feba） | ✅ **内容 PASS**——①通道零 UI 由版本推导 + 「测试版」琥珀徽标在位（nit：徽标文案写死组件未走 i18n，归 T-042 收编债）；②revoked 在 SQL 层过滤 + include_revoked 参数 + 单测；③正确移交 IPC-02 未越权。**但 🔴 直推前没跑 fmt → main 红 Format check**（8/7 同款失守，底线①）。验收人一键 `cargo fmt` 修复（5ec6ea6，纯格式零逻辑）。**push 前 `cargo fmt --check` 写在 CLAUDE.md 里，这是第二次** |
-| **DEV-01b 隐藏合并入口**（5870324） | ✅ PASS——UI 入口删净（Android 开关行/桌面替换选项），device_hint 照发照存，桌面 flag 保留反证路径 |
+| **MOB-03 权限链**（e9731d9） | ✅ **代码 PASS**——Home 与 onboarding 两入口统一走 enterBucketPicker 权限链，完整/部分/拒绝三分支齐、无白屏路径，launcher 回调即时重读状态。**模拟器"全新安装零权限"截图证据未交**（卡面验收 1/2），补上才算闭环 |
+| **ICON-01b 图标安全区**（a33a9ed） | ✅ **PASS（像素级实测）**——验收人直接量前景 PNG：内容占比 0.52×0.39，落在 0.61 安全区内；纸底正确剥离给背景层。遮罩截图证据仍欠 |
+| **DESK-02 桌面三项**（e6dfee5） | ✅ **内容 PASS**——①通道零 UI 由版本推导 + 「测试版」琥珀徽标在位（nit：徽标文案写死组件未走 i18n，归 T-042 收编债）；②revoked 在 SQL 层过滤 + include_revoked 参数 + 单测；③正确移交 IPC-02 未越权。**但 🔴 直推前没跑 fmt → main 红 Format check**（8/7 同款失守，底线①）。验收人一键 `cargo fmt` 修复（a5a9c7e，纯格式零逻辑）。**push 前 `cargo fmt --check` 写在 CLAUDE.md 里，这是第二次** |
+| **DEV-01b 隐藏合并入口**（b7c6b48） | ✅ PASS——UI 入口删净（Android 开关行/桌面替换选项），device_hint 照发照存，桌面 flag 保留反证路径 |
 
 **批次收尾欠账（agent 下轮第一件事）**：①4 张卡仍在队列没移 done/；
 ②PROGRESS/NEXT 本批零记录（底线②）；③MOB-03/ICON-01b 的模拟器截图
@@ -1930,10 +1930,10 @@ FIX-SC2 等第 2 步（卡点已锁定 restart 重拨）。
 
 | 卡 | 状态 |
 |---|---|
-| MOB-01 安全区适配 | ✅ **已完成并推 main**（`8d0b4b4`，CI 绿 android 107/107；模拟器截图/三星真机复核挂验收人——本机 VM 无嵌套虚拟化模拟器起不来，按用户指令跳过本地截图） |
-| MOB-02 备份触发模型重构 | ✅ **已完成并推 main**（`e3931ba`，android 121/121 绿；交互/文案照用户定稿实施；模拟器 onboarding 截图 + 三星真机全流程/连拍聚合/部分授权观感挂验收人） |
-| UX-08 配对确认列表化 | ✅ **已完成并推 main**（`07cd1b9`，vite build 绿 + ipc_flow 8/8；3 台同时扫码一屏三行/提示条 5s 消失+×关闭 挂验收人真窗口走查） |
-| REL-02 更新双通道 | ✅ **已完成并推 main**（`96c61ae` `8b5362c`，android 124/124 + vite build 绿；Worker 部署 + 发 prerelease/正式 release 双端对照验收挂验收人） |
+| MOB-01 安全区适配 | ✅ **已完成并推 main**（`c84f81a`，CI 绿 android 107/107；模拟器截图/三星真机复核挂验收人——本机 VM 无嵌套虚拟化模拟器起不来，按用户指令跳过本地截图） |
+| MOB-02 备份触发模型重构 | ✅ **已完成并推 main**（`9e6aebe`，android 121/121 绿；交互/文案照用户定稿实施；模拟器 onboarding 截图 + 三星真机全流程/连拍聚合/部分授权观感挂验收人） |
+| UX-08 配对确认列表化 | ✅ **已完成并推 main**（`d18b917`，vite build 绿 + ipc_flow 8/8；3 台同时扫码一屏三行/提示条 5s 消失+×关闭 挂验收人真窗口走查） |
+| REL-02 更新双通道 | ✅ **已完成并推 main**（`66b808f` `3437b40`，android 124/124 + vite build 绿；Worker 部署 + 发 prerelease/正式 release 双端对照验收挂验收人） |
 | DEV-01 身份保全+重配对合并 | ✅ **已完成并推 main**（本 commit，daemon/storage/proto 全量绿含 3 新集成测试；真机重装→重扫→「替换旧的」流程挂验收人） |
 | ICON-01 图标接入双端构建 | ✅ **已完成并推 main**（本 commit，桌面 cargo check 绿 + Android assembleDebug 绿 + 67 产物幂等；视觉核对/托盘观感/真机桌面图标挂验收人） |
 | FIX-SC2 blobs_resume | ⏳ 留队列等 CI 证据 |
@@ -1983,14 +1983,14 @@ T-082/091/092 桌面真窗口走查）。
 
 test.6 的签名 APK 缺 libiroh_ffi.so（根 .gitignore 全局 *.so 把它挡在 git 外，
 只有验收人本机工作区有此文件——任何干净克隆构建的 APK 都装上即崩）。
-修复 44225c1：.so 入库 + pr.yml/release.yml 各加打包完整性断言
+修复 dc268b7：.so 入库 + pr.yml/release.yml 各加打包完整性断言
 （unzip -l 确认 .so 在 APK 里，缺失即红）。**v0.2.0-test.7 全绿且断言
 step success——下载 APK 请用 test.7**，与残包同签名可直接覆盖安装。
 
 ## 一、H-10c：✅ 端到端 PASS（v0.2.0-test.7，run 30877876487）
 
 迭代记录：test.4 ❌（bundle-desktop-macos.sh 缺执行位）→ test.5 ❌（dmg 不在
-artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（5020136、2464dcd）。
+artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（668efaf、bf32f81）。
 
 | 平台 | 资产 | 状态 |
 |---|---|---|
@@ -2012,7 +2012,7 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 | 事项 | 裁决 |
 |---|---|
 | **T-090/091/092 链1数据面** | ✅ **质量 PASS**：daemon activity.list 窗口函数聚合（LAG 断批 + RANGE frame 处理时间并列，只读不建新表）、connection 中性 enum（iroh 锁在 transport 内，B.1 门禁绿）、photo_count/statvfs 磁盘水位。设计尊重架构规则、反证齐、本地 219/219 |
-| **main 曾红 Format check** | 🟠 自 merge 的 T-090 测试文件未跑 fmt → main CI `lint+test` 红。验收人一键 `cargo fmt` 修复（ddc42763，纯格式零逻辑）。**根因=没有 PR 门禁**：走 PR 的话 CI 会在合并前就拦下 fmt |
+| **main 曾红 Format check** | 🟠 自 merge 的 T-090 测试文件未跑 fmt → main CI `lint+test` 红。验收人一键 `cargo fmt` 修复（a2f8ff55，纯格式零逻辑）。**根因=没有 PR 门禁**：走 PR 的话 CI 会在合并前就拦下 fmt |
 | **第三次自 merge** | 🔴🔴🔴 T-090/091/092 又是 163 身份直推 main、无 PR。**这是连续第三次**（#47→布局v1→链1）。口头纪律已证明完全无效。**branch protection 不再是"建议"，是唯一止血手段**——不开的话第四次一定还来 |
 | daemon --help 误接管事故 | 已记录（PROGRESS 2026-08-06 傍晚）：daemon 无参数解析，--help 触发误接管停机数分钟。逼出 3 缺口（--help/--version 解析 / 纯新启动不装 autostart / 异身份端口冲突报错人话化）——**建议合成 DAE-03 卡**，agent 下轮做 |
 | 真机验收（0.3.0） | ⏳ 三星虽插回，但只装着 0.2.1；Downloads 无 0.3.0 APK。布局 v1 改的就是 Android UI，用 0.2.1 验=验旧界面。**仍缺 v0.3.0-test.2 的签名 APK**（draft 需登录下载，或 publish）|
@@ -2023,7 +2023,7 @@ artifact 根布局）→ **test.6 全绿**。两个修复直接进 main（502013
 ### 15:12 巡检轮（验收人）：0.3.0 包已出全绿，真机验收等设备
 
 - **v0.3.0-test.1 / test.2 均全绿出包**（agent 自行推进了上轮问用户的"出包"项）。
-  test.2 从 24eb2f68（布局 v1）打，Release run 31072694693 四 job success：
+  test.2 从 79d99f9c（布局 v1）打，Release run 31072694693 四 job success：
   签名 APK + libiroh_ffi.so 断言 ✓、macOS 自包含包 ✓、更新 manifest 签名 ✓。
 - **真机验收阻塞：三星 USB 断连**（adb 空列表）。0.3.0 新 UI 的六项验收
   （新两 tab 布局下的三元组/白名单/暂停/通知/约束/断开）无法开跑。
@@ -2101,15 +2101,15 @@ APK badging: versionName=0.2.1 versionCode=2，含 libiroh_ffi.so，sha256 b7ce9
 
 | 交付 | 裁决 |
 |---|---|
-| #45 DOG-01d | ✅ 已合并（上轮，1ed5e65）|
-| #46 BUMP-02 桌面版本 | ✅ **已合并**（907610f）：四件套对齐 0.2.1、漂移断言前置于任何改动、独立 workspace 的 lock 在目录内 cargo update -w（platform 0.1.0→0.2.1 属预期，version.workspace=true）。**合并卫生跟修一处**：diff 显示行的 ERE 转义被丢（裸 `+++` 非法，/usr/bin/grep exit 2 实测），已恢复 `\+\+\+` |
+| #45 DOG-01d | ✅ 已合并（上轮，336e595）|
+| #46 BUMP-02 桌面版本 | ✅ **已合并**（7826303）：四件套对齐 0.2.1、漂移断言前置于任何改动、独立 workspace 的 lock 在目录内 cargo update -w（platform 0.1.0→0.2.1 属预期，version.workspace=true）。**合并卫生跟修一处**：diff 显示行的 ERE 转义被丢（裸 `+++` 非法，/usr/bin/grep exit 2 实测），已恢复 `\+\+\+` |
 | **v0.2.1-test.3 出包** | ✅ **全绿（2026-08-06，Salamira，run 30980572190）**：四 job success（macOS arm64 签名门控 / Windows x64 未签名 / Android 签名 APK / Release 草稿）。**draft 9 资产**：`app-release.apk`（28.9MB，versionCode=2 同 test.2 可覆盖装，含 DOG-01d 修复）、`P-Pass-macos-arm64.dmg`（23.4MB，桌面 0.2.1）、`ppass-macos-arm64.zip`、`daemon.exe`、`testclient.exe`、`manifest.json`、`BUILD_INFO-windows-x64`、双平台 `SHA256SUMS-*`。三星真机启动验收挂验收人 |
 
 ### 13:47 巡检轮（验收人）
 
 | 交付 | 裁决 |
 |---|---|
-| DOG-01d | ✅ **已合并**（1ed5e65）：_ID 投影 + cursor.count 合规写法；computeTripletSafe 生产函数 Throwable 兜底（测试共用，注入同型异常反证）。本地 android 74/74 |
+| DOG-01d | ✅ **已合并**（336e595）：_ID 投影 + cursor.count 合规写法；computeTripletSafe 生产函数 Throwable 兜底（测试共用，注入同型异常反证）。本地 android 74/74 |
 | 下一手（执行 agent） | ①桌面版本号纳入 bump 并对齐 0.2.1（用户指令已发，若未做先做）；②打 **v0.2.1-test.3**（versionCode 不动），盯 run 全绿，资产清单写回本节 |
 | 验收人待命 | test.3 全绿即 adb 装三星：首验启动不闪退，然后六项真机验收连跑 |
 
@@ -2141,7 +2141,7 @@ blocker：countAll 用 projection ["count(*)"] 查 MediaStore——真机
 
 | 事项 | 结果 |
 |---|---|
-| DAE-02 | ✅ **已合并**（106cb57）：①plist KeepAlive → SuccessfulExit=false（纯函数化+单测）；②claim 提前到 transport bind 之前（identity.key 直接派生 node_id + bind 后漂移熔断 + QR 挪到 wait_online 之后）。本地 209/209（一次 blobs_resume 300s 超时，隔离复跑 6.4s 过=并发偶发）|
+| DAE-02 | ✅ **已合并**（e21b428）：①plist KeepAlive → SuccessfulExit=false（纯函数化+单测）；②claim 提前到 transport bind 之前（identity.key 直接派生 node_id + bind 后漂移熔断 + QR 挪到 wait_online 之后）。本地 209/209（一次 blobs_resume 300s 超时，隔离复跑 6.4s 过=并发偶发）|
 | 本机真实环境验收 | ✅ 新 daemon 上岗（/Applications，plist 新语义）后双测过：**信号杀 → 5 秒复活**（96670→96780）；**IPC step_down（exit 0）→ 15 秒不重拉**（launchctl PID=[-]）——churn 缺陷实锤已死。kickstart 恢复值班（96900，version 0.2.1）|
 | 真机验收 | ⏳ 仍等 test.2 签名 APK——Downloads 里的 app-release*.apk 是昨天的 0.1.0 旧包（一个还是缺 .so 的残包），不是 0.2.1。见「等用户」§六.0 |
 
@@ -2188,11 +2188,11 @@ blocker：countAll 用 projection ["count(*)"] 查 MediaStore——真机
 |---|---|
 | H-10a(+fix) quickstart | ✅ **已合并**：资产名与 v0.2.1-test.2 实物逐字对上（dmg/apk）、排障链接存在、Windows 只有 CLI 与 draft 不可见两处限制写得诚实、en+zh 齐。README 里的 [截图: …] 占位符等真机验收时顺手补图 |
 | BUMP-01 | ❌ **返工（一行）**：干净树断言用 `git status --porcelain` 把**未跟踪文件**也算脏——验收人机器上永远有 `?? .claude/`，实测 DIRTY=[.claude/]，bump 必误炸。改 `--porcelain -uno`（只看已跟踪改动，未跟踪本来就不会被显式 add 带进 commit）。`cargo update -w` 部分是对的，保留 |
-| main CI | ✅ 转绿实锤（cb34e2b PR Checks success，dae_flow 版本推导修复生效）|
+| main CI | ✅ 转绿实锤（5e30f5a PR Checks success，dae_flow 版本推导修复生效）|
 
 ### 05:47 巡检轮补充（验收人）：TAG-01 连带事故与收尾
 
-- **main 曾红两个 commit**（756332b/9fb339f 的 PR Checks 均 failure）：
+- **main 曾红两个 commit**（f3d08bf/21022ea 的 PR Checks 均 failure）：
   bump 0.1.0→0.2.1 打翻 dae_flow 两条测试——测试把版本**写死**成
   "0.2.0"/"0.1.0" 字面量，bump 后"newer"claimant 反而比在位旧 →
   TookOver 断言必挂。**产品逻辑没坏，是测试脆性**（每次 bump 必炸）。
@@ -2201,13 +2201,13 @@ blocker：countAll 用 projection ["count(*)"] 查 MediaStore——真机
   全量 206/206 绿，`6029de3` 已推。这属于 DAE-01b 验收时验收人漏掉
   的脆性，责任在 review 侧，不记实施方。
 - **Cargo.lock 缺口**：bump-version.sh 只改 Cargo.toml，首次构建后
-  lock 的 workspace 成员版本项变脏——`6bb3239` 补上。**BUMP-01 微卡
+  lock 的 workspace 成员版本项变脏——`b9b437a` 补上。**BUMP-01 微卡
   （L0）**：bump-version.sh 末尾追加 lock 同步（`cargo update -w -q`
   或等效）+ 断言 `git status` 干净，反证：删掉该步 → bump 后构建
   必出脏 lock（贴 git status）。
 - **纪律重申（对实施方）**：直推 main 的 commit 与分支交付同规——
   **push 后必须等 PR Checks 结论**，红了立刻跟修或回滚，不许留红
-  过夜。本次 756332b 红了之后又推了 9fb339f（还是红）才转去打 tag。
+  过夜。本次 f3d08bf 红了之后又推了 21022ea（还是红）才转去打 tag。
 - **网络备注**：办公网到 GitHub 的 SSH/HTTPS 全断过一段，验收人临时
   走 `GIT_SSH_COMMAND="ssh -o ProxyJump=vultr-ppass"` 跳板完成收口；
   后续巡检若 fetch 超时直接用这招，别空转。
@@ -2228,12 +2228,12 @@ blocker：countAll 用 projection ["count(*)"] 查 MediaStore——真机
 收尾：NEXT.md 第五节勾掉「打 tag」，验收人接手真机批量验收。
 ---
 ✅ **验收记录（2026-08-06 凌晨，Salamira）**：
-  - bump `756332b`：0.1.0→0.2.1（versionCode 1→2），diff 恰好只碰版本行
+  - bump `f3d08bf`：0.1.0→0.2.1（versionCode 1→2），diff 恰好只碰版本行
   - **v0.2.1-test.1 红（run 30949374415）**：Release 草稿 job「Sign update
     manifest」step 挂——`failed to decode base64 secret key: Invalid symbol
     10, offset 348`。根因 = CI `echo "$UPDATE_SIGNING_KEY" > key` 追加尾换行
     （key 文件 348B 单行 base64，offset 348 恰为 echo 补的 \n，tauri signer
-    base64 解码不 trim）。修复 `9fb339f`：`printf '%s'` 逐字节还原 +
+    base64 解码不 trim）。修复 `21022ea`：`printf '%s'` 逐字节还原 +
     重设 secret 无尾换行 + 本地 signer 签名预验证（cmp 字节一致）。
   - **v0.2.1-test.2 全绿（run 30950901275）**：四 job success——Android
     (signed APK, **Assert APK contains libiroh_ffi.so step success**)、
@@ -2362,8 +2362,8 @@ blocker：countAll 用 projection ["count(*)"] 查 MediaStore——真机
 
 **狗粮周阻塞全清**（DOG-01/02/03、DAE-01、UPD-01、UX-01..06 全部
 已合，main 全量 android 71/71 + nextest 206/206 绿）→ UX-06b/UX-07
-小卡收尾 → **✅ TAG-01 出包已完成**（bump 0.2.1 `756332b` + 修复
-`9fb339f` + **v0.2.1-test.2 全绿 run 30950901275**，draft 9 资产齐，
+小卡收尾 → **✅ TAG-01 出包已完成**（bump 0.2.1 `f3d08bf` + 修复
+`21022ea` + **v0.2.1-test.2 全绿 run 30950901275**，draft 9 资产齐，
 验收记录见第三节卡体）→
 验收人批量真机验收（DOG-01 三元组正反证、DOG-02 dumpsys 白名单、
 UX-01 暂停续传、UX-02 通知、UX-03 约束对照、UX-06 断开后 hello 拒）+

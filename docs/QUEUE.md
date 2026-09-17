@@ -131,6 +131,7 @@
 | [OBS-01](../cards/OBS-01-telemetry-privacy-consent-and-control.md) | 遥测默认 opt-out 且无 App 内隐私说明页/开关 | 等产品拍板（默认值与入口） |
 | [UI-04d](../cards/UI-04d-reupload-notice-uses-failure-channel.md) | 重传通知发送函数已被删、生产零调用 | 等 MOB-69 拍板 |
 | [DOC-02](../cards/DOC-02-progress-ledger-rows-too-fat.md) | 🟥 挂号：PROGRESS.md 237k 字符/单个单元格最长 4785 字符，顶部表格已读不动；三条歧路已在卡内排除 | 等拍板账本格式（拆一卡一文件 vs 只约束新增 vs 不动） |
+| [SEC-01](../cards/SEC-01-six-readonly-pr-refs-still-pin-pre-rewrite-commits.md) | ⬜ 全史已改写强推、分支与 tag 清零，但 6 个只读 `refs/pull/*` 仍钉着重写前的旧提交，本地推不动 | 等你以所有者账号提 GitHub 工单；一周后按卡内命令核查（现应为 6，处理完应为 0） |
 
 ---
 
@@ -153,8 +154,8 @@
 | [REBUILD-03](../cards/REBUILD-03-production-flow-runner.md) | 新生产 Flow runner 完成 | REBUILD-04 |
 | [REL-03](../cards/REL-03-bump-script-silently-skips-desktop-crate-version.md) | 版本脚本版本目标全断言 | — |
 | [BUILD-02](../cards/BUILD-02-toolchain-pin-must-bind-on-ci-too.md) | 五个 workflow 从 TOML 派生 Rust 工具链 | — |
-| [TEL-05](../cards/TEL-05-telemetry-http-timeout-and-queue-cap.md) | 遥测超时+封顶完成 `436ddbd`，L1 无需真机 | — |
-| [NET-15](../cards/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md) | daemon 重启后 status() 重拉丢失交付完成 `5bdbae4`+`bbdfbdb`，L1 无需真机 | — |
+| [TEL-05](../cards/TEL-05-telemetry-http-timeout-and-queue-cap.md) | 遥测超时+封顶完成 `413f9d1`，L1 无需真机 | — |
+| [NET-15](../cards/NET-15-flow-status-must-respawn-a-lost-delivery-task-after-daemon-restart.md) | daemon 重启后 status() 重拉丢失交付完成 `c01a02f`+`b67b0a7`，L1 无需真机 | — |
 
 ---
 

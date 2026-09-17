@@ -69,7 +69,7 @@ v0.5.0-test.5 真机（三星）：备份进行中，首页进度数字正常跳
   - `flowCommandOf`：按钮点击路由与按钮文案**读同一批事实**——此前文案显示
     Pause、点击却重读到 Idle 而 fire wake，「按钮撒两次谎」；现在可见 Pause
     必暂停（含缝隙）。
-- 2026-09-06 反证（实现已 commit `d030bc3` 之后才做，安全）：`flowRoundActive`
+- 2026-09-06 反证（实现已 commit `a876195` 之后才做，安全）：`flowRoundActive`
   改恒 false → 3 条用例真红，`git checkout` 单文件还原（工作区只有破坏 diff，
   教训落地）。
 - 2026-09-06 基线：Android JVM 全量 **274 tests / 0 failures / 4 skipped**

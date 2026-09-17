@@ -67,7 +67,7 @@ CI 绿；PROGRESS/NEXT/ROADMAP 一行；卡移 done/。
   （`TriggerPolicyTest` 11/11，含改写后的 `partial_access_detection`）。
 - 消费点核查：`grep -rn "PartialMediaAccess"` 确认唯一调用方是
   `MainActivity.hasPartialMediaAccess`，无 BackupWorker/BackupRunner 旁路。
-- CI：push `68b8f2d` → main，ci-android #3 绿（1m36s）。
+- CI：push `53220fb` → main，ci-android #3 绿（1m36s）。
 - 真机复现前提（pm grant 实测，用户授权连接测试机后）：先 grant
   `READ_MEDIA_VISUAL_USER_SELECTED` 单独授予（模拟「选择照片」），再
   额外 grant `READ_MEDIA_IMAGES`/`VIDEO`（模拟升级为「允许所有照片」，

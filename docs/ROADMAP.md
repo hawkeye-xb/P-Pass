@@ -342,7 +342,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       (CN=HawkeyeXbOrg), both added to Release draft assets; H-10b
       naive-user test pending tag-build acceptance
 - [ ] H-10b T1–T7 + fix 批次 — **全部代码已合并 2026-08-08/09（13
-      commits，0.3.1 正式发布 `9c66c76`）**：QR 密度瘦身（`&a=`→`&r=` +
+      commits，0.3.1 正式发布 `1242b64`）**：QR 密度瘦身（`&a=`→`&r=` +
       手机手动输入 + QR 刷新 + dmg 拖拽布局）、T1 版本号显示、T3 配对
       token 32B→12B、T4 配对状态机（QR 弹窗化）、T5 审计事件流 +
       activity 页、T6 相册级备份范围、T7 Windows NSIS 图形安装包进
@@ -475,7 +475,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       (2026-08-06, fix/bump-01-lock-sync)**: script now runs
       `cargo update -w -q` after editing Cargo.toml (workspace-member
       versions in Cargo.lock stay in sync — TAG-01 0.2.1 had to be fixed
-      by hand in 6bb3239) + asserts `git status` is clean except the
+      by hand in b9b437a) + asserts `git status` is clean except the
       version files (Cargo.toml / build.gradle.kts / Cargo.lock / the
       script itself), failing the bump otherwise — counter-proof: with
       the sync step removed, the first cargo command after a bump dirties
@@ -675,13 +675,13 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       只有 release 的 `lintVital` 会炸。`justfile` 的 `android-test` 写死
       `JAVA_HOME=$(brew --prefix openjdk)`，等于本地工具链跟着 brew 最新版漂。
       倾向改法：钉 `/usr/libexec/java_home -v 17` + 加前置检查报人话。
-- [ ] MOB-34 库里删掉的**老**照片永远不会被重传（水位把它们挡在扫描之外），「待备份 K」永远归不了零 — **🟡 2026-08-25 代码已合并（commit d592639），等真机验收**（MOB-29 的后半截：存储端报缺是对的，手机端断在增量扫描按水位只看新照片。落地：`ReuploadQueue` 定向补偿——校准算出 `lost` 后按 MOB-13 的文件级记录反查 fileKey 入队，下一轮 `MediaScanner.itemsByKeys` 按 `_ID` **定向**取回那几条记录进候选；查无此行/范围外/打不开一律出队，**不退化成每轮全量重扫**。两条校准门（`BackupWorker` + `BackupUiStateHolder`）都接了队列。已知边界：MOB-13 之前的存量条目没有文件级记录，反查够不着——见卡）。
+- [ ] MOB-34 库里删掉的**老**照片永远不会被重传（水位把它们挡在扫描之外），「待备份 K」永远归不了零 — **🟡 2026-08-25 代码已合并（commit d879008），等真机验收**（MOB-29 的后半截：存储端报缺是对的，手机端断在增量扫描按水位只看新照片。落地：`ReuploadQueue` 定向补偿——校准算出 `lost` 后按 MOB-13 的文件级记录反查 fileKey 入队，下一轮 `MediaScanner.itemsByKeys` 按 `_ID` **定向**取回那几条记录进候选；查无此行/范围外/打不开一律出队，**不退化成每轮全量重扫**。两条校准门（`BackupWorker` + `BackupUiStateHolder`）都接了队列。已知边界：MOB-13 之前的存量条目没有文件级记录，反查够不着——见卡）。
 - [ ] UX-14 传一半自己「暂停」了——失败重试被渲染成被暂停 — **🟡 2026-08-26 代码已合并，等真机验收**（验收人原话「怎么传一半自己暂停了，你查看下日志，是否是我误触了，按道理我没碰到」。**没有误触**：logcat 17:12:48 `CANCELLED_BY_APP(1)` 是他主动按的暂停 → 点继续 → 续传那一轮传到 `sending 54/198` 时 `IrohError ConnectionLost(TimedOut)` → `Result.retry()`，而 **WorkManager 的 retry 结构上拿不到 outputData** → 不盖 `KEY_FINISHED_AT` → UX-13 的判据认为那次暂停「还没被后来的运行覆盖」→ 又冒出「继续」；17:18:31 有一轮跑成功盖戳才自愈。修法：判据锚点从「最新完成时刻」扩到「最新**开跑**时刻」——新增 `RunStartPrefs`，worker 在**抢到互斥门之后**（空转轮不算开跑）、**扫描之前**（失败重试留不下终态戳，开跑是唯一一定能落下的事实）落盘。**教训：UX-13 卡面那句「时刻不需要清除时机就能自证过期」假设每一轮都会留下终态戳，而 retry 这条路结构上留不下——被自己写下的前提坑了。** 顺带记账：这是本仓**第五次**「源码断言钉字面形状」误伤（`uiStateOf(infos, pausedAt)` 被加参数顶红），已改钉不变量。）
 - [ ] MOB-40 还没选相册就把整库传了——「从未选过」被当成「全量备份」 — **🔴 2026-08-26 真机实锤（L0，验收人原话「我就选择了一个 11 张的相册，你给我同步几百个？我都不用往下测试了」）→ ✅ 当天修完，**test.8 真机通过**（只选 11 张的相册 → 全程只传 11 张，配对到选完相册之间零传输）**（logcat 铁证：15:53:05 全新安装 → 15:54:14 那一轮 `scanning 254/254` 把整库都传了，此刻用户还没进选相册页；15:55:13 用户手动按暂停；15:55:26 选完相册后才是正确的 `offered=11`。根因是**一条语义**：`selectedBucketIds() == null` 表示「从未选过」，全链路却解释成「全量备份」——T6 给升级用户留的兼容。触发时机有两条路都不带「已选范围」这道门：配对成功当场调 `scheduleAutoBackup`，而 `PeriodicWorkRequest` 没有 initialDelay、首轮立即跑；以及 MOB-38 的 `foregroundCatchup` 门控只有「已配对 + 未暂停」。**修在管线咽喉不在触发通道**——五条通道各加一道门就是把同一判断写五遍，MOB-33/34/35/38 四个 bug 全是「漏接一处」，那个形状不能再复制（触发侧收拢归 MOB-39）。null 与空集行为相同、盖戳分开（`KEY_NO_SCOPE` / `KEY_NO_ALBUMS`），UI 文案共用。**教训：一个备份产品最不该做的默认动作,就是在拿到用户选择之前把整个相册库传出去——「我还不知道你要备什么」不等于「那就全备」。** 顺带修掉一条自钉字面的旧测试:它断言 `contains("if (bucketIds != null && bucketIds.isEmpty())")`,理由写着「null = 全量语义」——把缺陷钉住了,什么也没守住。）
-- [ ] UX-13 暂停之后英雄区按钮整个消失，首页没有续传入口 — **🟡 2026-08-26 代码已合并（commit 2315259），等真机验收**（验收人真机原话「暂停之后，没有重新开始的按钮？」。按钮只在 `busy` 时渲染，一暂停 `busy` 变 false 就整块不渲染，续传入口只剩设置页的「立即备份」——**与 UX-01 卡面自己写的「再点一次 = 续传」冲突**；不是 MOB-33 改出来的，是既有缺陷。根因：「用户主动暂停」与「本来就没事干」都映射到 `Idle`，界面分不出来。落地：新增 `BackupUiState.Paused`，判据 = 落盘的「按下暂停的时刻」（新 `backup/PausePrefs.kt`，tmp+rename，随配对清）与 work 真实状态合成的纯函数 `pausedAfterOf`。**刻意不看那条 CANCELLED 记录**——取消拿不到 `outputData` → 无戳 → 在 MOB-31 的「按戳取最大」里恒被当上古记录；**也没破 MOB-33 的「界面不许自己编状态」**——合成要求「没有 work 在跑」，点完暂停而字节还在传的那几帧照旧显示进行中。英雄区按钮改由纯函数 `heroActionOf` 裁决，同一位置换文案、两分支共用同一个 `onClick`（MOB-19 红线）。**教训：记「时刻」而不是「布尔」——时刻不需要清除时机就能自证过期，布尔要有人负责清，而这里的「谁来清」得跟五条触发通道各自的开跑时机打交道。**）
-- [ ] MOB-37 重传告知只发一条系统通知，发失败就永久静默 — **🟡 2026-08-26 代码已合并（commit 94574b1），等真机验收**（MOB-29 的告知天然一次性：算出 `lost` → 发通知 → `removeMissing` 剔除 → 下一轮算不出同一批，于是**那一次发失败就永久静默**（权限没授/渠道被关/锁屏没看见）。真机现场：删 3 张，重传真的发生了，验收人什么提示都没看到。落地：新 `ReuploadNotice.kt` 把告知**落盘**（hash 并集，不累加——MOB-33 并发双发不许把 3 张记成 6 张），`noteReuploadNotice` **先落盘再发通知且吞掉通知异常**，两条校准门（`BackupWorker` 含收尾补校准 + `BackupUiStateHolder` 的 App 打开那次）都落盘，App 内一条可 acknowledge 的提示读的是盘上状态。**不重试通知**——只在 acknowledged→unacknowledged 的跃变时发一条。顺带给 `UI-04` 搭了提示优先级骨架 `ui/HomeNotices.kt`（`HomeNotice` + `topNotice` + `NoticeCard`，既有提示未迁移，那是 UI-04 的活）。**教训：「天然一次性，连去重窗口都不用做」是把缺陷说成了优雅——省掉一套机制之前先问它本来在防什么，这里防的是投递失败，而通知投递是最不可靠的一环。**）
-- [ ] MOB-36 移进备份范围的照片永远不会被扫到（水位挡住了它） — **🟡 2026-08-26 代码已合并（commit 55f8c43），等真机验收**（与 MOB-34 同族根因：相册之间移动照片不改 `_ID`/`date_added`/`date_modified`，只改 `bucket_id`，于是移进已选相册的老照片水位值远在水位之下、增量扫描永远看不见——真机现象是「触发了但什么也没传」。落地：选卡面 A 路（按 bucket 定向查）——新 `ScopeBackfill.kt` + `MediaScanner.scanScopeBelow`，每轮多一次「已选 bucket 里、水位之下」的元数据查询（一个 collection 一次，范围为 null 或水位为 0 时 0 次），返回集靠 `ConfirmedState.files` ∪ `HashCache` 两张现成的表筛掉已确认的那些，**已备份过的不开流不哈希、不重复上传**；稳态零候选零哈希，开销 ∝ 变化量而非库大小。不新增落盘状态（这是不选 B 路快照表的理由），不动水位推进规则。顺带治好「新勾选相册里的存量照片自动备份够不着」——代价是勾选大相册后第一轮会一次 offer 整个存量，属预期行为。测试 39 类/302 tests/0 failures，反证 4 条真跑）。
-- [ ] MOB-29 库里删掉的照片被静默传回来 + 「已备份」在两次备份之间说谎 — **🟡 2026-08-25 代码已合并（commit 95f3c4f），等真机验收**（落地：手机端「资源在客户端丢失，正在重传」通知 + 桌面端总览页删除警告 + 校准搭 `doWork` finally 的便车；`manifest`/`missing` 与 proto 零改动，反墓碑判据 `deleted_asset_is_still_reported_missing_no_tombstone` 钉死「删掉的 hash 下一轮仍在 missing」）。原记录：**⛔ 未实施，但 2026-08-25 已解除阻塞**（墓碑方案整条撤销，改为「不拦重传，只告知 + 教『先删手机原图、再删库』的顺序」；不加 proto 字段、不做内置垃圾桶、不做恢复入口——访达废纸篓已是这三样。数字口径 A/B 那道裁决随墓碑一起消失。竞品对照：Immich `#4282`/`#22507`/`#23897` 同病未解，其回收站事实上是 30 天隐式墓碑）。原记录：
+- [ ] UX-13 暂停之后英雄区按钮整个消失，首页没有续传入口 — **🟡 2026-08-26 代码已合并（commit 95fd3be），等真机验收**（验收人真机原话「暂停之后，没有重新开始的按钮？」。按钮只在 `busy` 时渲染，一暂停 `busy` 变 false 就整块不渲染，续传入口只剩设置页的「立即备份」——**与 UX-01 卡面自己写的「再点一次 = 续传」冲突**；不是 MOB-33 改出来的，是既有缺陷。根因：「用户主动暂停」与「本来就没事干」都映射到 `Idle`，界面分不出来。落地：新增 `BackupUiState.Paused`，判据 = 落盘的「按下暂停的时刻」（新 `backup/PausePrefs.kt`，tmp+rename，随配对清）与 work 真实状态合成的纯函数 `pausedAfterOf`。**刻意不看那条 CANCELLED 记录**——取消拿不到 `outputData` → 无戳 → 在 MOB-31 的「按戳取最大」里恒被当上古记录；**也没破 MOB-33 的「界面不许自己编状态」**——合成要求「没有 work 在跑」，点完暂停而字节还在传的那几帧照旧显示进行中。英雄区按钮改由纯函数 `heroActionOf` 裁决，同一位置换文案、两分支共用同一个 `onClick`（MOB-19 红线）。**教训：记「时刻」而不是「布尔」——时刻不需要清除时机就能自证过期，布尔要有人负责清，而这里的「谁来清」得跟五条触发通道各自的开跑时机打交道。**）
+- [ ] MOB-37 重传告知只发一条系统通知，发失败就永久静默 — **🟡 2026-08-26 代码已合并（commit 00befa6），等真机验收**（MOB-29 的告知天然一次性：算出 `lost` → 发通知 → `removeMissing` 剔除 → 下一轮算不出同一批，于是**那一次发失败就永久静默**（权限没授/渠道被关/锁屏没看见）。真机现场：删 3 张，重传真的发生了，验收人什么提示都没看到。落地：新 `ReuploadNotice.kt` 把告知**落盘**（hash 并集，不累加——MOB-33 并发双发不许把 3 张记成 6 张），`noteReuploadNotice` **先落盘再发通知且吞掉通知异常**，两条校准门（`BackupWorker` 含收尾补校准 + `BackupUiStateHolder` 的 App 打开那次）都落盘，App 内一条可 acknowledge 的提示读的是盘上状态。**不重试通知**——只在 acknowledged→unacknowledged 的跃变时发一条。顺带给 `UI-04` 搭了提示优先级骨架 `ui/HomeNotices.kt`（`HomeNotice` + `topNotice` + `NoticeCard`，既有提示未迁移，那是 UI-04 的活）。**教训：「天然一次性，连去重窗口都不用做」是把缺陷说成了优雅——省掉一套机制之前先问它本来在防什么，这里防的是投递失败，而通知投递是最不可靠的一环。**）
+- [ ] MOB-36 移进备份范围的照片永远不会被扫到（水位挡住了它） — **🟡 2026-08-26 代码已合并（commit 57a8ff0），等真机验收**（与 MOB-34 同族根因：相册之间移动照片不改 `_ID`/`date_added`/`date_modified`，只改 `bucket_id`，于是移进已选相册的老照片水位值远在水位之下、增量扫描永远看不见——真机现象是「触发了但什么也没传」。落地：选卡面 A 路（按 bucket 定向查）——新 `ScopeBackfill.kt` + `MediaScanner.scanScopeBelow`，每轮多一次「已选 bucket 里、水位之下」的元数据查询（一个 collection 一次，范围为 null 或水位为 0 时 0 次），返回集靠 `ConfirmedState.files` ∪ `HashCache` 两张现成的表筛掉已确认的那些，**已备份过的不开流不哈希、不重复上传**；稳态零候选零哈希，开销 ∝ 变化量而非库大小。不新增落盘状态（这是不选 B 路快照表的理由），不动水位推进规则。顺带治好「新勾选相册里的存量照片自动备份够不着」——代价是勾选大相册后第一轮会一次 offer 整个存量，属预期行为。测试 39 类/302 tests/0 failures，反证 4 条真跑）。
+- [ ] MOB-29 库里删掉的照片被静默传回来 + 「已备份」在两次备份之间说谎 — **🟡 2026-08-25 代码已合并（commit 561dd2d），等真机验收**（落地：手机端「资源在客户端丢失，正在重传」通知 + 桌面端总览页删除警告 + 校准搭 `doWork` finally 的便车；`manifest`/`missing` 与 proto 零改动，反墓碑判据 `deleted_asset_is_still_reported_missing_no_tombstone` 钉死「删掉的 hash 下一轮仍在 missing」）。原记录：**⛔ 未实施，但 2026-08-25 已解除阻塞**（墓碑方案整条撤销，改为「不拦重传，只告知 + 教『先删手机原图、再删库』的顺序」；不加 proto 字段、不做内置垃圾桶、不做恢复入口——访达废纸篓已是这三样。数字口径 A/B 那道裁决随墓碑一起消失。竞品对照：Immich `#4282`/`#22507`/`#23897` 同病未解，其回收站事实上是 30 天隐式墓碑）。原记录：
       桌面端删掉手机备份的照片后，手机仍报「已备份」，下一轮又原样传回来。
       ⚠️ **2026-08-21 真机证实**：14:07 手动删 5 张 → 14:08 那轮 `ingested=11
       duplicates=7`，逐个查文件名，5 张在索引里**每个都回来了 1 行**。
@@ -909,25 +909,25 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       `!imagesGranted && visualSelectedGranted`（与官方检测顺序一致）。
       android 全量绿（TriggerPolicyTest 11/11）。挂账：真机确认死循环解除
       （用户）。
-- [x] MOB-01 全页面安全区适配 — **merged 2026-08-11 (8d0b4b4)**:
+- [x] MOB-01 全页面安全区适配 — **merged 2026-08-11 (c84f81a)**:
       三星真机内容被导航键遮挡/顶到状态栏。根因 targetSdk 35 强制
       edge-to-edge 但零 insets 处理。enableEdgeToEdge + PPScreen 统一
       容器（safeDrawingPadding 一处封装全页面套用，手势/三键导航天然
       区分），系统栏图标深浅随背景亮度切换。android 107/107 + CI 绿。
       挂账：模拟器三键/手势逐屏截图 + 三星真机复核（验收人）。
-- [x] MOB-02 备份触发模型重构 — **merged 2026-08-11 (e3931ba)**:
+- [x] MOB-02 备份触发模型重构 — **merged 2026-08-11 (9e6aebe)**:
       用户定稿（L2）：事件驱动替代手动按钮——首页主按钮删除、四触发事件
       （选完范围/新照片 ContentUriTrigger 连拍聚合/周期 6h 兜底/进前台
       >24h）、两档条件（用户在场只查 Wi-Fi/后台全查）、部分授权引导不落
       死局、失败短退避重试 2 次后放弃、新相册默认不包含+「新」徽标。
       android 121/121 + CI 绿。挂账：模拟器 onboarding 截图 + 三星真机
       全流程/连拍 20 张只触发一次/部分授权观感（验收人）。
-- [x] UX-08 配对确认列表化 — **merged 2026-08-11 (07cd1b9)**:
+- [x] UX-08 配对确认列表化 — **merged 2026-08-11 (d18b917)**:
       多台同时扫码 → pending 全量列表一屏列出，逐行允许/拒绝，全清后
       关闭无残留（daemon 只读 pairing.pending + confirm 带 device_name）；
       提示条 5s 自动消失 + × 手动关闭。ipc_flow 8/8 + vite build 绿。
       挂账：3 台同时扫码真窗口逐行处理截图 + 提示条实机观感（验收人）。
-- [x] REL-02 更新双通道 — **merged 2026-08-11 (96c61ae + 8b5362c)**:
+- [x] REL-02 更新双通道 — **merged 2026-08-11 (66b808f + 3437b40)**:
       test tag 自动 publish 为 prerelease（latest 天然忽略，不漏 stable）；
       Worker 代理 test 通道 manifest（GitHub API 限流 60/h/IP，客户端不
       直连，300s 缓存）；Android 设置页通道切换（默认 stable，stable 原
@@ -1089,7 +1089,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## UX micro-cards（NEXT.md 第四节尽量项；产品输入 docs/product/2026-08-04-experience-gaps.md）
 
-- [x] T-080 Android 两 tab 对齐布局 v1 — **merged 2026-08-06 (4bc62071)**:
+- [x] T-080 Android 两 tab 对齐布局 v1 — **merged 2026-08-06 (bebd52e1)**:
       照片页=统一时间线头部+全部/仅本机/家人的过滤胶囊；备份页=恒真三元组
       英雄卡+备份规则卡+失败才说话+底部红字断开。修两个真机实锤缺陷：
       ①待备份>0 时横幅仍说「照片都存好了」（裁决纯函数 statusLineOf 锁死，
@@ -1107,7 +1107,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       升级 v0.2.1（launchd 稳定路径受监护，NodeId/配对未变），真数据实测
       photo_count=51、SM-S9210 批次上屏。挂账：设备行机型前缀（daemon 未
       暴露机型）、活动页周统计胶囊、90 天保留策略。
-- [x] T-082 桌面 UI 还原走查修复 — **merged 2026-08-06 (6f4efb97)**:
+- [x] T-082 桌面 UI 还原走查修复 — **merged 2026-08-06 (d00298fb)**:
       真窗口走查后修 7 项走样：窗口 1140×720+min 920×600、两卡等高
       (stretch)、QR 148×148 居中 2x、:focus-visible 墨色描边（灭系统蓝圈）、
       设备行两行结构（role 字串不再渲染）、已移除设备折叠（划线规则删除）、
@@ -1120,7 +1120,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       主按钮「重新扫码连接」、失败卡主按钮「再试一次」断点续传。
       89 tests 0 fail+反证红过；模拟器视觉复核（空闲/失败/详情折叠）通过。
       范围偏差已审：BackupUiStateHolder catch 块仅文案装配改 raw-only。
-- [x] T-081 桌面端侧边栏四页 — **merged 2026-08-06 (e56b1ec5)**:
+- [x] T-081 桌面端侧边栏四页 — **merged 2026-08-06 (f771459c)**:
       单页长滚动→侧栏四页（总览/家人与设备/活动记录/设置，照片库并入
       设置），hash 路由默认总览；徽章只说服务状态，连接状态下沉设备行；
       危险操作只在桌面。纯 UI 重排，IPC 调用集合逐字未变（验收 diff 比
@@ -1214,7 +1214,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       GcConfig 默认关且只能定时轮询）。真实 daemon 端到端
       `pushed=12 ingested=12; rerun pushed=0 dup=12`，占盘 1.00x。
 - [~] `.ppf/flow-blobs`（REBUILD-02 新 Flow 收件仓）永不回收 — **2026-09-09
-      `BLOB-02` 代码完成（commit `c6c0bb6`）**：与 BLOB-01 同构泄漏但发生在
+      `BLOB-02` 代码完成（commit `a123688`）**：与 BLOB-01 同构泄漏但发生在
       新生产管线，且不能照搬"启动清空"（会连同断点续传 partial 一起清）。
       改用 iroh-blobs 原生 `GcConfig` 周期性 GC，`transport::Blobs::open_with_periodic_gc`
       对外只暴露 `[u8;32]` 哈希集合回调（不泄漏 `iroh_blobs` 类型），
@@ -1228,17 +1228,17 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 ## 链 2 取回/哨兵批次（2026-08-12 实施；语义基准 docs/product/2026-08-11-chain2-decisions.md ①③④⑤⑥）
 
-- [x] RET-01 单张照片取回=使用动作 — **merged 2026-08-12 (4a92aae)**: 查看页「保存到相册」（MediaStore 29+ RELATIVE_PATH/26-28 DATA+扫描广播）+「用其他应用打开」（FileProvider+ACTION_VIEW）；原图按需下载 cacheDir/share 即用即清（MOB-04 红线）；文件头魔数嗅探真实 MIME（纯函数 JVM 可测）；防循环钉子显式断言（存回→再备份→ingested=0 duplicates=12）。android 140/140。挂账（真机）：家人照片保存到相册可见+时间元数据、打开面板+临时目录零残留、断网人话错误。
-- [x] SENT-01 手机盯电脑哨兵 — **merged 2026-08-12 (29af0ff)**: 搭后台任务便车（非心跳）记 daemon 可达性；判定纯函数四条件（确认可达过/距今>72h/期间有失败尝试/去重窗口 72h）；「3 天没连上电脑了——照片没丢」走 UX-02 通道 id 2028。android 150/150。挂账（真机）：mock 全失败跨阈值→通知一次不重复、恢复可达清零。
-- [x] DOG-02b 契机式白名单提醒 — **merged 2026-08-12 (a0792fe)**: 独立 store + 纯函数五条件（未加白/有失败/≤2天/失败后无成功/去重 72h）；成功一轮清零；通知进 App 见 DOG-02 Home 引导条。android 161/161。挂账（真机）：mock 条件满足→通知+点开引导、加白后不再通知。
-- [x] DESK-04 桌面向导低成本对齐 — **merged 2026-08-12 (9072735)**: 文案按产品语言过一遍（去「常驻服务/访达」等词）；step3 接 T4 新配对流（daemon-event 事件驱动 + 3s 轮询兜底，pending 出现即时切确认列表）；全 token 化。vite build 绿。挂账（真机）：三步截图对照、走完向导→扫码→确认列表即时出现。
-- [x] CI-04 release 等最慢的平台 — **merged 2026-08-26 (24f7ea3 + 1ee4a45 + 81ff6a2)**: ① windows vcpkg 缓存（`C:/vcpkg/installed`，不设 restore-keys、不跳过 install——缓存只负责让它快不负责让它可以不跑）；② **发布上传全拆**——原本一个 release job `needs` 三平台，Android 的 APK 5 分钟就在 artifact 里却要陪 win 等到最后（vcpkg 首次从源码编 libheif 10-20 分钟）。拆成 `create-draft`（秒级，消掉三条 lane 抢 create 的 TOCTOU）+ 三条独立 upload lane + `finalize-notes` 收口；manifest 签名 + test 自动发布跟着 android lane（`make-update-manifest.mjs` 结构上只吃 APK）→ 手机端约 6 分钟拿到包、自动更新立刻可验。**构建 job 的 `contents: read` 一字未动**——上传下沉到只做 download+upload 的独立 job，T-071b 红线保住，此前「等用户放宽权限」是我自造的障碍；③ 删掉 `environment: release-signing`——它从未配 reviewer、**从未拦过任何东西**，却被当成「发布前人工审批」向验收人描述了两轮。actionlint 通过、YAML 解析出 8 个 job。⚠️ **管线行为一次都没在 CI 上跑过**（`gh` 未登录+私有仓库，Actions 结果 agent 看不见）——判据待一次 dispatch 或下个 tag：(a) win 还在跑时 Android 资产是否已可下载 (b) notes 是否补齐签名状态+sha256 (c) `macOS=` 是否 `yes`。
-- [x] CI-01 流水线分块重构 — **merged 2026-08-12 (5b8cb88)**: pr.yml 拆三域 workflow（ci-rust/ci-android/ci-desktop，paths 门控+concurrency 取消，纯 docs 零 CI）；release.yml platforms dispatch 输入（tag 恒全量）；T-070 scenarios 并轨 e2e nightly+tag；CF 联动门控（R2 镜像 ppf-dl/dl.p-pass.hawkeye-xb.com + ci-workers 自动部署，CLOUDFLARE_API_TOKEN 未就位跳过）；CLAUDE.md 底线①口径更新。actionlint 8 workflow 零告警。**2026-08-25 核实：`CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` 已在 Repository secrets（2 weeks ago），门控条件早已满足——此处「等用户」已作废，勿再照搬。**
-- [x] CI-02 e2e nightly 两个 job 各自编译一遍 release 二进制 — **merged 2026-09-09 (f7bb429)**: `e2e.yml` 新增独立 `build` job 编译一次 release 二进制（daemon+testclient），tar 打包保留可执行位，`e2e`/`scenarios` 各自 `needs: build` + download-artifact 复用，两个测试 job 仍独立报绿/报红。actionlint 零告警。实跑 workflow_dispatch（[run 34317704548](https://github.com/hawkeye-xb/P-Pass/actions/runs/34317704548)）三 job 全 success。
+- [x] RET-01 单张照片取回=使用动作 — **merged 2026-08-12 (111e3bb)**: 查看页「保存到相册」（MediaStore 29+ RELATIVE_PATH/26-28 DATA+扫描广播）+「用其他应用打开」（FileProvider+ACTION_VIEW）；原图按需下载 cacheDir/share 即用即清（MOB-04 红线）；文件头魔数嗅探真实 MIME（纯函数 JVM 可测）；防循环钉子显式断言（存回→再备份→ingested=0 duplicates=12）。android 140/140。挂账（真机）：家人照片保存到相册可见+时间元数据、打开面板+临时目录零残留、断网人话错误。
+- [x] SENT-01 手机盯电脑哨兵 — **merged 2026-08-12 (7515734)**: 搭后台任务便车（非心跳）记 daemon 可达性；判定纯函数四条件（确认可达过/距今>72h/期间有失败尝试/去重窗口 72h）；「3 天没连上电脑了——照片没丢」走 UX-02 通道 id 2028。android 150/150。挂账（真机）：mock 全失败跨阈值→通知一次不重复、恢复可达清零。
+- [x] DOG-02b 契机式白名单提醒 — **merged 2026-08-12 (064361a)**: 独立 store + 纯函数五条件（未加白/有失败/≤2天/失败后无成功/去重 72h）；成功一轮清零；通知进 App 见 DOG-02 Home 引导条。android 161/161。挂账（真机）：mock 条件满足→通知+点开引导、加白后不再通知。
+- [x] DESK-04 桌面向导低成本对齐 — **merged 2026-08-12 (b2b4873)**: 文案按产品语言过一遍（去「常驻服务/访达」等词）；step3 接 T4 新配对流（daemon-event 事件驱动 + 3s 轮询兜底，pending 出现即时切确认列表）；全 token 化。vite build 绿。挂账（真机）：三步截图对照、走完向导→扫码→确认列表即时出现。
+- [x] CI-04 release 等最慢的平台 — **merged 2026-08-26 (617236f + 802ff11 + 4adc411)**: ① windows vcpkg 缓存（`C:/vcpkg/installed`，不设 restore-keys、不跳过 install——缓存只负责让它快不负责让它可以不跑）；② **发布上传全拆**——原本一个 release job `needs` 三平台，Android 的 APK 5 分钟就在 artifact 里却要陪 win 等到最后（vcpkg 首次从源码编 libheif 10-20 分钟）。拆成 `create-draft`（秒级，消掉三条 lane 抢 create 的 TOCTOU）+ 三条独立 upload lane + `finalize-notes` 收口；manifest 签名 + test 自动发布跟着 android lane（`make-update-manifest.mjs` 结构上只吃 APK）→ 手机端约 6 分钟拿到包、自动更新立刻可验。**构建 job 的 `contents: read` 一字未动**——上传下沉到只做 download+upload 的独立 job，T-071b 红线保住，此前「等用户放宽权限」是我自造的障碍；③ 删掉 `environment: release-signing`——它从未配 reviewer、**从未拦过任何东西**，却被当成「发布前人工审批」向验收人描述了两轮。actionlint 通过、YAML 解析出 8 个 job。⚠️ **管线行为一次都没在 CI 上跑过**（`gh` 未登录+私有仓库，Actions 结果 agent 看不见）——判据待一次 dispatch 或下个 tag：(a) win 还在跑时 Android 资产是否已可下载 (b) notes 是否补齐签名状态+sha256 (c) `macOS=` 是否 `yes`。
+- [x] CI-01 流水线分块重构 — **merged 2026-08-12 (912a8a0)**: pr.yml 拆三域 workflow（ci-rust/ci-android/ci-desktop，paths 门控+concurrency 取消，纯 docs 零 CI）；release.yml platforms dispatch 输入（tag 恒全量）；T-070 scenarios 并轨 e2e nightly+tag；CF 联动门控（R2 镜像 ppf-dl/dl.p-pass.hawkeye-xb.com + ci-workers 自动部署，CLOUDFLARE_API_TOKEN 未就位跳过）；CLAUDE.md 底线①口径更新。actionlint 8 workflow 零告警。**2026-08-25 核实：`CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` 已在 Repository secrets（2 weeks ago），门控条件早已满足——此处「等用户」已作废，勿再照搬。**
+- [x] CI-02 e2e nightly 两个 job 各自编译一遍 release 二进制 — **merged 2026-09-09 (c4c2394)**: `e2e.yml` 新增独立 `build` job 编译一次 release 二进制（daemon+testclient），tar 打包保留可执行位，`e2e`/`scenarios` 各自 `needs: build` + download-artifact 复用，两个测试 job 仍独立报绿/报红。actionlint 零告警。实跑 workflow_dispatch（[run 34317704548](https://github.com/hawkeye-xb/P-Pass/actions/runs/34317704548)）三 job 全 success。
 - [x] CI-05 Rust 工具链检查放行 CI-02 的 artifact consumer — **merged 2026-09-09 (本 commit)**: `tools/check-rust-toolchain-ci.sh` 的 `e2e.yml` 期望 Cargo job 集从 `{"e2e", "scenarios"}` 改为 `{"build"}`——CI-02 把编译收敛到 `build` job 后，`e2e`/`scenarios` 只下载已构建二进制运行剧本，不该被要求 Cargo/工具链 setup。反证：临时删掉 `build` job 的 toolchain setup，检查器正确报错退出非零；恢复后 `bash tools/check-rust-toolchain-ci.sh` 退出 0。`just ci` 全绿。
-- [x] CI-03 桌面壳 workspace 补 fmt/clippy 门禁 — **merged 2026-09-08 (4f941dc)**: src-tauri 是独立 workspace（ADR-012），主 workspace 的 just ci 覆盖不到；ci-desktop.yml 在 `cargo test --lib` 前加 `cargo fmt -- --check` + `cargo clippy --all-targets -- -D warnings`（working-directory `apps/desktop/src-tauri`），并一次性 `cargo fmt` 修掉既有漂移（ipc.rs 两处）。反证：故意未格式化行 → fmt 步骤 exit 1；clippy 0 告警、lib 测试 18/18 通过；actionlint 绿。`just ci` 语义不变（主 workspace 不编译 Tauri 树）。
+- [x] CI-03 桌面壳 workspace 补 fmt/clippy 门禁 — **merged 2026-09-08 (815bf43)**: src-tauri 是独立 workspace（ADR-012），主 workspace 的 just ci 覆盖不到；ci-desktop.yml 在 `cargo test --lib` 前加 `cargo fmt -- --check` + `cargo clippy --all-targets -- -D warnings`（working-directory `apps/desktop/src-tauri`），并一次性 `cargo fmt` 修掉既有漂移（ipc.rs 两处）。反证：故意未格式化行 → fmt 步骤 exit 1；clippy 0 告警、lib 测试 18/18 通过；actionlint 绿。`just ci` 语义不变（主 workspace 不编译 Tauri 树）。
 - [x] DESK-05 桌面走查反馈三项 — **merged 2026-08-12**: ①向导第一步默认填充路径（`configuredLibraryDir || defaultDir`）+ 路径 ≠ 默认时旁挂「↺ 回到默认」；②活动记录改真表格（设备/事件/时间三列，ingest.* 逐文件行过滤，auditLine 拆 auditWho/auditText）；③照片墙 staleness 修复（activity.appended/device.changed 事件重置 photos 强制重拉——备份落地后照片库立刻出新照片）。vite build 绿。挂账（真机）：向导第一步默认填充观感、活动表格布局、备份后照片墙自动刷新。
-- [x] DESK-07 桌面壳 Tailwind + shadcn-svelte 迁移（**第一轮：地基 + 家人与设备页**）— **merged 2026-08-14 (5507cf9)**（用户拍板拆多轮）：tailwindcss@4 + @tailwindcss/vite + shadcn-svelte 1.5（Vega preset）；`src/app.css` 用 `@theme inline` 把 Tailwind 工具类全部桥接到 tokens.css 的 `var(--pp-*)`（零平行调色板）；「家人与设备」页换 Button/Card + 工具类，19 项像素基准 DOM 实测迁移前后全等 + 反证有效 + 其余四页像素级 identical（preflight 两个副作用已在 base 层还原）。**其余页面（总览/照片/活动记录/设置）未迁，排后续卡**。挂账（真机）：Tauri 实际窗口观感。
+- [x] DESK-07 桌面壳 Tailwind + shadcn-svelte 迁移（**第一轮：地基 + 家人与设备页**）— **merged 2026-08-14 (c10a40c)**（用户拍板拆多轮）：tailwindcss@4 + @tailwindcss/vite + shadcn-svelte 1.5（Vega preset）；`src/app.css` 用 `@theme inline` 把 Tailwind 工具类全部桥接到 tokens.css 的 `var(--pp-*)`（零平行调色板）；「家人与设备」页换 Button/Card + 工具类，19 项像素基准 DOM 实测迁移前后全等 + 反证有效 + 其余四页像素级 identical（preflight 两个副作用已在 base 层还原）。**其余页面（总览/照片/活动记录/设置）未迁，排后续卡**。挂账（真机）：Tauri 实际窗口观感。
 - [ ] NAME-01 设备改名（L0 排队尾，可砍）
 - [ ] 恢复向导（换机整库恢复）— 后置
 
@@ -1246,7 +1246,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 
 > Landing + blog 对外阵地，与 app 主线并行。内容 zh 先行，en 随开源节奏补。
 
-- [x] SITE-03 备份核心重建故事 — **published 2026-09-07 (`40917dc`)**：中文工程复盘《为什么我们把备份核心整个换掉了》，只据 ARCH-01 / REBUILD-00~06 公开档案解释旧批次模型为何不能表达单张照片的状态、新 Flow 如何以账本/原子发现/严格队头/完成凭据收敛语义；手写 sitemap 与 RSS 同步，Pages workflow `34102057353` 成功并线上核对三项 HTTP 200。
+- [x] SITE-03 备份核心重建故事 — **published 2026-09-07 (`07f7a97`)**：中文工程复盘《为什么我们把备份核心整个换掉了》，只据 ARCH-01 / REBUILD-00~06 公开档案解释旧批次模型为何不能表达单张照片的状态、新 Flow 如何以账本/原子发现/严格队头/完成凭据收敛语义；手写 sitemap 与 RSS 同步，Pages workflow `34102057353` 成功并线上核对三项 HTTP 200。
 
 - [x] SITE-01 站点脚手架（landing v1 + blog 骨架 + RSS + GH Pages 部署）— **code landed 2026-08-11**: Astro 5 纯静态，tokens.css 构建期从 tokens.json 生成（脚本断言一致），图标从 docs/design/2026-08-11-icon-v1/ 同步，零 tracker（CI 断言）。site.yml paths 过滤 `site/**` 与主 CI 隔离。挂账：Pages 部署三路由 200 + Lighthouse ≥90 + DNS CNAME 改指 hawkeye-xb.github.io（当前指向旧 p-pass-landing.pages.dev 占位）。
 - [ ] SITE-02 首批三篇博文（定位故事 / 图标九轮 / IPC-02 重构）— 草稿完成。**优先级 L3（2026-08-25 用户降级：「优先级没这么高，回头统一审稿」）**——不再列为上线阻塞，不主动催审；用户择期统一审完再去 draft 发布
@@ -1285,5 +1285,5 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
 - [ ] **NET-20 P1 Flow 单通道 offer 缺传输前哈希对齐** — **2026-09-16 已开卡，未开工**：`offer_inner` 从不查 `db.get_asset(&hash)`，内容已存在也整份重传字节，事后才靠 `Ingestor::ingest` 判重丢弃；对大文件（如 224MB 视频）直接影响传输体验与未来 relay 计费口径。修复形状已在卡内写清（`checked_request` 后、`spawn_fetch_task` 前插入一次内容库查询），但需要用户拍板"命中已存在内容时 `materialize`/`status` 该返回什么样的终态语义"才能开工。
 - [x] **NET-20 P1 Flow 单通道 offer 缺传输前哈希对齐** — **2026-09-16 完成**：用户拍板"顺手做了"，决定复用现有完成路径不新增协议字段。新增 `core_index::Ingestor::has_durable_copy`（与 `ingest_inner` 自己判断 Duplicate 的逻辑同构：索引有行且 `rel_path` 真实存在于磁盘），`offer_inner` 在 `rebind_completed_flow_grant`（tuple 级幂等）之后、`spawn_fetch_task` 之前插入短路——命中直接调用现有 `complete_flow_grant` + `emit_flow_delivered`，手机侧收到的 `status`/`fetch` 结果与真实传输完成一模一样，零协议改动。RED 先行 2 条集成测试（跳过网络抓取 / 未命中行为不变）+1 条反证（去掉短路后新用例断言从"立即 completed"变成"active"，证明测试真的钉住这条逻辑）。`cargo test -p daemon --test flow_delivery` **28/28**（26 原有+2 新）、`cargo test -p core-index` 全绿、`just ci` 全绿。**未做真机验证**（需要真实"桌面已有某照片、手机对同内容不同 queue_sequence 重新 offer"的场景，比如断连重试或跨设备互传同一批照片）。
 - [x] **DEVLOG-01 L3 开发期前台 daemon 日志不落盘** — **2026-09-17 完成**：状态对齐时发现账外工作——外部 worktree `devlog/persistent-local-logs`（落后 main 8 个提交、零独有提交）里 `crates/daemon/src/log_guard.rs` 有 184 行未提交改动，`cards/` 无对应卡。收口回 main 并补齐原改动缺的三处：接线（`for_file`/`persistent_log_path_from_env` 原本生产零调用，是死代码；`main.rs` 按 `PPF_LOG_FILE` 择一，打不开照 `parse_cli` 先例 `exit(2)` 不静默退回）、`cargo fmt`（原改动未过，会重演 8/7 fmt 红）、以及修掉一条**死循环测试**（`while *written < SINK_CAP_BYTES` 遇上"跨限前就 truncate+重置计数器"的实现 → 条件恒真，实测 60s 后 SIGKILL，证明该测试从未被作者跑过）。`cargo test -p daemon --lib log_guard::` 7 passed + 反证真跑变红后还原；端到端隔离 HOME 验三分支（设了/不设/打不开）全通，未碰生产库。取舍：either/or 非 tee，**生产不得设 `PPF_LOG_FILE`**（会让 DESK-10 导出包依赖的 plist `.err` 变空）；与 DESK-10 零交互已核实。卡归档于 `cards/done/`。
-- [x] **顺带修复：本地 `just ci` 的队列门禁哑火** — **2026-09-17 完成**（随 DEVLOG-01 同批）：`4a4181e`（09-16 QUEUE 重构为验收人仪表盘）把 `tools/check-queue-sync.sh` 与 `tools/test-queue-archive-gate.sh` 的执行位删掉（`:100755 → 100644`）。`justfile:59-60` 用 `./tools/...` 调用，于是本地 `just ci` 跑到 queue-check 直接 `Permission denied` / exit 126；而 `.github/workflows/ci-docs.yml:51,54` 用 `bash tools/...` 调用不需要执行位——**CI 绿、本地门禁哑火**，两边不一致所以一直没被发现。`git update-index --chmod=+x` 恢复两个文件后 `just ci` 复绿。
-- [x] **NET-24 L1 NET-20 去重命中时 flow.delivered 推送必然丢失** — **2026-09-17 完成并真机验收通过**（commit `f70cfae`）：验收人体感「第二次发同样的照片特别慢，但状态都是对的」。根因经源码核实为订阅晚于 offer——手机先 await `desktop.offer`、之后才异步 `subscribeTimeline`，而 daemon 在 offer 处理中同步走完 NET-20 去重并 `emit_flow_delivered`，事件总线是 `broadcast::Sender`（「无订阅者时 send 直接丢弃」），推送在订阅上线前被丢弃且永不补发；去重意味着数据面零字节、本地 iroh 永无事件、`idleForMs` 恒 null，只剩 30 秒挂钟兜底。范围更正：与断链重连无关，是 NET-20 把传输延迟降到零后**确定性必中**。修法（验收人否掉「调时序赢竞态」并拍板测试阶段不考虑旧手机兼容）：`flow.offer` 应答改返回 `FlowStatusReply`，即「offer 完立刻调 status 会得到什么就给什么」——对照 HTTP 202 的标准用法（200/201 vs 202 按每次请求决定）与 Docker Registry v2 blob mount（已有则 201 零字节、没有则 202）。零新类型、手机零新解析。真机计时：同批 11 张由改动前约 3 分钟降到 **3.30 秒**，三批共 26 张中 ≥5s 的项 0 个；库内只新增 2 条资产，证实 11 张走的是零字节去重短路。遗留拆 **NET-25**（真实传输路径的推送是否送达仍未正面验证，有本地事件兜底，非正确性问题）。
+- [x] **顺带修复：本地 `just ci` 的队列门禁哑火** — **2026-09-17 完成**（随 DEVLOG-01 同批）：`1968008`（09-16 QUEUE 重构为验收人仪表盘）把 `tools/check-queue-sync.sh` 与 `tools/test-queue-archive-gate.sh` 的执行位删掉（`:100755 → 100644`）。`justfile:59-60` 用 `./tools/...` 调用，于是本地 `just ci` 跑到 queue-check 直接 `Permission denied` / exit 126；而 `.github/workflows/ci-docs.yml:51,54` 用 `bash tools/...` 调用不需要执行位——**CI 绿、本地门禁哑火**，两边不一致所以一直没被发现。`git update-index --chmod=+x` 恢复两个文件后 `just ci` 复绿。
+- [x] **NET-24 L1 NET-20 去重命中时 flow.delivered 推送必然丢失** — **2026-09-17 完成并真机验收通过**（commit `496cf68`）：验收人体感「第二次发同样的照片特别慢，但状态都是对的」。根因经源码核实为订阅晚于 offer——手机先 await `desktop.offer`、之后才异步 `subscribeTimeline`，而 daemon 在 offer 处理中同步走完 NET-20 去重并 `emit_flow_delivered`，事件总线是 `broadcast::Sender`（「无订阅者时 send 直接丢弃」），推送在订阅上线前被丢弃且永不补发；去重意味着数据面零字节、本地 iroh 永无事件、`idleForMs` 恒 null，只剩 30 秒挂钟兜底。范围更正：与断链重连无关，是 NET-20 把传输延迟降到零后**确定性必中**。修法（验收人否掉「调时序赢竞态」并拍板测试阶段不考虑旧手机兼容）：`flow.offer` 应答改返回 `FlowStatusReply`，即「offer 完立刻调 status 会得到什么就给什么」——对照 HTTP 202 的标准用法（200/201 vs 202 按每次请求决定）与 Docker Registry v2 blob mount（已有则 201 零字节、没有则 202）。零新类型、手机零新解析。真机计时：同批 11 张由改动前约 3 分钟降到 **3.30 秒**，三批共 26 张中 ≥5s 的项 0 个；库内只新增 2 条资产，证实 11 张走的是零字节去重短路。遗留拆 **NET-25**（真实传输路径的推送是否送达仍未正面验证，有本地事件兜底，非正确性问题）。

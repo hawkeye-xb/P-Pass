@@ -53,7 +53,7 @@ android 全量单测绿；CI 待推 main 后盯 ci-android。
   复用 `PhotosScreen.thumbCache`，全量单测转绿——闭环调试过程本身即
   验证证据（复现→隔离→假设→测试→验证）。
 - debug 包已 `adb install -r` 装到用户日常用的真机。
-- CI：push `28c4576` → main，ci-android #5 绿（1m42s）。
+- CI：push `610cccf` → main，ci-android #5 绿（1m42s）。
 - 走查追加三点（Checkbox 移位/删全选清空/取消 1/4+备份 3/4）已改完，
   单测重跑绿（`StringsSymmetryTest` 确认删除的两个字符串键 en/zh 同步
   消失，没留孤儿），debug 包已重新装机。
