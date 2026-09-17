@@ -102,7 +102,6 @@
 | P2 | [NET-03](../cards/NET-03-idle-phone-floods-audit-with-connection-events.md) | 闲置审计刷屏：先取证定性真抖动 vs 误记 | L2 |
 | P2 | [MOB-73](../cards/MOB-73-local-source-first-viewing.md) | 本机有原图时读本地并验 hash，远端仅回退 | L2 |
 | P2 | [MOB-87](../cards/MOB-87-repairing-does-not-wake-flow-until-app-restart.md) | 🟥 挂号：会话内重新配对成功后不自动开传，杀 App 重开才动（MOB-72 同形状的第二例） | L2 |
-| P1 | [QA-02](../cards/QA-02-queue-archive-gate-section-7-mutation-broken.md) | 🟡 代码完成待你过目：变异 C 改删非末节分区（六、backlog）+ 生成器失败即红不再被「门禁报错也非零」的巧合语义吞掉；恒真短路反证 A/B 真红、C 走 1/4 仍红，恢复复绿 | L1 |
 | P3 | [QA-03](../cards/QA-03-archived-cards-relative-links-break-and-no-gate-catches-it.md) | 🟡 代码完成待你过目：卡内链接门禁上线（抓到 8 处断链，已全修）+ `just ci-docs` 快车道；union 合并两次证伪后撤掉 | L1 |
 | P1 | [QA-04](../cards/QA-04-no-written-rules-for-parallel-sessions-on-main.md) | 🟡 代码完成待你过目：AGENTS.md 落地一卡一分支+PR、红线5 口径统一、新增 PR 模板；CI 一字未动（push 本来就只盯 main）；三项仓库设置待你在网页定 | L1 |
 | P3 | [DEV-02](../cards/DEV-02-device-row-must-not-be-hard-deleted-on-merge.md) | 🟥 挂号：merge_device 物理删设备行，验收人要求只标记「已断开授权」（入口当前被 DEV-01b 藏起，潜伏） | L2 |

@@ -2,7 +2,7 @@
 
 状态：🟥 挂号
 级别：L1（本地脚本，无真机）
-关联：从 [DOC-02](DOC-02-progress-ledger-rows-too-fat.md) 分出（评估「>500 字符自动换行」脚本时做破坏性实测撞见）；与 [QA-02](QA-02-queue-archive-gate-section-7-mutation-broken.md) 同型（门禁空转）
+关联：从 [DOC-02](DOC-02-progress-ledger-rows-too-fat.md) 分出（评估「>500 字符自动换行」脚本时做破坏性实测撞见）；与 [QA-02](done/QA-02-queue-archive-gate-section-7-mutation-broken.md) 同型（门禁空转）
 
 ## 挂号段（发现时 30 秒填完；🟥 状态只许有这三行，不可被接）
 

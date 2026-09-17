@@ -1,6 +1,6 @@
 # QA-02 归档门禁变异 C 空转：QUEUE 分区七成为末节后反证从未真正执行　级别 L1
 
-状态：🟡 代码完成待你过目（2026-09-17，本 PR，分支 `test/qa02-queue-archive-gate-mutation-c`）
+状态：✅ 代码已合并（PR #75，squash `7ba705a9`），2026-09-17 归档
 级别：L1（本地脚本，无真机）
 关联：从 NET-16 分出（做卡时跑 `just ci` 撞见 traceback）
 
@@ -45,9 +45,10 @@ context: 根因如上。`check-queue-sync.sh` 的 `EXPECTED` 分区集合本身�
 - [x] `bash tools/test-queue-archive-gate.sh` 退出码 0 且 **stderr 无
       Traceback** [E1]（新增断言：`2>&1 | grep -q Traceback && exit 1`）。
       **实测**：退出码 0，`grep -c Traceback` = 0，3/3 反证全按期望变色。
-- [ ] `just ci` 全绿 [E1]。**沙箱无 Rust 工具链无法本机跑**——本分支推上
-      PR 后由 ci-rust/ci-docs lane 闭环（queue-check 属 ci-docs 域，受影响
-      lane 只有 ci-docs）。
+- [x] `just ci` 全绿 [E1]。**沙箱无 Rust 工具链无法本机跑**——改由 PR CI
+      闭环：PR #75 的 ci-docs lane（`queue-sync + 归档出口门禁`，含本卡修复
+      后的反证脚本与 SEC-02 反证）与 ci-identity lane 均 success（2026-09-17）。
+      本 PR 零 Rust/Android 改动，其余 lane 按 paths 过滤本就不触发。
 范围:只准动 `tools/test-queue-archive-gate.sh`。不准动
   `check-queue-sync.sh` 的判定语义与 `docs/QUEUE.md` 分区结构。
   **核实**：`git diff origin/main..HEAD` 只有 `tools/test-queue-archive-gate.sh`
