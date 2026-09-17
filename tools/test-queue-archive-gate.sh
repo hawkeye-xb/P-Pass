@@ -19,9 +19,9 @@ expect() { # expect <期望退出码 pass|fail> <说明> <副本路径>
   local want="$1" desc="$2" file="$3"
   if run_gate "$file"; then got=pass; else got=fail; fi
   if [ "$got" = "$want" ]; then
-    echo "   ✅ $desc → $got（符合期望）"
+    echo "   ✅ $desc → ${got}（符合期望）"
   else
-    echo "   ❌ $desc → $got，期望 $want"
+    echo "   ❌ $desc → ${got}，期望 $want"
     sed 's/^/        /' "$TMP/out"
     FAIL=1
   fi
