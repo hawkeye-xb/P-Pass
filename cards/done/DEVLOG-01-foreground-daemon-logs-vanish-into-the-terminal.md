@@ -1,6 +1,6 @@
 # DEVLOG-01 开发期前台起的 daemon 日志只在终端一闪而过，出问题时没有日志可查
 
-> ✅ 状态：代码已合并（见「实施记录」commit），2026-09-17 归档
+> ✅ 状态：代码已合并（commit `0943c95`），2026-09-17 归档
 > 级别：L3（开发期工具；`PPF_LOG_FILE` 不设时生产路径一行未变）· 阻塞：无
 
 ## 问题
@@ -110,3 +110,11 @@ daemon PID 86519 正常存活）：
   `a_single_occurrence_*`、`a_burst_prints_first_line_then_exactly_one_summary`）。
 - Windows 上 `truncate_stderr` 仍是 no-op（NET-02 的已知缺口，未动）；文件
   sink 走 `set_len(0)`，跨平台都真的生效。
+- ⚠️ **已知门禁缺口，不装作修好了**：`main.rs` 那段接线**没有自动化门禁**。
+  三分支（设了/不设/打不开）只有本次的手工端到端验证；若有人把 `main.rs`
+  改回 `DedupGuard::new()`，不会有任何测试变红——又变回死代码。本仓有现成
+  范式可补（MOB-68/MOB-76 的源码合同测试 + 反证硬编码复活），但那属于 L3
+  之外的范围扩张，本卡不做，在此挂账。
+- `PPF_LOG_FILE` 目前只记录在本卡与 `log_guard.rs` 顶部注释里。仓库没有
+  集中的环境变量文档处（`PPF_FFMPEG`、`PPF_BUILD_VERSION` 同样只散在代码
+  注释与历史账本中），所以没有"应该写而没写"的地方——不为这一条新造文件。
