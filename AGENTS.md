@@ -23,7 +23,7 @@
    （去掉故障条件必须变红）。"CI 绿"不等于验收。
 4. **凭据只在 GitHub Secrets。** 不进代码、卡、文档；本机路径/设备状态
    只写 `local-state.md`（不进 git）。
-5. **红测不进 main。** 必须在红测状态停下时，推 `wip/<卡号>` 分支并在卡面写明。
+5. **红测不进 main。** 一卡一分支本身就是隔离：红测状态停下时，把红留在自己分支上、别开 PR（或把 PR 标 draft），并在卡面写明停在哪、剩什么。
 
 ## 验收证据分级
 
@@ -52,7 +52,17 @@ agent 有挂号权和建议权，没有改道权——优先级由验收人裁�
 
 ## 交付
 
-- 可直推 main；push 后盯受影响域 CI 到结论，红了立刻修或 revert。
+- **一卡一分支，走 PR 合入，不直推 main。**
+  `git fetch origin && git switch -c <type>/<卡号>-<slug> origin/main`
+  （type ∈ feat/fix/docs/test/ci）。干完 `git push -u origin <分支>` 就**停下**，
+  把分支名、自验结果、和一条**预填好的开 PR 链接**一起汇报：
+  `https://github.com/hawkeye-xb/P-Pass/compare/main...<分支>?expand=1&title=<urlencode>&body=<urlencode>`
+  验收人点开即已填好标题与正文，开 PR 与合并由他完成。agent 不许直接改 main。
+- **分支上快验，PR 上全验。** 推分支**不触发任何 CI**（四条 lane 的 `push` 都
+  限定 `branches: [main]`），所以分支阶段自己跑最快的那档就行：纯文档
+  `just ci-docs`，动了代码 `just ci`。开 PR 才跑受影响域的 lane（`pull_request`
+  四条 lane 早已配好，paths 过滤照旧），合入 main 再跑一次 push lane。
+- PR 开出后盯受影响域 CI 到结论，红了立刻在同一分支上修，不留红 PR。
 - **本机 `gh` 不用于本仓**（未绑定本仓账号）：agent 不许调 `gh` 看 CI、建 PR、
   触发 workflow、发 Release——这些一律在 GitHub 网页上由验收人自己做，agent
   只负责把结论问清楚。git 只走个人 SSH remote。

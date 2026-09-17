@@ -1,6 +1,6 @@
 # QA-04 改走分支 + PR 协同流；当前是全员直推 main、规范里没有任何规则
 
-状态：⬜ 可接（验收人 2026-09-17 拍板方向：改用标准分支 + PR + review，不再全员直推 main）
+状态：🟡 代码完成，待验收人过目（本卡两处事实更正，见「更正记录」；本 PR 自己就是第一次走新流程）
 级别：L1（只改 `AGENTS.md`，但它是所有 agent 的唯一规范入口，措辞要准）
 关联: 从 [QA-03](QA-03-archived-cards-relative-links-break-and-no-gate-catches-it.md)
 「协同冲突」那一问延伸 · 今天的实例见 [NET-26](NET-26-net15-respawn-defeats-suspend.md)
@@ -114,3 +114,49 @@
   任何业务代码。
 - ⚠️ 分支保护与合并方式是 **GitHub 仓库设置**，在网页上改，不在仓里——
   接卡人只负责把决定写进文档，不要试图用代码实现它。
+
+
+## 更正记录（2026-09-17，验收人指出后当天更正）
+
+本卡上一版把两件事说重了，验收人两句话就点破了：
+
+**① 「agent 开不了 PR」不是硬约束。** 我写成"固定成本、不可优化"，还叮嘱接卡人
+别去绕——错了。GitHub 支持**预填链接**：
+
+    https://github.com/hawkeye-xb/P-Pass/compare/main...<分支>?expand=1&title=<urlencode>&body=<urlencode>
+
+agent 推完分支给出这条链接，验收人点开时标题与正文已经填好，只需按「Create」。
+`gh` 不可用完全不影响这套流程——它挡的只是"agent 自己合并"，而合并本来就该是人做。
+**教训：把一个自己没查过的限制写成"不可优化"，比漏掉它更糟**，它会让接卡人
+也不去找办法。
+
+**② CI 不需要任何改动，现状就已经是验收人要的形状。** 我以为要把 `push` 触发
+限定到 main，查完发现四条 lane 的 `push:` 里**本来就写着 `branches: [main]`**。
+所以：
+
+    推分支              → 零 CI（push 只盯 main）
+    开 PR               → 跑受影响域的 pull_request lane（paths 过滤照旧）
+    合入 main           → 再跑一次 push lane
+
+正是验收人说的"分支开发时快速验证，开 PR 时再跑 CI/CD"。**一行 yml 都不用动。**
+
+### 本次实际落地
+
+- `AGENTS.md` 交付段首条改成「一卡一分支、走 PR、不直推 main」，含分支命名、
+  停在 push 后、预填链接格式。
+- `AGENTS.md` 加「分支上快验，PR 上全验」，写明推分支零 CI 的事实依据。
+- `AGENTS.md` 红线 5 口径统一：`wip/<卡号>` 那套删掉——一卡一分支本身就是隔离，
+  红测就留在自己分支上别开 PR（或标 draft）。
+- 新增 `.github/PULL_REQUEST_TEMPLATE.md`：卡 / 改了什么 / 自验（含反证与 E 级）/
+  账本 / 留白挂号。
+- `.github/workflows/**` **一个字没动**（见更正②）。
+
+### 仍然只有验收人能定的三件（GitHub 仓库设置，不在仓里）
+
+1. 合并方式建议 **squash**——main 一卡一提交、线性，单文件二分才有用（NET-26 靠它定位）。
+2. 分支保护 **require branches to be up to date before merging** 建议开——
+   今天能发现并行会话把 `suspend_interrupts_...` 弄红，正是因为 rebase 到最新
+   main 后跑了 CI；纯分支模式下 PR CI 只测自己那份。开了它等于机器强制"合并前
+   与最新 main 一起绿一次"。
+3. 账本那一行的时机：分支不消除 `PROGRESS.md`/`QUEUE.md` 的冲突，只是推迟并集中。
+   合并时解（同今天）或留到临合并前再加，各有代价。
