@@ -1770,7 +1770,7 @@ async fn cancel_by_tuple_cancels_without_content_hash_or_provider() {
     let receiver_transport =
         IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
             .await
-        .unwrap();
+            .unwrap();
     let receiver_blobs = Arc::new(
         Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
             .await
