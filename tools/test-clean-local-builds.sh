@@ -34,6 +34,12 @@ git clone --template= "$remote" "$repo" >/dev/null
 # 「正在构建的 worktree 被删」当成正常。这是夹具的路径问题，不是被测脚本
 # 在真实仓库（/Users/... 无符号链接）里的行为。
 repo=$(cd "$repo" && pwd -P)
+# DEV-04: 被测脚本打印的是 `git worktree list` 的路径写法。在 Windows 上那是
+# `C:/Users/...`，而 mktemp / `pwd -P` 给的是 `/c/Users/...`（大小写还可能不同）。
+# 断言必须对着脚本**实际会输出**的写法比，否则会红在路径格式上——DEV-04 实测
+# 就是这样：测试确实变红了，但红的原因掩盖了真正的安全回归（正在构建的
+# worktree 被删）。文件系统层面的断言仍然用 $repo。
+repo_as_printed=$(cd "$repo" && git worktree list --porcelain | sed -n 's/^worktree //p' | head -1)
 git -C "$repo" config user.name 'P-Pass test'
 git -C "$repo" config user.email 'test@example.invalid'
 printf 'fixture\n' > "$repo/README.md"
@@ -75,13 +81,34 @@ preview=$(cd "$repo" && bash "$cleanup_script")
 
 # A process whose command line represents a build in this worktree blocks removal.
 mkdir -p "$repo/.worktrees/active/target"
-python3 -c 'import time; time.sleep(30)' "$repo/.worktrees/active" 'cargo build' &
+# DEV-04: 传给夹具进程的路径要用**脚本会看到的那种写法**。Windows 上 MSYS 的
+# /tmp 是个挂载点（`git worktree list` 给的是 C:/Users/.../Temp/...，而 mktemp
+# 给的是 /tmp/...），拿 /tmp/... 当参数的话占用检查永远匹配不上——测试就会把
+# 「正在构建的 worktree 被删」当成正常。这与上面 macOS 那条 /var 注释同源：
+# 夹具必须统一到脚本视角的路径写法。macOS/Linux 上两者相同，此改动是空操作。
+# DEV-04: 不能硬写 python3。Windows 上它常常是 Microsoft Store 的**应用执行
+# 别名**——`command -v` 找得到、退出码 0，但**什么都不做**（实测
+# `python3 --version` 无任何输出）。于是夹具进程根本没起来，占用检查「查不到
+# 活跃构建」反而是对的，而测试会把「正在构建的 worktree 被删」当成正常。
+# 与 QA-07 (#178) 在 justfile 里踩的是同一个坑，用同样的三级探测；这里的探测
+# 要求**真的有输出**，否则那个静默的 stub 会通过。
+sleeper=""
+for candidate in python3 python py; do
+  if [[ "$("$candidate" -c 'print(3)' 2>/dev/null)" == "3" ]]; then
+    sleeper="$candidate"
+    break
+  fi
+done
+[[ -n "$sleeper" ]] || fail 'no working Python 3 (tried python3 / python / py); cannot fabricate an active build'
+# 睡 300s 而不是 30s：夹具进程必须活过整个脚本运行。Windows 上 git 操作和
+# du 明显更慢，30s 曾经在断言通过之后、收尾 kill 之前就到期了。
+"$sleeper" -c 'import time; time.sleep(300)' "$repo_as_printed/.worktrees/active" 'cargo build' &
 active_pid=$!
 trap 'kill "$active_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
 sleep 1
 
 worktree_apply=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees)
-[[ "$worktree_apply" == *"REMOVED    $repo/.worktrees/merged"* ]] || fail "[[ \"$worktree_apply\" == *\"REMOVED    $repo/.worktrees/merged\"* ]]"
+[[ "$worktree_apply" == *"REMOVED    $repo_as_printed/.worktrees/merged"* ]] || fail "[[ \"\$worktree_apply\" == *\"REMOVED    $repo_as_printed/.worktrees/merged\"* ]]"
 [[ ! -d "$repo/.worktrees/merged" ]] || fail "[[ ! -d \"$repo/.worktrees/merged\" ]]"
 [[ -d "$repo/.worktrees/dirty" ]] || fail "[[ -d \"$repo/.worktrees/dirty\" ]]"
 [[ -f "$repo/.worktrees/dirty/DIRTY" ]] || fail "[[ -f \"$repo/.worktrees/dirty/DIRTY\" ]]"
@@ -89,10 +116,15 @@ worktree_apply=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees)
 [[ -f "$repo/.worktrees/pending/PENDING" ]] || fail "[[ -f \"$repo/.worktrees/pending/PENDING\" ]]"
 [[ -d "$repo/.worktrees/active" ]] || fail "[[ -d \"$repo/.worktrees/active\" ]]"
 [[ -d "$repo/.worktrees/active/target" ]] || fail "[[ -d \"$repo/.worktrees/active/target\" ]]"
-[[ "$worktree_apply" == *"SKIP       $repo/.worktrees/pending — HEAD is neither merged into origin/main nor tracking an upstream"* ]] || fail "[[ \"$worktree_apply\" == *\"SKIP       $repo/.worktrees/pending — HEAD is not merged into origin/main\"* ]]"
-[[ "$worktree_apply" == *"SKIP       $repo/.worktrees/active — active build:"* ]] || fail "[[ \"$worktree_apply\" == *\"SKIP       $repo/.worktrees/active — active build:\"* ]]"
+[[ "$worktree_apply" == *"SKIP       $repo_as_printed/.worktrees/pending — HEAD is neither merged into origin/main nor tracking an upstream"* ]] || fail "[[ \"\$worktree_apply\" == *\"SKIP       $repo_as_printed/.worktrees/pending — HEAD is neither merged ...\"* ]]"
+# DEV-04: 这条是本文件的安全核心——「正在构建的 worktree 不许被删」。
+# Windows 上它曾经真的被删掉（占用检查靠 `ps -axo`，msys 的 ps 不认）。
+[[ "$worktree_apply" == *"SKIP       $repo_as_printed/.worktrees/active — active build:"* ]] || fail "[[ \"\$worktree_apply\" == *\"SKIP       $repo_as_printed/.worktrees/active — active build:\"* ]]"
 
-kill "$active_pid"
+# 收尾的 kill 不得让测试失败：夹具进程可能已经自己退出（`set -e` 下
+# `kill` 对已退出的 pid 会报 "No such process" 并中断脚本——实测踩过）。
+# 真正的判据是上面那条 `active build:` 断言，它已经过了。
+kill "$active_pid" 2>/dev/null || true
 wait "$active_pid" 2>/dev/null || true
 trap 'rm -rf "$tmp"' EXIT
 
