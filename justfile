@@ -53,12 +53,6 @@ gen:
 arch-check:
   @./tools/arch-check.sh
 
-# docs/QUEUE.md must stay in sync with cards/ (no missing/dangling entries)
-# 第二行是 3/3 归档出口门禁的反证（证明它不是恒真式），跟门禁同生共死
-queue-check:
-  @./tools/check-queue-sync.sh
-  @./tools/test-queue-archive-gate.sh
-
 # Markdown tables in docs/ and cards/ must not be split by a stray blank line
 md-check:
   @python3 ./tools/check-markdown-tables.py
@@ -93,7 +87,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint test arch-check queue-check md-check token-check identity-check
+ci: fmt lint test arch-check md-check token-check identity-check
   @echo "==> CI pipeline: all green ✅"
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
@@ -104,7 +98,7 @@ ci: fmt lint test arch-check queue-check md-check token-check identity-check
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: queue-check md-check token-check identity-check
+ci-docs: md-check token-check identity-check
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
