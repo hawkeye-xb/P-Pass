@@ -195,14 +195,43 @@ jobs:
       #   port 1.23.1: dependencies = [libde265, ...]
       #                default-features = [hevc]
       #                hevc = "HEVC encoding via x265"（只管编码，GPL-2.0+）
-      # 本机实测（2026-09-18，x64-windows-static-md）：heif.lib /
-      # libde265.lib / x265-static.lib 三者都在，`cargo test -p media-codec
-      # --test thumbs` 的 heic_decodes_via_libheif 通过（真实像素 64x48，
-      # outcome=Generated 而非占位图）。
-      - name: Install libheif (vcpkg, static)
+      #
+      # BUILD-08：所以这里用 `[core]`（= 不带默认特性）把 `hevc` 摘掉。
+      # P-Pass 只解码 HEIC、从不编码 HEVC，带着 x265 是白付许可面
+      # （x265 是 GPL-2.0-or-later；与本仓 AGPL-3.0 可共存，不构成冲突，
+      # 但没必要为一个从不调用的编码器扩大 copyleft 依赖面）。
+      #
+      # ⚠️ 本地改这行之后要注意 vcpkg 的特性变更行为（2026-09-18 实测，
+      # `--dry-run`）：它**能**识别特性变了并计划重建，但**会拒绝执行**，
+      # 只打印计划 + 一条 "If you are sure you want to rebuild the above
+      # packages, run the command with the --recurse option" 就停下。
+      # 既不是静默什么都不做，也不是自动切换。所以本地要么加 `--recurse`，
+      # 要么先 `vcpkg remove libheif:x64-windows-static-md
+      # x265:x64-windows-static-md` 再装。CI 每次是干净机器，不受影响。
+      #
+      # ⚠️ 更容易咬人的是 **cargo 侧**：`libheif-sys` 的 build script 用
+      # `vcpkg::Config` 探测，探到的链接指令被缓存在
+      # `target/*/build/libheif-sys-*/output` 里。vcpkg 那边摘掉 hevc 之后，
+      # 这份缓存**仍然**写着 `cargo:rustc-link-lib=x265-static`，于是链接直接
+      # 炸：`LNK1181: 无法打开输入文件"x265-static.lib"`（本机实测）。
+      # 必须 `cargo clean -p libheif-sys` 让 build script 重跑；重跑之后那条
+      # 指令就消失了（证明它是从 vcpkg 元数据推出来的，不是硬写的）。
+      # **两个 profile 都要清**：`cargo clean -p libheif-sys` 只清 dev，
+      # release 侧那份 `output` 会原样留着继续注入 x265-static，得再来一次
+      # `cargo clean --release -p libheif-sys`（本机实测踩过：debug 测试已经
+      # 绿了，release 链接照样炸）。
+      # 同理：这期间跑出来的测试若没重新链接，绿的是**旧二进制**，别当证据。
+      #
+      # 本机实测（2026-09-18，x64-windows-static-md）：
+      #   摘掉 hevc 前：heif.lib / libde265.lib / x265-static.lib 三者都在
+      #   摘掉 hevc 后：x265-static.lib 消失，libde265.lib 仍在
+      #   两种状态下 `cargo test -p media-codec --test thumbs` 都全绿，
+      #   heic_decodes_via_libheif 都是真实像素 64x48、outcome=Generated
+      #   ——解码确实与 hevc 特性无关，这是实证不是推断。
+      - name: Install libheif (vcpkg, static, no HEVC encoder)
         shell: bash
         run: |
-          /c/vcpkg/vcpkg.exe install "libheif:x64-windows-static-md" --clean-after-build
+          /c/vcpkg/vcpkg.exe install "libheif[core]:x64-windows-static-md" --clean-after-build
 
       - name: Build release binaries
         shell: bash
