@@ -862,13 +862,18 @@ mod tests {
     #[test]
     fn shell_never_launches_a_console_subsystem_program() {
         let src = include_str!("lib.rs");
+        // QA-12 (#212)：只扫**产品代码**，在第一个 test 属性处截断。
+        // 这道门禁要防的是「用户看到黑窗一闪」，而测试脚手架里用 console
+        // 程序（比如建 junction 来验证软链提权契约）不面向用户、不在产品
+        // 路径上。原判据比它自己的意图粗，这里把它对齐意图。
+        let product = src.split("#[cfg(test)]").next().unwrap_or(src);
         // 判据字符串**必须在运行时拼**：直接写成字面量的话，这段源码自己就
         // 含有被禁的子串，扫描必然命中自己（第一版就是这么自己把自己判红的）。
         for prog in ["cmd", "cmd.exe", "powershell", "powershell.exe"] {
             let bad = format!("Command::new(\"{prog}\")");
             let bad = bad.as_str();
             assert!(
-                !src.contains(bad),
+                !product.contains(bad),
                 "{bad} 是 console 子系统程序，从 GUI 进程拉起它会闪黑窗（DESK-19 / #168）。
                  要打开系统页面/URL 请用 tauri_plugin_opener::open_url，它带 CREATE_NO_WINDOW。"
             );
@@ -1123,6 +1128,89 @@ mod tests {
 
         // 不存在的路径 → 拒绝。
         assert!(validate_asset_file(&tmp.path().join("missing.mp4")).is_err());
+    }
+
+    // ── QA-12 (#212): MOB-47 那条契约在 Windows 上的覆盖 ──────────
+    //
+    // 原来只有下面那条 `#[cfg(unix)]` 用例守着，于是这条安全契约在 Windows
+    // 上从没被验证过。Windows 有两种「指向目录的链接」，而且特权要求不同：
+    //
+    //   junction —— 不需要任何特权，任何用户都能建（实测确认）。所以这条
+    //               用例**无条件跑**。它在 unix 上没有对应物，因此这种形态
+    //               在本仓此前是全平台零覆盖。
+    //   目录符号链接 —— 需要管理员，或需要调用方传
+    //               SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE。Rust std 的
+    //               `symlink_dir` 没传那个 flag，所以开了开发者模式也建不出来
+    //               （本机实测：AllowDevelopmentWithoutDevLicense=1 仍报
+    //               "Administrator privilege required"）。所以那条用例在建链
+    //               失败时**跳过并打印原因**，绝不静默变绿。
+
+    /// junction 指向目录 —— 即使名字像个视频文件，也必须拒绝。
+    /// 提权点与 unix 软链那条完全相同：目录授权会让同层文件可读。
+    #[cfg(windows)]
+    #[test]
+    fn validate_asset_file_rejects_junction_to_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("realdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = tmp.path().join("tricky.mp4");
+
+        // std 没有 junction API，本工作区也没有 windows-sys。mklink 是 cmd
+        // 的内建命令，只能这么建。这是测试脚手架，不是产品路径——#168 的
+        // console 启动器门禁只扫产品代码，见那条测试里的说明。
+        let out = std::process::Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &link.to_string_lossy(),
+                &dir.to_string_lossy(),
+            ])
+            .output()
+            .expect("cmd 必须存在于 Windows");
+        assert!(
+            out.status.success() && link.exists(),
+            "建 junction 失败，这条用例失去意义: status={:?} stdout={} stderr={}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+
+        assert!(
+            validate_asset_file(&link).is_err(),
+            "junction 指向目录必须被拒绝——放行等于把整个目录授权出去（MOB-47 / #212）"
+        );
+    }
+
+    /// 目录符号链接指向目录 —— 与上面同一条契约的另一种形态。
+    /// 建链需要特权，建不出来就跳过并说明，不当成通过。
+    #[cfg(windows)]
+    #[test]
+    fn validate_asset_file_rejects_windows_symlink_to_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("realdir");
+        std::fs::create_dir_all(&dir).unwrap();
+        let link = tmp.path().join("tricky-sym.mp4");
+
+        match std::os::windows::fs::symlink_dir(&dir, &link) {
+            Ok(()) => {
+                assert!(
+                    validate_asset_file(&link).is_err(),
+                    "目录符号链接必须被拒绝（MOB-47 / #212）"
+                );
+            }
+            Err(e) => {
+                // 明确跳过并打印原因——绝不静默变绿。cargo test 默认吞 stdout，
+                // 用 --nocapture 能看到这行；CI 上（若将来有 Windows lane）
+                // 同样能看到。
+                eprintln!(
+                    "SKIP validate_asset_file_rejects_windows_symlink_to_directory: \
+                     建目录符号链接失败（需要管理员，或需要传 \
+                     SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE，std 不传）：{e}。\
+                     junction 那条用例覆盖了同一条契约的另一种形态，仍然有效。"
+                );
+            }
+        }
     }
 
     // MOB-47 安全契约：软链可指向目录——canonicalize 后必须仍判普通文件，
