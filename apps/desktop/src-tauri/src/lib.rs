@@ -166,9 +166,21 @@ fn open_power_settings() {
     }
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "ms-settings:powersleep"])
-            .spawn();
+        // DESK-19：原来走 `cmd /C start`，而 cmd.exe 是 console 子系统程序
+        // （本机实测 PE Subsystem = 3）。桌面壳自己是 GUI 子系统、手上没有
+        // 控制台，Windows 只能为 cmd 新分配一个 ⇒ 每次点都闪一下黑窗。与
+        // DEVLOG-02 (#163) 的登录弹窗同一根因族。
+        //
+        // 改走本应用已经注册的 opener 插件（`tauri_plugin_opener::init()`）。
+        // 它内部的候选命令**每一条都带 CREATE_NO_WINDOW**（open 5.4.0 的
+        // windows 后端：`powershell -NoProfile -NonInteractive -Command
+        // Start-Process` 优先、`explorer.exe` 兜底），构造上就不会分配控制台；
+        // 退回 `cmd` 的那条只在 `insecure` feature 下存在，我们没开。
+        //
+        // 不自己写 CREATE_NO_WINDOW/ShellExecuteW：那需要往
+        // crates/platform/src/windows.rs 加代码（B.2），而这里用现成插件
+        // 就够，且不引入新的平台分叉。
+        let _ = tauri_plugin_opener::open_url("ms-settings:powersleep", None::<&str>);
     }
 }
 
@@ -749,6 +761,35 @@ fn tray_left_click_opens_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DESK-19 回归锁：桌面壳不得再用 **console 子系统程序**去拉起系统 UI。
+    ///
+    /// `cmd.exe` 的 PE Subsystem 是 3（console，本机实测）。桌面壳自己是 GUI
+    /// 子系统、手上没有控制台，所以从它里面 spawn 一个 console 程序时 Windows
+    /// 会新分配一个控制台——那就是用户看到的黑窗一闪。同理 `powershell.exe`。
+    ///
+    /// 为什么是源码扫描而不是行为断言：闪窗只在真实的无控制台 GUI 进程里发生，
+    /// `cargo test` 自己就跑在有控制台的进程里，行为上复现不出来。而"别再写
+    /// console 启动器"这条约束可以在**任何平台**上锁住——包括 ci-desktop 的
+    /// Linux lane，那是本仓今天唯一会跑的 lane（见 #164）。
+    ///
+    /// 要拉起系统 UI 就走 `tauri_plugin_opener`：它的候选命令条条带
+    /// `CREATE_NO_WINDOW`，构造上不分配控制台。
+    #[test]
+    fn shell_never_launches_a_console_subsystem_program() {
+        let src = include_str!("lib.rs");
+        // 判据字符串**必须在运行时拼**：直接写成字面量的话，这段源码自己就
+        // 含有被禁的子串，扫描必然命中自己（第一版就是这么自己把自己判红的）。
+        for prog in ["cmd", "cmd.exe", "powershell", "powershell.exe"] {
+            let bad = format!("Command::new(\"{prog}\")");
+            let bad = bad.as_str();
+            assert!(
+                !src.contains(bad),
+                "{bad} 是 console 子系统程序，从 GUI 进程拉起它会闪黑窗（DESK-19 / #168）。
+                 要打开系统页面/URL 请用 tauri_plugin_opener::open_url，它带 CREATE_NO_WINDOW。"
+            );
+        }
+    }
 
     /// DESK-18 契约：左键抬起才开窗口，且 macOS 不开（那边左键出菜单）。
     /// 这四条在任何平台上都跑——托盘点击本身模拟不了，但判定可以。
