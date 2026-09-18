@@ -1,3 +1,6 @@
+> ❄️ **已冻结（2026-09-18）**：本模板已被 GitHub issue 模板
+> `.github/ISSUE_TEMPLATE/task-card.md` 取代，新开工作请用 issue。本文件只读留档。
+
 # 卡号 标题
 
 状态：🟥 挂号 / ⬜ 可接 / 🟡 代码已合并待验收 / ✅ 已归档（commit xxx）
