@@ -1,4 +1,4 @@
-# P-Pass justfile — single-person project task runner
+# P-Pass justfile — single-person project runner
 # Run `just` for a list of available commands.
 
 default:
@@ -6,7 +6,20 @@ default:
 
 # ── Setup ───────────────────────────────────────────
 
-# Install toolchain checks + git hooks
+# Install toolchain checks + git hooks.
+#
+# 工具链部分：rustup 钉的 toolchain（见 rust-toolchain.toml）+ cargo-nextest
+# / cargo-deny。git hooks 部分：用 pre-commit 把仓内 .pre-commit-config.yaml
+# 的门禁（当前是 gitleaks）装进 .git/hooks/pre-commit。
+#
+# QA-10：pre-commit 可执行文件不一定在 PATH 上（比如装在用户级 Python 的
+# Scripts 目录），PATH 上那个还可能是坏的（装了包但环境坏了）。所以按
+# pre-commit（要求存在且 --version 能跑通）→ python3 -m pre_commit →
+# python -m pre_commit 的顺序探测，三者皆不可用就报错退出——装不上不许
+# 静默跳过。
+# gitleaks 是 language: system 的本机可执行文件，必须在 PATH 上 hook 才跑
+# 得动；它缺了不挡 hook 安装，但会让每次提交都硬失败，所以装完 hook 后单独
+# loud-check 一次，缺了打 WARNING 并给出安装指引。
 setup:
   @echo "==> Checking Rust toolchain..."
   rustup show
@@ -16,6 +29,26 @@ setup:
   cargo install cargo-deny --locked 2>/dev/null || echo "  (already installed or skipped)"
   @echo "==> Installing just..."
   @echo "  (just is already running this file — you have it! 🎉)"
+  @echo "==> Installing git hooks (pre-commit)..."
+  @if command -v pre-commit >/dev/null 2>&1 && pre-commit --version >/dev/null 2>&1; then \
+    pre-commit install; \
+  elif python3 -m pre_commit --version >/dev/null 2>&1; then \
+    python3 -m pre_commit install; \
+  elif python -m pre_commit --version >/dev/null 2>&1; then \
+    python -m pre_commit install; \
+  else \
+    echo "ERROR: pre-commit not found — git hooks were NOT installed." >&2; \
+    echo "  Tried: pre-commit on PATH (exists AND --version works), python3 -m pre_commit, python -m pre_commit." >&2; \
+    echo "  Fix: pip install pre-commit   then re-run: just setup" >&2; \
+    exit 1; \
+  fi
+  @if command -v gitleaks >/dev/null 2>&1; then \
+    echo "  gitleaks found in PATH ($(command -v gitleaks))"; \
+  else \
+    echo "WARNING: gitleaks not found in PATH." >&2; \
+    echo "  The installed hook (gitleaks protect --staged) will FAIL on every commit." >&2; \
+    echo "  Install it: https://github.com/gitleaks/gitleaks#installing" >&2; \
+  fi
 
 # ── Format & Lint ───────────────────────────────────
 
@@ -169,15 +202,15 @@ android-test:
 
 # T-051 live check: Kotlin iroh-ffi client speaks hello to a real daemon
 android-hello:
-    tools/android-hello.sh
+  tools/android-hello.sh
 
 # T-052 live check: full pairing flow (Kotlin phone + IPC owner confirm)
 android-pair:
-    tools/android-pair.sh
+  tools/android-pair.sh
 
 # T-054 live check: full phone backup pipeline vs a real daemon
 android-backup:
-    tools/android-backup.sh
+  tools/android-backup.sh
 
 # M2 total acceptance: Rust suite + Android suite + APK build +
 # live wire scripts (hello/pair/backup) against a throwaway daemon
