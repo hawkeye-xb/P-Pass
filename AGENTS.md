@@ -55,7 +55,15 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
 
 ## 机器兜底（`just ci` 会挡，不用背）
 
-- iroh 只在 `crates/transport/`；平台 cfg 只在 `crates/platform/`。
+- iroh 只在 `crates/transport/`。
+- 平台分叉只许在 `crates/platform/`：自己写 `#[cfg(unix)]` / `#[cfg(windows)]`
+  这类按操作系统分叉的代码，出了 platform crate 门禁必挡——含 `cfg_attr`
+  与 `cfg!` 形态，含 unix/linux/macos/target_family/target_env 全轴；扫
+  `crates/` 与 `apps/`，不扫 `tools/`。判据（QA-09 #186）：框架抹平差异、
+  暴露统一 API 的不算分叉；我们自写「A 平台这样、B 平台那样」才算。两个
+  登记例外：`windows_subsystem` 链接器指令按**属性名**豁免；#211 挂号的
+  存量（迁移中，arch-check 脚本 carve-out 销号后即删）。桌面壳不整体豁免，
+  它的自写分叉同属 #211 迁移对象。
 - 工具链版本唯一真相：`rust-toolchain.toml`（Rust）、CI `java-version`（JDK）。
 
 ## 索引（需要时才打开）
