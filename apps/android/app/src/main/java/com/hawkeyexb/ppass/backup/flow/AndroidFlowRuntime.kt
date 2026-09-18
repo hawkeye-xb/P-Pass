@@ -218,9 +218,7 @@ internal fun requestFlowWake(
 
 /** Scope changes only record durable Flow work; the scheduled wake enforces runtime constraints. */
 internal fun requestFlowScopeBackfill(context: Context) {
-    runtimeFor(context.applicationContext)?.let {
-        synchronized(flowTriggerLock) { it.runner.requestScopeBackfill() }
-    }
+    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.ScopeBackfill)
 }
 
 /**
@@ -231,12 +229,7 @@ internal fun requestFlowScopeBackfill(context: Context) {
 internal fun requestFlowScopeBackfillAndWake(context: Context, constraintsSatisfied: Boolean) {
     val app = context.applicationContext
     thread(name = "ppass-flow-scope-wake") {
-        runtimeFor(app)?.let { runtime ->
-            synchronized(flowTriggerLock) {
-                runtime.runner.requestScopeBackfill()
-                runtime.runner.run(constraintsSatisfied)
-            }
-        }
+        runtimeFor(app)?.writer?.dispatch(FlowAction.ScopeBackfillAndWake(constraintsSatisfied))
         flushAuditOutbox(app)
     }
 }
@@ -245,17 +238,12 @@ internal fun runFlowWake(
     context: Context,
     constraintsSatisfied: Boolean = flowConstraintsSatisfied(context),
 ) {
-    runtimeFor(context.applicationContext)?.let { runtime ->
-        synchronized(flowTriggerLock) {
-            runtime.runner.requestDiscovery()
-            runtime.runner.run(constraintsSatisfied)
-        }
-    }
+    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.Wake(constraintsSatisfied))
     flushAuditOutbox(context)
 }
 
 internal fun pauseFlow(context: Context) {
-    runtimeFor(context.applicationContext)?.let { synchronized(flowTriggerLock) { it.runner.pause() } }
+    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.Pause)
     flushAuditOutbox(context)
 }
 
@@ -263,32 +251,42 @@ internal fun continueFlow(
     context: Context,
     constraintsSatisfied: Boolean = flowConstraintsSatisfied(context),
 ) {
-    runtimeFor(context.applicationContext)?.let {
-        synchronized(flowTriggerLock) { it.runner.continueFlow(constraintsSatisfied) }
-    }
+    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.Continue(constraintsSatisfied))
     flushAuditOutbox(context)
 }
 
 internal fun retryFailedFlow(context: Context) {
-    runtimeFor(context.applicationContext)?.let {
-        synchronized(flowTriggerLock) { it.runner.retryFailedDeliveries() }
-    }
+    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.RetryFailed)
     flushAuditOutbox(context)
 }
 
 internal fun cancelCurrentFlowRound(context: Context) {
-    runtimeFor(context.applicationContext)?.let {
-        synchronized(flowTriggerLock) { it.runner.cancelCurrentRound(UUID.randomUUID().toString()) }
-    }
+    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.CancelCurrentRound(UUID.randomUUID().toString()))
     flushAuditOutbox(context)
 }
 
 /** MOB-59: the notice's only action — re-admit every cancelled round's items as QUEUED. */
 internal fun restoreAllCancelledFlowRounds(context: Context) {
-    runtimeFor(context.applicationContext)?.let {
-        synchronized(flowTriggerLock) { it.runner.restoreAllCancelledRounds() }
-    }
+    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.RestoreAllCancelledRounds)
     flushAuditOutbox(context)
+}
+
+/**
+ * MOB-88: 账本提交的订阅总线，取代 UI 每 500ms 重读整份 JSON 的轮询。
+ *
+ * 为什么是进程级而不是挂在运行时上：运行时会随配对/代号变化重建，而 UI
+ * 的订阅只想订一次。运行时构造时把自己的提交回调接到这条总线上。
+ *
+ * 回调在**写者线程**上同步触发，所以实现方必须廉价、不得回头写账本
+ * （写了会被写入门禁当场拦住）。
+ */
+private val flowLedgerListeners =
+    java.util.concurrent.CopyOnWriteArrayList<(DiscoveryLedgerSnapshot) -> Unit>()
+
+/** 返回取消订阅的句柄。 */
+internal fun observeFlowLedger(listener: (DiscoveryLedgerSnapshot) -> Unit): () -> Unit {
+    flowLedgerListeners += listener
+    return { flowLedgerListeners -= listener }
 }
 
 internal fun flowLedgerSnapshot(context: Context): DiscoveryLedgerSnapshot {
@@ -310,7 +308,17 @@ internal fun flowLedgerSnapshot(context: Context): DiscoveryLedgerSnapshot {
  * cleanup can block. */
 internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
     synchronized(flowRuntimeLock) {
-        flowRuntimes.remove(daemonNodeId)?.nativeProvider?.close()
+        flowRuntimes.remove(daemonNodeId)?.let { stale ->
+            // MOB-88: 写者线程与副作用执行器要显式关掉。
+            //
+            // 实测（2026-09-18 真机重新配对）它们最终确实退出了——因为
+            // `Executors.newSingleThreadExecutor` 返回的是带 finalize 的包装
+            // 类，运行时对象被 GC 时顺带 shutdown。但那是靠终结器兜底的偶然
+            // 正确：GC 何时发生不可控，期间这条线程还活着、还持有旧账本的
+            // 引用。解除配对是一条明确的生命周期边界，就该在这里显式收。
+            stale.shutdown()
+            stale.nativeProvider.close()
+        }
     }
     File(context.filesDir, "flow-state/$daemonNodeId").deleteRecursively()
 }
@@ -322,7 +330,53 @@ private data class AndroidFlowRuntime(
     val nativeProvider: AndroidNativeIrohBlobsProvider,
     val auditDispatcher: AuditOutboxDispatcher,
     val auditScope: CoroutineScope,
-)
+    // MOB-88: 这个 epoch 下账本的唯一写入者。
+    val writer: FlowWriter,
+    // 起飞（整文件哈希 + 原生注册 + offer）在这上面跑，不占写者线程。
+    val effects: java.util.concurrent.ExecutorService,
+) {
+    fun shutdown() {
+        writer.shutdown()
+        effects.shutdownNow()
+    }
+}
+
+/**
+ * MOB-88 的 reducer：把一条已发生的事实变成新的账本状态。
+ *
+ * 只在写者线程上执行，所以这里面的每一步都不需要考虑并发——「读账本、
+ * 判断、写回」这种读-改-写在这条线程上天然原子，这正是改造要换掉那把
+ * 靠自觉去拿的锁所换来的东西。
+ */
+private fun AndroidFlowRuntime.reduce(context: Context, action: FlowAction) {
+    when (action) {
+        FlowAction.ReconcileProcessStart -> runner.reconcileProcessStart()
+        FlowAction.MigrateCompletedAt -> ledger.migrateMissingCompletedAt()
+        is FlowAction.EnsurePairingEpoch -> PairingEpochController(ledger).ensureCurrentEpoch(action.epoch)
+        is FlowAction.Wake -> {
+            runner.requestDiscovery()
+            runner.run(action.constraintsSatisfied)
+        }
+        FlowAction.ScopeBackfill -> runner.requestScopeBackfill()
+        is FlowAction.ScopeBackfillAndWake -> {
+            runner.requestScopeBackfill()
+            runner.run(action.constraintsSatisfied)
+        }
+        FlowAction.Pause -> runner.pause()
+        is FlowAction.Continue -> runner.continueFlow(action.constraintsSatisfied)
+        FlowAction.RetryFailed -> runner.retryFailedDeliveries()
+        is FlowAction.CancelCurrentRound -> runner.cancelCurrentRound(action.roundId)
+        FlowAction.RestoreAllCancelledRounds -> runner.restoreAllCancelledRounds()
+        FlowAction.SkipMissingSource -> runner.skipMissingSource()
+        FlowAction.RecordPermanentFailure -> runner.recordPermanentFailure()
+        is FlowAction.AcceptReceipt -> runner.acceptCompletionReceipt(action.receipt)
+        is FlowAction.RecordContentHash -> ledger.update { snapshot -> snapshot.withContentHash(action.item) }
+        is FlowAction.AcknowledgeAuditEvents -> ledger.acknowledgeAuditEvents(action.eventIds)
+    }
+    // NET-12 的后置钩子原本挂在每个入口后面的 flushAuditOutbox 上；状态
+    // 变更收口到这里之后，挂在这一处就没有任何调用点能忘。
+    FlowTransferForeground.sync(context, ledger.load())
+}
 
 /** AUDIT-01: best-effort drain of the ledger's durable audit outbox after
  *  every trigger. Every other Flow trigger already serializes state
@@ -353,114 +407,143 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
     synchronized(flowRuntimeLock) {
         flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let { return it }
     }
-    // Native open can take seconds on a newly paired device. It must never
-    // occupy flowRuntimeLock: UI snapshots acquire that lock every 500ms.
-    val ledger = DiscoveryLedgerStore(File(context.filesDir, "flow-state/$key"))
-    PairingEpochController(ledger).ensureCurrentEpoch(epoch)
+    // MOB-88: 构造段做 single-flight。改造前这里没有互斥——两个线程同时
+    // 为同一个 key 构造，会各建一套 FlowRunner、各跑一次
+    // reconcileProcessStart()，写的是**同一份磁盘账本**（本卡的原始范围）。
+    // 用独立的锁而不是 flowRuntimeLock：原生 open 要几秒，不能挡住读取
+    // 运行时引用的人（MOB-62 的结论，此处保留）。
+    synchronized(flowConstructionLock) {
+        synchronized(flowRuntimeLock) {
+            flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let { return it }
+        }
+        return buildRuntime(context, app, epoch, key)
+    }
+}
+
+private fun buildRuntime(
+    context: Context,
+    app: PPassApplication,
+    epoch: PairingEpoch,
+    key: String,
+): AndroidFlowRuntime? {
+    // 先起写者线程：账本的写入门禁要拿它的引用，而账本要先于 runner 构造。
+    val writer = FlowWriter.start("ppass-flow-writer")
+    val effects = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
+        thread(start = false, name = "ppass-flow-effects", block = { runnable.run() })
+    }
+    val ledger = DiscoveryLedgerStore(
+        repository = JsonFileFlowLedgerRepository(File(context.filesDir, "flow-state/$key")),
+        writeGuard = SingleThreadLedgerWrites(writer.thread),
+    )
     lateinit var runner: FlowRunner
     val native = AndroidNativeIrohBlobsProvider.open(context.filesDir)
-        val bridge = IrohBlobsProviderBridge(native) { source ->
-            try {
-                context.contentResolver.openFileDescriptor(Uri.parse(source), "r")
-                    ?: throw SourceMissingException()
-            } catch (failure: FileNotFoundException) {
-                throw SourceMissingException(failure)
-            }
+    val bridge = IrohBlobsProviderBridge(native) { source ->
+        try {
+            context.contentResolver.openFileDescriptor(Uri.parse(source), "r")
+                ?: throw SourceMissingException()
+        } catch (failure: FileNotFoundException) {
+            throw SourceMissingException(failure)
         }
-        val delivery = NativeFlowDeliveryPort(
-            ledger = ledger,
-            bridge = bridge,
-            resolver = context.contentResolver,
-            pairing = { PairingStore(context.filesDir).load() },
-            identityKey = { IdentityStore(context.filesDir).secretKey() },
-            client = app.daemonClient,
-            // MOB-56: every other Flow trigger (pause/continue/wake/cancel/
-            // retry) serializes through flowTriggerLock — these two native
-            // delivery callbacks were the only entry points that called
-            // straight into the runner. On an unstable connection, a failed
-            // fetch's wake() could race a concurrent trigger's wake(), both
-            // grabbing the strict head and starting two overlapping native
-            // deliveries for the SAME item — a StrictConsumer (ARCH-03)
-            // single-active-lease violation. Real device: two independent
-            // delivery failures logged 322ms apart from different threads
-            // (2026-09-07, Samsung SM-S9210, after MOB-54 made a failed
-            // fetch's retry synchronous with the next wake).
-            // A deleted MediaStore URI is a terminal local fact, unlike a network
-            // failure. It must skip exactly this head and advance, never reset a
-            // retry budget or surface "try again" for a photo that no longer exists.
-            onMissingSource = { synchronized(flowTriggerLock) { runner.skipMissingSource() }; flushAuditOutbox(context) },
-            onPermanentFailure = { synchronized(flowTriggerLock) { runner.recordPermanentFailure() }; flushAuditOutbox(context) },
-            onReceipt = { receipt -> synchronized(flowTriggerLock) { runner.acceptCompletionReceipt(receipt) }; flushAuditOutbox(context) },
-            onPairingEpochRefreshed = { refreshedEpoch ->
-                val pairings = PairingStore(context.filesDir)
-                val current = pairings.load()
-                if (current != null && current.pairingEpoch != refreshedEpoch.value) {
-                    pairings.save(current.copy(pairingEpoch = refreshedEpoch.value))
-                    PairingEpochController(ledger).ensureCurrentEpoch(refreshedEpoch)
-                    requestFlowWake(context.applicationContext)
-                }
-            },
-        )
-        val tupleCanceller = FlowTupleCancelPort { item ->
-            // NET-06: best-effort — the local cancellation state change
-            // already happened in the ledger before this fires (卡片原则1:
-            // 意图先行，不等回声). A failure here just leaves a stale
-            // "active" row in the daemon's ledger for that one tuple,
-            // which is a separate cleanup concern (see NET-06 card), not a
-            // reason to block or retry the phone's own state transition.
-            val currentPairing = PairingStore(context.filesDir).load()
-            if (currentPairing != null) {
-                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                    runCatching {
-                        app.daemonClient.bind(IdentityStore(context.filesDir).secretKey())
-                        app.daemonClient.flowCancelTuple(
-                            parsePeerAddrToken(currentPairing.daemonAddrToken),
-                            com.hawkeyexb.ppass.proto.FlowTupleRef(
-                                queueSequence = item.queueSequence,
-                                pairingEpoch = item.pairingEpoch.value,
-                                leaseToken = "lease-${item.queueSequence}",
-                            ),
-                        )
-                    }
+    }
+    val delivery = NativeFlowDeliveryPort(
+        ledger = ledger,
+        bridge = bridge,
+        resolver = context.contentResolver,
+        pairing = { PairingStore(context.filesDir).load() },
+        identityKey = { IdentityStore(context.filesDir).secretKey() },
+        client = app.daemonClient,
+        // MOB-88: 这三个原生回调曾经是唯一绕过 flowTriggerLock 的入口
+        // （#107：同一队头双发，2026-09-07 三星真机抓到两条 322ms 内不同
+        // 线程的独立传输失败）。现在它们和别的入口一样只是投一条事实给
+        // 写者——「记得加锁」这件事不存在了，因为没有锁。
+        onMissingSource = { writer.dispatch(FlowAction.SkipMissingSource); flushAuditOutbox(context) },
+        onPermanentFailure = { writer.dispatch(FlowAction.RecordPermanentFailure); flushAuditOutbox(context) },
+        onReceipt = { receipt -> writer.dispatch(FlowAction.AcceptReceipt(receipt)); flushAuditOutbox(context) },
+        onPairingEpochRefreshed = { refreshedEpoch ->
+            // 桌面端换了身份：旧账全部作废。改造前这个回调整体没有任何
+            // 同步，而它触发的是整份清空重置——四条锁外写入里写坏最狠的
+            // 一条。pairing.json 是另一份文件、与账本无共享状态，仍在原
+            // 线程上保存；账本的重置走 action。
+            val pairings = PairingStore(context.filesDir)
+            val current = pairings.load()
+            if (current != null && current.pairingEpoch != refreshedEpoch.value) {
+                pairings.save(current.copy(pairingEpoch = refreshedEpoch.value))
+                writer.dispatch(FlowAction.EnsurePairingEpoch(refreshedEpoch))
+                requestFlowWake(context.applicationContext)
+            }
+        },
+        recordContentHash = { hashed ->
+            // 起飞已经离开写者线程，这里必须投 action 回去，并等它落地：
+            // 注册凭据与 offer 都要求哈希已经持久化。
+            writer.dispatchAndAwait(FlowAction.RecordContentHash(hashed))
+        },
+    )
+    val tupleCanceller = FlowTupleCancelPort { item ->
+        // NET-06: best-effort — the local cancellation state change
+        // already happened in the ledger before this fires (卡片原则1:
+        // 意图先行，不等回声). A failure here just leaves a stale
+        // "active" row in the daemon's ledger for that one tuple,
+        // which is a separate cleanup concern (see NET-06 card), not a
+        // reason to block or retry the phone's own state transition.
+        val currentPairing = PairingStore(context.filesDir).load()
+        if (currentPairing != null) {
+            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                runCatching {
+                    app.daemonClient.bind(IdentityStore(context.filesDir).secretKey())
+                    app.daemonClient.flowCancelTuple(
+                        parsePeerAddrToken(currentPairing.daemonAddrToken),
+                        com.hawkeyexb.ppass.proto.FlowTupleRef(
+                            queueSequence = item.queueSequence,
+                            pairingEpoch = item.pairingEpoch.value,
+                            leaseToken = "lease-${item.queueSequence}",
+                        ),
+                    )
                 }
             }
         }
-        runner = FlowRunner(
-            ledger = ledger,
-            discovery = AndroidFlowDiscoveryPort(context.contentResolver) { BackupScopeStore(context).selectedBucketIds() },
-            delivery = delivery,
-            // MOB-67: re-connect the UX-02 failure notification that REBUILD-04
-            // deleted with the legacy worker. Reads NotifyOnFailurePrefs live,
-            // so the settings toggle takes effect from the next failure.
-            failureNotifier = SystemFailureNotifier(
-                context.applicationContext,
-                NotifyOnFailurePrefs(context.filesDir),
-            ),
-            // MOB-76: every event-driven wake (receipt/requeue/retry/
-            // cancel-restore) reads the live Wi-Fi gate through this port.
-            constraintsProvider = { flowConstraintsSatisfied(context) },
-            tupleCanceller = tupleCanceller,
-        )
-        // A lease left over from a previous process life (this process was
-        // just constructed for this epoch) cannot be trusted as a live
-        // transfer — see reconcileProcessStart's doc for why wake() alone
-        // can never recover from it.
-        runner.reconcileProcessStart()
-        val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-        val auditDispatcher = AuditOutboxDispatcher(
-            ledger = ledger,
-            pairing = { PairingStore(context.filesDir).load() },
-            identityKey = { IdentityStore(context.filesDir).secretKey() },
-            client = app.daemonClient,
-        )
-    val candidate = AndroidFlowRuntime(epoch, ledger, runner, native, auditDispatcher, auditScope)
+    }
+    runner = FlowRunner(
+        ledger = ledger,
+        discovery = AndroidFlowDiscoveryPort(context.contentResolver) { BackupScopeStore(context).selectedBucketIds() },
+        delivery = delivery,
+        // MOB-67: re-connect the UX-02 failure notification that REBUILD-04
+        // deleted with the legacy worker. Reads NotifyOnFailurePrefs live,
+        // so the settings toggle takes effect from the next failure.
+        failureNotifier = SystemFailureNotifier(
+            context.applicationContext,
+            NotifyOnFailurePrefs(context.filesDir),
+        ),
+        // MOB-76: every event-driven wake (receipt/requeue/retry/
+        // cancel-restore) reads the live Wi-Fi gate through this port.
+        constraintsProvider = { flowConstraintsSatisfied(context) },
+        tupleCanceller = tupleCanceller,
+        // MOB-88: 起飞里的整文件哈希（4GB 视频就是读完 4GB + BLAKE3）绝不
+        // 能占着状态决策线程——改造前它占的是那把全局锁，见 #134。
+        effects = FlowEffectSink { effect -> effects.execute(effect) },
+    )
+    val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val auditDispatcher = AuditOutboxDispatcher(
+        ledger = ledger,
+        pairing = { PairingStore(context.filesDir).load() },
+        identityKey = { IdentityStore(context.filesDir).secretKey() },
+        client = app.daemonClient,
+        // MOB-88: 审计确认后删事件——四条锁外写入里触发最频繁的一条。
+        acknowledgeEvents = { ids -> writer.dispatch(FlowAction.AcknowledgeAuditEvents(ids)) },
+    )
+    val candidate = AndroidFlowRuntime(epoch, ledger, runner, native, auditDispatcher, auditScope, writer, effects)
+    writer.bind { action -> candidate.reduce(context, action) }
+    ledger.onCommit { snapshot -> flowLedgerListeners.forEach { it(snapshot) } }
+    // 启动引导，全部走写者、按顺序落地后才对外发布这套运行时：
+    //   ① 代号校正（旧代号的账要整份作废）
+    //   ② MOB-53 的 completedAt 一次性迁移（改造前藏在 load() 里）
+    //   ③ 上一条进程life遗留的租约降级回 QUEUED
+    writer.dispatchAndAwait(FlowAction.EnsurePairingEpoch(epoch))
+    writer.dispatchAndAwait(FlowAction.MigrateCompletedAt)
+    writer.dispatchAndAwait(FlowAction.ReconcileProcessStart)
     return synchronized(flowRuntimeLock) {
-        flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let {
-            native.close()
-            return@synchronized it
-        }
         val current = PairingStore(context.filesDir).load()
         if (current?.daemonNodeId != key || current.pairingEpoch != epoch.value) {
+            candidate.shutdown()
             native.close()
             null
         } else {
@@ -470,6 +553,9 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
     }
 }
 
-private val flowTriggerLock = Any()
 private val flowRuntimeLock = Any()
+
+// MOB-88: 构造段的 single-flight 锁，与 flowRuntimeLock 分开——原生 open
+// 要几秒，不能挡住只是取一下运行时引用的调用方。
+private val flowConstructionLock = Any()
 private val flowRuntimes = mutableMapOf<String, AndroidFlowRuntime>()

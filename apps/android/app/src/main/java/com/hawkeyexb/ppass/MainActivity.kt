@@ -528,6 +528,12 @@ fun PPassApp() {
 
         is Screen.Home -> {
             val holder = remember { BackupUiStateHolder(context, client, identity, s.pairing) }
+            // MOB-88: holder 改成订阅之后，它的监听器挂在进程级的账本总线上，
+            // 不解订阅就会随每次重进首页累积。轮询时代没有这个问题（协程随
+            // scope 死掉），所以这个 DisposableEffect 是新增的必需品。
+            DisposableEffect(holder) {
+                onDispose { holder.dispose() }
+            }
             // UX-03: 极简设置状态（仅充电/仅 WiFi）——改开关即落盘 +
             // 按新约束重建周期任务。MOB-02 起语义为「需要充电/需要 Wi-Fi」
             // 两档运行条件（默认都开），设置页有后果描述 + 合成句。

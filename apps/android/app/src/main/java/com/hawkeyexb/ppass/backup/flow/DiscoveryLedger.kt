@@ -6,7 +6,6 @@ package com.hawkeyexb.ppass.backup.flow
 import java.io.File
 import java.util.UUID
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 
 @Serializable
 data class DiscoveryCursor(
@@ -56,6 +55,21 @@ object AuditKinds {
      *  no audit trail at all — [StrictConsumer.skipMissingSource] now
      *  emits this in the same atomic snapshot as the state transition. */
     const val ITEM_SOURCE_MISSING = "flow.item.source_missing"
+
+    /**
+     * MOB-88: 一条异步送来的事实，其依据在落地时已经不成立，被 reducer 拒绝。
+     *
+     * 为什么要留这条：回执/失败/哈希回填这些事实来自原生传输线程，到达时
+     * 世界可能已经变了（用户暂停了、该轮被取消了、桌面端换了配对代号、
+     * 账本被重置了）。改造前这些情况一律静默 `return`——系统不出声，于是
+     * #107 的真机验收根本问不出结果（撤掉锁的对照组和修复版日志一模一样）。
+     * 留痕是把「静默竞态」变成「可发现问题」的唯一手段。
+     *
+     * payload：`action`（哪条事实）、`reason`（哪个前提不成立）、可选
+     * `queueSequence`。桌面端 `audit_route` 对未知 kind 走
+     * `route_unknown_as_operation`，所以新增这个类型不需要动协议或桌面端。
+     */
+    const val ACTION_REJECTED = "flow.action.rejected"
 }
 
 @Serializable
@@ -86,6 +100,45 @@ internal fun DiscoveryLedgerSnapshot.appendAudit(
         payload = payload,
     ),
 )
+
+/**
+ * MOB-88: 记一条「这条事实的依据已经不成立，被拒绝了」。
+ *
+ * 与 [appendAudit] 同样在 reducer 的那次原子写里提交——拒绝本身就是一个
+ * 事实，不是一次无事发生。
+ */
+internal fun DiscoveryLedgerSnapshot.rejected(
+    action: String,
+    reason: String,
+    queueSequence: Long? = null,
+): DiscoveryLedgerSnapshot = appendAudit(
+    AuditKinds.ACTION_REJECTED,
+    roundId = currentRoundId,
+    payload = buildMap {
+        put("action", action)
+        put("reason", reason)
+        queueSequence?.let { put("queueSequence", it.toString()) }
+    },
+)
+
+/**
+ * MOB-88: 哈希回填的状态迁移，抽成纯函数以便直接测。
+ *
+ * 哈希是在写者线程之外算的（4GB 视频要把 4GB 读完），算完回来时这一条
+ * 可能已经不是租约持有者了——暂停、取消、代号更换都会收走租约。这时候把
+ * 整条 item 副本写回去，就会把它们刚做的状态迁移按回旧值：`StrictConsumer`
+ * 里 2026-09-16 那条真机注释记的就是这类覆盖（TRANSFERRING 被写回 QUEUED）。
+ */
+internal fun DiscoveryLedgerSnapshot.withContentHash(item: TransferItem): DiscoveryLedgerSnapshot {
+    val lease = fetchLease
+    if (lease == null || lease.queueSequence != item.queueSequence) {
+        return rejected("content_hash", "no_longer_the_leased_head", item.queueSequence)
+    }
+    if (items.none { it.queueSequence == item.queueSequence }) {
+        return rejected("content_hash", "item_no_longer_in_ledger", item.queueSequence)
+    }
+    return copy(items = items.map { if (it.queueSequence == item.queueSequence) item else it })
+}
 
 @Serializable
 data class UploadCursor(val currentQueueSequence: Long? = null) {
@@ -240,32 +293,44 @@ private val TERMINAL_DELIVERY_STATES = setOf(
  * successful replacement makes both the newly admitted items and cursor visible
  * together after restart.
  */
-class DiscoveryLedgerStore(private val dir: File) {
-    private val file = File(dir, "discovery-ledger.json")
-    private val json = Json {
-        encodeDefaults = true
-        ignoreUnknownKeys = true
-    }
+class DiscoveryLedgerStore(
+    private val repository: FlowLedgerRepository,
+    private val writeGuard: LedgerWriteGuard = UncheckedLedgerWrites,
+) {
+    /** 兼容既有构造方式（测试与尚未接线的调用点）：默认用 JSON 文件实现。 */
+    constructor(dir: File) : this(JsonFileFlowLedgerRepository(dir))
+
+    // MOB-88: 内存里的这一份就是权威状态。单写者模型下不存在「文件里有一份
+    // 更新的」这种事，所以读路径不再碰磁盘——顺带干掉了 UI 每 500ms 重读
+    // 整份 JSON 的开销，以及「读操作里藏着写」那条锁外写入路径。
+    @Volatile
+    private var cached: DiscoveryLedgerSnapshot? = null
+
+    private val listeners = java.util.concurrent.CopyOnWriteArrayList<(DiscoveryLedgerSnapshot) -> Unit>()
 
     fun load(): DiscoveryLedgerSnapshot =
-        if (!file.isFile) {
-            DiscoveryLedgerSnapshot()
-        } else {
-            try {
-                backfillMissingCompletedAt(json.decodeFromString(DiscoveryLedgerSnapshot.serializer(), file.readText()))
-            } catch (_: Exception) {
-                DiscoveryLedgerSnapshot()
-            }
+        cached ?: synchronized(this) {
+            cached ?: (repository.read() ?: DiscoveryLedgerSnapshot()).also { cached = it }
         }
 
-    // MOB-53: items that reached CONFIRMED before UI-09 added `completedAt`
-    // are terminal — no receipt will ever replay for them again — so a 0
-    // default is not "not yet completed", it is "we never recorded when".
-    // Stamp them once with the load-time clock (the only honest value left;
-    // there is no earlier recoverable fact) and persist so the backfill runs
-    // exactly once per item, matching CompletionAndScope's own "stamp once,
-    // never overwrite" rule for completedAt.
-    private fun backfillMissingCompletedAt(snapshot: DiscoveryLedgerSnapshot): DiscoveryLedgerSnapshot {
+    /**
+     * 每次提交后回调，用于 UI 订阅——取代改造前的轮询。回调在写者线程上
+     * 同步触发，实现方必须自己切线程，且不得回头写账本。
+     */
+    fun onCommit(listener: (DiscoveryLedgerSnapshot) -> Unit) {
+        listeners += listener
+    }
+
+    /**
+     * MOB-53 的一次性迁移：UI-09 加 `completedAt` 之前就 CONFIRMED 的条目
+     * 没有完成时间（0 不是「还没完成」，是「我们没记下来」），用当下时钟
+     * 盖一次并持久化。
+     *
+     * MOB-88：改造前这段藏在 `load()` 里，于是**读操作变成了写操作**——UI
+     * 每 500ms 轮询都可能触发一次锁外落盘。现在它是启动时跑一次的显式动作。
+     */
+    fun migrateMissingCompletedAt() {
+        val snapshot = load()
         var changed = false
         val backfilled = snapshot.items.map { item ->
             if (item.deliveryState == DeliveryState.CONFIRMED && item.completedAt <= 0L) {
@@ -275,10 +340,8 @@ class DiscoveryLedgerStore(private val dir: File) {
                 item
             }
         }
-        if (!changed) return snapshot
-        val migrated = snapshot.copy(items = backfilled)
-        persist(migrated)
-        return migrated
+        if (!changed) return
+        persist(snapshot.copy(items = backfilled))
     }
 
     fun startCancellationRound(id: String) {
@@ -441,11 +504,13 @@ class DiscoveryLedgerStore(private val dir: File) {
     }
 
     private fun persist(snapshot: DiscoveryLedgerSnapshot) {
+        // MOB-88: 门禁在最内层——不管调用方是谁、走了几层，只要不在写者
+        // 线程上就当场抛，而不是静默覆盖别人刚写进去的字段。
+        writeGuard.assertAllowed()
         val finalized = finalizeRoundIfComplete(snapshot)
-        dir.mkdirs()
-        val temporary = File(dir, "${file.name}.tmp")
-        temporary.writeText(json.encodeToString(DiscoveryLedgerSnapshot.serializer(), finalized))
-        check(temporary.renameTo(file)) { "cannot atomically persist discovery ledger" }
+        repository.write(finalized)
+        cached = finalized
+        listeners.forEach { it(finalized) }
     }
 
     private companion object {
