@@ -64,12 +64,58 @@ mapfile_worktrees() {
   done
 }
 
+# DEV-04: 把路径归一成可比较的形式。同一个目录在这三处的写法各不相同：
+#   pwd -P               -> /c/Users/.../p-pass     (MSYS 风格)
+#   git worktree list    -> C:/Users/.../P-Pass     (Windows + 正斜杠)
+#   进程命令行（CIM）    -> C:\Users\...\P-Pass      (Windows + 反斜杠)
+# 归一 = 反斜杠转正斜杠 + 全小写 + 把 /c/ 前缀折成 c:/。
+#
+# 小写化在大小写敏感的文件系统上会放宽匹配，但这里只服务**占用检查**——
+# 放宽只会让判定更保守（更容易判成「有构建在跑」而拒绝删除），方向是安全的。
+normalize_for_match() {
+  printf '%s' "$1" | tr '\134' '/' | tr 'A-Z' 'a-z' | sed -E 's#^/([a-z])/#\1:/#'
+}
+
+# DEV-04: 列出所有进程的「pid + 完整命令行」；拿不到就返回非 0，调用方必须
+# 按 fail-closed 处理。
+#
+# msys 的 ps 不认 `-axo`（实测退出码 1、报 `ps: unknown option -- x`），而且
+# 它的 `ps -W` 的 COMMAND 列**只有映像名、没有完整命令行**，所以换参数是修不好
+# 的——判据要拿 worktree 路径去命令行里匹配。Windows 上改走 CIM 查询。
+list_process_command_lines() {
+  if ps -axo pid=,command= 2>/dev/null; then
+    return 0
+  fi
+  if command -v powershell.exe >/dev/null 2>&1; then
+    if powershell.exe -NoProfile -NonInteractive -Command \
+      'Get-CimInstance Win32_Process | ForEach-Object { "{0} {1}" -f $_.ProcessId, $_.CommandLine }' \
+      2>/dev/null; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# 返回值：0 = 有活跃构建（命令行打到 stdout）；1 = 没有；2 = **判不了**。
+# 2 和 1 必须分开——「查不出来」不等于「没人占用」，这是 DEV-04 的核心教训。
 has_active_build() {
   local worktree="$1"
-  ps -axo pid=,command= | while IFS= read -r process; do
-    case "$process" in
-      *"$worktree"*)
-        case "$process" in
+  local normalized_worktree normalized_process processes
+  normalized_worktree=$(normalize_for_match "$worktree")
+
+  if ! processes=$(list_process_command_lines); then
+    return 2
+  fi
+
+  # 这里刻意不用管道：管道会把循环放进子 shell，`return` 就只退出子 shell，
+  # 三态里的 0/1 分不出来（原实现靠 stdout 有无内容间接判断，加了「判不了」
+  # 这一态之后那样不够用了）。
+  while IFS= read -r process; do
+    [[ -n "$process" ]] || continue
+    normalized_process=$(normalize_for_match "$process")
+    case "$normalized_process" in
+      *"$normalized_worktree"*)
+        case "$normalized_process" in
           *cargo*|*rustc*|*gradle*|*'tauri '*|*'vite '*|*'pnpm '*|*'npm '*)
             printf '%s\n' "$process"
             return 0
@@ -77,7 +123,9 @@ has_active_build() {
         esac
         ;;
     esac
-  done
+  done <<< "$processes"
+
+  return 1
 }
 
 worktree_size() {
@@ -92,7 +140,14 @@ worktree_is_removable() {
   local worktree="$1"
   local active
 
-  if [[ "$worktree" == "$current_worktree" ]]; then
+  # DEV-04: 不能用裸字符串相等。同一个目录在 `pwd -P` 和 `git worktree list`
+  # 里的写法不同（Windows 上还差大小写：/c/...p-pass vs C:/...P-Pass），于是
+  # 这道守卫在 Windows 上永不命中，当前工作树会被列成删除候选。
+  # `-ef` 比的是 device+inode，即「是不是同一个文件」——顺带也解决了 macOS
+  # 上 /var 与 /private/var 这类符号链接导致的写法差异。
+  # `-ef` 要求两边都存在，所以前面加 -d 守一下，并保留字符串相等作为兜底。
+  if [[ -d "$worktree" && "$worktree" -ef "$current_worktree" ]] ||
+    [[ "$worktree" == "$current_worktree" ]]; then
     printf 'current worktree'
     return 1
   fi
@@ -130,7 +185,15 @@ worktree_is_removable() {
       return 1
     fi
   fi
-  active=$(has_active_build "$worktree" || true)
+  # DEV-04: 三态。`|| probe_status=$?` 是必需的——`set -e` 下命令替换失败
+  # 会直接中断脚本。
+  local probe_status=0
+  active=$(has_active_build "$worktree") || probe_status=$?
+  if [[ $probe_status -ge 2 ]]; then
+    # fail-closed：查不出来不等于没人占用。
+    printf 'cannot tell whether a build is running here (no usable process listing); refusing to remove'
+    return 1
+  fi
   if [[ -n "$active" ]]; then
     printf 'active build: %s' "$active"
     return 1
