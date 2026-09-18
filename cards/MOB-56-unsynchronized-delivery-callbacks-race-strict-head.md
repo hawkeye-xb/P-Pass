@@ -43,6 +43,9 @@ Flow 状态变化的每一个入口（不论是用户触发的还是原生传输
       `persist()` 写冲突异常），跨多轮尝试稳定复现。
 - [x] GREEN：`onPermanentFailure`、`onReceipt` 两个回调套入
       `synchronized(flowTriggerLock)`，与其余入口一致。
+- [x] 门禁：源码扫描测试锁死「`AndroidFlowRuntime.kt` 每个 `runner.*`
+      状态变更调用都在 `synchronized(flowTriggerLock)` 词法范围内」，
+      撤掉任一处锁必红。
 - [x] Android JVM 全量绿（报测试计数）+ `just ci`。
 - [ ] 真机：网络不稳定环境下（人为制造 daemon 无响应）不再出现两条
       并发的传输失败/成功日志。
@@ -87,8 +90,37 @@ Flow 状态变化的每一个入口（不论是用户触发的还是原生传输
   该风险的存在与修复；真机验证降级为「不稳定网络下观察不再有并发传输
   日志」的可选确认项。
 
+- 2026-09-18 回归复核（基线 `e1bd1da9`）：
+  - 静态穷举——文件内 10 处 `runner.*` 状态变更调用全部在
+    `synchronized(flowTriggerLock)` 内；`flowTriggerLock` 是本文件
+    private 顶层 val，全仓无其他引用，无外部持有 `runner` 的代码；
+    `FlowRunner`/`StrictConsumer` 内部零异步派发（无 `thread(`/`launch`/
+    `Handler`/`post`/`Dispatchers`），所以在回调点加锁是有效的——否则锁
+    会在派发时就释放。
+  - **发现 GREEN 行此前只有源码 review、没有自动化门禁**：把 392/393
+    两行的 `synchronized` 摘掉，Android JVM 全量 406 tests / 0 failures
+    照样全绿。卡里的 RED 用例直接驱动 `StrictConsumer.wake()`、不经过
+    `AndroidFlowRuntime`，证明的是「没锁会炸」而不是「回调有锁」。
+  - 补 `MOB56CallbackLockGuardTest`（同 `MOB62RuntimeInitializationTest`
+    的源码扫描做法）：按花括号深度判定词法范围，注释/字符串先整段置空
+    以免干扰配平；另有反空转断言（调用点少于 10 处即红，防重命名后
+    在空集上无条件通过）。
+  - 双向突变验证：①撤掉 392/393 的锁 → 红，报 `392: recordPermanentFailure`
+    `393: acceptCompletionReceipt`；②把扫描正则改成扫不到的名字 → 红，
+    报 `found 0 — the guard is vacuous`。还原后 Android JVM 全量
+    **407 tests / 0 failures / 4 skipped** + `:app:lintDebug` 绿。
+  - 真机那条仍未勾：它是「不稳定网络下观察不到并发日志」的否定性观察，
+    而本卡的竞态按卡面自述极难稳定复现——跑一轮没看到与运气好不可区分，
+    不作为验收证据。
+
 ## 备注
 
+- 2026-09-18 新发现的**同类但独立**缺口（不在本卡范围，需另开卡评估）：
+  `runtimeFor` 的构造段本身没有互斥——两个线程同时为同一 key 构造，会
+  各自建一个 `FlowRunner` 并各跑一次 `runner.reconcileProcessStart()`，
+  写的是同一份磁盘账本。门禁把这一处列为唯一白名单例外（构造期 runner
+  还没写进 `flowRuntimes`，单个构造流内无并发触发），例外理由与这条
+  留白都写在测试的 `PRE_PUBLICATION` 注释里。
 - 本卡与 MOB-54 共享同一触发根源：MOB-54 补的失败路径 `wake()` 调用
   放大了本卡的竞态触发概率，但本卡描述的架构缺口本身独立于 MOB-54
   存在（`acceptCompletionReceipt` 的 `wake()` 调用是 REBUILD-02/03
