@@ -34,6 +34,40 @@ fn ipc_timeout_msg(method: &str, timeout: Duration) -> String {
     format!("ipc timeout: {method} > {}s", timeout.as_secs())
 }
 
+/// NET-27：一次完整往返（连接 → 发送 → 读一行），设计上跑在工作线程里。
+///
+/// socket 级读超时仍然**尽力设置**，但失败不再致命：它只是让本线程在撞线后
+/// 能自我了结（unix 可用），真正的保险丝是调用方的通道超时。
+///
+/// 撞线后本线程被弃置——连接归它所有，线程结束即 drop。若对端真僵住且平台
+/// 不支持 socket 超时（Windows 命名管道），该线程会一直阻塞在 read 上直到
+/// 进程退出：**已知代价**，换来「保险丝一定生效」。每调用一个短命线程，与
+/// 本模块既有的「每调一新连接」同阶。
+fn one_round_trip(
+    socket_name: String,
+    payload: String,
+    method: String,
+    read_timeout: Duration,
+) -> Result<String, String> {
+    let name = socket_name
+        .to_ns_name::<GenericNamespaced>()
+        .map_err(|e| format!("socket 名不合法: {e}"))?;
+    let conn = Stream::connect(name).map_err(|e| format!("连接后台服务失败: {e}"))?;
+    let _ = conn.set_recv_timeout(Some(read_timeout));
+    let mut reader = BufReader::new(conn);
+    reader
+        .get_mut()
+        .write_all(payload.as_bytes())
+        .map_err(|e| format!("发送失败: {e}"))?;
+    let mut line = String::new();
+    match reader.read_line(&mut line) {
+        // socket 超时先于通道触发时（unix 上会），也要报成同一句：死因
+        // 必须带方法名（NET-11 判据）。
+        Err(e) if is_timeout_err(&e) => Err(ipc_timeout_msg(&method, read_timeout)),
+        Ok(_) => Ok(line),
+        Err(e) => Err(format!("读取响应失败: {e}")),
+    }
+}
 /// Read the `data_dir` value out of a config.toml, if any. Shared by the
 /// desktop IPC token discovery and the wizard prefill (one config parser).
 pub fn read_config_data_dir(dir: &Path) -> Option<String> {
@@ -137,33 +171,44 @@ impl DaemonHandle {
         params: Value,
         read_timeout: Duration,
     ) -> Result<Value, String> {
-        let name = self
-            .socket_name
-            .clone()
-            .to_ns_name::<GenericNamespaced>()
-            .map_err(|e| format!("socket 名不合法: {e}"))?;
-        let conn = Stream::connect(name).map_err(|e| format!("连接后台服务失败: {e}"))?;
-        // 保险丝装在 socket 上：超时后连接直接丢弃——「每调一新连接」的
-        // 模式天然满足，不回收复用。
-        conn.set_recv_timeout(Some(read_timeout))
-            .map_err(|e| format!("设置读超时失败: {e}"))?;
-        let mut reader = BufReader::new(conn);
-
+        // NET-27：保险丝**不能**装在 socket 上。Windows 的命名管道不支持
+        // I/O 超时（`set_recv_timeout` → "named pipes do not support I/O
+        // timeouts"），NET-11 的实现用 `?` 把它当硬失败，于是 Windows 上
+        // 每次调用在请求发出**之前**就 Err —— 桌面壳一个 daemon 数据都拿
+        // 不到（lib.rs 里 7 个调用点全废，含 status / asset.path /
+        // logs.export 与前端万能通道 daemon_call）。
+        //
+        // 改成在**通道**上掐表：整个往返跑在工作线程里，本函数用
+        // `recv_timeout` 计时。保险丝于是与平台能力无关，而 NET-11 的语义
+        // （撞线即断臂、错误带方法名、单一固定阈值）一字未改。
+        let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+        let socket_name = self.socket_name.clone();
         let req = json!({ "id": method, "method": method, "params": params });
         let payload = format!("{token}\n{req}\n", token = self.token);
-        reader
-            .get_mut()
-            .write_all(payload.as_bytes())
-            .map_err(|e| format!("发送失败: {e}"))?;
+        let method_owned = method.to_string();
+        std::thread::Builder::new()
+            .name(format!("ipc-{method}"))
+            .spawn(move || {
+                let _ = tx.send(one_round_trip(
+                    socket_name,
+                    payload,
+                    method_owned,
+                    read_timeout,
+                ));
+            })
+            .map_err(|e| format!("启动 IPC 线程失败: {e}"))?;
 
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            // 超时即弃连接（BufReader 可能已吞半行，不可复用）；
-            // Err 带方法名——死因必须可报告。
-            Err(e) if is_timeout_err(&e) => return Err(ipc_timeout_msg(method, read_timeout)),
-            Ok(_) => {}
-            Err(e) => return Err(format!("读取响应失败: {e}")),
-        }
+        let line = match rx.recv_timeout(read_timeout) {
+            Ok(Ok(line)) => line,
+            Ok(Err(msg)) => return Err(msg),
+            // 撞线：弃连接（它归那个线程，线程结束即 drop）。
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                return Err(ipc_timeout_msg(method, read_timeout))
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(format!("IPC 线程意外退出（{method}）"))
+            }
+        };
         let resp: Value =
             serde_json::from_str(line.trim()).map_err(|e| format!("响应不是 JSON: {e}"))?;
         if resp["ok"].as_bool() == Some(true) {
