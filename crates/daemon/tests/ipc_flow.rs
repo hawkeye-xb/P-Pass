@@ -329,12 +329,12 @@ async fn status_reports_photo_count_and_disk_watermarks() {
 
     // 三个新字段在场；photo_count == 种子数。
     assert_eq!(status["photo_count"], 3, "photo_count must equal seeds");
-    let free = status["disk_free_bytes"]
-        .as_u64()
-        .expect("disk_free_bytes present and numeric on unix");
-    let total = status["disk_total_bytes"]
-        .as_u64()
-        .expect("disk_total_bytes present and numeric on unix");
+    let free = status["disk_free_bytes"].as_u64().expect(
+        "disk_free_bytes present and numeric (DAE-05: unix statvfs / Windows GetDiskFreeSpaceExW)",
+    );
+    let total = status["disk_total_bytes"].as_u64().expect(
+        "disk_total_bytes present and numeric (DAE-05: unix statvfs / Windows GetDiskFreeSpaceExW)",
+    );
     assert!(total > 0, "library volume has a size");
     assert!(free <= total, "free space cannot exceed the volume size");
 }
