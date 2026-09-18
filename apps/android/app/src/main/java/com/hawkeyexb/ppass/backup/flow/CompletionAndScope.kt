@@ -26,7 +26,9 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
 
     fun acceptCompletionReceipt(receipt: CompletionReceipt) {
         ledger.update { snapshot ->
-            if (receipt.pairingEpoch != snapshot.pairingEpoch) return@update snapshot
+            if (receipt.pairingEpoch != snapshot.pairingEpoch) {
+                return@update snapshot.rejected("receipt", "pairing_epoch_changed", receipt.queueSequence)
+            }
             // REBUILD-05: a lease only blocks a receipt when it is a *different*,
             // still-active attempt for this exact queue slot (a genuine
             // supersession). A cleared lease (Pause / user-cancel already ran)
@@ -38,14 +40,20 @@ class CompletionAndScope(private val ledger: DiscoveryLedgerStore) {
                 lease != null &&
                 lease.queueSequence == receipt.queueSequence &&
                 lease.leaseToken != receipt.leaseToken
-            if (supersededByActiveLease) return@update snapshot
+            if (supersededByActiveLease) {
+                return@update snapshot.rejected("receipt", "superseded_by_active_lease", receipt.queueSequence)
+            }
             val item = snapshot.items.singleOrNull {
                 it.queueSequence == receipt.queueSequence && it.pairingEpoch == receipt.pairingEpoch
-            } ?: return@update snapshot
-            if (receipt.contentHash != null && item.contentHash != null && item.contentHash != receipt.contentHash) return@update snapshot
+            } ?: return@update snapshot.rejected("receipt", "item_no_longer_in_ledger", receipt.queueSequence)
+            if (receipt.contentHash != null && item.contentHash != null && item.contentHash != receipt.contentHash) {
+                return@update snapshot.rejected("receipt", "content_hash_mismatch", receipt.queueSequence)
+            }
             if (item.deliveryState == DeliveryState.CANCELLED_BY_SCOPE ||
                 item.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING
-            ) return@update snapshot
+            ) {
+                return@update snapshot.rejected("receipt", "item_already_terminal", receipt.queueSequence)
+            }
             // AUDIT-04: a replayed receipt for an item already CONFIRMED must
             // not mint a second audit_item_evidence fact — the guard is the
             // pre-transition state, checked once, before the copy below.

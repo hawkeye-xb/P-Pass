@@ -53,8 +53,11 @@ class FlowRunner(
     // Default = no-op so existing construction/tests are untouched;
     // AndroidFlowRuntime wires the real daemon-backed implementation.
     private val tupleCanceller: FlowTupleCancelPort = NoopFlowTupleCancelPort,
+    // MOB-88: 副作用出口。默认就地执行（= 改造前语义），生产接写者线程
+    // 之外的执行器。
+    effects: FlowEffectSink = InlineFlowEffects,
 ) {
-    private val consumer = StrictConsumer(ledger, delivery)
+    private val consumer = StrictConsumer(ledger, delivery, effects)
     private val completion = CompletionAndScope(ledger)
     private val cancellation = CancellationRoundController(ledger, tupleCanceller)
 

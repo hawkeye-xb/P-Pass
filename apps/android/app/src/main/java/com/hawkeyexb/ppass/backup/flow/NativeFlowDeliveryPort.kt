@@ -119,6 +119,13 @@ internal class AuditOutboxDispatcher(
         client.bind(identityKey())
         DaemonFlowAuditTransport(client, parsePeerAddrToken(currentPairing.daemonAddrToken))
     },
+    /**
+     * MOB-88: 删除已确认事件这一步。改造前它在 IO 协程里直接写账本——是
+     * 四条锁外写入路径中触发最频繁的一条：本意只想删自己那几条事件，但
+     * 整份覆盖会把读到那一刻的租约与条目状态一起写回去。默认实现保留原
+     * 行为供测试使用；生产传入的实现投一条 action 给写者。
+     */
+    private val acknowledgeEvents: (Set<String>) -> Unit = { ids -> ledger.acknowledgeAuditEvents(ids) },
 ) {
     /** Best-effort: any failure (offline, unpaired, IO) leaves the outbox
      *  untouched — there is always a next trigger to retry from. */
@@ -130,7 +137,7 @@ internal class AuditOutboxDispatcher(
             transportFor(currentPairing).submit(outbox)
         }.onSuccess { accepted ->
             if (accepted.eventIds.isNotEmpty()) {
-                ledger.acknowledgeAuditEvents(accepted.eventIds.toSet())
+                acknowledgeEvents(accepted.eventIds.toSet())
             }
         }
         // A failed flush (offline, transient daemon error, epoch stale)
@@ -256,6 +263,21 @@ internal class NativeFlowDeliveryPort(
         client.bind(identityKey())
         DaemonFlowReceiptClient(client, parsePeerAddrToken(currentPairing.daemonAddrToken))
     },
+    /**
+     * MOB-88: 算完哈希后的回填。改造前是这里直接 `ledger.update{}`——而
+     * `start()` 已经离开了写者线程，直接写会踩单写者门禁（也正是改造前
+     * 「整份覆盖踩邻居字段」那类 bug 的出处，见 `StrictConsumer` 里
+     * 2026-09-16 的注释）。默认实现保留原行为供测试使用；生产传入的实现
+     * 投一条 action 给写者，并等它落地——注册凭据与 offer 都要求哈希已
+     * 持久化。
+     */
+    private val recordContentHash: (TransferItem) -> Unit = { hashed ->
+        ledger.update { snapshot ->
+            snapshot.copy(items = snapshot.items.map { candidate ->
+                if (candidate.queueSequence == hashed.queueSequence) hashed else candidate
+            })
+        }
+    },
 ) : DeliveryPort {
     private var active: ActiveDelivery? = null
     private val epochGuard = FlowDeliveryEpochGuard(pairing)
@@ -268,11 +290,7 @@ internal class NativeFlowDeliveryPort(
         val ticket: String
         try {
             hashed = item.copy(contentHash = item.contentHash ?: hashSource(item.sourceRef))
-            ledger.update { snapshot ->
-                snapshot.copy(items = snapshot.items.map { candidate ->
-                    if (candidate.queueSequence == item.queueSequence) hashed else candidate
-                })
-            }
+            recordContentHash(hashed)
             ticket = bridge.register(hashed, epoch, lease)
         } catch (_: SourceMissingException) {
             Log.i("PPassFlow", "Flow source disappeared before it could be sent; skipping strict head")

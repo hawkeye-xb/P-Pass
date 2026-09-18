@@ -3,8 +3,13 @@ package com.hawkeyexb.ppass.backup
 
 import android.content.ContentResolver
 import android.content.Context
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import com.hawkeyexb.ppass.backup.flow.DiscoveryLedgerSnapshot
 import com.hawkeyexb.ppass.backup.flow.FlowCommand
 import com.hawkeyexb.ppass.backup.flow.FlowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.FlowUiState
@@ -23,6 +28,7 @@ import com.hawkeyexb.ppass.backup.flow.flowLedgerSnapshot
 import com.hawkeyexb.ppass.backup.flow.flowMissingSourceNotice
 import com.hawkeyexb.ppass.backup.flow.flowReuploadNoticeCount
 import com.hawkeyexb.ppass.backup.flow.flowUiStateOf
+import com.hawkeyexb.ppass.backup.flow.observeFlowLedger
 import com.hawkeyexb.ppass.backup.flow.pauseFlow
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.flow.restoreAllCancelledFlowRounds
@@ -40,8 +46,7 @@ import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -99,22 +104,69 @@ class BackupUiStateHolder(
     private val _roundProgress = mutableStateOf<RoundProgress?>(null)
     val roundProgress: State<RoundProgress?> get() = _roundProgress
 
+    // MOB-88: 订阅取代轮询。
+    //
+    // 改造前这里是两个死循环：`delay(500)` 每半秒重读整份账本 JSON 重算
+    // 投影，`delay(2_000)` 每两秒查一次 MediaStore 总数。两个被查的东西
+    // 都是能推的——账本有提交回调（单写者每次 reduce 完推一次），
+    // MediaStore 有 ContentObserver。轮询一个能通知你的东西是纯浪费，而且
+    // 「点击到下一次 tick 之间 UI 没反应」本身就制造过 bug（见
+    // commandPending 上面那段 2026-09-07 的真机反馈）。
+    private val unsubscribeLedger: () -> Unit
+    private val mediaObserver: ContentObserver
+    private val tripletRefreshPending = java.util.concurrent.atomic.AtomicBoolean(false)
+
     init {
+        // 首帧：订阅之前先算一次当前状态，否则要等到第一次状态变更才有内容。
         scope.launch {
-            while (isActive) {
+            repairEpochIfNeeded()
+            refreshFlowState()
+        }
+        // 账本每次提交推一次。回调跑在写者线程上，所以这里只做转发，
+        // 真正的投影计算切回 holder 自己的 scope。
+        unsubscribeLedger = observeFlowLedger { snapshot ->
+            scope.launch {
                 repairEpochIfNeeded()
-                refreshFlowState()
-                delay(500)
+                refreshFlowState(snapshot)
             }
+            // 确认数变化会改三元组里的 M，跟着推一次。
+            scheduleTripletRefresh()
         }
-        // The triplet's N is a MediaStore count — too heavy for the 500ms
-        // status tick, so it refreshes on its own slower IO loop.
+        // N 是 MediaStore 总数，由 ContentObserver 推——相册增删才需要重算。
+        mediaObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) = scheduleTripletRefresh()
+        }
+        runCatching {
+            context.contentResolver.registerContentObserver(
+                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL),
+                true,
+                mediaObserver,
+            )
+        }
+        scheduleTripletRefresh()
+    }
+
+    /**
+     * MediaStore 的变更通知会成串到达（一次相册写入可能推好几条），三元组
+     * 的 N 又是一次全量 count，所以这里做合并：已经有一次待跑就不再排队。
+     */
+    private fun scheduleTripletRefresh() {
+        if (!tripletRefreshPending.compareAndSet(false, true)) return
         tripletScope.launch {
-            while (isActive) {
+            try {
                 withContext(Dispatchers.IO) { refreshTriplet() }
-                delay(2_000)
+            } finally {
+                tripletRefreshPending.set(false)
             }
         }
+    }
+
+    /** Activity 销毁时解订阅——监听器活在进程级总线上，不解会泄漏。 */
+    fun dispose() {
+        unsubscribeLedger()
+        runCatching { context.contentResolver.unregisterContentObserver(mediaObserver) }
+        scope.cancel()
+        tripletScope.cancel()
     }
 
     fun acknowledgeReuploadNotice() = Unit
@@ -194,13 +246,12 @@ class BackupUiStateHolder(
         }
     }
 
-    private fun refreshFlowState() {
+    private fun refreshFlowState(snapshot: DiscoveryLedgerSnapshot = flowLedgerSnapshot(context)) {
         pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
         // UI-09/MOB-51: the home screen state is the single shared production
         // mapping from the durable snapshot (backupUiStateOf). The aggregate
         // (K/M/last-success) is derived from the same facts by the slower
         // refreshTriplet loop.
-        val snapshot = flowLedgerSnapshot(context)
         _state.value = backupUiStateOf(snapshot)
         // UI-10 item 2: ledger-derived reupload count replaces the dead
         // LEGACY ReuploadQueue read (see flowReuploadNoticeCount doc).

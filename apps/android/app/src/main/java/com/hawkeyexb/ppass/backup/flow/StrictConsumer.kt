@@ -42,6 +42,9 @@ object NoopFlowTupleCancelPort : FlowTupleCancelPort {
 class StrictConsumer(
     private val ledger: DiscoveryLedgerStore,
     private val delivery: DeliveryPort,
+    // MOB-88: 起飞这个副作用（整文件哈希 + 原生注册 + offer）必须离开状态
+    // 决策线程。默认就地执行 = 改造前的同步语义，测试断言不受影响。
+    private val effects: FlowEffectSink = InlineFlowEffects,
 ) {
     fun wake(constraintsSatisfied: Boolean) {
         val current = ledger.load()
@@ -84,7 +87,15 @@ class StrictConsumer(
         // genuinely in flight (real device, 2026-09-16, Samsung SM-S9210).
         // Passing the already-TRANSFERRING copy means start()'s own
         // ledger.update writes TRANSFERRING back, not QUEUED.
-        delivery.start(transferring, resumePartial = head.partialRetained, lease = lease)
+        //
+        // MOB-88: 起飞离开写者线程后，租约有可能在它真正动手之前就被后续
+        // action 收走（用户暂停、约束失效、代号更换）。所以动手前再读一次
+        // 内存里的权威状态确认租约还是自己的——不是则本次作废，什么都不做。
+        // 就地执行（测试）时这次检查恒真，行为与改造前一致。
+        effects.submit {
+            if (ledger.load().fetchLease?.leaseToken != lease.leaseToken) return@submit
+            delivery.start(transferring, resumePartial = head.partialRetained, lease = lease)
+        }
     }
 
     fun pauseByUser() {
@@ -185,7 +196,10 @@ class StrictConsumer(
      */
     fun skipMissingSource() {
         val current = ledger.load()
-        val lease = current.fetchLease ?: return
+        val lease = current.fetchLease ?: run {
+            ledger.update { it.rejected("skip_missing_source", "no_active_lease") }
+            return
+        }
         ledger.update { snapshot ->
             val item = snapshot.items.single { it.queueSequence == lease.queueSequence }
             val items = snapshot.items.map { item ->
@@ -229,7 +243,12 @@ class StrictConsumer(
      */
     fun recordPermanentFailure(): Boolean {
         val current = ledger.load()
-        val lease = current.fetchLease ?: return false
+        // MOB-88: 没有活跃租约说明这条失败的依据已经不成立（暂停/取消/代号
+        // 更换先落地了）。改造前这里静默 return，于是竞态发生时系统不出声。
+        val lease = current.fetchLease ?: run {
+            ledger.update { it.rejected("permanent_failure", "no_active_lease") }
+            return false
+        }
         var becameTerminal = false
         ledger.update { snapshot ->
             val currentItem = snapshot.items.single { it.queueSequence == lease.queueSequence }
