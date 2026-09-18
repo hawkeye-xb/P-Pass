@@ -1,3 +1,11 @@
+// DEVLOG-02: Windows release 产物必须是 GUI 子系统。CONSOLE 子系统的进程被
+// explorer 按 HKCU Run 键启动时，Windows 会自动给它分配一个控制台窗口——
+// Run 键是纯命令行，创建进程的是 Windows，`spawn_windowless` 的
+// CREATE_NO_WINDOW 只管桌面壳自己那一次 spawn，管不到登录自启这条路径。
+// `not(debug_assertions)` 保住开发体验：`just dev-daemon` 是 debug 构建，
+// 终端照样有输出。与 `apps/desktop/src-tauri/src/main.rs` 同构。
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 //! P-Pass storage daemon — production wiring (grows card by card).
 //!
 //! T-030: bind the endpoint, open the index, run the ctrl router with the
@@ -50,7 +58,42 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(2);
             }
         },
-        None => daemon::log_guard::DedupGuard::new(),
+        // DEVLOG-02：env 没设时退到**平台默认**日志文件（Windows 有，macOS
+        // 是 None、继续走 launchd 的 StandardErrorPath，一行未变）。
+        // 两种来源的失败处理**故意不同**：env 是用户显式指定，打不开就
+        // exit(2)（上面那条 DAE-03 先例）；平台默认是我们自己选的路径，
+        // 打不开只警告并退回 stderr——不能因为日志目录有问题就让 daemon
+        // 起不来。
+        // DEVLOG-02 ①：debug 构建不落盘。`just dev-daemon` 时终端就在眼前，
+        // 落盘等于让日志「消失」。门槛与顶部 windows_subsystem **刻意用同一
+        // 个条件**——不分配控制台的那种构建，才需要文件兜底。
+        None if cfg!(debug_assertions) => daemon::log_guard::DedupGuard::new(),
+        None => {
+            use platform::PlatformAdapter as _;
+            // DEVLOG-02 ②：日志必须在读 config **之前**就位（config 自己出错
+            // 也得记下来），所以这里只能用不需要解析 config 的两样东西：
+            // `PPF_DATA_DIR`（纯 env，测试脚本靠它隔离一次性 daemon——日志
+            // 不跟着走就会写进用户真实日志文件）与平台约定。
+            // config.toml 里的 data_dir **无法**在这里被尊重，是鸡生蛋，
+            // 属已知限制。
+            let base = std::env::var_os("PPF_DATA_DIR")
+                .map(std::path::PathBuf::from)
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or_else(|| platform::adapter().data_dir());
+            match platform::adapter().default_log_file(&base) {
+                Some(path) => match daemon::log_guard::DedupGuard::for_file(&path) {
+                    Ok(guard) => guard,
+                    Err(e) => {
+                        eprintln!(
+                            "平台默认日志文件 {} 打不开，退回 stderr：{e}",
+                            path.display()
+                        );
+                        daemon::log_guard::DedupGuard::new()
+                    }
+                },
+                None => daemon::log_guard::DedupGuard::new(),
+            }
+        }
     };
     tracing_subscriber::fmt()
         .with_env_filter(
