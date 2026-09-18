@@ -16,6 +16,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_System_Power",
   "Win32_Security_Cryptography",
+  # DAE-05: GetDiskFreeSpaceExW（卷容量水位）。
+  "Win32_Storage_FileSystem",
 ] }
 
 [dev-dependencies]

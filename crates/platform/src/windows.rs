@@ -135,6 +135,45 @@ impl PlatformAdapter for WindowsAdapter {
         PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into())).join("P-Pass")
     }
 
+    /// DAE-05：`GetDiskFreeSpaceExW`。free 取 `lpFreeBytesAvailableToCaller`
+    /// 而不是 `lpTotalNumberOfFreeBytes`——前者是「本调用者（受配额约束后）
+    /// 真正能写多少」，正是 unix 侧 `statvfs.f_bavail` 的对等语义，也是
+    /// 资源管理器显示的那个数。取错的话在带配额的卷上会偏大。
+    ///
+    /// 路径要先转成 UTF-16 + NUL 结尾的宽字符串（Win32 W 系列 API 的要求）。
+    /// 目录不存在或无权限时 API 返回 0，此处回 `None`——调用方序列化成 null，
+    /// 绝不编造数字。
+    fn volume_stats(&self, path: &Path) -> Option<crate::VolumeStats> {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut free_to_caller: u64 = 0;
+        let mut total: u64 = 0;
+        // SAFETY: wide 是 NUL 结尾的合法宽字符串且在调用期间存活；两个出参
+        // 是栈上的 u64，指针非空且对齐。第三个出参传 null 表示不关心
+        // 「卷上物理空闲量」（我们要的是 caller-available 那个）。
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_to_caller,
+                &mut total,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        Some(crate::VolumeStats {
+            free: free_to_caller,
+            total,
+        })
+    }
+
     /// DEVLOG-02：Run 键启动的 daemon，其 stderr 唯一去处就是 Windows 自动
     /// 分配的那个控制台——而 release 已经不再分配它，所以必须有确定的落盘
     /// 位置。放在生效的 data dir 下，与 DPAPI blob、索引同域：data_dir 将来
@@ -317,4 +356,36 @@ fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>> {
         unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
     unsafe { LocalFree(output.pbData as _) };
     Ok(data)
+}
+
+#[cfg(test)]
+mod dae05_volume_stats_tests {
+    use super::*;
+
+    /// DAE-05 契约：Windows 上 volume_stats 必须回真实数字，不能是 None。
+    /// 这条就是那个产品缺口的守卫——改回 `None` 它必须红。
+    #[test]
+    fn volume_stats_reports_real_numbers_for_an_existing_dir() {
+        let a = WindowsAdapter::new();
+        let stats = a
+            .volume_stats(&std::env::temp_dir())
+            .expect("Windows 必须能报出卷容量（None = DAE-05 的缺口又回来了）");
+        assert!(stats.total > 0, "total 必须为正，实测 {}", stats.total);
+        assert!(
+            stats.free <= stats.total,
+            "free({}) 不可能大于 total({})",
+            stats.free,
+            stats.total
+        );
+    }
+
+    /// 不存在的路径要老实回 None，而不是编一个数字。
+    #[test]
+    fn volume_stats_returns_none_for_a_nonexistent_volume() {
+        let a = WindowsAdapter::new();
+        assert_eq!(
+            a.volume_stats(std::path::Path::new(r"Q:\definitely-not-a-volume\dae05")),
+            None
+        );
+    }
 }

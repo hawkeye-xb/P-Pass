@@ -1315,9 +1315,17 @@ fn disk_stats(path: &std::path::Path) -> Option<DiskStats> {
     })
 }
 
+// DAE-05：非 unix 平台不再恒返回 None —— 那个 null 一路传到 UI，让磁盘
+// 告警在 Windows 上完全不工作。改为委托平台适配器（B.2 要的正是这个：
+// 平台实现待在 crates/platform/，这里只做转换）。适配器没实现的平台仍回
+// None，仍然序列化成 null，「老实的 null 胜过编造的数字」这条不变。
 #[cfg(not(unix))]
-fn disk_stats(_path: &std::path::Path) -> Option<DiskStats> {
-    None
+fn disk_stats(path: &std::path::Path) -> Option<DiskStats> {
+    use platform::PlatformAdapter as _;
+    platform::adapter().volume_stats(path).map(|v| DiskStats {
+        free: v.free,
+        total: v.total,
+    })
 }
 
 /// Replace the user's home directory (and thus their username) in any

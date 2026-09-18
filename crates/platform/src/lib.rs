@@ -78,6 +78,13 @@ pub enum PlatformError {
 
 pub type Result<T> = std::result::Result<T, PlatformError>;
 
+/// DAE-05：卷容量水位（`free` 对齐 unix `statvfs` 的 `f_bavail` 语义）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumeStats {
+    pub free: u64,
+    pub total: u64,
+}
+
 /// 架构 §4 trait —— 签名原样实施（updater/notify 的完整实现随
 /// T-041/T-062 落地，此处为可用的最小形态）.
 pub trait PlatformAdapter: Send + Sync {
@@ -99,6 +106,17 @@ pub trait PlatformAdapter: Send + Sync {
     /// macOS 返回 `None`：launchd plist 的 `StandardErrorPath` 已经把 stderr
     /// 重定向到文件，再叠一层只会写两份。Windows 必须返回 `Some`：HKCU Run
     /// 键没有任何重定向能力，release 又不再分配控制台，不落盘就等于没有日志。
+    /// DAE-05：`path` 所在卷的容量水位。`None` = 本平台没有实现（调用方
+    /// 应当序列化成 null，而不是编一个数字出来）。
+    ///
+    /// `free` 的语义**必须**是「无特权写入者真正可用的字节数」，对齐 unix
+    /// 侧 `statvfs` 的 `f_bavail`（也就是 `df` / Finder 显示的那个数），
+    /// 而不是卷上的物理空闲量——两者在有配额/保留区的卷上不一样。
+    fn volume_stats(&self, path: &std::path::Path) -> Option<VolumeStats> {
+        let _ = path;
+        None
+    }
+
     /// 入参是**生效的** data dir（由调用方解析 env / 平台约定后给出），
     /// 因为一次性 daemon 靠 `PPF_DATA_DIR` 做隔离，日志不跟着走就会污染
     /// 真实日志文件。默认实现返回 `None`——既无 launchd 托管也无 Run 键的
