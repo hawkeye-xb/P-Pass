@@ -131,7 +131,10 @@ async fn main() -> anyhow::Result<()> {
     let node_id = transport::node_id_from_secret_key(&secret);
     let socket_name = format!("ppf-{}", &node_id.to_string()[..8]);
     let daemon_version = daemon::daemon_version();
-    println!(
+    // DEVLOG-03：改走 tracing，否则这行在 Windows release 上无处可去
+    // （#163 之后不再分配控制台，stdout 没有去处）。只含 socket 名与令牌
+    // **路径**，不含令牌内容，进日志是安全的。
+    tracing::info!(
         "IPC: {socket_name}（令牌在 {}/ipc.token）",
         data_dir.display()
     );
@@ -216,7 +219,11 @@ async fn main() -> anyhow::Result<()> {
         .await
     {
         daemon::Claim::StandDown => {
-            println!("已有同版本或更新版本的 daemon 在值班（v{daemon_version}），本实例退出。");
+            // DEVLOG-03：退位理由必须在日志里留痕——Windows 上这曾是唯一
+            // 的线索，而它打在一个不再存在的控制台里。
+            tracing::info!(
+                "已有同版本或更新版本的 daemon 在值班（v{daemon_version}），本实例退出。"
+            );
             std::process::exit(0);
         }
         daemon::Claim::TookOver => {
@@ -260,7 +267,8 @@ async fn main() -> anyhow::Result<()> {
             // 冲突走不到这里（claim 已裁决），到这里的都是异身份/第三方。
             let msg = daemon::cli::humanize_bind_error(config.bind_addr, &e.to_string());
             tracing::error!("{msg}");
-            println!("启动失败：{msg}");
+            // DEVLOG-03：启动失败是最需要留痕的一条。
+            tracing::error!("启动失败：{msg}");
             std::process::exit(1);
         }
     };
@@ -281,16 +289,30 @@ async fn main() -> anyhow::Result<()> {
         .wait_online(std::time::Duration::from_secs(10))
         .await
     {
-        println!("提示：中继未在 10 秒内就绪，二维码将只含直连地址。");
+        tracing::info!("提示：中继未在 10 秒内就绪，二维码将只含直连地址。");
     }
 
-    println!("P-Pass daemon 已启动");
+    tracing::info!("P-Pass daemon 已启动");
+    // DEVLOG-03：`NodeId:` 这一行**必须留在 stdout**——它是机读契约：
+    // tools/dogfood-smoke.sh 与 tools/scenarios/{crash_recovery,disk_full,
+    // huge_file}.sh 都把两条流分开收（`> daemon.log 2> daemon.err`）然后
+    // `grep -o 'NodeId: .*' daemon.log`。搬到 tracing（stderr）会让那四个
+    // 脚本拿到空串。所以这里刻意打两遍：stdout 那条给脚本，日志那条给事后
+    // 排障（Windows release 上 stdout 无处可去，见 #163）。
     println!("NodeId: {}", transport.node_id());
-    println!("库目录: {}", data_dir.display());
+    tracing::info!("NodeId: {}", transport.node_id());
+    tracing::info!("库目录: {}", data_dir.display());
 
     // QR 在 transport bind 之后生成（&r= 需要 live endpoint 的中继）。
     let qr = pairing.start(rand_pair_token()?, unix_ms_now());
+    // DEVLOG-03：配对链接**只进 stdout，绝不进日志文件**。它带着 10 分钟内
+    // 有效的配对令牌；写进磁盘日志等于把「看得见的泄漏」换成「留痕的泄漏」，
+    // 比现状更糟（红线 4 的口径：凭据不落任何持久文件）。
+    // 这一行同时也是机读契约：上面那四个脚本 `grep -o 'ppf://pair[^ ]*'
+    // daemon.log`，两个理由指向同一个做法。
+    // 日志里只记「配对已开始」这件事实，不记内容。
     println!("配对二维码内容（10 分钟内有效）: {qr}");
+    tracing::info!("配对二维码已生成（10 分钟内有效；内容含令牌，刻意不入日志）");
 
     // DAE-01b blocker①：claim 成功后才生成/写入自己的 token（serve 写
     // 入 ipc.token）。claim 期间的探测用的是前任 token。
@@ -619,7 +641,8 @@ fn load_or_mint_identity(data_dir: &std::path::Path) -> anyhow::Result<[u8; 32]>
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600));
     }
-    println!("身份密钥已铸造: {}", key_file.display());
+    // DEVLOG-03：只有路径、不含密钥内容，进日志是安全的。
+    tracing::info!("身份密钥已铸造: {}", key_file.display());
     Ok(k)
 }
 

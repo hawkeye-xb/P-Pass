@@ -25,17 +25,24 @@ fn help_exits_zero_without_starting_anything() {
         "stdout 应列出 --ephemeral:\n{stdout}"
     );
     // 关键：--help 绝不能走到 claim/bind——正常启动才有的输出一行都不能有。
+    //
+    // DEVLOG-03：必须**两条流一起查**。这些行原来都走 println!（stdout），
+    // 现在启动期的诊断行改走 tracing（stderr）——只查 stdout 的话这三条断言
+    // 照样通过，但**失去判别力**：万一哪天 --help 真的走到了 claim/bind，
+    // 那些行会打在 stderr 上而这里看不见。
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let both = format!("{stdout}{stderr}");
     assert!(
-        !stdout.contains("IPC:"),
-        "--help 不应打印 IPC 行:\n{stdout}"
+        !both.contains("IPC:"),
+        "--help 不应打印 IPC 行:\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert!(
-        !stdout.contains("身份密钥已铸造"),
-        "--help 不应铸造身份:\n{stdout}"
+        !both.contains("身份密钥已铸造"),
+        "--help 不应铸造身份:\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
     assert!(
-        !stdout.contains("已启动"),
-        "--help 不应启动 daemon:\n{stdout}"
+        !both.contains("已启动"),
+        "--help 不应启动 daemon:\nstdout:\n{stdout}\nstderr:\n{stderr}"
     );
 }
 
