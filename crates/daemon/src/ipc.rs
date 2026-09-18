@@ -20,7 +20,6 @@ use std::time::Duration;
 
 use diag::state::DaemonState;
 use interprocess::local_socket::tokio::prelude::*;
-use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions};
 use proto::{codes, Req, Resp, RespError};
 use storage::Db;
@@ -119,16 +118,43 @@ async fn notify_step_down(socket_name: &str, token_hex: &str) -> Option<serde_js
     peer_call(socket_name, token_hex, "daemon.step_down").await
 }
 
+/// 存活探测的连接上限。`peer_call` 的应答超时是 800ms；这里只需要一次
+/// 连接握手的判决，500ms 足够，且必须有界（见下方 DAE-06 注释）。
+const LIVENESS_CONNECT_TIMEOUT: Duration = Duration::from_millis(500);
+
 /// True if anything is listening on the socket (raw connect, no auth).
 /// Distinguishes a dead socket file (connect refused) from a live peer —
 /// DAE-01b blocker①: the old code conflated the two and unlinked live
 /// sockets it merely failed to authenticate against.
-fn socket_is_live(socket_name: &str) -> bool {
+///
+/// DAE-06：这里**必须是异步 + 有界**。原实现用同步 `Stream::connect`，
+/// 却被 async 的 `claim_single_instance` 直接调用：unix domain socket 上
+/// 内核会立刻接受连接，所以一直看不出问题；Windows 命名管道不同——服务端
+/// 不在 accept 状态时客户端要等（ERROR_PIPE_BUSY），同步连接于是把执行器
+/// 线程整条堵住。单线程 runtime 下（`#[tokio::test]` 的默认）在岗实例的
+/// 任务因此永远得不到轮询 → 死锁（DAE-06 实测：该测试 60s 不返回）。
+/// 生产是多线程 runtime 且对端是另一个进程，表现为「偶发堵住一个 worker」
+/// 而非必死，但 async 路径里本就不该有阻塞 IO。
+///
+/// **超时一律判为「活着」**：有东西在监听却不应答，绝不能被当成死 socket
+/// 去 unlink——那正是 DAE-01b blocker① 那次事故的形状。宁可自己 StandDown。
+async fn socket_is_live(socket_name: &str) -> bool {
     let Ok(name) = socket_name.to_ns_name::<GenericNamespaced>() else {
         return false;
     };
-    // Sync connect, drop immediately — we only want the connect verdict.
-    interprocess::local_socket::Stream::connect(name).is_ok()
+    match tokio::time::timeout(
+        LIVENESS_CONNECT_TIMEOUT,
+        interprocess::local_socket::tokio::Stream::connect(name),
+    )
+    .await
+    {
+        // 连上了 = 有人在监听（连接随即 drop，我们只要这个判决）。
+        Ok(Ok(_conn)) => true,
+        // 连接被拒 = 死 socket 文件 / 首次启动。
+        Ok(Err(_)) => false,
+        // 连得上但对端忙着没握手 —— 当作活的，绝不 unlink。
+        Err(_elapsed) => true,
+    }
 }
 
 /// The predecessor's auth token, read from `data_dir/ipc.token`
@@ -321,7 +347,7 @@ impl IpcServer {
     /// proceed. A live peer we cannot authenticate is NEVER unlinked — we
     /// stand down instead.
     pub async fn claim_single_instance(&self, socket_name: &str, version: &str) -> Claim {
-        if !socket_is_live(socket_name) {
+        if !socket_is_live(socket_name).await {
             // Nothing listening: stale file or first start — clean, bind.
             clean_stale_socket(socket_name);
             return Claim::Proceed;
@@ -335,7 +361,7 @@ impl IpcServer {
             return Claim::StandDown;
         };
         let Some(peer) = probe_peer(socket_name, &token_hex).await else {
-            if socket_is_live(socket_name) {
+            if socket_is_live(socket_name).await {
                 // Socket still live but rejects the recorded token (drift).
                 tracing::error!(
                     "DAE-01b: live daemon on {socket_name} rejects the recorded token — standing down (do not unlink)"
