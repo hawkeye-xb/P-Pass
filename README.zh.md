@@ -127,6 +127,9 @@ docs/         工程文档：ROADMAP、PROGRESS（日志与决策）、网络矩
 
 ## 开发
 
+本地 Android 工具链的 JDK 版本以仓根 `.java-version` 为唯一真相（CI 同源），
+本机装对应版本即可：`brew install openjdk@$(cat .java-version)`。
+
 ```bash
 just ci                    # 全部门禁（提交前必绿）
 cargo nextest run          # 全部测试

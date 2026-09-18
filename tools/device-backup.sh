@@ -39,8 +39,8 @@ ALLOW_PID=$!
 trap 'kill $ALLOW_PID 2>/dev/null || true' EXIT
 
 cd "$ROOT/apps/android"
-JAVA_HOME="${JAVA_HOME:-$(brew --prefix openjdk)}" \
-  ./gradlew -q :app:connectedDebugAndroidTest \
+source "$ROOT/scripts/java-home.sh"
+./gradlew -q :app:connectedDebugAndroidTest \
   -Pandroid.testInstrumentationRunnerArguments.qr="$QR" \
   --info 2>&1 | grep -E "DEVICE BACKUP OK|FAILED|AssertionError" | head -5 || true
 

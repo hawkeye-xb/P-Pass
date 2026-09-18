@@ -113,14 +113,15 @@ jobs:
       - name: System codecs (libheif + HEVC plugin, ffmpeg)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
 
-      # iroh 1.1.0 的 uniffi 绑定 class 是 JDK 21 编译（major 65，实测），
-      # JDK 17 加载报 UnsupportedClassVersionError（pr.yml android job 用 17
-      # 是因为 DaemonHelloTest 无 QR 被跳过、不触 iroh ffi 类；e2e 真跑必 21）
-      - name: Setup Java (21)
+      # BUILD-01（2026-09-18）：全仓 JDK 统一 21——iroh 1.1.0 的 uniffi 绑定
+      # class 按 JDK 21 编译（major 65），17 加载报 UnsupportedClassVersionError；
+      # 以前只有本 job 用 21、其余钉 17 靠"不触 ffi 类"绕行，现三处都读
+      # 仓根 .java-version（唯一真相，与本地 scripts/java-home.sh 同源）。
+      - name: Setup Java (.java-version)
         uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version-file: .java-version
 
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v4
 
