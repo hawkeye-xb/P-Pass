@@ -145,6 +145,10 @@ fn read_predecessor_token(data_dir: &std::path::Path) -> Option<String> {
 
 /// Remove a stale socket file (unix only; named pipes don't leave files).
 fn clean_stale_socket(socket_name: &str) {
+    // BUILD-06: Windows 上整个函数体被 cfg 掉，参数于是没有任何使用点 ⇒
+    // `-D warnings` 把 `unused_variables` 提成 error，clippy 在 Windows 上红。
+    // 显式吃掉它，而不是改名成 `_socket_name`——unix 分支里这个名字是有意义的。
+    let _ = socket_name;
     #[cfg(unix)]
     {
         let _ = std::fs::remove_file(format!("/tmp/{socket_name}"));

@@ -24,14 +24,32 @@ fmt:
   cargo fmt --all -- --check
 
 # Lint all Rust code (clippy with deny warnings)
+#
+# BUILD-06: 刻意**不用** `--all-features`。本仓只有两个 feature，两个都是特殊
+# 构建模式，不该被默认打开：
+#   - `transport/android-jni` —— 只给 Android 桥用（全仓唯一启用处是
+#     tools/build-android-iroh-blobs-bridge.sh）。它的代码用 `std::os::fd`，
+#     在 Windows 上直接编不过（E0432/E0599）⇒ `--all-features` 等于把这个
+#     刻意做出来的平台闸门又强行打开。Android 那条路径见下方 lint-android。
+#   - `media-codec/vendored` —— 从源码编 libheif。该 crate 自己的注释就写着
+#     「Default stays on the system library for fast dev/CI builds」。
+# 远端 ci-rust.yml 仍用 `--all-features`（Linux 上两者都编得过），所以覆盖没丢；
+# 本地这条的目标是三个平台都能真的跑起来。
 lint:
-  cargo clippy --all-targets --all-features -- -D warnings
+  cargo clippy --all-targets -- -D warnings
+
+# BUILD-06: android-jni 的专项 lint。**只能在 unix 上跑**——该 feature 的代码
+# 用 `std::os::fd`，Windows 上必然 E0432。所以刻意没挂进 `ci`：挂进去等于让
+# Windows 的 `just ci` 永远红。
+lint-android:
+  cargo clippy -p transport --all-targets --features android-jni -- -D warnings
 
 # ── Test ────────────────────────────────────────────
 
 # Run all tests (nextest if available, fallback to cargo test)
+# BUILD-06: 同 lint，不用 `--all-features`（否则 Windows 上连编译都过不去）。
 test:
-  cargo nextest run --all-features 2>/dev/null || cargo test --all-features
+  cargo nextest run 2>/dev/null || cargo test
 
 # T-070 故障剧本（进程级三件套：4GB 大文件 / 崩溃恢复 / 磁盘满）
 # 需要 release 二进制: cargo build --release -p daemon -p testclient
