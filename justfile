@@ -1,4 +1,4 @@
-# P-Pass justfile — single-person project runner
+# P-Pass justfile — single-person project task runner
 # Run `just` for a list of available commands.
 
 default:
@@ -81,8 +81,20 @@ lint-android:
 
 # Run all tests (nextest if available, fallback to cargo test)
 # BUILD-06: 同 lint，不用 `--all-features`（否则 Windows 上连编译都过不去）。
+#
+# QA-11：nextest 在的时候输出一眼不吞——它的进度、失败清单、超时报告全走
+# stderr，`2>/dev/null` 会一并扔掉——退出码如实透传，失败绝不退化成
+# `cargo test` 全量重跑（cargo test 没有单测超时，挂着不动的测试能让配方
+# 永不返回）。「nextest 没装」和「测试失败」分两路：没装才退回 cargo test
+# 并明说；在但坏了（--version 跑不通，QA-10 实测过这种活死 shim）按没装处理。
 test:
-  cargo nextest run 2>/dev/null || cargo test
+  @if command -v cargo-nextest >/dev/null 2>&1 && cargo-nextest --version >/dev/null 2>&1; then \
+    cargo nextest run; \
+  else \
+    echo "cargo-nextest not found or not runnable — falling back to 'cargo test' (no per-test timeout)." >&2; \
+    echo "Install nextest for the real gate: just setup   (or: cargo install cargo-nextest --locked)" >&2; \
+    cargo test; \
+  fi
 
 # T-070 故障剧本（进程级三件套：4GB 大文件 / 崩溃恢复 / 磁盘满）
 # 需要 release 二进制: cargo build --release -p daemon -p testclient
