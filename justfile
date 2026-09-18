@@ -54,12 +54,38 @@ arch-check:
   @./tools/arch-check.sh
 
 # Markdown tables in docs/ and cards/ must not be split by a stray blank line
+#
+# QA-07: 解释器不能硬写 `python3`。Windows 上 `python3` 常解析到 Microsoft Store
+# 的应用执行别名占位程序——它**存在于 PATH**、但零输出、非零退出（本机实测
+# exit 49），所以 `command -v python3` 这类探测会被它骗过，必须真跑一次才判得出
+# 活死。反过来也不能一律改写成 `python`：Debian 系只保证有 `python3`。
+# 故：依次试 python3 / python / py，第一个能自报 major == 3 的胜出。
+#
+# 用 shebang 配方是刻意的——它绕开 just 的 shell 设置，将来若为 Windows 配上
+# `set windows-shell`（QA-08）这两条不会跟着坏。
 md-check:
-  @python3 ./tools/check-markdown-tables.py
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for py in python3 python py; do
+    if "$py" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+      exec "$py" ./tools/check-markdown-tables.py
+    fi
+  done
+  echo "md-check: 找不到可用的 Python 3（试过 python3 / python / py）" >&2
+  exit 1
 
 # DESK-15: assets/design/tokens.css must not drift from tokens.json
+# 解释器探测同 md-check（理由见上方 QA-07 注释）。
 token-check:
-  @python3 ./tools/check-token-drift.py
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for py in python3 python py; do
+    if "$py" -c 'import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)' >/dev/null 2>&1; then
+      exec "$py" ./tools/check-token-drift.py
+    fi
+  done
+  echo "token-check: 找不到可用的 Python 3（试过 python3 / python / py）" >&2
+  exit 1
 
 # SITE-04: site 有自己一套生成物（tokens.css / icons），由 site/scripts/*.mjs
 # 从 assets/design/ 生成，**不在 token-check 的覆盖范围内**——后者只比数值，
