@@ -153,6 +153,19 @@ cargo nextest run          # full test suite
 tools/dogfood-smoke.sh     # production-shape end-to-end smoke, agent-runnable
 ```
 
+**On Windows**: the `just` recipes are POSIX shell, so `bash` must be on
+`PATH`. Git for Windows ships it but only puts its `cmd` directory on `PATH`,
+so a plain PowerShell session fails on the first recipe with
+`could not find the shell bash`. Either run `just` from Git Bash, or add Git's
+`bin` directory to `PATH`:
+
+```powershell
+$env:PATH = "C:\Program Files\Git\bin;$env:PATH"   # this session only
+```
+
+`powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\env-check.ps1`
+reports whether this machine is set up (look for the `just.shell` line).
+
 ## Contribution rules
 
 - **Bilingual docs**: user- and contributor-facing documents ship in

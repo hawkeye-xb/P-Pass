@@ -1,6 +1,19 @@
 # P-Pass justfile — single-person project task runner
 # Run `just` for a list of available commands.
 
+# QA-08：Windows 上 just 默认去找 POSIX `sh`，而 Git for Windows 只把 Git 的
+# cmd 目录放进 PATH —— sh.exe / bash.exe 在它的 bin 目录里，默认不在 PATH 上。
+# 于是在 PowerShell 里任何一条配方都以 "could not find the shell sh" 失败，
+# 而那句话指向「shell 找不到」，第一反应会是仓库坏了。
+#
+# 改用 bash：本仓的配方本来就是 POSIX 写的，而且已有配方直接调 bash
+# （cleanup-local），所以「要求 bash 可用」是既成事实、不是新约束。只要
+# bash 在 PATH 上，PowerShell 里也能直接跑 just。bash 不在 PATH 时仍会失败，
+# 但 tools/windows/env-check.ps1 会明确报出来并给出修法（见 #179）。
+#
+# 只影响 Windows：其余平台仍用 just 默认的 `sh -cu`。
+set windows-shell := ["bash", "-cu"]
+
 default:
   @just --list
 

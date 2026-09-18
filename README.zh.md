@@ -136,6 +136,18 @@ cargo nextest run          # 全部测试
 tools/dogfood-smoke.sh     # 生产形态端到端冒烟（agent 可无人执行）
 ```
 
+**Windows 上**：`just` 的配方是 POSIX shell，所以 `bash` 必须在 `PATH` 上。
+Git for Windows 自带 bash，但默认只把 `cmd` 目录放进 `PATH`，所以在普通
+PowerShell 会话里第一条配方就以 `could not find the shell bash` 失败。
+两种办法：在 Git Bash 里跑 `just`，或者把 Git 的 `bin` 目录加进 `PATH`：
+
+```powershell
+$env:PATH = "C:\Program Files\Git\bin;$env:PATH"   # 只影响当前会话
+```
+
+跑 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\env-check.ps1`
+可以看本机配好没有（找 `just.shell` 那一行）。
+
 ## 贡献规则
 
 - **文档双语**：面向用户与贡献者的文档以英文为主、配中文姊妹篇
