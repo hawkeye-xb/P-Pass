@@ -188,6 +188,17 @@ jobs:
             target/
           key: win-x64-artifacts-${{ hashFiles('**/Cargo.lock') }}
 
+      # BUILD-07：HEIC **解码**在 Windows 上靠 `libde265`，它是 vcpkg
+      # libheif 端口的**基础依赖**（不是可选特性），静态构建里直接链进去
+      # —— 所以 Linux 那边需要的 `libheif-plugin-libde265` 插件机制在这里
+      # 不适用，也不需要显式声明。别再为此重新调研一遍：
+      #   port 1.23.1: dependencies = [libde265, ...]
+      #                default-features = [hevc]
+      #                hevc = "HEVC encoding via x265"（只管编码，GPL-2.0+）
+      # 本机实测（2026-09-18，x64-windows-static-md）：heif.lib /
+      # libde265.lib / x265-static.lib 三者都在，`cargo test -p media-codec
+      # --test thumbs` 的 heic_decodes_via_libheif 通过（真实像素 64x48，
+      # outcome=Generated 而非占位图）。
       - name: Install libheif (vcpkg, static)
         shell: bash
         run: |
