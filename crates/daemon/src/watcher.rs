@@ -289,7 +289,19 @@ impl LibraryWatcher {
                 continue;
             };
             // rel_path 以 "originals/" 开头（ingest place 的 rel 格式）。
-            let prefix = format!("originals/{}", rel.to_string_lossy());
+            //
+            // WATCH-08：必须按 components 逐段 join("/")，不能直接
+            // to_string_lossy()。`Path` 在 Windows 上渲染成反斜杠，而库里的
+            // rel_path 是写入侧归一过的正斜杠（core-index 的 rel_of 就是这个
+            // 写法），而下面是前缀 LIKE——混合分隔符会让前缀一行都匹配不到，
+            // 外部删除于是永不对账。不用 replace：unix 文件名里合法地能带
+            // 反斜杠，那样会破坏这类路径。
+            let rel_slashed = rel
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            let prefix = format!("originals/{rel_slashed}");
             let Ok(paths) = self.inner.db.list_asset_paths_under(&prefix).await else {
                 continue; // 索引不可读——静默跳过，等下一轮/每小时兜底
             };
