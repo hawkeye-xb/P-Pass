@@ -706,8 +706,8 @@ async fn mock_telemetry_server() -> (
                             .lines()
                             .find_map(|l| {
                                 l.to_lowercase()
-                                .strip_prefix("content-length:")
-                                .map(|v| v.trim().parse::<usize>().ok())
+                                    .strip_prefix("content-length:")
+                                    .map(|v| v.trim().parse::<usize>().ok())
                             })
                             .flatten()
                             .unwrap_or(0);
@@ -1311,7 +1311,7 @@ async fn offer_skips_the_network_fetch_when_content_already_has_a_durable_copy()
 #[tokio::test(flavor = "multi_thread")]
 async fn offer_reply_carries_the_terminal_receipt_when_content_already_exists() {
     // NET-24: the fix itself. NET-20's dedup completes synchronously inside
-    // the the offer handler, so `emit_flow_delivered` fires before a caller that
+    // the offer handler, so `emit_flow_delivered` fires before a caller that
     // subscribes *after* offer can possibly be listening — and the event bus
     // drops a broadcast with no subscribers outright. The reply the caller is
     // already awaiting is therefore the only guaranteed channel, and it must
@@ -1770,7 +1770,7 @@ async fn cancel_by_tuple_cancels_without_content_hash_or_provider() {
     let receiver_transport =
         IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
             .await
-            .unwrap();
+        .unwrap();
     let receiver_blobs = Arc::new(
         Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
             .await
