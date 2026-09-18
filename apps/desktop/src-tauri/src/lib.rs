@@ -733,6 +733,12 @@ pub fn run() {
                             cfg!(target_os = "macos"),
                         ) {
                             if let Some(win) = tray.app_handle().get_webview_window("main") {
+                                // DESK-28：unminimize 不能省——窗口被最小化时
+                                // show() 恢复不了它（#170 真机实测：只做
+                                // show + set_focus 之后 IsIconic 仍为 true）。
+                                // show 管「隐藏→可见」，unminimize 管
+                                // 「最小化→还原」，是两件独立的事。
+                                let _ = win.unminimize();
                                 let _ = win.show();
                                 let _ = win.set_focus();
                             }
@@ -742,6 +748,10 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(win) = app.get_webview_window("main") {
+                            // DESK-28：与左键回调同一组三步，理由同上。
+                            // 这条路径（右键 → 显示）比左键更常用，漏了
+                            // unminimize 的话最小化的窗口点了没反应。
+                            let _ = win.unminimize();
                             let _ = win.show();
                             let _ = win.set_focus();
                         }
@@ -790,6 +800,51 @@ fn tray_left_click_opens_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DESK-28 回归锁：**每一个把窗口拉回来的入口都必须先 unminimize**。
+    ///
+    /// 判据依据是 #170 的真机实测：窗口最小化时只做 `show()` + `set_focus()`
+    /// 恢复不了它（`IsIconic` 仍为 true），补上 `unminimize()` 才行。`show`
+    /// 管「隐藏 → 可见」，`unminimize` 管「最小化 → 还原」，两件独立的事。
+    ///
+    /// 为什么是源码扫描：托盘点击在 CI 里模拟不了（也不在我能驱动的范围内），
+    /// 但「这三行必须成组出现」这条约束可以在**任何平台**锁住——包括
+    /// ci-desktop 的 ubuntu lane，那是本仓今天唯一会跑的 lane（见 #164）。
+    ///
+    /// #167 当初只补了托盘左键那一处、漏了右键菜单的「显示」项，就是因为
+    /// 没有这样一条门禁。
+    #[test]
+    fn every_window_restore_unminimizes_first() {
+        let src = include_str!("lib.rs");
+        // 判据在运行时拼，避免这段源码自己命中自己（#168 踩过一次）。
+        let show = format!("let _ = win.{}();", "show");
+        let unmin = format!("win.{}()", "unminimize");
+
+        let lines: Vec<&str> = src.lines().collect();
+        let mut checked = 0usize;
+        for (n, line) in lines.iter().enumerate() {
+            if !line.contains(&show) {
+                continue;
+            }
+            // 往前看几行够了：三步是紧挨着写的（中间只隔注释）。
+            let from = n.saturating_sub(8);
+            let preceding = lines[from..n].join("\n");
+            assert!(
+                preceding.contains(&unmin),
+                "lib.rs:{} 处把窗口 show 出来但前面没有 unminimize——\
+                 窗口被最小化时这里会点了没反应（DESK-28 / #222）。\
+                 三步顺序：unminimize -> show -> set_focus。",
+                n + 1
+            );
+            checked += 1;
+        }
+        // 防恒真式：今天有三处入口（单实例回调、托盘左键、托盘菜单「显示」）。
+        // 少于三处说明判据没匹配上，或者有入口被删了——两种都该看一眼。
+        assert!(
+            checked >= 3,
+            "应当至少扫到 3 处窗口恢复入口，实际只扫到 {checked} 处——判据可能失效了"
+        );
+    }
 
     /// DESK-19 回归锁：桌面壳不得再用 **console 子系统程序**去拉起系统 UI。
     ///
