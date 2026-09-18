@@ -42,9 +42,6 @@ pub struct Device {
     pub paired_at: i64,
     pub last_seen: Option<i64>,
     pub revoked: bool,
-    /// DEV-01: reinstall fingerprint (SHA-256(Build.MODEL+ANDROID_ID)
-    /// first 8 bytes hex). None = pre-DEV-01 client / hint disabled.
-    pub device_hint: Option<String>,
 }
 
 impl Db {
@@ -52,13 +49,12 @@ impl Db {
     /// clears nothing — revocation is only ever set via [`Db::revoke`]).
     pub async fn upsert_device(&self, d: &Device) -> Result<()> {
         sqlx::query(
-            "INSERT INTO device (node_id, name, role, paired_at, last_seen, revoked, device_hint)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
+            "INSERT INTO device (node_id, name, role, paired_at, last_seen, revoked)
+             VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT(node_id) DO UPDATE SET
                name = excluded.name,
                role = excluded.role,
-               last_seen = excluded.last_seen,
-               device_hint = excluded.device_hint",
+               last_seen = excluded.last_seen",
         )
         .bind(&d.node_id)
         .bind(&d.name)
@@ -66,7 +62,6 @@ impl Db {
         .bind(d.paired_at)
         .bind(d.last_seen)
         .bind(i64::from(d.revoked))
-        .bind(&d.device_hint)
         .execute(self.pool())
         .await?;
         Ok(())
@@ -89,10 +84,10 @@ impl Db {
     /// （status.devices/revoked、export_logs）传 include_revoked=true。
     pub async fn list_devices(&self, include_revoked: bool) -> Result<Vec<Device>> {
         let sql = if include_revoked {
-            "SELECT node_id, name, role, paired_at, last_seen, revoked, device_hint
+            "SELECT node_id, name, role, paired_at, last_seen, revoked
              FROM device ORDER BY paired_at ASC"
         } else {
-            "SELECT node_id, name, role, paired_at, last_seen, revoked, device_hint
+            "SELECT node_id, name, role, paired_at, last_seen, revoked
              FROM device WHERE revoked = 0 ORDER BY paired_at ASC"
         };
         let rows = sqlx::query(sql).fetch_all(self.pool()).await?;
@@ -105,7 +100,6 @@ impl Db {
                 paired_at: r.get("paired_at"),
                 last_seen: r.get("last_seen"),
                 revoked: r.get::<i64, _>("revoked") != 0,
-                device_hint: r.get("device_hint"),
             })
             .collect())
     }
@@ -113,7 +107,7 @@ impl Db {
     /// One device by NodeId — the authz checkpoint's lookup (T-030).
     pub async fn get_device(&self, node_id: &[u8]) -> Result<Option<Device>> {
         let row = sqlx::query(
-            "SELECT node_id, name, role, paired_at, last_seen, revoked, device_hint
+            "SELECT node_id, name, role, paired_at, last_seen, revoked
              FROM device WHERE node_id = ?",
         )
         .bind(node_id)
@@ -126,36 +120,7 @@ impl Db {
             paired_at: r.get("paired_at"),
             last_seen: r.get("last_seen"),
             revoked: r.get::<i64, _>("revoked") != 0,
-            device_hint: r.get("device_hint"),
         }))
-    }
-
-    /// DEV-01: devices sharing a reinstall hint, excluding the given
-    /// NodeId and revoked rows — the "replace the old device" candidate
-    /// set for a fresh pairing with the same phone.
-    pub async fn find_by_hint(&self, hint: &str, exclude: &[u8]) -> Result<Vec<Device>> {
-        let rows = sqlx::query(
-            "SELECT node_id, name, role, paired_at, last_seen, revoked, device_hint
-             FROM device
-             WHERE device_hint = ? AND node_id != ? AND revoked = 0
-             ORDER BY paired_at ASC",
-        )
-        .bind(hint)
-        .bind(exclude)
-        .fetch_all(self.pool())
-        .await?;
-        Ok(rows
-            .iter()
-            .map(|r| Device {
-                node_id: r.get("node_id"),
-                name: r.get("name"),
-                role: Role::from_db(r.get("role")),
-                paired_at: r.get("paired_at"),
-                last_seen: r.get("last_seen"),
-                revoked: r.get::<i64, _>("revoked") != 0,
-                device_hint: r.get("device_hint"),
-            })
-            .collect())
     }
 
     /// Explicitly reinstate a revoked device — ONLY the pairing flow may
@@ -167,65 +132,6 @@ impl Db {
             .execute(self.pool())
             .await?;
         Ok(res.rows_affected() > 0)
-    }
-
-    /// DEV-01: merge an old device's data into a fresh pairing (owner
-    /// chose "替换旧的" in the confirm dialog). Moves asset ownership,
-    /// keeps the max backup watermark, then deletes the old row.
-    /// Returns the old device's name (for the audit trail).
-    pub async fn merge_device(&self, old: &[u8], new: &[u8]) -> Result<String> {
-        let old_name: Option<String> =
-            sqlx::query_scalar("SELECT name FROM device WHERE node_id = ?")
-                .bind(old)
-                .fetch_optional(self.pool())
-                .await?;
-        // Assets the old device uploaded now belong to the new identity.
-        sqlx::query("UPDATE asset SET src_device = ? WHERE src_device = ?")
-            .bind(new)
-            .bind(old)
-            .execute(self.pool())
-            .await?;
-        // Watermark: keep the max of both (the new row may already carry
-        // a watermark if the device re-paired in between).
-        let old_wm: Option<i64> =
-            sqlx::query_scalar("SELECT last_gen FROM backup_watermark WHERE node_id = ?")
-                .bind(old)
-                .fetch_optional(self.pool())
-                .await?;
-        let new_wm: Option<i64> =
-            sqlx::query_scalar("SELECT last_gen FROM backup_watermark WHERE node_id = ?")
-                .bind(new)
-                .fetch_optional(self.pool())
-                .await?;
-        if let Some(wm) = old_wm {
-            let merged = new_wm.map_or(wm, |n| n.max(wm));
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-            sqlx::query(
-                "INSERT INTO backup_watermark (node_id, last_gen, updated_at)
-                 VALUES (?, ?, ?)
-                 ON CONFLICT(node_id) DO UPDATE SET
-                   last_gen = excluded.last_gen,
-                   updated_at = excluded.updated_at",
-            )
-            .bind(new)
-            .bind(merged)
-            .bind(now)
-            .execute(self.pool())
-            .await?;
-        }
-        // Old identity is gone — a hello from it must now be rejected.
-        sqlx::query("DELETE FROM backup_watermark WHERE node_id = ?")
-            .bind(old)
-            .execute(self.pool())
-            .await?;
-        sqlx::query("DELETE FROM device WHERE node_id = ?")
-            .bind(old)
-            .execute(self.pool())
-            .await?;
-        Ok(old_name.unwrap_or_else(|| "未知设备".into()))
     }
 
     /// Mark a device revoked. Returns whether a row was affected.
@@ -356,7 +262,6 @@ mod tests {
             paired_at: 1_753_770_000_000 + i64::from(n),
             last_seen: None,
             revoked: false,
-            device_hint: None,
         }
     }
 
@@ -549,62 +454,34 @@ mod tests {
         assert!(wm.is_empty(), "revoked 设备不出现");
     }
 
-    // ── DEV-01: reinstall hint + merge ──
+    // ── DEV-02: 设备与身份 1:1 ──
 
-    fn hinted(n: u8, hint: &str) -> Device {
-        let mut d = device(n, Role::Member);
-        d.device_hint = Some(hint.into());
-        d
-    }
-
+    /// 同一个 NodeId 回来 = 同一行复用（正面证据）。DEV-02 删掉「替换旧
+    /// 身份」之后，「重装后续上旧账目」这件事不再存在；剩下的唯一续接
+    /// 语义就是这一条——密钥没变，行就没变，备份水位留在原处。
     #[tokio::test]
-    async fn find_by_hint_matches_active_only_and_excludes_self() {
+    async fn re_upserting_the_same_node_id_reuses_one_row_and_keeps_the_watermark() {
         let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&hinted(1, "abc")).await.unwrap();
-        db.upsert_device(&hinted(2, "def")).await.unwrap();
-        // Same hint but revoked — must not surface as a merge candidate.
-        let revoked = hinted(3, "abc");
-        db.upsert_device(&revoked).await.unwrap();
-        db.revoke(&[3u8; 32]).await.unwrap();
-
-        let hits = db.find_by_hint("abc", &[1u8; 32]).await.unwrap();
-        assert!(hits.is_empty(), "exclude=self + revoked excluded");
-
-        let hits = db.find_by_hint("abc", &[9u8; 32]).await.unwrap();
-        assert_eq!(hits.len(), 1, "only the active same-hint device");
-        assert_eq!(hits[0].node_id, vec![1u8; 32]);
-    }
-
-    #[tokio::test]
-    async fn merge_moves_assets_takes_max_watermark_and_removes_old() {
-        let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&hinted(1, "abc")).await.unwrap(); // old
-        db.upsert_device(&hinted(2, "abc")).await.unwrap(); // new
-                                                            // Old contributed assets + watermark 300; new has watermark 100.
-        db.insert_asset(&asset(&[1u8; 32], 1)).await.unwrap();
-        db.insert_asset(&asset(&[1u8; 32], 2)).await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
         db.set_watermark(&[1u8; 32], 300, 1_000).await.unwrap();
-        db.set_watermark(&[2u8; 32], 100, 1_000).await.unwrap();
+        db.revoke(&[1u8; 32]).await.unwrap();
 
-        let name = db.merge_device(&[1u8; 32], &[2u8; 32]).await.unwrap();
-        assert_eq!(name, "device-1");
+        // 重新配对：名字可能改过（「妈妈的手机」），身份没变。
+        let mut renamed = device(1, Role::Member);
+        renamed.name = "妈妈的手机".into();
+        db.upsert_device(&renamed).await.unwrap();
+        // upsert 故意不清吊销位——只有配对流程有权恢复信任。
+        assert!(db.get_device(&[1u8; 32]).await.unwrap().unwrap().revoked);
+        assert!(db.unrevoke(&[1u8; 32]).await.unwrap());
 
-        // Assets re-owned by the new identity.
-        let count = db.count_assets().await.unwrap();
-        assert_eq!(count, 2);
-        let rows = sqlx::query("SELECT src_device FROM asset")
-            .fetch_all(db.pool())
-            .await
-            .unwrap();
-        assert!(
-            rows.iter()
-                .all(|r| r.get::<Vec<u8>, _>("src_device") == vec![2u8; 32]),
-            "all assets now belong to the new NodeId"
+        let all = db.list_devices(true).await.unwrap();
+        assert_eq!(all.len(), 1, "同一个 NodeId 不得生出第二行：{all:?}");
+        assert_eq!(all[0].name, "妈妈的手机");
+        assert!(!all[0].revoked);
+        assert_eq!(
+            db.get_watermark(&[1u8; 32]).await.unwrap(),
+            Some(300),
+            "水位留在原处 = 照片不重传",
         );
-        // Watermark = max(300, 100).
-        assert_eq!(db.get_watermark(&[2u8; 32]).await.unwrap(), Some(300));
-        // Old identity gone — hello from it must be rejected downstream.
-        assert!(db.get_device(&[1u8; 32]).await.unwrap().is_none());
-        assert!(db.get_watermark(&[1u8; 32]).await.unwrap().is_none());
     }
 }

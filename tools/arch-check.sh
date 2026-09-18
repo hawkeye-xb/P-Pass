@@ -7,6 +7,8 @@
 #         #[cfg_attr(...)], and cfg!(...) forms, on every platform axis:
 #         unix, windows, linux, macos, target_os, target_family, target_env.
 #         Err on the side of false positives; the platform crate is exempt.
+#   B.3 — 设备记录不得物理删除（DEV-02）：crates/ 内不允许出现
+#         `DELETE FROM device` / `DELETE FROM backup_watermark`。
 set -euo pipefail
 
 FAIL=0
@@ -94,6 +96,36 @@ if [ -n "$VIOLATIONS_B2" ]; then
   FAIL=1
 else
   echo "   ✅ B.2: clean"
+fi
+
+# ── B.3: device rows are never hard-deleted ─────────
+
+echo "==> B.3: no physical delete of device / backup_watermark rows (DEV-02)"
+
+# DEV-02 (验收人 2026-09-17/09-18 拍板)：「本地不应该把这个设备的记录删除
+# 掉」，以及「任何设备都不应该对其它设备的记录有影响，尤其是删除」。设备
+# 记录只允许软删——`UPDATE device SET revoked = 1`，恢复信任只有配对流程
+# 有权做（`unrevoke`）。
+#
+# 被删掉的那条路径是 DEV-01 的 `merge_device()`：它把资产改挂到新身份后
+# `DELETE FROM device` + `DELETE FROM backup_watermark`，于是「这台设备
+# 存在过」这个事实在设备表里蒸发。设备与身份 1:1 定下之后这条路径整个
+# 不该存在（续旧账目 = 两个身份共享一份账，当场破 1:1）。
+#
+# 为什么是门禁而不是测试：语义靠人记会再漏——同形状的前例是
+# `flowTriggerLock`（MOB-88 #204：7 个入口记住 5 个）。行为测试证明
+# 「这次没删」，门禁证明「以后删不进来」。
+VIOLATIONS_B3=$(grep -rn --include='*.rs' --include='*.sql' \
+  -iE 'DELETE[[:space:]]+FROM[[:space:]]+(device|backup_watermark)\b' \
+  "$ROOT/crates" \
+  || true)
+
+if [ -n "$VIOLATIONS_B3" ]; then
+  echo "❌ B.3 VIOLATION: 设备记录只能软删（UPDATE device SET revoked = 1）:"
+  echo "$VIOLATIONS_B3"
+  FAIL=1
+else
+  echo "   ✅ B.3: clean"
 fi
 
 # ── Result ──────────────────────────────────────────

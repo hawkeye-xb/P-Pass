@@ -71,9 +71,7 @@ msg_keys! {
     UI_ALLOW => "ui.allow",
     UI_DENY => "ui.deny",
     /// DEV-01: owner picks "replace the old device" in the confirm dialog.
-    UI_ALLOW_REPLACE => "ui.allow_replace",
     /// DEV-01: owner picks "join as a brand-new device" instead.
-    UI_ALLOW_NEW => "ui.allow_new",
     UI_ADD_DEVICE => "ui.add_device",
     UI_GENERATE_QR => "ui.generate_qr",
     UI_QR_FALLBACK => "ui.qr_fallback",
@@ -267,8 +265,6 @@ mod tests {
             UI_RESTART_SERVICE_NO_CHANGE,
             UI_RESTART_SERVICE_STARTED,
             UI_RESTART_SERVICE_FAILED,
-            UI_ALLOW_REPLACE,
-            UI_ALLOW_NEW,
             UI_ENV_BADGE_TEST,
             UI_NAV_PHOTOS,
             UI_PHOTOS_COUNT,
@@ -292,7 +288,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 102);
+        assert_eq!(ALL.len(), 100);
     }
 
     #[test]

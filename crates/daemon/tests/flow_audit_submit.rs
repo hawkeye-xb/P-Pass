@@ -70,7 +70,6 @@ async fn paired_client(db: &Db) -> (IrohTransport, IrohTransport, transport::Pee
         paired_at: 1,
         last_seen: None,
         revoked: false,
-        device_hint: None,
     })
     .await
     .unwrap();

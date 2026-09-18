@@ -133,7 +133,6 @@ async fn status_devices_and_revoke_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "roundtrip").await;
     db.upsert_device(&Device {
-        device_hint: None,
         node_id: vec![0xAA; 32],
         name: "妈妈的手机".into(),
         role: Role::Member,
@@ -184,7 +183,6 @@ async fn device_rename_updates_list_and_appends_audit() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "rename").await;
     db.upsert_device(&Device {
-        device_hint: None,
         node_id: vec![0xBB; 32],
         name: "默认名字".into(),
         role: Role::Member,
@@ -239,7 +237,6 @@ async fn device_rename_rejects_bad_input_and_unknown_device() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "rename-bad").await;
     db.upsert_device(&Device {
-        device_hint: None,
         node_id: vec![0xCC; 32],
         name: "A".into(),
         role: Role::Member,
@@ -344,7 +341,6 @@ async fn activity_list_aggregates_backup_batches() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "t090activity").await;
     db.upsert_device(&Device {
-        device_hint: None,
         node_id: vec![0xA1; 32],
         name: "妈妈的手机".into(),
         role: Role::Member,
@@ -406,7 +402,6 @@ async fn devices_list_reports_connection_unknown_without_transport() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "t090conn").await;
     db.upsert_device(&Device {
-        device_hint: None,
         node_id: vec![0xAB; 32],
         name: "test-device".into(),
         role: Role::Member,
@@ -476,7 +471,6 @@ async fn pairing_start_and_confirm_over_ipc() {
                         token: pairing_token,
                         device_name: "IPC 测试机".into(),
                         role: "member".into(),
-                        device_hint: None,
                     },
                     now(),
                 )
@@ -539,7 +533,6 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
                         token,
                         device_name: name,
                         role: "member".into(),
-                        device_hint: None,
                     },
                     now(),
                 )
@@ -806,7 +799,6 @@ async fn subscription_delivers_pending_change_under_100ms() {
         token: "11".repeat(12),
         device_name: "事件测试机".into(),
         role: "member".into(),
-        device_hint: None,
     };
     let peer = transport::NodeId([0xBB; 32]);
     let pairing2 = pairing.clone();
@@ -859,7 +851,6 @@ async fn subscription_filter_blocks_unwanted_event_types() {
         token: "22".repeat(12),
         device_name: "过滤测试机".into(),
         role: "member".into(),
-        device_hint: None,
     };
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {
@@ -908,7 +899,6 @@ async fn unsubscribe_closes_subscription_connection() {
         token: "33".repeat(12),
         device_name: "退订测试机".into(),
         role: "member".into(),
-        device_hint: None,
     };
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {

@@ -81,7 +81,6 @@ async fn router_harness(_dir: &std::path::Path, db: Db, now: i64) -> RouterHarne
     let client_tp = endpoint().await;
     client_tp.add_peer(daemon_tp.local_addr());
     db.upsert_device(&Device {
-        device_hint: None,
         node_id: client_tp.node_id().0.to_vec(),
         name: "小红".into(),
         role: Role::Member,
@@ -293,7 +292,6 @@ async fn devices_list_presence_three_tiers() {
         (vec![0xEE; 32], "从未上报".to_string(), None),
     ] {
         db.upsert_device(&Device {
-            device_hint: None,
             node_id: node,
             name,
             role: Role::Member,

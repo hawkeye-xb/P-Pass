@@ -33,7 +33,6 @@ fn member(id: &transport::NodeId) -> Device {
         paired_at: 0,
         last_seen: None,
         revoked: false,
-        device_hint: None,
     }
 }
 

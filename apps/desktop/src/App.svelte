@@ -183,7 +183,6 @@
   // 编译期 flag 默认关；打开 = DEV-01 行为原样回来（反证路径）。
   // 底层不拆：pair.request 的 device_hint 照发照存（数据继续积累），
   // 未来打开入口即用。关闭时对话框与 DEV-01 之前完全一致。
-  const MERGE_ENTRY_ENABLED = false;
   // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
   let nowMs = $state(Date.now());
 
@@ -205,12 +204,12 @@
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
-      // DEV-01: 每项可能是 {name, hint_match}（新 daemon）或纯字符串
-      // （老 daemon）——统一 normalize 成对象。
+      // 每项可能是 {name}（新 daemon）或纯字符串（老 daemon）——
+      // 统一 normalize 成对象。
       try {
         const p = await call("pairing.pending", {});
         pendingList = (p.pending ?? []).map((x) =>
-          typeof x === "string" ? { name: x, hint_match: null } : x
+          typeof x === "string" ? { name: x } : x
         );
       } catch (_) {
         pendingList = [];
@@ -446,16 +445,13 @@
     }
   }
 
-  async function confirmPair(accept, name, mergeNodeId) {
+  async function confirmPair(accept, name) {
     try {
       // UX-08: 逐行处理——pairing.confirm 带 device_name 精确确认该台；
       // 不带则默认队首（老调用方兼容，语义不动）。
-      // DEV-01: merge_node_id 存在 = 用户选「替换旧的」——daemon 迁移
-      // 旧设备资产/水位后删除旧行；不传 = 作为新设备（与现状一致）。
       const r = await call("pairing.confirm", {
         accept,
         device_name: name,
-        merge_node_id: mergeNodeId ?? null,
       });
       flashMessage(
         accept ? t("ui.pair_allowed", { name: r.device }) : t("ui.pair_denied", { name: r.device }),
@@ -1670,30 +1666,17 @@
       <p class="hint modal-hint">确认是家人的手机吗？允许后它会出现在设备列表里。</p>
       <div class="pending-list">
         {#each pendingList as item}
-          <!-- DEV-01: item 可能带 hint_match——这台手机以前配对过
-               （重装/清数据后重扫）。DEV-01b: 入口先隐藏——flag 关时
-               hint_match 分支不渲染，对话框与 DEV-01 之前完全一致
-               （主按钮「允许」= 作为新设备）；打开 flag 即恢复
-               「替换旧的」主按钮 + 「作为新设备」次级按钮。 -->
+          <!-- DEV-02: 设备与身份 1:1——确认框只有「允许」/「拒绝」。
+               DEV-01 的「替换旧的」连同它依据的指纹匹配一起删掉了：那个
+               提示是手机自报的指纹算出来的，桌面端无法验证，等于让确认框
+               替对方声称「这台手机重装过」。 -->
           <div class="pending-row">
             <div class="pending-info">
               <span class="pending-name">{item.name}</span>
-              {#if MERGE_ENTRY_ENABLED && item.hint_match}
-                <span class="pending-hint">
-                  这台手机重装过——可以替换原来的「{item.hint_match.name}」，保留它的备份记录
-                </span>
-              {/if}
             </div>
             <div class="pending-actions">
               <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item.name)}>{t("ui.deny")}</Button>
-              {#if MERGE_ENTRY_ENABLED && item.hint_match}
-                <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(true, item.name)}>{t("ui.allow_new")}</Button>
-                <Button class="min-w-[64px]" onclick={() => confirmPair(true, item.name, item.hint_match.node_id)}>
-                  {t("ui.allow_replace")}
-                </Button>
-              {:else}
-                <Button class="min-w-[64px]" onclick={() => confirmPair(true, item.name)}>{t("ui.allow")}</Button>
-              {/if}
+              <Button class="min-w-[64px]" onclick={() => confirmPair(true, item.name)}>{t("ui.allow")}</Button>
             </div>
           </div>
         {/each}
@@ -2044,11 +2027,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .pending-hint {
-    color: var(--pp-act);
-    font-size: 13px;
-    line-height: 17px;
   }
   .pending-actions {
     display: flex;
