@@ -29,6 +29,7 @@ interprocess = "2"
 zip = "5"
 # System adapter (power hint, data dir) — not business logic.
 platform = { path = "../../../crates/platform" }
+tauri-plugin-single-instance = "2"
 
 [lib]
 name = "p_pass_desktop_lib"
