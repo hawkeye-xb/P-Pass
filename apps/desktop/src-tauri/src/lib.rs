@@ -6,7 +6,7 @@ mod ipc;
 
 use serde_json::{json, Value};
 use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Emitter;
 use tauri::Manager;
 
@@ -674,7 +674,30 @@ pub fn run() {
                 .icon(tray_icon)
                 .icon_as_template(cfg!(target_os = "macos"))
                 .menu(&menu)
-                .show_menu_on_left_click(true)
+                // DESK-18: 左键出菜单是 macOS 的习惯；Windows 上左键该打开
+                // 主窗口（下面的 on_tray_icon_event 负责），右键才出菜单。
+                // 用 cfg!（不是 #[cfg]）—— 两个平台的取值在每次构建里都被
+                // 类型检查，和上面 icon_as_template 同一手法。
+                .show_menu_on_left_click(cfg!(target_os = "macos"))
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button,
+                        button_state,
+                        ..
+                    } = event
+                    {
+                        if tray_left_click_opens_window(
+                            button,
+                            button_state,
+                            cfg!(target_os = "macos"),
+                        ) {
+                            if let Some(win) = tray.app_handle().get_webview_window("main") {
+                                let _ = win.show();
+                                let _ = win.set_focus();
+                            }
+                        }
+                    }
+                })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
                         if let Some(win) = app.get_webview_window("main") {
@@ -704,9 +727,67 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+/// DESK-18：左键点托盘该不该打开主窗口。
+///
+/// Windows 习惯：左键 = 打开应用主窗口，右键才出菜单。
+/// macOS 习惯：左键 = 出菜单（由 `show_menu_on_left_click` 负责），
+/// 所以 macOS 这里必须返回 false，否则会既弹菜单又开窗口。
+///
+/// 只认 `Up`：按下和抬起都会各来一个事件，两个都响应就会开两次窗口。
+///
+/// 抽成纯函数是刻意的——托盘点击在 CI 里没法模拟，但这个判定可以在**任何**
+/// 平台上单测。平台差异由调用方把 `cfg!(target_os = "macos")` 传进来，
+/// 于是两个平台的分支在每次构建里都被编译和检查（`cfg!` 而非 `#[cfg]`）。
+fn tray_left_click_opens_window(
+    button: MouseButton,
+    state: MouseButtonState,
+    is_macos: bool,
+) -> bool {
+    !is_macos && button == MouseButton::Left && state == MouseButtonState::Up
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// DESK-18 契约：左键抬起才开窗口，且 macOS 不开（那边左键出菜单）。
+    /// 这四条在任何平台上都跑——托盘点击本身模拟不了，但判定可以。
+    #[test]
+    fn left_click_up_opens_the_window_off_macos() {
+        assert!(tray_left_click_opens_window(
+            MouseButton::Left,
+            MouseButtonState::Up,
+            false
+        ));
+    }
+
+    #[test]
+    fn left_click_does_not_open_on_macos_where_it_shows_the_menu() {
+        assert!(!tray_left_click_opens_window(
+            MouseButton::Left,
+            MouseButtonState::Up,
+            true
+        ));
+    }
+
+    #[test]
+    fn right_click_never_opens_the_window() {
+        assert!(!tray_left_click_opens_window(
+            MouseButton::Right,
+            MouseButtonState::Up,
+            false
+        ));
+    }
+
+    /// 按下和抬起各来一个事件；只认 Up，否则一次点击开两次窗口。
+    #[test]
+    fn button_down_is_ignored_so_one_click_opens_once() {
+        assert!(!tray_left_click_opens_window(
+            MouseButton::Left,
+            MouseButtonState::Down,
+            false
+        ));
+    }
 
     #[test]
     fn startup_failure_reads_the_latest_sidecar_stderr_line() {
