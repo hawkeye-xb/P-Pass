@@ -143,6 +143,10 @@ docs/         Engineering docs: ROADMAP, PROGRESS (log & decisions),
 
 ## Development
 
+The JDK for local Android tooling is pinned once in `.java-version` at the
+repo root (CI reads the same file). Install it locally with:
+`brew install openjdk@$(cat .java-version)`.
+
 ```bash
 just ci                    # all gates (must be green before committing)
 cargo nextest run          # full test suite

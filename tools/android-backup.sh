@@ -14,7 +14,7 @@ DPID=$!
 for _ in $(seq 1 50); do grep -q 'ppf://pair' "$D/d.log" 2>/dev/null && break; sleep 0.2; done
 QR=$(grep -o 'ppf://pair[^ ]*' "$D/d.log")
 cd "$ROOT/apps/android"
-JAVA_HOME="${JAVA_HOME:-$(brew --prefix openjdk)}" \
-  PPF_DAEMON_QR="$QR" PPF_DAEMON_IPC="$D/library/ipc.token" \
+source "$ROOT/scripts/java-home.sh"
+PPF_DAEMON_QR="$QR" PPF_DAEMON_IPC="$D/library/ipc.token" \
   ./gradlew :app:testDebugUnitTest --tests '*DaemonBackupTest' --rerun
 grep -o "BACKUP OK[^<]*" app/build/test-results/testDebugUnitTest/TEST-*DaemonBackupTest.xml

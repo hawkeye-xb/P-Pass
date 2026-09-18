@@ -117,7 +117,11 @@ verify-m1:
 
 # Android unit tests (proto golden drift check included)
 android-test:
-    cd apps/android && JAVA_HOME=$(brew --prefix openjdk 2>/dev/null || echo "$JAVA_HOME") ./gradlew -q :app:testDebugUnitTest
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{ justfile_directory() }}/scripts/java-home.sh"
+    cd "{{ justfile_directory() }}/apps/android"
+    ./gradlew -q :app:testDebugUnitTest
 
 # T-051 live check: Kotlin iroh-ffi client speaks hello to a real daemon
 android-hello:
@@ -134,8 +138,14 @@ android-backup:
 # M2 total acceptance: Rust suite + Android suite + APK build +
 # live wire scripts (hello/pair/backup) against a throwaway daemon
 verify-m2:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{ justfile_directory() }}"
     cargo nextest run
-    cd apps/android && JAVA_HOME=$(brew --prefix openjdk) ./gradlew -q :app:testDebugUnitTest :app:assembleDebug
+    source scripts/java-home.sh
+    cd apps/android
+    ./gradlew -q :app:testDebugUnitTest :app:assembleDebug
+    cd ..
     tools/android-hello.sh
     tools/android-pair.sh
     tools/android-backup.sh

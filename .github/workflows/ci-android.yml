@@ -46,7 +46,8 @@ jobs:
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v4
         with:
           distribution: temurin
-          java-version: "17"
+          # BUILD-01: 版本唯一真相 = 仓根 .java-version（与本地 scripts/java-home.sh 同源）
+          java-version-file: .java-version
       - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v4
       - name: Build Android-native iroh-blobs provider
         run: |
