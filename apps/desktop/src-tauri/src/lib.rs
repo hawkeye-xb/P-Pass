@@ -375,6 +375,21 @@ fn resume_daemon_after_update() -> Result<(), String> {
     Ok(())
 }
 
+/// DESK-25：`taskkill` 用退出码区分「目标进程不存在」和真失败——128 是
+/// 前者（服务本来就没在跑，和 unix 分支里 pkill 的 1 同义，不算失败），
+/// 其余非零是后者。实测（2026-09-18，Windows 11 26200）：进程在 → 0；
+/// 进程不存在 → 128 `ERROR: The process "x" not found.`；非法参数 → 1。
+/// `taskkill_not_found_is_not_a_failure` 把这条事实本身也锁成断言。
+#[cfg(windows)]
+const TASKKILL_NOT_FOUND: i32 = 128;
+
+/// 杀 daemon 的结果判据。改这行会让 Windows 上「没杀掉」被当成杀成功，
+/// 紧接着就去 spawn 第二个 daemon——所以它有单测守着，不是内联的裸 if。
+/// `code == None` 只在被信号终止时出现（Windows 上不会），保守算失败。
+#[cfg(windows)]
+fn taskkill_is_failure(success: bool, code: Option<i32>) -> bool {
+    !success && code != Some(TASKKILL_NOT_FOUND)
+}
 /// DAE-04: 桌面壳更新后手动重启后台服务——杀掉当前运行的旧 daemon 进程，
 /// 靠 launchd KeepAlive（SuccessfulExit=false，crates/platform/src/macos.rs
 /// 注释：崩溃/被杀照样复活）自动拉起磁盘上已是新版本的同一个文件。
@@ -421,6 +436,16 @@ fn restart_daemon_process() -> Result<Value, String> {
             .args(["/F", "/IM", "ppf-daemon.exe"])
             .output()
             .map_err(|e| format!("杀掉旧后台服务进程失败：{e}"))?;
+        // DESK-25：这里以前接下 out 就再也没看过它——taskkill 失败（权限
+        // 不足、被 AV 拦、参数错）会被当成杀成功，然后直接去拉起第二个
+        // daemon。判据见 taskkill_is_failure。
+        if taskkill_is_failure(out.status.success(), out.status.code()) {
+            return Err(format!(
+                "杀掉旧后台服务进程失败：taskkill 退出码 {:?}（{}）",
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
         // Windows 没有 launchd KeepAlive 复活语义——杀掉后必须显式重新
         // 拉起（start_daemon 的一次性 spawn fallback 分支）。
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -906,5 +931,56 @@ mod tests {
         std::os::unix::fs::symlink(&dir, &link).unwrap();
         // 软链指向目录 → 即使按名字像个文件，也必须拒绝。
         assert!(validate_asset_file(&link).is_err());
+    }
+
+    // ── DESK-25: taskkill 结果判据 ──────────────────────────
+    // 只在 Windows 编译：判据本身是 #[cfg(windows)] 的，而 ci-desktop 的
+    // lane 跑在 ubuntu，所以这批断言今天只有本机和未来的 Windows CI
+    // (#164) 看得到。
+
+    #[cfg(windows)]
+    #[test]
+    fn taskkill_success_is_not_a_failure() {
+        assert!(!taskkill_is_failure(true, Some(0)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn taskkill_not_found_is_not_a_failure() {
+        // 服务本来就没在跑 —— 正常路径，不得报错。
+        assert!(!taskkill_is_failure(false, Some(128)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn taskkill_other_nonzero_is_a_failure() {
+        // 1 = 参数/权限错误（实测非法参数就是 1）。
+        assert!(taskkill_is_failure(false, Some(1)));
+        assert!(taskkill_is_failure(false, Some(2)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn taskkill_without_exit_code_is_a_failure() {
+        // 拿不到退出码时保守算失败，不能放行去 spawn 第二个 daemon。
+        assert!(taskkill_is_failure(false, None));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn real_taskkill_reports_128_for_a_missing_process() {
+        // 真机断言：判据里的 128 不是引文，是这台机器上跑出来的。
+        // 名字故意取成不可能存在的，所以这条不会杀掉任何东西。
+        let out = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "p-pass-desk25-no-such-process.exe"])
+            .output()
+            .expect("taskkill 必须存在于 Windows");
+        assert_eq!(
+            out.status.code(),
+            Some(TASKKILL_NOT_FOUND),
+            "「进程不存在」的退出码变了，判据要跟着改: stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
 }
