@@ -54,6 +54,29 @@ if ($gitVer) {
     Add-Result 'Git' 'BLOCK' 'git not found on PATH' 'winget install --id Git.Git -e'
 }
 
+# --- POSIX shell for just (QA-08 / #179) ---
+# The justfile sets windows-shell := ["bash", "-cu"], so every recipe needs
+# bash reachable on PATH. Git for Windows ships bash.exe/sh.exe in its bin
+# directory but puts only cmd on PATH, so PowerShell users hit
+# "could not find the shell bash" on their very first just command.
+$bashCmd = Get-Command bash -ErrorAction SilentlyContinue
+if ($bashCmd) {
+    Add-Result 'just.shell' 'OK' ('bash on PATH: ' + $bashCmd.Source)
+} else {
+    $gitBash = ''
+    foreach ($cand in @("$env:ProgramFiles\Git\bin\bash.exe", "${env:ProgramFiles(x86)}\Git\bin\bash.exe")) {
+        if (Test-Path $cand) { $gitBash = $cand; break }
+    }
+    if ($gitBash) {
+        $dir = Split-Path -Parent $gitBash
+        $detail = 'bash NOT on PATH (found at ' + $gitBash + ') - every just recipe fails here with "could not find the shell bash"'
+        $fix = 'run just from Git Bash, or prepend it for this session:  $env:PATH = "' + $dir + ';$env:PATH"'
+        Add-Result 'just.shell' 'WARN' $detail $fix
+    } else {
+        Add-Result 'just.shell' 'WARN' 'bash not found at all - every just recipe fails (justfile recipes are POSIX shell)' 'install Git for Windows (winget install --id Git.Git -e), then use Git Bash or add its bin directory to PATH'
+    }
+}
+
 # --- Rust toolchain (pinned version lives in rust-toolchain.toml) ---
 $pinnedRust = ''
 $toolchainFile = Join-Path (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)) 'rust-toolchain.toml'
@@ -207,8 +230,13 @@ foreach ($r in $results) {
 }
 
 Write-Output ''
-$blockCount = ($results | Where-Object { $_.Status -eq 'BLOCK' }).Count
-$warnCount = ($results | Where-Object { $_.Status -eq 'WARN' }).Count
+# QA-08 / #179: the @() wrapper is load-bearing. In Windows PowerShell 5.1,
+# Where-Object returning EXACTLY ONE object yields $null for .Count (zero
+# matches yields 0, two or more yields the real count). Without @(), a machine
+# with exactly one BLOCK item printed "0 BLOCK,  WARN" and then
+# "Result: READY" -- the report contradicted itself and hid the blocker.
+$blockCount = @($results | Where-Object { $_.Status -eq 'BLOCK' }).Count
+$warnCount = @($results | Where-Object { $_.Status -eq 'WARN' }).Count
 Write-Output "=== Summary: $blockCount BLOCK, $warnCount WARN ==="
 if ($blockCount -gt 0) {
     Write-Output 'Result: NOT READY to build. Resolve BLOCK items above first.'
