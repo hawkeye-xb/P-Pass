@@ -115,7 +115,7 @@ MOB-54「回队无人唤醒」都是这副焊接的毛刺。异步化后三者�
 | **取消当前轮** | 本地标 CANCELLED_BY_USER_ROUND，下次发现跳过（现有语义不动），不查对端 | 尽力而为 `flow.cancel`：grant 标 Cancelled + 中断任务 | partial 随保护失效被 GC 清理 |
 | **崩溃/断网恢复** | 醒来先 status 再决定 | active 无任务→重拉；completed→领回执；cancelled→skipped | iroh-blobs FsStore 天然续传（blobs_resume 测试实证） |
 
-竞态规则统一：**先过 irreversible 边界（complete_flow_grant）者赢，规则
+竞态规则统一：**先过 irreversible 边界（`complete_flow_grant`）者赢，规则
 是账本数据不是时序**——cancel/suspend 后迟到的 completed status 收敛为
 CONFIRMED（字节没白传，照片确实已备份），不弹 skipped。
 
@@ -186,9 +186,14 @@ FsStore partial 续传 ✅（跨重启有 blobs_resume 集成测试）、cancel 
 - [x] **cancel 清理用例**：cancel 后 grant=Cancelled → 越过 GC 保护名单 →
       partial 被清理（明确断言与 suspend 的相反落账，防两路混用）。
       `cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection`。
-- [ ] **迟到边界竞态用例**：materialize 前后各发一次 cancel/suspend → 两方向
+- [x] **迟到边界竞态用例**：materialize 前后各发一次 cancel/suspend → 两方向
       终态都确定：先过 complete_flow_grant 者赢，item 终 CONFIRMED 收回执，
-      不许靠 sleep 运气。**已拆出 [NET-17](NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md)。**
+      不许靠 sleep 运气。**已拆出 [NET-17](NET-17-late-boundary-race-between-materialize-and-cancel-suspend.md)；
+      2026-09-18 完成（PR #191）：两个用例各双向覆盖真实竞态（cancel-first
+      用 kill 阈值证明边界未过、complete-first 用 durable receipt 证明边界已
+      过），反证真跑（撤 SQL `AND state='active'` 守卫 → 两用例红于
+      flow_delivery.rs:2535/:2682，恢复后复绿），`flow_delivery` 35/35
+      全绿（两遍）+ `just ci` 全绿。**
 - [ ] **暂停不观察用例**（JVM）：暂停路径断言零 status/网络查询调用（原则 1
       反证：谁把"等桌面确认停了"做进暂停，此用例变红）。**已并入
       [NET-19](NET-19-android-no-competing-offer-and-pause-does-not-observe.md)。**
