@@ -1,5 +1,9 @@
+# SEC-03: `repos:` 里每一项的必需键是 `repo:`，不是 `name:`。写成 name 会让
+# pre-commit 在加载配置阶段就 InvalidConfigError 退出 —— 于是 gitleaks 根本
+# 走不到，而装了 hook 的人每次提交都被硬挡。本仓的 hook 全是本机可执行文件
+# （language: system），所以 repo 应为 `local`。
 repos:
-  - name: default
+  - repo: local
     hooks:
       - id: gitleaks
         name: gitleaks
