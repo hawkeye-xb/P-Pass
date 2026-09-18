@@ -308,7 +308,17 @@ internal fun flowLedgerSnapshot(context: Context): DiscoveryLedgerSnapshot {
  * cleanup can block. */
 internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
     synchronized(flowRuntimeLock) {
-        flowRuntimes.remove(daemonNodeId)?.nativeProvider?.close()
+        flowRuntimes.remove(daemonNodeId)?.let { stale ->
+            // MOB-88: 写者线程与副作用执行器要显式关掉。
+            //
+            // 实测（2026-09-18 真机重新配对）它们最终确实退出了——因为
+            // `Executors.newSingleThreadExecutor` 返回的是带 finalize 的包装
+            // 类，运行时对象被 GC 时顺带 shutdown。但那是靠终结器兜底的偶然
+            // 正确：GC 何时发生不可控，期间这条线程还活着、还持有旧账本的
+            // 引用。解除配对是一条明确的生命周期边界，就该在这里显式收。
+            stale.shutdown()
+            stale.nativeProvider.close()
+        }
     }
     File(context.filesDir, "flow-state/$daemonNodeId").deleteRecursively()
 }
