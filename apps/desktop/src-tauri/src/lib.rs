@@ -648,6 +648,35 @@ fn sidecar_daemon_version() -> Option<String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // DESK-21：单实例守卫必须是**第一个**注册的插件——它要在其余插件和
+        // setup 跑起来之前就判定「我是不是第二个」，晚注册就白费了。
+        //
+        // 真机复现（2026-09-18，已安装的 0.4.0-test.5）：连着启动两次，
+        // p-pass-desktop 进程从 0 → 1 → 2，两个都带标题为 P-Pass 的窗口。
+        // 所以这不是静态分析的猜测，是实测的缺陷。
+        //
+        // 回调里把已有窗口 show + focus：第二次启动的语义应当是「把我已经
+        // 开着的那个拿到前面来」，而不是静默什么都不做（那样用户会以为
+        // 双击没生效，继续双击）。
+        //
+        // 不加任何平台 cfg：这个插件三个桌面平台都有实现，且整个 crate 自带
+        // `#![cfg(not(any(target_os = "android", target_os = "ios")))]`，
+        // 移动端根本不编译它。macOS 上系统本来就保证单实例，多这层守卫
+        // 无害；写成平台分叉反而要往 crates/platform/ 加东西（B.2）。
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(win) = app.get_webview_window("main") {
+                // 三步缺一不可，实测得来的：
+                //   unminimize —— 窗口被最小化时，单靠 show + set_focus
+                //     **恢复不了**（真机实测：再启动一次之后 IsIconic 仍为
+                //     true、前台窗口也不是它）。show 只管「隐藏→可见」，
+                //     不管「最小化→还原」。
+                //   show       —— 关窗即隐藏到托盘（DESK-23）之后要靠它。
+                //   set_focus  —— 恢复可见之后还得真正拿到前台。
+                let _ = win.unminimize();
+                let _ = win.show();
+                let _ = win.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
