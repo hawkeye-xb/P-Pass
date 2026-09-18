@@ -94,6 +94,19 @@ pub trait PlatformAdapter: Send + Sync {
     // 系统集成
     fn notify(&self, title: &str, body: &str);
     fn data_dir(&self) -> PathBuf;
+    /// DEVLOG-02：daemon 在 `PPF_LOG_FILE` 未设时的**平台默认**日志文件。
+    ///
+    /// macOS 返回 `None`：launchd plist 的 `StandardErrorPath` 已经把 stderr
+    /// 重定向到文件，再叠一层只会写两份。Windows 必须返回 `Some`：HKCU Run
+    /// 键没有任何重定向能力，release 又不再分配控制台，不落盘就等于没有日志。
+    /// 入参是**生效的** data dir（由调用方解析 env / 平台约定后给出），
+    /// 因为一次性 daemon 靠 `PPF_DATA_DIR` 做隔离，日志不跟着走就会污染
+    /// 真实日志文件。默认实现返回 `None`——既无 launchd 托管也无 Run 键的
+    /// 平台自己决定。
+    fn default_log_file(&self, data_dir: &std::path::Path) -> Option<PathBuf> {
+        let _ = data_dir;
+        None
+    }
 }
 
 /// The adapter for the current platform.

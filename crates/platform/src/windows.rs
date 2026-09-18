@@ -134,6 +134,14 @@ impl PlatformAdapter for WindowsAdapter {
     fn data_dir(&self) -> PathBuf {
         PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into())).join("P-Pass")
     }
+
+    /// DEVLOG-02：Run 键启动的 daemon，其 stderr 唯一去处就是 Windows 自动
+    /// 分配的那个控制台——而 release 已经不再分配它，所以必须有确定的落盘
+    /// 位置。放在生效的 data dir 下，与 DPAPI blob、索引同域：data_dir 将来
+    /// 若从 Roaming 迁到 Local（DESK-24），日志跟着一起搬，不必改两处。
+    fn default_log_file(&self, data_dir: &Path) -> Option<PathBuf> {
+        Some(data_dir.join("logs").join("daemon.log"))
+    }
 }
 
 /// Spawn `exec` detached, with no console window (equivalent to macOS's
