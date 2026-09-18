@@ -201,6 +201,14 @@ pub enum ActiveTransferStatus {
 /// on `serde_json` alone, not `serde` — adding it just for one derive
 /// pulled in a dependency-tree reresolution that broke iroh-blobs'
 /// pinned `irpc` version; see NET-14 card notes).
+///
+/// BUILD-06: 闸门写成「存在即被使用」。唯一的非测试调用方是
+/// `nativeTransferStatus` 那个 JNI 导出（`#[cfg(feature = "android-jni")]`），
+/// 所以 feature 关闭时 lib target 里它没有调用方 ⇒ `-D warnings` 下的
+/// `dead_code` 直接变 error（`--all-targets` 里的 test target 算不上调用方，
+/// 两个 target 是分开编的）。加 `test` 是为了让 `wire_status_tests` 在默认
+/// feature 下仍然跑得到——不用 `#[allow(dead_code)]` 把问题盖住。
+#[cfg(any(feature = "android-jni", test))]
 impl ActiveTransferStatus {
     fn to_wire(&self) -> serde_json::Value {
         match self {
@@ -225,6 +233,8 @@ impl ActiveTransferStatus {
     }
 }
 
+// BUILD-06: 闸门同 to_wire——它只被 to_wire 调用，跟着一起存在或一起消失。
+#[cfg(any(feature = "android-jni", test))]
 fn hex_of(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
