@@ -1,6 +1,6 @@
 # QA-06 md-check / token-check 不在任何 CI lane 里——只靠「人记得跑 just ci」　级别 L1
 
-状态：🟥 挂号
+状态：✅ 已收口（issue #81，2026-09-18；本卡不再挂号）
 级别：L1（只动 workflow/门禁配置）
 关联：从 [QA-05](QA-05-md-check-blind-to-mid-row-hard-wrap.md) 分出（核对本 PR 该点起哪条 lane 时撞见）。与 QA-05 是**两件事、两个修法**：QA-05 改判据（`check-markdown-tables.py` 抓不到行中硬换行），本卡改覆盖（脚本压根没上 CI）；`token-check` 与 QA-05 无关。
 
@@ -41,3 +41,24 @@ context:（修法看着只是往 `ci-docs.yml` 加两个 step，但有两处要�
 阻塞与依赖:无。
 
 ## 实施记录（做完填）
+
+2026-09-18（issue #81，验收人在网页套用补丁）：
+
+**收口方式**：`.github/workflows/ci-docs.yml` 整 lane 改组——两个 queue
+门禁脚本随 QUEUE/cards 冻结退役并删除，lane 改由两个 step 组成：
+`python3 tools/check-markdown-tables.py`（md 表格被空行切断）与
+`python3 tools/check-token-drift.py`（`tokens.css` ↔ `tokens.json`
+漂移）。
+
+**挂号段 ⒜ 的教训已采纳**：触发 paths 按判据作用域对齐——`docs/**` +
+`cards/**`（md-check 实扫范围）+ `assets/design/tokens.json` +
+两个检查脚本自身 + workflow 文件本身；不再是只盯 `docs/QUEUE.md` 的窄
+路径。改任何 md 文档或设计 token 的 PR/push 都会点起本 lane。
+
+**justfile 同步**：`ci` / `ci-docs` 均去掉 `queue-check`；
+`ci-docs` = md-check + token-check + identity-check。
+
+**遗留说明**：挂号段建议的「先修 QA-05 再收编 md-check」顺序未执行
+（md-check 已进远端 lane，QA-05 的行中硬换行盲区随之带入远端 CI）。
+QA-05 由该卡独立跟踪，已于同日拍板留档不修，见
+[QA-05](QA-05-md-check-blind-to-mid-row-hard-wrap.md)。
