@@ -706,8 +706,8 @@ async fn mock_telemetry_server() -> (
                             .lines()
                             .find_map(|l| {
                                 l.to_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse::<usize>().ok())
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().ok())
                             })
                             .flatten()
                             .unwrap_or(0);
@@ -1311,7 +1311,7 @@ async fn offer_skips_the_network_fetch_when_content_already_has_a_durable_copy()
 #[tokio::test(flavor = "multi_thread")]
 async fn offer_reply_carries_the_terminal_receipt_when_content_already_exists() {
     // NET-24: the fix itself. NET-20's dedup completes synchronously inside
-    // the offer handler, so `emit_flow_delivered` fires before a caller that
+    // the the offer handler, so `emit_flow_delivered` fires before a caller that
     // subscribes *after* offer can possibly be listening — and the event bus
     // drops a broadcast with no subscribers outright. The reply the caller is
     // already awaiting is therefore the only guaranteed channel, and it must
@@ -2414,6 +2414,384 @@ async fn cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection() {
     assert!(
         cancelled_and_reclaimed,
         "never captured a genuine partial to cancel across 8 attempts"
+    );
+}
+
+/// NET-17, race direction 1: a `cancel` whose durable write lands BEFORE
+/// `complete_flow_grant` (the irreversible boundary) must converge the tuple
+/// to `cancelled`. The ordering is proven by data, not by sleep: the kill
+/// threshold guarantees the fetch is still in flight (receiver store holds
+/// >= KILL_THRESHOLD but the task has not finished), and `complete_flow_grant`
+/// strictly follows the fetch inside `run_fetch_body` — so at the moment
+/// `cancel` executes, the boundary provably has not been crossed. The same
+/// test then drives the OPPOSITE order on a second item (complete first,
+/// cancel after) and asserts the late cancel loses — each NET-17 test
+/// exercises both directions of the race for real.
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_before_complete_flow_grant_converges_to_cancelled() {
+    const PAYLOAD: usize = 24 * 1024 * 1024;
+    let mut payload = Vec::with_capacity(PAYLOAD);
+    let mut s: u64 = 0xCAFE_17A1_0000_0001;
+    while payload.len() < PAYLOAD {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        payload.extend_from_slice(&s.to_le_bytes());
+    }
+    payload.truncate(PAYLOAD);
+
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let source = root.path().join("source-x.bin");
+    std::fs::write(&source, &payload).unwrap();
+    let hash_x = *blake3::hash(&payload).as_bytes();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let ticket_x = provider_blobs.push(hash_x, &source).await.unwrap();
+    // Second, small item drives the opposite (complete-first) order below.
+    let bytes_y = b"net-17 complete-first fixture";
+    let source_y = root.path().join("source-y.jpg");
+    std::fs::write(&source_y, bytes_y).unwrap();
+    let hash_y = *blake3::hash(bytes_y).as_bytes();
+    let ticket_y = provider_blobs.push(hash_y, &source_y).await.unwrap();
+    let provider_node = provider_transport.node_id();
+
+    let db = paired_db("epoch-current", provider_node).await;
+    let offer_x = request("epoch-current", "lease-x", hash_x, ticket_x);
+    let receiver_store = root.path().join("receiver-store");
+
+    const KILL_THRESHOLD: u64 = 2 * 1024 * 1024;
+    let mut cancelled_before_the_boundary = false;
+    let mut raced_delivery: Option<FlowDelivery> = None;
+    for attempt in 0..8 {
+        let _ = std::fs::remove_dir_all(&receiver_store);
+        let receiver_transport =
+            IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+                .await
+                .unwrap();
+        let receiver_blobs = Arc::new(
+            Blobs::open(&receiver_transport, &receiver_store)
+                .await
+                .unwrap(),
+        );
+        let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+        delivery.offer(provider_node, &offer_x).await.unwrap();
+
+        let fetch_delivery = delivery.clone();
+        let fetch_offer = offer_x.clone();
+        let fetch =
+            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
+
+        let started = std::time::Instant::now();
+        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(60),
+                "fetch moved no bytes toward the kill threshold in 60s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        if fetch.is_finished() {
+            eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
+            continue;
+        }
+        // Still in flight => complete_flow_grant provably not executed =>
+        // this cancel is deterministically FIRST across the boundary.
+        delivery.cancel(provider_node, &offer_x).await.unwrap();
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), fetch)
+            .await
+            .expect("a cancelled fetch task must settle within 2s")
+            .expect("the spawned test task itself must not panic/be cancelled");
+        assert!(
+            matches!(outcome, Err(DeliveryError::Cancelled)),
+            "a fetch whose grant was cancelled before the boundary must resolve as Cancelled, got: {outcome:?}"
+        );
+
+        let status = delivery
+            .status(provider_node, &tuple_ref("epoch-current", "lease-x", 7))
+            .await
+            .unwrap();
+        assert_eq!(
+            status.state, "cancelled",
+            "cancel before the irreversible boundary must converge the tuple to cancelled"
+        );
+        assert!(
+            db.flow_receipt(provider_node.0.as_slice(), "epoch-current", 7)
+                .await
+                .unwrap()
+                .is_none(),
+            "a cancelled tuple must not carry a completion receipt"
+        );
+        // The terminal state is final: neither a repeat cancel nor a late
+        // suspend may move it (both require the grant to still be active).
+        assert!(
+            matches!(
+                delivery.cancel(provider_node, &offer_x).await,
+                Err(DeliveryError::GuardMismatch)
+            ),
+            "a repeat cancel on the cancelled tuple must lose"
+        );
+        assert!(
+            matches!(
+                delivery
+                    .suspend(provider_node, &tuple_ref("epoch-current", "lease-x", 7))
+                    .await,
+                Err(DeliveryError::GuardMismatch)
+            ),
+            "a late suspend on the cancelled tuple must lose"
+        );
+
+        cancelled_before_the_boundary = true;
+        raced_delivery = Some(delivery);
+        break;
+    }
+    assert!(
+        cancelled_before_the_boundary,
+        "never captured a mid-flight cancel across 8 attempts"
+    );
+
+    // Opposite order, same test: the second item crosses the boundary FIRST
+    // (fetch runs to completion — `fetch` only returns after the durable
+    // completed state is observable), then the late cancel/suspend must lose.
+    let delivery = raced_delivery.expect("the raced delivery must be in scope");
+    let offer_y = FlowFetchRequest {
+        queue_sequence: 8,
+        lease_token: "lease-y".into(),
+        content_hash: hex::encode(hash_y),
+        provider: ticket_y,
+        ..request("epoch-current", "lease-y", hash_y, String::new())
+    };
+    delivery.offer(provider_node, &offer_y).await.unwrap();
+    let receipt = delivery
+        .fetch(provider_node, &offer_y)
+        .await
+        .expect("the second item must complete normally");
+    assert_eq!(receipt.queue_sequence, 8);
+
+    assert!(
+        matches!(
+            delivery.cancel(provider_node, &offer_y).await,
+            Err(DeliveryError::GuardMismatch)
+        ),
+        "a cancel landing AFTER complete_flow_grant must not flip the completed tuple"
+    );
+    assert!(
+        matches!(
+            delivery
+                .suspend(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
+                .await,
+            Err(DeliveryError::GuardMismatch)
+        ),
+        "a suspend landing AFTER complete_flow_grant must not flip the completed tuple"
+    );
+    let status = delivery
+        .status(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
+        .await
+        .unwrap();
+    assert_eq!(
+        status.state, "completed",
+        "complete_flow_grant went first, so the tuple stays completed no matter what arrives late"
+    );
+    assert_eq!(
+        status
+            .receipt
+            .as_ref()
+            .map(|receipt| receipt.receipt_id.as_str()),
+        Some(receipt.receipt_id.as_str()),
+        "the durable receipt must survive the late cancel/suspend"
+    );
+}
+
+/// NET-17, race direction 2: once `complete_flow_grant` has executed, a late
+/// `cancel`/`suspend` must lose and the tuple stays `completed` with its
+/// receipt ("bytes were not wasted — the photo really is backed up"). The
+/// ordering is proven by observation, not sleep: `fetch` returns only after
+/// the durable completed state is readable. The same test then drives the
+/// OPPOSITE order (mid-flight cancel before the boundary) on a second item
+/// and asserts it converges to `cancelled` — mirroring
+/// `cancel_before_complete_flow_grant_converges_to_cancelled` so both NET-17
+/// tests cover both directions of the race.
+#[tokio::test(flavor = "multi_thread")]
+async fn complete_flow_grant_before_cancel_converges_to_completed() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    // Small item drives the complete-first direction.
+    let bytes_y = b"net-17 complete-first fixture";
+    let source_y = root.path().join("source-y.jpg");
+    std::fs::write(&source_y, bytes_y).unwrap();
+    let hash_y = *blake3::hash(bytes_y).as_bytes();
+    let ticket_y = provider_blobs.push(hash_y, &source_y).await.unwrap();
+    // Big item drives the opposite (cancel-first) direction below.
+    const PAYLOAD: usize = 24 * 1024 * 1024;
+    let mut payload = Vec::with_capacity(PAYLOAD);
+    let mut s: u64 = 0xCAFE_17B2_0000_0001;
+    while payload.len() < PAYLOAD {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        payload.extend_from_slice(&s.to_le_bytes());
+    }
+    payload.truncate(PAYLOAD);
+    let source_x = root.path().join("source-x.bin");
+    std::fs::write(&source_x, &payload).unwrap();
+    let hash_x = *blake3::hash(&payload).as_bytes();
+    let ticket_x = provider_blobs.push(hash_x, &source_x).await.unwrap();
+    let provider_node = provider_transport.node_id();
+
+    let db = paired_db("epoch-current", provider_node).await;
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
+
+    // Direction 2 first: the boundary is crossed before the phone's cancel
+    // is even sent — complete_flow_grant provably executed because `fetch`
+    // returns the durable receipt.
+    let offer_y = FlowFetchRequest {
+        queue_sequence: 8,
+        lease_token: "lease-y".into(),
+        content_hash: hex::encode(hash_y),
+        provider: ticket_y,
+        ..request("epoch-current", "lease-y", hash_y, String::new())
+    };
+    delivery.offer(provider_node, &offer_y).await.unwrap();
+    let receipt = delivery
+        .fetch(provider_node, &offer_y)
+        .await
+        .expect("the small item must complete normally");
+    assert_eq!(receipt.queue_sequence, 8);
+
+    assert!(
+        matches!(
+            delivery.cancel(provider_node, &offer_y).await,
+            Err(DeliveryError::GuardMismatch)
+        ),
+        "the late cancel must lose to the already-executed complete_flow_grant"
+    );
+    assert!(
+        matches!(
+            delivery
+                .suspend(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
+                .await,
+            Err(DeliveryError::GuardMismatch)
+        ),
+        "the late suspend must lose to the already-executed complete_flow_grant"
+    );
+    let status = delivery
+        .status(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
+        .await
+        .unwrap();
+    assert_eq!(
+        status.state, "completed",
+        "the terminal state after the boundary is completed and must be deterministic"
+    );
+    assert_eq!(
+        status
+            .receipt
+            .as_ref()
+            .map(|receipt| receipt.receipt_id.as_str()),
+        Some(receipt.receipt_id.as_str()),
+        "the durable receipt must survive the late cancel/suspend"
+    );
+
+    // Opposite order, same test: the big item is cancelled while provably
+    // still in flight (same kill-threshold idiom as the NET-06/NET-15 race
+    // tests) — cancel crosses the boundary FIRST and the tuple must
+    // converge to cancelled.
+    let offer_x = request("epoch-current", "lease-x", hash_x, ticket_x);
+    let receiver_store = root.path().join("receiver-store");
+    const KILL_THRESHOLD: u64 = 2 * 1024 * 1024;
+    let mut cancelled_before_the_boundary = false;
+    for attempt in 0..8 {
+        let _ = std::fs::remove_dir_all(&receiver_store);
+        let receiver_transport =
+            IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+                .await
+                .unwrap();
+        let receiver_blobs = Arc::new(
+            Blobs::open(&receiver_transport, &receiver_store)
+                .await
+                .unwrap(),
+        );
+        let attempt_delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+        attempt_delivery
+            .offer(provider_node, &offer_x)
+            .await
+            .unwrap();
+
+        let fetch_delivery = attempt_delivery.clone();
+        let fetch_offer = offer_x.clone();
+        let fetch =
+            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
+
+        let started = std::time::Instant::now();
+        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(60),
+                "fetch moved no bytes toward the kill threshold in 60s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        }
+        if fetch.is_finished() {
+            eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
+            continue;
+        }
+        // Still in flight => complete_flow_grant provably not executed =>
+        // this cancel is deterministically FIRST across the boundary.
+        attempt_delivery
+            .cancel(provider_node, &offer_x)
+            .await
+            .unwrap();
+
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), fetch)
+            .await
+            .expect("a cancelled fetch task must settle within 2s")
+            .expect("the spawned test task itself must not panic/be cancelled");
+        assert!(
+            matches!(outcome, Err(DeliveryError::Cancelled)),
+            "a fetch whose grant was cancelled before the boundary must resolve as Cancelled, got: {outcome:?}"
+        );
+
+        let status = attempt_delivery
+            .status(provider_node, &tuple_ref("epoch-current", "lease-x", 7))
+            .await
+            .unwrap();
+        assert_eq!(
+            status.state, "cancelled",
+            "cancel before the irreversible boundary must converge the tuple to cancelled"
+        );
+        assert!(
+            db.flow_receipt(provider_node.0.as_slice(), "epoch-current", 7)
+                .await
+                .unwrap()
+                .is_none(),
+            "a cancelled tuple must not carry a completion receipt"
+        );
+
+        cancelled_before_the_boundary = true;
+        break;
+    }
+    assert!(
+        cancelled_before_the_boundary,
+        "never captured a mid-flight cancel across 8 attempts"
     );
 }
 
