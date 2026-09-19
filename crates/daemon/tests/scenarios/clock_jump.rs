@@ -74,7 +74,6 @@ async fn send_pair(tp: &IrohTransport, daemon: transport::NodeId, token: &str, n
             token: token.into(),
             device_name: name.into(),
             role: "member".into(),
-            device_hint: None,
         })
         .unwrap(),
     )
@@ -91,7 +90,6 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
 
     // 健康基线：一个已配对设备 hello 正常。
     db.upsert_device(&Device {
-        device_hint: None,
         node_id: ctp.node_id().0.to_vec(),
         name: "老设备".into(),
         role: Role::Member,

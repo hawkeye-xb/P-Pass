@@ -71,7 +71,6 @@ import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.BackupHealthPrefs
 import com.hawkeyexb.ppass.backup.ConfirmedStore
 import com.hawkeyexb.ppass.backup.isPartialMediaAccess
-import com.hawkeyexb.ppass.backup.ReinstallHintPrefs
 import com.hawkeyexb.ppass.backup.resumeAfterInterruption
 import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
@@ -476,13 +475,10 @@ fun PPassApp() {
                 // never crash the app (real-phone T-052 lesson).
                 val outcome = try {
                     client.bind(identity.secretKey())
-                    // DEV-01: 重装识别开关（默认开）——关掉时 pair.request
-                    // 不带 device_hint，重装后按旧行为出新设备行。
                     pairWithQr(
                         client,
                         s.qr,
                         deviceName(),
-                        reinstallHintEnabled = ReinstallHintPrefs(context.filesDir).enabled(),
                         invalidCodeMessage = context.getString(R.string.not_a_code),
                         unparseableCodeMessage = context.getString(R.string.pair_unparseable_code),
                         storageDeviceNameFallback = context.getString(R.string.storage_device_default),
@@ -585,9 +581,6 @@ fun PPassApp() {
                     }
                 }
             }
-            // DEV-01b: 重装识别入口先隐藏（用户拍板）——设置页开关行已删；
-            // device_hint 照发照存（pair.request 处直接读 pref，默认开，
-            // 数据继续积累，未来打开入口即用）。
             // MOB-02 §三: 「需要 Wi-Fi」关闭需二次确认（移动网络消耗流量）。
             var pendingWifiOff by remember { mutableStateOf(false) }
             // SYNC-06: TimelineLoader 由 timeline holder 按配对创建/重建

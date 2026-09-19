@@ -126,27 +126,76 @@ serde 默认忽略未知字段。所以删掉 `device_hint` 之后，**老版本
 
 ## 验收标准
 
-- [ ] RED 先行（门禁，不是行为测试）：加一条源码/schema 门禁——`crates/storage`
+- [x] RED 先行（门禁，不是行为测试）：加一条源码/schema 门禁——`crates/storage`
       内不允许出现 `DELETE FROM device`，命中即失败。删代码前这道门必须真红
       （现在 `device_repo.rs:224` 就命中）。**这是本卡唯一的长期资产**：
       语义靠人记会再漏，靠门禁才不会。
-- [ ] 同一道门禁覆盖 `DELETE FROM backup_watermark`（或说明为什么它可以删）。
-- [ ] GREEN：上表「只准动」全部删净；`rg -i 'device_hint|hint_match|merge_device|merge_node_id|MERGE_ENTRY'` 在
+- [x] 同一道门禁覆盖 `DELETE FROM backup_watermark`（或说明为什么它可以删）。
+- [x] GREEN：上表「只准动」全部删净；`rg -i 'device_hint|hint_match|merge_device|merge_node_id|MERGE_ENTRY'` 在
       非测试、非审计历史的源码里零命中。
-- [ ] 迁移：新增 migration 删掉 `device.device_hint` 列（已收集的指纹随列一起
+- [x] 迁移：新增 migration 删掉 `device.device_hint` 列（已收集的指纹随列一起
       消失 = 顺手清掉了不该留的数据）。迁移在**已有数据的库**上跑通，不是只在
       空库上。
-- [ ] 回归（证明"不删"的那条语义没被顺手改坏）：`pairing_flow.rs` 的解绑→
+- [x] 回归（证明"不删"的那条语义没被顺手改坏）：`pairing_flow.rs` 的解绑→
       `revoked=1`、移除→`revoked=1`、**同 NodeId 重新配对→`unrevoke` 复用同一行**
       三条断言全绿。第三条如果现在没有，本卡补上——它是 1:1 语义的正面证据。
-- [ ] 全量：`cargo nextest run --workspace` + Android JVM 全量（报计数）+ `just ci`。
-- [ ] 真机：三星 SM-S9210 走一遍「解绑 → 重新扫码」，确认桌面端确认框**不再出现**
-      任何「替换旧的」相关文案，设备页旧行仍在（标已断开授权），新行正常出现。
+- [x] 全量：`cargo nextest run --workspace` + Android JVM 全量（报计数）+ `just ci`。
+- [x] 真机：三星 SM-S9210（0.5.5-test.3 / 29）走通，见「真机验收记录」。
+
+## 真机验收记录（2026-09-18，三星 SM-S9210 / 0.5.5-test.3(29)）
+
+对着一个一次性 daemon（独立库目录，没碰验收人的真实库）跑。配对全程自动化：
+二维码本体就是 `ppf://pair?...` 串，手机侧走「手动输入配对串」`adb shell input
+text` 灌进去，机主那一下「允许」走 daemon IPC `pairing.confirm`——不需要点桌面弹窗。
+
+**① 手机解绑 → 设备行留着，只标已断开授权**
+
+    解绑后 devices.list(include_revoked=true) → 1 行: SM-S9210 revoked=True be03d1d1
+    默认列表（不含已吊销）                    → 0 行
+
+行没消失，只是从默认列表里隐去。这正是卡面要的「本地不应该把这个设备的记录删除掉」。
+
+**② 同一个 NodeId 重新配对 → 还是那一行，不生第二行**
+
+    重新配对后 → 1 行: SM-S9210 revoked=False be03d1d1
+
+审计时间线（同一个 actor `be03d1d1…`，一条不漏）：
+
+    pair.requested → pair.accepted  {detail: "SM-S9210"}
+    device.unpaired
+    pair.requested → pair.accepted  {detail: "SM-S9210 (rejoined after revoke)"}
+
+顺带印证了手机上那句断开确认文案「想恢复，重新扫码即可，已备份的不会重传」
+——1:1 下它本来就成立，不需要「替换旧身份」。
+
+**③ 换了身份的新设备加入 → 确认框不再有「替换旧的」可给，旧行一动不动**
+
+用 `testclient` 以一把**新密钥**（= 重装后的手机）加入，此时库里已有一行：
+
+    pairing.pending → {"pending": [{"name": "重装后的手机"}]}
+
+**只有名字，没有 `hint_match`。** 改造前这里正是指纹匹配出现的位置，桌面端据此
+渲染「这台手机重装过——可以替换原来的「XXX」」。现在确认框无从替任何人声称
+「这台手机重装过」。确认之后：
+
+    2 行: SM-S9210 revoked=False be03d1d1
+          重装后的手机 revoked=False ab839009
+    审计事件种类: [pair.accepted, pair.requested, pair.accepted, pair.requested,
+                  device.unpaired, pair.accepted, pair.requested]
+    device.merged 出现次数: 0
+
+两个身份并存、各自成立，**没有任何一行被另一台设备的加入改写或删除**。
+
+**副作用（已告知验收人）**：为跑通①，手机上那次真实配对被解掉了，且解绑消息发给
+的是本卡的一次性 daemon。验收人的真实库里那一行还是旧状态，下次开桌面端要重新扫码。
 
 ## 实施记录
 
 - 2026-09-17：排查 IDX-01「10 张照片不在列表」时读 `device_repo.rs` 撞见物理删。
   **本次照片丢失不是它造成的**（IDX-01 卡里已列反证），它是独立的同类缺陷。
+- 2026-09-18 实施：按新口径删净（PR #227），门禁 B.3 先红后绿，真机验收见上。
+  一个记账：迁移目录新增文件**不会**自动触发 `sqlx::migrate!` 重编译——验证迁移
+  时得 touch 一下源文件，否则跑的还是旧的迁移集（本次差点把"没生效"当成"列没删掉"）。
 - 2026-09-18：与验收人重新讨论后**口径整体重写**（见「口径变更」）。初版方向
   （软删 + `merged_into` + 设备详情挂历史身份）作废，理由：它是为"设备与身份
   两层"服务的设计，而验收人先定了 1:1。同时核实了四件事实：桌面入口是硬编码
