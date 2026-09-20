@@ -165,6 +165,103 @@ jobs:
       - name: Windows cross-check (platform crate compiles for msvc)
         run: rustup target add x86_64-pc-windows-msvc && cargo check -p platform --target x86_64-pc-windows-msvc
 
+  # CI-06 后半（#164，2026-09-20）：daemon 侧的测试第一次在**真 Windows** 上跑。
+  #
+  # 为什么要单开一个 job 而不是把上面的 test 改成矩阵：
+  #   上面那个 job 的名字 `test (nextest + windows cross-check)` **已经在 main 的
+  #   必需检查列表里**。矩阵会给名字加 `(ubuntu-latest)` 后缀 ⇒ 必需检查对不上
+  #   ⇒ 全部 PR 永久 Pending，管理员也绕不过（enforce_admins=true）。
+  #   ⇒ 本轮一个字都不动上面那个 job。它那句 "windows cross-check" 名不副实
+  #     （只是 cargo check 一个 crate），正名留给**独立的一次操作**：
+  #     删冗余步骤 + 改名 + 同步改分支保护，三件必须在同一次里成对完成。
+  #
+  # ⚠️ 本 job **刻意不进必需检查**（至少本轮不进）。它是每个 PR 都跑的，
+  # 一旦设为必需，所有人的等待时间就被本 job 顶到底。先量稳定耗时再由用户决定。
+  test-windows:
+    name: test (windows)
+    runs-on: windows-latest
+    # 冷缓存那次要建 vcpkg 静态 libheif（约 20min）+ 全量冷构建，给足余量；
+    # 热缓存下应远低于此。cargo test 没有单测级超时，DAE-06 (#176) 那种 300s
+    # 级挂死只能靠 job 超时兜底 —— 所以这是上限，不是预算。
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: tools/setup-rust-toolchain.sh
+
+      # ⭐ 本 job 能不能每个 PR 跑，全看这一步。
+      # artifacts.yml 只缓存了 cargo，**vcpkg 安装树没缓存** —— 那就是它注释里
+      # 「vcpkg static libheif is ~20min, not worth every push」、只能手工触发
+      # 的原因。这里把安装树也缓存掉。
+      # key 里带 ImageVersion：runner 镜像一换，它自带的 vcpkg 提交（连带端口
+      # 版本与编译工具链）就可能变，缓存必须跟着失效，否则会拿旧 ABI 的
+      # heif.lib 去链新工具链，炸得莫名其妙。
+      # ⚠️ 改动下面那行 install 的端口或特性时，**把 -v1 改成 -v2**，否则会命中
+      # 旧特性的安装树 —— #235 实测过 vcpkg 换特性时 install 会拒绝执行（要
+      # --recurse），而 libheif-sys 的 build script 缓存仍注入 x265-static，
+      # 直接 LNK1181。缓存不失效会把那个一次性的坑变成常驻故障。
+      # key 在步骤里算，不用 `${{ env.ImageVersion }}` —— `env` 上下文**只含
+      # workflow/job/step 里声明的变量**，runner 镜像自己的环境变量不在其中。
+      # 那样写会静默解析成空串，key 退化成常量，而注释还在说「镜像换了会失效」
+      # —— 属于自己骗自己。在 bash 步骤里 $ImageVersion 才真的读得到。
+      - name: Compute vcpkg cache key
+        id: vkey
+        shell: bash
+        run: |
+          key="vcpkg-libheif-core-x64-windows-static-md-${ImageVersion:-unknown}-v1"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "vcpkg cache key = $key"
+      - name: Cache vcpkg (static libheif)
+        id: vcpkg-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\vcpkg\installed
+          key: ${{ steps.vkey.outputs.key }}
+
+      # 与 artifacts.yml 逐字一致（BUILD-08 #235）：[core] = 不带默认特性，
+      # 摘掉 GPL 的 x265 编码器。HEIC **解码**靠 libde265，它是基础依赖不是特性。
+      # --clean-after-build 会删掉 packages/ 与 buildtrees/，所以上面只缓存
+      # installed/ —— 缓存别的目录是白占空间。
+      # 自报耗时与缓存命中，用来验「缓存命中后从 ~20min 掉到 1 分钟量级」
+      # 这条成功判据 —— 不许用「首次慢、以后快」含糊过去，要贴冷/热两次数字。
+      - name: Install libheif (vcpkg, static, no HEVC encoder)
+        shell: bash
+        run: |
+          echo "cache-hit = ${{ steps.vcpkg-cache.outputs.cache-hit }}"
+          start=$(date +%s)
+          /c/vcpkg/vcpkg.exe install "libheif[core]:x64-windows-static-md" --clean-after-build
+          echo "VCPKG_INSTALL_SECONDS=$(( $(date +%s) - start ))"
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: test-windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
+        with:
+          tool: cargo-nextest
+
+      # ⚠️⚠️ **刻意不带 `--all-features`** —— 上面那个 Linux job 带，这里不带，
+      # 这个差异是有理由的，不是抄漏了：
+      #   本仓的 android-jni feature 用到 `std::os::fd`，Windows 上**不存在**，
+      #   `--all-features` 把这个「只给 Android 桥用」的 feature 强开到 Windows
+      #   ⇒ transport crate 当场 E0432/E0599 编不过。那正是 BUILD-06 (#174)
+      #   的根因，也是 justfile:74-82 刻意不用这个 flag 的原因。
+      # 覆盖账：android-jni 那条路径仍由 Linux job 的 --all-features 覆盖，没丢。
+      # 👉 谁要在这里"顺手补上" --all-features，先去读 #174。
+      - name: Test (nextest, 无 --all-features — 见上方注释)
+        shell: bash
+        env:
+          VCPKG_ROOT: "C:\\vcpkg"
+        run: cargo nextest run
+
   arch:
     name: architecture enforcement
     runs-on: ubuntu-latest
