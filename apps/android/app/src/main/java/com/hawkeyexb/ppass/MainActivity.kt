@@ -422,6 +422,18 @@ fun PPassApp() {
     // 的唯一来源，不需要单独一屏）；部分授权 → Home 引导卡（MOB-02 §二，
     // 不显示假 0/0）；拒绝 → 人话对话框。备份主流程的入口，任何分支都
     // 不许白屏。
+    /**
+     * 这台电脑以前连过吗——**账本还在，就算连过。**
+     *
+     * 判据用账本而不是「pairing.json 里的 nodeId 眼熟」：账本在，才说明
+     * 「我传过哪些、传没传成」这些事实还在，对账才有东西可对；账本没了
+     * （首次配对、或换了一台电脑），那就是真的从零开始，该走 onboarding。
+     * 相册选择是另一份文件（BackupScopeStore），跟着一起留下。
+     */
+    fun hasExistingLedgerFor(pairing: Pairing): Boolean =
+        java.io.File(context.filesDir, "flow-state/${pairing.daemonNodeId}/discovery-ledger.json").exists() &&
+            BackupScopeStore(context).selectedBucketIds()?.isNotEmpty() == true
+
     fun enterBucketPicker(pairing: Pairing, firstTime: Boolean) {
         val needed = requiredMediaPermissions().filter {
             ContextCompat.checkSelfPermission(context, it) !=
@@ -508,7 +520,16 @@ fun PPassApp() {
                         // 反馈"扫完等 desktop 允许自己跳选择相册页面不行？"）；
                         // firstTime=true 标记这是 onboarding 首次选相册，
                         // 选完才过 M6 安心收尾页。
-                        enterBucketPicker(outcome.pairing, firstTime = true)
+                        //
+                        // MOB-87（2026-09-20 验收人定调）：**这是"第一次"才该
+                        // 走的路。** 重新连回一台**以前连过的**电脑，账本还在，
+                        // 相册选择也还在——再让人把 onboarding 重走一遍是白让
+                        // 他干一遍活。识别出来就直接回首页，让对账去把差异补上。
+                        if (hasExistingLedgerFor(outcome.pairing)) {
+                            screen = Screen.Home(outcome.pairing)
+                        } else {
+                            enterBucketPicker(outcome.pairing, firstTime = true)
+                        }
                     }
                     is PairOutcome.Refused -> screen = Screen.Trouble(
                         R.string.pair_refused_title,

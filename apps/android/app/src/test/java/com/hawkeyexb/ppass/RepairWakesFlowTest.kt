@@ -19,6 +19,7 @@
 package com.hawkeyexb.ppass
 
 import java.io.File
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -141,6 +142,11 @@ class RepairWakesFlowTest {
         val build = sliceBetween(runtime, "buildRuntime: bootstrap start", "buildRuntime: bootstrap done")
         assertTrue("引导三连必须夹在两条日志之间", build.contains("EnsurePairingEpoch"))
         assertTrue("写者线程仍要显式关", clear.contains("stale.shutdown()"))
-        assertTrue("原生 provider 仍要显式关", clear.contains("nativeProvider.close()"))
+        // MOB-91：改成 revoke——停在飞的传输，但**不关仓库**。关了之后同一
+        // 进程内再也 open 不回来（真机实测永久阻塞），整个 Flow 瘫痪到进程
+        // 重启，那正是「必须杀掉 App 重开」的真根因。详见
+        // MOB62RuntimeInitializationTest.the_native_provider_is_opened_once...
+        assertTrue("解除配对要停掉在飞的传输", clear.contains("nativeProvider.revoke("))
+        assertFalse("但不许关仓库", clear.contains(".close()"))
     }
 }
