@@ -61,6 +61,15 @@ sealed interface FlowAction {
 
     /** 审计事件已被桌面端确认，可以从 outbox 里删掉。 */
     data class AcknowledgeAuditEvents(val eventIds: Set<String>) : FlowAction
+
+    /**
+     * MOB-87：一轮远端对账的结果（桌面有哪些、缺哪些、缺的那些本地源还在不在）。
+     *
+     * 探测本身走网络与 ContentResolver，不能占写者线程，所以到这里的时候
+     * 答案已经拿到了——这条和 [AcceptReceipt] / [RecordContentHash] 一样，
+     * 是「事实已发生，请落账」，不是「请去查一下」。
+     */
+    data class ApplyReconciliation(val outcome: ReconciliationOutcome) : FlowAction
 }
 
 /**

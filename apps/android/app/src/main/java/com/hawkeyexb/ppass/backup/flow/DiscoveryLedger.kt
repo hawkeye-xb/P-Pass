@@ -57,6 +57,22 @@ object AuditKinds {
     const val ITEM_SOURCE_MISSING = "flow.item.source_missing"
 
     /**
+     * MOB-87: 对账本该有活干、却一条都没排进核对页。
+     *
+     * `ReconciliationCoordinator` 原本在这种情况下裸 `return`——调用方拿到的
+     * 「对完账了，全都在」和「一条都没对上」是同一个返回值。账本里明明有
+     * CONFIRMED 项却排不出核对页，只可能是筛选判据坏了（最典型的是账本项
+     * 的 `pairingEpoch` 没跟上 snapshot），**那是故障，不是"没事可做"**。
+     *
+     * 不抛异常：对账是收敛手段，一轮失败等下一轮，不能把备份搞停
+     * （同 daemon 侧 `reconcile.rs:125` 的纪律）。留痕而已。
+     *
+     * ⚠️ 这条**只**给「有 CONFIRMED 但页为空」用。桌面离线导致探测失败是
+     * 另一回事，那种情况直接等下一轮，不许往这里刷。
+     */
+    const val RECONCILIATION_STALLED = "flow.reconciliation.stalled"
+
+    /**
      * MOB-88: 一条异步送来的事实，其依据在落地时已经不成立，被 reducer 拒绝。
      *
      * 为什么要留这条：回执/失败/哈希回填这些事实来自原生传输线程，到达时
@@ -277,6 +293,17 @@ data class DiscoveryLedgerSnapshot(
      *  daemon. A dispatcher drains it with [DiscoveryLedgerStore.acknowledgeAuditEvents]
      *  after a durable ack; entries are never mutated, only appended or removed. */
     val auditOutbox: List<AuditOutboxEvent> = emptyList(),
+    /**
+     * MOB-87: 远端核对进度——上一轮对账核实到的最后一个 `queueSequence`。
+     *
+     * **这是一个循环游标，不是单调水位线。** 走到账本尾部就回 0，下一轮
+     * 从头再来。理由：桌面上的照片随时可能消失（磁盘、误删、库被挪走），
+     * 「核实过一次就永远不再看」等于把本卡要修的问题推迟到首轮对账之后。
+     *
+     * 用游标而不是「过滤掉已 PRESENT 的项」，差别正在这里：后者首轮之后
+     * 核对页永久为空，再也不复查。
+     */
+    val reconcileCursor: Long = 0L,
 )
 
 private val TERMINAL_DELIVERY_STATES = setOf(
