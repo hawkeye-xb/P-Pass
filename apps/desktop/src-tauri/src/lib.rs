@@ -1278,3 +1278,12 @@ mod tests {
         );
     }
 }
+
+// PROBE (必需检查反证) — 只在 Windows 编译的 unused 变量。
+// 期望：五条必需检查绿、desktop (windows-latest) 红 ⇒ mergeStateStatus=BLOCKED。
+// 这个分支永不合入，观察完即关闭。
+#[cfg(windows)]
+pub fn gate_blocks_red_probe() -> u8 {
+    let deliberately_unused_on_windows = 42u8;
+    7
+}
