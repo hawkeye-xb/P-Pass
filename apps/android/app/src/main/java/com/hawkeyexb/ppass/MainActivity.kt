@@ -89,6 +89,7 @@ import com.hawkeyexb.ppass.backup.WatermarkStore
 import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfillAndWake
+import com.hawkeyexb.ppass.backup.flow.requestFlowWakeAfterRepair
 import com.hawkeyexb.ppass.backup.flow.isOnUnmetered
 import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
 import com.hawkeyexb.ppass.ui.BackupStartedScreen
@@ -492,6 +493,16 @@ fun PPassApp() {
                 when (outcome) {
                     is PairOutcome.Joined -> {
                         pairings.save(outcome.pairing)
+                        // MOB-87: 配对成功这个状态跃迁，此前**没有任何人接**。
+                        // 补捞只挂在 `LaunchedEffect(backupInterrupted)`（键里
+                        // 没有配对状态）和 `ON_RESUME`（会话内重新扫码用户一直
+                        // 在 App 里，不走 STOPPED→RESUMED）——两个都接不住，
+                        // 于是"配对完成了却毫无动静"，必须杀 App 重开。
+                        //
+                        // 顺带跑一轮远端对账：断开期间桌面那边什么都可能发生过，
+                        // 这是最该核对一次的时刻，也是真机验收这条链最快的触发点
+                        // （不必等 5 小时兜底）。
+                        requestFlowWakeAfterRepair(context)
                         // M4（全页面状态稿）：桌面点"允许"之后不再停一个要
                         // 点按钮的 Joined 中间页——直接进选相册（用户实机
                         // 反馈"扫完等 desktop 允许自己跳选择相册页面不行？"）；

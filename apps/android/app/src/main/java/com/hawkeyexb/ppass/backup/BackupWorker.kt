@@ -13,6 +13,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.hawkeyexb.ppass.backup.flow.requestFlowReconcile
 import com.hawkeyexb.ppass.backup.flow.runFlowWake
 import java.util.concurrent.TimeUnit
 
@@ -24,6 +25,17 @@ const val PERIODIC_FALLBACK_HOURS = 5L
 const val CONTENT_UPDATE_DELAY_MS = 1_000L
 const val CONTENT_MAX_DELAY_MS = 30_000L
 private const val KEY_AUTOMATIC_WAKE = "automatic_wake"
+
+/**
+ * MOB-87：这一次唤醒顺便跑一轮远端对账（去问桌面「我以为传成功的那些，
+ * 你还在吗」）。
+ *
+ * **只有 5 小时的周期兜底那条挂这个标。** 别的唤醒（内容监听、回前台补捞、
+ * 手动备份）一拍一个，挂上去等于每拍一张照片就朝桌面发一页 500 个 hash
+ * 的查询——对账是收敛手段，不需要那个频率。重新授权那条更即时的触发走
+ * `requestFlowWakeAfterRepair`，不走 worker。
+ */
+private const val KEY_RECONCILE_REMOTE = "reconcile_remote"
 
 /** The switch owns these producers, and deliberately does not own Manual. */
 internal fun autoBackupWorkNames(): List<String> = listOf(
@@ -97,7 +109,13 @@ fun scheduleAutoBackup(context: Context) {
     val request = PeriodicWorkRequestBuilder<BackupWorker>(PERIODIC_FALLBACK_HOURS, TimeUnit.HOURS)
         .setConstraints(constraintsOf(constraintsFor(BackupTier.BACKGROUND, settings)))
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-        .setInputData(androidx.work.workDataOf(KEY_AUTOMATIC_WAKE to true))
+        .setInputData(
+            androidx.work.workDataOf(
+                KEY_AUTOMATIC_WAKE to true,
+                // MOB-87: 兜底那一轮才对账，见 KEY_RECONCILE_REMOTE。
+                KEY_RECONCILE_REMOTE to true,
+            ),
+        )
         .build()
     WorkManager.getInstance(context).enqueueUniquePeriodicWork(
         BACKUP_WORK_NAME,
@@ -158,6 +176,12 @@ class BackupWorker(
             // MANUAL 档的 worker 约束是零，旧代码在这里把调度放行直接当
             // 交付闸门，等于给所有手动路径开了后门。交付闸门一律实时算。
             runFlowWake(applicationContext)
+            // MOB-87: 兜底轮顺带核对一次桌面。放在 wake 之后——先把已知的活
+            // 干了，再去问"还有什么是我不知道的"。桌面离线时这一轮自己会
+            // 安静退出，不影响上面的 wake 结果。
+            if (inputData.getBoolean(KEY_RECONCILE_REMOTE, false)) {
+                requestFlowReconcile(applicationContext)
+            }
         }
         Result.success()
     } catch (t: Throwable) {

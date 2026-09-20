@@ -242,6 +242,77 @@ internal fun runFlowWake(
     flushAuditOutbox(context)
 }
 
+/**
+ * MOB-87：跑一轮远端对账——**去问桌面「我以为传成功的那些，你还在吗」**。
+ *
+ * 这是整条链上过去缺失的那一环。备份扫描只进不退（`DiscoveryCursor`），
+ * 扫过的照片不会再看；`commitDiscoveryPage` 又按 `stableId` 去重，所以账本
+ * 上那句「这张我传成功了」**从来没有任何东西会去推翻它**。桌面上的副本
+ * 没了，手机永远不知道——直到这个函数被调用。
+ *
+ * 两个触发点：
+ * - **重新授权成功**（[requestFlowReconcileAfterRepair]）：最可能发生变化的
+ *   时刻，断开期间桌面那边什么都可能发生过。
+ * - **5 小时周期 Worker**（`BackupWorker`）：兜底。
+ *
+ * 线程纪律：探测走网络 + ContentResolver，在 IO 上跑；落账走
+ * [FlowAction.ApplyReconciliation] 回写者线程（生产账本是
+ * `SingleThreadLedgerWrites` 强制的，在这里直接写会抛）。
+ *
+ * 桌面不可达时 [ReconciliationCoordinator.probe] 返回 null，这轮安静结束、
+ * 游标不推进、不落任何审计——等下一轮（同 daemon 侧 `reconcile.rs:125`
+ * 「对账是收敛手段」的纪律）。
+ */
+internal fun requestFlowReconcile(context: Context) {
+    val app = context.applicationContext
+    val pairing = PairingStore(app.filesDir).load() ?: return
+    val runtime = runtimeFor(app) ?: return
+    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+        val coordinator = ReconciliationCoordinator(runtime.ledger)
+        val plan = coordinator.planPage()
+        val outcome = if (plan.page.isEmpty()) {
+            // 空页也要投递：`stalled` 为真时 reducer 要落那条故障审计。
+            ReconciliationOutcome(plan, emptySet(), emptyMap())
+        } else {
+            val application = app as? PPassApplication ?: return@launch
+            val sourceProbe = ContentResolverSourcePresenceProbe(app.contentResolver)
+            coordinator.probe(
+                plan = plan,
+                remoteMissing = { hashes ->
+                    application.daemonClient.bind(IdentityStore(app.filesDir).secretKey())
+                    RemotePresenceProbe(application.daemonClient)
+                        .missing(parsePeerAddrToken(pairing.daemonAddrToken), hashes)
+                },
+                sourcePresence = { sourceRef -> sourceProbe.presence(sourceRef) },
+            ) ?: return@launch
+        }
+        runtime.writer.dispatch(FlowAction.ApplyReconciliation(outcome))
+        flushAuditOutbox(app)
+        // 对账可能把桌面缺失的项退回了 QUEUED——那是活，得有人去干。
+        runFlowWake(app)
+    }
+}
+
+/**
+ * MOB-87：重新授权成功后的那一下。
+ *
+ * 原症状（本卡挂号那条）是：会话内重新扫码配对成功 → 什么都不发生，
+ * 必须杀掉 App 重开才动。根因是补捞只挂在
+ * `MainActivity` 的 `LaunchedEffect(backupInterrupted)`（键里没有配对状态）
+ * 和 `ON_RESUME`（会话内重新配对不会走 STOPPED→RESUMED）——**配对成功这个
+ * 状态跃迁两个都不在其中**。
+ *
+ * 唤醒之外还多跑一轮对账：断开期间桌面那边什么都可能发生过，这是最该
+ * 核对一次的时刻。
+ */
+internal fun requestFlowWakeAfterRepair(context: Context) {
+    val app = context.applicationContext
+    thread(name = "ppass-flow-repair-wake") {
+        runFlowWake(app)
+        requestFlowReconcile(app)
+    }
+}
+
 internal fun pauseFlow(context: Context) {
     runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.Pause)
     flushAuditOutbox(context)
@@ -302,10 +373,26 @@ internal fun flowLedgerSnapshot(context: Context): DiscoveryLedgerSnapshot {
 }
 
 /**
- * Unpair/rejoin is a lifetime boundary: no old native provider, durable Flow
- * ledger, or in-memory runtime may survive and contaminate a new pairing.
- * This must run off the UI thread because native shutdown and filesystem
- * cleanup can block. */
+ * Unpair/rejoin is a lifetime boundary: no old native provider or in-memory
+ * runtime may survive and contaminate a new pairing. This must run off the UI
+ * thread because native shutdown can block.
+ *
+ * ## MOB-87：账本**不再删**
+ *
+ * 这里原本还有一行 `File(context.filesDir, "flow-state/$daemonNodeId")
+ * .deleteRecursively()`。删掉它等于每次断开都宣布"我什么都没传过"，重连后
+ * 整库重新提供一遍（实测 95 张照片 4 次重连 → 桌面 603 行），而且让对账
+ * 无从谈起——没有 CONFIRMED 项，就没有"桌面上还在吗"这个问题可问。
+ *
+ * 保留的是**数据**，关掉的是**执行**：runtime / native provider 照常关，
+ * 所有 wake 照常取消，旧 epoch 的凭证照常作废
+ * （[PairingEpochController.replaceDesktop]）。MOB-62 要的"断开后旧会话
+ * 不能再运行"因此依然成立——它卡面写的"旧 ledger 删除"是手段不是目的，
+ * 本卡合入后那一条作废。
+ *
+ * 重新配对时账本项由 [PairingEpochController.replaceDesktop] 认领到新
+ * epoch，内容事实逐字段不动。
+ */
 internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
     synchronized(flowRuntimeLock) {
         flowRuntimes.remove(daemonNodeId)?.let { stale ->
@@ -320,7 +407,6 @@ internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
             stale.nativeProvider.close()
         }
     }
-    File(context.filesDir, "flow-state/$daemonNodeId").deleteRecursively()
 }
 
 private data class AndroidFlowRuntime(
@@ -353,6 +439,7 @@ private fun AndroidFlowRuntime.reduce(context: Context, action: FlowAction) {
         FlowAction.ReconcileProcessStart -> runner.reconcileProcessStart()
         FlowAction.MigrateCompletedAt -> ledger.migrateMissingCompletedAt()
         is FlowAction.EnsurePairingEpoch -> PairingEpochController(ledger).ensureCurrentEpoch(action.epoch)
+        is FlowAction.ApplyReconciliation -> ReconciliationCoordinator(ledger).applyOutcome(action.outcome)
         is FlowAction.Wake -> {
             runner.requestDiscovery()
             runner.run(action.constraintsSatisfied)
