@@ -11,19 +11,21 @@
 # 2026-08-23 修正（K3 评审抓到的自相矛盾）：删 PR 触发 + dependabot =
 # 升级 PR 零检查。加回 pull_request，paths 只含流水线文件 + pnpm/npm 依赖
 # 清单——dependabot 改什么就触发什么，业务代码 PR 依旧不跑。
+# 2026-09-20（CI-07 #189）：上面那句「业务代码 PR 依旧不跑」**已作废**，
+# 理由同 ci-rust.yml（直推 main 的前提没了；本仓 PUBLIC 不计费）。
+# 对桌面域尤其要命：src-tauri 是独立 workspace，主 workspace 的 just ci
+# 覆盖不到它，本 lane 是它**唯一**的自动化门禁——而改 apps/desktop/** 的
+# PR 恰恰不触发本 lane。
 name: CI Desktop
 
 on:
+  # CI-07（2026-09-20）：**刻意不设 paths，每个 PR 都跑**，理由同
+  # ci-rust.yml（要设为必需检查的 lane 不能被 paths 跳过，否则 PR 永久
+  # Pending）。本 lane 实测 1m11s，是四条业务 lane 里最便宜的一条。
+  # ⚠️ 谁要给本 lane 加回 paths，请先把 main 的必需检查里 desktop 那条
+  # 摘掉，否则不碰 apps/desktop/** 的 PR 会全部卡死。
   pull_request:
     branches: [main]
-    paths:
-      - ".github/workflows/**"
-      - "apps/desktop/package.json"
-      - "apps/desktop/pnpm-lock.yaml"
-      - "apps/desktop/src-tauri/Cargo.toml"
-      - "apps/desktop/src-tauri/Cargo.lock"
-      - "rust-toolchain.toml"
-      - "tools/setup-rust-toolchain.sh"
   push:
     branches: [main]
     paths:
