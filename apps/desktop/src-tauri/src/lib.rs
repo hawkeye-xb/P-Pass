@@ -1278,3 +1278,12 @@ mod tests {
         );
     }
 }
+
+// PROBE (CI-06 #164 negative control) — 只在 Windows 编译的 unused 变量。
+// 期望：desktop (ubuntu-latest) 绿，desktop (windows-latest) 红。
+// 这个分支永不合入，观察完即关闭。
+#[cfg(windows)]
+pub fn ci06_windows_only_probe() -> u8 {
+    let deliberately_unused_on_windows = 42u8;
+    7
+}
