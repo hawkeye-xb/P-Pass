@@ -307,6 +307,10 @@ jobs:
 
   arch:
     name: architecture enforcement
+    # PROBE (#255 支点验证) — 故意让这个 job 被条件跳过。
+    # 它**已经在 main 的必需检查列表里**，所以这是不碰分支保护就能验
+    # 「skipped 的 job 对必需检查算不算通过」的办法。永不合入。
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
