@@ -880,10 +880,36 @@ jobs:
     env:
       TAG: ${{ needs.create-draft.outputs.tag }}
     steps:
-      - name: Download artifacts
+      # CI-09: 逐 lane 具名下载，不再用「无 name 全量下载」——v5+ 在该模式下
+      # 只有 1 个 artifact 时会平铺到 path、不建 <name>/ 子目录（README 未记载，
+      # 源码 src/download-artifact.ts 比对确认），下游按 artifacts/<name>/ 的
+      # 硬路径会整体落空。具名下载 + 显式 path 在 v4/v5+ 下布局恒定；与
+      # upload-windows job 的先例一致。lane 被跳过时其 artifact 可能不存在，
+      # 故每步用 needs.*.result 门控。
+      - name: Download macos artifact
+        if: needs.macos-arm64.result == 'success'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: artifacts
+          name: macos-arm64
+          path: artifacts/macos-arm64
+      - name: Download windows binaries
+        if: needs.windows-x64.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-x64
+          path: artifacts/windows-x64
+      - name: Download windows installer
+        if: needs.windows-x64.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-x64-installer
+          path: artifacts/windows-x64-installer
+      - name: Download android artifact
+        if: needs.android.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android
+          path: artifacts/android
 
       - name: Compose final notes
         run: |
@@ -916,20 +942,31 @@ jobs:
 
       # H-10c: dmg/apk 的 sha256（不进平台 SUMS——保持 zip 内 SUMS 与 release
       # 资产逐字节一致，T-071 三重核对①；人类资产哈希单独列在 notes）
-      # DESK-05: 单平台 dispatch 容错——缺平台的文件不存在就不写。
+      # DESK-05: 单平台 dispatch 容错——lane 未跑（skipped）则其文件本就不存在。
+      # CI-09: 但 lane 成功而文件落空 = 下载布局或产物有问题，必须红——
+      # 静默跳过会让正文缺 SHA-256 段且无人发现（#236 的失效方向）。
       - name: H-10c assets sha256 → notes
+        env:
+          MACOS_OK: ${{ needs.macos-arm64.result == 'success' }}
+          ANDROID_OK: ${{ needs.android.result == 'success' }}
         run: |
           set -euo pipefail
           {
             echo ""
             echo "### H-10c 资产 SHA-256"
-            if [ -f artifacts/macos-arm64/P-Pass-macos-arm64.dmg ]; then
+            if [ "$MACOS_OK" = "true" ]; then
+              [ -f artifacts/macos-arm64/P-Pass-macos-arm64.dmg ] \
+                || { echo "::error::macOS lane 成功但 artifacts/macos-arm64/P-Pass-macos-arm64.dmg 不存在——下载布局或产物异常，拒绝静默"; exit 1; }
               sha256sum artifacts/macos-arm64/P-Pass-macos-arm64.dmg
             fi
-            if [ -f artifacts/android/app-release.apk ]; then
-              sha256sum artifacts/android/app-release.apk
-            elif [ -f artifacts/android/app-release-unsigned.apk ]; then
-              sha256sum artifacts/android/app-release-unsigned.apk
+            if [ "$ANDROID_OK" = "true" ]; then
+              if [ -f artifacts/android/app-release.apk ]; then
+                sha256sum artifacts/android/app-release.apk
+              elif [ -f artifacts/android/app-release-unsigned.apk ]; then
+                sha256sum artifacts/android/app-release-unsigned.apk
+              else
+                echo "::error::Android lane 成功但 app-release*.apk 不存在——下载布局或产物异常，拒绝静默"; exit 1
+              fi
             fi
           } >> NOTES.md
 
