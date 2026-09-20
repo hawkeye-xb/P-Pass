@@ -13,7 +13,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.hawkeyexb.ppass.backup.flow.requestFlowReconcile
+import com.hawkeyexb.ppass.backup.flow.runFlowReconcile
 import com.hawkeyexb.ppass.backup.flow.runFlowWake
 import java.util.concurrent.TimeUnit
 
@@ -180,7 +180,10 @@ class BackupWorker(
             // 干了，再去问"还有什么是我不知道的"。桌面离线时这一轮自己会
             // 安静退出，不影响上面的 wake 结果。
             if (inputData.getBoolean(KEY_RECONCILE_REMOTE, false)) {
-                requestFlowReconcile(applicationContext)
+                // **挂起版，不是 fire-and-forget 版。** doWork 是 suspend，
+                // 必须等对账跑完再返回：否则 Result.success() 当场落地、
+                // wakelock 放掉，那个还在等桌面网络往返的协程随时被掐。
+                runFlowReconcile(applicationContext)
             }
         }
         Result.success()

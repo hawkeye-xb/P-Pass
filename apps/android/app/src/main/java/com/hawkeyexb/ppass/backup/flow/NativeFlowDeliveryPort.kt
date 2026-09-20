@@ -487,7 +487,14 @@ internal class NativeFlowDeliveryPort(
             } catch (failure: Throwable) {
                 if (!epochGuard.isCurrent(epoch)) {
                     Log.i("PPassFlow", "Discarding stale Flow delivery after pairing epoch changed")
-                    bridge.pause(lease)
+                    // MOB-90：这是**清理**路径。清理失败绝不该把整个 App 带走。
+                    // 真机实测：传输在飞时解除配对，`clearFlowRuntime` 已经关掉
+                    // 原生 provider，这里再去 stopActiveFetch 就抛
+                    // 「unknown Android provider handle」，协程里没人接 → FATAL。
+                    // MOB-91 把仓库改成永不关的单例之后句柄不会再失效，但清理
+                    // 路径本身该自己兜住——半截数据丢掉就丢掉，GC 会收。
+                    runCatching { bridge.pause(lease) }
+                        .onFailure { Log.w("PPassFlow", "Stale delivery cleanup failed; dropping it", it) }
                     active = null
                     return@launch
                 }

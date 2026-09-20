@@ -3,6 +3,7 @@ package com.hawkeyexb.ppass.backup.flow
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.backup.BackupSettings
@@ -264,33 +265,56 @@ internal fun runFlowWake(
  * 「对账是收敛手段」的纪律）。
  */
 internal fun requestFlowReconcile(context: Context) {
+    // 调用方不在协程里时用这个；worker 里**必须**用挂起版，见下。
+    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { runFlowReconcile(context) }
+}
+
+/**
+ * 挂起版：调用方等它跑完。
+ *
+ * `BackupWorker.doWork` 必须用这一个。之前那里调的是 fire-and-forget 版，
+ * `doWork` 当场 `Result.success()` 返回、WorkManager 认为活干完了、放掉
+ * wakelock——而那个还在等桌面网络往返的协程随时可能被掐掉。`runFlowWake`
+ * 是同步的所以没事，这条是异步的，漏了。
+ */
+internal suspend fun runFlowReconcile(context: Context) {
     val app = context.applicationContext
-    val pairing = PairingStore(app.filesDir).load() ?: return
-    val runtime = runtimeFor(app) ?: return
-    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-        val coordinator = ReconciliationCoordinator(runtime.ledger)
-        val plan = coordinator.planPage()
-        val outcome = if (plan.page.isEmpty()) {
-            // 空页也要投递：`stalled` 为真时 reducer 要落那条故障审计。
-            ReconciliationOutcome(plan, emptySet(), emptyMap())
-        } else {
-            val application = app as? PPassApplication ?: return@launch
-            val sourceProbe = ContentResolverSourcePresenceProbe(app.contentResolver)
-            coordinator.probe(
-                plan = plan,
-                remoteMissing = { hashes ->
-                    application.daemonClient.bind(IdentityStore(app.filesDir).secretKey())
-                    RemotePresenceProbe(application.daemonClient)
-                        .missing(parsePeerAddrToken(pairing.daemonAddrToken), hashes)
-                },
-                sourcePresence = { sourceRef -> sourceProbe.presence(sourceRef) },
-            ) ?: return@launch
-        }
-        runtime.writer.dispatch(FlowAction.ApplyReconciliation(outcome))
-        flushAuditOutbox(app)
-        // 对账可能把桌面缺失的项退回了 QUEUED——那是活，得有人去干。
-        runFlowWake(app)
+    val pairing = PairingStore(app.filesDir).load() ?: run {
+        Log.i("PPassFlow", "reconcile: not paired; skipping this round")
+        return
     }
+    val runtime = runtimeFor(app) ?: run {
+        Log.w("PPassFlow", "reconcile: no Flow runtime available; skipping this round")
+        return
+    }
+    val coordinator = ReconciliationCoordinator(runtime.ledger)
+    val plan = coordinator.planPage()
+    Log.i("PPassFlow", "reconcile: page=${plan.page.size} stalled=${plan.stalled}")
+    val outcome = if (plan.page.isEmpty()) {
+        // 空页也要投递：`stalled` 为真时 reducer 要落那条故障审计。
+        ReconciliationOutcome(plan, emptySet(), emptyMap())
+    } else {
+        val application = app as? PPassApplication ?: return
+        val sourceProbe = ContentResolverSourcePresenceProbe(app.contentResolver)
+        coordinator.probe(
+            plan = plan,
+            remoteMissing = { hashes ->
+                application.daemonClient.bind(IdentityStore(app.filesDir).secretKey())
+                RemotePresenceProbe(application.daemonClient)
+                    .missing(parsePeerAddrToken(pairing.daemonAddrToken), hashes)
+            },
+            sourcePresence = { sourceRef -> sourceProbe.presence(sourceRef) },
+        ) ?: run {
+            // 桌面不可达。游标不推进，下一轮重试同一页。
+            Log.i("PPassFlow", "reconcile: Desktop unreachable; retrying the same page next round")
+            return
+        }
+    }
+    Log.i("PPassFlow", "reconcile: Desktop is missing ${outcome.missing.size} of ${plan.hashes.size}")
+    runtime.writer.dispatchAndAwait(FlowAction.ApplyReconciliation(outcome))
+    flushAuditOutbox(app)
+    // 对账可能把桌面缺失的项退回了 QUEUED——那是活，得有人去干。
+    runFlowWake(app)
 }
 
 /**
@@ -308,8 +332,17 @@ internal fun requestFlowReconcile(context: Context) {
 internal fun requestFlowWakeAfterRepair(context: Context) {
     val app = context.applicationContext
     thread(name = "ppass-flow-repair-wake") {
-        runFlowWake(app)
-        requestFlowReconcile(app)
+        // 裸 `thread {}` 里抛出的异常只会走默认处理器，调用方什么也看不到
+        // ——真机上表现就是「配对完成了却毫无动静」，和根本没调过一模一样。
+        Log.i("PPassFlow", "repair: pairing accepted, waking Flow")
+        try {
+            runFlowWake(app)
+            Log.i("PPassFlow", "repair: wake dispatched, starting one reconciliation")
+            kotlinx.coroutines.runBlocking { runFlowReconcile(app) }
+            Log.i("PPassFlow", "repair: done")
+        } catch (failure: Throwable) {
+            Log.e("PPassFlow", "repair: wake/reconcile after pairing failed", failure)
+        }
     }
 }
 
@@ -404,7 +437,17 @@ internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
             // 正确：GC 何时发生不可控，期间这条线程还活着、还持有旧账本的
             // 引用。解除配对是一条明确的生命周期边界，就该在这里显式收。
             stale.shutdown()
-            stale.nativeProvider.close()
+            // MOB-91：**停掉在飞的传输，但不关仓库。**
+            //
+            // `revoke()` = 停 active fetch + 放掉 temp tag（半截数据交给 GC，
+            // 浪费掉无所谓）。`close()` = 连仓库一起关——而那之后同一进程内
+            // 再也 open 不回来，整个 Flow 引擎瘫痪到进程重启为止。
+            //
+            // 顺带也修掉 MOB-90：在飞的投递发现 epoch 变了、回头调
+            // `stopActiveFetch` 时，句柄依然有效，不再抛
+            // 「unknown Android provider handle」把整个 App 带走。
+            runCatching { stale.nativeProvider.revoke("") }
+                .onFailure { Log.w("PPassFlow", "clearFlowRuntime: revoke failed; ignoring", it) }
         }
     }
 }
@@ -487,13 +530,26 @@ private fun flushAuditOutbox(context: Context) {
 
 private fun runtimeFor(context: Context): AndroidFlowRuntime? {
     val app = context.applicationContext as PPassApplication
-    val pairing = PairingStore(context.filesDir).load() ?: return null
-    if (pairing.pairingEpoch.isBlank()) return null
+    // MOB-87 取证：这个函数此前**全程无日志**，于是「重新配对后什么都没发生」
+    // 在 logcat 上和「一切正常」长得一模一样——真机定位时只能靠 run-as 读账本
+    // 反推。每条 return 都留痕，坏在哪一步一眼可见。
+    val pairing = PairingStore(context.filesDir).load() ?: run {
+        Log.i("PPassFlow", "runtimeFor: no pairing on disk; nothing to build")
+        return null
+    }
+    if (pairing.pairingEpoch.isBlank()) {
+        Log.w("PPassFlow", "runtimeFor: pairing has a blank epoch; refusing to build")
+        return null
+    }
     val epoch = PairingEpoch(pairing.pairingEpoch)
     val key = pairing.daemonNodeId
     synchronized(flowRuntimeLock) {
         flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let { return it }
     }
+    Log.i(
+        "PPassFlow",
+        "runtimeFor: no live runtime for epoch=${epoch.value.take(8)}; building (thread=${Thread.currentThread().name})",
+    )
     // MOB-88: 构造段做 single-flight。改造前这里没有互斥——两个线程同时
     // 为同一个 key 构造，会各建一套 FlowRunner、各跑一次
     // reconcileProcessStart()，写的是**同一份磁盘账本**（本卡的原始范围）。
@@ -503,7 +559,14 @@ private fun runtimeFor(context: Context): AndroidFlowRuntime? {
         synchronized(flowRuntimeLock) {
             flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let { return it }
         }
-        return buildRuntime(context, app, epoch, key)
+        // 构造会走原生 open（数秒）+ 三条引导 action。任何一步抛出，调用方
+        // 此前只会看到一个 null / 一条死掉的线程，不留任何痕迹。
+        return try {
+            buildRuntime(context, app, epoch, key)
+        } catch (failure: Throwable) {
+            Log.e("PPassFlow", "runtimeFor: buildRuntime threw for epoch=${epoch.value.take(8)}", failure)
+            throw failure
+        }
     }
 }
 
@@ -523,7 +586,12 @@ private fun buildRuntime(
         writeGuard = SingleThreadLedgerWrites(writer.thread),
     )
     lateinit var runner: FlowRunner
-    val native = AndroidNativeIrohBlobsProvider.open(context.filesDir)
+    // MOB-87 取证：原生 open 是整条构造里最慢、也最可能卡住或抛出的一步
+    // （数秒级；MOB-62 的 ANR 就栽在它身上）。它两侧各留一条，才分得清
+    // 「没走到这里」「卡在这里」「这里抛了」。
+    // MOB-91：拿的是进程内单例，第一次才真的 open。跨配对复用，永不 close。
+    val native = sharedNativeProvider(context)
+    Log.i("PPassFlow", "buildRuntime: native blobs provider ready")
     val bridge = IrohBlobsProviderBridge(native) { source ->
         try {
             context.contentResolver.openFileDescriptor(Uri.parse(source), "r")
@@ -624,21 +692,69 @@ private fun buildRuntime(
     //   ① 代号校正（旧代号的账要整份作废）
     //   ② MOB-53 的 completedAt 一次性迁移（改造前藏在 load() 里）
     //   ③ 上一条进程life遗留的租约降级回 QUEUED
+    // MOB-87 取证：①是账本迁移发生的唯一时刻。真机上「账本 epoch 没跟上
+    // pairing.json」这个症状，分水岭就在这三行跑没跑到。
+    Log.i("PPassFlow", "buildRuntime: bootstrap start epoch=${epoch.value.take(8)}")
     writer.dispatchAndAwait(FlowAction.EnsurePairingEpoch(epoch))
     writer.dispatchAndAwait(FlowAction.MigrateCompletedAt)
     writer.dispatchAndAwait(FlowAction.ReconcileProcessStart)
+    Log.i("PPassFlow", "buildRuntime: bootstrap done, ledger items=${ledger.load().items.size}")
     return synchronized(flowRuntimeLock) {
         val current = PairingStore(context.filesDir).load()
         if (current?.daemonNodeId != key || current.pairingEpoch != epoch.value) {
+            // 构造期间配对又变了：这套运行时生下来就过期，丢掉。
+            Log.w(
+                "PPassFlow",
+                "buildRuntime: pairing moved during construction " +
+                    "(built=${epoch.value.take(8)} now=${current?.pairingEpoch?.take(8)}); discarding",
+            )
             candidate.shutdown()
-            native.close()
+            // MOB-91：仓库是单例资产，丢弃这套运行时不等于关仓库。
             null
         } else {
             flowRuntimes[key] = candidate
+            Log.i("PPassFlow", "buildRuntime: published runtime epoch=${epoch.value.take(8)}")
             candidate
         }
     }
 }
+
+/**
+ * MOB-91：原生内容仓库是**进程内单例，开一次，永不关**。
+ *
+ * 它装的是 `runtime` / `store` / `transport` / `router`——一个 tokio 运行时、
+ * 一个落在 `filesDir/iroh-blobs-provider` 的内容仓库、一个 iroh 端点。
+ * **里面没有 token、没有 pairing_epoch、没有密钥对**，跟「这次配对是哪一次」
+ * 毫无关系。它是资产，不是会话。
+ *
+ * 此前解除配对会把它 `close()` 掉，而同一进程内的第二次 `nativeOpen` 会
+ * **永久阻塞**（真机实测 60s+ 未返回）——`nativeClose` 只做
+ * `registry.remove(handle)` + `revoke()`，而 `revoke()` 只清 active fetch 和
+ * dispatch handler，`runtime`/`store`/`transport`/`router` 一个没动，目录锁
+ * 也就没放。于是第二次 open 卡在同一个目录上。
+ *
+ * 更糟的是它卡在 `flowConstructionLock` 里面，之后每一个 `runtimeFor` 全部
+ * 堵死——整个 Flow 引擎瘫痪到进程重启为止。**这就是 MOB-87「必须杀掉 App
+ * 重开」的真根因**：杀 App 是唯一能让仓库重新打开的办法。
+ *
+ * 现在：开一次，跨配对一直活着。断开只 [AndroidNativeIrohBlobsProvider.revoke]
+ * ——停掉在飞的那次传输、放掉 temp tag，让半截数据交给 GC；仓库本身不动。
+ */
+private val nativeProviderLock = Any()
+
+@Volatile
+private var sharedNativeProvider: AndroidNativeIrohBlobsProvider? = null
+
+private fun sharedNativeProvider(context: Context): AndroidNativeIrohBlobsProvider =
+    sharedNativeProvider ?: synchronized(nativeProviderLock) {
+        sharedNativeProvider ?: run {
+            // 这一句**一个进程里只应该出现一次**。出现第二次就说明单例被谁
+            // 绕过了，而第二次 nativeOpen 会永久阻塞——取证时这是第一眼要看
+            // 的东西，所以它和「复用」分开打，不能共用一条。
+            Log.i("PPassFlow", "native blobs provider: opening (once per process)")
+            AndroidNativeIrohBlobsProvider.open(context.filesDir).also { sharedNativeProvider = it }
+        }
+    }
 
 private val flowRuntimeLock = Any()
 
