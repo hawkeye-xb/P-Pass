@@ -23,6 +23,7 @@
   "ui.pending_banner_text": "\"{name}\" just scanned this computer's QR code. Is this a family member?",
   "ui.pending_pairs": "{n} pairing request(s) awaiting confirmation",
   "ui.allow": "Allow",
+  "ui.allow_reconnect": "Allow reconnect",
   "ui.deny": "Deny",
   "ui.add_device": "Add a device",
   "ui.generate_qr": "Show pairing QR",

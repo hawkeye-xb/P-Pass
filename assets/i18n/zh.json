@@ -23,6 +23,7 @@
   "ui.pending_banner_text": "「{name}」刚扫了这台电脑的二维码。是家里人吗？",
   "ui.pending_pairs": "{n} 个配对请求待确认",
   "ui.allow": "允许加入",
+  "ui.allow_reconnect": "允许重连",
   "ui.deny": "拒绝",
   "ui.add_device": "添加设备",
   "ui.generate_qr": "显示配对二维码",

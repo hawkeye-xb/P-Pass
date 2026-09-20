@@ -37,6 +37,7 @@
   // DEV-03: 「自己断开」与「业主移除」的判据 + 已断开行文案（纯函数，
   // disconnected.test.js 钉边界）。
   import { isOwnerRemoved, disconnectedRow } from "./lib/disconnected.js";
+  import { pendingDialogText, pendingSubText, pendingAllowKey } from "./lib/pending.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
@@ -459,13 +460,18 @@
     }
   }
 
-  async function confirmPair(accept, name) {
+  async function confirmPair(accept, item) {
     try {
-      // UX-08: 逐行处理——pairing.confirm 带 device_name 精确确认该台；
-      // 不带则默认队首（老调用方兼容，语义不动）。
+      // UX-08: 逐行处理——pairing.confirm 精确确认该台；不带定位参数则
+      // 默认队首（老调用方兼容，语义不动）。
+      //
+      // DEV-04: 定位必须按 node_id。老设备改过名之后，弹窗上显示的是
+      // 桌面的名字，而队列里存的是手机自报名——继续按名字找就是
+      // NOT_FOUND，业主再也批不了这台设备（正是本卡要保的那个场景）。
       const r = await call("pairing.confirm", {
         accept,
-        device_name: name,
+        node_id: item?.node_id,
+        device_name: item?.name,
       });
       flashMessage(
         accept ? t("ui.pair_allowed", { name: r.device }) : t("ui.pair_denied", { name: r.device }),
@@ -1682,22 +1688,31 @@
     <Dialog open={showConfirmModal && pendingList.length > 0}>
       <!-- UX-08: 多台同时扫码 → 一屏全列，逐行允许/拒绝，处理完该行
            消失，全清后列表关闭——不挤牙膏式顺序弹窗。 -->
-      <h3>{pendingList.length > 1 ? `有 ${pendingList.length} 台设备请求加入` : "有设备请求加入"}</h3>
-      <p class="hint modal-hint">确认是家人的手机吗？允许后它会出现在设备列表里。</p>
+      <!-- DEV-04: 老设备重连 ≠ 陌生设备加入。判据是 node_id（daemon 查
+           device 表，不看 revoked），所以改过名的设备照样认得出来，
+           且用桌面上那个名字称呼它。措辞逻辑在 lib/pending.js，有测试。 -->
+      {@const dialogText = pendingDialogText(pendingList)}
+      <h3>{dialogText.title}</h3>
+      <p class="hint modal-hint">{dialogText.hint}</p>
       <div class="pending-list">
         {#each pendingList as item}
           <!-- DEV-02: 设备与身份 1:1——确认框只有「允许」/「拒绝」。
                DEV-01 的「替换旧的」连同它依据的指纹匹配一起删掉了：那个
                提示是手机自报的指纹算出来的，桌面端无法验证，等于让确认框
                替对方声称「这台手机重装过」。 -->
+          {@const sub = pendingSubText(item, humanTime(item.paired_at, nowMs))}
           <div class="pending-row">
-            <div class="pending-info">
-              <span class="pending-name">{item.name}</span>
-            </div>
+            <span class="pending-name">{item.name}</span>
             <div class="pending-actions">
-              <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item.name)}>{t("ui.deny")}</Button>
-              <Button class="min-w-[64px]" onclick={() => confirmPair(true, item.name)}>{t("ui.allow")}</Button>
+              <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
+              <!-- DEV-04: 按钮跟标题走。标题说「请求重新连接」而按钮说
+                   「允许加入」，正是本卡要拦的串台。 -->
+              <Button class="min-w-[64px]" onclick={() => confirmPair(true, item)}>{t(pendingAllowKey(item))}</Button>
             </div>
+            <!-- DEV-04: 实证副行占满整行。挤在名字那一列里会被按钮压到
+                 「首次配对 今天 10:26 · 已...」——摆出来的事实被截掉了，
+                 等于没摆（2026-09-20 验收人截图）。 -->
+            {#if sub}<span class="pending-sub">{sub}</span>{/if}
           </div>
         {/each}
       </div>
@@ -2027,31 +2042,42 @@
     max-height: 300px;
     overflow-y: auto;
   }
+  /* DEV-04: 两行网格——名字与按钮同行，实证副行独占整行。副行若跟名字
+     共用那一列，会被右侧按钮挤到只剩半句（验收截图里就是「已...」）。 */
   .pending-row {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    column-gap: 10px;
+    row-gap: 4px;
     background: var(--pp-linen);
     border-radius: var(--pp-radius-control-sm);
     padding: 10px 12px;
   }
-  .pending-info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-  }
   .pending-name {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  /* DEV-04: 老设备重连时的实证副行（首次配对时刻 · 已存 N 张）。
+     新设备这一行不存在——没有可说的事实就不占位。 */
+  .pending-sub {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--pp-ink-60);
+  }
   .pending-actions {
+    grid-column: 2;
+    grid-row: 1;
     display: flex;
     gap: 8px;
-    flex: none;
   }
   .hint {
     color: var(--pp-ink-40);
