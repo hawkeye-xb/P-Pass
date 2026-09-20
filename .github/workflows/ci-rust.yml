@@ -234,14 +234,28 @@ jobs:
           /c/vcpkg/vcpkg.exe install "libheif[core]:x64-windows-static-md" --clean-after-build
           echo "VCPKG_INSTALL_SECONDS=$(( $(date +%s) - start ))"
 
-      - name: Cache cargo
+      # ⚠️ **刻意不缓存 `target/`**（Linux 那个 job 缓存了，这里不缓存）。
+      # 这是量过账之后的决定，不是抄漏了。PR #249 的三轮实测：
+      #
+      #   带 target/ 的缓存条目大小 ............ 3636 MB
+      #   它省下的时间：Test 步骤 593s -> 290s .. 省 303s
+      #   它自己的恢复开销：Cache cargo ........ 花 146s
+      #   => 净省约 157s（2.6 分钟）
+      #
+      # 而本仓 Actions cache 配额**已经顶到 9.91 GB / 10 GB 上限**（22 个条目，
+      # 其中 test-Linux-cargo 就占 4081 MB）。再塞一个 3.6 GB 进去会触发 LRU
+      # 淘汰，把**别的 lane 的缓存挤掉** —— 代价是所有人的构建偶尔变慢，而且
+      # 是那种查不出原因的慢。
+      # ⇒ 用 36% 的仓库缓存配额去换 2.6 分钟，这笔账不划算。只缓存依赖源码
+      # （registry + git），target/ 每次重编。
+      # 👉 哪天配额宽裕了想加回 target/，先重新量一遍上面三个数字再决定。
+      - name: Cache cargo (依赖源码，刻意不含 target/ — 见上方注释)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/
             ~/.cargo/git/
-            target/
-          key: test-windows-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: test-windows-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
 
       # ffmpeg：Linux 那个 job 用 apt 装，Windows 上没有对应物，用仓库自己的
       # tools/fetch-ffmpeg.sh（它有 MINGW*/MSYS* 分支，在 runner 的 Git Bash
