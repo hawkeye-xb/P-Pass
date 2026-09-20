@@ -44,9 +44,32 @@ concurrency:
 
 jobs:
   desktop:
-    name: desktop (src-tauri tests + vite build)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    name: desktop (${{ matrix.os }})
+    # CI-06（#164，2026-09-20）：加 windows-latest。
+    # 在此之前**整个 CI 里没有一台 Windows 机器**——ci-rust.yml 里那个叫
+    # "test (nextest + windows cross-check)" 的 job 名字带 windows，实际只是
+    # `cargo check -p platform --target x86_64-pc-windows-msvc`：交叉 check
+    # 一个 crate，不链接、不跑任何测试。名字比能力大，是个陷阱。
+    # 后果是实测过的：「Windows 平台收口」里程碑为桌面壳补的 7 组回归测试
+    # （#214 #216 #217 #220 #223 #226 #229，本机 37 passed）在 CI 上一次都
+    # 没执行过。桌面壳又是独立 Cargo workspace（ADR-012），主 workspace 的
+    # just ci 覆盖不到它——本 lane 是它唯一的自动化门禁。
+    #
+    # 为什么这条 lane 能便宜地上 Windows：桌面壳只依赖 crates/platform
+    # （纯 Rust），**不依赖 media-codec**，所以不需要 vcpkg 静态 libheif
+    # 那套约 20 分钟的构建。那部分是 daemon 的事，留在 #164 的后半
+    # （ci-rust.yml 的 Windows job 扩到 workspace 构建 + nextest）。
+    strategy:
+      # 两个 OS 互不牵连：Windows 红不能掩掉 Linux 的结论，反之亦然。
+      # （CI-01④ 那次「四层洋葱」事故就是 fail-fast 让下一层永远跑不到。）
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    # Windows 冷构建（tauri 依赖树 + MSVC 链接）比 Linux 慢得多，原来的
+    # 30min 不够；显式给到 45。cargo test 没有单测级超时，真挂死（DAE-06
+    # #176 那种 300s 级别的）只能靠 job 超时兜底。
+    timeout-minutes: 45
     steps:
       # 全 pin commit SHA（CI 重构③，2026-08-23）：供应链攻击面归零，
       # dependabot 统一升级。
@@ -62,7 +85,9 @@ jobs:
             ~/.cargo/git/
             apps/desktop/src-tauri/target/
           key: ${{ runner.os }}-cargo-desktop-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+      # windows-latest 预装 WebView2 运行时与 MSVC 工具链，无需额外系统依赖。
       - name: System deps (tauri v2 on Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -70,35 +95,60 @@ jobs:
             libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
       # tauri-build wants the sidecar file to exist; the lib tests never
       # spawn it, so an empty stub is enough.
+      # externalBin 写的是裸名 "binaries/ppf-daemon"，tauri 按**目标三元组**
+      # 去找实际文件（release.yml:379 同名规则）——Windows 上必须是
+      # ppf-daemon-x86_64-pc-windows-msvc.exe，裸名或 Linux 那个名字都找不到。
       - name: Stub sidecar
+        shell: bash
         working-directory: apps/desktop/src-tauri
         run: |
           mkdir -p binaries
-          touch binaries/ppf-daemon-x86_64-unknown-linux-gnu
-          chmod +x binaries/ppf-daemon-x86_64-unknown-linux-gnu
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            stub=binaries/ppf-daemon-x86_64-pc-windows-msvc.exe
+          else
+            stub=binaries/ppf-daemon-x86_64-unknown-linux-gnu
+          fi
+          touch "$stub"
+          chmod +x "$stub"
+          ls -l "$stub"
       # CI-03: src-tauri 是独立 workspace（ADR-012），主 workspace 的
       # just ci（fmt + clippy）覆盖不到它——这里补上同档门禁，否则格式
       # 漂移无人发现（2026-08-25 实测 ipc.rs 两处既有代码被重排）。
+      # 三条都显式 shell: bash——windows-latest 的默认 shell 是 pwsh，
+      # 参数转义规则不同（`--` 的传递尤其容易出意外）。bash 在全部
+      # GitHub-hosted runner 上都预装，用它消掉整类 shell 差异。
       - name: rustfmt check (src-tauri)
+        shell: bash
         working-directory: apps/desktop/src-tauri
         run: cargo fmt -- --check
       - name: clippy (src-tauri, deny warnings)
+        shell: bash
         working-directory: apps/desktop/src-tauri
         run: cargo clippy --all-targets -- -D warnings
       - name: src-tauri lib tests
+        shell: bash
         working-directory: apps/desktop/src-tauri
         run: cargo test --lib
       # UI 构建（vite）——Svelte 编译错误（如模板语法）只有 build 才炸
       # （lint 不报）。assets/** 改动（tokens）也触发本域，确保 UI 侧
       # 消费新 token 时构建仍绿。desktop 用 pnpm（pnpm-lock.yaml，
       # 与 release.yml 的 pnpm tauri build 一致）。
+      # CI-06：UI 四步**只在 Linux 跑**。理由不是"省钱"（公开仓不计费），
+      # 是 Windows 侧的 UI 构建已由 release.yml 的 windows-latest job 覆盖
+      # （release.yml:381-382 `pnpm install --frozen-lockfile` +
+      # `pnpm tauri build --bundles nsis`）；而本 lane 即将进 main 的必需
+      # 检查，多引一条 Windows 上 pnpm 原生依赖/长路径的抖动源不划算。
+      # 代价写明：Windows 上的 UI 构建破损要到打 tag 时才会暴露。
       - name: Setup Node
+        if: runner.os == 'Linux'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
       - name: Install pnpm
+        if: runner.os == 'Linux'
         run: npm install -g pnpm@11
       - name: vite build (UI)
+        if: runner.os == 'Linux'
         working-directory: apps/desktop
         run: |
           pnpm install --frozen-lockfile
@@ -107,5 +157,6 @@ jobs:
       # DESK-06 修"墙不失效"、8/17 去卡顿又开了三个口子（只拉第一页 /
       # 已有条目不更新 / 删除不消失）。桌面端在此之前零测试。
       - name: 单测（照片墙对账 + 接线断言）
+        if: runner.os == 'Linux'
         working-directory: apps/desktop
         run: pnpm test
