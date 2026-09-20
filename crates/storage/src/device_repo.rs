@@ -188,6 +188,35 @@ impl Db {
         Ok(res.rows_affected() > 0)
     }
 
+    /// DEV-03：从审计流回填历史吊销行的来源。
+    ///
+    /// 与 migration `0008` 里那段 SQL 是同一份判据——提成方法是为了能被
+    /// 测试直接调用（迁移只跑一次，没法在单测里重放）。
+    ///
+    /// `device.unpaired` 的 actor 是**设备自己**（`router.handle_unpair`
+    /// 记的是 peer），`device.revoked` 的 actor 是 NULL（业主经本机 IPC
+    /// 操作）。所以只认前者。查不到记录的保持 NULL，展示层按「业主移除」
+    /// 处理。
+    pub async fn backfill_revocation_provenance(&self) -> Result<u64> {
+        let res = sqlx::query(
+            "UPDATE device
+             SET revoked_by = 'device',
+                 revoked_at = (
+                   SELECT MAX(occurred_at) FROM audit_operation
+                   WHERE kind = 'device.unpaired' AND actor = device.node_id
+                 )
+             WHERE revoked = 1
+               AND revoked_by IS NULL
+               AND EXISTS (
+                 SELECT 1 FROM audit_operation
+                 WHERE kind = 'device.unpaired' AND actor = device.node_id
+               )",
+        )
+        .execute(self.pool())
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// DEV-03：「家人与设备」的列表口径。
     ///
     /// - 在用的：列
@@ -442,6 +471,53 @@ mod tests {
 
         // 全量口径不变：诊断/统计仍看得到被移除的那台。
         assert_eq!(db.list_devices(true).await.unwrap().len(), 3);
+    }
+
+    /// DEV-03：升级迁移要从审计流回填历史吊销行的来源。
+    ///
+    /// 不回填的话，升级前就已断开的设备要等到「下次重连」或「下次再断一遍」
+    /// 才会正确出现——而这正是本卡要修的症状，等于让用户再忍一轮。
+    /// （本机那台 SM-S9210 升级后就正好落在这个处境里。）
+    #[tokio::test]
+    async fn the_migration_backfills_provenance_from_the_audit_trail() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+        db.upsert_device(&device(2, Role::Member)).await.unwrap();
+        // 一台自己断开过（审计里有 device.unpaired，actor = 它自己）。
+        db.append_audit(&crate::AuditEntry::local(
+            1_700_000_005_000,
+            Some(vec![1u8; 32]),
+            "device.unpaired",
+            None,
+            None,
+        ))
+        .await
+        .unwrap();
+        // 模拟「迁移之前就已吊销」：只写位，不带来源。
+        for n in [1u8, 2] {
+            sqlx::query("UPDATE device SET revoked = 1 WHERE node_id = ?")
+                .bind(vec![n; 32])
+                .execute(db.pool())
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(db.backfill_revocation_provenance().await.unwrap(), 1);
+
+        let one = db.get_device(&[1u8; 32]).await.unwrap().unwrap();
+        assert_eq!(
+            one.revoked_by,
+            Some(RevokedBy::Device),
+            "审计里有自我断开记录就该回填成 device"
+        );
+        assert_eq!(one.revoked_at, Some(1_700_000_005_000), "断开时刻也要回填");
+
+        let two = db.get_device(&[2u8; 32]).await.unwrap().unwrap();
+        assert_eq!(two.revoked_by, None, "查不到记录的保持未知");
+
+        let view = db.list_devices_for_family_view().await.unwrap();
+        assert_eq!(view.len(), 1, "回填之后，自己断开的那台才出现在列表里");
+        assert_eq!(view[0].node_id[0], 1);
     }
 
     /// DEV-03：来源未知的历史行（本列是 DEV-03 才加的）按「业主移除」处理。

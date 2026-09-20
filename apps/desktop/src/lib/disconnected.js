@@ -45,9 +45,10 @@ export function disconnectedRow(device, disconnectedAtText = null) {
   return {
     alert: false,
     dot: "idle",
-    sub: disconnectedAtText
-      ? `已断开 · ${disconnectedAtText}在这台手机上断开了连接`
-      : "已断开——在这台手机上断开了连接",
+    // 「已断开 · <时刻>」就够了。后半句「在这台手机上断开了连接」是把
+    // 「已断开」又说了一遍，占着一整列却不带新信息（2026-09-20 验收人
+    // 本地验收后拍掉）。
+    sub: disconnectedAtText ? `已断开 · ${disconnectedAtText}` : "已断开",
     right: "重新扫码即可恢复",
   };
 }

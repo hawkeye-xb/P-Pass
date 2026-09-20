@@ -41,13 +41,17 @@ test("两个判据永远互斥，且合起来覆盖所有 revoked 行", () => {
 test("已断开的行不借用「离线」话术——那读起来像「还在备份，只是不在线」", () => {
   const row = disconnectedRow(selfGone, "今天 14:20");
   eq(row.dot, "idle");
-  matches(row.sub, /已断开/);
+  eq(row.sub, "已断开 · 今天 14:20");
   notMatches(row.sub, /离线/);
   matches(row.right, /重新扫码/);
 });
 
+test("不把「已断开」换个说法再讲一遍——只给状态和时刻", () => {
+  notMatches(disconnectedRow(selfGone, "今天 14:20").sub, /断开了连接|这台手机/);
+});
+
 test("没有断开时刻时仍有可读文案", () => {
-  matches(disconnectedRow(selfGone, null).sub, /已断开/);
+  eq(disconnectedRow(selfGone, null).sub, "已断开");
 });
 
 test("不是自己断开的拿不到这套文案", () => {
