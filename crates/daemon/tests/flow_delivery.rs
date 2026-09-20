@@ -32,6 +32,8 @@ async fn paired_db(epoch: &str, peer: transport::NodeId) -> Db {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
@@ -1879,6 +1881,8 @@ async fn suspend_on_one_device_does_not_touch_another_devices_grant_for_the_same
             paired_at: 1,
             last_seen: None,
             revoked: false,
+            revoked_at: None,
+            revoked_by: None,
         })
         .await
         .unwrap();

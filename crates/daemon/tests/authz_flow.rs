@@ -51,6 +51,8 @@ fn paired(node_id: &[u8; 32], role: Role) -> Device {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     }
 }
 
@@ -129,7 +131,14 @@ async fn revoked_device_is_shut_out_at_once() {
     assert!(resp.ok);
 
     // Revoke → 吊销即拒连, even for hello.
-    assert!(db.revoke(&ctp.node_id().0).await.unwrap());
+    assert!(db
+        .revoke(
+            &ctp.node_id().0,
+            storage::RevokedBy::Owner,
+            1_700_000_000_000
+        )
+        .await
+        .unwrap());
     let resp = call(&ctp, dtp.node_id(), "hello").await;
     let err = resp.error.expect("denied after revocation");
     assert_eq!(err.code, codes::NOT_AUTHORIZED);

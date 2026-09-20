@@ -237,6 +237,10 @@ impl Pairing {
             paired_at: now_ms,
             last_seen: Some(now_ms),
             revoked: false,
+            // DEV-03：新配对/重新配对的设备不带吊销痕迹。已被吊销过的设备
+            // 由 `unrevoke` 清列——`upsert_device` 有意不碰这三列（防误触）。
+            revoked_at: None,
+            revoked_by: None,
         };
         let rejoining = matches!(
             self.db.get_device(&peer.0).await,

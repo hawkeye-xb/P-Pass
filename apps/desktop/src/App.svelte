@@ -34,6 +34,9 @@
   // apps/desktop/scripts/check-wire-fns.mjs 断言）
   // PRES-01: presence 三档 → 文案/点色（connection 路径事实优先展示）
   import { presenceText, flowConnectionText } from "./lib/connection.js";
+  // DEV-03: 「自己断开」与「业主移除」的判据 + 已断开行文案（纯函数，
+  // disconnected.test.js 钉边界）。
+  import { isOwnerRemoved, disconnectedRow } from "./lib/disconnected.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
@@ -223,7 +226,11 @@
         // 已处理完（confirmPair 清空 pending）——状态消失，不残留。
         showConfirmModal = false;
       }
-      const d = await call("devices.list");
+      // DEV-03: 这一屏要同时渲染「在用/已断开」和折叠的「已移除」，所以要
+      // 全量。此前不传参 ⇒ daemon 默认 `WHERE revoked = 0` ⇒ 下面那个
+      // 「已移除设备 N 台」折叠区**永远是空的、渲染不出来**（同一个默认
+      // 过滤，也让手机一断开设备就从列表里凭空消失——本卡要修的主症状）。
+      const d = await call("devices.list", { include_revoked: true });
       devices = d.devices ?? [];
       nowMs = Date.now();
       // T-091: 水位数据单独容错——拿不到不拖垮整页（保留上次值）
@@ -316,6 +323,10 @@
   const DOT_BG = { idle: "bg-idle", act: "bg-act", safe: "bg-safe", wait: "bg-waiting" };
 
   function deviceRow(d, now) {
+    // DEV-03: 已断开的设备先于一切分支返回——它不该参与「几天没备份了」
+    // 告警（授权都没了，催用户去开 App 是错的），也不该借用「离线」话术。
+    const disconnected = disconnectedRow(d, humanTime(d.revoked_at, now));
+    if (disconnected) return disconnected;
     const wm = watermarks[d.node_id];
     const lastBackupAt = wm?.last_backup_at ?? null;
     const backupTime = humanTime(lastBackupAt, now);
@@ -384,6 +395,9 @@
     return Math.max(d.last_seen ?? 0, wm?.last_backup_at ?? 0);
   }
   const waterRows = $derived.by(() => {
+    // 水位卡问的是「在用设备的备份健康度」——已断开/已移除的都不该算进来，
+    // 所以这里是 `!d.revoked`（比「家人与设备」列表的口径更窄），不是 DEV-03
+    // 那个 isOwnerRemoved。已断开的设备催用户「去开 App 备份」是错的。
     const active = devices.filter((d) => !d.revoked);
     const withRow = active
       .map((d) => ({ d, row: deviceRow(d, nowMs) }))
@@ -1356,10 +1370,16 @@
               <!-- 2026-08-18（用户反馈③）：按最近一次有动静倒序（新的在上）
                    ——与总览水位卡同一个 lastActivityAt 口径（last_seen 与
                    last_backup_at 取大者），不是 daemon 返回的入库顺序。 -->
+              <!-- DEV-03: 两种「离开」要分开。手机点「断开与这台电脑的连接」
+                   不是业主的决定，那台设备必须留在主列表里标「已断开」——
+                   业主有权知道它什么时候断的、到底是哪一台（可能被改过名）。
+                   业主自己点「移除设备」才收进下面的折叠区。
+                   判据是 daemon 给的 revoked_by，不是 revoked 这个布尔位。
+                   来源未知的历史行（DEV-03 之前留下的）按「已移除」处理。 -->
               {@const activeDevices = devices
-                .filter((d) => !d.revoked)
+                .filter((d) => !isOwnerRemoved(d))
                 .sort((a, b) => lastActivityAt(b) - lastActivityAt(a))}
-              {@const removedDevices = devices.filter((d) => d.revoked)}
+              {@const removedDevices = devices.filter(isOwnerRemoved)}
               {#if activeDevices.length === 0}
                 <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
               {:else}

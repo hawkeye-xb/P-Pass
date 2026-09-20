@@ -33,6 +33,8 @@ fn member(id: &transport::NodeId) -> Device {
         paired_at: 0,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     }
 }
 
@@ -200,7 +202,13 @@ async fn revoke_actively_closes_an_open_subscription() {
     // `device.revoke` 的两步：改数据库 + 查表主动断连（这里直接复用同
     // 一份 subscriptions handle，跳过 IPC 传输层——被测的是 router.rs
     // 的登记/断连机制本身，不是 IPC 的 JSON 解析）。
-    f.db.revoke(&f.client_tp.node_id().0).await.unwrap();
+    f.db.revoke(
+        &f.client_tp.node_id().0,
+        storage::RevokedBy::Owner,
+        1_700_000_000_000,
+    )
+    .await
+    .unwrap();
     f.subscriptions.close(f.client_tp.node_id());
 
     let end = tokio::time::timeout(std::time::Duration::from_secs(3), stream.recv_frame()).await;

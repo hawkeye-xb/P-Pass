@@ -87,6 +87,8 @@ async fn router_harness(_dir: &std::path::Path, db: Db, now: i64) -> RouterHarne
         paired_at: 1,
         last_seen: Some(now - 60_000),
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
@@ -190,7 +192,13 @@ async fn revoked_hello_is_denied_and_touches_nothing() {
     let db = Db::open_in_memory().await.unwrap();
     let now = 1_800_000_000_000;
     let h = router_harness(dir.path(), db.clone(), now).await;
-    db.revoke(&h.client_tp.node_id().0).await.unwrap();
+    db.revoke(
+        &h.client_tp.node_id().0,
+        storage::RevokedBy::Owner,
+        1_700_000_000_000,
+    )
+    .await
+    .unwrap();
     let before = db
         .get_device(&h.client_tp.node_id().0)
         .await
@@ -298,6 +306,8 @@ async fn devices_list_presence_three_tiers() {
             paired_at: 1,
             last_seen,
             revoked: false,
+            revoked_at: None,
+            revoked_by: None,
         })
         .await
         .unwrap();

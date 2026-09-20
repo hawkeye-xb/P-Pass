@@ -826,7 +826,13 @@ impl Router {
     /// device row is marked revoked; hello is denied from then on, and
     /// a fresh owner-issued token can rejoin (T-041 rejoin door).
     async fn handle_unpair(&self, peer: transport::NodeId, req: &Req) -> Resp {
-        match self.db.revoke(&peer.0).await {
+        // DEV-03：记下是**设备自己**断的。业主没做过这个决定，所以这台设备
+        // 要留在「家人与设备」里标「已断开」，而不是凭空消失。
+        match self
+            .db
+            .revoke(&peer.0, storage::RevokedBy::Device, unix_ms_now())
+            .await
+        {
             Ok(_) => {
                 let _ = self
                     .db
@@ -838,7 +844,8 @@ impl Router {
                         None,
                     ))
                     .await;
-                // IPC-02: 设备自我断开——桌面设备行即时消失。
+                // IPC-02: 设备自我断开——桌面设备行即时刷新。
+                // DEV-03：刷新后它仍在列表里，状态变成「已断开」，不再消失。
                 if let Some(bus) = &self.events {
                     events::emit(
                         bus,

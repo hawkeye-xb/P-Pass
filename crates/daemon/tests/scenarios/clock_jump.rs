@@ -96,6 +96,8 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
         paired_at: T0,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();

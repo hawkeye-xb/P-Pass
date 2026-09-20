@@ -639,16 +639,30 @@ impl IpcServer {
                 let pending = self.pending_summary();
                 Resp::ok(id, serde_json::json!({ "pending": pending }))
             }
-            // DESK-02②: 默认只返回在用设备（include_revoked 默认 false）——
-            // 被移除/吊销的设备不再挂在列表；include_revoked=true 时全量
-            // （内部统计/诊断用）。
+            // DEV-03（2026-09-20 验收人推翻 DESK-02②）：默认口径从
+            // 「只要在用的」改成「**家人与设备**该看见的」。
+            //
+            // 旧口径 `WHERE revoked = 0` 把两件事混成一件：手机点「断开与
+            // 这台电脑的连接」和业主点「移除设备」都只是 `revoked = 1`，于是
+            // 手机一断开，设备就从列表里凭空消失。验收人原话：「又不是我主动
+            // 移除的」「不要主动让它消失，因为它可能改过名称，回头审计时我得
+            // 明确到底是哪个设备」。
+            //
+            // 新口径：在用的 + **设备自己断开的**（标「已断开」）；业主主动
+            // 移除的不列——那正是业主的意图。
+            // `include_revoked=true` 仍是全量（内部统计/诊断用），不变。
             "devices.list" => {
                 let include_revoked = req
                     .params
                     .get("include_revoked")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                match self.db.list_devices(include_revoked).await {
+                let listed = if include_revoked {
+                    self.db.list_devices(true).await
+                } else {
+                    self.db.list_devices_for_family_view().await
+                };
+                match listed {
                     Ok(devices) => {
                         let list: Vec<_> = devices
                             .iter()
@@ -657,13 +671,33 @@ impl IpcServer {
                                 // a pre-transition `connection` with a post-transition
                                 // `presence`. Flow state stays a distinct nullable field:
                                 // `null` means no active transfer, not offline.
-                                let connection = (self.conn_status)(&d.node_id);
-                                let flow_connection = (self.flow_connection)(&d.node_id);
+                                // DEV-03：已吊销的设备一律不报在线。
+                                //
+                                // 泛连接判定看的是传输层还有没有活口，而吊销
+                                // 是**授权**上的终止——一个刚断开、连接尚未
+                                // 断干净的设备如果还显示「在线」，等于告诉
+                                // 用户「它还在备份」，正好相反。授权没了就是
+                                // 离线，这里不做组合判断。
+                                let connection = if d.revoked {
+                                    transport::ConnectionStatus::Offline
+                                } else {
+                                    (self.conn_status)(&d.node_id)
+                                };
+                                let flow_connection = if d.revoked {
+                                    None
+                                } else {
+                                    (self.flow_connection)(&d.node_id)
+                                };
                                 serde_json::json!({
                                     "node_id": hex(&d.node_id),
                                     "name": d.name,
                                     "role": d.role.as_str(),
                                     "revoked": d.revoked,
+                                    // DEV-03：谁让它离开的 + 什么时候。
+                                    // 展示层据此把「已断开」和「在用」分开渲染，
+                                    // 并能答「它什么时候断的」。
+                                    "revoked_by": d.revoked_by.map(|b| b.as_str()),
+                                    "revoked_at": d.revoked_at,
                                     "last_seen": d.last_seen,
                                     // T-090: generic live transport verdict only; this
                                     // remains intentionally independent from the Flow plane.
@@ -673,11 +707,15 @@ impl IpcServer {
                                     "flow_connection": flow_connection.map(|s| s.as_str()),
                                     // PRES-01: 三档在线态只用既有泛连接/心跳口径，
                                     // 不让短暂文件传输改写在线语义。
-                                    "presence": crate::presence::presence(
-                                        connection.as_str(),
-                                        d.last_seen,
-                                        now_ms(),
-                                    ),
+                                    "presence": if d.revoked {
+                                        "offline"
+                                    } else {
+                                        crate::presence::presence(
+                                            connection.as_str(),
+                                            d.last_seen,
+                                            now_ms(),
+                                        )
+                                    },
                                 })
                             })
                             .collect();
@@ -782,7 +820,14 @@ impl IpcServer {
                         RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
                     );
                 };
-                match self.db.revoke(&node_id).await {
+                // DEV-03：业主主动移除——这正是业主的意图，之后它不再出现在
+                // 「家人与设备」里（行仍在库里，审计可查，`arch-check B.3`
+                // 禁止物理删除这一条不变）。
+                match self
+                    .db
+                    .revoke(&node_id, storage::RevokedBy::Owner, now_ms())
+                    .await
+                {
                     Ok(revoked) => {
                         if revoked {
                             let _ = self

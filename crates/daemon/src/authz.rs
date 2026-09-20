@@ -100,6 +100,8 @@ mod tests {
             paired_at: 0,
             last_seen: None,
             revoked,
+            revoked_at: None,
+            revoked_by: None,
         }
     }
 

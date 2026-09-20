@@ -123,6 +123,8 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
@@ -139,7 +141,12 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
     assert_eq!(missing.hashes.len(), 2);
 
     // owner 吊销设备（IPC 路径的等价：直接走 db.revoke）。
-    assert!(db.revoke(&node).await.unwrap(), "revoke must affect a row");
+    assert!(
+        db.revoke(&node, storage::RevokedBy::Owner, 1_700_000_000_000)
+            .await
+            .unwrap(),
+        "revoke must affect a row"
+    );
 
     // commit 在门禁处被切断：NOT_AUTHORIZED，而不是 INTERNAL 或成功。
     let resp = client.commit(42).await;
@@ -176,6 +183,8 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
