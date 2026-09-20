@@ -42,6 +42,54 @@ pub struct Device {
     pub paired_at: i64,
     pub last_seen: Option<i64>,
     pub revoked: bool,
+    /// DEV-03：被吊销的时刻；未吊销为 None。
+    pub revoked_at: Option<i64>,
+    /// DEV-03：**谁**让它离开的。区分这两者是本卡的全部意义——
+    /// 设备自己断开该留在列表里标「已断开」，业主主动移除才该消失。
+    pub revoked_by: Option<RevokedBy>,
+}
+
+/// DEV-03：设备离开的两种方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevokedBy {
+    /// 手机侧点了「断开与这台电脑的连接」。
+    Device,
+    /// 业主在桌面点了「移除设备」。
+    Owner,
+}
+
+impl RevokedBy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RevokedBy::Device => "device",
+            RevokedBy::Owner => "owner",
+        }
+    }
+
+    /// 历史行没有来源信息（本列是 DEV-03 才加的）。读不出来就当业主移除——
+    /// 保守方向：宁可让一台老设备不出现在列表里，也不要凭空冒出来一台
+    /// 业主早就移除掉的。
+    fn from_db(raw: Option<String>) -> Option<Self> {
+        match raw.as_deref() {
+            Some("device") => Some(RevokedBy::Device),
+            Some("owner") => Some(RevokedBy::Owner),
+            Some(_) | None => None,
+        }
+    }
+}
+
+/// 两处列表查询共用一份行映射——分两份写，下次加列必然漏一处。
+fn row_to_device(r: &sqlx::sqlite::SqliteRow) -> Device {
+    Device {
+        node_id: r.get("node_id"),
+        name: r.get("name"),
+        role: Role::from_db(r.get("role")),
+        paired_at: r.get("paired_at"),
+        last_seen: r.get("last_seen"),
+        revoked: r.get::<i64, _>("revoked") != 0,
+        revoked_at: r.get("revoked_at"),
+        revoked_by: RevokedBy::from_db(r.get("revoked_by")),
+    }
 }
 
 impl Db {
@@ -84,63 +132,80 @@ impl Db {
     /// （status.devices/revoked、export_logs）传 include_revoked=true。
     pub async fn list_devices(&self, include_revoked: bool) -> Result<Vec<Device>> {
         let sql = if include_revoked {
-            "SELECT node_id, name, role, paired_at, last_seen, revoked
+            "SELECT node_id, name, role, paired_at, last_seen, revoked, revoked_at, revoked_by
              FROM device ORDER BY paired_at ASC"
         } else {
-            "SELECT node_id, name, role, paired_at, last_seen, revoked
+            "SELECT node_id, name, role, paired_at, last_seen, revoked, revoked_at, revoked_by
              FROM device WHERE revoked = 0 ORDER BY paired_at ASC"
         };
         let rows = sqlx::query(sql).fetch_all(self.pool()).await?;
-        Ok(rows
-            .iter()
-            .map(|r| Device {
-                node_id: r.get("node_id"),
-                name: r.get("name"),
-                role: Role::from_db(r.get("role")),
-                paired_at: r.get("paired_at"),
-                last_seen: r.get("last_seen"),
-                revoked: r.get::<i64, _>("revoked") != 0,
-            })
-            .collect())
+        Ok(rows.iter().map(row_to_device).collect())
     }
 
     /// One device by NodeId — the authz checkpoint's lookup (T-030).
     pub async fn get_device(&self, node_id: &[u8]) -> Result<Option<Device>> {
         let row = sqlx::query(
-            "SELECT node_id, name, role, paired_at, last_seen, revoked
+            "SELECT node_id, name, role, paired_at, last_seen, revoked, revoked_at, revoked_by
              FROM device WHERE node_id = ?",
         )
         .bind(node_id)
         .fetch_optional(self.pool())
         .await?;
-        Ok(row.map(|r| Device {
-            node_id: r.get("node_id"),
-            name: r.get("name"),
-            role: Role::from_db(r.get("role")),
-            paired_at: r.get("paired_at"),
-            last_seen: r.get("last_seen"),
-            revoked: r.get::<i64, _>("revoked") != 0,
-        }))
+        Ok(row.as_ref().map(row_to_device))
     }
 
     /// Explicitly reinstate a revoked device — ONLY the pairing flow may
     /// call this (owner confirmation = renewed trust). `upsert_device`
     /// intentionally never clears the flag (防误触, T-010 test).
     pub async fn unrevoke(&self, node_id: &[u8]) -> Result<bool> {
-        let res = sqlx::query("UPDATE device SET revoked = 0 WHERE node_id = ?")
-            .bind(node_id)
-            .execute(self.pool())
-            .await?;
+        // DEV-03：复位 revoked 时一并清掉来源——否则一台「曾被业主移除、
+        // 现已重新授权」的设备会一直带着 revoked_by='owner'，下次它自己
+        // 断开时又会从列表里消失。
+        let res = sqlx::query(
+            "UPDATE device SET revoked = 0, revoked_at = NULL, revoked_by = NULL WHERE node_id = ?",
+        )
+        .bind(node_id)
+        .execute(self.pool())
+        .await?;
         Ok(res.rows_affected() > 0)
     }
 
     /// Mark a device revoked. Returns whether a row was affected.
-    pub async fn revoke(&self, node_id: &[u8]) -> Result<bool> {
-        let res = sqlx::query("UPDATE device SET revoked = 1 WHERE node_id = ?")
-            .bind(node_id)
-            .execute(self.pool())
-            .await?;
+    /// DEV-03：吊销必须记下**是谁干的**和**什么时候**。
+    ///
+    /// 只写 `revoked = 1` 的旧写法让「手机自己断开」和「业主移除」在事后
+    /// 无从分辨，于是「家人与设备」只能一刀切过滤，手机一断开设备就凭空
+    /// 消失——业主看不到它什么时候断的，设备改过名时更无从确认是哪一台。
+    pub async fn revoke(&self, node_id: &[u8], by: RevokedBy, at_ms: i64) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE device SET revoked = 1, revoked_at = ?, revoked_by = ? WHERE node_id = ?",
+        )
+        .bind(at_ms)
+        .bind(by.as_str())
+        .bind(node_id)
+        .execute(self.pool())
+        .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// DEV-03：「家人与设备」的列表口径。
+    ///
+    /// - 在用的：列
+    /// - **设备自己断开的：列**，标「已断开」——它不是业主的意图，业主有权
+    ///   知道这台什么时候断的、是哪一台（可能被改过名）
+    /// - 业主主动移除的：**不列**——那正是业主的意图，不该再摆在眼前
+    ///
+    /// 来源未知的历史行按「业主移除」处理（保守方向，见 [`RevokedBy::from_db`]）。
+    pub async fn list_devices_for_family_view(&self) -> Result<Vec<Device>> {
+        let rows = sqlx::query(
+            "SELECT node_id, name, role, paired_at, last_seen, revoked, revoked_at, revoked_by
+             FROM device
+             WHERE revoked = 0 OR revoked_by = 'device'
+             ORDER BY paired_at ASC",
+        )
+        .fetch_all(self.pool())
+        .await?;
+        Ok(rows.iter().map(row_to_device).collect())
     }
 
     /// NAME-01: 改显示名（ID 与显示名分离——decisions ②）。返回旧名，
@@ -262,6 +327,8 @@ mod tests {
             paired_at: 1_753_770_000_000 + i64::from(n),
             last_seen: None,
             revoked: false,
+            revoked_at: None,
+            revoked_by: None,
         }
     }
 
@@ -275,21 +342,31 @@ mod tests {
         assert_eq!(devices.len(), 2);
         assert!(devices.iter().all(|d| !d.revoked));
 
-        assert!(db.revoke(&[2u8; 32]).await.unwrap());
+        assert!(db
+            .revoke(&[2u8; 32], RevokedBy::Owner, 1_700_000_000_000)
+            .await
+            .unwrap());
         let devices = db.list_devices(true).await.unwrap();
         let d2 = devices.iter().find(|d| d.node_id == vec![2u8; 32]).unwrap();
         assert!(d2.revoked, "revocation must be reflected in list_devices");
         let d1 = devices.iter().find(|d| d.node_id == vec![1u8; 32]).unwrap();
         assert!(!d1.revoked, "other devices stay untouched");
 
-        assert!(!db.revoke(&[9u8; 32]).await.unwrap(), "unknown id: no rows");
+        assert!(
+            !db.revoke(&[9u8; 32], RevokedBy::Owner, 1_700_000_000_000)
+                .await
+                .unwrap(),
+            "unknown id: no rows"
+        );
     }
 
     #[tokio::test]
     async fn upsert_updates_but_never_unrevokes() {
         let db = Db::open_in_memory().await.unwrap();
         db.upsert_device(&device(1, Role::Member)).await.unwrap();
-        db.revoke(&[1u8; 32]).await.unwrap();
+        db.revoke(&[1u8; 32], RevokedBy::Owner, 1_700_000_000_000)
+            .await
+            .unwrap();
 
         // Re-pair attempt with revoked=false must NOT clear the flag.
         let mut again = device(1, Role::Member);
@@ -308,7 +385,10 @@ mod tests {
         let db = Db::open_in_memory().await.unwrap();
         db.upsert_device(&device(1, Role::Owner)).await.unwrap();
         db.upsert_device(&device(2, Role::Viewer)).await.unwrap();
-        assert!(db.revoke(&[2u8; 32]).await.unwrap());
+        assert!(db
+            .revoke(&[2u8; 32], RevokedBy::Owner, 1_700_000_000_000)
+            .await
+            .unwrap());
 
         // 默认（include_revoked=false）：只剩在用设备。
         let active = db.list_devices(false).await.unwrap();
@@ -319,6 +399,92 @@ mod tests {
         let all = db.list_devices(true).await.unwrap();
         assert_eq!(all.len(), 2);
         assert!(all.iter().any(|d| d.revoked));
+    }
+
+    /// DEV-03：两种离开方式必须分得开，且「家人与设备」口径按此分流。
+    ///
+    /// 旧实现两条路都只写 `revoked = 1`，于是列表只能一刀切按
+    /// `WHERE revoked = 0` 过滤——手机一断开设备就从列表凭空消失。
+    #[tokio::test]
+    async fn the_family_view_keeps_self_disconnected_devices_and_hides_owner_removed_ones() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(2, Role::Member)).await.unwrap();
+        db.upsert_device(&device(3, Role::Member)).await.unwrap();
+
+        // 手机自己断开。
+        assert!(db
+            .revoke(&[2u8; 32], RevokedBy::Device, 1_700_000_000_000)
+            .await
+            .unwrap());
+        // 业主主动移除。
+        assert!(db
+            .revoke(&[3u8; 32], RevokedBy::Owner, 1_700_000_001_000)
+            .await
+            .unwrap());
+
+        let view = db.list_devices_for_family_view().await.unwrap();
+        let ids: Vec<_> = view.iter().map(|d| d.node_id[0]).collect();
+        assert_eq!(
+            ids,
+            vec![1, 2],
+            "在用的 + 自己断开的要在列表里；业主移除的不该在"
+        );
+
+        let disconnected = view.iter().find(|d| d.node_id[0] == 2).unwrap();
+        assert!(disconnected.revoked, "它确实是断开状态，不是在用");
+        assert_eq!(disconnected.revoked_by, Some(RevokedBy::Device));
+        assert_eq!(
+            disconnected.revoked_at,
+            Some(1_700_000_000_000),
+            "业主要能答「它什么时候断的」"
+        );
+
+        // 全量口径不变：诊断/统计仍看得到被移除的那台。
+        assert_eq!(db.list_devices(true).await.unwrap().len(), 3);
+    }
+
+    /// DEV-03：来源未知的历史行（本列是 DEV-03 才加的）按「业主移除」处理。
+    /// 保守方向——宁可让一台老设备不出现，也不要凭空冒出一台业主早就移除的。
+    #[tokio::test]
+    async fn a_legacy_revoked_row_without_provenance_stays_hidden() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+        sqlx::query("UPDATE device SET revoked = 1 WHERE node_id = ?")
+            .bind(vec![1u8; 32])
+            .execute(db.pool())
+            .await
+            .unwrap();
+
+        assert!(db.list_devices_for_family_view().await.unwrap().is_empty());
+        let all = db.list_devices(true).await.unwrap();
+        assert_eq!(all[0].revoked_by, None, "历史行读出来没有来源");
+    }
+
+    /// DEV-03：重新授权必须把吊销痕迹清干净。
+    ///
+    /// 不清的话，一台「曾被业主移除、现已重新授权」的设备会一直带着
+    /// `revoked_by='owner'`，下次它**自己**断开时又会从列表里消失。
+    #[tokio::test]
+    async fn reinstating_a_device_clears_its_revocation_provenance() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+        db.revoke(&[1u8; 32], RevokedBy::Owner, 1_700_000_000_000)
+            .await
+            .unwrap();
+
+        db.unrevoke(&[1u8; 32]).await.unwrap();
+
+        let d = db.get_device(&[1u8; 32]).await.unwrap().unwrap();
+        assert!(!d.revoked);
+        assert_eq!(d.revoked_by, None, "痕迹没清干净");
+        assert_eq!(d.revoked_at, None, "痕迹没清干净");
+
+        // 复位之后它自己断开，应当留在列表里。
+        db.revoke(&[1u8; 32], RevokedBy::Device, 1_700_000_002_000)
+            .await
+            .unwrap();
+        assert_eq!(db.list_devices_for_family_view().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -447,7 +613,9 @@ mod tests {
     async fn revoked_device_is_excluded_from_watermarks() {
         let db = Db::open_in_memory().await.unwrap();
         db.upsert_device(&device(1, Role::Member)).await.unwrap();
-        db.revoke(&[1u8; 32]).await.unwrap();
+        db.revoke(&[1u8; 32], RevokedBy::Owner, 1_700_000_000_000)
+            .await
+            .unwrap();
         db.insert_asset(&asset(&[1u8; 32], 9)).await.unwrap();
 
         let wm = db.list_device_watermarks().await.unwrap();
@@ -464,7 +632,9 @@ mod tests {
         let db = Db::open_in_memory().await.unwrap();
         db.upsert_device(&device(1, Role::Member)).await.unwrap();
         db.set_watermark(&[1u8; 32], 300, 1_000).await.unwrap();
-        db.revoke(&[1u8; 32]).await.unwrap();
+        db.revoke(&[1u8; 32], RevokedBy::Owner, 1_700_000_000_000)
+            .await
+            .unwrap();
 
         // 重新配对：名字可能改过（「妈妈的手机」），身份没变。
         let mut renamed = device(1, Role::Member);

@@ -139,6 +139,8 @@ async fn status_devices_and_revoke_roundtrip() {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
@@ -189,6 +191,8 @@ async fn device_rename_updates_list_and_appends_audit() {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
@@ -243,6 +247,8 @@ async fn device_rename_rejects_bad_input_and_unknown_device() {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
@@ -347,6 +353,8 @@ async fn activity_list_aggregates_backup_batches() {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
@@ -408,6 +416,8 @@ async fn devices_list_reports_connection_unknown_without_transport() {
         paired_at: 1,
         last_seen: Some(now()), // 有 last_seen 也不许推断在线
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
@@ -1020,4 +1030,97 @@ async fn audit_list_exposes_canonical_evidence_summary_for_activity_projection()
         serde_json::json!({ "confirmed": 2, "failed": 1, "source_missing": 1 }),
         "the activity projection must receive canonical evidence counts, not phone final_counts",
     );
+}
+
+/// DEV-03：`devices.list` 默认口径 = 「家人与设备」该看见的。
+///
+/// 旧口径 `WHERE revoked = 0` 把两件事混成一件：手机点「断开与这台电脑的
+/// 连接」和业主点「移除设备」都只是 `revoked = 1`，于是手机一断开，设备就
+/// 从桌面列表里凭空消失。验收人原话：「又不是我主动移除的」「不要主动让它
+/// 消失，因为它可能改过名称，回头审计时我得明确到底是哪个设备」。
+///
+/// 反证：把 `list_devices_for_family_view` 换回 `list_devices(false)`，
+/// 「自己断开的那台还在列表里」这条立刻变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "dev03").await;
+    for (n, name) in [
+        (0xAAu8, "在用的"),
+        (0xBB, "自己断开的"),
+        (0xCC, "业主移除的"),
+    ] {
+        db.upsert_device(&Device {
+            node_id: vec![n; 32],
+            name: name.into(),
+            role: Role::Member,
+            paired_at: i64::from(n),
+            last_seen: Some(1_700_000_000_000),
+            revoked: false,
+            revoked_at: None,
+            revoked_by: None,
+        })
+        .await
+        .unwrap();
+    }
+    // 手机自己断开走 router 的 handle_unpair（这里直接落库，等价）。
+    db.revoke(&[0xBB; 32], storage::RevokedBy::Device, 1_700_000_001_000)
+        .await
+        .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+
+    // 业主移除走 IPC——顺便钉死它记的来源是 owner。
+    let resp = c
+        .call(
+            "device.revoke",
+            serde_json::json!({ "node_id": "cc".repeat(32) }),
+        )
+        .await;
+    assert_eq!(resp.result.unwrap()["revoked"], true);
+    assert_eq!(
+        db.get_device(&[0xCC; 32])
+            .await
+            .unwrap()
+            .unwrap()
+            .revoked_by,
+        Some(storage::RevokedBy::Owner),
+        "业主经 IPC 移除必须记成 owner"
+    );
+
+    let resp = c.call("devices.list", serde_json::Value::Null).await;
+    let listed = resp.result.unwrap();
+    let names: Vec<&str> = listed["devices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["在用的", "自己断开的"],
+        "自己断开的要留在列表里；业主移除的不该在"
+    );
+
+    let gone = &listed["devices"][1];
+    assert_eq!(gone["revoked"], true);
+    assert_eq!(gone["revoked_by"], "device");
+    assert_eq!(
+        gone["revoked_at"], 1_700_000_001_000i64,
+        "业主要能答「它什么时候断的」"
+    );
+    // 已吊销的设备一律不报在线：授权没了就是离线，不做组合判断——否则
+    // 一台刚断开的设备会显示「在线」，等于告诉用户「它还在备份」。
+    assert_eq!(gone["presence"], "offline");
+    assert_eq!(gone["connection"], "offline");
+    assert!(gone["flow_connection"].is_null());
+
+    // include_revoked=true 仍是全量（诊断/统计口径不变）。
+    let resp = c
+        .call(
+            "devices.list",
+            serde_json::json!({ "include_revoked": true }),
+        )
+        .await;
+    assert_eq!(resp.result.unwrap()["devices"].as_array().unwrap().len(), 3);
 }

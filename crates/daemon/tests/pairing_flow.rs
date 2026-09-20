@@ -188,7 +188,14 @@ async fn revoked_device_rejoins_with_fresh_token() {
             .await
             .ok
     );
-    assert!(db.revoke(&ctp.node_id().0).await.unwrap());
+    assert!(db
+        .revoke(
+            &ctp.node_id().0,
+            storage::RevokedBy::Owner,
+            1_700_000_000_000
+        )
+        .await
+        .unwrap());
     // DEV-02: 水位是"已经备份到哪儿"的记账。同一个身份回来必须接着用它，
     // 否则照片会重传——这正是 DEV-01 的 merge 想解决、而 1:1 下本来就
     // 成立的那件事。

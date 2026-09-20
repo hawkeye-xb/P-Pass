@@ -122,6 +122,8 @@ async fn fixture() -> Fixture {
         paired_at: 1,
         last_seen: None,
         revoked: false,
+        revoked_at: None,
+        revoked_by: None,
     })
     .await
     .unwrap();
