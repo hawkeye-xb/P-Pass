@@ -243,6 +243,24 @@ jobs:
             target/
           key: test-windows-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+      # ffmpeg：Linux 那个 job 用 apt 装，Windows 上没有对应物，用仓库自己的
+      # tools/fetch-ffmpeg.sh（它有 MINGW*/MSYS* 分支，在 runner 的 Git Bash
+      # 下 `uname -s` 正好命中）。
+      # 这不是「给 CI 开后门让测试变绿」——失败的那条测试自己的断言就写着
+      # 「ffmpeg required on dev/CI machines」，是**开发机契约**；而**产品**
+      # 侧「用户机器上没有 ffmpeg 也要活」由 media-codec::ql_fallback 的
+      # video_thumbs_survive_a_machine_without_ffmpeg 守着，那条在 Windows 上
+      # 本来就通过。所以装 ffmpeg 不丢任何覆盖。
+      # ⚠️ 该脚本从 gyan.dev 拉 zip，**不带版本钉死与校验和**（脚本头部注释
+      # 自己写着这留给 T-071 发布流水线做）。这条 lane 引入了一个未校验的
+      # 第三方下载，与本仓「action 全 pin SHA」的口径不一致 —— 已开为 #252，
+      # 不在本 PR 顺手修。
+      - name: Fetch ffmpeg (video thumbnail tests)
+        shell: bash
+        run: |
+          tools/fetch-ffmpeg.sh
+          echo "PPF_FFMPEG=$PWD/tools/ffmpeg/ffmpeg.exe" >> "$GITHUB_ENV"
+
       - name: Install cargo-nextest
         uses: taiki-e/install-action@26e9283f268b880168bdbd2c545dfcd60ec2c6ab # v2.87.13
         with:
@@ -256,11 +274,15 @@ jobs:
       #   的根因，也是 justfile:74-82 刻意不用这个 flag 的原因。
       # 覆盖账：android-jni 那条路径仍由 Linux job 的 --all-features 覆盖，没丢。
       # 👉 谁要在这里"顺手补上" --all-features，先去读 #174。
+      # `--no-fail-fast`：nextest 默认一红就掐断。首次跑本 lane 时一条
+      # ffmpeg 失败**掩掉了后面 130 个测试**（307/437 就停了）—— 跟本仓
+      # CI-01④「四层洋葱」事故一模一样的病：上一层红让下一层永远跑不到。
+      # 这条 lane 的职责是**一次把 Windows 上所有问题摊开**，不是尽早失败。
       - name: Test (nextest, 无 --all-features — 见上方注释)
         shell: bash
         env:
           VCPKG_ROOT: "C:\\vcpkg"
-        run: cargo nextest run
+        run: cargo nextest run --no-fail-fast
 
   arch:
     name: architecture enforcement
