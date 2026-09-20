@@ -42,12 +42,22 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
   （type ∈ feat/fix/docs/test/ci）。
 - **分支上快验，PR 上全验。** 推分支不触发 CI（四条 lane 的 `push` 限定
   `branches: [main]`）：纯文档 `just ci-docs`，动了代码 `just ci`。
-  开 PR 才跑 lane，分两档（CI-07 #189）：
-  - `ci-rust` / `ci-desktop` **每个 PR 都跑**，刻意不设 `pull_request.paths`
-    ——它们的检查要进 `main` 的必需列表，而被 paths 跳过的必需检查会永久
-    停在 Pending 并挡住合并（GitHub 官方行为），带 paths + 设必需 = 自锁。
+  开 PR 才跑 lane，分两档：
+  - `ci-rust` / `ci-desktop` **workflow 层不设 `pull_request.paths`**
+    （CI-07 #189）——它们的检查在 `main` 的必需列表里，而被 paths 跳过的
+    workflow **根本不汇报状态**，必需检查会永久停在 Pending 并挡住合并，
+    带 paths + 设必需 = 自锁。
+    **但跳过被下放到了 job 层**（CI-11 #255）：一个 `changes` job 用
+    `tools/ci-needs-full-lane.sh` 判断，纯文档改动时下游 job 被 `if:` 跳过。
+    被 `if:` 跳过的 job **会汇报 `skipped`，而 `skipped` 对必需检查算通过**
+    （PR #260 实测），所以既省资源又挡得住。
+    ⚠️ 判据是 **allowlist**：只有改动**全部**落在无害清单（`docs/`、`cards/`、
+    `.claude/`、`*.md`）里才跳过，其余一律跑。往清单里加东西前先确认没有
+    测试或构建脚本读它（`assets/i18n/**` 被 diag 测试消费，**不许加**）。
   - `ci-android` / `site` / `ci-docs` 仍按 paths 只在改到自己域时跑，
     它们不进必需列表，被跳过无害。
+  - ⚠️ **任何 job 的 `name:` 都不许随手改**：`main` 的必需检查列表绑在名字上，
+    改名 = 全部 PR 永久 Pending。改名和改分支保护必须在同一次操作里成对完成。
 - PR 开出后盯受影响域 CI 到结论，红了在同一分支上修，不留红 PR。
 - **带 GitHub MCP 的会话**（协作者账号 `690591397`）：自己把 PR 全程做完——
   推分支、开 PR（描述里逐项回接收尾检查）、盯 lane、squash 合并。

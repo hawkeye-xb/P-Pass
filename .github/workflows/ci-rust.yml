@@ -72,8 +72,64 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # CI-11 (#255)：决定本次改动要不要跑重型门禁。
+  #
+  # 背景：本 workflow 的 `pull_request` **刻意不设 paths**（CI-07 #189）——
+  # 它的检查在 main 的必需列表里，而被 paths 跳过的 workflow **根本不汇报
+  # 状态**，必需检查会永久 Pending 把 PR 挡死。代价是纯文档 PR 也整条跑。
+  #
+  # 出路：把「要不要干活」从触发层下放到 **job 层**。被 `if:` 跳过的 job
+  # **会汇报 `skipped`，而 `skipped` 对必需检查算通过** —— PR #260 实测过：
+  # 给必需检查 `architecture enforcement` 加 `if: false`，PR 仍然 CLEAN。
+  #
+  # 判据本身在 tools/ci-needs-full-lane.sh，口径是 **allowlist 不是
+  # blocklist**：只有每个改动文件都落在无害清单里才判可跳过，任何不确定
+  # 都判要跑。它有变异测试（tools/test-ci-needs-full-lane.sh）。
+  #
+  # ⚠️ 两个 workflow 各有一份这个 job（workflow 之间不能共享 output）。
+  # 改判据只改 tools/ 里那个脚本，这里两处只是调用。
+  changes:
+    name: changes (要不要跑 Rust 重型门禁)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run_heavy: ${{ steps.decide.outputs.run_heavy }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 要和 base 做 diff，浅 clone 算不出来。算不出时脚本会判「要跑」，
+          # 但那等于本 job 白干，所以这里直接取全量历史。
+          fetch-depth: 0
+      # 判据脚本自己先过一遍它的变异测试再去用它 —— #230 就是「安全测试
+      # 不在任何门禁里」才让 #192 那个真删除缺陷活下来的。本 job 每个 PR
+      # 都跑（它自己不被跳过），所以这个测试也就每个 PR 都跑。约 1 秒。
+      # 这一步红 ⇒ changes job 红 ⇒ 下游按 `!= 'false'` 照常全跑（fail-closed）。
+      - name: 判据自检（含变异反证）
+        shell: bash
+        run: tools/test-ci-needs-full-lane.sh
+      - id: decide
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "非 PR 事件（push 到 main）→ 恒定全跑，不做任何跳过"
+            echo "run_heavy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          need="$(tools/ci-needs-full-lane.sh "${{ github.event.pull_request.base.sha }}")"
+          echo "判定结果: run_heavy=$need"
+          echo "run_heavy=$need" >> "$GITHUB_OUTPUT"
+
   fmt:
     name: fmt + actionlint
+    # CI-11 (#255)：**只有明确收到 'false' 才跳过**。
+    # 不能写成 `== 'true'` —— 那样 changes job 一旦失败，输出为空、条件算 false、
+    # 本 job 被跳过、而 skipped 对必需检查**算通过** ⇒ 判据自己挂了反而放行，
+    # 正是本仓这一轮在修的 fail-open。写成 `!= 'false'` 则失败时照跑。
+    # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
+    # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -103,6 +159,14 @@ jobs:
 
   clippy:
     name: clippy (deny warnings)
+    # CI-11 (#255)：**只有明确收到 'false' 才跳过**。
+    # 不能写成 `== 'true'` —— 那样 changes job 一旦失败，输出为空、条件算 false、
+    # 本 job 被跳过、而 skipped 对必需检查**算通过** ⇒ 判据自己挂了反而放行，
+    # 正是本仓这一轮在修的 fail-open。写成 `!= 'false'` 则失败时照跑。
+    # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
+    # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -130,6 +194,14 @@ jobs:
 
   test:
     name: test (nextest + windows cross-check)
+    # CI-11 (#255)：**只有明确收到 'false' 才跳过**。
+    # 不能写成 `== 'true'` —— 那样 changes job 一旦失败，输出为空、条件算 false、
+    # 本 job 被跳过、而 skipped 对必需检查**算通过** ⇒ 判据自己挂了反而放行，
+    # 正是本仓这一轮在修的 fail-open。写成 `!= 'false'` 则失败时照跑。
+    # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
+    # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -179,6 +251,14 @@ jobs:
   # 一旦设为必需，所有人的等待时间就被本 job 顶到底。先量稳定耗时再由用户决定。
   test-windows:
     name: test (windows)
+    # CI-11 (#255)：**只有明确收到 'false' 才跳过**。
+    # 不能写成 `== 'true'` —— 那样 changes job 一旦失败，输出为空、条件算 false、
+    # 本 job 被跳过、而 skipped 对必需检查**算通过** ⇒ 判据自己挂了反而放行，
+    # 正是本仓这一轮在修的 fail-open。写成 `!= 'false'` 则失败时照跑。
+    # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
+    # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # 冷缓存那次要建 vcpkg 静态 libheif（约 20min）+ 全量冷构建，给足余量；
     # 热缓存下应远低于此。cargo test 没有单测级超时，DAE-06 (#176) 那种 300s
@@ -307,6 +387,14 @@ jobs:
 
   arch:
     name: architecture enforcement
+    # CI-11 (#255)：**只有明确收到 'false' 才跳过**。
+    # 不能写成 `== 'true'` —— 那样 changes job 一旦失败，输出为空、条件算 false、
+    # 本 job 被跳过、而 skipped 对必需检查**算通过** ⇒ 判据自己挂了反而放行，
+    # 正是本仓这一轮在修的 fail-open。写成 `!= 'false'` 则失败时照跑。
+    # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
+    # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -316,6 +404,14 @@ jobs:
 
   deny:
     name: license + dependency audit
+    # CI-11 (#255)：**只有明确收到 'false' 才跳过**。
+    # 不能写成 `== 'true'` —— 那样 changes job 一旦失败，输出为空、条件算 false、
+    # 本 job 被跳过、而 skipped 对必需检查**算通过** ⇒ 判据自己挂了反而放行，
+    # 正是本仓这一轮在修的 fail-open。写成 `!= 'false'` 则失败时照跑。
+    # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
+    # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
