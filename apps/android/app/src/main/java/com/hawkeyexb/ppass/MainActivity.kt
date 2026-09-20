@@ -428,11 +428,14 @@ fun PPassApp() {
      * 判据用账本而不是「pairing.json 里的 nodeId 眼熟」：账本在，才说明
      * 「我传过哪些、传没传成」这些事实还在，对账才有东西可对；账本没了
      * （首次配对、或换了一台电脑），那就是真的从零开始，该走 onboarding。
-     * 相册选择是另一份文件（BackupScopeStore），跟着一起留下。
+     *
+     * MOB-92：范围也必须按**这台**桌面问。此前读的是全局那一份，于是
+     * 「macOS → Windows → 回 macOS」时它非空（是给 Windows 选的那 2 个），
+     * 直接回首页、用着错的范围开始备份，用户连重选的机会都没有。
      */
     fun hasExistingLedgerFor(pairing: Pairing): Boolean =
         java.io.File(context.filesDir, "flow-state/${pairing.daemonNodeId}/discovery-ledger.json").exists() &&
-            BackupScopeStore(context).selectedBucketIds()?.isNotEmpty() == true
+            BackupScopeStore(context, pairing.daemonNodeId).selectedBucketIds()?.isNotEmpty() == true
 
     fun enterBucketPicker(pairing: Pairing, firstTime: Boolean) {
         val needed = requiredMediaPermissions().filter {
