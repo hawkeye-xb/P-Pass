@@ -590,9 +590,8 @@ private fun buildRuntime(
     // （数秒级；MOB-62 的 ANR 就栽在它身上）。它两侧各留一条，才分得清
     // 「没走到这里」「卡在这里」「这里抛了」。
     // MOB-91：拿的是进程内单例，第一次才真的 open。跨配对复用，永不 close。
-    Log.i("PPassFlow", "buildRuntime: acquiring shared native blobs provider")
     val native = sharedNativeProvider(context)
-    Log.i("PPassFlow", "buildRuntime: shared native blobs provider ready")
+    Log.i("PPassFlow", "buildRuntime: native blobs provider ready")
     val bridge = IrohBlobsProviderBridge(native) { source ->
         try {
             context.contentResolver.openFileDescriptor(Uri.parse(source), "r")
@@ -748,8 +747,13 @@ private var sharedNativeProvider: AndroidNativeIrohBlobsProvider? = null
 
 private fun sharedNativeProvider(context: Context): AndroidNativeIrohBlobsProvider =
     sharedNativeProvider ?: synchronized(nativeProviderLock) {
-        sharedNativeProvider ?: AndroidNativeIrohBlobsProvider.open(context.filesDir)
-            .also { sharedNativeProvider = it }
+        sharedNativeProvider ?: run {
+            // 这一句**一个进程里只应该出现一次**。出现第二次就说明单例被谁
+            // 绕过了，而第二次 nativeOpen 会永久阻塞——取证时这是第一眼要看
+            // 的东西，所以它和「复用」分开打，不能共用一条。
+            Log.i("PPassFlow", "native blobs provider: opening (once per process)")
+            AndroidNativeIrohBlobsProvider.open(context.filesDir).also { sharedNativeProvider = it }
+        }
     }
 
 private val flowRuntimeLock = Any()

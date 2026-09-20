@@ -53,6 +53,12 @@ class MOB62RuntimeInitializationTest {
             "只允许单例里 open 一次",
             source.split("AndroidNativeIrohBlobsProvider.open(").size - 1 == 1,
         )
+        // 真 open 和「复用」必须分开打日志：一个进程里「opening」只该出现
+        // 一次，出现第二次就是单例被绕过了（而第二次 nativeOpen 会永久阻塞）。
+        assertTrue(
+            "真 open 要有独立的一条日志",
+            source.contains("native blobs provider: opening (once per process)"),
+        )
         val clear = source.substringAfter("fun clearFlowRuntime(").substringBefore("\n}")
         assertFalse("解除配对不许关仓库——关了同一进程内再也开不回来", clear.contains(".close()"))
         assertTrue("解除配对要停掉在飞的传输", clear.contains("nativeProvider.revoke("))
