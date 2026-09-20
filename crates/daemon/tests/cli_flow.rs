@@ -81,3 +81,15 @@ fn unknown_flag_fails_with_usage_on_stderr() {
         "未知参数不应启动 daemon:\n{stdout}"
     );
 }
+
+// PROBE (CI-06 #164 验收标准 2) — 只在 Windows 存在、且**必定失败**的测试。
+// 上一版探针用的是 unused 变量，但 `cargo nextest run` 不把警告当错误，
+// 所以那是个用错的工具（顺带挖出主工作区 Windows 侧零 lint 覆盖的缺口）。
+// 测试 lane 的正确探针是「让一个测试真的失败」。
+// 期望：test (windows) 红，Linux 侧的 test / clippy 全绿。
+// 这个分支永不合入，观察完即关闭。
+#[cfg(windows)]
+#[test]
+fn ci06_probe_deliberately_fails_on_windows_only() {
+    assert_eq!(1, 2, "PROBE: 故意失败，用来证明 test (windows) 真的在跑断言");
+}
