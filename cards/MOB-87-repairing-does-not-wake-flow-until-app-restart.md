@@ -32,9 +32,24 @@
 | 4 | epoch 过滤会让保留下来的账本项**全部落空**（3 处） | `ReconciliationCoordinator.kt:13`、`RemoteReconciliation.kt:10,37` |
 | 5 | 对不上账时**静默 return**，外面分不出正常和故障 | `ReconciliationCoordinator.kt:20` |
 | 6 | 桌面缺失后没有补传路径 | `RecoveryDisposition` 只有计数，没有消费者 |
+| 7 | 断开时删掉账本，#4 的迁移无从谈起 | `AndroidFlowRuntime.kt:323` |
 
 **桌面侧一行不用改。** `backup.presence`（`backup.rs:231` / `router.rs:708`）
 已完整实现并接线，收一批 hash 回一批"我没有的"，行为正确。
+
+### ⚠️ 本卡推翻 MOB-62 的一条验收标准
+
+[MOB-62](MOB-62-unpair-must-reset-flow-runtime-and-wakes.md)（issue #82，已关闭）
+验收标准写着「旧 remote Flow ledger **删除**」。本卡要求**保留**。
+
+这不是打架，是把手段和目的分开：MOB-62 要的是「断开后旧会话不能再运行」
+（症状是旧 offer 乱发、ANR、崩溃），删账本只是它当时选的手段。保留账本文件、
+断开时照常关 runtime / provider / 取消所有 wake，MOB-62 的目的依然满足——
+**保留的是数据，关掉的是执行**。
+
+已核实**没有任何测试锁定删除行为**（`apps/android/app/src/test` 下的
+`deleteRecursively()` 全是 tmpdir 清理，不是断言）。MOB-62 卡面那一条本卡合入
+后作废，改动记在这里，不回改已归档的卡。
 
 ---
 
@@ -190,12 +205,27 @@ CONFIRMED 项，本来就该安静返回。它错在"保留账本"这个新语�
 2. **5 小时周期 Worker 醒来** → 扫新照片之外，顺带跑一轮对账（兜底）。
 3. **对账翻页翻到底** → 跨轮推进，全部 CONFIRMED 项最终都被核实，不只前 500。
 4. **桌面缺失 + 手机源还在** → 退回队列，无提示补传，走已有备份状态显示。
-5. **桌面缺失 + 手机源也没了** → 标 `UNRECOVERABLE`，落审计事实，**不提示**。
-6. **重新配对后** → 保留的账本项认领到新 epoch（只改归属，`deliveryState` /
+
+   **写死：原地把该项翻回 `QUEUED`，不新发条目。** 不能新发——
+   `commitDiscoveryPage` 按 `stableId` 去重（`DiscoveryLedger.kt:390`），
+   同一张照片第二次根本进不来。原地翻安全的理由已核实：`headOf`
+   （`StrictConsumer.kt:324`）在 `uploadCursor` 为 null 时取
+   `firstOrNull { QUEUED }`，而 `items` 恒按 `queueSequence` 排序，
+   所以翻回去的老项会被自然选中；`acceptCompletionReceipt` 里
+   `next = items.firstOrNull { QUEUED }` 同理，游标回退到老序号不会丢头。
+   实现前先为这条写 contract 测试。
+
+5. **探测失败（桌面离线/不可达）** → 这轮不对账，等下一轮，**不落任何审计**。
+   `RemotePresenceProbe.missing` 里 `check(response.ok)` 会抛，`reconcilePage`
+   现在没有 catch——挂到 5 小时 worker 上桌面一关机这轮就炸。纪律同
+   `reconcile.rs:125`「对账是收敛手段，一轮失败等下一轮」。
+   **别让离线把「静默失败」那条审计刷成噪音**——那条是留给
+   「账本有 CONFIRMED 但 page 空」的。
+6. **桌面缺失 + 手机源也没了** → 标 `UNRECOVERABLE`，落审计事实，**不提示**。
+7. **重新配对后** → 保留的账本项认领到新 epoch（只改归属，`deliveryState` /
    `contentHash` / `completedAt` 等事实一个字不动）。
-7. **账本里有 CONFIRMED 项、却一条都没进对账页** → 落一条审计事实走已有的
-   审计 outbox。**不抛异常**——对账是收敛手段，一轮失败等下一轮，不能把备份
-   搞停（同 `reconcile.rs:125` 的纪律）。
+8. **账本里有 CONFIRMED 项、却一条都没进对账页** → 落一条审计事实走已有的
+   审计 outbox。**不抛异常**。
 
 ---
 
@@ -205,9 +235,16 @@ CONFIRMED 项，本来就该安静返回。它错在"保留账本"这个新语�
    去掉配对成功那条唤醒 → 红。
 2. **E2** 一轮对账后，桌面缺失且手机源仍在的项回到 `QUEUED`。
    去掉补传路径 → 红。
-3. **E2** 账本 1200 项、页大小 500 → 连续三轮对账覆盖全部 1200 项，无重复核实
-   已确认 PRESENT 的项。**保留现在的 `take(500)` 无游标写法 → 红**（第 501 项
-   起永远 `remotePresence == UNKNOWN`）。
+3. **E2** 账本 1200 项、页大小 500 → 连续三轮对账覆盖全部 1200 项。
+   **保留现在的 `take(500)` 无游标写法 → 红**（第 501 项起永远
+   `remotePresence == UNKNOWN`）。
+
+   ⚠️ **同一条测试必须再断言：全部核实成 PRESENT 之后再跑一轮，对账要
+   重新从第 1 项开始。** 要的是**循环游标**（持久化
+   `lastReconciledQueueSequence`，走到尾回头归零），不是「过滤掉已 PRESENT
+   的项」。后者也能让这条测试的前半段变绿，但首轮对完之后 page 永久为空、
+   **再也不复查**——桌面在那之后删掉一张就永远发现不了，正好是本卡要解决
+   的问题，只是推迟到了首轮之后。没有这条断言，按字面实现会全绿而产品照样坏。
 4. **E2** 重新配对后账本项被认领到新 epoch，且 `deliveryState` / `contentHash` /
    `completedAt` / `queueSequence` 逐字段不变。去掉迁移 → `page` 空 → 红。
 5. **E2** 账本含 N 条 CONFIRMED 但对账页为空时，审计 outbox 里出现对应事实，
@@ -217,9 +254,14 @@ CONFIRMED 项，本来就该安静返回。它错在"保留账本"这个新语�
    只改了 Coordinator 就以为修完了。
 7. **E2** `UNRECOVERABLE` 项不进入任何 UI 投影计数。
 8. **E3 真机** 三星 SM-S9210：断开 → 重新扫码 → 沿用原相册 → 不杀 App，
-   传输自动开始；桌面 Finder 里删掉若干张 → 等一轮对账 → 这些照片自动回到
-   桌面，**手机端全程无新增提示**，桌面端出现 MOB-29 那条警告。
-9. **E1** `just ci` 全绿。
+   传输自动开始；桌面 Finder 里删掉若干张 → 断开重连一次触发对账 → 这些
+   照片自动回到桌面，**手机端全程无新增提示**，桌面端出现 MOB-29 那条警告。
+
+   **用「重新授权」这个触发点验，不要等 5 小时闹钟**——否则真机那天会卡在
+   等待上。周期触发那条走 E2。
+
+9. **E2** 桌面不可达时 `reconcilePage` 不抛、不落审计，下一轮正常对账。
+10. **E1** `just ci` 全绿。
 
 ---
 
@@ -231,9 +273,10 @@ CONFIRMED 项，本来就该安静返回。它错在"保留账本"这个新语�
   **相册**跟桌面比。账本里压根没有的照片，对账看不见——这是另一个问题，
   另开卡。
 - **epoch 轮换本身。** 它作为授权凭证版本轮换是对的，保留。
-- **断开时到底清哪些文件**（`auto_backup_prefs.json` / `backup.watermark` /
+- **断开时到底清哪些别的文件**（`auto_backup_prefs.json` / `backup.watermark` /
   `backup_health.json` / `sentinel.json` / `pairing.json` /
-  `iroh-blobs-provider/`）——本卡只要求 `flow-state/` 下的账本**不再被删**。
+  `iroh-blobs-provider/`）——本卡只动 `flow-state/` 下的账本（缺陷 #7），
+  其余文件的清理策略另议。
 
 ---
 
