@@ -69,6 +69,10 @@ msg_keys! {
     UI_REVOKED_COUNT => "ui.revoked_count",
     UI_PENDING_PAIRS => "ui.pending_pairs",
     UI_ALLOW => "ui.allow",
+    /// DEV-04: owner approves a device that has paired before. 标题说
+    /// 「请求重新连接」时按钮不能还说「允许加入」——老设备本来就在
+    /// 列表里，"加入"这个动词在那一屏是错的。
+    UI_ALLOW_RECONNECT => "ui.allow_reconnect",
     UI_DENY => "ui.deny",
     /// DEV-01: owner picks "replace the old device" in the confirm dialog.
     /// DEV-01: owner picks "join as a brand-new device" instead.
@@ -208,6 +212,7 @@ mod tests {
             UI_REVOKED_COUNT,
             UI_PENDING_PAIRS,
             UI_ALLOW,
+            UI_ALLOW_RECONNECT,
             UI_DENY,
             UI_ADD_DEVICE,
             UI_GENERATE_QR,
@@ -288,7 +293,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 100);
+        assert_eq!(ALL.len(), 101);
     }
 
     #[test]
