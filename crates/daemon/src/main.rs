@@ -668,3 +668,12 @@ fn unix_ms_now() -> i64 {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
+
+// PROBE (CI-06 #164 验收标准 2) — 只在 Windows 编译的 unused 变量。
+// 期望：test (nextest + windows cross-check)[Linux] 绿、test (windows) 红。
+// 这个分支永不合入，观察完即关闭。
+#[cfg(windows)]
+pub fn ci06_lane_negative_control() -> u8 {
+    let deliberately_unused_on_windows = 42u8;
+    7
+}
