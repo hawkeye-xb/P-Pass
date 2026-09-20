@@ -24,7 +24,12 @@ with toolchain_file.open("rb") as fh:
 
 expected_jobs = {
     ".github/workflows/ci-rust.yml": {"fmt", "clippy", "test", "deny"},
-    ".github/workflows/ci-desktop.yml": {"desktop"},
+    # CI-11 (#255)：空集**不是**「这个文件不用查」。ci-desktop 的两个 job
+    # 自己不跑 Cargo——Cargo 命令和工具链 setup 都在共享 composite action
+    # 里（拆 job 去掉现算检查名时搬过去的）。文件仍然在这里列着，是为了继续
+    # 吃下面那两条全文检查（dtolnay / 重复钉版本号）；job 层的判据由
+    # delegated_jobs 接力，**判据本身一个字没放宽**。
+    ".github/workflows/ci-desktop.yml": set(),
     # CI-02: release 二进制只在 build job 里编译一次；e2e/scenarios 只
     # download-artifact 后运行已构建二进制，不跑 Cargo，不需要工具链 setup。
     ".github/workflows/e2e.yml": {"build"},
@@ -35,24 +40,25 @@ expected_jobs = {
         "windows-x64-bin",
     },
 }
+
+# job 自己不跑 Cargo，把活委托给仓库内的 composite action。
+# **两头都必须查，缺一头就是 fail-open**：
+#   - 只查 action、不查引用 ⇒ 有人把 job 里的 `uses:` 删了，action 文件还在，
+#     判据照样报绿，而那条 lane 已经没有工具链锁定了；
+#   - 只查引用、不查 action ⇒ action 里的 setup 步骤被删了没人管。
+delegated_jobs = {
+    ".github/workflows/ci-desktop.yml": {
+        "desktop-linux": ".github/actions/desktop-checks",
+        "desktop-windows": ".github/actions/desktop-checks",
+    },
+}
+
 setup_name = "- name: Set Rust toolchain from rust-toolchain.toml"
 setup_run = "run: tools/setup-rust-toolchain.sh"
 errors: list[str] = []
 
-for relative_path, cargo_jobs in expected_jobs.items():
-    path = root / relative_path
-    lines = path.read_text().splitlines()
-    text = "\n".join(lines)
 
-    if "dtolnay/rust-toolchain" in text:
-        errors.append(
-            f"{relative_path}: dtolnay/rust-toolchain may override rust-toolchain.toml"
-        )
-    if pinned in text:
-        errors.append(
-            f"{relative_path}: duplicates pinned Rust version {pinned!r}"
-        )
-
+def parse_jobs(lines: list[str]) -> dict[str, str]:
     jobs: dict[str, str] = {}
     in_jobs = False
     current_job: str | None = None
@@ -73,6 +79,44 @@ for relative_path, cargo_jobs in expected_jobs.items():
             job_lines.append(line)
     if current_job is not None:
         jobs[current_job] = "\n".join(job_lines)
+    return jobs
+
+
+def check_version_authority(label: str, text: str) -> None:
+    """rust-toolchain.toml 必须是唯一版本权威。"""
+    if "dtolnay/rust-toolchain" in text:
+        errors.append(f"{label}: dtolnay/rust-toolchain may override rust-toolchain.toml")
+    if pinned in text:
+        errors.append(f"{label}: duplicates pinned Rust version {pinned!r}")
+
+
+def check_setup_precedes_cargo(label: str, body: str) -> None:
+    """跑 Cargo 的单位必须先在一个命名步骤里执行 setup 脚本。
+
+    job 和 composite action 用的是**同一条判据**——单位变了，标准没变。
+    """
+    cargo_positions = [
+        match.start() for match in re.finditer(r"(?m)^\s*run:\s*cargo\b", body)
+    ]
+    if not cargo_positions:
+        errors.append(f"{label}: expected a Cargo run command")
+        return
+    setup_position = body.find(setup_name)
+    setup_run_position = body.find(setup_run)
+    if setup_position == -1 or setup_run_position == -1:
+        errors.append(
+            f"{label}: Cargo job must run {setup_run} in a named toolchain setup step"
+        )
+    elif not (setup_position < setup_run_position < min(cargo_positions)):
+        errors.append(f"{label}: toolchain setup must precede every Cargo command")
+
+
+for relative_path, cargo_jobs in expected_jobs.items():
+    path = root / relative_path
+    lines = path.read_text().splitlines()
+    check_version_authority(relative_path, "\n".join(lines))
+
+    jobs = parse_jobs(lines)
 
     missing_jobs = sorted(cargo_jobs - jobs.keys())
     if missing_jobs:
@@ -80,24 +124,35 @@ for relative_path, cargo_jobs in expected_jobs.items():
         continue
 
     for job_name in sorted(cargo_jobs):
-        job = jobs[job_name]
-        cargo_positions = [
-            match.start()
-            for match in re.finditer(r"(?m)^\s*run:\s*cargo\b", job)
-        ]
-        if not cargo_positions:
-            errors.append(f"{relative_path}:{job_name}: expected a Cargo run command")
+        check_setup_precedes_cargo(f"{relative_path}:{job_name}", jobs[job_name])
+
+# ── 委托给 composite action 的 job：job → action 两段接力 ──
+referenced_actions: set[str] = set()
+for relative_path, mapping in delegated_jobs.items():
+    path = root / relative_path
+    jobs = parse_jobs(path.read_text().splitlines())
+    for job_name, action_dir in sorted(mapping.items()):
+        label = f"{relative_path}:{job_name}"
+        if job_name not in jobs:
+            errors.append(f"{relative_path}: missing expected delegating job: {job_name}")
             continue
-        setup_position = job.find(setup_name)
-        setup_run_position = job.find(setup_run)
-        if setup_position == -1 or setup_run_position == -1:
+        job = jobs[job_name]
+        if re.search(r"(?m)^\s*run:\s*cargo\b", job):
             errors.append(
-                f"{relative_path}:{job_name}: Cargo job must run {setup_run} in a named toolchain setup step"
+                f"{label}: runs Cargo directly; list it in expected_jobs, not delegated_jobs"
             )
-        elif not (setup_position < setup_run_position < min(cargo_positions)):
-            errors.append(
-                f"{relative_path}:{job_name}: toolchain setup must precede every Cargo command"
-            )
+        if f"uses: ./{action_dir}" not in job:
+            errors.append(f"{label}: must delegate Cargo work to ./{action_dir}")
+        referenced_actions.add(action_dir)
+
+for action_dir in sorted(referenced_actions):
+    action_path = root / action_dir / "action.yml"
+    if not action_path.is_file():
+        errors.append(f"{action_dir}/action.yml: referenced by a job but missing")
+        continue
+    action_text = action_path.read_text()
+    check_version_authority(f"{action_dir}/action.yml", action_text)
+    check_setup_precedes_cargo(f"{action_dir}/action.yml", action_text)
 
 if errors:
     raise SystemExit("Rust CI toolchain check failed:\n- " + "\n- ".join(errors))
@@ -151,5 +206,6 @@ def run_setup(channel: str) -> None:
 run_setup(pinned)
 older = "1.0.0" if pinned != "1.0.0" else "0.99.0"
 run_setup(older)
-print(f"Rust CI toolchain check passed: {len(expected_jobs)} workflows, TOML counterproof {pinned} -> {older}")
+checked = len(expected_jobs) + len(referenced_actions)
+print(f"Rust CI toolchain check passed: {checked} units, TOML counterproof {pinned} -> {older}")
 PY
