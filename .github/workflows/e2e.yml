@@ -118,7 +118,7 @@ jobs:
       # 以前只有本 job 用 21、其余钉 17 靠"不触 ffi 类"绕行，现三处都读
       # 仓根 .java-version（唯一真相，与本地 scripts/java-home.sh 同源）。
       - name: Setup Java (.java-version)
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v4
         with:
           distribution: temurin
           java-version-file: .java-version
