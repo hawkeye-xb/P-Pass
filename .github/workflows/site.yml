@@ -1,12 +1,16 @@
 name: site
 
 on:
+  # CI-07（2026-09-20）：paths 与下面的 push 对齐，加上 'site/**'——
+  # 原先改 site/** 的 PR 一条检查都不跑。保留 paths（不像 ci-rust /
+  # ci-desktop 那样全删）因为本 lane 不进必需检查，被跳过无害。
+  # deploy job 有 `if: github.event_name != 'pull_request'` 守着，
+  # 已核实 PR 上只 build 不发布。
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/**'
-      - 'site/package.json'
-      - 'site/package-lock.json'
+      - 'site/**'
   push:
     branches: [main]
     paths:

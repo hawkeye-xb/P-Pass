@@ -14,14 +14,18 @@
 name: CI Android
 
 on:
+  # CI-07（2026-09-20）：paths 与下面的 push **逐条对齐**，业务代码 PR
+  # 从此能在 PR 上跑本 lane（原先只有 gradle 依赖清单触发，改
+  # apps/android/** 的 PR 一条 Android 检查都没有）。
+  # 本 lane **不设 paths=全跑**（与 ci-rust / ci-desktop 不同），因为它
+  # 实测 5-6min 是四条里最贵的，且**不进必需检查**——不进必需检查就不会
+  # 踩「被跳过的必需检查永久 Pending」那个坑，可以安全地保留 paths。
   pull_request:
     branches: [main]
     paths:
       - ".github/workflows/**"
-      - "apps/android/**/build.gradle.kts"
-      - "apps/android/**/libs.versions.toml"
-      - "apps/android/**/gradle-wrapper.properties"
-      - "apps/android/gradle.properties"
+      - "apps/android/**"
+      - "assets/i18n/**"
   push:
     branches: [main]
     paths:

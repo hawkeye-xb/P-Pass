@@ -24,18 +24,29 @@
 # 升级 PR 零检查（dependabot.yml 里写的「PR → CI 绿 → 合」永远等不来绿）。
 # 加回 pull_request，但 paths 只含流水线文件 + 依赖清单——dependabot
 # 改什么就触发什么，业务代码 PR 依旧不跑，额度不多花。
+# 2026-09-20（CI-07 #189）：上面那句「业务代码 PR 依旧不跑」**已作废**。
+# 它依赖的两条前提今天都不成立了：① 工作流已从直推 main 改为
+# issue -> 分支 -> PR -> squash，PR 事件不再是多余的；② 本仓是 PUBLIC，
+# 标准 GitHub-hosted runner 不计费（Windows 的 2x 分钟乘数同样不适用于
+# 公开仓），「白烧额度」无从谈起。后果实测过：PR #217 修的是
+# crates/daemon 里一处 P0 级对账缺陷，合入时 clippy / test / arch-check
+# 一条都没跑，PR 上的检查列表只有 identity 一条。
 name: CI Rust
 
 on:
+  # CI-07（2026-09-20）：**刻意不设 paths，每个 PR 都跑**。
+  # 本 lane 的 clippy / test / architecture 三条要进 main 的必需检查，而
+  # GitHub 官方文档明写：被 paths 跳过的 workflow，其检查会停在 Pending
+  # 并挡住合并（"Associated checks stay in a 'Pending' state and block
+  # merging"），给出的建议是 "Avoid requiring workflows that can be
+  # skipped."。所以**带 paths + 设必需 = 自锁**：一个只改 apps/** 的 PR
+  # 永远等不到 clippy 报告，而 enforce_admins=true 连管理员也绕不过。
+  # 代价：每个 PR 固定多跑本 lane（实测 job-分钟合计 6m29s，五个 job 并行
+  # 墙钟约 4min）。公开仓不计费，这个代价是 0。
+  # ⚠️ 谁要给本 lane 加回 paths，请先把 main 的必需检查里对应的三条摘掉，
+  # 否则会把所有不碰 crates/** 的 PR 全部卡死。
   pull_request:
     branches: [main]
-    paths:
-      - ".github/workflows/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "tools/setup-rust-toolchain.sh"
-      - "tools/check-rust-toolchain-ci.sh"
   push:
     branches: [main]
     paths:

@@ -42,7 +42,12 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
   （type ∈ feat/fix/docs/test/ci）。
 - **分支上快验，PR 上全验。** 推分支不触发 CI（四条 lane 的 `push` 限定
   `branches: [main]`）：纯文档 `just ci-docs`，动了代码 `just ci`。
-  开 PR 才跑受影响域 lane。
+  开 PR 才跑 lane，分两档（CI-07 #189）：
+  - `ci-rust` / `ci-desktop` **每个 PR 都跑**，刻意不设 `pull_request.paths`
+    ——它们的检查要进 `main` 的必需列表，而被 paths 跳过的必需检查会永久
+    停在 Pending 并挡住合并（GitHub 官方行为），带 paths + 设必需 = 自锁。
+  - `ci-android` / `site` / `ci-docs` 仍按 paths 只在改到自己域时跑，
+    它们不进必需列表，被跳过无害。
 - PR 开出后盯受影响域 CI 到结论，红了在同一分支上修，不留红 PR。
 - **带 GitHub MCP 的会话**（协作者账号 `690591397`）：自己把 PR 全程做完——
   推分支、开 PR（描述里逐项回接收尾检查）、盯 lane、squash 合并。
