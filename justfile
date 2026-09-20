@@ -256,6 +256,20 @@ verify-m2:
 cleanup-local *args:
     bash tools/clean-local-builds.sh {{args}}
 
+# QA-13: fetch + automatic reclamation, the moment the info is freshest.
+# GitHub deletes a PR's head branch on merge, so right after --prune the
+# merged-and-done worktrees are exactly the ones whose upstream vanished;
+# removal still passes every existing guard (current worktree / uncommitted
+# changes / not-merged / active build / fail-closed probe). Local-only by
+# construction: fetch is read-only, deletion touches local dirs only.
+# Scope note: `--worktrees`, not `--all` — auto-deleting the CURRENT
+# worktree's target/ would force a full rebuild on every pull; cache
+# reclamation for kept worktrees stays manual (`just cleanup-local
+# --apply --targets`), which is a deliberate cost choice, not an oversight.
+sync:
+    git fetch --prune origin
+    bash tools/clean-local-builds.sh --apply --worktrees
+
 # Safety integration test; it creates and destroys only a temporary Git repository.
 test-cleanup-local:
     bash tools/test-clean-local-builds.sh
