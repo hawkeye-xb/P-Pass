@@ -153,6 +153,39 @@ impl PlatformAdapter for WindowsAdapter {
         verdict_from_readback(before, read_standby_idle_seconds())
     }
 
+    // ── QA-09 迁移（#211）桌面壳批次 ───────────────────────────────
+    fn platform_name(&self) -> &'static str {
+        "windows"
+    }
+
+    /// Windows 的可执行文件带 `.exe`。与 [`crate::DAEMON_EXECUTABLE_STEM`]
+    /// 的关系有单测钉着（`executable_name_is_the_stem_plus_exe`）——写成
+    /// 字面量是因为 `const` 里没法做字符串拼接。
+    fn daemon_executable_name(&self) -> &'static str {
+        "ppf-daemon.exe"
+    }
+
+    /// 「电源和睡眠」设置页。迁移前桌面壳直接把这个字符串交给 opener
+    /// 插件；现在字符串归这里，打开动作仍归桌面壳（理由见 trait 上的说明）。
+    fn power_settings_uri(&self) -> Option<&'static str> {
+        Some("ms-settings:powersleep")
+    }
+
+    fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
+        let out = Command::new("taskkill")
+            .args(["/F", "/IM", "ppf-daemon.exe"])
+            .output()
+            .map_err(|e| PlatformError::Io {
+                action: "kill_daemon_process",
+                source: e,
+            })?;
+        taskkill_verdict(
+            out.status.success(),
+            out.status.code(),
+            &String::from_utf8_lossy(&out.stderr),
+        )
+    }
+
     fn notify(&self, _title: &str, _body: &str) {
         // Tauri notification carries this in T-041; no-op until then.
     }
@@ -652,5 +685,109 @@ mod desk22_disable_auto_sleep_tests {
         };
         assert!(matches!(c, PlatformError::Cancelled { .. }));
         assert!(c.to_string().contains("取消"), "{c}");
+    }
+}
+
+/// DESK-25 (#208)：`taskkill` 用退出码区分「目标进程不存在」和真失败。
+///
+/// 实测（2026-09-18，Windows 11 26200）：进程在 → 0；进程不存在 → 128
+/// `ERROR: The process "x" not found.`；非法参数 → 1。
+///
+/// 128 与 unix 侧 `pkill` 的 1 同义（[`crate::unix::PKILL_NO_MATCH`]）。
+pub const TASKKILL_NOT_FOUND: i32 = 128;
+
+/// 把 `taskkill` 的退出码翻译成结论。
+///
+/// 抽成纯函数是刻意的，而且这条判据是**有过事故的**：DESK-25 之前它被
+/// 内联成一个裸 if、没人守着，于是「没杀掉」（权限不足 / 被杀软拦 /
+/// 参数错）被当成杀成功，紧接着就去 spawn 第二个 daemon。
+///
+/// `code == None` 只在被信号终止时出现（Windows 上不会），保守算失败——
+/// 「没法确认」不等于「成功」。
+pub fn taskkill_verdict(
+    success: bool,
+    code: Option<i32>,
+    stderr: &str,
+) -> Result<crate::KillOutcome> {
+    if success {
+        Ok(crate::KillOutcome::Killed)
+    } else if code == Some(TASKKILL_NOT_FOUND) {
+        Ok(crate::KillOutcome::NotRunning)
+    } else {
+        Err(PlatformError::Failed {
+            action: "kill_daemon_process",
+            detail: format!("taskkill 退出码 {:?}（{}）", code, stderr.trim()),
+        })
+    }
+}
+
+/// QA-09 迁移（#211）：这组用例原来住在
+/// `apps/desktop/src-tauri/src/lib.rs`，随被测函数一起搬过来。
+/// 判据一个字没改，只是换了地方——搬家途中丢掉判别力是本次迁移最大的风险。
+#[cfg(test)]
+mod desk25_taskkill_tests {
+    use super::*;
+    use crate::KillOutcome;
+
+    #[test]
+    fn taskkill_success_is_not_a_failure() {
+        assert_eq!(
+            taskkill_verdict(true, Some(0), "").unwrap(),
+            KillOutcome::Killed
+        );
+    }
+
+    /// 128 = 进程本来就没在跑 ⇒ 正常结果，不是错误。
+    #[test]
+    fn taskkill_not_found_is_not_a_failure() {
+        assert_eq!(
+            taskkill_verdict(
+                false,
+                Some(TASKKILL_NOT_FOUND),
+                "ERROR: The process \"x\" not found."
+            )
+            .unwrap(),
+            KillOutcome::NotRunning
+        );
+    }
+
+    /// 1 = 参数 / 权限问题 ⇒ 真失败。放松这条就回到 DESK-25 的原病。
+    #[test]
+    fn taskkill_other_nonzero_is_a_failure() {
+        let e = taskkill_verdict(false, Some(1), "拒绝访问").unwrap_err();
+        assert!(e.to_string().contains("退出码 Some(1)"), "{e}");
+    }
+
+    /// 拿不到退出码 ⇒ 保守算失败。
+    #[test]
+    fn taskkill_unknown_exit_status_is_a_failure() {
+        assert!(taskkill_verdict(false, None, "").is_err());
+    }
+
+    /// 真机验一次「128 确实代表进程不存在」——判据的前提是**实测事实**，
+    /// 不是文档。这条挂在一个必然不存在的进程名上。
+    #[test]
+    fn real_taskkill_reports_128_for_a_missing_process() {
+        let out = Command::new("taskkill")
+            .args(["/F", "/IM", "p-pass-no-such-process-zzz.exe"])
+            .output()
+            .expect("taskkill 必须存在于 Windows");
+        assert_eq!(
+            out.status.code(),
+            Some(TASKKILL_NOT_FOUND),
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+
+    /// Windows 的文件名就是基名加 `.exe`——两者漂开会让 taskkill 打空。
+    #[test]
+    fn executable_name_is_the_stem_plus_exe() {
+        use crate::PlatformAdapter as _;
+        assert_eq!(
+            WindowsAdapter::new().daemon_executable_name(),
+            format!("{}.exe", crate::DAEMON_EXECUTABLE_STEM)
+        );
     }
 }

@@ -74,19 +74,22 @@ echo "==> B.2: platform #[cfg] / cfg_attr / cfg!() isolation (platform crate onl
 #      language at the bin crate root and forks no code path. Only the
 #      attribute name is exempt: a cfg_attr carrying any OTHER attribute on
 #      a platform predicate still flags. Not file-based, not crate-based.
-#   3. Grandfathered existing forks, migration issue #211 (QA-09 #186 Q2/Q3):
-#        apps/desktop/src-tauri/src/lib.rs (self-written forks)
-#      2026-09-21 销号：crates/daemon/ 那三个文件已清零（7 处分叉迁进
-#      crates/platform/，见 #211）。剩桌面壳一个，等 #171 落地与「仅测试
-#      搭建的平台门」定性之后再销。
-#      New platform forks anywhere MUST go through crates/platform/;
-#      adding to this list requires an issue decision.
+#   3.（原「存量分叉按文件豁免」——**2026-09-21 全部销号，豁免清单为空**。）
+#
+#      daemon 侧 7 处 → PR #280；桌面壳 18 处 → #211 桌面壳批次。
+#
+#      中间挡路的 3 处「只挂在测试上的平台门」**没有开豁免**：建「指向目录
+#      的链接」那个能力搬进了 crates/platform 的 test-support feature
+#      （#287 / PR #329）。那张卡问的就是「能做到为什么要豁免」，答案是不
+#      豁免——要往回加豁免之前，请先读一遍它。
+#
+#      现在 crates/** 与 apps/** 里**任何**平台分叉都必须走
+#      crates/platform/，没有例外文件。加例外需要 issue 拍板。
 VIOLATIONS_B2=$(grep -rn --include='*.rs' \
   -E '\bcfg(_attr)?\b.*\b(unix|windows|linux|macos|target_os|target_family|target_env)\b' \
   "$ROOT/crates" "$ROOT/apps" \
   | grep -v 'crates/platform/' \
   | grep -v 'windows_subsystem' \
-  | grep -v 'apps/desktop/src-tauri/src/lib\.rs:' \
   || true)
 
 if [ -n "$VIOLATIONS_B2" ]; then
