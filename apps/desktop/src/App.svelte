@@ -1,9 +1,14 @@
 <script>
   import { reconcilePhotoWall } from "./photoWall.js";
+  import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
-  import { open as openDialog, confirm as confirmDialog } from "@tauri-apps/plugin-dialog";
+  import {
+    open as openDialog,
+    confirm as confirmDialog,
+    message as messageDialog,
+  } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
   import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
   import QRCode from "qrcode";
@@ -595,8 +600,34 @@
     }
   }
 
+  // DESK-23 (#172)：Rust 侧每次关窗都会发 `hidden-to-tray`，要不要弹在这里判。
+  // 判定规则本身抽在 trayHint.js 里单测（macOS 那条没 Mac 验不了端到端，
+  // 但规则可以测）；这里只负责读写标记和真正把话说出来。
+  // 平台取自 wizard_state 已有的 platform 字段——不为这一处新加命令，也不
+  // 在 Rust 里加 cfg（#211 正在往外搬平台分叉，别一边搬一边添）。
+  async function onHiddenToTray() {
+    let shown = null;
+    try {
+      shown = localStorage.getItem(TRAY_HINT_SHOWN_KEY);
+    } catch {
+      // 隐私模式/存储被禁时 localStorage 会抛。当成"没提示过"继续走：
+      // 多提示一次可以忍，静默不行。
+    }
+    if (!shouldShowTrayHint(wizard?.platform, shown)) return;
+    try {
+      localStorage.setItem(TRAY_HINT_SHOWN_KEY, "1");
+    } catch {
+      // 同上，置不上就下次还会提示——不影响这次把话说清楚。
+    }
+    await messageDialog(
+      "关掉窗口不会停止备份——家人手机传来的照片照样会收。\n\n要彻底退出，右键点任务栏右下角的 P-Pass 图标，选「退出」。",
+      { title: "P-Pass 还在后台运行", kind: "info" },
+    );
+  }
+
   let timer;
   let unlisten;
+  let unlistenTray;
   onMount(() => {
     checkWizard();
     // DESK-02①: 更新检查放首次 status 落地后——updateChannel 由
@@ -608,11 +639,14 @@
     // 订阅线程在 src-tauri setup 启动（start_event_stream），事件经
     // `daemon-event` 转发——这里只负责收。
     listen("daemon-event", onDaemonEvent).then((f) => (unlisten = f));
+    // DESK-23 (#172): 关窗藏到托盘时 Rust 发来的通知。
+    listen("hidden-to-tray", onHiddenToTray).then((f) => (unlistenTray = f));
     window.addEventListener("hashchange", onHashChange);
   });
   onDestroy(() => {
     clearInterval(timer);
     unlisten?.();
+    unlistenTray?.();
     window.removeEventListener("hashchange", onHashChange);
   });
 
