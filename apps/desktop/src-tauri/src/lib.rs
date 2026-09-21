@@ -763,6 +763,22 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let _ = window.hide();
                 api.prevent_close();
+                // DESK-23 (#172)：Windows 上点 X 就是退出，是强预期。藏到
+                // 托盘却不说一声，用户会以为备份已经停了。
+                //
+                // 这里**只发事件，不做判断**——要不要弹、弹过没有、当前是不是
+                // Windows，全交给前端。理由有两条：
+                //   1. 「已提示过」是 UI 偏好，它唯一合法的落点是前端的
+                //      localStorage。卡面禁止新造文件，而桌面壳其余的持久化
+                //      通道要么会被 write_config 整体重写（config.toml），
+                //      要么根本是 daemon 的配置（#172 里逐条核过）。
+                //   2. 平台判断放前端就不用在本文件再加一处 cfg——#211 正在
+                //      往外搬这些，别一边搬一边添。
+                //
+                // hide() 与 prevent_close() 留在 Rust 不动是刻意的：前端万一
+                // 没注册上监听，最坏只是**少提示一次**，关窗行为不会退化成
+                // 真退出。错误方向是「提示丢失」，不是「程序没了」。
+                let _ = window.emit("hidden-to-tray", ());
             }
         })
         .run(tauri::generate_context!())
