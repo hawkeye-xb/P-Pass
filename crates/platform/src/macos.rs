@@ -75,6 +75,9 @@ fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
 }
 
 impl PlatformAdapter for MacosAdapter {
+    // CI-14 (#278) 一次性探针：故意的编译错误，用来验证新加的 macOS 交叉
+    // check 那一步真的会红。**下一个提交就还原**，不会合进 main。
+    const _CI14_PROBE: () = this_symbol_does_not_exist();
     fn install_autostart(&self, exec: &Path) -> Result<()> {
         // DAE-01 稳定路径纪律：plist 绝不指向 target/ 开发路径或 /tmp/——
         // 指向那里的 launchd 条目会把旧构建永远钉在岗上（用户机实锤：
