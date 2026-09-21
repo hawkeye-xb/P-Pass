@@ -367,15 +367,36 @@ jobs:
       # 侧「用户机器上没有 ffmpeg 也要活」由 media-codec::ql_fallback 的
       # video_thumbs_survive_a_machine_without_ffmpeg 守着，那条在 Windows 上
       # 本来就通过。所以装 ffmpeg 不丢任何覆盖。
-      # ⚠️ 该脚本从 gyan.dev 拉 zip，**不带版本钉死与校验和**（脚本头部注释
-      # 自己写着这留给 T-071 发布流水线做）。这条 lane 引入了一个未校验的
-      # 第三方下载，与本仓「action 全 pin SHA」的口径不一致 —— 已开为 #252，
-      # 不在本 PR 顺手修。
+      # SEC-06 (#252, 2026-09-21)：上面那句「不带版本钉死与校验和」已经修掉。
+      # 脚本的 Windows 分支现在钉在 BtbN/FFmpeg-Builds 的**不可变 tag** 上，
+      # 下载后对一个写死的 SHA256 做校验，不符就删文件并非零退出。
+      # 换源同时也是修故障：gyan.dev 对 runner 出口 IP 返 503，本 lane 在
+      # `main` 与 #358 上连续三次全红在这一行（详见 #252）。
+      #
+      # **刻意不加 actions/cache**：本仓 Actions cache 配额 10 GB 实测已顶到
+      # 9.91 GB（上面 target/ 那段注释里算过这笔账）。解出来的 ffmpeg.exe 有
+      # 132 MB，而 asset 由 GitHub Releases 托管、与 runner 同网，下载本身很快
+      # （实测秒数见下方 FFMPEG_FETCH_SECONDS）。为省几秒去占 132 MB 配额、
+      # 把别的 lane 的缓存 LRU 挤掉，是赔的 —— 和上面不缓存 target/ 同一笔账。
+      # 哪天 FFMPEG_FETCH_SECONDS 涨上去了再重新算，别拍脑袋加。
       - name: Fetch ffmpeg (video thumbnail tests)
         shell: bash
+        env:
+          # 见 tools/fetch-ffmpeg.sh：runner 镜像哪天自带了 ffmpeg，脚本的
+          # 「PATH 上已有就不折腾」早退会让 CI 静默改用那个**未经本仓校验**
+          # 的二进制，本卡钉版本+校验和的努力当场归零且没人会发现。
+          PPF_FFMPEG_FORCE_FETCH: "1"
         run: |
+          start=$(date +%s)
           tools/fetch-ffmpeg.sh
-          echo "PPF_FFMPEG=$PWD/tools/ffmpeg/ffmpeg.exe" >> "$GITHUB_ENV"
+          echo "FFMPEG_FETCH_SECONDS=$(( $(date +%s) - start ))"
+          exe="$PWD/tools/ffmpeg/ffmpeg.exe"
+          # 断言钉死的那个真的落地了。ffmpeg_path() 对 PPF_FFMPEG 是
+          # `if p.is_file()` —— 指向一个不存在的路径时它**不报错**，而是
+          # 静默往下落到 <exe_dir>/tools 与 PATH；那样又回到「用了一个未校验
+          # 的 ffmpeg」。在这里 fail-closed 补上。
+          test -x "$exe" || { echo "pinned ffmpeg missing at $exe" >&2; exit 1; }
+          echo "PPF_FFMPEG=$exe" >> "$GITHUB_ENV"
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908 # v2.87.15
