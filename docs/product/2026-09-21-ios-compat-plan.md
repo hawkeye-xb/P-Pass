@@ -20,7 +20,7 @@
 
 ## 二、开工前必须知道的五条一手事实
 
-全部取自本机 `Xcode 26.6 / iPhoneOS26.5.sdk`（`xcrun --sdk iphoneos --show-sdk-path`），不是文档转述。复核命令附在每条后面。
+全部取自**本机**（P-Pass 开发用 Mac，`xcodebuild -version` = `Xcode 26.6 / Build 17F113`，`xcrun --sdk iphoneos --show-sdk-path` = `iPhoneOS26.5.sdk`），不是文档转述。复核命令附在每条后面。**在别的机器上复核前先对齐这两个版本号**——SDK 版本不同，行号与 `API_AVAILABLE` 都可能对不上。`IOS-01` 的基线文档要把「一手事实出自哪台机器的哪个 Xcode」写死。
 
 **F1｜iroh-ffi 有 Swift/XCFramework，但 `iroh-blobs` 明确不在其范围内。**
 这与 Android 撞的是同一堵墙，而本仓的答案已经在盘上：`crates/transport --features android-jni` 编出 `libtransport.so`，`AndroidBlobsProvider` 独占一个 endpoint、一次一个 lease、用 `TempTag` 挡住 60s GC。
@@ -129,6 +129,11 @@ PHAssetResourceUploadJob.h:39   @property NSURLRequest *destination;   // 我们
 
 整个 `PHAssetResourceUploadJob` / `PHAssetResourceUploadJobChangeRequest` 里**没有任何 body、stream、transform 或 data provider 钩子**（全文 grep 零命中）。请求体就是那个 `PHAssetResource` 本身，由系统读取、由系统发送；我们能控制的只有 URL、HTTP 方法和请求头。
 
+**「那我把 `NSURLRequest.httpBody` 换成密文呢」——这一问要单独挡住。** `NSURLRequest` 本身确实有 `httpBody`，所以「只能控 URL/方法/请求头」不是 grep 能证明的结论，真正封死它的是契约语义与代价：
+
+- **契约上 body 不归我们定。** `PHAssetResourceUploadJob.h:37` 写的是 "The destination to send the **job's resource**"，`PHAssetResourceUploadJobChangeRequest.h:29/42` 写的是 "resource: the asset resource **to be uploaded**"。`destination` 指定的是「送到哪」，被送的东西由 `resource` 参数独立给出，由系统读取。把密文塞进 `httpBody` 并不能替换掉那个资源。
+- **就算能替换，代价更糟。** 要让系统把我们的密文当成「一个资源」发出去，得先把这段密文以 `performChanges` 写进用户相册、伪装成一张照片才能拿到 `PHAssetResource`。**污染用户的照片库**比明文过境更违背原则，不是一条出路。
+
 → **在这条通道上做不了客户端加密。** 字节以明文离开手机（TLS 保护传输），而 TLS 在我们的 Worker 上终止 —— **中转必然看得到明文**。这不是「云相册」（我们不存），但也不是「零知识管道」。
 
 ### 三种形态的取舍（第三种已被否决）
@@ -150,7 +155,7 @@ PHAssetResourceUploadJob.h:39   @property NSURLRequest *destination;   // 我们
 | R3 | **Worker 怎么找到桌面**。桌面在 NAT 后，Worker 不能主动连它 → 桌面必须常驻一条对外长连接（Durable Object + WebSocket 一类），并在 iroh 之外多一套在线状态与鉴权 | 这是新增的常驻依赖：后台备份从此依赖我们的服务在线，而 P-Pass 现在是完全可离线/局域网自足的 |
 | R4 | **体积与时长撑不撑得住**。Workers 的请求体大小上限按套餐封顶，视频可能超；DO WebSocket 单条消息 1 MiB 级，要自己分块；桌面确认前响应要一直挂着，系统上传器会不会超时未知 | 任何一条不成立，这条路对视频就是不可用的，而视频恰恰是最需要后台传的那类 |
 
-**桌面不在线怎么办**（此段对无中间人的两种形态同样成立）：job 会失败，而失败只允许重试一次（`retry(destination:)`）。之后只能等扩展下一次 `process()` 重新登记 —— 粒度约一天。所以「桌面关机三天」= 备份滞后三天，不是丢失。这一点要写进用户可见的表达里。
+**桌面不在线怎么办**（此段对无中间人的两种形态同样成立）：job 会失败，而失败只允许重试一次（`retry(destination:)`，头文件原文 "has not been retried before"）。之后只能等扩展下一次 `process()` 重新登记。**重登记的频率未知**——`process()` 的实际触发节奏是 `IOS-03` 第 6 问明确标注待实测的东西，公开报道说「设备闲置充电时一天一次左右」，那是 E1，不能当数字用。所以「桌面关机 N 天会滞后多久」**在 Q6 有实测之前不许写进任何用户可见表达**；能说的只有定性结论：滞后，不是丢失。
 
 ## 四、三类环境分工
 
@@ -166,10 +171,10 @@ PHAssetResourceUploadJob.h:39   @property NSURLRequest *destination;   // 我们
 |---|---|---|
 | D1 | **设备与会员** —— **已答（2026-09-21）：有 iPhone，无 Apple Developer Program 会员**。剩余待补：机型与系统版本（是否 ≥ 26.1 决定 F2/F5 能不能验）。带出两个新的待验风险，见下方 D1-a / D1-b | 真机在手，L3 不再整体阻塞；但免费个人团队的能力集比付费窄，哪些卡因此受限必须先测出来，不能等写完才发现签不上 |
 | D2 | **最低系统版本**：后台通道的地板是 iOS 26.1（`creationRequestForJob`/`cancel`/响应头要 26.4，`Process` action 要 26.5）；`PHPersistentChangeToken` 只要 16 | 决定老系统是「降级为前台备份」还是「不支持」，这是产品决策不是工程决策 |
-| D3 | **许可证**：仓库是 AGPL-3.0，第三方 App Store 分发与 GPL 家族条款历来冲突（VLC 先例）。历史提交里有第三位作者（106 次提交），重新授权需要其同意 | 代码写完才发现不能上架。TestFlight 同受 Apple ToS 约束，不是绕开手段 |
+| D3 | **许可证**：仓库是 AGPL-3.0，第三方 App Store 分发与 GPL 家族条款历来冲突（VLC 先例）。**「需要第三位作者同意」这个前提先别当真**——`690591397 <690591397@qq.com>`（`origin/main` 上 115 次提交）在 `AGENTS.md:74` 被称为「协作者账号」、在 `.github/allowed-identities.txt` 列在「人类身份」段，究竟是独立第三方还是本项目自己持有的第二身份，**仓库里判不出来**，必须先向账号持有人确认归属。若是自己人，重新授权的故事比原先设想的简单得多 | 一张决策卡建立在查错的 git 史上，比没有这张卡更糟 |
 | D4 | **iCloud 瘦身原图的账本语义**：不在本地算 `WAITING_FOR_CONSTRAINTS` 还是单独一态？允许走蜂窝吗？下载失败消耗失败预算吗？ | ARCH-01 没有这个状态。最容易在后期浮现并作废一批已完成卡的就是它 |
 | D5 | **新绑定的平台 `cfg` 归属**：QA-09 把 daemon 的平台分叉收进 `crates/platform/`，而 `android_blobs.rs` 以 feature 形式留在 `crates/transport/`。iOS 绑定按哪条规则放 | 让 reviewer 在 PR 里才发现，等于返工一张传输卡 |
-| D6 | **B 路线的 Desktop 端形态**：HTTP ingest 是 daemon 内置还是独立监听？只允许同一 Wi-Fi 网段？鉴权用什么（lease token 需要活满 24h）？ | `IOS-03` spike 要拿它去测，没有它 spike 无法设计 |
+| D6 | **Desktop 端 HTTP ingest 形态** —— **2026-09-21 定为「暂缓」**。它的全部输入（请求体形状、能否自定义方法与请求头、回执头能不能回、体积上限）都压在 `IOS-03` 第 2/5/7 问上，全是未实测项；中转形态又已否决。现在能拍的诚实结论只有暂缓 + 重开条件：**`IOS-03` 第 2 问答「能通」时重开**，届时形态收窄为「只服务同一 Wi-Fi 网段的直连」 | 输入全是未知时硬拍一个形态，等于让执行 agent 编一个出来 |
 
 **D1 的两个派生风险（`IOS-01` 必须实测，不许推断）**
 
