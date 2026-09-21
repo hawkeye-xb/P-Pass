@@ -237,6 +237,21 @@ jobs:
       - name: Windows cross-check (platform crate compiles for msvc)
         run: rustup target add x86_64-pc-windows-msvc && cargo check -p platform --target x86_64-pc-windows-msvc
 
+      # CI-14 (#278)：与上面那条对称。在此之前 **PR 门禁里没有任何一步会编译
+      # macOS 侧的平台代码**——三个 ubuntu job 走 HeadlessAdapter、两个 windows
+      # job 走 WindowsAdapter，唯一的交叉 check 只有 msvc；release.yml 的
+      # macos-arm64 只在打 tag 时跑。也就是说 crates/platform/src/macos.rs 改坏
+      # 了要到**发版**才暴露，那是最贵的暴露时机。
+      #
+      # 用 `cargo check` 不是 `cargo build`：check 不链接，ubuntu runner 上不需要
+      # macOS SDK。加 `--all-targets` 是为了连 examples/smoke.rs 与那个 macOS 专属
+      # 集成测试 tests/fsevents_shapes.rs 一起编到——它们同样只有这一条能覆盖。
+      #
+      # ⚠️ 覆盖不到的仍有一处：桌面壳（apps/desktop/src-tauri）里的 macOS 分支。
+      # 交叉 check 它要跑 tauri-build 与 macOS 系统框架，不是加一行能解决的。
+      - name: macOS cross-check (platform crate compiles for darwin)
+        run: rustup target add x86_64-apple-darwin && cargo check -p platform --all-targets --target x86_64-apple-darwin
+
   # CI-06 后半（#164，2026-09-20）：daemon 侧的测试第一次在**真 Windows** 上跑。
   #
   # 为什么要单开一个 job 而不是把上面的 test 改成矩阵：
