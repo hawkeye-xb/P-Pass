@@ -23,7 +23,11 @@ with toolchain_file.open("rb") as fh:
     pinned = tomllib.load(fh)["toolchain"]["channel"]
 
 expected_jobs = {
-    ".github/workflows/ci-rust.yml": {"fmt", "clippy", "test", "deny"},
+    # CI-13 (#274)：test-windows 是 CI-06 (#249) 加的，当时漏了同步这份名单，
+    # 于是全仓唯一在真 Windows 上跑 daemon 测试的那条 lane，工具链锁定**没人守**。
+    # 2026-09-21 普查过一遍（「文件里所有 run: cargo」对「本名单覆盖到的 job」
+    # 做差集）：全仓只有它一个漏网，补上之后差集为空。
+    ".github/workflows/ci-rust.yml": {"fmt", "clippy", "test", "test-windows", "deny"},
     # CI-11 (#255)：空集**不是**「这个文件不用查」。ci-desktop 的两个 job
     # 自己不跑 Cargo——Cargo 命令和工具链 setup 都在共享 composite action
     # 里（拆 job 去掉现算检查名时搬过去的）。文件仍然在这里列着，是为了继续
