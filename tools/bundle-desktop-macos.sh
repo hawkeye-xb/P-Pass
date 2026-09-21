@@ -82,6 +82,32 @@ else
 fi
 codesign --verify --deep --strict "$APP"
 
+# ── 5b. BUILD-09 产物自检：真的把 sidecar 跑一遍 ──────────────────────
+# 这是这条链路上**唯一执行产物**的一步。在它之前，所有检查看的都是「文件
+# 在不在、签名完不完整」，没有一处回答过「它能不能启动」——于是「.app 里
+# daemon 和它的 dylib 被拆散」这个形状可以一路绿灯走到用户机器上，失败在
+# 运行时以 dyld 报错出现（BUILD-09）。
+#
+# 同一形状已经出现过两次，成因不同：
+#   BUILD-05 — 第 3 步非零退出把第 4 步「嵌 lib」和第 5 步重签一起跳过；
+#   BUILD-09 — 压根没走本脚本，直接 `tauri build` 只搬了 externalBin 那一个
+#              二进制，daemon 的 rpath（@executable_path/lib）落空。
+# 按成因逐个堵是堵不完的，所以这里只问结果：**跑得起来吗**。
+#
+# 反证锚点：`rm -rf "$APP/Contents/MacOS/lib"` 后本步必须失败。
+SIDECAR="$APP/Contents/MacOS/ppf-daemon"
+echo "── 5b. 产物自检：$SIDECAR --version"
+[ -x "$SIDECAR" ] || { echo "FATAL: sidecar 不存在或不可执行：$SIDECAR" >&2; exit 1; }
+if ! SELFCHECK_OUT="$("$SIDECAR" --version 2>&1)"; then
+  echo "FATAL: .app 里的 daemon 起不起来——构建产物是坏的，不许出门。" >&2
+  echo "       $SIDECAR --version 退出码非 0，输出：" >&2
+  echo "$SELFCHECK_OUT" | sed 's/^/       /' >&2
+  echo "       最常见成因：Contents/MacOS/lib 缺失或不完整（daemon 的 rpath" >&2
+  echo "       是 @executable_path/lib，库必须与 sidecar 并排）。" >&2
+  exit 1
+fi
+echo "   ✓ $SELFCHECK_OUT"
+
 # BUILD-05（验收人 2026-09-17 定调：本地先讲究快）：dmg 那套
 # hdiutil + 挂载 + AppleScript 布局对狗粮验证零价值，只拖慢每一轮。
 # ad-hoc 身份（= 本地无凭据路径）默认不出 dmg；要 dmg 就 PPF_BUNDLE_DMG=1。
