@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.BuildConfig
+import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.BackupTriplet
 import com.hawkeyexb.ppass.backup.BackgroundBackupState
 import com.hawkeyexb.ppass.update.UpdateChannel
@@ -117,9 +118,12 @@ fun HomeScreen(
     // T6: 备份范围（null = 全部相册）——「选择相册」与「发起备份」分离。
     selectedBucketCount: Int? = null,
     onOpenBucketPicker: () -> Unit = {},
-    // MOB-02 §二: 部分授权态（只授权了部分照片）——hero 显示引导卡顶替
-    // 三元组（部分授权下 N/M 是假数），一键去系统设置。
-    partialAccess: Boolean = false,
+    // MOB-02 §二 / MOB-94: 相册权限三档——非 FULL 时 hero 显示引导卡顶替
+    // 三元组（拿不到完整相册时 N/M 是假数），一键去系统设置。
+    //
+    // 用枚举而不是两个布尔：「只给了部分」和「一张都不给」互斥，布尔并列
+    // 表示不了这个互斥，而 MOB-94 的 bug 恰恰是全拒那一档被漏掉了。
+    mediaAccess: MediaAccess = MediaAccess.FULL,
     onOpenAppSettings: () -> Unit = {},
     // MOB-02 §四事件①: Wi-Fi 要求不满足时触发已排队——显示提示行。
     wifiDeferred: Boolean = false,
@@ -180,19 +184,28 @@ fun HomeScreen(
         // MOB-02 §二: 部分授权下不显示假 0/0——引导卡顶替三元组，
         // 诚实说明「只授权了部分照片——备份需要完整相册权限」+ 去设置。
         Surface(
-            color = if (partialAccess) PPColor.ActBg else PPColor.SafeBg,
+            color = if (mediaAccess != MediaAccess.FULL) PPColor.ActBg else PPColor.SafeBg,
             shape = RoundedCornerShape(PPSize.RadiusCard),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(Modifier.padding(20.dp)) {
-                if (partialAccess) {
+                if (mediaAccess != MediaAccess.FULL) {
+                    // MOB-94: 两档各说各的话。「只给了部分」和「一张都不给」
+                    // 对用户是两件事，共用一句文案等于两边都说不准。
+                    val noAccess = mediaAccess == MediaAccess.NONE
                     Text(
-                        stringResource(R.string.partial_access_title),
+                        stringResource(
+                            if (noAccess) R.string.no_media_access_title
+                            else R.string.partial_access_title
+                        ),
                         fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        stringResource(R.string.partial_access_body),
+                        stringResource(
+                            if (noAccess) R.string.no_media_access_body
+                            else R.string.partial_access_body
+                        ),
                         fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink60,
                     )
                     Spacer(Modifier.height(12.dp))
@@ -339,7 +352,7 @@ fun HomeScreen(
                 wifiOnly = wifiOnly,
                 wifiDeferred = wifiDeferred,
                 busy = busy,
-                partialAccess = partialAccess,
+                mediaAccess = mediaAccess,
             )
         ) {
             Spacer(Modifier.height(10.dp))
@@ -796,8 +809,8 @@ internal fun shouldShowWifiDeferredHint(
     wifiOnly: Boolean,
     wifiDeferred: Boolean,
     busy: Boolean,
-    partialAccess: Boolean,
-): Boolean = wifiOnly && wifiDeferred && !busy && !partialAccess
+    mediaAccess: MediaAccess,
+): Boolean = wifiOnly && wifiDeferred && !busy && mediaAccess == MediaAccess.FULL
 
 /** M10（全页面状态稿）：cell 行高 52dp——设计稿原文数值，带 hint 的
  *  两行开关自然长过这个下限，是合理例外，不受这条线约束。

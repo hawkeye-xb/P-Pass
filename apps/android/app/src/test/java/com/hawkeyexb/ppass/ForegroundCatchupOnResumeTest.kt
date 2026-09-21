@@ -102,7 +102,9 @@ class ForegroundCatchupOnResumeTest {
         // 既有刷新还在」，避免有人为了加补捞而误删旁边的东西。
         val resume = onResumeBlock()
         assertTrue("电池白名单刷新仍经授权 adapter", resume.contains("backgroundAuthorization.isGranted"))
-        assertTrue("部分授权态刷新还在", resume.contains("hasPartialMediaAccess"))
+        // MOB-94: 判据从布尔「是不是部分授权」换成三档 MediaAccess，
+        // 刷新这件事本身没变，锚点跟着改名。
+        assertTrue("相册权限态刷新还在", resume.contains("mediaAccess = mediaAccess(context)"))
         assertTrue("前台心跳还在", resume.contains("heartbeat.start()"))
         assertTrue("时间线订阅还在", resume.contains("timeline.start()"))
     }

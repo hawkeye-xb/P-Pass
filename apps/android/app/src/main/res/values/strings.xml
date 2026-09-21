@@ -163,6 +163,9 @@
     <string name="partial_access_title">Only some photos are accessible</string>
     <string name="partial_access_body">Backup needs access to the full library. Grant full photo access to back up everything.</string>
     <string name="partial_access_action">Open settings</string>
+    <!-- MOB-94: 全拒那一档，与「只给了部分」分开说 -->
+    <string name="no_media_access_title">No access to your photos</string>
+    <string name="no_media_access_body">Backup needs access to your photo library. Right now it cannot read a single photo, so nothing is being backed up. Grant photo access in Settings.</string>
     <!-- MOB-03: 相册选择页权限链——拒绝引导（不崩不白屏，说清为什么需要） -->
     <string name="media_permission_denied_title">Photo access needed</string>
     <string name="media_permission_denied_body">Backup needs to see your photos and videos so you can pick which albums to back up. Grant access in system settings.</string>

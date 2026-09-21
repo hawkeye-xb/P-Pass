@@ -71,6 +71,8 @@ import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.BackupHealthPrefs
 import com.hawkeyexb.ppass.backup.ConfirmedStore
 import com.hawkeyexb.ppass.backup.isPartialMediaAccess
+import com.hawkeyexb.ppass.backup.MediaAccess
+import com.hawkeyexb.ppass.backup.mediaAccessOf
 import com.hawkeyexb.ppass.backup.resumeAfterInterruption
 import com.hawkeyexb.ppass.backup.rescheduleAutoBackup
 import com.hawkeyexb.ppass.backup.scheduleAutoBackup
@@ -182,7 +184,9 @@ fun PPassApp() {
     // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
     // （用户去系统设置改完全授权返回后引导卡消失）；bucketMediaPermission
     // 回调里也会即时重读。声明提前：launcher 回调需要引用。
-    var partialMedia by remember { mutableStateOf(hasPartialMediaAccess(context)) }
+    // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
+    // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
+    var mediaAccess by remember { mutableStateOf(mediaAccess(context)) }
     // MOB-02 §四事件①: 排队提示——触发时 Wi-Fi 要求不满足，WorkManager
     // 排队等网，首页显示「将在连上 Wi-Fi 后进行」。
     var wifiDeferred by remember { mutableStateOf(false) }
@@ -259,18 +263,18 @@ fun PPassApp() {
         if (pairing != null) {
             pendingBucketsPairing = null
             // 系统弹窗关闭后状态已落定，直接重读（比 ON_RESUME 刷新更及时）。
-            partialMedia = hasPartialMediaAccess(context)
+            mediaAccess = mediaAccess(context)
             val stillNeeded = requiredMediaPermissions().filter {
                 ContextCompat.checkSelfPermission(context, it) !=
                     PackageManager.PERMISSION_GRANTED
             }
             when {
-                stillNeeded.isEmpty() && !partialMedia -> screen = Screen.Buckets(
+                stillNeeded.isEmpty() && mediaAccess == MediaAccess.FULL -> screen = Screen.Buckets(
                     pairing,
                     BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
                     pendingBucketsFirstTime,
                 )
-                partialMedia -> screen = Screen.Home(pairing)
+                mediaAccess == MediaAccess.PARTIAL -> screen = Screen.Home(pairing)
                 else -> showMediaPermissionDialog = true
             }
         }
@@ -379,7 +383,7 @@ fun PPassApp() {
                     batteryWhitelisted = backgroundAuthorization.isGranted()
 
                     daysUnreachable = computeDaysUnreachable()
-                    partialMedia = hasPartialMediaAccess(context)
+                    mediaAccess = mediaAccess(context)
                     heartbeat.start()
                     timeline.start()
                     // MOB-38（2026-08-26 真机）：**每次回到前台都补捞一次。**
@@ -858,7 +862,7 @@ fun PPassApp() {
                         },
                         // MOB-02 §二: 部分授权引导（只授权了部分照片 →
                         // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
-                        partialAccess = partialMedia,
+                        mediaAccess = mediaAccess,
                         onOpenAppSettings = { openAppDetailsSettings(context) },
                         // MOB-02 §四事件①: 排队提示（Wi-Fi 要求不满足时）。
                         wifiDeferred = wifiDeferred,
@@ -1032,7 +1036,29 @@ private fun hasNotificationPermission(context: Context): Boolean =
         true
     }
 
-/** MOB-02 §二: 部分授权检测（走纯函数判定，权限查询为生产注入）。 */
+/**
+ * MOB-94: 相册权限三档的生产查询点。
+ *
+ * `imagesGranted` 取的是**主相册权限**——API 33+ 是 READ_MEDIA_IMAGES，
+ * 更低版本是 READ_EXTERNAL_STORAGE（minSdk 26，那些机器上前者根本不存在，
+ * 查它必然 DENIED，会把完整授权误判成全拒）。
+ */
+private fun mediaAccess(context: Context): MediaAccess = mediaAccessOf(
+    imagesGranted = ContextCompat.checkSelfPermission(
+        context, primaryMediaPermission()
+    ) == PackageManager.PERMISSION_GRANTED,
+    visualSelectedGranted = ContextCompat.checkSelfPermission(
+        context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
+    ) == PackageManager.PERMISSION_GRANTED,
+    sdkInt = Build.VERSION.SDK_INT,
+)
+
+private fun primaryMediaPermission(): String =
+    if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES
+    else Manifest.permission.READ_EXTERNAL_STORAGE
+
+/** MOB-02 §二: 部分授权检测（走纯函数判定，权限查询为生产注入）。
+ *  路由判据保持原样——「只给了部分」与「全拒」在这里不可混用。 */
 private fun hasPartialMediaAccess(context: Context): Boolean =
     isPartialMediaAccess(
         imagesGranted = ContextCompat.checkSelfPermission(

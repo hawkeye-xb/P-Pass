@@ -159,6 +159,9 @@
     <string name="partial_access_title">只授权了部分照片</string>
     <string name="partial_access_body">备份需要完整相册权限——授予完整相册访问权限，才能备份全部照片。</string>
     <string name="partial_access_action">去设置</string>
+    <!-- MOB-94: 全拒那一档，与「只给了部分」分开说 -->
+    <string name="no_media_access_title">拿不到相册权限</string>
+    <string name="no_media_access_body">备份需要访问相册。现在一张照片都读不到，所以什么都没在备份——去设置里允许访问相册。</string>
     <!-- MOB-03: 相册选择页权限链——拒绝引导（不崩不白屏，说清为什么需要） -->
     <string name="media_permission_denied_title">需要照片权限</string>
     <string name="media_permission_denied_body">备份需要访问你的照片和视频，才能选择要备份的相册。请到系统设置中允许访问。</string>
