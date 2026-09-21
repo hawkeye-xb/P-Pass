@@ -213,6 +213,20 @@ enum class RecoveryDisposition {
     UNRECOVERABLE,
 }
 
+/**
+ * MOB-98：一张照片的「版本」只由**内容变没变**决定 —— `date_modified` 与
+ * `size`。
+ *
+ * MediaStore 的 `generation_modified` **不在其列**，虽然它就摆在同一行上：
+ * 它在内容一个字节没变时也会自增（把照片移进相册就会），编进
+ * [DiscoveryCandidate.stableId] 的直接后果是同一张照片被当成新照片重新入队，
+ * 叠加严格队头消费还会堵死它后面所有新照片（2026-09-21 鸿蒙 4.2 真机实测）。
+ *
+ * 它作为 discovery 游标（`DiscoveryCursor`）的用途不受影响 —— 那里要的正是
+ * 「有没有动过」这个信号，与「身份」是两回事。
+ */
+internal fun sourceVersionOf(dateModified: Long, size: Long): String = "$dateModified:$size"
+
 @Serializable
 data class DiscoveryCandidate(
     val sourceRef: String,
@@ -369,6 +383,48 @@ class DiscoveryLedgerStore(
         }
         if (!changed) return
         persist(snapshot.copy(items = backfilled))
+    }
+
+    /**
+     * MOB-98 的一次性迁移：把 `sourceVersion` 里的 `generation_modified`
+     * 摘掉，并合并因此产生的重复条目。
+     *
+     * **这不是清理，是必须项。** `TransferItem.stableId` 是**落盘字段**，而
+     * [DiscoveryCandidate.stableId] 是现算的。只改发现侧的构造而不重写存量
+     * 账本，新算出来的 key 与账本里任何一条都对不上 —— 下一次全量扫描
+     * （[commitScopeBackfill]，或重新配对时 `PairingEpochController` 依赖的
+     * 「stableId 去重，老照片不会重复入账」）会把**整个相册库当成新照片重新
+     * 入队**，比本卡要修的 bug 更糟。
+     *
+     * 旧式 `sourceVersion` = `generation:date_modified:size`（三段）。
+     * 新式 = `date_modified:size`（两段）。只有三段的才改写，所以本函数
+     * 幂等：跑第二遍没有任何一条命中。
+     *
+     * 合并规则见 [mergeGenerationDuplicate]：以「已确认成功」为最强事实，
+     * 且不丢 `completedAt`（丢了就是把刚修完的 MOB-53 重新引回来）。
+     */
+    fun collapseGenerationDuplicates() {
+        val snapshot = load()
+        var changed = false
+        val merged = LinkedHashMap<String, TransferItem>()
+        snapshot.items.forEach { item ->
+            val version = dropGeneration(item.sourceVersion)
+            val rewritten = if (version == item.sourceVersion && item.stableId == stableIdOf(item.sourceRef, version)) {
+                item
+            } else {
+                changed = true
+                item.copy(sourceVersion = version, stableId = stableIdOf(item.sourceRef, version))
+            }
+            val prior = merged[rewritten.stableId]
+            merged[rewritten.stableId] = if (prior == null) {
+                rewritten
+            } else {
+                changed = true
+                mergeGenerationDuplicate(prior, rewritten)
+            }
+        }
+        if (!changed) return
+        persist(snapshot.copy(items = merged.values.sortedBy { it.queueSequence }))
     }
 
     fun startCancellationRound(id: String) {
@@ -528,6 +584,52 @@ class DiscoveryLedgerStore(
         )
         return snapshot.copy(currentRoundId = null)
             .appendAudit(AuditKinds.ROUND_FINISHED, roundId = roundId, payload = summary)
+    }
+
+    /**
+     * MOB-98：旧式三段 `generation:date_modified:size` → 两段
+     * `date_modified:size`。其它形状（已经是两段、或历史上别的写法）原样
+     * 返回，保证幂等且不猜。
+     */
+    private fun dropGeneration(sourceVersion: String): String {
+        val parts = sourceVersion.split(':')
+        return if (parts.size == 3) "${parts[1]}:${parts[2]}" else sourceVersion
+    }
+
+    private fun stableIdOf(sourceRef: String, sourceVersion: String): String =
+        "$sourceRef\u0000$sourceVersion"
+
+    /**
+     * MOB-98：同一张照片的两条记录合成一条。
+     *
+     * 幸存者按交付事实的强弱选（[deliveryRank]），但**字段不是整条照搬**：
+     * `completedAt` / `contentHash` / `completionReceiptId` 这三样一旦任一
+     * 条记下过就必须留住 —— 真机上撞见的那一对正是
+     * `CONFIRMED(completedAt 有值)` + `TRANSFERRING(completedAt 0)`，
+     * 整条照搬幸存者会在这里悄悄把 MOB-53 重新引回来。
+     *
+     * `queueSequence` 取两者较小：它是同一张照片，第一次被收下的位置才是
+     * 它真正的排队位置，合并不该把它甩到队尾。
+     */
+    private fun mergeGenerationDuplicate(a: TransferItem, b: TransferItem): TransferItem {
+        val winner = if (deliveryRank(b.deliveryState) > deliveryRank(a.deliveryState)) b else a
+        return winner.copy(
+            queueSequence = minOf(a.queueSequence, b.queueSequence),
+            completedAt = maxOf(a.completedAt, b.completedAt),
+            contentHash = a.contentHash ?: b.contentHash,
+            completionReceiptId = a.completionReceiptId ?: b.completionReceiptId,
+            attemptCount = maxOf(a.attemptCount, b.attemptCount),
+        )
+    }
+
+    /** MOB-98：交付事实的强弱。已确认成功最强，用户可见的终态次之。 */
+    private fun deliveryRank(state: DeliveryState): Int = when (state) {
+        DeliveryState.CONFIRMED -> 5
+        DeliveryState.TRANSFERRING -> 4
+        DeliveryState.QUEUED -> 3
+        DeliveryState.FAILED_NEEDS_USER -> 2
+        DeliveryState.SKIPPED_SOURCE_MISSING -> 1
+        DeliveryState.CANCELLED_BY_SCOPE, DeliveryState.CANCELLED_BY_USER_ROUND -> 0
     }
 
     private fun persist(snapshot: DiscoveryLedgerSnapshot) {

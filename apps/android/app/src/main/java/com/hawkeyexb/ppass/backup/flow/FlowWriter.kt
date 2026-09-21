@@ -23,6 +23,7 @@ sealed interface FlowAction {
     data object ReconcileProcessStart : FlowAction
 
     /** MOB-53 的一次性 completedAt 迁移（改造前藏在 `load()` 里）。 */
+    data object CollapseGenerationDuplicates : FlowAction
     data object MigrateCompletedAt : FlowAction
 
     /** 配对代号校正：与当前代号不一致时整份重置账本。 */

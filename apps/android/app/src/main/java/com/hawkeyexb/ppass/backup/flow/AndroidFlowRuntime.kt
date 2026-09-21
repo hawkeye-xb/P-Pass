@@ -88,7 +88,9 @@ internal class AndroidFlowDiscoveryPort(
                 val rowGeneration = rows.getLong(gen)
                 candidates += DiscoveryCandidate(
                     sourceRef = Uri.withAppendedPath(collection, rowId.toString()).toString(),
-                    sourceVersion = "$rowGeneration:${rows.getLong(modified)}:${rows.getLong(size)}",
+                    // MOB-98: generation_modified 绝不进身份标识，理由见 sourceVersionOf。
+                    // 它作为 discovery 游标的用途不受影响，见下面的 DiscoveryCursor。
+                    sourceVersion = sourceVersionOf(rows.getLong(modified), rows.getLong(size)),
                     bucketId = rows.getLong(bucket),
                     fileName = rows.getString(name).orEmpty(),
                     mediaType = rows.getString(mime) ?: "application/octet-stream",
@@ -161,7 +163,9 @@ internal class AndroidFlowDiscoveryPort(
                 val rowGeneration = rows.getLong(gen)
                 candidates += DiscoveryCandidate(
                     sourceRef = Uri.withAppendedPath(collection, rowId.toString()).toString(),
-                    sourceVersion = "$rowGeneration:${rows.getLong(modified)}:${rows.getLong(size)}",
+                    // MOB-98: generation_modified 绝不进身份标识，理由见 sourceVersionOf。
+                    // 它作为 discovery 游标的用途不受影响，见下面的 DiscoveryCursor。
+                    sourceVersion = sourceVersionOf(rows.getLong(modified), rows.getLong(size)),
                     bucketId = rows.getLong(bucket),
                     fileName = rows.getString(name).orEmpty(),
                     mediaType = rows.getString(mime) ?: "application/octet-stream",
@@ -480,6 +484,7 @@ private data class AndroidFlowRuntime(
 private fun AndroidFlowRuntime.reduce(context: Context, action: FlowAction) {
     when (action) {
         FlowAction.ReconcileProcessStart -> runner.reconcileProcessStart()
+        FlowAction.CollapseGenerationDuplicates -> ledger.collapseGenerationDuplicates()
         FlowAction.MigrateCompletedAt -> ledger.migrateMissingCompletedAt()
         is FlowAction.EnsurePairingEpoch -> PairingEpochController(ledger).ensureCurrentEpoch(action.epoch)
         is FlowAction.ApplyReconciliation -> ReconciliationCoordinator(ledger).applyOutcome(action.outcome)
@@ -690,12 +695,19 @@ private fun buildRuntime(
     ledger.onCommit { snapshot -> flowLedgerListeners.forEach { it(snapshot) } }
     // 启动引导，全部走写者、按顺序落地后才对外发布这套运行时：
     //   ① 代号校正（旧代号的账要整份作废）
-    //   ② MOB-53 的 completedAt 一次性迁移（改造前藏在 load() 里）
-    //   ③ 上一条进程life遗留的租约降级回 QUEUED
+    //   ② MOB-98 的 generation 去身份化 + 重复项合并
+    //   ③ MOB-53 的 completedAt 一次性迁移（改造前藏在 load() 里）
+    //   ④ 上一条进程life遗留的租约降级回 QUEUED
+    //
+    // ② 排在 ③④ 之前是有意的：它会改写 stableId 并合并条目，后两步必须
+    // 看到收敛后的账本——③ 的 completedAt 回填要落在幸存者身上，④ 清理
+    // 遗留租约时要看到最终的 queueSequence 集合（合并取较小者，被合掉的
+    // 那个序号不再存在）。
     // MOB-87 取证：①是账本迁移发生的唯一时刻。真机上「账本 epoch 没跟上
     // pairing.json」这个症状，分水岭就在这三行跑没跑到。
     Log.i("PPassFlow", "buildRuntime: bootstrap start epoch=${epoch.value.take(8)}")
     writer.dispatchAndAwait(FlowAction.EnsurePairingEpoch(epoch))
+    writer.dispatchAndAwait(FlowAction.CollapseGenerationDuplicates)
     writer.dispatchAndAwait(FlowAction.MigrateCompletedAt)
     writer.dispatchAndAwait(FlowAction.ReconcileProcessStart)
     Log.i("PPassFlow", "buildRuntime: bootstrap done, ledger items=${ledger.load().items.size}")
