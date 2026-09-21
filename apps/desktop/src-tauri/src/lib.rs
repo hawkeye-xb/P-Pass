@@ -165,8 +165,21 @@ fn open_power_settings() {
     // DESK-19 (#168) 的教训必须留在这儿：原来 Windows 走 `cmd /C start`，
     // 而 cmd.exe 是 console 子系统程序（本机实测 PE Subsystem = 3）。桌面壳
     // 自己是 GUI 子系统、手上没有控制台，Windows 只能为它新分配一个 ⇒
-    // 每次点都闪一下黑窗。opener 插件的候选命令**条条带 CREATE_NO_WINDOW**，
-    // 构造上不会分配控制台——所以打开动作必须继续走它，不要改回自己起进程。
+    // 每次点都闪一下黑窗。
+    //
+    // opener 插件构造上就不会分配控制台：`tauri-plugin-opener` 声明依赖时开了
+    // `open` 的 `shellexecute-on-windows`（桌面壳 lockfile 里 `open` 带着
+    // `dunce` 就是这个 feature 拉进来的），于是 `open::that_detached()` 走的是
+    // **`ShellExecuteExW`**，**根本不起子进程**——没有进程可言，自然没有控制台。
+    //
+    // ⚠️ 这里原来写的是「候选命令条条带 CREATE_NO_WINDOW」。那描述的是
+    // `open::commands()` 那条 powershell / explorer 分支，**本仓走不到**。
+    // 结论（不闪窗）没错，理由是错的；#211 做真机验证时顺着错理由去找子进程，
+    // 一个都没找到，才发现记错了。写清楚是因为这条注释有人会照着做判断。
+    //
+    // 2026-09-21 真机实测（#211）：点击前 SystemSettings 进程数 = 0，点击后
+    // 设置页打开，全程**新增 conhost 数 = 0**。所以打开动作必须继续走它，
+    // 不要改回自己起进程。
     //
     // `None` = 这个系统没有可直接跳转的设置页（Linux / headless），什么也
     // 不做；迁移前那两个平台本来就一个分支都没有，行为一致。
