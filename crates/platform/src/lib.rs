@@ -78,6 +78,12 @@ pub enum PlatformError {
         action: &'static str,
         detail: String,
     },
+    /// DESK-22 (#171)：用户在系统授权弹窗上点了**取消**。
+    ///
+    /// 单开一个变体而不是并进 `Failed`：取消不是失败，是用户的选择。
+    /// 混在一起，调用方要么把取消当错误吓人一跳，要么干脆吞掉假装成功。
+    #[error("{action}: 用户取消了授权")]
+    Cancelled { action: &'static str },
 }
 
 pub type Result<T> = std::result::Result<T, PlatformError>;
@@ -163,6 +169,20 @@ pub trait PlatformAdapter: Send + Sync {
     /// 平台共同的主防线）。只有当 stderr 被托管方重定向到文件时才有意义。
     fn truncate_own_stderr(&self) -> Applied {
         Applied::Unsupported
+    }
+
+    /// DESK-22 (#171)：关掉「空闲自动睡眠」，让备份能在无人值守时跑完。
+    ///
+    /// 两个平台都要走系统的授权弹窗（macOS 是 Touch ID/密码，Windows 是
+    /// UAC），所以 `Err(PlatformError::Cancelled)` 是**正常路径之一**，
+    /// 调用方必须把它和真失败分开呈现。
+    ///
+    /// ⚠️ 实现方**必须回读确认**再返回 `Done`。Windows 上实测过：
+    /// `powercfg /x standby-timeout-ac 0` 在非管理员下**退出码是 0，但注册表
+    /// 根本没被写**（用注册表键的最后写入时间比对出来的）。拿退出码当"已
+    /// 生效"就是本仓这一轮在修的那类缺陷——静默没做却报成功。
+    fn disable_auto_sleep(&self) -> Result<Applied> {
+        Ok(Applied::Unsupported)
     }
 
     /// QA-09 迁移（#211）：清掉被强杀的前任留在文件系统里的 IPC 端点。

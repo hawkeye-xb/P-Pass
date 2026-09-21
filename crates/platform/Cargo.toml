@@ -23,6 +23,17 @@ windows-sys = { version = "0.61", features = [
   "Win32_Security_Cryptography",
   # DAE-05: GetDiskFreeSpaceExW（卷容量水位）。
   "Win32_Storage_FileSystem",
+  # DESK-22 (#171): ShellExecuteExW + runas 动词拉 UAC（提权改电源设置）。
+  "Win32_UI_Shell",
+  # SHELLEXECUTEINFOW 里有个 HKEY 字段，windows-sys 因此把整个结构体连同
+  # ShellExecuteExW 一起挂在这个 feature 下——不开的话报"no ShellExecuteExW"，
+  # 看着像名字写错，其实是被 cfg 掉了。
+  "Win32_System_Registry",
+  # 同上：SW_HIDE —— 被提权拉起的是 console 程序，不隐藏就会闪黑窗
+  # （DESK-19 #168 那一类）。
+  "Win32_UI_WindowsAndMessaging",
+  # 同上：等提权进程结束并取退出码。
+  "Win32_System_Threading",
 ] }
 
 [dev-dependencies]

@@ -194,31 +194,22 @@ fn open_power_settings() {
 /// 只改 AC 场景的话笔记本用电池时检测仍会报"还会睡眠"，勾不上✓。
 /// 用户拒绝授权/找不到管理员密码时，「去系统设置」手动入口原样保留
 /// 作为退路，不因为加了一键设置就删掉。
+/// DESK-22 (#171) + QA-09 迁移 (#211)：平台实现已收进 `crates/platform/`，
+/// 这里只剩「把三种结果翻译成给用户看的话」。
+///
+/// 三种结果分开呈现是刻意的：**取消不是失败**，本平台没实现也不是失败。
+/// 前端（Wizard/WizardWindows 的 `fixAutoSleep`）收到 Err 就原样显示，
+/// 并始终保留「去系统设置」这条手动退路。
 #[tauri::command]
 fn disable_auto_sleep() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        let out = std::process::Command::new("osascript")
-            .args([
-                "-e",
-                "do shell script \"pmset -a sleep 0\" with administrator privileges",
-            ])
-            .output()
-            .map_err(|e| format!("无法执行系统命令：{e}"))?;
-        if out.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            if stderr.contains("User canceled") || stderr.contains("-128") {
-                Err("已取消授权".into())
-            } else {
-                Err(format!("设置失败：{}", stderr.trim()))
-            }
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Err("这台电脑暂不支持一键设置，请用「去系统设置」手动关闭".into())
+    use platform::PlatformAdapter as _;
+    match platform::adapter().disable_auto_sleep() {
+        Ok(platform::Applied::Done) => Ok(()),
+        // Unsupported / NotApplicable 都走手动退路，文案与迁移前一致。
+        Ok(_) => Err("这台电脑暂不支持一键设置，请用「去系统设置」手动关闭".into()),
+        Err(platform::PlatformError::Cancelled { .. }) => Err("已取消授权".into()),
+        Err(platform::PlatformError::Failed { detail, .. }) => Err(format!("设置失败：{detail}")),
+        Err(e) => Err(format!("设置失败：{e}")),
     }
 }
 
