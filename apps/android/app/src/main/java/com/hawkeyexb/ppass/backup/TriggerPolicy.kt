@@ -119,3 +119,37 @@ fun isPartialMediaAccess(
     visualSelectedGranted: Boolean,
     sdkInt: Int,
 ): Boolean = sdkInt >= 34 && !imagesGranted && visualSelectedGranted
+
+/**
+ * MOB-94: 相册权限三档。
+ *
+ * MOB-02 §二只做了 `PARTIAL` 这一档——它防的是"只授权了部分照片却显示
+ * 假 0/0"。**全拒**那一档当时没人管：两个权限都没给时
+ * `isPartialMediaAccess` 返回 false，首页于是走正常分支，显示
+ * 「0 / 0 张已回家 · 照片都存好了」——一模一样的假 0/0，而且更糟，
+ * 因为它还盖了个"都存好了"的绿章（真机实测 2026-09-21）。
+ *
+ * `imagesGranted` 传的是**主相册权限**：API 33+ 为 READ_MEDIA_IMAGES，
+ * 更低版本为 READ_EXTERNAL_STORAGE。它本身就是完整授权的充分条件
+ * （理由见 `isPartialMediaAccess` 上面那段真机反证）。
+ */
+enum class MediaAccess {
+    /** 完整相册权限——正常三元组。 */
+    FULL,
+
+    /** 只给了部分照片（API 34+）——N/M 是假数，出引导卡。 */
+    PARTIAL,
+
+    /** 一张都看不到——出引导卡，**绝不能**显示「照片都存好了」。 */
+    NONE,
+}
+
+fun mediaAccessOf(
+    imagesGranted: Boolean,
+    visualSelectedGranted: Boolean,
+    sdkInt: Int,
+): MediaAccess = when {
+    imagesGranted -> MediaAccess.FULL
+    isPartialMediaAccess(imagesGranted, visualSelectedGranted, sdkInt) -> MediaAccess.PARTIAL
+    else -> MediaAccess.NONE
+}

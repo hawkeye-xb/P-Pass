@@ -1,5 +1,7 @@
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.backup.MediaAccess
+
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,7 +20,7 @@ class MOB71WifiDeferredHintTest {
                 wifiOnly = false,
                 wifiDeferred = true,
                 busy = false, // paused rounds are not sending
-                partialAccess = false,
+                mediaAccess = MediaAccess.FULL,
             ),
         )
     }
@@ -30,14 +32,14 @@ class MOB71WifiDeferredHintTest {
                 wifiOnly = true,
                 wifiDeferred = true,
                 busy = false,
-                partialAccess = false,
+                mediaAccess = MediaAccess.FULL,
             ),
         )
     }
 
     @Test
     fun busyOrPartialAccessSuppressesTheWaitRegardlessOfADeferredMarker() {
-        assertFalse(shouldShowWifiDeferredHint(true, true, busy = true, partialAccess = false))
-        assertFalse(shouldShowWifiDeferredHint(true, true, busy = false, partialAccess = true))
+        assertFalse(shouldShowWifiDeferredHint(true, true, busy = true, mediaAccess = MediaAccess.FULL))
+        assertFalse(shouldShowWifiDeferredHint(true, true, busy = false, mediaAccess = MediaAccess.PARTIAL))
     }
 }
