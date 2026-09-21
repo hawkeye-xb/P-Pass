@@ -236,6 +236,91 @@ enabled = false
     std::fs::write(dir.join("config.toml"), config).map_err(|e| e.to_string())
 }
 
+/// DESK-29 (#268)：`--version` 输出里那个"这确实是我们的 daemon"的记号。
+///
+/// 取的是 `crates/daemon/src/main.rs` 打印的固定前缀，**刻意不比对版本号**：
+/// 桌面壳与 daemon 是两个独立 workspace（ADR-012），而 daemon 的版本还会被
+/// `PPF_DAEMON_VERSION` / `PPF_BUILD_VERSION` 覆盖，比对版本号只会造出一个
+/// 隔三差五自己红的判据。
+///
+/// ⚠️ 这是一处**跨 crate 的字符串耦合，目前没有守卫**：daemon 那边改了这句
+/// 话，这里就会开始把好 daemon 判成坏的。错误方向是安全的（向导会明确报错，
+/// 不是静默放行），但应该有个契约测试盯着——已开卡，本卡范围内不动 daemon。
+const DAEMON_VERSION_MARKER: &str = "P-Pass daemon";
+
+/// 探活子进程的上限。`--version` 在任何机器上都是毫秒级的事；给到 5 秒是
+/// 为了「坏掉但仍能被 CreateProcess 接受」的文件——那种可能直接挂住，而
+/// 向导不能跟着一起卡死。
+const SIDECAR_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// DESK-29 (#268)：把探活结果翻译成结论。
+///
+/// 抽成纯函数是刻意的：起子进程那半只能真机验，但**「什么才算通过」这条
+/// 判据**可以单测。判据一旦松掉（比如有人图省事只看退出码），单测必须立刻红。
+///
+/// `code` = 子进程退出码；`None` 表示被信号/超时干掉，拿不到码。
+fn sidecar_probe_verdict(code: Option<i32>, stdout: &str) -> Result<(), String> {
+    match code {
+        Some(0) if stdout.contains(DAEMON_VERSION_MARKER) => Ok(()),
+        Some(0) => Err(format!(
+            "内置后台服务能启动，但它不是 P-Pass 的 daemon（--version 输出：{}）",
+            stdout.trim().chars().take(120).collect::<String>()
+        )),
+        Some(other) => Err(format!("内置后台服务跑不起来（--version 退出码 {other}）")),
+        None => Err("内置后台服务没有在预期时间内响应 --version".into()),
+    }
+}
+
+/// DESK-29 (#268)：注册开机自启**之前**，先确认这个 sidecar 真的能跑。
+///
+/// 为什么不能只看 `is_file()`（改之前唯一的守卫）：**0 字节的文件
+/// `is_file()` 返回 true**。杀毒软件把未签名的 exe 掏空、安装/更新写到一半
+/// 被打断、开发机上的构建 stub——任何一种都会让一个跑不起来的文件被写进
+/// 开机自启，**覆盖掉原来那条好的**，而向导报告"已启动"。用户的备份从此
+/// 不再自动运行，且他不会知道。
+///
+/// 判法选的是「**真的跑一次 `--version`**」而不是「查文件大小」：
+/// 前者直接回答"能不能跑"这个问题本身，后者只是个代理指标，挡不住
+/// 「非零但坏掉」。前置条件是现成的——daemon 的 `--version` 有实现
+/// （`crates/daemon/src/cli.rs`）也有集成测试守着（`cli_flow.rs`）。
+///
+/// ⚠️ Windows 上 release 的 daemon 是 GUI 子系统（`main.rs` 顶部的
+/// `windows_subsystem`），不会分配控制台，所以不闪窗；**debug 构建是
+/// console 子系统，可能闪一下**。要彻底消掉得用 `CREATE_NO_WINDOW`，那是
+/// 平台专属 API，会往本文件再加一处 cfg——而 #211 正在往外搬这些，不加。
+fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
+    let mut child = std::process::Command::new(sidecar)
+        .arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        // 0 字节文件就死在这一步：CreateProcess 直接拒绝
+        // （Windows 错误 193「不是有效的 Win32 应用程序」）。
+        .map_err(|e| format!("内置后台服务跑不起来（{e}）：{}", sidecar.display()))?;
+
+    let deadline = std::time::Instant::now() + SIDECAR_PROBE_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return sidecar_probe_verdict(None, "");
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            Err(e) => return Err(format!("等不到内置后台服务的探活结果（{e}）")),
+        }
+    }
+    // 已经退出了，这一步立即返回。`--version` 的输出只有一行，塞不满管道。
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("读不到内置后台服务的探活输出（{e}）"))?;
+    sidecar_probe_verdict(out.status.code(), &String::from_utf8_lossy(&out.stdout))
+}
+
 /// Install the bundled daemon as a resident service (T-040 autostart:
 /// launchd/registry — starts now, at every boot, and restarts on
 /// crash). Falls back to a one-shot spawn if registration fails, so
@@ -252,6 +337,13 @@ fn start_daemon() -> Result<String, String> {
     if !sidecar.is_file() {
         return Err(format!("找不到内置后台服务：{}", sidecar.display()));
     }
+    // DESK-29 (#268)：**先探活再注册**。顺序是这条修复的全部要害——
+    // 探不过就在这里返回，`install_autostart` 根本不会被调到，所以用户
+    // 原来那条好的开机自启键**不会被覆盖**。
+    //
+    // 也不走下面那条 "注册失败就直接 spawn" 的兜底：一个跑不起来的文件，
+    // spawn 也一样跑不起来，兜底只会把错误掩成另一种错误。
+    verify_sidecar_runs(&sidecar)?;
     match platform::adapter().install_autostart(&sidecar) {
         // LaunchAgent RunAtLoad+KeepAlive: starts immediately, survives
         // crashes and reboots.
@@ -1217,6 +1309,109 @@ mod tests {
                      junction 那条用例覆盖了同一条契约的另一种形态，仍然有效。"
                 );
             }
+        }
+    }
+
+    // ── DESK-29 (#268): 探活判据 ─────────────────────────────
+    //
+    // 起子进程那半要真机验（见 PR 里的 Run 键前后对照）；这里锁的是
+    // 「什么才算通过」。改之前唯一的守卫是 `is_file()`，而 **0 字节文件
+    // is_file() 返回 true** ——于是一个跑不起来的 daemon 被写进开机自启、
+    // 覆盖掉好的那条，向导还报成功。
+
+    #[test]
+    fn probe_passes_only_on_exit_zero_with_our_marker() {
+        assert!(sidecar_probe_verdict(Some(0), "P-Pass daemon 0.5.7-test.1\n").is_ok());
+    }
+
+    #[test]
+    fn probe_rejects_a_program_that_is_not_our_daemon() {
+        // 退出码 0 但不是我们的 daemon（被换成了别的 exe）。
+        let e = sidecar_probe_verdict(Some(0), "Python 3.9.13\n").unwrap_err();
+        assert!(e.contains("不是 P-Pass 的 daemon"), "{e}");
+    }
+
+    #[test]
+    fn probe_rejects_empty_output() {
+        assert!(sidecar_probe_verdict(Some(0), "").is_err());
+    }
+
+    #[test]
+    fn probe_rejects_nonzero_exit() {
+        let e = sidecar_probe_verdict(Some(2), "P-Pass daemon 0.5.7-test.1").unwrap_err();
+        assert!(e.contains("退出码 2"), "{e}");
+    }
+
+    /// 超时/被干掉 ⇒ 拿不到退出码 ⇒ **不许当通过**。
+    /// 「没法确认」不等于「没问题」——放松这条就是静默放行。
+    #[test]
+    fn probe_rejects_unknown_exit_status() {
+        assert!(sidecar_probe_verdict(None, "P-Pass daemon 0.5.7-test.1").is_err());
+    }
+
+    /// 本机上能找到的、真的 daemon 产物。找不到就返回 None——
+    /// CI 上 `binaries/` 里放的是 0 字节 stub（ci-desktop.yml 的 "Stub sidecar"
+    /// 步骤造的），所以那边天然没有。
+    fn locate_real_daemon() -> Option<std::path::PathBuf> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        [
+            "binaries/ppf-daemon-x86_64-pc-windows-msvc.exe",
+            "binaries/ppf-daemon-x86_64-unknown-linux-gnu",
+            "binaries/ppf-daemon-aarch64-apple-darwin",
+            "target/debug/ppf-daemon.exe",
+            "target/debug/ppf-daemon",
+        ]
+        .iter()
+        .map(|p| root.join(p))
+        .find(|p| {
+            std::fs::metadata(p)
+                .map(|m| m.is_file() && m.len() > 0)
+                .unwrap_or(false)
+        })
+    }
+
+    /// DESK-29 (#268) E1：0 字节的 sidecar 必须被挡住。
+    ///
+    /// 直接对着缺陷本身：改之前唯一的守卫是 `is_file()`，而
+    /// **0 字节文件 `is_file()` 返回 true** —— 所以它一路通过、被写进开机
+    /// 自启、覆盖掉原来那条好的，向导还报成功。下面第一条断言把这个前提
+    /// 也锁住了，免得以后有人以为"旧守卫本来就拦得住"。
+    #[test]
+    fn verify_rejects_a_zero_byte_sidecar() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 一律带 .exe 后缀：不为了这个测试在本文件再加一处平台 cfg
+        // （#211 正在往外搬）。Windows 上 spawn 直接被拒（不是有效的
+        // Win32 程序），unix 上没有执行位同样被拒——两边都走 Err。
+        let fake = tmp.path().join("ppf-daemon.exe");
+        std::fs::write(&fake, b"").unwrap();
+
+        assert!(
+            fake.is_file(),
+            "前提：0 字节文件 is_file() 为真，旧守卫正是这样被绕过的"
+        );
+        assert_eq!(std::fs::metadata(&fake).unwrap().len(), 0);
+
+        let err = verify_sidecar_runs(&fake).unwrap_err();
+        assert!(err.contains("跑不起来"), "错误信息要说清跑不起来：{err}");
+    }
+
+    /// DESK-29 (#268) E1 反证：换成**真的** daemon 必须通过。
+    ///
+    /// 没有这一条，上面那条可能只是「总是报错」——那样虽然挡住了坏文件，
+    /// 也把所有人的开机自启一起挡死了。
+    #[test]
+    fn verify_accepts_a_real_daemon() {
+        let Some(real) = locate_real_daemon() else {
+            // 绝不静默变绿：跳过了就把原因打出来。
+            eprintln!(
+                "⚠️ 跳过 verify_accepts_a_real_daemon：本机找不到非空的 daemon 产物。
+                 CI 上 binaries/ 里是 0 字节 stub，所以这条反证只能在有真产物的
+                 开发机上跑（本轮已在 Windows 真机跑过，见 PR）。"
+            );
+            return;
+        };
+        if let Err(e) = verify_sidecar_runs(&real) {
+            panic!("真 daemon 被误判成坏的（{}）：{e}", real.display());
         }
     }
 
