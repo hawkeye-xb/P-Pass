@@ -86,12 +86,14 @@ class TransferProtectionStore(private val dir: File) {
             TransferProtectionState()
         }
 
-    fun record(outcome: ForegroundStartOutcome, now: Long) {
+    /** @return whether the outcome actually reached durable storage. */
+    fun record(outcome: ForegroundStartOutcome, now: Long): Boolean {
         dir.mkdirs()
         val state = TransferProtectionState(lastOutcome = outcome.name, lastOutcomeAt = now)
         val tmp = File(dir, "$FILE_NAME.tmp")
         tmp.writeText(json.encodeToString(TransferProtectionState.serializer(), state))
         check(tmp.renameTo(file)) { "cannot persist transfer protection state" }
+        return true
     }
 
     private companion object {
