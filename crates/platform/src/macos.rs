@@ -176,6 +176,26 @@ impl PlatformAdapter for MacosAdapter {
     fn data_dir(&self) -> PathBuf {
         home().join("Library/Application Support/P-Pass")
     }
+
+    // QA-09 迁移（#211）：以下四个能力 macOS 与 Linux 完全一致，实现只此
+    // 一份，在 crates/platform/src/unix.rs。
+    //
+    // ⚠️ volume_stats 在此之前 macOS 侧是**没有**实现的（吃 trait 默认的
+    // None），DAE-05 的数字靠 daemon 自己那段 `#[cfg(unix)]` statvfs 供。
+    // 迁移把那段搬了过来，所以这里必须接上，否则 macOS 的磁盘水位会从
+    // 「有数字」退回「null」——那是迁移改了行为，不允许。
+    fn volume_stats(&self, path: &Path) -> Option<crate::VolumeStats> {
+        crate::unix::volume_stats(path)
+    }
+    fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
+        crate::unix::restrict_to_owner(path)
+    }
+    fn truncate_own_stderr(&self) -> crate::Applied {
+        crate::unix::truncate_own_stderr()
+    }
+    fn remove_stale_ipc_endpoint(&self, name: &str) -> crate::Applied {
+        crate::unix::remove_stale_ipc_endpoint(name)
+    }
 }
 
 /// RAII wrapper over a `caffeinate -i` child: alive = system stays awake.

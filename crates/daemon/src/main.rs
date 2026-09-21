@@ -636,11 +636,12 @@ fn load_or_mint_identity(data_dir: &std::path::Path) -> anyhow::Result<[u8; 32]>
     let k = rand_token()?;
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
     std::fs::write(&key_file, k)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&key_file, std::fs::Permissions::from_mode(0o600));
-    }
+    // QA-09 迁移（#211）：原先是一处 unix 专属的 0o600。
+    // 忽略返回值与迁移前一致（那时也是 `let _ =`）；Windows 上适配器回的
+    // 是 `Unsupported`，也就是「本平台没收紧」——契约里写明了，不是这里
+    // 假装做过了。
+    use platform::PlatformAdapter as _;
+    let _ = platform::adapter().restrict_to_owner(&key_file);
     // DEVLOG-03：只有路径、不含密钥内容，进日志是安全的。
     tracing::info!("身份密钥已铸造: {}", key_file.display());
     Ok(k)

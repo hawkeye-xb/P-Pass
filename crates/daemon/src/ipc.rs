@@ -169,16 +169,20 @@ fn read_predecessor_token(data_dir: &std::path::Path) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Remove a stale socket file (unix only; named pipes don't leave files).
+/// Remove a stale socket endpoint left by a killed predecessor.
+///
+/// QA-09 迁移（#211）：平台分叉已收进 `crates/platform/`。unix 域套接字
+/// 在文件系统里留文件，要清；Windows 的命名管道是内核对象，不留文件，
+/// 适配器那边回的是 `NotApplicable`——**「不需要做」和「没实现」在契约
+/// 上是两回事**，这里不必也不该区分处理。
+///
+/// 顺带干掉了 BUILD-06 那个补丁：原先在 Windows 上整个函数体被条件编译
+/// 掉，参数没有任何使用点，`-D warnings` 把 `unused_variables` 提成
+/// error，只好写一行 `let _ = socket_name;` 压住。现在参数真的被用了，
+/// 补丁不需要了。
 fn clean_stale_socket(socket_name: &str) {
-    // BUILD-06: Windows 上整个函数体被 cfg 掉，参数于是没有任何使用点 ⇒
-    // `-D warnings` 把 `unused_variables` 提成 error，clippy 在 Windows 上红。
-    // 显式吃掉它，而不是改名成 `_socket_name`——unix 分支里这个名字是有意义的。
-    let _ = socket_name;
-    #[cfg(unix)]
-    {
-        let _ = std::fs::remove_file(format!("/tmp/{socket_name}"));
-    }
+    use platform::PlatformAdapter as _;
+    let _ = platform::adapter().remove_stale_ipc_endpoint(socket_name);
 }
 
 /// Resolve the effective daemon version, in precedence order:
@@ -422,10 +426,9 @@ impl IpcServer {
         // NodeId) — clear a stale file left by a killed predecessor or
         // bind fails with EADDRINUSE and the whole IPC plane dies
         // (launchd guarantees single instance, so unlink is safe).
-        #[cfg(unix)]
-        {
-            let _ = std::fs::remove_file(format!("/tmp/{socket_name}"));
-        }
+        // QA-09 迁移（#211）：原先这里内联了第二份 unix 专属拷贝，和上面
+        // clean_stale_socket 一模一样。现在共用同一个函数。
+        clean_stale_socket(socket_name);
         let name = socket_name.to_ns_name::<GenericNamespaced>()?;
         let listener = ListenerOptions::new().name(name).create_tokio()?;
         loop {
@@ -1352,38 +1355,17 @@ struct DiskStats {
 }
 
 /// Volume capacity for `path`. `std::fs` has no stable capacity API, so
-/// unix goes through `libc::statvfs` (libc was already in the dependency
-/// tree via tokio/iroh; declared directly for this call). `free` is
-/// `f_bavail` — what an unprivileged writer can actually use, matching
-/// what Finder/`df` report. Non-unix returns `None` (fields serialize as
-/// null) until a platform adapter lands — rule B.2 keeps platform gates
-/// out of this crate, and honest null beats a made-up number.
-// statvfs field widths differ per unix (fsblkcnt_t: u32 on macOS, u64 on
-// Linux) — `u64::from` is required on one and "useless" on the other, so
-// the lint cannot be satisfied on both. From (not `as`) keeps it lossless.
-#[allow(clippy::useless_conversion)]
-#[cfg(unix)]
-fn disk_stats(path: &std::path::Path) -> Option<DiskStats> {
-    use std::os::unix::ffi::OsStrExt as _;
-    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
-    let mut vfs: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut vfs) } != 0 {
-        return None;
-    }
-    // u64::from, not `as`: fsblkcnt_t is u32 on macOS and u64 on Linux —
-    // From compiles clean on both (identity impl on Linux), no lossy cast.
-    let frsize = u64::from(vfs.f_frsize);
-    Some(DiskStats {
-        free: u64::from(vfs.f_bavail) * frsize,
-        total: u64::from(vfs.f_blocks) * frsize,
-    })
-}
-
-// DAE-05：非 unix 平台不再恒返回 None —— 那个 null 一路传到 UI，让磁盘
-// 告警在 Windows 上完全不工作。改为委托平台适配器（B.2 要的正是这个：
-// 平台实现待在 crates/platform/，这里只做转换）。适配器没实现的平台仍回
-// None，仍然序列化成 null，「老实的 null 胜过编造的数字」这条不变。
-#[cfg(not(unix))]
+/// `path` 所在卷的容量水位。`None` = 本平台没有实现，序列化成 null
+/// ——「老实的 null 胜过编造的数字」（DAE-05）。
+///
+/// QA-09 迁移（#211）：这里原先按 unix / 非 unix 分成两个实现——unix 那半
+/// 直接在本 crate 里调 `libc::statvfs`，非 unix 那半已经在 DAE-05 里改成了
+/// 委托。迁移把 statvfs 那段搬进
+/// `crates/platform/src/unix.rs`，两个分支于是塌成一次调用。
+///
+/// `free` 的语义是 statvfs 的 `f_bavail`——**无特权写入者真正可用**的
+/// 字节数（`df` / Finder 显示的那个），不是物理空闲量。这条契约现在写在
+/// trait 上，macOS / Linux / Windows 三边共同遵守。
 fn disk_stats(path: &std::path::Path) -> Option<DiskStats> {
     use platform::PlatformAdapter as _;
     platform::adapter().volume_stats(path).map(|v| DiskStats {

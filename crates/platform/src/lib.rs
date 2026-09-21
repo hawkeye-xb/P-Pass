@@ -12,6 +12,10 @@ use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 mod macos;
+// QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
+// 3 处是 `#[cfg(unix)]`（同时覆盖两者），没有共享模块就得抄两遍。
+#[cfg(unix)]
+mod unix;
 #[cfg(windows)]
 mod windows;
 
@@ -85,6 +89,24 @@ pub struct VolumeStats {
     pub total: u64,
 }
 
+/// QA-09 迁移（#211）：一个平台动作的结果口径。
+///
+/// 为什么不用 `Result<()>`：`Ok(())` 会把「这个平台上其实什么都没做」
+/// 说成成功。本仓这一轮在修的缺陷全是这个形状——#189 的 paths 让必需
+/// 检查永不汇报、#192 的清理脚本静默不删、#268 的 0 字节 daemon 注册完
+/// 报 resident。三个变体把「做了 / 没实现 / 不需要」分开，调用方就没法
+/// 把缺口当成完成。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Applied {
+    /// 本平台做了这件事。
+    Done,
+    /// 本平台**没有实现**——已知缺口，别当成做过了。
+    Unsupported,
+    /// 本平台**机制上不需要**做这件事，不是缺口。
+    /// 例：Windows 的命名管道不在文件系统留端点，没有残留要清。
+    NotApplicable,
+}
+
 /// 架构 §4 trait —— 签名原样实施（updater/notify 的完整实现随
 /// T-041/T-062 落地，此处为可用的最小形态）.
 pub trait PlatformAdapter: Send + Sync {
@@ -124,6 +146,32 @@ pub trait PlatformAdapter: Send + Sync {
     fn default_log_file(&self, data_dir: &std::path::Path) -> Option<PathBuf> {
         let _ = data_dir;
         None
+    }
+
+    /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。
+    ///
+    /// 用在身份密钥这类文件上。默认实现返回 [`Applied::Unsupported`] 而
+    /// **不是** `Ok(Applied::Done)`——没实现却报做过了，正是这套口径要防的。
+    fn restrict_to_owner(&self, path: &std::path::Path) -> Result<Applied> {
+        let _ = path;
+        Ok(Applied::Unsupported)
+    }
+
+    /// QA-09 迁移（#211）：把本进程自己的 stderr 截断到 0 字节。
+    ///
+    /// 日志洪水防线的最后一环（前面还有「折叠重复行」那道，那道是所有
+    /// 平台共同的主防线）。只有当 stderr 被托管方重定向到文件时才有意义。
+    fn truncate_own_stderr(&self) -> Applied {
+        Applied::Unsupported
+    }
+
+    /// QA-09 迁移（#211）：清掉被强杀的前任留在文件系统里的 IPC 端点。
+    ///
+    /// 默认 [`Applied::NotApplicable`]：只有 unix domain socket 会落文件，
+    /// 命名管道这类端点不存在「残留」这个问题。
+    fn remove_stale_ipc_endpoint(&self, name: &str) -> Applied {
+        let _ = name;
+        Applied::NotApplicable
     }
 }
 
@@ -182,6 +230,53 @@ impl PlatformAdapter for HeadlessAdapter {
                     .join(".local/share")
             });
         base.join("p-pass")
+    }
+
+    // QA-09 迁移（#211）：headless 平台实际上就是 Linux（unix），四个能力
+    // 直接走共享的 unix 实现。这里的 cfg 在 platform crate 内部，是 B.2
+    // 规则的自留地。`not(unix)` 那半保持诚实的「没实现」，不编数字。
+    fn volume_stats(&self, path: &std::path::Path) -> Option<VolumeStats> {
+        #[cfg(unix)]
+        {
+            crate::unix::volume_stats(path)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            None
+        }
+    }
+    fn restrict_to_owner(&self, path: &std::path::Path) -> Result<Applied> {
+        #[cfg(unix)]
+        {
+            crate::unix::restrict_to_owner(path)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(Applied::Unsupported)
+        }
+    }
+    fn truncate_own_stderr(&self) -> Applied {
+        #[cfg(unix)]
+        {
+            crate::unix::truncate_own_stderr()
+        }
+        #[cfg(not(unix))]
+        {
+            Applied::Unsupported
+        }
+    }
+    fn remove_stale_ipc_endpoint(&self, name: &str) -> Applied {
+        #[cfg(unix)]
+        {
+            crate::unix::remove_stale_ipc_endpoint(name)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = name;
+            Applied::NotApplicable
+        }
     }
 }
 

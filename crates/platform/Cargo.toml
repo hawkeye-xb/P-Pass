@@ -8,6 +8,11 @@ publish = false
 [dependencies]
 thiserror.workspace = true
 
+# QA-09 迁移（#211）：statvfs（卷容量水位 / DAE-05）。原先这个调用长在
+# crates/daemon 里，libc 也声明在那边；迁进来之后 daemon 不再需要它。
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 # HKCU Run key (user-level autostart, §4).
 winreg = "0.55"
