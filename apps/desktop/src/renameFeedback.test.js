@@ -6,8 +6,15 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 
 /** 剥掉注释再断言——否则解释性文字会被当成代码（photoWall.test.js 同款）。 */
-function codeOf(path) {
-  return readFileSync(path, "utf8")
+function codeOf(url) {
+  // 两处都是 Windows 上才会现形的坑（#297）：
+  // 1. 传 URL **对象**，不传 `.pathname`——后者在 Windows 上是 `/C:/...`，
+  //    readFileSync 会再拼成 `C:\C:\...`，直接 ENOENT。
+  // 2. 先把 CRLF 归一成 LF：仓库里存的是 LF，但 core.autocrlf 让 Windows
+  //    检出成 CRLF。下面的断言按 LF 写，不归一化就是同一份源码 Linux 过、
+  //    Windows 挂——挂的是行尾，不是代码。
+  return readFileSync(url, "utf8")
+    .replace(/\r\n/g, "\n")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/<!--[\s\S]*?-->/g, "")
     .split("\n")
@@ -16,9 +23,12 @@ function codeOf(path) {
 }
 
 describe("UI-04b 改名反馈", () => {
-  const src = codeOf(new URL("./App.svelte", import.meta.url).pathname);
-  const sonnerSrc = codeOf(new URL("./lib/components/ui/sonner/sonner.svelte", import.meta.url).pathname);
-  const appCss = readFileSync(new URL("./app.css", import.meta.url), "utf8");
+  const src = codeOf(new URL("./App.svelte", import.meta.url));
+  const sonnerSrc = codeOf(new URL("./lib/components/ui/sonner/sonner.svelte", import.meta.url));
+  const appCss = readFileSync(new URL("./app.css", import.meta.url), "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
   it("改名成功/失败必须走官方 Sonner 通知原语，而不是手写 Message/Toast", () => {
     const rename = src.slice(src.indexOf("async function commitRename()"), src.indexOf("async function openLibrary()"));
     expect(src).toContain('import { Toaster } from "$lib/components/ui/sonner"');
