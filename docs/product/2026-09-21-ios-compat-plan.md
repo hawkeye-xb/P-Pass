@@ -1,7 +1,7 @@
 # iOS 兼容任务规划与独立验证门禁（2026-09-21）
 
 > Base：`main@53df09f6a3c96645fd8e068dbac5132da30a4c7c`（开工前必须重新 fetch；验证前再确认 HEAD）。
-> 执行边界：代码、脚本、CI、文档由 agent 在本机或 GitHub 侧完成；后台调度与真实分发只能在 iPhone 真机验证，L3 结论必须回贴真机原始输出。背景上传扩展在模拟器 SDK 里**编译得过**（`iPhoneSimulator.sdk` 同样导出 `PHBackgroundResourceUploadExtension` 与 `PHAssetResourceUploadJob`，已核实），但**运行期系统是否会调度它未一手核实**——只有 Apple 论坛的说法（证据等级 E1），列为 `IOS-03` 的第 0 问。
+> 执行边界：代码、脚本、CI、文档由 agent 在本机或 GitHub 侧完成；后台调度与真实分发只能在 iPhone 真机验证，L3 结论必须回贴真机原始输出。背景上传扩展在模拟器 SDK 里**编译得过**（`iPhoneSimulator.sdk` 同样导出 `PHBackgroundResourceUploadExtension` 与 `PHAssetResourceUploadJob`，已核实），但**运行期系统是否会调度它未一手核实**——只有 Apple 论坛的说法（证据等级 E1），列为 `IOS-03` 的第 1 问。
 > 明确跳过：App Store 上架审核、Live Photo 跨端保真、iPad/macCatalyst/visionOS 形态、App 内自更新（TestFlight 取代 `UpdateChecker`）。
 > 纪律：不重写配对/账本/Flow 业务语义；平台 `cfg` 的归属按 QA-09 既定规则走；不把「CI 绿」「模拟器绿」当真机绿；不把计划写成已完成事实；不为未选路线预埋抽象。
 
@@ -79,13 +79,13 @@ responseHeaderFields // ios(26.4)：终态可读回服务端响应头
 **推荐 C，但 B 的那一半必须先过 spike 才准写生产代码。**
 理由：A 单独交付会得到一个「必须手动打开 App 才备份」的照片备份 App，这不是与 Android 同节奏；B 单独交付会让 iOS 走上一条独立传输栈，Desktop 侧的 Flow 语义要分叉两遍。C 把 A 做成地基（语义不分叉、可验证、可发 TestFlight），把 B 隔离成一条能力开关（`Hello.capabilities` 里加一条 `"ios.http-ingest.v1"`，协议版本不动）。
 
-B 的四个未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论前，任何卡不得宣称 iOS 具备后台自动备份能力**。
+B 的未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论前，任何卡不得宣称 iOS 具备后台自动备份能力**。
 
 ## 四、三类环境分工
 
 | 环境 | 作用 | 能证明 | 不能证明 |
 |---|---|---|---|
-| 本机 Xcode 模拟器 | 写代码、跑 XCTest、UI 布局与状态机回归 | 纯逻辑、账本 IO 往返、UI、i18n、与 daemon 的 iroh 连通（同机）、扩展能否编译链接 | 真实后台调度、iCloud 瘦身、蜂窝/省电行为；扩展能否被系统真正调度（待 `IOS-03` 第 0 问回答） |
+| 本机 Xcode 模拟器 | 写代码、跑 XCTest、UI 布局与状态机回归 | 纯逻辑、账本 IO 往返、UI、i18n、与 daemon 的 iroh 连通（同机）、扩展能否编译链接 | 真实后台调度、iCloud 瘦身、蜂窝/省电行为；扩展能否被系统真正调度（待 `IOS-03` 第 1 问回答） |
 | GitHub `macos-*` runner | 构建 XCFramework、`xcodebuild test`、归档产物 | 能否出包、单测是否全绿、产物可复现 | 一切真机行为 |
 | iPhone 真机 | L3 验收 | 配对、发现、传输、后台唤醒、扩展调度、取证 | 由前两者代跑 |
 
@@ -93,12 +93,17 @@ B 的四个未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论
 
 | # | 事项 | 不定它会怎样 |
 |---|---|---|
-| D1 | **设备与会员**：可用 iPhone 型号 + 系统版本，Apple Developer Program 会员状态（`docs/runbook/h02-apple-signing.md` 已写明没有会员就先不做） | 备忘录里在册的是 Mate 60 与三星，没有 iPhone。没有真机与会员，F2/F5 全部无法验证，agent 会写出没人能装的代码 |
+| D1 | **设备与会员** —— **已答（2026-09-21）：有 iPhone，无 Apple Developer Program 会员**。剩余待补：机型与系统版本（是否 ≥ 26.1 决定 F2/F5 能不能验）。带出两个新的待验风险，见下方 D1-a / D1-b | 真机在手，L3 不再整体阻塞；但免费个人团队的能力集比付费窄，哪些卡因此受限必须先测出来，不能等写完才发现签不上 |
 | D2 | **最低系统版本**：后台通道的地板是 iOS 26.1（`creationRequestForJob`/`cancel`/响应头要 26.4，`Process` action 要 26.5）；`PHPersistentChangeToken` 只要 16 | 决定老系统是「降级为前台备份」还是「不支持」，这是产品决策不是工程决策 |
 | D3 | **许可证**：仓库是 AGPL-3.0，第三方 App Store 分发与 GPL 家族条款历来冲突（VLC 先例）。历史提交里有第三位作者（106 次提交），重新授权需要其同意 | 代码写完才发现不能上架。TestFlight 同受 Apple ToS 约束，不是绕开手段 |
 | D4 | **iCloud 瘦身原图的账本语义**：不在本地算 `WAITING_FOR_CONSTRAINTS` 还是单独一态？允许走蜂窝吗？下载失败消耗失败预算吗？ | ARCH-01 没有这个状态。最容易在后期浮现并作废一批已完成卡的就是它 |
 | D5 | **新绑定的平台 `cfg` 归属**：QA-09 把 daemon 的平台分叉收进 `crates/platform/`，而 `android_blobs.rs` 以 feature 形式留在 `crates/transport/`。iOS 绑定按哪条规则放 | 让 reviewer 在 PR 里才发现，等于返工一张传输卡 |
 | D6 | **B 路线的 Desktop 端形态**：HTTP ingest 是 daemon 内置还是独立监听？只允许同一 Wi-Fi 网段？鉴权用什么（lease token 需要活满 24h）？ | `IOS-03` spike 要拿它去测，没有它 spike 无法设计 |
+
+**D1 的两个派生风险（`IOS-01` 必须实测，不许推断）**
+
+- **D1-a｜免费个人团队能否配 App Group。** 计划里 `IOS-12` 要求账本从第一天就落在 App Group 容器，而背景上传扩展与主 App 共享状态**只能**走 App Group。若免费团队不提供这项能力，I5 的 B 半边在补上会员之前无法验证，`IOS-03` 的第 2–5 问也跟着卡住。测法：Xcode 建一个带 App Groups capability 的空 target，看自动签名是否通过，回贴原始报错。
+- **D1-b｜7 天调试证书与 G5 的 24h 放置冲突。** 免费签名的 App 装机后约 7 天过期。G5 要求「真机放置 24h 不开 App」，窗口内可完成，但连续多轮观测会被反复重装打断，重装是否清空账本/水位要在 `IOS-01` 里一并确认（清空则每轮观测都从零开始，G5 的判据要改写）。
 
 ## 六、工作分解、卡号与门禁
 
@@ -109,7 +114,7 @@ B 的四个未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论
 - `IOS-01` 环境基线：`tools/ios/env-check.sh`（Xcode/SDK 版本、`rustup target add aarch64-apple-ios aarch64-apple-ios-sim`、`cargo-make`/`xcodebuild` 可用性、真机 UDID 与系统版本、会员与证书状态）；产出 `docs/ios-dev-baseline.md`，标出「阻塞构建」与「只影响分发体验」两类缺口。
 - `IOS-02` D1–D6 决策记录落盘。
 
-**Gate G0**：真机 UDID + 系统版本回贴；`env-check.sh` 完整输出回贴；D1–D6 六条全部有结论（可以是「暂不做」，不可以是空白）。G0 不过不进 I1。
+**Gate G0**：真机 UDID + 系统版本回贴；`env-check.sh` 完整输出回贴；**D1-a（App Group 能否签）与 D1-b（重装是否清账本）各有一次真机实测输出**；D2–D6 五条全部有结论（可以是「暂不做」，不可以是空白）。G0 不过不进 I1。
 
 ### I1｜背景执行 spike（决定产品天花板，串行紧随 G0）
 
@@ -143,7 +148,7 @@ B 的四个未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论
 
 ### I4｜账本与状态（依赖 I3，不依赖 G1）
 
-- `IOS-12` `DiscoveryLedger` / `backup_scope` / `AutoBackupPrefs` / `PausePrefs` 的 iOS 实现，**从第一天就落在 App Group 容器**（`UserDefaults(suiteName:)` + 容器内 JSON）。后补迁移的代价远高于一开始就放对。
+- `IOS-12` `DiscoveryLedger` / `backup_scope` / `AutoBackupPrefs` / `PausePrefs` 的 iOS 实现，**从第一天就落在 App Group 容器**（`UserDefaults(suiteName:)` + 容器内 JSON）。后补迁移的代价远高于一开始就放对。若 D1-a 判定免费团队签不了 App Group，本卡仍按 App Group 写，但路径解析留一条「容器不可用则退回 App 私有目录」的分支，并在日志里说实话——不许静默降级成看起来正常。
 - `IOS-13` ARCH-01 的 04-case-matrix 逐条映射为 XCTest；矩阵里任何一条在 iOS 上不成立的，必须在本卡产出「iOS 变体不变量」的书面登记，不允许静默豁免。
 
 **Gate G4**：case matrix 覆盖率与 Android 侧对齐；换 Desktop、取消本轮、Pause 跨重启三条重启类用例在真机上各跑一遍。
@@ -175,7 +180,7 @@ B 的四个未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论
 - `IOS-21` `ci-ios.yml`：macOS runner 上构建 XCFramework + `xcodebuild test`；paths 覆盖 `crates/transport/**`、`assets/i18n/**`、`apps/ios/**`。
 - `IOS-22` 版本号可判定性：`CFBundleShortVersionString` 只接受最多三段数字，装不下 `0.5.7-test.1`。规则定为 short = `0.5.7`、`CFBundleVersion` = 单调整数（对位 `versionCode`）、完整串写进自定义 Info.plist 键并在诊断页与 `Hello.device_name` 之外的诊断通道可见。构建期由 `PPF_BUILD_VERSION` 注入，与 Android 同源。
 - `IOS-23` 真机取证手册 `docs/runbook/ios-device-forensics.md`：`xcrun devicectl` 取设备信息、Xcode Devices 下载 App 容器（对位 Android 的 `run-as` 直读私有目录）、`log collect --device` 取 OSLog、如何把账本 JSON 捞出来比对。**没有这一节，下游 agent 交不出 E3/E4 证据，只会交 E1 散文。**
-- `IOS-24` 发布路径：TestFlight 内测流程 + `release.yml` 的 iOS job（`APPLE_*` secret 槽位在 H-02 时已建好，值待补）。
+- `IOS-24` 发布路径：TestFlight 内测流程 + `release.yml` 的 iOS job（`APPLE_*` secret 槽位在 H-02 时已建好，值待补）。**前置：Apple Developer Program 会员**（D1 已答为「无」）——在补上会员之前本卡不可接，分发只能走 Xcode 直装的 7 天调试签名。
 
 **Gate G8**：一次完整的 tag → CI → TestFlight 内测包 → 真机安装 → 诊断页显示正确完整版本串。
 
@@ -218,4 +223,4 @@ I4 账本在 I3 出第一个可用枚举后接上。
 
 ## 十、下一动作
 
-基于 `main@53df09f6` 开 `IOS-01`：先回答 D1（有没有 iPhone、什么系统版本、会员状态），这一条不落地，后面 23 张卡都只能停在纸上。
+基于 `main@53df09f6` 开 `IOS-01`：回贴机型与系统版本，并把 D1-a（App Group 能否签）、D1-b（重装是否清账本）各测一次。这两条决定 I5 的 B 半边现在能不能动，以及 G5 的判据要不要改写。
