@@ -91,6 +91,30 @@ pub enum PlatformError {
 
 pub type Result<T> = std::result::Result<T, PlatformError>;
 
+/// 内置 daemon 可执行文件的基名（不含平台扩展名）。
+///
+/// QA-09 迁移（#211）：迁移前这个字符串在桌面壳 `lib.rs` 里被
+/// `if cfg!(windows) { "ppf-daemon.exe" } else { "ppf-daemon" }` **抄了三遍**。
+pub const DAEMON_EXECUTABLE_STEM: &str = "ppf-daemon";
+
+/// 杀 daemon 进程的结果。
+///
+/// QA-09 迁移（#211）：**「进程本来就没在跑」不是错误**，是一种正常结果。
+/// 各系统表达它的方式不同（unix 的 `pkill` 用退出码 1，Windows 的 `taskkill`
+/// 用 128），而迁移前这条知识被抄散在三个调用点上，其中两处直接
+/// `let _ = ...` 把结果丢了。DESK-25 (#208) 就是因为**另一处**没看退出码、
+/// 把「没杀掉」当成杀成功、紧接着去 spawn 第二个 daemon 才出的事。
+///
+/// 收进这个枚举之后判据只有一份：真失败（权限不足、被杀软拦、参数错）
+/// 才是 `Err`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KillOutcome {
+    /// 进程在，已经杀掉了。
+    Killed,
+    /// 进程本来就没在跑。
+    NotRunning,
+}
+
 /// DAE-05：卷容量水位（`free` 对齐 unix `statvfs` 的 `f_bavail` 语义）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VolumeStats {
@@ -196,6 +220,68 @@ pub trait PlatformAdapter: Send + Sync {
         let _ = name;
         Applied::NotApplicable
     }
+
+    // ── QA-09 迁移（#211）桌面壳批次 ─────────────────────────────
+    //
+    // 以下五个能力此前以 `#[cfg]` / `cfg!()` 的形式散在
+    // `apps/desktop/src-tauri/src/lib.rs` 里（18 处）。搬过来之后调用点
+    // 一个 cfg 不留，`tools/arch-check.sh` 对那个文件的整文件豁免因此
+    // 可以删掉——那是本卡的销号条件。
+
+    /// 这个系统的名字，喂给前端 `wizard_state` 的 json。
+    ///
+    /// **没有默认实现**：每个系统都有名字，编一个默认值只会在某天悄悄
+    /// 把平台标错，而前端拿它决定显示哪套文案。
+    fn platform_name(&self) -> &'static str;
+
+    /// 内置 daemon 可执行文件的文件名。
+    ///
+    /// 默认是不带扩展名的 [`DAEMON_EXECUTABLE_STEM`]——这对除 Windows 外的
+    /// 每个系统都成立，所以它是个诚实的默认值，不是猜的。
+    fn daemon_executable_name(&self) -> &'static str {
+        DAEMON_EXECUTABLE_STEM
+    }
+
+    /// 这个系统「电源与睡眠」设置页的 URI；`None` = 没有可直接跳转的页面。
+    ///
+    /// 只给 URI，**不给「怎么打开」**。理由：
+    ///
+    /// 1. 本 crate 是 **daemon 也在用**的，而 daemon 不是 Tauri 应用——
+    ///    把 `tauri_plugin_opener` 引进来是错的方向。
+    /// 2. 另一条路是在这里手写 `ShellExecuteW`，那等于把 DESK-19 (#168)
+    ///    刚修好的「不闪黑窗」用手写代码重做一遍，**有回归风险、换不来
+    ///    任何好处**。opener 插件的候选命令条条带 `CREATE_NO_WINDOW`。
+    ///
+    /// 真正属于平台知识的是「这个系统的电源设置在哪」，不是「怎么打开一个
+    /// URI」。后者是桌面壳（Tauri 层）的事。
+    fn power_settings_uri(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// 托盘图标是不是「模板图标」（单色、随系统深浅色自动反色）。
+    ///
+    /// 这是 macOS 的习惯，所以默认 `false`——**默认值取的是多数派行为，
+    /// 不是「不知道」**。命名上刻意不叫 `is_macos()`：那只是把 cfg 挪了个
+    /// 地方，没有说出为什么要分叉。
+    fn tray_icon_is_template(&self) -> bool {
+        false
+    }
+
+    /// 托盘左键是出菜单（macOS 习惯）还是开窗口（Windows / Linux 习惯）。
+    ///
+    /// DESK-18 (#167)：Windows 上左键出菜单与系统习惯相反。
+    fn tray_shows_menu_on_left_click(&self) -> bool {
+        false
+    }
+
+    /// 杀掉正在跑的内置 daemon 进程。
+    ///
+    /// **没有默认实现**：三个系统都做得到这件事，编一个「不支持」的默认值
+    /// 等于给将来的实现留一条静默什么都不做的路。
+    ///
+    /// 「进程本来就没在跑」返回 [`KillOutcome::NotRunning`]，**不是 `Err`**。
+    /// 真失败（权限不足、被杀软拦、参数错）才是 `Err`——判据见各平台实现。
+    fn kill_daemon_process(&self) -> Result<KillOutcome>;
 }
 
 /// The adapter for the current platform.
@@ -288,6 +374,24 @@ impl PlatformAdapter for HeadlessAdapter {
         #[cfg(not(unix))]
         {
             Applied::Unsupported
+        }
+    }
+    fn platform_name(&self) -> &'static str {
+        // headless 平台实际上就是 Linux；迁移前桌面壳那行 `else` 分支
+        // 给的也是 "linux"，行为一字不变。
+        "linux"
+    }
+    fn kill_daemon_process(&self) -> Result<KillOutcome> {
+        #[cfg(unix)]
+        {
+            crate::unix::kill_daemon_process()
+        }
+        #[cfg(not(unix))]
+        {
+            Err(PlatformError::Failed {
+                action: "kill_daemon_process",
+                detail: "这个平台没有实现杀进程".into(),
+            })
         }
     }
     fn remove_stale_ipc_endpoint(&self, name: &str) -> Applied {

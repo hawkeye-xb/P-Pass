@@ -8,7 +8,7 @@
 //! 本模块只提供自由函数，谁用由各自的适配器 impl 决定
 //! （`MacosAdapter` 与 `HeadlessAdapter` 都用）。
 
-use crate::{Applied, PlatformError, VolumeStats};
+use crate::{Applied, KillOutcome, PlatformError, VolumeStats};
 use std::path::Path;
 
 /// `free` 取 `statvfs` 的 `f_bavail`——**无特权写入者真正可用**的字节数，
@@ -116,5 +116,77 @@ mod tests {
     #[test]
     fn restrict_to_owner_fails_loudly_on_missing_file() {
         assert!(restrict_to_owner(std::path::Path::new("/definitely/not/here/ppf-qa09")).is_err());
+    }
+}
+
+/// `pkill` 退出码 1 = 没有匹配进程。
+///
+/// 也就是「服务本来就没在跑」——**不是失败**。迁移前这个 1 以裸字面量的
+/// 形式写在桌面壳的 if 里，且只有三个调用点中的一个真的判了它。
+pub const PKILL_NO_MATCH: i32 = 1;
+
+/// 杀掉正在跑的内置 daemon 进程（`pkill -f`）。
+///
+/// 用 `-f`（匹配完整命令行）而不是进程名：迁移前就是这么写的，改成匹配
+/// 进程名会改变行为——从 `target/debug/` 跑起来的开发版命令行长得不一样。
+pub fn kill_daemon_process() -> crate::Result<KillOutcome> {
+    let out = std::process::Command::new("pkill")
+        .args(["-f", crate::DAEMON_EXECUTABLE_STEM])
+        .output()
+        .map_err(|e| crate::PlatformError::Io {
+            action: "kill_daemon_process",
+            source: e,
+        })?;
+    pkill_verdict(out.status.success(), out.status.code())
+}
+
+/// 把 `pkill` 的退出码翻译成结论。
+///
+/// 抽成纯函数是刻意的：真的杀进程只能在有 daemon 在跑的机器上验，但
+/// **「什么退出码算没跑」这条判据**可以在任何地方单测。Windows 侧有同款
+/// （`windows::taskkill_verdict`）——DESK-25 (#208) 的教训是这条判据一旦
+/// 内联成裸 if 就没人守着，然后「没杀掉」被当成杀成功。
+pub fn pkill_verdict(success: bool, code: Option<i32>) -> crate::Result<KillOutcome> {
+    if success {
+        Ok(KillOutcome::Killed)
+    } else if code == Some(PKILL_NO_MATCH) {
+        Ok(KillOutcome::NotRunning)
+    } else {
+        Err(crate::PlatformError::Failed {
+            action: "kill_daemon_process",
+            detail: format!("pkill 退出码 {code:?}"),
+        })
+    }
+}
+
+#[cfg(test)]
+mod kill_tests {
+    use super::*;
+
+    #[test]
+    fn success_means_killed() {
+        assert_eq!(pkill_verdict(true, Some(0)).unwrap(), KillOutcome::Killed);
+    }
+
+    /// 退出码 1 = 没有匹配进程 ⇒ 正常结果，不是错误。
+    #[test]
+    fn no_match_is_not_running_not_an_error() {
+        assert_eq!(
+            pkill_verdict(false, Some(PKILL_NO_MATCH)).unwrap(),
+            KillOutcome::NotRunning
+        );
+    }
+
+    /// 其余非零 = 真失败。放松这条就是把「没杀掉」当成杀成功
+    /// ——DESK-25 (#208) 在 Windows 侧的原病。
+    #[test]
+    fn other_nonzero_is_a_failure() {
+        assert!(pkill_verdict(false, Some(2)).is_err());
+    }
+
+    /// 拿不到退出码（被信号终止）⇒ 保守算失败，「没法确认」不等于「成功」。
+    #[test]
+    fn unknown_exit_status_is_a_failure() {
+        assert!(pkill_verdict(false, None).is_err());
     }
 }

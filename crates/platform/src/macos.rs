@@ -227,6 +227,32 @@ impl PlatformAdapter for MacosAdapter {
     fn remove_stale_ipc_endpoint(&self, name: &str) -> crate::Applied {
         crate::unix::remove_stale_ipc_endpoint(name)
     }
+
+    // ── QA-09 迁移（#211）桌面壳批次 ───────────────────────────────
+    fn platform_name(&self) -> &'static str {
+        "macos"
+    }
+
+    /// 「电池」设置面板。迁移前桌面壳直接 `open` 这个 URI；现在只给 URI，
+    /// 打开动作由桌面壳的 opener 插件负责（理由见 trait 上的说明）。
+    fn power_settings_uri(&self) -> Option<&'static str> {
+        Some("x-apple.systempreferences:com.apple.Battery-Settings.extension")
+    }
+
+    /// macOS 的模板图标：单色、随系统深浅色自动反色。
+    fn tray_icon_is_template(&self) -> bool {
+        true
+    }
+
+    /// macOS 上托盘左键出菜单是系统习惯；Windows / Linux 左键开窗口
+    /// （DESK-18 / #167）。
+    fn tray_shows_menu_on_left_click(&self) -> bool {
+        true
+    }
+
+    fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
+        crate::unix::kill_daemon_process()
+    }
 }
 
 /// RAII wrapper over a `caffeinate -i` child: alive = system stays awake.

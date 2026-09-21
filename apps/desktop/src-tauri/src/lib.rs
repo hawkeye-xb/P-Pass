@@ -4,6 +4,9 @@
 mod daemon_logs;
 mod ipc;
 
+// QA-09 迁移（#211）：桌面壳现在有 9 个地方要调 platform 的能力，
+// 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
+use platform::PlatformAdapter as _;
 use serde_json::{json, Value};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -108,7 +111,6 @@ fn start_event_stream(app: tauri::AppHandle) {
 /// (orphaned-library risk) — the wizard shows what's already configured.
 #[tauri::command]
 fn wizard_state() -> Value {
-    use platform::PlatformAdapter as _;
     let dir = platform::adapter().data_dir();
     // Photos must land somewhere a person can FIND (real walkthrough:
     // "传到哪儿了" had no answer while the library hid in ~/Library).
@@ -128,7 +130,7 @@ fn wizard_state() -> Value {
         // every platform — a Windows real-box run surfaced this as
         // "onboarding 说明都是 macOS 的". Expose the platform so the
         // frontend can branch copy instead of guessing from user agent.
-        "platform": if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "macos" } else { "linux" },
+        "platform": platform::adapter().platform_name(),
     })
 }
 
@@ -142,7 +144,6 @@ fn dirs_pictures() -> std::path::PathBuf {
 /// Current sleep policy, humanized for the wizard.
 #[tauri::command]
 fn power_hint() -> Value {
-    use platform::PlatformAdapter as _;
     match platform::adapter().power_hint() {
         platform::PowerHint::NeverSleeps => json!({ "kind": "never" }),
         platform::PowerHint::SleepsWhenIdle { minutes } => {
@@ -158,29 +159,19 @@ fn power_hint() -> Value {
 /// grant the one-click fix admin rights).
 #[tauri::command]
 fn open_power_settings() {
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open")
-            .arg("x-apple.systempreferences:com.apple.Battery-Settings.extension")
-            .spawn();
-    }
-    #[cfg(windows)]
-    {
-        // DESK-19：原来走 `cmd /C start`，而 cmd.exe 是 console 子系统程序
-        // （本机实测 PE Subsystem = 3）。桌面壳自己是 GUI 子系统、手上没有
-        // 控制台，Windows 只能为 cmd 新分配一个 ⇒ 每次点都闪一下黑窗。与
-        // DEVLOG-02 (#163) 的登录弹窗同一根因族。
-        //
-        // 改走本应用已经注册的 opener 插件（`tauri_plugin_opener::init()`）。
-        // 它内部的候选命令**每一条都带 CREATE_NO_WINDOW**（open 5.4.0 的
-        // windows 后端：`powershell -NoProfile -NonInteractive -Command
-        // Start-Process` 优先、`explorer.exe` 兜底），构造上就不会分配控制台；
-        // 退回 `cmd` 的那条只在 `insecure` feature 下存在，我们没开。
-        //
-        // 不自己写 CREATE_NO_WINDOW/ShellExecuteW：那需要往
-        // crates/platform/src/windows.rs 加代码（B.2），而这里用现成插件
-        // 就够，且不引入新的平台分叉。
-        let _ = tauri_plugin_opener::open_url("ms-settings:powersleep", None::<&str>);
+    // QA-09 迁移（#211）：「哪个 URI」是平台知识，搬进了 platform crate；
+    // 「怎么打开」留在这里，因为那是 Tauri 层的事，不是系统知识。
+    //
+    // DESK-19 (#168) 的教训必须留在这儿：原来 Windows 走 `cmd /C start`，
+    // 而 cmd.exe 是 console 子系统程序（本机实测 PE Subsystem = 3）。桌面壳
+    // 自己是 GUI 子系统、手上没有控制台，Windows 只能为它新分配一个 ⇒
+    // 每次点都闪一下黑窗。opener 插件的候选命令**条条带 CREATE_NO_WINDOW**，
+    // 构造上不会分配控制台——所以打开动作必须继续走它，不要改回自己起进程。
+    //
+    // `None` = 这个系统没有可直接跳转的设置页（Linux / headless），什么也
+    // 不做；迁移前那两个平台本来就一个分支都没有，行为一致。
+    if let Some(uri) = platform::adapter().power_settings_uri() {
+        let _ = tauri_plugin_opener::open_url(uri, None::<&str>);
     }
 }
 
@@ -202,7 +193,6 @@ fn open_power_settings() {
 /// 并始终保留「去系统设置」这条手动退路。
 #[tauri::command]
 fn disable_auto_sleep() -> Result<(), String> {
-    use platform::PlatformAdapter as _;
     match platform::adapter().disable_auto_sleep() {
         Ok(platform::Applied::Done) => Ok(()),
         // Unsupported / NotApplicable 都走手动退路，文案与迁移前一致。
@@ -216,7 +206,6 @@ fn disable_auto_sleep() -> Result<(), String> {
 /// Write the initial config.toml (T-042 step 1) into the platform dir.
 #[tauri::command]
 fn write_config(library_dir: String) -> Result<(), String> {
-    use platform::PlatformAdapter as _;
     let dir = platform::adapter().data_dir();
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let config = format!(
@@ -327,13 +316,11 @@ fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
 /// the wizard never dead-ends. 基础服务不该手动启动、不该会停。
 #[tauri::command]
 fn start_daemon() -> Result<String, String> {
-    use platform::PlatformAdapter as _;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let sidecar = exe.parent().ok_or("no parent dir")?.join(if cfg!(windows) {
-        "ppf-daemon.exe"
-    } else {
-        "ppf-daemon"
-    });
+    let sidecar = exe
+        .parent()
+        .ok_or("no parent dir")?
+        .join(platform::adapter().daemon_executable_name());
     if !sidecar.is_file() {
         return Err(format!("找不到内置后台服务：{}", sidecar.display()));
     }
@@ -389,24 +376,15 @@ fn daemon_startup_error() -> Option<String> {
 /// (用户裁决 2026-07-31).
 #[tauri::command]
 fn stop_daemon() -> Result<(), String> {
-    use platform::PlatformAdapter as _;
     // 1) Unregister first — otherwise KeepAlive revives it immediately.
     let _ = platform::adapter().uninstall_autostart();
     // 2) Best-effort: kill the bundled daemon process. launchctl bootout
     //    (inside uninstall_autostart) already stopped the managed one;
     //    this also covers a one-shot fallback spawn.
-    #[cfg(unix)]
-    {
-        let _ = std::process::Command::new("pkill")
-            .args(["-f", "ppf-daemon"])
-            .output();
-    }
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "ppf-daemon.exe"])
-            .output();
-    }
+    // QA-09 迁移（#211）：best-effort —— 杀不掉也继续（原来两个分支也是
+    // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
+    // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
+    let _ = platform::adapter().kill_daemon_process();
     Ok(())
 }
 
@@ -429,18 +407,10 @@ fn stop_daemon() -> Result<(), String> {
 /// with a human-readable hint) instead of blocking updates entirely.
 #[tauri::command]
 fn pause_daemon_for_update() -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        let _ = std::process::Command::new("pkill")
-            .args(["-f", "ppf-daemon"])
-            .output();
-    }
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "ppf-daemon.exe"])
-            .output();
-    }
+    // QA-09 迁移（#211）：best-effort —— 杀不掉也继续（原来两个分支也是
+    // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
+    // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
+    let _ = platform::adapter().kill_daemon_process();
     Ok(())
 }
 
@@ -453,11 +423,10 @@ fn pause_daemon_for_update() -> Result<(), String> {
 #[tauri::command]
 fn resume_daemon_after_update() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let sidecar = exe.parent().ok_or("no parent dir")?.join(if cfg!(windows) {
-        "ppf-daemon.exe"
-    } else {
-        "ppf-daemon"
-    });
+    let sidecar = exe
+        .parent()
+        .ok_or("no parent dir")?
+        .join(platform::adapter().daemon_executable_name());
     if !sidecar.is_file() {
         return Err(format!("找不到内置后台服务：{}", sidecar.display()));
     }
@@ -470,21 +439,6 @@ fn resume_daemon_after_update() -> Result<(), String> {
     Ok(())
 }
 
-/// DESK-25：`taskkill` 用退出码区分「目标进程不存在」和真失败——128 是
-/// 前者（服务本来就没在跑，和 unix 分支里 pkill 的 1 同义，不算失败），
-/// 其余非零是后者。实测（2026-09-18，Windows 11 26200）：进程在 → 0；
-/// 进程不存在 → 128 `ERROR: The process "x" not found.`；非法参数 → 1。
-/// `taskkill_not_found_is_not_a_failure` 把这条事实本身也锁成断言。
-#[cfg(windows)]
-const TASKKILL_NOT_FOUND: i32 = 128;
-
-/// 杀 daemon 的结果判据。改这行会让 Windows 上「没杀掉」被当成杀成功，
-/// 紧接着就去 spawn 第二个 daemon——所以它有单测守着，不是内联的裸 if。
-/// `code == None` 只在被信号终止时出现（Windows 上不会），保守算失败。
-#[cfg(windows)]
-fn taskkill_is_failure(success: bool, code: Option<i32>) -> bool {
-    !success && code != Some(TASKKILL_NOT_FOUND)
-}
 /// DAE-04: 桌面壳更新后手动重启后台服务——杀掉当前运行的旧 daemon 进程，
 /// 靠 launchd KeepAlive（SuccessfulExit=false，crates/platform/src/macos.rs
 /// 注释：崩溃/被杀照样复活）自动拉起磁盘上已是新版本的同一个文件。
@@ -510,41 +464,30 @@ fn restart_daemon_process() -> Result<Value, String> {
         });
     // 2) 杀进程——照抄 stop_daemon 的 kill 逻辑（同款 pkill/taskkill），
     //    但绝不做任何 uninstall_autostart。
-    #[cfg(unix)]
-    {
-        let out = std::process::Command::new("pkill")
-            .args(["-f", "ppf-daemon"])
-            .output()
-            .map_err(|e| format!("杀掉旧后台服务进程失败：{e}"))?;
-        // pkill 退出码 1 = 没有匹配进程（服务本来就没在跑）——不 panic，
-        // 继续走轮询（launchd 会把它拉起来）。
-        if !out.status.success() && out.status.code() != Some(1) {
-            return Err(format!(
-                "杀掉旧后台服务进程失败：pkill 退出码 {:?}",
-                out.status.code()
-            ));
-        }
-    }
-    #[cfg(windows)]
-    {
-        let out = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "ppf-daemon.exe"])
-            .output()
-            .map_err(|e| format!("杀掉旧后台服务进程失败：{e}"))?;
-        // DESK-25：这里以前接下 out 就再也没看过它——taskkill 失败（权限
-        // 不足、被 AV 拦、参数错）会被当成杀成功，然后直接去拉起第二个
-        // daemon。判据见 taskkill_is_failure。
-        if taskkill_is_failure(out.status.success(), out.status.code()) {
-            return Err(format!(
-                "杀掉旧后台服务进程失败：taskkill 退出码 {:?}（{}）",
-                out.status.code(),
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
-        // Windows 没有 launchd KeepAlive 复活语义——杀掉后必须显式重新
-        // 拉起（start_daemon 的一次性 spawn fallback 分支）。
+    // QA-09 迁移（#211）：这处**认真判错**（另两个调用点是 best-effort）。
+    // 「进程本来就没在跑」不是失败——判据在 platform 里，各系统一份
+    // （unix 的 pkill 退出码 1 / Windows 的 taskkill 128）。DESK-25 (#208)
+    // 就是因为这条判据被抄散、其中一处没判，把「没杀掉」当成杀成功、
+    // 紧接着去 spawn 第二个 daemon 才出的事。
+    platform::adapter()
+        .kill_daemon_process()
+        .map_err(|e| format!("杀掉旧后台服务进程失败：{e}"))?;
+
+    // 3) 被杀之后系统会不会自己把它拉回来，取决于常驻方式：
+    //    LaunchAgent 的 KeepAlive 会（macOS），Run key 不会（Windows /
+    //    Linux）——后者必须显式重新拉起一次（一次性 spawn，不碰 autostart
+    //    注册，注册从头到尾没动过，这正是本命令的设计要点）。
+    //
+    //    ⚠️ 这一句在 Linux 上是**行为改变**，已在 PR 里登记：迁移前
+    //    Linux 走的是原来那个 unix 分支、杀完不拉起，然后下面那个 12 秒
+    //    轮询必然超时报错（Linux 没有任何东西会复活它）。桌面壳在 Linux
+    //    上不是发布形态，但既然改了就写明，不混在"纯搬家"里带过去。
+    if platform::adapter().service_mode() == platform::ServiceMode::UserAutostart {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let sidecar = exe.parent().ok_or("no parent dir")?.join("ppf-daemon.exe");
+        let sidecar = exe
+            .parent()
+            .ok_or("no parent dir")?
+            .join(platform::adapter().daemon_executable_name());
         if !sidecar.is_file() {
             return Err(format!("找不到内置后台服务：{}", sidecar.display()));
         }
@@ -555,7 +498,7 @@ fn restart_daemon_process() -> Result<Value, String> {
             .spawn()
             .map_err(|e| format!("重启后台服务失败：{e}"))?;
     }
-    // 3) 轮询 status 直到复活（每 500ms，最长 12s——实测信号杀 4~5s
+    // 4) 轮询 status 直到复活（每 500ms，最长 12s——实测信号杀 4~5s
     //    复活，12s 预算充裕；超时报错，绝不无限等）。
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
     let new_version = loop {
@@ -603,7 +546,6 @@ fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>) -> Valu
 /// 已经习惯了，不动）。
 #[tauri::command]
 fn export_logs_bundle() -> Result<Value, String> {
-    use platform::PlatformAdapter as _;
     let env = ExportEnv {
         platform_dir: platform::adapter().data_dir(),
         home: daemon_logs::home_dir(),
@@ -712,11 +654,9 @@ fn assemble_export(
 /// 绝不因此让导出失败。
 fn sidecar_daemon_version() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
-    let sidecar = exe.parent()?.join(if cfg!(windows) {
-        "ppf-daemon.exe"
-    } else {
-        "ppf-daemon"
-    });
+    let sidecar = exe
+        .parent()?
+        .join(platform::adapter().daemon_executable_name());
     if !sidecar.is_file() {
         return None;
     }
@@ -743,7 +683,7 @@ pub fn run() {
         // 双击没生效，继续双击）。
         //
         // 不加任何平台 cfg：这个插件三个桌面平台都有实现，且整个 crate 自带
-        // `#![cfg(not(any(target_os = "android", target_os = "ios")))]`，
+        // 那条排除 android / ios 的顶层平台断言，
         // 移动端根本不编译它。macOS 上系统本来就保证单实例，多这层守卫
         // 无害；写成平台分叉反而要往 crates/platform/ 加东西（B.2）。
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -796,13 +736,14 @@ pub fn run() {
                     .expect("tray icon bytes");
             TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
-                .icon_as_template(cfg!(target_os = "macos"))
+                .icon_as_template(platform::adapter().tray_icon_is_template())
                 .menu(&menu)
                 // DESK-18: 左键出菜单是 macOS 的习惯；Windows 上左键该打开
                 // 主窗口（下面的 on_tray_icon_event 负责），右键才出菜单。
-                // 用 cfg!（不是 #[cfg]）—— 两个平台的取值在每次构建里都被
-                // 类型检查，和上面 icon_as_template 同一手法。
-                .show_menu_on_left_click(cfg!(target_os = "macos"))
+                // QA-09 迁移（#211）：这条习惯从 cfg! 变成了 platform 上的
+                // 一个具名能力——`is_macos()` 只是把分叉挪个地方，说不出
+                // 为什么要分叉；`tray_shows_menu_on_left_click` 说得出。
+                .show_menu_on_left_click(platform::adapter().tray_shows_menu_on_left_click())
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click {
                         button,
@@ -813,7 +754,7 @@ pub fn run() {
                         if tray_left_click_opens_window(
                             button,
                             button_state,
-                            cfg!(target_os = "macos"),
+                            platform::adapter().tray_shows_menu_on_left_click(),
                         ) {
                             if let Some(win) = tray.app_handle().get_webview_window("main") {
                                 // DESK-28：unminimize 不能省——窗口被最小化时
@@ -886,14 +827,18 @@ pub fn run() {
 /// 只认 `Up`：按下和抬起都会各来一个事件，两个都响应就会开两次窗口。
 ///
 /// 抽成纯函数是刻意的——托盘点击在 CI 里没法模拟，但这个判定可以在**任何**
-/// 平台上单测。平台差异由调用方把 `cfg!(target_os = "macos")` 传进来，
-/// 于是两个平台的分支在每次构建里都被编译和检查（`cfg!` 而非 `#[cfg]`）。
+/// 平台上单测。平台差异由调用方传进来，于是两个平台的分支在每次构建里都被
+/// 编译和检查，而不是只编译当前平台那一半。
+///
+/// QA-09 迁移（#211）：参数从「是不是 macOS」改名成「这个系统左键出不出
+/// 菜单」——判定依据的是**行为**，不是系统的名字。调用方传的现在是
+/// `platform::adapter().tray_shows_menu_on_left_click()`。
 fn tray_left_click_opens_window(
     button: MouseButton,
     state: MouseButtonState,
-    is_macos: bool,
+    menu_on_left_click: bool,
 ) -> bool {
-    !is_macos && button == MouseButton::Left && state == MouseButtonState::Up
+    !menu_on_left_click && button == MouseButton::Left && state == MouseButtonState::Up
 }
 
 #[cfg(test)]
@@ -1379,56 +1324,5 @@ mod tests {
         if let Err(e) = verify_sidecar_runs(&real) {
             panic!("真 daemon 被误判成坏的（{}）：{e}", real.display());
         }
-    }
-
-    // ── DESK-25: taskkill 结果判据 ──────────────────────────
-    // 只在 Windows 编译：判据本身是 #[cfg(windows)] 的，而 ci-desktop 的
-    // lane 跑在 ubuntu，所以这批断言今天只有本机和未来的 Windows CI
-    // (#164) 看得到。
-
-    #[cfg(windows)]
-    #[test]
-    fn taskkill_success_is_not_a_failure() {
-        assert!(!taskkill_is_failure(true, Some(0)));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn taskkill_not_found_is_not_a_failure() {
-        // 服务本来就没在跑 —— 正常路径，不得报错。
-        assert!(!taskkill_is_failure(false, Some(128)));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn taskkill_other_nonzero_is_a_failure() {
-        // 1 = 参数/权限错误（实测非法参数就是 1）。
-        assert!(taskkill_is_failure(false, Some(1)));
-        assert!(taskkill_is_failure(false, Some(2)));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn taskkill_without_exit_code_is_a_failure() {
-        // 拿不到退出码时保守算失败，不能放行去 spawn 第二个 daemon。
-        assert!(taskkill_is_failure(false, None));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn real_taskkill_reports_128_for_a_missing_process() {
-        // 真机断言：判据里的 128 不是引文，是这台机器上跑出来的。
-        // 名字故意取成不可能存在的，所以这条不会杀掉任何东西。
-        let out = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", "p-pass-desk25-no-such-process.exe"])
-            .output()
-            .expect("taskkill 必须存在于 Windows");
-        assert_eq!(
-            out.status.code(),
-            Some(TASKKILL_NOT_FOUND),
-            "「进程不存在」的退出码变了，判据要跟着改: stdout={} stderr={}",
-            String::from_utf8_lossy(&out.stdout).trim(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
     }
 }
