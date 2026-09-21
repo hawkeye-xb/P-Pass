@@ -130,6 +130,65 @@ fun rescheduleAutoBackup(context: Context) {
     scheduleAutoBackup(context)
 }
 
+/**
+ * MOB-93: 重连回一台**以前连过的**电脑时，自动备份该怎么恢复。
+ *
+ * 纯判定，不碰 IO——`suspendAutoBackupForPairingChange` 把用户意图留下来了，
+ * 这里只回答"按它该做什么"。
+ */
+enum class AutoBackupResume {
+    /** 意图还在，授权也还在——把生产者重新排上。 */
+    ENABLE,
+
+    /** 意图还在，但后台授权没了——记着意图，先不排（与授权丢失时同一处置）。 */
+    SUSPEND,
+
+    /** 用户本来就没要后台备份——不许替他打开。 */
+    LEAVE_OFF,
+}
+
+fun autoBackupResumeDecision(
+    userRequested: Boolean,
+    backgroundAuthorized: Boolean,
+): AutoBackupResume = when {
+    !userRequested -> AutoBackupResume.LEAVE_OFF
+    backgroundAuthorized -> AutoBackupResume.ENABLE
+    else -> AutoBackupResume.SUSPEND
+}
+
+/**
+ * MOB-93: 断开配对时对自动备份策略的处置——**停生产者，留意图**。
+ *
+ * 旧写法把 `userRequested` 一起清成 false，理由写在注释里：「下一轮
+ * onboarding 会重新问」。#257 加了快速重连（连回以前连过的电脑直接回
+ * 首页、跳过 onboarding）之后，那个"重新问"不再必然发生，于是意图有去
+ * 无回：5 小时周期（兜底对账的唯一载体）、前台补捞、相册变更监听三条
+ * 链全部静默留在关闭态。
+ *
+ * `setRequested(requested())` 不是废话：老文件里 `userRequested` 可能是
+ * null，取值回退到当时的 `autoEnabled`。先把它固化下来，再把 autoEnabled
+ * 置 false，否则这一步自己就会把意图抹掉。
+ */
+fun suspendAutoBackupForPairingChange(dir: java.io.File) {
+    AutoBackupPrefs(dir).apply {
+        setRequested(requested())
+        setEnabled(false)
+    }
+}
+
+/**
+ * MOB-93: 快速重连路径上按留下来的意图恢复自动备份。
+ * 换一台**新**电脑不走这里——那是新的信任关系，由 onboarding 重新问。
+ */
+fun restoreAutoBackupAfterRepair(context: Context, backgroundAuthorized: Boolean) {
+    val requested = AutoBackupPrefs(context.filesDir).requested()
+    when (autoBackupResumeDecision(requested, backgroundAuthorized)) {
+        AutoBackupResume.ENABLE -> enableAutoBackup(context)
+        AutoBackupResume.SUSPEND -> suspendAutoBackupUntilAuthorized(context)
+        AutoBackupResume.LEAVE_OFF -> Unit
+    }
+}
+
 /** Disables future automatic producers; it never mutates the current Flow round. */
 fun disableAutoBackup(context: Context) {
     AutoBackupPrefs(context.filesDir).apply {
