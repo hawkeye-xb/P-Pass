@@ -1124,3 +1124,153 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
         .await;
     assert_eq!(resp.result.unwrap()["devices"].as_array().unwrap().len(), 3);
 }
+
+/// DEV-04：老设备重连，`pairing.pending` 必须认得出来——判据是
+/// `node_id`，不是名字。
+///
+/// 验收人 2026-09-20 实测报的是两件事，这个测试同时钉死：
+///
+/// 1. **弹窗认不出老设备。** `pending_summary` 此前只传 `{name}`，桌面
+///    无从分辨新旧，一律按「有设备请求加入」措辞。
+/// 2. **改过的名字被重连冲掉。** 审计流水里 19:32:29 `device.renamed`
+///    → 19:32:42 `pair.accepted`，`upsert_device` 的
+///    `name = excluded.name` 把桌面上的名字换回了手机自报名。
+///
+/// 这里两台手机**自报同一个名字**——真机上就是这样（同型号默认名），
+/// 也正因如此，确认必须按 `node_id` 定位：按名字找会命中错的那台。
+///
+/// 反证：把 `handle_request` 的 `name` 改回无条件
+/// `safe_name(&req.device_name)`，「改过的名字必须活下来」立刻变红；
+/// 把 `pending_summary` 改回只传 `{name}`，「known」那几条全红。
+#[tokio::test(flavor = "multi_thread")]
+async fn pairing_pending_knows_a_returning_device_by_node_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, pairing, socket, token) = start(dir.path(), "dev04").await;
+
+    // 老设备：首次配对在很久以前，业主在桌面上给它改过名，然后手机自己
+    // 断开了（revoked = 1）——它依然算「以前连过」。
+    const FIRST_PAIRED_AT: i64 = 1_700_000_000_000;
+    db.upsert_device(&Device {
+        node_id: vec![0xE1; 32],
+        name: "客厅的旧手机".into(),
+        role: Role::Member,
+        paired_at: FIRST_PAIRED_AT,
+        last_seen: Some(FIRST_PAIRED_AT),
+        revoked: false,
+        revoked_at: None,
+        revoked_by: None,
+    })
+    .await
+    .unwrap();
+    db.revoke(&[0xE1; 32], storage::RevokedBy::Device, FIRST_PAIRED_AT + 1)
+        .await
+        .unwrap();
+    for n in 0..3u8 {
+        db.insert_asset(&seeded_asset(0xE1, n, FIRST_PAIRED_AT + i64::from(n)))
+            .await
+            .unwrap();
+    }
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+
+    // 两台同时敲门，**自报同一个名字**：0xE0 从没连过，0xE1 是上面那台。
+    let pairing = pairing.clone();
+    for (i, node) in [0xE0u8, 0xE1].into_iter().enumerate() {
+        let qr = pairing.start([0x31 + i as u8; 12], now());
+        let token = qr.rsplit("&t=").next().unwrap().to_string();
+        let pairing = pairing.clone();
+        tokio::spawn(async move {
+            pairing
+                .handle_request(
+                    transport::NodeId([node; 32]),
+                    &proto::PairRequest {
+                        token,
+                        device_name: "SM-S9210".into(),
+                        role: "member".into(),
+                    },
+                    now(),
+                )
+                .await
+        });
+    }
+
+    let mut pending = Vec::new();
+    for _ in 0..200 {
+        let resp = c.call("pairing.pending", serde_json::Value::Null).await;
+        pending = resp.result.unwrap()["pending"].as_array().unwrap().clone();
+        if pending.len() == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(pending.len(), 2, "两台都该在队列里: {pending:?}");
+
+    let by_node = |hex: &str| -> serde_json::Value {
+        pending
+            .iter()
+            .find(|v| v["node_id"] == hex)
+            .unwrap_or_else(|| panic!("pending 必须带 node_id: {pending:?}"))
+            .clone()
+    };
+
+    // 全新设备：未知，名字用手机自报名。
+    let fresh = by_node(&"e0".repeat(32));
+    assert_eq!(fresh["known"], false, "从没连过的必须判为未知: {fresh}");
+    assert_eq!(fresh["name"], "SM-S9210", "未知设备只能用自报名: {fresh}");
+
+    // 老设备：已知（**尽管 revoked = 1**），名字用桌面上那个。
+    let returning = by_node(&"e1".repeat(32));
+    assert_eq!(
+        returning["known"], true,
+        "被移除过的设备再回来依然是「以前连过」: {returning}"
+    );
+    assert_eq!(
+        returning["name"], "客厅的旧手机",
+        "改过名的设备必须按桌面上的名字称呼，不是手机自报名: {returning}"
+    );
+    assert_eq!(
+        returning["paired_at"], FIRST_PAIRED_AT,
+        "首次配对时间要传上去（弹窗要显示）: {returning}"
+    );
+    assert_eq!(
+        returning["photo_count"], 3,
+        "「允许后会恢复备份」恢复的是这些照片: {returning}"
+    );
+
+    // 确认必须按 node_id——两台自报名相同，按名字找会命中错的那台。
+    let resp = c
+        .call(
+            "pairing.confirm",
+            serde_json::json!({ "node_id": "e1".repeat(32), "accept": true }),
+        )
+        .await;
+    assert!(resp.ok, "按 node_id 确认必须成功: {resp:?}");
+
+    // 队列里只剩那台全新的——确认精确落在 0xE1 上。
+    let resp = c.call("pairing.pending", serde_json::Value::Null).await;
+    let left = resp.result.unwrap()["pending"].as_array().unwrap().clone();
+    assert_eq!(left.len(), 1, "只该处理掉一台: {left:?}");
+    assert_eq!(left[0]["node_id"], "e0".repeat(32), "处理错了台: {left:?}");
+
+    // 重连落定后，改过的名字必须活下来，首次配对时间不被重置。
+    // `confirm` 只是把决定投给 handle_request，落库在它那一侧——等写完
+    // 再断言，否则读到的是**配对前**那一行，三条断言全部落空（真机上
+    // 恰恰是配对之后才被冲掉的）。
+    let mut row = db.get_device(&[0xE1; 32]).await.unwrap().unwrap();
+    for _ in 0..200 {
+        if !row.revoked {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        row = db.get_device(&[0xE1; 32]).await.unwrap().unwrap();
+    }
+    assert!(!row.revoked, "业主批准了，授权要恢复");
+    assert_eq!(
+        row.name, "客厅的旧手机",
+        "重新配对不许把桌面上改过的名字冲回手机自报名"
+    );
+    assert_eq!(
+        row.paired_at, FIRST_PAIRED_AT,
+        "paired_at 是「首次」配对时间，重连不重置"
+    );
+}

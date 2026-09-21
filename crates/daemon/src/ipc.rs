@@ -622,7 +622,14 @@ impl IpcServer {
                     .get("device_name")
                     .and_then(|v| v.as_str())
                     .map(str::to_owned);
-                match self.confirm(device_name.as_deref(), accept) {
+                // DEV-04：按身份定位，名字只作回退——改过名的设备重连时
+                // 弹窗上的名字不再等于队列里的自报名。
+                let node_id = req
+                    .params
+                    .get("node_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_hex32);
+                match self.confirm(node_id.as_deref(), device_name.as_deref(), accept) {
                     Some(name) => {
                         Resp::ok(id, serde_json::json!({ "decided": accept, "device": name }))
                     }
@@ -636,7 +643,7 @@ impl IpcServer {
             // pending 逐行允许/拒绝（confirm 带 device_name 逐台处理）。
             // 不动确认语义，只补「队列里都有谁」。
             "pairing.pending" => {
-                let pending = self.pending_summary();
+                let pending = self.pending_summary().await;
                 Resp::ok(id, serde_json::json!({ "pending": pending }))
             }
             // DEV-03（2026-09-20 验收人推翻 DESK-02②）：默认口径从
@@ -1114,11 +1121,22 @@ impl IpcServer {
     /// DEV-02: 只有允许/拒绝两种。DEV-01 的第三个入参 `merge_node_id`
     /// （「替换旧的」目标）删掉了——设备与身份 1:1，没有"接管另一个身份的
     /// 账目"这回事，配对流程也因此不再有任何写别人那一行的入口。
-    pub fn confirm(&self, device_name: Option<&str>, accept: bool) -> Option<String> {
+    ///
+    /// DEV-04：定位优先看 `node_id`。展示名与身份在这张卡之后不再是同一
+    /// 个字符串——改过名的老设备重连时，弹窗显示的是**桌面上**的名字，
+    /// 而队列里存的是手机自报名，按名字找必然 `None`，业主就再也批不了
+    /// 这台设备了。`device_name` 作为回退保留（老调用方语义不动）。
+    pub fn confirm(
+        &self,
+        node_id: Option<&[u8]>,
+        device_name: Option<&str>,
+        accept: bool,
+    ) -> Option<String> {
         let mut queue = self.pending.lock().expect("pending lock");
-        let idx = match device_name {
-            Some(name) => queue.iter().position(|p| p.device_name == name),
-            None => (!queue.is_empty()).then_some(0),
+        let idx = match (node_id, device_name) {
+            (Some(id), _) => queue.iter().position(|p| p.peer.0 == id),
+            (None, Some(name)) => queue.iter().position(|p| p.device_name == name),
+            (None, None) => (!queue.is_empty()).then_some(0),
         }?;
         let p = queue.remove(idx);
         if queue.is_empty() {
@@ -1140,16 +1158,51 @@ impl IpcServer {
         Some(name)
     }
 
-    /// Pending pairing requests for the owner UI. DEV-02: 只有名字——
-    /// 指纹匹配（DEV-01 的 `hint_match`）删掉了，确认框不再替任何人
-    /// 声称"这台手机重装过"。
-    pub fn pending_summary(&self) -> Vec<serde_json::Value> {
-        self.pending
+    /// Pending pairing requests for the owner UI. DEV-02: 不做指纹匹配
+    /// （DEV-01 的 `hint_match` 已删）——确认框不替任何人声称"这台手机
+    /// 重装过"。
+    ///
+    /// DEV-04：但"库里有没有这一行"是桌面自己查得到的事实，不是手机的
+    /// 一面之词，所以它该往上传。`known = true` 时名字取**桌面上**那个
+    /// （业主可能改过名），并附首次配对时间和已存照片数，让审批框说得出
+    /// 「允许后会恢复备份」到底恢复的是什么。
+    ///
+    /// 判据是 `device` 表有没有这一行，**不看 `revoked`**：被移除过的设备
+    /// 再回来依然是"以前连过"，只是仍要业主重新批准。
+    pub async fn pending_summary(&self) -> Vec<serde_json::Value> {
+        // 先把身份抄出来再放锁：下面要 await，而 pending 是 std Mutex，
+        // 跨 await 持有它既是 clippy::await_holding_lock 也是真死锁面。
+        let queued: Vec<(transport::NodeId, String)> = self
+            .pending
             .lock()
             .expect("pending lock")
             .iter()
-            .map(|p| serde_json::json!({ "name": p.device_name }))
-            .collect()
+            .map(|p| (p.peer, p.device_name.clone()))
+            .collect();
+
+        let mut out = Vec::with_capacity(queued.len());
+        for (peer, reported_name) in queued {
+            let existing = self.db.get_device(&peer.0).await.ok().flatten();
+            let mut row = serde_json::json!({
+                "node_id": hex(&peer.0),
+                "known": existing.is_some(),
+                "name": existing
+                    .as_ref()
+                    .map(|d| d.name.clone())
+                    .unwrap_or(reported_name),
+            });
+            if let Some(d) = existing {
+                row["paired_at"] = serde_json::json!(d.paired_at);
+                row["revoked"] = serde_json::json!(d.revoked);
+                row["photo_count"] = serde_json::json!(self
+                    .db
+                    .count_assets_from_device(&d.node_id)
+                    .await
+                    .unwrap_or(0));
+            }
+            out.push(row);
+        }
+        out
     }
 
     /// Names of requests waiting for the owner (UI list / console prompt).

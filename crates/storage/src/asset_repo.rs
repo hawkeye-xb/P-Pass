@@ -175,6 +175,18 @@ impl Db {
             .await?)
     }
 
+    /// DEV-04: 某一台设备贡献过多少张——重连审批框里「这台以前连过」
+    /// 的实证。数字本身就是业主该知道的事：允许之后恢复的是**这些**
+    /// 照片的续传，不是从零开始。
+    pub async fn count_assets_from_device(&self, node_id: &[u8]) -> Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT COUNT(*) FROM asset WHERE src_device = ?")
+                .bind(node_id)
+                .fetch_one(self.pool())
+                .await?,
+        )
+    }
+
     /// DESK-03: 贡献过照片的设备数（status.photo_sources）——
     /// 「共 N 张 · 来自 M 台设备」的 M。
     pub async fn count_asset_sources(&self) -> Result<i64> {
@@ -537,6 +549,28 @@ mod tests {
         a.src_device = vec![src; 32];
         a.added_at = added_at;
         a
+    }
+
+    // DEV-04: 重连审批框里的「已存 N 张」只算这一台——全库总数在那个
+    // 语境下是误导（业主要判断的是「允许它回来恢复的是什么」）。
+    #[tokio::test]
+    async fn count_assets_from_device_counts_only_that_device() {
+        let db = Db::open_in_memory().await.unwrap();
+        for n in 0..3u8 {
+            db.insert_asset(&asset_at(0xE1, n, 1_700_000_000_000 + i64::from(n)))
+                .await
+                .unwrap();
+        }
+        for n in 10..15u8 {
+            db.insert_asset(&asset_at(0xE2, n, 1_700_000_000_000 + i64::from(n)))
+                .await
+                .unwrap();
+        }
+        assert_eq!(db.count_assets().await.unwrap(), 8);
+        assert_eq!(db.count_assets_from_device(&[0xE1; 32]).await.unwrap(), 3);
+        assert_eq!(db.count_assets_from_device(&[0xE2; 32]).await.unwrap(), 5);
+        // 没贡献过照片的设备 = 0，不是错误——重连弹窗照样要显示。
+        assert_eq!(db.count_assets_from_device(&[0xE9; 32]).await.unwrap(), 0);
     }
 
     #[tokio::test]

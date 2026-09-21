@@ -230,9 +230,25 @@ impl Pairing {
             return Err(PairRejection::OwnerDeclined);
         }
 
+        // DEV-04：库里已有这一行 = 这台以前连过。这一次查询同时回答三件
+        // 事——要不要 unrevoke、审批框该说「加入」还是「重新连接」、
+        // **以及叫什么名字**。
+        let existing = self.db.get_device(&peer.0).await.ok().flatten();
+        let rejoining = existing.as_ref().is_some_and(|d| d.revoked);
+        // DEV-04（验收人 2026-09-20 实测）：桌面上改过的名字不能被重连
+        // 冲掉。`device.rename` 是业主对这台设备的称呼，手机自报名只在
+        // 库里还没有这一行时作数。
+        //
+        // 旧写法无条件 `safe_name(&req.device_name)`，配上 upsert 的
+        // `name = excluded.name`，业主 19:32:29 改的名 19:32:42 就被
+        // 重连覆盖回 "SM-S9210"——审计流水里两行挨着。
+        let name = match &existing {
+            Some(d) => d.name.clone(),
+            None => safe_name(&req.device_name),
+        };
         let device = Device {
             node_id: peer.0.to_vec(),
-            name: safe_name(&req.device_name),
+            name,
             role,
             paired_at: now_ms,
             last_seen: Some(now_ms),
@@ -242,10 +258,6 @@ impl Pairing {
             revoked_at: None,
             revoked_by: None,
         };
-        let rejoining = matches!(
-            self.db.get_device(&peer.0).await,
-            Ok(Some(d)) if d.revoked
-        );
         self.db
             .upsert_device(&device)
             .await
