@@ -127,6 +127,32 @@ impl PlatformAdapter for WindowsAdapter {
             .unwrap_or(PowerHint::Unknown)
     }
 
+    /// DESK-22 (#171)：一键关闭「空闲自动睡眠」，让备份能在无人值守时跑完。
+    ///
+    /// 等价物是 `powercfg /x standby-timeout-ac 0`，它写的是 HKLM 下的电源
+    /// 方案键，**非管理员没有写权限**（2026-09-21 实测：以写权限打开该键
+    /// 直接被拒，`Requested registry access is not allowed`）。所以必须提权，
+    /// 走 `ShellExecuteExW` 的 `runas` 动词弹 UAC——与 macOS 侧那个管理员
+    /// 授权弹窗对等。
+    ///
+    /// ⚠️ **只设 AC，不设 DC**。理由是与本适配器的检测口径严格一致：
+    /// [`read_standby_idle_seconds`] 只读 `ACSettingIndex`。设了 DC 却不检测
+    /// 它，就会出现「改了但没法验证」的半截状态，而"没法验证"在本仓等于
+    /// "不许报成功"。AC / DC 口径不一致是**检测侧既有的**问题，另开卡处理。
+    /// （macOS 侧 `pmset -a` 设所有场景，是因为 `parse_pmset` 也检测所有场景，
+    /// 两边各自自洽。）
+    ///
+    /// ⚠️ **不信退出码，动手后回读**。2026-09-21 在 Windows 11 26200 上实测
+    /// （非管理员）：`powercfg /x standby-timeout-ac 0` 退出码是 **0**，而那个
+    /// 注册表键的最后写入时间**一点没变**——它压根没写成，却报了成功。拿退出
+    /// 码当"已生效"就是本仓这一轮在修的那类缺陷（#268 那个 0 字节 daemon
+    /// 注册完报 resident 是同一形状）。
+    fn disable_auto_sleep(&self) -> Result<crate::Applied> {
+        let before = read_standby_idle_seconds();
+        elevated_powercfg("/x standby-timeout-ac 0")?;
+        verdict_from_readback(before, read_standby_idle_seconds())
+    }
+
     fn notify(&self, _title: &str, _body: &str) {
         // Tauri notification carries this in T-041; no-op until then.
     }
@@ -252,6 +278,121 @@ fn read_standby_idle_seconds() -> Option<u32> {
     // get interrupted" — mirrors the SCHEME_CURRENT/SUB_SLEEP/STANDBYIDLE
     // AC query `powercfg` itself defaults to.
     setting.get_value::<u32, _>("ACSettingIndex").ok()
+}
+
+/// DESK-22 (#171)：把「回读到的值」翻译成结果。
+///
+/// 抽成纯函数是刻意的——提权那半只能真机手测（要 UAC 交互、要改这台机器的
+/// 电源设置），但**「回读不是 0 就不许报成功」这条判据本身**可以在不提权、
+/// 不改任何设置的前提下锁成断言。判据一旦松掉（比如有人图省事让 `None` 也
+/// 返回 `Done`），单测必须立刻红。
+fn verdict_from_readback(before: Option<u32>, after: Option<u32>) -> Result<crate::Applied> {
+    match after {
+        Some(0) => Ok(crate::Applied::Done),
+        Some(seconds) => Err(PlatformError::Failed {
+            action: "disable_auto_sleep",
+            detail: format!(
+                "powercfg 报了成功，但回读到空闲睡眠仍是 {seconds} 秒（改动前 {before:?}）——设置没有生效"
+            ),
+        }),
+        None => Err(PlatformError::Failed {
+            action: "disable_auto_sleep",
+            detail: "powercfg 报了成功，但读不回设置值，无法确认是否生效".into(),
+        }),
+    }
+}
+
+/// 以管理员身份、**隐藏窗口**地跑 `powercfg.exe`，等它结束并检查退出码。
+///
+/// 为什么不用 `std::process::Command`：只有 shell 的 `runas` 动词能触发 UAC，
+/// `CreateProcess`（`Command` 走的那条）做不到提权。
+///
+/// 为什么 `SW_HIDE`：`powercfg.exe` 是 console 子系统程序，桌面壳自己是 GUI
+/// 子系统、手上没有控制台，不隐藏的话 Windows 会给它新分配一个 ⇒ 闪一下黑窗。
+/// 这正是 DESK-19 (#168) 修过的那一类。`ShellExecuteEx` **不接受**
+/// `CREATE_NO_WINDOW`（那是 `CreateProcess` 的标志），`nShow` 是唯一的手柄。
+/// ⚠️ 这一条只能真机肉眼验，代码里锁不住——列在 #171 的手测清单第一条。
+fn elevated_powercfg(params: &str) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_CANCELLED};
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, WaitForSingleObject, INFINITE,
+    };
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
+
+    fn wide(s: &str) -> Vec<u16> {
+        std::ffi::OsStr::new(s)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    }
+    let verb = wide("runas");
+    let file = wide("powercfg.exe");
+    let args = wide(params);
+
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    // NOCLOSEPROCESS: 要拿到进程句柄才能等它结束、读退出码。
+    // NOASYNC: 本调用返回后我们还要立刻回读注册表，必须确保动作已经完成。
+    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpParameters = args.as_ptr();
+    info.nShow = SW_HIDE;
+
+    // SAFETY: info 已零初始化并填好 cbSize；三个宽字符串都是 NUL 结尾且在
+    // 整个调用期间存活（它们的所有权在本函数栈上，晚于本次调用释放）。
+    let started = unsafe { ShellExecuteExW(&mut info) };
+    if started == 0 {
+        // SAFETY: 紧跟失败调用之后读取本线程的错误码。
+        let code = unsafe { GetLastError() };
+        // 用户在 UAC 上点了「否」——这不是失败，是他的选择。
+        if code == ERROR_CANCELLED {
+            return Err(PlatformError::Cancelled {
+                action: "disable_auto_sleep",
+            });
+        }
+        return Err(PlatformError::Failed {
+            action: "disable_auto_sleep",
+            detail: format!("提权启动失败（Win32 错误码 {code}）"),
+        });
+    }
+
+    if info.hProcess.is_null() {
+        // 拿不到句柄就等不了、也读不到退出码。不装作成功——反正后面还有
+        // 回读兜底，但这里先把"没法确认"说出来。
+        return Err(PlatformError::Failed {
+            action: "disable_auto_sleep",
+            detail: "提权进程已启动，但拿不到句柄，无法确认它是否跑完".into(),
+        });
+    }
+
+    // SAFETY: hProcess 由 SEE_MASK_NOCLOSEPROCESS 保证有效，且下面只用一次。
+    unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
+    let mut exit_code: u32 = 0;
+    // SAFETY: 同上；exit_code 是栈上的 u32 出参。
+    let got = unsafe { GetExitCodeProcess(info.hProcess, &mut exit_code) };
+    // SAFETY: 同上；之后不再使用该句柄。
+    unsafe { CloseHandle(info.hProcess) };
+
+    if got == 0 {
+        return Err(PlatformError::Failed {
+            action: "disable_auto_sleep",
+            detail: "读不到提权进程的退出码，无法确认它是否成功".into(),
+        });
+    }
+    if exit_code != 0 {
+        return Err(PlatformError::Failed {
+            action: "disable_auto_sleep",
+            detail: format!("powercfg 退出码 {exit_code}"),
+        });
+    }
+    // ⚠️ 退出码 0 **不代表设置生效**（见 disable_auto_sleep 的注释）。
+    // 判定交给调用方的回读。
+    Ok(())
 }
 
 /// RAII wrapper over the thread execution state.
@@ -466,5 +607,50 @@ mod qa09_migrated_capability_tests {
             WindowsAdapter::new().remove_stale_ipc_endpoint("ppf-qa09-whatever"),
             crate::Applied::NotApplicable
         );
+    }
+}
+
+#[cfg(test)]
+mod desk22_disable_auto_sleep_tests {
+    use super::*;
+
+    /// 唯一可信的成功条件：回读到 0。
+    #[test]
+    fn readback_zero_is_the_only_success() {
+        assert_eq!(
+            verdict_from_readback(Some(1200), Some(0)).unwrap(),
+            crate::Applied::Done
+        );
+    }
+
+    /// 回读仍是非零 ⇒ 没生效，必须报错。
+    ///
+    /// 这条守的是那个实测事实：非管理员下 `powercfg /x` 退出码是 0 但注册表
+    /// 没被写。谁把判据放松成"退出码 0 就算成功"，这里必须红。
+    #[test]
+    fn readback_nonzero_must_not_be_reported_as_success() {
+        let e = verdict_from_readback(Some(1200), Some(1200)).unwrap_err();
+        let msg = e.to_string();
+        assert!(msg.contains("1200"), "错误信息要带上实际读到的值：{msg}");
+        assert!(msg.contains("没有生效"), "错误信息要说清没生效：{msg}");
+    }
+
+    /// 读不回值 ⇒ **不许**当成功。「没法确认」不等于「成功」——
+    /// 这是 fail-closed 的方向，放松它就是静默放行。
+    #[test]
+    fn unreadable_state_must_not_be_reported_as_success() {
+        assert!(verdict_from_readback(None, None).is_err());
+        assert!(verdict_from_readback(Some(0), None).is_err());
+    }
+
+    /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
+    /// 说成出错。
+    #[test]
+    fn cancelled_is_its_own_variant_not_a_failure() {
+        let c = PlatformError::Cancelled {
+            action: "disable_auto_sleep",
+        };
+        assert!(matches!(c, PlatformError::Cancelled { .. }));
+        assert!(c.to_string().contains("取消"), "{c}");
     }
 }

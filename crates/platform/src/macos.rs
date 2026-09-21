@@ -177,6 +177,37 @@ impl PlatformAdapter for MacosAdapter {
         home().join("Library/Application Support/P-Pass")
     }
 
+    /// DESK-22 (#211/#171)：原先长在桌面壳 `lib.rs` 的 `#[cfg(target_os =
+    /// "macos")]` 分支里，这次随 Windows 侧实现一起迁进来。**行为一字未改。**
+    ///
+    /// 用系统原生的管理员授权弹窗（不是终端，是"输入密码 / Touch ID"那种）
+    /// 直接帮用户改。`-a`（电池 + 电源两种场景）而非只 `-c`（仅电源）——跟
+    /// `parse_pmset` 的检测口径一致（取所有场景里最小的正数 sleep 值），
+    /// 只改 AC 的话笔记本用电池时检测仍报"还会睡眠"，勾不上 ✓。
+    fn disable_auto_sleep(&self) -> Result<crate::Applied> {
+        let out = Command::new("osascript")
+            .args([
+                "-e",
+                "do shell script \"pmset -a sleep 0\" with administrator privileges",
+            ])
+            .output()
+            .map_err(io_err("disable_auto_sleep"))?;
+        if out.status.success() {
+            return Ok(crate::Applied::Done);
+        }
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        // osascript 用 -128 表示"用户取消"；文案随语言变，两个都认。
+        if stderr.contains("User canceled") || stderr.contains("-128") {
+            return Err(PlatformError::Cancelled {
+                action: "disable_auto_sleep",
+            });
+        }
+        Err(PlatformError::Failed {
+            action: "disable_auto_sleep",
+            detail: stderr.trim().to_string(),
+        })
+    }
+
     // QA-09 迁移（#211）：以下四个能力 macOS 与 Linux 完全一致，实现只此
     // 一份，在 crates/platform/src/unix.rs。
     //
