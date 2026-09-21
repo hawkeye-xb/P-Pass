@@ -142,6 +142,37 @@ class MOB101ForegroundBudgetTest {
         assertEquals(TransferProtection.UNKNOWN, transferProtectionOf(store.load()))
     }
 
+    // 一个没人调用的纯函数保护不了任何东西（ForegroundServiceWiringTest
+    // 同款源码锚点）：两个会抛这个异常的调用点——服务里的 startForeground
+    // 和 sync() 里的 startForegroundService——都必须走这条 seam。
+    @Test
+    fun both_protected_start_call_sites_go_through_the_seam() {
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        val source = File(
+            dir,
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowTransferForegroundService.kt",
+        ).readText()
+            .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+            .lines()
+            .filterNot { it.trimStart().startsWith("//") }
+            .joinToString("\n")
+
+        // 1 处定义 + 2 处调用
+        assertEquals(
+            "startForeground / startForegroundService 必须全部经由 startProtectedForeground，" +
+                "裸调就是 MOB-101 这次崩溃本身",
+            3,
+            source.split("startProtectedForeground(").size - 1,
+        )
+        assertTrue(
+            "配额耗尽后必须把这一轮durable地暂停掉，不许继续无保护传输",
+            source.contains("pauseFlow("),
+        )
+    }
+
     // 验收 3：文案出自 strings.xml，中英双语齐备，且不含任何技术词
     // （tokens.json：Errors never show a code or bare technical term）。
     @Test

@@ -149,9 +149,24 @@ internal fun startProtectedForeground(
     haltTransfer: () -> Unit,
     start: () -> Unit,
 ): ForegroundStartOutcome {
-    start()
-    store.record(ForegroundStartOutcome.STARTED, now)
-    return ForegroundStartOutcome.STARTED
+    val outcome = try {
+        start()
+        ForegroundStartOutcome.STARTED
+    } catch (refusal: IllegalStateException) {
+        // Only a foreground-start refusal is handled here. Anything else
+        // is a different fault and must stay visible — swallowing it
+        // would bury the next bug the way the missing catch buried this
+        // one.
+        if (!isForegroundStartRefusal(refusal)) throw refusal
+        if (isSystemBudgetExhausted(refusal)) {
+            ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED
+        } else {
+            ForegroundStartOutcome.START_REFUSED
+        }
+    }
+    store.record(outcome, now)
+    if (outcome != ForegroundStartOutcome.STARTED) haltTransfer()
+    return outcome
 }
 
 /**
