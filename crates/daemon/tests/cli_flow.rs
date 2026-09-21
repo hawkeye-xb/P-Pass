@@ -61,6 +61,44 @@ fn version_prints_crate_version_and_exits_zero() {
     );
 }
 
+/// DAE-08 (#304)：`--version` 的输出前缀是**桌面壳的探活判据**，不是文案。
+///
+/// 桌面壳在注册开机自启之前会跑一次 `ppf-daemon --version`，用这个前缀确认
+/// 「这确实是我们的 daemon」（DESK-29 / #268）：
+///
+/// ```text
+/// apps/desktop/src-tauri/src/lib.rs
+///   const DAEMON_VERSION_MARKER: &str = "P-Pass daemon";
+/// ```
+///
+/// **改 `main.rs` 里那句 `println!("P-Pass daemon {}", ...)` 等于改桌面壳的
+/// 探活判据**：壳会开始把好的 daemon 判成坏的，向导第 3 步「设为常驻服务」
+/// 对所有人失败。错误方向是安全的（向导明确报错，不是静默放行），但 CI 里
+/// 没有任何 job 会跑向导——所以这条断言就是那个耦合关系唯一的守卫。
+///
+/// 真要改文案，两边一起改，别只改一边。
+///
+/// 为什么断言前缀而不是整行相等：版本号那半会被 `PPF_DAEMON_VERSION` /
+/// `PPF_BUILD_VERSION` 覆盖（这也正是桌面壳刻意不比对版本号的原因）。
+/// 钉死整行会造出一个隔三差五自己红的判据；前缀才是真正的契约。
+#[test]
+fn version_prefix_is_the_desktop_probe_contract() {
+    let out = daemon_bin()
+        .arg("--version")
+        .output()
+        .expect("spawn daemon --version");
+    assert!(out.status.success(), "status: {:?}", out.status);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // 带尾空格：`println!("P-Pass daemon {}", ...)` 的实际形状。少了这个空格
+    // 就漏掉了「前缀后面紧跟版本号」这半，`P-Pass daemonX` 也能过。
+    assert!(
+        stdout.starts_with("P-Pass daemon "),
+        "--version 的 stdout 必须以 `P-Pass daemon ` 开头——\
+         apps/desktop/src-tauri/src/lib.rs 的 DAEMON_VERSION_MARKER 依赖它。\
+         实际输出:\n{stdout}"
+    );
+}
+
 #[test]
 fn unknown_flag_fails_with_usage_on_stderr() {
     let out = daemon_bin()
