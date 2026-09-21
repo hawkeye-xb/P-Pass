@@ -3,7 +3,12 @@
 #
 # Removes everything a normal user install leaves behind on this machine:
 #   1. HKCU autostart Run key (Software\Microsoft\Windows\CurrentVersion\Run\P-Pass)
-#   2. %APPDATA%\P-Pass  (platform data_dir: config.toml, ipc.token, keys\ DPAPI blob)
+#   2. The platform data dir (config.toml, logs\, keys\ DPAPI blob) in BOTH
+#      locations, because DESK-24 (#173) moved it:
+#        - %LOCALAPPDATA%\com.p-pass.desktop   <- current
+#        - %APPDATA%\P-Pass                    <- legacy (pre-#173 installs)
+#      plus any com.p-pass.desktop.migrating-* staging dir left behind by an
+#      interrupted move.
 #   3. The photo library directory and its .ppf/ sidecar (identity.key, blobs,
 #      staging, thumbs, index.db) - ONLY if --LibraryDir is given or the
 #      default "<Pictures>\P-Pass 家庭照片库" exists; never guesses beyond that.
@@ -101,9 +106,31 @@ if ($runVal) {
 }
 Say ''
 
-# --- 3. %APPDATA%\P-Pass (platform data_dir: config.toml, ipc.token, keys\) ---
-$appDataDir = Join-Path $env:APPDATA 'P-Pass'
-Remove-Target -Path $appDataDir -Label 'APPDATA data_dir (config.toml, ipc.token, keys\)'
+# --- 3. Platform data dir, BOTH locations (DESK-24 #173) ---
+# The current one is %LOCALAPPDATA%\com.p-pass.desktop; installs made before
+# #173 still have %APPDATA%\P-Pass, and crates/platform keeps using that old
+# location until the move actually succeeds - so a reset that only wiped one
+# of them would leave the app resurrectable from the other.
+#
+# NOTE: the current dir also holds EBWebView (Tauri's webview profile). Wiping
+# it is intentional - this script exists to produce a clean re-test, and a
+# stale webview profile can mask first-run behaviour.
+$currentDataDir = Join-Path $env:LOCALAPPDATA 'com.p-pass.desktop'
+Remove-Target -Path $currentDataDir -Label 'LOCALAPPDATA data_dir (config.toml, logs\, keys\, EBWebView\)'
+
+$legacyDataDir = Join-Path $env:APPDATA 'P-Pass'
+Remove-Target -Path $legacyDataDir -Label 'legacy APPDATA data_dir, pre-#173 (config.toml, logs\, keys\)'
+
+# Staging dirs from an interrupted move (crates/platform/src/data_migration.rs
+# names them "<data dir>.migrating-<pid>", as siblings of the data dir).
+$staging = @(Get-ChildItem -Path $env:LOCALAPPDATA -Directory -Filter 'com.p-pass.desktop.migrating-*' -ErrorAction SilentlyContinue)
+if ($staging.Count -eq 0) {
+    Say '[SKIP] no interrupted-migration staging dir found'
+} else {
+    foreach ($d in $staging) {
+        Remove-Target -Path $d.FullName -Label 'interrupted migration staging dir'
+    }
+}
 Say ''
 
 # --- 4. Photo library + .ppf sidecar ---

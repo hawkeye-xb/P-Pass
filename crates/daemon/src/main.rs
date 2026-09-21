@@ -40,6 +40,25 @@ async fn main() -> anyhow::Result<()> {
     let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
     let eof_tx = if ephemeral { Some(eof_tx) } else { None };
 
+    // DESK-24 (#173)：数据目录搬家必须排在**所有**读 data dir 的动作之前，
+    // 包括下面这段日志初始化——平台默认日志文件的路径就是从 data dir 算出
+    // 来的。此刻 tracing 还没起来，所以这里只拿结果，等它起来再记
+    // （见 `.init()` 之后那几行）。
+    //
+    // `PPF_DATA_DIR` 设了就不搬：那是场景脚本 / `just dev-daemon` 用来隔离
+    // 一次性 daemon 的开关，一个临时实例顺手把用户真实的 Roaming 目录搬走
+    // 属于越权。真实 daemon 不设这个变量。
+    let pinned_data_dir = std::env::var_os("PPF_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty());
+    let data_dir_migration = match pinned_data_dir {
+        Some(_) => None,
+        None => {
+            use platform::PlatformAdapter as _;
+            Some(platform::adapter().migrate_legacy_data_dir())
+        }
+    };
+
     // Log to stderr; level via RUST_LOG (default info). 狗粮机排障的眼睛.
     // NET-02: DedupGuard 折叠重复行 + 给这次运行的写入量设上限——
     // 8/26 真机实锤 relay 握手失败 7 分钟写了 92211 行/73MB，见
@@ -76,9 +95,8 @@ async fn main() -> anyhow::Result<()> {
             // 不跟着走就会写进用户真实日志文件）与平台约定。
             // config.toml 里的 data_dir **无法**在这里被尊重，是鸡生蛋，
             // 属已知限制。
-            let base = std::env::var_os("PPF_DATA_DIR")
-                .map(std::path::PathBuf::from)
-                .filter(|p| !p.as_os_str().is_empty())
+            let base = pinned_data_dir
+                .clone()
                 .unwrap_or_else(|| platform::adapter().data_dir());
             match platform::adapter().default_log_file(&base) {
                 Some(path) => match daemon::log_guard::DedupGuard::for_file(&path) {
@@ -103,6 +121,17 @@ async fn main() -> anyhow::Result<()> {
         .with_ansi(false)
         .with_writer(log_writer)
         .init();
+
+    // DESK-24 (#173)：搬家发生在日志之前，到这儿才有地方记它。
+    // **用户的数据换过位置**这件事必须在日志里留痕，否则事后查「我的配置
+    // 哪去了」只能靠猜。没搬成 / 只搬了一半是 warn，不是 info。
+    if let Some(outcome) = data_dir_migration {
+        if outcome.is_warning() {
+            tracing::warn!("{outcome}");
+        } else if !outcome.is_quiet() {
+            tracing::info!("{outcome}");
+        }
+    }
 
     // Default config file + data dir follow the platform convention
     // (~/Library/Application Support/P-Pass on macOS) — a first launch

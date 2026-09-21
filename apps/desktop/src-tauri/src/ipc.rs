@@ -138,9 +138,11 @@ pub fn read_config_data_dir(dir: &Path) -> Option<String> {
 /// Where to look for a daemon's ipc.token, in order.
 ///
 /// T-042b: the platform data dir comes from `platform::adapter().data_dir()`
-/// (macOS: ~/Library/Application Support/P-Pass; Windows: %APPDATA%\P-Pass)
-/// instead of a hardcoded macOS-only path — the token discovery fix must
-/// work on Windows too.
+/// (macOS: ~/Library/Application Support/P-Pass; Windows:
+/// %LOCALAPPDATA%\com.p-pass.desktop — DESK-24 #173 moved it off roaming
+/// %APPDATA%, and the adapter keeps returning the old location until the
+/// move actually succeeds) instead of a hardcoded macOS-only path — the
+/// token discovery fix must work on Windows too.
 pub fn token_candidates() -> Vec<PathBuf> {
     use platform::PlatformAdapter as _;
     let data_dir = platform::adapter().data_dir();

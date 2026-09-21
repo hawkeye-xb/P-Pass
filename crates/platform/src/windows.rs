@@ -5,7 +5,9 @@
 //! - Awake: `SetThreadExecutionState(ES_SYSTEM_REQUIRED|ES_CONTINUOUS)`
 //!   held RAII-style; drop restores `ES_CONTINUOUS`.
 //! - Keys: DPAPI (`CryptProtectData`/`CryptUnprotectData`), blob stored
-//!   in the data dir — decryptable only by this Windows user.
+//!   in the data dir — decryptable only by this Windows user **on this
+//!   machine**. DESK-24 (#173): that is precisely why the data dir must
+//!   live under `%LOCALAPPDATA%` and never under roaming `%APPDATA%`.
 //! - Power hint: `powercfg /query` through the shared pure parser.
 //!
 //! Compile-checked cross-platform in CI (`cargo check --target
@@ -18,6 +20,37 @@ use crate::{AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Res
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "P-Pass";
+
+/// DESK-24 (#173)：数据目录在 `%LOCALAPPDATA%` 下的名字。
+///
+/// 取自 `apps/desktop/src-tauri/tauri.conf.json` 的 `identifier`，不是随手
+/// 起的：`%LOCALAPPDATA%\<identifier>` 已经是本应用的本机数据根目录——
+/// Tauri 的网页视图数据 `EBWebView` 现在就在里面，NSIS 的
+/// `deleteAppDataOnUninstall` 指的也是它。用它，「应用数据」在我们代码和
+/// 打包器眼里是同一个意思。
+///
+/// ⚠️ **不许改成 `P-Pass`。** 那是安装程序自己的目录，实证：
+/// `HKCU\...\Uninstall\P-Pass` 的 `InstallLocation` =
+/// `C:\Users\<user>\AppData\Local\P-Pass`，里面是三个 exe 加卸载程序。
+/// 用户数据不许用安装程序拥有的目录来定义——卸载的清理范围会和用户数据
+/// 焊死；而且 `nsis.installMode` 哪天从 currentUser 改成 perMachine，
+/// `$INSTDIR` 就变成 `C:\Program Files\P-Pass`，普通用户根本写不进去。
+const DATA_DIR_NAME: &str = "com.p-pass.desktop";
+
+/// 搬家前的老位置：`%APPDATA%`（= Roaming）下的 `P-Pass`。
+///
+/// 为什么是错的（DESK-24 #173）：Roaming 在域环境里会被系统复制到用户登录
+/// 的其他机器上，而这个目录里装的**全是**不该跟着跑的东西——只增不减的
+/// 日志、内容是本机绝对路径的 `config.toml`、以及（T-071 之后的）只有本机
+/// 能解开的 DPAPI 密文。
+fn legacy_data_dir() -> PathBuf {
+    PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into())).join("P-Pass")
+}
+
+/// 现行位置：`%LOCALAPPDATA%\com.p-pass.desktop`。
+fn current_data_dir() -> PathBuf {
+    PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into())).join(DATA_DIR_NAME)
+}
 
 pub struct WindowsAdapter;
 
@@ -190,8 +223,18 @@ impl PlatformAdapter for WindowsAdapter {
         // Tauri notification carries this in T-041; no-op until then.
     }
 
+    /// DESK-24 (#173)：**生效的**数据目录。老目录还在就是老目录，搬完了
+    /// 才是新目录——判据见 [`crate::data_migration::resolve`]。
+    ///
+    /// 不写死返回新位置，是为了让「搬迁失败」退化成「保持原样」，而不是
+    /// 指着一个空目录让 daemon 建一个崭新的空索引。
     fn data_dir(&self) -> PathBuf {
-        PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into())).join("P-Pass")
+        crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
+    }
+
+    /// DESK-24 (#173)：见 [`crate::PlatformAdapter::migrate_legacy_data_dir`]。
+    fn migrate_legacy_data_dir(&self) -> crate::DataDirMigration {
+        crate::data_migration::migrate(&legacy_data_dir(), &current_data_dir())
     }
 
     /// DAE-05：`GetDiskFreeSpaceExW`。free 取 `lpFreeBytesAvailableToCaller`
@@ -235,8 +278,10 @@ impl PlatformAdapter for WindowsAdapter {
 
     /// DEVLOG-02：Run 键启动的 daemon，其 stderr 唯一去处就是 Windows 自动
     /// 分配的那个控制台——而 release 已经不再分配它，所以必须有确定的落盘
-    /// 位置。放在生效的 data dir 下，与 DPAPI blob、索引同域：data_dir 将来
-    /// 若从 Roaming 迁到 Local（DESK-24），日志跟着一起搬，不必改两处。
+    /// 位置。放在生效的 data dir 下，与 DPAPI blob、索引同域。
+    ///
+    /// DESK-24 (#173) 那次从 Roaming 迁到 Local，这里**一个字都没改**——
+    /// 日志路径是从入参 data dir 算出来的，data dir 换地方它就跟着走。
     fn default_log_file(&self, data_dir: &Path) -> Option<PathBuf> {
         Some(data_dir.join("logs").join("daemon.log"))
     }
@@ -247,7 +292,8 @@ impl PlatformAdapter for WindowsAdapter {
     /// 掉——也就是说这里返回 `Unsupported` **与迁移前的行为完全一致**，
     /// 只是从「代码里看不见」变成「契约里写明」。
     ///
-    /// 现状下的实际风险有限：身份密钥落在 `%APPDATA%` 之下，用户配置目录
+    /// 现状下的实际风险有限：身份密钥落在 `%LOCALAPPDATA%` 之下（DESK-24
+    /// #173 之前是 `%APPDATA%`），用户配置目录
     /// 本身的 ACL 已经限定到当前用户。但那是**依赖默认值**，不是显式收紧，
     /// 所以口径是缺口而不是 NotApplicable。要真做得走 `SetNamedSecurityInfo`
     /// 重写 DACL。
@@ -724,6 +770,113 @@ pub fn taskkill_verdict(
 /// QA-09 迁移（#211）：这组用例原来住在
 /// `apps/desktop/src-tauri/src/lib.rs`，随被测函数一起搬过来。
 /// 判据一个字没改，只是换了地方——搬家途中丢掉判别力是本次迁移最大的风险。
+#[cfg(test)]
+mod desk24_data_dir_tests {
+    use super::*;
+
+    fn env_dir(var: &str) -> PathBuf {
+        PathBuf::from(std::env::var(var).unwrap_or_else(|_| ".".into()))
+    }
+
+    /// 本卡的全部目的：数据目录必须在 Local 下，不在 Roaming 下。
+    #[test]
+    fn the_current_data_dir_is_local_and_the_legacy_one_was_roaming() {
+        assert!(
+            current_data_dir().starts_with(env_dir("LOCALAPPDATA")),
+            "现行数据目录必须在 %LOCALAPPDATA% 下：{}",
+            current_data_dir().display()
+        );
+        assert!(
+            legacy_data_dir().starts_with(env_dir("APPDATA")),
+            "遗留位置的定义就是 %APPDATA%（Roaming）：{}",
+            legacy_data_dir().display()
+        );
+        assert_ne!(
+            legacy_data_dir(),
+            current_data_dir(),
+            "两者相等的话整张卡就没有意义了"
+        );
+    }
+
+    /// **反证：数据目录不许踩进安装程序的地盘。**
+    ///
+    /// NSIS 单用户安装的 `$INSTDIR` 就是 `%LOCALAPPDATA%\P-Pass`——注册表
+    /// `HKCU\...\Uninstall\P-Pass` 的 `InstallLocation` 实证，里面是
+    /// `p-pass-desktop.exe` / `ppf-daemon.exe` / `uninstall.exe`。
+    ///
+    /// 「搬到 Local 去」最顺手的写法恰好就是那个错答案（把 `APPDATA` 改成
+    /// `LOCALAPPDATA`、`P-Pass` 原样留着），所以这条必须由测试挡着。
+    #[test]
+    fn the_data_dir_must_not_be_the_installer_directory() {
+        let install_dir = env_dir("LOCALAPPDATA").join("P-Pass");
+        assert_ne!(
+            current_data_dir(),
+            install_dir,
+            "那是安装目录（NSIS $INSTDIR），用户数据不许放进去"
+        );
+    }
+
+    /// 目录名与 `tauri.conf.json` 的 `identifier` 是同一个字符串——那不是
+    /// 巧合，是选它的理由（`%LOCALAPPDATA%\<identifier>` 已经是本应用的
+    /// 本机数据根目录，Tauri 的 `EBWebView` 就在里面）。写死在这里，改名
+    /// 时至少有一条测试会开口。
+    #[test]
+    fn the_directory_name_is_the_bundle_identifier() {
+        assert_eq!(DATA_DIR_NAME, "com.p-pass.desktop");
+        assert_eq!(current_data_dir().file_name().unwrap(), DATA_DIR_NAME);
+    }
+
+    /// 卡面验收标准第 3 条点名的那条性质：**DPAPI 密文搬了位置照样解得开。**
+    ///
+    /// 用的是真的 `CryptProtectData` / `CryptUnprotectData`，不是模拟——
+    /// DPAPI 的用户态密钥挂在 Windows 账户上，与密文文件躺在哪个目录毫无
+    /// 关系，所以同机搬家不影响解密。**跨机器才解不开**，而那正是本卡要
+    /// 把数据目录挪出漫游目录的理由。
+    ///
+    /// 今天产品代码还没有一处调 `key_store()`（身份密钥是 data_dir 里的
+    /// 明文文件，等 T-071 才进系统密钥仓），所以真机上没有密文可验。
+    /// 这条把性质本身钉死，等密文真落地时不必回头补。
+    #[test]
+    fn a_dpapi_blob_still_decrypts_after_its_directory_moves() {
+        let tmp = tempfile::tempdir().unwrap();
+        let legacy_keys = tmp.path().join("Roaming").join("P-Pass").join("keys");
+        let current = tmp.path().join("Local").join("com.p-pass.desktop");
+        let secret = b"32-bytes-of-pretend-device-key!!";
+
+        let before = DpapiStore {
+            dir: legacy_keys.clone(),
+        };
+        before.store("device-key", secret).unwrap();
+        assert!(legacy_keys.join("device-key.dpapi").is_file());
+
+        // 搬家：同一台机器、同一个 Windows 用户，换个目录。
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::rename(&legacy_keys, current.join("keys")).unwrap();
+
+        let after = DpapiStore {
+            dir: current.join("keys"),
+        };
+        assert_eq!(
+            after.load("device-key").unwrap().as_deref(),
+            Some(&secret[..]),
+            "同机搬家之后必须还解得开"
+        );
+    }
+
+    /// 适配器返回的是**生效**目录：两者都不存在（全新安装）时应当是新位置。
+    /// 有遗留目录时的分支由 `data_migration` 的用例覆盖，那边能造目录。
+    #[test]
+    fn a_fresh_machine_resolves_straight_to_the_new_location() {
+        if legacy_data_dir().is_dir() {
+            // 开发机上真有老目录（本卡的验收人机器就是），那这条不适用：
+            // 此时 data_dir() 返回老目录才是对的。断言那个。
+            assert_eq!(WindowsAdapter::new().data_dir(), legacy_data_dir());
+            return;
+        }
+        assert_eq!(WindowsAdapter::new().data_dir(), current_data_dir());
+    }
+}
+
 #[cfg(test)]
 mod desk25_taskkill_tests {
     use super::*;

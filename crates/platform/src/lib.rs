@@ -10,6 +10,11 @@
 
 use std::path::PathBuf;
 
+// DESK-24 (#173)：数据目录搬家。整个模块**不在 cfg 里**——里面全是
+// `rename` / `read_dir`，没有一行平台专属代码，三条 lane 都跑得到它的测试。
+// 只有 Windows 有遗留位置要搬，那部分知识在 `windows.rs`。
+mod data_migration;
+
 #[cfg(target_os = "macos")]
 mod macos;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
@@ -21,6 +26,8 @@ mod windows;
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;
+
+pub use data_migration::DataDirMigration;
 
 #[cfg(target_os = "macos")]
 pub use macos::MacosAdapter;
@@ -155,7 +162,27 @@ pub trait PlatformAdapter: Send + Sync {
     fn power_hint(&self) -> PowerHint;
     // 系统集成
     fn notify(&self, title: &str, body: &str);
+    /// 本平台**生效的**数据目录。
+    ///
+    /// DESK-24 (#173)：Windows 上这个值不是常量——`%APPDATA%`（Roaming）时代
+    /// 的老目录只要还在，返回的就是它，搬完了才换成新位置。这样「搬迁失败」
+    /// 退化成「保持原样」，而不是指着一个空目录（见 [`DataDirMigration`]）。
+    /// 想真正换过去，调用方得先调 [`Self::migrate_legacy_data_dir`]。
     fn data_dir(&self) -> PathBuf;
+
+    /// DESK-24 (#173)：把遗留位置的数据搬到 [`Self::data_dir`] 现在该在的地方。
+    ///
+    /// **在任何人读 data dir 之前调一次**，进程生命周期里一次就够。daemon 那边
+    /// 还得排在日志初始化**之前**——日志文件路径本身就是从 data dir 算出来的。
+    ///
+    /// 不返回 `Result`：搬迁失败不得导致启动失败（卡面第 2 条），所以类型上
+    /// 就没给出「炸掉」这个选项，失败表达成 [`DataDirMigration::Deferred`]。
+    ///
+    /// 默认实现 = 本平台**没有遗留位置这回事**（macOS 的 Application Support、
+    /// Linux 的 XDG 目录当初就选对了）。这不是缺口。
+    fn migrate_legacy_data_dir(&self) -> DataDirMigration {
+        DataDirMigration::NothingToDo
+    }
     /// DEVLOG-02：daemon 在 `PPF_LOG_FILE` 未设时的**平台默认**日志文件。
     ///
     /// macOS 返回 `None`：launchd plist 的 `StandardErrorPath` 已经把 stderr
