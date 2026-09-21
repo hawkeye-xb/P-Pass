@@ -683,6 +683,25 @@ fn sidecar_daemon_version() -> Option<String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // DESK-24 (#173)：数据目录搬家，排在**一切**读 data dir 的动作之前——
+    // 包括 setup 里的 start_event_stream（它会走 token_candidates() →
+    // data_dir()）。搬家是幂等的：daemon 那边多半已经在登录时搬过了，
+    // 这里再调一次只会得到「无遗留位置需要搬迁」。
+    //
+    // 桌面壳为什么也要调：升级后用户先开 App、daemon 还没被拉起来的那条
+    // 路径上，第一个读 data dir 的人是它。
+    //
+    // ⚠️ 桌面壳没有日志落盘（release 是 GUI 子系统，stderr 无处可去），
+    // 所以这里的 eprintln 只在 `just dev-desktop` 时看得见。**搬家的权威
+    // 记录在 daemon 日志里**，那边有 DedupGuard 落盘。
+    {
+        use platform::PlatformAdapter as _;
+        let outcome = platform::adapter().migrate_legacy_data_dir();
+        if !outcome.is_quiet() {
+            eprintln!("{outcome}");
+        }
+    }
+
     tauri::Builder::default()
         // DESK-21：单实例守卫必须是**第一个**注册的插件——它要在其余插件和
         // setup 跑起来之前就判定「我是不是第二个」，晚注册就白费了。
