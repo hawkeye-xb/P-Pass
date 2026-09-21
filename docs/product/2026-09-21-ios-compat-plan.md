@@ -36,8 +36,20 @@ Photos.swiftmodule/arm64e-apple-ios.swiftinterface:39
     func process() -> PHBackgroundResourceUploadProcessingResult
     func notifyTermination() }
 ```
-扩展的职责只是**登记任务**；字节由系统在我们进程之外发出，我们拿不到 socket。
+扩展的职责只是**登记任务**；字节由系统在我们进程之外发出，我们拿不到 socket。目的地是任意 HTTP 端点，**不是 iCloud**——这条通道本来就是开给第三方备份 App 的。
+
+两条附带约束，同样来自头文件：
+```
+PHPhotoLibrary.h:85   要开启后台上传，必须同时具备 full library access
+                      并注册扩展点 "com.apple.photos.background-upload"
+PHPhotoLibrary.h:79   uploadJobExtensionEnabled            // 宿主 App 据此判断通道是否可用
+PHPhotoLibrary.h:90   setUploadJobExtensionEnabled:error:  // 建 job 之前必须先调
+```
+**「部分照片」授权下这条通道直接不可用**——这与 MOB-02/MOB-94 已定的部分授权语义正面相关：Android 上部分授权只是范围变小，iOS 上部分授权等于后台备份能力整个消失，首页表达必须说清这件事。
+
 → **这是 iOS 与 Android 的根本分叉点**，不是一个实现细节。Android 的 FGS + WorkManager 能在后台跑我们自己的 iroh 传输；iOS 上「后台自动备份」与「走 iroh」二选一。第三节给出路线。
+
+**为什么有了这条通道仍然要 iroh**：它只搬「一个资源的字节」，且要求目的地是一个够得着的 HTTP 端点。而我们的对端是用户自己的桌面——没有公网地址、没有域名与证书、在 NAT 后面。iroh 解决的是**寻址/打洞、对端身份、加密**，不是「怎么搬字节」；配对、时间线查询、缩略图、`flow.status`/`suspend`、诊断这些双向控制面，这条通道一件也不管。把 iroh 从 iOS 拿掉意味着自己重造 iroh 解决的那部分难题，并且远程（不同网段）场景直接消失。
 
 **F3｜发现水位有对应物，但多一条 Android 从来不需要的兜底路径。**
 ```
@@ -102,7 +114,7 @@ B 的未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论前，
 
 **D1 的两个派生风险（`IOS-01` 必须实测，不许推断）**
 
-- **D1-a｜免费个人团队能否配 App Group。** 计划里 `IOS-12` 要求账本从第一天就落在 App Group 容器，而背景上传扩展与主 App 共享状态**只能**走 App Group。若免费团队不提供这项能力，I5 的 B 半边在补上会员之前无法验证，`IOS-03` 的第 2–5 问也跟着卡住。测法：Xcode 建一个带 App Groups capability 的空 target，看自动签名是否通过，回贴原始报错。
+- **D1-a｜免费个人团队能否配 App Group。** 计划里 `IOS-12` 要求账本从第一天就落在 App Group 容器，而背景上传扩展与主 App 共享状态**只能**走 App Group。若免费团队不提供这项能力，I5 的 B 半边在补上会员之前无法验证，`IOS-03` 的第 2–6 问也跟着卡住。测法：Xcode 建一个带 App Groups capability 的空 target，看自动签名是否通过，回贴原始报错。
 - **D1-b｜7 天调试证书与 G5 的 24h 放置冲突。** 免费签名的 App 装机后约 7 天过期。G5 要求「真机放置 24h 不开 App」，窗口内可完成，但连续多轮观测会被反复重装打断，重装是否清空账本/水位要在 `IOS-01` 里一并确认（清空则每轮观测都从零开始，G5 的判据要改写）。
 
 ## 六、工作分解、卡号与门禁
@@ -122,12 +134,13 @@ B 的未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论前，
   1. 模拟器上 `process()` 到底会不会被系统调度。能，则后续几问的一部分可以在模拟器上先跑，G1 不必全压在真机上；不能，则 G1 完全依赖 D1。
   2. 目的地写成 LAN 明文 `http://192.168.x.x:port` 时，系统上传器是否放行（ATS 由谁裁决、我们的 Info.plist 例外是否作用于系统进程）；自签 HTTPS 是否放行。
   3. 系统上传器是否受「本地网络」权限约束、是否需要用户授权。
-  4. `jobLimit` 实测值；`process()` 在真机上的实际触发频率与前置条件（充电/闲置/网络）。
-  5. `responseHeaderFields` 能否稳定回传一个 64 hex 的完成凭据。
-  6. token 过期（3105）能否人工构造，或只能靠长时间放置观察。
+  4. 资源字节以什么形状进入请求：裸 body 还是 multipart？`Content-Type` 由谁定？能否自定义 HTTP 方法与请求头（lease token 要从这里带过去）？大文件是否分块、能否断点续传？
+  5. `jobLimit` 实测值；`process()` 在真机上的实际触发频率与前置条件（充电/闲置/网络）。
+  6. `responseHeaderFields` 能否稳定回传一个 64 hex 的完成凭据。
+  7. token 过期（3105）能否人工构造，或只能靠长时间放置观察。
 - `IOS-04` spike 结论文档 + 路线 C 的最终裁决（B 半边留下 / 砍掉 / 降级为「仅同网段」）。
 
-**Gate G1**：六问逐条有证据（抓包/日志/截图；除第 1 问外全部来自真机），不接受「应该可以」。B 半边被否 → 计划回落到路线 A，`IOS-1x` 全部改写为前台语义，且产品一页纸必须写明 iOS 不承诺后台自动备份。
+**Gate G1**：七问逐条有证据（抓包/日志/截图；除第 1 问外全部来自真机），不接受「应该可以」。B 半边被否 → 计划回落到路线 A，`IOS-1x` 全部改写为前台语义，且产品一页纸必须写明 iOS 不承诺后台自动备份。
 
 ### I2｜传输与 FFI（G0 后即可并行开工，不等 G1）
 
@@ -141,7 +154,7 @@ B 的未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论前，
 
 - `IOS-08` PhotoKit 相册枚举 → `MediaScanner.Bucket` 对位（含封面、计数、空名相册）。
 - `IOS-09` `PHPersistentChangeToken` 水位 + **3105 全量重扫兜底**；契约测试写成对真实 token 序列化往返的 XCTest。
-- `IOS-10` `PHAuthorizationStatus.limited` 与 MOB-02/MOB-94 已定的部分授权语义对齐——**沿用既有结论，不重新讨论**：拿不到完整权限时首页说实话，不盖「都存好了」的章。
+- `IOS-10` `PHAuthorizationStatus.limited` 与 MOB-02/MOB-94 已定的部分授权语义对齐——**沿用既有结论，不重新讨论**：拿不到完整权限时首页说实话，不盖「都存好了」的章。**iOS 多一层**：部分授权下后台上传通道整个不可用（`PHPhotoLibrary.h:85` 要求 full library access），首页必须把「现在只能前台备份」说出来，不能只表达范围变小。
 - `IOS-11` `PHAssetResourceManager` 取原始字节 + `isNetworkAccessAllowed` 策略（按 D4 结论实现）。
 
 **Gate G3**：真机上「新增一张照片 → 水位前移 → 出现在待传列表」闭环；人为构造 token 失效后，重扫收敛且不产生重复传输（靠内容哈希证明，不靠计数）。
