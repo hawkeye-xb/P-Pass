@@ -77,6 +77,8 @@ import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.disableAutoBackup
 import com.hawkeyexb.ppass.backup.enableAutoBackup
 import com.hawkeyexb.ppass.backup.suspendAutoBackupUntilAuthorized
+import com.hawkeyexb.ppass.backup.suspendAutoBackupForPairingChange
+import com.hawkeyexb.ppass.backup.restoreAutoBackupAfterRepair
 import com.hawkeyexb.ppass.backup.BackgroundBackupState
 import com.hawkeyexb.ppass.backup.backgroundBackupStateOf
 import com.hawkeyexb.ppass.backup.triggerUserPresentBackup
@@ -529,8 +531,20 @@ fun PPassApp() {
                         // 相册选择也还在——再让人把 onboarding 重走一遍是白让
                         // 他干一遍活。识别出来就直接回首页，让对账去把差异补上。
                         if (hasExistingLedgerFor(outcome.pairing)) {
+                            // MOB-93: 这条路跳过 onboarding，所以恢复自动
+                            // 备份这件事没有别人会做——断开时留下的意图在
+                            // 这里兑现。不做的话，重连之后手机上一个自动
+                            // 生产者都没有，而且不吭声。
+                            restoreAutoBackupAfterRepair(
+                                context,
+                                backgroundAuthorization.isGranted(),
+                            )
                             screen = Screen.Home(outcome.pairing)
                         } else {
+                            // MOB-93: 换一台新电脑 = 新的信任关系，后台备份
+                            // 要重新问一次。清意图放在这里（而不是断开时），
+                            // 正是原注释所说的「the next onboarding」。
+                            AutoBackupPrefs(context.filesDir).setRequested(false)
                             enterBucketPicker(outcome.pairing, firstTime = true)
                         }
                     }
@@ -1064,12 +1078,17 @@ private fun clearLocalPairing(
     // （电脑端删过库时 M 虚高，首屏是错的）。
     clearConfirmedCacheForRemote(context.filesDir, pairing.daemonNodeId)
     WatermarkStore(context.filesDir).save(0)
-    // A new pairing starts from a new user's choice. Do not carry the prior
-    // pairing's automatic-backup intent into the next onboarding.
-    AutoBackupPrefs(context.filesDir).apply {
-        setRequested(false)
-        setEnabled(false)
-    }
+    // MOB-93: 停生产者，**留意图**。
+    //
+    // 这里原先把 userRequested 一起清掉，注释写的是「下一轮 onboarding 会
+    // 重新问」——那在 #257 之前成立：每一次重连都必走 onboarding。#257 加了
+    // 快速重连（连回以前连过的电脑直接回首页）之后，那个"重新问"不再必然
+    // 发生，意图就有去无回，5 小时周期（兜底对账的唯一载体）、前台补捞、
+    // 相册变更监听三条链静默留在关闭态。
+    //
+    // 现在按交互实际的样子分工：断开只停生产者；**换一台新电脑**时由
+    // onboarding 入口清掉意图（见下面 PairOutcome.Ok 分支），重新问一次。
+    suspendAutoBackupForPairingChange(context.filesDir)
     val work = WorkManager.getInstance(context)
     listOf(BACKUP_WORK_NAME, CATCHUP_WORK_NAME, PROCESS_CATCHUP_WORK_NAME, MANUAL_BACKUP_WORK_NAME)
         .forEach(work::cancelUniqueWork)
