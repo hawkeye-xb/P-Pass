@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[features]
+# QA-09 迁移（#211 / #287）：只给测试用的平台能力（造「指向目录的链接」）。
+# 默认关闭 —— 关着时 src/test_support.rs 整个不参与编译，产品二进制里不会
+# 多出任何东西。消费方在 [dev-dependencies] 里开它。
+test-support = []
+
 [dependencies]
 thiserror.workspace = true
 

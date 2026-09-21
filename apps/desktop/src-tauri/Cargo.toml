@@ -37,3 +37,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dev-dependencies]
 tempfile = "3"
+# #287：测试里要造「指向目录的链接」来验 MOB-47 契约，各系统机制不同。
+# 这个能力在 platform crate 的 test-support feature 里（架构红线 B.2：
+# 平台分叉只许待在那儿）。**只在这里开**——上面那条普通依赖不开，所以
+# 产品构建里它不参与编译。
+platform = { path = "../../../crates/platform", features = ["test-support"] }
