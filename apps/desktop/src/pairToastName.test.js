@@ -60,8 +60,20 @@ describe("DEV-06 配对结果提示的名字来源", () => {
     expect(name).not.toContain("a".repeat(8));
   });
 
-  it("横幅那条路不带 item（App.svelte:1265-1266 老调用方）：回退 daemon 回的名字", () => {
-    // 队首语义——daemon 自己挑的那台，前端手上没有对应的 pending 行。
+  it("横幅那条路（App.svelte:1265-1266 不带 item）同样说桌面上的名字", () => {
+    // 横幅走 daemon 队首语义，但队首前端也知道：confirm() 在两个定位参数
+    // 都缺时取 queue 的 0 号（ipc.rs:1142），pending_summary 遍历的是同一
+    // 个 queue、同一个顺序（ipc.rs:1178-1183）。横幅自己显示的就是
+    // pendingList[0].name（App.svelte:1259）——toast 必须跟它同一个名字，
+    // 否则同一屏又是两个名字，正是本卡要消掉的那个症状。
+    const item = undefined; // 横幅按钮 onclick={() => confirmPair(true)}
+    const pendingList = [renamed];
+    const name = pairResultName(item ?? pendingList[0], renamedResp);
+    expect(t("ui.pair_allowed", { name })).toBe("已允许「客厅的手机」加入");
+  });
+
+  it("回执是最后兜底，不是主来源", () => {
+    // 列表取不到（老 daemon / 刚好被刷空）才轮到 confirm 的回执。
     expect(pairResultName(undefined, renamedResp)).toBe("SM-S9210");
     expect(pairResultName(null, { device: "SM-S9210" })).toBe("SM-S9210");
     // 老 daemon 的 pending 只有字符串，normalize 成 { name }——照样能用。
@@ -82,12 +94,12 @@ const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8").repla
 );
 
 describe("DEV-06 接线", () => {
-  it("confirmPair 的 toast 走 pairResultName(item, r)，不再直接用 r.device", () => {
+  it("confirmPair 的 toast 走 pairResultName（行 item 优先、队首兜底），不再直接用 r.device", () => {
     const fn = app.slice(
       app.indexOf("async function confirmPair("),
       app.indexOf("async function revoke(")
     );
-    expect(fn).toContain("pairResultName(item, r)");
+    expect(fn).toContain("pairResultName(item ?? pendingList[0], r)");
     expect(fn).not.toContain("{ name: r.device }");
     expect(app).toContain("pairResultName");
   });

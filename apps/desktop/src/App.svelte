@@ -485,9 +485,15 @@
       });
       // DEV-06: 结果提示的名字以设备表为准。`r.device` 是队列里的自报名
       // （SM-S9210），弹窗标题用的却是 pending 行里 daemon 解析过的名字
-      // （客厅的手机）——同一次操作两个名字。pending 行优先，回执兜住横幅
-      // 那条不带 item 的老路。
-      const shown = pairResultName(item, r);
+      // （客厅的手机）——同一次操作两个名字。
+      //
+      // 横幅那两个按钮不带 item（走 daemon 队首语义），但队首前端也知道：
+      // `confirm()` 在 node_id/device_name 都缺时取 `queue` 的 0 号
+      // （ipc.rs:1142），而 `pending_summary` 遍历的就是同一个 `queue`、
+      // 同一个顺序（ipc.rs:1178-1183）——所以 `pendingList[0]` 正是要被
+      // 决定的那台，也正是横幅上已经显示着的那个名字（:1259）。
+      // `r.device` 留作最后兜底（老 daemon / 列表取不到）。
+      const shown = pairResultName(item ?? pendingList[0], r);
       flashMessage(
         accept ? t("ui.pair_allowed", { name: shown }) : t("ui.pair_denied", { name: shown }),
         accept ? "success" : "warning"
