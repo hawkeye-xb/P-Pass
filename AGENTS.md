@@ -58,6 +58,18 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
     它们不进必需列表，被跳过无害。
   - ⚠️ **任何 job 的 `name:` 都不许随手改**：`main` 的必需检查列表绑在名字上，
     改名 = 全部 PR 永久 Pending。改名和改分支保护必须在同一次操作里成对完成。
+  - ⚠️ **进必需列表的 job，名字必须是写死的常量，不许用 `matrix` 现算。**
+    `job 被 if: 跳过` 与 `name: xxx (${{ matrix.os }})` 这两件事**单独都对，
+    凑一块儿就废**：跳过时 GitHub 不展开 matrix，只汇报一条名叫
+    `xxx (${{ matrix.os }})` 的检查（模板原文），分支保护要的那几个名字一条
+    都不来 ⇒ 必需检查永久 Pending。#240 加 Windows 矩阵、#261 加按需跳过，
+    几小时内先后落地，探针 PR #271 才撞出来（纯文档 PR `BLOCKED`）。
+    **同一次跳过里，名字写死的 job 全都正常汇报 `skipped`，一个没漏**——
+    问题只出在「名字现算」这一个特征上。要跑多平台就拆成多个 job、`name:`
+    各写死，步骤抽进 `.github/actions/<x>/action.yml` 共享（`ci-desktop` 的
+    `desktop-linux` / `desktop-windows` 就是这么做的）。
+    composite action 里每个 `run` 步骤**必须**显式写 `shell:`，且 actionlint
+    默认不扫那个文件，语法错误要到 CI 真跑才暴露。
 - PR 开出后盯受影响域 CI 到结论，红了在同一分支上修，不留红 PR。
 - **带 GitHub MCP 的会话**（协作者账号 `690591397`）：自己把 PR 全程做完——
   推分支、开 PR（描述里逐项回接收尾检查）、盯 lane、squash 合并。
