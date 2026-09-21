@@ -75,10 +75,10 @@ echo "==> B.2: platform #[cfg] / cfg_attr / cfg!() isolation (platform crate onl
 #      attribute name is exempt: a cfg_attr carrying any OTHER attribute on
 #      a platform predicate still flags. Not file-based, not crate-based.
 #   3. Grandfathered existing forks, migration issue #211 (QA-09 #186 Q2/Q3):
-#        crates/daemon/src/ipc.rs          (unix socket vs named pipe, disk_stats)
-#        crates/daemon/src/log_guard.rs    (truncate_stderr unix/not-unix)
-#        crates/daemon/src/main.rs         (identity key 0o600, unix only)
-#        apps/desktop/src-tauri/src/lib.rs (19 self-written forks)
+#        apps/desktop/src-tauri/src/lib.rs (self-written forks)
+#      2026-09-21 销号：crates/daemon/ 那三个文件已清零（7 处分叉迁进
+#      crates/platform/，见 #211）。剩桌面壳一个，等 #171 落地与「仅测试
+#      搭建的平台门」定性之后再销。
 #      New platform forks anywhere MUST go through crates/platform/;
 #      adding to this list requires an issue decision.
 VIOLATIONS_B2=$(grep -rn --include='*.rs' \
@@ -86,7 +86,6 @@ VIOLATIONS_B2=$(grep -rn --include='*.rs' \
   "$ROOT/crates" "$ROOT/apps" \
   | grep -v 'crates/platform/' \
   | grep -v 'windows_subsystem' \
-  | grep -vE 'crates/daemon/src/(ipc|log_guard|main)\.rs:' \
   | grep -v 'apps/desktop/src-tauri/src/lib\.rs:' \
   || true)
 

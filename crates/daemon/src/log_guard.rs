@@ -121,25 +121,16 @@ impl BoundedSink {
     }
 }
 
-#[cfg(unix)]
+/// QA-09 迁移（#211）：原先按 unix / 非 unix 分成两个实现，unix 那半直接
+/// 操作 fd 2。现在 fd 级别的细节在
+/// `crates/platform/src/unix.rs`，这里只调用。
+///
+/// Windows 上适配器回 `Unsupported`——**已知缺口，没装作修好了**：计数器
+/// 照样清零（所以不会每行都重复触发），但底层文件不会真的变小。上面那道
+/// 「折叠重复行」才是所有平台共同的主防线。
 fn truncate_stderr() {
-    use std::os::fd::FromRawFd;
-    // fd 2 就是我们自己的 stderr——launchd/systemd 等把真正的 `.err`
-    // 文件 open() 之后 dup2 到 fd 2 才 exec 我们，所以对 fd 2
-    // set_len(0)+seek(0) 动的就是那个文件本身。ManuallyDrop：这只是
-    // 借用 fd 2 的视角，这里把它 drop 掉会把 stderr 从整个进程手里
-    // 关掉。
-    let mut file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(2) });
-    let _ = file.set_len(0);
-    let _ = io::Seek::seek(&mut *file, io::SeekFrom::Start(0));
-}
-
-#[cfg(not(unix))]
-fn truncate_stderr() {
-    // Windows 等平台：还没接 fd 级别的 truncate（需要 SetEndOfFile 之
-    // 类的 Win32 调用）。计数器照样清零（不会每行都重复触发这个分
-    // 支），但底层文件不会真的变小——已知缺口，不装作修好了。上面的
-    // 折叠才是所有平台共同的主防线。
+    use platform::PlatformAdapter as _;
+    let _ = platform::adapter().truncate_own_stderr();
 }
 
 /// 从一条已格式化的日志行里去掉行首的时间戳（唯一每次都会变化的部

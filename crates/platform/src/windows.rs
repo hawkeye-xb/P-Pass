@@ -181,6 +181,39 @@ impl PlatformAdapter for WindowsAdapter {
     fn default_log_file(&self, data_dir: &Path) -> Option<PathBuf> {
         Some(data_dir.join("logs").join("daemon.log"))
     }
+
+    /// QA-09 迁移（#211）：**没实现**，不是「不需要」。
+    ///
+    /// 迁移前 daemon 里那段 0o600 是 `#[cfg(unix)]`，Windows 上整块被编译
+    /// 掉——也就是说这里返回 `Unsupported` **与迁移前的行为完全一致**，
+    /// 只是从「代码里看不见」变成「契约里写明」。
+    ///
+    /// 现状下的实际风险有限：身份密钥落在 `%APPDATA%` 之下，用户配置目录
+    /// 本身的 ACL 已经限定到当前用户。但那是**依赖默认值**，不是显式收紧，
+    /// 所以口径是缺口而不是 NotApplicable。要真做得走 `SetNamedSecurityInfo`
+    /// 重写 DACL。
+    fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
+        let _ = path;
+        Ok(crate::Applied::Unsupported)
+    }
+
+    /// QA-09 迁移（#211）：**没实现**，与迁移前一致。
+    ///
+    /// fd 级别的截断在 Windows 上要走 `SetEndOfFile` 之类的 Win32 调用。
+    /// 计数器照样清零（不会每行都重复触发），但底层文件不会真的变小。
+    /// 日志洪水的主防线是「折叠重复行」，那道所有平台都有。
+    fn truncate_own_stderr(&self) -> crate::Applied {
+        crate::Applied::Unsupported
+    }
+
+    /// QA-09 迁移（#211）：**机制上不需要**，这不是缺口。
+    ///
+    /// Windows 侧的 IPC 端点是命名管道，内核对象，不在文件系统里留文件，
+    /// 所以不存在「被强杀的前任留下一个文件挡住 bind」这个问题。
+    fn remove_stale_ipc_endpoint(&self, name: &str) -> crate::Applied {
+        let _ = name;
+        crate::Applied::NotApplicable
+    }
 }
 
 /// Spawn `exec` detached, with no console window (equivalent to macOS's
@@ -386,6 +419,52 @@ mod dae05_volume_stats_tests {
         assert_eq!(
             a.volume_stats(std::path::Path::new(r"Q:\definitely-not-a-volume\dae05")),
             None
+        );
+    }
+}
+
+#[cfg(test)]
+mod qa09_migrated_capability_tests {
+    use super::*;
+
+    /// QA-09 迁移（#211）契约：Windows 上收紧权限是**已知缺口**，必须
+    /// 明说 `Unsupported`。
+    ///
+    /// 这条守的是口径而不是功能：谁哪天把它改成 `Ok(Applied::Done)` 来
+    /// 「让返回值好看」，这里必须红——静默什么都没做却报成功，正是本仓
+    /// 这一轮在修的那类缺陷。真做出来了要连这条测试一起改。
+    #[test]
+    fn restrict_to_owner_admits_it_is_unsupported() {
+        let a = WindowsAdapter::new();
+        let f = std::env::temp_dir().join("ppf-qa09-restrict.probe");
+        std::fs::write(&f, b"x").unwrap();
+        assert_eq!(
+            a.restrict_to_owner(&f).unwrap(),
+            crate::Applied::Unsupported
+        );
+        let _ = std::fs::remove_file(&f);
+    }
+
+    /// 同上：fd 级别截断在 Windows 上没接，必须说 `Unsupported`。
+    #[test]
+    fn truncate_own_stderr_admits_it_is_unsupported() {
+        assert_eq!(
+            WindowsAdapter::new().truncate_own_stderr(),
+            crate::Applied::Unsupported
+        );
+    }
+
+    /// 这条相反：命名管道**机制上就不落文件**，没有残留要清，所以是
+    /// `NotApplicable` 而不是 `Unsupported`。
+    ///
+    /// 两者绝不能混：`Unsupported` 是「该做没做」（将来要补），
+    /// `NotApplicable` 是「本来就不用做」（将来也不用补）。混成一个，
+    /// 清单上就分不出哪些是真欠的。
+    #[test]
+    fn remove_stale_ipc_endpoint_is_not_applicable_for_named_pipes() {
+        assert_eq!(
+            WindowsAdapter::new().remove_stale_ipc_endpoint("ppf-qa09-whatever"),
+            crate::Applied::NotApplicable
         );
     }
 }
