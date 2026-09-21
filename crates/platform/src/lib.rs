@@ -18,6 +18,9 @@ mod macos;
 mod unix;
 #[cfg(windows)]
 mod windows;
+// #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
+#[cfg(feature = "test-support")]
+pub mod test_support;
 
 #[cfg(target_os = "macos")]
 pub use macos::MacosAdapter;

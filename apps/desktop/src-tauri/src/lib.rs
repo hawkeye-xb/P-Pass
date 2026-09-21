@@ -1229,85 +1229,51 @@ mod tests {
         assert!(validate_asset_file(&tmp.path().join("missing.mp4")).is_err());
     }
 
-    // ── QA-12 (#212): MOB-47 那条契约在 Windows 上的覆盖 ──────────
+    // ── QA-12 (#212): MOB-47 那条契约，对这台系统能造出的每一种链接 ──
     //
-    // 原来只有下面那条 `#[cfg(unix)]` 用例守着，于是这条安全契约在 Windows
-    // 上从没被验证过。Windows 有两种「指向目录的链接」，而且特权要求不同：
+    // 契约：**指向目录的链接必须被拒绝**，哪怕名字叫 `tricky.mp4`。
+    // 提权点在于目录授权会让同层文件全都可读。
     //
-    //   junction —— 不需要任何特权，任何用户都能建（实测确认）。所以这条
-    //               用例**无条件跑**。它在 unix 上没有对应物，因此这种形态
-    //               在本仓此前是全平台零覆盖。
-    //   目录符号链接 —— 需要管理员，或需要调用方传
-    //               SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE。Rust std 的
-    //               `symlink_dir` 没传那个 flag，所以开了开发者模式也建不出来
-    //               （本机实测：AllowDevelopmentWithoutDevLicense=1 仍报
-    //               "Administrator privilege required"）。所以那条用例在建链
-    //               失败时**跳过并打印原因**，绝不静默变绿。
+    // #287 之前这里是三条各带 `#[cfg]` 的用例（Windows junction / Windows
+    // 目录符号链接 / unix 符号链接），因为"怎么造一个指向目录的链接"每个
+    // 系统不一样。现在那份系统知识搬进了 `platform::test_support`——它本来
+    // 就属于那儿（架构红线 B.2），本用例因此一个平台门都不需要。
+    //
+    // 遍历而不是挑一种：Windows 的 junction 与目录符号链接是**两种不同的
+    // 机制**，在 canonicalize 下未必一致，验一种不等于验过了。
 
-    /// junction 指向目录 —— 即使名字像个视频文件，也必须拒绝。
-    /// 提权点与 unix 软链那条完全相同：目录授权会让同层文件可读。
-    #[cfg(windows)]
     #[test]
-    fn validate_asset_file_rejects_junction_to_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("realdir");
-        std::fs::create_dir_all(&dir).unwrap();
-        let link = tmp.path().join("tricky.mp4");
-
-        // std 没有 junction API，本工作区也没有 windows-sys。mklink 是 cmd
-        // 的内建命令，只能这么建。这是测试脚手架，不是产品路径——#168 的
-        // console 启动器门禁只扫产品代码，见那条测试里的说明。
-        let out = std::process::Command::new("cmd")
-            .args([
-                "/C",
-                "mklink",
-                "/J",
-                &link.to_string_lossy(),
-                &dir.to_string_lossy(),
-            ])
-            .output()
-            .expect("cmd 必须存在于 Windows");
+    fn validate_asset_file_rejects_every_kind_of_link_to_a_directory() {
+        let kinds = platform::test_support::dir_link_kinds();
         assert!(
-            out.status.success() && link.exists(),
-            "建 junction 失败，这条用例失去意义: status={:?} stdout={} stderr={}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stdout).trim(),
-            String::from_utf8_lossy(&out.stderr).trim()
+            !kinds.is_empty(),
+            "这台系统一种链接形态都没有？契约将无人验证"
         );
 
-        assert!(
-            validate_asset_file(&link).is_err(),
-            "junction 指向目录必须被拒绝——放行等于把整个目录授权出去（MOB-47 / #212）"
-        );
-    }
+        for (i, kind) in kinds.iter().enumerate() {
+            let tmp = tempfile::tempdir().unwrap();
+            let dir = tmp.path().join("realdir");
+            std::fs::create_dir_all(&dir).unwrap();
+            // 名字**刻意**像个视频文件：判据不许靠扩展名放行。
+            let link = tmp.path().join(format!("tricky{i}.mp4"));
 
-    /// 目录符号链接指向目录 —— 与上面同一条契约的另一种形态。
-    /// 建链需要特权，建不出来就跳过并说明，不当成通过。
-    #[cfg(windows)]
-    #[test]
-    fn validate_asset_file_rejects_windows_symlink_to_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("realdir");
-        std::fs::create_dir_all(&dir).unwrap();
-        let link = tmp.path().join("tricky-sym.mp4");
-
-        match std::os::windows::fs::symlink_dir(&dir, &link) {
-            Ok(()) => {
-                assert!(
+            match kind.make(&dir, &link) {
+                Ok(()) => assert!(
                     validate_asset_file(&link).is_err(),
-                    "目录符号链接必须被拒绝（MOB-47 / #212）"
-                );
-            }
-            Err(e) => {
-                // 明确跳过并打印原因——绝不静默变绿。cargo test 默认吞 stdout，
-                // 用 --nocapture 能看到这行；CI 上（若将来有 Windows lane）
-                // 同样能看到。
-                eprintln!(
-                    "SKIP validate_asset_file_rejects_windows_symlink_to_directory: \
-                     建目录符号链接失败（需要管理员，或需要传 \
-                     SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE，std 不传）：{e}。\
-                     junction 那条用例覆盖了同一条契约的另一种形态，仍然有效。"
-                );
+                    "{} 指向目录却被放行——等于把整个目录授权出去（MOB-47 / #212）",
+                    kind.name
+                ),
+                // 需要特权的形态建不出来 ⇒ 明确跳过并打印原因，绝不静默变绿。
+                // （Windows 的目录符号链接要管理员；std 的 symlink_dir 不传
+                // SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE，本机实测开了
+                // 开发者模式也照样建不出来。）
+                Err(e) if kind.may_need_privilege => eprintln!(
+                    "SKIP {}: 建链失败（需要特权）：{e}。\
+                     其余形态覆盖同一条契约，用例仍然有效。",
+                    kind.name
+                ),
+                // 不需要特权却建不出来 = 真出事了，不许当跳过混过去。
+                Err(e) => panic!("{} 不需要特权却建不出来：{e}", kind.name),
             }
         }
     }
@@ -1413,20 +1379,6 @@ mod tests {
         if let Err(e) = verify_sidecar_runs(&real) {
             panic!("真 daemon 被误判成坏的（{}）：{e}", real.display());
         }
-    }
-
-    // MOB-47 安全契约：软链可指向目录——canonicalize 后必须仍判普通文件，
-    // 不能用「resolve 前是文件」这类假判据放行。
-    #[cfg(unix)]
-    #[test]
-    fn validate_asset_file_rejects_symlink_to_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("realdir");
-        std::fs::create_dir_all(&dir).unwrap();
-        let link = tmp.path().join("tricky.mp4");
-        std::os::unix::fs::symlink(&dir, &link).unwrap();
-        // 软链指向目录 → 即使按名字像个文件，也必须拒绝。
-        assert!(validate_asset_file(&link).is_err());
     }
 
     // ── DESK-25: taskkill 结果判据 ──────────────────────────
