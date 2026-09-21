@@ -329,14 +329,22 @@ fun HomeScreen(
                             onClick = onBackupNow,
                         )
                     }
-                    if (state is BackupUiState.Paused) {
-                        Spacer(Modifier.width(8.dp))
-                        HeroSecondaryButton(
-                            label = if (commandPending) {
-                                stringResource(R.string.backup_command_processing)
-                            } else {
-                                stringResource(R.string.backup_cancel_current_round)
-                            },
+                    // MOB-89: 取消**不是**与「继续」并列的二选一，它是一个
+                    // 降级动作，所以既不共用 HeroSecondaryButton 的外观，也不
+                    // 共用它的出场判据。
+                    //
+                    // ① 出场判据交给 cancelAffordanceVisible —— 它绑死「只在
+                    //    『继续』在场时出现」，堵掉 pairingLost 下取消左移顶替
+                    //    「继续」位置的那个组合（详见该函数注释里的真机事故）。
+                    // ② 外观降级成无边框文字动作，与带边框加粗的主动作在视觉
+                    //    层级上一眼可分；间距也从 8dp 拉到 16dp。
+                    // ③ commandPending 时**保留自己的文案**只置灰。原来它和
+                    //    「继续」会同时显示「处理中…」——那一刻两个相邻按钮
+                    //    连文案都一样，完全无法分辨。
+                    if (cancelAffordanceVisible(state, pairingLost)) {
+                        Spacer(Modifier.width(16.dp))
+                        HeroTertiaryAction(
+                            label = stringResource(R.string.backup_cancel_current_round),
                             enabled = !commandPending,
                             onClick = onCancelCurrentRound,
                         )
@@ -750,6 +758,30 @@ private fun idleStatusText(line: StatusLine): String = when (line) {
     is StatusLine.WaitingForConstraints -> stringResource(R.string.backup_waiting_constraints)
     is StatusLine.CancelledCurrentRound -> stringResource(R.string.backup_round_cancelled)
     is StatusLine.Working, is StatusLine.Trouble -> stringResource(R.string.idle_auto_hint) // unreachable
+}
+
+/**
+ * MOB-89：降级动作。与 [HeroSecondaryButton] 的区别是刻意的、而且是全部的
+ * 区别所在——无边框、无容器、非加粗、次级墨色、字号更小。主动作看起来像
+ * 按钮，它看起来像链接。
+ *
+ * 高度仍是 44dp：视觉降级不等于点击区缩水。
+ */
+@Composable
+private fun HeroTertiaryAction(label: String, onClick: () -> Unit, enabled: Boolean = true) {
+    androidx.compose.material3.TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.height(44.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = PPColor.Ink40,
+            disabledContentColor = PPColor.Ink40.copy(alpha = 0.5f),
+        ),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+    ) {
+        Text(label, fontSize = 14.sp, fontWeight = FontWeight.Normal)
+    }
 }
 
 /** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) + 圆角 14 +
