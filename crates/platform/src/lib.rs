@@ -13,6 +13,16 @@ use std::path::PathBuf;
 // DESK-24 (#173)：数据目录搬家。整个模块**不在 cfg 里**——里面全是
 // `rename` / `read_dir`，没有一行平台专属代码，三条 lane 都跑得到它的测试。
 // 只有 Windows 有遗留位置要搬，那部分知识在 `windows.rs`。
+//
+// 那也正是这条 `allow` 的由来：**今天只有 `windows.rs` 调它**，所以在别的
+// 平台上整个模块的函数都没有调用方，`clippy -D warnings` 会报 8 条
+// `is never used`。本地 `just ci` 跑在 Windows 上看不见，远端 Linux lane 上
+// 必红（PR #368 实测）。
+//
+// 不改成 `pub mod` 让它「有调用方」：那是拿扩大公开 API 去换一条 lint 闭嘴。
+// 这个模块是平台内部的管道，不该被 daemon / 桌面壳绕过适配器直接调。
+// 只在非 Windows 上放行，Windows 那边的死代码照样挡得住。
+#[cfg_attr(not(windows), allow(dead_code))]
 mod data_migration;
 
 #[cfg(target_os = "macos")]
