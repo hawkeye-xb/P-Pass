@@ -79,26 +79,71 @@ class TransferProtectionStore(private val dir: File) {
     private val json = Json { ignoreUnknownKeys = true }
 
     fun load(): TransferProtectionState =
-        if (file.isFile) {
+        // MOB-102: a write that did not land means the file on disk is not
+        // the current fact — and a stale "STARTED" would claim protection
+        // works while we know it just failed. 写不进去就是不知道.
+        if (file.absolutePath in unpersisted) {
+            TransferProtectionState()
+        } else if (file.isFile) {
             runCatching { json.decodeFromString<TransferProtectionState>(file.readText()) }
                 .getOrDefault(TransferProtectionState())
         } else {
             TransferProtectionState()
         }
 
-    /** @return whether the outcome actually reached durable storage. */
+    /**
+     * MOB-102: **this function must never throw.** It is only ever called
+     * from the path that is already handling a failure, so escalating a
+     * diagnostic write into a fatal is strictly worse than losing the
+     * diagnosis — which is exactly what happened on the real device
+     * (Samsung SM-S9210 / Android 15, 2026-09-21 17:25: two FATALs from
+     * `check(tmp.renameTo(file))`, on `ppass-flow-wake` and on `main`).
+     * [load] has said "unreadable = UNKNOWN = the safe end" since day one;
+     * this is the symmetric half.
+     *
+     * The temp file is unique per call: two Flow wakes ran in the SAME
+     * millisecond on two threads (real logcat), both renamed the one
+     * fixed `.tmp` name, and the loser got `false` back. Uniqueness is
+     * the actual fix for that race — never-throwing alone would only
+     * downgrade it to "sometimes silently unrecorded".
+     *
+     * @return whether the outcome actually reached durable storage.
+     */
     fun record(outcome: ForegroundStartOutcome, now: Long): Boolean {
-        dir.mkdirs()
         val state = TransferProtectionState(lastOutcome = outcome.name, lastOutcomeAt = now)
-        val tmp = File(dir, "$FILE_NAME.tmp")
-        tmp.writeText(json.encodeToString(TransferProtectionState.serializer(), state))
-        check(tmp.renameTo(file)) { "cannot persist transfer protection state" }
-        return true
+        val persisted = runCatching {
+            dir.mkdirs()
+            val tmp = File.createTempFile("$FILE_NAME.", ".tmp", dir)
+            try {
+                tmp.writeText(json.encodeToString(TransferProtectionState.serializer(), state))
+                tmp.renameTo(file)
+            } finally {
+                tmp.delete()
+            }
+        }.getOrElse { failure ->
+            logQuietly("cannot persist transfer protection state; the verdict stays UNKNOWN", failure)
+            false
+        }
+        if (persisted) unpersisted.remove(file.absolutePath) else unpersisted.add(file.absolutePath)
+        return persisted
     }
 
     private companion object {
         const val FILE_NAME = "flow-transfer-protection.json"
+
+        /**
+         * Paths whose last write did not land, so [load] must not serve
+         * whatever stale fact is still on disk. Process-scoped on purpose:
+         * a fresh process has no failed write of its own to remember.
+         */
+        val unpersisted: MutableSet<String> =
+            java.util.Collections.synchronizedSet(mutableSetOf<String>())
     }
+}
+
+/** Logging must never be the thing that crashes a crash handler (and `Log` is a stub in JVM tests). */
+private fun logQuietly(message: String, failure: Throwable? = null) {
+    runCatching { Log.w("PPassFlow", message, failure) }
 }
 
 /** MOB-101: the pure verdict the UI reads. Evidence only — see [TransferProtection]. */
@@ -166,8 +211,18 @@ internal fun startProtectedForeground(
             ForegroundStartOutcome.START_REFUSED
         }
     }
-    store.record(outcome, now)
-    if (outcome != ForegroundStartOutcome.STARTED) haltTransfer()
+    // MOB-102: everything below is failure HANDLING. Whatever happens in
+    // here, nothing may escape to `onStartCommand` / `flushAuditOutbox` —
+    // this path exists to catch failures, so a failure of its own must
+    // not become the next FATAL. (`start()`'s own unrecognized failure is
+    // deliberately NOT covered by this: it is rethrown above, because
+    // burying an unknown fault is the other way to lose a bug.)
+    runCatching { store.record(outcome, now) }
+        .onFailure { logQuietly("recording the protection outcome failed; continuing", it) }
+    if (outcome != ForegroundStartOutcome.STARTED) {
+        runCatching { haltTransfer() }
+            .onFailure { logQuietly("pausing the round after a refused start failed", it) }
+    }
     return outcome
 }
 
