@@ -59,7 +59,7 @@ class MOB88SingleWriterTest {
         val mutation = Regex(
             """\brunner\.[A-Za-z_][A-Za-z0-9_]*\s*\(""" +
                 """|\bledger\.update\s*\{""" +
-                """|\bledger\.(?:acknowledgeAuditEvents|migrateMissingCompletedAt|commitDiscoveryPage|commitScopeBackfill|startCancellationRound)\s*\(""" +
+                """|\bledger\.(?:acknowledgeAuditEvents|collapseGenerationDuplicates|migrateMissingCompletedAt|commitDiscoveryPage|commitScopeBackfill|startCancellationRound)\s*\(""" +
                 """|\bPairingEpochController\s*\(""",
         )
         val hits = mutation.findAll(source).toList()
