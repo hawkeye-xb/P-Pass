@@ -86,3 +86,28 @@ export function pendingSubText(item, pairedAtText = null) {
 export function pendingAllowKey(item) {
   return isKnownDevice(item) ? "ui.allow_reconnect" : "ui.allow";
 }
+
+/**
+ * DEV-06: 配对结果提示（`ui.pair_allowed` / `ui.pair_denied`）该怎么称呼
+ * 这台设备。
+ *
+ * `pairing.confirm` 回的 `device` 是队列里的**自报名**（ipc.rs:1155
+ * `let name = p.device_name.clone()`），业主在桌面改过的名字它不知道。
+ * pending 行的 `name` 则已经由 daemon 按上面那条口径解析过：known 时是
+ * 设备表里的名字，否则才是自报名——审批弹窗标题正因为用它才是对的。
+ *
+ * 所以优先级是 pending 行 → confirm 回执。首次配对两者本就相同，取谁都
+ * 一样；改过名的老设备重连，只有前者是业主认得的那个称呼。
+ *
+ * 回执是回退而不是摆设：横幅上那两个按钮不带 item（走 daemon 队首语义），
+ * 前端手上没有对应的 pending 行。
+ *
+ * @param {object|null|undefined} item pairing.pending 的那一行（可能没有）
+ * @param {object|null|undefined} resp pairing.confirm 的回执
+ * @returns {string} 插值用的名字；两者都没有时给空串，不渲染 undefined
+ */
+export function pairResultName(item, resp) {
+  const fromTable = typeof item?.name === "string" ? item.name.trim() : "";
+  if (fromTable) return fromTable;
+  return typeof resp?.device === "string" ? resp.device.trim() : "";
+}

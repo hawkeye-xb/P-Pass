@@ -42,7 +42,12 @@
   // DEV-03: 「自己断开」与「业主移除」的判据 + 已断开行文案（纯函数，
   // disconnected.test.js 钉边界）。
   import { isOwnerRemoved, disconnectedRow } from "./lib/disconnected.js";
-  import { pendingDialogText, pendingSubText, pendingAllowKey } from "./lib/pending.js";
+  import {
+    pendingDialogText,
+    pendingSubText,
+    pendingAllowKey,
+    pairResultName,
+  } from "./lib/pending.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
@@ -478,8 +483,13 @@
         node_id: item?.node_id,
         device_name: item?.name,
       });
+      // DEV-06: 结果提示的名字以设备表为准。`r.device` 是队列里的自报名
+      // （SM-S9210），弹窗标题用的却是 pending 行里 daemon 解析过的名字
+      // （客厅的手机）——同一次操作两个名字。pending 行优先，回执兜住横幅
+      // 那条不带 item 的老路。
+      const shown = pairResultName(item, r);
       flashMessage(
-        accept ? t("ui.pair_allowed", { name: r.device }) : t("ui.pair_denied", { name: r.device }),
+        accept ? t("ui.pair_allowed", { name: shown }) : t("ui.pair_denied", { name: shown }),
         accept ? "success" : "warning"
       );
       // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
