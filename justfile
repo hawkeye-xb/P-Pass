@@ -212,10 +212,23 @@ dev-desktop:
     cd apps/desktop && npx tauri dev
 
 # M1 总验收（手册 E 表）：全仓测试 + 接口全剧本 + 桌面产物
+#
+# BUILD-09：这里以前直接 `npx tauri build --bundles app`，出来的 .app 缺
+# Contents/MacOS/lib —— daemon 的 rpath 是 @executable_path/lib，Tauri 的
+# externalBin 只搬那一个二进制，不搬它旁边那包 dylib。构建全绿、装上才炸。
+# 正确链路只有一条（release.yml 一直走的那条），现在本地也走它，而且
+# bundle-desktop-macos.sh 第 5b 步会真的跑一遍 sidecar 才放行。
+# 本地 ad-hoc 身份默认不出 dmg（BUILD-05 定调），要 dmg 设 PPF_BUNDLE_DMG=1。
 verify-m1:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{ justfile_directory() }}"
     cargo nextest run
     tools/dogfood-smoke.sh /tmp/ppf-verify-m1
-    cd apps/desktop && npx tauri build --bundles app
+    cargo build --release -p daemon -p testclient
+    rm -rf /tmp/ppf-rel && mkdir -p /tmp/ppf-rel
+    tools/bundle-macos.sh /tmp/ppf-rel target/release/daemon target/release/testclient
+    tools/bundle-desktop-macos.sh /tmp/ppf-rel /tmp/ppf-rel
 
 # Android unit tests (proto golden drift check included)
 android-test:
