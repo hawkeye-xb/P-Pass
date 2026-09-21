@@ -190,8 +190,15 @@ describe("onerror 代际守卫（handleVideoError）", () => {
 import { readFileSync } from "node:fs";
 
 /** 剥掉注释再断言——避免解释性文字被当成代码（与 photoWall 同款教训）。 */
-function codeOf(path) {
-  return readFileSync(path, "utf8")
+function codeOf(url) {
+  // 两处都是 Windows 上才会现形的坑（#297）：
+  // 1. 传 URL **对象**，不传 `.pathname`——后者在 Windows 上是 `/C:/...`，
+  //    readFileSync 会再拼成 `C:\C:\...`，直接 ENOENT。
+  // 2. 先把 CRLF 归一成 LF：仓库里存的是 LF，但 core.autocrlf 让 Windows
+  //    检出成 CRLF。下面的断言按 LF 写，不归一化就是同一份源码 Linux 过、
+  //    Windows 挂——挂的是行尾，不是代码。
+  return readFileSync(url, "utf8")
+    .replace(/\r\n/g, "\n")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/<!--[\s\S]*?-->/g, "")
     .split("\n")
@@ -200,7 +207,7 @@ function codeOf(path) {
 }
 
 describe("App.svelte 视频分支的接线", () => {
-  const src = codeOf(new URL("../App.svelte", import.meta.url).pathname);
+  const src = codeOf(new URL("../App.svelte", import.meta.url));
   // 只截取大图查看器的那个 $effect（以 `const v = photoViewer` 起头），
   // 避免把照片墙分页的 $effect 也算进来——接线断言要钉在查看器这一处。
   const viewerEffect = (() => {

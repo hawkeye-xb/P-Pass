@@ -3,9 +3,20 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { isMacOSUserAgent } from "./titlebar.js";
 
-const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8");
-const css = readFileSync(new URL("./app.css", import.meta.url), "utf8");
-const titlebar = readFileSync(new URL("./titlebar.js", import.meta.url), "utf8");
+/**
+ * 读源码前先把 CRLF 归一成 LF（#297）。
+ *
+ * 仓库里存的是 LF，但 core.autocrlf 让 Windows 检出成 CRLF；下面
+ * `.titlebar-drag-region {\n  display: none;` 那条断言按 LF 写死了换行，
+ * 不归一化就是同一份 CSS 在 Linux 上过、在 Windows 上挂。
+ */
+function read(url) {
+  return readFileSync(url, "utf8").replace(/\r\n/g, "\n");
+}
+
+const app = read(new URL("./App.svelte", import.meta.url));
+const css = read(new URL("./app.css", import.meta.url));
+const titlebar = read(new URL("./titlebar.js", import.meta.url));
 
 function expectBand(name) {
   expect(app).toContain(

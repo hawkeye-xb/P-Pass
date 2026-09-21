@@ -8,7 +8,14 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 
-const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8");
+// 读进来先把 CRLF 归一成 LF（#297）：仓库里存的是 LF，core.autocrlf 让
+// Windows 检出成 CRLF。下面那条正则里写了 `\n`，眼下它在 CRLF 下也能过
+// ——但那只是因为紧邻的 `\s*` 顺手吃掉了 `\r`，是碰巧对，不是写对了。
+// 谁把 `\s*` 收紧一点，红的就只有 Windows，而且看不出是行尾的事。
+const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8").replace(
+  /\r\n/g,
+  "\n",
+);
 
 describe("NET-11 ipc timeout 呈现接线", () => {
   it("refresh 的失败路径统一置 online=false（失联横幅即呈现）", () => {
