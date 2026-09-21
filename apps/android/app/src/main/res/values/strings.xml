@@ -99,6 +99,13 @@
          an alert. -->
     <string name="notif_channel_transfer">Backing up</string>
     <string name="notif_transfer_title">Backing up photos</string>
+    <!-- MOB-101: the system stopped letting the backup run while the app is
+         off screen (it allows a limited amount of that each day). Plain
+         words only: no error code, no class name, no jargon. The fact is
+         learned only after the system refuses — the wording says what
+         happened, not what is about to happen. -->
+    <string name="state_background_budget_paused">Today\'s off-screen backup time is used up. Backup is paused — keep P-Pass open on screen to carry on now, or it picks up again tomorrow.</string>
+    <string name="state_background_protection_unknown">The phone turned this backup down just now and didn\'t say why. Backup is paused — open P-Pass and keep it on screen to carry on.</string>
     <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->
     <string name="notif_sentinel_title">Haven\'t connected in 3 days</string>
     <string name="notif_sentinel_body">Your photos are safe — check that P-Pass is still running on your computer.</string>

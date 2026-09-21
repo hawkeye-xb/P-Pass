@@ -94,6 +94,11 @@
          这是状态提示不是告警。 -->
     <string name="notif_channel_transfer">正在备份</string>
     <string name="notif_transfer_title">正在备份照片</string>
+    <!-- MOB-101: 系统不再允许「App 不在屏幕上时继续备份」（这件事每天有额度）。
+         只说人话：不出现代码、类名、术语。这个事实只有在系统拒绝之后才知道，
+         所以文案说的是「已经发生了什么」，不是「接下来会怎样」。 -->
+    <string name="state_background_budget_paused">今天在后台备份的时间用完了。备份已暂停——把 P-Pass 留在屏幕上就能继续，或者明天自动接着传。</string>
+    <string name="state_background_protection_unknown">手机刚刚拒绝了这次备份，没有说原因。备份已暂停——打开 P-Pass 并留在屏幕上就能继续。</string>
     <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->
     <string name="notif_sentinel_title">3 天没连上电脑了</string>
     <string name="notif_sentinel_body">照片没丢——看看电脑上的 P-Pass 还开着吗</string>
