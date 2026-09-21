@@ -1,7 +1,7 @@
 # iOS 兼容任务规划与独立验证门禁（2026-09-21）
 
 > Base：`main@53df09f6a3c96645fd8e068dbac5132da30a4c7c`（开工前必须重新 fetch；验证前再确认 HEAD）。
-> 执行边界：代码、脚本、CI、文档由 agent 在本机或 GitHub 侧完成；**背景上传扩展与后台调度只能在 iPhone 真机验证，模拟器上该扩展不存在**（`API_UNAVAILABLE` 之外还有 Apple 论坛记录的模拟器不可用），L3 结论必须回贴真机原始输出。
+> 执行边界：代码、脚本、CI、文档由 agent 在本机或 GitHub 侧完成；后台调度与真实分发只能在 iPhone 真机验证，L3 结论必须回贴真机原始输出。背景上传扩展在模拟器 SDK 里**编译得过**（`iPhoneSimulator.sdk` 同样导出 `PHBackgroundResourceUploadExtension` 与 `PHAssetResourceUploadJob`，已核实），但**运行期系统是否会调度它未一手核实**——只有 Apple 论坛的说法（证据等级 E1），列为 `IOS-03` 的第 0 问。
 > 明确跳过：App Store 上架审核、Live Photo 跨端保真、iPad/macCatalyst/visionOS 形态、App 内自更新（TestFlight 取代 `UpdateChecker`）。
 > 纪律：不重写配对/账本/Flow 业务语义；平台 `cfg` 的归属按 QA-09 既定规则走；不把「CI 绿」「模拟器绿」当真机绿；不把计划写成已完成事实；不为未选路线预埋抽象。
 
@@ -85,7 +85,7 @@ B 的四个未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论
 
 | 环境 | 作用 | 能证明 | 不能证明 |
 |---|---|---|---|
-| 本机 Xcode 模拟器 | 写代码、跑 XCTest、UI 布局与状态机回归 | 纯逻辑、账本 IO 往返、UI、i18n、与 daemon 的 iroh 连通（同机） | 背景上传扩展（模拟器不提供）、真实后台调度、iCloud 瘦身、蜂窝/省电行为 |
+| 本机 Xcode 模拟器 | 写代码、跑 XCTest、UI 布局与状态机回归 | 纯逻辑、账本 IO 往返、UI、i18n、与 daemon 的 iroh 连通（同机）、扩展能否编译链接 | 真实后台调度、iCloud 瘦身、蜂窝/省电行为；扩展能否被系统真正调度（待 `IOS-03` 第 0 问回答） |
 | GitHub `macos-*` runner | 构建 XCFramework、`xcodebuild test`、归档产物 | 能否出包、单测是否全绿、产物可复现 | 一切真机行为 |
 | iPhone 真机 | L3 验收 | 配对、发现、传输、后台唤醒、扩展调度、取证 | 由前两者代跑 |
 
@@ -113,15 +113,16 @@ B 的四个未证实前提由 `IOS-03` spike 逐条回答，**spike 未出结论
 
 ### I1｜背景执行 spike（决定产品天花板，串行紧随 G0）
 
-- `IOS-03` 用一个最小 App + `com.apple.photos.background-upload` 扩展，在真机上逐条回答：
-  1. 目的地写成 LAN 明文 `http://192.168.x.x:port` 时，系统上传器是否放行（ATS 由谁裁决、我们的 Info.plist 例外是否作用于系统进程）；自签 HTTPS 是否放行。
-  2. 系统上传器是否受「本地网络」权限约束、是否需要用户授权。
-  3. `jobLimit` 实测值；`process()` 在真机上的实际触发频率与前置条件（充电/闲置/网络）。
-  4. `responseHeaderFields` 能否稳定回传一个 64 hex 的完成凭据。
-  5. token 过期（3105）能否人工构造，或只能靠长时间放置观察。
+- `IOS-03` 用一个最小 App + `com.apple.photos.background-upload` 扩展逐条回答（第 1 问先在模拟器上试，其余在真机上）：
+  1. 模拟器上 `process()` 到底会不会被系统调度。能，则后续几问的一部分可以在模拟器上先跑，G1 不必全压在真机上；不能，则 G1 完全依赖 D1。
+  2. 目的地写成 LAN 明文 `http://192.168.x.x:port` 时，系统上传器是否放行（ATS 由谁裁决、我们的 Info.plist 例外是否作用于系统进程）；自签 HTTPS 是否放行。
+  3. 系统上传器是否受「本地网络」权限约束、是否需要用户授权。
+  4. `jobLimit` 实测值；`process()` 在真机上的实际触发频率与前置条件（充电/闲置/网络）。
+  5. `responseHeaderFields` 能否稳定回传一个 64 hex 的完成凭据。
+  6. token 过期（3105）能否人工构造，或只能靠长时间放置观察。
 - `IOS-04` spike 结论文档 + 路线 C 的最终裁决（B 半边留下 / 砍掉 / 降级为「仅同网段」）。
 
-**Gate G1**：五问逐条有真机证据（抓包/日志/截图），不接受「应该可以」。B 半边被否 → 计划回落到路线 A，`IOS-1x` 全部改写为前台语义，且产品一页纸必须写明 iOS 不承诺后台自动备份。
+**Gate G1**：六问逐条有证据（抓包/日志/截图；除第 1 问外全部来自真机），不接受「应该可以」。B 半边被否 → 计划回落到路线 A，`IOS-1x` 全部改写为前台语义，且产品一页纸必须写明 iOS 不承诺后台自动备份。
 
 ### I2｜传输与 FFI（G0 后即可并行开工，不等 G1）
 
