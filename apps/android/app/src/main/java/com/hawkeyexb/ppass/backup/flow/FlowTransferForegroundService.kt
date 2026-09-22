@@ -125,15 +125,18 @@ internal val ForegroundStartOutcome.evidenceWeight: Int
  * - Strictly less evidence: refused — this is the E3 bug (2026-09-22:
  *   `FGS (dataSync) timed out` at 17:51:15.688, disk still said `STARTED`
  *   at …706).
- * - Equal evidence, both meaning "the system refused": the refusal that NAMES
- *   its cause outranks the one that cannot. `startForegroundService` is
- *   refused for plain background-start denial too (MOB-101's own
- *   `mAllowStartForeground false` case), and inside the same 18ms window that
- *   would replace the budget reason with "we cannot say why" — losing the one
- *   sentence the user can act on. Both verdicts are
+ * - Within ONE start attempt ([START_ATTEMPT_WINDOW_MS]), both meaning "the
+ *   system refused": the refusal that NAMES its cause outranks the one that
+ *   cannot. `startForegroundService` is refused for plain background-start
+ *   denial too (MOB-101's own `mAllowStartForeground false` case), and inside
+ *   the same 18ms window that would replace the budget reason with "we cannot
+ *   say why" — losing the one sentence the user can act on. Both verdicts are
  *   [TransferProtection.NOT_EFFECTIVE], so keeping the better explanation
- *   cannot preserve a reassuring lie. A refusal still overturns an earlier
- *   observed success — that direction is exactly what must not be frozen.
+ *   cannot preserve a reassuring lie. The window is what keeps this from
+ *   inverting the rule: past it, a refusal is an observation about a
+ *   different attempt (the budget resets daily) and must land, or "今天后台
+ *   时间用完了" would be shown on a day it is false. A refusal also still
+ *   overturns an earlier observed success — that must never be frozen.
  * - Equal evidence otherwise: the newer observation wins. A record older
  *   than what is stored is an out-of-order loser of the MOB-102 race and must
  *   not clobber the winner — unless it is older by more than one start
@@ -153,7 +156,8 @@ internal fun supersedes(
         candidate.evidenceWeight > previous.evidenceWeight -> true
         candidate.evidenceWeight < previous.evidenceWeight -> false
         candidate == ForegroundStartOutcome.START_REFUSED &&
-            previous == ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED -> false
+            previous == ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED &&
+            now - stored.lastOutcomeAt <= START_ATTEMPT_WINDOW_MS -> false
         else -> now >= stored.lastOutcomeAt || stored.lastOutcomeAt - now > START_ATTEMPT_WINDOW_MS
     }
 }

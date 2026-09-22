@@ -141,6 +141,31 @@ class UI19ProtectionSourceTest {
         )
     }
 
+    // 让位只在「同一次启动尝试」内成立。配额隔天就会重置，那之后一次说不出
+    // 原因的拒绝是关于另一件事的新观测，必须落地——否则「今天后台时间用完了」
+    // 会被显示在它已经不成立的那天。
+    @Test
+    fun a_later_unrelated_refusal_does_land_once_the_start_attempt_is_over() {
+        val store = TransferProtectionStore(tempDir("stale-cause"))
+        store.record(ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED, 1_000_000L)
+
+        val landed = store.record(
+            ForegroundStartOutcome.START_REFUSED,
+            1_000_000L + START_ATTEMPT_WINDOW_MS + 1L,
+        )
+
+        assertTrue(landed)
+        assertEquals(
+            "配额那句人话不许在它已经不成立之后还留在盘上",
+            TransferProtection.UNKNOWN,
+            transferProtectionOf(store.load()),
+        )
+        assertEquals(
+            R.string.state_background_protection_unknown,
+            transferProtectionNoticeRes(store.load()),
+        )
+    }
+
     // 但这条让位规则不许越界成「失败永远保留」：盘上是一次观测到的成功时，
     // 新来的拒绝必须能推翻它，否则就是在已经暂停的时候报「一切正常」。
     @Test
