@@ -374,7 +374,7 @@ impl Router {
             methods::HELLO => {
                 // PRES-01: hello 是「我还活着」的轻信号——已配对未吊销的
                 // 设备每次 hello 更新 last_seen（三档在线态的数据源）+
-                // 记 device.connected 审计（同设备 10 分钟内去死防刷屏）。
+                // 记 device.connected 审计（同设备 10 分钟内去重防刷屏）。
                 // 复用 hello 不加协议动词的理由：hello 是唯一对成员/未配对
                 // 都放行的零数据方法，能力握手语义天然合适；新加轻方法要
                 // 动 authz + 双端协议，收益为零。红线：不参与鉴权、后台
