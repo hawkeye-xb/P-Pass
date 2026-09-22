@@ -85,6 +85,27 @@ fun heroActionOf(state: BackupUiState, pairingLost: Boolean): HeroAction? = when
 }
 
 /**
+ * MOB-89：「取消当前轮」什么时候才准出现。
+ *
+ * 规则只有一条：**它只在「继续」同时在场时出现**。
+ *
+ * 原来的判据是 `state is BackupUiState.Paused`，与「继续」的判据
+ * （[heroActionOf]）各走各的，于是有一个组合两者不一致：
+ * `pairingLost && Paused` —— [heroActionOf] 返回 null，「继续」整个不渲染，
+ * 而「取消当前轮」照渲染，**顺位左移落进「继续」原来的位置**。用户凭手指
+ * 记忆点下去，点到的是取消。
+ *
+ * 2026-09-20 10:31:46 的真机事故里取消确实被调用了
+ * （桌面 `audit_decision`：`cancel` / `causal_operation_id=8b854bdb…`，
+ * 正是那一轮 `{CONFIRMED:4, CANCELLED_BY_USER_ROUND:11}`），
+ * 验收人坚称没点过 —— 按钮在他手指底下换了身份。
+ *
+ * 把两者绑在同一个判据上，这个组合从此不可能构造。
+ */
+fun cancelAffordanceVisible(state: BackupUiState, pairingLost: Boolean): Boolean =
+    heroActionOf(state, pairingLost) == HeroAction.Resume
+
+/**
  * 「这一刻有一轮备份在跑」——**点击的裁决也用它**：只有进行中那一下算
  * 暂停，其余（含被暂停态下的「继续」）一律落到 `triggerManualBackup`
  * 那一条管线（MOB-19 红线：不许有第二条）。
