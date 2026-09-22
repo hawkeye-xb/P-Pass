@@ -13,6 +13,9 @@ vendored = ["libheif-rs/embedded-libheif"]
 
 [dependencies]
 core-media = { path = "../core-media" }
+# DESK-16 (#165)：Windows 的系统缩略图要走 COM，而平台 cfg 只许待在
+# crates/platform（红线 B.2）。本 crate 只向它要像素，自己不带任何 cfg。
+platform = { path = "../platform" }
 # JPEG/PNG/WebP/GIF decode + resize + JPEG encode (详细设计 §4.3).
 # default features off: drops the AVIF encoder (rav1e) — unused, heavy,
 # and its libfuzzer-sys dep carries an NCSA license we'd rather not allow.
