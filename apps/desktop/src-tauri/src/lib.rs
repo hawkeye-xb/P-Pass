@@ -125,7 +125,13 @@ fn wizard_state() -> Value {
     // "传到哪儿了" had no answer while the library hid in ~/Library).
     let pictures = dirs_pictures().join("P-Pass 家庭照片库");
     let installed = platform::adapter().autostart_installed().unwrap_or(false);
-    let configured_dir = ipc::read_config_data_dir(&dir);
+    // DESK-27 (#219)：预填前先归一。
+    // 为什么读侧也要归一（写侧已经归一了）：**存量**配置在本卡合入前就已经
+    // 被翻倍过，而向导要在用户重跑之前就把**正确**的路径显示出来 —— 卡面记的
+    // 危害之一正是"UI 显示给用户的路径是错的"。写侧归一只能让下一次写入变好，
+    // 读侧归一让这一次显示就对。
+    // 两侧都归一不冗余：写侧管"不再变坏"，读侧管"立刻看起来对"。
+    let configured_dir = ipc::read_config_data_dir(&dir).map(|v| normalize_separators(&v));
     json!({
         "configured": dir.join("config.toml").exists(),
         "installed": installed,
@@ -225,13 +231,75 @@ fn disable_auto_sleep() -> Result<(), String> {
     }
 }
 
-/// Write the initial config.toml (T-042 step 1) into the platform dir.
-#[tauri::command]
-fn write_config(library_dir: String) -> Result<(), String> {
-    let dir = platform::adapter().data_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let config = format!(
-        "data_dir = {:?}
+/// DESK-27 (#219)：把路径里重复的反斜杠折回单个，**但保住前导的那一对**。
+///
+/// 为什么需要它：`write_config` 原先用 `format!("{:?}")` 当 TOML 序列化器，
+/// 而读取方（#209 修好前）不反转义 —— 于是「写→读→预填→再写」每轮把反斜杠
+/// 数量翻一倍，2 → 4 → 8 → 16，没有收敛点。#209 修了读取方，本函数负责
+/// **打断回路**（写入前归一，保证幂等）与**修存量**（任意 N 轮的损坏都收敛）。
+///
+/// ⚠️ **为什么不用 `Path::components()`** —— 那是本卡实施时实测否掉的第一版。
+/// 它对被翻倍过的 UNC 路径会给出**另一个错路径**（下面用 `/` 代替反斜杠画，
+/// 免得注释本身被转义规则绕晕）：
+///
+/// ```text
+///   输入        ////server//share     （UNC 被翻倍一次）
+///   components() → /server/share      ← 只剩一个前导分隔符，不再是 UNC
+///   本函数       → //server/share     ← 对
+/// ```
+///
+/// UNC（`//server/share` 形状）与 verbatim（`//?/C:/x` 形状）的**前导两个**
+/// 分隔符是语义的一部分，折成一个就指向别的地方。而 Windows 会折叠**中间**的
+/// 重复分隔符，所以中间折回一个是安全的 —— 这个不对称正是 `components()` 没
+/// 处理好的地方。
+///
+/// 非 Windows 平台上路径里没有反斜杠可折，本函数是恒等变换（有测试钉住）。
+fn normalize_separators(p: &str) -> String {
+    const SEP: char = '\\';
+    let leading = p.chars().take_while(|&c| c == SEP).count();
+    let mut out = String::with_capacity(p.len());
+    // 前导：>=2 一律收成 2（UNC / verbatim），1 保持 1（根相对路径），0 不加。
+    match leading {
+        0 => {}
+        1 => out.push(SEP),
+        _ => {
+            out.push(SEP);
+            out.push(SEP);
+        }
+    }
+    let mut prev_sep = false;
+    for ch in p[leading..].chars() {
+        if ch == SEP {
+            if !prev_sep {
+                out.push(ch);
+            }
+            prev_sep = true;
+        } else {
+            out.push(ch);
+            prev_sep = false;
+        }
+    }
+    out
+}
+
+/// DESK-27 (#219)：把 config.toml 的内容渲染出来。
+///
+/// **单独提成纯函数是为了让归一那一步可被测试覆盖到调用点。** 卡面验收
+/// 标准 3 要的是「把归一那步去掉必须变红」—— 如果只测 `normalize_separators`
+/// 本身，删掉下面那句调用测试照样是绿的，那种反证等于没做。
+///
+/// 两处改动缺一不可：
+/// ① **先归一**：打断「写→读→预填→再写」的翻倍回路，并顺带把已损坏的存量
+///    救回来（任意 N 轮翻倍都收敛到单分隔符）。
+/// ② **用真的 TOML 序列化器**，不再拿 `{:?}`（Debug）冒充。两者只在反斜杠
+///    和引号上碰巧一致，而那个"碰巧"正是本缺陷的起点。实测 `toml::Value`
+///    对 Windows 路径会选 literal string（单引号，TOML 里不做任何转义），
+///    路径里带单引号时还会自动改用三引号 —— 那是手写转义最容易漏的边界。
+fn render_config(library_dir: &str) -> String {
+    let normalized = normalize_separators(library_dir);
+    let data_dir_value = toml::Value::String(normalized).to_string();
+    format!(
+        "data_dir = {data_dir_value}
 
 # 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。
 bind_addr = \"0.0.0.0:41145\"
@@ -241,10 +309,16 @@ relay_urls = []
 
 [telemetry]
 enabled = false
-",
-        library_dir
-    );
-    std::fs::write(dir.join("config.toml"), config).map_err(|e| e.to_string())
+"
+    )
+}
+
+/// Write the initial config.toml (T-042 step 1) into the platform dir.
+#[tauri::command]
+fn write_config(library_dir: String) -> Result<(), String> {
+    let dir = platform::adapter().data_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join("config.toml"), render_config(&library_dir)).map_err(|e| e.to_string())
 }
 
 /// DESK-29 (#268)：`--version` 输出里那个"这确实是我们的 daemon"的记号。
@@ -929,6 +1003,211 @@ fn tray_left_click_opens_window(
 
 #[cfg(test)]
 mod tests {
+
+    // ── DESK-27 (#219)：反斜杠翻倍回路 ────────────────────────────────
+    //
+    // 这一组测试就是卡面验收标准 3 要的「锁住幂等性」：把 `write_config` 里
+    // 那句 `normalize_separators` 去掉，下面 doubled/quadrupled 那几条会立刻
+    // 变红（本卡实施时实测过，反证输出贴在 PR 里）。
+
+    /// 正常路径必须原样通过 —— 归一不许"顺手美化"没坏的东西。
+    #[test]
+    fn desk27_a_healthy_path_is_untouched() {
+        for p in [
+            "C:\\Users\\ethan\\Pictures",
+            "C:\\",
+            "relative\\sub",
+            "/unix/style",
+        ] {
+            assert_eq!(normalize_separators(p), p, "健康路径被改动了: {p}");
+        }
+    }
+
+    /// 被翻倍过的路径必须收敛回单分隔符 —— **任意轮数**。
+    ///
+    /// 这是本卡的正题：真机上已经翻到过每个分隔符四个反斜杠。修法按「折叠
+    /// 重复分隔符」而不是「反转义 N 次」，所以不需要事先知道 N。
+    #[test]
+    fn desk27_any_number_of_doublings_converges() {
+        let want = "C:\\Users\\ethan\\Pictures";
+        for p in [
+            "C:\\\\Users\\\\ethan\\\\Pictures",             // N=2
+            "C:\\\\\\\\Users\\\\\\\\ethan\\\\\\\\Pictures", // N=4
+            "C:\\\\\\\\\\\\\\\\Users\\\\\\\\\\\\\\\\ethan\\\\\\\\\\\\\\\\Pictures", // N=8
+        ] {
+            assert_eq!(normalize_separators(p), want, "没收敛: {p}");
+        }
+    }
+
+    /// ⚠️ UNC 的**前导两个**分隔符是语义，不许折掉。
+    ///
+    /// 这条是本卡实施时实测否掉 `Path::components()` 方案的那个反例：
+    /// `components()` 会把翻倍过的 UNC 折成**单个**前导分隔符，得到另一个
+    /// （错的）路径 —— 比放着不修更坏，因为 Windows 至少还能折叠解析损坏的
+    /// 那个，而单前导的版本指向完全不同的地方。
+    #[test]
+    fn desk27_unc_and_verbatim_prefixes_keep_their_leading_pair() {
+        // 健康的 UNC / verbatim：原样。
+        assert_eq!(
+            normalize_separators("\\\\server\\share\\dir"),
+            "\\\\server\\share\\dir"
+        );
+        assert_eq!(
+            normalize_separators("\\\\?\\C:\\Users\\x"),
+            "\\\\?\\C:\\Users\\x"
+        );
+        // 被翻倍过的 UNC / verbatim：前导收成两个，中间收成一个。
+        assert_eq!(
+            normalize_separators("\\\\\\\\server\\\\share\\\\dir"),
+            "\\\\server\\share\\dir"
+        );
+        assert_eq!(
+            normalize_separators("\\\\\\\\?\\\\C:\\\\Users\\\\x"),
+            "\\\\?\\C:\\Users\\x"
+        );
+        // 单个前导分隔符（根相对路径）不许被撑成两个。
+        assert_eq!(normalize_separators("\\Users\\x"), "\\Users\\x");
+    }
+
+    /// 幂等：再归一一次不再变。这条保证「写→读→再写」不会漂移。
+    #[test]
+    fn desk27_normalization_is_idempotent() {
+        for p in [
+            "C:\\Users\\x",
+            "C:\\\\Users\\\\x",
+            "C:\\\\\\\\Users\\\\\\\\x",
+            "\\\\server\\share",
+            "\\\\\\\\server\\\\share",
+            "\\\\?\\C:\\x",
+            "\\Users\\x",
+            "no-separators-at-all",
+            "",
+        ] {
+            let once = normalize_separators(p);
+            let twice = normalize_separators(&once);
+            assert_eq!(once, twice, "不幂等: {p} -> {once} -> {twice}");
+        }
+    }
+
+    /// 非 Windows 的路径形状（无反斜杠）必须是恒等变换 —— 卡面验收标准 5：
+    /// Linux/macOS 行为完全不变。
+    #[test]
+    fn desk27_paths_without_backslashes_are_identity() {
+        for p in [
+            "/home/ethan/Pictures/P-Pass",
+            "/Users/ethan/Pictures/P-Pass 家庭照片库",
+            "relative/path",
+        ] {
+            assert_eq!(normalize_separators(p), p);
+        }
+    }
+
+    /// DESK-27 (#219) 验收标准 1 的可重复版本：**连续三轮，字节数必须相同**。
+    ///
+    /// 走的是向导的真实代码路径 —— `read_config_data_dir`（#209 的反转义）
+    /// → 预填归一 → `render_config` → 写盘 —— 只是没有 GUI。真机点三次向导
+    /// 与这三轮跑的是同一串函数；把它做成测试的好处是**可重复、会在回归时
+    /// 变红**，而点 GUI 的记录只能证明当时那一次。
+    ///
+    /// 起点刻意用真机上观测到的**损坏形状**（每个分隔符四个反斜杠，卡面
+    /// 2026-09-18 记的 309 字节 / 16 个 0x5C 就是这个形状），所以这条测试
+    /// 同时覆盖了验收标准 2（存量修复）。
+    #[test]
+    fn desk27_three_wizard_rounds_are_byte_identical_and_repair_legacy() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+
+        // 真机损坏态：data_dir = "C:@@@@Users@@@@ethan@@@@Pictures"
+        // （文件里每个分隔符四个反斜杠）
+        let legacy = format!(
+            "data_dir = \"C:{s}{s}{s}{s}Users{s}{s}{s}{s}ethan{s}{s}{s}{s}Pictures\"\n",
+            s = '\\'
+        );
+        std::fs::write(&cfg, &legacy).unwrap();
+        let legacy_backslashes = std::fs::read(&cfg)
+            .unwrap()
+            .iter()
+            .filter(|&&b| b == b'\\')
+            .count();
+        assert_eq!(legacy_backslashes, 12, "起点应当是损坏态（12 个 0x5C）");
+
+        let mut rounds = Vec::new();
+        for _ in 0..3 {
+            // 向导做的事：读回已配置的库目录 → 预填（归一）→ 用户不改 → 写回。
+            let prefill = ipc::read_config_data_dir(dir.path())
+                .map(|v| normalize_separators(&v))
+                .expect("读不到 data_dir");
+            std::fs::write(&cfg, render_config(&prefill)).unwrap();
+            let bytes = std::fs::read(&cfg).unwrap();
+            let n = bytes.iter().filter(|&&b| b == b'\\').count();
+            let parsed: toml::Value =
+                toml::from_str(&String::from_utf8(bytes).unwrap()).expect("必须是合法 TOML");
+            rounds.push((n, parsed["data_dir"].as_str().unwrap().to_string()));
+        }
+
+        // 打出来便于取证（`--nocapture` 可见；卡面要求贴三次的真实字节数）。
+        println!(
+            "DESK-27 起点 0x5C={legacy_backslashes}  三轮 0x5C={:?}  data_dir={:?}",
+            rounds.iter().map(|r| r.0).collect::<Vec<_>>(),
+            rounds[2].1
+        );
+        // 三轮的字节数必须完全相同 —— 改前是 N、2N、4N。
+        assert_eq!(
+            rounds[0].0, rounds[1].0,
+            "第 1→2 轮反斜杠数变了: {rounds:?}"
+        );
+        assert_eq!(
+            rounds[1].0, rounds[2].0,
+            "第 2→3 轮反斜杠数变了: {rounds:?}"
+        );
+
+        // 且三轮解析出来都是**归一后的真实路径**（存量已修复）。
+        let want = format!("C:{s}Users{s}ethan{s}Pictures", s = '\\');
+        for (i, (_, v)) in rounds.iter().enumerate() {
+            assert_eq!(v, &want, "第 {} 轮的 data_dir 不是归一值", i + 1);
+        }
+    }
+
+    /// 写入方产出的必须是**真 TOML**，且读回来等于**归一后**的路径。
+    ///
+    /// ⚠️ 刻意走 `render_config`（而不是直接调 `normalize_separators`）——
+    /// 这样「把归一那步去掉」才会让本测试变红。卡面验收标准 3 要的就是这个；
+    /// 只测归一函数本身的话，删掉调用点测试照样绿，那种反证等于没做。
+    #[test]
+    fn desk27_rendered_config_round_trips_and_is_normalized() {
+        let want = "C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库";
+        // 损坏输入（每个分隔符两个/四个反斜杠）必须写出健康值。
+        for input in [
+            want,
+            "C:\\\\Users\\\\ethan\\\\Pictures\\\\P-Pass 家庭照片库",
+            "C:\\\\\\\\Users\\\\\\\\ethan\\\\\\\\Pictures\\\\\\\\P-Pass 家庭照片库",
+        ] {
+            let doc = render_config(input);
+            let parsed: toml::Value = toml::from_str(&doc)
+                .unwrap_or_else(|e| panic!("产出的不是合法 TOML: {e} / doc={doc}"));
+            assert_eq!(
+                parsed["data_dir"].as_str().unwrap(),
+                want,
+                "render_config 没把 {input} 归一"
+            );
+        }
+        // UNC / 含引号这些边界也要能往返（值等于归一后的自己）。
+        for input in [
+            "\\\\server\\share\\dir",
+            "\\\\\\\\server\\\\share\\\\dir",
+            "C:\\Users\\O'Brien\\Pics",
+            "C:\\Users\\say \"hi\"\\Pics",
+        ] {
+            let doc = render_config(input);
+            let parsed: toml::Value =
+                toml::from_str(&doc).unwrap_or_else(|e| panic!("不是合法 TOML: {e}"));
+            assert_eq!(
+                parsed["data_dir"].as_str().unwrap(),
+                normalize_separators(input),
+                "往返后值变了: {input}"
+            );
+        }
+    }
     use super::*;
 
     /// DESK-28 回归锁：**每一个把窗口拉回来的入口都必须先 unminimize**。
