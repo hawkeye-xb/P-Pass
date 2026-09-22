@@ -44,7 +44,7 @@ android {
             System.getenv("PPF_BUILD_VERSION")
                 ?.takeIf { it.isNotBlank() }
                 ?.removePrefix("v")
-                ?: "0.5.7-test.1"
+                ?: "0.5.7-test.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

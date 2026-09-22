@@ -383,8 +383,14 @@ async fn main() -> anyhow::Result<()> {
                     continue;
                 }
                 let accept = line.trim().eq_ignore_ascii_case("y");
-                if let Some(name) = ipc.confirm(None, None, accept) {
-                    println!("「{name}」：{}", if accept { "已允许" } else { "已拒绝" });
+                match ipc.confirm(None, None, accept) {
+                    daemon::ConfirmOutcome::Decided(name) => {
+                        println!("「{name}」：{}", if accept { "已允许" } else { "已拒绝" });
+                    }
+                    daemon::ConfirmOutcome::Expired(name) => {
+                        println!("「{name}」：请求已失效（对方已放弃），这次点击没有生效");
+                    }
+                    daemon::ConfirmOutcome::NotFound => {}
                 }
             }
         }

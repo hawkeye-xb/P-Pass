@@ -21,6 +21,17 @@ use tokio::sync::oneshot;
 
 pub const TOKEN_TTL_MS: i64 = 600_000;
 
+/// DEV-05 (#276): how long a pending request may wait for the owner.
+///
+/// Must stay **below** the Android side's own wait (`PairFlow.kt`
+/// default `waitMs = 120_000` — the phone drops the connection and
+/// gives up at 120 s). The owner's reaction budget on the desktop is
+/// the phone's reaction budget on this screen: a click after the phone
+/// has walked away lands on a dead request, which is the whole bug.
+/// Anything ≤ TOKEN_TTL_MS is a non-extension of the pairing window;
+/// 110 s leaves the phone a 10 s margin to deliver a real rejection.
+pub const PENDING_TTL_MS: i64 = 110_000;
+
 /// Why a PairRequest was turned away.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairRejection {
@@ -49,12 +60,30 @@ pub struct PendingPair {
     pub peer: transport::NodeId,
     pub device_name: String,
     pub role: Role,
+    /// DEV-05 (#276): wall-clock ms when this request entered the
+    /// queue. The queue side had no way to tell "how long has this row
+    /// been waiting" — without it neither a TTL sweep nor a
+    /// "已失效" marker is expressible. Set at enqueue; never updated.
+    pub requested_at: i64,
     decision: oneshot::Sender<PairDecision>,
 }
 
+/// The owner's click landed on a request whose other end is gone: the
+/// phone already gave up (or its connection dropped), so the decision
+/// has nowhere to go. DEV-05 (#276): this used to be swallowed by
+/// `let _ = send(...)` — the desktop showed "已允许" for a request
+/// nobody would ever honour. An exception to expose, not to hide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecisionUndelivered;
+
 impl PendingPair {
-    pub fn decide(self, decision: PairDecision) {
-        let _ = self.decision.send(decision);
+    /// Sends the decision to the waiting request. `Err` means the
+    /// receiving half was already dropped — the phone is not there
+    /// anymore, the owner approved a dead request.
+    pub fn decide(self, decision: PairDecision) -> Result<(), DecisionUndelivered> {
+        self.decision
+            .send(decision)
+            .map_err(|_| DecisionUndelivered)
     }
 }
 
@@ -76,6 +105,11 @@ struct Inner {
 pub struct Pairing {
     db: Db,
     node_id: transport::NodeId,
+    /// DEV-05 (#276): how long the request side waits for the owner
+    /// before the pairing is resolved as denied. Production default is
+    /// [`PENDING_TTL_MS`]; tests inject a short one via
+    /// [`Pairing::with_pending_ttl`] instead of sleeping 110 s.
+    pending_ttl_ms: i64,
     /// Live dialable-address provider — historically appended to QR
     /// strings as `&a=` (full PeerAddr base64) so a scan connects without
     /// discovery services (真机冒烟教训: 办公网屏蔽 n0 发现,纯 NodeId
@@ -117,6 +151,7 @@ impl Pairing {
             Self {
                 db,
                 node_id,
+                pending_ttl_ms: PENDING_TTL_MS,
                 addr_provider,
                 relay_provider,
                 events: None,
@@ -132,6 +167,13 @@ impl Pairing {
     /// IPC-02: 注入事件总线——配对落定后发 device.changed。
     pub fn with_events(mut self, events: crate::events::EventBus) -> Self {
         self.events = Some(events);
+        self
+    }
+
+    /// DEV-05 (#276): override the request-side pending TTL (test seam —
+    /// production keeps [`PENDING_TTL_MS`] so tests need not sleep 110 s).
+    pub fn with_pending_ttl(mut self, ttl_ms: i64) -> Self {
+        self.pending_ttl_ms = ttl_ms;
         self
     }
 
@@ -192,6 +234,7 @@ impl Pairing {
                 peer,
                 device_name: req.device_name.clone(),
                 role,
+                requested_at: now_ms,
                 decision: tx,
             };
             if inner.pending_tx.send(pending).is_err() {
@@ -212,15 +255,41 @@ impl Pairing {
             ))
             .await;
 
-        let decision = decision_rx.await;
-        let accept = matches!(decision, Ok(PairDecision::Accept));
+        // DEV-05 (#276): the wait for the owner is bounded. Without this
+        // arm, a request whose phone already gave up sat in `await` until
+        // process exit — and the queue row stayed clickable. The timeout
+        // drops `decision_rx`, so the *queue* half of the fix is
+        // `ipc.rs`'s prune sweep + `confirm` surfacing `decide`'s
+        // Err; one side alone leaves the other lying.
+        let wait_started = tokio::time::Instant::now();
+        let decision = match tokio::time::timeout(
+            std::time::Duration::from_millis(self.pending_ttl_ms as u64),
+            decision_rx,
+        )
+        .await
+        {
+            Ok(Ok(d)) => Some(d),
+            // sender dropped (owner UI gone) or timed out: no verdict.
+            _ => None,
+        };
+        // DEV-05 (#276) 验收标准 4: the verdict timestamp is taken NOW —
+        // the moment the owner decided (or the request expired) — not the
+        // `now_ms` captured at request entry. Accept and deny share the
+        // same fix: the audit must answer "how long did the owner take to
+        // click?" for BOTH verdicts, and the timeout path lands on
+        // `denied`. Elapsed is added to the caller-injected `now_ms`
+        // (never wall-clock raw) so clock-jump scenarios keep the trail
+        // monotonic (T-070's injected clock stays the truth).
+        let decided_at = now_ms.saturating_add(wait_started.elapsed().as_millis() as i64);
+
+        let accept = matches!(decision, Some(PairDecision::Accept));
 
         if !accept {
             // T5: owner 拒绝（或 UI 消失/超时）同样入审计。
             let _ = self
                 .db
                 .append_audit(&storage::AuditEntry::local(
-                    now_ms,
+                    decided_at,
                     Some(peer.0.to_vec()),
                     "pair.denied",
                     None,
@@ -291,7 +360,7 @@ impl Pairing {
         let _ = self
             .db
             .append_audit(&storage::AuditEntry::local(
-                now_ms,
+                decided_at,
                 Some(peer.0.to_vec()),
                 "pair.accepted",
                 None,
