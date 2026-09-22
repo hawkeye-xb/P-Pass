@@ -79,6 +79,76 @@ sealed class BackupUiState {
     data class Trouble(val text: String) : BackupUiState()
 }
 
+// ── UI-16：英雄卡的绿色是承诺 ──────────────────────────────────
+// 事实源：docs/design/2026-09-22-home-notice-priority.md §2.2 规则 G、
+// §2.3 规则 H、§2.3b 规则 S。三条判据全部提纯成纯函数（与
+// shouldShowWifiDeferredHint / heroActionOf 同一条路），JVM 直接可测；
+// 本文件只做「裁决 → 颜色/字符串资源」的映射。
+//
+// 为什么判据的输入是 triplet 而不是新参数：HomeScreen 的调用方是
+// MainActivity，本卡范围不含它；加一个带默认值的新参数会让测试全绿而生产
+// 依旧恒绿——那是假修。G4/G5 两票因此随三元组从 BackupUiStateHolder 走
+// 同一个 tick 过来（见 tripletOf 的注释）。
+
+/** 规则 H：英雄卡主位四选一，互斥、无第五种。 */
+enum class HeroRender {
+    /** H-A：相册权限不足，引导卡顶替整块三元组。 */
+    AccessBlocked,
+
+    /** H-B：读不到手机相册的数量（三元组为 null）。 */
+    Unreadable,
+
+    /** H-C：两个数对不上（clamp 前的原始已确认数 > N）——不渲染任何 m/n
+     *  分数，改说「正在核对」。L0：数据不可信压过一切完成度结论。 */
+    Unreconciled,
+
+    /** H-D：三元组，配色由规则 G 决定。 */
+    Triplet,
+}
+
+fun heroRenderOf(mediaAccess: MediaAccess, triplet: BackupTriplet?): HeroRender = when {
+    mediaAccess != MediaAccess.FULL -> HeroRender.AccessBlocked
+    triplet == null -> HeroRender.Unreadable
+    // clamp 后的 m 恒 ≤ n，所以这里必须读 confirmedRaw：真机「23 / 23」那一例
+    // m == n，clamp 是恒等变换，一行代码都没执行，英雄卡照样撒谎。
+    triplet.confirmedRaw > triplet.n -> HeroRender.Unreconciled
+    else -> HeroRender.Triplet
+}
+
+/**
+ * 规则 G：主数字与 `hero_of_n` 用 `PPColor.Safe`，**当且仅当**五条同时成立。
+ * 任一条不成立 → 不得为绿（R-GREEN：绿色只表示已确认成功或数据已安全存好）。
+ */
+fun heroNumberIsSafe(
+    mediaAccess: MediaAccess,
+    triplet: BackupTriplet?,
+    pairingLost: Boolean,
+): Boolean =
+    mediaAccess == MediaAccess.FULL &&        // G1 权限完整
+        triplet != null &&                    // G2 三元组可用
+        !pairingLost &&                       // G3 未失联
+        !triplet.hasFailedNeedsUser &&        // G4 账本无 FAILED_NEEDS_USER
+        !triplet.pausedByUser                 // G5 未被用户暂停
+
+/**
+ * 规则 S：状态行「照片都存好了」用**文字**说的是和主数字同一件事，所以受
+ * 同一组闸门约束（S1 = G1–G5），外加两条「还有事没了结」的事实：
+ * S2 无 SKIP-MISS、S3 无 CANCEL-ROW。
+ *
+ * S2 在投影层也堵了一道（`flowIsAllDone` 不再把 `SKIPPED_SOURCE_MISSING`
+ * 当完成），这里是同一条规则在渲染层的闸门——两道门各自可测，且都不许松。
+ */
+fun allSafeTextAllowed(
+    mediaAccess: MediaAccess,
+    triplet: BackupTriplet?,
+    pairingLost: Boolean,
+    missingSourceCount: Int,
+    cancelledRoundCount: Int,
+): Boolean =
+    heroNumberIsSafe(mediaAccess, triplet, pairingLost) &&
+        missingSourceCount == 0 &&
+        cancelledRoundCount == 0
+
 @Composable
 fun HomeScreen(
     // T-083 目标 1：副标题「已连接 …」已删（连接状态是桌面设备行的职责，
@@ -224,19 +294,25 @@ fun HomeScreen(
                     }
                 } else {
                 val t = triplet
-                if (t != null) {
+                val heroRender = heroRenderOf(mediaAccess, t)
+                if (heroRender == HeroRender.Triplet && t != null) {
+                    // UI-16 规则 G：五条闸门全过才准绿；任一条不成立退回墨色。
+                    // 恒绿的那两行是本卡要修的缺陷本体——配对已断/有失败待处理/
+                    // 被按停时，绿色是在替一件没发生的事作保。
+                    val numberColor =
+                        if (heroNumberIsSafe(mediaAccess, t, pairingLost)) PPColor.Safe else PPColor.Ink
                     Row(verticalAlignment = Alignment.Bottom) {
                         // 设计稿："1,180 / 1,234 张已回家"——千分位分组，
                         // 三位数以内跟纯数字一样，大库才看得出差别。
                         Text(
                             groupThousands(t.m),
                             fontSize = 40.sp, fontFamily = PPFont.Serif,
-                            color = PPColor.Safe,
+                            color = numberColor,
                         )
                         Text(
                             stringResource(R.string.hero_of_n, groupThousands(t.n)),
                             fontSize = 18.sp, fontFamily = PPFont.Serif,
-                            color = PPColor.Safe,
+                            color = numberColor,
                             modifier = Modifier.padding(start = 6.dp, bottom = 4.dp),
                         )
                     }
@@ -250,6 +326,20 @@ fun HomeScreen(
                     Text(
                         lastText + pendingSuffix,
                         fontSize = 14.sp, color = PPColor.Ink60,
+                    )
+                } else if (heroRender == HeroRender.Unreconciled) {
+                    // UI-16 规则 H-C：账本说的已确认数多于相册里的文件数——
+                    // 两个数对不上。既不编数字（clamp 出的绿色「10 / 10」），
+                    // 也不藏事实（原始的「51 / 10」），第三条路是说实话：
+                    // 不渲染任何分数，非绿，出路指向对账（#139 MOB-87）。
+                    Text(
+                        stringResource(R.string.hero_unreconciled_title),
+                        fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Waiting,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.hero_unreconciled_body),
+                        fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink60,
                     )
                 } else {
                     // DOG-01d: 三元组不可用（媒体查询失败）→ 不编数字。
@@ -305,7 +395,17 @@ fun HomeScreen(
                             }
                         } else {
                             Text(
-                                idleStatusText(line),
+                                idleStatusText(
+                                    line,
+                                    // UI-16 规则 S：文字版的绿色谎言走同一组闸门。
+                                    allSafeTextAllowed(
+                                        mediaAccess = mediaAccess,
+                                        triplet = t,
+                                        pairingLost = pairingLost,
+                                        missingSourceCount = missingSourceNotice?.count ?: 0,
+                                        cancelledRoundCount = cancelledRoundCount ?: 0,
+                                    ),
+                                ),
                                 fontSize = 13.5.sp, color = PPColor.Ink60,
                             )
                         }
@@ -750,10 +850,13 @@ private fun workingText(line: StatusLine.Working): String = when (val s = line.s
  * 逐一出对应文案，才是「点了有交代」的最小闭环。
  */
 @Composable
-private fun idleStatusText(line: StatusLine): String = when (line) {
+private fun idleStatusText(line: StatusLine, allSafeAllowed: Boolean = true): String = when (line) {
     is StatusLine.NoAlbums -> stringResource(R.string.state_no_albums)
     is StatusLine.Pending -> stringResource(R.string.state_pending, line.k)
-    is StatusLine.AllSafe -> stringResource(R.string.state_safe)
+    // UI-16 规则 S：闸门不过时退回既有的中性分支，**不许**说「都存好了」。
+    is StatusLine.AllSafe ->
+        if (allSafeAllowed) stringResource(R.string.state_safe)
+        else stringResource(R.string.idle_auto_hint)
     is StatusLine.Ready -> stringResource(R.string.idle_auto_hint)
     is StatusLine.WaitingForConstraints -> stringResource(R.string.backup_waiting_constraints)
     is StatusLine.CancelledCurrentRound -> stringResource(R.string.backup_round_cancelled)

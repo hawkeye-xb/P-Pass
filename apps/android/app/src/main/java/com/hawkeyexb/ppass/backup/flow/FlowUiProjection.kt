@@ -33,13 +33,47 @@ fun flowUiStateOf(snapshot: DiscoveryLedgerSnapshot): FlowUiState = when {
  * the only writer after REBUILD-00 froze the batch pipeline, so the old read
  * path froze the numbers on real devices (verifier observation, 2026-09-06).
  */
-data class FlowAggregate(val pending: Long, val confirmed: Long, val lastSuccessAt: Long)
+data class FlowAggregate(
+    val pending: Long,
+    val confirmed: Long,
+    val lastSuccessAt: Long,
+    /**
+     * UI-16 规则 G4：账本里待用户处理的失败项条数。**全量口径，不随
+     * [flowAggregateOf] 的 bucket 过滤收窄**——「有一张失败等着处理」在哪个
+     * 相册都不是「数据已安全存好」，它是绿色的否决票，不是完成度的分子。
+     */
+    val failedNeedsUser: Long = 0L,
+    /** UI-16 规则 G5：传输被用户按停（gate 语义由 #353/#362 定死，此处只读）。 */
+    val pausedByUser: Boolean = false,
+)
 
-fun flowAggregateOf(snapshot: DiscoveryLedgerSnapshot): FlowAggregate {
+/**
+ * UI-16: [bucketIds] = 当前选中相册（`null` = 全量，空集 = 一个都不备 → 0），
+ * 与 `ConfirmedStore.countInScope` 同一范围口径。
+ *
+ * 为什么必须能过滤：英雄卡把这里的 `confirmed` 当分子、把
+ * `MediaScanner.countAll(selectedBucketIds)` 当分母
+ * （`BackupUiStateHolder.refreshTriplet`）。过滤之前分子是**账本全量**、
+ * 分母是**选中相册的实时文件数**，两个集合既非包含关系也非同一单位，相除
+ * 本就不成立——真机因此渲染出绿字「10 / 10 张已回家」（配对已失效 + 1 张
+ * 失败）与「23 / 23 张已回家」（实有 4 张待传）。见
+ * docs/design/2026-09-22-home-notice-priority.md §4.1。
+ *
+ * 默认 `null` 是有意的：状态行/进度条/前台服务那几个调用方要的就是全量，
+ * 只有英雄卡的三元组按选中相册收窄。
+ */
+fun flowAggregateOf(
+    snapshot: DiscoveryLedgerSnapshot,
+    bucketIds: Set<Long>? = null,
+): FlowAggregate {
     var pending = 0L
     var confirmed = 0L
     var lastSuccessAt = 0L
+    var failedNeedsUser = 0L
     for (item in snapshot.items) {
+        // G4 先数，再过滤——见 [FlowAggregate.failedNeedsUser] 的口径说明。
+        if (item.deliveryState == DeliveryState.FAILED_NEEDS_USER) failedNeedsUser += 1
+        if (bucketIds != null && item.bucketId !in bucketIds) continue
         when (item.deliveryState) {
             // A user-cancelled round is a deliberate decision, not a debt;
             // scope-cancelled items left the selected scope entirely. Neither
@@ -55,18 +89,30 @@ fun flowAggregateOf(snapshot: DiscoveryLedgerSnapshot): FlowAggregate {
             -> Unit
         }
     }
-    return FlowAggregate(pending = pending, confirmed = confirmed, lastSuccessAt = lastSuccessAt)
+    return FlowAggregate(
+        pending = pending,
+        confirmed = confirmed,
+        lastSuccessAt = lastSuccessAt,
+        failedNeedsUser = failedNeedsUser,
+        pausedByUser = snapshot.consumerGate == ConsumerGate.PAUSED_BY_USER,
+    )
 }
 
 /**
  * UI-09: "本轮全部安全" — every discovered item in the current durable window
  * carries a completion receipt and at least one item exists. An empty ledger
  * (nothing discovered yet) is deliberately NOT all-done; it renders Ready.
+ *
+ * UI-16 规则 S（§2.3b）：`SKIPPED_SOURCE_MISSING` **曾算作完成**，于是账本里
+ * 有一张源已删除、永不重传的照片时，这里返回 true → [backupUiStateOf] 投影成
+ * `AllSafe` → 状态行说「照片都存好了」，而同屏的 `flowMissingSourceNotice`
+ * 正在说「已跳过 N 张…不会再重传」。那是英雄卡绿字谎言的文字版，同一个根因。
+ * 「跳过」不是「存好了」：判据收紧成**每一项都有完成回执**。
+ * （`CANCELLED_BY_USER_ROUND` 早就过不了这个 `all {}`，规则 S 的 S3 无需另加。）
  */
 fun flowIsAllDone(snapshot: DiscoveryLedgerSnapshot, aggregate: FlowAggregate): Boolean =
     aggregate.confirmed > 0L && snapshot.items.all {
-        it.deliveryState == DeliveryState.CONFIRMED ||
-            it.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING
+        it.deliveryState == DeliveryState.CONFIRMED
     }
 
 /**

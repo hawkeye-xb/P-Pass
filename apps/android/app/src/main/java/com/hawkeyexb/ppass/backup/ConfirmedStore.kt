@@ -39,6 +39,15 @@ data class BackupTriplet(
     val n: Long,             // 手机 N 张（扫描范围全量 count）
     val m: Long,             // 已备份 M（该 remote 已确认条数）
     val lastSuccessAt: Long, // 最后成功时间（unix ms；0 = 从未成功）
+    /** UI-16 规则 H-C：**clamp 前**的账本原始已确认数。`confirmedRaw > n` =
+     *  两个数对不上，英雄卡不得渲染任何 m/n 分数（见 [tripletOf]）。
+     *  clamp 后的 [m] 看不见这件事——那正是真机「10 / 10」「23 / 23」两次
+     *  绿字假话能过关的原因。 */
+    val confirmedRaw: Long = m,
+    /** UI-16 规则 G4：账本里有待用户处理的失败项。 */
+    val hasFailedNeedsUser: Boolean = false,
+    /** UI-16 规则 G5：传输被用户按停。 */
+    val pausedByUser: Boolean = false,
 ) {
     /** 待备份 K = N - M（防御：不为负——UI 显示不允许负数）。 */
     val k: Long get() = (n - m).coerceAtLeast(0)
@@ -51,12 +60,30 @@ data class BackupTriplet(
  *  FIX-T6 验收③：**UI 三元组永不出现 M > N**——m 在这里 clamp 到 n
  *  （确认缓存漂移/口径过渡期 m 可能超 n，显示层必须收敛，否则 UI 出
  *  「手机 10 张 · 已备份 51」类假话）。k 由 clamp 后的 m 计算，恒 ≥0。
+ *
+ *  UI-16：clamp **不是**绿字假话的根因，也不许当修法——删掉它会让
+ *  「已备份 51 / 手机 10 张」回来，留着它是把假话换成更危险的绿色「10 / 10」。
+ *  所以 clamp 原样保留，同时把 clamp 前的原始数据留在
+ *  [BackupTriplet.confirmedRaw] 里，交给规则 H-C 决定「这一屏根本不该有分数」。
+ *
+ *  [hasFailedNeedsUser] / [pausedByUser] 是规则 G 的 G4 / G5 两票，由调用方
+ *  从同一份账本快照读出（`flowAggregateOf`）。它们随三元组走，因为英雄卡的
+ *  数字与它的配色说的是同一件事，拆成两条数据通道就必然漂移。
  */
-fun tripletOf(n: Long, confirmedCount: Long, lastSuccessAt: Long): BackupTriplet =
+fun tripletOf(
+    n: Long,
+    confirmedCount: Long,
+    lastSuccessAt: Long,
+    hasFailedNeedsUser: Boolean = false,
+    pausedByUser: Boolean = false,
+): BackupTriplet =
     BackupTriplet(
         n = n,
         m = confirmedCount.coerceAtMost(n),
         lastSuccessAt = lastSuccessAt,
+        confirmedRaw = confirmedCount,
+        hasFailedNeedsUser = hasFailedNeedsUser,
+        pausedByUser = pausedByUser,
     )
 
 /** DOG-01c: 一次成功 commit 后，本次候选**全部**确认。

@@ -10,6 +10,7 @@ package com.hawkeyexb.ppass.backup.flow
 
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -110,7 +111,7 @@ class UI09LedgerAggregateTest {
     }
 
     @Test
-    fun missing_source_is_terminal_not_pending_and_does_not_block_all_safe_for_remaining_media() {
+    fun missing_source_is_terminal_not_pending_but_it_does_block_the_all_safe_claim() {
         fun item(id: Long, state: DeliveryState) = TransferItem(
             stableId = "content://media/external/images/media/$id\u0000generation-7",
             sourceRef = "content://media/external/images/media/$id",
@@ -133,8 +134,12 @@ class UI09LedgerAggregateTest {
         assertEquals(0L, flowAggregateOf(snapshot).pending)
         assertEquals(1L, flowAggregateOf(snapshot).confirmed)
         assertEquals(1, flowMissingSourceNotice(snapshot)?.count)
-        assertTrue(flowIsAllDone(snapshot, flowAggregateOf(snapshot)))
-        assertTrue(backupUiStateOf(snapshot) is com.hawkeyexb.ppass.ui.BackupUiState.AllSafe)
+        // UI-16 规则 S（设计表 §2.3b）：这两条断言原本是反的（跳过算完成）。
+        // 于是「照片都存好了」与同屏的「已跳过 N 张…不会再重传」同时在场——
+        // 与 #350 报的绿字英雄卡是同一个谎，只是用文字说的。「跳过」不是
+        // 「存好了」，判据收紧后这里必须是 false。
+        assertFalse(flowIsAllDone(snapshot, flowAggregateOf(snapshot)))
+        assertFalse(backupUiStateOf(snapshot) is com.hawkeyexb.ppass.ui.BackupUiState.AllSafe)
     }
 
     @Test
