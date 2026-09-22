@@ -679,7 +679,7 @@ impl Router {
         let internal_err = |id: &str| {
             Resp::err(
                 id.to_string(),
-                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+                RespError::new(codes::INTERNAL, diag::keys::ERR_BACKUP_FAILED),
             )
         };
         match req.method.as_str() {
@@ -687,7 +687,7 @@ impl Router {
                 backup.begin(peer);
                 // AUDIT-01: legacy batch backup sessions are explicitly out
                 // of the v2 event matrix (card decision #4/#5) — no longer
-                // written to the long-term audit trail.
+                /// written to the long-term audit trail.
                 Resp::ok(req.id.clone(), serde_json::Value::Null)
             }
             methods::BACKUP_MANIFEST => {
@@ -704,8 +704,7 @@ impl Router {
                         Err(_) => internal_err(&req.id),
                     },
                     Err(e) => {
-                        tracing::warn!("backup.manifest from {peer:?} failed: {error}");
-                        let _ = &e;
+                        tracing::warn!("backup.manifest from {peer:?} failed: {e}");
                         internal_err(&req.id)
                     }
                 }
@@ -729,8 +728,7 @@ impl Router {
                         RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
                     ),
                     Err(e) => {
-                        tracing::warn!("backup.presence from {peer:?} failed: {error}");
-                        let _ = &e;
+                        tracing::warn!("backup.presence from {peer:?} failed: {e}");
                         internal_err(&req.id)
                     }
                 }
@@ -778,8 +776,7 @@ impl Router {
                         )
                     }
                     Err(e) => {
-                        tracing::warn!("backup.commit from {peer:?} failed: {error}");
-                        let _ = &e;
+                        tracing::warn!("backup.commit from {peer:?} failed: {e}");
                         internal_err(&req.id)
                     }
                 }
@@ -823,7 +820,7 @@ impl Router {
                 Resp::err(
                     req.id.clone(),
                     RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
-                );
+                )
             }
         }
     }
