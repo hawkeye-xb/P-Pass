@@ -157,6 +157,45 @@ fun allSafeTextAllowed(
         missingSourceCount == 0 &&
         cancelledRoundCount == 0
 
+/**
+ * 规则 P（事实源 §2.5，#361 步骤 2）：暂停**有理由**时，把理由说出来——
+ * 但**不新增横幅**，它是英雄卡状态行（A7）在暂停态下的替换文案，紧挨着
+ * 既有的「继续」按钮（A8）。
+ *
+ * [reasonRes] = 数据源（#379 的 `TransferProtectionStore`）给出的那句人话，
+ * `null` = 三态里的「未知」（只提交过请求 / 空 / 读不出）。三条闸门：
+ *
+ * - **ACCESS 压制**（§2.4 脚注 12）：`mediaAccess != FULL` 时英雄卡内部整块
+ *   被权限引导卡顶替（`HomeScreen.kt` 的 `if (mediaAccess != MediaAccess.FULL)`
+ *   分支），规则 P 该挂的那一行根本不存在——挂载点不在场，理由就不该假装
+ *   能显示。不是并存。
+ * - **PAIR 压制**（脚注 6）：配对失效时 [heroActionOf] 返回 `null`，「继续」
+ *   按钮不在场，同样没有挂载点；且「今天后台时间用完了」在配对已断时是误导。
+ * - **未知不说话**（R-UNKNOWN / #299 MOB-97）：`reasonRes == null` 时不渲染
+ *   任何理由，状态行退回既有的 `idleStatusText`——那条分支在暂停态下走
+ *   `Ready`/`Pending`，**不会**是「照片都存好了」（规则 G5 同时否掉绿色）。
+ *
+ * ⚠️ 已知局限（#361 步骤 1 登记的字段不新鲜问题，见报告）：数据源记的是
+ * 「最后一次保护尝试的结论」，账本里没有「这次暂停发生在何时」的落盘事实，
+ * 所以无法证明这条理由解释的就是当下这次暂停。此处只做了能做的那一半：
+ * 只有账本独立地说「确实停着」（[HeroAction.Resume] 在场）才会说理由，
+ * 绝不用这个字段去推断「有没有在传」。
+ */
+fun visiblePauseReasonRes(
+    state: BackupUiState,
+    mediaAccess: MediaAccess,
+    pairingLost: Boolean,
+    reasonRes: Int?,
+): Int? {
+    // ACCESS 压制：英雄卡内部整块被权限引导卡顶替，挂载点不存在。
+    if (mediaAccess != MediaAccess.FULL) return null
+    // 挂载点判据**复用**「继续」按钮那一条（[heroActionOf]），不另写一份：
+    // MOB-89 的事故正是两个判据各走各的，于是出现了一个两者不一致的组合。
+    // 这一条同时兜住 PAIR 压制（配对失效 ⇒ null）与「压根没暂停」。
+    if (heroActionOf(state, pairingLost) != HeroAction.Resume) return null
+    return reasonRes
+}
+
 @Composable
 fun HomeScreen(
     // T-083 目标 1：副标题「已连接 …」已删（连接状态是桌面设备行的职责，
@@ -228,6 +267,11 @@ fun HomeScreen(
     // MOB-100 关键判断 3：确认过的那批仍可查——横幅收起后计数搬进这一行，
     // 0 = 没有已确认的，不渲染。
     acknowledgedMissingSourceCount: Int = 0,
+    // UI-19 规则 P：为什么暂停。null = 三态里的「未知」⇒ 不渲染任何理由。
+    // 由 BackupUiStateHolder 每个 tick 从 #379 的 TransferProtectionStore 读出；
+    // HomeScreen 自己不碰数据源（Compose 里读盘，且 JVM 不可测）。出场闸门
+    // 见 [visiblePauseReasonRes]。
+    pauseReasonRes: Int? = null,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -409,8 +453,19 @@ fun HomeScreen(
                                 )
                             }
                         } else {
+                            // UI-19 规则 P：暂停**有理由**时，这一行换成那句人话，
+                            // 就挂在既有的「继续」按钮旁边——**不新增横幅**。
+                            // 「未知」（reasonRes == null）时一个字都不加，退回
+                            // idleStatusText 既有的分支（暂停态下是 Ready/Pending，
+                            // 规则 G5/S 保证它不会是「照片都存好了」）。
+                            val pauseReason = visiblePauseReasonRes(
+                                state = state,
+                                mediaAccess = mediaAccess,
+                                pairingLost = pairingLost,
+                                reasonRes = pauseReasonRes,
+                            )
                             Text(
-                                idleStatusText(
+                                if (pauseReason != null) stringResource(pauseReason) else idleStatusText(
                                     line,
                                     // UI-16 规则 S：文字版的绿色谎言走同一组闸门。
                                     allSafeTextAllowed(

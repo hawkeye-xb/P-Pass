@@ -16,6 +16,7 @@ import com.hawkeyexb.ppass.backup.flow.FlowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.FlowUiState
 import com.hawkeyexb.ppass.backup.flow.PairingEpoch
 import com.hawkeyexb.ppass.backup.flow.RoundProgress
+import com.hawkeyexb.ppass.backup.flow.TransferProtectionStore
 import com.hawkeyexb.ppass.backup.flow.acknowledgeFlowNotice
 import com.hawkeyexb.ppass.backup.flow.advanceRoundProgress
 import com.hawkeyexb.ppass.backup.flow.backupUiStateOf
@@ -36,6 +37,7 @@ import com.hawkeyexb.ppass.backup.flow.pauseFlow
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.flow.restoreAllCancelledFlowRounds
 import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
+import com.hawkeyexb.ppass.backup.flow.transferProtectionNoticeRes
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
@@ -111,6 +113,19 @@ class BackupUiStateHolder(
     private var previousRoundDone: Long = 0L
     private val _roundProgress = mutableStateOf<RoundProgress?>(null)
     val roundProgress: State<RoundProgress?> get() = _roundProgress
+    // UI-19 规则 P：为什么暂停。#379 的 TransferProtectionStore 是唯一数据源，
+    // 这里只做「读出来交给 UI」——null = 三态里的「未知」，UI 侧一个字不渲染。
+    //
+    // 为什么在这一层读、而不是让 HomeScreen 自己读：composable 里读盘既是
+    // 主线程 IO，又在本仓（无 Robolectric）根本测不了；而这个 tick 本来就在
+    // 读账本 JSON，多一次小文件读不引入新的时机。
+    //
+    // ⚠️ 这个字段**不保证新鲜**（步骤 1 的报告登记：被拦下的 START_REQUESTED
+    // 之后若 onStartCommand 始终没跑，盘上留的是上一次的结论）。所以它只被
+    // 当作「暂停的理由」候选，出场与否由账本独立判定的暂停态决定
+    // （见 ui/visiblePauseReasonRes），绝不用它去推断「有没有在传」。
+    private val _pauseReason = mutableStateOf<Int?>(null)
+    val pauseReason: State<Int?> get() = _pauseReason
 
     // MOB-88: 订阅取代轮询。
     //
@@ -305,6 +320,10 @@ class BackupUiStateHolder(
         previousPending = pending
         previousRoundDone = progress.done
         _roundProgress.value = progress
+        // UI-19：与账本同一 tick 读出「为什么暂停」，见 [pauseReason]。
+        _pauseReason.value = transferProtectionNoticeRes(
+            TransferProtectionStore(context.filesDir).load(),
+        )
     }
 
     /** MOB-59: re-admit every cancelled round's items as QUEUED and wake the consumer. */

@@ -158,6 +158,20 @@ class MOB100NoticeClearPathTest {
             Role.STATUS, Presence.TRANSIENT,
             ClearPath.NotApplicable("瞬态进度显示"),
         ),
+        NoticeEntry(
+            // UI-19 #361 步骤 2 新增：暂停的**理由**（规则 P，优先级表 §2.5）。
+            // 不是新横幅——它是 A7 那一行在暂停态下的替换文案，紧挨「继续」按钮。
+            // 登记成独立一行而不是塞进 A7 的「不适用」：它确实要求用户做事
+            // （把 App 留在屏幕上），按判据 4 那种行不许用「不适用」放过去。
+            "A11", "state_background_budget_paused / state_background_protection_unknown（暂停理由）",
+            "HomeScreen.kt 英雄卡状态行（visiblePauseReasonRes）",
+            Role.NOTICE, Presence.PERSISTENT,
+            ClearPath.UserAction(
+                "点既有的「继续」按钮 → FlowCommand.Continue：点它必然意味着 App 就在屏幕上，" +
+                    "而那正是 Android 文档所述重置 dataSync 配额计时的条件，也是传输根本不需要" +
+                    "后台保护的条件；理由随下一次保护结论改写而消失",
+            ),
+        ),
         // 区 B — 英雄卡下方正文
         NoticeEntry(
             "B1", "wifi_deferred_hint", "HomeScreen.kt shouldShowWifiDeferredHint",
@@ -395,13 +409,15 @@ class MOB100NoticeClearPathTest {
 
         val ids = manifest().map { it.id }
         assertEquals("清单里有重复 id", ids.size, ids.distinct().size)
-        val fromTable = ids.filterNot { it == "C4" }
+        // C4（#328 新增的去处行）与 A11（#361 步骤 2 的暂停理由）都不在表 §1
+        // 的 22 条里——表 §2.4 把 PAUSE-WHY 登记为决策单元时它还没接线。
+        val fromTable = ids.filterNot { it == "C4" || it == "A11" }
         assertEquals(
-            "优先级表 §1 是 22 条，清单里来自表的行必须也是 22 条（C4 是本卡新增的去处行）",
+            "优先级表 §1 是 22 条，清单里来自表的行必须也是 22 条（C4 / A11 是后续卡新增的行）",
             22,
             fromTable.size,
         )
-        assertEquals(23, ids.size)
+        assertEquals(24, ids.size)
     }
 
     // D3 的反证锚点：holder 的那两个函数必须真的投一条 action 出去。
