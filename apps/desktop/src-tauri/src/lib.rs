@@ -566,26 +566,28 @@ fn export_logs_bundle() -> Result<Value, String> {
     };
     // daemon 可达就把它那三份要过来（它写出来的 zip 先整份读进内存，
     // 之后才允许覆盖同名文件）；不可达只记原因，收集继续。
+    // DESK-31：版本号在 status 那一步就拿定了，必须独立于「三份日志要不
+    // 要得到」传下去——logs.export 被拒 / zip 读不出时，包里印的仍是在线
+    // 服务自报的版本，不是 App 自带 sidecar 的版本。
     let daemon = match ipc::DaemonHandle::discover() {
         Ok(handle) => {
             let version = handle
                 .call("status", json!({}))
                 .ok()
                 .and_then(|v| v["version"].as_str().map(str::to_string));
-            match handle.call("logs.export", json!({})) {
-                Ok(v) => {
-                    let daemon_zip = v["zip"].as_str().unwrap_or_default().to_string();
-                    match daemon_logs::read_zip_entries(std::path::Path::new(&daemon_zip)) {
-                        Ok(entries) => Ok(DaemonParts { version, entries }),
-                        Err(e) => Err(format!("后台服务的日志包读不出来：{e}")),
-                    }
-                }
-                Err(e) => Err(format!("后台服务拒绝了 logs.export：{e}")),
+            let logs =
+                daemon_entries_from_logs_export(handle.call("logs.export", json!({})), |zip| {
+                    daemon_logs::read_zip_entries(std::path::Path::new(zip))
+                        .map_err(|e| format!("后台服务的日志包读不出来：{e}"))
+                });
+            match logs {
+                Ok(entries) => DaemonCollection::Complete(DaemonParts { version, entries }),
+                Err(reason) => DaemonCollection::LogsUnavailable { version, reason },
             }
         }
         // 版本号仍然要有：直接问内置的服务程序自己（真机事故里正是
         // `ppf-daemon --version` 一句话拿到了真相）。
-        Err(e) => Err(e),
+        Err(e) => DaemonCollection::Unreachable(e),
     };
     assemble_export(&env, daemon, sidecar_daemon_version)
 }
@@ -607,12 +609,44 @@ struct DaemonParts {
     entries: Vec<(String, Vec<u8>)>,
 }
 
-/// 组装并落盘。**daemon 那部分是 `Result`，Err 不是失败路径**——它只是
-/// 少了三份文件、多一份 `daemon-unreachable.txt`，zip 照出。这个函数里
-/// 一行 `return Err` 都不能因为 daemon 不可达而触发（DESK-10 的核心）。
+/// daemon 收集结果的三态（DESK-31）。`LogsUnavailable` 与 `Unreachable`
+/// 必须分开：前者服务活着、只是三份日志没拿到，versions.txt 印的是
+/// **在线服务自报版本**；后者服务压根没起来，才退回 sidecar 版本。
+enum DaemonCollection {
+    /// discover() 失败：后台服务压根没起来（DESK-10 的不可达分支）。
+    Unreachable(String),
+    /// 服务在线（version 已拿到或为 None），但 diag / devices / audit
+    /// 三份没拿到。version 独立于日志获取成败——这是本卡的修复点。
+    LogsUnavailable {
+        version: Option<String>,
+        reason: String,
+    },
+    /// 三份日志完整拿到（version 是服务自报版本，旧 daemon 可能 None）。
+    Complete(DaemonParts),
+}
+
+/// logs.export 的 IPC 结果 → 三份日志条目。两条失败路径——应答被拒、
+/// zip 读不出——都在这一步落成 Err(String)，版本号的去留由调用方决定。
+/// 单独成函数，是为了让两条分支都能在不起真 daemon 的情况下被单测喂到。
+fn daemon_entries_from_logs_export(
+    export: Result<serde_json::Value, String>,
+    read_zip: impl FnOnce(&str) -> Result<Vec<(String, Vec<u8>)>, String>,
+) -> Result<Vec<(String, Vec<u8>)>, String> {
+    match export {
+        Ok(v) => {
+            let daemon_zip = v["zip"].as_str().unwrap_or_default().to_string();
+            read_zip(&daemon_zip)
+        }
+        Err(e) => Err(format!("后台服务拒绝了 logs.export：{e}")),
+    }
+}
+
+/// 组装并落盘。**daemon 那部分不是失败路径**——它只是少了三份文件、
+/// 多一份说明 txt，zip 照出。这个函数里一行 `return Err` 都不能因为
+/// daemon 不可达而触发（DESK-10 的核心）。
 fn assemble_export(
     env: &ExportEnv,
-    daemon: Result<DaemonParts, String>,
+    daemon: DaemonCollection,
     sidecar_version: impl Fn() -> Option<String>,
 ) -> Result<Value, String> {
     let home = env.home.display().to_string();
@@ -639,11 +673,17 @@ fn assemble_export(
         ..Default::default()
     };
     match daemon {
-        Ok(parts) => {
+        DaemonCollection::Complete(parts) => {
             inputs.daemon_version = parts.version;
             inputs.daemon_entries = parts.entries;
         }
-        Err(reason) => {
+        // DESK-31：服务在线、日志没拿到——版本用在线自报的，不退回
+        // sidecar；reachable 不是 no，单独写 daemon-logs-unavailable.txt。
+        DaemonCollection::LogsUnavailable { version, reason } => {
+            inputs.daemon_version = version;
+            inputs.daemon_logs_unavailable = Some(reason);
+        }
+        DaemonCollection::Unreachable(reason) => {
             inputs.daemon_unreachable = Some(reason);
             inputs.daemon_version = sidecar_version();
         }
@@ -1132,7 +1172,9 @@ mod tests {
         };
         let res = assemble_export(
             &env,
-            Err("找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".into()),
+            DaemonCollection::Unreachable(
+                "找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".into(),
+            ),
             || Some("0.3.0".into()),
         )
         .expect("daemon 不可达也必须出包");
@@ -1192,7 +1234,7 @@ mod tests {
                 ("audit.json".into(), b"[]".to_vec()),
             ],
         };
-        let res = assemble_export(&env, Ok(parts), || None).unwrap();
+        let res = assemble_export(&env, DaemonCollection::Complete(parts), || None).unwrap();
         assert_eq!(res["daemon_reachable"], true);
         let entries =
             daemon_logs::read_zip_entries(std::path::Path::new(res["zip"].as_str().unwrap()))
@@ -1208,6 +1250,185 @@ mod tests {
             .map(|(_, b)| String::from_utf8_lossy(b).to_string())
             .unwrap();
         assert!(sources.contains("未注册"), "{sources}");
+    }
+
+    /// DESK-31 反证（logs.export 被拒那条）：服务在线（status 自报
+    /// 9.9.9-fake），但 logs.export 返回 Err——versions.txt 必须印在线
+    /// 版本。修复前这条真红：版本被丢、退回 sidecar 0.3.0、reachable
+    /// 印 no、还多写一份 daemon-unreachable.txt。
+    #[test]
+    fn export_keeps_live_version_when_logs_export_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("support");
+        std::fs::create_dir_all(&platform_dir).unwrap();
+        let env = ExportEnv {
+            platform_dir,
+            home: tmp.path().join("home"),
+            plist: tmp.path().join("missing.plist"),
+        };
+        let collection = DaemonCollection::LogsUnavailable {
+            version: Some("9.9.9-fake".into()),
+            reason: "后台服务拒绝了 logs.export：模拟拒绝".into(),
+        };
+        // 输入构造自检：status 那一步确实已拿到在线版本。
+        assert!(
+            matches!(
+                &collection,
+                DaemonCollection::LogsUnavailable { version: Some(v), .. } if v == "9.9.9-fake"
+            ),
+            "status 自报版本必须在输入里"
+        );
+        let res = assemble_export(&env, collection, || Some("0.3.0".into()))
+            .expect("日志要不到也必须出包（DESK-10）");
+        // 服务起来了——daemon_reachable 不得是 no。
+        assert_eq!(res["daemon_reachable"], true);
+        let entries =
+            daemon_logs::read_zip_entries(std::path::Path::new(res["zip"].as_str().unwrap()))
+                .unwrap();
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            !names.contains(&"daemon-unreachable.txt"),
+            "服务在线，不许写「不可达」说明：{names:?}"
+        );
+        assert!(
+            names.contains(&"daemon-logs-unavailable.txt"),
+            "缺 daemon-logs-unavailable.txt：{names:?}"
+        );
+        let text: String = entries
+            .iter()
+            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        // 核心断言：版本是在线服务自报的，不是 sidecar 的。
+        assert!(text.contains("daemon_version = 9.9.9-fake"), "{text}");
+        assert!(!text.contains("daemon_version = 0.3.0"), "{text}");
+        // 三态措辞：不得印 no。
+        assert!(text.contains("daemon_reachable = partial"), "{text}");
+        assert!(!text.contains("daemon_reachable = no"), "{text}");
+        // 说明文件把「在线但要不到日志」和「压根没起来」区分开。
+        let note = entries
+            .iter()
+            .find(|(n, _)| n == "daemon-logs-unavailable.txt")
+            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+            .unwrap();
+        assert!(note.contains("在线"), "{note}");
+        assert!(note.contains("两回事"), "{note}");
+    }
+
+    /// DESK-31 反证（zip 读不出来那条）：logs.export 应答了，但 zip 读
+    /// 不出——同样必须保住在线版本。与上一条是两条不同的失败路径，各
+    /// 一个用例。
+    #[test]
+    fn export_keeps_live_version_when_daemon_zip_unreadable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("support");
+        std::fs::create_dir_all(&platform_dir).unwrap();
+        let env = ExportEnv {
+            platform_dir,
+            home: tmp.path().join("home"),
+            plist: tmp.path().join("missing.plist"),
+        };
+        let res = assemble_export(
+            &env,
+            DaemonCollection::LogsUnavailable {
+                version: Some("9.9.9-fake".into()),
+                reason: "后台服务的日志包读不出来：模拟 zip 损坏".into(),
+            },
+            || Some("0.3.0".into()),
+        )
+        .expect("日志要不到也必须出包（DESK-10）");
+        assert_eq!(res["daemon_reachable"], true);
+        let entries =
+            daemon_logs::read_zip_entries(std::path::Path::new(res["zip"].as_str().unwrap()))
+                .unwrap();
+        let text: String = entries
+            .iter()
+            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("daemon_version = 9.9.9-fake"), "{text}");
+        assert!(!text.contains("daemon_version = 0.3.0"), "{text}");
+        assert!(text.contains("daemon_reachable = partial"), "{text}");
+    }
+
+    /// DESK-31 验收 (e)：新暴露的在线版本串同样过 scrub——daemon 自报
+    /// 什么我们控制不了，出包的每个字节都过同一道脱敏。
+    #[test]
+    fn export_scrubs_live_version_string() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("support");
+        std::fs::create_dir_all(&platform_dir).unwrap();
+        let home = tmp.path().join("home");
+        let env = ExportEnv {
+            platform_dir,
+            home: home.clone(),
+            plist: tmp.path().join("missing.plist"),
+        };
+        let weird_version = format!("9.9.9-fake+{}", home.display());
+        let res = assemble_export(
+            &env,
+            DaemonCollection::LogsUnavailable {
+                version: Some(weird_version),
+                reason: "模拟".into(),
+            },
+            || None,
+        )
+        .unwrap();
+        let entries =
+            daemon_logs::read_zip_entries(std::path::Path::new(res["zip"].as_str().unwrap()))
+                .unwrap();
+        let text: String = entries
+            .iter()
+            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !text.contains(&home.display().to_string()),
+            "在线版本串不许泄漏家目录：{text}"
+        );
+        assert!(text.contains("<DATA>"), "{text}");
+    }
+
+    /// DESK-31 接线层：logs.export 被拒那条分支（修复前位于 lib.rs 的
+    /// logs.export Err 臂）——reason 原样带出，且根本不去读 zip。
+    #[test]
+    fn daemon_entries_from_logs_export_rejected() {
+        let err = daemon_entries_from_logs_export(Err("模拟拒绝".into()), |_| {
+            panic!("logs.export 被拒时不该去读 zip")
+        })
+        .unwrap_err();
+        assert!(err.contains("后台服务拒绝了 logs.export"), "{err}");
+        assert!(err.contains("模拟拒绝"), "{err}");
+    }
+
+    /// DESK-31 接线层：zip 读不出来那条分支（修复前的 read_zip_entries
+    /// Err 臂）——读 zip 的错误原样带出。
+    #[test]
+    fn daemon_entries_from_logs_export_zip_unreadable() {
+        let err = daemon_entries_from_logs_export(
+            Ok(json!({ "zip": "/tmp/fake-daemon.zip" })),
+            // 生产接线里由调用方的 map_err 包上「日志包读不出来」前缀，
+            // 闭包按同一契约模拟。
+            |zip| {
+                assert_eq!(zip, "/tmp/fake-daemon.zip");
+                Err("后台服务的日志包读不出来：模拟 zip 损坏".into())
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("后台服务的日志包读不出来"), "{err}");
+        assert!(err.contains("模拟 zip 损坏"), "{err}");
+    }
+
+    /// DESK-31 接线层：happy path——按应答里的 zip 路径读条目。
+    #[test]
+    fn daemon_entries_from_logs_export_happy_path() {
+        let entries =
+            daemon_entries_from_logs_export(Ok(json!({ "zip": "/tmp/fake-daemon.zip" })), |_| {
+                Ok(vec![("audit.json".into(), b"[]".to_vec())])
+            })
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "audit.json");
     }
 
     // DAE-04: 版本真的变了 → changed=true（真成功，前端报「已重启」）。
