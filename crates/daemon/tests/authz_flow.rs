@@ -78,6 +78,41 @@ async fn unpaired_node_gets_not_authorized() {
     );
 }
 
+/// QA-17 detector: the denial's diag event must be committed *before* the
+/// error response reaches the client — the original test only asserted it
+/// once, which let a send-before-record race hide under full-suite load.
+/// Hammer the path and check visibility after every single call, no retry.
+#[tokio::test(flavor = "multi_thread")]
+async fn denial_diag_is_visible_immediately_every_time() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr) = start_daemon(db.clone()).await;
+    let ctp = client().await;
+    ctp.add_peer(daddr);
+    let baseline = db.list_diag(1000).await.unwrap().len();
+
+    for i in 0..300 {
+        let resp = call(&ctp, dtp.node_id(), "timeline.page").await;
+        assert!(!resp.ok, "iter {i}: still denied");
+        let events = db.list_diag(1000).await.unwrap();
+        assert_eq!(
+            events.len(),
+            baseline + i + 1,
+            "iter {i}: denial #{n} must be committed before response {n} returns",
+            n = i + 1
+        );
+        let newest = &events[0];
+        assert!(
+            newest.kind == "authz.denied"
+                && newest
+                    .detail
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("timeline.page"),
+            "iter {i}: newest event must be this denial: {newest:?}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn unpaired_node_may_still_say_hello() {
     let db = Db::open_in_memory().await.unwrap();
