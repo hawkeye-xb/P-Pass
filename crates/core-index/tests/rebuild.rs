@@ -88,7 +88,7 @@ async fn ingest_one(
     content: &[u8],
     dev: [u8; 32],
 ) {
-    let src = dir.join(format!("staging-{tag}"));
+    let src = dir.join(format!("staging-{tag}-{name}"));
     fs::write(&src, content).unwrap();
     let media_type = match name.rsplit_once('.').map(|(_, e)| e) {
         Some("jpg") => "image/jpeg",
@@ -152,6 +152,54 @@ async fn rebuild_reproduces_the_index_exactly() {
     assert_eq!(
         after, before,
         "rebuild must re-derive every content field (ADR-006)"
+    );
+}
+
+/// IDX-03：`rebuild` 的尺寸必须与 `ingest` 一模一样。
+///
+/// 为什么单开一条而不是靠上面那条 50 文件的契约测试：那条的图全是
+/// `jpeg_with_exif`——SOI + APP1 + EOI，**没有 SOF 段**，两边
+/// `image_dimensions` 都失败、都是 `None`，`Dump` 里的 width/height 两列
+/// 因此恒等，什么都没锁住。这条换成一张真能解码的图，两边才真的会分岔：
+/// `rebuild` 曾经硬写 `None`，而 `ingest` 一直在实算，这条在修之前必红。
+///
+/// 口径一致是模块注释的铁律（「严格入库 + 宽容重建」会让重建一次库的
+/// 语义就变了），本卡正是它被破掉的一处。
+///
+/// ⚠️ 这条**不能**被读成「ingest 侧在生产上是好的」。它绿，只因为
+/// `ingest_one` 给 staging 文件带了扩展名；生产的 staging 文件名是
+/// `flow_delivery.rs` 的 `staged_path`——`{node}-{seq}-{hash}`，**没有扩展
+/// 名**，而 `image::image_dimensions` 只按扩展名认格式。同一份 5×2 PNG：
+/// staging 名 `staging-0` → ingest 记 `(None, None)`；改成 `staging-0-real.png`
+/// → `(Some(5), Some(2))`。所以手机 flow 推上来的照片在 ingest 侧同样恒为
+/// NULL。那是 IDX-03 范围外的另一处根因，另开卡。
+#[tokio::test(flavor = "multi_thread")]
+async fn rebuild_agrees_with_ingest_on_pixel_dimensions() {
+    let (dir, db, ing) = setup().await;
+    let mut png = Vec::new();
+    // 5×2，非方形：宽高写反当场露馅。
+    image::RgbImage::new(5, 2)
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    ingest_one(&ing, dir.path(), 0, "real.png", &png, DEV_A).await;
+
+    let ingested = dump(&db).await;
+    assert_eq!(
+        (ingested[0].5, ingested[0].6),
+        (Some(5), Some(2)),
+        "前提自检：ingest 这一侧本来就该是实算的"
+    );
+
+    let fresh = Db::open_in_memory().await.unwrap();
+    rebuild(&fresh, &dir.path().join("library"), &LOCAL)
+        .await
+        .unwrap();
+
+    let rebuilt = dump(&fresh).await;
+    assert_eq!(
+        (rebuilt[0].5, rebuilt[0].6),
+        (ingested[0].5, ingested[0].6),
+        "重建出来的尺寸必须与入库时逐字相同"
     );
 }
 
