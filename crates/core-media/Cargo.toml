@@ -9,8 +9,13 @@ publish = false
 # EXIF parsing (详细设计 §4.3 指名 kamadak-exif). Moved here from
 # core-index at T-013 — ingest now consumes this crate's reader.
 kamadak-exif = "0.6"
-# Calendar math: EXIF wall clock → unix ms.
-time = "0.3"
+# Calendar math: EXIF wall clock → unix ms. `local-offset` 是 IDX-03 要
+# 的：没有 `OffsetTime*` 标签时要拿 daemon 本机当前 UTC 偏移来解释墙钟，
+# 而 `UtcOffset::current_local_offset()` 被 `#[cfg(feature = "local-offset")]`
+# 门着，不开这个 feature 根本没有这个函数。
+time = { version = "0.3", features = ["local-offset"] }
 
 [dev-dependencies]
 tempfile = "3"
+# 测试要注入偏移（`UtcOffset`）来避开跑测机真实时区，见 tests/exif.rs。
+time = { version = "0.3", features = ["local-offset"] }
