@@ -995,6 +995,61 @@ mod tests {
         ));
     }
 
+    /// QA-16（#326）：**向导 invoke 的是这一层，测试也必须打这一层**。
+    ///
+    /// 下面那条 `startup_failure_reads_the_latest_sidecar_stderr_line` 打的是
+    /// 内部函数 `daemon_startup_stderr_from(plist)`；渲染进程真正调的却是
+    /// `#[tauri::command] daemon_startup_error()` 这层包装。#326 的 M2 变异
+    /// 把包装体强行改成 `return None`，整个 Rust 套件一条都不红——它可以
+    /// 返回 None、可以读错 plist、可以被整个摘掉，没有任何测试知道。
+    ///
+    /// 这条测试补的正是那一段：包装层自己去找 plist（`plist_path()` →
+    /// `home_dir()` → `$HOME`），所以把 HOME 指到 tempdir，在里面摆一份
+    /// 真的 LaunchAgent plist 和一份真的 stderr 日志，然后**无参调用命令
+    /// 本体**，断言 daemon 那行错误原样回来了。
+    ///
+    /// 反证：`daemon_startup_error()` 体内改成 `None` → 本测试红。
+    ///
+    /// ⚠️ HOME 是进程级的，cargo 的测试线程共享它。本文件里没有第二条
+    /// 测试读 HOME（`home_dir()` 的调用点都在产品代码里，且没有测试调到
+    /// 它们），所以这里就地改、用完还原；将来谁再加读 HOME 的测试，这两
+    /// 条得一起串行化。
+    #[test]
+    fn the_startup_error_command_itself_surfaces_the_daemon_stderr() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+
+        let logs = home.join("Library/Logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let stderr_log = logs.join("p-pass-daemon.err");
+        let daemon_error =
+            "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
+        // 尾部空行 + 前面的正常输出：命令要给出**最后一行非空**的那条。
+        std::fs::write(&stderr_log, format!("starting daemon\n{daemon_error}\n\n")).unwrap();
+
+        let agents = home.join("Library/LaunchAgents");
+        std::fs::create_dir_all(&agents).unwrap();
+        std::fs::write(
+            agents.join("com.p-pass.daemon.plist"),
+            format!(
+                "<plist><dict><key>StandardErrorPath</key><string>{}</string></dict></plist>",
+                stderr_log.display()
+            ),
+        )
+        .unwrap();
+
+        let saved_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home);
+        // 命令本体，无参——与渲染进程 `invoke("daemon_startup_error")` 同一条路。
+        let got = daemon_startup_error();
+        match saved_home {
+            Some(h) => std::env::set_var("HOME", h),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert_eq!(got.as_deref(), Some(daemon_error));
+    }
+
     #[test]
     fn startup_failure_reads_the_latest_sidecar_stderr_line() {
         let tmp = tempfile::tempdir().unwrap();
