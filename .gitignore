@@ -30,6 +30,12 @@ Thumbs.db
 # with no native lib, crashing on-device (UnsatisfiedLinkError, twice).
 !apps/android/app/src/main/jniLibs/**/*.so
 
+# tools/fetch-ffmpeg.sh 下载的 ffmpeg（默认落在 tools/ffmpeg/）。
+# SEC-08 (#363)：它有 130 MB 量级，之前不在本文件里，跑一次脚本就在工作区
+# 留一个未跟踪的大二进制，离被 git add -A 带进仓库只差一步。
+# 上面 Build artifacts 那组后缀兑不上它（没有 *.exe，Linux/macOS 侧更是无后缀）。
+tools/ffmpeg/
+
 # Wrangler
 .wrangler/
 node_modules/
