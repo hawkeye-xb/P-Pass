@@ -107,6 +107,64 @@ class UI19ProtectionSourceTest {
         )
     }
 
+    // 同一个 18 毫秒窗口的另一条路：并发的那次 sync 不是成功返回，而是被
+    // 「后台启动不允许」当场拒掉。它同样没观测到配额的任何事，说不出原因的
+    // 拒绝不许把系统亲口说出的原因顶掉——两条都判「保护没生效」，留下更好
+    // 的那句解释。
+    @Test
+    fun a_refusal_without_a_named_cause_must_not_replace_the_named_one() {
+        val store = TransferProtectionStore(tempDir("refused"))
+        store.record(ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED, 1_758_534_675_688L)
+
+        var paused = 0
+        val outcome = startProtectedForeground(
+            store = store,
+            now = 1_758_534_675_706L,
+            haltTransfer = { paused += 1 },
+            successOutcome = ForegroundStartOutcome.START_REQUESTED,
+        ) {
+            throw ForegroundServiceStartNotAllowedException(
+                "startForegroundService() not allowed due to mAllowStartForeground false",
+            )
+        }
+
+        assertEquals(ForegroundStartOutcome.START_REFUSED, outcome)
+        assertEquals("拒了就必须暂停这一轮", 1, paused)
+        assertEquals(
+            "说不出原因的拒绝不许抹掉系统亲口说出的配额耗尽",
+            TransferProtection.NOT_EFFECTIVE,
+            transferProtectionOf(store.load()),
+        )
+        assertEquals(
+            R.string.state_background_budget_paused,
+            transferProtectionNoticeRes(store.load()),
+        )
+    }
+
+    // 但这条让位规则不许越界成「失败永远保留」：盘上是一次观测到的成功时，
+    // 新来的拒绝必须能推翻它，否则就是在已经暂停的时候报「一切正常」。
+    @Test
+    fun a_refusal_still_overturns_an_earlier_observed_success() {
+        val store = TransferProtectionStore(tempDir("overturn"))
+        store.record(ForegroundStartOutcome.STARTED, 1_000L)
+
+        startProtectedForeground(
+            store = store,
+            now = 2_000L,
+            haltTransfer = {},
+            successOutcome = ForegroundStartOutcome.START_REQUESTED,
+        ) {
+            throw ForegroundServiceStartNotAllowedException(
+                "startForegroundService() not allowed due to mAllowStartForeground false",
+            )
+        }
+
+        assertTrue(
+            "刚被拒还报「保护生效」就是在已经暂停的时候说一切正常",
+            transferProtectionOf(store.load()) != TransferProtection.EFFECTIVE,
+        )
+    }
+
     // #299 (MOB-97) 口径：证据不足 = 未知，且「未知」不得是一句安心话。
     // 只提交过请求就属于证据不足。
     @Test
@@ -180,4 +238,7 @@ class UI19ProtectionSourceTest {
             transferProtectionOf(store.load()),
         )
     }
+
+    /** 与 `android.app.ForegroundServiceStartNotAllowedException` 同名同祖先的替身（判据按类名）。 */
+    private class ForegroundServiceStartNotAllowedException(message: String) : IllegalStateException(message)
 }

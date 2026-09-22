@@ -125,7 +125,16 @@ internal val ForegroundStartOutcome.evidenceWeight: Int
  * - Strictly less evidence: refused — this is the E3 bug (2026-09-22:
  *   `FGS (dataSync) timed out` at 17:51:15.688, disk still said `STARTED`
  *   at …706).
- * - Equal evidence: the newer observation wins. A record older than what is
+ * - Equal evidence, both meaning "the system refused": the refusal that NAMES
+ *   its cause outranks the one that cannot. `startForegroundService` is
+ *   refused for plain background-start denial too (MOB-101's own
+ *   `mAllowStartForeground false` case), and inside the same 18ms window that
+ *   would replace the budget reason with "we cannot say why" — losing the one
+ *   sentence the user can act on. Both verdicts are
+ *   [TransferProtection.NOT_EFFECTIVE], so keeping the better explanation
+ *   cannot preserve a reassuring lie. A refusal still overturns an earlier
+ *   observed success — that direction is exactly what must not be frozen.
+ * - Equal evidence otherwise: the newer observation wins. A record older than what is
  *   stored is an out-of-order loser of the MOB-102 two-thread race and must
  *   not clobber the winner — unless it is older by more than one start
  *   attempt can possibly last ([START_ATTEMPT_WINDOW_MS]), which means the
@@ -143,6 +152,8 @@ internal fun supersedes(
     return when {
         candidate.evidenceWeight > previous.evidenceWeight -> true
         candidate.evidenceWeight < previous.evidenceWeight -> false
+        candidate == ForegroundStartOutcome.START_REFUSED &&
+            previous == ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED -> false
         else -> now >= stored.lastOutcomeAt || stored.lastOutcomeAt - now > START_ATTEMPT_WINDOW_MS
     }
 }
