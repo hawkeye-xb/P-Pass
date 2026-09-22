@@ -319,6 +319,16 @@ impl PlatformAdapter for WindowsAdapter {
         let _ = name;
         crate::Applied::NotApplicable
     }
+
+    /// DESK-16 (#165)：Windows 这半的系统兜底 —— Shell 缩略图（COM）。
+    /// 实现与注释在本文件下方的 `system_video_thumbnail`。
+    fn system_video_thumbnail(
+        &self,
+        src: &Path,
+        max_px: u32,
+    ) -> crate::Result<Option<crate::SystemThumbnail>> {
+        system_video_thumbnail(src, max_px)
+    }
 }
 
 /// Spawn `exec` detached, with no console window (equivalent to macOS's
@@ -942,5 +952,158 @@ mod desk25_taskkill_tests {
             WindowsAdapter::new().daemon_executable_name(),
             format!("{}.exe", crate::DAEMON_EXECUTABLE_STEM)
         );
+    }
+}
+
+/// DESK-16 (#165)：向 Windows Shell 要一帧视频首帧（COM）。
+///
+/// 为什么是 COM：macOS 那半能用 `/usr/bin/qlmanage` 这个 CLI，Windows **没有
+/// 对等的命令行缩略图器**。Shell 的 `IShellItemImageFactory` 是系统自带能力，
+/// 与 qlmanage 同一个姿态 —— 不 ship、不授权、零安装包体积。
+///
+/// ⚠️ **`SIIGBF_THUMBNAILONLY` 不是可选项**。不带它时 Shell 在拿不到真缩略图
+/// 的情况下会**回退给文件类型图标**（那个蓝色的视频文件图标），而调用是成功
+/// 的 —— 于是我们会把一个图标当作"首帧"写进缩略图，`thumb_state` 还报正常。
+/// 那正是本仓这一轮一直在修的形状：静默给出错的东西而不是承认失败。带上它
+/// 之后，没有真缩略图就是 `Err`，由调用方落到占位图。
+///
+/// ⚠️ 32bpp DIB 的字节序是 **BGRA**，不是 RGBA；下面显式换序。不换的话人脸
+/// 会发蓝，而且"看起来能用"——又一个不会报错的错。
+pub(crate) fn system_video_thumbnail(
+    src: &std::path::Path,
+    max_px: u32,
+) -> crate::Result<Option<crate::SystemThumbnail>> {
+    use windows::core::HSTRING;
+    use windows::Win32::Foundation::SIZE;
+    use windows::Win32::Graphics::Gdi::{
+        DeleteObject, GetDC, GetDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    };
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::{
+        IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_THUMBNAILONLY,
+    };
+
+    // ⚠️ `SHCreateItemFromParsingName` 对**相对路径**返回 E_INVALIDARG
+    // (0x80070057)，实测过。用 `std::path::absolute` 而不是 `canonicalize`：
+    // 后者在 Windows 上会产出 `\?\C:\...` 这种 verbatim 前缀，Shell 的
+    // 解析名接口对它同样不友好。absolute 只做"补全成绝对路径"这一件事。
+    let abs = std::path::absolute(src).map_err(|source| crate::PlatformError::Io {
+        action: "shell thumbnail: absolute path",
+        source,
+    })?;
+    let path = abs.as_os_str();
+    // COM 套间：单线程套间够用（本调用不跨线程传接口）。
+    // RPC_E_CHANGED_MODE = 调用线程已经在别的套间里初始化过了 —— 那不是错误，
+    // 继续用现有套间，但**不许**在结尾 CoUninitialize（那会拆掉别人的套间）。
+    let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let we_initialized = hr.is_ok();
+
+    let result = (|| -> crate::Result<crate::SystemThumbnail> {
+        let factory: IShellItemImageFactory = unsafe {
+            SHCreateItemFromParsingName(&HSTRING::from(path), None)
+        }
+        .map_err(|e| crate::PlatformError::Failed {
+            action: "shell thumbnail: SHCreateItemFromParsingName",
+            detail: format!("{}: {e}", src.display()),
+        })?;
+
+        let size = SIZE {
+            cx: max_px as i32,
+            cy: max_px as i32,
+        };
+        // THUMBNAILONLY：见上方注释，不带它会静默拿到文件类型图标。
+        let hbitmap = unsafe { factory.GetImage(size, SIIGBF_THUMBNAILONLY) }.map_err(|e| {
+            crate::PlatformError::Failed {
+                action: "shell thumbnail: GetImage (THUMBNAILONLY)",
+                detail: format!("no thumbnail for {}: {e}", src.display()),
+            }
+        })?;
+
+        let out = (|| -> crate::Result<crate::SystemThumbnail> {
+            let hdc = unsafe { GetDC(None) };
+            if hdc.is_invalid() {
+                return Err(crate::PlatformError::Failed {
+                    action: "shell thumbnail: GetDC",
+                    detail: "returned null".into(),
+                });
+            }
+            let _dc_guard = DcGuard(hdc);
+
+            // 先问尺寸（biBitCount=0 时 GetDIBits 只填头，不拷像素）。
+            let mut info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let probed = unsafe { GetDIBits(hdc, hbitmap, 0, 0, None, &mut info, DIB_RGB_COLORS) };
+            if probed == 0 {
+                return Err(crate::PlatformError::Failed {
+                    action: "shell thumbnail: GetDIBits(probe)",
+                    detail: "returned 0 — bitmap header unreadable".into(),
+                });
+            }
+            let w = info.bmiHeader.biWidth;
+            let h = info.bmiHeader.biHeight.abs();
+            if w <= 0 || h == 0 {
+                return Err(crate::PlatformError::Failed {
+                    action: "shell thumbnail: size check",
+                    detail: format!("degenerate size {w}x{h}"),
+                });
+            }
+
+            // 取像素：强制 32bpp、BI_RGB、**负高度**（自顶向下），否则拿到的是
+            // 自底向上的 DIB，图会上下颠倒——又一个不报错的错。
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biCompression = BI_RGB.0;
+            info.bmiHeader.biHeight = -h;
+            let mut buf = vec![0u8; (w as usize) * (h as usize) * 4];
+            let copied = unsafe {
+                GetDIBits(
+                    hdc,
+                    hbitmap,
+                    0,
+                    h as u32,
+                    Some(buf.as_mut_ptr().cast()),
+                    &mut info,
+                    DIB_RGB_COLORS,
+                )
+            };
+            if copied == 0 {
+                return Err(crate::PlatformError::Failed {
+                    action: "shell thumbnail: GetDIBits(pixels)",
+                    detail: "returned 0 — no scanlines copied".into(),
+                });
+            }
+
+            // BGRA → RGBA。
+            for px in buf.as_chunks_mut::<4>().0 {
+                px.swap(0, 2);
+            }
+            Ok(crate::SystemThumbnail {
+                width: w as u32,
+                height: h as u32,
+                rgba: buf,
+            })
+        })();
+
+        let _ = unsafe { DeleteObject(hbitmap.into()) };
+        out
+    })();
+
+    if we_initialized {
+        unsafe { CoUninitialize() };
+    }
+    result.map(Some)
+}
+
+/// 只为保证 `ReleaseDC` 在任何返回路径上都被调到（含 `?` 提前返回）。
+struct DcGuard(windows::Win32::Graphics::Gdi::HDC);
+
+impl Drop for DcGuard {
+    fn drop(&mut self) {
+        unsafe { windows::Win32::Graphics::Gdi::ReleaseDC(None, self.0) };
     }
 }

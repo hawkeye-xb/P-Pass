@@ -42,6 +42,23 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Threading",
 ] }
 
+# DESK-16 (#165)：Windows 的系统缩略图走 COM（IShellItemImageFactory），
+# 而 windows-sys 是裸 FFI —— 没有 IUnknown/Interface 那套，做 COM 要手搓
+# vtable，写对的成本远高于收益。所以这里用高层 `windows` crate。
+# ⚠️ 它**不是新引入的 crate**：`cargo tree -i windows@0.62.2 --target
+#    x86_64-pc-windows-msvc` 显示它早已在主 workspace 的 Windows 依赖树里
+#    （netwatch ← iroh ← iroh-blobs ← transport ← daemon），这里只是提为
+#    直接依赖并多开几个 feature。
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  # CoInitializeEx / CoUninitialize —— COM 必须先初始化线程套间。
+  "Win32_System_Com",
+  # SHCreateItemFromParsingName + IShellItemImageFactory。
+  "Win32_UI_Shell",
+  # GetDIBits / BITMAP / DeleteObject —— 把 HBITMAP 变成像素要走 GDI。
+  "Win32_Graphics_Gdi",
+] }
+
 [dev-dependencies]
 # fsevents_shapes 集成测试（macOS 目录监听平台行为实测）：直接驱动 notify。
 notify = "7"

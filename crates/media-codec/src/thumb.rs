@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use image::DynamicImage;
 
-use crate::{decode, ffmpeg, quicklook, CodecError, Result};
+use crate::{decode, ffmpeg, quicklook, system_thumb, CodecError, Result};
 
 pub const THUMB_SIZES: [u32; 2] = [256, 1024];
 const JPEG_QUALITY: u8 = 85;
@@ -118,15 +118,26 @@ fn first_frame(src: &Path) -> Result<DynamicImage> {
             decode::decode_image(tmp.path())
         }
         None => {
-            let ql = quicklook::qlmanage_path().ok_or(CodecError::FfmpegMissing)?;
-            let dir = tempfile::Builder::new()
-                .tempdir()
-                .map_err(|source| CodecError::Io {
-                    path: src.to_path_buf(),
-                    source,
-                })?;
-            let png = quicklook::extract_frame(&ql, src, dir.path())?;
-            decode::decode_image(&png)
+            // DESK-16 (#165)：系统兜底两半，按「本平台有没有这个能力」依次问。
+            // macOS：qlmanage（探测固定路径，见 quicklook.rs）。
+            if let Some(ql) = quicklook::qlmanage_path() {
+                let dir = tempfile::Builder::new()
+                    .tempdir()
+                    .map_err(|source| CodecError::Io {
+                        path: src.to_path_buf(),
+                        source,
+                    })?;
+                let png = quicklook::extract_frame(&ql, src, dir.path())?;
+                return decode::decode_image(&png);
+            }
+            // Windows：Shell 缩略图（COM 在 crates/platform，本 crate 零 cfg）。
+            // 注意这里**不吞 Err**：拿不到缩略图要把原因带出去，而不是并进
+            // FfmpegMissing —— 那会让日志说成"没装 ffmpeg"，与事实不符。
+            if let Some(img) = system_thumb::first_frame(src)? {
+                return Ok(img);
+            }
+            // 两半都没有能力 ⇒ 这台机器确实只剩 ffmpeg 一条路，而它不在。
+            Err(CodecError::FfmpegMissing)
         }
     }
 }

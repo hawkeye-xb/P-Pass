@@ -139,6 +139,22 @@ pub struct VolumeStats {
     pub total: u64,
 }
 
+/// DESK-16 (#165)：系统缩略图器产出的一帧，**未编码的 RGBA 像素**。
+///
+/// 为什么不返回「写好的 PNG 文件路径」：那样本 crate 就得带一个图像编码
+/// 器，而编码能力已经在 `crates/media-codec`（`image` 依赖）里了。让本
+/// crate 只做「调系统 API 取像素」这一件事，编码留给调用方 —— 分层更干净，
+/// 也省掉一次落盘再读回。
+///
+/// `rgba` 的长度**必须**等于 `width * height * 4`；构造方负责保证，调用方
+/// 可以据此直接喂给 `image::RgbaImage::from_raw`。
+#[derive(Debug, Clone)]
+pub struct SystemThumbnail {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 /// QA-09 迁移（#211）：一个平台动作的结果口径。
 ///
 /// 为什么不用 `Result<()>`：`Ok(())` 会把「这个平台上其实什么都没做」
@@ -256,6 +272,32 @@ pub trait PlatformAdapter: Send + Sync {
     fn remove_stale_ipc_endpoint(&self, name: &str) -> Applied {
         let _ = name;
         Applied::NotApplicable
+    }
+
+    /// DESK-16 (#165)：向系统自带的缩略图器要一帧视频首帧。
+    ///
+    /// 这是回退链 `ffmpeg → 系统兜底` 里「系统兜底」那一环在**本 crate** 的
+    /// 落点。两个平台的形态不对称，原因是系统能力不对称：
+    ///
+    /// - **macOS** 有 `/usr/bin/qlmanage` 这个 CLI，所以 `media-codec` 自己
+    ///   探测那个固定路径就够了（`quicklook.rs`），**不经过本方法** —— 探测
+    ///   一个 unix 路径不需要 cfg，那是它能待在 media-codec 里的原因。
+    /// - **Windows** 没有对等的 CLI，只能走 COM（`IShellItemImageFactory`）。
+    ///   COM 调用必然带 `#[cfg(windows)]`，而红线 B.2 要求平台 cfg 只许待在
+    ///   本 crate —— 所以 Windows 那半必须从这里出去。
+    ///
+    /// `Ok(None)` = **本平台没有实现**（不是「这个文件没有缩略图」）。
+    /// 真取不到缩略图返回 `Err`，让调用方能把「平台不支持」与「这个文件
+    /// 失败了」分开 —— 混成一个 `None` 就又回到「静默降级说不清原因」。
+    ///
+    /// `max_px` 是最长边的**上界**，实现方不许放大（与 `qlmanage -s` 同义）。
+    fn system_video_thumbnail(
+        &self,
+        src: &std::path::Path,
+        max_px: u32,
+    ) -> Result<Option<SystemThumbnail>> {
+        let _ = (src, max_px);
+        Ok(None)
     }
 
     // ── QA-09 迁移（#211）桌面壳批次 ─────────────────────────────

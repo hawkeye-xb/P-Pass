@@ -2846,6 +2846,7 @@ dependencies = [
  "core-media",
  "image",
  "libheif-rs",
+ "platform",
  "tempfile",
  "thiserror 2.0.19",
  "thread-priority",
@@ -3629,6 +3630,7 @@ dependencies = [
  "notify",
  "tempfile",
  "thiserror 2.0.19",
+ "windows",
  "windows-sys 0.61.2",
  "winreg",
 ]
