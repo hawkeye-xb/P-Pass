@@ -51,9 +51,16 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
     `tools/ci-needs-full-lane.sh` 判断，纯文档改动时下游 job 被 `if:` 跳过。
     被 `if:` 跳过的 job **会汇报 `skipped`，而 `skipped` 对必需检查算通过**
     （PR #260 实测），所以既省资源又挡得住。
-    ⚠️ 判据是 **allowlist**：只有改动**全部**落在无害清单（`docs/`、`cards/`、
-    `.claude/`、`*.md`）里才跳过，其余一律跑。往清单里加东西前先确认没有
-    测试或构建脚本读它（`assets/i18n/**` 被 diag 测试消费，**不许加**）。
+    ⚠️ 判据是 **allowlist**：只有改动**全部**落在无害清单里才跳过，其余一律跑。
+    往清单里加东西前先确认没有测试或构建脚本读它（`assets/i18n/**` 被 diag
+    测试消费，**不许加**）。
+    判据有**两个 lane**（CI-17 #373），因为 6 个 job 的依赖面不同：**默认**
+    lane（上面那份清单）给 `architecture enforcement` 与 `ci-desktop` 用
+    （`arch-check.sh` 扫 `apps/**`，桌面壳门禁编的就是 `apps/desktop`）；
+    **`rust-workspace`** lane 把 `apps/**` 也算惰性，给 `clippy` / `test` /
+    `test (windows)` / `license+deny` / `fmt` 用（`src-tauri` 是独立 workspace，
+    主 workspace 编不到它；`apps/` 的 Rust 由 `ci-desktop` 自己检查）。
+    ⚠️ 不带 lane 参数 = 默认 lane，这是**向后兼容契约**；未知 lane 一律判要跑。
   - `ci-android` / `site` / `ci-docs` 仍按 paths 只在改到自己域时跑，
     它们不进必需列表，被跳过无害。
   - ⚠️ **任何 job 的 `name:` 都不许随手改**：`main` 的必需检查列表绑在名字上，
