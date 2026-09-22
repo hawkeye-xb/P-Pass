@@ -44,7 +44,25 @@ enum class TransferProtection {
 
 /** MOB-101: the outcome of one attempt to put the transfer under protection. */
 enum class ForegroundStartOutcome {
+    /**
+     * A protected start was OBSERVED to succeed: `startForeground` returned
+     * and the system did not refuse. Only [FlowTransferForegroundService.onStartCommand]
+     * is in a position to learn this.
+     */
     STARTED,
+
+    /**
+     * UI-19: `ContextCompat.startForegroundService` returned — i.e. we
+     * submitted a start request. That call never reaches `startForeground`,
+     * so it observes NOTHING about whether the system agreed to protect the
+     * transfer; the answer (or the refusal) arrives later, in
+     * [FlowTransferForegroundService.onStartCommand] or [FlowTransferForegroundService.onTimeout].
+     * Writing [STARTED] here is what let a real budget exhaustion be erased
+     * 18ms after the system reported it (E3, 2026-09-22), so "we asked" gets
+     * its own value and maps to [TransferProtection.UNKNOWN], never to a
+     * reassuring [TransferProtection.EFFECTIVE].
+     */
+    START_REQUESTED,
 
     /**
      * Android 14+ gives a `dataSync` foreground service a cumulative
@@ -64,8 +82,77 @@ enum class ForegroundStartOutcome {
 data class TransferProtectionState(
     /** [ForegroundStartOutcome] name; empty = never attempted. */
     val lastOutcome: String = "",
+    /**
+     * When [lastOutcome] was observed. Read by [supersedes] — see
+     * [ForegroundStartOutcome.evidenceWeight] — to decide whether an
+     * incoming record of the SAME evidence weight is actually newer, since
+     * two Flow wakes have raced here in the same millisecond on two threads
+     * (MOB-102). Not a diagnostic-only field: if nothing read it, it would
+     * have no business being persisted.
+     */
     val lastOutcomeAt: Long = 0L,
 )
+
+/**
+ * UI-19: how much the system itself is behind an outcome.
+ *
+ * `0` = we only know what WE did (a request was submitted); the system has
+ * said nothing. `1` = the system answered — it accepted the start, refused
+ * it, or named the daily budget as the reason.
+ *
+ * The whole point: a conclusion carrying observation must not be replaced by
+ * one carrying none. Same-weight records still replace each other freely —
+ * a later observed [ForegroundStartOutcome.STARTED] genuinely does prove the
+ * budget came back (Android resets it when the user brings the app forward),
+ * and refusing that would just freeze the opposite lie in place.
+ */
+internal val ForegroundStartOutcome.evidenceWeight: Int
+    get() = when (this) {
+        ForegroundStartOutcome.START_REQUESTED -> 0
+        ForegroundStartOutcome.STARTED,
+        ForegroundStartOutcome.START_REFUSED,
+        ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED,
+        -> 1
+    }
+
+/**
+ * UI-19: may [candidate] replace what is already on disk?
+ *
+ * Pure so the ordering rule is provable on the JVM without a device.
+ *
+ * - Nothing (or an unparsable name) on disk: anything may land.
+ * - Strictly more evidence: lands.
+ * - Strictly less evidence: refused — this is the E3 bug (2026-09-22:
+ *   `FGS (dataSync) timed out` at 17:51:15.688, disk still said `STARTED`
+ *   at …706).
+ * - Equal evidence: the newer observation wins. A record older than what is
+ *   stored is an out-of-order loser of the MOB-102 two-thread race and must
+ *   not clobber the winner — unless it is older by more than one start
+ *   attempt can possibly last ([START_ATTEMPT_WINDOW_MS]), which means the
+ *   wall clock moved rather than that the writers raced; then the newest
+ *   observation wins, because freezing a stale verdict is how "unknown"
+ *   turns back into "all fine".
+ */
+internal fun supersedes(
+    stored: TransferProtectionState,
+    candidate: ForegroundStartOutcome,
+    now: Long,
+): Boolean {
+    val previous = ForegroundStartOutcome.values().firstOrNull { it.name == stored.lastOutcome }
+        ?: return true
+    return when {
+        candidate.evidenceWeight > previous.evidenceWeight -> true
+        candidate.evidenceWeight < previous.evidenceWeight -> false
+        else -> now >= stored.lastOutcomeAt || stored.lastOutcomeAt - now > START_ATTEMPT_WINDOW_MS
+    }
+}
+
+/**
+ * The system gives a service started with `startForegroundService` ~5s to
+ * reach `startForeground`, so two writers can only ever be racing over the
+ * same start attempt inside that window.
+ */
+internal const val START_ATTEMPT_WINDOW_MS: Long = 5_000L
 
 /**
  * MOB-101: durable, single-fact store for the last protection outcome, so
@@ -107,9 +194,16 @@ class TransferProtectionStore(private val dir: File) {
      * the actual fix for that race — never-throwing alone would only
      * downgrade it to "sometimes silently unrecorded".
      *
-     * @return whether the outcome actually reached durable storage.
+     * UI-19: a record that [supersedes] refuses is not written at all, and
+     * is reported as success — the store already holds a verdict built on
+     * at least as much evidence, so there is nothing to persist and nothing
+     * went wrong. `false` stays reserved for "a write was needed and did
+     * not land", which is the only case [load] must distrust.
+     *
+     * @return whether the store now holds the verdict the UI should read.
      */
     fun record(outcome: ForegroundStartOutcome, now: Long): Boolean {
+        if (!supersedes(load(), outcome, now)) return true
         val state = TransferProtectionState(lastOutcome = outcome.name, lastOutcomeAt = now)
         val persisted = runCatching {
             dir.mkdirs()
@@ -151,6 +245,9 @@ fun transferProtectionOf(state: TransferProtectionState): TransferProtection =
     when (state.lastOutcome) {
         ForegroundStartOutcome.STARTED.name -> TransferProtection.EFFECTIVE
         ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED.name -> TransferProtection.NOT_EFFECTIVE
+        // UI-19: a submitted request proves nothing either way — #299's
+        // 未知, which callers may not render as "everything is fine".
+        ForegroundStartOutcome.START_REQUESTED.name -> TransferProtection.UNKNOWN
         else -> TransferProtection.UNKNOWN
     }
 
@@ -194,11 +291,15 @@ internal fun startProtectedForeground(
     store: TransferProtectionStore,
     now: Long,
     haltTransfer: () -> Unit,
+    successOutcome: ForegroundStartOutcome = ForegroundStartOutcome.STARTED,
     start: () -> Unit,
 ): ForegroundStartOutcome {
     val outcome = try {
         start()
-        ForegroundStartOutcome.STARTED
+        // UI-19: what `start()` returning actually proves is the caller's
+        // to declare — `startForeground` coming back is evidence the system
+        // agreed, `startForegroundService` coming back is not.
+        successOutcome
     } catch (refusal: IllegalStateException) {
         // Only a foreground-start refusal is handled here. Anything else
         // is a different fault and must stay visible — swallowing it
@@ -219,7 +320,7 @@ internal fun startProtectedForeground(
     // burying an unknown fault is the other way to lose a bug.)
     runCatching { store.record(outcome, now) }
         .onFailure { logQuietly("recording the protection outcome failed; continuing", it) }
-    if (outcome != ForegroundStartOutcome.STARTED) {
+    if (outcome != successOutcome) {
         runCatching { haltTransfer() }
             .onFailure { logQuietly("pausing the round after a refused start failed", it) }
     }
@@ -244,6 +345,10 @@ internal object FlowTransferForeground {
                     store = TransferProtectionStore(app.filesDir),
                     now = System.currentTimeMillis(),
                     haltTransfer = { haltUnprotectedTransfer(app) },
+                    // UI-19: this call hands the request to the system and
+                    // returns; whether protection was granted is decided in
+                    // onStartCommand, which writes its own verdict.
+                    successOutcome = ForegroundStartOutcome.START_REQUESTED,
                 ) {
                     ContextCompat.startForegroundService(app, intent)
                 }
@@ -310,6 +415,9 @@ class FlowTransferForegroundService : Service() {
             store = TransferProtectionStore(filesDir),
             now = System.currentTimeMillis(),
             haltTransfer = { haltUnprotectedTransfer(this) },
+            // UI-19: the one writer that actually observes the system's
+            // answer, so the one allowed to claim protection is effective.
+            successOutcome = ForegroundStartOutcome.STARTED,
         ) {
             if (Build.VERSION.SDK_INT >= 29) {
                 startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
