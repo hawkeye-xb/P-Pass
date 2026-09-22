@@ -4,3 +4,29 @@
 # 唯一生效位置是 pnpm-workspace.yaml 顶层的 allowBuilds map。
 allowBuilds:
   esbuild: true
+
+# QA-16（#326）：把 jsdom 那棵子树里**发布不足 24 小时**的传递依赖钉住。
+#
+# 起因是实测的：#370 第一版 lockfile 用本机 pnpm 10.15 生成，它不跑
+# minimumReleaseAge；CI 的 pnpm 11 跑，于是 desktop (ubuntu-latest) 红在
+# ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION，6 条全是当天/前一天刚发布的包。
+#
+# 修法是**降到更老的版本**，不是放宽策略：
+#   - jsdom 在 package.json 里钉死 30.1.0（2026-09-17）。它的 deps 写的是
+#     `html-encoding-sniffer: ^6.0.0` 与 `w3c-xmlserializer: ^5.0.0`，所以
+#     那两条新发布的 7.0.0 / 6.0.0 跟着自动消失，不需要 override。
+#   - 剩下三条是 caret 浮上去的，必须显式钉：
+#       @exodus/bytes  jsdom 写 ^1.15.1 → 会浮到 1.15.2（2026-09-21）
+#       tldts          tough-cookie 写 ^7.0.5 → 会浮到 7.4.14（2026-09-21）
+#       tldts-core     tldts@7.4.13 写 ^7.4.13 → 同样会浮到 7.4.14
+#
+# ⚠️ cutoff 是**跑 CI 那一刻往前推 24 小时**，不是固定日期。所以这里挑的
+# 都是留足余量的版本（最近的 tldts 7.4.13 也有 9 天），不挑刚好卡线的。
+#
+# ⚠️ 不许改成往 minimumReleaseAgeExclude 里加名字——那是绕过门禁，跟 #252
+# SEC-06 收紧供应链口径的方向相反。`pnpm clean --lockfile && pnpm install`
+# 会自作主张写那份 exclude 名单（实测 pnpm 11.27.1 会加 3 条），别用它。
+overrides:
+  "@exodus/bytes": 1.15.1
+  tldts: 7.4.13
+  tldts-core: 7.4.13
