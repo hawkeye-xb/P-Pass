@@ -64,6 +64,14 @@ sealed interface FlowAction {
     data class AcknowledgeAuditEvents(val eventIds: Set<String>) : FlowAction
 
     /**
+     * MOB-100：用户在首页确认了某条常驻提示（「知道了」）。
+     *
+     * 这是一条**已发生的用户事实**，不是「请把那些条目删掉」——reducer 只
+     * 给当前被提示的条目打上确认水位线，条目本身一条不删（关键判断 1）。
+     */
+    data class AcknowledgeNotice(val notice: AcknowledgeableNotice, val atMs: Long) : FlowAction
+
+    /**
      * MOB-87：一轮远端对账的结果（桌面有哪些、缺哪些、缺的那些本地源还在不在）。
      *
      * 探测本身走网络与 ContentResolver，不能占写者线程，所以到这里的时候

@@ -12,6 +12,7 @@
  * Phone has exactly 2 tabs (Photos / Backup); no settings screen in the way. 手机只有两个标签。
  * Destructive actions (remove device) live on desktop only. 危险操作只在电脑上。
  * Errors never show a code or bare technical term. 报错不出现代码或孤立术语。
+ * Any persistent notice must have a path the user can take to clear it; developer-only cleanup does not count. 任何常驻提示都必须有用户自己走得通的消除路径；只有开发者能清不算。
  */
 
 :root {

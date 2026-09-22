@@ -748,6 +748,8 @@ fun PPassApp() {
                         commandPending = holder.commandPending.value,
                         // MOB-61: 缺源只读告知仍留在 HomeScreen（信息类，无动作）。
                         missingSourceNotice = holder.missingSourceNotice.value,
+                        onAcknowledgeMissingSource = { holder.acknowledgeMissingSourceNotice() },
+                        acknowledgedMissingSourceCount = holder.acknowledgedMissingSourceCount.value,
                         // MOB-59: 本轮自己的进度（0 起算，见 HomeScreen.kt 说明）。
                         roundProgress = holder.roundProgress.value,
                         // 2026-09-14（用户拍板）：取消轮次恢复入口从常驻琥珀

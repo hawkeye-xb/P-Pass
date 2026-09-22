@@ -273,6 +273,32 @@ data class TransferItem(
      *  ordinary window gets exactly one `flow.round.finished` summary keyed
      *  by this id once every item in the round reaches a terminal state. */
     val roundId: String? = null,
+    /**
+     * MOB-100 水位线（B4）：用户已确认过「这张的源没了、不会再重传」的时刻
+     * （0 = 还没确认过）。**确认不是删条目**——条目是「这张曾在队里、源没了」
+     * 的事实记录，删掉对账就没了依据（#139 MOB-87）。所以水位线落在条目上，
+     * 而不是账本上的一个计数或布尔开关：
+     *
+     * - 计数（`已确认 N 条`）在集合缩小后会把新出现的事实当成旧的吃掉；
+     * - `queueSequence` 水位线更糟：它是**发现顺序**，不是**跳过顺序**——
+     *   确认到 seq 7 之后，seq 5 那张的源明天才被删，新事实就永久沉在水位线
+     *   底下。那正是 MOB-59 的「提示消失了，那批再也找不到」。
+     *
+     * 逐条打标既不会把新事实预先确认掉，也随条目一起持久化/一起消失。
+     */
+    val missingSourceAckedAt: Long = 0L,
+    /**
+     * MOB-100 水位线（D3）：用户已确认过「这张在电脑上不见了、正在传回」
+     * 的时刻（0 = 还没确认过）。
+     *
+     * 与 [missingSourceAckedAt] **分成两个字段而不是共用一个**：两个集合在
+     * 任一瞬间互斥（前者要求 `SKIPPED_SOURCE_MISSING`，后者只写在 `CONFIRMED`
+     * 上），但跨时间不互斥——`ReconciliationCoordinator.requeueRecoverable`
+     * 会把 `NEEDS_DECISION` 翻回 `QUEUED`，那一条之后可能走到
+     * `StrictConsumer.skipMissingSource`。共用一个字段的话，这条新出现的
+     * 「源没了」事实一出生就**带着别人的确认**，用户根本没见过它。
+     */
+    val reuploadAckedAt: Long = 0L,
 )
 
 @Serializable
@@ -619,8 +645,18 @@ class DiscoveryLedgerStore(
             contentHash = a.contentHash ?: b.contentHash,
             completionReceiptId = a.completionReceiptId ?: b.completionReceiptId,
             attemptCount = maxOf(a.attemptCount, b.attemptCount),
+            // MOB-100：确认水位线按「未确认的一方胜出」合并。两种错法不对称：
+            // 丢掉一次确认 = 横幅再出现一次，用户再点一下就好；凭空多一次
+            // 确认 = 一条用户没见过的事实被永久藏起来，那是 MOB-59 那类
+            // 不可恢复的丢信息。宁可多问一次。
+            missingSourceAckedAt = mergeAck(a.missingSourceAckedAt, b.missingSourceAckedAt),
+            reuploadAckedAt = mergeAck(a.reuploadAckedAt, b.reuploadAckedAt),
         )
     }
+
+    /** MOB-100：任一条没确认过（0）则合并结果也是没确认过。 */
+    private fun mergeAck(a: Long, b: Long): Long =
+        if (a <= 0L || b <= 0L) 0L else minOf(a, b)
 
     /** MOB-98：交付事实的强弱。已确认成功最强，用户可见的终态次之。 */
     private fun deliveryRank(state: DeliveryState): Int = when (state) {

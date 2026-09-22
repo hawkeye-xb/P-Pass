@@ -374,6 +374,19 @@ internal fun cancelCurrentFlowRound(context: Context) {
 }
 
 /** MOB-59: the notice's only action — re-admit every cancelled round's items as QUEUED. */
+/**
+ * MOB-100：首页「知道了」的落盘入口。与 [restoreAllCancelledFlowRounds] 同一
+ * 形状——经单写者投一条 action，不在 UI 线程上直接写账本。
+ *
+ * 为什么必须走这条路而不是在 holder 里 `ledger.update`：写入门禁
+ * （`LedgerWriteGuard`）在最内层，非写者线程写账本当场抛（MOB-88）。
+ */
+internal fun acknowledgeFlowNotice(context: Context, notice: AcknowledgeableNotice) {
+    runtimeFor(context.applicationContext)?.writer
+        ?.dispatch(FlowAction.AcknowledgeNotice(notice, System.currentTimeMillis()))
+    flushAuditOutbox(context)
+}
+
 internal fun restoreAllCancelledFlowRounds(context: Context) {
     runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.RestoreAllCancelledRounds)
     flushAuditOutbox(context)
@@ -507,6 +520,8 @@ private fun AndroidFlowRuntime.reduce(context: Context, action: FlowAction) {
         is FlowAction.AcceptReceipt -> runner.acceptCompletionReceipt(action.receipt)
         is FlowAction.RecordContentHash -> ledger.update { snapshot -> snapshot.withContentHash(action.item) }
         is FlowAction.AcknowledgeAuditEvents -> ledger.acknowledgeAuditEvents(action.eventIds)
+        is FlowAction.AcknowledgeNotice ->
+            ledger.update { snapshot -> snapshot.acknowledgeNotice(action.notice, action.atMs) }
     }
     // NET-12 的后置钩子原本挂在每个入口后面的 flushAuditOutbox 上；状态
     // 变更收口到这里之后，挂在这一处就没有任何调用点能忘。
