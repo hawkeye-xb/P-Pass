@@ -137,6 +137,13 @@ fun heroNumberIsSafe(
  *
  * S2 在投影层也堵了一道（`flowIsAllDone` 不再把 `SKIPPED_SOURCE_MISSING`
  * 当完成），这里是同一条规则在渲染层的闸门——两道门各自可测，且都不许松。
+ *
+ * 还多一条 H-C：主位在说「两个数对不上、正在核对」时，状态行不许在它正下方
+ * 说「照片都存好了」。这个组合是可达的、而且是最普通的漂移场景——备份成功后
+ * 用户把照片从手机相册删掉（终态 `CONFIRMED` 不会被改写成
+ * `SKIPPED_SOURCE_MISSING`），于是账本 51 项全部 CONFIRMED、相册只剩 10 张：
+ * `confirmedRaw > n` 走 H-C，而 `flowIsAllDone` 照样为真。L0「数据不可信压过
+ * 一切完成度结论」就是为这一格写的。
  */
 fun allSafeTextAllowed(
     mediaAccess: MediaAccess,
@@ -146,6 +153,7 @@ fun allSafeTextAllowed(
     cancelledRoundCount: Int,
 ): Boolean =
     heroNumberIsSafe(mediaAccess, triplet, pairingLost) &&
+        heroRenderOf(mediaAccess, triplet) != HeroRender.Unreconciled &&
         missingSourceCount == 0 &&
         cancelledRoundCount == 0
 

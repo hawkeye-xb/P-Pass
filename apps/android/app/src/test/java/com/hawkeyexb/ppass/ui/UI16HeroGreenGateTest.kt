@@ -135,6 +135,21 @@ class UI16HeroGreenGateTest {
         )
     }
 
+    @Test
+    fun rule_s_also_blocks_all_safe_text_while_the_two_counts_disagree() {
+        // 可达且最普通的漂移场景：备份成功后用户把照片从手机相册删掉
+        // （终态 CONFIRMED 不会被改写成 SKIPPED_SOURCE_MISSING）——账本 51 项
+        // 全部已确认、相册只剩 10 张。主位走 H-C 说「两个数对不上」，此时
+        // 状态行不许在它正下方说「照片都存好了」（L0 压过一切完成度结论）。
+        val drifted = tripletOf(n = 10L, confirmedCount = 51L, lastSuccessAt = 1L)
+
+        assertEquals(HeroRender.Unreconciled, heroRenderOf(MediaAccess.FULL, drifted))
+        assertFalse(
+            "H-C 与「照片都存好了」不许同屏",
+            allSafeTextAllowed(MediaAccess.FULL, drifted, false, 0, 0),
+        )
+    }
+
     // ── 两次真机组合（回归用例：刻意同时触发多条闸门） ──
 
     @Test
