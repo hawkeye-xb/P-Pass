@@ -1,7 +1,21 @@
 # Standalone workspace on purpose: the tray shell has ZERO business
-# logic (ADR-012) — it speaks the daemon's local IPC protocol only, so
-# it depends on no internal crate, and the huge Tauri tree stays out of
-# the main workspace's build/CI.
+# logic (ADR-012) — it speaks the daemon's local IPC protocol only,
+# and the huge Tauri tree stays out of the main workspace's build/CI.
+#
+# DOC-05: the old "depends on no internal crate" line was retired when
+# QA-09 moved platform forking into crates/platform — src-tauri DOES
+# consume it below (the only path dependency in this file; verified
+# with `grep -n 'path = '`). "ZERO business logic" still holds:
+# platform is a system adapter, not business logic. A path dependency
+# does not require same-workspace membership, so the standalone
+# decision stands on the Tauri-tree argument alone.
+#
+# Dependency direction: src-tauri → crates/platform, one-way. CI-17
+# (#373) leans on exactly this direction — apps/**-only changes may
+# skip the main workspace's heavy lanes because editing src-tauri
+# cannot affect crates/**; the reverse direction (editing crates/**)
+# affects src-tauri but is judged "run everything" anyway by
+# tools/ci-needs-full-lane.sh.
 [workspace]
 
 [package]
