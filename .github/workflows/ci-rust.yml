@@ -302,6 +302,7 @@ jobs:
       # 腾出这 ~3.9 GB 换回的是「所有 lane 的缓存都稳定命中」。
       #
       # 👉 哪天配额宽裕想加回 target/，先重新量上面那张表再决定，别照搬结论。
+      # 稳态代价（本 PR 第二轮实测，`~/.cargo` 命中 / `target/` 重编）见 PR 描述。
       - name: Cache cargo (依赖源码，刻意不含 target/ — 见上方注释)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
