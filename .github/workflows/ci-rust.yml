@@ -202,7 +202,16 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/
             target/
-          key: clippy-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      # CI-18 (#382)：key 只跟**主 workspace** 的 Cargo.lock 走。
+      # 原先是 `**/Cargo.lock`，那个 glob 实测匹配**四个**文件：
+      #   Cargo.lock                          ← 本 job 真正编译的那棵树
+      #   apps/desktop/src-tauri/Cargo.lock   ← 独立 workspace（ADR-012）
+      #   spikes/iroh-probe/Cargo.lock        ← 根 Cargo.toml 的 exclude 里
+      #   spikes/thumb-bench/Cargo.lock       ← 同上
+      # 后三个本 job 一个字节都编译不到，改它们却会把本 job 的缓存作废。
+      # 实测代价（PR #381 只改了 src-tauri 一个补丁号）：clippy 56s→2m57s、
+      # test 3m20s→7m10s、test (windows) 12m25s→13m29s，约 +7 分钟白烧。
+          key: clippy-${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       # --all-targets 会编译测试二进制（链接 libheif），dev headers 必需。
       - name: System codecs (libheif + HEVC plugin for HEIC, ffmpeg for video thumbs)
@@ -237,7 +246,8 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/
             target/
-          key: test-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # CI-18 (#382)：只跟主 workspace 的 lock 走，见 clippy 那条的注释。
+          key: test-${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: System codecs (libheif + HEVC plugin for HEIC, ffmpeg for video thumbs)
         # libheif-plugin-libde265 is the HEVC decode plugin — without it
@@ -376,7 +386,8 @@ jobs:
           path: |
             ~/.cargo/registry/
             ~/.cargo/git/
-          key: test-windows-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+          # CI-18 (#382)：只跟主 workspace 的 lock 走，见 clippy 那条的注释。
+          key: test-windows-cargo-deps-${{ hashFiles('Cargo.lock') }}
 
       # ffmpeg：Linux 那个 job 用 apt 装，Windows 上没有对应物，用仓库自己的
       # tools/fetch-ffmpeg.sh（它有 MINGW*/MSYS* 分支，在 runner 的 Git Bash
@@ -488,7 +499,9 @@ jobs:
           path: |
             ~/.cargo/registry/
             ~/.cargo/git/
-          key: deny-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # CI-18 (#382)：只跟主 workspace 的 lock 走。src-tauri 那棵由
+          # ci-desktop 的 `License and dependency audit (src-tauri)` 单独审（SEC-09 #376）。
+          key: deny-${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Install cargo-deny
         uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908 # v2.87.15
