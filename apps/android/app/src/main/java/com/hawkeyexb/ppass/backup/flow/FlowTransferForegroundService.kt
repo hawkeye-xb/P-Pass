@@ -157,6 +157,7 @@ internal fun supersedes(
         candidate.evidenceWeight < previous.evidenceWeight -> false
         candidate == ForegroundStartOutcome.START_REFUSED &&
             previous == ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED &&
+            now >= stored.lastOutcomeAt &&
             now - stored.lastOutcomeAt <= START_ATTEMPT_WINDOW_MS -> false
         else -> now >= stored.lastOutcomeAt || stored.lastOutcomeAt - now > START_ATTEMPT_WINDOW_MS
     }

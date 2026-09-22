@@ -9,6 +9,20 @@
 // ContextCompat.startForegroundService，只把请求交给系统就返回，**没有任何
 // 机会观测系统同不同意**，却写出了跟真 startForeground 一模一样的 STARTED。
 // 这里钉的就是一条：**有观测分量的结论不得被无观测分量的结论覆盖。**
+//
+// supersedes 的输入只有三个维度：证据分量之差、是否「说得出原因 vs 说不出
+// 原因」这一对、以及 now - lastOutcomeAt 的正负与是否超过一次启动尝试的
+// 时长。九个格逐一有用例（case matrix，别再凭感觉加规则）：
+//   1 盘上是空/读不出        → 落地   a_submitted_request_alone_…
+//   2 分量更高（时间戳更旧） → 落地   more_evidence_lands_even_when_…
+//   3 分量更低              → 拦下   a_submitted_request_must_not_erase_…
+//   4 说不出原因 vs 说得出原因，0 ≤ Δ ≤ 窗口 → 拦下  a_refusal_without_a_named_cause_…
+//   5 同上，Δ > 窗口         → 落地   a_later_unrelated_refusal_does_land_…
+//   6 同上，Δ < 0（时钟回跳）→ 落地   a_backwards_clock_never_freezes_the_named_cause_…
+//   7 同分量其余情况，now ≥ 盘上 → 落地 a_later_observed_start_does_take_over_…
+//                                     a_refusal_still_overturns_an_earlier_observed_success
+//   8 同分量其余情况，now < 盘上且在窗口内 → 拦下 an_out_of_order_record_…
+//   9 同上但回跳超过窗口     → 落地   a_backwards_clock_never_freezes_a_stale_verdict
 package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.R
@@ -163,6 +177,35 @@ class UI19ProtectionSourceTest {
         assertEquals(
             R.string.state_background_protection_unknown,
             transferProtectionNoticeRes(store.load()),
+        )
+    }
+
+    // 时钟回跳同样不许让「说得出原因优先」变成永久黏住：差值为负不是
+    // 「同一次启动尝试内」。
+    @Test
+    fun a_backwards_clock_never_freezes_the_named_cause_either() {
+        val store = TransferProtectionStore(tempDir("stale-cause-clock"))
+        store.record(ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED, 1_000_000L)
+
+        assertTrue(store.record(ForegroundStartOutcome.START_REFUSED, 1_000_000L - 3_600_000L))
+        assertEquals(
+            "时钟往回跳不等于同一次启动尝试，新观测必须落地",
+            TransferProtection.UNKNOWN,
+            transferProtectionOf(store.load()),
+        )
+    }
+
+    // 证据分量压时间：只提交过请求时，一条更有分量的结论即使时间戳更旧
+    // 也必须落地。
+    @Test
+    fun more_evidence_lands_even_when_its_timestamp_is_older() {
+        val store = TransferProtectionStore(tempDir("weight-beats-time"))
+        store.record(ForegroundStartOutcome.START_REQUESTED, 9_000L)
+
+        assertTrue(store.record(ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED, 8_000L))
+        assertEquals(
+            TransferProtection.NOT_EFFECTIVE,
+            transferProtectionOf(store.load()),
         )
     }
 
