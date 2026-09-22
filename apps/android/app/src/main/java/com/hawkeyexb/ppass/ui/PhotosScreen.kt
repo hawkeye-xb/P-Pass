@@ -515,6 +515,23 @@ internal fun attributionText(isMine: Boolean, takenAtSeconds: Long): String {
     }
 }
 
+/**
+ * IDX-03: 查看器头部的尺寸位——**只在尺寸真的已知时**才有字。
+ *
+ * 为什么判据是 `<= 0` 而不是 null：线上这个字段是 `u32`
+ * （`crates/proto/src/msgs.rs` 的 `AssetMeta`），daemon 侧
+ * `a.width.unwrap_or(0)`（`crates/daemon/src/query.rs`）已经把「库里是
+ * NULL」压成 `0` 才发出来。手机收到的从来不是 null，是 0——把 `Proto.kt`
+ * 改成 `Int?` 一个字都改不动这件事（IDX-03 判断 ④，留白记在卡上）。
+ * 好在这个哨兵值没有歧义：没有任何一张照片是 0 像素宽的。
+ *
+ * 为什么不写「尺寸未知」：头部只有这一个信息位，视频本来就常常没有尺寸，
+ * 那不是异常态，空着比写字干净（判断 ③）。`0×0` 是个看起来像真数据的
+ * 假数据，比不显示更糟——用户会以为照片坏了。
+ */
+internal fun dimensionsText(width: Int, height: Int): String? =
+    if (width > 0 && height > 0) "$width×$height" else null
+
 @Composable
 private fun MediaViewer(
     loader: TimelineLoader,
@@ -654,10 +671,14 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
                 modifier = Modifier.clickable(onClick = onClose).padding(10.dp),
             )
             // 设计稿 M9：头部只有尺寸信息，分享挪到底部按钮。
-            Text(
-                "${asset.width}×${asset.height}", fontSize = 14.sp,
-                color = PPColor.PaperDim, modifier = Modifier.padding(10.dp),
-            )
+            // IDX-03：尺寸未知（视频 / 探测不到）时整个 Text 不出现——
+            // 宁可空着，也不画 `0×0` 那个假数字。
+            dimensionsText(asset.width, asset.height)?.let {
+                Text(
+                    it, fontSize = 14.sp,
+                    color = PPColor.PaperDim, modifier = Modifier.padding(10.dp),
+                )
+            }
         }
         // 归因信息按需出现——网格不标来源，只有大图才显示。
         Text(
