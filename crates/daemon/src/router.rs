@@ -609,8 +609,8 @@ impl Router {
     /// AUDIT-04: batch delivery for the phone's durable Flow audit outbox.
     /// Each event carries its own event_id (minted once on the phone),
     /// so appending it here is idempotent — a retransmitted batch after a
-    /// lost response never duplicates a row. Every event is routed onto
-    /// the canonical `audit_operation`/`audit_item_evidence`/`audit_tombstone`/
+    /// lost response never duplicates a row. Every event is routed onto the
+    /// canonical `audit_operation`/`audit_item_evidence`/`audit_tombstone`/
     /// `audit_decision` tables by [`crate::audit_route::route`] — this
     /// method itself no longer decides where a fact lands (card decision
     /// #2/#9 supersede AUDIT-01's single-bucket `audit_event`). Returns
