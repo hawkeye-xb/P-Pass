@@ -79,7 +79,9 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/
             target/
-          key: macos-arm64-artifacts-${{ hashFiles('**/Cargo.lock') }}
+          # CI-18 (#382)：本 job 只 `cargo build -p daemon -p testclient`（主
+          # workspace），key 不该被 src-tauri / spikes 的 lock 带着失效。
+          key: macos-arm64-artifacts-${{ hashFiles('Cargo.lock') }}
 
       - name: System codecs (libheif via brew)
         run: brew install libheif
@@ -132,7 +134,8 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/
             target/
-          key: linux-artifacts-${{ hashFiles('**/Cargo.lock') }}
+          # CI-18 (#382)：同上，只编主 workspace。
+          key: linux-artifacts-${{ hashFiles('Cargo.lock') }}
 
       - name: System codecs (libheif + HEVC plugin, ffmpeg)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg
@@ -186,7 +189,8 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/
             target/
-          key: win-x64-artifacts-${{ hashFiles('**/Cargo.lock') }}
+          # CI-18 (#382)：同上，只编主 workspace。
+          key: win-x64-artifacts-${{ hashFiles('Cargo.lock') }}
 
       # BUILD-07：HEIC **解码**在 Windows 上靠 `libde265`，它是 vcpkg
       # libheif 端口的**基础依赖**（不是可选特性），静态构建里直接链进去

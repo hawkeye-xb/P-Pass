@@ -62,7 +62,8 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # CI-18 (#382)：只编主 workspace（cargo build -p daemon -p testclient）。
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       # daemon/testclient release 构建需要 libheif-dev（vendored 编译）+
       # HEVC 解码插件；ffmpeg 供视频首帧测试（下游 job 运行时也要，各自装）。
@@ -105,7 +106,8 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/
             target/
-          key: e2e-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # CI-18 (#382)：同上，只碰主 workspace。
+          key: e2e-${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       # 抄 scenarios job：daemon 运行时需要 libheif 运行时库 + HEVC 解码
       # 插件；ffmpeg 供视频首帧测试。ubuntu-latest runner 自带 Android
