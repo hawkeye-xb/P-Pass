@@ -1010,10 +1010,14 @@ mod tests {
     ///
     /// 反证：`daemon_startup_error()` 体内改成 `None` → 本测试红。
     ///
-    /// ⚠️ HOME 是进程级的，cargo 的测试线程共享它。本文件里没有第二条
-    /// 测试读 HOME（`home_dir()` 的调用点都在产品代码里，且没有测试调到
-    /// 它们），所以这里就地改、用完还原；将来谁再加读 HOME 的测试，这两
-    /// 条得一起串行化。
+    /// ⚠️ HOME 是进程级的，cargo 的测试线程共享它，所以这里就地改、用完
+    /// 还原。**全 crate 只有一条别的测试会间接读到 HOME**：
+    /// `ipc::tests::candidates_include_config_data_dir` → `token_candidates_from`
+    /// （ipc.rs 里那行 `env::var("HOME")`）。它不受影响——HOME 只决定候选表里
+    /// `home.join("ppf-library/ipc.token")` 那一项，而它的两条断言查的是
+    /// config 的 data_dir 和注入的 cfg_dir，跟 HOME 无关。
+    /// 将来谁加一条**断言到 HOME 那一项**的测试，必须跟本条一起串行化
+    /// （在 tests mod 里加个共享 Mutex，别退回 `--test-threads=1`）。
     #[test]
     fn the_startup_error_command_itself_surfaces_the_daemon_stderr() {
         let tmp = tempfile::tempdir().unwrap();
