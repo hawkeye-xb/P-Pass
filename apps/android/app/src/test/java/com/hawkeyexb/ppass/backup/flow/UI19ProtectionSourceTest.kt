@@ -10,17 +10,26 @@
 // 机会观测系统同不同意**，却写出了跟真 startForeground 一模一样的 STARTED。
 // 这里钉的就是一条：**有观测分量的结论不得被无观测分量的结论覆盖。**
 //
-// supersedes 的输入只有三个维度：证据分量之差、是否「说得出原因 vs 说不出
-// 原因」这一对、以及 now - lastOutcomeAt 的正负与是否超过一次启动尝试的
-// 时长。九个格逐一有用例（case matrix，别再凭感觉加规则）：
+// UI-22（E3 2026-09-22 18:49）：分量相同、时间更新、却仍然不许落地的还有
+// 第二对——盘上是系统亲口说的配额耗尽，22 毫秒后同一次启动尝试内一次
+// startForeground() 成功返回。那次成功是系统拆除服务的一部分，不是配额
+// 回来了（写入者已钉死在 onStartCommand，见 issue #400）。
+//
+// supersedes 的输入只有三个维度：证据分量之差、盘上/新来这一对具体是什么、
+// 以及 now - lastOutcomeAt 的正负与是否超过一次启动尝试的时长。每个格子
+// 逐一有用例（case matrix，别再凭感觉加规则）：
 //   1 盘上是空/读不出        → 落地   a_submitted_request_alone_…
 //   2 分量更高（时间戳更旧） → 落地   more_evidence_lands_even_when_…
 //   3 分量更低              → 拦下   a_submitted_request_must_not_erase_…
 //   4 说不出原因 vs 说得出原因，0 ≤ Δ ≤ 窗口 → 拦下  a_refusal_without_a_named_cause_…
 //   5 同上，Δ > 窗口         → 落地   a_later_unrelated_refusal_does_land_…
 //   6 同上，Δ < 0（时钟回跳）→ 落地   a_backwards_clock_never_freezes_the_named_cause_…
-//   7 同分量其余情况，now ≥ 盘上 → 落地 a_later_observed_start_does_take_over_…
-//                                     a_refusal_still_overturns_an_earlier_observed_success
+//   7a 盘上配额耗尽 + 新来 STARTED，0 ≤ Δ ≤ 窗口 → 拦下
+//                                     a_started_inside_the_same_start_attempt_…
+//   7b 同上，Δ > 窗口（用户切回前台）→ 落地
+//                                     a_later_observed_start_does_take_over_…
+//                                     coming_back_to_the_foreground_clears_…
+//   7c 同分量其余情况，now ≥ 盘上 → 落地 a_refusal_still_overturns_an_earlier_observed_success
 //   8 同分量其余情况，now < 盘上且在窗口内 → 拦下 an_out_of_order_record_…
 //   9 同上但回跳超过窗口     → 落地   a_backwards_clock_never_freezes_a_stale_verdict
 package com.hawkeyexb.ppass.backup.flow
@@ -248,9 +257,48 @@ class UI19ProtectionSourceTest {
         assertNull("不知道就闭嘴，不许编一句理由", transferProtectionNoticeRes(store.load()))
     }
 
+    // UI-22 / E3（2026-09-22 18:49）：配额耗尽 `.613`，22 毫秒后 `.635` 盘上
+    // 又成了 STARTED。写入者已钉死是 onStartCommand（issue #400 comment）：
+    // 系统把服务拆掉的那一瞬间又投递了一次 onStartCommand，startForeground()
+    // 成功返回了。**那次成功是拆除过程的一部分，不是「配额回来了」的证据**，
+    // 它与配额耗尽属于同一次启动尝试，不许翻盘。
+    @Test
+    fun a_started_inside_the_same_start_attempt_must_not_erase_the_budget_exhaustion() {
+        val store = TransferProtectionStore(tempDir("teardown-started"))
+        // 18:49:05.613 —— onTimeout
+        store.record(ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED, 1_790_074_145_613L)
+
+        // 18:49:05.635 —— 同一实例的 onStartCommand 又被投递一次，
+        // startForeground() 成功返回（没抛 ForegroundServiceStartNotAllowedException）
+        val outcome = startProtectedForeground(
+            store = store,
+            now = 1_790_074_145_635L,
+            haltTransfer = { error("startForeground 成功返回时不许暂停") },
+            successOutcome = ForegroundStartOutcome.STARTED,
+        ) { /* startForeground 成功返回 */ }
+
+        assertEquals(ForegroundStartOutcome.STARTED, outcome)
+        assertEquals(
+            "配额耗尽后 22 毫秒、同一次启动尝试内的一次成功返回，不是配额回来了",
+            TransferProtection.NOT_EFFECTIVE,
+            transferProtectionOf(store.load()),
+        )
+        assertEquals(
+            "那句人话必须还在，否则 #361 在真机上永远不出场",
+            R.string.state_background_budget_paused,
+            transferProtectionNoticeRes(store.load()),
+        )
+    }
+
     // 优先级不是「失败永远赢」：配额会在用户把 App 切回前台后重置，
     // 此时 onStartCommand 真的观测到 startForeground 成功——同等证据分量，
-    // 后来的观测必须能翻盘，否则就是把反方向的谎话冻住。
+    // **新的一次启动尝试**里的观测必须能翻盘，否则就是把反方向的谎话冻住。
+    //
+    // UI-22 retime：这条原本用 1_000L → 2_000L（Δ=1s，落在同一次启动尝试
+    // 窗口内），那正是上面那条 E3 的形状，用它代表「用户切回前台」等于把
+    // bug 锁成护栏。断言意图不变，只把 Δ 挪到窗口之外——「用户看到暂停、
+    // 切回前台、点继续」本来就不可能在一次启动尝试内完成。
+    // 反证：把规则改成「失败永远赢」，这条必红。
     @Test
     fun a_later_observed_start_does_take_over_from_an_earlier_refusal() {
         val store = TransferProtectionStore(tempDir("reset"))
@@ -258,17 +306,52 @@ class UI19ProtectionSourceTest {
 
         val outcome = startProtectedForeground(
             store = store,
-            now = 2_000L,
+            now = 1_000L + START_ATTEMPT_WINDOW_MS + 1L,
             haltTransfer = { error("观测到启动成功时不许暂停") },
             successOutcome = ForegroundStartOutcome.STARTED,
         ) { /* startForeground 成功返回 */ }
 
         assertEquals(ForegroundStartOutcome.STARTED, outcome)
         assertEquals(
-            "同等证据分量下，后来的观测必须能翻盘",
+            "新的一次启动尝试里，后来的观测必须能翻盘",
             TransferProtection.EFFECTIVE,
             transferProtectionOf(store.load()),
         )
+    }
+
+    // 同一条不许倒退的规则，走用户真实动线：配额耗尽 → 用户切回前台
+    // （分钟级，早已是另一次启动尝试）→ 点继续 → sync 提交请求 →
+    // onStartCommand 观测到成功。UI 必须回到「生效」，而不是继续挂着
+    // 一句已经不成立的「今天后台时间用完了」。
+    @Test
+    fun coming_back_to_the_foreground_clears_the_budget_verdict() {
+        val store = TransferProtectionStore(tempDir("foreground-resume"))
+        val exhaustedAt = 1_790_074_145_613L
+        store.record(ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED, exhaustedAt)
+
+        // 用户切回前台、点「继续」：sync 只提交请求（无观测分量，不许落地）
+        val resumedAt = exhaustedAt + 120_000L
+        startProtectedForeground(
+            store = store,
+            now = resumedAt,
+            haltTransfer = {},
+            successOutcome = ForegroundStartOutcome.START_REQUESTED,
+        ) { /* ContextCompat.startForegroundService 成功返回 */ }
+
+        // onStartCommand 真的观测到 startForeground 成功
+        startProtectedForeground(
+            store = store,
+            now = resumedAt + 30L,
+            haltTransfer = { error("观测到启动成功时不许暂停") },
+            successOutcome = ForegroundStartOutcome.STARTED,
+        ) { /* startForeground 成功返回 */ }
+
+        assertEquals(
+            "配额真的重置之后还报暂停，就是把反方向的谎话冻住",
+            TransferProtection.EFFECTIVE,
+            transferProtectionOf(store.load()),
+        )
+        assertNull("配额那句人话不许留在它已经不成立之后", transferProtectionNoticeRes(store.load()))
     }
 
     // lastOutcomeAt 不是只写不读：同等证据分量时它就是判据——MOB-102 的
