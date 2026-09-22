@@ -166,6 +166,27 @@ async fn index_missing_files(
             source,
         })?;
         let rel_path = rel_path_of(library_root, path)?;
+        // IDX-03: 与 `ingest.rs` 逐字同一口径的 header-only probe。这里曾经
+        // 硬写 `None`，而同一个插入块里的 `taken_at` 是实算的——于是所有经
+        // adopt/rebuild 入库的行（手放进 originals/ 的文件、索引丢失后被重新
+        // 收编的文件）尺寸永远是 NULL，UI 一路兜成 `0×0`。
+        //
+        // ⚠️ 这里只补上了两条入库路径中的一条。`ingest` 那条另有一处独立
+        // 缺陷：它探的是 `f.src_path`，而 flow 投递给它的是 staging 里那个
+        // **没有扩展名**的文件（`flow_delivery.rs` 的 `staged_path`），
+        // `image::image_dimensions` 只按扩展名认格式，于是手机推上来的照片
+        // 在 ingest 侧同样恒为 NULL。那处不在 IDX-03 范围内，另开卡。
+        //
+        // 开销（卡面判断 ①）：只在**新插入行**上跑，已在册的行连这段都到不了
+        // （上面 `get_asset` 就 continue 了）。而这个循环对每个文件本来就已经
+        // 付了一次全文件 `hash_file`，新行还要再付一次 EXIF 解析；只读文件头的
+        // probe 比两者都便宜。每小时那一轮的稳态是「一条没收」= 零次 probe。
+        let (width, height) = match image::image_dimensions(path) {
+            Ok((w, h)) => (Some(i64::from(w)), Some(i64::from(h))),
+            // 视频与异体编码本来就没有 header-only 尺寸，诚实记 None——
+            // 绝不拿 0 充数：那是个看起来像真数据的假数据。
+            Err(_) => (None, None),
+        };
         let insert = db
             .insert_asset(&Asset {
                 hash: hash.to_vec(),
@@ -173,8 +194,8 @@ async fn index_missing_files(
                 media_type: media_type_for(path),
                 bytes: meta.len() as i64,
                 taken_at: Some(ingest::taken_at_ms(path, None)?),
-                width: None,
-                height: None,
+                width,
+                height,
                 src_device: device_of(&rel_path, local_node_id),
                 added_at: unix_ms_now(),
                 thumb_state: 0,
