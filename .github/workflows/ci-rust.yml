@@ -93,6 +93,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      # CI-17 (#373)：两个输出，按依赖面分。run_heavy=true ⇒ run_arch=true
+      # （宽 lane 的无害清单是窄 lane 的超集），这个包含关系有测试钉着。
+      run_arch: ${{ steps.decide.outputs.run_arch }}
       run_heavy: ${{ steps.decide.outputs.run_heavy }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -113,12 +116,28 @@ jobs:
           set -uo pipefail
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "非 PR 事件（push 到 main）→ 恒定全跑，不做任何跳过"
+            echo "run_arch=true" >> "$GITHUB_OUTPUT"
             echo "run_heavy=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          need="$(tools/ci-needs-full-lane.sh "${{ github.event.pull_request.base.sha }}")"
-          echo "判定结果: run_heavy=$need"
-          echo "run_heavy=$need" >> "$GITHUB_OUTPUT"
+          base="${{ github.event.pull_request.base.sha }}"
+          # 两个 lane 各算一次（判据同一个脚本，无害清单不同）。
+          #   run_arch  ← 默认 lane：docs/cards/.claude/*.md 才算惰性。
+          #               给 architecture enforcement 用 —— arch-check.sh 扫 apps/**。
+          #   run_heavy ← rust-workspace lane：额外把 apps/** 也算惰性。
+          #               给只碰主 workspace 的那五条用。
+          arch="$(tools/ci-needs-full-lane.sh "$base")"
+          heavy="$(tools/ci-needs-full-lane.sh "$base" rust-workspace)"
+          echo "判定结果: run_arch=$arch  run_heavy=$heavy"
+          # 包含关系自检：宽 lane 判要跑，窄 lane 不可能判不跑。
+          # 真出现就是判据被改坏了 —— 当场两个都判要跑，不许放行。
+          if [ "$heavy" = "true" ] && [ "$arch" != "true" ]; then
+            echo "::error::包含关系被破坏（run_heavy=true 而 run_arch=$arch）——判据有问题，全部改判要跑"
+            arch=true
+            heavy=true
+          fi
+          echo "run_arch=$arch" >> "$GITHUB_OUTPUT"
+          echo "run_heavy=$heavy" >> "$GITHUB_OUTPUT"
 
   fmt:
     name: fmt + actionlint
@@ -430,7 +449,13 @@ jobs:
     # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
     # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
+    # ⭐ CI-17 (#373)：**本 job 是唯一绑 run_arch 的**，别跟下面五条搞混。
+    # 理由：tools/arch-check.sh 第 64 行明写 `apps/** — scanned`，所以只改
+    # apps/** 的 PR **真的可能**把它弄红 ⇒ 不能跟着重型编译一起跳。
+    # 而 clippy / test / test (windows) / license+deny / fmt 绑的是 run_heavy，
+    # 那条 lane 把 apps/** 也算惰性 —— src-tauri 是独立 workspace，主 workspace
+    # 的 cargo 命令编译不到它（依据见 tools/ci-needs-full-lane.sh 文件头）。
+    if: ${{ !cancelled() && needs.changes.outputs.run_arch != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
