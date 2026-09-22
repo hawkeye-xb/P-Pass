@@ -143,8 +143,12 @@ pub struct BundleInputs {
     pub home: String,
     pub app_version: String,
     pub daemon_version: Option<String>,
-    /// daemon 不可达时的原因（可达 = None）。
+    /// daemon 不可达时的原因（可达 = None）。「不可达」只指 discover()
+    /// 都没成功——服务压根没起来。
     pub daemon_unreachable: Option<String>,
+    /// daemon 在线、但三份日志（diag / devices / audit）没拿到时的原因。
+    /// 与 `daemon_unreachable` 互斥：前者服务活着，排查路径完全不同。
+    pub daemon_logs_unavailable: Option<String>,
     pub config_toml: Option<String>,
     /// plist 是否存在（不存在 = 没注册成常驻服务，也就没有日志路径）。
     pub plist_found: bool,
@@ -168,8 +172,10 @@ P-Pass 诊断包（导出时间见各文件内容）
   5. diag_events.json   ← 后台服务自己记的诊断事件流
   6. devices.json       ← 已配对设备（NodeId 只留前缀）
   7. audit.json         ← 审计事件（配对 / 吊销 / 外部删除）
-  8. daemon-unreachable.txt ← 只在导出时后台服务不可达才有；里面写了
-                              为什么连不上（此时 5~7 会缺）
+  8. daemon-unreachable.txt / daemon-logs-unavailable.txt
+                              ← 前者：导出时后台服务压根没起来，里面写了
+                              为什么连不上；后者：服务在线但三份日志没拿到。
+                              出现任一个时 5~7 会缺
 
 脱敏：家目录路径统一替换成 <DATA>，NodeId / 配对令牌这类长 hex 串只
 留前 8 位。可以直接把整个 zip 发给开发者。
@@ -181,15 +187,24 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     entries.push(("README.txt".into(), README.as_bytes().to_vec()));
 
+    // 三态（DESK-31）：不可达 / 在线但日志没拿到 / 完整。
+    let reachable = if i.daemon_unreachable.is_some() {
+        "no"
+    } else if i.daemon_logs_unavailable.is_some() {
+        "partial (online, logs unavailable)"
+    } else {
+        "yes"
+    };
     let versions = format!(
         "app_version    = {}\ndaemon_version = {}\ndaemon_reachable = {}\nplatform       = {}\n",
         i.app_version,
-        i.daemon_version.as_deref().unwrap_or("(读不到)"),
-        if i.daemon_unreachable.is_none() {
-            "yes"
-        } else {
-            "no"
-        },
+        // 版本串 daemon 自报什么我们控制不了（DESK-31 之后它可能来自
+        // LogsUnavailable 路径），出包前过同一道 scrub。
+        i.daemon_version
+            .as_deref()
+            .map(|v| scrub(v, home))
+            .unwrap_or("(读不到)".into()),
+        reachable,
         std::env::consts::OS,
     );
     entries.push(("versions.txt".into(), versions.into_bytes()));
@@ -236,6 +251,17 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
             scrub(reason, home)
         );
         entries.push(("daemon-unreachable.txt".into(), text.into_bytes()));
+    }
+    if let Some(reason) = &i.daemon_logs_unavailable {
+        let text = format!(
+            "导出时后台服务在线，但 diag_events.json / devices.json / audit.json \
+             三份没拿到，所以它们不在包里。\n\n原因：{}\n\n\
+             versions.txt 里的 daemon_version 是**在线服务自报**的版本，不是 \
+             App 自带的 sidecar 版本。服务在线但日志缺失，和服务压根没起来是 \
+             两回事——support 排查时别按「服务没起来」的路径走。\n",
+            scrub(reason, home)
+        );
+        entries.push(("daemon-logs-unavailable.txt".into(), text.into_bytes()));
     }
     // daemon 给的那几份 JSON 也过同一道 scrub，不"原样搬"——
     // DESK-10 真机验收：旧 daemon 只给 actor 做前缀掩码，`detail` 里
@@ -336,6 +362,7 @@ mod tests {
             app_version: "0.4.0-test.2".into(),
             daemon_version: Some("0.3.0".into()),
             daemon_unreachable: Some("找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".into()),
+            daemon_logs_unavailable: None,
             config_toml: Some("data_dir = \"/Users/someone/Pictures/lib\"\nbind_addr = \"0.0.0.0:41145\"\n".into()),
             plist_found: true,
             stdout_path: Some("/Users/someone/Library/Logs/p-pass-daemon.log".into()),
@@ -453,6 +480,57 @@ mod tests {
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].0, "a.txt");
         assert_eq!(back[0].1, b"hello");
+    }
+
+    // DESK-31：服务在线但三份日志没拿到——versions.txt 印三态的
+    // partial（不是 no），daemon-unreachable.txt 不出现，改出
+    // daemon-logs-unavailable.txt 且把两种情形说开。
+    #[test]
+    fn bundle_with_live_daemon_but_no_logs_marks_partial() {
+        let i = BundleInputs {
+            home: "/Users/someone".into(),
+            app_version: "0.4.0".into(),
+            daemon_version: Some("9.9.9-fake".into()),
+            daemon_logs_unavailable: Some("后台服务拒绝了 logs.export：模拟拒绝".into()),
+            plist_found: true,
+            ..Default::default()
+        };
+        let entries = build_bundle(&i);
+        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(names.contains(&"daemon-logs-unavailable.txt"), "{names:?}");
+        assert!(!names.contains(&"daemon-unreachable.txt"), "{names:?}");
+        let text = all_text(&entries);
+        assert!(text.contains("daemon_version = 9.9.9-fake"), "{text}");
+        assert!(
+            text.contains("daemon_reachable = partial (online, logs unavailable)"),
+            "{text}"
+        );
+        assert!(!text.contains("daemon_reachable = no"), "{text}");
+        let note = entries
+            .iter()
+            .find(|(n, _)| n == "daemon-logs-unavailable.txt")
+            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+            .unwrap();
+        assert!(note.contains("在线"), "{note}");
+        assert!(note.contains("两回事"), "{note}");
+        // 在线版本串同样过 scrub。
+        assert!(!text.contains("/Users/someone"), "{text}");
+    }
+
+    /// DESK-31：新暴露的在线版本串在 versions.txt 里也要脱敏。
+    #[test]
+    fn versions_txt_scrubs_daemon_version() {
+        let i = BundleInputs {
+            home: "/Users/someone".into(),
+            app_version: "0.4.0".into(),
+            daemon_version: Some("9.9.9+私货/Users/someone".into()),
+            daemon_logs_unavailable: Some("模拟".into()),
+            ..Default::default()
+        };
+        let entries = build_bundle(&i);
+        let text = all_text(&entries);
+        assert!(!text.contains("/Users/someone"), "{text}");
+        assert!(text.contains("<DATA>"), "{text}");
     }
 
     fn all_text(entries: &[(String, Vec<u8>)]) -> String {
