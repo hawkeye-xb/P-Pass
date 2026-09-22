@@ -757,6 +757,9 @@ fun PPassApp() {
                         // 主动取消不该被塑造成待处理的警告。
                         cancelledRoundCount = holder.cancelledRoundNotice.value?.count,
                         onRestoreCancelledRounds = { holder.restoreCancelledRounds() },
+                        // UI-19 规则 P：为什么暂停（#379 的数据源结论，
+                        // null = 未知 ⇒ 状态行一个字都不加）。
+                        pauseReasonRes = holder.pauseReason.value,
                         wifiOnly = wifiOnly,
                         onWifiOnlyChange = { enable ->
                             // MOB-02 §三: 关闭「需要 Wi-Fi」需二次确认
