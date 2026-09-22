@@ -92,6 +92,12 @@ jobs:
     name: changes (要不要跑 Rust 重型门禁)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # CI-19 (#392)：本 job 比 workflow 顶层多一条 `actions: read`，**只为读
+    # cache/usage 端点**（见最后那步）。job 级 permissions 会整体覆盖顶层，
+    # 所以 `contents: read` 必须一并写出来，否则 checkout 拿不到权限。
+    permissions:
+      contents: read
+      actions: read
     outputs:
       # CI-17 (#373)：两个输出，按依赖面分。run_heavy=true ⇒ run_arch=true
       # （宽 lane 的无害清单是窄 lane 的超集），这个包含关系有测试钉着。
@@ -138,6 +144,39 @@ jobs:
           fi
           echo "run_arch=$arch" >> "$GITHUB_OUTPUT"
           echo "run_heavy=$heavy" >> "$GITHUB_OUTPUT"
+
+      # CI-19 (#392)：缓存配额观测。
+      # ⚠️ **只告警，不拦路。** 缓存占用不是正确性问题，把它设成红会造出一条
+      # 与代码无关的常红检查 —— 那正是 #252 那轮刚治好的病（顶着一条常红，
+      # 每次都要人工判断能不能忽略，迟早在它真的红出别的原因时误判放过）。
+      # ⚠️ 本步骤**不许让 job 失败**：changes 一旦红，下游按 `!= 'false'` 会
+      # 全量照跑（fail-closed 是对的），但那等于为一条观测白烧一轮重型门禁。
+      # ⚠️ 注意 GitHub 的 `shell: bash` **默认就是 `bash -e`**，`set -uo pipefail`
+      # 并不会把 `-e` 关掉。真正兜住失败的是两处：`gh api` 后面的 `|| true`
+      # （读不到就当空值）与末尾的显式 `exit 0`。别以为写了 set 就安全了。
+      - name: 缓存配额观测（warning，不拦路）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          used="$(gh api "repos/${{ github.repository }}/actions/cache/usage"                     -q .active_caches_size_in_bytes 2>/dev/null || true)"
+          case "$used" in
+            ''|*[!0-9]*)
+              echo "读不到 cache/usage（权限或接口变动）→ 跳过观测，不影响本 job"
+              exit 0
+              ;;
+          esac
+          echo "Actions 缓存占用: $(( used / 1024 / 1024 )) MiB"
+          echo "（上限每仓 10 GB，GitHub 免费版**不可配置**——cache/usage 端点也不返回上限字段）"
+          # 阈值 8 GiB：#392 的目标是长期留出余量。贴满时 GitHub 会持续淘汰，
+          # 实测 refs/heads/main 上的条目 21 分钟就被淘汰过。
+          if [ "$used" -gt "$(( 8 * 1024 * 1024 * 1024 ))" ]; then
+            echo "::warning::Actions 缓存占用 $(( used / 1024 / 1024 / 1024 )) GiB 超过 8 GiB 阈值——接近 10 GB 上限，main 上的缓存可能被小时级淘汰。账表见 #392。"
+          else
+            echo "低于 8 GiB 阈值，正常。"
+          fi
+          exit 0
 
   fmt:
     name: fmt + actionlint
@@ -239,13 +278,36 @@ jobs:
         shell: bash
         run: tools/setup-rust-toolchain.sh
 
-      - name: Cache cargo
+      # ⚠️ CI-19 (#392)：**刻意不缓存 `target/`** —— 与下方 `test (windows)` 同一个
+      # 决定，同一笔账，只是这次是被配额逼的。
+      #
+      # 本条目实测曾是 **4104 MB，占 10 GB 配额的 41%**，是全仓最大的一条。
+      # 而它的性价比是全仓倒数第二（表见 #392）：
+      #
+      #   条目                      MB    命中      未命中     省(秒)  MB/省秒
+      #   deny-Linux-cargo         181    23s       26s            3   60.33  ← 已删（见下）
+      #   test-Linux-cargo        4104    3m20s     6m37s        190   21.60  ← 本条
+      #   Linux-cargo-desktop     1106    1m10s     4m33s        205    5.40
+      #   clippy-Linux-cargo       554    49s       2m31s        110    5.04
+      #   Windows-cargo-desktop    756    1m16s     3m35s        170    4.45
+      #   vcpkg-libheif             71    3s        ~20min      1197    0.06  ← 千倍最优，别碰
+      #
+      # 也就是说：本条目每省 1 秒要占 21.6 MB，是次差那条的 4 倍。
+      #
+      # 为什么非动它不可：`cache/usage` 实测 `active_caches_size_in_bytes =
+      # 10710270626`（按 GB 算 **10.71 GB，已越过 10 GB 上限**），GitHub 在持续
+      # 淘汰 —— 实测 `refs/heads/main` 上的 deny 缓存 **21 分钟**就被淘汰掉了。
+      # 配额贴满时「省下来的空间被别的条目吃掉、淘汰谁是随机的」，本仓自己在
+      # 下方 test-windows 那段写过结论：**不可预测的慢比可预测的慢更贵**。
+      # 腾出这 ~3.9 GB 换回的是「所有 lane 的缓存都稳定命中」。
+      #
+      # 👉 哪天配额宽裕想加回 target/，先重新量上面那张表再决定，别照搬结论。
+      - name: Cache cargo (依赖源码，刻意不含 target/ — 见上方注释)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry/
             ~/.cargo/git/
-            target/
           # CI-18 (#382)：只跟主 workspace 的 lock 走，见 clippy 那条的注释。
           key: test-${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
@@ -493,15 +555,15 @@ jobs:
         shell: bash
         run: tools/setup-rust-toolchain.sh
 
-      - name: Cache cargo (registry only)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/
-            ~/.cargo/git/
-          # CI-18 (#382)：只跟主 workspace 的 lock 走。src-tauri 那棵由
-          # ci-desktop 的 `License and dependency audit (src-tauri)` 单独审（SEC-09 #376）。
-          key: deny-${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+      # ⚠️ CI-19 (#392)：**本 job 刻意不缓存 cargo**，这里原先有一条
+      # `deny-${{ runner.os }}-cargo-...`，已删。
+      # 理由是实测的性价比：**181 MB 换 3 秒**（命中 23s / 未命中 26s），
+      # 60.33 MB/省秒，全仓倒数第一，比次差的 test-Linux-cargo 还差 3 倍。
+      # 根因：`cargo deny check` 只读 Cargo.lock 与 advisory DB，**不编译任何
+      # 东西**，所以 `~/.cargo/registry` 对它几乎没用。
+      # 而它占的不止 181 MB —— 缓存按 ref 隔离，每个开着的 PR 各存一份，实测
+      # 同时存在两份 PR ref 副本共 362 MB。
+      # 👉 谁要加回来，先贴「命中 vs 未命中」的实测秒数，别凭「加缓存总是好的」。
 
       - name: Install cargo-deny
         uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908 # v2.87.15
