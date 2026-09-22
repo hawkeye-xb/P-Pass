@@ -122,6 +122,11 @@
     <string name="hero_of_n">/ %1$s photos home</string>
     <string name="pending_count">%1$d to back up</string>
     <string name="triplet_unavailable">Cannot read the photo count on this phone — it retries next time the app opens.</string>
+    <!-- UI-16 rule H-C: the two counts disagree, so no fraction may be shown.
+         Deliberately NOT triplet_unavailable — that one means "cannot read the
+         phone's album count", a different fact. -->
+    <string name="hero_unreconciled_title">These two counts do not match — checking them</string>
+    <string name="hero_unreconciled_body">More photos are recorded as backed up than the selected albums currently hold. Nothing is lost; the two records simply have not been reconciled yet. Next time this phone reaches the storage computer, they are checked against each other.</string>
     <string name="dog_last_success">Last success %1$s</string>
     <!-- T-080 defect(b): never render an epoch-0 date when nothing ever succeeded -->
     <string name="last_success_never">No successful backup yet</string>

@@ -293,9 +293,19 @@ class BackupUiStateHolder(
     private fun refreshTriplet() {
         _triplet.value = try {
             val bucketIds = scopeStore.selectedBucketIds() ?: return
-            val aggregate = flowAggregateOf(flowLedgerSnapshot(context))
+            // UI-16: M 与 N 必须同作用域。N 数的是**选中相册**的实时文件，
+            // 所以 M 也只能数选中相册的已确认项——过滤之前分子是账本全量，
+            // 两个集合相除本就不成立（见 flowAggregateOf 的口径说明）。
+            val aggregate = flowAggregateOf(flowLedgerSnapshot(context), bucketIds)
             val n = MediaScanner(context.contentResolver).countAll(bucketIds)
-            tripletOf(n, aggregate.confirmed, aggregate.lastSuccessAt)
+            tripletOf(
+                n,
+                aggregate.confirmed,
+                aggregate.lastSuccessAt,
+                // 规则 G 的 G4 / G5：与数字同源同一 tick，不另开数据通道。
+                hasFailedNeedsUser = aggregate.failedNeedsUser > 0L,
+                pausedByUser = aggregate.pausedByUser,
+            )
         } catch (_: Throwable) {
             null
         }
