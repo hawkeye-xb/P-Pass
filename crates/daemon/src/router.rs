@@ -218,12 +218,16 @@ impl Router {
 
         match authz::check(device.as_ref(), &req.method) {
             Decision::Deny { msg_key } => {
+                // QA-17：diag 必须先于拒答响应落库。曾经先发响应再记
+                // diag——客户端收到 NOT_AUTHORIZED 的瞬间即可读 diag，
+                // 两条 sqlx 命令的调度顺序没保证，整轮并行下偶发断言
+                // 跑在 INSERT 之前（压 29 轮 1 红，见 #357）。
+                self.record_denial(peer, &req.method, msg_key).await;
                 let resp = Resp::err(
                     req.id.clone(),
                     RespError::new(codes::NOT_AUTHORIZED, msg_key),
                 );
                 let _ = self.send(stream, &resp).await;
-                self.record_denial(peer, &req.method, msg_key).await;
                 false // 关流 (§2.3: deny closes the connection)
             }
             Decision::Allow => {
@@ -605,8 +609,8 @@ impl Router {
     /// AUDIT-04: batch delivery for the phone's durable Flow audit outbox.
     /// Each event carries its own event_id (minted once on the phone),
     /// so appending it here is idempotent — a retransmitted batch after a
-    /// lost response never duplicates a row. Every event is routed onto the
-    /// canonical `audit_operation`/`audit_item_evidence`/`audit_tombstone`/
+    /// lost response never duplicates a row. Every event is routed onto
+    /// the canonical `audit_operation`/`audit_item_evidence`/`audit_tombstone`/
     /// `audit_decision` tables by [`crate::audit_route::route`] — this
     /// method itself no longer decides where a fact lands (card decision
     /// #2/#9 supersede AUDIT-01's single-bucket `audit_event`). Returns
@@ -675,7 +679,7 @@ impl Router {
         let internal_err = |id: &str| {
             Resp::err(
                 id.to_string(),
-                RespError::new(codes::INTERNAL, diag::keys::ERR_BACKUP_FAILED),
+                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
             )
         };
         match req.method.as_str() {
@@ -700,7 +704,8 @@ impl Router {
                         Err(_) => internal_err(&req.id),
                     },
                     Err(e) => {
-                        tracing::warn!("backup.manifest from {peer:?} failed: {e}");
+                        tracing::warn!("backup.manifest from {peer:?} failed: {error}");
+                        let _ = &e;
                         internal_err(&req.id)
                     }
                 }
@@ -724,7 +729,8 @@ impl Router {
                         RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
                     ),
                     Err(e) => {
-                        tracing::warn!("backup.presence from {peer:?} failed: {e}");
+                        tracing::warn!("backup.presence from {peer:?} failed: {error}");
+                        let _ = &e;
                         internal_err(&req.id)
                     }
                 }
@@ -772,7 +778,8 @@ impl Router {
                         )
                     }
                     Err(e) => {
-                        tracing::warn!("backup.commit from {peer:?} failed: {e}");
+                        tracing::warn!("backup.commit from {peer:?} failed: {error}");
+                        let _ = &e;
                         internal_err(&req.id)
                     }
                 }
@@ -816,7 +823,7 @@ impl Router {
                 Resp::err(
                     req.id.clone(),
                     RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
-                )
+                );
             }
         }
     }
