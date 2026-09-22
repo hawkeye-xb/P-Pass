@@ -134,8 +134,8 @@ internal val ForegroundStartOutcome.evidenceWeight: Int
  *   [TransferProtection.NOT_EFFECTIVE], so keeping the better explanation
  *   cannot preserve a reassuring lie. A refusal still overturns an earlier
  *   observed success — that direction is exactly what must not be frozen.
- * - Equal evidence otherwise: the newer observation wins. A record older than what is
- *   stored is an out-of-order loser of the MOB-102 two-thread race and must
+ * - Equal evidence otherwise: the newer observation wins. A record older
+ *   than what is stored is an out-of-order loser of the MOB-102 race and must
  *   not clobber the winner — unless it is older by more than one start
  *   attempt can possibly last ([START_ATTEMPT_WINDOW_MS]), which means the
  *   wall clock moved rather than that the writers raced; then the newest
