@@ -5,6 +5,26 @@
 allowBuilds:
   esbuild: true
 
+# SEC-09（#371）：pnpm 11 的 minimumReleaseAge（禁止发布不足 24 小时的包进
+# lockfile）是**工具内置默认值**，本仓没有任何一行声明它——所以它既看不见也
+# 审计不到。下面这一行是把它从"默认行为"变成"仓库明确要求"的唯一落点。
+#
+# strict=true 的作用是**堵掉自动豁免**。2026-09-22 实测（pnpm 11.27.1）：
+# 不加这行时，普通一句 `pnpm install` 引入一个 12 小时前发布的包，pnpm 不报错、
+# 不提示、退出码 0，而是**自己往 minimumReleaseAgeExclude 写一条**并继续装：
+#
+#   Added 1 entry to minimumReleaseAgeExclude in pnpm-workspace.yaml
+#     @aws-sdk/client-s3@3.1137.0
+#
+# 而且它插在 allowBuilds 正下方，离下面那段警告注释十几行远，review 时
+# 看起来就是"装依赖的正常附带改动"。#370 当时以为只有照着报错提示跑
+# `pnpm clean --lockfile` 才会触发——不是，默认路径就会。
+#
+# CI 之所以能红，只是因为它跑 `pnpm install --frozen-lockfile`：frozen 模式
+# 不许改 lockfile/workspace，于是同一件事变成 ERR_PNPM_MINIMUM_RELEASE_AGE_
+# VIOLATION。也就是说门禁只在 CI 咬人，本地默认是自动绕过的。
+minimumReleaseAgeStrict: true
+
 # QA-16（#326）：把 jsdom 那棵子树里**发布不足 24 小时**的传递依赖钉住。
 #
 # 起因是实测的：#370 第一版 lockfile 用本机 pnpm 10.15 生成，它不跑
