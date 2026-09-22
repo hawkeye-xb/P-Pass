@@ -77,7 +77,10 @@
          挪进备份设置卡的一行，不再是打断式提示，故文案不再叫 notice。 -->
     <string name="cancelled_round_cell_label">已跳过的照片</string>
     <string name="cancelled_round_cell_value">%1$d 张 · 点击恢复</string>
-    <string name="missing_source_notice_body">已跳过 %1$d 张已从手机相册删除的照片，不会再重传。</string>
+    <string name="missing_source_notice_body">无法恢复：%1$d 张照片已从手机相册删除，不会再传到电脑。</string>
+    <string name="missing_source_notice_dismiss">知道了</string>
+    <string name="missing_source_archive_label">已从手机删除的照片</string>
+    <string name="missing_source_archive_value">%1$d 张 · 无法恢复</string>
     <!-- T-083: hero 空闲态（设计稿未画，卡内裁决的最小延伸） -->
     <string name="idle_auto_hint">插电 + Wi-Fi 时自动进行</string>
     <string name="state_no_albums">没有可备份的相册（一个都没选）</string>

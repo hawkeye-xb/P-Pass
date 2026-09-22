@@ -80,7 +80,10 @@
          挪进备份设置卡的一行，不再是打断式提示，故文案不再叫 notice。 -->
     <string name="cancelled_round_cell_label">Skipped photos</string>
     <string name="cancelled_round_cell_value">%1$d · restore</string>
-    <string name="missing_source_notice_body">Skipped %1$d photo(s) deleted from this phone. They will not be retried.</string>
+    <string name="missing_source_notice_body">Cannot be recovered: %1$d photo(s) were deleted from this phone, so they will not be sent again.</string>
+    <string name="missing_source_notice_dismiss">Got it</string>
+    <string name="missing_source_archive_label">Photos deleted from this phone</string>
+    <string name="missing_source_archive_value">%1$d · cannot be recovered</string>
     <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
     <string name="idle_auto_hint">Runs by itself while charging on Wi-Fi</string>
     <string name="state_no_albums">No albums selected — nothing to back up</string>

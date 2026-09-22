@@ -9,16 +9,19 @@ import android.os.Looper
 import android.provider.MediaStore
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import com.hawkeyexb.ppass.backup.flow.AcknowledgeableNotice
 import com.hawkeyexb.ppass.backup.flow.DiscoveryLedgerSnapshot
 import com.hawkeyexb.ppass.backup.flow.FlowCommand
 import com.hawkeyexb.ppass.backup.flow.FlowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.FlowUiState
 import com.hawkeyexb.ppass.backup.flow.PairingEpoch
 import com.hawkeyexb.ppass.backup.flow.RoundProgress
+import com.hawkeyexb.ppass.backup.flow.acknowledgeFlowNotice
 import com.hawkeyexb.ppass.backup.flow.advanceRoundProgress
 import com.hawkeyexb.ppass.backup.flow.backupUiStateOf
 import com.hawkeyexb.ppass.backup.flow.cancelCurrentFlowRound
 import com.hawkeyexb.ppass.backup.flow.continueFlow
+import com.hawkeyexb.ppass.backup.flow.flowAcknowledgedMissingSourceCount
 import com.hawkeyexb.ppass.backup.flow.flowAggregateOf
 import com.hawkeyexb.ppass.backup.flow.flowCancelledRoundNotice
 import com.hawkeyexb.ppass.backup.flow.flowCommandOf
@@ -74,6 +77,11 @@ class BackupUiStateHolder(
     val reuploadNoticeCount: State<Int> get() = _reuploadNoticeCount
     private val _missingSourceNotice = mutableStateOf<com.hawkeyexb.ppass.backup.flow.MissingSourceNotice?>(null)
     val missingSourceNotice: State<com.hawkeyexb.ppass.backup.flow.MissingSourceNotice?> get() = _missingSourceNotice
+    // MOB-100 关键判断 3：横幅被确认收起之后，那批事实不能就此失踪——
+    // 计数搬进备份卡的一行（MOB-59 当年把取消轮次的入口从警告条搬成
+    // CellRow 是同一处置）。0 = 没有已确认的，那一行不渲染。
+    private val _acknowledgedMissingSourceCount = mutableStateOf(0)
+    val acknowledgedMissingSourceCount: State<Int> get() = _acknowledgedMissingSourceCount
     private val pairingLostState = HolderPairingLostState()
     val pairingLost: State<Boolean> get() = pairingLostState.value
     // UI-10 item 1: guards the silent epoch-repair attempt so it fires at
@@ -169,7 +177,37 @@ class BackupUiStateHolder(
         tripletScope.cancel()
     }
 
-    fun acknowledgeReuploadNotice() = Unit
+    /**
+     * MOB-100（D3）：真正的确认，取代此前的 `fun acknowledgeReuploadNotice() = Unit`。
+     *
+     * 空函数配上「知道了」按钮是 R-CLEARABLE 最坏的一种违反：按钮在、
+     * 点了不算数（计数每 tick 由 [flowReuploadNoticeCount] 从账本重算，
+     * 下一 tick 原样回来）。语义与 B4 的水位线一致——**不删账本条目**，
+     * 只记「用户已确认过截至此刻的这些条」。
+     */
+    fun acknowledgeReuploadNotice() {
+        if (_reuploadNoticeCount.value <= 0) return
+        acknowledge(AcknowledgeableNotice.REUPLOAD)
+    }
+
+    /** MOB-100（B4）：「已跳过 N 张…不会再重传」的确认路径。 */
+    fun acknowledgeMissingSourceNotice() {
+        if (_missingSourceNotice.value == null) return
+        acknowledge(AcknowledgeableNotice.SOURCE_MISSING)
+    }
+
+    private fun acknowledge(notice: AcknowledgeableNotice) {
+        if (_commandPending.value) return
+        _commandPending.value = true
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) { acknowledgeFlowNotice(context, notice) }
+                refreshFlowState()
+            } finally {
+                _commandPending.value = false
+            }
+        }
+    }
 
     /** Pause/Continue/trigger commands operate on the same persisted Flow ledger. */
     fun backupNow() {
@@ -257,6 +295,8 @@ class BackupUiStateHolder(
         // LEGACY ReuploadQueue read (see flowReuploadNoticeCount doc).
         _reuploadNoticeCount.value = flowReuploadNoticeCount(snapshot)
         _missingSourceNotice.value = flowMissingSourceNotice(snapshot)
+        // MOB-100：已确认过的那批的去处，与上面那条横幅读同一 tick。
+        _acknowledgedMissingSourceCount.value = flowAcknowledgedMissingSourceCount(snapshot)
         // MOB-59: X-05's cancelled-round notice, read from the same tick.
         _cancelledRoundNotice.value = flowCancelledRoundNotice(snapshot)
         // MOB-59: this round's own progress, not the lifetime M/N triplet.

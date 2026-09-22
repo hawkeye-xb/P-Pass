@@ -201,20 +201,81 @@ fun flowCommandOf(snapshot: DiscoveryLedgerSnapshot): FlowCommand =
  * `RemoteReconciliation.recordRemoteMissing`) — that IS "library lost N,
  * bringing them back". Counting it directly retires the dead LEGACY path
  * without inventing a new signal.
+ *
+ * MOB-100（D3）：只数**用户还没确认过**的那些。改造前「知道了」绑的是
+ * `fun acknowledgeReuploadNotice() = Unit`，而这个计数每 tick 从账本重算
+ * （`BackupUiStateHolder.refreshFlowState`）——点完下一 tick 原样回来。
+ * 按 R-CLEARABLE 的措辞，**一个 no-op 按钮不是路径**：B4 是没给按钮，用户
+ * 至少知道自己无能为力；D3 给了按钮、按钮不做事，那是更坏的一种。
  */
 fun flowReuploadNoticeCount(snapshot: DiscoveryLedgerSnapshot): Int =
-    snapshot.items.count { it.disposition == RecoveryDisposition.NEEDS_DECISION }
+    snapshot.items.count { isUnacknowledgedReupload(it) }
 
 /** A phone-deleted source was skipped; it is informative and never retryable. */
 data class MissingSourceNotice(val count: Int)
 
+/**
+ * MOB-100（B4）：判据本体一个字没动（`SKIPPED_SOURCE_MISSING` +
+ * `sourcePresence == MISSING` + `UNRECOVERABLE` 的判定语义归
+ * `StrictConsumer`，本卡不碰），只**排除用户已确认过的那些**。
+ *
+ * 水位线的核心判据（本卡验收）：确认过 6 条，第二天又删 2 张照片 →
+ * 这里返回 2，不是 8、也不是 null。逐条打标而不是记一个数：新出现的事实
+ * 不可能被上一次确认预先吃掉。
+ */
 fun flowMissingSourceNotice(snapshot: DiscoveryLedgerSnapshot): MissingSourceNotice? {
-    val count = snapshot.items.count {
-        it.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING &&
-            it.sourcePresence == SourcePresence.MISSING &&
-            it.disposition == RecoveryDisposition.UNRECOVERABLE
-    }
+    val count = snapshot.items.count { isUnacknowledgedMissingSource(it) }
     return if (count > 0) MissingSourceNotice(count) else null
+}
+
+/** MOB-100：`SKIPPED_SOURCE_MISSING` 的事实判据（与确认状态无关）。 */
+private fun isMissingSourceFact(item: TransferItem): Boolean =
+    item.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING &&
+        item.sourcePresence == SourcePresence.MISSING &&
+        item.disposition == RecoveryDisposition.UNRECOVERABLE
+
+private fun isUnacknowledgedMissingSource(item: TransferItem): Boolean =
+    isMissingSourceFact(item) && item.missingSourceAckedAt <= 0L
+
+private fun isUnacknowledgedReupload(item: TransferItem): Boolean =
+    item.disposition == RecoveryDisposition.NEEDS_DECISION && item.reuploadAckedAt <= 0L
+
+/**
+ * MOB-100 关键判断 3「关掉之后这批事实仍可查」：确认过的那批得有去处。
+ * MOB-59 的真机教训正是「提示消失了，那批再也找不到」——所以横幅收起之后
+ * 计数并没有消失，它搬进备份卡的一行（`HomeScreen` 的
+ * `missing_source_archive_*`），跟 MOB-59 当年把取消轮次的恢复入口从常驻
+ * 警告条搬成 CellRow 是同一处置。
+ */
+fun flowAcknowledgedMissingSourceCount(snapshot: DiscoveryLedgerSnapshot): Int =
+    snapshot.items.count { isMissingSourceFact(it) && it.missingSourceAckedAt > 0L }
+
+/** MOB-100：哪一条提示被确认了。两条水位线互不相干，见 [TransferItem.reuploadAckedAt]。 */
+enum class AcknowledgeableNotice { SOURCE_MISSING, REUPLOAD }
+
+/**
+ * MOB-100：把「用户已确认过截至此刻的这些条」落进账本——**纯函数**，
+ * JVM 单测直接跑，也是 `FlowAction.AcknowledgeNotice` 的 reducer 本体。
+ *
+ * 只给**当前正在被提示**的那些条目打标，绝不删除任何条目（关键判断 1：
+ * 确认 ≠ 删账本条目，条目是对账的依据）。已经打过标的不重写时间戳——
+ * 「已确认过截至某个点」记的是第一次确认那个点。
+ */
+fun DiscoveryLedgerSnapshot.acknowledgeNotice(
+    notice: AcknowledgeableNotice,
+    atMs: Long,
+): DiscoveryLedgerSnapshot {
+    require(atMs > 0L) { "an acknowledgement needs a real timestamp" }
+    return copy(
+        items = items.map { item ->
+            when (notice) {
+                AcknowledgeableNotice.SOURCE_MISSING ->
+                    if (isUnacknowledgedMissingSource(item)) item.copy(missingSourceAckedAt = atMs) else item
+                AcknowledgeableNotice.REUPLOAD ->
+                    if (isUnacknowledgedReupload(item)) item.copy(reuploadAckedAt = atMs) else item
+            }
+        },
+    )
 }
 
 /**

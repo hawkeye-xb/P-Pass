@@ -221,6 +221,13 @@ fun HomeScreen(
     // 张数，点击即恢复（同一条 restoreCancelledRounds 管线，未改动）。
     cancelledRoundCount: Int? = null,
     onRestoreCancelledRounds: () -> Unit = {},
+    // MOB-100（B4）：「已跳过 N 张…不会再重传」的确认路径。R-CLEARABLE：
+    // 任何常驻提示都必须有用户自己走得通的消除路径，只有开发者能清不算
+    // （此前清那 6 条测试残留用的是 adb + run-as + 手改账本 JSON）。
+    onAcknowledgeMissingSource: () -> Unit = {},
+    // MOB-100 关键判断 3：确认过的那批仍可查——横幅收起后计数搬进这一行，
+    // 0 = 没有已确认的，不渲染。
+    acknowledgedMissingSourceCount: Int = 0,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -595,6 +602,11 @@ fun HomeScreen(
                 HomeNotice(
                     kind = HomeNoticeKind.SOURCE_MISSING,
                     body = stringResource(R.string.missing_source_notice_body, missingSourceNotice.count),
+                    // MOB-100：出路是「知道了」（dismiss），**不是** action——
+                    // action 在本族视觉里是「去处理」，放在这儿会被读成
+                    // 「再传一次」，而 MOB-61 的决定正是这条不给重传按钮。
+                    dismissLabel = stringResource(R.string.missing_source_notice_dismiss),
+                    onDismiss = onAcknowledgeMissingSource,
                 )
             )
         }
@@ -635,6 +647,21 @@ fun HomeScreen(
                             cancelledRoundCount,
                         ),
                         onClick = onRestoreCancelledRounds,
+                    )
+                }
+                // MOB-100 关键判断 3：确认过的「源已删除」那批的去处。
+                // MOB-59 的真机教训是「提示消失了，那批再也找不到」，所以
+                // 确认只把它从打断式横幅降级成这一行账目，事实一条没删
+                // （账本条目是对账的依据，#139 MOB-87）。不可点——源已经
+                // 不在手机上，没有任何动作能把它变回来（MOB-61）。
+                if (acknowledgedMissingSourceCount > 0) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.missing_source_archive_label),
+                        value = stringResource(
+                            R.string.missing_source_archive_value,
+                            acknowledgedMissingSourceCount,
+                        ),
                     )
                 }
                 HorizontalDivider(color = PPColor.Divider)
@@ -1005,12 +1032,16 @@ private fun RuleSwitchRow(
     }
 }
 
-/** 设计稿的 cell 行——label 左、可选的 value + "›" 右，整行可点。 */
+/** 设计稿的 cell 行——label 左、可选的 value + "›" 右，整行可点。
+ *
+ *  MOB-100：`onClick == null` 的行是**账目**，不是入口——不可点，也不画
+ *  「›」。有雪佛龙却点不动比没有雪佛龙更坏，那就是本卡要修的 D3 形状
+ *  （有按钮、按钮不做事）换一个地方重演。 */
 @Composable
-private fun CellRow(label: String, value: String? = null, onClick: () -> Unit) {
+private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)? = null) {
     Row(
         Modifier.fillMaxWidth()
-            .clickable(onClick = onClick)
+            .let { if (onClick != null) it.clickable(onClick = onClick) else it }
             .heightIn(min = CellRowHeight)
             .padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1018,9 +1049,9 @@ private fun CellRow(label: String, value: String? = null, onClick: () -> Unit) {
         Text(label, fontSize = 15.sp, color = PPColor.Ink, modifier = Modifier.weight(1f))
         if (value != null) {
             Text(value, fontSize = 14.sp, color = PPColor.Ink40)
-            Spacer(Modifier.width(4.dp))
+            if (onClick != null) Spacer(Modifier.width(4.dp))
         }
-        Text("›", fontSize = 16.sp, color = PPColor.Ink40)
+        if (onClick != null) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
     }
 }
 
