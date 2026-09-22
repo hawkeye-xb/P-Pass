@@ -101,10 +101,13 @@ data class TransferProtectionState(
  * it, or named the daily budget as the reason.
  *
  * The whole point: a conclusion carrying observation must not be replaced by
- * one carrying none. Same-weight records still replace each other freely —
- * a later observed [ForegroundStartOutcome.STARTED] genuinely does prove the
- * budget came back (Android resets it when the user brings the app forward),
- * and refusing that would just freeze the opposite lie in place.
+ * one carrying none. Same-weight records still replace each other once the
+ * start attempt they belong to is over — a later observed
+ * [ForegroundStartOutcome.STARTED] genuinely does prove the budget came back
+ * (Android resets it when the user brings the app forward), and refusing that
+ * would just freeze the opposite lie in place. Weight alone cannot separate
+ * that from the teardown success 22ms after the timeout; [supersedes] does it
+ * with [START_ATTEMPT_WINDOW_MS] (UI-22).
  */
 internal val ForegroundStartOutcome.evidenceWeight: Int
     get() = when (this) {
@@ -137,6 +140,19 @@ internal val ForegroundStartOutcome.evidenceWeight: Int
  *   different attempt (the budget resets daily) and must land, or "今天后台
  *   时间用完了" would be shown on a day it is false. A refusal also still
  *   overturns an earlier observed success — that must never be frozen.
+ * - UI-22: within ONE start attempt of a stored [ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED],
+ *   an observed [ForegroundStartOutcome.STARTED] does NOT overturn it. On the
+ *   real device (2026-09-22 18:49, Samsung SM-S9210 / Android 15) the system
+ *   reported the timeout at …05.613 and 22ms later `startForeground()` returned
+ *   normally inside a re-delivered `onStartCommand` of the SAME service instance
+ *   (no second `Background started FGS` in the whole window — issue #400). That
+ *   success is part of the system TEARING THE SERVICE DOWN, not evidence the
+ *   budget came back, and taking it at face value erased the one fact the user
+ *   could act on. The window is again what keeps this from becoming "a failure
+ *   always wins": the budget really does reset when the user brings the app
+ *   forward, and that takes a human, i.e. far longer than one start attempt —
+ *   past the window a [ForegroundStartOutcome.STARTED] still lands, or a pause
+ *   would be reported after it has been resolved.
  * - Equal evidence otherwise: the newer observation wins. A record older
  *   than what is stored is an out-of-order loser of the MOB-102 race and must
  *   not clobber the winner — unless it is older by more than one start
@@ -159,6 +175,16 @@ internal fun supersedes(
             previous == ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED &&
             now >= stored.lastOutcomeAt &&
             now - stored.lastOutcomeAt <= START_ATTEMPT_WINDOW_MS -> false
+        candidate == ForegroundStartOutcome.STARTED &&
+            previous == ForegroundStartOutcome.SYSTEM_BUDGET_EXHAUSTED &&
+            now >= stored.lastOutcomeAt &&
+            now - stored.lastOutcomeAt <= START_ATTEMPT_WINDOW_MS -> {
+            logQuietly(
+                "a protected start succeeded ${now - stored.lastOutcomeAt}ms after the system " +
+                    "reported the budget exhausted; same start attempt, so the budget verdict stands",
+            )
+            false
+        }
         else -> now >= stored.lastOutcomeAt || stored.lastOutcomeAt - now > START_ATTEMPT_WINDOW_MS
     }
 }
