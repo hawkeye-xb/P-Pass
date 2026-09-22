@@ -32,7 +32,7 @@ async fn start_daemon(
     let (pairing, mut pending) = daemon::Pairing::new(db.clone(), tp.node_id(), None, None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
-            req.decide(daemon::PairDecision::Accept); // 剧本自动确认（owner 在 IPC 侧）
+            let _ = req.decide(daemon::PairDecision::Accept); // 剧本自动确认（owner 在 IPC 侧）
         }
     });
     let router = Router::new(db, "时钟剧本存储端")

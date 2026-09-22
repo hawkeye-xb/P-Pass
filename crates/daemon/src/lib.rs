@@ -32,8 +32,12 @@ pub use diag_agg::DiagAgg;
 pub use inbox::{reclaim_inbox, sweep_flow_staging_orphans};
 pub use ipc::daemon_version;
 pub use ipc::Claim;
+pub use ipc::ConfirmOutcome;
 pub use ipc::IpcServer;
-pub use pairing::{PairDecision, PairRejection, Pairing, PendingPair};
+pub use pairing::{
+    DecisionUndelivered, PairDecision, PairRejection, Pairing, PendingPair, PENDING_TTL_MS,
+    TOKEN_TTL_MS,
+};
 pub use query::QueryEngine;
 pub use reconcile::Reconcile;
 pub use router::Router;

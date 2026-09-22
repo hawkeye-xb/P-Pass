@@ -19,7 +19,7 @@ async fn start_daemon(db: Db, accept: bool) -> (IrohTransport, transport::PeerAd
     let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
-            req.decide(if accept {
+            let _ = req.decide(if accept {
                 PairDecision::Accept
             } else {
                 PairDecision::Reject
@@ -335,4 +335,150 @@ fn now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+// ── DEV-05 (#276): pending requests expire on BOTH sides ──────────
+//
+// Card: 手机早放弃了，业主后点的「允许」照样生效. These tests pin the
+// request-side half (pairing.rs); the queue-side half lives in
+// ipc_flow.rs (the queue is IpcServer's state).
+
+/// Daemon whose owner queue DRAINS but never decides — requests park
+/// until their own TTL expires (the real-world "owner never clicks").
+/// `request_ttl_ms` shortens the wait so the test need not sleep 110 s.
+async fn park_daemon(db: Db, request_ttl_ms: u64) -> (IrohTransport, transport::PeerAddr, Pairing) {
+    let tp = endpoint().await;
+    let addr = tp.local_addr();
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let pairing = pairing.with_pending_ttl(request_ttl_ms as i64);
+    tokio::spawn(async move {
+        // Keep the received PendingPairs ALIVE (holding them keeps their
+        // oneshot senders open → the request waits for a verdict that
+        // never comes, until its own timeout). Dropping here would fake
+        // an owner-decision channel close.
+        let mut parked = Vec::new();
+        while let Some(p) = pending.recv().await {
+            parked.push(p);
+        }
+    });
+    let router = Router::new(db, "客厅的电脑").with_pairing(pairing.clone());
+    let tp2 = tp.clone();
+    tokio::spawn(async move { router.serve(&tp2).await });
+    (tp, addr, pairing)
+}
+
+/// 验收标准 1（请求侧）+ 4（拒绝也要能答"隔了多久"）：一条没人决策的
+/// pending 到期后，手机收到明确拒绝，且库里什么都不写。
+/// 反证靶子：去掉 handle_request 的 timeout，本用例在 5s 处变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_pending_times_out_denied_with_no_writes() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = park_daemon(db.clone(), 300).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    let qr = pairing.start([0x77; 12], now());
+    let t0 = std::time::Instant::now();
+    let resp = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        send_pair(&ctp, dtp.node_id(), &token_of(&qr), "没人点的手机"),
+    )
+    .await
+    .expect("daemon must answer within 5s once the pending TTL expires (无 TTL 时此反证变红)");
+    let waited = t0.elapsed();
+
+    assert!(!resp.ok, "expired pending must be denied: {resp:?}");
+    assert_eq!(resp.error.unwrap().code, codes::NOT_AUTHORIZED);
+    assert!(
+        waited >= std::time::Duration::from_millis(250),
+        "denied before the TTL is up = instant-fail, not expiry: {waited:?}"
+    );
+    assert!(
+        waited <= std::time::Duration::from_secs(2),
+        "TTL fired far too late: {waited:?}"
+    );
+    assert!(
+        db.get_device(&ctp.node_id().0).await.unwrap().is_none(),
+        "no device row"
+    );
+    assert!(
+        db.pairing_epoch(&ctp.node_id().0).await.unwrap().is_none(),
+        "no epoch rotation for a request nobody approved"
+    );
+
+    // 验收标准 4 for the DENY path (简报六: denied shares the same bug):
+    // pair.denied lands at the expiry moment, not the request moment.
+    let audit = db.list_audit(20).await.unwrap();
+    let requested = audit
+        .iter()
+        .find(|r| r.entry.kind == "pair.requested")
+        .expect("pair.requested recorded")
+        .entry
+        .ts;
+    let denied = audit
+        .iter()
+        .find(|r| r.entry.kind == "pair.denied")
+        .expect("pair.denied recorded")
+        .entry
+        .ts;
+    assert!(
+        denied - requested >= 250,
+        "审计要答得出'业主隔了多久（这里是超时多久）'：requested={requested} denied={denied}"
+    );
+}
+
+/// 验收标准 3 + 4（允许路径）：扫码后正常批准仍成功；且
+/// `pair.accepted` 的时间戳 = 业主点下的时刻，不再是 `pair.requested`
+/// 的入参快照。反证靶子：accepted 落回 now_ms 时差值断言变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn accepted_audit_carries_decision_time_not_request_time() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon_slow_owner(db.clone(), 700).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    let qr = pairing.start([0x78; 12], now());
+    let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "隔了一会儿才点的手机").await;
+    assert!(resp.ok, "normal path stays unaffected: {resp:?}");
+
+    let audit = db.list_audit(20).await.unwrap();
+    let requested = audit
+        .iter()
+        .find(|r| r.entry.kind == "pair.requested")
+        .expect("pair.requested")
+        .entry
+        .ts;
+    let accepted = audit
+        .iter()
+        .find(|r| r.entry.kind == "pair.accepted")
+        .expect("pair.accepted")
+        .entry
+        .ts;
+    assert!(
+        accepted - requested >= 500,
+        "业主隔了 700ms 才点，审计两条必须分得开：requested={requested} accepted={accepted}"
+    );
+    assert!(db.get_device(&ctp.node_id().0).await.unwrap().is_some());
+}
+
+/// Daemon with an owner that takes `owner_delay_ms` to say Accept —
+/// simulating "业主隔了一会儿才点". The request side keeps the default
+/// 110 s TTL, so the slow click still lands inside it.
+async fn start_daemon_slow_owner(
+    db: Db,
+    owner_delay_ms: u64,
+) -> (IrohTransport, transport::PeerAddr, Pairing) {
+    let tp = endpoint().await;
+    let addr = tp.local_addr();
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    tokio::spawn(async move {
+        while let Some(req) = pending.recv().await {
+            tokio::time::sleep(std::time::Duration::from_millis(owner_delay_ms)).await;
+            let _ = req.decide(PairDecision::Accept);
+        }
+    });
+    let router = Router::new(db, "客厅的电脑").with_pairing(pairing.clone());
+    let tp2 = tp.clone();
+    tokio::spawn(async move { router.serve(&tp2).await });
+    (tp, addr, pairing)
 }

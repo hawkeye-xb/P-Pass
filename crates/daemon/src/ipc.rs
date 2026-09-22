@@ -27,8 +27,24 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::diag_agg::DiagAgg;
 use crate::events::{self, EventBus};
-use crate::pairing::{PairDecision, Pairing, PendingPair};
+use crate::pairing::{PairDecision, Pairing, PendingPair, PENDING_TTL_MS};
 use crate::subscriptions::SubscriptionRegistry;
+
+/// Outcome of an owner decision on one pending pairing request
+/// (DEV-05 #276). The old return type (`Option<String>`) could not tell
+/// "no such row" apart from "row found, but the phone had already
+/// walked away" — and it let the second case report success.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConfirmOutcome {
+    /// The row was live; the decision reached the waiting request.
+    Decided(String),
+    /// The row matched, but its other end was gone — the owner's click
+    /// acted on a dead request. The desktop MUST show failure, not
+    /// "已允许". Carries the device name for the failure message.
+    Expired(String),
+    /// Nothing in the queue matched the lookup.
+    NotFound,
+}
 
 /// One IPC server per daemon. Owns the pending-pair queue the UI drains.
 pub struct IpcServer {
@@ -45,6 +61,11 @@ pub struct IpcServer {
     /// (launchd KeepAlive relaunches from the new plist). Tests inject a
     /// no-op to observe the handshake without killing the harness.
     step_down_exit: Arc<dyn Fn() + Send + Sync>,
+    /// DEV-05 (#276): pending-queue TTL used by `confirm`'s sweep.
+    /// Production keeps [`PENDING_TTL_MS`]; a test that must exercise
+    /// "row still fresh but requester already timed out" injects a long
+    /// queue TTL against a short request-side TTL without sleeping.
+    pending_ttl_ms: i64,
     /// T-090: live connection status per device (raw 32-byte NodeId in).
     /// main injects a closure over the transport slot; the default says
     /// `Unknown` — 拿不到实况就如实报 unknown，绝不用 last_seen 推断.
@@ -272,7 +293,26 @@ impl IpcServer {
         tokio::spawn(async move {
             while let Some(p) = pending_rx.recv().await {
                 diag2.apply(diag::DaemonEvent::PairingStarted);
-                queue.lock().expect("pending lock").push(p);
+                {
+                    // DEV-05 (#276) 设计要点 3「新的顶掉旧的」: one phone
+                    // scanning twice in a row leaves ONE row, not two —
+                    // the old row's request half is stale by then (the
+                    // phone already dropped that connection), and
+                    // `confirm`'s position(...) on a duplicate would
+                    // decide the OLD one while the owner believes they
+                    // approved the scan on screen. Dropping the replaced
+                    // PendingPair sends nothing; its waiting request (if
+                    // any) sees the receiver-side channel close and
+                    // resolves denied — exactly right for a stale scan.
+                    // Same sweep also retires TTL-expired rows opportunistically
+                    // (expiry judgment happens here because the queue holds
+                    // `requested_at`, see pairing.rs).
+                    let now = now_ms();
+                    let ttl = PENDING_TTL_MS;
+                    let mut q = queue.lock().expect("pending lock");
+                    q.retain(|old| old.requested_at + ttl > now && old.peer.0 != p.peer.0);
+                    q.push(p);
+                }
                 // IPC-02: 新扫码请求入队——桌面壳即时从「二维码弹窗」切到
                 // 「授权列表」，不再等下一次 3s 轮询。
                 events::emit(
@@ -290,6 +330,7 @@ impl IpcServer {
             pending,
             events,
             started_at: now_ms(),
+            pending_ttl_ms: PENDING_TTL_MS,
             step_down_exit: Arc::new(|| std::process::exit(0)),
             conn_status: Arc::new(|_| transport::ConnectionStatus::Unknown),
             flow_connection: Arc::new(|_| None),
@@ -315,6 +356,14 @@ impl IpcServer {
     /// Override the step_down side effect (tests only).
     pub fn set_step_down_exit(&mut self, f: impl Fn() + Send + Sync + 'static) {
         self.step_down_exit = Arc::new(f);
+    }
+
+    /// DEV-05 (#276): override the queue-side pending TTL (tests only —
+    /// production keeps [`PENDING_TTL_MS`]). Pair it with
+    /// [`Pairing::with_pending_ttl`] to exercise the two-sided expiry
+    /// without sleeping minutes.
+    pub fn set_pending_ttl_for_test(&mut self, ttl_ms: i64) {
+        self.pending_ttl_ms = ttl_ms;
     }
 
     /// T-090: inject the live connection-status source (main wires this
@@ -633,10 +682,13 @@ impl IpcServer {
                     .and_then(|v| v.as_str())
                     .and_then(parse_hex32);
                 match self.confirm(node_id.as_deref(), device_name.as_deref(), accept) {
-                    Some(name) => {
+                    ConfirmOutcome::Decided(name) => {
                         Resp::ok(id, serde_json::json!({ "decided": accept, "device": name }))
                     }
-                    None => Resp::err(
+                    // DEV-05 (#276): the click landed on a dead request —
+                    // report failure honestly (the old code answered ok
+                    // and the phone never received anything).
+                    ConfirmOutcome::Expired(_) | ConfirmOutcome::NotFound => Resp::err(
                         id,
                         RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
                     ),
@@ -1118,8 +1170,8 @@ impl IpcServer {
     }
 
     /// Decide one pending pairing request: by device name, or the queue
-    /// head when `device_name` is None. Returns the decided device's
-    /// name. Shared by IPC and the interim console confirmer in main.
+    /// head when `device_name` is None. Shared by IPC and the interim
+    /// console confirmer in main.
     ///
     /// DEV-02: 只有允许/拒绝两种。DEV-01 的第三个入参 `merge_node_id`
     /// （「替换旧的」目标）删掉了——设备与身份 1:1，没有"接管另一个身份的
@@ -1129,19 +1181,47 @@ impl IpcServer {
     /// 个字符串——改过名的老设备重连时，弹窗显示的是**桌面上**的名字，
     /// 而队列里存的是手机自报名，按名字找必然 `None`，业主就再也批不了
     /// 这台设备了。`device_name` 作为回退保留（老调用方语义不动）。
+    ///
+    /// DEV-05 (#276): three-way outcome + a TTL sweep on touch.
+    /// - Expired rows are pruned before lookup; a click that lands on a
+    ///   row the sweep just removed is NOT_FOUND (fail, no side effects).
+    /// - A row still inside TTL whose phone already walked away surfaces
+    ///   `decide`'s send-Err as [`ConfirmOutcome::Expired`] — the precise
+    ///   fact "the owner's click acted on a request nobody is waiting on
+    ///   anymore" (简报四: this used to be swallowed and reported as
+    ///   success). TTL judges by estimate; the send-Err judges by fact;
+    ///   both arms run, whichever fires first.
+    /// - All three lookup branches (node_id / device_name / queue head)
+    ///   resolve against the post-sweep queue, so the head fallback
+    ///   cannot smuggle a stale row past the new semantics (简报五).
     pub fn confirm(
         &self,
         node_id: Option<&[u8]>,
         device_name: Option<&str>,
         accept: bool,
-    ) -> Option<String> {
+    ) -> ConfirmOutcome {
         let mut queue = self.pending.lock().expect("pending lock");
+        let now = now_ms();
         let idx = match (node_id, device_name) {
             (Some(id), _) => queue.iter().position(|p| p.peer.0 == id),
             (None, Some(name)) => queue.iter().position(|p| p.device_name == name),
             (None, None) => (!queue.is_empty()).then_some(0),
-        }?;
+        };
+        let Some(idx) = idx else {
+            // Nothing to decide — still sweep stale rows, and report the
+            // queue emptying to diag exactly as the success path would.
+            queue.retain(|p| p.requested_at + self.pending_ttl_ms > now);
+            if queue.is_empty() {
+                self.diag.apply(diag::DaemonEvent::PairingEnded);
+            }
+            return ConfirmOutcome::NotFound;
+        };
         let p = queue.remove(idx);
+        // The located row itself may be past TTL: answer Expired, not a
+        // fake success and not a NotFound that hides which row failed.
+        let stale = p.requested_at + self.pending_ttl_ms <= now;
+        // Any other rows that aged out leave the queue with this touch.
+        queue.retain(|q| q.requested_at + self.pending_ttl_ms > now);
         if queue.is_empty() {
             self.diag.apply(diag::DaemonEvent::PairingEnded);
         }
@@ -1152,13 +1232,18 @@ impl IpcServer {
             serde_json::json!({ "pending": queue.len() }),
         );
         let name = p.device_name.clone();
+        if stale {
+            return ConfirmOutcome::Expired(name);
+        }
         let decision = if accept {
             PairDecision::Accept
         } else {
             PairDecision::Reject
         };
-        p.decide(decision);
-        Some(name)
+        match p.decide(decision) {
+            Ok(()) => ConfirmOutcome::Decided(name),
+            Err(_) => ConfirmOutcome::Expired(name),
+        }
     }
 
     /// Pending pairing requests for the owner UI. DEV-02: 不做指纹匹配
@@ -1175,16 +1260,21 @@ impl IpcServer {
     pub async fn pending_summary(&self) -> Vec<serde_json::Value> {
         // 先把身份抄出来再放锁：下面要 await，而 pending 是 std Mutex，
         // 跨 await 持有它既是 clippy::await_holding_lock 也是真死锁面。
-        let queued: Vec<(transport::NodeId, String)> = self
+        // DEV-05 (#276): 同时带出入队时刻与是否已过期——「业主等了多久
+        // 没点」是队列自己的事实，桌面要把它如实标出来（设计要点 2），
+        // 而不是替业主静默丢弃。过期行留在列表里直到被 touch（confirm/
+        // 新请求顶掉）时清除。
+        let now = now_ms();
+        let queued: Vec<(transport::NodeId, String, i64)> = self
             .pending
             .lock()
             .expect("pending lock")
             .iter()
-            .map(|p| (p.peer, p.device_name.clone()))
+            .map(|p| (p.peer, p.device_name.clone(), p.requested_at))
             .collect();
 
         let mut out = Vec::with_capacity(queued.len());
-        for (peer, reported_name) in queued {
+        for (peer, reported_name, requested_at) in queued {
             let existing = self.db.get_device(&peer.0).await.ok().flatten();
             let mut row = serde_json::json!({
                 "node_id": hex(&peer.0),
@@ -1193,6 +1283,8 @@ impl IpcServer {
                     .as_ref()
                     .map(|d| d.name.clone())
                     .unwrap_or(reported_name),
+                "requested_at": requested_at,
+                "expired": requested_at + self.pending_ttl_ms <= now,
             });
             if let Some(d) = existing {
                 row["paired_at"] = serde_json::json!(d.paired_at);
