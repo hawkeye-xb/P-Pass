@@ -6,7 +6,17 @@ use std::path::Path;
 
 use core_index::{IncomingFile, IngestOutcome, Ingestor};
 use storage::Db;
-use time::{Date, Month, PrimitiveDateTime, Time};
+use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
+
+/// EXIF `DateTimeOriginal` 是**无时区的墙钟**。IDX-03（#330）起，没有
+/// `OffsetTime*` 标签时 core-media 按 daemon 本机当前偏移解释它，而不再
+/// 把裸值当 UTC。这里按**当前偏移推导**期望值（不是硬编 `+08:00`，也不
+/// 是 `assume_utc()`），所以用例在任何 `TZ` 下都确定性通过。
+fn exif_wall_clock_as_unix_ms(dt: PrimitiveDateTime) -> i64 {
+    let local =
+        UtcOffset::current_local_offset().expect("取不到本机 UTC 偏移，期望值无从推导——不许猜一个");
+    dt.assume_offset(local).unix_timestamp() * 1000
+}
 
 const DEV_A: [u8; 32] = [0xaa; 32];
 // Full NodeId as hex (§4.2 <deviceId>) — rebuild (T-012) must recover the
@@ -67,13 +77,10 @@ async fn exif_datetime_original_becomes_taken_at() {
     let f = incoming(dir.path(), "IMG_2.jpg", &content);
     ing.ingest(&f).await.unwrap();
 
-    let expected = PrimitiveDateTime::new(
+    let expected = exif_wall_clock_as_unix_ms(PrimitiveDateTime::new(
         Date::from_calendar_date(2024, Month::May, 6).unwrap(),
         Time::from_hms(7, 8, 9).unwrap(),
-    )
-    .assume_utc()
-    .unix_timestamp()
-        * 1000;
+    ));
     let asset = db.get_asset(&blake3_of(&content)).await.unwrap().unwrap();
     assert_eq!(asset.taken_at, Some(expected), "EXIF wins over mtime");
 }
@@ -151,13 +158,10 @@ async fn exif_still_wins_over_an_uploader_capture_hint() {
     };
 
     ing.ingest(&f).await.unwrap();
-    let expected = PrimitiveDateTime::new(
+    let expected = exif_wall_clock_as_unix_ms(PrimitiveDateTime::new(
         Date::from_calendar_date(2024, Month::May, 6).unwrap(),
         Time::from_hms(7, 8, 9).unwrap(),
-    )
-    .assume_utc()
-    .unix_timestamp()
-        * 1000;
+    ));
     let asset = db.get_asset(&blake3_of(&content)).await.unwrap().unwrap();
     assert_eq!(
         asset.taken_at,

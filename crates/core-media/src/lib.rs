@@ -7,4 +7,4 @@
 
 mod exif_meta;
 
-pub use exif_meta::{read_meta, MediaMeta};
+pub use exif_meta::{read_meta, read_meta_with_local_offset, MediaMeta};
