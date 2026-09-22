@@ -89,6 +89,30 @@ runs:
       shell: bash
       working-directory: apps/desktop/src-tauri
       run: cargo test --lib
+    # SEC-09 (#376)：src-tauri 的依赖树（538 个包）此前**从来没被
+    # cargo deny 审过** —— 根 deny.toml 与 ci-rust 的 `license + dependency
+    # audit` 只审主 workspace，而 src-tauri 是刻意独立的 workspace（ADR-012）。
+    # 落地时实测的盲区：1 个**真漏洞**（rustls 0.23.43 / RUSTSEC-2026-0285，
+    # 主 workspace 早已是修好的 0.23.45）、6 个 unmaintained、1 个许可被拒。
+    #
+    # ⚠️ **只在 Linux 跑**：判据是 lock 文件加 advisory DB，与 runner 平台无关
+    # （本份 deny.toml 不设 [graph].targets，所以 windows-sys 那些平台专属
+    # 依赖在 Linux 上一样会被纳入分析）。跑两遍纯属浪费，与上面 UI 四步
+    # 只在 Linux 跑同一个理由。
+    # ⚠️ **不许加 `|| true` 或 `continue-on-error`**。#230 的教训：安全测试
+    # 不在任何门禁里，才让 #192 那个真删除缺陷活下来。
+    - name: Install cargo-deny
+      if: runner.os == 'Linux'
+      uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908 # v2.87.15
+      with:
+        tool: cargo-deny
+    - name: License and dependency audit (src-tauri)
+      if: runner.os == 'Linux'
+      shell: bash
+      working-directory: apps/desktop/src-tauri
+      # 用本目录下的 deny.toml（cargo-deny 默认就近取），**不是**根那份 ——
+      # 两棵树的 ignore 清单刻意不共享，理由写在 src-tauri/deny.toml 头部。
+      run: cargo deny check advisories licenses bans
     # UI 构建（vite）——Svelte 编译错误（如模板语法）只有 build 才炸
     # （lint 不报）。assets/** 改动（tokens）也触发本域，确保 UI 侧
     # 消费新 token 时构建仍绿。desktop 用 pnpm（pnpm-lock.yaml，

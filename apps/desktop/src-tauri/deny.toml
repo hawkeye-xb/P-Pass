@@ -1,0 +1,95 @@
+# cargo-deny configuration for the P-Pass desktop shell (src-tauri).
+# Run: cd apps/desktop/src-tauri && cargo deny check advisories licenses bans
+#
+# ── 为什么这里有第二份 deny.toml（SEC-09 #376）──────────────────────────
+# `apps/desktop/src-tauri` 是**刻意独立的 workspace**（ADR-012：巨大的 Tauri
+# 依赖树不进主 workspace 的 build/CI）。代价是：根 `deny.toml` 与 `ci-rust` 的
+# `license + dependency audit` job 只审主 workspace，**这棵 538 个包的树在
+# #376 之前从来没有被审过** —— 而它正是编进桌面端、发给用户的那一棵。
+#
+# 落地时实测过「复用根那份」这条路，**不可行**：根那份的 ignore 项是给主
+# workspace 的依赖树写的（notify / iroh / iroh-blobs），拿到这里一条都不匹配，
+# 立刻冒出 4 条 `advisory-not-detected` / `license-not-encountered` 噪音；更要紧
+# 的是会把两棵毫无交集的依赖树的 ignore 清单焊在一起 —— 一边清掉一条，另一边
+# 就报告有未命中项。所以两份分开，各自只写自己树里真实存在的东西。
+#
+# ⚠️ 与根那份的分工：根管 `crates/**`（主 workspace），本份管 src-tauri。
+#    两份**不要互相抄** —— 抄来的未命中项会变成噪音，噪音会训练人忽略告警。
+
+[graph]
+# 与根那份同口径：不开 all-features。src-tauri 的 feature 由 Cargo.toml 钉死。
+all-features = false
+
+[advisories]
+yanked = "deny"
+ignore = [
+  # `unic-*` 全家（RUSTSEC-2025-0075/0080/0081/0098/0100）——**unmaintained，
+  # 不是漏洞**（informational）。五条同一个根因，链路也是同一条：
+  #   unic-ucd-* / unic-char-* / unic-common
+  #     └── urlpattern 0.3.0
+  #         └── tauri-utils 2.9.3
+  #             └── tauri 2.11.5（以及 tauri-build / tauri-runtime-wry 等）
+  # 公告原文写着 `Solution: No safe upgrade is available!` —— rust-unic 整个项目
+  # 已停止维护，而 urlpattern 仍在用它，我们对这条链路没有可选项：既不能换
+  # tauri，也不能让 tauri 换 urlpattern。
+  # 🔁 重估触发条件：升级 `tauri` 时（届时看 tauri-utils 是否已换掉
+  #    urlpattern，或 urlpattern 是否已换掉 unic-*），把这五条逐条重试一遍。
+  "RUSTSEC-2025-0075", # unic-char-range
+  "RUSTSEC-2025-0080", # unic-common
+  "RUSTSEC-2025-0081", # unic-char-property
+  "RUSTSEC-2025-0098", # unic-ucd-version
+  "RUSTSEC-2025-0100", # unic-ucd-ident
+  # `proc-macro-error` unmaintained（RUSTSEC-2024-0370）——同样是
+  # informational，不是漏洞。公告原文：维护者两年无提交、四年无发布、邮件与
+  # GitLab 均无回应。
+  # ⚠️ 根 `deny.toml` 里也有这一条，但**链路不同，不要以为是抄来的**：
+  #   根那边  proc-macro-error ← genawaiter ← bao-tree ← iroh-blobs（T-021）
+  #   这边    proc-macro-error ← gtk3-macros ← gtk 0.18（Tauri 的 Linux GTK 栈）
+  # 两棵树各自独立命中，所以两份配置各记一次，不是重复。
+  # 🔁 重估触发条件：升级 `tauri`（进而升级它依赖的 gtk 0.18 一线）时重试。
+  "RUSTSEC-2024-0370", # proc-macro-error（经 gtk3-macros）
+]
+
+[licenses]
+# ⚠️ 这份清单只列**本树里真实出现且被选中**的许可。多许可 crate（如 r-efi 的
+# `MIT OR Apache-2.0 OR LGPL-2.1-or-later`）由 cargo-deny 挑第一个被允许的，
+# 所以 LGPL 虽然出现在 `cargo deny list` 里，实际选中的是 MIT，不需要放行。
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-3-Clause",
+  "MPL-2.0",
+  "ISC",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+  "CDLA-Permissive-2.0",
+  "CC0-1.0",
+  "0BSD",
+  "Apache-2.0 WITH LLVM-exception",
+  # SEC-09 (#376) 新增，本树独有（主 workspace 没有 zip → bzip2 这条链）：
+  # `bzip2-1.0.6` 是 bzip2/libbzip2 自己的许可，BSD 风格的宽松许可 ——
+  # 允许再分发源码与二进制，只要保留版权声明与免责声明，**没有 copyleft
+  # 传染**，与本仓其它宽松许可同档。
+  #   libbz2-rs-sys 0.2.5
+  #     └── bzip2 0.6.1
+  #         └── zip 5.1.1
+  #             └── p-pass-desktop（直接依赖，DESK-10 的诊断包要 zip）
+  # 注：`zip` 在主 workspace 侧也有，但那边解析出的是不带 bzip2 的特性组合，
+  # 所以根 deny.toml 里没有这一条 —— 不是漏了。
+  "bzip2-1.0.6",
+]
+confidence-threshold = 0.8
+# 自家 crate（p-pass-desktop、platform，都是 AGPL-3.0）不参与许可检查。
+private = { ignore = true }
+
+[bans]
+# 与根那份同口径：重复版本记 warn 不记 deny。
+# 本树实测 31 条 `warning[duplicate]` —— Tauri 的依赖树横跨 gtk / objc2 /
+# windows-sys 三套平台绑定，同一个 crate 出现多个大版本是常态（例如
+# windows-sys 有 0.45/0.52/0.59/0.60/0.61 五个）。设 deny 会把这条门禁变成
+# 一条永远红的检查，而我们对上游的版本收敛毫无影响力。
+# ⚠️ 这是**刻意降级，不是默默放过**：31 条的数字记在这里，哪天它明显变大
+#    （比如翻倍），说明有人引入了新的重复源，值得去看一眼。
+multiple-versions = "warn"
+deny = []
