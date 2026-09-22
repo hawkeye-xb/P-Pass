@@ -1417,3 +1417,7 @@ mod tests {
         }
     }
 }
+
+// CI-17 探针（#373）：本行只为制造一个「改动全在 apps/** 内」的 PR，
+// 用来实测 run_heavy 是否真的把主 workspace 的重型门禁跳掉。探针不合入。
+// （本行为触发 synchronize 事件而追加——改 base 只发 edited，不在默认 types 里。）
