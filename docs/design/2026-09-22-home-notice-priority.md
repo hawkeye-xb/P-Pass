@@ -148,6 +148,31 @@ H-C 的文案**当前不存在**，登记在 §5「应该有但没有」。不�
 `triplet_unavailable`——那条说的是「读不到手机相册的数量」
 （`values-zh/strings.xml:117`），与「两个数对不上」是两件事。
 
+### 2.3b 状态行闸门（规则 S）
+
+英雄卡状态行（A7）用**文字**说的是和主数字同一件事，所以受同一组闸门约束——
+否则颜色改对了、话还是假的。
+
+> `state_safe`「照片都存好了」可渲染，**当且仅当**：
+>
+> - S1 规则 G 的 G1–G5 全部成立，**且**
+> - S2 `flowMissingSourceNotice(snapshot) == null`（无 SKIP-MISS），**且**
+> - S3 `flowCancelledRoundNotice(snapshot) == null`（无 CANCEL-ROW）
+>
+> 任一条不成立 → 状态行不得说「都存好了」，退回 `state_pending` /
+> `idle_auto_hint` 等既有分支（`HomeScreen.kt:753-761`）。
+
+S2/S3 不是新发明的顾虑，是现存的漏洞：`flowIsAllDone` **把
+`SKIPPED_SOURCE_MISSING` 算作已完成**（`FlowUiProjection.kt:66-70`）→
+`backupUiStateOf` 投影成 `AllSafe`（`:104-105`）→ `statusLineOf` 出
+`StatusLine.AllSafe`（`BackupStatus.kt:53-57`）→ `state_safe`。
+与此同时 `flowMissingSourceNotice` 仍返回非 null（`FlowUiProjection.kt:165-172`），
+于是「照片都存好了」与「已跳过 N 张…不会再重传」**同屏**。
+这与 #350 报的绿色英雄卡是同一个谎，只是用文字说的。
+
+**A7 由规则 G/S 治理，不进 §2.4 的矩阵**——它没有独立的出场/隐藏判据，
+只有内容对不对，矩阵那种「谁压谁」的形状套不上它。
+
 ### 2.4 跨区两两裁决矩阵
 
 11 个决策单元（把同源的合并）：
@@ -172,7 +197,7 @@ H-C 的文案**当前不存在**，登记在 §5「应该有但没有」。不�
 | | ACCESS | PAIR | TROUBLE | SKIP-MISS | CANCEL-ROW | BG | REUP | WIFI | PAUSE-WHY | DOT |
 |---|---|---|---|---|---|---|---|---|---|---|
 | **HERO** | ACCESS ¹ | 并存 ² | 并存 ² | 并存 | 并存 | 并存 | 并存 | 并存 | 并存 ⁷ | 并存 |
-| **ACCESS** | — | 并存 | 并存 | 并存 | 并存 | 并存 | 并存 | ACCESS ³ | 并存 | 并存 |
+| **ACCESS** | — | 并存 | 并存 | 并存 | 并存 | 并存 | 并存 | ACCESS ³ | ACCESS ¹² | 并存 |
 | **PAIR** | — | — | PAIR ⁴ | 并存 | 并存 | 并存 | PAIR ⁵ | PAIR ⁵ | PAIR ⁶ | 并存 |
 | **TROUBLE** | — | — | — | 并存 | 并存 | 并存 | 并存 | TROUBLE ⁵ | 互斥 ⁸ | 并存 |
 | **SKIP-MISS** | — | — | — | — | 并存 ⁹ | 并存 | 并存 | 并存 | 并存 | 并存 |
@@ -192,9 +217,12 @@ H-C 的文案**当前不存在**，登记在 §5「应该有但没有」。不�
 3. 已由代码保证：`shouldShowWifiDeferredHint` 要求 `mediaAccess == FULL`
    （`HomeScreen.kt:840-845`）。
 4. 已由代码保证：`HomeScreen.kt:381` 的 `state is Trouble && !pairingLost`。
-5. 新增裁决：L1 在场时，L4 的补充信息不出现。理由——配对已断时，「有 N 张在电脑上
-   不见了正在重新传回」「将在连上 Wi-Fi 后进行」都是**当下不可能发生的承诺**。
-   这与 R-UNKNOWN 同源：不知道就别说，做不到更别说。
+5. 新增裁决：L1 在场时，**承诺类**的 L4 不出现。L4 里分两种：
+   **承诺类**（REUP「正在重新传回」、WIFI「将在连上 Wi-Fi 后进行」）说的是
+   接下来会发生什么，配对已断时**当下不可能发生**；**事实类**
+   （SKIP-MISS「已跳过 N 张」、CANCEL-ROW「已跳过的照片」）说的是已经发生过什么，
+   配对断不断都还是真的，所以 `PAIR × SKIP-MISS` 与 `PAIR × CANCEL-ROW` 仍是并存。
+   这条与 R-UNKNOWN 同源：不知道就别说，做不到更别说。
 6. 新增裁决：PAIR 在场时 `heroActionOf` 已返回 `null`（`BackupStatus.kt:81`），
    「继续」按钮不在场 ⇒ PAUSE-WHY 没有挂载点（见 §2.5），且「今天后台时间用完了」
    在配对已断时是误导。
@@ -208,8 +236,16 @@ H-C 的文案**当前不存在**，登记在 §5「应该有但没有」。不�
     本表另加：C2/C3 与 D1/D2 是同一事实的两处渲染，**同屏只保留横幅**，
     设置卡的 hint 不得作为第二条独立提示计数（否则一件事说两遍，占掉 tokens.json
     `rules[4]`「每屏一个结论一句解释」的预算）。
-11. 新增裁决：两者都在解释「为什么没在传」，同屏说两个不同原因即自相矛盾。
-    暂停是已发生的事实，Wi-Fi 等待是尚未发生的条件，事实压条件。
+11. 新增裁决：两者都在解释**同一件事**——「为什么没在传」——同屏说两个不同原因
+    即自相矛盾。暂停是已发生的事实，Wi-Fi 等待是尚未发生的条件，事实压条件。
+    对照 `BG × PAUSE-WHY = 并存`：那两条解释的是**两件事**（后台监听被系统停掉 /
+    本次前台传输被撤掉保护），且落在两个区（NoticeHost 槽位 / 英雄卡状态行），
+    互不改写对方的结论，所以并存不矛盾。**判据：同区且同问题 ⇒ 择一；
+    异区或异问题 ⇒ 并存。**
+12. 新增裁决：`mediaAccess != FULL` 时 `HomeScreen.kt:192` 的 `if` 分支顶替整个
+    英雄卡内部，`:225` 的 `else`（含 A6–A10 状态行与按钮）到 `:353` 整块不渲染
+    ⇒ PAUSE-WHY 按规则 P 该挂的那一行根本不存在。与脚注 6 同一形状：
+    挂载点不在场，理由就不该假装能显示。
 
 ### 2.5 暂停理由的挂载点（规则 P，#361 专用）
 
