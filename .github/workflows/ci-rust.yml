@@ -69,6 +69,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # CI-18 探针（#382）：本行只为让改动落在非惰性路径上，从而使
+  # run_heavy=true、四条重型 job 真的跑起来 —— 否则 CI-17 会把它们跳掉，
+  # 就测不到缓存 key 的行为。探针不合入。
   CARGO_TERM_COLOR: always
 
 jobs:
