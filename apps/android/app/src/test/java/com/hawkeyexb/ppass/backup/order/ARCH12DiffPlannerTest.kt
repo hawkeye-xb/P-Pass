@@ -21,10 +21,14 @@ class ARCH12DiffPlannerTest {
         override fun <R> readAll(block: (Sequence<MediaSnapshot>) -> R): R =
             block(photos.sortedBy { it.mediaId }.asSequence().map { it.snapshot })
 
-        override fun <R> readChangedSince(afterGeneration: Long, block: (Sequence<MediaSnapshot>) -> R): R =
+        override fun <R> readChangedSince(volumeName: String, afterGeneration: Long, block: (Sequence<MediaSnapshot>) -> R): R =
             block(photos.filter { it.generation > afterGeneration }.sortedWith(compareBy({ it.generation }, { it.mediaId })).asSequence().map { it.snapshot })
 
+        override fun volumeNames(): List<String> = listOf(LEGACY_VOLUME)
+
         override fun volumeVersions(): Map<String, String> = mapOf("external_primary" to "v1")
+
+        override fun lookup(mediaId: Long): MediaDetails? = null
     }
 
     private val store = InMemoryOrderStore { 1L }
@@ -40,10 +44,10 @@ class ARCH12DiffPlannerTest {
 
     private fun slowPresent(): List<DiffAction> = media.readAll { s -> store.readCurrentOrders { o -> planner.planPresent(s, o).toList() } }
     private fun slowGone(): List<DiffAction.Gone> = media.readAll { s -> store.readCurrentOrders { o -> planner.planGone(s, o).toList() } }
-    private fun fastPath(g: Long): List<DiffAction> = media.readChangedSince(g) { planner.planFastPath(it, store::currentForMedia).toList() }
+    private fun fastPath(g: Long): List<DiffAction> = media.readChangedSince(LEGACY_VOLUME, g) { planner.planFastPath(it, store::currentForMedia).toList() }
 
     private fun confirmed(p: Photo, state: OrderState = OrderState.CONFIRMED): Order =
-        store.insert(NewOrder(p.mediaId, p.snapshot.sourceVersion, p.bucketId, "blake3:" + p.content, state, pairingEpoch = 1))
+        store.insert(NewOrder(p.mediaId, p.snapshot.sourceVersion, p.bucketId, "blake3:" + p.content, state, pairingEpoch = "e1"))
 
     private inline fun <reified T : DiffAction> List<DiffAction>.only(): List<T> = filterIsInstance<T>()
 
@@ -136,7 +140,8 @@ class ARCH12DiffPlannerTest {
         assertTrue(alreadyMissing !in gone)
     }
 
-    // O：用户跳过（及移出范围取消）的照片不会被补传——同版本、改版本、换 _id 三种都不产出待传。
+    // O：用户跳过的照片不会被补传——同版本、改版本、换 _id 三种都不产出待传。
+    // #415 裁决 5：CANCELLED_BY_SCOPE 不是长期决定，同内容改了版本只更新映射（落库时重新准入，见 ARCH13OrderRulingsTest）。
     @Test
     fun `user-decided photos are never planned for upload`() {
         val skipped = Photo(1, 100, 10, "skipped", generation = 1)
@@ -156,9 +161,10 @@ class ARCH12DiffPlannerTest {
         )
         val actions = slowPresent()
         assertEquals(emptyList<DiffAction.Upload>(), actions.only<DiffAction.Upload>())
-        assertEquals(listOf(1L, 2L), actions.only<DiffAction.Suppressed>().map { it.mediaId })
+        assertEquals(listOf(1L), actions.only<DiffAction.Suppressed>().map { it.mediaId })
+        assertEquals(listOf(2L), actions.only<DiffAction.MappingOnly>().map { it.mediaId })
         assertEquals(listOf(50L), actions.only<DiffAction.KnownContent>().map { it.mediaId })
-        assertEquals("suppressed photos are not even hashed", listOf(50L), hashed)
+        assertEquals("suppressed photos are not even hashed", listOf(2L, 50L), hashed)
         assertEquals(emptyList<DiffAction.Upload>(), fastPath(g = 0).only<DiffAction.Upload>())
     }
 
@@ -170,14 +176,14 @@ class ARCH12DiffPlannerTest {
         val targets = photos.map { SkipTarget(it.mediaId, it.snapshot.sourceVersion, it.bucketId) }
 
         try {
-            store.skipByUser(targets.take(2) + SkipTarget(0, "bad", 7) + targets.drop(2), pairingEpoch = 1)
+            store.skipByUser(targets.take(2) + SkipTarget(0, "bad", 7) + targets.drop(2), pairingEpoch = "e1")
             fail("invalid target must abort the batch")
         } catch (expected: IllegalArgumentException) {
             // 预期
         }
         assertEquals("rolled back: all three still pending", listOf(1L, 2L, 3L), slowPresent().only<DiffAction.Upload>().map { it.mediaId })
 
-        assertEquals(SkipResult(inserted = 3, updated = 0, untouched = 0), store.skipByUser(targets, pairingEpoch = 1))
+        assertEquals(SkipResult(inserted = 3, updated = 0, untouched = 0), store.skipByUser(targets, pairingEpoch = "e1"))
         assertEquals(emptyList<DiffAction>(), slowPresent())
     }
 
@@ -200,7 +206,7 @@ class ARCH12DiffPlannerTest {
         val snapshots = generateSequence(1L) { it + 1 }.map { pulledSnapshots++; MediaSnapshot(it * 2, "v", 7, it) }
         val orders = generateSequence(1L) { it + 1 }.map {
             pulledOrders++
-            Order(it, it * 2 + 1, "v", 7, "h", OrderState.CONFIRMED, 0, 1, 0, 0)
+            Order(it, it * 2 + 1, "v", 7, "h", OrderState.CONFIRMED, 0, "e1", 0, 0)
         }
         val lazyPlanner = DiffPlanner(hasher = { "h${it.mediaId}" }, ordersWithHash = { emptyList() })
         val first = lazyPlanner.planPresent(snapshots, orders).take(3).toList()

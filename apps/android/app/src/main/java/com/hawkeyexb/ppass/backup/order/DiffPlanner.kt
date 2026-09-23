@@ -1,8 +1,8 @@
-// ARCH-12 (#416): MediaStore × order 差集规划。纯函数：不写库、不碰 ContentResolver，
+// ARCH-12 (#416) / ARCH-13 (#417): MediaStore × order 差集规划。纯函数：不写库、不碰 ContentResolver，
 // 只把两条已排序的流归并成一串「该做什么」。算 hash 与按 hash 查 order 都由调用方注入。
 package com.hawkeyexb.ppass.backup.order
 
-/** 差集规划的产出。规划器只分类，落库与传输由调用方（循环）决定。 */
+/** 差集规划的产出。规划器只分类，落库由 [DiffApplier]、传输由循环决定。 */
 sealed interface DiffAction {
     val mediaId: Long
 
@@ -12,8 +12,9 @@ sealed interface DiffAction {
     }
 
     /**
-     * hash 已经存在于 order（MediaStore 重建、文件移动、同内容另存）：**不传**，只更新映射。
+     * hash 已经存在于 order（MediaStore 重建、文件移动、同内容另存）。
      * [existing] 是持有该 hash 的行（按 id 升序），[current] 是该 media_id 自己的当前行（可能为 null）。
+     * #416 裁决 3：新增一行、不搬迁旧行（见 [DiffApplier]）。
      */
     data class KnownContent(val snapshot: MediaSnapshot, val contentHash: String, val existing: List<Order>, val current: Order?) : DiffAction {
         override val mediaId get() = snapshot.mediaId
@@ -29,12 +30,31 @@ sealed interface DiffAction {
         override val mediaId get() = snapshot.mediaId
     }
 
-    /** 读不出内容（被删、无权限）：本轮跳过，下一次对账再看。 */
-    data class Unhashable(val snapshot: MediaSnapshot, val error: Exception) : DiffAction {
+    /** 读不出内容（被删、无权限）：#416 裁决 9——按单张失败处理，计入次数。 */
+    data class Unhashable(val snapshot: MediaSnapshot, val error: Exception, val current: Order?) : DiffAction {
         override val mediaId get() = snapshot.mediaId
     }
 
-    /** order 里有、MediaStore（范围内）里没有，且当前行不是 SKIPPED_SOURCE_MISSING。 */
+    /** #416 裁决 1：照片还在 MediaStore 里，但所在相册已不在范围内，而它的 order 还没有结局 → CANCELLED_BY_SCOPE。 */
+    data class OutOfScope(val snapshot: MediaSnapshot, val order: Order) : DiffAction {
+        override val mediaId get() = snapshot.mediaId
+    }
+
+    /**
+     * 同一版本重新变为可传：
+     * - SKIPPED_SOURCE_MISSING 的照片又出现在 MediaStore（从回收站恢复，#416 裁决 5）
+     * - CANCELLED_BY_SCOPE 的照片所在相册重新纳入范围（#415 裁决 5）
+     */
+    data class Readmit(val snapshot: MediaSnapshot, val order: Order) : DiffAction {
+        override val mediaId get() = snapshot.mediaId
+    }
+
+    /** 带 `source_missing` 标记的行，原图又出现了：清掉标记（#416 裁决 2 的反向）。 */
+    data class Reappeared(val snapshot: MediaSnapshot, val order: Order) : DiffAction {
+        override val mediaId get() = snapshot.mediaId
+    }
+
+    /** order 里有、MediaStore（全量）里确实没有，且还没被记过（不是 SKIPPED_SOURCE_MISSING、没打标记）。 */
     data class Gone(val order: Order) : DiffAction {
         override val mediaId get() = order.mediaId
     }
@@ -46,20 +66,24 @@ sealed interface DiffAction {
  * 差集规划器。
  *
  * 慢路径分**两遍**，调用方必须按顺序执行、并在两遍之间把第一遍的动作落库：
- * 1. [planPresent]：new / changed → 算 hash → Upload / KnownContent / MappingOnly / Suppressed
+ * 1. [planPresent]：new / changed → 算 hash → Upload / KnownContent / MappingOnly / ...
  * 2. [planGone]：重新打开两条流，产出 Gone
  *
  * 为什么不一遍做完：MediaStore 重建后新 `_id` 通常都比旧的大，一遍归并会先走到旧 `_id`
- * 判 Gone，再走到新 `_id` 才发现 hash 相同。先落 Gone 会把 CONFIRMED 之类的证据覆盖成
- * SKIPPED_SOURCE_MISSING。两遍之后，第二遍看到的已是更新过映射的 order。
+ * 判 Gone，再走到新 `_id` 才发现 hash 相同。两遍之后，第二遍看到的已是第一遍新插入的行，
+ * [DiffApplier.applyGone] 才能认出「这份内容换了个 `_id` 还在」、删掉旧行。
  *
  * 两条输入流都必须按 media_id **严格升序**（order 流每个 media_id 只给当前那一行，见
  * [OrderStore.readCurrentOrders]），否则抛 [IllegalStateException]——归并的正确性全靠排序一致。
  * 规划过程是惰性的：两边各只持有当前一行，不会把任何一边整个读进内存。
+ *
+ * [inScope]：这个相册现在在不在备份范围内。快照是全量的（#416 裁决 1），范围判断在这里做，
+ * 并且**先于算 hash**——范围外的照片一次 hash 都不算（D-06）。
  */
 class DiffPlanner(
     private val hasher: (MediaSnapshot) -> String,
     private val ordersWithHash: (String) -> List<Order>,
+    private val inScope: (bucketId: Long) -> Boolean = { true },
 ) {
     /** 慢路径第一遍。 */
     fun planPresent(snapshots: Sequence<MediaSnapshot>, currentOrders: Sequence<Order>): Sequence<DiffAction> =
@@ -70,7 +94,7 @@ class DiffPlanner(
     /** 慢路径第二遍：必须在第一遍的动作落库之后，用重新打开的流调用。 */
     fun planGone(snapshots: Sequence<MediaSnapshot>, currentOrders: Sequence<Order>): Sequence<DiffAction.Gone> =
         merge(snapshots, currentOrders).mapNotNull { (snapshot, order) ->
-            if (snapshot == null && order != null && order.state != OrderState.SKIPPED_SOURCE_MISSING) {
+            if (snapshot == null && order != null && order.state != OrderState.SKIPPED_SOURCE_MISSING && !order.sourceMissing) {
                 DiffAction.Gone(order)
             } else {
                 null
@@ -86,14 +110,27 @@ class DiffPlanner(
 
     /** 单张分类；null = 没变化，什么都不用做。 */
     fun classify(snapshot: MediaSnapshot, current: Order?): DiffAction? {
+        // 原图重新出现：先清标记。与范围无关——标记描述的是「原图在不在」。
+        if (current != null && current.sourceMissing && current.sourceVersion == snapshot.sourceVersion) {
+            return DiffAction.Reappeared(snapshot, current)
+        }
+        if (!inScope(snapshot.bucketId)) {
+            // 范围外：只有还没结局的 order 需要收尾；其余（没有 order、已有结局）一概不看、不算 hash。
+            return if (current != null && current.state.isOpen) DiffAction.OutOfScope(snapshot, current) else null
+        }
         if (current != null && current.sourceVersion == snapshot.sourceVersion) {
-            return if (current.bucketId != snapshot.bucketId) DiffAction.MappingOnly(snapshot, current) else null
+            return when {
+                current.state == OrderState.SKIPPED_SOURCE_MISSING || current.state == OrderState.CANCELLED_BY_SCOPE ->
+                    DiffAction.Readmit(snapshot, current)
+                current.bucketId != snapshot.bucketId -> DiffAction.MappingOnly(snapshot, current)
+                else -> null
+            }
         }
         if (current != null && current.state.isUserDecided) return DiffAction.Suppressed(snapshot, current)
         val hash = try {
             hasher(snapshot)
         } catch (e: Exception) {
-            return DiffAction.Unhashable(snapshot, e)
+            return DiffAction.Unhashable(snapshot, e, current)
         }
         if (current != null && current.contentHash == hash) return DiffAction.MappingOnly(snapshot, current)
         val existing = ordersWithHash(hash)

@@ -18,7 +18,7 @@ abstract class OrderStoreContract {
     abstract fun newStore(clock: () -> Long): OrderStore
 
     private fun newOrder(mediaId: Long, state: OrderState = OrderState.TRANSFERRING, hash: String? = "h$mediaId", version: String = "v1") =
-        NewOrder(mediaId = mediaId, sourceVersion = version, bucketId = 7, contentHash = hash, state = state, pairingEpoch = 3)
+        NewOrder(mediaId = mediaId, sourceVersion = version, bucketId = 7, contentHash = hash, state = state, pairingEpoch = "e3")
 
     @Test
     fun `insert assigns strictly increasing ids and stamps time`() {
@@ -124,7 +124,7 @@ abstract class OrderStoreContract {
         val confirmed = store.insert(newOrder(3, OrderState.CONFIRMED))
         val result = store.skipByUser(
             listOf(SkipTarget(1, "v1", 7), SkipTarget(2, "v1", 7), SkipTarget(3, "v1", 7), SkipTarget(4, "v4", 9)),
-            pairingEpoch = 5,
+            pairingEpoch = "e5",
         )
         assertEquals(SkipResult(inserted = 1, updated = 2, untouched = 1), result)
         assertEquals(OrderState.SKIPPED_BY_USER, store.get(open.id)!!.state)
@@ -133,7 +133,7 @@ abstract class OrderStoreContract {
         val inserted = store.currentForMedia(4)!!
         assertEquals(OrderState.SKIPPED_BY_USER, inserted.state)
         assertEquals("v4", inserted.sourceVersion)
-        assertEquals(5L, inserted.pairingEpoch)
+        assertEquals("e5", inserted.pairingEpoch)
         assertNull(inserted.contentHash)
     }
 
@@ -146,7 +146,7 @@ abstract class OrderStoreContract {
         try {
             store.skipByUser(
                 listOf(SkipTarget(1, "v1", 7), SkipTarget(2, "v2", 7), SkipTarget(-1, "bad", 7), SkipTarget(3, "v3", 7)),
-                pairingEpoch = 5,
+                pairingEpoch = "e5",
             )
             fail("a non-positive media id must abort the batch")
         } catch (expected: IllegalArgumentException) {
@@ -170,6 +170,93 @@ abstract class OrderStoreContract {
         assertEquals(VolumeState("external_primary", 130, "v-b"), store.volumeState("external_primary"))
         assertEquals(VolumeState("0a1b-2c3d", 7, null), store.volumeState("0a1b-2c3d"))
         assertEquals(listOf("0a1b-2c3d", "external_primary"), store.volumeNames())
+    }
+    // ---- ARCH-13 (#417) 新增契约 ----
+
+    @Test
+    fun `transition carries the generation advance and audit in the same write, or neither`() {
+        val store = newStore(clock)
+        val o = store.insert(newOrder(1, OrderState.TRANSFERRING))
+        val audit = AuditRecord("ev-1", "flow.item.confirmed", null, 1L, mapOf("queueSequence" to o.id.toString()))
+        assertFalse(
+            "wrong expected state writes nothing",
+            store.transition(o.id, setOf(OrderState.PAUSED), OrderState.CONFIRMED, advance = GenerationAdvance("vol", 50), audit = audit),
+        )
+        assertNull(store.volumeState("vol"))
+        assertEquals(emptyList<AuditRecord>(), store.pendingAudit(10))
+
+        assertTrue(store.transition(o.id, setOf(OrderState.TRANSFERRING), OrderState.CONFIRMED, advance = GenerationAdvance("vol", 50), audit = audit))
+        assertEquals(50L, store.volumeState("vol")!!.fastPathGeneration)
+        assertEquals(listOf(audit), store.pendingAudit(10))
+        // G 只增不减。
+        store.advanceGeneration(GenerationAdvance("vol", 20))
+        assertEquals(50L, store.volumeState("vol")!!.fastPathGeneration)
+        store.acknowledgeAudit(setOf("ev-1"))
+        assertEquals(emptyList<AuditRecord>(), store.pendingAudit(10))
+    }
+
+    @Test
+    fun `source missing flag, hash fill and delete`() {
+        val store = newStore(clock)
+        val confirmed = store.insert(newOrder(1, OrderState.CONFIRMED, "h1"))
+        assertTrue(store.setSourceMissing(confirmed.id, true))
+        assertTrue(store.get(confirmed.id)!!.sourceMissing)
+        assertEquals("flag never rewrites CONFIRMED", OrderState.CONFIRMED, store.get(confirmed.id)!!.state)
+        assertTrue(store.setSourceMissing(confirmed.id, false))
+        assertFalse(store.get(confirmed.id)!!.sourceMissing)
+
+        val unhashed = store.insert(newOrder(2, OrderState.SKIPPED_BY_USER, hash = null))
+        assertTrue(store.setContentHash(unhashed.id, "h2"))
+        assertFalse("an existing hash is never overwritten", store.setContentHash(unhashed.id, "other"))
+        assertEquals("h2", store.get(unhashed.id)!!.contentHash)
+
+        assertTrue(store.delete(unhashed.id))
+        assertFalse(store.delete(unhashed.id))
+        assertNull(store.get(unhashed.id))
+    }
+
+    @Test
+    fun `pick queries only see current rows`() {
+        val store = newStore(clock)
+        val stale = store.insert(newOrder(1, OrderState.PAUSED, "old"))
+        store.insert(newOrder(1, OrderState.CONFIRMED, "new", version = "v2"))
+        val paused = store.insert(newOrder(2, OrderState.PAUSED))
+        val queued = store.insert(newOrder(3, OrderState.QUEUED))
+        val confirmed = store.insert(newOrder(4, OrderState.CONFIRMED))
+        assertEquals(listOf(paused), store.currentInStates(setOf(OrderState.PAUSED, OrderState.TRANSFERRING), 10))
+        assertTrue(stale !in store.currentInStates(setOf(OrderState.PAUSED), 10))
+        assertEquals(listOf(queued), store.currentInStates(setOf(OrderState.QUEUED), 10))
+        assertEquals(listOf(4L), store.confirmedWithHashAfter(confirmed.id - 1, 10).map { it.mediaId })
+        assertEquals(listOf(1L, 4L), store.confirmedWithHashAfter(0, 10).map { it.mediaId })
+        assertEquals(
+            mapOf(OrderState.CONFIRMED to 2L, OrderState.PAUSED to 1L, OrderState.QUEUED to 1L),
+            store.countCurrentByState(),
+        )
+        assertEquals(emptyMap<OrderState, Long>(), store.countCurrentByState(setOf(99L)))
+    }
+
+    @Test
+    fun `claiming a new owner clears the table and lifts the id floor above old queue sequences`() {
+        val store = newStore(clock)
+        assertFalse("first owner clears nothing", store.claimOwner("desk-a", idFloor = 1_000_000))
+        val first = store.insert(newOrder(1, OrderState.CONFIRMED))
+        assertTrue("ids start above the floor: ${first.id}", first.id > 1_000_000)
+        assertFalse("same owner keeps everything", store.claimOwner("desk-a", idFloor = 5))
+        assertEquals(first, store.get(first.id))
+
+        assertTrue(store.claimOwner("desk-b", idFloor = 2_000_000))
+        assertNull(store.get(first.id))
+        assertEquals(emptyMap<OrderState, Long>(), store.countCurrentByState())
+        assertTrue(store.insert(newOrder(1)).id > 2_000_000)
+    }
+
+    @Test
+    fun `skip by user covers queued rows too`() {
+        val store = newStore(clock)
+        val queued = store.insert(newOrder(1, OrderState.QUEUED))
+        val result = store.skipByUser(listOf(SkipTarget(1, "v1", 7)), pairingEpoch = "e5")
+        assertEquals(1, result.written)
+        assertEquals(OrderState.SKIPPED_BY_USER, store.get(queued.id)!!.state)
     }
 }
 
