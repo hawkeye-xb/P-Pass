@@ -192,7 +192,8 @@ class ARCH12DiffPlannerTest {
         }
     }
 
-    @Test
+    // 超时兜底：两边都是无限流，实现一旦不再惰性（或一直产出不了动作）就会挂死而不是变红。
+    @Test(timeout = 10_000)
     fun `planning is lazy - both sides are consumed one row at a time`() {
         var pulledSnapshots = 0L
         var pulledOrders = 0L
