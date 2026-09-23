@@ -51,6 +51,27 @@ class ARCH12DiffPlannerTest {
 
     private inline fun <reified T : DiffAction> List<DiffAction>.only(): List<T> = filterIsInstance<T>()
 
+    // #418：已确认的照片被挪进范围外的相册，慢路径只改 bucket_id（不算 hash、不改状态），英雄区的 m 才不会比 n 多。
+    // 反证：去掉 DiffPlanner 范围外分支里的 MappingOnly → 这张得到 null，bucket_id 停在 7，红。
+    @Test
+    fun `a confirmed photo moved into an unselected album only has its album updated`() {
+        val scoped = DiffPlanner(
+            hasher = { snap -> hashed += snap.mediaId; "blake3:" + media.photos.single { it.mediaId == snap.mediaId }.content },
+            ordersWithHash = store::ordersWithHash,
+            inScope = { it == 7L },
+        )
+        val p = Photo(1, 100, 10, "a", generation = 5, bucketId = 7)
+        val row = confirmed(p)
+        val moved = p.copy(bucketId = 9)
+        media = FakeMediaSource(listOf(moved))
+        val actions = media.readAll { s -> store.readCurrentOrders { o -> scoped.planPresent(s, o).toList() } }
+        assertEquals(listOf(DiffAction.MappingOnly(moved.snapshot, row)), actions)
+        DiffApplier(store, { "e1" }) { 1L }.applyPresent(actions.single())
+        assertEquals(9L, store.get(row.id)!!.bucketId)
+        assertEquals(OrderState.CONFIRMED, store.get(row.id)!!.state)
+        assertTrue("no hash is computed for an out-of-scope photo", hashed.isEmpty())
+    }
+
     // O：新照片 → 待传。
     @Test
     fun `new photo is planned for upload`() {

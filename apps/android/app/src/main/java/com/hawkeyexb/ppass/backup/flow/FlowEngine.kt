@@ -186,6 +186,30 @@ class FlowEngine(
         result.written
     }
 
+    /**
+     * #418「已跳过的照片 · 点击恢复」：一个事务删掉所有当前行为 SKIPPED_BY_USER 的 order（审计同事务），
+     * 然后触发一次慢路径——这些照片没有 order 了，慢路径第一遍把它们重新规划（内容桌面已有的只记映射，
+     * 其余成为 QUEUED 进取件顺序 ②）。暂停中只删不传：触发被暂停挡住，之后的下一次慢路径（回到前台、定时兜底）再接上。
+     * 返回恢复了几张。
+     */
+    fun restoreSkipped(): Deferred<Int> = scope.async {
+        val count = store.countCurrentByState(null)[OrderState.SKIPPED_BY_USER] ?: 0L
+        val restored = store.restoreSkippedByUser(
+            audit(AuditKinds.ROUND_CONTROLLED, mapOf("action" to "restore", "restored" to count.toString())),
+        )
+        log.log("restore: $restored SKIPPED_BY_USER rows removed; the slow path will plan them again")
+        bump()
+        if (restored > 0) onTrigger(TriggerReason.RESTORE_SKIPPED)
+        restored
+    }
+
+    /**
+     * #418：「取消剩余 N 张」的 N，也是英雄区的「待备份 K」。与 [cancelRemaining] 写 SKIPPED_BY_USER 的
+     * 是**同一个函数**（[remainingTargets]），所以确认框里的 N 就是确认后会写下的张数（除非这期间又有
+     * 照片确认或新拍）。只读，不经过写者 scope，传输进行中也不会被卡住。
+     */
+    suspend fun countRemaining(): Int = withContext(io) { remainingTargets().size }
+
     /** FGS 被系统收走（onTimeout）：记事实、停循环。**不**再调 startForegroundService（#414）。 */
     fun onForegroundLost(reason: FgsBlockReason = FgsBlockReason.BUDGET_EXHAUSTED): Job = scope.launch {
         control.recordFgsBlock(reason)
@@ -472,8 +496,11 @@ class FlowEngine(
         }
 
     private fun fail(orderId: Long, advance: GenerationAdvance, reason: String) {
-        // 失败通知（FailureNotifier）先不发：失败要先按 路径 / 单张 / 对端 分类（#410），而且慢路径兜底会
-        // 自动再试一次 FAILED——现在就推通知，大多数是会自愈的问题（#413「UI 与通知」）。
+        // #418：这里是「一张照片记为 FAILED」的唯一调用点，失败通知（FailureNotifier / SystemFailureNotifier，
+        // 代码保留）**故意不在这里调用**：
+        //  1. 失败要先按 路径 / 单张 / 对端 分类（#410），分类没落地之前，推给用户的「备份失败」多半是误报；
+        //  2. 慢路径兜底会自动再试一次 FAILED——现在就推通知，大多数是会自愈的问题。
+        // 结构测试 ARCH14UiWiringTest.the_failure_notification_is_kept_but_never_posted 锁住「main 里没有 postFailure 调用点」。
         store.transition(
             orderId,
             setOf(OrderState.TRANSFERRING),

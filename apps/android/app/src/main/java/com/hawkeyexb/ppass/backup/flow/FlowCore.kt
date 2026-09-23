@@ -65,6 +65,8 @@ enum class TriggerReason(val userPresent: Boolean = false, val slowPath: Boolean
     PAIRING_REPAIRED(userPresent = true, slowPath = true),
     USER_CONTINUE(userPresent = true),
     RETRY_FAILED(userPresent = true, slowPath = true),
+    /** #418「已跳过的照片 · 点击恢复」：删掉 SKIPPED_BY_USER 行之后，靠慢路径把它们重新规划进待传。 */
+    RESTORE_SKIPPED(userPresent = true, slowPath = true),
     MANUAL(userPresent = true),
 }
 

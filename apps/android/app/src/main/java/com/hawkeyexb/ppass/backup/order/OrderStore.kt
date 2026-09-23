@@ -195,6 +195,13 @@ interface OrderStore {
      */
     fun skipByUser(targets: List<SkipTarget>, pairingEpoch: String, audit: AuditRecord? = null): SkipResult
 
+    /**
+     * #418「已跳过的照片 · 点击恢复」：删掉所有**当前行**为 SKIPPED_BY_USER 的行（一个事务，[audit] 同一事务），
+     * 返回删了几行。之后下一次慢路径把这些照片当作「还没有 order」重新规划——内容桌面已有的只记映射，
+     * 其余进待传。历史行（被更新版本盖过的旧行）不动。
+     */
+    fun restoreSkippedByUser(audit: AuditRecord? = null): Int
+
     fun volumeState(volumeName: String): VolumeState?
 
     fun saveVolumeState(state: VolumeState)
@@ -207,6 +214,13 @@ interface OrderStore {
 
     /** UI 投影：当前行按状态计数；[bucketIds] 非 null 时只数这些相册里的。 */
     fun countCurrentByState(bucketIds: Set<Long>? = null): Map<OrderState, Long>
+
+    /**
+     * #418 英雄区的 m：当前行为 CONFIRMED、且原图还在手机上（`source_missing` = 0）的张数。
+     * 原图删了的行按 #416 裁决 2 保持 CONFIRMED，但它已不在 n（范围内 MediaStore 实时计数）里，
+     * 算进 m 会让 m > n，英雄区永远停在「两个数对不上」。
+     */
+    fun countConfirmedPresent(bucketIds: Set<Long>? = null): Long
 
     /** 当前行里 CONFIRMED 的最近一次 updated_at（0 = 一张都没有）。 */
     fun lastConfirmedAtMs(): Long

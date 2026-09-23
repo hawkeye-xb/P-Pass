@@ -116,7 +116,15 @@ class DiffPlanner(
         }
         if (!inScope(snapshot.bucketId)) {
             // 范围外：只有还没结局的 order 需要收尾；其余（没有 order、已有结局）一概不看、不算 hash。
-            return if (current != null && current.state.isOpen) DiffAction.OutOfScope(snapshot, current) else null
+            if (current != null && current.state.isOpen) return DiffAction.OutOfScope(snapshot, current)
+            // #418：已确认的照片被挪进了范围外的相册——只改映射里的 bucket_id，不算 hash。否则这一行永远
+            // 带着旧相册号，英雄区的 m（按相册数的已确认数）会一直比 n（MediaStore 实时计数）多一张。
+            if (current != null && current.state == OrderState.CONFIRMED &&
+                current.sourceVersion == snapshot.sourceVersion && current.bucketId != snapshot.bucketId
+            ) {
+                return DiffAction.MappingOnly(snapshot, current)
+            }
+            return null
         }
         if (current != null && current.sourceVersion == snapshot.sourceVersion) {
             return when {

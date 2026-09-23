@@ -305,6 +305,16 @@ class SqliteOrderStore private constructor(
         delete("orders", "id = ?", arrayOf(id.toString())) == 1
     }
 
+    override fun restoreSkippedByUser(audit: AuditRecord?): Int = inTransaction {
+        val removed = delete(
+            "orders",
+            "state = '${OrderState.SKIPPED_BY_USER.name}' AND id = (SELECT MAX(id) FROM orders o2 WHERE o2.media_id = orders.media_id)",
+            null,
+        )
+        writeAudit(audit)
+        removed
+    }
+
     override fun skipByUser(targets: List<SkipTarget>, pairingEpoch: String, audit: AuditRecord?): SkipResult = inTransaction {
         val now = clock()
         var inserted = 0
@@ -380,6 +390,15 @@ class SqliteOrderStore private constructor(
             while (c.moveToNext()) out[OrderState.valueOf(c.getString(0))] = c.getLong(1)
             out
         }
+    }
+
+    override fun countConfirmedPresent(bucketIds: Set<Long>?): Long {
+        if (bucketIds != null && bucketIds.isEmpty()) return 0L
+        val bucketFilter = bucketIds?.let { " AND o.bucket_id IN (${it.joinToString(",")})" }.orEmpty()
+        return db.rawQuery(
+            "SELECT COUNT(*) FROM orders o WHERE o.state = '${OrderState.CONFIRMED.name}' AND o.source_missing = 0 AND $IS_CURRENT$bucketFilter",
+            null,
+        ).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
     }
 
     override fun lastConfirmedAtMs(): Long =

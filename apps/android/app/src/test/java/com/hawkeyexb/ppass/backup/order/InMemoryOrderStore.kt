@@ -174,6 +174,14 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
 
     override fun delete(id: Long): Boolean = inTransaction { rows.remove(id) != null }
 
+    override fun restoreSkippedByUser(audit: AuditRecord?): Int = inTransaction {
+        val snapshot = rows
+        val ids = snapshot.values.filter { it.state == OrderState.SKIPPED_BY_USER && currentIn(snapshot, it.mediaId)?.id == it.id }.map { it.id }
+        ids.forEach { rows.remove(it) }
+        audit(audit)
+        ids.size
+    }
+
     override fun skipByUser(targets: List<SkipTarget>, pairingEpoch: String, audit: AuditRecord?): SkipResult = inTransaction {
         val now = clock()
         var inserted = 0
@@ -216,6 +224,12 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
     override fun countCurrentByState(bucketIds: Set<Long>?): Map<OrderState, Long> =
         rows.values.filter { isCurrent(it) && (bucketIds == null || it.bucketId in bucketIds) }
             .groupingBy { it.state }.eachCount().mapValues { it.value.toLong() }
+
+    @Synchronized
+    override fun countConfirmedPresent(bucketIds: Set<Long>?): Long =
+        rows.values.count {
+            it.state == OrderState.CONFIRMED && !it.sourceMissing && isCurrent(it) && (bucketIds == null || it.bucketId in bucketIds)
+        }.toLong()
 
     @Synchronized
     override fun lastConfirmedAtMs(): Long =

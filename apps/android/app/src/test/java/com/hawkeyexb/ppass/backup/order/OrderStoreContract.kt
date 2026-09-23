@@ -235,6 +235,23 @@ abstract class OrderStoreContract {
         assertEquals(emptyMap<OrderState, Long>(), store.countCurrentByState(setOf(99L)))
     }
 
+    // #418：英雄区的 m 只数原图还在的 CONFIRMED 当前行，按相册过滤。
+    // 反证：实现里去掉 source_missing 条件 → present 为 3，红。
+    @Test
+    fun `confirmed present count skips rows whose source was deleted and honours the album filter`() {
+        val store = newStore(clock)
+        store.insert(newOrder(1, OrderState.CONFIRMED, "h1"))
+        val gone = store.insert(newOrder(2, OrderState.CONFIRMED, "h2"))
+        store.insert(newOrder(3, OrderState.CONFIRMED, "h3"))
+        store.insert(newOrder(4, OrderState.SKIPPED_BY_USER, null))
+        store.insert(newOrder(3, OrderState.TRANSFERRING, "h3b", version = "v2"))
+        assertTrue(store.setSourceMissing(gone.id, true))
+        assertEquals("row 2 lost its source, row 3's current row is not CONFIRMED", 1L, store.countConfirmedPresent())
+        assertEquals(1L, store.countConfirmedPresent(setOf(7L)))
+        assertEquals(0L, store.countConfirmedPresent(setOf(99L)))
+        assertEquals(0L, store.countConfirmedPresent(emptySet()))
+    }
+
     @Test
     fun `claiming a new owner clears the table and lifts the id floor above old queue sequences`() {
         val store = newStore(clock)
@@ -248,6 +265,27 @@ abstract class OrderStoreContract {
         assertNull(store.get(first.id))
         assertEquals(emptyMap<OrderState, Long>(), store.countCurrentByState())
         assertTrue(store.insert(newOrder(1)).id > 2_000_000)
+    }
+
+    // #418：恢复只删当前行为 SKIPPED_BY_USER 的行，一个事务；其它状态与历史行不动。
+    // 反证：实现删掉所有 SKIPPED_BY_USER 行（不看是不是当前行）→ media 3 的历史行也没了，红。
+    @Test
+    fun `restoring skipped photos deletes only current skipped rows, atomically`() {
+        val store = newStore(clock)
+        store.insert(newOrder(1, OrderState.SKIPPED_BY_USER, null))
+        store.insert(newOrder(2, OrderState.CONFIRMED))
+        val oldSkip = store.insert(newOrder(3, OrderState.SKIPPED_BY_USER, null))
+        store.insert(newOrder(3, OrderState.QUEUED, "h3b", version = "v2"))
+        store.insert(newOrder(4, OrderState.SKIPPED_BY_USER, null))
+        val audit = AuditRecord("restore-1", "flow.round.controlled", null, 1L, mapOf("action" to "restore"))
+
+        assertEquals(2, store.restoreSkippedByUser(audit))
+        assertNull(store.currentForMedia(1))
+        assertNull(store.currentForMedia(4))
+        assertEquals(OrderState.CONFIRMED, store.currentForMedia(2)!!.state)
+        assertEquals("history row of media 3 is untouched", oldSkip, store.get(oldSkip.id))
+        assertEquals(listOf("restore-1"), store.pendingAudit(10).map { it.eventId })
+        assertEquals(0, store.restoreSkippedByUser())
     }
 
     @Test

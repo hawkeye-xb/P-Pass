@@ -50,6 +50,39 @@ class SqliteOrderStoreDeviceTest {
         assertNull(store.currentForMedia(11))
     }
 
+    // #418：与 OrderStoreContract 的同名用例一致。
+    @Test
+    fun confirmedPresentCountSkipsSourceMissingRowsAndHonoursAlbumFilter() {
+        store.insert(newOrder(1, OrderState.CONFIRMED, "h1"))
+        val gone = store.insert(newOrder(2, OrderState.CONFIRMED, "h2"))
+        store.insert(newOrder(3, OrderState.CONFIRMED, "h3"))
+        store.insert(newOrder(4, OrderState.SKIPPED_BY_USER, null))
+        store.insert(newOrder(3, OrderState.TRANSFERRING, "h3b", version = "v2"))
+        assertTrue(store.setSourceMissing(gone.id, true))
+        assertEquals(1L, store.countConfirmedPresent())
+        assertEquals(1L, store.countConfirmedPresent(setOf(7L)))
+        assertEquals(0L, store.countConfirmedPresent(setOf(99L)))
+        assertEquals(0L, store.countConfirmedPresent(emptySet()))
+    }
+
+    // #418：与 OrderStoreContract 的同名用例一致。
+    @Test
+    fun restoringSkippedPhotosDeletesOnlyCurrentSkippedRows() {
+        store.insert(newOrder(1, OrderState.SKIPPED_BY_USER, null))
+        store.insert(newOrder(2, OrderState.CONFIRMED))
+        val oldSkip = store.insert(newOrder(3, OrderState.SKIPPED_BY_USER, null))
+        store.insert(newOrder(3, OrderState.QUEUED, "h3b", version = "v2"))
+        store.insert(newOrder(4, OrderState.SKIPPED_BY_USER, null))
+        val audit = AuditRecord("restore-1", "flow.round.controlled", null, 1L, mapOf("action" to "restore"))
+        assertEquals(2, store.restoreSkippedByUser(audit))
+        assertNull(store.currentForMedia(1))
+        assertNull(store.currentForMedia(4))
+        assertEquals(OrderState.CONFIRMED, store.currentForMedia(2)!!.state)
+        assertEquals(oldSkip, store.get(oldSkip.id))
+        assertEquals(listOf("restore-1"), store.pendingAudit(10).map { it.eventId })
+        assertEquals(0, store.restoreSkippedByUser())
+    }
+
     @Test
     fun currentOrdersStreamAscendingAcrossPages() {
         for (m in 600L downTo 1L) store.insert(newOrder(m, OrderState.CONFIRMED, "a$m"))
