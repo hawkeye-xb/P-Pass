@@ -66,6 +66,10 @@ pub enum PowerHint {
 
 /// Keeps the system awake while alive (RAII). Dropping releases the
 /// assertion. MVP 尽力而为：合盖必睡等平台边界由诊断文案覆盖（§4）。
+///
+/// NET-26 (#419)：guard 是 `Send` 的，可以在**任意线程**上 drop——daemon
+/// 在 tokio 多线程 runtime 的一个 worker 上拿、在另一个 worker 上放。各平台
+/// 实现必须保证这一点（Windows 的线程级执行状态因此由专属线程持有）。
 pub struct AwakeGuard {
     #[allow(dead_code)] // the handle's Drop is the whole point
     inner: AwakeGuardImpl,
@@ -77,6 +81,12 @@ type AwakeGuardImpl = macos::CaffeinateGuard;
 type AwakeGuardImpl = windows::ExecutionStateGuard;
 #[cfg(not(any(target_os = "macos", windows)))]
 type AwakeGuardImpl = ();
+
+// Compile-time proof of the `Send` contract documented on `AwakeGuard`.
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<AwakeGuard>();
+};
 
 /// Device private-key storage (DPAPI / Keychain).
 pub trait KeyStore {

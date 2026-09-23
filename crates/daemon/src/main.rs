@@ -516,7 +516,9 @@ async fn main() -> anyhow::Result<()> {
         // TEL-02: same telemetry client as the daemon_alive heartbeat —
         // `Telemetry::record` is already a no-op when disabled, so this
         // wiring is unconditional regardless of the config switch.
-        .with_telemetry(telemetry.clone());
+        .with_telemetry(telemetry.clone())
+        // NET-26 (#419): keep the machine awake while any fetch runs.
+        .with_awake(daemon::awake::AwakeHold::platform());
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
         .with_events(event_bus.clone());
     let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir)

@@ -29,6 +29,7 @@ use proto::{FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowTupleR
 use storage::{Db, FlowGrant, FlowGrantState};
 use transport::{Blobs, ConnectionStatus, NodeId};
 
+use crate::awake::AwakeHold;
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
 use crate::subscriptions::SubscriptionRegistry;
 use crate::telemetry::{Event as TelemetryEvent, Telemetry};
@@ -372,6 +373,10 @@ pub struct FlowDelivery {
     /// NET-25: 只用来在推送发出时记一句"这台手机此刻在不在订阅表里"。
     /// `None`（测试/单组件构造）= 不记这一维，推送行为完全不变。
     subscriptions: Option<SubscriptionRegistry>,
+    /// NET-26 (#419): every running background fetch task holds one lease;
+    /// the platform "stay awake" assertion lives while any lease does.
+    /// Default is a no-op; `main.rs` wires [`AwakeHold::platform`].
+    awake: AwakeHold,
 }
 
 impl FlowDelivery {
@@ -393,7 +398,15 @@ impl FlowDelivery {
             fetch_locks: Arc::default(),
             tasks: FlowTaskRegistry::default(),
             subscriptions: None,
+            awake: AwakeHold::noop(),
         }
+    }
+
+    /// NET-26 (#419): hold this awake assertion while any background fetch
+    /// task runs (reference counted across tasks, released by the last).
+    pub fn with_awake(mut self, awake: AwakeHold) -> Self {
+        self.awake = awake;
+        self
     }
 
     /// NET-25: 接上按 `NodeId` 登记的订阅表，**只读**，只为 `emit_flow_delivered`
@@ -657,7 +670,14 @@ impl FlowDelivery {
         };
         let key = TaskKey::of(peer, &grant);
         let delivery = self.clone();
+        // NET-26: taken only after `try_register` won (the idempotent early
+        // return above holds nothing) and moved into the task, so every way
+        // the task ends — success, error, cancel, panic, runtime shutdown —
+        // drops it. Not derived from the registry: `interrupt()` removes the
+        // entry while the task may still be winding down.
+        let awake = self.awake.lease();
         tokio::spawn(async move {
+            let _awake = awake;
             let outcome = tokio::select! {
                 result = delivery.run_fetch_body(peer, &grant, &request) => Some(result),
                 _ = token.cancelled() => None,
