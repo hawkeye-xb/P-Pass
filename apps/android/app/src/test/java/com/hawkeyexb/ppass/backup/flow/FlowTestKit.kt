@@ -135,7 +135,7 @@ class FakeControl : FlowControl {
 /**
  * 一套装好的引擎。[media] 默认范围是 bucket 7；照片内容即 hash 源（FakeMedia）。
  */
-class Rig(test: TestScope) {
+class Rig(test: TestScope, reconciled: Boolean = true) {
     val dispatcher = StandardTestDispatcher(test.testScheduler)
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val testScope = test
@@ -179,7 +179,7 @@ class Rig(test: TestScope) {
         clock = { now },
     ).also {
         // 默认视为「已经全量对账过」（getVersion 没变），这样只有显式要求的触发才跑慢路径。
-        store.saveVolumeState(com.hawkeyexb.ppass.backup.order.VolumeState(com.hawkeyexb.ppass.backup.order.LEGACY_VOLUME, 0L, "v1"))
+        if (reconciled) store.saveVolumeState(com.hawkeyexb.ppass.backup.order.VolumeState(com.hawkeyexb.ppass.backup.order.LEGACY_VOLUME, 0L, "v1"))
         it.start()
     }
 

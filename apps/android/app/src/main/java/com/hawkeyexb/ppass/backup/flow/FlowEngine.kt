@@ -586,6 +586,22 @@ class FlowEngine(
 
     /** 慢路径第 1 步（手机完整性检查，两遍）与第 3 步（FAILED 重试一次）。 */
     private suspend fun runLocalSlowPath() {
+        val volumes = withContext(io) { media.volumeNames() }
+        val freshStart = store.countCurrentByState(null).isEmpty() &&
+            volumes.all { (store.volumeState(it)?.fastPathGeneration ?: 0L) == 0L }
+        if (freshStart) {
+            // order 表是空的且 G 全为 0（首次安装、或换桌面刚清空）：全量对账只会在不持有 FGS、
+            // 什么都不落库的情况下把整个相册算一遍 hash——进程中途被杀就永远从头来、永远传不出第一张。
+            // G 全为 0 时快路径本来就会按 generation 逐张走过每一张（在 FGS 下边算边传），
+            // 所以只记下 getVersion，把工作交给快路径。
+            withContext(io) { media.volumeVersions() }.forEach { (volume, version) ->
+                val prev = store.volumeState(volume)
+                store.saveVolumeState(VolumeState(volume, prev?.fastPathGeneration ?: 0L, version))
+            }
+            log.log("slow path: fresh start (empty order table, G = 0), deferring to the fast path")
+            bump()
+            return
+        }
         val stats = ApplyStats()
         val present = withContext(io) { reconciler.collectPresent() }
         reconciler.applyPresent(present, stats)

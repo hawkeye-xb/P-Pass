@@ -12,7 +12,7 @@
 //
 // #417 在这里另挂两个进程级触发：
 // - 网络变化回调（ConnectivityManager）：立刻探测一次，并让 iroh `Endpoint::network_change()` 重探路径。
-// - App 进入前台（任一 Activity resumed）：清 FGS 受阻事实（前台重置 dataSync 额度，#411），跑慢路径 + 循环。
+// - App 进入前台（第一个 Activity started）：清 FGS 受阻事实（前台重置 dataSync 额度，#411），跑慢路径 + 循环。
 package com.hawkeyexb.ppass
 
 import android.app.Activity
@@ -77,21 +77,28 @@ class PPassApplication : Application() {
         onFlowNetworkChanged(this)
     }
 
-    /** 第一个 Activity resumed = App 进入前台。 */
+    /**
+     * 第一个 Activity started = App 进入前台。按 started/stopped 计数而不是 resumed/paused：
+     * 权限弹窗、电池白名单设置页、旋转屏幕都会 pause/resume，不该每次都跑一遍带慢路径的前台触发。
+     */
     private inner class ForegroundWatcher : ActivityLifecycleCallbacks {
-        private var resumed = 0
+        private var started = 0
+        private var recreating = false
 
-        override fun onActivityResumed(activity: Activity) {
-            if (resumed++ == 0) onFlowAppForeground(this@PPassApplication)
+        override fun onActivityStarted(activity: Activity) {
+            if (started++ == 0 && !recreating) onFlowAppForeground(this@PPassApplication)
+            recreating = false
         }
 
-        override fun onActivityPaused(activity: Activity) {
-            resumed = (resumed - 1).coerceAtLeast(0)
+        override fun onActivityStopped(activity: Activity) {
+            started = (started - 1).coerceAtLeast(0)
+            // 旋转屏幕：stop 之后马上会有同一 Activity 的 start，那不是「进入前台」。
+            if (activity.isChangingConfigurations) recreating = true
         }
 
         override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-        override fun onActivityStarted(activity: Activity) = Unit
-        override fun onActivityStopped(activity: Activity) = Unit
+        override fun onActivityResumed(activity: Activity) = Unit
+        override fun onActivityPaused(activity: Activity) = Unit
         override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
         override fun onActivityDestroyed(activity: Activity) = Unit
     }

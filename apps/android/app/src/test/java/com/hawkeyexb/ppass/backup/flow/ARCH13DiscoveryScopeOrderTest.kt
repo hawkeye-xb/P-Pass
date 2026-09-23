@@ -107,6 +107,24 @@ class ARCH13DiscoveryScopeOrderTest {
         rig.close()
     }
 
+    // 首次运行（order 表空、getVersion 从没记过）：不在 FGS 之外把整个相册先算一遍 hash，
+    // 而是交给快路径按 generation 逐张「算 hash → 建 order → 传」。
+    // 反证：删掉 runLocalSlowPath 开头的空表短路 → 申请 FGS 之前已算过 5 次 hash，红。
+    @Test
+    fun `first run hashes nothing before the foreground service and sends in generation order`() = runTest {
+        val rig = Rig(this, reconciled = false)
+        var hashedBeforeAcquire = -1
+        val realForeground = rig.foreground
+        (1L..5L).forEach { rig.photo(6 - it, generation = it) }
+        rig.delivery.onStart = { if (hashedBeforeAcquire < 0) hashedBeforeAcquire = rig.media.hashed.size - 1 }
+        rig.trigger(TriggerReason.PROCESS_START)
+        assertEquals(listOf(5L, 4L, 3L, 2L, 1L), rig.delivery.deliveredMediaIds)
+        assertEquals("only the first photo was hashed before sending started", 0, hashedBeforeAcquire)
+        assertEquals(1, realForeground.acquires)
+        assertEquals("v1", rig.store.volumeState(LEGACY_VOLUME)!!.mediaStoreVersion)
+        rig.close()
+    }
+
     // ---------------------------------------------------------------- X 组
 
     // X-01 / #417 重点：「取消剩余 N 张」——正在传的那张停下并通知桌面丢掉部分数据；剩下的（含 FAILED）
