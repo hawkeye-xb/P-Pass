@@ -12,6 +12,7 @@ import com.hawkeyexb.ppass.backup.blake3Hex
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairOutcome
+import com.hawkeyexb.ppass.transport.addrOf
 import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.transport.parsePairingQr
 import java.io.File

@@ -50,6 +50,10 @@ android {
 
     sourceSets {
         getByName("main").jniLibs.srcDir(irohBlobsJniLibs)
+        // #420: JVM 单测与设备测试共用的测试辅助（例如 addrOf）。只放两边都要的，
+        // 生产代码看不到这里。
+        getByName("test").java.srcDir("src/sharedTest/java")
+        getByName("androidTest").java.srcDir("src/sharedTest/java")
     }
 
     buildFeatures {

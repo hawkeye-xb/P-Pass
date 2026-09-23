@@ -1,4 +1,5 @@
 // E2E-02: 从配对码重建可连接地址的**唯一一份**测试辅助。
+// #420: 放在 src/sharedTest，JVM 单测与 androidTest 两个源集共用（之前只在 src/test，设备测试编不过）。
 //
 // H-10b（2026-08-08）把 `&a=`（完整 PeerAddr，100–180 字符 base64，太密扫
 // 不动）从配对码里去掉了，新码只带 relay URL（`r=`），手机端从 node+relay
