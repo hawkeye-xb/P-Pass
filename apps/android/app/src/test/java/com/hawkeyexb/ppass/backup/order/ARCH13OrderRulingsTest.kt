@@ -140,7 +140,7 @@ class ARCH13OrderRulingsTest {
     }
 
     // #415 裁决 5：CANCELLED_BY_SCOPE 的照片所在相册重新纳入范围 → 重新变为可传。
-    // 反证：OrderState.isUserDecided 重新包含 CANCELLED_BY_SCOPE / classify 去掉 Readmit → 状态不变，红。
+    // 反证：同 ruling 5（classify 的同版本短路提到状态检查之前）→ 状态不变，红。
     @Test
     fun `a CANCELLED_BY_SCOPE photo whose album comes back is transferable again`() {
         val p = FakePhoto(1, 100, 10, "album-back", generation = 1)
@@ -153,7 +153,7 @@ class ARCH13OrderRulingsTest {
     }
 
     // 裁决 7：G 按卷分开存——推进一个卷的 G 不影响另一个卷。
-    // 反证：GenerationAdvance 忽略 volumeName（写同一个键）→ 第二个卷的 G 被抬高，红。
+    // （存储层的键；按卷查询、按卷推进由循环的快路径测试 D 组覆盖。）
     @Test
     fun `ruling 7 - fast path cursor G is kept per volume`() {
         store.advanceGeneration(GenerationAdvance("external_primary", 500))
