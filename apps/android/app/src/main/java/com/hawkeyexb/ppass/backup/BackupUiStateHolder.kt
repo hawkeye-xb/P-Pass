@@ -1,4 +1,7 @@
-// REBUILD-04: Home status/actions are projected from the durable Flow ledger.
+// REBUILD-04 → ARCH-13 (#417): Home status/actions are projected from the order table + loop status.
+//
+// #417 只做「能编译、能运行」的最小改动：公开成员（state / triplet / 各提示 / 命令）一个不少，
+// 背后换成 [FlowProjection]。UI 的行为改动（取消剩余 N 张的文案、恢复入口去留、等待原因的人话）属于 #418。
 package com.hawkeyexb.ppass.backup
 
 import android.content.ContentResolver
@@ -9,35 +12,28 @@ import android.os.Looper
 import android.provider.MediaStore
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
-import com.hawkeyexb.ppass.backup.flow.AcknowledgeableNotice
-import com.hawkeyexb.ppass.backup.flow.DiscoveryLedgerSnapshot
+import com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice
 import com.hawkeyexb.ppass.backup.flow.FlowCommand
 import com.hawkeyexb.ppass.backup.flow.FlowDeliveryPairingLoss
-import com.hawkeyexb.ppass.backup.flow.FlowUiState
+import com.hawkeyexb.ppass.backup.flow.FlowProjection
+import com.hawkeyexb.ppass.backup.flow.MissingSourceNotice
 import com.hawkeyexb.ppass.backup.flow.PairingEpoch
 import com.hawkeyexb.ppass.backup.flow.RoundProgress
-import com.hawkeyexb.ppass.backup.flow.TransferProtectionStore
-import com.hawkeyexb.ppass.backup.flow.acknowledgeFlowNotice
-import com.hawkeyexb.ppass.backup.flow.advanceRoundProgress
+import com.hawkeyexb.ppass.backup.flow.TriggerReason
+import com.hawkeyexb.ppass.backup.flow.acknowledgeFlowMissingSource
 import com.hawkeyexb.ppass.backup.flow.backupUiStateOf
-import com.hawkeyexb.ppass.backup.flow.cancelCurrentFlowRound
+import com.hawkeyexb.ppass.backup.flow.cancelRemainingFlow
 import com.hawkeyexb.ppass.backup.flow.continueFlow
-import com.hawkeyexb.ppass.backup.flow.flowAcknowledgedMissingSourceCount
-import com.hawkeyexb.ppass.backup.flow.flowAggregateOf
-import com.hawkeyexb.ppass.backup.flow.flowCancelledRoundNotice
+import com.hawkeyexb.ppass.backup.flow.fgsBlockNoticeRes
 import com.hawkeyexb.ppass.backup.flow.flowCommandOf
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
-import com.hawkeyexb.ppass.backup.flow.flowIsAllDone
-import com.hawkeyexb.ppass.backup.flow.flowLedgerSnapshot
 import com.hawkeyexb.ppass.backup.flow.flowMissingSourceNotice
-import com.hawkeyexb.ppass.backup.flow.flowReuploadNoticeCount
-import com.hawkeyexb.ppass.backup.flow.flowUiStateOf
-import com.hawkeyexb.ppass.backup.flow.observeFlowLedger
+import com.hawkeyexb.ppass.backup.flow.flowProjection
 import com.hawkeyexb.ppass.backup.flow.pauseFlow
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
-import com.hawkeyexb.ppass.backup.flow.restoreAllCancelledFlowRounds
 import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
-import com.hawkeyexb.ppass.backup.flow.transferProtectionNoticeRes
+import com.hawkeyexb.ppass.backup.flow.roundProgressOf
+import com.hawkeyexb.ppass.backup.flow.runtimeFor
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
@@ -47,11 +43,15 @@ import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.BackupUiState
-import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -65,226 +65,139 @@ class BackupUiStateHolder(
     private val scopeStore: BackupScopeStore = BackupScopeStore(context),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val tripletScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val _state = mutableStateOf<BackupUiState>(BackupUiState.Idle)
     val state: State<BackupUiState> get() = _state
 
-    // UI-09: K/M/last-success now derive from the durable Flow ledger. The
-    // LEGACY ConfirmedStore had no production writer after REBUILD-00 froze
-    // the batch pipeline — reading it froze the home screen while transfers
-    // actually succeeded (verifier observation, 2026-09-06).
     private val _triplet = mutableStateOf<BackupTriplet?>(null)
     val triplet: State<BackupTriplet?> get() = _triplet
+
+    /** #417：桌面缺失的照片现在自动补传、不打扰（#413），这条提示没有数据源了——恒 0，去留由 #418 定。 */
     private val _reuploadNoticeCount = mutableStateOf(0)
     val reuploadNoticeCount: State<Int> get() = _reuploadNoticeCount
-    private val _missingSourceNotice = mutableStateOf<com.hawkeyexb.ppass.backup.flow.MissingSourceNotice?>(null)
-    val missingSourceNotice: State<com.hawkeyexb.ppass.backup.flow.MissingSourceNotice?> get() = _missingSourceNotice
-    // MOB-100 关键判断 3：横幅被确认收起之后，那批事实不能就此失踪——
-    // 计数搬进备份卡的一行（MOB-59 当年把取消轮次的入口从警告条搬成
-    // CellRow 是同一处置）。0 = 没有已确认的，那一行不渲染。
+    private val _missingSourceNotice = mutableStateOf<MissingSourceNotice?>(null)
+    val missingSourceNotice: State<MissingSourceNotice?> get() = _missingSourceNotice
     private val _acknowledgedMissingSourceCount = mutableStateOf(0)
     val acknowledgedMissingSourceCount: State<Int> get() = _acknowledgedMissingSourceCount
     private val pairingLostState = HolderPairingLostState()
     val pairingLost: State<Boolean> get() = pairingLostState.value
-    // UI-10 item 1: guards the silent epoch-repair attempt so it fires at
-    // most once per held instance — a repeated blank epoch after a failed
-    // repair means the pairing is genuinely lost, not a transient race.
     private var epochRepairAttempted = false
-    // 2026-09-07 真机反馈：暂停/取消/取消当前轮连点几下会各自往协程里排
-    // 一个命令，但按钮从点击到下一次 500ms tick 刷新之间没有任何禁用/
-    // 处理中反馈——用户看不出点击生效了没有，于是接着点，命令排队执行，
-    // 表现为「按钮卡死」。这里加一个「命令处理中」标记，UI 据此禁用按钮
-    // 并显示处理中文案，同一命令处理完才能再点下一次。
+
+    // 2026-09-07 真机反馈：命令处理中禁用按钮，同一命令处理完才能再点下一次。
     private val _commandPending = mutableStateOf(false)
     val commandPending: State<Boolean> get() = _commandPending
-    // MOB-59: X-05's restore entry — a permanent notice, not a dismissible
-    // one (no Discard: real-device feedback was explicit that a discard
-    // button with no way back is a dead end). Null = nothing cancelled and
-    // still awaiting restore. Counts across ALL cancelled rounds, not just
-    // the latest — repeated cancels must not orphan earlier batches.
-    private val _cancelledRoundNotice = mutableStateOf<com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice?>(null)
-    val cancelledRoundNotice: State<com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice?> get() = _cancelledRoundNotice
-    // MOB-59: this round's own progress (0-based), separate from the
-    // lifetime M/N triplet above the bar — real-device feedback: adding more
-    // albums mid-round made the bar jump straight to "15/15"-ish territory
-    // instead of showing the newly added work starting at 0. null previous
-    // pending = round hasn't been observed yet (fresh holder instance).
-    private var previousPending: Long? = null
-    private var previousRoundDone: Long = 0L
+
+    /** #415 裁决 4：SKIPPED_BY_USER 这次不提供恢复入口——恒 null（HomeScreen 的入口因此不渲染）。 */
+    private val _cancelledRoundNotice = mutableStateOf<CancelledRoundNotice?>(null)
+    val cancelledRoundNotice: State<CancelledRoundNotice?> get() = _cancelledRoundNotice
+
+    /** #413：「已确认的 order 数 / 范围内的照片总数」。 */
     private val _roundProgress = mutableStateOf<RoundProgress?>(null)
     val roundProgress: State<RoundProgress?> get() = _roundProgress
-    // UI-19 规则 P：为什么暂停。#379 的 TransferProtectionStore 是唯一数据源，
-    // 这里只做「读出来交给 UI」——null = 三态里的「未知」，UI 侧一个字不渲染。
-    //
-    // 为什么在这一层读、而不是让 HomeScreen 自己读：composable 里读盘既是
-    // 主线程 IO，又在本仓（无 Robolectric）根本测不了；而这个 tick 本来就在
-    // 读账本 JSON，多一次小文件读不引入新的时机。
-    //
-    // ⚠️ 这个字段**不保证新鲜**（步骤 1 的报告登记：被拦下的 START_REQUESTED
-    // 之后若 onStartCommand 始终没跑，盘上留的是上一次的结论）。所以它只被
-    // 当作「暂停的理由」候选，出场与否由账本独立判定的暂停态决定
-    // （见 ui/visiblePauseReasonRes），绝不用它去推断「有没有在传」。
+
+    /** FGS 受阻的人话（额度用完 / 被拒）。null = 没有可解释的。 */
     private val _pauseReason = mutableStateOf<Int?>(null)
     val pauseReason: State<Int?> get() = _pauseReason
 
-    // MOB-88: 订阅取代轮询。
-    //
-    // 改造前这里是两个死循环：`delay(500)` 每半秒重读整份账本 JSON 重算
-    // 投影，`delay(2_000)` 每两秒查一次 MediaStore 总数。两个被查的东西
-    // 都是能推的——账本有提交回调（单写者每次 reduce 完推一次），
-    // MediaStore 有 ContentObserver。轮询一个能通知你的东西是纯浪费，而且
-    // 「点击到下一次 tick 之间 UI 没反应」本身就制造过 bug（见
-    // commandPending 上面那段 2026-09-07 的真机反馈）。
-    private val unsubscribeLedger: () -> Unit
+    /** #418 交接：完整投影（已确认数、范围内总数、当前进度、等待原因、暂停、FAILED 数）。 */
+    private val _projection = mutableStateOf<FlowProjection?>(null)
+    val projection: State<FlowProjection?> get() = _projection
+
     private val mediaObserver: ContentObserver
-    private val tripletRefreshPending = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val refreshPending = AtomicBoolean(false)
+    @Volatile private var inScopeTotal: Long? = null
 
     init {
-        // 首帧：订阅之前先算一次当前状态，否则要等到第一次状态变更才有内容。
         scope.launch {
             repairEpochIfNeeded()
-            refreshFlowState()
+            refresh(recount = true)
         }
-        // 账本每次提交推一次。回调跑在写者线程上，所以这里只做转发，
-        // 真正的投影计算切回 holder 自己的 scope。
-        unsubscribeLedger = observeFlowLedger { snapshot ->
-            scope.launch {
-                repairEpochIfNeeded()
-                refreshFlowState(snapshot)
-            }
-            // 确认数变化会改三元组里的 M，跟着推一次。
-            scheduleTripletRefresh()
-        }
-        // N 是 MediaStore 总数，由 ContentObserver 推——相册增删才需要重算。
+        // 订阅取代轮询（MOB-88 的思路保留）：order 写入（revision）或循环运行态变化时重算投影。
+        scope.launch { subscribe() }
         mediaObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
-            override fun onChange(selfChange: Boolean) = scheduleTripletRefresh()
+            override fun onChange(selfChange: Boolean) = scheduleRefresh(recount = true)
         }
         runCatching {
-            context.contentResolver.registerContentObserver(
-                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL),
-                true,
-                mediaObserver,
-            )
+            context.contentResolver.registerContentObserver(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL), true, mediaObserver)
         }
-        scheduleTripletRefresh()
     }
 
-    /**
-     * MediaStore 的变更通知会成串到达（一次相册写入可能推好几条），三元组
-     * 的 N 又是一次全量 count，所以这里做合并：已经有一次待跑就不再排队。
-     */
-    private fun scheduleTripletRefresh() {
-        if (!tripletRefreshPending.compareAndSet(false, true)) return
-        tripletScope.launch {
+    @OptIn(FlowPreview::class)
+    private suspend fun subscribe() {
+        var runtime = withContext(Dispatchers.IO) { runtimeFor(context) }
+        while (runtime == null) {
+            delay(RUNTIME_RETRY_MS)
+            runtime = withContext(Dispatchers.IO) { runtimeFor(context) }
+        }
+        combine(runtime.engine.revision, runtime.engine.status) { _, _ -> Unit }
+            .debounce(UI_DEBOUNCE_MS)
+            .collect { refresh(recount = false) }
+    }
+
+    private fun scheduleRefresh(recount: Boolean) {
+        if (!refreshPending.compareAndSet(false, true)) return
+        scope.launch {
             try {
-                withContext(Dispatchers.IO) { refreshTriplet() }
+                refresh(recount)
             } finally {
-                tripletRefreshPending.set(false)
+                refreshPending.set(false)
             }
         }
     }
 
-    /** Activity 销毁时解订阅——监听器活在进程级总线上，不解会泄漏。 */
     fun dispose() {
-        unsubscribeLedger()
         runCatching { context.contentResolver.unregisterContentObserver(mediaObserver) }
         scope.cancel()
-        tripletScope.cancel()
     }
 
-    /**
-     * MOB-100（D3）：真正的确认，取代此前的 `fun acknowledgeReuploadNotice() = Unit`。
-     *
-     * 空函数配上「知道了」按钮是 R-CLEARABLE 最坏的一种违反：按钮在、
-     * 点了不算数（计数每 tick 由 [flowReuploadNoticeCount] 从账本重算，
-     * 下一 tick 原样回来）。语义与 B4 的水位线一致——**不删账本条目**，
-     * 只记「用户已确认过截至此刻的这些条」。
-     */
-    fun acknowledgeReuploadNotice() {
-        if (_reuploadNoticeCount.value <= 0) return
-        acknowledge(AcknowledgeableNotice.REUPLOAD)
-    }
+    /** #417：桌面缺失自动补传、没有提示了——保留入口给 #418，no-op。 */
+    fun acknowledgeReuploadNotice() = Unit
 
-    /** MOB-100（B4）：「已跳过 N 张…不会再重传」的确认路径。 */
+    /** MOB-100（B4）：「已跳过 N 张…不会再重传」的确认路径（水位 = 确认时刻）。 */
     fun acknowledgeMissingSourceNotice() {
         if (_missingSourceNotice.value == null) return
-        acknowledge(AcknowledgeableNotice.SOURCE_MISSING)
+        command { acknowledgeFlowMissingSource(context) }
     }
 
-    private fun acknowledge(notice: AcknowledgeableNotice) {
+    private fun command(block: suspend () -> Unit) {
         if (_commandPending.value) return
         _commandPending.value = true
         scope.launch {
             try {
-                withContext(Dispatchers.IO) { acknowledgeFlowNotice(context, notice) }
-                refreshFlowState()
+                withContext(Dispatchers.IO) { block() }
+                refresh(recount = false)
             } finally {
                 _commandPending.value = false
             }
         }
     }
 
-    /** Pause/Continue/trigger commands operate on the same persisted Flow ledger. */
-    fun backupNow() {
-        if (_commandPending.value) return
-        _commandPending.value = true
-        scope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    // MOB-51: route the click on the same durable facts the button
-                    // label came from — a visible "Pause" always pauses, including
-                    // in the between-files gap where the per-file state is Idle.
-                    when (flowCommandOf(flowLedgerSnapshot(context))) {
-                        FlowCommand.Pause -> pauseFlow(context)
-                        FlowCommand.Continue -> continueFlow(context)
-                        FlowCommand.Retry -> retryFailedFlow(context)
-                        FlowCommand.Wake -> requestFlowWake(context)
-                    }
-                }
-                refreshFlowState()
-            } finally {
-                _commandPending.value = false
-            }
-        }
-    }
-
-    /** Cancel is intentionally offered only from a durable user-paused state. */
-    fun cancelCurrentRound() {
-        if (_commandPending.value) return
-        _commandPending.value = true
-        scope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    if (flowUiStateOf(flowLedgerSnapshot(context)) == FlowUiState.PausedByUser) {
-                        cancelCurrentFlowRound(context)
-                    }
-                }
-                refreshFlowState()
-            } finally {
-                _commandPending.value = false
-            }
+    /** Pause/Continue/Retry/Wake，按与按钮文案同一个投影路由（MOB-51）。 */
+    fun backupNow() = command {
+        val p = _projection.value ?: currentProjection(recount = false)
+        when (p?.let(::flowCommandOf) ?: FlowCommand.Wake) {
+            FlowCommand.Pause -> pauseFlow(context)
+            FlowCommand.Continue -> continueFlow(context)
+            FlowCommand.Retry -> retryFailedFlow(context)
+            FlowCommand.Wake -> requestFlowWake(context, TriggerReason.MANUAL)
         }
     }
 
     /**
-     * UI-10 item 1: `AndroidFlowRuntime.runtimeFor()` needs a non-blank
-     * `pairingEpoch` to do anything — a blank one (legacy pairing, or a
-     * pre-epoch app version) otherwise makes the home screen render Idle
-     * forever with dead buttons. One silent `hello` attempt tries to recover
-     * the current epoch from Desktop before ever showing the pairing-lost
-     * red card; a real revoke still surfaces normally once the repair fails.
+     * 「取消剩余 N 张」。#415 裁决 4：不需要先暂停。UI 的确认文案（带 N）属于 #418；
+     * 这里保留原入口名，行为已是新语义。
      */
+    fun cancelCurrentRound() = command { cancelRemainingFlow(context) }
+
+    /** #415 裁决 4：没有恢复入口。保留方法签名给 HomeScreen，no-op。 */
+    fun restoreCancelledRounds() = Unit
+
     private suspend fun repairEpochIfNeeded() {
         if (epochRepairAttempted || !needsEpochRepair(pairing.pairingEpoch)) return
         epochRepairAttempted = true
         val outcome = runCatching {
             withContext(Dispatchers.IO) {
                 withTimeout(5_000) {
-                    val response = client.call(
-                        parsePeerAddrToken(pairing.daemonAddrToken),
-                        Methods.HELLO,
-                        buildJsonObject {},
-                    )
+                    val response = client.call(parsePeerAddrToken(pairing.daemonAddrToken), Methods.HELLO, buildJsonObject {})
                     check(response.ok) { "hello: ${response.error?.msgKey}" }
                     ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
                 }
@@ -299,75 +212,41 @@ class BackupUiStateHolder(
         }
     }
 
-    private fun refreshFlowState(snapshot: DiscoveryLedgerSnapshot = flowLedgerSnapshot(context)) {
-        pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
-        // UI-09/MOB-51: the home screen state is the single shared production
-        // mapping from the durable snapshot (backupUiStateOf). The aggregate
-        // (K/M/last-success) is derived from the same facts by the slower
-        // refreshTriplet loop.
-        _state.value = backupUiStateOf(snapshot)
-        // UI-10 item 2: ledger-derived reupload count replaces the dead
-        // LEGACY ReuploadQueue read (see flowReuploadNoticeCount doc).
-        _reuploadNoticeCount.value = flowReuploadNoticeCount(snapshot)
-        _missingSourceNotice.value = flowMissingSourceNotice(snapshot)
-        // MOB-100：已确认过的那批的去处，与上面那条横幅读同一 tick。
-        _acknowledgedMissingSourceCount.value = flowAcknowledgedMissingSourceCount(snapshot)
-        // MOB-59: X-05's cancelled-round notice, read from the same tick.
-        _cancelledRoundNotice.value = flowCancelledRoundNotice(snapshot)
-        // MOB-59: this round's own progress, not the lifetime M/N triplet.
-        val pending = flowAggregateOf(snapshot).pending
-        val progress = advanceRoundProgress(previousPending, previousRoundDone, pending)
-        previousPending = pending
-        previousRoundDone = progress.done
-        _roundProgress.value = progress
-        // UI-19：与账本同一 tick 读出「为什么暂停」，见 [pauseReason]。
-        _pauseReason.value = transferProtectionNoticeRes(
-            TransferProtectionStore(context.filesDir).load(),
-        )
+    private fun currentProjection(recount: Boolean): FlowProjection? {
+        val bucketIds = scopeStore.selectedBucketIds()
+        if (recount || inScopeTotal == null) {
+            inScopeTotal = try {
+                bucketIds?.let { MediaScanner(context.contentResolver).countAll(it) }
+            } catch (_: Throwable) {
+                null
+            }
+        }
+        return flowProjection(context, bucketIds, inScopeTotal)
     }
 
-    /** MOB-59: re-admit every cancelled round's items as QUEUED and wake the consumer. */
-    fun restoreCancelledRounds() {
-        if (_cancelledRoundNotice.value == null) return
-        if (_commandPending.value) return
-        _commandPending.value = true
-        scope.launch {
-            try {
-                withContext(Dispatchers.IO) { restoreAllCancelledFlowRounds(context) }
-                refreshFlowState()
-            } finally {
-                _commandPending.value = false
+    private suspend fun refresh(recount: Boolean) {
+        pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
+        val bucketIds = withContext(Dispatchers.IO) { scopeStore.selectedBucketIds() }
+        val p = withContext(Dispatchers.IO) { runCatching { currentProjection(recount) }.getOrNull() } ?: return
+        _projection.value = p
+        _state.value = backupUiStateOf(p)
+        _missingSourceNotice.value = flowMissingSourceNotice(p)
+        _acknowledgedMissingSourceCount.value = p.missingSourceAcknowledged.toInt()
+        _roundProgress.value = roundProgressOf(p)
+        _pauseReason.value = fgsBlockNoticeRes(p.fgsBlock)
+        // UI-09 / UI-16：N 是范围内 MediaStore 实时计数，M 是同范围的已确认 order 数。
+        _triplet.value = if (bucketIds == null) {
+            null
+        } else {
+            p.inScopeTotal?.let { n ->
+                tripletOf(n, p.confirmed, p.lastSuccessAt, hasFailedNeedsUser = p.failed > 0L, pausedByUser = p.paused)
             }
         }
     }
 
-
-    /**
-     * UI-09: the displayed triplet. N stays a live MediaStore count (the
-     * selected-scope total); M and last-success come from the durable Flow
-     * ledger. Runs on the IO dispatcher; the media query keeps the same
-     * Throwable guard as before (a scoped provider failure must hide the
-     * triplet, never crash — see MediaQueryFailureTest).
-     */
-    private fun refreshTriplet() {
-        _triplet.value = try {
-            val bucketIds = scopeStore.selectedBucketIds() ?: return
-            // UI-16: M 与 N 必须同作用域。N 数的是**选中相册**的实时文件，
-            // 所以 M 也只能数选中相册的已确认项——过滤之前分子是账本全量，
-            // 两个集合相除本就不成立（见 flowAggregateOf 的口径说明）。
-            val aggregate = flowAggregateOf(flowLedgerSnapshot(context), bucketIds)
-            val n = MediaScanner(context.contentResolver).countAll(bucketIds)
-            tripletOf(
-                n,
-                aggregate.confirmed,
-                aggregate.lastSuccessAt,
-                // 规则 G 的 G4 / G5：与数字同源同一 tick，不另开数据通道。
-                hasFailedNeedsUser = aggregate.failedNeedsUser > 0L,
-                pausedByUser = aggregate.pausedByUser,
-            )
-        } catch (_: Throwable) {
-            null
-        }
+    private companion object {
+        const val RUNTIME_RETRY_MS = 2_000L
+        const val UI_DEBOUNCE_MS = 150L
     }
 }
 

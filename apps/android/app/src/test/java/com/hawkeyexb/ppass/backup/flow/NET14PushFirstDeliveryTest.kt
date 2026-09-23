@@ -46,7 +46,7 @@ class NET14PushFirstDeliveryTest {
     @Test
     fun in_progress_json_decodes_connected_and_idle() {
         assertEquals(
-            TransferStatus.InProgress(connected = true, idleForMs = 1500L),
+            TransferStatus.InProgress(connected = true, idleForMs = 1500L, bytesSent = null, byteIdleForMs = null),
             parseTransferStatus("""{"state":"in_progress","connected":true,"idle_for_ms":1500}"""),
         )
     }
@@ -134,134 +134,7 @@ class NET14PushFirstDeliveryTest {
         assertNull(parseFlowPushOutcome("flow.delivered", data, tuple.toRef()))
     }
 
-    // ── flowWaitStep ─────────────────────────────────────────────
-
-    @Test
-    fun a_delivered_push_resolves_immediately_regardless_of_local_status() {
-        val receipt = FlowCompletionReceipt(queueSequence = 7L)
-        val step = flowWaitStep(
-            pushed = FlowPushOutcome.Delivered(receipt),
-            localStatus = TransferStatus.InProgress(connected = false, idleForMs = 99_999L),
-            idleStallThresholdMs = 30_000L,
-            attemptElapsedMs = 0L,
-        )
-        assertEquals(
-            FlowWaitStep.Resolved(FlowStatusPollOutcome.Completed(receipt)),
-            step,
-        )
-    }
-
-    @Test
-    fun a_failed_push_throws_a_pushed_failure_exception() {
-        try {
-            flowWaitStep(
-                pushed = FlowPushOutcome.Failed("fetch_failed"),
-                localStatus = TransferStatus.InProgress(connected = true, idleForMs = 0L),
-                idleStallThresholdMs = 30_000L,
-                attemptElapsedMs = 0L,
-            )
-            throw AssertionError("expected FlowPushedFailureException")
-        } catch (failure: FlowPushedFailureException) {
-            assertEquals("fetch_failed", failure.code)
-        }
-    }
-
-    @Test
-    fun connected_local_status_keeps_waiting_for_push_no_matter_how_long_idle_is_zero() {
-        // The core NET-14 property: an actively-connected transfer is NEVER
-        // treated as stalled, regardless of a fixed clock — only "nobody
-        // connected" plus an idle threshold can trigger the fallback.
-        val step = flowWaitStep(
-            pushed = null,
-            localStatus = TransferStatus.InProgress(connected = true, idleForMs = 999_999L),
-            idleStallThresholdMs = 30_000L,
-            attemptElapsedMs = 999_999L,
-        )
-        assertEquals(FlowWaitStep.KeepWaitingForPush, step)
-    }
-
-    @Test
-    fun disconnected_and_under_the_stall_threshold_keeps_waiting() {
-        val step = flowWaitStep(
-            pushed = null,
-            localStatus = TransferStatus.InProgress(connected = false, idleForMs = 10_000L),
-            idleStallThresholdMs = 30_000L,
-            attemptElapsedMs = 10_000L,
-        )
-        assertEquals(FlowWaitStep.KeepWaitingForPush, step)
-    }
-
-    @Test
-    fun disconnected_and_past_the_stall_threshold_falls_back_to_status_check() {
-        val step = flowWaitStep(
-            pushed = null,
-            localStatus = TransferStatus.InProgress(connected = false, idleForMs = 30_001L),
-            idleStallThresholdMs = 30_000L,
-            attemptElapsedMs = 30_001L,
-        )
-        assertEquals(FlowWaitStep.CheckStatusNow, step)
-    }
-
-    @Test
-    fun disconnected_with_no_activity_ever_but_still_under_the_stall_threshold_keeps_waiting() {
-        // A brand-new transfer starts exactly here: connected=false,
-        // idleForMs=null (no iroh-blobs event has fired yet because the
-        // daemon has not connected yet). Must NOT be treated as stalled
-        // just because idleForMs is null — only the attempt's own elapsed
-        // time may promote this to a status check.
-        val step = flowWaitStep(
-            pushed = null,
-            localStatus = TransferStatus.InProgress(connected = false, idleForMs = null),
-            idleStallThresholdMs = 30_000L,
-            attemptElapsedMs = 5_000L,
-        )
-        assertEquals(FlowWaitStep.KeepWaitingForPush, step)
-    }
-
-    @Test
-    fun disconnected_with_no_activity_ever_past_the_stall_threshold_falls_back_to_status_check() {
-        // NET: a grant the daemon completed without ever touching the data
-        // plane (content-already-exists dedup, or a rebind of an
-        // already-completed tuple) never fires a single iroh-blobs event on
-        // this phone's sender side — idleForMs stays null forever, not just
-        // at the start. Without this branch the attempt hangs forever
-        // whenever the flow.delivered push is also missed (real device,
-        // 2026-09-16).
-        val step = flowWaitStep(
-            pushed = null,
-            localStatus = TransferStatus.InProgress(connected = false, idleForMs = null),
-            idleStallThresholdMs = 30_000L,
-            attemptElapsedMs = 30_001L,
-        )
-        assertEquals(FlowWaitStep.CheckStatusNow, step)
-    }
-
-    @Test
-    fun no_lease_locally_falls_back_to_status_check() {
-        // No local registration at all is itself an inconsistency this
-        // attempt should resolve via the daemon, not sit on indefinitely.
-        val step = flowWaitStep(
-            pushed = null,
-            localStatus = TransferStatus.NoLease,
-            idleStallThresholdMs = 30_000L,
-            attemptElapsedMs = 0L,
-        )
-        assertEquals(FlowWaitStep.CheckStatusNow, step)
-    }
-
-    @Test
-    fun local_completed_status_falls_back_to_status_check_to_confirm_with_a_durable_receipt() {
-        // The phone's own sender-side "completed" event is not itself a
-        // receipt — it must still be confirmed against the daemon's
-        // durable state before this attempt accepts it.
-        val step = flowWaitStep(
-            pushed = null,
-            localStatus = TransferStatus.Completed("d".repeat(64)),
-            idleStallThresholdMs = 30_000L,
-            attemptElapsedMs = 0L,
-        )
-        assertEquals(FlowWaitStep.CheckStatusNow, step)
-    }
+    // flowWaitStep 的判据（#410 新参数：15s / 3min 字节停滞）由 ARCH13DeliveryPortTest 覆盖。
 
     private data class FlowTupleRefFixture(val queueSequence: Long, val pairingEpoch: String, val leaseToken: String) {
         fun toRef() = com.hawkeyexb.ppass.proto.FlowTupleRef(

@@ -78,28 +78,4 @@ class MOB100SkippedCopyDistinctTest {
 
     @Test
     fun en_the_two_skipped_notices_do_not_share_a_leading_word() = assertDistinct("values")
-
-    // 并存不做互斥的那一半：两条判据落在互斥的 `deliveryState` 上，所以
-    // 同一张照片不会被两边同时数到——这条在
-    // MOB100NoticeClearPathTest 的清单里也有对照物，这里只钉「不许把它们
-    // 改成互斥」这条产品决定的代码锚点。
-    @Test
-    fun the_two_counts_remain_two_independent_predicates() {
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "apps/android").isDirectory) {
-            dir = dir.parentFile ?: error("apps/android not found")
-        }
-        val projection = File(
-            dir,
-            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowUiProjection.kt",
-        ).readText()
-        assertTrue(
-            "flowMissingSourceNotice 必须继续按 SKIPPED_SOURCE_MISSING 独立判定",
-            projection.contains("DeliveryState.SKIPPED_SOURCE_MISSING"),
-        )
-        assertTrue(
-            "flowCancelledRoundNotice 必须继续按 CANCELLED_BY_USER_ROUND 独立判定",
-            projection.contains("DeliveryState.CANCELLED_BY_USER_ROUND &&"),
-        )
-    }
 }

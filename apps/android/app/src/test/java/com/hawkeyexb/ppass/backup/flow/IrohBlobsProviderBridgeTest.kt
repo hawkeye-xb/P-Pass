@@ -5,75 +5,59 @@ import org.junit.Test
 
 class IrohBlobsProviderBridgeTest {
     @Test
-    fun `register exposes only the item in the current epoch and active lease`() {
+    fun `register imports exactly the leased order's source under its declared hash`() {
         val native = RecordingNativeProvider()
-        val bridge = IrohBlobsProviderBridge(native) { sourceRef -> "fd:$sourceRef" }
-        val epoch = PairingEpoch("desktop-b")
-        val lease = FetchLease(queueSequence = 7L, leaseToken = "lease-7")
-        val allowed = item(queueSequence = 7L, epoch = epoch)
+        val bridge = IrohBlobsProviderBridge(native) { uri -> "fd:$uri" }
 
-        bridge.register(allowed, epoch, lease)
+        val ticket = bridge.register(lease(7L), "content://media/7")
 
+        assertEquals("ticket:${hashFor(7L)}", ticket)
         assertEquals(listOf("${hashFor(7L)}:fd:content://media/7"), native.registrations)
-        assertIllegalArgument {
-            bridge.register(item(queueSequence = 8L, epoch = epoch), epoch, lease)
-        }
-        assertIllegalArgument {
-            bridge.register(item(queueSequence = 7L, epoch = PairingEpoch("desktop-old")), epoch, lease)
-        }
-        assertEquals(listOf("${hashFor(7L)}:fd:content://media/7"), native.registrations)
+        assertIllegalArgument { bridge.register(ProviderLease(8L, leaseTokenFor(8L), "not-a-hash"), "content://media/8") }
+        assertEquals(1, native.registrations.size)
     }
 
     @Test
-    fun `pause stops the active native fetch then revokes its provider`() {
+    fun `pause stops the active native fetch then revokes, a stale lease is a no-op`() {
         val native = RecordingNativeProvider()
-        val bridge = IrohBlobsProviderBridge(native) { sourceRef -> "fd:$sourceRef" }
-        val epoch = PairingEpoch("desktop-b")
-        val lease = FetchLease(queueSequence = 7L, leaseToken = "lease-7")
-        bridge.register(item(queueSequence = 7L, epoch = epoch), epoch, lease)
+        val bridge = IrohBlobsProviderBridge(native) { uri -> "fd:$uri" }
+        bridge.register(lease(7L), "content://media/7")
 
-        assertIllegalArgument {
-            bridge.pause(FetchLease(queueSequence = 7L, leaseToken = "stale-lease"))
-        }
+        bridge.pause(ProviderLease(7L, "stale-lease", hashFor(7L)))
         assertEquals(emptyList<String>(), native.events)
-        bridge.pause(lease)
-
+        bridge.pause(lease(7L))
         assertEquals(listOf("stop:7", "revoke:${hashFor(7L)}"), native.events)
+        assertEquals(TransferStatus.NoLease, bridge.transferStatus())
     }
 
     @Test
     fun `releaseRetention drops retention without revoking and verifies the lease`() {
         val native = RecordingNativeProvider()
-        val bridge = IrohBlobsProviderBridge(native) { sourceRef -> "fd:$sourceRef" }
-        val epoch = PairingEpoch("desktop-b")
-        val lease = FetchLease(queueSequence = 7L, leaseToken = "lease-7")
-        bridge.register(item(queueSequence = 7L, epoch = epoch), epoch, lease)
+        val bridge = IrohBlobsProviderBridge(native) { uri -> "fd:$uri" }
+        bridge.register(lease(7L), "content://media/7")
 
-        assertIllegalArgument {
-            bridge.releaseRetention(FetchLease(queueSequence = 7L, leaseToken = "stale-lease"))
-        }
+        assertIllegalArgument { bridge.releaseRetention(ProviderLease(7L, "stale-lease", hashFor(7L))) }
         assertEquals(emptyList<String>(), native.events)
-
-        bridge.releaseRetention(lease)
+        bridge.releaseRetention(lease(7L))
         assertEquals(listOf("release:${hashFor(7L)}"), native.events)
     }
 
     @Test
-    fun `next completed item keeps the native endpoint alive`() {
+    fun `next order keeps the native endpoint alive`() {
         val native = RecordingNativeProvider()
-        val bridge = IrohBlobsProviderBridge(native) { sourceRef -> "fd:$sourceRef" }
-        val epoch = PairingEpoch("desktop-b")
-        bridge.register(item(queueSequence = 7L, epoch = epoch), epoch, FetchLease(7L, "lease-7"))
-        bridge.register(item(queueSequence = 8L, epoch = epoch), epoch, FetchLease(8L, "lease-8"))
+        val bridge = IrohBlobsProviderBridge(native) { uri -> "fd:$uri" }
+        bridge.register(lease(7L), "content://media/7")
+        bridge.register(lease(8L), "content://media/8")
 
         assertEquals(emptyList<String>(), native.events)
-        assertEquals(
-            listOf(
-                "${hashFor(7L)}:fd:content://media/7",
-                "${hashFor(8L)}:fd:content://media/8",
-            ),
-            native.registrations,
-        )
+        assertEquals(listOf("${hashFor(7L)}:fd:content://media/7", "${hashFor(8L)}:fd:content://media/8"), native.registrations)
+    }
+
+    @Test
+    fun `network change is forwarded to the native endpoint`() {
+        val native = RecordingNativeProvider()
+        IrohBlobsProviderBridge(native) { it }.networkChange()
+        assertEquals(listOf("network_change"), native.events)
     }
 
     private inline fun assertIllegalArgument(block: () -> Unit) {
@@ -85,19 +69,9 @@ class IrohBlobsProviderBridgeTest {
         throw AssertionError("expected IllegalArgumentException")
     }
 
-    private fun hashFor(queueSequence: Long) = queueSequence.toString(16).padStart(64, '0')
+    private fun hashFor(orderId: Long) = orderId.toString(16).padStart(64, '0')
 
-    private fun item(queueSequence: Long, epoch: PairingEpoch) = TransferItem(
-        stableId = "media-$queueSequence",
-        sourceRef = "content://media/$queueSequence",
-        sourceVersion = "1",
-        bucketId = 1L,
-        scopeRevision = ScopeRevision(),
-        queueSequence = queueSequence,
-        deliveryState = DeliveryState.QUEUED,
-        contentHash = hashFor(queueSequence),
-        pairingEpoch = epoch,
-    )
+    private fun lease(orderId: Long) = ProviderLease(orderId, leaseTokenFor(orderId), hashFor(orderId))
 
     private class RecordingNativeProvider : NativeIrohBlobsProvider {
         val registrations = mutableListOf<String>()
@@ -121,5 +95,9 @@ class IrohBlobsProviderBridgeTest {
         }
 
         override fun transferStatus(): String = "{\"state\":\"no_lease\"}"
+
+        override fun networkChange() {
+            events += "network_change"
+        }
     }
 }
