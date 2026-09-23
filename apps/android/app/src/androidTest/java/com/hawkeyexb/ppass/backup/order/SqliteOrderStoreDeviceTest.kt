@@ -188,6 +188,12 @@ class SqliteOrderStoreDeviceTest {
         assertEquals("strictly ascending _id", ids.sorted().distinct(), ids)
         assertTrue(all.all { it.bucketId in allBuckets })
 
+        // 无论有没有读媒体权限，都让真实的 selection / sortOrder 在 MediaProvider 上执行一次：
+        // 列名或语法写错会抛异常。bucket -1 不存在，所以结果必为空。
+        val probe = ContentResolverMediaSnapshotSource(context, { setOf(-1L) })
+        assertEquals(emptyList<MediaSnapshot>(), probe.readAll { it.toList() })
+        assertEquals(emptyList<MediaSnapshot>(), probe.readChangedSince(0) { it.toList() })
+
         val none = ContentResolverMediaSnapshotSource(context, { null }).readAll { it.toList() }
         assertEquals(emptyList<MediaSnapshot>(), none)
 
