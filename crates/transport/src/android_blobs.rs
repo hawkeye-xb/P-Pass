@@ -116,6 +116,14 @@ struct ActivityState {
     last_progress_at: Option<Instant>,
     completed_hash: Option<Hash>,
     aborted_hash: Option<Hash>,
+    /// #417 (#410 参数): the furthest `RequestUpdate::Progress.end_offset` seen
+    /// for this lease — i.e. how many file bytes the peer has pulled.
+    bytes_sent: Option<u64>,
+    /// When [`Self::bytes_sent`] last moved FORWARD. Only file-byte progress
+    /// refreshes this; connection-level events (ClientConnected,
+    /// GetRequestReceived, Started) deliberately do not, so a peer that keeps
+    /// a connection open without pulling bytes shows up as a byte stall.
+    last_byte_at: Option<Instant>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -127,6 +135,28 @@ impl TransferActivity {
             .lock()
             .expect("transfer activity lock")
             .last_progress_at = Some(Instant::now());
+    }
+
+    /// #417: record a file-byte progress event. Only a strictly larger
+    /// `end_offset` counts as progress (a repeated or smaller offset — e.g. a
+    /// resumed request re-reporting an earlier range — is not new bytes).
+    fn record_bytes(&self, end_offset: u64) {
+        let mut state = self.0.lock().expect("transfer activity lock");
+        state.last_progress_at = Some(Instant::now());
+        if state.bytes_sent.is_none_or(|sent| end_offset > sent) {
+            state.bytes_sent = Some(end_offset);
+            state.last_byte_at = Some(Instant::now());
+        }
+    }
+
+    /// `(bytes pulled so far, time since that number last grew)`; `None`
+    /// before the first byte-progress event of this lease.
+    fn byte_progress(&self) -> Option<(u64, Duration)> {
+        let state = self.0.lock().expect("transfer activity lock");
+        match (state.bytes_sent, state.last_byte_at) {
+            (Some(sent), Some(at)) => Some((sent, at.elapsed())),
+            _ => None,
+        }
     }
 
     fn mark_completed(&self, hash: Hash) {
@@ -191,6 +221,12 @@ pub enum ActiveTransferStatus {
         /// Time since the last iroh-blobs get-request/progress/completed/
         /// aborted event, if any has ever fired for this lease.
         idle_for: Option<Duration>,
+        /// #417: file bytes the peer has pulled so far (furthest
+        /// `Progress.end_offset`); `None` before any byte moved.
+        bytes_sent: Option<u64>,
+        /// #417: time since [`Self::InProgress::bytes_sent`] last grew;
+        /// connection events never reset it. `None` before any byte moved.
+        byte_idle_for: Option<Duration>,
     },
 }
 
@@ -224,10 +260,14 @@ impl ActiveTransferStatus {
             ActiveTransferStatus::InProgress {
                 connected,
                 idle_for,
+                bytes_sent,
+                byte_idle_for,
             } => serde_json::json!({
                 "state": "in_progress",
                 "connected": connected,
                 "idle_for_ms": idle_for.map(|d| d.as_millis() as u64),
+                "bytes_sent": bytes_sent,
+                "byte_idle_for_ms": byte_idle_for.map(|d| d.as_millis() as u64),
             }),
         }
     }
@@ -264,11 +304,15 @@ mod wire_status_tests {
         let wire = ActiveTransferStatus::InProgress {
             connected: true,
             idle_for: Some(Duration::from_millis(1234)),
+            bytes_sent: Some(4096),
+            byte_idle_for: Some(Duration::from_millis(180_000)),
         }
         .to_wire();
         assert_eq!(wire["state"], "in_progress");
         assert_eq!(wire["connected"], true);
         assert_eq!(wire["idle_for_ms"], 1234);
+        assert_eq!(wire["bytes_sent"], 4096);
+        assert_eq!(wire["byte_idle_for_ms"], 180_000);
     }
 
     #[test]
@@ -276,10 +320,14 @@ mod wire_status_tests {
         let wire = ActiveTransferStatus::InProgress {
             connected: false,
             idle_for: None,
+            bytes_sent: None,
+            byte_idle_for: None,
         }
         .to_wire();
         assert_eq!(wire["connected"], false);
         assert!(wire["idle_for_ms"].is_null());
+        assert!(wire["bytes_sent"].is_null());
+        assert!(wire["byte_idle_for_ms"].is_null());
     }
 }
 
@@ -343,9 +391,12 @@ impl StopAwareBlobsProtocol {
             .lock()
             .expect("active provider connections lock")
             .is_empty();
+        let bytes = self.activity.byte_progress();
         ActiveTransferStatus::InProgress {
             connected,
             idle_for: self.activity.idle_for(),
+            bytes_sent: bytes.map(|(sent, _)| sent),
+            byte_idle_for: bytes.map(|(_, idle)| idle),
         }
     }
 }
@@ -390,7 +441,11 @@ fn spawn_activity_event_sink(activity: TransferActivity) -> EventSender {
                                     current_hash = Some(started.hash);
                                     activity.touch();
                                 }
-                                RequestUpdate::Progress(_) => activity.touch(),
+                                // #417: only file-byte progress feeds the byte-stall
+                                // clock (connection events above never do).
+                                RequestUpdate::Progress(progress) => {
+                                    activity.record_bytes(progress.end_offset)
+                                }
                                 RequestUpdate::Completed(_) => match current_hash {
                                     Some(hash) => activity.mark_completed(hash),
                                     None => activity.touch(),
@@ -601,6 +656,23 @@ impl AndroidBlobsProvider {
             Some(active) => active.handler.status(),
             None => ActiveTransferStatus::NoLease,
         }
+    }
+
+    /// #417 (#410): `(file bytes pulled, time since that last grew)` for the
+    /// current lease, independent of whether the pull has since completed.
+    pub fn byte_progress(&self) -> Option<(u64, Duration)> {
+        self.active
+            .lock()
+            .expect("active provider lock")
+            .as_ref()
+            .and_then(|active| active.handler.activity.byte_progress())
+    }
+
+    /// #417: tell iroh the OS network changed (Android `ConnectivityManager`
+    /// callback), so it re-probes paths instead of waiting for its own timers.
+    pub fn network_change(&self) {
+        self.runtime
+            .block_on(self.transport.endpoint().network_change());
     }
 
     /// BLOB-03 test hook: whether a complete blob is still present in the
@@ -865,6 +937,20 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
             throw(&mut env, error);
             std::ptr::null_mut()
         }
+    }
+}
+
+/// #417: forward an Android network-change callback to the provider endpoint.
+#[cfg(feature = "android-jni")]
+#[no_mangle]
+pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeNetworkChange(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) {
+    match provider(handle) {
+        Ok(provider) => provider.network_change(),
+        Err(error) => throw(&mut env, error),
     }
 }
 
