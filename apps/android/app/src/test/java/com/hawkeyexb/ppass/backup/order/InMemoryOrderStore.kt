@@ -15,6 +15,13 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
     @Volatile
     var failNextCommit: RuntimeException? = null
 
+    /**
+     * 故障注入（O-07）：下一次**推进了 G** 的事务在提交前崩溃。原子实现里 G 与 CONFIRMED 同一事务，
+     * 所以两者一起不在；把 G 拆成单独一次写入的实现会留下「CONFIRMED 但 G 没推进」。
+     */
+    @Volatile
+    var crashWhenGenerationMoves = false
+
     private class Tx(
         var rows: MutableMap<Long, Order>,
         var lastId: Long,
@@ -29,6 +36,10 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         failNextCommit?.let {
             failNextCommit = null
             throw it
+        }
+        if (crashWhenGenerationMoves && tx.volumes != volumes) {
+            crashWhenGenerationMoves = false
+            throw IllegalStateException("crash while committing a G advance")
         }
         rows = tx.rows
         lastId = tx.lastId

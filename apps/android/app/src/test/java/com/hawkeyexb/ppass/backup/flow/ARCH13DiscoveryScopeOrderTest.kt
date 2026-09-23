@@ -45,7 +45,7 @@ class ARCH13DiscoveryScopeOrderTest {
     }
 
     // D-04：G 丢了（清零）而照片多数已 CONFIRMED——快路径按 order 过滤，不重传。
-    // 反证：快路径跳过 order 过滤（classify 传 current=null）→ 已确认的照片被重传，红。
+    // 反证：快路径既不看当前行、也不按 hash 查已有 order（classify(snapshot, null) + ordersWithHash 恒空）→ 重传，红。
     @Test
     fun `D-04 losing G re-sends nothing that is already confirmed`() = runTest {
         val rig = Rig(this)
@@ -291,12 +291,12 @@ class ARCH13DiscoveryScopeOrderTest {
     }
 
     // O-07：确认写入中途崩溃 → CONFIRMED、G、审计要么都在要么都不在（此时行仍可续传，重启后再传一次）。
-    // 反证：把 G 推进从 transition 里拆成单独一次 advanceGeneration → 崩溃后 G 已推进而行未确认，红。
+    // 反证：把 G 推进从 transition 里拆成随后单独一次 advanceGeneration → 崩溃落在第二次写入，留下「CONFIRMED 但 G 没推进」，红。
     @Test
     fun `O-07 confirmation, G and audit commit together or not at all`() = runTest {
         val rig = Rig(this)
         rig.photo(1, generation = 9)
-        rig.delivery.onStart = { rig.store.failNextCommit = IllegalStateException("crash during confirm") }
+        rig.delivery.onStart = { rig.store.crashWhenGenerationMoves = true }
         rig.trigger()
         val row = rig.store.currentForMedia(1)!!
         assertFalse(row.state == OrderState.CONFIRMED)
