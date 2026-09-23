@@ -71,13 +71,13 @@
     <!-- UX-13: 被暂停后同一个位置的按钮文案（点它续传，同一条管线） -->
     <string name="backup_resume">Resume</string>
     <string name="backup_waiting_constraints">Waiting for backup conditions</string>
-    <string name="backup_round_cancelled">Current round cancelled</string>
-    <string name="backup_cancel_current_round">Cancel current round</string>
     <!-- 2026-09-07 real-device feedback: disable the button while a command
          is in flight so repeated taps don't queue behind it. -->
     <string name="backup_command_processing">Working…</string>
-    <!-- 2026-09-14（用户拍板，取代 MOB-59/X-05）：恢复入口从常驻警告条
-         挪进备份设置卡的一行，不再是打断式提示，故文案不再叫 notice。 -->
+    <!-- #418: settings row + confirm dialog for "cancel the remaining N photos" (restore lives in the "skipped photos" row). -->
+    <string name="cancel_remaining_label">Cancel remaining %1$d photos</string>
+    <string name="cancel_remaining_confirm_title">Cancel the remaining %1$d photos?</string>
+    <string name="cancel_remaining_confirm_body">These photos will not be backed up. You can restore them later from “Skipped photos”. Photos you take later are backed up as usual.</string>
     <string name="cancelled_round_cell_label">Skipped photos</string>
     <string name="cancelled_round_cell_value">%1$d · restore</string>
     <string name="missing_source_notice_body">Cannot be recovered: %1$d photo(s) were deleted from this phone, so they will not be sent again.</string>
@@ -267,9 +267,4 @@
     <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
     <string name="backup_interrupted_body">Automatic background backup was stopped. Photos sync while the app is open; tap to resume automatic backup. Your photos are safe — nothing was lost.</string>
     <string name="backup_interrupted_action">Resume</string>
-    <!-- MOB-37: 重传告知的 App 内呈现（系统通知发失败/没被看见时的兜底）。
-         措辞不做精确归因——手机端分不清「电脑上被删了」和「换了个库」，
-         带条件从句的第二句在两种成因下都成立（MOB-29 定调）。 -->
-    <string name="reupload_notice_body">%1$d backed-up photos are missing on your computer, so they are being uploaded again. If you meant to delete them, delete them on this phone first.</string>
-    <string name="reupload_notice_action">Got it</string>
 </resources>

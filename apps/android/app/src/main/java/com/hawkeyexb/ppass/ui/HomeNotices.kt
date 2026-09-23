@@ -1,16 +1,17 @@
 // UI-04a/c: 全局唯一提示呈现层（batch/ui-04a-c）。
 //
-// 既有提示已迁入：中断恢复 / 重传告知，统一在 [NoticeHost] 里构造候选
+// 既有提示已迁入：中断恢复，统一在 [NoticeHost] 里构造候选
 // 列表 → [topNotice]，只渲染最高优先级的一条，其余全部收起。
 //
-// 2026-09-14（用户拍板）：取消轮次的「重新传输」不再走这条常驻琥珀警告
-// 条——用户主动取消是正常操作，不该被塑造成"未处理的问题"。该入口已
-// 移到 HomeScreen 的「备份」设置卡里，做成一行可点的 CellRow（见
-// HomeScreen.kt 的 cancelledRoundCount 参数），跟"备份哪些相册"并列，
-// 平时不显眼，想找的时候在。CANCELLED_ROUND 这个 kind 已删除。
+// #418：「电脑上少了照片、正在重新传回」（REUPLOAD，MOB-37）已删除——新模型里
+// 桌面缺失由慢路径**自动补传、不打扰**（#413），这条提示没有数据源，接不上就删。
+//
+// 2026-09-14（用户拍板）：取消不走这条常驻琥珀警告条——用户主动取消是
+// 正常操作，不该被塑造成"未处理的问题"。#418：取消轮与它的恢复入口已删除，
+// 设置卡里只剩「取消剩余 N 张」一行（见 HomeScreen.kt 的 cancelRemainingCount）。
 //
 // [HOME_NOTICE_PRIORITY] 的排序：
-//   PAIRING_LOST (阻塞) 在最前，底下的 REUPLOAD (补充) 在最后——按
+//   PAIRING_LOST (阻塞) 在最前，底下的 SOURCE_MISSING (补充) 在最后——按
 //   UI-04c 口径「阻塞备份的 > 需要授权的 > 补充信息的」。
 //
 // UI-12（2026-09-15，用户真机反馈）：后台备份被系统限制（白名单被撤 /
@@ -55,9 +56,6 @@ enum class HomeNoticeKind {
     PARTIAL_ACCESS,
 
 
-    /** MOB-37: 库里少了照片、正在传回来。补充信息类：用户不动手也没事。 */
-    REUPLOAD,
-
     /** A phone-deleted source cannot be sent again; informational only. */
     SOURCE_MISSING,
 }
@@ -70,7 +68,6 @@ val HOME_NOTICE_PRIORITY: List<HomeNoticeKind> = listOf(
     HomeNoticeKind.PARTIAL_ACCESS,
 
     HomeNoticeKind.SOURCE_MISSING,
-    HomeNoticeKind.REUPLOAD,
 )
 
 /** 一条常驻提示的全部数据。文案已解析成字符串（`stringResource` 在
@@ -164,13 +161,10 @@ fun NoticeCard(notice: HomeNotice) {
  * **不再提供"知道了"**——它和设置页那行琥珀 hint 描述的是同一个事实，两个
  * 入口不能给出两个不同的承诺（横幅说"已读不打扰"、hint 说"问题还在"）。
  * 唯一的退出路径是把"自动备份"配置改成跟现状一致（关掉开关），不维护
- * 一个独立的"已忽略"状态。REUPLOAD（补充信息类，用户不动手也没事）不
- * 受影响，继续保留自己的一次性确认语义。
+ * 一个独立的"已忽略"状态。
  */
 @Composable
 fun NoticeHost(
-    reuploadCount: Int,
-    onAcknowledgeReupload: () -> Unit,
     backgroundBackupState: BackgroundBackupState = BackgroundBackupState.OffByUser,
     onResolveBackgroundBackup: () -> Unit = {},
 ) {
@@ -188,14 +182,6 @@ fun NoticeHost(
                 body = stringResource(bodyRes),
                 actionLabel = stringResource(R.string.background_backup_notice_action),
                 onAction = onResolveBackgroundBackup,
-            )
-        )
-        if (reuploadCount > 0) add(
-            HomeNotice(
-                kind = HomeNoticeKind.REUPLOAD,
-                body = stringResource(R.string.reupload_notice_body, reuploadCount),
-                actionLabel = stringResource(R.string.reupload_notice_action),
-                onAction = onAcknowledgeReupload,
             )
         )
     }

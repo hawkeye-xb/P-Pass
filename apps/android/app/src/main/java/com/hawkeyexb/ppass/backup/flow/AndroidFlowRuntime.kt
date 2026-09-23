@@ -107,6 +107,14 @@ internal fun retryFailedFlow(context: Context) = requestFlowWake(context, Trigge
 internal suspend fun cancelRemainingFlow(context: Context): Int =
     runtimeFor(context.applicationContext)?.engine?.cancelRemaining()?.await() ?: 0
 
+/** 「已跳过的照片 · 点击恢复」，返回恢复了几张。 */
+internal suspend fun restoreSkippedFlow(context: Context): Int =
+    runtimeFor(context.applicationContext)?.engine?.restoreSkipped()?.await() ?: 0
+
+/** 「取消剩余 N 张」的 N（与取消时写下的是同一个函数）。null = 运行时不可用。 */
+internal suspend fun countRemainingFlow(context: Context): Int? =
+    runtimeFor(context.applicationContext)?.engine?.countRemaining()
+
 internal fun acknowledgeFlowMissingSource(context: Context) {
     runtimeFor(context.applicationContext)?.engine?.acknowledgeMissingSource()
 }
@@ -136,9 +144,9 @@ internal fun onFlowNetworkChanged(context: Context) {
 /** 当前运行时（不触发构造）；UI 投影用。 */
 internal fun liveFlowRuntime(): AndroidFlowRuntime? = synchronized(runtimeLock) { runtime }
 
-internal fun flowProjection(context: Context, bucketIds: Set<Long>?, inScopeTotal: Long?): FlowProjection? {
+internal fun flowProjection(context: Context, bucketIds: Set<Long>?, inScopeTotal: Long?, remaining: Long?): FlowProjection? {
     val live = runtimeFor(context.applicationContext) ?: return null
-    return FlowProjection.of(live.store, live.engine.status.value, live.control, bucketIds, inScopeTotal)
+    return FlowProjection.of(live.store, live.engine.status.value, live.control, bucketIds, inScopeTotal, remaining)
 }
 
 // ------------------------------------------------------------------ 生命周期

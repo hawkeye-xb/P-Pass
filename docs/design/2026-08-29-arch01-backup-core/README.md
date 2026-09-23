@@ -155,7 +155,7 @@ Trigger (new photo / app to foreground / process start / network-change callback
 | `WAITING_FOR_CONSTRAINTS` | Wi-Fi, battery, daily quota, or Desktop is temporarily unavailable: release the FGS and register a wake-up (network-change callback / 3 probes 10 minutes apart after unreachability / constraint job / on quota exhaustion, wait for the app to come to the foreground) | Resumes automatically once the wake-up arrives and the constraint recovers |
 | FGS denied or timed out | Record the FGS-blocked fact and exit the loop; do not call `startForegroundService` again until the app comes to the foreground (#414) | App comes to the foreground |
 | `DISABLED` | Background switch is off: automatic triggers no longer start the loop; manual triggers are unaffected | User enables it |
-| Cancel remaining N | Write each of the N photos that have no outcome yet (including `FAILED`) as `SKIPPED_BY_USER` (one transaction); the photo in flight is cancelled too and Desktop is told to drop its partial data | no restore entry this time (#415 ruling 4) |
+| Cancel remaining N | Write each of the N photos that have no outcome yet (including `FAILED`) as `SKIPPED_BY_USER` (one transaction); the photo in flight is cancelled too and Desktop is told to drop its partial data | settings row “Skipped photos · restore”: one transaction deletes those `SKIPPED_BY_USER` rows and the next slow path plans them again as photos without an order (#418, supersedes #415 ruling 4) |
 
 ## Scope, cancellation, and pairing
 
@@ -186,7 +186,7 @@ User confirms “Cancel remaining N”
 ```
 
 - The slow path neither re-sends nor retries `SKIPPED_BY_USER`; it is an explicit user decision.
-- `SKIPPED_BY_USER` has **no restore entry** this time (#415 ruling 4).
+- **Restore** (#418, supersedes #415 ruling 4 “no restore entry”): the settings row “Skipped photos N · restore”, where N is the number of current rows in `SKIPPED_BY_USER`. Restoring deletes those current rows in one transaction (audit in the same transaction) and triggers a slow path; the diff plans them again — content Desktop already has only gets a mapping, the rest joins the backlog (pick order ②). Restoring while paused only deletes; the next slow path (returning to the foreground, the periodic backstop, …) picks them up.
 - Writing N `SKIPPED_BY_USER` orders **does not compute hashes**; those rows have no hash (see the MediaStore-rebuild note in slow-path step 3).
 - Cancellation **does not require a prior Pause**: the photo in flight stops on the spot and the rest are written as `SKIPPED_BY_USER`. N includes `FAILED` (#415 ruling 7).
 

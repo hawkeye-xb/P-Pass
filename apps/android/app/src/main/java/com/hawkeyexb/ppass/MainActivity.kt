@@ -722,8 +722,6 @@ fun PPassApp() {
                 notice = if (!photoViewerOpen && !storageDetailOpen) {
                     {
                         NoticeHost(
-                            reuploadCount = holder.reuploadNoticeCount.value,
-                            onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
                             backgroundBackupState = backgroundBackupState,
                             onResolveBackgroundBackup = resolveBackgroundBackup,
                         )
@@ -742,7 +740,6 @@ fun PPassApp() {
                     HomeScreen(
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
-                        onCancelCurrentRound = { holder.cancelCurrentRound() },
                         triplet = holder.triplet.value,
                         // 2026-09-07 真机反馈：命令处理中禁用暂停/取消按钮。
                         commandPending = holder.commandPending.value,
@@ -750,16 +747,19 @@ fun PPassApp() {
                         missingSourceNotice = holder.missingSourceNotice.value,
                         onAcknowledgeMissingSource = { holder.acknowledgeMissingSourceNotice() },
                         acknowledgedMissingSourceCount = holder.acknowledgedMissingSourceCount.value,
-                        // MOB-59: 本轮自己的进度（0 起算，见 HomeScreen.kt 说明）。
-                        roundProgress = holder.roundProgress.value,
-                        // 2026-09-14（用户拍板）：取消轮次恢复入口从常驻琥珀
-                        // 警告条挪进「备份」设置卡，做成一行 CellRow——用户
-                        // 主动取消不该被塑造成待处理的警告。
-                        cancelledRoundCount = holder.cancelledRoundNotice.value?.count,
-                        onRestoreCancelledRounds = { holder.restoreCancelledRounds() },
-                        // UI-19 规则 P：为什么暂停（#379 的数据源结论，
-                        // null = 未知 ⇒ 状态行一个字都不加）。
-                        pauseReasonRes = holder.pauseReason.value,
+                        // #418：正在传的这一张的字节进度（与前台服务通知同一个函数）。
+                        transferProgress = holder.transferProgress.value,
+                        // #418：「取消剩余 N 张」——设置卡一行 + 写明 N 的确认框。
+                        cancelRemainingCount = holder.cancelRemainingCount.value,
+                        onRequestCancelRemaining = { holder.requestCancelRemaining() },
+                        cancelConfirmCount = holder.cancelConfirmCount.value,
+                        // 「已跳过的照片 N 张 · 点击恢复」（SKIPPED_BY_USER）。
+                        skippedCount = holder.skippedCount.value,
+                        onRestoreSkipped = { holder.restoreSkipped() },
+                        onConfirmCancelRemaining = { holder.confirmCancelRemaining() },
+                        onDismissCancelRemaining = { holder.dismissCancelRemaining() },
+                        // 规则 P（#418）：FGS 受阻而等待时的人话（null ⇒ 状态行一个字都不加）。
+                        waitReasonRes = holder.waitReasonNotice.value,
                         wifiOnly = wifiOnly,
                         onWifiOnlyChange = { enable ->
                             // MOB-02 §三: 关闭「需要 Wi-Fi」需二次确认

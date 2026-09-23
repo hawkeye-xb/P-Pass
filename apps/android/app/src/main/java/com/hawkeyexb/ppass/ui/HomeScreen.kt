@@ -71,8 +71,6 @@ sealed class BackupUiState {
     data object Paused : BackupUiState()
     /** The ledger remains open but the current environment is not admissible. */
     data object WaitingForConstraints : BackupUiState()
-    /** A durable user cancellation round is active; confirmed items remain intact. */
-    data object CancelledCurrentRound : BackupUiState()
     /** FIX-T6: 一个相册都没选（空集 = 一个都不备）——显式「没有可
      *  备份的相册」，绝不显示假话「照片都存好了」。 */
     data object NoAlbums : BackupUiState()
@@ -133,7 +131,8 @@ fun heroNumberIsSafe(
 /**
  * 规则 S：状态行「照片都存好了」用**文字**说的是和主数字同一件事，所以受
  * 同一组闸门约束（S1 = G1–G5），外加两条「还有事没了结」的事实：
- * S2 无 SKIP-MISS、S3 无 CANCEL-ROW。
+ * S2 无 SKIP-MISS、S3 范围内没有用户取消过的照片（#418：取消轮没了，S3 改读
+ * [BackupTriplet.skippedByUser]——用户说了「剩下的不要了」，那几张确实没存到电脑上）。
  *
  * S2 在投影层也堵了一道（`flowIsAllDone` 不再把 `SKIPPED_SOURCE_MISSING`
  * 当完成），这里是同一条规则在渲染层的闸门——两道门各自可测，且都不许松。
@@ -150,49 +149,36 @@ fun allSafeTextAllowed(
     triplet: BackupTriplet?,
     pairingLost: Boolean,
     missingSourceCount: Int,
-    cancelledRoundCount: Int,
 ): Boolean =
     heroNumberIsSafe(mediaAccess, triplet, pairingLost) &&
         heroRenderOf(mediaAccess, triplet) != HeroRender.Unreconciled &&
         missingSourceCount == 0 &&
-        cancelledRoundCount == 0
+        (triplet?.skippedByUser ?: 0L) == 0L
 
 /**
- * 规则 P（事实源 §2.5，#361 步骤 2）：暂停**有理由**时，把理由说出来——
- * 但**不新增横幅**，它是英雄卡状态行（A7）在暂停态下的替换文案，紧挨着
- * 既有的「继续」按钮（A8）。
+ * 规则 P（事实源 §2.5，#361 步骤 2）→ #418：FGS 受阻（今天的后台额度用完 / 手机拒绝了这次备份）时，
+ * 把理由说出来——**不新增横幅**，它是英雄卡状态行（A7）的替换文案。
  *
- * [reasonRes] = 数据源（#379 的 `TransferProtectionStore`）给出的那句人话，
- * `null` = 三态里的「未知」（只提交过请求 / 空 / 读不出）。三条闸门：
+ * 新模型里 FGS 受阻是「等条件」（[BackupUiState.WaitingForConstraints]），不是用户暂停：
+ * 用户暂停时说的是暂停（「继续」按钮在场），不该再挂一句额度的事。所以挂载点从「继续」按钮
+ * 改成了等待态的状态行（原来写的是「正在等待备份条件满足」）。
  *
- * - **ACCESS 压制**（§2.4 脚注 12）：`mediaAccess != FULL` 时英雄卡内部整块
- *   被权限引导卡顶替（`HomeScreen.kt` 的 `if (mediaAccess != MediaAccess.FULL)`
- *   分支），规则 P 该挂的那一行根本不存在——挂载点不在场，理由就不该假装
- *   能显示。不是并存。
- * - **PAIR 压制**（脚注 6）：配对失效时 [heroActionOf] 返回 `null`，「继续」
- *   按钮不在场，同样没有挂载点；且「今天后台时间用完了」在配对已断时是误导。
- * - **未知不说话**（R-UNKNOWN / #299 MOB-97）：`reasonRes == null` 时不渲染
- *   任何理由，状态行退回既有的 `idleStatusText`——那条分支在暂停态下走
- *   `Ready`/`Pending`，**不会**是「照片都存好了」（规则 G5 同时否掉绿色）。
+ * [reasonRes] = 投影给出的那句人话（[com.hawkeyexb.ppass.backup.flow.fgsBlockWaitNoticeRes]），
+ * `null` = 此刻挡路的不是 FGS（Wi‑Fi、电量、桌面不可达），或者说不清。闸门：
  *
- * ⚠️ 已知局限（#361 步骤 1 登记的字段不新鲜问题，见报告）：数据源记的是
- * 「最后一次保护尝试的结论」，账本里没有「这次暂停发生在何时」的落盘事实，
- * 所以无法证明这条理由解释的就是当下这次暂停。此处只做了能做的那一半：
- * 只有账本独立地说「确实停着」（[HeroAction.Resume] 在场）才会说理由，
- * 绝不用这个字段去推断「有没有在传」。
+ * - **ACCESS 压制**：`mediaAccess != FULL` 时英雄卡内部整块被权限引导卡顶替，挂载点不在场。
+ * - **PAIR 压制**：配对已断时「今天后台时间用完了」是误导，出路在红卡。
+ * - **只在等待态说**：其它状态（在传、暂停、出错、都存好了）一律不说。
  */
-fun visiblePauseReasonRes(
+fun visibleWaitReasonRes(
     state: BackupUiState,
     mediaAccess: MediaAccess,
     pairingLost: Boolean,
     reasonRes: Int?,
 ): Int? {
-    // ACCESS 压制：英雄卡内部整块被权限引导卡顶替，挂载点不存在。
     if (mediaAccess != MediaAccess.FULL) return null
-    // 挂载点判据**复用**「继续」按钮那一条（[heroActionOf]），不另写一份：
-    // MOB-89 的事故正是两个判据各走各的，于是出现了一个两者不一致的组合。
-    // 这一条同时兜住 PAIR 压制（配对失效 ⇒ null）与「压根没暂停」。
-    if (heroActionOf(state, pairingLost) != HeroAction.Resume) return null
+    if (pairingLost) return null
+    if (state !is BackupUiState.WaitingForConstraints) return null
     return reasonRes
 }
 
@@ -203,7 +189,6 @@ fun HomeScreen(
     storageName: String,
     state: BackupUiState,
     onBackupNow: () -> Unit,
-    onCancelCurrentRound: () -> Unit = {},
     // DOG-01: 恒真三元组（持久缓存，断网/失败时仍显示）
     triplet: BackupTriplet? = null,
     // UX-03: 极简设置——仅 WiFi（写 WorkManager 约束）。
@@ -250,16 +235,20 @@ fun HomeScreen(
     commandPending: Boolean = false,
     // MOB-61: a source deleted from the phone is terminal, with no retry action.
     missingSourceNotice: com.hawkeyexb.ppass.backup.flow.MissingSourceNotice? = null,
-    // MOB-59: 本轮自己的进度（0 起算），与上方 hero 的终身 M/N 三元组
-    // 是两回事——真机反馈：中途加相册后进度条直接跳到"15/15"附近，
-    // 混进了之前已经传完的历史，应该只看这一轮还要传的。
-    roundProgress: com.hawkeyexb.ppass.backup.flow.RoundProgress? = null,
-    // 2026-09-14（用户拍板，取代 MOB-59/X-05 的常驻警告条设计）：取消
-    // 轮次的恢复入口不再是打断式提示，改为「备份」设置卡里的一行——
-    // null = 没有可恢复的取消轮次，这一行不渲染；非 null 时显示跳过
-    // 张数，点击即恢复（同一条 restoreCancelledRounds 管线，未改动）。
-    cancelledRoundCount: Int? = null,
-    onRestoreCancelledRounds: () -> Unit = {},
+    // #418：正在传的这一张的字节进度（0..1），与前台服务通知的进度条同一个函数。
+    // null = 没在传 / 总字节未知 ⇒ 不画进度条。英雄区的大数字仍是「已确认 / 范围内总数」。
+    transferProgress: Float? = null,
+    // #418：设置卡「取消剩余 N 张」那一行。null = 不渲染（没有剩余 / 配对已失效 / 还没算出来）。
+    cancelRemainingCount: Long? = null,
+    onRequestCancelRemaining: () -> Unit = {},
+    // #418：设置卡「已跳过的照片 N 张 · 点击恢复」。null = 没有用户取消过的照片，不渲染。
+    // 恢复 = 删掉这些 SKIPPED_BY_USER 行，慢路径把它们重新放回待传。
+    skippedCount: Long? = null,
+    onRestoreSkipped: () -> Unit = {},
+    // 确认框里写明的 N（点那一行时现算）；null = 没有确认框。
+    cancelConfirmCount: Int? = null,
+    onConfirmCancelRemaining: () -> Unit = {},
+    onDismissCancelRemaining: () -> Unit = {},
     // MOB-100（B4）：「已跳过 N 张…不会再重传」的确认路径。R-CLEARABLE：
     // 任何常驻提示都必须有用户自己走得通的消除路径，只有开发者能清不算
     // （此前清那 6 条测试残留用的是 adb + run-as + 手改账本 JSON）。
@@ -267,11 +256,9 @@ fun HomeScreen(
     // MOB-100 关键判断 3：确认过的那批仍可查——横幅收起后计数搬进这一行，
     // 0 = 没有已确认的，不渲染。
     acknowledgedMissingSourceCount: Int = 0,
-    // UI-19 规则 P：为什么暂停。null = 三态里的「未知」⇒ 不渲染任何理由。
-    // 由 BackupUiStateHolder 每个 tick 从 #379 的 TransferProtectionStore 读出；
-    // HomeScreen 自己不碰数据源（Compose 里读盘，且 JVM 不可测）。出场闸门
-    // 见 [visiblePauseReasonRes]。
-    pauseReasonRes: Int? = null,
+    // 规则 P（#418 改挂在等待态）：为什么在等。null = 挡路的不是 FGS / 说不清 ⇒ 不渲染任何理由。
+    // 由 BackupUiStateHolder 从投影算出；HomeScreen 自己不碰数据源。出场闸门见 [visibleWaitReasonRes]。
+    waitReasonRes: Int? = null,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -296,6 +283,26 @@ fun HomeScreen(
             onDisconnect = onDisconnect,
         )
     } else {
+
+    // #418：「取消剩余 N 张」的确认框。确认按钮就是那句带 N 的话本身，关闭按钮用「返回」
+    // ——不用「取消」：要确认的动作本身就叫取消，两个按钮都叫取消会让人点错（MOB-89 同形）。
+    if (cancelConfirmCount != null) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = onDismissCancelRemaining,
+            title = { Text(stringResource(R.string.cancel_remaining_confirm_title, cancelConfirmCount)) },
+            text = { Text(stringResource(R.string.cancel_remaining_confirm_body)) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = onConfirmCancelRemaining) {
+                    Text(stringResource(R.string.cancel_remaining_label, cancelConfirmCount), color = PPColor.Act)
+                }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = onDismissCancelRemaining) {
+                    Text(stringResource(R.string.back), color = PPColor.Ink)
+                }
+            },
+        )
+    }
 
     Column(
         Modifier.fillMaxSize().background(PPColor.Paper)
@@ -429,9 +436,7 @@ fun HomeScreen(
                                 fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
                                 color = PPColor.Ink60,
                             )
-                            val progress = roundProgress?.let {
-                                if (it.total > 0) it.done.toFloat() / it.total else null
-                            }
+                            val progress = transferProgress
                             if (progress != null) {
                                 Spacer(Modifier.height(8.dp))
                                 // MOB-33（2026-08-26 真机）：必须显式覆盖 M3 1.3
@@ -453,19 +458,17 @@ fun HomeScreen(
                                 )
                             }
                         } else {
-                            // UI-19 规则 P：暂停**有理由**时，这一行换成那句人话，
-                            // 就挂在既有的「继续」按钮旁边——**不新增横幅**。
-                            // 「未知」（reasonRes == null）时一个字都不加，退回
-                            // idleStatusText 既有的分支（暂停态下是 Ready/Pending，
-                            // 规则 G5/S 保证它不会是「照片都存好了」）。
-                            val pauseReason = visiblePauseReasonRes(
+                            // 规则 P（#418）：因为 FGS 受阻而等待时，这一行换成那句人话——
+                            // **不新增横幅**。说不清（reasonRes == null）时一个字都不加，
+                            // 退回 idleStatusText 既有的分支。
+                            val waitReason = visibleWaitReasonRes(
                                 state = state,
                                 mediaAccess = mediaAccess,
                                 pairingLost = pairingLost,
-                                reasonRes = pauseReasonRes,
+                                reasonRes = waitReasonRes,
                             )
                             Text(
-                                if (pauseReason != null) stringResource(pauseReason) else idleStatusText(
+                                if (waitReason != null) stringResource(waitReason) else idleStatusText(
                                     line,
                                     // UI-16 规则 S：文字版的绿色谎言走同一组闸门。
                                     allSafeTextAllowed(
@@ -473,7 +476,6 @@ fun HomeScreen(
                                         triplet = t,
                                         pairingLost = pairingLost,
                                         missingSourceCount = missingSourceNotice?.count ?: 0,
-                                        cancelledRoundCount = cancelledRoundCount ?: 0,
                                     ),
                                 ),
                                 fontSize = 13.5.sp, color = PPColor.Ink60,
@@ -499,26 +501,8 @@ fun HomeScreen(
                             onClick = onBackupNow,
                         )
                     }
-                    // MOB-89: 取消**不是**与「继续」并列的二选一，它是一个
-                    // 降级动作，所以既不共用 HeroSecondaryButton 的外观，也不
-                    // 共用它的出场判据。
-                    //
-                    // ① 出场判据交给 cancelAffordanceVisible —— 它绑死「只在
-                    //    『继续』在场时出现」，堵掉 pairingLost 下取消左移顶替
-                    //    「继续」位置的那个组合（详见该函数注释里的真机事故）。
-                    // ② 外观降级成无边框文字动作，与带边框加粗的主动作在视觉
-                    //    层级上一眼可分；间距也从 8dp 拉到 16dp。
-                    // ③ commandPending 时**保留自己的文案**只置灰。原来它和
-                    //    「继续」会同时显示「处理中…」——那一刻两个相邻按钮
-                    //    连文案都一样，完全无法分辨。
-                    if (cancelAffordanceVisible(state, pairingLost)) {
-                        Spacer(Modifier.width(16.dp))
-                        HeroTertiaryAction(
-                            label = stringResource(R.string.backup_cancel_current_round),
-                            enabled = !commandPending,
-                            onClick = onCancelCurrentRound,
-                        )
-                    }
+                    // #418：英雄区原来这里有 MOB-89 的「取消当前轮」降级动作——取消轮已经没有了，
+                    // 取消的唯一入口是下方设置卡的「取消剩余 N 张」（带写明 N 的确认框）。
                 }
                 }
             }
@@ -689,19 +673,25 @@ fun HomeScreen(
                     ),
                     onClick = onOpenBucketPicker,
                 )
-                // 2026-09-14（用户拍板，取代 MOB-59/X-05 常驻警告条）：
-                // 用户主动取消传输后，恢复入口不再是打断式琥珀提示，
-                // 改为这里一行——跟"备份哪些相册"同属"这次备份包含
-                // 什么"的语义线，平时不显眼，想找的时候在。
-                if (cancelledRoundCount != null) {
+                // #418：「取消剩余 N 张」——跟「备份哪些相册」同属「这次备份包含什么」的
+                // 语义线。N 与引擎取消时写下的张数是同一个函数算的；点了先现算一次 N，
+                // 再弹确认框写明 N。取消掉的照片进下面「已跳过的照片」那一行，可以恢复。
+                if (cancelRemainingCount != null) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.cancel_remaining_label, cancelRemainingCount.toInt()),
+                        onClick = if (commandPending) null else onRequestCancelRemaining,
+                    )
+                }
+                // 2026-09-14（用户拍板）/ #418：用户取消过的照片不做打断式提示，只在这里一行
+                // 「已跳过的照片 N 张 · 点击恢复」。N = SKIPPED_BY_USER 的张数，取消后随之增加；
+                // 点击恢复 = 删掉这些行，慢路径把它们当作没有 order 的照片重新放回待传。
+                if (skippedCount != null) {
                     HorizontalDivider(color = PPColor.Divider)
                     CellRow(
                         label = stringResource(R.string.cancelled_round_cell_label),
-                        value = stringResource(
-                            R.string.cancelled_round_cell_value,
-                            cancelledRoundCount,
-                        ),
-                        onClick = onRestoreCancelledRounds,
+                        value = stringResource(R.string.cancelled_round_cell_value, skippedCount.toInt()),
+                        onClick = if (commandPending) null else onRestoreSkipped,
                     )
                 }
                 // MOB-100 关键判断 3：确认过的「源已删除」那批的去处。
@@ -949,32 +939,7 @@ private fun idleStatusText(line: StatusLine, allSafeAllowed: Boolean = true): St
         else stringResource(R.string.idle_auto_hint)
     is StatusLine.Ready -> stringResource(R.string.idle_auto_hint)
     is StatusLine.WaitingForConstraints -> stringResource(R.string.backup_waiting_constraints)
-    is StatusLine.CancelledCurrentRound -> stringResource(R.string.backup_round_cancelled)
     is StatusLine.Working, is StatusLine.Trouble -> stringResource(R.string.idle_auto_hint) // unreachable
-}
-
-/**
- * MOB-89：降级动作。与 [HeroSecondaryButton] 的区别是刻意的、而且是全部的
- * 区别所在——无边框、无容器、非加粗、次级墨色、字号更小。主动作看起来像
- * 按钮，它看起来像链接。
- *
- * 高度仍是 44dp：视觉降级不等于点击区缩水。
- */
-@Composable
-private fun HeroTertiaryAction(label: String, onClick: () -> Unit, enabled: Boolean = true) {
-    androidx.compose.material3.TextButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.height(44.dp),
-        shape = RoundedCornerShape(14.dp),
-        colors = ButtonDefaults.textButtonColors(
-            contentColor = PPColor.Ink40,
-            disabledContentColor = PPColor.Ink40.copy(alpha = 0.5f),
-        ),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
-    ) {
-        Text(label, fontSize = 14.sp, fontWeight = FontWeight.Normal)
-    }
 }
 
 /** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) + 圆角 14 +

@@ -166,9 +166,13 @@ internal fun buildTransferNotification(context: Context, status: LoopStatus): No
         .setOngoing(true)
         .setOnlyAlertOnce(true)
         .setContentIntent(pi)
-    if (current != null && current.totalBytes > 0) {
-        // #413「FGS 常驻通知：显示传输进度条」——当前这一张的字节进度。
-        val permille = ((current.bytesSent.coerceIn(0, current.totalBytes) * 1000) / current.totalBytes).toInt()
+    // #418「FGS 常驻通知：显示传输进度条」——用当前这一张的字节进度，不用「已确认 / 总数」：
+    //  - 通知与循环同生共死，它要回答的是「现在有没有在传、传到哪了」；大库里一张照片只占总数的
+    //    万分之几，「已确认 / 总数」的进度条几分钟都不动，看起来像卡死；
+    //  - 首页进度条也是这一张的字节进度（同一个函数 [transferPermilleOf]），两处说的是同一件事；
+    //  - 「已确认 / 总数」要读 order 表 + MediaStore 计数，这条路径每个进度回调都会走，不该碰数据库。
+    val permille = transferPermilleOf(current)
+    if (permille != null) {
         builder.setProgress(1000, permille, false)
     } else if (current != null) {
         builder.setProgress(0, 0, true)

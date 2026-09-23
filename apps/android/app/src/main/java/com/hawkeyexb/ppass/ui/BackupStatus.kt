@@ -26,7 +26,6 @@ sealed class StatusLine {
     /** 失败才说话。 */
     data object Trouble : StatusLine()
     data object WaitingForConstraints : StatusLine()
-    data object CancelledCurrentRound : StatusLine()
 }
 
 /**
@@ -45,7 +44,6 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
     -> StatusLine.Working(state)
     is BackupUiState.NoAlbums -> StatusLine.NoAlbums
     is BackupUiState.WaitingForConstraints -> StatusLine.WaitingForConstraints
-    is BackupUiState.CancelledCurrentRound -> StatusLine.CancelledCurrentRound
     // UX-13: 被暂停在状态**文案**上与空闲同档（Pending/Ready 照旧说欠账），
     // 区别只在英雄区按钮——见 [heroActionOf]。
     is BackupUiState.Idle,
@@ -84,26 +82,8 @@ fun heroActionOf(state: BackupUiState, pairingLost: Boolean): HeroAction? = when
     else -> null
 }
 
-/**
- * MOB-89：「取消当前轮」什么时候才准出现。
- *
- * 规则只有一条：**它只在「继续」同时在场时出现**。
- *
- * 原来的判据是 `state is BackupUiState.Paused`，与「继续」的判据
- * （[heroActionOf]）各走各的，于是有一个组合两者不一致：
- * `pairingLost && Paused` —— [heroActionOf] 返回 null，「继续」整个不渲染，
- * 而「取消当前轮」照渲染，**顺位左移落进「继续」原来的位置**。用户凭手指
- * 记忆点下去，点到的是取消。
- *
- * 2026-09-20 10:31:46 的真机事故里取消确实被调用了
- * （桌面 `audit_decision`：`cancel` / `causal_operation_id=8b854bdb…`，
- * 正是那一轮 `{CONFIRMED:4, CANCELLED_BY_USER_ROUND:11}`），
- * 验收人坚称没点过 —— 按钮在他手指底下换了身份。
- *
- * 把两者绑在同一个判据上，这个组合从此不可能构造。
- */
-fun cancelAffordanceVisible(state: BackupUiState, pairingLost: Boolean): Boolean =
-    heroActionOf(state, pairingLost) == HeroAction.Resume
+// #418：MOB-89 的 `cancelAffordanceVisible`（英雄区「取消当前轮」的出场判据）随取消轮一起删掉了。
+// 取消的唯一入口是设置卡里的「取消剩余 N 张」，带确认框（见 HomeScreen / cancelRemainingRowCount）。
 
 /**
  * 「这一刻有一轮备份在跑」——**点击的裁决也用它**：只有进行中那一下算

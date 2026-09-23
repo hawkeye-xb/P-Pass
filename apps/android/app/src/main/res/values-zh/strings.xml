@@ -69,12 +69,12 @@
     <!-- UX-13: 被暂停后同一个位置的按钮文案（点它续传，同一条管线） -->
     <string name="backup_resume">继续</string>
     <string name="backup_waiting_constraints">正在等待备份条件满足</string>
-    <string name="backup_round_cancelled">当前轮已取消</string>
-    <string name="backup_cancel_current_round">取消当前轮</string>
     <!-- 2026-09-07 真机反馈：命令处理中禁用按钮，避免连点排队 -->
     <string name="backup_command_processing">处理中…</string>
-    <!-- 2026-09-14（用户拍板，取代 MOB-59/X-05）：恢复入口从常驻警告条
-         挪进备份设置卡的一行，不再是打断式提示，故文案不再叫 notice。 -->
+    <!-- #418: settings row + confirm dialog for "cancel the remaining N photos" (restore lives in the "skipped photos" row). -->
+    <string name="cancel_remaining_label">取消剩余 %1$d 张</string>
+    <string name="cancel_remaining_confirm_title">取消剩余 %1$d 张？</string>
+    <string name="cancel_remaining_confirm_body">这些照片不会再备份，之后可以在「已跳过的照片」里恢复。新拍的照片照常备份。</string>
     <string name="cancelled_round_cell_label">已跳过的照片</string>
     <string name="cancelled_round_cell_value">%1$d 张 · 点击恢复</string>
     <string name="missing_source_notice_body">无法恢复：%1$d 张照片已从手机相册删除，不会再传到电脑。</string>
@@ -265,7 +265,4 @@
     <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
     <string name="backup_interrupted_body">后台自动备份被停掉了。现在只有打开 App 时才会传，点一下就恢复自动。照片都还在，一张没丢。</string>
     <string name="backup_interrupted_action">恢复备份</string>
-    <!-- MOB-37: 重传告知的 App 内呈现（系统通知发失败/没被看见时的兜底）。 -->
-    <string name="reupload_notice_body">有 %1$d 张已备份的照片在电脑上不见了，正在重新传回。如果是主动删除，请先删除手机上的原图。</string>
-    <string name="reupload_notice_action">知道了</string>
 </resources>

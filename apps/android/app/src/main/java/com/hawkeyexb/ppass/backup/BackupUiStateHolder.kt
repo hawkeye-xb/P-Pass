@@ -1,7 +1,8 @@
-// REBUILD-04 → ARCH-13 (#417): Home status/actions are projected from the order table + loop status.
+// REBUILD-04 → ARCH-13 (#417) → ARCH-14 (#418): Home status/actions are projected from the order table + loop status.
 //
-// #417 只做「能编译、能运行」的最小改动：公开成员（state / triplet / 各提示 / 命令）一个不少，
-// 背后换成 [FlowProjection]。UI 的行为改动（取消剩余 N 张的文案、恢复入口去留、等待原因的人话）属于 #418。
+// 所有裁决都在 FlowUiProjection.kt 的纯函数里（JVM 可测）；这里只负责取事实、节流、把结果放进 Compose State。
+// 取消轮与桌面缺失补传提示已删除（#413：桌面缺失自动补传、不打扰）。取消 = 「取消剩余 N 张」逐张写
+// SKIPPED_BY_USER；恢复 = 「已跳过的照片 · 点击恢复」删掉这些行，交给慢路径重新规划。
 package com.hawkeyexb.ppass.backup
 
 import android.content.ContentResolver
@@ -12,28 +13,31 @@ import android.os.Looper
 import android.provider.MediaStore
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
-import com.hawkeyexb.ppass.backup.flow.CancelledRoundNotice
 import com.hawkeyexb.ppass.backup.flow.FlowCommand
 import com.hawkeyexb.ppass.backup.flow.FlowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.FlowProjection
 import com.hawkeyexb.ppass.backup.flow.MissingSourceNotice
 import com.hawkeyexb.ppass.backup.flow.PairingEpoch
-import com.hawkeyexb.ppass.backup.flow.RoundProgress
 import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.backup.flow.acknowledgeFlowMissingSource
 import com.hawkeyexb.ppass.backup.flow.backupUiStateOf
 import com.hawkeyexb.ppass.backup.flow.cancelRemainingFlow
+import com.hawkeyexb.ppass.backup.flow.cancelRemainingRowCount
 import com.hawkeyexb.ppass.backup.flow.continueFlow
-import com.hawkeyexb.ppass.backup.flow.fgsBlockNoticeRes
+import com.hawkeyexb.ppass.backup.flow.countRemainingFlow
+import com.hawkeyexb.ppass.backup.flow.fgsBlockWaitNoticeRes
 import com.hawkeyexb.ppass.backup.flow.flowCommandOf
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.flowMissingSourceNotice
 import com.hawkeyexb.ppass.backup.flow.flowProjection
 import com.hawkeyexb.ppass.backup.flow.pauseFlow
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
+import com.hawkeyexb.ppass.backup.flow.restoreSkippedFlow
 import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
-import com.hawkeyexb.ppass.backup.flow.roundProgressOf
+import com.hawkeyexb.ppass.backup.flow.flowTripletOf
 import com.hawkeyexb.ppass.backup.flow.runtimeFor
+import com.hawkeyexb.ppass.backup.flow.skippedRowCount
+import com.hawkeyexb.ppass.backup.flow.transferPermilleOf
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
@@ -49,6 +53,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
@@ -71,9 +76,6 @@ class BackupUiStateHolder(
     private val _triplet = mutableStateOf<BackupTriplet?>(null)
     val triplet: State<BackupTriplet?> get() = _triplet
 
-    /** #417：桌面缺失的照片现在自动补传、不打扰（#413），这条提示没有数据源了——恒 0，去留由 #418 定。 */
-    private val _reuploadNoticeCount = mutableStateOf(0)
-    val reuploadNoticeCount: State<Int> get() = _reuploadNoticeCount
     private val _missingSourceNotice = mutableStateOf<MissingSourceNotice?>(null)
     val missingSourceNotice: State<MissingSourceNotice?> get() = _missingSourceNotice
     private val _acknowledgedMissingSourceCount = mutableStateOf(0)
@@ -86,17 +88,25 @@ class BackupUiStateHolder(
     private val _commandPending = mutableStateOf(false)
     val commandPending: State<Boolean> get() = _commandPending
 
-    /** #415 裁决 4：SKIPPED_BY_USER 这次不提供恢复入口——恒 null（HomeScreen 的入口因此不渲染）。 */
-    private val _cancelledRoundNotice = mutableStateOf<CancelledRoundNotice?>(null)
-    val cancelledRoundNotice: State<CancelledRoundNotice?> get() = _cancelledRoundNotice
+    /** #418：正在传的这一张的字节进度（0..1）。null = 没在传 / 总字节未知。 */
+    private val _transferProgress = mutableStateOf<Float?>(null)
+    val transferProgress: State<Float?> get() = _transferProgress
 
-    /** #413：「已确认的 order 数 / 范围内的照片总数」。 */
-    private val _roundProgress = mutableStateOf<RoundProgress?>(null)
-    val roundProgress: State<RoundProgress?> get() = _roundProgress
+    /** #418：设置页「取消剩余 N 张」那一行的 N。null = 不渲染这一行。 */
+    private val _cancelRemainingCount = mutableStateOf<Long?>(null)
+    val cancelRemainingCount: State<Long?> get() = _cancelRemainingCount
 
-    /** FGS 受阻的人话（额度用完 / 被拒）。null = 没有可解释的。 */
-    private val _pauseReason = mutableStateOf<Int?>(null)
-    val pauseReason: State<Int?> get() = _pauseReason
+    /** #418：设置卡「已跳过的照片 N 张」的 N（SKIPPED_BY_USER）。null = 不渲染这一行。 */
+    private val _skippedCount = mutableStateOf<Long?>(null)
+    val skippedCount: State<Long?> get() = _skippedCount
+
+    /** #418：确认框要写明的 N（点那一行时现算）。null = 没有确认框。 */
+    private val _cancelConfirmCount = mutableStateOf<Int?>(null)
+    val cancelConfirmCount: State<Int?> get() = _cancelConfirmCount
+
+    /** FGS 受阻的人话（额度用完 / 被拒），只在循环此刻正因此等待时给出。null = 没有可解释的。 */
+    private val _waitReasonNotice = mutableStateOf<Int?>(null)
+    val waitReasonNotice: State<Int?> get() = _waitReasonNotice
 
     /** #418 交接：完整投影（已确认数、范围内总数、当前进度、等待原因、暂停、FAILED 数）。 */
     private val _projection = mutableStateOf<FlowProjection?>(null)
@@ -106,6 +116,11 @@ class BackupUiStateHolder(
     private val refreshPending = AtomicBoolean(false)
     @Volatile private var inScopeTotal: Long? = null
 
+    /** 最近一次现算的「剩余张数」。全量读 MediaStore + order 表，所以节流（见 [remainingLoop]）。 */
+    @Volatile private var remaining: Long? = null
+    private val remainingRequests = Channel<Unit>(Channel.CONFLATED)
+    private var lastBucketIds: Set<Long>? = null
+
     init {
         scope.launch {
             repairEpochIfNeeded()
@@ -113,6 +128,7 @@ class BackupUiStateHolder(
         }
         // 订阅取代轮询（MOB-88 的思路保留）：order 写入（revision）或循环运行态变化时重算投影。
         scope.launch { subscribe() }
+        scope.launch { remainingLoop() }
         mediaObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) = scheduleRefresh(recount = true)
         }
@@ -133,6 +149,22 @@ class BackupUiStateHolder(
             .collect { refresh(recount = false) }
     }
 
+    /**
+     * 「剩余张数」要把 MediaStore 与 order 表各读一遍，不能跟着每个进度回调算。每次投影刷新只是投一个
+     * 请求（CONFLATED，合并），这里算完一次至少歇 [REMAINING_MIN_INTERVAL_MS]；算出来只重新发布上一次的
+     * 投影，不再触发刷新（否则自己喂自己）。
+     */
+    private suspend fun remainingLoop() {
+        for (request in remainingRequests) {
+            val n = withContext(Dispatchers.IO) { runCatching { countRemainingFlow(context) }.getOrNull() }
+            if (n != null) {
+                remaining = n.toLong()
+                _projection.value?.let { publish(it.copy(remaining = remaining)) }
+            }
+            delay(REMAINING_MIN_INTERVAL_MS)
+        }
+    }
+
     private fun scheduleRefresh(recount: Boolean) {
         if (!refreshPending.compareAndSet(false, true)) return
         scope.launch {
@@ -148,9 +180,6 @@ class BackupUiStateHolder(
         runCatching { context.contentResolver.unregisterContentObserver(mediaObserver) }
         scope.cancel()
     }
-
-    /** #417：桌面缺失自动补传、没有提示了——保留入口给 #418，no-op。 */
-    fun acknowledgeReuploadNotice() = Unit
 
     /** MOB-100（B4）：「已跳过 N 张…不会再重传」的确认路径（水位 = 确认时刻）。 */
     fun acknowledgeMissingSourceNotice() {
@@ -183,13 +212,48 @@ class BackupUiStateHolder(
     }
 
     /**
-     * 「取消剩余 N 张」。#415 裁决 4：不需要先暂停。UI 的确认文案（带 N）属于 #418；
-     * 这里保留原入口名，行为已是新语义。
+     * 点「取消剩余 N 张」：先按引擎同一个函数现算 N，N > 0 才弹确认框（框里写明 N）。
+     * 算出来是 0（这期间都传完了）就只把那一行收起来。
      */
-    fun cancelCurrentRound() = command { cancelRemainingFlow(context) }
+    fun requestCancelRemaining() {
+        if (_commandPending.value) return
+        _commandPending.value = true
+        scope.launch {
+            try {
+                val n = withContext(Dispatchers.IO) { runCatching { countRemainingFlow(context) }.getOrNull() } ?: return@launch
+                remaining = n.toLong()
+                _projection.value?.let { publish(it.copy(remaining = remaining)) }
+                _cancelConfirmCount.value = n.takeIf { it > 0 }
+            } finally {
+                _commandPending.value = false
+            }
+        }
+    }
 
-    /** #415 裁决 4：没有恢复入口。保留方法签名给 HomeScreen，no-op。 */
-    fun restoreCancelledRounds() = Unit
+    /**
+     * 「已跳过的照片 · 点击恢复」：删掉所有 SKIPPED_BY_USER 行（单事务），慢路径把它们重新规划进待传。
+     */
+    fun restoreSkipped() = command {
+        restoreSkippedFlow(context)
+        remaining = runCatching { countRemainingFlow(context) }.getOrNull()?.toLong() ?: remaining
+    }
+
+    fun dismissCancelRemaining() {
+        _cancelConfirmCount.value = null
+    }
+
+    /**
+     * 确认「取消剩余 N 张」：#415 裁决 4，不需要先暂停；当场停掉当前这张，剩余的逐张写成
+     * SKIPPED_BY_USER（含 FAILED，裁决 7）。这次不提供恢复入口。
+     */
+    fun confirmCancelRemaining() {
+        if (_cancelConfirmCount.value == null) return
+        _cancelConfirmCount.value = null
+        command {
+            cancelRemainingFlow(context)
+            remaining = runCatching { countRemainingFlow(context) }.getOrNull()?.toLong() ?: remaining
+        }
+    }
 
     private suspend fun repairEpochIfNeeded() {
         if (epochRepairAttempted || !needsEpochRepair(pairing.pairingEpoch)) return
@@ -221,32 +285,36 @@ class BackupUiStateHolder(
                 null
             }
         }
-        return flowProjection(context, bucketIds, inScopeTotal)
+        return flowProjection(context, bucketIds, inScopeTotal, remaining)
     }
 
     private suspend fun refresh(recount: Boolean) {
         pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
         val bucketIds = withContext(Dispatchers.IO) { scopeStore.selectedBucketIds() }
         val p = withContext(Dispatchers.IO) { runCatching { currentProjection(recount) }.getOrNull() } ?: return
+        lastBucketIds = bucketIds
+        publish(p)
+        remainingRequests.trySend(Unit)
+    }
+
+    /** 投影 → 各个 State。全部裁决在 FlowUiProjection.kt 的纯函数里。 */
+    private fun publish(p: FlowProjection) {
         _projection.value = p
         _state.value = backupUiStateOf(p)
         _missingSourceNotice.value = flowMissingSourceNotice(p)
         _acknowledgedMissingSourceCount.value = p.missingSourceAcknowledged.toInt()
-        _roundProgress.value = roundProgressOf(p)
-        _pauseReason.value = fgsBlockNoticeRes(p.fgsBlock)
-        // UI-09 / UI-16：N 是范围内 MediaStore 实时计数，M 是同范围的已确认 order 数。
-        _triplet.value = if (bucketIds == null) {
-            null
-        } else {
-            p.inScopeTotal?.let { n ->
-                tripletOf(n, p.confirmed, p.lastSuccessAt, hasFailedNeedsUser = p.failed > 0L, pausedByUser = p.paused)
-            }
-        }
+        _transferProgress.value = transferPermilleOf(p.current)?.let { it / 1000f }
+        _waitReasonNotice.value = fgsBlockWaitNoticeRes(p)
+        _cancelRemainingCount.value = cancelRemainingRowCount(p, pairingLostState.value.value)
+        _skippedCount.value = skippedRowCount(p)
+        // UI-09 / UI-16：N 是范围内 MediaStore 实时计数，M 是同范围的已确认、原图还在的 order 数。
+        _triplet.value = flowTripletOf(p, lastBucketIds)
     }
 
     private companion object {
         const val RUNTIME_RETRY_MS = 2_000L
         const val UI_DEBOUNCE_MS = 150L
+        const val REMAINING_MIN_INTERVAL_MS = 2_000L
     }
 }
 
