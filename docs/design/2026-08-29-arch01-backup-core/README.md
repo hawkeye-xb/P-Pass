@@ -63,8 +63,8 @@ The five order outcomes:
 | `CONFIRMED` | Desktop fully received, verified, durably saved, and acknowledged it | yes, when it is missing on Desktop |
 | `FAILED` | a per-photo failure that still failed after one immediate retry | retried once per slow path |
 | `SKIPPED_BY_USER` | written per photo by “Cancel remaining N” | no |
-| `SKIPPED_SOURCE_MISSING` | the phone original no longer exists | no (nothing to send) |
-| `CANCELLED_BY_SCOPE` | found out of scope on resume | open: whether it is re-admitted when its album returns to scope |
+| `SKIPPED_SOURCE_MISSING` | the phone original no longer exists | no; becomes transferable again when the original reappears in MediaStore (e.g. restored from the trash, #416 ruling 5) |
+| `CANCELLED_BY_SCOPE` | found out of scope on resume (or by the slow path) | becomes transferable again when its album returns to scope (#415 ruling 5) |
 
 ### Invariants
 
@@ -95,18 +95,23 @@ Bulk outcome (Cancel remaining N)
 
 - Query `GENERATION_MODIFIED > G`, ascending by generation. G is only an acceleration hint: a photo the fast path misses is not lost; the next slow path picks it up.
 - Content triggers carry the changed URIs in batches; after each photo the loop also uses the fast path to fetch the next one. Photos taken while the loop runs are therefore picked up naturally, and triggers arriving meanwhile are coalesced into the running loop.
-- **Open:** `GENERATION_MODIFIED` exists only on API 30+, while the app’s minSdk is 26. The fast-path key on API 26–29, and whether photos can be missed there (and fully covered by the slow path), is undecided.
+- **API 26–29:** there is no `GENERATION_MODIFIED`; the fast path uses `DATE_MODIFIED > G` as a speed-up hint. It has one-second granularity and is not monotonic; anything it misses is covered by the slow path (#415 ruling 1).
+- **G is kept per volume:** each external volume is queried and advanced separately (`MediaStore.getExternalVolumeNames`, #416 ruling 7).
 
 ### Slow path
 
 Triggers: a 5-hour safety net, app open, and a `MediaStore.getVersion()` change (which triggers a full reconciliation).
 
-1. **Merge diff:** sort both MediaStore and the order table by `_id` and merge row by row, reading only `_id`, modification time, and size.
+1. **Merge diff:** sort both MediaStore and the order table by `_id` and merge row by row, reading only `_id`, modification time, size, and `bucket_id`. The snapshot is **not filtered by album**: a photo still present whose album left the scope makes its unfinished order `CANCELLED_BY_SCOPE`; only a photo truly absent from MediaStore is a missing source (#416 ruling 1). The scope check happens before hashing, so out-of-scope photos are never hashed.
 2. **Hash mapping:** compute BLAKE3 for photos that are new or whose version changed.
-   - Hash already known: MediaStore was rebuilt or the file moved; only update the `(_id, version) → hash` mapping, do not re-send.
+   - Hash already known: **add a new row; the old row is not moved** (#416 ruling 3). If a `CONFIRMED` row already holds that content, the new row is recorded `CONFIRMED` and not sent; if the hash only sits on unfinished / `FAILED` rows, “Desktop already has it” does not hold and the new row is queued (Desktop deduplicates by content). One content may therefore map to several `_id`s (e.g. a copy saved by a messaging app).
    - New hash: send it (an edited photo is a new version and is sent as such).
-3. **Missing source:** orders present in the table but absent from MediaStore become `SKIPPED_SOURCE_MISSING`. **Open:** whether this step applies to `CONFIRMED` orders — if it does, deleting a backed-up original would overwrite a completed fact, contradicting “CONFIRMED cannot be revoked.”
-4. **Desktop presence:** ask Desktop, page by page, whether every confirmed photo still exists. Missing ones are **re-sent automatically**; orders carrying an explicit user decision such as `SKIPPED_BY_USER` are not. **Open:** what a photo becomes, and how it is shown, when it is missing on Desktop and the phone original is also gone.
+3. **Missing source (second pass, only after the first pass is persisted):** orders present in the table but absent from MediaStore:
+   - its hash still lives on another existing row (MediaStore rebuild, file move): delete the stale row; it does not count as “deleted from the phone” (#416 ruling 3).
+   - no outcome yet: `SKIPPED_SOURCE_MISSING`.
+   - already has an outcome (including `CONFIRMED`): **the state is not changed**; only a `source_missing` flag is set, so “CONFIRMED cannot be revoked” holds (#415 ruling 2, #416 ruling 2). The flag clears when the original reappears.
+   - rows written by a bulk skip have no hash, so after a MediaStore rebuild they are treated as new photos and sent once more. Rebuilds are rare and the effect equals switching phones; accepted (#416 ruling 4).
+4. **Desktop presence:** ask Desktop, page by page, whether every confirmed photo still exists. Missing ones are **re-sent automatically** (a new row, pick order ②); orders carrying an explicit user decision such as `SKIPPED_BY_USER` are not. Missing on Desktop with the phone original also gone: nothing to re-send, the state stays `CONFIRMED` and only an `unrecoverable` audit event is recorded; no UI this time (#415 ruling 2).
 5. **Failure retry:** retry each `FAILED` photo once.
 
 Estimate (not yet measured): a routine pass over 100 000 photos takes seconds; after a MediaStore rebuild, recomputing every hash takes minutes.
@@ -140,7 +145,7 @@ Trigger (new photo / app to foreground / process start / network-change callback
 |---|---|---|
 | Path failure | Desktop unreachable, handshake failure, no new bytes for 3 minutes | order stays resumable; exit the loop, release the FGS, register a wake-up; not counted as a per-photo failure |
 | Per-photo failure | this photo cannot be read, hashing fails | retry once immediately; still failing → `FAILED`, loop continues with the next photo; the slow path retries once more |
-| Peer failure | Desktop explicitly reports it cannot receive or save | **Open:** #413 does not define the handling (count as per-photo or not, exit the loop or not, which wake-up to register) |
+| Peer failure | Desktop explicitly reports it cannot store the photo (`storage_failed`) | exit the loop, do not count a per-photo attempt, wait for the next wake-up; notification later (#415 ruling 3). `fetch_failed` is a path failure; unknown codes are per-photo failures (counted, bounded) |
 
 ## Control semantics
 
@@ -150,7 +155,7 @@ Trigger (new photo / app to foreground / process start / network-change callback
 | `WAITING_FOR_CONSTRAINTS` | Wi-Fi, battery, daily quota, or Desktop is temporarily unavailable: release the FGS and register a wake-up (network-change callback / 3 probes 10 minutes apart after unreachability / constraint job / on quota exhaustion, wait for the app to come to the foreground) | Resumes automatically once the wake-up arrives and the constraint recovers |
 | FGS denied or timed out | Record the FGS-blocked fact and exit the loop; do not call `startForegroundService` again until the app comes to the foreground (#414) | App comes to the foreground |
 | `DISABLED` | Background switch is off: automatic triggers no longer start the loop; manual triggers are unaffected | User enables it |
-| Cancel remaining N | Write each of the N photos that have no outcome yet as `SKIPPED_BY_USER` (one transaction); the photo in flight is cancelled too and Desktop is told to drop its partial data | Open: see “Cancellation” |
+| Cancel remaining N | Write each of the N photos that have no outcome yet (including `FAILED`) as `SKIPPED_BY_USER` (one transaction); the photo in flight is cancelled too and Desktop is told to drop its partial data | no restore entry this time (#415 ruling 4) |
 
 ## Scope, cancellation, and pairing
 
@@ -165,8 +170,8 @@ original deleted                          → SKIPPED_SOURCE_MISSING
 ```
 
 - `CONFIRMED` photos are unaffected by scope changes.
-- **Open:** whether the photo in flight at the moment of a scope change is interrupted on the spot or allowed to finish; the pre-resume check only covers resuming after a pause or interruption.
-- **Open:** historical photos in a newly added album have generations older than G, so the fast path cannot see them; they wait for the next slow path (app open / 5h safety net). Whether a scope change should trigger a slow path immediately is undecided.
+- The photo in flight at the moment of a scope change **is allowed to finish**; the next photo is checked against the new scope before it starts (#415 ruling 5).
+- **Adding an album triggers a slow path immediately**: its historical photos have generations older than G, so the fast path cannot see them (#415 ruling 5). Removing an album needs no action.
 
 ### Cancellation
 
@@ -181,9 +186,9 @@ User confirms “Cancel remaining N”
 ```
 
 - The slow path neither re-sends nor retries `SKIPPED_BY_USER`; it is an explicit user decision.
-- **Open:** the way out of `SKIPPED_BY_USER` — whether the settings entry “Skipped photos” keeps a restore action, and whether restoring moves those orders into the re-send list.
-- **Open:** whether writing N `SKIPPED_BY_USER` orders requires computing each photo’s hash on the spot (orders use the hash as identity; for a large N that is expensive).
-- **Open:** whether cancellation requires a prior Pause.
+- `SKIPPED_BY_USER` has **no restore entry** this time (#415 ruling 4).
+- Writing N `SKIPPED_BY_USER` orders **does not compute hashes**; those rows have no hash (see the MediaStore-rebuild note in slow-path step 3).
+- Cancellation **does not require a prior Pause**: the photo in flight stops on the spot and the rest are written as `SKIPPED_BY_USER`. N includes `FAILED` (#415 ruling 7).
 
 ### Change Desktop
 
@@ -193,7 +198,7 @@ Clear: partials, running transfer state, and old Desktop ownership
 Result: the new Desktop starts a new backup history
 ```
 
-**Open:** how order history is separated by pairing (`pairingEpoch`), and whether orders from the old pairing are kept.
+Switching to a different Desktop **clears the order table**; the `pairing_epoch` column stays as a guard (#415 ruling 6). Re-pairing the same Desktop (only the epoch changes) keeps the orders — content is addressed by hash, so `CONFIRMED` still holds. After a clear, new order ids start above the current timestamp so they never collide with `queue_sequence` values that the old ledger already completed on Desktop.
 
 ### Migration
 
