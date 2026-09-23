@@ -159,6 +159,14 @@ impl TransferActivity {
         }
     }
 
+    /// #417: a new registration on the same (kept-alive) handler starts a new
+    /// lease. Without this, item N+1 would inherit item N's `completed_hash`
+    /// (status stuck at `Completed{previous}`) and its final `bytes_sent`
+    /// (a false byte stall until the new file passes the old offset).
+    fn reset(&self) {
+        *self.0.lock().expect("transfer activity lock") = ActivityState::default();
+    }
+
     fn mark_completed(&self, hash: Hash) {
         let mut state = self.0.lock().expect("transfer activity lock");
         state.completed_hash = Some(hash);
@@ -762,6 +770,9 @@ impl AndroidBlobsProvider {
         }
 
         self.ensure_active_handler();
+        if let Some(active) = self.active.lock().expect("active provider lock").as_ref() {
+            active.handler.activity.reset();
+        }
         // BLOB-03: retain only the current lease's blob. A later register (in
         // the real Flow every strict-head advance is preceded by a revoke that
         // drops this tag, but the loopback tests register back-to-back) drops

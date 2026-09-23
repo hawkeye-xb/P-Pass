@@ -184,6 +184,81 @@ fn byte_progress_is_recorded_from_real_transfer_progress_events() {
     );
 }
 
+/// #417：同一个 handler 上连续两张（成功之后只 release_retention、不 revoke——生产路径就是这样）。
+/// 第二张的状态必须是它自己的：不能继承上一张的 `Completed{A}`，也不能继承上一张的 `bytes_sent`。
+/// 反证：去掉 activate() 里的 activity.reset() → 注册 B 之后 status 仍是 Completed{A}，红。
+#[test]
+fn serial_items_on_one_handler_do_not_inherit_the_previous_lease_activity() {
+    let dir = tempdir().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+    let a: Vec<u8> = (0..(4 * 1024 * 1024u32)).map(|i| (i % 241) as u8).collect();
+    let b: Vec<u8> = (0..(1024 * 1024u32)).map(|i| (i % 239) as u8).collect();
+    let (pa, pb) = (dir.path().join("a.bin"), dir.path().join("b.bin"));
+    fs::write(&pa, &a).unwrap();
+    fs::write(&pb, &b).unwrap();
+    let (ha, hb) = (blake3_of(&a), blake3_of(&b));
+
+    let pull = |ticket: String, name: &str| {
+        let receiver_dir = dir.path().join(format!("recv-{name}"));
+        runtime.block_on(async {
+            let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+                .await
+                .unwrap();
+            let blobs = Blobs::open(&receiver, &receiver_dir).await.unwrap();
+            blobs
+                .pull(&ticket, &receiver_dir.join("out.bin"))
+                .await
+                .unwrap();
+            blobs.close().await;
+            receiver.close().await;
+        });
+    };
+
+    let ta = provider.register_path(ha, &pa).unwrap();
+    pull(ta, "a");
+    let mut completed_a = false;
+    for _ in 0..50 {
+        if provider.transfer_status() == (transport::ActiveTransferStatus::Completed { hash: ha }) {
+            completed_a = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(completed_a, "A completes first");
+    provider.release_retention();
+
+    let tb = provider.register_path(hb, &pb).unwrap();
+    match provider.transfer_status() {
+        transport::ActiveTransferStatus::InProgress { bytes_sent, .. } => {
+            assert!(
+                bytes_sent.is_none(),
+                "B starts with no bytes, not A's {bytes_sent:?}"
+            )
+        }
+        other => panic!("B must start InProgress, got {other:?}"),
+    }
+    assert!(provider.byte_progress().is_none());
+
+    pull(tb, "b");
+    let mut progress = None;
+    for _ in 0..50 {
+        progress = provider.byte_progress();
+        if progress.is_some_and(|(sent, _)| sent > 0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (sent, _) = progress.expect("B reports its own byte progress");
+    assert!(
+        sent <= b.len() as u64,
+        "bytes_sent={sent} must describe B, not A"
+    );
+}
+
 #[test]
 fn provider_keeps_one_endpoint_for_serial_flow_items() {
     let dir = tempdir().unwrap();
