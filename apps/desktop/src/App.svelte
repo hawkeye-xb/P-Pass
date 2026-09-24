@@ -49,6 +49,8 @@
     pairResultName,
   } from "./lib/pending.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
+  // #413 §7：照片库卷低于 5 GiB 发一次系统通知（判定规则见 lowSpace.js）。
+  import { nextLowSpace } from "./lowSpace.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
   import { externalDeleteNotice } from "./lib/externalDelete.js";
@@ -152,6 +154,19 @@
 
   let online = $state(false);
   let status = $state(null);
+  // #413 §7：低空间通知的布防状态——每个进程最多在跌破时报一次，回升到
+  // 6 GiB 以上才重新布防。不是 $state：它不驱动任何渲染。
+  let lowSpaceArmed = true;
+  function checkLowSpace(freeBytes) {
+    const next = nextLowSpace(lowSpaceArmed, freeBytes);
+    lowSpaceArmed = next.armed;
+    if (!next.notify) return;
+    // 尽力而为：系统通知失败不影响任何界面状态。
+    invoke("notify_system", {
+      title: t("ui.low_space_title"),
+      body: t("ui.low_space_body", { free: formatBytes(freeBytes) }),
+    }).catch(() => {});
+  }
   let devices = $state([]);
   let qrDataUrl = $state("");
   let qrText = $state("");
@@ -215,6 +230,7 @@
     try {
       status = await call("status");
       online = true;
+      checkLowSpace(status.disk_free_bytes ?? null);
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。

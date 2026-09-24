@@ -9,25 +9,20 @@ class MOB62RuntimeInitializationTest {
     private fun source(): String =
         File("src/main/java/com/hawkeyexb/ppass/backup/flow/AndroidFlowRuntime.kt").readText()
 
+    /**
+     * MOB-62 / #414：原生初始化（数秒）绝不能在 runtimeLock 里做，调用方也绝不能无界等待它——
+     * 之前 flowConstructionLock 里原生 open 永久阻塞时，所有入口跟着永久阻塞。
+     */
     @Test
     fun runtime_map_lock_never_wraps_native_provider_open() {
         val source = source()
-        val runtimeFor = source.substringAfter("private fun runtimeFor(context: Context)")
-            .substringBefore("private val flowTriggerLock")
-        // MOB-91 之后原生仓库是进程内单例，`runtimeFor`/`buildRuntime` 拿的是
-        // 它的引用（第一次才真 open）。MOB-62 要守的不变量没变：**原生初始化
-        // 绝不能被 `flowRuntimeLock` 包住**——那把锁是给「取一下运行时引用」
-        // 用的，原生初始化要几秒，挡住它就是 ANR。
-        val nativeInit = runtimeFor.indexOf("sharedNativeProvider(context)")
-        val publish = runtimeFor.indexOf("return synchronized(flowRuntimeLock)")
-
-        assertTrue("native initialization must remain in runtimeFor", nativeInit >= 0)
-        assertTrue("a ready candidate must publish only after native initialization", publish > nativeInit)
-        assertTrue(
-            "the first lock section must end before native initialization begins",
-            runtimeFor.substring(0, nativeInit)
-                .contains("flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let { return it }\n    }"),
-        )
+        val runtimeFor = source.substringAfter("internal fun runtimeFor(context: Context)").substringBefore("private fun buildRuntime(")
+        assertFalse("runtimeFor 里不许直接 open 原生仓库", runtimeFor.contains("sharedNativeProvider(app)"))
+        assertTrue("构造在专门的线程上跑", runtimeFor.contains("thread(name = \"ppass-flow-init\")"))
+        assertTrue("调用方有界等待初始化", runtimeFor.contains("task.get(INIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)"))
+        assertTrue("超时要留痕", runtimeFor.contains("initialization still running after"))
+        val build = source.substringAfter("private fun buildRuntime(")
+        assertTrue("原生 open 在构造里", build.contains("sharedNativeProvider(app)"))
     }
 
     /**
@@ -61,9 +56,7 @@ class MOB62RuntimeInitializationTest {
         )
         val clear = source.substringAfter("fun clearFlowRuntime(").substringBefore("\n}")
         assertFalse("解除配对不许关仓库——关了同一进程内再也开不回来", clear.contains(".close()"))
-        assertTrue("解除配对要停掉在飞的传输", clear.contains("nativeProvider.revoke("))
-        // MOB-62 要的那半仍然成立：旧运行时该关的照关。
-        assertTrue("旧运行时仍要从 map 移除", clear.contains("flowRuntimes.remove("))
-        assertTrue("写者线程仍要显式关", clear.contains("stale.shutdown()"))
+        assertTrue("解除配对要停掉在飞的传输", clear.contains("sharedNativeProvider?.revoke("))
+        assertTrue("旧运行时仍要显式关", clear.contains("stale?.shutdown()"))
     }
 }

@@ -60,7 +60,9 @@
     <string name="state_sending_file">正在备份 %1$s（第 %2$d / %3$d 张）</string>
     <string name="state_safe">照片都存好了</string>
     <!-- T-080 缺陷(a): 待备份 > 0 时状态条只允许说欠账，不许说存好了 -->
-    <string name="state_pending">还有 %1$d 张待备份</string>
+    <plurals name="state_pending">
+        <item quantity="other">还有 %1$d 张待备份</item>
+    </plurals>
     <string name="state_trouble">需要再试一次</string>
     <string name="safe_detail">新存 %1$d 张。</string>
     <string name="safe_detail_dup">新存 %1$d 张，%2$d 张原本就在。</string>
@@ -69,15 +71,31 @@
     <!-- UX-13: 被暂停后同一个位置的按钮文案（点它续传，同一条管线） -->
     <string name="backup_resume">继续</string>
     <string name="backup_waiting_constraints">正在等待备份条件满足</string>
-    <string name="backup_round_cancelled">当前轮已取消</string>
-    <string name="backup_cancel_current_round">取消当前轮</string>
+    <!-- #413 全局状态与等待原因（草稿，待用户确认）。「已暂停」只指用户暂停；等待中由 P-Pass 自动接着传。 -->
+    <string name="state_paused">已暂停，点「继续」接着备份</string>
+    <string name="state_preparing">准备备份…</string>
+    <string name="state_waiting_disabled">后台备份已关闭，打开 P-Pass 时照常备份</string>
+    <string name="state_waiting_battery">电量低，充电后自动接着备份</string>
+    <string name="state_waiting_desktop_unreachable">连不上存储电脑，连上后自动接着备份</string>
+    <string name="state_waiting_desktop_full">存储电脑的空间满了，请清理磁盘或把照片库换到更大的位置。</string>
+    <string name="state_waiting_desktop_library">存储电脑照片库文件夹无法打开</string>
+    <string name="state_waiting_desktop_error">存储电脑保存照片时出错了，请在电脑上看看 P-Pass</string>
+    <string name="desktop_low_space_hint">存储电脑剩余空间不到 5 GB，快存满了</string>
     <!-- 2026-09-07 真机反馈：命令处理中禁用按钮，避免连点排队 -->
     <string name="backup_command_processing">处理中…</string>
-    <!-- 2026-09-14（用户拍板，取代 MOB-59/X-05）：恢复入口从常驻警告条
-         挪进备份设置卡的一行，不再是打断式提示，故文案不再叫 notice。 -->
+    <!-- #418: settings row + confirm dialog for "cancel the remaining N photos" (restore lives in the "skipped photos" row). -->
+    <plurals name="cancel_remaining_label">
+        <item quantity="other">取消剩余 %1$d 张</item>
+    </plurals>
+    <plurals name="cancel_remaining_confirm_title">
+        <item quantity="other">取消剩余 %1$d 张？</item>
+    </plurals>
+    <string name="cancel_remaining_confirm_body">这些照片不会再备份，之后可以在「已跳过的照片」里恢复。新拍的照片照常备份。</string>
     <string name="cancelled_round_cell_label">已跳过的照片</string>
     <string name="cancelled_round_cell_value">%1$d 张 · 点击恢复</string>
-    <string name="missing_source_notice_body">无法恢复：%1$d 张照片已从手机相册删除，不会再传到电脑。</string>
+    <plurals name="missing_source_notice_body">
+        <item quantity="other">无法恢复：%1$d 张照片已从手机相册删除，不会再传到电脑。</item>
+    </plurals>
     <string name="missing_source_notice_dismiss">知道了</string>
     <string name="missing_source_archive_label">已从手机删除的照片</string>
     <string name="missing_source_archive_value">%1$d 张 · 无法恢复</string>
@@ -91,7 +109,9 @@
     <!-- UX-02: 失败通知（成功保持沉默）；MOB-67 渠道名进字典（旧代码硬编码双语） -->
     <string name="notif_channel_backup_failed">照片备份失败</string>
     <string name="notif_backup_failed_title">照片备份没成功</string>
-    <string name="notif_backup_failed_body">%1$d 张照片没备份成功，打开看看</string>
+    <plurals name="notif_backup_failed_body">
+        <item quantity="other">%1$d 张照片没备份成功，打开看看</item>
+    </plurals>
     <!-- NET-12: 传输前台服务——传输期间把进程留在系统不会随便回收的档位，
          防止像 2026-09-14 那样在传输中途被系统直接杀掉。低优先级/静音，
          这是状态提示不是告警。 -->
@@ -100,8 +120,8 @@
     <!-- MOB-101: 系统不再允许「App 不在屏幕上时继续备份」（这件事每天有额度）。
          只说人话：不出现代码、类名、术语。这个事实只有在系统拒绝之后才知道，
          所以文案说的是「已经发生了什么」，不是「接下来会怎样」。 -->
-    <string name="state_background_budget_paused">今天在后台备份的时间用完了。备份已暂停——把 P-Pass 留在屏幕上就能继续，或者明天自动接着传。</string>
-    <string name="state_background_protection_unknown">手机刚刚拒绝了这次备份，没有说原因。备份已暂停——打开 P-Pass 并留在屏幕上就能继续。</string>
+    <string name="state_background_budget_paused">今天在后台备份的时间用完了。把 P-Pass 留在屏幕上就能继续，或者明天自动接着传。</string>
+    <string name="state_background_protection_unknown">手机刚刚拒绝了这次备份，没有说原因。打开 P-Pass 并留在屏幕上就能继续。</string>
     <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->
     <string name="notif_sentinel_title">3 天没连上电脑了</string>
     <string name="notif_sentinel_body">照片没丢——看看电脑上的 P-Pass 还开着吗</string>
@@ -154,7 +174,9 @@
          "备份哪些相册"，跟下面几行同款"问句式"标签。 -->
     <string name="backup_scope">备份哪些相册</string>
     <string name="backup_scope_all">全部相册</string>
-    <string name="backup_scope_n">%1$d 个相册</string>
+    <plurals name="backup_scope_n">
+        <item quantity="other">%1$d 个相册</item>
+    </plurals>
     <string name="storage_computer">存储电脑</string>
     <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
@@ -193,7 +215,9 @@
          页露出）；天数来自 SentinelStore.lastReachableAt，从未确认可达
          过时不编造具体天数，走 unknown 兜底文案。 -->
     <string name="photos_lost_title">和家里的电脑失去了联系</string>
-    <string name="photos_lost_body_days">备份已经暂停 %1$d 天。照片都还在你手机上，一张没丢——重新连上就会自动补齐。</string>
+    <plurals name="photos_lost_body_days">
+        <item quantity="other">备份已经暂停 %1$d 天。照片都还在你手机上，一张没丢——重新连上就会自动补齐。</item>
+    </plurals>
     <string name="photos_lost_body_unknown">备份已经暂停。照片都还在你手机上，一张没丢——重新连上就会自动补齐。</string>
     <!-- 设计稿原文按钮文案是"重新扫码连接"，跟 scan_again（欢迎/配对
          流程用的"重新扫码"）不是同一个字符串，各自独立不复用。 -->
@@ -265,7 +289,4 @@
     <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
     <string name="backup_interrupted_body">后台自动备份被停掉了。现在只有打开 App 时才会传，点一下就恢复自动。照片都还在，一张没丢。</string>
     <string name="backup_interrupted_action">恢复备份</string>
-    <!-- MOB-37: 重传告知的 App 内呈现（系统通知发失败/没被看见时的兜底）。 -->
-    <string name="reupload_notice_body">有 %1$d 张已备份的照片在电脑上不见了，正在重新传回。如果是主动删除，请先删除手机上的原图。</string>
-    <string name="reupload_notice_action">知道了</string>
 </resources>

@@ -1,771 +1,376 @@
-// REBUILD-04: shared Android runtime for Flow wake, ledger commands, and UI reads.
+// REBUILD-04 → ARCH-13 (#417): Android 侧的逐张循环运行时——把 FlowEngine 接到 SQLite、MediaStore、
+// iroh 原生 provider、前台服务与 WorkManager 上，并提供所有触发入口。
 package com.hawkeyexb.ppass.backup.flow
 
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
+import android.os.BatteryManager
+import android.os.SystemClock
 import android.util.Log
 import com.hawkeyexb.ppass.PPassApplication
+import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.backup.BackupSettings
-import com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs
-import com.hawkeyexb.ppass.backup.SystemFailureNotifier
+import com.hawkeyexb.ppass.backup.WorkManagerWakeScheduler
+import com.hawkeyexb.ppass.backup.order.OrderStore
+import com.hawkeyexb.ppass.backup.order.ContentResolverMediaSnapshotSource
+import com.hawkeyexb.ppass.backup.order.SqliteOrderStore
 import com.hawkeyexb.ppass.transport.IdentityStore
+import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import java.io.File
 import java.io.FileNotFoundException
-import java.util.UUID
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 
-/** Reads one ordered MediaStore window; it never hashes or contacts Desktop. */
-internal class AndroidFlowDiscoveryPort(
-    private val resolver: android.content.ContentResolver,
-    private val selectedBuckets: () -> Set<Long>?,
-) : FlowDiscoveryPort {
-    override fun discover(cursor: DiscoveryCursor, scope: ScopeRevision): DiscoveryPage {
-        val generation = if (android.os.Build.VERSION.SDK_INT >= 30) {
-            android.provider.MediaStore.MediaColumns.GENERATION_MODIFIED
-        } else {
-            android.provider.MediaStore.MediaColumns.DATE_MODIFIED
-        }
-        val collection = android.provider.MediaStore.Files.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL)
-        val projection = arrayOf(
-            android.provider.MediaStore.MediaColumns._ID,
-            android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
-            android.provider.MediaStore.MediaColumns.MIME_TYPE,
-            android.provider.MediaStore.MediaColumns.SIZE,
-            generation,
-            android.provider.MediaStore.MediaColumns.DATE_MODIFIED,
-            android.provider.MediaStore.MediaColumns.BUCKET_ID,
-            // DESK-12: the phone's own capture-time fact — carried to
-            // Desktop as a fallback for files with no EXIF (screenshots,
-            // some video codecs), which otherwise landed under the
-            // Flow-delivered file's export moment instead of its real date.
-            android.provider.MediaStore.MediaColumns.DATE_TAKEN,
-            // 2026-09-15 用户实测：飞书(Lark)等第三方 App 保存的图片既没有
-            // EXIF DateTimeOriginal 也没有 DATE_TAKEN（两者都为 null/0）——
-            // 手机自己的相册 App 遇到这批素材也拿不到"拍摄时间"，但
-            // MediaStore 仍然记得 DATE_ADDED（这个 App 把文件写入相册库的
-            // 那一刻，单位是秒不是毫秒）。这是手机上唯一还剩的、比 Desktop
-            // 端"daemon 收到文件的时刻"更接近真相的时间信号，缺 DATE_TAKEN
-            // 时必须退到它，否则这批素材会被扣上"落地时刻"这个跟内容本身
-            // 毫无关系的时间戳（Google 相册等主流相册处理无 EXIF 素材就是
-            // 这个优先级，不是我们发明的口径）。
-            android.provider.MediaStore.MediaColumns.DATE_ADDED,
-        )
-        val buckets = selectedBuckets() ?: return DiscoveryPage(emptyList(), cursor)
-        if (buckets.isEmpty()) return DiscoveryPage(emptyList(), cursor)
-        val selection = buildString {
-            append("${android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?, ?)")
-            append(" AND ($generation > ? OR ($generation = ? AND ${android.provider.MediaStore.MediaColumns._ID} > ?))")
-            append(" AND ${android.provider.MediaStore.MediaColumns.BUCKET_ID} IN (${buckets.joinToString(",")})")
-        }
-        val args = arrayOf(
-            android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
-            android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
-            cursor.lastGeneration.toString(),
-            cursor.lastGeneration.toString(),
-            cursor.lastMediaId.toString(),
-        )
-        val candidates = mutableListOf<DiscoveryCandidate>()
-        var next = cursor
-        resolver.query(collection, projection, selection, args, "$generation ASC, ${android.provider.MediaStore.MediaColumns._ID} ASC")?.use { rows ->
-            val id = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
-            val name = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DISPLAY_NAME)
-            val mime = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.MIME_TYPE)
-            val size = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.SIZE)
-            val gen = rows.getColumnIndexOrThrow(generation)
-            val modified = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_MODIFIED)
-            val bucket = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_ID)
-            val taken = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_TAKEN)
-            val added = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_ADDED)
-            while (rows.moveToNext() && candidates.size < DISCOVERY_PAGE_SIZE) {
-                val rowId = rows.getLong(id)
-                val rowGeneration = rows.getLong(gen)
-                candidates += DiscoveryCandidate(
-                    sourceRef = Uri.withAppendedPath(collection, rowId.toString()).toString(),
-                    // MOB-98: generation_modified 绝不进身份标识，理由见 sourceVersionOf。
-                    // 它作为 discovery 游标的用途不受影响，见下面的 DiscoveryCursor。
-                    sourceVersion = sourceVersionOf(rows.getLong(modified), rows.getLong(size)),
-                    bucketId = rows.getLong(bucket),
-                    fileName = rows.getString(name).orEmpty(),
-                    mediaType = rows.getString(mime) ?: "application/octet-stream",
-                    captureAtMs = captureAtMsOrDateAdded(rows.getLong(taken), rows.getLong(added)),
-                )
-                next = DiscoveryCursor(rowGeneration, rowId)
-            }
-        }
-        return DiscoveryPage(candidates, next)
-    }
-
-    override fun backfill(request: ScopeBackfillRequest): ScopeBackfillPage {
-        if (request.boundary == DiscoveryCursor.INITIAL) {
-            return ScopeBackfillPage(emptyList(), request.cursor, complete = true)
-        }
-        val generation = if (android.os.Build.VERSION.SDK_INT >= 30) {
-            android.provider.MediaStore.MediaColumns.GENERATION_MODIFIED
-        } else {
-            android.provider.MediaStore.MediaColumns.DATE_MODIFIED
-        }
-        val collection = android.provider.MediaStore.Files.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL)
-        val buckets = selectedBuckets() ?: return ScopeBackfillPage(emptyList(), request.cursor, complete = true)
-        if (buckets.isEmpty()) return ScopeBackfillPage(emptyList(), request.cursor, complete = true)
-        val projection = arrayOf(
-            android.provider.MediaStore.MediaColumns._ID,
-            android.provider.MediaStore.MediaColumns.DISPLAY_NAME,
-            android.provider.MediaStore.MediaColumns.MIME_TYPE,
-            android.provider.MediaStore.MediaColumns.SIZE,
-            generation,
-            android.provider.MediaStore.MediaColumns.DATE_MODIFIED,
-            android.provider.MediaStore.MediaColumns.BUCKET_ID,
-            android.provider.MediaStore.MediaColumns.DATE_TAKEN,
-            android.provider.MediaStore.MediaColumns.DATE_ADDED,
-        )
-        val selection = buildString {
-            append("${android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?, ?)")
-            append(" AND ($generation > ? OR ($generation = ? AND ${android.provider.MediaStore.MediaColumns._ID} > ?))")
-            append(" AND ($generation < ? OR ($generation = ? AND ${android.provider.MediaStore.MediaColumns._ID} <= ?))")
-            append(" AND ${android.provider.MediaStore.MediaColumns.BUCKET_ID} IN (${buckets.joinToString(",")})")
-        }
-        val args = arrayOf(
-            android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE.toString(),
-            android.provider.MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
-            request.cursor.lastGeneration.toString(),
-            request.cursor.lastGeneration.toString(),
-            request.cursor.lastMediaId.toString(),
-            request.boundary.lastGeneration.toString(),
-            request.boundary.lastGeneration.toString(),
-            request.boundary.lastMediaId.toString(),
-        )
-        val candidates = mutableListOf<DiscoveryCandidate>()
-        var next = request.cursor
-        var complete = true
-        resolver.query(collection, projection, selection, args, "$generation ASC, ${android.provider.MediaStore.MediaColumns._ID} ASC")?.use { rows ->
-            val id = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns._ID)
-            val name = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DISPLAY_NAME)
-            val mime = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.MIME_TYPE)
-            val size = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.SIZE)
-            val gen = rows.getColumnIndexOrThrow(generation)
-            val modified = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_MODIFIED)
-            val bucket = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.BUCKET_ID)
-            val taken = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_TAKEN)
-            val added = rows.getColumnIndexOrThrow(android.provider.MediaStore.MediaColumns.DATE_ADDED)
-            while (rows.moveToNext()) {
-                if (candidates.size == DISCOVERY_PAGE_SIZE) {
-                    complete = false
-                    break
-                }
-                val rowId = rows.getLong(id)
-                val rowGeneration = rows.getLong(gen)
-                candidates += DiscoveryCandidate(
-                    sourceRef = Uri.withAppendedPath(collection, rowId.toString()).toString(),
-                    // MOB-98: generation_modified 绝不进身份标识，理由见 sourceVersionOf。
-                    // 它作为 discovery 游标的用途不受影响，见下面的 DiscoveryCursor。
-                    sourceVersion = sourceVersionOf(rows.getLong(modified), rows.getLong(size)),
-                    bucketId = rows.getLong(bucket),
-                    fileName = rows.getString(name).orEmpty(),
-                    mediaType = rows.getString(mime) ?: "application/octet-stream",
-                    captureAtMs = captureAtMsOrDateAdded(rows.getLong(taken), rows.getLong(added)),
-                )
-                next = DiscoveryCursor(rowGeneration, rowId)
-            }
-        }
-        return ScopeBackfillPage(candidates, next, complete)
-    }
-
-    private companion object { const val DISCOVERY_PAGE_SIZE = 500 }
-}
+private const val TAG = "PPassFlow"
+private val androidLog = FlowLogger { Log.i(TAG, it) }
 
 /**
- * MediaStore `DATE_TAKEN` 优先（毫秒，多数相机 App 的真实拍摄时间）；
- * 为 0（列缺失/未知）时退到 `DATE_ADDED`（秒，第三方 App —— 实测飞书 —— 保存
- * 图片时唯一还留着的时间信号，见调用处注释）。两者都拿不到才是真的 0，
- * 交给 Desktop 端的 EXIF/mtime 兜底链继续处理。
- */
-private fun captureAtMsOrDateAdded(dateTakenMs: Long, dateAddedSec: Long): Long {
-    if (dateTakenMs > 0) return dateTakenMs
-    return if (dateAddedSec > 0) dateAddedSec * 1000 else 0L
-}
-
-/**
- * MOB-76: the live delivery gate —「仅 Wi-Fi 时备份」× current network.
- * This answers 「往哪条网络发」 and is deliberately separate from the
- * WorkManager scheduling constraints in TriggerPolicy (「什么时候允许跑」):
- * even a MANUAL-tier worker that the scheduler let run on cellular must not
- * push a delivery onto a metered network while the switch is on (09-12 OPPO
- * real device, card: 任何触发路径都不例外).
+ * MOB-76: the live delivery gate —「仅 Wi-Fi 时备份」× current network. Separate from the WorkManager
+ * scheduling constraints: even a MANUAL worker must not push onto a metered network while the switch is on.
  */
 internal fun flowConstraintsSatisfied(context: Context): Boolean {
     val settings = BackupSettings(context.filesDir).load()
     return !settings.wifiOnly || isOnUnmetered(context)
 }
 
-/** 是否在不计流量网络（Wi-Fi）上——从 MainActivity 的私有实现上移共用。 */
+/** 是否在不计流量网络（Wi-Fi）上。 */
 internal fun isOnUnmetered(context: Context): Boolean {
-    val cm = context.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
-        as? android.net.ConnectivityManager ?: return false
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
     val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
     return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
 }
 
-/** Framework wake path. The Worker invokes [runFlowWake] synchronously. */
-internal fun requestFlowWake(
-    context: Context,
-    constraintsSatisfied: Boolean = flowConstraintsSatisfied(context),
-) {
+/** 电量低（与 WorkManager `requiresBatteryNotLow` 同一口径：未充电且 ≤ 15%）。 */
+internal fun isBatteryLow(context: Context): Boolean {
+    val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return false
+    val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+    val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+    val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+    if (level < 0 || scale <= 0 || plugged) return false
+    return level * 100 / scale <= 15
+}
+
+// ------------------------------------------------------------------ 触发入口
+
+/** 任何触发都走这里（先查暂停在 [FlowEngine.trigger] 里）。不阻塞调用方。 */
+internal fun requestFlowWake(context: Context, reason: TriggerReason) {
     val app = context.applicationContext
-    thread(name = "ppass-flow-wake") { runFlowWake(app, constraintsSatisfied) }
-}
-
-/** Scope changes only record durable Flow work; the scheduled wake enforces runtime constraints. */
-internal fun requestFlowScopeBackfill(context: Context) {
-    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.ScopeBackfill)
-}
-
-/**
- * A scope save is an explicit foreground action, not just a future WorkManager
- * eligibility change.  Keep the durable backfill request and its first run in
- * one background critical section so an older KEEP work request cannot delay it.
- */
-internal fun requestFlowScopeBackfillAndWake(context: Context, constraintsSatisfied: Boolean) {
-    val app = context.applicationContext
-    thread(name = "ppass-flow-scope-wake") {
-        runtimeFor(app)?.writer?.dispatch(FlowAction.ScopeBackfillAndWake(constraintsSatisfied))
-        flushAuditOutbox(app)
+    thread(name = "ppass-flow-wake") {
+        runCatching { runtimeFor(app)?.engine?.trigger(reason) }
+            .onFailure { Log.e(TAG, "wake $reason failed", it) }
     }
 }
 
-internal fun runFlowWake(
-    context: Context,
-    constraintsSatisfied: Boolean = flowConstraintsSatisfied(context),
-) {
-    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.Wake(constraintsSatisfied))
-    flushAuditOutbox(context)
+/** worker 用：触发并等检查阶段结束（传输跑在进程级 scope + FGS 下，不占 worker 的执行时长）。 */
+internal suspend fun runFlowWake(context: Context, reason: TriggerReason) {
+    val runtime = runtimeFor(context.applicationContext) ?: return
+    withTimeoutOrNull(WORKER_CHECK_BUDGET_MS) { runtime.engine.triggerAndAwaitChecks(reason) }
+        ?: Log.w(TAG, "wake $reason: checks did not finish within ${WORKER_CHECK_BUDGET_MS}ms; the cycle continues on its own")
 }
 
-/**
- * MOB-87：跑一轮远端对账——**去问桌面「我以为传成功的那些，你还在吗」**。
- *
- * 这是整条链上过去缺失的那一环。备份扫描只进不退（`DiscoveryCursor`），
- * 扫过的照片不会再看；`commitDiscoveryPage` 又按 `stableId` 去重，所以账本
- * 上那句「这张我传成功了」**从来没有任何东西会去推翻它**。桌面上的副本
- * 没了，手机永远不知道——直到这个函数被调用。
- *
- * 两个触发点：
- * - **重新授权成功**（[requestFlowReconcileAfterRepair]）：最可能发生变化的
- *   时刻，断开期间桌面那边什么都可能发生过。
- * - **5 小时周期 Worker**（`BackupWorker`）：兜底。
- *
- * 线程纪律：探测走网络 + ContentResolver，在 IO 上跑；落账走
- * [FlowAction.ApplyReconciliation] 回写者线程（生产账本是
- * `SingleThreadLedgerWrites` 强制的，在这里直接写会抛）。
- *
- * 桌面不可达时 [ReconciliationCoordinator.probe] 返回 null，这轮安静结束、
- * 游标不推进、不落任何审计——等下一轮（同 daemon 侧 `reconcile.rs:125`
- * 「对账是收敛手段」的纪律）。
- */
-internal fun requestFlowReconcile(context: Context) {
-    // 调用方不在协程里时用这个；worker 里**必须**用挂起版，见下。
-    CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { runFlowReconcile(context) }
-}
+/** 新增相册：立刻叫醒循环并对账（新相册的历史照片在 G 以下，只有对账扫得到）。减少相册不需要调用任何东西。 */
+@Suppress("UNUSED_PARAMETER")
+internal fun requestFlowScopeBackfillAndWake(context: Context, constraintsSatisfied: Boolean) =
+    requestFlowWake(context, TriggerReason.SCOPE_ADDED)
 
-/**
- * 挂起版：调用方等它跑完。
- *
- * `BackupWorker.doWork` 必须用这一个。之前那里调的是 fire-and-forget 版，
- * `doWork` 当场 `Result.success()` 返回、WorkManager 认为活干完了、放掉
- * wakelock——而那个还在等桌面网络往返的协程随时可能被掐掉。`runFlowWake`
- * 是同步的所以没事，这条是异步的，漏了。
- */
-internal suspend fun runFlowReconcile(context: Context) {
-    val app = context.applicationContext
-    val pairing = PairingStore(app.filesDir).load() ?: run {
-        Log.i("PPassFlow", "reconcile: not paired; skipping this round")
-        return
-    }
-    val runtime = runtimeFor(app) ?: run {
-        Log.w("PPassFlow", "reconcile: no Flow runtime available; skipping this round")
-        return
-    }
-    val coordinator = ReconciliationCoordinator(runtime.ledger)
-    val plan = coordinator.planPage()
-    Log.i("PPassFlow", "reconcile: page=${plan.page.size} stalled=${plan.stalled}")
-    val outcome = if (plan.page.isEmpty()) {
-        // 空页也要投递：`stalled` 为真时 reducer 要落那条故障审计。
-        ReconciliationOutcome(plan, emptySet(), emptyMap())
-    } else {
-        val application = app as? PPassApplication ?: return
-        val sourceProbe = ContentResolverSourcePresenceProbe(app.contentResolver)
-        coordinator.probe(
-            plan = plan,
-            remoteMissing = { hashes ->
-                application.daemonClient.bind(IdentityStore(app.filesDir).secretKey())
-                RemotePresenceProbe(application.daemonClient)
-                    .missing(parsePeerAddrToken(pairing.daemonAddrToken), hashes)
-            },
-            sourcePresence = { sourceRef -> sourceProbe.presence(sourceRef) },
-        ) ?: run {
-            // 桌面不可达。游标不推进，下一轮重试同一页。
-            Log.i("PPassFlow", "reconcile: Desktop unreachable; retrying the same page next round")
-            return
-        }
-    }
-    Log.i("PPassFlow", "reconcile: Desktop is missing ${outcome.missing.size} of ${plan.hashes.size}")
-    runtime.writer.dispatchAndAwait(FlowAction.ApplyReconciliation(outcome))
-    flushAuditOutbox(app)
-    // 对账可能把桌面缺失的项退回了 QUEUED——那是活，得有人去干。
-    runFlowWake(app)
-}
+/** MOB-87：重新配对成功——唤醒 + 对账（含问桌面「还在吗」）。 */
+internal fun requestFlowWakeAfterRepair(context: Context) = requestFlowWake(context, TriggerReason.PAIRING_REPAIRED)
 
-/**
- * MOB-87：重新授权成功后的那一下。
- *
- * 原症状（本卡挂号那条）是：会话内重新扫码配对成功 → 什么都不发生，
- * 必须杀掉 App 重开才动。根因是补捞只挂在
- * `MainActivity` 的 `LaunchedEffect(backupInterrupted)`（键里没有配对状态）
- * 和 `ON_RESUME`（会话内重新配对不会走 STOPPED→RESUMED）——**配对成功这个
- * 状态跃迁两个都不在其中**。
- *
- * 唤醒之外还多跑一轮对账：断开期间桌面那边什么都可能发生过，这是最该
- * 核对一次的时刻。
- */
-internal fun requestFlowWakeAfterRepair(context: Context) {
-    val app = context.applicationContext
-    thread(name = "ppass-flow-repair-wake") {
-        // 裸 `thread {}` 里抛出的异常只会走默认处理器，调用方什么也看不到
-        // ——真机上表现就是「配对完成了却毫无动静」，和根本没调过一模一样。
-        Log.i("PPassFlow", "repair: pairing accepted, waking Flow")
-        try {
-            runFlowWake(app)
-            Log.i("PPassFlow", "repair: wake dispatched, starting one reconciliation")
-            kotlinx.coroutines.runBlocking { runFlowReconcile(app) }
-            Log.i("PPassFlow", "repair: done")
-        } catch (failure: Throwable) {
-            Log.e("PPassFlow", "repair: wake/reconcile after pairing failed", failure)
-        }
-    }
-}
-
+/** 契约 §3：暂停（只在备份中有效）。 */
 internal fun pauseFlow(context: Context) {
-    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.Pause)
-    flushAuditOutbox(context)
+    runtimeFor(context.applicationContext)?.engine?.pause()
 }
 
-internal fun continueFlow(
-    context: Context,
-    constraintsSatisfied: Boolean = flowConstraintsSatisfied(context),
-) {
-    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.Continue(constraintsSatisfied))
-    flushAuditOutbox(context)
+/** 契约 §3：继续（只在已暂停有效）。 */
+internal fun continueFlow(context: Context) {
+    runtimeFor(context.applicationContext)?.engine?.resume()
 }
 
+/** 用户点「重试」：FAILED 改回待传输（不受兜底次数上限）并叫醒循环。 */
 internal fun retryFailedFlow(context: Context) {
-    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.RetryFailed)
-    flushAuditOutbox(context)
-}
-
-internal fun cancelCurrentFlowRound(context: Context) {
-    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.CancelCurrentRound(UUID.randomUUID().toString()))
-    flushAuditOutbox(context)
-}
-
-/** MOB-59: the notice's only action — re-admit every cancelled round's items as QUEUED. */
-/**
- * MOB-100：首页「知道了」的落盘入口。与 [restoreAllCancelledFlowRounds] 同一
- * 形状——经单写者投一条 action，不在 UI 线程上直接写账本。
- *
- * 为什么必须走这条路而不是在 holder 里 `ledger.update`：写入门禁
- * （`LedgerWriteGuard`）在最内层，非写者线程写账本当场抛（MOB-88）。
- */
-internal fun acknowledgeFlowNotice(context: Context, notice: AcknowledgeableNotice) {
-    runtimeFor(context.applicationContext)?.writer
-        ?.dispatch(FlowAction.AcknowledgeNotice(notice, System.currentTimeMillis()))
-    flushAuditOutbox(context)
-}
-
-internal fun restoreAllCancelledFlowRounds(context: Context) {
-    runtimeFor(context.applicationContext)?.writer?.dispatch(FlowAction.RestoreAllCancelledRounds)
-    flushAuditOutbox(context)
-}
-
-/**
- * MOB-88: 账本提交的订阅总线，取代 UI 每 500ms 重读整份 JSON 的轮询。
- *
- * 为什么是进程级而不是挂在运行时上：运行时会随配对/代号变化重建，而 UI
- * 的订阅只想订一次。运行时构造时把自己的提交回调接到这条总线上。
- *
- * 回调在**写者线程**上同步触发，所以实现方必须廉价、不得回头写账本
- * （写了会被写入门禁当场拦住）。
- */
-private val flowLedgerListeners =
-    java.util.concurrent.CopyOnWriteArrayList<(DiscoveryLedgerSnapshot) -> Unit>()
-
-/** 返回取消订阅的句柄。 */
-internal fun observeFlowLedger(listener: (DiscoveryLedgerSnapshot) -> Unit): () -> Unit {
-    flowLedgerListeners += listener
-    return { flowLedgerListeners -= listener }
-}
-
-internal fun flowLedgerSnapshot(context: Context): DiscoveryLedgerSnapshot {
-    val pairing = PairingStore(context.filesDir).load() ?: return DiscoveryLedgerSnapshot()
-    if (pairing.pairingEpoch.isBlank()) return DiscoveryLedgerSnapshot()
-    val epoch = PairingEpoch(pairing.pairingEpoch)
-    val key = pairing.daemonNodeId
-    val liveLedger = synchronized(flowRuntimeLock) {
-        flowRuntimes[key]?.takeIf { it.epoch == epoch }?.ledger
-    }
-    return liveLedger?.load()
-        ?: DiscoveryLedgerStore(File(context.filesDir, "flow-state/$key")).load()
-}
-
-/**
- * Unpair/rejoin is a lifetime boundary: no old native provider or in-memory
- * runtime may survive and contaminate a new pairing. This must run off the UI
- * thread because native shutdown can block.
- *
- * ## MOB-87：账本**不再删**
- *
- * 这里原本还有一行 `File(context.filesDir, "flow-state/$daemonNodeId")
- * .deleteRecursively()`。删掉它等于每次断开都宣布"我什么都没传过"，重连后
- * 整库重新提供一遍（实测 95 张照片 4 次重连 → 桌面 603 行），而且让对账
- * 无从谈起——没有 CONFIRMED 项，就没有"桌面上还在吗"这个问题可问。
- *
- * 保留的是**数据**，关掉的是**执行**：runtime / native provider 照常关，
- * 所有 wake 照常取消，旧 epoch 的凭证照常作废
- * （[PairingEpochController.replaceDesktop]）。MOB-62 要的"断开后旧会话
- * 不能再运行"因此依然成立——它卡面写的"旧 ledger 删除"是手段不是目的，
- * 本卡合入后那一条作废。
- *
- * 重新配对时账本项由 [PairingEpochController.replaceDesktop] 认领到新
- * epoch，内容事实逐字段不动。
- */
-internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
-    synchronized(flowRuntimeLock) {
-        flowRuntimes.remove(daemonNodeId)?.let { stale ->
-            // MOB-88: 写者线程与副作用执行器要显式关掉。
-            //
-            // 实测（2026-09-18 真机重新配对）它们最终确实退出了——因为
-            // `Executors.newSingleThreadExecutor` 返回的是带 finalize 的包装
-            // 类，运行时对象被 GC 时顺带 shutdown。但那是靠终结器兜底的偶然
-            // 正确：GC 何时发生不可控，期间这条线程还活着、还持有旧账本的
-            // 引用。解除配对是一条明确的生命周期边界，就该在这里显式收。
-            stale.shutdown()
-            // MOB-91：**停掉在飞的传输，但不关仓库。**
-            //
-            // `revoke()` = 停 active fetch + 放掉 temp tag（半截数据交给 GC，
-            // 浪费掉无所谓）。`close()` = 连仓库一起关——而那之后同一进程内
-            // 再也 open 不回来，整个 Flow 引擎瘫痪到进程重启为止。
-            //
-            // 顺带也修掉 MOB-90：在飞的投递发现 epoch 变了、回头调
-            // `stopActiveFetch` 时，句柄依然有效，不再抛
-            // 「unknown Android provider handle」把整个 App 带走。
-            runCatching { stale.nativeProvider.revoke("") }
-                .onFailure { Log.w("PPassFlow", "clearFlowRuntime: revoke failed; ignoring", it) }
-        }
+    val app = context.applicationContext
+    thread(name = "ppass-flow-retry") {
+        runCatching { runtimeFor(app)?.engine?.retryFailed() }.onFailure { Log.e(TAG, "retry failed", it) }
     }
 }
 
-private data class AndroidFlowRuntime(
-    val epoch: PairingEpoch,
-    val ledger: DiscoveryLedgerStore,
-    val runner: FlowRunner,
-    val nativeProvider: AndroidNativeIrohBlobsProvider,
-    val auditDispatcher: AuditOutboxDispatcher,
-    val auditScope: CoroutineScope,
-    // MOB-88: 这个 epoch 下账本的唯一写入者。
-    val writer: FlowWriter,
-    // 起飞（整文件哈希 + 原生注册 + offer）在这上面跑，不占写者线程。
-    val effects: java.util.concurrent.ExecutorService,
+/** 契约 §3：UI 与 FGS 通知读的唯一视图。null = 运行时不可用（未配对）。 */
+internal fun engineViewFlow(context: Context): kotlinx.coroutines.flow.StateFlow<EngineView>? =
+    runtimeFor(context.applicationContext)?.engine?.view
+
+/** 契约 §3：「取消剩余 N 张」弹窗那一刻的边界 + 张数。null = 运行时不可用。 */
+internal suspend fun remainingSnapshotFlow(context: Context): RemainingSnapshot? =
+    runtimeFor(context.applicationContext)?.engine?.remainingSnapshot()
+
+/** 契约 §3：确认取消（只在已暂停 / 等待中有效），返回写下的张数；null = 当前状态不允许或运行时不可用。 */
+internal suspend fun cancelRemainingFlow(context: Context, snapshot: RemainingSnapshot): Int? =
+    runtimeFor(context.applicationContext)?.engine?.cancelRemaining(snapshot)?.await()
+
+/** 「已跳过的照片 · 点击恢复」，返回恢复了几张。 */
+internal suspend fun restoreSkippedFlow(context: Context): Int =
+    runtimeFor(context.applicationContext)?.engine?.restoreSkipped()?.await() ?: 0
+
+/** 「取消剩余 N 张」的 N（与取消时写下的是同一份边界）。null = 运行时不可用。 */
+internal suspend fun countRemainingFlow(context: Context): Int? =
+    runtimeFor(context.applicationContext)?.engine?.countRemaining()
+
+internal fun acknowledgeFlowMissingSource(context: Context) {
+    runtimeFor(context.applicationContext)?.engine?.acknowledgeMissingSource()
+}
+
+/** App 进入前台：触发一次（含对账）。 */
+internal fun onFlowAppForeground(context: Context) {
+    val app = context.applicationContext
+    thread(name = "ppass-flow-foreground") {
+        runCatching { runtimeFor(app)?.engine?.onAppForeground() }.onFailure { Log.e(TAG, "foreground trigger failed", it) }
+    }
+}
+
+/**
+ * ConnectivityManager 网络变化回调：先让 iroh 立刻重探路径，再交给引擎。
+ * [lost] = 这是一次 onLost 且此刻手机**没有任何**默认网络：在飞的这张立即判路径失败（#413）。
+ * Wi‑Fi ↔ 移动网络切换时旧网络的 onLost 不算（新网络已经在了，传输可以换路继续）。
+ */
+internal fun onFlowNetworkChanged(context: Context, lost: Boolean = false) {
+    val app = context.applicationContext
+    thread(name = "ppass-flow-network") {
+        runCatching {
+            val runtime = runtimeFor(app) ?: return@runCatching
+            runCatching { runtime.bridge.networkChange() }.onFailure { Log.w(TAG, "network_change failed", it) }
+            if (lost && !hasDefaultNetwork(app)) runtime.engine.onNetworkLost() else runtime.engine.onNetworkChanged()
+        }.onFailure { Log.e(TAG, "network trigger failed", it) }
+    }
+}
+
+private fun hasDefaultNetwork(context: Context): Boolean {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
+    return cm.activeNetwork != null
+}
+
+// ------------------------------------------------------------------ UI 读取
+
+/** 当前运行时（不触发构造）；UI 投影用。 */
+internal fun liveFlowRuntime(): AndroidFlowRuntime? = synchronized(runtimeLock) { runtime }
+
+internal fun flowProjection(context: Context, bucketIds: Set<Long>?, inScopeTotal: Long?, remaining: Long?): FlowProjection? {
+    val live = runtimeFor(context.applicationContext) ?: return null
+    return FlowProjection.of(live.store, live.engine.display.value, live.control, bucketIds, inScopeTotal, remaining)
+}
+
+// ------------------------------------------------------------------ 生命周期
+
+internal class AndroidFlowRuntime(
+    val ownerKey: String,
+    val engine: FlowEngine,
+    val store: OrderStore,
+    val control: FlowControl,
+    val bridge: IrohBlobsProviderBridge,
+    private val writer: FlowWriter,
+    private val scope: CoroutineScope,
+    private val sqlite: SqliteOrderStore,
 ) {
     fun shutdown() {
+        scope.cancel()
         writer.shutdown()
-        effects.shutdownNow()
+        runCatching { sqlite.close() }
     }
 }
 
 /**
- * MOB-88 的 reducer：把一条已发生的事实变成新的账本状态。
- *
- * 只在写者线程上执行，所以这里面的每一步都不需要考虑并发——「读账本、
- * 判断、写回」这种读-改-写在这条线程上天然原子，这正是改造要换掉那把
- * 靠自觉去拿的锁所换来的东西。
+ * 解除配对：停掉运行时（在飞的传输随 scope 取消而停；原生仓库不关，MOB-91）。order 表不删——
+ * 连回**同一台**桌面时 CONFIRMED 仍然有效；换一台桌面时由 [OrderStore.claimOwner] 清空（#415 裁决 6）。
  */
-private fun AndroidFlowRuntime.reduce(context: Context, action: FlowAction) {
-    when (action) {
-        FlowAction.ReconcileProcessStart -> runner.reconcileProcessStart()
-        FlowAction.CollapseGenerationDuplicates -> ledger.collapseGenerationDuplicates()
-        FlowAction.MigrateCompletedAt -> ledger.migrateMissingCompletedAt()
-        is FlowAction.EnsurePairingEpoch -> PairingEpochController(ledger).ensureCurrentEpoch(action.epoch)
-        is FlowAction.ApplyReconciliation -> ReconciliationCoordinator(ledger).applyOutcome(action.outcome)
-        is FlowAction.Wake -> {
-            runner.requestDiscovery()
-            runner.run(action.constraintsSatisfied)
-        }
-        FlowAction.ScopeBackfill -> runner.requestScopeBackfill()
-        is FlowAction.ScopeBackfillAndWake -> {
-            runner.requestScopeBackfill()
-            runner.run(action.constraintsSatisfied)
-        }
-        FlowAction.Pause -> runner.pause()
-        is FlowAction.Continue -> runner.continueFlow(action.constraintsSatisfied)
-        FlowAction.RetryFailed -> runner.retryFailedDeliveries()
-        is FlowAction.CancelCurrentRound -> runner.cancelCurrentRound(action.roundId)
-        FlowAction.RestoreAllCancelledRounds -> runner.restoreAllCancelledRounds()
-        FlowAction.SkipMissingSource -> runner.skipMissingSource()
-        FlowAction.RecordPermanentFailure -> runner.recordPermanentFailure()
-        is FlowAction.AcceptReceipt -> runner.acceptCompletionReceipt(action.receipt)
-        is FlowAction.RecordContentHash -> ledger.update { snapshot -> snapshot.withContentHash(action.item) }
-        is FlowAction.AcknowledgeAuditEvents -> ledger.acknowledgeAuditEvents(action.eventIds)
-        is FlowAction.AcknowledgeNotice ->
-            ledger.update { snapshot -> snapshot.acknowledgeNotice(action.notice, action.atMs) }
+internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
+    val stale = synchronized(runtimeLock) {
+        runtime?.takeIf { it.ownerKey == daemonNodeId }?.also { runtime = null }
     }
-    // NET-12 的后置钩子原本挂在每个入口后面的 flushAuditOutbox 上；状态
-    // 变更收口到这里之后，挂在这一处就没有任何调用点能忘。
-    FlowTransferForeground.sync(context, ledger.load())
+    stale?.shutdown()
+    runCatching { sharedNativeProvider?.revoke("") }.onFailure { Log.w(TAG, "clearFlowRuntime: revoke failed; ignoring", it) }
 }
 
-/** AUDIT-01: best-effort drain of the ledger's durable audit outbox after
- *  every trigger. Every other Flow trigger already serializes state
- *  mutation through [flowTriggerLock] synchronously; the network hop to
- *  the daemon must not block that path, so this fires on its own
- *  coroutine and simply retries from the next trigger on any failure.
- *
- *  NET-12: also the single postcondition hook for the transfer foreground
- *  service — every ledger-mutating trigger (wake/pause/continue/retry/
- *  cancel/restore/receipt/failure) already reaches this exact point, so
- *  syncing the service here means no call site can forget it. This part
- *  is synchronous and cheap (ContextCompat.startForegroundService /
- *  stopService are non-blocking Binder calls) — it must not wait on the
- *  audit network hop above. */
-private fun flushAuditOutbox(context: Context) {
-    runtimeFor(context.applicationContext)?.let { runtime ->
-        FlowTransferForeground.sync(context, runtime.ledger.load())
-        runtime.auditScope.launch { runtime.auditDispatcher.flush() }
-    }
-}
-
-private fun runtimeFor(context: Context): AndroidFlowRuntime? {
-    val app = context.applicationContext as PPassApplication
-    // MOB-87 取证：这个函数此前**全程无日志**，于是「重新配对后什么都没发生」
-    // 在 logcat 上和「一切正常」长得一模一样——真机定位时只能靠 run-as 读账本
-    // 反推。每条 return 都留痕，坏在哪一步一眼可见。
-    val pairing = PairingStore(context.filesDir).load() ?: run {
-        Log.i("PPassFlow", "runtimeFor: no pairing on disk; nothing to build")
-        return null
-    }
-    if (pairing.pairingEpoch.isBlank()) {
-        Log.w("PPassFlow", "runtimeFor: pairing has a blank epoch; refusing to build")
-        return null
-    }
-    val epoch = PairingEpoch(pairing.pairingEpoch)
+/**
+ * 取运行时，必要时构造。构造（原生 open 数秒 + SQLite）在专门的线程上跑，调用方**有界等待**
+ * [INIT_TIMEOUT_MS]：之前 `flowConstructionLock` 里原生 open 永久阻塞时，所有入口跟着永久阻塞（MOB-91 / #414）。
+ * 超时只打日志返回 null；构造继续跑，下一个调用方等同一个 future。
+ */
+internal fun runtimeFor(context: Context): AndroidFlowRuntime? {
+    val app = context.applicationContext
+    val pairing = PairingStore(app.filesDir).load() ?: return null.also { Log.i(TAG, "runtimeFor: not paired") }
+    if (pairing.pairingEpoch.isBlank()) return null.also { Log.w(TAG, "runtimeFor: blank pairing epoch; refusing to build") }
     val key = pairing.daemonNodeId
-    synchronized(flowRuntimeLock) {
-        flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let { return it }
-    }
-    Log.i(
-        "PPassFlow",
-        "runtimeFor: no live runtime for epoch=${epoch.value.take(8)}; building (thread=${Thread.currentThread().name})",
-    )
-    // MOB-88: 构造段做 single-flight。改造前这里没有互斥——两个线程同时
-    // 为同一个 key 构造，会各建一套 FlowRunner、各跑一次
-    // reconcileProcessStart()，写的是**同一份磁盘账本**（本卡的原始范围）。
-    // 用独立的锁而不是 flowRuntimeLock：原生 open 要几秒，不能挡住读取
-    // 运行时引用的人（MOB-62 的结论，此处保留）。
-    synchronized(flowConstructionLock) {
-        synchronized(flowRuntimeLock) {
-            flowRuntimes[key]?.takeIf { it.epoch == epoch }?.let { return it }
+    val task = synchronized(runtimeLock) {
+        runtime?.let { live ->
+            if (live.ownerKey == key) return live
+            runtime = null
+            live.shutdown()
         }
-        // 构造会走原生 open（数秒）+ 三条引导 action。任何一步抛出，调用方
-        // 此前只会看到一个 null / 一条死掉的线程，不留任何痕迹。
-        return try {
-            buildRuntime(context, app, epoch, key)
-        } catch (failure: Throwable) {
-            Log.e("PPassFlow", "runtimeFor: buildRuntime threw for epoch=${epoch.value.take(8)}", failure)
-            throw failure
+        building?.takeIf { it.first == key }?.second ?: FutureTask { buildRuntime(app, key) }.also { future ->
+            building = key to future
+            thread(name = "ppass-flow-init") { future.run() }
         }
     }
+    val started = SystemClock.elapsedRealtime()
+    return try {
+        task.get(INIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+    } catch (_: TimeoutException) {
+        Log.e(TAG, "runtimeFor: initialization still running after ${INIT_TIMEOUT_MS}ms; giving up this call")
+        null
+    } catch (failure: Exception) {
+        Log.e(TAG, "runtimeFor: initialization failed", failure)
+        synchronized(runtimeLock) { if (building?.second === task) building = null }
+        null
+    }.also { Log.i(TAG, "runtimeFor: ready=${it != null} in ${SystemClock.elapsedRealtime() - started}ms") }
 }
 
-private fun buildRuntime(
-    context: Context,
-    app: PPassApplication,
-    epoch: PairingEpoch,
-    key: String,
-): AndroidFlowRuntime? {
-    // 先起写者线程：账本的写入门禁要拿它的引用，而账本要先于 runner 构造。
+private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
+    Log.i(TAG, "buildRuntime: start")
+    migrateLegacyFlowState(app.filesDir)
+    val application = app as PPassApplication
     val writer = FlowWriter.start("ppass-flow-writer")
-    val effects = java.util.concurrent.Executors.newSingleThreadExecutor { runnable ->
-        thread(start = false, name = "ppass-flow-effects", block = { runnable.run() })
-    }
-    val ledger = DiscoveryLedgerStore(
-        repository = JsonFileFlowLedgerRepository(File(context.filesDir, "flow-state/$key")),
-        writeGuard = SingleThreadLedgerWrites(writer.thread),
-    )
-    lateinit var runner: FlowRunner
-    // MOB-87 取证：原生 open 是整条构造里最慢、也最可能卡住或抛出的一步
-    // （数秒级；MOB-62 的 ANR 就栽在它身上）。它两侧各留一条，才分得清
-    // 「没走到这里」「卡在这里」「这里抛了」。
-    // MOB-91：拿的是进程内单例，第一次才真的 open。跨配对复用，永不 close。
-    val native = sharedNativeProvider(context)
-    Log.i("PPassFlow", "buildRuntime: native blobs provider ready")
+    val sqlite = SqliteOrderStore.open(app)
+    val store = WriterGuardedOrderStore(sqlite, SingleThreadWrites(writer.thread))
+    val cleared = runBlocking(writer.dispatcher) { store.claimOwner(key, idFloor = System.currentTimeMillis()) }
+    Log.i(TAG, "buildRuntime: order store ready (cleared for a different desktop=$cleared)")
+    val native = sharedNativeProvider(app)
+    Log.i(TAG, "buildRuntime: native blobs provider ready")
+    // 旧的 register 路径（打开原图、原生导入并出 ticket）仍保留在桥上；#413 的循环只走 importer → serve。
     val bridge = IrohBlobsProviderBridge(native) { source ->
         try {
-            context.contentResolver.openFileDescriptor(Uri.parse(source), "r")
-                ?: throw SourceMissingException()
+            app.contentResolver.openFileDescriptor(Uri.parse(source), "r") ?: throw SourceMissingException()
         } catch (failure: FileNotFoundException) {
             throw SourceMissingException(failure)
         }
     }
+    val pairing: () -> Pairing? = { PairingStore(app.filesDir).load() }
+    val client = application.daemonClient
+    val desktopFor: suspend (Pairing) -> FlowReceiptClient = { p ->
+        client.bind(IdentityStore(app.filesDir).secretKey())
+        DaemonFlowReceiptClient(client, parsePeerAddrToken(p.daemonAddrToken))
+    }
+    // #413 契约 §4：准备阶段 import（引用优先）拿 hash，建 order 后 serve(lease) 拿 ticket 再 offer。
+    val importer = AndroidMediaImporter.forContentResolver(app, bridge, androidLog)
     val delivery = NativeFlowDeliveryPort(
-        ledger = ledger,
         bridge = bridge,
-        resolver = context.contentResolver,
-        pairing = { PairingStore(context.filesDir).load() },
-        identityKey = { IdentityStore(context.filesDir).secretKey() },
-        client = app.daemonClient,
-        // MOB-88: 这三个原生回调曾经是唯一绕过 flowTriggerLock 的入口
-        // （#107：同一队头双发，2026-09-07 三星真机抓到两条 322ms 内不同
-        // 线程的独立传输失败）。现在它们和别的入口一样只是投一条事实给
-        // 写者——「记得加锁」这件事不存在了，因为没有锁。
-        onMissingSource = { writer.dispatch(FlowAction.SkipMissingSource); flushAuditOutbox(context) },
-        onPermanentFailure = { writer.dispatch(FlowAction.RecordPermanentFailure); flushAuditOutbox(context) },
-        onReceipt = { receipt -> writer.dispatch(FlowAction.AcceptReceipt(receipt)); flushAuditOutbox(context) },
-        onPairingEpochRefreshed = { refreshedEpoch ->
-            // 桌面端换了身份：旧账全部作废。改造前这个回调整体没有任何
-            // 同步，而它触发的是整份清空重置——四条锁外写入里写坏最狠的
-            // 一条。pairing.json 是另一份文件、与账本无共享状态，仍在原
-            // 线程上保存；账本的重置走 action。
-            val pairings = PairingStore(context.filesDir)
-            val current = pairings.load()
-            if (current != null && current.pairingEpoch != refreshedEpoch.value) {
-                pairings.save(current.copy(pairingEpoch = refreshedEpoch.value))
-                writer.dispatch(FlowAction.EnsurePairingEpoch(refreshedEpoch))
-                requestFlowWake(context.applicationContext)
-            }
-        },
-        recordContentHash = { hashed ->
-            // 起飞已经离开写者线程，这里必须投 action 回去，并等它落地：
-            // 注册凭据与 offer 都要求哈希已经持久化。
-            writer.dispatchAndAwait(FlowAction.RecordContentHash(hashed))
-        },
-    )
-    val tupleCanceller = FlowTupleCancelPort { item ->
-        // NET-06: best-effort — the local cancellation state change
-        // already happened in the ledger before this fires (卡片原则1:
-        // 意图先行，不等回声). A failure here just leaves a stale
-        // "active" row in the daemon's ledger for that one tuple,
-        // which is a separate cleanup concern (see NET-06 card), not a
-        // reason to block or retry the phone's own state transition.
-        val currentPairing = PairingStore(context.filesDir).load()
-        if (currentPairing != null) {
-            CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-                runCatching {
-                    app.daemonClient.bind(IdentityStore(context.filesDir).secretKey())
-                    app.daemonClient.flowCancelTuple(
-                        parsePeerAddrToken(currentPairing.daemonAddrToken),
-                        com.hawkeyexb.ppass.proto.FlowTupleRef(
-                            queueSequence = item.queueSequence,
-                            pairingEpoch = item.pairingEpoch.value,
-                            leaseToken = "lease-${item.queueSequence}",
-                        ),
-                    )
-                }
-            }
-        }
-    }
-    runner = FlowRunner(
-        ledger = ledger,
-        discovery = AndroidFlowDiscoveryPort(context.contentResolver) { BackupScopeStore(context).selectedBucketIds() },
-        delivery = delivery,
-        // MOB-67: re-connect the UX-02 failure notification that REBUILD-04
-        // deleted with the legacy worker. Reads NotifyOnFailurePrefs live,
-        // so the settings toggle takes effect from the next failure.
-        failureNotifier = SystemFailureNotifier(
-            context.applicationContext,
-            NotifyOnFailurePrefs(context.filesDir),
-        ),
-        // MOB-76: every event-driven wake (receipt/requeue/retry/
-        // cancel-restore) reads the live Wi-Fi gate through this port.
-        constraintsProvider = { flowConstraintsSatisfied(context) },
-        tupleCanceller = tupleCanceller,
-        // MOB-88: 起飞里的整文件哈希（4GB 视频就是读完 4GB + BLAKE3）绝不
-        // 能占着状态决策线程——改造前它占的是那把全局锁，见 #134。
-        effects = FlowEffectSink { effect -> effects.execute(effect) },
-    )
-    val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    val auditDispatcher = AuditOutboxDispatcher(
-        ledger = ledger,
-        pairing = { PairingStore(context.filesDir).load() },
-        identityKey = { IdentityStore(context.filesDir).secretKey() },
-        client = app.daemonClient,
-        // MOB-88: 审计确认后删事件——四条锁外写入里触发最频繁的一条。
-        acknowledgeEvents = { ids -> writer.dispatch(FlowAction.AcknowledgeAuditEvents(ids)) },
-    )
-    val candidate = AndroidFlowRuntime(epoch, ledger, runner, native, auditDispatcher, auditScope, writer, effects)
-    writer.bind { action -> candidate.reduce(context, action) }
-    ledger.onCommit { snapshot -> flowLedgerListeners.forEach { it(snapshot) } }
-    // 启动引导，全部走写者、按顺序落地后才对外发布这套运行时：
-    //   ① 代号校正（旧代号的账要整份作废）
-    //   ② MOB-98 的 generation 去身份化 + 重复项合并
-    //   ③ MOB-53 的 completedAt 一次性迁移（改造前藏在 load() 里）
-    //   ④ 上一条进程life遗留的租约降级回 QUEUED
-    //
-    // ② 排在 ③④ 之前是有意的：它会改写 stableId 并合并条目，后两步必须
-    // 看到收敛后的账本——③ 的 completedAt 回填要落在幸存者身上，④ 清理
-    // 遗留租约时要看到最终的 queueSequence 集合（合并取较小者，被合掉的
-    // 那个序号不再存在）。
-    // MOB-87 取证：①是账本迁移发生的唯一时刻。真机上「账本 epoch 没跟上
-    // pairing.json」这个症状，分水岭就在这三行跑没跑到。
-    Log.i("PPassFlow", "buildRuntime: bootstrap start epoch=${epoch.value.take(8)}")
-    writer.dispatchAndAwait(FlowAction.EnsurePairingEpoch(epoch))
-    writer.dispatchAndAwait(FlowAction.CollapseGenerationDuplicates)
-    writer.dispatchAndAwait(FlowAction.MigrateCompletedAt)
-    writer.dispatchAndAwait(FlowAction.ReconcileProcessStart)
-    Log.i("PPassFlow", "buildRuntime: bootstrap done, ledger items=${ledger.load().items.size}")
-    return synchronized(flowRuntimeLock) {
-        val current = PairingStore(context.filesDir).load()
-        if (current?.daemonNodeId != key || current.pairingEpoch != epoch.value) {
-            // 构造期间配对又变了：这套运行时生下来就过期，丢掉。
-            Log.w(
-                "PPassFlow",
-                "buildRuntime: pairing moved during construction " +
-                    "(built=${epoch.value.take(8)} now=${current?.pairingEpoch?.take(8)}); discarding",
+        serve = { lease, _ -> importer.serve(lease) },
+        pairing = pairing,
+        desktopFor = desktopFor,
+        subscribe = { p, onConnected, onEvent ->
+            // 每轮开头就订阅，不一定排在某次 desktopFor（会 bind）之后：自己 bind。
+            client.bind(IdentityStore(app.filesDir).secretKey())
+            client.subscribeTimeline(
+                parsePeerAddrToken(p.daemonAddrToken),
+                onConnected = { onConnected() },
+                onFlowEvent = { kind, data -> onEvent(kind, data) },
+                onInvalidated = {},
             )
-            candidate.shutdown()
-            // MOB-91：仓库是单例资产，丢弃这套运行时不等于关仓库。
-            null
-        } else {
-            flowRuntimes[key] = candidate
-            Log.i("PPassFlow", "buildRuntime: published runtime epoch=${epoch.value.take(8)}")
-            candidate
+        },
+        cancelTuple = { p, tuple ->
+            client.bind(IdentityStore(app.filesDir).secretKey())
+            client.flowCancelTuple(parsePeerAddrToken(p.daemonAddrToken), tuple)
+        },
+        log = androidLog,
+        clock = SystemClock::elapsedRealtime,
+    )
+    val scopeStore = BackupScopeStore(app)
+    val control = FlowControlStore(app.filesDir)
+    val scope = CoroutineScope(SupervisorJob() + writer.dispatcher)
+    val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    lateinit var engine: FlowEngine
+    val dispatcher = AuditOutboxDispatcher(
+        store = store,
+        pairing = pairing,
+        transportFor = { p ->
+            client.bind(IdentityStore(app.filesDir).secretKey())
+            DaemonFlowAuditTransport(client, parsePeerAddrToken(p.daemonAddrToken))
+        },
+        acknowledgeEvents = { ids -> engine.acknowledgeAudit(ids) },
+    )
+    engine = FlowEngine(
+        store = store,
+        media = ContentResolverMediaSnapshotSource(app, { scopeStore.selectedBucketIds() }),
+        importer = importer,
+        delivery = delivery,
+        probe = DaemonDesktopProbe(pairing, desktopFor, log = androidLog, clock = SystemClock::elapsedRealtime),
+        presence = RemotePresence { hashes ->
+            val p = pairing() ?: error("not paired")
+            client.bind(IdentityStore(app.filesDir).secretKey())
+            RemotePresenceProbe(client).missing(parsePeerAddrToken(p.daemonAddrToken), hashes)
+        },
+        foreground = AndroidForegroundLease(app, control),
+        scheduler = WorkManagerWakeScheduler(app),
+        control = control,
+        conditions = {
+            val settings = BackupSettings(app.filesDir).load()
+            Conditions(
+                paired = pairing() != null,
+                autoBackupEnabled = AutoBackupPrefs(app.filesDir).enabled(),
+                wifiOnly = settings.wifiOnly,
+                onUnmetered = isOnUnmetered(app),
+                batteryLow = isBatteryLow(app),
+            )
+        },
+        inScope = { bucket -> scopeStore.selectedBucketIds()?.contains(bucket) == true },
+        pairingEpoch = { pairing()?.pairingEpoch?.takeIf { it.isNotBlank() }?.let(::PairingEpoch) },
+        scope = scope,
+        io = Dispatchers.IO,
+        log = androidLog,
+        afterCycle = { auditScope.launch { dispatcher.flush() } },
+        onEpochAdvertised = { advertised ->
+            // 同一台桌面换了配对代号：order 表保留（内容寻址，CONFIRMED 跨代号成立），只更新凭证。
+            val pairings = PairingStore(app.filesDir)
+            pairings.load()?.let { current -> if (current.pairingEpoch != advertised) pairings.save(current.copy(pairingEpoch = advertised)) }
+        },
+    )
+    FlowForegroundHandoff.control = control
+    FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }
+    engine.start()
+    val built = AndroidFlowRuntime(key, engine, store, control, bridge, writer, scope, sqlite)
+    synchronized(runtimeLock) {
+        val current = PairingStore(app.filesDir).load()
+        if (current?.daemonNodeId != key) {
+            Log.w(TAG, "buildRuntime: pairing moved during construction; discarding")
+            built.shutdown()
+            building = null
+            error("pairing moved during construction")
         }
+        runtime = built
+        building = null
     }
+    Log.i(TAG, "buildRuntime: published")
+    return built
 }
 
 /**
- * MOB-91：原生内容仓库是**进程内单例，开一次，永不关**。
- *
- * 它装的是 `runtime` / `store` / `transport` / `router`——一个 tokio 运行时、
- * 一个落在 `filesDir/iroh-blobs-provider` 的内容仓库、一个 iroh 端点。
- * **里面没有 token、没有 pairing_epoch、没有密钥对**，跟「这次配对是哪一次」
- * 毫无关系。它是资产，不是会话。
- *
- * 此前解除配对会把它 `close()` 掉，而同一进程内的第二次 `nativeOpen` 会
- * **永久阻塞**（真机实测 60s+ 未返回）——`nativeClose` 只做
- * `registry.remove(handle)` + `revoke()`，而 `revoke()` 只清 active fetch 和
- * dispatch handler，`runtime`/`store`/`transport`/`router` 一个没动，目录锁
- * 也就没放。于是第二次 open 卡在同一个目录上。
- *
- * 更糟的是它卡在 `flowConstructionLock` 里面，之后每一个 `runtimeFor` 全部
- * 堵死——整个 Flow 引擎瘫痪到进程重启为止。**这就是 MOB-87「必须杀掉 App
- * 重开」的真根因**：杀 App 是唯一能让仓库重新打开的办法。
- *
- * 现在：开一次，跨配对一直活着。断开只 [AndroidNativeIrohBlobsProvider.revoke]
- * ——停掉在飞的那次传输、放掉 temp tag，让半截数据交给 GC；仓库本身不动。
+ * #413「迁移」：没有正式用户，旧账本（`flow-state/`）与旧的前台保护状态文件直接删，不做数据迁移。
+ * order 库升 schema 版本直接重建；G 缺失 → 对账扫描置脏，整个范围按 `_id` 过一遍；桌面按内容去重，不会重复传输。
+ * 只做一次（marker 文件）。
+ */
+internal fun migrateLegacyFlowState(filesDir: File) {
+    val marker = File(filesDir, "flow-migrated-arch13")
+    if (marker.exists()) return
+    File(filesDir, "flow-state").deleteRecursively()
+    File(filesDir, "flow-transfer-protection.json").delete()
+    filesDir.listFiles { f -> f.name.startsWith("flow-transfer-protection.json.") }?.forEach { it.delete() }
+    runCatching { marker.writeText("1") }
+}
+
+/**
+ * MOB-91：原生内容仓库是**进程内单例，开一次，永不关**——同一进程内第二次 nativeOpen 会永久阻塞。
+ * 断开只 revoke（停掉在飞的传输、放掉 temp tag），仓库本身不动。
  */
 private val nativeProviderLock = Any()
 
@@ -775,17 +380,17 @@ private var sharedNativeProvider: AndroidNativeIrohBlobsProvider? = null
 private fun sharedNativeProvider(context: Context): AndroidNativeIrohBlobsProvider =
     sharedNativeProvider ?: synchronized(nativeProviderLock) {
         sharedNativeProvider ?: run {
-            // 这一句**一个进程里只应该出现一次**。出现第二次就说明单例被谁
-            // 绕过了，而第二次 nativeOpen 会永久阻塞——取证时这是第一眼要看
-            // 的东西，所以它和「复用」分开打，不能共用一条。
-            Log.i("PPassFlow", "native blobs provider: opening (once per process)")
+            Log.i(TAG, "native blobs provider: opening (once per process)")
             AndroidNativeIrohBlobsProvider.open(context.filesDir).also { sharedNativeProvider = it }
         }
     }
 
-private val flowRuntimeLock = Any()
+private val runtimeLock = Any()
+private var runtime: AndroidFlowRuntime? = null
+private var building: Pair<String, FutureTask<AndroidFlowRuntime>>? = null
 
-// MOB-88: 构造段的 single-flight 锁，与 flowRuntimeLock 分开——原生 open
-// 要几秒，不能挡住只是取一下运行时引用的调用方。
-private val flowConstructionLock = Any()
-private val flowRuntimes = mutableMapOf<String, AndroidFlowRuntime>()
+/** 运行时初始化的有界等待。 */
+private const val INIT_TIMEOUT_MS = 20_000L
+
+/** worker 只等检查阶段（WorkManager 的单次执行上限约 10 分钟）。 */
+private const val WORKER_CHECK_BUDGET_MS = 8 * 60 * 1000L

@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.transport.DaemonClient
+import com.hawkeyexb.ppass.transport.addrOf
 import com.hawkeyexb.ppass.transport.parsePairingQr
 import java.net.DatagramPacket
 import java.net.DatagramSocket

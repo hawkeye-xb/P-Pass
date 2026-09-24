@@ -35,7 +35,7 @@ android {
         applicationId = "com.hawkeyexb.ppass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 32
+        versionCode = 34
         // DESK-02①: 构建期注入完整版本串（release tag = "v0.3.2-test.2"，
         // 去前导 v）——Android 端靠它推导更新通道（含 -test. → test）并
         // 让连续 test tag 能自动升级（isNewer 预发布段比较）。本地/非 tag
@@ -44,12 +44,16 @@ android {
             System.getenv("PPF_BUILD_VERSION")
                 ?.takeIf { it.isNotBlank() }
                 ?.removePrefix("v")
-                ?: "0.5.7-test.2"
+                ?: "0.6.0-test.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     sourceSets {
         getByName("main").jniLibs.srcDir(irohBlobsJniLibs)
+        // #420: JVM 单测与设备测试共用的测试辅助（例如 addrOf）。只放两边都要的，
+        // 生产代码看不到这里。
+        getByName("test").java.srcDir("src/sharedTest/java")
+        getByName("androidTest").java.srcDir("src/sharedTest/java")
     }
 
     buildFeatures {

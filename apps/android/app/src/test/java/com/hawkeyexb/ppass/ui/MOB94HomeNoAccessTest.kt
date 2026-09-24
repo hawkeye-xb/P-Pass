@@ -1,7 +1,7 @@
 // MOB-94: 首页在拿不到相册时不许说「照片都存好了」。
 //
 // HomeScreen 是 Compose，本仓没有 Robolectric，所以这里测的是两件能测的
-// 事：① 渲染分支的判据（纯函数 shouldShowWifiDeferredHint 同一口径）；
+// 事：① 渲染分支的判据（纯函数 visibleWaitReasonRes / desktopLowSpaceHintVisible 同一口径）；
 // ② 源文本门禁——绿卡分支必须被非 FULL 挡在外面，且两档文案不共用。
 //
 // ②是源文本，只能证明写法，证明不了效果；判据本身由 MOB94MediaAccessTest
@@ -22,19 +22,18 @@ class MOB94HomeNoAccessTest {
     @Test
     fun the_waiting_hint_is_suppressed_whenever_the_library_is_not_fully_readable() {
         // 拿不到完整相册时 N/M 是假数，"将在连上 Wi-Fi 后进行"也就无从谈起。
-        assertTrue(
-            shouldShowWifiDeferredHint(
-                wifiOnly = true, wifiDeferred = true, busy = false,
-                mediaAccess = MediaAccess.FULL,
-            ),
-        )
+        // #413：这句话现在是等待中（WIFI）的状态行，闸门在 visibleWaitReasonRes。
+        val wifi = BackupUiState.Waiting(com.hawkeyexb.ppass.backup.flow.WaitReason.WIFI)
+        val res = com.hawkeyexb.ppass.R.string.wifi_deferred_hint
+        assertTrue(visibleWaitReasonRes(wifi, MediaAccess.FULL, pairingLost = false, reasonRes = res) == res)
         for (blocked in listOf(MediaAccess.PARTIAL, MediaAccess.NONE)) {
-            assertFalse(
+            assertTrue(
                 "拿不到完整相册（$blocked）时不许显示排队提示",
-                shouldShowWifiDeferredHint(
-                    wifiOnly = true, wifiDeferred = true, busy = false,
-                    mediaAccess = blocked,
-                ),
+                visibleWaitReasonRes(wifi, blocked, pairingLost = false, reasonRes = res) == null,
+            )
+            assertFalse(
+                "拿不到完整相册（$blocked）时也不许显示桌面低空间预警",
+                desktopLowSpaceHintVisible(lowSpace = true, mediaAccess = blocked, pairingLost = false),
             )
         }
     }

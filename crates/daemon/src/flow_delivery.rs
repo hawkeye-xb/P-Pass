@@ -17,6 +17,7 @@
 //! once it reports `completed`.
 
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -24,17 +25,86 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-use core_index::{IncomingFile, Ingestor};
-use proto::{FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowTupleRef};
+use core_index::{IncomingFile, IndexError, Ingestor};
+use proto::{
+    DesktopHealth, FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowTupleRef,
+};
 use storage::{Db, FlowGrant, FlowGrantState};
 use transport::{Blobs, ConnectionStatus, NodeId};
 
+use crate::awake::AwakeHold;
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
 use crate::subscriptions::SubscriptionRegistry;
 use crate::telemetry::{Event as TelemetryEvent, Telemetry};
 
 type PeerFetchLock = Arc<AsyncMutex<()>>;
 type FetchLocks = Arc<Mutex<HashMap<[u8; 32], PeerFetchLock>>>;
+type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
+type FreeSpaceProbe = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
+
+/// #413 §6: an active grant nobody resumed (offer / status respawn) for this
+/// long is cancelled, so its partial leaves the GC protection set. Covers a
+/// phone that will never come back for the item (App uninstalled, item
+/// dropped while the Desktop was unreachable).
+pub const GRANT_RESUME_TTL_MS: i64 = 3 * 24 * 60 * 60 * 1000;
+
+/// #413 §7: fixed low-space warning line for the photo library's volume.
+/// Same value as the phone's `DesktopHealth.lowSpace` (FlowContract.kt).
+pub const LOW_SPACE_THRESHOLD_BYTES: u64 = 5 * 1024 * 1024 * 1024;
+
+/// Headroom kept free on top of what one item needs at offer time, and the
+/// line below which an unexplained write failure is read as "disk full".
+/// Covers the index WAL, thumbnails and other writers sharing the volume.
+pub const SPACE_RESERVE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// #413 contract §5: the public reason a Desktop could not store an item,
+/// carried as `flow.failed.code` and as an offer rejection's `msg_key`. The
+/// phone maps each one to `PeerFailure(PeerFailureKind)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerFailure {
+    /// ENOSPC / quota: the library volume has no room.
+    StorageFull,
+    /// The photo library folder is missing or not writable.
+    LibraryUnavailable,
+    /// Any other write failure (index database, blob store, ...).
+    StorageFailed,
+}
+
+impl PeerFailure {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::StorageFull => "storage_full",
+            Self::LibraryUnavailable => "library_unavailable",
+            Self::StorageFailed => "storage_failed",
+        }
+    }
+}
+
+/// Pure classification of a Desktop-side write failure. The io error, when
+/// there is one, is trusted first; a failure that carries no usable kind
+/// (blob-store errors arrive as text) is explained by the environment
+/// observed right after it: a library that is gone, then a volume that is
+/// out of space. Unknown free space is never guessed as full.
+pub fn classify_peer_failure(
+    io_kind: Option<ErrorKind>,
+    library_writable: bool,
+    free_bytes: Option<u64>,
+) -> PeerFailure {
+    match io_kind {
+        Some(ErrorKind::StorageFull | ErrorKind::QuotaExceeded) => return PeerFailure::StorageFull,
+        Some(ErrorKind::ReadOnlyFilesystem | ErrorKind::PermissionDenied | ErrorKind::NotFound) => {
+            return PeerFailure::LibraryUnavailable
+        }
+        _ => {}
+    }
+    if !library_writable {
+        PeerFailure::LibraryUnavailable
+    } else if free_bytes.is_some_and(|free| free < SPACE_RESERVE_BYTES) {
+        PeerFailure::StorageFull
+    } else {
+        PeerFailure::StorageFailed
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryError {
@@ -46,14 +116,31 @@ pub enum DeliveryError {
     InvalidRequest(String),
     #[error("native iroh-blobs fetch: {0}")]
     Fetch(String),
-    #[error("create flow staging directory: {0}")]
-    MaterializeStaging(String),
-    #[error("export fetched item from blob store: {0}")]
-    MaterializeExport(String),
-    #[error("ingest materialized item into the index: {0}")]
-    MaterializeIngest(String),
+    /// #413: each materialize failure carries its public classification
+    /// (`failure`) next to the fine-grained telemetry stage (the variant).
+    #[error("create flow staging directory: {detail}")]
+    MaterializeStaging {
+        failure: PeerFailure,
+        detail: String,
+    },
+    #[error("export fetched item from blob store: {detail}")]
+    MaterializeExport {
+        failure: PeerFailure,
+        detail: String,
+    },
+    #[error("ingest materialized item into the index: {detail}")]
+    MaterializeIngest {
+        failure: PeerFailure,
+        detail: String,
+    },
     #[error("durable delivery state: {0}")]
     Storage(String),
+    /// #413 §7: offer-time precheck — the item cannot fit, nothing started.
+    #[error("not enough free space: need {needed} bytes, {free} free")]
+    InsufficientSpace { needed: u64, free: u64 },
+    /// #413 §7: the photo library folder is missing or not writable.
+    #[error("photo library unavailable: {0}")]
+    LibraryUnavailable(String),
 }
 
 impl DeliveryError {
@@ -70,10 +157,42 @@ impl DeliveryError {
             DeliveryError::Cancelled => "cancelled",
             DeliveryError::InvalidRequest(_) => "invalid_request",
             DeliveryError::Fetch(_) => "fetch_failed",
-            DeliveryError::MaterializeStaging(_) => "materialize_staging_failed",
-            DeliveryError::MaterializeExport(_) => "materialize_export_failed",
-            DeliveryError::MaterializeIngest(_) => "materialize_ingest_failed",
+            DeliveryError::MaterializeStaging { .. } => "materialize_staging_failed",
+            DeliveryError::MaterializeExport { .. } => "materialize_export_failed",
+            DeliveryError::MaterializeIngest { .. } => "materialize_ingest_failed",
             DeliveryError::Storage(_) => "storage_failed",
+            DeliveryError::InsufficientSpace { .. } => "offer_storage_full",
+            DeliveryError::LibraryUnavailable(_) => "library_unavailable",
+        }
+    }
+
+    /// #413 contract §5: the code the phone sees — `flow.failed.code` and
+    /// an offer rejection's `msg_key`. Storage-side failures collapse to the
+    /// three [`PeerFailure`] codes; `fetch_failed` (path problem) and the
+    /// control-flow codes keep their names. Telemetry keeps the finer
+    /// [`Self::telemetry_code`].
+    pub fn wire_code(&self) -> &'static str {
+        match self {
+            DeliveryError::MaterializeStaging { failure, .. }
+            | DeliveryError::MaterializeExport { failure, .. }
+            | DeliveryError::MaterializeIngest { failure, .. } => failure.code(),
+            DeliveryError::InsufficientSpace { .. } => PeerFailure::StorageFull.code(),
+            DeliveryError::LibraryUnavailable(_) => PeerFailure::LibraryUnavailable.code(),
+            DeliveryError::Storage(_) => PeerFailure::StorageFailed.code(),
+            other => other.telemetry_code(),
+        }
+    }
+
+    /// The storage-side classification, if this is a storage-side failure.
+    pub fn peer_failure(&self) -> Option<PeerFailure> {
+        match self {
+            DeliveryError::MaterializeStaging { failure, .. }
+            | DeliveryError::MaterializeExport { failure, .. }
+            | DeliveryError::MaterializeIngest { failure, .. } => Some(*failure),
+            DeliveryError::InsufficientSpace { .. } => Some(PeerFailure::StorageFull),
+            DeliveryError::LibraryUnavailable(_) => Some(PeerFailure::LibraryUnavailable),
+            DeliveryError::Storage(_) => Some(PeerFailure::StorageFailed),
+            _ => None,
         }
     }
 }
@@ -372,6 +491,17 @@ pub struct FlowDelivery {
     /// NET-25: 只用来在推送发出时记一句"这台手机此刻在不在订阅表里"。
     /// `None`（测试/单组件构造）= 不记这一维，推送行为完全不变。
     subscriptions: Option<SubscriptionRegistry>,
+    /// NET-26 (#419): every running background fetch task holds one lease;
+    /// the platform "stay awake" assertion lives while any lease does.
+    /// Default is a no-op; `main.rs` wires [`AwakeHold::platform`].
+    awake: AwakeHold,
+    /// #413: the photo library folder (the daemon data dir). Health and the
+    /// materialize guard check it; nothing here ever recreates it.
+    library_root: PathBuf,
+    /// #413 §6: resume-deadline clock (unix ms). Tests inject one.
+    now: Clock,
+    /// #413 §7: free bytes on `library_root`'s volume. Tests inject one.
+    free_space: FreeSpaceProbe,
 }
 
 impl FlowDelivery {
@@ -393,7 +523,137 @@ impl FlowDelivery {
             fetch_locks: Arc::default(),
             tasks: FlowTaskRegistry::default(),
             subscriptions: None,
+            awake: AwakeHold::noop(),
+            library_root: root,
+            now: Arc::new(unix_ms_now),
+            free_space: Arc::new(platform_free_bytes),
         }
+    }
+
+    /// #413 §6: override the resume-deadline clock (unix ms).
+    pub fn with_clock(mut self, now: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        self.now = Arc::new(now);
+        self
+    }
+
+    /// #413 §7: override the free-space source for the library volume.
+    pub fn with_free_space_probe(
+        mut self,
+        probe: impl Fn(&Path) -> Option<u64> + Send + Sync + 'static,
+    ) -> Self {
+        self.free_space = Arc::new(probe);
+        self
+    }
+
+    /// #413 §7 / contract §5: the `hello.health` answer. Filesystem probes
+    /// run off the async workers: a sleeping external drive can stall
+    /// `statvfs`, and hello is on the control path.
+    pub async fn health(&self) -> DesktopHealth {
+        let root = self.library_root.clone();
+        let probe = self.free_space.clone();
+        let (free, writable) =
+            tokio::task::spawn_blocking(move || (probe(&root), library_writable(&root)))
+                .await
+                .unwrap_or((None, false));
+        DesktopHealth {
+            free_bytes: free.map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX)),
+            library_writable: writable,
+            index_ok: self.db.index_health_check().await.is_ok(),
+        }
+    }
+
+    /// Classify a storage-side failure against the environment right now.
+    fn classify(&self, io_kind: Option<ErrorKind>) -> PeerFailure {
+        classify_peer_failure(
+            io_kind,
+            library_writable(&self.library_root),
+            (self.free_space)(&self.library_root),
+        )
+    }
+
+    fn ingest_failure(&self, error: &IndexError) -> DeliveryError {
+        let io_kind = match error {
+            IndexError::Io { source, .. } => Some(source.kind()),
+            _ => None,
+        };
+        DeliveryError::MaterializeIngest {
+            failure: self.classify(io_kind),
+            detail: error.to_string(),
+        }
+    }
+
+    /// #413 §7: offer-time admission for an item the library does not have
+    /// yet. The library must be writable, and — when the phone knows the
+    /// size — the volume must hold the rest of the blob plus the staging
+    /// export (one full copy) with [`SPACE_RESERVE_BYTES`] to spare. A
+    /// resumed partial already on disk is not counted twice.
+    async fn admit(&self, hash: &[u8; 32], size_bytes: i64) -> Result<(), DeliveryError> {
+        if !library_writable(&self.library_root) {
+            return Err(DeliveryError::LibraryUnavailable(
+                "library folder missing or not writable".into(),
+            ));
+        }
+        let Ok(size) = u64::try_from(size_bytes) else {
+            return Ok(());
+        };
+        if size == 0 {
+            return Ok(());
+        }
+        let Some(free) = (self.free_space)(&self.library_root) else {
+            return Ok(());
+        };
+        let partial = self.blobs.local_bytes(*hash).await.unwrap_or(0).min(size);
+        let needed = (size - partial)
+            .saturating_add(size)
+            .saturating_add(SPACE_RESERVE_BYTES);
+        if free < needed {
+            return Err(DeliveryError::InsufficientSpace { needed, free });
+        }
+        Ok(())
+    }
+
+    /// #413 §6: cancel every active grant nobody resumed within
+    /// [`GRANT_RESUME_TTL_MS`], so GC may reclaim its partial. A grant whose
+    /// fetch is still running in this process is never expired, however old
+    /// its last offer. Returns how many grants were cancelled.
+    pub async fn expire_stale_grants(&self) -> Result<usize, DeliveryError> {
+        let cutoff = (self.now)().saturating_sub(GRANT_RESUME_TTL_MS);
+        let stale = self
+            .db
+            .stale_active_flow_grants(cutoff)
+            .await
+            .map_err(storage_error)?;
+        let mut expired = 0;
+        for grant in stale {
+            let peer = match array32(&grant.node_id) {
+                Some(bytes) => NodeId(bytes),
+                None => continue,
+            };
+            if self.tasks.is_running(peer, &grant) {
+                continue;
+            }
+            if self
+                .db
+                .cancel_flow_grant(&grant)
+                .await
+                .map_err(storage_error)?
+            {
+                tracing::info!(
+                    "flow grant expired after {} days without resume seq={} peer={peer:?}",
+                    GRANT_RESUME_TTL_MS / (24 * 60 * 60 * 1000),
+                    grant.queue_sequence
+                );
+                expired += 1;
+            }
+        }
+        Ok(expired)
+    }
+
+    /// NET-26 (#419): hold this awake assertion while any background fetch
+    /// task runs (reference counted across tasks, released by the last).
+    pub fn with_awake(mut self, awake: AwakeHold) -> Self {
+        self.awake = awake;
+        self
     }
 
     /// NET-25: 接上按 `NodeId` 登记的订阅表，**只读**，只为 `emit_flow_delivered`
@@ -472,6 +732,16 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowFetchRequest,
     ) -> Result<FlowStatusReply, DeliveryError> {
+        // DIAG-B：offer 到达时这台手机有没有挂着订阅。手机的推送订阅是在 offer 之后才建的，
+        // 与后面的 `flow.delivered push … peer_subscribed=` 对照，判断推送是否早于订阅。
+        tracing::info!(
+            "flow.offer received seq={} peer_subscribed={} peer={peer:?}",
+            request.queue_sequence,
+            self.subscriptions.as_ref().map_or_else(
+                || "unwired".to_string(),
+                |r| r.is_subscribed(peer).to_string()
+            ),
+        );
         let grant = self.checked_request(peer, request).await?;
         self.provider_for(&grant)?;
         if self
@@ -505,14 +775,6 @@ impl FlowDelivery {
                 task_running: false,
             });
         }
-        self.db
-            .upsert_flow_grant(&grant)
-            .await
-            .map_err(storage_error)?;
-        // A completed receipt is immutable. Verify the upsert really made
-        // this tuple current rather than silently acknowledging a different
-        // completed item at the same queue sequence.
-        let stored = self.matching_grant(&grant).await?;
         // NET-20: the content may already have a durable copy in the
         // library under a different (or even the same) tuple — a restarted
         // discovery cursor re-offering, the same photo arriving from a
@@ -520,12 +782,29 @@ impl FlowDelivery {
         // this. Skip the network fetch entirely instead of pulling bytes we
         // already have only to discard them at ingest time (NET-20).
         let hash = array32(&grant.content_hash).expect("validated by checked_request");
-        if self
+        let durable = self
             .ingestor
             .has_durable_copy(&hash)
             .await
-            .map_err(|e| DeliveryError::MaterializeIngest(e.to_string()))?
-        {
+            .map_err(|e| self.ingest_failure(&e))?;
+        // #413 §7: decided BEFORE anything is persisted — a refused offer
+        // leaves no active grant behind (it would hold GC protection for an
+        // item that never starts). Content the library already has needs no
+        // space, so it is never refused as full.
+        if !durable {
+            self.admit(&hash, request.size_bytes).await?;
+        }
+        // #413 §6: an offer is the phone (re)starting this tuple — it stamps
+        // the resume clock `expire_stale_grants` measures from.
+        self.db
+            .upsert_flow_grant_at(&grant, (self.now)())
+            .await
+            .map_err(storage_error)?;
+        // A completed receipt is immutable. Verify the upsert really made
+        // this tuple current rather than silently acknowledging a different
+        // completed item at the same queue sequence.
+        let stored = self.matching_grant(&grant).await?;
+        if durable {
             return self.complete_without_fetch(peer, &stored).await;
         }
         // NET-06: this is the async-202 trigger — offer's job ends here; the
@@ -657,7 +936,14 @@ impl FlowDelivery {
         };
         let key = TaskKey::of(peer, &grant);
         let delivery = self.clone();
+        // NET-26: taken only after `try_register` won (the idempotent early
+        // return above holds nothing) and moved into the task, so every way
+        // the task ends — success, error, cancel, panic, runtime shutdown —
+        // drops it. Not derived from the registry: `interrupt()` removes the
+        // entry while the task may still be winding down.
+        let awake = self.awake.lease();
         tokio::spawn(async move {
+            let _awake = awake;
             let outcome = tokio::select! {
                 result = delivery.run_fetch_body(peer, &grant, &request) => Some(result),
                 _ = token.cancelled() => None,
@@ -723,6 +1009,17 @@ impl FlowDelivery {
 
     fn emit_flow_failed(&self, peer: NodeId, grant: &FlowGrant, error: &DeliveryError) {
         let Some(events) = &self.events else { return };
+        // DIAG-B2：与 flow.delivered 那行对称——失败推送发出时这台手机在不在订阅表里。
+        tracing::info!(
+            "flow.failed push seq={} code={} detail={} peer_subscribed={} peer={peer:?}",
+            grant.queue_sequence,
+            error.wire_code(),
+            error.telemetry_code(),
+            self.subscriptions.as_ref().map_or_else(
+                || "unwired".to_string(),
+                |r| r.is_subscribed(peer).to_string()
+            ),
+        );
         crate::events::emit(
             events,
             crate::events::FLOW_FAILED,
@@ -731,7 +1028,9 @@ impl FlowDelivery {
                 "queue_sequence": grant.queue_sequence,
                 "pairing_epoch": grant.pairing_epoch,
                 "lease_token": grant.lease_token,
-                "code": error.telemetry_code(),
+                // #413 contract §5: public code only; the fine-grained
+                // telemetry code stays in the log line above.
+                "code": error.wire_code(),
             }),
         );
     }
@@ -778,14 +1077,27 @@ impl FlowDelivery {
         // A concurrent cancel/superseding offer may have landed while the
         // fetch was in flight. Do not materialize or finalize old work.
         self.require_active(grant).await?;
-        std::fs::create_dir_all(&self.staging)
-            .map_err(|e| DeliveryError::MaterializeStaging(format!("create staging: {e}")))?;
+        // #413: `create_dir_all` below would quietly recreate a library
+        // folder that vanished (external drive unplugged) and ingest into an
+        // empty stand-in. Refuse instead: the phone waits, nothing is lost.
+        if !self.library_root.is_dir() {
+            return Err(DeliveryError::LibraryUnavailable(
+                "library folder is gone".into(),
+            ));
+        }
+        std::fs::create_dir_all(&self.staging).map_err(|e| DeliveryError::MaterializeStaging {
+            failure: self.classify(Some(e.kind())),
+            detail: format!("create staging: {e}"),
+        })?;
         let staged = self.staged_path(grant);
         let _ = std::fs::remove_file(&staged);
-        self.blobs
-            .export_to(hash, &staged)
-            .await
-            .map_err(|e| DeliveryError::MaterializeExport(e.to_string()))?;
+        self.blobs.export_to(hash, &staged).await.map_err(|e| {
+            // The blob store reports as text; the environment explains it.
+            DeliveryError::MaterializeExport {
+                failure: self.classify(None),
+                detail: e.to_string(),
+            }
+        })?;
         self.require_active(grant).await?;
         let item_bytes = std::fs::metadata(&staged).map(|m| m.len()).unwrap_or(0);
 
@@ -815,7 +1127,7 @@ impl FlowDelivery {
                     throttle.signal();
                 }
             }
-            Err(e) => return Err(DeliveryError::MaterializeIngest(e.to_string())),
+            Err(e) => return Err(self.ingest_failure(&e)),
         }
 
         // This update is the receipt adapter's irreversible boundary. It
@@ -957,6 +1269,11 @@ impl FlowDelivery {
         // phone is actively waiting on it — the same fact a resuming
         // `flow.offer` carries, which is the documented resume trigger.
         if grant.state == FlowGrantState::Active && !self.tasks.is_running(peer, &grant) {
+            // #413 §6: a phone polling this exact tuple is resuming it.
+            self.db
+                .touch_active_flow_grant(&grant, (self.now)())
+                .await
+                .map_err(storage_error)?;
             self.spawn_fetch_task(peer, grant.clone(), resume_request(&grant));
         }
         self.reply_for_grant(peer, &grant).await
@@ -1243,6 +1560,8 @@ fn resume_request(grant: &FlowGrant) -> FlowFetchRequest {
         media_type: grant.media_type.clone(),
         provider: grant.provider.clone(),
         capture_at_ms: 0,
+        // Only the offer-time precheck reads it; a respawn is past that.
+        size_bytes: 0,
     }
 }
 
@@ -1285,6 +1604,55 @@ fn receipt_id() -> Result<String, DeliveryError> {
     getrandom::fill(&mut bytes)
         .map_err(|e| DeliveryError::Storage(format!("receipt randomness: {e}")))?;
     Ok(hex::encode(bytes))
+}
+
+/// #413 §7 `library_writable`: the library folder exists and a file can be
+/// created in it. The probe file goes into `.ppf/` when present, else the
+/// library root — never under `originals/`, the only tree the watcher and
+/// reconcile scan — and is removed at once. Nothing is ever created here
+/// except that one probe file.
+fn library_writable(root: &Path) -> bool {
+    static PROBE_SEQ: AtomicU64 = AtomicU64::new(0);
+    if !root.is_dir() {
+        return false;
+    }
+    let internal = root.join(".ppf");
+    let dir = if internal.is_dir() {
+        internal
+    } else {
+        root.to_path_buf()
+    };
+    let probe = dir.join(format!(
+        ".write-probe-{}-{}",
+        std::process::id(),
+        PROBE_SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Ok(file) => {
+            drop(file);
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// Same volume query as `status.disk_free_bytes` (T-090 / DAE-05):
+/// `statvfs` `f_bavail` semantics, `None` where the platform cannot answer.
+fn platform_free_bytes(path: &Path) -> Option<u64> {
+    use platform::PlatformAdapter as _;
+    platform::adapter().volume_stats(path).map(|v| v.free)
+}
+
+fn unix_ms_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn storage_error(error: storage::StorageError) -> DeliveryError {

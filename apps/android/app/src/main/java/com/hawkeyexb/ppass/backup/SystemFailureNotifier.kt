@@ -6,13 +6,17 @@
 // the existing notification instead of stacking a second buzz.
 package com.hawkeyexb.ppass.backup
 
+import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.hawkeyexb.ppass.MainActivity
 import com.hawkeyexb.ppass.R
 
@@ -23,6 +27,8 @@ class SystemFailureNotifier(
     override fun enabled(): Boolean = prefs.enabled()
 
     override fun postFailure(failedItems: Int) {
+        // #413 §8：有通知权限才发（API 33+ 的运行时权限，以及用户在系统设置里关掉的通知）。
+        if (!canPostNotifications(context)) return
         val nm = context.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             nm.createNotificationChannel(
@@ -44,7 +50,7 @@ class SystemFailureNotifier(
         )
         val notification = NotificationCompat.Builder(context, FAIL_CHANNEL_ID)
             .setContentTitle(context.getString(R.string.notif_backup_failed_title))
-            .setContentText(context.getString(R.string.notif_backup_failed_body, failedItems))
+            .setContentText(context.resources.getQuantityString(R.plurals.notif_backup_failed_body, failedItems, failedItems))
             .setSmallIcon(R.drawable.ic_notification)
             .setAutoCancel(true)
             .setContentIntent(pi)
@@ -56,4 +62,14 @@ class SystemFailureNotifier(
         const val FAIL_CHANNEL_ID = "ppass.backup.failed"
         const val FAIL_NOTIFICATION_ID = 2027
     }
+}
+
+/**
+ * #413 §8：这台手机此刻能不能发通知——API 33+ 要 POST_NOTIFICATIONS 运行时权限（更早的版本装完就有），
+ * 而且用户没在系统设置里关掉本 App 的通知。发任何非 FGS 通知前都先问它。
+ */
+fun canPostNotifications(context: Context): Boolean {
+    val granted = Build.VERSION.SDK_INT < 33 ||
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+    return granted && NotificationManagerCompat.from(context).areNotificationsEnabled()
 }

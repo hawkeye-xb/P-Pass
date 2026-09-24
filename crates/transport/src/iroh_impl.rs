@@ -244,6 +244,8 @@ fn watch_connection_close(
     });
 }
 
+type ConnectGate = Arc<tokio::sync::Mutex<()>>;
+
 /// The iroh transport: one QUIC endpoint plus its keyed connection cache.
 #[derive(Clone)]
 pub struct IrohTransport {
@@ -251,9 +253,14 @@ pub struct IrohTransport {
     /// Peer address book, fed by [`Self::add_peer`] (pairing/tickets).
     peers: Arc<Mutex<HashMap<NodeId, EndpointAddr>>>,
     connections: Arc<Mutex<ConnectionCache>>,
-    /// Serializes cache misses so concurrent requests for one key cannot
-    /// perform duplicate handshakes before either inserts its connection.
-    connect_gate: Arc<tokio::sync::Mutex<()>>,
+    /// One gate per `(peer, ALPN)`: serializes cache misses for the SAME key
+    /// so concurrent requests cannot perform duplicate handshakes before
+    /// either inserts its connection. NET-26 (#419): this used to be a
+    /// single transport-wide gate, so one phone whose handshake hung
+    /// (up to the ~30s connect timeout) queued every other peer's first
+    /// connect behind it. Different keys now handshake in parallel.
+    /// Entries are never pruned — the map is bounded by peers × ALPNs.
+    connect_gates: Arc<Mutex<HashMap<ConnectionKey, ConnectGate>>>,
     /// Optional blobs handler: `listen` routes `ALPN_BLOBS` connections
     /// here instead of the ctrl stream (one endpoint = one accept queue;
     /// a daemon serving both planes shares the loop, T-033).
@@ -313,7 +320,7 @@ impl IrohTransport {
             ep,
             peers: Arc::default(),
             connections,
-            connect_gate: Arc::default(),
+            connect_gates: Arc::default(),
             blobs_handler: Arc::default(),
         })
     }
@@ -415,6 +422,18 @@ impl IrohTransport {
             .remove_if_same(&ConnectionKey::new(peer, alpn), conn);
     }
 
+    /// The dedup gate for one `(peer, ALPN)` key (created on first use).
+    /// The std lock is released before the caller awaits the gate.
+    fn connect_gate(&self, peer: NodeId, alpn: &str) -> ConnectGate {
+        Arc::clone(
+            self.connect_gates
+                .lock()
+                .expect("connect gates lock")
+                .entry(ConnectionKey::new(peer, alpn))
+                .or_default(),
+        )
+    }
+
     /// Crate-internal: fetch or create the single live connection for one
     /// `(peer, ALPN)` key. A live connection returns immediately; a closed
     /// one is removed before reconnecting.
@@ -428,7 +447,8 @@ impl IrohTransport {
             return Ok(conn);
         }
 
-        let _connect_gate = self.connect_gate.lock().await;
+        let gate = self.connect_gate(peer, alpn);
+        let _connect_gate = gate.lock().await;
         if let Some(conn) = self
             .connections
             .lock()
@@ -712,6 +732,152 @@ impl BiStream {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal `StreamExt::next` stand-in (no futures-util dependency).
+    async fn next_incoming<S: futures_core::Stream + Unpin>(s: &mut S) -> Option<S::Item> {
+        std::future::poll_fn(|cx| Pin::new(&mut *s).poll_next(cx)).await
+    }
+
+    fn ctrl_loopback() -> TransportConfig {
+        TransportConfig::loopback(vec![crate::ALPN_CTRL.into()])
+    }
+
+    /// A reachable ctrl-ALPN server whose accept loop runs (without it the
+    /// dialer's handshake never completes).
+    async fn serving_peer() -> (IrohTransport, tokio::task::JoinHandle<()>) {
+        let server = IrohTransport::bind(ctrl_loopback())
+            .await
+            .expect("bind server");
+        let listener = server.clone();
+        let task = tokio::spawn(async move {
+            let mut incoming = listener.listen().await;
+            let mut held = Vec::new();
+            while let Some(inc) = next_incoming(&mut incoming).await {
+                held.push(inc);
+            }
+        });
+        (server, task)
+    }
+
+    /// Register a peer whose only address is a bound-but-never-read UDP
+    /// socket: nothing answers and no ICMP unreachable comes back, so a
+    /// handshake to it hangs until iroh's own connect timeout.
+    fn blackhole_peer(client: &IrohTransport) -> (NodeId, std::net::UdpSocket) {
+        let sink = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind blackhole");
+        let id = SecretKey::from_bytes(&[0x42; 32]).public();
+        let addr = EndpointAddr {
+            id,
+            addrs: [TransportAddr::Ip(
+                sink.local_addr().expect("blackhole addr"),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        (client.add_peer(PeerAddr(addr)), sink)
+    }
+
+    /// NET-26 (#419): a handshake hung on one peer must not queue another
+    /// peer's first connect behind it. With the old transport-wide gate,
+    /// B's connect waits for A's handshake to time out and this budget fails.
+    #[tokio::test]
+    async fn hung_handshake_to_one_peer_does_not_block_another_peer() {
+        let client = IrohTransport::bind(ctrl_loopback())
+            .await
+            .expect("bind client");
+        let (server, server_task) = serving_peer().await;
+        let reachable = client.add_peer(server.local_addr());
+        let (blackhole, _sink) = blackhole_peer(&client);
+
+        let hung_client = client.clone();
+        let hung = tokio::spawn(async move {
+            hung_client
+                .get_or_connect(blackhole, crate::ALPN_CTRL)
+                .await
+                .map(|_| ())
+        });
+        // Let the hung handshake take its gate first.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !hung.is_finished(),
+            "blackhole handshake must still be pending"
+        );
+
+        let started = Instant::now();
+        let conn = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.get_or_connect(reachable, crate::ALPN_CTRL),
+        )
+        .await
+        .expect("connect to a reachable peer must not wait on another peer's hung handshake")
+        .expect("connect to reachable peer");
+        assert_eq!(NodeId(*conn.remote_id().as_bytes()), reachable);
+        eprintln!("reachable peer connected in {:?}", started.elapsed());
+        assert!(
+            !hung.is_finished(),
+            "blackhole handshake should still be hanging"
+        );
+
+        hung.abort();
+        server_task.abort();
+        client.close().await;
+        server.close().await;
+    }
+
+    /// The gate's original job (a9ea255f): concurrent cache misses for the
+    /// SAME `(peer, ALPN)` share one handshake instead of racing duplicates.
+    #[tokio::test]
+    async fn concurrent_connects_to_one_key_share_one_handshake() {
+        let client = IrohTransport::bind(ctrl_loopback())
+            .await
+            .expect("bind client");
+        let (server, server_task) = serving_peer().await;
+        let peer = client.add_peer(server.local_addr());
+
+        let attempts: Vec<_> = (0..8)
+            .map(|_| {
+                let client = client.clone();
+                tokio::spawn(async move {
+                    client
+                        .get_or_connect(peer, crate::ALPN_CTRL)
+                        .await
+                        .expect("connect")
+                        .stable_id()
+                })
+            })
+            .collect();
+        let mut ids = std::collections::BTreeSet::new();
+        for attempt in attempts {
+            ids.insert(attempt.await.expect("connect task"));
+        }
+        assert_eq!(
+            ids.len(),
+            1,
+            "one key must yield exactly one handshake, got {ids:?}"
+        );
+
+        server_task.abort();
+        client.close().await;
+        server.close().await;
+    }
+
+    /// Diagnostic: how long a blackhole handshake hangs on its own. The
+    /// budget in the cross-peer test must sit well below this.
+    #[tokio::test]
+    #[ignore = "diagnostic: measures the iroh connect timeout (slow)"]
+    async fn measure_blackhole_handshake_duration() {
+        let client = IrohTransport::bind(ctrl_loopback())
+            .await
+            .expect("bind client");
+        let (blackhole, _sink) = blackhole_peer(&client);
+        let started = Instant::now();
+        let result = client.get_or_connect(blackhole, crate::ALPN_CTRL).await;
+        eprintln!(
+            "blackhole connect ended after {:?}: {:?}",
+            started.elapsed(),
+            result.map(|_| ())
+        );
+        client.close().await;
+    }
 
     #[tokio::test]
     async fn node_id_from_secret_key_matches_bound_endpoint() {

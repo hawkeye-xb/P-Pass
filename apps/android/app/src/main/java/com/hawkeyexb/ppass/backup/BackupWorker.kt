@@ -13,7 +13,9 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.hawkeyexb.ppass.backup.flow.runFlowReconcile
+import com.hawkeyexb.ppass.backup.flow.TriggerReason
+import com.hawkeyexb.ppass.backup.flow.WaitReason
+import com.hawkeyexb.ppass.backup.flow.WakeScheduler
 import com.hawkeyexb.ppass.backup.flow.runFlowWake
 import java.util.concurrent.TimeUnit
 
@@ -27,15 +29,15 @@ const val CONTENT_MAX_DELAY_MS = 30_000L
 private const val KEY_AUTOMATIC_WAKE = "automatic_wake"
 
 /**
- * MOB-87：这一次唤醒顺便跑一轮远端对账（去问桌面「我以为传成功的那些，
- * 你还在吗」）。
- *
- * **只有 5 小时的周期兜底那条挂这个标。** 别的唤醒（内容监听、回前台补捞、
- * 手动备份）一拍一个，挂上去等于每拍一张照片就朝桌面发一页 500 个 hash
- * 的查询——对账是收敛手段，不需要那个频率。重新授权那条更即时的触发走
- * `requestFlowWakeAfterRepair`，不走 worker。
+ * #417：这次唤醒的 [TriggerReason]。决定这一轮要不要对账（5h 兜底 = PERIODIC 对账，含问桌面「还在吗」；
+ * 内容监听一拍一个，只做发现）、要不要查后台开关与电量（人在场的不查）。
  */
-private const val KEY_RECONCILE_REMOTE = "reconcile_remote"
+private const val KEY_REASON = "trigger_reason"
+
+const val UNREACHABLE_PROBE_WORK_PREFIX = "ppass-unreachable-probe-"
+const val CONSTRAINT_WAKE_WORK_NAME = "ppass-constraint-wake"
+const val UNREACHABLE_PROBE_COUNT = 3
+const val UNREACHABLE_PROBE_INTERVAL_MINUTES = 10L
 
 /** The switch owns these producers, and deliberately does not own Manual. */
 internal fun autoBackupWorkNames(): List<String> = listOf(
@@ -54,12 +56,61 @@ private fun constraintsOf(spec: BackupConstraintsSpec): Constraints =
 internal fun backupWorkRequest(
     spec: BackupConstraintsSpec,
     automatic: Boolean = true,
+    reason: TriggerReason = TriggerReason.MEDIA_CHANGE,
+    initialDelayMinutes: Long = 0L,
 ): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<BackupWorker>()
         .setConstraints(constraintsOf(spec))
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-        .setInputData(androidx.work.workDataOf(KEY_AUTOMATIC_WAKE to automatic))
+        .setInitialDelay(initialDelayMinutes, TimeUnit.MINUTES)
+        .setInputData(androidx.work.workDataOf(KEY_AUTOMATIC_WAKE to automatic, KEY_REASON to reason.name))
         .build()
+
+/**
+ * #417 的唤醒登记：
+ * - 桌面不可达：3 个一次性任务，间隔 10 分钟（10 / 20 / 30 分钟后各探测一次）。已经排着的不重排（KEEP），
+ *   所以反复失败不会把探测一直往后推。
+ * - 条件不满足：一个带相应约束的一次性任务（Wi‑Fi → UNMETERED，电量 → batteryNotLow）。
+ */
+class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
+    override fun scheduleUnreachableProbes() {
+        val wm = WorkManager.getInstance(context)
+        val settings = BackupSettings(context.filesDir).load()
+        for (i in 1..UNREACHABLE_PROBE_COUNT) {
+            wm.enqueueUniqueWork(
+                "$UNREACHABLE_PROBE_WORK_PREFIX$i",
+                ExistingWorkPolicy.KEEP,
+                backupWorkRequest(
+                    constraintsFor(BackupTier.USER_PRESENT, settings),
+                    automatic = false,
+                    reason = TriggerReason.UNREACHABLE_PROBE,
+                    initialDelayMinutes = UNREACHABLE_PROBE_INTERVAL_MINUTES * i,
+                ),
+            )
+        }
+    }
+
+    override fun cancelUnreachableProbes() {
+        val wm = WorkManager.getInstance(context)
+        for (i in 1..UNREACHABLE_PROBE_COUNT) wm.cancelUniqueWork("$UNREACHABLE_PROBE_WORK_PREFIX$i")
+    }
+
+    override fun scheduleWhenConditionsMet(reason: WaitReason) {
+        val spec = when (reason) {
+            WaitReason.WIFI -> BackupConstraintsSpec(requiresBatteryNotLow = false, requiresUnmetered = true)
+            WaitReason.BATTERY -> BackupConstraintsSpec(
+                requiresBatteryNotLow = true,
+                requiresUnmetered = BackupSettings(context.filesDir).load().wifiOnly,
+            )
+            else -> return
+        }
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            CONSTRAINT_WAKE_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            backupWorkRequest(spec, automatic = false, reason = TriggerReason.CONSTRAINTS_MET),
+        )
+    }
+}
 
 // NET-06: this fires only when the user is looking at the screen right
 // now (scope confirm / app foreground) — it must run regardless of the
@@ -73,10 +124,12 @@ internal fun backupWorkRequest(
 // "auto-backup enabled".
 fun triggerUserPresentBackup(context: Context) = enqueueFlowWake(
     context, CATCHUP_WORK_NAME, BackupTier.USER_PRESENT, ExistingWorkPolicy.KEEP, automatic = false,
+    reason = TriggerReason.APP_FOREGROUND,
 )
 
 fun triggerManualBackup(context: Context) = enqueueFlowWake(
-    context, MANUAL_BACKUP_WORK_NAME, BackupTier.MANUAL, ExistingWorkPolicy.KEEP,
+    context, MANUAL_BACKUP_WORK_NAME, BackupTier.MANUAL, ExistingWorkPolicy.KEEP, automatic = false,
+    reason = TriggerReason.MANUAL,
 )
 
 fun cancelManualBackup(context: Context) {
@@ -85,6 +138,7 @@ fun cancelManualBackup(context: Context) {
 
 fun triggerProcessStartCatchup(context: Context) = enqueueFlowWake(
     context, PROCESS_CATCHUP_WORK_NAME, BackupTier.BACKGROUND, ExistingWorkPolicy.KEEP,
+    reason = TriggerReason.PROCESS_START,
 )
 
 private fun enqueueFlowWake(
@@ -93,13 +147,14 @@ private fun enqueueFlowWake(
     tier: BackupTier,
     policy: ExistingWorkPolicy,
     automatic: Boolean = true,
+    reason: TriggerReason,
 ) {
     if (automatic && !AutoBackupPrefs(context.filesDir).enabled()) return
     val settings = BackupSettings(context.filesDir).load()
     WorkManager.getInstance(context).enqueueUniqueWork(
         name,
         policy,
-        backupWorkRequest(constraintsFor(tier, settings), automatic),
+        backupWorkRequest(constraintsFor(tier, settings), automatic, reason),
     )
 }
 
@@ -112,8 +167,8 @@ fun scheduleAutoBackup(context: Context) {
         .setInputData(
             androidx.work.workDataOf(
                 KEY_AUTOMATIC_WAKE to true,
-                // MOB-87: 兜底那一轮才对账，见 KEY_RECONCILE_REMOTE。
-                KEY_RECONCILE_REMOTE to true,
+                // 5h 兜底：这一轮对账（问桌面「还在吗」+ FAILED 兜底重试一次）。
+                KEY_REASON to TriggerReason.PERIODIC.name,
             ),
         )
         .build()
@@ -221,8 +276,10 @@ fun suspendAutoBackupUntilAuthorized(context: Context) {
 }
 
 /**
- * This worker is deliberately only an OS wake adapter. It may request and drive
- * Flow, but it never scans media, hashes files, or performs transport itself.
+ * This worker is deliberately only an OS wake adapter: it hands a [TriggerReason] to the loop and waits
+ * only for the loop's **checks** (pause, switch, Wi-Fi, battery, budget, desktop reachable). The
+ * transfer itself runs in the process-level loop under its own FGS + wakelock (#413), so WorkManager's
+ * ~10-minute execution cap never bounds a transfer.
  */
 class BackupWorker(
     context: Context,
@@ -230,20 +287,11 @@ class BackupWorker(
 ) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = try {
         val automatic = inputData.getBoolean(KEY_AUTOMATIC_WAKE, true)
+        val reason = inputData.getString(KEY_REASON)
+            ?.let { name -> TriggerReason.entries.firstOrNull { it.name == name } }
+            ?: TriggerReason.MEDIA_CHANGE
         if (!automatic || AutoBackupPrefs(applicationContext.filesDir).enabled()) {
-            // MOB-76: 「WorkManager 把 job 放行了」≠「Wi-Fi 闸门满足」——
-            // MANUAL 档的 worker 约束是零，旧代码在这里把调度放行直接当
-            // 交付闸门，等于给所有手动路径开了后门。交付闸门一律实时算。
-            runFlowWake(applicationContext)
-            // MOB-87: 兜底轮顺带核对一次桌面。放在 wake 之后——先把已知的活
-            // 干了，再去问"还有什么是我不知道的"。桌面离线时这一轮自己会
-            // 安静退出，不影响上面的 wake 结果。
-            if (inputData.getBoolean(KEY_RECONCILE_REMOTE, false)) {
-                // **挂起版，不是 fire-and-forget 版。** doWork 是 suspend，
-                // 必须等对账跑完再返回：否则 Result.success() 当场落地、
-                // wakelock 放掉，那个还在等桌面网络往返的协程随时被掐。
-                runFlowReconcile(applicationContext)
-            }
+            runFlowWake(applicationContext, reason)
         }
         Result.success()
     } catch (t: Throwable) {
