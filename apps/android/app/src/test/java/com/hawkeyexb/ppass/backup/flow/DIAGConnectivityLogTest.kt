@@ -49,10 +49,10 @@ class DIAGConnectivityLogTest {
 
     private fun client(probe: suspend ((CallTrace) -> Unit) -> String?) = object : FlowReceiptClient {
         override suspend fun currentPairingEpoch(): String? = error("probe must use the traced entry point")
-        override suspend fun probePairingEpoch(trace: (CallTrace) -> Unit): String? = probe(trace)
+        override suspend fun probeHello(trace: (CallTrace) -> Unit) = com.hawkeyexb.ppass.proto.Hello(pairingEpoch = probe(trace))
         override suspend fun offer(request: FlowFetchRequest) = FlowStatusReply(state = "active")
         override suspend fun status(tuple: FlowTupleRef) = FlowStatusReply(state = "active")
-        override suspend fun cancel(request: FlowFetchRequest) = Unit
+        override suspend fun suspendFetch(tuple: FlowTupleRef) = Unit
     }
 
     private fun trace(error: String?) = CallTrace(

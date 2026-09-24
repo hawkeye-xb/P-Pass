@@ -51,7 +51,7 @@ class FakeDelivery : ItemDelivery {
         return next(request)
     }
 
-    override fun discardPartial(orderId: Long, pairingEpoch: PairingEpoch) {
+    override suspend fun discardPartial(orderId: Long, pairingEpoch: PairingEpoch) {
         discarded += orderId
     }
 
@@ -74,14 +74,14 @@ class FakeForeground(private val control: FlowControl) : ForegroundLease {
     var grant = true
     var held = false
 
-    /** 模拟真实实现：受阻事实在时，根本不调 startForegroundService。 */
+    /** #413：受阻原因不是闸门——每次 acquire 都真的调一次 startForegroundService；成功就清掉原因。 */
     var startForegroundServiceCalls = 0
 
     override suspend fun acquire(): Boolean {
         acquires++
-        if (control.fgsBlock() != null) return false
         startForegroundServiceCalls++
         held = grant
+        if (grant) control.clearFgsBlock()
         return grant
     }
 
@@ -128,6 +128,11 @@ class FakeScheduler : WakeScheduler {
 class FakeControl : FlowControl {
     var pausedFlag = false
     var block: FgsBlockReason? = null
+    var wait: WaitReason? = null
+    override fun waitReason() = wait
+    override fun setWaitReason(reason: WaitReason?) {
+        wait = reason
+    }
     var ack = 0L
     override fun paused() = pausedFlag
     override fun setPaused(paused: Boolean) {
@@ -184,7 +189,7 @@ class Rig(test: TestScope, reconciled: Boolean = true) {
         foreground = foreground,
         scheduler = scheduler,
         control = control,
-        conditions = { conditions.copy(fgsBlocked = control.fgsBlock() != null) },
+        conditions = { conditions },
         inScope = media::inScope,
         pairingEpoch = { epoch },
         scope = scope,

@@ -56,7 +56,7 @@ class ARCH13DeliveryPortTest {
         var statusReply: (Long) -> FlowStatusReply = { FlowStatusReply(state = "active") }
         val offers = mutableListOf<FlowFetchRequest>()
         val statusCallsAt = mutableListOf<Long>()
-        val cancels = mutableListOf<FlowFetchRequest>()
+        val suspends = mutableListOf<FlowTupleRef>()
         var push: ((String, JsonObject) -> Unit)? = null
         val progress = mutableListOf<Long>()
         val logLines = mutableListOf<String>()
@@ -76,8 +76,8 @@ class ARCH13DeliveryPortTest {
                 statusCallsAt += test.testScheduler.currentTime
                 return statusReply(test.testScheduler.currentTime)
             }
-            override suspend fun cancel(request: FlowFetchRequest) {
-                cancels += request
+            override suspend fun suspendFetch(tuple: FlowTupleRef) {
+                suspends += tuple
             }
         }
         val port = NativeFlowDeliveryPort(
@@ -263,7 +263,9 @@ class ARCH13DeliveryPortTest {
     @Test
     fun `pushed failure codes are classified - storage is a peer failure, fetch is a path failure, unknown is an item failure`() = runTest {
         for ((code, expected) in listOf(
-            "storage_failed" to DeliveryOutcome.PeerFailure("storage_failed"),
+            "storage_full" to DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, "storage_full"),
+            "library_unavailable" to DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, "library_unavailable"),
+            "storage_failed" to DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, "storage_failed"),
             "fetch_failed" to DeliveryOutcome.PathFailure("fetch_failed"),
             "something_new" to DeliveryOutcome.ItemFailure("pushed:something_new"),
         )) {
@@ -283,7 +285,7 @@ class ARCH13DeliveryPortTest {
         assertEquals(DeliveryOutcome.PairingLost, classifyDeliveryFailure(DesktopRejectedException("err.not_paired", "flow.offer")))
         assertEquals(DeliveryOutcome.ItemFailure("rejected:err.grant_mismatch"), classifyDeliveryFailure(DesktopRejectedException("err.grant_mismatch", "flow.offer")))
         assertEquals(DeliveryOutcome.PathFailure("network:IOException"), classifyDeliveryFailure(java.io.IOException("reset")))
-        assertEquals(DeliveryOutcome.PeerFailure("storage_failed"), classifyDeliveryFailure(FlowPushedFailureException("storage_failed")))
+        assertEquals(DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, "storage_failed"), classifyDeliveryFailure(FlowPushedFailureException("storage_failed")))
     }
 
     // C-01（传输侧）：被取消（暂停 / 取消 / FGS 收走）→ 停掉原生传输、告诉桌面不等了、把取消抛出去。
@@ -297,7 +299,7 @@ class ARCH13DeliveryPortTest {
         runCurrent()
         assertTrue(job.isCancelled)
         assertTrue(h.nativeEvents.containsAll(listOf("stop:$orderId", "revoke")))
-        assertEquals(1, h.cancels.size)
+        assertEquals(1, h.suspends.size)
     }
 
     // 暂停发生在大文件 register（阻塞导入）期间 → register 返回后不再 offer。

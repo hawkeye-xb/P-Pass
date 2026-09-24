@@ -44,8 +44,8 @@ class ARCH13LoopControlTest {
     fun `C-02 while paused no trigger of any kind sends, probes or requests the foreground service`() = runTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
-        rig.engine.pause()
-        rig.settle()
+        // 契约 §3：pause() 只在备份中有效；这里直接摆出「已暂停」的意图。
+        rig.control.pausedFlag = true
         TriggerReason.entries.forEach { rig.trigger(it) }
         rig.engine.onAppForeground()
         rig.engine.onNetworkChanged()
@@ -193,35 +193,36 @@ class ARCH13LoopControlTest {
         rig.close()
     }
 
-    // C-08 / #414：FGS 被拒只尝试 1 次，没有递归；之后的后台触发不再调用 startForegroundService；
-    // 回到前台清掉事实后恢复。
-    // 反证：acquire 失败后不记 recordFgsBlock → 之后每次触发都再调一次，startForegroundServiceCalls = 4，红。
+    // C-08 / #413：FGS 被拒 → 这一轮只申请 1 次（没有递归）、进「等待中」；下一次触发照常再申请（不再卡到回前台）。
+    // 反证：把受阻原因当闸门（acquire 前看到 fgsBlock 就返回 false）→ 第二次触发不申请，照片不传，红。
     @Test
-    fun `C-08 a refused foreground start is tried exactly once and not again until the app is in the foreground`() = runTest {
+    fun `C-08 a refused foreground start waits and the next trigger simply tries again`() = runTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
         rig.foreground.grant = false
 
         rig.trigger()
-        repeat(3) { rig.trigger(TriggerReason.MEDIA_CHANGE) }
 
         assertEquals(1, rig.foreground.startForegroundServiceCalls)
         assertEquals(FgsBlockReason.START_REFUSED, rig.control.block)
         assertEquals(WaitReason.FGS_BLOCKED, rig.engine.status.value.waitReason)
+        assertEquals(GlobalState.WAITING, rig.engine.view.value.state)
+        assertEquals(WaitReason.FGS_BLOCKED, rig.control.wait)
         assertEquals(0, rig.delivery.requests.size)
 
         rig.foreground.grant = true
-        rig.engine.onAppForeground()
-        rig.settle()
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
         assertEquals(2, rig.foreground.startForegroundServiceCalls)
         assertEquals(OrderState.CONFIRMED, rig.state(1))
+        assertEquals("拿到 FGS 就清掉受阻原因", null, rig.control.block)
+        assertEquals(GlobalState.IDLE, rig.engine.view.value.state)
         rig.close()
     }
 
-    // #414 重点：FGS 超时（onTimeout）→ 停循环、记事实；之后不再调用 start。
-    // 反证：onForegroundLost 不 recordFgsBlock → 下一次触发又调 startForegroundService，红。
+    // #414 / #413：FGS 超时（onTimeout）→ 停循环、记原因、等待中；下一次触发照常再申请。
+    // 反证：onForegroundLost 不停循环 → 第二张照样开始，红。
     @Test
-    fun `after a foreground timeout nothing calls start again until the app is in the foreground`() = runTest {
+    fun `after a foreground timeout the loop stops and the next trigger requests it again`() = runTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
         rig.photo(2, generation = 2)
@@ -231,13 +232,13 @@ class ARCH13LoopControlTest {
 
         rig.engine.onForegroundLost(FgsBlockReason.BUDGET_EXHAUSTED)
         rig.settle()
-        rig.delivery.release()
-        repeat(3) { rig.trigger(TriggerReason.PERIODIC) }
-
-        assertEquals(1, rig.foreground.startForegroundServiceCalls)
-        assertEquals(FgsBlockReason.BUDGET_EXHAUSTED, rig.control.block)
-        assertEquals(OrderState.PAUSED, rig.state(1))
+        assertEquals(listOf(1L), rig.delivery.deliveredMediaIds)
         assertEquals(1, rig.foreground.releases)
+        assertEquals(WaitReason.FGS_BLOCKED, rig.control.wait)
+
+        rig.delivery.release()
+        rig.trigger(TriggerReason.PERIODIC)
+        assertEquals(2, rig.foreground.startForegroundServiceCalls)
         rig.close()
     }
 
@@ -305,14 +306,14 @@ class ARCH13LoopControlTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
         rig.photo(2, generation = 2)
-        rig.delivery.script += { DeliveryOutcome.PeerFailure("storage_failed") }
+        rig.delivery.script += { DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, "storage_failed") }
 
         rig.trigger()
 
         assertEquals(listOf(1L), rig.delivery.deliveredMediaIds)
         assertEquals(OrderState.PAUSED, rig.state(1))
         assertEquals(0, rig.store.currentForMedia(1)!!.attempts)
-        assertEquals(WaitReason.PEER_REFUSED, rig.engine.status.value.waitReason)
+        assertEquals(WaitReason.DESKTOP_STORAGE_ERROR, rig.engine.status.value.waitReason)
         rig.close()
     }
 

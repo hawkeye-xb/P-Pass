@@ -65,16 +65,17 @@ class PPassApplication : Application() {
                         changed("caps:$network:${caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)}")
                     }
 
-                    override fun onLost(network: Network) = changed("lost:$network")
+                    // #413：onLost 立即判路径失败（没有任何默认网络时，见 onFlowNetworkChanged）。
+                    override fun onLost(network: Network) = changed("lost:$network", lost = true)
                 },
             )
         }.onFailure { Log.w("PPassFlow", "network callback registration failed", it) }
     }
 
-    private fun changed(signature: String) {
+    private fun changed(signature: String, lost: Boolean = false) {
         if (signature == lastNetworkSignature) return
         lastNetworkSignature = signature
-        onFlowNetworkChanged(this)
+        onFlowNetworkChanged(this, lost)
     }
 
     /**

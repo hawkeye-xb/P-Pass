@@ -84,26 +84,40 @@ internal suspend fun runFlowWake(context: Context, reason: TriggerReason) {
         ?: Log.w(TAG, "wake $reason: checks did not finish within ${WORKER_CHECK_BUDGET_MS}ms; the cycle continues on its own")
 }
 
-/** 新增相册：立刻跑一次慢路径（#415 裁决 5）。减少相册不需要调用任何东西。 */
+/** 新增相册：立刻叫醒循环并对账（新相册的历史照片在 G 以下，只有对账扫得到）。减少相册不需要调用任何东西。 */
 @Suppress("UNUSED_PARAMETER")
 internal fun requestFlowScopeBackfillAndWake(context: Context, constraintsSatisfied: Boolean) =
     requestFlowWake(context, TriggerReason.SCOPE_ADDED)
 
-/** MOB-87：重新配对成功——唤醒 + 一次慢路径（含问桌面「还在吗」）。 */
+/** MOB-87：重新配对成功——唤醒 + 对账（含问桌面「还在吗」）。 */
 internal fun requestFlowWakeAfterRepair(context: Context) = requestFlowWake(context, TriggerReason.PAIRING_REPAIRED)
 
+/** 契约 §3：暂停（只在备份中有效）。 */
 internal fun pauseFlow(context: Context) {
     runtimeFor(context.applicationContext)?.engine?.pause()
 }
 
+/** 契约 §3：继续（只在已暂停有效）。 */
 internal fun continueFlow(context: Context) {
-    runtimeFor(context.applicationContext)?.engine?.continueFlow()
+    runtimeFor(context.applicationContext)?.engine?.resume()
 }
 
-/** FAILED 立即重试一次（走慢路径第 3 步）。 */
+/** FAILED 立即重试一次。 */
 internal fun retryFailedFlow(context: Context) = requestFlowWake(context, TriggerReason.RETRY_FAILED)
 
-/** 「取消剩余 N 张」，返回 N。 */
+/** 契约 §3：UI 与 FGS 通知读的唯一视图。null = 运行时不可用（未配对）。 */
+internal fun engineViewFlow(context: Context): kotlinx.coroutines.flow.StateFlow<EngineView>? =
+    runtimeFor(context.applicationContext)?.engine?.view
+
+/** 契约 §3：「取消剩余 N 张」弹窗那一刻的边界 + 张数。null = 运行时不可用。 */
+internal suspend fun remainingSnapshotFlow(context: Context): RemainingSnapshot? =
+    runtimeFor(context.applicationContext)?.engine?.remainingSnapshot()
+
+/** 契约 §3：确认取消（只在已暂停 / 等待中有效），返回写下的张数；null = 当前状态不允许或运行时不可用。 */
+internal suspend fun cancelRemainingFlow(context: Context, snapshot: RemainingSnapshot): Int? =
+    runtimeFor(context.applicationContext)?.engine?.cancelRemaining(snapshot)?.await()
+
+/** 旧入口：当场拍边界再取消（在跑时先停下）。新 UI 用 [remainingSnapshotFlow] + [cancelRemainingFlow]。 */
 internal suspend fun cancelRemainingFlow(context: Context): Int =
     runtimeFor(context.applicationContext)?.engine?.cancelRemaining()?.await() ?: 0
 
@@ -111,7 +125,7 @@ internal suspend fun cancelRemainingFlow(context: Context): Int =
 internal suspend fun restoreSkippedFlow(context: Context): Int =
     runtimeFor(context.applicationContext)?.engine?.restoreSkipped()?.await() ?: 0
 
-/** 「取消剩余 N 张」的 N（与取消时写下的是同一个函数）。null = 运行时不可用。 */
+/** 「取消剩余 N 张」的 N（与取消时写下的是同一份边界）。null = 运行时不可用。 */
 internal suspend fun countRemainingFlow(context: Context): Int? =
     runtimeFor(context.applicationContext)?.engine?.countRemaining()
 
@@ -119,7 +133,7 @@ internal fun acknowledgeFlowMissingSource(context: Context) {
     runtimeFor(context.applicationContext)?.engine?.acknowledgeMissingSource()
 }
 
-/** App 进入前台：清 FGS 受阻事实并触发一次（含慢路径）。 */
+/** App 进入前台：触发一次（含对账）。 */
 internal fun onFlowAppForeground(context: Context) {
     val app = context.applicationContext
     thread(name = "ppass-flow-foreground") {
@@ -127,16 +141,25 @@ internal fun onFlowAppForeground(context: Context) {
     }
 }
 
-/** ConnectivityManager 网络变化回调：先让 iroh 立刻重探路径，再交给引擎。 */
-internal fun onFlowNetworkChanged(context: Context) {
+/**
+ * ConnectivityManager 网络变化回调：先让 iroh 立刻重探路径，再交给引擎。
+ * [lost] = 这是一次 onLost 且此刻手机**没有任何**默认网络：在飞的这张立即判路径失败（#413）。
+ * Wi‑Fi ↔ 移动网络切换时旧网络的 onLost 不算（新网络已经在了，传输可以换路继续）。
+ */
+internal fun onFlowNetworkChanged(context: Context, lost: Boolean = false) {
     val app = context.applicationContext
     thread(name = "ppass-flow-network") {
         runCatching {
             val runtime = runtimeFor(app) ?: return@runCatching
             runCatching { runtime.bridge.networkChange() }.onFailure { Log.w(TAG, "network_change failed", it) }
-            runtime.engine.onNetworkChanged()
+            if (lost && !hasDefaultNetwork(app)) runtime.engine.onNetworkLost() else runtime.engine.onNetworkChanged()
         }.onFailure { Log.e(TAG, "network trigger failed", it) }
     }
+}
+
+private fun hasDefaultNetwork(context: Context): Boolean {
+    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
+    return cm.activeNetwork != null
 }
 
 // ------------------------------------------------------------------ UI 读取
@@ -243,6 +266,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         pairing = pairing,
         desktopFor = desktopFor,
         subscribe = { p, onConnected, onEvent ->
+            // 每轮开头就订阅，不一定排在某次 desktopFor（会 bind）之后：自己 bind。
+            client.bind(IdentityStore(app.filesDir).secretKey())
             client.subscribeTimeline(
                 parsePeerAddrToken(p.daemonAddrToken),
                 onConnected = { onConnected() },
@@ -293,7 +318,6 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
                 wifiOnly = settings.wifiOnly,
                 onUnmetered = isOnUnmetered(app),
                 batteryLow = isBatteryLow(app),
-                fgsBlocked = control.fgsBlock() != null,
             )
         },
         inScope = { bucket -> scopeStore.selectedBucketIds()?.contains(bucket) == true },

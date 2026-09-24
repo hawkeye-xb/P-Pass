@@ -1,11 +1,19 @@
-// REBUILD-03 / ARCH-13 (#417): phone-side adapter from one order to a Desktop receipt.
+// REBUILD-03 / ARCH-13 (#417) → #413: phone-side adapter from one order to a Desktop receipt.
 //
 // #417 的改动：
 // - queue_sequence / lease_token 由 order 行 id 填（线协议不改）。
 // - 回调风格改成挂起函数，结局按 #410 分类返回（路径 / 单张 / 对端），不再是一种「失败」。
-// - `FlowPushedFailureException.code` 终于被读：storage_failed = 对端失败，fetch_failed = 路径失败。
 // - #410 参数：15 秒没人来连 → 去问桌面，回 active 就继续等；3 分钟没有新的文件字节 → 主动断开，路径失败。
 // - 不直接碰 android.util.Log / SystemClock：日志和时钟都注入，整条等待循环能在 JVM 上用虚拟时间测。
+//
+// #413 的改动（契约 §5）：
+// - 暂停 / FGS 被收 / 断网（协程取消）改发 `flow.suspend`：同步、不可取消、限时约 3 秒。**不再发 `flow.cancel`**
+//   ——它让桌面把 grant 标成 cancelled，半截失去 GC 保护。丢弃半截只走 [NativeFlowDeliveryPort.discardPartial]
+//   （`flow.cancel_tuple`）。
+// - 推送订阅每轮一条（[NativeFlowDeliveryPort.session]）：首张 offer 前限时等订阅就绪，缓冲无界，按 tuple 过滤。
+// - 错误码按契约重新分类：storage_full / library_unavailable / storage_failed → 对端失败；fetch_failed → 路径失败；
+//   provider 上线超时 → 路径失败；导入 hash 与声明的对不上 → 源已删（不计失败）。
+// - offer 带 `size_bytes`，桌面按它预检剩余空间。
 package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.backup.isPairingLostText
@@ -19,18 +27,21 @@ import com.hawkeyexb.ppass.proto.FlowFetchRequest
 import com.hawkeyexb.ppass.proto.FlowStatusReply
 import com.hawkeyexb.ppass.proto.FlowTupleRef
 import com.hawkeyexb.ppass.proto.Hello
+import com.hawkeyexb.ppass.proto.HelloHealth
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
 import com.hawkeyexb.ppass.transport.CallTrace
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PeerAddrParts
-import com.hawkeyexb.ppass.transport.parsePeerAddrToken
+import java.util.concurrent.TimeoutException
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -39,6 +50,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -52,8 +64,11 @@ internal class DesktopRejectedException(val msgKey: String?, method: String) :
 internal interface FlowReceiptClient {
     suspend fun currentPairingEpoch(): String?
 
-    /** DIAG-A：同 [currentPairingEpoch]，但把这次往返的逐阶段记录交给 [trace]（只有真实客户端有）。 */
-    suspend fun probePairingEpoch(trace: (CallTrace) -> Unit): String? = currentPairingEpoch()
+    /**
+     * DIAG-A：`hello` 探测，把这次往返的逐阶段记录交给 [trace]（只有真实客户端有）。
+     * #413：顺带带回桌面健康（契约 §5 的 `health`；旧桌面没有 → null）。
+     */
+    suspend fun probeHello(trace: (CallTrace) -> Unit): Hello = Hello(pairingEpoch = currentPairingEpoch())
 
     /**
      * NET-24: returns the same [FlowStatusReply] a [status] call issued right now would return.
@@ -64,7 +79,9 @@ internal interface FlowReceiptClient {
 
     /** NET-06: read-only control-plane query for one exact tuple. */
     suspend fun status(tuple: FlowTupleRef): FlowStatusReply
-    suspend fun cancel(request: FlowFetchRequest)
+
+    /** NET-06 / #413：`flow.suspend`——打断桌面的拉取任务，grant 保持 active（半截受保护，续传只补缺的）。 */
+    suspend fun suspendFetch(tuple: FlowTupleRef)
 }
 
 /** AUDIT-01: the one daemon interaction the audit outbox dispatcher needs. */
@@ -180,10 +197,10 @@ internal class DaemonFlowReceiptClient(
         return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
     }
 
-    override suspend fun probePairingEpoch(trace: (CallTrace) -> Unit): String? {
+    override suspend fun probeHello(trace: (CallTrace) -> Unit): Hello {
         val response = client.callTraced(peer, Methods.HELLO, buildJsonObject {}, trace)
         if (!response.ok) throw DesktopRejectedException(response.error?.msgKey, "hello")
-        return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
+        return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result))
     }
 
     override suspend fun offer(request: FlowFetchRequest): FlowStatusReply {
@@ -203,23 +220,30 @@ internal class DaemonFlowReceiptClient(
         return ProtoJson.decodeFromJsonElement(FlowStatusReply.serializer(), checkNotNull(response.result))
     }
 
-    override suspend fun cancel(request: FlowFetchRequest) {
-        val response = client.call(peer, Methods.FLOW_CANCEL, ProtoJson.encodeToJsonElement(FlowFetchRequest.serializer(), request))
-        if (!response.ok) throw DesktopRejectedException(response.error?.msgKey, "flow.cancel")
-    }
+    override suspend fun suspendFetch(tuple: FlowTupleRef) = client.flowSuspend(peer, tuple)
 }
 
+/** `hello` 的 `health` → 共享类型。旧桌面不带 → null（视为健康）。 */
+internal fun desktopHealthOf(health: HelloHealth?): DesktopHealth? =
+    health?.let { DesktopHealth(freeBytes = it.freeBytes, libraryWritable = it.libraryWritable, indexOk = it.indexOk) }
+
 /**
- * #410 / #415 裁决 3：桌面推来的 `flow.failed` code 的分类。
- * - `storage_failed`（存不下）→ 对端失败：退出循环，不计次数。
+ * #413 契约 §5：桌面失败码（`flow.failed` 推送的 code、offer 被拒的 msgKey）的分类。
+ * - `storage_full` / `library_unavailable` / `storage_failed` → 对端失败：退出循环，不计次数，原因带回手机显示。
  * - `fetch_failed`（拉不到——relay 限流、断网、对端忙）→ 路径失败：保持可续传，不计次数。
- * - 其它 / 旧版对端的未知 code → 单张失败：计次数、有上限——保守的那一侧（不会因此无限重试）。
+ * - 其它（含旧桌面的 `materialize_*`）→ null，由调用方当单张失败（计次数、有上限——不会无限重试）。
  */
-internal fun classifyPushedFailure(code: String): DeliveryOutcome = when (code) {
-    "storage_failed" -> DeliveryOutcome.PeerFailure(code)
+internal fun classifyDesktopCode(code: String?): DeliveryOutcome? = when (code) {
+    "storage_full" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, code)
+    "library_unavailable" -> DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, code)
+    "storage_failed" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, code)
     "fetch_failed" -> DeliveryOutcome.PathFailure(code)
-    else -> DeliveryOutcome.ItemFailure("pushed:$code")
+    else -> null
 }
+
+/** 推送的 `flow.failed`。 */
+internal fun classifyPushedFailure(code: String): DeliveryOutcome =
+    classifyDesktopCode(code) ?: DeliveryOutcome.ItemFailure("pushed:$code")
 
 /**
  * 传输过程中抛出的异常的分类。桌面可达且明确拒绝（[DesktopRejectedException]）不是路径问题：
@@ -227,11 +251,28 @@ internal fun classifyPushedFailure(code: String): DeliveryOutcome = when (code) 
  */
 internal fun classifyDeliveryFailure(failure: Throwable): DeliveryOutcome = when {
     failure is DesktopRejectedException && failure.msgKey?.let(::isPairingLostText) == true -> DeliveryOutcome.PairingLost
-    failure is DesktopRejectedException -> DeliveryOutcome.ItemFailure("rejected:${failure.msgKey}")
+    failure is DesktopRejectedException -> classifyDesktopCode(failure.msgKey) ?: DeliveryOutcome.ItemFailure("rejected:${failure.msgKey}")
     failure is FlowPushedFailureException -> classifyPushedFailure(failure.code)
     failure is IllegalArgumentException || failure is IllegalStateException ->
         DeliveryOutcome.ItemFailure("invalid:${failure.javaClass.simpleName}")
     else -> DeliveryOutcome.PathFailure("network:${failure.javaClass.simpleName}")
+}
+
+/**
+ * 原生 provider 供数（导入 / 出 ticket）失败的分类：
+ * - 原图没了；或导入出来的 hash 与这张 order 记的对不上（导入之后又被编辑）→ 源已删，不计失败。
+ * - provider 端点在限时内没上线（`wait_online`）→ 路径失败：网络问题，不是这张照片的问题。
+ * - 其它 → 单张失败。
+ */
+internal fun classifyProviderFailure(failure: Throwable): DeliveryOutcome {
+    val message = failure.message.orEmpty()
+    return when {
+        failure is SourceMissingException || failure is SourceChangedException -> DeliveryOutcome.SourceMissing
+        message.contains("does not match its declared content hash") -> DeliveryOutcome.SourceMissing
+        failure is ProviderOfflineException || failure is TimeoutException -> DeliveryOutcome.PathFailure("provider_offline")
+        message.contains("did not become online") -> DeliveryOutcome.PathFailure("provider_offline")
+        else -> DeliveryOutcome.ItemFailure("provider:${failure.javaClass.simpleName}")
+    }
 }
 
 /**
@@ -246,36 +287,78 @@ internal class NativeFlowDeliveryPort(
     /**
      * NET-14 push subscription (`timeline.subscribe`); suspends until the stream ends.
      * 第二个参数在订阅确认帧到达时调用（DIAG-B：区分「连上了」和「还在连」）。
+     * 实现要自己保证客户端已 bind：它在每轮开头就起，不一定排在某次 [desktopFor] 之后。
      */
     private val subscribe: suspend (Pairing, () -> Unit, (String, JsonObject) -> Unit) -> Unit,
-    /** NET-06: best-effort `flow.cancel_tuple` for discarding a partial. */
+    /** NET-06: `flow.cancel_tuple` for discarding a partial. */
     private val cancelTuple: suspend (Pairing, FlowTupleRef) -> Unit,
+    /**
+     * 这一张的 ticket。默认是旧路径：打开原图、原生侧导入并出 ticket（[IrohBlobsProviderBridge.register]）。
+     * #413：接上 W3 的 `MediaImporter` 之后换成 `serve(lease)`。
+     */
+    private val serve: (ProviderLease, DeliveryRequest) -> String = { lease, request -> bridge.register(lease, request.details.uri) },
+    /** 这份内容不再需要（桌面已有 / 已确认 / 放弃这一张）。不许抛。 */
+    private val release: (ProviderLease) -> Unit = { lease -> runCatching { bridge.releaseRetention(lease) } },
     private val log: FlowLogger = FlowLogger { },
     /** 单调时钟（ms）。生产是 SystemClock.elapsedRealtime。 */
     private val clock: () -> Long = System::nanoTime.let { nano -> { nano() / 1_000_000 } },
+    /** 发给桌面的控制面请求（suspend / cancel_tuple）跑在这里，调用方只有界地等结果。 */
     private val sideEffects: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val idleStallThresholdMs: Long = LOCAL_IDLE_STALL_THRESHOLD_MS,
     private val byteStallThresholdMs: Long = BYTE_STALL_THRESHOLD_MS,
     private val subscriptionRetryDelaysMs: LongArray = SUBSCRIPTION_RETRY_DELAYS_MS,
+    private val subscriptionReadyTimeoutMs: Long = SUBSCRIPTION_READY_TIMEOUT_MS,
+    private val controlCallTimeoutMs: Long = CONTROL_CALL_TIMEOUT_MS,
 ) : ItemDelivery {
     private val epochGuard = FlowDeliveryEpochGuard(pairing)
 
+    /** 一轮的推送订阅：缓冲无界（整轮共用，旧 tuple 的推送不许把要等的那条挤掉），按 tuple 过滤。 */
+    private class Round(val pairing: Pairing) {
+        val events = Channel<Pair<String, JsonObject>>(Channel.UNLIMITED)
+        val connected = CompletableDeferred<Unit>()
+
+        /** 首张 offer 之前等过订阅就绪了没有（只等一次）。 */
+        var readyAwaited = false
+    }
+
+    @Volatile private var round: Round? = null
+
+    override suspend fun <T> session(block: suspend () -> T): T {
+        val currentPairing = pairing() ?: return block()
+        return coroutineScope {
+            val r = Round(currentPairing)
+            // 推送只是加速，不是唯一路径：订阅失败不致命，本地信号 + status() 兜底。断了按退避重建。
+            val subscription = launch { keepSubscribed(r) }
+            round = r
+            try {
+                block()
+            } finally {
+                if (round === r) round = null
+                subscription.cancel()
+            }
+        }
+    }
+
     override suspend fun deliver(request: DeliveryRequest, onProgress: (Long) -> Unit): DeliveryOutcome {
+        // 没有外层会话（单测直接调、或调用方没开轮）：这一张自己开一条订阅。
+        val r = round ?: return session { deliverIn(checkNotNull(round), request, onProgress) }
+        return deliverIn(r, request, onProgress)
+    }
+
+    private suspend fun deliverIn(r: Round, request: DeliveryRequest, onProgress: (Long) -> Unit): DeliveryOutcome {
         val currentPairing = pairing() ?: return DeliveryOutcome.PairingLost
         if (currentPairing.pairingEpoch != request.pairingEpoch.value) return DeliveryOutcome.PathFailure("epoch_changed")
         val lease = ProviderLease(request.orderId, request.leaseToken, request.contentHash)
         val ticket = try {
-            bridge.register(lease, request.details.uri)
-        } catch (missing: SourceMissingException) {
-            return DeliveryOutcome.SourceMissing
+            serve(lease, request)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Throwable) {
-            // 原生导入失败：多半是文件在 hash 之后又被改了（声明的 hash 对不上）——这一张的问题。
-            log.log("order ${request.orderId}: native register failed (${failure.message})")
-            return DeliveryOutcome.ItemFailure("register:${failure.javaClass.simpleName}")
+            return classifyProviderFailure(failure).also {
+                log.log("order ${request.orderId}: provider serve failed -> $it (${failure.javaClass.simpleName}: ${failure.message})")
+            }
         }
-        // 大文件的 register 会阻塞很久：它返回之后、offer 之前再看一眼是不是已经被暂停 / 取消了。
+        // 大文件的导入会阻塞很久：它返回之后、offer 之前再看一眼是不是已经被暂停 / 取消了。
         try {
             currentCoroutineContext().ensureActive()
         } catch (cancelled: CancellationException) {
@@ -291,15 +374,22 @@ internal class NativeFlowDeliveryPort(
             mediaType = request.details.mimeType,
             provider = ticket,
             captureAtMs = request.details.captureAtMs,
+            sizeBytes = request.details.sizeBytes.coerceAtLeast(0L),
         )
+        val tuple = FlowTupleRef(queueSequence = fetch.queueSequence, pairingEpoch = fetch.pairingEpoch, leaseToken = fetch.leaseToken)
         var desktop: FlowReceiptClient? = null
         return try {
             val client = desktopFor(currentPairing).also { desktop = it }
-            // DIAG-B：offer 的发出 / 回复时刻。推送订阅在 offer 之后才建（waitForCompletion 里），
-            // 订阅那行的 sinceOfferMs 与桌面 `flow.offer received` / `flow.delivered push` 对照，
-            // 就能判断「推送是不是在订阅建好之前就发了」。
+            if (!r.readyAwaited) {
+                // 推送可能早于订阅建立，桌面的 broadcast 不重放：首张 offer 之前限时等订阅就绪（超时照样继续，status 兜底）。
+                r.readyAwaited = true
+                val ready = withTimeoutOrNull(subscriptionReadyTimeoutMs) { r.connected.await() } != null
+                if (!ready) log.log("Flow push subscription not ready within ${subscriptionReadyTimeoutMs}ms; offering anyway")
+            }
+            // 整轮共用一条订阅：offer 之前积压的都是别的 tuple / 上一次尝试的，丢掉。
+            while (r.events.tryReceive().isSuccess) Unit
             val offerAt = clock()
-            log.log("Flow offer sent seq=${fetch.queueSequence}")
+            log.log("Flow offer sent seq=${fetch.queueSequence} sizeBytes=${fetch.sizeBytes}")
             val offerReply = client.offer(fetch)
             log.log("Flow offer replied seq=${fetch.queueSequence} state=${offerReply.state} inMs=${clock() - offerAt}")
             // NET-24: terminal state may already ride back on the offer reply (dedup / rebind).
@@ -314,12 +404,14 @@ internal class NativeFlowDeliveryPort(
                 }
                 FlowStatusPollOutcome.KeepPolling -> Unit
             }
-            waitForCompletion(client, currentPairing, fetch, lease, request.pairingEpoch, onProgress, offerAt)
+            waitForCompletion(r, client, fetch, tuple, lease, request.pairingEpoch, onProgress)
         } catch (cancelled: CancellationException) {
-            // 暂停 / 取消 / FGS 被收走：停掉原生传输（部分数据在桌面保留，续传只补缺的），
-            // 顺带告诉桌面这次不等了。不等回声（NET-06 原则 1）。
-            withContext(NonCancellable) { runCatching { bridge.pause(lease) } }
-            desktop?.let { d -> sideEffects.launch { runCatching { d.cancel(fetch) } } }
+            // 暂停 / FGS 被收走 / 断网：停掉原生传输，再同步、有界地告诉桌面「先停，别丢」（flow.suspend）。
+            // 半截在桌面保持受保护，续传只补缺的。取消本身照样抛出去。
+            withContext(NonCancellable) {
+                runCatching { bridge.pause(lease) }
+                desktop?.let { d -> boundedControlCall("flow.suspend", fetch.queueSequence) { d.suspendFetch(tuple) } }
+            }
             throw cancelled
         } catch (failure: Throwable) {
             runCatching { bridge.pause(lease) }
@@ -331,115 +423,117 @@ internal class NativeFlowDeliveryPort(
         }
     }
 
+    /**
+     * 控制面请求只**有界地**等：`DaemonClient.call` 是阻塞 FFI + 15 秒连接超时，直接包 withTimeout 不一定按时返回。
+     * 所以请求跑在 [sideEffects] 上，这里只限时等它的结果；超时就不等了（请求自己跑完或失败）。
+     */
+    private suspend fun boundedControlCall(label: String, seq: Long, call: suspend () -> Unit) {
+        val job = sideEffects.async { runCatching { call() } }
+        val result = withTimeoutOrNull(controlCallTimeoutMs) { job.await() }
+        when {
+            result == null -> log.log("$label seq=$seq: no reply within ${controlCallTimeoutMs}ms; not waiting")
+            result.isFailure -> log.log("$label seq=$seq failed: ${result.exceptionOrNull()?.javaClass?.simpleName}: ${result.exceptionOrNull()?.message}")
+            else -> log.log("$label seq=$seq sent")
+        }
+    }
+
     private suspend fun waitForCompletion(
+        r: Round,
         desktop: FlowReceiptClient,
-        currentPairing: Pairing,
         fetch: FlowFetchRequest,
+        tuple: FlowTupleRef,
         lease: ProviderLease,
         epoch: PairingEpoch,
         onProgress: (Long) -> Unit,
-        offerAt: Long,
-    ): DeliveryOutcome = coroutineScope {
+    ): DeliveryOutcome {
         // NET-06/NET-14: priority order — push, then local iroh-blobs signal, then a bounded status() check.
-        val tuple = FlowTupleRef(queueSequence = fetch.queueSequence, pairingEpoch = fetch.pairingEpoch, leaseToken = fetch.leaseToken)
-        val pushChannel = Channel<Pair<String, JsonObject>>(capacity = 8)
         val seq = fetch.queueSequence
-        val subscription = launch {
-            // 推送只是加速，不是唯一路径：订阅失败不致命，本地信号 + status() 兜底。
-            // DIAG-B：但订阅断了要重建——以前只建一次，断了（或一开始就没连上）这一张剩下的时间
-            // 就只能靠 status() 兜底；连着的时候（KeepWaitingForPush）甚至根本不问 status。
-            keepSubscribed(currentPairing, seq, offerAt) { kind, data -> pushChannel.trySend(kind to data) }
-        }
-        try {
-            var pollDelayIndex = 0
-            var consecutiveStatusFailures = 0
-            var lastBytes = -1L
-            val attemptStartedAt = clock()
-            var localDoneAt: Long? = null
-            while (true) {
-                if (!epochGuard.isCurrent(epoch)) {
+        var pollDelayIndex = 0
+        var consecutiveStatusFailures = 0
+        var lastBytes = -1L
+        val attemptStartedAt = clock()
+        var localDoneAt: Long? = null
+        while (true) {
+            if (!epochGuard.isCurrent(epoch)) {
+                bridge.pause(lease)
+                return DeliveryOutcome.PathFailure("epoch_changed")
+            }
+            // 按 tuple 过滤：不是这一张的推送直接丢（整轮共用一条订阅）。
+            var pushed: FlowPushOutcome? = null
+            while (pushed == null) {
+                val (kind, data) = r.events.tryReceive().getOrNull() ?: break
+                pushed = parseFlowPushOutcome(kind, data, tuple)
+                log.log("Flow push received kind=$kind seq=$seq matched=${pushed != null} elapsedMs=${clock() - attemptStartedAt}")
+            }
+            val local = bridge.transferStatus()
+            if (localDoneAt == null && (local is TransferStatus.Completed || local is TransferStatus.Aborted)) {
+                localDoneAt = clock()
+                log.log("Flow local transfer ended seq=$seq local=$local elapsedMs=${localDoneAt - attemptStartedAt}; waiting for desktop receipt")
+            }
+            (local as? TransferStatus.InProgress)?.bytesSent?.let { sent ->
+                if (sent != lastBytes) {
+                    lastBytes = sent
+                    onProgress(sent)
+                }
+            }
+            val elapsed = clock() - attemptStartedAt
+            when (val step = flowWaitStep(pushed, local, idleStallThresholdMs, byteStallThresholdMs, elapsed)) {
+                is FlowWaitStep.Resolved -> when (val outcome = step.outcome) {
+                    is FlowStatusPollOutcome.Completed -> {
+                        log.log("Flow resolved by=push seq=$seq")
+                        return accept(outcome.receipt, fetch, lease)
+                    }
+                    FlowStatusPollOutcome.Cancelled -> {
+                        bridge.pause(lease)
+                        return DeliveryOutcome.PathFailure("cancelled")
+                    }
+                    FlowStatusPollOutcome.KeepPolling -> continue
+                }
+                is FlowWaitStep.Failed -> {
                     bridge.pause(lease)
-                    return@coroutineScope DeliveryOutcome.PathFailure("epoch_changed")
+                    return classifyPushedFailure(step.code)
                 }
-                val pushed = pushChannel.tryReceive().getOrNull()?.let { (kind, data) ->
-                    parseFlowPushOutcome(kind, data, tuple).also { parsed ->
-                        log.log("Flow push received kind=$kind seq=$seq matched=${parsed != null} elapsedMs=${clock() - attemptStartedAt}")
+                FlowWaitStep.Stalled -> {
+                    // #410：连接还在、3 分钟没有新的文件字节 → 主动断开，路径失败。
+                    log.log("order $seq: no new file bytes for ${byteStallThresholdMs}ms; disconnecting")
+                    bridge.pause(lease)
+                    return DeliveryOutcome.PathFailure("byte_stall")
+                }
+                FlowWaitStep.KeepWaitingForPush -> delay(LOCAL_STATUS_RECHECK_MS)
+                FlowWaitStep.CheckStatusNow -> {
+                    val reply = try {
+                        desktop.status(tuple)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: DesktopRejectedException) {
+                        throw failure
+                    } catch (failure: Throwable) {
+                        consecutiveStatusFailures += 1
+                        log.log("Flow status poll failed seq=$seq #$consecutiveStatusFailures (${failure.javaClass.simpleName}: ${failure.message})")
+                        if (consecutiveStatusFailures >= STATUS_POLL_MAX_CONSECUTIVE_FAILURES) throw failure
+                        delay(nextStatusPollDelayMs(pollDelayIndex++))
+                        continue
                     }
-                }
-                val local = bridge.transferStatus()
-                if (localDoneAt == null && (local is TransferStatus.Completed || local is TransferStatus.Aborted)) {
-                    localDoneAt = clock()
-                    log.log("Flow local transfer ended seq=$seq local=$local elapsedMs=${localDoneAt - attemptStartedAt}; waiting for desktop receipt")
-                }
-                (local as? TransferStatus.InProgress)?.bytesSent?.let { sent ->
-                    if (sent != lastBytes) {
-                        lastBytes = sent
-                        onProgress(sent)
-                    }
-                }
-                val elapsed = clock() - attemptStartedAt
-                when (val step = flowWaitStep(pushed, local, idleStallThresholdMs, byteStallThresholdMs, elapsed)) {
-                    is FlowWaitStep.Resolved -> when (val outcome = step.outcome) {
+                    consecutiveStatusFailures = 0
+                    when (val outcome = flowStatusPollOutcome(reply)) {
                         is FlowStatusPollOutcome.Completed -> {
-                            log.log("Flow resolved by=push seq=${fetch.queueSequence}")
-                            return@coroutineScope accept(outcome.receipt, fetch, lease)
+                            val sinceLocal = localDoneAt?.let { clock() - it }
+                            log.log("Flow resolved by=status seq=$seq local=$local elapsedMs=$elapsed sinceLocalDoneMs=${sinceLocal ?: "-"} subscription=${subscriptionState.name}")
+                            return accept(outcome.receipt, fetch, lease)
                         }
                         FlowStatusPollOutcome.Cancelled -> {
                             bridge.pause(lease)
-                            return@coroutineScope DeliveryOutcome.PathFailure("cancelled")
+                            return DeliveryOutcome.PathFailure("cancelled")
                         }
-                        FlowStatusPollOutcome.KeepPolling -> continue
-                    }
-                    is FlowWaitStep.Failed -> {
-                        bridge.pause(lease)
-                        return@coroutineScope classifyPushedFailure(step.code)
-                    }
-                    FlowWaitStep.Stalled -> {
-                        // #410：连接还在、3 分钟没有新的文件字节 → 主动断开，路径失败。
-                        log.log("order ${fetch.queueSequence}: no new file bytes for ${byteStallThresholdMs}ms; disconnecting")
-                        bridge.pause(lease)
-                        return@coroutineScope DeliveryOutcome.PathFailure("byte_stall")
-                    }
-                    FlowWaitStep.KeepWaitingForPush -> delay(LOCAL_STATUS_RECHECK_MS)
-                    FlowWaitStep.CheckStatusNow -> {
-                        val reply = try {
-                            desktop.status(tuple)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: DesktopRejectedException) {
-                            throw failure
-                        } catch (failure: Throwable) {
-                            consecutiveStatusFailures += 1
-                            log.log("Flow status poll failed seq=$seq #$consecutiveStatusFailures (${failure.javaClass.simpleName}: ${failure.message})")
-                            if (consecutiveStatusFailures >= STATUS_POLL_MAX_CONSECUTIVE_FAILURES) throw failure
-                            delay(nextStatusPollDelayMs(pollDelayIndex++))
-                            continue
-                        }
-                        consecutiveStatusFailures = 0
-                        when (val outcome = flowStatusPollOutcome(reply)) {
-                            is FlowStatusPollOutcome.Completed -> {
-                                val sinceLocal = localDoneAt?.let { clock() - it }
-                                log.log("Flow resolved by=status seq=${fetch.queueSequence} local=$local elapsedMs=$elapsed sinceLocalDoneMs=${sinceLocal ?: "-"} subscription=${subscriptionState.name}")
-                                return@coroutineScope accept(outcome.receipt, fetch, lease)
-                            }
-                            FlowStatusPollOutcome.Cancelled -> {
-                                bridge.pause(lease)
-                                return@coroutineScope DeliveryOutcome.PathFailure("cancelled")
-                            }
-                            // #410：桌面回 active 就继续等，不判失败（字节停滞由 Stalled 兜底）。
-                            FlowStatusPollOutcome.KeepPolling -> {
-                                val next = nextStatusPollDelayMs(pollDelayIndex++)
-                                log.log("Flow status poll seq=$seq state=${reply.state} elapsedMs=$elapsed local=$local subscription=${subscriptionState.name} nextInMs=$next")
-                                delay(next)
-                            }
+                        // #410：桌面回 active 就继续等，不判失败（字节停滞由 Stalled 兜底）。
+                        FlowStatusPollOutcome.KeepPolling -> {
+                            val next = nextStatusPollDelayMs(pollDelayIndex++)
+                            log.log("Flow status poll seq=$seq state=${reply.state} elapsedMs=$elapsed local=$local subscription=${subscriptionState.name} nextInMs=$next")
+                            delay(next)
                         }
                     }
                 }
             }
-            @Suppress("UNREACHABLE_CODE")
-            error("unreachable")
-        } finally {
-            subscription.cancel()
         }
     }
 
@@ -449,21 +543,23 @@ internal class NativeFlowDeliveryPort(
     @Volatile private var subscriptionState = SubscriptionState.DOWN
 
     /**
-     * DIAG-B：保持这一张的推送订阅一直在。订阅流结束（正常结束或抛错）就按 [subscriptionRetryDelaysMs]
-     * 退避重建，直到 [waitForCompletion] 取消它。建立 / 断开 / 重建各一行日志。
-     * 取消必须原样抛出：吞掉它等于这张结束了还在后台一直重连。
+     * DIAG-B：保持这一轮的推送订阅一直在。订阅流结束（正常结束或抛错）就按 [subscriptionRetryDelaysMs]
+     * 退避重建，直到 [session] 结束取消它。建立 / 断开 / 重建各一行日志。
+     * 取消必须原样抛出：吞掉它等于这一轮结束了还在后台一直重连。
      */
-    private suspend fun keepSubscribed(pairing: Pairing, seq: Long, offerAt: Long, onEvent: (String, JsonObject) -> Unit) {
+    private suspend fun keepSubscribed(r: Round) {
         var attempt = 0
+        val roundStartedAt = clock()
         while (true) {
-            if (attempt > 0) log.log("Flow push subscription rebuild seq=$seq #$attempt")
+            if (attempt > 0) log.log("Flow push subscription rebuild #$attempt")
             val startedAt = clock()
             subscriptionState = SubscriptionState.CONNECTING
             val reason = try {
-                subscribe(pairing, {
+                subscribe(r.pairing, {
                     subscriptionState = SubscriptionState.CONNECTED
-                    log.log("Flow push subscription connected seq=$seq attempt=$attempt inMs=${clock() - startedAt} sinceOfferMs=${clock() - offerAt}")
-                }, onEvent)
+                    r.connected.complete(Unit)
+                    log.log("Flow push subscription connected attempt=$attempt inMs=${clock() - startedAt} sinceRoundStartMs=${clock() - roundStartedAt}")
+                }) { kind, data -> r.events.trySend(kind to data) }
                 "stream_ended"
             } catch (cancelled: CancellationException) {
                 subscriptionState = SubscriptionState.DOWN
@@ -473,7 +569,7 @@ internal class NativeFlowDeliveryPort(
             }
             subscriptionState = SubscriptionState.DOWN
             val retryIn = subscriptionRetryDelaysMs.getOrElse(attempt) { subscriptionRetryDelaysMs.last() }
-            log.log("Flow push subscription closed seq=$seq attempt=$attempt afterMs=${clock() - startedAt} reason=$reason; retry in ${retryIn}ms")
+            log.log("Flow push subscription closed attempt=$attempt afterMs=${clock() - startedAt} reason=$reason; retry in ${retryIn}ms")
             delay(retryIn)
             attempt++
         }
@@ -482,21 +578,18 @@ internal class NativeFlowDeliveryPort(
     private fun accept(receipt: FlowCompletionReceipt, fetch: FlowFetchRequest, lease: ProviderLease): DeliveryOutcome {
         val completed = relayFlowCompletion(receipt, fetch)
         // BLOB-03: release provider retention only at the validated success boundary.
-        runCatching { bridge.releaseRetention(lease) }
+        runCatching { release(lease) }
         return DeliveryOutcome.Confirmed(completed)
     }
 
-    override fun discardPartial(orderId: Long, pairingEpoch: PairingEpoch) {
+    override suspend fun discardPartial(orderId: Long, pairingEpoch: PairingEpoch) {
         val currentPairing = pairing() ?: return
-        sideEffects.launch {
-            runCatching {
-                cancelTuple(currentPairing, FlowTupleRef(queueSequence = orderId, pairingEpoch = pairingEpoch.value, leaseToken = leaseTokenFor(orderId)))
-            }
-        }
+        val tuple = FlowTupleRef(queueSequence = orderId, pairingEpoch = pairingEpoch.value, leaseToken = leaseTokenFor(orderId))
+        withContext(NonCancellable) { boundedControlCall("flow.cancel_tuple", orderId) { cancelTuple(currentPairing, tuple) } }
     }
 }
 
-/** `hello` 探测（有超时）：桌面可达吗、它现在的配对代号是什么。 */
+/** `hello` 探测（有超时）：桌面可达吗、它现在的配对代号是什么、它健不健康（#413 契约 §5）。 */
 internal class DaemonDesktopProbe(
     private val pairing: () -> Pairing?,
     private val desktopFor: suspend (Pairing) -> FlowReceiptClient,
@@ -522,7 +615,8 @@ internal class DaemonDesktopProbe(
             withTimeout(timeoutMs) {
                 val client = desktopFor(current)
                 bindMs = clock() - started
-                ProbeResult.Reachable(client.probePairingEpoch { trace = it })
+                val hello = client.probeHello { trace = it }
+                ProbeResult.Reachable(hello.pairingEpoch, desktopHealthOf(hello.health))
             }.also { report("reachable", null) }
         } catch (rejected: DesktopRejectedException) {
             report("rejected:${rejected.msgKey}", rejected)
@@ -652,3 +746,9 @@ internal val SUBSCRIPTION_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 5_000, 10_
 
 /** NET-14: how often the wait loop re-reads the local iroh-blobs signal (local field read, no network). */
 internal const val LOCAL_STATUS_RECHECK_MS = 500L
+
+/** #413：每轮首张 offer 之前最多等订阅就绪多久（超时照样 offer，status 兜底）。 */
+internal const val SUBSCRIPTION_READY_TIMEOUT_MS = 2_000L
+
+/** #413：`flow.suspend` / `flow.cancel_tuple` 这类控制面请求最多等多久（暂停不能被一次 15 秒的连接超时卡住）。 */
+internal const val CONTROL_CALL_TIMEOUT_MS = 3_000L

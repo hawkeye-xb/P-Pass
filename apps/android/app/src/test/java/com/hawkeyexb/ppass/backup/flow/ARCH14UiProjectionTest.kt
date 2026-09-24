@@ -158,8 +158,8 @@ class ARCH14UiProjectionTest {
         (1L..2L).forEach { rig.photo(it, generation = it) }
         rig.engine.cancelRemaining()
         rig.settle()
-        rig.engine.pause()
-        rig.settle()
+        // #413 契约 §3：pause() 只在备份中有效；这里直接摆出「已暂停」的意图。
+        rig.control.pausedFlag = true
         rig.engine.restoreSkipped()
         rig.settle()
         assertEquals(emptyList<Long>(), rig.delivery.deliveredMediaIds)

@@ -2,10 +2,11 @@
 //
 // 判据从「账本里还有待传项」改成「循环正在跑」：只有 [FlowEngine] 在检查全部通过之后调 [AndroidForegroundLease.acquire]
 // 一次，循环退出时 release。#414 的两条根因在这里各自被结构性地堵死：
-//  1. 被拒后无限递归：被拒只记一个持久事实（FlowControl.fgsBlock）然后返回 false；没有任何「被拒 → 暂停 →
+//  1. 被拒后无限递归：被拒只记原因（FlowControl.fgsBlock，给 UI 说人话）然后返回 false；没有任何「被拒 → 暂停 →
 //     同步前台 → 再申请」的回路——暂停路径根本不认识这个类的 acquire。
-//  2. 超时后又调 startForegroundService：onTimeout 只记事实、通知引擎停循环、stopSelf。App 进入前台之前，
-//     acquire 看到受阻事实直接返回 false，不再调用 startForegroundService。
+//  2. 超时后又调 startForegroundService：onTimeout 只记原因、通知引擎停循环、stopSelf。同一轮里不会再申请。
+// #413：受阻原因**不再是闸门**——以前记下之后要等 App 回前台才清，后台备份一次被拒就停到用户打开 App。
+// 现在下一次触发照常申请；成功拿到就清掉原因。
 package com.hawkeyexb.ppass.backup.flow
 
 import android.app.Notification
@@ -73,10 +74,6 @@ class AndroidForegroundLease(
 
     override suspend fun acquire(): Boolean {
         FlowForegroundHandoff.control = control
-        if (control.fgsBlock() != null) {
-            Log.i(TAG, "foreground: blocked fact present (${control.fgsBlock()}); not calling startForegroundService")
-            return false
-        }
         val verdict = CompletableDeferred<Boolean>()
         FlowForegroundHandoff.verdict = verdict
         val intent = Intent(app, FlowTransferForegroundService::class.java)
@@ -85,7 +82,7 @@ class AndroidForegroundLease(
         } catch (refusal: IllegalStateException) {
             if (!isForegroundStartRefusal(refusal)) throw refusal
             control.recordFgsBlock(fgsBlockReasonOf(refusal))
-            Log.w(TAG, "foreground: startForegroundService refused (${fgsBlockReasonOf(refusal)}); recorded, not retrying")
+            Log.w(TAG, "foreground: startForegroundService refused (${fgsBlockReasonOf(refusal)}); waiting for the next trigger")
             FlowForegroundHandoff.verdict = null
             return false
         }
@@ -100,6 +97,7 @@ class AndroidForegroundLease(
         }
         wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
         lastRenewAt = System.currentTimeMillis()
+        control.clearFgsBlock()
         Log.i(TAG, "foreground: held (FGS + PARTIAL_WAKE_LOCK ${WAKE_LOCK_TIMEOUT_MS}ms)")
         return true
     }
@@ -219,11 +217,11 @@ class FlowTransferForegroundService : Service() {
 
     /**
      * Android 15：dataSync 额度在服务运行中耗尽时系统调这里，并要求几秒内下来。
-     * #414：只停止、只记录，**不再调用 startForegroundService**。
+     * #414：只停止、只记录，这一轮**不再调用 startForegroundService**（#413：下一次触发照常再申请）。
      */
     @androidx.annotation.RequiresApi(35)
     override fun onTimeout(startId: Int, fgsType: Int) {
-        Log.w("PPassFlow", "foreground: onTimeout (dataSync budget); stopping, no restart until the app is in the foreground")
+        Log.w("PPassFlow", "foreground: onTimeout (dataSync budget); stopping this round, the next trigger may try again")
         FlowForegroundHandoff.held = false
         FlowForegroundHandoff.control?.recordFgsBlock(FgsBlockReason.BUDGET_EXHAUSTED)
         runCatching { FlowForegroundHandoff.onLost?.invoke(FgsBlockReason.BUDGET_EXHAUSTED) }

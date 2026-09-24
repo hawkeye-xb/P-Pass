@@ -73,7 +73,6 @@ class ARCH13ControlAndWriterTest {
         assertEquals(WaitReason.BATTERY, waitReasonOf(Conditions(batteryLow = true), userPresent = false))
         assertNull(waitReasonOf(Conditions(batteryLow = true), userPresent = true))
         assertEquals(WaitReason.WIFI, waitReasonOf(Conditions(wifiOnly = true, onUnmetered = false), userPresent = true))
-        assertEquals(WaitReason.FGS_BLOCKED, waitReasonOf(Conditions(fgsBlocked = true), userPresent = true))
         assertEquals(WaitReason.NOT_PAIRED, waitReasonOf(Conditions(paired = false), userPresent = true))
     }
 }

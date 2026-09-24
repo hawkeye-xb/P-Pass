@@ -248,10 +248,8 @@ class ARCH13DiscoveryScopeOrderTest {
         val rig = Rig(this)
         val p = rig.photo(1, generation = 1)
         val paused = rig.order(p, OrderState.PAUSED)
-        rig.control.pausedFlag = true
         rig.media.scope = setOf(99L)
-        rig.engine.continueFlow()
-        rig.settle()
+        rig.trigger(TriggerReason.MANUAL)
         assertEquals(OrderState.CANCELLED_BY_SCOPE, rig.store.get(paused.id)!!.state)
         assertEquals(listOf(paused.id), rig.delivery.discarded)
         assertEquals(0, rig.delivery.requests.size)

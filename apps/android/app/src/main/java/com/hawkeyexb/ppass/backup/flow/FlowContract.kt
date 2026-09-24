@@ -59,3 +59,11 @@ internal interface MediaImporter {
     /** 这份内容不再需要（桌面已有、放弃这一张）。不许抛。 */
     fun release(contentHash: String)
 }
+
+// ---- W1 补充（#413 契约 §4 的错误分类）：[MediaImporter.serve] 失败时 W3 按这两类抛，W1 据此归类 ----
+
+/** 供数时发现原文件在导入之后被改 / 截断（内容与导入时的 hash 对不上）→ W1 记「源已删」，不计失败。 */
+class SourceChangedException(message: String? = null, cause: Throwable? = null) : Exception(message, cause)
+
+/** provider 端点在限时内没上线（`wait_online` 超时）→ W1 记路径失败（网络问题，不计这张照片的失败）。 */
+class ProviderOfflineException(message: String? = null, cause: Throwable? = null) : Exception(message, cause)

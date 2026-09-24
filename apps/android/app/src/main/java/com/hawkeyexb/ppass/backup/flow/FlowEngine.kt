@@ -33,6 +33,9 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -83,6 +86,17 @@ class FlowEngine(
     /** 对外展示的运行态：值变了才发，字节进度每秒最多一次。首页英雄区与 FGS 通知都读它。 */
     val display: StateFlow<LoopStatus> = _status.display
 
+    /** 视图里除运行态之外的事实（暂停标志、等待原因、待办、本轮已完成、桌面健康）。 */
+    private val facts = MutableStateFlow(
+        ViewFacts(paused = control.paused(), waitReason = control.waitReason()),
+    )
+
+    /**
+     * #413 契约 §3：UI 与 FGS 通知读的唯一视图。暂停压过一切；在传是 RUNNING；有等待原因是 WAITING；否则 IDLE。
+     */
+    val view: StateFlow<EngineView> = combine(_status.display, facts) { status, f -> engineViewOf(status, f) }
+        .stateIn(scope, SharingStarted.Eagerly, engineViewOf(LoopStatus(), facts.value))
+
     /** 每次 order 写入后 +1：UI 投影据此重算计数（取代账本提交回调）。 */
     private val _revision = MutableStateFlow(0L)
     val revision: StateFlow<Long> = _revision.asStateFlow()
@@ -96,6 +110,17 @@ class FlowEngine(
 
     private fun bump() {
         _revision.update { it + 1 }
+    }
+
+    /** 等待原因：写运行态（通知 / 旧投影读它）、持久化（进程重启后还在）、进视图。 */
+    private fun setWait(reason: WaitReason?) {
+        control.setWaitReason(reason)
+        facts.update { it.copy(waitReason = reason, paused = control.paused()) }
+    }
+
+    private fun setPausedFlag(paused: Boolean) {
+        control.setPaused(paused)
+        facts.update { it.copy(paused = paused) }
     }
 
     private fun audit(kind: String, payload: Map<String, String>) =
@@ -150,50 +175,103 @@ class FlowEngine(
     /** 每轮「检查阶段结束」+1（进入 RUNNING 或判定不跑）。 */
     private val checksDone = MutableStateFlow(0L)
 
+    /** 全局状态（写者上读）。 */
+    private fun globalState(): GlobalState = view.value.state.let { shown ->
+        when {
+            control.paused() -> GlobalState.PAUSED
+            cycleJob?.isActive == true && _status.value.phase == LoopPhase.RUNNING -> GlobalState.RUNNING
+            else -> shown.takeIf { it != GlobalState.RUNNING && it != GlobalState.PAUSED }
+                ?: if (control.waitReason() != null) GlobalState.WAITING else GlobalState.IDLE
+        }
+    }
+
     /**
-     * C-01：暂停 = 持久化 → 退出循环 → 释放 FGS，不做任何保活。**这条路径不会申请 FGS**（#414）。
+     * C-01 / 契约 §3：暂停只在「备份中」有效。写暂停标志 → 退出循环（传输端口在取消时同步发 `flow.suspend`）
+     * → 释放 FGS。**这条路径不会申请 FGS**（#414）。返回是否真的暂停了。
      */
-    fun pause(): Job = scope.launch {
-        control.setPaused(true)
+    fun pause(): Deferred<Boolean> = scope.async {
+        if (globalState() != GlobalState.RUNNING) {
+            log.log("pause ignored: not running (${globalState()})")
+            return@async false
+        }
+        setPausedFlag(true)
         pending.clear()
         cycleJob?.cancelAndJoin()
         store.appendAudit(audit(AuditKinds.ROUND_CONTROLLED, mapOf("action" to "pause")))
         _status.value = LoopStatus(phase = LoopPhase.IDLE)
         bump()
         afterCycle()
+        true
     }
 
-    /** 只有用户 Continue 能解除暂停。 */
-    fun continueFlow(): Job = scope.launch {
-        control.setPaused(false)
+    /** 契约 §3：继续只在「已暂停」有效；回到入口（续传 + 对账：暂停期间只改了意图，待办现算）。 */
+    fun resume(): Deferred<Boolean> = scope.async {
+        if (!control.paused()) {
+            log.log("resume ignored: not paused")
+            return@async false
+        }
+        setPausedFlag(false)
+        setWait(null)
         store.appendAudit(audit(AuditKinds.ROUND_CONTROLLED, mapOf("action" to "continue")))
         bump()
-        trigger(TriggerReason.USER_CONTINUE).join()
+        onTrigger(TriggerReason.USER_CONTINUE)
+        true
+    }
+
+    /** 旧入口（UI 还在用）：等价于 [resume]。 */
+    fun continueFlow(): Job = scope.launch { resume().await() }
+
+    /**
+     * 「取消剩余 N 张」弹窗那一刻的边界 + 张数（契约 §3）。只读，不经过写者 scope，传输进行中也不会被卡住。
+     * 确认时交给 [cancelRemaining]：写下的正是这份边界里的照片，弹窗之后新拍的不在里面。
+     */
+    suspend fun remainingSnapshot(): RemainingSnapshot = withContext(io) {
+        val targets = remainingTargets()
+        RemainingSnapshot(targets.size, clock(), targets)
     }
 
     /**
-     * X-01：「取消剩余 N 张」。停掉当前这张（通知桌面丢掉它的部分数据），然后把剩下的照片
-     * （含 FAILED，#415 裁决 7）在**一个事务**里逐张写成 SKIPPED_BY_USER。不需要先暂停（#415 裁决 4）。
-     * 返回 N（真正写成 SKIPPED_BY_USER 的张数）。
+     * X-01 / 契约 §3：「取消剩余 N 张」，只在「已暂停」与「等待中」有效。一个事务把 [snapshot] 里的照片
+     * 写成 SKIPPED_BY_USER，已经跟桌面打过交道的请桌面丢掉半截（`cancel_tuple`），清除暂停标志 → 空闲。
+     * 返回真正写下的张数；不在允许的状态时返回 null。
      */
-    fun cancelRemaining(): Deferred<Int> = scope.async {
+    fun cancelRemaining(snapshot: RemainingSnapshot): Deferred<Int?> = scope.async {
+        val state = globalState()
+        if (state != GlobalState.PAUSED && state != GlobalState.WAITING) {
+            log.log("cancel ignored: state is $state")
+            return@async null
+        }
         pending.clear()
         cycleJob?.cancelAndJoin()
         val epoch = pairingEpoch() ?: return@async 0
-        // 已经跟桌面打过交道的那几张（续传中 / 暂停中）：请桌面丢掉部分数据。
         store.currentInStates(setOf(OrderState.PAUSED, OrderState.TRANSFERRING), Int.MAX_VALUE)
             .forEach { delivery.discardPartial(it.id, epoch) }
-        val targets = withContext(io) { remainingTargets() }
         val result = store.skipByUser(
-            targets,
+            snapshot.targets,
             epoch.value,
-            audit = audit(AuditKinds.ROUND_CONTROLLED, mapOf("action" to "cancel", "skipped" to targets.size.toString())),
+            audit = audit(AuditKinds.ROUND_CONTROLLED, mapOf("action" to "cancel", "skipped" to snapshot.count.toString())),
         )
         log.log("cancel: ${result.written} photos recorded as SKIPPED_BY_USER (${result.untouched} already decided)")
+        setPausedFlag(false)
+        setWait(null)
         _status.value = LoopStatus(phase = LoopPhase.IDLE)
         bump()
         afterCycle()
         result.written
+    }
+
+    /** 旧入口（UI 还在用）：当场拍一份边界再取消。新代码用 [remainingSnapshot] + [cancelRemaining]。 */
+    fun cancelRemaining(): Deferred<Int> = scope.async {
+        val snapshot = remainingSnapshot()
+        if (globalState() == GlobalState.RUNNING) {
+            // 旧 UI 允许在跑的时候取消：先按暂停的路径停下（发 flow.suspend），再按契约取消。
+            setPausedFlag(true)
+            pending.clear()
+            cycleJob?.cancelAndJoin()
+            _status.value = LoopStatus(phase = LoopPhase.IDLE)
+        }
+        if (globalState() == GlobalState.IDLE) setPausedFlag(true)
+        cancelRemaining(snapshot).await() ?: 0
     }
 
     /**
@@ -209,7 +287,8 @@ class FlowEngine(
         )
         log.log("restore: $restored SKIPPED_BY_USER rows removed; the slow path will plan them again")
         bump()
-        if (restored > 0) onTrigger(TriggerReason.RESTORE_SKIPPED)
+        // 暂停期间只改意图：不叫醒循环，继续之后对账自然接上。
+        if (restored > 0 && !control.paused()) onTrigger(TriggerReason.RESTORE_SKIPPED)
         restored
     }
 
@@ -218,20 +297,18 @@ class FlowEngine(
      * 是**同一个函数**（[remainingTargets]），所以确认框里的 N 就是确认后会写下的张数（除非这期间又有
      * 照片确认或新拍）。只读，不经过写者 scope，传输进行中也不会被卡住。
      */
-    suspend fun countRemaining(): Int = withContext(io) { remainingTargets().size }
+    suspend fun countRemaining(): Int = remainingSnapshot().count
 
-    /** FGS 被系统收走（onTimeout）：记事实、停循环。**不**再调 startForegroundService（#414）。 */
+    /** FGS 被系统收走（onTimeout）：记原因、停循环（端口发 flow.suspend）、等待中。下一次触发照常再申请（#413）。 */
     fun onForegroundLost(reason: FgsBlockReason = FgsBlockReason.BUDGET_EXHAUSTED): Job = scope.launch {
         control.recordFgsBlock(reason)
-        log.log("foreground lost ($reason): stopping the loop, no restart until the app is in the foreground")
-        cycleJob?.cancelAndJoin()
-        _status.value = LoopStatus(phase = LoopPhase.IDLE, waitReason = WaitReason.FGS_BLOCKED)
+        log.log("foreground lost ($reason): stopping the loop; the next trigger may request it again")
+        stopCycle(WaitReason.FGS_BLOCKED)
     }
 
-    /** App 回到前台：清掉 FGS 受阻事实（前台重置额度），跑一次慢路径 + 循环。 */
+    /** App 回到前台：一次触发（含对账）。 */
     fun onAppForeground(): Job = scope.launch {
-        control.clearFgsBlock()
-        trigger(TriggerReason.APP_FOREGROUND).join()
+        onTrigger(TriggerReason.APP_FOREGROUND)
     }
 
     /**
@@ -243,13 +320,30 @@ class FlowEngine(
         val reason = waitReasonOf(conditions(), userPresent = false)
         if (running && (reason == WaitReason.WIFI)) {
             log.log("network changed: $reason no longer satisfied, stopping the loop")
-            pending.clear()
-            cycleJob?.cancelAndJoin()
+            stopCycle(reason)
             scheduler.scheduleWhenConditionsMet(reason)
-            _status.value = LoopStatus(phase = LoopPhase.IDLE, waitReason = reason)
             return@launch
         }
-        trigger(TriggerReason.NETWORK_CHANGE).join()
+        onTrigger(TriggerReason.NETWORK_CHANGE)
+    }
+
+    /**
+     * #413：onLost（手机此刻没有任何可用网络）→ 在飞的这张立即判路径失败：停循环（端口尽力发 flow.suspend），
+     * order 保持可续传，等待中（桌面不可达）+ 3 次间隔 10 分钟的探测；网络回来时网络回调就是下一次触发。
+     */
+    fun onNetworkLost(): Job = scope.launch {
+        if (cycleJob?.isActive != true) return@launch
+        log.log("network lost: path failure for the in-flight item; waiting for the network to come back")
+        stopCycle(WaitReason.DESKTOP_UNREACHABLE)
+        scheduler.scheduleUnreachableProbes()
+    }
+
+    /** 写者上执行：停掉这一轮，进「等待中」。 */
+    private suspend fun stopCycle(reason: WaitReason) {
+        pending.clear()
+        cycleJob?.cancelAndJoin()
+        _status.value = LoopStatus(phase = LoopPhase.IDLE, waitReason = reason)
+        setWait(reason)
     }
 
     fun acknowledgeAudit(eventIds: Set<String>): Job = scope.launch {
@@ -292,6 +386,7 @@ class FlowEngine(
 
     private fun settle(wait: WaitReason?) {
         _status.value = LoopStatus(phase = LoopPhase.IDLE, waitReason = wait)
+        setWait(wait)
         checksDone.update { it + 1 }
     }
 
@@ -303,7 +398,7 @@ class FlowEngine(
 
         // DIAG-A：检查阶段每一步各打一条耗时——首次配对后曾空等 32 秒、一条日志都没有。
         val cycleStarted = System.nanoTime()
-        val slow = reasons.any { it.slowPath } || withContext(io) { mediaStoreVersionChanged() }
+        val slow = reasons.any { it.reconcile } || withContext(io) { mediaStoreVersionChanged() }
         if (slow) {
             val t = System.nanoTime()
             runLocalSlowPath()
@@ -335,6 +430,12 @@ class FlowEngine(
             is ProbeResult.Reachable -> {
                 scheduler.cancelUnreachableProbes()
                 reach.advertisedEpoch?.takeIf { it.isNotBlank() && it != epoch.value }?.let(onEpochAdvertised)
+                facts.update { it.copy(desktopHealth = reach.health) }
+                // 契约 §7：桌面不健康 → 不申请 FGS，等待中（具体原因）。
+                waitReasonOf(reach.health)?.let { unhealthy ->
+                    log.log("cycle $reasons: desktop unhealthy (${reach.health}); waiting for $unhealthy")
+                    return settle(unhealthy)
+                }
             }
         }
         if (slow) {
@@ -348,14 +449,16 @@ class FlowEngine(
         // ---- 申请 FGS + wakelock：整个循环只申请这一次（C-06） ----
         if (!foreground.acquire()) {
             control.recordFgsBlock(FgsBlockReason.START_REFUSED)
-            log.log("foreground service refused: recorded, not retrying until the app is in the foreground")
+            log.log("foreground service refused: waiting; the next trigger requests it again")
             return settle(WaitReason.FGS_BLOCKED)
         }
         _status.value = LoopStatus(phase = LoopPhase.RUNNING)
+        setWait(null)
         checksDone.update { it + 1 }
         var exit: WaitReason? = null
         try {
-            exit = loop(first, userPresent)
+            // 一轮一条推送订阅（契约 §5），随 FGS 一起释放。
+            exit = delivery.session { loop(first, userPresent) }
         } finally {
             withContext(NonCancellable) {
                 // 被暂停 / 取消 / 超时打断时，在飞的那张退回 PAUSED（可续传，不计次数）。
@@ -489,10 +592,10 @@ class FlowEngine(
             }
             is DeliveryOutcome.PeerFailure -> {
                 // #415 裁决 3：对端失败——退出循环，不计次数，等下一次唤醒。
-                log.log("order ${order.id}: desktop refused to store it (${outcome.code}); waiting for the next wake")
+                log.log("order ${order.id}: desktop cannot store it (${outcome.kind}/${outcome.code}); waiting for the next wake")
                 store.transition(order.id, setOf(OrderState.TRANSFERRING), OrderState.PAUSED)
                 bump()
-                StepResult.Exit(WaitReason.PEER_REFUSED)
+                StepResult.Exit(waitReasonOf(outcome.kind))
             }
             DeliveryOutcome.PairingLost -> {
                 store.transition(order.id, setOf(OrderState.TRANSFERRING), OrderState.PAUSED)
@@ -749,4 +852,30 @@ class FlowEngine(
         private const val FAST_BATCH = 32
         private val OPEN = OrderState.entries.filter { it.isOpen }.toSet()
     }
+}
+
+/** [FlowEngine.view] 里运行态之外的事实。 */
+internal data class ViewFacts(
+    val paused: Boolean = false,
+    val waitReason: WaitReason? = null,
+    val pending: Int = 0,
+    val doneThisRound: Int = 0,
+    val desktopHealth: DesktopHealth? = null,
+)
+
+internal fun engineViewOf(status: LoopStatus, facts: ViewFacts): EngineView {
+    val state = when {
+        facts.paused -> GlobalState.PAUSED
+        status.running -> GlobalState.RUNNING
+        facts.waitReason != null -> GlobalState.WAITING
+        else -> GlobalState.IDLE
+    }
+    return EngineView(
+        state = state,
+        waitReason = facts.waitReason.takeIf { state == GlobalState.WAITING },
+        pending = facts.pending,
+        doneThisRound = facts.doneThisRound,
+        current = status.current.takeIf { state == GlobalState.RUNNING },
+        desktopHealth = facts.desktopHealth,
+    )
 }

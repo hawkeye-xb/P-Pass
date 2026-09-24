@@ -59,13 +59,13 @@ class RepairWakesFlowTest {
         )
     }
 
-    // ARCH-13 (#417)：重新授权 = 一次带慢路径的触发（含问桌面「还在吗」），不再是 wake + 单独的对账函数。
+    // ARCH-13 (#417) → #413：重新授权 = 一次带对账的触发（含问桌面「还在吗」），不再是 wake + 单独的对账函数。
     @Test
     fun the_repair_path_also_runs_one_reconciliation() {
         val runtime = code("app/src/main/java/com/hawkeyexb/ppass/backup/flow/AndroidFlowRuntime.kt")
         val repair = sliceBetween(runtime, "fun requestFlowWakeAfterRepair(", "internal fun pauseFlow")
-        assertTrue("重新授权后要唤醒，并带慢路径", repair.contains("TriggerReason.PAIRING_REPAIRED"))
-        assertTrue("PAIRING_REPAIRED 必须跑慢路径（含桌面存在性检查）", com.hawkeyexb.ppass.backup.flow.TriggerReason.PAIRING_REPAIRED.slowPath)
+        assertTrue("重新授权后要唤醒，并带对账", repair.contains("TriggerReason.PAIRING_REPAIRED"))
+        assertTrue("PAIRING_REPAIRED 必须对账（含桌面存在性检查）", com.hawkeyexb.ppass.backup.flow.TriggerReason.PAIRING_REPAIRED.reconcile)
     }
 
     @Test
@@ -74,11 +74,11 @@ class RepairWakesFlowTest {
         assertTrue("必须有一个生产入口真的去问桌面", runtime.contains("RemotePresenceProbe("))
         val worker = code("app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt")
         val periodic = sliceBetween(worker, "PeriodicWorkRequestBuilder<BackupWorker>", ".build()")
-        assertTrue("5 小时周期兜底那一轮必须跑慢路径", periodic.contains("TriggerReason.PERIODIC"))
-        assertTrue(com.hawkeyexb.ppass.backup.flow.TriggerReason.PERIODIC.slowPath)
+        assertTrue("5 小时周期兜底那一轮必须对账", periodic.contains("TriggerReason.PERIODIC"))
+        assertTrue(com.hawkeyexb.ppass.backup.flow.TriggerReason.PERIODIC.reconcile)
         assertFalse(
             "内容监听一拍一个，不许每拍一张就朝桌面发一页查询",
-            com.hawkeyexb.ppass.backup.flow.TriggerReason.MEDIA_CHANGE.slowPath,
+            com.hawkeyexb.ppass.backup.flow.TriggerReason.MEDIA_CHANGE.reconcile,
         )
     }
 

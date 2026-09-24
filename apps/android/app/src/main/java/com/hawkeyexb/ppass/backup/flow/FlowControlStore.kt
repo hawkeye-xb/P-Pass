@@ -1,4 +1,4 @@
-// ARCH-13 (#417): 用户暂停与 FGS 受阻事实的持久存储。
+// ARCH-13 (#417) → #413: 意图层的暂停标志、持久化的等待原因、最近一次 FGS 受阻原因。
 //
 // 取代 ledger 里的 ConsumerGate 与 flow-transfer-protection.json（TransferProtectionStore）。
 // 单个小 JSON 文件，唯一临时文件名 + rename（MOB-102 的教训：固定 .tmp 名在两个线程同一毫秒写时会互相踩）。
@@ -11,6 +11,8 @@ import kotlinx.serialization.json.Json
 @Serializable
 internal data class FlowControlState(
     val paused: Boolean = false,
+    /** [WaitReason] 的 name；空 = 没在等。 */
+    val waitReason: String = "",
     /** [FgsBlockReason] 的 name；空 = 没有受阻。 */
     val fgsBlocked: String = "",
     val fgsBlockedAtMs: Long = 0L,
@@ -56,6 +58,13 @@ class FlowControlStore(private val dir: File, private val clock: () -> Long = Sy
 
     override fun setPaused(paused: Boolean) = update { it.copy(paused = paused) }
 
+    override fun waitReason(): WaitReason? = WaitReason.entries.firstOrNull { it.name == load().waitReason }
+
+    override fun setWaitReason(reason: WaitReason?) {
+        val name = reason?.name.orEmpty()
+        if (load().waitReason != name) update { it.copy(waitReason = name) }
+    }
+
     override fun fgsBlock(): FgsBlockReason? = FgsBlockReason.entries.firstOrNull { it.name == load().fgsBlocked }
 
     override fun recordFgsBlock(reason: FgsBlockReason) = update {
@@ -63,7 +72,9 @@ class FlowControlStore(private val dir: File, private val clock: () -> Long = Sy
         if (it.fgsBlocked.isNotEmpty()) it else it.copy(fgsBlocked = reason.name, fgsBlockedAtMs = clock())
     }
 
-    override fun clearFgsBlock() = update { it.copy(fgsBlocked = "", fgsBlockedAtMs = 0L) }
+    override fun clearFgsBlock() {
+        if (load().fgsBlocked.isNotEmpty()) update { it.copy(fgsBlocked = "", fgsBlockedAtMs = 0L) }
+    }
 
     override fun missingSourceAckAt(): Long = load().missingSourceAckAtMs
 
