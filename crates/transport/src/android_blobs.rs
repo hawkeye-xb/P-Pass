@@ -930,7 +930,7 @@ struct SourceWatch {
     path: PathBuf,
     len: u64,
     modified: Option<SystemTime>,
-    file_id: Option<(u64, u64)>,
+    file_id: Option<FileIdentity>,
 }
 
 impl SourceWatch {
@@ -955,26 +955,61 @@ impl SourceWatch {
 }
 
 fn describe(meta: &Metadata) -> String {
-    let (dev, ino) = file_id(meta).map_or((None, None), |(d, i)| (Some(d), Some(i)));
-    format!(
-        "dev={dev:?} ino={ino:?} size={} mtime={:?} file={}",
-        meta.len(),
-        meta.modified().ok(),
-        meta.is_file()
-    )
+    match file_id(meta) {
+        Some(id) => format!(
+            "dev={} ino={} size={} mtime={}.{:09} file={}",
+            id.dev,
+            id.ino,
+            id.len,
+            id.mtime_sec,
+            id.mtime_nsec,
+            meta.is_file()
+        ),
+        None => format!("size={} file={}", meta.len(), meta.is_file()),
+    }
 }
 
-/// `(st_dev, st_ino)`. Only the Android bridge build references originals;
+/// What `stat` says about one file. Only the Android bridge build reads it;
 /// every other build has no identity and therefore always copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    dev: u64,
+    ino: u64,
+    len: u64,
+    mtime_sec: i64,
+    mtime_nsec: i64,
+}
+
 #[cfg(feature = "android-jni")]
-fn file_id(meta: &Metadata) -> Option<(u64, u64)> {
+fn file_id(meta: &Metadata) -> Option<FileIdentity> {
     use std::os::unix::fs::MetadataExt;
-    Some((meta.dev(), meta.ino()))
+    Some(FileIdentity {
+        dev: meta.dev(),
+        ino: meta.ino(),
+        len: meta.len(),
+        mtime_sec: meta.mtime(),
+        mtime_nsec: meta.mtime_nsec(),
+    })
 }
 
 #[cfg(not(feature = "android-jni"))]
-fn file_id(_meta: &Metadata) -> Option<(u64, u64)> {
+fn file_id(_meta: &Metadata) -> Option<FileIdentity> {
     None
+}
+
+/// Whether the descriptor's file and the path's file are the same file.
+///
+/// On Android 11+ `_data` goes through the FUSE mount while the
+/// ContentResolver descriptor points at the lower filesystem: `st_dev`
+/// always differs (emulator API 35: fd dev=65068, path dev=83) while inode,
+/// size and mtime match. So `st_dev` is not compared; inode + size + mtime
+/// (with nanoseconds) must all match. The 64 KiB head comparison afterwards
+/// and iroh's per-leaf validation while serving remain the content guards.
+fn same_file(fd: &FileIdentity, path: &FileIdentity) -> bool {
+    fd.ino == path.ino
+        && fd.len == path.len
+        && fd.mtime_sec == path.mtime_sec
+        && fd.mtime_nsec == path.mtime_nsec
 }
 
 struct HeldImport {
@@ -1288,8 +1323,11 @@ fn reference_plan(
             Some(format!("stat {path:?}: {error}")),
         )
     })?;
-    let fd_id = file_id(fd_meta);
-    if fd_id.is_none() || fd_id != file_id(&path_meta) || fd_meta.len() != path_meta.len() {
+    let same = match (file_id(fd_meta), file_id(&path_meta)) {
+        (Some(fd_id), Some(path_id)) => same_file(&fd_id, &path_id),
+        _ => false,
+    };
+    if !same {
         return Err((
             ImportFallback::IdentityMismatch,
             Some(format!(
@@ -1349,6 +1387,49 @@ fn status_wire(status: &ActiveTransferStatus, fault: Option<SourceFault>) -> ser
 #[cfg(test)]
 mod media_wire_tests {
     use super::*;
+
+    const FD: FileIdentity = FileIdentity {
+        dev: 65068,
+        ino: 499_733,
+        len: 532_102,
+        mtime_sec: 1_790_243_013,
+        mtime_nsec: 123_456_789,
+    };
+
+    #[test]
+    fn fuse_path_with_a_different_device_is_the_same_file() {
+        // Emulator API 35 observation: only st_dev differs between the two views.
+        assert!(same_file(&FD, &FileIdentity { dev: 83, ..FD }));
+        assert!(same_file(&FD, &FD));
+    }
+
+    #[test]
+    fn inode_size_or_mtime_difference_is_another_file() {
+        assert!(!same_file(&FD, &FileIdentity { ino: 499_734, ..FD }));
+        assert!(!same_file(
+            &FD,
+            &FileIdentity {
+                dev: 83,
+                ino: 1,
+                ..FD
+            }
+        ));
+        assert!(!same_file(&FD, &FileIdentity { len: 532_103, ..FD }));
+        assert!(!same_file(
+            &FD,
+            &FileIdentity {
+                mtime_sec: 1_790_243_014,
+                ..FD
+            }
+        ));
+        assert!(!same_file(
+            &FD,
+            &FileIdentity {
+                mtime_nsec: 0,
+                ..FD
+            }
+        ));
+    }
 
     #[test]
     fn import_wire_reports_fallback_reason() {
