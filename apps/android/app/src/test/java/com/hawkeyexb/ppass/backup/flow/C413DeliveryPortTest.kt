@@ -47,8 +47,12 @@ class C413DeliveryPortTest {
             override fun revoke(hash: String) {
                 nativeEvents += "revoke"
             }
-            override fun transferStatus(): String = """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":1,"byte_idle_for_ms":0}"""
+            override fun transferStatus(): String = localStatus()
         }
+        var localStatus: () -> String = { """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":1,"byte_idle_for_ms":0}""" }
+        var statusImpl: suspend (FlowTupleRef) -> FlowStatusReply = { FlowStatusReply(state = "active") }
+        val statusCalls = mutableListOf<Long>()
+        var subscribeImpl: (suspend (Int, () -> Unit) -> Unit)? = null
         var offerReply: (FlowFetchRequest) -> FlowStatusReply = { FlowStatusReply(state = "active") }
         var offerFailure: Throwable? = null
         val offers = mutableListOf<FlowFetchRequest>()
@@ -64,7 +68,10 @@ class C413DeliveryPortTest {
                 offerFailure?.let { throw it }
                 return offerReply(request)
             }
-            override suspend fun status(tuple: FlowTupleRef): FlowStatusReply = FlowStatusReply(state = "active")
+            override suspend fun status(tuple: FlowTupleRef): FlowStatusReply {
+                statusCalls += test.testScheduler.currentTime
+                return statusImpl(tuple)
+            }
             override suspend fun suspendFetch(tuple: FlowTupleRef) = suspendImpl(tuple)
         }
         val port = NativeFlowDeliveryPort(
@@ -72,11 +79,16 @@ class C413DeliveryPortTest {
             pairing = { pairing },
             desktopFor = { desktop },
             subscribe = { _, onConnected, onEvent ->
-                subscribeCalls++
+                val n = subscribeCalls++
                 push = onEvent
-                kotlinx.coroutines.delay(connectDelayMs)
-                onConnected()
-                awaitCancellation()
+                val impl = subscribeImpl
+                if (impl != null) {
+                    impl(n, onConnected)
+                } else {
+                    kotlinx.coroutines.delay(connectDelayMs)
+                    onConnected()
+                    awaitCancellation()
+                }
             },
             cancelTuple = { _, _ -> },
             clock = { test.testScheduler.currentTime },
@@ -239,5 +251,62 @@ class C413DeliveryPortTest {
         val old = ProtoJson.decodeFromString(Hello.serializer(), """{"proto_ver":1,"pairing_epoch":"e1"}""")
         assertNull(desktopHealthOf(old.health))
         assertNull(waitReasonOf(desktopHealthOf(old.health)))
+    }
+
+    // 真机（S9210）：传大视频时桌面后台服务被停。本地 Aborted（非源文件问题）→ 立即短超时问一次桌面；
+    // 问不到就判路径失败（引擎：保持传输中、退出循环、释放 FGS、WAITING(DESKTOP_UNREACHABLE)、挂探测），
+    // 不再沿着 1→8 秒退避一直等回执。
+    // 反证：去掉 suspect 分支 → 走旧的 CheckStatusNow 退避，3.1 秒时还没结果，红。
+    @Test
+    fun `a local abort with a silent desktop is a path failure within the short timeout`() = runTest {
+        val h = Harness(this)
+        h.localStatus = { """{"state":"aborted","hash":"$hash"}""" }
+        h.statusImpl = { kotlinx.coroutines.awaitCancellation() }
+        val job = async { h.port.deliver(h.request(1)) {} }
+        advanceTimeBy(STALL_STATUS_TIMEOUT_MS + 100)
+        runCurrent()
+        assertTrue("resolved within the short timeout", job.isCompleted)
+        assertEquals(DeliveryOutcome.PathFailure("desktop_unreachable:local_aborted"), job.await())
+        assertTrue(h.nativeEvents.contains("revoke"))
+    }
+
+    // 桌面还在：本地 Aborted 之后那一次状态回 completed → 当场结账；回 active → 维持现有逻辑继续等。
+    @Test
+    fun `a local abort with a live desktop keeps the existing outcomes`() = runTest {
+        val h = Harness(this)
+        h.localStatus = { """{"state":"aborted","hash":"$hash"}""" }
+        h.statusImpl = { FlowStatusReply(state = "completed", receipt = h.receipt(1)) }
+        assertTrue(h.port.deliver(h.request(1)) {} is DeliveryOutcome.Confirmed)
+
+        val h2 = Harness(this)
+        h2.localStatus = { """{"state":"aborted","hash":"$hash"}""" }
+        val job = async { h2.port.deliver(h2.request(2)) {} }
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertTrue("active → keep waiting", !job.isCompleted)
+        assertTrue(h2.statusCalls.size >= 2)
+        job.cancel()
+    }
+
+    // 推送订阅断了、一次重建也没连上 → 同样立即短超时问一次桌面，问不到判路径失败。
+    // 反证：keepSubscribed 不置 subscriptionLost → 连着的本地信号下循环只等推送，10 秒时还没结果，红。
+    @Test
+    fun `a lost push subscription whose rebuild fails triggers the same check`() = runTest {
+        val h = Harness(this)
+        h.subscribeImpl = { n, onConnected ->
+            if (n == 0) {
+                onConnected()
+                kotlinx.coroutines.delay(2_000)
+                error("stream reset")
+            } else {
+                error("connect failed")
+            }
+        }
+        h.statusImpl = { kotlinx.coroutines.awaitCancellation() }
+        val job = async { h.port.deliver(h.request(1)) {} }
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertTrue(job.isCompleted)
+        assertEquals(DeliveryOutcome.PathFailure("desktop_unreachable:subscription_lost"), job.await())
     }
 }
