@@ -44,7 +44,7 @@ class SystemFailureNotifier(
         )
         val notification = NotificationCompat.Builder(context, FAIL_CHANNEL_ID)
             .setContentTitle(context.getString(R.string.notif_backup_failed_title))
-            .setContentText(context.getString(R.string.notif_backup_failed_body, failedItems))
+            .setContentText(context.resources.getQuantityString(R.plurals.notif_backup_failed_body, failedItems, failedItems))
             .setSmallIcon(R.drawable.ic_notification)
             .setAutoCancel(true)
             .setContentIntent(pi)

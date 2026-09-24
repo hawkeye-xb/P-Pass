@@ -41,6 +41,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.graphics.Color
@@ -289,11 +290,11 @@ fun HomeScreen(
     if (cancelConfirmCount != null) {
         androidx.compose.material3.AlertDialog(
             onDismissRequest = onDismissCancelRemaining,
-            title = { Text(stringResource(R.string.cancel_remaining_confirm_title, cancelConfirmCount)) },
+            title = { Text(pluralStringResource(R.plurals.cancel_remaining_confirm_title, cancelConfirmCount, cancelConfirmCount)) },
             text = { Text(stringResource(R.string.cancel_remaining_confirm_body)) },
             confirmButton = {
                 androidx.compose.material3.TextButton(onClick = onConfirmCancelRemaining) {
-                    Text(stringResource(R.string.cancel_remaining_label, cancelConfirmCount), color = PPColor.Act)
+                    Text(pluralStringResource(R.plurals.cancel_remaining_label, cancelConfirmCount, cancelConfirmCount), color = PPColor.Act)
                 }
             },
             dismissButton = {
@@ -640,7 +641,7 @@ fun HomeScreen(
             NoticeCard(
                 HomeNotice(
                     kind = HomeNoticeKind.SOURCE_MISSING,
-                    body = stringResource(R.string.missing_source_notice_body, missingSourceNotice.count),
+                    body = pluralStringResource(R.plurals.missing_source_notice_body, missingSourceNotice.count, missingSourceNotice.count),
                     // MOB-100：出路是「知道了」（dismiss），**不是** action——
                     // action 在本族视觉里是「去处理」，放在这儿会被读成
                     // 「再传一次」，而 MOB-61 的决定正是这条不给重传按钮。
@@ -666,11 +667,11 @@ fun HomeScreen(
             Column {
                 CellRow(
                     label = stringResource(R.string.backup_scope),
-                    value = stringResource(
-                        if (selectedBucketCount == null) R.string.backup_scope_all
-                        else R.string.backup_scope_n,
-                        selectedBucketCount ?: 0,
-                    ),
+                    value = if (selectedBucketCount == null) {
+                        stringResource(R.string.backup_scope_all)
+                    } else {
+                        pluralStringResource(R.plurals.backup_scope_n, selectedBucketCount, selectedBucketCount)
+                    },
                     onClick = onOpenBucketPicker,
                 )
                 // #418：「取消剩余 N 张」——跟「备份哪些相册」同属「这次备份包含什么」的
@@ -679,7 +680,7 @@ fun HomeScreen(
                 if (cancelRemainingCount != null) {
                     HorizontalDivider(color = PPColor.Divider)
                     CellRow(
-                        label = stringResource(R.string.cancel_remaining_label, cancelRemainingCount.toInt()),
+                        label = pluralStringResource(R.plurals.cancel_remaining_label, cancelRemainingCount.toInt(), cancelRemainingCount),
                         onClick = if (commandPending) null else onRequestCancelRemaining,
                     )
                 }
@@ -932,7 +933,7 @@ private fun workingText(line: StatusLine.Working): String = when (val s = line.s
 @Composable
 private fun idleStatusText(line: StatusLine, allSafeAllowed: Boolean = true): String = when (line) {
     is StatusLine.NoAlbums -> stringResource(R.string.state_no_albums)
-    is StatusLine.Pending -> stringResource(R.string.state_pending, line.k)
+    is StatusLine.Pending -> pluralStringResource(R.plurals.state_pending, line.k.toInt(), line.k)
     // UI-16 规则 S：闸门不过时退回既有的中性分支，**不许**说「都存好了」。
     is StatusLine.AllSafe ->
         if (allSafeAllowed) stringResource(R.string.state_safe)

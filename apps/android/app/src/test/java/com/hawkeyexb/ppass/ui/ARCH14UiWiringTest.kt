@@ -47,8 +47,8 @@ class ARCH14UiWiringTest {
     @Test
     fun the_confirm_dialog_names_N_and_its_dismiss_button_is_not_called_cancel() {
         val dialog = home.substringAfter("if (cancelConfirmCount != null) {").substringBefore("\n    Column(")
-        assertTrue(dialog.contains("R.string.cancel_remaining_confirm_title, cancelConfirmCount"))
-        assertTrue(dialog.contains("R.string.cancel_remaining_label, cancelConfirmCount"))
+        assertTrue(dialog.contains("R.plurals.cancel_remaining_confirm_title, cancelConfirmCount, cancelConfirmCount"))
+        assertTrue(dialog.contains("R.plurals.cancel_remaining_label, cancelConfirmCount, cancelConfirmCount"))
         val dismiss = dialog.substringAfter("dismissButton")
         assertTrue(dismiss.contains("R.string.back"))
         assertFalse(dismiss.contains("R.string.cancel)"))

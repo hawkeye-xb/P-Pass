@@ -62,7 +62,10 @@
     <string name="state_sending_file">Backing up %1$s (%2$d / %3$d)</string>
     <string name="state_safe">All photos are backed up</string>
     <!-- T-080 defect(a): with K > 0 the status line may only speak of the debt -->
-    <string name="state_pending">%1$d photos still to back up</string>
+    <plurals name="state_pending">
+        <item quantity="one">%1$d photo still to back up</item>
+        <item quantity="other">%1$d photos still to back up</item>
+    </plurals>
     <string name="state_trouble">Needs another try</string>
     <string name="safe_detail">%1$d new photos arrived home.</string>
     <string name="safe_detail_dup">%1$d new photos arrived home, %2$d were already there.</string>
@@ -75,12 +78,21 @@
          is in flight so repeated taps don't queue behind it. -->
     <string name="backup_command_processing">Working…</string>
     <!-- #418: settings row + confirm dialog for "cancel the remaining N photos" (restore lives in the "skipped photos" row). -->
-    <string name="cancel_remaining_label">Cancel remaining %1$d photos</string>
-    <string name="cancel_remaining_confirm_title">Cancel the remaining %1$d photos?</string>
+    <plurals name="cancel_remaining_label">
+        <item quantity="one">Cancel remaining %1$d photo</item>
+        <item quantity="other">Cancel remaining %1$d photos</item>
+    </plurals>
+    <plurals name="cancel_remaining_confirm_title">
+        <item quantity="one">Cancel the remaining %1$d photo?</item>
+        <item quantity="other">Cancel the remaining %1$d photos?</item>
+    </plurals>
     <string name="cancel_remaining_confirm_body">These photos will not be backed up. You can restore them later from “Skipped photos”. Photos you take later are backed up as usual.</string>
     <string name="cancelled_round_cell_label">Skipped photos</string>
     <string name="cancelled_round_cell_value">%1$d · restore</string>
-    <string name="missing_source_notice_body">Cannot be recovered: %1$d photo(s) were deleted from this phone, so they will not be sent again.</string>
+    <plurals name="missing_source_notice_body">
+        <item quantity="one">Cannot be recovered: %1$d photo was deleted from this phone, so it will not be sent again.</item>
+        <item quantity="other">Cannot be recovered: %1$d photos were deleted from this phone, so they will not be sent again.</item>
+    </plurals>
     <string name="missing_source_notice_dismiss">Got it</string>
     <string name="missing_source_archive_label">Photos deleted from this phone</string>
     <string name="missing_source_archive_value">%1$d · cannot be recovered</string>
@@ -94,7 +106,10 @@
     <!-- UX-02: 失败通知（成功保持沉默）；MOB-67 渠道名进字典（旧代码硬编码双语） -->
     <string name="notif_channel_backup_failed">Backup failed</string>
     <string name="notif_backup_failed_title">Backup didn\'t finish</string>
-    <string name="notif_backup_failed_body">%1$d photos didn\'t make it home — open to see</string>
+    <plurals name="notif_backup_failed_body">
+        <item quantity="one">%1$d photo didn\'t make it home — open to see</item>
+        <item quantity="other">%1$d photos didn\'t make it home — open to see</item>
+    </plurals>
     <!-- NET-12: transfer foreground service — keeps the process out of the
          cached-process range while a Flow round is actively sending, so
          the system cannot reclaim it mid-transfer (real device: it did,
@@ -161,7 +176,10 @@
     <string name="bucket_new">New</string>
     <string name="backup_scope">Albums to back up</string>
     <string name="backup_scope_all">All albums</string>
-    <string name="backup_scope_n">%1$d albums</string>
+    <plurals name="backup_scope_n">
+        <item quantity="one">%1$d album</item>
+        <item quantity="other">%1$d albums</item>
+    </plurals>
     <string name="storage_computer">Storage computer</string>
     <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
@@ -197,7 +215,10 @@
     <string name="pairing_lost_title">Pairing with this computer is no longer valid</string>
     <string name="pairing_lost_body">Your photos are all still on this phone — nothing is lost. The computer may have removed this phone; scan the code again and backup resumes.</string>
     <string name="photos_lost_title">Lost touch with the home computer</string>
-    <string name="photos_lost_body_days">Backups have been paused for %1$d days. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</string>
+    <plurals name="photos_lost_body_days">
+        <item quantity="one">Backups have been paused for %1$d day. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</item>
+        <item quantity="other">Backups have been paused for %1$d days. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</item>
+    </plurals>
     <string name="photos_lost_body_unknown">Backups have been paused. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</string>
     <string name="photos_lost_action">Scan the code again to reconnect</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->

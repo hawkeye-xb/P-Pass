@@ -53,6 +53,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.hawkeyexb.ppass.R
@@ -320,7 +321,7 @@ internal fun PhotosScreen(
                     Spacer(Modifier.height(6.dp))
                     Text(
                         if (daysUnreachable != null) {
-                            stringResource(R.string.photos_lost_body_days, daysUnreachable)
+                            pluralStringResource(R.plurals.photos_lost_body_days, daysUnreachable, daysUnreachable)
                         } else {
                             stringResource(R.string.photos_lost_body_unknown)
                         },

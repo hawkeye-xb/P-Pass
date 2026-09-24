@@ -60,7 +60,9 @@
     <string name="state_sending_file">正在备份 %1$s（第 %2$d / %3$d 张）</string>
     <string name="state_safe">照片都存好了</string>
     <!-- T-080 缺陷(a): 待备份 > 0 时状态条只允许说欠账，不许说存好了 -->
-    <string name="state_pending">还有 %1$d 张待备份</string>
+    <plurals name="state_pending">
+        <item quantity="other">还有 %1$d 张待备份</item>
+    </plurals>
     <string name="state_trouble">需要再试一次</string>
     <string name="safe_detail">新存 %1$d 张。</string>
     <string name="safe_detail_dup">新存 %1$d 张，%2$d 张原本就在。</string>
@@ -72,12 +74,18 @@
     <!-- 2026-09-07 真机反馈：命令处理中禁用按钮，避免连点排队 -->
     <string name="backup_command_processing">处理中…</string>
     <!-- #418: settings row + confirm dialog for "cancel the remaining N photos" (restore lives in the "skipped photos" row). -->
-    <string name="cancel_remaining_label">取消剩余 %1$d 张</string>
-    <string name="cancel_remaining_confirm_title">取消剩余 %1$d 张？</string>
+    <plurals name="cancel_remaining_label">
+        <item quantity="other">取消剩余 %1$d 张</item>
+    </plurals>
+    <plurals name="cancel_remaining_confirm_title">
+        <item quantity="other">取消剩余 %1$d 张？</item>
+    </plurals>
     <string name="cancel_remaining_confirm_body">这些照片不会再备份，之后可以在「已跳过的照片」里恢复。新拍的照片照常备份。</string>
     <string name="cancelled_round_cell_label">已跳过的照片</string>
     <string name="cancelled_round_cell_value">%1$d 张 · 点击恢复</string>
-    <string name="missing_source_notice_body">无法恢复：%1$d 张照片已从手机相册删除，不会再传到电脑。</string>
+    <plurals name="missing_source_notice_body">
+        <item quantity="other">无法恢复：%1$d 张照片已从手机相册删除，不会再传到电脑。</item>
+    </plurals>
     <string name="missing_source_notice_dismiss">知道了</string>
     <string name="missing_source_archive_label">已从手机删除的照片</string>
     <string name="missing_source_archive_value">%1$d 张 · 无法恢复</string>
@@ -91,7 +99,9 @@
     <!-- UX-02: 失败通知（成功保持沉默）；MOB-67 渠道名进字典（旧代码硬编码双语） -->
     <string name="notif_channel_backup_failed">照片备份失败</string>
     <string name="notif_backup_failed_title">照片备份没成功</string>
-    <string name="notif_backup_failed_body">%1$d 张照片没备份成功，打开看看</string>
+    <plurals name="notif_backup_failed_body">
+        <item quantity="other">%1$d 张照片没备份成功，打开看看</item>
+    </plurals>
     <!-- NET-12: 传输前台服务——传输期间把进程留在系统不会随便回收的档位，
          防止像 2026-09-14 那样在传输中途被系统直接杀掉。低优先级/静音，
          这是状态提示不是告警。 -->
@@ -154,7 +164,9 @@
          "备份哪些相册"，跟下面几行同款"问句式"标签。 -->
     <string name="backup_scope">备份哪些相册</string>
     <string name="backup_scope_all">全部相册</string>
-    <string name="backup_scope_n">%1$d 个相册</string>
+    <plurals name="backup_scope_n">
+        <item quantity="other">%1$d 个相册</item>
+    </plurals>
     <string name="storage_computer">存储电脑</string>
     <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
@@ -193,7 +205,9 @@
          页露出）；天数来自 SentinelStore.lastReachableAt，从未确认可达
          过时不编造具体天数，走 unknown 兜底文案。 -->
     <string name="photos_lost_title">和家里的电脑失去了联系</string>
-    <string name="photos_lost_body_days">备份已经暂停 %1$d 天。照片都还在你手机上，一张没丢——重新连上就会自动补齐。</string>
+    <plurals name="photos_lost_body_days">
+        <item quantity="other">备份已经暂停 %1$d 天。照片都还在你手机上，一张没丢——重新连上就会自动补齐。</item>
+    </plurals>
     <string name="photos_lost_body_unknown">备份已经暂停。照片都还在你手机上，一张没丢——重新连上就会自动补齐。</string>
     <!-- 设计稿原文按钮文案是"重新扫码连接"，跟 scan_again（欢迎/配对
          流程用的"重新扫码"）不是同一个字符串，各自独立不复用。 -->
