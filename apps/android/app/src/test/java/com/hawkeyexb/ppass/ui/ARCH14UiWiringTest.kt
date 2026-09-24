@@ -31,15 +31,41 @@ class ARCH14UiWiringTest {
             "onRestoreSkipped = { holder.restoreSkipped() }",
             "transferProgress = holder.transferProgress.value",
             "waitReasonRes = holder.waitReasonNotice.value",
+            "desktopLowSpace = holder.desktopLowSpace.value",
         ).forEach { assertTrue("MainActivity → HomeScreen 缺少 `$it`", call.contains(it)) }
 
         assertTrue(holder.contains("cancelRemainingRowCount(p, pairingLostState.value.value)"))
         assertTrue(holder.contains("_skippedCount.value = skippedRowCount(p)"))
-        assertTrue(holder.contains("restoreSkippedFlow(context)"))
+        assertTrue(holder.contains("fun restoreSkipped() = command { gateway?.restoreSkipped() }"))
         assertTrue(holder.contains("_triplet.value = flowTripletOf(p, lastBucketIds)"))
-        assertTrue(holder.contains("_waitReasonNotice.value = fgsBlockWaitNoticeRes(p)"))
+        assertTrue(holder.contains("_waitReasonNotice.value = waitReasonTextRes(p)"))
+        assertTrue(holder.contains("_desktopLowSpace.value = desktopLowSpaceWarning(p)"))
         assertTrue(holder.contains("transferPermilleOf(p.current)"))
-        assertTrue("点那一行要先现算 N 再弹框", holder.contains("fun requestCancelRemaining()") && holder.contains("countRemainingFlow(context)"))
+        assertTrue("点那一行要先向引擎要快照再弹框", holder.contains("fun requestCancelRemaining()") && holder.contains("g.remainingSnapshot()"))
+    }
+
+    // #413 §5：取消边界 = 弹窗显示那一刻。确认时交回引擎的必须是弹框时拿到的**同一个**快照，不许确认时重算。
+    // 反证：confirmCancelRemaining 里改成 `gateway?.cancelRemaining(g.remainingSnapshot())` → 红。
+    @Test
+    fun the_cancel_confirmation_hands_back_the_snapshot_taken_when_the_dialog_opened() {
+        val request = holder.substringAfter("fun requestCancelRemaining()").substringBefore("fun restoreSkipped()")
+        assertTrue(request.contains("cancelSnapshot = snapshot.takeIf { it.count > 0 }"))
+        assertTrue(request.contains("_cancelConfirmCount.value = cancelSnapshot?.count"))
+        val confirm = holder.substringAfter("fun confirmCancelRemaining()").substringBefore("private suspend fun repairEpochIfNeeded")
+        assertTrue(confirm.contains("val snapshot = cancelSnapshot ?: return"))
+        assertTrue(confirm.contains("gateway?.cancelRemaining(snapshot)"))
+        assertFalse("确认时不许重算", confirm.contains("remainingSnapshot()"))
+    }
+
+    // #413：UI 只经 EngineGateway 碰引擎——holder 里不再直接调旧引擎的暂停 / 继续 / 取消 / 计数入口。
+    // 反证：backupNow 改回 `pauseFlow(context)` → 红。
+    @Test
+    fun the_holder_reaches_the_engine_only_through_the_gateway() {
+        val holderClass = holder.substringBefore("// ================================================================ W1 接线点：EngineGateway")
+        listOf("pauseFlow(", "continueFlow(", "cancelRemainingFlow(", "countRemainingFlow(", "restoreSkippedFlow(", "flowProjection(")
+            .forEach { assertFalse("holder 还在直接调 $it", holderClass.contains(it)) }
+        assertTrue(holderClass.contains("FlowCommand.Pause -> gateway?.pause()"))
+        assertTrue(holderClass.contains("FlowCommand.Continue -> gateway?.resume()"))
     }
 
     // 确认框：写明 N；关闭按钮不许也叫「取消」（要确认的动作本身就叫取消，MOB-89 同形的误触）。

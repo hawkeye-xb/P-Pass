@@ -1,10 +1,14 @@
-// ARCH-13 (#417) → ARCH-14 (#418): 逐张循环的 UI 投影。取代 DiscoveryLedgerSnapshot → UI 的那一套。
+// ARCH-13 (#417) → ARCH-14 (#418) → #413 W5: 逐张循环的 UI 投影。
 //
-// 事实源只有四个：order 表（计数）、循环的运行态（当前这一张、等待原因）、FlowControl（暂停、FGS 受阻），
-// 以及引擎按 [FlowEngine.countRemaining] 现算的「还没有结局的张数」。本文件全是纯函数，JVM 单测直接可跑；
-// HomeScreen / 前台服务通知只做「裁决 → 颜色 / 字符串资源」的映射。
+// 事实源分两类：
+//  - 引擎视图 [EngineView]（全局状态、等待原因、待办张数、本轮已完成、当前这一张、桌面健康）——UI 与 FGS 通知
+//    读的唯一视图，状态 / 进度 / 待备份 / 按钮全部只看它（#413 §8）；
+//  - order 表与 FlowControl 的账目（已确认 m、FAILED、已跳过、源已删、FGS 受阻的具体原因）——英雄区的 m/n
+//    与设置卡的几行账目，只在 order 写入（revision）或 MediaStore 变化时重读。
+// 本文件全是纯函数，JVM 单测直接可跑；HomeScreen 只做「裁决 → 颜色 / 字符串资源」的映射。
 package com.hawkeyexb.ppass.backup.flow
 
+import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.BackupTriplet
 import com.hawkeyexb.ppass.backup.order.OrderState
 import com.hawkeyexb.ppass.backup.order.OrderStore
@@ -14,27 +18,20 @@ import com.hawkeyexb.ppass.ui.BackupUiState
 /**
  * 首页需要的全部事实。
  *
+ * - [view]：引擎视图；null = 还没拿到（运行时未就绪 / 待办还没算出来）。全局状态、待备份、当前这一张都只读它。
  * - [confirmed]：范围内（[FlowProjection.of] 的 bucketIds）当前行为 CONFIRMED、且原图还在的 order 数。
  *   原图删了的 CONFIRMED 行（`source_missing`，#416 裁决 2）不算：它已不在 [inScopeTotal] 里。
  * - [inScopeTotal]：范围内照片总数（MediaStore 实时计数，由调用方传入；null = 读不到）
- * - [current]：当前这一张的进度（字节）；null = 没在传
- * - [waitReason]：等待原因；null = 没在等
- * - [paused]：用户暂停
  * - [failed]：当前行为 FAILED 的 order 数（全量口径，不随范围收窄——UI-16 规则 G4）
- * - [remaining]：「取消剩余 N 张」的 N，也是英雄区的「待备份 K」——与引擎取消时写 SKIPPED_BY_USER 的
- *   是同一个函数（范围内还没有 order 的照片 + 还没结局的当前行，含 FAILED）。null = 还没算出来。
  * - [skippedByUser]：范围内当前行为 SKIPPED_BY_USER 的张数（「照片都存好了」的闸门 S3）。
- * - [skippedByUserTotal]：全部当前行为 SKIPPED_BY_USER 的张数（设置卡「已跳过的照片 N 张」，
- *   与「点击恢复」删掉的是同一批行）。
+ * - [skippedByUserTotal]：全部当前行为 SKIPPED_BY_USER 的张数（设置卡「已跳过的照片 N 张」）。
+ * - [fgsBlock]：FGS 受阻的具体原因（额度用完 / 被拒），只用来挑 [WaitReason.FGS_BLOCKED] 的那句人话。
  */
 data class FlowProjection(
+    val view: EngineView?,
     val confirmed: Long,
     val inScopeTotal: Long?,
-    val current: CurrentItem?,
-    val waitReason: WaitReason?,
-    val paused: Boolean,
     val failed: Long,
-    val running: Boolean = current != null,
     /** 还没有结局的当前行（PAUSED / QUEUED / TRANSFERRING / FAILED）。 */
     val unfinished: Long = 0L,
     val lastSuccessAt: Long = 0L,
@@ -43,11 +40,55 @@ data class FlowProjection(
     val missingSourceAcknowledged: Long = 0L,
     val fgsBlock: FgsBlockReason? = null,
     val skippedByUser: Long = 0L,
-    val remaining: Long? = null,
     val skippedByUserTotal: Long = 0L,
 ) {
+    val state: GlobalState get() = view?.state ?: GlobalState.IDLE
+
+    /** 只在 [GlobalState.WAITING] 时非空。 */
+    val waitReason: WaitReason? get() = view?.waitReason?.takeIf { state == GlobalState.WAITING }
+
+    /** 当前这一张：只在备份中才有。 */
+    val current: CurrentItem? get() = view?.current?.takeIf { state == GlobalState.RUNNING }
+
+    /** 「待备份 K」= 待办大小（#413 §8：唯一来源）。null = 还没算出来。 */
+    val remaining: Long? get() = view?.pending?.toLong()
+
+    val paused: Boolean get() = state == GlobalState.PAUSED
+    val running: Boolean get() = state == GlobalState.RUNNING
+
     companion object {
-        /** 纯函数：从事实源拼出投影。 */
+        /**
+         * 账目部分（读 order 表与 FlowControl）。[view] 原样带上；引擎视图单独变化时调用方只 `copy(view = …)`，
+         * 不必重读这几条计数。
+         */
+        fun facts(
+            store: OrderStore,
+            control: FlowControl,
+            bucketIds: Set<Long>?,
+            inScopeTotal: Long?,
+            view: EngineView?,
+        ): FlowProjection {
+            val scoped = store.countCurrentByState(bucketIds)
+            val all = if (bucketIds == null) scoped else store.countCurrentByState(null)
+            val ackAt = control.missingSourceAckAt()
+            return FlowProjection(
+                view = view,
+                confirmed = store.countConfirmedPresent(bucketIds),
+                inScopeTotal = inScopeTotal,
+                failed = all[OrderState.FAILED] ?: 0L,
+                unfinished = OrderState.entries.filter { it.isOpen }.sumOf { all[it] ?: 0L },
+                lastSuccessAt = store.lastConfirmedAtMs(),
+                missingSourceUnacknowledged = store.countSourceMissingSkipped(afterMs = ackAt),
+                missingSourceAcknowledged = if (ackAt > 0) store.countSourceMissingSkipped(afterMs = 0L, upToMs = ackAt) else 0L,
+                fgsBlock = control.fgsBlock(),
+                skippedByUser = scoped[OrderState.SKIPPED_BY_USER] ?: 0L,
+                skippedByUserTotal = all[OrderState.SKIPPED_BY_USER] ?: 0L,
+            )
+        }
+
+        // ======== LEGACY-ENGINE-VIEW（W1 接线点）========
+        // W1 的 `StateFlow<EngineView>` 进集成分支之前，旧引擎的运行态经 [legacyEngineViewOf] 拼成 EngineView。
+        // AndroidFlowRuntime.flowProjection() 仍按旧签名调这里；W1 接上之后这个重载与 legacyEngineViewOf 一起删。
         fun of(
             store: OrderStore,
             status: LoopStatus,
@@ -55,58 +96,81 @@ data class FlowProjection(
             bucketIds: Set<Long>?,
             inScopeTotal: Long?,
             remaining: Long? = null,
-        ): FlowProjection {
-            val scoped = store.countCurrentByState(bucketIds)
-            val all = if (bucketIds == null) scoped else store.countCurrentByState(null)
-            val ackAt = control.missingSourceAckAt()
-            return FlowProjection(
-                confirmed = store.countConfirmedPresent(bucketIds),
-                inScopeTotal = inScopeTotal,
-                current = status.current.takeIf { status.running },
-                // 循环自己报的等待原因优先：Wi‑Fi 与 FGS 受阻同时成立时，说的是正在挡路的那一个。
-                waitReason = status.waitReason ?: control.fgsBlock()?.let { WaitReason.FGS_BLOCKED },
-                paused = control.paused(),
-                failed = all[OrderState.FAILED] ?: 0L,
-                running = status.running,
-                unfinished = OrderState.entries.filter { it.isOpen }.sumOf { all[it] ?: 0L },
-                lastSuccessAt = store.lastConfirmedAtMs(),
-                missingSourceUnacknowledged = store.countSourceMissingSkipped(afterMs = ackAt),
-                missingSourceAcknowledged = if (ackAt > 0) store.countSourceMissingSkipped(afterMs = 0L, upToMs = ackAt) else 0L,
-                fgsBlock = control.fgsBlock(),
-                skippedByUser = scoped[OrderState.SKIPPED_BY_USER] ?: 0L,
-                remaining = remaining,
-                skippedByUserTotal = all[OrderState.SKIPPED_BY_USER] ?: 0L,
-            )
-        }
+        ): FlowProjection = facts(
+            store, control, bucketIds, inScopeTotal,
+            view = remaining?.let { legacyEngineViewOf(status, control.paused(), control.fgsBlock() != null, it.toInt(), doneThisRound = 0) },
+        )
     }
 }
 
 /**
- * 投影 → 首页状态机。暂停压过一切；在传显示当前文件；等条件显示等待；有 FAILED 且没在跑显示
- * Trouble（点击 = 立即重试一次）；范围内每一张都有了结局显示 AllSafe。
+ * 旧引擎运行态 → [EngineView]（LEGACY-ENGINE-VIEW，W1 接上后删）。
+ * 暂停压过一切；检查阶段（CHECKING）算备份中，不显示成空闲；循环报的等待原因优先，其次是持久的 FGS 受阻。
+ */
+internal fun legacyEngineViewOf(
+    status: LoopStatus,
+    paused: Boolean,
+    fgsBlocked: Boolean,
+    pending: Int,
+    doneThisRound: Int,
+): EngineView {
+    val wait = status.waitReason ?: WaitReason.FGS_BLOCKED.takeIf { fgsBlocked }
+    val state = when {
+        paused -> GlobalState.PAUSED
+        status.phase != LoopPhase.IDLE -> GlobalState.RUNNING
+        wait != null -> GlobalState.WAITING
+        else -> GlobalState.IDLE
+    }
+    return EngineView(
+        state = state,
+        waitReason = wait.takeIf { state == GlobalState.WAITING },
+        pending = pending,
+        doneThisRound = doneThisRound,
+        current = status.current.takeIf { state == GlobalState.RUNNING && status.running },
+    )
+}
+// ======== LEGACY-ENGINE-VIEW 结束 ========
+
+/**
+ * 投影 → 首页状态。四个全局状态各有出口（#413 §4）：
+ * - 已暂停：[BackupUiState.Paused]；
+ * - 备份中：有当前这一张 → [BackupUiState.Sending]，否则（检查 / 准备阶段）→ [BackupUiState.Preparing]；
+ * - 等待中：[BackupUiState.Waiting]（带原因）。NOT_PAIRED 不说「等待」——出路是配对失效红卡；
+ * - 空闲：有 FAILED 显示 Trouble（点击 = 立即重试一次），范围内每一张都有了结局显示 AllSafe，否则 Idle。
  *
- * Sending 的 done 是「正在传的这一张是第几张」= 已确认 + 1（封顶到总数），不是旧的「本轮第 x 张」。
+ * Sending 的「第 x / y 张」按本轮算：x = 本轮已完成 + 1，y = 本轮已完成 + 待备份（待备份含正在传的这一张）。
  */
 fun backupUiStateOf(p: FlowProjection): BackupUiState {
-    val total = p.inScopeTotal ?: (p.confirmed + p.unfinished)
-    return when {
-        p.paused -> BackupUiState.Paused
-        p.running -> BackupUiState.Sending(
-            done = (p.confirmed + 1).coerceAtMost(total).toInt(),
-            total = total.toInt(),
-            currentFile = p.current?.fileName.orEmpty(),
-        )
-        p.waitReason != null && p.waitReason != WaitReason.NOT_PAIRED -> BackupUiState.WaitingForConstraints
-        // 技术标记，只进「查看技术详情」；主文案是 run_failed（troubleTextOf 是唯一渲染闸门）。
-        p.failed > 0 -> BackupUiState.Trouble("flow.failed=${p.failed}")
-        flowAllDone(p) -> BackupUiState.AllSafe(ingested = p.confirmed.toInt(), duplicates = 0)
-        else -> BackupUiState.Idle
+    val v = p.view
+    return when (p.state) {
+        GlobalState.PAUSED -> BackupUiState.Paused
+        GlobalState.RUNNING -> {
+            val current = p.current ?: return BackupUiState.Preparing
+            val (done, total) = roundOrdinalOf(v?.doneThisRound ?: 0, v?.pending ?: 0)
+            BackupUiState.Sending(done = done, total = total, currentFile = current.fileName)
+        }
+        GlobalState.WAITING -> p.waitReason?.takeIf { it != WaitReason.NOT_PAIRED }?.let { BackupUiState.Waiting(it) }
+            ?: idleUiStateOf(p)
+        GlobalState.IDLE -> idleUiStateOf(p)
     }
 }
 
+private fun idleUiStateOf(p: FlowProjection): BackupUiState = when {
+    // 技术标记，只进「查看技术详情」；主文案是 run_failed（troubleTextOf 是唯一渲染闸门）。
+    p.failed > 0 -> BackupUiState.Trouble("flow.failed=${p.failed}")
+    flowAllDone(p) -> BackupUiState.AllSafe(ingested = p.confirmed.toInt(), duplicates = 0)
+    else -> BackupUiState.Idle
+}
+
+/** 本轮的「第 x / y 张」。y 至少是 x：待办刚被别处清零、这一张还没收尾时，不说「第 3 / 2 张」。 */
+internal fun roundOrdinalOf(doneThisRound: Int, pending: Int): Pair<Int, Int> {
+    val done = doneThisRound.coerceAtLeast(0) + 1
+    return done to (doneThisRound.coerceAtLeast(0) + pending.coerceAtLeast(0)).coerceAtLeast(done)
+}
+
 /**
- * 「范围内每一张都有了结局」。[FlowProjection.remaining] 算出来之后以它为准（0 = 没有待传的）；
- * 还没算出来时退回计数比较。无论哪条路，都要求至少确认过一张、且没有未完成的行。
+ * 「范围内每一张都有了结局」。待办算出来之后以它为准（0 = 没有待传的）；还没算出来时退回计数比较。
+ * 无论哪条路，都要求至少确认过一张、且没有未完成的行。
  */
 internal fun flowAllDone(p: FlowProjection): Boolean {
     if (p.confirmed <= 0 || p.unfinished != 0L) return false
@@ -114,8 +178,8 @@ internal fun flowAllDone(p: FlowProjection): Boolean {
 }
 
 /**
- * 英雄区三元组。m = 原图还在的已确认数，n = 范围内总数，K = [FlowProjection.remaining]
- * （还没算出来时退回 n − m）。bucketIds == null（还没选过范围）或 n 读不到 → null，英雄区说「读不到」。
+ * 英雄区三元组。m = 原图还在的已确认数，n = 范围内总数，K = 待办（[EngineView.pending]；还没算出来时退回 n − m）。
+ * bucketIds == null（还没选过范围）或 n 读不到 → null，英雄区说「读不到」。
  */
 fun flowTripletOf(p: FlowProjection, bucketIds: Set<Long>?): BackupTriplet? {
     if (bucketIds == null) return null
@@ -134,11 +198,11 @@ fun flowTripletOf(p: FlowProjection, bucketIds: Set<Long>?): BackupTriplet? {
 /** MOB-51: the durable command behind the single hero button click — routed on the same projection. */
 enum class FlowCommand { Pause, Continue, Retry, Wake }
 
-fun flowCommandOf(p: FlowProjection): FlowCommand = when {
-    p.paused -> FlowCommand.Continue
-    p.running -> FlowCommand.Pause
-    p.failed > 0 -> FlowCommand.Retry
-    else -> FlowCommand.Wake
+/** 「继续」只在已暂停，「暂停」只在备份中（#413 §5）；其余按账目重试 / 唤醒。 */
+fun flowCommandOf(p: FlowProjection): FlowCommand = when (p.state) {
+    GlobalState.PAUSED -> FlowCommand.Continue
+    GlobalState.RUNNING -> FlowCommand.Pause
+    GlobalState.IDLE, GlobalState.WAITING -> if (p.failed > 0) FlowCommand.Retry else FlowCommand.Wake
 }
 
 /** A phone-deleted source was skipped; it is informative and never retryable. */
@@ -158,21 +222,60 @@ fun transferPermilleOf(current: CurrentItem?): Int? {
 }
 
 /**
- * 设置页「取消剩余 N 张」那一行的 N。null = 这一行不渲染：N 还没算出来、没有剩余、或配对已失效
- * （配对失效时出路是重新扫码，不是取消）。
+ * 设置页「取消剩余 N 张」那一行的 N。只在已暂停 / 等待中出现（#413 §5：备份中先暂停，空闲时没有「剩余」）。
+ * null = 这一行不渲染：不在这两个状态、N 还没算出来、没有剩余、或配对已失效（出路是重新扫码，不是取消）。
+ * 确认框里的 N 不用它，用点击那一刻的快照（[UiCancelSnapshot]）。
  */
-fun cancelRemainingRowCount(p: FlowProjection?, pairingLost: Boolean): Long? =
-    p?.remaining?.takeIf { it > 0 && !pairingLost }
+fun cancelRemainingRowCount(p: FlowProjection?, pairingLost: Boolean): Long? {
+    if (p == null || pairingLost) return null
+    if (p.state != GlobalState.PAUSED && p.state != GlobalState.WAITING) return null
+    return p.remaining?.takeIf { it > 0 }
+}
 
 /**
  * 设置卡「已跳过的照片 N 张 · 点击恢复」那一行的 N（用户取消过的张数）。null = 没有，不渲染。
- * 配对失效时照样显示：它是账目，恢复只改本机 order 表，不需要连着电脑。
+ * 配对失效时照样显示：它是账目，恢复只改本机，不需要连着电脑。
  */
 fun skippedRowCount(p: FlowProjection?): Long? = p?.skippedByUserTotal?.takeIf { it > 0 }
 
 /**
- * FGS 受阻的人话。只在循环此刻确实因为 FGS 受阻而等待时给出（[WaitReason.FGS_BLOCKED]）：
- * Wi‑Fi 不满足时不说额度的事；用户暂停时暂停压过一切。
+ * 等待原因 → 状态行那句人话（#413 §4 / 契约 §3）。null = 此刻不在等，或者不该在状态行说（NOT_PAIRED：出路在红卡）。
+ *
+ * 按**名字**映射，不直接引用枚举常量：W1 正在把 [WaitReason] 改成契约 §3 的九个值（删 PEER_REFUSED），
+ * 这里在新旧两版枚举下都能编译。九个契约值各有一句，由单测逐个锁住；认不出的名字退回通用的「等待条件满足」。
+ * FGS 受阻再按 [FlowProjection.fgsBlock] 细分「额度用完」与「被拒」。
  */
-fun fgsBlockWaitNoticeRes(p: FlowProjection): Int? =
-    p.fgsBlock?.takeIf { p.waitReason == WaitReason.FGS_BLOCKED && !p.paused }?.let(::fgsBlockNoticeRes)
+fun waitReasonTextRes(p: FlowProjection): Int? {
+    if (p.state != GlobalState.WAITING) return null
+    val reason = p.waitReason ?: return null
+    return waitReasonTextRes(reason.name, p.fgsBlock)
+}
+
+internal fun waitReasonTextRes(reasonName: String, fgsBlock: FgsBlockReason?): Int? = when (reasonName) {
+    "NOT_PAIRED" -> null
+    "DISABLED" -> R.string.state_waiting_disabled
+    "WIFI" -> R.string.wifi_deferred_hint
+    "BATTERY" -> R.string.state_waiting_battery
+    "FGS_BLOCKED" -> fgsBlockNoticeRes(fgsBlock) ?: R.string.state_background_protection_unknown
+    "DESKTOP_UNREACHABLE" -> R.string.state_waiting_desktop_unreachable
+    "DESKTOP_STORAGE_FULL" -> R.string.state_waiting_desktop_full
+    "DESKTOP_LIBRARY_UNAVAILABLE" -> R.string.state_waiting_desktop_library
+    // 旧枚举的 PEER_REFUSED（桌面回 `storage_failed`）在新契约里就是「桌面存储出错」。
+    "DESKTOP_STORAGE_ERROR", "PEER_REFUSED" -> R.string.state_waiting_desktop_error
+    else -> R.string.backup_waiting_constraints
+}
+
+/**
+ * 桌面剩余空间不足 5 GiB 的预警（#413 §7）。已经因为桌面存满而在等时不重复说（状态行说的就是这件事）。
+ */
+fun desktopLowSpaceWarning(p: FlowProjection?): Boolean {
+    val v = p?.view ?: return false
+    if (v.desktopHealth?.lowSpace != true) return false
+    return p.waitReason?.name != "DESKTOP_STORAGE_FULL"
+}
+
+/**
+ * 「取消剩余 N 张」确认框的快照：弹框那一刻的边界 + 张数（#413 §5：边界 = 弹窗显示那一刻）。
+ * [token] 是 W1 `remainingSnapshot()` 的原值，确认时原样交回 `cancelRemaining(snapshot)`；UI 只读 [count]。
+ */
+class UiCancelSnapshot(val count: Int, val token: Any?)

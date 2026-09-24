@@ -5,7 +5,7 @@
 //       （真机曾渲染出「01-01 08:00」假话），必须走「还没有成功备份过」。
 package com.hawkeyexb.ppass.ui
 
-/** 状态条只可能是这五种裁决之一；UI 只负责把裁决映射到字符串资源。 */
+/** 状态条只可能是这几种裁决之一；UI 只负责把裁决映射到字符串资源。 */
 sealed class StatusLine {
     /** 没有在跑、也没有欠账、也没有可报告的成功——「随时可以备份」。 */
     data object Ready : StatusLine()
@@ -25,7 +25,12 @@ sealed class StatusLine {
 
     /** 失败才说话。 */
     data object Trouble : StatusLine()
-    data object WaitingForConstraints : StatusLine()
+
+    /** #413：等待中（条件不满足 / 桌面不可达或不健康），具体那句由等待原因给出。 */
+    data object Waiting : StatusLine()
+
+    /** #413：用户暂停——只有用户能解除，状态行要说出来，不与空闲同档。 */
+    data object Paused : StatusLine()
 }
 
 /**
@@ -40,14 +45,14 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
     is BackupUiState.Trouble -> StatusLine.Trouble
     is BackupUiState.Scanning,
     is BackupUiState.Hashing,
+    is BackupUiState.Preparing,
     is BackupUiState.Sending,
     -> StatusLine.Working(state)
     is BackupUiState.NoAlbums -> StatusLine.NoAlbums
-    is BackupUiState.WaitingForConstraints -> StatusLine.WaitingForConstraints
-    // UX-13: 被暂停在状态**文案**上与空闲同档（Pending/Ready 照旧说欠账），
-    // 区别只在英雄区按钮——见 [heroActionOf]。
+    is BackupUiState.Waiting -> StatusLine.Waiting
+    // #413：已暂停有自己的一句（待备份 K 仍在英雄区上一行），不再与空闲同档。
+    is BackupUiState.Paused -> StatusLine.Paused
     is BackupUiState.Idle,
-    is BackupUiState.Paused,
     is BackupUiState.AllSafe,
     -> when {
         pendingK > 0 -> StatusLine.Pending(pendingK)
@@ -57,7 +62,8 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
 }
 
 /**
- * UX-13: 英雄区次级按钮的裁决——**同一个位置**在两种文案之间切换。
+ * UX-13 → #413: 英雄区次级按钮的裁决——**同一个位置**在两种文案之间切换。
+ * 「暂停」只在备份中（含检查 / 准备阶段），「继续」只在已暂停（#413 §5）。
  *
  * `null` = 不显示（空闲、都存好了、没相册、出错了：出路在别处的卡上；
  * 配对失效时也收起，出路在红卡的「重新扫码」）。
@@ -67,11 +73,9 @@ fun statusLineOf(state: BackupUiState, pendingK: Long): StatusLine = when (state
  * dedup 收敛缺 0）。MOB-19 红线：不新增第二条管线，所以这里只裁决**文案**，
  * 不裁决动作。
  *
- * 为什么 [HeroAction.Resume] **不再加「待备份 K > 0」这道门**：`Paused`
- * 的构造前提已经是「有一轮跑到一半被打断，之后没有任何一轮跑完」——那本身
- * 就是「还有活没干完」。再拿三元组的 K 当门，会在三元组不可用（DOG-01d
- * 退化为 null → K 传 0）时恰好把按钮藏起来，也就是把本卡要修的缺陷原样
- * 放回去。K = 0 时点一下最坏是跑一轮零新增的空转，跑完 `Paused` 自动过期。
+ * 为什么 [HeroAction.Resume] **不加「待备份 K > 0」这道门**：`Paused` 只来自
+ * 引擎的全局暂停标志（#413 §4：只有用户能解除），与剩余张数无关；「取消剩余」
+ * 会把标志一并清掉回到空闲，所以不会再出现「没活可干却挂着继续」。
  */
 enum class HeroAction { Pause, Resume }
 
@@ -95,6 +99,7 @@ fun heroActionOf(state: BackupUiState, pairingLost: Boolean): HeroAction? = when
 fun isBackupRunning(state: BackupUiState): Boolean =
     state is BackupUiState.Scanning ||
         state is BackupUiState.Hashing ||
+        state is BackupUiState.Preparing ||
         state is BackupUiState.Sending
 
 /** 「最后成功时间」的裁决；UI 把每个分支映射到字符串资源。 */

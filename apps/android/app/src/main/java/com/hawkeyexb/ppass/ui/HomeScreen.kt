@@ -52,6 +52,7 @@ import com.hawkeyexb.ppass.BuildConfig
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.BackupTriplet
 import com.hawkeyexb.ppass.backup.BackgroundBackupState
+import com.hawkeyexb.ppass.backup.flow.WaitReason
 import com.hawkeyexb.ppass.update.UpdateChannel
 import kotlinx.coroutines.launch
 
@@ -60,18 +61,17 @@ sealed class BackupUiState {
     data object Idle : BackupUiState()
     data class Scanning(val found: Int) : BackupUiState()
     data class Hashing(val done: Int, val total: Int) : BackupUiState()
+    /** #413：备份中、还没轮到具体哪一张（检查条件 / 探测桌面 / 准备）。不许显示成空闲。 */
+    data object Preparing : BackupUiState()
     // 2026-08-17：currentFile——设计稿"正在备份 {文件名}（第 x / y 张）"
     // 要求展示当前文件名，不只是计数；默认空串（还没传完第一个文件时）。
     data class Sending(val done: Int, val total: Int, val currentFile: String = "") : BackupUiState()
     data class AllSafe(val ingested: Int, val duplicates: Int) : BackupUiState()
-    /** UX-13: 用户主动暂停、还没续传——**与 Idle 是两种不同的空闲**。
-     *  在此之前两者都是 Idle，界面分不出来，于是暂停后英雄区按钮整个消失，
-     *  首页没有任何「继续」入口（验收人：「暂停之后，没有重新开始的
-     *  按钮？」）。判据见 backup/PausePrefs.kt 的 pausedAfterOf——是「按下
-     *  暂停的时刻」与 work 真实状态的合成，不是点击时就地写死的。 */
+    /** UX-13 → #413: 用户暂停（引擎的全局暂停标志）——只有用户能解除，与 Idle 不是一回事：
+     *  英雄区给「继续」，状态行说「已暂停」。 */
     data object Paused : BackupUiState()
-    /** The ledger remains open but the current environment is not admissible. */
-    data object WaitingForConstraints : BackupUiState()
+    /** #413：等待中——条件不满足 / 桌面不可达或不健康，由引擎自动恢复；[reason] 决定状态行那句话。 */
+    data class Waiting(val reason: WaitReason) : BackupUiState()
     /** FIX-T6: 一个相册都没选（空集 = 一个都不备）——显式「没有可
      *  备份的相册」，绝不显示假话「照片都存好了」。 */
     data object NoAlbums : BackupUiState()
@@ -157,31 +157,38 @@ fun allSafeTextAllowed(
         (triplet?.skippedByUser ?: 0L) == 0L
 
 /**
- * 规则 P（事实源 §2.5，#361 步骤 2）→ #418：FGS 受阻（今天的后台额度用完 / 手机拒绝了这次备份）时，
- * 把理由说出来——**不新增横幅**，它是英雄卡状态行（A7）的替换文案。
+ * 规则 P（事实源 §2.5，#361 步骤 2）→ #418 → #413：等待中把**为什么在等**说出来——**不新增横幅**，
+ * 它是英雄卡状态行（A7）的替换文案。每个等待原因一句（Wi‑Fi、电量、后台额度 / 被拒、连不上电脑、
+ * 电脑空间满、照片库打不开、电脑存储出错……），由投影给出（[com.hawkeyexb.ppass.backup.flow.waitReasonTextRes]）。
  *
- * 新模型里 FGS 受阻是「等条件」（[BackupUiState.WaitingForConstraints]），不是用户暂停：
- * 用户暂停时说的是暂停（「继续」按钮在场），不该再挂一句额度的事。所以挂载点从「继续」按钮
- * 改成了等待态的状态行（原来写的是「正在等待备份条件满足」）。
- *
- * [reasonRes] = 投影给出的那句人话（[com.hawkeyexb.ppass.backup.flow.fgsBlockWaitNoticeRes]），
- * `null` = 此刻挡路的不是 FGS（Wi‑Fi、电量、桌面不可达），或者说不清。闸门：
+ * `null` = 状态行不替换，退回 idleStatusText 既有的分支。闸门：
  *
  * - **ACCESS 压制**：`mediaAccess != FULL` 时英雄卡内部整块被权限引导卡顶替，挂载点不在场。
- * - **PAIR 压制**：配对已断时「今天后台时间用完了」是误导，出路在红卡。
+ * - **PAIR 压制**：配对已断时说什么等待都是误导，出路在红卡。
  * - **只在等待态说**：其它状态（在传、暂停、出错、都存好了）一律不说。
+ * - **Wi‑Fi 过期压制**（接替 MOB-71）：用户已经关掉「仅 Wi‑Fi」，引擎还没重新检查时，
+ *   不许再说「将在连上 Wi‑Fi 后进行」——退回通用的「正在等待备份条件满足」。
  */
 fun visibleWaitReasonRes(
     state: BackupUiState,
     mediaAccess: MediaAccess,
     pairingLost: Boolean,
     reasonRes: Int?,
+    wifiOnly: Boolean = true,
 ): Int? {
     if (mediaAccess != MediaAccess.FULL) return null
     if (pairingLost) return null
-    if (state !is BackupUiState.WaitingForConstraints) return null
+    if (state !is BackupUiState.Waiting) return null
+    if (state.reason == WaitReason.WIFI && !wifiOnly) return R.string.backup_waiting_constraints
     return reasonRes
 }
+
+/**
+ * #413 §7：桌面剩余空间不足 5 GiB 的预警行。[lowSpace] 由投影给出（已因桌面存满而等待时投影就不报）；
+ * 权限引导卡顶替英雄卡、或配对已断时不说。
+ */
+fun desktopLowSpaceHintVisible(lowSpace: Boolean, mediaAccess: MediaAccess, pairingLost: Boolean): Boolean =
+    lowSpace && mediaAccess == MediaAccess.FULL && !pairingLost
 
 @Composable
 fun HomeScreen(
@@ -228,8 +235,8 @@ fun HomeScreen(
     // 表示不了这个互斥，而 MOB-94 的 bug 恰恰是全拒那一档被漏掉了。
     mediaAccess: MediaAccess = MediaAccess.FULL,
     onOpenAppSettings: () -> Unit = {},
-    // MOB-02 §四事件①: Wi-Fi 要求不满足时触发已排队——显示提示行。
-    wifiDeferred: Boolean = false,
+    // #413 §7：桌面剩余空间不足 5 GiB（投影裁决，见 desktopLowSpaceWarning）。
+    desktopLowSpace: Boolean = false,
     // 2026-09-07 真机反馈：暂停/取消连点几下按钮像卡死——命令已经提交、
     // 只是还没等到下一次 500ms tick 刷新出结果；这里禁用按钮 + 换处理中
     // 文案，同一命令没跑完不接受下一次点击。
@@ -257,7 +264,7 @@ fun HomeScreen(
     // MOB-100 关键判断 3：确认过的那批仍可查——横幅收起后计数搬进这一行，
     // 0 = 没有已确认的，不渲染。
     acknowledgedMissingSourceCount: Int = 0,
-    // 规则 P（#418 改挂在等待态）：为什么在等。null = 挡路的不是 FGS / 说不清 ⇒ 不渲染任何理由。
+    // 规则 P（#413：每个等待原因一句）：为什么在等。null = 不在等 / 不在状态行说 ⇒ 不渲染任何理由。
     // 由 BackupUiStateHolder 从投影算出；HomeScreen 自己不碰数据源。出场闸门见 [visibleWaitReasonRes]。
     waitReasonRes: Int? = null,
 ) {
@@ -459,7 +466,7 @@ fun HomeScreen(
                                 )
                             }
                         } else {
-                            // 规则 P（#418）：因为 FGS 受阻而等待时，这一行换成那句人话——
+                            // 规则 P（#413）：等待中这一行换成那句人话（每个等待原因一句）——
                             // **不新增横幅**。说不清（reasonRes == null）时一个字都不加，
                             // 退回 idleStatusText 既有的分支。
                             val waitReason = visibleWaitReasonRes(
@@ -467,6 +474,7 @@ fun HomeScreen(
                                 mediaAccess = mediaAccess,
                                 pairingLost = pairingLost,
                                 reasonRes = waitReasonRes,
+                                wifiOnly = wifiOnly,
                             )
                             Text(
                                 if (waitReason != null) stringResource(waitReason) else idleStatusText(
@@ -509,18 +517,12 @@ fun HomeScreen(
             }
         }
 
-        // MOB-02 §四事件①: 触发已排队（Wi-Fi 要求不满足）——「将在连上
-        // Wi-Fi 后进行」，不假装已经开跑。
-        if (shouldShowWifiDeferredHint(
-                wifiOnly = wifiOnly,
-                wifiDeferred = wifiDeferred,
-                busy = busy,
-                mediaAccess = mediaAccess,
-            )
-        ) {
+        // #413：「将在连上 Wi-Fi 后进行」不再是 MainActivity 自己的一条平行状态——它就是
+        // 等待中（WIFI）的状态行，见上方 visibleWaitReasonRes。这里只剩桌面低空间预警（#413 §7）。
+        if (desktopLowSpaceHintVisible(desktopLowSpace, mediaAccess, pairingLost)) {
             Spacer(Modifier.height(10.dp))
             Text(
-                stringResource(R.string.wifi_deferred_hint),
+                stringResource(R.string.desktop_low_space_hint),
                 fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
                 color = PPColor.Waiting,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 2.dp),
@@ -912,8 +914,9 @@ private fun storageDetailBody(
 private fun workingText(line: StatusLine.Working): String = when (val s = line.state) {
     is BackupUiState.Scanning -> stringResource(R.string.state_scanning, s.found)
     is BackupUiState.Hashing -> stringResource(R.string.state_hashing, s.done, s.total)
-    // 设计稿："正在备份 {文件名}（第 x / y 张）"——sent=0 时还没有当前
-    // 文件（onProgress(0, total, "") 那一次），退回旧的纯计数文案。
+    is BackupUiState.Preparing -> stringResource(R.string.state_preparing)
+    // 设计稿："正在备份 {文件名}（第 x / y 张）"——#413：x / y 按本轮算（本轮已完成 + 1 /
+    // 本轮已完成 + 待备份）。文件名还没拿到时退回纯计数文案。
     is BackupUiState.Sending -> if (s.currentFile.isNotEmpty()) {
         stringResource(R.string.state_sending_file, s.currentFile, s.done, s.total)
     } else {
@@ -939,7 +942,8 @@ private fun idleStatusText(line: StatusLine, allSafeAllowed: Boolean = true): St
         if (allSafeAllowed) stringResource(R.string.state_safe)
         else stringResource(R.string.idle_auto_hint)
     is StatusLine.Ready -> stringResource(R.string.idle_auto_hint)
-    is StatusLine.WaitingForConstraints -> stringResource(R.string.backup_waiting_constraints)
+    is StatusLine.Waiting -> stringResource(R.string.backup_waiting_constraints)
+    is StatusLine.Paused -> stringResource(R.string.state_paused)
     is StatusLine.Working, is StatusLine.Trouble -> stringResource(R.string.idle_auto_hint) // unreachable
 }
 
@@ -994,14 +998,6 @@ private fun lastSuccessText(ts: Long): String =
 /** 千分位分组（设计稿"1,180 / 1,234"）——用户当前 locale 的分组符号。 */
 internal fun groupThousands(n: Long): String =
     java.text.NumberFormat.getIntegerInstance().format(n)
-
-/** A waiting hint is valid only while the user still requires Wi-Fi. */
-internal fun shouldShowWifiDeferredHint(
-    wifiOnly: Boolean,
-    wifiDeferred: Boolean,
-    busy: Boolean,
-    mediaAccess: MediaAccess,
-): Boolean = wifiOnly && wifiDeferred && !busy && mediaAccess == MediaAccess.FULL
 
 /** M10（全页面状态稿）：cell 行高 52dp——设计稿原文数值，带 hint 的
  *  两行开关自然长过这个下限，是合理例外，不受这条线约束。

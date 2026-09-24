@@ -71,6 +71,16 @@
     <!-- UX-13: 被暂停后同一个位置的按钮文案（点它续传，同一条管线） -->
     <string name="backup_resume">继续</string>
     <string name="backup_waiting_constraints">正在等待备份条件满足</string>
+    <!-- #413 全局状态与等待原因（草稿，待用户确认）。「已暂停」只指用户暂停；等待中由 P-Pass 自动接着传。 -->
+    <string name="state_paused">已暂停，点「继续」接着备份</string>
+    <string name="state_preparing">正在准备备份…</string>
+    <string name="state_waiting_disabled">后台备份已关闭，打开 P-Pass 时照常备份</string>
+    <string name="state_waiting_battery">电量低，充上电后自动接着备份</string>
+    <string name="state_waiting_desktop_unreachable">连不上存储电脑，连上后自动接着备份</string>
+    <string name="state_waiting_desktop_full">存储电脑的空间满了，腾出空间后自动接着备份</string>
+    <string name="state_waiting_desktop_library">存储电脑上的照片库文件夹打不开，请在电脑上看看 P-Pass</string>
+    <string name="state_waiting_desktop_error">存储电脑保存照片时出错了，请在电脑上看看 P-Pass</string>
+    <string name="desktop_low_space_hint">存储电脑剩余空间不到 5 GB，快存满了</string>
     <!-- 2026-09-07 真机反馈：命令处理中禁用按钮，避免连点排队 -->
     <string name="backup_command_processing">处理中…</string>
     <!-- #418: settings row + confirm dialog for "cancel the remaining N photos" (restore lives in the "skipped photos" row). -->
@@ -110,8 +120,8 @@
     <!-- MOB-101: 系统不再允许「App 不在屏幕上时继续备份」（这件事每天有额度）。
          只说人话：不出现代码、类名、术语。这个事实只有在系统拒绝之后才知道，
          所以文案说的是「已经发生了什么」，不是「接下来会怎样」。 -->
-    <string name="state_background_budget_paused">今天在后台备份的时间用完了。备份已暂停——把 P-Pass 留在屏幕上就能继续，或者明天自动接着传。</string>
-    <string name="state_background_protection_unknown">手机刚刚拒绝了这次备份，没有说原因。备份已暂停——打开 P-Pass 并留在屏幕上就能继续。</string>
+    <string name="state_background_budget_paused">今天在后台备份的时间用完了。把 P-Pass 留在屏幕上就能继续，或者明天自动接着传。</string>
+    <string name="state_background_protection_unknown">手机刚刚拒绝了这次备份，没有说原因。打开 P-Pass 并留在屏幕上就能继续。</string>
     <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->
     <string name="notif_sentinel_title">3 天没连上电脑了</string>
     <string name="notif_sentinel_body">照片没丢——看看电脑上的 P-Pass 还开着吗</string>

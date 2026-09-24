@@ -83,6 +83,7 @@ class ARCH14UiProjectionTest {
 
     // 「待备份 K」=「取消剩余 N 张」的 N = 取消时真正写下的张数，三处同一个定义（含 FAILED）。
     // 取消之后 K 归零、那一行收起；用户取消过的照片挡住「照片都存好了」这句话（规则 S3）。
+    // #413：那一行只在已暂停 / 等待中出现，所以这里在已暂停的视图上看它。
     // 反证 1：BackupTriplet.k 改回 n − m → 取消后 k = 3，红。
     // 反证 2：cancelRemainingRowCount 不看 remaining > 0 → 取消后那一行仍在（0），红。
     @Test
@@ -97,8 +98,9 @@ class ARCH14UiProjectionTest {
         val t = flowTripletOf(before, albums)!!
         assertEquals(3L, before.remaining)
         assertEquals(3L, t.k)
-        assertEquals(3L, cancelRemainingRowCount(before, pairingLost = false))
-        assertNull("配对已失效时出路是重新扫码，不给取消", cancelRemainingRowCount(before, pairingLost = true))
+        val pausedBefore = before.copy(view = before.view!!.copy(state = GlobalState.PAUSED))
+        assertEquals(3L, cancelRemainingRowCount(pausedBefore, pairingLost = false))
+        assertNull("配对已失效时出路是重新扫码，不给取消", cancelRemainingRowCount(pausedBefore, pairingLost = true))
 
         val written = rig.engine.cancelRemaining()
         rig.settle()
@@ -108,7 +110,7 @@ class ARCH14UiProjectionTest {
         val t2 = flowTripletOf(after, albums)!!
         assertEquals(0L, after.remaining)
         assertEquals(0L, t2.k)
-        assertNull(cancelRemainingRowCount(after, pairingLost = false))
+        assertNull(cancelRemainingRowCount(after.copy(view = after.view!!.copy(state = GlobalState.PAUSED)), pairingLost = false))
         assertEquals(3L, t2.skippedByUser)
         assertTrue(backupUiStateOf(after) is BackupUiState.AllSafe)
         assertFalse(
@@ -186,8 +188,9 @@ class ARCH14UiProjectionTest {
 
     // ---------------------------------------------------------------- 在传：状态行与进度条
 
-    // 在传时：大数字仍是「已确认 / 总数」；状态行的「第 x / y 张」是正在传的这张 = 已确认 + 1；进度条是这张的字节进度。
-    // 反证：Sending 的 done 用 p.confirmed（旧的「本轮第 x 张」习惯）→ 断言 done == 3 变 2，红。
+    // 在传时：大数字仍是「已确认 / 总数」；状态行的「第 x / y 张」按本轮算（#413 §8）：
+    // x = 本轮已完成 + 1，y = 本轮已完成 + 待备份（待备份含正在传的这一张）；进度条是这张的字节进度。
+    // 反证：Sending 的 total 用 inScopeTotal（旧口径）→ 断言 total == 2 变 4，红。
     @Test
     fun `while sending the status line counts this photo and the bar shows its bytes`() = runTest {
         val rig = backedUp(2)
@@ -198,8 +201,8 @@ class ARCH14UiProjectionTest {
 
         val p = rig.projection()
         val state = backupUiStateOf(p) as BackupUiState.Sending
-        assertEquals(3, state.done)
-        assertEquals(4, state.total)
+        assertEquals(1, state.done)
+        assertEquals(2, state.total)
         assertEquals("IMG_3.jpg", state.currentFile)
         assertEquals(2L, flowTripletOf(p, albums)!!.m)
         assertEquals(FlowCommand.Pause, flowCommandOf(p))
@@ -229,36 +232,42 @@ class ARCH14UiProjectionTest {
         assertEquals(500, transferPermilleOf(item(2L shl 30, 4L shl 30)))
     }
 
-    // 已确认数已经等于总数时（桌面缺失、自动补传那一张），「第 x 张」封顶，不说「第 11 / 10 张」。
+    // 待办刚被别处清零、这一张还没收尾时，「第 x 张」不超过总数：不说「第 3 / 2 张」。
     @Test
-    fun `the photo ordinal never exceeds the total`() {
+    fun `the round ordinal never exceeds the total`() {
+        assertEquals(1 to 1, roundOrdinalOf(doneThisRound = 0, pending = 0))
+        assertEquals(3 to 3, roundOrdinalOf(doneThisRound = 2, pending = 0))
+        assertEquals(3 to 7, roundOrdinalOf(doneThisRound = 2, pending = 5))
         val p = FlowProjection(
-            confirmed = 10, inScopeTotal = 10, current = CurrentItem(1, "a.jpg", 0, 10),
-            waitReason = null, paused = false, failed = 0,
+            view = EngineView(GlobalState.RUNNING, pending = 0, doneThisRound = 10, current = CurrentItem(1, "a.jpg", 0, 10)),
+            confirmed = 10, inScopeTotal = 10, failed = 0,
         )
-        assertEquals(10, (backupUiStateOf(p) as BackupUiState.Sending).done)
+        assertEquals(11, (backupUiStateOf(p) as BackupUiState.Sending).done)
+        assertEquals(11, (backupUiStateOf(p) as BackupUiState.Sending).total)
     }
 
     // ---------------------------------------------------------------- 按钮与状态（MOB-51 接替）
 
-    // 暂停压过一切；在传 = 暂停按钮；FAILED 且没在跑 = Trouble（点 = 立即重试）；否则唤醒。
+    // #413：按钮只看全局状态——「继续」只在已暂停，「暂停」只在备份中；FAILED 且空闲 = Trouble（点 = 立即重试）；否则唤醒。
     // Trouble 带的只是技术标记，主文案由 run_failed 出（规则 6：不许在这里造英文句子）。
-    // 反证：backupUiStateOf 里 paused 分支挪到 running 之后 → 暂停中又收到进度时显示 Sending，红。
+    // 反证：flowCommandOf 改回先看 failed → 已暂停且有 FAILED 时给 Retry，红。
     @Test
     fun `hero state and hero command are routed on the same projection`() {
-        val base = FlowProjection(confirmed = 3, inScopeTotal = 5, current = null, waitReason = null, paused = false, failed = 0)
-        val sending = base.copy(current = CurrentItem(9, "x.jpg", 1, 2), running = true)
-        assertEquals(BackupUiState.Paused, backupUiStateOf(sending.copy(paused = true)))
-        assertEquals(FlowCommand.Continue, flowCommandOf(sending.copy(paused = true)))
-        assertTrue(backupUiStateOf(sending) is BackupUiState.Sending)
-        assertEquals(FlowCommand.Pause, flowCommandOf(sending))
+        fun p(state: GlobalState, current: CurrentItem? = null, failed: Long = 0) = FlowProjection(
+            view = EngineView(state, pending = 2, current = current), confirmed = 3, inScopeTotal = 5, failed = failed,
+        )
+        val item = CurrentItem(9, "x.jpg", 1, 2)
+        assertEquals(BackupUiState.Paused, backupUiStateOf(p(GlobalState.PAUSED, failed = 2)))
+        assertEquals(FlowCommand.Continue, flowCommandOf(p(GlobalState.PAUSED, failed = 2)))
+        assertTrue(backupUiStateOf(p(GlobalState.RUNNING, item)) is BackupUiState.Sending)
+        assertEquals(FlowCommand.Pause, flowCommandOf(p(GlobalState.RUNNING, item)))
 
-        val failed = base.copy(failed = 2)
+        val failed = p(GlobalState.IDLE, failed = 2)
         assertEquals(BackupUiState.Trouble("flow.failed=2"), backupUiStateOf(failed))
         assertEquals(FlowCommand.Retry, flowCommandOf(failed))
 
-        assertEquals(BackupUiState.Idle, backupUiStateOf(base.copy(remaining = 2)))
-        assertEquals(FlowCommand.Wake, flowCommandOf(base))
+        assertEquals(BackupUiState.Idle, backupUiStateOf(p(GlobalState.IDLE)))
+        assertEquals(FlowCommand.Wake, flowCommandOf(p(GlobalState.IDLE)))
     }
 
     // ---------------------------------------------------------------- 等待理由（UI19 接替）
@@ -275,23 +284,23 @@ class ARCH14UiProjectionTest {
 
         val p = rig.projection()
         val state = backupUiStateOf(p)
-        assertEquals(BackupUiState.WaitingForConstraints, state)
-        val res = fgsBlockWaitNoticeRes(p)
+        assertEquals(BackupUiState.Waiting(WaitReason.FGS_BLOCKED), state)
+        val res = waitReasonTextRes(p)
         assertEquals(R.string.state_background_protection_unknown, res)
         assertEquals(res, visibleWaitReasonRes(state, MediaAccess.FULL, pairingLost = false, reasonRes = res))
         assertNull(visibleWaitReasonRes(state, MediaAccess.PARTIAL, pairingLost = false, reasonRes = res))
         assertNull(visibleWaitReasonRes(state, MediaAccess.FULL, pairingLost = true, reasonRes = res))
         assertNull("不在等待态就不说", visibleWaitReasonRes(BackupUiState.Paused, MediaAccess.FULL, false, res))
 
-        val wifi = p.copy(waitReason = WaitReason.WIFI)
-        assertNull("此刻挡路的是 Wi‑Fi，不说额度的事", fgsBlockWaitNoticeRes(wifi))
-        assertNull("用户暂停时说的是暂停", fgsBlockWaitNoticeRes(p.copy(paused = true)))
+        val wifi = p.copy(view = p.view!!.copy(waitReason = WaitReason.WIFI))
+        assertEquals("此刻挡路的是 Wi‑Fi，不说额度的事", R.string.wifi_deferred_hint, waitReasonTextRes(wifi))
+        assertNull("用户暂停时说的是暂停", waitReasonTextRes(p.copy(view = p.view!!.copy(state = GlobalState.PAUSED))))
 
         rig.foreground.grant = true
         rig.engine.onAppForeground()
         rig.settle()
         val back = rig.projection()
-        assertNull(fgsBlockWaitNoticeRes(back))
+        assertNull(waitReasonTextRes(back))
         assertEquals(OrderState.CONFIRMED, rig.state(1))
         rig.close()
     }
@@ -307,7 +316,7 @@ class ARCH14UiProjectionTest {
         rig.settle()
         val p = rig.projection()
         assertEquals(WaitReason.FGS_BLOCKED, p.waitReason)
-        assertEquals(R.string.state_background_budget_paused, fgsBlockWaitNoticeRes(p))
+        assertEquals(R.string.state_background_budget_paused, waitReasonTextRes(p))
         rig.delivery.release()
         rig.close()
     }
