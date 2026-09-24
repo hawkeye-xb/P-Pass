@@ -92,6 +92,8 @@ class FlowEngine(
     private val pending = LinkedHashSet<TriggerReason>()
     private var started = false
 
+    private fun msSince(startedNanos: Long): Long = (System.nanoTime() - startedNanos) / 1_000_000
+
     private fun bump() {
         _revision.update { it + 1 }
     }
@@ -299,8 +301,14 @@ class FlowEngine(
         if (control.paused()) return settle(null)
         val epoch = pairingEpoch() ?: return settle(WaitReason.NOT_PAIRED)
 
+        // DIAG-A：检查阶段每一步各打一条耗时——首次配对后曾空等 32 秒、一条日志都没有。
+        val cycleStarted = System.nanoTime()
         val slow = reasons.any { it.slowPath } || withContext(io) { mediaStoreVersionChanged() }
-        if (slow) runLocalSlowPath()
+        if (slow) {
+            val t = System.nanoTime()
+            runLocalSlowPath()
+            log.log("cycle $reasons: check local_slow_path took ${msSince(t)}ms")
+        }
 
         // ---- worker 里的检查，此时不持有 FGS ----
         waitReasonOf(conditions(), userPresent)?.let { reason ->
@@ -308,9 +316,15 @@ class FlowEngine(
             if (reason == WaitReason.WIFI || reason == WaitReason.BATTERY) scheduler.scheduleWhenConditionsMet(reason)
             return settle(reason)
         }
+        val pickStarted = System.nanoTime()
         var first = pickNext()
+        // pickNext 走快路径时会给下一张算 hash（大视频可能很久），它排在探测之前。
+        log.log("cycle $reasons: check pick_next took ${msSince(pickStarted)}ms found=${first != null}")
         if (first == null && !slow) return settle(null)
-        when (val reach = withContext(io) { probe.probe() }) {
+        val probeStarted = System.nanoTime()
+        val reach = withContext(io) { probe.probe() }
+        log.log("cycle $reasons: check probe took ${msSince(probeStarted)}ms result=${reach.javaClass.simpleName} sinceCycleStartMs=${msSince(cycleStarted)}")
+        when (reach) {
             ProbeResult.Unreachable -> {
                 if (first == null) return settle(null)
                 log.log("cycle $reasons: desktop unreachable, scheduling probes; no foreground service, no attempt counted")
@@ -324,7 +338,9 @@ class FlowEngine(
             }
         }
         if (slow) {
+            val t = System.nanoTime()
             runRemotePresence()
+            log.log("cycle $reasons: check remote_presence took ${msSince(t)}ms")
             if (first == null) first = pickNext()
         }
         if (first == null) return settle(null)

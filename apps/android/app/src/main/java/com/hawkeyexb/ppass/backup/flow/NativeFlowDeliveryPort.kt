@@ -21,6 +21,7 @@ import com.hawkeyexb.ppass.proto.FlowTupleRef
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
+import com.hawkeyexb.ppass.transport.CallTrace
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PeerAddrParts
@@ -50,6 +51,9 @@ internal class DesktopRejectedException(val msgKey: String?, method: String) :
 /** The only Desktop interaction accepted by the Android Flow delivery port. */
 internal interface FlowReceiptClient {
     suspend fun currentPairingEpoch(): String?
+
+    /** DIAG-A：同 [currentPairingEpoch]，但把这次往返的逐阶段记录交给 [trace]（只有真实客户端有）。 */
+    suspend fun probePairingEpoch(trace: (CallTrace) -> Unit): String? = currentPairingEpoch()
 
     /**
      * NET-24: returns the same [FlowStatusReply] a [status] call issued right now would return.
@@ -176,6 +180,12 @@ internal class DaemonFlowReceiptClient(
         return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
     }
 
+    override suspend fun probePairingEpoch(trace: (CallTrace) -> Unit): String? {
+        val response = client.callTraced(peer, Methods.HELLO, buildJsonObject {}, trace)
+        if (!response.ok) throw DesktopRejectedException(response.error?.msgKey, "hello")
+        return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
+    }
+
     override suspend fun offer(request: FlowFetchRequest): FlowStatusReply {
         val response = client.call(peer, Methods.FLOW_OFFER, ProtoJson.encodeToJsonElement(FlowFetchRequest.serializer(), request))
         if (!response.ok) throw DesktopRejectedException(response.error?.msgKey, "flow.offer")
@@ -233,8 +243,11 @@ internal class NativeFlowDeliveryPort(
     private val pairing: () -> Pairing?,
     /** Seam for tests: production binds the real client and builds a [DaemonFlowReceiptClient]. */
     private val desktopFor: suspend (Pairing) -> FlowReceiptClient,
-    /** NET-14 push subscription (`timeline.subscribe`); suspends until the stream ends. */
-    private val subscribe: suspend (Pairing, (String, JsonObject) -> Unit) -> Unit,
+    /**
+     * NET-14 push subscription (`timeline.subscribe`); suspends until the stream ends.
+     * 第二个参数在订阅确认帧到达时调用（DIAG-B：区分「连上了」和「还在连」）。
+     */
+    private val subscribe: suspend (Pairing, () -> Unit, (String, JsonObject) -> Unit) -> Unit,
     /** NET-06: best-effort `flow.cancel_tuple` for discarding a partial. */
     private val cancelTuple: suspend (Pairing, FlowTupleRef) -> Unit,
     private val log: FlowLogger = FlowLogger { },
@@ -243,6 +256,7 @@ internal class NativeFlowDeliveryPort(
     private val sideEffects: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
     private val idleStallThresholdMs: Long = LOCAL_IDLE_STALL_THRESHOLD_MS,
     private val byteStallThresholdMs: Long = BYTE_STALL_THRESHOLD_MS,
+    private val subscriptionRetryDelaysMs: LongArray = SUBSCRIPTION_RETRY_DELAYS_MS,
 ) : ItemDelivery {
     private val epochGuard = FlowDeliveryEpochGuard(pairing)
 
@@ -281,7 +295,13 @@ internal class NativeFlowDeliveryPort(
         var desktop: FlowReceiptClient? = null
         return try {
             val client = desktopFor(currentPairing).also { desktop = it }
+            // DIAG-B：offer 的发出 / 回复时刻。推送订阅在 offer 之后才建（waitForCompletion 里），
+            // 订阅那行的 sinceOfferMs 与桌面 `flow.offer received` / `flow.delivered push` 对照，
+            // 就能判断「推送是不是在订阅建好之前就发了」。
+            val offerAt = clock()
+            log.log("Flow offer sent seq=${fetch.queueSequence}")
             val offerReply = client.offer(fetch)
+            log.log("Flow offer replied seq=${fetch.queueSequence} state=${offerReply.state} inMs=${clock() - offerAt}")
             // NET-24: terminal state may already ride back on the offer reply (dedup / rebind).
             when (val immediate = flowStatusPollOutcome(offerReply)) {
                 is FlowStatusPollOutcome.Completed -> {
@@ -294,7 +314,7 @@ internal class NativeFlowDeliveryPort(
                 }
                 FlowStatusPollOutcome.KeepPolling -> Unit
             }
-            waitForCompletion(client, currentPairing, fetch, lease, request.pairingEpoch, onProgress)
+            waitForCompletion(client, currentPairing, fetch, lease, request.pairingEpoch, onProgress, offerAt)
         } catch (cancelled: CancellationException) {
             // 暂停 / 取消 / FGS 被收走：停掉原生传输（部分数据在桌面保留，续传只补缺的），
             // 顺带告诉桌面这次不等了。不等回声（NET-06 原则 1）。
@@ -318,26 +338,39 @@ internal class NativeFlowDeliveryPort(
         lease: ProviderLease,
         epoch: PairingEpoch,
         onProgress: (Long) -> Unit,
+        offerAt: Long,
     ): DeliveryOutcome = coroutineScope {
         // NET-06/NET-14: priority order — push, then local iroh-blobs signal, then a bounded status() check.
         val tuple = FlowTupleRef(queueSequence = fetch.queueSequence, pairingEpoch = fetch.pairingEpoch, leaseToken = fetch.leaseToken)
         val pushChannel = Channel<Pair<String, JsonObject>>(capacity = 8)
+        val seq = fetch.queueSequence
         val subscription = launch {
             // 推送只是加速，不是唯一路径：订阅失败不致命，本地信号 + status() 兜底。
-            runCatching { subscribe(currentPairing) { kind, data -> pushChannel.trySend(kind to data) } }
+            // DIAG-B：但订阅断了要重建——以前只建一次，断了（或一开始就没连上）这一张剩下的时间
+            // 就只能靠 status() 兜底；连着的时候（KeepWaitingForPush）甚至根本不问 status。
+            keepSubscribed(currentPairing, seq, offerAt) { kind, data -> pushChannel.trySend(kind to data) }
         }
         try {
             var pollDelayIndex = 0
             var consecutiveStatusFailures = 0
             var lastBytes = -1L
             val attemptStartedAt = clock()
+            var localDoneAt: Long? = null
             while (true) {
                 if (!epochGuard.isCurrent(epoch)) {
                     bridge.pause(lease)
                     return@coroutineScope DeliveryOutcome.PathFailure("epoch_changed")
                 }
-                val pushed = pushChannel.tryReceive().getOrNull()?.let { (kind, data) -> parseFlowPushOutcome(kind, data, tuple) }
+                val pushed = pushChannel.tryReceive().getOrNull()?.let { (kind, data) ->
+                    parseFlowPushOutcome(kind, data, tuple).also { parsed ->
+                        log.log("Flow push received kind=$kind seq=$seq matched=${parsed != null} elapsedMs=${clock() - attemptStartedAt}")
+                    }
+                }
                 val local = bridge.transferStatus()
+                if (localDoneAt == null && (local is TransferStatus.Completed || local is TransferStatus.Aborted)) {
+                    localDoneAt = clock()
+                    log.log("Flow local transfer ended seq=$seq local=$local elapsedMs=${localDoneAt - attemptStartedAt}; waiting for desktop receipt")
+                }
                 (local as? TransferStatus.InProgress)?.bytesSent?.let { sent ->
                     if (sent != lastBytes) {
                         lastBytes = sent
@@ -377,6 +410,7 @@ internal class NativeFlowDeliveryPort(
                             throw failure
                         } catch (failure: Throwable) {
                             consecutiveStatusFailures += 1
+                            log.log("Flow status poll failed seq=$seq #$consecutiveStatusFailures (${failure.javaClass.simpleName}: ${failure.message})")
                             if (consecutiveStatusFailures >= STATUS_POLL_MAX_CONSECUTIVE_FAILURES) throw failure
                             delay(nextStatusPollDelayMs(pollDelayIndex++))
                             continue
@@ -384,7 +418,8 @@ internal class NativeFlowDeliveryPort(
                         consecutiveStatusFailures = 0
                         when (val outcome = flowStatusPollOutcome(reply)) {
                             is FlowStatusPollOutcome.Completed -> {
-                                log.log("Flow resolved by=status seq=${fetch.queueSequence} local=$local elapsedMs=$elapsed")
+                                val sinceLocal = localDoneAt?.let { clock() - it }
+                                log.log("Flow resolved by=status seq=${fetch.queueSequence} local=$local elapsedMs=$elapsed sinceLocalDoneMs=${sinceLocal ?: "-"} subscription=${subscriptionState.name}")
                                 return@coroutineScope accept(outcome.receipt, fetch, lease)
                             }
                             FlowStatusPollOutcome.Cancelled -> {
@@ -392,7 +427,11 @@ internal class NativeFlowDeliveryPort(
                                 return@coroutineScope DeliveryOutcome.PathFailure("cancelled")
                             }
                             // #410：桌面回 active 就继续等，不判失败（字节停滞由 Stalled 兜底）。
-                            FlowStatusPollOutcome.KeepPolling -> delay(nextStatusPollDelayMs(pollDelayIndex++))
+                            FlowStatusPollOutcome.KeepPolling -> {
+                                val next = nextStatusPollDelayMs(pollDelayIndex++)
+                                log.log("Flow status poll seq=$seq state=${reply.state} elapsedMs=$elapsed local=$local subscription=${subscriptionState.name} nextInMs=$next")
+                                delay(next)
+                            }
                         }
                     }
                 }
@@ -401,6 +440,42 @@ internal class NativeFlowDeliveryPort(
             error("unreachable")
         } finally {
             subscription.cancel()
+        }
+    }
+
+    /** DIAG-B：订阅此刻的状态，写进 status 兜底那几行日志——推送丢了的时候一眼看出订阅在不在。 */
+    private enum class SubscriptionState { CONNECTING, CONNECTED, DOWN }
+
+    @Volatile private var subscriptionState = SubscriptionState.DOWN
+
+    /**
+     * DIAG-B：保持这一张的推送订阅一直在。订阅流结束（正常结束或抛错）就按 [subscriptionRetryDelaysMs]
+     * 退避重建，直到 [waitForCompletion] 取消它。建立 / 断开 / 重建各一行日志。
+     * 取消必须原样抛出：吞掉它等于这张结束了还在后台一直重连。
+     */
+    private suspend fun keepSubscribed(pairing: Pairing, seq: Long, offerAt: Long, onEvent: (String, JsonObject) -> Unit) {
+        var attempt = 0
+        while (true) {
+            if (attempt > 0) log.log("Flow push subscription rebuild seq=$seq #$attempt")
+            val startedAt = clock()
+            subscriptionState = SubscriptionState.CONNECTING
+            val reason = try {
+                subscribe(pairing, {
+                    subscriptionState = SubscriptionState.CONNECTED
+                    log.log("Flow push subscription connected seq=$seq attempt=$attempt inMs=${clock() - startedAt} sinceOfferMs=${clock() - offerAt}")
+                }, onEvent)
+                "stream_ended"
+            } catch (cancelled: CancellationException) {
+                subscriptionState = SubscriptionState.DOWN
+                throw cancelled
+            } catch (failure: Throwable) {
+                "${failure.javaClass.simpleName}: ${failure.message}"
+            }
+            subscriptionState = SubscriptionState.DOWN
+            val retryIn = subscriptionRetryDelaysMs.getOrElse(attempt) { subscriptionRetryDelaysMs.last() }
+            log.log("Flow push subscription closed seq=$seq attempt=$attempt afterMs=${clock() - startedAt} reason=$reason; retry in ${retryIn}ms")
+            delay(retryIn)
+            attempt++
         }
     }
 
@@ -426,18 +501,39 @@ internal class DaemonDesktopProbe(
     private val pairing: () -> Pairing?,
     private val desktopFor: suspend (Pairing) -> FlowReceiptClient,
     private val timeoutMs: Long = PROBE_TIMEOUT_MS,
+    private val log: FlowLogger = FlowLogger { },
+    private val clock: () -> Long = System::nanoTime.let { nano -> { nano() / 1_000_000 } },
 ) : DesktopProbe {
+    /**
+     * DIAG-A：每次探测一行 `Flow probe result=…`：总耗时、`desktopFor`（含 endpoint bind）耗时，以及
+     * 真实客户端给的逐阶段记录（[CallTrace.render]）。注意实际上限通常是 DaemonClient 自己的 15 秒
+     * （`CONNECT_TIMEOUT_MS`，抛 DaemonUnreachableException），不是这里的 [timeoutMs]。
+     */
     override suspend fun probe(): ProbeResult {
         val current = pairing() ?: return ProbeResult.PairingLost
+        val started = clock()
+        var bindMs: Long? = null
+        var trace: CallTrace? = null
+        fun report(result: String, failure: Throwable?) {
+            val cause = failure?.let { " error=${it.javaClass.simpleName}: ${it.message}" }.orEmpty()
+            log.log("Flow probe result=$result totalMs=${clock() - started} bindMs=${bindMs ?: "-"} ${trace?.render() ?: "trace=-"}$cause")
+        }
         return try {
-            withTimeout(timeoutMs) { ProbeResult.Reachable(desktopFor(current).currentPairingEpoch()) }
+            withTimeout(timeoutMs) {
+                val client = desktopFor(current)
+                bindMs = clock() - started
+                ProbeResult.Reachable(client.probePairingEpoch { trace = it })
+            }.also { report("reachable", null) }
         } catch (rejected: DesktopRejectedException) {
+            report("rejected:${rejected.msgKey}", rejected)
             if (rejected.msgKey?.let(::isPairingLostText) == true) ProbeResult.PairingLost else ProbeResult.Unreachable
         } catch (cancelled: CancellationException) {
             // withTimeout 的超时也是 CancellationException——区分「我被取消了」与「对端没回」。
             currentCoroutineContext().ensureActive()
+            report("unreachable:probe_timeout_${timeoutMs}ms", cancelled)
             ProbeResult.Unreachable
-        } catch (_: Throwable) {
+        } catch (failure: Throwable) {
+            report("unreachable", failure)
             ProbeResult.Unreachable
         }
     }
@@ -550,6 +646,9 @@ internal const val LOCAL_IDLE_STALL_THRESHOLD_MS = 15_000L
 
 /** #410：连接还在但多久没有新的文件字节就判路径失败。 */
 internal const val BYTE_STALL_THRESHOLD_MS = 180_000L
+
+/** DIAG-B：推送订阅断开后的重建退避（封顶 10s，不无限增长）。 */
+internal val SUBSCRIPTION_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 5_000, 10_000)
 
 /** NET-14: how often the wait loop re-reads the local iroh-blobs signal (local field read, no network). */
 internal const val LOCAL_STATUS_RECHECK_MS = 500L

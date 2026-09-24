@@ -242,8 +242,13 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         bridge = bridge,
         pairing = pairing,
         desktopFor = desktopFor,
-        subscribe = { p, onEvent ->
-            client.subscribeTimeline(parsePeerAddrToken(p.daemonAddrToken), onFlowEvent = { kind, data -> onEvent(kind, data) }, onInvalidated = {})
+        subscribe = { p, onConnected, onEvent ->
+            client.subscribeTimeline(
+                parsePeerAddrToken(p.daemonAddrToken),
+                onConnected = { onConnected() },
+                onFlowEvent = { kind, data -> onEvent(kind, data) },
+                onInvalidated = {},
+            )
         },
         cancelTuple = { p, tuple ->
             client.bind(IdentityStore(app.filesDir).secretKey())
@@ -271,7 +276,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         media = ContentResolverMediaSnapshotSource(app, { scopeStore.selectedBucketIds() }),
         hasher = ContentResolverHasher(app),
         delivery = delivery,
-        probe = DaemonDesktopProbe(pairing, desktopFor),
+        probe = DaemonDesktopProbe(pairing, desktopFor, log = androidLog, clock = SystemClock::elapsedRealtime),
         presence = RemotePresence { hashes ->
             val p = pairing() ?: error("not paired")
             client.bind(IdentityStore(app.filesDir).secretKey())

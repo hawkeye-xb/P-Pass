@@ -59,6 +59,13 @@ class ARCH13DeliveryPortTest {
         val cancels = mutableListOf<FlowFetchRequest>()
         var push: ((String, JsonObject) -> Unit)? = null
         val progress = mutableListOf<Long>()
+        val logLines = mutableListOf<String>()
+        var subscribeCalls = 0
+        var subscribeImpl: suspend (Int, () -> Unit, (String, JsonObject) -> Unit) -> Unit = { _, onConnected, onEvent ->
+            push = onEvent
+            onConnected()
+            awaitCancellation()
+        }
         val desktop = object : FlowReceiptClient {
             override suspend fun currentPairingEpoch(): String = "e1"
             override suspend fun offer(request: FlowFetchRequest): FlowStatusReply {
@@ -77,10 +84,9 @@ class ARCH13DeliveryPortTest {
             bridge = IrohBlobsProviderBridge(native) { "fd" },
             pairing = { pairing },
             desktopFor = { desktop },
-            subscribe = { _, onEvent ->
-                push = onEvent
-                awaitCancellation()
-            },
+            subscribe = { _, onConnected, onEvent -> subscribeImpl(subscribeCalls++, onConnected, onEvent) },
+            log = FlowLogger { logLines += it },
+            subscriptionRetryDelaysMs = longArrayOf(1_000),
             cancelTuple = { _, _ -> },
             clock = { test.testScheduler.currentTime },
             sideEffects = CoroutineScope(test.coroutineContext + Job()),
@@ -102,8 +108,10 @@ class ARCH13DeliveryPortTest {
             contentHash = hash,
         )
 
+        /** 推给**当前活着的**那条订阅；没有活着的订阅 = 这条推送丢了（与桌面 broadcast 无订阅者时一致）。 */
         fun pushEvent(kind: String, extra: Map<String, kotlinx.serialization.json.JsonElement> = emptyMap()) {
-            push!!(
+            val live = push ?: return
+            live(
                 kind,
                 buildJsonObject {
                     put("queue_sequence", JsonPrimitive(orderId))
@@ -126,6 +134,69 @@ class ARCH13DeliveryPortTest {
         assertEquals("lease-$orderId", h.offers.single().leaseToken)
         assertEquals(hash, h.offers.single().contentHash)
         assertEquals(listOf("release"), h.nativeEvents)
+    }
+
+    // DIAG-B：订阅流中途结束（或一开始就没连上）必须重建。连着的时候循环只等推送、不问 status，
+    // 不重建 = 这一张只剩字节停滞 / 本地结束后的 status 兜底。
+    // 反证：keepSubscribed 去掉重建循环、只订阅一次 → 推送落空，60 秒后仍未结束，红。
+    @Test
+    fun `DIAG-B a dropped push subscription is rebuilt and the delivered push still resolves the item`() = runTest {
+        val h = Harness(this)
+        h.status = {
+            val t = testScheduler.currentTime
+            """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":${t / 100},"byte_idle_for_ms":0}"""
+        }
+        h.subscribeImpl = { n, onConnected, onEvent ->
+            onConnected()
+            if (n > 0) {
+                h.push = onEvent
+                awaitCancellation()
+            }
+            // n == 0：订阅流直接结束（对端关流 / 连接断了）。
+        }
+        val job = h.start()
+        advanceTimeBy(5_000)
+        runCurrent()
+        h.pushEvent("flow.delivered", mapOf("receipt" to com.hawkeyexb.ppass.proto.ProtoJson.encodeToJsonElement(FlowCompletionReceipt.serializer(), h.receipt())))
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertTrue("resolved by the rebuilt subscription's push", job.isCompleted)
+        assertTrue(job.await() is DeliveryOutcome.Confirmed)
+        assertTrue("connected wait never needed status()", h.statusCallsAt.isEmpty())
+        assertTrue(h.logLines.toString(), h.logLines.any { it.startsWith("Flow push subscription closed") && it.contains("reason=stream_ended") })
+        assertTrue(h.logLines.toString(), h.logLines.any { it.startsWith("Flow push subscription rebuild") })
+        assertTrue(h.logLines.toString(), h.logLines.any { it.startsWith("Flow resolved by=push") })
+    }
+
+    // DIAG-B：重建循环必须随这一张结束而停，不能在后台一直重连。
+    // 反证：订阅循环改到 sideEffects 上 launch、finally 里不 cancel（脱离这一张的生命周期）→
+    // 结束后 subscribeCalls 继续增长，红。
+    @Test
+    fun `DIAG-B the subscription loop stops with the item and never reconnects in the background`() = runTest {
+        val h = Harness(this)
+        h.status = { """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":1,"byte_idle_for_ms":0}""" }
+        // 每条订阅只活 500ms 就被对端关掉——循环一直在重建。
+        h.subscribeImpl = { _, onConnected, onEvent ->
+            onConnected()
+            h.push = onEvent
+            try {
+                kotlinx.coroutines.delay(500)
+            } finally {
+                h.push = null
+            }
+        }
+        val job = h.start()
+        advanceTimeBy(1_700) // 第二条订阅（1.5s 建立，活到 2.0s）正活着
+        runCurrent()
+        h.pushEvent("flow.delivered", mapOf("receipt" to com.hawkeyexb.ppass.proto.ProtoJson.encodeToJsonElement(FlowCompletionReceipt.serializer(), h.receipt())))
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertTrue(job.await() is DeliveryOutcome.Confirmed)
+        val callsAtEnd = h.subscribeCalls
+        advanceTimeBy(120_000)
+        runCurrent()
+        assertTrue("rebuilt at least once before the push", callsAtEnd >= 2)
+        assertEquals("no reconnect after the item finished", callsAtEnd, h.subscribeCalls)
     }
 
     // C-10 / #410：连接还在、3 分钟没有新的文件字节 → 主动断开，判路径失败（不是单张失败）。
