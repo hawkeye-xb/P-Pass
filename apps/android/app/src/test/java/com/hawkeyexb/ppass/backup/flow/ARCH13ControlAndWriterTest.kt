@@ -76,3 +76,20 @@ class ARCH13ControlAndWriterTest {
         assertEquals(WaitReason.NOT_PAIRED, waitReasonOf(Conditions(paired = false), userPresent = true))
     }
 }
+
+// #413：等待原因持久化——换一个原因要真的写盘（模拟器上看到过「日志说 DISABLED、文件里还是 DESKTOP_UNREACHABLE」）。
+class C413FlowControlStoreTest {
+    @org.junit.Test
+    fun `the wait reason is persisted and replaced`() {
+        val dir = java.nio.file.Files.createTempDirectory("flowctl").toFile()
+        val a = FlowControlStore(dir)
+        a.setWaitReason(WaitReason.DESKTOP_UNREACHABLE)
+        a.setWaitReason(WaitReason.DISABLED)
+        org.junit.Assert.assertEquals(WaitReason.DISABLED, FlowControlStore(dir).waitReason())
+        a.setWaitReason(null)
+        org.junit.Assert.assertNull(FlowControlStore(dir).waitReason())
+        a.setPaused(true)
+        org.junit.Assert.assertTrue(FlowControlStore(dir).paused())
+        dir.deleteRecursively()
+    }
+}

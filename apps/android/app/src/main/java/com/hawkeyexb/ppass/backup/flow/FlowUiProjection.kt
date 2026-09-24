@@ -87,8 +87,8 @@ data class FlowProjection(
         }
 
         /**
-         * 旧签名（AndroidFlowRuntime.flowProjection() 与 Rig 测试用）：由运行态 + 持久的暂停 / 等待原因拼出视图，
-         * 再按 [supplementEngineView] 补上待办与检查阶段。[remaining] == null → 视图未知。
+         * 旧签名（AndroidFlowRuntime.flowProjection() 与 Rig 测试用）：由运行态 + 持久的暂停 / 等待原因 + [remaining]
+         * 拼出与 [FlowEngine.view] 同一口径的视图。[remaining] == null → 视图未知。
          */
         fun of(
             store: OrderStore,
@@ -100,32 +100,12 @@ data class FlowProjection(
         ): FlowProjection = facts(
             store, control, bucketIds, inScopeTotal,
             view = remaining?.let {
-                val base = engineViewOf(status, ViewFacts(paused = control.paused(), waitReason = control.waitReason()))
-                supplementEngineView(base, status.phase, it.toInt(), doneThisRound = 0)
+                engineViewOf(status, ViewFacts(paused = control.paused(), waitReason = control.waitReason(), pending = it.toInt()))
             },
         )
     }
 }
 
-// ======== W1 接线点：视图补齐 ========
-/**
- * W1-M1 的 [FlowEngine.view] 已给出全局状态、等待原因、当前这一张、桌面健康；还没给的两样由 UI 侧补齐：
- * - [EngineView.pending] / [EngineView.doneThisRound]：W1 还没填（恒为 0）。先用引擎的 `remainingSnapshot().count`
- *   与「本轮待办的减少量」补上（见 BackupUiStateHolder 的 EngineViewGateway）；
- * - 检查阶段：引擎在入口检查（[LoopPhase.CHECKING]）时视图仍是 IDLE / WAITING，这里算作备份中，不显示成空闲。
- * W1 填好这两样、并从入口开始就报 RUNNING 之后，本函数与网关里的补齐一起删，UI 直接读 [FlowEngine.view]。
- */
-internal fun supplementEngineView(view: EngineView, phase: LoopPhase, pending: Int, doneThisRound: Int): EngineView {
-    val state = if (view.state != GlobalState.PAUSED && phase != LoopPhase.IDLE) GlobalState.RUNNING else view.state
-    return view.copy(
-        state = state,
-        waitReason = view.waitReason.takeIf { state == GlobalState.WAITING },
-        pending = pending,
-        doneThisRound = doneThisRound,
-        current = view.current.takeIf { state == GlobalState.RUNNING },
-    )
-}
-// ======== W1 接线点结束 ========
 
 /**
  * 投影 → 首页状态。四个全局状态各有出口（#413 §4）：

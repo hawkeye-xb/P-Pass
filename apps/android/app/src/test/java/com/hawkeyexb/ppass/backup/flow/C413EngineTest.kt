@@ -544,4 +544,62 @@ class C413EngineTest {
         assertEquals(OrderState.CONFIRMED, rig.state(2))
         rig.close()
     }
+
+    // ---------------------------------------------------------------- 模拟器回归（W5 报告）
+
+    // 设计 §2：先计数、再查条件。等待中（后台备份关闭）时首页的「待备份」是真实张数，不是 0；等待原因落进持久化。
+    // 反证：把计数挪回条件检查之后 → settle 时 pending 还是 0，红。
+    @Test
+    fun `the count comes before the conditions so a waiting home screen still shows the backlog`() = runTest {
+        val rig = Rig(this)
+        rig.photo(1, generation = 1)
+        rig.photo(2, generation = 2)
+        rig.conditions = Conditions(autoBackupEnabled = false)
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
+        assertEquals(GlobalState.WAITING, rig.engine.view.value.state)
+        assertEquals(WaitReason.DISABLED, rig.engine.view.value.waitReason)
+        assertEquals(WaitReason.DISABLED, rig.control.wait)
+        assertEquals(2, rig.pending())
+        rig.close()
+    }
+
+    // 检查阶段（还没申请到 FGS）报 RUNNING，不报 IDLE。
+    @Test
+    fun `the checking phase is reported as running`() = runTest {
+        val rig = Rig(this)
+        rig.photo(1, generation = 1)
+        val seen = mutableListOf<GlobalState>()
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val probed = FlowEngineProbeHold(gate)
+        rig.probeHook = { probed.hold() }
+        rig.engine.trigger(TriggerReason.MEDIA_CHANGE)
+        rig.settle()
+        seen += rig.engine.view.value.state
+        gate.complete(Unit)
+        rig.settle()
+        assertEquals(listOf(GlobalState.RUNNING), seen)
+        assertEquals(OrderState.CONFIRMED, rig.state(1))
+        rig.close()
+    }
+
+    // 恢复已跳过之后：MediaProvider 给出重复的行也不崩、照常传完（旧 DiffPlanner 在这里抛过 strictly ascending）。
+    // 反证：todoTargets 去掉重复行保护 → 计数多算 1，红。
+    @Test
+    fun `restore keeps working when the media store repeats a row`() = runTest {
+        val rig = Rig(this)
+        rig.photo(1, generation = 1)
+        rig.photo(2, generation = 2)
+        rig.cancelRemainingNow().also { rig.settle() }.await()
+        rig.media.duplicateInScope = setOf(2L)
+        rig.engine.restoreSkipped().also { rig.settle() }.await()
+        assertEquals(listOf(1L, 2L), rig.delivery.deliveredMediaIds)
+        assertEquals(0, rig.pending())
+        assertEquals(0, rig.engine.remainingSnapshot().count)
+        rig.close()
+    }
+}
+
+/** 让探测挂在一个闸门上（看检查阶段的视图）。 */
+internal class FlowEngineProbeHold(private val gate: kotlinx.coroutines.CompletableDeferred<Unit>) {
+    suspend fun hold() = gate.await()
 }

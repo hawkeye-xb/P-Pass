@@ -3,7 +3,6 @@
 package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.R
-import com.hawkeyexb.ppass.backup.RoundCounter
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HeroAction
@@ -173,44 +172,5 @@ class W5EngineViewUiTest {
         assertEquals(res, visibleWaitReasonRes(waiting, MediaAccess.FULL, pairingLost = false, reasonRes = res))
         assertNull(visibleWaitReasonRes(waiting, MediaAccess.FULL, pairingLost = true, reasonRes = res))
         assertNull(visibleWaitReasonRes(BackupUiState.Idle, MediaAccess.FULL, pairingLost = false, reasonRes = res))
-    }
-
-    // ---------------------------------------------------------------- W1 视图补齐（W1 填好待办 / 检查阶段后与之一起删）
-
-    // 检查阶段（CHECKING）算备份中；暂停压过一切；当前这一张只在备份中带出；待办与本轮已完成由 UI 侧填。
-    // 反证：supplementEngineView 不看 phase → CHECKING 时仍是 IDLE，红。
-    @Test
-    fun `the engine view is supplemented with pending and the checking phase`() {
-        val idle = EngineView(GlobalState.IDLE)
-        supplementEngineView(idle, LoopPhase.CHECKING, pending = 3, doneThisRound = 1).let {
-            assertEquals(GlobalState.RUNNING, it.state)
-            assertEquals(3, it.pending)
-            assertEquals(1, it.doneThisRound)
-            assertNull(it.current)
-        }
-        val waiting = EngineView(GlobalState.WAITING, waitReason = WaitReason.WIFI)
-        assertEquals(waiting.copy(pending = 3), supplementEngineView(waiting, LoopPhase.IDLE, pending = 3, doneThisRound = 0))
-        assertNull(supplementEngineView(waiting, LoopPhase.CHECKING, 3, 0).waitReason)
-        val paused = EngineView(GlobalState.PAUSED, current = item)
-        supplementEngineView(paused, LoopPhase.RUNNING, 3, 0).let {
-            assertEquals(GlobalState.PAUSED, it.state)
-            assertNull(it.current)
-        }
-        val running = EngineView(GlobalState.RUNNING, current = item, desktopHealth = DesktopHealth(freeBytes = 1))
-        assertEquals(running.copy(pending = 2), supplementEngineView(running, LoopPhase.RUNNING, 2, 0))
-    }
-
-    // 「本轮已完成」的近似：备份中待办每减 1 记 1；新拍的照片抬高待办不抵扣；暂停 / 等待中保留本轮；回到空闲清零。
-    @Test
-    fun `the round counter counts completions within a round`() {
-        val c = RoundCounter()
-        assertEquals(0, c.next(GlobalState.RUNNING, 5))
-        assertEquals(1, c.next(GlobalState.RUNNING, 4))
-        assertEquals(1, c.next(GlobalState.RUNNING, 6)) // 新拍了两张
-        assertEquals(3, c.next(GlobalState.RUNNING, 4))
-        assertEquals(3, c.next(GlobalState.PAUSED, 4))
-        assertEquals(4, c.next(GlobalState.RUNNING, 3))
-        assertEquals(0, c.next(GlobalState.IDLE, 3))
-        assertEquals(0, c.next(GlobalState.RUNNING, 3))
     }
 }

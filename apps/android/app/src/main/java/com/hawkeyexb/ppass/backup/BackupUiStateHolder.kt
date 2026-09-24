@@ -32,7 +32,6 @@ import com.hawkeyexb.ppass.backup.flow.desktopLowSpaceWarning
 import com.hawkeyexb.ppass.backup.flow.flowCommandOf
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.flowMissingSourceNotice
-import com.hawkeyexb.ppass.backup.flow.supplementEngineView
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
 import com.hawkeyexb.ppass.backup.flow.flowTripletOf
@@ -55,10 +54,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -315,7 +312,6 @@ class BackupUiStateHolder(
 //
 // UI 与引擎之间只有这一层：视图读 [com.hawkeyexb.ppass.backup.flow.FlowEngine.view]，用户操作直接转发引擎的
 // pause / resume / remainingSnapshot / cancelRemaining(snapshot) / restoreSkipped（契约 §3）。
-// 唯一的补齐：W1-M1 的视图还没填待办与本轮已完成、检查阶段仍报 IDLE——见 [supplementEngineView]。
 
 /** 首页读引擎、发用户操作的唯一接口。 */
 internal interface EngineGateway {
@@ -351,36 +347,18 @@ internal interface EngineGateway {
 internal fun engineGatewayFor(runtime: AndroidFlowRuntime): EngineGateway = EngineViewGateway(runtime)
 
 /**
- * 转发 W1 引擎。待办 = `remainingSnapshot().count`（全量扫描，所以每次算完歇 [RECOUNT_MIN_INTERVAL_MS]），
- * 在 order 写入与 MediaStore 变化时重算；「本轮已完成」按「备份中待办的减少量」近似，回到空闲清零。
- * W1 在视图里填好这两样之后，[view] 直接用 `engine.view`，[pending] / [round] 删掉。
+ * 转发 W1 引擎：视图直接是 `engine.view`（待办、本轮已完成、检查阶段算备份中都由引擎给）；第一次精确计数出来之前
+ * 是 null（[com.hawkeyexb.ppass.backup.flow.FlowEngine.pendingKnown]），英雄区不会先说「照片都存好了」。
  */
 private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : EngineGateway {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val engine get() = runtime.engine
-    private val pending = MutableStateFlow<Int?>(null)
-    private val recounts = Channel<Unit>(Channel.CONFLATED)
-    private val round = RoundCounter()
 
     override val view: StateFlow<EngineView?> =
-        combine(engine.view, engine.display, pending) { v, status, n ->
-            n?.let {
-                val filled = supplementEngineView(v, status.phase, it, doneThisRound = 0)
-                filled.copy(doneThisRound = round.next(filled.state, it))
-            }
-        }.stateIn(scope, SharingStarted.Eagerly, null)
+        combine(engine.view, engine.pendingKnown) { v, known -> v.takeIf { known } }
+            .stateIn(scope, SharingStarted.Eagerly, null)
 
     override val revision: Flow<Long> = engine.revision
-
-    init {
-        scope.launch { engine.revision.collect { recounts.trySend(Unit) } }
-        scope.launch {
-            for (request in recounts) {
-                runCatching { engine.remainingSnapshot().count }.getOrNull()?.let { pending.value = it }
-                delay(RECOUNT_MIN_INTERVAL_MS)
-            }
-        }
-    }
 
     override fun facts(bucketIds: Set<Long>?, inScopeTotal: Long?): FlowProjection =
         FlowProjection.facts(runtime.store, runtime.control, bucketIds, inScopeTotal, view = null)
@@ -397,45 +375,16 @@ private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : Engin
 
     override suspend fun cancelRemaining(snapshot: RemainingSnapshot) {
         engine.cancelRemaining(snapshot).await()
-        recounts.trySend(Unit)
     }
 
     override suspend fun restoreSkipped() {
         engine.restoreSkipped().await()
-        recounts.trySend(Unit)
     }
 
-    override fun onMediaChanged() {
-        recounts.trySend(Unit)
-    }
+    /** 引擎自己在 MediaStore 触发（MediaWatchJob → MEDIA_CHANGE）时重算待办。 */
+    override fun onMediaChanged() = Unit
 
     override fun close() = scope.cancel()
-
-    private companion object {
-        const val RECOUNT_MIN_INTERVAL_MS = 2_000L
-    }
-}
-
-/** 「本轮已完成」的近似（W1 填好视图后删）：备份中待办每减少 1 记 1；新增的待办不抵扣；回到空闲清零。 */
-internal class RoundCounter {
-    private var done = 0
-    private var lastPending: Int? = null
-
-    fun next(state: GlobalState, pending: Int): Int {
-        when (state) {
-            GlobalState.IDLE -> {
-                done = 0
-                lastPending = null
-            }
-            GlobalState.RUNNING -> {
-                lastPending?.let { if (pending < it) done += it - pending }
-                lastPending = pending
-            }
-            // 暂停 / 等待中仍是同一轮：只记下基线，不计完成。
-            GlobalState.PAUSED, GlobalState.WAITING -> lastPending = pending
-        }
-        return done
-    }
 }
 // ================================================================ W1 接线点结束
 

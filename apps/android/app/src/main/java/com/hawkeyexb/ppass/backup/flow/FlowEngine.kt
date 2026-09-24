@@ -906,7 +906,8 @@ internal class FlowEngine(
      * 精确的待办张数（只读元数据）。
      * - 扫描脏时（新相册 / 恢复 / 重建之后，G 以下可能有待办）：全量差集，与 [todoTargets] 同一个函数。
      * - 不脏时：G 以下没有漏网的，待办只可能是「新照片（G 之后）」或「当前行还在路上（待传输 / 传输中 / 失败）」——
-     *   两部分按 media_id 去重（中断的新照片两边都在），所以互斥、不重复。
+     *   两部分按 media_id 去重（中断的新照片两边都在），所以互斥、不重复。在路上的那部分只读 order 表（按状态过滤走
+     *   `orders_state` 索引，10 万张实测热 1 ms / 冷 44 ms），按行里记的相册判范围，不逐张回查 MediaStore。
      */
     private fun countTodo(): Int {
         if (store.scanState().dirty) return todoTargets().size
@@ -918,9 +919,8 @@ internal class FlowEngine(
             }
         }
         for (order in store.currentInStates(OPEN)) {
-            if (order.mediaId in todo || store.isSkipped(order.mediaId)) continue
-            val details = media.lookup(order.mediaId) ?: continue
-            if (inScope(details.snapshot.bucketId)) todo += order.mediaId
+            if (order.mediaId in todo || !inScope(order.bucketId) || store.isSkipped(order.mediaId)) continue
+            todo += order.mediaId
         }
         return todo.size
     }
@@ -935,7 +935,11 @@ internal class FlowEngine(
                     val k = skips.iterator()
                     var order = if (o.hasNext()) o.next() else null
                     var skip = if (k.hasNext()) k.next() else null
+                    var last = Long.MIN_VALUE
                     for (s in snapshots) {
+                        // 按 `_id` 升序；万一 MediaProvider 给出重复 / 回退的行，跳过而不是抛（旧 DiffPlanner 在这里崩过）。
+                        if (s.mediaId <= last) continue
+                        last = s.mediaId
                         while (order != null && order.mediaId < s.mediaId) order = if (o.hasNext()) o.next() else null
                         while (skip != null && skip < s.mediaId) skip = if (k.hasNext()) k.next() else null
                         val current = order?.takeIf { it.mediaId == s.mediaId }

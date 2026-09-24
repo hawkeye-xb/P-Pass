@@ -26,6 +26,9 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
     var versions: Map<String, String> = mapOf(LEGACY_VOLUME to "v1")
     override var preciseGeneration: Boolean = true
 
+    /** 这些照片在 [readInScope] 里连着出现两次（模拟 MediaProvider 给出重复行）。 */
+    var duplicateInScope: Set<Long> = emptySet()
+
     /** 每次元数据读取（不读文件）的次数：扫描 / 计数 / 发现都算。 */
     var metadataReads = 0
 
@@ -42,7 +45,9 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
 
     override fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
         metadataReads++
-        return block(photos.filter { it.mediaId > afterId && inScope(it.bucketId) }.sortedBy { it.mediaId }.map { it.snapshot }.asSequence())
+        val rows = photos.filter { it.mediaId > afterId && inScope(it.bucketId) }.sortedBy { it.mediaId }
+            .flatMap { if (it.mediaId in duplicateInScope) listOf(it, it) else listOf(it) }
+        return block(rows.map { it.snapshot }.asSequence())
     }
 
     override fun <R> readChangedSince(volumeName: String, afterGeneration: Long, afterMediaId: Long, block: (Sequence<MediaSnapshot>) -> R): R {

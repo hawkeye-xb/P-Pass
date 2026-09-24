@@ -114,6 +114,8 @@ class AndroidForegroundLease(
 
     override fun update(status: LoopStatus) {
         if (!FlowForegroundHandoff.held) return
+        // 没有通知权限（Android 13+ 未授予 / 用户关了本 App 的通知）就不刷新：FGS 本身照常，只是不去 notify。
+        if (!androidx.core.app.NotificationManagerCompat.from(app).areNotificationsEnabled()) return
         runCatching {
             app.getSystemService(NotificationManager::class.java)
                 .notify(NOTIFICATION_ID, buildTransferNotification(app, status))

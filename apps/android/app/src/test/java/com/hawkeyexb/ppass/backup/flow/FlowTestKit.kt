@@ -202,6 +202,9 @@ internal class Rig(test: TestScope, cursors: Boolean = true) {
     val scheduler = FakeScheduler()
     var probeResult: ProbeResult = ProbeResult.Reachable("e1")
     var probes = 0
+
+    /** 探测开始时调用（可挂起：用来观察检查阶段）。 */
+    var probeHook: suspend () -> Unit = {}
     var missingOnDesktop: Set<String> = emptySet()
     var presenceCalls = 0
     var conditions = Conditions()
@@ -217,7 +220,11 @@ internal class Rig(test: TestScope, cursors: Boolean = true) {
         media = media,
         importer = importer,
         delivery = delivery,
-        probe = DesktopProbe { probes++; probeResult },
+        probe = DesktopProbe {
+            probes++
+            probeHook()
+            probeResult
+        },
         presence = RemotePresence { hashes -> presenceCalls++; hashes.filter { it in missingOnDesktop }.toSet() },
         foreground = foreground,
         scheduler = scheduler,
