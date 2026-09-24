@@ -99,5 +99,7 @@
   "ui.library_delete_warn": "刚从照片库里删掉 {n} 张照片。还在手机上的那些，下次备份会被自动传回来——想彻底删掉，先删手机上的原图，再删库里的。",
   "ui.library_delete_warn_dismiss": "知道了",
   "ui.device_open_folder": "打开文件夹",
-  "ui.device_open_folder_failed": "打开设备文件夹失败：{err}"
+  "ui.device_open_folder_failed": "打开设备文件夹失败：{err}",
+  "ui.low_space_title": "照片库空间不足",
+  "ui.low_space_body": "照片库所在磁盘只剩 {free}（低于 5 GB）。空间不够时手机会暂停备份，请清理磁盘或把照片库换到更大的位置。"
 }
