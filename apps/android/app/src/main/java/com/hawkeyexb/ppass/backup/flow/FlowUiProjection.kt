@@ -86,9 +86,10 @@ data class FlowProjection(
             )
         }
 
-        // ======== LEGACY-ENGINE-VIEW（W1 接线点）========
-        // W1 的 `StateFlow<EngineView>` 进集成分支之前，旧引擎的运行态经 [legacyEngineViewOf] 拼成 EngineView。
-        // AndroidFlowRuntime.flowProjection() 仍按旧签名调这里；W1 接上之后这个重载与 legacyEngineViewOf 一起删。
+        /**
+         * 旧签名（AndroidFlowRuntime.flowProjection() 与 Rig 测试用）：由运行态 + 持久的暂停 / 等待原因拼出视图，
+         * 再按 [supplementEngineView] 补上待办与检查阶段。[remaining] == null → 视图未知。
+         */
         fun of(
             store: OrderStore,
             status: LoopStatus,
@@ -98,38 +99,33 @@ data class FlowProjection(
             remaining: Long? = null,
         ): FlowProjection = facts(
             store, control, bucketIds, inScopeTotal,
-            view = remaining?.let { legacyEngineViewOf(status, control.paused(), control.fgsBlock() != null, it.toInt(), doneThisRound = 0) },
+            view = remaining?.let {
+                val base = engineViewOf(status, ViewFacts(paused = control.paused(), waitReason = control.waitReason()))
+                supplementEngineView(base, status.phase, it.toInt(), doneThisRound = 0)
+            },
         )
     }
 }
 
+// ======== W1 接线点：视图补齐 ========
 /**
- * 旧引擎运行态 → [EngineView]（LEGACY-ENGINE-VIEW，W1 接上后删）。
- * 暂停压过一切；检查阶段（CHECKING）算备份中，不显示成空闲；循环报的等待原因优先，其次是持久的 FGS 受阻。
+ * W1-M1 的 [FlowEngine.view] 已给出全局状态、等待原因、当前这一张、桌面健康；还没给的两样由 UI 侧补齐：
+ * - [EngineView.pending] / [EngineView.doneThisRound]：W1 还没填（恒为 0）。先用引擎的 `remainingSnapshot().count`
+ *   与「本轮待办的减少量」补上（见 BackupUiStateHolder 的 EngineViewGateway）；
+ * - 检查阶段：引擎在入口检查（[LoopPhase.CHECKING]）时视图仍是 IDLE / WAITING，这里算作备份中，不显示成空闲。
+ * W1 填好这两样、并从入口开始就报 RUNNING 之后，本函数与网关里的补齐一起删，UI 直接读 [FlowEngine.view]。
  */
-internal fun legacyEngineViewOf(
-    status: LoopStatus,
-    paused: Boolean,
-    fgsBlocked: Boolean,
-    pending: Int,
-    doneThisRound: Int,
-): EngineView {
-    val wait = status.waitReason ?: WaitReason.FGS_BLOCKED.takeIf { fgsBlocked }
-    val state = when {
-        paused -> GlobalState.PAUSED
-        status.phase != LoopPhase.IDLE -> GlobalState.RUNNING
-        wait != null -> GlobalState.WAITING
-        else -> GlobalState.IDLE
-    }
-    return EngineView(
+internal fun supplementEngineView(view: EngineView, phase: LoopPhase, pending: Int, doneThisRound: Int): EngineView {
+    val state = if (view.state != GlobalState.PAUSED && phase != LoopPhase.IDLE) GlobalState.RUNNING else view.state
+    return view.copy(
         state = state,
-        waitReason = wait.takeIf { state == GlobalState.WAITING },
+        waitReason = view.waitReason.takeIf { state == GlobalState.WAITING },
         pending = pending,
         doneThisRound = doneThisRound,
-        current = status.current.takeIf { state == GlobalState.RUNNING && status.running },
+        current = view.current.takeIf { state == GlobalState.RUNNING },
     )
 }
-// ======== LEGACY-ENGINE-VIEW 结束 ========
+// ======== W1 接线点结束 ========
 
 /**
  * 投影 → 首页状态。四个全局状态各有出口（#413 §4）：
@@ -224,7 +220,7 @@ fun transferPermilleOf(current: CurrentItem?): Int? {
 /**
  * 设置页「取消剩余 N 张」那一行的 N。只在已暂停 / 等待中出现（#413 §5：备份中先暂停，空闲时没有「剩余」）。
  * null = 这一行不渲染：不在这两个状态、N 还没算出来、没有剩余、或配对已失效（出路是重新扫码，不是取消）。
- * 确认框里的 N 不用它，用点击那一刻的快照（[UiCancelSnapshot]）。
+ * 确认框里的 N 不用它，用点击那一刻的快照（[RemainingSnapshot]）。
  */
 fun cancelRemainingRowCount(p: FlowProjection?, pairingLost: Boolean): Long? {
     if (p == null || pairingLost) return null
@@ -240,29 +236,24 @@ fun skippedRowCount(p: FlowProjection?): Long? = p?.skippedByUserTotal?.takeIf {
 
 /**
  * 等待原因 → 状态行那句人话（#413 §4 / 契约 §3）。null = 此刻不在等，或者不该在状态行说（NOT_PAIRED：出路在红卡）。
- *
- * 按**名字**映射，不直接引用枚举常量：W1 正在把 [WaitReason] 改成契约 §3 的九个值（删 PEER_REFUSED），
- * 这里在新旧两版枚举下都能编译。九个契约值各有一句，由单测逐个锁住；认不出的名字退回通用的「等待条件满足」。
- * FGS 受阻再按 [FlowProjection.fgsBlock] 细分「额度用完」与「被拒」。
+ * FGS 受阻再按 [FlowProjection.fgsBlock] 细分「额度用完」与「被拒」；说不清时用「被拒」那句。
  */
 fun waitReasonTextRes(p: FlowProjection): Int? {
     if (p.state != GlobalState.WAITING) return null
     val reason = p.waitReason ?: return null
-    return waitReasonTextRes(reason.name, p.fgsBlock)
+    return waitReasonTextRes(reason, p.fgsBlock)
 }
 
-internal fun waitReasonTextRes(reasonName: String, fgsBlock: FgsBlockReason?): Int? = when (reasonName) {
-    "NOT_PAIRED" -> null
-    "DISABLED" -> R.string.state_waiting_disabled
-    "WIFI" -> R.string.wifi_deferred_hint
-    "BATTERY" -> R.string.state_waiting_battery
-    "FGS_BLOCKED" -> fgsBlockNoticeRes(fgsBlock) ?: R.string.state_background_protection_unknown
-    "DESKTOP_UNREACHABLE" -> R.string.state_waiting_desktop_unreachable
-    "DESKTOP_STORAGE_FULL" -> R.string.state_waiting_desktop_full
-    "DESKTOP_LIBRARY_UNAVAILABLE" -> R.string.state_waiting_desktop_library
-    // 旧枚举的 PEER_REFUSED（桌面回 `storage_failed`）在新契约里就是「桌面存储出错」。
-    "DESKTOP_STORAGE_ERROR", "PEER_REFUSED" -> R.string.state_waiting_desktop_error
-    else -> R.string.backup_waiting_constraints
+internal fun waitReasonTextRes(reason: WaitReason, fgsBlock: FgsBlockReason?): Int? = when (reason) {
+    WaitReason.NOT_PAIRED -> null
+    WaitReason.DISABLED -> R.string.state_waiting_disabled
+    WaitReason.WIFI -> R.string.wifi_deferred_hint
+    WaitReason.BATTERY -> R.string.state_waiting_battery
+    WaitReason.FGS_BLOCKED -> fgsBlockNoticeRes(fgsBlock) ?: R.string.state_background_protection_unknown
+    WaitReason.DESKTOP_UNREACHABLE -> R.string.state_waiting_desktop_unreachable
+    WaitReason.DESKTOP_STORAGE_FULL -> R.string.state_waiting_desktop_full
+    WaitReason.DESKTOP_LIBRARY_UNAVAILABLE -> R.string.state_waiting_desktop_library
+    WaitReason.DESKTOP_STORAGE_ERROR -> R.string.state_waiting_desktop_error
 }
 
 /**
@@ -271,11 +262,5 @@ internal fun waitReasonTextRes(reasonName: String, fgsBlock: FgsBlockReason?): I
 fun desktopLowSpaceWarning(p: FlowProjection?): Boolean {
     val v = p?.view ?: return false
     if (v.desktopHealth?.lowSpace != true) return false
-    return p.waitReason?.name != "DESKTOP_STORAGE_FULL"
+    return p.waitReason != WaitReason.DESKTOP_STORAGE_FULL
 }
-
-/**
- * 「取消剩余 N 张」确认框的快照：弹框那一刻的边界 + 张数（#413 §5：边界 = 弹窗显示那一刻）。
- * [token] 是 W1 `remainingSnapshot()` 的原值，确认时原样交回 `cancelRemaining(snapshot)`；UI 只读 [count]。
- */
-class UiCancelSnapshot(val count: Int, val token: Any?)

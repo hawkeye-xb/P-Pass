@@ -3,7 +3,7 @@
 package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.R
-import com.hawkeyexb.ppass.backup.LegacyRoundCounter
+import com.hawkeyexb.ppass.backup.RoundCounter
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HeroAction
@@ -113,29 +113,26 @@ class W5EngineViewUiTest {
     // ---------------------------------------------------------------- 等待原因的话
 
     // 契约 §3 的九个等待原因：NOT_PAIRED 不在状态行说，其余八个各有一句、互不相同、都不是通用的「等待条件满足」。
-    // 按名字映射（新旧枚举都能编译），所以这里按名字锁；旧枚举的 PEER_REFUSED 归到「桌面存储出错」。
-    // 反证：DESKTOP_STORAGE_FULL 那一行删掉 → 落到 else 的通用句，红。
+    // 反证：DESKTOP_STORAGE_FULL 那一行改成 backup_waiting_constraints → 红。
     @Test
     fun `every contract wait reason has its own sentence`() {
-        val contract = listOf(
-            "NOT_PAIRED", "DISABLED", "WIFI", "BATTERY", "FGS_BLOCKED",
-            "DESKTOP_UNREACHABLE", "DESKTOP_STORAGE_FULL", "DESKTOP_LIBRARY_UNAVAILABLE", "DESKTOP_STORAGE_ERROR",
+        assertEquals(
+            listOf(
+                "NOT_PAIRED", "DISABLED", "WIFI", "BATTERY", "FGS_BLOCKED",
+                "DESKTOP_UNREACHABLE", "DESKTOP_STORAGE_FULL", "DESKTOP_LIBRARY_UNAVAILABLE", "DESKTOP_STORAGE_ERROR",
+            ),
+            WaitReason.entries.map { it.name },
         )
-        assertNull(waitReasonTextRes("NOT_PAIRED", null))
-        val sentences = contract.drop(1).associateWith { waitReasonTextRes(it, null) }
-        sentences.forEach { (name, res) ->
-            assertNotNull(name, res)
-            assertNotEquals("$name 不能只说「正在等待备份条件满足」", R.string.backup_waiting_constraints, res)
+        assertNull(waitReasonTextRes(WaitReason.NOT_PAIRED, null))
+        val sentences = WaitReason.entries.filter { it != WaitReason.NOT_PAIRED }.associateWith { waitReasonTextRes(it, null) }
+        sentences.forEach { (reason, res) ->
+            assertNotNull(reason.name, res)
+            assertNotEquals("$reason 不能只说「正在等待备份条件满足」", R.string.backup_waiting_constraints, res)
         }
         assertEquals("八个原因八句话", 8, sentences.values.toSet().size)
-        assertEquals(R.string.state_waiting_desktop_error, waitReasonTextRes("PEER_REFUSED", null))
-        // 当前枚举里的每一个值都认得（除了 NOT_PAIRED 都不落到通用句）。
-        WaitReason.entries.filter { it != WaitReason.NOT_PAIRED }.forEach {
-            assertNotEquals(it.name, R.string.backup_waiting_constraints, waitReasonTextRes(it.name, null))
-        }
         // FGS 受阻再按具体原因细分。
-        assertEquals(R.string.state_background_budget_paused, waitReasonTextRes("FGS_BLOCKED", FgsBlockReason.BUDGET_EXHAUSTED))
-        assertEquals(R.string.state_background_protection_unknown, waitReasonTextRes("FGS_BLOCKED", FgsBlockReason.START_REFUSED))
+        assertEquals(R.string.state_background_budget_paused, waitReasonTextRes(WaitReason.FGS_BLOCKED, FgsBlockReason.BUDGET_EXHAUSTED))
+        assertEquals(R.string.state_background_protection_unknown, waitReasonTextRes(WaitReason.FGS_BLOCKED, FgsBlockReason.START_REFUSED))
     }
 
     // 额度受阻是「等待中」，不是「已暂停」——那两句话里不许再说暂停（#413 §4：已暂停只指用户暂停）。
@@ -178,34 +175,35 @@ class W5EngineViewUiTest {
         assertNull(visibleWaitReasonRes(BackupUiState.Idle, MediaAccess.FULL, pairingLost = false, reasonRes = res))
     }
 
-    // ---------------------------------------------------------------- 旧引擎适配（LEGACY-ENGINE-VIEW，W1 接上后与之一起删）
+    // ---------------------------------------------------------------- W1 视图补齐（W1 填好待办 / 检查阶段后与之一起删）
 
-    // 暂停压过一切；CHECKING 算备份中；循环报的等待原因优先，其次是持久的 FGS 受阻；当前这一张只在真正传输时带出。
+    // 检查阶段（CHECKING）算备份中；暂停压过一切；当前这一张只在备份中带出；待办与本轮已完成由 UI 侧填。
+    // 反证：supplementEngineView 不看 phase → CHECKING 时仍是 IDLE，红。
     @Test
-    fun `the legacy loop status maps onto the four global states`() {
-        val idle = LoopStatus()
-        assertEquals(GlobalState.PAUSED, legacyEngineViewOf(LoopStatus(LoopPhase.RUNNING, item), paused = true, fgsBlocked = false, pending = 3, doneThisRound = 0).state)
-        legacyEngineViewOf(LoopStatus(LoopPhase.CHECKING), paused = false, fgsBlocked = false, pending = 3, doneThisRound = 0).let {
+    fun `the engine view is supplemented with pending and the checking phase`() {
+        val idle = EngineView(GlobalState.IDLE)
+        supplementEngineView(idle, LoopPhase.CHECKING, pending = 3, doneThisRound = 1).let {
             assertEquals(GlobalState.RUNNING, it.state)
+            assertEquals(3, it.pending)
+            assertEquals(1, it.doneThisRound)
             assertNull(it.current)
         }
-        assertEquals(item, legacyEngineViewOf(LoopStatus(LoopPhase.RUNNING, item), false, false, 3, 0).current)
-        legacyEngineViewOf(idle.copy(waitReason = WaitReason.WIFI), paused = false, fgsBlocked = true, pending = 3, doneThisRound = 0).let {
-            assertEquals(GlobalState.WAITING, it.state)
-            assertEquals(WaitReason.WIFI, it.waitReason)
+        val waiting = EngineView(GlobalState.WAITING, waitReason = WaitReason.WIFI)
+        assertEquals(waiting.copy(pending = 3), supplementEngineView(waiting, LoopPhase.IDLE, pending = 3, doneThisRound = 0))
+        assertNull(supplementEngineView(waiting, LoopPhase.CHECKING, 3, 0).waitReason)
+        val paused = EngineView(GlobalState.PAUSED, current = item)
+        supplementEngineView(paused, LoopPhase.RUNNING, 3, 0).let {
+            assertEquals(GlobalState.PAUSED, it.state)
+            assertNull(it.current)
         }
-        assertEquals(WaitReason.FGS_BLOCKED, legacyEngineViewOf(idle, false, fgsBlocked = true, pending = 3, doneThisRound = 0).waitReason)
-        legacyEngineViewOf(idle, paused = false, fgsBlocked = false, pending = 3, doneThisRound = 0).let {
-            assertEquals(GlobalState.IDLE, it.state)
-            assertNull(it.waitReason)
-            assertEquals(3, it.pending)
-        }
+        val running = EngineView(GlobalState.RUNNING, current = item, desktopHealth = DesktopHealth(freeBytes = 1))
+        assertEquals(running.copy(pending = 2), supplementEngineView(running, LoopPhase.RUNNING, 2, 0))
     }
 
     // 「本轮已完成」的近似：备份中待办每减 1 记 1；新拍的照片抬高待办不抵扣；暂停 / 等待中保留本轮；回到空闲清零。
     @Test
-    fun `the legacy round counter counts completions within a round`() {
-        val c = LegacyRoundCounter()
+    fun `the round counter counts completions within a round`() {
+        val c = RoundCounter()
         assertEquals(0, c.next(GlobalState.RUNNING, 5))
         assertEquals(1, c.next(GlobalState.RUNNING, 4))
         assertEquals(1, c.next(GlobalState.RUNNING, 6)) // 新拍了两张

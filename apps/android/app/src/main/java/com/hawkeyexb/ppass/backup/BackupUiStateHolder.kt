@@ -24,7 +24,7 @@ import com.hawkeyexb.ppass.backup.flow.GlobalState
 import com.hawkeyexb.ppass.backup.flow.MissingSourceNotice
 import com.hawkeyexb.ppass.backup.flow.PairingEpoch
 import com.hawkeyexb.ppass.backup.flow.TriggerReason
-import com.hawkeyexb.ppass.backup.flow.UiCancelSnapshot
+import com.hawkeyexb.ppass.backup.flow.RemainingSnapshot
 import com.hawkeyexb.ppass.backup.flow.acknowledgeFlowMissingSource
 import com.hawkeyexb.ppass.backup.flow.backupUiStateOf
 import com.hawkeyexb.ppass.backup.flow.cancelRemainingRowCount
@@ -32,7 +32,7 @@ import com.hawkeyexb.ppass.backup.flow.desktopLowSpaceWarning
 import com.hawkeyexb.ppass.backup.flow.flowCommandOf
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.flowMissingSourceNotice
-import com.hawkeyexb.ppass.backup.flow.legacyEngineViewOf
+import com.hawkeyexb.ppass.backup.flow.supplementEngineView
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
 import com.hawkeyexb.ppass.backup.flow.flowTripletOf
@@ -64,7 +64,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -111,7 +110,7 @@ class BackupUiStateHolder(
     /**
      * #413：确认框的快照（弹框那一刻的边界 + 张数）。确认时把**同一个**快照交回引擎；null = 没有确认框。
      */
-    private var cancelSnapshot: UiCancelSnapshot? = null
+    private var cancelSnapshot: RemainingSnapshot? = null
     private val _cancelConfirmCount = mutableStateOf<Int?>(null)
     val cancelConfirmCount: State<Int?> get() = _cancelConfirmCount
 
@@ -314,13 +313,13 @@ class BackupUiStateHolder(
 
 // ================================================================ W1 接线点：EngineGateway
 //
-// UI 与引擎之间只有这一层。W1 的 `StateFlow<EngineView>` 与 pause / resume / remainingSnapshot /
-// cancelRemaining(snapshot) / restoreSkipped 进集成分支后，[engineGatewayFor] 改成直接转发 AndroidFlowRuntime
-// 的这几样，[LegacyEngineGateway] 整块删掉（FlowUiProjection.kt 的 LEGACY-ENGINE-VIEW 块一起删）。
+// UI 与引擎之间只有这一层：视图读 [com.hawkeyexb.ppass.backup.flow.FlowEngine.view]，用户操作直接转发引擎的
+// pause / resume / remainingSnapshot / cancelRemaining(snapshot) / restoreSkipped（契约 §3）。
+// 唯一的补齐：W1-M1 的视图还没填待办与本轮已完成、检查阶段仍报 IDLE——见 [supplementEngineView]。
 
 /** 首页读引擎、发用户操作的唯一接口。 */
 internal interface EngineGateway {
-    /** 引擎视图。null = 还不知道——首个待办计数出来之前不许发 `pending = 0`，否则英雄区会先说「照片都存好了」。 */
+    /** 引擎视图。null = 还不知道——首个待办计数出来之前不发 `pending = 0`，否则英雄区会先说「照片都存好了」。 */
     val view: StateFlow<EngineView?>
 
     /** order 写入计数：账目（m、FAILED、已跳过、源已删）据此重读。 */
@@ -336,54 +335,48 @@ internal interface EngineGateway {
     suspend fun resume()
 
     /** 弹框那一刻的边界 + 张数。 */
-    suspend fun remainingSnapshot(): UiCancelSnapshot
+    suspend fun remainingSnapshot(): RemainingSnapshot
 
-    /** 在 PAUSED / WAITING 有效：边界内的待办全部跳过、清除暂停标志 → IDLE。 */
-    suspend fun cancelRemaining(snapshot: UiCancelSnapshot)
+    /** 在 PAUSED / WAITING 有效：快照里的待办全部跳过、清除暂停标志 → IDLE。 */
+    suspend fun cancelRemaining(snapshot: RemainingSnapshot)
 
     suspend fun restoreSkipped()
 
-    /** MediaStore 变了（待办可能变了）。W1 自己监听的话可以忽略。 */
+    /** MediaStore 变了（待办可能变了）。 */
     fun onMediaChanged()
 
     fun close()
 }
 
-internal fun engineGatewayFor(runtime: AndroidFlowRuntime): EngineGateway = LegacyEngineGateway(runtime)
+internal fun engineGatewayFor(runtime: AndroidFlowRuntime): EngineGateway = EngineViewGateway(runtime)
 
 /**
- * 旧引擎上的临时实现（LEGACY-ENGINE-VIEW）。待办 = 旧引擎的 `countRemaining()`（全量扫描，所以每次算完歇
- * [RECOUNT_MIN_INTERVAL_MS]）；「本轮已完成」旧引擎没有数据源，这里按「备份中待办的减少量」近似，回到空闲清零。
- * 已知差异（W1 接上后消失）：取消时旧引擎重新算目标，不按快照边界。
+ * 转发 W1 引擎。待办 = `remainingSnapshot().count`（全量扫描，所以每次算完歇 [RECOUNT_MIN_INTERVAL_MS]），
+ * 在 order 写入与 MediaStore 变化时重算；「本轮已完成」按「备份中待办的减少量」近似，回到空闲清零。
+ * W1 在视图里填好这两样之后，[view] 直接用 `engine.view`，[pending] / [round] 删掉。
  */
-private class LegacyEngineGateway(private val runtime: AndroidFlowRuntime) : EngineGateway {
+private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : EngineGateway {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val engine get() = runtime.engine
     private val pending = MutableStateFlow<Int?>(null)
-    private val controlTick = MutableStateFlow(0L)
     private val recounts = Channel<Unit>(Channel.CONFLATED)
-    private val round = LegacyRoundCounter()
+    private val round = RoundCounter()
 
     override val view: StateFlow<EngineView?> =
-        combine(engine.display, pending, controlTick) { status, n, _ ->
+        combine(engine.view, engine.display, pending) { v, status, n ->
             n?.let {
-                val base = legacyEngineViewOf(status, runtime.control.paused(), runtime.control.fgsBlock() != null, it, doneThisRound = 0)
-                base.copy(doneThisRound = round.next(base.state, it))
+                val filled = supplementEngineView(v, status.phase, it, doneThisRound = 0)
+                filled.copy(doneThisRound = round.next(filled.state, it))
             }
         }.stateIn(scope, SharingStarted.Eagerly, null)
 
     override val revision: Flow<Long> = engine.revision
 
     init {
-        scope.launch {
-            engine.revision.collect {
-                controlTick.update { t -> t + 1 }
-                recounts.trySend(Unit)
-            }
-        }
+        scope.launch { engine.revision.collect { recounts.trySend(Unit) } }
         scope.launch {
             for (request in recounts) {
-                runCatching { engine.countRemaining() }.getOrNull()?.let { pending.value = it }
+                runCatching { engine.remainingSnapshot().count }.getOrNull()?.let { pending.value = it }
                 delay(RECOUNT_MIN_INTERVAL_MS)
             }
         }
@@ -393,22 +386,17 @@ private class LegacyEngineGateway(private val runtime: AndroidFlowRuntime) : Eng
         FlowProjection.facts(runtime.store, runtime.control, bucketIds, inScopeTotal, view = null)
 
     override suspend fun pause() {
-        engine.pause().join()
-        controlTick.update { it + 1 }
+        engine.pause().await()
     }
 
     override suspend fun resume() {
-        // 不等这一轮传完：暂停标志清掉时引擎会 bump revision，视图随之重算。
-        engine.continueFlow()
+        engine.resume().await()
     }
 
-    override suspend fun remainingSnapshot(): UiCancelSnapshot = UiCancelSnapshot(engine.countRemaining(), token = null)
+    override suspend fun remainingSnapshot(): RemainingSnapshot = engine.remainingSnapshot()
 
-    override suspend fun cancelRemaining(snapshot: UiCancelSnapshot) {
-        engine.cancelRemaining().await()
-        // 契约 §3：取消 = 清除暂停标志 → 空闲。旧引擎的 cancelRemaining 不碰暂停标志，这里补上（不唤醒）。
-        if (runtime.control.paused()) runtime.control.setPaused(false)
-        controlTick.update { it + 1 }
+    override suspend fun cancelRemaining(snapshot: RemainingSnapshot) {
+        engine.cancelRemaining(snapshot).await()
         recounts.trySend(Unit)
     }
 
@@ -428,8 +416,8 @@ private class LegacyEngineGateway(private val runtime: AndroidFlowRuntime) : Eng
     }
 }
 
-/** 「本轮已完成」的近似（LEGACY-ENGINE-VIEW）：备份中待办每减少 1 记 1；新增的待办不抵扣；回到空闲清零。 */
-internal class LegacyRoundCounter {
+/** 「本轮已完成」的近似（W1 填好视图后删）：备份中待办每减少 1 记 1；新增的待办不抵扣；回到空闲清零。 */
+internal class RoundCounter {
     private var done = 0
     private var lastPending: Int? = null
 
