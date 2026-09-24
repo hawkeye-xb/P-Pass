@@ -119,7 +119,7 @@ class DIAGConnectivityLogTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
         rig.trigger(TriggerReason.PERIODIC)
-        for (step in listOf("check local_slow_path took", "check pick_next took", "check probe took", "check remote_presence took")) {
+        for (step in listOf("check count took", "check probe took")) {
             assertTrue("$step in ${rig.logs}", rig.logs.any { it.contains(step) })
         }
         rig.close()

@@ -22,11 +22,12 @@ class SqliteOrderStore private constructor(
         const val DEFAULT_DB_NAME = "backup-orders.db"
 
         /**
-         * v2（#417）：加 QUEUED 状态、`source_missing` 列、审计 outbox 与 meta 表，
-         * `pairing_epoch` 改成 TEXT。v1 只在 #416 的集成分支上存在过、从未接入生产，
-         * 没有要保留的数据，所以升级 = 删表重建（#413「迁移」段）。
+         * v2（#417）：加 QUEUED 状态、`source_missing` 列、审计 outbox 与 meta 表，`pairing_epoch` 改成 TEXT。
+         * v3（#413 三层模型）：状态集合改成 PENDING / TRANSFERRING / CONFIRMED / FAILED / SKIPPED_BY_USER /
+         * SKIPPED_SOURCE_MISSING；加跳过名单表（意图）与扫描游标；卷游标列改名 generation。
+         * 测试设备上都是测试数据（#413 契约 §0），升级 = 删表重建，不写数据迁移。
          */
-        private const val SCHEMA_VERSION = 2
+        private const val SCHEMA_VERSION = 3
         private const val PAGE_SIZE = 256
 
         /** App 的正式库。[name] 为 null 时是纯内存库（设备测试用，不碰 App 数据）。 */
@@ -35,7 +36,7 @@ class SqliteOrderStore private constructor(
 
         private val ALL_STATES = OrderState.entries.joinToString(",") { "'${it.name}'" }
 
-        private val TABLES = listOf("orders", "volume_state", "audit_outbox", "meta")
+        private val TABLES = listOf("orders", "volume_state", "audit_outbox", "meta", "skip_list")
 
         private val SCHEMA = listOf(
             """
@@ -60,8 +61,18 @@ class SqliteOrderStore private constructor(
             """
             CREATE TABLE volume_state (
                 volume_name          TEXT    PRIMARY KEY,
-                fast_path_generation INTEGER NOT NULL,
+                generation           INTEGER NOT NULL,
+                generation_media_id  INTEGER NOT NULL,
                 media_store_version  TEXT
+            )
+            """.trimIndent(),
+            // 意图层：用户取消剩余时写、恢复时清。bucket_id 是跳过那一刻的相册（UI 按相册数「已跳过」）。
+            """
+            CREATE TABLE skip_list (
+                media_id        INTEGER PRIMARY KEY,
+                bucket_id       INTEGER NOT NULL,
+                source_version  TEXT    NOT NULL,
+                created_at_ms   INTEGER NOT NULL
             )
             """.trimIndent(),
             """
@@ -88,6 +99,8 @@ class SqliteOrderStore private constructor(
             "SELECT $COLUMNS FROM orders o WHERE o.media_id > ? AND $IS_CURRENT ORDER BY o.media_id ASC LIMIT $PAGE_SIZE"
 
         private const val OWNER_KEY = "owner"
+        private const val SCAN_DIRTY_KEY = "scan_dirty"
+        private const val SCAN_CURSOR_KEY = "scan_cursor"
     }
 
     private class Helper(context: Context?, name: String?) : SQLiteOpenHelper(context, name, null, SCHEMA_VERSION) {
@@ -160,19 +173,47 @@ class SqliteOrderStore private constructor(
     private fun SQLiteDatabase.writeAdvance(advance: GenerationAdvance?) {
         advance ?: return
         // 不用 UPSERT（ON CONFLICT … DO UPDATE 要 SQLite 3.24，API 26 带的是 3.18）。
-        val updated = compileStatement(
-            "UPDATE volume_state SET fast_path_generation = MAX(fast_path_generation, ?) WHERE volume_name = ?",
+        val exists = rawQuery("SELECT 1 FROM volume_state WHERE volume_name = ?", arrayOf(advance.volumeName)).use { it.moveToFirst() }
+        if (!exists) {
+            execSQL(
+                "INSERT INTO volume_state (volume_name, generation, generation_media_id, media_store_version) VALUES (?, ?, ?, NULL)",
+                arrayOf<Any>(advance.volumeName, advance.generation, advance.mediaId),
+            )
+            return
+        }
+        // 字典序取大：只在 (generation, media_id) 更靠后时才写。
+        compileStatement(
+            "UPDATE volume_state SET generation = ?, generation_media_id = ? WHERE volume_name = ? " +
+                "AND (generation < ? OR (generation = ? AND generation_media_id < ?))",
         ).use { st ->
             st.bindLong(1, advance.generation)
-            st.bindString(2, advance.volumeName)
+            st.bindLong(2, advance.mediaId)
+            st.bindString(3, advance.volumeName)
+            st.bindLong(4, advance.generation)
+            st.bindLong(5, advance.generation)
+            st.bindLong(6, advance.mediaId)
             st.executeUpdateDelete()
         }
-        if (updated == 0) {
-            execSQL(
-                "INSERT INTO volume_state (volume_name, fast_path_generation, media_store_version) VALUES (?, ?, NULL)",
-                arrayOf<Any>(advance.volumeName, advance.generation),
-            )
-        }
+    }
+
+    private fun SQLiteDatabase.metaGet(key: String): String? =
+        rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(key)).use { c -> if (c.moveToFirst()) c.getString(0) else null }
+
+    private fun SQLiteDatabase.metaPut(key: String, value: String) =
+        execSQL("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", arrayOf(key, value))
+
+    private fun SQLiteDatabase.readScan(): ScanState =
+        ScanState(dirty = metaGet(SCAN_DIRTY_KEY) == "1", cursor = metaGet(SCAN_CURSOR_KEY)?.toLongOrNull() ?: 0L)
+
+    private fun SQLiteDatabase.writeScan(scan: ScanState) {
+        metaPut(SCAN_DIRTY_KEY, if (scan.dirty) "1" else "0")
+        metaPut(SCAN_CURSOR_KEY, scan.cursor.toString())
+    }
+
+    private fun SQLiteDatabase.writeScanTo(cursor: Long?) {
+        cursor ?: return
+        val scan = readScan()
+        if (cursor > scan.cursor) writeScan(scan.copy(cursor = cursor))
     }
 
     private fun SQLiteDatabase.writeAudit(audit: AuditRecord?) {
@@ -187,10 +228,11 @@ class SqliteOrderStore private constructor(
         insertOrThrow("audit_outbox", null, values)
     }
 
-    override fun insert(order: NewOrder, advance: GenerationAdvance?, audit: AuditRecord?): Order {
+    override fun insert(order: NewOrder, advance: GenerationAdvance?, scanTo: Long?, audit: AuditRecord?): Order {
         val id = inTransaction {
             val id = insertRow(order, clock())
             writeAdvance(advance)
+            writeScanTo(scanTo)
             writeAudit(audit)
             id
         }
@@ -202,9 +244,6 @@ class SqliteOrderStore private constructor(
 
     override fun currentForMedia(mediaId: Long): Order? =
         queryOrders("SELECT $COLUMNS FROM orders WHERE media_id = ? ORDER BY id DESC LIMIT 1", mediaId.toString()).firstOrNull()
-
-    override fun ordersWithHash(hash: String): List<Order> =
-        queryOrders("SELECT $COLUMNS FROM orders WHERE content_hash = ? ORDER BY id ASC", hash)
 
     override fun <R> readCurrentOrders(block: (Sequence<Order>) -> R): R {
         // 每页一次查询、查完即关游标，所以 Sequence 里不挂着打开的 Cursor；
@@ -221,10 +260,13 @@ class SqliteOrderStore private constructor(
         return block(rows)
     }
 
-    override fun currentInStates(states: Set<OrderState>, limit: Int): List<Order> {
+    override fun currentInStates(states: Set<OrderState>, afterId: Long, limit: Int): List<Order> {
         if (states.isEmpty()) return emptyList()
         val list = states.joinToString(",") { "'${it.name}'" }
-        return queryOrders("SELECT $COLUMNS FROM orders o WHERE o.state IN ($list) AND $IS_CURRENT ORDER BY o.id ASC LIMIT $limit")
+        return queryOrders(
+            "SELECT $COLUMNS FROM orders o WHERE o.state IN ($list) AND o.id > ? AND $IS_CURRENT ORDER BY o.id ASC LIMIT $limit",
+            afterId.toString(),
+        )
     }
 
     override fun confirmedWithHashAfter(afterId: Long, limit: Int): List<Order> =
@@ -239,54 +281,33 @@ class SqliteOrderStore private constructor(
         expected: Set<OrderState>,
         to: OrderState,
         countAttempt: Boolean,
+        contentHash: String?,
         advance: GenerationAdvance?,
+        scanTo: Long?,
         audit: AuditRecord?,
     ): Boolean {
         if (expected.isEmpty()) return false
+        require(contentHash == null || contentHash.isNotBlank()) { "contentHash must be null or non-blank" }
         val placeholders = expected.joinToString(",") { "?" }
         val attemptsSql = if (countAttempt) ", attempts = attempts + 1" else ""
-        val sql = "UPDATE orders SET state = ?, updated_at_ms = ?$attemptsSql WHERE id = ? AND state IN ($placeholders)"
+        val hashSql = if (contentHash != null) ", content_hash = IFNULL(content_hash, ?)" else ""
+        val sql = "UPDATE orders SET state = ?, updated_at_ms = ?$attemptsSql$hashSql WHERE id = ? AND state IN ($placeholders)"
         return inTransaction {
             val changed = compileStatement(sql).use { st ->
-                st.bindString(1, to.name)
-                st.bindLong(2, clock())
-                st.bindLong(3, id)
-                expected.forEachIndexed { i, s -> st.bindString(4 + i, s.name) }
+                var i = 1
+                st.bindString(i++, to.name)
+                st.bindLong(i++, clock())
+                if (contentHash != null) st.bindString(i++, contentHash)
+                st.bindLong(i++, id)
+                expected.forEach { s -> st.bindString(i++, s.name) }
                 st.executeUpdateDelete() == 1
             }
             if (changed) {
                 writeAdvance(advance)
+                writeScanTo(scanTo)
                 writeAudit(audit)
             }
             changed
-        }
-    }
-
-    override fun updateMapping(id: Long, mediaId: Long, sourceVersion: String, bucketId: Long): Boolean {
-        require(sourceVersion.isNotBlank()) { "sourceVersion must not be blank" }
-        return inTransaction {
-            compileStatement(
-                "UPDATE orders SET media_id = ?, source_version = ?, bucket_id = ?, updated_at_ms = ? WHERE id = ?",
-            ).use { st ->
-                st.bindLong(1, mediaId)
-                st.bindString(2, sourceVersion)
-                st.bindLong(3, bucketId)
-                st.bindLong(4, clock())
-                st.bindLong(5, id)
-                st.executeUpdateDelete() == 1
-            }
-        }
-    }
-
-    override fun setContentHash(id: Long, hash: String): Boolean {
-        require(hash.isNotBlank()) { "hash must not be blank" }
-        return inTransaction {
-            compileStatement("UPDATE orders SET content_hash = ?, updated_at_ms = ? WHERE id = ? AND content_hash IS NULL").use { st ->
-                st.bindString(1, hash)
-                st.bindLong(2, clock())
-                st.bindLong(3, id)
-                st.executeUpdateDelete() == 1
-            }
         }
     }
 
@@ -301,70 +322,97 @@ class SqliteOrderStore private constructor(
         changed
     }
 
-    override fun delete(id: Long): Boolean = inTransaction {
-        delete("orders", "id = ?", arrayOf(id.toString())) == 1
+    override fun isSkipped(mediaId: Long): Boolean =
+        db.rawQuery("SELECT 1 FROM skip_list WHERE media_id = ?", arrayOf(mediaId.toString())).use { it.moveToFirst() }
+
+    override fun <R> readSkipList(block: (Sequence<Long>) -> R): R {
+        // 与 readCurrentOrders 同样按页读、查完即关。
+        val ids = sequence {
+            var after = Long.MIN_VALUE
+            while (true) {
+                val page = db.rawQuery(
+                    "SELECT media_id FROM skip_list WHERE media_id > ? ORDER BY media_id ASC LIMIT $PAGE_SIZE",
+                    arrayOf(after.toString()),
+                ).use { c ->
+                    val out = ArrayList<Long>(c.count)
+                    while (c.moveToNext()) out += c.getLong(0)
+                    out
+                }
+                yieldAll(page)
+                if (page.size < PAGE_SIZE) break
+                after = page.last()
+            }
+        }
+        return block(ids)
     }
 
-    override fun restoreSkippedByUser(audit: AuditRecord?): Int = inTransaction {
-        val removed = delete(
-            "orders",
-            "state = '${OrderState.SKIPPED_BY_USER.name}' AND id = (SELECT MAX(id) FROM orders o2 WHERE o2.media_id = orders.media_id)",
-            null,
-        )
-        writeAudit(audit)
-        removed
+    override fun countSkipped(bucketIds: Set<Long>?): Long {
+        if (bucketIds != null && bucketIds.isEmpty()) return 0L
+        val filter = bucketIds?.let { " WHERE bucket_id IN (${it.joinToString(",")})" }.orEmpty()
+        return db.rawQuery("SELECT COUNT(*) FROM skip_list$filter", null).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
     }
 
-    override fun skipByUser(targets: List<SkipTarget>, pairingEpoch: String, audit: AuditRecord?): SkipResult = inTransaction {
+    override fun cancelRemaining(targets: List<SkipTarget>, audit: AuditRecord?): SkipResult = inTransaction {
         val now = clock()
-        var inserted = 0
-        var updated = 0
+        var written = 0
+        var ordersSkipped = 0
         var untouched = 0
         // 逐条执行预编译语句，不拼 IN (…)：API 26 的 SQLite 绑定变量上限是 999。
         compileStatement(
-            "UPDATE orders SET state = '${OrderState.SKIPPED_BY_USER.name}', updated_at_ms = ? WHERE id = ?",
-        ).use { skip ->
-            for (target in targets) {
-                require(target.mediaId > 0) { "mediaId must be positive, got ${target.mediaId}" }
-                val current = rawQuery(
-                    "SELECT id, state FROM orders WHERE media_id = ? ORDER BY id DESC LIMIT 1",
-                    arrayOf(target.mediaId.toString()),
-                ).use { c -> if (c.moveToFirst()) c.getLong(0) to OrderState.valueOf(c.getString(1)) else null }
-                when {
-                    current == null -> {
-                        insertRow(
-                            NewOrder(target.mediaId, target.sourceVersion, target.bucketId, target.contentHash, OrderState.SKIPPED_BY_USER, pairingEpoch),
-                            now,
-                        )
-                        inserted++
+            "INSERT OR IGNORE INTO skip_list (media_id, bucket_id, source_version, created_at_ms) VALUES (?, ?, ?, ?)",
+        ).use { addSkip ->
+            compileStatement(
+                "UPDATE orders SET state = '${OrderState.SKIPPED_BY_USER.name}', updated_at_ms = ? WHERE id = ?",
+            ).use { skipOrder ->
+                for (target in targets) {
+                    require(target.mediaId > 0) { "mediaId must be positive, got ${target.mediaId}" }
+                    val current = rawQuery(
+                        "SELECT id, state, source_version FROM orders WHERE media_id = ? ORDER BY id DESC LIMIT 1",
+                        arrayOf(target.mediaId.toString()),
+                    ).use { c -> if (c.moveToFirst()) Triple(c.getLong(0), OrderState.valueOf(c.getString(1)), c.getString(2)) else null }
+                    if (current != null && current.second.isSettled && current.third == target.sourceVersion) {
+                        untouched++
+                        continue
                     }
-                    current.second.isOpen -> {
-                        skip.bindLong(1, now)
-                        skip.bindLong(2, current.first)
-                        skip.executeUpdateDelete()
-                        updated++
+                    addSkip.bindLong(1, target.mediaId)
+                    addSkip.bindLong(2, target.bucketId)
+                    addSkip.bindString(3, target.sourceVersion)
+                    addSkip.bindLong(4, now)
+                    if (addSkip.executeInsert() != -1L) written++
+                    if (current != null && current.second.isOpen) {
+                        skipOrder.bindLong(1, now)
+                        skipOrder.bindLong(2, current.first)
+                        skipOrder.executeUpdateDelete()
+                        ordersSkipped++
                     }
-                    else -> untouched++
                 }
             }
         }
         writeAudit(audit)
-        SkipResult(inserted, updated, untouched)
+        SkipResult(written, ordersSkipped, untouched)
+    }
+
+    override fun restoreSkipped(audit: AuditRecord?): Int = inTransaction {
+        val removed = delete("skip_list", null, null)
+        writeScan(ScanState(dirty = true, cursor = 0L))
+        writeAudit(audit)
+        removed
     }
 
     override fun volumeState(volumeName: String): VolumeState? =
         db.rawQuery(
-            "SELECT volume_name, fast_path_generation, media_store_version FROM volume_state WHERE volume_name = ?",
+            "SELECT volume_name, generation, generation_media_id, media_store_version FROM volume_state WHERE volume_name = ?",
             arrayOf(volumeName),
         ).use { c ->
-            if (c.moveToFirst()) VolumeState(c.getString(0), c.getLong(1), if (c.isNull(2)) null else c.getString(2)) else null
+            if (c.moveToFirst()) VolumeState(c.getString(0), c.getLong(1), c.getLong(2), if (c.isNull(3)) null else c.getString(3)) else null
         }
 
     override fun saveVolumeState(state: VolumeState) {
         inTransaction {
             val values = ContentValues().apply {
                 put("volume_name", state.volumeName)
-                put("fast_path_generation", state.fastPathGeneration)
+                put("generation", state.generation)
+                put("generation_media_id", state.generationMediaId)
                 put("media_store_version", state.mediaStoreVersion)
             }
             replaceOrThrow("volume_state", null, values)
@@ -375,21 +423,47 @@ class SqliteOrderStore private constructor(
         inTransaction { writeAdvance(advance) }
     }
 
-    override fun volumeNames(): List<String> =
-        db.rawQuery("SELECT volume_name FROM volume_state ORDER BY volume_name ASC", null).use { c ->
-            val out = ArrayList<String>(c.count)
-            while (c.moveToNext()) out += c.getString(0)
-            out
+    override fun scanState(): ScanState = db.readScan()
+
+    override fun markScanDirty() {
+        inTransaction { writeScan(ScanState(dirty = true, cursor = 0L)) }
+    }
+
+    override fun advanceScan(cursor: Long) {
+        inTransaction { writeScanTo(cursor) }
+    }
+
+    override fun finishScan() {
+        inTransaction { writeScan(ScanState(dirty = false, cursor = 0L)) }
+    }
+
+    override fun retryFailed(audit: AuditRecord?): Int = inTransaction {
+        val changed = compileStatement(
+            "UPDATE orders SET state = '${OrderState.PENDING.name}', updated_at_ms = ? " +
+                "WHERE state = '${OrderState.FAILED.name}' AND id = (SELECT MAX(id) FROM orders o2 WHERE o2.media_id = orders.media_id)",
+        ).use { st ->
+            st.bindLong(1, clock())
+            st.executeUpdateDelete()
         }
+        writeAudit(audit)
+        changed
+    }
 
     override fun countCurrentByState(bucketIds: Set<Long>?): Map<OrderState, Long> {
         if (bucketIds != null && bucketIds.isEmpty()) return emptyMap()
         val bucketFilter = bucketIds?.let { " AND o.bucket_id IN (${it.joinToString(",")})" }.orEmpty()
-        return db.rawQuery("SELECT o.state, COUNT(*) FROM orders o WHERE $IS_CURRENT$bucketFilter GROUP BY o.state", null).use { c ->
+        val out = db.rawQuery(
+            "SELECT o.state, COUNT(*) FROM orders o WHERE $IS_CURRENT$bucketFilter AND o.state != '${OrderState.SKIPPED_BY_USER.name}' GROUP BY o.state",
+            null,
+        ).use { c ->
             val out = LinkedHashMap<OrderState, Long>()
             while (c.moveToNext()) out[OrderState.valueOf(c.getString(0))] = c.getLong(1)
             out
         }
+        // 「已跳过」是意图：报跳过名单的张数（见接口 KDoc）。
+        val skipped = countSkipped(bucketIds)
+        if (skipped > 0) out[OrderState.SKIPPED_BY_USER] = skipped
+        return out
     }
 
     override fun countConfirmedPresent(bucketIds: Set<Long>?): Long {
@@ -441,21 +515,21 @@ class SqliteOrderStore private constructor(
     }
 
     override fun claimOwner(ownerKey: String, idFloor: Long): Boolean = inTransaction {
-        val previous = rawQuery("SELECT value FROM meta WHERE key = ?", arrayOf(OWNER_KEY)).use { c ->
-            if (c.moveToFirst()) c.getString(0) else null
-        }
+        val previous = metaGet(OWNER_KEY)
         if (previous == ownerKey) return@inTransaction false
         val cleared = previous != null
         if (cleared) {
+            // 跳过名单保留：用户意图与哪台桌面无关（#413 裁定 9）。
             execSQL("DELETE FROM orders")
             execSQL("DELETE FROM volume_state")
             execSQL("DELETE FROM audit_outbox")
+            writeScan(ScanState(dirty = true, cursor = 0L))
         }
         // sqlite_sequence 由 AUTOINCREMENT 表自动建出；手写一行把起点抬上去。
         execSQL("DELETE FROM sqlite_sequence WHERE name = 'orders'")
         val maxId = rawQuery("SELECT IFNULL(MAX(id), 0) FROM orders", null).use { c -> c.moveToFirst(); c.getLong(0) }
         execSQL("INSERT INTO sqlite_sequence (name, seq) VALUES ('orders', ?)", arrayOf(maxOf(idFloor, maxId)))
-        execSQL("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", arrayOf(OWNER_KEY, ownerKey))
+        metaPut(OWNER_KEY, ownerKey)
         cleared
     }
 }

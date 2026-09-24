@@ -293,12 +293,16 @@ internal class NativeFlowDeliveryPort(
     /** NET-06: `flow.cancel_tuple` for discarding a partial. */
     private val cancelTuple: suspend (Pairing, FlowTupleRef) -> Unit,
     /**
-     * 这一张的 ticket。默认是旧路径：打开原图、原生侧导入并出 ticket（[IrohBlobsProviderBridge.register]）。
-     * #413：接上 W3 的 `MediaImporter` 之后换成 `serve(lease)`。
+     * 这一张的 ticket：#413 契约 §4，准备阶段已由 [MediaImporter.import] 导入，这里只以这张 order 的 lease 供数
+     * （生产是 `importer.serve(lease)`，它把 lease 设为桥的当前 lease——[IrohBlobsProviderBridge.transferStatus] /
+     * [IrohBlobsProviderBridge.pause] 靠它）。
      */
-    private val serve: (ProviderLease, DeliveryRequest) -> String = { lease, request -> bridge.register(lease, request.details.uri) },
-    /** 这份内容不再需要（桌面已有 / 已确认 / 放弃这一张）。不许抛。 */
-    private val release: (ProviderLease) -> Unit = { lease -> runCatching { bridge.releaseRetention(lease) } },
+    private val serve: (ProviderLease, DeliveryRequest) -> String = { lease, _ -> bridge.serve(lease) },
+    /** 已确认（含桌面「已有」）：放掉供数占用与导入。不许抛。 */
+    private val release: (ProviderLease) -> Unit = { lease ->
+        runCatching { bridge.releaseRetention(lease) }
+        runCatching { bridge.release(lease.contentHash) }
+    },
     private val log: FlowLogger = FlowLogger { },
     /** 单调时钟（ms）。生产是 SystemClock.elapsedRealtime。 */
     private val clock: () -> Long = System::nanoTime.let { nano -> { nano() / 1_000_000 } },
@@ -466,6 +470,14 @@ internal class NativeFlowDeliveryPort(
                 log.log("Flow push received kind=$kind seq=$seq matched=${pushed != null} elapsedMs=${clock() - attemptStartedAt}")
             }
             val local = bridge.transferStatus()
+            // #413：引用的原图在供数期间被删 / 被改。桌面那边只会报 fetch_failed（流被重置），所以要先看这里，
+            // 否则会被误判为路径失败、下一轮又续传同一份坏内容。桌面已经回了完整回执的除外（它按 BLAKE3 校验过）。
+            val fault = (local as? TransferStatus.Aborted)?.source ?: (local as? TransferStatus.InProgress)?.source
+            if (fault != null && pushed !is FlowPushOutcome.Delivered) {
+                log.log("order $seq: source ${fault.name.lowercase()} while serving; abandoning as source missing")
+                bridge.pause(lease)
+                return DeliveryOutcome.SourceMissing
+            }
             if (localDoneAt == null && (local is TransferStatus.Completed || local is TransferStatus.Aborted)) {
                 localDoneAt = clock()
                 log.log("Flow local transfer ended seq=$seq local=$local elapsedMs=${localDoneAt - attemptStartedAt}; waiting for desktop receipt")

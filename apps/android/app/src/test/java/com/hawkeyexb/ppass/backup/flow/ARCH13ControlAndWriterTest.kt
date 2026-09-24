@@ -52,13 +52,13 @@ class ARCH13ControlAndWriterTest {
         try {
             val store = WriterGuardedOrderStore(InMemoryOrderStore(), SingleThreadWrites(writer.thread))
             try {
-                store.insert(NewOrder(1, "v", 7, "h", OrderState.QUEUED, "e1"))
+                store.insert(NewOrder(1, "v", 7, "h", OrderState.PENDING, "e1"))
                 fail("a write from the test thread must be refused")
             } catch (expected: IllegalStateException) {
                 assertTrue(expected.message!!.contains("single-writer"))
             }
             val inserted = kotlinx.coroutines.runBlocking(writer.dispatcher) {
-                store.insert(NewOrder(1, "v", 7, "h", OrderState.QUEUED, "e1"))
+                store.insert(NewOrder(1, "v", 7, "h", OrderState.PENDING, "e1"))
             }
             assertEquals(inserted, store.get(inserted.id)) // 读不受限
         } finally {

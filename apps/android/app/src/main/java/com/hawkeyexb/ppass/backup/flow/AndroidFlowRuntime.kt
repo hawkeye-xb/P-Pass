@@ -8,7 +8,6 @@ import android.content.IntentFilter
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.SystemClock
-import android.provider.MediaStore
 import android.util.Log
 import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
@@ -22,7 +21,6 @@ import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
-import io.github.rctcwyvrn.blake3.Blake3
 import java.io.File
 import java.io.FileNotFoundException
 import java.util.concurrent.FutureTask
@@ -102,8 +100,13 @@ internal fun continueFlow(context: Context) {
     runtimeFor(context.applicationContext)?.engine?.resume()
 }
 
-/** FAILED 立即重试一次。 */
-internal fun retryFailedFlow(context: Context) = requestFlowWake(context, TriggerReason.RETRY_FAILED)
+/** 用户点「重试」：FAILED 改回待传输（不受兜底次数上限）并叫醒循环。 */
+internal fun retryFailedFlow(context: Context) {
+    val app = context.applicationContext
+    thread(name = "ppass-flow-retry") {
+        runCatching { runtimeFor(app)?.engine?.retryFailed() }.onFailure { Log.e(TAG, "retry failed", it) }
+    }
+}
 
 /** 契约 §3：UI 与 FGS 通知读的唯一视图。null = 运行时不可用（未配对）。 */
 internal fun engineViewFlow(context: Context): kotlinx.coroutines.flow.StateFlow<EngineView>? =
@@ -116,10 +119,6 @@ internal suspend fun remainingSnapshotFlow(context: Context): RemainingSnapshot?
 /** 契约 §3：确认取消（只在已暂停 / 等待中有效），返回写下的张数；null = 当前状态不允许或运行时不可用。 */
 internal suspend fun cancelRemainingFlow(context: Context, snapshot: RemainingSnapshot): Int? =
     runtimeFor(context.applicationContext)?.engine?.cancelRemaining(snapshot)?.await()
-
-/** 旧入口：当场拍边界再取消（在跑时先停下）。新 UI 用 [remainingSnapshotFlow] + [cancelRemainingFlow]。 */
-internal suspend fun cancelRemainingFlow(context: Context): Int =
-    runtimeFor(context.applicationContext)?.engine?.cancelRemaining()?.await() ?: 0
 
 /** 「已跳过的照片 · 点击恢复」，返回恢复了几张。 */
 internal suspend fun restoreSkippedFlow(context: Context): Int =
@@ -248,6 +247,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     Log.i(TAG, "buildRuntime: order store ready (cleared for a different desktop=$cleared)")
     val native = sharedNativeProvider(app)
     Log.i(TAG, "buildRuntime: native blobs provider ready")
+    // 旧的 register 路径（打开原图、原生导入并出 ticket）仍保留在桥上；#413 的循环只走 importer → serve。
     val bridge = IrohBlobsProviderBridge(native) { source ->
         try {
             app.contentResolver.openFileDescriptor(Uri.parse(source), "r") ?: throw SourceMissingException()
@@ -261,8 +261,11 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         client.bind(IdentityStore(app.filesDir).secretKey())
         DaemonFlowReceiptClient(client, parsePeerAddrToken(p.daemonAddrToken))
     }
+    // #413 契约 §4：准备阶段 import（引用优先）拿 hash，建 order 后 serve(lease) 拿 ticket 再 offer。
+    val importer = AndroidMediaImporter.forContentResolver(app, bridge, androidLog)
     val delivery = NativeFlowDeliveryPort(
         bridge = bridge,
+        serve = { lease, _ -> importer.serve(lease) },
         pairing = pairing,
         desktopFor = desktopFor,
         subscribe = { p, onConnected, onEvent ->
@@ -299,7 +302,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     engine = FlowEngine(
         store = store,
         media = ContentResolverMediaSnapshotSource(app, { scopeStore.selectedBucketIds() }),
-        hasher = ContentResolverHasher(app),
+        importer = importer,
         delivery = delivery,
         probe = DaemonDesktopProbe(pairing, desktopFor, log = androidLog, clock = SystemClock::elapsedRealtime),
         presence = RemotePresence { hashes ->
@@ -353,7 +356,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
 
 /**
  * #413「迁移」：没有正式用户，旧账本（`flow-state/`）与旧的前台保护状态文件直接删，不做数据迁移。
- * 第一次全量慢路径重建 order 表；桌面按内容去重，不会重复传输。只做一次（marker 文件）。
+ * order 库升 schema 版本直接重建；G 缺失 → 对账扫描置脏，整个范围按 `_id` 过一遍；桌面按内容去重，不会重复传输。
+ * 只做一次（marker 文件）。
  */
 internal fun migrateLegacyFlowState(filesDir: File) {
     val marker = File(filesDir, "flow-migrated-arch13")
@@ -362,28 +366,6 @@ internal fun migrateLegacyFlowState(filesDir: File) {
     File(filesDir, "flow-transfer-protection.json").delete()
     filesDir.listFiles { f -> f.name.startsWith("flow-transfer-protection.json.") }?.forEach { it.delete() }
     runCatching { marker.writeText("1") }
-}
-
-/** 整文件 BLAKE3（按 media_id 在外部卷上打开）。 */
-private class ContentResolverHasher(private val context: Context) : ContentHasher {
-    override fun hash(mediaId: Long): String {
-        val uri = Uri.withAppendedPath(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL), mediaId.toString())
-        val hasher = Blake3.newInstance()
-        try {
-            context.contentResolver.openInputStream(uri).use { input ->
-                val present = input ?: throw SourceMissingException()
-                val buffer = ByteArray(256 * 1024)
-                while (true) {
-                    val count = present.read(buffer)
-                    if (count < 0) break
-                    hasher.update(if (count == buffer.size) buffer else buffer.copyOf(count))
-                }
-            }
-        } catch (failure: FileNotFoundException) {
-            throw SourceMissingException(failure)
-        }
-        return hasher.hexdigest()
-    }
 }
 
 /**

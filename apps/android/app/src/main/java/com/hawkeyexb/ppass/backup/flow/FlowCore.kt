@@ -1,9 +1,8 @@
-// ARCH-13 (#417): 逐张循环的核心类型与端口。本文件不碰任何 Android API，JVM 单测直接可跑。
+// ARCH-13 (#417) → #413: 逐张循环的核心类型与端口。本文件不碰任何 Android API，JVM 单测直接可跑。
 //
-// 模型（#413 正文「循环」一节）：
-//   触发 → worker 里检查条件（不持有 FGS）→ 申请 FGS + PARTIAL_WAKE_LOCK →
-//   取件 ① 未完成 order → ② 慢路径标记的 QUEUED → ③ 快路径下一张 → 传输 → 下一张 → 释放。
-// 没有物化队列、没有发现水位、没有取消轮；「对哪张照片做过决定」全部落在 order 表上。
+// 模型（#413 最终设计）：三层——意图（范围、跳过名单、暂停标志）/ 事实（order：一次传输一行）/ 待办（现算）。
+// 触发只叫醒循环 → 入口检查（不持有 FGS、不读文件）→ 申请 FGS + wakelock + 一条推送订阅 →
+// 取件（遗留续传 → 对账扫描 → 新照片 → 对账补传）→ 准备 → 传输 → 提交 → 下一张 → 释放。
 package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.backup.order.MediaDetails
@@ -193,11 +192,6 @@ fun interface DesktopProbe {
 /** 对账：分页问桌面「这些 hash 你还在吗」，返回缺的那些。不可达时抛。 */
 fun interface RemotePresence {
     suspend fun missing(hashes: List<String>): Set<String>
-}
-
-/** 按 media_id 算整文件 BLAKE3。原图没了抛 [SourceMissingException]。 */
-fun interface ContentHasher {
-    fun hash(mediaId: Long): String
 }
 
 /** A discovered MediaStore item disappeared; retrying cannot recreate it. */

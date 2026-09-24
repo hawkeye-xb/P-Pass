@@ -1,5 +1,5 @@
-// ARCH-13 (#417): 测试用 MediaStore。语义与 ContentResolverMediaSnapshotSource 相同：
-// readAll = 全量（不按相册过滤，#416 裁决 1），按 _id 升序；readChangedSince = 该卷上范围内、generation > G，
+// ARCH-13 (#417) → #413: 测试用 MediaStore。语义与 ContentResolverMediaSnapshotSource 相同：
+// readInScope = 范围内、_id > afterId，按 _id 升序；readChangedSince = 该卷上范围内、(generation, _id) > G，
 // 按 (generation, _id) 升序。
 package com.hawkeyexb.ppass.backup.order
 
@@ -23,8 +23,11 @@ fun fakeHashOf(content: String): String = "blake3:$content"
 
 class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = setOf(7L)) : MediaSnapshotSource {
     val photos: MutableList<FakePhoto> = photos.toMutableList()
-    val hashed = mutableListOf<Long>()
     var versions: Map<String, String> = mapOf(LEGACY_VOLUME to "v1")
+    override var preciseGeneration: Boolean = true
+
+    /** 每次元数据读取（不读文件）的次数：扫描 / 计数 / 发现都算。 */
+    var metadataReads = 0
 
     fun put(photo: FakePhoto) {
         photos.removeAll { it.mediaId == photo.mediaId }
@@ -35,25 +38,27 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
         photos.removeAll { it.mediaId == mediaId }
     }
 
-    /** 与生产 hasher 同样的失败语义：照片没了抛 [java.io.FileNotFoundException]。 */
-    fun hash(mediaId: Long): String {
-        hashed += mediaId
-        val p = photos.singleOrNull { it.mediaId == mediaId } ?: throw java.io.FileNotFoundException("media $mediaId gone")
-        return p.hash
-    }
-
     fun inScope(bucketId: Long): Boolean = scope?.contains(bucketId) == true
 
-    override fun <R> readAll(block: (Sequence<MediaSnapshot>) -> R): R =
-        block(photos.sortedBy { it.mediaId }.map { it.snapshot }.asSequence())
+    override fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
+        metadataReads++
+        return block(photos.filter { it.mediaId > afterId && inScope(it.bucketId) }.sortedBy { it.mediaId }.map { it.snapshot }.asSequence())
+    }
 
-    override fun <R> readChangedSince(volumeName: String, afterGeneration: Long, block: (Sequence<MediaSnapshot>) -> R): R =
-        block(
-            photos.filter { it.volume == volumeName && it.generation > afterGeneration && inScope(it.bucketId) }
+    override fun <R> readChangedSince(volumeName: String, afterGeneration: Long, afterMediaId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
+        metadataReads++
+        return block(
+            photos.filter {
+                it.volume == volumeName && inScope(it.bucketId) &&
+                    (it.generation > afterGeneration || (it.generation == afterGeneration && it.mediaId > afterMediaId))
+            }
                 .sortedWith(compareBy({ it.generation }, { it.mediaId }))
                 .map { it.snapshot }
                 .asSequence(),
         )
+    }
+
+    override fun maxGeneration(volumeName: String): Long = photos.filter { it.volume == volumeName }.maxOfOrNull { it.generation } ?: 0L
 
     override fun volumeNames(): List<String> = (photos.map { it.volume } + LEGACY_VOLUME).distinct().sorted()
 
@@ -61,6 +66,6 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
 
     override fun lookup(mediaId: Long): MediaDetails? =
         photos.singleOrNull { it.mediaId == mediaId }?.let {
-            MediaDetails(it.snapshot, "content://media/external/file/${it.mediaId}", "IMG_${it.mediaId}.jpg", "image/jpeg", it.size, 0L)
+            MediaDetails(it.snapshot, "content://media/external/file/${it.mediaId}", "IMG_${it.mediaId}.jpg", "image/jpeg", it.size, 0L, "/sdcard/DCIM/IMG_${it.mediaId}.jpg")
         }
 }

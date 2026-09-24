@@ -29,8 +29,8 @@ const val CONTENT_MAX_DELAY_MS = 30_000L
 private const val KEY_AUTOMATIC_WAKE = "automatic_wake"
 
 /**
- * #417：这次唤醒的 [TriggerReason]。决定要不要跑慢路径（5h 兜底 = PERIODIC 跑，含问桌面「还在吗」；
- * 内容监听一拍一个，不跑）、要不要查后台开关与电量（人在场的不查）。
+ * #417：这次唤醒的 [TriggerReason]。决定这一轮要不要对账（5h 兜底 = PERIODIC 对账，含问桌面「还在吗」；
+ * 内容监听一拍一个，只做发现）、要不要查后台开关与电量（人在场的不查）。
  */
 private const val KEY_REASON = "trigger_reason"
 
@@ -167,7 +167,7 @@ fun scheduleAutoBackup(context: Context) {
         .setInputData(
             androidx.work.workDataOf(
                 KEY_AUTOMATIC_WAKE to true,
-                // 5h 兜底：这一轮跑慢路径（手机完整性检查 + 问桌面「还在吗」+ FAILED 重试一次）。
+                // 5h 兜底：这一轮对账（问桌面「还在吗」+ FAILED 兜底重试一次）。
                 KEY_REASON to TriggerReason.PERIODIC.name,
             ),
         )

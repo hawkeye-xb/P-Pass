@@ -61,23 +61,27 @@ class WriterGuardedOrderStore(private val delegate: OrderStore, private val guar
         return block()
     }
 
-    override fun insert(order: NewOrder, advance: GenerationAdvance?, audit: AuditRecord?): Order = write { delegate.insert(order, advance, audit) }
+    override fun insert(order: NewOrder, advance: GenerationAdvance?, scanTo: Long?, audit: AuditRecord?): Order =
+        write { delegate.insert(order, advance, scanTo, audit) }
     override fun transition(
         id: Long,
         expected: Set<OrderState>,
         to: OrderState,
         countAttempt: Boolean,
+        contentHash: String?,
         advance: GenerationAdvance?,
+        scanTo: Long?,
         audit: AuditRecord?,
-    ): Boolean = write { delegate.transition(id, expected, to, countAttempt, advance, audit) }
-    override fun updateMapping(id: Long, mediaId: Long, sourceVersion: String, bucketId: Long): Boolean =
-        write { delegate.updateMapping(id, mediaId, sourceVersion, bucketId) }
-    override fun setContentHash(id: Long, hash: String): Boolean = write { delegate.setContentHash(id, hash) }
+    ): Boolean = write { delegate.transition(id, expected, to, countAttempt, contentHash, advance, scanTo, audit) }
     override fun setSourceMissing(id: Long, missing: Boolean, audit: AuditRecord?): Boolean =
         write { delegate.setSourceMissing(id, missing, audit) }
-    override fun delete(id: Long): Boolean = write { delegate.delete(id) }
-    override fun skipByUser(targets: List<SkipTarget>, pairingEpoch: String, audit: AuditRecord?): SkipResult =
-        write { delegate.skipByUser(targets, pairingEpoch, audit) }
+    override fun cancelRemaining(targets: List<SkipTarget>, audit: AuditRecord?): SkipResult =
+        write { delegate.cancelRemaining(targets, audit) }
+    override fun restoreSkipped(audit: AuditRecord?): Int = write { delegate.restoreSkipped(audit) }
+    override fun markScanDirty() = write { delegate.markScanDirty() }
+    override fun advanceScan(cursor: Long) = write { delegate.advanceScan(cursor) }
+    override fun finishScan() = write { delegate.finishScan() }
+    override fun retryFailed(audit: AuditRecord?): Int = write { delegate.retryFailed(audit) }
     override fun saveVolumeState(state: VolumeState) = write { delegate.saveVolumeState(state) }
     override fun advanceGeneration(advance: GenerationAdvance) = write { delegate.advanceGeneration(advance) }
     override fun appendAudit(audit: AuditRecord) = write { delegate.appendAudit(audit) }

@@ -37,6 +37,7 @@ class C413DeliveryPortTest {
         val nativeEvents = mutableListOf<String>()
         val native = object : NativeIrohBlobsProvider {
             override fun register(hash: String, source: Any): String = "ticket"
+            override fun serve(hash: String): String = "ticket"
             override fun stopActiveFetch(queueSequence: Long) {
                 nativeEvents += "stop:$queueSequence"
             }

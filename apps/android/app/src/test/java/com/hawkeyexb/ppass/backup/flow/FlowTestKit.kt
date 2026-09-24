@@ -1,15 +1,18 @@
-// ARCH-13 (#417): 逐张循环契约测试用的假端口。全部在 kotlinx-coroutines-test 的虚拟时间里跑。
+// ARCH-13 (#417) → #413: 逐张循环契约测试用的假端口。全部在 kotlinx-coroutines-test 的虚拟时间里跑。
 package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.backup.order.FakeMedia
 import com.hawkeyexb.ppass.backup.order.FakePhoto
 import com.hawkeyexb.ppass.backup.order.InMemoryOrderStore
+import com.hawkeyexb.ppass.backup.order.LEGACY_VOLUME
 import com.hawkeyexb.ppass.backup.order.NewOrder
 import com.hawkeyexb.ppass.backup.order.Order
 import com.hawkeyexb.ppass.backup.order.OrderState
+import com.hawkeyexb.ppass.backup.order.VolumeState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -152,15 +155,47 @@ class FakeControl : FlowControl {
 }
 
 /**
- * 一套装好的引擎。[media] 默认范围是 bucket 7；照片内容即 hash 源（FakeMedia）。
+ * 假的 [MediaImporter]：导入 = 读 FakeMedia 的内容（假 hash），照片没了 → SourceMissing。
+ * 计数：每次导入就是一次「读文件」；[failures] 非空时按顺序抛。
  */
-class Rig(test: TestScope, reconciled: Boolean = true) {
+internal class FakeImporter(private val media: FakeMedia) : MediaImporter {
+    val imported = mutableListOf<Long>()
+    val released = mutableListOf<String>()
+    val failures = ArrayDeque<Exception>()
+
+    /** MediaStore 还列着、文件读不到的照片。 */
+    val unreadable = mutableSetOf<Long>()
+
+    /** 覆盖某张照片导入出来的 hash（模拟「中断期间被编辑、MediaStore 版本没跟上」）。 */
+    val hashOverride = mutableMapOf<Long, String>()
+
+    override fun import(mediaId: Long, contentUri: String, dataPath: String?): ImportResult {
+        imported += mediaId
+        failures.removeFirstOrNull()?.let { throw it }
+        if (mediaId in unreadable) return ImportResult.SourceMissing
+        val photo = media.photos.singleOrNull { it.mediaId == mediaId } ?: return ImportResult.SourceMissing
+        return ImportResult.Imported(hashOverride[mediaId] ?: photo.hash, photo.size, byReference = true)
+    }
+
+    override fun serve(lease: ProviderLease): String = "ticket-${lease.orderId}"
+
+    override fun release(contentHash: String) {
+        released += contentHash
+    }
+}
+
+/**
+ * 一套装好的引擎。[media] 默认范围是 bucket 7；照片内容即 hash 源（FakeMedia）。
+ * [cursors] 为 true（默认）时预置 G = (0, 0)、getVersion 不变——视为「装好之后一直在跑」，只有显式置脏才扫描。
+ */
+internal class Rig(test: TestScope, cursors: Boolean = true) {
     val dispatcher = StandardTestDispatcher(test.testScheduler)
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val testScope = test
     var now = 1_000L
     val store = InMemoryOrderStore { now }
     val media = FakeMedia()
+    val importer = FakeImporter(media)
     val delivery = FakeDelivery()
     val control = FakeControl()
     val foreground = FakeForeground(control).also { it.clock = { test.testScheduler.currentTime } }
@@ -173,16 +208,14 @@ class Rig(test: TestScope, reconciled: Boolean = true) {
     var epoch: PairingEpoch? = PairingEpoch("e1")
     val logs = mutableListOf<String>()
 
+    init {
+        if (cursors) store.saveVolumeState(VolumeState(LEGACY_VOLUME, 0L, 0L, "v1"))
+    }
+
     val engine = FlowEngine(
         store = store,
         media = media,
-        hasher = ContentHasher { id ->
-            try {
-                media.hash(id)
-            } catch (e: java.io.FileNotFoundException) {
-                throw SourceMissingException(e)
-            }
-        },
+        importer = importer,
         delivery = delivery,
         probe = DesktopProbe { probes++; probeResult },
         presence = RemotePresence { hashes -> presenceCalls++; hashes.filter { it in missingOnDesktop }.toSet() },
@@ -197,13 +230,9 @@ class Rig(test: TestScope, reconciled: Boolean = true) {
         log = FlowLogger { logs += it },
         clock = { now },
         monotonicClock = { test.testScheduler.currentTime },
-    ).also {
-        // 默认视为「已经全量对账过」（getVersion 没变），这样只有显式要求的触发才跑慢路径。
-        if (reconciled) store.saveVolumeState(com.hawkeyexb.ppass.backup.order.VolumeState(com.hawkeyexb.ppass.backup.order.LEGACY_VOLUME, 0L, "v1"))
-        it.start()
-    }
+    ).also { it.start() }
 
-    fun photo(mediaId: Long, generation: Long, content: String = "c$mediaId", bucketId: Long = 7, volume: String = com.hawkeyexb.ppass.backup.order.LEGACY_VOLUME): FakePhoto =
+    fun photo(mediaId: Long, generation: Long, content: String = "c$mediaId", bucketId: Long = 7, volume: String = LEGACY_VOLUME): FakePhoto =
         FakePhoto(mediaId, 100 + mediaId, 10 + mediaId, content, generation, bucketId, volume).also { media.put(it) }
 
     fun order(p: FakePhoto, state: OrderState): Order =
@@ -211,11 +240,21 @@ class Rig(test: TestScope, reconciled: Boolean = true) {
 
     fun state(mediaId: Long): OrderState? = store.currentForMedia(mediaId)?.state
 
+    fun generation(): Long = store.volumeState(LEGACY_VOLUME)!!.generation
+
     fun settle() = testScope.advanceUntilIdle()
 
     fun trigger(reason: TriggerReason = TriggerReason.MEDIA_CHANGE) {
         engine.trigger(reason)
         settle()
+    }
+
+    fun pending(): Int = engine.view.value.pending
+
+    /** 旧测试用：按契约的顺序「已暂停 → 弹窗拍边界 → 按边界取消」。返回写下的张数。 */
+    fun cancelRemainingNow(): kotlinx.coroutines.Deferred<Int> = scope.async {
+        control.pausedFlag = true
+        engine.cancelRemaining(engine.remainingSnapshot()).await() ?: 0
     }
 
     fun close() = scope.cancel()

@@ -41,6 +41,12 @@ class ARCH13DeliveryPortTest {
                 onRegister()
                 return "ticket"
             }
+
+            // #413：导入在准备阶段已做，端口只 serve（大文件的阻塞现在落在这一步之前的导入上）。
+            override fun serve(hash: String): String {
+                onRegister()
+                return "ticket"
+            }
             override fun stopActiveFetch(queueSequence: Long) {
                 nativeEvents += "stop:$queueSequence"
             }

@@ -1,4 +1,4 @@
-// ARCH-12 (#416): OrderStore 契约。任何实现都要过这一套。
+// ARCH-12 (#416) → #413: OrderStore 契约（order 事实 + 跳过名单意图 + 游标）。任何实现都要过这一套。
 //
 // JVM 上只有 InMemoryOrderStore 能跑（android.database.sqlite 需要真机）；
 // SqliteOrderStore 由 src/androidTest/.../SqliteOrderStoreDeviceTest 在设备上跑同样的用例。
@@ -21,280 +21,147 @@ abstract class OrderStoreContract {
         NewOrder(mediaId = mediaId, sourceVersion = version, bucketId = 7, contentHash = hash, state = state, pairingEpoch = "e3")
 
     @Test
-    fun `insert assigns strictly increasing ids and stamps time`() {
+    fun `insert assigns strictly increasing ids and the current row is the newest one per photo`() {
         val store = newStore(clock)
         val a = store.insert(newOrder(10))
         now = 2_000L
-        val b = store.insert(newOrder(5))
-        assertTrue("ids must strictly increase: ${a.id} then ${b.id}", b.id > a.id)
+        val b = store.insert(newOrder(10, OrderState.PENDING, version = "v2"))
+        assertTrue(b.id > a.id)
         assertEquals(1_000L, a.createdAtMs)
-        assertEquals(2_000L, b.updatedAtMs)
-        assertEquals(0, a.attempts)
-        assertEquals(a, store.get(a.id))
-        assertNull(store.get(b.id + 1000))
+        assertEquals(b, store.currentForMedia(10))
+        assertEquals(listOf(b.id), store.currentInStates(setOf(OrderState.PENDING, OrderState.TRANSFERRING)).map { it.id })
+        assertEquals(emptyList<Order>(), store.currentInStates(setOf(OrderState.PENDING), afterId = b.id))
     }
 
     @Test
-    fun `current order for a media id is its newest row`() {
+    fun `transition is compare-and-set and writes attempts, hash, G, S and audit in the same step`() {
         val store = newStore(clock)
-        store.insert(newOrder(10, OrderState.CONFIRMED, "old"))
-        val edited = store.insert(newOrder(10, OrderState.TRANSFERRING, "new", version = "v2"))
-        assertEquals(edited, store.currentForMedia(10))
-        assertNull(store.currentForMedia(11))
-    }
-
-    @Test
-    fun `current orders stream ascending by media id, one row each, across pages`() {
-        val store = newStore(clock)
-        // 600 > SQLite 实现的页大小 256，覆盖跨页。倒序插入，证明排序来自存储而不是插入顺序。
-        for (m in 600L downTo 1L) store.insert(newOrder(m, OrderState.CONFIRMED, "a$m"))
-        for (m in 1L..600L step 3) store.insert(newOrder(m, OrderState.TRANSFERRING, "b$m", version = "v2"))
-        val seen = store.readCurrentOrders { it.toList() }
-        assertEquals((1L..600L).toList(), seen.map { it.mediaId })
-        seen.forEach { o ->
-            val expected = if ((o.mediaId - 1) % 3 == 0L) "b${o.mediaId}" else "a${o.mediaId}"
-            assertEquals("media ${o.mediaId}", expected, o.contentHash)
-        }
-    }
-
-    @Test
-    fun `writing during the current-orders stream never repeats a media id`() {
-        val store = newStore(clock)
-        for (m in 1L..300L) store.insert(newOrder(m))
-        val seen = store.readCurrentOrders { rows ->
-            rows.map { o ->
-                // 边读边给已读过的 media_id 插新行（编辑）——不许被再读到一次。
-                store.insert(newOrder(o.mediaId, hash = "edit${o.mediaId}", version = "v2"))
-                o.mediaId
-            }.toList()
-        }
-        assertEquals((1L..300L).toList(), seen)
-    }
-
-    @Test
-    fun `orders with hash are found by content`() {
-        val store = newStore(clock)
-        val a = store.insert(newOrder(1, hash = "same"))
-        val b = store.insert(newOrder(2, hash = "same"))
-        store.insert(newOrder(3, hash = "other"))
-        store.insert(newOrder(4, hash = null))
-        assertEquals(listOf(a, b), store.ordersWithHash("same"))
-        assertEquals(emptyList<Order>(), store.ordersWithHash("missing"))
-    }
-
-    @Test
-    fun `transition is compare-and-set and counts attempts in the same write`() {
-        val store = newStore(clock)
-        val o = store.insert(newOrder(1, OrderState.TRANSFERRING))
-        assertFalse(store.transition(o.id, setOf(OrderState.PAUSED), OrderState.CONFIRMED))
-        assertEquals(OrderState.TRANSFERRING, store.get(o.id)!!.state)
-
-        now = 5_000L
-        assertTrue(store.transition(o.id, setOf(OrderState.TRANSFERRING, OrderState.PAUSED), OrderState.FAILED, countAttempt = true))
-        val failed = store.get(o.id)!!
-        assertEquals(OrderState.FAILED, failed.state)
-        assertEquals(1, failed.attempts)
-        assertEquals(5_000L, failed.updatedAtMs)
-
-        assertFalse("unknown id", store.transition(o.id + 99, setOf(OrderState.FAILED), OrderState.CONFIRMED))
-        assertFalse("empty expected set", store.transition(o.id, emptySet(), OrderState.CONFIRMED))
-    }
-
-    @Test
-    fun `update mapping moves media id and version but keeps state and hash`() {
-        val store = newStore(clock)
-        val o = store.insert(newOrder(1, OrderState.CONFIRMED, "h"))
-        assertTrue(store.updateMapping(o.id, mediaId = 101, sourceVersion = "v9", bucketId = 8))
-        val moved = store.get(o.id)!!
-        assertEquals(101L, moved.mediaId)
-        assertEquals("v9", moved.sourceVersion)
-        assertEquals(8L, moved.bucketId)
-        assertEquals(OrderState.CONFIRMED, moved.state)
-        assertEquals("h", moved.contentHash)
-        assertNull(store.currentForMedia(1))
-        assertFalse(store.updateMapping(o.id + 99, 1, "v", 1))
-    }
-
-    // O 组「批量跳过是单事务」：正常路径——没有 order 的插入、未完结的改写、已有结局的不动。
-    @Test
-    fun `skip by user inserts missing rows, closes open rows, leaves decided rows`() {
-        val store = newStore(clock)
-        val open = store.insert(newOrder(1, OrderState.PAUSED))
-        val failed = store.insert(newOrder(2, OrderState.FAILED))
-        val confirmed = store.insert(newOrder(3, OrderState.CONFIRMED))
-        val result = store.skipByUser(
-            listOf(SkipTarget(1, "v1", 7), SkipTarget(2, "v1", 7), SkipTarget(3, "v1", 7), SkipTarget(4, "v4", 9)),
-            pairingEpoch = "e5",
+        store.saveVolumeState(VolumeState("external", 0L, 0L, "v"))
+        val o = store.insert(newOrder(1, hash = null))
+        assertFalse(store.transition(o.id, setOf(OrderState.PENDING), OrderState.CONFIRMED, advance = GenerationAdvance("external", 9)))
+        assertEquals(0L, store.volumeState("external")!!.generation)
+        val audit = AuditRecord("ev1", "k", null, 1L)
+        assertTrue(
+            store.transition(
+                o.id, setOf(OrderState.TRANSFERRING), OrderState.FAILED,
+                countAttempt = true, contentHash = "abc", advance = GenerationAdvance("external", 9, 3), scanTo = 42, audit = audit,
+            ),
         )
-        assertEquals(SkipResult(inserted = 1, updated = 2, untouched = 1), result)
-        assertEquals(OrderState.SKIPPED_BY_USER, store.get(open.id)!!.state)
-        assertEquals(OrderState.SKIPPED_BY_USER, store.get(failed.id)!!.state)
-        assertEquals(OrderState.CONFIRMED, store.get(confirmed.id)!!.state)
-        val inserted = store.currentForMedia(4)!!
-        assertEquals(OrderState.SKIPPED_BY_USER, inserted.state)
-        assertEquals("v4", inserted.sourceVersion)
-        assertEquals("e5", inserted.pairingEpoch)
-        assertNull(inserted.contentHash)
-    }
-
-    // O 组「批量跳过是单事务」：中途一项失败，整批一行都不写。
-    @Test
-    fun `skip by user is one transaction - a failure mid-batch writes nothing`() {
-        val store = newStore(clock)
-        val open = store.insert(newOrder(1, OrderState.TRANSFERRING))
-        val before = store.readCurrentOrders { it.toList() }
-        try {
-            store.skipByUser(
-                listOf(SkipTarget(1, "v1", 7), SkipTarget(2, "v2", 7), SkipTarget(-1, "bad", 7), SkipTarget(3, "v3", 7)),
-                pairingEpoch = "e5",
-            )
-            fail("a non-positive media id must abort the batch")
-        } catch (expected: IllegalArgumentException) {
-            // 预期
-        }
-        assertEquals(before, store.readCurrentOrders { it.toList() })
-        assertEquals(OrderState.TRANSFERRING, store.get(open.id)!!.state)
-        assertNull(store.currentForMedia(2))
-        // 回滚之后 id 依然只增不减。
-        val next = store.insert(newOrder(9))
-        assertTrue(next.id > open.id)
-    }
-
-    @Test
-    fun `volume state round-trips per volume`() {
-        val store = newStore(clock)
-        assertNull(store.volumeState("external_primary"))
-        store.saveVolumeState(VolumeState("external_primary", 120, "v-a"))
-        store.saveVolumeState(VolumeState("0a1b-2c3d", 7, null))
-        store.saveVolumeState(VolumeState("external_primary", 130, "v-b"))
-        assertEquals(VolumeState("external_primary", 130, "v-b"), store.volumeState("external_primary"))
-        assertEquals(VolumeState("0a1b-2c3d", 7, null), store.volumeState("0a1b-2c3d"))
-        assertEquals(listOf("0a1b-2c3d", "external_primary"), store.volumeNames())
-    }
-    // ---- ARCH-13 (#417) 新增契约 ----
-
-    @Test
-    fun `transition carries the generation advance and audit in the same write, or neither`() {
-        val store = newStore(clock)
-        val o = store.insert(newOrder(1, OrderState.TRANSFERRING))
-        val audit = AuditRecord("ev-1", "flow.item.confirmed", null, 1L, mapOf("queueSequence" to o.id.toString()))
-        assertFalse(
-            "wrong expected state writes nothing",
-            store.transition(o.id, setOf(OrderState.PAUSED), OrderState.CONFIRMED, advance = GenerationAdvance("vol", 50), audit = audit),
-        )
-        assertNull(store.volumeState("vol"))
-        assertEquals(emptyList<AuditRecord>(), store.pendingAudit(10))
-
-        assertTrue(store.transition(o.id, setOf(OrderState.TRANSFERRING), OrderState.CONFIRMED, advance = GenerationAdvance("vol", 50), audit = audit))
-        assertEquals(50L, store.volumeState("vol")!!.fastPathGeneration)
+        val row = store.get(o.id)!!
+        assertEquals(OrderState.FAILED, row.state)
+        assertEquals(1, row.attempts)
+        assertEquals("abc", row.contentHash)
+        assertEquals(VolumeState("external", 9L, 3L, "v"), store.volumeState("external"))
+        assertEquals(42L, store.scanState().cursor)
         assertEquals(listOf(audit), store.pendingAudit(10))
-        // G 只增不减。
-        store.advanceGeneration(GenerationAdvance("vol", 20))
-        assertEquals(50L, store.volumeState("vol")!!.fastPathGeneration)
-        store.acknowledgeAudit(setOf("ev-1"))
-        assertEquals(emptyList<AuditRecord>(), store.pendingAudit(10))
     }
 
     @Test
-    fun `source missing flag, hash fill and delete`() {
+    fun `G advances lexicographically by generation then media id and never goes back`() {
         val store = newStore(clock)
-        val confirmed = store.insert(newOrder(1, OrderState.CONFIRMED, "h1"))
-        assertTrue(store.setSourceMissing(confirmed.id, true))
-        assertTrue(store.get(confirmed.id)!!.sourceMissing)
-        assertEquals("flag never rewrites CONFIRMED", OrderState.CONFIRMED, store.get(confirmed.id)!!.state)
-        assertTrue(store.setSourceMissing(confirmed.id, false))
-        assertFalse(store.get(confirmed.id)!!.sourceMissing)
-
-        val unhashed = store.insert(newOrder(2, OrderState.SKIPPED_BY_USER, hash = null))
-        assertTrue(store.setContentHash(unhashed.id, "h2"))
-        assertFalse("an existing hash is never overwritten", store.setContentHash(unhashed.id, "other"))
-        assertEquals("h2", store.get(unhashed.id)!!.contentHash)
-
-        assertTrue(store.delete(unhashed.id))
-        assertFalse(store.delete(unhashed.id))
-        assertNull(store.get(unhashed.id))
+        store.advanceGeneration(GenerationAdvance("v", 5, 10))
+        store.advanceGeneration(GenerationAdvance("v", 5, 3))
+        assertEquals(10L, store.volumeState("v")!!.generationMediaId)
+        store.advanceGeneration(GenerationAdvance("v", 4, 99))
+        assertEquals(5L, store.volumeState("v")!!.generation)
+        store.advanceGeneration(GenerationAdvance("v", 6, 1))
+        assertEquals(6L to 1L, store.volumeState("v")!!.let { it.generation to it.generationMediaId })
     }
 
     @Test
-    fun `pick queries only see current rows`() {
+    fun `the scan cursor lifecycle - dirty from zero, only moves forward, finish clears it`() {
         val store = newStore(clock)
-        val stale = store.insert(newOrder(1, OrderState.PAUSED, "old"))
-        store.insert(newOrder(1, OrderState.CONFIRMED, "new", version = "v2"))
-        val paused = store.insert(newOrder(2, OrderState.PAUSED))
-        val queued = store.insert(newOrder(3, OrderState.QUEUED))
-        val confirmed = store.insert(newOrder(4, OrderState.CONFIRMED))
-        assertEquals(listOf(paused), store.currentInStates(setOf(OrderState.PAUSED, OrderState.TRANSFERRING), 10))
-        assertTrue(stale !in store.currentInStates(setOf(OrderState.PAUSED), 10))
-        assertEquals(listOf(queued), store.currentInStates(setOf(OrderState.QUEUED), 10))
-        assertEquals(listOf(4L), store.confirmedWithHashAfter(confirmed.id - 1, 10).map { it.mediaId })
-        assertEquals(listOf(1L, 4L), store.confirmedWithHashAfter(0, 10).map { it.mediaId })
-        assertEquals(
-            mapOf(OrderState.CONFIRMED to 2L, OrderState.PAUSED to 1L, OrderState.QUEUED to 1L),
-            store.countCurrentByState(),
-        )
-        assertEquals(emptyMap<OrderState, Long>(), store.countCurrentByState(setOf(99L)))
-    }
-
-    // #418：英雄区的 m 只数原图还在的 CONFIRMED 当前行，按相册过滤。
-    // 反证：实现里去掉 source_missing 条件 → present 为 3，红。
-    @Test
-    fun `confirmed present count skips rows whose source was deleted and honours the album filter`() {
-        val store = newStore(clock)
-        store.insert(newOrder(1, OrderState.CONFIRMED, "h1"))
-        val gone = store.insert(newOrder(2, OrderState.CONFIRMED, "h2"))
-        store.insert(newOrder(3, OrderState.CONFIRMED, "h3"))
-        store.insert(newOrder(4, OrderState.SKIPPED_BY_USER, null))
-        store.insert(newOrder(3, OrderState.TRANSFERRING, "h3b", version = "v2"))
-        assertTrue(store.setSourceMissing(gone.id, true))
-        assertEquals("row 2 lost its source, row 3's current row is not CONFIRMED", 1L, store.countConfirmedPresent())
-        assertEquals(1L, store.countConfirmedPresent(setOf(7L)))
-        assertEquals(0L, store.countConfirmedPresent(setOf(99L)))
-        assertEquals(0L, store.countConfirmedPresent(emptySet()))
+        assertEquals(ScanState(false, 0L), store.scanState())
+        store.markScanDirty()
+        store.advanceScan(5)
+        store.advanceScan(3)
+        assertEquals(ScanState(true, 5L), store.scanState())
+        store.markScanDirty()
+        assertEquals(ScanState(true, 0L), store.scanState())
+        store.finishScan()
+        assertEquals(ScanState(false, 0L), store.scanState())
     }
 
     @Test
-    fun `claiming a new owner clears the table and lifts the id floor above old queue sequences`() {
+    fun `cancel remaining writes the skip list and skips open orders but leaves photos settled since the dialog`() {
         val store = newStore(clock)
-        assertFalse("first owner clears nothing", store.claimOwner("desk-a", idFloor = 1_000_000))
-        val first = store.insert(newOrder(1, OrderState.CONFIRMED))
-        assertTrue("ids start above the floor: ${first.id}", first.id > 1_000_000)
-        assertFalse("same owner keeps everything", store.claimOwner("desk-a", idFloor = 5))
-        assertEquals(first, store.get(first.id))
-
-        assertTrue(store.claimOwner("desk-b", idFloor = 2_000_000))
-        assertNull(store.get(first.id))
-        assertEquals(emptyMap<OrderState, Long>(), store.countCurrentByState())
-        assertTrue(store.insert(newOrder(1)).id > 2_000_000)
-    }
-
-    // #418：恢复只删当前行为 SKIPPED_BY_USER 的行，一个事务；其它状态与历史行不动。
-    // 反证：实现删掉所有 SKIPPED_BY_USER 行（不看是不是当前行）→ media 3 的历史行也没了，红。
-    @Test
-    fun `restoring skipped photos deletes only current skipped rows, atomically`() {
-        val store = newStore(clock)
-        store.insert(newOrder(1, OrderState.SKIPPED_BY_USER, null))
+        val open = store.insert(newOrder(1))
         store.insert(newOrder(2, OrderState.CONFIRMED))
-        val oldSkip = store.insert(newOrder(3, OrderState.SKIPPED_BY_USER, null))
-        store.insert(newOrder(3, OrderState.QUEUED, "h3b", version = "v2"))
-        store.insert(newOrder(4, OrderState.SKIPPED_BY_USER, null))
-        val audit = AuditRecord("restore-1", "flow.round.controlled", null, 1L, mapOf("action" to "restore"))
-
-        assertEquals(2, store.restoreSkippedByUser(audit))
-        assertNull(store.currentForMedia(1))
-        assertNull(store.currentForMedia(4))
-        assertEquals(OrderState.CONFIRMED, store.currentForMedia(2)!!.state)
-        assertEquals("history row of media 3 is untouched", oldSkip, store.get(oldSkip.id))
-        assertEquals(listOf("restore-1"), store.pendingAudit(10).map { it.eventId })
-        assertEquals(0, store.restoreSkippedByUser())
+        store.insert(newOrder(4, OrderState.CONFIRMED, version = "old"))
+        val result = store.cancelRemaining(
+            listOf(SkipTarget(1, "v1", 7), SkipTarget(2, "v1", 7), SkipTarget(3, "v1", 8), SkipTarget(4, "v1", 7)),
+        )
+        assertEquals(SkipResult(written = 3, ordersSkipped = 1, untouched = 1), result)
+        assertEquals(OrderState.SKIPPED_BY_USER, store.get(open.id)!!.state)
+        assertTrue(store.isSkipped(1) && store.isSkipped(3) && store.isSkipped(4))
+        assertFalse(store.isSkipped(2))
+        assertEquals(listOf(1L, 3L, 4L), store.readSkipList { it.toList() })
+        assertEquals(1L, store.countSkipped(setOf(8L)))
+        assertEquals("「已跳过」报名单", 3L, store.countCurrentByState(null)[OrderState.SKIPPED_BY_USER])
     }
 
     @Test
-    fun `skip by user covers queued rows too`() {
+    fun `cancel remaining is one transaction`() {
         val store = newStore(clock)
-        val queued = store.insert(newOrder(1, OrderState.QUEUED))
-        val result = store.skipByUser(listOf(SkipTarget(1, "v1", 7)), pairingEpoch = "e5")
-        assertEquals(1, result.written)
-        assertEquals(OrderState.SKIPPED_BY_USER, store.get(queued.id)!!.state)
+        val open = store.insert(newOrder(1))
+        try {
+            store.cancelRemaining(listOf(SkipTarget(1, "v1", 7), SkipTarget(-1, "v1", 7)))
+            fail("a bad target must abort the batch")
+        } catch (_: IllegalArgumentException) {
+        }
+        assertEquals(OrderState.TRANSFERRING, store.get(open.id)!!.state)
+        assertFalse(store.isSkipped(1))
+    }
+
+    @Test
+    fun `restore empties the skip list and marks the scan dirty`() {
+        val store = newStore(clock)
+        store.cancelRemaining(listOf(SkipTarget(1, "v1", 7), SkipTarget(2, "v1", 7)))
+        assertEquals(2, store.restoreSkipped())
+        assertEquals(0L, store.countSkipped())
+        assertEquals(ScanState(true, 0L), store.scanState())
+        assertNull(store.countCurrentByState(null)[OrderState.SKIPPED_BY_USER])
+    }
+
+    @Test
+    fun `retry failed turns current failed rows back to pending and keeps their attempts`() {
+        val store = newStore(clock)
+        val o = store.insert(newOrder(1))
+        store.transition(o.id, setOf(OrderState.TRANSFERRING), OrderState.FAILED, countAttempt = true)
+        assertEquals(1, store.retryFailed())
+        assertEquals(OrderState.PENDING, store.get(o.id)!!.state)
+        assertEquals(1, store.get(o.id)!!.attempts)
+    }
+
+    @Test
+    fun `changing desktops clears facts and cursors but keeps the skip list and lifts the id floor`() {
+        val store = newStore(clock)
+        assertFalse(store.claimOwner("desk-a", idFloor = 100))
+        val o = store.insert(newOrder(1))
+        assertTrue(o.id > 100)
+        store.cancelRemaining(listOf(SkipTarget(2, "v1", 7)))
+        store.saveVolumeState(VolumeState("v", 3, 3, "x"))
+        assertFalse(store.claimOwner("desk-a", idFloor = 5_000))
+        assertTrue(store.claimOwner("desk-b", idFloor = 5_000))
+        assertNull(store.get(o.id))
+        assertNull(store.volumeState("v"))
+        assertTrue(store.scanState().dirty)
+        assertTrue(store.isSkipped(2))
+        assertTrue(store.insert(newOrder(3)).id > 5_000)
+    }
+
+    @Test
+    fun `ui counts read current rows and confirmed-present`() {
+        val store = newStore(clock)
+        store.insert(newOrder(1, OrderState.CONFIRMED))
+        val gone = store.insert(newOrder(2, OrderState.CONFIRMED))
+        store.setSourceMissing(gone.id, true)
+        store.insert(newOrder(3, OrderState.FAILED))
+        assertEquals(2L, store.countCurrentByState(setOf(7L))[OrderState.CONFIRMED])
+        assertEquals(1L, store.countConfirmedPresent(setOf(7L)))
+        assertEquals(0L, store.countConfirmedPresent(emptySet()))
+        assertEquals(listOf(1L, 2L, 3L), store.readCurrentOrders { rows -> rows.map { it.mediaId }.toList() })
+        assertEquals(2, store.confirmedWithHashAfter(0L, 10).size)
     }
 }
 

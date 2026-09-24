@@ -12,7 +12,7 @@
 //
 // #417 在这里另挂两个进程级触发：
 // - 网络变化回调（ConnectivityManager）：立刻探测一次，并让 iroh `Endpoint::network_change()` 重探路径。
-// - App 进入前台（第一个 Activity started）：清 FGS 受阻事实（前台重置 dataSync 额度，#411），跑慢路径 + 循环。
+// - App 进入前台（第一个 Activity started）：一次带对账的触发（#413：触发只叫醒循环）。
 package com.hawkeyexb.ppass
 
 import android.app.Activity
@@ -80,7 +80,7 @@ class PPassApplication : Application() {
 
     /**
      * 第一个 Activity started = App 进入前台。按 started/stopped 计数而不是 resumed/paused：
-     * 权限弹窗、电池白名单设置页、旋转屏幕都会 pause/resume，不该每次都跑一遍带慢路径的前台触发。
+     * 权限弹窗、电池白名单设置页、旋转屏幕都会 pause/resume，不该每次都跑一遍带对账的前台触发。
      */
     private inner class ForegroundWatcher : ActivityLifecycleCallbacks {
         private var started = 0

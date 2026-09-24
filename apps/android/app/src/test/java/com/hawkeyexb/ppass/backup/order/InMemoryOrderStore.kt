@@ -1,15 +1,23 @@
-// ARCH-12 (#416) / ARCH-13 (#417): 测试用 order 存储。与 SqliteOrderStore 共用 OrderStoreContract。
+// ARCH-12 (#416) / ARCH-13 (#417) → #413: 测试用 order 存储 + 跳过名单。与 SqliteOrderStore 共用 OrderStoreContract。
 //
 // 事务语义靠「拷贝一份、全部成功才替换」实现：写到一半抛异常时原表一行不变，
-// 这样「批量跳过是单事务」的契约测试才能真的红（原地改的实现测不出回滚）。
+// 这样「取消剩余是单事务」的契约测试才能真的红（原地改的实现测不出回滚）。
 package com.hawkeyexb.ppass.backup.order
 
 class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMillis) : OrderStore {
-    private var rows: Map<Long, Order> = emptyMap()
-    private var lastId = 0L
-    private var volumes: Map<String, VolumeState> = emptyMap()
-    private var audits: List<AuditRecord> = emptyList()
-    private var owner: String? = null
+    private var state = State()
+
+    private data class Skip(val bucketId: Long, val sourceVersion: String)
+
+    private data class State(
+        val rows: Map<Long, Order> = emptyMap(),
+        val lastId: Long = 0L,
+        val volumes: Map<String, VolumeState> = emptyMap(),
+        val scan: ScanState = ScanState(dirty = false, cursor = 0L),
+        val skips: Map<Long, Skip> = emptyMap(),
+        val audits: List<AuditRecord> = emptyList(),
+        val owner: String? = null,
+    )
 
     /** 故障注入：非 null 时，下一次事务在提交前抛出它（测试「崩在写入中途」）。 */
     @Volatile
@@ -22,29 +30,31 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
     @Volatile
     var crashWhenGenerationMoves = false
 
-    private class Tx(
-        var rows: MutableMap<Long, Order>,
-        var lastId: Long,
-        var volumes: MutableMap<String, VolumeState>,
-        var audits: MutableList<AuditRecord>,
-    )
+    private class Tx(s: State) {
+        val rows = LinkedHashMap(s.rows)
+        var lastId = s.lastId
+        val volumes = LinkedHashMap(s.volumes)
+        var scan = s.scan
+        val skips = java.util.TreeMap(s.skips)
+        val audits = s.audits.toMutableList()
+        var owner = s.owner
+
+        fun freeze() = State(rows, lastId, volumes, scan, skips, audits, owner)
+    }
 
     @Synchronized
     private fun <T> inTransaction(block: Tx.() -> T): T {
-        val tx = Tx(LinkedHashMap(rows), lastId, LinkedHashMap(volumes), audits.toMutableList())
+        val tx = Tx(state)
         val result = tx.block()
         failNextCommit?.let {
             failNextCommit = null
             throw it
         }
-        if (crashWhenGenerationMoves && tx.volumes != volumes) {
+        if (crashWhenGenerationMoves && tx.volumes != state.volumes) {
             crashWhenGenerationMoves = false
             throw IllegalStateException("crash while committing a G advance")
         }
-        rows = tx.rows
-        lastId = tx.lastId
-        volumes = tx.volumes
-        audits = tx.audits
+        state = tx.freeze()
         return result
     }
 
@@ -58,220 +68,170 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
     private fun Tx.advance(advance: GenerationAdvance?) {
         advance ?: return
         val prev = volumes[advance.volumeName]
-        volumes[advance.volumeName] = VolumeState(
-            advance.volumeName,
-            maxOf(prev?.fastPathGeneration ?: Long.MIN_VALUE, advance.generation),
-            prev?.mediaStoreVersion,
-        )
+        val later = prev == null || advance.generation > prev.generation ||
+            (advance.generation == prev.generation && advance.mediaId > prev.generationMediaId)
+        if (later) volumes[advance.volumeName] = VolumeState(advance.volumeName, advance.generation, advance.mediaId, prev?.mediaStoreVersion)
     }
 
-    private fun Tx.audit(audit: AuditRecord?) {
-        if (audit != null) audits += audit
+    private fun Tx.scanTo(cursor: Long?) {
+        cursor ?: return
+        scan = scan.copy(cursor = maxOf(scan.cursor, cursor))
     }
 
-    private fun currentIn(snapshot: Map<Long, Order>, mediaId: Long): Order? =
-        snapshot.values.filter { it.mediaId == mediaId }.maxByOrNull { it.id }
+    private fun Tx.current(mediaId: Long): Order? = rows.values.filter { it.mediaId == mediaId }.maxByOrNull { it.id }
 
-    private fun isCurrent(o: Order): Boolean = currentIn(rows, o.mediaId)?.id == o.id
+    private fun currentRows(): List<Order> = state.rows.values.groupBy { it.mediaId }.map { (_, v) -> v.maxBy { it.id } }
 
-    override fun insert(order: NewOrder, advance: GenerationAdvance?, audit: AuditRecord?): Order = inTransaction {
+    override fun insert(order: NewOrder, advance: GenerationAdvance?, scanTo: Long?, audit: AuditRecord?): Order = inTransaction {
         val row = insertRow(order, clock())
         advance(advance)
-        audit(audit)
+        scanTo(scanTo)
+        audit?.let { audits += it }
         row
     }
 
-    @Synchronized
-    override fun get(id: Long): Order? = rows[id]
+    override fun get(id: Long): Order? = state.rows[id]
 
-    @Synchronized
-    override fun currentForMedia(mediaId: Long): Order? = currentIn(rows, mediaId)
+    override fun currentForMedia(mediaId: Long): Order? = state.rows.values.filter { it.mediaId == mediaId }.maxByOrNull { it.id }
 
-    @Synchronized
-    override fun ordersWithHash(hash: String): List<Order> =
-        rows.values.filter { it.contentHash == hash }.sortedBy { it.id }
+    override fun <R> readCurrentOrders(block: (Sequence<Order>) -> R): R = block(currentRows().sortedBy { it.mediaId }.asSequence())
 
-    override fun <R> readCurrentOrders(block: (Sequence<Order>) -> R): R {
-        // 与 SQLite 实现同样的键集语义：每一步取「media_id 比上一个大」的最小 media_id 的当前行。
-        val seq = sequence {
-            var after = Long.MIN_VALUE
-            while (true) {
-                val next = synchronized(this@InMemoryOrderStore) {
-                    val mediaId = rows.values.map { it.mediaId }.filter { it > after }.minOrNull()
-                    mediaId?.let { currentIn(rows, it) }
-                } ?: break
-                yield(next)
-                after = next.mediaId
-            }
-        }
-        return block(seq)
-    }
+    override fun currentInStates(states: Set<OrderState>, afterId: Long, limit: Int): List<Order> =
+        currentRows().filter { it.state in states && it.id > afterId }.sortedBy { it.id }.take(limit)
 
-    @Synchronized
-    override fun currentInStates(states: Set<OrderState>, limit: Int): List<Order> =
-        rows.values.filter { it.state in states && isCurrent(it) }.sortedBy { it.id }.take(limit)
-
-    @Synchronized
     override fun confirmedWithHashAfter(afterId: Long, limit: Int): List<Order> =
-        rows.values.filter { it.state == OrderState.CONFIRMED && it.contentHash != null && it.id > afterId && isCurrent(it) }
-            .sortedBy { it.id }.take(limit)
+        currentRows().filter { it.state == OrderState.CONFIRMED && it.contentHash != null && it.id > afterId }.sortedBy { it.id }.take(limit)
 
     override fun transition(
         id: Long,
         expected: Set<OrderState>,
         to: OrderState,
         countAttempt: Boolean,
+        contentHash: String?,
         advance: GenerationAdvance?,
+        scanTo: Long?,
         audit: AuditRecord?,
     ): Boolean = inTransaction {
-        val row = rows[id]
-        if (row == null || row.state !in expected) {
-            false
-        } else {
-            rows[id] = row.copy(state = to, attempts = row.attempts + if (countAttempt) 1 else 0, updatedAtMs = clock())
-            advance(advance)
-            audit(audit)
-            true
-        }
-    }
-
-    override fun updateMapping(id: Long, mediaId: Long, sourceVersion: String, bucketId: Long): Boolean {
-        require(sourceVersion.isNotBlank()) { "sourceVersion must not be blank" }
-        return inTransaction {
-            val row = rows[id]
-            if (row == null) {
-                false
-            } else {
-                rows[id] = row.copy(mediaId = mediaId, sourceVersion = sourceVersion, bucketId = bucketId, updatedAtMs = clock())
-                true
-            }
-        }
-    }
-
-    override fun setContentHash(id: Long, hash: String): Boolean {
-        require(hash.isNotBlank()) { "hash must not be blank" }
-        return inTransaction {
-            val row = rows[id]
-            if (row == null || row.contentHash != null) {
-                false
-            } else {
-                rows[id] = row.copy(contentHash = hash, updatedAtMs = clock())
-                true
-            }
-        }
+        val row = rows[id] ?: return@inTransaction false
+        if (row.state !in expected) return@inTransaction false
+        rows[id] = row.copy(
+            state = to,
+            attempts = if (countAttempt) row.attempts + 1 else row.attempts,
+            contentHash = row.contentHash ?: contentHash,
+            updatedAtMs = clock(),
+        )
+        advance(advance)
+        scanTo(scanTo)
+        audit?.let { audits += it }
+        true
     }
 
     override fun setSourceMissing(id: Long, missing: Boolean, audit: AuditRecord?): Boolean = inTransaction {
-        val row = rows[id]
-        if (row == null) {
-            false
-        } else {
-            rows[id] = row.copy(sourceMissing = missing, updatedAtMs = clock())
-            audit(audit)
-            true
-        }
+        val row = rows[id] ?: return@inTransaction false
+        rows[id] = row.copy(sourceMissing = missing, updatedAtMs = clock())
+        audit?.let { audits += it }
+        true
     }
 
-    override fun delete(id: Long): Boolean = inTransaction { rows.remove(id) != null }
+    override fun isSkipped(mediaId: Long): Boolean = mediaId in state.skips
 
-    override fun restoreSkippedByUser(audit: AuditRecord?): Int = inTransaction {
-        val snapshot = rows
-        val ids = snapshot.values.filter { it.state == OrderState.SKIPPED_BY_USER && currentIn(snapshot, it.mediaId)?.id == it.id }.map { it.id }
-        ids.forEach { rows.remove(it) }
-        audit(audit)
-        ids.size
-    }
+    override fun <R> readSkipList(block: (Sequence<Long>) -> R): R = block(state.skips.keys.sorted().asSequence())
 
-    override fun skipByUser(targets: List<SkipTarget>, pairingEpoch: String, audit: AuditRecord?): SkipResult = inTransaction {
+    override fun countSkipped(bucketIds: Set<Long>?): Long =
+        state.skips.values.count { bucketIds == null || it.bucketId in bucketIds }.toLong()
+
+    override fun cancelRemaining(targets: List<SkipTarget>, audit: AuditRecord?): SkipResult = inTransaction {
         val now = clock()
-        var inserted = 0
-        var updated = 0
+        var written = 0
+        var ordersSkipped = 0
         var untouched = 0
         for (target in targets) {
             require(target.mediaId > 0) { "mediaId must be positive, got ${target.mediaId}" }
-            val current = currentIn(rows, target.mediaId)
-            when {
-                current == null -> {
-                    insertRow(NewOrder(target.mediaId, target.sourceVersion, target.bucketId, target.contentHash, OrderState.SKIPPED_BY_USER, pairingEpoch), now)
-                    inserted++
-                }
-                current.state.isOpen -> {
-                    rows[current.id] = current.copy(state = OrderState.SKIPPED_BY_USER, updatedAtMs = now)
-                    updated++
-                }
-                else -> untouched++
+            val current = current(target.mediaId)
+            if (current != null && current.state.isSettled && current.sourceVersion == target.sourceVersion) {
+                untouched++
+                continue
+            }
+            if (target.mediaId !in skips) {
+                skips[target.mediaId] = Skip(target.bucketId, target.sourceVersion)
+                written++
+            }
+            if (current != null && current.state.isOpen) {
+                rows[current.id] = current.copy(state = OrderState.SKIPPED_BY_USER, updatedAtMs = now)
+                ordersSkipped++
             }
         }
-        audit(audit)
-        SkipResult(inserted, updated, untouched)
+        audit?.let { audits += it }
+        SkipResult(written, ordersSkipped, untouched)
     }
 
-    @Synchronized
-    override fun volumeState(volumeName: String): VolumeState? = volumes[volumeName]
-
-    override fun saveVolumeState(state: VolumeState) {
-        inTransaction { volumes[state.volumeName] = state }
+    override fun restoreSkipped(audit: AuditRecord?): Int = inTransaction {
+        val n = skips.size
+        skips.clear()
+        scan = ScanState(dirty = true, cursor = 0L)
+        audit?.let { audits += it }
+        n
     }
 
-    override fun advanceGeneration(advance: GenerationAdvance) {
-        inTransaction { advance(advance) }
+    override fun volumeState(volumeName: String): VolumeState? = state.volumes[volumeName]
+
+    override fun saveVolumeState(state: VolumeState) = inTransaction { volumes[state.volumeName] = state }
+
+    override fun advanceGeneration(advance: GenerationAdvance) = inTransaction { advance(advance) }
+
+    override fun scanState(): ScanState = state.scan
+
+    override fun markScanDirty() = inTransaction { scan = ScanState(dirty = true, cursor = 0L) }
+
+    override fun advanceScan(cursor: Long) = inTransaction { scanTo(cursor) }
+
+    override fun finishScan() = inTransaction { scan = ScanState(dirty = false, cursor = 0L) }
+
+    override fun retryFailed(audit: AuditRecord?): Int = inTransaction {
+        val failed = rows.values.groupBy { it.mediaId }.map { (_, v) -> v.maxBy { it.id } }.filter { it.state == OrderState.FAILED }
+        failed.forEach { rows[it.id] = it.copy(state = OrderState.PENDING, updatedAtMs = clock()) }
+        audit?.let { audits += it }
+        failed.size
     }
 
-    @Synchronized
-    override fun volumeNames(): List<String> = volumes.keys.sorted()
-
-    @Synchronized
-    override fun countCurrentByState(bucketIds: Set<Long>?): Map<OrderState, Long> =
-        rows.values.filter { isCurrent(it) && (bucketIds == null || it.bucketId in bucketIds) }
+    override fun countCurrentByState(bucketIds: Set<Long>?): Map<OrderState, Long> {
+        val out = currentRows()
+            .filter { bucketIds == null || it.bucketId in bucketIds }
+            .filter { it.state != OrderState.SKIPPED_BY_USER }
             .groupingBy { it.state }.eachCount().mapValues { it.value.toLong() }
-
-    @Synchronized
-    override fun countConfirmedPresent(bucketIds: Set<Long>?): Long =
-        rows.values.count {
-            it.state == OrderState.CONFIRMED && !it.sourceMissing && isCurrent(it) && (bucketIds == null || it.bucketId in bucketIds)
-        }.toLong()
-
-    @Synchronized
-    override fun lastConfirmedAtMs(): Long =
-        rows.values.filter { it.state == OrderState.CONFIRMED && isCurrent(it) }.maxOfOrNull { it.updatedAtMs } ?: 0L
-
-    @Synchronized
-    override fun countSourceMissingSkipped(afterMs: Long, upToMs: Long): Long =
-        rows.values.count {
-            it.state == OrderState.SKIPPED_SOURCE_MISSING && it.updatedAtMs > afterMs && it.updatedAtMs <= upToMs && isCurrent(it)
-        }.toLong()
-
-    override fun appendAudit(audit: AuditRecord) {
-        inTransaction { audit(audit) }
+            .toMutableMap()
+        val skipped = countSkipped(bucketIds)
+        if (skipped > 0) out[OrderState.SKIPPED_BY_USER] = skipped
+        return out
     }
 
-    @Synchronized
-    override fun pendingAudit(limit: Int): List<AuditRecord> = audits.take(limit)
+    override fun countConfirmedPresent(bucketIds: Set<Long>?): Long =
+        currentRows().count { it.state == OrderState.CONFIRMED && !it.sourceMissing && (bucketIds == null || it.bucketId in bucketIds) }.toLong()
+
+    override fun lastConfirmedAtMs(): Long = currentRows().filter { it.state == OrderState.CONFIRMED }.maxOfOrNull { it.updatedAtMs } ?: 0L
+
+    override fun countSourceMissingSkipped(afterMs: Long, upToMs: Long): Long =
+        currentRows().count { it.state == OrderState.SKIPPED_SOURCE_MISSING && it.updatedAtMs > afterMs && it.updatedAtMs <= upToMs }.toLong()
+
+    override fun appendAudit(audit: AuditRecord) = inTransaction { audits += audit }
+
+    override fun pendingAudit(limit: Int): List<AuditRecord> = state.audits.take(limit)
 
     override fun acknowledgeAudit(eventIds: Set<String>) {
         inTransaction { audits.removeAll { it.eventId in eventIds } }
     }
 
-    override fun claimOwner(ownerKey: String, idFloor: Long): Boolean {
-        val cleared = inTransaction {
-            if (owner == ownerKey) return@inTransaction null
-            val cleared = owner != null
-            if (cleared) {
-                rows.clear()
-                volumes.clear()
-                audits.clear()
-            }
-            lastId = maxOf(lastId, idFloor, rows.keys.maxOrNull() ?: 0L)
-            cleared
-        } ?: return false
-        synchronized(this) { owner = ownerKey }
-        return cleared
+    override fun claimOwner(ownerKey: String, idFloor: Long): Boolean = inTransaction {
+        if (owner == ownerKey) return@inTransaction false
+        val cleared = owner != null
+        if (cleared) {
+            rows.clear()
+            volumes.clear()
+            audits.clear()
+            scan = ScanState(dirty = true, cursor = 0L)
+        }
+        lastId = maxOf(idFloor, rows.keys.maxOrNull() ?: 0L)
+        owner = ownerKey
+        cleared
     }
-
-    /** 测试直读：所有行（含非当前行）。 */
-    @Synchronized
-    fun allRows(): List<Order> = rows.values.sortedBy { it.id }
-
-    @Synchronized
-    fun audits(): List<AuditRecord> = audits
 }

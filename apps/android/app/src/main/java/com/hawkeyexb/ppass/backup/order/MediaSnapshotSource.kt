@@ -1,4 +1,4 @@
-// ARCH-12 (#416) / ARCH-13 (#417): MediaStore 快照读取——只读、不算 hash、不联系桌面。
+// ARCH-12 (#416) / ARCH-13 (#417) → #413: MediaStore 快照读取——只读元数据、不读文件、不联系桌面。
 package com.hawkeyexb.ppass.backup.order
 
 import android.content.ContentResolver
@@ -12,9 +12,9 @@ import com.hawkeyexb.ppass.backup.flow.sourceVersionOf
 const val LEGACY_VOLUME = MediaStore.VOLUME_EXTERNAL
 
 /**
- * MediaStore 里的一张照片/视频（不论是否在备份范围内——#416 裁决 1）。
+ * MediaStore 里的一张照片/视频。
  *
- * [generation] 只用来推进快路径游标 G，**不是身份**（MOB-98）：API ≥ 30 是
+ * [generation] 只用来推进发现游标 G，**不是身份**（MOB-98）：API ≥ 30 是
  * `GENERATION_MODIFIED`，API < 30 退回 `DATE_MODIFIED`（秒）。
  */
 data class MediaSnapshot(
@@ -34,23 +34,27 @@ data class MediaDetails(
     val sizeBytes: Long,
     /** DATE_TAKEN 优先，缺失时退到 DATE_ADDED（见 [captureAtMsOrDateAdded]）。 */
     val captureAtMs: Long,
+    /** MediaStore `_data`（真实路径，引用导入用）；API 29 或查不到时为 null，导入直接走复制（#413 契约 §4）。 */
+    val dataPath: String? = null,
 )
 
 interface MediaSnapshotSource {
     /**
-     * 慢路径：MediaStore 里**全部**图片与视频（#416 裁决 1：不按相册过滤，带上 `bucket_id`），
-     * 按 `_id` 严格升序流式读出。流只在 [block] 内有效。
-     *
-     * 为什么不过滤：照片还在、只是相册移出了范围（→ CANCELLED_BY_SCOPE），与照片真的没了
-     * （→ Gone），只有看全量才分得开。
+     * 对账扫描 / 精确计数：**范围内** `_id > [afterId]` 的图片与视频，按 `_id` 严格升序流式读出。流只在 [block] 内有效。
      */
-    fun <R> readAll(block: (Sequence<MediaSnapshot>) -> R): R
+    fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R
 
     /**
-     * 快路径：[volumeName] 卷上 `generation > [afterGeneration]`、**范围内**的照片，
-     * 按 (generation, `_id`) 升序。结果只是加速提示——漏掉的照片由 [readAll] 那条慢路径补上。
+     * 发现：[volumeName] 卷上按 (generation, `_id`) 排在 ([afterGeneration], [afterMediaId]) 之后、**范围内**的照片，
+     * 按 (generation, `_id`) 升序。G 以下的照片（新相册的历史照片、恢复的、重建后的）由对账扫描负责。
      */
-    fun <R> readChangedSince(volumeName: String, afterGeneration: Long, block: (Sequence<MediaSnapshot>) -> R): R
+    fun <R> readChangedSince(volumeName: String, afterGeneration: Long, afterMediaId: Long, block: (Sequence<MediaSnapshot>) -> R): R
+
+    /** [volumeName] 卷上当前最大的 generation（0 = 空卷）。G 缺失 / MediaStore 重建时 G 从这里起步。 */
+    fun maxGeneration(volumeName: String): Long
+
+    /** generation 是否精确（API ≥ 30 的 `GENERATION_MODIFIED`）。退回 `DATE_MODIFIED`（秒）时发现可能漏同一秒的照片，对账要扫。 */
+    val preciseGeneration: Boolean get() = true
 
     /** 当前挂着的外部卷（#416 裁决 7：G 按卷分开存）。 */
     fun volumeNames(): List<String>
@@ -65,8 +69,8 @@ interface MediaSnapshotSource {
 /**
  * [MediaSnapshotSource] 的 ContentResolver 实现。
  *
- * 范围口径与旧 discovery 一致：`MEDIA_TYPE` 为图片或视频，快路径另加 `BUCKET_ID` 在
- * [selectedBuckets] 里；[selectedBuckets] 返回 null 或空集 = 什么都不在范围内。
+ * 范围口径与旧 discovery 一致：`MEDIA_TYPE` 为图片或视频，`BUCKET_ID` 在 [selectedBuckets] 里；
+ * [selectedBuckets] 返回 null 或空集 = 什么都不在范围内。
  *
  * 游标不分页：单个查询、一行一行 `moveToNext`，内存里只有当前一行。
  */
@@ -80,8 +84,7 @@ class ContentResolverMediaSnapshotSource(
 
     /**
      * API ≥ 30 用 `GENERATION_MODIFIED`；API < 30 没有这一列，退回 `DATE_MODIFIED`。
-     * 后者粒度是秒、而且会被改系统时间/拷入旧文件打乱——它**只是加速提示**
-     * （#415 裁决 1），正确性由慢路径全量归并保证，不依赖它单调。
+     * 后者粒度是秒、而且会被改系统时间/拷入旧文件打乱——这时对账每次都扫（[preciseGeneration]）。
      */
     private val generationColumn: String =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -108,18 +111,37 @@ class ContentResolverMediaSnapshotSource(
         MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO.toString(),
     )
 
-    override fun <R> readAll(block: (Sequence<MediaSnapshot>) -> R): R =
-        query(external, mediaTypeSelection, mediaTypeArgs, "${MediaStore.MediaColumns._ID} ASC", LEGACY_VOLUME, block)
+    override val preciseGeneration: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
-    override fun <R> readChangedSince(volumeName: String, afterGeneration: Long, block: (Sequence<MediaSnapshot>) -> R): R {
+    override fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
+        val buckets = selectedBuckets()
+        if (buckets.isNullOrEmpty()) return block(emptySequence())
+        val selection = "$mediaTypeSelection AND ${MediaStore.MediaColumns.BUCKET_ID} IN (${buckets.joinToString(",")}) AND ${MediaStore.MediaColumns._ID} > ?"
+        return query(external, selection, mediaTypeArgs + afterId.toString(), "${MediaStore.MediaColumns._ID} ASC", LEGACY_VOLUME, block)
+    }
+
+    override fun maxGeneration(volumeName: String): Long {
+        val cursor = resolver.query(
+            collectionOf(volumeName),
+            arrayOf(generationColumn),
+            mediaTypeSelection,
+            mediaTypeArgs,
+            "$generationColumn DESC",
+        ) ?: return 0L
+        return cursor.use { if (it.moveToFirst()) it.getLong(0) else 0L }
+    }
+
+    override fun <R> readChangedSince(volumeName: String, afterGeneration: Long, afterMediaId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
         val buckets = selectedBuckets()
         if (buckets.isNullOrEmpty()) return block(emptySequence())
         // bucket id 是 Long，直接拼进 SQL 与旧 discovery 口径一致，且不占绑定变量名额。
-        val selection = "$mediaTypeSelection AND ${MediaStore.MediaColumns.BUCKET_ID} IN (${buckets.joinToString(",")}) AND $generationColumn > ?"
+        val id = MediaStore.MediaColumns._ID
+        val selection = "$mediaTypeSelection AND ${MediaStore.MediaColumns.BUCKET_ID} IN (${buckets.joinToString(",")}) " +
+            "AND ($generationColumn > ? OR ($generationColumn = ? AND $id > ?))"
         return query(
             collectionOf(volumeName),
             selection,
-            mediaTypeArgs + afterGeneration.toString(),
+            mediaTypeArgs + arrayOf(afterGeneration.toString(), afterGeneration.toString(), afterMediaId.toString()),
             "$generationColumn ASC, ${MediaStore.MediaColumns._ID} ASC",
             volumeName,
             block,
@@ -148,6 +170,7 @@ class ContentResolverMediaSnapshotSource(
                 MediaStore.MediaColumns.MIME_TYPE,
                 MediaStore.MediaColumns.DATE_TAKEN,
                 MediaStore.MediaColumns.DATE_ADDED,
+                @Suppress("DEPRECATION") MediaStore.MediaColumns.DATA,
             )
             ).distinct().toTypedArray()
         val cursor = resolver.query(
@@ -170,6 +193,13 @@ class ContentResolverMediaSnapshotSource(
                     rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_TAKEN)),
                     rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)),
                 ),
+                // API 29 的分区存储下 `_data` 不可直读；拿不到就是 null，导入走复制。
+                dataPath = if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                    null
+                } else {
+                    @Suppress("DEPRECATION")
+                    rows.getColumnIndex(MediaStore.MediaColumns.DATA).takeIf { it >= 0 }?.let { rows.getString(it) }?.takeIf { it.isNotBlank() }
+                },
             )
         }
     }
