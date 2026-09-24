@@ -98,8 +98,16 @@ async fn main() -> anyhow::Result<()> {
             let base = pinned_data_dir
                 .clone()
                 .unwrap_or_else(|| platform::adapter().data_dir());
+            // DIAG-B1：macOS 文件 + stderr 双写——stderr 在 launchd 托管时是
+            // `.err`，桌面向导读它的最后一行报启动失败（DESK-09）；被一次性
+            // spawn 时 stderr 是 /dev/null，文件是唯一留痕。
+            let open = if platform::adapter().default_log_tees_stderr() {
+                daemon::log_guard::DedupGuard::for_file_and_stderr
+            } else {
+                daemon::log_guard::DedupGuard::for_file
+            };
             match platform::adapter().default_log_file(&base) {
-                Some(path) => match daemon::log_guard::DedupGuard::for_file(&path) {
+                Some(path) => match open(&path) {
                     Ok(guard) => guard,
                     Err(e) => {
                         eprintln!(

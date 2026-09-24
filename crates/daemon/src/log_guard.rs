@@ -38,9 +38,10 @@ use tracing_subscriber::fmt::MakeWriter;
 /// 同一条消息安静这么久，才认为"这一轮折叠结束"并打汇总行。
 const IDLE_GAP: Duration = Duration::from_secs(2);
 
-/// 单次 daemon 运行里，同一个 sink（stderr 或持久日志文件）写入的字节数
-/// 上限。超过就地 truncate 重来——不是等外部工具（launchd/logrotate）来
-/// 做,那些工具从没为这个配过。
+/// 同一个 sink 的字节上限。stderr：单次运行里超过就地 truncate 重来——不是
+/// 等外部工具（launchd/logrotate）来做，那些工具从没为这个配过。
+/// 持久日志文件：**跨运行**计数（打开时从现有文件大小起算），超过就轮转成
+/// `<name>.1`（只留一代），所以磁盘占用上限是 2 × 本值。
 const SINK_CAP_BYTES: usize = 8 * 1024 * 1024;
 
 struct KeyState {
@@ -54,7 +55,7 @@ struct KeyState {
 /// 标准的 `set_len(0)`——不需要 fd 层面的技巧，跨平台都能用。
 enum Sink {
     Stderr,
-    File(Mutex<File>),
+    File { path: PathBuf, file: Mutex<File> },
 }
 
 /// 字节计数 + 超限 truncate，多个 writer 共享一份。
@@ -72,21 +73,41 @@ impl BoundedSink {
         }
     }
 
-    fn file(file: File) -> Self {
-        Self {
-            sink: Arc::new(Sink::File(Mutex::new(file))),
-            written: Arc::new(Mutex::new(0)),
+    /// 以 append 打开 `path`。计数器从**现有文件大小**起算——否则每次启动
+    /// 都从 0 数，上限只管得住单次运行，文件跨重启无限增长（DIAG-B1 修的
+    /// 就是这个）。已经超限的旧文件先轮转掉再开新的。
+    fn file(path: &Path) -> io::Result<Self> {
+        let existing = std::fs::metadata(path)
+            .map(|m| m.len() as usize)
+            .unwrap_or(0);
+        if existing >= SINK_CAP_BYTES {
+            rotate_file(path)?;
         }
+        let file = open_append(path)?;
+        let written = file.metadata().map(|m| m.len() as usize).unwrap_or(0);
+        Ok(Self {
+            sink: Arc::new(Sink::File {
+                path: path.to_path_buf(),
+                file: Mutex::new(file),
+            }),
+            written: Arc::new(Mutex::new(written)),
+        })
     }
 
     fn write_line(&self, buf: &[u8]) {
         let mut written = self.written.lock().expect("sink byte counter lock");
         if *written + buf.len() >= SINK_CAP_BYTES {
+            let marker = match &*self.sink {
+                Sink::Stderr => format!(
+                    "--- p-pass: 日志超过 {}MB（本次运行），已截断——防止某个失败循环把磁盘写满 ---\n",
+                    SINK_CAP_BYTES / (1024 * 1024)
+                ),
+                Sink::File { .. } => format!(
+                    "--- p-pass: 日志超过 {}MB，上一段已轮转到 .1 ---\n",
+                    SINK_CAP_BYTES / (1024 * 1024)
+                ),
+            };
             self.truncate();
-            let marker = format!(
-                "--- p-pass: 日志超过 {}MB（本次运行），已截断——防止某个失败循环把磁盘写满 ---\n",
-                SINK_CAP_BYTES / (1024 * 1024)
-            );
             self.raw_write(marker.as_bytes());
             *written = marker.len();
         }
@@ -99,8 +120,8 @@ impl BoundedSink {
             Sink::Stderr => {
                 let _ = io::stderr().write_all(buf);
             }
-            Sink::File(f) => {
-                let mut f = f.lock().expect("log file lock");
+            Sink::File { file, .. } => {
+                let mut f = file.lock().expect("log file lock");
                 let _ = f.write_all(buf);
                 let _ = f.flush();
             }
@@ -110,15 +131,37 @@ impl BoundedSink {
     fn truncate(&self) {
         match &*self.sink {
             Sink::Stderr => truncate_stderr(),
-            Sink::File(f) => {
-                let f = f.lock().expect("log file lock");
-                // 以 append 模式打开的文件，下一次写入永远落在"当前文件
-                // 末尾"（POSIX/Win32 append 语义），set_len(0) 之后末尾
-                // 就是 0，不需要额外 seek。
-                let _ = f.set_len(0);
+            Sink::File { path, file } => {
+                let mut f = file.lock().expect("log file lock");
+                // 轮转：当前文件改名成 `.1`（覆盖上一代），再开一个新的。
+                // 轮转失败（权限 / 卷只读）退回原来的就地截断——宁可丢历史，
+                // 也不能让文件无界增长。
+                match rotate_file(path).and_then(|()| open_append(path)) {
+                    Ok(fresh) => *f = fresh,
+                    // 以 append 模式打开的文件，下一次写入永远落在"当前文件
+                    // 末尾"（POSIX/Win32 append 语义），set_len(0) 之后末尾
+                    // 就是 0，不需要额外 seek。
+                    Err(_) => {
+                        let _ = f.set_len(0);
+                    }
+                }
             }
         }
     }
+}
+
+fn open_append(path: &Path) -> io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
+}
+
+/// `daemon.log` → `daemon.log.1`（已有的 `.1` 被覆盖：只留一代）。
+fn rotate_file(path: &Path) -> io::Result<()> {
+    let mut rotated = path.as_os_str().to_owned();
+    rotated.push(".1");
+    let rotated = PathBuf::from(rotated);
+    // Windows 的 rename 在目标已存在时会失败的老版本行为不去赌：先删。
+    let _ = std::fs::remove_file(&rotated);
+    std::fs::rename(path, &rotated)
 }
 
 /// QA-09 迁移（#211）：原先按 unix / 非 unix 分成两个实现，unix 那半直接
@@ -162,6 +205,9 @@ fn human_duration(d: Duration) -> String {
 pub struct DedupGuard {
     state: Arc<Mutex<HashMap<Vec<u8>, KeyState>>>,
     out: BoundedSink,
+    /// DIAG-B1：同一行再抄一份到这里（macOS：文件是主 sink，stderr 仍要写，
+    /// 因为桌面向导读 launchd `.err` 的最后一行报启动失败，DESK-09）。
+    tee: Option<BoundedSink>,
     idle_gap: Duration,
 }
 
@@ -177,15 +223,31 @@ impl DedupGuard {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(Self::with_sink(BoundedSink::file(file), IDLE_GAP))
+        Ok(Self::with_sink(BoundedSink::file(path)?, IDLE_GAP))
+    }
+
+    /// DIAG-B1：写持久文件（主），同时照旧写 stderr。给 macOS 用：daemon 可能
+    /// 被 launchd 拉起（stderr → `.err`），也可能被桌面壳一次性 spawn
+    /// （stdio 全是 `/dev/null`）——两种情况下日志都必须落在同一个固定文件里。
+    pub fn for_file_and_stderr(path: &Path) -> io::Result<Self> {
+        let mut guard = Self::for_file(path)?;
+        guard.tee = Some(BoundedSink::stderr());
+        Ok(guard)
     }
 
     fn with_sink(out: BoundedSink, idle_gap: Duration) -> Self {
         Self {
             state: Arc::new(Mutex::new(HashMap::new())),
             out,
+            tee: None,
             idle_gap,
+        }
+    }
+
+    fn emit(&self, buf: &[u8]) {
+        self.out.write_line(buf);
+        if let Some(tee) = &self.tee {
+            tee.write_line(buf);
         }
     }
 
@@ -195,8 +257,8 @@ impl DedupGuard {
     }
 
     #[cfg(test)]
-    fn with_idle_gap_file(idle_gap: Duration, file: File) -> Self {
-        Self::with_sink(BoundedSink::file(file), idle_gap)
+    fn with_idle_gap_file(idle_gap: Duration, path: &Path) -> Self {
+        Self::with_sink(BoundedSink::file(path).expect("open test log"), idle_gap)
     }
 
     fn on_line(&self, buf: &[u8]) {
@@ -218,13 +280,8 @@ impl DedupGuard {
                     },
                 );
                 drop(state);
-                self.out.write_line(buf);
-                tokio::spawn(watch_key(
-                    Arc::clone(&self.state),
-                    self.out.clone(),
-                    key,
-                    self.idle_gap,
-                ));
+                self.emit(buf);
+                tokio::spawn(watch_key(self.clone(), key));
             }
         }
     }
@@ -238,15 +295,11 @@ impl Default for DedupGuard {
 
 /// 一个 key 从"第一条打印"到"安静下来"期间只有这一个任务在盯着它
 /// （由 [`DedupGuard::on_line`] 在插入新 key 时唯一地 spawn 一次）。
-async fn watch_key(
-    state: Arc<Mutex<HashMap<Vec<u8>, KeyState>>>,
-    out: BoundedSink,
-    key: Vec<u8>,
-    idle_gap: Duration,
-) {
+async fn watch_key(guard: DedupGuard, key: Vec<u8>) {
+    let idle_gap = guard.idle_gap;
     loop {
         tokio::time::sleep(idle_gap).await;
-        let mut state_guard = state.lock().expect("dedup state lock");
+        let mut state_guard = guard.state.lock().expect("dedup state lock");
         let Some(entry) = state_guard.get(&key) else {
             return;
         };
@@ -263,7 +316,7 @@ async fn watch_key(
             line.extend_from_slice(
                 format!(" (折叠 ×{count} over {})\n", human_duration(span)).as_bytes(),
             );
-            out.write_line(&line);
+            guard.emit(&line);
         }
         return;
     }
@@ -366,12 +419,7 @@ mod tests {
     async fn file_sink_folds_and_persists_across_the_guard() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon-dev.log");
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .unwrap();
-        let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(50), file);
+        let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(50), &path);
         guard.on_line(b"2026-09-16T00:00:00.000000Z  INFO x: hello file\n");
         tokio::time::sleep(Duration::from_millis(200)).await;
         let content = std::fs::read_to_string(&path).unwrap();
@@ -383,12 +431,7 @@ mod tests {
     async fn file_sink_truncates_past_the_cap() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon-dev.log");
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .unwrap();
-        let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(10), file);
+        let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(10), &path);
         // 每条都不同内容 → 折叠不生效，直接考验容量上限本身。
         // ⚠️ 循环上界必须是固定行数，**不能**写成
         // `while written < SINK_CAP_BYTES`：`write_line` 是在跨过上限*之前*
@@ -407,9 +450,63 @@ mod tests {
         );
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(
-            content.contains("已截断"),
-            "truncation marker must be in the file: {content}"
+            content.contains("已轮转"),
+            "rotation marker must be in the file: {content}"
         );
+        assert!(
+            tmp.path().join("daemon-dev.log.1").exists(),
+            "the previous segment must survive as .1, not be thrown away"
+        );
+    }
+
+    // DIAG-B1：上限必须跨运行生效。每次启动都 append、计数器却从 0 起算的话，
+    // 反复重启的 daemon 会把同一个文件一路写大（8MB 只管得住单次运行）。
+    #[tokio::test(start_paused = true)]
+    async fn file_sink_cap_counts_bytes_left_by_previous_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.log");
+        // 上一次运行留下的、离上限只差一点的文件。
+        std::fs::write(&path, vec![b'o'; SINK_CAP_BYTES - 16]).unwrap();
+        let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(10), &path);
+        guard.on_line(b"2026-09-24T00:00:00.000000Z  INFO x: first line of this run\n");
+        let main_len = std::fs::metadata(&path).unwrap().len() as usize;
+        assert!(
+            main_len < SINK_CAP_BYTES,
+            "file must stay under the cap across runs, got {main_len}"
+        );
+        let rotated = tmp.path().join("daemon.log.1");
+        assert_eq!(
+            std::fs::metadata(&rotated).unwrap().len() as usize,
+            SINK_CAP_BYTES - 16,
+            "the old run's bytes must be rotated to .1 intact"
+        );
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("first line of this run"));
+    }
+
+    // DIAG-B1：打开时就已经超限的旧文件（比如旧版本写出来的）先轮转再用。
+    #[test]
+    fn opening_an_oversized_file_rotates_it_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.log");
+        std::fs::write(&path, vec![b'o'; SINK_CAP_BYTES + 1]).unwrap();
+        let _sink = BoundedSink::file(&path).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 0);
+        assert!(tmp.path().join("daemon.log.1").exists());
+    }
+
+    // DIAG-B1：tee 模式两边都写——文件是固定位置，stderr 给向导读启动错误。
+    #[tokio::test(start_paused = true)]
+    async fn tee_mode_writes_the_file_and_counts_stderr_separately() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("logs").join("daemon.log");
+        let guard = DedupGuard::for_file_and_stderr(&path).unwrap();
+        let line = b"2026-09-24T00:00:00.000000Z  INFO x: tee line\n";
+        guard.on_line(line);
+        assert!(std::fs::read_to_string(&path).unwrap().contains("tee line"));
+        let tee = guard.tee.as_ref().expect("tee sink");
+        assert_eq!(*tee.written.lock().unwrap(), line.len());
     }
 
     // 环境变量读取：不设/空串都视为"不启用"，绝不猜默认路径。

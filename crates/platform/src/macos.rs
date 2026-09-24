@@ -177,6 +177,17 @@ impl PlatformAdapter for MacosAdapter {
         home().join("Library/Application Support/P-Pass")
     }
 
+    /// DIAG-B1：固定位置，与 Windows 同构（`<data_dir>/logs/daemon.log`，轮转
+    /// 出 `daemon.log.1`）。跟着 data dir 走，`PPF_DATA_DIR` 隔离的一次性
+    /// daemon 不会写进用户真实日志。
+    fn default_log_file(&self, data_dir: &Path) -> Option<PathBuf> {
+        Some(data_dir.join("logs").join("daemon.log"))
+    }
+
+    fn default_log_tees_stderr(&self) -> bool {
+        true
+    }
+
     /// DESK-22 (#211/#171)：原先长在桌面壳 `lib.rs` 的 `#[cfg(target_os =
     /// "macos")]` 分支里，这次随 Windows 侧实现一起迁进来。**行为一字未改。**
     ///
@@ -342,5 +353,23 @@ impl KeyStore for KeychainStore {
             .output()
             .map_err(io_err("security delete-generic-password"))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod diag_log_tests {
+    use super::*;
+
+    // DIAG-B1：macOS daemon 日志落在固定位置、跟着 data dir 走（PPF_DATA_DIR 隔离不漏），且 tee stderr。
+    // 反证：default_log_file 退回 None（改动前）→ 一次性 spawn 的 daemon 没有任何日志，红。
+    #[test]
+    fn daemon_log_lives_under_the_effective_data_dir_and_tees_stderr() {
+        let adapter = MacosAdapter;
+        let dir = Path::new("/var/ppf-isolated");
+        assert_eq!(
+            adapter.default_log_file(dir),
+            Some(dir.join("logs").join("daemon.log"))
+        );
+        assert!(adapter.default_log_tees_stderr());
     }
 }

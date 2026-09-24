@@ -670,6 +670,10 @@ fn assemble_export(
             .and_then(|p| daemon_logs::tail(std::path::Path::new(p), 256 * 1024)),
         stdout_path: out_path,
         stderr_path: err_path,
+        // DIAG-B1：daemon 自己的固定位置日志，不依赖 plist。
+        persistent_log_tail: platform::adapter()
+            .default_log_file(&env.platform_dir)
+            .and_then(|p| daemon_logs::tail(&p, 1024 * 1024)),
         ..Default::default()
     };
     match daemon {
