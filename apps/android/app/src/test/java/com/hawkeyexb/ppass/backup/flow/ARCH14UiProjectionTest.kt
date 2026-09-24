@@ -28,7 +28,7 @@ class ARCH14UiProjectionTest {
 
     private suspend fun Rig.projection(withRemaining: Boolean = true): FlowProjection =
         FlowProjection.of(
-            store, engine.status.value, control, albums, inScopeTotal(),
+            store, engine.display.value, control, albums, inScopeTotal(),
             remaining = if (withRemaining) engine.countRemaining().toLong() else null,
         )
 

@@ -31,6 +31,9 @@ class FakeDelivery : ItemDelivery {
     /** 每次 deliver 开始时回调（例如「传输期间新拍一张」）。 */
     var onStart: (DeliveryRequest) -> Unit = {}
 
+    /** 结局之前的进度脚本（可挂起、可在虚拟时间里 delay）；默认什么都不报。 */
+    var progress: suspend (DeliveryRequest, (Long) -> Unit) -> Unit = { _, _ -> }
+
     val deliveredMediaIds get() = requests.map { it.details.snapshot.mediaId }
 
     override suspend fun deliver(request: DeliveryRequest, onProgress: (Long) -> Unit): DeliveryOutcome {
@@ -42,6 +45,7 @@ class FakeDelivery : ItemDelivery {
             cancelled += request.orderId
             throw c
         }
+        progress(request, onProgress)
         onProgress(request.details.sizeBytes)
         val next = script.removeFirstOrNull() ?: { r -> confirmed(r) }
         return next(request)
@@ -85,7 +89,17 @@ class FakeForeground(private val control: FlowControl) : ForegroundLease {
 
     override fun renew() = Unit
 
-    override fun update(status: LoopStatus) = Unit
+    /** 每次 FGS 通知刷新（生产里是一次 NotificationManager.notify）。 */
+    val updates = mutableListOf<LoopStatus>()
+
+    /** 与 [updates] 一一对应的（虚拟）时刻。 */
+    val updateTimes = mutableListOf<Long>()
+    var clock: () -> Long = { 0L }
+
+    override fun update(status: LoopStatus) {
+        updates += status
+        updateTimes += clock()
+    }
 
     override fun release() {
         releases++
@@ -144,7 +158,7 @@ class Rig(test: TestScope, reconciled: Boolean = true) {
     val media = FakeMedia()
     val delivery = FakeDelivery()
     val control = FakeControl()
-    val foreground = FakeForeground(control)
+    val foreground = FakeForeground(control).also { it.clock = { test.testScheduler.currentTime } }
     val scheduler = FakeScheduler()
     var probeResult: ProbeResult = ProbeResult.Reachable("e1")
     var probes = 0
@@ -177,6 +191,7 @@ class Rig(test: TestScope, reconciled: Boolean = true) {
         io = dispatcher,
         log = FlowLogger { logs += it },
         clock = { now },
+        monotonicClock = { test.testScheduler.currentTime },
     ).also {
         // 默认视为「已经全量对账过」（getVersion 没变），这样只有显式要求的触发才跑慢路径。
         if (reconciled) store.saveVolumeState(com.hawkeyexb.ppass.backup.order.VolumeState(com.hawkeyexb.ppass.backup.order.LEGACY_VOLUME, 0L, "v1"))

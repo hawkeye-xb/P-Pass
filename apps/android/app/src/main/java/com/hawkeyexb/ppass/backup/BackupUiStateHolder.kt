@@ -127,6 +127,7 @@ class BackupUiStateHolder(
             refresh(recount = true)
         }
         // 订阅取代轮询（MOB-88 的思路保留）：order 写入（revision）或循环运行态变化时重算投影。
+        // 运行态读 engine.display（与 FGS 通知同一个出口）：值变了才发、字节进度每秒最多一次。
         scope.launch { subscribe() }
         scope.launch { remainingLoop() }
         mediaObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -144,7 +145,7 @@ class BackupUiStateHolder(
             delay(RUNTIME_RETRY_MS)
             runtime = withContext(Dispatchers.IO) { runtimeFor(context) }
         }
-        combine(runtime.engine.revision, runtime.engine.status) { _, _ -> Unit }
+        combine(runtime.engine.revision, runtime.engine.display) { _, _ -> Unit }
             .debounce(UI_DEBOUNCE_MS)
             .collect { refresh(recount = false) }
     }

@@ -146,7 +146,7 @@ internal fun liveFlowRuntime(): AndroidFlowRuntime? = synchronized(runtimeLock) 
 
 internal fun flowProjection(context: Context, bucketIds: Set<Long>?, inScopeTotal: Long?, remaining: Long?): FlowProjection? {
     val live = runtimeFor(context.applicationContext) ?: return null
-    return FlowProjection.of(live.store, live.engine.status.value, live.control, bucketIds, inScopeTotal, remaining)
+    return FlowProjection.of(live.store, live.engine.display.value, live.control, bucketIds, inScopeTotal, remaining)
 }
 
 // ------------------------------------------------------------------ 生命周期

@@ -63,6 +63,8 @@ class FlowEngine(
     private val afterCycle: () -> Unit = {},
     /** 桌面宣布了新的配对代号（同一台桌面重新配对）：持久化它。 */
     private val onEpochAdvertised: (String) -> Unit = {},
+    /** 单调时钟（ms），只给刷新节流用；[clock] 是墙钟（审计时间戳）。 */
+    private val monotonicClock: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     private val planner = DiffPlanner(
         hasher = { snapshot -> hasher.hash(snapshot.mediaId) },
@@ -72,8 +74,14 @@ class FlowEngine(
     private val applier = DiffApplier(store, { pairingEpoch()?.value.orEmpty() }, clock)
     private val reconciler = LocalReconciler(store, media, planner, applier)
 
-    private val _status = MutableStateFlow(LoopStatus())
-    val status: StateFlow<LoopStatus> = _status.asStateFlow()
+    // 写 `_status` 就是写原始运行态；要不要刷新通知 / 首页由 [LoopStatusCell] 按「值变了 + 节流」决定。
+    private val _status = LoopStatusCell(scope, publish = { foreground.update(it) }, now = monotonicClock)
+
+    /** 原始运行态：每次写入都是最新值（引擎判断、测试断言用）。 */
+    val status: StateFlow<LoopStatus> = _status.raw
+
+    /** 对外展示的运行态：值变了才发，字节进度每秒最多一次。首页英雄区与 FGS 通知都读它。 */
+    val display: StateFlow<LoopStatus> = _status.display
 
     /** 每次 order 写入后 +1：UI 投影据此重算计数（取代账本提交回调）。 */
     private val _revision = MutableStateFlow(0L)
@@ -402,7 +410,6 @@ class FlowEngine(
         val hash = checkNotNull(order.contentHash)
         val request = DeliveryRequest(order.id, epoch, hash, details)
         _status.value = LoopStatus(LoopPhase.RUNNING, CurrentItem(order.id, details.fileName, 0L, details.sizeBytes))
-        foreground.update(_status.value)
         val advance = GenerationAdvance(details.snapshot.volumeName, details.snapshot.generation)
 
         var outcome = deliverOnce(request)
@@ -485,7 +492,6 @@ class FlowEngine(
                 delivery.deliver(request) { bytes ->
                     _status.update { s -> s.current?.let { s.copy(current = it.copy(bytesSent = bytes)) } ?: s }
                     foreground.renew()
-                    foreground.update(_status.value)
                 }
             }
         } catch (cancelled: CancellationException) {
