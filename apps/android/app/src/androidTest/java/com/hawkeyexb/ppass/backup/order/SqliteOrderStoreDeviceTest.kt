@@ -34,7 +34,7 @@ class SqliteOrderStoreDeviceTest {
         NewOrder(mediaId = mediaId, sourceVersion = version, bucketId = 7, contentHash = hash, state = state, pairingEpoch = "e3")
 
     @Test
-    fun `insert assigns strictly increasing ids and the current row is the newest one per photo`() {
+    fun insertAssignsStrictlyIncreasingIdsAndTheCurrentRowIsTheNewestOnePerPhoto() {
         val store = fresh()
         val a = store.insert(newOrder(10))
         now = 2_000L
@@ -47,7 +47,7 @@ class SqliteOrderStoreDeviceTest {
     }
 
     @Test
-    fun `transition is compare-and-set and writes attempts, hash, G, S and audit in the same step`() {
+    fun transitionIsCompareAndSetAndWritesAttemptsHashGSAndAuditInTheSameStep() {
         val store = fresh()
         store.saveVolumeState(VolumeState("external", 0L, 0L, "v"))
         val o = store.insert(newOrder(1, hash = null))
@@ -70,7 +70,7 @@ class SqliteOrderStoreDeviceTest {
     }
 
     @Test
-    fun `G advances lexicographically by generation then media id and never goes back`() {
+    fun gAdvancesLexicographicallyByGenerationThenMediaIdAndNeverGoesBack() {
         val store = fresh()
         store.advanceGeneration(GenerationAdvance("v", 5, 10))
         store.advanceGeneration(GenerationAdvance("v", 5, 3))
@@ -82,7 +82,7 @@ class SqliteOrderStoreDeviceTest {
     }
 
     @Test
-    fun `the scan cursor lifecycle - dirty from zero, only moves forward, finish clears it`() {
+    fun theScanCursorLifecycleDirtyFromZeroOnlyMovesForwardFinishClearsIt() {
         val store = fresh()
         assertEquals(ScanState(false, 0L), store.scanState())
         store.markScanDirty()
@@ -96,7 +96,7 @@ class SqliteOrderStoreDeviceTest {
     }
 
     @Test
-    fun `cancel remaining writes the skip list and skips open orders but leaves photos settled since the dialog`() {
+    fun cancelRemainingWritesTheSkipListAndSkipsOpenOrdersButLeavesPhotosSettledSinceTheDialog() {
         val store = fresh()
         val open = store.insert(newOrder(1))
         store.insert(newOrder(2, OrderState.CONFIRMED))
@@ -114,7 +114,7 @@ class SqliteOrderStoreDeviceTest {
     }
 
     @Test
-    fun `cancel remaining is one transaction`() {
+    fun cancelRemainingIsOneTransaction() {
         val store = fresh()
         val open = store.insert(newOrder(1))
         try {
@@ -127,7 +127,7 @@ class SqliteOrderStoreDeviceTest {
     }
 
     @Test
-    fun `restore empties the skip list and marks the scan dirty`() {
+    fun restoreEmptiesTheSkipListAndMarksTheScanDirty() {
         val store = fresh()
         store.cancelRemaining(listOf(SkipTarget(1, "v1", 7), SkipTarget(2, "v1", 7)))
         assertEquals(2, store.restoreSkipped())
@@ -137,7 +137,7 @@ class SqliteOrderStoreDeviceTest {
     }
 
     @Test
-    fun `retry failed turns current failed rows back to pending and keeps their attempts`() {
+    fun retryFailedTurnsCurrentFailedRowsBackToPendingAndKeepsTheirAttempts() {
         val store = fresh()
         val o = store.insert(newOrder(1))
         store.transition(o.id, setOf(OrderState.TRANSFERRING), OrderState.FAILED, countAttempt = true)
@@ -147,7 +147,7 @@ class SqliteOrderStoreDeviceTest {
     }
 
     @Test
-    fun `changing desktops clears facts and cursors but keeps the skip list and lifts the id floor`() {
+    fun changingDesktopsClearsFactsAndCursorsButKeepsTheSkipListAndLiftsTheIdFloor() {
         val store = fresh()
         assertFalse(store.claimOwner("desk-a", idFloor = 100))
         val o = store.insert(newOrder(1))
@@ -164,7 +164,7 @@ class SqliteOrderStoreDeviceTest {
     }
 
     @Test
-    fun `ui counts read current rows and confirmed-present`() {
+    fun uiCountsReadCurrentRowsAndConfirmedPresent() {
         val store = fresh()
         store.insert(newOrder(1, OrderState.CONFIRMED))
         val gone = store.insert(newOrder(2, OrderState.CONFIRMED))

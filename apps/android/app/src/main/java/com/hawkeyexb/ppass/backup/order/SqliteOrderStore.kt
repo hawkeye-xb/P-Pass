@@ -393,7 +393,8 @@ class SqliteOrderStore private constructor(
     }
 
     override fun restoreSkipped(audit: AuditRecord?): Int = inTransaction {
-        val removed = delete("skip_list", null, null)
+        // whereClause 传 "1"：传 null 时 SQLiteDatabase.delete 按文档返回 0，拿不到真实张数。
+        val removed = delete("skip_list", "1", null)
         writeScan(ScanState(dirty = true, cursor = 0L))
         writeAudit(audit)
         removed

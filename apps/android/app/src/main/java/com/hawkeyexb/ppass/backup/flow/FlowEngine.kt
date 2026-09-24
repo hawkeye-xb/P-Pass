@@ -459,11 +459,14 @@ internal class FlowEngine(
 
     /** 入口：这一轮有没有可能取到东西（不读文件、不走网络）。没有就不申请 FGS。 */
     private suspend fun hasWork(reconcile: Boolean): Boolean {
-        if (store.currentInStates(setOf(OrderState.TRANSFERRING, OrderState.PENDING), limit = 1).isNotEmpty()) return true
+        // 传输中不看范围（在飞时相册被移出范围的那一行还要改待传输 + 丢弃半截）；待传输只算范围内的——
+        // 否则一行范围外的待传输会让每次触发都空转一次 FGS。
+        if (store.currentInStates(setOf(OrderState.TRANSFERRING), limit = 1).isNotEmpty()) return true
+        if (store.currentInStates(setOf(OrderState.PENDING)).any { inScope(it.bucketId) }) return true
         if (store.scanState().dirty) return true
         if (discoveryStep() != null) return true
         if (!reconcile) return false
-        if (store.currentInStates(setOf(OrderState.FAILED)).any { it.attempts < OrderStore.MAX_FAILURES }) return true
+        if (store.currentInStates(setOf(OrderState.FAILED)).any { it.attempts < OrderStore.MAX_FAILURES && inScope(it.bucketId) }) return true
         return store.confirmedWithHashAfter(0L, 1).isNotEmpty()
     }
 
@@ -528,6 +531,8 @@ internal class FlowEngine(
             for (order in batch) {
                 round.retryAfter = order.id
                 if (order.state == OrderState.FAILED && order.attempts >= OrderStore.MAX_FAILURES) continue
+                // 范围是查询条件：相册被移出范围的待传输 / 失败行不取（相册加回来再取）。
+                if (!inScope(order.bucketId)) continue
                 return WorkItem.Existing(order, Origin.RETRY)
             }
             if (batch.isNotEmpty()) continue
@@ -664,7 +669,7 @@ internal class FlowEngine(
                 // 引用导入算出 hash → 建 order（传输中，带 hash）→ 传输。G / S 在结局落库时一起推进（#415 裁决 8）。
                 val row = store.insert(NewOrder(snapshot.mediaId, version, bucket, imported.contentHash, OrderState.TRANSFERRING, epoch.value))
                 bump()
-                return deliverAndCommit(row, imported.contentHash, details, progress, epoch)
+                return releasingOnCancel(imported.contentHash) { deliverAndCommit(row, imported.contentHash, details, progress, epoch) }
             }
         }
     }
@@ -712,8 +717,20 @@ internal class FlowEngine(
             return StepResult.Next
         }
         val row = store.get(order.id)!!.copy(contentHash = hash)
-        return deliverAndCommit(row, hash, details, Progress(), epoch)
+        return releasingOnCancel(hash) { deliverAndCommit(row, hash, details, Progress(), epoch) }
     }
+
+    /**
+     * 导入了、还没交给端口（或端口还没 serve）时这一轮被取消（暂停 / FGS 被收 / 断网）：放掉这次导入——
+     * 没 serve 的导入必须 release，复制回退时它占着一整份文件大小的空间（W3 的规矩）。release 幂等，已 serve 的也无害。
+     */
+    private suspend fun <T> releasingOnCancel(hash: String, block: suspend () -> T): T =
+        try {
+            block()
+        } catch (cancelled: CancellationException) {
+            withContext(NonCancellable) { runCatching { importer.release(hash) } }
+            throw cancelled
+        }
 
     private suspend fun settleSourceMissing(order: Order, reason: String, discard: Boolean) {
         if (store.transition(

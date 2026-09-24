@@ -357,6 +357,19 @@ class C413EngineTest {
         assertEquals(listOf(o.id), rig.delivery.discarded)
         assertEquals(OrderState.PENDING, rig.state(1))
         assertEquals(0, rig.pending())
+        // 之后的触发不因为这行范围外的待传输空转 FGS（hasWork / 补传来源都按范围过滤）。
+        // 反证：hasWork 里待传输不看范围 → acquires / probes 每次触发 +1，红。
+        val acquires = rig.foreground.acquires
+        val probes = rig.probes
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
+        rig.trigger(TriggerReason.NETWORK_CHANGE)
+        assertEquals(acquires, rig.foreground.acquires)
+        assertEquals(probes, rig.probes)
+        // 相册加回来：同一行续传（桌面 upsert 会把 cancelled 的 grant 复活成 active）。
+        rig.media.scope = setOf(7L)
+        rig.trigger(TriggerReason.SCOPE_ADDED)
+        assertEquals(listOf(o.id), rig.delivery.requests.map { it.orderId })
+        assertEquals(OrderState.CONFIRMED, rig.state(1))
         rig.close()
     }
 
@@ -595,6 +608,19 @@ class C413EngineTest {
         assertEquals(listOf(1L, 2L), rig.delivery.deliveredMediaIds)
         assertEquals(0, rig.pending())
         assertEquals(0, rig.engine.remainingSnapshot().count)
+        rig.close()
+    }
+
+    // 导入了、还没传完这一轮就被取消（暂停）：放掉这次导入（没 serve 的导入必须 release）。
+    // 反证：去掉 releasingOnCancel → released 为空，红。
+    @Test
+    fun `an import is released when the round is cancelled before it is delivered`() = runTest {
+        val rig = Rig(this)
+        val p = rig.photo(1, generation = 1)
+        rig.delivery.hold = true
+        rig.trigger()
+        rig.engine.pause().also { rig.settle() }.await()
+        assertEquals(listOf(p.hash), rig.importer.released)
         rig.close()
     }
 }
