@@ -39,28 +39,6 @@ fn write_photo(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     path
 }
 
-fn store_files(dir: &Path) -> Vec<PathBuf> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in fs::read_dir(dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else {
-                out.push(path);
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(&dir.join("iroh-blobs-provider"), &mut out);
-    out
-}
-
-fn has_extension(files: &[PathBuf], extension: &str) -> bool {
-    files
-        .iter()
-        .any(|file| file.extension().is_some_and(|e| e == extension))
-}
-
 /// Pull [ticket] from a fresh loopback receiver, bounded by [PULL_TIMEOUT].
 fn pull(dir: &Path, ticket: &str) -> Result<Vec<u8>, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -168,11 +146,8 @@ fn copy_import_serve_release_leaves_nothing_behind() {
 
     provider.release(import.hash);
     wait_until_gone(&provider, import.hash);
-    let files = store_files(dir.path());
-    assert!(
-        !has_extension(&files, "data") && !has_extension(&files, "obao4"),
-        "store must hold no payload after release + GC: {files:?}"
-    );
+    // The on-disk residue check lives in the gated module: on Windows a file
+    // the store still has open may outlive its entry.
     assert_eq!(fs::read(&source).unwrap(), bytes);
 }
 
@@ -198,6 +173,28 @@ mod reference {
     use super::*;
     use std::io::{Seek, SeekFrom, Write};
     use transport::SourceFault;
+
+    fn store_files(dir: &Path) -> Vec<PathBuf> {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else {
+                    out.push(path);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&dir.join("iroh-blobs-provider"), &mut out);
+        out
+    }
+
+    fn has_extension(files: &[PathBuf], extension: &str) -> bool {
+        files
+            .iter()
+            .any(|file| file.extension().is_some_and(|e| e == extension))
+    }
 
     fn import_ref(provider: &AndroidBlobsProvider, path: &Path) -> transport::MediaImport {
         provider
@@ -394,6 +391,26 @@ mod reference {
             provider.serve(import.hash),
             Err(ServeError::Source(SourceFault::Missing))
         ));
+    }
+
+    #[test]
+    fn copy_import_release_leaves_no_payload_on_disk() {
+        let dir = tempdir().unwrap();
+        let bytes = photo_bytes(2 * 1024 * 1024, 20);
+        let source = write_photo(dir.path(), "photo.jpg", &bytes);
+        let provider = AndroidBlobsProvider::new_loopback_with_gc(dir.path(), GC).unwrap();
+
+        let import = provider
+            .import_media(None, File::open(&source).unwrap())
+            .unwrap();
+        assert!(has_extension(&store_files(dir.path()), "data"));
+        provider.release(import.hash);
+        wait_until_gone(&provider, import.hash);
+        let files = store_files(dir.path());
+        assert!(
+            !has_extension(&files, "data") && !has_extension(&files, "obao4"),
+            "store must hold no payload after release + GC: {files:?}"
+        );
     }
 
     #[test]
