@@ -281,18 +281,22 @@ impl Router {
             return true;
         };
         let mut rx = bus.subscribe();
+        // DIAG-B2：订阅的一生都留痕——手机侧说"推送没到"时，先看这条订阅
+        // 在推送那一刻是不是还活着、是怎么结束的。
+        let started = std::time::Instant::now();
+        tracing::info!("subscription open peer={peer:?} gen={generation}");
 
         // 客户端预期只发一次订阅请求就半关闭发送方向（拿数据走别的
         // stream）；`Ok(None)` 之后不再 select 这个分支，避免忙等。
         let mut client_send_open = true;
-        loop {
+        let end_reason: String = loop {
             tokio::select! {
-                _ = token.cancelled() => break,
+                _ = token.cancelled() => break "revoked".to_string(),
                 frame = stream.recv_frame(), if client_send_open => {
                     match frame {
                         Ok(Some(_)) => continue, // 这条流上的多余数据——忽略
                         Ok(None) => { client_send_open = false; continue; }
-                        Err(_) => break, // 连接异常
+                        Err(e) => break format!("recv_error: {e}"), // 连接异常
                     }
                 }
                 ev = rx.recv() => {
@@ -300,8 +304,8 @@ impl Router {
                         Ok(v) if v.get("event").and_then(|e| e.as_str())
                             == Some(events::TIMELINE_INVALIDATED) =>
                         {
-                            if self.send_push(stream, &v).await.is_err() {
-                                break; // 写失败 = 连接真的断了
+                            if let Err(e) = self.send_push(stream, &v).await {
+                                break format!("write_error(timeline.invalidated): {e}"); // 写失败 = 连接真的断了
                             }
                         }
                         // NET-14: 完成/失败推送——只转发给这条订阅所属的那台
@@ -319,17 +323,48 @@ impl Router {
                                 .and_then(|d| d.get("node_id"))
                                 .and_then(|n| n.as_str())
                                 == Some(peer.to_string().as_str());
-                            if for_this_peer && self.send_push(stream, &v).await.is_err() {
-                                break;
+                            if !for_this_peer {
+                                continue;
+                            }
+                            // DIAG-B2：推送真正写进这条订阅流的那一刻（或写失败）。
+                            // flow_delivery 那行 `peer_subscribed=` 只说明"表里有这台
+                            // 手机"，这一行才说明"字节交给了 QUIC"。
+                            let kind = v.get("event").and_then(|e| e.as_str()).unwrap_or("?");
+                            let seq = v
+                                .get("data")
+                                .and_then(|d| d.get("queue_sequence"))
+                                .cloned()
+                                .unwrap_or_default();
+                            match self.send_push(stream, &v).await {
+                                Ok(()) => tracing::info!(
+                                    "subscription push sent kind={kind} seq={seq} peer={peer:?} gen={generation}"
+                                ),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "subscription push write failed kind={kind} seq={seq} peer={peer:?} gen={generation}: {e}"
+                                    );
+                                    break format!("write_error({kind}): {e}");
+                                }
                             }
                         }
                         Ok(_) => continue, // 只推 timeline.invalidated，别的事件不转发
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            // DIAG-B2：被挤掉的 n 条里可能正好有 flow.delivered——
+                            // 以前这里静默 continue，丢了都不知道。
+                            tracing::warn!(
+                                "subscription lagged peer={peer:?} gen={generation}: skipped {n} events (may include flow.delivered)"
+                            );
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break "bus_closed".to_string(),
                     }
                 }
             }
-        }
+        };
+        tracing::info!(
+            "subscription closed peer={peer:?} gen={generation} after {}ms reason={end_reason}",
+            started.elapsed().as_millis()
+        );
         self.subscriptions.unregister(peer, generation);
         let _ = stream.finish();
         true

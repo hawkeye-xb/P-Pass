@@ -485,6 +485,16 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowFetchRequest,
     ) -> Result<FlowStatusReply, DeliveryError> {
+        // DIAG-B：offer 到达时这台手机有没有挂着订阅。手机的推送订阅是在 offer 之后才建的，
+        // 与后面的 `flow.delivered push … peer_subscribed=` 对照，判断推送是否早于订阅。
+        tracing::info!(
+            "flow.offer received seq={} peer_subscribed={} peer={peer:?}",
+            request.queue_sequence,
+            self.subscriptions.as_ref().map_or_else(
+                || "unwired".to_string(),
+                |r| r.is_subscribed(peer).to_string()
+            ),
+        );
         let grant = self.checked_request(peer, request).await?;
         self.provider_for(&grant)?;
         if self
@@ -743,6 +753,16 @@ impl FlowDelivery {
 
     fn emit_flow_failed(&self, peer: NodeId, grant: &FlowGrant, error: &DeliveryError) {
         let Some(events) = &self.events else { return };
+        // DIAG-B2：与 flow.delivered 那行对称——失败推送发出时这台手机在不在订阅表里。
+        tracing::info!(
+            "flow.failed push seq={} code={} peer_subscribed={} peer={peer:?}",
+            grant.queue_sequence,
+            error.telemetry_code(),
+            self.subscriptions.as_ref().map_or_else(
+                || "unwired".to_string(),
+                |r| r.is_subscribed(peer).to_string()
+            ),
+        );
         crate::events::emit(
             events,
             crate::events::FLOW_FAILED,
