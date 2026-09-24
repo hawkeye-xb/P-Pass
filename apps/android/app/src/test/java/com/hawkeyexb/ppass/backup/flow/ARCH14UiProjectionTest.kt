@@ -41,17 +41,14 @@ class ARCH14UiProjectionTest {
     // ---------------------------------------------------------------- 英雄区 m / n / K
 
     // 协调方追加的必修项：用户删掉已备份的照片（最常见的用法），英雄区必须是「全部完成」，不是 H-C「正在核对」。
-    // 分子只数「CONFIRMED、原图还在、在当前范围内」，与分母（MediaStore 实时计数）同口径。
-    // 反证：FlowProjection.of 的 confirmed 改回 scoped[CONFIRMED]（不排除 source_missing）→ m 原始值 10 > n 7，
-    // heroRenderOf 走 Unreconciled，红。
-    @org.junit.Ignore("#413 去掉了本地对账：原图被删 / 挪相册不再有来源写 source_missing / bucket_id，m 可能大于 n。待定 m 的口径（W1 报告已列）")
+    // #413 裁定：m = n − 待办 − 范围内已跳过（与待办同一套现算差集），不靠 source_missing 写入——原图删了就不在 n 里。
+    // 反证：flowTripletOf 的 confirmedCount 改回 p.confirmed（order 表里 CONFIRMED 仍是 10）→ m 10 > n 7，Unreconciled，红。
     @Test
     fun `deleting backed-up photos from the phone still shows all done, not the unreconciled card`() = runTest {
         val rig = backedUp(10)
         listOf(2L, 5L, 8L).forEach(rig.media::remove)
-        rig.trigger(TriggerReason.APP_FOREGROUND) // 慢路径第二遍：Gone → source_missing，行仍是 CONFIRMED
-        assertEquals(OrderState.CONFIRMED, rig.state(2))
-        assertTrue(rig.store.currentForMedia(2)!!.sourceMissing)
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertEquals("order 行不改写（CONFIRMED 不可否定）", OrderState.CONFIRMED, rig.state(2))
 
         val p = rig.projection()
         val t = flowTripletOf(p, albums)!!
@@ -67,9 +64,8 @@ class ARCH14UiProjectionTest {
         rig.close()
     }
 
-    // 已确认的照片被挪进没选的相册：慢路径更新 bucket_id，m 随之减一，不会比 n 多。
-    // 反证：去掉 DiffPlanner 范围外分支里的 MappingOnly → 行的 bucket_id 停在 7，m = 3 > n = 2，Unreconciled，红。
-    @org.junit.Ignore("#413 去掉了本地对账：原图被删 / 挪相册不再有来源写 source_missing / bucket_id，m 可能大于 n。待定 m 的口径（W1 报告已列）")
+    // 已确认的照片被挪进没选的相册：它不在 n 里，m = n − 待办 − 已跳过 随之减一，不会比 n 多（不需要改写 bucket_id）。
+    // 反证：同上，m 改回按 order 表的 bucket_id 数 → m = 3 > n = 2，Unreconciled，红。
     @Test
     fun `moving a backed-up photo into an unselected album keeps m equal to n`() = runTest {
         val rig = backedUp(3)
@@ -80,6 +76,28 @@ class ARCH14UiProjectionTest {
         assertEquals(2L, t.n)
         assertEquals(2L, t.confirmedRaw)
         assertEquals(HeroRender.Triplet, heroRenderOf(MediaAccess.FULL, t))
+        rig.close()
+    }
+
+    // #413 裁定补充：删掉一部分已备份照片、同时还有一张没传完、一张被跳过——m / n / K 三者自洽，传完之后显示全部完成。
+    @Test
+    fun `after deleting backed-up photos the hero shows all done once the rest is sent`() = runTest {
+        val rig = backedUp(5)
+        listOf(1L, 2L).forEach(rig.media::remove)
+        rig.photo(6, generation = 6)
+        rig.photo(7, generation = 7)
+        rig.control.pausedFlag = true
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
+        val snap = rig.engine.remainingSnapshot()
+        assertEquals(2, snap.count)
+        rig.cancelRemainingNow().also { rig.settle() }.await() // 两张新拍的都跳过
+        rig.engine.restoreSkipped().also { rig.settle() }.await() // 又恢复：对账扫描传走
+        val t = flowTripletOf(rig.projection(), albums)!!
+        assertEquals(5L, t.n)
+        assertEquals(5L, t.confirmedRaw)
+        assertEquals(0L, t.k)
+        assertEquals(HeroRender.Triplet, heroRenderOf(MediaAccess.FULL, t))
+        assertTrue(backupUiStateOf(rig.projection()) is BackupUiState.AllSafe)
         rig.close()
     }
 

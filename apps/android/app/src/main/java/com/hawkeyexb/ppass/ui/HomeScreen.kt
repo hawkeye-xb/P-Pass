@@ -250,7 +250,7 @@ fun HomeScreen(
     cancelRemainingCount: Long? = null,
     onRequestCancelRemaining: () -> Unit = {},
     // #418：设置卡「已跳过的照片 N 张 · 点击恢复」。null = 没有用户取消过的照片，不渲染。
-    // 恢复 = 删掉这些 SKIPPED_BY_USER 行，慢路径把它们重新放回待传。
+    // 恢复 = 清空跳过名单，对账扫描把它们重新放回待传。
     skippedCount: Long? = null,
     onRestoreSkipped: () -> Unit = {},
     // 确认框里写明的 N（点那一行时现算）；null = 没有确认框。
@@ -688,7 +688,7 @@ fun HomeScreen(
                 }
                 // 2026-09-14（用户拍板）/ #418：用户取消过的照片不做打断式提示，只在这里一行
                 // 「已跳过的照片 N 张 · 点击恢复」。N = SKIPPED_BY_USER 的张数，取消后随之增加；
-                // 点击恢复 = 删掉这些行，慢路径把它们当作没有 order 的照片重新放回待传。
+                // 点击恢复 = 清空跳过名单，对账扫描把这些照片重新放回待传。
                 if (skippedCount != null) {
                     HorizontalDivider(color = PPColor.Divider)
                     CellRow(

@@ -19,8 +19,8 @@ import com.hawkeyexb.ppass.ui.BackupUiState
  * 首页需要的全部事实。
  *
  * - [view]：引擎视图；null = 还没拿到（运行时未就绪 / 待办还没算出来）。全局状态、待备份、当前这一张都只读它。
- * - [confirmed]：范围内（[FlowProjection.of] 的 bucketIds）当前行为 CONFIRMED、且原图还在的 order 数。
- *   原图删了的 CONFIRMED 行（`source_missing`，#416 裁决 2）不算：它已不在 [inScopeTotal] 里。
+ * - [confirmed]：范围内当前行为 CONFIRMED、且原图还在的 order 数（读 order 表）。只在待办还没算出来时兜底；
+ *   英雄区与「全部完成」读 [done]。
  * - [inScopeTotal]：范围内照片总数（MediaStore 实时计数，由调用方传入；null = 读不到）
  * - [failed]：当前行为 FAILED 的 order 数（全量口径，不随范围收窄——UI-16 规则 G4）
  * - [skippedByUser]：范围内当前行为 SKIPPED_BY_USER 的张数（「照片都存好了」的闸门 S3）。
@@ -52,6 +52,18 @@ data class FlowProjection(
 
     /** 「待备份 K」= 待办大小（#413 §8：唯一来源）。null = 还没算出来。 */
     val remaining: Long? get() = view?.pending?.toLong()
+
+    /**
+     * 英雄区的 m（#413 裁定：与待办同一套现算差集）= 范围内总数 n − 待办 − 范围内已跳过。不依赖 `source_missing` /
+     * bucket 变化的写入：原图删了就不在 n 里，挪出范围也不在 n 里，所以 m 永远不会比 n 大。
+     * n 或待办还不知道时退回 order 表的 [confirmed]。
+     */
+    val done: Long
+        get() {
+            val n = inScopeTotal ?: return confirmed
+            val k = remaining ?: return confirmed
+            return (n - k - skippedByUser).coerceIn(0L, n)
+        }
 
     val paused: Boolean get() = state == GlobalState.PAUSED
     val running: Boolean get() = state == GlobalState.RUNNING
@@ -134,7 +146,7 @@ fun backupUiStateOf(p: FlowProjection): BackupUiState {
 private fun idleUiStateOf(p: FlowProjection): BackupUiState = when {
     // 技术标记，只进「查看技术详情」；主文案是 run_failed（troubleTextOf 是唯一渲染闸门）。
     p.failed > 0 -> BackupUiState.Trouble("flow.failed=${p.failed}")
-    flowAllDone(p) -> BackupUiState.AllSafe(ingested = p.confirmed.toInt(), duplicates = 0)
+    flowAllDone(p) -> BackupUiState.AllSafe(ingested = p.done.toInt(), duplicates = 0)
     else -> BackupUiState.Idle
 }
 
@@ -149,12 +161,14 @@ internal fun roundOrdinalOf(doneThisRound: Int, pending: Int): Pair<Int, Int> {
  * 无论哪条路，都要求至少确认过一张、且没有未完成的行。
  */
 internal fun flowAllDone(p: FlowProjection): Boolean {
+    // 待办算出来了：它就是唯一口径（范围外的在途行、封顶的失败行已由待办自己决定算不算）。
+    p.remaining?.let { k -> if (p.inScopeTotal != null) return k == 0L && p.done > 0 }
     if (p.confirmed <= 0 || p.unfinished != 0L) return false
     return p.remaining?.let { it == 0L } ?: (p.inScopeTotal == null || p.confirmed >= p.inScopeTotal)
 }
 
 /**
- * 英雄区三元组。m = 原图还在的已确认数，n = 范围内总数，K = 待办（[EngineView.pending]；还没算出来时退回 n − m）。
+ * 英雄区三元组。m = [FlowProjection.done]（n − 待办 − 范围内已跳过），n = 范围内总数，K = 待办（[EngineView.pending]；还没算出来时退回 n − m）。
  * bucketIds == null（还没选过范围）或 n 读不到 → null，英雄区说「读不到」。
  */
 fun flowTripletOf(p: FlowProjection, bucketIds: Set<Long>?): BackupTriplet? {
@@ -162,7 +176,7 @@ fun flowTripletOf(p: FlowProjection, bucketIds: Set<Long>?): BackupTriplet? {
     val n = p.inScopeTotal ?: return null
     return tripletOf(
         n = n,
-        confirmedCount = p.confirmed,
+        confirmedCount = p.done,
         lastSuccessAt = p.lastSuccessAt,
         hasFailedNeedsUser = p.failed > 0L,
         pausedByUser = p.paused,
