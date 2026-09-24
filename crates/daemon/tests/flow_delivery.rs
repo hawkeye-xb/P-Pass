@@ -20,6 +20,7 @@ fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFe
         media_type: "image/jpeg".into(),
         provider,
         capture_at_ms: 0,
+        size_bytes: 0,
     }
 }
 

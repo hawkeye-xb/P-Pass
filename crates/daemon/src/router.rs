@@ -412,11 +412,19 @@ impl Router {
                 // 不心跳（客户端侧把关）。未配对节点的 hello 只是能力握手，
                 // 无设备行可更新，静默跳过。
                 self.record_presence(peer).await;
+                let pairing_epoch = self.db.pairing_epoch(&peer.0).await.ok().flatten();
+                // #413 §7: Desktop health rides on hello for a paired member
+                // only — same zero-data rule as `pairing_epoch`.
+                let health = match (&pairing_epoch, &self.flow_delivery) {
+                    (Some(_), Some(delivery)) => Some(delivery.health().await),
+                    _ => None,
+                };
                 let ours = Hello {
                     proto_ver: PROTO_VER,
                     capabilities: SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect(),
                     device_name: self.device_name.clone(),
-                    pairing_epoch: self.db.pairing_epoch(&peer.0).await.ok().flatten(),
+                    pairing_epoch,
+                    health,
                 };
                 match serde_json::to_value(&ours) {
                     Ok(v) => Resp::ok(req.id.clone(), v),
@@ -550,6 +558,21 @@ impl Router {
                 req.id.clone(),
                 RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
             ),
+            // #413 contract §5: a Desktop-side storage refusal names its
+            // reason in `msg_key` (`storage_full` / `library_unavailable` /
+            // `storage_failed`) so the phone can wait with the right cause
+            // instead of counting a per-item failure.
+            Err(error) if error.peer_failure().is_some() => {
+                tracing::warn!(
+                    "flow delivery from {peer:?} refused ({}): {error}",
+                    error.wire_code()
+                );
+                let code = match error.peer_failure() {
+                    Some(crate::flow_delivery::PeerFailure::StorageFull) => codes::STORAGE_FULL,
+                    _ => codes::INTERNAL,
+                };
+                Resp::err(req.id.clone(), RespError::new(code, error.wire_code()))
+            }
             Err(error) => {
                 tracing::warn!("flow delivery from {peer:?} failed: {error}");
                 Resp::err(
