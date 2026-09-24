@@ -87,12 +87,14 @@ class PPassApplication : Application() {
         private var recreating = false
 
         override fun onActivityStarted(activity: Activity) {
+            appVisible = true
             if (started++ == 0 && !recreating) onFlowAppForeground(this@PPassApplication)
             recreating = false
         }
 
         override fun onActivityStopped(activity: Activity) {
             started = (started - 1).coerceAtLeast(0)
+            appVisible = started > 0
             // 旋转屏幕：stop 之后马上会有同一 Activity 的 start，那不是「进入前台」。
             if (activity.isChangingConfigurations) recreating = true
         }
@@ -104,3 +106,8 @@ class PPassApplication : Application() {
         override fun onActivityDestroyed(activity: Activity) = Unit
     }
 }
+
+/** App 此刻是否有可见的 Activity（第一个 started 到最后一个 stopped 之间）。首页的媒体变化触发只在可见时发。 */
+@Volatile private var appVisible = false
+
+internal fun isAppVisible(): Boolean = appVisible

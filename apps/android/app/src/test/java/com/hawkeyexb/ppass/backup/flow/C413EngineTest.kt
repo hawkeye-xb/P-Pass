@@ -623,6 +623,78 @@ class C413EngineTest {
         assertEquals(listOf(p.hash), rig.importer.released)
         rig.close()
     }
+
+    // ---------------------------------------------------------------- 模拟器冒烟（第二轮）
+
+    // 后台备份关着、App 在前台时存入新照片：首页的媒体变化触发（人在场）照常备份；后台的 MEDIA_CHANGE 仍被开关挡住。
+    // 反证：FOREGROUND_MEDIA_CHANGE 不带 userPresent → DISABLED，第二段红。
+    @Test
+    fun `a media change while the app is visible backs up even with background backup off`() = runTest {
+        val rig = Rig(this)
+        rig.conditions = Conditions(autoBackupEnabled = false)
+        rig.photo(1, generation = 1)
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
+        assertEquals(0, rig.delivery.requests.size)
+        assertEquals(WaitReason.DISABLED, rig.engine.view.value.waitReason)
+        rig.trigger(TriggerReason.FOREGROUND_MEDIA_CHANGE)
+        assertEquals(listOf(1L), rig.delivery.deliveredMediaIds)
+        assertEquals(0, rig.pending())
+        rig.close()
+    }
+
+    // 媒体变化即重算待办，不依赖一轮跑完：等待中（仅 Wi‑Fi）时新拍一张，待备份立即 +1；在跑时合并进来的也当场重算。
+    // 反证：onTrigger 合并时不重算 → 第二段仍是 1，红。
+    @Test
+    fun `a media change recounts the backlog without waiting for a round`() = runTest {
+        val rig = Rig(this)
+        rig.conditions = Conditions(wifiOnly = true, onUnmetered = false)
+        rig.photo(1, generation = 1)
+        rig.trigger(TriggerReason.FOREGROUND_MEDIA_CHANGE)
+        assertEquals(1, rig.pending())
+        rig.conditions = Conditions()
+        rig.delivery.hold = true
+        rig.trigger(TriggerReason.FOREGROUND_MEDIA_CHANGE)
+        rig.photo(2, generation = 2)
+        rig.trigger(TriggerReason.FOREGROUND_MEDIA_CHANGE)
+        assertEquals("the in-flight one and the new one", 2, rig.pending())
+        rig.delivery.release()
+        rig.settle()
+        assertEquals(0, rig.pending())
+        rig.close()
+    }
+
+    // 配对后（扫描脏、全部已确认）：入口的全量差集为 0 → 扫描当场收掉、不申请 FGS；只为问桌面「还在吗」只在 5h 兜底轮申请。
+    // 反证：去掉入口的 finishScan → hasWork 因扫描脏返回 true，acquires = 1，红。
+    @Test
+    fun `nothing to do after re-pairing does not start the foreground service`() = runTest {
+        val rig = Rig(this)
+        val p = rig.photo(1, generation = 1)
+        rig.order(p, OrderState.CONFIRMED)
+        rig.store.advanceGeneration(GenerationAdvance(LEGACY_VOLUME, 1))
+        rig.store.markScanDirty()
+        rig.trigger(TriggerReason.PAIRING_REPAIRED)
+        assertEquals(0, rig.pending())
+        assertEquals(0, rig.foreground.acquires)
+        assertEquals(0, rig.probes)
+        assertFalse(rig.store.scanState().dirty)
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertEquals(0, rig.foreground.acquires)
+        rig.trigger(TriggerReason.PERIODIC)
+        assertEquals(1, rig.foreground.acquires)
+        assertEquals(1, rig.presenceCalls)
+        rig.close()
+    }
+
+    // 接线：首页的 ContentObserver 在 App 可见时叫醒引擎（FOREGROUND_MEDIA_CHANGE），不只是刷新 UI。
+    @Test
+    fun `the home media observer wakes the engine while the app is visible`() {
+        var dir = java.io.File(System.getProperty("user.dir"))
+        while (!java.io.File(dir, "app/src/main").isDirectory) dir = dir.parentFile
+        val holder = java.io.File(dir, "app/src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt").readText()
+        val body = holder.substringAfter("override fun onMediaChanged()").substringBefore("override fun close()")
+        assertTrue(body.contains("isAppVisible()") && body.contains("TriggerReason.FOREGROUND_MEDIA_CHANGE"))
+        assertTrue(TriggerReason.FOREGROUND_MEDIA_CHANGE.userPresent)
+    }
 }
 
 /** 让探测挂在一个闸门上（看检查阶段的视图）。 */

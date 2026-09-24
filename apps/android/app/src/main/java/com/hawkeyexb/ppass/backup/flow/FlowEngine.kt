@@ -156,7 +156,7 @@ internal class FlowEngine(
         pending += reason
         if (cycleJob?.isActive == true) {
             log.log("trigger $reason coalesced into the running cycle")
-            if (reason == TriggerReason.MEDIA_CHANGE || reason == TriggerReason.SCOPE_ADDED) refreshPending()
+            if (reason in RECOUNT_WHILE_RUNNING) refreshPending()
             return false
         }
         cycleJob = scope.launch { drain() }
@@ -382,13 +382,18 @@ internal class FlowEngine(
         prepareCursors(reconcile)
         val todo = withContext(io) { countTodo() }
         setPending(todo)
+        if (todo == 0 && store.scanState().dirty) {
+            // 扫描脏时 countTodo 就是全量差集：一张待办都没有 = 扫描也取不到东西，在入口就收掉，不为它申请 FGS。
+            store.finishScan()
+            log.log("cycle $reasons: reconcile scan has nothing to do (full diff is empty); cleared before the foreground service")
+        }
         log.log("cycle $reasons: check count took ${msSince(cycleStarted)}ms pending=$todo")
         waitReasonOf(conditions(), userPresent)?.let { reason ->
             log.log("cycle $reasons: waiting for $reason (no foreground service requested)")
             if (reason == WaitReason.WIFI || reason == WaitReason.BATTERY) scheduler.scheduleWhenConditionsMet(reason)
             return settle(reason)
         }
-        if (!hasWork(reconcile)) {
+        if (!hasWork(reconcile, askPresence = TriggerReason.PERIODIC in reasons)) {
             log.log("cycle $reasons: nothing to transfer")
             return settle(null)
         }
@@ -457,8 +462,12 @@ internal class FlowEngine(
         if (reconcile && !media.preciseGeneration) store.markScanDirty()
     }
 
-    /** 入口：这一轮有没有可能取到东西（不读文件、不走网络）。没有就不申请 FGS。 */
-    private suspend fun hasWork(reconcile: Boolean): Boolean {
+    /**
+     * 入口：这一轮有没有可能取到东西（不读文件、不走网络）。没有就不申请 FGS。
+     * 只为「问桌面还在吗」而申请 FGS 只在 5h 兜底轮（[askPresence]）：待办为 0 的用户在场触发（配对、回前台）不起 FGS；
+     * 有别的活时，对账轮照样顺带问一次。
+     */
+    private suspend fun hasWork(reconcile: Boolean, askPresence: Boolean): Boolean {
         // 传输中不看范围（在飞时相册被移出范围的那一行还要改待传输 + 丢弃半截）；待传输只算范围内的——
         // 否则一行范围外的待传输会让每次触发都空转一次 FGS。
         if (store.currentInStates(setOf(OrderState.TRANSFERRING), limit = 1).isNotEmpty()) return true
@@ -467,7 +476,7 @@ internal class FlowEngine(
         if (discoveryStep() != null) return true
         if (!reconcile) return false
         if (store.currentInStates(setOf(OrderState.FAILED)).any { it.attempts < OrderStore.MAX_FAILURES && inScope(it.bucketId) }) return true
-        return store.confirmedWithHashAfter(0L, 1).isNotEmpty()
+        return askPresence && store.confirmedWithHashAfter(0L, 1).isNotEmpty()
     }
 
     /** 一轮之内的取件状态。 */
@@ -972,6 +981,14 @@ internal class FlowEngine(
         private const val SOURCE_BATCH = 64
         private const val RETRY_BATCH = 32
         private val OPEN = OrderState.entries.filter { it.isOpen }.toSet()
+
+        /** 在跑时合并进来的这些触发意味着待办可能变了：当场重算（只读元数据），不等这一轮结束。 */
+        private val RECOUNT_WHILE_RUNNING = setOf(
+            TriggerReason.MEDIA_CHANGE,
+            TriggerReason.FOREGROUND_MEDIA_CHANGE,
+            TriggerReason.SCOPE_ADDED,
+            TriggerReason.APP_FOREGROUND,
+        )
     }
 }
 

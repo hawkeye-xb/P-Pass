@@ -24,6 +24,7 @@ import com.hawkeyexb.ppass.backup.flow.GlobalState
 import com.hawkeyexb.ppass.backup.flow.MissingSourceNotice
 import com.hawkeyexb.ppass.backup.flow.PairingEpoch
 import com.hawkeyexb.ppass.backup.flow.TriggerReason
+import com.hawkeyexb.ppass.isAppVisible
 import com.hawkeyexb.ppass.backup.flow.RemainingSnapshot
 import com.hawkeyexb.ppass.backup.flow.acknowledgeFlowMissingSource
 import com.hawkeyexb.ppass.backup.flow.backupUiStateOf
@@ -381,8 +382,13 @@ private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : Engin
         engine.restoreSkipped().await()
     }
 
-    /** 引擎自己在 MediaStore 触发（MediaWatchJob → MEDIA_CHANGE）时重算待办。 */
-    override fun onMediaChanged() = Unit
+    /**
+     * App 在前台时 MediaStore 变了：叫醒引擎（人在场的触发，不查后台开关；在跑就合并）。引擎在入口 / 合并时重算待办
+     * （只读元数据），首页的待备份与 m 随之更新——不依赖 MediaWatchJob（后台备份关着时它不注册）。
+     */
+    override fun onMediaChanged() {
+        if (isAppVisible()) engine.trigger(TriggerReason.FOREGROUND_MEDIA_CHANGE)
+    }
 
     override fun close() = scope.cancel()
 }

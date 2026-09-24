@@ -71,6 +71,12 @@ enum class TriggerReason(val userPresent: Boolean = false, val reconcile: Boolea
     /** #418「已跳过的照片 · 点击恢复」：移出跳过名单的照片在 G 以下，只有对账扫得到。 */
     RESTORE_SKIPPED(userPresent = true, reconcile = true),
     MANUAL(userPresent = true),
+
+    /**
+     * App 在前台时 MediaStore 变了（首页的 ContentObserver）：人在场，不查后台开关——「后台备份」关着时
+     * MediaWatchJob 不注册，只有这条路能兑现「打开 P-Pass 时照常备份」。
+     */
+    FOREGROUND_MEDIA_CHANGE(userPresent = true),
 }
 
 /**
