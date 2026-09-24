@@ -1023,9 +1023,15 @@ private fun requiredMediaPermissions(): List<String> =
 
 // MOB-02 §四事件④: App 进前台且距上次成功 >24h → 用户在场档补跑。
 
-/** 通知权限现状：与发通知前的检查是同一个判据（[com.hawkeyexb.ppass.backup.canPostNotifications]）。 */
+/** 通知权限现状（API<33 恒真——那些版本装完就有，没有运行时权限这
+ *  一说）；只喂 HomeScreen 的不堵路引导卡，不参与任何 onboarding 流程。 */
 private fun hasNotificationPermission(context: Context): Boolean =
-    com.hawkeyexb.ppass.backup.canPostNotifications(context)
+    if (Build.VERSION.SDK_INT >= 33) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+    } else {
+        true
+    }
 
 /**
  * MOB-94: 相册权限三档的生产查询点。

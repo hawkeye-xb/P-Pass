@@ -66,7 +66,7 @@ class SystemFailureNotifier(
 
 /**
  * #413 §8：这台手机此刻能不能发通知——API 33+ 要 POST_NOTIFICATIONS 运行时权限（更早的版本装完就有），
- * 而且用户没在系统设置里关掉本 App 的通知。发任何非 FGS 通知前都先问它；设置页「备份失败时通知我」也读它。
+ * 而且用户没在系统设置里关掉本 App 的通知。发任何非 FGS 通知前都先问它。
  */
 fun canPostNotifications(context: Context): Boolean {
     val granted = Build.VERSION.SDK_INT < 33 ||
