@@ -73,12 +73,12 @@
     <string name="backup_waiting_constraints">正在等待备份条件满足</string>
     <!-- #413 全局状态与等待原因（草稿，待用户确认）。「已暂停」只指用户暂停；等待中由 P-Pass 自动接着传。 -->
     <string name="state_paused">已暂停，点「继续」接着备份</string>
-    <string name="state_preparing">正在准备备份…</string>
+    <string name="state_preparing">准备备份…</string>
     <string name="state_waiting_disabled">后台备份已关闭，打开 P-Pass 时照常备份</string>
-    <string name="state_waiting_battery">电量低，充上电后自动接着备份</string>
+    <string name="state_waiting_battery">电量低，充电后自动接着备份</string>
     <string name="state_waiting_desktop_unreachable">连不上存储电脑，连上后自动接着备份</string>
-    <string name="state_waiting_desktop_full">存储电脑的空间满了，腾出空间后自动接着备份</string>
-    <string name="state_waiting_desktop_library">存储电脑上的照片库文件夹打不开，请在电脑上看看 P-Pass</string>
+    <string name="state_waiting_desktop_full">存储电脑的空间满了，请清理磁盘或把照片库换到更大的位置。</string>
+    <string name="state_waiting_desktop_library">存储电脑照片库文件夹无法打开</string>
     <string name="state_waiting_desktop_error">存储电脑保存照片时出错了，请在电脑上看看 P-Pass</string>
     <string name="desktop_low_space_hint">存储电脑剩余空间不到 5 GB，快存满了</string>
     <!-- 2026-09-07 真机反馈：命令处理中禁用按钮，避免连点排队 -->

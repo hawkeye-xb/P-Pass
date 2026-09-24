@@ -76,12 +76,12 @@
     <string name="backup_waiting_constraints">Waiting for backup conditions</string>
     <!-- #413 global state and wait reasons (drafts, pending user sign-off). "Paused" only means the user paused; waiting resumes by itself. -->
     <string name="state_paused">Paused — tap Resume to carry on</string>
-    <string name="state_preparing">Getting ready to back up…</string>
+    <string name="state_preparing">Preparing backup…</string>
     <string name="state_waiting_disabled">Background backup is off — backs up while P-Pass is open</string>
-    <string name="state_waiting_battery">Battery is low — carries on once charging</string>
+    <string name="state_waiting_battery">Battery is low — backup continues once charging</string>
     <string name="state_waiting_desktop_unreachable">Can\'t reach the storage computer — carries on once it\'s back</string>
-    <string name="state_waiting_desktop_full">The storage computer is full — carries on once there\'s space</string>
-    <string name="state_waiting_desktop_library">The photo library folder on the storage computer can\'t be opened — check P-Pass on the computer</string>
+    <string name="state_waiting_desktop_full">The storage computer is full. Free up disk space or move the photo library to a bigger drive.</string>
+    <string name="state_waiting_desktop_library">Can\'t open the photo library folder on the storage computer</string>
     <string name="state_waiting_desktop_error">The storage computer hit an error saving photos — check P-Pass on the computer</string>
     <string name="desktop_low_space_hint">The storage computer has less than 5 GB free</string>
     <!-- 2026-09-07 real-device feedback: disable the button while a command
