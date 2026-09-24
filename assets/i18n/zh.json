@@ -101,5 +101,5 @@
   "ui.device_open_folder": "打开文件夹",
   "ui.device_open_folder_failed": "打开设备文件夹失败：{err}",
   "ui.low_space_title": "照片库空间不足",
-  "ui.low_space_body": "照片库所在磁盘只剩 {free}（低于 5 GB）。空间不够时手机会暂停备份，请清理磁盘或把照片库换到更大的位置。"
+  "ui.low_space_body": "照片库所在磁盘只剩 {free}（低于 5 GB）。空间不够时手机会停下等待，请清理磁盘或把照片库换到更大的位置。"
 }

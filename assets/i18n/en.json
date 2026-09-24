@@ -101,5 +101,5 @@
   "ui.device_open_folder": "Open folder",
   "ui.device_open_folder_failed": "Failed to open device folder: {err}",
   "ui.low_space_title": "Photo library is running low on space",
-  "ui.low_space_body": "Only {free} left on the photo library's disk (below 5 GB). Phones pause backing up when it runs out — free up space or move the library to a bigger drive."
+  "ui.low_space_body": "Only {free} left on the photo library's disk (below 5 GB). Phones wait until there's room — free up space or move the library to a bigger drive."
 }
