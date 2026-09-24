@@ -17,6 +17,18 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
         return nativeRegister(handle, hash, descriptor.fd)
     }
 
+    override fun importMedia(dataPath: String?, source: Any): String {
+        val descriptor = source as? ParcelFileDescriptor
+            ?: throw IllegalArgumentException("Android provider source must be a ParcelFileDescriptor")
+        return nativeImportMedia(handle, dataPath, descriptor.fd)
+    }
+
+    override fun serve(hash: String): String = nativeServe(handle, hash)
+
+    override fun release(hash: String) {
+        nativeRelease(handle, hash)
+    }
+
     override fun stopActiveFetch(queueSequence: Long) {
         nativeStopActiveFetch(handle)
     }
@@ -47,6 +59,17 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
 
         @JvmStatic
         external fun nativeRegister(handle: Long, hash: String, fd: Int): String
+
+        /** #413：[path] 为 null 时直接从 [fd] 复制。返回导入结果 JSON。 */
+        @JvmStatic
+        external fun nativeImportMedia(handle: Long, path: String?, fd: Int): String
+
+        /** #413：引用的原图已删 / 已变抛 java.io.FileNotFoundException。 */
+        @JvmStatic
+        external fun nativeServe(handle: Long, hash: String): String
+
+        @JvmStatic
+        external fun nativeRelease(handle: Long, hash: String)
 
         @JvmStatic
         external fun nativeStopActiveFetch(handle: Long)
