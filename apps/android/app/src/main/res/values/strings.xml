@@ -62,7 +62,10 @@
     <string name="state_sending_file">Backing up %1$s (%2$d / %3$d)</string>
     <string name="state_safe">All photos are backed up</string>
     <!-- T-080 defect(a): with K > 0 the status line may only speak of the debt -->
-    <string name="state_pending">%1$d photos still to back up</string>
+    <plurals name="state_pending">
+        <item quantity="one">%1$d photo still to back up</item>
+        <item quantity="other">%1$d photos still to back up</item>
+    </plurals>
     <string name="state_trouble">Needs another try</string>
     <string name="safe_detail">%1$d new photos arrived home.</string>
     <string name="safe_detail_dup">%1$d new photos arrived home, %2$d were already there.</string>
@@ -71,16 +74,35 @@
     <!-- UX-13: 被暂停后同一个位置的按钮文案（点它续传，同一条管线） -->
     <string name="backup_resume">Resume</string>
     <string name="backup_waiting_constraints">Waiting for backup conditions</string>
-    <string name="backup_round_cancelled">Current round cancelled</string>
-    <string name="backup_cancel_current_round">Cancel current round</string>
+    <!-- #413 global state and wait reasons (drafts, pending user sign-off). "Paused" only means the user paused; waiting resumes by itself. -->
+    <string name="state_paused">Paused — tap Resume to carry on</string>
+    <string name="state_preparing">Preparing backup…</string>
+    <string name="state_waiting_disabled">Background backup is off — backs up while P-Pass is open</string>
+    <string name="state_waiting_battery">Battery is low — backup continues once charging</string>
+    <string name="state_waiting_desktop_unreachable">Can\'t reach the storage computer — carries on once it\'s back</string>
+    <string name="state_waiting_desktop_full">The storage computer is full. Free up disk space or move the photo library to a bigger drive.</string>
+    <string name="state_waiting_desktop_library">Can\'t open the photo library folder on the storage computer</string>
+    <string name="state_waiting_desktop_error">The storage computer hit an error saving photos — check P-Pass on the computer</string>
+    <string name="desktop_low_space_hint">The storage computer has less than 5 GB free</string>
     <!-- 2026-09-07 real-device feedback: disable the button while a command
          is in flight so repeated taps don't queue behind it. -->
     <string name="backup_command_processing">Working…</string>
-    <!-- 2026-09-14（用户拍板，取代 MOB-59/X-05）：恢复入口从常驻警告条
-         挪进备份设置卡的一行，不再是打断式提示，故文案不再叫 notice。 -->
+    <!-- #418: settings row + confirm dialog for "cancel the remaining N photos" (restore lives in the "skipped photos" row). -->
+    <plurals name="cancel_remaining_label">
+        <item quantity="one">Cancel remaining %1$d photo</item>
+        <item quantity="other">Cancel remaining %1$d photos</item>
+    </plurals>
+    <plurals name="cancel_remaining_confirm_title">
+        <item quantity="one">Cancel the remaining %1$d photo?</item>
+        <item quantity="other">Cancel the remaining %1$d photos?</item>
+    </plurals>
+    <string name="cancel_remaining_confirm_body">These photos will not be backed up. You can restore them later from “Skipped photos”. Photos you take later are backed up as usual.</string>
     <string name="cancelled_round_cell_label">Skipped photos</string>
     <string name="cancelled_round_cell_value">%1$d · restore</string>
-    <string name="missing_source_notice_body">Cannot be recovered: %1$d photo(s) were deleted from this phone, so they will not be sent again.</string>
+    <plurals name="missing_source_notice_body">
+        <item quantity="one">Cannot be recovered: %1$d photo was deleted from this phone, so it will not be sent again.</item>
+        <item quantity="other">Cannot be recovered: %1$d photos were deleted from this phone, so they will not be sent again.</item>
+    </plurals>
     <string name="missing_source_notice_dismiss">Got it</string>
     <string name="missing_source_archive_label">Photos deleted from this phone</string>
     <string name="missing_source_archive_value">%1$d · cannot be recovered</string>
@@ -94,7 +116,10 @@
     <!-- UX-02: 失败通知（成功保持沉默）；MOB-67 渠道名进字典（旧代码硬编码双语） -->
     <string name="notif_channel_backup_failed">Backup failed</string>
     <string name="notif_backup_failed_title">Backup didn\'t finish</string>
-    <string name="notif_backup_failed_body">%1$d photos didn\'t make it home — open to see</string>
+    <plurals name="notif_backup_failed_body">
+        <item quantity="one">%1$d photo didn\'t make it home — open to see</item>
+        <item quantity="other">%1$d photos didn\'t make it home — open to see</item>
+    </plurals>
     <!-- NET-12: transfer foreground service — keeps the process out of the
          cached-process range while a Flow round is actively sending, so
          the system cannot reclaim it mid-transfer (real device: it did,
@@ -107,8 +132,8 @@
          words only: no error code, no class name, no jargon. The fact is
          learned only after the system refuses — the wording says what
          happened, not what is about to happen. -->
-    <string name="state_background_budget_paused">Today\'s off-screen backup time is used up. Backup is paused — keep P-Pass open on screen to carry on now, or it picks up again tomorrow.</string>
-    <string name="state_background_protection_unknown">The phone turned this backup down just now and didn\'t say why. Backup is paused — open P-Pass and keep it on screen to carry on.</string>
+    <string name="state_background_budget_paused">Today\'s off-screen backup time is used up. Keep P-Pass open on screen to carry on now, or it picks up again tomorrow.</string>
+    <string name="state_background_protection_unknown">The phone turned this backup down just now and didn\'t say why. Open P-Pass and keep it on screen to carry on.</string>
     <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->
     <string name="notif_sentinel_title">Haven\'t connected in 3 days</string>
     <string name="notif_sentinel_body">Your photos are safe — check that P-Pass is still running on your computer.</string>
@@ -161,7 +186,10 @@
     <string name="bucket_new">New</string>
     <string name="backup_scope">Albums to back up</string>
     <string name="backup_scope_all">All albums</string>
-    <string name="backup_scope_n">%1$d albums</string>
+    <plurals name="backup_scope_n">
+        <item quantity="one">%1$d album</item>
+        <item quantity="other">%1$d albums</item>
+    </plurals>
     <string name="storage_computer">Storage computer</string>
     <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
          Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
@@ -197,7 +225,10 @@
     <string name="pairing_lost_title">Pairing with this computer is no longer valid</string>
     <string name="pairing_lost_body">Your photos are all still on this phone — nothing is lost. The computer may have removed this phone; scan the code again and backup resumes.</string>
     <string name="photos_lost_title">Lost touch with the home computer</string>
-    <string name="photos_lost_body_days">Backups have been paused for %1$d days. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</string>
+    <plurals name="photos_lost_body_days">
+        <item quantity="one">Backups have been paused for %1$d day. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</item>
+        <item quantity="other">Backups have been paused for %1$d days. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</item>
+    </plurals>
     <string name="photos_lost_body_unknown">Backups have been paused. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</string>
     <string name="photos_lost_action">Scan the code again to reconnect</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
@@ -267,9 +298,4 @@
     <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
     <string name="backup_interrupted_body">Automatic background backup was stopped. Photos sync while the app is open; tap to resume automatic backup. Your photos are safe — nothing was lost.</string>
     <string name="backup_interrupted_action">Resume</string>
-    <!-- MOB-37: 重传告知的 App 内呈现（系统通知发失败/没被看见时的兜底）。
-         措辞不做精确归因——手机端分不清「电脑上被删了」和「换了个库」，
-         带条件从句的第二句在两种成因下都成立（MOB-29 定调）。 -->
-    <string name="reupload_notice_body">%1$d backed-up photos are missing on your computer, so they are being uploaded again. If you meant to delete them, delete them on this phone first.</string>
-    <string name="reupload_notice_action">Got it</string>
 </resources>

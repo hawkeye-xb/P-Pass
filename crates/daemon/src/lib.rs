@@ -4,6 +4,7 @@
 
 pub mod audit_route;
 pub mod authz;
+pub mod awake;
 pub mod backup;
 pub mod cli;
 pub mod config;

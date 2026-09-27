@@ -88,7 +88,7 @@ class UI16HeroGreenGateTest {
         assertTrue(
             allSafeTextAllowed(
                 MediaAccess.FULL, t, pairingLost = false,
-                missingSourceCount = 0, cancelledRoundCount = 0,
+                missingSourceCount = 0,
             ),
         )
     }
@@ -123,15 +123,17 @@ class UI16HeroGreenGateTest {
         val t = healthy()
         assertFalse(
             "S1（G3）：配对已失效时不许说「照片都存好了」",
-            allSafeTextAllowed(MediaAccess.FULL, t, true, 0, 0),
+            allSafeTextAllowed(MediaAccess.FULL, t, true, 0),
         )
         assertFalse(
             "S2：有「已跳过 N 张…不会再重传」时不许同屏说都存好了",
-            allSafeTextAllowed(MediaAccess.FULL, t, false, 1, 0),
+            allSafeTextAllowed(MediaAccess.FULL, t, false, 1),
         )
+        // #418：S3 改读三元组里「范围内用户取消过的张数」（取消轮已删除）。
+        // 反证：allSafeTextAllowed 去掉 skippedByUser 条件 → 这条为 true，红。
         assertFalse(
-            "S3：有可恢复的取消轮次时不许说都存好了",
-            allSafeTextAllowed(MediaAccess.FULL, t, false, 0, 3),
+            "S3：范围内有用户取消过（SKIPPED_BY_USER）的照片时不许说都存好了",
+            allSafeTextAllowed(MediaAccess.FULL, t.copy(skippedByUser = 3), false, 0),
         )
     }
 
@@ -146,7 +148,7 @@ class UI16HeroGreenGateTest {
         assertEquals(HeroRender.Unreconciled, heroRenderOf(MediaAccess.FULL, drifted))
         assertFalse(
             "H-C 与「照片都存好了」不许同屏",
-            allSafeTextAllowed(MediaAccess.FULL, drifted, false, 0, 0),
+            allSafeTextAllowed(MediaAccess.FULL, drifted, false, 0),
         )
     }
 
@@ -160,7 +162,7 @@ class UI16HeroGreenGateTest {
             hasFailedNeedsUser = true,
         )
         assertFalse(heroNumberIsSafe(MediaAccess.FULL, t, pairingLost = true))
-        assertFalse(allSafeTextAllowed(MediaAccess.FULL, t, true, 0, 0))
+        assertFalse(allSafeTextAllowed(MediaAccess.FULL, t, true, 0))
     }
 
     @Test
@@ -172,7 +174,7 @@ class UI16HeroGreenGateTest {
             pausedByUser = true,
         )
         assertFalse(heroNumberIsSafe(MediaAccess.FULL, t, pairingLost = false))
-        assertFalse(allSafeTextAllowed(MediaAccess.FULL, t, false, 0, 0))
+        assertFalse(allSafeTextAllowed(MediaAccess.FULL, t, false, 0))
     }
 
     // ── 生产链路门禁（源文本：证明判据真的接进了渲染） ──

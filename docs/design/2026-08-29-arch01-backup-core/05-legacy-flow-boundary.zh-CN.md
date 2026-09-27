@@ -21,7 +21,7 @@
 | 现有测试 | 保留的用户语义 | 新 Flow 对应 |
 |---|---|---|
 | `NoScopeNoBackupTest` | 未选范围时不得传任何照片 | Flow discovery 的范围准入；待 REBUILD-03 新 case |
-| `BadMediaRecordTest` | 单个不可读源不得卡死后续项目 | C-05：当前项最终 `FAILED_NEEDS_USER` 后严格前进 |
+| `BadMediaRecordTest` | 单个不可读源不得卡死后续项目 | C-09：单张失败当场重试 1 次后记失败，循环继续下一张 |
 | `ScopeBackfillTest` | 范围变动不得漏掉或误传项目 | E-02/E-03 与 ARCH-01 scope/backfill 规则 |
 | `ResumeAfterPauseTest` | 用户 Pause 后只有明确 Continue 才恢复 | C-01～C-03 |
 | `FailedRetryIsNotPausedTest` | 条件/失败与用户 Pause 必须可区分 | C-02/C-04/C-05 |

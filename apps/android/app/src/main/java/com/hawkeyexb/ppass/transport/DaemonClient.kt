@@ -25,12 +25,15 @@ import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -150,6 +153,107 @@ class DaemonClient {
                 )
             }
         }
+
+    /**
+     * DIAG-A：与 [call] 同一次往返、同一个 [CONNECT_TIMEOUT_MS] 上限，但逐阶段记下发生了什么，
+     * 成败都调一次 [report]。只给可达性探测用——状态轮询也走它会把日志刷爆。
+     *
+     * 记的东西（全部来自 iroh-ffi 公开 API，不猜）：开始时本端有没有 home relay（`addr().relayUrl()`）、
+     * 本端 `online()` 在这次调用期间何时返回、`connect()` 耗时、收到回复的耗时、连上后选中的路径
+     * （`Connection.paths()` → lan / direct / relay，口径同 conninfo.rs）；失败时的异常类型、
+     * `IrohException.kind()` / `debugMessage()` 原文，以及 iroh 此刻手里的对端地址（`remoteAddr`）。
+     */
+    suspend fun callTraced(
+        peer: PeerAddrParts,
+        method: String,
+        params: JsonElement,
+        report: (CallTrace) -> Unit,
+    ): Resp = withContext(Dispatchers.IO) {
+        val ep = endpoint ?: error("bind() first")
+        val started = System.nanoTime()
+        fun sinceStart() = (System.nanoTime() - started) / 1_000_000
+        val homeRelayAtStart = runCatching { ep.addr().relayUrl() }.getOrNull()?.takeIf { it.isNotBlank() }
+        val onlineAfter = java.util.concurrent.atomic.AtomicLong(-1)
+        var connectMs: Long? = null
+        var roundTripMs: Long? = null
+        var path: PathVerdict? = null
+        var pathCount = 0
+        var failure: Throwable? = null
+        val addr = EndpointAddr(EndpointId.fromString(peer.idHex), peer.relayUrl, peer.directAddresses)
+        try {
+            coroutineScope {
+                val onlineWatch = launch {
+                    runCatching { ep.online() }.onSuccess { onlineAfter.set(sinceStart()) }
+                }
+                try {
+                    withTimeout(CONNECT_TIMEOUT_MS) {
+                        val conn = ep.connect(addr, ALPN_CTRL.toByteArray())
+                        connectMs = sinceStart()
+                        try {
+                            runCatching {
+                                val snapshots = conn.paths()
+                                pathCount = snapshots.size
+                                path = classifyPaths(
+                                    snapshots.map { PathFacts(it.isSelected, it.isRelay, it.remoteAddr, it.rttMs.toLong()) },
+                                )
+                            }
+                            val bi = conn.openBi()
+                            val send = bi.send()
+                            val recv = bi.recv()
+                            val req = Req(id = UUID.randomUUID().toString(), method = method, params = params)
+                            send.writeAll(encodeFrame(Req.serializer(), req))
+                            send.finish()
+                            val header = recv.readExact(4u)
+                            val payload = recv.readExact(frameLen(header).toUInt())
+                            decodePayload(Resp.serializer(), payload).also { roundTripMs = sinceStart() }
+                        } finally {
+                            conn.close(0L, ByteArray(0))
+                        }
+                    }
+                } finally {
+                    onlineWatch.cancel()
+                }
+            }
+        } catch (_: TimeoutCancellationException) {
+            DaemonUnreachableException("$method: no response from the computer within ${CONNECT_TIMEOUT_MS}ms")
+                .also { failure = it }
+                .let { throw it }
+        } catch (t: Throwable) {
+            failure = t
+            throw t
+        } finally {
+            val f = failure
+            val iroh = f as? computer.iroh.IrohException
+            val peerKnown = if (f == null) {
+                null
+            } else {
+                runCatching {
+                    withTimeoutOrNull(1_000) { ep.remoteAddr(EndpointId.fromString(peer.idHex)) }
+                        ?.let { known -> "relay=${known.relayUrl() ?: "-"} direct=${known.directAddresses()}" }
+                }.getOrNull()
+            }
+            report(
+                CallTrace(
+                    method = method,
+                    tokenRelay = peer.relayUrl,
+                    tokenDirectAddrs = peer.directAddresses,
+                    homeRelayAtStart = homeRelayAtStart,
+                    onlineAfterMs = onlineAfter.get().takeIf { it >= 0 },
+                    connectMs = connectMs,
+                    roundTripMs = roundTripMs,
+                    totalMs = sinceStart(),
+                    path = path,
+                    pathCount = pathCount,
+                    errorClass = f?.javaClass?.simpleName,
+                    errorKind = iroh?.let { runCatching { it.kind().name }.getOrNull() },
+                    errorMessage = f?.let { e ->
+                        iroh?.let { runCatching { it.debugMessage() }.getOrNull() } ?: e.message
+                    },
+                    peerKnownAddr = peerKnown,
+                ),
+            )
+        }
+    }
 
     /**
      * NET-06: read-only status query for one exact tuple — a short

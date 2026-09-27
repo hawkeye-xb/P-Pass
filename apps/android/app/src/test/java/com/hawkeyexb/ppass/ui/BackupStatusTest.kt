@@ -109,6 +109,16 @@ class BackupStatusTest {
             val el = nodes.item(i) as Element
             result[el.getAttribute("name")] = el.textContent?.trim().orEmpty()
         }
+        // plurals（#418 回归起 state_pending 等带数量的文案是 plurals）：取 other 那一条参与同样的断言。
+        val plurals = doc.getElementsByTagName("plurals")
+        for (i in 0 until plurals.length) {
+            val el = plurals.item(i) as Element
+            val items = el.getElementsByTagName("item")
+            for (j in 0 until items.length) {
+                val item = items.item(j) as Element
+                if (item.getAttribute("quantity") == "other") result[el.getAttribute("name")] = item.textContent?.trim().orEmpty()
+            }
+        }
         return result
     }
 }

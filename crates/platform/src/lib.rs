@@ -66,6 +66,10 @@ pub enum PowerHint {
 
 /// Keeps the system awake while alive (RAII). Dropping releases the
 /// assertion. MVP 尽力而为：合盖必睡等平台边界由诊断文案覆盖（§4）。
+///
+/// NET-26 (#419)：guard 是 `Send` 的，可以在**任意线程**上 drop——daemon
+/// 在 tokio 多线程 runtime 的一个 worker 上拿、在另一个 worker 上放。各平台
+/// 实现必须保证这一点（Windows 的线程级执行状态因此由专属线程持有）。
 pub struct AwakeGuard {
     #[allow(dead_code)] // the handle's Drop is the whole point
     inner: AwakeGuardImpl,
@@ -77,6 +81,12 @@ type AwakeGuardImpl = macos::CaffeinateGuard;
 type AwakeGuardImpl = windows::ExecutionStateGuard;
 #[cfg(not(any(target_os = "macos", windows)))]
 type AwakeGuardImpl = ();
+
+// Compile-time proof of the `Send` contract documented on `AwakeGuard`.
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<AwakeGuard>();
+};
 
 /// Device private-key storage (DPAPI / Keychain).
 pub trait KeyStore {
@@ -211,9 +221,14 @@ pub trait PlatformAdapter: Send + Sync {
     }
     /// DEVLOG-02：daemon 在 `PPF_LOG_FILE` 未设时的**平台默认**日志文件。
     ///
-    /// macOS 返回 `None`：launchd plist 的 `StandardErrorPath` 已经把 stderr
-    /// 重定向到文件，再叠一层只会写两份。Windows 必须返回 `Some`：HKCU Run
-    /// 键没有任何重定向能力，release 又不再分配控制台，不落盘就等于没有日志。
+    /// Windows 必须返回 `Some`：HKCU Run 键没有任何重定向能力，release 又不再
+    /// 分配控制台，不落盘就等于没有日志。
+    ///
+    /// macOS 也返回 `Some`（DIAG-B1）：原先指望 launchd plist 的
+    /// `StandardErrorPath`，但桌面壳还有好几条一次性 spawn 路径（注册失败兜底、
+    /// 更新后恢复、重启）把 stdio 全接到 `/dev/null`——真机上 0.6.0 的 daemon
+    /// 就是这么跑的，日志整段丢失。daemon 在 macOS 上**同时**写这个文件和
+    /// stderr（后者留给向导读启动错误），见 main.rs。
     /// DAE-05：`path` 所在卷的容量水位。`None` = 本平台没有实现（调用方
     /// 应当序列化成 null，而不是编一个数字出来）。
     ///
@@ -232,6 +247,13 @@ pub trait PlatformAdapter: Send + Sync {
     fn default_log_file(&self, data_dir: &std::path::Path) -> Option<PathBuf> {
         let _ = data_dir;
         None
+    }
+
+    /// DIAG-B1：写 [`default_log_file`](Self::default_log_file) 时是否**同时**照旧写
+    /// stderr。macOS 为 true：launchd 托管时 stderr 是 `.err`，桌面向导读它的最后
+    /// 一行报启动失败（DESK-09）。默认 false（Windows release 没有控制台可写）。
+    fn default_log_tees_stderr(&self) -> bool {
+        false
     }
 
     /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。

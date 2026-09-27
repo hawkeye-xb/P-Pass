@@ -156,6 +156,9 @@ pub struct BundleInputs {
     pub stderr_path: Option<String>,
     pub stdout_tail: Option<String>,
     pub stderr_tail: Option<String>,
+    /// DIAG-B1：daemon 自己写的固定位置日志（`<data_dir>/logs/daemon.log`）的
+    /// 尾部。与 plist 无关——一次性 spawn 的 daemon 只有这一份日志。
+    pub persistent_log_tail: Option<String>,
     /// daemon 活着时它自己给的那几份（diag_events.json / devices.json /
     /// audit.json），原样搬进来（daemon 侧已脱敏）。
     pub daemon_entries: Vec<(String, Vec<u8>)>,
@@ -165,6 +168,7 @@ const README: &str = "\
 P-Pass 诊断包（导出时间见各文件内容）
 
 先看哪个：
+  0. daemon.log         ← 后台服务自己写的完整运行日志（固定位置，每次运行都有）
   1. daemon-stderr.log  ← 后台服务起不来 / 崩了，原因几乎总在这里
   2. daemon-stdout.log  ← 正常运行日志（连接、备份、库目录）
   3. versions.txt       ← App 与后台服务的版本号（版本装反是常见原因）
@@ -236,6 +240,9 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
     ));
     entries.push(("log-sources.txt".into(), src.into_bytes()));
 
+    if let Some(t) = &i.persistent_log_tail {
+        entries.push(("daemon.log".into(), scrub(t, home).into_bytes()));
+    }
     if let Some(t) = &i.stderr_tail {
         entries.push(("daemon-stderr.log".into(), scrub(t, home).into_bytes()));
     }
@@ -371,6 +378,7 @@ mod tests {
             stderr_tail: Some(
                 "Error: migration: migration 2 was previously applied but is missing in the resolved migrations\n".into(),
             ),
+            persistent_log_tail: None,
             daemon_entries: Vec::new(),
         };
         let entries = build_bundle(&i);
@@ -468,6 +476,31 @@ mod tests {
         assert!(!masked.contains(&node), "{masked}");
         // 短 hex（端口号、小 id）不动。
         assert_eq!(mask_long_hex("port 41145 beef"), "port 41145 beef");
+    }
+
+    // DIAG-B1：一次性 spawn 的 daemon 没有 plist 日志，固定位置那份必须进包（且脱敏）。
+    #[test]
+    fn bundle_includes_the_persistent_daemon_log_without_a_plist() {
+        let i = BundleInputs {
+            home: "/Users/someone".into(),
+            app_version: "0.6.0".into(),
+            plist_found: false,
+            persistent_log_tail: Some(
+                "INFO flow.delivered push seq=1 at /Users/someone/x\n".into(),
+            ),
+            ..Default::default()
+        };
+        let entries = build_bundle(&i);
+        let log = entries
+            .iter()
+            .find(|(n, _)| n == "daemon.log")
+            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+            .expect("daemon.log must be in the bundle");
+        assert!(log.contains("flow.delivered push seq=1"), "{log}");
+        assert!(
+            !log.contains("/Users/someone"),
+            "home must be scrubbed: {log}"
+        );
     }
 
     // zip 真的能写出来、读回来（write_zip / read_zip_entries 往返）。

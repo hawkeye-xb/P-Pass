@@ -118,22 +118,59 @@ impl PlatformAdapter for WindowsAdapter {
         })
     }
 
+    /// NET-26 (#419)：`SetThreadExecutionState` 的状态挂在**调用线程**上。
+    /// daemon 在 tokio 多线程 runtime 里拿锁、放锁，两次调用多半落在不同的
+    /// worker 上——放锁那一下清的是别的线程的状态，拿锁的那个线程会一直让
+    /// 系统保持唤醒。所以这里起一个专属线程：它设置状态、汇报结果、阻塞等
+    /// guard 被 drop，再在**同一个线程**上清掉状态退出。guard 因此可以在任意
+    /// 线程上 drop，语义与 macOS 的 caffeinate 子进程对称。
     fn assert_awake(&self) -> Result<AwakeGuard> {
-        use windows_sys::Win32::System::Power::{
-            SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
-        };
-        // SAFETY: SetThreadExecutionState has no memory-safety
-        // preconditions; a zero return means failure.
-        let prev = unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
-        if prev == 0 {
-            return Err(PlatformError::Failed {
-                action: "SetThreadExecutionState",
-                detail: "returned 0".into(),
-            });
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::Builder::new()
+            .name("ppf-awake".into())
+            .spawn(move || {
+                use windows_sys::Win32::System::Power::{
+                    SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
+                };
+                // SAFETY: SetThreadExecutionState has no memory-safety
+                // preconditions; a zero return means failure.
+                let prev = unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
+                if prev == 0 {
+                    let _ = ready_tx.send(Err("returned 0".into()));
+                    return;
+                }
+                let _ = ready_tx.send(Ok(()));
+                // Blocks until the guard drops (its sender disconnects).
+                let _ = release_rx.recv();
+                // SAFETY: as above.
+                unsafe {
+                    SetThreadExecutionState(ES_CONTINUOUS);
+                }
+            })
+            .map_err(io_err("spawn awake thread"))?;
+        match ready_rx.recv() {
+            Ok(Ok(())) => Ok(AwakeGuard {
+                inner: ExecutionStateGuard {
+                    release: Some(release_tx),
+                    thread: Some(thread),
+                },
+            }),
+            Ok(Err(detail)) => {
+                let _ = thread.join();
+                Err(PlatformError::Failed {
+                    action: "SetThreadExecutionState",
+                    detail,
+                })
+            }
+            Err(_) => {
+                let _ = thread.join();
+                Err(PlatformError::Failed {
+                    action: "SetThreadExecutionState",
+                    detail: "awake thread exited before reporting".into(),
+                })
+            }
         }
-        Ok(AwakeGuard {
-            inner: ExecutionStateGuard { _private: () },
-        })
     }
 
     fn power_hint(&self) -> PowerHint {
@@ -484,17 +521,19 @@ fn elevated_powercfg(params: &str) -> Result<()> {
     Ok(())
 }
 
-/// RAII wrapper over the thread execution state.
+/// RAII wrapper over the execution state held by the dedicated awake
+/// thread (see `assert_awake`). Dropping disconnects the channel; the
+/// thread clears its own state and is joined here.
 pub struct ExecutionStateGuard {
-    _private: (),
+    release: Option<std::sync::mpsc::Sender<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Drop for ExecutionStateGuard {
     fn drop(&mut self) {
-        use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS};
-        // SAFETY: as above.
-        unsafe {
-            SetThreadExecutionState(ES_CONTINUOUS);
+        drop(self.release.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
         }
     }
 }

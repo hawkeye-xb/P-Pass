@@ -96,6 +96,27 @@ pub struct Hello {
     /// Omitted for unpaired peers so hello remains a zero-data handshake there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_epoch: Option<String>,
+    /// #413 §7: Desktop health, carried only on the Desktop's reply to a
+    /// paired member (same zero-data rule as `pairing_epoch`). Omitted
+    /// entirely otherwise; a phone that sees no `health` treats the Desktop
+    /// as healthy (old Desktop builds never send it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<DesktopHealth>,
+}
+
+/// #413 §7 / contract §5: what the phone checks before it asks for a
+/// foreground service. Field names are a fixed W1↔W4 contract.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct DesktopHealth {
+    /// Bytes an unprivileged writer can still use on the photo library's
+    /// volume (`statvfs` `f_bavail` semantics). `null` = this platform could
+    /// not answer — never a made-up number.
+    pub free_bytes: Option<i64>,
+    /// The photo library folder exists and a file can be created in it.
+    pub library_writable: bool,
+    /// The index database answers a query.
+    pub index_ok: bool,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -106,6 +127,7 @@ impl Default for Hello {
             capabilities: Vec::new(),
             device_name: String::new(),
             pairing_epoch: None,
+            health: None,
         }
     }
 }
@@ -298,6 +320,10 @@ pub struct FlowFetchRequest {
     /// ingest wall-clock. `#[serde(default)]` on this struct makes the field
     /// backward compatible with an older phone build that never sends it.
     pub capture_at_ms: i64,
+    /// #413 §7: the item's size in bytes as the phone knows it. 0 = unknown
+    /// (old client). Desktop prechecks free space with it at offer time and
+    /// refuses with `storage_full` before fetching a single byte.
+    pub size_bytes: i64,
 }
 
 /// A durable Desktop acknowledgement for exactly one materialized item.
@@ -617,8 +643,62 @@ mod tests {
             capabilities: vec!["thumbnail.v1".into()],
             device_name: "Salamira's Phone".into(),
             pairing_epoch: None,
+            health: None,
         }
     );
+
+    /// #413 §5 W1↔W4 契约：`hello` 回复的 `health` 字段名、`free_bytes` 取不到时
+    /// 是 JSON `null`（不是省略），这三点手机侧逐字依赖——钉死字面量。
+    #[test]
+    fn hello_health_serializes_with_the_contract_field_names_and_a_null_free_bytes() {
+        let hello = Hello {
+            health: Some(DesktopHealth {
+                free_bytes: None,
+                library_writable: true,
+                index_ok: false,
+            }),
+            ..Hello::default()
+        };
+        let value = serde_json::to_value(&hello).unwrap();
+        assert_eq!(
+            value["health"],
+            serde_json::json!({"free_bytes": null, "library_writable": true, "index_ok": false})
+        );
+        let known = DesktopHealth {
+            free_bytes: Some(6_000_000_000),
+            library_writable: true,
+            index_ok: true,
+        };
+        assert_eq!(
+            serde_json::to_value(known).unwrap(),
+            serde_json::json!({"free_bytes": 6_000_000_000i64, "library_writable": true, "index_ok": true})
+        );
+    }
+
+    /// 没有 health 的 hello（未配对节点、手机自己发的 hello、老桌面）不带这个键，
+    /// 旧的 hello 快照因此一字不变。
+    #[test]
+    fn hello_without_health_omits_the_key_and_old_frames_still_parse() {
+        let value = serde_json::to_value(Hello::default()).unwrap();
+        assert!(value.get("health").is_none(), "{value}");
+        let old: Hello =
+            serde_json::from_str(r#"{"proto_ver":1,"capabilities":[],"device_name":"d"}"#).unwrap();
+        assert_eq!(old.health, None);
+    }
+
+    /// `size_bytes` 缺省（老手机）= 0 = 未知。
+    #[test]
+    fn flow_fetch_request_size_bytes_defaults_to_unknown_for_old_phones() {
+        let old: FlowFetchRequest =
+            serde_json::from_str(r#"{"queue_sequence":7,"pairing_epoch":"e"}"#).unwrap();
+        assert_eq!(old.size_bytes, 0);
+        let value = serde_json::to_value(FlowFetchRequest {
+            size_bytes: 42,
+            ..FlowFetchRequest::default()
+        })
+        .unwrap();
+        assert_eq!(value["size_bytes"], 42);
+    }
 
     roundtrip_test!(
         pair_request_roundtrip,
@@ -777,6 +857,7 @@ mod tests {
             media_type: "image/jpeg".into(),
             provider: "peer-address".into(),
             capture_at_ms: 1_700_000_000_000,
+            size_bytes: 3_000_000,
         }
     );
 

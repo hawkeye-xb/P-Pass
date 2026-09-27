@@ -98,8 +98,16 @@ async fn main() -> anyhow::Result<()> {
             let base = pinned_data_dir
                 .clone()
                 .unwrap_or_else(|| platform::adapter().data_dir());
+            // DIAG-B1：macOS 文件 + stderr 双写——stderr 在 launchd 托管时是
+            // `.err`，桌面向导读它的最后一行报启动失败（DESK-09）；被一次性
+            // spawn 时 stderr 是 /dev/null，文件是唯一留痕。
+            let open = if platform::adapter().default_log_tees_stderr() {
+                daemon::log_guard::DedupGuard::for_file_and_stderr
+            } else {
+                daemon::log_guard::DedupGuard::for_file
+            };
             match platform::adapter().default_log_file(&base) {
-                Some(path) => match daemon::log_guard::DedupGuard::for_file(&path) {
+                Some(path) => match open(&path) {
                     Ok(guard) => guard,
                     Err(e) => {
                         eprintln!(
@@ -516,7 +524,9 @@ async fn main() -> anyhow::Result<()> {
         // TEL-02: same telemetry client as the daemon_alive heartbeat —
         // `Telemetry::record` is already a no-op when disabled, so this
         // wiring is unconditional regardless of the config switch.
-        .with_telemetry(telemetry.clone());
+        .with_telemetry(telemetry.clone())
+        // NET-26 (#419): keep the machine awake while any fetch runs.
+        .with_awake(daemon::awake::AwakeHold::platform());
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
         .with_events(event_bus.clone());
     let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir)
@@ -549,9 +559,17 @@ async fn main() -> anyhow::Result<()> {
         startup.removed,
         startup.adopted
     );
+    // #413 §6: 3 天没人续传的 active grant 取消，半截交给 flow-blobs GC。
+    // 启动先扫一轮（daemon 可能停过好几天），之后跟每小时巡检一起跑。
+    match flow_delivery.expire_stale_grants().await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("#413: 启动时取消超期未续传的 Flow grant {n} 个"),
+        Err(error) => tracing::warn!("#413: 超期 grant 巡检失败，下一轮再试: {error}"),
+    }
     {
         let reconcile = reconcile.clone();
         let backup = backup.clone();
+        let flow_expiry = flow_delivery.clone();
         // NET-20: flow-staging 孤儿回收复用同一份 db/data_dir——
         // 保护集判据与 flow-blobs 的 iroh GC 回调（上面的
         // `flow_gc_protected`）同一张表（`active_flow_content_hashes`），
@@ -585,6 +603,11 @@ async fn main() -> anyhow::Result<()> {
                 // NET-20: `.ppf/flow-staging` 是 Flow 单通道自己的装卸台，
                 // 不在 `backup.reclaim_staging` 的职责范围内——查询失败就
                 // 跳过本轮（宁可漏收，不可在保护集不可信时误删）。
+                match flow_expiry.expire_stale_grants().await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!("#413: 取消超期未续传的 Flow grant {n} 个"),
+                    Err(error) => tracing::warn!("#413: 超期 grant 巡检失败，下一轮再试: {error}"),
+                }
                 match flow_staging_db.active_flow_content_hashes().await {
                     Ok(protected) => {
                         let freed = daemon::sweep_flow_staging_orphans(

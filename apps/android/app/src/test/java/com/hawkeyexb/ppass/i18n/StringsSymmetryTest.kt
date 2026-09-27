@@ -59,6 +59,52 @@ class StringsSymmetryTest {
         }
     }
 
+    /** plurals：name → (quantity → text)。 */
+    private fun plurals(resDir: File, localeDir: String): Map<String, Map<String, String>> {
+        val xml = File(resDir, "$localeDir/strings.xml")
+        val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml)
+        val nodes = doc.getElementsByTagName("plurals")
+        val result = LinkedHashMap<String, Map<String, String>>()
+        for (i in 0 until nodes.length) {
+            val el = nodes.item(i) as Element
+            val items = el.getElementsByTagName("item")
+            result[el.getAttribute("name")] = (0 until items.length).associate { j ->
+                val item = items.item(j) as Element
+                item.getAttribute("quantity") to item.textContent.trim()
+            }
+        }
+        return result
+    }
+
+    // #418 回归：N=1 时英文显示成「Cancel remaining 1 photos」。带数量的文案一律 plurals：
+    // en 必须有 one + other，且 one 里不许出现复数名词；zh 没有复数，只给 other（给 one 会被 lint 报 UnusedQuantity）。
+    // 反证：把 cancel_remaining_label 改回 <string> → 下面的键集断言缺这个 key，红；
+    // 把 en 的 one 写成「%1$d photos」→ 复数名词断言红。
+    @Test
+    fun counted_copy_uses_plurals_with_a_real_english_singular() {
+        val res = appRes()
+        val en = plurals(res, "values")
+        val zh = plurals(res, "values-zh")
+        val required = setOf(
+            "cancel_remaining_label", "cancel_remaining_confirm_title", "state_pending",
+            "missing_source_notice_body", "notif_backup_failed_body", "photos_lost_body_days", "backup_scope_n",
+        )
+        assertTrue("缺 plurals：${required - en.keys}", en.keys.containsAll(required))
+        assertEquals("en/zh plurals 键集不一致", en.keys.sorted(), zh.keys.sorted())
+        // 只看紧跟数字的那个名词（「Your photos are…」这种与 N 无关的复数不算）。
+        val pluralNoun = Regex("""%1\${'$'}d\s+(photos|albums|days|items|files)\b|\(s\)""")
+        for ((name, items) in en) {
+            assertEquals("en 的 $name 应有 one + other", setOf("one", "other"), items.keys)
+            val one = items.getValue("one")
+            assertTrue("en 的 $name 单数写成了复数：$one", !pluralNoun.containsMatchIn(one))
+            items.values.forEach { assertTrue("en 的 $name 缺 %1\$d：$it", it.contains("%1\$d")) }
+        }
+        for ((name, items) in zh) {
+            assertEquals("zh 的 $name 只应有 other", setOf("other"), items.keys)
+            assertTrue("zh 的 $name 缺 %1\$d", items.getValue("other").contains("%1\$d"))
+        }
+    }
+
     @Test
     fun main_kotlin_has_no_chinese_outside_comments() {
         val app = appRes().parentFile!!.parentFile!!.parentFile!!

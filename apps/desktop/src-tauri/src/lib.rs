@@ -63,6 +63,15 @@ fn validate_asset_file(path: &std::path::Path) -> Result<std::path::PathBuf, Str
 }
 
 /// Forward one IPC method. The frontend does the rest.
+/// #413 §7: desktop system notification (the low-space warning). The shell
+/// only relays already-localized text; the "when" rule lives in the
+/// frontend (`src/lowSpace.js`), the "how" in the platform adapter
+/// (macOS: osascript, best effort; Windows: not implemented yet, no-op).
+#[tauri::command]
+fn notify_system(title: String, body: String) {
+    platform::adapter().notify(&title, &body);
+}
+
 #[tauri::command]
 fn daemon_call(method: String, params: Value) -> Result<Value, String> {
     ipc::DaemonHandle::discover()?.call(&method, params)
@@ -670,6 +679,10 @@ fn assemble_export(
             .and_then(|p| daemon_logs::tail(std::path::Path::new(p), 256 * 1024)),
         stdout_path: out_path,
         stderr_path: err_path,
+        // DIAG-B1：daemon 自己的固定位置日志，不依赖 plist。
+        persistent_log_tail: platform::adapter()
+            .default_log_file(&env.platform_dir)
+            .and_then(|p| daemon_logs::tail(&p, 1024 * 1024)),
         ..Default::default()
     };
     match daemon {
@@ -791,7 +804,8 @@ pub fn run() {
             resume_daemon_after_update,
             restart_daemon_process,
             export_logs_bundle,
-            allow_media_scope
+            allow_media_scope,
+            notify_system
         ])
         .setup(|app| {
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、

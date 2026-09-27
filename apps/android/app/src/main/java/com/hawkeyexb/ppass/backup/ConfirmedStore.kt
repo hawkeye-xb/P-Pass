@@ -33,7 +33,7 @@ import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-/** 三元组快照。K = n - m（待备份），由 UI 计算。 */
+/** 三元组快照。K = 待备份（见 [BackupTriplet.k]）。 */
 @Serializable
 data class BackupTriplet(
     val n: Long,             // 手机 N 张（扫描范围全量 count）
@@ -48,9 +48,16 @@ data class BackupTriplet(
     val hasFailedNeedsUser: Boolean = false,
     /** UI-16 规则 G5：传输被用户按停。 */
     val pausedByUser: Boolean = false,
+    /**
+     * #418：「还没有结局的张数」（与「取消剩余 N 张」的 N 同一个定义，引擎现算）。
+     * null = 还没算出来，K 退回 N − M。用户取消过的照片还在 N 里，所以不能再用 N − M。
+     */
+    val remaining: Long? = null,
+    /** #418 规则 S3：范围内用户取消过（SKIPPED_BY_USER）的张数。 */
+    val skippedByUser: Long = 0L,
 ) {
-    /** 待备份 K = N - M（防御：不为负——UI 显示不允许负数）。 */
-    val k: Long get() = (n - m).coerceAtLeast(0)
+    /** 待备份 K（防御：不为负——UI 显示不允许负数）。 */
+    val k: Long get() = (remaining ?: (n - m)).coerceAtLeast(0)
 }
 
 /** DOG-01b: 由「全量 N + 确认缓存 M」算三元组；单独提纯便于测试。
@@ -76,6 +83,8 @@ fun tripletOf(
     lastSuccessAt: Long,
     hasFailedNeedsUser: Boolean = false,
     pausedByUser: Boolean = false,
+    remaining: Long? = null,
+    skippedByUser: Long = 0L,
 ): BackupTriplet =
     BackupTriplet(
         n = n,
@@ -84,6 +93,8 @@ fun tripletOf(
         confirmedRaw = confirmedCount,
         hasFailedNeedsUser = hasFailedNeedsUser,
         pausedByUser = pausedByUser,
+        remaining = remaining,
+        skippedByUser = skippedByUser,
     )
 
 /** DOG-01c: 一次成功 commit 后，本次候选**全部**确认。

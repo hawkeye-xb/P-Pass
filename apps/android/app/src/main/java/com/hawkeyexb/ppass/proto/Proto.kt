@@ -65,6 +65,16 @@ data class Hello(
     val capabilities: List<String> = emptyList(),
     @SerialName("device_name") val deviceName: String = "",
     @SerialName("pairing_epoch") val pairingEpoch: String? = null,
+    /** #413 契约 §5：桌面健康。旧桌面没有这个字段 → null，手机视为健康。 */
+    val health: HelloHealth? = null,
+)
+
+/** #413 契约 §5：`hello` 回复里的 `health`。字段名固定。 */
+@Serializable
+data class HelloHealth(
+    @SerialName("free_bytes") val freeBytes: Long? = null,
+    @SerialName("library_writable") val libraryWritable: Boolean = true,
+    @SerialName("index_ok") val indexOk: Boolean = true,
 )
 
 // ── Pair ────────────────────────────────────────────
@@ -173,6 +183,8 @@ data class FlowFetchRequest(
     // to its own local mtime (which for a Flow-delivered file is the
     // export/ingest moment, not the real capture moment).
     @SerialName("capture_at_ms") val captureAtMs: Long = 0L,
+    /** #413 契约 §5：这张的字节数（0 = 未知）。桌面 offer 时按它预检剩余空间，放不下回 `storage_full`。 */
+    @SerialName("size_bytes") val sizeBytes: Long = 0L,
 )
 
 /** Kotlin mirror of proto::FlowCompletionReceipt. */

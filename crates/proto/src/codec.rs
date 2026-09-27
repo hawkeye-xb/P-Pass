@@ -86,6 +86,7 @@ mod tests {
             capabilities: vec!["thumbnail.v1".into()],
             device_name: "test-device".into(),
             pairing_epoch: None,
+            health: None,
         };
 
         let frame = encode(&hello).unwrap();

@@ -180,6 +180,10 @@ msg_keys! {
     UI_DEVICE_OPEN_FOLDER => "ui.device_open_folder",
     /// 打开设备文件夹失败时的错误提示。
     UI_DEVICE_OPEN_FOLDER_FAILED => "ui.device_open_folder_failed",
+    /// #413 §7: desktop system notification when the photo library's
+    /// volume drops below 5 GiB free. Body takes `{free}` (formatted bytes).
+    UI_LOW_SPACE_TITLE => "ui.low_space_title",
+    UI_LOW_SPACE_BODY => "ui.low_space_body",
 }
 
 #[cfg(test)]
@@ -290,10 +294,12 @@ mod tests {
             UI_LIBRARY_DELETE_WARN_DISMISS,
             UI_DEVICE_OPEN_FOLDER,
             UI_DEVICE_OPEN_FOLDER_FAILED,
+            UI_LOW_SPACE_TITLE,
+            UI_LOW_SPACE_BODY,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 101);
+        assert_eq!(ALL.len(), 103);
     }
 
     #[test]

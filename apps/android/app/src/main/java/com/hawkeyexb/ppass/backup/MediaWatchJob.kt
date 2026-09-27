@@ -265,7 +265,7 @@ class MediaWatchJob : JobService() {
                     // R3 keeps the existing watcher wake behavior for R4,
                     // while the production Flow receives only a discovery
                     // request and owns every subsequent state transition.
-                    requestFlowWake(ctx)
+                    requestFlowWake(ctx, com.hawkeyexb.ppass.backup.flow.TriggerReason.MEDIA_CHANGE)
                 }
             } catch (t: Throwable) {
                 android.util.Log.w(TAG, "dispatch failed", t)

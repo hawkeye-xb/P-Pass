@@ -114,15 +114,149 @@ fn transfer_status_before_any_connection_is_in_progress_not_connected() {
         transport::ActiveTransferStatus::InProgress {
             connected,
             idle_for,
+            bytes_sent,
+            byte_idle_for,
         } => {
             assert!(!connected, "nobody has dialed in yet");
             assert!(
                 idle_for.is_none(),
                 "no iroh-blobs event has fired yet, so there is no idle duration to report"
             );
+            assert!(bytes_sent.is_none() && byte_idle_for.is_none());
         }
         other => panic!("expected InProgress{{connected:false}}, got {other:?}"),
     }
+}
+
+/// #417 (#410 参数)：3 分钟无新字节判路径失败，前提是 `RequestUpdate::Progress` 在当前
+/// EventMask 下真的会到达。用一个多 MB 的 blob 做一次真实拉取，断言记录下了文件字节进度，
+/// 而且进度是按 `end_offset` 前进的（不是连接事件）。反证：把 Progress 分支改回 `touch()`
+/// （不记字节）→ `byte_progress()` 为 None，这条变红。
+#[test]
+fn byte_progress_is_recorded_from_real_transfer_progress_events() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("big.bin");
+    let contents: Vec<u8> = (0..(8 * 1024 * 1024u32)).map(|i| (i % 251) as u8).collect();
+    fs::write(&source, &contents).unwrap();
+    let hash = blake3_of(&contents);
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+    let ticket = provider.register_path(hash, &source).unwrap();
+    assert!(
+        provider.byte_progress().is_none(),
+        "no bytes before anyone pulls"
+    );
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+        let blobs = Blobs::open(&receiver, &dir.path().join("receiver-store"))
+            .await
+            .unwrap();
+        assert_eq!(
+            blobs
+                .pull(&ticket, &dir.path().join("received.bin"))
+                .await
+                .unwrap(),
+            hash
+        );
+        blobs.close().await;
+        receiver.close().await;
+    });
+
+    // The event sink is a separate task; give it a moment to drain.
+    let mut progress = None;
+    for _ in 0..50 {
+        progress = provider.byte_progress();
+        if progress.is_some_and(|(sent, _)| sent > 0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (sent, _) = progress.expect("Progress events must reach the activity sink");
+    assert!(
+        sent > 0 && sent <= contents.len() as u64,
+        "bytes_sent={sent}"
+    );
+}
+
+/// #417：同一个 handler 上连续两张（成功之后只 release_retention、不 revoke——生产路径就是这样）。
+/// 第二张的状态必须是它自己的：不能继承上一张的 `Completed{A}`，也不能继承上一张的 `bytes_sent`。
+/// 反证：去掉 activate() 里的 activity.reset() → 注册 B 之后 status 仍是 Completed{A}，红。
+#[test]
+fn serial_items_on_one_handler_do_not_inherit_the_previous_lease_activity() {
+    let dir = tempdir().unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+    let a: Vec<u8> = (0..(4 * 1024 * 1024u32)).map(|i| (i % 241) as u8).collect();
+    let b: Vec<u8> = (0..(1024 * 1024u32)).map(|i| (i % 239) as u8).collect();
+    let (pa, pb) = (dir.path().join("a.bin"), dir.path().join("b.bin"));
+    fs::write(&pa, &a).unwrap();
+    fs::write(&pb, &b).unwrap();
+    let (ha, hb) = (blake3_of(&a), blake3_of(&b));
+
+    let pull = |ticket: String, name: &str| {
+        let receiver_dir = dir.path().join(format!("recv-{name}"));
+        runtime.block_on(async {
+            let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+                .await
+                .unwrap();
+            let blobs = Blobs::open(&receiver, &receiver_dir).await.unwrap();
+            blobs
+                .pull(&ticket, &receiver_dir.join("out.bin"))
+                .await
+                .unwrap();
+            blobs.close().await;
+            receiver.close().await;
+        });
+    };
+
+    let ta = provider.register_path(ha, &pa).unwrap();
+    pull(ta, "a");
+    let mut completed_a = false;
+    for _ in 0..50 {
+        if provider.transfer_status() == (transport::ActiveTransferStatus::Completed { hash: ha }) {
+            completed_a = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(completed_a, "A completes first");
+    provider.release_retention();
+
+    let tb = provider.register_path(hb, &pb).unwrap();
+    match provider.transfer_status() {
+        transport::ActiveTransferStatus::InProgress { bytes_sent, .. } => {
+            assert!(
+                bytes_sent.is_none(),
+                "B starts with no bytes, not A's {bytes_sent:?}"
+            )
+        }
+        other => panic!("B must start InProgress, got {other:?}"),
+    }
+    assert!(provider.byte_progress().is_none());
+
+    pull(tb, "b");
+    let mut progress = None;
+    for _ in 0..50 {
+        progress = provider.byte_progress();
+        if progress.is_some_and(|(sent, _)| sent > 0) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (sent, _) = progress.expect("B reports its own byte progress");
+    assert!(
+        sent <= b.len() as u64,
+        "bytes_sent={sent} must describe B, not A"
+    );
 }
 
 #[test]

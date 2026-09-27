@@ -1,349 +1,260 @@
-// REBUILD-04: minimal, durable UI projection. WorkManager state is intentionally absent.
+// ARCH-13 (#417) → ARCH-14 (#418) → #413 W5: 逐张循环的 UI 投影。
+//
+// 事实源分两类：
+//  - 引擎视图 [EngineView]（全局状态、等待原因、待办张数、本轮已完成、当前这一张、桌面健康）——UI 与 FGS 通知
+//    读的唯一视图，状态 / 进度 / 待备份 / 按钮全部只看它（#413 §8）；
+//  - order 表与 FlowControl 的账目（已确认 m、FAILED、已跳过、源已删、FGS 受阻的具体原因）——英雄区的 m/n
+//    与设置卡的几行账目，只在 order 写入（revision）或 MediaStore 变化时重读。
+// 本文件全是纯函数，JVM 单测直接可跑；HomeScreen 只做「裁决 → 颜色 / 字符串资源」的映射。
 package com.hawkeyexb.ppass.backup.flow
 
-sealed interface FlowUiState {
-    data object Idle : FlowUiState
-    data object PausedByUser : FlowUiState
-    data object WaitingForConstraints : FlowUiState
-    data class Transferring(val queueSequence: Long, val fileName: String = "") : FlowUiState
-    /** The strict head exhausted its delivery attempts and needs an explicit retry. */
-    data object NeedsUserAttention : FlowUiState
-    data object CancelledCurrentRound : FlowUiState
-}
+import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.backup.BackupTriplet
+import com.hawkeyexb.ppass.backup.order.OrderState
+import com.hawkeyexb.ppass.backup.order.OrderStore
+import com.hawkeyexb.ppass.backup.tripletOf
+import com.hawkeyexb.ppass.ui.BackupUiState
 
 /**
- * Maps only persisted ledger facts to the small R3 status surface. A user pause
- * wins over constraints; an active cancellation round is distinct from both.
+ * 首页需要的全部事实。
+ *
+ * - [view]：引擎视图；null = 还没拿到（运行时未就绪 / 待办还没算出来）。全局状态、待备份、当前这一张都只读它。
+ * - [confirmed]：范围内当前行为 CONFIRMED、且原图还在的 order 数（读 order 表）。只在待办还没算出来时兜底；
+ *   英雄区与「全部完成」读 [done]。
+ * - [inScopeTotal]：范围内照片总数（MediaStore 实时计数，由调用方传入；null = 读不到）
+ * - [failed]：当前行为 FAILED 的 order 数（全量口径，不随范围收窄——UI-16 规则 G4）
+ * - [skippedByUser]：范围内当前行为 SKIPPED_BY_USER 的张数（「照片都存好了」的闸门 S3）。
+ * - [skippedByUserTotal]：全部当前行为 SKIPPED_BY_USER 的张数（设置卡「已跳过的照片 N 张」）。
+ * - [fgsBlock]：FGS 受阻的具体原因（额度用完 / 被拒），只用来挑 [WaitReason.FGS_BLOCKED] 的那句人话。
  */
-fun flowUiStateOf(snapshot: DiscoveryLedgerSnapshot): FlowUiState = when {
-    snapshot.cancellationRound != null -> FlowUiState.CancelledCurrentRound
-    snapshot.consumerGate == ConsumerGate.PAUSED_BY_USER -> FlowUiState.PausedByUser
-    snapshot.consumerStatus == ConsumerStatus.WAITING_FOR_CONSTRAINTS -> FlowUiState.WaitingForConstraints
-    else -> snapshot.items.firstOrNull { it.deliveryState == DeliveryState.TRANSFERRING }
-        ?.let { FlowUiState.Transferring(it.queueSequence, it.fileName) }
-        ?: snapshot.items.firstOrNull { it.deliveryState == DeliveryState.FAILED_NEEDS_USER }
-            ?.let { FlowUiState.NeedsUserAttention }
-        ?: FlowUiState.Idle
-}
-
-/**
- * UI-09: the home status bar's aggregate (pending K / confirmed M /
- * last-success) derived purely from durable ledger facts. The LEGACY
- * ConfirmedStore is not consulted anywhere on this path — the Flow core was
- * the only writer after REBUILD-00 froze the batch pipeline, so the old read
- * path froze the numbers on real devices (verifier observation, 2026-09-06).
- */
-data class FlowAggregate(
-    val pending: Long,
+data class FlowProjection(
+    val view: EngineView?,
     val confirmed: Long,
-    val lastSuccessAt: Long,
+    val inScopeTotal: Long?,
+    val failed: Long,
+    /** 还没有结局的当前行（PAUSED / QUEUED / TRANSFERRING / FAILED）。 */
+    val unfinished: Long = 0L,
+    val lastSuccessAt: Long = 0L,
+    /** 「无法恢复：N 张照片已从手机相册删除」横幅：确认水位之后新出现的张数。 */
+    val missingSourceUnacknowledged: Long = 0L,
+    val missingSourceAcknowledged: Long = 0L,
+    val fgsBlock: FgsBlockReason? = null,
+    val skippedByUser: Long = 0L,
+    val skippedByUserTotal: Long = 0L,
+) {
+    val state: GlobalState get() = view?.state ?: GlobalState.IDLE
+
+    /** 只在 [GlobalState.WAITING] 时非空。 */
+    val waitReason: WaitReason? get() = view?.waitReason?.takeIf { state == GlobalState.WAITING }
+
+    /** 当前这一张：只在备份中才有。 */
+    val current: CurrentItem? get() = view?.current?.takeIf { state == GlobalState.RUNNING }
+
+    /** 「待备份 K」= 待办大小（#413 §8：唯一来源）。null = 还没算出来。 */
+    val remaining: Long? get() = view?.pending?.toLong()
+
     /**
-     * UI-16 规则 G4：账本里待用户处理的失败项条数。**全量口径，不随
-     * [flowAggregateOf] 的 bucket 过滤收窄**——「有一张失败等着处理」在哪个
-     * 相册都不是「数据已安全存好」，它是绿色的否决票，不是完成度的分子。
+     * 英雄区的 m（#413 裁定：与待办同一套现算差集）= 范围内总数 n − 待办 − 范围内已跳过。不依赖 `source_missing` /
+     * bucket 变化的写入：原图删了就不在 n 里，挪出范围也不在 n 里，所以 m 永远不会比 n 大。
+     * n 或待办还不知道时退回 order 表的 [confirmed]。
      */
-    val failedNeedsUser: Long = 0L,
-    /** UI-16 规则 G5：传输被用户按停（gate 语义由 #353/#362 定死，此处只读）。 */
-    val pausedByUser: Boolean = false,
-)
+    val done: Long
+        get() {
+            val n = inScopeTotal ?: return confirmed
+            val k = remaining ?: return confirmed
+            return (n - k - skippedByUser).coerceIn(0L, n)
+        }
+
+    val paused: Boolean get() = state == GlobalState.PAUSED
+    val running: Boolean get() = state == GlobalState.RUNNING
+
+    companion object {
+        /**
+         * 账目部分（读 order 表与 FlowControl）。[view] 原样带上；引擎视图单独变化时调用方只 `copy(view = …)`，
+         * 不必重读这几条计数。
+         */
+        fun facts(
+            store: OrderStore,
+            control: FlowControl,
+            bucketIds: Set<Long>?,
+            inScopeTotal: Long?,
+            view: EngineView?,
+        ): FlowProjection {
+            val scoped = store.countCurrentByState(bucketIds)
+            val all = if (bucketIds == null) scoped else store.countCurrentByState(null)
+            val ackAt = control.missingSourceAckAt()
+            return FlowProjection(
+                view = view,
+                confirmed = store.countConfirmedPresent(bucketIds),
+                inScopeTotal = inScopeTotal,
+                failed = all[OrderState.FAILED] ?: 0L,
+                unfinished = OrderState.entries.filter { it.isOpen }.sumOf { all[it] ?: 0L },
+                lastSuccessAt = store.lastConfirmedAtMs(),
+                missingSourceUnacknowledged = store.countSourceMissingSkipped(afterMs = ackAt),
+                missingSourceAcknowledged = if (ackAt > 0) store.countSourceMissingSkipped(afterMs = 0L, upToMs = ackAt) else 0L,
+                fgsBlock = control.fgsBlock(),
+                skippedByUser = scoped[OrderState.SKIPPED_BY_USER] ?: 0L,
+                skippedByUserTotal = all[OrderState.SKIPPED_BY_USER] ?: 0L,
+            )
+        }
+
+        /**
+         * 旧签名（AndroidFlowRuntime.flowProjection() 与 Rig 测试用）：由运行态 + 持久的暂停 / 等待原因 + [remaining]
+         * 拼出与 [FlowEngine.view] 同一口径的视图。[remaining] == null → 视图未知。
+         */
+        fun of(
+            store: OrderStore,
+            status: LoopStatus,
+            control: FlowControl,
+            bucketIds: Set<Long>?,
+            inScopeTotal: Long?,
+            remaining: Long? = null,
+        ): FlowProjection = facts(
+            store, control, bucketIds, inScopeTotal,
+            view = remaining?.let {
+                engineViewOf(status, ViewFacts(paused = control.paused(), waitReason = control.waitReason(), pending = it.toInt()))
+            },
+        )
+    }
+}
+
 
 /**
- * UI-16: [bucketIds] = 当前选中相册（`null` = 全量，空集 = 一个都不备 → 0），
- * 与 `ConfirmedStore.countInScope` 同一范围口径。
+ * 投影 → 首页状态。四个全局状态各有出口（#413 §4）：
+ * - 已暂停：[BackupUiState.Paused]；
+ * - 备份中：有当前这一张 → [BackupUiState.Sending]，否则（检查 / 准备阶段）→ [BackupUiState.Preparing]；
+ * - 等待中：[BackupUiState.Waiting]（带原因）。NOT_PAIRED 不说「等待」——出路是配对失效红卡；
+ * - 空闲：有 FAILED 显示 Trouble（点击 = 立即重试一次），范围内每一张都有了结局显示 AllSafe，否则 Idle。
  *
- * 为什么必须能过滤：英雄卡把这里的 `confirmed` 当分子、把
- * `MediaScanner.countAll(selectedBucketIds)` 当分母
- * （`BackupUiStateHolder.refreshTriplet`）。过滤之前分子是**账本全量**、
- * 分母是**选中相册的实时文件数**，两个集合既非包含关系也非同一单位，相除
- * 本就不成立——真机因此渲染出绿字「10 / 10 张已回家」（配对已失效 + 1 张
- * 失败）与「23 / 23 张已回家」（实有 4 张待传）。见
- * docs/design/2026-09-22-home-notice-priority.md §4.1。
- *
- * 默认 `null` 是有意的：状态行/进度条/前台服务那几个调用方要的就是全量，
- * 只有英雄卡的三元组按选中相册收窄。
+ * Sending 的「第 x / y 张」按本轮算：x = 本轮已完成 + 1，y = 本轮已完成 + 待备份（待备份含正在传的这一张）。
  */
-fun flowAggregateOf(
-    snapshot: DiscoveryLedgerSnapshot,
-    bucketIds: Set<Long>? = null,
-): FlowAggregate {
-    var pending = 0L
-    var confirmed = 0L
-    var lastSuccessAt = 0L
-    var failedNeedsUser = 0L
-    for (item in snapshot.items) {
-        // G4 先数，再过滤——见 [FlowAggregate.failedNeedsUser] 的口径说明。
-        if (item.deliveryState == DeliveryState.FAILED_NEEDS_USER) failedNeedsUser += 1
-        if (bucketIds != null && item.bucketId !in bucketIds) continue
-        when (item.deliveryState) {
-            // A user-cancelled round is a deliberate decision, not a debt;
-            // scope-cancelled items left the selected scope entirely. Neither
-            // counts as "待备份".
-            DeliveryState.QUEUED, DeliveryState.TRANSFERRING, DeliveryState.FAILED_NEEDS_USER -> pending += 1
-            DeliveryState.CONFIRMED -> {
-                confirmed += 1
-                if (item.completedAt > lastSuccessAt) lastSuccessAt = item.completedAt
-            }
-            DeliveryState.CANCELLED_BY_SCOPE,
-            DeliveryState.CANCELLED_BY_USER_ROUND,
-            DeliveryState.SKIPPED_SOURCE_MISSING,
-            -> Unit
+fun backupUiStateOf(p: FlowProjection): BackupUiState {
+    val v = p.view
+    return when (p.state) {
+        GlobalState.PAUSED -> BackupUiState.Paused
+        GlobalState.RUNNING -> {
+            val current = p.current ?: return BackupUiState.Preparing
+            val (done, total) = roundOrdinalOf(v?.doneThisRound ?: 0, v?.pending ?: 0)
+            BackupUiState.Sending(done = done, total = total, currentFile = current.fileName)
         }
+        GlobalState.WAITING -> p.waitReason?.takeIf { it != WaitReason.NOT_PAIRED }?.let { BackupUiState.Waiting(it) }
+            ?: idleUiStateOf(p)
+        GlobalState.IDLE -> idleUiStateOf(p)
     }
-    return FlowAggregate(
-        pending = pending,
-        confirmed = confirmed,
-        lastSuccessAt = lastSuccessAt,
-        failedNeedsUser = failedNeedsUser,
-        pausedByUser = snapshot.consumerGate == ConsumerGate.PAUSED_BY_USER,
+}
+
+private fun idleUiStateOf(p: FlowProjection): BackupUiState = when {
+    // 技术标记，只进「查看技术详情」；主文案是 run_failed（troubleTextOf 是唯一渲染闸门）。
+    p.failed > 0 -> BackupUiState.Trouble("flow.failed=${p.failed}")
+    flowAllDone(p) -> BackupUiState.AllSafe(ingested = p.done.toInt(), duplicates = 0)
+    else -> BackupUiState.Idle
+}
+
+/** 本轮的「第 x / y 张」。y 至少是 x：待办刚被别处清零、这一张还没收尾时，不说「第 3 / 2 张」。 */
+internal fun roundOrdinalOf(doneThisRound: Int, pending: Int): Pair<Int, Int> {
+    val done = doneThisRound.coerceAtLeast(0) + 1
+    return done to (doneThisRound.coerceAtLeast(0) + pending.coerceAtLeast(0)).coerceAtLeast(done)
+}
+
+/**
+ * 「范围内每一张都有了结局」。待办算出来之后以它为准（0 = 没有待传的）；还没算出来时退回计数比较。
+ * 无论哪条路，都要求至少确认过一张、且没有未完成的行。
+ */
+internal fun flowAllDone(p: FlowProjection): Boolean {
+    // 待办算出来了：它就是唯一口径（范围外的在途行、封顶的失败行已由待办自己决定算不算）。
+    p.remaining?.let { k -> if (p.inScopeTotal != null) return k == 0L && p.done > 0 }
+    if (p.confirmed <= 0 || p.unfinished != 0L) return false
+    return p.remaining?.let { it == 0L } ?: (p.inScopeTotal == null || p.confirmed >= p.inScopeTotal)
+}
+
+/**
+ * 英雄区三元组。m = [FlowProjection.done]（n − 待办 − 范围内已跳过），n = 范围内总数，K = 待办（[EngineView.pending]；还没算出来时退回 n − m）。
+ * bucketIds == null（还没选过范围）或 n 读不到 → null，英雄区说「读不到」。
+ */
+fun flowTripletOf(p: FlowProjection, bucketIds: Set<Long>?): BackupTriplet? {
+    if (bucketIds == null) return null
+    val n = p.inScopeTotal ?: return null
+    return tripletOf(
+        n = n,
+        confirmedCount = p.done,
+        lastSuccessAt = p.lastSuccessAt,
+        hasFailedNeedsUser = p.failed > 0L,
+        pausedByUser = p.paused,
+        remaining = p.remaining,
+        skippedByUser = p.skippedByUser,
     )
 }
 
-/**
- * UI-09: "本轮全部安全" — every discovered item in the current durable window
- * carries a completion receipt and at least one item exists. An empty ledger
- * (nothing discovered yet) is deliberately NOT all-done; it renders Ready.
- *
- * UI-16 规则 S（§2.3b）：`SKIPPED_SOURCE_MISSING` **曾算作完成**，于是账本里
- * 有一张源已删除、永不重传的照片时，这里返回 true → [backupUiStateOf] 投影成
- * `AllSafe` → 状态行说「照片都存好了」，而同屏的 `flowMissingSourceNotice`
- * 正在说「已跳过 N 张…不会再重传」。那是英雄卡绿字谎言的文字版，同一个根因。
- * 「跳过」不是「存好了」：判据收紧成**每一项都有完成回执**。
- * （`CANCELLED_BY_USER_ROUND` 早就过不了这个 `all {}`，规则 S 的 S3 无需另加。）
- */
-fun flowIsAllDone(snapshot: DiscoveryLedgerSnapshot, aggregate: FlowAggregate): Boolean =
-    aggregate.confirmed > 0L && snapshot.items.all {
-        it.deliveryState == DeliveryState.CONFIRMED
-    }
-
-/**
- * MOB-51: the durable round-active fact. A round is running while the gate
- * is open AND the ledger still owns deliverable work (a leased or queued
- * item). This survives the between-files gap that the per-file Transferring
- * projection cannot see (head confirmed, next queued, lease momentarily
- * null) — which made the Pause button practically unreachable on real
- * devices where LAN transfers finish a file in hundreds of milliseconds.
- * A user pause ends the round (paused shows Resume, not Pause); a terminal
- * failed head with no queued backing is "stalled", not "running" — showing
- * Pause there would lie about work happening.
- */
-fun flowRoundActive(snapshot: DiscoveryLedgerSnapshot): Boolean =
-    snapshot.consumerGate == ConsumerGate.OPEN &&
-        (
-            snapshot.fetchLease != null ||
-                snapshot.items.any {
-                    it.deliveryState == DeliveryState.QUEUED || it.deliveryState == DeliveryState.TRANSFERRING
-                }
-            )
-
-/**
- * MOB-51: the single snapshot -> home-screen state mapping (shared by the
- * production holder and tests; production-chain rule). A round that is
- * active but momentarily between files still renders as work in progress,
- * so the Pause affordance stays reachable for the whole round. The gap
- * render is `Sending` with no file and total == 0 — the UI shows a plain
- * "round running" line, never a fabricated 0/0 or fake file progress.
- */
-fun backupUiStateOf(snapshot: DiscoveryLedgerSnapshot): com.hawkeyexb.ppass.ui.BackupUiState {
-    val aggregate = flowAggregateOf(snapshot)
-    return when (val state = flowUiStateOf(snapshot)) {
-        FlowUiState.Idle -> when {
-            flowIsAllDone(snapshot, aggregate) ->
-                com.hawkeyexb.ppass.ui.BackupUiState.AllSafe(ingested = aggregate.confirmed.toInt(), duplicates = 0)
-            flowRoundActive(snapshot) ->
-                com.hawkeyexb.ppass.ui.BackupUiState.Sending(
-                    done = aggregate.confirmed.toInt(),
-                    total = (aggregate.confirmed + aggregate.pending).toInt(),
-                    currentFile = "",
-                )
-            else -> com.hawkeyexb.ppass.ui.BackupUiState.Idle
-        }
-        FlowUiState.PausedByUser -> com.hawkeyexb.ppass.ui.BackupUiState.Paused
-        FlowUiState.WaitingForConstraints -> com.hawkeyexb.ppass.ui.BackupUiState.WaitingForConstraints
-        is FlowUiState.Transferring -> com.hawkeyexb.ppass.ui.BackupUiState.Sending(
-            done = aggregate.confirmed.toInt(),
-            total = (aggregate.confirmed + aggregate.pending).toInt(),
-            currentFile = state.fileName,
-        )
-        FlowUiState.NeedsUserAttention -> com.hawkeyexb.ppass.ui.BackupUiState.Trouble("Flow delivery exhausted its retry limit")
-        FlowUiState.CancelledCurrentRound -> com.hawkeyexb.ppass.ui.BackupUiState.CancelledCurrentRound
-    }
-}
-
-/** MOB-51: the durable command behind the single hero button click. */
+/** MOB-51: the durable command behind the single hero button click — routed on the same projection. */
 enum class FlowCommand { Pause, Continue, Retry, Wake }
 
-/**
- * MOB-51: routing the hero click on the SAME durable facts the button label
- * came from. Before this, the label said "Pause" in the between-files gap
- * while the click re-read the ledger, saw Idle, and fired a wake instead —
- * the button lied twice. Now a visible Pause click always pauses: an open
- * round with a lease, a transferring item, or a gap is pausable.
- */
-fun flowCommandOf(snapshot: DiscoveryLedgerSnapshot): FlowCommand =
-    when (flowUiStateOf(snapshot)) {
-        FlowUiState.PausedByUser -> FlowCommand.Continue
-        FlowUiState.NeedsUserAttention -> FlowCommand.Retry
-        is FlowUiState.Transferring -> FlowCommand.Pause
-        // Idle / WaitingForConstraints / CancelledCurrentRound: pause while
-        // the round is durably active, otherwise wake a stopped engine.
-        else -> if (flowRoundActive(snapshot)) FlowCommand.Pause else FlowCommand.Wake
-    }
-
-/**
- * UI-10 item 2: the reupload notice's LEGACY data source (`ReuploadQueue`)
- * is frozen (REBUILD-00) and `BackupUiStateHolder._reuploadNoticeCount` has
- * no production writer — `reuploadNoticeCount > 0` is permanently false, so
- * the notice card can never appear (source-read finding, 2026-09-06).
- *
- * The durable ledger already carries the exact fact this notice describes:
- * a CONFIRMED item whose remote copy went missing while the phone's own
- * source is still present (`RecoveryDisposition.NEEDS_DECISION`, written by
- * `RemoteReconciliation.recordRemoteMissing`) — that IS "library lost N,
- * bringing them back". Counting it directly retires the dead LEGACY path
- * without inventing a new signal.
- *
- * MOB-100（D3）：只数**用户还没确认过**的那些。改造前「知道了」绑的是
- * `fun acknowledgeReuploadNotice() = Unit`，而这个计数每 tick 从账本重算
- * （`BackupUiStateHolder.refreshFlowState`）——点完下一 tick 原样回来。
- * 按 R-CLEARABLE 的措辞，**一个 no-op 按钮不是路径**：B4 是没给按钮，用户
- * 至少知道自己无能为力；D3 给了按钮、按钮不做事，那是更坏的一种。
- */
-fun flowReuploadNoticeCount(snapshot: DiscoveryLedgerSnapshot): Int =
-    snapshot.items.count { isUnacknowledgedReupload(it) }
+/** 「继续」只在已暂停，「暂停」只在备份中（#413 §5）；其余按账目重试 / 唤醒。 */
+fun flowCommandOf(p: FlowProjection): FlowCommand = when (p.state) {
+    GlobalState.PAUSED -> FlowCommand.Continue
+    GlobalState.RUNNING -> FlowCommand.Pause
+    GlobalState.IDLE, GlobalState.WAITING -> if (p.failed > 0) FlowCommand.Retry else FlowCommand.Wake
+}
 
 /** A phone-deleted source was skipped; it is informative and never retryable. */
 data class MissingSourceNotice(val count: Int)
 
-/**
- * MOB-100（B4）：判据本体一个字没动（`SKIPPED_SOURCE_MISSING` +
- * `sourcePresence == MISSING` + `UNRECOVERABLE` 的判定语义归
- * `StrictConsumer`，本卡不碰），只**排除用户已确认过的那些**。
- *
- * 水位线的核心判据（本卡验收）：确认过 6 条，第二天又删 2 张照片 →
- * 这里返回 2，不是 8、也不是 null。逐条打标而不是记一个数：新出现的事实
- * 不可能被上一次确认预先吃掉。
- */
-fun flowMissingSourceNotice(snapshot: DiscoveryLedgerSnapshot): MissingSourceNotice? {
-    val count = snapshot.items.count { isUnacknowledgedMissingSource(it) }
-    return if (count > 0) MissingSourceNotice(count) else null
-}
-
-/** MOB-100：`SKIPPED_SOURCE_MISSING` 的事实判据（与确认状态无关）。 */
-private fun isMissingSourceFact(item: TransferItem): Boolean =
-    item.deliveryState == DeliveryState.SKIPPED_SOURCE_MISSING &&
-        item.sourcePresence == SourcePresence.MISSING &&
-        item.disposition == RecoveryDisposition.UNRECOVERABLE
-
-private fun isUnacknowledgedMissingSource(item: TransferItem): Boolean =
-    isMissingSourceFact(item) && item.missingSourceAckedAt <= 0L
-
-private fun isUnacknowledgedReupload(item: TransferItem): Boolean =
-    item.disposition == RecoveryDisposition.NEEDS_DECISION && item.reuploadAckedAt <= 0L
+fun flowMissingSourceNotice(p: FlowProjection): MissingSourceNotice? =
+    p.missingSourceUnacknowledged.takeIf { it > 0 }?.let { MissingSourceNotice(it.toInt()) }
 
 /**
- * MOB-100 关键判断 3「关掉之后这批事实仍可查」：确认过的那批得有去处。
- * MOB-59 的真机教训正是「提示消失了，那批再也找不到」——所以横幅收起之后
- * 计数并没有消失，它搬进备份卡的一行（`HomeScreen` 的
- * `missing_source_archive_*`），跟 MOB-59 当年把取消轮次的恢复入口从常驻
- * 警告条搬成 CellRow 是同一处置。
+ * 当前这一张的字节进度（千分比）。首页进度条与前台服务通知的进度条共用这一个函数。
+ * null = 没在传，或者总字节数未知（通知里画不确定进度条）。
  */
-fun flowAcknowledgedMissingSourceCount(snapshot: DiscoveryLedgerSnapshot): Int =
-    snapshot.items.count { isMissingSourceFact(it) && it.missingSourceAckedAt > 0L }
-
-/** MOB-100：哪一条提示被确认了。两条水位线互不相干，见 [TransferItem.reuploadAckedAt]。 */
-enum class AcknowledgeableNotice { SOURCE_MISSING, REUPLOAD }
-
-/**
- * MOB-100：把「用户已确认过截至此刻的这些条」落进账本——**纯函数**，
- * JVM 单测直接跑，也是 `FlowAction.AcknowledgeNotice` 的 reducer 本体。
- *
- * 只给**当前正在被提示**的那些条目打标，绝不删除任何条目（关键判断 1：
- * 确认 ≠ 删账本条目，条目是对账的依据）。已经打过标的不重写时间戳——
- * 「已确认过截至某个点」记的是第一次确认那个点。
- */
-fun DiscoveryLedgerSnapshot.acknowledgeNotice(
-    notice: AcknowledgeableNotice,
-    atMs: Long,
-): DiscoveryLedgerSnapshot {
-    require(atMs > 0L) { "an acknowledgement needs a real timestamp" }
-    return copy(
-        items = items.map { item ->
-            when (notice) {
-                AcknowledgeableNotice.SOURCE_MISSING ->
-                    if (isUnacknowledgedMissingSource(item)) item.copy(missingSourceAckedAt = atMs) else item
-                AcknowledgeableNotice.REUPLOAD ->
-                    if (isUnacknowledgedReupload(item)) item.copy(reuploadAckedAt = atMs) else item
-            }
-        },
-    )
+fun transferPermilleOf(current: CurrentItem?): Int? {
+    val item = current ?: return null
+    if (item.totalBytes <= 0) return null
+    return ((item.bytesSent.coerceIn(0, item.totalBytes) * 1000) / item.totalBytes).toInt()
 }
 
 /**
- * MOB-59: the first cut only counted the *latest* round's items, so cancelling
- * twice without ever restoring silently orphaned the earlier batch — real
- * device: "重复点取消当前轮，已跳过 20 张的提示消失了，那批再也找不到"
- * (2026-09-07). This now sums every still-cancelled item across every round,
- * and the notice has no roundId of its own: [restoreAllCancelledFlowRounds]
- * (FlowRunner) restores every distinct cancelled round in one action, so the
- * UI never needs to track which specific round is "current".
+ * 设置页「取消剩余 N 张」那一行的 N。只在已暂停 / 等待中出现（#413 §5：备份中先暂停，空闲时没有「剩余」）。
+ * null = 这一行不渲染：不在这两个状态、N 还没算出来、没有剩余、或配对已失效（出路是重新扫码，不是取消）。
+ * 确认框里的 N 不用它，用点击那一刻的快照（[RemainingSnapshot]）。
  */
-data class CancelledRoundNotice(val count: Int)
-
-fun flowCancelledRoundNotice(snapshot: DiscoveryLedgerSnapshot): CancelledRoundNotice? {
-    val count = snapshot.items.count {
-        it.deliveryState == DeliveryState.CANCELLED_BY_USER_ROUND && it.cancellationRoundId != null
-    }
-    return if (count > 0) CancelledRoundNotice(count) else null
+fun cancelRemainingRowCount(p: FlowProjection?, pairingLost: Boolean): Long? {
+    if (p == null || pairingLost) return null
+    if (p.state != GlobalState.PAUSED && p.state != GlobalState.WAITING) return null
+    return p.remaining?.takeIf { it > 0 }
 }
 
 /**
- * MOB-59: the progress bar must show *this round's* progress, not the
- * lifetime M/N the hero stat above it already shows — otherwise the two
- * numbers are a redundant echo of each other (user's own argument: adding
- * more albums mid-transfer made the bar jump to "15/15"-ish territory
- * instead of showing the newly-added work at 0, 2026-09-07). This is
- * inherently a *running* quantity (it needs to remember what was already
- * confirmed since the round started), so it cannot live in the pure
- * snapshot->state mapping ([backupUiStateOf]) the way K/M/N do — the holder
- * calls this once per tick and keeps the returned state itself.
- *
- * Rule: an item completing (pending drops) advances `done`; new pending
- * work materializing (album added mid-round, pending rises) only grows
- * `total` and never resets `done` — mid-round album additions do not lose
- * credit for what already finished. A round that fully drains (pending
- * hits 0) resets the baseline so the *next* round starts at a clean 0.
+ * 设置卡「已跳过的照片 N 张 · 点击恢复」那一行的 N（用户取消过的张数）。null = 没有，不渲染。
+ * 配对失效时照样显示：它是账目，恢复只改本机，不需要连着电脑。
  */
-data class RoundProgress(val done: Long, val total: Long)
+fun skippedRowCount(p: FlowProjection?): Long? = p?.skippedByUserTotal?.takeIf { it > 0 }
 
-fun advanceRoundProgress(previousPending: Long?, previousDone: Long, currentPending: Long): RoundProgress {
-    val done = when {
-        previousPending == null || previousPending == 0L -> 0L
-        currentPending < previousPending -> previousDone + (previousPending - currentPending)
-        else -> previousDone
-    }
-    return RoundProgress(done = done, total = done + currentPending)
+/**
+ * 等待原因 → 状态行那句人话（#413 §4 / 契约 §3）。null = 此刻不在等，或者不该在状态行说（NOT_PAIRED：出路在红卡）。
+ * FGS 受阻再按 [FlowProjection.fgsBlock] 细分「额度用完」与「被拒」；说不清时用「被拒」那句。
+ */
+fun waitReasonTextRes(p: FlowProjection): Int? {
+    if (p.state != GlobalState.WAITING) return null
+    val reason = p.waitReason ?: return null
+    return waitReasonTextRes(reason, p.fgsBlock)
+}
+
+internal fun waitReasonTextRes(reason: WaitReason, fgsBlock: FgsBlockReason?): Int? = when (reason) {
+    WaitReason.NOT_PAIRED -> null
+    WaitReason.DISABLED -> R.string.state_waiting_disabled
+    WaitReason.WIFI -> R.string.wifi_deferred_hint
+    WaitReason.BATTERY -> R.string.state_waiting_battery
+    WaitReason.FGS_BLOCKED -> fgsBlockNoticeRes(fgsBlock) ?: R.string.state_background_protection_unknown
+    WaitReason.DESKTOP_UNREACHABLE -> R.string.state_waiting_desktop_unreachable
+    WaitReason.DESKTOP_STORAGE_FULL -> R.string.state_waiting_desktop_full
+    WaitReason.DESKTOP_LIBRARY_UNAVAILABLE -> R.string.state_waiting_desktop_library
+    WaitReason.DESKTOP_STORAGE_ERROR -> R.string.state_waiting_desktop_error
 }
 
 /**
- * NET-12: REBUILD-04 (commit a325208) deleted `BackupWorker`'s
- * `setForeground()`/`ForegroundInfo` when it cut the worker down to a pure
- * wake adapter — the new Flow transport (`NativeFlowDeliveryPort`'s
- * coroutine `scope.launch`) never registered a replacement. Real device
- * (Samsung SM-S9210, 2026-09-14): `oom_score_adj` sampled every 10s during a
- * live 35-photo transfer stayed at 700-900 (cached-process range) the whole
- * time — the exact range the system killed the process from twice that same
- * day ("one-time permission revoked", adj=915 and adj=900). A foreground
- * service is the only thing that moves a process out of that range while
- * work is in flight.
- *
- * [flowRoundActive] is already the durable, ledger-derived fact for "is a
- * round in flight" (MOB-51). This is the pure decision the Android layer
- * dispatches on — never call platform Service APIs from here, so the
- * decision itself stays JVM-testable without a Robolectric/instrumented
- * harness.
+ * 桌面剩余空间不足 5 GiB 的预警（#413 §7）。已经因为桌面存满而在等时不重复说（状态行说的就是这件事）。
  */
-enum class ForegroundAction { START, STOP }
-
-fun foregroundActionFor(snapshot: DiscoveryLedgerSnapshot): ForegroundAction =
-    if (flowRoundActive(snapshot)) ForegroundAction.START else ForegroundAction.STOP
-
+fun desktopLowSpaceWarning(p: FlowProjection?): Boolean {
+    val v = p?.view ?: return false
+    if (v.desktopHealth?.lowSpace != true) return false
+    return p.waitReason != WaitReason.DESKTOP_STORAGE_FULL
+}

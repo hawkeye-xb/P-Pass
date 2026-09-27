@@ -11,7 +11,10 @@ mod blobs;
 mod conninfo;
 mod iroh_impl;
 
-pub use android_blobs::{ActiveTransferStatus, AndroidBlobsProvider};
+pub use android_blobs::{
+    ActiveTransferStatus, AndroidBlobsProvider, ImportFallback, MediaImport, ServeError,
+    SourceFault,
+};
 pub use blobs::Blobs;
 pub use conninfo::{ConnInfo, ConnectionStatus, PathKind};
 pub use iroh_impl::{

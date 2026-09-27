@@ -94,6 +94,8 @@ import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfillAndWake
 import com.hawkeyexb.ppass.backup.flow.requestFlowWakeAfterRepair
+import com.hawkeyexb.ppass.backup.flow.requestFlowWake
+import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.backup.flow.isOnUnmetered
 import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
 import com.hawkeyexb.ppass.ui.BackupStartedScreen
@@ -187,9 +189,7 @@ fun PPassApp() {
     // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
     // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
     var mediaAccess by remember { mutableStateOf(mediaAccess(context)) }
-    // MOB-02 §四事件①: 排队提示——触发时 Wi-Fi 要求不满足，WorkManager
-    // 排队等网，首页显示「将在连上 Wi-Fi 后进行」。
-    var wifiDeferred by remember { mutableStateOf(false) }
+    // #413：「将在连上 Wi-Fi 后进行」由引擎的等待原因（WIFI）给出，这里不再另存一份排队状态。
     // Home 内 Photos/设置 tab——提到顶层是因为 Screen.Buckets 是独立的
     // 顶层 Screen，从相册选择页返回时 `is Screen.Home ->` 分支会整个
     // 重新进入组合，若这个变量还留在分支内部的 remember 里就会被重置回
@@ -242,13 +242,6 @@ fun PPassApp() {
         }
     }
     LaunchedEffect(backupInterrupted) { foregroundCatchup() }
-    remember {
-        // 新会话重新评估排队提示（上一轮的排队状态随进程重开作废）。
-        // MOB-40: 这里原本还有一个 MOB-38 重构掏空的空 `if (pairing != null…) {}`
-        // ——补捞逻辑已经全部搬进 foregroundCatchup，那具尸体删掉。
-        wifiDeferred = false
-        true
-    }
 
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -722,8 +715,6 @@ fun PPassApp() {
                 notice = if (!photoViewerOpen && !storageDetailOpen) {
                     {
                         NoticeHost(
-                            reuploadCount = holder.reuploadNoticeCount.value,
-                            onAcknowledgeReupload = { holder.acknowledgeReuploadNotice() },
                             backgroundBackupState = backgroundBackupState,
                             onResolveBackgroundBackup = resolveBackgroundBackup,
                         )
@@ -742,7 +733,6 @@ fun PPassApp() {
                     HomeScreen(
                         storageName = s.pairing.storageDeviceName,
                         state = holder.state.value,
-                        onCancelCurrentRound = { holder.cancelCurrentRound() },
                         triplet = holder.triplet.value,
                         // 2026-09-07 真机反馈：命令处理中禁用暂停/取消按钮。
                         commandPending = holder.commandPending.value,
@@ -750,16 +740,21 @@ fun PPassApp() {
                         missingSourceNotice = holder.missingSourceNotice.value,
                         onAcknowledgeMissingSource = { holder.acknowledgeMissingSourceNotice() },
                         acknowledgedMissingSourceCount = holder.acknowledgedMissingSourceCount.value,
-                        // MOB-59: 本轮自己的进度（0 起算，见 HomeScreen.kt 说明）。
-                        roundProgress = holder.roundProgress.value,
-                        // 2026-09-14（用户拍板）：取消轮次恢复入口从常驻琥珀
-                        // 警告条挪进「备份」设置卡，做成一行 CellRow——用户
-                        // 主动取消不该被塑造成待处理的警告。
-                        cancelledRoundCount = holder.cancelledRoundNotice.value?.count,
-                        onRestoreCancelledRounds = { holder.restoreCancelledRounds() },
-                        // UI-19 规则 P：为什么暂停（#379 的数据源结论，
-                        // null = 未知 ⇒ 状态行一个字都不加）。
-                        pauseReasonRes = holder.pauseReason.value,
+                        // #418：正在传的这一张的字节进度（与前台服务通知同一个函数）。
+                        transferProgress = holder.transferProgress.value,
+                        // #418：「取消剩余 N 张」——设置卡一行 + 写明 N 的确认框。
+                        cancelRemainingCount = holder.cancelRemainingCount.value,
+                        onRequestCancelRemaining = { holder.requestCancelRemaining() },
+                        cancelConfirmCount = holder.cancelConfirmCount.value,
+                        // 「已跳过的照片 N 张 · 点击恢复」（SKIPPED_BY_USER）。
+                        skippedCount = holder.skippedCount.value,
+                        onRestoreSkipped = { holder.restoreSkipped() },
+                        onConfirmCancelRemaining = { holder.confirmCancelRemaining() },
+                        onDismissCancelRemaining = { holder.dismissCancelRemaining() },
+                        // 规则 P（#418）：FGS 受阻而等待时的人话（null ⇒ 状态行一个字都不加）。
+                        waitReasonRes = holder.waitReasonNotice.value,
+                        // #413 §7：桌面剩余空间不足 5 GiB 的预警。
+                        desktopLowSpace = holder.desktopLowSpace.value,
                         wifiOnly = wifiOnly,
                         onWifiOnlyChange = { enable ->
                             // MOB-02 §三: 关闭「需要 Wi-Fi」需二次确认
@@ -768,7 +763,6 @@ fun PPassApp() {
                             else {
                                 wifiOnly = true
                                 backupSettings.save(wifiOnly)
-                                wifiDeferred = !isOnUnmetered(context)
                                 rescheduleAutoBackup(context)
                             }
                         },
@@ -869,8 +863,6 @@ fun PPassApp() {
                         // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
                         mediaAccess = mediaAccess,
                         onOpenAppSettings = { openAppDetailsSettings(context) },
-                        // MOB-02 §四事件①: 排队提示（Wi-Fi 要求不满足时）。
-                        wifiDeferred = wifiDeferred,
                     )
                 },
             )
@@ -884,8 +876,10 @@ fun PPassApp() {
                             pendingWifiOff = false
                             wifiOnly = false
                             backupSettings.save(false)
-                            wifiDeferred = false
                             rescheduleAutoBackup(context)
+                            // #413：引擎可能正因为 Wi‑Fi 在等——用户刚放开限制，人在场，立即重新检查一次，
+                            // 等待原因随之更新（否则「将在连上 Wi-Fi 后进行」会挂到下一次触发）。
+                            requestFlowWake(context, TriggerReason.MANUAL)
                         }) { Text(stringResource(R.string.wifi_off_confirm_ok)) }
                     },
                     dismissButton = {
@@ -953,7 +947,6 @@ fun PPassApp() {
                         } else {
                             val settings = BackupSettings(context.filesDir).load()
                             val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
-                            wifiDeferred = !constraintsSatisfied
                             if (added.isNotEmpty()) {
                                 requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
                             }
@@ -972,7 +965,6 @@ fun PPassApp() {
             val finishOnboarding = {
                 val settings = BackupSettings(context.filesDir).load()
                 val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
-                wifiDeferred = !constraintsSatisfied
                 requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
                 triggerUserPresentBackup(context)
                 screen = Screen.Home(s.pairing)

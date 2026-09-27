@@ -86,11 +86,20 @@ impl Db {
 
     /// Persist or replace a non-completed single-item grant. Completed rows
     /// are immutable receipts; callers must not overwrite their evidence.
+    /// Stamps the resume clock with the wall clock; see
+    /// [`Self::upsert_flow_grant_at`].
     pub async fn upsert_flow_grant(&self, grant: &FlowGrant) -> Result<()> {
+        self.upsert_flow_grant_at(grant, wall_clock_ms()).await
+    }
+
+    /// Same as [`Self::upsert_flow_grant`] with an explicit `now_ms`: an
+    /// offer is the phone resuming this tuple, so it restarts the
+    /// [`Self::stale_active_flow_grants`] clock (#413 §6).
+    pub async fn upsert_flow_grant_at(&self, grant: &FlowGrant, now_ms: i64) -> Result<()> {
         sqlx::query(
             "INSERT INTO flow_delivery
-                (node_id, queue_sequence, pairing_epoch, lease_token, content_hash, file_name, media_type, provider, state, receipt_id)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                (node_id, queue_sequence, pairing_epoch, lease_token, content_hash, file_name, media_type, provider, state, receipt_id, last_resumed_ms)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
              ON CONFLICT(node_id, pairing_epoch, queue_sequence) DO UPDATE SET
                 pairing_epoch = excluded.pairing_epoch,
                 lease_token = excluded.lease_token,
@@ -99,7 +108,8 @@ impl Db {
                 media_type = excluded.media_type,
                 provider = excluded.provider,
                 state = excluded.state,
-                receipt_id = NULL
+                receipt_id = NULL,
+                last_resumed_ms = excluded.last_resumed_ms
              WHERE flow_delivery.state != 'completed'",
         )
         .bind(&grant.node_id)
@@ -111,8 +121,53 @@ impl Db {
         .bind(&grant.media_type)
         .bind(&grant.provider)
         .bind(grant.state.as_str())
+        .bind(now_ms)
         .execute(self.pool())
         .await?;
+        Ok(())
+    }
+
+    /// #413 §6: a status poll that respawns a lost fetch is the phone
+    /// actively waiting on this tuple — the same resume fact as an offer.
+    /// Only an active row is touched; returns whether one was.
+    pub async fn touch_active_flow_grant(&self, grant: &FlowGrant, now_ms: i64) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE flow_delivery SET last_resumed_ms = ?
+             WHERE node_id = ? AND queue_sequence = ? AND pairing_epoch = ? AND lease_token = ?
+               AND state = 'active'",
+        )
+        .bind(now_ms)
+        .bind(&grant.node_id)
+        .bind(grant.queue_sequence)
+        .bind(&grant.pairing_epoch)
+        .bind(&grant.lease_token)
+        .execute(self.pool())
+        .await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// #413 §6: active grants whose last resume is older than `cutoff_ms`.
+    /// Selection only — the caller decides (e.g. skips a still-running
+    /// fetch) and cancels through the guarded [`Self::cancel_flow_grant`].
+    pub async fn stale_active_flow_grants(&self, cutoff_ms: i64) -> Result<Vec<FlowGrant>> {
+        let rows = sqlx::query(
+            "SELECT node_id, queue_sequence, pairing_epoch, lease_token, content_hash, file_name, media_type, provider, state, receipt_id
+             FROM flow_delivery WHERE state = 'active' AND last_resumed_ms < ?
+             ORDER BY last_resumed_ms",
+        )
+        .bind(cutoff_ms)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(rows.into_iter().map(flow_grant_from_row).collect())
+    }
+
+    /// #413 §7 `index_ok`: the index database is open and its schema
+    /// answers a query. Deliberately a read — a health probe must never
+    /// contend with ingest for the write lock.
+    pub async fn index_health_check(&self) -> Result<()> {
+        sqlx::query("SELECT 1 FROM asset LIMIT 1")
+            .fetch_optional(self.pool())
+            .await?;
         Ok(())
     }
 
@@ -234,6 +289,13 @@ impl Db {
     }
 }
 
+fn wall_clock_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 fn flow_grant_from_row(row: sqlx::sqlite::SqliteRow) -> FlowGrant {
     FlowGrant {
         node_id: row.get("node_id"),
@@ -320,5 +382,56 @@ mod tests {
             Some(renewed),
             "the new pairing epoch owns an independent sequence namespace"
         );
+    }
+
+    /// #413 §6: 超过期限没续传的 active grant 才算过期；completed/cancelled
+    /// 永不出现在结果里，刚续传（重新 offer）过的也不算。
+    #[tokio::test]
+    async fn stale_active_grants_are_selected_by_their_last_resume_time_only() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_flow_grant_at(&grant(1, FlowGrantState::Active, 1), 1_000)
+            .await
+            .unwrap();
+        db.upsert_flow_grant_at(&grant(2, FlowGrantState::Active, 2), 5_000)
+            .await
+            .unwrap();
+        db.upsert_flow_grant_at(&grant(3, FlowGrantState::Cancelled, 3), 1_000)
+            .await
+            .unwrap();
+        db.upsert_flow_grant_at(&grant(4, FlowGrantState::Completed, 4), 1_000)
+            .await
+            .unwrap();
+
+        let stale = db.stale_active_flow_grants(2_000).await.unwrap();
+        assert_eq!(stale, vec![grant(1, FlowGrantState::Active, 1)]);
+
+        // Re-offering the same tuple is the resume signal: it refreshes the clock.
+        db.upsert_flow_grant_at(&grant(1, FlowGrantState::Active, 1), 9_000)
+            .await
+            .unwrap();
+        assert!(db.stale_active_flow_grants(2_000).await.unwrap().is_empty());
+
+        // A status-driven respawn refreshes it too, but only for an active row.
+        assert!(db
+            .touch_active_flow_grant(&grant(2, FlowGrantState::Active, 2), 20_000)
+            .await
+            .unwrap());
+        assert!(!db
+            .touch_active_flow_grant(&grant(3, FlowGrantState::Active, 3), 20_000)
+            .await
+            .unwrap());
+        assert_eq!(
+            db.stale_active_flow_grants(10_000).await.unwrap(),
+            vec![grant(1, FlowGrantState::Active, 1)]
+        );
+    }
+
+    #[tokio::test]
+    async fn index_health_check_answers_on_an_open_index() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.index_health_check().await.unwrap();
+        // Counter-proof: a closed index must not report healthy.
+        db.pool().close().await;
+        assert!(db.index_health_check().await.is_err());
     }
 }
