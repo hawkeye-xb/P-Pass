@@ -282,6 +282,8 @@ async fn queue_head_fallback_respects_sweep_and_replacement() {
         start_pairing_harness(dir.path(), "dev05-head", 600_000, 30_000).await;
 
     let a = knock(&pairing, [0xA8; 12], 0xE8, "队首手机A");
+    // A 先入队再放 B：两个 spawn 并发时入队先后由调度决定（Windows CI 上实测会倒过来）。
+    wait_pending(&ipc, 1).await;
     let b = knock(&pairing, [0xA9; 12], 0xE9, "队首手机B");
     wait_pending(&ipc, 2).await;
 

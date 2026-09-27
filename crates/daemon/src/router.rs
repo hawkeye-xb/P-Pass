@@ -218,12 +218,16 @@ impl Router {
 
         match authz::check(device.as_ref(), &req.method) {
             Decision::Deny { msg_key } => {
+                // QA-17：diag 必须先于拒答响应落库。曾经先发响应再记
+                // diag——客户端收到 NOT_AUTHORIZED 的瞬间即可读 diag，
+                // 两条 sqlx 命令的调度顺序没保证，整轮并行下偶发断言
+                // 跑在 INSERT 之前（压 29 轮 1 红，见 #357）。
+                self.record_denial(peer, &req.method, msg_key).await;
                 let resp = Resp::err(
                     req.id.clone(),
                     RespError::new(codes::NOT_AUTHORIZED, msg_key),
                 );
                 let _ = self.send(stream, &resp).await;
-                self.record_denial(peer, &req.method, msg_key).await;
                 false // 关流 (§2.3: deny closes the connection)
             }
             Decision::Allow => {
