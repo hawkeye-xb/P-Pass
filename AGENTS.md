@@ -106,6 +106,7 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
 |---|---|
 | 开 issue | GitHub issue 模板「任务卡」 |
 | 本地跑测试 | `just --list` |
+| 真机/模拟器、配对（无需摄像头）、本机 daemon IPC | 本机 `local-state.md`（不进 git，先读它再说"做不到"） |
 | 发版、签名、版本纪律 | `docs/RELEASING.md` |
 | 验收协议细则（L 分级由来、抽检法） | `docs/AGENT_PROTOCOL.md` |
 | 历史事故与教训（出同类事故才翻） | `docs/lessons/` |
