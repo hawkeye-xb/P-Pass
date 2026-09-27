@@ -158,3 +158,57 @@ async fn duplicate_content_counts_as_already_indexed_not_adopted() {
     assert_eq!(page.assets.len(), 1);
     assert_eq!(page.assets[0].rel_path, "originals/a.jpg");
 }
+
+/// IDX-03：收编一张尺寸可读的 JPEG，行里必须带**真实**像素尺寸。
+///
+/// 这条守的是「三层各自降级、合起来产出 `0×0`」的最上游那一层：
+/// `index_missing_files` 曾把 `width`/`height` 直接写死 `None`，而同一个
+/// 插入块里的 `taken_at` 是实算的——桌面库 121 张全 NULL 就是这么来的。
+///
+/// 7×3 是故意不对称的：宽高写反也会被这条当场抓住。
+#[tokio::test(flavor = "multi_thread")]
+async fn adopted_rows_carry_the_real_pixel_dimensions() {
+    let (dir, db) = setup().await;
+    let root = dir.path().join("library");
+    let p = root.join("originals/wide.jpg");
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    image::RgbImage::new(7, 3).save(&p).unwrap();
+    // 前提自检：文件本身的尺寸确实读得出来。缺了这句，下面的断言变红时
+    // 分不清是产品码没写还是 fixture 根本不是张能解码的图。
+    assert_eq!(
+        image::image_dimensions(&p).unwrap(),
+        (7, 3),
+        "fixture 自身必须是一张尺寸读得出来的真图"
+    );
+    let hash = hash_file(&p).unwrap().to_vec();
+
+    assert_eq!(adopt_orphans(&db, &root, &LOCAL).await.unwrap().adopted, 1);
+
+    let row = db.get_asset(&hash).await.unwrap().unwrap();
+    assert_eq!(
+        (row.width, row.height),
+        (Some(7), Some(3)),
+        "收编进来的行必须带真实尺寸——写死 None 就是 IDX-03 的 0×0"
+    );
+}
+
+/// IDX-03 的另一半：探不到尺寸时必须诚实地 `None`，不许兜成 `Some(0)`。
+///
+/// 视频与异体编码本来就没有 header-only 尺寸，那不是异常态；把它记成 0
+/// 等于造一个「看起来像真数据的假数据」，比空着更糟（卡面原话）。
+#[tokio::test(flavor = "multi_thread")]
+async fn unprobeable_files_keep_honest_null_dimensions() {
+    let (dir, db) = setup().await;
+    let root = dir.path().join("library");
+    let p = write(&root, "originals/clip.mp4", b"not really a video");
+    let hash = hash_file(&p).unwrap().to_vec();
+
+    assert_eq!(adopt_orphans(&db, &root, &LOCAL).await.unwrap().adopted, 1);
+
+    let row = db.get_asset(&hash).await.unwrap().unwrap();
+    assert_eq!(
+        (row.width, row.height),
+        (None, None),
+        "探不到就是探不到，不许拿 0 充数"
+    );
+}
