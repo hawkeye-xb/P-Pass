@@ -29,6 +29,7 @@
     <string name="pair_waiting_body">回到电脑，在弹出的请求上点「允许」。</string>
     <string name="pair_refused_title">电脑拒绝了这次加入</string>
     <string name="pair_refused_body">请管理员重新生成二维码后再试一次。</string>
+    <string name="pair_lapsed_title">这次加入没有完成</string>
     <string name="pair_failed_title">没能连上电脑</string>
     <string name="pair_failed_body">确认电脑开着、两边都能上网，然后重新扫码。</string>
     <string name="scan_again">重新扫码</string>

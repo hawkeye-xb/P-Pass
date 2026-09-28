@@ -9,6 +9,8 @@
   "diag.pairing": "Waiting for confirmation on the storage computer…",
   "err.unsupported": "The storage computer doesn't understand this request. One side may need an update.",
   "err.backup_failed": "Backing up hit a snag — it will retry automatically; nothing was lost.",
+  "err.pair_expired": "Nobody confirmed this request on the computer in time, so it expired. Generate a new pairing code on the computer and scan again.",
+  "err.pair_restarted": "The P-Pass service on the computer restarted and this pairing request was lost. Generate a new pairing code on the computer and scan again.",
   "diag.desktop.storage_offline": "Network connection lost",
   "diag.desktop.pairing": "A device is waiting for you to confirm pairing",
   "diag.desktop.indexing": "Indexing the library…",

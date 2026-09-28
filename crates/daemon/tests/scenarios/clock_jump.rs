@@ -74,6 +74,7 @@ async fn send_pair(tp: &IrohTransport, daemon: transport::NodeId, token: &str, n
             token: token.into(),
             device_name: name.into(),
             role: "member".into(),
+            ..Default::default()
         })
         .unwrap(),
     )

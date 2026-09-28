@@ -11,26 +11,67 @@
 //!
 //! Tokens are 32 random bytes, TTL 600 s, strictly one-time: the first
 //! PairRequest consumes the token whatever happens afterwards — a replay
-//! is rejected even while the first request is still pending.
+//! from another device is rejected even while the first request is still
+//! pending.
+//!
+//! NET-10 (#128): submitting and waiting are two different things. A
+//! request enters an in-memory **ledger** keyed by `request_id`; a task
+//! spawned per request waits for the owner and writes the verdict back
+//! into the ledger. `pair.status` reads the ledger; the legacy blocking
+//! `pair.request` is "submit, then wait on the same ledger entry". The
+//! ledger is process memory on purpose: a daemon restart forgets it and
+//! `pair.status` answers `not_found` — the phone then asks for a fresh
+//! code instead of blindly resending.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use storage::{Db, Device, Role};
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, watch};
 
 pub const TOKEN_TTL_MS: i64 = 600_000;
 
-/// DEV-05 (#276): how long a pending request may wait for the owner.
+/// How long a pending request may wait for the owner — DEV-05 (#276)
+/// bounded it, NET-10 (#128) makes it the **single** number every side
+/// uses: the request-side wait (the spawned decision task), the owner
+/// queue's sweep and "已失效" marker (`ipc.rs`), and the phone's polling
+/// deadline (sent back as `PairSubmitted.ttl_ms`). Equal to the token TTL:
+/// the owner gets the same 10 minutes the QR code promised.
 ///
-/// Must stay **below** the Android side's own wait (`PairFlow.kt`
-/// default `waitMs = 120_000` — the phone drops the connection and
-/// gives up at 120 s). The owner's reaction budget on the desktop is
-/// the phone's reaction budget on this screen: a click after the phone
-/// has walked away lands on a dead request, which is the whole bug.
-/// Anything ≤ TOKEN_TTL_MS is a non-extension of the pairing window;
-/// 110 s leaves the phone a 10 s margin to deliver a real rejection.
-pub const PENDING_TTL_MS: i64 = 110_000;
+/// DEV-05's old 110 s had to stay below the phone's 120 s blocking wait.
+/// That wait never really existed — the phone's control-plane client caps
+/// every round trip at 15 s (`DaemonClient.kt` `CONNECT_TIMEOUT_MS`) — and
+/// the phone no longer waits inside an RPC at all: it polls `pair.status`
+/// until this deadline, so the desktop row and the phone expire together.
+pub const PENDING_TTL_MS: i64 = TOKEN_TTL_MS;
+
+/// How long a settled ledger entry (accepted / denied / expired) stays
+/// queryable, so a phone that lost the network right after the owner's
+/// click still reads the verdict — and replays the same `PairAccepted` —
+/// instead of needing a second click.
+const SETTLED_RETENTION_MS: i64 = TOKEN_TTL_MS;
+
+/// Where one submitted pairing request stands (NET-10 ledger state).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PairState {
+    /// Queued; the owner has not decided yet.
+    Pending,
+    /// The owner allowed it; the device row and this epoch are durable.
+    Accepted { pairing_epoch: String },
+    /// The owner said no.
+    Denied,
+    /// Left the queue without an owner verdict: the pending TTL ran out,
+    /// or the row was replaced/swept on the desktop.
+    Expired,
+}
+
+/// `pair.request{ack_then_poll}` result: what the phone polls, and until when.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairSubmission {
+    pub request_id: String,
+    /// Remaining pending time for this request, from [`PENDING_TTL_MS`].
+    pub ttl_ms: i64,
+}
 
 /// Why a PairRequest was turned away.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,11 +133,39 @@ struct TokenState {
     used: bool,
 }
 
+/// One NET-10 ledger entry.
+struct Ticket {
+    /// Only this NodeId may read the entry (authz 口径, see `router.rs`).
+    peer: transport::NodeId,
+    /// The one-time token that created it — `(token, peer)` is the dedup
+    /// key for a resend.
+    token: [u8; 12],
+    submitted_at: i64,
+    /// Set when the verdict lands; drives retention.
+    settled_at: Option<i64>,
+    /// Current state; legacy blocking callers wait on a receiver of it.
+    state: watch::Sender<PairState>,
+}
+
 struct Inner {
     tokens: HashMap<[u8; 12], TokenState>,
     /// Owner-side queue of requests awaiting confirmation (UI drains it;
     /// tests drain it directly).
     pending_tx: tokio::sync::mpsc::UnboundedSender<PendingPair>,
+    /// NET-10: request_id → ledger entry.
+    tickets: HashMap<String, Ticket>,
+}
+
+impl Inner {
+    /// Drop settled entries past retention. Pending entries are never
+    /// dropped here — their own decision task settles them within the
+    /// pending TTL.
+    fn sweep_tickets(&mut self, now_ms: i64) {
+        self.tickets.retain(|_, t| match t.settled_at {
+            Some(at) => now_ms <= at.saturating_add(SETTLED_RETENTION_MS),
+            None => true,
+        });
+    }
 }
 
 /// Pairing engine: token issuance + request handling. Cloneable — router
@@ -158,6 +227,7 @@ impl Pairing {
                 inner: Arc::new(Mutex::new(Inner {
                     tokens: HashMap::new(),
                     pending_tx: tx,
+                    tickets: HashMap::new(),
                 })),
             },
             rx,
@@ -202,14 +272,52 @@ impl Pairing {
         qr
     }
 
-    /// Handle one inbound PairRequest. Consumes the token, parks the
-    /// request for owner confirmation, resolves when the owner decides.
+    /// Legacy `pair.request` (old phones, `ack_then_poll == false`): the
+    /// reply still waits for the owner and its semantics are unchanged —
+    /// `Ok(pairing_epoch)` on Allow, `Err` otherwise. NET-10: internally it
+    /// is [`Self::submit_request`] plus a wait on the same ledger entry the
+    /// spawned decision task settles, so both protocol shapes share one
+    /// source of truth.
     pub async fn handle_request(
         &self,
         peer: transport::NodeId,
         req: &proto::PairRequest,
         now_ms: i64,
     ) -> Result<String, PairRejection> {
+        let submission = self.submit_request(peer, req, now_ms).await?;
+        let mut rx = {
+            let inner = self.inner.lock().expect("pairing lock");
+            inner
+                .tickets
+                .get(&submission.request_id)
+                .map(|t| t.state.subscribe())
+                .ok_or(PairRejection::OwnerDeclined)?
+        };
+        let settled = match rx.wait_for(|s| *s != PairState::Pending).await {
+            Ok(s) => s.clone(),
+            Err(_) => PairState::Expired,
+        };
+        match settled {
+            PairState::Accepted { pairing_epoch } => Ok(pairing_epoch),
+            _ => Err(PairRejection::OwnerDeclined),
+        }
+    }
+
+    /// NET-10 (#128): accept-then-poll. Validates the token, parks the
+    /// request in the owner's queue, records it in the ledger, spawns the
+    /// task that waits for the owner — and returns at once.
+    ///
+    /// Dedup: the same `(token, peer)` resubmitted (the phone lost the
+    /// reply, or re-scanned the same QR) returns the **existing**
+    /// `request_id` and pushes nothing to the owner queue — a second push
+    /// would make the queue's same-phone replacement (`ipc.rs`) drop the
+    /// live row. The same token from another device is still a replay.
+    pub async fn submit_request(
+        &self,
+        peer: transport::NodeId,
+        req: &proto::PairRequest,
+        now_ms: i64,
+    ) -> Result<PairSubmission, PairRejection> {
         let role = match req.role.as_str() {
             "viewer" => Role::Viewer,
             // §2.2: joining devices are members unless explicitly viewer;
@@ -217,9 +325,20 @@ impl Pairing {
             _ => Role::Member,
         };
 
-        let decision_rx = {
+        let (request_id, decision_rx) = {
             let mut inner = self.inner.lock().expect("pairing lock");
+            inner.sweep_tickets(now_ms);
             let token = parse_token(&req.token).ok_or(PairRejection::BadToken)?;
+            if let Some((id, t)) = inner
+                .tickets
+                .iter()
+                .find(|(_, t)| t.token == token && t.peer == peer)
+            {
+                return Ok(PairSubmission {
+                    request_id: id.clone(),
+                    ttl_ms: (t.submitted_at + self.pending_ttl_ms - now_ms).max(0),
+                });
+            }
             let state = inner
                 .tokens
                 .get_mut(&token)
@@ -229,6 +348,7 @@ impl Pairing {
             }
             state.used = true; // one-time, consumed no matter what follows
 
+            let request_id = fresh_request_id().map_err(|_| PairRejection::OwnerDeclined)?;
             let (tx, rx) = oneshot::channel();
             let pending = PendingPair {
                 peer,
@@ -240,7 +360,18 @@ impl Pairing {
             if inner.pending_tx.send(pending).is_err() {
                 return Err(PairRejection::OwnerDeclined); // UI gone = no
             }
-            rx
+            let (state_tx, _) = watch::channel(PairState::Pending);
+            inner.tickets.insert(
+                request_id.clone(),
+                Ticket {
+                    peer,
+                    token,
+                    submitted_at: now_ms,
+                    settled_at: None,
+                    state: state_tx,
+                },
+            );
+            (request_id, rx)
         };
 
         // T5: 扫码请求到达即审计（含后续被拒/超时——审计要全，不只看成功）。
@@ -255,6 +386,55 @@ impl Pairing {
             ))
             .await;
 
+        let this = self.clone();
+        let device_name = req.device_name.clone();
+        let id = request_id.clone();
+        tokio::spawn(async move {
+            let (state, settled_at) = this
+                .await_owner(peer, device_name, role, now_ms, decision_rx)
+                .await;
+            let mut inner = this.inner.lock().expect("pairing lock");
+            if let Some(t) = inner.tickets.get_mut(&id) {
+                t.settled_at = Some(settled_at);
+                t.state.send_replace(state);
+            }
+        });
+
+        Ok(PairSubmission {
+            request_id,
+            ttl_ms: self.pending_ttl_ms,
+        })
+    }
+
+    /// NET-10: the ledger entry for `request_id`, **as seen by `peer`**.
+    /// `None` = not_found: unknown id, swept, daemon restarted — or an id
+    /// that belongs to another NodeId (indistinguishable on purpose, so a
+    /// request's existence and its `PairAccepted` never leak).
+    pub fn status(
+        &self,
+        peer: transport::NodeId,
+        request_id: &str,
+        now_ms: i64,
+    ) -> Option<PairState> {
+        let mut inner = self.inner.lock().expect("pairing lock");
+        inner.sweep_tickets(now_ms);
+        inner
+            .tickets
+            .get(request_id)
+            .filter(|t| t.peer == peer)
+            .map(|t| t.state.borrow().clone())
+    }
+
+    /// The decision task body: wait (bounded) for the owner, then apply
+    /// the verdict. Returns the ledger state and the settle timestamp.
+    async fn await_owner(
+        &self,
+        peer: transport::NodeId,
+        device_name: String,
+        role: Role,
+        now_ms: i64,
+        decision_rx: oneshot::Receiver<PairDecision>,
+    ) -> (PairState, i64) {
         // DEV-05 (#276): the wait for the owner is bounded. Without this
         // arm, a request whose phone already gave up sat in `await` until
         // process exit — and the queue row stayed clickable. The timeout
@@ -269,7 +449,8 @@ impl Pairing {
         .await
         {
             Ok(Ok(d)) => Some(d),
-            // sender dropped (owner UI gone) or timed out: no verdict.
+            // sender dropped (row replaced/swept, owner UI gone) or timed
+            // out: no verdict.
             _ => None,
         };
         // DEV-05 (#276) 验收标准 4: the verdict timestamp is taken NOW —
@@ -282,6 +463,38 @@ impl Pairing {
         // monotonic (T-070's injected clock stays the truth).
         let decided_at = now_ms.saturating_add(wait_started.elapsed().as_millis() as i64);
 
+        let state = match self
+            .apply_verdict(
+                peer,
+                &device_name,
+                role,
+                now_ms,
+                decision.as_ref(),
+                decided_at,
+            )
+            .await
+        {
+            Ok(pairing_epoch) => PairState::Accepted { pairing_epoch },
+            // No verdict at all: the request aged out or left the queue.
+            Err(_) if decision.is_none() => PairState::Expired,
+            // The owner said no (or an accepted write failed — the phone
+            // must not proceed either way).
+            Err(_) => PairState::Denied,
+        };
+        (state, decided_at)
+    }
+
+    /// Apply the owner's verdict: audit + (on Allow) device row, epoch,
+    /// events. `Ok(pairing_epoch)` only when the pairing is durable.
+    async fn apply_verdict(
+        &self,
+        peer: transport::NodeId,
+        device_name: &str,
+        role: Role,
+        now_ms: i64,
+        decision: Option<&PairDecision>,
+        decided_at: i64,
+    ) -> Result<String, PairRejection> {
         let accept = matches!(decision, Some(PairDecision::Accept));
 
         if !accept {
@@ -293,7 +506,7 @@ impl Pairing {
                     Some(peer.0.to_vec()),
                     "pair.denied",
                     None,
-                    Some(serde_json::json!({ "deviceName": req.device_name.clone() }).to_string()),
+                    Some(serde_json::json!({ "deviceName": device_name }).to_string()),
                 ))
                 .await;
             return Err(PairRejection::OwnerDeclined);
@@ -313,7 +526,7 @@ impl Pairing {
         // 重连覆盖回 "SM-S9210"——审计流水里两行挨着。
         let name = match &existing {
             Some(d) => d.name.clone(),
-            None => safe_name(&req.device_name),
+            None => safe_name(device_name),
         };
         let device = Device {
             node_id: peer.0.to_vec(),
@@ -389,7 +602,17 @@ impl Pairing {
         inner
             .tokens
             .retain(|_, s| !s.used && now_ms <= s.expires_at);
+        inner.sweep_tickets(now_ms);
     }
+}
+
+/// NET-10: 128 bits of OS entropy per request id — unguessable, so the
+/// per-NodeId scoping in [`Pairing::status`] is defence in depth, not the
+/// only barrier.
+fn fresh_request_id() -> Result<String, getrandom::Error> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)?;
+    Ok(hex(&bytes))
 }
 
 /// Device names come from the network — cap length, strip control chars.

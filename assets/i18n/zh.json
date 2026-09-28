@@ -9,6 +9,8 @@
   "diag.pairing": "等待存储电脑上确认…",
   "err.unsupported": "存储电脑不认识这个请求，可能有一端需要更新版本。",
   "err.backup_failed": "这一批备份没有完成——会自动重试，已传的数据不会丢。",
+  "err.pair_expired": "电脑上一直没人确认，这次配对请求已过期。请在电脑上重新生成配对码再扫。",
+  "err.pair_restarted": "电脑端服务重启了，这次配对请求已失效。请在电脑上重新生成配对码再扫。",
   "diag.desktop.storage_offline": "网络连接中断",
   "diag.desktop.pairing": "有设备等待你确认配对",
   "diag.desktop.indexing": "正在整理照片库…",

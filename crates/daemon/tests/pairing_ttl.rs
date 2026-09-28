@@ -72,6 +72,7 @@ fn knock(
                     token: token_hex,
                     device_name: name,
                     role: "member".into(),
+                    ..Default::default()
                 },
                 now(),
             )

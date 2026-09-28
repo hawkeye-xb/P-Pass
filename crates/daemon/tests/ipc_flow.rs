@@ -481,6 +481,7 @@ async fn pairing_start_and_confirm_over_ipc() {
                         token: pairing_token,
                         device_name: "IPC 测试机".into(),
                         role: "member".into(),
+                        ..Default::default()
                     },
                     now(),
                 )
@@ -543,6 +544,7 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
                         token,
                         device_name: name,
                         role: "member".into(),
+                        ..Default::default()
                     },
                     now(),
                 )
@@ -809,6 +811,7 @@ async fn subscription_delivers_pending_change_under_100ms() {
         token: "11".repeat(12),
         device_name: "事件测试机".into(),
         role: "member".into(),
+        ..Default::default()
     };
     let peer = transport::NodeId([0xBB; 32]);
     let pairing2 = pairing.clone();
@@ -861,6 +864,7 @@ async fn subscription_filter_blocks_unwanted_event_types() {
         token: "22".repeat(12),
         device_name: "过滤测试机".into(),
         role: "member".into(),
+        ..Default::default()
     };
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {
@@ -909,6 +913,7 @@ async fn unsubscribe_closes_subscription_connection() {
         token: "33".repeat(12),
         device_name: "退订测试机".into(),
         role: "member".into(),
+        ..Default::default()
     };
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {
@@ -1187,6 +1192,7 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
                         token,
                         device_name: "SM-S9210".into(),
                         role: "member".into(),
+                        ..Default::default()
                     },
                     now(),
                 )

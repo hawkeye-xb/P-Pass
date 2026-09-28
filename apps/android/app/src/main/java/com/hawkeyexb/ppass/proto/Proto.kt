@@ -87,12 +87,39 @@ data class PairRequest(
     // DEV-01: 重装指纹（SHA-256(Build.MODEL+ANDROID_ID) 前 8 字节 hex）。
     // null = 旧客户端/设置里关了「重装识别」——序列化时省略该键，
     // 帧与 DEV-01 前逐字节一致（proto 演进铁律：旧端互解）。
+    /** NET-10 (#128): true = "answer once queued, I will poll pair.status".
+     *  null (never false) so a legacy frame omits the key, byte-identical
+     *  to the Rust side's skip_serializing_if. */
+    @SerialName("ack_then_poll") val ackThenPoll: Boolean? = null,
 )
 
 @Serializable
 data class PairAccepted(
     @SerialName("storage_device_name") val storageDeviceName: String = "",
     @SerialName("pairing_epoch") val pairingEpoch: String = "",
+)
+
+/** NET-10 (#128): pair.request reply for ackThenPoll — queued, poll [requestId]. */
+@Serializable
+data class PairSubmitted(
+    val accepted: Boolean = false,
+    @SerialName("request_id") val requestId: String = "",
+    /** Polling deadline from the desktop (single source: its PENDING_TTL_MS). */
+    @SerialName("ttl_ms") val ttlMs: Long = 0,
+)
+
+/** NET-10 (#128): pair.status params. */
+@Serializable
+data class PairStatusRequest(
+    @SerialName("request_id") val requestId: String = "",
+)
+
+/** NET-10 (#128): pair.status reply — pending / accepted / denied / expired / not_found. */
+@Serializable
+data class PairStatusReply(
+    val state: String = "",
+    val accepted: PairAccepted? = null,
+    @SerialName("msg_key") val msgKey: String? = null,
 )
 
 // ── Timeline ────────────────────────────────────────
@@ -307,6 +334,8 @@ data class DiagStatus(
 object Methods {
     const val HELLO = "hello"
     const val PAIR_REQUEST = "pair.request"
+    /** NET-10 (#128): read-only verdict query for an ackThenPoll pair.request. */
+    const val PAIR_STATUS = "pair.status"
     const val TIMELINE_PAGE = "timeline.page"
     const val ASSET_META = "asset.meta"
     const val THUMB_GET = "thumb.get"

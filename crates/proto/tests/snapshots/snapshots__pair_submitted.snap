@@ -1,0 +1,9 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "accepted": true,
+  "request_id": "0123456789abcdef0123456789abcdef",
+  "ttl_ms": 600000
+}

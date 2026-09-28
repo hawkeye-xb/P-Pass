@@ -46,6 +46,7 @@ async fn send_pair(
             token: token.into(),
             device_name: name.into(),
             role: "member".into(),
+            ..Default::default()
         })
         .unwrap(),
         ..Default::default()

@@ -251,6 +251,7 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
             token: token.trim().into(),
             device_name: name.into(),
             role: "member".into(),
+            ..Default::default()
         })?,
         ..Default::default()
     };

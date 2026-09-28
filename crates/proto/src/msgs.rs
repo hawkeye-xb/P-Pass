@@ -144,6 +144,14 @@ pub struct PairRequest {
     pub device_name: String,
     /// Requested role: `"member"` or `"viewer"`.
     pub role: String,
+    /// NET-10 (#128): the caller will poll `pair.status` for the owner's
+    /// verdict, so the daemon answers as soon as the request is queued
+    /// ([`PairSubmitted`]) instead of holding this RPC open until a human
+    /// clicks. `false` (omitted — old phones never send it) keeps the
+    /// legacy blocking reply ([`PairAccepted`] or NOT_AUTHORIZED); the key
+    /// is skipped when false so legacy frames and snapshots stay identical.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ack_then_poll: bool,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -153,8 +161,52 @@ impl Default for PairRequest {
             token: String::new(),
             device_name: String::new(),
             role: String::from("member"),
+            ack_then_poll: false,
         }
     }
+}
+
+/// NET-10 (#128): `pair.request` reply when `ack_then_poll` is set — the
+/// token was valid and the request sits in the owner's queue. The verdict
+/// is read through `pair.status(request_id)`, never inferred from how long
+/// this RPC took.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct PairSubmitted {
+    /// Always `true` on an ok reply (a bad token is an error reply).
+    pub accepted: bool,
+    /// Opaque id naming this request in the daemon's pairing ledger. Only
+    /// the NodeId that submitted it can query it.
+    pub request_id: String,
+    /// How much longer the daemon keeps this request pending for the
+    /// owner — the phone's polling deadline. The daemon's
+    /// `PENDING_TTL_MS` stays the single source of that number.
+    pub ttl_ms: i64,
+}
+
+/// NET-10 (#128): `pair.status` params.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct PairStatusRequest {
+    pub request_id: String,
+}
+
+/// NET-10 (#128): `pair.status` reply — same shape as [`FlowStatusReply`]:
+/// a state string plus the terminal payload when there is one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct PairStatusReply {
+    /// One of: `"pending"`, `"accepted"`, `"denied"`, `"expired"`,
+    /// `"not_found"` (unknown id, another device's id, or the daemon
+    /// restarted and its in-memory ledger is gone).
+    pub state: String,
+    /// Present only when `state == "accepted"`. Replayed identically on
+    /// every query for as long as the ledger keeps the entry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted: Option<PairAccepted>,
+    /// Present only when `state == "denied"`: the msg_key the phone shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub msg_key: Option<String>,
 }
 
 /// Pairing accepted response.
@@ -523,6 +575,9 @@ pub struct DiagStatus {
 pub mod methods {
     pub const HELLO: &str = "hello";
     pub const PAIR_REQUEST: &str = "pair.request";
+    /// NET-10 (#128): read-only verdict query for one `pair.request`
+    /// submitted with `ack_then_poll`. Control-plane, answers at once.
+    pub const PAIR_STATUS: &str = "pair.status";
     pub const TIMELINE_PAGE: &str = "timeline.page";
     pub const ASSET_META: &str = "asset.meta";
     pub const THUMB_GET: &str = "thumb.get";
@@ -707,8 +762,60 @@ mod tests {
             token: "abcd1234".into(),
             device_name: "Mom's Phone".into(),
             role: "member".into(),
+            ack_then_poll: false,
         }
     );
+
+    /// NET-10: the opt-in flag is omitted when false, so a legacy frame is
+    /// byte-identical, and an old frame (no key) parses as legacy.
+    #[test]
+    fn pair_request_ack_then_poll_is_omitted_when_false_and_defaults_off() {
+        let legacy = serde_json::to_value(PairRequest::default()).unwrap();
+        assert!(legacy.get("ack_then_poll").is_none(), "{legacy}");
+        let old: PairRequest =
+            serde_json::from_str(r#"{"token":"t","device_name":"d","role":"member"}"#).unwrap();
+        assert!(!old.ack_then_poll);
+        let new = serde_json::to_value(PairRequest {
+            ack_then_poll: true,
+            ..PairRequest::default()
+        })
+        .unwrap();
+        assert_eq!(new["ack_then_poll"], true);
+    }
+
+    roundtrip_test!(
+        pair_submitted_roundtrip,
+        PairSubmitted,
+        PairSubmitted {
+            accepted: true,
+            request_id: "ab".repeat(16),
+            ttl_ms: 600_000,
+        }
+    );
+
+    roundtrip_test!(
+        pair_status_reply_accepted_roundtrip,
+        PairStatusReply,
+        PairStatusReply {
+            state: "accepted".into(),
+            accepted: Some(PairAccepted {
+                storage_device_name: "Home PC".into(),
+                pairing_epoch: "epoch-1".into(),
+            }),
+            msg_key: None,
+        }
+    );
+
+    /// NET-10: pending carries neither payload nor reason key.
+    #[test]
+    fn pair_status_reply_pending_has_only_state() {
+        let v = serde_json::to_value(PairStatusReply {
+            state: "pending".into(),
+            ..PairStatusReply::default()
+        })
+        .unwrap();
+        assert_eq!(v, serde_json::json!({"state": "pending"}));
+    }
 
     /// DEV-02: 老版本手机仍会发 `device_hint`（DEV-01b 只藏了设置页那行
     /// UI，pref 默认开）。`PairRequest` 没有 `deny_unknown_fields`，所以

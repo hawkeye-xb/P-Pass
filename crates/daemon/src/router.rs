@@ -19,7 +19,15 @@ use crate::subscriptions::SubscriptionRegistry;
 
 /// Capabilities this daemon ships. Grows with T-033 (thumbnail serving)
 /// and later cards; hello advertises it from day one (决策 D 项).
-pub const SERVER_CAPABILITIES: &[&str] = &["thumbnail.v1"];
+///
+/// NET-10 (#128): `pair.status.v1` = this daemon answers
+/// `pair.request{ack_then_poll}` at once and serves `pair.status`. A new
+/// phone checks it in the (unpaired-allowed) hello before pairing; without
+/// it the phone reports "desktop too old" instead of timing out.
+pub const SERVER_CAPABILITIES: &[&str] = &["thumbnail.v1", PAIR_STATUS_CAPABILITY];
+
+/// NET-10 (#128): see [`SERVER_CAPABILITIES`].
+pub const PAIR_STATUS_CAPABILITY: &str = "pair.status.v1";
 
 /// The ctrl-plane router: one per daemon process.
 #[derive(Clone)]
@@ -390,6 +398,7 @@ impl Router {
     async fn dispatch(&self, peer: transport::NodeId, req: &Req) -> Resp {
         match req.method.as_str() {
             methods::PAIR_REQUEST => self.handle_pair(peer, req).await,
+            methods::PAIR_STATUS => self.handle_pair_status(peer, req),
             methods::DEVICE_UNPAIR => self.handle_unpair(peer, req).await,
             methods::FLOW_OFFER | methods::FLOW_FETCH | methods::FLOW_CANCEL => {
                 self.handle_flow_delivery(peer, req).await
@@ -858,6 +867,29 @@ impl Router {
                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
             );
         };
+        // NET-10 (#128): accept-then-poll — answer as soon as the request
+        // is queued; the verdict is read through `pair.status`. A bad or
+        // replayed token is still the same immediate NOT_AUTHORIZED.
+        if pair_req.ack_then_poll {
+            return match pairing.submit_request(peer, &pair_req, (self.now)()).await {
+                Ok(sub) => ok_json(
+                    &req.id,
+                    &proto::PairSubmitted {
+                        accepted: true,
+                        request_id: sub.request_id,
+                        ttl_ms: sub.ttl_ms,
+                    },
+                ),
+                Err(_) => {
+                    self.record_denial(peer, methods::PAIR_REQUEST, diag::keys::ERR_NOT_AUTHORIZED)
+                        .await;
+                    Resp::err(
+                        req.id.clone(),
+                        RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
+                    )
+                }
+            };
+        }
         match pairing.handle_request(peer, &pair_req, (self.now)()).await {
             Ok(pairing_epoch) => {
                 let accepted = proto::PairAccepted {
@@ -881,6 +913,57 @@ impl Router {
                 )
             }
         }
+    }
+
+    /// `pair.status` (NET-10 #128): read the pairing ledger for one
+    /// request_id. Control-plane, never waits. authz lets any caller in
+    /// (see `authz.rs`); the scoping happens here: a caller only ever sees
+    /// the requests **its own NodeId** submitted — anyone else's id reads
+    /// as `not_found`, same as an id that never existed.
+    fn handle_pair_status(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        let Some(pairing) = &self.pairing else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let Ok(query) = serde_json::from_value::<proto::PairStatusRequest>(req.params.clone())
+        else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        use crate::pairing::PairState;
+        let reply = match pairing.status(peer, &query.request_id, (self.now)()) {
+            Some(PairState::Pending) => proto::PairStatusReply {
+                state: "pending".into(),
+                ..Default::default()
+            },
+            // Idempotent replay: the same payload the legacy reply carries.
+            Some(PairState::Accepted { pairing_epoch }) => proto::PairStatusReply {
+                state: "accepted".into(),
+                accepted: Some(proto::PairAccepted {
+                    storage_device_name: self.device_name.clone(),
+                    pairing_epoch,
+                }),
+                msg_key: None,
+            },
+            Some(PairState::Denied) => proto::PairStatusReply {
+                state: "denied".into(),
+                accepted: None,
+                msg_key: Some(diag::keys::ERR_NOT_AUTHORIZED.into()),
+            },
+            Some(PairState::Expired) => proto::PairStatusReply {
+                state: "expired".into(),
+                ..Default::default()
+            },
+            None => proto::PairStatusReply {
+                state: "not_found".into(),
+                ..Default::default()
+            },
+        };
+        ok_json(&req.id, &reply)
     }
 
     /// `device.unpair` (UX-06): the caller revokes ITSELF. Unilateral
@@ -950,6 +1033,18 @@ impl Router {
         if let Err(e) = self.db.append_diag(&event).await {
             tracing::error!("diag append failed: {e}");
         }
+    }
+}
+
+/// Serialize an ok reply; a serializer failure is INTERNAL (same fallback
+/// as `handle_pair`'s legacy branch).
+fn ok_json(id: &str, value: &impl serde::Serialize) -> Resp {
+    match serde_json::to_value(value) {
+        Ok(v) => Resp::ok(id.to_string(), v),
+        Err(_) => Resp::err(
+            id.to_string(),
+            RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+        ),
     }
 }
 
