@@ -63,9 +63,69 @@ fn snapshot_pair_request() {
         token: "abcd1234abcd1234abcd1234abcd1234".into(),
         device_name: "Mom's Phone".into(),
         role: "member".into(),
+        ack_then_poll: false,
     };
     assert_roundtrip(&pr);
     snapshot_message("pair_request", &pr);
+}
+
+// NET-10 (#128): accept-then-poll pairing — new golden samples only; the
+// legacy `pair_request` sample above must stay byte-identical.
+#[test]
+fn snapshot_pair_request_ack_then_poll() {
+    let pr = PairRequest {
+        token: "abcd1234abcd1234abcd1234abcd1234".into(),
+        device_name: "Mom's Phone".into(),
+        role: "member".into(),
+        ack_then_poll: true,
+    };
+    assert_roundtrip(&pr);
+    snapshot_message("pair_request_ack_then_poll", &pr);
+}
+
+#[test]
+fn snapshot_pair_submitted() {
+    let ps = PairSubmitted {
+        accepted: true,
+        request_id: "0123456789abcdef0123456789abcdef".into(),
+        ttl_ms: 600_000,
+    };
+    assert_roundtrip(&ps);
+    snapshot_message("pair_submitted", &ps);
+}
+
+#[test]
+fn snapshot_pair_status_request() {
+    let q = PairStatusRequest {
+        request_id: "0123456789abcdef0123456789abcdef".into(),
+    };
+    assert_roundtrip(&q);
+    snapshot_message("pair_status_request", &q);
+}
+
+#[test]
+fn snapshot_pair_status_reply_accepted() {
+    let r = PairStatusReply {
+        state: "accepted".into(),
+        accepted: Some(PairAccepted {
+            storage_device_name: "Home PC".into(),
+            pairing_epoch: "epoch-1".into(),
+        }),
+        msg_key: None,
+    };
+    assert_roundtrip(&r);
+    snapshot_message("pair_status_reply_accepted", &r);
+}
+
+#[test]
+fn snapshot_pair_status_reply_denied() {
+    let r = PairStatusReply {
+        state: "denied".into(),
+        accepted: None,
+        msg_key: Some("err.not_authorized".into()),
+    };
+    assert_roundtrip(&r);
+    snapshot_message("pair_status_reply_denied", &r);
 }
 
 #[test]

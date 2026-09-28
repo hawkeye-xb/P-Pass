@@ -72,6 +72,15 @@ class GoldenDriftTest {
     @Test fun helloJson() = check("snapshots__hello_json", Hello.serializer())
     @Test fun pairRequest() = check("snapshots__pair_request", PairRequest.serializer())
     @Test fun pairAccepted() = check("snapshots__pair_accepted", PairAccepted.serializer())
+    @Test fun pairRequestAckThenPoll() =
+        check("snapshots__pair_request_ack_then_poll", PairRequest.serializer())
+    @Test fun pairSubmitted() = check("snapshots__pair_submitted", PairSubmitted.serializer())
+    @Test fun pairStatusRequest() =
+        check("snapshots__pair_status_request", PairStatusRequest.serializer())
+    @Test fun pairStatusReplyAccepted() =
+        check("snapshots__pair_status_reply_accepted", PairStatusReply.serializer())
+    @Test fun pairStatusReplyDenied() =
+        check("snapshots__pair_status_reply_denied", PairStatusReply.serializer())
     @Test fun reqEnvelope() = check("snapshots__req_envelope", Req.serializer())
     @Test fun reqEnvelopeJson() = check("snapshots__req_envelope_json", Req.serializer())
     @Test fun respOk() = check("snapshots__resp_ok_envelope", Resp.serializer())
@@ -102,6 +111,9 @@ class GoldenDriftTest {
         val covered = setOf(
             "snapshots__hello", "snapshots__hello_json",
             "snapshots__pair_request", "snapshots__pair_accepted",
+            "snapshots__pair_request_ack_then_poll", "snapshots__pair_submitted",
+            "snapshots__pair_status_request", "snapshots__pair_status_reply_accepted",
+            "snapshots__pair_status_reply_denied",
             "snapshots__req_envelope", "snapshots__req_envelope_json",
             "snapshots__resp_ok_envelope", "snapshots__resp_ok_envelope_json",
             "snapshots__resp_err_envelope", "snapshots__resp_err_envelope_json",

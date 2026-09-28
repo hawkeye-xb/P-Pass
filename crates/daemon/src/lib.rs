@@ -37,8 +37,8 @@ pub use ipc::Claim;
 pub use ipc::ConfirmOutcome;
 pub use ipc::IpcServer;
 pub use pairing::{
-    DecisionUndelivered, PairDecision, PairRejection, Pairing, PendingPair, PENDING_TTL_MS,
-    TOKEN_TTL_MS,
+    DecisionUndelivered, PairDecision, PairRejection, PairState, PairSubmission, Pairing,
+    PendingPair, PENDING_TTL_MS, TOKEN_TTL_MS,
 };
 pub use query::QueryEngine;
 pub use reconcile::Reconcile;

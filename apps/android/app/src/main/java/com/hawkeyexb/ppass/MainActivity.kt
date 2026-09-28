@@ -564,7 +564,9 @@ fun PPassApp() {
                         }
                     }
                     is PairOutcome.Refused -> screen = Screen.Trouble(
-                        R.string.pair_refused_title,
+                        // NET-10: expired / desktop restarted / desktop too old
+                        // are not "the computer said no".
+                        if (outcome.ownerSaidNo) R.string.pair_refused_title else R.string.pair_lapsed_title,
                         R.string.pair_refused_body,
                         // T-072: 具体拒绝原因走 diag 字典（msg_key → 双语人话）
                         // 渲染在通用文案下方；未知 key 显示空详情，绝不崩溃。

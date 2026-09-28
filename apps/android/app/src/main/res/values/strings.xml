@@ -30,6 +30,7 @@
     <string name="pair_waiting_body">On the computer, click Allow when it asks.</string>
     <string name="pair_refused_title">The computer said no.</string>
     <string name="pair_refused_body">Ask the family owner to generate a fresh code and try again.</string>
+    <string name="pair_lapsed_title">This pairing didn\'t go through.</string>
     <string name="pair_failed_title">Could not reach the computer.</string>
     <string name="pair_failed_body">Make sure the computer is on and both devices have internet, then scan again.</string>
     <string name="scan_again">Scan again</string>

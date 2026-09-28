@@ -22,7 +22,15 @@ pub enum Decision {
 
 /// Methods an unpaired device may call: the pairing door and nothing else.
 /// (`hello` is capability negotiation and carries no data.)
-const UNPAIRED_METHODS: &[&str] = &[methods::HELLO, methods::PAIR_REQUEST];
+///
+/// NET-10 (#128): `pair.status` is part of the pairing door. The gate
+/// lets **every** caller through — unpaired, revoked, and every role —
+/// because the same phone keeps polling across its own state change
+/// (unpaired/revoked while pending → member the moment the owner allows).
+/// Scoping is done by the handler, not here: `router.rs`
+/// `handle_pair_status` answers only for request_ids submitted by the
+/// caller's own NodeId and reports any other id as `not_found`.
+const UNPAIRED_METHODS: &[&str] = &[methods::HELLO, methods::PAIR_REQUEST, methods::PAIR_STATUS];
 
 /// 权限表 (T-030): viewer 只许浏览/诊断; member 加 backup.* 和新 Flow
 /// delivery; owner 全部（pair 确认走 IPC 而非网络方法，见 T-034）。
@@ -42,6 +50,10 @@ fn role_allows(role: Role, method: &str) -> bool {
     // （device.unpair 只作用于调用者自身，无需 owner 在场）。
     let self_unpair = method == methods::DEVICE_UNPAIR;
     let member_delivery = method.starts_with("backup.") || method.starts_with("flow.");
+    // NET-10: see UNPAIRED_METHODS — own-request scoping lives in the handler.
+    if method == methods::PAIR_STATUS {
+        return true;
+    }
     match role {
         Role::Viewer => viewer_ok || self_unpair,
         Role::Member => viewer_ok || self_unpair || member_delivery,
@@ -68,7 +80,7 @@ pub fn check(device: Option<&Device>, method: &str) -> Decision {
         // 必须能重新加入。它没有新令牌就过不了配对（令牌在 owner 手里
         // = owner 授权），其余方法一律拒绝（走查实测抓到的产品 bug）。
         Some(d) if d.revoked => {
-            if method == methods::PAIR_REQUEST {
+            if method == methods::PAIR_REQUEST || method == methods::PAIR_STATUS {
                 Decision::Allow
             } else {
                 Decision::Deny {
@@ -206,6 +218,24 @@ mod tests {
             methods::PAIR_REQUEST,
         ] {
             assert!(allowed(Some(&d), m), "owner must reach {m}");
+        }
+    }
+
+    /// NET-10: the phone polls pair.status across its own state change —
+    /// unpaired/revoked while pending, member right after Allow. Every
+    /// state must pass the gate (scoping is the handler's job).
+    #[test]
+    fn pair_status_passes_the_gate_in_every_device_state() {
+        assert!(allowed(None, methods::PAIR_STATUS));
+        assert!(allowed(
+            Some(&device(Role::Member, true)),
+            methods::PAIR_STATUS
+        ));
+        for role in [Role::Viewer, Role::Member, Role::Owner] {
+            assert!(
+                allowed(Some(&device(role, false)), methods::PAIR_STATUS),
+                "{role:?} must be able to read its own pair.status"
+            );
         }
     }
 
