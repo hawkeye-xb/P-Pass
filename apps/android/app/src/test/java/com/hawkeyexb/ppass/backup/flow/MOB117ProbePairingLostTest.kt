@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class MOB117ProbePairingLostTest {
     private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingEpoch = "e1")
@@ -54,5 +55,13 @@ class MOB117ProbePairingLostTest {
 
         assertEquals(ProbeResult.Unreachable, probe.probe())
         assertFalse(loss.isLost(PairingEpoch("e1")))
+    }
+
+    // 接线门禁：探测只改视图、不写 order（revision 不动），所以 holder 必须在视图订阅里同步红卡，否则记了也不亮。
+    @Test
+    fun `the home holder syncs the pairing-lost card on every engine view, not only on order writes`() {
+        val src = File("src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt").readText()
+        val viewCollect = src.substringAfter("g.view.collect").substringBefore("\n    }\n")
+        assertTrue("视图订阅里必须同步配对失效（#466）", viewCollect.contains("pairingLostState.syncFrom(flowDeliveryPairingLoss"))
     }
 }
