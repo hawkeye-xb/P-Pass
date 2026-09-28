@@ -1,0 +1,51 @@
+---
+import { t, type Lang } from '../i18n/ui';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+
+// 1×1 transparent GIF. The real cover is a CSS background (below); a poster
+// must still be set, or Chrome paints an opaque dark layer over it.
+const CLEAR_POSTER =
+  'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+---
+
+<!-- 30s promo. Click-to-play only (preload="none"): nothing is fetched until
+     the viewer asks — no surprise mobile data. Narrow screens get the 3:4 cut,
+     wider ones the 16:9 cut; the 760px breakpoint matches .pillars. The cover
+     is a CSS background instead of `poster` so each breakpoint downloads only
+     its own image, with zero JS. Assets: public/video/; provenance: site/VIDEO-SOURCES.md (not deployed). -->
+<section class="promo">
+  <video controls preload="none" playsinline poster={CLEAR_POSTER} aria-label={t(lang, 'video.label')}>
+    <source media="(max-width: 760px)" src="/video/promo-3x4.mp4" type="video/mp4" />
+    <source src="/video/promo-16x9.mp4" type="video/mp4" />
+    <p>
+      {t(lang, 'video.fallback')}
+      <a href="/video/promo-16x9.mp4" download>{t(lang, 'video.download')}</a>
+    </p>
+  </video>
+</section>
+
+<style>
+  .promo {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 1.25rem 4rem;
+  }
+  video {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    border-radius: var(--radius-card);
+    background: var(--canvas) url('/video/promo-16x9.webp') center / cover no-repeat;
+  }
+  @media (max-width: 760px) {
+    video {
+      aspect-ratio: 3 / 4;
+      background-image: url('/video/promo-3x4.webp');
+    }
+  }
+</style>

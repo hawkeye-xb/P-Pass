@@ -21,6 +21,9 @@ export const ui = {
     'hero.cta': 'Download P-Pass',
     'hero.cta.sub': 'macOS / Android · GitHub Releases',
     'hero.icon.alt': 'P-Pass roof-guardian icon',
+    'video.label': 'P-Pass in 30 seconds',
+    'video.fallback': "Your browser can't play this video.",
+    'video.download': 'Download it (MP4)',
     'testing.note':
       "P-Pass is in testing. Windows desktop and iPhone are on the way; iOS limits background backup, so the iPhone experience will differ — we'll spell that out when it ships.",
     'pillar1.title': 'Photos come home',
@@ -63,6 +66,9 @@ export const ui = {
     'hero.cta': '下载 P-Pass',
     'hero.cta.sub': 'macOS / Android · GitHub Releases',
     'hero.icon.alt': 'P-Pass 屋脊兽图标',
+    'video.label': '30 秒看懂 P-Pass',
+    'video.fallback': '你的浏览器无法播放这段视频。',
+    'video.download': '下载观看（MP4）',
     'testing.note':
       '目前是测试阶段——Windows 桌面版与 iPhone 版在路上；iPhone 受 iOS 系统限制，后台自动备份体验会不同，发布时会说清楚。',
     'pillar1.title': '照片回家',
