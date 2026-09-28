@@ -61,6 +61,11 @@ windows = { version = "0.62", features = [
   "Win32_UI_Shell",
   # GetDIBits / BITMAP / DeleteObject —— 把 HBITMAP 变成像素要走 GDI。
   "Win32_Graphics_Gdi",
+  # DESK-17 (#166)：WinRT toast —— ToastNotificationManager / XmlDocument，
+  # 以及工作线程上的 RoInitialize。
+  "UI_Notifications",
+  "Data_Xml_Dom",
+  "Win32_System_WinRT",
 ] }
 
 [dev-dependencies]

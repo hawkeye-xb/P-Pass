@@ -66,6 +66,66 @@ impl Default for WindowsAdapter {
     }
 }
 
+/// DESK-17 (#166)：toast 挂在这个 AppUserModelID 名下。它等于
+/// `tauri.conf.json` 的 `identifier`——NSIS 安装时把开始菜单快捷方式的
+/// AUMID 设成的就是它（见 `notify` 的注释）。与 [`DATA_DIR_NAME`] 恰好同值，
+/// 但语义不同，刻意分开写。
+const APP_USER_MODEL_ID: &str = "com.p-pass.desktop";
+
+/// `notify` 的可注入版本：AUMID 由调用方给，契约测试用一个不存在的 ID 来
+/// 验「不可用时不 panic、不阻塞」。
+fn notify_as(app_id: &str, title: &str, body: &str) {
+    let (app_id, title, body) = (app_id.to_owned(), title.to_owned(), body.to_owned());
+    // 线程起不来（资源耗尽）也只是没通知，不能让调用方跟着失败。
+    let _ = std::thread::Builder::new()
+        .name("ppf-toast".into())
+        .spawn(move || {
+            let _ = show_toast(&app_id, &title, &body);
+        });
+}
+
+/// 真正弹 toast 的那一段（同步）。
+fn show_toast(app_id: &str, title: &str, body: &str) -> windows::core::Result<()> {
+    use windows::core::HSTRING;
+    use windows::Data::Xml::Dom::XmlDocument;
+    use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
+    use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+
+    // 本线程是自己起的，套间由我们定。重复初始化返回 S_FALSE / 已初始化，
+    // 都不影响后面的调用，所以结果不看。
+    // SAFETY: RoInitialize 没有内存安全前提。
+    let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
+    let xml = XmlDocument::new()?;
+    xml.LoadXml(&HSTRING::from(toast_xml(title, body)))?;
+    let toast = ToastNotification::CreateToastNotification(&xml)?;
+    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id))?.Show(&toast)
+}
+
+/// toast 的 XML 负载。标题与正文都要做 XML 转义——它们来自产品文案与
+/// 文件名之类的外部输入，一个 `<` 就能让整条通知 `LoadXml` 失败。
+fn toast_xml(title: &str, body: &str) -> String {
+    format!(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",
+        xml_escape(title),
+        xml_escape(body)
+    )
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
     move |source| PlatformError::Io { action, source }
 }
@@ -256,8 +316,19 @@ impl PlatformAdapter for WindowsAdapter {
         )
     }
 
-    fn notify(&self, _title: &str, _body: &str) {
-        // Tauri notification carries this in T-041; no-op until then.
+    /// DESK-17 (#166)：Windows toast（WinRT `ToastNotificationManager`）。
+    ///
+    /// ⚠️ Windows 的 toast 要挂在一个 **AppUserModelID** 名下，而且这个 ID
+    /// 必须有一个开始菜单快捷方式认领它，否则 `Show()` 返回成功、通知却不显示。
+    /// 本应用的快捷方式由 Tauri 的 NSIS 模板创建，模板会用 `SetLnkAppUserModelId`
+    /// 把它设成 bundle identifier（真机实测已安装的 `P-Pass.lnk` 的
+    /// `System.AppUserModel.ID` = `com.p-pass.desktop`）。所以这里用同一个 ID，
+    /// 不需要改安装脚本。
+    ///
+    /// 不阻塞调用方：WinRT 调用放进一个一次性线程。trait 的返回值是 `()`，
+    /// 失败只能吞掉——与 macOS 侧 osascript 的「尽力而为」口径一致。
+    fn notify(&self, title: &str, body: &str) {
+        notify_as(APP_USER_MODEL_ID, title, body);
     }
 
     /// DESK-24 (#173)：**生效的**数据目录。老目录还在就是老目录，搬完了
@@ -1103,6 +1174,40 @@ mod qa09_migrated_capability_tests {
         let size = std::fs::metadata(&log).unwrap().len();
         assert_eq!(verdict, "Unsupported", "只追加的文件截不动，不许报 Done");
         assert!(size > 100_000, "文件应当没被截断: {size}");
+    }
+
+    // ── DESK-17 (#166)：notify ───────────────────────────────────────────
+
+    /// 验收标准 3（E2）：通知不可用时**不 panic、不阻塞调用方**。
+    ///
+    /// 用一个没有任何快捷方式认领的 AUMID，逼它走不可用的路径（CI runner 上
+    /// 连通知平台本身都可能缺席，同一条判据）。调用必须立刻返回。
+    #[test]
+    fn desk17_notify_never_blocks_or_panics_when_unavailable() {
+        let start = std::time::Instant::now();
+        for _ in 0..20 {
+            notify_as("ppf.desk17.no-such-app", "标题", "正文");
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "notify 阻塞了调用方: {elapsed:?}"
+        );
+        // 同步那一段本身也不能 panic——失败以 Err 形式回来。
+        let _ = show_toast("ppf.desk17.no-such-app", "标题", "正文");
+    }
+
+    /// toast 负载必须是合法 XML，且标题 / 正文里的特殊字符被转义——
+    /// 否则 `LoadXml` 失败，整条通知静默丢失。
+    #[test]
+    fn desk17_toast_xml_escapes_user_text() {
+        let xml = toast_xml("备份 <完成> & \"好\"", "O'Brien 的 a<b.jpg");
+        assert!(!xml.contains("<完成>"), "标题没转义: {xml}");
+        assert!(xml.contains("&lt;完成&gt; &amp; &quot;好&quot;"), "{xml}");
+        assert!(xml.contains("O&apos;Brien 的 a&lt;b.jpg"), "{xml}");
+        // 用系统自己的 XML 解析器验合法性（与 show_toast 用的是同一个）。
+        let doc = windows::Data::Xml::Dom::XmlDocument::new().unwrap();
+        doc.LoadXml(&windows::core::HSTRING::from(xml)).unwrap();
     }
 
     /// 这条相反：命名管道**机制上就不落文件**，没有残留要清，所以是
