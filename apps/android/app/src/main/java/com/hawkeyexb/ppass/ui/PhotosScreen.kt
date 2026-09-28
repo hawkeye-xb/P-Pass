@@ -238,6 +238,39 @@ internal fun filterAssetsBySource(
 
 private fun AssetMeta.sourceDeviceOrNull(): String? = srcDevice?.takeIf { it.isNotBlank() }
 
+/**
+ * UI-17（#354）：照片 tab 时间线区域上方那几行状态提示该不该露出——纯函数，JVM 可测。
+ *
+ * 配对失效（`holder.pairingLost`，与设置 tab 红卡、设置角标同一个信号）时，出路只有一个：
+ * 红卡上的「重新扫码连接」。这时订阅必然一直被拒（not_authorized），如果时间线区域照常显示
+ * 「正在重新连接电脑…」/「连不上 + 重试」/「没能连上电脑。(timeline: err.not_authorized)」，
+ * 就等于同一屏里一个说要重新扫码、一个说正在重连，还露出原始错误 key。所以配对失效时三者全部收起。
+ */
+internal data class PhotosTimelineChrome(
+    /** 「正在重新连接电脑…」小字。 */
+    val showReconnecting: Boolean,
+    /** 「和电脑的实时连接断了。」+「重试」。 */
+    val showExhaustedRetry: Boolean,
+    /** 中间的「没能连上电脑。(原始错误)」。 */
+    val showTimelineError: Boolean,
+)
+
+internal fun photosTimelineChrome(
+    pairingLost: Boolean,
+    state: SubscriptionSessionState,
+    error: String?,
+): PhotosTimelineChrome =
+    if (pairingLost) {
+        PhotosTimelineChrome(showReconnecting = false, showExhaustedRetry = false, showTimelineError = false)
+    } else {
+        PhotosTimelineChrome(
+            // SYNC-04：跟「耗尽」互斥（耗尽之后不会再是「重连中」）。
+            showReconnecting = state.subscribeHadFailure && !state.subscribeConnected && !state.subscribeExhausted,
+            showExhaustedRetry = state.subscribeExhausted,
+            showTimelineError = error != null,
+        )
+    }
+
 @Composable
 internal fun PhotosScreen(
     holder: TimelineSubscriptionHolder,
@@ -264,9 +297,8 @@ internal fun PhotosScreen(
     val next = holder.next
     val loading = holder.loading
     val error = holder.error
-    val subscribeExhausted = holder.state.subscribeExhausted
-    val subscribeConnected = holder.state.subscribeConnected
-    val subscribeHadFailure = holder.state.subscribeHadFailure
+    // UI-17: 配对失效时红卡是唯一出路，时间线区域的重连/错误提示一律收起（见 photosTimelineChrome）。
+    val chrome = photosTimelineChrome(pairingLost, holder.state, error)
 
     var viewer by remember { mutableStateOf<MediaViewerSession?>(null) }
     // T-080: 轻过滤器（设计稿：全部 / 仅本机 / 家人的）。
@@ -368,7 +400,7 @@ internal fun PhotosScreen(
         // 界面原来完全沉默（飞行模式几秒钟用户会以为是卡死），现在给
         // 一个不打断浏览的小字提示。跟下面"耗尽"的提示互斥（耗尽之后
         // 不会再是"重连中"）。
-        if (subscribeHadFailure && !subscribeConnected && !subscribeExhausted) {
+        if (chrome.showReconnecting) {
             Text(
                 stringResource(R.string.photos_live_reconnecting),
                 fontSize = 13.sp, color = PPColor.Ink40,
@@ -378,7 +410,7 @@ internal fun PhotosScreen(
 
         // SYNC-04：订阅退避重试耗尽——不挡住已加载的照片，只在上面提示
         // "连不上"+手动重试（UX-11 同款：有界等待→亮错误→交给用户）。
-        if (subscribeExhausted) {
+        if (chrome.showExhaustedRetry) {
             Row(
                 Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -400,9 +432,12 @@ internal fun PhotosScreen(
             // SYNC-06: loader 尚未就绪（换配对后的极短窗口）——不渲染交互。
             loader == null -> Center(stringResource(R.string.photos_loading))
             loading -> Center(stringResource(R.string.photos_loading))
-            error != null -> Center(
+            error != null && chrome.showTimelineError -> Center(
                 stringResource(R.string.photos_unreachable) + "\n(${error?.take(100)})"
             )
+            // UI-17: 配对失效且一张都没加载到——什么都不放，上面的红卡就是全部内容
+            // （落到下一条会显示「照片库还是空的——先备份一批吧」，又是一个不同的出路）。
+            error != null && items.isEmpty() -> Unit
             items.isEmpty() -> Center(stringResource(R.string.photos_empty))
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
             else -> LazyVerticalGrid(
