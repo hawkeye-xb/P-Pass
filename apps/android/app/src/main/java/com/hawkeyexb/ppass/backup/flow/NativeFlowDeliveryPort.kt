@@ -664,6 +664,7 @@ internal class DaemonDesktopProbe(
     private val timeoutMs: Long = PROBE_TIMEOUT_MS,
     private val log: FlowLogger = FlowLogger { },
     private val clock: () -> Long = System::nanoTime.let { nano -> { nano() / 1_000_000 } },
+    private val pairingLoss: FlowDeliveryPairingLoss = flowDeliveryPairingLoss,
 ) : DesktopProbe {
     /**
      * DIAG-A：每次探测一行 `Flow probe result=…`：总耗时、`desktopFor`（含 endpoint bind）耗时，以及
@@ -688,6 +689,8 @@ internal class DaemonDesktopProbe(
             }.also { report("reachable", null) }
         } catch (rejected: DesktopRejectedException) {
             report("rejected:${rejected.msgKey}", rejected)
+            // #466：#424 之后每轮先探测，桌面移除这台手机时走不到投递——探测这里不记，红卡就永远不亮。
+            pairingLoss.record(PairingEpoch(current.pairingEpoch), rejected)
             if (rejected.msgKey?.let(::isPairingLostText) == true) ProbeResult.PairingLost else ProbeResult.Unreachable
         } catch (cancelled: CancellationException) {
             // withTimeout 的超时也是 CancellationException——区分「我被取消了」与「对端没回」。
