@@ -4,7 +4,7 @@
 // 「用户停了服务再重开 App」那两条必须红。
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { shouldShowWizard } from "./serviceGate.js";
+import { shouldShowWizard, serviceCameBack } from "./serviceGate.js";
 
 const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8").replace(
   /\r\n/g,
@@ -68,5 +68,29 @@ describe("DESK-36 接线（App.svelte）", () => {
     expect(stopBody).toContain("await syncServiceState();");
     expect(app).toContain('listen("service-stopped", onServiceStopped)');
     expect(app).toContain("unlistenStopped?.();");
+  });
+});
+
+// DESK-38 (#475)：服务恢复的判定。反证：改成 `prev !== true && reachable`，
+// 「正常启动」那条必须红。
+describe("DESK-38 服务恢复判定", () => {
+  it("见过离线 → 可达：算恢复（按钮启动 / 自愈 / 更新后恢复）", () => {
+    expect(serviceCameBack(false, true)).toBe(true);
+  });
+
+  it("本进程第一次探活就可达：正常启动，不算恢复（墙不被清空重拉）", () => {
+    expect(serviceCameBack(null, true)).toBe(false);
+  });
+
+  it("一直在线 / 仍然离线 / 刚掉线：都不算", () => {
+    expect(serviceCameBack(true, true)).toBe(false);
+    expect(serviceCameBack(false, false)).toBe(false);
+    expect(serviceCameBack(true, false)).toBe(false);
+  });
+
+  it("接线：refresh 成功分支用它触发 onServiceBackOnline，失败分支记下离线", () => {
+    const refreshBody = app.match(/async function refresh\(\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
+    expect(refreshBody).toContain("if (serviceCameBack(lastReachable, true)) onServiceBackOnline();");
+    expect(refreshBody).toContain("lastReachable = false;");
   });
 });

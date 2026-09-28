@@ -1,7 +1,7 @@
 <script>
   import { reconcilePhotoWall } from "./photoWall.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
-  import { shouldShowWizard } from "./serviceGate.js";
+  import { shouldShowWizard, serviceCameBack } from "./serviceGate.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
@@ -183,6 +183,9 @@
   }
 
   let online = $state(false);
+  // DESK-38 (#475)：上一次 refresh 的探活结果（null = 本进程还没探过）。
+  // 不是 $state：只给 serviceCameBack 判「离线 → 可达」这一跳用，不驱动渲染。
+  let lastReachable = null;
   let status = $state(null);
   // #413 §7：低空间通知的布防状态——每个进程最多在跌破时报一次，回升到
   // 6 GiB 以上才重新布防。不是 $state：它不驱动任何渲染。
@@ -261,6 +264,10 @@
       status = await call("status");
       online = true;
       checkLowSpace(status.disk_free_bytes ?? null);
+      // DESK-38 (#475)：服务刚从不可达变可达（「启动后台服务」、自愈拉起、
+      // 更新后恢复都走到这里）——只拉一次的视图要重拉，见 onServiceBackOnline。
+      if (serviceCameBack(lastReachable, true)) onServiceBackOnline();
+      lastReachable = true;
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
@@ -312,6 +319,7 @@
       } catch (_) {}
     } catch (e) {
       online = false;
+      lastReachable = false;
       status = null;
       // Self-heal: only if onboarding already completed (wizard===null
       // means "not checked yet", still fine to skip — checkWizard() runs
@@ -745,11 +753,26 @@
 
   // 照片墙硬重置——手动"刷新"按钮专用，用户主动要求"就要最新真相"时
   // 才整墙清空重拉，代价（缩略图重新请求+滚动位置归零）用户自己选的，
-  // 不是背着用户在后台悄悄发生。
+  // 不是背着用户在后台悄悄发生。唯一的后台调用是 DESK-38 的「服务恢复、
+  // 墙是空的」（onServiceBackOnline）——空墙没有缩略图和滚动位置可丢。
   function resetPhotosWall() {
+    photosGen++;
     photosLoaded = false;
     photos = [];
     photosNext = null;
+  }
+
+  // DESK-38 (#475)：服务从不可达变可达。设备/活动/审计每次 refresh() 都全量
+  // 重拉，自己会跟上；照片墙不会——停服时进过照片页，首拉失败后
+  // photosLoaded 照样置 true、墙留空，之后只有 daemon 事件才会同步它，服务
+  // 刚起来又没有新照片就永远空着（要重开 App）。
+  //
+  // 墙是空的 → 打回「未加载」，在照片页上时 $effect 立刻重拉，不在照片页
+  // 则进页时拉。墙上已经有照片 → 只做增量对账：一次 IPC 超时也会让 refresh
+  // 记成「离线」，下一轮成功时不许把满墙缩略图清掉、滚动位置打回顶部。
+  function onServiceBackOnline() {
+    if (photos.length > 0) syncPhotosWallIncremental();
+    else resetPhotosWall();
   }
 
   // 照片墙窗口对账 —— 判据全部在 src/photoWall.js（纯函数 + 单测）。
@@ -771,6 +794,7 @@
   async function syncPhotosWallIncremental() {
     if (!photosLoaded || photosSyncing) return; // 首拉交给进页时的 $effect
     photosSyncing = true;
+    const gen = photosGen;
     try {
       // 重取**当前已加载的整个窗口**，不是只取第一页。
       const held = photos.length;
@@ -792,6 +816,7 @@
         }
         if (items.length === 0) break; // 防御：有 cursor 却空页，别转圈
       }
+      if (gen !== photosGen) return; // 同步途中墙被重置了（DESK-38），交给首拉
       const merged = reconcilePhotoWall(photos, fresh, reachedEnd);
       if (merged.added || merged.updated || merged.removed) {
         photos = merged.items;
@@ -1041,6 +1066,10 @@
   let photosNext = $state(null); // 分页游标
   let photosLoading = $state(false);
   let photosLoaded = $state(false); // 首次加载完成（区分空库与未加载）
+  // DESK-38 (#475)：墙的代际——每次 resetPhotosWall 递增。重置前发出、重置后
+  // 才回来的请求（比如停服时发出的首拉，失败回来时服务刚好恢复）不许把旧
+  // 结果写回墙、更不许把 photosLoaded 置 true 挡住重拉。非响应式，只做比较。
+  let photosGen = 0;
   let sentinelEl = $state(null); // 墙底哨兵 → 触发下一页
   let photoViewer = $state(null); // {hash, taken_at, media_type} 大图目标
   let viewerSrc = $state(null); // 大图 data URL（原图或 1024 降级）
@@ -1060,15 +1089,17 @@
   async function loadPhotosPage() {
     if (photosLoading || !photosNext) return;
     photosLoading = true;
+    const gen = photosGen;
     try {
       const r = await call("timeline.page", { cursor: photosNext, limit: PHOTOS_PAGE_SIZE });
+      if (gen !== photosGen) return;
       photos = photos.concat(r.items ?? []);
       photosNext = r.next ?? null;
     } catch (_) {
-      photosNext = null; // 下一页拿不到就停，不循环报错
+      if (gen === photosGen) photosNext = null; // 下一页拿不到就停，不循环报错
     } finally {
       photosLoading = false;
-      photosLoaded = true;
+      if (gen === photosGen) photosLoaded = true;
     }
   }
 
@@ -1077,15 +1108,21 @@
     if (page !== "photos") return;
     if (!photosLoaded && !photosLoading) {
       photosLoading = true;
+      const gen = photosGen;
       call("timeline.page", { cursor: null, limit: PHOTOS_PAGE_SIZE })
         .then((r) => {
+          if (gen !== photosGen) return;
           photos = r.items ?? [];
           photosNext = r.next ?? null;
         })
-        .catch(() => (photosNext = null))
+        .catch(() => {
+          if (gen === photosGen) photosNext = null;
+        })
         .finally(() => {
           photosLoading = false;
-          photosLoaded = true;
+          // 过期的这一拉不算「已加载」——photosLoading 落下会让本 $effect
+          // 重跑，按新代际重新拉。
+          if (gen === photosGen) photosLoaded = true;
         });
     }
     if (sentinelEl) {
