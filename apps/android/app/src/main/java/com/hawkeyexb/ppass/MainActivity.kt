@@ -65,6 +65,9 @@ import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.backup.BackupRunner
 import com.hawkeyexb.ppass.backup.BackupScopeStore
+import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
+import com.hawkeyexb.ppass.backup.backfillOnboardedOnHome
+import com.hawkeyexb.ppass.backup.isKnownDesktop
 import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
@@ -136,6 +139,14 @@ internal sealed class Screen {
     // 的安心收尾页。
     data class Started(val pairing: Pairing, val photoCount: Int) : Screen()
 }
+
+/**
+ * UI-18（#355）：配对失效红卡「重新扫码连接」的落点——直达扫码，中间零多余屏。
+ * 相机权限被系统收回时先垫 Welcome（系统授权框盖在上面，授权回调落到 Scan；
+ * 拒绝则停在 Welcome，可以再点扫码）。
+ */
+internal fun repairScanTarget(cameraGranted: Boolean): Screen =
+    if (cameraGranted) Screen.Scan else Screen.Welcome
 
 /** System back for secondary app screens; null leaves the root gesture to Android. */
 internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
@@ -426,19 +437,22 @@ fun PPassApp() {
     // 不显示假 0/0）；拒绝 → 人话对话框。备份主流程的入口，任何分支都
     // 不许白屏。
     /**
-     * 这台电脑以前连过吗——**账本还在，就算连过。**
+     * 这台电脑以前连过吗——**在这台手机上走完过 onboarding，且这台桌面的
+     * 相册范围还在，就算连过。**
      *
-     * 判据用账本而不是「pairing.json 里的 nodeId 眼熟」：账本在，才说明
-     * 「我传过哪些、传没传成」这些事实还在，对账才有东西可对；账本没了
-     * （首次配对、或换了一台电脑），那就是真的从零开始，该走 onboarding。
+     * MOB-114（#455）：原判据是 `flow-state/<id>/discovery-ledger.json` 在不在；
+     * #413 的迁移删了整个 `flow-state/` 且之后没人再写，判据恒为 false，连回
+     * 同一台电脑被当成新电脑。新判据用 [OnboardedDesktopsStore]——断开、配对
+     * 失效、换台再换回都不清它（为什么不用 order 表 / pairing.json 等见该类）。
      *
      * MOB-92：范围也必须按**这台**桌面问。此前读的是全局那一份，于是
      * 「macOS → Windows → 回 macOS」时它非空（是给 Windows 选的那 2 个），
      * 直接回首页、用着错的范围开始备份，用户连重选的机会都没有。
      */
     fun hasExistingLedgerFor(pairing: Pairing): Boolean =
-        java.io.File(context.filesDir, "flow-state/${pairing.daemonNodeId}/discovery-ledger.json").exists() &&
+        isKnownDesktop(OnboardedDesktopsStore(context.filesDir), pairing.daemonNodeId) {
             BackupScopeStore(context, pairing.daemonNodeId).selectedBucketIds()?.isNotEmpty() == true
+        }
 
     fun enterBucketPicker(pairing: Pairing, firstTime: Boolean) {
         val needed = requiredMediaPermissions().filter {
@@ -580,6 +594,14 @@ fun PPassApp() {
             DisposableEffect(holder) {
                 onDispose { holder.dispose() }
             }
+            // MOB-114（#455）：存量补记——本修复前走完 onboarding 的桌面没有标记。
+            LaunchedEffect(s.pairing.daemonNodeId) {
+                withContext(Dispatchers.IO) {
+                    backfillOnboardedOnHome(OnboardedDesktopsStore(context.filesDir), s.pairing.daemonNodeId) {
+                        BackupScopeStore(context, s.pairing.daemonNodeId).selectedBucketIds()?.isNotEmpty() == true
+                    }
+                }
+            }
             // UX-03: 极简设置状态（仅充电/仅 WiFi）——改开关即落盘 +
             // 按新约束重建周期任务。MOB-02 起语义为「需要充电/需要 Wi-Fi」
             // 两档运行条件（默认都开），设置页有后果描述 + 合成句。
@@ -691,12 +713,20 @@ fun PPassApp() {
                 ActivityResultContracts.RequestMultiplePermissions()
             ) { grants -> if (grants.values.any { it }) holder.backupNow() }
             // 存储端移除/吊销本设备后：本地照清（无需 unpair，daemon 端
-            // 本就不认本设备），回 Welcome 扫码，新 token 走 rejoin 门
+            // 本就不认本设备），直达扫码，新 token 走 rejoin 门
             // 重建——备份页、照片页的失联红卡按同一个动作走。
+            // UI-18（#355）：这是**恢复**路径，不是开场路径——直达扫码，不回
+            // onboarding 第一页。相机权限已给过就不再问；只有被系统收回时
+            // 才请求（授权回调本来就落到 Scan）。扫码成功后连回同一台电脑走
+            // 快速重连回 Screen.Home，`tab` 是 PPassApp 顶层状态，回到点击前的那个。
             val onRepairPairing = {
                 scope.launch {
                     withContext(Dispatchers.IO) { clearLocalPairing(context, pairings, s.pairing) }
-                    screen = Screen.Welcome
+                    val cameraGranted = ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.CAMERA,
+                    ) == PackageManager.PERMISSION_GRANTED
+                    screen = repairScanTarget(cameraGranted)
+                    if (!cameraGranted) cameraPermission.launch(Manifest.permission.CAMERA)
                 }
                 Unit
             }
@@ -839,7 +869,7 @@ fun PPassApp() {
                         },
                         // 存储端移除/吊销本设备后：主按钮变「重新扫码连接」——
                         // 本地照清（无需 unpair，daemon 端本就不认本设备），
-                        // 回 Welcome 扫码，新 token 走 rejoin 门重建。
+                        // 直达扫码（UI-18），新 token 走 rejoin 门重建。
                         pairingLost = holder.pairingLost.value,
                         onRepair = onRepairPairing,
                         onStorageDetailOpenChange = { storageDetailOpen = it },
@@ -967,6 +997,8 @@ fun PPassApp() {
             // 后台备份是用户可选能力；通知权限不属于 onboarding，必须由设置页
             // 的对应开关主动请求。首次传输不依赖任何可选授权。
             val finishOnboarding = {
+                // MOB-114（#455）：「连过这台」的事实在这里落盘，快速重连只认它。
+                OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)
                 val settings = BackupSettings(context.filesDir).load()
                 val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
                 requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
