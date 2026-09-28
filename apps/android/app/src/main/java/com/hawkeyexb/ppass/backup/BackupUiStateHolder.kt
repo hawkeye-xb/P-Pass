@@ -152,6 +152,12 @@ class BackupUiStateHolder(
         }
         // 订阅取代轮询（MOB-88 的思路保留）：引擎视图变化只换视图；order 写入（revision）才重读账目。
         scope.launch { subscribe() }
+        // #466: 失效可能由前台心跳记下（引擎视图、order 都不变）——直接订阅这个事实。
+        scope.launch {
+            flowDeliveryPairingLoss.changes.collect {
+                pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
+            }
+        }
         mediaObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
                 gateway?.onMediaChanged()
