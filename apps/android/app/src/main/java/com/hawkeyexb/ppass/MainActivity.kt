@@ -350,7 +350,11 @@ fun PPassApp() {
     // 耗电红线）；app 在前台时 daemon 每 ~30s 收到一次 hello，桌面设备行
     // 才显示「在线」而不是「离线」（锁屏 ≠ 离开）。
     val heartbeat = remember {
-        ForegroundHeartbeat(client, pairings, scope, com.hawkeyexb.ppass.backup.SentinelStore(context.filesDir))
+        ForegroundHeartbeat(
+            client, pairings, scope, com.hawkeyexb.ppass.backup.SentinelStore(context.filesDir),
+            // #439: 桌面回来了，人就在 App 里——不等 10 分钟的探测。
+            onReachable = { com.hawkeyexb.ppass.backup.flow.onFlowDesktopReachable(context) },
+        )
     }
     // SYNC-06: 订阅连接生命周期跟心跳对齐——ON_RESUME 起 / ON_STOP 停，
     // App 前台期间不管显示哪个 tab 都保持订阅（脱钩 tab 切换，旧实现

@@ -289,6 +289,16 @@ internal class FlowEngine(
     fun onAppForeground(): Job = scope.launch { onTrigger(TriggerReason.APP_FOREGROUND) }
 
     /**
+     * #439：前台心跳确认桌面可达。只在「等待中（桌面不可达）」时叫醒循环——否则桌面回来之后，
+     * 人就在 App 里看着，也要等下一次 10 分钟的探测。其他状态一律不动（心跳每 30 秒一拍，不能变成触发源）。
+     */
+    fun onDesktopReachable(): Job = scope.launch {
+        if (control.waitReason() != WaitReason.DESKTOP_UNREACHABLE) return@launch
+        log.log("desktop reachable again (foreground heartbeat): waking the loop")
+        onTrigger(TriggerReason.DESKTOP_REACHABLE)
+    }
+
+    /**
      * 网络变化回调：正在跑且条件已不满足（例如仅 Wi‑Fi 却切到了移动网络）→ 停掉循环、释放 FGS、
      * 登记约束唤醒；否则当作一次触发（路径失败之后网络回来，就是这一次触发把循环叫醒）。
      */

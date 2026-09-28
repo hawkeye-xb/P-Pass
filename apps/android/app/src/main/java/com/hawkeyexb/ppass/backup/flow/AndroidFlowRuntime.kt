@@ -140,6 +140,14 @@ internal fun onFlowAppForeground(context: Context) {
     }
 }
 
+/** #439：前台心跳确认桌面可达（引擎只在「等待中（桌面不可达）」时据此叫醒循环）。 */
+internal fun onFlowDesktopReachable(context: Context) {
+    val app = context.applicationContext
+    thread(name = "ppass-flow-reachable") {
+        runCatching { runtimeFor(app)?.engine?.onDesktopReachable() }.onFailure { Log.e(TAG, "reachable trigger failed", it) }
+    }
+}
+
 /**
  * ConnectivityManager 网络变化回调：先让 iroh 立刻重探路径，再交给引擎。
  * [lost] = 这是一次 onLost 且此刻手机**没有任何**默认网络：在飞的这张立即判路径失败（#413）。
