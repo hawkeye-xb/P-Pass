@@ -23,3 +23,18 @@ export function shouldShowWizard(wizard, online) {
   // 用户自己停的就留在主界面，给「启动服务」按钮。
   return !wizard.installed && !wizard.user_stopped;
 }
+
+// DESK-38 (#475)：「服务刚恢复」的判定——照片墙这类只在首拉时读一次 daemon
+// 的视图，要靠它知道该重拉了。
+//
+// 只认「确实见过离线 → 现在可达」：`prev === null`（本进程还没探过）到可达
+// 是正常启动，不算恢复——那时各视图的首拉本来就会成功，再清一遍只会让墙
+// 重复请求、闪一下。
+/**
+ * @param {boolean | null} prev  上一次探活结果；null = 本进程还没探过
+ * @param {boolean} reachable     这一次探活是否可达
+ * @returns {boolean} 是否应当把依赖服务的视图重新拉一遍
+ */
+export function serviceCameBack(prev, reachable) {
+  return prev === false && reachable === true;
+}
