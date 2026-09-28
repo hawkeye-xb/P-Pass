@@ -18,7 +18,8 @@
 //   - 把 App.svelte refresh() 里「服务刚恢复 → onServiceBackOnline()」那一行
 //     去掉，前三条用例必须红（墙上 0 张）；
 //   - 把首拉 finally 里的 `if (gen === photosGen)` 去掉（过期的失败照样置
-//     photosLoaded），第三条必须红。
+//     photosLoaded），第三条必须红；
+//   - 把 onServiceBackOnline 改成无条件 resetPhotosWall()，「不清墙」那条必须红。
 import { cleanup, render, screen, fireEvent } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -68,14 +69,17 @@ const PHOTOS = [
 
 /** 一台「用户停了服务」的桌面：daemon 不可达，直到有人把它拉起来。 */
 function stoppedDesktop({ slowOfflineTimeline = 0 } = {}) {
-  const d = { up: false };
+  // userStopped：用户在设置里点过「停止后台服务」（autostart 被卸、停止标记落盘）。
+  const d = { up: false, userStopped: true };
   invokeMock.mockImplementation(async (cmd, args) => {
     switch (cmd) {
       case "wizard_state":
-        // 配过、用户主动停的 → 留在主界面（shouldShowWizard = false）。
-        return { configured: true, installed: false, user_stopped: !d.up };
+        // 配过、用户主动停的 → 留在主界面（shouldShowWizard = false）；
+        // 正常常驻时 autostart 在，偶尔探活失败也不回向导。
+        return { configured: true, installed: !d.userStopped, user_stopped: d.userStopped };
       case "start_daemon":
         d.up = true;
+        d.userStopped = false;
         return "resident";
       case "self_heal_daemon":
         return null;
@@ -201,6 +205,28 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     expect(wallCount()).toBe(PHOTOS.length);
   });
 
+  it("墙上已有照片时一次探活失败再恢复：只做增量对账，不清墙（缩略图 DOM 不重建）", async () => {
+    const d = stoppedDesktop();
+    d.up = true;
+    d.userStopped = false;
+    location.hash = "#/photos";
+    render(App);
+    await settle();
+    await settle();
+    expect(wallCount()).toBe(PHOTOS.length);
+    const first = screen.getAllByRole("button", { name: "查看大图" })[0];
+
+    // 大备份期间一次 status 超时 → refresh 记成离线；下一轮成功 → 「恢复」。
+    d.up = false;
+    await settle(60000);
+    d.up = true;
+    await settle(60000);
+    await settle();
+
+    expect(wallCount()).toBe(PHOTOS.length);
+    expect(first.isConnected, "同一个缩略图节点必须还挂在 DOM 上").toBe(true);
+  });
+
   it("设备列表同样跟上（refresh 全量重拉，锁住不回归）", async () => {
     stoppedDesktop();
     render(App);
@@ -215,6 +241,7 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
   it("一直在线的正常启动：墙只拉一次首页，不会因为「首次探活成功」被清空重拉", async () => {
     const d = stoppedDesktop();
     d.up = true;
+    d.userStopped = false;
     location.hash = "#/photos";
     render(App);
     await settle();

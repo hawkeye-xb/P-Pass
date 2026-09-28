@@ -753,7 +753,8 @@
 
   // 照片墙硬重置——手动"刷新"按钮专用，用户主动要求"就要最新真相"时
   // 才整墙清空重拉，代价（缩略图重新请求+滚动位置归零）用户自己选的，
-  // 不是背着用户在后台悄悄发生。
+  // 不是背着用户在后台悄悄发生。唯一的后台调用是 DESK-38 的「服务恢复、
+  // 墙是空的」（onServiceBackOnline）——空墙没有缩略图和滚动位置可丢。
   function resetPhotosWall() {
     photosGen++;
     photosLoaded = false;
@@ -764,10 +765,14 @@
   // DESK-38 (#475)：服务从不可达变可达。设备/活动/审计每次 refresh() 都全量
   // 重拉，自己会跟上；照片墙不会——停服时进过照片页，首拉失败后
   // photosLoaded 照样置 true、墙留空，之后只有 daemon 事件才会同步它，服务
-  // 刚起来又没有新照片就永远空着（要重开 App）。这里把墙打回「未加载」，
-  // 在照片页上时 $effect 立刻重拉，不在照片页则进页时拉。
+  // 刚起来又没有新照片就永远空着（要重开 App）。
+  //
+  // 墙是空的 → 打回「未加载」，在照片页上时 $effect 立刻重拉，不在照片页
+  // 则进页时拉。墙上已经有照片 → 只做增量对账：一次 IPC 超时也会让 refresh
+  // 记成「离线」，下一轮成功时不许把满墙缩略图清掉、滚动位置打回顶部。
   function onServiceBackOnline() {
-    resetPhotosWall();
+    if (photos.length > 0) syncPhotosWallIncremental();
+    else resetPhotosWall();
   }
 
   // 照片墙窗口对账 —— 判据全部在 src/photoWall.js（纯函数 + 单测）。
