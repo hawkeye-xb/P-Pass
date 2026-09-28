@@ -129,6 +129,10 @@ fn wizard_state() -> Value {
     json!({
         "configured": dir.join("config.toml").exists(),
         "installed": installed,
+        // DESK-36 (#456)：用户主动停了服务。停服会卸 autostart（installed
+        // 变 false），没有这一位的话重开 App 会被当成「向导中途退出」打回
+        // 完整 onboard（#155 的停服路径）；有了它，前端落回主界面给「启动服务」。
+        "user_stopped": is_user_stopped(&dir),
         "default_dir": pictures.to_string_lossy(),
         // Some of the library, if the config already points somewhere —
         // the wizard prefills this so re-running it never orphans the
@@ -435,6 +439,9 @@ fn start_daemon() -> Result<String, String> {
     // 也不走下面那条 "注册失败就直接 spawn" 的兜底：一个跑不起来的文件，
     // spawn 也一样跑不起来，兜底只会把错误掩成另一种错误。
     verify_sidecar_runs(&sidecar)?;
+    // DESK-36 (#456)：用户点「启动服务」（或走完向导）= 撤销之前的主动停止，
+    // 自愈恢复正常。放在探活之后：文件跑不起来就什么都没启动，仍算「停着」。
+    set_user_stopped(&platform::adapter().data_dir(), false)?;
     match platform::adapter().install_autostart(&sidecar) {
         // LaunchAgent RunAtLoad+KeepAlive: starts immediately, survives
         // crashes and reboots.
@@ -474,12 +481,81 @@ fn daemon_startup_error() -> Option<String> {
     daemon_startup_stderr_from(&daemon_logs::plist_path())
 }
 
+/// DESK-36 (#456)：「用户主动停止了后台服务」的持久标记。
+///
+/// 自愈（前端 refresh 失败分支 → `self_heal_daemon`）原来分不清「服务崩了」
+/// 和「用户点了停止」，冷却窗口一过就把用户刚停掉的服务拉回来。这个标记是
+/// 两者唯一的区分依据，前端按钮和托盘菜单共用同一份（都走 `stop_daemon`）。
+///
+/// 为什么是 data dir 里的独立文件、而不是 config.toml 的一个字段：
+/// `write_config` 会整体重写 config.toml（向导每走一次就重写一次），字段放
+/// 进去会被冲掉；而且 config.toml 是 daemon 的配置，这是壳自己的状态。
+/// 持久化（而不是进程内变量）是因为语义要跨 App 重开：用户停了服务、关掉
+/// App 再打开，服务仍应保持停止，直到用户点「启动服务」。
+const USER_STOPPED_MARKER: &str = "desktop-user-stopped";
+
+fn user_stopped_marker(data_dir: &std::path::Path) -> std::path::PathBuf {
+    data_dir.join(USER_STOPPED_MARKER)
+}
+
+fn is_user_stopped(data_dir: &std::path::Path) -> bool {
+    user_stopped_marker(data_dir).exists()
+}
+
+/// 落标记 / 清标记。失败要报出来：标记没落下 = 自愈照样会把服务拉回来，
+/// 用户意图被静默撤销，这正是 #456 本身。
+fn set_user_stopped(data_dir: &std::path::Path, stopped: bool) -> Result<(), String> {
+    let marker = user_stopped_marker(data_dir);
+    if stopped {
+        std::fs::create_dir_all(data_dir).map_err(|e| format!("写不了停止标记（{e}）"))?;
+        std::fs::write(&marker, b"user stopped the background service\n")
+            .map_err(|e| format!("写不了停止标记（{e}）"))
+    } else {
+        match std::fs::remove_file(&marker) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("清不掉停止标记（{e}）")),
+        }
+    }
+}
+
+/// 自愈判据（纯函数，单测覆盖）：配置过、且不是用户主动停的，才允许自愈。
+/// 「没配置过」是首启向导的事；「用户停的」要等用户自己点「启动服务」。
+fn self_heal_allowed(data_dir: &std::path::Path) -> bool {
+    data_dir.join("config.toml").exists() && !is_user_stopped(data_dir)
+}
+
+/// DESK-36 (#456)：前端 refresh 发现 daemon 不可达时调这个，而不是直接调
+/// `resume_daemon_after_update`。判据在**调用这一刻**读磁盘上的标记——
+/// 前端缓存的状态可能是旧的（比如刚在托盘里点了停止），只有这里读才没有竞态。
+/// 返回 true = 真的拉起了；false = 按判据跳过（不是错误）。
+#[tauri::command]
+fn self_heal_daemon() -> Result<bool, String> {
+    if !self_heal_allowed(&platform::adapter().data_dir()) {
+        return Ok(false);
+    }
+    resume_daemon_after_update().map(|()| true)
+}
+
 /// Stop the resident service the way a user means it: unregister the
 /// autostart entry FIRST (so launchd won't respawn it), then ask the
 /// running daemon to shut down. "能优雅退出"与"崩溃自动恢复"必须并存
 /// (用户裁决 2026-07-31).
+///
+/// DESK-36 (#456)：末尾要等进程真的退掉（最长 5s），所以命令是 async、
+/// 实际工作放到阻塞线程池——同步命令跑在主线程上，等待期间窗口会卡住。
 #[tauri::command]
-fn stop_daemon() -> Result<(), String> {
+async fn stop_daemon() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(stop_daemon_now)
+        .await
+        .map_err(|e| format!("停止后台服务的线程异常退出：{e}"))?
+}
+
+fn stop_daemon_now() -> Result<(), String> {
+    // 0) DESK-36 (#456)：先落「用户主动停止」标记，再动进程——停到一半时
+    //    恰好来一次自愈 tick，它也得看见标记。落不下就不停：停了也会被
+    //    自愈拉回来，不如直接告诉用户停止失败。
+    set_user_stopped(&platform::adapter().data_dir(), true)?;
     // 1) Unregister first — otherwise KeepAlive revives it immediately.
     let _ = platform::adapter().uninstall_autostart();
     // 2) Best-effort: kill the bundled daemon process. launchctl bootout
@@ -489,6 +565,13 @@ fn stop_daemon() -> Result<(), String> {
     // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
     // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
     let _ = platform::adapter().kill_daemon_process();
+    // 3) DESK-36 (#456)：等它真的不可达了再返回（最长 5s）——调用方紧接着
+    //    就要刷新状态点，socket 还活着的那一瞬读到「运行中」就白刷了。
+    //    超时不算失败：标记已落、autostart 已卸，剩下的只是进程退得慢。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while daemon_online() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
     Ok(())
 }
 
@@ -884,6 +967,7 @@ pub fn run() {
             stop_daemon,
             pause_daemon_for_update,
             resume_daemon_after_update,
+            self_heal_daemon,
             restart_daemon_process,
             export_logs_bundle,
             allow_media_scope,
@@ -949,7 +1033,15 @@ pub fn run() {
                         }
                     }
                     "stop" => {
-                        let _ = stop_daemon();
+                        // DESK-36 (#456)：托盘停止和窗口里的按钮走同一个
+                        // stop_daemon（同一份「用户主动停止」标记），停完
+                        // 通知前端立刻刷新状态点——结果（含失败原因）一起带过去。
+                        // 放到后台线程：要等进程退干净（最长 5s），不能卡住菜单事件循环。
+                        let app = app.clone();
+                        std::thread::spawn(move || {
+                            let result = stop_daemon_now();
+                            let _ = app.emit("service-stopped", result.err());
+                        });
                     }
                     // Closing the App window只是隐藏；退出 App 不停后台服务
                     // （备份继续）——停服务要显式点"停止后台服务".
@@ -1945,5 +2037,99 @@ mod tests {
         if let Err(e) = verify_sidecar_runs(&real) {
             panic!("真 daemon 被误判成坏的（{}）：{e}", real.display());
         }
+    }
+
+    // ── DESK-36 (#456)：「用户主动停止」标记 + 自愈判据 ───────────────────
+    //
+    // 全部用 tempdir 注入 data dir——绝不调 stop_daemon / start_daemon 本体，
+    // 它们会走真实 adapter（pkill ppf-daemon、launchctl bootout 真 agent）。
+
+    /// 一个「向导走完了」的 data dir：config.toml 在。
+    fn configured_data_dir() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "library_dir = \"x\"\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn self_heal_revives_a_configured_daemon_that_was_not_stopped_by_the_user() {
+        // 崩了 / 被更新流程停了又没拉回来（W1 那个 NSIS 场景）——自愈的本职。
+        let dir = configured_data_dir();
+        assert!(self_heal_allowed(dir.path()));
+    }
+
+    #[test]
+    fn self_heal_never_revives_a_daemon_the_user_stopped() {
+        // #456 本体：用户点了停止 → 自愈不许在冷却窗口过后把它拉回来。
+        let dir = configured_data_dir();
+        set_user_stopped(dir.path(), true).unwrap();
+        assert!(
+            !self_heal_allowed(dir.path()),
+            "用户主动停止了服务，自愈却仍然判定要拉起它（#456）"
+        );
+    }
+
+    #[test]
+    fn user_stop_survives_an_app_restart() {
+        // 持久化语义：标记在盘上，换一个「进程」（重新读同一目录）仍然在。
+        let dir = configured_data_dir();
+        set_user_stopped(dir.path(), true).unwrap();
+        let reopened = dir.path().to_path_buf();
+        assert!(is_user_stopped(&reopened));
+        assert!(!self_heal_allowed(&reopened));
+    }
+
+    #[test]
+    fn starting_the_service_clears_the_user_stop() {
+        let dir = configured_data_dir();
+        set_user_stopped(dir.path(), true).unwrap();
+        set_user_stopped(dir.path(), false).unwrap();
+        assert!(!is_user_stopped(dir.path()));
+        assert!(self_heal_allowed(dir.path()), "点了启动之后自愈应当恢复");
+        // 没停过也能清（首启向导调 start_daemon 时就是这种情况）。
+        set_user_stopped(dir.path(), false).unwrap();
+    }
+
+    #[test]
+    fn self_heal_stays_out_of_an_unconfigured_machine() {
+        // 向导没走完不自愈——这条是原有语义，本卡不许改掉。
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!self_heal_allowed(dir.path()));
+    }
+
+    /// stop_daemon / start_daemon 本体走真实 adapter，测试里不能调；这里钉
+    /// 接线：停止先落标记（在卸 autostart、杀进程之前，且落不下就返回错误），
+    /// 启动清标记。
+    #[test]
+    fn stop_marks_before_touching_the_process_and_start_clears() {
+        let src = include_str!("lib.rs");
+        let product = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let body = |name: &str| {
+            let start = product
+                .find(&format!("fn {name}("))
+                .unwrap_or_else(|| panic!("找不到 fn {name}"));
+            let rest = &product[start..];
+            &rest[..rest.find("\n}\n").expect("函数结尾")]
+        };
+        let stop = body("stop_daemon_now");
+        let mark = stop
+            .find("set_user_stopped(&platform::adapter().data_dir(), true)?;")
+            .expect("stop_daemon_now 必须落「用户主动停止」标记，且失败要返回错误");
+        let unregister = stop.find("uninstall_autostart()").expect("卸 autostart");
+        let kill = stop.find("kill_daemon_process()").expect("杀进程");
+        assert!(mark < unregister && mark < kill, "标记必须先于停进程落下");
+        assert!(body("start_daemon")
+            .contains("set_user_stopped(&platform::adapter().data_dir(), false)?;"));
+        // 托盘停止与窗口按钮必须是同一个实现（同一份标记）。
+        assert!(product.contains("let result = stop_daemon_now();"));
+    }
+
+    #[test]
+    fn wizard_state_reports_the_user_stop_to_the_frontend() {
+        // 前端的向导门靠这一位区分「用户停了」和「向导中途退出」。
+        // 只钉字段名与来源——wizard_state() 本体读真实 data dir，不在测试里调。
+        let src = include_str!("lib.rs");
+        let product = src.split("#[cfg(test)]").next().unwrap_or(src);
+        assert!(product.contains("\"user_stopped\": is_user_stopped(&dir)"));
     }
 }

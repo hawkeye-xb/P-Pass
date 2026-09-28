@@ -1,6 +1,7 @@
 <script>
   import { reconcilePhotoWall } from "./photoWall.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
+  import { shouldShowWizard } from "./serviceGate.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
@@ -139,6 +140,25 @@
     } catch (e) {
       flashMessage(t("ui.stop_failed", { err: String(e) }), "error");
     }
+    // DESK-36 (#456)：停完立刻对账——状态点变「未运行」不用等 60s 兜底轮询；
+    // wizard_state 也要重读（user_stopped 刚落盘，向导门靠它不把人打回 onboard）。
+    await syncServiceState();
+  }
+
+  // DESK-36 (#456)：托盘里点「停止后台服务」时 Rust 发来的通知（payload =
+  // 失败原因，成功为 null）。和窗口里的按钮同一个 stop_daemon、同一份标记。
+  async function onServiceStopped(ev) {
+    const err = ev?.payload;
+    if (err) flashMessage(t("ui.stop_failed", { err: String(err) }), "error");
+    else flashMessage(t("ui.service_stopped"), "warning");
+    await syncServiceState();
+  }
+
+  async function syncServiceState() {
+    try {
+      await checkWizard();
+    } catch (_) {}
+    await refresh();
   }
 
   async function startDaemonNow() {
@@ -149,6 +169,16 @@
       flashMessage(t("ui.start_failed", { err: String(e) }), "error");
     } finally {
       setTimeout(() => (starting = false), 3000);
+    }
+    // DESK-36 (#456)：start_daemon 清掉了「用户主动停止」——重读 wizard_state，
+    // 然后按 ui.refresh_hint 说的每 3 秒刷新一次，服务起来就停（最多 30s，
+    // 之后交还给 60s 兜底轮询）。
+    try {
+      await checkWizard();
+    } catch (_) {}
+    for (let i = 0; i < 10 && !online; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      await refresh();
     }
   }
 
@@ -289,11 +319,16 @@
       // resume a daemon on a machine that hasn't finished the wizard,
       // that's a different, expected "not configured yet" offline state
       // the overview page's "启动后台服务" button already handles.
+      //
+      // DESK-36 (#456)：「是不是用户自己停的」只能由 Rust 在调用这一刻判——
+      // self_heal_daemon 读盘上的停止标记，用户停的就不拉（托盘停止时这里的
+      // wizard 缓存可能还是旧的）。更新流程的 resume_daemon_after_update
+      // 是另一条路径，不经过这里。
       const now = Date.now();
       if (wizard?.configured && now - lastSelfHealAttempt > SELF_HEAL_COOLDOWN_MS) {
         lastSelfHealAttempt = now;
         try {
-          await invoke("resume_daemon_after_update");
+          await invoke("self_heal_daemon");
         } catch (_) {
           // Best-effort — if this fails too, the existing offline banner
           // + manual "启动后台服务" button on the overview page is still
@@ -660,6 +695,7 @@
   let timer;
   let unlisten;
   let unlistenTray;
+  let unlistenStopped;
   onMount(() => {
     checkWizard();
     // DESK-02①: 更新检查放首次 status 落地后——updateChannel 由
@@ -673,12 +709,15 @@
     listen("daemon-event", onDaemonEvent).then((f) => (unlisten = f));
     // DESK-23 (#172): 关窗藏到托盘时 Rust 发来的通知。
     listen("hidden-to-tray", onHiddenToTray).then((f) => (unlistenTray = f));
+    // DESK-36 (#456): 托盘停止服务后 Rust 发来的通知。
+    listen("service-stopped", onServiceStopped).then((f) => (unlistenStopped = f));
     window.addEventListener("hashchange", onHashChange);
   });
   onDestroy(() => {
     clearInterval(timer);
     unlisten?.();
     unlistenTray?.();
+    unlistenStopped?.();
     window.removeEventListener("hashchange", onHashChange);
   });
 
@@ -1202,11 +1241,13 @@
 
 <Toaster position="top-right" />
 
-{#if wizard && (!wizard.configured || !wizard.installed) && !online}
+{#if shouldShowWizard(wizard, online)}
   <!-- T-042: onboarding 进行中不展示"后台服务未运行"终态——服务本来
        就要在这一步才被拉起，提前暴露只有困惑（xixi 实测反馈 1）。
        配置写了但服务没注册 = wizard 中途退出，重进继续走 wizard
-       （xixi 实测反馈 3），而不是丢到"启动后台服务"裸界面。 -->
+       （xixi 实测反馈 3），而不是丢到"启动后台服务"裸界面。
+       DESK-36 (#456)：用户自己点了停止（user_stopped）不算中途退出——
+       留在主界面给「启动服务」，判定见 serviceGate.js。 -->
   <div class="titlebar-drag-region wizard-titlebar-drag-region" aria-hidden="true"></div>
   <main class="wizard-shell">
     <header>
