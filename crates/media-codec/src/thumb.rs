@@ -2,9 +2,16 @@
 //! `thumbs/<hash前2>/<hash>.{256,1024}.jpg` (详细设计 §4.2).
 //!
 //! 契约: `make_thumbs` never panics and never errors. Any failure —
-//! unreadable file, corrupt image, missing ffmpeg — writes the built-in
-//! placeholder instead and says so in the outcome, so serving stays
-//! uniform and the caller records `thumb_state = 2`.
+//! unreadable file, corrupt image, missing ffmpeg — says so in the outcome
+//! and the caller records `thumb_state = 2`.
+//!
+//! DESK-35 (#441): a failure writes **nothing** at the final thumb paths.
+//! It used to write the placeholder JPEG there, and since a file at the
+//! final path is a cache hit, one transient failure (qlmanage timing out
+//! behind a permission prompt) froze that asset on the gray placeholder
+//! forever. Now "a file at the final path" means "real pixels", and the
+//! placeholder is served from memory ([`placeholder_jpeg`]) by whoever
+//! answers the request, leaving the retry decision to the caller.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,8 +33,8 @@ pub struct ThumbPaths {
 pub enum ThumbOutcome {
     /// Real pixels. Caller records thumb_state = 1.
     Generated,
-    /// Decode failed — the placeholder was written; `reason` is the
-    /// human-readable cause. Caller records thumb_state = 2.
+    /// Decode failed — nothing was written; `reason` is the human-readable
+    /// cause. Caller serves [`placeholder_jpeg`] and records thumb_state = 2.
     Placeholder { reason: String },
 }
 
@@ -57,23 +64,13 @@ pub fn make_thumbs(hash: &[u8; 32], src_path: &Path, thumbs_root: &Path) -> Thum
             paths,
             outcome: ThumbOutcome::Generated,
         },
-        Err(e) => {
-            let reason = e.to_string();
-            if let Err(e2) = write_placeholders(&paths) {
-                // Even the placeholder failed (disk full, permissions) —
-                // still no panic; the caller sees both causes.
-                return ThumbResult {
-                    paths,
-                    outcome: ThumbOutcome::Placeholder {
-                        reason: format!("{reason}; placeholder also failed: {e2}"),
-                    },
-                };
-            }
-            ThumbResult {
-                paths,
-                outcome: ThumbOutcome::Placeholder { reason },
-            }
-        }
+        // DESK-35 (#441): no placeholder at the final paths — see module doc.
+        Err(e) => ThumbResult {
+            paths,
+            outcome: ThumbOutcome::Placeholder {
+                reason: e.to_string(),
+            },
+        },
     }
 }
 
@@ -103,8 +100,8 @@ fn first_frame(src: &Path) -> Result<DynamicImage> {
     // ffmpeg keeps priority when the release pipeline ships or the operator
     // configures one (PPF_FFMPEG / bundled / PATH); otherwise macOS videos
     // fall through to the system Quick Look thumbnailer — zero bundle size,
-    // zero license. Both fail -> Err -> make_thumbs writes the placeholder,
-    // and thumb_state=2 stays the durable evidence of that.
+    // zero license. Both fail -> Err -> make_thumbs reports Placeholder
+    // (nothing on disk), and thumb_state=2 stays the durable evidence.
     match ffmpeg::ffmpeg_path() {
         Some(ff) => {
             let tmp = tempfile::Builder::new()
@@ -152,13 +149,6 @@ fn write_thumb(img: &DynamicImage, size: u32, dest: &Path) -> Result<()> {
         img.thumbnail(size, size)
     };
     write_jpeg_atomic(&scaled.to_rgb8(), dest)
-}
-
-fn write_placeholders(paths: &ThumbPaths) -> Result<()> {
-    for (size, dest) in [(256u32, &paths.t256), (1024, &paths.t1024)] {
-        write_jpeg_atomic(&placeholder_image(size), dest)?;
-    }
-    Ok(())
 }
 
 /// The built-in placeholder: a neutral gray square with a darker inner

@@ -6,6 +6,15 @@
 //!
 //! DESK-34 (#428): 生成路径加了 `ThumbGate`——同一 hash 的 in-flight 去重、
 //! 失败/超时后的内存负缓存（带过期，daemon 重启即清空），以及失败 WARN 日志。
+//!
+//! IDX-06 (#442): 入库后的后台预生成（`crate::thumb_pregen`）与 `thumb.get`
+//! 共用同一个 `ThumbGate` 和同一份收尾逻辑 [`settle_generation`]——同一
+//! hash 不管谁先触发，底层只生成一次。`thumb.get` 的生成期间会点亮
+//! `ThumbGate::foreground`，预生成见它非零就暂停取新活（前台优先）。
+//!
+//! DESK-35 (#441): 失败不再在最终路径留占位图（见 media-codec thumb.rs），
+//! 且收尾时清掉最终路径上的残留文件——「最终路径有文件 ⇔ 真缩略图」，
+//! 重试与否只由 gate 的负缓存（10 分钟 / 重启）决定。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -30,22 +39,20 @@ const THUMB_BUDGET: Duration = Duration::from_secs(5);
 /// same page never re-pays, short enough that a transient cause (a system
 /// permission prompt the user has since answered) heals in one session.
 ///
-/// Note the scope: when `make_thumbs` reports a placeholder outcome it has
-/// already written placeholder JPEGs at the final thumb paths, and the
-/// disk-hit check above this gate serves those forever. This table covers
-/// what never reached disk: over-budget generations still running, task
-/// deaths, and placeholder writes that themselves failed.
+/// DESK-35 (#441): a failed generation leaves nothing at the final thumb
+/// paths (and [`settle_generation`] purges any stale file there), so this
+/// window is the one and only retry bound for every failure kind.
 const THUMB_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// Above this many entries, expired negative records are pruned on insert —
 /// keeps the table bounded without a background sweeper.
 const THUMB_GATE_PRUNE_AT: usize = 4096;
 
-/// The thumbnail generator `thumb.get` calls on a miss. Production is
-/// always `media_codec::make_thumbs`; the indirection exists so contract
-/// tests can count invocations and inject slow / failing generations.
-type ThumbGen =
-    Arc<dyn Fn(&[u8; 32], &Path, &Path) -> media_codec::ThumbResult + Send + Sync + 'static>;
+/// The thumbnail generator `thumb.get` (and the pre-generation pool) calls.
+/// Production is always `media_codec::make_thumbs`; the indirection exists
+/// so contract tests can count invocations and inject slow / failing
+/// generations.
+pub(crate) type ThumbGen = media_codec::ThumbGenerator;
 
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
@@ -60,19 +67,19 @@ pub enum QueryError {
 /// Cloneable query engine; the router holds one.
 #[derive(Clone)]
 pub struct QueryEngine {
-    db: Db,
+    pub(crate) db: Db,
     blobs: Arc<Blobs>,
-    library_root: PathBuf,
-    thumbs_root: PathBuf,
+    pub(crate) library_root: PathBuf,
+    pub(crate) thumbs_root: PathBuf,
     /// TEL-04: optional anonymized telemetry sink for `first_byte`.
     telemetry: Option<Telemetry>,
     /// DESK-34 (#428): in-flight dedup + negative cache, shared by every
     /// clone of this engine (the router clones it — a per-clone table
     /// would silently defeat the dedup).
-    gate: Arc<ThumbGate>,
-    generator: ThumbGen,
-    budget: Duration,
-    retry_after: Duration,
+    pub(crate) gate: Arc<ThumbGate>,
+    pub(crate) generator: ThumbGen,
+    pub(crate) budget: Duration,
+    pub(crate) retry_after: Duration,
 }
 
 /// One hash's generation bookkeeping.
@@ -87,13 +94,45 @@ enum Slot {
     Failed { at: Instant },
 }
 
-#[derive(Default)]
-struct ThumbGate {
+pub(crate) struct ThumbGate {
     slots: Mutex<HashMap<[u8; 32], Slot>>,
+    /// IDX-06 (#442): how many `thumb.get`-owned generations are running.
+    /// Pre-generation waits for this to reach zero before taking new work,
+    /// which is what "thumb.get 优先" means in practice: the background
+    /// pool's threads are low priority, but a video's ffmpeg / qlmanage
+    /// child process is not, so yielding is the only real lever.
+    foreground: tokio::sync::watch::Sender<usize>,
+}
+
+impl Default for ThumbGate {
+    fn default() -> Self {
+        Self {
+            slots: Mutex::default(),
+            foreground: tokio::sync::watch::Sender::new(0),
+        }
+    }
+}
+
+/// Holds one unit of `ThumbGate::foreground` for as long as it lives —
+/// a Drop guard, so a panicking owner task can never leave the counter
+/// stuck above zero and starve pre-generation forever.
+struct ForegroundGuard(tokio::sync::watch::Sender<usize>);
+
+impl ForegroundGuard {
+    fn new(gate: &ThumbGate) -> Self {
+        gate.foreground.send_modify(|n| *n += 1);
+        Self(gate.foreground.clone())
+    }
+}
+
+impl Drop for ForegroundGuard {
+    fn drop(&mut self) {
+        self.0.send_modify(|n| *n = n.saturating_sub(1));
+    }
 }
 
 /// What a `thumb.get` miss should do, decided under the gate lock.
-enum Plan {
+pub(crate) enum Plan {
     /// Answer the placeholder now; do not generate.
     Placeholder,
     /// Someone else is generating: wait, bounded by the original deadline.
@@ -110,7 +149,13 @@ enum Plan {
 }
 
 impl ThumbGate {
-    fn plan(&self, hash: &[u8; 32], budget: Duration, retry_after: Duration) -> Plan {
+    /// Resolves once no `thumb.get`-owned generation is running.
+    pub(crate) async fn foreground_idle(&self) {
+        let mut rx = self.foreground.subscribe();
+        let _ = rx.wait_for(|n| *n == 0).await;
+    }
+
+    pub(crate) fn plan(&self, hash: &[u8; 32], budget: Duration, retry_after: Duration) -> Plan {
         let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
         match slots.get(hash) {
             Some(Slot::Failed { at }) if at.elapsed() < retry_after => return Plan::Placeholder,
@@ -142,7 +187,7 @@ impl ThumbGate {
 
     /// Close out a generation: a failure becomes a negative record,
     /// anything else clears the slot so a later miss starts fresh.
-    fn finish(&self, hash: &[u8; 32], failed: bool, retry_after: Duration) {
+    pub(crate) fn finish(&self, hash: &[u8; 32], failed: bool, retry_after: Duration) {
         let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
         if failed {
             if slots.len() >= THUMB_GATE_PRUNE_AT {
@@ -158,8 +203,66 @@ impl ThumbGate {
     }
 }
 
+/// DESK-34 / IDX-06: close out one generation — shared by the `thumb.get`
+/// owner task and the pre-generation pool, so both write `thumb_state`,
+/// log, and release the gate slot identically. `joined` is the generator's
+/// result, or why there is none (task death, pool worker lost).
+///
+/// DESK-35 (#441): on failure, whatever sits at the final thumb paths is
+/// removed. `make_thumbs` itself no longer writes there on failure, so what
+/// this catches is a placeholder left by an older build (`thumb_state=2`
+/// rows from before the fix): as long as it stays, the disk-hit check
+/// serves it and the negative cache's expiry never gets a say.
+pub(crate) async fn settle_generation(
+    db: &Db,
+    gate: &ThumbGate,
+    thumbs_root: &Path,
+    hash: &[u8; 32],
+    joined: Result<media_codec::ThumbResult, String>,
+    retry_after: Duration,
+    tx: tokio::sync::watch::Sender<bool>,
+) {
+    let prefix = hash_prefix(hash);
+    let failed = match joined {
+        Ok(result) => {
+            let (state, failed) = match &result.outcome {
+                media_codec::ThumbOutcome::Generated => (1, false),
+                media_codec::ThumbOutcome::Placeholder { reason } => {
+                    tracing::warn!(
+                        hash = %prefix,
+                        reason = %reason,
+                        "thumb generation failed; placeholder served"
+                    );
+                    (2, true)
+                }
+            };
+            if let Err(e) = db.set_thumb_state(hash, state).await {
+                tracing::warn!(hash = %prefix, "thumb_state write failed: {e}");
+            }
+            failed
+        }
+        Err(e) => {
+            tracing::warn!(
+                hash = %prefix,
+                reason = %e,
+                "thumb generation task died; placeholder served"
+            );
+            let _ = db.set_thumb_state(hash, 2).await;
+            true
+        }
+    };
+    if failed {
+        let paths = media_codec::thumb_paths(thumbs_root, hash);
+        for p in [&paths.t256, &paths.t1024] {
+            let _ = tokio::fs::remove_file(p).await;
+        }
+    }
+    gate.finish(hash, failed, retry_after);
+    let _ = tx.send(true);
+}
+
 /// Short, log-friendly hash prefix.
-fn hash_prefix(hash: &[u8; 32]) -> String {
+pub(crate) fn hash_prefix(hash: &[u8; 32]) -> String {
     hash[..6].iter().map(|b| format!("{b:02x}")).collect()
 }
 
@@ -299,10 +402,14 @@ impl QueryEngine {
         let generator = Arc::clone(&self.generator);
         let thumbs_root = self.thumbs_root.clone();
         let (budget, retry_after) = (self.budget, self.retry_after);
+        // Taken synchronously, before the task exists: pre-generation must
+        // already see the foreground as busy by the time `thumb()` returns.
+        let foreground = ForegroundGuard::new(&self.gate);
         tokio::spawn(async move {
+            let _foreground = foreground;
             let prefix = hash_prefix(&hash);
-            let mut handle =
-                tokio::task::spawn_blocking(move || generator(&hash, &src, &thumbs_root));
+            let root = thumbs_root.clone();
+            let mut handle = tokio::task::spawn_blocking(move || generator(&hash, &src, &root));
             let joined = match tokio::time::timeout(budget, &mut handle).await {
                 Ok(joined) => joined,
                 Err(_) => {
@@ -315,36 +422,16 @@ impl QueryEngine {
                     handle.await
                 }
             };
-            let failed = match joined {
-                Ok(result) => {
-                    let (state, failed) = match &result.outcome {
-                        media_codec::ThumbOutcome::Generated => (1, false),
-                        media_codec::ThumbOutcome::Placeholder { reason } => {
-                            tracing::warn!(
-                                hash = %prefix,
-                                reason = %reason,
-                                "thumb generation failed; placeholder served"
-                            );
-                            (2, true)
-                        }
-                    };
-                    if let Err(e) = db.set_thumb_state(&hash, state).await {
-                        tracing::warn!(hash = %prefix, "thumb_state write failed: {e}");
-                    }
-                    failed
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        hash = %prefix,
-                        reason = %e,
-                        "thumb generation task died; placeholder served"
-                    );
-                    let _ = db.set_thumb_state(&hash, 2).await;
-                    true
-                }
-            };
-            gate.finish(&hash, failed, retry_after);
-            let _ = tx.send(true);
+            settle_generation(
+                &db,
+                &gate,
+                &thumbs_root,
+                &hash,
+                joined.map_err(|e| e.to_string()),
+                retry_after,
+                tx,
+            )
+            .await;
         });
     }
 
@@ -475,11 +562,10 @@ mod tests {
 
     // ── DESK-34 (#428): thumb.get gate contract ───────────────────────────
     //
-    // The injected generators below deliberately write NOTHING to disk on
-    // failure. The real `make_thumbs` writes placeholder JPEGs at the final
-    // paths, which the disk-hit check would serve on the next request — a
-    // test generator that did the same would stay green with the gate
-    // removed and prove nothing about it.
+    // The injected generators below write NOTHING to disk on failure —
+    // which, since DESK-35 (#441), is also what the real `make_thumbs` does.
+    // (Before it, the real codec wrote placeholder JPEGs at the final paths;
+    // `a_failed_real_generation_is_retried_after_the_window` pins that down.)
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -763,6 +849,70 @@ mod tests {
         );
     }
 
+    /// E2 DESK-35 (#441), with the REAL codec: a generation that fails
+    /// (corrupt original) is negative-cached for the window — no re-pay, the
+    /// #428 guard — and once the window passes, the same hash is generated
+    /// again and serves the real thumbnail. Before the fix `make_thumbs`
+    /// wrote the placeholder at the final path and the disk hit served it
+    /// forever.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failed_real_generation_is_retried_after_the_window() {
+        use crate::thumb_pregen::tests::{fixture, write_jpeg};
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&calls);
+        let generator: ThumbGen = Arc::new(move |hash: &[u8; 32], src: &Path, root: &Path| {
+            c.fetch_add(1, Ordering::SeqCst);
+            media_codec::make_thumbs(hash, src, root)
+        });
+        let a = [0x41; 32];
+        let f = fixture(
+            Some(generator),
+            Duration::from_millis(1500),
+            &[(a, "originals/p.jpg".into(), 0)],
+        )
+        .await;
+        let src = f.library().join("originals/p.jpg");
+        std::fs::create_dir_all(src.parent().unwrap()).unwrap();
+        std::fs::write(&src, b"not a jpeg (yet)").unwrap();
+        let placeholder = media_codec::placeholder_jpeg(256);
+
+        assert_eq!(f.engine.thumb(&get(&a)).await.unwrap(), placeholder);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        let paths = media_codec::thumb_paths(&f.engine.thumbs_root, &a);
+        assert!(
+            !paths.t256.exists() && !paths.t1024.exists(),
+            "a failure must not land at the final thumb paths"
+        );
+
+        // The cause goes away (the user answered the permission prompt).
+        write_jpeg(&src);
+        assert_eq!(f.engine.thumb(&get(&a)).await.unwrap(), placeholder);
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "inside the window: negative-cached, no second generation"
+        );
+
+        tokio::time::sleep(Duration::from_millis(1700)).await;
+        let bytes = f.engine.thumb(&get(&a)).await.unwrap();
+        assert_ne!(
+            bytes, placeholder,
+            "after the window the hash is retried and serves the real thumbnail"
+        );
+        image::load_from_memory(&bytes).expect("real JPEG");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            f.engine
+                .db
+                .get_asset(&a)
+                .await
+                .unwrap()
+                .unwrap()
+                .thumb_state,
+            1
+        );
+    }
+
     /// `tracing` sink for the log contract.
     #[derive(Clone, Default)]
     struct LogBuf(Arc<Mutex<Vec<u8>>>);
@@ -787,6 +937,14 @@ mod tests {
             .with_max_level(tracing::Level::WARN)
             .with_writer(move || sink.clone())
             .finish();
+        // A second live dispatcher is load-bearing. With exactly one
+        // registered, tracing-core takes its `has_just_one` shortcut and
+        // computes a callsite's interest from the *registering thread's*
+        // default: a parallel test (no subscriber) hitting the shared WARN
+        // callsite first caches `Interest::never`, and this test's events
+        // vanish (tracing-core 0.1.36 callsite.rs `register_dispatch`).
+        // With two, interest is the union over every registered dispatcher.
+        let _second = tracing::Dispatch::new(tracing_subscriber::registry());
         let _guard = tracing::subscriber::set_default(subscriber);
 
         let generator: ThumbGen = Arc::new(|hash: &[u8; 32], _src: &Path, root: &Path| {

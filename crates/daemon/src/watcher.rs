@@ -31,6 +31,7 @@ use core_index::{IncomingFile, IngestOutcome, Ingestor};
 use storage::Db;
 
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
+use crate::thumb_pregen::ThumbPregen;
 use crate::Reconcile;
 
 /// 防抖窗口：静默窗口模式——收到事件后开始计时，窗口内无新事件才处理。
@@ -51,6 +52,9 @@ const MEDIA_EXTS: &[&str] = &[
 #[derive(Clone)]
 pub struct LibraryWatcher {
     inner: Arc<WatcherInner>,
+    /// IDX-06 (#442): background thumbnail pre-generation (outside `inner`
+    /// so the builder needs no `Arc::get_mut`). `None` = none.
+    thumbs: Option<ThumbPregen>,
 }
 
 struct WatcherInner {
@@ -98,7 +102,15 @@ impl LibraryWatcher {
                 debounce: DEFAULT_DEBOUNCE,
                 ingest_concurrency: DEFAULT_INGEST_CONCURRENCY,
             }),
+            thumbs: None,
         }
+    }
+
+    /// IDX-06 (#442): hand every file the watcher ingests to the thumbnail
+    /// pre-generation pool.
+    pub fn with_thumb_pregen(mut self, thumbs: ThumbPregen) -> Self {
+        self.thumbs = Some(thumbs);
+        self
     }
 
     /// 测试用：覆盖防抖窗口（集成测试缩短等待）。
@@ -243,6 +255,7 @@ impl LibraryWatcher {
             };
             let ingestor = self.inner.ingestor.clone();
             let src_device = self.inner.src_device.clone();
+            let thumbs = self.thumbs.clone();
             set.spawn(async move {
                 let _permit = permit;
                 let name = path
@@ -257,9 +270,14 @@ impl LibraryWatcher {
                     capture_at_ms_hint: None,
                 };
                 match ingestor.ingest(&incoming).await {
-                    Ok(IngestOutcome::New(_)) => Some(()),
-                    // 库内移动：索引已改指新位置，时间线要刷。
-                    Ok(IngestOutcome::Moved(_)) => Some(()),
+                    // 库内移动（Moved）：索引已改指新位置，时间线要刷。
+                    // IDX-06 (#442)：两种都投递预生成（fire-and-forget）。
+                    Ok(IngestOutcome::New(rel) | IngestOutcome::Moved(rel)) => {
+                        if let Some(thumbs) = &thumbs {
+                            thumbs.ingested(&rel);
+                        }
+                        Some(())
+                    }
                     Ok(IngestOutcome::Duplicate) => None,
                     Err(e) => {
                         tracing::warn!("WATCH-01: ingest {:?} 失败: {e}", path);
@@ -514,5 +532,53 @@ mod tests {
         assert_eq!(media_type_for("a.mov"), "video/quicktime");
         assert_eq!(media_type_for("a.dng"), "image/x-raw");
         assert_eq!(media_type_for("a.xyz"), "application/octet-stream");
+    }
+
+    /// E2 IDX-06 (#442): a file the watcher ingests gets both thumbnail
+    /// sizes and `thumb_state=1` from pre-generation alone — no `thumb.get`
+    /// is ever issued in this test.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ingest_hands_the_new_asset_to_thumbnail_pregen() {
+        use crate::thumb_pregen::tests::{fixture, write_jpeg};
+        let f = fixture(None, Duration::from_secs(600), &[]).await;
+        let (bus, _rx) = crate::events::bus();
+        let watcher = LibraryWatcher::new(f.engine.db.clone(), f.library(), [7u8; 32], bus)
+            .with_thumb_pregen(f.engine.start_thumb_pregen(crate::PREGEN_WORKERS));
+        let src = f.library().join("originals/2026/09/NEW_1.jpg");
+        write_jpeg(&src);
+
+        assert_eq!(watcher.ingest_new(vec![src]).await, 1, "ingested");
+        let hash = f
+            .engine
+            .db
+            .hash_at_rel_path("originals/2026/09/NEW_1.jpg")
+            .await
+            .unwrap()
+            .expect("indexed");
+        let hash: [u8; 32] = hash.as_slice().try_into().unwrap();
+        let paths = media_codec::thumb_paths(&f.engine.thumbs_root, &hash);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let state = f
+                .engine
+                .db
+                .get_asset(&hash)
+                .await
+                .unwrap()
+                .unwrap()
+                .thumb_state;
+            if state == 1 && paths.t256.is_file() && paths.t1024.is_file() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no pre-generated thumbs after ingest (thumb_state={state}, 256={}, 1024={})",
+                paths.t256.is_file(),
+                paths.t1024.is_file()
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        image::open(&paths.t256).expect("real 256 thumb");
+        image::open(&paths.t1024).expect("real 1024 thumb");
     }
 }

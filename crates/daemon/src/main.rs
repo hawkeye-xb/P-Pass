@@ -515,7 +515,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?,
     );
+    let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir)
+        // TEL-04: same telemetry client as daemon_alive/conn/flow_item —
+        // `Telemetry::record` is already a no-op when disabled.
+        .with_telemetry(telemetry.clone());
+    // IDX-06 (#442): 入库后的缩略图预生成——低优先级线程池，与 thumb.get
+    // 共用同一个 gate（同一 hash 只生成一次）。三条入库路径（Flow 交付、
+    // 旧备份管线的 upload/commit、目录监听）都接同一个句柄；adopt 收编的
+    // 行由下面的启动补齐 + 每小时对账后的补齐覆盖。
+    let thumb_pregen = query.start_thumb_pregen(daemon::PREGEN_WORKERS);
     let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir)
+        .with_thumb_pregen(thumb_pregen.clone())
         .with_path_registry(flow_paths)
         .with_events(event_bus.clone())
         // NET-25: 同一张按 NodeId 登记的订阅表（Router 也拿同一份）——
@@ -528,11 +538,8 @@ async fn main() -> anyhow::Result<()> {
         // NET-26 (#419): keep the machine awake while any fetch runs.
         .with_awake(daemon::awake::AwakeHold::platform());
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
-        .with_events(event_bus.clone());
-    let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir)
-        // TEL-04: same telemetry client as daemon_alive/conn/flow_item —
-        // `Telemetry::record` is already a no-op when disabled.
-        .with_telemetry(telemetry.clone());
+        .with_events(event_bus.clone())
+        .with_thumb_pregen(thumb_pregen.clone());
     // DESK-03: 本地 IPC 也注入查询平面——桌面壳照片墙走同一 QueryEngine
     // （与手机同一数据源），timeline/thumb/asset.* 双平面可答。
     ipc.set_query(query.clone());
@@ -559,6 +566,17 @@ async fn main() -> anyhow::Result<()> {
         startup.removed,
         startup.adopted
     );
+    // IDX-06 (#442): 启动补齐——存量库里 thumb_state=0 的行（含刚收编的
+    // 孤儿）后台低优先级补齐；DESK-35 (#441)：thumb_state=2 的行每次启动
+    // 重试一次（旧版本留在最终路径的占位图由此被真图覆盖或清掉）。
+    // 延后片刻再开扫：启动这一刻桌面壳正要拉第一屏，不跟它抢。
+    {
+        let thumb_pregen = thumb_pregen.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            thumb_pregen.backfill(true);
+        });
+    }
     // #413 §6: 3 天没人续传的 active grant 取消，半截交给 flow-blobs GC。
     // 启动先扫一轮（daemon 可能停过好几天），之后跟每小时巡检一起跑。
     match flow_delivery.expire_stale_grants().await {
@@ -570,6 +588,7 @@ async fn main() -> anyhow::Result<()> {
         let reconcile = reconcile.clone();
         let backup = backup.clone();
         let flow_expiry = flow_delivery.clone();
+        let thumb_pregen = thumb_pregen.clone();
         // NET-20: flow-staging 孤儿回收复用同一份 db/data_dir——
         // 保护集判据与 flow-blobs 的 iroh GC 回调（上面的
         // `flow_gc_protected`）同一张表（`active_flow_content_hashes`），
@@ -587,6 +606,8 @@ async fn main() -> anyhow::Result<()> {
                 // `adopt_orphans` 里那条审计同一条噪声纪律（WATCH-07）。
                 if r.adopted > 0 {
                     tracing::info!("IDX-01: 每小时对账收编孤儿文件 {} 条", r.adopted);
+                    // IDX-06 (#442): 收编的行 thumb_state=0，补一轮预生成。
+                    thumb_pregen.backfill(false);
                 }
                 // MOB-32 janitor：`begin` 不再重置会话之后，总得有人收走
                 // 中途死掉的那一轮（否则上一轮声明过、手机再也不会提供的
@@ -633,7 +654,8 @@ async fn main() -> anyhow::Result<()> {
     // 库目录变化 → 增量 ingest/清理 → timeline.invalidated（SYNC-02 节流
     // 合并 → SYNC-03 订阅 → 手机刷新）。启动失败降级为每小时对账兜底，
     // 不阻塞 daemon（策略与理由见 watcher.rs 模块注释 + WATCH-01 卡）。
-    let watcher = daemon::LibraryWatcher::new(db.clone(), &data_dir, node_id.0, event_bus.clone());
+    let watcher = daemon::LibraryWatcher::new(db.clone(), &data_dir, node_id.0, event_bus.clone())
+        .with_thumb_pregen(thumb_pregen.clone());
     if let Err(e) = watcher.spawn() {
         tracing::warn!("WATCH-01: 目录监听启动失败，降级为每小时对账兜底: {e}");
     }
