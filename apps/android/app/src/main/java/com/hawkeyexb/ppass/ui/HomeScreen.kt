@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -246,6 +247,8 @@ fun HomeScreen(
     // #418：正在传的这一张的字节进度（0..1），与前台服务通知的进度条同一个函数。
     // null = 没在传 / 总字节未知 ⇒ 不画进度条。英雄区的大数字仍是「已确认 / 范围内总数」。
     transferProgress: Float? = null,
+    // #250 / #251：当前这一张那一块（裁决在 FlowUiProjection.transferRowOf）。null = 没在传。
+    transferRow: com.hawkeyexb.ppass.backup.flow.TransferRow? = null,
     // #418：设置卡「取消剩余 N 张」那一行。null = 不渲染（没有剩余 / 配对已失效 / 还没算出来）。
     cancelRemainingCount: Long? = null,
     onRequestCancelRemaining: () -> Unit = {},
@@ -439,14 +442,36 @@ fun HomeScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         if (busy) {
+                            // #251：进行中这一块是固定的三格——状态行 / 当前项那一行 / 进度条槽——每格单行
+                            // （maxLines = 1、不折行），进度条没有时留同高的空位。文件名多长、换到下一张、
+                            // 准备 ↔ 备份切换，都不改变这一块的高度。
+                            val sending = (line as StatusLine.Working).state as? BackupUiState.Sending
+                            val row = transferRow?.takeIf { sending != null }
+                            val slow = row?.pace == com.hawkeyexb.ppass.backup.flow.TransferPace.SLOW
+                            // 第一格：有当前项时是文件名（已在投影层做中间截断，保住扩展名）；否则是阶段文案。
                             Text(
-                                workingText(line as StatusLine.Working),
+                                row?.fileName ?: workingText(line),
                                 fontSize = 13.5.sp, fontWeight = FontWeight.Medium,
                                 color = PPColor.Ink60,
+                                maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
                             )
+                            // 第二格：「12.3 / 189 MB · 第 x / y 张」；字节 15 秒没动 →「N 秒没有新数据，仍在等待」
+                            // （等待色，与正常传输看得出不同，#250）；没有当前项时留空行占位。
+                            Text(
+                                when {
+                                    row == null || sending == null -> ""
+                                    slow -> stringResource(R.string.state_sending_slow, row.quietSeconds)
+                                    row.bytesText != null ->
+                                        stringResource(R.string.state_sending_detail, row.bytesText, sending.done, sending.total)
+                                    else -> stringResource(R.string.state_sending, sending.done, sending.total)
+                                },
+                                fontSize = 13.sp,
+                                color = if (slow) PPColor.Waiting else PPColor.Ink60,
+                                maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.height(8.dp))
                             val progress = transferProgress
                             if (progress != null) {
-                                Spacer(Modifier.height(8.dp))
                                 // MOB-33（2026-08-26 真机）：必须显式覆盖 M3 1.3
                                 // 的两个默认值，否则进度条不是一根标准直条。
                                 // 本仓用 compose-bom:2024.12.01（= material3 1.3.x），
@@ -456,14 +481,17 @@ fun HomeScreen(
                                 // 验收人原话：「有断层，不知道是不是有一个和背景
                                 // 颜色一样的圆点在移动。反正看着不是标准的。」
                                 // ——那道缝跟着进度头走，看起来就像一个洞在移动。
+                                val barColor = if (slow) PPColor.Waiting else PPColor.Safe
                                 androidx.compose.material3.LinearProgressIndicator(
                                     progress = { progress },
                                     modifier = Modifier.fillMaxWidth().height(6.dp),
-                                    color = PPColor.Safe,
-                                    trackColor = PPColor.Safe.copy(alpha = 0.18f),
+                                    color = barColor,
+                                    trackColor = barColor.copy(alpha = 0.18f),
                                     gapSize = 0.dp,
                                     drawStopIndicator = {},
                                 )
+                            } else {
+                                Spacer(Modifier.fillMaxWidth().height(6.dp))
                             }
                         } else {
                             // 规则 P（#413）：等待中这一行换成那句人话（每个等待原因一句）——

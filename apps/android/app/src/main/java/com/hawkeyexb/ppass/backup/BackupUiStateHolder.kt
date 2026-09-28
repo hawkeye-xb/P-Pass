@@ -38,7 +38,11 @@ import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
 import com.hawkeyexb.ppass.backup.flow.flowTripletOf
 import com.hawkeyexb.ppass.backup.flow.runtimeFor
 import com.hawkeyexb.ppass.backup.flow.skippedRowCount
+import com.hawkeyexb.ppass.backup.flow.TransferMark
+import com.hawkeyexb.ppass.backup.flow.TransferRow
+import com.hawkeyexb.ppass.backup.flow.advanceTransferMark
 import com.hawkeyexb.ppass.backup.flow.transferPermilleOf
+import com.hawkeyexb.ppass.backup.flow.transferRowOf
 import com.hawkeyexb.ppass.backup.flow.waitReasonTextRes
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
@@ -53,6 +57,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -96,6 +101,16 @@ class BackupUiStateHolder(
     /** #418：正在传的这一张的字节进度（0..1）。null = 没在传 / 总字节未知。 */
     private val _transferProgress = mutableStateOf<Float?>(null)
     val transferProgress: State<Float?> get() = _transferProgress
+
+    /**
+     * #250 / #251：当前这一张那一块（文件名、「12.3 / 189 MB」、慢 / 正常）。null = 没在传。
+     * 「字节多久没动」要靠时间流逝才看得出来——字节停下时引擎不会再发任何东西（值没变就不刷新），
+     * 所以在传的时候由 [transferTicker] 每秒按单调时钟重算一次；裁决全在 [transferRowOf]。
+     */
+    private val _transferRow = mutableStateOf<TransferRow?>(null)
+    val transferRow: State<TransferRow?> get() = _transferRow
+    private var transferMark: TransferMark? = null
+    private var transferTicker: Job? = null
 
     /** #418：设置页「取消剩余 N 张」那一行的 N。null = 不渲染这一行（只在已暂停 / 等待中出现）。 */
     private val _cancelRemainingCount = mutableStateOf<Long?>(null)
@@ -295,6 +310,7 @@ class BackupUiStateHolder(
         _missingSourceNotice.value = flowMissingSourceNotice(p)
         _acknowledgedMissingSourceCount.value = p.missingSourceAcknowledged.toInt()
         _transferProgress.value = transferPermilleOf(p.current)?.let { it / 1000f }
+        publishTransferRow(p)
         _waitReasonNotice.value = waitReasonTextRes(p)
         _desktopLowSpace.value = desktopLowSpaceWarning(p)
         _cancelRemainingCount.value = cancelRemainingRowCount(p, pairingLostState.value.value)
@@ -303,8 +319,32 @@ class BackupUiStateHolder(
         _triplet.value = flowTripletOf(p, lastBucketIds)
     }
 
+    /** 只在主线程调（[publish] 与 ticker 都跑在 Main 上）。 */
+    private fun publishTransferRow(p: FlowProjection?) {
+        val current = p?.current
+        val now = monotonicNowMs()
+        transferMark = advanceTransferMark(transferMark, current, now)
+        _transferRow.value = transferRowOf(current, transferMark, now)
+        if (current == null) {
+            transferTicker?.cancel()
+            transferTicker = null
+        } else if (transferTicker?.isActive != true) {
+            transferTicker = scope.launch {
+                while (true) {
+                    delay(TRANSFER_TICK_MS)
+                    publishTransferRow(_projection.value)
+                }
+            }
+        }
+    }
+
     private companion object {
         const val RUNTIME_RETRY_MS = 2_000L
+        /** 「N 秒没有新数据」按秒走；与引擎的字节刷新节流同一个节拍。 */
+        const val TRANSFER_TICK_MS = 1_000L
+
+        /** 与 FlowEngine 的 monotonicClock 同一个时钟源。 */
+        fun monotonicNowMs(): Long = System.nanoTime() / 1_000_000
         const val UI_DEBOUNCE_MS = 150L
     }
 }

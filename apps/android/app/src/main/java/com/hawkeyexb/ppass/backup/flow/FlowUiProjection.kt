@@ -258,3 +258,158 @@ fun desktopLowSpaceWarning(p: FlowProjection?): Boolean {
     if (v.desktopHealth?.lowSpace != true) return false
     return p.waitReason != WaitReason.DESKTOP_STORAGE_FULL
 }
+
+// ---------------------------------------------------------------- #250 / #251：当前这一张的那一块
+//
+// #250：进度条早就是这一张的字节进度（原生 `Progress.end_offset` → 等待循环 500ms 读一次 → 变了才 onProgress →
+// LoopStatusCell 每秒最多发一次），但界面上没有文件大小、没有「已传多少」，更没有「字节停了」这件事——
+// 慢传输和真停滞看起来一模一样。
+// #251：文件名嵌在一整句话里、不限行数，长名字换行，整块区域跟着上下跳。
+//
+// 这里全是纯函数：停滞判据（标记 + 裁决）、文件名中间截断、字节数文案。时钟由调用方传入（单调时钟）。
+
+/**
+ * 字节多久不前进就说「没有新数据」：15 秒。依据：
+ *  - 正常传输时，首页看到的字节数最多隔 本地读取 500ms（[LOCAL_STATUS_RECHECK_MS]）+ 刷新节流 1s
+ *    （[STATUS_REFRESH_MIN_INTERVAL_MS]）变一次；连接断了走 status 兜底时，读取间隔封顶 8s。15s 在这些
+ *    正常空档之上，健康的传输不会闪出「没有新数据」；
+ *  - 与等待循环自己「多久没动静就去问桌面」的门槛 [LOCAL_IDLE_STALL_THRESHOLD_MS] 是同一个数——两处对「可疑」
+ *    的定义一致；
+ *  - 远低于断开重来的门槛 [BYTE_STALL_THRESHOLD_MS]（3 分钟）：引擎放弃之前很久，用户就能看到「在等」，不必去点暂停试探。
+ */
+internal const val TRANSFER_SLOW_AFTER_MS = LOCAL_IDLE_STALL_THRESHOLD_MS
+
+/**
+ * 当前项文件名最多占多少「宽度单位」（ASCII 算 1，中日韩 / 全角 / emoji 算 2）。
+ * 首页这一行约 210dp 宽（S24 约 384dp − 卡片内边距 − 右侧「暂停」按钮），13.5sp 的拉丁字符平均约 7dp → 约 30 个；
+ * 取 26 留出余量。真超出时 Text 的尾部省略兜底，高度照样不变（单行）。
+ */
+internal const val TRANSFER_FILE_NAME_MAX_UNITS = 26
+
+/** 停滞判据的标记：这一张（[orderId]）的字节数上一次变成 [bytesSent] 是在 [atMs]（单调时钟）。 */
+data class TransferMark(val orderId: Long, val bytesSent: Long, val atMs: Long)
+
+/**
+ * 标记的推进。换了一张、第一次看到（包括 App 刚打开、传输早已在进行）、或字节数变了 → 以 [nowMs] 重新打点；
+ * 字节数没变 → 原样保留（计时继续累积）。没在传 → null。
+ */
+fun advanceTransferMark(previous: TransferMark?, current: CurrentItem?, nowMs: Long): TransferMark? {
+    val item = current ?: return null
+    if (previous == null || previous.orderId != item.orderId || previous.bytesSent != item.bytesSent) {
+        return TransferMark(item.orderId, item.bytesSent, nowMs)
+    }
+    return previous
+}
+
+/**
+ * 这一张此刻的节奏：
+ *  - [MOVING]：字节在前进（或不动还没满 [TRANSFER_SLOW_AFTER_MS]）；
+ *  - [SLOW]：字节已经 ≥ 门槛没有前进，但还没传完——界面上必须和正常传输看得出不同（#250 验收 3）；
+ *  - [FINISHING]：字节已经全部发出，在等电脑确认收下（算 BLAKE3、入库）——此时字节不动是正常的，不算慢。
+ */
+enum class TransferPace { MOVING, SLOW, FINISHING }
+
+fun transferPaceOf(
+    current: CurrentItem,
+    mark: TransferMark?,
+    nowMs: Long,
+    slowAfterMs: Long = TRANSFER_SLOW_AFTER_MS,
+): TransferPace {
+    if (current.totalBytes > 0 && current.bytesSent >= current.totalBytes) return TransferPace.FINISHING
+    val m = mark?.takeIf { it.orderId == current.orderId && it.bytesSent == current.bytesSent }
+        ?: return TransferPace.MOVING
+    return if (nowMs - m.atMs >= slowAfterMs) TransferPace.SLOW else TransferPace.MOVING
+}
+
+/**
+ * 首页「当前这一张」那一块显示的全部东西。
+ * - [fileName]：已做中间截断（保住扩展名），单行；
+ * - [bytesText]：「12.3 / 189 MB」；总字节未知 → null；
+ * - [pace] / [quietSeconds]：节奏，以及字节已经多少秒没动（只在 [TransferPace.SLOW] 时显示）。
+ */
+data class TransferRow(
+    val fileName: String,
+    val bytesText: String?,
+    val pace: TransferPace,
+    val quietSeconds: Int,
+)
+
+fun transferRowOf(current: CurrentItem?, mark: TransferMark?, nowMs: Long): TransferRow? {
+    val item = current ?: return null
+    val quiet = mark?.takeIf { it.orderId == item.orderId && it.bytesSent == item.bytesSent }
+        ?.let { ((nowMs - it.atMs).coerceAtLeast(0) / 1000).toInt() } ?: 0
+    return TransferRow(
+        fileName = middleEllipsize(item.fileName),
+        bytesText = bytesProgressText(item.bytesSent, item.totalBytes),
+        pace = transferPaceOf(item, mark, nowMs),
+        quietSeconds = quiet,
+    )
+}
+
+private const val ELLIPSIS = "…"
+
+/** 一个码点占几个宽度单位：中日韩 / 谚文 / 全角 / emoji 算 2，其余算 1。 */
+internal fun displayUnits(codePoint: Int): Int = when (codePoint) {
+    in 0x1100..0x115F, in 0x2E80..0xA4CF, in 0xAC00..0xD7A3, in 0xF900..0xFAFF, in 0xFE30..0xFE4F,
+    in 0xFF00..0xFF60, in 0xFFE0..0xFFE6, in 0x1F300..0x1FAFF, in 0x20000..0x3FFFD -> 2
+    else -> 1
+}
+
+internal fun displayUnits(s: String): Int = s.codePoints().toArray().sumOf { displayUnits(it) }
+
+/**
+ * 文件名的中间截断（#251）。Compose 1.7（BOM 2024.12.01，ui-text 1.7.6）的 TextOverflow 只有尾部省略，
+ * 没有 MiddleEllipsis；尾部省略会把 `.mp4` / `_161635` 这些信息量最大的部分吃掉，所以在这里按码点截。
+ *
+ * 规则：不超过 [maxUnits] 原样返回；否则 头 +「…」+ 尾。头尾按剩余宽度对半分（多出的一个单位给尾部）；
+ * 扩展名（`.` 之后 1–8 个字符）比半边还长时，尾部放宽到正好装下扩展名。按码点截，不会切开代理对 / emoji。
+ */
+fun middleEllipsize(name: String, maxUnits: Int = TRANSFER_FILE_NAME_MAX_UNITS): String {
+    if (displayUnits(name) <= maxUnits) return name
+    val cps = name.codePoints().toArray()
+    val budget = (maxUnits - 1).coerceAtLeast(2) // 一个单位留给「…」
+    val dot = name.lastIndexOf('.')
+    val extUnits = if (dot > 0 && name.length - dot - 1 in 1..8) displayUnits(name.substring(dot)) else 0
+    var tailBudget = budget - budget / 2
+    if (extUnits > tailBudget && extUnits <= budget - 1) tailBudget = extUnits
+    val headBudget = budget - tailBudget
+
+    val head = StringBuilder()
+    var used = 0
+    for (cp in cps) {
+        val w = displayUnits(cp)
+        if (used + w > headBudget) break
+        head.appendCodePoint(cp)
+        used += w
+    }
+    val tail = ArrayDeque<Int>()
+    used = 0
+    for (k in cps.indices.reversed()) {
+        val w = displayUnits(cps[k])
+        if (used + w > tailBudget) break
+        tail.addFirst(cps[k])
+        used += w
+    }
+    val tailText = StringBuilder().also { sb -> tail.forEach { sb.appendCodePoint(it) } }
+    return "$head$ELLIPSIS$tailText"
+}
+
+/**
+ * 「已传 / 总大小」（#250），例如「12.3 / 189 MB」。单位按**总大小**选、两边同一个单位（不说「900 KB / 189 MB」）；
+ * 十进制（1 MB = 1000 × 1000 字节），与 Android 系统显示文件大小的口径一致（API 26 起 `Formatter` 用 SI）。
+ * 数值小于 100 保留一位小数，否则取整；0 就写「0」。总大小未知 → null。
+ */
+fun bytesProgressText(bytesSent: Long, totalBytes: Long): String? {
+    if (totalBytes <= 0) return null
+    val (divisor, unit) = when {
+        totalBytes >= 1_000_000_000L -> 1e9 to "GB"
+        totalBytes >= 1_000_000L -> 1e6 to "MB"
+        else -> 1e3 to "KB"
+    }
+    fun fmt(v: Long): String {
+        if (v <= 0) return "0"
+        val x = v / divisor
+        return String.format(java.util.Locale.ROOT, if (x >= 100) "%.0f" else "%.1f", x)
+    }
+    return "${fmt(bytesSent.coerceIn(0, totalBytes))} / ${fmt(totalBytes)} $unit"
+}
