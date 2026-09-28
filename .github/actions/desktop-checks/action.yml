@@ -1,6 +1,6 @@
 name: desktop checks
 description: >-
-  桌面壳门禁的全部检查步骤（src-tauri fmt/clippy/lib tests + Linux 侧 UI 构建）。
+  桌面壳门禁的全部检查步骤（src-tauri fmt/clippy/lib tests + 两个平台的前端单测 + Linux 侧 UI 构建）。
   ci-desktop.yml 的 desktop-linux / desktop-windows 两个 job 各引用一次。
 
 # 为什么抽成共享片段（CI-11 修正，#255，2026-09-20）：
@@ -123,27 +123,33 @@ runs:
     # `pnpm tauri build --bundles nsis`）；而本 lane 在 main 的必需检查里，
     # 多引一条 Windows 上 pnpm 原生依赖/长路径的抖动源不划算。
     # 代价写明：Windows 上的 UI 构建破损要到打 tag 时才会暴露。
+    #
+    # CI-15 (#318)：上面这个权衡只对**构建**（`pnpm build`）成立，对 `pnpm test`
+    # 不成立——vitest 跑的是纯 JS，没有原生依赖编译，也没有构建的长路径问题。
+    # 所以 Node / pnpm / 依赖安装和单测两个平台都跑，只有 vite build 仍只在
+    # Linux。#297 那类 Windows 专属的前端缺陷（`.pathname` 拼出 `C:\C:\`、
+    # 断言硬编码 `\n` 撞 CRLF）此前在 CI 上一直全绿，就是因为这一步不在
+    # Windows 上跑。
     - name: Setup Node
-      if: runner.os == 'Linux'
       uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
       with:
         node-version: 22
     - name: Install pnpm
-      if: runner.os == 'Linux'
       shell: bash
       run: npm install -g pnpm@11
+    - name: pnpm install
+      shell: bash
+      working-directory: apps/desktop
+      run: pnpm install --frozen-lockfile
     - name: vite build (UI)
       if: runner.os == 'Linux'
       shell: bash
       working-directory: apps/desktop
-      run: |
-        pnpm install --frozen-lockfile
-        pnpm build
+      run: pnpm build
     # 照片墙窗口对账的回归锁（DESK-09）。这个函数已经回归两次——
     # DESK-06 修"墙不失效"、8/17 去卡顿又开了三个口子（只拉第一页 /
     # 已有条目不更新 / 删除不消失）。桌面端在此之前零测试。
     - name: 单测（照片墙对账 + 接线断言）
-      if: runner.os == 'Linux'
       shell: bash
       working-directory: apps/desktop
       run: pnpm test
