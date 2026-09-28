@@ -514,6 +514,81 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
         run: cargo nextest run --no-fail-fast
 
+  # CI-12 (#259)：`crates/**` 里 `#[cfg(windows)]` 的代码此前**从没被 lint 过**
+  # ——上面的 `clippy` 跑在 ubuntu，根本编译不到这些代码；`test (windows)`
+  # 只跑测试，而 nextest 不把警告当错误（PR #256 的探针实测：unused 变量
+  # 的警告在 Windows 日志里打出来了，却没有任何一条 lane 变红）。桌面壳
+  # 早就两条腿各跑一次 clippy（ci-desktop.yml），本 job 让主 workspace
+  # 的口径与它一致。
+  #
+  # 为什么单独成一个 job，而不是往 `test (windows)` 里加一步：那条 job
+  # 刻意**不进**必需检查（9–13 分钟，全仓最慢）。lint 挂在它身上，红了也
+  # 挡不住合并，等于没加。单独成 job 才能按自己的耗时决定要不要设为必需。
+  #
+  # ⚠️ 与上面那条 `clippy` 的差别都是有理由的，不是抄漏了：
+  #   - **不带 `--all-features`**：android-jni 在 Windows 上编不过，理由见
+  #     BUILD-06 (#174) 与上面 test-windows 那段注释。android-jni 那条路径的
+  #     lint 仍由 Linux 的 `clippy` 覆盖，没丢。
+  #   - **缓存全部复用 test (windows) 的 key**（vcpkg 安装树 + cargo 依赖源码），
+  #     不新增任何缓存条目：本仓 10 GB 配额实测已顶满（CI-19 #392），多占一份
+  #     就会把别的 lane 挤出去。key 相同时只有先跑完的那条会保存，另一条
+  #     只读，这正是想要的效果。
+  #   - **不缓存 `target/`**：理由与 test (windows) 那段账相同。
+  # vcpkg 那两步与 test (windows) 逐字一致；本卡范围只许改本文件，所以没有
+  # 抽成 composite action。改其中一处时**两处一起改**。
+  clippy-windows:
+    name: clippy (windows)
+    # CI-11 (#255)：**只有明确收到 'false' 才跳过**（fail-closed，理由同上）。
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
+    runs-on: windows-latest
+    # 冷缓存要建 vcpkg 静态 libheif（约 20min），给足余量；热缓存下远低于此。
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: tools/setup-rust-toolchain.sh
+
+      # 与 test (windows) 逐字一致 —— key 必须相同，才能共用同一份缓存。
+      - name: Compute vcpkg cache key
+        id: vkey
+        shell: bash
+        run: |
+          key="vcpkg-libheif-core-x64-windows-static-md-${ImageVersion:-unknown}-v1"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "vcpkg cache key = $key"
+      - name: Cache vcpkg (static libheif)
+        id: vcpkg-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\vcpkg\installed
+          key: ${{ steps.vkey.outputs.key }}
+
+      # `--all-targets` 会跑 libheif-sys 的 build script，它要找到 heif.lib。
+      - name: Install libheif (vcpkg, static, no HEVC encoder)
+        shell: bash
+        run: |
+          echo "cache-hit = ${{ steps.vcpkg-cache.outputs.cache-hit }}"
+          start=$(date +%s)
+          /c/vcpkg/vcpkg.exe install "libheif[core]:x64-windows-static-md" --clean-after-build
+          echo "VCPKG_INSTALL_SECONDS=$(( $(date +%s) - start ))"
+
+      - name: Cache cargo (依赖源码；key 与 test (windows) 共用)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+          key: test-windows-cargo-deps-${{ hashFiles('Cargo.lock') }}
+
+      - name: Clippy (deny warnings, 无 --all-features — 见上方注释)
+        shell: bash
+        env:
+          VCPKG_ROOT: "C:\\vcpkg"
+        run: cargo clippy --all-targets -- -D warnings
+
   arch:
     name: architecture enforcement
     # CI-11 (#255)：**只有明确收到 'false' 才跳过**。
