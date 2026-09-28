@@ -27,7 +27,16 @@ expected_jobs = {
     # 于是全仓唯一在真 Windows 上跑 daemon 测试的那条 lane，工具链锁定**没人守**。
     # 2026-09-21 普查过一遍（「文件里所有 run: cargo」对「本名单覆盖到的 job」
     # 做差集）：全仓只有它一个漏网，补上之后差集为空。
-    ".github/workflows/ci-rust.yml": {"fmt", "clippy", "test", "test-windows", "deny"},
+    # CI-12 (#259)：clippy-windows 同理——新增 Cargo job 必须同步登记，本名单
+    # 不会自己发现漏网的 job。
+    ".github/workflows/ci-rust.yml": {
+        "fmt",
+        "clippy",
+        "test",
+        "test-windows",
+        "clippy-windows",
+        "deny",
+    },
     # CI-11 (#255)：空集**不是**「这个文件不用查」。ci-desktop 的两个 job
     # 自己不跑 Cargo——Cargo 命令和工具链 setup 都在共享 composite action
     # 里（拆 job 去掉现算检查名时搬过去的）。文件仍然在这里列着，是为了继续
