@@ -313,6 +313,7 @@ internal class NativeFlowDeliveryPort(
     private val subscriptionRetryDelaysMs: LongArray = SUBSCRIPTION_RETRY_DELAYS_MS,
     private val subscriptionReadyTimeoutMs: Long = SUBSCRIPTION_READY_TIMEOUT_MS,
     private val controlCallTimeoutMs: Long = CONTROL_CALL_TIMEOUT_MS,
+    private val stallStatusTimeoutMs: Long = STALL_STATUS_TIMEOUT_MS,
 ) : ItemDelivery {
     private val epochGuard = FlowDeliveryEpochGuard(pairing)
 
@@ -323,6 +324,9 @@ internal class NativeFlowDeliveryPort(
 
         /** 首张 offer 之前等过订阅就绪了没有（只等一次）。 */
         var readyAwaited = false
+
+        /** 订阅断了、而且至少一次重建也没连上：等待循环要马上问一次桌面（桌面多半不在了）。 */
+        @Volatile var subscriptionLost = false
     }
 
     @Volatile private var round: Round? = null
@@ -428,6 +432,17 @@ internal class NativeFlowDeliveryPort(
     }
 
     /**
+     * 短超时的一次 `flow.status`（本地中止 / 订阅丢了之后用）。超时或网络错误 → null（调用方判路径失败）；
+     * 桌面可达但拒绝（[DesktopRejectedException]）照常抛出，由外层分类。与 [boundedControlCall] 一样只有界地等结果。
+     */
+    private suspend fun quickStatus(desktop: FlowReceiptClient, tuple: FlowTupleRef): FlowStatusReply? {
+        val job = sideEffects.async { runCatching { desktop.status(tuple) } }
+        val result = withTimeoutOrNull(stallStatusTimeoutMs) { job.await() } ?: return null
+        result.exceptionOrNull()?.let { if (it is DesktopRejectedException) throw it }
+        return result.getOrNull()
+    }
+
+    /**
      * 控制面请求只**有界地**等：`DaemonClient.call` 是阻塞 FFI + 15 秒连接超时，直接包 withTimeout 不一定按时返回。
      * 所以请求跑在 [sideEffects] 上，这里只限时等它的结果；超时就不等了（请求自己跑完或失败）。
      */
@@ -457,6 +472,7 @@ internal class NativeFlowDeliveryPort(
         var lastBytes = -1L
         val attemptStartedAt = clock()
         var localDoneAt: Long? = null
+        var abortChecked = false
         while (true) {
             if (!epochGuard.isCurrent(epoch)) {
                 bridge.pause(lease)
@@ -477,6 +493,35 @@ internal class NativeFlowDeliveryPort(
                 log.log("order $seq: source ${fault.name.lowercase()} while serving; abandoning as source missing")
                 bridge.pause(lease)
                 return DeliveryOutcome.SourceMissing
+            }
+            // 本地传输中止（不是源文件的问题）或推送订阅断了且重建失败：桌面多半不在了（后台服务被停、断网）。
+            // 立即、短超时问一次桌面状态；问不到就判路径失败——不再沿着 1→8 秒的退避一直等回执、进度条卡住。
+            val suspect = when {
+                local is TransferStatus.Aborted && !abortChecked -> "local_aborted"
+                r.subscriptionLost -> "subscription_lost"
+                else -> null
+            }
+            if (suspect != null && pushed == null) {
+                if (local is TransferStatus.Aborted) abortChecked = true
+                r.subscriptionLost = false
+                val reply = quickStatus(desktop, tuple)
+                if (reply == null) {
+                    log.log("order $seq: $suspect and the desktop did not answer flow.status within ${stallStatusTimeoutMs}ms; path failure")
+                    bridge.pause(lease)
+                    return DeliveryOutcome.PathFailure("desktop_unreachable:$suspect")
+                }
+                when (val outcome = flowStatusPollOutcome(reply)) {
+                    is FlowStatusPollOutcome.Completed -> {
+                        log.log("Flow resolved by=status seq=$seq after $suspect")
+                        return accept(outcome.receipt, fetch, lease)
+                    }
+                    FlowStatusPollOutcome.Cancelled -> {
+                        bridge.pause(lease)
+                        return DeliveryOutcome.PathFailure("cancelled")
+                    }
+                    // 桌面还在、说 active：照现有逻辑继续等（status 兜底 / 字节停滞）。
+                    FlowStatusPollOutcome.KeepPolling -> log.log("order $seq: $suspect but the desktop still reports ${reply.state}; waiting")
+                }
             }
             if (localDoneAt == null && (local is TransferStatus.Completed || local is TransferStatus.Aborted)) {
                 localDoneAt = clock()
@@ -566,8 +611,11 @@ internal class NativeFlowDeliveryPort(
             if (attempt > 0) log.log("Flow push subscription rebuild #$attempt")
             val startedAt = clock()
             subscriptionState = SubscriptionState.CONNECTING
+            var connectedThisAttempt = false
             val reason = try {
                 subscribe(r.pairing, {
+                    connectedThisAttempt = true
+                    r.subscriptionLost = false
                     subscriptionState = SubscriptionState.CONNECTED
                     r.connected.complete(Unit)
                     log.log("Flow push subscription connected attempt=$attempt inMs=${clock() - startedAt} sinceRoundStartMs=${clock() - roundStartedAt}")
@@ -580,6 +628,8 @@ internal class NativeFlowDeliveryPort(
                 "${failure.javaClass.simpleName}: ${failure.message}"
             }
             subscriptionState = SubscriptionState.DOWN
+            // 断开之后的重建也没连上：告诉等待循环去问一次桌面。
+            if (attempt >= 1 && !connectedThisAttempt) r.subscriptionLost = true
             val retryIn = subscriptionRetryDelaysMs.getOrElse(attempt) { subscriptionRetryDelaysMs.last() }
             log.log("Flow push subscription closed attempt=$attempt afterMs=${clock() - startedAt} reason=$reason; retry in ${retryIn}ms")
             delay(retryIn)
@@ -761,6 +811,9 @@ internal const val LOCAL_STATUS_RECHECK_MS = 500L
 
 /** #413：每轮首张 offer 之前最多等订阅就绪多久（超时照样 offer，status 兜底）。 */
 internal const val SUBSCRIPTION_READY_TIMEOUT_MS = 2_000L
+
+/** #413：本地传输中止 / 推送订阅丢了之后那一次 `flow.status` 最多等多久；等不到就判路径失败。 */
+internal const val STALL_STATUS_TIMEOUT_MS = 3_000L
 
 /** #413：`flow.suspend` / `flow.cancel_tuple` 这类控制面请求最多等多久（暂停不能被一次 15 秒的连接超时卡住）。 */
 internal const val CONTROL_CALL_TIMEOUT_MS = 3_000L
