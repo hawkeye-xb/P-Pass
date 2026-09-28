@@ -855,6 +855,11 @@ fn assemble_export(
         .as_deref()
         .map(daemon_logs::parse_plist_log_paths)
         .unwrap_or((None, None));
+    // DIAG-B1：daemon 自己的固定位置日志，不依赖 plist。DESK-32 (#367)：没读到
+    // 也要把原因和本该在的位置带进包里。
+    let log_path = platform::adapter().default_log_file(&env.platform_dir);
+    let (persistent_log_tail, persistent_log_missing) =
+        daemon_logs::persistent_log(log_path.as_deref(), 1024 * 1024);
 
     let mut inputs = daemon_logs::BundleInputs {
         home: home.clone(),
@@ -869,10 +874,9 @@ fn assemble_export(
             .and_then(|p| daemon_logs::tail(std::path::Path::new(p), 256 * 1024)),
         stdout_path: out_path,
         stderr_path: err_path,
-        // DIAG-B1：daemon 自己的固定位置日志，不依赖 plist。
-        persistent_log_tail: platform::adapter()
-            .default_log_file(&env.platform_dir)
-            .and_then(|p| daemon_logs::tail(&p, 1024 * 1024)),
+        persistent_log_tail,
+        persistent_log_path: log_path.map(|p| p.display().to_string()),
+        persistent_log_missing,
         ..Default::default()
     };
     match daemon {

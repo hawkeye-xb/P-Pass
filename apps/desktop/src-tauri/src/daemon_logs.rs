@@ -61,6 +61,29 @@ pub fn tail(path: &Path, max_bytes: u64) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).to_string())
 }
 
+/// DESK-32 (#367)：读固定位置的 daemon 日志。返回 `(尾部, 没读到的原因)`，
+/// 两者恰有一个是 `Some`——没读到必须说清是哪一种。
+pub fn persistent_log(path: Option<&Path>, max_bytes: u64) -> (Option<String>, Option<String>) {
+    let Some(path) = path else {
+        return (None, Some("本平台没有固定位置的后台服务日志".into()));
+    };
+    match tail(path, max_bytes) {
+        Some(t) => (Some(t), None),
+        None if path.exists() => (
+            None,
+            Some("日志文件存在，但读不出来（被占用或没有权限）".into()),
+        ),
+        None => (
+            None,
+            Some(
+                "日志文件不存在——后台服务可能从没在这台机器上启动过，\
+                 或者日志目录被清理过"
+                    .into(),
+            ),
+        ),
+    }
+}
+
 /// 家目录 → `<DATA>`（与 daemon 侧 `sanitize()` 同语义：导出件绝不带
 /// 用户名）。桌面壳是独立 workspace（ADR-012：不依赖内部业务 crate），
 /// 所以这里是同语义的第二份实现，靠"包里不许出现真实 HOME"的测试锁死。
@@ -167,6 +190,11 @@ pub struct BundleInputs {
     /// DIAG-B1：daemon 自己写的固定位置日志（`<data_dir>/logs/daemon.log`）的
     /// 尾部。与 plist 无关——一次性 spawn 的 daemon 只有这一份日志。
     pub persistent_log_tail: Option<String>,
+    /// DESK-32 (#367)：固定位置日志应该在哪（本平台没有 = None）。
+    pub persistent_log_path: Option<String>,
+    /// DESK-32 (#367)：固定位置日志没收进来的原因。收进来了 = None。
+    /// 不许静默省略——包看起来完整、却少了最该有的那份，正是这张卡的病。
+    pub persistent_log_missing: Option<String>,
     /// daemon 活着时它自己给的那几份（diag_events.json / devices.json /
     /// audit.json），原样搬进来（daemon 侧已脱敏）。
     pub daemon_entries: Vec<(String, Vec<u8>)>,
@@ -188,6 +216,8 @@ P-Pass 诊断包（导出时间见各文件内容）
                               ← 前者：导出时后台服务压根没起来，里面写了
                               为什么连不上；后者：服务在线但三份日志没拿到。
                               出现任一个时 5~7 会缺
+  9. daemon-log-missing.txt
+                              ← 0 那份没收进来，里面写了原因和它本该在的位置
 
 脱敏：家目录路径统一替换成 <DATA>，NodeId / 配对令牌这类长 hex 串只
 留前 8 位。可以直接把整个 zip 发给开发者。
@@ -227,6 +257,20 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
 
     // 日志来源写进包里——路径是从 plist 读的还是没读到，支持方一眼可见。
     let mut src = String::new();
+    // DESK-32 (#367)：固定位置那份放第一行。Windows 上它是唯一的日志，下面
+    // plist 那几行在 Windows 上永远是「未注册」，只看它们会以为没有日志。
+    src.push_str(&format!(
+        "daemon.log（固定位置）= {} —— {}\n",
+        i.persistent_log_path
+            .as_deref()
+            .map(|p| scrub(p, home))
+            .unwrap_or_else(|| "(本平台没有)".into()),
+        match &i.persistent_log_missing {
+            None if i.persistent_log_tail.is_some() => "已收入包内".to_string(),
+            None => "未收入".to_string(),
+            Some(reason) => format!("未收入：{reason}"),
+        },
+    ));
     if i.plist_found {
         src.push_str("LaunchAgent plist: 已注册（日志路径从 plist 读取）\n");
     } else {
@@ -250,6 +294,18 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
 
     if let Some(t) = &i.persistent_log_tail {
         entries.push(("daemon.log".into(), scrub(t, home).into_bytes()));
+    } else {
+        let text = format!(
+            "这个诊断包里没有 daemon.log（后台服务自己写的运行日志）。\n\n原因：{}\n本该在：{}\n",
+            i.persistent_log_missing
+                .as_deref()
+                .unwrap_or("(没有记录原因)"),
+            i.persistent_log_path
+                .as_deref()
+                .map(|p| scrub(p, home))
+                .unwrap_or_else(|| "(本平台没有)".into()),
+        );
+        entries.push(("daemon-log-missing.txt".into(), text.into_bytes()));
     }
     if let Some(t) = &i.stderr_tail {
         entries.push(("daemon-stderr.log".into(), scrub(t, home).into_bytes()));
@@ -431,6 +487,8 @@ mod tests {
                 "Error: migration: migration 2 was previously applied but is missing in the resolved migrations\n".into(),
             ),
             persistent_log_tail: None,
+            persistent_log_path: None,
+            persistent_log_missing: None,
             daemon_entries: Vec::new(),
         };
         let entries = build_bundle(&i);
@@ -553,6 +611,79 @@ mod tests {
             !log.contains("/Users/someone"),
             "home must be scrubbed: {log}"
         );
+    }
+
+    fn entry(entries: &[(String, Vec<u8>)], name: &str) -> Option<String> {
+        entries
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
+    }
+
+    // DESK-32 (#367) RED: no persistent log must be SAID, not silently left
+    // out of a bundle that otherwise looks complete.
+    #[test]
+    fn desk32_missing_daemon_log_is_reported_not_silently_omitted() {
+        let i = BundleInputs {
+            home: r"C:\Users\someone".into(),
+            app_version: "0.6.0".into(),
+            plist_found: false,
+            persistent_log_tail: None,
+            persistent_log_path: Some(r"C:\Users\someone\AppData\Local\x\logs\daemon.log".into()),
+            persistent_log_missing: Some("日志文件不存在".into()),
+            ..Default::default()
+        };
+        let entries = build_bundle(&i);
+        assert!(entry(&entries, "daemon.log").is_none());
+        let note = entry(&entries, "daemon-log-missing.txt")
+            .expect("a missing daemon.log must be explained in the bundle");
+        assert!(note.contains("日志文件不存在"), "{note}");
+        assert!(
+            note.contains(r"<DATA>\AppData\Local\x\logs\daemon.log"),
+            "{note}"
+        );
+        assert!(!note.contains("someone"), "home must be scrubbed: {note}");
+        let src = entry(&entries, "log-sources.txt").unwrap();
+        assert!(
+            src.starts_with(r"daemon.log（固定位置）= <DATA>\AppData\Local\x\logs\daemon.log —— 未收入：日志文件不存在"),
+            "{src}"
+        );
+    }
+
+    #[test]
+    fn desk32_log_sources_says_when_the_daemon_log_is_included() {
+        let i = BundleInputs {
+            home: "/Users/someone".into(),
+            persistent_log_tail: Some("INFO hello\n".into()),
+            persistent_log_path: Some("/Users/someone/x/logs/daemon.log".into()),
+            ..Default::default()
+        };
+        let entries = build_bundle(&i);
+        assert!(entry(&entries, "daemon-log-missing.txt").is_none());
+        let src = entry(&entries, "log-sources.txt").unwrap();
+        assert!(
+            src.starts_with("daemon.log（固定位置）= <DATA>/x/logs/daemon.log —— 已收入包内"),
+            "{src}"
+        );
+    }
+
+    #[test]
+    fn desk32_persistent_log_names_each_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let present = dir.path().join("daemon.log");
+        std::fs::write(&present, "INFO up\n").unwrap();
+        assert_eq!(
+            persistent_log(Some(&present), 1024),
+            (Some("INFO up\n".to_string()), None)
+        );
+
+        let (tail, why) = persistent_log(Some(&dir.path().join("absent.log")), 1024);
+        assert!(tail.is_none());
+        assert!(why.unwrap().contains("不存在"));
+
+        let (tail, why) = persistent_log(None, 1024);
+        assert!(tail.is_none());
+        assert!(why.unwrap().contains("本平台没有"));
     }
 
     // zip 真的能写出来、读回来（write_zip / read_zip_entries 往返）。
