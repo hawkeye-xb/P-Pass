@@ -1211,6 +1211,9 @@ mod tests {
             "\\\\\\\\server\\\\share\\\\dir",
             "C:\\Users\\O'Brien\\Pics",
             "C:\\Users\\say \"hi\"\\Pics",
+            // macOS / Linux 形状（家里 Mac 狗粮走的就是这条写入路径）。
+            "/Users/ethan/Pictures/P-Pass 家庭照片库",
+            "/home/ethan/Pictures/P-Pass",
         ] {
             let doc = render_config(input);
             let parsed: toml::Value =
