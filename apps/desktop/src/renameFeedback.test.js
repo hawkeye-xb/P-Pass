@@ -13,7 +13,7 @@ function codeOf(url) {
   // 2. 先把 CRLF 归一成 LF：仓库里存的是 LF，但 core.autocrlf 让 Windows
   //    检出成 CRLF。下面的断言按 LF 写，不归一化就是同一份源码 Linux 过、
   //    Windows 挂——挂的是行尾，不是代码。
-  return readFileSync(url, "utf8")
+  return readFileSync(url.pathname, "utf8")
     .replace(/\r\n/g, "\n")
     .replace(/\/\*[\s\S]*?\*\//g, "")
     .replace(/<!--[\s\S]*?-->/g, "")
