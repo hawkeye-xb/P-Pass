@@ -67,6 +67,13 @@ jobs:
         working-directory: apps/android
         run: ./gradlew :app:assembleDebug
 
+      # QA-19（#420）：androidTest 是独立编译单元，引用了 src/test 独有的
+      # addrOf 红了很久没人发现——CI 从不编译它。加编译步（只 compile，
+      # 不上真机跑），坏在 PR 上就红。
+      - name: Compile instrumentation tests (QA-19)
+        working-directory: apps/android
+        run: ./gradlew :app:compileDebugAndroidTestKotlin
+
       # Packaging-completeness guard: gradle silently packages "whatever is
       # there" — a missing jniLibs .so builds green and crashes on-device
       # (UnsatisfiedLinkError, happened twice). Assert the native lib is IN
