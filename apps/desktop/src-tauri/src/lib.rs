@@ -125,13 +125,7 @@ fn wizard_state() -> Value {
     // "传到哪儿了" had no answer while the library hid in ~/Library).
     let pictures = dirs_pictures().join("P-Pass 家庭照片库");
     let installed = platform::adapter().autostart_installed().unwrap_or(false);
-    // DESK-27 (#219)：预填前先归一。
-    // 为什么读侧也要归一（写侧已经归一了）：**存量**配置在本卡合入前就已经
-    // 被翻倍过，而向导要在用户重跑之前就把**正确**的路径显示出来 —— 卡面记的
-    // 危害之一正是"UI 显示给用户的路径是错的"。写侧归一只能让下一次写入变好，
-    // 读侧归一让这一次显示就对。
-    // 两侧都归一不冗余：写侧管"不再变坏"，读侧管"立刻看起来对"。
-    let configured_dir = ipc::read_config_data_dir(&dir).map(|v| normalize_separators(&v));
+    let configured_dir = configured_library_dir(&dir);
     json!({
         "configured": dir.join("config.toml").exists(),
         "installed": installed,
@@ -229,6 +223,20 @@ fn disable_auto_sleep() -> Result<(), String> {
         Err(platform::PlatformError::Failed { detail, .. }) => Err(format!("设置失败：{detail}")),
         Err(e) => Err(format!("设置失败：{e}")),
     }
+}
+
+/// DESK-27 (#219)：向导预填用的库目录——读回 config 后**先归一**。
+///
+/// 为什么读侧也要归一（写侧已经归一了）：**存量**配置在本卡合入前就已经
+/// 被翻倍过，而向导要在用户重跑之前就把**正确**的路径显示出来 —— 卡面记的
+/// 危害之一正是"UI 显示给用户的路径是错的"。写侧归一只能让下一次写入变好，
+/// 读侧归一让这一次显示就对。两侧都归一不冗余：写侧管"不再变坏"，读侧管
+/// "立刻看起来对"。
+///
+/// 单独提成函数是为了让测试走**和 `wizard_state` 同一条**读路径，而不是在
+/// 测试里抄一份——抄的那份改坏产品代码也不会红。
+fn configured_library_dir(data_dir: &std::path::Path) -> Option<String> {
+    ipc::read_config_data_dir(data_dir).map(|v| normalize_separators(&v))
 }
 
 /// DESK-27 (#219)：把路径里重复的反斜杠折回单个，**但保住前导的那一对**。
@@ -1003,6 +1011,7 @@ fn tray_left_click_opens_window(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     // ── DESK-27 (#219)：反斜杠翻倍回路 ────────────────────────────────
     //
@@ -1132,11 +1141,13 @@ mod tests {
         assert_eq!(legacy_backslashes, 12, "起点应当是损坏态（12 个 0x5C）");
 
         let mut rounds = Vec::new();
+        let mut prefills = Vec::new();
         for _ in 0..3 {
             // 向导做的事：读回已配置的库目录 → 预填（归一）→ 用户不改 → 写回。
-            let prefill = ipc::read_config_data_dir(dir.path())
-                .map(|v| normalize_separators(&v))
-                .expect("读不到 data_dir");
+            let prefill = configured_library_dir(dir.path()).expect("读不到 data_dir");
+            // 读侧归一：**第一轮**（还没写过）向导显示的就必须是正确路径——
+            // 锁的是"UI 显示给用户的路径是错的"那条危害。
+            prefills.push(prefill.clone());
             std::fs::write(&cfg, render_config(&prefill)).unwrap();
             let bytes = std::fs::read(&cfg).unwrap();
             let n = bytes.iter().filter(|&&b| b == b'\\').count();
@@ -1165,6 +1176,9 @@ mod tests {
         let want = format!("C:{s}Users{s}ethan{s}Pictures", s = '\\');
         for (i, (_, v)) in rounds.iter().enumerate() {
             assert_eq!(v, &want, "第 {} 轮的 data_dir 不是归一值", i + 1);
+        }
+        for (i, v) in prefills.iter().enumerate() {
+            assert_eq!(v, &want, "第 {} 轮向导预填的不是归一值", i + 1);
         }
     }
 
@@ -1208,7 +1222,6 @@ mod tests {
             );
         }
     }
-    use super::*;
 
     /// DESK-28 回归锁：**每一个把窗口拉回来的入口都必须先 unminimize**。
     ///
