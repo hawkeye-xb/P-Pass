@@ -66,6 +66,13 @@ impl Default for WindowsAdapter {
     }
 }
 
+/// CI-12 (#259) 一次性探针，**不合入**：本文件只在 Windows 上编译，
+/// Linux 的 clippy 看不见这里；新的 clippy (windows) 必须变红。
+pub fn ci12_probe() -> u8 {
+    let deliberately_unused_on_windows = 42u8;
+    0
+}
+
 fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
     move |source| PlatformError::Io { action, source }
 }
