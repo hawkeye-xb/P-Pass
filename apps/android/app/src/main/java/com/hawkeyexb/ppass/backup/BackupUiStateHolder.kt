@@ -173,7 +173,11 @@ class BackupUiStateHolder(
         val g = engineGatewayFor(runtime).also { gateway = it }
         refresh(recount = false)
         scope.launch { g.revision.debounce(UI_DEBOUNCE_MS).collect { refresh(recount = false) } }
-        g.view.collect { view -> _projection.value?.let { publish(it.copy(view = view)) } }
+        g.view.collect { view ->
+            // #466：探测判出配对失效只改视图（settle NOT_PAIRED），不写 order，revision 不动——这里也要同步红卡。
+            pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
+            _projection.value?.let { publish(it.copy(view = view)) }
+        }
     }
 
     private fun scheduleRefresh(recount: Boolean) {
