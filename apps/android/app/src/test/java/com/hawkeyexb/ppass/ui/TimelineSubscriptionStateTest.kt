@@ -119,4 +119,34 @@ class TimelineSubscriptionStateTest {
         assertFalse(s.subscribeExhausted)
         assertFalse(s.subscribeHadFailure)
     }
+
+    // ── #474: 退避耗尽后，前台心跳判定桌面可达 → 自动重启会话 ──────────────
+
+    @Test
+    fun reachableWhileExhaustedRestartsSession() {
+        var state = SubscriptionSessionState()
+        repeat(4) { // 3 档退避 + 第 4 次失败 → 耗尽
+            state = onSubscriptionSessionStarted(state)
+            state = onSubscriptionEnded(state, wasLive = false, retry = ::retry).state
+        }
+        assertTrue(state.subscribeExhausted)
+
+        val resumed = onSubscriptionDesktopReachable(state)
+        assertEquals("耗尽 + 桌面可达必须重启（等同手动重试）", onSubscriptionManualRetry(state), resumed)
+        assertFalse(resumed!!.subscribeExhausted)
+        assertEquals(0, resumed.subscribeAttempt)
+        assertEquals("30s 后心跳再来一次，已不在耗尽态，不得再重启", null, onSubscriptionDesktopReachable(resumed))
+    }
+
+    @Test
+    fun reachableWhileConnectedOrBackingOffIsNoOp() {
+        val connected = onSubscriptionConnected(onSubscriptionSessionStarted(SubscriptionSessionState()))
+        assertEquals("已连上：心跳可达不打扰", null, onSubscriptionDesktopReachable(connected))
+
+        val backingOff = onSubscriptionEnded(connected, wasLive = false, retry = ::retry).state
+        assertFalse(backingOff.subscribeExhausted)
+        assertEquals("正在退避重连：心跳可达不打扰（退避档位不清零）", null, onSubscriptionDesktopReachable(backingOff))
+
+        assertEquals("初始态", null, onSubscriptionDesktopReachable(SubscriptionSessionState()))
+    }
 }

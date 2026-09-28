@@ -357,22 +357,6 @@ fun PPassApp() {
         return ((System.currentTimeMillis() - last) / (24 * 60 * 60 * 1000L)).toInt()
     }
     var daysUnreachable by remember { mutableStateOf(computeDaysUnreachable()) }
-    // PRES-01: 前台轻心跳——ON_RESUME 起、ON_STOP 停（退后台绝不心跳，
-    // 耗电红线）；app 在前台时 daemon 每 ~30s 收到一次 hello，桌面设备行
-    // 才显示「在线」而不是「离线」（锁屏 ≠ 离开）。
-    val heartbeat = remember {
-        ForegroundHeartbeat(
-            client, pairings, scope, com.hawkeyexb.ppass.backup.SentinelStore(context.filesDir),
-            // #439: 桌面回来了，人就在 App 里——不等 10 分钟的探测。
-            onReachable = { com.hawkeyexb.ppass.backup.flow.onFlowDesktopReachable(context) },
-            // #466: 打开 App 就能发现「电脑端已移除这台手机」，不用等下一张新照片。
-            onPairingLost = { epoch, failure ->
-                com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss.record(
-                    com.hawkeyexb.ppass.backup.flow.PairingEpoch(epoch), failure,
-                )
-            },
-        )
-    }
     // SYNC-06: 订阅连接生命周期跟心跳对齐——ON_RESUME 起 / ON_STOP 停，
     // App 前台期间不管显示哪个 tab 都保持订阅（脱钩 tab 切换，旧实现
     // 绑在 PhotosScreen 组合可见性上，切设置 tab 就断）。只有退后台/
@@ -386,6 +370,27 @@ fun PPassApp() {
                     TimelineLoader(client, parsePeerAddrToken(p.daemonAddrToken)) {
                         client.bind(identity.secretKey())
                     }
+                )
+            },
+            log = { android.util.Log.i("PPassTimeline", it) },
+        )
+    }
+    // PRES-01: 前台轻心跳——ON_RESUME 起、ON_STOP 停（退后台绝不心跳，
+    // 耗电红线）；app 在前台时 daemon 每 ~30s 收到一次 hello，桌面设备行
+    // 才显示「在线」而不是「离线」（锁屏 ≠ 离开）。
+    val heartbeat = remember {
+        ForegroundHeartbeat(
+            client, pairings, scope, com.hawkeyexb.ppass.backup.SentinelStore(context.filesDir),
+            // #439: 桌面回来了，人就在 App 里——不等 10 分钟的探测。
+            // #474: 同一个信号也交给照片 tab 的订阅——退避耗尽后桌面回来了，不用手点「重试」。
+            onReachable = {
+                com.hawkeyexb.ppass.backup.flow.onFlowDesktopReachable(context)
+                timeline.onDesktopReachable()
+            },
+            // #466: 打开 App 就能发现「电脑端已移除这台手机」，不用等下一张新照片。
+            onPairingLost = { epoch, failure ->
+                com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss.record(
+                    com.hawkeyexb.ppass.backup.flow.PairingEpoch(epoch), failure,
                 )
             },
         )

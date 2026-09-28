@@ -93,6 +93,15 @@ internal fun onSubscriptionManualRetry(s: SubscriptionSessionState): Subscriptio
     s.copy(subscribeAttempt = 0, subscribeExhausted = false)
 
 /**
+ * #474: 前台心跳确认桌面可达（hello 成功）。只有退避已耗尽（停在「重试」按钮上）
+ * 才重启会话，效果同手动重试；正在重连或已连上时返回 null，什么都不做。
+ * 心跳每 30s 成功一次就调一次，靠这个守卫保证幂等：重启会同步清掉 exhausted，
+ * 后面的心跳全部落到 null 分支，不会重复起会话。
+ */
+internal fun onSubscriptionDesktopReachable(s: SubscriptionSessionState): SubscriptionSessionState? =
+    if (s.subscribeExhausted) onSubscriptionManualRetry(s) else null
+
+/**
  * SYNC-06: holder 对 timeline 通道的依赖面——生产实现包 TimelineLoader，
  * 测试注入计数 fake（不走网络）。协议层（SYNC-03/04）原样不动。
  */
@@ -139,6 +148,8 @@ internal class TimelineSubscriptionHolder(
     private val currentPairing: () -> Pairing?,
     /** 给配对建 timeline 通道（生产 = LoaderTimelineChannel(TimelineLoader(...))）。 */
     private val channelFor: (Pairing) -> TimelineChannel,
+    /** #474: 订阅生命周期日志（建立/断开/放弃/自动恢复各一行）——生产 = Log.i("PPassTimeline", …)。 */
+    private val log: (String) -> Unit = {},
 ) {
     var state by mutableStateOf(SubscriptionSessionState())
         private set
@@ -198,6 +209,17 @@ internal class TimelineSubscriptionHolder(
         sessionJob?.cancel()
         sessionJob = null
         launchSession()
+    }
+
+    /**
+     * #474: 前台心跳 hello 成功时调用。退避耗尽后桌面回来了，不用等用户点「重试」。
+     * 非耗尽状态直接返回，见 [onSubscriptionDesktopReachable]。
+     */
+    fun onDesktopReachable() {
+        if (!active) return
+        if (onSubscriptionDesktopReachable(state) == null) return
+        log("subscribe: auto-resume (desktop reachable after exhausted)")
+        retry()
     }
 
     /**
@@ -264,6 +286,7 @@ internal class TimelineSubscriptionHolder(
                     onConnected = {
                         state = onSubscriptionConnected(state)
                         connectedAt = System.currentTimeMillis()
+                        log("subscribe: connected")
                     },
                 ) {
                     try {
@@ -276,16 +299,21 @@ internal class TimelineSubscriptionHolder(
                 }
                 // 正常返回（对端 finish 了发送方向，比如设备被吊销）和抛异常
                 // 是同一件事：这次订阅结束了，都走下面的退避重连。
+                log("subscribe: ended (peer closed)")
             } catch (e: CancellationException) {
                 throw e // REV-01 #4: 同上——stop()/换配对时真的停下来。
-            } catch (_: Throwable) {
+            } catch (t: Throwable) {
                 // 连接异常——同样走退避重连。
+                log("subscribe: ended (${t::class.simpleName}: ${t.message})")
             }
             val wasLive = connectedAt?.let {
                 System.currentTimeMillis() - it >= SUBSCRIBE_WAS_LIVE_MS
             } ?: false
             val ended = onSubscriptionEnded(state, wasLive)
             state = ended.state
+            if (ended.state.subscribeExhausted) {
+                log("subscribe: exhausted (backoff used up), waiting for manual retry or desktop reachable")
+            }
             ended.delayMs?.let { delay(it) }
         }
     }
