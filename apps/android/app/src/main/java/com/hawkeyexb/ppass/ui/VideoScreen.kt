@@ -9,6 +9,7 @@
 package com.hawkeyexb.ppass.ui
 
 import android.net.Uri
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,25 +62,26 @@ fun VideoScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    // LINT-01: ProduceStateDoesNotAssignValue 误报——赋值裹在
-    // `if (cache.isFile...) { ...; return@produceState }` 提前返回分支和
-    // try/catch 分支里，lint 的静态检查看不穿这类控制流（实际每条路径
-    // 都有赋值：命中缓存直接 return，否则下载成功/失败各赋一次值）。
+    // MOB-115: 命中缓存要求长度 == asset.bytes（截断的旧缓存会被删掉重下）；
+    // 下载层断流/内容不符直接抛错，不会留下缓存文件，也就不会进 Ready。
+    // LINT-01: ProduceStateDoesNotAssignValue 误报——`value = try { … }` 在
+    // 每条路径（命中/下载成功/失败）都赋值，lint 的静态检查看不穿 try 表达式。
     @Suppress("ProduceStateDoesNotAssignValue")
     val state by produceState<VideoState>(VideoState.Fetching(0), asset.hash) {
         val cache = File(context.cacheDir, "video-${asset.hash.take(16)}.mp4")
-        if (cache.isFile && cache.length() > 0) {
-            value = VideoState.Ready(cache)
-            return@produceState
-        }
         value = try {
-            loader.download(asset.hash, cache) { got, total ->
-                if (total > 0) {
-                    value = VideoState.Fetching((got * 100 / total).toInt())
+            fetchOriginalCached(cache, asset.bytes) { dest ->
+                loader.download(asset.hash, dest) { got, total ->
+                    if (total > 0) {
+                        value = VideoState.Fetching((got * 100 / total).toInt())
+                    }
                 }
             }
             VideoState.Ready(cache)
-        } catch (_: Throwable) {
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Log.w("PPassVideo", "video ${asset.hash.take(16)} fetch failed", e)
             cache.delete()
             VideoState.Failed
         }
