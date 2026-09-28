@@ -323,20 +323,19 @@ impl PlatformAdapter for WindowsAdapter {
         Some(data_dir.join("logs").join("daemon.log"))
     }
 
-    /// QA-09 迁移（#211）：**没实现**，不是「不需要」。
+    /// SEC-07 (#289)：把文件的 DACL 重写成**只有当前用户一条 ACE**，并切断
+    /// 从父目录的继承——与 unix 侧 `0o600` 同一个意思。
     ///
-    /// 迁移前 daemon 里那段 0o600 是 `#[cfg(unix)]`，Windows 上整块被编译
-    /// 掉——也就是说这里返回 `Unsupported` **与迁移前的行为完全一致**，
-    /// 只是从「代码里看不见」变成「契约里写明」。
+    /// 为什么要显式做（而不是信 `%LOCALAPPDATA%` 的默认 ACL）：默认值只在
+    /// 默认位置成立。data_dir 一旦被改到别处（自定义路径、共享盘、
+    /// `ProgramData`），继承来的 ACE 就不再有这个保证。
     ///
-    /// 现状下的实际风险有限：身份密钥落在 `%LOCALAPPDATA%` 之下（DESK-24
-    /// #173 之前是 `%APPDATA%`），用户配置目录
-    /// 本身的 ACL 已经限定到当前用户。但那是**依赖默认值**，不是显式收紧，
-    /// 所以口径是缺口而不是 NotApplicable。要真做得走 `SetNamedSecurityInfo`
-    /// 重写 DACL。
+    /// `PROTECTED_DACL_SECURITY_INFORMATION` 是关键：不带它，父目录继承下来
+    /// 的 ACE 照样生效，等于没收紧。路径不存在时 `SetNamedSecurityInfoW`
+    /// 返回 `ERROR_FILE_NOT_FOUND`，这里如实报 `Err`，不静默回 `Done`。
     fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
-        let _ = path;
-        Ok(crate::Applied::Unsupported)
+        restrict_to_current_user(path)?;
+        Ok(crate::Applied::Done)
     }
 
     /// QA-09 迁移（#211）：**没实现**，与迁移前一致。
@@ -589,6 +588,116 @@ impl KeyStore for DpapiStore {
     }
 }
 
+/// SEC-07 (#289)：当前进程用户的 SID，按字节拷出来（`TOKEN_USER` 里的
+/// `Sid` 指针指向同一块缓冲区内部，缓冲区活多久它就活多久）。
+fn current_user_sid() -> Result<Vec<u8>> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        GetLengthSid, GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token: HANDLE = std::ptr::null_mut();
+    // SAFETY: GetCurrentProcess 返回伪句柄，无需关闭；token 是栈上出参。
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(io_err("OpenProcessToken")(std::io::Error::last_os_error()));
+    }
+    let result = (|| {
+        let mut len: u32 = 0;
+        // 第一次调用只为拿到所需长度，预期失败（ERROR_INSUFFICIENT_BUFFER）。
+        // SAFETY: 传 null 缓冲区 + 0 长度是文档允许的探长度用法。
+        unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len) };
+        if len == 0 {
+            return Err(io_err("GetTokenInformation(len)")(
+                std::io::Error::last_os_error(),
+            ));
+        }
+        // u64 对齐的缓冲区：TOKEN_USER 里有指针，按字节 Vec 分配不保证对齐。
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        // SAFETY: buf 至少 len 字节且 8 字节对齐；len 是上一次调用给的。
+        if unsafe { GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len) }
+            == 0
+        {
+            return Err(io_err("GetTokenInformation")(
+                std::io::Error::last_os_error(),
+            ));
+        }
+        // SAFETY: 成功返回后 buf 开头就是一个 TOKEN_USER。
+        let sid = unsafe { (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+        // SAFETY: sid 指向 buf 内部的合法 SID。
+        let sid_len = unsafe { GetLengthSid(sid) } as usize;
+        // SAFETY: 同上，长度来自 GetLengthSid。
+        Ok(unsafe { std::slice::from_raw_parts(sid.cast::<u8>(), sid_len) }.to_vec())
+    })();
+    // SAFETY: token 是 OpenProcessToken 成功返回的真句柄。
+    unsafe { CloseHandle(token) };
+    result
+}
+
+/// SEC-07 (#289)：见 `restrict_to_owner`。
+fn restrict_to_current_user(path: &Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+    use windows_sys::Win32::Security::Authorization::{
+        SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE,
+        SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+
+    let mut sid = current_user_sid()?;
+    let access = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: FILE_ALL_ACCESS,
+        grfAccessMode: SET_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            // TRUSTEE_IS_SID 时这个字段装的是 SID 指针（Win32 的惯用法）。
+            ptstrName: sid.as_mut_ptr().cast(),
+        },
+    };
+    let mut acl: *mut ACL = std::ptr::null_mut();
+    // SAFETY: access 与它指向的 sid 在调用期间存活；oldacl 传 null = 从空
+    // ACL 起建（不保留任何旧 ACE）；成功时 acl 是 LocalAlloc 的，下面释放。
+    let rc = unsafe { SetEntriesInAclW(1, &access, std::ptr::null(), &mut acl) };
+    if rc != ERROR_SUCCESS {
+        return Err(io_err("SetEntriesInAclW")(
+            std::io::Error::from_raw_os_error(rc as i32),
+        ));
+    }
+    let wide: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // SAFETY: wide 是 NUL 结尾的宽字符串；只改 DACL，owner/group/SACL 传 null
+    // 表示不动；acl 是上面建好的合法 ACL。
+    let rc = unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null(),
+        )
+    };
+    // SAFETY: acl 由 SetEntriesInAclW 分配，此后不再使用。
+    unsafe { LocalFree(acl.cast()) };
+    if rc != ERROR_SUCCESS {
+        return Err(io_err("SetNamedSecurityInfoW")(
+            std::io::Error::from_raw_os_error(rc as i32),
+        ));
+    }
+    Ok(())
+}
+
 fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
@@ -696,22 +805,107 @@ mod dae05_volume_stats_tests {
 mod qa09_migrated_capability_tests {
     use super::*;
 
-    /// QA-09 迁移（#211）契约：Windows 上收紧权限是**已知缺口**，必须
-    /// 明说 `Unsupported`。
+    /// SEC-07 (#289) 契约：收紧之后 DACL **只剩当前用户一条 ACE**，且不再
+    /// 继承父目录（`SE_DACL_PROTECTED`）。
     ///
-    /// 这条守的是口径而不是功能：谁哪天把它改成 `Ok(Applied::Done)` 来
-    /// 「让返回值好看」，这里必须红——静默什么都没做却报成功，正是本仓
-    /// 这一轮在修的那类缺陷。真做出来了要连这条测试一起改。
+    /// 判据刻意读的是**真实的 DACL**，不是返回值：返回 `Done` 而 ACL 没变，
+    /// 正是 QA-09 那一轮在修的「静默没做却报成功」。收紧之前先断言文件带着
+    /// 继承来的多条 ACE——前后一样就说明本测试什么都没验到。
     #[test]
-    fn restrict_to_owner_admits_it_is_unsupported() {
-        let a = WindowsAdapter::new();
-        let f = std::env::temp_dir().join("ppf-qa09-restrict.probe");
+    fn sec07_restrict_to_owner_leaves_only_the_current_user() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("identity.key");
         std::fs::write(&f, b"x").unwrap();
-        assert_eq!(
-            a.restrict_to_owner(&f).unwrap(),
-            crate::Applied::Unsupported
+
+        let before = dacl_facts(&f);
+        assert!(
+            !before.protected && before.ace_count > 1,
+            "起点应当是继承来的多条 ACE，否则本测试无判别力: {before:?}"
         );
-        let _ = std::fs::remove_file(&f);
+
+        assert_eq!(
+            WindowsAdapter::new().restrict_to_owner(&f).unwrap(),
+            crate::Applied::Done
+        );
+
+        let after = dacl_facts(&f);
+        assert!(after.protected, "继承没有切断: {after:?}");
+        assert_eq!(after.ace_count, 1, "应当只剩一条 ACE: {after:?}");
+        assert_eq!(
+            after.sids,
+            vec![current_user_sid().unwrap()],
+            "唯一那条 ACE 不是当前用户: {after:?}"
+        );
+        // 属主自己仍然能读写——收紧不能把自己也锁在外面。
+        std::fs::write(&f, b"y").unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"y");
+    }
+
+    /// 与 unix 侧 `restrict_to_owner_fails_loudly_on_missing_file` 对齐：
+    /// 路径不存在必须报错，不许静默回 `Done`。
+    #[test]
+    fn sec07_restrict_to_owner_fails_loudly_on_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("no-such.key");
+        assert!(WindowsAdapter::new().restrict_to_owner(&missing).is_err());
+    }
+
+    #[derive(Debug)]
+    struct DaclFacts {
+        protected: bool,
+        ace_count: u32,
+        sids: Vec<Vec<u8>>,
+    }
+
+    /// 读回文件的真实 DACL：是否 protected、ACE 条数、每条 ACE 的 SID。
+    fn dacl_facts(path: &Path) -> DaclFacts {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+        use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+        use windows_sys::Win32::Security::{
+            GetAce, GetLengthSid, GetSecurityDescriptorControl, ACCESS_ALLOWED_ACE, ACL,
+            DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, SE_DACL_PROTECTED,
+        };
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut dacl: *mut ACL = std::ptr::null_mut();
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: 测试辅助；出参都是栈上指针，sd 用完 LocalFree。
+        unsafe {
+            let rc = GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut dacl,
+                std::ptr::null_mut(),
+                &mut sd,
+            );
+            assert_eq!(rc, ERROR_SUCCESS, "GetNamedSecurityInfoW");
+            let mut control: u16 = 0;
+            let mut rev: u32 = 0;
+            assert_ne!(GetSecurityDescriptorControl(sd, &mut control, &mut rev), 0);
+            let ace_count = u32::from((*dacl).AceCount);
+            let mut sids = Vec::new();
+            for i in 0..ace_count {
+                let mut ace: *mut core::ffi::c_void = std::ptr::null_mut();
+                assert_ne!(GetAce(dacl, i, &mut ace), 0);
+                // 只会出现 ACCESS_ALLOWED / DENIED 这类，SidStart 偏移相同。
+                let sid = std::ptr::addr_of_mut!((*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart);
+                let len = GetLengthSid(sid.cast()) as usize;
+                sids.push(std::slice::from_raw_parts(sid.cast::<u8>(), len).to_vec());
+            }
+            LocalFree(sd.cast());
+            DaclFacts {
+                protected: control & SE_DACL_PROTECTED != 0,
+                ace_count,
+                sids,
+            }
+        }
     }
 
     /// 同上：fd 级别截断在 Windows 上没接，必须说 `Unsupported`。

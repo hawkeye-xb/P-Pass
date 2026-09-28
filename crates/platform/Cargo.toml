@@ -27,6 +27,10 @@ windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_System_Power",
   "Win32_Security_Cryptography",
+  # SEC-07 (#289): OpenProcessToken/GetTokenInformation 取当前用户 SID，
+  # SetEntriesInAclW + SetNamedSecurityInfoW 重写身份密钥的 DACL。
+  "Win32_Security",
+  "Win32_Security_Authorization",
   # DAE-05: GetDiskFreeSpaceExW（卷容量水位）。
   "Win32_Storage_FileSystem",
   # DESK-22 (#171): ShellExecuteExW + runas 动词拉 UAC（提权改电源设置）。
