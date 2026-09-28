@@ -240,9 +240,18 @@ impl QueryEngine {
             return Ok(bytes);
         }
 
-        // Miss. DESK-34 (#428): consult the gate before spawning anything —
-        // a recent failure answers at once, a running generation is joined
-        // instead of duplicated.
+        // Miss: the asset must exist.
+        let Some(asset) = self.db.get_asset(&hash).await? else {
+            self.record_first_byte(started, "thumb");
+            return Ok(media_codec::placeholder_jpeg(size as u32));
+        };
+
+        // DESK-34 (#428): consult the gate before spawning anything — a
+        // recent failure answers at once, a running generation is joined
+        // instead of duplicated. No `.await` may sit between reserving a
+        // slot (`Plan::Spawn`) and `spawn_generation`: a request dropped
+        // there (connection closed) would leave the slot InFlight with no
+        // owner, wedging the hash on the placeholder until restart.
         let (gen_started, mut done) = match self.gate.plan(&hash, self.budget, self.retry_after) {
             Plan::Placeholder => {
                 self.record_first_byte(started, "thumb");
@@ -254,19 +263,6 @@ impl QueryEngine {
                 tx,
                 done,
             } => {
-                // The asset must exist; otherwise release the slot unused.
-                let asset = match self.db.get_asset(&hash).await {
-                    Ok(Some(asset)) => asset,
-                    other => {
-                        self.gate.finish(&hash, false, self.retry_after);
-                        let _ = tx.send(true);
-                        self.record_first_byte(started, "thumb");
-                        return match other {
-                            Err(e) => Err(e.into()),
-                            Ok(_) => Ok(media_codec::placeholder_jpeg(size as u32)),
-                        };
-                    }
-                };
                 self.spawn_generation(hash, self.library_root.join(&asset.rel_path), tx);
                 (gen_started, done)
             }
@@ -710,6 +706,61 @@ mod tests {
             "{N} concurrent thumb.get for one hash must run the generator once"
         );
         assert_eq!(thumb_state(&f, &VIDEO_A).await, 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_request_dropped_mid_flight_never_wedges_the_hash() {
+        // A connection closing mid-request drops the `thumb()` future at
+        // whatever `.await` it sits on. If that happened after the gate
+        // slot was reserved but before the owner task existed, the slot
+        // would stay InFlight forever and the hash would answer the
+        // placeholder until restart, with no generation ever run.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let c = Arc::clone(&calls);
+        let generator: ThumbGen = Arc::new(move |hash: &[u8; 32], _src: &Path, root: &Path| {
+            c.fetch_add(1, Ordering::SeqCst);
+            let paths = media_codec::thumb_paths(root, hash);
+            std::fs::create_dir_all(paths.t256.parent().unwrap()).unwrap();
+            std::fs::write(&paths.t256, b"REAL-256").unwrap();
+            media_codec::ThumbResult {
+                paths,
+                outcome: media_codec::ThumbOutcome::Generated,
+            }
+        });
+        let f = fixture(
+            generator,
+            Duration::from_millis(200),
+            Duration::from_secs(3600),
+            &[VIDEO_A],
+        )
+        .await;
+        // Poll by hand and drop the future the moment the gate holds a slot
+        // for the hash — the narrowest point a real disconnect could hit.
+        {
+            let req = get(&VIDEO_A);
+            let mut fut = std::pin::pin!(f.engine.thumb(&req));
+            let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if std::future::Future::poll(fut.as_mut(), &mut cx).is_ready() {
+                    panic!("request finished before the gate was observed; test inconclusive");
+                }
+                if f.engine.gate.slots.lock().unwrap().contains_key(&VIDEO_A) {
+                    break; // drop `fut` here
+                }
+                assert!(Instant::now() < deadline, "gate slot never appeared");
+                tokio::task::yield_now().await;
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await; // past the budget
+        let bytes = f.engine.thumb(&get(&VIDEO_A)).await.unwrap();
+        assert!(
+            bytes == b"REAL-256",
+            "the hash must still get its real thumbnail after a dropped request \
+             (got {} bytes, generator calls = {})",
+            bytes.len(),
+            calls.load(Ordering::SeqCst)
+        );
     }
 
     /// `tracing` sink for the log contract.
