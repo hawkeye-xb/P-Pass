@@ -32,7 +32,7 @@ data class MediaDetails(
     val fileName: String,
     val mimeType: String,
     val sizeBytes: Long,
-    /** DATE_TAKEN 优先，缺失时退到 DATE_ADDED（见 [captureAtMsOrDateAdded]）。 */
+    /** DATE_TAKEN → DATE_MODIFIED → DATE_ADDED 依次回退（见 [captureAtMsOf]）。 */
     val captureAtMs: Long,
     /** MediaStore `_data`（真实路径，引用导入用）；API 29 或查不到时为 null，导入直接走复制（#413 契约 §4）。 */
     val dataPath: String? = null,
@@ -164,15 +164,7 @@ class ContentResolverMediaSnapshotSource(
     }
 
     override fun lookup(mediaId: Long): MediaDetails? {
-        val columns = (
-            projection.toList() + listOf(
-                MediaStore.MediaColumns.DISPLAY_NAME,
-                MediaStore.MediaColumns.MIME_TYPE,
-                MediaStore.MediaColumns.DATE_TAKEN,
-                MediaStore.MediaColumns.DATE_ADDED,
-                @Suppress("DEPRECATION") MediaStore.MediaColumns.DATA,
-            )
-            ).distinct().toTypedArray()
+        val columns = lookupColumns(projection.toList())
         val cursor = resolver.query(
             external,
             columns,
@@ -189,10 +181,7 @@ class ContentResolverMediaSnapshotSource(
                 fileName = rows.getString(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)).orEmpty(),
                 mimeType = rows.getString(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)) ?: "application/octet-stream",
                 sizeBytes = rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)),
-                captureAtMs = captureAtMsOrDateAdded(
-                    rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_TAKEN)),
-                    rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)),
-                ),
+                captureAtMs = captureAtMsOf(rows),
                 // API 29 的分区存储下 `_data` 不可直读；拿不到就是 null，导入走复制。
                 dataPath = if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
                     null
@@ -238,13 +227,45 @@ class ContentResolverMediaSnapshotSource(
     }
 }
 
+/** 算 captureAt 要读的三列。[lookupColumns] 必须带上它们，否则 [captureAtMsOf] 取列直接抛错（MOB-99）。 */
+internal val CAPTURE_AT_COLUMNS = listOf(
+    MediaStore.MediaColumns.DATE_TAKEN,
+    MediaStore.MediaColumns.DATE_MODIFIED,
+    MediaStore.MediaColumns.DATE_ADDED,
+)
+
 /**
- * MediaStore `DATE_TAKEN` 优先（毫秒，多数相机 App 的真实拍摄时间）；
- * 为 0（列缺失/未知）时退到 `DATE_ADDED`（秒，第三方 App —— 实测飞书 —— 保存
- * 图片时唯一还留着的时间信号）。两者都拿不到才是真的 0，交给 Desktop 端的
- * EXIF/mtime 兜底链继续处理（DESK-12）。
+ * [ContentResolverMediaSnapshotSource.lookup] 的投影：[snapshotColumns]（快照本身要的列）加上传输要的列。
+ * `DATE_MODIFIED` 虽然快照也要（算 sourceVersion），这里仍经 [CAPTURE_AT_COLUMNS] 显式带上，不靠巧合。
  */
-internal fun captureAtMsOrDateAdded(dateTakenMs: Long, dateAddedSec: Long): Long {
+internal fun lookupColumns(snapshotColumns: List<String>): Array<String> = (
+    snapshotColumns + listOf(
+        MediaStore.MediaColumns.DISPLAY_NAME,
+        MediaStore.MediaColumns.MIME_TYPE,
+        @Suppress("DEPRECATION") MediaStore.MediaColumns.DATA,
+    ) + CAPTURE_AT_COLUMNS
+    ).distinct().toTypedArray()
+
+/** 从 [lookupColumns] 查出来的当前行读 captureAt；缺列抛 [IllegalArgumentException]，不静默当 0。 */
+internal fun captureAtMsOf(rows: android.database.Cursor): Long = captureAtMsOf(
+    dateTakenMs = rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_TAKEN)),
+    dateModifiedSec = rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_MODIFIED)),
+    dateAddedSec = rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)),
+)
+
+/**
+ * 回退链 `DATE_TAKEN → DATE_MODIFIED → DATE_ADDED`：
+ * - `DATE_TAKEN`（毫秒）：多数相机 App 写的真实拍摄时间，优先。
+ * - `DATE_MODIFIED`（秒）：文件 mtime。第三方 App（实测微信、飞书）存的图没有 DATE_TAKEN；再被移动/
+ *   拷贝进相册时 mtime 保留原文件的时间（MOB-99 鸿蒙真机实测与文件名里的时间戳逐秒吻合）。
+ * - `DATE_ADDED`（秒）：入 MediaStore 的时刻，对移进来的老照片就是移动那一刻，只作最后一级。
+ *
+ * 取舍：原地编辑过的图 mtime 是编辑时间，可能比 DATE_ADDED 还晚、离拍摄更远；但移动/拷入场景下
+ * DATE_ADDED 必然是移动时刻，而这正是没有 DATE_TAKEN 的图最常见的来路，所以 DATE_MODIFIED 排在前面。
+ * 三者都拿不到才是真的 0，交给 Desktop 端的 EXIF/mtime 兜底链继续处理（DESK-12）。
+ */
+internal fun captureAtMsOf(dateTakenMs: Long, dateModifiedSec: Long, dateAddedSec: Long): Long {
     if (dateTakenMs > 0) return dateTakenMs
+    if (dateModifiedSec > 0) return dateModifiedSec * 1000
     return if (dateAddedSec > 0) dateAddedSec * 1000 else 0L
 }
