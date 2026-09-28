@@ -1,6 +1,7 @@
 ---
 import { RELEASES_URL, GITHUB_URL } from '../consts';
 import { t, type Lang } from '../i18n/ui';
+import PromoVideo from './PromoVideo.astro';
 
 interface Props {
   lang: Lang;
@@ -29,6 +30,9 @@ const pillars = [
   </a>
   <p class="testing">{t(lang, 'testing.note')}</p>
 </section>
+
+{/* zh only for now: the video's captions are burned-in Chinese. */}
+{lang === 'zh' && <PromoVideo lang={lang} />}
 
 <section class="pillars">
   {
