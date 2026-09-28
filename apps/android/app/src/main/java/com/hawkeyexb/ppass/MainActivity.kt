@@ -746,6 +746,8 @@ fun PPassApp() {
                         acknowledgedMissingSourceCount = holder.acknowledgedMissingSourceCount.value,
                         // #418：正在传的这一张的字节进度（与前台服务通知同一个函数）。
                         transferProgress = holder.transferProgress.value,
+                        // #250 / #251：当前这一张——文件名（单行、中间省略）、「12.3 / 189 MB」、字节停滞时的「在等」。
+                        transferRow = holder.transferRow.value,
                         // #418：「取消剩余 N 张」——设置卡一行 + 写明 N 的确认框。
                         cancelRemainingCount = holder.cancelRemainingCount.value,
                         onRequestCancelRemaining = { holder.requestCancelRemaining() },

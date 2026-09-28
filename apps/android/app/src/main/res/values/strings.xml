@@ -60,6 +60,9 @@
     <string name="state_hashing">Reading %1$d/%2$d</string>
     <string name="state_sending">Sending %1$d/%2$d home</string>
     <string name="state_sending_file">Backing up %1$s (%2$d / %3$d)</string>
+    <!-- #250 / #251：备份中「当前这一张」的第二行——字节进度 + 第 x / y 张；字节 15 秒没动时换成「在等」。 -->
+    <string name="state_sending_detail">%1$s · %2$d of %3$d</string>
+    <string name="state_sending_slow">No new data for %1$d s, waiting</string>
     <string name="state_safe">All photos are backed up</string>
     <!-- T-080 defect(a): with K > 0 the status line may only speak of the debt -->
     <plurals name="state_pending">

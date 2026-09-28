@@ -245,6 +245,31 @@ class ARCH13DeliveryPortTest {
         assertTrue("progress reported", h.progress.size > 100 && h.progress == h.progress.sorted())
     }
 
+    // #250：本地传输完成（Completed 不带字节数）→ 端口报一次满，**在回执到之前**。否则最后一次采样停在 99%，
+    // 等回执的那段时间首页不到头，满 15 秒还会被判成「没有新数据」（UI14TransferRowTest 的 FINISHING 依赖这一下）。
+    // 反证：删掉 waitForCompletion 里「local is Completed → onProgress(fetch.sizeBytes)」那一段 → 最后一次进度是 700000，红。
+    @Test
+    fun `a locally completed transfer reports full bytes before the receipt arrives`() = runTest {
+        val h = Harness(this)
+        h.status = {
+            if (testScheduler.currentTime < 5_000) {
+                """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":700000,"byte_idle_for_ms":0}"""
+            } else {
+                """{"state":"completed","hash":"$hash"}"""
+            }
+        }
+        h.statusReply = { now -> if (now >= 30_000) FlowStatusReply(state = "completed", receipt = h.receipt()) else FlowStatusReply(state = "active") }
+        val job = h.start()
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertFalse("回执还没到", job.isCompleted)
+        assertEquals(listOf(700_000L, 1_000_000L), h.progress)
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertTrue(job.await() is DeliveryOutcome.Confirmed)
+        assertEquals("只报一次满", listOf(700_000L, 1_000_000L), h.progress)
+    }
+
     // C-11 / #410：15 秒没人来连 → 去问桌面；桌面回 active 就继续等，不判失败。
     // 反证：把 status「active」当失败（flowStatusPollOutcome 的 else → error）→ 结果变成失败，红。
     @Test

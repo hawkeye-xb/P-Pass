@@ -533,6 +533,12 @@ internal class NativeFlowDeliveryPort(
                     onProgress(sent)
                 }
             }
+            // #250：本地传输已完成（不是中止）→ 字节全部发出了，报一次满。Completed 不带字节数，最后一次 500ms 采样
+            // 通常差一点才到总数；不补这一下，等回执的那段时间首页停在 99%，满 15 秒还会被判成「没有新数据」。
+            if (local is TransferStatus.Completed && fetch.sizeBytes > 0 && lastBytes < fetch.sizeBytes) {
+                lastBytes = fetch.sizeBytes
+                onProgress(fetch.sizeBytes)
+            }
             val elapsed = clock() - attemptStartedAt
             when (val step = flowWaitStep(pushed, local, idleStallThresholdMs, byteStallThresholdMs, elapsed)) {
                 is FlowWaitStep.Resolved -> when (val outcome = step.outcome) {
