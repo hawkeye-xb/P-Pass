@@ -338,13 +338,51 @@ impl PlatformAdapter for WindowsAdapter {
         Ok(crate::Applied::Done)
     }
 
-    /// QA-09 迁移（#211）：**没实现**，与迁移前一致。
+    /// DEVLOG-04 (#290)：把本进程 stderr 背后的**磁盘文件**截到 0 字节。
     ///
-    /// fd 级别的截断在 Windows 上要走 `SetEndOfFile` 之类的 Win32 调用。
-    /// 计数器照样清零（不会每行都重复触发），但底层文件不会真的变小。
-    /// 日志洪水的主防线是「折叠重复行」，那道所有平台都有。
+    /// 与 unix 侧对 fd 2 `set_len(0)` + `seek(0)` 同义：先把文件指针移回开头
+    /// （`SetFilePointerEx`），再在那里截断（`SetEndOfFile`）。
+    ///
+    /// 三态口径：
+    /// - **`Done`**：stderr 是磁盘文件，而且真的截断了。
+    /// - **`NotApplicable`**：stderr 不是磁盘文件——控制台、管道、`NUL`，
+    ///   或者根本没有 stderr（release 是 `windows_subsystem = "windows"`，
+    ///   没人重定向时句柄为空）。这些都没有「磁盘上越长越大的文件」可截，
+    ///   机制上就不需要，不是缺口。
+    /// - **`Unsupported`**：stderr 是磁盘文件但截不动。典型情形是托管方以
+    ///   **只追加**方式打开的文件（`FILE_APPEND_DATA` 没有 `FILE_WRITE_DATA`，
+    ///   `SetEndOfFile` 会被拒绝）。那种情况下**文件确实没变小**，绝不能报
+    ///   `Done`。`Applied` 眼下没有「试了但失败」这一态，那是 QA-15（#291）
+    ///   要收口的事；这里先保证「没做成就不说做成」。
+    ///
+    /// ⚠️ 句柄是**借来的**：只拿 raw handle 调 Win32，不包进任何会 Drop 的
+    /// owned 类型——关掉它等于把 stderr 从整个进程手里拿走（unix 侧
+    /// `ManuallyDrop` 那条教训）。
     fn truncate_own_stderr(&self) -> crate::Applied {
-        crate::Applied::Unsupported
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileType, SetEndOfFile, SetFilePointerEx, FILE_BEGIN, FILE_TYPE_DISK,
+        };
+
+        let handle = std::io::stderr().as_raw_handle() as HANDLE;
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            return crate::Applied::NotApplicable;
+        }
+        // SAFETY: handle 是本进程的标准错误句柄，进程存活期间有效；这里只查询
+        // 类型，不接管所有权。
+        if unsafe { GetFileType(handle) } != FILE_TYPE_DISK {
+            return crate::Applied::NotApplicable;
+        }
+        // SAFETY: 同上；新位置出参传 null 表示不关心。
+        if unsafe { SetFilePointerEx(handle, 0, std::ptr::null_mut(), FILE_BEGIN) } == 0 {
+            return crate::Applied::Unsupported;
+        }
+        // SAFETY: 同上；在当前位置（刚移到 0）截断。
+        if unsafe { SetEndOfFile(handle) } == 0 {
+            return crate::Applied::Unsupported;
+        }
+        crate::Applied::Done
     }
 
     /// QA-09 迁移（#211）：**机制上不需要**，这不是缺口。
@@ -804,6 +842,7 @@ mod dae05_volume_stats_tests {
 #[cfg(test)]
 mod qa09_migrated_capability_tests {
     use super::*;
+    use std::io::Write as _;
 
     /// SEC-07 (#289) 契约：收紧之后 DACL **只剩当前用户一条 ACE**，且不再
     /// 继承父目录（`SE_DACL_PROTECTED`）。
@@ -908,13 +947,162 @@ mod qa09_migrated_capability_tests {
         }
     }
 
-    /// 同上：fd 级别截断在 Windows 上没接，必须说 `Unsupported`。
+    // ── DEVLOG-04 (#290)：truncate_own_stderr ───────────────────────────
+    //
+    // 截的是**本进程自己的** stderr，所以测试必须在一个 stderr 被重定向过的
+    // 子进程里跑：父进程把测试二进制自己再拉起一次（只跑 `child` 这一条），
+    // 用环境变量告诉它该做什么，结果从 stdout 带回来。
+
+    const DEVLOG04_CHILD_ENV: &str = "PPF_DEVLOG04_CHILD";
+
+    /// 子进程入口。父进程没设环境变量时它什么都不做（直接跑到也是绿的）。
     #[test]
-    fn truncate_own_stderr_admits_it_is_unsupported() {
+    fn devlog04_child() {
+        if std::env::var_os(DEVLOG04_CHILD_ENV).is_none() {
+            return;
+        }
+        // 先往 stderr 灌一批内容，模拟日志洪水。
+        let mut err = std::io::stderr();
+        for i in 0..2000 {
+            let _ = writeln!(
+                err,
+                "flood line {i:05} ------------------------------------------"
+            );
+        }
+        let _ = err.flush();
+        if std::env::var_os("PPF_DEVLOG04_SKIP").is_some() {
+            return;
+        }
+        let verdict = WindowsAdapter::new().truncate_own_stderr();
+        // 截断之后、再写之前的文件大小（验收标准 1 要的「必须是 0」）。
+        if let Some(path) = std::env::var_os("PPF_DEVLOG04_PATH") {
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+            println!("DEVLOG04_SIZE_AFTER={size}");
+        }
+        // 截断之后还能接着写，而且从 0 开始写（不能留出一段空洞）。
+        let _ = write!(err, "after");
+        let _ = err.flush();
+        println!("DEVLOG04_VERDICT={verdict:?}");
+    }
+
+    /// 以给定的 stderr 拉起子进程，返回子进程报告的 `Applied`。
+    fn devlog04_run_child(stderr: std::process::Stdio) -> String {
+        devlog04_run_child_at(stderr, None).0
+    }
+
+    /// 同上；给了 `path` 时子进程还会报告截断那一刻的文件大小。
+    fn devlog04_run_child_at(
+        stderr: std::process::Stdio,
+        path: Option<&Path>,
+    ) -> (String, Option<String>) {
+        let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+        if let Some(p) = path {
+            cmd.env("PPF_DEVLOG04_PATH", p);
+        }
+        let out = cmd
+            .args([
+                "--exact",
+                "windows::qa09_migrated_capability_tests::devlog04_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(DEVLOG04_CHILD_ENV, "1")
+            .stdin(std::process::Stdio::null())
+            .stderr(stderr)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        assert!(out.status.success(), "子进程失败: {stdout}");
+        // libtest 可能把它们和 `test ... ` 打在同一行，按子串找。
+        let field = |key: &str| {
+            stdout
+                .lines()
+                .find_map(|l| l.split_once(key).map(|(_, v)| v.trim().to_string()))
+        };
+        let verdict =
+            field("DEVLOG04_VERDICT=").unwrap_or_else(|| panic!("子进程没报结果: {stdout}"));
+        (verdict, field("DEVLOG04_SIZE_AFTER="))
+    }
+
+    /// 验收标准 1 + 2：stderr 重定向到文件 → 灌入内容 → 截断 → 文件只剩截断
+    /// 之后写的那几个字节。截断前的大小也记下来：没灌进去的话本测试等于
+    /// 什么都没验。
+    #[test]
+    fn devlog04_truncates_a_redirected_stderr_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("daemon.err");
+        let file = std::fs::File::create(&log).unwrap();
+        let (verdict, size_after) = devlog04_run_child_at(file.into(), Some(&log));
         assert_eq!(
-            WindowsAdapter::new().truncate_own_stderr(),
-            crate::Applied::Unsupported
+            size_after.as_deref(),
+            Some("0"),
+            "截断那一刻文件必须是 0 字节"
         );
+        let bytes = std::fs::read(&log).unwrap();
+        println!(
+            "DEVLOG-04 verdict={verdict} 截断后文件={} 字节",
+            bytes.len()
+        );
+        assert_eq!(verdict, "Done");
+        assert_eq!(
+            bytes, b"after",
+            "截断后应当只剩之后写的 5 个字节（从 0 开始写、无空洞）"
+        );
+    }
+
+    /// 反证对照：同样灌一批内容但**不截断**时文件有多大——证明上面那条
+    /// 测试的「变小」是截断造成的，不是本来就没写进去。
+    #[test]
+    fn devlog04_flood_really_reaches_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("daemon.err");
+        let file = std::fs::File::create(&log).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "windows::qa09_migrated_capability_tests::devlog04_child",
+                "--nocapture",
+            ])
+            .env(DEVLOG04_CHILD_ENV, "1")
+            .env("PPF_DEVLOG04_SKIP", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(file)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let size = std::fs::metadata(&log).unwrap().len();
+        println!("DEVLOG-04 不截断时文件={size} 字节");
+        // 有截断时是 5 字节；这里至少是灌进去的 2000 行。
+        assert!(size > 100_000, "洪水没写进文件，对照无效: {size}");
+    }
+
+    /// 验收标准 3：stderr 不是文件（这里用 `NUL` 字符设备 / 管道代表）时
+    /// 不 panic，也不谎报 `Done`。
+    #[test]
+    fn devlog04_non_file_stderr_is_not_applicable() {
+        assert_eq!(
+            devlog04_run_child(std::process::Stdio::null()),
+            "NotApplicable"
+        );
+        assert_eq!(
+            devlog04_run_child(std::process::Stdio::piped()),
+            "NotApplicable"
+        );
+    }
+
+    /// 只追加打开的文件截不动：必须如实说没做成（`Unsupported`），文件也
+    /// 确实没变小。
+    #[test]
+    fn devlog04_append_only_stderr_is_not_reported_as_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("daemon.err");
+        std::fs::write(&log, b"").unwrap();
+        let file = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        let verdict = devlog04_run_child(file.into());
+        let size = std::fs::metadata(&log).unwrap().len();
+        assert_eq!(verdict, "Unsupported", "只追加的文件截不动，不许报 Done");
+        assert!(size > 100_000, "文件应当没被截断: {size}");
     }
 
     /// 这条相反：命名管道**机制上就不落文件**，没有残留要清，所以是
