@@ -705,26 +705,47 @@ async fn main() -> anyhow::Result<()> {
 /// on every restart (live finding — an unattended service cannot answer
 /// dialogs). Keychain migration lands with real release signing (T-071).
 fn load_or_mint_identity(data_dir: &std::path::Path) -> anyhow::Result<[u8; 32]> {
+    use platform::PlatformAdapter as _;
+    load_or_mint_identity_with(data_dir, |p| platform::adapter().restrict_to_owner(p))
+}
+
+/// SEC-10 (#445): `restrict` is injected so a test can see that BOTH
+/// branches tighten the file. Only minting used to call it, so a key
+/// minted before SEC-07 (or copied in by the DESK-24 data-dir move)
+/// kept its inherited ACL forever.
+fn load_or_mint_identity_with(
+    data_dir: &std::path::Path,
+    restrict: impl Fn(&std::path::Path) -> platform::Result<platform::Applied>,
+) -> anyhow::Result<[u8; 32]> {
     let key_file = data_dir.join(".ppf/identity.key");
     if let Ok(bytes) = std::fs::read(&key_file) {
         if bytes.len() == 32 {
             let mut k = [0u8; 32];
             k.copy_from_slice(&bytes);
+            // Idempotent: tightening an already-tight file is a no-op.
+            tighten_identity_file(&key_file, &restrict);
             return Ok(k);
         }
     }
     let k = rand_token()?;
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
     std::fs::write(&key_file, k)?;
-    // QA-09 迁移（#211）：原先是一处 unix 专属的 0o600。
-    // 忽略返回值与迁移前一致（那时也是 `let _ =`）；Windows 上适配器回的
-    // 是 `Unsupported`，也就是「本平台没收紧」——契约里写明了，不是这里
-    // 假装做过了。
-    use platform::PlatformAdapter as _;
-    let _ = platform::adapter().restrict_to_owner(&key_file);
+    tighten_identity_file(&key_file, &restrict);
     // DEVLOG-03：只有路径、不含密钥内容，进日志是安全的。
     tracing::info!("身份密钥已铸造: {}", key_file.display());
     Ok(k)
+}
+
+/// QA-09 迁移（#211）：原先是一处 unix 专属的 0o600。失败不阻止启动（与
+/// 迁移前的 `let _ =` 一致），但 `Err` 记一条 WARN——SEC-10：收紧失败不能
+/// 又是一件看不见的事。`Unsupported` 是契约写明的「本平台没收紧」，不算失败。
+fn tighten_identity_file(
+    key_file: &std::path::Path,
+    restrict: &impl Fn(&std::path::Path) -> platform::Result<platform::Applied>,
+) {
+    if let Err(e) = restrict(key_file) {
+        tracing::warn!("身份密钥权限收紧失败: {}: {e}", key_file.display());
+    }
 }
 
 /// 32 random bytes from the OS (via std's RandomState hashing entropy is
@@ -748,4 +769,68 @@ fn unix_ms_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::path::{Path, PathBuf};
+
+    fn recording(
+        calls: &RefCell<Vec<PathBuf>>,
+    ) -> impl Fn(&Path) -> platform::Result<platform::Applied> + '_ {
+        move |p| {
+            calls.borrow_mut().push(p.to_path_buf());
+            Ok(platform::Applied::Done)
+        }
+    }
+
+    // SEC-10 (#445) RED: a key that already exists (minted before SEC-07,
+    // or carried over by the DESK-24 move) must be tightened on load too,
+    // and loading must not re-mint it.
+    #[test]
+    fn sec10_existing_identity_is_tightened_and_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_file = dir.path().join(".ppf/identity.key");
+        std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
+        std::fs::write(&key_file, [7u8; 32]).unwrap();
+
+        let calls = RefCell::new(Vec::new());
+        let k = load_or_mint_identity_with(dir.path(), recording(&calls)).unwrap();
+
+        assert_eq!(
+            k, [7u8; 32],
+            "an existing key must be loaded, not re-minted"
+        );
+        assert_eq!(*calls.borrow(), vec![key_file]);
+    }
+
+    #[test]
+    fn sec10_minted_identity_is_tightened() {
+        let dir = tempfile::tempdir().unwrap();
+        let calls = RefCell::new(Vec::new());
+        let k = load_or_mint_identity_with(dir.path(), recording(&calls)).unwrap();
+
+        let key_file = dir.path().join(".ppf/identity.key");
+        assert_eq!(std::fs::read(&key_file).unwrap(), k);
+        assert_eq!(*calls.borrow(), vec![key_file]);
+    }
+
+    #[test]
+    fn sec10_tighten_failure_does_not_block_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_file = dir.path().join(".ppf/identity.key");
+        std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
+        std::fs::write(&key_file, [9u8; 32]).unwrap();
+
+        let k = load_or_mint_identity_with(dir.path(), |_| {
+            Err(platform::PlatformError::Failed {
+                action: "restrict_to_owner",
+                detail: "denied".into(),
+            })
+        })
+        .unwrap();
+        assert_eq!(k, [9u8; 32]);
+    }
 }
