@@ -77,6 +77,9 @@ enum class TriggerReason(val userPresent: Boolean = false, val reconcile: Boolea
      * MediaWatchJob 不注册，只有这条路能兑现「打开 P-Pass 时照常备份」。
      */
     FOREGROUND_MEDIA_CHANGE(userPresent = true),
+
+    /** #439：等待中（桌面不可达）时，前台心跳又连上了桌面。只由前台心跳发出，人在场。 */
+    DESKTOP_REACHABLE(userPresent = true),
 }
 
 /**

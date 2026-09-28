@@ -28,6 +28,8 @@ class ForegroundHeartbeat(
     // natural, already-scheduled connectivity signal (30s while foreground);
     // wiring its outcome here is the fix, not a new mechanism.
     private val sentinel: com.hawkeyexb.ppass.backup.SentinelStore? = null,
+    // #439: 桌面可达（hello 成功）时通知备份引擎——引擎只在「等待中（桌面不可达）」时才会据此叫醒循环。
+    private val onReachable: (() -> Unit)? = null,
 ) {
     private var job: Job? = null
     private var active = false
@@ -64,6 +66,7 @@ class ForegroundHeartbeat(
         applyHeartbeatOutcome(
             sentinel,
             runCatching { client.call(peer, Methods.HELLO, buildJsonObject {}) },
+            onReachable,
         )
     }
 
@@ -80,8 +83,12 @@ class ForegroundHeartbeat(
 internal fun applyHeartbeatOutcome(
     sentinel: com.hawkeyexb.ppass.backup.SentinelStore?,
     outcome: Result<*>,
+    onReachable: (() -> Unit)? = null,
 ) {
     outcome
-        .onSuccess { sentinel?.recordReachable() }
+        .onSuccess {
+            sentinel?.recordReachable()
+            onReachable?.invoke()
+        }
         .onFailure { sentinel?.recordUnreachable() }
 }
