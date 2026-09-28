@@ -525,6 +525,15 @@ fn self_heal_allowed(data_dir: &std::path::Path) -> bool {
     data_dir.join("config.toml").exists() && !is_user_stopped(data_dir)
 }
 
+/// #456 后续：更新流程装完（或装失败）之后要不要把 daemon 拉回来。
+/// 用户主动停了服务 = 一直停着，直到用户自己点「启动后台服务」；更新不算
+/// 用户的启动意图。其余情况（包括向导还没走完的机器）行为和原来一样：
+/// pause 杀掉了什么就拉回什么。不复用 `self_heal_allowed`——它多一条
+/// config.toml 判断，会改掉「没停过」时的更新行为。
+fn update_resume_allowed(data_dir: &std::path::Path) -> bool {
+    !is_user_stopped(data_dir)
+}
+
 /// DESK-36 (#456)：前端 refresh 发现 daemon 不可达时调这个，而不是直接调
 /// `resume_daemon_after_update`。判据在**调用这一刻**读磁盘上的标记——
 /// 前端缓存的状态可能是旧的（比如刚在托盘里点了停止），只有这里读才没有竞态。
@@ -534,7 +543,7 @@ fn self_heal_daemon() -> Result<bool, String> {
     if !self_heal_allowed(&platform::adapter().data_dir()) {
         return Ok(false);
     }
-    resume_daemon_after_update().map(|()| true)
+    spawn_bundled_daemon_oneshot().map(|()| true)
 }
 
 /// Stop the resident service the way a user means it: unregister the
@@ -607,8 +616,24 @@ fn pause_daemon_for_update() -> Result<(), String> {
 /// frontend degrades to "restart the app" guidance if this fails,
 /// rather than silently leaving the daemon down after an update the
 /// user believes succeeded.
+///
+/// #456 后续：用户主动停了服务（盘上有 `desktop-user-stopped` 标记）就不拉，
+/// 标记原样保留，界面仍给「启动后台服务」。判据在 Rust 这一侧、调用这一刻
+/// 读盘（和 `self_heal_daemon` 同一来源），不信前端缓存——托盘停止之后
+/// 前端的 wizard 状态可能还是旧的。之后用户手动启动走 `start_daemon`，它每次
+/// 都从 `current_exe()` 旁边现取 sidecar 并探活、重写 autostart，用的就是
+/// 更新后的新文件。返回 true = 拉起了；false = 按判据跳过（不是错误）。
 #[tauri::command]
-fn resume_daemon_after_update() -> Result<(), String> {
+fn resume_daemon_after_update() -> Result<bool, String> {
+    if !update_resume_allowed(&platform::adapter().data_dir()) {
+        return Ok(false);
+    }
+    spawn_bundled_daemon_oneshot().map(|()| true)
+}
+
+/// 一次性 spawn 同目录下的内置 daemon（不注册 autostart）。更新后恢复和
+/// 崩溃自愈共用；各自的判据在调用方。
+fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sidecar = exe
         .parent()
@@ -2132,5 +2157,65 @@ mod tests {
         let src = include_str!("lib.rs");
         let product = src.split("#[cfg(test)]").next().unwrap_or(src);
         assert!(product.contains("\"user_stopped\": is_user_stopped(&dir)"));
+    }
+
+    // ── #456 后续：更新流程也尊重「用户主动停止」 ─────────────────────────
+
+    #[test]
+    fn update_brings_back_a_daemon_the_user_did_not_stop() {
+        // 没停过：pause 杀了什么，装完就拉回什么（W1 原语义不变）。
+        let dir = configured_data_dir();
+        assert!(update_resume_allowed(dir.path()));
+    }
+
+    #[test]
+    fn update_never_revives_a_daemon_the_user_stopped() {
+        // 规则：用户点了停止 → 一直停着，只有用户点「启动后台服务」才恢复。
+        let dir = configured_data_dir();
+        set_user_stopped(dir.path(), true).unwrap();
+        assert!(
+            !update_resume_allowed(dir.path()),
+            "用户主动停止了服务，更新装完却仍然判定要拉起它（#456 后续）"
+        );
+        // 标记原样保留：更新之后界面仍是「启动后台服务」。
+        assert!(is_user_stopped(dir.path()));
+    }
+
+    #[test]
+    fn update_resume_does_not_require_a_finished_wizard() {
+        // 「没停过时行为不变」：原来更新后恢复不看 config.toml，这里也不许加。
+        let dir = tempfile::tempdir().unwrap();
+        assert!(update_resume_allowed(dir.path()));
+    }
+
+    #[test]
+    fn update_resume_command_checks_the_on_disk_marker_before_spawning() {
+        // resume_daemon_after_update 本体走真实 adapter / current_exe，测试里不能调；
+        // 钉接线：判据读的是 Rust 侧 data dir 上的标记，且在 spawn 之前；
+        // 自愈与更新共用同一个 spawn，但各走各的判据。
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let body = |name: &str| {
+            let start = product
+                .find(&format!("fn {name}("))
+                .unwrap_or_else(|| panic!("找不到 fn {name}"));
+            let rest = &product[start..];
+            rest[..rest.find("\n}\n").expect("函数结尾")].to_string()
+        };
+        let resume = body("resume_daemon_after_update");
+        let gate = resume
+            .find("if !update_resume_allowed(&platform::adapter().data_dir()) {")
+            .expect("resume_daemon_after_update 必须先读盘上的「用户主动停止」标记");
+        let spawn = resume
+            .find("spawn_bundled_daemon_oneshot()")
+            .expect("resume_daemon_after_update 走共用 spawn");
+        assert!(gate < spawn, "判据必须在 spawn 之前");
+        let heal = body("self_heal_daemon");
+        assert!(heal.contains("self_heal_allowed(&platform::adapter().data_dir())"));
+        assert!(heal.contains("spawn_bundled_daemon_oneshot()"));
+        assert!(
+            !heal.contains("resume_daemon_after_update()"),
+            "自愈不该绕进更新路径的判据"
+        );
     }
 }
