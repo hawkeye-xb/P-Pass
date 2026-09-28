@@ -59,7 +59,7 @@
   "ui.restart_service_failed": "Failed to restart the background service: {err}",
   "ui.logs_hint": "The diagnostics package strips private paths like usernames — safe to paste into a GitHub issue.",
   "ui.stop_service": "Stop background service",
-  "ui.stop_hint": "After stopping, the service won't auto-start and backups pause; reopening the app re-enables it.",
+  "ui.stop_hint": "After stopping, the service won't auto-start and backups pause, and it stays stopped after reopening or updating the app; click \"Start background service\" to re-enable it.",
   "ui.stop_confirm_title": "Stop background service",
   "ui.stop_confirm_body": "Stopping cancels auto-start and pauses all backups; family phones can't connect until you re-enable it. Stop anyway?",
   "ui.service_stopped": "Background service stopped; it won't auto-start on boot.",

@@ -323,7 +323,7 @@
       // DESK-36 (#456)：「是不是用户自己停的」只能由 Rust 在调用这一刻判——
       // self_heal_daemon 读盘上的停止标记，用户停的就不拉（托盘停止时这里的
       // wizard 缓存可能还是旧的）。更新流程的 resume_daemon_after_update
-      // 是另一条路径，不经过这里。
+      // 是另一条路径，不经过这里（它在 Rust 侧同样读这份标记）。
       const now = Date.now();
       if (wizard?.configured && now - lastSelfHealAttempt > SELF_HEAL_COOLDOWN_MS) {
         lastSelfHealAttempt = now;
@@ -976,8 +976,12 @@
       // mask a Windows gap. Daemon's single-instance claim protocol
       // makes a redundant spawn harmless if something already revived
       // it first.
+      // #456 后续：用户主动停了服务就不拉——Rust 在调用这一刻读盘上的
+      // 停止标记（和 self_heal_daemon 同一来源），返回 false = 按规则跳过，
+      // 服务保持停止，界面照旧给「启动后台服务」。
       try {
-        await invoke("resume_daemon_after_update");
+        const resumed = await invoke("resume_daemon_after_update");
+        if (resumed === false) console.info("[updater] 用户主动停止过服务，更新后保持停止");
       } catch (e) {
         console.warn("[updater] resume_daemon_after_update failed after a successful install:", e);
       }
@@ -985,6 +989,7 @@
     } catch (e) {
       // The daemon we paused above is still down — bring it back so a
       // failed update doesn't also leave backups silently stopped.
+      // （用户主动停过的不拉，判据同上，在 Rust 侧。）
       try {
         await invoke("resume_daemon_after_update");
       } catch (_) {}

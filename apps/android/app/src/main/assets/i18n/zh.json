@@ -59,7 +59,7 @@
   "ui.restart_service_failed": "重启后台服务失败：{err}",
   "ui.logs_hint": "诊断包会自动抹去用户名等隐私路径，可放心贴到 GitHub issue。",
   "ui.stop_service": "停止后台服务",
-  "ui.stop_hint": "停止后开机不再自动运行、备份暂停；重新打开本 App 可再次启用。",
+  "ui.stop_hint": "停止后开机不再自动运行、备份暂停，重开 App 或更新后也保持停止；点「启动后台服务」可再次启用。",
   "ui.stop_confirm_title": "停止后台服务",
   "ui.stop_confirm_body": "停止后会取消开机自启并暂停所有备份，家人手机将无法连接，直到你重新启用。确定停止？",
   "ui.service_stopped": "后台服务已停止，开机不再自动运行。",
