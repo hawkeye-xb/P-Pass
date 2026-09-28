@@ -396,6 +396,8 @@ class DaemonClient {
     /**
      * Download an asset's original bytes to [dest] over ppf/download/1.
      * Returns total bytes. [onProgress] gets (received, total).
+     * MOB-115: throws [AssetDownloadException] on a short/corrupt stream;
+     * [dest] only ever appears complete and BLAKE3-verified.
      */
     suspend fun downloadAsset(
         peer: PeerAddrParts,
@@ -427,26 +429,11 @@ class DaemonClient {
             val total = (resp.result as? kotlinx.serialization.json.JsonObject)
                 ?.get("bytes")?.let {
                     (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()
-                } ?: -1L
+                }?.takeIf { it >= 0 } ?: throw DownloadLengthUnknown(hash)
 
-            var received = 0L
-            dest.outputStream().use { out ->
-                while (received < total || total < 0) {
-                    val want = if (total > 0) {
-                        minOf(256L * 1024, total - received).toUInt()
-                    } else 256u * 1024u
-                    val chunk = try {
-                        recv.readExact(want)
-                    } catch (_: Throwable) {
-                        break // sender finished early
-                    }
-                    if (chunk.isEmpty()) break
-                    out.write(chunk)
-                    received += chunk.size
-                    onProgress(received, total)
-                }
-            }
-            received
+            // MOB-115: 断流/长度不足/内容不符都抛错，绝不返回截断文件；
+            // 先写 .part，校验通过才原子改名为 dest（见 VerifiedDownload.kt）。
+            receiveVerified(dest, total, hash, { n -> recv.readExact(n) }, onProgress)
         } finally {
             conn.close(0L, ByteArray(0))
         }
