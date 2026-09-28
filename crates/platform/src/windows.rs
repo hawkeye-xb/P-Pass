@@ -243,18 +243,13 @@ impl PlatformAdapter for WindowsAdapter {
         // independent, and it's literally what powercfg itself reads.
         // Path: HKLM\SYSTEM\CurrentControlSet\Control\Power\User\
         //   PowerSchemes\<ActiveScheme>\238c9fa8...(SUB_SLEEP)\
-        //   29f6c1db...(STANDBYIDLE), value ACSettingIndex (seconds, 0 = never).
-        read_standby_idle_seconds()
-            .map(|seconds| {
-                if seconds == 0 {
-                    PowerHint::NeverSleeps
-                } else {
-                    PowerHint::SleepsWhenIdle {
-                        minutes: seconds.div_ceil(60),
-                    }
-                }
-            })
-            .unwrap_or(PowerHint::Unknown)
+        //   29f6c1db...(STANDBYIDLE), values AC/DCSettingIndex (seconds, 0 = never).
+        // DESK-30 (#294)：AC 和 DC 都要看——只看 AC，笔记本拔掉电源后会睡却报
+        // 「永不睡眠」。
+        hint_from_standby(
+            read_standby_idle_seconds(STANDBY_AC),
+            read_standby_idle_seconds(STANDBY_DC),
+        )
     }
 
     /// DESK-22 (#171)：一键关闭「空闲自动睡眠」，让备份能在无人值守时跑完。
@@ -265,12 +260,11 @@ impl PlatformAdapter for WindowsAdapter {
     /// 走 `ShellExecuteExW` 的 `runas` 动词弹 UAC——与 macOS 侧那个管理员
     /// 授权弹窗对等。
     ///
-    /// ⚠️ **只设 AC，不设 DC**。理由是与本适配器的检测口径严格一致：
-    /// [`read_standby_idle_seconds`] 只读 `ACSettingIndex`。设了 DC 却不检测
-    /// 它，就会出现「改了但没法验证」的半截状态，而"没法验证"在本仓等于
-    /// "不许报成功"。AC / DC 口径不一致是**检测侧既有的**问题，另开卡处理。
-    /// （macOS 侧 `pmset -a` 设所有场景，是因为 `parse_pmset` 也检测所有场景，
-    /// 两边各自自洽。）
+    /// ⚠️ **只设 AC，不设 DC**，回读也只读 AC，所以本函数自身自洽。DESK-30
+    /// (#294) 之后 [`power_hint`](Self::power_hint) 已经同时看 AC / DC：在
+    /// DC ≠ 0 的笔记本上点完这里，向导会如实显示「用电池时仍会睡」。把这里
+    /// 也扩到 DC 是 DESK-41（#486）的事，这里没有做。
+    /// （macOS 侧 `pmset -a` 设所有场景，`parse_pmset` 也检测所有场景。）
     ///
     /// ⚠️ **不信退出码，动手后回读**。2026-09-21 在 Windows 11 26200 上实测
     /// （非管理员）：`powercfg /x standby-timeout-ac 0` 退出码是 **0**，而那个
@@ -278,9 +272,9 @@ impl PlatformAdapter for WindowsAdapter {
     /// 码当"已生效"就是本仓这一轮在修的那类缺陷（#268 那个 0 字节 daemon
     /// 注册完报 resident 是同一形状）。
     fn disable_auto_sleep(&self) -> Result<crate::Applied> {
-        let before = read_standby_idle_seconds();
+        let before = read_standby_idle_seconds(STANDBY_AC);
         elevated_powercfg("/x standby-timeout-ac 0")?;
-        verdict_from_readback(before, read_standby_idle_seconds())
+        verdict_from_readback(before, read_standby_idle_seconds(STANDBY_AC))
     }
 
     // ── QA-09 迁移（#211）桌面壳批次 ───────────────────────────────
@@ -492,10 +486,31 @@ fn spawn_windowless(exec: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Read the active power scheme's AC standby-idle timeout (seconds; 0 =
-/// never) straight from the registry — locale-independent, unlike parsing
-/// `powercfg /query`'s localized text output.
-fn read_standby_idle_seconds() -> Option<u32> {
+/// Registry value names of the plugged-in / on-battery standby timeout.
+const STANDBY_AC: &str = "ACSettingIndex";
+const STANDBY_DC: &str = "DCSettingIndex";
+
+/// DESK-30 (#294)：与 macOS 的 `parse_pmset` 同口径——取所有电源场景里最小
+/// 的正数；读到的全是 0 才是「永不睡眠」；一个都没读到才是 `Unknown`。
+/// 纯函数：注册表读取那半在 CI 上没法造数据。
+fn hint_from_standby(ac: Option<u32>, dc: Option<u32>) -> PowerHint {
+    let read: Vec<u32> = [ac, dc].into_iter().flatten().collect();
+    if read.is_empty() {
+        return PowerHint::Unknown;
+    }
+    match read.into_iter().filter(|s| *s > 0).min() {
+        None => PowerHint::NeverSleeps,
+        Some(seconds) => PowerHint::SleepsWhenIdle {
+            minutes: seconds.div_ceil(60),
+        },
+    }
+}
+
+/// Read one of the active power scheme's standby-idle timeouts (seconds;
+/// 0 = never) straight from the registry — locale-independent, unlike
+/// parsing `powercfg /query`'s localized text output. `value` is
+/// [`STANDBY_AC`] or [`STANDBY_DC`].
+fn read_standby_idle_seconds(value: &str) -> Option<u32> {
     use winreg::enums::HKEY_LOCAL_MACHINE;
     use winreg::RegKey;
     const SUB_SLEEP: &str = "238c9fa8-0aad-41ed-83f4-97be242c8f20";
@@ -508,10 +523,7 @@ fn read_standby_idle_seconds() -> Option<u32> {
     let setting = schemes
         .open_subkey(format!("{active}\\{SUB_SLEEP}\\{STANDBYIDLE}"))
         .ok()?;
-    // AC (plugged in) is the relevant one for "will this backup session
-    // get interrupted" — mirrors the SCHEME_CURRENT/SUB_SLEEP/STANDBYIDLE
-    // AC query `powercfg` itself defaults to.
-    setting.get_value::<u32, _>("ACSettingIndex").ok()
+    setting.get_value::<u32, _>(value).ok()
 }
 
 /// DESK-22 (#171)：把「回读到的值」翻译成结果。
@@ -1256,6 +1268,28 @@ mod desk22_disable_auto_sleep_tests {
     fn unreadable_state_must_not_be_reported_as_success() {
         assert!(verdict_from_readback(None, None).is_err());
         assert!(verdict_from_readback(Some(0), None).is_err());
+    }
+
+    /// DESK-30 (#294) RED：AC / DC 取最小正数，与 macOS `parse_pmset` 同口径。
+    /// `(0, 1200)` 与 `(1200, 600)` 是「只看 AC」会答错的两组。
+    #[test]
+    fn desk30_power_hint_takes_the_smallest_positive_of_ac_and_dc() {
+        let sleeps = |minutes| PowerHint::SleepsWhenIdle { minutes };
+        assert_eq!(hint_from_standby(Some(0), Some(0)), PowerHint::NeverSleeps);
+        assert_eq!(hint_from_standby(Some(0), Some(1200)), sleeps(20));
+        assert_eq!(hint_from_standby(Some(1200), Some(0)), sleeps(20));
+        assert_eq!(hint_from_standby(Some(600), Some(1200)), sleeps(10));
+        assert_eq!(hint_from_standby(Some(1200), Some(600)), sleeps(10));
+    }
+
+    #[test]
+    fn desk30_power_hint_with_values_missing() {
+        assert_eq!(hint_from_standby(None, None), PowerHint::Unknown);
+        assert_eq!(hint_from_standby(Some(0), None), PowerHint::NeverSleeps);
+        assert_eq!(
+            hint_from_standby(None, Some(90)),
+            PowerHint::SleepsWhenIdle { minutes: 2 }
+        );
     }
 
     /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
