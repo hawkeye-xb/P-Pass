@@ -107,32 +107,40 @@ pub fn scrub(s: &str, home: &str) -> String {
 
 /// config.toml 摘要（只出 `data_dir` / `bind_addr`，路径脱敏）——
 /// 全文可能有别的东西，摘要只取这两条支持案子真的会问的。
+///
+/// DESK-40 (#483)：值要经 TOML 解析取出来。DESK-27 起 `data_dir` 是
+/// TOML 转义写的（Windows 上 `C:\\Users\\…`），逐行读原文拿到的是双反斜杠，
+/// 与 `home` 对不上，脱敏就静默失效，把用户名带进了诊断包。
 pub fn config_summary(raw: Option<&str>, home: &str) -> String {
     let Some(raw) = raw else {
         return "config.toml: 不存在（向导还没走完？）\n".to_string();
     };
-    let mut data_dir = None;
-    let mut bind_addr = None;
-    for line in raw.lines() {
-        let line = line.trim();
-        for (key, slot) in [("data_dir", &mut data_dir), ("bind_addr", &mut bind_addr)] {
-            if let Some(rest) = line.strip_prefix(key) {
-                if let Some(val) = rest.trim_start().strip_prefix('=') {
-                    let val = val.trim().trim_matches('"').trim();
-                    if !val.is_empty() && slot.is_none() {
-                        *slot = Some(val.to_string());
-                    }
-                }
-            }
+    let table = match raw.parse::<toml::Table>() {
+        Ok(t) => t,
+        // 不带错误原文：toml 的报错会引用出错的那一行，那一行里可能就是
+        // 没脱敏的路径。只给行号，够开发者对着用户的文件找。
+        Err(e) => {
+            let line = e
+                .span()
+                .map(|s| raw[..s.start.min(raw.len())].lines().count().max(1));
+            return match line {
+                Some(n) => format!("config.toml: 解析失败（第 {n} 行附近），文件可能被改坏了\n"),
+                None => "config.toml: 解析失败，文件可能被改坏了\n".to_string(),
+            };
         }
-    }
+    };
+    let field = |key: &str| {
+        table
+            .get(key)
+            .and_then(toml::Value::as_str)
+            .filter(|v| !v.is_empty())
+    };
     format!(
         "data_dir  = {}\nbind_addr = {}\n",
-        data_dir
-            .as_deref()
+        field("data_dir")
             .map(|v| scrub(v, home))
             .unwrap_or_else(|| "(未设置)".into()),
-        bind_addr.as_deref().unwrap_or("(未设置)"),
+        field("bind_addr").unwrap_or("(未设置)"),
     )
 }
 
@@ -329,6 +337,50 @@ pub fn read_zip_entries(path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // DESK-40 (#483) RED: the exact shape DESK-27's writer produces on
+    // Windows. Line-reading it kept the TOML escapes, so `home` never
+    // matched and the username leaked into the bundle.
+    #[test]
+    fn desk40_windows_config_summary_is_scrubbed_and_unescaped() {
+        let raw = "data_dir = \"C:\\\\Users\\\\alice\\\\Pictures\\\\lib\"\nbind_addr = \"0.0.0.0:41145\"\n";
+        let out = config_summary(Some(raw), r"C:\Users\alice");
+        assert_eq!(
+            out,
+            "data_dir  = <DATA>\\Pictures\\lib\nbind_addr = 0.0.0.0:41145\n"
+        );
+        assert!(!out.contains("alice"), "username leaked: {out}");
+        assert!(!out.contains(r"\\"), "TOML escapes leaked: {out}");
+    }
+
+    #[test]
+    fn desk40_unix_config_summary_still_scrubbed() {
+        let raw = "data_dir = \"/Users/alice/Pictures/lib\"\nbind_addr = \"0.0.0.0:41145\"\n\n[telemetry]\nenabled = false\n";
+        assert_eq!(
+            config_summary(Some(raw), "/Users/alice"),
+            "data_dir  = <DATA>/Pictures/lib\nbind_addr = 0.0.0.0:41145\n"
+        );
+    }
+
+    #[test]
+    fn desk40_missing_fields_and_absent_file() {
+        assert_eq!(
+            config_summary(Some("[telemetry]\nenabled = false\n"), "/Users/alice"),
+            "data_dir  = (未设置)\nbind_addr = (未设置)\n"
+        );
+        assert!(config_summary(None, "/Users/alice").contains("不存在"));
+    }
+
+    // A broken file must say so readably, and must not echo the offending
+    // line back (it may hold the unscrubbed path).
+    #[test]
+    fn desk40_broken_config_is_reported_without_echoing_content() {
+        let raw = "bind_addr = \"0.0.0.0:41145\"\ndata_dir = \"C:\\\\Users\\\\alice\\\\Pictures\n";
+        let out = config_summary(Some(raw), r"C:\Users\alice");
+        assert!(out.contains("解析失败"), "{out}");
+        assert!(out.contains("第 2 行"), "{out}");
+        assert!(!out.contains("alice"), "{out}");
+    }
 
     const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
