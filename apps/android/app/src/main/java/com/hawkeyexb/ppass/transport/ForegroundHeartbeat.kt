@@ -10,7 +10,9 @@
 // 不重试不告警，等下一拍。
 package com.hawkeyexb.ppass.transport
 
+import com.hawkeyexb.ppass.backup.isPairingLostText
 import com.hawkeyexb.ppass.proto.Methods
+import com.hawkeyexb.ppass.proto.Resp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -30,6 +32,8 @@ class ForegroundHeartbeat(
     private val sentinel: com.hawkeyexb.ppass.backup.SentinelStore? = null,
     // #439: 桌面可达（hello 成功）时通知备份引擎——引擎只在「等待中（桌面不可达）」时才会据此叫醒循环。
     private val onReachable: (() -> Unit)? = null,
+    // #466: 桌面已移除这台手机（hello 被拒为 not_paired/not_authorized）——交给红卡，按这次配对的 epoch 记。
+    private val onPairingLost: ((epoch: String, failure: Throwable) -> Unit)? = null,
 ) {
     private var job: Job? = null
     private var active = false
@@ -66,7 +70,8 @@ class ForegroundHeartbeat(
         applyHeartbeatOutcome(
             sentinel,
             runCatching { client.call(peer, Methods.HELLO, buildJsonObject {}) },
-            onReachable,
+            onPairingLost = onPairingLost?.let { cb -> { failure: Throwable -> cb(pairing.pairingEpoch, failure) } },
+            onReachable = onReachable,
         )
     }
 
@@ -83,10 +88,18 @@ class ForegroundHeartbeat(
 internal fun applyHeartbeatOutcome(
     sentinel: com.hawkeyexb.ppass.backup.SentinelStore?,
     outcome: Result<*>,
+    // 放在 onReachable 前面：既有调用方用尾随 lambda 传 onReachable，不能被新参数截走。
+    onPairingLost: ((Throwable) -> Unit)? = null,
     onReachable: (() -> Unit)? = null,
 ) {
     outcome
-        .onSuccess {
+        .onSuccess { value ->
+            // #466: `DaemonClient.call` 被拒时不抛，回 ok=false 的 Resp——原来这里把「你已被移除」也当成可达。
+            val rejectedKey = (value as? Resp)?.takeIf { !it.ok }?.error?.msgKey
+            if (rejectedKey != null && isPairingLostText(rejectedKey)) {
+                onPairingLost?.invoke(IllegalStateException("hello: $rejectedKey"))
+                return
+            }
             sentinel?.recordReachable()
             onReachable?.invoke()
         }

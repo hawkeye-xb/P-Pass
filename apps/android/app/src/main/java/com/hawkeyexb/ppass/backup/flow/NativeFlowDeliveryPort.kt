@@ -159,10 +159,15 @@ internal class FlowDeliveryEpochGuard(private val pairing: () -> Pairing?) {
 /** Process-local pairing-loss fact from an authenticated Flow delivery rejection. */
 internal class FlowDeliveryPairingLoss {
     @Volatile private var lostEpoch: String? = null
+    private val _changes = kotlinx.coroutines.flow.MutableStateFlow(0L)
+
+    /** #466: 每记一次加 1——红卡订阅它，任何写入方（投递 / 探测 / 前台心跳）记下的失效都立刻亮。 */
+    val changes: kotlinx.coroutines.flow.StateFlow<Long> get() = _changes
 
     fun record(epoch: PairingEpoch, failure: Throwable) {
         if (failure.message?.let(::isPairingLostText) == true) {
             lostEpoch = epoch.value
+            _changes.value += 1
         }
     }
 

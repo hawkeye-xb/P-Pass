@@ -365,6 +365,12 @@ fun PPassApp() {
             client, pairings, scope, com.hawkeyexb.ppass.backup.SentinelStore(context.filesDir),
             // #439: 桌面回来了，人就在 App 里——不等 10 分钟的探测。
             onReachable = { com.hawkeyexb.ppass.backup.flow.onFlowDesktopReachable(context) },
+            // #466: 打开 App 就能发现「电脑端已移除这台手机」，不用等下一张新照片。
+            onPairingLost = { epoch, failure ->
+                com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss.record(
+                    com.hawkeyexb.ppass.backup.flow.PairingEpoch(epoch), failure,
+                )
+            },
         )
     }
     // SYNC-06: 订阅连接生命周期跟心跳对齐——ON_RESUME 起 / ON_STOP 停，
