@@ -229,7 +229,14 @@ async fn external_deletion_reconciles_index_thumbs_and_audit() {
                 .unwrap_or_else(|| panic!("asset {h} indexed"));
         let abs = f.library.path().join(&asset.rel_path);
         assert_eq!(&std::fs::read(&abs).unwrap(), data, "{h} bit-identical");
-        media_codec::make_thumbs(&parse_hash(h), &abs, &thumbs_root);
+        // Stand-in thumb files at the real layout. The fixture bytes are not
+        // decodable images, and since DESK-35 (#441) a failed `make_thumbs`
+        // writes nothing — this test is about reconcile deleting thumbs, so
+        // it materializes them directly instead.
+        let tp = media_codec::thumb_paths(&thumbs_root, &parse_hash(h));
+        std::fs::create_dir_all(tp.t256.parent().unwrap()).unwrap();
+        std::fs::write(&tp.t256, b"thumb-256").unwrap();
+        std::fs::write(&tp.t1024, b"thumb-1024").unwrap();
         disk_paths.push((parse_hash(h), abs));
     }
 

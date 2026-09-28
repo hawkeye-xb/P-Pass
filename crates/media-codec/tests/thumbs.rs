@@ -80,8 +80,11 @@ fn video_first_frame_via_ffmpeg() {
     assert_valid_jpeg_max_edge(&r.paths.t256, 256);
 }
 
-/// 契约: 损坏文件 → 占位图 + Placeholder 结果（thumb_state=2 由调用方记），
+/// 契约: 损坏文件 → Placeholder 结果（thumb_state=2 由调用方记），
 /// 不许 panic，不许 Err。
+///
+/// DESK-35 (#441)：最终路径上**不许**有文件。占位图一旦落在最终路径，
+/// `thumb.get` 的读盘命中就会永远端出这张灰图、再也不重试。
 #[test]
 fn corrupt_file_yields_placeholder_not_panic() {
     let dir = tempfile::tempdir().unwrap();
@@ -96,9 +99,14 @@ fn corrupt_file_yields_placeholder_not_panic() {
         reason.contains("broken.jpg"),
         "reason names the file: {reason}"
     );
-    // The placeholder itself is a real, decodable JPEG at both sizes.
-    assert_valid_jpeg_max_edge(&r.paths.t256, 256);
-    assert_valid_jpeg_max_edge(&r.paths.t1024, 1024);
+    assert!(
+        !r.paths.t256.exists() && !r.paths.t1024.exists(),
+        "a failed generation must leave the final thumb paths empty"
+    );
+    // What the caller serves instead is still a real, decodable JPEG.
+    let bytes = media_codec::placeholder_jpeg(256);
+    let img = image::load_from_memory(&bytes).expect("placeholder decodes");
+    assert_eq!(img.dimensions(), (256, 256));
 }
 
 #[test]
@@ -110,7 +118,10 @@ fn missing_file_yields_placeholder_too() {
         &dir.path().join("thumbs"),
     );
     assert!(matches!(r.outcome, ThumbOutcome::Placeholder { .. }));
-    assert_valid_jpeg_max_edge(&r.paths.t256, 256);
+    assert!(
+        !r.paths.t256.exists() && !r.paths.t1024.exists(),
+        "a failed generation must leave the final thumb paths empty"
+    );
 }
 
 #[test]

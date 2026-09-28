@@ -2,7 +2,9 @@
 //! first-frame via ffmpeg) and the thumbnail pipeline (T-013).
 //!
 //! 契约: `make_thumbs` never panics and never errors — a file we cannot
-//! decode yields the built-in placeholder (caller records thumb_state=2).
+//! decode yields a `Placeholder` outcome and writes nothing at the final
+//! thumb paths (DESK-35 #441); the caller serves `placeholder_jpeg` from
+//! memory and records thumb_state=2.
 
 use std::path::PathBuf;
 
@@ -18,7 +20,7 @@ pub use decode::decode_image;
 pub use ffmpeg::{extract_frame, ffmpeg_path};
 // DESK-16 (#165)：与 `ffmpeg_path` 同样公开，理由相同 —— 回退链的集成测试
 // 必须能把「本机有没有这个能力」写成显式前提，而不是靠条件编译分叉。
-pub use pool::ThumbPool;
+pub use pool::{ThumbGenerator, ThumbPool};
 pub use system_thumb::capable as system_thumbnail_capable;
 pub use thumb::{
     make_thumbs, placeholder_jpeg, thumb_paths, ThumbOutcome, ThumbPaths, ThumbResult, THUMB_SIZES,

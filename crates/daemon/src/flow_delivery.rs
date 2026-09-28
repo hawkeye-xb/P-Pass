@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-use core_index::{IncomingFile, IndexError, Ingestor};
+use core_index::{IncomingFile, IndexError, IngestOutcome, Ingestor};
 use proto::{
     DesktopHealth, FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowTupleRef,
 };
@@ -36,6 +36,7 @@ use crate::awake::AwakeHold;
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
 use crate::subscriptions::SubscriptionRegistry;
 use crate::telemetry::{Event as TelemetryEvent, Telemetry};
+use crate::thumb_pregen::ThumbPregen;
 
 type PeerFetchLock = Arc<AsyncMutex<()>>;
 type FetchLocks = Arc<Mutex<HashMap<[u8; 32], PeerFetchLock>>>;
@@ -502,6 +503,9 @@ pub struct FlowDelivery {
     now: Clock,
     /// #413 §7: free bytes on `library_root`'s volume. Tests inject one.
     free_space: FreeSpaceProbe,
+    /// IDX-06 (#442): background thumbnail pre-generation. `None` = no
+    /// pre-generation; `thumb.get` still generates on first view.
+    thumbs: Option<ThumbPregen>,
 }
 
 impl FlowDelivery {
@@ -527,7 +531,15 @@ impl FlowDelivery {
             library_root: root,
             now: Arc::new(unix_ms_now),
             free_space: Arc::new(platform_free_bytes),
+            thumbs: None,
         }
+    }
+
+    /// IDX-06 (#442): hand every freshly materialized item to the
+    /// low-priority thumbnail pre-generation pool.
+    pub fn with_thumb_pregen(mut self, thumbs: ThumbPregen) -> Self {
+        self.thumbs = Some(thumbs);
+        self
     }
 
     /// #413 §6: override the resume-deadline clock (unix ms).
@@ -1116,7 +1128,13 @@ impl FlowDelivery {
             })
             .await
         {
-            Ok(_) => {
+            Ok(outcome) => {
+                // IDX-06 (#442): fire-and-forget, never blocks the receipt.
+                if let (IngestOutcome::New(rel) | IngestOutcome::Moved(rel), Some(thumbs)) =
+                    (&outcome, &self.thumbs)
+                {
+                    thumbs.ingested(rel);
+                }
                 // Duplicate leaves the staging export in place; it is not a
                 // durable source and must not survive as a false partial.
                 let _ = std::fs::remove_file(&staged);

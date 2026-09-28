@@ -25,6 +25,7 @@ use storage::Db;
 use transport::Blobs;
 
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
+use crate::thumb_pregen::ThumbPregen;
 
 /// MOB-32：一个会话空闲多久算「上一轮已经不在了」。
 ///
@@ -100,6 +101,9 @@ pub struct BackupEngine {
     /// `None`（未接事件总线，如某些测试场景）时 `signal`/`flush_now`
     /// 直接跳过，不影响 ingest 本身。
     throttle: Option<Throttle>,
+    /// IDX-06 (#442): background thumbnail pre-generation. `None` = none;
+    /// `thumb.get` still generates on first view.
+    thumbs: Option<ThumbPregen>,
 }
 
 /// What a commit did (also serialized into the audit detail).
@@ -142,7 +146,15 @@ impl BackupEngine {
             sessions: Arc::default(),
             delivered: Arc::default(),
             throttle: None,
+            thumbs: None,
         }
+    }
+
+    /// IDX-06 (#442): hand every fresh ingest (upload and commit paths —
+    /// both go through `ingest_one`) to the thumbnail pre-generation pool.
+    pub fn with_thumb_pregen(mut self, thumbs: ThumbPregen) -> Self {
+        self.thumbs = Some(thumbs);
+        self
     }
 
     /// SYNC-02：接上事件总线——之后每条新 ingest 经节流合并推
@@ -361,7 +373,11 @@ impl BackupEngine {
         match self.ingestor.ingest(&incoming).await {
             // WATCH-03：Moved = 索引里有这份内容但记录的文件早被外部删了，
             // 这次上传把它补回来——staged 已被 place 移走，不能再删。
-            Ok(core_index::IngestOutcome::New(_)) | Ok(core_index::IngestOutcome::Moved(_)) => {
+            Ok(core_index::IngestOutcome::New(rel)) | Ok(core_index::IngestOutcome::Moved(rel)) => {
+                // IDX-06 (#442): fire-and-forget, never blocks the ingest.
+                if let Some(thumbs) = &self.thumbs {
+                    thumbs.ingested(&rel);
+                }
                 if let Some(throttle) = &self.throttle {
                     throttle.signal();
                 }
