@@ -41,6 +41,11 @@ interprocess = "2"
 # DESK-10: 诊断包由桌面壳本地组装（daemon 挂着也要能导出）——打包/
 # 读回 daemon 那份 zip 都要 zip crate（与 daemon 侧同一大版本）。
 zip = "5"
+# DESK-27 (#219)：写 config.toml 要用**真的 TOML 序列化器**，不能再用
+# `{:?}`（Debug）——两者只在反斜杠和引号上碰巧一致，而那个"碰巧"正是
+# 反斜杠翻倍回路的起点。toml 0.8 已在本 workspace 的依赖树里（tauri 拖进
+# 来的），提为直接依赖不引入新 crate。
+toml = "0.8"
 # System adapter (power hint, data dir) — not business logic.
 platform = { path = "../../../crates/platform" }
 tauri-plugin-single-instance = "2"
