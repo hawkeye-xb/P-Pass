@@ -2102,8 +2102,9 @@ mod tests {
     /// 启动清标记。
     #[test]
     fn stop_marks_before_touching_the_process_and_start_clears() {
-        let src = include_str!("lib.rs");
-        let product = src.split("#[cfg(test)]").next().unwrap_or(src);
+        // 先归一行尾（#297）：Windows 检出可能是 CRLF，下面按 "\n}\n" 找函数结尾。
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap_or(&src);
         let body = |name: &str| {
             let start = product
                 .find(&format!("fn {name}("))
