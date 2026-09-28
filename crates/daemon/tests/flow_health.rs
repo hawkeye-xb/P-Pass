@@ -638,21 +638,33 @@ async fn caught_mid_flight(seed: u64) -> Option<MidFlight> {
     None
 }
 
+/// Waits until the suspended fetch has gone quiet: `STABLE_SAMPLES`
+/// consecutive 100 ms samples with no byte growth.
+///
+/// QA-20 (#443): this used to demand quiet within a 2 s wall clock, which a
+/// loaded Windows runner missed while the interrupt was still landing (or
+/// in-flight bytes were still being written). The claim under test is that
+/// the fetch *does* stop, not how fast; a suspend that never takes effect
+/// runs the transfer to completion, and the callers' `partial < size`
+/// assertion goes red. `HANG_GUARD` only bounds a test that would
+/// otherwise never finish.
 async fn wait_until_not_running(m: &MidFlight) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        // `status` would respawn a stopped task, so observe the registry
-        // through a fresh handle over the same state instead: the grant's
-        // durable state plus "is anything still pulling bytes".
-        let before = m.blobs.local_bytes(m.hash).await.unwrap();
+    const STABLE_SAMPLES: u32 = 5;
+    const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(60);
+    let started = std::time::Instant::now();
+    // `status` would respawn a stopped task, so observe the registry
+    // through a fresh handle over the same state instead: the grant's
+    // durable state plus "is anything still pulling bytes".
+    let mut last = m.blobs.local_bytes(m.hash).await.unwrap();
+    let mut stable = 0;
+    while stable < STABLE_SAMPLES {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let after = m.blobs.local_bytes(m.hash).await.unwrap();
-        if before == after {
-            return;
-        }
+        let now = m.blobs.local_bytes(m.hash).await.unwrap();
+        stable = if now == last { stable + 1 } else { 0 };
+        last = now;
         assert!(
-            std::time::Instant::now() < deadline,
-            "suspended fetch kept pulling bytes"
+            started.elapsed() < HANG_GUARD,
+            "suspended fetch never went quiet (still at {last} bytes after {HANG_GUARD:?})"
         );
     }
 }
