@@ -1,0 +1,51 @@
+---
+import Base from '../../layouts/Base.astro';
+import Legal from '../../components/Legal.astro';
+import { GITHUB_URL } from '../../consts';
+---
+
+<Base lang="zh" title="使用条款 — P-Pass">
+  <Legal title="使用条款" updated="2026-09-29" updatedLabel="最后更新">
+    <p>下载、安装或使用 P-Pass，即表示你同意以下条款。</p>
+
+    <h2>软件说明</h2>
+    <p>
+      P-Pass 是一款家庭照片备份软件，运行在你自己的电脑和手机上，把手机里的照片和视频备份到家中的电脑。我们不提供照片存储服务。
+    </p>
+
+    <h2>开源许可</h2>
+    <p>
+      P-Pass 的源代码以
+      <a href={`${GITHUB_URL}/blob/main/LICENSE`} rel="external">GNU Affero 通用公共许可证第 3 版（AGPL-3.0）</a>
+      发布。你可以按照该许可证使用、修改和分发 P-Pass；修改后通过网络向他人提供服务的，需要按许可证要求公开相应源代码。
+    </p>
+
+    <h2>Beta 阶段</h2>
+    <p>
+      P-Pass 目前处于 Beta 阶段，可能存在缺陷，版本更新会比较频繁。在此期间，建议为重要照片保留至少一份其他备份，不要把 P-Pass 作为唯一的备份手段。
+    </p>
+
+    <h2>你的责任</h2>
+    <ul>
+      <li>只备份你有权保存的照片和视频。</li>
+      <li>保管好安装 P-Pass 的电脑及其硬盘，照片库的安全和容量由你负责。</li>
+      <li>只允许你信任的设备完成配对；不再使用的设备请及时在电脑端移除。</li>
+    </ul>
+
+    <h2>第三方服务</h2>
+    <p>
+      设备无法直连时，P-Pass 会使用第三方运营的中继服务转发加密数据（详见<a href="/zh/privacy/">隐私政策</a>）。我们不保证这些服务始终可用。
+    </p>
+
+    <h2>免责声明</h2>
+    <p>
+      P-Pass 按「现状」提供，不附带任何明示或默示的担保。在适用法律允许的范围内，对于因使用或无法使用 P-Pass 造成的数据丢失或其他损失，开发者不承担责任。具体以 AGPL-3.0 第 15、16 条为准。
+    </p>
+
+    <h2>条款变更</h2>
+    <p>条款更新时，会修改本页的「最后更新」日期。更新后继续使用 P-Pass，视为接受更新后的条款。</p>
+
+    <h2>联系我们</h2>
+    <p>对条款有疑问，请在 <a href={`${GITHUB_URL}/issues`} rel="external">GitHub Issues</a> 提出。</p>
+  </Legal>
+</Base>
