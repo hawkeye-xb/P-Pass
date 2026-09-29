@@ -778,11 +778,46 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # REL-02 补丁（2026-08-11）：gh release edit --prerelease 只设
-          # prerelease 标志、不清 draft——release 仍是 draft，GitHub API
-          # 默认不返回 draft，update Worker 的 latestPrereleaseTag 永远
-          # 找不到 → test 通道 404 → 手机收不到。必须显式清 draft。
+          # prerelease 标志、不清 draft——release 仍是 draft，下一步的
+          # test-channel 指针也不该指向它 → test 通道收不到。必须显式清 draft。
           gh release edit "$TAG" --draft=false --prerelease
           echo "test 通道已发布（prerelease，stable 不受影响）: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      # REL-07: test 通道指针——把本次**已组装/签名**的 manifest.json 原样
+      # 覆盖进固定的滚动 prerelease `test-channel`（同 neovim 的 nightly tag）。
+      # 客户端与 update Worker 只读 releases/download/test-channel/manifest.json
+      # 这一个静态文件：不调 GitHub API → 没有匿名限流、不需要 GH_TOKEN。
+      # manifest 里的下载链接仍指向版本化 release（${TAG}）的资产。
+      # 只在 test tag 且 manifest 存在时执行；stable 流程不经过这里。
+      # 放在 auto-publish 之后：没 publish 的 test tag（留 draft）不移动指针。
+      - name: Point test-channel at this manifest (REL-07)
+        if: contains(env.TAG, '-test.') && hashFiles('artifacts/manifest.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CH=test-channel
+          if ! gh release view "$CH" >/dev/null 2>&1; then
+            printf '%s\n' \
+              "固定通道指针，勿删。test 通道客户端与 update Worker 只读本 release 的 manifest.json；" \
+              "内容随每次 test 发布覆盖（release.yml · REL-07），下载链接指向对应版本的 release。" \
+              "Fixed channel pointer - do not delete. Overwritten by every test release." > /tmp/ch-notes.md
+            gh release create "$CH" --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "test channel (rolling pointer)" --notes-file /tmp/ch-notes.md
+          fi
+          # 重跑旧 tag 的 workflow 不许把指针往回拨：指针上已是更新版本就跳过。
+          NEW=$(node -p 'require("./artifacts/manifest.json").version')
+          CUR=""
+          if gh release download "$CH" -p manifest.json -O /tmp/ch-current.json 2>/dev/null; then
+            CUR=$(node -p 'require("/tmp/ch-current.json").version')
+          fi
+          if [ -n "$CUR" ] && [ "$CUR" != "$NEW" ] && \
+             [ "$(printf '%s\n%s\n' "$CUR" "$NEW" | sort -V | tail -n1)" = "$CUR" ]; then
+            echo "test-channel 已指向更新的 $CUR（本次 $NEW）——不回拨"
+            exit 0
+          fi
+          gh release upload "$CH" artifacts/manifest.json --clobber
+          echo "test-channel → $NEW: https://github.com/${GITHUB_REPOSITORY}/releases/download/${CH}/manifest.json"
 
   # ── lane 2: macOS ──
   upload-macos:

@@ -16,6 +16,11 @@ on:
       # Waiting run）。且 cancel-in-progress 收不掉 Waiting 状态，只会越堆
       # 越多。改流水线走 workflow_dispatch 验证，不靠误触发。
       - "infra/workers/**"
+  # REL-07：PR 上只跑 test job（零依赖 node:test）；deploy job 用 if 挡掉
+  # pull_request——否则每个 PR 都挂一个等审批的生产部署（上面记过的堆 Waiting）。
+  pull_request:
+    paths:
+      - "infra/workers/**"
   workflow_dispatch:
 
 permissions:
@@ -34,8 +39,26 @@ env:
   HAS_CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
 
 jobs:
+  # REL-07：update worker 单测（错误/缓存语义）。不挂 environment——PR 上就跑，
+  # 不等审批；deploy needs 它，红了不部署。node 24：index.ts 靠 Node 内建
+  # type stripping 直接加载（无依赖、无构建）。
+  test:
+    name: test update worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: node --test (update worker)
+        run: node --test 'infra/workers/update/test/*.test.mjs'
+
   deploy:
     name: deploy workers (审批门)
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # 2026-08-23：部署挂环境审批门——push 自动触发但跑到部署前暂停，
@@ -53,7 +76,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          GH_TOKEN_SECRET: ${{ secrets.GH_TOKEN }}
         run: |
           set -euo pipefail
           : "${CF_ACCOUNT_ID:?CLOUDFLARE_ACCOUNT_ID secret missing}"
@@ -67,10 +89,7 @@ jobs:
           routes = [{ pattern = "update.p-pass.hawkeye-xb.com", custom_domain = true }]
           EOF
           npx --yes wrangler@4 deploy --config /tmp/deploy.toml
-          # GH_TOKEN 提升 GitHub API 限额（60/h → 5000/h）——已有则更新，无则跳过。
-          if [ -n "${GH_TOKEN_SECRET:-}" ]; then
-            echo "$GH_TOKEN_SECRET" | npx --yes wrangler@4 secret put GH_TOKEN --config /tmp/deploy.toml
-          fi
+          # REL-07：Worker 不再调 GitHub API，GH_TOKEN 注入已撤。
       - name: Skip note (token absent)
         if: env.HAS_CF_TOKEN != 'true'
         run: echo "CLOUDFLARE_API_TOKEN 未设置——workers 自动部署跳过（CI-01③b 门控）；请在 GitHub 仓库 Settings → Secrets and variables → Actions 添加 CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID。"

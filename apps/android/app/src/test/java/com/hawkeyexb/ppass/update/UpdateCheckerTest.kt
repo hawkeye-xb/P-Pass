@@ -109,13 +109,25 @@ class UpdateCheckerTest {
     }
 
     @Test
-    fun channelManifestUrl_testGoesThroughWorker() {
-        // test 通道走 Cloudflare Worker（GitHub API 未认证限流 60/h/IP，
-        // 客户端不直连）；Worker 端解析最新 prerelease。
+    fun channelManifestUrl_testReadsRollingPrereleaseFile() {
+        // REL-07: test 通道直读滚动 prerelease `test-channel` 的静态文件——
+        // 不调 GitHub API（匿名限流 60/h/IP 曾把 test 通道整段打瞎）。
         assertEquals(
-            "https://update.p-pass.hawkeye-xb.com/manifest?channel=test",
+            "https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest.json",
             channelManifestUrl(UpdateChannel.Test),
         )
+    }
+
+    // ── REL-07: 404 = 无 release；5xx（Worker 上游故障/限流）= 检查失败，不是「已是最新」 ──
+
+    @Test
+    fun classifyManifestStatus_separatesNoReleaseFromUpstreamFailure() {
+        assertEquals(ManifestFetchOutcome.Ok, classifyManifestStatus(200))
+        assertEquals(ManifestFetchOutcome.NoRelease, classifyManifestStatus(404))
+        assertEquals(ManifestFetchOutcome.CheckFailed, classifyManifestStatus(502))
+        assertEquals(ManifestFetchOutcome.CheckFailed, classifyManifestStatus(503))
+        assertEquals(ManifestFetchOutcome.CheckFailed, classifyManifestStatus(403))
+        assertEquals(ManifestFetchOutcome.CheckFailed, classifyManifestStatus(500))
     }
 
     @Test
