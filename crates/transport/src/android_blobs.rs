@@ -1,9 +1,16 @@
 //! Android JNI bridge for a one-lease iroh-blobs provider.
 //!
-//! A provider owns one endpoint for its whole lifetime. Registrations add their
+//! A provider keeps one endpoint across Flow items. Registrations add their
 //! current source to the same private store; revocation only stops the active
 //! fetch, leaving the endpoint alive until the provider is closed so daemon
 //! connection reuse survives one-item Flow deliveries.
+//!
+//! NET-29 (#467): the one exception is an endpoint that did not come online
+//! (no home relay connected) within the serve deadline. That endpoint is
+//! replaced by a freshly bound one before the failure is returned, so the
+//! next attempt in the same process serves from a new endpoint instead of
+//! waiting on the same stuck one until the process restarts. The store, held
+//! imports and the dispatch slot are not touched by the replacement.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{File, Metadata};
@@ -19,6 +26,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use iroh::endpoint::Connection;
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
+use iroh::{TransportAddr, Watcher};
 use iroh_blobs::api::blobs::{AddPathOptions, BlobStatus, ImportMode};
 use iroh_blobs::api::TempTag;
 use iroh_blobs::provider::events::{
@@ -51,9 +59,17 @@ use crate::{IrohTransport, Result, TransportConfig, TransportError, ALPN_BLOBS};
 pub struct AndroidBlobsProvider {
     runtime: tokio::runtime::Runtime,
     store: FsStore,
-    transport: IrohTransport,
-    config: TransportConfig,
-    _router: Router,
+    /// NET-29: the current endpoint. Replaced (never mutated) when it did not
+    /// come online in time; every reader takes the current `Arc` once.
+    endpoint: Mutex<Arc<ProviderEndpoint>>,
+    /// Config for the endpoint of each generation (0 = the first bind).
+    /// Production returns the same config every time; tests inject a
+    /// never-online first endpoint.
+    endpoint_config: EndpointConfigFactory,
+    /// How many times the endpoint has been replaced in this process.
+    generation: AtomicU64,
+    /// Serve / register deadline for the endpoint to come online.
+    online_timeout: Duration,
     dispatch: Arc<Mutex<Option<StopAwareBlobsProtocol>>>,
     active: Mutex<Option<ActiveProvider>>,
     /// #413 §3: contents imported by [`Self::import_media`] and not yet
@@ -66,6 +82,92 @@ pub struct AndroidBlobsProvider {
     /// Imports run one at a time: the "was this hash already in the store"
     /// snapshot taken before a reference import must not race another import.
     import_lock: Mutex<()>,
+}
+
+type EndpointConfigFactory = Box<dyn Fn(u64) -> TransportConfig + Send + Sync>;
+
+/// Production deadline for the provider endpoint to come online before a
+/// ticket is handed out (iroh recommends a timeout close to its net report
+/// timeout, so at least one net report has been attempted).
+pub const PROVIDER_ONLINE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// One bound provider endpoint and the router accepting `ALPN_BLOBS` on it.
+struct ProviderEndpoint {
+    transport: IrohTransport,
+    config: TransportConfig,
+    router: Router,
+    /// Set when this endpoint has been replaced. Its router's shutdown must
+    /// then not reach the shared handler: `BlobsProtocol::shutdown` shuts the
+    /// provider store down, which the replacement endpoint still serves from.
+    retired: Arc<AtomicBool>,
+}
+
+impl ProviderEndpoint {
+    async fn bind(
+        config: TransportConfig,
+        dispatch: &Arc<Mutex<Option<StopAwareBlobsProtocol>>>,
+    ) -> Result<Self> {
+        let transport = IrohTransport::bind(config.clone()).await?;
+        let retired = Arc::new(AtomicBool::new(false));
+        let router = Router::builder(transport.endpoint().clone())
+            .accept(
+                ALPN_BLOBS.as_bytes(),
+                ActiveBlobsDispatch {
+                    handler: Arc::clone(dispatch),
+                    retired: Arc::clone(&retired),
+                },
+            )
+            .spawn();
+        Ok(Self {
+            transport,
+            config,
+            router,
+            retired,
+        })
+    }
+
+    /// `online()` pends forever without relays, so only endpoints that have
+    /// relays wait for it.
+    fn waits_for_online(&self) -> bool {
+        self.config.n0_services || !self.config.relay_urls.is_empty()
+    }
+
+    /// NET-29 diagnostics: why this endpoint is not online, from iroh's own
+    /// stable watchers — the home relay (URL, connected, last connection
+    /// error) and how many direct addresses it has.
+    fn online_diagnostics(&self) -> String {
+        let endpoint = self.transport.endpoint();
+        let relays = endpoint.home_relay_status().get();
+        let relay = if relays.is_empty() {
+            "none".to_owned()
+        } else {
+            relays
+                .iter()
+                .map(|status| {
+                    let error = status
+                        .last_error()
+                        .map(|error| format!(" lastError={error}"))
+                        .unwrap_or_default();
+                    format!(
+                        "{} connected={}{error}",
+                        status.url(),
+                        status.is_connected()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let direct = endpoint
+            .addr()
+            .addrs
+            .iter()
+            .filter(|addr| matches!(addr, TransportAddr::Ip(_)))
+            .count();
+        format!(
+            "endpoint={} homeRelay=[{relay}] directAddrs={direct}",
+            endpoint.id().fmt_short()
+        )
+    }
 }
 
 struct ActiveProvider {
@@ -90,10 +192,16 @@ impl ActiveProvider {
 #[derive(Clone, Debug)]
 struct ActiveBlobsDispatch {
     handler: Arc<Mutex<Option<StopAwareBlobsProtocol>>>,
+    /// See [`ProviderEndpoint::retired`].
+    retired: Arc<AtomicBool>,
 }
 
 impl ProtocolHandler for ActiveBlobsDispatch {
     async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
+        if self.retired.load(Ordering::SeqCst) {
+            connection.close(0u32.into(), b"provider endpoint replaced");
+            return Ok(());
+        }
         let handler = self
             .handler
             .lock()
@@ -109,6 +217,9 @@ impl ProtocolHandler for ActiveBlobsDispatch {
     }
 
     async fn shutdown(&self) {
+        if self.retired.load(Ordering::SeqCst) {
+            return;
+        }
         let handler = self
             .handler
             .lock()
@@ -526,6 +637,18 @@ impl AndroidBlobsProvider {
         )
     }
 
+    /// NET-29 test constructor: generation `n`'s endpoint is bound with
+    /// `config_for(n)` and gets `online_timeout` to come online, so a test
+    /// can make the first endpoint never come online and observe the
+    /// replacement serve.
+    pub fn with_endpoint_factory(
+        root: impl AsRef<Path>,
+        config_for: impl Fn(u64) -> TransportConfig + Send + Sync + 'static,
+        online_timeout: Duration,
+    ) -> Result<Self> {
+        Self::build(root, Box::new(config_for), None, online_timeout)
+    }
+
     /// Loopback-only constructor for native-provider protocol verification.
     pub fn new_loopback(root: impl AsRef<Path>) -> Result<Self> {
         Self::with_config(
@@ -550,6 +673,20 @@ impl AndroidBlobsProvider {
         config: TransportConfig,
         gc_interval: Option<Duration>,
     ) -> Result<Self> {
+        Self::build(
+            root,
+            Box::new(move |_| config.clone()),
+            gc_interval,
+            PROVIDER_ONLINE_TIMEOUT,
+        )
+    }
+
+    fn build(
+        root: impl AsRef<Path>,
+        endpoint_config: EndpointConfigFactory,
+        gc_interval: Option<Duration>,
+        online_timeout: Duration,
+    ) -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -558,7 +695,7 @@ impl AndroidBlobsProvider {
             })?;
         let root = root.as_ref().join("iroh-blobs-provider");
         let dispatch: Arc<Mutex<Option<StopAwareBlobsProtocol>>> = Arc::default();
-        let (store, transport, router) = runtime.block_on(async {
+        let (store, endpoint) = runtime.block_on(async {
             let mut options = Options::new(&root);
             if let Some(interval) = gc_interval {
                 options.gc = Some(GcConfig {
@@ -585,23 +722,16 @@ impl AndroidBlobsProvider {
             if removed > 0 {
                 tracing::info!("BLOB-03: released {removed} legacy Android provider blob tags");
             }
-            let transport = IrohTransport::bind(config.clone()).await?;
-            let router = Router::builder(transport.endpoint().clone())
-                .accept(
-                    ALPN_BLOBS.as_bytes(),
-                    ActiveBlobsDispatch {
-                        handler: Arc::clone(&dispatch),
-                    },
-                )
-                .spawn();
-            Ok::<_, TransportError>((store, transport, router))
+            let endpoint = ProviderEndpoint::bind(endpoint_config(0), &dispatch).await?;
+            Ok::<_, TransportError>((store, endpoint))
         })?;
         Ok(Self {
             runtime,
             store,
-            transport,
-            config,
-            _router: router,
+            endpoint: Mutex::new(Arc::new(endpoint)),
+            endpoint_config,
+            generation: AtomicU64::new(0),
+            online_timeout,
             dispatch,
             active: Mutex::default(),
             imports: Mutex::default(),
@@ -706,8 +836,90 @@ impl AndroidBlobsProvider {
     /// #417: tell iroh the OS network changed (Android `ConnectivityManager`
     /// callback), so it re-probes paths instead of waiting for its own timers.
     pub fn network_change(&self) {
+        let endpoint = self.current_endpoint();
         self.runtime
-            .block_on(self.transport.endpoint().network_change());
+            .block_on(endpoint.transport.endpoint().network_change());
+    }
+
+    /// NET-29: how many times the endpoint has been replaced because it did
+    /// not come online in time.
+    pub fn endpoint_generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// The node id the next ticket would carry (tests observe replacement).
+    pub fn endpoint_node_id(&self) -> crate::NodeId {
+        self.current_endpoint().transport.node_id()
+    }
+
+    /// NET-29 test hook: replace the current endpoint exactly as a failed
+    /// online wait does, while a lease handler may already be installed (the
+    /// serial-items case a never-online first endpoint cannot reach).
+    #[doc(hidden)]
+    pub fn replace_endpoint_for_test(&self) -> String {
+        let stuck = self.current_endpoint();
+        self.runtime.block_on(self.replace_endpoint(&stuck))
+    }
+
+    fn current_endpoint(&self) -> Arc<ProviderEndpoint> {
+        Arc::clone(&self.endpoint.lock().expect("provider endpoint lock"))
+    }
+
+    /// Returns the current endpoint once it is online (or needs no relay).
+    ///
+    /// NET-29: an endpoint that stays offline for the whole deadline is
+    /// replaced by a freshly bound one BEFORE the failure is returned — the
+    /// deadline itself is unchanged and nothing is retried here. The next
+    /// serve then waits on the new endpoint. The error keeps the
+    /// "did not become online" wording the Android caller classifies as
+    /// `provider_offline`, and carries the stuck endpoint's diagnostics.
+    async fn online_endpoint(&self, stage: &str) -> Result<Arc<ProviderEndpoint>> {
+        let endpoint = self.current_endpoint();
+        if !endpoint.waits_for_online() || endpoint.transport.wait_online(self.online_timeout).await
+        {
+            return Ok(endpoint);
+        }
+        let diagnostics = endpoint.online_diagnostics();
+        let replaced = self.replace_endpoint(&endpoint).await;
+        tracing::warn!(
+            "NET-29: Android provider endpoint not online after {:?} before {stage} ({diagnostics}); {replaced}",
+            self.online_timeout
+        );
+        Err(TransportError::Io(format!(
+            "Android provider endpoint did not become online before {stage} ({diagnostics}; {replaced})"
+        )))
+    }
+
+    /// Swap [stuck] for a freshly bound endpoint and retire it. Returns a
+    /// diagnostic phrase; a failed bind keeps the old endpoint (the next
+    /// failure tries again).
+    async fn replace_endpoint(&self, stuck: &Arc<ProviderEndpoint>) -> String {
+        let next_generation = self.generation.load(Ordering::SeqCst) + 1;
+        let fresh =
+            match ProviderEndpoint::bind((self.endpoint_config)(next_generation), &self.dispatch)
+                .await
+            {
+                Ok(fresh) => Arc::new(fresh),
+                Err(error) => return format!("rebind failed: {error}"),
+            };
+        let fresh_id = fresh.transport.endpoint().id().fmt_short().to_string();
+        {
+            let mut current = self.endpoint.lock().expect("provider endpoint lock");
+            if !Arc::ptr_eq(&current, stuck) {
+                // Another caller already replaced it; keep theirs.
+                return "already replaced".to_owned();
+            }
+            *current = fresh;
+            self.generation.store(next_generation, Ordering::SeqCst);
+        }
+        stuck.retired.store(true, Ordering::SeqCst);
+        let router = stuck.router.clone();
+        tokio::spawn(async move {
+            // Retired: the dispatch shutdown is a no-op, so this only closes
+            // the stuck endpoint — never the shared store.
+            let _ = router.shutdown().await;
+        });
+        format!("replaced by endpoint={fresh_id} generation={next_generation}")
     }
 
     /// BLOB-03 test hook: whether a complete blob is still present in the
@@ -790,16 +1002,7 @@ impl AndroidBlobsProvider {
             ));
         }
 
-        if self.config.n0_services
-            && !self
-                .transport
-                .wait_online(std::time::Duration::from_secs(15))
-                .await
-        {
-            return Err(TransportError::Io(
-                "Android provider endpoint did not become online before ticket registration".into(),
-            ));
-        }
+        let endpoint = self.online_endpoint("ticket registration").await?;
 
         self.ensure_active_handler();
         if let Some(active) = self.active.lock().expect("active provider lock").as_ref() {
@@ -816,7 +1019,7 @@ impl AndroidBlobsProvider {
         active.retained = Some(tag);
         active.served = None;
         Ok(BlobTicket::new(
-            self.transport.endpoint().addr(),
+            endpoint.transport.endpoint().addr(),
             imported_hash,
             BlobFormat::Raw,
         )
@@ -1221,17 +1424,7 @@ impl AndroidBlobsProvider {
         if let Some(fault) = fault {
             return Err(ServeError::Source(fault));
         }
-        if self.config.n0_services
-            && !self
-                .transport
-                .wait_online(std::time::Duration::from_secs(15))
-                .await
-        {
-            return Err(TransportError::Io(
-                "Android provider endpoint did not become online before serving".into(),
-            )
-            .into());
-        }
+        let endpoint = self.online_endpoint("serving").await?;
         self.ensure_active_handler();
         {
             let mut active = self.active.lock().expect("active provider lock");
@@ -1242,7 +1435,10 @@ impl AndroidBlobsProvider {
             active.retained = None;
             active.served = Some(hash);
         }
-        Ok(BlobTicket::new(self.transport.endpoint().addr(), hash, BlobFormat::Raw).to_string())
+        Ok(
+            BlobTicket::new(endpoint.transport.endpoint().addr(), hash, BlobFormat::Raw)
+                .to_string(),
+        )
     }
 
     /// #413: this content is no longer needed. Drops its hold (the store's GC

@@ -217,6 +217,64 @@ impl Blobs {
         Ok(())
     }
 
+    /// NET-29 (#467): [`Self::fetch_from_observing_path`] with a byte-stall
+    /// watchdog. The fetch fails once `byte_stall` passes without a single
+    /// payload-byte progress event from iroh-blobs' own fetch stream — not a
+    /// total-duration timeout, so a slow but moving relay transfer is never
+    /// cut. On a stall the blobs connection is closed, so the next attempt
+    /// redials instead of reusing a connection whose request went unanswered
+    /// (#467 capture 1: request sent, then nothing, forever).
+    pub async fn fetch_from_observing_path_with_stall<F>(
+        &self,
+        peer: crate::NodeId,
+        hash: [u8; 32],
+        byte_stall: Duration,
+        on_connected: F,
+    ) -> Result<()>
+    where
+        F: FnOnce(crate::ConnectionStatus),
+    {
+        use futures_core::Stream;
+        use iroh_blobs::api::remote::GetProgressItem;
+
+        let conn = self
+            .transport
+            .connect_raw(peer, crate::ALPN_BLOBS)
+            .await
+            .map_err(|e| TransportError::Io(format!("connect for fetch: {e}")))?;
+        on_connected(self.transport.path_status_of(peer, crate::ALPN_BLOBS));
+        let progress = self
+            .store
+            .remote()
+            .fetch(conn.clone(), Hash::from_bytes(hash));
+        let mut items = std::pin::pin!(progress.stream());
+        loop {
+            let next = tokio::time::timeout(
+                byte_stall,
+                std::future::poll_fn(|cx| items.as_mut().poll_next(cx)),
+            )
+            .await;
+            match next {
+                Ok(Some(GetProgressItem::Progress(_))) => continue,
+                Ok(Some(GetProgressItem::Done(_))) => return Ok(()),
+                Ok(Some(GetProgressItem::Error(e))) => {
+                    return Err(TransportError::Io(format!("fetch from {peer:?}: {e}")))
+                }
+                Ok(None) => {
+                    return Err(TransportError::Io(format!(
+                        "fetch from {peer:?}: progress stream closed without a result"
+                    )))
+                }
+                Err(_) => {
+                    conn.close(0u32.into(), b"fetch stalled");
+                    return Err(TransportError::Io(format!(
+                        "fetch from {peer:?}: stalled, no payload bytes for {byte_stall:?}"
+                    )));
+                }
+            }
+        }
+    }
+
     /// Export a (complete) blob from the store to a file.
     pub async fn export_to(&self, hash: [u8; 32], dest: &Path) -> Result<()> {
         self.store
