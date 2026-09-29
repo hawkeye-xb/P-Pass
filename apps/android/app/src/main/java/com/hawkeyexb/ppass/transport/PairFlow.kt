@@ -9,6 +9,12 @@
 // until the owner clicked — but DaemonClient.call caps every round trip at
 // 15 s (CONNECT_TIMEOUT_MS), so any owner slower than ~15 s turned into
 // "could not reach the computer".
+//
+// DEV-07 (#463): leaving the waiting screen (Cancel / back) cancels the
+// coroutine polling here. That alone only changed the phone's screen — the
+// desktop kept the request approvable for the whole pending window, and a
+// later "Allow" wrote a device the phone never learned about. So on the way
+// out we tell the desktop: pair.cancel(request_id).
 package com.hawkeyexb.ppass.transport
 
 import com.hawkeyexb.ppass.proto.Hello
@@ -21,7 +27,10 @@ import com.hawkeyexb.ppass.proto.PairSubmitted
 import com.hawkeyexb.ppass.proto.ProtoJson
 import com.hawkeyexb.ppass.proto.Resp
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.coroutines.withTimeout
@@ -48,6 +57,12 @@ const val ERR_NOT_AUTHORIZED = "err.not_authorized"
 
 /** NET-10: hello capability of a desktop that serves pair.status (router.rs). */
 const val PAIR_STATUS_CAPABILITY = "pair.status.v1"
+/** DEV-07: hello capability of a desktop that accepts pair.cancel (router.rs). */
+const val PAIR_CANCEL_CAPABILITY = "pair.cancel.v1"
+/** DEV-07: how long leaving the waiting screen may spend telling the desktop.
+ *  Best effort — the user has already moved on; DaemonClient's own 15 s cap
+ *  is too long to hold a cancelled job open for. */
+const val PAIR_CANCEL_BUDGET_MS = 5_000L
 /** NET-10: card-fixed polling interval. */
 const val PAIR_POLL_INTERVAL_MS = 5_000L
 /** A single failed status RPC is not a dead pairing — the ledger entry
@@ -103,11 +118,16 @@ suspend fun awaitPairVerdict(
     } catch (e: Exception) {
         return PairVerdict.Unreachable(e.toString())
     }
+    // DEV-07: withdraw only where the desktop says it understands it (an
+    // older desktop denies the unknown method and logs a denial). A revoked
+    // phone's hello is denied, so it cannot know — it tries anyway.
+    var mayWithdraw = true
     if (hello.ok) {
         val caps = hello.result?.let {
             runCatching { ProtoJson.decodeFromJsonElement(Hello.serializer(), it) }.getOrNull()
         }?.capabilities.orEmpty()
         if (PAIR_STATUS_CAPABILITY !in caps) return PairVerdict.DesktopTooOld
+        mayWithdraw = PAIR_CANCEL_CAPABILITY in caps
     }
 
     val submit = try {
@@ -149,6 +169,35 @@ suspend fun awaitPairVerdict(
         PairStatusRequest.serializer(),
         PairStatusRequest(requestId = submitted.requestId),
     )
+    try {
+        return pollPairStatus(rpc, query, pollIntervalMs, maxPolls, maxConsecutiveFailures)
+    } catch (e: CancellationException) {
+        // The user left the waiting screen. Tell the desktop before the job
+        // dies, so the owner's queue row can no longer be approved. Runs
+        // outside the cancellation, bounded, and never throws.
+        if (mayWithdraw) {
+            withContext(NonCancellable) {
+                withTimeoutOrNull(PAIR_CANCEL_BUDGET_MS) {
+                    try {
+                        rpc.call(Methods.PAIR_CANCEL, query)
+                    } catch (_: Exception) {
+                        // Best effort: an unreachable desktop still ends
+                        // the request at its own pending deadline.
+                    }
+                }
+            }
+        }
+        throw e
+    }
+}
+
+private suspend fun pollPairStatus(
+    rpc: PairRpc,
+    query: JsonElement,
+    pollIntervalMs: Long,
+    maxPolls: Long,
+    maxConsecutiveFailures: Int,
+): PairVerdict {
     var failures = 0
     var lastFailure = ""
     var polls = 0L

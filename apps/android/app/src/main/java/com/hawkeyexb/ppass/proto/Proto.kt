@@ -336,6 +336,8 @@ object Methods {
     const val PAIR_REQUEST = "pair.request"
     /** NET-10 (#128): read-only verdict query for an ackThenPoll pair.request. */
     const val PAIR_STATUS = "pair.status"
+    /** DEV-07 (#463): the submitting phone withdraws its own pending pair.request. */
+    const val PAIR_CANCEL = "pair.cancel"
     const val TIMELINE_PAGE = "timeline.page"
     const val ASSET_META = "asset.meta"
     const val THUMB_GET = "thumb.get"

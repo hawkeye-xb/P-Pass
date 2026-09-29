@@ -578,6 +578,12 @@ pub mod methods {
     /// NET-10 (#128): read-only verdict query for one `pair.request`
     /// submitted with `ack_then_poll`. Control-plane, answers at once.
     pub const PAIR_STATUS: &str = "pair.status";
+    /// DEV-07 (#463): the submitting phone withdraws its own pending
+    /// `pair.request` (params [`PairStatusRequest`], reply
+    /// [`PairStatusReply`] with the state after the withdrawal). Without
+    /// it the owner's later "Allow" still wrote a device row the phone had
+    /// already walked away from. Control-plane, answers at once.
+    pub const PAIR_CANCEL: &str = "pair.cancel";
     pub const TIMELINE_PAGE: &str = "timeline.page";
     pub const ASSET_META: &str = "asset.meta";
     pub const THUMB_GET: &str = "thumb.get";

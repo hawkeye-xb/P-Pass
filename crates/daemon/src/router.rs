@@ -24,10 +24,20 @@ use crate::subscriptions::SubscriptionRegistry;
 /// `pair.request{ack_then_poll}` at once and serves `pair.status`. A new
 /// phone checks it in the (unpaired-allowed) hello before pairing; without
 /// it the phone reports "desktop too old" instead of timing out.
-pub const SERVER_CAPABILITIES: &[&str] = &["thumbnail.v1", PAIR_STATUS_CAPABILITY];
+pub const SERVER_CAPABILITIES: &[&str] = &[
+    "thumbnail.v1",
+    PAIR_STATUS_CAPABILITY,
+    PAIR_CANCEL_CAPABILITY,
+];
 
 /// NET-10 (#128): see [`SERVER_CAPABILITIES`].
 pub const PAIR_STATUS_CAPABILITY: &str = "pair.status.v1";
+
+/// DEV-07 (#463): `pair.cancel.v1` = this daemon lets the submitting phone
+/// withdraw a pending `pair.request`. A phone only sends `pair.cancel` when
+/// hello advertises it, so an older desktop (which would deny the unknown
+/// method and log a denial) is never probed with it.
+pub const PAIR_CANCEL_CAPABILITY: &str = "pair.cancel.v1";
 
 /// The ctrl-plane router: one per daemon process.
 #[derive(Clone)]
@@ -399,6 +409,7 @@ impl Router {
         match req.method.as_str() {
             methods::PAIR_REQUEST => self.handle_pair(peer, req).await,
             methods::PAIR_STATUS => self.handle_pair_status(peer, req),
+            methods::PAIR_CANCEL => self.handle_pair_cancel(peer, req).await,
             methods::DEVICE_UNPAIR => self.handle_unpair(peer, req).await,
             methods::FLOW_OFFER | methods::FLOW_FETCH | methods::FLOW_CANCEL => {
                 self.handle_flow_delivery(peer, req).await
@@ -934,8 +945,41 @@ impl Router {
                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
             );
         };
+        let state = pairing.status(peer, &query.request_id, (self.now)());
+        ok_json(&req.id, &self.pair_status_reply(state))
+    }
+
+    /// `pair.cancel` (DEV-07 #463): the submitting phone withdraws its own
+    /// pending request. Same params, reply shape and scoping as
+    /// `pair.status` — another NodeId's id reads `not_found` and is not
+    /// touched. The reply is the state after the withdrawal: `expired` for
+    /// a request that was still pending (the owner's queue row can no
+    /// longer be approved), or the verdict that had already landed.
+    async fn handle_pair_cancel(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        let Some(pairing) = &self.pairing else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let Ok(query) = serde_json::from_value::<proto::PairStatusRequest>(req.params.clone())
+        else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        let state = pairing.cancel(peer, &query.request_id, (self.now)()).await;
+        ok_json(&req.id, &self.pair_status_reply(state))
+    }
+
+    /// Ledger state → wire reply, shared by `pair.status` and `pair.cancel`.
+    fn pair_status_reply(
+        &self,
+        state: Option<crate::pairing::PairState>,
+    ) -> proto::PairStatusReply {
         use crate::pairing::PairState;
-        let reply = match pairing.status(peer, &query.request_id, (self.now)()) {
+        match state {
             Some(PairState::Pending) => proto::PairStatusReply {
                 state: "pending".into(),
                 ..Default::default()
@@ -962,8 +1006,7 @@ impl Router {
                 state: "not_found".into(),
                 ..Default::default()
             },
-        };
-        ok_json(&req.id, &reply)
+        }
     }
 
     /// `device.unpair` (UX-06): the caller revokes ITSELF. Unilateral

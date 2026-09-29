@@ -475,3 +475,210 @@ async fn hello_advertises_the_pair_status_capability_to_unpaired_peers() {
         hello.capabilities
     );
 }
+
+// ── DEV-07 (#463): the phone withdraws a pending request ────────────────
+
+async fn cancel(ctp: &IrohTransport, d: &Desk, request_id: &str) -> PairStatusReply {
+    let resp = rpc(
+        ctp,
+        d.tp.node_id(),
+        methods::PAIR_CANCEL,
+        serde_json::to_value(PairStatusRequest {
+            request_id: request_id.into(),
+        })
+        .unwrap(),
+    )
+    .await;
+    assert!(resp.ok, "pair.cancel must answer ok: {resp:?}");
+    serde_json::from_value(resp.result.unwrap()).unwrap()
+}
+
+/// 验收 E2（#463 收窄后的标准 2）：手机点「取消」→ `pair.cancel` →
+/// 之后主人点「允许」，`confirm` 返回 `Expired`，**不写 device 行**，不记
+/// `pair.accepted`。改前：取消只改手机自己的屏幕，决策任务把
+/// `decision_rx` 留到 600 s TTL，主人的允许照样落库（模拟器实测第 9 行
+/// `9ffe785c27… role=member`）。
+#[tokio::test(flavor = "multi_thread")]
+async fn phone_cancel_then_owner_allow_is_expired_and_writes_no_device() {
+    let d = desk(Db::open_in_memory().await.unwrap(), None).await;
+    let ctp = phone(&d).await;
+    let qr = d.pairing.start([0x70; 12], now());
+    let s = submitted(submit(&ctp, &d, &token_of(&qr), "取消了的手机").await);
+    wait_queue(&d.ipc, 1).await;
+
+    let c = cancel(&ctp, &d, &s.request_id).await;
+    assert_eq!(
+        c.state, "expired",
+        "a withdrawn request is no longer pending: {c:?}"
+    );
+
+    // 主人在手机取消之后点「允许」。
+    let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, true);
+    assert!(
+        matches!(outcome, daemon::ConfirmOutcome::Expired(_)),
+        "the owner's Allow landed on a withdrawn request: {outcome:?}"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(
+        d.db.get_device(&ctp.node_id().0).await.unwrap().is_none(),
+        "no device row for a phone that walked away"
+    );
+    assert!(
+        d.db.pairing_epoch(&ctp.node_id().0)
+            .await
+            .unwrap()
+            .is_none(),
+        "no pairing epoch either"
+    );
+    let audit = d.db.list_audit(20).await.unwrap();
+    assert!(
+        !audit.iter().any(|r| r.entry.kind == "pair.accepted"),
+        "{:?}",
+        audit.iter().map(|r| &r.entry.kind).collect::<Vec<_>>()
+    );
+    assert!(
+        audit.iter().any(|r| r.entry.kind == "pair.denied"),
+        "the withdrawal is on the trail like any other no-verdict ending"
+    );
+    assert_eq!(status(&ctp, &d, &s.request_id).await.state, "expired");
+}
+
+/// 手机撤回之后，`pairing.pending` 里这一行照实标 `expired`（与过了 TTL
+/// 的行同一个字段），不再冒充一条还能批的活请求。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_withdrawn_row_is_reported_expired_in_the_owner_queue() {
+    let d = desk(Db::open_in_memory().await.unwrap(), None).await;
+    let ctp = phone(&d).await;
+    let qr = d.pairing.start([0x75; 12], now());
+    let s = submitted(submit(&ctp, &d, &token_of(&qr), "取消了的手机").await);
+    wait_queue(&d.ipc, 1).await;
+    let before = d.ipc.pending_summary().await;
+    assert_eq!(before[0]["expired"], serde_json::json!(false), "{before:?}");
+
+    cancel(&ctp, &d, &s.request_id).await;
+    let rows = d.ipc.pending_summary().await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["expired"], serde_json::json!(true), "{rows:?}");
+}
+
+/// 只有提交者本人能撤回：别的 NodeId 拿着 request_id 调 `pair.cancel`
+/// 读到 `not_found` 且**什么都不动**——主人照常允许，照常加入。
+#[tokio::test(flavor = "multi_thread")]
+async fn another_device_cannot_withdraw_someone_elses_request() {
+    let d = desk(Db::open_in_memory().await.unwrap(), None).await;
+    let ctp = phone(&d).await;
+    let intruder = phone(&d).await;
+    let qr = d.pairing.start([0x71; 12], now());
+    let s = submitted(submit(&ctp, &d, &token_of(&qr), "真正的手机").await);
+    wait_queue(&d.ipc, 1).await;
+
+    let c = cancel(&intruder, &d, &s.request_id).await;
+    assert_eq!(c.state, "not_found", "{c:?}");
+    assert_eq!(status(&ctp, &d, &s.request_id).await.state, "pending");
+
+    let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, true);
+    assert!(
+        matches!(outcome, daemon::ConfirmOutcome::Decided(_)),
+        "{outcome:?}"
+    );
+    let (r, _) = poll_until_settled(
+        &ctp,
+        &d,
+        &s.request_id,
+        Duration::from_millis(50),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(r.state, "accepted");
+}
+
+/// 主人的「允许」先到、手机的取消后到：已落定的结论不被撤回改写——
+/// 桌面已经报了「已允许」，库里这一行是真的，撤回只读回 accepted。
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_after_the_owner_allowed_does_not_undo_the_join() {
+    let d = desk(Db::open_in_memory().await.unwrap(), None).await;
+    let ctp = phone(&d).await;
+    let qr = d.pairing.start([0x72; 12], now());
+    let s = submitted(submit(&ctp, &d, &token_of(&qr), "手慢的手机").await);
+    wait_queue(&d.ipc, 1).await;
+    let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, true);
+    assert!(
+        matches!(outcome, daemon::ConfirmOutcome::Decided(_)),
+        "{outcome:?}"
+    );
+
+    let c = cancel(&ctp, &d, &s.request_id).await;
+    assert_eq!(c.state, "accepted", "{c:?}");
+    assert!(c.accepted.is_some());
+    assert!(d.db.get_device(&ctp.node_id().0).await.unwrap().is_some());
+}
+
+/// 取消后用**同一张码**再扫：token 是一次性的，撤回不会让它复活——手机
+/// 拿回原 request_id，读到 expired，要请主人重新生成配对码。桌面队列
+/// 不会因为重扫多出第二行。
+#[tokio::test(flavor = "multi_thread")]
+async fn rescanning_the_same_code_after_cancel_reads_expired() {
+    let d = desk(Db::open_in_memory().await.unwrap(), None).await;
+    let ctp = phone(&d).await;
+    let qr = d.pairing.start([0x73; 12], now());
+    let s = submitted(submit(&ctp, &d, &token_of(&qr), "反悔又回来的手机").await);
+    wait_queue(&d.ipc, 1).await;
+    assert_eq!(cancel(&ctp, &d, &s.request_id).await.state, "expired");
+
+    let again = submitted(submit(&ctp, &d, &token_of(&qr), "反悔又回来的手机").await);
+    assert_eq!(again.request_id, s.request_id);
+    assert_eq!(status(&ctp, &d, &again.request_id).await.state, "expired");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(d.ipc.pending_names().len(), 1, "no second queue row");
+}
+
+/// 新手机据 hello 判断能不能撤回（旧桌面不认 `pair.cancel`，会按未知方法
+/// 拒绝并记一条 denial——所以手机只在看到能力时才发）。
+#[tokio::test(flavor = "multi_thread")]
+async fn hello_advertises_the_pair_cancel_capability_to_unpaired_peers() {
+    let d = desk(Db::open_in_memory().await.unwrap(), None).await;
+    let ctp = phone(&d).await;
+    let resp = rpc(&ctp, d.tp.node_id(), methods::HELLO, serde_json::json!({})).await;
+    let hello: proto::Hello = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert!(
+        hello.capabilities.iter().any(|c| c == "pair.cancel.v1"),
+        "{:?}",
+        hello.capabilities
+    );
+}
+
+/// 竞态口径：主人的「允许」与手机的撤回**同时**摆在决策任务面前时，
+/// 主人赢——`confirm` 已经对主人说了「已允许」，这句话必须兑现（DEV-05
+/// 的反面教训：桌面报成功、库里却没有）。current_thread 保证两件事都在
+/// 决策任务第一次被调度前就位。
+#[tokio::test(flavor = "current_thread")]
+async fn a_decision_already_delivered_beats_a_simultaneous_withdrawal() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (pairing, mut pending_rx) =
+        Pairing::new(db.clone(), transport::NodeId([0x01; 32]), None, None);
+    let peer = transport::NodeId([0x74; 32]);
+    let qr = pairing.start([0x74; 12], now());
+    let sub = pairing
+        .submit_request(
+            peer,
+            &PairRequest {
+                token: token_of(&qr),
+                device_name: "同时到的手机".into(),
+                ack_then_poll: true,
+                ..Default::default()
+            },
+            now(),
+        )
+        .await
+        .unwrap();
+    let row = pending_rx.try_recv().expect("queued");
+    row.decide(daemon::PairDecision::Accept)
+        .expect("the owner's click is delivered while the task is still waiting");
+
+    let settled = pairing.cancel(peer, &sub.request_id, now()).await;
+    assert!(
+        matches!(settled, Some(daemon::PairState::Accepted { .. })),
+        "{settled:?}"
+    );
+    assert!(db.get_device(&peer.0).await.unwrap().is_some());
+}

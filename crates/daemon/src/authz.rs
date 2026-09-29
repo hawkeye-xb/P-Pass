@@ -30,7 +30,16 @@ pub enum Decision {
 /// Scoping is done by the handler, not here: `router.rs`
 /// `handle_pair_status` answers only for request_ids submitted by the
 /// caller's own NodeId and reports any other id as `not_found`.
-const UNPAIRED_METHODS: &[&str] = &[methods::HELLO, methods::PAIR_REQUEST, methods::PAIR_STATUS];
+///
+/// DEV-07 (#463): `pair.cancel` is the same door with the same scoping —
+/// the withdrawing phone is exactly as unpaired/revoked as it was when it
+/// submitted, and `handle_pair_cancel` only touches the caller's own ids.
+const UNPAIRED_METHODS: &[&str] = &[
+    methods::HELLO,
+    methods::PAIR_REQUEST,
+    methods::PAIR_STATUS,
+    methods::PAIR_CANCEL,
+];
 
 /// 权限表 (T-030): viewer 只许浏览/诊断; member 加 backup.* 和新 Flow
 /// delivery; owner 全部（pair 确认走 IPC 而非网络方法，见 T-034）。
@@ -51,7 +60,7 @@ fn role_allows(role: Role, method: &str) -> bool {
     let self_unpair = method == methods::DEVICE_UNPAIR;
     let member_delivery = method.starts_with("backup.") || method.starts_with("flow.");
     // NET-10: see UNPAIRED_METHODS — own-request scoping lives in the handler.
-    if method == methods::PAIR_STATUS {
+    if method == methods::PAIR_STATUS || method == methods::PAIR_CANCEL {
         return true;
     }
     match role {
@@ -80,7 +89,10 @@ pub fn check(device: Option<&Device>, method: &str) -> Decision {
         // 必须能重新加入。它没有新令牌就过不了配对（令牌在 owner 手里
         // = owner 授权），其余方法一律拒绝（走查实测抓到的产品 bug）。
         Some(d) if d.revoked => {
-            if method == methods::PAIR_REQUEST || method == methods::PAIR_STATUS {
+            if method == methods::PAIR_REQUEST
+                || method == methods::PAIR_STATUS
+                || method == methods::PAIR_CANCEL
+            {
                 Decision::Allow
             } else {
                 Decision::Deny {
@@ -235,6 +247,25 @@ mod tests {
             assert!(
                 allowed(Some(&device(role, false)), methods::PAIR_STATUS),
                 "{role:?} must be able to read its own pair.status"
+            );
+        }
+    }
+
+    /// DEV-07 (#463): the withdrawing phone is in whatever state it was
+    /// when it submitted (unpaired / revoked), or already a member if the
+    /// owner's Allow won the race — every state must reach the handler,
+    /// which scopes by NodeId and no-ops on settled requests.
+    #[test]
+    fn pair_cancel_passes_the_gate_in_every_device_state() {
+        assert!(allowed(None, methods::PAIR_CANCEL));
+        assert!(allowed(
+            Some(&device(Role::Member, true)),
+            methods::PAIR_CANCEL
+        ));
+        for role in [Role::Viewer, Role::Member, Role::Owner] {
+            assert!(
+                allowed(Some(&device(role, false)), methods::PAIR_CANCEL),
+                "{role:?} must be able to withdraw its own pair.request"
             );
         }
     }
