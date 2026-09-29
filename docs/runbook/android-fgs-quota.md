@@ -1,6 +1,6 @@
 # Android dataSync 前台服务配额：几分钟内复现「配额耗尽」
 
-Android 15（SDK 35）起，`dataSync` 类型前台服务在 24 小时滚动窗口内累计最多约 6 小时，
+Android 15（SDK 35）起，`dataSync` 类型前台服务累计运行最多约 6 小时（何时清零见下文，不是简单的 24 小时滚动窗口），
 到点系统回调 `Service.onTimeout()`，App 须在 `fgs_crash_extra_wait_duration`（本机 10 秒）内停下，
 否则进程被杀。真实 6 小时没法等，用 `tools/android-fgs-quota.sh` 把配额压到几十秒。
 相关卡：[#409](https://github.com/hawkeye-xb/P-Pass/issues/409)、
@@ -43,6 +43,9 @@ just android-fgs-quota reset           # 恢复系统默认（做完实验必须
   `Cannot override 317799821 for com.hawkeyexb.ppass because the app's targetSdk (35) is above the change's targetSdk threshold (34)`。
 - **App 在前台时不会到点，但前台运行的时间照样计入累计时长。**「切回前台清零」只在两种情况下发生：
   在前台时调用 `startForeground`；或者上次超时之后 App 又回过前台，下一次 `startForeground` 时清零。
+  另有一条源码推断（未实测）：上一次会话开始距今超过 24h，下一次 `startForeground` 时也清零。
+  这个起点是**最近一次**会话的开始时间（`TimeLimitedFgsInfo.noteFgsFgsStart` 在并行数从 0 变 1 时覆盖它），
+  被拒的申请不会更新它，累计时长也不随时间衰减。
   到点时刻取两者中较晚的一个：`本次启动 + (配额 − 累计)`，或者 `最后一次离开前台 + 配额`。
   依据是 AOSP android15-release 的 `ActiveServices.onFgsTimeout` / `getNextFgsStopTime`，下面的实测与它吻合（配额 60 秒）：
   - 前台跑了 77.4 秒，16:58:17.2 离开前台。16:58:59.6 在后台起 FGS，**17.5 秒后**（16:59:17.19）就到点了，
