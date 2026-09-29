@@ -168,6 +168,152 @@ fn revoke_drops_every_held_import() {
     wait_until_gone(&provider, import.hash);
 }
 
+/// NET-29: an endpoint whose only relay is a closed local port — iroh's
+/// `online()` can never resolve, exactly like the provider endpoint in the
+/// #467 captures that never got a home relay connected. Minimal preset: no
+/// n0 address lookup, so this stays fully offline.
+fn never_online() -> TransportConfig {
+    TransportConfig {
+        relay_urls: vec!["http://127.0.0.1:1".into()],
+        n0_services: false,
+        secret_key: None,
+        alpns: vec![ALPN_BLOBS.into()],
+        bind_addr: None,
+    }
+}
+
+const NET29_ONLINE_TIMEOUT: Duration = Duration::from_millis(400);
+
+/// NET-29 (#467) RED→GREEN: the first endpoint never comes online. The serve
+/// must fail as `provider_offline` (wording the Android caller classifies)
+/// with the stuck endpoint's diagnostics, and must leave a freshly bound
+/// endpoint behind — so the very next serve in the SAME process succeeds and
+/// the bytes pull intact, with the held import and the shared store surviving
+/// the stuck endpoint's retirement.
+#[test]
+fn an_endpoint_that_never_comes_online_is_replaced_and_the_next_serve_succeeds() {
+    let dir = tempdir().unwrap();
+    let bytes = photo_bytes(40 * 1024, 29);
+    let source = write_photo(dir.path(), "photo.jpg", &bytes);
+    let provider = AndroidBlobsProvider::with_endpoint_factory(
+        dir.path(),
+        |generation| match generation {
+            0 => never_online(),
+            _ => TransportConfig::loopback(vec![ALPN_BLOBS.into()]),
+        },
+        NET29_ONLINE_TIMEOUT,
+    )
+    .unwrap();
+    let import = provider
+        .import_media(None, File::open(&source).unwrap())
+        .unwrap();
+    let stuck = provider.endpoint_node_id();
+
+    let error = provider.serve(import.hash).unwrap_err().to_string();
+    assert!(error.contains("did not become online"), "{error}");
+    assert!(
+        error.contains("homeRelay=["),
+        "diagnostics missing: {error}"
+    );
+    assert!(
+        provider.is_held(import.hash),
+        "replacing the endpoint must not drop held imports"
+    );
+
+    // Let the stuck endpoint's retirement (router shutdown) finish first: it
+    // must not have shut the shared store down.
+    std::thread::sleep(Duration::from_millis(500));
+    let ticket = provider
+        .serve(import.hash)
+        .expect("the next serve in the same process must not hit the stuck endpoint again");
+    assert_eq!(pull(dir.path(), &ticket).unwrap(), bytes);
+    assert_eq!(
+        provider.transfer_status(),
+        ActiveTransferStatus::Completed { hash: import.hash }
+    );
+    assert_eq!(provider.endpoint_generation(), 1, "{error}");
+    assert_ne!(
+        provider.endpoint_node_id(),
+        stuck,
+        "the ticket must come from a new endpoint"
+    );
+}
+
+/// NET-29: retiring a replaced endpoint while an earlier lease's handler is
+/// installed (serial items: item 1 served, the endpoint then loses its relay)
+/// must only close that endpoint. Its router shutdown reaching the shared
+/// handler would shut the provider store down (`BlobsProtocol::shutdown`),
+/// and every later item would fail on the replacement endpoint.
+#[test]
+fn retiring_a_replaced_endpoint_keeps_the_shared_store_serving() {
+    let dir = tempdir().unwrap();
+    let first = photo_bytes(40 * 1024, 31);
+    let second = photo_bytes(40 * 1024, 32);
+    let first_source = write_photo(dir.path(), "first.jpg", &first);
+    let second_source = write_photo(dir.path(), "second.jpg", &second);
+    let provider = AndroidBlobsProvider::with_endpoint_factory(
+        dir.path(),
+        |_| TransportConfig::loopback(vec![ALPN_BLOBS.into()]),
+        NET29_ONLINE_TIMEOUT,
+    )
+    .unwrap();
+    let first_import = provider
+        .import_media(None, File::open(&first_source).unwrap())
+        .unwrap();
+    let ticket = provider.serve(first_import.hash).unwrap();
+    assert_eq!(pull(dir.path(), &ticket).unwrap(), first);
+    provider.release_retention();
+
+    let replaced = provider.replace_endpoint_for_test();
+    assert!(replaced.starts_with("replaced by"), "{replaced}");
+    std::thread::sleep(Duration::from_millis(500));
+
+    let second_import = provider
+        .import_media(None, File::open(&second_source).unwrap())
+        .expect("the provider store must survive the old endpoint's retirement");
+    let ticket = provider.serve(second_import.hash).unwrap();
+    assert_eq!(pull(dir.path(), &ticket).unwrap(), second);
+}
+
+/// NET-29: an endpoint that stays offline is replaced on EVERY failed serve —
+/// every attempt gets a fresh endpoint instead of the same stuck one, and the
+/// deadline stays the same (no widened wait inside one serve).
+#[test]
+fn a_persistently_offline_provider_replaces_its_endpoint_on_each_failed_serve() {
+    let dir = tempdir().unwrap();
+    let bytes = photo_bytes(20 * 1024, 30);
+    let source = write_photo(dir.path(), "photo.jpg", &bytes);
+    let provider = AndroidBlobsProvider::with_endpoint_factory(
+        dir.path(),
+        |_| never_online(),
+        NET29_ONLINE_TIMEOUT,
+    )
+    .unwrap();
+    let import = provider
+        .import_media(None, File::open(&source).unwrap())
+        .unwrap();
+
+    let mut seen = vec![provider.endpoint_node_id()];
+    for attempt in 1..=3u64 {
+        let started = std::time::Instant::now();
+        let error = provider.serve(import.hash).unwrap_err().to_string();
+        let took = started.elapsed();
+        assert!(error.contains("did not become online"), "{error}");
+        assert!(
+            took < NET29_ONLINE_TIMEOUT * 3,
+            "one serve waits one deadline, took {took:?}"
+        );
+        assert_eq!(provider.endpoint_generation(), attempt);
+        let id = provider.endpoint_node_id();
+        assert!(
+            !seen.contains(&id),
+            "attempt {attempt} reused a stuck endpoint"
+        );
+        seen.push(id);
+    }
+    assert!(provider.is_held(import.hash));
+}
+
 #[cfg(feature = "android-jni")]
 mod reference {
     use super::*;

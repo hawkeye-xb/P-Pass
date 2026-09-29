@@ -2816,3 +2816,82 @@ fn dir_bytes(dir: &Path) -> u64 {
     walk(dir, &mut total);
     total
 }
+
+/// NET-29 (#467) capture 1 RED→GREEN: the provider accepts the blobs
+/// connection but never answers the request (its transport holds the
+/// connection with no blobs handler attached) — the daemon's fetch sent its
+/// request and then waited forever, while the phone kept polling `active`.
+/// With no payload byte inside the stall limit the fetch must fail, push
+/// `flow.failed` with `fetch_failed` (a path failure on the phone, which then
+/// serves and offers again), and stop running, so the next offer / status
+/// poll starts a fresh attempt.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_fetch_that_receives_no_bytes_fails_within_the_stall_limit_and_pushes_flow_failed() {
+    use transport::Transport;
+
+    const STALL: std::time::Duration = std::time::Duration::from_millis(500);
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    let bytes = b"NET-29 silent provider fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    // A ticket for content the provider has — but no blobs handler is ever
+    // attached, so the accepted connection never answers the request.
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+    let _silent_listener = provider_transport.listen().await;
+    let provider_node = provider_transport.node_id();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_node).await;
+    let (event_bus, mut event_rx) = events::bus();
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path())
+        .with_events_and_window(event_bus, std::time::Duration::from_millis(20))
+        .with_fetch_byte_stall(STALL);
+    let offer = request("epoch-current", "lease-current", hash, ticket);
+
+    let started = std::time::Instant::now();
+    let reply = delivery.offer(provider_node, &offer).await.unwrap();
+    assert_eq!(reply.state, "active");
+    let failed = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if event["event"].as_str() == Some(events::FLOW_FAILED) {
+                return event;
+            }
+        }
+    })
+    .await
+    .expect("a fetch with no byte progress must fail and push flow.failed, not hang");
+    let took = started.elapsed();
+    assert!(took >= STALL, "failed before the stall limit: {took:?}");
+    assert_eq!(failed["data"]["code"].as_str(), Some("fetch_failed"));
+    assert_eq!(failed["data"]["queue_sequence"].as_u64(), Some(7));
+    assert_eq!(
+        failed["data"]["lease_token"].as_str(),
+        Some("lease-current")
+    );
+
+    // The grant stays active (a path failure is resumable), and the stalled
+    // task is gone: the next offer starts a fresh fetch task.
+    let again = delivery.offer(provider_node, &offer).await.unwrap();
+    assert_eq!(again.state, "active");
+    assert!(
+        again.task_running,
+        "a re-offer after the stall starts a new attempt"
+    );
+}

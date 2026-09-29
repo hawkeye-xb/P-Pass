@@ -506,7 +506,20 @@ pub struct FlowDelivery {
     /// IDX-06 (#442): background thumbnail pre-generation. `None` = no
     /// pre-generation; `thumb.get` still generates on first view.
     thumbs: Option<ThumbPregen>,
+    /// NET-29 (#467): how long one native fetch may go without receiving a
+    /// payload byte before it fails as `fetch_failed`. Tests inject one.
+    fetch_byte_stall: std::time::Duration,
 }
+
+/// NET-29 (#467) capture 1: the daemon's fetch sent its request and then
+/// waited forever — no bytes, no error — while the phone kept polling an
+/// `active` grant. With no byte progress for this long the fetch fails, the
+/// daemon pushes `flow.failed` (`fetch_failed` → a path failure on the phone)
+/// and the phone serves and offers again. Byte progress resets the clock, so
+/// only a transfer that has stopped moving is cut. Set below the phone's own
+/// 180 s byte-stall give-up (`BYTE_STALL_THRESHOLD_MS`) so the desktop, which
+/// sees the stall first-hand, reports it first.
+pub const FETCH_BYTE_STALL_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl FlowDelivery {
     /// `library_root` is the daemon data directory. The dedicated flow blob
@@ -532,7 +545,14 @@ impl FlowDelivery {
             now: Arc::new(unix_ms_now),
             free_space: Arc::new(platform_free_bytes),
             thumbs: None,
+            fetch_byte_stall: FETCH_BYTE_STALL_LIMIT,
         }
+    }
+
+    /// NET-29: override [`FETCH_BYTE_STALL_LIMIT`] (tests).
+    pub fn with_fetch_byte_stall(mut self, limit: std::time::Duration) -> Self {
+        self.fetch_byte_stall = limit;
+        self
     }
 
     /// IDX-06 (#442): hand every freshly materialized item to the
@@ -1074,7 +1094,7 @@ impl FlowDelivery {
         let mut conn_path: &'static str = "unknown";
         let fetch_result = self
             .blobs
-            .fetch_from_observing_path(provider, hash, |status| {
+            .fetch_from_observing_path_with_stall(provider, hash, self.fetch_byte_stall, |status| {
                 conn_path = status.as_str();
                 path_guard.set_path(status);
             })
