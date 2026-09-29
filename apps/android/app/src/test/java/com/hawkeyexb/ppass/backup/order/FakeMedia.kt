@@ -69,6 +69,17 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
 
     override fun volumeVersions(): Map<String, String> = versions
 
+    /** #459：为 true 时 [existingIds] 返回 null（模拟查询拿到 null 游标）。 */
+    var existingIdsUnreadable = false
+    var existingIdsCalls = 0
+
+    override fun existingIds(mediaIds: Collection<Long>): Set<Long>? {
+        existingIdsCalls++
+        if (existingIdsUnreadable) return null
+        val present = photos.mapTo(HashSet()) { it.mediaId }
+        return mediaIds.filterTo(HashSet()) { it in present }
+    }
+
     override fun lookup(mediaId: Long): MediaDetails? =
         photos.singleOrNull { it.mediaId == mediaId }?.let {
             MediaDetails(it.snapshot, "content://media/external/file/${it.mediaId}", "IMG_${it.mediaId}.jpg", "image/jpeg", it.size, 0L, "/sdcard/DCIM/IMG_${it.mediaId}.jpg")

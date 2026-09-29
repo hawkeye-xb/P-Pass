@@ -312,10 +312,14 @@ class SqliteOrderStore private constructor(
     }
 
     override fun setSourceMissing(id: Long, missing: Boolean, audit: AuditRecord?): Boolean = inTransaction {
-        val changed = compileStatement("UPDATE orders SET source_missing = ?, updated_at_ms = ? WHERE id = ?").use { st ->
-            st.bindLong(1, if (missing) 1 else 0)
-            st.bindLong(2, clock())
-            st.bindLong(3, id)
+        // 不写 updated_at_ms（见接口 KDoc）；只有 CONFIRMED、且值真的变了才算改。
+        val changed = compileStatement(
+            "UPDATE orders SET source_missing = ? WHERE id = ? AND state = '${OrderState.CONFIRMED.name}' AND source_missing != ?",
+        ).use { st ->
+            val flag = if (missing) 1L else 0L
+            st.bindLong(1, flag)
+            st.bindLong(2, id)
+            st.bindLong(3, flag)
             st.executeUpdateDelete() == 1
         }
         if (changed) writeAudit(audit)

@@ -163,6 +163,30 @@ abstract class OrderStoreContract {
         assertEquals(listOf(1L, 2L, 3L), store.readCurrentOrders { rows -> rows.map { it.mediaId }.toList() })
         assertEquals(2, store.confirmedWithHashAfter(0L, 10).size)
     }
+
+    // #459：标记是 MediaStore 的观察结果，不是一次传输的结局——不动 updated_at（「最近成功」与横幅水位按它算），
+    // 只对 CONFIRMED 生效，值没变返回 false。
+    // 反证：setSourceMissing 照旧写 updated_at_ms → lastConfirmedAtMs 跳到 9_000，红。
+    @Test
+    fun `source missing flag only applies to confirmed rows and never moves updated_at`() {
+        val store = newStore(clock)
+        val kept = store.insert(newOrder(1, OrderState.CONFIRMED))
+        val gone = store.insert(newOrder(2, OrderState.CONFIRMED))
+        val settled = store.insert(newOrder(3, OrderState.SKIPPED_SOURCE_MISSING))
+        now = 9_000L
+        assertTrue(store.setSourceMissing(gone.id, true))
+        assertFalse("值没变", store.setSourceMissing(gone.id, true))
+        assertFalse("不是 CONFIRMED", store.setSourceMissing(settled.id, true))
+        assertFalse(store.get(settled.id)!!.sourceMissing)
+        assertEquals(1_000L, store.get(gone.id)!!.updatedAtMs)
+        assertEquals(1_000L, store.lastConfirmedAtMs())
+        assertEquals(1L, store.countSourceMissingSkipped(afterMs = 0L))
+        assertEquals(1L, store.countConfirmedPresent(setOf(7L)))
+        assertTrue(store.setSourceMissing(gone.id, false))
+        assertEquals(2L, store.countConfirmedPresent(setOf(7L)))
+        assertEquals(1_000L, store.get(gone.id)!!.updatedAtMs)
+        assertEquals(kept, store.get(kept.id))
+    }
 }
 
 class InMemoryOrderStoreContractTest : OrderStoreContract() {

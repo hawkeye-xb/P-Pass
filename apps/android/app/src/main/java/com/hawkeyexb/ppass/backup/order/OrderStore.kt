@@ -63,7 +63,8 @@ data class Order(
     val updatedAtMs: Long,
     /**
      * #416 裁决 2：MediaStore 里已经没有这张的原图。CONFIRMED 不改写，只打这个标记。
-     * #413 去掉了本地对账，循环不再写它；列与读口径保留给 UI 的 m。
+     * #459：对账轮入口（FlowEngine.reconcileSourcePresence）按 MediaStore 差集写它——完整相册权限下原图不在了打 1，
+     * 同一个 media_id 又出现了（例如从回收站恢复）清回 0。只有 CONFIRMED 行会被打标记。
      */
     val sourceMissing: Boolean = false,
 )
@@ -179,7 +180,13 @@ interface OrderStore {
         audit: AuditRecord? = null,
     ): Boolean
 
-    /** #416 裁决 2：打 / 清 `source_missing` 标记。返回是否找到该行。 */
+    /**
+     * #416 裁决 2 / #459：打 / 清 `source_missing` 标记。只对 CONFIRMED 行生效；返回是否真的改了（行不存在、
+     * 不是 CONFIRMED、或标记本来就是这个值 → false）。
+     *
+     * **不动 `updated_at_ms`**：它是「这次传输什么时候有了结局」，「最近成功」（[lastConfirmedAtMs]）与
+     * 「源已删」横幅的确认水位（[countSourceMissingSkipped]）都按它算；原图后来被删只是 MediaStore 的观察结果。
+     */
     fun setSourceMissing(id: Long, missing: Boolean, audit: AuditRecord? = null): Boolean
 
     // ---------------------------------------------------------------- 意图：跳过名单

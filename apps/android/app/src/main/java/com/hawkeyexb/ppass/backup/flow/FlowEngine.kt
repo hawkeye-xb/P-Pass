@@ -56,6 +56,11 @@ internal class FlowEngine(
     private val control: FlowControl,
     private val conditions: () -> Conditions,
     private val inScope: (bucketId: Long) -> Boolean,
+    /**
+     * #459：「MediaStore 里查不到」此刻能不能当「原图被删了」。只有完整相册权限（图片 + 视频）才是 true——
+     * 部分授权 / 没授权时看不见的照片同样查不到。**没有默认值**：新的构造点必须想清楚再接（失败关闭）。
+     */
+    private val mediaAbsenceTrusted: () -> Boolean,
     /** 当前配对代号；null = 未配对。 */
     private val pairingEpoch: () -> PairingEpoch?,
     /** 单写者 scope。 */
@@ -390,6 +395,7 @@ internal class FlowEngine(
         // ---- 入口：不持有 FGS，只读元数据 ----
         val cycleStarted = System.nanoTime()
         prepareCursors(reconcile)
+        if (reconcile) reconcileSourcePresence()
         val todo = withContext(io) { countTodo() }
         setPending(todo)
         if (todo == 0 && store.scanState().dirty) {
@@ -907,15 +913,15 @@ internal class FlowEngine(
             for (order in page) {
                 val hash = order.contentHash ?: continue
                 if (hash !in missing || !inScope(order.bucketId)) continue
-                if (order.sourceMissing) {
-                    store.appendAudit(audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "UNRECOVERABLE", "contentHash" to hash)))
-                } else {
-                    store.insert(
-                        NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.PENDING, order.pairingEpoch),
-                        audit = audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "REUPLOAD", "contentHash" to hash)),
-                    )
-                    requeued++
-                }
+                // #459：`source_missing` 开始有人写之后，这里**故意不按它分流**，保持写入之前的行为：桌面缺、原图也删了的
+                // 照片照样新建一行待传输 → 取件时查不到原图 → 记「源已删」→ 进「无法恢复」横幅（#390 UI-20）。
+                // 按 #415 裁决 2 改成「只记 unrecoverable 审计」会让这类丢失对用户不可见，且 CONFIRMED 行留着、每个对账轮
+                // 都会再记一条审计——要不要这样改是产品决定，见 #459 PR。
+                store.insert(
+                    NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.PENDING, order.pairingEpoch),
+                    audit = audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "REUPLOAD", "contentHash" to hash)),
+                )
+                requeued++
             }
             after = page.last().id
         }
@@ -925,6 +931,79 @@ internal class FlowEngine(
         }
         bump()
         return requeued
+    }
+
+    // ---------------------------------------------------------------- 对账：原图还在吗（#459）
+
+    /** [sourcePresencePlan] 的结果：要打 / 要清 `source_missing` 的 order id。 */
+    private class SourcePresencePlan(val mark: List<Long>, val clear: List<Long>)
+
+    /**
+     * #459：对账轮入口（只读元数据、不持有 FGS）按 MediaStore 差集写 `source_missing`，让 order 表的「已确认且原图还在」
+     * （[OrderStore.countConfirmedPresent]，英雄区 m 在待办 / n 未知时的兜底）跟得上相册里的删除与恢复。
+     *
+     * 边界（任何一条不满足就不写）：
+     * - 只看**当前行是 CONFIRMED** 的：用户跳过（跳过名单 / SKIPPED_BY_USER）、源已删（SKIPPED_SOURCE_MISSING，
+     *   横幅水位按它的 updated_at 算）、在路上的行一概不碰；标记本身也不改 updated_at（见 [OrderStore.setSourceMissing]）。
+     * - 行记的相册不在范围里（相册被取消选中）→ 不打也不清：范围是查询条件，不是删除。
+     * - 不在范围内列表里 ≠ 被删：挪到别的相册的也不在。要再用 [MediaSnapshotSource.existingIds]（不看范围）确认；
+     *   它读不出来（null）→ 这一轮什么都不写。
+     * - 不是完整相册权限（[mediaAbsenceTrusted]）→ 整步跳过、不打也不清：部分授权下「看不见」≠「被删」。
+     */
+    private suspend fun reconcileSourcePresence() {
+        if (!mediaAbsenceTrusted()) {
+            log.log("source_missing: media access is not full; absence proves nothing, skipped")
+            return
+        }
+        val started = System.nanoTime()
+        val plan = try {
+            withContext(io) { sourcePresencePlan() }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            log.log("source_missing: MediaStore read failed (${failure.javaClass.simpleName}: ${failure.message}); nothing written")
+            return
+        }
+        if (plan == null) {
+            log.log("source_missing: MediaStore could not confirm which photos are gone; nothing written")
+            return
+        }
+        // 写在写者上（读在 io 上）。读完到写之间行可能变了：setSourceMissing 只改仍是 CONFIRMED 的行，改不到就算了。
+        val marked = plan.mark.count { store.setSourceMissing(it, true) }
+        val cleared = plan.clear.count { store.setSourceMissing(it, false) }
+        log.log("source_missing: marked $marked cleared $cleared (${msSince(started)}ms)")
+        if (marked + cleared > 0) bump()
+    }
+
+    /** 两路归并：范围内照片（按 `_id`）× 当前行（按 media_id）；列表里没有的再按 id 回查一次。null = 读不出来。 */
+    private fun sourcePresencePlan(): SourcePresencePlan? {
+        val clear = ArrayList<Long>()
+        val unlisted = ArrayList<Order>()
+        media.readInScope(0L) { snapshots ->
+            store.readCurrentOrders { orders ->
+                val s = snapshots.iterator()
+                var snap = if (s.hasNext()) s.next() else null
+                for (order in orders) {
+                    if (order.state != OrderState.CONFIRMED) continue
+                    while (snap != null && snap.mediaId < order.mediaId) snap = if (s.hasNext()) s.next() else null
+                    if (snap?.mediaId == order.mediaId) {
+                        if (order.sourceMissing) clear += order.id
+                        continue
+                    }
+                    if (!inScope(order.bucketId)) continue
+                    unlisted += order
+                }
+            }
+        }
+        if (unlisted.isEmpty()) return SourcePresencePlan(emptyList(), clear)
+        val existing = media.existingIds(unlisted.map { it.mediaId }) ?: return null
+        val mark = ArrayList<Long>()
+        for (order in unlisted) {
+            val present = order.mediaId in existing
+            if (!present && !order.sourceMissing) mark += order.id
+            if (present && order.sourceMissing) clear += order.id
+        }
+        return SourcePresencePlan(mark, clear)
     }
 
     // ---------------------------------------------------------------- 待办（现算）

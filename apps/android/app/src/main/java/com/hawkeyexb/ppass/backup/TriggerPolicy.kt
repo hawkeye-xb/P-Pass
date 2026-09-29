@@ -153,3 +153,14 @@ fun mediaAccessOf(
     isPartialMediaAccess(imagesGranted, visualSelectedGranted, sdkInt) -> MediaAccess.PARTIAL
     else -> MediaAccess.NONE
 }
+
+/**
+ * #459：「MediaStore 里查不到这张」此刻能不能当「原图被删了」（据此给 order 打 `source_missing`）。
+ *
+ * 只有完整相册权限才行——范围读的是图片**和视频**：
+ * - `imagesGranted`：主相册权限（API 33+ READ_MEDIA_IMAGES，更低版本 READ_EXTERNAL_STORAGE，与 [mediaAccessOf] 同口径）。
+ *   API 34+ 的「部分照片」授权下它是 false：只看得见选中的那几张，其余的查不到但并没有被删。
+ * - `videoGranted`：API 33+ 视频是单独一项权限（READ_MEDIA_VIDEO），没给就看不见任何视频；更低版本不需要。
+ */
+fun mediaAbsenceTrusted(imagesGranted: Boolean, videoGranted: Boolean, sdkInt: Int): Boolean =
+    imagesGranted && (sdkInt < 33 || videoGranted)
