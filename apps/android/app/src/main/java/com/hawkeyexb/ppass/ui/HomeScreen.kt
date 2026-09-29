@@ -206,8 +206,9 @@ fun HomeScreen(
     // 等于「永不备份」，且局域网传照片的能耗根本不是瓶颈。
     wifiOnly: Boolean = true,
     onWifiOnlyChange: (Boolean) -> Unit = {},
-    // M10（全页面状态稿）："备份失败时通知我"——真实开关，不是摆设，
-    // 默认开，落地到 NotifyOnFailurePrefs，BackupWorker 发通知前会读。
+    // M10（全页面状态稿）：通知开关——真实开关，不是摆设，默认开，落地到 NotifyOnFailurePrefs。
+    // #130：它管确定事件通知（配对失效 / 相册权限收回 / 系统停止后台备份），发之前由
+    // SystemDefinitiveEventNotifier 读；临时失败与单张失败本来就不发（#418）。
     notifyOnFailure: Boolean = true,
     onNotifyOnFailureChange: (Boolean) -> Unit = {},
     // MOB-65: 自动触发策略开关；它不表示当前 Flow 轮次是否暂停。

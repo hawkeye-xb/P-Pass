@@ -290,6 +290,9 @@ class BackupWorker(
         val reason = inputData.getString(KEY_REASON)
             ?.let { name -> TriggerReason.entries.firstOrNull { it.name == name } }
             ?: TriggerReason.MEDIA_CHANGE
+        // #130 第 1 层：每次 Worker 唤醒都查一次确定事件——放在后台开关的闸门之前（电池优化被打开后
+        // 意图还在、生产者可能已被挂起，这一次唤醒可能就是发现它的唯一机会）。
+        evaluateDefinitiveEvents(applicationContext)
         if (!automatic || AutoBackupPrefs(applicationContext.filesDir).enabled()) {
             runFlowWake(applicationContext, reason)
         }
