@@ -176,7 +176,7 @@ site-check:
 # REL-07: update Worker 单测（错误/缓存语义）。零依赖，Node ≥ 22.18/23.6
 # 内建 type stripping 直接加载 src/index.ts；远端由 ci-workers.yml test job 跑。
 workers-update-test:
-  node --test infra/workers/update/test/
+  node --test 'infra/workers/update/test/*.test.mjs'
 
 # SEC-02: 提交身份必须在 .github/allowed-identities.txt 白名单内。
 # 第二行是反证（证明门禁在该红时真的红），跟门禁同生共死。

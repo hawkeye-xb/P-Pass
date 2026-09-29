@@ -53,7 +53,7 @@ jobs:
         with:
           node-version: 24
       - name: node --test (update worker)
-        run: node --test infra/workers/update/test/
+        run: node --test 'infra/workers/update/test/*.test.mjs'
 
   deploy:
     name: deploy workers (审批门)

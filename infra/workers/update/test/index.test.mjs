@@ -1,6 +1,6 @@
 // REL-07: update Worker 的错误/缓存语义单测——零依赖，node:test + fetch/caches mock。
 //
-// 跑法：just workers-update-test（= node --test infra/workers/update/test/）。
+// 跑法：just workers-update-test（= node --test 'infra/workers/update/test/*.test.mjs'）。
 // index.ts 本身不含类型注解，Node 内建 type stripping 直接加载；
 // CI 用 node 24（ci-workers.yml 的 test job）。
 import { beforeEach, describe, it } from "node:test";
