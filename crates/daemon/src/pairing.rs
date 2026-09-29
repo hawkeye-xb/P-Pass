@@ -30,8 +30,14 @@
 //! phone never learned about. A withdrawal ends the decision task the same
 //! way the TTL does — `decision_rx` is closed, the owner's click then gets
 //! `decide`'s Err (`ConfirmOutcome::Expired`), and nothing is written.
+//!
+//! DEV-07 follow-up (#463): a withdrawn row also **leaves the owner's
+//! queue**. The decision task marks the queued [`PendingPair`] withdrawn
+//! and emits `pairing.pending_changed`; the IPC queue drops marked rows on
+//! every read (`ipc.rs`), so the desktop's refresh no longer lists it.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use storage::{Db, Device, Role};
@@ -115,6 +121,10 @@ pub struct PendingPair {
     /// "已失效" marker is expressible. Set at enqueue; never updated.
     pub requested_at: i64,
     decision: oneshot::Sender<PairDecision>,
+    /// DEV-07 follow-up (#463): set by the decision task when the phone's
+    /// withdrawal — not the TTL, not an owner verdict — ended the request.
+    /// The owner queue drops such rows instead of listing them.
+    withdrawn: Arc<AtomicBool>,
 }
 
 /// The owner's click landed on a request whose other end is gone: the
@@ -142,6 +152,23 @@ impl PendingPair {
     pub fn is_abandoned(&self) -> bool {
         self.decision.is_closed()
     }
+
+    /// DEV-07 follow-up (#463): the phone withdrew this request
+    /// (`pair.cancel`) and no owner verdict had landed. Narrower than
+    /// [`Self::is_abandoned`]: a request-side TTL expiry closes the channel
+    /// too, but that row keeps its DEV-05 "已失效" display — only a
+    /// withdrawn row leaves the queue.
+    pub fn is_withdrawn(&self) -> bool {
+        self.withdrawn.load(Ordering::Acquire)
+    }
+}
+
+/// DEV-07 (#463): the decision task's half of a phone withdrawal — the
+/// signal `Pairing::cancel` fires, and the marker the task sets on the
+/// queued [`PendingPair`] when that signal (not the owner) ended it.
+struct Withdrawal {
+    signal: oneshot::Receiver<()>,
+    marker: Arc<AtomicBool>,
 }
 
 struct TokenState {
@@ -344,7 +371,7 @@ impl Pairing {
             _ => Role::Member,
         };
 
-        let (request_id, decision_rx, withdraw_rx) = {
+        let (request_id, decision_rx, withdraw_rx, withdrawn) = {
             let mut inner = self.inner.lock().expect("pairing lock");
             inner.sweep_tickets(now_ms);
             let token = parse_token(&req.token).ok_or(PairRejection::BadToken)?;
@@ -369,12 +396,14 @@ impl Pairing {
 
             let request_id = fresh_request_id().map_err(|_| PairRejection::OwnerDeclined)?;
             let (tx, rx) = oneshot::channel();
+            let withdrawn = Arc::new(AtomicBool::new(false));
             let pending = PendingPair {
                 peer,
                 device_name: req.device_name.clone(),
                 role,
                 requested_at: now_ms,
                 decision: tx,
+                withdrawn: Arc::clone(&withdrawn),
             };
             if inner.pending_tx.send(pending).is_err() {
                 return Err(PairRejection::OwnerDeclined); // UI gone = no
@@ -392,7 +421,7 @@ impl Pairing {
                     withdraw: Some(withdraw_tx),
                 },
             );
-            (request_id, rx, withdraw_rx)
+            (request_id, rx, withdraw_rx, withdrawn)
         };
 
         // T5: 扫码请求到达即审计（含后续被拒/超时——审计要全，不只看成功）。
@@ -412,7 +441,17 @@ impl Pairing {
         let id = request_id.clone();
         tokio::spawn(async move {
             let (state, settled_at) = this
-                .await_owner(peer, device_name, role, now_ms, decision_rx, withdraw_rx)
+                .await_owner(
+                    peer,
+                    device_name,
+                    role,
+                    now_ms,
+                    decision_rx,
+                    Withdrawal {
+                        signal: withdraw_rx,
+                        marker: withdrawn,
+                    },
+                )
                 .await;
             let mut inner = this.inner.lock().expect("pairing lock");
             if let Some(t) = inner.tickets.get_mut(&id) {
@@ -497,8 +536,12 @@ impl Pairing {
         role: Role,
         now_ms: i64,
         mut decision_rx: oneshot::Receiver<PairDecision>,
-        mut withdraw_rx: oneshot::Receiver<()>,
+        withdrawal: Withdrawal,
     ) -> (PairState, i64) {
+        let Withdrawal {
+            signal: mut withdraw_rx,
+            marker: withdrawn,
+        } = withdrawal;
         // DEV-05 (#276): the wait for the owner is bounded. Without this
         // arm, a request whose phone already gave up sat in `await` until
         // process exit — and the queue row stayed clickable. The timeout
@@ -508,6 +551,7 @@ impl Pairing {
         let wait_started = tokio::time::Instant::now();
         let ttl = tokio::time::sleep(std::time::Duration::from_millis(self.pending_ttl_ms as u64));
         tokio::pin!(ttl);
+        let mut phone_withdrew = false;
         let heard = tokio::select! {
             // DEV-07 (#463): `biased` with the owner's arm FIRST. A decision
             // already delivered means `confirm` has told the owner
@@ -517,7 +561,10 @@ impl Pairing {
             d = &mut decision_rx => d.ok(),
             // Only an actual withdrawal counts; the ticket dropping its
             // sender (never happens while pending) disables this arm.
-            Ok(()) = &mut withdraw_rx => None,
+            Ok(()) = &mut withdraw_rx => {
+                phone_withdrew = true;
+                None
+            }
             // TTL: no verdict. A dropped sender (row replaced/swept, owner
             // UI gone) resolves the first arm with Err → None as well.
             () = &mut ttl => None,
@@ -529,6 +576,23 @@ impl Pairing {
         decision_rx.close();
         let decision = heard.or_else(|| decision_rx.try_recv().ok());
         drop(decision_rx);
+        // DEV-07 follow-up (#463): withdrawn with no owner verdict — the
+        // row is unapprovable from the close above, so take it off the
+        // owner's screen now: mark it (the IPC queue drops marked rows on
+        // every read) and push the existing queue-change event so the
+        // desktop refreshes instead of waiting for its fallback poll. An
+        // owner verdict that won the race is not marked: `confirm` already
+        // removed that row itself.
+        if phone_withdrew && decision.is_none() {
+            withdrawn.store(true, Ordering::Release);
+            if let Some(bus) = &self.events {
+                crate::events::emit(
+                    bus,
+                    crate::events::PAIRING_PENDING_CHANGED,
+                    serde_json::json!({ "pending": 0 }), // 占位，客户端全量拉取
+                );
+            }
+        }
         // DEV-05 (#276) 验收标准 4: the verdict timestamp is taken NOW —
         // the moment the owner decided (or the request expired) — not the
         // `now_ms` captured at request entry. Accept and deny share the

@@ -1280,3 +1280,112 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
         "paired_at 是「首次」配对时间，重连不重置"
     );
 }
+
+/// DEV-07 后续（#463，产品拍板「撤回的那一行直接消失」），走桌面真实用的
+/// 那条 IPC 口径验收：
+/// - 手机撤回 → 订阅连接收到已有的 `pairing.pending_changed`（桌面靠它
+///   即时 refresh，不等兜底轮询）；
+/// - refresh 读到的 `pairing.pending` 与 `status.pending_pairs` 都不再算这
+///   一行——横幅（按 `pending_pairs` 显示、按钮走队首语义）不会在弹窗关掉
+///   之后重新露出一个可点的「允许」；
+/// - 按 node_id 点、按队首点，都点不到它，不写设备行。
+///
+/// 反证靶子：去掉 `await_owner` 里的 emit → 等事件超时变红；`status` 不走
+/// `live_queue` → `pending_pairs` 断言变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn withdrawn_request_leaves_queue_and_pushes_pending_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, pairing, socket, token) = start(dir.path(), "withdraw").await;
+    let mut c = IpcClient::connect(&socket, &token).await;
+
+    let phone_a = transport::NodeId([0xA7; 32]);
+    let phone_b = transport::NodeId([0xB7; 32]);
+    let mut request_ids = Vec::new();
+    for (i, (peer, name)) in [(phone_a, "撤回的手机"), (phone_b, "还在等的手机")]
+        .into_iter()
+        .enumerate()
+    {
+        let qr = pairing.start([0x31 + i as u8; 12], now());
+        let t = qr.rsplit("&t=").next().unwrap().to_string();
+        let sub = pairing
+            .submit_request(
+                peer,
+                &proto::PairRequest {
+                    token: t,
+                    device_name: name.into(),
+                    role: "member".into(),
+                    ..Default::default()
+                },
+                now(),
+            )
+            .await
+            .expect("submitted");
+        request_ids.push(sub.request_id);
+    }
+    for _ in 0..200 {
+        let resp = c.call("status", serde_json::Value::Null).await;
+        if resp.result.unwrap()["pending_pairs"] == 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let resp = c.call("status", serde_json::Value::Null).await;
+    assert_eq!(resp.result.unwrap()["pending_pairs"], 2);
+
+    // 订阅建立在撤回之前（桌面壳常驻订阅）。
+    let mut sub = IpcClient::connect(&socket, &token).await;
+    assert!(
+        sub.subscribe(Some(vec!["pairing.pending_changed"]))
+            .await
+            .ok,
+        "subscribe"
+    );
+
+    let settled = pairing.cancel(phone_a, &request_ids[0], now()).await;
+    assert_eq!(settled, Some(daemon::PairState::Expired));
+
+    let ev = tokio::time::timeout(std::time::Duration::from_secs(3), sub.next_event())
+        .await
+        .expect("撤回必须推 pairing.pending_changed，桌面才会即时 refresh");
+    assert_eq!(ev["event"], "pairing.pending_changed", "{ev}");
+
+    // 桌面 refresh 读到的两样东西。
+    let resp = c.call("pairing.pending", serde_json::Value::Null).await;
+    let rows = resp.result.unwrap()["pending"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 1, "撤回的行必须离开列表: {rows:?}");
+    assert_eq!(rows[0]["name"], "还在等的手机");
+    let resp = c.call("status", serde_json::Value::Null).await;
+    assert_eq!(
+        resp.result.unwrap()["pending_pairs"],
+        1,
+        "横幅计数也不能再算撤回的行"
+    );
+
+    // 按身份点撤回的那一行：点不到。
+    let hex_a: String = phone_a.0.iter().map(|b| format!("{b:02x}")).collect();
+    let resp = c
+        .call(
+            "pairing.confirm",
+            serde_json::json!({ "node_id": hex_a, "accept": true }),
+        )
+        .await;
+    assert!(!resp.ok, "撤回的行不许被允许: {resp:?}");
+
+    // 另一台也撤回 → 队列空；横幅的队首「允许」无从落下。
+    let settled = pairing.cancel(phone_b, &request_ids[1], now()).await;
+    assert_eq!(settled, Some(daemon::PairState::Expired));
+    let resp = c.call("status", serde_json::Value::Null).await;
+    assert_eq!(resp.result.unwrap()["pending_pairs"], 0);
+    let resp = c.call("pairing.pending", serde_json::Value::Null).await;
+    assert!(resp.result.unwrap()["pending"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+    let resp = c
+        .call("pairing.confirm", serde_json::json!({ "accept": true }))
+        .await;
+    assert!(!resp.ok, "队首语义也点不到撤回的行: {resp:?}");
+
+    assert!(db.get_device(&phone_a.0).await.unwrap().is_none());
+    assert!(db.get_device(&phone_b.0).await.unwrap().is_none());
+}

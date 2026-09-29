@@ -6,7 +6,8 @@
 //! （客户端以全量 refresh 兜底，事件只是加速器，不承诺零丢失）。
 //!
 //! 触发点约定（每类事件的发出位置）：
-//! - `pairing.pending_changed` — IpcServer（pending 队列增/减）
+//! - `pairing.pending_changed` — IpcServer（pending 队列增/减）/ Pairing
+//!   （手机撤回请求，DEV-07 #463：该行随之移出队列）
 //! - `status.changed` — main（daemon 启动就绪）
 //! - `activity.appended` — Router/IpcServer（audit/活动流新条目）
 //! - `device.changed` — Router/Pairing/IpcServer（配对/移除/水位推进）

@@ -310,7 +310,12 @@ impl IpcServer {
                     let now = now_ms();
                     let ttl = PENDING_TTL_MS;
                     let mut q = queue.lock().expect("pending lock");
-                    q.retain(|old| old.requested_at + ttl > now && old.peer.0 != p.peer.0);
+                    // DEV-07 follow-up (#463): withdrawn rows leave too.
+                    q.retain(|old| {
+                        old.requested_at + ttl > now
+                            && old.peer.0 != p.peer.0
+                            && !old.is_withdrawn()
+                    });
                     q.push(p);
                 }
                 // IPC-02: 新扫码请求入队——桌面壳即时从「二维码弹窗」切到
@@ -1202,6 +1207,10 @@ impl IpcServer {
     ) -> ConfirmOutcome {
         let mut queue = self.pending.lock().expect("pending lock");
         let now = now_ms();
+        // DEV-07 follow-up (#463): a row the phone withdrew is gone before
+        // lookup — including the queue-head fallback — so a click that
+        // raced the removal is NOT_FOUND, never a decision on it.
+        queue.retain(|p| !p.is_withdrawn());
         let idx = match (node_id, device_name) {
             (Some(id), _) => queue.iter().position(|p| p.peer.0 == id),
             (None, Some(name)) => queue.iter().position(|p| p.device_name == name),
@@ -1246,6 +1255,24 @@ impl IpcServer {
         }
     }
 
+    /// DEV-07 follow-up (#463): the owner queue as the desktop may see it —
+    /// rows the phone withdrew (`pair.cancel`) are dropped here, on every
+    /// read, the same "sweep on touch" the TTL and same-phone replacement
+    /// use. The decision task that marks a row also emits
+    /// `pairing.pending_changed`, so the desktop's refresh is the touch.
+    /// TTL-expired rows are NOT dropped here: they keep DEV-05's "已失效"
+    /// display until `confirm` / a new scan retires them.
+    fn live_queue(&self) -> std::sync::MutexGuard<'_, Vec<PendingPair>> {
+        let mut queue = self.pending.lock().expect("pending lock");
+        let before = queue.len();
+        queue.retain(|p| !p.is_withdrawn());
+        if before > 0 && queue.is_empty() {
+            // Same bookkeeping as `confirm` emptying the queue.
+            self.diag.apply(diag::DaemonEvent::PairingEnded);
+        }
+        queue
+    }
+
     /// Pending pairing requests for the owner UI. DEV-02: 不做指纹匹配
     /// （DEV-01 的 `hint_match` 已删）——确认框不替任何人声称"这台手机
     /// 重装过"。
@@ -1266,9 +1293,7 @@ impl IpcServer {
         // 新请求顶掉）时清除。
         let now = now_ms();
         let queued: Vec<(transport::NodeId, String, i64, bool)> = self
-            .pending
-            .lock()
-            .expect("pending lock")
+            .live_queue()
             .iter()
             .map(|p| {
                 (
@@ -1291,8 +1316,9 @@ impl IpcServer {
                     .map(|d| d.name.clone())
                     .unwrap_or(reported_name),
                 "requested_at": requested_at,
-                // DEV-07 (#463): a row whose phone withdrew is just as
-                // unapprovable as one past TTL.
+                // DEV-07 (#463): a row whose request side already ended
+                // (request-side TTL) is as unapprovable as one past the
+                // queue TTL. Withdrawn rows never get here (`live_queue`).
                 "expired": abandoned || requested_at + self.pending_ttl_ms <= now,
             });
             if let Some(d) = existing {
@@ -1311,9 +1337,7 @@ impl IpcServer {
 
     /// Names of requests waiting for the owner (UI list / console prompt).
     pub fn pending_names(&self) -> Vec<String> {
-        self.pending
-            .lock()
-            .expect("pending lock")
+        self.live_queue()
             .iter()
             .map(|p| p.device_name.clone())
             .collect()
@@ -1322,7 +1346,9 @@ impl IpcServer {
     async fn status(&self) -> anyhow::Result<serde_json::Value> {
         let devices = self.db.list_devices(true).await?;
         let state = self.diag.state();
-        let pending = self.pending.lock().expect("pending lock").len();
+        // DEV-07 follow-up (#463): the banner is gated on this count — a
+        // withdrawn row counted here would re-open a clickable 「允许」.
+        let pending = self.live_queue().len();
         // T-090: photo total + disk watermarks of the library volume.
         let photo_count = self.db.count_assets().await?;
         let photo_sources = self.db.count_asset_sources().await?;
