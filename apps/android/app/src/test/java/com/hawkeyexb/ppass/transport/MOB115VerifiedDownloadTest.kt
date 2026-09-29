@@ -85,7 +85,10 @@ class MOB115VerifiedDownloadTest {
             receiveVerified(dest, payload.size.toLong(), hash, stream(short))
             fail("长度不足必须抛错")
         } catch (e: DownloadTruncated) {
-            assertEquals("前两整块已收，第三块读不满", 2L * 256 * 1024, e.received)
+            // 整块都已收，只有最后一块读不满（不绑定具体块大小：NET-09 #116 把块从
+            // 256 KiB 调到 16 KiB，块大小即停滞看门狗的进展粒度）。
+            assertTrue("整块已收：${e.received}", e.received in 1 until short.size)
+            assertTrue("只丢了最后一块：${e.received}", short.size - e.received <= 256 * 1024)
         }
         assertFalse(dest.exists())
         assertEquals(emptyList<String>(), leftovers(dir))
