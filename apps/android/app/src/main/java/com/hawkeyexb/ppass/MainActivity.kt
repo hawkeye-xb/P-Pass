@@ -621,7 +621,8 @@ fun PPassApp() {
             // 两档运行条件（默认都开），设置页有后果描述 + 合成句。
             val backupSettings = remember { BackupSettings(context.filesDir) }
             var wifiOnly by remember { mutableStateOf(backupSettings.load().wifiOnly) }
-            // M10（全页面状态稿）："备份失败时通知我"真实开关。
+            // M10（全页面状态稿）：通知开关的真实偏好。#130 起它管的是「需要处理」的确定事件通知
+            // （配对失效 / 相册权限收回 / 系统停止后台备份），见 DefinitiveEventNotices.kt。
             val notifyOnFailurePrefs = remember {
                 com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir)
             }
@@ -1098,19 +1099,8 @@ private fun hasNotificationPermission(context: Context): Boolean =
  * 更低版本是 READ_EXTERNAL_STORAGE（minSdk 26，那些机器上前者根本不存在，
  * 查它必然 DENIED，会把完整授权误判成全拒）。
  */
-private fun mediaAccess(context: Context): MediaAccess = mediaAccessOf(
-    imagesGranted = ContextCompat.checkSelfPermission(
-        context, primaryMediaPermission()
-    ) == PackageManager.PERMISSION_GRANTED,
-    visualSelectedGranted = ContextCompat.checkSelfPermission(
-        context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-    ) == PackageManager.PERMISSION_GRANTED,
-    sdkInt = Build.VERSION.SDK_INT,
-)
-
-private fun primaryMediaPermission(): String =
-    if (Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_IMAGES
-    else Manifest.permission.READ_EXTERNAL_STORAGE
+private fun mediaAccess(context: Context): MediaAccess =
+    com.hawkeyexb.ppass.backup.currentMediaAccess(context) // #130：与确定事件通知共用同一个查询点
 
 /** MOB-02 §二: 部分授权检测（走纯函数判定，权限查询为生产注入）。
  *  路由判据保持原样——「只给了部分」与「全拒」在这里不可混用。 */

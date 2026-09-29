@@ -118,12 +118,22 @@
     <string name="trouble_details_show">Show technical details</string>
     <string name="trouble_details_hide">Hide technical details</string>
     <!-- UX-02: 失败通知（成功保持沉默）；MOB-67 渠道名进字典（旧代码硬编码双语） -->
-    <string name="notif_channel_backup_failed">Backup failed</string>
+    <string name="notif_channel_backup_failed">Backup needs your attention</string>
     <string name="notif_backup_failed_title">Backup didn\'t finish</string>
     <plurals name="notif_backup_failed_body">
         <item quantity="one">%1$d photo didn\'t make it home — open to see</item>
         <item quantity="other">%1$d photos didn\'t make it home — open to see</item>
     </plurals>
+    <!-- #130 layer 1: definitive-event notifications (pairing lost / photo access revoked / system stopped
+         background backup). Facts only, no guessing at causes. Titles reuse pairing_lost_title /
+         partial_access_title / no_media_access_title. -->
+    <string name="notif_pairing_lost_body">Backup has stopped. Your photos are all still on this phone — tap to scan the code again and backup resumes.</string>
+    <string name="notif_media_partial_body">Photo access changed from All to Limited, so photos outside your selection won\'t be backed up. Tap to switch it back to All in system settings.</string>
+    <string name="notif_media_none_body">Photo access is off, so P-Pass can\'t read any photos and nothing is being backed up. Tap to allow access in system settings.</string>
+    <string name="notif_background_stopped_title">The system stopped background backup</string>
+    <string name="notif_background_stopped_body">Photos only back up while the app is open now. Tap to turn automatic backup back on. Your photos are all still on this phone.</string>
+    <string name="notif_battery_reenabled_title">Battery optimization is back on</string>
+    <string name="notif_battery_reenabled_body">P-Pass is under battery optimization again, so background backup needs to be allowed again. Tap to fix.</string>
     <!-- NET-12: transfer foreground service — keeps the process out of the
          cached-process range while a Flow round is actively sending, so
          the system cannot reclaim it mid-transfer (real device: it did,
@@ -173,7 +183,7 @@
     <string name="more_section_title">More</string>
     <!-- M10 (full-page-states doc) exact copy — a real toggle row
          (NotifyOnFailurePrefs), no longer a nav row to system settings. -->
-    <string name="rule_notify">Notify me on backup failure</string>
+    <string name="rule_notify">Notify me when backup needs attention</string>
     <!-- T1: 版本号显示 -->
     <string name="setting_version">Version</string>
     <!-- T6: 相册选择 -->

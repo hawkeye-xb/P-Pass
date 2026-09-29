@@ -27,9 +27,15 @@ import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.backup.flow.onFlowAppForeground
 import com.hawkeyexb.ppass.backup.flow.onFlowNetworkChanged
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
+import com.hawkeyexb.ppass.backup.evaluateDefinitiveEvents
+import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.reconcileWatchOnProcessStart
 import com.hawkeyexb.ppass.transport.DaemonClient
 import kotlin.concurrent.thread
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class PPassApplication : Application() {
     /** One iroh Endpoint for every foreground and Flow delivery connection in this process. */
@@ -48,10 +54,18 @@ class PPassApplication : Application() {
             }.onFailure { error ->
                 Log.w("PPassLegacyWatch", "legacy watch reconciliation failed; Flow continues", error)
             }
+            // #130 第 1 层：进程因任何原因起来（含 Worker 唤醒）都查一次确定事件；排在 MOB-28 对账之后，
+            // 这样刚记下的中断这一轮就能看到。
+            evaluateDefinitiveEvents(this)
         }
         registerNetworkCallback()
         registerActivityLifecycleCallbacks(ForegroundWatcher())
+        // #130 第 1 层：配对失效由投递 / 探测 / 前台心跳记下（#466），记下的那一刻就评估，不等下一次唤醒。
+        noticeScope.launch { flowDeliveryPairingLoss.changes.collect { evaluateDefinitiveEvents(this@PPassApplication) } }
     }
+
+    /** #130：确定事件评估用的进程级 scope（IO，阻塞读文件 + binder）。 */
+    private val noticeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private fun registerNetworkCallback() {
         val cm = getSystemService(ConnectivityManager::class.java) ?: return
@@ -88,7 +102,11 @@ class PPassApplication : Application() {
 
         override fun onActivityStarted(activity: Activity) {
             appVisible = true
-            if (started++ == 0 && !recreating) onFlowAppForeground(this@PPassApplication)
+            if (started++ == 0 && !recreating) {
+                onFlowAppForeground(this@PPassApplication)
+                // #130：进前台也查一次（进程可能一直活着，权限 / 电池优化在系统设置里被改过）。
+                noticeScope.launch { evaluateDefinitiveEvents(this@PPassApplication) }
+            }
             recreating = false
         }
 
