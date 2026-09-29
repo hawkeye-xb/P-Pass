@@ -278,5 +278,5 @@
   "ui.wizard_notice_only_label": "只是通知",
   "ui.wizard_autostart_notice_mac": "开机自启——系统会弹一次「后台项目已添加」通知，不用操作",
   "ui.wizard_allow_label": "要点「允许」",
-  "ui.wizard_local_network_mac": "本地网络——点「完成」后 macOS 会弹窗问「允许“ppf-daemon”查找本地网络中的设备？」。ppf-daemon 就是 P-Pass 的后台服务，请点「允许」。界面会先进入首页，不必等它，弹窗照样点「允许」就行。不允许的话，同一 Wi-Fi 下手机没法直连这台电脑，只能经中继，速度可能慢不少；点错了可以去「系统设置 → 隐私与安全性 → 本地网络」把 ppf-daemon 打开。"
+  "ui.wizard_local_network_mac": "本地网络——macOS 会问是否允许 ppf-daemon（P-Pass 后台服务）查找本地网络设备，请点「允许」。"
 }

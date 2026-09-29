@@ -187,7 +187,7 @@
          (NotifyOnFailurePrefs), no longer a nav row to system settings. -->
     <string name="rule_notify">Notifications</string>
     <!-- #130: neutral caption under the switch — states which notifications it controls. -->
-    <string name="rule_notify_hint">Alerts you when pairing is lost, photo access is revoked, or the system stops background backup</string>
+    <string name="rule_notify_hint">Alerts on lost pairing, revoked access or stopped backup</string>
     <!-- T1: 版本号显示 -->
     <string name="setting_version">Version</string>
     <!-- T6: 相册选择 -->

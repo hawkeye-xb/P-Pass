@@ -48,17 +48,12 @@ describe("#481 向导第 3 步：如实告知本地网络弹窗", () => {
   });
 
   it("写出用户实际看到的名字 ppf-daemon，并说明它就是 P-Pass 的后台服务", () => {
-    expect(step3).toContain("允许“ppf-daemon”查找本地网络中的设备？");
-    expect(step3).toContain("ppf-daemon 就是 P-Pass 的后台服务");
+    expect(step3).toContain("ppf-daemon（P-Pass 后台服务）");
   });
 
-  it("说明界面会先进首页、弹窗照样要点（#481 的困惑点）", () => {
-    expect(step3).toContain("界面会先进入首页");
-  });
-
-  it("说明拒绝的后果与恢复入口", () => {
-    expect(step3).toContain("没法直连");
-    expect(step3).toContain("「系统设置 → 隐私与安全性 → 本地网络」把 ppf-daemon 打开");
+  it("一句话说完，不堆叠解释（验收人 2026-09-29：尽量用最少的语言说清楚）", () => {
+    expect(step3).not.toContain("界面会先进入首页");
+    expect(step3).not.toContain("只能经中继");
   });
 
   it("开机自启标成只是通知，不再用「会申请什么」笼统一行", () => {

@@ -278,5 +278,5 @@
   "ui.wizard_notice_only_label": "Just a notification",
   "ui.wizard_autostart_notice_mac": "Start at login — macOS shows a one-time \"Background Items Added\" notification; nothing to do",
   "ui.wizard_allow_label": "Click \"Allow\"",
-  "ui.wizard_local_network_mac": "Local network — after you click \"Finish\", macOS asks \"Allow “ppf-daemon” to find devices on local networks?\". ppf-daemon is P-Pass's background service, so click \"Allow\". The app goes to the home screen first — no need to wait; just click \"Allow\" on the prompt anyway. If you don't allow it, phones on the same Wi-Fi can't connect to this computer directly and must go through the relay, which can be much slower. If you clicked the wrong button, turn ppf-daemon back on in \"System Settings → Privacy & Security → Local Network\"."
+  "ui.wizard_local_network_mac": "Local network — macOS will ask whether “ppf-daemon” (P-Pass's background service) may find local network devices. Click \"Allow\"."
 }
