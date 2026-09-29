@@ -1,18 +1,44 @@
 #!/usr/bin/env bash
 # P-Pass 狗粮冒烟：daemon 全接口剧本，agent 可无人化执行。
 # 用法: tools/dogfood-smoke.sh [工作目录]   （默认 /tmp/ppf-dogfood）
+#       也可从 dogfood release 资产目录直接跑: ./dogfood-smoke.sh [工作目录]
+#
+# 布局（REL-08 #510）：脚本只认「自己所在目录」——
+#   - helper：同目录的 ipc-lib.sh（仓库里两者都在 tools/，资产里两者平铺）；
+#   - 二进制：同目录有 daemon 就用它（release 资产布局），否则回落仓库的
+#     target/release/（`just verify-m1` 从仓库直接跑）。
+# 资产清单的唯一来源是 tools/stage-dogfood-scripts.sh，门禁见
+# tools/test-dogfood-assets.sh。
 #
 # 剧本: 起 daemon → 配对(QR+IPC确认) → backup 50 → 幂等重跑 →
 #       browse → IPC 吊销 → revoke-check → logs.export 脱敏抽查。
 # 全部通过输出 "DOGFOOD SMOKE: ALL GREEN"，任一步失败即退出非零。
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="${1:-/tmp/ppf-dogfood}"
-DAEMON="$ROOT/target/release/daemon"
-TC="$ROOT/target/release/testclient"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=./ipc-lib.sh
+source "$HERE/ipc-lib.sh"
 
-[ -x "$DAEMON" ] || { echo "先构建: cargo build --release -p daemon -p testclient"; exit 1; }
+case "${1:-}" in
+  -h|--help)
+    sed -n '2,/^set -euo/{/^#/p;}' "$0" | sed 's/^# \{0,1\}//'
+    exit 0 ;;
+esac
+
+WORK="${1:-/tmp/ppf-dogfood}"
+if [ -x "$HERE/daemon" ]; then
+  BIN="$HERE"                          # release 资产布局：与脚本平铺
+else
+  BIN="$HERE/../target/release"        # 仓库布局：tools/ 的上一级
+fi
+DAEMON="$BIN/daemon"
+TC="$BIN/testclient"
+
+if [ ! -x "$DAEMON" ] || [ ! -x "$TC" ]; then
+  echo "找不到 daemon/testclient（查过 $HERE/ 与 $HERE/../target/release/）"
+  echo "仓库里先构建: cargo build --release -p daemon -p testclient；release 资产记得 chmod +x"
+  exit 1
+fi
 
 rm -rf "$WORK" && mkdir -p "$WORK/library" && cd "$WORK"
 # UX-07: --ephemeral + FIFO 控制 stdin——脚本收尾时关闭 FIFO 写端（EOF）
@@ -31,8 +57,6 @@ exec 3>"$WORK/daemon-ctl"   # 保持写端打开——daemon 不会立即 EOF
 
 for _ in $(seq 1 50); do grep -q 'NodeId:' daemon.log 2>/dev/null && break; sleep 0.2; done
 NODE=$(grep -o 'NodeId: .*' daemon.log | awk '{print $2}')
-# shellcheck source=./ipc-lib.sh
-source "$ROOT/tools/ipc-lib.sh"
 # SEC-11 (#496)：配对串经 IPC pairing.start 现取（daemon 不再把它打进被重定向的 stdout）
 ipc_pair_qr library/ipc.token
 QR="$PAIR_QR"
