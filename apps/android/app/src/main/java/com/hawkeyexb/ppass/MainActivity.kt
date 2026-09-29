@@ -62,6 +62,7 @@ import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairOutcome
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
+import com.hawkeyexb.ppass.transport.bindThenPair
 import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.backup.BackupRunner
 import com.hawkeyexb.ppass.backup.BackupScopeStore
@@ -514,22 +515,22 @@ fun PPassApp() {
                     { screen = Screen.Welcome },
             )
             LaunchedEffect(s.qr) {
-                // Catch Throwable, not Exception: a missing native lib
-                // (UnsatisfiedLinkError) must land on the trouble screen,
-                // never crash the app (real-phone T-052 lesson).
-                val outcome = try {
-                    client.bind(identity.secretKey())
-                    pairWithQr(
-                        client,
-                        s.qr,
-                        deviceName(),
-                        invalidCodeMessage = context.getString(R.string.not_a_code),
-                        unparseableCodeMessage = context.getString(R.string.pair_unparseable_code),
-                        storageDeviceNameFallback = context.getString(R.string.storage_device_default),
-                    )
-                } catch (t: Throwable) {
-                    PairOutcome.Failed(t.toString())
-                }
+                // Every throw (missing native lib, NET-28 bind timeout, …)
+                // becomes Failed inside bindThenPair — never a crash, never
+                // an endless wait (bind is bounded inside DaemonClient).
+                val outcome = bindThenPair(
+                    bind = { client.bind(identity.secretKey()) },
+                    pair = {
+                        pairWithQr(
+                            client,
+                            s.qr,
+                            deviceName(),
+                            invalidCodeMessage = context.getString(R.string.not_a_code),
+                            unparseableCodeMessage = context.getString(R.string.pair_unparseable_code),
+                            storageDeviceNameFallback = context.getString(R.string.storage_device_default),
+                        )
+                    },
+                )
                 // The user may have cancelled while we waited — a stale
                 // result must not yank them out of another screen.
                 if (screen != s) return@LaunchedEffect
@@ -721,7 +722,13 @@ fun PPassApp() {
                 Unit
             }
             val scope = rememberCoroutineScope()
-            LaunchedEffect(Unit) { client.bind(identity.secretKey()) }
+            // NET-28: bind can now throw (timeout) — an uncaught throw in a
+            // LaunchedEffect would crash Home. This is only a warm-up; every
+            // real use binds again and reports its own failure.
+            LaunchedEffect(Unit) {
+                runCatching { client.bind(identity.secretKey()) }
+                    .onFailure { android.util.Log.w("PPassBind", "home warm-up bind failed: $it") }
+            }
             val mediaPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
             ) { grants -> if (grants.values.any { it }) holder.backupNow() }

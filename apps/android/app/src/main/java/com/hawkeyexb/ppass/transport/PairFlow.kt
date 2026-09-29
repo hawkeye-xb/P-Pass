@@ -207,6 +207,24 @@ fun PairVerdict.toOutcome(join: (PairAccepted) -> Pairing): PairOutcome = when (
 }
 
 /**
+ * NET-28 (#454): the pairing wait screen's whole job — bind the endpoint,
+ * then pair. Any throw lands on [PairOutcome.Failed] carrying the
+ * throwable's class and message, so "the phone's endpoint never came up"
+ * ([EndpointBindTimeoutException]) and "the computer cannot be reached"
+ * ([DaemonUnreachableException]) read differently on the trouble screen.
+ * Catches Throwable, not Exception: a missing native lib
+ * (UnsatisfiedLinkError) must land on the trouble screen, never crash the
+ * app (real-phone T-052 lesson).
+ */
+suspend fun bindThenPair(bind: suspend () -> Unit, pair: suspend () -> PairOutcome): PairOutcome =
+    try {
+        bind()
+        pair()
+    } catch (t: Throwable) {
+        PairOutcome.Failed(t.toString())
+    }
+
+/**
  * Scan result → submit → poll until the owner decides (NET-10).
  */
 suspend fun pairWithQr(

@@ -23,14 +23,14 @@ import computer.iroh.EndpointOptions
 import computer.iroh.presetN0
 import java.io.IOException
 import java.util.UUID
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
@@ -67,29 +67,100 @@ private suspend fun Endpoint.connectBounded(addr: EndpointAddr, alpn: ByteArray)
     }
 
 /**
+ * NET-28 (#454): upper bound on `Endpoint.bind`.
+ *
+ * Why it lives here and not in iroh or in the pairing UI: iroh has no bind
+ * deadline of its own — `Builder::bind` (iroh 1.0.2, the version inside the
+ * shipped libiroh_ffi.so; its socket.rs bind path is identical to 1.0.3) has
+ * no timeout option and `BindError` has no timeout variant, and the one await
+ * inside it (`netwatch::netmon::Monitor::new`, which enumerates interfaces and
+ * on Android may spawn `ip route`) is unbounded. iroh-ffi 1.1.0 adds none
+ * either. And bind is not a pairing step: every caller of this process-wide
+ * endpoint (pairing, timeline, Flow delivery, audit) waits on it, so the
+ * owner of the endpoint owns its deadline.
+ *
+ * Why 15 s: bind does no network round trip (relay/net-report run after it,
+ * in the background), so the value does not have to cover network latency.
+ * The slowest *legitimate* bind on Android is bounded by netdev's netlink
+ * dumps — `collect_interfaces` + `collect_routes` = 4 dumps, each with a 2 s
+ * `RECV_TIMEOUT` (netdev 0.45.0 os/android/netlink.rs) — about 8 s, plus the
+ * `ip route` fork/exec. 15 s clears that with margin, and equals
+ * [CONNECT_TIMEOUT_MS], so the pairing wait screen gives up no later than
+ * one connect budget after the tap. A normal bind takes far less; the
+ * `bindMs=` line from [DaemonClient]'s bindLog is how that is checked on a
+ * real device.
+ */
+internal const val BIND_TIMEOUT_MS = 15_000L
+
+/**
+ * The phone's own iroh endpoint did not come up in time — a local problem on
+ * the phone, deliberately NOT a [DaemonUnreachableException] ("the computer
+ * cannot be reached"): the two point troubleshooting in opposite directions.
+ * Not a CancellationException either, for the reason given on
+ * [DaemonUnreachableException].
+ */
+class EndpointBindTimeoutException(timeoutMs: Long) :
+    IOException("phone network endpoint did not start within ${timeoutMs}ms (local, not the computer)")
+
+private suspend fun bindIrohEndpoint(secretKey: ByteArray?): Endpoint {
+    val opts = EndpointOptions(
+        preset = presetN0(),
+        alpns = listOf(ALPN_CTRL.toByteArray()),
+    )
+    if (secretKey != null) opts.secretKey = secretKey
+    return Endpoint.bind(opts)
+}
+
+/**
  * One endpoint per app process. Bind once, then `call` against a peer
  * added via [addPeerFromToken]. All methods are IO-dispatched — safe to
  * call from any coroutine.
  */
-class DaemonClient {
-    private var endpoint: Endpoint? = null
-    private val bindLock = Mutex()
+class DaemonClient internal constructor(
+    private val bindTimeoutMs: Long,
+    private val openEndpoint: suspend (secretKey: ByteArray?) -> Endpoint,
+    private val bindLog: (String) -> Unit,
+) {
+    /** [bindLog] receives one line per bind attempt (duration, outcome) —
+     *  NET-28 asks for real-device bind timings to be observable. */
+    constructor(bindLog: (String) -> Unit = {}) : this(BIND_TIMEOUT_MS, ::bindIrohEndpoint, bindLog)
+
+    private val bindScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val bound = BoundedSingleFlight<Endpoint>(
+        timeoutMs = bindTimeoutMs,
+        scope = bindScope,
+        // A bind that finishes after close(): nobody owns it, release it.
+        discard = { late -> runCatching { late.close() } },
+    )
+    private val endpoint: Endpoint? get() = bound.current()
 
     /**
      * Bind the endpoint. Pass the device's persistent 32-byte secret so
      * the phone keeps ONE identity across restarts — pairing is bound to
      * the NodeId, a fresh key would demote us to a stranger.
+     *
+     * NET-28: bounded by [BIND_TIMEOUT_MS]; a hung bind throws
+     * [EndpointBindTimeoutException] instead of waiting forever. The hung
+     * attempt is not restarted by the next call — that call waits on the same
+     * attempt again, and adopts it if it ever finishes (see [BoundedSingleFlight]).
      */
-    suspend fun bind(secretKey: ByteArray? = null): Unit = withContext(Dispatchers.IO) {
-        bindLock.withLock {
-            if (endpoint != null) return@withLock
-            val opts = EndpointOptions(
-                preset = presetN0(),
-                alpns = listOf(ALPN_CTRL.toByteArray()),
-            )
-            if (secretKey != null) opts.secretKey = secretKey
-            endpoint = Endpoint.bind(opts)
-        }
+    suspend fun bind(secretKey: ByteArray? = null) {
+        bound.get(
+            start = {
+                val started = System.nanoTime()
+                fun ms() = (System.nanoTime() - started) / 1_000_000
+                try {
+                    openEndpoint(secretKey).also { bindLog("bind ok bindMs=${ms()}") }
+                } catch (t: Throwable) {
+                    bindLog("bind failed bindMs=${ms()} error=$t")
+                    throw t
+                }
+            },
+            onTimeout = { waited ->
+                bindLog("bind timeout: still running after ${waited}ms")
+                EndpointBindTimeoutException(waited)
+            },
+        )
     }
 
     fun nodeIdHex(): String? = endpoint?.addr()?.id()?.toString()
@@ -440,7 +511,6 @@ class DaemonClient {
     }
 
     suspend fun close(): Unit = withContext(Dispatchers.IO) {
-        endpoint?.close()
-        endpoint = null
+        bound.reset()?.close()
     }
 }
