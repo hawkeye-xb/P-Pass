@@ -9,7 +9,10 @@
 #   3. 换一个无关 cwd 跑暂存目录里的 `dogfood-smoke.sh --help`：它在 set -e 下
 #      先 source helper 再解析参数，helper 缺失即非零；
 #   4. workflow 不许绕过暂存脚本直接 `cp tools/*.sh`，且 artifacts.yml 的
-#      paths 过滤覆盖清单里的每个文件（改 helper 也要重打资产）。
+#      paths 过滤覆盖清单里的每个文件（改 helper 也要重打资产）；
+#   5. 每个 .sh 过 shellcheck SC2251：`! cmd` 在 set -e 下不会失败，写成断言
+#      就是空转（#510 顺带修掉的脱敏抽查就是这样永远绿的）。shellcheck 缺失
+#      直接红，不静默跳过。
 # 可选：PPF_SMOKE_BIN_DIR=<含 daemon/testclient(/lib) 的目录> 时，把它们也
 # 放进暂存目录，从无关 cwd 跑完整冒烟，期望 ALL GREEN（验收「干净目录只用
 # release 资产跑通」）。
@@ -43,6 +46,9 @@ check_scripts() {
 
   for f in "$dest"/*.sh; do
     bash -n "$f" || fail "bash -n 不过: $(basename "$f")" || return 1
+    command -v shellcheck >/dev/null || fail "找不到 shellcheck（SC2251 检查不能跳过）" || return 1
+    shellcheck --include=SC2251 "$f" >&2 \
+      || fail "$(basename "$f") 有 set -e 下不生效的 \`! cmd\` 断言（SC2251）" || return 1
     # 取所有 source / . 行（忽略注释）；目标形如 "$VAR/name.sh" 或 "${VAR}/name.sh"
     while IFS= read -r line; do
       target="$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(source|\.)[[:space:]]+//; s/[[:space:]].*$//; s/"//g')"
@@ -98,7 +104,7 @@ self_test() {
     if PPF_SMOKE_BIN_DIR='' run_gate "$3" "$4" >/dev/null 2>"$base/err"; then got=green; else got=red; fi
     if [[ "$got" == "$want" ]]; then
       echo "ok   [$want] $name"
-      [[ "$got" == green ]] || sed 's/^/       ↳ /' "$base/err" | head -1
+      [[ "$got" == green ]] || grep -m1 '^FAIL' "$base/err" | sed 's/^/       ↳ /' || true
     else
       echo "BAD  期望 $want 实得 $got: $name"; cat "$base/err"; rc=1
     fi
@@ -125,6 +131,11 @@ self_test() {
 
   w="$(mut)"; sed -i.bak 's#tools/stage-dogfood-scripts.sh /tmp/rel#tools/stage-dogfood-scripts.sh /tmp/rel; cp tools/dogfood-smoke.sh /tmp/rel/#' "$w/wf/release.yml"
   expect red "release.yml 绕过暂存脚本直接 cp" "$w/tools" "$w/wf"
+
+  w="$(mut)"
+  sed -i.bak 's#^echo "DOGFOOD SMOKE: ALL GREEN"#! grep -q leak /dev/null\n&#' "$w/tools/dogfood-smoke.sh"
+  grep -q '^! grep -q leak' "$w/tools/dogfood-smoke.sh" || { echo "BAD 变异没打上"; rc=1; }
+  expect red "smoke 写回 set -e 下空转的 \`! cmd\` 断言（SC2251）" "$w/tools" "$w/wf"
 
   w="$(mut)"; sed -i.bak '/"tools\/ipc-lib.sh"/d' "$w/wf/artifacts.yml"
   expect red "artifacts.yml paths 过滤漏掉 ipc-lib.sh" "$w/tools" "$w/wf"
