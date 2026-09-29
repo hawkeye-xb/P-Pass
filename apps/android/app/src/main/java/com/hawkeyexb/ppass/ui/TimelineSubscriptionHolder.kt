@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import com.hawkeyexb.ppass.proto.AssetMeta
 import com.hawkeyexb.ppass.proto.TimelinePage
 import com.hawkeyexb.ppass.transport.Pairing
+import com.hawkeyexb.ppass.transport.SubscribeRejectedException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -302,6 +303,9 @@ internal class TimelineSubscriptionHolder(
                 log("subscribe: ended (peer closed)")
             } catch (e: CancellationException) {
                 throw e // REV-01 #4: 同上——stop()/换配对时真的停下来。
+            } catch (rejected: SubscribeRejectedException) {
+                // #522：桌面明确拒绝（撤销后是 NOT_AUTHORIZED）——不是断线，也从没连上过。退避照旧。
+                log("subscribe: rejected by the desktop (${rejected.code}: ${rejected.msgKey})")
             } catch (t: Throwable) {
                 // 连接异常——同样走退避重连。
                 log("subscribe: ended (${t::class.simpleName}: ${t.message})")

@@ -80,11 +80,22 @@ class FakeForeground(private val control: FlowControl) : ForegroundLease {
     /** #413：受阻原因不是闸门——每次 acquire 都真的调一次 startForegroundService；成功就清掉原因。 */
     var startForegroundServiceCalls = 0
 
+    /** #522：被拒时系统抛的异常（null = 服务没给结论，按旧的 START_REFUSED 记）。走生产的 [noteFgsRefusal]。 */
+    var refusal: Throwable? = null
+
+    /** #522：系统额度时钟上的「现在」（生产是 BOOT_COUNT + elapsedRealtime）。 */
+    var bootNow: () -> BootInstant? = { null }
+
     override suspend fun acquire(): Boolean {
         acquires++
         startForegroundServiceCalls++
         held = grant
-        if (grant) control.clearFgsBlock()
+        if (grant) {
+            control.recordFgsGrant(bootNow())
+            control.clearFgsBlock()
+        } else {
+            refusal?.let { noteFgsRefusal(control, it, bootNow()) }
+        }
         return grant
     }
 
@@ -147,6 +158,19 @@ class FakeControl : FlowControl {
     }
     override fun clearFgsBlock() {
         block = null
+    }
+    var budget = FgsBudgetFacts()
+    override fun fgsBudgetFacts() = budget
+    override fun recordFgsGrant(at: BootInstant?) {
+        budget = FgsBudgetFacts(lastGrantAt = at, exhaustedRefusalAt = null)
+    }
+    override fun recordBudgetRefusal(at: BootInstant?) {
+        budget = budget.copy(exhaustedRefusalAt = at)
+    }
+    override fun clearBudgetRefusal(): Boolean {
+        val had = budget.exhaustedRefusalAt != null
+        budget = budget.copy(exhaustedRefusalAt = null)
+        return had
     }
     override fun missingSourceAckAt() = ack
     override fun setMissingSourceAckAt(atMs: Long) {
@@ -214,7 +238,11 @@ internal class Rig(test: TestScope, cursors: Boolean = true) {
     var fullMediaAccess = true
     val logs = mutableListOf<String>()
 
+    /** #522：系统额度时钟（开机序号 + elapsedRealtime）。引擎和假前台读同一个。 */
+    var boot: BootInstant? = null
+
     init {
+        foreground.bootNow = { boot }
         if (cursors) store.saveVolumeState(VolumeState(LEGACY_VOLUME, 0L, 0L, "v1"))
     }
 
@@ -241,6 +269,7 @@ internal class Rig(test: TestScope, cursors: Boolean = true) {
         log = FlowLogger { logs += it },
         clock = { now },
         monotonicClock = { test.testScheduler.currentTime },
+        bootClock = { boot },
     ).also { it.start() }
 
     fun photo(mediaId: Long, generation: Long, content: String = "c$mediaId", bucketId: Long = 7, volume: String = LEGACY_VOLUME): FakePhoto =

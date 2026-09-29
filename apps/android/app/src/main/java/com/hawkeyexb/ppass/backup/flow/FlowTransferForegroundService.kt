@@ -7,6 +7,9 @@
 //  2. 超时后又调 startForegroundService：onTimeout 只记原因、通知引擎停循环、stopSelf。同一轮里不会再申请。
 // #413：受阻原因**不再是闸门**——以前记下之后要等 App 回前台才清，后台备份一次被拒就停到用户打开 App。
 // 现在下一次触发照常申请；成功拿到就清掉原因。
+// #522：唯一的例外是**系统明确说额度耗尽**（"Time limit already exhausted"）且之后没回过前台——那时再申请必被拒，
+// 后台触发跳过申请（判据见 [fgsBudgetSkipReason]，闸门在 FlowEngine）。这里负责记下两条系统事实：每次
+// startForeground 成功的时刻、每次明确的额度拒绝。acquire 的日志也按事实分开写：被拒写「被拒 + 原因」，真超时才写超时。
 package com.hawkeyexb.ppass.backup.flow
 
 import android.app.Notification
@@ -20,12 +23,15 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.hawkeyexb.ppass.MainActivity
 import com.hawkeyexb.ppass.R
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -42,10 +48,44 @@ internal fun isSystemBudgetExhausted(failure: Throwable): Boolean =
 internal fun fgsBlockReasonOf(failure: Throwable): FgsBlockReason =
     if (isSystemBudgetExhausted(failure)) FgsBlockReason.BUDGET_EXHAUSTED else FgsBlockReason.START_REFUSED
 
+/** #522：服务在 onStartCommand 里观察到的结论。被拒时带上系统给的原因，acquire 据此如实写日志。 */
+internal sealed interface FgsVerdict {
+    data object Granted : FgsVerdict
+
+    data class Refused(val reason: FgsBlockReason, val detail: String) : FgsVerdict
+}
+
+/** #522：有界等服务的结论。null = 真的没等到（超时）；明确的拒绝原样返回，不能和超时混在一起。 */
+internal suspend fun awaitFgsVerdict(verdict: Deferred<FgsVerdict>, timeoutMs: Long): FgsVerdict? =
+    withTimeoutOrNull(timeoutMs) { verdict.await() }
+
+/** #522：acquire 没拿到前台时的那一行日志。被拒写「被拒 + 原因」；只有真超时才写 no verdict。 */
+internal fun fgsNotGrantedLog(verdict: FgsVerdict?, timeoutMs: Long): String = when (verdict) {
+    is FgsVerdict.Refused -> "foreground: refused by the system (${verdict.reason}: ${verdict.detail}); waiting for the next trigger"
+    null -> "foreground: no verdict within ${timeoutMs}ms; treating as refused"
+    FgsVerdict.Granted -> "foreground: granted"
+}
+
+/**
+ * #522：系统拒绝了前台（startForegroundService 或 startForeground 抛出）。记受阻原因给 UI；
+ * 只有系统**明确**说额度耗尽（[isSystemBudgetExhausted]）才记为「确定被拒」——那是后台跳过申请的唯一依据。
+ */
+internal fun noteFgsRefusal(control: FlowControl?, refusal: Throwable, now: BootInstant?): FgsBlockReason {
+    val reason = fgsBlockReasonOf(refusal)
+    control?.recordFgsBlock(reason)
+    if (reason == FgsBlockReason.BUDGET_EXHAUSTED) control?.recordBudgetRefusal(now)
+    return reason
+}
+
+/** #522：系统额度时钟上的「现在」。读不到开机序号就返回 null（调用方据此一律照常申请）。 */
+internal fun androidBootInstant(context: Context): BootInstant? = runCatching {
+    BootInstant(Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT), SystemClock.elapsedRealtime())
+}.getOrNull()
+
 /** 进程内：服务与租约之间的交接。 */
 internal object FlowForegroundHandoff {
     /** acquire 在等的那个结论；服务在 onStartCommand 里完成它。 */
-    @Volatile var verdict: CompletableDeferred<Boolean>? = null
+    @Volatile var verdict: CompletableDeferred<FgsVerdict>? = null
 
     /** 服务当前是否真的在前台。 */
     @Volatile var held: Boolean = false
@@ -74,24 +114,24 @@ class AndroidForegroundLease(
 
     override suspend fun acquire(): Boolean {
         FlowForegroundHandoff.control = control
-        val verdict = CompletableDeferred<Boolean>()
+        val verdict = CompletableDeferred<FgsVerdict>()
         FlowForegroundHandoff.verdict = verdict
         val intent = Intent(app, FlowTransferForegroundService::class.java)
         try {
             ContextCompat.startForegroundService(app, intent)
         } catch (refusal: IllegalStateException) {
             if (!isForegroundStartRefusal(refusal)) throw refusal
-            control.recordFgsBlock(fgsBlockReasonOf(refusal))
-            Log.w(TAG, "foreground: startForegroundService refused (${fgsBlockReasonOf(refusal)}); waiting for the next trigger")
+            val reason = noteFgsRefusal(control, refusal, androidBootInstant(app))
+            Log.w(TAG, "foreground: startForegroundService refused ($reason: ${refusal.message}); waiting for the next trigger")
             FlowForegroundHandoff.verdict = null
             return false
         }
-        val granted = withTimeoutOrNull(verdictTimeoutMs) { verdict.await() } ?: false
-        if (!granted) {
+        val outcome = awaitFgsVerdict(verdict, verdictTimeoutMs)
+        if (outcome != FgsVerdict.Granted) {
             // 不在这里 stopService：服务可能还没走到 startForeground，这时把它带下去正是 #414 的崩溃
             // （Bringing down service while still waiting for start foreground）。迟到的 onStartCommand
             // 看到没人在等，会自己 startForeground + 立刻 stopSelf 了结义务。
-            Log.w(TAG, "foreground: no verdict within ${verdictTimeoutMs}ms; treating as refused")
+            Log.w(TAG, fgsNotGrantedLog(outcome, verdictTimeoutMs))
             FlowForegroundHandoff.verdict = null
             return false
         }
@@ -198,13 +238,15 @@ class FlowTransferForegroundService : Service() {
             }
         } catch (refusal: IllegalStateException) {
             if (!isForegroundStartRefusal(refusal)) throw refusal
-            FlowForegroundHandoff.control?.recordFgsBlock(fgsBlockReasonOf(refusal))
-            Log.w("PPassFlow", "foreground: startForeground refused (${fgsBlockReasonOf(refusal)}); recorded")
+            val reason = noteFgsRefusal(FlowForegroundHandoff.control, refusal, androidBootInstant(this))
+            Log.w("PPassFlow", "foreground: startForeground refused ($reason: ${refusal.message}); recorded")
             FlowForegroundHandoff.held = false
-            waiting?.complete(false)
+            waiting?.complete(FgsVerdict.Refused(reason, refusal.message.orEmpty()))
             stopSelf()
             return START_NOT_STICKY
         }
+        // #522：成功一次 = 系统开了一次新会话（24h 窗口的起点），也说明额度已经复位。迟到的那条路径同样算。
+        FlowForegroundHandoff.control?.recordFgsGrant(androidBootInstant(this))
         if (waiting == null) {
             // 没人在等（acquire 已超时放弃，或循环已结束）：义务已了结，立刻下来。
             FlowForegroundHandoff.held = false
@@ -213,13 +255,15 @@ class FlowTransferForegroundService : Service() {
             return START_NOT_STICKY
         }
         FlowForegroundHandoff.held = true
-        waiting.complete(true)
+        waiting.complete(FgsVerdict.Granted)
         return START_NOT_STICKY
     }
 
     /**
      * Android 15：dataSync 额度在服务运行中耗尽时系统调这里，并要求几秒内下来。
      * #414：只停止、只记录，这一轮**不再调用 startForegroundService**（#413：下一次触发照常再申请）。
+     * #522：这里**不**记「确定被拒」——AOSP 在 `enableFgsTimeoutCrashBehavior` 关闭时，下一次 startForeground
+     * 会直接复位额度；只有系统真的抛出 "Time limit already exhausted" 才是后台跳过申请的依据。
      */
     @androidx.annotation.RequiresApi(35)
     override fun onTimeout(startId: Int, fgsType: Int) {

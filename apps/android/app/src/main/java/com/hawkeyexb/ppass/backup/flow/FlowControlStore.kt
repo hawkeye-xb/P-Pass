@@ -1,4 +1,5 @@
 // ARCH-13 (#417) → #413: 意图层的暂停标志、持久化的等待原因、最近一次 FGS 受阻原因。
+// #522：再加 dataSync 额度的两条系统事实（最近一次授予、确定被拒），跨进程保留，见 [FlowControl.fgsBudgetFacts]。
 //
 // 取代 ledger 里的 ConsumerGate 与 flow-transfer-protection.json（TransferProtectionStore）。
 // 单个小 JSON 文件，唯一临时文件名 + rename（MOB-102 的教训：固定 .tmp 名在两个线程同一毫秒写时会互相踩）。
@@ -17,7 +18,16 @@ internal data class FlowControlState(
     val fgsBlocked: String = "",
     val fgsBlockedAtMs: Long = 0L,
     val missingSourceAckAtMs: Long = 0L,
+    /** #522：最近一次 startForeground 成功（开机序号 + elapsedRealtime）；-1 = 不知道。 */
+    val fgsGrantBoot: Int = -1,
+    val fgsGrantElapsedMs: Long = -1L,
+    /** #522：系统明确说额度耗尽的时刻；-1 = 没有（或之后成功过 / 回过前台）。 */
+    val budgetRefusalBoot: Int = -1,
+    val budgetRefusalElapsedMs: Long = -1L,
 )
+
+private fun instantOf(boot: Int, elapsedMs: Long): BootInstant? =
+    if (boot < 0 || elapsedMs < 0) null else BootInstant(boot, elapsedMs)
 
 class FlowControlStore(private val dir: File, private val clock: () -> Long = System::currentTimeMillis) : FlowControl {
     private val file = File(dir, FILE_NAME)
@@ -74,6 +84,32 @@ class FlowControlStore(private val dir: File, private val clock: () -> Long = Sy
 
     override fun clearFgsBlock() {
         if (load().fgsBlocked.isNotEmpty()) update { it.copy(fgsBlocked = "", fgsBlockedAtMs = 0L) }
+    }
+
+    override fun fgsBudgetFacts(): FgsBudgetFacts = load().let {
+        FgsBudgetFacts(
+            lastGrantAt = instantOf(it.fgsGrantBoot, it.fgsGrantElapsedMs),
+            exhaustedRefusalAt = instantOf(it.budgetRefusalBoot, it.budgetRefusalElapsedMs),
+        )
+    }
+
+    override fun recordFgsGrant(at: BootInstant?) = update {
+        it.copy(
+            fgsGrantBoot = at?.bootCount ?: -1,
+            fgsGrantElapsedMs = at?.elapsedMs ?: -1L,
+            budgetRefusalBoot = -1,
+            budgetRefusalElapsedMs = -1L,
+        )
+    }
+
+    override fun recordBudgetRefusal(at: BootInstant?) = update {
+        it.copy(budgetRefusalBoot = at?.bootCount ?: -1, budgetRefusalElapsedMs = at?.elapsedMs ?: -1L)
+    }
+
+    override fun clearBudgetRefusal(): Boolean {
+        if (load().budgetRefusalElapsedMs < 0) return false
+        update { it.copy(budgetRefusalBoot = -1, budgetRefusalElapsedMs = -1L) }
+        return true
     }
 
     override fun missingSourceAckAt(): Long = load().missingSourceAckAtMs

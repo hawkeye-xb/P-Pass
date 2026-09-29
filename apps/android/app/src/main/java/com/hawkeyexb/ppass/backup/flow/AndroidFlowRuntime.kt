@@ -353,6 +353,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         scope = scope,
         io = Dispatchers.IO,
         log = androidLog,
+        bootClock = { androidBootInstant(app) },
         afterCycle = { auditScope.launch { dispatcher.flush() } },
         onEpochAdvertised = { advertised ->
             // 同一台桌面换了配对代号：order 表保留（内容寻址，CONFIRMED 跨代号成立），只更新凭证。

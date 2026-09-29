@@ -241,6 +241,51 @@ interface WakeScheduler {
 /** FGS 受阻的原因。 */
 enum class FgsBlockReason { BUDGET_EXHAUSTED, START_REFUSED }
 
+/**
+ * #522：一个「系统时钟上的时刻」——开机序号（`Settings.Global.BOOT_COUNT`）+ 开机以来的时长
+ * （`SystemClock.elapsedRealtime`，系统 24h 窗口用的就是这个钟）。开机序号不同 = 不是同一次开机，时长不可比。
+ */
+data class BootInstant(val bootCount: Int, val elapsedMs: Long)
+
+/**
+ * #522：dataSync 额度的两条系统事实（持久化，见 [FlowControl.fgsBudgetFacts]）。
+ * - [lastGrantAt]：最近一次 `startForeground` 成功的时刻 ≈ 系统 `TimeLimitedFgsInfo.mFirstFgsStartRealtime`
+ *   （并行数 0→1 时覆盖；被拒的申请在预检阶段就抛，不更新它）。
+ * - [exhaustedRefusalAt]：系统明确说「Time limit already exhausted」的时刻；之后成功一次就清。
+ */
+data class FgsBudgetFacts(
+    val lastGrantAt: BootInstant? = null,
+    val exhaustedRefusalAt: BootInstant? = null,
+)
+
+/** 系统复位额度的窗口（AOSP android15 `ActiveServices`：最近一次会话开始距今超过 24h 就在 startForeground 时复位）。 */
+internal const val FGS_BUDGET_RESET_WINDOW_MS = 24 * 60 * 60 * 1000L
+
+/** 我们记下的授予时刻比系统的晚几毫秒；再留一分钟余量，偏差一律落在「多试一次」那边。 */
+internal const val FGS_BUDGET_RESET_MARGIN_MS = 60_000L
+
+/**
+ * #522：后台触发要不要跳过 `startForegroundService`。返回跳过原因（写日志），null = 照常申请。
+ *
+ * 只在下面全部成立时跳过——任何一条拿不准都照常申请（最多白申请一次，绝不错过恢复后的第一次）：
+ *  1. 系统**明确**拒绝过（消息含 "Time limit"，见 [FlowControl.recordBudgetRefusal]）。onTimeout 不算：
+ *     AOSP 在 `enableFgsTimeoutCrashBehavior` 关闭时下一次 startForeground 会直接复位，onTimeout 之后不一定被拒；
+ *  2. 知道最近一次成功授予的时刻，且它、拒绝、现在三者是同一次开机（重启会清掉 system_server 里的额度账）；
+ *  3. 现在还在「最近一次授予 + 24h − 余量」之内（过了这个点系统会复位，下一次必须真去申请）。
+ * 「回过前台」由调用方复位（[FlowControl.clearBudgetRefusal]），这里不管。
+ */
+internal fun fgsBudgetSkipReason(facts: FgsBudgetFacts, now: BootInstant?): String? {
+    val refusal = facts.exhaustedRefusalAt ?: return null
+    val grant = facts.lastGrantAt ?: return null
+    if (now == null) return null
+    if (refusal.bootCount != now.bootCount || grant.bootCount != now.bootCount) return null
+    if (refusal.elapsedMs < grant.elapsedMs || now.elapsedMs < refusal.elapsedMs) return null
+    val resetAt = grant.elapsedMs + FGS_BUDGET_RESET_WINDOW_MS - FGS_BUDGET_RESET_MARGIN_MS
+    if (now.elapsedMs >= resetAt) return null
+    return "dataSync budget exhausted (system refused with 'Time limit' ${(now.elapsedMs - refusal.elapsedMs) / 1000}s ago), " +
+        "app not in the foreground since; system resets in ${(resetAt - now.elapsedMs) / 60_000}min"
+}
+
 /** 意图（暂停标志）与等待原因的持久存储。 */
 interface FlowControl {
     fun paused(): Boolean
@@ -258,6 +303,21 @@ interface FlowControl {
     fun recordFgsBlock(reason: FgsBlockReason)
 
     fun clearFgsBlock()
+
+    /**
+     * #522：额度事实（**落盘**）。系统的额度账记在 system_server 里、按 uid 保存，我们的进程被杀重启后它还在，
+     * 所以「确定被拒」也要跨进程保留；重启设备会清掉系统的账，靠 [BootInstant.bootCount] 识别。
+     */
+    fun fgsBudgetFacts(): FgsBudgetFacts = FgsBudgetFacts()
+
+    /** 服务 `startForeground` 成功：记下时刻（系统 24h 窗口的起点），并清掉「确定被拒」。 */
+    fun recordFgsGrant(at: BootInstant?) = Unit
+
+    /** 系统明确说额度耗尽（"Time limit already exhausted"）。 */
+    fun recordBudgetRefusal(at: BootInstant?) = Unit
+
+    /** App 回过前台（系统会在下一次 startForeground 时复位额度）：不再跳过。返回之前是否记着。 */
+    fun clearBudgetRefusal(): Boolean = false
 
     /** MOB-100：「已跳过 N 张…不会再重传」横幅的确认水位（ms）。 */
     fun missingSourceAckAt(): Long
