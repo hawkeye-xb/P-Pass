@@ -494,7 +494,8 @@ async fn cancel(ctp: &IrohTransport, d: &Desk, request_id: &str) -> PairStatusRe
 }
 
 /// 验收 E2（#463 收窄后的标准 2）：手机点「取消」→ `pair.cancel` →
-/// 之后主人点「允许」，`confirm` 返回 `Expired`，**不写 device 行**，不记
+/// 之后主人点「允许」，`confirm` 点不到（DEV-07 后续起该行已离开队列，
+/// 返回 `NotFound`；#503 时是 `Expired`），**不写 device 行**，不记
 /// `pair.accepted`。改前：取消只改手机自己的屏幕，决策任务把
 /// `decision_rx` 留到 600 s TTL，主人的允许照样落库（模拟器实测第 9 行
 /// `9ffe785c27… role=member`）。
@@ -512,10 +513,11 @@ async fn phone_cancel_then_owner_allow_is_expired_and_writes_no_device() {
         "a withdrawn request is no longer pending: {c:?}"
     );
 
-    // 主人在手机取消之后点「允许」。
+    // 主人在手机取消之后点「允许」（桌面上那一行已经消失，这一下只可能
+    // 是和移除赛跑的点击）：点不到它——NotFound，与 IPC 口径 NOT_FOUND 同。
     let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, true);
     assert!(
-        matches!(outcome, daemon::ConfirmOutcome::Expired(_)),
+        matches!(outcome, daemon::ConfirmOutcome::NotFound),
         "the owner's Allow landed on a withdrawn request: {outcome:?}"
     );
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -543,22 +545,30 @@ async fn phone_cancel_then_owner_allow_is_expired_and_writes_no_device() {
     assert_eq!(status(&ctp, &d, &s.request_id).await.state, "expired");
 }
 
-/// 手机撤回之后，`pairing.pending` 里这一行照实标 `expired`（与过了 TTL
-/// 的行同一个字段），不再冒充一条还能批的活请求。
+/// DEV-07 后续（#463，产品拍板）：手机撤回之后，这一行**离开主人队列**
+/// ——`pairing.pending` 不再列它、控制台名单里也没有它，而不是留一行
+/// 「已失效」等业主点了才报失败。同一台桌面上另一台手机的行不受影响。
+/// 反证靶子：`IpcServer::live_queue` 不滤 `is_withdrawn` → 撤回后仍是两行。
 #[tokio::test(flavor = "multi_thread")]
-async fn a_withdrawn_row_is_reported_expired_in_the_owner_queue() {
+async fn a_withdrawn_row_leaves_the_owner_queue() {
     let d = desk(Db::open_in_memory().await.unwrap(), None).await;
     let ctp = phone(&d).await;
+    let other = phone(&d).await;
     let qr = d.pairing.start([0x75; 12], now());
     let s = submitted(submit(&ctp, &d, &token_of(&qr), "取消了的手机").await);
-    wait_queue(&d.ipc, 1).await;
+    let qr2 = d.pairing.start([0x76; 12], now());
+    let _s2 = submitted(submit(&other, &d, &token_of(&qr2), "还在等的手机").await);
+    wait_queue(&d.ipc, 2).await;
     let before = d.ipc.pending_summary().await;
-    assert_eq!(before[0]["expired"], serde_json::json!(false), "{before:?}");
+    assert_eq!(before.len(), 2, "{before:?}");
 
-    cancel(&ctp, &d, &s.request_id).await;
+    let c = cancel(&ctp, &d, &s.request_id).await;
+    assert_eq!(c.state, "expired", "{c:?}");
     let rows = d.ipc.pending_summary().await;
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["expired"], serde_json::json!(true), "{rows:?}");
+    assert_eq!(rows.len(), 1, "撤回的那一行必须离开队列: {rows:?}");
+    assert_eq!(rows[0]["name"], "还在等的手机", "{rows:?}");
+    assert_eq!(rows[0]["expired"], serde_json::json!(false), "{rows:?}");
+    assert_eq!(d.ipc.pending_names(), vec!["还在等的手机".to_string()]);
 }
 
 /// 只有提交者本人能撤回：别的 NodeId 拿着 request_id 调 `pair.cancel`
@@ -629,7 +639,8 @@ async fn rescanning_the_same_code_after_cancel_reads_expired() {
     assert_eq!(again.request_id, s.request_id);
     assert_eq!(status(&ctp, &d, &again.request_id).await.state, "expired");
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(d.ipc.pending_names().len(), 1, "no second queue row");
+    // 撤回的行已离开队列；重扫也不会把它（或第二行）放回来。
+    assert!(d.ipc.pending_names().is_empty(), "no queue row comes back");
 }
 
 /// 新手机据 hello 判断能不能撤回（旧桌面不认 `pair.cancel`，会按未知方法
