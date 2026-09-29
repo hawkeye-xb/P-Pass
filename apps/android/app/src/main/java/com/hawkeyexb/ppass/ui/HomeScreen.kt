@@ -108,6 +108,15 @@ enum class HeroRender {
     Triplet,
 }
 
+/**
+ * #541：设置页「备份哪些相册」那一行显示几个相册；null = 显示「未选相册」。
+ *
+ * 与引擎同源：范围从未保存（null）和保存了空集，引擎都当成「一张都不在范围内」
+ * （AndroidFlowRuntime 的 `inScope` 要求 `== true`，MediaSnapshotSource 对 `isNullOrEmpty` 返回空）。
+ * 此前 null 显示「全部相册」——那是 MOB-40 之前「没选过 = 全量」的旧语义，实际一张都不会备份。
+ */
+internal fun backupScopeRowCount(selectedBucketCount: Int?): Int? = selectedBucketCount?.takeIf { it > 0 }
+
 fun heroRenderOf(mediaAccess: MediaAccess, triplet: BackupTriplet?): HeroRender = when {
     mediaAccess != MediaAccess.FULL -> HeroRender.AccessBlocked
     triplet == null -> HeroRender.Unreadable
@@ -229,7 +238,8 @@ fun HomeScreen(
     // M11（全页面状态稿）"存储电脑"详情页富文本用——配对日期（0=未知，
     // 老 pairing 升级上来的存量数据，不倒推瞎编）。
     pairedAt: Long = 0L,
-    // T6: 备份范围（null = 全部相册）——「选择相册」与「发起备份」分离。
+    // T6: 备份范围（选了几个相册）——「选择相册」与「发起备份」分离。null = 从未保存过范围，
+    // 引擎按「一个都不在范围内」处理（#541，见 [backupScopeRowCount]）。
     selectedBucketCount: Int? = null,
     onOpenBucketPicker: () -> Unit = {},
     // MOB-02 §二 / MOB-94: 相册权限三档——非 FULL 时 hero 显示引导卡顶替
@@ -701,11 +711,9 @@ fun HomeScreen(
             Column {
                 CellRow(
                     label = stringResource(R.string.backup_scope),
-                    value = if (selectedBucketCount == null) {
-                        stringResource(R.string.backup_scope_all)
-                    } else {
-                        pluralStringResource(R.plurals.backup_scope_n, selectedBucketCount, selectedBucketCount)
-                    },
+                    value = backupScopeRowCount(selectedBucketCount)?.let {
+                        pluralStringResource(R.plurals.backup_scope_n, it, it)
+                    } ?: stringResource(R.string.backup_scope_none),
                     onClick = onOpenBucketPicker,
                 )
                 // #418：「取消剩余 N 张」——跟「备份哪些相册」同属「这次备份包含什么」的

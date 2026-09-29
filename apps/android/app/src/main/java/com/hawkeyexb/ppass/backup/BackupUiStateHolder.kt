@@ -145,6 +145,7 @@ class BackupUiStateHolder(
     @Volatile private var inScopeTotal: Long? = null
     @Volatile private var gateway: EngineGateway? = null
     private var lastBucketIds: Set<Long>? = null
+    private val accessGate = MediaAccessRecountGate()
 
     init {
         scope.launch {
@@ -183,6 +184,7 @@ class BackupUiStateHolder(
         g.view.collect { view ->
             // #466：探测判出配对失效只改视图（settle NOT_PAIRED），不写 order，revision 不动——这里也要同步红卡。
             pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
+            accessGate.onEngineView()
             _projection.value?.let { publish(it.copy(view = view)) }
         }
     }
@@ -196,6 +198,18 @@ class BackupUiStateHolder(
                 refreshPending.set(false)
             }
         }
+    }
+
+    /**
+     * #541：媒体权限档位（首页 ON_RESUME / 权限弹窗回调重读的那个 [MediaAccess]）。档位变了（尤其由无到全部）：
+     * 缓存的 n 是在旧档位下数的（无权限时 MediaStore 查询返回空 → n = 0），ContentObserver 也不会因为授权而回调，
+     * 所以这里清掉 n 的缓存、叫醒引擎重算待办、立刻重读一次账目。首次调用只记下档位（init 已经数过）。
+     */
+    fun onMediaAccess(access: MediaAccess) {
+        if (!accessGate.onAccess(access)) return
+        inScopeTotal = null
+        gateway?.onMediaChanged()
+        scope.launch { refresh(recount = true) }
     }
 
     fun dispose() {
@@ -303,7 +317,7 @@ class BackupUiStateHolder(
                 null
             }
         }
-        return g.facts(bucketIds, inScopeTotal).copy(view = g.view.value)
+        return g.facts(bucketIds, inScopeTotal).copy(view = accessGate.visible(g.view.value))
     }
 
     private suspend fun refresh(recount: Boolean) {
@@ -358,6 +372,32 @@ class BackupUiStateHolder(
         fun monotonicNowMs(): Long = System.nanoTime() / 1_000_000
         const val UI_DEBOUNCE_MS = 150L
     }
+}
+
+/**
+ * #541：权限档位变化的判据 + 变化后引擎视图的暂扣。
+ *
+ * - [onAccess]：档位与上一次不同才返回 true；第一次只记下。
+ * - 档位刚变时引擎视图还是旧档位下算的（无权限时待办 = 0）。n 重数成 7 而待办还是 0 的话，m = n − 0 = n，
+ *   英雄区会在引擎重算之前先说「照片都存好了」（#401 那道闸门防的就是这个）。所以变化之后视图按 null 投影
+ *   （m 退回 order 表的已确认且原图还在），直到引擎发出下一个视图（[onEngineView]）。
+ */
+internal class MediaAccessRecountGate {
+    private var last: MediaAccess? = null
+    @Volatile private var holdView = false
+
+    fun onAccess(now: MediaAccess): Boolean {
+        val changed = last != null && last != now
+        last = now
+        if (changed) holdView = true
+        return changed
+    }
+
+    fun onEngineView() {
+        holdView = false
+    }
+
+    fun <V> visible(view: V?): V? = if (holdView) null else view
 }
 
 // ================================================================ W1 接线点：EngineGateway

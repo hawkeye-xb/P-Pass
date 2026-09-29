@@ -37,14 +37,15 @@ class BackupScopeStore(context: Context, daemonNodeId: String? = null) {
         appContext.getSharedPreferences(scopePrefsName(id), Context.MODE_PRIVATE)
     }
 
-    /** Selected album ids; null = everything (never scoped). */
+    /** 选中的相册 id。null = 从未保存过范围——**不是**「全部」：引擎把 null 与空集都当成一张都不在范围内
+     *  （MOB-40；#541 起设置行也按这个显示「未选相册」）。 */
     fun selectedBucketIds(): Set<Long>? {
         val raw = prefs.getString("bucket_ids", null) ?: return null
         return raw.split(",").mapNotNull { it.toLongOrNull() }.toSet()
     }
 
     /** MOB-02: 最近一次保存范围时看到的全部相册 id；null = 从未选过范围
-     *  （全量模式——新相册自动包含，无「新」徽标）。 */
+     *  （选相册页不标「新」徽标；范围本身仍是空的，见 [selectedBucketIds]）。 */
     fun knownBucketIds(): Set<Long>? {
         val raw = prefs.getString("known_bucket_ids", null) ?: return null
         return raw.split(",").mapNotNull { it.toLongOrNull() }.toSet()
