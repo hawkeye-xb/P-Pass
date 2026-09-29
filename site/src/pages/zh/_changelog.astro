@@ -1,0 +1,119 @@
+---
+import Base from '../../layouts/Base.astro';
+import { GITHUB_URL } from '../../consts';
+
+/**
+ * 更新日志。条目目前是占位模板，正式内容按版本发布时替换。
+ * 分类沿用仓库根 CHANGELOG.md：新增 / 改进 / 修复。
+ */
+interface Release {
+  version: string;
+  date: string;
+  sections: { title: string; items: string[] }[];
+}
+
+const releases: Release[] = [
+  {
+    version: '0.6.2',
+    date: '2026-09-20',
+    sections: [
+      { title: '新增', items: ['示例条目：新增功能的一句话说明。', '示例条目：另一项新增内容。'] },
+      { title: '改进', items: ['示例条目：已有功能的体验改进。'] },
+      { title: '修复', items: ['示例条目：修复的问题及影响范围。', '示例条目：另一处问题修复。'] },
+    ],
+  },
+  {
+    version: '0.6.1',
+    date: '2026-09-06',
+    sections: [
+      { title: '改进', items: ['示例条目：已有功能的体验改进。', '示例条目：界面文案调整。'] },
+      { title: '修复', items: ['示例条目：修复的问题及影响范围。'] },
+    ],
+  },
+  {
+    version: '0.6.0',
+    date: '2026-08-23',
+    sections: [
+      { title: '新增', items: ['示例条目：新增功能的一句话说明。'] },
+      { title: '修复', items: ['示例条目：修复的问题及影响范围。'] },
+    ],
+  },
+];
+---
+
+<Base lang="zh" title="更新日志 — P-Pass" description="P-Pass 各版本的新增、改进和修复记录。">
+  <article class="changelog">
+    <header>
+      <h1>更新日志</h1>
+      <p class="meta">
+        这里记录各版本的主要变化，完整的发布记录见
+        <a href={`${GITHUB_URL}/releases`} rel="external">GitHub Releases</a>。
+      </p>
+    </header>
+    {
+      releases.map((r) => (
+        <section class="release">
+          <h2>
+            v{r.version}
+            <time datetime={r.date}>{r.date}</time>
+          </h2>
+          {r.sections.map((s) => (
+            <>
+              <h3>{s.title}</h3>
+              <ul>
+                {s.items.map((item) => (
+                  <li>{item}</li>
+                ))}
+              </ul>
+            </>
+          ))}
+        </section>
+      ))
+    }
+  </article>
+</Base>
+
+<style>
+  .changelog {
+    max-width: 40em;
+    margin: 0 auto;
+    padding: 3.5rem 1.25rem 4rem;
+  }
+  h1 {
+    font-size: clamp(1.8rem, 5vw, 2.4rem);
+    margin: 0 0 0.5rem;
+  }
+  .meta {
+    margin: 0 0 2.5rem;
+    color: var(--text-meta);
+    font-size: 0.9rem;
+  }
+  .release + .release {
+    border-top: 1px solid var(--hairline);
+  }
+  h2 {
+    font-size: 1.2rem;
+    margin: 2.25rem 0 0.75rem;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.75rem;
+  }
+  h2 time {
+    color: var(--text-meta);
+    font-size: 0.9rem;
+    font-weight: normal;
+  }
+  h3 {
+    font-size: 1rem;
+    margin: 1.25rem 0 0.25rem;
+  }
+  ul {
+    padding-left: 1.25rem;
+    margin: 0;
+  }
+  li {
+    color: var(--text-secondary);
+    line-height: 1.75;
+  }
+</style>

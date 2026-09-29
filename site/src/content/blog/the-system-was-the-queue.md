@@ -36,7 +36,7 @@ P-Pass 手机端要做一件很朴素的事：你拍了照片，它自动传到�
 
 他是对的。我压缩的是空窗的长度，而空窗本身还在。1 秒里也能拍照。而那个"上一轮有照片才补扫"的条件更糟：如果这轮唤醒是微信收了张图触发的（我们不备份微信相册），扫描结果为空，就完全不补扫，那期间你真拍的照片得等五个小时。
 
-补丁在猜。猜就会猜错。
+这个补丁靠的是两个猜测：猜 1 秒里没人拍照，猜上一轮扫空了这一轮也不用补。两个都会落空。
 
 ## 用户给了另一个方向
 
@@ -50,7 +50,7 @@ P-Pass 手机端要做一件很朴素的事：你拍了照片，它自动传到�
 
 > To continually monitor for content changes, you need to schedule a new JobInfo using the same job ID and observing the same URIs in place of calling `jobFinished()`. […] Following this pattern will ensure you do not lose any content changes: while your job is running, the system will continue monitoring for content changes, and propagate any changes it sees over to the next job you schedule, so you do not have to worry about missing new changes.
 
-翻译过来，就是用户刚才那句话，一个字都不差：
+翻译过来，跟用户刚才那句话说的是同一个模型：
 
 - 系统 = 事件队列，一直在收，从不关门
 - 我们 = worker，事件来了就处理
@@ -105,15 +105,15 @@ Constraints.Builder()
 
 这个洞比连拍那个严重得多，而且从来没人报过。它的症状是"回家过一会儿就同步了"，看起来完全正常。
 
-拆开之后天然就没了：监听是裸的，永远在线；Wi-Fi 和电量的要求挪到派出去的备份任务上。 有新照片立刻知道，能不能传是另一回事。
+拆开之后天然就没了：监听是裸的，永远在线；Wi-Fi 和电量的要求挪到派出去的备份任务上。有新照片立刻知道，能不能传是另一回事。
 
 ## 新方案自己的代价
 
 同一段文档往下几行：trigger URI 和 `setPersisted` 互斥。翻译过来就是，**这个看门任务不能持久化，每次开机都会消失**。
 
-这不是 bug，是平台的硬约束，绕不过去。
+这是平台写死的约束，绕不过去。
 
-好在照片不会丢。我们的备份不是"处理系统告诉我们的那几张照片"，而是"扫描上次成功备份之后新增的全部"。漏掉一次通知只损失时延，不损失数据。开机后周期任务把进程拉起来，顺手就把监听挂回去了。
+好在照片不会丢。我们的备份每次都"扫描上次成功备份之后新增的全部"，用不着系统告诉我们具体是哪几张。漏掉一次通知只损失时延，不损失数据。开机后周期任务把进程拉起来，顺手就把监听挂回去了。
 
 亏的是那段时间的即时性。要压到零得自己注册一个开机广播，多一个常驻组件换一次开机时延，值不值得，等真机测出实际空窗再定。
 
@@ -123,6 +123,6 @@ Constraints.Builder()
 
 **第一，先读一手文档。** 我给这个问题写过三版方案，前两版都在系统外面绕。真正的答案在一段我本来就该读的注释里。一手源码在我本机躺着，翻一下的成本是几分钟。
 
-**第二，"我做不到"往往是"我没找对层"。** 我最初想解释的是"监听是一次性的，所以做不到不间断"。这句话在 WorkManager 那一层是真的，在 JobScheduler 那一层就是假的。用户不懂 Android 的这些细节，但他知道 event loop 该长什么样，于是他问了一个我认为不可能的问题。
+**第二，说"做不到"之前，先问清楚是哪一层做不到。** 我最初想解释的是"监听是一次性的，所以做不到不间断"。这句话在 WorkManager 那一层是真的，在 JobScheduler 那一层就是假的。用户不懂 Android 的这些细节，但他知道 event loop 该长什么样，于是他问了一个我认为不可能的问题。
 
-那个问题的答案，在文档里等着。
+那个问题的答案就写在 `addTriggerContentUri` 的注释里。

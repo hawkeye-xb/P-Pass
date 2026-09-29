@@ -8,7 +8,9 @@
   --text-secondary: var(--ink-60);
   --text-meta: var(--ink-40);
   --accent: var(--safe);
-  --hairline: var(--hairline);
+  /* --hairline comes straight from tokens.css. Do not alias it here:
+     `--hairline: var(--hairline)` is a cycle, which makes the variable
+     invalid and silently removes every hairline border in light mode. */
 }
 
 html {
@@ -23,6 +25,16 @@ html {
 body {
   margin: 0;
   background: var(--bg);
+  /* Footer sits at the bottom of the viewport when a page is shorter than
+     the screen; extra space goes above the footer, not below it. */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+body > main {
+  flex: 1 0 auto;
 }
 
 /* Headlines use the serif token stack (Georgia/system fallback if Newsreader
@@ -56,6 +68,48 @@ pre {
   padding: 1rem 1.25rem;
   overflow-x: auto;
 }
+
+/* Long-form body text (blog posts, legal pages). Global on purpose: Astro's
+   scoped styles never reach elements rendered from Markdown by <Content />,
+   so these rules must not live in a page's <style> block. */
+.prose { font-size: 1.02rem; line-height: 1.8; }
+.prose h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; }
+.prose h3 { font-size: 1.2rem; margin: 2rem 0 0.75rem; }
+.prose p { margin: 0 0 1.25rem; }
+.prose ul, .prose ol { margin: 0 0 1.25rem; padding-left: 1.5rem; }
+.prose li { margin-bottom: 0.4rem; }
+.prose li > p { margin-bottom: 0.4rem; }
+.prose strong { font-weight: 600; }
+.prose blockquote {
+  margin: 1.5rem 0;
+  padding: 0.25rem 0 0.25rem 1.1rem;
+  border-left: 3px solid var(--accent);
+  color: var(--text-secondary);
+}
+.prose img { max-width: 100%; border-radius: var(--radius-control); }
+.prose pre { margin: 0 0 1.5rem; line-height: 1.55; }
+.prose :not(pre) > code {
+  background: var(--canvas);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+  overflow-wrap: anywhere;
+}
+.prose table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0 0 1.5rem;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+.prose th, .prose td {
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--hairline);
+  text-align: left;
+  vertical-align: top;
+}
+.prose th { background: var(--canvas); font-weight: 600; }
 
 @media (prefers-color-scheme: dark) {
   :root {

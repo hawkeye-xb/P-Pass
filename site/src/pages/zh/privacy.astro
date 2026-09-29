@@ -1,0 +1,56 @@
+---
+import Base from '../../layouts/Base.astro';
+import Legal from '../../components/Legal.astro';
+import { GITHUB_URL } from '../../consts';
+---
+
+<Base lang="zh" title="隐私政策 — P-Pass">
+  <Legal title="隐私政策" updated="2026-09-29" updatedLabel="最后更新">
+    <p>
+      本政策适用于 P-Pass 官网（p-pass.hawkeye-xb.com）、P-Pass 桌面端和 P-Pass Android App，说明我们会接触哪些数据、不会接触哪些数据。
+    </p>
+
+    <h2>你的照片和视频</h2>
+    <p>
+      照片和视频只在你自己的设备之间传输，保存在你安装了 P-Pass 的电脑上。我们没有存放用户照片的服务器，也无法查看你的照片。
+    </p>
+
+    <h2>传输与中继</h2>
+    <p>
+      设备之间的连接全程加密。手机和电脑无法直接连通时，加密后的数据会经中继服务器转发。目前使用的中继和设备地址发现服务由开源网络库 iroh 的维护方 number 0 运营。这些服务能看到设备的 IP 地址和设备标识（一串公钥），看不到照片内容，也不保存传输的数据。
+    </p>
+
+    <h2>App 收集的数据</h2>
+    <ul>
+      <li>桌面端和 Android App 目前不上报任何使用数据或统计信息，也没有自动崩溃上报。</li>
+      <li>代码中包含匿名统计功能，默认关闭。如果将来开启，会在版本更新说明中告知，并提供关闭方式。</li>
+      <li>以后如果需要你提供崩溃日志，会先征得你的同意。</li>
+    </ul>
+
+    <h2>诊断包</h2>
+    <p>
+      诊断包只在你主动点击「导出诊断包」时生成，保存在你的电脑上。导出时会自动脱敏：用户目录路径统一替换，设备标识和配对令牌只保留前 8 位。只有你自己把诊断包发给我们，我们才会看到其中的内容。
+    </p>
+
+    <h2>Android 权限说明</h2>
+    <ul>
+      <li>照片和视频读取：用于备份你选择的相册。</li>
+      <li>相机：用于扫描电脑上的配对二维码。</li>
+      <li>通知：用于备份进度提示和备份失败提醒。</li>
+      <li>网络、后台运行、开机启动、忽略电池优化：用于在后台自动完成备份。</li>
+    </ul>
+
+    <h2>官网</h2>
+    <p>
+      官网不使用统计脚本、Cookie 或第三方追踪器。官网托管在 GitHub Pages，安装包通过 GitHub Releases 分发，GitHub 作为托管方会按其
+      <a href="https://github.com/site/privacy" rel="external">隐私声明</a>
+      处理访问日志。我们看到的下载量是 GitHub Releases 提供的下载次数汇总。
+    </p>
+
+    <h2>政策变更</h2>
+    <p>本政策更新时，会修改本页的「最后更新」日期。涉及数据收集方式的变化，会同时在版本更新说明中说明。</p>
+
+    <h2>联系我们</h2>
+    <p>对本政策有疑问，请在 <a href={`${GITHUB_URL}/issues`} rel="external">GitHub Issues</a> 提出。</p>
+  </Legal>
+</Base>
