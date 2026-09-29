@@ -518,14 +518,11 @@ impl Router {
                 let Ok(t) = serde_json::from_value::<proto::ThumbGet>(req.params.clone()) else {
                     return bad_request();
                 };
-                match query.thumb(&t).await {
-                    Ok(bytes) => {
-                        use base64::Engine as _;
-                        let data = proto::ThumbData {
-                            jpeg_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-                        };
-                        ok_or(&req.id, serde_json::to_value(&data))
-                    }
+                // DESK-34 (#428): phones get the same placeholder marker;
+                // the fields are skipped on real thumbs, and old Android
+                // builds ignore unknown keys (`ProtoJson.ignoreUnknownKeys`).
+                match query.thumb_reply(&t).await {
+                    Ok(reply) => ok_or(&req.id, serde_json::to_value(reply.into_wire())),
                     Err(_) => not_found(),
                 }
             }

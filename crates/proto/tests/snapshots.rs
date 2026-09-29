@@ -205,6 +205,36 @@ fn snapshot_thumb_get_1024() {
     snapshot_message("thumb_get_1024", &tg);
 }
 
+#[test]
+fn snapshot_thumb_data_real() {
+    // DESK-34 (#428): a real thumb must serialize exactly as before the
+    // placeholder fields existed — only `jpeg_base64`.
+    let td = ThumbData {
+        jpeg_base64: "/9j/4AAQ".into(),
+        ..Default::default()
+    };
+    assert_roundtrip(&td);
+    snapshot_message("thumb_data_real", &td);
+}
+
+#[test]
+fn snapshot_thumb_data_placeholder() {
+    let td = ThumbData {
+        jpeg_base64: "/9j/4AAQ".into(),
+        placeholder: true,
+        retry_after_ms: 600_000,
+    };
+    assert_roundtrip(&td);
+    snapshot_message("thumb_data_placeholder", &td);
+}
+
+#[test]
+fn thumb_data_from_an_old_daemon_decodes_as_a_real_thumb() {
+    let td: ThumbData = serde_json::from_str(r#"{"jpeg_base64":"/9j/"}"#).unwrap();
+    assert!(!td.placeholder);
+    assert_eq!(td.retry_after_ms, 0);
+}
+
 // ── Blob ticket ─────────────────────────────────────
 
 #[test]

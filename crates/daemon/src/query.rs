@@ -133,8 +133,10 @@ impl Drop for ForegroundGuard {
 
 /// What a `thumb.get` miss should do, decided under the gate lock.
 pub(crate) enum Plan {
-    /// Answer the placeholder now; do not generate.
-    Placeholder,
+    /// Answer the placeholder now; do not generate. `retry_after` is when
+    /// asking again can change the answer (DESK-34 #428, surfaced to the
+    /// client as `ThumbData::retry_after_ms`).
+    Placeholder { retry_after: Duration },
     /// Someone else is generating: wait, bounded by the original deadline.
     Wait {
         started: Instant,
@@ -158,12 +160,20 @@ impl ThumbGate {
     pub(crate) fn plan(&self, hash: &[u8; 32], budget: Duration, retry_after: Duration) -> Plan {
         let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
         match slots.get(hash) {
-            Some(Slot::Failed { at }) if at.elapsed() < retry_after => return Plan::Placeholder,
+            Some(Slot::Failed { at }) if at.elapsed() < retry_after => {
+                return Plan::Placeholder {
+                    retry_after: retry_after - at.elapsed(),
+                }
+            }
             // Over budget and still running: a waiter would only time out
             // again — answer at once (the timeout half of the negative
             // cache), and never start a second generation for the hash.
+            // The retry hint is one more budget: the generation is already
+            // past it, and qlmanage's own deadline sits inside it.
             Some(Slot::InFlight { started, .. }) if started.elapsed() >= budget => {
-                return Plan::Placeholder
+                return Plan::Placeholder {
+                    retry_after: budget,
+                }
             }
             Some(Slot::InFlight { started, done }) => {
                 return Plan::Wait {
@@ -261,6 +271,37 @@ pub(crate) async fn settle_generation(
     let _ = tx.send(true);
 }
 
+/// DESK-34 (#428): one `thumb.get` answer — the bytes, whether they are
+/// the built-in placeholder, and (for a placeholder) when a retry can help.
+/// `retry_after == 0` on a placeholder means retrying is pointless.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThumbReply {
+    pub bytes: Vec<u8>,
+    pub placeholder: bool,
+    pub retry_after: Duration,
+}
+
+impl ThumbReply {
+    fn real(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            placeholder: false,
+            retry_after: Duration::ZERO,
+        }
+    }
+
+    /// The wire form (`ThumbData`); the new fields are skipped for a real
+    /// thumb, so that frame is unchanged from before #428.
+    pub fn into_wire(self) -> proto::ThumbData {
+        use base64::Engine as _;
+        proto::ThumbData {
+            jpeg_base64: base64::engine::general_purpose::STANDARD.encode(&self.bytes),
+            placeholder: self.placeholder,
+            retry_after_ms: u64::try_from(self.retry_after.as_millis()).unwrap_or(u64::MAX),
+        }
+    }
+}
+
 /// Short, log-friendly hash prefix.
 pub(crate) fn hash_prefix(hash: &[u8; 32]) -> String {
     hash[..6].iter().map(|b| format!("{b:02x}")).collect()
@@ -323,15 +364,29 @@ impl QueryEngine {
         Ok(asset_meta(&asset))
     }
 
+    /// `thumb.get` bytes only — see [`Self::thumb_reply`].
+    pub async fn thumb(&self, t: &ThumbGet) -> Result<Vec<u8>, QueryError> {
+        Ok(self.thumb_reply(t).await?.bytes)
+    }
+
     /// `thumb.get`: cache hit reads the file; miss generates within the
     /// budget; over-budget (or unknown asset) answers the placeholder —
     /// a grid never blocks on a slow decode.
-    pub async fn thumb(&self, t: &ThumbGet) -> Result<Vec<u8>, QueryError> {
+    ///
+    /// DESK-34 (#428): the answer says whether it is the placeholder and,
+    /// if so, when asking again can help — so a client can re-fetch once
+    /// instead of keeping the gray square for as long as it is on screen.
+    pub async fn thumb_reply(&self, t: &ThumbGet) -> Result<ThumbReply, QueryError> {
         let started = std::time::Instant::now();
         let size = t.size;
+        let placeholder = |retry_after: Duration| ThumbReply {
+            bytes: media_codec::placeholder_jpeg(size as u32),
+            placeholder: true,
+            retry_after,
+        };
         let Some(hash) = parse_hash(&t.hash) else {
             self.record_first_byte(started, "thumb");
-            return Ok(media_codec::placeholder_jpeg(size as u32));
+            return Ok(placeholder(Duration::ZERO));
         };
         let paths = media_codec::thumb_paths(&self.thumbs_root, &hash);
         let path = match size {
@@ -340,13 +395,13 @@ impl QueryEngine {
         };
         if let Ok(bytes) = tokio::fs::read(&path).await {
             self.record_first_byte(started, "thumb");
-            return Ok(bytes);
+            return Ok(ThumbReply::real(bytes));
         }
 
         // Miss: the asset must exist.
         let Some(asset) = self.db.get_asset(&hash).await? else {
             self.record_first_byte(started, "thumb");
-            return Ok(media_codec::placeholder_jpeg(size as u32));
+            return Ok(placeholder(Duration::ZERO));
         };
 
         // DESK-34 (#428): consult the gate before spawning anything — a
@@ -356,9 +411,9 @@ impl QueryEngine {
         // there (connection closed) would leave the slot InFlight with no
         // owner, wedging the hash on the placeholder until restart.
         let (gen_started, mut done) = match self.gate.plan(&hash, self.budget, self.retry_after) {
-            Plan::Placeholder => {
+            Plan::Placeholder { retry_after } => {
                 self.record_first_byte(started, "thumb");
-                return Ok(media_codec::placeholder_jpeg(size as u32));
+                return Ok(placeholder(retry_after));
             }
             Plan::Wait { started, done } => (started, done),
             Plan::Spawn {
@@ -378,16 +433,19 @@ impl QueryEngine {
             .await
             .is_ok();
         let result = if finished {
-            Ok(tokio::fs::read(&path)
-                .await
-                .unwrap_or_else(|_| media_codec::placeholder_jpeg(size as u32)))
+            // Finished without a file = the generation failed and the
+            // negative cache now holds the hash for the full window.
+            match tokio::fs::read(&path).await {
+                Ok(bytes) => ThumbReply::real(bytes),
+                Err(_) => placeholder(self.retry_after),
+            }
         } else {
             // Budget blown: placeholder now; the owner task keeps running
             // and the file may still land on disk for a later request.
-            Ok(media_codec::placeholder_jpeg(size as u32))
+            placeholder(self.budget)
         };
         self.record_first_byte(started, "thumb");
-        result
+        Ok(result)
     }
 
     /// DESK-34 (#428): run one generation to completion, detached from any
@@ -993,5 +1051,110 @@ mod tests {
             !log.contains(&hex::encode(VIDEO_A)),
             "log carries a prefix, not the full hash"
         );
+    }
+
+    // ── DESK-34 (#428): the reply says "placeholder" and when to retry ────
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failure_reply_is_marked_placeholder_with_the_remaining_window() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let window = Duration::from_secs(600);
+        let f = fixture(
+            failing_gen(Arc::clone(&calls), Duration::ZERO),
+            Duration::from_secs(2),
+            window,
+            &[VIDEO_A],
+        )
+        .await;
+
+        // The generating request itself: failed just now -> full window.
+        let first = f.engine.thumb_reply(&get(&VIDEO_A)).await.unwrap();
+        assert!(first.placeholder);
+        assert_eq!(first.bytes, media_codec::placeholder_jpeg(256));
+        assert_eq!(first.retry_after, window);
+
+        // A negative-cache hit: the REMAINING window, never more.
+        std::thread::sleep(Duration::from_millis(50));
+        let hit = f.engine.thumb_reply(&get(&VIDEO_A)).await.unwrap();
+        assert!(hit.placeholder);
+        assert!(
+            hit.retry_after > Duration::ZERO && hit.retry_after < window,
+            "remaining window expected, got {:?}",
+            hit.retry_after
+        );
+
+        let wire = serde_json::to_value(hit.into_wire()).unwrap();
+        assert_eq!(wire["placeholder"], true);
+        assert!(wire["retry_after_ms"].as_u64().unwrap() <= 600_000);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_over_budget_reply_asks_to_retry_after_one_budget() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let budget = Duration::from_millis(200);
+        let f = fixture(
+            failing_gen(Arc::clone(&calls), Duration::from_millis(800)),
+            budget,
+            Duration::from_secs(3600),
+            &[VIDEO_A],
+        )
+        .await;
+        let timed_out = f.engine.thumb_reply(&get(&VIDEO_A)).await.unwrap();
+        assert!(timed_out.placeholder);
+        assert_eq!(timed_out.retry_after, budget);
+        let short_circuited = f.engine.thumb_reply(&get(&VIDEO_A)).await.unwrap();
+        assert!(short_circuited.placeholder);
+        assert_eq!(short_circuited.retry_after, budget);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_real_thumb_reply_is_unmarked_and_serializes_as_before() {
+        let generator: ThumbGen = Arc::new(|hash: &[u8; 32], _src: &Path, root: &Path| {
+            let paths = media_codec::thumb_paths(root, hash);
+            std::fs::create_dir_all(paths.t256.parent().unwrap()).unwrap();
+            std::fs::write(&paths.t256, b"REAL-256").unwrap();
+            std::fs::write(&paths.t1024, b"REAL-1024").unwrap();
+            media_codec::ThumbResult {
+                paths,
+                outcome: media_codec::ThumbOutcome::Generated,
+            }
+        });
+        let f = fixture(
+            generator,
+            Duration::from_secs(3),
+            Duration::from_secs(3600),
+            &[VIDEO_A],
+        )
+        .await;
+        for _ in 0..2 {
+            // generated now, then a disk hit
+            let r = f.engine.thumb_reply(&get(&VIDEO_A)).await.unwrap();
+            assert_eq!(r.bytes, b"REAL-256");
+            assert!(!r.placeholder);
+            assert_eq!(r.retry_after, Duration::ZERO);
+            let wire = serde_json::to_value(r.into_wire()).unwrap();
+            let keys: Vec<_> = wire.as_object().unwrap().keys().cloned().collect();
+            assert_eq!(
+                keys,
+                vec!["jpeg_base64".to_string()],
+                "real-thumb frame unchanged"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_unknown_asset_placeholder_says_retrying_is_pointless() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let f = fixture(
+            failing_gen(Arc::clone(&calls), Duration::ZERO),
+            Duration::from_secs(2),
+            Duration::from_secs(3600),
+            &[],
+        )
+        .await;
+        let r = f.engine.thumb_reply(&get(&VIDEO_B)).await.unwrap();
+        assert!(r.placeholder);
+        assert_eq!(r.retry_after, Duration::ZERO);
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 }
