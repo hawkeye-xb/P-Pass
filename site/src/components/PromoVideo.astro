@@ -7,6 +7,9 @@ interface Props {
 
 const { lang } = Astro.props;
 
+// Captions are burned in, so each language has its own cut: promo-<ratio>[-en].mp4
+const v = (ratio: string, ext: string) => `/video/promo-${ratio}${lang === 'en' ? '-en' : ''}.${ext}`;
+
 // 1×1 transparent GIF. The real cover is a CSS background (below); a poster
 // must still be set, or Chrome paints an opaque dark layer over it.
 const CLEAR_POSTER =
@@ -20,16 +23,16 @@ const CLEAR_POSTER =
      its own image, with zero JS. Assets: public/video/; provenance: site/VIDEO-SOURCES.md (not deployed). -->
 <section class="promo">
   <video controls preload="none" playsinline poster={CLEAR_POSTER} aria-label={t(lang, 'video.label')}>
-    <source media="(max-width: 760px)" src="/video/promo-3x4.mp4" type="video/mp4" />
-    <source src="/video/promo-16x9.mp4" type="video/mp4" />
+    <source media="(max-width: 760px)" src={v('3x4', 'mp4')} type="video/mp4" />
+    <source src={v('16x9', 'mp4')} type="video/mp4" />
     <p>
       {t(lang, 'video.fallback')}
-      <a href="/video/promo-16x9.mp4" download>{t(lang, 'video.download')}</a>
+      <a href={v('16x9', 'mp4')} download>{t(lang, 'video.download')}</a>
     </p>
   </video>
 </section>
 
-<style>
+<style define:vars={{ coverWide: `url('${v('16x9', 'webp')}')`, coverNarrow: `url('${v('3x4', 'webp')}')` }}>
   .promo {
     max-width: 960px;
     margin: 0 auto;
@@ -40,12 +43,12 @@ const CLEAR_POSTER =
     width: 100%;
     aspect-ratio: 16 / 9;
     border-radius: var(--radius-card);
-    background: var(--canvas) url('/video/promo-16x9.webp') center / cover no-repeat;
+    background: var(--canvas) var(--coverWide) center / cover no-repeat;
   }
   @media (max-width: 760px) {
     video {
       aspect-ratio: 3 / 4;
-      background-image: url('/video/promo-3x4.webp');
+      background-image: var(--coverNarrow);
     }
   }
 </style>
