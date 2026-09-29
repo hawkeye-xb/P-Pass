@@ -1,6 +1,7 @@
 package com.hawkeyexb.ppass
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -19,7 +20,11 @@ class BackgroundBackupPresentationContractTest {
             .substringBefore("private fun requiredMediaPermissions")
 
         assertTrue(started.contains("backgroundAuthorization.requestIntent()"))
-        assertFalse("notification permission must not be requested during onboarding", started.contains("POST_NOTIFICATIONS"))
+        // #130（用户拍板 B，原断言「onboarding 不许申请通知权限」改为保意图的形状）：onboarding 里的
+        // 通知申请只能有一处，且必须经过「只问一次」的闸门——先判 shouldAsk、先落盘 markAsked，再弹。
+        assertEquals("onboarding 里只许有一处通知申请", 1, Regex("launch\\(Manifest\\.permission\\.POST_NOTIFICATIONS\\)").findAll(started).count())
+        val gate = started.substringBefore("launch(Manifest.permission.POST_NOTIFICATIONS)").substringAfterLast("val thenContinue")
+        assertTrue("通知申请必须经过只问一次的闸门", gate.contains("notificationAsk.shouldAsk(") && gate.contains("notificationAsk.markAsked()"))
     }
 
     @Test
