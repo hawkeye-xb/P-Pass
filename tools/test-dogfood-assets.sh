@@ -21,10 +21,11 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-TMPS=()
-cleanup() { [ "${#TMPS[@]}" -eq 0 ] || rm -rf "${TMPS[@]}"; }
-trap cleanup EXIT
-mktmp() { local d; d="$(mktemp -d "${TMPDIR:-/tmp}/ppf-assets.XXXXXX")"; TMPS+=("$d"); echo "$d"; }
+# 所有临时目录都建在同一个根下：mktmp 常在 $(...) 子 shell 里调用，往数组
+# 里登记会丢，统一根目录才能在 EXIT 时一把清干净。
+TMPROOT="$(mktemp -d "${TMPDIR:-/tmp}/ppf-assets.XXXXXX")"
+trap 'rm -rf "$TMPROOT"' EXIT
+mktmp() { mktemp -d "$TMPROOT/d.XXXXXX"; }
 
 fail() { echo "FAIL: $*" >&2; return 1; }
 
@@ -60,8 +61,10 @@ check_scripts() {
 
   if [[ -n "${PPF_SMOKE_BIN_DIR:-}" ]]; then
     cp -R "$PPF_SMOKE_BIN_DIR"/. "$dest"/
-    (cd "$cwd" && bash "$dest/dogfood-smoke.sh" "$cwd/work") | tee "$cwd/smoke.out" \
-      || fail "干净目录完整冒烟失败" || return 1
+    if ! (cd "$cwd" && bash "$dest/dogfood-smoke.sh" "$cwd/work") 2>&1 | tee "$cwd/smoke.out"; then
+      tail -5 "$cwd/work/daemon.err" 2>/dev/null >&2 || true
+      fail "干净目录完整冒烟失败"; return 1
+    fi
     grep -q 'DOGFOOD SMOKE: ALL GREEN' "$cwd/smoke.out" || fail "完整冒烟未 ALL GREEN" || return 1
   fi
 }

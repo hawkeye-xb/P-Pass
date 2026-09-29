@@ -56,7 +56,13 @@ DAEMON_PID=$!
 exec 3>"$WORK/daemon-ctl"   # 保持写端打开——daemon 不会立即 EOF
 
 for _ in $(seq 1 50); do grep -q 'NodeId:' daemon.log 2>/dev/null && break; sleep 0.2; done
-NODE=$(grep -o 'NodeId: .*' daemon.log | awk '{print $2}')
+# grep 落空时别让 pipefail 静默退出：daemon 没起来要把原因亮出来
+NODE=$(grep -o 'NodeId: .*' daemon.log 2>/dev/null | awk '{print $2}' || true)
+if [ -z "$NODE" ]; then
+  echo "daemon 10 秒内没打出 NodeId，daemon.err 末尾：" >&2
+  tail -5 daemon.err >&2 || true
+  exit 1
+fi
 # SEC-11 (#496)：配对串经 IPC pairing.start 现取（daemon 不再把它打进被重定向的 stdout）
 ipc_pair_qr library/ipc.token
 QR="$PAIR_QR"

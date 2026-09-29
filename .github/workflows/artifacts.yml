@@ -47,6 +47,8 @@ on:
       - "tools/setup-rust-toolchain.sh"
       - "tools/bundle-macos.sh"
       - "tools/dogfood-smoke.sh"
+      - "tools/ipc-lib.sh" # REL-08 (#510)：smoke 所 source 的 helper，随资产发布
+      - "tools/stage-dogfood-scripts.sh"
       - "tools/win-smoke.ps1"
       - ".github/workflows/artifacts.yml"
   workflow_dispatch:
@@ -97,7 +99,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          cp tools/dogfood-smoke.sh /tmp/bin/ || true
+          # REL-08 (#510)：随资产的 .sh 只从暂存脚本的单一清单出（含 helper），
+          # 缺文件直接红——原先 `cp … || true` 漏带 ipc-lib.sh 也静默通过。
+          tools/stage-dogfood-scripts.sh /tmp/bin
           cd /tmp/bin
           shasum -a 256 daemon testclient lib/*.dylib > SHA256SUMS-macos-arm64
           echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO-macos-arm64
@@ -150,7 +154,8 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/rel
           cp target/release/daemon target/release/testclient /tmp/rel/
-          cp tools/dogfood-smoke.sh /tmp/rel/ || true
+          # REL-08 (#510)：同上；Linux 是散装资产，upload 列表直接用清单输出。
+          mapfile -t STAGED < <(tools/stage-dogfood-scripts.sh /tmp/rel)
           cd /tmp/rel
           sha256sum daemon testclient > SHA256SUMS-linux-x64
           echo "built from ${GITHUB_SHA} on $(date -u +%FT%TZ)" > BUILD_INFO-linux-x64
@@ -163,7 +168,7 @@ jobs:
           gh release upload dogfood --repo "$GITHUB_REPOSITORY" \
             /tmp/rel/daemon \
             /tmp/rel/testclient \
-            /tmp/rel/dogfood-smoke.sh \
+            "${STAGED[@]}" \
             /tmp/rel/SHA256SUMS-linux-x64 \
             /tmp/rel/BUILD_INFO-linux-x64 \
             --clobber

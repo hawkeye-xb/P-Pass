@@ -292,8 +292,8 @@ sync:
 test-cleanup-local:
     bash tools/test-clean-local-builds.sh
 
+# 先跑变异反证，再跑门禁本身；PPF_SMOKE_BIN_DIR=<bundle 目录> 时加跑完整冒烟。
 # REL-08 (#510): release 资产里的 .sh 在只含资产的干净目录里必须自足
-# （source 的 helper 也在清单里）。先跑变异反证，再跑门禁本身。
 test-dogfood-assets:
     bash tools/test-dogfood-assets.sh --self-test
     bash tools/test-dogfood-assets.sh
