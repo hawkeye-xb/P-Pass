@@ -469,6 +469,8 @@ class DaemonClient internal constructor(
      * Returns total bytes. [onProgress] gets (received, total).
      * MOB-115: throws [AssetDownloadException] on a short/corrupt stream;
      * [dest] only ever appears complete and BLAKE3-verified.
+     * NET-09 (#116): no total-duration limit; [DownloadStalled] once no new
+     * byte arrives for [DOWNLOAD_BYTE_STALL_MS] (response head included).
      */
     suspend fun downloadAsset(
         peer: PeerAddrParts,
@@ -477,6 +479,9 @@ class DaemonClient internal constructor(
         onProgress: (Long, Long) -> Unit = { _, _ -> },
     ): Long = withContext(Dispatchers.IO) {
         val conn = connectRaw(peer, "ppf/download/1")
+        // NET-09（#116）：请求发出后等响应头、以及之后的每一块字节，都受字节停滞
+        // 看门狗约束；判停滞时同步关闭连接，让卡住的 readExact 报错返回。
+        val stall = ByteStallGuard(DOWNLOAD_BYTE_STALL_MS) { conn.close(0L, ByteArray(0)) }
         try {
             val bi = conn.openBi()
             val send = bi.send()
@@ -491,10 +496,10 @@ class DaemonClient internal constructor(
             send.writeAll(com.hawkeyexb.ppass.proto.encodeFrame(Req.serializer(), req))
             send.finish()
 
-            val header = recv.readExact(4u)
+            val header = stall.read(0, null) { recv.readExact(4u) }
             val len = com.hawkeyexb.ppass.proto.frameLen(header)
             val resp = com.hawkeyexb.ppass.proto.decodePayload(
-                Resp.serializer(), recv.readExact(len.toUInt())
+                Resp.serializer(), stall.read(0, null) { recv.readExact(len.toUInt()) }
             )
             check(resp.ok) { "download $hash: ${resp.error?.msgKey}" }
             val total = (resp.result as? kotlinx.serialization.json.JsonObject)
@@ -504,9 +509,10 @@ class DaemonClient internal constructor(
 
             // MOB-115: 断流/长度不足/内容不符都抛错，绝不返回截断文件；
             // 先写 .part，校验通过才原子改名为 dest（见 VerifiedDownload.kt）。
-            receiveVerified(dest, total, hash, { n -> recv.readExact(n) }, onProgress)
+            receiveVerified(dest, total, hash, { n -> recv.readExact(n) }, stall, onProgress)
         } finally {
-            conn.close(0L, ByteArray(0))
+            // 看门狗可能已经关过一次；二次 close 抛的错不能盖掉真正的失败原因。
+            runCatching { conn.close(0L, ByteArray(0)) }
         }
     }
 
