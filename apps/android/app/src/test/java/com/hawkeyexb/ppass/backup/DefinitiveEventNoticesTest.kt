@@ -196,6 +196,13 @@ class DefinitiveEventNoticesTest {
     }
 
     @Test
+    fun the_notify_switch_explains_itself_in_a_neutral_non_clickable_hint() {
+        val row = src("ui/HomeScreen.kt").substringAfter("label = stringResource(R.string.rule_notify),").substringBefore(")\n")
+        assertTrue("开关下有说明小字", row.contains("hint = stringResource(R.string.rule_notify_hint)"))
+        assertTrue("说明小字用默认中性色、不可点", !row.contains("hintColor") && !row.contains("onHintClick"))
+    }
+
+    @Test
     fun every_run_of_the_app_evaluates_definitive_events() {
         val app = src("PPassApplication.kt")
         val boot = app.substringAfter("thread(name = \"ppass-boot-check\") {").substringBefore("registerNetworkCallback()")

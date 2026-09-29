@@ -183,7 +183,9 @@
     <string name="more_section_title">More</string>
     <!-- M10 (full-page-states doc) exact copy — a real toggle row
          (NotifyOnFailurePrefs), no longer a nav row to system settings. -->
-    <string name="rule_notify">Notify me when backup needs attention</string>
+    <string name="rule_notify">Notifications</string>
+    <!-- #130: neutral caption under the switch — states which notifications it controls. -->
+    <string name="rule_notify_hint">Alerts you when pairing is lost, photo access is revoked, or the system stops background backup</string>
     <!-- T1: 版本号显示 -->
     <string name="setting_version">Version</string>
     <!-- T6: 相册选择 -->

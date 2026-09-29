@@ -168,7 +168,9 @@
     <string name="more_section_title">更多</string>
     <!-- M10 全页面状态稿原文——真实开关行(NotifyOnFailurePrefs)，不再是
          导航到系统设置的展示行。 -->
-    <string name="rule_notify">备份需要处理时通知我</string>
+    <string name="rule_notify">通知</string>
+    <!-- #130：开关下的中性小字，只写这个开关管哪几类通知。 -->
+    <string name="rule_notify_hint">配对失效、相册权限被收回、后台备份被系统停止时提醒你</string>
     <!-- T1: 版本号显示 -->
     <string name="setting_version">版本</string>
     <!-- T6: 相册选择 -->
