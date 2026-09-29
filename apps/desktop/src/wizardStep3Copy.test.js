@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+//
 // #481：向导第 3 步必须如实告知点「完成」后 macOS 会出现什么——
 // 开机自启只是通知；本地网络是要用户点「允许」的系统弹窗，系统显示的
 // 名字是 ppf-daemon（0.6.1-test.1 实测），界面会先进首页；拒绝后给出
@@ -5,21 +7,39 @@
 //
 // 反证：把第 3 步表格还原成只有「会申请什么：开机自启…」一行，
 // 本文件除「不会做什么/如果被拦」外的断言全部变红。
-import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+//
+// I18N-03 (#492)：文案搬进 assets/i18n 后，源码里已经没有这些中文，改成
+// **挂载向导走到第 3 步、读渲染出来的文本**（zh 语言），断言一字未动。
+import { cleanup, fireEvent, render, screen } from "@testing-library/svelte";
+import { afterAll, beforeAll, describe, it, expect, vi } from "vitest";
+import Wizard from "./Wizard.svelte";
+import { setLocale } from "./lib/i18n.js";
 
-const src = readFileSync(new URL("./Wizard.svelte", import.meta.url), "utf8").replace(
-  /\r\n/g,
-  "\n",
-);
-// 只看第 3 步的模板（去掉 HTML 注释，免得注释里的字样让断言假绿）。
-const start = src.indexOf("{:else if step === 3}");
-const step3 = src.slice(start, src.indexOf("{/if}", start)).replace(/<!--[\s\S]*?-->/g, "");
+setLocale("zh");
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: vi.fn(async (cmd) => (cmd === "power_hint" ? { kind: "never" } : null)),
+}));
+vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
+
+let step3 = "";
+let hasFinish = false;
+beforeAll(async () => {
+  render(Wizard, {
+    props: { defaultDir: "/Users/someone/Pictures/P-Pass", configuredLibraryDir: null, onDone: vi.fn() },
+  });
+  await fireEvent.click(screen.getByRole("button", { name: "继续" }));
+  await vi.waitFor(() => screen.getByText("让这台电脑保持醒着。"));
+  await fireEvent.click(screen.getByRole("button", { name: "继续" }));
+  await vi.waitFor(() => screen.getByText("最后一步：设为常驻服务。"));
+  step3 = document.body.textContent;
+  hasFinish = Boolean(screen.queryByRole("button", { name: "完成" }));
+});
+afterAll(() => cleanup());
 
 describe("#481 向导第 3 步：如实告知本地网络弹窗", () => {
-  it("能定位到第 3 步模板", () => {
-    expect(start).toBeGreaterThan(0);
-    expect(step3).toContain("finishSetup");
+  it("确实渲染到了第 3 步（「完成」按钮在）", () => {
+    expect(hasFinish).toBe(true);
   });
 
   it("明确说出本地网络弹窗、要点「允许」", () => {

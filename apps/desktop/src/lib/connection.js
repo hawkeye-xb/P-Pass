@@ -1,12 +1,15 @@
 // T-092: devices.list[].connection → 设备行 sub 文案 + 状态点色。
-// 纯函数，无 DOM/Tauri 依赖，node 可直跑
-// （apps/desktop/scripts/check-wire-fns.mjs 是对应断言脚本）。
+// 纯函数，无 DOM/Tauri 依赖。I18N-03 (#492) 起文案经 ./i18n.js 取自
+// assets/i18n（JSON import 要 Vite/vitest 解析），裸 node 不再能直跑——
+// apps/desktop/scripts/check-wire-fns.mjs 因此失效，未在本卡修。
 //
 // 契约（crates/daemon/src/ipc.rs devices.list）：connection 是四态字符串
 // "direct" | "relay" | "offline" | "unknown"——只报活连接事实，
 // "unknown" = 没有活的连接信息（daemon 绝不从 last_seen 推导）。
 // 话术为设计稿/T-092 卡原文；unknown 返回 null，调用方保持 T-082
 // 中性占位（不捏造「已直连」）。
+
+import { t } from "./i18n.js";
 
 /**
  * connection → 设备行次行文案。
@@ -20,11 +23,11 @@
 export function connectionText(connection, lastSeenText = null) {
   switch (connection) {
     case "direct":
-      return "已直连";
+      return t("ui.conn_direct");
     case "relay":
-      return "经中继连接——内容加密，中继无法读取";
+      return t("ui.conn_relay");
     case "offline":
-      return lastSeenText ? `离线，最后在线 ${lastSeenText}` : "离线";
+      return lastSeenText ? t("ui.conn_offline_since", { time: lastSeenText }) : t("ui.conn_offline");
     default:
       return null;
   }
@@ -54,11 +57,11 @@ export function connectionDot(connection) {
 export function flowConnectionText(flowConnection) {
   switch (flowConnection) {
     case "direct":
-      return { sub: "正在直连传输", dot: "safe" };
+      return { sub: t("ui.flow_direct"), dot: "safe" };
     case "relay":
-      return { sub: "正在经中继传输（内容加密，中继无法读取）", dot: "wait" };
+      return { sub: t("ui.flow_relay"), dot: "wait" };
     case "unknown":
-      return { sub: "正在连接/传输（路径尚未确认）", dot: "wait" };
+      return { sub: t("ui.flow_unknown"), dot: "wait" };
     default:
       return null;
   }
@@ -80,15 +83,15 @@ export function flowConnectionText(flowConnection) {
 export function presenceText(presence, connection, relativeText = null, humanText = null) {
   switch (presence) {
     case "online":
-      if (connection === "direct") return { sub: "已直连", dot: "safe" };
-      if (connection === "relay") return { sub: "经中继连接——内容加密，中继无法读取", dot: "wait" };
-      return { sub: "在线", dot: "safe" }; // 心跳新鲜，无活连接
+      if (connection === "direct") return { sub: t("ui.conn_direct"), dot: "safe" };
+      if (connection === "relay") return { sub: t("ui.conn_relay"), dot: "wait" };
+      return { sub: t("ui.presence_online"), dot: "safe" }; // 心跳新鲜，无活连接
     case "recent":
-      return { sub: relativeText ? `${relativeText}在线` : "刚刚在线", dot: "idle" };
+      return { sub: relativeText ? t("ui.presence_recent", { time: relativeText }) : t("ui.presence_just_now"), dot: "idle" };
     case "offline":
     default:
       return {
-        sub: humanText ? `离线，最后在线 ${humanText}` : "等待下次备份上报",
+        sub: humanText ? t("ui.conn_offline_since", { time: humanText }) : t("ui.presence_waiting"),
         dot: "idle",
       };
   }

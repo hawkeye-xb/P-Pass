@@ -3,6 +3,7 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { Button } from "$lib/components/ui/button";
   import { startupFailureText } from "$lib/daemonStartupError.js";
+  import { t, errText } from "$lib/i18n.js";
 
   // DESK-15：按钮视觉合同收进 Button 组件本身（primary/secondary/danger/
   // link variant），本页只保留一个真实的版式例外——向导主按钮比全站其它
@@ -24,7 +25,7 @@
   async function chooseFolder() {
     const dir = await openDialog({
       directory: true,
-      title: "选择照片存放的文件夹",
+      title: t("ui.wizard_choose_folder_title"),
       defaultPath: defaultDir,
     });
     if (dir) libraryDir = dir;
@@ -45,7 +46,7 @@
       await invoke("disable_auto_sleep");
       power = await invoke("power_hint"); // 刷新，成功的话这里应该变成 never
     } catch (e) {
-      sleepFixError = String(e);
+      sleepFixError = errText(e);
     } finally {
       sleepFixBusy = false;
     }
@@ -59,7 +60,7 @@
       power = await invoke("power_hint");
       step = 2;
     } catch (e) {
-      error = `保存设置失败：${e}`;
+      error = t("ui.wizard_save_failed", { err: errText(e) });
     } finally {
       busy = false;
     }
@@ -98,12 +99,12 @@
           stderr = await invoke("daemon_startup_error");
         } catch (_) {}
         throw new Error(
-          startupFailureText(stderr) || "后台服务未能启动。请检查后台服务日志。",
+          startupFailureText(stderr) || t("ui.wizard_daemon_not_started"),
         );
       }
       onDone();
     } catch (e) {
-      error = `启动后台服务失败：${e}`;
+      error = t("ui.wizard_start_failed", { err: errText(e) });
     } finally {
       busy = false;
     }
@@ -123,7 +124,7 @@
      主界面，用户落地总览页自然看得到那张卡片。 -->
 <div class="mt-4 flex flex-col gap-[22px] rounded-xl border border-border bg-paper px-8 py-7">
   <div class="flex gap-2">
-    {#each ["照片存在哪", "电脑会睡吗", "设为常驻服务"] as label, i}
+    {#each [t("ui.wizard_step_library"), t("ui.wizard_step_sleep"), t("ui.wizard_step_service")] as label, i}
       <span class="text-[13px] font-semibold {step === i + 1 ? 'text-ink' : step > i + 1 ? 'text-safe' : 'text-ink-40'}">
         {i + 1}. {label}
       </span>
@@ -136,44 +137,44 @@
 
   {#if step === 1}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">全家的照片，要存到哪里？</h2>
-      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">选一个文件夹当「照片库」。照片会按原始文件存进去，你随时能在 Finder 里翻到它们。</p>
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_library_body_mac")}</p>
       <!-- DESK-05: 路径始终有值（默认填充 defaultDir / 预填已配置库）——
            不再要求先点按钮才能继续。路径 ≠ 默认时旁挂「回到默认」链接，
            路径 = 默认时不显示（没有可回退的目标）。 -->
       <div class="flex items-center gap-[10px]">
         <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{libraryDir}</code>
-        <Button variant="secondary" class="flex-none" onclick={chooseFolder}>更改…</Button>
+        <Button variant="secondary" class="flex-none" onclick={chooseFolder}>{t("ui.wizard_change_folder")}</Button>
       </div>
       {#if libraryDir !== defaultDir}
-        <Button variant="link" tone="safe" class="self-start" onclick={useDefault} title="回到默认位置">↺ 回到默认位置</Button>
+        <Button variant="link" tone="safe" class="self-start" onclick={useDefault} title={t("ui.wizard_use_default")}>↺ {t("ui.wizard_use_default")}</Button>
       {/if}
       <!-- 设计稿 v2：TCC 保护目录提醒——「桌面」「文稿」受 macOS 保护会
            额外弹一次权限申请，放不下时也更难搬家。 -->
-      <p class="m-0 rounded-xl bg-waiting-bg px-4 py-3 text-[13.5px] leading-[1.6] text-ink-60">建议避开「桌面」和「文稿」——它们受 macOS 系统保护，会额外弹一次权限申请；放不下时也更难搬家。</p>
+      <p class="m-0 rounded-xl bg-waiting-bg px-4 py-3 text-[13.5px] leading-[1.6] text-ink-60">{t("ui.wizard_library_tip_mac")}</p>
     </div>
     <div class="mt-auto flex items-center justify-between">
       <span></span>
-      <Button class={WIZARD_PRIMARY_WIDE} disabled={!libraryDir || busy} onclick={toStep2}>继续</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} disabled={!libraryDir || busy} onclick={toStep2}>{t("ui.wizard_continue")}</Button>
     </div>
   {:else if step === 2}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">让这台电脑保持醒着。</h2>
-      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">家人手机会趁插电连 Wi-Fi 时把照片传回来——电脑得开着才收得到。</p>
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_sleep_body")}</p>
       {#if power?.kind === "never"}
         <div class="flex items-center gap-3 rounded-xl border border-border px-[18px] py-[14px]">
           <span class="h-[9px] w-[9px] flex-none rounded-full bg-safe"></span>
-          <span class="flex-1 text-[15px] font-semibold">这台电脑设置为不自动休眠</span>
-          <span class="text-[13px] text-safe">✓ 检查通过</span>
+          <span class="flex-1 text-[15px] font-semibold">{t("ui.wizard_sleep_never")}</span>
+          <span class="text-[13px] text-safe">✓ {t("ui.wizard_check_passed")}</span>
         </div>
       {:else if power?.kind === "sleeps"}
         <div class="flex flex-col gap-3 rounded-xl border border-border bg-waiting-bg px-[18px] py-[14px]">
           <div class="flex items-center gap-3">
             <span class="h-[9px] w-[9px] flex-none rounded-full bg-waiting"></span>
             <div class="flex-1">
-              <p class="m-0 text-[15px] font-semibold">「自动睡眠」还开着</p>
+              <p class="m-0 text-[15px] font-semibold">{t("ui.wizard_sleep_on")}</p>
               <p class="m-0 mt-[3px] text-[13px] leading-[1.5] text-ink-60">
-                这台电脑闲置 {power.minutes} 分钟后会休眠，睡着时收不了备份。
+                {t("ui.wizard_sleep_minutes", { n: power.minutes })}
               </p>
             </div>
           </div>
@@ -183,29 +184,29 @@
                弹系统授权直接帮着改；不想授权的人保留手动入口退路。 -->
           <div class="flex items-center gap-[10px]">
             <Button size="compact" disabled={sleepFixBusy} onclick={fixAutoSleep}>
-              {sleepFixBusy ? "设置中…" : "一键设置"}
+              {sleepFixBusy ? t("ui.wizard_sleep_fixing") : t("ui.wizard_sleep_fix")}
             </Button>
-            <Button variant="secondary" size="compact" onclick={() => invoke("open_power_settings")}>去系统设置</Button>
+            <Button variant="secondary" size="compact" onclick={() => invoke("open_power_settings")}>{t("ui.wizard_open_power_settings")}</Button>
           </div>
           {#if sleepFixError}
-            <p class="m-0 text-[13px] text-act">{sleepFixError}——你也可以点「去系统设置」自己关：打开后在右上角搜索框搜「睡眠」最快，不同 macOS 版本菜单位置不一样。</p>
+            <p class="m-0 text-[13px] text-act">{t("ui.wizard_sleep_fix_failed_mac", { err: sleepFixError })}</p>
           {/if}
         </div>
       {:else}
-        <p class="m-0 text-[13px] leading-[1.6] text-ink-40">没能读到这台电脑的电源策略（不影响使用）：备份进行中我们会自动保持它清醒。</p>
+        <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.wizard_power_unknown")}</p>
       {/if}
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <Button variant="link" onclick={() => (step = 1)}>‹ 上一步</Button>
-      <Button class={WIZARD_PRIMARY_WIDE} onclick={toStep3}>继续</Button>
+      <Button variant="link" onclick={() => (step = 1)}>‹ {t("ui.wizard_back")}</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} onclick={toStep3}>{t("ui.wizard_continue")}</Button>
     </div>
   {:else if step === 3}
     <!-- 设计稿 v2：第 3 步 = 「设为常驻服务」——先讲清会弹什么（#481：
          开机自启通知 + 本地网络授权弹窗）/不会做什么/被拦怎么办，点「完成」才真正启动 daemon（含 autostart
          注册，finishSetup）。 -->
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">最后一步：设为常驻服务。</h2>
-      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">P-Pass 会注册为系统后台服务：开机自动运行，关掉这个窗口也在安静地收备份。随时可以在「设置」里停止它。</p>
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_service_body")}</p>
       <!-- 设计稿 v2："标签(120px)+说明"的表格式布局（#481 起四行），不是
            各自独立的卡片——分隔线贴边，跟其它页面的 list-card 同款。 -->
       <div class="rounded-xl border border-border">
@@ -218,27 +219,27 @@
              「只能经中继」而不是「连不上」。恢复入口是静态指引，不做
              拒绝探测（理由见 #481 PR）。 -->
         <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">只是通知</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">开机自启——系统会弹一次「后台项目已添加」通知，不用操作</span>
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_notice_only_label")}</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_autostart_notice_mac")}</span>
         </div>
         <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">要点「允许」</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">本地网络——点「完成」后 macOS 会弹窗问「允许“ppf-daemon”查找本地网络中的设备？」。ppf-daemon 就是 P-Pass 的后台服务，请点「允许」。界面会先进入首页，不必等它，弹窗照样点「允许」就行。不允许的话，同一 Wi-Fi 下手机没法直连这台电脑，只能经中继，速度可能慢不少；点错了可以去「系统设置 → 隐私与安全性 → 本地网络」把 ppf-daemon 打开。</span>
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_allow_label")}</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_local_network_mac")}</span>
         </div>
         <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">不会做什么</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">不上传到任何云端、不建账号——照片只在你家的设备之间走</span>
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_wont_label")}</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_wont")}</span>
         </div>
         <div class="flex gap-3 px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">如果被拦</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">首次打开被 macOS 拦截时：右键点 App → 打开（只需一次）</span>
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_blocked_label")}</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_blocked_mac")}</span>
         </div>
       </div>
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <Button variant="link" onclick={() => (step = 2)}>‹ 上一步</Button>
+      <Button variant="link" onclick={() => (step = 2)}>‹ {t("ui.wizard_back")}</Button>
       <Button class={WIZARD_PRIMARY_WIDE} disabled={busy} onclick={finishSetup}>
-        {busy ? "正在启动…" : "完成"}
+        {busy ? t("ui.starting") : t("ui.wizard_finish")}
       </Button>
     </div>
   {/if}

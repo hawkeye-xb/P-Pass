@@ -19,6 +19,53 @@ use tauri::Manager;
 // 注意：tauri-plugin-updater 2.10 的 build() 返回带 Config 的 TauriPlugin，
 // 需内联注册（独立函数标注单参数类型会类型不匹配）。
 
+// ── I18N-03 (#492)：托盘菜单文案 ───────────────────────────────────────
+// 与前端同一份字典：编译期 include_str! 仓库根的 assets/i18n/*.json，不另开
+// 副本。语言判定规则与 `src/lib/i18n.js` 的 `localeFor` 一字不差（zh* → zh，
+// 其它 → en，拿不到 → zh）。系统语言由前端报上来（`set_tray_locale`，传的
+// 就是它自己按 navigator.language 判出来的那个），所以托盘和窗口永远同一种
+// 语言；在前端报到之前（启动后不到一秒），先按 LANG 环境变量猜一次。
+const I18N_EN: &str = include_str!("../../../../assets/i18n/en.json");
+const I18N_ZH: &str = include_str!("../../../../assets/i18n/zh.json");
+
+/// 托盘菜单项 id → 字典 key。
+const TRAY_ITEMS: [(&str, &str); 3] = [
+    ("show", "ui.tray_open"),
+    ("stop", "ui.stop_service"),
+    ("quit", "ui.tray_quit"),
+];
+
+fn tray_locale(lang: &str) -> &'static str {
+    if lang.is_empty() || lang.to_lowercase().starts_with("zh") {
+        "zh"
+    } else {
+        "en"
+    }
+}
+
+/// 取一条托盘文案；key 缺失时退回 key 本身（与前端 t() 同一兜底）。
+fn tray_text(locale: &str, key: &str) -> String {
+    let raw = if locale == "zh" { I18N_ZH } else { I18N_EN };
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .and_then(|v| v.get(key).and_then(Value::as_str).map(str::to_owned))
+        .unwrap_or_else(|| key.to_string())
+}
+
+/// 已建好的托盘菜单项（key, item），`set_tray_locale` 据此改字。
+struct TrayMenuItems(Vec<(&'static str, MenuItem<tauri::Wry>)>);
+
+/// 前端启动时报一次它用的语言，托盘菜单跟着换字。
+#[tauri::command]
+fn set_tray_locale(app: tauri::AppHandle, lang: String) {
+    let locale = tray_locale(&lang);
+    if let Some(items) = app.try_state::<TrayMenuItems>() {
+        for (key, item) in &items.0 {
+            let _ = item.set_text(tray_text(locale, key));
+        }
+    }
+}
+
 /// Forward one IPC method. The frontend does the rest.
 // MOB-47: 视频弹窗走 asset 协议从磁盘直接 streaming 播放，避免把整段
 // 视频 base64 拉进内存。安全契约（L2 审查修）：
@@ -222,10 +269,14 @@ fn disable_auto_sleep() -> Result<(), String> {
     match platform::adapter().disable_auto_sleep() {
         Ok(platform::Applied::Done) => Ok(()),
         // Unsupported / NotApplicable 都走手动退路，文案与迁移前一致。
-        Ok(_) => Err("这台电脑暂不支持一键设置，请用「去系统设置」手动关闭".into()),
-        Err(platform::PlatformError::Cancelled { .. }) => Err("已取消授权".into()),
-        Err(platform::PlatformError::Failed { detail, .. }) => Err(format!("设置失败：{detail}")),
-        Err(e) => Err(format!("设置失败：{e}")),
+        Ok(_) => Err(ipc::ui_err("ui.err_sleep_fix_unsupported", &[])),
+        Err(platform::PlatformError::Cancelled { .. }) => {
+            Err(ipc::ui_err("ui.err_auth_cancelled", &[]))
+        }
+        Err(platform::PlatformError::Failed { detail, .. }) => {
+            Err(ipc::ui_err("ui.err_sleep_fix_failed", &[("err", &detail)]))
+        }
+        Err(e) => Err(ipc::ui_err("ui.err_sleep_fix_failed", &[("err", &e)])),
     }
 }
 
@@ -359,12 +410,15 @@ const SIDECAR_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 fn sidecar_probe_verdict(code: Option<i32>, stdout: &str) -> Result<(), String> {
     match code {
         Some(0) if stdout.contains(DAEMON_VERSION_MARKER) => Ok(()),
-        Some(0) => Err(format!(
-            "内置后台服务能启动，但它不是 P-Pass 的 daemon（--version 输出：{}）",
-            stdout.trim().chars().take(120).collect::<String>()
+        Some(0) => Err(ipc::ui_err(
+            "ui.err_sidecar_not_daemon",
+            &[(
+                "output",
+                &stdout.trim().chars().take(120).collect::<String>(),
+            )],
         )),
-        Some(other) => Err(format!("内置后台服务跑不起来（--version 退出码 {other}）")),
-        None => Err("内置后台服务没有在预期时间内响应 --version".into()),
+        Some(other) => Err(ipc::ui_err("ui.err_sidecar_exit_code", &[("code", &other)])),
+        None => Err(ipc::ui_err("ui.err_sidecar_version_timeout", &[])),
     }
 }
 
@@ -394,7 +448,12 @@ fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
         .spawn()
         // 0 字节文件就死在这一步：CreateProcess 直接拒绝
         // （Windows 错误 193「不是有效的 Win32 应用程序」）。
-        .map_err(|e| format!("内置后台服务跑不起来（{e}）：{}", sidecar.display()))?;
+        .map_err(|e| {
+            ipc::ui_err(
+                "ui.err_sidecar_spawn",
+                &[("err", &e), ("path", &sidecar.display())],
+            )
+        })?;
 
     let deadline = std::time::Instant::now() + SIDECAR_PROBE_TIMEOUT;
     loop {
@@ -408,13 +467,13 @@ fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
-            Err(e) => return Err(format!("等不到内置后台服务的探活结果（{e}）")),
+            Err(e) => return Err(ipc::ui_err("ui.err_sidecar_wait", &[("err", &e)])),
         }
     }
     // 已经退出了，这一步立即返回。`--version` 的输出只有一行，塞不满管道。
     let out = child
         .wait_with_output()
-        .map_err(|e| format!("读不到内置后台服务的探活输出（{e}）"))?;
+        .map_err(|e| ipc::ui_err("ui.err_sidecar_read", &[("err", &e)]))?;
     sidecar_probe_verdict(out.status.code(), &String::from_utf8_lossy(&out.stdout))
 }
 
@@ -430,7 +489,10 @@ fn start_daemon() -> Result<String, String> {
         .ok_or("no parent dir")?
         .join(platform::adapter().daemon_executable_name());
     if !sidecar.is_file() {
-        return Err(format!("找不到内置后台服务：{}", sidecar.display()));
+        return Err(ipc::ui_err(
+            "ui.err_sidecar_missing",
+            &[("path", &sidecar.display())],
+        ));
     }
     // DESK-29 (#268)：**先探活再注册**。顺序是这条修复的全部要害——
     // 探不过就在这里返回，`install_autostart` 根本不会被调到，所以用户
@@ -453,7 +515,12 @@ fn start_daemon() -> Result<String, String> {
                 .stderr(std::process::Stdio::null())
                 .stdin(std::process::Stdio::null())
                 .spawn()
-                .map_err(|e2| format!("注册服务失败（{e}）且直接启动也失败（{e2}）"))?;
+                .map_err(|e2| {
+                    ipc::ui_err(
+                        "ui.err_register_and_spawn",
+                        &[("err", &e), ("spawn_err", &e2)],
+                    )
+                })?;
             Ok(format!("oneshot: {e}"))
         }
     }
@@ -507,14 +574,15 @@ fn is_user_stopped(data_dir: &std::path::Path) -> bool {
 fn set_user_stopped(data_dir: &std::path::Path, stopped: bool) -> Result<(), String> {
     let marker = user_stopped_marker(data_dir);
     if stopped {
-        std::fs::create_dir_all(data_dir).map_err(|e| format!("写不了停止标记（{e}）"))?;
+        std::fs::create_dir_all(data_dir)
+            .map_err(|e| ipc::ui_err("ui.err_stop_mark_write", &[("err", &e)]))?;
         std::fs::write(&marker, b"user stopped the background service\n")
-            .map_err(|e| format!("写不了停止标记（{e}）"))
+            .map_err(|e| ipc::ui_err("ui.err_stop_mark_write", &[("err", &e)]))
     } else {
         match std::fs::remove_file(&marker) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(format!("清不掉停止标记（{e}）")),
+            Err(e) => Err(ipc::ui_err("ui.err_stop_mark_clear", &[("err", &e)])),
         }
     }
 }
@@ -557,7 +625,7 @@ fn self_heal_daemon() -> Result<bool, String> {
 async fn stop_daemon() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(stop_daemon_now)
         .await
-        .map_err(|e| format!("停止后台服务的线程异常退出：{e}"))?
+        .map_err(|e| ipc::ui_err("ui.err_stop_thread", &[("err", &e)]))?
 }
 
 fn stop_daemon_now() -> Result<(), String> {
@@ -640,14 +708,17 @@ fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
         .ok_or("no parent dir")?
         .join(platform::adapter().daemon_executable_name());
     if !sidecar.is_file() {
-        return Err(format!("找不到内置后台服务：{}", sidecar.display()));
+        return Err(ipc::ui_err(
+            "ui.err_sidecar_missing",
+            &[("path", &sidecar.display())],
+        ));
     }
     std::process::Command::new(&sidecar)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("重新启动后台服务失败：{e}"))?;
+        .map_err(|e| ipc::ui_err("ui.err_respawn", &[("err", &e)]))?;
     Ok(())
 }
 
@@ -683,7 +754,7 @@ fn restart_daemon_process() -> Result<Value, String> {
     // 紧接着去 spawn 第二个 daemon 才出的事。
     platform::adapter()
         .kill_daemon_process()
-        .map_err(|e| format!("杀掉旧后台服务进程失败：{e}"))?;
+        .map_err(|e| ipc::ui_err("ui.err_kill_old", &[("err", &e)]))?;
 
     // 3) 被杀之后系统会不会自己把它拉回来，取决于常驻方式：
     //    LaunchAgent 的 KeepAlive 会（macOS），Run key 不会（Windows /
@@ -701,14 +772,17 @@ fn restart_daemon_process() -> Result<Value, String> {
             .ok_or("no parent dir")?
             .join(platform::adapter().daemon_executable_name());
         if !sidecar.is_file() {
-            return Err(format!("找不到内置后台服务：{}", sidecar.display()));
+            return Err(ipc::ui_err(
+                "ui.err_sidecar_missing",
+                &[("path", &sidecar.display())],
+            ));
         }
         std::process::Command::new(&sidecar)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .stdin(std::process::Stdio::null())
             .spawn()
-            .map_err(|e| format!("重启后台服务失败：{e}"))?;
+            .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
     }
     // 4) 轮询 status 直到复活（每 500ms，最长 12s——实测信号杀 4~5s
     //    复活，12s 预算充裕；超时报错，绝不无限等）。
@@ -721,10 +795,7 @@ fn restart_daemon_process() -> Result<Value, String> {
                 .map(str::to_string);
         }
         if std::time::Instant::now() >= deadline {
-            return Err(
-                "后台服务被杀后没能自动重启（系统没有把它拉起来）。请重启电脑，或手动点「启动后台服务」。"
-                    .into(),
-            );
+            return Err(ipc::ui_err("ui.err_not_revived", &[]));
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     };
@@ -1000,16 +1071,24 @@ pub fn run() {
             restart_daemon_process,
             export_logs_bundle,
             allow_media_scope,
-            notify_system
+            notify_system,
+            set_tray_locale
         ])
         .setup(|app| {
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
             // 备份落地即时刷新），不依赖前端渲染时序。
             start_event_stream(app.handle().clone());
-            let show = MenuItem::with_id(app, "show", "打开 P-Pass", true, None::<&str>)?;
-            let stop = MenuItem::with_id(app, "stop", "停止后台服务", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "退出 App", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &stop, &quit])?;
+            // I18N-03 (#492)：文案取自 assets/i18n（见 TRAY_ITEMS）；前端
+            // 报上语言后 set_tray_locale 会再改一次字。
+            let locale = tray_locale(&std::env::var("LANG").unwrap_or_default());
+            let mut tray_items = Vec::with_capacity(TRAY_ITEMS.len());
+            for (id, key) in TRAY_ITEMS {
+                let item = MenuItem::with_id(app, id, tray_text(locale, key), true, None::<&str>)?;
+                tray_items.push((key, item));
+            }
+            let menu =
+                Menu::with_items(app, &[&tray_items[0].1, &tray_items[1].1, &tray_items[2].1])?;
+            app.manage(TrayMenuItems(tray_items));
             // ICON-01: 托盘用 beast 全实线纯黑版 + 模板标记——macOS 系统按
             // 深浅色自动反色（碳纹版 22px 会糊，模板图标不渲染颜色）。
             let tray_icon =
@@ -1133,6 +1212,122 @@ fn tray_left_click_opens_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── I18N-03 (#492)：托盘文案 + keyed 错误 ─────────────────────────
+
+    /// 把一条 keyed 错误按某种语言渲染成整句（前端 errText 的等价物，含
+    /// 参数本身是 keyed 错误时的递归）。老测试据此仍能对**中文原文**断言：
+    /// 只搬字不改措辞，zh 渲染结果必须和搬迁前的 format! 逐字相同。
+    fn render_err(locale: &str, e: &str) -> String {
+        // 与前端 errText 同一判据：以 { 开头、能解析、带字符串 key 才算。
+        let parsed = e
+            .starts_with('{')
+            .then(|| serde_json::from_str::<Value>(e).ok())
+            .flatten();
+        let Some(v) = parsed.filter(|v| v["key"].is_string()) else {
+            return e.to_string();
+        };
+        let key = v["key"].as_str().unwrap_or_default();
+        let mut out = tray_text(locale, key);
+        for (name, val) in v["params"].as_object().expect("params 必须是对象") {
+            let val = render_err(locale, val.as_str().expect("参数值必须是字符串"));
+            out = out.replace(&format!("{{{name}}}"), &val);
+        }
+        out
+    }
+
+    #[test]
+    fn tray_locale_matches_the_frontend_rule() {
+        // 与 src/lib/i18n.js 的 localeFor 同一条规则。
+        for (lang, want) in [
+            ("zh", "zh"),
+            ("zh-CN", "zh"),
+            ("zh-Hans", "zh"),
+            ("zh_CN.UTF-8", "zh"),
+            ("ZH-TW", "zh"),
+            ("", "zh"),
+            ("en", "en"),
+            ("en-US", "en"),
+            ("en_US.UTF-8", "en"),
+            ("ja-JP", "en"),
+        ] {
+            assert_eq!(tray_locale(lang), want, "{lang:?}");
+        }
+    }
+
+    #[test]
+    fn tray_menu_copy_comes_from_the_shared_dictionary() {
+        for (_, key) in TRAY_ITEMS {
+            for locale in ["en", "zh"] {
+                let text = tray_text(locale, key);
+                assert_ne!(text, key, "{locale}.json 缺托盘 key {key}");
+                assert!(!text.is_empty(), "{locale}.json 的 {key} 是空串");
+            }
+        }
+        // 中文原文逐字不变；英文不许混进中文。
+        let zh: Vec<String> = TRAY_ITEMS.iter().map(|(_, k)| tray_text("zh", k)).collect();
+        assert_eq!(zh, ["打开 P-Pass", "停止后台服务", "退出 App"]);
+        for (_, key) in TRAY_ITEMS {
+            let en = tray_text("en", key);
+            assert!(
+                !en.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+                "托盘英文混进了中文：{key} = {en}"
+            );
+        }
+    }
+
+    /// 壳里每个 `ui_err("…")` 引用的 key，两份字典都得有——diag 的测试只管
+    /// 「注册表 ↔ JSON」，管不到壳实际引用了哪些 key。
+    #[test]
+    fn every_shell_error_key_is_translated() {
+        let mut keys = Vec::new();
+        for src in [include_str!("lib.rs"), include_str!("ipc.rs")] {
+            let product = src.split("#[cfg(test)]").next().unwrap_or(src);
+            let mut rest = product;
+            // 调用可能被 rustfmt 折成多行：`ui_err(` 之后跳过空白再取字面量。
+            while let Some(i) = rest.find("ui_err(") {
+                rest = rest[i + "ui_err(".len()..].trim_start();
+                let Some(lit) = rest.strip_prefix('"') else {
+                    continue; // 函数定义本身（`ui_err(key: &str, …)`）
+                };
+                let end = lit.find('"').expect("key 的收尾引号");
+                keys.push(lit[..end].to_string());
+                rest = &lit[end..];
+            }
+        }
+        // 扫描本身失效（比如调用形状变了）时不许空集变绿。
+        assert!(keys.len() >= 25, "只扫到 {} 个 ui_err 调用点", keys.len());
+        for key in &keys {
+            for locale in ["en", "zh"] {
+                assert_ne!(tray_text(locale, key), *key, "{locale}.json 缺 {key}");
+            }
+        }
+    }
+
+    #[test]
+    fn ui_err_is_the_wire_shape_the_frontend_parses() {
+        let inner = ipc::ui_err("ui.err_connect", &[("err", &"refused")]);
+        let e = ipc::ui_err(
+            "ui.err_register_and_spawn",
+            &[("err", &inner), ("spawn_err", &13)],
+        );
+        let v: Value = serde_json::from_str(&e).unwrap();
+        assert!(
+            e.starts_with('{'),
+            "前端 errText 靠开头的 {{ 认出 keyed 错误：{e}"
+        );
+        assert_eq!(v["key"], "ui.err_register_and_spawn");
+        assert_eq!(v["params"]["spawn_err"], "13");
+        assert_eq!(
+            render_err("zh", &e),
+            "注册服务失败（连接后台服务失败: refused）且直接启动也失败（13）"
+        );
+        assert_eq!(
+            render_err("en", &e),
+            "Registering the service failed (Couldn't connect to the background service: refused), \
+             and starting it directly failed too (13)"
+        );
+    }
 
     // ── DESK-27 (#219)：反斜杠翻倍回路 ────────────────────────────────
     //
@@ -1981,7 +2176,11 @@ mod tests {
     fn probe_rejects_a_program_that_is_not_our_daemon() {
         // 退出码 0 但不是我们的 daemon（被换成了别的 exe）。
         let e = sidecar_probe_verdict(Some(0), "Python 3.9.13\n").unwrap_err();
-        assert!(e.contains("不是 P-Pass 的 daemon"), "{e}");
+        assert!(
+            render_err("zh", &e).contains("不是 P-Pass 的 daemon"),
+            "{e}"
+        );
+        assert!(render_err("zh", &e).contains("Python 3.9.13"), "{e}");
     }
 
     #[test]
@@ -1992,7 +2191,7 @@ mod tests {
     #[test]
     fn probe_rejects_nonzero_exit() {
         let e = sidecar_probe_verdict(Some(2), "P-Pass daemon 0.5.7-test.1").unwrap_err();
-        assert!(e.contains("退出码 2"), "{e}");
+        assert!(render_err("zh", &e).contains("退出码 2"), "{e}");
     }
 
     /// 超时/被干掉 ⇒ 拿不到退出码 ⇒ **不许当通过**。
@@ -2045,7 +2244,10 @@ mod tests {
         assert_eq!(std::fs::metadata(&fake).unwrap().len(), 0);
 
         let err = verify_sidecar_runs(&fake).unwrap_err();
-        assert!(err.contains("跑不起来"), "错误信息要说清跑不起来：{err}");
+        assert!(
+            render_err("zh", &err).contains("跑不起来"),
+            "错误信息要说清跑不起来：{err}"
+        );
     }
 
     /// DESK-29 (#268) E1 反证：换成**真的** daemon 必须通过。

@@ -22,6 +22,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import Wizard from "./Wizard.svelte";
 import WizardWindows from "./WizardWindows.svelte";
+import { setLocale } from "./lib/i18n.js";
+
+// I18N-03 (#492)：文案搬进字典后按系统语言取词；这里断言的是中文原文——
+// 只搬字不改措辞，zh 下渲染结果必须和搬迁前逐字相同。
+setLocale("zh");
 
 // 那次真实事故的 stderr（装回旧版本 → 库的 migration 比二进制新）。
 const DAEMON_STDERR =
