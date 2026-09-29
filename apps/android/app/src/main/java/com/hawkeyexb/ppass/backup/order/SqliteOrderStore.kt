@@ -29,6 +29,7 @@ class SqliteOrderStore private constructor(
          */
         private const val SCHEMA_VERSION = 3
         private const val PAGE_SIZE = 256
+        private const val AUDIT_ONCE_PREFIX = "audit_once:"
 
         /** App 的正式库。[name] 为 null 时是纯内存库（设备测试用，不碰 App 数据）。 */
         fun open(context: Context?, name: String? = DEFAULT_DB_NAME, clock: () -> Long = System::currentTimeMillis): SqliteOrderStore =
@@ -494,6 +495,15 @@ class SqliteOrderStore private constructor(
 
     override fun appendAudit(audit: AuditRecord) {
         inTransaction { writeAudit(audit) }
+    }
+
+    // 记过的 key 存在 meta 表（不升 schema：升版本 = 删表重建）。换桌面清库时不删——新 order id 抬到 idFloor 之上，撞不上旧 key。
+    override fun appendAuditOnce(onceKey: String, audit: AuditRecord): Boolean = inTransaction {
+        val key = AUDIT_ONCE_PREFIX + onceKey
+        if (metaGet(key) != null) return@inTransaction false
+        metaPut(key, audit.eventId)
+        writeAudit(audit)
+        true
     }
 
     override fun pendingAuditAfter(afterSeq: Long, limit: Int): List<SequencedAudit> =

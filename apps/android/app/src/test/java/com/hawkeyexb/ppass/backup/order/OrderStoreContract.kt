@@ -206,6 +206,21 @@ abstract class OrderStoreContract {
         assertEquals(1_000L, store.get(gone.id)!!.updatedAtMs)
         assertEquals(kept, store.get(kept.id))
     }
+
+    // #459：同一个 key 只追加一次；审计被桌面确认删掉之后也不重复。
+    // 反证：appendAuditOnce 不记 key、直接追加 → 第二次返回 true、outbox 里 2 条，红。
+    @Test
+    fun `append audit once records a key only once even after the outbox is acknowledged`() {
+        val store = newStore(clock)
+        val first = AuditRecord("ev-1", "reconciliation_resolved", null, 1_000L, mapOf("disposition" to "UNRECOVERABLE"))
+        assertTrue(store.appendAuditOnce("unrecoverable:1:e1", first))
+        assertFalse(store.appendAuditOnce("unrecoverable:1:e1", first.copy(eventId = "ev-2")))
+        assertEquals(listOf("ev-1"), store.pendingAudit(10).map { it.eventId })
+        store.acknowledgeAudit(setOf("ev-1"))
+        assertFalse(store.appendAuditOnce("unrecoverable:1:e1", first.copy(eventId = "ev-3")))
+        assertTrue(store.appendAuditOnce("unrecoverable:1:e2", first.copy(eventId = "ev-4")))
+        assertEquals(listOf("ev-4"), store.pendingAudit(10).map { it.eventId })
+    }
 }
 
 class InMemoryOrderStoreContractTest : OrderStoreContract() {

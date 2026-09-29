@@ -198,6 +198,19 @@ class SqliteOrderStoreDeviceTest {
         assertEquals(kept, store.get(kept.id))
     }
 
+    @Test
+    fun appendAuditOnceRecordsAKeyOnlyOnceEvenAfterTheOutboxIsAcknowledged() {
+        val store = fresh()
+        val first = AuditRecord("ev-1", "reconciliation_resolved", null, 1_000L, mapOf("disposition" to "UNRECOVERABLE"))
+        assertTrue(store.appendAuditOnce("unrecoverable:1:e1", first))
+        assertFalse(store.appendAuditOnce("unrecoverable:1:e1", first.copy(eventId = "ev-2")))
+        assertEquals(listOf("ev-1"), store.pendingAudit(10).map { it.eventId })
+        store.acknowledgeAudit(setOf("ev-1"))
+        assertFalse(store.appendAuditOnce("unrecoverable:1:e1", first.copy(eventId = "ev-3")))
+        assertTrue(store.appendAuditOnce("unrecoverable:1:e2", first.copy(eventId = "ev-4")))
+        assertEquals(listOf("ev-4"), store.pendingAudit(10).map { it.eventId })
+    }
+
     /** MediaStore 只读冒烟：排序、范围过滤、发现游标过滤在真机 ContentResolver 上成立。 */
     @Test
     fun contentResolverSnapshotIsOrderedAndScoped() {

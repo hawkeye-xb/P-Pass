@@ -20,6 +20,7 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         /** 与 SQLite 的 AUTOINCREMENT seq 同语义：按追加顺序只增、不复用。 */
         val auditSeqs: Map<String, Long> = emptyMap(),
         val lastAuditSeq: Long = 0L,
+        val onceKeys: Set<String> = emptySet(),
     )
 
     /** 故障注入：非 null 时，下一次事务在提交前抛出它（测试「崩在写入中途」）。 */
@@ -42,12 +43,13 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         val audits = s.audits.toMutableList()
         var owner = s.owner
         val auditSeqs = LinkedHashMap(s.auditSeqs)
+        val onceKeys = s.onceKeys.toMutableSet()
         var lastAuditSeq = s.lastAuditSeq
 
         fun freeze(): State {
             for (a in audits) if (a.eventId !in auditSeqs) auditSeqs[a.eventId] = ++lastAuditSeq
             auditSeqs.keys.retainAll(audits.mapTo(HashSet()) { it.eventId })
-            return State(rows, lastId, volumes, scan, skips, audits, owner, auditSeqs, lastAuditSeq)
+            return State(rows, lastId, volumes, scan, skips, audits, owner, auditSeqs, lastAuditSeq, onceKeys)
         }
     }
 
@@ -225,6 +227,13 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         currentRows().count { it.state == OrderState.SKIPPED_SOURCE_MISSING && it.updatedAtMs > afterMs && it.updatedAtMs <= upToMs }.toLong()
 
     override fun appendAudit(audit: AuditRecord) = inTransaction { audits += audit }
+
+    // 与 SqliteOrderStore 同口径：记过的 key 不随换桌面清库而清。
+    override fun appendAuditOnce(onceKey: String, audit: AuditRecord): Boolean = inTransaction {
+        if (!onceKeys.add(onceKey)) return@inTransaction false
+        audits += audit
+        true
+    }
 
     override fun pendingAuditAfter(afterSeq: Long, limit: Int): List<SequencedAudit> = state.let { s ->
         s.audits.map { SequencedAudit(s.auditSeqs.getValue(it.eventId), it) }.filter { it.seq > afterSeq }.take(limit)
