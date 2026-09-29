@@ -33,7 +33,7 @@ import kotlin.concurrent.thread
 
 class PPassApplication : Application() {
     /** One iroh Endpoint for every foreground and Flow delivery connection in this process. */
-    val daemonClient = DaemonClient()
+    val daemonClient = DaemonClient(bindLog = { Log.i("PPassBind", it) })
 
     @Volatile private var lastNetworkSignature: String? = null
 
