@@ -15,7 +15,7 @@ const { title, updated, updatedLabel } = Astro.props;
 <article class="legal">
   <header>
     <h1>{title}</h1>
-    <p class="meta">{updatedLabel}：<time datetime={updated}>{updated}</time></p>
+    <p class="meta">{updatedLabel}<time datetime={updated}>{updated}</time></p>
   </header>
   <div class="prose">
     <slot />

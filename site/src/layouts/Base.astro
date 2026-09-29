@@ -93,15 +93,10 @@ const zhUrl = lang === 'zh' ? canonical : mirrorUrl;
     <footer class="site-footer">
       <p>
         <a href={GITHUB_URL} rel="external">{t(lang, 'footer.repo')}</a>
-        {/* Legal pages exist in zh only for now; en follows in the English copy pass. */}
-        {lang === 'zh' && (
-          <>
-            <span aria-hidden="true"> · </span>
-            <a href="/zh/privacy/">{t(lang, 'footer.privacy')}</a>
-            <span aria-hidden="true"> · </span>
-            <a href="/zh/terms/">{t(lang, 'footer.terms')}</a>
-          </>
-        )}
+        <span aria-hidden="true"> · </span>
+        <a href={lang === 'zh' ? '/zh/privacy/' : '/privacy/'}>{t(lang, 'footer.privacy')}</a>
+        <span aria-hidden="true"> · </span>
+        <a href={lang === 'zh' ? '/zh/terms/' : '/terms/'}>{t(lang, 'footer.terms')}</a>
       </p>
     </footer>
   </body>

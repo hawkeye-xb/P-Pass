@@ -1,0 +1,51 @@
+---
+import Base from '../layouts/Base.astro';
+import Legal from '../components/Legal.astro';
+import { GITHUB_URL } from '../consts';
+---
+
+<Base lang="en" title="Terms of Use — P-Pass" mirror="/zh/terms/">
+  <Legal title="Terms of Use" updated="2026-09-29" updatedLabel="Last updated: ">
+    <p>By downloading, installing, or using P-Pass, you agree to these terms.</p>
+
+    <h2>What P-Pass is</h2>
+    <p>
+      P-Pass is photo backup software for families. It runs on your own computer and phones and backs up the photos and videos on your phone to the computer at home. We don't provide photo storage.
+    </p>
+
+    <h2>Open-source license</h2>
+    <p>
+      The P-Pass source code is released under the
+      <a href={`${GITHUB_URL}/blob/main/LICENSE`} rel="external">GNU Affero General Public License v3.0 (AGPL-3.0)</a>.
+      You may use, modify, and distribute P-Pass under that license. If you modify it and offer it to others over a network, the license requires you to make the corresponding source code available.
+    </p>
+
+    <h2>Beta</h2>
+    <p>
+      P-Pass is in beta. It may have bugs, and updates will be frequent. During the beta, we recommend keeping at least one other backup of important photos rather than relying on P-Pass alone.
+    </p>
+
+    <h2>Your responsibilities</h2>
+    <ul>
+      <li>Back up only photos and videos you have the right to keep.</li>
+      <li>Take care of the computer running P-Pass and its drives; the security and capacity of your photo library are up to you.</li>
+      <li>Only let devices you trust finish pairing, and remove devices you no longer use from the desktop app.</li>
+    </ul>
+
+    <h2>Third-party services</h2>
+    <p>
+      When your devices can't connect directly, P-Pass uses a relay service run by a third party to forward encrypted data (see the <a href="/privacy/">Privacy Policy</a>). We can't guarantee these services will always be available.
+    </p>
+
+    <h2>Disclaimer</h2>
+    <p>
+      P-Pass is provided "as is", without warranty of any kind, express or implied. To the extent permitted by applicable law, the developers are not liable for data loss or any other damages arising from the use of, or inability to use, P-Pass. Sections 15 and 16 of the AGPL-3.0 govern.
+    </p>
+
+    <h2>Changes to these terms</h2>
+    <p>When these terms change, we update the "Last updated" date on this page. Continuing to use P-Pass after an update means you accept the updated terms.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about these terms? Open an issue on <a href={`${GITHUB_URL}/issues`} rel="external">GitHub Issues</a>.</p>
+  </Legal>
+</Base>
