@@ -138,6 +138,21 @@ class MOB122ResumeAfterWhitelistRestoredTest {
         assertTrue("恢复落盘必须推进 revision", AutoBackupPrefs.revision.value > before)
     }
 
+    @Test
+    fun the_hero_line_only_promises_automatic_backup_when_it_is_armed() {
+        // 原症状里的「插电 + Wi-Fi 时自动进行」就是这一句；挂起期间与设置行 hint 说同一句话。
+        val auto = com.hawkeyexb.ppass.R.string.idle_auto_hint
+        assertEquals(auto, com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.Armed))
+        assertEquals(
+            com.hawkeyexb.ppass.R.string.background_backup_system_stopped,
+            com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.SystemStoppedWatcher),
+        )
+        assertEquals(
+            com.hawkeyexb.ppass.R.string.background_backup_needs_authorization,
+            com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.NeedsSystemAuthorization),
+        )
+    }
+
     // ── 两条入口的接线（源码级）──────────────────────────────────
 
     @Test
@@ -170,6 +185,15 @@ class MOB122ResumeAfterWhitelistRestoredTest {
             "生产者真相必须随任意线程的落盘刷新，而不是只在界面回调里刷",
             s.contains("AutoBackupPrefs.revision.collectAsState()") &&
                 s.contains("remember(autoPrefsRevision) { prefs.enabled() }"),
+        )
+    }
+
+    @Test
+    fun the_hero_idle_line_is_wired_to_the_background_state() {
+        val s = code("ui/HomeScreen.kt")
+        assertTrue(
+            "空闲态那一句必须经 idleHintRes 看后台状态",
+            s.contains("is StatusLine.Ready -> stringResource(idleHintRes(backgroundBackupState))"),
         )
     }
 
