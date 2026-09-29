@@ -17,7 +17,7 @@ export const ui = {
     'hero.overline': 'P2P photo backup for families',
     'hero.h1': "Your family's photos, at home. Literally.",
     'hero.lede':
-      'Phone photos back up automatically to the computer in your home. No cloud, no account — devices talk directly, with a relay only as fallback. Backing up at home is free, forever.',
+      'Photos on your phone back up automatically to the computer in your home. No account to sign up for, and nothing goes to any cloud drive.',
     'hero.cta': 'Download P-Pass',
     'hero.cta.sub': 'macOS / Android · GitHub Releases',
     'hero.icon.alt': 'P-Pass roof-guardian icon',
@@ -39,10 +39,9 @@ export const ui = {
     'build.body':
       'Open source, AGPL-3.0. Originals stay plain files on your own disk; the index rebuilds from them.',
     'build.link': 'The code lives on GitHub',
-    'privacy.h2': "Privacy is not a feature. It's a stance.",
+    'privacy.h2': 'What we collect',
     'privacy.body':
-      "Your photos never leave home: the bytes, thumbnails, and filenames move only between your family's devices, and the relay forwards nothing but ciphertext. That's not a slogan, it's the architecture — the code is open, so go check. This site keeps count of things like downloads, because we need to know if anyone's actually using it. The app itself sends nothing today; if a crash log would ever help fix something, it'll ask you first.",
-    closing: 'No cloud. No account. No us.',
+      "This site keeps count of things like downloads, because we need to know if anyone's actually using it. The app itself sends nothing today; if a crash log would ever help fix something, it'll ask you first.",
     'footer.tag':
       'P-Pass — photo backup for families. Open source, end-to-end encrypted. Photos never leave home.',
     'footer.repo': 'GitHub repository',
@@ -62,7 +61,7 @@ export const ui = {
     'hero.overline': 'P2P 家庭照片备份',
     'hero.h1': '全家的照片，住回自己家。',
     'hero.lede':
-      '家人的照片自动备份到你家电脑。没有云，没有账号——设备之间直接传输，中继只做转发兜底。回家备份，永远免费。',
+      '手机里的照片会自动备份到你家的电脑上，不用注册账号，也不传到任何云盘。',
     'hero.cta': '下载 P-Pass',
     'hero.cta.sub': 'macOS / Android · GitHub Releases',
     'hero.icon.alt': 'P-Pass 屋脊兽图标',
@@ -84,10 +83,9 @@ export const ui = {
     'build.body':
       '开源（AGPL-3.0）。原图以裸文件存在你自己的硬盘上，索引随时可重建。',
     'build.link': '代码在 GitHub 上',
-    'privacy.h2': '隐私不是功能，是立场',
+    'privacy.h2': '我们收集什么',
     'privacy.body':
-      '照片永远不出门：字节、缩略图、文件名只在你家的设备之间走，中继只转发密文。这不是口号，是架构，代码开源，谁都能查。官网会统计下载量这类汇总数字，做产品总得知道有没有人在用。客户端目前什么都不上报，哪天真需要你发一份崩溃日志，会先问过你。',
-    closing: '照片只在你家的设备之间走——没有云，没有账号，也没有「我们」。',
+      '官网会统计下载量这类汇总数字，做产品总得知道有没有人在用。App 目前什么都不上报；哪天真需要你发一份崩溃日志，会先问过你。',
     'footer.tag': 'P-Pass — 家人照片备份。开源，端到端加密，照片不出门。',
     'footer.repo': 'GitHub 仓库',
     'blog.h1': '博客',
