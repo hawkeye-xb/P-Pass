@@ -17,6 +17,9 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         val skips: Map<Long, Skip> = emptyMap(),
         val audits: List<AuditRecord> = emptyList(),
         val owner: String? = null,
+        /** 与 SQLite 的 AUTOINCREMENT seq 同语义：按追加顺序只增、不复用。 */
+        val auditSeqs: Map<String, Long> = emptyMap(),
+        val lastAuditSeq: Long = 0L,
     )
 
     /** 故障注入：非 null 时，下一次事务在提交前抛出它（测试「崩在写入中途」）。 */
@@ -38,8 +41,14 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         val skips = java.util.TreeMap(s.skips)
         val audits = s.audits.toMutableList()
         var owner = s.owner
+        val auditSeqs = LinkedHashMap(s.auditSeqs)
+        var lastAuditSeq = s.lastAuditSeq
 
-        fun freeze() = State(rows, lastId, volumes, scan, skips, audits, owner)
+        fun freeze(): State {
+            for (a in audits) if (a.eventId !in auditSeqs) auditSeqs[a.eventId] = ++lastAuditSeq
+            auditSeqs.keys.retainAll(audits.mapTo(HashSet()) { it.eventId })
+            return State(rows, lastId, volumes, scan, skips, audits, owner, auditSeqs, lastAuditSeq)
+        }
     }
 
     @Synchronized
@@ -217,7 +226,9 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
 
     override fun appendAudit(audit: AuditRecord) = inTransaction { audits += audit }
 
-    override fun pendingAudit(limit: Int): List<AuditRecord> = state.audits.take(limit)
+    override fun pendingAuditAfter(afterSeq: Long, limit: Int): List<SequencedAudit> = state.let { s ->
+        s.audits.map { SequencedAudit(s.auditSeqs.getValue(it.eventId), it) }.filter { it.seq > afterSeq }.take(limit)
+    }
 
     override fun acknowledgeAudit(eventIds: Set<String>) {
         inTransaction { audits.removeAll { it.eventId in eventIds } }

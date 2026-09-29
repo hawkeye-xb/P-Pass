@@ -117,6 +117,14 @@ internal class FlowEngine(
     private fun audit(kind: String, payload: Map<String, String>) =
         AuditRecord(UUID.randomUUID().toString(), kind, null, clock(), payload)
 
+    /**
+     * AUDIT-06（#460）：逐张审计（flow.item.*）的 payload 一律带 `itemRef`（这张照片的稳定身份
+     * `media:<MediaStore _ID>`），桌面据此落 `audit_item_evidence`。旧桌面（test.2 及更早）缺它就拒收。
+     * 两端契约锚点：仓库根 `tests/flow-audit-item-events.json`（两端测试都读它），改 payload 形状先改那份。
+     */
+    private fun itemAudit(kind: String, mediaId: Long, payload: Map<String, String>) =
+        audit(kind, mapOf("itemRef" to "media:$mediaId") + payload)
+
     /** 等待原因：持久化（进程重启后还在）、进视图。 */
     private fun setWait(reason: WaitReason?) {
         control.setWaitReason(reason)
@@ -675,7 +683,7 @@ internal class FlowEngine(
             null -> {
                 // 读不出来（两次）：记一次失败（有上限），游标照常推进，不在这张上打转。
                 val row = store.insert(NewOrder(snapshot.mediaId, version, bucket, null, OrderState.TRANSFERRING, epoch.value))
-                fail(row.id, progress, failure)
+                fail(row, progress, failure)
                 return StepResult.Next
             }
             ImportResult.SourceMissing -> {
@@ -684,7 +692,7 @@ internal class FlowEngine(
                     NewOrder(snapshot.mediaId, version, bucket, null, OrderState.SKIPPED_SOURCE_MISSING, epoch.value),
                     advance = progress.advance,
                     scanTo = progress.scanTo,
-                    audit = audit(AuditKinds.ITEM_SOURCE_MISSING, mapOf("mediaId" to snapshot.mediaId.toString())),
+                    audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, snapshot.mediaId, mapOf("mediaId" to snapshot.mediaId.toString())),
                 )
                 onSettled()
                 bump()
@@ -722,7 +730,7 @@ internal class FlowEngine(
         val (imported, failure) = importWithRetry(details)
         val hash = when (imported) {
             null -> {
-                if (store.transition(order.id, OPEN, OrderState.TRANSFERRING)) fail(order.id, Progress(), failure)
+                if (store.transition(order.id, OPEN, OrderState.TRANSFERRING)) fail(order, Progress(), failure)
                 return StepResult.Next
             }
             ImportResult.SourceMissing -> {
@@ -762,7 +770,7 @@ internal class FlowEngine(
                 order.id,
                 OPEN,
                 OrderState.SKIPPED_SOURCE_MISSING,
-                audit = audit(AuditKinds.ITEM_SOURCE_MISSING, mapOf("queueSequence" to order.id.toString(), "reason" to reason)),
+                audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString(), "reason" to reason)),
             )
         ) {
             if (discard) delivery.discardPartial(order.id, PairingEpoch(order.pairingEpoch))
@@ -787,7 +795,7 @@ internal class FlowEngine(
                     (receipt.contentHash == null || receipt.contentHash == hash)
                 if (!valid) {
                     log.log("order ${order.id}: receipt does not match the request; treating as item failure")
-                    fail(order.id, progress, "receipt_mismatch")
+                    fail(order, progress, "receipt_mismatch")
                 } else if (store.transition(
                         order.id,
                         setOf(OrderState.TRANSFERRING),
@@ -795,8 +803,9 @@ internal class FlowEngine(
                         advance = progress.advance,
                         scanTo = progress.scanTo,
                         // E-01 / O-07：CONFIRMED、hash 映射（行本身）、游标推进、确认审计——同一次写入。
-                        audit = audit(
+                        audit = itemAudit(
                             AuditKinds.ITEM_CONFIRMED,
+                            order.mediaId,
                             mapOf(
                                 "queueSequence" to order.id.toString(),
                                 "sourceVersion" to order.sourceVersion,
@@ -821,7 +830,7 @@ internal class FlowEngine(
                         OrderState.SKIPPED_SOURCE_MISSING,
                         advance = progress.advance,
                         scanTo = progress.scanTo,
-                        audit = audit(AuditKinds.ITEM_SOURCE_MISSING, mapOf("queueSequence" to order.id.toString())),
+                        audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString())),
                     )
                 ) {
                     delivery.discardPartial(order.id, epoch)
@@ -832,7 +841,7 @@ internal class FlowEngine(
             }
             is DeliveryOutcome.ItemFailure -> {
                 importer.release(hash)
-                fail(order.id, progress, outcome.reason)
+                fail(order, progress, outcome.reason)
                 StepResult.Next
             }
             is DeliveryOutcome.PathFailure -> {
@@ -865,7 +874,7 @@ internal class FlowEngine(
             DeliveryOutcome.ItemFailure("unclassified: ${failure.javaClass.simpleName}")
         }
 
-    private fun fail(orderId: Long, progress: Progress, reason: String) {
+    private fun fail(order: Order, progress: Progress, reason: String) {
         // #418：这里是「一张照片记为 FAILED」的唯一调用点，失败通知（FailureNotifier / SystemFailureNotifier，
         // 代码保留）**故意不在这里调用**：
         //  1. 失败要先按 路径 / 单张 / 对端 分类（#410 / #413 契约 §5）——分类刚落地，各类的真机比例还没看过，
@@ -873,13 +882,13 @@ internal class FlowEngine(
         //  2. 兜底对账会自动再试一次 FAILED——现在就推通知，大多数是会自愈的问题。
         // 结构测试 ARCH14UiWiringTest.the_failure_notification_is_kept_but_never_posted 锁住「main 里没有 postFailure 调用点」。
         store.transition(
-            orderId,
+            order.id,
             setOf(OrderState.TRANSFERRING),
             OrderState.FAILED,
             countAttempt = true,
             advance = progress.advance,
             scanTo = progress.scanTo,
-            audit = audit(AuditKinds.ITEM_ATTENTION, mapOf("reason" to reason, "queueSequence" to orderId.toString())),
+            audit = itemAudit(AuditKinds.ITEM_ATTENTION, order.mediaId, mapOf("reason" to reason, "queueSequence" to order.id.toString())),
         )
         bump()
     }

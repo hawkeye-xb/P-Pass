@@ -1,0 +1,160 @@
+{
+  "_about": "AUDIT-06 (#460) cross-end contract anchor: every item-level Flow audit payload shape the phone (apps/android FlowEngine) emits into audit_outbox and submits over flow.audit.submit. Read by crates/daemon/src/audit_route.rs tests (every event must be accepted and persisted with expect.item_ref / expect.outcome) and by apps/android AUDIT06ItemAuditContractTest (every item fact the phone emits today must have the key set of a phone-current event of its kind). phone-legacy = shapes emitted from #424 up to #460 (no itemRef, round_id NULL) that may still sit in an upgraded phone's outbox; legacy_confirmed is the card's real outbox row, with the two values the card truncated filled in. Changing a phone payload means changing this file, which re-runs the daemon contract.",
+  "events": [
+    {
+      "name": "legacy_confirmed",
+      "emitter": "phone-legacy",
+      "site": "FlowEngine.deliverAndCommit (Confirmed)",
+      "kind": "flow.item.confirmed",
+      "round_id": null,
+      "payload": {
+        "queueSequence": "1790574682018",
+        "sourceVersion": "1790569136:30333",
+        "contentHash": "e0635a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a398c",
+        "receiptRef": "460400000000000000000000000000000000000000000000000000000000510f"
+      },
+      "expect": {
+        "item_ref": "queue:1790574682018",
+        "outcome": "confirmed"
+      }
+    },
+    {
+      "name": "legacy_source_missing_fresh",
+      "emitter": "phone-legacy",
+      "site": "FlowEngine.processFresh (SourceMissing)",
+      "kind": "flow.item.source_missing",
+      "round_id": null,
+      "payload": {
+        "mediaId": "30333"
+      },
+      "expect": {
+        "item_ref": "media:30333",
+        "outcome": "source_missing"
+      }
+    },
+    {
+      "name": "legacy_source_missing_settle",
+      "emitter": "phone-legacy",
+      "site": "FlowEngine.settleSourceMissing",
+      "kind": "flow.item.source_missing",
+      "round_id": null,
+      "payload": {
+        "queueSequence": "1790574682019",
+        "reason": "gone"
+      },
+      "expect": {
+        "item_ref": "queue:1790574682019",
+        "outcome": "source_missing"
+      }
+    },
+    {
+      "name": "legacy_source_missing_delivery",
+      "emitter": "phone-legacy",
+      "site": "FlowEngine.deliverAndCommit (SourceMissing)",
+      "kind": "flow.item.source_missing",
+      "round_id": null,
+      "payload": {
+        "queueSequence": "1790574682020"
+      },
+      "expect": {
+        "item_ref": "queue:1790574682020",
+        "outcome": "source_missing"
+      }
+    },
+    {
+      "name": "legacy_attention",
+      "emitter": "phone-legacy",
+      "site": "FlowEngine.fail",
+      "kind": "flow.item.attention",
+      "round_id": null,
+      "payload": {
+        "reason": "receipt_mismatch",
+        "queueSequence": "1790574682021"
+      },
+      "expect": {
+        "item_ref": "queue:1790574682021",
+        "outcome": "failed"
+      }
+    },
+    {
+      "name": "current_confirmed",
+      "emitter": "phone-current",
+      "site": "FlowEngine.deliverAndCommit (Confirmed)",
+      "kind": "flow.item.confirmed",
+      "round_id": null,
+      "payload": {
+        "queueSequence": "1790574682018",
+        "sourceVersion": "1790569136:30333",
+        "contentHash": "e0635a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a398c",
+        "receiptRef": "460400000000000000000000000000000000000000000000000000000000510f",
+        "itemRef": "media:30333"
+      },
+      "expect": {
+        "item_ref": "media:30333",
+        "outcome": "confirmed"
+      }
+    },
+    {
+      "name": "current_source_missing_fresh",
+      "emitter": "phone-current",
+      "site": "FlowEngine.processFresh (SourceMissing)",
+      "kind": "flow.item.source_missing",
+      "round_id": null,
+      "payload": {
+        "mediaId": "30333",
+        "itemRef": "media:30333"
+      },
+      "expect": {
+        "item_ref": "media:30333",
+        "outcome": "source_missing"
+      }
+    },
+    {
+      "name": "current_source_missing_settle",
+      "emitter": "phone-current",
+      "site": "FlowEngine.settleSourceMissing",
+      "kind": "flow.item.source_missing",
+      "round_id": null,
+      "payload": {
+        "queueSequence": "1790574682019",
+        "reason": "gone",
+        "itemRef": "media:30333"
+      },
+      "expect": {
+        "item_ref": "media:30333",
+        "outcome": "source_missing"
+      }
+    },
+    {
+      "name": "current_source_missing_delivery",
+      "emitter": "phone-current",
+      "site": "FlowEngine.deliverAndCommit (SourceMissing)",
+      "kind": "flow.item.source_missing",
+      "round_id": null,
+      "payload": {
+        "queueSequence": "1790574682020",
+        "itemRef": "media:30333"
+      },
+      "expect": {
+        "item_ref": "media:30333",
+        "outcome": "source_missing"
+      }
+    },
+    {
+      "name": "current_attention",
+      "emitter": "phone-current",
+      "site": "FlowEngine.fail",
+      "kind": "flow.item.attention",
+      "round_id": null,
+      "payload": {
+        "reason": "receipt_mismatch",
+        "queueSequence": "1790574682021",
+        "itemRef": "media:30333"
+      },
+      "expect": {
+        "item_ref": "media:30333",
+        "outcome": "failed"
+      }
+    }
+  ]
+}

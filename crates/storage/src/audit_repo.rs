@@ -318,6 +318,22 @@ impl Db {
         Ok(result.rows_affected() == 1)
     }
 
+    /// One item evidence row by its idempotency key. The replay check for
+    /// a retransmitted fact must key on `evidence_id` itself: phone item
+    /// facts carry no `round_id` (operation_id is NULL), so looking them
+    /// up by operation never finds them (AUDIT-06, #460).
+    pub async fn get_item_evidence(&self, evidence_id: &str) -> Result<Option<ItemEvidenceRecord>> {
+        let row = sqlx::query(
+            "SELECT id, evidence_id, operation_id, item_ref, source_version, content_hash,
+                    receipt_ref, asset_ref, outcome, occurred_at, payload
+             FROM audit_item_evidence WHERE evidence_id = ?",
+        )
+        .bind(evidence_id)
+        .fetch_optional(self.pool())
+        .await?;
+        Ok(row.map(|r| item_evidence_from_row(&r)))
+    }
+
     /// Every item evidence row belonging to one operation (Flow round) —
     /// how `audit_operation.evidence_summary` is recomputed, and how a
     /// UI/support case answers "what proved this operation's outcome".

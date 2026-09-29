@@ -130,6 +130,9 @@ data class ScanState(val dirty: Boolean, val cursor: Long)
  * AUDIT-01 的持久 outbox 事件。和它描述的事实**同一个事务**落库（见 [OrderStore.transition] 的 audit），
  * 由 AuditOutboxDispatcher 送给桌面、桌面确认后删除。
  */
+/** AUDIT-06：一条 outbox 事件和它在 outbox 里的顺序号（只增不复用）。 */
+data class SequencedAudit(val seq: Long, val record: AuditRecord)
+
 data class AuditRecord(
     val eventId: String,
     val kind: String,
@@ -260,7 +263,13 @@ interface OrderStore {
     /** 追加一条审计（不伴随状态迁移的事实，例如 `unrecoverable`）。 */
     fun appendAudit(audit: AuditRecord)
 
-    fun pendingAudit(limit: Int): List<AuditRecord>
+    fun pendingAudit(limit: Int): List<AuditRecord> = pendingAuditAfter(0L, limit).map { it.record }
+
+    /**
+     * AUDIT-06（#460）：outbox 里 `seq > afterSeq` 的前 [limit] 条（seq 升序），带上 seq 作分页游标。
+     * 投递方按 seq 往后翻页，而不是每次都从最旧的读：被桌面永久拒收的事件留在原地，但挡不住后面的。
+     */
+    fun pendingAuditAfter(afterSeq: Long, limit: Int): List<SequencedAudit>
 
     fun acknowledgeAudit(eventIds: Set<String>)
 

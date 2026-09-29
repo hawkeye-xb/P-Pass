@@ -496,13 +496,19 @@ class SqliteOrderStore private constructor(
         inTransaction { writeAudit(audit) }
     }
 
-    override fun pendingAudit(limit: Int): List<AuditRecord> =
-        db.rawQuery("SELECT event_id, kind, round_id, occurred_at_ms, payload FROM audit_outbox ORDER BY seq ASC LIMIT $limit", null).use { c ->
-            val out = ArrayList<AuditRecord>(c.count)
+    override fun pendingAuditAfter(afterSeq: Long, limit: Int): List<SequencedAudit> =
+        db.rawQuery(
+            "SELECT seq, event_id, kind, round_id, occurred_at_ms, payload FROM audit_outbox WHERE seq > ? ORDER BY seq ASC LIMIT $limit",
+            arrayOf(afterSeq.toString()),
+        ).use { c ->
+            val out = ArrayList<SequencedAudit>(c.count)
             while (c.moveToNext()) {
-                val json = JSONObject(c.getString(4))
+                val json = JSONObject(c.getString(5))
                 val payload = json.keys().asSequence().associateWith { json.getString(it) }
-                out += AuditRecord(c.getString(0), c.getString(1), if (c.isNull(2)) null else c.getString(2), c.getLong(3), payload)
+                out += SequencedAudit(
+                    c.getLong(0),
+                    AuditRecord(c.getString(1), c.getString(2), if (c.isNull(3)) null else c.getString(3), c.getLong(4), payload),
+                )
             }
             out
         }

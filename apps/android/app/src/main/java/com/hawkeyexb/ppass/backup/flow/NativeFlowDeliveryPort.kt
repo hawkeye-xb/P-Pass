@@ -19,6 +19,7 @@ package com.hawkeyexb.ppass.backup.flow
 import com.hawkeyexb.ppass.backup.isPairingLostText
 import com.hawkeyexb.ppass.backup.order.AuditRecord
 import com.hawkeyexb.ppass.backup.order.OrderStore
+import com.hawkeyexb.ppass.backup.order.SequencedAudit
 import com.hawkeyexb.ppass.proto.FlowAuditAccepted
 import com.hawkeyexb.ppass.proto.FlowAuditEvent
 import com.hawkeyexb.ppass.proto.FlowAuditSubmit
@@ -122,9 +123,15 @@ internal class DaemonFlowAuditTransport(
  * AUDIT-01: drains the order store's durable audit outbox to the daemon over `flow.audit.submit`,
  * acknowledging exactly the event ids the daemon confirmed durable. Anything not confirmed stays for
  * the next flush (never drop on send, only on confirmed daemon receipt).
+ *
+ * AUDIT-06 (#460): one flush walks the **whole** outbox in seq-ordered pages of [AUDIT_BATCH], with a
+ * seq cursor (not "the oldest N" again — acks land asynchronously on the writer, and re-reading from
+ * the head would resend the same page). A fact the daemon permanently rejects therefore stays queued
+ * but never blocks the facts behind it, however many rejected ones pile up in front.
  */
 internal class AuditOutboxDispatcher(
-    private val outbox: () -> List<AuditRecord>,
+    /** Up to [AUDIT_BATCH] outbox events with `seq > afterSeq`, seq ascending. */
+    private val outboxAfter: (afterSeq: Long) -> List<SequencedAudit>,
     private val pairing: () -> Pairing?,
     private val transportFor: suspend (Pairing) -> FlowAuditTransport,
     /** MOB-88: 删已确认事件这一步回到单写者上执行。 */
@@ -135,18 +142,25 @@ internal class AuditOutboxDispatcher(
         pairing: () -> Pairing?,
         transportFor: suspend (Pairing) -> FlowAuditTransport,
         acknowledgeEvents: (Set<String>) -> Unit,
-    ) : this({ store.pendingAudit(AUDIT_BATCH) }, pairing, transportFor, acknowledgeEvents)
+    ) : this({ after -> store.pendingAuditAfter(after, AUDIT_BATCH) }, pairing, transportFor, acknowledgeEvents)
 
-    /** Best-effort: any failure (offline, unpaired, IO) leaves the outbox untouched. */
+    /** Best-effort: any failure (offline, unpaired, IO) stops this flush and leaves the rest of the outbox untouched. */
     suspend fun flush() {
-        val events = outbox()
-        if (events.isEmpty()) return
-        val currentPairing = pairing() ?: return
-        runCatching { transportFor(currentPairing).submit(events) }
-            .onSuccess { accepted -> if (accepted.eventIds.isNotEmpty()) acknowledgeEvents(accepted.eventIds.toSet()) }
+        var cursor = 0L
+        var transport: FlowAuditTransport? = null
+        while (true) {
+            val page = outboxAfter(cursor)
+            if (page.isEmpty()) return
+            val currentPairing = pairing() ?: return
+            val t = transport ?: runCatching { transportFor(currentPairing) }.getOrElse { return }.also { transport = it }
+            val accepted = runCatching { t.submit(page.map { it.record }) }.getOrElse { return }
+            if (accepted.eventIds.isNotEmpty()) acknowledgeEvents(accepted.eventIds.toSet())
+            if (page.size < AUDIT_BATCH) return
+            cursor = page.last().seq
+        }
     }
 
-    private companion object {
+    internal companion object {
         const val AUDIT_BATCH = 200
     }
 }

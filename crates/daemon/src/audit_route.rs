@@ -98,15 +98,40 @@ async fn route_item_attention(db: &Db, fact: &FlowAuditFact<'_>) -> bool {
     route_item_evidence(db, fact, "failed").await
 }
 
+/// AUDIT-06 (#460): the item identity of one phone item fact.
+///
+/// Phones since #460 send `itemRef` (`media:<MediaStore _ID>`). Phones from
+/// #424 up to #460 never did — and their outbox still holds those facts —
+/// so the daemon derives the identity from what those shapes do carry, in
+/// this fixed order: `itemRef` → `media:<mediaId>` → `queue:<queueSequence>`
+/// → the content hash (hex, as `flow.reconciliation.resolved` uses). A fact
+/// carrying none of them has no identity and is rejected (stays queued on
+/// the phone; the dispatcher pages past it, so it blocks nothing).
+/// The exhaustive list of real phone shapes lives in the shared fixture
+/// `tests/flow-audit-item-events.json`, read by both ends' tests.
+fn item_ref_of(payload: &std::collections::BTreeMap<String, String>) -> Option<String> {
+    let non_empty = |k: &str| payload.get(k).filter(|v| !v.is_empty());
+    if let Some(r) = non_empty("itemRef") {
+        return Some(r.clone());
+    }
+    if let Some(m) = non_empty("mediaId") {
+        return Some(format!("media:{m}"));
+    }
+    if let Some(q) = non_empty("queueSequence") {
+        return Some(format!("queue:{q}"));
+    }
+    non_empty("contentHash").cloned()
+}
+
 async fn route_item_evidence(db: &Db, fact: &FlowAuditFact<'_>, outcome: &str) -> bool {
-    let Some(item_ref) = fact.payload.get("itemRef") else {
+    let Some(item_ref) = item_ref_of(fact.payload) else {
         return false;
     };
     let content_hash = fact.payload.get("contentHash").and_then(|h| parse_hex32(h));
     let entry = ItemEvidenceEntry {
         evidence_id: fact.event_id.to_string(),
         operation_id: fact.round_id.map(str::to_string),
-        item_ref: item_ref.clone(),
+        item_ref,
         source_version: fact.payload.get("sourceVersion").cloned(),
         content_hash: content_hash.as_ref().map(|h| h.to_vec()),
         receipt_ref: fact.payload.get("receiptRef").cloned(),
@@ -118,14 +143,22 @@ async fn route_item_evidence(db: &Db, fact: &FlowAuditFact<'_>, outcome: &str) -
     // Idempotent: a fresh insert accepts it; a replay hitting INSERT OR
     // IGNORE's no-op path must still report accepted (the fact IS durable,
     // just not newly written), or the phone would resend it forever.
-    if db.append_item_evidence(&entry).await.unwrap_or(false) {
+    append_item_evidence_idempotent(db, &entry).await
+}
+
+/// Insert, or confirm an earlier delivery already inserted it. The replay
+/// check keys on `evidence_id` (not the operation): phone facts arrive with
+/// `round_id` NULL, and an operation-keyed lookup never finds those, which
+/// made every retransmission after a lost response fail forever (#460).
+async fn append_item_evidence_idempotent(db: &Db, entry: &ItemEvidenceEntry) -> bool {
+    if db.append_item_evidence(entry).await.unwrap_or(false) {
         return true;
     }
-    db.list_item_evidence_for_operation(fact.round_id.unwrap_or_default())
+    db.get_item_evidence(&entry.evidence_id)
         .await
-        .unwrap_or_default()
-        .iter()
-        .any(|r| r.entry.evidence_id == fact.event_id)
+        .ok()
+        .flatten()
+        .is_some()
 }
 
 /// `flow.reconciliation.resolved` fans out to one of two canonical tables
@@ -180,7 +213,7 @@ async fn route_reconciliation_resolved(db: &Db, actor: &[u8], fact: &FlowAuditFa
                 occurred_at: fact.occurred_at_ms,
                 payload: serde_json::to_string(fact.payload).ok(),
             };
-            db.append_item_evidence(&entry).await.unwrap_or(false)
+            append_item_evidence_idempotent(db, &entry).await
         }
     }
 }
@@ -480,5 +513,118 @@ mod tests {
         assert!(route(&db, &ACTOR, &fact).await);
         let op = db.get_operation("future-kind-1").await.unwrap();
         assert!(op.is_some(), "unrecognised kinds must still be durable");
+    }
+
+    // AUDIT-06 (#460) acceptance #1: every item fact shape the phone really
+    // emits — including the legacy no-itemRef / round_id NULL shape still
+    // sitting in upgraded phones' outboxes — is accepted and persisted. The
+    // shapes come from the fixture the Android tests also read, so the two
+    // ends can no longer each test a shape the other never produces.
+    #[tokio::test]
+    async fn every_real_phone_item_fact_shape_is_accepted_and_persisted() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/flow-audit-item-events.json"))
+                .unwrap();
+        let events = fixture["events"].as_array().unwrap();
+        assert!(
+            events.len() >= 10,
+            "fixture lost its cases: {}",
+            events.len()
+        );
+        let db = Db::open_in_memory().await.unwrap();
+        for (i, e) in events.iter().enumerate() {
+            let name = e["name"].as_str().unwrap();
+            let p: BTreeMap<String, String> = e["payload"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+                .collect();
+            assert!(
+                e["round_id"].is_null(),
+                "{name}: phone item facts carry no round_id"
+            );
+            let event_id = format!("fixture-{i}");
+            let fact = FlowAuditFact {
+                event_id: &event_id,
+                kind: e["kind"].as_str().unwrap(),
+                round_id: None,
+                occurred_at_ms: 1_000 + i as i64,
+                payload: &p,
+            };
+            assert!(
+                route(&db, &ACTOR, &fact).await,
+                "{name}: daemon must accept it"
+            );
+            assert!(
+                route(&db, &ACTOR, &fact).await,
+                "{name}: a replay (lost response) must still be accepted"
+            );
+            let row = db
+                .get_item_evidence(&event_id)
+                .await
+                .unwrap()
+                .unwrap_or_else(|| panic!("{name}: must land in audit_item_evidence"));
+            assert_eq!(
+                row.entry.item_ref,
+                e["expect"]["item_ref"].as_str().unwrap(),
+                "{name}"
+            );
+            assert_eq!(
+                row.entry.outcome,
+                e["expect"]["outcome"].as_str().unwrap(),
+                "{name}"
+            );
+            assert_eq!(row.entry.operation_id, None, "{name}");
+            if let Some(h) = p.get("contentHash") {
+                assert_eq!(
+                    row.entry.content_hash.as_deref().map(hex::encode),
+                    Some(h.clone()),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    // AUDIT-06 (#460): an item fact with no identity at all is still
+    // rejected (never invented), so the phone keeps it queued.
+    #[tokio::test]
+    async fn an_item_fact_with_no_identity_is_rejected() {
+        let db = Db::open_in_memory().await.unwrap();
+        let p = payload(&[("reason", "gone")]);
+        let fact = FlowAuditFact {
+            event_id: "no-id-1",
+            kind: "flow.item.source_missing",
+            round_id: None,
+            occurred_at_ms: 7_000,
+            payload: &p,
+        };
+        assert!(!route(&db, &ACTOR, &fact).await);
+        assert!(db.get_item_evidence("no-id-1").await.unwrap().is_none());
+    }
+
+    // AUDIT-06 (#460): a NEEDS_DECISION reconciliation replay (round_id
+    // NULL, as the phone sends it) must still report accepted, or the
+    // phone resends it forever.
+    #[tokio::test]
+    async fn replaying_a_remote_missing_reconciliation_is_still_accepted() {
+        let db = Db::open_in_memory().await.unwrap();
+        let p = payload(&[("disposition", "REUPLOAD"), ("contentHash", &hash_hex())]);
+        let fact = FlowAuditFact {
+            event_id: "recon-replay-1",
+            kind: "flow.reconciliation.resolved",
+            round_id: None,
+            occurred_at_ms: 8_000,
+            payload: &p,
+        };
+        assert!(route(&db, &ACTOR, &fact).await, "first delivery accepts");
+        assert!(
+            route(&db, &ACTOR, &fact).await,
+            "replay still reports accepted"
+        );
+        assert_eq!(
+            db.list_item_evidence_for_asset(&HASH).await.unwrap().len(),
+            1
+        );
     }
 }
