@@ -50,6 +50,10 @@ class C522FgsBudgetSkipTest {
             "拒绝早于最近一次授予（不该出现，按拿不准处理）",
             fgsBudgetSkipReason(FgsBudgetFacts(lastGrantAt = refused, exhaustedRefusalAt = grant), BootInstant(3, 30_000L)),
         )
+        assertNull("拒绝之后回过前台（进程内事实）", fgsBudgetSkipReason(exhausted, BootInstant(3, 30_000L), BootInstant(3, 25_000L)))
+        assertNotNull("前台在拒绝之前，不算", fgsBudgetSkipReason(exhausted, BootInstant(3, 30_000L), BootInstant(3, 15_000L)))
+        assertNotNull("上一次开机的前台，不算", fgsBudgetSkipReason(exhausted, BootInstant(3, 30_000L), BootInstant(2, 25_000L)))
+        assertNull("没有确定被拒 = 不必说明", fgsBudgetDecision(FgsBudgetFacts(lastGrantAt = grant), BootInstant(3, 30_000L)))
     }
 
     // ---------------------------------------------------------------- 落盘
@@ -143,6 +147,32 @@ class C522FgsBudgetSkipTest {
         rig.trigger(TriggerReason.UNREACHABLE_PROBE)
         assertEquals("回过前台之后的后台触发必须真去申请", 3, rig.foreground.startForegroundServiceCalls)
         assertEquals(OrderState.CONFIRMED, rig.state(2))
+        rig.close()
+    }
+
+    // 引擎在回前台那一刻没起来（runtimeFor 超时）也不能漏：进程内的前台事实同样让后台触发恢复申请，并说明原因。
+    // 反证：fgsBudgetDecision 不看 lastForegroundAt → 仍跳过，红。
+    @Test
+    fun `a foreground seen only in-process still lets background triggers request, and says why`() = runTest {
+        val rig = Rig(this)
+        rig.exhaust()
+        rig.boot = BootInstant(3, 30_000L)
+        rig.appForegroundAt = BootInstant(3, 25_000L)
+        rig.trigger()
+        assertEquals(3, rig.foreground.startForegroundServiceCalls)
+        assertTrue(rig.logs.any { it.contains("requesting anyway: app came to the foreground since") })
+        rig.close()
+    }
+
+    // 读不到系统时钟 = 拿不准：照常申请，但要留痕（不静默降级）。
+    @Test
+    fun `an unreadable system clock never skips and is logged`() = runTest {
+        val rig = Rig(this)
+        rig.exhaust()
+        rig.boot = null
+        rig.trigger()
+        assertEquals(3, rig.foreground.startForegroundServiceCalls)
+        assertTrue(rig.logs.any { it.contains("requesting anyway: system clock (BOOT_COUNT) unavailable") })
         rig.close()
     }
 
@@ -266,9 +296,10 @@ class C522FgsBudgetSkipTest {
         assertTrue(service.contains("FlowForegroundHandoff.control?.recordFgsGrant(androidBootInstant(this))"))
         val onTimeout = service.substringAfter("override fun onTimeout(").substringBefore("override fun onDestroy")
         assertFalse("onTimeout 不是「确定被拒」", onTimeout.contains("recordBudgetRefusal"))
-        assertTrue(
-            "运行时要把真实的系统时钟交给引擎",
-            source("backup/flow/AndroidFlowRuntime.kt").contains("bootClock = { androidBootInstant(app) }"),
-        )
+        val runtime = source("backup/flow/AndroidFlowRuntime.kt")
+        assertTrue("运行时要把真实的系统时钟交给引擎", runtime.contains("bootClock = { androidBootInstant(app) }"))
+        assertTrue(runtime.contains("appForegroundAt = { FlowForegroundHandoff.lastAppForegroundAt },"))
+        val onForeground = runtime.substringAfter("internal fun onFlowAppForeground(").substringBefore("thread(")
+        assertTrue("回前台的事实要在拿运行时之前同步记下", onForeground.contains("FlowForegroundHandoff.lastAppForegroundAt = androidBootInstant(app)"))
     }
 }

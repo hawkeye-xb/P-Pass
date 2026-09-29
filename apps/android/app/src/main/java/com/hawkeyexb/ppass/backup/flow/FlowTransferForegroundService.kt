@@ -97,6 +97,9 @@ internal object FlowForegroundHandoff {
     @Volatile var control: FlowControl? = null
 
     @Volatile var latestText: String = ""
+
+    /** #522：App 最近一次进入前台（ForegroundWatcher 同步写入，早于引擎是否就绪）。 */
+    @Volatile var lastAppForegroundAt: BootInstant? = null
 }
 
 class AndroidForegroundLease(

@@ -76,6 +76,8 @@ internal class FlowEngine(
     private val monotonicClock: () -> Long = { System.nanoTime() / 1_000_000 },
     /** #522：系统额度时钟（开机序号 + elapsedRealtime）。null = 读不到 → 从不跳过申请。 */
     private val bootClock: () -> BootInstant? = { null },
+    /** #522：App 最近一次进入前台的时刻（进程内事实，不依赖引擎当时是否已起来）。 */
+    private val appForegroundAt: () -> BootInstant? = { null },
 ) {
     // 写 `_status` 就是写原始运行态；要不要刷新通知 / 首页由 [LoopStatusCell] 按「值变了 + 节流」决定。
     private val _status = LoopStatusCell(scope, publish = { foreground.update(it) }, now = monotonicClock)
@@ -458,9 +460,12 @@ internal class FlowEngine(
         // #522：系统已明确说额度耗尽、之后没回过前台、也没过系统复位点——这次申请必被拒，后台触发直接跳过。
         // 人在场时不跳过（系统按 TOP 复位）。依据与边界见 [fgsBudgetSkipReason]。
         if (!userPresent) {
-            fgsBudgetSkipReason(control.fgsBudgetFacts(), bootClock())?.let { why ->
-                log.log("cycle $reasons: skipping startForegroundService: $why")
-                return settle(WaitReason.FGS_BLOCKED)
+            fgsBudgetDecision(control.fgsBudgetFacts(), bootClock(), appForegroundAt())?.let { decision ->
+                if (decision.skip) {
+                    log.log("cycle $reasons: skipping startForegroundService: ${decision.why}")
+                    return settle(WaitReason.FGS_BLOCKED)
+                }
+                log.log("cycle $reasons: the system refused for budget earlier, requesting anyway: ${decision.why}")
             }
         }
         if (!foreground.acquire()) {

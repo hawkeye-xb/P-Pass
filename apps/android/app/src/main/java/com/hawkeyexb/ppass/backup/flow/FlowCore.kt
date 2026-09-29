@@ -264,27 +264,42 @@ internal const val FGS_BUDGET_RESET_WINDOW_MS = 24 * 60 * 60 * 1000L
 /** 我们记下的授予时刻比系统的晚几毫秒；再留一分钟余量，偏差一律落在「多试一次」那边。 */
 internal const val FGS_BUDGET_RESET_MARGIN_MS = 60_000L
 
+/** #522：有「确定被拒」记录时的判定。[skip] = 这次后台触发跳过申请；[why] 写进日志（不跳过时说明为什么仍去申请）。 */
+internal data class FgsBudgetDecision(val skip: Boolean, val why: String)
+
 /**
- * #522：后台触发要不要跳过 `startForegroundService`。返回跳过原因（写日志），null = 照常申请。
+ * #522：后台触发要不要跳过 `startForegroundService`。null = 没有「确定被拒」的记录，照常申请、不必说明。
  *
  * 只在下面全部成立时跳过——任何一条拿不准都照常申请（最多白申请一次，绝不错过恢复后的第一次）：
  *  1. 系统**明确**拒绝过（消息含 "Time limit"，见 [FlowControl.recordBudgetRefusal]）。onTimeout 不算：
  *     AOSP 在 `enableFgsTimeoutCrashBehavior` 关闭时下一次 startForeground 会直接复位，onTimeout 之后不一定被拒；
- *  2. 知道最近一次成功授予的时刻，且它、拒绝、现在三者是同一次开机（重启会清掉 system_server 里的额度账）；
- *  3. 现在还在「最近一次授予 + 24h − 余量」之内（过了这个点系统会复位，下一次必须真去申请）。
- * 「回过前台」由调用方复位（[FlowControl.clearBudgetRefusal]），这里不管。
+ *  2. 读得到系统时钟，且最近一次成功授予、拒绝、现在三者是同一次开机（重启会清掉 system_server 里的额度账）；
+ *  3. 拒绝之后 App 没回过前台（[lastForegroundAt]，对应 AOSP 的 `lastTopTime > lastTimeOutAt`）。
+ *     持久化的复位走 [FlowControl.clearBudgetRefusal]；这里再看一眼进程内的事实，引擎当时没起来也不会漏；
+ *  4. 现在还在「最近一次授予 + 24h − 余量」之内（过了这个点系统会复位，下一次必须真去申请）。
  */
-internal fun fgsBudgetSkipReason(facts: FgsBudgetFacts, now: BootInstant?): String? {
+internal fun fgsBudgetDecision(facts: FgsBudgetFacts, now: BootInstant?, lastForegroundAt: BootInstant? = null): FgsBudgetDecision? {
     val refusal = facts.exhaustedRefusalAt ?: return null
-    val grant = facts.lastGrantAt ?: return null
-    if (now == null) return null
-    if (refusal.bootCount != now.bootCount || grant.bootCount != now.bootCount) return null
-    if (refusal.elapsedMs < grant.elapsedMs || now.elapsedMs < refusal.elapsedMs) return null
+    fun request(why: String) = FgsBudgetDecision(skip = false, why = why)
+    if (now == null) return request("system clock (BOOT_COUNT) unavailable")
+    val grant = facts.lastGrantAt ?: return request("start of the system window unknown (no successful start on record)")
+    if (refusal.bootCount != now.bootCount || grant.bootCount != now.bootCount) return request("device rebooted since")
+    if (refusal.elapsedMs < grant.elapsedMs || now.elapsedMs < refusal.elapsedMs) return request("inconsistent timestamps")
+    if (lastForegroundAt != null && lastForegroundAt.bootCount == now.bootCount && lastForegroundAt.elapsedMs >= refusal.elapsedMs) {
+        return request("app came to the foreground since")
+    }
     val resetAt = grant.elapsedMs + FGS_BUDGET_RESET_WINDOW_MS - FGS_BUDGET_RESET_MARGIN_MS
-    if (now.elapsedMs >= resetAt) return null
-    return "dataSync budget exhausted (system refused with 'Time limit' ${(now.elapsedMs - refusal.elapsedMs) / 1000}s ago), " +
-        "app not in the foreground since; system resets in ${(resetAt - now.elapsedMs) / 60_000}min"
+    if (now.elapsedMs >= resetAt) return request("past the system reset point (last successful start + 24h)")
+    return FgsBudgetDecision(
+        skip = true,
+        why = "dataSync budget exhausted (system refused with 'Time limit' ${(now.elapsedMs - refusal.elapsedMs) / 1000}s ago), " +
+            "app not in the foreground since; system resets in ${(resetAt - now.elapsedMs) / 60_000}min",
+    )
 }
+
+/** [fgsBudgetDecision] 的简写：跳过时返回原因，否则 null。 */
+internal fun fgsBudgetSkipReason(facts: FgsBudgetFacts, now: BootInstant?, lastForegroundAt: BootInstant? = null): String? =
+    fgsBudgetDecision(facts, now, lastForegroundAt)?.takeIf { it.skip }?.why
 
 /** 意图（暂停标志）与等待原因的持久存储。 */
 interface FlowControl {

@@ -241,6 +241,9 @@ internal class Rig(test: TestScope, cursors: Boolean = true) {
     /** #522：系统额度时钟（开机序号 + elapsedRealtime）。引擎和假前台读同一个。 */
     var boot: BootInstant? = null
 
+    /** #522：进程内「App 最近一次进入前台」（生产由 ForegroundWatcher 同步写入）。 */
+    var appForegroundAt: BootInstant? = null
+
     init {
         foreground.bootNow = { boot }
         if (cursors) store.saveVolumeState(VolumeState(LEGACY_VOLUME, 0L, 0L, "v1"))
@@ -270,6 +273,7 @@ internal class Rig(test: TestScope, cursors: Boolean = true) {
         clock = { now },
         monotonicClock = { test.testScheduler.currentTime },
         bootClock = { boot },
+        appForegroundAt = { appForegroundAt },
     ).also { it.start() }
 
     fun photo(mediaId: Long, generation: Long, content: String = "c$mediaId", bucketId: Long = 7, volume: String = LEGACY_VOLUME): FakePhoto =
