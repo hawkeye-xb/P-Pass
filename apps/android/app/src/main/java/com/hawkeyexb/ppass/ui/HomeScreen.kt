@@ -989,7 +989,7 @@ private fun idleStatusText(
 /**
  * #540：空闲态那一句「插电 + Wi-Fi 时自动进行」是在替后台备份作保——只有后台真的在跑（Armed）才许说。
  * 挂起期间（等授权 / 监听被停）说的是设置行 hint 同一句话，两处不许给两个说法。
- * OffByUser 维持原文案不动（不在本卡范围，见 PR 留白）。
+ * OffByUser 在这里不改：用户关掉后 Flow 的等待原因 DISABLED 先接管这一行（state_waiting_disabled）。
  */
 internal fun idleHintRes(backgroundBackupState: BackgroundBackupState): Int = when (backgroundBackupState) {
     BackgroundBackupState.NeedsSystemAuthorization -> R.string.background_backup_needs_authorization
