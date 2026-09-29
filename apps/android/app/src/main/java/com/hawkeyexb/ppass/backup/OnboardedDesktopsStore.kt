@@ -42,6 +42,9 @@ class OnboardedDesktopsStore(private val dir: File) {
     fun wasOnboarded(daemonNodeId: String): Boolean =
         daemonNodeId.isNotBlank() && daemonNodeId in load().nodeIds
 
+    /** #130：这台手机是否走完过任何一次 onboarding（判「老用户」用）。 */
+    fun anyOnboarded(): Boolean = load().nodeIds.isNotEmpty()
+
     fun markOnboarded(daemonNodeId: String) {
         if (daemonNodeId.isBlank()) return
         val current = load()

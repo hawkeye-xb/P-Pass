@@ -189,6 +189,15 @@ fun PPassApp() {
     var screen by remember {
         mutableStateOf<Screen>(pairings.load()?.let { Screen.Home(it) } ?: Screen.Welcome)
     }
+    // #130：onboarding 只问一次通知权限。第一次运行这一版时定下是不是老用户（已有配对 / 走完过
+    // onboarding）——老用户升级不问；靠落盘标记，不靠版本号。
+    val notificationAsk = remember {
+        com.hawkeyexb.ppass.backup.OnboardingNotificationAsk(context.filesDir).also {
+            it.initIfAbsent(
+                existingUser = pairings.load() != null || OnboardedDesktopsStore(context.filesDir).anyOnboarded(),
+            )
+        }
+    }
     // MOB-03: 相册选择页权限链——「等授权结果后去哪」的落点。设置后由
     // bucketMediaPermission 回调消费；不进 Buckets 的路径立即清掉。
     var pendingBucketsPairing by remember { mutableStateOf<Pairing?>(null) }
@@ -1017,8 +1026,10 @@ fun PPassApp() {
         }
 
         is Screen.Started -> {
-            // 后台备份是用户可选能力；通知权限不属于 onboarding，必须由设置页
-            // 的对应开关主动请求。首次传输不依赖任何可选授权。
+            // 后台备份是用户可选能力，只在用户选「开启」时才申请。首次传输不依赖任何可选授权。
+            // #130（用户拍板）：Android 13+ 在这里**只问一次**通知权限——完成页先一句话讲清用途，
+            // 用户点任一按钮时先弹通知、再走原来的动作（两项系统授权串行，不叠框）。问过（含拒绝）
+            // 就再也不问，之后只能从设置里的「通知」开关申请；老用户升级、Android 12 及以下不问。
             val finishOnboarding = {
                 // MOB-114（#455）：「连过这台」的事实在这里落盘，快速重连只认它。
                 OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)
@@ -1035,18 +1046,41 @@ fun PPassApp() {
                 else suspendAutoBackupUntilAuthorized(context)
                 finishOnboarding()
             }
+            val onEnableBackgroundBackup = {
+                if (backgroundAuthorization.isGranted()) {
+                    enableAutoBackup(context)
+                    finishOnboarding()
+                } else {
+                    AutoBackupPrefs(context.filesDir).setRequested(true)
+                    batteryPermission.launch(backgroundAuthorization.requestIntent())
+                }
+            }
+            val askNotifications = remember {
+                notificationAsk.shouldAsk(Build.VERSION.SDK_INT, hasNotificationPermission(context))
+            }
+            var afterNotificationAsk by remember { mutableStateOf<(() -> Unit)?>(null) }
+            val onboardingNotificationPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) { granted ->
+                notificationAsk.onResult(granted, com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir))
+                afterNotificationAsk?.invoke()
+                afterNotificationAsk = null
+            }
+            // 用户点了按钮：该问就先问（先落盘「问过」再弹），弹窗结果回来后继续原动作。
+            val thenContinue = { next: () -> Unit ->
+                if (askNotifications && notificationAsk.shouldAsk(Build.VERSION.SDK_INT, hasNotificationPermission(context))) {
+                    notificationAsk.markAsked()
+                    afterNotificationAsk = next
+                    onboardingNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                } else {
+                    next()
+                }
+            }
             BackupStartedScreen(
                 photoCount = s.photoCount,
-                onEnableBackgroundBackup = {
-                    if (backgroundAuthorization.isGranted()) {
-                        enableAutoBackup(context)
-                        finishOnboarding()
-                    } else {
-                        AutoBackupPrefs(context.filesDir).setRequested(true)
-                        batteryPermission.launch(backgroundAuthorization.requestIntent())
-                    }
-                },
-                onEnter = finishOnboarding,
+                onEnableBackgroundBackup = { thenContinue(onEnableBackgroundBackup) },
+                onEnter = { thenContinue(finishOnboarding) },
+                notificationAskNote = askNotifications,
             )
         }
     }

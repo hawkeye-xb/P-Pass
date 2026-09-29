@@ -773,6 +773,8 @@ fun HomeScreen(
                     label = stringResource(R.string.rule_notify),
                     checked = notifyOnFailure,
                     onCheckedChange = onNotifyOnFailureChange,
+                    // #130：短标题「通知」+ 中性小字说明管哪几类（默认 Ink40、不可点——这不是待处理状态）。
+                    hint = stringResource(R.string.rule_notify_hint),
                 )
             }
         }

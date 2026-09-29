@@ -99,6 +99,8 @@ fun BackupStartedScreen(
     photoCount: Int,
     onEnableBackgroundBackup: () -> Unit,
     onEnter: () -> Unit,
+    /** #130：点按钮后会弹一次通知权限——先用一句话讲清用途（与欢迎页步骤说明同一样式）。 */
+    notificationAskNote: Boolean = false,
 ) {
     PPScreen(background = PPColor.SafeBg) {
         androidx.compose.material3.ProvideTextStyle(
@@ -118,6 +120,13 @@ fun BackupStartedScreen(
                 stringResource(R.string.backup_started_body),
                 fontSize = 16.sp, lineHeight = 27.sp, color = PPColor.Ink60,
             )
+            if (notificationAskNote) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    stringResource(R.string.onboarding_notification_note),
+                    fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
+                )
+            }
             Spacer(Modifier.height(28.dp))
             Button(
                 onClick = onEnableBackgroundBackup,
