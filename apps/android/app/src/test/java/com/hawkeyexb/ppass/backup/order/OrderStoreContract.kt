@@ -56,6 +56,25 @@ abstract class OrderStoreContract {
         assertEquals(listOf(audit), store.pendingAudit(10))
     }
 
+    // AUDIT-06 (#460): the outbox pages by an increasing seq that survives acknowledging earlier events, so the
+    // dispatcher can walk past events the daemon refuses instead of re-reading the same oldest page.
+    @Test
+    fun `the audit outbox pages by an increasing seq that acknowledging earlier events does not disturb`() {
+        val store = newStore(clock)
+        (1..5).forEach { store.appendAudit(AuditRecord("ev$it", "k", null, it.toLong())) }
+        val first = store.pendingAuditAfter(0L, 2)
+        assertEquals(listOf("ev1", "ev2"), first.map { it.record.eventId })
+        assertTrue(first[0].seq < first[1].seq)
+        store.acknowledgeAudit(setOf("ev3"))
+        val second = store.pendingAuditAfter(first.last().seq, 2)
+        assertEquals(listOf("ev4", "ev5"), second.map { it.record.eventId })
+        assertTrue(second[0].seq > first.last().seq)
+        assertEquals(emptyList<SequencedAudit>(), store.pendingAuditAfter(second.last().seq, 2))
+        store.appendAudit(AuditRecord("ev6", "k", null, 6L))
+        assertEquals(listOf("ev6"), store.pendingAuditAfter(second.last().seq, 2).map { it.record.eventId })
+        assertEquals(listOf("ev1", "ev2", "ev4", "ev5", "ev6"), store.pendingAudit(10).map { it.eventId })
+    }
+
     @Test
     fun `G advances lexicographically by generation then media id and never goes back`() {
         val store = newStore(clock)

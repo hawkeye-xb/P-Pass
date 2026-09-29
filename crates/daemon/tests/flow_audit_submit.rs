@@ -197,3 +197,68 @@ async fn unpaired_device_cannot_submit_audit_events() {
     assert_eq!(resp.error.unwrap().code, codes::NOT_AUTHORIZED);
     assert!(db.get_operation("round-1").await.unwrap().is_none());
 }
+
+/// AUDIT-06 (#460) acceptance #1 end to end: the exact outbox row the card
+/// pulled off a phone (`flow.item.confirmed`, `round_id` NULL, no
+/// `itemRef`) goes over the real `flow.audit.submit` wire, is reported
+/// accepted (twice — a lost-response replay too) and lands in
+/// `audit_item_evidence`. The shape is read from the shared cross-end
+/// fixture, not re-typed here.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_phones_real_item_confirmed_row_is_accepted_and_persisted() {
+    let fixture: serde_json::Value =
+        serde_json::from_str(include_str!("../../../tests/flow-audit-item-events.json")).unwrap();
+    let card = fixture["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["name"] == "legacy_confirmed")
+        .expect("fixture keeps the card's row");
+    let event = FlowAuditEvent {
+        event_id: "1732528f96-card-row".into(),
+        kind: card["kind"].as_str().unwrap().into(),
+        round_id: None,
+        occurred_at_ms: 1_790_574_700_000,
+        payload: serde_json::from_value(card["payload"].clone()).unwrap(),
+    };
+    let db = Db::open_in_memory().await.unwrap();
+    let (daemon_tp, ctp, _) = paired_client(&db).await;
+    let router = Router::new(db.clone(), "客厅的电脑");
+    let tp2 = daemon_tp.clone();
+    tokio::spawn(async move { router.serve(&tp2).await });
+
+    let params = serde_json::to_value(FlowAuditSubmit {
+        events: vec![event.clone()],
+    })
+    .unwrap();
+    for attempt in ["first delivery", "replay after a lost response"] {
+        let resp = send_method(
+            &ctp,
+            daemon_tp.node_id(),
+            methods::FLOW_AUDIT_SUBMIT,
+            params.clone(),
+        )
+        .await;
+        assert!(resp.ok, "{attempt}: {resp:?}");
+        let accepted: FlowAuditAccepted = serde_json::from_value(resp.result.unwrap()).unwrap();
+        assert_eq!(
+            accepted.event_ids,
+            vec![event.event_id.clone()],
+            "{attempt}"
+        );
+    }
+    let row = db
+        .get_item_evidence(&event.event_id)
+        .await
+        .unwrap()
+        .expect("the card's row must land in audit_item_evidence");
+    assert_eq!(row.entry.outcome, "confirmed");
+    assert_eq!(
+        row.entry.item_ref,
+        card["expect"]["item_ref"].as_str().unwrap()
+    );
+    assert_eq!(
+        row.entry.receipt_ref,
+        event.payload.get("receiptRef").cloned()
+    );
+}
