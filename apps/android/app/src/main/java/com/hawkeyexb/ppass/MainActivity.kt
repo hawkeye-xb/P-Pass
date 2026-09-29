@@ -73,7 +73,6 @@ import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.BackupHealthPrefs
-import com.hawkeyexb.ppass.backup.ConfirmedStore
 import com.hawkeyexb.ppass.backup.isPartialMediaAccess
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.mediaAccessOf
@@ -83,18 +82,13 @@ import com.hawkeyexb.ppass.backup.scheduleAutoBackup
 import com.hawkeyexb.ppass.backup.disableAutoBackup
 import com.hawkeyexb.ppass.backup.enableAutoBackup
 import com.hawkeyexb.ppass.backup.suspendAutoBackupUntilAuthorized
-import com.hawkeyexb.ppass.backup.suspendAutoBackupForPairingChange
 import com.hawkeyexb.ppass.backup.restoreAutoBackupAfterRepair
 import com.hawkeyexb.ppass.backup.BackgroundBackupState
 import com.hawkeyexb.ppass.backup.backgroundBackupStateOf
 import com.hawkeyexb.ppass.backup.triggerUserPresentBackup
-import com.hawkeyexb.ppass.backup.BACKUP_WORK_NAME
-import com.hawkeyexb.ppass.backup.CATCHUP_WORK_NAME
-import com.hawkeyexb.ppass.backup.PROCESS_CATCHUP_WORK_NAME
-import com.hawkeyexb.ppass.backup.MANUAL_BACKUP_WORK_NAME
-import com.hawkeyexb.ppass.backup.cancelMediaWatch
-import com.hawkeyexb.ppass.backup.WatermarkStore
-import com.hawkeyexb.ppass.backup.clearConfirmedCacheForRemote
+import com.hawkeyexb.ppass.backup.DisconnectRuntime
+import com.hawkeyexb.ppass.backup.applyDisconnectManifest
+import com.hawkeyexb.ppass.backup.unregisteredStatePaths
 import com.hawkeyexb.ppass.backup.BackupUiStateHolder
 import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfillAndWake
 import com.hawkeyexb.ppass.backup.flow.requestFlowWakeAfterRepair
@@ -751,7 +745,7 @@ fun PPassApp() {
             // 快速重连回 Screen.Home，`tab` 是 PPassApp 顶层状态，回到点击前的那个。
             val onRepairPairing = {
                 scope.launch {
-                    withContext(Dispatchers.IO) { clearLocalPairing(context, pairings, s.pairing) }
+                    withContext(Dispatchers.IO) { clearLocalPairing(context, s.pairing) }
                     val cameraGranted = ContextCompat.checkSelfPermission(
                         context, Manifest.permission.CAMERA,
                     ) == PackageManager.PERMISSION_GRANTED
@@ -894,7 +888,7 @@ fun PPassApp() {
                                         // 尽力而为——本地照断，重扫用新 token 重建。
                                     }
                                 }
-                                withContext(Dispatchers.IO) { clearLocalPairing(context, pairings, s.pairing) }
+                                withContext(Dispatchers.IO) { clearLocalPairing(context, s.pairing) }
                                 screen = Screen.Welcome
                             }
                             Unit
@@ -1164,38 +1158,31 @@ private fun deviceName(): String {
 }
 
 /**
- * 本地单方断开（UX-06/UX-06b 语义）——清空这台手机的配对现场：
- * pairing 记录、该 remote 的确认缓存（重配对后 M 从 0 重新计数）、
- * watermark、自动备份暂停态、周期任务。断开与「配对已失效重新扫码」
- * 共用此清理；不依赖 daemon 是否可达/是否已撤销本设备。
+ * 本地单方断开（UX-06/UX-06b 语义）。断开与「配对已失效重新扫码」共用此清理；
+ * 不依赖 daemon 是否可达/是否已撤销本设备。
+ *
+ * MOB-95（#282）：留什么、清什么**只在** [DisconnectState] 里声明，这里只把
+ * 清单里的运行时动作接到 Context 上，不另写任何处置。
  */
 private fun clearLocalPairing(
     context: Context,
-    pairings: PairingStore,
     pairing: Pairing,
 ) {
-    pairings.clear()
-    // A rejoin to the same NodeId must not resurrect its old strict head,
-    // native provider, or receipt facts.
-    clearFlowRuntime(context, pairing.daemonNodeId)
-    // UX-06b: 清该 remote 的确认缓存（backup-state/<daemonNodeId>/）——
-    // 重配对到同一台电脑后 M 从 0 重新计数，不沿用旧缓存
-    // （电脑端删过库时 M 虚高，首屏是错的）。
-    clearConfirmedCacheForRemote(context.filesDir, pairing.daemonNodeId)
-    WatermarkStore(context.filesDir).save(0)
-    // MOB-93: 停生产者，**留意图**。
-    //
-    // 这里原先把 userRequested 一起清掉，注释写的是「下一轮 onboarding 会
-    // 重新问」——那在 #257 之前成立：每一次重连都必走 onboarding。#257 加了
-    // 快速重连（连回以前连过的电脑直接回首页）之后，那个"重新问"不再必然
-    // 发生，意图就有去无回，5 小时周期（兜底对账的唯一载体）、前台补捞、
-    // 相册变更监听三条链静默留在关闭态。
-    //
-    // 现在按交互实际的样子分工：断开只停生产者；**换一台新电脑**时由
-    // onboarding 入口清掉意图（见下面 PairOutcome.Ok 分支），重新问一次。
-    suspendAutoBackupForPairingChange(context.filesDir)
     val work = WorkManager.getInstance(context)
-    listOf(BACKUP_WORK_NAME, CATCHUP_WORK_NAME, PROCESS_CATCHUP_WORK_NAME, MANUAL_BACKUP_WORK_NAME)
-        .forEach(work::cancelUniqueWork)
-    cancelMediaWatch(context)
+    applyDisconnectManifest(
+        context.filesDir,
+        object : DisconnectRuntime {
+            override fun stopFlowRuntime() = clearFlowRuntime(context, pairing.daemonNodeId)
+            override fun cancelUniqueWork(name: String) {
+                work.cancelUniqueWork(name)
+            }
+            override fun cancelMediaWatch() = com.hawkeyexb.ppass.backup.cancelMediaWatch(context)
+        },
+    )
+    // 登记门禁的真机一半：断开后私有目录里出现清单之外的东西，留一行日志（不拦断开）。
+    context.filesDir.parentFile?.let { dataDir ->
+        unregisteredStatePaths(dataDir).takeIf { it.isNotEmpty() }?.let {
+            android.util.Log.w("PPassDisconnect", "unregistered app state (register in DisconnectState): $it")
+        }
+    }
 }

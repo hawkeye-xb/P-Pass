@@ -53,17 +53,20 @@ class MOB114KnownDesktopRoundTripTest {
         OnboardedDesktopsStore(dir()).markOnboarded(nodeId)
     }
 
-    /** clearLocalPairing 里所有落在文件上的清理（WorkManager / 运行时那几行不碰文件），
-     *  再加上 #413 那次一次性迁移——正是它删掉了旧判据依赖的文件。 */
+    /** clearLocalPairing 实际执行的那份断开清单（MOB-95：它就是全部处置；运行时
+     *  那几行记账不落盘），再加上 #413 那次一次性迁移——正是它删掉了旧判据依赖的文件。 */
     private fun disconnect(nodeId: String) {
         File(dir(), "backup-state/$nodeId").mkdirs()
         File(dir(), "flow-state/$nodeId").mkdirs()
         File(dir(), "flow-state/$nodeId/discovery-ledger.json").writeText("{}")
-        PairingStore(dir()).clear()
-        clearConfirmedCacheForRemote(dir(), nodeId)
-        WatermarkStore(dir()).save(0)
-        suspendAutoBackupForPairingChange(dir())
+        applyDisconnectManifest(dir(), NoRuntime)
         migrateLegacyFlowState(dir())
+    }
+
+    private object NoRuntime : DisconnectRuntime {
+        override fun stopFlowRuntime() = Unit
+        override fun cancelUniqueWork(name: String) = Unit
+        override fun cancelMediaWatch() = Unit
     }
 
     @Test
@@ -159,6 +162,14 @@ class MOB114KnownDesktopRoundTripTest {
         val clear = src.substringAfter("private fun clearLocalPairing(").substringBefore("\n}")
         assertFalse("断开 / 配对失效不许碰「连过」的标记", clear.contains("OnboardedDesktops"))
         assertFalse("断开 / 配对失效不许碰「连过」的标记", clear.contains("onboarded_desktops"))
+        // MOB-95：断开的处置只在清单里——「连过」那一行必须是 KEEP，且断开真的走清单。
+        assertTrue("断开必须按清单执行", clear.contains("applyDisconnectManifest("))
+        assertEquals(
+            "断开 / 配对失效不许碰「连过」的标记",
+            DisconnectDisposition.KEEP,
+            DisconnectState.ONBOARDED_DESKTOPS.disposition,
+        )
+        assertTrue(DisconnectState.ONBOARDED_DESKTOPS.matches("onboarded_desktops.json"))
 
         val predicate = src.substringAfter("fun hasExistingLedgerFor(").substringBefore("\n\n")
         assertTrue("判据必须读标记", predicate.contains("isKnownDesktop(OnboardedDesktopsStore(context.filesDir)"))

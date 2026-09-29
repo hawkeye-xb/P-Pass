@@ -1,6 +1,9 @@
 package com.hawkeyexb.ppass
 
+import com.hawkeyexb.ppass.backup.DisconnectDisposition
+import com.hawkeyexb.ppass.backup.DisconnectState
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -27,13 +30,23 @@ class BackgroundBackupResetOnUnpairTest {
         val cleanup = mainActivity().substringAfter("private fun clearLocalPairing(")
             .substringBefore("\n}")
 
-        assertTrue(
+        // MOB-95：处置挪进了断开清单，clearLocalPairing 只按清单执行。
+        assertTrue("断开必须按清单执行", cleanup.contains("applyDisconnectManifest("))
+        assertEquals(
             "断开必须走停生产者、留意图的那条处置",
-            cleanup.contains("suspendAutoBackupForPairingChange(context.filesDir)"),
+            DisconnectDisposition.RESET,
+            DisconnectState.AUTO_BACKUP_PREFS.disposition,
         )
-        // MOB-68 的红线，原样保留。
-        assertFalse("断开绝不能打开后台备份", cleanup.contains("setEnabled(true)"))
-        assertFalse("断开绝不能替用户要后台备份", cleanup.contains("setRequested(true)"))
+        val executor = File("src/main/java/com/hawkeyexb/ppass/backup/DisconnectStateManifest.kt").readText()
+        assertTrue(
+            "清单里 RESET 那一行的实现就是停生产者、留意图",
+            executor.contains("DisconnectState.AUTO_BACKUP_PREFS -> suspendAutoBackupForPairingChange(filesDir)"),
+        )
+        // MOB-68 的红线，原样保留——断开的执行体（clearLocalPairing + 清单）都不许出现。
+        for (body in listOf(cleanup, executor)) {
+            assertFalse("断开绝不能打开后台备份", body.contains("setEnabled(true)"))
+            assertFalse("断开绝不能替用户要后台备份", body.contains("setRequested(true)"))
+        }
     }
 
     @Test
