@@ -9,51 +9,47 @@ export type Lang = (typeof LANGS)[number];
 
 export const ui = {
   en: {
-    'meta.title': "P-Pass — Your family's photos, at home",
-    'meta.description':
-      "P2P photo backup for families: phones back up to your own computer at home — through no one else's cloud. Open source, end-to-end encrypted.",
     'nav.blog': 'Blog',
     'nav.lang': '中文',
-    'hero.overline': 'P2P photo backup for families',
-    'hero.h1': "Your family's photos, at home. Literally.",
+    'hero.overline': "",
+    'hero.h1': "Your family's photos, kept at home.",
     'hero.lede':
-      'Photos on your phone back up automatically to the computer in your home. No account to sign up for, and nothing goes to any cloud drive.',
+      "Photos from your phone back up automatically to the computer at home. No account, no cloud storage.",
+    'hero.tagline': 'A self-hosted photo backup, without the server setup.',
     'hero.cta': 'Download P-Pass',
     'hero.cta.badge': 'Beta',
-    'hero.cta.sub': 'macOS / Android · GitHub Releases',
+    'hero.cta.sub': "Mac with Apple silicon · Android 8.0+",
     'video.label': 'P-Pass in 30 seconds',
     'video.fallback': "Your browser can't play this video.",
     'video.download': 'Download it (MP4)',
-    'pillar1.title': 'Photos come home',
+    'pillar1.title': "Set up once, and the whole family is backed up",
     'pillar1.body':
-      "Phones back up automatically to your own computer, through no one else's cloud. Originals live at your house; the index can always be rebuilt from them.",
-    'pillar2.title': 'Designed for the 60-year-old in the family',
+      "Runs on a computer you already have at home. Scan a code on each phone, and backups run on their own. You can check each phone's backup status at any time.",
+    'pillar2.title': "End-to-end encrypted",
     'pillar2.body':
-      'Scan one code, then never think about it again. Open the app and get a straight answer to "are my photos safe?"',
-    'pillar3.title': 'Open source · End-to-end encrypted',
+      "Photos are encrypted the whole way from phone to computer, on any network.",
+    'pillar3.title': "Full-resolution originals",
     'pillar3.body':
-      'The relay only forwards ciphertext, never stored, never decrypted. Photos never touch a server — ours included.',
-    'footer.repo': 'GitHub repository',
+      "Photos and videos are saved as the original files on your computer, never compressed, and open straight from the folder.",
+    'footer.repo': 'GitHub · Open source (AGPL-3.0)',
     'footer.privacy': 'Privacy',
     'footer.terms': 'Terms',
     'footer.changelog': 'Changelog',
     'blog.h1': 'Blog',
     'blog.sub':
-      'Product thinking, design decisions, build logs — written as it happened, not as marketing.',
+      "How we build P-Pass: design trade-offs and engineering notes on backing up phone photos to a computer at home.",
     'blog.empty': 'The first post is on its way.',
-    'blog.description': 'P-Pass development notes — product, design, and engineering.',
+    'blog.description': "P-Pass blog: design decisions and engineering notes behind private, at-home photo backup for families.",
     'post.back': '← Back to the blog',
   },
   zh: {
-    'meta.title': 'P-Pass — 家人的照片，备份回自己家',
-    'meta.description':
-      'P2P 家庭照片备份：手机自动备份到家里自己的电脑，不经过任何人的云。开源、端到端加密。',
     'nav.blog': '博客',
     'nav.lang': 'English',
     'hero.overline': '',
     'hero.h1': '全家的照片，存在自己家里。',
     'hero.lede':
       '手机照片自动备份到家中的电脑，无需注册账号，不上传任何云端。',
+    'hero.tagline': '',
     'hero.cta': '下载 P-Pass',
     'hero.cta.badge': 'Beta',
     'hero.cta.sub': 'Apple 芯片 Mac · Android 8.0+',

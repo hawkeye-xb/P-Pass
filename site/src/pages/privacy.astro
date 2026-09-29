@@ -1,0 +1,56 @@
+---
+import Base from '../layouts/Base.astro';
+import Legal from '../components/Legal.astro';
+import { GITHUB_URL } from '../consts';
+---
+
+<Base lang="en" title="Privacy Policy — P-Pass" mirror="/zh/privacy/">
+  <Legal title="Privacy Policy" updated="2026-09-29" updatedLabel="Last updated: ">
+    <p>
+      This policy covers the P-Pass website (p-pass.hawkeye-xb.com), the P-Pass desktop app, and the P-Pass Android app. It explains what data we can see and what we can't.
+    </p>
+
+    <h2>Your photos and videos</h2>
+    <p>
+      Your photos and videos are sent from your phone to your own computer and stored on the computer where you installed P-Pass. We don't run servers that store user photos, and we have no way to view your photos.
+    </p>
+
+    <h2>Transfers and the relay</h2>
+    <p>
+      Connections between your devices are encrypted end to end. When your phone and computer can't reach each other directly, the encrypted data is forwarded through a relay server. The relay and device-discovery services currently in use are operated by number 0, the maintainers of the open-source networking library iroh. These services can see your devices' IP addresses and device identifiers (public keys). They can't see the content of your photos, and they don't store the data they forward.
+    </p>
+
+    <h2>Data collected by the apps</h2>
+    <ul>
+      <li>The desktop and Android apps currently send no usage data or analytics, and there is no automatic crash reporting.</li>
+      <li>The code includes an anonymous analytics feature that is turned off by default. If we ever turn it on, we'll say so in the release notes and give you a way to switch it off.</li>
+      <li>If we ever need a crash log from you, we'll ask first.</li>
+    </ul>
+
+    <h2>Diagnostic bundles</h2>
+    <p>
+      A diagnostic bundle is created only when you click "Export diagnostic bundle", and it's saved on your computer. Exported bundles are scrubbed automatically: home-folder paths are replaced, and device identifiers and pairing tokens are cut to their first 8 characters. We only see a bundle if you send it to us yourself.
+    </p>
+
+    <h2>Android permissions</h2>
+    <ul>
+      <li>Photos and videos: to back up the albums you choose.</li>
+      <li>Camera: to scan the pairing QR code on your computer.</li>
+      <li>Notifications: to show backup progress and tell you when a backup fails.</li>
+      <li>Network, background activity, start on boot, and battery-optimization exemption: to finish backups automatically in the background.</li>
+    </ul>
+
+    <h2>This website</h2>
+    <p>
+      This website uses no analytics scripts, cookies, or third-party trackers. It is hosted on GitHub Pages, and installers are distributed through GitHub Releases, so GitHub processes access logs as the host under its
+      <a href="https://github.com/site/privacy" rel="external">privacy statement</a>.
+      The download numbers we see are the totals GitHub Releases provides.
+    </p>
+
+    <h2>Changes to this policy</h2>
+    <p>When this policy changes, we update the "Last updated" date on this page. Any change to how data is collected will also be called out in the release notes.</p>
+
+    <h2>Contact</h2>
+    <p>Questions about this policy? Open an issue on <a href={`${GITHUB_URL}/issues`} rel="external">GitHub Issues</a>.</p>
+  </Legal>
+</Base>

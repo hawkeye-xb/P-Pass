@@ -20,6 +20,7 @@ const pillars = [
   {t(lang, 'hero.overline') && <p class="overline">{t(lang, 'hero.overline')}</p>}
   <h1>{t(lang, 'hero.h1')}</h1>
   <p class="lede">{t(lang, 'hero.lede')}</p>
+  {t(lang, 'hero.tagline') && <p class="tagline">{t(lang, 'hero.tagline')}</p>}
   <a class="cta" href={RELEASES_URL} rel="external">
     <span class="cta-main">
       {t(lang, 'hero.cta')}
@@ -68,6 +69,12 @@ const pillars = [
     margin: 0 auto 2rem;
     color: var(--text-secondary);
     font-size: 1.1rem;
+  }
+  /* Second line for technical visitors (en only; zh leaves it empty). */
+  .tagline {
+    margin: -0.75rem auto 1.75rem;
+    color: var(--text-meta);
+    font-size: 0.95rem;
   }
   .cta {
     display: inline-flex;
