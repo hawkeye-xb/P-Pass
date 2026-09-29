@@ -46,7 +46,9 @@ class NET09ApkDownloadFailureKindsTest {
         private val onResponseCode: () -> Int = { 200 },
         private val body: () -> InputStream = { ByteArrayInputStream(ByteArray(0)) },
         private val length: Long = -1,
-    ) : HttpURLConnection(URL("https://example.invalid/ppass.apk")) {
+        private val headers: Map<String, String> = emptyMap(),
+        at: String = "https://example.invalid/ppass.apk",
+    ) : HttpURLConnection(URL(at)) {
         var inputStreamTouched = false
         var disconnected = false
         override fun connect() = onConnect()
@@ -58,6 +60,7 @@ class NET09ApkDownloadFailureKindsTest {
             return body()
         }
         override fun getContentLengthLong(): Long = length
+        override fun getHeaderField(name: String): String? = headers[name]
         override fun disconnect() { disconnected = true }
         override fun usingProxy() = false
     }
@@ -200,6 +203,32 @@ class NET09ApkDownloadFailureKindsTest {
         assertTrue(conn, conn.contains("CONNECTION FAILED") && conn.contains("connect") && conn.contains("ConnectException"))
     }
 
+    // ── 重定向：生产 URL 是 GitHub 资产 → 302 → CDN，阶段必须逐跳判 ──
+
+    @Test
+    fun cdnConnectTimeoutAfterRedirectIsConnectionFailureNotStall() {
+        val opened = mutableListOf<String>()
+        val hops = ArrayDeque(listOf(
+            FakeConn(onResponseCode = { 302 }, headers = mapOf("Location" to "https://cdn.invalid/blob?sig=1")),
+            FakeConn(onConnect = { throw SocketTimeoutException("connect timed out") }),
+        ))
+        val r = downloadApk("https://example.invalid/ppass.apk", dest, open = { opened += it; hops.removeFirst() })
+        assertEquals(listOf("https://example.invalid/ppass.apk", "https://cdn.invalid/blob?sig=1"), opened)
+        assertTrue("$r", r is ApkDownloadResult.ConnectionFailed)
+        assertEquals(ApkDownloadResult.Phase.Connect, (r as ApkDownloadResult.ConnectionFailed).phase)
+    }
+
+    @Test
+    fun redirectLoopStopsAtCapAndReportsTheStatus() {
+        var opens = 0
+        val r = downloadApk("https://example.invalid/ppass.apk", dest, open = {
+            opens++
+            FakeConn(onResponseCode = { 302 }, headers = mapOf("Location" to "/again"))
+        })
+        assertEquals(ApkDownloadResult.HttpStatus(302), r)
+        assertEquals(APK_MAX_REDIRECTS + 1, opens)
+    }
+
     // ── 真 socket：JDK HttpURLConnection 的阶段行为与假连接的假设一致 ──
 
     private fun realOpen(url: String) = URL(url).openConnection() as HttpURLConnection
@@ -258,5 +287,39 @@ class NET09ApkDownloadFailureKindsTest {
     }) { port ->
         val r = downloadApk("http://127.0.0.1:$port/ppass.apk", dest, ::realOpen, readTimeoutMs = 500)
         assertEquals(ApkDownloadResult.HttpStatus(404), r)
+    }
+
+    private fun redirectTo(target: String): (java.io.OutputStream) -> Unit = { out ->
+        out.write("HTTP/1.1 302 Found\r\nLocation: $target\r\nContent-Length: 0\r\n\r\n".toByteArray())
+    }
+
+    @Test
+    fun realRedirectToRefusedHostIsConnectionFailureInConnectPhase() {
+        val closed = ServerSocket(0, 1, InetAddress.getLoopbackAddress()).use { it.localPort }
+        serve(redirectTo("http://127.0.0.1:$closed/blob")) { port ->
+            val r = downloadApk("http://127.0.0.1:$port/ppass.apk", dest, ::realOpen, readTimeoutMs = 500)
+            assertTrue("$r", r is ApkDownloadResult.ConnectionFailed)
+            assertEquals(ApkDownloadResult.Phase.Connect, (r as ApkDownloadResult.ConnectionFailed).phase)
+        }
+    }
+
+    @Test
+    fun realRedirectToSilentHostIsStallInHeadersPhase() = serve({ /* CDN 一个字节都不回 */ }) { cdn ->
+        serve(redirectTo("http://127.0.0.1:$cdn/blob")) { port ->
+            val r = downloadApk("http://127.0.0.1:$port/ppass.apk", dest, ::realOpen, readTimeoutMs = 500)
+            assertEquals(ApkDownloadResult.Stalled(ApkDownloadResult.Phase.Headers, 0, 500), r)
+        }
+    }
+
+    @Test
+    fun realRedirectToOkHostDownloads() = serve({ out ->
+        out.write("HTTP/1.1 200 OK\r\nContent-Length: 3000\r\n\r\n".toByteArray())
+        out.write(ByteArray(3000))
+    }) { cdn ->
+        serve(redirectTo("http://127.0.0.1:$cdn/blob")) { port ->
+            val r = downloadApk("http://127.0.0.1:$port/ppass.apk", dest, ::realOpen, readTimeoutMs = 2000)
+            assertEquals(ApkDownloadResult.Ok(3000), r)
+            assertEquals(3000L, dest.length())
+        }
     }
 }

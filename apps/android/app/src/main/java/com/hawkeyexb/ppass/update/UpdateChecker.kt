@@ -197,7 +197,7 @@ sealed interface ApkDownloadResult {
         val readTimeoutMs: Int,
     ) : ApkDownloadResult
 
-    /** 服务器回了响应，但最终（跟随重定向后）的状态码不是 200。 */
+    /** 服务器回了响应，但最终（逐跳跟随重定向后）的状态码不是 200。 */
     data class HttpStatus(val code: Int) : ApkDownloadResult
 
     /**
@@ -250,6 +250,7 @@ fun ApkDownloadResult.logLine(url: String): String = when (this) {
 internal const val APK_CONNECT_TIMEOUT_MS = 15_000
 internal const val APK_READ_TIMEOUT_MS = 30_000
 private const val APK_COPY_BUFFER = 64 * 1024
+internal const val APK_MAX_REDIRECTS = 5
 
 /**
  * NET-09: 下载 [url] 到 [dest] 并分类失败（不含安装；JVM 用假连接可测）。
@@ -265,54 +266,69 @@ fun downloadApk(
     },
     readTimeoutMs: Int = APK_READ_TIMEOUT_MS,
 ): ApkDownloadResult {
-    val conn = try {
-        open(url)
-    } catch (e: java.io.IOException) {
-        return ApkDownloadResult.ConnectionFailed(ApkDownloadResult.Phase.Connect, 0, e.toString())
-    } catch (e: RuntimeException) {
-        return ApkDownloadResult.Unexpected(ApkDownloadResult.Phase.Connect, e.toString())
-    }
-    conn.connectTimeout = APK_CONNECT_TIMEOUT_MS
-    conn.readTimeout = readTimeoutMs
+    var current = url
+    var redirects = 0
     var phase = ApkDownloadResult.Phase.Connect
     var received = 0L
-    val result = try {
-        // 显式 connect：DNS / 拒绝 / TLS 握手 / connectTimeout 都在这一步抛，
-        // 与之后的 readTimeout 分开。
-        conn.connect()
-        phase = ApkDownloadResult.Phase.Headers
-        // 先看状态码再碰 inputStream：非 2xx 时 inputStream 会直接抛 IOException，
-        // 那样 HTTP 404/5xx 就会被误记成网络失败。
-        val code = conn.responseCode
-        if (code != 200) {
-            ApkDownloadResult.HttpStatus(code)
-        } else {
-            phase = ApkDownloadResult.Phase.Body
-            val expected = conn.contentLengthLong
-            copyBody(conn.inputStream, dest) { received = it }
-                ?: if (expected >= 0 && received != expected) {
-                    ApkDownloadResult.ConnectionFailed(
-                        phase, received, "body ended early: $received of $expected bytes",
-                    )
-                } else {
-                    ApkDownloadResult.Ok(received)
-                }
+    var conn: java.net.HttpURLConnection? = null
+    var result: ApkDownloadResult? = null
+    try {
+        // 重定向逐跳手动跟：生产 URL 是 GitHub release 资产，302 到另一个 CDN
+        // 主机。若交给 HttpURLConnection 自动跟随，CDN 那一跳的 DNS / TCP /
+        // TLS / connectTimeout 都发生在 responseCode 里——阶段已是 Headers，
+        // CDN 连不上会被错记成「字节停滞」。逐跳显式 connect 才能把阶段分对。
+        while (result == null) {
+            phase = ApkDownloadResult.Phase.Connect
+            val c = open(current)
+            conn = c
+            c.instanceFollowRedirects = false
+            c.connectTimeout = APK_CONNECT_TIMEOUT_MS
+            c.readTimeout = readTimeoutMs
+            // 显式 connect：DNS / 拒绝 / TLS 握手 / connectTimeout 都在这一步抛，
+            // 与之后的 readTimeout 分开。
+            c.connect()
+            phase = ApkDownloadResult.Phase.Headers
+            // 先看状态码再碰 inputStream：非 2xx 时 inputStream 会直接抛 IOException，
+            // 那样 HTTP 404/5xx 就会被误记成网络失败。
+            val code = c.responseCode
+            val location = if (code in 300..399) c.getHeaderField("Location") else null
+            if (location != null && redirects < APK_MAX_REDIRECTS) {
+                current = java.net.URL(java.net.URL(current), location).toString()
+                redirects++
+                runCatching { c.disconnect() }
+                conn = null
+            } else if (code != 200) {
+                // 含：3xx 没带 Location、重定向超过上限——都如实报最后那个状态码。
+                result = ApkDownloadResult.HttpStatus(code)
+            } else {
+                phase = ApkDownloadResult.Phase.Body
+                val expected = c.contentLengthLong
+                result = copyBody(c.inputStream, dest) { received = it }
+                    ?: if (expected >= 0 && received != expected) {
+                        ApkDownloadResult.ConnectionFailed(
+                            phase, received, "body ended early: $received of $expected bytes",
+                        )
+                    } else {
+                        ApkDownloadResult.Ok(received)
+                    }
+            }
         }
     } catch (e: java.net.SocketTimeoutException) {
-        if (phase == ApkDownloadResult.Phase.Connect) {
+        result = if (phase == ApkDownloadResult.Phase.Connect) {
             ApkDownloadResult.ConnectionFailed(phase, received, e.toString())
         } else {
-            ApkDownloadResult.Stalled(phase, received, conn.readTimeout)
+            ApkDownloadResult.Stalled(phase, received, readTimeoutMs)
         }
     } catch (e: java.io.IOException) {
-        ApkDownloadResult.ConnectionFailed(phase, received, e.toString())
+        result = ApkDownloadResult.ConnectionFailed(phase, received, e.toString())
     } catch (e: RuntimeException) {
-        ApkDownloadResult.Unexpected(phase, e.toString())
+        result = ApkDownloadResult.Unexpected(phase, e.toString())
     } finally {
-        runCatching { conn.disconnect() }
+        conn?.let { runCatching { it.disconnect() } }
     }
-    if (result !is ApkDownloadResult.Ok) dest.delete()
-    return result
+    val final = result!!
+    if (final !is ApkDownloadResult.Ok) dest.delete()
+    return final
 }
 
 /**
