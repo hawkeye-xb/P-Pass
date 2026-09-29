@@ -260,6 +260,12 @@ interface OrderStore {
     /** 追加一条审计（不伴随状态迁移的事实，例如 `unrecoverable`）。 */
     fun appendAudit(audit: AuditRecord)
 
+    /**
+     * #459：同一个 [onceKey] 只追加一次（记没记过与审计同一事务落库，进程重启、审计被桌面确认删掉之后也不重复）。
+     * 返回这次是否真的追加了。用于每个对账轮都会再遇到的事实（例如同一张照片的 `UNRECOVERABLE`）。
+     */
+    fun appendAuditOnce(onceKey: String, audit: AuditRecord): Boolean
+
     fun pendingAudit(limit: Int): List<AuditRecord>
 
     fun acknowledgeAudit(eventIds: Set<String>)

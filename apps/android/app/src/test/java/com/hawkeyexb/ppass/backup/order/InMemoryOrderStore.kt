@@ -17,6 +17,7 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         val skips: Map<Long, Skip> = emptyMap(),
         val audits: List<AuditRecord> = emptyList(),
         val owner: String? = null,
+        val onceKeys: Set<String> = emptySet(),
     )
 
     /** 故障注入：非 null 时，下一次事务在提交前抛出它（测试「崩在写入中途」）。 */
@@ -38,8 +39,9 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         val skips = java.util.TreeMap(s.skips)
         val audits = s.audits.toMutableList()
         var owner = s.owner
+        val onceKeys = s.onceKeys.toMutableSet()
 
-        fun freeze() = State(rows, lastId, volumes, scan, skips, audits, owner)
+        fun freeze() = State(rows, lastId, volumes, scan, skips, audits, owner, onceKeys)
     }
 
     @Synchronized
@@ -216,6 +218,13 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         currentRows().count { it.state == OrderState.SKIPPED_SOURCE_MISSING && it.updatedAtMs > afterMs && it.updatedAtMs <= upToMs }.toLong()
 
     override fun appendAudit(audit: AuditRecord) = inTransaction { audits += audit }
+
+    // 与 SqliteOrderStore 同口径：记过的 key 不随换桌面清库而清。
+    override fun appendAuditOnce(onceKey: String, audit: AuditRecord): Boolean = inTransaction {
+        if (!onceKeys.add(onceKey)) return@inTransaction false
+        audits += audit
+        true
+    }
 
     override fun pendingAudit(limit: Int): List<AuditRecord> = state.audits.take(limit)
 

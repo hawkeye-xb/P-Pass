@@ -13,7 +13,6 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -182,11 +181,13 @@ class C459SourceMissingTest {
         rig.close()
     }
 
-    // 桌面缺、原图也删了：保持写入 source_missing 之前的行为——新建一行待传输 → 取件时查不到原图 → 源已删 → 进横幅。
-    // （改成只记 unrecoverable 审计是产品决定，见 #459 PR。）
-    // 反证：runRemotePresence 按 order.sourceMissing 分流去只记审计 → 不新建行、横幅 0 张，红。
+    private fun Rig.unrecoverableAudits() = store.pendingAudit(100).filter { it.payload["disposition"] == "UNRECOVERABLE" }
+
+    // 桌面缺 + 原图也删了：意图来源 MOB-87 卡面「对账边界」第 6 条（cards/MOB-87-…:224，与 #415 裁决 2 一致）——
+    // 标 UNRECOVERABLE、只落审计事实、**不提示**：不补传、不建新行、不进「无法恢复」横幅。
+    // 反证：去掉 runRemotePresence 按 order.sourceMissing 分流的那一支 → 新建一行、取件记「源已删」、横幅 1 张，红。
     @Test
-    fun `a marked photo the desktop lost still surfaces in the unrecoverable banner`() = runTest {
+    fun `a marked photo the desktop lost is audited as unrecoverable and never reaches the banner`() = runTest {
         val rig = backedUp()
         val lost = rig.media.photos.single { it.mediaId == 2L }
         val old = rig.store.currentForMedia(2)!!
@@ -194,11 +195,36 @@ class C459SourceMissingTest {
         rig.missingOnDesktop = setOf(lost.hash)
         rig.trigger(TriggerReason.PERIODIC)
 
-        val row = rig.store.currentForMedia(2)!!
-        assertNotEquals(old.id, row.id)
-        assertEquals(OrderState.SKIPPED_SOURCE_MISSING, row.state)
-        assertTrue("原来那一行在这一轮入口已被打上标记", rig.store.get(old.id)!!.sourceMissing)
-        assertEquals(1L, rig.store.countSourceMissingSkipped(afterMs = 0L))
+        assertEquals(1, rig.presenceCalls)
+        assertEquals("不补传：当前行还是原来那行 CONFIRMED", old.id, rig.store.currentForMedia(2)!!.id)
+        assertTrue(rig.store.get(old.id)!!.sourceMissing)
+        assertEquals(0L, rig.store.countSourceMissingSkipped(afterMs = 0L))
+        assertEquals(emptyList<Long>(), rig.delivery.requests.map { it.orderId })
+        val audits = rig.unrecoverableAudits()
+        assertEquals(1, audits.size)
+        assertEquals(lost.hash, audits.single().payload["contentHash"])
+        rig.close()
+    }
+
+    // 同一行、同一配对代号只记一次 UNRECOVERABLE：CONFIRMED 行留着，每个对账轮都会再遇到它。换了配对代号再记一次。
+    // 反证：appendAuditOnce 换回 appendAudit → 第二轮又记一条（2 条），红。
+    @Test
+    fun `the unrecoverable audit is recorded once per order and pairing epoch`() = runTest {
+        val rig = backedUp()
+        val lost = rig.media.photos.single { it.mediaId == 2L }
+        rig.media.remove(2)
+        rig.missingOnDesktop = setOf(lost.hash)
+        rig.trigger(TriggerReason.PERIODIC)
+        rig.trigger(TriggerReason.PERIODIC)
+        assertEquals(2, rig.presenceCalls)
+        assertEquals(1, rig.unrecoverableAudits().size)
+
+        rig.epoch = PairingEpoch("e2")
+        rig.probeResult = ProbeResult.Reachable("e2")
+        rig.trigger(TriggerReason.PERIODIC)
+        assertEquals(3, rig.presenceCalls)
+        assertEquals("新配对代号下再记一次", 2, rig.unrecoverableAudits().size)
+        assertEquals(0L, rig.store.countSourceMissingSkipped(afterMs = 0L))
         rig.close()
     }
 }
