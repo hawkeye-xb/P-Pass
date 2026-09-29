@@ -1265,16 +1265,23 @@ impl IpcServer {
         // 而不是替业主静默丢弃。过期行留在列表里直到被 touch（confirm/
         // 新请求顶掉）时清除。
         let now = now_ms();
-        let queued: Vec<(transport::NodeId, String, i64)> = self
+        let queued: Vec<(transport::NodeId, String, i64, bool)> = self
             .pending
             .lock()
             .expect("pending lock")
             .iter()
-            .map(|p| (p.peer, p.device_name.clone(), p.requested_at))
+            .map(|p| {
+                (
+                    p.peer,
+                    p.device_name.clone(),
+                    p.requested_at,
+                    p.is_abandoned(),
+                )
+            })
             .collect();
 
         let mut out = Vec::with_capacity(queued.len());
-        for (peer, reported_name, requested_at) in queued {
+        for (peer, reported_name, requested_at, abandoned) in queued {
             let existing = self.db.get_device(&peer.0).await.ok().flatten();
             let mut row = serde_json::json!({
                 "node_id": hex(&peer.0),
@@ -1284,7 +1291,9 @@ impl IpcServer {
                     .map(|d| d.name.clone())
                     .unwrap_or(reported_name),
                 "requested_at": requested_at,
-                "expired": requested_at + self.pending_ttl_ms <= now,
+                // DEV-07 (#463): a row whose phone withdrew is just as
+                // unapprovable as one past TTL.
+                "expired": abandoned || requested_at + self.pending_ttl_ms <= now,
             });
             if let Some(d) = existing {
                 row["paired_at"] = serde_json::json!(d.paired_at);

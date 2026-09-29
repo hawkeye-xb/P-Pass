@@ -22,6 +22,14 @@
 //! ledger is process memory on purpose: a daemon restart forgets it and
 //! `pair.status` answers `not_found` — the phone then asks for a fresh
 //! code instead of blindly resending.
+//!
+//! DEV-07 (#463): the phone can **withdraw** a pending request
+//! (`pair.cancel`). Before this, the phone's Cancel only changed its own
+//! screen: the decision task kept `decision_rx` alive for the whole
+//! pending TTL, so a later owner "Allow" still wrote a device row the
+//! phone never learned about. A withdrawal ends the decision task the same
+//! way the TTL does — `decision_rx` is closed, the owner's click then gets
+//! `decide`'s Err (`ConfirmOutcome::Expired`), and nothing is written.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -126,6 +134,14 @@ impl PendingPair {
             .send(decision)
             .map_err(|_| DecisionUndelivered)
     }
+
+    /// DEV-07 (#463): the request side is gone — the phone withdrew it,
+    /// its pending TTL ran out, or it was otherwise settled without this
+    /// row. Such a row can no longer be approved (`decide` would Err); the
+    /// owner queue reports it as expired instead of as a live request.
+    pub fn is_abandoned(&self) -> bool {
+        self.decision.is_closed()
+    }
 }
 
 struct TokenState {
@@ -145,6 +161,9 @@ struct Ticket {
     settled_at: Option<i64>,
     /// Current state; legacy blocking callers wait on a receiver of it.
     state: watch::Sender<PairState>,
+    /// DEV-07 (#463): fires the phone's withdrawal into the decision task.
+    /// Taken (and sent) at most once; `None` once used.
+    withdraw: Option<oneshot::Sender<()>>,
 }
 
 struct Inner {
@@ -325,7 +344,7 @@ impl Pairing {
             _ => Role::Member,
         };
 
-        let (request_id, decision_rx) = {
+        let (request_id, decision_rx, withdraw_rx) = {
             let mut inner = self.inner.lock().expect("pairing lock");
             inner.sweep_tickets(now_ms);
             let token = parse_token(&req.token).ok_or(PairRejection::BadToken)?;
@@ -361,6 +380,7 @@ impl Pairing {
                 return Err(PairRejection::OwnerDeclined); // UI gone = no
             }
             let (state_tx, _) = watch::channel(PairState::Pending);
+            let (withdraw_tx, withdraw_rx) = oneshot::channel();
             inner.tickets.insert(
                 request_id.clone(),
                 Ticket {
@@ -369,9 +389,10 @@ impl Pairing {
                     submitted_at: now_ms,
                     settled_at: None,
                     state: state_tx,
+                    withdraw: Some(withdraw_tx),
                 },
             );
-            (request_id, rx)
+            (request_id, rx, withdraw_rx)
         };
 
         // T5: 扫码请求到达即审计（含后续被拒/超时——审计要全，不只看成功）。
@@ -391,7 +412,7 @@ impl Pairing {
         let id = request_id.clone();
         tokio::spawn(async move {
             let (state, settled_at) = this
-                .await_owner(peer, device_name, role, now_ms, decision_rx)
+                .await_owner(peer, device_name, role, now_ms, decision_rx, withdraw_rx)
                 .await;
             let mut inner = this.inner.lock().expect("pairing lock");
             if let Some(t) = inner.tickets.get_mut(&id) {
@@ -425,6 +446,48 @@ impl Pairing {
             .map(|t| t.state.borrow().clone())
     }
 
+    /// DEV-07 (#463): the submitting phone withdraws its own request
+    /// (`pair.cancel`). Scoped exactly like [`Self::status`]: another
+    /// NodeId's id, an unknown id, or a swept one is `None` (not_found) and
+    /// touches nothing. A still-pending request is ended without an owner
+    /// verdict — it settles `Expired` and the owner's queue row can no
+    /// longer be approved. An already-settled one is left as it is (an
+    /// owner Allow that landed first stays a real join).
+    ///
+    /// Returns the state after the withdrawal has settled, waiting (briefly)
+    /// for the decision task so the caller's answer is the ledger's truth:
+    /// once this returns `Expired`, the owner-side `decision_rx` is closed.
+    pub async fn cancel(
+        &self,
+        peer: transport::NodeId,
+        request_id: &str,
+        now_ms: i64,
+    ) -> Option<PairState> {
+        let mut rx = {
+            let mut inner = self.inner.lock().expect("pairing lock");
+            inner.sweep_tickets(now_ms);
+            let ticket = inner
+                .tickets
+                .get_mut(request_id)
+                .filter(|t| t.peer == peer)?;
+            if *ticket.state.borrow() == PairState::Pending {
+                if let Some(withdraw) = ticket.withdraw.take() {
+                    let _ = withdraw.send(());
+                }
+            }
+            ticket.state.subscribe()
+        };
+        // The decision task settles within one audit write; the bound only
+        // keeps a stuck DB from holding a control-plane RPC open.
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            rx.wait_for(|s| *s != PairState::Pending),
+        )
+        .await;
+        let settled = rx.borrow().clone();
+        Some(settled)
+    }
+
     /// The decision task body: wait (bounded) for the owner, then apply
     /// the verdict. Returns the ledger state and the settle timestamp.
     async fn await_owner(
@@ -433,7 +496,8 @@ impl Pairing {
         device_name: String,
         role: Role,
         now_ms: i64,
-        decision_rx: oneshot::Receiver<PairDecision>,
+        mut decision_rx: oneshot::Receiver<PairDecision>,
+        mut withdraw_rx: oneshot::Receiver<()>,
     ) -> (PairState, i64) {
         // DEV-05 (#276): the wait for the owner is bounded. Without this
         // arm, a request whose phone already gave up sat in `await` until
@@ -442,17 +506,29 @@ impl Pairing {
         // `ipc.rs`'s prune sweep + `confirm` surfacing `decide`'s
         // Err; one side alone leaves the other lying.
         let wait_started = tokio::time::Instant::now();
-        let decision = match tokio::time::timeout(
-            std::time::Duration::from_millis(self.pending_ttl_ms as u64),
-            decision_rx,
-        )
-        .await
-        {
-            Ok(Ok(d)) => Some(d),
-            // sender dropped (row replaced/swept, owner UI gone) or timed
-            // out: no verdict.
-            _ => None,
+        let ttl = tokio::time::sleep(std::time::Duration::from_millis(self.pending_ttl_ms as u64));
+        tokio::pin!(ttl);
+        let heard = tokio::select! {
+            // DEV-07 (#463): `biased` with the owner's arm FIRST. A decision
+            // already delivered means `confirm` has told the owner
+            // "已允许/已拒绝" — it must be honoured even if the phone's
+            // withdrawal is also ready, or the desktop lies (DEV-05).
+            biased;
+            d = &mut decision_rx => d.ok(),
+            // Only an actual withdrawal counts; the ticket dropping its
+            // sender (never happens while pending) disables this arm.
+            Ok(()) = &mut withdraw_rx => None,
+            // TTL: no verdict. A dropped sender (row replaced/swept, owner
+            // UI gone) resolves the first arm with Err → None as well.
+            () = &mut ttl => None,
         };
+        // Close the owner's half NOW, before the (awaiting) verdict write:
+        // from here on `decide` fails → `ConfirmOutcome::Expired`, so the
+        // desktop can never report success for a click this task ignores.
+        // A decision sent before the close is still read and honoured.
+        decision_rx.close();
+        let decision = heard.or_else(|| decision_rx.try_recv().ok());
+        drop(decision_rx);
         // DEV-05 (#276) 验收标准 4: the verdict timestamp is taken NOW —
         // the moment the owner decided (or the request expired) — not the
         // `now_ms` captured at request entry. Accept and deny share the
