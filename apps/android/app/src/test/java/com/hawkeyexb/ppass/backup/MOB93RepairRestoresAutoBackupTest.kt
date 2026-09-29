@@ -32,22 +32,39 @@ class MOB93RepairRestoresAutoBackupTest {
         setEnabled(true)
     }
 
+    /** MOB-95：断开走的是生产里 clearLocalPairing 执行的同一份清单，不是手抄的某一步。 */
+    private val runtime = object : DisconnectRuntime {
+        val cancelled = mutableListOf<String>()
+        var mediaWatchCancelled = false
+        override fun stopFlowRuntime() = Unit
+        override fun cancelUniqueWork(name: String) {
+            cancelled += name
+        }
+        override fun cancelMediaWatch() {
+            mediaWatchCancelled = true
+        }
+    }
+
+    private fun disconnect() = applyDisconnectManifest(tmp.root, runtime)
+
     // ── 断开：停生产者，留意图 ──────────────────────────────────
     @Test
     fun disconnect_stops_producers_but_keeps_the_users_intent() {
         userHadBackupOn()
 
-        suspendAutoBackupForPairingChange(tmp.root)
+        disconnect()
 
         val prefs = AutoBackupPrefs(tmp.root)
         assertFalse("断开必须停掉生产者", prefs.enabled())
         assertTrue("断开不许把用户的意图一起清掉——这正是本卡的 bug", prefs.requested())
+        assertTrue("周期任务（兜底对账的载体）必须随断开取消", BACKUP_WORK_NAME in runtime.cancelled)
+        assertTrue("相册变更监听必须随断开停掉", runtime.mediaWatchCancelled)
     }
 
     @Test
     fun disconnect_does_not_invent_an_intent_the_user_never_had() {
         // 从没开过后台备份的用户，断开之后也不该凭空多出一个意图。
-        suspendAutoBackupForPairingChange(tmp.root)
+        disconnect()
 
         assertFalse(AutoBackupPrefs(tmp.root).requested())
         assertFalse(AutoBackupPrefs(tmp.root).enabled())
@@ -59,7 +76,7 @@ class MOB93RepairRestoresAutoBackupTest {
         // 先固化再置 false，否则这一步自己就把意图抹了。
         File(tmp.root, "auto_backup_prefs.json").writeText("""{"autoEnabled":true}""")
 
-        suspendAutoBackupForPairingChange(tmp.root)
+        disconnect()
 
         assertTrue("老文件的意图要先固化再停", AutoBackupPrefs(tmp.root).requested())
         assertFalse(AutoBackupPrefs(tmp.root).enabled())
@@ -101,7 +118,7 @@ class MOB93RepairRestoresAutoBackupTest {
         userHadBackupOn()
 
         // 1. 断开
-        suspendAutoBackupForPairingChange(tmp.root)
+        disconnect()
         assertFalse(AutoBackupPrefs(tmp.root).enabled())
 
         // 2. 重连回**同一台**电脑（快速路径，跳过 onboarding）
@@ -119,7 +136,7 @@ class MOB93RepairRestoresAutoBackupTest {
     @Test
     fun switching_to_a_different_desktop_asks_again_instead_of_inheriting() {
         userHadBackupOn()
-        suspendAutoBackupForPairingChange(tmp.root)
+        disconnect()
 
         // 换新电脑走 onboarding，入口清意图（MainActivity 的 else 分支）。
         AutoBackupPrefs(tmp.root).setRequested(false)
@@ -140,9 +157,12 @@ class MOB93RepairRestoresAutoBackupTest {
         val source = File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText()
 
         val clearBody = source.substringAfter("private fun clearLocalPairing(")
-        assertTrue(
+        // MOB-95：处置挪进了清单；断开必须按清单执行，且后台备份意图那一行是「停生产者、留意图」。
+        assertTrue("断开必须按清单执行", clearBody.substringBefore("\n}").contains("applyDisconnectManifest("))
+        assertEquals(
             "断开必须走留意图的那条处置",
-            clearBody.contains("suspendAutoBackupForPairingChange(context.filesDir)"),
+            DisconnectDisposition.RESET,
+            DisconnectState.AUTO_BACKUP_PREFS.disposition,
         )
         assertFalse(
             "断开不许再把用户意图清成 false",
