@@ -1,5 +1,5 @@
 ---
-import { RELEASES_URL } from '../consts';
+import { MIRROR_ANDROID, MIRROR_MAC, RELEASES_URL } from '../consts';
 import { t, type Lang } from '../i18n/ui';
 import PromoVideo from './PromoVideo.astro';
 
@@ -21,13 +21,39 @@ const pillars = [
   <h1>{t(lang, 'hero.h1')}</h1>
   <p class="lede">{t(lang, 'hero.lede')}</p>
   {t(lang, 'hero.tagline') && <p class="tagline">{t(lang, 'hero.tagline')}</p>}
-  <a class="cta" href={RELEASES_URL} rel="external">
-    <span class="cta-main">
-      {t(lang, 'hero.cta')}
-      <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
-    </span>
-    <span class="cta-sub">{t(lang, 'hero.cta.sub')}</span>
-  </a>
+  {
+    lang === 'zh' ? (
+      <>
+        <div class="cta-row">
+          <a class="cta" href={MIRROR_MAC} rel="external">
+            <span class="cta-main">
+              {t(lang, 'hero.cta.mac')}
+              <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
+            </span>
+            <span class="cta-sub">{t(lang, 'hero.cta.mac.sub')}</span>
+          </a>
+          <a class="cta" href={MIRROR_ANDROID} rel="external">
+            <span class="cta-main">
+              {t(lang, 'hero.cta.android')}
+              <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
+            </span>
+            <span class="cta-sub">{t(lang, 'hero.cta.android.sub')}</span>
+          </a>
+        </div>
+        <p class="cta-alt">
+          <a href={RELEASES_URL} rel="external">{t(lang, 'hero.cta.alt')}</a>
+        </p>
+      </>
+    ) : (
+      <a class="cta" href={RELEASES_URL} rel="external">
+        <span class="cta-main">
+          {t(lang, 'hero.cta')}
+          <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
+        </span>
+        <span class="cta-sub">{t(lang, 'hero.cta.sub')}</span>
+      </a>
+    )
+  }
 </section>
 
 <PromoVideo lang={lang} />
@@ -92,6 +118,17 @@ const pillars = [
     transition: background 0.15s ease;
   }
   .cta:hover { background: var(--ink-hover); color: var(--paper); }
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+  }
+  .cta-alt {
+    margin: 0.9rem 0 0;
+    font-size: 0.85rem;
+  }
+  .cta-alt a { color: var(--text-meta); }
   .cta-main {
     display: inline-flex;
     align-items: center;

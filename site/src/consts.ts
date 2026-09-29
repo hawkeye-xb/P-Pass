@@ -4,6 +4,13 @@ export const SITE_URL = 'https://p-pass.hawkeye-xb.com';
 export const GITHUB_URL = 'https://github.com/hawkeye-xb/P-Pass';
 export const RELEASES_URL = `${GITHUB_URL}/releases/latest`;
 
+// Download mirror for the zh page: GitHub release assets are often unreachable
+// from mainland China. Fixed file names, overwritten on every release (manual
+// upload to Cloudflare R2, see the release checklist in the business repo).
+export const MIRROR_BASE = 'https://dl.hawkeye-xb.com';
+export const MIRROR_MAC = `${MIRROR_BASE}/P-Pass-latest.dmg`;
+export const MIRROR_ANDROID = `${MIRROR_BASE}/P-Pass-latest.apk`;
+
 // Canon copy (Brief §3) — one entry per language, same level.
 export const SITE_TITLE: Record<Lang, string> = {
   en: "P-Pass — Your family's photos, kept at home",
