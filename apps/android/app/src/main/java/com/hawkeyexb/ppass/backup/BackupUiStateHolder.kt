@@ -36,6 +36,7 @@ import com.hawkeyexb.ppass.backup.flow.flowMissingSourceNotice
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
 import com.hawkeyexb.ppass.backup.flow.flowTripletOf
+import com.hawkeyexb.ppass.backup.flow.visibleEngineView
 import com.hawkeyexb.ppass.backup.flow.runtimeFor
 import com.hawkeyexb.ppass.backup.flow.skippedRowCount
 import com.hawkeyexb.ppass.backup.flow.TransferMark
@@ -406,7 +407,7 @@ private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : Engin
     private val engine get() = runtime.engine
 
     override val view: StateFlow<EngineView?> =
-        combine(engine.view, engine.pendingKnown) { v, known -> v.takeIf { known } }
+        combine(engine.view, engine.pendingKnown, ::visibleEngineView)
             .stateIn(scope, SharingStarted.Eagerly, null)
 
     override val revision: Flow<Long> = engine.revision

@@ -155,8 +155,8 @@
     <string name="triplet_unavailable">读不到手机相册的数量——打开 App 时会再试。</string>
     <!-- UI-16 规则 H-C：两个数对不上，一律不渲染分数。刻意不复用
          triplet_unavailable——那条说的是「读不到手机相册的数量」，是另一件事。 -->
-    <string name="hero_unreconciled_title">两个数对不上，正在核对</string>
-    <string name="hero_unreconciled_body">记录里已备份的张数比选中相册现在的张数还多。照片没丢，只是两边的账还没核对过。下次这台手机连上存储电脑时会自己核对。</string>
+    <string name="hero_unreconciled_title">正在重新清点照片</string>
+    <string name="hero_unreconciled_body">备份记录里的张数比选中相册现在的张数多，手机正在按相册里现有的照片重新清点。不用连电脑，也不用等插电或 Wi-Fi，清点完这里会直接显示结果。</string>
     <string name="dog_last_success">最近成功 %1$s</string>
     <!-- T-080 缺陷(b): 从未成功备份（时间戳 0）绝不渲染 epoch 日期 -->
     <string name="last_success_never">还没有成功备份过</string>

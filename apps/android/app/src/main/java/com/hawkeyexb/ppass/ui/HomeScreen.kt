@@ -99,7 +99,9 @@ enum class HeroRender {
     Unreadable,
 
     /** H-C：两个数对不上（clamp 前的原始已确认数 > N）——不渲染任何 m/n
-     *  分数，改说「正在核对」。L0：数据不可信压过一切完成度结论。 */
+     *  分数，改说「正在重新清点」。L0：数据不可信压过一切完成度结论。
+     *  #401：新模型里只在引擎第一次算出待办之前出现（见 visibleEngineView），
+     *  由手机本地重算收敛，不靠连上电脑。 */
     Unreconciled,
 
     /** H-D：三元组，配色由规则 G 决定。 */
@@ -409,7 +411,8 @@ fun HomeScreen(
                     // UI-16 规则 H-C：账本说的已确认数多于相册里的文件数——
                     // 两个数对不上。既不编数字（clamp 出的绿色「10 / 10」），
                     // 也不藏事实（原始的「51 / 10」），第三条路是说实话：
-                    // 不渲染任何分数，非绿，出路指向对账（#139 MOB-87）。
+                    // 不渲染任何分数，非绿。#401：文案只说真实会发生的事——手机本地重算
+                    // 待办（不需要电脑、插电、Wi-Fi），算完 m ≤ n，这一格自己消失。
                     Text(
                         stringResource(R.string.hero_unreconciled_title),
                         fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Waiting,
