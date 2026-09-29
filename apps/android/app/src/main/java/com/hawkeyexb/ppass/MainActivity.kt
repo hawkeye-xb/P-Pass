@@ -33,6 +33,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -83,6 +84,7 @@ import com.hawkeyexb.ppass.backup.disableAutoBackup
 import com.hawkeyexb.ppass.backup.enableAutoBackup
 import com.hawkeyexb.ppass.backup.suspendAutoBackupUntilAuthorized
 import com.hawkeyexb.ppass.backup.restoreAutoBackupAfterRepair
+import com.hawkeyexb.ppass.backup.restoreAutoBackupAfterAuthorizationReturned
 import com.hawkeyexb.ppass.backup.BackgroundBackupState
 import com.hawkeyexb.ppass.backup.backgroundBackupStateOf
 import com.hawkeyexb.ppass.backup.triggerUserPresentBackup
@@ -404,6 +406,12 @@ fun PPassApp() {
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
                     batteryWhitelisted = backgroundAuthorization.isGranted()
+                    // #540：白名单是前提、意图是真相源。用户在系统设置里把白名单加回来，回到 App 时
+                    // 没有任何开关动作会经过这里——前提重新满足就按意图把生产者排回去。必须同步跑、
+                    // 排在 foregroundCatchup() 之前：它门控在 enabled() 上，晚一拍这次补捞就白跳过了。
+                    if (batteryWhitelisted) {
+                        restoreAutoBackupAfterAuthorizationReturned(context, backgroundAuthorized = true, source = "resume")
+                    }
 
                     daysUnreachable = computeDaysUnreachable()
                     mediaAccess = mediaAccess(context)
@@ -636,6 +644,10 @@ fun PPassApp() {
             // Explicit user intent is separate from whether Android can currently run it.
             val prefs = remember { AutoBackupPrefs(context.filesDir) }
             var userRequestedBackgroundBackup by remember { mutableStateOf(prefs.requested()) }
+            // #540：生产者此刻是否真的开着。任何线程落盘（含进程启动对账）都会推进 revision，这里跟着重读——
+            // 不在各个回调里手动刷新，漏一处就是「开关开、写着自动进行、实际 0 个任务」。
+            val autoPrefsRevision by AutoBackupPrefs.revision.collectAsState()
+            val autoBackupProducing = remember(autoPrefsRevision) { prefs.enabled() }
             var batteryRequestInFlight by remember { mutableStateOf(false) }
             val notificationPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission(),
@@ -692,6 +704,7 @@ fun PPassApp() {
             val backgroundBackupState = backgroundBackupStateOf(
                 userEnabled = userRequestedBackgroundBackup,
                 systemWhitelisted = batteryWhitelisted,
+                producerEnabled = autoBackupProducing,
                 watcherScheduled = !backupInterrupted,
                 watcherInterrupted = backupInterrupted,
             )
@@ -711,6 +724,9 @@ fun PPassApp() {
                 if (batteryWhitelisted) {
                     resumeAfterInterruption(context)
                     backupInterrupted = false
+                    // #540：中断确认之后，挂起留下的 autoEnabled=false 也要回来——否则 Worker 与
+                    // foregroundCatchup 的 enabled() 闸门仍关着，点了「恢复」等于没点。
+                    restoreAutoBackupAfterAuthorizationReturned(context, backgroundAuthorized = true, source = "resolve")
                     // UI-12: 本地重挂 WorkManager 监听，没有会失败的路径——
                     // 真正传不传得出去要等这轮 Flow 跑完，那是 Trouble 状态/
                     // SystemFailureNotifier 的地盘，这里只诚实说"已发起"。

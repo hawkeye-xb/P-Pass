@@ -267,6 +267,86 @@ fun restoreAutoBackupAfterRepair(context: Context, backgroundAuthorized: Boolean
     }
 }
 
+/**
+ * #540：授权回来之后，按留下来的意图把生产者重新排上。
+ *
+ * [suspendAutoBackupUntilAuthorized] 停生产者、留意图；白名单是**前提**，不是意图。前提在 App 外
+ * （系统设置）重新满足时，没有任何用户动作会经过「开关」——旧代码里也就没有人把 `autoEnabled`
+ * 置回 true：前台只在白名单为 false 时挂起，进程启动对账见 `!enabled()` 直接返回。结果是意图还在、
+ * 界面说「自动进行」、JobScheduler 里 0 个任务。
+ */
+enum class AuthorizationRestore {
+    /** 条件不满足（未配对 / 没有意图 / 生产者本来就开着 / 授权仍缺）——什么都不做。 */
+    NONE,
+
+    /** 意图在、授权回来了——走 [enableAutoBackup] 同一条路重新排上。 */
+    RESUMED,
+
+    /**
+     * 意图在、授权回来了，但 MOB-28 的「监听被清、等用户点恢复」还没确认：只把生产者开关置回，
+     * **不重挂**——重挂的唯一入口仍是 [resumeAfterInterruption]。
+     */
+    RESUMED_AWAITING_CONSENT,
+}
+
+/** 测试口：把 [enableAutoBackup] 里碰 WorkManager 的那一半隔出来，JVM 下能把文件 IO 真走一遍。 */
+internal fun interface AutoBackupScheduler {
+    fun schedule()
+}
+
+internal fun restoreAutoBackupIfAuthorized(
+    dir: java.io.File,
+    paired: Boolean,
+    backgroundAuthorized: Boolean,
+    awaitingUserConsent: Boolean,
+    scheduler: AutoBackupScheduler,
+): AuthorizationRestore {
+    if (!paired) return AuthorizationRestore.NONE
+    val prefs = AutoBackupPrefs(dir)
+    if (prefs.enabled()) return AuthorizationRestore.NONE
+    if (autoBackupResumeDecision(prefs.requested(), backgroundAuthorized) != AutoBackupResume.ENABLE) {
+        return AuthorizationRestore.NONE
+    }
+    if (awaitingUserConsent) {
+        prefs.setEnabled(true)
+        return AuthorizationRestore.RESUMED_AWAITING_CONSENT
+    }
+    markAutoBackupEnabled(dir)
+    scheduler.schedule()
+    return AuthorizationRestore.RESUMED
+}
+
+/**
+ * #540：前台（`ON_RESUME`）与进程启动（`reconcileWatchOnProcessStart`）共用的入口。
+ * [source] 只进日志——取证时靠它分辨是哪条路径恢复的。
+ */
+fun restoreAutoBackupAfterAuthorizationReturned(
+    context: Context,
+    backgroundAuthorized: Boolean,
+    source: String,
+): AuthorizationRestore {
+    val outcome = restoreAutoBackupIfAuthorized(
+        dir = context.filesDir,
+        paired = com.hawkeyexb.ppass.transport.PairingStore(context.filesDir).load() != null,
+        backgroundAuthorized = backgroundAuthorized,
+        awaitingUserConsent = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged,
+    ) { scheduleAutoBackup(context) }
+    when (outcome) {
+        AuthorizationRestore.RESUMED -> android.util.Log.i(
+            "PPassAutoBackup",
+            "background backup resumed source=$source: battery optimization exemption is back and the " +
+                "user still wants background backup; periodic work and media watch rescheduled",
+        )
+        AuthorizationRestore.RESUMED_AWAITING_CONSENT -> android.util.Log.i(
+            "PPassAutoBackup",
+            "background backup re-enabled source=$source: exemption is back, but the watcher was " +
+                "stopped earlier and the user has not tapped resume yet; not rescheduling (MOB-28)",
+        )
+        AuthorizationRestore.NONE -> Unit
+    }
+    return outcome
+}
+
 /** Disables future automatic producers; it never mutates the current Flow round. */
 fun disableAutoBackup(context: Context) {
     AutoBackupPrefs(context.filesDir).apply {
@@ -280,22 +360,32 @@ fun disableAutoBackup(context: Context) {
 
 /** Re-enables normal automatic producers; it never means "continue this round". */
 fun enableAutoBackup(context: Context) {
-    AutoBackupPrefs(context.filesDir).apply {
+    markAutoBackupEnabled(context.filesDir)
+    scheduleAutoBackup(context)
+}
+
+/** [enableAutoBackup] 的落盘一半（#540 抽出，供 [restoreAutoBackupIfAuthorized] 复用同一份写法）。 */
+internal fun markAutoBackupEnabled(dir: java.io.File) {
+    AutoBackupPrefs(dir).apply {
         setRequested(true)
         setEnabled(true)
     }
-    scheduleAutoBackup(context)
 }
 
 /** Keep the user's choice, but stop automatic producers until authorization returns. */
 fun suspendAutoBackupUntilAuthorized(context: Context) {
-    AutoBackupPrefs(context.filesDir).apply {
-        setRequested(true)
-        setEnabled(false)
-    }
+    markAutoBackupSuspended(context.filesDir)
     val workManager = WorkManager.getInstance(context)
     autoBackupWorkNames().forEach(workManager::cancelUniqueWork)
     cancelMediaWatch(context)
+}
+
+/** [suspendAutoBackupUntilAuthorized] 的落盘一半：留意图、停生产者（#540 抽出，测试走同一份写法）。 */
+internal fun markAutoBackupSuspended(dir: java.io.File) {
+    AutoBackupPrefs(dir).apply {
+        setRequested(true)
+        setEnabled(false)
+    }
 }
 
 /**

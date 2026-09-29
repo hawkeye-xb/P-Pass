@@ -152,6 +152,14 @@ class BackupHealthPrefs(private val dir: File) {
  */
 fun reconcileWatchOnProcessStart(context: Context, nowMs: Long, elapsedMs: Long) {
     if (PairingStore(context.filesDir).load() == null) return
+    // #540：白名单在 App 外加回、进程冷启动时，生产者还停在挂起态——下一行的早退会让它永远停着。
+    // 必须排在早退和 decideRecovery 之前：恢复路径会先把看门 job 挂上，否则「同一次开机、job 不在」
+    // 会被误判成 force-stop（ASK_USER），凭空多出一条「系统停止了后台备份」。
+    restoreAutoBackupAfterAuthorizationReturned(
+        context,
+        com.hawkeyexb.ppass.battery.AndroidBackgroundAuthorizationAdapter(context).isGranted(),
+        "process_start",
+    )
     if (!AutoBackupPrefs(context.filesDir).enabled()) return
 
     val prefs = BackupHealthPrefs(context.filesDir)
