@@ -1088,18 +1088,13 @@ impl IpcServer {
                                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
                             );
                         };
-                        match query.thumb(&t).await {
-                            Ok(bytes) => {
-                                use base64::Engine as _;
-                                let data = proto::ThumbData {
-                                    jpeg_base64: base64::engine::general_purpose::STANDARD
-                                        .encode(bytes),
-                                };
-                                match serde_json::to_value(&data) {
-                                    Ok(v) => Resp::ok(id, v),
-                                    Err(_) => internal(id),
-                                }
-                            }
+                        // DESK-34 (#428): carries `placeholder` / `retry_after_ms`
+                        // so PhotoThumb can re-fetch a placeholder once.
+                        match query.thumb_reply(&t).await {
+                            Ok(reply) => match serde_json::to_value(reply.into_wire()) {
+                                Ok(v) => Resp::ok(id, v),
+                                Err(_) => internal(id),
+                            },
                             Err(_) => Resp::err(
                                 id,
                                 RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),

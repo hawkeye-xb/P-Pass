@@ -328,6 +328,24 @@ pub struct ThumbGet {
 #[serde(default)]
 pub struct ThumbData {
     pub jpeg_base64: String,
+    /// DESK-34 (#428): `true` when `jpeg_base64` is the daemon's built-in
+    /// placeholder, not the asset's pixels — the caller must not treat it
+    /// as final. Skipped when `false`, so a real-thumb frame is byte-for-byte
+    /// what it was before this field existed (old clients: unknown key only
+    /// on placeholder answers; Android's `ProtoJson` ignores unknown keys).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub placeholder: bool,
+    /// DESK-34 (#428): with `placeholder`, how long until asking again can
+    /// give a different answer — the remaining negative-cache window, or the
+    /// generation budget while a slow generation is still running. `0`
+    /// (skipped) means "no point retrying" (unknown asset / bad hash) or,
+    /// with `placeholder = false`, nothing to retry.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub retry_after_ms: u64,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
 }
 
 // ── Blob transfer ───────────────────────────────────

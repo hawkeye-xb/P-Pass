@@ -1,0 +1,9 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "jpeg_base64": "/9j/4AAQ",
+  "placeholder": true,
+  "retry_after_ms": 600000
+}

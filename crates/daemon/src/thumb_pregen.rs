@@ -211,7 +211,7 @@ impl Worker {
         let tx = match engine.gate.plan(&hash, engine.budget, engine.retry_after) {
             Plan::Spawn { tx, .. } => tx,
             // Someone is generating it, or it failed recently: not ours.
-            Plan::Wait { .. } | Plan::Placeholder => return,
+            Plan::Wait { .. } | Plan::Placeholder { .. } => return,
         };
         // A `thumb.get` may have finished this hash between the check above
         // and the reservation — do not generate it a second time.
