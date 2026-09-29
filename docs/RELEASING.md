@@ -81,14 +81,30 @@ default** (family devices are never touched by test builds):
 - **test** (dev/dogfood devices): CI auto-publishes any tag containing
   `-test.` as a **GitHub prerelease** (release.yml; GitHub `latest`
   ignores prereleases by design, so it can never leak into stable).
-  Clients on the test channel fetch
-  `https://update.p-pass.hawkeye-xb.com/manifest?channel=test` — a
-  Cloudflare Worker (`infra/workers/update`) that resolves the latest
-  prerelease's manifest and caches it 300s. Clients never call the
-  GitHub API directly (unauthenticated limit 60/h/IP). Worker deployment
+  **Test-channel pointer (REL-07):** after a test release is
+  auto-published, release.yml overwrites
+  `releases/download/test-channel/manifest.json` — a fixed, rolling
+  prerelease tagged `test-channel` (created on the first test release,
+  marked prerelease, never latest; do not delete it) — with that
+  release's signed manifest. Download URLs inside still point at the
+  versioned release. Re-running an older tag's workflow never moves the
+  pointer backwards. Nothing calls the GitHub API, so there is no
+  anonymous rate limit and no `GH_TOKEN` to manage.
+  Android reads that file directly. The desktop shell and older Android
+  builds read `https://update.p-pass.hawkeye-xb.com/manifest?channel=test`
+  — the Cloudflare Worker (`infra/workers/update`), now a thin proxy of
+  the same file (300s cache, adds `Access-Control-Allow-Origin`, which the
+  desktop webview needs and GitHub downloads lack). Worker deployment
   config lives in ppf-ops; DNS: `update.p-pass.hawkeye-xb.com`.
 - **404 semantics unchanged**: a test tag left as draft (not published)
   → no prerelease → Worker 404 → clients stay silent ("no update").
+  (A draft tag never reaches the pointer step.) Before the very first
+  test release after REL-07, `test-channel` does not exist → the file
+  404s → Worker 404 → same silent "no update". Worker 404 means *only*
+  that upstream said 404; any other upstream failure (5xx, 403/429,
+  network) → **502** (with `Retry-After` when upstream sent one),
+  `no-store`, never cached. Clients log 5xx as a *failed check*, not
+  "up to date".
 - Desktop note: tauri updater's endpoint is baked at build time and
   `Update` has no public constructor, so the test-channel **install**
   path on desktop is currently "check → dialog → open download page"
@@ -113,8 +129,10 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   nightly + tag gate.
 - `ci-android.yml` — `apps/android/** assets/i18n/**` → unit tests + APK.
 - `ci-desktop.yml` — `apps/desktop/** assets/**` → src-tauri lib tests + vite build.
-- `ci-workers.yml` — `infra/workers/**` → wrangler deploy (gated on
-  `CLOUDFLARE_API_TOKEN`; skipped cleanly when absent).
+- `ci-workers.yml` — `infra/workers/**` → `test` job (update Worker
+  `node --test`, also on PRs) → wrangler deploy (push/dispatch only,
+  behind the `workers-prod` approval gate; gated on
+  `CLOUDFLARE_API_TOKEN`, skipped cleanly when absent).
 - Every workflow has `concurrency: cancel-in-progress`.
 - `release.yml` gained a `platforms` dispatch input (`android`/`macos`/
   `windows` comma list; empty = all). Tag pushes always build everything.
@@ -188,14 +206,27 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   publish 就是验收后的发布动作**。
 - **test**（开发/狗粮设备）：CI 把含 `-test.` 的 tag 自动 publish 为
   **GitHub prerelease**（release.yml；GitHub latest 设计上忽略
-  prerelease，绝不会漏进 stable）。test 通道客户端 fetch
-  `https://update.p-pass.hawkeye-xb.com/manifest?channel=test`——这是
-  Cloudflare Worker（`infra/workers/update`），Worker 端解析最新
-  prerelease 的 manifest 并缓存 300s。客户端不直连 GitHub API（未认证
-  限流 60 次/小时/IP）。Worker 生产配置在 ppf-ops；DNS：
+  prerelease，绝不会漏进 stable）。
+  **test 通道指针（REL-07）**：test release 自动 publish 之后，
+  release.yml 把该版本已签名的 manifest 覆盖进
+  `releases/download/test-channel/manifest.json`——固定的滚动
+  prerelease（tag `test-channel`，首次 test 发布时自动创建，标记
+  prerelease、永不是 latest，勿删）。manifest 里的下载链接仍指向版本化
+  release。重跑旧 tag 的 workflow 不会把指针往回拨。全程不调 GitHub
+  API → 没有匿名限流，也没有 `GH_TOKEN` 要管。
+  Android 直读这个文件；桌面壳和旧版 Android 读
+  `https://update.p-pass.hawkeye-xb.com/manifest?channel=test`——Cloudflare
+  Worker（`infra/workers/update`），现在只是同一文件的薄代理（缓存 300s，
+  补上桌面 webview 需要、GitHub 下载链接没有的
+  `Access-Control-Allow-Origin`）。Worker 生产配置在 ppf-ops；DNS：
   `update.p-pass.hawkeye-xb.com`。
 - **404 语义不变**：test tag 留 draft 不 publish → 无 prerelease →
-  Worker 404 → 客户端静默（「无更新」）。
+  Worker 404 → 客户端静默（「无更新」）（draft 走不到指针那一步）。
+  REL-07 合入后、第一次 test 发布之前，`test-channel` 还不存在 → 文件
+  404 → Worker 404 → 同样静默无更新。Worker 的 404 **只**表示上游答
+  404；其它上游故障（5xx、403/429、网络异常）→ **502**（上游给了
+  `Retry-After` 就透传），`no-store`，绝不缓存。客户端把 5xx 记为「检查
+  失败」，不当「已是最新」。
 - 桌面注：tauri updater endpoint 构建期写死、`Update` 无公开构造器，
   test 通道**安装**路径当前形态是「检查 → 弹窗 → 打开下载页」（壳内
   fetch Worker manifest + plugin-opener）。test 通道全自动安装需要重写
@@ -217,8 +248,9 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   nightly + tag 门禁。
 - `ci-android.yml`（apps/android/** assets/i18n/**）→ 单测 + APK。
 - `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + vite build。
-- `ci-workers.yml`（infra/workers/**）→ wrangler deploy（CLOUDFLARE_API_TOKEN
-  门控，缺 secret 干净跳过）。
+- `ci-workers.yml`（infra/workers/**）→ `test` job（update Worker
+  `node --test`，PR 上也跑）→ wrangler deploy（仅 push/dispatch，停在
+  `workers-prod` 审批门；CLOUDFLARE_API_TOKEN 门控，缺 secret 干净跳过）。
 - 每个 workflow 带 `concurrency: cancel-in-progress`（连续 push 取消旧 run）。
 - release.yml 加 `platforms` dispatch 输入（android/macos/windows 逗号
   组合，留空=all）；tag push 恒全量（发布完整性不许分块）。

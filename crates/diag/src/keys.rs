@@ -130,6 +130,9 @@ msg_keys! {
     UI_UPDATE_AVAILABLE => "ui.update_available",
     UI_UPDATE_INSTALLED => "ui.update_installed",
     UI_UPDATE_FAILED => "ui.update_failed",
+    /// REL-07: the update *check* itself failed (upstream 5xx / network) —
+    /// distinct from "no new version".
+    UI_UPDATE_CHECK_FAILED => "ui.update_check_failed",
     // W1 (2026-08-26): the Windows-specific "a background process still
     // holds the file" failure mode of the update flow — see App.svelte
     // checkForUpdate()'s pause_daemon_for_update/resume_daemon_after_update
@@ -451,6 +454,7 @@ mod tests {
             UI_UPDATE_AVAILABLE,
             UI_UPDATE_INSTALLED,
             UI_UPDATE_FAILED,
+            UI_UPDATE_CHECK_FAILED,
             UI_UPDATE_FAILED_FILE_LOCKED,
             UI_RESTART_SERVICE,
             UI_RESTART_SERVICE_BTN,
@@ -661,7 +665,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 279);
+        assert_eq!(ALL.len(), 280);
     }
 
     #[test]

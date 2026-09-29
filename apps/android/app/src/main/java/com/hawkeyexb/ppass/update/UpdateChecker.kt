@@ -44,23 +44,23 @@ data class UpdateInfo(
 private const val MANIFEST_URL =
     "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json"
 
-// REL-02 test 通道：Cloudflare Worker 代理（infra/workers/update）——
-// 「最新 prerelease 的 manifest」解析在 Worker 端（GitHub API 未认证
-// 限流 60/h/IP，客户端直连迟早撞墙）；客户端只 fetch 静态 URL，命中
-// Worker 缓存（300s）不碰 GitHub。路由/DNS 配置在 ppf-ops（隔离方案 §2）。
-private const val WORKER_TEST_URL =
-    "https://update.p-pass.hawkeye-xb.com/manifest?channel=test"
+// REL-07 test 通道：固定的滚动 prerelease `test-channel` 里的 manifest.json
+// ——release.yml 每次 test 发布后用已签名的 manifest 覆盖它。静态文件下载，
+// 不调 GitHub API（没有匿名限流）。REL-02 时代的 Worker
+// （update.p-pass.hawkeye-xb.com/manifest?channel=test）留作旧构建兼容层。
+private const val TEST_CHANNEL_URL =
+    "https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest.json"
 
 private val json = Json { ignoreUnknownKeys = true }
 
 /**
  * REL-02: 通道 → manifest URL（纯函数，JVM 可测）。
  * 反证红线：stable 必须恒等于 GitHub latest 原 URL（卡面「不准动」——
- * 改动此 URL 本测试必红）；test 走 Worker 静态 URL。
+ * 改动此 URL 本测试必红）；test 走滚动 prerelease 的静态文件（REL-07）。
  */
 fun channelManifestUrl(channel: UpdateChannel): String = when (channel) {
     UpdateChannel.Stable -> MANIFEST_URL
-    UpdateChannel.Test -> WORKER_TEST_URL
+    UpdateChannel.Test -> TEST_CHANNEL_URL
 }
 
 /** SemVer 三段数字比较：candidate 严格大于 current 才算更新。 */
@@ -118,7 +118,7 @@ fun parseUpdateManifest(body: String, currentVersion: String): UpdateInfo? {
 /**
  * 拉取并解析 manifest；无更新/不可达返回 null（静默，绝不打断启动）。
  * REL-02: 按通道取源——stable = GitHub latest（原 URL 语义不动）；
- * test = GitHub API 最新 prerelease 的 manifest 资产。
+ * test = 滚动 prerelease `test-channel` 的 manifest 资产（REL-07）。
  */
 suspend fun fetchUpdate(currentVersion: String, channel: UpdateChannel = UpdateChannel.Stable): UpdateInfo? =
     withContext(Dispatchers.IO) {
@@ -130,7 +130,24 @@ suspend fun fetchUpdate(currentVersion: String, channel: UpdateChannel = UpdateC
         }
     }
 
-/** GET 文本；非 200 / 网络失败返回 null。 */
+/**
+ * REL-07: manifest 拉取的 HTTP 结果分类（纯函数，JVM 可测）。
+ * 404 = 真的没有可用 release（指针/正式 release 尚不存在）；
+ * 其它非 200（5xx、403/429 限流等）= 检查失败，
+ * **不是**「已是最新」——UX 上仍静默（不打断启动），但日志必须分得开。
+ */
+enum class ManifestFetchOutcome { Ok, NoRelease, CheckFailed }
+
+fun classifyManifestStatus(code: Int): ManifestFetchOutcome = when (code) {
+    200 -> ManifestFetchOutcome.Ok
+    404 -> ManifestFetchOutcome.NoRelease
+    else -> ManifestFetchOutcome.CheckFailed
+}
+
+// 诊断：`adb logcat -s PPassUpdate`（鸿蒙真机需先 `adb shell setprop log.tag.PPassUpdate V`）。
+private const val LOG_TAG = "PPassUpdate"
+
+/** GET 文本；非 200 / 网络失败返回 null（REL-07：按 classifyManifestStatus 分级打日志）。 */
 private fun httpGet(url: String): String? = try {
     val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
     conn.connectTimeout = 8_000
@@ -138,9 +155,27 @@ private fun httpGet(url: String): String? = try {
     conn.requestMethod = "GET"
     // GitHub API 要 User-Agent（无 UA 403）。
     conn.setRequestProperty("User-Agent", "P-Pass-UpdateChecker")
-    if (conn.responseCode != 200) null
-    else conn.inputStream.bufferedReader().use { it.readText() }
-} catch (_: Exception) {
+    val code = conn.responseCode
+    when (classifyManifestStatus(code)) {
+        ManifestFetchOutcome.Ok -> conn.inputStream.bufferedReader().use { it.readText() }
+        ManifestFetchOutcome.NoRelease -> {
+            android.util.Log.i(LOG_TAG, "no release at $url (HTTP 404) — no update")
+            null
+        }
+        ManifestFetchOutcome.CheckFailed -> {
+            val detail = runCatching {
+                conn.errorStream?.bufferedReader()?.use { it.readText().take(200) }
+            }.getOrNull()
+            val retryAfter = conn.getHeaderField("Retry-After")
+            android.util.Log.w(
+                LOG_TAG,
+                "update check FAILED at $url: HTTP $code retry-after=$retryAfter body=$detail",
+            )
+            null
+        }
+    }
+} catch (e: Exception) {
+    android.util.Log.w(LOG_TAG, "update check FAILED at $url: $e")
     null
 }
 

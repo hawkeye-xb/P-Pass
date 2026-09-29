@@ -17,16 +17,23 @@ loop + release pipeline land with T-071.
 本目录现在是 **Cloudflare Worker**（`src/index.ts` + `wrangler.toml` 占位，
 生产配置在 ppf-ops，隔离方案 §2）：
 
-- `GET /manifest?channel=test` — 最新 **prerelease** 的 manifest.json
-  （Worker 端调 GitHub API 解析最新 prerelease tag；客户端不直连 GitHub
-  API——未认证限流 60 次/小时/IP）。
+- `GET /manifest?channel=test` — 滚动 prerelease `test-channel` 的
+  manifest.json（REL-07 起为静态文件代理，不调 GitHub API）。
 - `GET /manifest?channel=stable` — 代理 GitHub latest 的 manifest.json
   （仅供测试对照；**stable 客户端保持直连 GitHub 原 URL，一个字节不动**）。
 
 特性：按 channel 缓存 300s（Cache API，客户端命中不碰 GitHub）；manifest
-字节原样透传（签名随字节不变，客户端验签零改动）；可选 secret `GH_TOKEN`
-提升 GitHub API 限额。反证：test 通道包留 draft 不 publish → Worker 404 →
-客户端静默无更新。
+字节原样透传（签名随字节不变，客户端验签零改动）。反证：test 通道包留
+draft 不 publish → 指针不动 → 客户端看不到。
+
+REL-07：test 通道不再调 GitHub API（匿名限流 60/h/IP 曾被报成「没有 test
+release」）。release.yml 每次 test 发布后把已签名 manifest 覆盖进滚动
+prerelease `test-channel`，Worker 只下载
+`releases/download/test-channel/manifest.json`，不需要 `GH_TOKEN`。错误
+语义：上游 404 → 404 `no test release`；其它非 2xx / 网络异常 → 502；错误
+`no-store`、不写缓存。本 Worker 现为旧版客户端与桌面壳（需要 CORS）的兼容
+层，退役条件见 `src/index.ts` 头注释。单测：`just workers-update-test`
+（`test/index.test.mjs`，node:test + fetch/caches mock，零依赖）。
 
 部署：`wrangler deploy`（需 CF 账号，生产配置在 ppf-ops）；DNS 建议
 `update.p-pass.hawkeye-xb.com` → 本 worker。

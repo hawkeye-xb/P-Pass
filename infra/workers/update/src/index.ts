@@ -1,20 +1,36 @@
 // REL-02: 更新通道代理（Cloudflare Worker）——test 通道的 manifest 源。
 //
-// 为什么客户端不直接打 GitHub API：未认证限流 60 次/小时/IP，客户端
-// （Android/桌面壳）直连迟早撞墙。解析「最新 prerelease」的逻辑放
-// Worker 端，客户端只 fetch 一个静态 URL（自己域名，无限流）。
-//
-//   GET /manifest?channel=test    → 最新 prerelease 的 manifest.json
+//   GET /manifest?channel=test    → 滚动 prerelease `test-channel` 的 manifest.json
 //   GET /manifest?channel=stable  → 代理 GitHub latest 的 manifest.json
 //                                    （仅测试对照用；stable 客户端保持
 //                                    直连 GitHub 原 URL，一个字节不动）
 //
-// 反证（卡面）：test 通道包故意不 publish（留 draft）→ Worker 在 GitHub
-// API 里找不到 prerelease → 404 → 客户端静默无更新。
+// REL-07：test 通道不再调 GitHub API。release.yml 每次 test 发布后把
+// 已签名的 manifest.json 覆盖进固定的滚动 prerelease `test-channel`；本
+// Worker 只下载这一个静态文件——没有 API 匿名限流（60/h/IP），也不需要
+// GH_TOKEN。此前 latestPrereleaseTag() 在 API 限流（403/429）时返回 null，
+// 被报成 404「没有 test release」，客户端静默当作无更新。
 //
-// 缓存：按 channel 缓存 300s（Cache API）——客户端命中不碰 GitHub；
-// GitHub API 每 5 分钟最多打一次/边缘节点，限额绰绰有余。可选 secret
-// GH_TOKEN（ppf-ops 生产配置里给）把限额从 60/h 提到 5000/h。
+// 现在的角色：**旧版客户端兼容层**。新版 Android 直读
+// releases/download/test-channel/manifest.json；桌面壳仍经本 Worker
+// （webview 跨域 fetch 需要 Access-Control-Allow-Origin，GitHub 下载
+// 链接不带）。退役条件：桌面壳改走原生 HTTP（或不再需要 CORS），且指向
+// 本 Worker 的旧 Android 构建已全部升级。
+//
+// 响应语义：
+//   200 — manifest 字节原样透传（签名随字节不变，客户端验签零改动）。
+//   404 {"error":"no test release"} — 上游明确 404：test-channel 指针还不存在
+//         （首次 test 发布前），或 test tag 留 draft 未 publish（指针不动）。
+//   502 {"error":"upstream manifest <status>"|"upstream manifest fetch failed: …"}
+//         — 其它非 2xx / 网络异常；上游给了 Retry-After 就透传。
+//   错误响应一律 Cache-Control: no-store，绝不写进 Cache API。
+//
+// 缓存：成功响应按 channel 缓存 300s（Cache API），客户端命中不碰上游。
+const REPO = "hawkeye-xb/P-Pass";
+const TEST_CHANNEL_MANIFEST_URL = `https://github.com/${REPO}/releases/download/test-channel/manifest.json`;
+const STABLE_MANIFEST_URL = `https://github.com/${REPO}/releases/latest/download/manifest.json`;
+const FRESH_TTL_S = 300;
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -31,29 +47,32 @@ export default {
     const cached = await caches.default.match(cacheKey);
     if (cached) return cached;
 
-    let manifestUrl;
-    if (channel === "test") {
-      const tag = await latestPrereleaseTag(env);
-      if (!tag) return json({ error: "no test release" }, 404);
-      manifestUrl = `https://github.com/hawkeye-xb/P-Pass/releases/download/${tag}/manifest.json`;
-    } else {
-      manifestUrl =
-        "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json";
+    const manifestUrl = channel === "test" ? TEST_CHANNEL_MANIFEST_URL : STABLE_MANIFEST_URL;
+    let upstream;
+    try {
+      upstream = await fetch(manifestUrl, {
+        headers: { "User-Agent": "ppass-update-worker" },
+        redirect: "follow",
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return json({ error: `upstream manifest fetch failed: ${msg}` }, 502);
+    }
+    if (!upstream.ok) {
+      if (channel === "test" && upstream.status === 404) {
+        return json({ error: "no test release" }, 404);
+      }
+      const extra = {};
+      const ra = upstream.headers.get("retry-after");
+      if (ra) extra["Retry-After"] = ra;
+      return json({ error: `upstream manifest ${upstream.status}` }, 502, extra);
     }
 
-    const upstream = await fetch(manifestUrl, {
-      headers: { "User-Agent": "ppass-update-worker" },
-      redirect: "follow",
-    });
-    if (!upstream.ok) return json({ error: `upstream ${upstream.status}` }, 502);
-
-    // 原样透传 manifest 字节——签名（tauri signer，manifest 内嵌 per-artifact
-    // signature）随字节不变，客户端验签逻辑一根手指都不用动。
-    const body = await upstream.arrayBuffer();
-    const out = new Response(body, {
+    const out = new Response(await upstream.arrayBuffer(), {
       headers: {
         "Content-Type": "application/json",
-        "Cache-Control": "public, max-age=300",
+        "Cache-Control": `public, max-age=${FRESH_TTL_S}`,
+        ...CORS,
       },
     });
     ctx.waitUntil(caches.default.put(cacheKey, out.clone()));
@@ -61,23 +80,13 @@ export default {
   },
 };
 
-/** GitHub API 里找最新 prerelease 的 tag；没有（留 draft/未 publish）→ null。 */
-async function latestPrereleaseTag(env) {
-  const headers = { "User-Agent": "ppass-update-worker" };
-  if (env.GH_TOKEN) headers.Authorization = `Bearer ${env.GH_TOKEN}`;
-  const resp = await fetch(
-    "https://api.github.com/repos/hawkeye-xb/P-Pass/releases?per_page=10",
-    { headers },
-  );
-  if (!resp.ok) return null;
-  const releases = await resp.json();
-  const pre = releases.find((r) => r.prerelease === true);
-  return pre?.tag_name ?? null;
-}
+// 桌面壳（Tauri webview）跨域 fetch 本 Worker：不带 ACAO 时 fetch 直接
+// reject，连状态码都读不到。内容是公开 JSON，放开 * 无风险。
+const CORS = { "Access-Control-Allow-Origin": "*" };
 
-function json(obj, status) {
+function json(obj, status, extra = {}) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...CORS, ...extra },
   });
 }

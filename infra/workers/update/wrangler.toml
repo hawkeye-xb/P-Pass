@@ -10,6 +10,5 @@ compatibility_date = "2026-07-31"
 # account_id = "<your-account-id>"   # needed only for `wrangler deploy`
 # workers_dev = false                # put it behind your own route/domain
 
-# 可选：提升 GitHub API 限额（60/h → 5000/h）。用 secret 存，别写进 toml：
-#   npx wrangler secret put GH_TOKEN
-# vars = { GH_TOKEN = "" }
+# REL-07：Worker 不再调 GitHub API（test 通道读滚动 prerelease
+# test-channel 的静态文件），不需要 GH_TOKEN 或任何 secret。

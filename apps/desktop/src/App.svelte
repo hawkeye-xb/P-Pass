@@ -2,6 +2,7 @@
   import { reconcilePhotoWall } from "./photoWall.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
   import { shouldShowWizard, serviceCameBack } from "./serviceGate.js";
+  import { testManifestOutcome } from "./lib/updateCheck.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
@@ -835,8 +836,11 @@
   // T-081: 设置页「检查更新」手动入口复用同一函数（manual=true 时
   // 「已是最新」也给一句反馈，不再沉默）。
   // REL-02: test 通道的 manifest 源——Cloudflare Worker 代理
-  // （infra/workers/update；GitHub API 未认证限流 60/h/IP，客户端不
-  // 直连；解析最新 prerelease 在 Worker 端，命中 300s 缓存）。
+  // （infra/workers/update，命中 300s 缓存）。REL-07：Worker 现在只读
+  // 滚动 prerelease `test-channel` 的静态文件，不再调 GitHub API。桌面壳
+  // 不像 Android 那样直读 GitHub 下载链接：webview 的 fetch 受 CORS 约束，
+  // GitHub 下载链接（302 → release-assets）不带 Access-Control-Allow-Origin，
+  // Worker 带。
   const WORKER_TEST_URL = "https://update.p-pass.hawkeye-xb.com/manifest?channel=test";
 
   // SemVer 三段比较（与 Android UpdateChecker.isNewer 同语义）。
@@ -923,8 +927,16 @@
   async function checkTestChannel(manual) {
     try {
       const resp = await fetch(WORKER_TEST_URL);
-      if (!resp.ok) {
+      const outcome = testManifestOutcome(resp.status);
+      if (outcome === "none") {
         if (manual) flashMessage(t("ui.no_update"), "warning");
+        return;
+      }
+      if (outcome === "failed") {
+        // REL-07: 上游故障 ≠ 已是最新——日志里留状态码，手动检查如实说失败。
+        const body = await resp.text().catch(() => "");
+        console.warn(`[updater] test channel check failed: HTTP ${resp.status} ${body.slice(0, 200)}`);
+        if (manual) flashMessage(t("ui.update_check_failed", { err: `HTTP ${resp.status}` }), "error");
         return;
       }
       const m = await resp.json();
@@ -945,8 +957,8 @@
         entry?.url || `https://github.com/hawkeye-xb/P-Pass/releases/tag/v${m.version}`;
       await openUrl(url);
     } catch (e) {
-      console.warn("[updater] test channel check failed (silent):", e);
-      if (manual) flashMessage(t("ui.no_update"), "warning");
+      console.warn("[updater] test channel check failed:", e);
+      if (manual) flashMessage(t("ui.update_check_failed", { err: errText(e) }), "error");
     }
   }
 
