@@ -180,34 +180,213 @@ private fun httpGet(url: String): String? = try {
 }
 
 /**
+ * NET-09: APK 下载的结果分类。原实现 `catch (_: Exception) false` 把所有
+ * 失败压成一个 false，日志里分不出「服务器不回字节」「HTTP 非 200」「根本
+ * 没连上」。这里按**失败发生的阶段**分类，而不是按异常类型猜：
+ * `SocketTimeoutException` 在 connect 阶段是 connectTimeout（连不上），在
+ * 等响应头 / 读 body 阶段是 readTimeout（字节停滞）——同一个异常类，两种事实。
+ */
+sealed interface ApkDownloadResult {
+    /** 下载完整落盘（[downloadApk] 的成功值；[downloadAndInstall] 成功时也返回它）。 */
+    data class Ok(val bytes: Long) : ApkDownloadResult
+
+    /** 已建立连接，但连续 [readTimeoutMs] 毫秒没有新字节（readTimeout 触发）。 */
+    data class Stalled(
+        val phase: Phase,
+        val receivedBytes: Long,
+        val readTimeoutMs: Int,
+    ) : ApkDownloadResult
+
+    /** 服务器回了响应，但最终（跟随重定向后）的状态码不是 200。 */
+    data class HttpStatus(val code: Int) : ApkDownloadResult
+
+    /**
+     * 连接层失败（readTimeout 之外的网络错误）：在 [Phase.Connect] 是连接
+     * 拒绝 / DNS / TLS 握手 / connectTimeout；在其它阶段是中途断开或 body
+     * 比 Content-Length 短。
+     */
+    data class ConnectionFailed(
+        val phase: Phase,
+        val receivedBytes: Long,
+        val cause: String,
+    ) : ApkDownloadResult
+
+    /** 本机写盘失败——不是网络问题，不能混进上面三类。 */
+    data class LocalWriteFailed(val receivedBytes: Long, val cause: String) : ApkDownloadResult
+
+    /**
+     * 不属于上面任何一类的运行时异常（URL 不是 http、缺权限等）。单列出来，
+     * 既不让它崩掉调用方的协程，也不把它冒充成网络失败。
+     */
+    data class Unexpected(val phase: Phase, val cause: String) : ApkDownloadResult
+
+    /** 下载成功，但交给系统安装器这一步失败（FileProvider / startActivity）。 */
+    data class InstallLaunchFailed(val bytes: Long, val cause: String) : ApkDownloadResult
+
+    enum class Phase { Connect, Headers, Body }
+}
+
+/** 日志用的一行描述（纯函数，JVM 可测）：类别名 + 关键数字，不带 URL 以外的隐私。 */
+fun ApkDownloadResult.logLine(url: String): String = when (this) {
+    is ApkDownloadResult.Ok -> "apk download OK at $url: $bytes bytes"
+    is ApkDownloadResult.Stalled ->
+        "apk download STALLED at $url: no bytes for ${readTimeoutMs}ms " +
+            "during ${phase.name.lowercase()} (received $receivedBytes bytes)"
+    is ApkDownloadResult.HttpStatus -> "apk download FAILED at $url: HTTP $code"
+    is ApkDownloadResult.ConnectionFailed ->
+        "apk download CONNECTION FAILED at $url during ${phase.name.lowercase()} " +
+            "(received $receivedBytes bytes): $cause"
+    is ApkDownloadResult.LocalWriteFailed ->
+        "apk download LOCAL WRITE FAILED for $url (received $receivedBytes bytes): $cause"
+    is ApkDownloadResult.Unexpected ->
+        "apk download UNEXPECTED ERROR at $url during ${phase.name.lowercase()}: $cause"
+    is ApkDownloadResult.InstallLaunchFailed ->
+        "apk downloaded ($bytes bytes) but installer launch FAILED for $url: $cause"
+}
+
+// APK 走 HTTPS（GitHub release 资产 → 302 → CDN），不经 iroh relay，没有
+// NET-09 下载原图那条 60s 取值依据里的「relay 恢复空窗」。readTimeout 本身是
+// per-read，即「连续 N 秒零新字节」的停滞语义，所以沿用原有 30s，只把分类做对。
+internal const val APK_CONNECT_TIMEOUT_MS = 15_000
+internal const val APK_READ_TIMEOUT_MS = 30_000
+private const val APK_COPY_BUFFER = 64 * 1024
+
+/**
+ * NET-09: 下载 [url] 到 [dest] 并分类失败（不含安装；JVM 用假连接可测）。
+ * [open] 只负责造出未连接的 HttpURLConnection；超时由本函数设置
+ * （[readTimeoutMs] 只为测试缩短，生产恒用默认值）。
+ * 任何失败都会删掉 [dest] 的残包，不留半个 APK 给下次误装。
+ */
+fun downloadApk(
+    url: String,
+    dest: File,
+    open: (String) -> java.net.HttpURLConnection = {
+        java.net.URL(it).openConnection() as java.net.HttpURLConnection
+    },
+    readTimeoutMs: Int = APK_READ_TIMEOUT_MS,
+): ApkDownloadResult {
+    val conn = try {
+        open(url)
+    } catch (e: java.io.IOException) {
+        return ApkDownloadResult.ConnectionFailed(ApkDownloadResult.Phase.Connect, 0, e.toString())
+    } catch (e: RuntimeException) {
+        return ApkDownloadResult.Unexpected(ApkDownloadResult.Phase.Connect, e.toString())
+    }
+    conn.connectTimeout = APK_CONNECT_TIMEOUT_MS
+    conn.readTimeout = readTimeoutMs
+    var phase = ApkDownloadResult.Phase.Connect
+    var received = 0L
+    val result = try {
+        // 显式 connect：DNS / 拒绝 / TLS 握手 / connectTimeout 都在这一步抛，
+        // 与之后的 readTimeout 分开。
+        conn.connect()
+        phase = ApkDownloadResult.Phase.Headers
+        // 先看状态码再碰 inputStream：非 2xx 时 inputStream 会直接抛 IOException，
+        // 那样 HTTP 404/5xx 就会被误记成网络失败。
+        val code = conn.responseCode
+        if (code != 200) {
+            ApkDownloadResult.HttpStatus(code)
+        } else {
+            phase = ApkDownloadResult.Phase.Body
+            val expected = conn.contentLengthLong
+            copyBody(conn.inputStream, dest) { received = it }
+                ?: if (expected >= 0 && received != expected) {
+                    ApkDownloadResult.ConnectionFailed(
+                        phase, received, "body ended early: $received of $expected bytes",
+                    )
+                } else {
+                    ApkDownloadResult.Ok(received)
+                }
+        }
+    } catch (e: java.net.SocketTimeoutException) {
+        if (phase == ApkDownloadResult.Phase.Connect) {
+            ApkDownloadResult.ConnectionFailed(phase, received, e.toString())
+        } else {
+            ApkDownloadResult.Stalled(phase, received, conn.readTimeout)
+        }
+    } catch (e: java.io.IOException) {
+        ApkDownloadResult.ConnectionFailed(phase, received, e.toString())
+    } catch (e: RuntimeException) {
+        ApkDownloadResult.Unexpected(phase, e.toString())
+    } finally {
+        runCatching { conn.disconnect() }
+    }
+    if (result !is ApkDownloadResult.Ok) dest.delete()
+    return result
+}
+
+/**
+ * 把 body 抄进 [dest]。网络读的异常原样抛给 [downloadApk] 分类；写盘失败在这里
+ * 就地转成 [ApkDownloadResult.LocalWriteFailed]（返回非 null）。正常读完返回 null。
+ */
+private fun copyBody(
+    input: java.io.InputStream,
+    dest: File,
+    onProgress: (Long) -> Unit,
+): ApkDownloadResult? {
+    var received = 0L
+    val output = try {
+        dest.outputStream()
+    } catch (e: java.io.IOException) {
+        input.close()
+        return ApkDownloadResult.LocalWriteFailed(0, e.toString())
+    }
+    input.use {
+        output.use { out ->
+            val buf = ByteArray(APK_COPY_BUFFER)
+            while (true) {
+                val n = input.read(buf) // 网络：异常交给调用方分类
+                if (n < 0) break
+                try {
+                    out.write(buf, 0, n)
+                } catch (e: java.io.IOException) {
+                    return ApkDownloadResult.LocalWriteFailed(received, e.toString())
+                }
+                received += n
+                onProgress(received)
+            }
+        }
+    }
+    return null
+}
+
+/**
  * 下载 APK → FileProvider → 系统安装器（PackageInstaller 强制同签名校验
  * 兜底）。UPD-01 返工：原实现是普通 fun 在主线程同步下载——Android 直接
  * 抛 NetworkOnMainThreadException，异常被 catch 吞掉，「下载安装」点了
  * 没反应。改为 suspend + Dispatchers.IO。
+ *
+ * NET-09: 返回分类后的结果，并在 `PPassUpdate` 如实记一行类别与关键数字。
+ * 调用方目前不向用户展示失败（对话框照旧关闭），这一点没有变。
  */
-suspend fun downloadAndInstall(context: Context, url: String): Boolean =
+suspend fun downloadAndInstall(context: Context, url: String): ApkDownloadResult =
     withContext(Dispatchers.IO) {
-        try {
-            val apk = File(context.cacheDir, "ppass-update.apk")
-            val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
-            conn.connectTimeout = 15_000
-            conn.readTimeout = 30_000
-            conn.inputStream.use { input ->
-                apk.outputStream().use { output -> input.copyTo(output) }
+        val apk = File(context.cacheDir, "ppass-update.apk")
+        val downloaded = downloadApk(url, apk)
+        val result = if (downloaded !is ApkDownloadResult.Ok) {
+            downloaded
+        } else {
+            try {
+                val uri: Uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.fileprovider",
+                    apk,
+                )
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+                downloaded
+            } catch (e: Exception) {
+                ApkDownloadResult.InstallLaunchFailed(downloaded.bytes, e.toString())
             }
-            val uri: Uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.fileprovider",
-                apk,
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            context.startActivity(intent)
-            true
-        } catch (_: Exception) {
-            false
         }
+        if (result is ApkDownloadResult.Ok) {
+            android.util.Log.i(LOG_TAG, result.logLine(url))
+        } else {
+            android.util.Log.w(LOG_TAG, result.logLine(url))
+        }
+        result
     }
