@@ -12,6 +12,7 @@
 //! authz checkpoint. Pairing/IPC/tray integration land with T-031/T-034.
 
 use daemon::{Config, Router};
+use std::io::IsTerminal;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -342,13 +343,20 @@ async fn main() -> anyhow::Result<()> {
 
     // QR 在 transport bind 之后生成（&r= 需要 live endpoint 的中继）。
     let qr = pairing.start(rand_pair_token()?, unix_ms_now());
-    // DEVLOG-03：配对链接**只进 stdout，绝不进日志文件**。它带着 10 分钟内
-    // 有效的配对令牌；写进磁盘日志等于把「看得见的泄漏」换成「留痕的泄漏」，
-    // 比现状更糟（红线 4 的口径：凭据不落任何持久文件）。
-    // 这一行同时也是机读契约：上面那四个脚本 `grep -o 'ppf://pair[^ ]*'
-    // daemon.log`，两个理由指向同一个做法。
+    // DEVLOG-03 / SEC-11 (#496)：配对链接**绝不进任何持久文件**。它带着
+    // 10 分钟内有效的配对令牌（红线 4：凭据不落任何持久文件）。
+    // DEVLOG-03 当初的做法是「只进 stdout」，但 stdout 不等于屏幕：macOS
+    // launchd 的 StandardOutPath 就是 ~/Library/Logs/p-pass-daemon.log，
+    // systemd/nohup/脚本重定向同理。所以只在 stdout 是终端时才打印链接，
+    // 否则打一句不含链接的提示（见 cli::pair_link_stdout_line）。
+    // 机读契约随之改为 IPC `pairing.start`：tools/ipc-lib.sh 的
+    // `ipc_pair_qr`（dogfood-smoke / scenarios / android-*.sh）与
+    // tools/win-smoke.ps1 都走它，不再 grep stdout。
     // 日志里只记「配对已开始」这件事实，不记内容。
-    println!("配对二维码内容（10 分钟内有效）: {qr}");
+    println!(
+        "{}",
+        daemon::cli::pair_link_stdout_line(&qr, std::io::stdout().is_terminal())
+    );
     tracing::info!("配对二维码已生成（10 分钟内有效；内容含令牌，刻意不入日志）");
 
     // DAE-01b blocker①：claim 成功后才生成/写入自己的 token（serve 写

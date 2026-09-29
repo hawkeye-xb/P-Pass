@@ -111,30 +111,39 @@ try {
     $null = $proc.Handle   # H-09b：缓存句柄，之后 $proc.ExitCode 才可读（PS 5.1 标准修法）
     $script:DAEMON_PID = $proc.Id
 
-    # 等 QR 出现
-    $qr = $null
+    # 等 NodeId 出现（SEC-11 #496：stdout 被重定向时 daemon 不再打印配对串）
+    $node = $null
     for ($i = 0; $i -lt 100; $i++) {
         Start-Sleep -Milliseconds 200
         if (Test-Path $daemonLog) {
-            $m = Select-String -Path $daemonLog -Pattern "ppf://pair" | Select-Object -First 1
-            if ($m) { $qr = ($m.Line -split " " | Where-Object { $_ -like "ppf://pair*" } | Select-Object -First 1); break }
+            $m = Select-String -Path $daemonLog -Pattern "NodeId: ([0-9a-fA-F]{64})" | Select-Object -First 1
+            if ($m) { $node = $m.Matches[0].Groups[1].Value; break }
         }
         if ($proc.HasExited) { Write-Error "daemon 提前退出，日志: $(Get-Content $daemonErr -ErrorAction SilentlyContinue | Select-Object -Last 5)"; exit 1 }
     }
-    if (-not $qr) { Write-Error "20 秒内未见配对 QR —— daemon 启动异常（看 $daemonErr）"; exit 1 }
+    if (-not $node) { Write-Error "20 秒内日志中未见 NodeId —— daemon 启动异常（看 $daemonErr）"; exit 1 }
 
-    $node = $null
-    $m = Select-String -Path $daemonLog -Pattern "NodeId: ([0-9a-fA-F]{64})" | Select-Object -First 1
-    if ($m) { $node = $m.Matches[0].Groups[1].Value }
-    if (-not $node) { Write-Error "日志中未找到 NodeId"; exit 1 }
-
+    # SEC-11 (#496)：配对串经 IPC pairing.start 现取，只在内存里，不经任何文件。
+    # ipc.token 由 ipc.serve 稍晚才写，所以重试并每次重读。
     $ipcToken = Join-Path $env:PPF_DATA_DIR "ipc.token"
-    if (-not (Test-Path $ipcToken)) { Write-Error "ipc.token 未生成"; exit 1 }
-    # H-09b：@() 包一层——单行文件时 $lines[1] 会取到第 2 个字符
-    $tokenLines = @(Get-Content $ipcToken)
-    $sockName = $tokenLines[0].Trim()
-    $token = $tokenLines[1].Trim()
-    if (-not $token) { Write-Error "ipc.token 缺少令牌行（行2 应为 32B hex）"; exit 1 }
+    $qr = $null
+    for ($i = 0; $i -lt 50; $i++) {
+        if (Test-Path $ipcToken) {
+            # H-09b：@() 包一层——单行文件时 $lines[1] 会取到第 2 个字符
+            $tokenLines = @(Get-Content $ipcToken)
+            if ($tokenLines.Count -ge 2) {
+                $sockName = $tokenLines[0].Trim()
+                $token = $tokenLines[1].Trim()
+                try {
+                    $obj = (Invoke-Ipc "pairing.start" '{}') | ConvertFrom-Json
+                    if ($obj.ok -and ($obj.result.qr -like "ppf://pair*")) { $qr = $obj.result.qr; break }
+                } catch { }
+            }
+        }
+        if ($proc.HasExited) { Write-Error "daemon 提前退出，日志: $(Get-Content $daemonErr -ErrorAction SilentlyContinue | Select-Object -Last 5)"; exit 1 }
+        Start-Sleep -Milliseconds 200
+    }
+    if (-not $qr) { Write-Error "IPC pairing.start 10 秒内未给出配对串（看 $daemonErr）"; exit 1 }
     Write-Host "daemon up: $node (ipc: $sockName)"
 
     Write-Host "── 1. 配对（QR + IPC owner 确认）"

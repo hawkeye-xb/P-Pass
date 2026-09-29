@@ -29,14 +29,14 @@ PPF_DATA_DIR="$WORK/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="${PPF_R
 DAEMON_PID=$!
 exec 3>"$WORK/daemon-ctl"   # 保持写端打开——daemon 不会立即 EOF
 
-for _ in $(seq 1 50); do grep -q 'ppf://pair' daemon.log 2>/dev/null && break; sleep 0.2; done
-QR=$(grep -o 'ppf://pair[^ ]*' daemon.log)
+for _ in $(seq 1 50); do grep -q 'NodeId:' daemon.log 2>/dev/null && break; sleep 0.2; done
 NODE=$(grep -o 'NodeId: .*' daemon.log | awk '{print $2}')
-SOCK=$(sed -n 1p library/ipc.token)
-TOKEN=$(sed -n 2p library/ipc.token)
-echo "daemon up: $NODE (ipc: $SOCK)"
 # shellcheck source=./ipc-lib.sh
 source "$ROOT/tools/ipc-lib.sh"
+# SEC-11 (#496)：配对串经 IPC pairing.start 现取（daemon 不再把它打进被重定向的 stdout）
+ipc_pair_qr library/ipc.token
+QR="$PAIR_QR"
+echo "daemon up: $NODE (ipc: $SOCK)"
 
 echo "── 1. 配对（QR + IPC owner 确认）"
 "$TC" pair --token "$QR" --name "冒烟agent" > pair.log 2>&1 &
