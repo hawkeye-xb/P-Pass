@@ -255,6 +255,11 @@ android-pair:
 android-backup:
   tools/android-backup.sh
 
+# Android 15 dataSync FGS 配额压缩（#409 #397 #414）：set <秒> / status / reset。
+# 多台设备时先 export ANDROID_SERIAL。用法与判据见 docs/runbook/android-fgs-quota.md。
+android-fgs-quota *args:
+  bash tools/android-fgs-quota.sh {{args}}
+
 # M2 total acceptance: Rust suite + Android suite + APK build +
 # live wire scripts (hello/pair/backup) against a throwaway daemon
 verify-m2:
