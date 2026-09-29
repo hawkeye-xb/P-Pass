@@ -11,8 +11,12 @@ PPF_DATA_DIR="$D/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
   PPF_BIND_ADDR="127.0.0.1:0" \
   "$ROOT/target/release/daemon" > "$D/d.log" 2>&1 &
 DPID=$!
-for _ in $(seq 1 50); do grep -q 'ppf://pair' "$D/d.log" 2>/dev/null && break; sleep 0.2; done
-QR=$(grep -o 'ppf://pair[^ ]*' "$D/d.log")
+for _ in $(seq 1 50); do grep -q 'NodeId:' "$D/d.log" 2>/dev/null && break; sleep 0.2; done
+# shellcheck source=./ipc-lib.sh
+source "$ROOT/tools/ipc-lib.sh"
+# SEC-11 (#496)：配对串经 IPC pairing.start 现取（daemon 不再把它打进被重定向的 stdout）
+ipc_pair_qr "$D/library/ipc.token"
+QR="$PAIR_QR"
 cd "$ROOT/apps/android"
 source "$ROOT/scripts/java-home.sh"
 PPF_DAEMON_QR="$QR" PPF_DAEMON_IPC="$D/library/ipc.token" \

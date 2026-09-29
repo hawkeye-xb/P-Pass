@@ -34,10 +34,11 @@ start_daemon() {
     PPF_BIND_ADDR="0.0.0.0:0" \
     "$DAEMON" > daemon.log 2> daemon.err &
   DAEMON_PID=$!
-  for _ in $(seq 1 50); do grep -q 'ppf://pair' daemon.log 2>/dev/null && break; sleep 0.2; done
-  QR=$(grep -o 'ppf://pair[^ ]*' daemon.log)
+  for _ in $(seq 1 50); do grep -q 'NodeId:' daemon.log 2>/dev/null && break; sleep 0.2; done
   NODE=$(grep -o 'NodeId: .*' daemon.log | awk '{print $2}')
-  SOCK=$(sed -n 1p library/ipc.token); TOKEN=$(sed -n 2p library/ipc.token)
+  # SEC-11 (#496)：配对串经 IPC pairing.start 现取（daemon 不再把它打进被重定向的 stdout）
+  ipc_pair_qr library/ipc.token
+  QR="$PAIR_QR"
 }
 
 # shellcheck source=../ipc-lib.sh

@@ -92,9 +92,50 @@ pub fn humanize_bind_error(addr: Option<std::net::SocketAddr>, raw: &str) -> Str
     }
 }
 
+/// SEC-11 (#496)：启动时 stdout 上关于配对链接的那一行。
+///
+/// 配对链接带 10 分钟内有效的令牌，**只能给眼前的终端看**。stdout 不是终端
+/// 时它几乎一定落进了某个文件——macOS launchd 的 `StandardOutPath`
+/// （`~/Library/Logs/p-pass-daemon.log`）、systemd/journald、`nohup … >`、
+/// 脚本的 `> daemon.log`——这时只打一句不含链接的提示，告诉人/脚本改走
+/// IPC `pairing.start`（桌面端显示二维码走的也是它）。
+///
+/// 提示里**刻意不出现 `ppf://pair` 字面量**：验收口径就是日志里这个串计数为 0。
+pub fn pair_link_stdout_line(qr: &str, stdout_is_terminal: bool) -> String {
+    if stdout_is_terminal {
+        format!("配对二维码内容（10 分钟内有效）: {qr}")
+    } else {
+        "配对链接未打印：stdout 不是终端（多半被重定向进了日志文件），\
+         链接含令牌不能落盘。请用桌面端显示二维码，或经 IPC `pairing.start` 获取。"
+            .to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const QR: &str = "ppf://pair?node=aa&t=0123456789abcdef01234567&r=https://relay.example";
+
+    #[test]
+    fn pair_link_printed_only_to_a_terminal() {
+        let tty = pair_link_stdout_line(QR, true);
+        assert!(tty.contains(QR), "终端下应打印完整链接:\n{tty}");
+
+        let redirected = pair_link_stdout_line(QR, false);
+        assert!(
+            !redirected.contains("ppf://pair"),
+            "非终端时不许出现配对链接字面量:\n{redirected}"
+        );
+        assert!(
+            !redirected.contains("0123456789abcdef01234567"),
+            "非终端时不许出现令牌:\n{redirected}"
+        );
+        assert!(
+            redirected.contains("pairing.start"),
+            "非终端时应指明替代取法:\n{redirected}"
+        );
+    }
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()

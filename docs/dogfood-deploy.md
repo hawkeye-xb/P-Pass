@@ -71,10 +71,17 @@ sleep 3 && cat ~/ppf-daemon.log
 > public relays. / 在 H-07 部署前**必须**设置：内置官方 relay 域名尚未
 > 部署，留着会毒害连接协商（冒烟 #1 实证）；置空回落到 n0 公共 relay。
 
-Record from the startup output / 记下启动输出里的三样:
-1. `NodeId: <64hex>` — the storage identity / 存储端身份
-2. `ppf://pair?...` — pairing string (address included, 10 min TTL)
-   / 配对串（含地址，10 分钟有效）
+Record / 记下三样:
+1. `NodeId: <64hex>` (in the startup output) — the storage identity
+   / 存储端身份（启动输出里有）
+2. `ppf://pair?...` — pairing string (address included, 10 min TTL).
+   It carries a pairing token, so the daemon prints it **only when stdout
+   is a terminal**; with `nohup … >` it is deliberately absent from the
+   log (SEC-11). Fetch it over IPC instead / 配对串（含地址，10 分钟有效）。
+   它含配对令牌，daemon **只在 stdout 是终端时**才打印；上面 `nohup … >`
+   重定向进了文件，日志里刻意没有它（SEC-11）。改经 IPC 现取
+   (helper from a repo checkout / 助手函数在仓库的 `tools/ipc-lib.sh`):
+   `source tools/ipc-lib.sh && ipc_pair_qr ~/ppf-library/ipc.token && echo "$PAIR_QR"`
 3. the `ipc.token` path — local admin credential / 本机管理凭证
 
 ## 3. Same-machine smoke / 本机冒烟（第一道验收）

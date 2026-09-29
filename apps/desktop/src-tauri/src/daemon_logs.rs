@@ -95,8 +95,9 @@ pub fn sanitize(s: &str, home: &str) -> String {
 }
 
 /// 长 hex 串（NodeId 全长 64 hex、配对令牌 24 hex）只留前 8 位。
-/// daemon 的 stdout 日志里有 NodeId 和配对串，导出包的脱敏口径必须跟
-/// `devices.json` 一致：只出前缀。
+/// daemon 的 stdout 日志里有 NodeId；SEC-11 (#496) 之前的历史日志里还可能
+/// 残留配对串（此后 daemon 在 stdout 非终端时不再打印它）。导出包的脱敏
+/// 口径必须跟 `devices.json` 一致：只出前缀。
 pub fn mask_long_hex(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let chars: Vec<char> = s.chars().collect();
