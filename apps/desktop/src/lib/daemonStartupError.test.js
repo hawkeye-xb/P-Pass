@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { startupFailureText } from "./daemonStartupError.js";
+import { setLocale } from "./i18n.js";
+
+// I18N-03 (#492)：文案搬进字典后按系统语言取词；这里断言的是中文原文——
+// 只搬字不改措辞，zh 下渲染结果必须和搬迁前逐字相同。
+setLocale("zh");
 
 // 向导那条「stderr 真的流进了红条」的护栏在 `src/wizardStartupFailure.test.js`
 // ——它挂载 Wizard / WizardWindows 并读渲染出来的文本。

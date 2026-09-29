@@ -5,6 +5,11 @@ const eq = (a, b, msg) => expect(a, msg).toBe(b);
 const matches = (a, re, msg) => expect(a, msg).toMatch(re);
 const notMatches = (a, re, msg) => expect(a, msg).not.toMatch(re);
 import { isSelfDisconnected, isOwnerRemoved, disconnectedRow } from "./lib/disconnected.js";
+import { setLocale } from "./lib/i18n.js";
+
+// I18N-03 (#492)：文案搬进字典后按系统语言取词；这里断言的是中文原文——
+// 只搬字不改措辞，zh 下渲染结果必须和搬迁前逐字相同。
+setLocale("zh");
 
 const active = { revoked: false, revoked_by: null };
 const selfGone = { revoked: true, revoked_by: "device", revoked_at: 1_700_000_000_000 };

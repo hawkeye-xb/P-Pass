@@ -60,19 +60,11 @@
   // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
   import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./lib/viewerVideo.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
-  // assets/i18n/*.json，Rust 测试保证双语文案齐全）。直接从仓库根引用，
-  // 零副本零漂移；按系统语言选语言表（UI 单语显示的既定决策）。
-  // T-081: 布局 v1 新增的导航/页面文案按设计稿原文暂写死在组件里
-  //（assets/i18n 不在本卡范围），后续卡收编进字典。
-  import enDict from "../../../assets/i18n/en.json";
-  import zhDict from "../../../assets/i18n/zh.json";
-
-  const dict = (navigator.language || "zh").toLowerCase().startsWith("zh") ? zhDict : enDict;
-  const t = (key, vars = {}) => {
-    let s = dict[key] ?? key;
-    for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
-    return s;
-  };
+  // assets/i18n/*.json，Rust 测试保证双语文案齐全）。
+  // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
+  // T-081 暂写死在组件里的导航/页面文案已全部收编进字典。errText 负责
+  // 把 Rust 壳回来的错误（key + 参数 / 裸 msg_key / 原串）渲染成人话。
+  import { t, errText, getLocale } from "./lib/i18n.js";
 
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
@@ -86,11 +78,11 @@
   // ≥1080px 展开态不画图标，跟设计稿交互原型一致（原型的 nav 只有
   // label，没有 icon——图标是收起态专属，不是随时都显示的装饰）。
   const NAV = [
-    { id: "overview", label: "总览", icon: HouseIcon },
+    { id: "overview", label: t("ui.nav_overview"), icon: HouseIcon },
     { id: "photos", label: t("ui.nav_photos"), icon: ImageIcon },
-    { id: "devices", label: "家人与设备", icon: SmartphoneIcon },
-    { id: "log", label: "活动记录", icon: ClockIcon },
-    { id: "settings", label: "设置", icon: SettingsIcon },
+    { id: "devices", label: t("ui.nav_devices"), icon: SmartphoneIcon },
+    { id: "log", label: t("ui.nav_log"), icon: ClockIcon },
+    { id: "settings", label: t("ui.settings"), icon: SettingsIcon },
   ];
   const pageFromHash = () => {
     const m = (location.hash || "").match(/^#\/(overview|photos|devices|log|settings)$/);
@@ -138,7 +130,7 @@
       await invoke("stop_daemon");
       flashMessage(t("ui.service_stopped"), "warning");
     } catch (e) {
-      flashMessage(t("ui.stop_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.stop_failed", { err: errText(e) }), "error");
     }
     // DESK-36 (#456)：停完立刻对账——状态点变「未运行」不用等 60s 兜底轮询；
     // wizard_state 也要重读（user_stopped 刚落盘，向导门靠它不把人打回 onboard）。
@@ -149,7 +141,7 @@
   // 失败原因，成功为 null）。和窗口里的按钮同一个 stop_daemon、同一份标记。
   async function onServiceStopped(ev) {
     const err = ev?.payload;
-    if (err) flashMessage(t("ui.stop_failed", { err: String(err) }), "error");
+    if (err) flashMessage(t("ui.stop_failed", { err: errText(err) }), "error");
     else flashMessage(t("ui.service_stopped"), "warning");
     await syncServiceState();
   }
@@ -166,7 +158,7 @@
     try {
       await invoke("start_daemon");
     } catch (e) {
-      flashMessage(t("ui.start_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.start_failed", { err: errText(e) }), "error");
     } finally {
       setTimeout(() => (starting = false), 3000);
     }
@@ -405,8 +397,8 @@
       return {
         alert: true,
         dot: "act",
-        sub: `${daysSince(lastBackupAt, now)} 天没备份了——去那台手机上打开一次 App 就会自动补上`,
-        right: "需要看看",
+        sub: t("ui.device_no_backup_days", { n: daysSince(lastBackupAt, now) }),
+        right: t("ui.device_needs_attention"),
       };
     }
     // NET-05 has priority over generic presence only while this exact device
@@ -418,7 +410,7 @@
         alert: false,
         dot: flow.dot,
         sub: flow.sub,
-        right: backupTime ? `最近备份 ${backupTime}` : "还没备份过",
+        right: backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up"),
       };
     }
     const pres = presenceText(
@@ -431,7 +423,7 @@
       alert: false,
       dot: pres.dot,
       sub: pres.sub,
-      right: backupTime ? `最近备份 ${backupTime}` : "还没备份过",
+      right: backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up"),
     };
   }
 
@@ -491,7 +483,7 @@
         errorCorrectionLevel: "L",
       });
     } catch (e) {
-      flashMessage(t("ui.pair_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.pair_failed", { err: errText(e) }), "error");
     }
   }
 
@@ -509,7 +501,7 @@
     if (!qrText) return;
     try {
       await navigator.clipboard.writeText(qrText);
-      flashMessage("配对串已复制");
+      flashMessage(t("ui.pair_string_copied"));
     } catch {
       // 静默——剪贴板权限问题不值得打断用户，主路径还是扫码。
     }
@@ -523,7 +515,7 @@
       const r = qrText || (await call("pairing.start")).qr;
       qrText = r;
       await navigator.clipboard.writeText(r);
-      flashMessage("配对串已复制");
+      flashMessage(t("ui.pair_string_copied"));
     } catch {
       // 静默
     }
@@ -560,7 +552,7 @@
       // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.confirm_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.confirm_failed", { err: errText(e) }), "error");
     }
   }
 
@@ -575,7 +567,7 @@
       flashMessage(t("ui.revoked", { name }), "warning");
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.revoke_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.revoke_failed", { err: errText(e) }), "error");
     }
   }
 
@@ -603,7 +595,7 @@
       toast.success(t("ui.rename_saved", { name: r.name ?? trimmed }));
       await refresh();
     } catch (e) {
-      toast.error(t("ui.rename_failed", { err: String(e) }));
+      toast.error(t("ui.rename_failed", { err: errText(e) }));
     }
   }
 
@@ -619,7 +611,7 @@
         await revealItemInDir(dir);
       }
     } catch (e) {
-      flashMessage(t("ui.open_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.open_failed", { err: errText(e) }), "error");
     }
   }
 
@@ -639,7 +631,7 @@
         await revealItemInDir(`${dir}/originals`);
       }
     } catch (e) {
-      flashMessage(t("ui.device_open_folder_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.device_open_folder_failed", { err: errText(e) }), "error");
     }
   }
 
@@ -655,7 +647,7 @@
       await call("folder.set", { path: dir });
       flashMessage(t("ui.change_saved", { dir }));
     } catch (e) {
-      flashMessage(t("ui.save_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.save_failed", { err: errText(e) }), "error");
     }
   }
 
@@ -671,7 +663,7 @@
         await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示
       } catch (_) {}
     } catch (e) {
-      flashMessage(t("ui.export_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.export_failed", { err: errText(e) }), "error");
     }
   }
 
@@ -695,8 +687,8 @@
       // 同上，置不上就下次还会提示——不影响这次把话说清楚。
     }
     await messageDialog(
-      "关掉窗口不会停止备份——家人手机传来的照片照样会收。\n\n要彻底退出，右键点任务栏右下角的 P-Pass 图标，选「退出」。",
-      { title: "P-Pass 还在后台运行", kind: "info" },
+      t("ui.tray_hint_body"),
+      { title: t("ui.tray_hint_title"), kind: "info" },
     );
   }
 
@@ -705,6 +697,9 @@
   let unlistenTray;
   let unlistenStopped;
   onMount(() => {
+    // I18N-03 (#492)：托盘菜单跟窗口同一种语言——把这里判出来的语言报给
+    // Rust 壳，它从同一份 assets/i18n 取托盘文案。失败只影响托盘语言，静默。
+    invoke("set_tray_locale", { lang: getLocale() }).catch(() => {});
     checkWizard();
     // DESK-02①: 更新检查放首次 status 落地后——updateChannel 由
     // status.version（完整 tag）推导，避免启动竞态按壳版本误判 stable。
@@ -914,7 +909,7 @@
         flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }), "warning");
       }
     } catch (e) {
-      flashMessage(t("ui.restart_service_failed", { err: String(e) }), "error");
+      flashMessage(t("ui.restart_service_failed", { err: errText(e) }), "error");
     } finally {
       restartingService = false;
     }
@@ -929,12 +924,12 @@
     try {
       const resp = await fetch(WORKER_TEST_URL);
       if (!resp.ok) {
-        if (manual) flashMessage("没有发现新版本。", "warning");
+        if (manual) flashMessage(t("ui.no_update"), "warning");
         return;
       }
       const m = await resp.json();
       if (!m?.version || !isNewerVersion(m.version, version)) {
-        if (manual) flashMessage("没有发现新版本。", "warning");
+        if (manual) flashMessage(t("ui.no_update"), "warning");
         return;
       }
       const ok = await confirmDialog(t("ui.update_available", { version: m.version }), {
@@ -951,7 +946,7 @@
       await openUrl(url);
     } catch (e) {
       console.warn("[updater] test channel check failed (silent):", e);
-      if (manual) flashMessage("没有发现新版本。", "warning");
+      if (manual) flashMessage(t("ui.no_update"), "warning");
     }
   }
 
@@ -967,11 +962,11 @@
       update = await checkUpdate();
     } catch (e) {
       console.warn("[updater] check failed (silent — 404/draft/network = no update):", e);
-      if (manual) flashMessage("没有发现新版本。", "warning");
+      if (manual) flashMessage(t("ui.no_update"), "warning");
       return;
     }
     if (!update) {
-      if (manual) flashMessage("没有发现新版本。", "warning");
+      if (manual) flashMessage(t("ui.no_update"), "warning");
       return;
     }
     const ok = await confirmDialog(t("ui.update_available", { version: update.version }), {
@@ -1006,7 +1001,7 @@
       // 服务保持停止，界面照旧给「启动后台服务」。
       try {
         const resumed = await invoke("resume_daemon_after_update");
-        if (resumed === false) console.info("[updater] 用户主动停止过服务，更新后保持停止");
+        if (resumed === false) console.info("[updater] service was stopped by the user; keeping it stopped after the update");
       } catch (e) {
         console.warn("[updater] resume_daemon_after_update failed after a successful install:", e);
       }
@@ -1024,7 +1019,9 @@
       // itself couldn't clear it (third-party lock, AV scan holding the
       // handle, etc.), tell the user the one concrete thing they can do
       // instead of surfacing a raw OS error string.
-      if (/being used by another process|access is denied|拒绝访问|正被另一个进程使用/i.test(msg)) {
+      // The \u escapes are the zh-CN Windows wording of the same two OS errors
+      // (拒绝访问 / 正被另一个进程使用) — OS text we match, not our copy.
+      if (/being used by another process|access is denied|\u62d2\u7edd\u8bbf\u95ee|\u6b63\u88ab\u53e6\u4e00\u4e2a\u8fdb\u7a0b\u4f7f\u7528/i.test(msg)) {
         flashMessage(t("ui.update_failed_file_locked"), "error");
       } else {
         flashMessage(t("ui.update_failed", { err: msg }), "error");
@@ -1248,7 +1245,7 @@
     try {
       await revealItemInDir(viewerPath);
     } catch (e) {
-      flashMessage(`无法在文件管理器中显示：${e}`, "error");
+      flashMessage(t("ui.reveal_failed", { err: errText(e) }), "error");
     }
   }
 
@@ -1325,9 +1322,9 @@
       </nav>
       <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊；<1080px
            收起态缩成纯色点（设计稿：服务状态缩成底部绿点）。 -->
-      <div class="service-pill" class:ok={online} class:bad={!online} title={online ? "后台服务运行中" : t("ui.offline_banner")}>
+      <div class="service-pill" class:ok={online} class:bad={!online} title={online ? t("ui.service_running_long") : t("ui.offline_banner")}>
         <span class="dot"></span>
-        <span class="service-label">{online ? "后台服务运行中" : t("ui.offline_banner")}</span>
+        <span class="service-label">{online ? t("ui.service_running_long") : t("ui.offline_banner")}</span>
       </div>
     </aside>
 
@@ -1340,16 +1337,16 @@
                  换成"全家 N 张照片"，photoCount 没拿到时退回原句（不写
                  假数字）。 -->
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3] text-ink">
-              {#if photoCount !== null}全家 {photoCount} 张照片，安全地住在这台电脑上。{:else}全家的照片，安全地住在这台电脑上。{/if}
+              {#if photoCount !== null}{t("ui.overview_title_count", { n: photoCount })}{:else}{t("ui.overview_title")}{/if}
             </h2>
             <!-- 副标题：有真实"最近一次备份"数据就用设计稿的格式，没有
                  （比如还没配对过/一次都没备份过）就退回旧的配对数摘要，
                  不硬凑一句假话。 -->
             <p class="mt-[6px] text-[14px] text-ink-40">
               {#if lastBackupOverall}
-                最近一次备份：{humanTime(lastBackupOverall.at, nowMs)} · 来自 {lastBackupOverall.name}
+                {t("ui.overview_last_backup", { time: humanTime(lastBackupOverall.at, nowMs), name: lastBackupOverall.name })}
               {:else}
-                {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · 照片库 ${photoCount} 张`}{/if}
+                {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · ${t("ui.overview_library_count", { n: photoCount })}`}{/if}
               {/if}
               {#if status && status.revoked > 0}{t("ui.revoked_count", { n: status.revoked })}{/if}
             </p>
@@ -1424,7 +1421,7 @@
                  状态多，不等高会让水位卡下面露出一大块空白背景。 -->
             <div class="grid grid-cols-1 gap-[22px] min-[1080px]:grid-cols-2 min-[1440px]:grid-cols-3">
               <Card class="text-[16px]">
-                <h3 class="mb-[12px] text-[15px] font-semibold">备份状态</h3>
+                <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.backup_status")}</h3>
                 {#if devices.filter((d) => !d.revoked).length === 0}
                   <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
                        卡片顶部，下面一截空白显得像没做完。 -->
@@ -1446,7 +1443,7 @@
                   </ul>
                   {#if waterRows.moreOk > 0}
                     <Button variant="link" tone="safe" class="mt-px self-start" onclick={() => go("devices")}
-                      >一切正常的还有 {waterRows.moreOk} 台 ›</Button
+                      >{t("ui.water_more_ok", { n: waterRows.moreOk })} ›</Button
                     >
                   {/if}
                 {/if}
@@ -1459,7 +1456,7 @@
                    状态消失；扫码后的允许/拒绝也走模态。 -->
               <Card class="gap-[12px] text-[16px]">
                 <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
-                <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">点击后会放大显示一个配对二维码，用家人手机上的 P-Pass 扫一下；扫到后二维码自动收起，回到这里确认「允许加入」。</p>
+                <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">{t("ui.add_device_body")}</p>
                 <Button class="w-full" onclick={startPairing}>{t("ui.generate_qr")}</Button>
                 <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
                      能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
@@ -1472,7 +1469,7 @@
                    是活动记录前 3 条，复用同一套 auditWho/auditText，不是
                    另开一套数据源。 -->
               <Card class="gap-[12px] text-[16px] min-[1080px]:col-span-2 min-[1440px]:col-span-1">
-                <h3 class="mb-0 text-[15px] font-semibold">最近动静</h3>
+                <h3 class="mb-0 text-[15px] font-semibold">{t("ui.recent_activity")}</h3>
                 <!-- 2026-08-17：内容包一层 flex-1——大屏三栏等高时这张卡
                      内容天然比左边两张少（最多 3 行），没有这层撑底的话
                      链接会紧贴在短内容下面、卡片下半段留一截空白，看起来
@@ -1480,7 +1477,7 @@
                      没撑满，视觉上像矮了一截）。 -->
                 <div class="flex-1">
                   {#if visibleAudit.length === 0}
-                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">还没有活动记录。</p>
+                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_activity")}</p>
                   {:else}
                     <!-- 单行紧凑文案（设备+事件+相对时间连成一行，不分列、
                          行间不加分隔线），跟主活动记录页的双列卡片行是两种
@@ -1497,7 +1494,7 @@
                     </ul>
                   {/if}
                 </div>
-                <Button variant="link" tone="safe" class="self-start" onclick={() => go("log")}>全部活动记录 ›</Button>
+                <Button variant="link" tone="safe" class="self-start" onclick={() => go("log")}>{t("ui.all_activity")} ›</Button>
               </Card>
             </div>
           {/if}
@@ -1509,7 +1506,7 @@
              移除=纯文字链接、标题 28px/副标题 14px/提示 13px）验收见卡记录。 -->
         <section class="page" data-testid="page-devices">
           <div class="lede">
-            <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">家人与设备</h2>
+            <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.nav_devices")}</h2>
             <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.devices_paired_line", { n: pairedCount })}</p>
           </div>
           <!-- 2026-08-18（用户反馈③）：设备列表在卡内自己滚，标题/副标题和
@@ -1610,7 +1607,7 @@
                 <!-- T-082: 已移除设备折叠为展开器，展开后用 ink-40 弱化，
                      不再划线平铺。 -->
                 <details class="mt-[12px] border-t border-divider px-[22px] pt-[12px]">
-                  <summary class="cursor-pointer text-[14px] font-semibold text-ink-40">已移除设备 {removedDevices.length} 台</summary>
+                  <summary class="cursor-pointer text-[14px] font-semibold text-ink-40">{t("ui.removed_devices", { n: removedDevices.length })}</summary>
                   <ul>
                     {#each removedDevices as d}
                       <li class="flex items-center gap-[14px] py-[14px]">
@@ -1626,7 +1623,7 @@
           <!-- 设计稿 v2：区块间距靠 .page 的 flex gap(22px)统一撑开，
                这里不再叠加 mt——叠加会让卡片到提示文字的间距变成 32px，
                跟标题到卡片的 22px 不一致（design v2 是整段 20px 等距）。 -->
-          <p class="text-[13px] leading-[1.6] text-ink-40">「经中继」= 直连不通时走加密中转，中继看不到照片内容，速度可能慢一些。移除设备会让它立刻失去访问权限——危险操作只放在电脑上。</p>
+          <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.devices_footnote")}</p>
         </section>
       {:else if page === "photos"}
         <!-- DESK-03: 照片墙——与手机时间线同一数据源（query.timeline +
@@ -1659,7 +1656,7 @@
             <div class="flex flex-none items-center gap-[10px]">
               <Button variant="secondary" class="mt-[2px] flex-none" onclick={openLibrary}>{t("ui.photos_open_library")}</Button>
               <Button variant="secondary" class="mt-[2px] flex-none" onclick={resetPhotosWall}>
-                {photosLoading ? "刷新中…" : "刷新"}
+                {photosLoading ? t("ui.photos_refreshing") : t("ui.photos_refresh")}
               </Button>
             </div>
           </div>
@@ -1671,7 +1668,7 @@
             {#if photosLoaded && photos.length === 0}
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_empty")}</p>
             {:else if !photosLoaded}
-              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">正在加载照片…</p>
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_loading")}</p>
             {:else}
               {#each photoGroups as g (g.key)}
                 <h4 class="mt-[14px] mb-[8px] text-[13px] font-semibold text-ink-60 first:mt-0">{g.label}</h4>
@@ -1680,7 +1677,7 @@
                     <button
                       class="relative aspect-square cursor-zoom-in overflow-hidden rounded-sm border-0 border-none bg-border p-0 hover:outline-2 hover:outline-ink hover:outline-offset-2"
                       onclick={() => (photoViewer = item)}
-                      aria-label="查看大图"
+                      aria-label={t("ui.photo_view_large")}
                     >
                       <PhotoThumb hash={item.hash} />
                       {#if item.media_type === "video"}
@@ -1692,12 +1689,12 @@
               {/each}
               {#if photosNext}
                 <div class="h-6 text-center text-[12px] text-ink-60" bind:this={sentinelEl}>
-                  {photosLoading ? "加载中…" : ""}
+                  {photosLoading ? t("ui.loading") : ""}
                 </div>
               {/if}
             {/if}
           </Card>
-          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">缩略图只用来快速翻找；整理、导出、删除都在文件管理器里进行——文件就是普通文件。</p>
+          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_footnote")}</p>
         </section>
       {:else if page === "log"}
         <section class="page" data-testid="page-log">
@@ -1706,8 +1703,8 @@
                下线，Flow 侧尚无同口径汇总字段，不编造数字。 -->
           <div class="flex flex-wrap items-end justify-between gap-[20px]">
             <div>
-              <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">活动记录</h2>
-              <p class="mt-[6px] text-[14px] text-ink-40">谁备份了什么，一目了然——不用去文件管理器里对账。</p>
+              <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.nav_log")}</h2>
+              <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.log_subtitle")}</p>
             </div>
           </div>
           <!-- AUDIT-01: 活动记录页展示审计事件流 v2——配对请求/允许/拒绝、
@@ -1715,7 +1712,7 @@
                时间倒序。ingest.* 逐文件行过滤不展示（全路径噪音）。 -->
           <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
             {#if visibleAudit.length === 0}
-              <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。</p>
+              <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_empty")}</p>
             {:else}
               <ul class="m-0 list-none p-0">
                 <!-- DESK-08: 同上——key 必须是审计主键，不是 ts+kind。 -->
@@ -1741,7 +1738,7 @@
               </ul>
             {/if}
           </Card>
-          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">记录来自本机照片库与审计日志，不上传。</p>
+          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_footnote")}</p>
         </section>
       {:else if page === "settings"}
         <section class="page" data-testid="page-settings">
@@ -1752,7 +1749,7 @@
           </div>
           <div class="flex items-start gap-[22px] max-[1079px]:flex-col">
             <Card class="flex-[1.2_1_0%] text-[16px]">
-              <h3 class="mb-[12px] text-[15px] font-semibold">照片库</h3>
+              <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.library")}</h3>
               {#if status?.library_dir}
                 <code class="block rounded-sm bg-linen px-[16px] py-[12px] text-[14px] break-all">{status.library_dir}</code>
               {/if}
@@ -1765,20 +1762,20 @@
                    null（磁盘统计拿不到）整行连进度条一起隐藏。 -->
               {#if diskFree !== null && diskTotal !== null && diskPct !== null}
                 <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold">
-                  <span>磁盘空间</span>
-                  <span class="text-[14px] font-normal text-ink-40">可用 {diskFree} / 共 {diskTotal}</span>
+                  <span>{t("ui.disk_space")}</span>
+                  <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_free_of_total", { free: diskFree, total: diskTotal })}</span>
                 </div>
                 <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
               {/if}
-              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">更改位置重启后台服务后生效；已备份的照片不会自动搬家。</p>
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
             </Card>
             <div class="flex flex-1 flex-col gap-[22px]">
               <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
                 <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
                      test），旧 REL-02 通道选择行已删。 -->
                 <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
-                  <span>软件更新</span>
-                  <Button variant="secondary" onclick={() => checkForUpdate(true)}>检查更新</Button>
+                  <span>{t("ui.software_update")}</span>
+                  <Button variant="secondary" onclick={() => checkForUpdate(true)}>{t("ui.check_update")}</Button>
                 </div>
                 <!-- DAE-04: 桌面壳更新后 daemon 还是旧版（版本不一致）才
                      显示——一致时不出现，避免误杀正常运行的服务。 -->
@@ -1792,7 +1789,7 @@
                   <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.restart_service_hint")}</p>
                 {/if}
                 <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
-                  <span>遇到问题？导出诊断包</span>
+                  <span>{t("ui.export_logs_prompt")}</span>
                   <Button variant="secondary" onclick={exportLogs}>{t("ui.export_logs")}</Button>
                 </div>
               </Card>
@@ -1809,26 +1806,26 @@
     <!-- T4 (H-10b): 配对状态机模态——二维码弹窗 + 允许/拒绝弹窗。 -->
     <Dialog open={showPairModal} onClose={closePairModal}>
       <!-- 设计稿 v2：弹窗标题「配对二维码 · 放大版」——亮码用途一目了然 -->
-      <h3>配对二维码</h3>
+      <h3>{t("ui.pair_qr_title")}</h3>
       {#if qrDataUrl}
-        <img class="qr-lg" src={qrDataUrl} alt="配对二维码" />
+        <img class="qr-lg" src={qrDataUrl} alt={t("ui.pair_qr_title")} />
         <!-- FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，
              新码只带 r=，旧手机扫新码静默失败。把话说清：先升手机 App。 -->
         <p class="hint modal-hint modal-upgrade-note">
           {t("ui.qr_phone_version")}
         </p>
         <p class="hint modal-hint">
-          用家人手机上的 P-Pass 扫这个码；手机发来的加入请求会自动出现在这里。
+          {t("ui.pair_qr_body")}
         </p>
         <div class="modal-actions">
-          <Button variant="secondary" onclick={startPairing}>刷新二维码</Button>
-          <Button onclick={closePairModal}>关闭</Button>
+          <Button variant="secondary" onclick={startPairing}>{t("ui.refresh_qr")}</Button>
+          <Button onclick={closePairModal}>{t("ui.close")}</Button>
         </div>
         <!-- 设计稿离线版 v2：扫码有困难的退路——复制配对串手动传给
              手机（比如隔空投送/微信发给家人自己粘）。 -->
-        <Button variant="link" tone="safe" onclick={copyPairString}>无法扫码？复制配对串</Button>
+        <Button variant="link" tone="safe" onclick={copyPairString}>{t("ui.qr_fallback")}</Button>
       {:else}
-        <p class="hint modal-hint">正在生成配对码…</p>
+        <p class="hint modal-hint">{t("ui.pair_generating")}</p>
       {/if}
     </Dialog>
 
@@ -1889,16 +1886,16 @@
             {:else if viewerSrc}
               <img class="photo-viewer-img" src={viewerSrc} alt="" />
             {:else if viewerFailed}
-              <div class="photo-viewer-loading">无法加载此视频</div>
+              <div class="photo-viewer-loading">{t("ui.video_load_failed")}</div>
             {:else}
-              <div class="photo-viewer-loading">加载中…</div>
+              <div class="photo-viewer-loading">{t("ui.loading")}</div>
             {/if}
           </div>
       <div class="modal-actions">
         <Button variant="secondary" onclick={revealPhotoInFinder} disabled={!viewerPath}>
           {t("ui.photos_open_in_finder")}
         </Button>
-        <Button onclick={() => (photoViewer = null)}>关闭</Button>
+        <Button onclick={() => (photoViewer = null)}>{t("ui.close")}</Button>
       </div>
     </Dialog>
     <!-- T1: 版本号——报问题/排查时先知道装的是什么版本。 -->

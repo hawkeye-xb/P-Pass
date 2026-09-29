@@ -2,6 +2,8 @@
 // This module deliberately receives only daemon-provided evidenceSummary:
 // phone final_counts are advisory and must never determine displayed counts.
 
+import { t } from "./lib/i18n.js";
+
 const HIDDEN_KINDS = new Set([
   "device.connected",
   "flow.round.controlled",
@@ -26,10 +28,10 @@ function backupResult(summary) {
   const skipped = count(summary, "source_missing");
   const parts = [];
 
-  if (confirmed) parts.push(`已备份 ${confirmed} 张照片`);
-  if (needsAttention) parts.push(`${needsAttention} 张需处理`);
-  if (skipped) parts.push(`${skipped} 张已跳过`);
-  return parts.length ? parts.join("；") : "备份完成";
+  if (confirmed) parts.push(t("ui.audit_backed_up", { n: confirmed }));
+  if (needsAttention) parts.push(t("ui.audit_needs_attention", { n: needsAttention }));
+  if (skipped) parts.push(t("ui.audit_skipped", { n: skipped }));
+  return parts.length ? parts.join(t("ui.audit_part_sep")) : t("ui.audit_backup_done");
 }
 
 export function isVisibleAudit(event) {
@@ -43,34 +45,36 @@ export function auditWho(event, devices) {
   const device = devices.find((item) => item.node_id === actor);
   if (device) return `${device.name} · #${actor.slice(0, 8)}`;
   if (event?.kind?.startsWith("pair.") && payload.deviceName) return payload.deviceName;
-  if (actor) return `未知设备 · #${actor.slice(0, 8)}`;
-  return "【本地】";
+  if (actor) return t("ui.audit_unknown_device", { id: actor.slice(0, 8) });
+  return t("ui.audit_local");
 }
 
 export function auditText(event) {
   const payload = event?.payload ?? {};
   switch (event?.kind) {
     case "pair.requested":
-      return "请求加入";
+      return t("ui.audit_pair_requested");
     case "pair.accepted":
-      return "已加入";
+      return t("ui.audit_pair_accepted");
     case "pair.denied":
-      return "加入被拒绝";
+      return t("ui.audit_pair_denied");
     case "asset.removed_external":
-      return `外部删除（${shortName(payload.relPath)}）`;
+      return t("ui.audit_removed_external", { name: shortName(payload.relPath) });
     case "device.renamed":
-      return payload.oldName && payload.newName ? `改名：${payload.oldName} → ${payload.newName}` : "已改名";
+      return payload.oldName && payload.newName
+        ? t("ui.audit_renamed_from_to", { old: payload.oldName, new: payload.newName })
+        : t("ui.audit_renamed");
     case "device.revoked":
-      return "已移除设备";
+      return t("ui.audit_revoked");
     case "device.unpaired":
-      return "主动断开连接";
+      return t("ui.audit_unpaired");
     case "device.merged":
-      return "合并旧设备（重装恢复）";
+      return t("ui.audit_merged");
     case "flow.round.finished":
       return backupResult(event.evidenceSummary);
     case "flow.reconciliation.resolved":
-      return "对账裁决完成";
+      return t("ui.audit_reconciled");
     default:
-      return "发生了一条未分类的活动";
+      return t("ui.audit_unknown");
   }
 }

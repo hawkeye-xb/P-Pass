@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { auditText, auditWho, isVisibleAudit } from "./auditProjection.js";
+import { setLocale } from "./lib/i18n.js";
+
+// I18N-03 (#492)：文案搬进字典后按系统语言取词；这里断言的是中文原文——
+// 只搬字不改措辞，zh 下渲染结果必须和搬迁前逐字相同。
+setLocale("zh");
 
 describe("活动记录的用户投影", () => {
   it("按 daemon 重算的对象证据展示备份结果，不读取手机自报 final counts", () => {

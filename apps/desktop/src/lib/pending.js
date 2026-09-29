@@ -22,6 +22,8 @@
 //   revoked      bool          ← 仅 known
 //   photo_count  int           ← 仅 known
 
+import { t } from "./i18n.js";
+
 /** 这条 pending 是老设备重连吗。 */
 export function isKnownDevice(item) {
   return Boolean(item?.known);
@@ -39,21 +41,21 @@ export function pendingDialogText(pendingList) {
   const list = Array.isArray(pendingList) ? pendingList : [];
   if (list.length > 1) {
     return {
-      title: `有 ${list.length} 台设备请求加入`,
-      hint: "确认是家人的手机吗？允许后它会出现在设备列表里。",
+      title: t("ui.pending_many_title", { n: list.length }),
+      hint: t("ui.pending_new_hint"),
     };
   }
   const only = list[0];
   if (isKnownDevice(only)) {
     return {
       // 点名，且点的是桌面上的名字——业主改过名就叫改过的那个。
-      title: `「${only.name}」请求重新连接`,
-      hint: "这台设备以前连过，允许后会恢复备份。",
+      title: t("ui.pending_known_title", { name: only.name }),
+      hint: t("ui.pending_known_hint"),
     };
   }
   return {
-    title: "有设备请求加入",
-    hint: "确认是家人的手机吗？允许后它会出现在设备列表里。",
+    title: t("ui.pending_one_title"),
+    hint: t("ui.pending_new_hint"),
   };
 }
 
@@ -69,10 +71,10 @@ export function pendingDialogText(pendingList) {
 export function pendingSubText(item, pairedAtText = null) {
   if (!isKnownDevice(item)) return null;
   const parts = [];
-  if (pairedAtText) parts.push(`首次配对 ${pairedAtText}`);
+  if (pairedAtText) parts.push(t("ui.pending_sub_paired_at", { time: pairedAtText }));
   const n = Number(item?.photo_count ?? 0);
-  if (n > 0) parts.push(`已存 ${n} 张`);
-  return parts.length > 0 ? parts.join(" · ") : "以前连过这台电脑";
+  if (n > 0) parts.push(t("ui.pending_sub_photos", { n }));
+  return parts.length > 0 ? parts.join(" · ") : t("ui.pending_sub_known");
 }
 
 /**
@@ -81,7 +83,7 @@ export function pendingSubText(item, pairedAtText = null) {
  * 标题说「请求重新连接」而按钮说「允许加入」是同一种串台——老设备本来
  * 就在列表里，"加入"这个动词在这一屏是错的。
  *
- * 返回键名而不是文案：这个文件不碰 i18n，由调用方 t() 取词。
+ * 返回键名而不是文案：由调用方 t() 取词（按钮在模板里渲染）。
  */
 export function pendingAllowKey(item) {
   return isKnownDevice(item) ? "ui.allow_reconnect" : "ui.allow";

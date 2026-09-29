@@ -2,6 +2,7 @@
 	/* DESK-15：UX-08 提示条收进组件——原 App.svelte 两处（wizard-shell 头部 /
 	   shell 内容区）各自复制一份完全相同的 .message/.message-close，现在
 	   只有一处视觉定义。数值原样收编自原 CSS，不是重新设计。 */
+	import { t } from "$lib/i18n.js";
 	let {
 		message,
 		onClose,
@@ -18,7 +19,7 @@
 	<!-- UX-08: 提示条右侧 × 手动关闭（5s 自动消失之外的第二条路） -->
 	<button
 		class="flex-none rounded-[6px] px-[6px] py-[2px] text-[18px] leading-none text-ink-40 hover:bg-linen hover:text-ink"
-		aria-label="关闭提示"
+		aria-label={t("ui.notice_close")}
 		onclick={onClose}
 	>
 		×

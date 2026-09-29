@@ -15,14 +15,10 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { pairResultName } from "./lib/pending.js";
-import zhDict from "../../../assets/i18n/zh.json";
+// I18N-03 (#492)：App.svelte 用的就是这个共享 t()——断言的是**渲染出来的整句**，不是参数。
+import { setLocale, t } from "./lib/i18n.js";
 
-/** App.svelte 里那个 t() 的等价物——断言的是**渲染出来的整句**，不是参数。 */
-const t = (key, vars = {}) => {
-  let s = zhDict[key] ?? key;
-  for (const [k, v] of Object.entries(vars)) s = s.replaceAll(`{${k}}`, String(v));
-  return s;
-};
+setLocale("zh");
 
 // 业主在桌面改过名的老设备重连：队列行带桌面名，daemon 回的是自报名。
 const renamed = {

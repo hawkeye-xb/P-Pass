@@ -19,6 +19,20 @@ use interprocess::local_socket::traits::Stream as _;
 use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
 use serde_json::{json, Value};
 
+/// I18N-03 (#492)：会经 `invoke` 回到前端展示的错误，一律是「key + 参数」，
+/// 由前端 `t()`（`apps/desktop/src/lib/i18n.js` 的 `errText`）按系统语言渲染；
+/// 文案只在 `assets/i18n/{en,zh}.json`。线上格式是 JSON 字符串
+/// `{"key":"ui.err_…","params":{…}}`——`Result<_, String>` 签名、事件 payload
+/// 类型都不用动。参数值原样透传、不翻译（底层 `{e}` 细节是给人排查用的）；
+/// 参数值本身也可以是另一条 keyed 错误（壳错误包 IPC 错误），前端递归渲染。
+pub(crate) fn ui_err(key: &str, params: &[(&str, &dyn std::fmt::Display)]) -> String {
+    let params: serde_json::Map<String, Value> = params
+        .iter()
+        .map(|(k, v)| ((*k).to_string(), Value::String(v.to_string())))
+        .collect();
+    json!({ "key": key, "params": params }).to_string()
+}
+
 /// NET-11: socket 读超时在 std::io 里的表现跨平台不统一（TimedOut 是
 /// 稳定档；部分平台映射成 WouldBlock——非阻塞语义的超时即此）。只认
 /// 这两档，且调用方（BufReader）可能已消耗部分字节，故超时即弃连接。
@@ -51,21 +65,21 @@ fn one_round_trip(
 ) -> Result<String, String> {
     let name = socket_name
         .to_ns_name::<GenericNamespaced>()
-        .map_err(|e| format!("socket 名不合法: {e}"))?;
-    let conn = Stream::connect(name).map_err(|e| format!("连接后台服务失败: {e}"))?;
+        .map_err(|e| ui_err("ui.err_socket_name", &[("err", &e)]))?;
+    let conn = Stream::connect(name).map_err(|e| ui_err("ui.err_connect", &[("err", &e)]))?;
     let _ = conn.set_recv_timeout(Some(read_timeout));
     let mut reader = BufReader::new(conn);
     reader
         .get_mut()
         .write_all(payload.as_bytes())
-        .map_err(|e| format!("发送失败: {e}"))?;
+        .map_err(|e| ui_err("ui.err_send", &[("err", &e)]))?;
     let mut line = String::new();
     match reader.read_line(&mut line) {
         // socket 超时先于通道触发时（unix 上会），也要报成同一句：死因
         // 必须带方法名（NET-11 判据）。
         Err(e) if is_timeout_err(&e) => Err(ipc_timeout_msg(&method, read_timeout)),
         Ok(_) => Ok(line),
-        Err(e) => Err(format!("读取响应失败: {e}")),
+        Err(e) => Err(ui_err("ui.err_read_response", &[("err", &e)])),
     }
 }
 /// 反转义一个 TOML basic string 的内容（引号已去掉）。
@@ -179,7 +193,7 @@ impl DaemonHandle {
     /// call — a stale token file from a dead daemon must never hijack
     /// discovery (real-world bug: leftover dogfood token).
     pub fn discover() -> Result<Self, String> {
-        let mut last_err = "找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".to_string();
+        let mut last_err = ui_err("ui.err_no_daemon", &[]);
         for path in token_candidates() {
             let Ok(content) = std::fs::read_to_string(&path) else {
                 continue;
@@ -196,7 +210,10 @@ impl DaemonHandle {
                 Ok(_) => return Ok(handle),
                 Err(e) => {
                     // Stale token (dead daemon) — try the next candidate.
-                    last_err = format!("{} 指向的服务无响应：{e}", path.display());
+                    last_err = ui_err(
+                        "ui.err_daemon_unresponsive",
+                        &[("path", &path.display()), ("err", &e)],
+                    );
                 }
             }
         }
@@ -245,7 +262,7 @@ impl DaemonHandle {
                     read_timeout,
                 ));
             })
-            .map_err(|e| format!("启动 IPC 线程失败: {e}"))?;
+            .map_err(|e| ui_err("ui.err_ipc_thread_spawn", &[("err", &e)]))?;
 
         let line = match rx.recv_timeout(read_timeout) {
             Ok(Ok(line)) => line,
@@ -255,11 +272,11 @@ impl DaemonHandle {
                 return Err(ipc_timeout_msg(method, read_timeout))
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(format!("IPC 线程意外退出（{method}）"))
+                return Err(ui_err("ui.err_ipc_thread_exit", &[("method", &method)]))
             }
         };
-        let resp: Value =
-            serde_json::from_str(line.trim()).map_err(|e| format!("响应不是 JSON: {e}"))?;
+        let resp: Value = serde_json::from_str(line.trim())
+            .map_err(|e| ui_err("ui.err_not_json", &[("err", &e)]))?;
         if resp["ok"].as_bool() == Some(true) {
             Ok(resp["result"].clone())
         } else {

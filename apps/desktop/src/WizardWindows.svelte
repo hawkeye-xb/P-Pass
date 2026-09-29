@@ -3,6 +3,7 @@
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { Button } from "$lib/components/ui/button";
   import { startupFailureText } from "$lib/daemonStartupError.js";
+  import { t, errText } from "$lib/i18n.js";
 
   // Windows onboarding — separate component, not a branch inside the
   // macOS Wizard.svelte (2026-08-26, W1 real-box run: 用户明确要求整块
@@ -27,7 +28,7 @@
   async function chooseFolder() {
     const dir = await openDialog({
       directory: true,
-      title: "选择照片存放的文件夹",
+      title: t("ui.wizard_choose_folder_title"),
       defaultPath: defaultDir,
     });
     if (dir) libraryDir = dir;
@@ -46,7 +47,7 @@
       await invoke("disable_auto_sleep");
       power = await invoke("power_hint");
     } catch (e) {
-      sleepFixError = String(e);
+      sleepFixError = errText(e);
     } finally {
       sleepFixBusy = false;
     }
@@ -60,7 +61,7 @@
       power = await invoke("power_hint");
       step = 2;
     } catch (e) {
-      error = `保存设置失败：${e}`;
+      error = t("ui.wizard_save_failed", { err: errText(e) });
     } finally {
       busy = false;
     }
@@ -96,12 +97,12 @@
           stderr = await invoke("daemon_startup_error");
         } catch (_) {}
         throw new Error(
-          startupFailureText(stderr) || "后台服务未能启动。请检查后台服务日志。",
+          startupFailureText(stderr) || t("ui.wizard_daemon_not_started"),
         );
       }
       onDone();
     } catch (e) {
-      error = `启动后台服务失败：${e}`;
+      error = t("ui.wizard_start_failed", { err: errText(e) });
     } finally {
       busy = false;
     }
@@ -110,7 +111,7 @@
 
 <div class="mt-4 flex flex-col gap-[22px] rounded-xl border border-border bg-paper px-8 py-7">
   <div class="flex gap-2">
-    {#each ["照片存在哪", "电脑会睡吗", "设为常驻服务"] as label, i}
+    {#each [t("ui.wizard_step_library"), t("ui.wizard_step_sleep"), t("ui.wizard_step_service")] as label, i}
       <span class="text-[13px] font-semibold {step === i + 1 ? 'text-ink' : step > i + 1 ? 'text-safe' : 'text-ink-40'}">
         {i + 1}. {label}
       </span>
@@ -123,87 +124,87 @@
 
   {#if step === 1}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">全家的照片，要存到哪里？</h2>
-      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">选一个文件夹当「照片库」。照片会按原始文件存进去，你随时能在文件资源管理器里翻到它们。</p>
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_library_body_win")}</p>
       <div class="flex items-center gap-[10px]">
         <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{libraryDir}</code>
-        <Button variant="secondary" class="flex-none" onclick={chooseFolder}>更改…</Button>
+        <Button variant="secondary" class="flex-none" onclick={chooseFolder}>{t("ui.wizard_change_folder")}</Button>
       </div>
       {#if libraryDir !== defaultDir}
-        <Button variant="link" tone="safe" class="self-start" onclick={useDefault} title="回到默认位置">↺ 回到默认位置</Button>
+        <Button variant="link" tone="safe" class="self-start" onclick={useDefault} title={t("ui.wizard_use_default")}>↺ {t("ui.wizard_use_default")}</Button>
       {/if}
       <!-- Windows 没有 macOS TCC 那样的系统级保护目录弹窗；真正的坑是系统盘
            受保护路径（Program Files 等）权限受限、云盘同步目录（OneDrive
            等）可能带来重复占用/同步冲突。默认路径落在用户的「图片」目录，
            不需要额外提醒，只在选到明显有风险的地方才提示。 -->
-      <p class="m-0 rounded-xl bg-waiting-bg px-4 py-3 text-[13.5px] leading-[1.6] text-ink-60">建议避开系统盘的「Program Files」等受保护目录，也尽量不要选在 OneDrive 等云同步文件夹里——放在「图片」「文档」这类你自己的用户目录下最省心。</p>
+      <p class="m-0 rounded-xl bg-waiting-bg px-4 py-3 text-[13.5px] leading-[1.6] text-ink-60">{t("ui.wizard_library_tip_win")}</p>
     </div>
     <div class="mt-auto flex items-center justify-between">
       <span></span>
-      <Button class={WIZARD_PRIMARY_WIDE} disabled={!libraryDir || busy} onclick={toStep2}>继续</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} disabled={!libraryDir || busy} onclick={toStep2}>{t("ui.wizard_continue")}</Button>
     </div>
   {:else if step === 2}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">让这台电脑保持醒着。</h2>
-      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">家人手机会趁插电连 Wi-Fi 时把照片传回来——电脑得开着才收得到。</p>
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_sleep_body")}</p>
       {#if power?.kind === "never"}
         <div class="flex items-center gap-3 rounded-xl border border-border px-[18px] py-[14px]">
           <span class="h-[9px] w-[9px] flex-none rounded-full bg-safe"></span>
-          <span class="flex-1 text-[15px] font-semibold">这台电脑设置为不自动休眠</span>
-          <span class="text-[13px] text-safe">✓ 检查通过</span>
+          <span class="flex-1 text-[15px] font-semibold">{t("ui.wizard_sleep_never")}</span>
+          <span class="text-[13px] text-safe">✓ {t("ui.wizard_check_passed")}</span>
         </div>
       {:else if power?.kind === "sleeps"}
         <div class="flex flex-col gap-3 rounded-xl border border-border bg-waiting-bg px-[18px] py-[14px]">
           <div class="flex items-center gap-3">
             <span class="h-[9px] w-[9px] flex-none rounded-full bg-waiting"></span>
             <div class="flex-1">
-              <p class="m-0 text-[15px] font-semibold">「自动睡眠」还开着</p>
+              <p class="m-0 text-[15px] font-semibold">{t("ui.wizard_sleep_on")}</p>
               <p class="m-0 mt-[3px] text-[13px] leading-[1.5] text-ink-60">
-                这台电脑闲置 {power.minutes} 分钟后会休眠，睡着时收不了备份。
+                {t("ui.wizard_sleep_minutes", { n: power.minutes })}
               </p>
             </div>
           </div>
           <div class="flex items-center gap-[10px]">
             <Button size="compact" disabled={sleepFixBusy} onclick={fixAutoSleep}>
-              {sleepFixBusy ? "设置中…" : "一键设置"}
+              {sleepFixBusy ? t("ui.wizard_sleep_fixing") : t("ui.wizard_sleep_fix")}
             </Button>
-            <Button variant="secondary" size="compact" onclick={() => invoke("open_power_settings")}>去系统设置</Button>
+            <Button variant="secondary" size="compact" onclick={() => invoke("open_power_settings")}>{t("ui.wizard_open_power_settings")}</Button>
           </div>
           {#if sleepFixError}
-            <p class="m-0 text-[13px] text-act">{sleepFixError}——你也可以点「去系统设置」自己关：打开「电源和睡眠设置」，把「屏幕和睡眠」都改成「从不」。</p>
+            <p class="m-0 text-[13px] text-act">{t("ui.wizard_sleep_fix_failed_win", { err: sleepFixError })}</p>
           {/if}
         </div>
       {:else}
-        <p class="m-0 text-[13px] leading-[1.6] text-ink-40">没能读到这台电脑的电源策略（不影响使用）：备份进行中我们会自动保持它清醒。</p>
+        <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.wizard_power_unknown")}</p>
       {/if}
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <Button variant="link" onclick={() => (step = 1)}>‹ 上一步</Button>
-      <Button class={WIZARD_PRIMARY_WIDE} onclick={toStep3}>继续</Button>
+      <Button variant="link" onclick={() => (step = 1)}>‹ {t("ui.wizard_back")}</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} onclick={toStep3}>{t("ui.wizard_continue")}</Button>
     </div>
   {:else if step === 3}
     <div class="flex flex-col gap-4">
-      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">最后一步：设为常驻服务。</h2>
-      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">P-Pass 会注册为系统后台服务：开机自动运行，关掉这个窗口也在安静地收备份。随时可以在「设置」里停止它。</p>
+      <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
+      <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_service_body")}</p>
       <div class="rounded-xl border border-border">
         <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">会申请什么</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">开机自启（注册表「启动项」，不需要管理员权限，也不会创建 Windows 服务）</span>
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_asks_label")}</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_asks_win")}</span>
         </div>
         <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">不会做什么</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">不上传到任何云端、不建账号——照片只在你家的设备之间走</span>
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_wont_label")}</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_wont")}</span>
         </div>
         <div class="flex gap-3 px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">如果被拦</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">安装时若出现 Windows SmartScreen 提示「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」即可（未签名安装包目前会出现这条提示，属已知状态）</span>
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_blocked_label")}</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_blocked_win")}</span>
         </div>
       </div>
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <Button variant="link" onclick={() => (step = 2)}>‹ 上一步</Button>
+      <Button variant="link" onclick={() => (step = 2)}>‹ {t("ui.wizard_back")}</Button>
       <Button class={WIZARD_PRIMARY_WIDE} disabled={busy} onclick={finishSetup}>
-        {busy ? "正在启动…" : "完成"}
+        {busy ? t("ui.starting") : t("ui.wizard_finish")}
       </Button>
     </div>
   {/if}

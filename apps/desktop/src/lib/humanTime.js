@@ -1,5 +1,6 @@
-// T-091: 人性化时间 + 哨兵判定 —— 纯函数，无 DOM/Tauri 依赖，node 可直跑
-// （apps/desktop/scripts/check-human-time.mjs 是对应断言脚本）。
+// T-091: 人性化时间 + 哨兵判定 —— 纯函数，无 DOM/Tauri 依赖。I18N-03 (#492)
+// 起文案经 ./i18n.js 取自 assets/i18n（JSON import 要 Vite/vitest 解析），
+// 裸 node 不再能直跑——scripts/check-human-time.mjs 因此失效，未在本卡修。
 //
 // 时间戳单位 = unix 毫秒。代码依据（不是猜的）：
 // - device.watermarks.last_backup_at ← backup_watermark.updated_at，
@@ -9,8 +10,18 @@
 // - devices.list.last_seen ← 配对时 pairing.rs:168 last_seen: Some(now_ms)，
 //   now_ms 由 ipc.rs:696 now_ms() = as_millis() 传入。
 
+import { t } from "./i18n.js";
+
 const DAY_MS = 86_400_000;
-const WEEKDAY = ["日", "一", "二", "三", "四", "五", "六"];
+const WEEKDAY = [
+  "ui.weekday_sun",
+  "ui.weekday_mon",
+  "ui.weekday_tue",
+  "ui.weekday_wed",
+  "ui.weekday_thu",
+  "ui.weekday_fri",
+  "ui.weekday_sat",
+];
 
 const pad = (n) => String(n).padStart(2, "0");
 const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -25,13 +36,13 @@ const dayStart = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).get
  */
 export function humanTime(tsMs, nowMs = Date.now()) {
   if (typeof tsMs !== "number" || !Number.isFinite(tsMs) || tsMs <= 0) return null;
-  if (nowMs - tsMs < 60_000) return "刚刚"; // 含轻微时钟偏差（未来值）
+  if (nowMs - tsMs < 60_000) return t("ui.time_just_now"); // 含轻微时钟偏差（未来值）
   const d = new Date(tsMs);
   const now = new Date(nowMs);
   const dayDiff = Math.round((dayStart(now) - dayStart(d)) / DAY_MS);
-  if (dayDiff <= 0) return `今天 ${hm(d)}`;
-  if (dayDiff === 1) return `昨天 ${hm(d)}`;
-  if (dayDiff < 7) return `周${WEEKDAY[d.getDay()]} ${hm(d)}`;
+  if (dayDiff <= 0) return t("ui.time_today", { time: hm(d) });
+  if (dayDiff === 1) return t("ui.time_yesterday", { time: hm(d) });
+  if (dayDiff < 7) return t("ui.time_weekday", { day: t(WEEKDAY[d.getDay()]), time: hm(d) });
   if (d.getFullYear() === now.getFullYear()) return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
@@ -48,13 +59,13 @@ export const BACKUP_ATTENTION_DAYS = 5;
 export function relativeTime(tsMs, nowMs = Date.now()) {
   if (typeof tsMs !== "number" || !Number.isFinite(tsMs) || tsMs <= 0) return null;
   const diff = nowMs - tsMs;
-  if (diff < 60_000) return "刚刚";
+  if (diff < 60_000) return t("ui.time_just_now");
   const minutes = Math.max(1, Math.floor(diff / 60_000));
-  if (minutes < 60) return `${minutes} 分钟前`;
+  if (minutes < 60) return t("ui.time_minutes_ago", { n: minutes });
   const hours = Math.max(1, Math.floor(minutes / 60));
-  if (hours < 24) return `${hours} 小时前`;
+  if (hours < 24) return t("ui.time_hours_ago", { n: hours });
   const days = Math.max(1, Math.floor(hours / 24));
-  if (days < 30) return `${days} 天前`;
+  if (days < 30) return t("ui.time_days_ago", { n: days });
   return null;
 }
 

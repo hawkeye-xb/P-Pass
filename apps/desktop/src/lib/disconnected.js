@@ -20,6 +20,8 @@
 // 处理**——保守方向：宁可让一台老设备不出现在主列表，也不要凭空冒出一台
 // 业主早就移除掉的。
 
+import { t } from "./i18n.js";
+
 /** 这台是「自己断开的」吗——该留在主列表里标「已断开」。 */
 export function isSelfDisconnected(device) {
   return Boolean(device?.revoked) && device?.revoked_by === "device";
@@ -48,7 +50,7 @@ export function disconnectedRow(device, disconnectedAtText = null) {
     // 「已断开 · <时刻>」就够了。后半句「在这台手机上断开了连接」是把
     // 「已断开」又说了一遍，占着一整列却不带新信息（2026-09-20 验收人
     // 本地验收后拍掉）。
-    sub: disconnectedAtText ? `已断开 · ${disconnectedAtText}` : "已断开",
-    right: "重新扫码即可恢复",
+    sub: disconnectedAtText ? t("ui.disconnected_at", { time: disconnectedAtText }) : t("ui.disconnected"),
+    right: t("ui.disconnected_hint"),
   };
 }
