@@ -66,8 +66,8 @@
   }
 
   async function toStep3() {
-    // 设计稿 v2：第 3 步 = 「设为常驻服务」说明页——先讲清楚会申请什么/
-    // 不会做什么/被拦怎么办，再动手。真正的 start_daemon（含 autostart
+    // 设计稿 v2：第 3 步 = 「设为常驻服务」说明页——先讲清楚会弹什么
+    // （开机自启通知 + 本地网络授权弹窗，#481）/不会做什么/被拦怎么办，再动手。真正的 start_daemon（含 autostart
     // 注册）在用户点「完成」的 finishSetup 里才执行。
     step = 3;
   }
@@ -200,18 +200,30 @@
       <Button class={WIZARD_PRIMARY_WIDE} onclick={toStep3}>继续</Button>
     </div>
   {:else if step === 3}
-    <!-- 设计稿 v2：第 3 步 = 「设为常驻服务」——先讲清会申请什么/不会
-         做什么/被拦怎么办，点「完成」才真正启动 daemon（含 autostart
+    <!-- 设计稿 v2：第 3 步 = 「设为常驻服务」——先讲清会弹什么（#481：
+         开机自启通知 + 本地网络授权弹窗）/不会做什么/被拦怎么办，点「完成」才真正启动 daemon（含 autostart
          注册，finishSetup）。 -->
     <div class="flex flex-col gap-4">
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">最后一步：设为常驻服务。</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">P-Pass 会注册为系统后台服务：开机自动运行，关掉这个窗口也在安静地收备份。随时可以在「设置」里停止它。</p>
-      <!-- 设计稿 v2：三行"标签(120px)+说明"的表格式布局，不是三个
+      <!-- 设计稿 v2："标签(120px)+说明"的表格式布局（#481 起四行），不是
            各自独立的卡片——分隔线贴边，跟其它页面的 list-card 同款。 -->
       <div class="rounded-xl border border-border">
+        <!-- #481：点「完成」后 macOS 实际会出现两样东西，分两行如实写：
+             开机自启只是一条通知（不用批准）；本地网络是真正要用户点
+             「允许」的系统弹窗（新构建的 daemon 一启动就弹，系统显示的名字
+             是 ppf-daemon 而不是 P-Pass——0.6.1-test.1 实测；finishSetup
+             不等弹窗处理完就 onDone() 进首页）。拒绝后 LAN 直连被挡，生产配置带中继
+             （TransportConfig::from_endpoints，n0_services=true），所以写
+             「只能经中继」而不是「连不上」。恢复入口是静态指引，不做
+             拒绝探测（理由见 #481 PR）。 -->
         <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">会申请什么</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">开机自启（系统会弹一次「后台项目已添加」通知，是正常的）</span>
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">只是通知</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">开机自启——系统会弹一次「后台项目已添加」通知，不用操作</span>
+        </div>
+        <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
+          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">要点「允许」</span>
+          <span class="text-[14px] leading-[1.5] text-ink-60">本地网络——点「完成」后 macOS 会弹窗问「允许“ppf-daemon”查找本地网络中的设备？」。ppf-daemon 就是 P-Pass 的后台服务，请点「允许」。界面会先进入首页，不必等它，弹窗照样点「允许」就行。不允许的话，同一 Wi-Fi 下手机没法直连这台电脑，只能经中继，速度可能慢不少；点错了可以去「系统设置 → 隐私与安全性 → 本地网络」把 ppf-daemon 打开。</span>
         </div>
         <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
           <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">不会做什么</span>
