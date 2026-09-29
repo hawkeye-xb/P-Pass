@@ -309,7 +309,22 @@ internal class FlowEngine(
     }
 
     private fun resetBudgetRefusal(why: String) {
-        if (control.clearBudgetRefusal()) log.log("foreground budget: $why; background triggers request the foreground service again")
+        if (!control.clearBudgetRefusal()) return
+        scheduler.cancelBudgetResetWake()
+        log.log("foreground budget: $why; background triggers request the foreground service again; reset wake cancelled")
+    }
+
+    /**
+     * #522：这次申请刚被系统明确以额度耗尽拒绝——登记一次性唤醒，定在系统复位点之后。只在这里登记（跳过的触发不登记），
+     * 一次耗尽只登记一次；否则耗尽后没有任何唤醒，只能等外部触发（最坏 24h + 5h 兜底）。
+     */
+    private fun scheduleBudgetResetWakeIfExhausted(reasons: Set<TriggerReason>) {
+        val now = bootClock() ?: return
+        val decision = fgsBudgetDecision(control.fgsBudgetFacts(), now, appForegroundAt())?.takeIf { it.skip } ?: return
+        val wakeAt = decision.wakeAtElapsedMs ?: return
+        val delayMs = (wakeAt - now.elapsedMs).coerceAtLeast(0L)
+        scheduler.scheduleBudgetResetWake(delayMs)
+        log.log("cycle $reasons: foreground budget exhausted; one-off wake registered in ${delayMs / 60_000}min (system reset + margin)")
     }
 
     /**
@@ -471,6 +486,7 @@ internal class FlowEngine(
         if (!foreground.acquire()) {
             control.recordFgsBlock(FgsBlockReason.START_REFUSED)
             log.log("foreground service refused: waiting; the next trigger requests it again")
+            scheduleBudgetResetWakeIfExhausted(reasons)
             return settle(WaitReason.FGS_BLOCKED)
         }
         _status.value = LoopStatus(phase = LoopPhase.RUNNING)

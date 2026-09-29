@@ -150,6 +150,76 @@ class C522FgsBudgetSkipTest {
         rig.close()
     }
 
+    // ---------------------------------------------------------------- 额度复位唤醒
+
+    // 耗尽后 App 自己登记一个一次性唤醒，定在「最近一次授予 + 24h + 余量」；跳过的触发不再登记（一次耗尽只登记一次）。
+    // 反证：去掉登记 → 0 次，红；在跳过路径也登记 → 4 次，红；延迟少了余量 → 值不等，红。
+    @Test
+    fun `a certain exhaustion registers exactly one reset wake just past the system reset point`() = runTest {
+        val rig = Rig(this)
+        rig.exhaust()
+        val expected = grant.elapsedMs + FGS_BUDGET_RESET_WINDOW_MS + FGS_BUDGET_RESET_MARGIN_MS - refused.elapsedMs
+        assertEquals(listOf(expected), rig.scheduler.budgetResetWakes)
+        assertTrue(rig.logs.any { it.contains("one-off wake registered in ${expected / 60_000}min") })
+        rig.boot = BootInstant(3, 30_000L)
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
+        rig.trigger(TriggerReason.PERIODIC)
+        rig.trigger(TriggerReason.NETWORK_CHANGE)
+        assertEquals("跳过的触发不得重复登记", 1, rig.scheduler.budgetResetWakes.size)
+        rig.close()
+    }
+
+    // 唤醒到点（已过系统复位点）按普通后台触发走：真去申请、续传。
+    @Test
+    fun `the reset wake at its due time requests the foreground service and resumes`() = runTest {
+        val rig = Rig(this)
+        rig.exhaust()
+        rig.boot = BootInstant(3, refused.elapsedMs + rig.scheduler.budgetResetWakes.single())
+        rig.foreground.grant = true
+        rig.trigger(TriggerReason.BUDGET_RESET)
+        assertEquals(3, rig.foreground.startForegroundServiceCalls)
+        assertEquals(OrderState.CONFIRMED, rig.state(2))
+        rig.close()
+    }
+
+    // 说不清原因的拒绝 / onTimeout 不登记（不是「确定耗尽」）；重启后首个触发直接申请，不另登记。
+    // 反证：登记不看判据（每次被拒都登记）→ 红。
+    @Test
+    fun `no reset wake for unexplained refusals, and none needed after a reboot`() = runTest {
+        val rig = Rig(this)
+        rig.boot = grant
+        rig.photo(1, generation = 1)
+        rig.foreground.grant = false
+        rig.foreground.refusal = otherRefusal
+        rig.trigger()
+        assertEquals(emptyList<Long>(), rig.scheduler.budgetResetWakes)
+
+        val rebooted = Rig(this)
+        rebooted.exhaust()
+        rebooted.boot = BootInstant(4, 5_000L)
+        rebooted.foreground.refusal = otherRefusal
+        rebooted.trigger()
+        assertEquals("重启后不跳过", 3, rebooted.foreground.startForegroundServiceCalls)
+        assertEquals("重启后不另登记", 1, rebooted.scheduler.budgetResetWakes.size)
+        rig.close()
+        rebooted.close()
+    }
+
+    // 回前台清除登记。反证：resetBudgetRefusal 不撤唤醒 → 0 次，红。
+    @Test
+    fun `coming to the foreground cancels the reset wake`() = runTest {
+        val rig = Rig(this)
+        rig.exhaust()
+        rig.probeResult = ProbeResult.Unreachable
+        rig.engine.onAppForeground()
+        rig.settle()
+        assertEquals(1, rig.scheduler.budgetResetWakeCancels)
+        rig.engine.onAppForeground()
+        rig.settle()
+        assertEquals("没记着时不重复撤", 1, rig.scheduler.budgetResetWakeCancels)
+        rig.close()
+    }
+
     // 引擎在回前台那一刻没起来（runtimeFor 超时）也不能漏：进程内的前台事实同样让后台触发恢复申请，并说明原因。
     // 反证：fgsBudgetDecision 不看 lastForegroundAt → 仍跳过，红。
     @Test
@@ -301,5 +371,11 @@ class C522FgsBudgetSkipTest {
         assertTrue(runtime.contains("appForegroundAt = { FlowForegroundHandoff.lastAppForegroundAt },"))
         val onForeground = runtime.substringAfter("internal fun onFlowAppForeground(").substringBefore("thread(")
         assertTrue("回前台的事实要在拿运行时之前同步记下", onForeground.contains("FlowForegroundHandoff.lastAppForegroundAt = androidBootInstant(app)"))
+        val worker = source("backup/BackupWorker.kt")
+        val wake = worker.substringAfter("override fun scheduleBudgetResetWake(").substringBefore("override fun cancelBudgetResetWake(")
+        assertTrue("一次性、唯一名、新替旧", wake.contains("enqueueUniqueWork(") && wake.contains("BUDGET_RESET_WAKE_WORK_NAME") && wake.contains("ExistingWorkPolicy.REPLACE"))
+        assertTrue(wake.contains("backupWorkRequest(") && wake.contains("reason = TriggerReason.BUDGET_RESET") && wake.contains("initialDelayMs = delayMs"))
+        assertFalse("不得复用周期任务（WorkManager 会推迟提前强跑的周期任务）", wake.contains("Periodic"))
+        assertTrue(worker.substringAfter("override fun cancelBudgetResetWake(").contains("cancelUniqueWork(BUDGET_RESET_WAKE_WORK_NAME)"))
     }
 }

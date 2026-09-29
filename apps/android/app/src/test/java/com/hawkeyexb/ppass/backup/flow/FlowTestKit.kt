@@ -137,6 +137,18 @@ class FakeScheduler : WakeScheduler {
     override fun scheduleWhenConditionsMet(reason: WaitReason) {
         constraintWakes += reason
     }
+
+    /** #522：每次登记的额度复位唤醒延迟（ms）。 */
+    val budgetResetWakes = mutableListOf<Long>()
+    var budgetResetWakeCancels = 0
+
+    override fun scheduleBudgetResetWake(delayMs: Long) {
+        budgetResetWakes += delayMs
+    }
+
+    override fun cancelBudgetResetWake() {
+        budgetResetWakeCancels++
+    }
 }
 
 class FakeControl : FlowControl {

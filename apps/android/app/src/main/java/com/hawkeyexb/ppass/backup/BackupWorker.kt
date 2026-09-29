@@ -36,6 +36,9 @@ private const val KEY_REASON = "trigger_reason"
 
 const val UNREACHABLE_PROBE_WORK_PREFIX = "ppass-unreachable-probe-"
 const val CONSTRAINT_WAKE_WORK_NAME = "ppass-constraint-wake"
+
+/** #522：额度复位唤醒的唯一名。独立的一次性任务——不复用周期任务（WorkManager 会推迟提前强跑的周期任务）。 */
+const val BUDGET_RESET_WAKE_WORK_NAME = "ppass-fgs-budget-reset-wake"
 const val UNREACHABLE_PROBE_COUNT = 3
 const val UNREACHABLE_PROBE_INTERVAL_MINUTES = 10L
 
@@ -58,11 +61,12 @@ internal fun backupWorkRequest(
     automatic: Boolean = true,
     reason: TriggerReason = TriggerReason.MEDIA_CHANGE,
     initialDelayMinutes: Long = 0L,
+    initialDelayMs: Long = TimeUnit.MINUTES.toMillis(initialDelayMinutes),
 ): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<BackupWorker>()
         .setConstraints(constraintsOf(spec))
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-        .setInitialDelay(initialDelayMinutes, TimeUnit.MINUTES)
+        .setInitialDelay(initialDelayMs, TimeUnit.MILLISECONDS)
         .setInputData(androidx.work.workDataOf(KEY_AUTOMATIC_WAKE to automatic, KEY_REASON to reason.name))
         .build()
 
@@ -109,6 +113,25 @@ class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
             ExistingWorkPolicy.REPLACE,
             backupWorkRequest(spec, automatic = false, reason = TriggerReason.CONSTRAINTS_MET),
         )
+    }
+
+    // #522：后台触发（automatic = true：后台备份关着就不跑），约束与其他后台生产者相同。REPLACE：见接口注释。
+    override fun scheduleBudgetResetWake(delayMs: Long) {
+        val settings = BackupSettings(context.filesDir).load()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            BUDGET_RESET_WAKE_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            backupWorkRequest(
+                constraintsFor(BackupTier.BACKGROUND, settings),
+                automatic = true,
+                reason = TriggerReason.BUDGET_RESET,
+                initialDelayMs = delayMs,
+            ),
+        )
+    }
+
+    override fun cancelBudgetResetWake() {
+        WorkManager.getInstance(context).cancelUniqueWork(BUDGET_RESET_WAKE_WORK_NAME)
     }
 }
 
