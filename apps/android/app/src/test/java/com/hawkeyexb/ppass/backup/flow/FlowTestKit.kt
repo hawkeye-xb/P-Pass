@@ -209,6 +209,9 @@ internal class Rig(test: TestScope, cursors: Boolean = true) {
     var presenceCalls = 0
     var conditions = Conditions()
     var epoch: PairingEpoch? = PairingEpoch("e1")
+
+    /** #459：完整相册权限（false = 部分授权 / 没授权：「查不到」不能当「被删了」）。 */
+    var fullMediaAccess = true
     val logs = mutableListOf<String>()
 
     init {
@@ -231,6 +234,7 @@ internal class Rig(test: TestScope, cursors: Boolean = true) {
         control = control,
         conditions = { conditions },
         inScope = media::inScope,
+        mediaAbsenceTrusted = { fullMediaAccess },
         pairingEpoch = { epoch },
         scope = scope,
         io = dispatcher,

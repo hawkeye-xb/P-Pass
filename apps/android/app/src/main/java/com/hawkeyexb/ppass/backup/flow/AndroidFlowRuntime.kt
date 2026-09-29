@@ -2,18 +2,23 @@
 // iroh 原生 provider、前台服务与 WorkManager 上，并提供所有触发入口。
 package com.hawkeyexb.ppass.backup.flow
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.BatteryManager
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import androidx.core.content.ContextCompat
 import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.WorkManagerWakeScheduler
+import com.hawkeyexb.ppass.backup.mediaAbsenceTrusted
 import com.hawkeyexb.ppass.backup.order.OrderStore
 import com.hawkeyexb.ppass.backup.order.ContentResolverMediaSnapshotSource
 import com.hawkeyexb.ppass.backup.order.SqliteOrderStore
@@ -52,6 +57,17 @@ internal fun isOnUnmetered(context: Context): Boolean {
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
     val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
     return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+}
+
+/** #459：此刻的相册权限够不够把「MediaStore 查不到」当「原图被删了」（判据见 [mediaAbsenceTrusted]）。 */
+internal fun mediaAbsenceTrustedNow(context: Context): Boolean {
+    fun granted(permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    val sdk = Build.VERSION.SDK_INT
+    return mediaAbsenceTrusted(
+        imagesGranted = granted(if (sdk >= 33) Manifest.permission.READ_MEDIA_IMAGES else Manifest.permission.READ_EXTERNAL_STORAGE),
+        videoGranted = sdk < 33 || granted(Manifest.permission.READ_MEDIA_VIDEO),
+        sdkInt = sdk,
+    )
 }
 
 /** 电量低（与 WorkManager `requiresBatteryNotLow` 同一口径：未充电且 ≤ 15%）。 */
@@ -332,6 +348,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
             )
         },
         inScope = { bucket -> scopeStore.selectedBucketIds()?.contains(bucket) == true },
+        mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },
         pairingEpoch = { pairing()?.pairingEpoch?.takeIf { it.isNotBlank() }?.let(::PairingEpoch) },
         scope = scope,
         io = Dispatchers.IO,

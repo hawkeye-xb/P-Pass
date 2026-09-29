@@ -128,7 +128,9 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
 
     override fun setSourceMissing(id: Long, missing: Boolean, audit: AuditRecord?): Boolean = inTransaction {
         val row = rows[id] ?: return@inTransaction false
-        rows[id] = row.copy(sourceMissing = missing, updatedAtMs = clock())
+        if (row.state != OrderState.CONFIRMED || row.sourceMissing == missing) return@inTransaction false
+        // 与 SqliteOrderStore 同口径：不动 updatedAtMs。
+        rows[id] = row.copy(sourceMissing = missing)
         audit?.let { audits += it }
         true
     }

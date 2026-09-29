@@ -177,6 +177,27 @@ class SqliteOrderStoreDeviceTest {
         assertEquals(2, store.confirmedWithHashAfter(0L, 10).size)
     }
 
+    @Test
+    fun sourceMissingFlagOnlyAppliesToConfirmedRowsAndNeverMovesUpdatedAt() {
+        val store = fresh()
+        val kept = store.insert(newOrder(1, OrderState.CONFIRMED))
+        val gone = store.insert(newOrder(2, OrderState.CONFIRMED))
+        val settled = store.insert(newOrder(3, OrderState.SKIPPED_SOURCE_MISSING))
+        now = 9_000L
+        assertTrue(store.setSourceMissing(gone.id, true))
+        assertFalse("值没变", store.setSourceMissing(gone.id, true))
+        assertFalse("不是 CONFIRMED", store.setSourceMissing(settled.id, true))
+        assertFalse(store.get(settled.id)!!.sourceMissing)
+        assertEquals(1_000L, store.get(gone.id)!!.updatedAtMs)
+        assertEquals(1_000L, store.lastConfirmedAtMs())
+        assertEquals(1L, store.countSourceMissingSkipped(afterMs = 0L))
+        assertEquals(1L, store.countConfirmedPresent(setOf(7L)))
+        assertTrue(store.setSourceMissing(gone.id, false))
+        assertEquals(2L, store.countConfirmedPresent(setOf(7L)))
+        assertEquals(1_000L, store.get(gone.id)!!.updatedAtMs)
+        assertEquals(kept, store.get(kept.id))
+    }
+
     /** MediaStore 只读冒烟：排序、范围过滤、发现游标过滤在真机 ContentResolver 上成立。 */
     @Test
     fun contentResolverSnapshotIsOrderedAndScoped() {
@@ -214,7 +235,10 @@ class SqliteOrderStoreDeviceTest {
             val after = volumes.flatMap { v -> source.readChangedSince(v, mid.generation, mid.mediaId) { it.toList() } }
             assertTrue(after.all { it.generation > mid.generation || (it.generation == mid.generation && it.mediaId > mid.mediaId) })
             assertEquals(all.filter { it.mediaId > first.mediaId }, source.readInScope(first.mediaId) { it.toList() })
+            // #459：existingIds 不看范围（范围是空集的 probe 也查得到），不存在的 id 不在结果里。
+            assertEquals(setOf(first.mediaId), probe.existingIds(listOf(first.mediaId, Long.MAX_VALUE)))
         }
+        assertEquals(emptySet<Long>(), source.existingIds(listOf(Long.MAX_VALUE)))
 
         val versions = source.volumeVersions()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) assertTrue("getVersion per volume: $versions", versions.isNotEmpty())

@@ -64,6 +64,13 @@ interface MediaSnapshotSource {
 
     /** 这张照片现在的样子；MediaStore 里已经没有了返回 null。 */
     fun lookup(mediaId: Long): MediaDetails?
+
+    /**
+     * #459：[mediaIds] 里哪些此刻还在 MediaStore 里（图片 / 视频，**不看范围**——挪到别的相册也算在）。
+     * 返回 null = 这次读不出来（查询返回 null 游标）：调用方必须当「不知道」，**不许**当「全都没了」。
+     * 注意「不在」只在完整相册权限下才等于「被删了」（部分授权下看不见的也不在结果里），由调用方把关。
+     */
+    fun existingIds(mediaIds: Collection<Long>): Set<Long>?
 }
 
 /**
@@ -193,6 +200,22 @@ class ContentResolverMediaSnapshotSource(
         }
     }
 
+    override fun existingIds(mediaIds: Collection<Long>): Set<Long>? {
+        val out = HashSet<Long>()
+        // id 是 Long，直接拼进 SQL（与 BUCKET_ID IN 同一做法），分批避免超长语句。
+        for (chunk in mediaIds.distinct().chunked(EXISTING_IDS_CHUNK)) {
+            val cursor = resolver.query(
+                external,
+                arrayOf(MediaStore.MediaColumns._ID),
+                "$mediaTypeSelection AND ${MediaStore.MediaColumns._ID} IN (${chunk.joinToString(",")})",
+                mediaTypeArgs,
+                null,
+            ) ?: return null
+            cursor.use { rows -> while (rows.moveToNext()) out += rows.getLong(0) }
+        }
+        return out
+    }
+
     private fun collectionOf(volumeName: String): Uri =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) MediaStore.Files.getContentUri(volumeName) else external
 
@@ -226,6 +249,8 @@ class ContentResolverMediaSnapshotSource(
         }
     }
 }
+
+private const val EXISTING_IDS_CHUNK = 500
 
 /** 算 captureAt 要读的三列。[lookupColumns] 必须带上它们，否则 [captureAtMsOf] 取列直接抛错（MOB-99）。 */
 internal val CAPTURE_AT_COLUMNS = listOf(
