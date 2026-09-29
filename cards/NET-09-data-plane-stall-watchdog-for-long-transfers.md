@@ -89,3 +89,10 @@ upload.rs，NET-06 碰 call 路径与 flow 管线）。UI 接线若与 NET-06 �
   120s 回收），但那是**服务端连接表清理**，不解除客户端 await 的挂起；
   设计纪律第 4 条口径：已核查库能力，库无「单流字节停滞」事件可订阅，
   read-with-deadline 即标准答案。
+
+## 进展（2026-09-29）
+
+- 手机查看原图 / 视频下载这条 lane 已由 [#525](https://github.com/hawkeye-xb/P-Pass/pull/525) 处理：`ByteStallGuard` 在停滞时关闭连接、抛 `DownloadStalled`，落到既有失败出口。
+- 阈值改用 60s，不用上文的 30s。iroh 连接级空闲判死是 30s（心跳 5s），relay 恢复期间合法空窗可以接近 30s，贴着它会抢跑，所以取 2 倍，与桌面 NET-29 `FETCH_BYTE_STALL_LIMIT` 同值。
+- 异常名是 `DownloadStalled`，不是 `DaemonStallException`，以便归入 MOB-115 的 `AssetDownloadException` 失败族。
+- 剩余：APK 下载三种失败可区分（`UpdateChecker.kt` catch-all）；daemon `upload.rs` 收流停滞上限；视频页原地重试按钮。
