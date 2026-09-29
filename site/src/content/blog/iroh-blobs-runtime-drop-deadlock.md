@@ -1,6 +1,6 @@
 ---
 title: 一个本该报错的 Rust 程序为什么直接卡死：iroh-blobs FsStore::load 的自死锁
-date: 2026-09-29
+date: 2026-08-12
 tags: [Rust, 工程, 调试]
 lang: zh
 draft: false
@@ -135,7 +135,7 @@ loop {
 
 ## 上游进展
 
-我们在 2026-08-12 把机制、栈和复现提交到了 iroh 仓库（n0-computer/iroh#4468）。之后它被转到了 iroh-blobs 仓库，现在的地址是 [n0-computer/iroh-blobs#252](https://github.com/n0-computer/iroh-blobs/issues/252)。issue 标题是 "iroh-blobs: a failed `FsStore::load` hangs the process forever (deadlock inside `RtWrapper::drop` on the store's own runtime) — the error never surfaces"。截至 2026-09-29，它仍是 open 状态，还没有评论。
+我们在 2026-08-12 把机制、栈和复现提交到了 iroh 仓库（n0-computer/iroh#4468）。之后它被转到了 iroh-blobs 仓库，现在的地址是 [n0-computer/iroh-blobs#252](https://github.com/n0-computer/iroh-blobs/issues/252)。issue 标题是 "iroh-blobs: a failed `FsStore::load` hangs the process forever (deadlock inside `RtWrapper::drop` on the store's own runtime) — the error never surfaces"。（2026-09-29 补记：这个 issue 仍是 open 状态，还没有评论。）
 
 issue 里我们附了几个修复方向，供维护者判断：
 

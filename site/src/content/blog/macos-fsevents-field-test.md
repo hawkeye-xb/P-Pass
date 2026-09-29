@@ -1,6 +1,6 @@
 ---
 title: macOS FSEvents 实测：在访达里移动、删除照片时，系统到底报了什么
-date: 2026-09-29
+date: 2026-08-27
 tags: [macOS, 工程, 文件监听]
 lang: zh
 draft: false

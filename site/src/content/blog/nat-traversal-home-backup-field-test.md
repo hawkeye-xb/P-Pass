@@ -1,6 +1,6 @@
 ---
 title: 手机在外面用 5G，能把照片传回家里的电脑吗：NAT 穿透实测
-date: 2026-09-29
+date: 2026-09-16
 tags: [网络, 工程]
 lang: zh
 draft: false
@@ -172,7 +172,7 @@ v3 版本同时新增了一个 `remote` 字段，把真实的对端地址原样�
 iroh::socket::remote_map::remote_state: connections are not good enough, triggering holepunching
 ```
 
-连接的 `network_path` 始终是 `Relay(https://aps1-1.relay.n0.iroh.link./)`，一次也没有升级成直连。传输没有卡死，经中继传完了多个文件，其中有一个约 220MB 的视频，只是明显比直连慢。这一次为什么没打通，现有的日志还回答不了。这台手机在这个网络下有没有全局 IPv6，当时没有采集。
+连接的 `network_path` 始终是 `Relay(aps1-1.relay.n0.iroh.link)`，一次也没有升级成直连。传输没有卡死，经中继传完了多个文件，其中有一个约 220MB 的视频，只是明显比直连慢。这一次为什么没打通，现有的日志还回答不了。这台手机在这个网络下有没有全局 IPv6，当时没有采集。
 
 所以 5G 连家宽有时能直连，有时会落到中继上，产品要把两种情况都当成常态来处理。
 
