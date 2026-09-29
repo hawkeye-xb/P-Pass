@@ -4,6 +4,9 @@
 # 2026-09-18 工作流迁移至 GitHub Issues，QUEUE/cards 冻结只读、队列门禁
 # 随校验对象一起退役。QA-06 指出的问题由本 lane 收编：md-check / token-check
 # 进 CI。同样是秒级、无编译、无缓存。
+# REL-08 (#510) 起兼收 dogfood-assets：release 资产里的 .sh 在只含资产的
+# 干净目录里必须自足。artifacts.yml / release.yml 只在 push main / tag /
+# dispatch 触发，挂在那边拦不住合并前的回归，所以放在 PR 必过的这条秒级 lane。
 name: CI Docs
 
 on:
@@ -15,6 +18,12 @@ on:
       - "assets/design/tokens.json"
       - "tools/check-markdown-tables.py"
       - "tools/check-token-drift.py"
+      - "tools/dogfood-smoke.sh"
+      - "tools/ipc-lib.sh"
+      - "tools/stage-dogfood-scripts.sh"
+      - "tools/test-dogfood-assets.sh"
+      - ".github/workflows/artifacts.yml"
+      - ".github/workflows/release.yml"
       - ".github/workflows/ci-docs.yml"
   push:
     branches: [main]
@@ -24,6 +33,12 @@ on:
       - "assets/design/tokens.json"
       - "tools/check-markdown-tables.py"
       - "tools/check-token-drift.py"
+      - "tools/dogfood-smoke.sh"
+      - "tools/ipc-lib.sh"
+      - "tools/stage-dogfood-scripts.sh"
+      - "tools/test-dogfood-assets.sh"
+      - ".github/workflows/artifacts.yml"
+      - ".github/workflows/release.yml"
       - ".github/workflows/ci-docs.yml"
   workflow_dispatch:
 
@@ -45,3 +60,16 @@ jobs:
         run: python3 tools/check-markdown-tables.py
       - name: token-check（DESK-15：tokens.css 不许与 tokens.json 漂移）
         run: python3 tools/check-token-drift.py
+
+  dogfood-assets:
+    name: dogfood-assets（REL-08：资产里的 .sh 在干净目录自足）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # 门禁自己的反证：变异（清单漏 helper / 按仓库布局 source / workflow
+      # 绕过暂存脚本 …）必须全红。反证挂了就别信门禁的绿。
+      - name: 反证（变异必须全部被抓到）
+        run: bash tools/test-dogfood-assets.sh --self-test
+      - name: 门禁
+        run: bash tools/test-dogfood-assets.sh

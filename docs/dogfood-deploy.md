@@ -49,7 +49,8 @@ gh release download dogfood --repo hawkeye-xb/P-Pass --pattern 'ppass-macos-arm6
 tar xzf ppass-macos-arm64.tar.gz && mv bin ppf-bin
 # Linux x86_64（裸二进制 + 校验和，分资产）:
 gh release download dogfood --repo hawkeye-xb/P-Pass --pattern 'daemon' --pattern 'testclient' \
-  --pattern 'dogfood-smoke.sh' --pattern 'SHA256SUMS-linux-x64' --pattern 'BUILD_INFO-linux-x64' --dir ppf-bin
+  --pattern 'dogfood-smoke.sh' --pattern 'ipc-lib.sh' --pattern 'SHA256SUMS-linux-x64' --pattern 'BUILD_INFO-linux-x64' --dir ppf-bin
+# ipc-lib.sh 是 dogfood-smoke.sh 从「脚本同目录」source 的 helper，必须一起下
 # 无 gh 的机器用 curl 逐个拉（https://github.com/hawkeye-xb/P-Pass/releases/download/dogfood/<asset>）
 cd ppf-bin && shasum -c SHA256SUMS-* && chmod +x daemon testclient dogfood-smoke.sh && cat BUILD_INFO-*
 ```
@@ -80,8 +81,10 @@ Record / 记下三样:
    log (SEC-11). Fetch it over IPC instead / 配对串（含地址，10 分钟有效）。
    它含配对令牌，daemon **只在 stdout 是终端时**才打印；上面 `nohup … >`
    重定向进了文件，日志里刻意没有它（SEC-11）。改经 IPC 现取
-   (helper from a repo checkout / 助手函数在仓库的 `tools/ipc-lib.sh`):
-   `source tools/ipc-lib.sh && ipc_pair_qr ~/ppf-library/ipc.token && echo "$PAIR_QR"`
+   (helper ships in the release assets next to the binaries; in a repo
+   checkout it is `tools/ipc-lib.sh` / 助手函数随 release 资产与二进制平铺，
+   仓库里是 `tools/ipc-lib.sh`):
+   `source ./ipc-lib.sh && ipc_pair_qr ~/ppf-library/ipc.token && echo "$PAIR_QR"`
 3. the `ipc.token` path — local admin credential / 本机管理凭证
 
 ## 3. Same-machine smoke / 本机冒烟（第一道验收）
