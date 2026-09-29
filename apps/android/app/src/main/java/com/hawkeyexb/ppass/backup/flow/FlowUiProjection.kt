@@ -168,6 +168,16 @@ internal fun flowAllDone(p: FlowProjection): Boolean {
 }
 
 /**
+ * 首页拿到的引擎视图：第一次精确计数（[FlowEngine.pendingKnown]）出来之前是 null——英雄区不先说「照片都存好了」。
+ *
+ * #401：这也是英雄卡 H-C（`confirmedRaw > n`）在新模型里唯一能出现的窗口——视图为 null 时 m 退回 order 表的
+ * [FlowProjection.confirmed]，已备份后又从相册删掉的照片还算在里面。让它消失的是引擎自己在手机上算待办
+ * （进程启动的 [FlowEngine.start]、以及每一轮结束 / 每次触发的重算），**不需要连着电脑、不看插电与 Wi‑Fi**；
+ * 算出来之后 m = n − 待办 − 已跳过，恒 ≤ n。H-C 的文案必须说这件事，不许说「连上电脑时核对」。
+ */
+fun visibleEngineView(view: EngineView, pendingKnown: Boolean): EngineView? = view.takeIf { pendingKnown }
+
+/**
  * 英雄区三元组。m = [FlowProjection.done]（n − 待办 − 范围内已跳过），n = 范围内总数，K = 待办（[EngineView.pending]；还没算出来时退回 n − m）。
  * bucketIds == null（还没选过范围）或 n 读不到 → null，英雄区说「读不到」。
  */
