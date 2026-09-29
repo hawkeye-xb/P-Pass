@@ -85,6 +85,7 @@ class WriterGuardedOrderStore(private val delegate: OrderStore, private val guar
     override fun saveVolumeState(state: VolumeState) = write { delegate.saveVolumeState(state) }
     override fun advanceGeneration(advance: GenerationAdvance) = write { delegate.advanceGeneration(advance) }
     override fun appendAudit(audit: AuditRecord) = write { delegate.appendAudit(audit) }
+    override fun appendAuditOnce(onceKey: String, audit: AuditRecord): Boolean = write { delegate.appendAuditOnce(onceKey, audit) }
     override fun acknowledgeAudit(eventIds: Set<String>) = write { delegate.acknowledgeAudit(eventIds) }
     override fun claimOwner(ownerKey: String, idFloor: Long): Boolean = write { delegate.claimOwner(ownerKey, idFloor) }
 }

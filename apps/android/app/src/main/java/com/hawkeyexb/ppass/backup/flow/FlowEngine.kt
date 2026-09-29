@@ -913,10 +913,17 @@ internal class FlowEngine(
             for (order in page) {
                 val hash = order.contentHash ?: continue
                 if (hash !in missing || !inScope(order.bucketId)) continue
-                // #459：`source_missing` 开始有人写之后，这里**故意不按它分流**，保持写入之前的行为：桌面缺、原图也删了的
-                // 照片照样新建一行待传输 → 取件时查不到原图 → 记「源已删」→ 进「无法恢复」横幅（#390 UI-20）。
-                // 按 #415 裁决 2 改成「只记 unrecoverable 审计」会让这类丢失对用户不可见，且 CONFIRMED 行留着、每个对账轮
-                // 都会再记一条审计——要不要这样改是产品决定，见 #459 PR。
+                if (order.sourceMissing) {
+                    // 桌面缺 + 手机原图也没了（#415 裁决 2；MOB-87 卡面「对账边界」第 6 条：标 UNRECOVERABLE、落审计事实、
+                    // **不提示**）：不补传、不建行，所以也不进「无法恢复」横幅。这条审计的读者是我们（查「账本说谎」），
+                    // 不是用户。CONFIRMED 行留着、每个对账轮都会再遇到它：同一行同一配对代号只记一次。
+                    val epochKey = pairingEpoch()?.value ?: order.pairingEpoch
+                    store.appendAuditOnce(
+                        "unrecoverable:${order.id}:$epochKey",
+                        audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "UNRECOVERABLE", "contentHash" to hash)),
+                    )
+                    continue
+                }
                 store.insert(
                     NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.PENDING, order.pairingEpoch),
                     audit = audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "REUPLOAD", "contentHash" to hash)),
