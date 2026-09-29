@@ -409,32 +409,17 @@ class DaemonClient internal constructor(
             send.writeAll(encodeFrame(Req.serializer(), req))
             send.finish()
 
-            var firstFrame = true
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                val header = recv.readExact(4u)
-                val len = frameLen(header)
-                val payload = decodePayload(JsonElement.serializer(), recv.readExact(len.toUInt()))
-                if (firstFrame) {
-                    firstFrame = false
-                    onConnected() // 读到第一个帧（订阅确认）= 这次真的连上了
-                }
-                val event = (payload as? JsonObject)?.get("event")
-                    ?.let { (it as? JsonPrimitive)?.content }
-                when (event) {
-                    "timeline.invalidated" -> onInvalidated()
-                    // NET-14: flow.delivered/flow.failed — the daemon already
-                    // filters these to only the phone they name (router.rs),
-                    // so every frame that arrives here on this connection is
-                    // already this phone's own event; no further filtering
-                    // by node_id is needed at this layer.
-                    "flow.delivered", "flow.failed" -> {
-                        val data = (payload as? JsonObject)?.get("data") as? JsonObject
-                        if (data != null) onFlowEvent(event, data)
-                    }
-                }
-                // 没有 "event" 键的帧是订阅确认本身（{"ok":true,...}）——忽略。
-            }
+            readSubscriptionFrames(
+                nextFrame = {
+                    currentCoroutineContext().ensureActive()
+                    val header = recv.readExact(4u)
+                    val len = frameLen(header)
+                    decodePayload(JsonElement.serializer(), recv.readExact(len.toUInt()))
+                },
+                onConnected = onConnected,
+                onFlowEvent = onFlowEvent,
+                onInvalidated = onInvalidated,
+            )
         } finally {
             conn.close(0L, ByteArray(0))
         }

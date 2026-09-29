@@ -151,6 +151,8 @@ internal fun acknowledgeFlowMissingSource(context: Context) {
 /** App 进入前台：触发一次（含对账）。 */
 internal fun onFlowAppForeground(context: Context) {
     val app = context.applicationContext
+    // #522：先同步记下「回过前台」——就算下面拿运行时超时 / 失败，额度闸门也看得到这个事实。
+    FlowForegroundHandoff.lastAppForegroundAt = androidBootInstant(app)
     thread(name = "ppass-flow-foreground") {
         runCatching { runtimeFor(app)?.engine?.onAppForeground() }.onFailure { Log.e(TAG, "foreground trigger failed", it) }
     }
@@ -353,6 +355,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         scope = scope,
         io = Dispatchers.IO,
         log = androidLog,
+        bootClock = { androidBootInstant(app) },
+        appForegroundAt = { FlowForegroundHandoff.lastAppForegroundAt },
         afterCycle = { auditScope.launch { dispatcher.flush() } },
         onEpochAdvertised = { advertised ->
             // 同一台桌面换了配对代号：order 表保留（内容寻址，CONFIRMED 跨代号成立），只更新凭证。

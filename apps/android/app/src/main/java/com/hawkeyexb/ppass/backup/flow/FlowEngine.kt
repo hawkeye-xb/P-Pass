@@ -74,6 +74,10 @@ internal class FlowEngine(
     private val onEpochAdvertised: (String) -> Unit = {},
     /** 单调时钟（ms），只给刷新节流用；[clock] 是墙钟（审计时间戳）。 */
     private val monotonicClock: () -> Long = { System.nanoTime() / 1_000_000 },
+    /** #522：系统额度时钟（开机序号 + elapsedRealtime）。null = 读不到 → 从不跳过申请。 */
+    private val bootClock: () -> BootInstant? = { null },
+    /** #522：App 最近一次进入前台的时刻（进程内事实，不依赖引擎当时是否已起来）。 */
+    private val appForegroundAt: () -> BootInstant? = { null },
 ) {
     // 写 `_status` 就是写原始运行态；要不要刷新通知 / 首页由 [LoopStatusCell] 按「值变了 + 节流」决定。
     private val _status = LoopStatusCell(scope, publish = { foreground.update(it) }, now = monotonicClock)
@@ -298,8 +302,30 @@ internal class FlowEngine(
         stopCycle(WaitReason.FGS_BLOCKED)
     }
 
-    /** App 回到前台：一次触发（含对账）。 */
-    fun onAppForeground(): Job = scope.launch { onTrigger(TriggerReason.APP_FOREGROUND) }
+    /** App 回到前台：一次触发（含对账）。#522：回过前台 = 系统下一次 startForeground 会复位额度，先把「确定被拒」清掉。 */
+    fun onAppForeground(): Job = scope.launch {
+        resetBudgetRefusal("app came to the foreground")
+        onTrigger(TriggerReason.APP_FOREGROUND)
+    }
+
+    private fun resetBudgetRefusal(why: String) {
+        if (!control.clearBudgetRefusal()) return
+        scheduler.cancelBudgetResetWake()
+        log.log("foreground budget: $why; background triggers request the foreground service again; reset wake cancelled")
+    }
+
+    /**
+     * #522：这次申请刚被系统明确以额度耗尽拒绝——登记一次性唤醒，定在系统复位点之后。只在这里登记（跳过的触发不登记），
+     * 一次耗尽只登记一次；否则耗尽后没有任何唤醒，只能等外部触发（最坏 24h + 5h 兜底）。
+     */
+    private fun scheduleBudgetResetWakeIfExhausted(reasons: Set<TriggerReason>) {
+        val now = bootClock() ?: return
+        val decision = fgsBudgetDecision(control.fgsBudgetFacts(), now, appForegroundAt())?.takeIf { it.skip } ?: return
+        val wakeAt = decision.wakeAtElapsedMs ?: return
+        val delayMs = (wakeAt - now.elapsedMs).coerceAtLeast(0L)
+        scheduler.scheduleBudgetResetWake(delayMs)
+        log.log("cycle $reasons: foreground budget exhausted; one-off wake registered in ${delayMs / 60_000}min (system reset + margin)")
+    }
 
     /**
      * #439：前台心跳确认桌面可达。只在「等待中（桌面不可达）」时叫醒循环——否则桌面回来之后，
@@ -396,6 +422,8 @@ internal class FlowEngine(
     private suspend fun runCycle(reasons: Set<TriggerReason>) {
         val userPresent = reasons.any { it.userPresent }
         val reconcile = reasons.any { it.reconcile }
+        // #522：人在场的触发都来自可见的 App（系统此刻按 TOP 复位额度），同样清掉「确定被拒」。多清只会多试一次。
+        if (userPresent) resetBudgetRefusal("user present ($reasons)")
         _status.value = LoopStatus(phase = LoopPhase.CHECKING)
         if (control.paused()) return settle(null)
         val epoch = pairingEpoch() ?: return settle(WaitReason.NOT_PAIRED)
@@ -444,9 +472,21 @@ internal class FlowEngine(
         }
 
         // ---- 申请 FGS + wakelock：整轮只申请这一次（C-06）；被拒就等下一次触发 ----
+        // #522：系统已明确说额度耗尽、之后没回过前台、也没过系统复位点——这次申请必被拒，后台触发直接跳过。
+        // 人在场时不跳过（系统按 TOP 复位）。依据与边界见 [fgsBudgetSkipReason]。
+        if (!userPresent) {
+            fgsBudgetDecision(control.fgsBudgetFacts(), bootClock(), appForegroundAt())?.let { decision ->
+                if (decision.skip) {
+                    log.log("cycle $reasons: skipping startForegroundService: ${decision.why}")
+                    return settle(WaitReason.FGS_BLOCKED)
+                }
+                log.log("cycle $reasons: the system refused for budget earlier, requesting anyway: ${decision.why}")
+            }
+        }
         if (!foreground.acquire()) {
             control.recordFgsBlock(FgsBlockReason.START_REFUSED)
             log.log("foreground service refused: waiting; the next trigger requests it again")
+            scheduleBudgetResetWakeIfExhausted(reasons)
             return settle(WaitReason.FGS_BLOCKED)
         }
         _status.value = LoopStatus(phase = LoopPhase.RUNNING)
