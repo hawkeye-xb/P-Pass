@@ -249,7 +249,7 @@
   "ui.pair_generating": "Generating pairing code…",
   "ui.video_load_failed": "Can't load this video",
   "ui.tray_open": "Open P-Pass",
-  "ui.tray_export_logs": "Export Diagnostics…",
+  "ui.tray_export_logs": "Export Diagnostics",
   "ui.tray_quit": "Quit App",
   "ui.err_socket_name": "Invalid socket name: {err}",
   "ui.err_connect": "Couldn't connect to the background service: {err}",

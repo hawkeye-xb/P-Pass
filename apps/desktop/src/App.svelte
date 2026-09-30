@@ -736,7 +736,7 @@
     listen("hidden-to-tray", onHiddenToTray).then((f) => (unlistenTray = f));
     // DESK-36 (#456): 托盘停止服务后 Rust 发来的通知。
     listen("service-stopped", onServiceStopped).then((f) => (unlistenStopped = f));
-    // #550: 托盘「导出诊断包…」——窗口已被 Rust 拉到前台，结果走 toast。
+    // #550: 托盘「导出诊断包」——窗口已被 Rust 拉到前台，结果走 toast。
     listen("export-logs-requested", exportLogs).then((f) => (unlistenExportLogs = f));
     window.addEventListener("hashchange", onHashChange);
   });
@@ -1836,7 +1836,7 @@
                   </div>
                   <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.restart_service_hint")}</p>
                 {/if}
-                <!-- #550：诊断包入口已收进托盘菜单（「导出诊断包…」），设置页不再展示。 -->
+                <!-- #550：诊断包入口已收进托盘菜单（「导出诊断包」），设置页不再展示。 -->
               </Card>
               <Card variant="danger" class="text-[16px]">
                 <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
