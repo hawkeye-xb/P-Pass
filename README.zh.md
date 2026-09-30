@@ -71,10 +71,10 @@
    **允许**。
    Open P-Pass on your phone, scan the QR on your computer screen, tap
    **Allow** on the pairing prompt.
-3. 完成——手机从此自动备份（充电 + Wi-Fi 时）。随时打开 App 就能浏览全家
+3. 完成——手机从此自动备份（连接 Wi-Fi 且电量不低时）。随时打开 App 就能浏览全家
    照片时间线。
-   Done — your phone backs up automatically (charging + Wi-Fi). Open the app
-   any time to browse the family photo timeline.
+   Done — your phone backs up automatically (on Wi-Fi when the battery isn't
+   low). Open the app any time to browse the family photo timeline.
 
 [截图: 手机扫码配对成功的界面（时间线视图）]
 
