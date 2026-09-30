@@ -1,7 +1,7 @@
 # 国内下载镜像：把已发布 release 的 dmg / apk 覆盖到 R2 固定地址
-#   https://dl.hawkeye-xb.com/P-Pass-latest.dmg
-#   https://dl.hawkeye-xb.com/P-Pass-latest.apk
-#   https://dl.hawkeye-xb.com/P-Pass-latest.json   （版本号 + sha256，核对用）
+#   https://p-pass-dl.hawkeye-xb.com/P-Pass-latest.dmg
+#   https://p-pass-dl.hawkeye-xb.com/P-Pass-latest.apk
+#   https://p-pass-dl.hawkeye-xb.com/P-Pass-latest.json   （版本号 + sha256，核对用）
 # 中文官网下载按钮指向这里（site/src/consts.ts MIRROR_*）。
 #
 # 和 release.yml **完全解耦**：2026-08-25 撤掉旧镜像，原因是镜像步骤写在
@@ -38,7 +38,7 @@ concurrency:
 
 env:
   BUCKET: p-pass-releases
-  PUBLIC_BASE: https://dl.hawkeye-xb.com
+  PUBLIC_BASE: https://p-pass-dl.hawkeye-xb.com
 
 jobs:
   mirror:
