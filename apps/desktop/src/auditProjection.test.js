@@ -35,6 +35,22 @@ describe("活动记录的用户投影", () => {
     expect(auditText(event)).toBe("发生了一条未分类的活动");
   });
 
+  it("#552：配对未成的三种结局各有各的文案，不落入未分类兜底", () => {
+    const denied = auditText({ kind: "pair.denied" });
+    const cancelled = auditText({ kind: "pair.cancelled" });
+    const expired = auditText({ kind: "pair.expired" });
+    expect(denied).toBe("加入被拒绝");
+    expect(cancelled).toBe("手机已取消");
+    expect(expired).toBe("配对已超时");
+    const unknown = auditText({ kind: "future.internal.event" });
+    for (const text of [denied, cancelled, expired]) expect(text).not.toBe(unknown);
+    expect(new Set([denied, cancelled, expired]).size).toBe(3);
+    for (const kind of ["pair.denied", "pair.cancelled", "pair.expired"]) {
+      expect(isVisibleAudit({ kind })).toBe(true);
+      expect(auditWho({ kind, payload: { deviceName: "客厅的手机" } }, [])).toBe("客厅的手机");
+    }
+  });
+
   it("本机和其它设备按审计合同显示身份", () => {
     expect(auditWho({}, [])).toBe("【本地】");
     expect(

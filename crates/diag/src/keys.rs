@@ -245,6 +245,8 @@ msg_keys! {
     UI_AUDIT_PAIR_REQUESTED => "ui.audit_pair_requested",
     UI_AUDIT_PAIR_ACCEPTED => "ui.audit_pair_accepted",
     UI_AUDIT_PAIR_DENIED => "ui.audit_pair_denied",
+    UI_AUDIT_PAIR_CANCELLED => "ui.audit_pair_cancelled",
+    UI_AUDIT_PAIR_EXPIRED => "ui.audit_pair_expired",
     UI_AUDIT_REMOVED_EXTERNAL => "ui.audit_removed_external",
     UI_AUDIT_RENAMED_FROM_TO => "ui.audit_renamed_from_to",
     UI_AUDIT_RENAMED => "ui.audit_renamed",
@@ -539,6 +541,8 @@ mod tests {
             UI_AUDIT_PAIR_REQUESTED,
             UI_AUDIT_PAIR_ACCEPTED,
             UI_AUDIT_PAIR_DENIED,
+            UI_AUDIT_PAIR_CANCELLED,
+            UI_AUDIT_PAIR_EXPIRED,
             UI_AUDIT_REMOVED_EXTERNAL,
             UI_AUDIT_RENAMED_FROM_TO,
             UI_AUDIT_RENAMED,
@@ -673,7 +677,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 283);
+        assert_eq!(ALL.len(), 285);
     }
 
     #[test]

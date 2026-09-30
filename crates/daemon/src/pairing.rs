@@ -109,6 +109,31 @@ pub enum PairDecision {
     Reject,
 }
 
+/// #552: how a pending request ended — the input to its audit kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    /// The owner said yes.
+    Accept,
+    /// The owner said no → `pair.denied`.
+    Denied,
+    /// The phone withdrew (`pair.cancel`) before any verdict → `pair.cancelled`.
+    Cancelled,
+    /// No verdict in time: TTL, or the owner's half dropped → `pair.expired`.
+    Expired,
+}
+
+impl Ending {
+    /// The audit kind of a non-join ending; `None` for [`Ending::Accept`].
+    fn refusal_kind(self) -> Option<&'static str> {
+        match self {
+            Ending::Accept => None,
+            Ending::Denied => Some("pair.denied"),
+            Ending::Cancelled => Some("pair.cancelled"),
+            Ending::Expired => Some("pair.expired"),
+        }
+    }
+}
+
 /// A pairing request waiting for the owner's decision.
 #[derive(Debug)]
 pub struct PendingPair {
@@ -598,20 +623,25 @@ impl Pairing {
         // `now_ms` captured at request entry. Accept and deny share the
         // same fix: the audit must answer "how long did the owner take to
         // click?" for BOTH verdicts, and the timeout path lands on
-        // `denied`. Elapsed is added to the caller-injected `now_ms`
-        // (never wall-clock raw) so clock-jump scenarios keep the trail
-        // monotonic (T-070's injected clock stays the truth).
+        // `pair.expired` (#552; was `denied`). Elapsed is added to the
+        // caller-injected `now_ms` (never wall-clock raw) so clock-jump
+        // scenarios keep the trail monotonic (T-070's injected clock stays
+        // the truth).
         let decided_at = now_ms.saturating_add(wait_started.elapsed().as_millis() as i64);
+        // #552: how the request ended decides its audit kind. The
+        // "phone withdrew" test is exactly the one above that takes the row
+        // off the owner's screen — an owner verdict that won the race is
+        // recorded as the owner's, never as the phone's cancel.
+        let ending = match decision.as_ref() {
+            Some(PairDecision::Accept) => Ending::Accept,
+            Some(PairDecision::Reject) => Ending::Denied,
+            None if phone_withdrew => Ending::Cancelled,
+            // TTL, or the owner's half dropped (row replaced/swept, UI gone).
+            None => Ending::Expired,
+        };
 
         let state = match self
-            .apply_verdict(
-                peer,
-                &device_name,
-                role,
-                now_ms,
-                decision.as_ref(),
-                decided_at,
-            )
+            .apply_verdict(peer, &device_name, role, now_ms, ending, decided_at)
             .await
         {
             Ok(pairing_epoch) => PairState::Accepted { pairing_epoch },
@@ -632,19 +662,19 @@ impl Pairing {
         device_name: &str,
         role: Role,
         now_ms: i64,
-        decision: Option<&PairDecision>,
+        ending: Ending,
         decided_at: i64,
     ) -> Result<String, PairRejection> {
-        let accept = matches!(decision, Some(PairDecision::Accept));
-
-        if !accept {
-            // T5: owner 拒绝（或 UI 消失/超时）同样入审计。
+        if let Some(kind) = ending.refusal_kind() {
+            // T5: 没成的配对同样入审计。#552：按结局分 kind——业主拒绝
+            // `pair.denied`、手机取消 `pair.cancelled`、没人及时决策
+            // `pair.expired`，桌面活动记录据此显示不同文案。
             let _ = self
                 .db
                 .append_audit(&storage::AuditEntry::local(
                     decided_at,
                     Some(peer.0.to_vec()),
-                    "pair.denied",
+                    kind,
                     None,
                     Some(serde_json::json!({ "deviceName": device_name }).to_string()),
                 ))
