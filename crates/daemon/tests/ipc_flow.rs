@@ -669,7 +669,7 @@ async fn logs_export_zip_leaks_no_username() {
         "the export must not contain the real home path"
     );
     assert!(
-        all_text.contains("<DATA>/Pictures/secret.jpg"),
+        all_text.contains("<DATA>/Pictures/<file>.jpg"),
         "the path must be present but sanitised: {all_text}"
     );
     assert!(
@@ -798,10 +798,9 @@ async fn logs_export_zip_carries_no_address_identifier_or_name() {
     let (db, _pairing, socket, token) = start(dir.path(), "logs-544").await;
     let vectors: serde_json::Value =
         serde_json::from_str(include_str!("../../../assets/privacy/redact-vectors.json")).unwrap();
-    let inputs: Vec<String> = vectors["exact"]
-        .as_array()
-        .unwrap()
+    let inputs: Vec<String> = ["exact", "export"]
         .iter()
+        .flat_map(|g| vectors[*g].as_array().unwrap().iter())
         .map(|c| c["in"].as_str().unwrap().to_string())
         .collect();
     for (i, input) in inputs.iter().enumerate() {
@@ -859,6 +858,16 @@ async fn logs_export_zip_carries_no_address_identifier_or_name() {
     }
     for needle in [
         "张三",
+        "Zhang San",
+        "Li Si",
+        "王五",
+        "wangwu",
+        "Alice",
+        "alice",
+        "家庭",
+        "zhangsan",
+        "IMG_0001",
+        "DSC",
         "family-example",
         &library,
         "203.0.113.",
@@ -867,7 +876,10 @@ async fn logs_export_zip_carries_no_address_identifier_or_name() {
     ] {
         assert!(!all_text.contains(needle), "{needle} leaked: {all_text}");
     }
-    assert!(all_text.contains("<LIBRARY>/originals/x.jpg"), "{all_text}");
+    assert!(
+        all_text.contains("<LIBRARY>/originals/<file>.jpg"),
+        "{all_text}"
+    );
     assert_no_leak(&all_text);
 }
 

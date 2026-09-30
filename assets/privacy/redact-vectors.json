@@ -102,6 +102,64 @@
       "out": "relay client dial wss://<host>/relay failed"
     }
   ],
+  "export": [
+    {
+      "in": "originals/ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c/2026/09/IMG_0001.jpg",
+      "out": "originals/ea4a6c63…<masked>/2026/09/<file>.jpg"
+    },
+    {
+      "in": "{\"relPath\":\"originals/ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c/2026/09/张三婚礼.HEIC\"}",
+      "out": "{\"relPath\":\"originals/ea4a6c63…<masked>/2026/09/<file>.heic\"}"
+    },
+    {
+      "in": "WATCH-01: ingest \"<LIBRARY>/Zhang San Wedding/IMG 1.jpg\" 失败: denied",
+      "out": "WATCH-01: ingest \"<LIBRARY>/<dir>/<file>.jpg\" 失败: denied"
+    },
+    {
+      "in": "file missing at \"/Volumes/Zhang San Disk/Photos/2026/家庭 聚会/DSC 0001.JPG\"",
+      "out": "file missing at \"/Volumes/<dir>/<dir>/2026/<dir>/<file>.jpg\""
+    },
+    {
+      "in": "IDX-06: 预生成查 hash 失败 originals/ab…<masked>/2026/08/Li Si birthday 2026.mov: io error",
+      "out": "IDX-06: 预生成查 hash 失败 originals/ab…<masked>/2026/08/<file>.mov: io error"
+    },
+    {
+      "in": "<DATA>/Pictures/王五的相册/wangwu-trip.png failed: denied",
+      "out": "<DATA>/Pictures/<dir>/<file>.png failed: denied"
+    },
+    {
+      "in": "C:\\Users\\alice\\Pictures\\Alice Smith\\photo 7.heic not found",
+      "out": "C:\\Users\\<dir>\\Pictures\\<dir>\\<file>.heic not found"
+    },
+    {
+      "in": "<DATA>\\AppData\\Local\\P-Pass\\logs\\daemon.log",
+      "out": "<DATA>\\AppData\\Local\\P-Pass\\logs\\daemon.log"
+    },
+    {
+      "in": "身份密钥已铸造: <LIBRARY>/.ppf/identity.key",
+      "out": "身份密钥已铸造: <LIBRARY>/.ppf/identity.key"
+    },
+    {
+      "in": "库目录: /Users/zhangsan/Pictures/P-Pass 家庭照片库",
+      "out": "库目录: /Users/<dir>/Pictures/<dir>"
+    },
+    {
+      "in": "export \"张三 婚礼.jpg\" done",
+      "out": "export \"<file>.jpg\" done"
+    },
+    {
+      "in": "StandardOutPath  = <DATA>/Library/Logs/p-pass-daemon.log",
+      "out": "StandardOutPath  = <DATA>/Library/Logs/p-pass-daemon.log"
+    },
+    {
+      "in": "daemon.log（固定位置）= <DATA>/Library/Application Support/P-Pass/logs/daemon.log —— 已收入包内",
+      "out": "daemon.log（固定位置）= <DATA>/Library/Application Support/P-Pass/logs/daemon.log —— 已收入包内"
+    },
+    {
+      "in": "NET-20: 回收 flow-staging 孤儿 ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c.upload（123 字节）",
+      "out": "NET-20: 回收 flow-staging 孤儿 ea4a6c63…<masked>.upload（123 字节）"
+    }
+  ],
   "keep": [
     "2026-09-30T01:49:50.562699Z  INFO daemon: P-Pass daemon 已启动",
     "2026-09-29T10:56:37.111749Z  WARN noq_proto::connection: failed closing path err=MultipathNotNegotiated",
@@ -120,6 +178,9 @@
     "[1, 2, 3]",
     "flow_delivery::FlowDelivery::provider_for returned GuardMismatch",
     "watch_connection_close handles MultipathMappedAddr variants",
-    "MAC 00:1a:2b:3c:4d:5e stays out of scope"
+    "MAC 00:1a:2b:3c:4d:5e stays out of scope",
+    "alpn=ppf/ctrl/1 remote=5f0b2c9d41",
+    "https://<host>/relay and https://aps1-1.relay.n0.iroh.link./",
+    "2026/09 rollup ok"
   ]
 }

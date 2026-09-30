@@ -133,7 +133,7 @@ n0 relay 协调打洞。若跨网配对超时，那是 H-07（自建 relay）的
   whitelist persists. QR & IPC tokens are re-minted per launch.
   / 崩溃重启：库与索引无恙，白名单在库里；QR 与 IPC 令牌每次启动新发。
 - Logs: `RUST_LOG=debug` for connection detail; `logs.export` over IPC
-  produces a sanitized zip (public IPs, long identifiers, library path and
-  device names removed; photo file names remain — share with developers
-  only). / 日志与脱敏诊断包（仍含照片文件名，只发给开发者）。
+  produces a sanitized zip for the developers (paths, photo file names,
+  public IPs, long identifiers and device names removed). / 日志与脱敏诊断包
+  （路径、照片文件名、公网 IP、长标识与设备名已抹去），供开发者排查。
 - Update: `gh release download dogfood --repo hawkeye-xb/P-Pass --pattern 'ppass-macos-arm64.tar.gz' --clobber` 重拉（产物随每次 push 自动重建，tag 固定不挪）。/ 更新：dogfood release 资产随主干自动重建，重拉即新版（tag `dogfood` 固定，只 clobber 资产，不产生新 tag）。

@@ -99,11 +99,14 @@ pub fn sanitize(s: &str, home: &str) -> String {
 /// [`crate::redact::redact`]（公网 IP、自建 relay 域名、长 hex / base32 /
 /// base64url 标识与票据）。与 daemon 侧 `ipc.rs` 的 `scrub` 同语义。
 pub fn scrub_full(s: &str, home: &str, library: Option<&str>) -> String {
-    let s = match library.filter(|l| !l.is_empty()) {
-        Some(lib) => s.replace(lib, "<LIBRARY>"),
-        None => s.to_string(),
+    let pre = |s: &str| {
+        let s = match library.filter(|l| !l.is_empty()) {
+            Some(lib) => s.replace(lib, "<LIBRARY>"),
+            None => s.to_string(),
+        };
+        sanitize(&s, home)
     };
-    crate::redact::redact(&sanitize(&s, home))
+    crate::redact::redact_export_json_or_text(s, &pre)
 }
 
 /// config.toml 里的 `data_dir`（库目录），经 TOML 解析取值（DESK-40 教训：
@@ -230,10 +233,11 @@ P-Pass 诊断包（导出时间见各文件内容）
   9. daemon-log-missing.txt
                               ← 0 那份没收进来，里面写了原因和它本该在的位置
 
-脱敏（导出时自动做）：家目录 → <DATA>，库目录 → <LIBRARY>；公网 IP 换成
-<ipv4:public> / <ipv6:public>（局域网地址保留）；NodeId、hash、票据、配对
-令牌这类长标识只留前 8 位；自建中继的域名换成 <host>；不含设备名。
-日志里仍有照片的文件名和时间，请只发给开发者，不要公开发布。
+脱敏（导出时自动做）：家目录 → <DATA>，库目录 → <LIBRARY>；路径里的文件夹
+名换成 <dir>，照片等文件名换成 <file>.扩展名；公网 IP 换成 <ipv4:public> /
+<ipv6:public>（局域网地址保留）；NodeId、hash、票据、配对令牌这类长标识只留
+前 8 位；自建中继的域名换成 <host>；不含设备名。保留时间戳与错误信息，供开发者
+排查。
 ";
 
 /// 打包内容（纯函数：入 inputs，出 zip 条目表）。
@@ -596,10 +600,10 @@ mod tests {
         assert!(!text.contains(&node), "全长 NodeId 泄漏了: {text}");
         assert!(text.contains("c4c4c4c4…<masked>"), "{text}");
         // 8 位前缀在阈值之下，必须原样保留（不然支持案子没法对话）。
-        assert!(text.contains("\"actor_prefix\": \"abababab\""), "{text}");
+        // #544：JSON 按字符串值逐个脱敏后重新序列化，格式可能变，按值判断。
+        let v: serde_json::Value = serde_json::from_str(&text).expect("scrub 后仍是合法 JSON");
+        assert_eq!(v[0]["actor_prefix"], "abababab", "{text}");
         assert!(!text.contains("/Users/someone"), "家目录也要脱敏: {text}");
-        // 仍是合法 JSON——掩码只发生在字符串值内部。
-        serde_json::from_str::<serde_json::Value>(&text).expect("scrub 后仍是合法 JSON");
     }
 
     // 脱敏口径与 devices.json 一致：NodeId / 配对令牌只出前缀。
@@ -624,10 +628,9 @@ mod tests {
             "../../../../assets/privacy/redact-vectors.json"
         ))
         .unwrap();
-        let blob: String = vectors["exact"]
-            .as_array()
-            .unwrap()
+        let blob: String = ["exact", "export"]
             .iter()
+            .flat_map(|g| vectors[*g].as_array().unwrap().iter())
             .map(|c| format!("{}\n", c["in"].as_str().unwrap()))
             .collect();
         let library = "/Volumes/Zhang San Disk/Photos";
@@ -671,6 +674,15 @@ mod tests {
         for needle in [
             "张三",
             "Zhang San",
+            "Li Si",
+            "王五",
+            "wangwu",
+            "Alice",
+            "alice",
+            "家庭",
+            "zhangsan",
+            "IMG_0001",
+            "DSC",
             "family-example",
             "203.0.113.",
             "198.51.100.",
@@ -679,7 +691,7 @@ mod tests {
         ] {
             assert!(!text.contains(needle), "{needle} leaked:\n{text}");
         }
-        assert!(text.contains("<LIBRARY>/originals/x.jpg"), "{text}");
+        assert!(text.contains("<LIBRARY>/originals/<file>.jpg"), "{text}");
         assert!(text.contains("<LIBRARY>（不在家目录下）"), "{text}");
         assert_no_leak(&text);
     }
@@ -773,7 +785,9 @@ mod tests {
             app_version: "0.6.0".into(),
             plist_found: false,
             persistent_log_tail: None,
-            persistent_log_path: Some(r"C:\Users\someone\AppData\Local\x\logs\daemon.log".into()),
+            persistent_log_path: Some(
+                r"C:\Users\someone\AppData\Local\P-Pass\logs\daemon.log".into(),
+            ),
             persistent_log_missing: Some("日志文件不存在".into()),
             ..Default::default()
         };
@@ -783,13 +797,13 @@ mod tests {
             .expect("a missing daemon.log must be explained in the bundle");
         assert!(note.contains("日志文件不存在"), "{note}");
         assert!(
-            note.contains(r"<DATA>\AppData\Local\x\logs\daemon.log"),
+            note.contains(r"<DATA>\AppData\Local\P-Pass\logs\daemon.log"),
             "{note}"
         );
         assert!(!note.contains("someone"), "home must be scrubbed: {note}");
         let src = entry(&entries, "log-sources.txt").unwrap();
         assert!(
-            src.starts_with(r"daemon.log（固定位置）= <DATA>\AppData\Local\x\logs\daemon.log —— 未收入：日志文件不存在"),
+            src.starts_with(r"daemon.log（固定位置）= <DATA>\AppData\Local\P-Pass\logs\daemon.log —— 未收入：日志文件不存在"),
             "{src}"
         );
     }
@@ -799,14 +813,14 @@ mod tests {
         let i = BundleInputs {
             home: "/Users/someone".into(),
             persistent_log_tail: Some("INFO hello\n".into()),
-            persistent_log_path: Some("/Users/someone/x/logs/daemon.log".into()),
+            persistent_log_path: Some("/Users/someone/P-Pass/logs/daemon.log".into()),
             ..Default::default()
         };
         let entries = build_bundle(&i);
         assert!(entry(&entries, "daemon-log-missing.txt").is_none());
         let src = entry(&entries, "log-sources.txt").unwrap();
         assert!(
-            src.starts_with("daemon.log（固定位置）= <DATA>/x/logs/daemon.log —— 已收入包内"),
+            src.starts_with("daemon.log（固定位置）= <DATA>/P-Pass/logs/daemon.log —— 已收入包内"),
             "{src}"
         );
     }
