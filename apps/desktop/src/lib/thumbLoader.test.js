@@ -119,3 +119,72 @@ describe("占位图有界重取", () => {
     expect(h.timers).toHaveLength(0);
   });
 });
+
+describe("#551：服务恢复后失败态重取", () => {
+  it("调用报错 → 灰块；retryFailed 后可见即重取一次，拿到真图", async () => {
+    const h = harness([new Error("daemon unreachable"), REAL]);
+    await h.loader.load();
+    expect(h.state.failed).toBe(true);
+    expect(h.calls).toHaveLength(1);
+    h.loader.retryFailed();
+    await h.flush();
+    expect(h.calls).toHaveLength(2);
+    expect(h.state.src).toBe("data:image/jpeg;base64,REAL");
+  });
+
+  it("不可见时等到可见才重取", async () => {
+    const h = harness([new Error("x"), REAL], { visible: false });
+    await h.loader.load();
+    h.loader.retryFailed();
+    await h.flush();
+    expect(h.calls).toHaveLength(1);
+    await h.becomeVisible();
+    expect(h.calls).toHaveLength(2);
+    expect(h.state.src).toBe("data:image/jpeg;base64,REAL");
+  });
+
+  it("真图 / 占位图不受 retryFailed 影响（不重拉）", async () => {
+    const real = harness([REAL]);
+    await real.loader.load();
+    real.loader.retryFailed();
+    await real.flush();
+    expect(real.calls).toHaveLength(1);
+
+    const ph = harness([placeholder(0)]);
+    await ph.loader.load();
+    ph.loader.retryFailed();
+    await ph.flush();
+    expect(ph.calls).toHaveLength(1);
+  });
+
+  it("重复信号幂等：可见前连发两次只重取一次；dispose 后不重取", async () => {
+    const h = harness([new Error("x"), REAL], { visible: false });
+    await h.loader.load();
+    h.loader.retryFailed();
+    h.loader.retryFailed();
+    await h.becomeVisible();
+    expect(h.calls).toHaveLength(2);
+
+    const d = harness([new Error("x"), REAL], { visible: false });
+    await d.loader.load();
+    d.loader.retryFailed();
+    d.loader.dispose();
+    await d.becomeVisible();
+    expect(d.calls).toHaveLength(1);
+  });
+
+  it("重取仍失败就停在灰块，直到下一次恢复信号", async () => {
+    const h = harness([new Error("x"), new Error("x"), REAL]);
+    await h.loader.load();
+    h.loader.retryFailed();
+    await h.flush();
+    expect(h.calls).toHaveLength(2);
+    expect(h.state.src).toBe(null);
+    await h.flush();
+    expect(h.calls).toHaveLength(2);
+    h.loader.retryFailed();
+    await h.flush();
+    expect(h.calls).toHaveLength(3);
+    expect(h.state.src).toBe("data:image/jpeg;base64,REAL");
+  });
+});
