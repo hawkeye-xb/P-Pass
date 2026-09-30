@@ -10,11 +10,24 @@
 # 失败只让本 workflow 红，不碰 release、不碰自动更新 manifest。
 #
 # 触发：
-# - workflow_run：Release 成功后（test tag 由 release.yml 自动发 prerelease；
-#   它用 GITHUB_TOKEN 发布，GitHub 不会因此触发 `release: published`，
-#   所以要靠 workflow_run 接）。仍是 draft 的（正式 tag）跳过。
-# - release published：正式 tag 人工点发布那一刻。
-# - workflow_dispatch：补跑，或指定旧 tag 回滚。
+# - workflow_run：Release **结束**后（不论成败）。test tag 由 release.yml 在
+#   android lane 里用 GITHUB_TOKEN 自动发 prerelease，GitHub 不会因此触发
+#   `release: published`，只能靠这里接。workflow_run 要等整条 Release 跑完
+#   （含最慢的 Windows lane，约 30 分钟）才触发——发布后到镜像更新之间
+#   这段空窗是预期的，不是没触发。
+#   不看 conclusion：镜像只要 dmg + apk，Windows / 正文补齐这类与镜像无关
+#   的 job 红了不该连带镜像不更新（v0.5.0-test.1/2/3 就是 Windows 红、
+#   dmg/apk 都在）。真缺资产由下面的「两个都要有」检查报红。
+#   仍是 draft 的（非 test tag，如 -beta.N / 正式版）跳过。
+# - release published：非 test tag 人工点发布那一刻（prerelease 或 latest
+#   都算 published）。人工发布时资产还没传齐 → 这次红；Release 跑完后
+#   workflow_run 那条会再镜像一次，谁晚到谁兜底。
+#   ⚠️ release 事件用的是 **tag 所指 commit** 上的本文件，不是 main 上的。
+# - workflow_dispatch：补跑，或指定旧 tag 回滚（不做「最新」检查）。
+#
+# 只镜像「最新发布」：自动触发时，若已有更晚发布的 v* release，跳过。
+# 两个 tag 的 Release 并行跑时，先发布的那个可能后跑完，不拦会用旧包
+# 覆盖新包（v0.6.2-test.2 / test.3 就是 12 分钟内先后打的）。
 name: Mirror latest to R2
 
 on:
@@ -42,7 +55,6 @@ env:
 
 jobs:
   mirror:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -70,6 +82,18 @@ jobs:
           if [ "$DRAFT" = "true" ]; then
             echo "::notice::$TAG 仍是 draft，等人工发布后由 release published 触发"
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$EVENT" != workflow_dispatch ]; then
+            NEWEST=$(gh release list -R "$GITHUB_REPOSITORY" --exclude-drafts -L 50 \
+              --json tagName,publishedAt \
+              -q '[.[] | select(.tagName | startswith("v"))] | sort_by(.publishedAt) | last | .tagName')
+            if [ -z "$NEWEST" ]; then
+              echo "::error::查不到已发布的 v* release，无法判断 $TAG 是否最新"; exit 1
+            fi
+            if [ "$NEWEST" != "$TAG" ]; then
+              echo "::notice::$TAG 不是最新发布的 release（最新是 $NEWEST），跳过，免得旧包覆盖新包"
+              echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+            fi
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
