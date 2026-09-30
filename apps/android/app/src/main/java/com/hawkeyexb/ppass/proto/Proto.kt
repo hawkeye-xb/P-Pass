@@ -182,6 +182,10 @@ data class ThumbGet(
 @Serializable
 data class ThumbData(
     @SerialName("jpeg_base64") val jpegBase64: String = "",
+    // #527（refs #428）：daemon 回占位图时带上，真图时 Rust 侧不序列化。
+    // 手机端目前不消费，只做 wire 镜像，让 GoldenDriftTest 能覆盖这两个 snapshot。
+    val placeholder: Boolean = false,
+    @SerialName("retry_after_ms") val retryAfterMs: Long = 0,
 )
 
 // ── Blob transfer ───────────────────────────────────
