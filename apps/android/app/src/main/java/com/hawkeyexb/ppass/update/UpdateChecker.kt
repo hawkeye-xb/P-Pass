@@ -375,9 +375,12 @@ private fun copyBody(
  * NET-09: 返回分类后的结果，并在 `PPassUpdate` 如实记一行类别与关键数字。
  * 调用方目前不向用户展示失败（对话框照旧关闭），这一点没有变。
  */
+/** 更新 APK 的落盘位置：必须在 file_paths.xml 的 `update/` 目录下（见 UpdateApkFileProviderPathTest）。 */
+internal fun updateApkFile(cacheDir: File): File = File(File(cacheDir, "update"), "ppass-update.apk")
+
 suspend fun downloadAndInstall(context: Context, url: String): ApkDownloadResult =
     withContext(Dispatchers.IO) {
-        val apk = File(context.cacheDir, "ppass-update.apk")
+        val apk = updateApkFile(context.cacheDir).apply { parentFile?.mkdirs() }
         val downloaded = downloadApk(url, apk)
         val result = if (downloaded !is ApkDownloadResult.Ok) {
             downloaded
