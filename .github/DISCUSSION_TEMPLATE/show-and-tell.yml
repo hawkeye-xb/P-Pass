@@ -1,0 +1,44 @@
+title: "[机型] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        用着正常也请来留一条，哪些机型能用和哪些不能用一样重要。
+        Please report even if everything works. Knowing which devices work matters as much as knowing which don't.
+  - type: input
+    id: phone
+    attributes:
+      label: 手机型号 / Phone model
+      placeholder: "小米 14 / 华为 P60 / Galaxy S23"
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: 安卓版本和系统 / Android version and ROM
+      placeholder: "Android 14 / HyperOS 1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: status
+    attributes:
+      label: 结果 / Result
+      options:
+        - 正常 / Works
+        - 部分正常 / Partly works
+        - 不能用 / Doesn't work
+    validations:
+      required: true
+  - type: checkboxes
+    id: scenarios
+    attributes:
+      label: 试过的场景 / What you tried
+      options:
+        - label: 家里 Wi-Fi 下自动备份 / Automatic backup on home Wi-Fi
+        - label: 锁屏或切到后台后仍在备份 / Backup keeps going with the screen locked or the app in the background
+        - label: 在外面用 4G/5G 连回家 / Connecting back home over 4G/5G
+  - type: textarea
+    id: notes
+    attributes:
+      label: 补充说明 / Notes
+      description: 比如需要手动开哪些权限、关哪些省电设置 / e.g. which permissions or battery settings you had to change

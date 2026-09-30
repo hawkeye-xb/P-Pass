@@ -1,0 +1,51 @@
+title: "[问题] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢来当测试者。维护者只有一个人，按下面填得越全，修得越快。
+        Thanks for testing. There is one maintainer, so the more complete this is, the faster it gets fixed.
+
+        **请不要在这里上传诊断包。** 诊断包里有 IP 地址，这里所有人都能看到。需要时维护者会告诉你怎么私下发送。
+        **Please don't upload a diagnostic bundle here.** It contains IP addresses and this page is public. The maintainer will tell you how to send it privately if needed.
+  - type: input
+    id: phone
+    attributes:
+      label: 手机型号 / Phone model
+      placeholder: "小米 14 / 华为 P60 / Galaxy S23"
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: 安卓版本和系统 / Android version and ROM
+      description: 设置 → 关于手机 / Settings → About phone
+      placeholder: "Android 14 / HyperOS 1.0"
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: 电脑型号和 macOS 版本 / Mac model and macOS version
+      placeholder: "MacBook Air M2 / macOS 15.3"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: P-Pass 版本 / P-Pass version
+      placeholder: "0.6.0"
+  - type: textarea
+    id: steps
+    attributes:
+      label: 你做了什么 / What you did
+      description: 一步一步写，从哪一步开始不对 / Step by step, and where it went wrong
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: 发生了什么 / What happened
+      description: 可以贴截图，注意别带出私人照片 / Screenshots welcome, but keep personal photos out of them
+    validations:
+      required: true
