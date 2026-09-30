@@ -10,8 +10,8 @@
       "out": "remote_addr=Ip(<ipv4:public>:4433)"
     },
     {
-      "in": "network_path=Ip(10.1.150.85->198.51.100.20:54560) status=Backup",
-      "out": "network_path=Ip(10.1.150.85-><ipv4:public>:54560) status=Backup"
+      "in": "network_path=Ip(10.0.0.5->198.51.100.20:54560) status=Backup",
+      "out": "network_path=Ip(10.0.0.5-><ipv4:public>:54560) status=Backup"
     },
     {
       "in": "addr: 203.0.113.7.",
@@ -34,8 +34,8 @@
       "out": "global_v6=<ipv6:public>"
     },
     {
-      "in": "remote: [::ffff:203.0.113.7]:54560 and [::ffff:10.1.150.85]:54560",
-      "out": "remote: [<ipv6:public>]:54560 and [::ffff:10.1.150.85]:54560"
+      "in": "remote: [::ffff:203.0.113.7]:54560 and [::ffff:10.0.0.5]:54560",
+      "out": "remote: [<ipv6:public>]:54560 and [::ffff:10.0.0.5]:54560"
     },
     {
       "in": "fe80::1%en0 fd12:3456::1 ::1 :: 0.0.0.0:41145 [::]:0 127.0.0.1:8080 100.64.1.2 169.254.9.9",
@@ -96,6 +96,10 @@
     {
       "in": "{\"peer\":\"ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c\",\"method\":\"timeline.page\"}",
       "out": "{\"peer\":\"ea4a6c63…<masked>\",\"method\":\"timeline.page\"}"
+    },
+    {
+      "in": "relay client dial wss://relay.family-example.org/relay failed",
+      "out": "relay client dial wss://<host>/relay failed"
     }
   ],
   "keep": [
@@ -104,14 +108,14 @@
     "iroh::socket::transports::relay::actor: home is now relay",
     "app_version    = 0.6.1-test.2",
     "iroh_version=1.0.3",
-    "subscription push sent kind=flow.delivered seq=1790679446995 peer=3cf7348efa… gen=7",
+    "subscription push sent kind=flow.delivered seq=1234567890123 peer=5f0b2c9d41… gen=7",
     "BLOB-01: 收件箱回收 1056768 字节",
     "took 0.58s, 12.5 MiB/s",
-    "{\"ts\":1790679446995,\"kind\":\"authz.denied\",\"detail\":null}",
-    "network_path=Ip(10.1.150.85->10.1.150.85:54560) prev_network_path=None",
+    "{\"ts\":1234567890123,\"kind\":\"authz.denied\",\"detail\":null}",
+    "network_path=Ip(10.0.0.5->10.0.0.5:54560) prev_network_path=None",
     "bind_addr = 0.0.0.0:41145",
-    "endpoint{id=f9a924cba4}:relay-actor",
-    "actor_prefix: 3cf7348e",
+    "endpoint{id=ea4a6c63e2}:relay-actor",
+    "actor_prefix: 5f0b2c9d",
     "abcd1234…<masked>",
     "[1, 2, 3]",
     "flow_delivery::FlowDelivery::provider_for returned GuardMismatch",

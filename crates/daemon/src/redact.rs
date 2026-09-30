@@ -11,7 +11,7 @@
 //!    未指定地址原样保留——局域网排障要看它们，它们也定位不到人。分类器
 //!    **默认判公网**：只有明确列出的非公网段才放过（文档段 203.0.113.x、
 //!    2001:db8:: 因此按公网处理，测试正好用它们）。
-//! 2. **URL 主机名**：`http(s)://` 后的主机名不在白名单（n0 relay 所在的
+//! 2. **URL 主机名**：`http(s)://`、`ws(s)://` 后的主机名不在白名单（n0 relay 所在的
 //!    `iroh.link`、`github.com`）就换成 `<host>`——自建 relay 的域名能识别人。
 //! 3. **长不透明串**：由 `[A-Za-z0-9_-]` 组成、长度 ≥32、含 ≥2 个数字和
 //!    ≥8 个字母的连续串只留前 8 位。覆盖 base32 票据 / NodeId / hash 与
@@ -189,7 +189,7 @@ pub fn mask_url_hosts(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     loop {
-        let hit = ["https://", "http://"]
+        let hit = ["https://", "http://", "wss://", "ws://"]
             .iter()
             .filter_map(|scheme| rest.find(scheme).map(|p| (p, scheme.len())))
             .min();
