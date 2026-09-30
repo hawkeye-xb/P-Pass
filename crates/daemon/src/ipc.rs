@@ -83,6 +83,10 @@ pub struct IpcServer {
     /// 挂着 `timeline.subscribe` 长连接的设备时主动断连。main 未注入时
     /// 是一份空表（`close` 天然 no-op），不影响任何现有测试。
     subscriptions: SubscriptionRegistry,
+    /// #563: `device.revoke` cancels every in-flight fetch from the removed
+    /// device. OnceLock for the same reason as `query`: main builds
+    /// FlowDelivery after IpcServer is already shared. Unset = no-op.
+    flow_delivery: std::sync::OnceLock<crate::flow_delivery::FlowDelivery>,
 }
 
 /// See [`IpcServer::set_conn_status_provider`].
@@ -341,6 +345,7 @@ impl IpcServer {
             flow_connection: Arc::new(|_| None),
             query: std::sync::OnceLock::new(),
             subscriptions: SubscriptionRegistry::new(),
+            flow_delivery: std::sync::OnceLock::new(),
         }
     }
 
@@ -356,6 +361,13 @@ impl IpcServer {
     /// timeline/thumb/asset.*。重复 set 静默忽略（只注入一次）。
     pub fn set_query(&self, query: crate::query::QueryEngine) {
         let _ = self.query.set(query);
+    }
+
+    /// #563: inject the Flow delivery port so `device.revoke` can cancel the
+    /// removed device's in-flight fetches (main calls this once FlowDelivery
+    /// exists; repeated sets are ignored).
+    pub fn set_flow_delivery(&self, flow_delivery: crate::flow_delivery::FlowDelivery) {
+        let _ = self.flow_delivery.set(flow_delivery);
     }
 
     /// Override the step_down side effect (tests only).
@@ -896,6 +908,19 @@ impl IpcServer {
                     .await
                 {
                     Ok(revoked) => {
+                        // #563: right after the durable revoke, stop pulling
+                        // from this device — its in-flight photo must not
+                        // reach the library.
+                        if let (Some(flow), Ok(bytes)) = (
+                            self.flow_delivery.get(),
+                            <[u8; 32]>::try_from(node_id.as_slice()),
+                        ) {
+                            if let Err(error) = flow.revoke_peer(transport::NodeId(bytes)).await {
+                                tracing::warn!(
+                                    "#563: cancelling flow grants on revoke failed: {error}"
+                                );
+                            }
+                        }
                         if revoked {
                             let _ = self
                                 .db

@@ -242,6 +242,25 @@ impl Db {
         Ok(result.rows_affected() == 1)
     }
 
+    /// #563: the owner removed this device. Every grant still `active` for it
+    /// — under any pairing epoch, so rows left behind by an earlier epoch are
+    /// closed too — moves to `cancelled` and so leaves the GC protection set.
+    /// Returns the rows it moved, as they were before the update.
+    pub async fn cancel_active_flow_grants_for_node(
+        &self,
+        node_id: &[u8],
+    ) -> Result<Vec<FlowGrant>> {
+        let rows = sqlx::query(
+            "UPDATE flow_delivery SET state = 'cancelled'
+             WHERE node_id = ? AND state = 'active'
+             RETURNING node_id, queue_sequence, pairing_epoch, lease_token, content_hash, file_name, media_type, provider, 'active' AS state, receipt_id",
+        )
+        .bind(node_id)
+        .fetch_all(self.pool())
+        .await?;
+        Ok(rows.into_iter().map(flow_grant_from_row).collect())
+    }
+
     /// Atomically record a receipt after the original is materialized. The
     /// exact active tuple is rechecked here, so cancellation/supersession can
     /// never receive a completion receipt.
