@@ -7,7 +7,7 @@ export const RELEASES_URL = `${GITHUB_URL}/releases/latest`;
 // Download mirror for the zh page: GitHub release assets are often unreachable
 // from mainland China. Fixed file names, overwritten on every release (manual
 // upload to Cloudflare R2, see the release checklist in the business repo).
-export const MIRROR_BASE = 'https://dl.hawkeye-xb.com';
+export const MIRROR_BASE = 'https://p-pass-dl.hawkeye-xb.com';
 export const MIRROR_MAC = `${MIRROR_BASE}/P-Pass-latest.dmg`;
 export const MIRROR_ANDROID = `${MIRROR_BASE}/P-Pass-latest.apk`;
 

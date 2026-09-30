@@ -1,0 +1,146 @@
+# 国内下载镜像：把已发布 release 的 dmg / apk 覆盖到 R2 固定地址
+#   https://p-pass-dl.hawkeye-xb.com/P-Pass-latest.dmg
+#   https://p-pass-dl.hawkeye-xb.com/P-Pass-latest.apk
+#   https://p-pass-dl.hawkeye-xb.com/P-Pass-latest.json   （版本号 + sha256，核对用）
+# 中文官网下载按钮指向这里（site/src/consts.ts MIRROR_*）。
+#
+# 和 release.yml **完全解耦**：2026-08-25 撤掉旧镜像，原因是镜像步骤写在
+# release job 里、manifest 先写了镜像地址再镜像，镜像 403 时坏 manifest 已
+# 签名出门（见 release.yml UPD-01 注释）。这里只读已发布的 release 资产，
+# 失败只让本 workflow 红，不碰 release、不碰自动更新 manifest。
+#
+# 触发：
+# - workflow_run：Release 成功后（test tag 由 release.yml 自动发 prerelease；
+#   它用 GITHUB_TOKEN 发布，GitHub 不会因此触发 `release: published`，
+#   所以要靠 workflow_run 接）。仍是 draft 的（正式 tag）跳过。
+# - release published：正式 tag 人工点发布那一刻。
+# - workflow_dispatch：补跑，或指定旧 tag 回滚。
+name: Mirror latest to R2
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要镜像的 release tag（如 v0.6.2-test.1）"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-latest
+  cancel-in-progress: false
+
+env:
+  BUCKET: p-pass-releases
+  PUBLIC_BASE: https://p-pass-dl.hawkeye-xb.com
+
+jobs:
+  mirror:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RUN_REF: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            workflow_dispatch) TAG="$INPUT_TAG" ;;
+            release)           TAG="$RELEASE_TAG" ;;
+            workflow_run)      TAG="$RUN_REF" ;;
+          esac
+          # Release 被手动 dispatch 时 head_branch 是分支名，不是 tag——跳过，要镜像就手动触发本 workflow。
+          if [[ "$TAG" != v* ]]; then
+            echo "::notice::'$TAG' 不是 v* tag，跳过"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          DRAFT=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)
+          if [ "$DRAFT" = "true" ]; then
+            echo "::notice::$TAG 仍是 draft，等人工发布后由 release published 触发"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets
+        if: steps.tag.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dl && cd dl
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p 'P-Pass-macos-arm64.dmg' -p 'app-release.apk'
+          # 两个都要有才镜像：只覆盖一个会让 dmg 和 apk 版本错开。
+          for f in P-Pass-macos-arm64.dmg app-release.apk; do
+            [ -s "$f" ] || { echo "::error::$TAG 缺少 $f"; exit 1; }
+          done
+          ls -l
+
+      - name: Upload to R2
+        if: steps.tag.outputs.skip != 'true'
+        env:
+          # 走 S3 接口 + 只授权 p-pass-releases 一个桶的 R2 访问密钥。不用
+          # wrangler：它走 REST 接口，只认账号级「Workers R2 Storage: Edit」，
+          # 桶级授权的 token 一律 403（2026-08-12、2026-09-30 两次实测）。
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          # 新版 aws cli 默认附带 CRC 校验头，R2 不一定全认；只在必须时算。
+          AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+          AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+          ENDPOINT: https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
+          VERSION: ${{ steps.tag.outputs.version }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          : "${AWS_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID secret missing}"
+          cd dl
+          put() { # key file content-type cache-control [download-name]
+            args=(--endpoint-url "$ENDPOINT" --no-progress --content-type "$3" --cache-control "$4")
+            [ -n "${5:-}" ] && args+=(--content-disposition "attachment; filename=\"$5\"")
+            aws s3 cp "$2" "s3://$BUCKET/$1" "${args[@]}"
+          }
+          # 固定文件名每次覆盖；边缘缓存 5 分钟，覆盖后最多 5 分钟生效。
+          put P-Pass-latest.dmg P-Pass-macos-arm64.dmg application/x-apple-diskimage "public, max-age=300" "P-Pass-$VERSION.dmg"
+          put P-Pass-latest.apk app-release.apk application/vnd.android.package-archive "public, max-age=300" "P-Pass-$VERSION.apk"
+          jq -n --arg tag "$TAG" --arg version "$VERSION" \
+            --arg dmg "$(sha256sum P-Pass-macos-arm64.dmg | cut -d' ' -f1)" \
+            --arg apk "$(sha256sum app-release.apk | cut -d' ' -f1)" \
+            '{tag:$tag, version:$version, sha256:{dmg:$dmg, apk:$apk}}' > latest.json
+          cat latest.json
+          put P-Pass-latest.json latest.json application/json "public, max-age=60"
+
+      - name: Verify via public domain
+        if: steps.tag.outputs.skip != 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd dl
+          # 带 tag 查询串绕过边缘缓存，确认公网拿到的就是刚传的字节。
+          for pair in "P-Pass-latest.dmg:P-Pass-macos-arm64.dmg" "P-Pass-latest.apk:app-release.apk"; do
+            key=${pair%%:*}; src=${pair#*:}
+            got=$(curl -fsSL --retry 3 "$PUBLIC_BASE/$key?v=$TAG" | sha256sum | cut -d' ' -f1)
+            want=$(sha256sum "$src" | cut -d' ' -f1)
+            [ "$got" = "$want" ] || { echo "::error::$key sha256 不符：公网 $got / 本地 $want"; exit 1; }
+            echo "$key OK $got"
+          done
+          {
+            echo "### 国内镜像已更新：$TAG"
+            echo "- $PUBLIC_BASE/P-Pass-latest.dmg"
+            echo "- $PUBLIC_BASE/P-Pass-latest.apk"
+            echo "- 边缘缓存最多 5 分钟后生效"
+          } >> "$GITHUB_STEP_SUMMARY"

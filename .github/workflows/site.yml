@@ -74,10 +74,10 @@ jobs:
         run: |
           set -euo pipefail
           # Allowlist: our own domain (self) + github.com and our download
-          # mirror dl.hawkeye-xb.com (deliberate outbound download links). Any
+          # mirror p-pass-dl.hawkeye-xb.com (deliberate outbound download links). Any
           # other external origin in built assets means a tracker / CDN / font
           # leak — fail.
-          ALLOW='^(https://p-pass\.hawkeye-xb\.com|https://github\.com|https://dl\.hawkeye-xb\.com)'
+          ALLOW='^(https://p-pass\.hawkeye-xb\.com|https://github\.com|https://p-pass-dl\.hawkeye-xb\.com)'
           BAD=$(grep -rEoh 'https?://[^"'"'"' )]+' dist --include='*.html' --include='*.css' --include='*.js' | grep -vE "$ALLOW" || true)
           if [ -n "$BAD" ]; then
             echo "third-party origin found in dist:"; echo "$BAD"; exit 1
