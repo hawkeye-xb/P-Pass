@@ -19,6 +19,7 @@ pub mod pairing;
 pub mod presence;
 pub mod query;
 pub mod reconcile;
+pub mod redact;
 pub mod router;
 pub mod subscriptions;
 pub mod telemetry;

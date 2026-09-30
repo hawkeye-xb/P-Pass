@@ -94,39 +94,40 @@ pub fn sanitize(s: &str, home: &str) -> String {
     s.replace(home, "<DATA>")
 }
 
-/// 长 hex 串（NodeId 全长 64 hex、配对令牌 24 hex）只留前 8 位。
-/// daemon 的 stdout 日志里有 NodeId；SEC-11 (#496) 之前的历史日志里还可能
-/// 残留配对串（此后 daemon 在 stdout 非终端时不再打印它）。导出包的脱敏
-/// 口径必须跟 `devices.json` 一致：只出前缀。
-pub fn mask_long_hex(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let chars: Vec<char> = s.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i].is_ascii_hexdigit() {
-            let mut j = i;
-            while j < chars.len() && chars[j].is_ascii_hexdigit() {
-                j += 1;
-            }
-            let run: String = chars[i..j].iter().collect();
-            if run.len() >= 24 {
-                out.push_str(&run[..8]);
-                out.push_str("…<masked>");
-            } else {
-                out.push_str(&run);
-            }
-            i = j;
-        } else {
-            out.push(chars[i]);
-            i += 1;
-        }
-    }
-    out
+/// 导出件的统一脱敏（#544）：库目录 → `<LIBRARY>`（自定义库名、外置盘卷名
+/// 都可能带人名，先于家目录替换），家目录 → `<DATA>`，再过
+/// [`crate::redact::redact`]（公网 IP、自建 relay 域名、长 hex / base32 /
+/// base64url 标识与票据）。与 daemon 侧 `ipc.rs` 的 `scrub` 同语义。
+pub fn scrub_full(s: &str, home: &str, library: Option<&str>) -> String {
+    let s = match library.filter(|l| !l.is_empty()) {
+        Some(lib) => s.replace(lib, "<LIBRARY>"),
+        None => s.to_string(),
+    };
+    crate::redact::redact(&sanitize(&s, home))
 }
 
-/// 导出件的统一脱敏：家目录 + 长 hex。新加的文件一律过这里。
-pub fn scrub(s: &str, home: &str) -> String {
-    mask_long_hex(&sanitize(s, home))
+/// config.toml 里的 `data_dir`（库目录），经 TOML 解析取值（DESK-40 教训：
+/// 逐行读会带着转义）。解析不了 / 没设 = None。
+pub fn library_root(raw: Option<&str>) -> Option<String> {
+    raw?.parse::<toml::Table>()
+        .ok()?
+        .get("data_dir")?
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+/// #544：devices.json 里的设备名是用户起的（「张三的手机」），属于可识别
+/// 信息。新 daemon 已经不导出它；这里在包边界再剥一次（新壳 + 旧 daemon）。
+/// 不是预期的 JSON 形状就原样交回，由调用方照常 scrub。
+fn strip_device_names(json: &str) -> Option<String> {
+    let mut v: serde_json::Value = serde_json::from_str(json).ok()?;
+    for d in v.as_array_mut()? {
+        if let Some(obj) = d.as_object_mut() {
+            obj.remove("name");
+        }
+    }
+    serde_json::to_string_pretty(&v).ok()
 }
 
 /// config.toml 摘要（只出 `data_dir` / `bind_addr`，路径脱敏）——
@@ -159,12 +160,21 @@ pub fn config_summary(raw: Option<&str>, home: &str) -> String {
             .and_then(toml::Value::as_str)
             .filter(|v| !v.is_empty())
     };
+    // #544：库目录本身不出包（路径里的文件夹名 / 卷名可能带人名），只报
+    // 它在不在家目录下——排障真正要问的是这个。
+    let data_dir = match field("data_dir") {
+        Some(v) if !home.is_empty() && v.starts_with(home) => {
+            "<LIBRARY>（位于家目录下）".to_string()
+        }
+        Some(_) => "<LIBRARY>（不在家目录下）".to_string(),
+        None => "(未设置)".to_string(),
+    };
     format!(
         "data_dir  = {}\nbind_addr = {}\n",
-        field("data_dir")
-            .map(|v| scrub(v, home))
+        data_dir,
+        field("bind_addr")
+            .map(crate::redact::redact)
             .unwrap_or_else(|| "(未设置)".into()),
-        field("bind_addr").unwrap_or("(未设置)"),
     )
 }
 
@@ -220,13 +230,17 @@ P-Pass 诊断包（导出时间见各文件内容）
   9. daemon-log-missing.txt
                               ← 0 那份没收进来，里面写了原因和它本该在的位置
 
-脱敏：家目录路径统一替换成 <DATA>，NodeId / 配对令牌这类长 hex 串只
-留前 8 位。可以直接把整个 zip 发给开发者。
+脱敏（导出时自动做）：家目录 → <DATA>，库目录 → <LIBRARY>；公网 IP 换成
+<ipv4:public> / <ipv6:public>（局域网地址保留）；NodeId、hash、票据、配对
+令牌这类长标识只留前 8 位；自建中继的域名换成 <host>；不含设备名。
+日志里仍有照片的文件名和时间，请只发给开发者，不要公开发布。
 ";
 
 /// 打包内容（纯函数：入 inputs，出 zip 条目表）。
 pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
     let home = i.home.as_str();
+    let library = library_root(i.config_toml.as_deref());
+    let scrub = |s: &str, home: &str| scrub_full(s, home, library.as_deref());
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     entries.push(("README.txt".into(), README.as_bytes().to_vec()));
 
@@ -344,9 +358,16 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
     // （actor_prefix / node_id_prefix）在阈值之下，不受影响。
     for (name, bytes) in &i.daemon_entries {
         let scrubbed = match std::str::from_utf8(bytes) {
-            Ok(text) => scrub(text, home).into_bytes(),
-            // 非 UTF-8 就别乱动（现在这三份都是 JSON，留个安全兜底）。
-            Err(_) => bytes.clone(),
+            Ok(text) => {
+                let text = if name == "devices.json" {
+                    strip_device_names(text).unwrap_or_else(|| text.to_string())
+                } else {
+                    text.to_string()
+                };
+                scrub(&text, home).into_bytes()
+            }
+            // #544：非 UTF-8 的条目不原样进包（脱敏对它无效）——宁可丢掉并说明。
+            Err(_) => format!("（{name} 不是 UTF-8 文本，无法脱敏，未收入）\n").into_bytes(),
         };
         entries.push((name.clone(), scrubbed));
     }
@@ -404,7 +425,7 @@ mod tests {
         let out = config_summary(Some(raw), r"C:\Users\alice");
         assert_eq!(
             out,
-            "data_dir  = <DATA>\\Pictures\\lib\nbind_addr = 0.0.0.0:41145\n"
+            "data_dir  = <LIBRARY>（位于家目录下）\nbind_addr = 0.0.0.0:41145\n"
         );
         assert!(!out.contains("alice"), "username leaked: {out}");
         assert!(!out.contains(r"\\"), "TOML escapes leaked: {out}");
@@ -415,7 +436,7 @@ mod tests {
         let raw = "data_dir = \"/Users/alice/Pictures/lib\"\nbind_addr = \"0.0.0.0:41145\"\n\n[telemetry]\nenabled = false\n";
         assert_eq!(
             config_summary(Some(raw), "/Users/alice"),
-            "data_dir  = <DATA>/Pictures/lib\nbind_addr = 0.0.0.0:41145\n"
+            "data_dir  = <LIBRARY>（位于家目录下）\nbind_addr = 0.0.0.0:41145\n"
         );
     }
 
@@ -518,7 +539,10 @@ mod tests {
         );
         // 脱敏不回退：真实家目录路径不许出现。
         assert!(!text.contains("/Users/someone"), "{text}");
-        assert!(text.contains("<DATA>/Pictures/lib"), "{text}");
+        assert!(
+            text.contains("data_dir  = <LIBRARY>（位于家目录下）"),
+            "{text}"
+        );
     }
 
     // daemon 活着时，它给的那三份原样进包。
@@ -582,11 +606,130 @@ mod tests {
     #[test]
     fn long_hex_is_masked_to_a_prefix() {
         let node = "ab".repeat(32);
-        let masked = mask_long_hex(&format!("peer {node} connected"));
+        let masked = scrub_full(&format!("peer {node} connected"), "", None);
         assert!(masked.contains("abababab…<masked>"), "{masked}");
         assert!(!masked.contains(&node), "{masked}");
         // 短 hex（端口号、小 id）不动。
-        assert_eq!(mask_long_hex("port 41145 beef"), "port 41145 beef");
+        assert_eq!(scrub_full("port 41145 beef", "", None), "port 41145 beef");
+    }
+
+    /// #544 硬判据：诊断包即使被整包公开，也不能带出能连上设备、定位或识别
+    /// 用户的信息。把共用向量里的每种敏感输入写进三份日志、daemon 的 JSON、
+    /// 不可达原因与配置，库目录放在家目录外（卷名带人名），设备起真名，再
+    /// 塞一条非 UTF-8 条目；`build_bundle` → `write_zip` → 读回之后，用独立
+    /// 检测器（不复用 redact）扫整个包。
+    #[test]
+    fn issue544_public_bundle_leaks_no_address_identifier_or_name() {
+        let vectors: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../assets/privacy/redact-vectors.json"
+        ))
+        .unwrap();
+        let blob: String = vectors["exact"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| format!("{}\n", c["in"].as_str().unwrap()))
+            .collect();
+        let library = "/Volumes/Zhang San Disk/Photos";
+        let devices =
+            "[{\"node_id_prefix\": \"eaeaeaea\", \"name\": \"张三的手机\", \"role\": \"member\"}]";
+        let i = BundleInputs {
+            home: "/Users/someone".into(),
+            app_version: "0.6.1".into(),
+            daemon_version: Some("0.6.1".into()),
+            daemon_unreachable: Some(format!("dial 203.0.113.7:4433 failed\n{blob}")),
+            config_toml: Some(format!(
+                "data_dir = \"{library}\"\nbind_addr = \"203.0.113.7:41145\"\n"
+            )),
+            plist_found: true,
+            stdout_tail: Some(blob.clone()),
+            stderr_tail: Some(blob.clone()),
+            persistent_log_tail: Some(format!("{blob}ingest {library}/originals/x.jpg ok\n")),
+            persistent_log_path: Some(
+                "/Users/someone/Library/Application Support/P-Pass/logs/daemon.log".into(),
+            ),
+            daemon_entries: vec![
+                ("devices.json".into(), devices.as_bytes().to_vec()),
+                (
+                    "diag_events.json".into(),
+                    serde_json::to_vec(&blob).unwrap(),
+                ),
+                ("audit.json".into(), vec![0xff, 0xfe, 0x00, 0x41]),
+            ],
+            ..Default::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("ppf-logs.zip");
+        write_zip(&zip, &build_bundle(&i)).unwrap();
+        let back = read_zip_entries(&zip).unwrap();
+        let mut text = String::new();
+        for (name, bytes) in &back {
+            let t = std::str::from_utf8(bytes)
+                .unwrap_or_else(|_| panic!("{name} 不是 UTF-8——未经脱敏的字节进了包"));
+            text.push_str(t);
+        }
+        for needle in [
+            "张三",
+            "Zhang San",
+            "family-example",
+            "203.0.113.",
+            "198.51.100.",
+            "2001:db8",
+            "/Users/someone",
+        ] {
+            assert!(!text.contains(needle), "{needle} leaked:\n{text}");
+        }
+        assert!(text.contains("<LIBRARY>/originals/x.jpg"), "{text}");
+        assert!(text.contains("<LIBRARY>（不在家目录下）"), "{text}");
+        assert_no_leak(&text);
+    }
+
+    /// 独立检测器（#544）：公网 IP、≥24 位 hex、≥32 位含数字的不透明串一个都不许有。
+    fn assert_no_leak(text: &str) {
+        use std::net::{IpAddr, Ipv4Addr};
+        let public_v4 = |v4: Ipv4Addr| {
+            let o = v4.octets();
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || (o[0] == 100 && (64..128).contains(&o[1])))
+        };
+        let public = |ip: IpAddr| match ip {
+            IpAddr::V4(v4) => public_v4(v4),
+            IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+                Some(v4) => public_v4(v4),
+                None => {
+                    !(v6.is_loopback()
+                        || v6.is_unspecified()
+                        || (v6.segments()[0] & 0xfe00) == 0xfc00
+                        || (v6.segments()[0] & 0xffc0) == 0xfe80)
+                }
+            },
+        };
+        for tok in text.split(|c: char| !(c.is_ascii_hexdigit() || c == ':' || c == '.')) {
+            for cand in [tok, tok.trim_matches(|c| c == ':' || c == '.')] {
+                if let Ok(ip) = cand.parse::<IpAddr>() {
+                    assert!(!public(ip), "public IP {ip} leaked");
+                }
+                if let Some((a, port)) = cand.rsplit_once(':') {
+                    if port.bytes().all(|b| b.is_ascii_digit()) {
+                        if let Ok(v4) = a.parse::<Ipv4Addr>() {
+                            assert!(!public_v4(v4), "public IP {v4} leaked");
+                        }
+                    }
+                }
+            }
+        }
+        let mut run = 0usize;
+        for ch in text.chars() {
+            run = if ch.is_ascii_hexdigit() { run + 1 } else { 0 };
+            assert!(run < 24, "≥24-char hex run leaked");
+        }
+        for tok in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')) {
+            let digits = tok.bytes().filter(u8::is_ascii_digit).count();
+            assert!(tok.len() < 32 || digits < 2, "opaque token leaked: {tok}");
+        }
     }
 
     // DIAG-B1：一次性 spawn 的 daemon 没有 plist 日志，固定位置那份必须进包（且脱敏）。

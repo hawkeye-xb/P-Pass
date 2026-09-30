@@ -31,6 +31,11 @@ use futures_core::Stream;
 /// changes open a new ALPN and run dual-stack during transition.
 pub const ALPN_CTRL: &str = "ppf/ctrl/1";
 
+/// #544：给宿主进程 `EnvFilter` 追加的指令——iroh 的 net_report 在 warn
+/// 级别直接打印本机公网地址（QAD 结果），源头压到 error。iroh 的 target
+/// 名只许出现在本 crate（架构红线 B.1），所以由这里导出。
+pub const QUIET_LOG_DIRECTIVES: &str = "iroh::net_report=error";
+
 /// ALPN for the data plane: photo/video content via iroh-blobs (T-021).
 pub const ALPN_BLOBS: &str = "ppf/blobs/1";
 

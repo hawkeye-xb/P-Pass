@@ -328,7 +328,12 @@ pub struct DedupWriter {
 
 impl Write for DedupWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.guard.on_line(buf);
+        // #544：落盘前脱敏（源头治理）。第三方 crate（iroh / noq / portmapper）
+        // 的行不经过我们的日志点，只能在写入器这一层兜住：公网 IP、自建 relay
+        // 域名、长 hex / base32 / base64url 标识与票据一律不进磁盘。
+        let text = String::from_utf8_lossy(buf);
+        let redacted = crate::redact::redact(&text);
+        self.guard.on_line(redacted.as_bytes());
         Ok(buf.len())
     }
 
@@ -534,5 +539,28 @@ mod tests {
         unsafe {
             std::env::remove_var("PPF_LOG_FILE");
         }
+    }
+
+    // #544：日志写入器落盘前即脱敏——第三方 crate 的行也走这里。
+    #[tokio::test]
+    async fn writer_redacts_before_the_line_reaches_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.log");
+        let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(10), &path);
+        let node = "ea".repeat(32);
+        let line = format!(
+            "2026-09-30T00:00:00.000000Z  WARN net_report: received IPv6 address from IPv4 QAD: [2001:db8::1]:7842 peer {node} via https://relay.family-example.org./ lan 192.168.1.20:41145\n"
+        );
+        let mut w = guard.make_writer();
+        w.write_all(line.as_bytes()).unwrap();
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(!written.contains("2001:db8"), "{written}");
+        assert!(!written.contains(&node), "{written}");
+        assert!(!written.contains("family-example"), "{written}");
+        assert!(written.contains("[<ipv6:public>]:7842"), "{written}");
+        assert!(
+            written.contains("192.168.1.20:41145"),
+            "private LAN kept: {written}"
+        );
     }
 }

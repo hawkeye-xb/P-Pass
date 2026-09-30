@@ -1064,7 +1064,8 @@ impl Router {
 
     async fn record_denial(&self, peer: transport::NodeId, method: &str, msg_key: &str) {
         let detail =
-            format!("{{\"peer\":\"{peer}\",\"method\":\"{method}\",\"msg_key\":\"{msg_key}\"}}",);
+            // #544：diag 库里只存前缀（`{:?}` = 前 5 字节），全长 NodeId 不落库。
+            format!("{{\"peer\":\"{peer:?}\",\"method\":\"{method}\",\"msg_key\":\"{msg_key}\"}}",);
         let event = DiagEvent {
             ts: unix_ms_now(),
             kind: "authz.denied".into(),
