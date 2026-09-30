@@ -563,6 +563,8 @@ async fn main() -> anyhow::Result<()> {
     // DESK-03: 本地 IPC 也注入查询平面——桌面壳照片墙走同一 QueryEngine
     // （与手机同一数据源），timeline/thumb/asset.* 双平面可答。
     ipc.set_query(query.clone());
+    // #563: device.revoke cancels the removed device's in-flight fetches.
+    ipc.set_flow_delivery(flow_delivery.clone());
     // MOB-30：上传平面拿同一个 BackupEngine——收完一张就走它入库，
     // 单条入库的实现只有一份（BackupEngine::ingest_one）。
     let upload =

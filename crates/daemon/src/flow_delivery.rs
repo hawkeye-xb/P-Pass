@@ -456,6 +456,28 @@ impl FlowTaskRegistry {
             None => false,
         }
     }
+
+    /// #563 `device.revoke`: cancel and remove every task registered for
+    /// this control peer, whatever its tuple. Same per-tuple tokens as
+    /// [`Self::interrupt`]; returns how many were cancelled.
+    fn interrupt_peer(&self, peer: NodeId) -> usize {
+        let mut cancelled = Vec::new();
+        self.entries
+            .lock()
+            .expect("flow task registry lock")
+            .retain(|key, entry| {
+                if key.peer == peer.0 {
+                    cancelled.push(entry.token.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+        for token in &cancelled {
+            token.cancel();
+        }
+        cancelled.len()
+    }
 }
 
 /// Adapter from a current flow item to the native iroh-blobs receiver.
@@ -1130,7 +1152,11 @@ impl FlowDelivery {
                 detail: e.to_string(),
             }
         })?;
-        self.require_active(grant).await?;
+        // #563: last gate before the photo enters the library. The owner may
+        // have removed this device while the bytes were in flight; its
+        // revoke cancels this task, and this re-check covers a revoke that
+        // lands between that sweep and here.
+        self.require_authorized(grant).await?;
         let item_bytes = std::fs::metadata(&staged).map(|m| m.len()).unwrap_or(0);
 
         match self
@@ -1474,6 +1500,60 @@ impl FlowDelivery {
             return Err(DeliveryError::GuardMismatch);
         }
         Ok(provider)
+    }
+
+    /// #563: [`Self::require_active`] plus "the device is still paired, not
+    /// revoked, and still on this grant's pairing epoch". A grant whose
+    /// device lost authorization is cancelled here, so it leaves the GC
+    /// protection set exactly as a `flow.cancel` would.
+    async fn require_authorized(&self, grant: &FlowGrant) -> Result<(), DeliveryError> {
+        self.require_active(grant).await?;
+        let epoch = self
+            .db
+            .pairing_epoch(&grant.node_id)
+            .await
+            .map_err(storage_error)?;
+        if epoch.as_deref() == Some(grant.pairing_epoch.as_str()) {
+            return Ok(());
+        }
+        let _ = self
+            .db
+            .cancel_flow_grant(grant)
+            .await
+            .map_err(storage_error)?;
+        tracing::info!(
+            "#563: device no longer authorized, dropping flow item before ingest seq={}",
+            grant.queue_sequence
+        );
+        Err(DeliveryError::Cancelled)
+    }
+
+    /// #563: the owner removed `peer` (`device.revoke`). Cancel every grant
+    /// still active for it (any pairing epoch) — durable state first, as in
+    /// [`Self::cancel`], so a racing `status` poll cannot respawn the fetch —
+    /// then interrupt every running fetch task for it. Returns how many
+    /// grants were cancelled and how many tasks were interrupted.
+    pub async fn revoke_peer(&self, peer: NodeId) -> Result<(usize, usize), DeliveryError> {
+        let cancelled = self
+            .db
+            .cancel_active_flow_grants_for_node(&peer.0)
+            .await
+            .map_err(storage_error)?;
+        let interrupted = self.tasks.interrupt_peer(peer);
+        let mut path_cleared = false;
+        for grant in &cancelled {
+            path_cleared |=
+                self.paths
+                    .clear_if_current(peer, grant.queue_sequence, &grant.lease_token);
+        }
+        if path_cleared {
+            emit_device_changed(self.events.as_ref());
+        }
+        tracing::info!(
+            "#563: device revoked, cancelled {} flow grant(s), interrupted {interrupted} fetch task(s) peer={peer:?}",
+            cancelled.len()
+        );
+        Ok((cancelled.len(), interrupted))
     }
 
     async fn require_active(&self, grant: &FlowGrant) -> Result<(), DeliveryError> {
