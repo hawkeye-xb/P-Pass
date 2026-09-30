@@ -208,11 +208,14 @@ internal class AndroidFlowRuntime(
     private val writer: FlowWriter,
     private val scope: CoroutineScope,
     private val sqlite: SqliteOrderStore,
+    /** #434：运行时没了，引擎自然也不忙了（它的状态收集随 [scope] 一起取消）。 */
+    private val onShutdown: () -> Unit = {},
 ) {
     fun shutdown() {
         scope.cancel()
         writer.shutdown()
         runCatching { sqlite.close() }
+        onShutdown()
     }
 }
 
@@ -371,9 +374,11 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }
     // #434：引擎这一轮没结束就不回收 endpoint；一轮结束（含 afterCycle 的审计上报在飞）再由回收器等宽限期。
-    auditScope.launch { engine.status.collect { application.networkIdleReaper.setEngineBusy(it.phase != LoopPhase.IDLE) } }
+    scope.launch { engine.status.collect { application.networkIdleReaper.setEngineBusy(it.phase != LoopPhase.IDLE) } }
     engine.start()
-    val built = AndroidFlowRuntime(key, engine, store, control, bridge, writer, scope, sqlite)
+    val built = AndroidFlowRuntime(key, engine, store, control, bridge, writer, scope, sqlite) {
+        application.networkIdleReaper.setEngineBusy(false)
+    }
     synchronized(runtimeLock) {
         val current = PairingStore(app.filesDir).load()
         if (current?.daemonNodeId != key) {

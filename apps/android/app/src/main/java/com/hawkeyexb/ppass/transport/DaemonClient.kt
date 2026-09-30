@@ -193,7 +193,10 @@ class DaemonClient internal constructor(
         )
     }
 
-    fun nodeIdHex(): String? = endpoint?.addr()?.id()?.toString()
+    /** #434: the id survives [closeIfIdle] — it comes from the persistent key, not the socket. */
+    fun nodeIdHex(): String? = endpoint?.addr()?.id()?.toString()?.also { lastNodeIdHex = it } ?: lastNodeIdHex
+
+    @Volatile private var lastNodeIdHex: String? = null
 
     /**
      * Register the storage daemon's address (from a pairing QR's `a=`
@@ -536,6 +539,7 @@ class DaemonClient internal constructor(
         if (inFlight.get() != 0) return@withContext false
         if (endpoint == null) return@withContext true
         bound.reset()?.let { ep ->
+            runCatching { lastNodeIdHex = ep.addr().id().toString() }
             runCatching { ep.close() }
             bindLog("endpoint closed while idle")
         }
