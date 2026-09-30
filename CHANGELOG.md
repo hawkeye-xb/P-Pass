@@ -5,6 +5,17 @@ All notable changes to P-Pass are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2-test.2] - 2026-09-30
+
+### Changed
+- 托盘和小尺寸图标换回与主图标一致的样式。(#567)
+- 官网下载按钮对国内用户改走 Cloudflare R2 镜像。(#574)
+
+### Fixed
+- Android 应用内「下载安装」能拉起系统安装器了。修复前 APK 能下载完，但安装界面从不出现，更新装不上。0.6.2-test.1 及更早的版本需要手动装一次本版，之后才能在 App 内升级。(#577)
+- 桌面照片墙：后台服务停止期间变灰的缩略图，服务恢复后自动重新加载，不用切页。(#571)
+- 桌面活动记录区分三种未完成的配对：桌面拒绝、手机取消、超时。(#573)
+
 ## [0.6.2-test.1] - 2026-09-30
 
 ### Added
