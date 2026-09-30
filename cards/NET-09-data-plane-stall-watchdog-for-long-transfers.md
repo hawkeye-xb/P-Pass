@@ -1,6 +1,6 @@
 # NET-09 长数据传输面加「字节停滞」看门狗（手机下载原图 / APK 下载 / daemon 收发）　级别 L1
 
-> ⬜ 状态：未开工（2026-09-14 NET-08 普查产出，焊点 N4+N5）
+> 🔄 状态：收尾 PR 待合（2026-09-29；#525 已合，APK 下载分类见 #538，daemon 上传项按 legacy 移出范围）
 > 级别：L1 · 阻塞：无
 > **AGENTS.md 设计纪律登记：本卡是终态方案本身（看门狗即长数据流的
 > 标准答案，非止血）；不需要另开根治卡。**
@@ -95,4 +95,7 @@ upload.rs，NET-06 碰 call 路径与 flow 管线）。UI 接线若与 NET-06 �
 - 手机查看原图 / 视频下载这条 lane 已由 [#525](https://github.com/hawkeye-xb/P-Pass/pull/525) 处理：`ByteStallGuard` 在停滞时关闭连接、抛 `DownloadStalled`，落到既有失败出口。
 - 阈值改用 60s，不用上文的 30s。iroh 连接级空闲判死是 30s（心跳 5s），relay 恢复期间合法空窗可以接近 30s，贴着它会抢跑，所以取 2 倍，与桌面 NET-29 `FETCH_BYTE_STALL_LIMIT` 同值。
 - 异常名是 `DownloadStalled`，不是 `DaemonStallException`，以便归入 MOB-115 的 `AssetDownloadException` 失败族。
-- 剩余：APK 下载三种失败可区分（`UpdateChecker.kt` catch-all）；daemon `upload.rs` 收流停滞上限；视频页原地重试按钮。
+- APK 下载三种失败已可区分：`downloadApk` 按阶段分类，返回 `ApkDownloadResult`，`PPassUpdate` 日志记类别与关键数字。重定向逐跳手动跟随（GitHub 资产 302 到 CDN 主机），每一跳都先显式 connect：这一步的失败（拒绝 / DNS / TLS / connectTimeout）算连接失败；连上后 readTimeout 触发算字节停滞；先看状态码，非 200 单列。readTimeout 仍是 30s：APK 走 HTTPS CDN，不经 relay，60s 的取值依据不适用。
+- daemon `upload.rs`（`ppf/upload/1`）移出本卡范围：核对 origin/main `9f7f7e12`，手机生产代码不再拨它。`BackupRunner` 是唯一拨号方，但生产代码里没有构造点，只剩测试在用。自 `d72ea44a`（首个发布 `v0.5.0-test.4`）起备份走 flow 管线。`v0.5.0-test.3` 及更早的已装包仍会拨，daemon 也仍接受，所以这条收流仍无停滞上限。它按 legacy 处理，下线与兼容另立卡，本卡不再加看门狗。上文「期望行为」第 3 条、验收第 4 条随之作废。
+- 视频页原地「重试」按钮不在验收里（验收第 6 条已由退出再进入满足），需要的话另立卡，涉及新文案与 i18n。
+- APK 下载失败目前对用户仍无提示：`MainActivity` 忽略返回值，对话框照旧关闭，Android 侧也没有现成的更新失败文案。这是 UX 缺口，另立卡。

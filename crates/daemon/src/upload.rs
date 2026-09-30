@@ -7,6 +7,15 @@
 //! `backup.upload`, granted to member+ via the `backup.` prefix). The
 //! received bytes must hash to the declared BLAKE3 before the blob
 //! store accepts them — a lying uploader gets an error, not storage.
+//!
+//! **LEGACY（NET-09 核对，2026-09-29）**：当前手机端已不拨这条通道。
+//! 生产备份自 `d72ea44a`（首个含它的发布是 `v0.5.0-test.4`）起走 flow
+//! 管线；`BackupRunner`（唯一的 `ppf/upload/1` 拨号方）在 `apps/android`
+//! 生产代码里没有任何构造点，仅剩 JVM/androidTest 与本 crate 的
+//! `tests/upload_flow.rs`、`tests/sync_flow.rs` 在用。`v0.5.0-test.3` 及更早
+//! 的已装包仍会拨它，所以 daemon 继续接受这条 ALPN；`receive_file` 里的
+//! `recv_chunk` 因此**没有**加字节停滞上限（NET-09 把本项移出范围，
+//! 下线与兼容处理另立卡）。不要在这里新增功能。
 
 use std::path::PathBuf;
 
