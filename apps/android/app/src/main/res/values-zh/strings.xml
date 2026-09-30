@@ -190,7 +190,7 @@
     <!-- 2026-08-17 设计稿对齐：这行原文是"备份范围"，改成设计稿原文
          "备份哪些相册"，跟下面几行同款"问句式"标签。 -->
     <string name="backup_scope">备份哪些相册</string>
-    <string name="backup_scope_all">全部相册</string>
+    <string name="backup_scope_none">未选相册</string>
     <plurals name="backup_scope_n">
         <item quantity="other">%1$d 个相册</item>
     </plurals>

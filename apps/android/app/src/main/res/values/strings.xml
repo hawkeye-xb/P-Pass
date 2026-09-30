@@ -203,7 +203,7 @@
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">New</string>
     <string name="backup_scope">Albums to back up</string>
-    <string name="backup_scope_all">All albums</string>
+    <string name="backup_scope_none">None selected</string>
     <plurals name="backup_scope_n">
         <item quantity="one">%1$d album</item>
         <item quantity="other">%1$d albums</item>

@@ -619,6 +619,9 @@ fun PPassApp() {
             DisposableEffect(holder) {
                 onDispose { holder.dispose() }
             }
+            // #541：权限档位（ON_RESUME / 权限弹窗回调重读）变了要让 holder 重数 n——授权不会触发
+            // MediaStore 的 ContentObserver，也不会杀进程，不接这一下英雄卡就停在无权限时数出来的 0 / 0。
+            LaunchedEffect(holder, mediaAccess) { holder.onMediaAccess(mediaAccess) }
             // MOB-114（#455）：存量补记——本修复前走完 onboarding 的桌面没有标记。
             LaunchedEffect(s.pairing.daemonNodeId) {
                 withContext(Dispatchers.IO) {
