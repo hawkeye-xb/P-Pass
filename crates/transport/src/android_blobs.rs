@@ -61,7 +61,14 @@ pub struct AndroidBlobsProvider {
     store: FsStore,
     /// NET-29: the current endpoint. Replaced (never mutated) when it did not
     /// come online in time; every reader takes the current `Arc` once.
-    endpoint: Mutex<Arc<ProviderEndpoint>>,
+    ///
+    /// #434: `None` until the first serve/register needs it, and again after
+    /// [`Self::park`]. An idle bound endpoint is not free: iroh pings its home
+    /// relay every 15 s and re-runs a net report every 20–26 s, which on a
+    /// cellular network keeps the radio awake for as long as the process lives.
+    endpoint: Mutex<Option<Arc<ProviderEndpoint>>>,
+    /// #434: serialises lazy binds so two concurrent serves bind once.
+    bind_gate: tokio::sync::Mutex<()>,
     /// Config for the endpoint of each generation (0 = the first bind).
     /// Production returns the same config every time; tests inject a
     /// never-online first endpoint.
@@ -747,7 +754,7 @@ impl AndroidBlobsProvider {
         let root = root.as_ref().join("iroh-blobs-provider");
         let dispatch: Arc<Mutex<Option<StopAwareBlobsProtocol>>> = Arc::default();
         let allowed_peer: AllowedPeer = Arc::default();
-        let (store, endpoint) = runtime.block_on(async {
+        let store = runtime.block_on(async {
             let mut options = Options::new(&root);
             if let Some(interval) = gc_interval {
                 options.gc = Some(GcConfig {
@@ -774,14 +781,14 @@ impl AndroidBlobsProvider {
             if removed > 0 {
                 tracing::info!("BLOB-03: released {removed} legacy Android provider blob tags");
             }
-            let endpoint =
-                ProviderEndpoint::bind(endpoint_config(0), &dispatch, &allowed_peer).await?;
-            Ok::<_, TransportError>((store, endpoint))
+            // #434: no endpoint yet — the first serve binds it.
+            Ok::<_, TransportError>(store)
         })?;
         Ok(Self {
             runtime,
             store,
-            endpoint: Mutex::new(Arc::new(endpoint)),
+            endpoint: Mutex::new(None),
+            bind_gate: tokio::sync::Mutex::new(()),
             endpoint_config,
             generation: AtomicU64::new(0),
             online_timeout,
@@ -903,9 +910,42 @@ impl AndroidBlobsProvider {
     /// #417: tell iroh the OS network changed (Android `ConnectivityManager`
     /// callback), so it re-probes paths instead of waiting for its own timers.
     pub fn network_change(&self) {
-        let endpoint = self.current_endpoint();
-        self.runtime
-            .block_on(endpoint.transport.endpoint().network_change());
+        // #434: no endpoint = nothing to re-probe (the next bind sees the new network).
+        if let Some(endpoint) = self.current_endpoint() {
+            self.runtime
+                .block_on(endpoint.transport.endpoint().network_change());
+        }
+    }
+
+    /// #434: whether an endpoint is bound right now.
+    pub fn is_endpoint_bound(&self) -> bool {
+        self.current_endpoint().is_some()
+    }
+
+    /// #434: close the endpoint while nothing is being served, so an idle
+    /// process stops pinging relays. The store, held imports and the lease
+    /// handler stay as they are; the next serve/register binds a fresh
+    /// endpoint (the ticket carries its address, exactly as after a NET-29
+    /// replacement). Refused — returns `false` — while a peer connection is
+    /// open or a pull has not finished, so it can never cut a live transfer.
+    pub fn park(&self) -> bool {
+        let busy = matches!(
+            self.transfer_status(),
+            ActiveTransferStatus::InProgress {
+                connected: true,
+                ..
+            }
+        );
+        if busy {
+            return false;
+        }
+        let parked = self.endpoint.lock().expect("provider endpoint lock").take();
+        if let Some(parked) = parked {
+            let id = parked.transport.endpoint().id().fmt_short().to_string();
+            self.retire(parked);
+            tracing::info!("#434: provider endpoint={id} parked while idle");
+        }
+        true
     }
 
     /// NET-29: how many times the endpoint has been replaced because it did
@@ -915,8 +955,9 @@ impl AndroidBlobsProvider {
     }
 
     /// The node id the next ticket would carry (tests observe replacement).
-    pub fn endpoint_node_id(&self) -> crate::NodeId {
-        self.current_endpoint().transport.node_id()
+    pub fn endpoint_node_id(&self) -> Result<crate::NodeId> {
+        let endpoint = self.runtime.block_on(self.bound_endpoint())?;
+        Ok(endpoint.transport.node_id())
     }
 
     /// NET-29 test hook: replace the current endpoint exactly as a failed
@@ -924,12 +965,52 @@ impl AndroidBlobsProvider {
     /// serial-items case a never-online first endpoint cannot reach).
     #[doc(hidden)]
     pub fn replace_endpoint_for_test(&self) -> String {
-        let stuck = self.current_endpoint();
-        self.runtime.block_on(self.replace_endpoint(&stuck))
+        self.runtime.block_on(async {
+            match self.bound_endpoint().await {
+                Ok(stuck) => self.replace_endpoint(&stuck).await,
+                Err(error) => format!("bind failed: {error}"),
+            }
+        })
     }
 
-    fn current_endpoint(&self) -> Arc<ProviderEndpoint> {
-        Arc::clone(&self.endpoint.lock().expect("provider endpoint lock"))
+    fn current_endpoint(&self) -> Option<Arc<ProviderEndpoint>> {
+        self.endpoint
+            .lock()
+            .expect("provider endpoint lock")
+            .clone()
+    }
+
+    /// #434: the current endpoint, binding one first if there is none.
+    async fn bound_endpoint(&self) -> Result<Arc<ProviderEndpoint>> {
+        if let Some(endpoint) = self.current_endpoint() {
+            return Ok(endpoint);
+        }
+        let _gate = self.bind_gate.lock().await;
+        if let Some(endpoint) = self.current_endpoint() {
+            return Ok(endpoint);
+        }
+        let generation = self.generation.load(Ordering::SeqCst);
+        let fresh = Arc::new(
+            ProviderEndpoint::bind(
+                (self.endpoint_config)(generation),
+                &self.dispatch,
+                &self.allowed_peer,
+            )
+            .await?,
+        );
+        *self.endpoint.lock().expect("provider endpoint lock") = Some(Arc::clone(&fresh));
+        Ok(fresh)
+    }
+
+    /// Mark [endpoint] retired and shut its router down. Retired: the dispatch
+    /// shutdown is a no-op, so this only closes that endpoint — never the
+    /// shared store.
+    fn retire(&self, endpoint: Arc<ProviderEndpoint>) {
+        endpoint.retired.store(true, Ordering::SeqCst);
+        let router = endpoint.router.clone();
+        self.runtime.spawn(async move {
+            let _ = router.shutdown().await;
+        });
     }
 
     /// Returns the current endpoint once it is online (or needs no relay).
@@ -941,7 +1022,7 @@ impl AndroidBlobsProvider {
     /// "did not become online" wording the Android caller classifies as
     /// `provider_offline`, and carries the stuck endpoint's diagnostics.
     async fn online_endpoint(&self, stage: &str) -> Result<Arc<ProviderEndpoint>> {
-        let endpoint = self.current_endpoint();
+        let endpoint = self.bound_endpoint().await?;
         if !endpoint.waits_for_online() || endpoint.transport.wait_online(self.online_timeout).await
         {
             return Ok(endpoint);
@@ -975,20 +1056,17 @@ impl AndroidBlobsProvider {
         let fresh_id = fresh.transport.endpoint().id().fmt_short().to_string();
         {
             let mut current = self.endpoint.lock().expect("provider endpoint lock");
-            if !Arc::ptr_eq(&current, stuck) {
-                // Another caller already replaced it; keep theirs.
+            if !current
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, stuck))
+            {
+                // Another caller already replaced (or parked) it; keep theirs.
                 return "already replaced".to_owned();
             }
-            *current = fresh;
+            *current = Some(fresh);
             self.generation.store(next_generation, Ordering::SeqCst);
         }
-        stuck.retired.store(true, Ordering::SeqCst);
-        let router = stuck.router.clone();
-        tokio::spawn(async move {
-            // Retired: the dispatch shutdown is a no-op, so this only closes
-            // the stuck endpoint — never the shared store.
-            let _ = router.shutdown().await;
-        });
+        self.retire(Arc::clone(stuck));
         format!("replaced by endpoint={fresh_id} generation={next_generation}")
     }
 
@@ -2069,6 +2147,24 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
     match provider(handle) {
         Ok(provider) => provider.network_change(),
         Err(error) => throw(&mut env, error),
+    }
+}
+
+/// #434: close the provider endpoint while idle; `false` = refused (a peer
+/// is connected), try again later.
+#[cfg(feature = "android-jni")]
+#[no_mangle]
+pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativePark(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jni::sys::jboolean {
+    match provider(handle) {
+        Ok(provider) => provider.park() as jni::sys::jboolean,
+        Err(error) => {
+            throw(&mut env, error);
+            0
+        }
     }
 }
 

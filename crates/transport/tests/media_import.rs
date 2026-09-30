@@ -210,7 +210,7 @@ fn an_endpoint_that_never_comes_online_is_replaced_and_the_next_serve_succeeds()
     let import = provider
         .import_media(None, File::open(&source).unwrap())
         .unwrap();
-    let stuck = provider.endpoint_node_id();
+    let stuck = provider.endpoint_node_id().expect("bind provider endpoint");
 
     let error = provider.serve(import.hash).unwrap_err().to_string();
     assert!(error.contains("did not become online"), "{error}");
@@ -236,7 +236,7 @@ fn an_endpoint_that_never_comes_online_is_replaced_and_the_next_serve_succeeds()
     );
     assert_eq!(provider.endpoint_generation(), 1, "{error}");
     assert_ne!(
-        provider.endpoint_node_id(),
+        provider.endpoint_node_id().expect("bind provider endpoint"),
         stuck,
         "the ticket must come from a new endpoint"
     );
@@ -296,7 +296,7 @@ fn a_persistently_offline_provider_replaces_its_endpoint_on_each_failed_serve() 
         .import_media(None, File::open(&source).unwrap())
         .unwrap();
 
-    let mut seen = vec![provider.endpoint_node_id()];
+    let mut seen = vec![provider.endpoint_node_id().expect("bind provider endpoint")];
     for attempt in 1..=3u64 {
         let started = std::time::Instant::now();
         let error = provider.serve(import.hash).unwrap_err().to_string();
@@ -307,7 +307,7 @@ fn a_persistently_offline_provider_replaces_its_endpoint_on_each_failed_serve() 
             "one serve waits one deadline, took {took:?}"
         );
         assert_eq!(provider.endpoint_generation(), attempt);
-        let id = provider.endpoint_node_id();
+        let id = provider.endpoint_node_id().expect("bind provider endpoint");
         assert!(
             !seen.contains(&id),
             "attempt {attempt} reused a stuck endpoint"
@@ -592,4 +592,88 @@ mod reference {
         let again = import_ref(&provider, &source);
         assert!(again.by_reference, "{again:?}");
     }
+}
+
+/// #434: an idle provider holds no endpoint (a bound one pings relays and
+/// re-runs net reports forever); park after a finished pull drops it, and the
+/// next serve binds a fresh one that still serves from the same store.
+#[test]
+fn endpoint_is_bound_on_demand_and_parked_when_idle() {
+    let dir = tempdir().unwrap();
+    let first = photo_bytes(64 * 1024, 434);
+    let second = photo_bytes(64 * 1024, 435);
+    let provider = AndroidBlobsProvider::new_loopback_with_gc(dir.path(), GC).unwrap();
+    assert!(
+        !provider.is_endpoint_bound(),
+        "open must not bind an endpoint"
+    );
+
+    let import = provider
+        .import_media(
+            None,
+            File::open(write_photo(dir.path(), "a.jpg", &first)).unwrap(),
+        )
+        .unwrap();
+    assert!(
+        !provider.is_endpoint_bound(),
+        "import is local: still no endpoint"
+    );
+    let ticket = provider.serve(import.hash).unwrap();
+    assert!(provider.is_endpoint_bound());
+    assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), first);
+    let first_id = provider.endpoint_node_id().unwrap();
+
+    assert!(provider.park(), "a finished pull must not block park");
+    assert!(!provider.is_endpoint_bound());
+    provider.network_change(); // no endpoint: a no-op, not a rebind
+    assert!(!provider.is_endpoint_bound());
+
+    let import = provider
+        .import_media(
+            None,
+            File::open(write_photo(dir.path(), "b.jpg", &second)).unwrap(),
+        )
+        .unwrap();
+    let ticket = provider.serve(import.hash).unwrap();
+    assert!(provider.is_endpoint_bound(), "serve after park rebinds");
+    assert_ne!(provider.endpoint_node_id().unwrap(), first_id);
+    assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), second);
+}
+
+/// #434 反证: park must refuse while the desktop is connected to the current
+/// lease — it would cut a live transfer.
+#[test]
+fn park_is_refused_while_a_peer_is_connected() {
+    let dir = tempdir().unwrap();
+    let bytes = photo_bytes(8 * 1024 * 1024, 436);
+    let provider = AndroidBlobsProvider::new_loopback_with_gc(dir.path(), GC).unwrap();
+    let import = provider
+        .import_media(
+            None,
+            File::open(write_photo(dir.path(), "big.jpg", &bytes)).unwrap(),
+        )
+        .unwrap();
+    let ticket = provider.serve(import.hash).unwrap();
+
+    std::thread::scope(|scope| {
+        let puller = scope.spawn(|| pull(&provider, dir.path(), &ticket));
+        let deadline = std::time::Instant::now() + PULL_TIMEOUT;
+        let mut refused = false;
+        while std::time::Instant::now() < deadline && !puller.is_finished() {
+            if matches!(
+                provider.transfer_status(),
+                ActiveTransferStatus::InProgress {
+                    connected: true,
+                    ..
+                }
+            ) {
+                refused = !provider.park();
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(refused, "park was not refused while the peer was connected");
+        assert!(provider.is_endpoint_bound());
+        assert_eq!(puller.join().unwrap().unwrap(), bytes);
+    });
 }

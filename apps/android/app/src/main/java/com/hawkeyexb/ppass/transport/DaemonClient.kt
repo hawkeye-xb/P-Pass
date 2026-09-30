@@ -120,10 +120,37 @@ class DaemonClient internal constructor(
     private val bindTimeoutMs: Long,
     private val openEndpoint: suspend (secretKey: ByteArray?) -> Endpoint,
     private val bindLog: (String) -> Unit,
+    /** #434: the device's persistent identity. When set, every method binds on demand, so the
+     *  endpoint can be closed while idle ([closeIfIdle]) and come back on the next use. */
+    private val secretKey: (() -> ByteArray)? = null,
 ) {
     /** [bindLog] receives one line per bind attempt (duration, outcome) —
      *  NET-28 asks for real-device bind timings to be observable. */
-    constructor(bindLog: (String) -> Unit = {}) : this(BIND_TIMEOUT_MS, ::bindIrohEndpoint, bindLog)
+    constructor(bindLog: (String) -> Unit = {}, secretKey: (() -> ByteArray)? = null) :
+        this(BIND_TIMEOUT_MS, ::bindIrohEndpoint, bindLog, secretKey)
+
+    /** #434: called after every successful bind (the idle reaper re-arms on it). */
+    @Volatile var onBound: () -> Unit = {}
+
+    /** #434: requests / streams / downloads currently using the endpoint. */
+    private val inFlight = java.util.concurrent.atomic.AtomicInteger(0)
+
+    private suspend fun <T> using(block: suspend (Endpoint) -> T): T {
+        inFlight.incrementAndGet()
+        try {
+            return block(requireEndpoint())
+        } finally {
+            inFlight.decrementAndGet()
+        }
+    }
+
+    /** The bound endpoint; binds it first when [secretKey] is known (#434 lazy bind). */
+    private suspend fun requireEndpoint(): Endpoint {
+        endpoint?.let { return it }
+        val key = secretKey ?: error("bind() first")
+        bind(key())
+        return endpoint ?: error("bind() first")
+    }
 
     private val bindScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val bound = BoundedSingleFlight<Endpoint>(
@@ -150,7 +177,10 @@ class DaemonClient internal constructor(
                 val started = System.nanoTime()
                 fun ms() = (System.nanoTime() - started) / 1_000_000
                 try {
-                    openEndpoint(secretKey).also { bindLog("bind ok bindMs=${ms()}") }
+                    openEndpoint(secretKey).also {
+                        bindLog("bind ok bindMs=${ms()}")
+                        runCatching { onBound() }
+                    }
                 } catch (t: Throwable) {
                     bindLog("bind failed bindMs=${ms()} error=$t")
                     throw t
@@ -182,8 +212,7 @@ class DaemonClient internal constructor(
      * The peer address must carry enough to dial (relay and/or direct).
      */
     suspend fun call(peer: PeerAddrParts, method: String, params: JsonElement): Resp =
-        withContext(Dispatchers.IO) {
-            val ep = endpoint ?: error("bind() first")
+        withContext(Dispatchers.IO) { using { ep ->
             // relayUrl is nullable in the ffi — an empty string fails
             // URL parsing ("Failed to parse relay URL", found live).
             val addr = EndpointAddr(
@@ -223,7 +252,7 @@ class DaemonClient internal constructor(
                     "$method: no response from the computer within ${CONNECT_TIMEOUT_MS}ms"
                 )
             }
-        }
+        } }
 
     /**
      * DIAG-A：与 [call] 同一次往返、同一个 [CONNECT_TIMEOUT_MS] 上限，但逐阶段记下发生了什么，
@@ -239,8 +268,7 @@ class DaemonClient internal constructor(
         method: String,
         params: JsonElement,
         report: (CallTrace) -> Unit,
-    ): Resp = withContext(Dispatchers.IO) {
-        val ep = endpoint ?: error("bind() first")
+    ): Resp = withContext(Dispatchers.IO) { using { ep ->
         val started = System.nanoTime()
         fun sinceStart() = (System.nanoTime() - started) / 1_000_000
         val homeRelayAtStart = runCatching { ep.addr().relayUrl() }.getOrNull()?.takeIf { it.isNotBlank() }
@@ -324,7 +352,7 @@ class DaemonClient internal constructor(
                 ),
             )
         }
-    }
+    } }
 
     /**
      * NET-06: read-only status query for one exact tuple — a short
@@ -389,8 +417,7 @@ class DaemonClient internal constructor(
         onConnected: suspend () -> Unit = {},
         onFlowEvent: suspend (String, JsonObject) -> Unit = { _, _ -> },
         onInvalidated: suspend () -> Unit,
-    ): Unit = withContext(Dispatchers.IO) {
-        val ep = endpoint ?: error("bind() first")
+    ): Unit = withContext(Dispatchers.IO) { using { ep ->
         val addr = EndpointAddr(
             EndpointId.fromString(peer.idHex),
             peer.relayUrl,
@@ -423,7 +450,7 @@ class DaemonClient internal constructor(
         } finally {
             conn.close(0L, ByteArray(0))
         }
-    }
+    } }
 
     /** UX-06: unilateral stop — ask the daemon to revoke THIS device.
      *  Success means hello is denied from now on; a fresh owner-issued
@@ -436,8 +463,7 @@ class DaemonClient internal constructor(
     /** Open a raw connection on any ALPN (upload plane reuses it for
      *  many streams — one per file). Caller closes. */
     suspend fun connectRaw(peer: PeerAddrParts, alpn: String): Connection =
-        withContext(Dispatchers.IO) {
-            val ep = endpoint ?: error("bind() first")
+        withContext(Dispatchers.IO) { using { ep ->
             val addr = EndpointAddr(
                 EndpointId.fromString(peer.idHex),
                 peer.relayUrl,
@@ -447,7 +473,7 @@ class DaemonClient internal constructor(
             // itself (upload/download streams) legitimately runs long,
             // only the "can we even reach it" step is time-boxed.
             ep.connectBounded(addr, alpn.toByteArray())
-        }
+        } }
 
     /**
      * Download an asset's original bytes to [dest] over ppf/download/1.
@@ -462,7 +488,7 @@ class DaemonClient internal constructor(
         hash: String,
         dest: java.io.File,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
-    ): Long = withContext(Dispatchers.IO) {
+    ): Long = withContext(Dispatchers.IO) { using {
         val conn = connectRaw(peer, "ppf/download/1")
         // NET-09（#116）：请求发出后等响应头、以及之后的每一块字节，都受字节停滞
         // 看门狗约束；判停滞时同步关闭连接，让卡住的 readExact 报错返回。
@@ -499,6 +525,21 @@ class DaemonClient internal constructor(
             // 看门狗可能已经关过一次；二次 close 抛的错不能盖掉真正的失败原因。
             runCatching { conn.close(0L, ByteArray(0)) }
         }
+    } }
+
+    /**
+     * #434: close the endpoint if nothing is using it, so an idle process stops pinging relays.
+     * Returns false (and keeps it) while a request, stream or download is in flight. Only
+     * meaningful with [secretKey] set — the next use binds again.
+     */
+    suspend fun closeIfIdle(): Boolean = withContext(Dispatchers.IO) {
+        if (inFlight.get() != 0) return@withContext false
+        if (endpoint == null) return@withContext true
+        bound.reset()?.let { ep ->
+            runCatching { ep.close() }
+            bindLog("endpoint closed while idle")
+        }
+        true
     }
 
     suspend fun close(): Unit = withContext(Dispatchers.IO) {

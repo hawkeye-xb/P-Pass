@@ -30,7 +30,10 @@ import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.evaluateDefinitiveEvents
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.reconcileWatchOnProcessStart
+import com.hawkeyexb.ppass.backup.flow.parkFlowNetwork
 import com.hawkeyexb.ppass.transport.DaemonClient
+import com.hawkeyexb.ppass.transport.IdentityStore
+import com.hawkeyexb.ppass.transport.NetworkIdleReaper
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +42,20 @@ import kotlinx.coroutines.launch
 
 class PPassApplication : Application() {
     /** One iroh Endpoint for every foreground and Flow delivery connection in this process. */
-    val daemonClient = DaemonClient(bindLog = { Log.i("PPassBind", it) })
+    val daemonClient = DaemonClient(
+        bindLog = { Log.i("PPassBind", it) },
+        // #434：带上持久身份，调用方不必先 bind；空闲关掉之后下次用到自己再绑。
+        secretKey = { IdentityStore(filesDir).secretKey() },
+    )
+
+    /** #434：后台空闲（不在前台、引擎这一轮已结束）30 s 后关掉两个 iroh endpoint。 */
+    internal val networkIdleReaper by lazy {
+        NetworkIdleReaper(
+            scope = noticeScope,
+            park = { daemonClient.closeIfIdle() and parkFlowNetwork() },
+            log = { Log.i("PPassFlow", it) },
+        ).also { reaper -> daemonClient.onBound = reaper::onBound }
+    }
 
     @Volatile private var lastNetworkSignature: String? = null
 
@@ -60,6 +76,7 @@ class PPassApplication : Application() {
         }
         registerNetworkCallback()
         registerActivityLifecycleCallbacks(ForegroundWatcher())
+        networkIdleReaper.setForeground(false)
         // #130 第 1 层：配对失效由投递 / 探测 / 前台心跳记下（#466），记下的那一刻就评估，不等下一次唤醒。
         noticeScope.launch { flowDeliveryPairingLoss.changes.collect { evaluateDefinitiveEvents(this@PPassApplication) } }
     }
@@ -102,6 +119,7 @@ class PPassApplication : Application() {
 
         override fun onActivityStarted(activity: Activity) {
             appVisible = true
+            networkIdleReaper.setForeground(true)
             if (started++ == 0 && !recreating) {
                 onFlowAppForeground(this@PPassApplication)
                 // #130：进前台也查一次（进程可能一直活着，权限 / 电池优化在系统设置里被改过）。
@@ -113,6 +131,7 @@ class PPassApplication : Application() {
         override fun onActivityStopped(activity: Activity) {
             started = (started - 1).coerceAtLeast(0)
             appVisible = started > 0
+            networkIdleReaper.setForeground(appVisible)
             // 旋转屏幕：stop 之后马上会有同一 Activity 的 start，那不是「进入前台」。
             if (activity.isChangingConfigurations) recreating = true
         }

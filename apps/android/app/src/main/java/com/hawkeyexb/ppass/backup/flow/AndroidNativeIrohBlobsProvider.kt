@@ -45,6 +45,9 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
 
     override fun networkChange() = nativeNetworkChange(handle)
 
+    /** #434：空闲时关掉 provider 的 endpoint；false = 桌面还连着，稍后再试。 */
+    fun park(): Boolean = nativePark(handle)
+
     override fun setAllowedPeer(daemonNodeId: String?) = nativeSetAllowedPeer(handle, daemonNodeId)
 
     override fun close() {
@@ -87,6 +90,9 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
 
         @JvmStatic
         external fun nativeNetworkChange(handle: Long)
+
+        @JvmStatic
+        external fun nativePark(handle: Long): Boolean
 
         @JvmStatic
         external fun nativeClose(handle: Long)

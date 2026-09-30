@@ -370,6 +370,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     )
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }
+    // #434：引擎这一轮没结束就不回收 endpoint；一轮结束（含 afterCycle 的审计上报在飞）再由回收器等宽限期。
+    auditScope.launch { engine.status.collect { application.networkIdleReaper.setEngineBusy(it.phase != LoopPhase.IDLE) } }
     engine.start()
     val built = AndroidFlowRuntime(key, engine, store, control, bridge, writer, scope, sqlite)
     synchronized(runtimeLock) {
@@ -409,6 +411,13 @@ private val nativeProviderLock = Any()
 
 @Volatile
 private var sharedNativeProvider: AndroidNativeIrohBlobsProvider? = null
+
+/**
+ * #434：关掉原生 provider 的 endpoint（store 不关）。还没打开 = 没什么可关。
+ * false = 桌面还连着这一张，稍后再试。下一次 serve 自己重新绑。
+ */
+internal fun parkFlowNetwork(): Boolean =
+    sharedNativeProvider?.let { runCatching { it.park() }.getOrElse { failure -> Log.w(TAG, "park failed", failure); false } } ?: true
 
 private fun sharedNativeProvider(context: Context): AndroidNativeIrohBlobsProvider =
     sharedNativeProvider ?: synchronized(nativeProviderLock) {
