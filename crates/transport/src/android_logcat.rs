@@ -7,6 +7,11 @@
 //! [`LOGCAT_TAG`]，默认 INFO；`setprop log.tag.PPassRust DEBUG` 解锁更低级别
 //! （鸿蒙同样支持 log.tag.*）。
 //!
+//! liblog 用 dlopen/dlsym 运行时解析，不做链接期 `#[link(name = "log")]`：
+//! `android-jni` feature 会被宿主侧 CI（`cargo nextest run --all-features`）
+//! 在 Linux/Windows 上编译并链接测试二进制，链接期依赖会因为没有 liblog 而
+//! 直接失败；运行时解析在宿主上只是优雅退化为不写日志。
+//!
 //! 隐私红线沿用 #544（与桌面端 `crate::QUIET_LOG_DIRECTIVES` 同口径）：iroh 的
 //! net_report 在 WARN 级别直接打印本机公网地址，这里在源头压到 ERROR。
 
@@ -33,16 +38,37 @@ const ANDROID_LOG_INFO: libc::c_int = 4;
 const ANDROID_LOG_WARN: libc::c_int = 5;
 const ANDROID_LOG_ERROR: libc::c_int = 6;
 
-#[link(name = "log")]
-extern "C" {
-    fn __android_log_write(
-        prio: libc::c_int,
-        tag: *const libc::c_char,
-        text: *const libc::c_char,
-    ) -> libc::c_int;
+/// `__android_log_write` 的 ABI（NDK <android/log.h>）。
+type LogWrite = unsafe extern "C" fn(
+    prio: libc::c_int,
+    tag: *const libc::c_char,
+    text: *const libc::c_char,
+) -> libc::c_int;
+
+/// 运行时解析 liblog（见模块头：不能链接期依赖，否则宿主侧 CI 链接失败）。
+/// 只解析一次；宿主（非 Android）上解析失败即退化为不写日志。
+fn log_write() -> Option<LogWrite> {
+    static RESOLVED: OnceLock<Option<LogWrite>> = OnceLock::new();
+    *RESOLVED.get_or_init(|| unsafe {
+        let handle = libc::dlopen(c"liblog.so".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+        if handle.is_null() {
+            return None;
+        }
+        let symbol = libc::dlsym(handle, c"__android_log_write".as_ptr());
+        if symbol.is_null() {
+            None
+        } else {
+            // SAFETY: dlsym returned liblog's `__android_log_write`, whose ABI
+            // matches `LogWrite` (NDK stable C ABI).
+            Some(std::mem::transmute::<*mut libc::c_void, LogWrite>(symbol))
+        }
+    })
 }
 
 fn write_log(priority: libc::c_int, text: &str) {
+    let Some(write) = log_write() else {
+        return;
+    };
     static TAG: OnceLock<std::ffi::CString> = OnceLock::new();
     let tag = TAG.get_or_init(|| std::ffi::CString::new(LOGCAT_TAG).expect("tag has no NUL"));
     let Ok(text) = std::ffi::CString::new(text.replace('\0', " ")) else {
@@ -50,7 +76,7 @@ fn write_log(priority: libc::c_int, text: &str) {
     };
     // SAFETY: both pointers are valid NUL-terminated strings that outlive the call.
     unsafe {
-        __android_log_write(priority, tag.as_ptr(), text.as_ptr());
+        write(priority, tag.as_ptr(), text.as_ptr());
     }
 }
 
