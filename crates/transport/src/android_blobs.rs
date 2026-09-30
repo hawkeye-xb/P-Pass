@@ -917,6 +917,14 @@ impl AndroidBlobsProvider {
         }
     }
 
+    /// #434: bind the endpoint now (without waiting for it to come online) so
+    /// it can reach its home relay while the caller does other work — the
+    /// first serve after [`Self::park`] would otherwise start that from zero
+    /// and spend its whole online budget on it. Idempotent.
+    pub fn prewarm(&self) -> Result<()> {
+        self.runtime.block_on(self.bound_endpoint()).map(|_| ())
+    }
+
     /// #434: whether an endpoint is bound right now.
     pub fn is_endpoint_bound(&self) -> bool {
         self.current_endpoint().is_some()
@@ -2147,6 +2155,19 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
     match provider(handle) {
         Ok(provider) => provider.network_change(),
         Err(error) => throw(&mut env, error),
+    }
+}
+
+/// #434: bind the provider endpoint ahead of the first serve of a round.
+#[cfg(feature = "android-jni")]
+#[no_mangle]
+pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativePrewarm(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) {
+    if let Err(error) = provider(handle).and_then(|provider| provider.prewarm()) {
+        throw(&mut env, error);
     }
 }
 

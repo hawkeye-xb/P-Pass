@@ -627,6 +627,9 @@ fn endpoint_is_bound_on_demand_and_parked_when_idle() {
     assert!(!provider.is_endpoint_bound());
     provider.network_change(); // no endpoint: a no-op, not a rebind
     assert!(!provider.is_endpoint_bound());
+    provider.prewarm().unwrap();
+    assert!(provider.is_endpoint_bound(), "prewarm binds ahead of serve");
+    let prewarmed = provider.endpoint_node_id().unwrap();
 
     let import = provider
         .import_media(
@@ -637,6 +640,11 @@ fn endpoint_is_bound_on_demand_and_parked_when_idle() {
     let ticket = provider.serve(import.hash).unwrap();
     assert!(provider.is_endpoint_bound(), "serve after park rebinds");
     assert_ne!(provider.endpoint_node_id().unwrap(), first_id);
+    assert_eq!(
+        provider.endpoint_node_id().unwrap(),
+        prewarmed,
+        "serve uses the prewarmed endpoint"
+    );
     assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), second);
 }
 

@@ -337,7 +337,14 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         media = ContentResolverMediaSnapshotSource(app, { scopeStore.selectedBucketIds() }),
         importer = importer,
         delivery = delivery,
-        probe = DaemonDesktopProbe(pairing, desktopFor, log = androidLog, clock = SystemClock::elapsedRealtime),
+        // #434：只有「有东西要传」才会探测桌面——此刻先把 provider 的 endpoint 绑上，它和 hello 并行去连
+        // relay；空闲时它被关掉了，等到第一次 serve 才从零开始会把 15 s 上线预算整个耗在这上面。
+        probe = DaemonDesktopProbe(pairing, desktopFor, log = androidLog, clock = SystemClock::elapsedRealtime).let { hello ->
+            DesktopProbe {
+                runCatching { native.prewarm() }.onFailure { Log.w(TAG, "provider prewarm failed; serve binds instead", it) }
+                hello.probe()
+            }
+        },
         presence = RemotePresence { hashes ->
             val p = pairing() ?: error("not paired")
             client.bind(IdentityStore(app.filesDir).secretKey())
