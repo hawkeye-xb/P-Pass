@@ -518,6 +518,7 @@ fun HomeScreen(
                                         pairingLost = pairingLost,
                                         missingSourceCount = missingSourceNotice?.count ?: 0,
                                     ),
+                                    backgroundBackupState,
                                 ),
                                 fontSize = 13.5.sp, color = PPColor.Ink60,
                             )
@@ -968,17 +969,32 @@ private fun workingText(line: StatusLine.Working): String = when (val s = line.s
  * 逐一出对应文案，才是「点了有交代」的最小闭环。
  */
 @Composable
-private fun idleStatusText(line: StatusLine, allSafeAllowed: Boolean = true): String = when (line) {
+private fun idleStatusText(
+    line: StatusLine,
+    allSafeAllowed: Boolean,
+    backgroundBackupState: BackgroundBackupState,
+): String = when (line) {
     is StatusLine.NoAlbums -> stringResource(R.string.state_no_albums)
     is StatusLine.Pending -> pluralStringResource(R.plurals.state_pending, line.k.toInt(), line.k)
     // UI-16 规则 S：闸门不过时退回既有的中性分支，**不许**说「都存好了」。
     is StatusLine.AllSafe ->
         if (allSafeAllowed) stringResource(R.string.state_safe)
-        else stringResource(R.string.idle_auto_hint)
-    is StatusLine.Ready -> stringResource(R.string.idle_auto_hint)
+        else stringResource(idleHintRes(backgroundBackupState))
+    is StatusLine.Ready -> stringResource(idleHintRes(backgroundBackupState))
     is StatusLine.Waiting -> stringResource(R.string.backup_waiting_constraints)
     is StatusLine.Paused -> stringResource(R.string.state_paused)
     is StatusLine.Working, is StatusLine.Trouble -> stringResource(R.string.idle_auto_hint) // unreachable
+}
+
+/**
+ * #540：空闲态那一句「插电 + Wi-Fi 时自动进行」是在替后台备份作保——只有后台真的在跑（Armed）才许说。
+ * 挂起期间（等授权 / 监听被停）说的是设置行 hint 同一句话，两处不许给两个说法。
+ * OffByUser 在这里不改：用户关掉后 Flow 的等待原因 DISABLED 先接管这一行（state_waiting_disabled）。
+ */
+internal fun idleHintRes(backgroundBackupState: BackgroundBackupState): Int = when (backgroundBackupState) {
+    BackgroundBackupState.NeedsSystemAuthorization -> R.string.background_backup_needs_authorization
+    BackgroundBackupState.SystemStoppedWatcher -> R.string.background_backup_system_stopped
+    BackgroundBackupState.Armed, BackgroundBackupState.OffByUser -> R.string.idle_auto_hint
 }
 
 /** 设计稿 hero 内次级按钮：白底 #FBF8F2 + 描边 rgba(23,21,18,.24) + 圆角 14 +
