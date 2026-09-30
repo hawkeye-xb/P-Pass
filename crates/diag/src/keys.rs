@@ -330,6 +330,11 @@ msg_keys! {
     UI_DISK_SPACE => "ui.disk_space",
     UI_DISK_FREE_OF_TOTAL => "ui.disk_free_of_total",
     UI_LIBRARY_CHANGE_HINT => "ui.library_change_hint",
+    /// #557: Settings → interface language (follow system / zh / en).
+    UI_LANGUAGE => "ui.language",
+    UI_LANGUAGE_SYSTEM => "ui.language_system",
+    UI_LANGUAGE_ZH => "ui.language_zh",
+    UI_LANGUAGE_EN => "ui.language_en",
     UI_SOFTWARE_UPDATE => "ui.software_update",
     UI_CHECK_UPDATE => "ui.check_update",
     UI_PAIR_QR_TITLE => "ui.pair_qr_title",
@@ -619,6 +624,10 @@ mod tests {
             UI_DISK_SPACE,
             UI_DISK_FREE_OF_TOTAL,
             UI_LIBRARY_CHANGE_HINT,
+            UI_LANGUAGE,
+            UI_LANGUAGE_SYSTEM,
+            UI_LANGUAGE_ZH,
+            UI_LANGUAGE_EN,
             UI_SOFTWARE_UPDATE,
             UI_CHECK_UPDATE,
             UI_PAIR_QR_TITLE,
@@ -664,7 +673,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 279);
+        assert_eq!(ALL.len(), 283);
     }
 
     #[test]

@@ -2,9 +2,10 @@
 //
 // Copy lives only in assets/i18n/{en,zh}.json (crates/diag registers every
 // key and its tests keep both languages complete). Imported straight from
-// the repo root — zero copies, zero drift. One language per session, picked
-// from the system language (the UI is single-language by design); the tray
-// menu asks the same question via `trayLocale()` so shell and window agree.
+// the repo root — zero copies, zero drift. One language per session (the UI
+// is single-language by design): the user's choice from Settings (#557) if
+// there is one, else the system language. The tray menu is told the same
+// answer via `set_tray_locale`, so shell and window agree.
 import enDict from "../../../../assets/i18n/en.json";
 import zhDict from "../../../../assets/i18n/zh.json";
 
@@ -16,11 +17,57 @@ export function localeFor(lang) {
   return String(lang).toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 
-let current = localeFor(typeof navigator !== "undefined" ? navigator.language : "");
+// #557: the Settings language choice. "system" = follow navigator.language.
+// Stored in localStorage (a per-machine UI preference, like the tray-hint
+// flag — the daemon's config.toml is library config, not UI state).
+export const LANG_PREF_KEY = "ppass.ui_language";
+export const LANG_PREFS = ["system", "zh", "en"];
 
-/** Force a locale (tests; never called by product code). */
+function systemLang() {
+  return typeof navigator !== "undefined" ? navigator.language : "";
+}
+
+/** Only "zh" / "en" are real choices; missing, garbage or "system" → "system". */
+export function normalizePref(v) {
+  return v === "zh" || v === "en" ? v : "system";
+}
+
+/** Saved choice; storage missing or throwing (private mode) → "system". */
+export function readLangPref(storage = globalThis.localStorage) {
+  try {
+    return normalizePref(storage?.getItem(LANG_PREF_KEY));
+  } catch {
+    return "system";
+  }
+}
+
+/** The locale a preference resolves to right now. */
+export function localeForPref(pref) {
+  const p = normalizePref(pref);
+  return p === "system" ? localeFor(systemLang()) : p;
+}
+
+let current = localeForPref(readLangPref());
+
+/** Force a locale (tests, and applyLangPref below). */
 export function setLocale(lang) {
   current = localeFor(lang);
+}
+
+/**
+ * #557: switch language from Settings. Persist first — a choice that cannot
+ * be saved would silently revert on the reload, so a write failure throws
+ * (the caller shows it) and nothing else happens. Then tell the tray (its
+ * failure only affects the tray, so it is swallowed like at startup), then
+ * reload so every t() call — NAV included — re-evaluates in the new language.
+ */
+export async function applyLangPref(pref, { storage = globalThis.localStorage, invoke, reload }) {
+  const p = normalizePref(pref);
+  if (p === "system") storage.removeItem(LANG_PREF_KEY);
+  else storage.setItem(LANG_PREF_KEY, p);
+  setLocale(localeForPref(p));
+  await Promise.resolve(invoke("set_tray_locale", { lang: getLocale() })).catch(() => {});
+  reload();
 }
 
 export function getLocale() {
