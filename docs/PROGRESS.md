@@ -112,7 +112,7 @@
 | **ARCH-01 首批 P0 实施卡（ARCH-02~05）** | 2026-08-31 | 本 commit | 🟡 self-review 通过；ARCH-02 可接，零生产代码 | 按 ARCH-01 Case Matrix 的执行顺序创建四张纵向卡：ARCH-02（D-01~D-04 手机账本/发现原子提交）、ARCH-03（C-01~C-05 严格消费者与 Pause/条件等待）、ARCH-04（E-01~E-04 完成凭据与 ScopeRevision）、ARCH-05（X-01~X-05 取消本轮）。复核确认：ARCH-02 将账本与发现放同卡是为守住不可拆开的“候选写入 + 游标前移”原子事务；C、E、X 分别按消费者控制、完成/范围竞争、取消轮 saga 分界，不复用旧 WorkManager 机制。四卡均要求先写对应新 case 的失败测试，且不准修改旧管线、调度、UI、Rust 或传输协议。 |
 | **ARCH-01 旧卡/旧测试冻结** | 2026-08-31 | 本 commit | ✅ 协同状态已收口，待按新 case 重拆 | 用户确认核心叙述已由 ARCH-01 重定义。`MOB-39`、`MOB-42`、`MOB-48` 的旧 `TriggerSpec` / WorkManager 通道枚举 / enqueue facade 形状全部冻结，禁止直接实施；曾在 `wip/MOB-42` 写入的一条旧通道枚举红测已废弃且不会合入 main。AGENTS 与 AGENT_PROTOCOL 新增规则：架构换代时先区分仍有效的产品不变量与已被取代的实现测试；旧测试不许把新设计拉回旧管线，后续从 ARCH-01 Case Matrix 重写失败用例。 |
 | **ARCH-01（L2）备份核心流程：发现队列与严格单张消费** | 2026-08-29 | 本 commit | 🟡 设计已收口，待拆实施卡 | 设计完成：单文件是交付单位，批次只作 500 项发现窗口；触发合并为 `discoveryRequested`，发现器用复合 DiscoveryCursor 原子入队，消费者用严格 UploadCursor 单张处理。传输统一为原生 iroh-blobs fetch/resume，不新增 raw upload/offset/chunk-map 协议；Pause 保留有主 partial 且仅 Continue 恢复，Wi-Fi/电量/Desktop 等条件进入自动 `WAITING_FOR_CONSTRAINTS` 并在条件恢复后从队头续传。范围增加走延后补扫；范围减少经确认替换 ScopeRevision，已获 Desktop 完整保存凭据的项仍确认完成，其他旧未确认项取消并重新发现。Cancel Current Round 在 Pause 后逐页清空本轮全部待传项，取消期间入队项也取消；结束后新入队项属于下一轮，仅用户显式恢复才重新准入。对账默认 `NEEDS_DECISION`，不自动补传或删手机。中英文设计档、SVG/PNG 图及失败 Case Matrix 已归档于 `docs/design/2026-08-29-arch01-backup-core/`。未改生产代码。 |
-| **NET-02（L2）relay 握手失败的 stderr 洪水折叠** | 2026-08-27 | 本 commit | ✅ 完成（daemon 单测 4/4 + `just ci` 全绿 + 真实二进制对假 relay 跑 95s 验证） | 8/26 家中真机实锤：Clash 代理导致 relay TLS 握手失败，daemon 7 分钟写了 92211 行/73MB 到 `.err`（同一句 `tls handshake eof`）。这些行来自 iroh/quinn 内部的 `tracing` 调用，我们没有对应的调用点可改，所以修在 subscriber 层：新增 `crates/daemon/src/log_guard.rs::DedupGuard`（`tracing_subscriber::fmt::MakeWriter`）——折叠 key = 格式化行去掉行首时间戳，第一次立即打印，重复只计数，安静 2 秒后打一条汇总（`×92211 over 1m32s`，格式对上卡片期望），单次/偶发失败不受影响。独立加一道 8MB/次运行的硬上限（Unix `ftruncate` 当前 stderr 文件），防的是"折叠按精确文本分组、某个循环每次内容不完全一样就漏网"的场景；Windows 分支老实标注未接、不装作修好。顺带 `.with_ansi(false)` 去掉落盘文件里没用的颜色码。**调试真坑**：单测最初用 `std::time::Instant`，`tokio::time::advance`/`sleep` 只拨动 tokio 自己的虚拟时钟，`std::time::Instant::now()` 不受影响，导致"是否已安静"的判断永远读到真实墙钟时间、从未触发——切到 `tokio::time::Instant` 才真正验证了逻辑。**真机验证的已知局限**：本地假 relay（accept 即 close）跑出来的是 daemon 被动网络探测（`net_report`，每 ~21s 一轮、自带回退），不是故障当晚"已配对设备正在传输、relay 连接被主动维持"时的紧密循环——那个要复现需要第二台设备真的在传输，本次未做；折叠机制本身的洪水级压力已由单测（真实 92211 次重复，虚拟时钟）覆盖。验证脚本未纳入 CI：测的是 iroh 库自己的探测退避节奏而非我们的代码，慢且环境敏感，价值已被更快更确定的单测覆盖。 |
+| **NET-02（L2）relay 握手失败的 stderr 洪水折叠** | 2026-08-27 | 本 commit | ✅ 完成（daemon 单测 4/4 + `just ci` 全绿 + 真实二进制对假 relay 跑 95s 验证） | 8/26 家中真机实锤：本机全局代理导致 relay TLS 握手失败，daemon 7 分钟写了 92211 行/73MB 到 `.err`（同一句 `tls handshake eof`）。这些行来自 iroh/quinn 内部的 `tracing` 调用，我们没有对应的调用点可改，所以修在 subscriber 层：新增 `crates/daemon/src/log_guard.rs::DedupGuard`（`tracing_subscriber::fmt::MakeWriter`）——折叠 key = 格式化行去掉行首时间戳，第一次立即打印，重复只计数，安静 2 秒后打一条汇总（`×92211 over 1m32s`，格式对上卡片期望），单次/偶发失败不受影响。独立加一道 8MB/次运行的硬上限（Unix `ftruncate` 当前 stderr 文件），防的是"折叠按精确文本分组、某个循环每次内容不完全一样就漏网"的场景；Windows 分支老实标注未接、不装作修好。顺带 `.with_ansi(false)` 去掉落盘文件里没用的颜色码。**调试真坑**：单测最初用 `std::time::Instant`，`tokio::time::advance`/`sleep` 只拨动 tokio 自己的虚拟时钟，`std::time::Instant::now()` 不受影响，导致"是否已安静"的判断永远读到真实墙钟时间、从未触发——切到 `tokio::time::Instant` 才真正验证了逻辑。**真机验证的已知局限**：本地假 relay（accept 即 close）跑出来的是 daemon 被动网络探测（`net_report`，每 ~21s 一轮、自带回退），不是故障当晚"已配对设备正在传输、relay 连接被主动维持"时的紧密循环——那个要复现需要第二台设备真的在传输，本次未做；折叠机制本身的洪水级压力已由单测（真实 92211 次重复，虚拟时钟）覆盖。验证脚本未纳入 CI：测的是 iroh 库自己的探测退避节奏而非我们的代码，慢且环境敏感，价值已被更快更确定的单测覆盖。 |
 | **验收人第二批真机验收：9 张归档** | 2026-08-27 | 本 commit | ✅ 已归档（纯卡片/索引，零 CI） | 验收人 Discord 批量报「通过」：**MOB-32**（大批量传一半开 App 不丢照片，L0）、**MOB-37**（通知权限关掉也有重传提示）、**MOB-29**（删照片→桌面警告+手机重传）、**MOB-34**（删老照片自动回归、K 归零）、**MOB-36**（移入已选相册自动被备）、**WATCH-03**（Finder 挪动不丢）、**WATCH-04**（手拷自动收录）、**DESK-08**（批量删除活动页不打挂）、**UI-03**（顶部大标题已删）→ 全部横幅转 ✅、补验收记录、移入 `done/`，QUEUE.md 待验收区同步移除。剩余待验：UX-14、MOB-40、DESK-10、MOB-38、UX-13、WATCH-07、MOB-19、MOB-09、MOB-13、BLOB-01、E2E-02。 |
 | **验收人 7 条真机反馈开卡批次（6 新卡 + MOB-26 解冻）** | 2026-08-27 | 本 commit | ✅ 已开卡（纯文档/卡片，零 CI） | 验收人 2026-08-27 反馈 7 条（⚠️ 与并行 session 撞号后重排，最终编号如下）：**①侧滑返回**→`MOB-45`（L2，含查看页手势分层，与 MOB-26 交集已在两卡互相标注）；**②开源图片查看库**→`MOB-26` 从 backlog 解冻移回队列（L2），补调研：查看层 Telephoto/ZoomImage/SubsamplingScaleImageView、元数据层 metadata-extractor/ExifInterface，包体积纪律沿用 ICON-02 先例；**③相册计数虚高**（选 3 显 7、选 4 显 8，恒 +4）→`MOB-46`（L1，线索指向计数混入 4 个固定伪桶，卡面标注先取证）；**④闲置时审计被连接事件刷屏**→`NET-03`（L2，先取证定性真抖动 vs 误记，⚠️ PRES-01 在读 `device.connected` 做 10 分钟去重，口径不能乱动）；**⑤鸿蒙恢复备份无后台**→`MOB-44`（L1，与 DOG-03 同族，先分 HarmonyOS 4.x 兼容层 vs NEXT，需鸿蒙真机窗口）；**⑥闪电标没了**→`UI-07`（L3，当天验收人定性：不是丢了，是小 icon 用错版本——引用了不带闪电标识的 icon，修法等她指示）；**⑦选相册页长名换行+缩略图模糊**→`UI-08`（L3）。QUEUE.md 可接队列已同步。 |
 | **UX-13（L1）暂停之后按钮不再消失，原地变「继续」** | 2026-08-26 | 本 commit | ✅ 代码完成（Android **44 类 / 334 tests / 0 failures**，反证真跑；真机验收欠验收人） | 验收人真机原话：「暂停之后，没有重新开始的按钮？」——英雄区那个按钮只在 `busy` 时渲染，一暂停 `busy` 变 false、整个 `if` 块不渲染，续传入口只剩设置页那个低调的「立即备份」，**与 UX-01 卡面自己写的「再点一次 = 续传」冲突**。⚠️ 不是 MOB-33 改出来的（之前那句 `_state.value = Idle` 同样让按钮消失，只是以前没人点第二次）。根因是**「用户主动暂停」与「本来就没事干」都映射到 `Idle`，界面分不出来**。改法：新增 `BackupUiState.Paused`，判据落一个「按下暂停的时刻」（新 `backup/PausePrefs.kt`，tmp+rename）再与 work 真实状态合成——纯函数 `pausedAfterOf(pausedAt, newestFinishedAt, anyRunning)`。**刻意不看那条 CANCELLED 记录**：取消拿不到 `outputData` → 无戳 → 在 MOB-31 的「按戳取最大」里恒被当上古记录，靠它判断「刚被暂停」永远不成立（本卡点名的坑）。**也没破 MOB-33 的「界面不许自己编状态」**：合成要求「没有 work 在跑」，所以点完暂停而字节还在传的那几帧照旧显示进行中。记时刻而不是布尔，是为了**不需要清除时机就能自证过期**（出现更新的完成记录即失效）。英雄区按钮改由纯函数 `heroActionOf` 裁决，**同一个位置换文案**、两个分支共用同一个 `onClick = onBackupNow`（MOB-19 红线：不新增第二条管线）；点击的裁决与文案的裁决共用 `isBackupRunning`，于是「界面显示什么」和「点下去干什么」永远对得上。两处易漏已处理：①构造时**同步**读 `pausedAt`（异步会跟 WorkManager 首帧抢跑 → 暂停后杀 App 重开按钮不见）；②被后来的运行覆盖时清掉标记（不清则终态记录被清理后「继续」凭空复活）。**「继续」刻意不加「K>0」门**：三元组不可用时 K 传 0，加门等于把缺陷原样放回去。 |
@@ -347,18 +347,18 @@
 
 - **[2026-07-28] S-03 验收盲区：Android App 与 S-01 CLI 从未真正互通。** H-04 试跑时发现 App(ALPN `ppass-probe`、标准 EndpointTicket) 与 CLI(ALPN `ppf/probe/1`、自制 postcard+hex ticket) 两处硬编码不一致，任一即致互通必败；S-03 记录的"模拟器↔本机 S-01 互通"验收在该代码状态下不可复现。已修复（`0c05255`，CLI 适配 App）。教训：跨端互通验收必须两端真实对跑，不能各自回环。
 - **[2026-07-28] T-001 workspace 曾破坏 spike 独立构建**（缺 workspace.exclude），h04-case-list 中的构建命令因此失效。已修复（`040ce43`）。
-- **[2026-07-28] 网络环境记录：** 办公网（10.1.150.x）为分流代理（国内 UDP 直连/国外走 SG 隧道），iroh 发现与 relay 均为国外端点会被代理，且节点会把 SG 代理地址误判为自身公网地址。该环境下的连接数据只能记为"代理路由器环境"附加场景，不可作为家宽基线。手机(5G)→Mac 实测：可经 relay 建连，但 100MB 传输中途停滞超时。
+- **[2026-07-28] 网络环境记录：** 办公网为分流代理（国内 UDP 直连/国外走 SG 隧道），iroh 发现与 relay 均为国外端点会被代理，且节点会把 SG 代理地址误判为自身公网地址。该环境下的连接数据只能记为"代理路由器环境"附加场景，不可作为家宽基线。手机(5G)→Mac 实测：可经 relay 建连，但 100MB 传输中途停滞超时。
 - **[2026-07-28] Android Probe App 四处缺陷（spike 级，下次重打 APK 一并修）：** ① UidtLogger 把 error 统一写成空串 `""`（应为 null/真实错误信息），失败原因无法从日志判读；② Share Log 按钮可见性绑在"传输中"状态上，任务结束/界面刷新后无法导出（数据在 `files/uidt_log.jsonl` 持久化未丢，靠重新 Start 一次才能召出按钮）；③ Activity 重建即丢 endpoint 与结果列表（切后台回来要重新 Bind）；④ App 生成自身 ticket 不等待 relay 就绪，ticket 可能仅含内网地址（与 CLI 已修复的同款问题，影响 App 作为监听端被跨网拨入，如场景 3）。
 - **[2026-07-29] C1/C2 对照完成（阿里云公网 IP 监听端）：蜂窝侧嫌疑排除。** 鸿蒙 5G→阿里云 20/20 direct/v4
   （18~48 Mbps）；三星公司 WiFi→阿里云 20/20 direct/v4（P50 24ms/16.9Mbps，含 5 轮灭屏无损）。
-  场景 2 的 0/20 direct 归因收敛到家侧（双层 NAT/Clash TUN/UPnP 关），R1（宿主机+关代理）成为决定性复测。
+  场景 2 的 0/20 direct 归因收敛到家侧（双层 NAT/本机代理 TUN/UPnP 关），R1（宿主机+关代理）成为决定性复测。
   附带：阿里云→n0 海外 relay 不稳（usw1 超时切 euc1），H-07 国内自建 relay 再添实证。APK v3 双机验证通过
   （ipver/remote 字段正确）。数据见 h04-network-matrix.md C1/C2 节。
 - **[2026-07-29] Android Probe App 第五缺陷（数据级，比前四个严重）：ipver 分类器恒判 v6。**
   `remoteAddr.contains(":")` 判 v6，但 `ip:port` 必含冒号 → v1/v2 所有日志的 ipver 字段不可信。
   由家侧网络画像的矛盾（VM 无全局 v6 却记录"20/20 v6 直连"）触发排查，经 ticket 解码证实。
   连锁修正：场景 7 实为 **v4 打洞穿双层 NAT** 成功；"IPv6 决定性因素"结论作废降级为假设；
-  场景 2 归因收敛至蜂窝 CGNAT×家侧双层 NAT/Clash TUN（家侧 v4 地址判定其实干净）。
+  场景 2 归因收敛至蜂窝 CGNAT×家侧双层 NAT/本机代理 TUN（家侧 v4 地址判定其实干净）。
   v3 APK 已修复并新增 remote 字段。详见 h04-network-matrix.md 归因修正节。
   **教训：spike 数据字段也要有最小校验（一个恒真条件让整列数据作废）；结论要与网络事实交叉验证。**
 - **[2026-07-28] H-04 场景 2/7 正式数据入档**（docs/h04-logs/）：场景 7=20/20 direct(v6) 16.9Mbps；场景 2=0/20 direct、relay 兜底 20/20 完成 11.3Mbps（判红暂缓，见矩阵表复测清单——家侧监听端在 VM 内 + 双端代理，归因未分离）。IPv6 有无 = direct/relay 的对照实验入档。
@@ -374,7 +374,7 @@ spawn。用户实测：pkill 后 3 秒 launchd 复活新 pid。随后用户点�
 
 **verify-m1 战役**（一场三层的排查）：
 1. 假象一"Tailscale 路由劫持"——用户退出 Tailscale 仍红，判断被推翻。
-2. 日志实证：`connecting relay_url=None ip_addresses=[10.1.150.82]`——
+2. 日志实证：`connecting relay_url=None ip_addresses=[10.0.0.x]（办公网内网地址，已脱敏）`——
    provider（testclient）绑定后立即自报地址，relay 尚未就绪，存储端
    反拨无兜底；同机打洞又被 7 个残留 utun（Tailscale 系统扩展"等重启
    卸载"状态）干扰 → 超时。用户重启清掉 utun 后同机打洞恢复。
@@ -398,7 +398,7 @@ bundle 三连全绿。**M1 正式收官。**
 **决策记录**：
 - 同机冒烟不因环境残留降级验收——修到真绿为止（三层根因全部定位）。
 - "能优雅退出"与"崩溃自动恢复"必须并存（用户裁决）。
-- 产品铁律再获实锤：存储端不与全局 VPN/TUN 共存（Clash、Tailscale
+- 产品铁律再获实锤：存储端不与全局 VPN/TUN 共存（本机代理、Tailscale
   两案并档）。
 
 ## 2026-07-31 — M2 开工：T-050 Android 骨架 + proto Kotlin（防漂移）

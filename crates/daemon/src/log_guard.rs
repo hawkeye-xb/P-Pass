@@ -1,7 +1,7 @@
 //! NET-02: fold repeated log lines, cap total bytes. DEVLOG-01: same
 //! folding/capping guard, generalized to also drive a persistent file sink.
 //!
-//! 2026-08-26 家中真机实锤：Clash 把 iroh relay 的 TLS 握手流量代理
+//! 2026-08-26 家中真机实锤：本机全局代理把 iroh relay 的 TLS 握手流量代理
 //! 掉，握手失败在 7 分钟内被逐条打印了 92211 次（73MB）。失败重试本身
 //! 没错——错的是每一次重试都逐条写 `tls handshake eof` 到 `.err`。这些
 //! 行来自 iroh/quinn 内部的 `tracing` 调用，不是我们自己代码里的日志

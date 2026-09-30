@@ -36,7 +36,7 @@ data class ProbeResult(
 )
 
 // "ip:port" always contains ':' — strip the port first; v6 iff the host part still has one
-// (handles both "[2408::1]:443" and bare "2408::1:443").
+// (handles both "[2001:db8::1]:443" and bare "2001:db8::1:443").
 internal fun ipVersionOf(addr: String?): String =
     when {
         addr == null -> "?"
