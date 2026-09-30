@@ -1514,12 +1514,15 @@ fn sanitize(s: &str, home: &str) -> String {
 /// `detail` 里的 `rel_path` 以全长 NodeId 开头）。与桌面壳
 /// `daemon_logs::scrub_full` 同语义，两侧共用 `assets/privacy/redact-vectors.json`。
 fn scrub(s: &str, home: &str, library: &str) -> String {
-    let s = if library.is_empty() {
-        s.to_string()
-    } else {
-        s.replace(library, "<LIBRARY>")
+    let pre = |s: &str| {
+        let s = if library.is_empty() {
+            s.to_string()
+        } else {
+            s.replace(library, "<LIBRARY>")
+        };
+        sanitize(&s, home)
     };
-    crate::redact::redact(&sanitize(&s, home))
+    crate::redact::redact_export_json_or_text(s, &pre)
 }
 
 fn state_name(s: &DaemonState) -> &'static str {
@@ -1587,7 +1590,7 @@ mod tests {
         let s = format!("/Users/alice/x originals/{node}/2026/08/a.jpg");
         let out = scrub(&s, "/Users/alice", "");
         assert!(
-            out.starts_with("<DATA>/x originals/abababab…<masked>/"),
+            out.starts_with("<DATA>/<dir> originals/abababab…<masked>/2026/08/<file>.jpg"),
             "{out}"
         );
         assert!(!out.contains(&node), "{out}");
@@ -1607,7 +1610,7 @@ mod tests {
             "/Users/alice",
             "/Volumes/Alice Disk/Photos",
         );
-        assert_eq!(out, "<LIBRARY>/originals/x.jpg via <ipv4:public>:4433");
+        assert_eq!(out, "<LIBRARY>/originals/<file>.jpg via <ipv4:public>:4433");
     }
 
     #[test]

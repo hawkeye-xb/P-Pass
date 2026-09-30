@@ -17,12 +17,12 @@ class PeerAddrTokenTest {
     @Test
     fun parsesRelayAndDirectAddresses() {
         val t = token(
-            """{"id":"$idHex","addrs":[{"Relay":"https://aps1-1.relay.n0.iroh.link./"},{"Ip":"10.1.150.82:51124"},{"Ip":"138.113.121.131:51124"}]}"""
+            """{"id":"$idHex","addrs":[{"Relay":"https://aps1-1.relay.n0.iroh.link./"},{"Ip":"192.168.1.20:51124"},{"Ip":"203.0.113.131:51124"}]}"""
         )
         val p = parsePeerAddrToken(t)
         assertEquals(idHex, p.idHex)
         assertEquals("https://aps1-1.relay.n0.iroh.link./", p.relayUrl)
-        assertEquals(listOf("10.1.150.82:51124", "138.113.121.131:51124"), p.directAddresses)
+        assertEquals(listOf("192.168.1.20:51124", "203.0.113.131:51124"), p.directAddresses)
     }
 
     @Test
