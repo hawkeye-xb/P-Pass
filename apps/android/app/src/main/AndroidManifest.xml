@@ -31,6 +31,10 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- DOG-02: 请求系统"忽略电池优化"白名单对话框（杀后台防护引导）。 -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- UPD-01 应用内更新：targetSdk ≥ 26 时，没有声明这个权限，系统安装器收到
+         ACTION_VIEW 后会不提示就直接退出（2026-09-30 三星真机实测）。声明它不会
+         弹运行时授权，用户首次安装时由系统引导去开「允许安装未知应用」。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- LINT-01: CAMERA 权限会被 Play 隐含推断为"需要摄像头硬件"，导致
          ChromeOS/平板等无摄像头设备被商店过滤掉——扫码配对只是可选功能
