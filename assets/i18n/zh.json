@@ -245,7 +245,7 @@
   "ui.pair_generating": "正在生成配对码…",
   "ui.video_load_failed": "无法加载此视频",
   "ui.tray_open": "打开 P-Pass",
-  "ui.tray_export_logs": "导出诊断包…",
+  "ui.tray_export_logs": "导出诊断包",
   "ui.tray_quit": "退出 App",
   "ui.err_socket_name": "socket 名不合法: {err}",
   "ui.err_connect": "连接后台服务失败: {err}",

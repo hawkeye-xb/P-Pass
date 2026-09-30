@@ -29,7 +29,7 @@ use tauri::Manager;
 const I18N_EN: &str = include_str!("../../../../assets/i18n/en.json");
 const I18N_ZH: &str = include_str!("../../../../assets/i18n/zh.json");
 
-/// #550：托盘「导出诊断包…」的菜单 id——TRAY_ITEMS 与 on_menu_event 的分支
+/// #550：托盘「导出诊断包」的菜单 id——TRAY_ITEMS 与 on_menu_event 的分支
 /// 共用这一个常量，拼错不会被 match 的 `_ => {}` 静默吞掉。
 const TRAY_EXPORT_LOGS: &str = "export_logs";
 
@@ -41,7 +41,7 @@ const TRAY_ITEMS: [(&str, &str); 4] = [
     ("quit", "ui.tray_quit"),
 ];
 
-/// #550：托盘点「导出诊断包…」时发给前端的事件名。前端收到后走窗口里原来
+/// #550：托盘点「导出诊断包」时发给前端的事件名。前端收到后走窗口里原来
 /// 那条 `exportLogs()`（同一个 export_logs_bundle、同一套提示文案）。
 const EVENT_EXPORT_LOGS_REQUESTED: &str = "export-logs-requested";
 
@@ -1299,7 +1299,7 @@ mod tests {
         let zh: Vec<String> = TRAY_ITEMS.iter().map(|(_, k)| tray_text("zh", k)).collect();
         assert_eq!(
             zh,
-            ["打开 P-Pass", "导出诊断包…", "停止后台服务", "退出 App"]
+            ["打开 P-Pass", "导出诊断包", "停止后台服务", "退出 App"]
         );
         for (_, key) in TRAY_ITEMS {
             let en = tray_text("en", key);
@@ -1310,7 +1310,7 @@ mod tests {
         }
     }
 
-    /// #550：托盘里有「导出诊断包…」，且点击后发出的事件前端真的在听——
+    /// #550：托盘里有「导出诊断包」，且点击后发出的事件前端真的在听——
     /// 事件名两边各写一份字面量，改了一边另一边就静默失联，这里把两边钉在一起。
     #[test]
     fn tray_export_logs_item_is_wired_to_the_frontend() {
@@ -1321,10 +1321,10 @@ mod tests {
         );
         let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
         assert_eq!(unique.len(), ids.len(), "托盘菜单 id 重复：{ids:?}");
-        assert_eq!(tray_text("zh", "ui.tray_export_logs"), "导出诊断包…");
+        assert_eq!(tray_text("zh", "ui.tray_export_logs"), "导出诊断包");
         assert_eq!(
             tray_text("en", "ui.tray_export_logs"),
-            "Export Diagnostics…"
+            "Export Diagnostics"
         );
 
         let app = include_str!("../../src/App.svelte");
