@@ -7,6 +7,8 @@
 //! interface, at which point these concrete types become enums.
 
 mod android_blobs;
+#[cfg(feature = "android-jni")]
+mod android_logcat;
 mod blobs;
 mod conninfo;
 mod iroh_impl;
@@ -85,7 +87,7 @@ impl std::str::FromStr for NodeId {
         for (i, chunk) in s.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let hi = hex_val(chunk[0]).ok_or(TransportError::InvalidNodeId)?;
             let lo = hex_val(chunk[1]).ok_or(TransportError::InvalidNodeId)?;
-            bytes[i] = (hi << 4) | lo;
+            bytes[i] = (hi << 4) | (lo);
         }
         Ok(NodeId(bytes))
     }

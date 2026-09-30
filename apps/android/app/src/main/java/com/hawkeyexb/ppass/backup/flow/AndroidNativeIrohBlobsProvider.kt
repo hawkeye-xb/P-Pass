@@ -60,10 +60,26 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
     companion object {
         init {
             System.loadLibrary("transport")
+            // #584：把 Rust/iroh 的 tracing 日志接进 logcat（tag=PPassRust，默认 INFO）。
+            // 级别取自系统属性 log.tag.PPassRust：`setprop log.tag.PPassRust DEBUG`
+            // 可解锁更低级别，鸿蒙同样支持 log.tag.*。iroh 的 net_report 在 Rust 侧
+            // 源头压到 ERROR（#544 同口径，避免打印本机公网地址）。
+            runCatching { nativeInitLogging(rustLogLevel()) }
         }
+
+        private fun rustLogLevel(): String =
+            runCatching {
+                Class.forName("android.os.SystemProperties")
+                    .getMethod("get", String::class.java, String::class.java)
+                    .invoke(null, "log.tag.PPassRust", "INFO") as String
+            }.getOrDefault("INFO")
 
         @JvmStatic
         external fun nativeOpen(root: String): Long
+
+        /** #584：安装 Rust→logcat 的 tracing subscriber；每进程一次，重复调用保留第一个。 */
+        @JvmStatic
+        private external fun nativeInitLogging(level: String)
 
         @JvmStatic
         external fun nativeRegister(handle: Long, hash: String, fd: Int): String
