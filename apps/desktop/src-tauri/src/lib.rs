@@ -1322,10 +1322,7 @@ mod tests {
         let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
         assert_eq!(unique.len(), ids.len(), "托盘菜单 id 重复：{ids:?}");
         assert_eq!(tray_text("zh", "ui.tray_export_logs"), "导出诊断包");
-        assert_eq!(
-            tray_text("en", "ui.tray_export_logs"),
-            "Export Diagnostics"
-        );
+        assert_eq!(tray_text("en", "ui.tray_export_logs"), "Export Diagnostics");
 
         let app = include_str!("../../src/App.svelte");
         assert!(
