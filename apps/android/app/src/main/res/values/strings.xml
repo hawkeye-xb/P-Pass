@@ -113,7 +113,7 @@
     <string name="missing_source_archive_label">Photos deleted from this phone</string>
     <string name="missing_source_archive_value">%1$d · cannot be recovered</string>
     <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
-    <string name="idle_auto_hint">Runs by itself while charging on Wi-Fi</string>
+    <string name="idle_auto_hint">Runs by itself on Wi-Fi when the battery isn\'t low</string>
     <string name="state_no_albums">No albums selected — nothing to back up</string>
     <!-- T-083: trouble card — human copy only; raw errors live behind this fold -->
     <string name="try_again">Try again</string>
@@ -170,7 +170,7 @@
          Deliberately NOT triplet_unavailable — that one means "cannot read the
          phone's album count", a different fact. -->
     <string name="hero_unreconciled_title">Recounting your photos</string>
-    <string name="hero_unreconciled_body">The backup record lists more photos than the selected albums hold now, so this phone is recounting against the photos that are actually there. It does not need the computer, power or Wi-Fi; the result shows here as soon as the count finishes.</string>
+    <string name="hero_unreconciled_body">The backup record lists more photos than the selected albums hold now, so this phone is recounting against the photos that are actually there. It does not need the computer or Wi-Fi; the result shows here as soon as the count finishes.</string>
     <string name="dog_last_success">Last success %1$s</string>
     <!-- T-080 defect(b): never render an epoch-0 date when nothing ever succeeded -->
     <string name="last_success_never">No successful backup yet</string>
@@ -198,7 +198,7 @@
     <string name="bucket_count">%1$d</string>
     <string name="bucket_unnamed">Unnamed</string>
     <!-- M5 (full-page-states doc): summary sentence + single primary button. -->
-    <string name="bucket_summary">%1$s photos will back up · runs automatically on power + Wi-Fi by default, change anytime in Settings</string>
+    <string name="bucket_summary">%1$s photos will back up · by default runs automatically on Wi-Fi when the battery isn\'t low, change anytime in Settings</string>
     <string name="bucket_start">Start backup</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">New</string>
@@ -209,9 +209,9 @@
         <item quantity="other">%1$d albums</item>
     </plurals>
     <string name="storage_computer">Storage computer</string>
-    <!-- UX-03: 后台规则一行 + 极简设置（MOB-02 起语义为「需要充电/需要
-         Wi-Fi」两档运行条件，默认都开，各有后果描述 + 合成句） -->
-    <string name="auto_backup_rule">Auto-backup runs while charging and on WiFi — no need to open the app.</string>
+    <!-- UX-03: 后台规则一行 + 极简设置。MOB-10 起后台条件为「Wi-Fi（可在设置关闭）+ 电量不低」，
+         不再要求充电；文案须与 TriggerPolicy.constraintsFor 一致（#513，MOB513BackupConditionCopyTest）。 -->
+    <string name="auto_backup_rule">Backs up automatically on Wi-Fi when the battery isn\'t low — no need to open the app.</string>
     <!-- M10 (full-page-states doc) exact copy — "back up only when...", not "require...". -->
     <string name="setting_wifi_only">Back up only on Wi-Fi</string>
     <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
@@ -251,7 +251,7 @@
     <string name="photos_lost_action">Scan the code again to reconnect</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">Background backup</string>
-    <string name="auto_backup_pause_hint">Charge + WiFi: new photos go home on their own</string>
+    <string name="auto_backup_pause_hint">On Wi-Fi with the battery not low, new photos go home on their own</string>
     <string name="background_backup_needs_authorization">Allow background access</string>
     <string name="background_backup_system_stopped">The system stopped background monitoring · check and restart</string>
     <!-- UI-12 (2026-09-15, second pass): Snackbar feedback for "Fix it" —

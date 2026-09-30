@@ -83,9 +83,9 @@ The app walks you through it — just click through:
    screen. Your computer will ask you to approve the pairing — tap
    **Allow**. / 打开手机上的 P-Pass，扫电脑屏幕上的二维码。电脑会弹出配对
    确认——点**允许**。
-3. Done — your phone now backs up automatically (when charging and on
-   Wi-Fi). Open the app any time to browse the family photo timeline.
-   完成——手机从此自动备份（充电 + Wi-Fi 时）。随时打开 App 就能浏览全家
+3. Done — your phone now backs up automatically (on Wi-Fi when the
+   battery isn't low). Open the app any time to browse the family photo timeline.
+   完成——手机从此自动备份（连接 Wi-Fi 且电量不低时）。随时打开 App 就能浏览全家
    照片时间线。
 
 [截图: 手机扫码配对成功的界面（时间线视图）]
