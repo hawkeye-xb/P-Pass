@@ -15,7 +15,7 @@ pub use android_blobs::{
     ActiveTransferStatus, AndroidBlobsProvider, ImportFallback, MediaImport, ServeError,
     SourceFault,
 };
-pub use blobs::Blobs;
+pub use blobs::{Blobs, PeerGate};
 pub use conninfo::{ConnInfo, ConnectionStatus, PathKind};
 pub use iroh_impl::{
     node_id_from_secret_key, BiStream, Incoming, IrohTransport, PeerAddr, TransportConfig,

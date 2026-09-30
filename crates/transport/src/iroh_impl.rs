@@ -264,7 +264,7 @@ pub struct IrohTransport {
     /// Optional blobs handler: `listen` routes `ALPN_BLOBS` connections
     /// here instead of the ctrl stream (one endpoint = one accept queue;
     /// a daemon serving both planes shares the loop, T-033).
-    blobs_handler: Arc<Mutex<Option<iroh_blobs::BlobsProtocol>>>,
+    blobs_handler: Arc<Mutex<Option<crate::blobs::GatedBlobs>>>,
 }
 
 /// DAE-02: derive the stable node id from the identity secret key
@@ -411,7 +411,7 @@ impl IrohTransport {
 
     /// Crate-internal: register the blobs handler the `listen` loop
     /// dispatches `ALPN_BLOBS` connections to.
-    pub(crate) fn set_blobs_handler(&self, handler: iroh_blobs::BlobsProtocol) {
+    pub(crate) fn set_blobs_handler(&self, handler: crate::blobs::GatedBlobs) {
         *self.blobs_handler.lock().expect("blobs handler lock") = Some(handler);
     }
 

@@ -119,6 +119,12 @@ internal interface NativeIrohBlobsProvider {
 
     /** 放掉 [hash] 的导入（不停在飞的拉取）。幂等。 */
     fun release(hash: String) = Unit
+
+    /**
+     * #547：只允许已配对桌面（[daemonNodeId]，64 hex）来拉；null = 谁都不许（解配后）。
+     * 原生侧默认就是谁都不许，所以漏调只会让传输失败，不会放行。
+     */
+    fun setAllowedPeer(daemonNodeId: String?) = Unit
 }
 
 /** 一次注册占用 provider 的凭据：queue_sequence = order 行 id，lease_token = [leaseTokenFor]。 */
