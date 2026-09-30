@@ -91,6 +91,9 @@ class GoldenDriftTest {
     @Test fun timelinePage() = check("snapshots__timeline_page", TimelinePage.serializer())
     @Test fun thumbGet256() = check("snapshots__thumb_get_256", ThumbGet.serializer())
     @Test fun thumbGet1024() = check("snapshots__thumb_get_1024", ThumbGet.serializer())
+    @Test fun thumbDataReal() = check("snapshots__thumb_data_real", ThumbData.serializer())
+    @Test fun thumbDataPlaceholder() =
+        check("snapshots__thumb_data_placeholder", ThumbData.serializer())
     @Test fun blobTicketReq() = check("snapshots__blob_ticket_request", BlobTicketRequest.serializer())
     @Test fun blobTicketResp() = check("snapshots__blob_ticket_response", BlobTicketResponse.serializer())
     @Test fun backupBegin() = check("snapshots__backup_begin", BackupBegin.serializer())
@@ -119,6 +122,7 @@ class GoldenDriftTest {
             "snapshots__resp_err_envelope", "snapshots__resp_err_envelope_json",
             "snapshots__timeline_query", "snapshots__timeline_page",
             "snapshots__thumb_get_256", "snapshots__thumb_get_1024",
+            "snapshots__thumb_data_real", "snapshots__thumb_data_placeholder",
             "snapshots__blob_ticket_request", "snapshots__blob_ticket_response",
             "snapshots__backup_begin", "snapshots__backup_manifest",
             "snapshots__backup_manifest_with_items", "snapshots__backup_missing",
