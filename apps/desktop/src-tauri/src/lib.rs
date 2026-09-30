@@ -29,12 +29,32 @@ use tauri::Manager;
 const I18N_EN: &str = include_str!("../../../../assets/i18n/en.json");
 const I18N_ZH: &str = include_str!("../../../../assets/i18n/zh.json");
 
-/// 托盘菜单项 id → 字典 key。
-const TRAY_ITEMS: [(&str, &str); 3] = [
+/// #550：托盘「导出诊断包…」的菜单 id——TRAY_ITEMS 与 on_menu_event 的分支
+/// 共用这一个常量，拼错不会被 match 的 `_ => {}` 静默吞掉。
+const TRAY_EXPORT_LOGS: &str = "export_logs";
+
+/// 托盘菜单项 id → 字典 key（数组顺序即菜单顺序）。
+const TRAY_ITEMS: [(&str, &str); 4] = [
     ("show", "ui.tray_open"),
+    (TRAY_EXPORT_LOGS, "ui.tray_export_logs"),
     ("stop", "ui.stop_service"),
     ("quit", "ui.tray_quit"),
 ];
+
+/// #550：托盘点「导出诊断包…」时发给前端的事件名。前端收到后走窗口里原来
+/// 那条 `exportLogs()`（同一个 export_logs_bundle、同一套提示文案）。
+const EVENT_EXPORT_LOGS_REQUESTED: &str = "export-logs-requested";
+
+/// DESK-28：把主窗口拉到前台——unminimize 不能省（最小化时 show() 恢复
+/// 不了它，#170 真机实测）；show 管「隐藏→可见」，unminimize 管
+/// 「最小化→还原」，是两件独立的事。
+fn bring_main_window_to_front(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.unminimize();
+        let _ = win.show();
+        let _ = win.set_focus();
+    }
+}
 
 fn tray_locale(lang: &str) -> &'static str {
     if lang.is_empty() || lang.to_lowercase().starts_with("zh") {
@@ -1087,8 +1107,12 @@ pub fn run() {
                 let item = MenuItem::with_id(app, id, tray_text(locale, key), true, None::<&str>)?;
                 tray_items.push((key, item));
             }
-            let menu =
-                Menu::with_items(app, &[&tray_items[0].1, &tray_items[1].1, &tray_items[2].1])?;
+            // 从 TRAY_ITEMS 整体收集，不按下标手写——加一项就自动进菜单。
+            let menu_refs: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = tray_items
+                .iter()
+                .map(|(_, item)| item as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
+                .collect();
+            let menu = Menu::with_items(app, &menu_refs)?;
             app.manage(TrayMenuItems(tray_items));
             // ICON-01: 托盘用 beast 全实线纯黑版 + 模板标记——macOS 系统按
             // 深浅色自动反色（碳纹版 22px 会糊，模板图标不渲染颜色）。
@@ -1132,14 +1156,20 @@ pub fn run() {
                 })
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "show" => {
-                        if let Some(win) = app.get_webview_window("main") {
-                            // DESK-28：与左键回调同一组三步，理由同上。
-                            // 这条路径（右键 → 显示）比左键更常用，漏了
-                            // unminimize 的话最小化的窗口点了没反应。
-                            let _ = win.unminimize();
-                            let _ = win.show();
-                            let _ = win.set_focus();
-                        }
+                        // DESK-28：与左键回调同一组三步。这条路径（右键 →
+                        // 显示）比左键更常用，漏了 unminimize 的话最小化的
+                        // 窗口点了没反应。
+                        bring_main_window_to_front(app);
+                    }
+                    id if id == TRAY_EXPORT_LOGS => {
+                        // #550：诊断包入口从设置页收进托盘。先把窗口拉起来
+                        // 再让前端导出——结果（路径 + 「只发给开发者」的
+                        // 提醒，或失败原因）走窗口里的 toast，窗口藏着时
+                        // 用户看不见；notify_system 在 Windows 上是 no-op，
+                        // 靠不住。导出本身仍是前端 invoke export_logs_bundle，
+                        // 不另开第二条导出路径。
+                        bring_main_window_to_front(app);
+                        let _ = app.emit(EVENT_EXPORT_LOGS_REQUESTED, ());
                     }
                     "stop" => {
                         // DESK-36 (#456)：托盘停止和窗口里的按钮走同一个
@@ -1267,7 +1297,10 @@ mod tests {
         }
         // 中文原文逐字不变；英文不许混进中文。
         let zh: Vec<String> = TRAY_ITEMS.iter().map(|(_, k)| tray_text("zh", k)).collect();
-        assert_eq!(zh, ["打开 P-Pass", "停止后台服务", "退出 App"]);
+        assert_eq!(
+            zh,
+            ["打开 P-Pass", "导出诊断包…", "停止后台服务", "退出 App"]
+        );
         for (_, key) in TRAY_ITEMS {
             let en = tray_text("en", key);
             assert!(
@@ -1275,6 +1308,38 @@ mod tests {
                 "托盘英文混进了中文：{key} = {en}"
             );
         }
+    }
+
+    /// #550：托盘里有「导出诊断包…」，且点击后发出的事件前端真的在听——
+    /// 事件名两边各写一份字面量，改了一边另一边就静默失联，这里把两边钉在一起。
+    #[test]
+    fn tray_export_logs_item_is_wired_to_the_frontend() {
+        let ids: Vec<&str> = TRAY_ITEMS.iter().map(|(id, _)| *id).collect();
+        assert!(
+            ids.contains(&TRAY_EXPORT_LOGS),
+            "托盘缺导出诊断包项：{ids:?}"
+        );
+        let unique: std::collections::HashSet<&str> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len(), "托盘菜单 id 重复：{ids:?}");
+        assert_eq!(tray_text("zh", "ui.tray_export_logs"), "导出诊断包…");
+        assert_eq!(
+            tray_text("en", "ui.tray_export_logs"),
+            "Export Diagnostics…"
+        );
+
+        let app = include_str!("../../src/App.svelte");
+        assert!(
+            app.contains(&format!("listen(\"{EVENT_EXPORT_LOGS_REQUESTED}\"")),
+            "App.svelte 没有监听 {EVENT_EXPORT_LOGS_REQUESTED}，托盘点了没反应"
+        );
+
+        // 菜单必须从 TRAY_ITEMS 整体收集：按下标手写时加了项也进不了菜单，
+        // 而上面的断言照样全绿。
+        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        assert!(
+            !product.contains("&tray_items[0]"),
+            "托盘菜单又按下标手写了"
+        );
     }
 
     /// 壳里每个 `ui_err("…")` 引用的 key，两份字典都得有——diag 的测试只管
