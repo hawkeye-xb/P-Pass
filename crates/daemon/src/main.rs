@@ -125,7 +125,14 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+                // #544：第三方 target 里会直接打印本机公网地址的，源头压级
+                // （见 transport::QUIET_LOG_DIRECTIVES）；写入器另有脱敏兜底。
+                .unwrap_or_else(|_| {
+                    tracing_subscriber::EnvFilter::new(format!(
+                        "info,{}",
+                        transport::QUIET_LOG_DIRECTIVES
+                    ))
+                }),
         )
         .with_ansi(false)
         .with_writer(log_writer)
@@ -338,7 +345,9 @@ async fn main() -> anyhow::Result<()> {
     // 脚本拿到空串。所以这里刻意打两遍：stdout 那条给脚本，日志那条给事后
     // 排障（Windows release 上 stdout 无处可去，见 #163）。
     println!("NodeId: {}", transport.node_id());
-    tracing::info!("NodeId: {}", transport.node_id());
+    // #544：日志里只记前缀——全长 NodeId 可被任何人拨号，建连即可换来本机
+    // 当前的直连地址（含公网 IP）。stdout 那行是脚本的机读契约，保持不动。
+    tracing::info!("NodeId: {:?}", transport.node_id());
     tracing::info!("库目录: {}", data_dir.display());
 
     // QR 在 transport bind 之后生成（&r= 需要 live endpoint 的中继）。

@@ -1,0 +1,125 @@
+{
+  "_comment": "#544 shared redaction vectors: crates/daemon/src/redact.rs and apps/desktop/src-tauri/src/redact.rs both run this file. Every address here is from documentation ranges (RFC 5737 / RFC 3849) or private ranges; identifiers are derived from a fixed test key, never from a real device.",
+  "exact": [
+    {
+      "in": "connecting relay_url=None ip_addresses=[203.0.113.7:4433, 10.1.2.3:4433]",
+      "out": "connecting relay_url=None ip_addresses=[<ipv4:public>:4433, 10.1.2.3:4433]"
+    },
+    {
+      "in": "remote_addr=Ip(203.0.113.7:4433)",
+      "out": "remote_addr=Ip(<ipv4:public>:4433)"
+    },
+    {
+      "in": "network_path=Ip(10.0.0.5->198.51.100.20:54560) status=Backup",
+      "out": "network_path=Ip(10.0.0.5-><ipv4:public>:54560) status=Backup"
+    },
+    {
+      "in": "addr: 203.0.113.7.",
+      "out": "addr: <ipv4:public>."
+    },
+    {
+      "in": "addr:203.0.113.7",
+      "out": "addr:<ipv4:public>"
+    },
+    {
+      "in": "local_candidates={203.0.113.9:1234, 192.168.1.20:1234} remote_candidates={[2001:db8:85a3::8a2e:370:7334]:4433}",
+      "out": "local_candidates={<ipv4:public>:1234, 192.168.1.20:1234} remote_candidates={[<ipv6:public>]:4433}"
+    },
+    {
+      "in": "received IPv6 address from IPv4 QAD: [2001:db8::1]:7842",
+      "out": "received IPv6 address from IPv4 QAD: [<ipv6:public>]:7842"
+    },
+    {
+      "in": "global_v6=2001:db8:1234:5678:9abc:def0:1234:5678",
+      "out": "global_v6=<ipv6:public>"
+    },
+    {
+      "in": "remote: [::ffff:203.0.113.7]:54560 and [::ffff:10.0.0.5]:54560",
+      "out": "remote: [<ipv6:public>]:54560 and [::ffff:10.0.0.5]:54560"
+    },
+    {
+      "in": "fe80::1%en0 fd12:3456::1 ::1 :: 0.0.0.0:41145 [::]:0 127.0.0.1:8080 100.64.1.2 169.254.9.9",
+      "out": "fe80::1%en0 fd12:3456::1 ::1 :: 0.0.0.0:41145 [::]:0 127.0.0.1:8080 100.64.1.2 169.254.9.9"
+    },
+    {
+      "in": "home is now relay https://aps1-1.relay.n0.iroh.link./, was None",
+      "out": "home is now relay https://aps1-1.relay.n0.iroh.link./, was None"
+    },
+    {
+      "in": "active-relay{url=https://relay.family-example.org./}: lost connection",
+      "out": "active-relay{url=https://<host>/}: lost connection"
+    },
+    {
+      "in": "update check FAILED at https://objects.githubusercontent.com/x and http://[2001:db8::7]:8080/p",
+      "out": "update check FAILED at https://objects.githubusercontent.com/x and http://[<ipv6:public>]:8080/p"
+    },
+    {
+      "in": "ppf://pair?node=ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c&t=0123456789abcdef01234567&r=https://relay.family-example.org",
+      "out": "ppf://pair?node=ea4a6c63…<masked>&t=01234567…<masked>&r=https://<host>"
+    },
+    {
+      "in": "NodeId: ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+      "out": "NodeId: ea4a6c63…<masked>"
+    },
+    {
+      "in": "originals/ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c/2026/09/IMG_0001.jpg",
+      "out": "originals/ea4a6c63…<masked>/2026/09/IMG_0001.jpg"
+    },
+    {
+      "in": "ticket=blobadveu3dd4kofecv66vihwezoyx4zkr3wv27l464siipou2iui3jcyajcnb2hi4dthixs64tfnrqxsltgmfwws3dzfvsxqylnobwgkltpojts4lycadfqa4ih2eraciabbw4iliyaaaaabcroanyhgngreiaegm6poql73gz3kmyit2dovzghhfys7qegmkse56w3oyv6j2wwtga",
+      "out": "ticket=blobadve…<masked>"
+    },
+    {
+      "in": "provider addr token eyJpZCI6ImVhNGE2YzYzZTI5YzUyMGFiZWY1NTA3YjEzMmVjNWY5OTU0Nzc2YWViZWJlN2I5MjQyMWVlYTY5MTQ0NmQyMmMiLCJhZGRycyI6W3siUmVsYXkiOiJodHRwczovL3JlbGF5LmZhbWlseS1leGFtcGxlLm9yZy4vIn0seyJJcCI6IjIwMy4wLjExMy43OjQ0MzMifSx7IklwIjoiWzIwMDE6ZGI4Ojg1YTM6OjhhMmU6MzcwOjczMzRdOjQ0MzMifV19 rejected",
+      "out": "provider addr token eyJpZCI6…<masked> rejected"
+    },
+    {
+      "in": "legacy z-base-32 id 7jfgaa9nutjyixzikb7tgmsf9gkwq7iqz498zr1nd5ig1fng4esy",
+      "out": "legacy z-base-32 id 7jfgaa9n…<masked>"
+    },
+    {
+      "in": "base32 id 5jfgyy7ctrjavpxvkb5rglwf7gkuo5vox27hxescd3vgsfcg2iwa",
+      "out": "base32 id 5jfgyy7c…<masked>"
+    },
+    {
+      "in": "hash 4333cf7417fd9b3b533089e86eae4c739712fc08662a44efadb762be4ead6998 and base32 imz465ax7wntwuzqrhug5lsmoolrf7aimyvej35nw5rl4tvnngma",
+      "out": "hash 4333cf74…<masked> and base32 imz465ax…<masked>"
+    },
+    {
+      "in": "node_ea4a6c63e29c520abef5507b",
+      "out": "node_ea4a6c63…<masked>"
+    },
+    {
+      "in": "Device { node_id: [234, 74, 108, 99, 226, 156, 82, 10, 190, 245, 80, 123, 19, 46, 197, 249, 149, 71, 118, 174, 190, 190, 123, 146, 66, 30, 234, 105, 20, 70, 210, 44], name: \"x\" }",
+      "out": "Device { node_id: [<bytes:32>], name: \"x\" }"
+    },
+    {
+      "in": "{\"peer\":\"ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c\",\"method\":\"timeline.page\"}",
+      "out": "{\"peer\":\"ea4a6c63…<masked>\",\"method\":\"timeline.page\"}"
+    },
+    {
+      "in": "relay client dial wss://relay.family-example.org/relay failed",
+      "out": "relay client dial wss://<host>/relay failed"
+    }
+  ],
+  "keep": [
+    "2026-09-30T01:49:50.562699Z  INFO daemon: P-Pass daemon 已启动",
+    "2026-09-29T10:56:37.111749Z  WARN noq_proto::connection: failed closing path err=MultipathNotNegotiated",
+    "iroh::socket::transports::relay::actor: home is now relay",
+    "app_version    = 0.6.1-test.2",
+    "iroh_version=1.0.3",
+    "subscription push sent kind=flow.delivered seq=1234567890123 peer=5f0b2c9d41… gen=7",
+    "BLOB-01: 收件箱回收 1056768 字节",
+    "took 0.58s, 12.5 MiB/s",
+    "{\"ts\":1234567890123,\"kind\":\"authz.denied\",\"detail\":null}",
+    "network_path=Ip(10.0.0.5->10.0.0.5:54560) prev_network_path=None",
+    "bind_addr = 0.0.0.0:41145",
+    "endpoint{id=ea4a6c63e2}:relay-actor",
+    "actor_prefix: 5f0b2c9d",
+    "abcd1234…<masked>",
+    "[1, 2, 3]",
+    "flow_delivery::FlowDelivery::provider_for returned GuardMismatch",
+    "watch_connection_close handles MultipathMappedAddr variants",
+    "MAC 00:1a:2b:3c:4d:5e stays out of scope"
+  ]
+}

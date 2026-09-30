@@ -787,6 +787,140 @@ fn longest_hex_run(s: &str) -> Option<String> {
     best.filter(|b| !b.is_empty())
 }
 
+/// #544：导出包即使被整包公开，也不能带出任何能连上设备、定位或识别用户
+/// 的东西。把共用向量里的每一种敏感输入（公网 IPv4/IPv6、全长 NodeId 的
+/// hex / base32 / 字节数组形式、hash、iroh 票据、base64url 地址令牌、配对
+/// 令牌、自建 relay 域名）塞进 diag 与 audit，再加一台起了真名的设备和
+/// 库目录路径，导出后用**独立检测器**（不复用 redact 本身）扫整个包。
+#[tokio::test(flavor = "multi_thread")]
+async fn logs_export_zip_carries_no_address_identifier_or_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "logs-544").await;
+    let vectors: serde_json::Value =
+        serde_json::from_str(include_str!("../../../assets/privacy/redact-vectors.json")).unwrap();
+    let inputs: Vec<String> = vectors["exact"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["in"].as_str().unwrap().to_string())
+        .collect();
+    for (i, input) in inputs.iter().enumerate() {
+        db.append_diag(&storage::DiagEvent {
+            ts: i as i64,
+            kind: "probe".into(),
+            detail: Some(input.clone()),
+        })
+        .await
+        .unwrap();
+    }
+    db.append_audit(&storage::AuditEntry::local(
+        99,
+        Some(vec![0xAB; 32]),
+        "probe",
+        None,
+        Some(serde_json::json!({ "all": inputs.join(" | ") }).to_string()),
+    ))
+    .await
+    .unwrap();
+    let library = dir.path().display().to_string();
+    db.append_diag(&storage::DiagEvent {
+        ts: 1000,
+        kind: "probe.path".into(),
+        detail: Some(format!("{library}/originals/x.jpg")),
+    })
+    .await
+    .unwrap();
+    db.upsert_device(&storage::Device {
+        node_id: vec![0xEA; 32],
+        name: "张三的手机".into(),
+        role: storage::Role::Member,
+        paired_at: 1,
+        last_seen: None,
+        revoked: false,
+        revoked_at: None,
+        revoked_by: None,
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c.call("logs.export", serde_json::Value::Null).await;
+    assert!(resp.ok, "{resp:?}");
+    let zip_path = resp.result.unwrap()["zip"].as_str().unwrap().to_string();
+    let file = std::fs::File::open(&zip_path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    let mut all_text = String::new();
+    for i in 0..zip.len() {
+        use std::io::Read as _;
+        let mut f = zip.by_index(i).unwrap();
+        let mut s = String::new();
+        f.read_to_string(&mut s).unwrap();
+        all_text.push_str(&s);
+    }
+    for needle in [
+        "张三",
+        "family-example",
+        &library,
+        "203.0.113.",
+        "198.51.100.",
+        "2001:db8",
+    ] {
+        assert!(!all_text.contains(needle), "{needle} leaked: {all_text}");
+    }
+    assert!(all_text.contains("<LIBRARY>/originals/x.jpg"), "{all_text}");
+    assert_no_leak(&all_text);
+}
+
+/// 独立检测器（#544）：公网 IP、≥24 位 hex、≥32 位含数字的不透明串一个都不许有。
+fn assert_no_leak(text: &str) {
+    use std::net::IpAddr;
+    let public = |ip: IpAddr| match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || (o[0] == 100 && (64..128).contains(&o[1])))
+        }
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => !(v4.is_private() || v4.is_loopback()),
+            None => {
+                !(v6.is_loopback()
+                    || v6.is_unspecified()
+                    || (v6.segments()[0] & 0xfe00) == 0xfc00
+                    || (v6.segments()[0] & 0xffc0) == 0xfe80)
+            }
+        },
+    };
+    for tok in text.split(|c: char| !(c.is_ascii_hexdigit() || c == ':' || c == '.')) {
+        for cand in [tok, tok.trim_matches(|c| c == ':' || c == '.')] {
+            if let Ok(ip) = cand.parse::<IpAddr>() {
+                assert!(!public(ip), "public IP {ip} leaked");
+            }
+            // IPv4:端口
+            if let Some((a, port)) = cand.rsplit_once(':') {
+                if port.bytes().all(|b| b.is_ascii_digit()) {
+                    if let Ok(ip) = a.parse::<std::net::Ipv4Addr>() {
+                        assert!(!public(IpAddr::V4(ip)), "public IP {ip} leaked");
+                    }
+                }
+            }
+        }
+    }
+    if let Some(run) = longest_hex_run(text) {
+        assert!(run.len() < 24, "{}-char hex run leaked: {run}", run.len());
+    }
+    for tok in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')) {
+        let digits = tok.bytes().filter(u8::is_ascii_digit).count();
+        assert!(
+            tok.len() < 32 || digits < 2,
+            "{}-char opaque token leaked: {tok}",
+            tok.len()
+        );
+    }
+}
+
 // ── IPC-02: events.subscribe——事件订阅通道（桌面壳告别 3s 轮询）──
 
 /// 验收 1：订阅后注入配对请求 → pending_changed 事件帧 <100ms 到达

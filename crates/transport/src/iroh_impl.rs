@@ -534,7 +534,15 @@ impl Transport for IrohTransport {
                     if addrs.is_empty() {
                         tracing::debug!("inbound {peer:?}: no observable addresses to register");
                     } else {
-                        tracing::debug!("inbound {peer:?}: registering {addrs:?}");
+                        // #544：只记数量与类别，不记具体地址。
+                        let relay = addrs
+                            .iter()
+                            .filter(|a| matches!(a, TransportAddr::Relay(_)))
+                            .count();
+                        tracing::debug!(
+                            "inbound {peer:?}: registering {} addrs ({relay} relay)",
+                            addrs.len()
+                        );
                         let ep_addr = EndpointAddr {
                             id: conn.remote_id(),
                             addrs,
