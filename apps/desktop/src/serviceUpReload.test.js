@@ -20,6 +20,9 @@
 //   - 把首拉 finally 里的 `if (gen === photosGen)` 去掉（过期的失败照样置
 //     photosLoaded），第三条必须红；
 //   - 把 onServiceBackOnline 改成无条件 resetPhotosWall()，「不清墙」那条必须红。
+//   - #551：把 onServiceBackOnline 里的 `thumbServiceEpoch++` 去掉，或把
+//     PhotoThumb 失败灰块上的 `bind:this={el}` 去掉，「#551」那条必须红
+//     （灰块还在）。
 import { cleanup, render, screen, fireEvent } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -225,6 +228,84 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
 
     expect(wallCount()).toBe(PHOTOS.length);
     expect(first.isConnected, "同一个缩略图节点必须还挂在 DOM 上").toBe(true);
+  });
+
+  it("#551：停服期间失败的缩略图，服务恢复后不切页自己重取成真图（DOM 不重建、真图不重拉）", async () => {
+    // 可手动触发的 IntersectionObserver：记住所有活着的观察者，测试显式 fire。
+    const observers = new Set();
+    globalThis.IntersectionObserver = class {
+      constructor(cb) {
+        this.cb = cb;
+        this.els = [];
+      }
+      observe(el) {
+        this.els.push(el);
+        observers.add(this);
+      }
+      disconnect() {
+        observers.delete(this);
+      }
+    };
+    const fireVisible = async () => {
+      for (const o of [...observers]) {
+        for (const el of o.els) o.cb([{ isIntersecting: true, target: el }]);
+      }
+      await settle();
+    };
+    const thumbCalls = (hash) =>
+      invokeMock.mock.calls.filter(
+        ([cmd, a]) => cmd === "daemon_call" && a.method === "thumb.get" && a.params.hash === hash,
+      ).length;
+
+    const d = stoppedDesktop();
+    d.up = true;
+    d.userStopped = false;
+    location.hash = "#/photos";
+    const { container } = render(App);
+    await settle();
+    await settle();
+    expect(wallCount()).toBe(PHOTOS.length);
+    const buttons = screen.getAllByRole("button", { name: "查看大图" });
+
+    // h1 在线时就滚进过视口，拿到了真图。
+    const firstObservers = [...observers];
+    for (const o of firstObservers) {
+      if (buttons[0].contains(o.els[0])) o.cb([{ isIntersecting: true, target: o.els[0] }]);
+    }
+    await settle();
+    expect(buttons[0].querySelector("img")).not.toBeNull();
+    expect(thumbCalls("h1")).toBe(1);
+
+    // 用户停了服务，60s 兜底对账记成离线；这时 h2/h3 才进视口，thumb.get 失败 → 灰块。
+    d.up = false;
+    await settle(60000);
+    await fireVisible();
+    expect(container.querySelectorAll(".thumb-fail").length).toBe(2);
+    expect(thumbCalls("h2")).toBe(1);
+    // 服务没恢复之前，失败格子再进视口也不自己重试（不轮询、不自旋）。
+    await fireVisible();
+    await settle(5000);
+    expect(thumbCalls("h2"), "离线期间不许自己重试").toBe(1);
+
+    // 服务被拉起来，停在照片页上不切页；下一轮对账发现恢复。
+    d.up = true;
+    await settle(60000);
+    await settle();
+    await fireVisible();
+
+    expect(container.querySelectorAll(".thumb-fail").length, "灰块必须变回真图").toBe(0);
+    for (const b of buttons) {
+      expect(b.isConnected, "缩略图按钮节点不许重建（DESK-38）").toBe(true);
+      expect(b.querySelector("img")).not.toBeNull();
+    }
+    expect(thumbCalls("h2"), "失败的格子恰好重取一次").toBe(2);
+    expect(thumbCalls("h3")).toBe(2);
+    expect(thumbCalls("h1"), "真图是终态，不重拉（DESK-34）").toBe(1);
+    const pages = invokeMock.mock.calls.filter(
+      ([cmd, a]) => cmd === "daemon_call" && a.method === "timeline.page",
+    );
+    // 首拉 1 次 + 恢复时增量对账 1 次；墙没被重置重拉。
+    expect(pages.length).toBe(2);
   });
 
   it("设备列表同样跟上（refresh 全量重拉，锁住不回归）", async () => {

@@ -793,7 +793,11 @@
   function onServiceBackOnline() {
     if (photos.length > 0) syncPhotosWallIncremental();
     else resetPhotosWall();
+    // #551：停服期间进视口的缩略图 thumb.get 失败成了灰块；墙不重建 DOM，
+    // 就由这个代际让失败态格子（且只有它们）在可见时重取一次。
+    thumbServiceEpoch++;
   }
+  let thumbServiceEpoch = $state(0);
 
   // 照片墙窗口对账 —— 判据全部在 src/photoWall.js（纯函数 + 单测）。
   //
@@ -1715,7 +1719,7 @@
                       onclick={() => (photoViewer = item)}
                       aria-label={t("ui.photo_view_large")}
                     >
-                      <PhotoThumb hash={item.hash} />
+                      <PhotoThumb hash={item.hash} serviceEpoch={thumbServiceEpoch} />
                       {#if item.media_type === "video"}
                         <span class="pointer-events-none absolute bottom-[5px] right-[5px] rounded-[4px] bg-black/55 px-[5px] py-[1px] text-[11px] text-white">▶</span>
                       {/if}

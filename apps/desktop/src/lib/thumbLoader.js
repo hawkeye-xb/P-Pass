@@ -9,7 +9,11 @@
 // - 占位图且 retry_after_ms > 0：等窗口到期，**且组件可见**时重取一次；
 //   每次挂载至多一次，重取回来仍是占位图就停在占位图。
 // - 占位图且 retry_after_ms == 0（未知资产/坏 hash）：不重取。
-// - 调用报错：显示失败灰块（原行为），不重取。
+// - 调用报错：显示失败灰块（原行为），不自己重取。
+// - #551：调用报错后，只有「服务恢复」信号（retryFailed()，App 在
+//   onServiceBackOnline 时发）才重取——等组件可见时拉一次。停服期间进墙的
+//   格子全失败，而 DESK-38 规定恢复时墙不重建 DOM，没有这个入口灰块就永久
+//   留在同一次挂载里。真图/占位图/加载中调它一律 no-op，重复调用幂等。
 //
 // 依赖全部注入，便于测试：
 //   call(method, params) -> Promise<ThumbData>
@@ -23,13 +27,20 @@ export function createThumbLoader(deps, params) {
   let retried = false;
   let disposed = false;
   let cancelPending = null;
+  // #551：上一次 load 以调用报错告终（且之后没有新的 load 在跑）。
+  let lastFailed = false;
+  let cancelFailedRetry = null;
 
   async function load() {
+    lastFailed = false;
     let r;
     try {
       r = await call("thumb.get", { hash: params.hash, size: params.size });
     } catch (_) {
-      if (!disposed) onFailed();
+      if (!disposed) {
+        lastFailed = true;
+        onFailed();
+      }
       return;
     }
     if (disposed) return;
@@ -46,12 +57,24 @@ export function createThumbLoader(deps, params) {
     }
   }
 
+  function retryFailed() {
+    if (disposed || !lastFailed) return;
+    if (cancelFailedRetry) cancelFailedRetry();
+    cancelFailedRetry = whenVisible(() => {
+      cancelFailedRetry = null;
+      if (!disposed && lastFailed) load();
+    });
+  }
+
   return {
     load,
+    retryFailed,
     dispose() {
       disposed = true;
       if (cancelPending) cancelPending();
       cancelPending = null;
+      if (cancelFailedRetry) cancelFailedRetry();
+      cancelFailedRetry = null;
     },
   };
 }
