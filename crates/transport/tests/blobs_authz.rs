@@ -190,6 +190,14 @@ async fn nobody_can_push_into_the_daemon_store() {
                 .complete()
                 .await;
         }
+        // The provider finishes writing a push after the pusher's side
+        // reports done; watch the store for a while before concluding.
+        for _ in 0..20 {
+            if d.blobs.local_bytes(hash).await.unwrap() != 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
         assert_eq!(
             d.blobs.local_bytes(hash).await.unwrap(),
             0,
