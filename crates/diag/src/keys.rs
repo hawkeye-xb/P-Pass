@@ -94,7 +94,6 @@ msg_keys! {
     UI_SETTINGS => "ui.settings",
     UI_OPEN_LIBRARY => "ui.open_library",
     UI_CHANGE_LIBRARY => "ui.change_library",
-    UI_EXPORT_LOGS => "ui.export_logs",
     UI_LOGS_HINT => "ui.logs_hint",
     UI_STOP_SERVICE => "ui.stop_service",
     UI_STOP_HINT => "ui.stop_hint",
@@ -333,7 +332,6 @@ msg_keys! {
     UI_LIBRARY_CHANGE_HINT => "ui.library_change_hint",
     UI_SOFTWARE_UPDATE => "ui.software_update",
     UI_CHECK_UPDATE => "ui.check_update",
-    UI_EXPORT_LOGS_PROMPT => "ui.export_logs_prompt",
     UI_PAIR_QR_TITLE => "ui.pair_qr_title",
     UI_PAIR_QR_BODY => "ui.pair_qr_body",
     UI_REFRESH_QR => "ui.refresh_qr",
@@ -341,6 +339,8 @@ msg_keys! {
     UI_PAIR_GENERATING => "ui.pair_generating",
     UI_VIDEO_LOAD_FAILED => "ui.video_load_failed",
     UI_TRAY_OPEN => "ui.tray_open",
+    /// #550: tray menu entry that exports the diagnostics bundle.
+    UI_TRAY_EXPORT_LOGS => "ui.tray_export_logs",
     UI_TRAY_QUIT => "ui.tray_quit",
     UI_ERR_SOCKET_NAME => "ui.err_socket_name",
     UI_ERR_CONNECT => "ui.err_connect",
@@ -421,7 +421,6 @@ mod tests {
             UI_SETTINGS,
             UI_OPEN_LIBRARY,
             UI_CHANGE_LIBRARY,
-            UI_EXPORT_LOGS,
             UI_LOGS_HINT,
             UI_STOP_SERVICE,
             UI_STOP_HINT,
@@ -622,7 +621,6 @@ mod tests {
             UI_LIBRARY_CHANGE_HINT,
             UI_SOFTWARE_UPDATE,
             UI_CHECK_UPDATE,
-            UI_EXPORT_LOGS_PROMPT,
             UI_PAIR_QR_TITLE,
             UI_PAIR_QR_BODY,
             UI_REFRESH_QR,
@@ -630,6 +628,7 @@ mod tests {
             UI_PAIR_GENERATING,
             UI_VIDEO_LOAD_FAILED,
             UI_TRAY_OPEN,
+            UI_TRAY_EXPORT_LOGS,
             UI_TRAY_QUIT,
             UI_ERR_SOCKET_NAME,
             UI_ERR_CONNECT,
@@ -665,7 +664,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 280);
+        assert_eq!(ALL.len(), 279);
     }
 
     #[test]

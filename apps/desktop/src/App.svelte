@@ -653,9 +653,11 @@
   }
 
   // DESK-10: 导出走桌面壳本地组装的 export_logs_bundle（不是 daemon 的
-  // logs.export IPC）——daemon 起不来时这个按钮必须照样出包，那正是最
+  // logs.export IPC）——daemon 起不来时这个入口必须照样出包，那正是最
   // 需要日志的场景。daemon 活着时壳会把它那三份（diag/devices/audit）
   // 附进同一个包。
+  // #550：入口在托盘菜单——Rust 先把窗口拉到前台，再发
+  // `export-logs-requested`，这里收到后照旧导出、照旧 toast + 在 Finder 里展示。
   async function exportLogs() {
     try {
       const r = await invoke("export_logs_bundle");
@@ -697,6 +699,7 @@
   let unlisten;
   let unlistenTray;
   let unlistenStopped;
+  let unlistenExportLogs;
   onMount(() => {
     // I18N-03 (#492)：托盘菜单跟窗口同一种语言——把这里判出来的语言报给
     // Rust 壳，它从同一份 assets/i18n 取托盘文案。失败只影响托盘语言，静默。
@@ -715,6 +718,8 @@
     listen("hidden-to-tray", onHiddenToTray).then((f) => (unlistenTray = f));
     // DESK-36 (#456): 托盘停止服务后 Rust 发来的通知。
     listen("service-stopped", onServiceStopped).then((f) => (unlistenStopped = f));
+    // #550: 托盘「导出诊断包…」——窗口已被 Rust 拉到前台，结果走 toast。
+    listen("export-logs-requested", exportLogs).then((f) => (unlistenExportLogs = f));
     window.addEventListener("hashchange", onHashChange);
   });
   onDestroy(() => {
@@ -722,6 +727,7 @@
     unlisten?.();
     unlistenTray?.();
     unlistenStopped?.();
+    unlistenExportLogs?.();
     window.removeEventListener("hashchange", onHashChange);
   });
 
@@ -1800,10 +1806,7 @@
                   </div>
                   <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.restart_service_hint")}</p>
                 {/if}
-                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
-                  <span>{t("ui.export_logs_prompt")}</span>
-                  <Button variant="secondary" onclick={exportLogs}>{t("ui.export_logs")}</Button>
-                </div>
+                <!-- #550：诊断包入口已收进托盘菜单（「导出诊断包…」），设置页不再展示。 -->
               </Card>
               <Card variant="danger" class="text-[16px]">
                 <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
