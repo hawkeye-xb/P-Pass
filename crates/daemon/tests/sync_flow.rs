@@ -114,7 +114,7 @@ async fn fixture() -> Fixture {
             .await
             .unwrap(),
     );
-    blobs.attach_to_listener();
+    blobs.attach_to_listener(daemon::blobs_gate::gate(db.clone()));
     let backup = BackupEngine::new(db.clone(), blobs.clone(), library.path());
     let query = QueryEngine::new(db.clone(), blobs.clone(), library.path());
     // MOB-30: 上传平面拿同一个 engine——收完一张立刻入库。

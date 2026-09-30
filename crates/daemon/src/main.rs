@@ -492,7 +492,10 @@ async fn main() -> anyhow::Result<()> {
     let blobs = std::sync::Arc::new(
         transport::Blobs::open(&transport, &data_dir.join(".ppf/blobs")).await?,
     );
-    blobs.attach_to_listener();
+    // #546: the blobs data plane passes the same authz gate as ctrl /
+    // upload / download — per connection and per request, device row read
+    // fresh each time (revocation is immediate).
+    blobs.attach_to_listener(daemon::blobs_gate::gate(db.clone()));
     // REBUILD-02: independent retained store for new Flow pulls. The legacy
     // inbox cleanup intentionally clears `.ppf/blobs`; this store must keep
     // iroh-blobs partials so interrupted one-item fetches resume after restart.

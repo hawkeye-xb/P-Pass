@@ -94,7 +94,7 @@ async fn harness(dir: &Path, db: Db) -> Harness {
             .await
             .unwrap(),
     );
-    blobs.attach_to_listener();
+    blobs.attach_to_listener(daemon::blobs_gate::gate(db.clone()));
     let query = QueryEngine::new(db.clone(), blobs, dir.join("library"));
     let router = Router::new(db.clone(), "storage").with_query(query);
     let tp2 = daemon_tp.clone();

@@ -100,7 +100,7 @@ async fn query_plane_over_ipc_and_three_way_count() {
             .await
             .unwrap(),
     );
-    blobs.attach_to_listener();
+    blobs.attach_to_listener(daemon::blobs_gate::gate(db.clone()));
     let query = QueryEngine::new(db.clone(), blobs, dir.path().join("library"));
 
     let (event_bus, _probe) = daemon::events::bus();

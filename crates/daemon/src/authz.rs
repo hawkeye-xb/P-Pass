@@ -20,6 +20,14 @@ pub enum Decision {
     },
 }
 
+/// #546: pseudo-method for the blobs data plane (`ALPN_BLOBS`). Not a wire
+/// method — it never appears in a `Req` — but the blobs gate
+/// (`blobs_gate.rs`) passes it through [`check`] so the data plane is judged
+/// by this same table: unpaired and revoked peers are denied, every paired
+/// role may read (a viewer can already obtain a ticket via
+/// `asset.blob_ticket`).
+pub const BLOBS_FETCH: &str = "blobs.fetch";
+
 /// Methods an unpaired device may call: the pairing door and nothing else.
 /// (`hello` is capability negotiation and carries no data.)
 ///
@@ -54,6 +62,7 @@ fn role_allows(role: Role, method: &str) -> bool {
             | methods::ASSET_DOWNLOAD
             | methods::DIAG_STATUS
             | methods::TIMELINE_SUBSCRIBE
+            | BLOBS_FETCH
     );
     // UX-06: 任一端可单方停止——任何已配对角色都可以撤销自己
     // （device.unpair 只作用于调用者自身，无需 owner 在场）。
@@ -266,6 +275,27 @@ mod tests {
             assert!(
                 allowed(Some(&device(role, false)), methods::PAIR_CANCEL),
                 "{role:?} must be able to withdraw its own pair.request"
+            );
+        }
+    }
+
+    /// #546: the blobs data plane is one more door behind the same gate.
+    #[test]
+    fn blobs_fetch_needs_a_live_pairing() {
+        assert_eq!(
+            check(None, BLOBS_FETCH),
+            Decision::Deny {
+                msg_key: diag::keys::ERR_NOT_PAIRED
+            }
+        );
+        for role in [Role::Viewer, Role::Member, Role::Owner] {
+            assert!(allowed(Some(&device(role, false)), BLOBS_FETCH));
+            assert_eq!(
+                check(Some(&device(role, true)), BLOBS_FETCH),
+                Decision::Deny {
+                    msg_key: diag::keys::ERR_NOT_AUTHORIZED
+                },
+                "revoked {role:?} must not fetch blobs"
             );
         }
     }

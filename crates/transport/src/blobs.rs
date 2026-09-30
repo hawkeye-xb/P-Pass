@@ -12,14 +12,19 @@
 //! A daemon that serves both planes (ctrl + blobs) moves its ctrl accept
 //! loop into the same Router at T-030 — an endpoint has one accept queue.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use iroh::protocol::Router;
+use iroh::endpoint::Connection;
+use iroh::protocol::{AcceptError, ProtocolHandler, Router};
+use iroh_blobs::provider::events::{
+    AbortReason, ConnectMode, EventMask, EventResult, EventSender, ObserveMode, ProviderMessage,
+    RequestMode, ThrottleMode,
+};
 use iroh_blobs::store::fs::{options::Options, FsStore};
 use iroh_blobs::store::{GcConfig, ProtectCb, ProtectOutcome};
 use iroh_blobs::ticket::BlobTicket;
@@ -27,6 +32,167 @@ use iroh_blobs::{BlobFormat, BlobsProtocol, Hash};
 
 use crate::iroh_impl::{IrohTransport, PeerAddr};
 use crate::{NodeId, Result, TransportError};
+
+/// #546: may this peer use the blobs data plane right now? Asked once when
+/// a connection arrives and again for every request on it, so a revocation
+/// takes effect on the very next request of an already-open connection.
+/// Anything but `true` (including a failed lookup) is a denial.
+pub type PeerGate = Arc<dyn Fn(NodeId) -> Pin<Box<dyn Future<Output = bool> + Send>> + Send + Sync>;
+
+/// QUIC application close code for a gate denial (0 is the normal close).
+const DENIED_CLOSE_CODE: u32 = 403;
+
+/// #546: the daemon's blobs handler. Two checkpoints, both the same
+/// [`PeerGate`]:
+///
+/// 1. connection level — [`ProtocolHandler::accept`] refuses the connection
+///    before iroh-blobs reads a single request from it;
+/// 2. request level — iroh-blobs' own `Intercept` provider events: every
+///    get / get-many / observe request re-asks the gate for the connection's
+///    peer (revocation reaches already-open connections), and push requests
+///    are always refused (nobody may write into the daemon's store over the
+///    network; its only writers are its own pulls and imports).
+///
+/// A request-level denial also closes the connection.
+#[derive(Clone)]
+pub(crate) struct GatedBlobs {
+    inner: BlobsProtocol,
+    gate: PeerGate,
+    /// Open connections by iroh-blobs' `connection_id` (= QUIC stable id):
+    /// which peer the request events belong to, and what to close on denial.
+    live: LiveConnections,
+}
+
+type LiveConnections = Arc<Mutex<HashMap<u64, (NodeId, Connection)>>>;
+
+impl std::fmt::Debug for GatedBlobs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GatedBlobs").finish_non_exhaustive()
+    }
+}
+
+impl GatedBlobs {
+    fn new(store: &FsStore, gate: PeerGate) -> Self {
+        let live: LiveConnections = Arc::default();
+        let events = spawn_request_gate(Arc::clone(&gate), Arc::clone(&live));
+        Self {
+            inner: BlobsProtocol::new(store, Some(events)),
+            gate,
+            live,
+        }
+    }
+}
+
+impl ProtocolHandler for GatedBlobs {
+    async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
+        let peer = NodeId(*connection.remote_id().as_bytes());
+        if !(self.gate)(peer).await {
+            connection.close(DENIED_CLOSE_CODE.into(), b"not authorized");
+            return Ok(());
+        }
+        let id = connection.stable_id() as u64;
+        self.live
+            .lock()
+            .expect("blobs live connections lock")
+            .insert(id, (peer, connection.clone()));
+        let result = self.inner.accept(connection).await;
+        self.live
+            .lock()
+            .expect("blobs live connections lock")
+            .remove(&id);
+        result
+    }
+
+    async fn shutdown(&self) {
+        self.inner.shutdown().await;
+    }
+}
+
+/// The request-level half of [`GatedBlobs`]. Note iroh-blobs 0.103 routes
+/// EVERY request kind (get, get-many, observe, push) through the `get`
+/// request mode, so `get: Intercept` is what makes all of them arrive here;
+/// each is answered on its own task so one slow lookup never serializes
+/// other connections.
+fn spawn_request_gate(gate: PeerGate, live: LiveConnections) -> EventSender {
+    let mask = EventMask {
+        connected: ConnectMode::None,
+        get: RequestMode::Intercept,
+        get_many: RequestMode::Intercept,
+        push: RequestMode::Disabled,
+        observe: ObserveMode::Intercept,
+        throttle: ThrottleMode::None,
+    };
+    let (tx, mut rx) = EventSender::channel(64, mask);
+    tokio::spawn(async move {
+        while let Some(message) = rx.recv().await {
+            let gate = Arc::clone(&gate);
+            let live = Arc::clone(&live);
+            match message {
+                ProviderMessage::GetRequestReceived(msg) => {
+                    let id = msg.inner.connection_id;
+                    tokio::spawn(async move {
+                        let verdict = request_verdict(&gate, &live, id, true).await;
+                        msg.tx.send(verdict).await.ok();
+                    });
+                }
+                ProviderMessage::GetManyRequestReceived(msg) => {
+                    let id = msg.inner.connection_id;
+                    tokio::spawn(async move {
+                        let verdict = request_verdict(&gate, &live, id, true).await;
+                        msg.tx.send(verdict).await.ok();
+                    });
+                }
+                ProviderMessage::ObserveRequestReceived(msg) => {
+                    let id = msg.inner.connection_id;
+                    tokio::spawn(async move {
+                        let verdict = request_verdict(&gate, &live, id, true).await;
+                        msg.tx.send(verdict).await.ok();
+                    });
+                }
+                ProviderMessage::PushRequestReceived(msg) => {
+                    let id = msg.inner.connection_id;
+                    tokio::spawn(async move {
+                        let verdict = request_verdict(&gate, &live, id, false).await;
+                        msg.tx.send(verdict).await.ok();
+                    });
+                }
+                ProviderMessage::Throttle(msg) => {
+                    msg.tx.send(Ok(())).await.ok();
+                }
+                // Notify-only variants carry no verdict; the mask above
+                // never produces them.
+                _ => {}
+            }
+        }
+    });
+    tx
+}
+
+/// `readable = false` (push) is refused without asking the gate. A request
+/// on a connection the handler does not know (never admitted) is refused.
+async fn request_verdict(
+    gate: &PeerGate,
+    live: &LiveConnections,
+    connection_id: u64,
+    readable: bool,
+) -> EventResult {
+    let entry = live
+        .lock()
+        .expect("blobs live connections lock")
+        .get(&connection_id)
+        .cloned();
+    let allowed = match &entry {
+        Some((peer, _)) if readable => gate(*peer).await,
+        _ => false,
+    };
+    if allowed {
+        return Ok(());
+    }
+    if let Some((_, connection)) = entry {
+        connection.close(DENIED_CLOSE_CODE.into(), b"not authorized");
+    }
+    Err(AbortReason::Permission)
+}
 
 /// Blob store + optional serving router for one endpoint.
 ///
@@ -113,6 +279,12 @@ impl Blobs {
     /// side of a backup). A process that also runs [`Transport::listen`]
     /// must use [`Self::attach_to_listener`] instead: one endpoint has
     /// one accept queue.
+    ///
+    /// #546: this router is NOT gated — it answers anyone who knows a hash.
+    /// No production process calls it (the phone serves through
+    /// [`crate::AndroidBlobsProvider`], the daemon through
+    /// [`Self::attach_to_listener`]); it stays as a test fixture for a
+    /// stand-in provider.
     pub fn serve(&mut self) {
         if self.router.is_some() {
             return;
@@ -127,9 +299,14 @@ impl Blobs {
     /// Serve fetch requests through the transport's own `listen` loop —
     /// the daemon shape (ctrl + blobs on one endpoint, T-033). The
     /// transport dispatches `ALPN_BLOBS` connections to this store.
-    pub fn attach_to_listener(&self) {
+    ///
+    /// #546: every inbound blobs connection AND every request on it passes
+    /// `gate` first — the same whitelist the ctrl / upload / download planes
+    /// enforce. There is deliberately no ungated variant: a daemon cannot
+    /// attach its store to the network without saying who may read it.
+    pub fn attach_to_listener(&self, gate: PeerGate) {
         self.transport
-            .set_blobs_handler(BlobsProtocol::new(&self.store, None));
+            .set_blobs_handler(GatedBlobs::new(&self.store, gate));
     }
 
     /// Import `path` into the store and return a ticket a peer can pull

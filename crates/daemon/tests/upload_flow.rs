@@ -95,7 +95,7 @@ async fn fixture() -> Fixture {
             .await
             .unwrap(),
     );
-    blobs.attach_to_listener();
+    blobs.attach_to_listener(daemon::blobs_gate::gate(db.clone()));
     let backup = BackupEngine::new(db.clone(), blobs.clone(), library.path());
     // BLOB-01: 上传平面不再碰 blob store——校验自己做，文件留 staging 等
     // ingest。blobs 仍传给 BackupEngine（回退路径 T-032 用）。

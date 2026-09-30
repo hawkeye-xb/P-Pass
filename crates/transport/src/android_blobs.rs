@@ -82,6 +82,22 @@ pub struct AndroidBlobsProvider {
     /// Imports run one at a time: the "was this hash already in the store"
     /// snapshot taken before a reference import must not race another import.
     import_lock: Mutex<()>,
+    /// #547: the only peer allowed to pull from this provider — the paired
+    /// desktop's NodeId, set by the app from its pairing record. `None`
+    /// (the initial state, and after unpair) refuses everyone.
+    allowed_peer: AllowedPeer,
+}
+
+/// #547: shared by every endpoint generation's dispatch (NET-29 replacement
+/// must keep the same gate, never open or close it by accident).
+type AllowedPeer = Arc<Mutex<Option<crate::NodeId>>>;
+
+/// QUIC application close code for a peer the provider refuses.
+const NOT_PAIRED_CLOSE_CODE: u32 = 403;
+
+/// First 4 bytes of a NodeId for logs — never the dialable full id.
+fn peer_prefix(peer: &crate::NodeId) -> String {
+    peer.0[..4].iter().map(|b| format!("{b:02x}")).collect()
 }
 
 type EndpointConfigFactory = Box<dyn Fn(u64) -> TransportConfig + Send + Sync>;
@@ -106,6 +122,7 @@ impl ProviderEndpoint {
     async fn bind(
         config: TransportConfig,
         dispatch: &Arc<Mutex<Option<StopAwareBlobsProtocol>>>,
+        allowed_peer: &AllowedPeer,
     ) -> Result<Self> {
         let transport = IrohTransport::bind(config.clone()).await?;
         let retired = Arc::new(AtomicBool::new(false));
@@ -115,6 +132,7 @@ impl ProviderEndpoint {
                 ActiveBlobsDispatch {
                     handler: Arc::clone(dispatch),
                     retired: Arc::clone(&retired),
+                    allowed_peer: Arc::clone(allowed_peer),
                 },
             )
             .spawn();
@@ -194,12 +212,30 @@ struct ActiveBlobsDispatch {
     handler: Arc<Mutex<Option<StopAwareBlobsProtocol>>>,
     /// See [`ProviderEndpoint::retired`].
     retired: Arc<AtomicBool>,
+    /// #547: see [`AndroidBlobsProvider::allowed_peer`].
+    allowed_peer: AllowedPeer,
 }
 
 impl ProtocolHandler for ActiveBlobsDispatch {
     async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
         if self.retired.load(Ordering::SeqCst) {
             connection.close(0u32.into(), b"provider endpoint replaced");
+            return Ok(());
+        }
+        // #547: a ticket is not a capability. Only the paired desktop's
+        // identity gets past this line; everyone else is closed before
+        // iroh-blobs reads a request.
+        let peer = crate::NodeId(*connection.remote_id().as_bytes());
+        let allowed = *self
+            .allowed_peer
+            .lock()
+            .expect("Android provider allowed peer lock");
+        if allowed != Some(peer) {
+            tracing::warn!(
+                "blobs provider: refused peer={} (not the paired desktop)",
+                peer_prefix(&peer)
+            );
+            connection.close(NOT_PAIRED_CLOSE_CODE.into(), b"not paired");
             return Ok(());
         }
         let handler = self
@@ -506,6 +542,21 @@ impl StopAwareBlobsProtocol {
         }
     }
 
+    /// #547: close every live connection whose peer is not `allowed` (the
+    /// paired desktop changed or was cleared).
+    fn close_foreign(&self, allowed: Option<crate::NodeId>) {
+        let active = self
+            .active
+            .lock()
+            .expect("active provider connections lock");
+        for connection in active.values() {
+            let peer = crate::NodeId(*connection.remote_id().as_bytes());
+            if allowed != Some(peer) {
+                connection.close(NOT_PAIRED_CLOSE_CODE.into(), b"not paired");
+            }
+        }
+    }
+
     /// NET-14: the local, iroh-blobs-sourced fact for "what is happening to
     /// this exact lease's blob right now" — never derived from whether a
     /// remote peer has answered anything.
@@ -695,6 +746,7 @@ impl AndroidBlobsProvider {
             })?;
         let root = root.as_ref().join("iroh-blobs-provider");
         let dispatch: Arc<Mutex<Option<StopAwareBlobsProtocol>>> = Arc::default();
+        let allowed_peer: AllowedPeer = Arc::default();
         let (store, endpoint) = runtime.block_on(async {
             let mut options = Options::new(&root);
             if let Some(interval) = gc_interval {
@@ -722,7 +774,8 @@ impl AndroidBlobsProvider {
             if removed > 0 {
                 tracing::info!("BLOB-03: released {removed} legacy Android provider blob tags");
             }
-            let endpoint = ProviderEndpoint::bind(endpoint_config(0), &dispatch).await?;
+            let endpoint =
+                ProviderEndpoint::bind(endpoint_config(0), &dispatch, &allowed_peer).await?;
             Ok::<_, TransportError>((store, endpoint))
         })?;
         Ok(Self {
@@ -737,7 +790,21 @@ impl AndroidBlobsProvider {
             imports: Mutex::default(),
             stored: Mutex::default(),
             import_lock: Mutex::default(),
+            allowed_peer,
         })
+    }
+
+    /// #547: the one peer allowed to pull from this provider (the paired
+    /// desktop), or `None` to refuse everyone. Takes effect for the next
+    /// connection; live connections from any other peer are closed now.
+    pub fn set_allowed_peer(&self, peer: Option<crate::NodeId>) {
+        *self
+            .allowed_peer
+            .lock()
+            .expect("Android provider allowed peer lock") = peer;
+        if let Some(active) = self.active.lock().expect("active provider lock").as_ref() {
+            active.handler.close_foreign(peer);
+        }
     }
 
     /// Imports [path] under [declared_hash] into the provider's persistent
@@ -895,13 +962,16 @@ impl AndroidBlobsProvider {
     /// failure tries again).
     async fn replace_endpoint(&self, stuck: &Arc<ProviderEndpoint>) -> String {
         let next_generation = self.generation.load(Ordering::SeqCst) + 1;
-        let fresh =
-            match ProviderEndpoint::bind((self.endpoint_config)(next_generation), &self.dispatch)
-                .await
-            {
-                Ok(fresh) => Arc::new(fresh),
-                Err(error) => return format!("rebind failed: {error}"),
-            };
+        let fresh = match ProviderEndpoint::bind(
+            (self.endpoint_config)(next_generation),
+            &self.dispatch,
+            &self.allowed_peer,
+        )
+        .await
+        {
+            Ok(fresh) => Arc::new(fresh),
+            Err(error) => return format!("rebind failed: {error}"),
+        };
         let fresh_id = fresh.transport.endpoint().id().fmt_short().to_string();
         {
             let mut current = self.endpoint.lock().expect("provider endpoint lock");
@@ -1835,6 +1905,49 @@ pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlo
         Err(error) => {
             throw(&mut env, error);
             0
+        }
+    }
+}
+
+/// #547: set the paired desktop's NodeId (64 hex) as the only peer allowed
+/// to pull; `null` / empty refuses everyone. A malformed id refuses everyone
+/// and throws.
+#[cfg(feature = "android-jni")]
+#[no_mangle]
+pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeSetAllowedPeer(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+    node_id: JString<'_>,
+) {
+    let provider = match provider(handle) {
+        Ok(provider) => provider,
+        Err(error) => {
+            throw(&mut env, error);
+            return;
+        }
+    };
+    if node_id.is_null() {
+        provider.set_allowed_peer(None);
+        return;
+    }
+    let text: String = match env.get_string(&node_id) {
+        Ok(text) => text.into(),
+        Err(error) => {
+            provider.set_allowed_peer(None);
+            throw(&mut env, error);
+            return;
+        }
+    };
+    if text.trim().is_empty() {
+        provider.set_allowed_peer(None);
+        return;
+    }
+    match text.parse::<crate::NodeId>() {
+        Ok(peer) => provider.set_allowed_peer(Some(peer)),
+        Err(error) => {
+            provider.set_allowed_peer(None);
+            throw(&mut env, format!("invalid paired desktop node id: {error}"));
         }
     }
 }

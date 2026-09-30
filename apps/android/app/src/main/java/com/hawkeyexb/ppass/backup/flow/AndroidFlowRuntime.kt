@@ -225,6 +225,8 @@ internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
         runtime?.takeIf { it.ownerKey == daemonNodeId }?.also { runtime = null }
     }
     stale?.shutdown()
+    // #547：解配后旧桌面不许再拉（在飞的连接也在原生侧关掉）。
+    runCatching { sharedNativeProvider?.setAllowedPeer(null) }.onFailure { Log.w(TAG, "clearFlowRuntime: clearing allowed peer failed; ignoring", it) }
     runCatching { sharedNativeProvider?.revoke("") }.onFailure { Log.w(TAG, "clearFlowRuntime: revoke failed; ignoring", it) }
 }
 
@@ -272,6 +274,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     val cleared = runBlocking(writer.dispatcher) { store.claimOwner(key, idFloor = System.currentTimeMillis()) }
     Log.i(TAG, "buildRuntime: order store ready (cleared for a different desktop=$cleared)")
     val native = sharedNativeProvider(app)
+    // #547：原生 provider 只给这台已配对桌面供数（运行时按桌面 NodeId 建，换桌面会重建再设一次）。
+    native.setAllowedPeer(key)
     Log.i(TAG, "buildRuntime: native blobs provider ready")
     // 旧的 register 路径（打开原图、原生导入并出 ticket）仍保留在桥上；#413 的循环只走 importer → serve。
     val bridge = IrohBlobsProviderBridge(native) { source ->

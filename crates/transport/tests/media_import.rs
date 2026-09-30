@@ -40,7 +40,9 @@ fn write_photo(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
 }
 
 /// Pull [ticket] from a fresh loopback receiver, bounded by [PULL_TIMEOUT].
-fn pull(dir: &Path, ticket: &str) -> Result<Vec<u8>, String> {
+/// The receiver plays the paired desktop: #547 admits only the NodeId the
+/// provider was told about, so the helper registers it first.
+fn pull(provider: &AndroidBlobsProvider, dir: &Path, ticket: &str) -> Result<Vec<u8>, String> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -49,6 +51,7 @@ fn pull(dir: &Path, ticket: &str) -> Result<Vec<u8>, String> {
         let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
             .await
             .unwrap();
+        provider.set_allowed_peer(Some(receiver.node_id()));
         let store = tempfile::tempdir_in(dir).unwrap();
         let blobs = Blobs::open(&receiver, store.path()).await.unwrap();
         let destination = store.path().join("received.bin");
@@ -91,7 +94,7 @@ fn null_path_copies_from_the_descriptor_and_serves() {
     assert_eq!(import.fallback, Some(ImportFallback::NoPath));
 
     let ticket = provider.serve(import.hash).unwrap();
-    assert_eq!(pull(dir.path(), &ticket).unwrap(), bytes);
+    assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
     assert_eq!(
         provider.transfer_status(),
         ActiveTransferStatus::Completed { hash: import.hash }
@@ -142,7 +145,7 @@ fn copy_import_serve_release_leaves_nothing_behind() {
     // Several GC passes while held: the import must survive until release.
     std::thread::sleep(Duration::from_millis(120));
     let ticket = provider.serve(import.hash).unwrap();
-    assert_eq!(pull(dir.path(), &ticket).unwrap(), bytes);
+    assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
 
     provider.release(import.hash);
     wait_until_gone(&provider, import.hash);
@@ -226,7 +229,7 @@ fn an_endpoint_that_never_comes_online_is_replaced_and_the_next_serve_succeeds()
     let ticket = provider
         .serve(import.hash)
         .expect("the next serve in the same process must not hit the stuck endpoint again");
-    assert_eq!(pull(dir.path(), &ticket).unwrap(), bytes);
+    assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
     assert_eq!(
         provider.transfer_status(),
         ActiveTransferStatus::Completed { hash: import.hash }
@@ -261,7 +264,7 @@ fn retiring_a_replaced_endpoint_keeps_the_shared_store_serving() {
         .import_media(None, File::open(&first_source).unwrap())
         .unwrap();
     let ticket = provider.serve(first_import.hash).unwrap();
-    assert_eq!(pull(dir.path(), &ticket).unwrap(), first);
+    assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), first);
     provider.release_retention();
 
     let replaced = provider.replace_endpoint_for_test();
@@ -272,7 +275,7 @@ fn retiring_a_replaced_endpoint_keeps_the_shared_store_serving() {
         .import_media(None, File::open(&second_source).unwrap())
         .expect("the provider store must survive the old endpoint's retirement");
     let ticket = provider.serve(second_import.hash).unwrap();
-    assert_eq!(pull(dir.path(), &ticket).unwrap(), second);
+    assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), second);
 }
 
 /// NET-29: an endpoint that stays offline is replaced on EVERY failed serve —
@@ -356,7 +359,7 @@ mod reference {
         ticket: &str,
         expected: SourceFault,
     ) {
-        let pulled = pull(dir, ticket);
+        let pulled = pull(provider, dir, ticket);
         assert!(pulled.is_err(), "a changed original must not be served");
         assert_eq!(provider.source_fault(), Some(expected));
         // The abort event is delivered asynchronously after the reset.
@@ -390,7 +393,7 @@ mod reference {
         assert!(has_extension(&files, "obao4"), "outboard only: {files:?}");
 
         let ticket = provider.serve(import.hash).unwrap();
-        assert_eq!(pull(dir.path(), &ticket).unwrap(), bytes);
+        assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
         assert_eq!(provider.source_fault(), None);
     }
 
@@ -460,7 +463,7 @@ mod reference {
 
         fs::remove_file(&first).unwrap();
         let ticket = provider.serve(b.hash).unwrap();
-        assert_eq!(pull(dir.path(), &ticket).unwrap(), bytes);
+        assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
     }
 
     /// A reference released but not yet collected is still in the store:
@@ -570,7 +573,7 @@ mod reference {
         assert!(import.by_reference);
         std::thread::sleep(Duration::from_millis(120));
         let ticket = provider.serve(import.hash).unwrap();
-        assert_eq!(pull(dir.path(), &ticket).unwrap(), bytes);
+        assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
 
         provider.release(import.hash);
         wait_until_gone(&provider, import.hash);

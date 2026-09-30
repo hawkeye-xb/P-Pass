@@ -34,6 +34,7 @@ fn provider_registration_serves_native_ticket_then_revoke_stops_it() {
         let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
             .await
             .unwrap();
+        provider.set_allowed_peer(Some(receiver.node_id()));
         let receiver_store = dir.path().join("receiver-store");
         let blobs = Blobs::open(&receiver, &receiver_store).await.unwrap();
         let destination = dir.path().join("received.jpg");
@@ -81,6 +82,7 @@ fn transfer_status_reports_no_lease_then_completed_after_a_real_pull() {
         let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
             .await
             .unwrap();
+        provider.set_allowed_peer(Some(receiver.node_id()));
         let receiver_store = dir.path().join("receiver-store");
         let blobs = Blobs::open(&receiver, &receiver_store).await.unwrap();
         let destination = dir.path().join("received.jpg");
@@ -154,6 +156,7 @@ fn byte_progress_is_recorded_from_real_transfer_progress_events() {
         let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
             .await
             .unwrap();
+        provider.set_allowed_peer(Some(receiver.node_id()));
         let blobs = Blobs::open(&receiver, &dir.path().join("receiver-store"))
             .await
             .unwrap();
@@ -208,6 +211,7 @@ fn serial_items_on_one_handler_do_not_inherit_the_previous_lease_activity() {
             let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
                 .await
                 .unwrap();
+            provider.set_allowed_peer(Some(receiver.node_id()));
             let blobs = Blobs::open(&receiver, &receiver_dir).await.unwrap();
             blobs
                 .pull(&ticket, &receiver_dir.join("out.bin"))
@@ -284,6 +288,7 @@ fn provider_keeps_one_endpoint_for_serial_flow_items() {
             ALPN_BLOBS.into(),
         ])))
         .unwrap();
+    provider.set_allowed_peer(Some(receiver.node_id()));
     let blobs = runtime
         .block_on(Blobs::open(&receiver, &dir.path().join("receiver-store")))
         .unwrap();
@@ -383,6 +388,7 @@ fn released_blob_is_reclaimed_but_endpoint_survives_for_reuse() {
         let receiver = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
             .await
             .unwrap();
+        provider.set_allowed_peer(Some(receiver.node_id()));
         let blobs = Blobs::open(&receiver, &dir.path().join("receiver-store"))
             .await
             .unwrap();
@@ -456,4 +462,125 @@ fn wait_until_gone(provider: &AndroidBlobsProvider, hash: [u8; 32]) {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// #547: bind a loopback identity and open a receiver store for it.
+async fn receiver_at(dir: &std::path::Path, name: &str) -> (IrohTransport, Blobs) {
+    let tp = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+        .await
+        .unwrap();
+    let blobs = Blobs::open(&tp, &dir.join(name)).await.unwrap();
+    (tp, blobs)
+}
+
+/// #547 RED→GREEN: a valid ticket held by anyone but the paired desktop
+/// yields no bytes; the paired desktop pulls the same ticket normally.
+#[test]
+fn only_the_paired_desktop_can_pull_a_valid_ticket() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.jpg");
+    let contents = b"#547 the photo a leaked ticket points at";
+    fs::write(&source, contents).unwrap();
+    let hash = blake3_of(contents);
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+    let ticket = provider.register_path(hash, &source).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (desktop_tp, desktop) = receiver_at(dir.path(), "desktop-store").await;
+        let (_stranger_tp, stranger) = receiver_at(dir.path(), "stranger-store").await;
+        provider.set_allowed_peer(Some(desktop_tp.node_id()));
+
+        let leaked = dir.path().join("leaked.jpg");
+        assert!(
+            stranger.pull(&ticket, &leaked).await.is_err(),
+            "a ticket is not a capability: an unpaired identity must be refused"
+        );
+        assert_eq!(
+            stranger.local_bytes(hash).await.unwrap(),
+            0,
+            "no byte left the phone"
+        );
+        assert!(!leaked.exists());
+
+        let received = dir.path().join("received.jpg");
+        assert_eq!(desktop.pull(&ticket, &received).await.unwrap(), hash);
+        assert_eq!(fs::read(&received).unwrap(), contents);
+    });
+}
+
+/// #547: fail closed — a provider nobody told about a paired desktop
+/// serves no one, not even the desktop that holds the ticket.
+#[test]
+fn provider_without_a_paired_desktop_refuses_everyone() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.jpg");
+    let contents = b"#547 no pairing yet";
+    fs::write(&source, contents).unwrap();
+    let hash = blake3_of(contents);
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+    let ticket = provider.register_path(hash, &source).unwrap();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let (_tp, anyone) = receiver_at(dir.path(), "anyone-store").await;
+        assert!(anyone
+            .pull(&ticket, &dir.path().join("out.jpg"))
+            .await
+            .is_err());
+        assert_eq!(anyone.local_bytes(hash).await.unwrap(), 0);
+    });
+}
+
+/// #547: unpair (allowed peer cleared) cuts the former desktop off — on its
+/// already-open connection and on any new one.
+#[test]
+fn clearing_the_paired_desktop_cuts_it_off() {
+    let dir = tempdir().unwrap();
+    let first = b"#547 first item".to_vec();
+    let second = b"#547 second item".to_vec();
+    let first_src = dir.path().join("first.jpg");
+    let second_src = dir.path().join("second.jpg");
+    fs::write(&first_src, &first).unwrap();
+    fs::write(&second_src, &second).unwrap();
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+    let first_ticket = provider
+        .register_path(blake3_of(&first), &first_src)
+        .unwrap();
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let (desktop_tp, desktop) = runtime.block_on(receiver_at(dir.path(), "desktop-store"));
+    provider.set_allowed_peer(Some(desktop_tp.node_id()));
+    let (provider_id, _) = desktop.register_blob_ticket(&first_ticket).unwrap();
+    runtime
+        .block_on(desktop.fetch_from(provider_id, blake3_of(&first)))
+        .unwrap();
+
+    let _second_ticket = provider
+        .register_path(blake3_of(&second), &second_src)
+        .unwrap();
+    provider.set_allowed_peer(None);
+    runtime.block_on(async {
+        assert!(
+            desktop
+                .fetch_from(provider_id, blake3_of(&second))
+                .await
+                .is_err(),
+            "an unpaired desktop must not keep pulling"
+        );
+        assert!(desktop
+            .fetch_from(provider_id, blake3_of(&second))
+            .await
+            .is_err());
+        assert_eq!(desktop.local_bytes(blake3_of(&second)).await.unwrap(), 0);
+    });
 }

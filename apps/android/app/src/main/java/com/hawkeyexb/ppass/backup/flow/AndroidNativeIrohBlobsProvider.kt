@@ -45,6 +45,8 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
 
     override fun networkChange() = nativeNetworkChange(handle)
 
+    override fun setAllowedPeer(daemonNodeId: String?) = nativeSetAllowedPeer(handle, daemonNodeId)
+
     override fun close() {
         nativeClose(handle)
     }
@@ -88,6 +90,10 @@ internal class AndroidNativeIrohBlobsProvider private constructor(
 
         @JvmStatic
         external fun nativeClose(handle: Long)
+
+        /** #547：[nodeId] 为 null / 空 = 谁都不许拉；格式不对抛异常且同样谁都不许。 */
+        @JvmStatic
+        external fun nativeSetAllowedPeer(handle: Long, nodeId: String?)
 
         fun open(filesDir: File): AndroidNativeIrohBlobsProvider {
             val handle = nativeOpen(filesDir.absolutePath)
