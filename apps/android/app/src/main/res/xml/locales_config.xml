@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #557: Android 13+ per-app language (Settings → Apps → P-Pass → Language).
+     List exactly the languages the app ships: values/ (en, default) and
+     values-zh/ — LocaleConfigTest keeps this list and the resource dirs in
+     step. No in-app switcher; the system applies the choice to Resources and
+     Locale.getDefault() (DiagText picks the bundled i18n JSON from it). -->
+<locale-config xmlns:android="http://schemas.android.com/apk/res/android">
+    <locale android:name="en" />
+    <locale android:name="zh" />
+</locale-config>

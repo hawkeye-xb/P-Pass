@@ -65,7 +65,7 @@
   // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
   // T-081 暂写死在组件里的导航/页面文案已全部收编进字典。errText 负责
   // 把 Rust 壳回来的错误（key + 参数 / 裸 msg_key / 原串）渲染成人话。
-  import { t, errText, getLocale } from "./lib/i18n.js";
+  import { t, errText, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
 
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
@@ -116,6 +116,24 @@
   // thanks to the single-instance claim protocol).
   let lastSelfHealAttempt = 0;
   const SELF_HEAL_COOLDOWN_MS = 30000;
+
+  // #557: Settings → language. Options render their own labels via t();
+  // the switch persists, re-tells the tray and reloads (t() is not reactive;
+  // the #/settings hash survives the reload, so the user stays here).
+  const LANG_OPTIONS = [
+    { pref: "system", label: "ui.language_system" },
+    { pref: "zh", label: "ui.language_zh" },
+    { pref: "en", label: "ui.language_en" },
+  ];
+  const langPref = readLangPref();
+  async function changeLanguage(pref) {
+    if (pref === langPref) return;
+    try {
+      await applyLangPref(pref, { invoke, reload: () => location.reload() });
+    } catch (e) {
+      flashMessage(t("ui.save_failed", { err: errText(e) }), "error");
+    }
+  }
 
   async function checkWizard() {
     wizard = await invoke("wizard_state");
@@ -1789,6 +1807,18 @@
             </Card>
             <div class="flex flex-1 flex-col gap-[22px]">
               <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
+                <!-- #557: 界面语言——跟随系统 / 中文 / English，当前项用主按钮。 -->
+                <div class="flex flex-wrap items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0" data-testid="settings-language">
+                  <span>{t("ui.language")}</span>
+                  <div class="flex flex-wrap gap-[10px]">
+                    {#each LANG_OPTIONS as opt}
+                      <Button
+                        variant={opt.pref === langPref ? "primary" : "secondary"}
+                        aria-pressed={opt.pref === langPref}
+                        onclick={() => changeLanguage(opt.pref)}>{t(opt.label)}</Button>
+                    {/each}
+                  </div>
+                </div>
                 <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
                      test），旧 REL-02 通道选择行已删。 -->
                 <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">

@@ -41,6 +41,7 @@
         android:name=".PPassApplication"
         android:allowBackup="false"
         android:label="P-Pass"
+        android:localeConfig="@xml/locales_config"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
