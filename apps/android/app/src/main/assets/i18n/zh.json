@@ -155,6 +155,8 @@
   "ui.audit_pair_requested": "请求加入",
   "ui.audit_pair_accepted": "已加入",
   "ui.audit_pair_denied": "加入被拒绝",
+  "ui.audit_pair_cancelled": "手机已取消",
+  "ui.audit_pair_expired": "配对已超时",
   "ui.audit_removed_external": "外部删除（{name}）",
   "ui.audit_renamed_from_to": "改名：{old} → {new}",
   "ui.audit_renamed": "已改名",

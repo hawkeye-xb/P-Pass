@@ -336,6 +336,21 @@ async fn status_is_visible_only_to_the_submitting_device() {
     assert!(theirs.accepted.is_none());
 }
 
+/// #552: every non-join ending writes exactly one terminal audit kind, and
+/// the three ways a request ends without a join are told apart — owner
+/// Deny `pair.denied`, phone `pair.cancel` `pair.cancelled`, nobody decided
+/// in time (TTL / owner UI gone) `pair.expired`. Returns the terminal kinds
+/// on the trail (everything but `pair.requested`).
+async fn pair_endings(d: &Desk) -> Vec<String> {
+    d.db.list_audit(20)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.entry.kind)
+        .filter(|k| k.starts_with("pair.") && k != "pair.requested")
+        .collect()
+}
+
 /// 死因：主人点拒绝 → status 立刻 denied（带拒绝码），不写设备行。
 #[tokio::test(flavor = "multi_thread")]
 async fn owner_deny_surfaces_as_denied_with_a_reason_key() {
@@ -357,6 +372,8 @@ async fn owner_deny_surfaces_as_denied_with_a_reason_key() {
     assert_eq!(r.msg_key.as_deref(), Some(diag::keys::ERR_NOT_AUTHORIZED));
     assert!(r.accepted.is_none());
     assert!(d.db.get_device(&ctp.node_id().0).await.unwrap().is_none());
+    // #552: the owner's No is the only ending audited as `pair.denied`.
+    assert_eq!(pair_endings(&d).await, ["pair.denied"]);
 }
 
 /// 死因：主人一直不点 → pending TTL 到 → expired（不是 denied），不写库。
@@ -383,6 +400,9 @@ async fn owner_never_clicks_surfaces_as_expired() {
         .await
         .unwrap()
         .is_none());
+    // #552: nobody decided in time — audited as expired, not as the
+    // owner's No (改前这里是 `pair.denied`，桌面显示「被拒绝」)。
+    assert_eq!(pair_endings(&d).await, ["pair.expired"]);
 }
 
 /// 死因：daemon 重启 → 内存账本没了 → not_found（手机据此提示重新生成配对码）。
@@ -538,10 +558,9 @@ async fn phone_cancel_then_owner_allow_is_expired_and_writes_no_device() {
         "{:?}",
         audit.iter().map(|r| &r.entry.kind).collect::<Vec<_>>()
     );
-    assert!(
-        audit.iter().any(|r| r.entry.kind == "pair.denied"),
-        "the withdrawal is on the trail like any other no-verdict ending"
-    );
+    // #552: the phone walked away — its own ending on the trail, not the
+    // owner's No (改前与主人拒绝共用 `pair.denied`，桌面显示「被拒绝」)。
+    assert_eq!(pair_endings(&d).await, ["pair.cancelled"]);
     assert_eq!(status(&ctp, &d, &s.request_id).await.state, "expired");
 }
 

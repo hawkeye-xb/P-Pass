@@ -408,7 +408,9 @@ async fn stale_pending_times_out_denied_with_no_writes() {
     );
 
     // 验收标准 4 for the DENY path (简报六: denied shares the same bug):
-    // pair.denied lands at the expiry moment, not the request moment.
+    // the no-verdict ending lands at the expiry moment, not the request
+    // moment. #552: that ending is `pair.expired` (it used to share
+    // `pair.denied` with the owner's No).
     let audit = db.list_audit(20).await.unwrap();
     let requested = audit
         .iter()
@@ -418,10 +420,14 @@ async fn stale_pending_times_out_denied_with_no_writes() {
         .ts;
     let denied = audit
         .iter()
-        .find(|r| r.entry.kind == "pair.denied")
-        .expect("pair.denied recorded")
+        .find(|r| r.entry.kind == "pair.expired")
+        .expect("pair.expired recorded")
         .entry
         .ts;
+    assert!(
+        !audit.iter().any(|r| r.entry.kind == "pair.denied"),
+        "a timeout is not the owner's No"
+    );
     assert!(
         denied - requested >= 250,
         "审计要答得出'业主隔了多久（这里是超时多久）'：requested={requested} denied={denied}"
