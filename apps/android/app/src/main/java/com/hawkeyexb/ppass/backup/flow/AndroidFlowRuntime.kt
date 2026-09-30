@@ -208,11 +208,14 @@ internal class AndroidFlowRuntime(
     private val writer: FlowWriter,
     private val scope: CoroutineScope,
     private val sqlite: SqliteOrderStore,
+    /** #434：运行时没了，引擎自然也不忙了（它的状态收集随 [scope] 一起取消）。 */
+    private val onShutdown: () -> Unit = {},
 ) {
     fun shutdown() {
         scope.cancel()
         writer.shutdown()
         runCatching { sqlite.close() }
+        onShutdown()
     }
 }
 
@@ -334,7 +337,14 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         media = ContentResolverMediaSnapshotSource(app, { scopeStore.selectedBucketIds() }),
         importer = importer,
         delivery = delivery,
-        probe = DaemonDesktopProbe(pairing, desktopFor, log = androidLog, clock = SystemClock::elapsedRealtime),
+        // #434：只有「有东西要传」才会探测桌面——此刻先把 provider 的 endpoint 绑上，它和 hello 并行去连
+        // relay；空闲时它被关掉了，等到第一次 serve 才从零开始会把 15 s 上线预算整个耗在这上面。
+        probe = DaemonDesktopProbe(pairing, desktopFor, log = androidLog, clock = SystemClock::elapsedRealtime).let { hello ->
+            DesktopProbe {
+                runCatching { native.prewarm() }.onFailure { Log.w(TAG, "provider prewarm failed; serve binds instead", it) }
+                hello.probe()
+            }
+        },
         presence = RemotePresence { hashes ->
             val p = pairing() ?: error("not paired")
             client.bind(IdentityStore(app.filesDir).secretKey())
@@ -370,8 +380,12 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     )
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }
+    // #434：引擎这一轮没结束就不回收 endpoint；一轮结束（含 afterCycle 的审计上报在飞）再由回收器等宽限期。
+    scope.launch { engine.status.collect { application.networkIdleReaper.setEngineBusy(it.phase != LoopPhase.IDLE) } }
     engine.start()
-    val built = AndroidFlowRuntime(key, engine, store, control, bridge, writer, scope, sqlite)
+    val built = AndroidFlowRuntime(key, engine, store, control, bridge, writer, scope, sqlite) {
+        application.networkIdleReaper.setEngineBusy(false)
+    }
     synchronized(runtimeLock) {
         val current = PairingStore(app.filesDir).load()
         if (current?.daemonNodeId != key) {
@@ -409,6 +423,13 @@ private val nativeProviderLock = Any()
 
 @Volatile
 private var sharedNativeProvider: AndroidNativeIrohBlobsProvider? = null
+
+/**
+ * #434：关掉原生 provider 的 endpoint（store 不关）。还没打开 = 没什么可关。
+ * false = 桌面还连着这一张，稍后再试。下一次 serve 自己重新绑。
+ */
+internal fun parkFlowNetwork(): Boolean =
+    sharedNativeProvider?.let { runCatching { it.park() }.getOrElse { failure -> Log.w(TAG, "park failed", failure); false } } ?: true
 
 private fun sharedNativeProvider(context: Context): AndroidNativeIrohBlobsProvider =
     sharedNativeProvider ?: synchronized(nativeProviderLock) {
