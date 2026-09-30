@@ -12,7 +12,7 @@
 
 7 分钟写 9 万行 ≈ **每秒 220 行**。
 
-触发条件：验收人家里的 Clash（mihomo）把 iroh relay 的流量走了代理，relay
+触发条件：验收人家里的本机全局代理把 iroh relay 的流量走了代理，relay
 的 TLS 握手在代理上失败。他给 relay 域名/IP 加了直连白名单后立即恢复
 （22:29 配对成功，之后传了 13 张；8/27 全天 relay 错误 = 0）。
 
@@ -95,7 +95,7 @@ daemon 的 tracing/日志初始化 + transport 层 relay 重连的错误路径�
 - `just ci`（fmt + clippy -D warnings + nextest 全量 + arch-check +
   queue-check）全绿，退出码 0。
 - **真机二进制验证**：编译 `target/debug/daemon`，起一个本地假 relay
-  （accept 后立即 close，模拟 8/26 那晚 Clash 代理导致 TLS 握手 EOF 的
+  （accept 后立即 close，模拟 8/26 那晚本机代理导致 TLS 握手 EOF 的
   效果），`PPF_DATA_DIR`/`PPF_RELAY_URLS` 指向隔离的 scratch 目录（不碰
   真实用户数据）跑了约 95 秒。观察：daemon 的网络质量探测
   （`net_report::reportgen`）每 ~21 秒一轮、失败打 3 行 WARN，95 秒内总共

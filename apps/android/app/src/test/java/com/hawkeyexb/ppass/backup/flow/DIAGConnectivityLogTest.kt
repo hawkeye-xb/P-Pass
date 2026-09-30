@@ -26,6 +26,8 @@ class DIAGConnectivityLogTest {
         for (a in listOf("192.168.43.1:5000", "10.0.0.2:1", "172.16.0.9:9", "172.31.255.1:9", "127.0.0.1:7", "169.254.3.4:1", "[fe80::1]:9", "[fd00::5]:9", "[::1]:9", "192.168.1.5")) {
             assertTrue(a, isLanAddr(a))
         }
+        // 172.32.0.1 是 172.16.0.0/12 上界外侧第一个 /16 的合成边界探针：该位置只能落在公网空间，
+        // 附近没有文档保留段可替代；不对应任何测试环境里的真实主机。
         for (a in listOf("8.8.8.8:53", "172.32.0.1:9", "[2001:db8::1]:9", "https://aps1-1.relay.n0.iroh.link./", "", "not-an-ip")) {
             assertFalse(a, isLanAddr(a))
         }
@@ -35,7 +37,7 @@ class DIAGConnectivityLogTest {
     fun `selected path wins, relay is relay, no paths is none`() {
         val relay = PathFacts(selected = false, relay = true, remoteAddr = "https://r/", rttMs = 200)
         val lan = PathFacts(selected = true, relay = false, remoteAddr = "192.168.1.9:1234", rttMs = 3)
-        val public = PathFacts(selected = false, relay = false, remoteAddr = "1.2.3.4:1234", rttMs = 40)
+        val public = PathFacts(selected = false, relay = false, remoteAddr = "203.0.113.4:1234", rttMs = 40)
         assertEquals(PathKind.LAN, classifyPaths(listOf(relay, lan, public)).kind)
         assertEquals(PathKind.RELAY, classifyPaths(listOf(relay, public)).kind) // 没选中 → 第一条
         assertEquals(PathKind.DIRECT, classifyPaths(listOf(public.copy(selected = true), relay)).kind)

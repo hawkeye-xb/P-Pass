@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn public_v4_is_direct() {
-        let info = classify(&[facts(true, false, Some("123.119.22.188"), 24)]);
+        let info = classify(&[facts(true, false, Some("203.0.113.10"), 24)]);
         assert_eq!(info.path, Some(PathKind::Direct));
         assert_eq!(info.rtt_ms, 24);
     }
@@ -168,7 +168,7 @@ mod tests {
             let info = classify(&[facts(true, false, Some(ip), 1)]);
             assert_eq!(info.path, Some(PathKind::Lan), "{ip} should be Lan");
         }
-        let info = classify(&[facts(true, false, Some("2408:8207:5455:ef60::1"), 8)]);
+        let info = classify(&[facts(true, false, Some("2001:db8::1"), 8)]);
         assert_eq!(info.path, Some(PathKind::Direct));
     }
 
@@ -207,7 +207,7 @@ mod tests {
     fn live_status_maps_lan_and_direct_to_direct() {
         let lan = classify(&[facts(true, false, Some("192.168.1.2"), 3)]);
         assert_eq!(status_of_live(lan), ConnectionStatus::Direct);
-        let direct = classify(&[facts(true, false, Some("123.119.22.188"), 24)]);
+        let direct = classify(&[facts(true, false, Some("203.0.113.10"), 24)]);
         assert_eq!(status_of_live(direct), ConnectionStatus::Direct);
     }
 
