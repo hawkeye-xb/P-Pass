@@ -690,8 +690,11 @@ fn park_is_refused_while_a_peer_is_connected() {
 /// them. iroh frees the sockets only once every `Endpoint` clone is dropped,
 /// and a retired endpoint whose shutdown pends on the peer's close ack leaks
 /// them (observed on Mate60 / Samsung: one v4+v6 pair per transfer round).
-/// Guard: after park settles, no retirement is pending and the previously
-/// bound ports are gone from /proc/net/udp{,6}.
+/// Guard: after park, the retirement settles and the previously bound ports
+/// disappear from /proc/net/udp{,6}. Both are polled: the retire task runs on
+/// the provider's runtime, and iroh's own internal tasks drop their endpoint
+/// clones a beat after `Endpoint::close` resolves — a one-shot read would
+/// race that teardown.
 #[test]
 fn park_releases_the_endpoints_udp_sockets() {
     let dir = tempdir().unwrap();
@@ -720,16 +723,26 @@ fn park_releases_the_endpoints_udp_sockets() {
         "retire did not settle: the endpoint shutdown is stuck"
     );
 
-    let in_use = udp_ports_in_use();
-    for port in ports {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let in_use = udp_ports_in_use();
+        let leaked: Vec<u16> = ports
+            .iter()
+            .copied()
+            .filter(|port| in_use.contains(port))
+            .collect();
+        if leaked.is_empty() {
+            break;
+        }
         assert!(
-            !in_use.contains(&port),
-            "port {port} is still bound after park: the endpoint's socket leaked"
+            std::time::Instant::now() < deadline,
+            "ports {leaked:?} still bound after park: the endpoint's socket leaked"
         );
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 
-/// #584: UDP ports currently bound by this process, read from
+/// #584: UDP ports currently bound on this host, read from
 /// /proc/net/udp{,6} (hex `local_address` column).
 fn udp_ports_in_use() -> std::collections::HashSet<u16> {
     let mut ports = std::collections::HashSet::new();
