@@ -186,8 +186,8 @@ pub enum Applied {
 /// 【DESK-42 #604】开机自启登记的对账结果。
 ///
 /// 为什么不能只用 `bool`：`false` 会把「本来就没登记」和「登记正确、不用动」
-/// 混成一件事——这正是本卡要修的缺陷形状（登记路径漂移后没人发现）。三个
-/// 变体各自可断言，日志也能说清到底发生了什么。
+/// 混成一件事——这正是本卡要修的缺陷形状（登记路径漂移后没人发现）。变体各自可断言，
+/// 日志也能说清到底发生了什么。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutostartReconcile {
     /// 本来就没有登记：**不动**（纯新启动不得篡改用户的开机自启配置，DAE-03 ②）。
@@ -196,6 +196,13 @@ pub enum AutostartReconcile {
     Unchanged,
     /// 已登记但指向别处（换目录 / 更新 / 从临时或备份副本注册过）：已用期望路径重写。
     Rewritten,
+    /// **闸门拦下**：当前可执行文件不在「稳定安装位置」（dmg 挂载点 / 下载目录 /
+    /// App Translocation 随机路径 / 备份副本 …），一律不碰登记。
+    ///
+    /// 为什么单列一个变体：这是「我们**故意**没动」而不是「没有需要动的」——
+    /// 静默跳过会让闸门失效时没人发现（外部评审 2026-10-01 在 PR #611 上拦下的
+    /// 正是「不判位置就静默改名」这件事）。
+    SkippedUnstableLocation,
 }
 
 /// 【DESK-42 #604】对账决策（纯函数——三条分支由单测钉死）。
@@ -230,11 +237,26 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// 【DESK-42 #604】对账**闸门**：本平台是否允许用 `expected` 改写开机自启登记。
+    ///
+    /// 默认 `false` = **保守拒绝**：平台必须显式声明哪些位置算「稳定安装位置」，
+    /// 没声明就不许动用户的登记。真机风险（外部评审 2026-10-01 拦停）：dmg 挂载点、
+    /// 「下载」目录、macOS App Translocation 随机路径都是一次性路径，把登记改指到
+    /// 那里 → 下次开机 launchd 拉起一个已消失的可执行文件，服务静默起不来。
+    fn autostart_reconcile_allowed(&self, _expected: &std::path::Path) -> bool {
+        false
+    }
+
     /// 【DESK-42 #604】开机自启登记对账：登记存在但指向别处 → 用 `expected`
-    /// 重写（幂等）；未登记 → 不动；一致 → 不动。
+    /// 重写（幂等）；未登记 → 不动；一致 → 不动；**位置不稳定 → 闸门拦下，不碰**。
     ///
     /// 由启动路径调用一次即可自愈「换目录 / 更新后路径漂移」的历史登记。
+    /// ⚠️ 闸门在**读登记之前**判定：不稳定的位置连读都不读，避免任何后续分支
+    /// 有机会写。
     fn reconcile_autostart(&self, expected: &std::path::Path) -> Result<AutostartReconcile> {
+        if !self.autostart_reconcile_allowed(expected) {
+            return Ok(AutostartReconcile::SkippedUnstableLocation);
+        }
         let registered = self.autostart_registered_exec()?;
         let action = reconcile_decision(registered.as_deref(), expected);
         if action == AutostartReconcile::Rewritten {
@@ -744,5 +766,64 @@ mod tests {
             "<key>NotProgramArguments</key>",
         );
         assert_eq!(macos::plist_program_argument(&broken), None);
+    }
+
+    /// 【DESK-42 #604】闸门判据：只放行稳定安装位置。
+    /// 外部评审在 PR #611 上拦下的正是「不判位置就静默改写登记」——这些一次性路径
+    /// 必须一条都不许过。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn gate_allows_only_stable_install_locations() {
+        use macos::is_stable_install_location as allowed;
+        let p = |s: &str| std::path::PathBuf::from(s);
+
+        // 稳定：系统级 / 用户级安装
+        assert!(allowed(&p(
+            "/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"
+        )));
+        assert!(allowed(&p(&format!(
+            "{}/Applications/P-Pass.app/Contents/MacOS/ppf-daemon",
+            std::env::var("HOME").unwrap_or_default()
+        ))));
+
+        // 一次性 / 不稳定：一条都不许过（每行都是真机上真实存在的形态）
+        assert!(
+            !allowed(&p("/Volumes/P-Pass/P-Pass.app/Contents/MacOS/ppf-daemon")),
+            "dmg 挂载点"
+        );
+        assert!(
+            !allowed(&p(&format!(
+                "{}/Downloads/P-Pass.app/Contents/MacOS/ppf-daemon",
+                std::env::var("HOME").unwrap_or_default()
+            ))),
+            "「下载」目录直接点开"
+        );
+        assert!(
+            !allowed(&p("/private/var/folders/xy/abc/T/AppTranslocation/1234-5678/d/P-Pass.app/Contents/MacOS/ppf-daemon")),
+            "App Translocation 随机路径"
+        );
+        assert!(
+            !allowed(&p("/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/MacOS/ppf-daemon")),
+            "备份副本（本卡的原始现场）"
+        );
+        assert!(
+            !allowed(&p("/Users/x/workspace/P-Pass/target/debug/ppf-daemon")),
+            "开发构建路径"
+        );
+    }
+
+    /// 【DESK-42 #604】闸门必须**先于**读登记生效：不稳定位置上，对账直接返回
+    /// `SkippedUnstableLocation`，既不改也不读。
+    /// 反证：把闸门去掉（恒真），这条会变成 NotRegistered/Unchanged/Rewritten → 断言失败。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn gate_precedes_registration_read_and_write() {
+        let adapter = macos::MacosAdapter::new();
+        let dmg = std::path::Path::new("/Volumes/P-Pass/P-Pass.app/Contents/MacOS/ppf-daemon");
+        assert_eq!(
+            adapter.reconcile_autostart(dmg).expect("reconcile"),
+            AutostartReconcile::SkippedUnstableLocation,
+            "从 dmg 挂载点启动时绝不许改写开机自启登记"
+        );
     }
 }
