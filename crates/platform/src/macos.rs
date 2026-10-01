@@ -60,6 +60,38 @@ pub(crate) fn agent_plist(exec: &Path) -> String {
     )
 }
 
+/// 【DESK-42 #604】从（我们自己生成的）plist 文本里取出 `ProgramArguments`
+/// 数组的第一项。纯函数，单测覆盖——真机上正是靠它发现登记被钉在备份目录。
+///
+/// 只认我们自己写出的那一种形状（`<array><string>…</string></array>`）：
+/// 这个文件由同一份代码生成、形状可控，不为它引入 XML 依赖。
+pub(crate) fn plist_program_argument(text: &str) -> Option<String> {
+    let after_key = text.split("<key>ProgramArguments</key>").nth(1)?;
+    let after_array = after_key.split("<array>").nth(1)?;
+    let after_open = after_array.split("<string>").nth(1)?;
+    let value = after_open.split("</string>").next()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// 【DESK-42 #604】对账闸门判据：这个可执行文件是不是在**稳定安装位置**。
+///
+/// 允许：`/Applications/…`、`~/Applications/…`（用户级安装）。
+/// 拒绝：其余一切——dmg 挂载点 `/Volumes/…`、「下载」目录、备份目录、
+/// `/private/var/folders/…/AppTranslocation/…` 随机路径、开发构建路径。
+///
+/// 保守方向是刻意的：**漏判的代价**是「本可自愈的旧登记没被修」（下次开机还是旧服务，
+/// 用户看得见、可再修）；**误判的代价**是把登记改到一次性路径上（用户下次开机服务
+/// 静默起不来，且没有任何提示）。后者严重得多，所以只放行确定稳定的两个位置。
+pub(crate) fn is_stable_install_location(exec: &Path) -> bool {
+    let s = exec.to_string_lossy();
+    // macOS App Translocation：带 quarantine 的 App 可能跑在随机只读路径下，
+    // 该路径随进程消失——即使它的外层看起来像 /Applications 也不许写。
+    if s.contains("/AppTranslocation/") {
+        return false;
+    }
+    s.starts_with("/Applications/") || s.starts_with(&format!("{}/Applications/", home().display()))
+}
+
 impl Default for MacosAdapter {
     fn default() -> Self {
         Self::new()
@@ -75,6 +107,18 @@ fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
 }
 
 impl PlatformAdapter for MacosAdapter {
+    /// 【DESK-42 #604】对账闸门：**只有稳定安装位置**里的 App 才允许改写开机自启登记。
+    ///
+    /// 真机风险（外部评审 2026-10-01 在 PR #611 上拦停）：Mac 用户从「下载」目录直接
+    /// 打开 dmg 里的 App 是极常见操作，macOS 还会对带 quarantine 的 App 做 App
+    /// Translocation（跑在 `/private/var/folders/…/AppTranslocation/…` 随机路径）——
+    /// 这些都是一次性路径。若此时改登记，用户下次开机就被指向一个已消失的可执行文件，
+    /// **服务静默起不来，且没有任何提示**。原缺陷要用户手点「启动后台服务」才写错，
+    /// 「每次启动静默对账」不判位置的话危险面更大。
+    fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
+        is_stable_install_location(expected)
+    }
+
     fn install_autostart(&self, exec: &Path) -> Result<()> {
         // DAE-01 稳定路径纪律：plist 绝不指向 target/ 开发路径或 /tmp/——
         // 指向那里的 launchd 条目会把旧构建永远钉在岗上（用户机实锤：
@@ -117,6 +161,21 @@ impl PlatformAdapter for MacosAdapter {
 
     fn autostart_installed(&self) -> Result<bool> {
         Ok(Self::agent_plist_path().exists())
+    }
+
+    /// 【DESK-42 #604】读登记条目里的目标路径：文件不存在 = 未登记（`None`）。
+    /// 读得到但解析不出路径 = 登记已损坏，同样按「读不出」报 `None`，
+    /// 由对账把它重写成当前安装路径。
+    fn autostart_registered_exec(&self) -> Result<Option<PathBuf>> {
+        let path = Self::agent_plist_path();
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Ok(plist_program_argument(&text).map(PathBuf::from)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(PlatformError::Io {
+                action: "read LaunchAgent plist",
+                source: e,
+            }),
+        }
     }
 
     fn uninstall_autostart(&self) -> Result<()> {

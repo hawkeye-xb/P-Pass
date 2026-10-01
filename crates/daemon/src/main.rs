@@ -280,8 +280,24 @@ async fn main() -> anyhow::Result<()> {
             if daemon::cli::autostart_install_required(&daemon::Claim::TookOver) {
                 use platform::PlatformAdapter as _;
                 if let Ok(exe) = std::env::current_exe() {
-                    if let Err(e) = platform::adapter().install_autostart(&exe) {
-                        tracing::warn!("DAE-01: autostart re-install skipped: {e}");
+                    // #604 [DESK-42]：**只在本实例有权写登记时**才重装。
+                    // 真机事故：登记被钉在 `~/P-Pass-Backups/<日期>/old-app/…`
+                    // 里的旧 App 上——那正是「某个从备份副本起来的实例按自己的
+                    // 路径改了登记」。现在：已有登记指向别处 → 一个字节都不动，
+                    // 只留痕；未登记 / 本来就指向自己 → 照旧写（幂等）。
+                    match platform::adapter().autostart_registered_exec() {
+                        Ok(Some(registered)) if registered != exe => {
+                            tracing::warn!(
+                                "#604: 已有开机自启登记指向 {}（本实例 {}）——不覆盖，避免从备份/临时副本启动的实例篡改用户登记",
+                                registered.display(),
+                                exe.display()
+                            );
+                        }
+                        _ => {
+                            if let Err(e) = platform::adapter().install_autostart(&exe) {
+                                tracing::warn!("DAE-01: autostart re-install skipped: {e}");
+                            }
+                        }
                     }
                 }
             }

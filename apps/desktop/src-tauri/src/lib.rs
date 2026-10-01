@@ -498,6 +498,40 @@ fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
     sidecar_probe_verdict(out.status.code(), &String::from_utf8_lossy(&out.stdout))
 }
 
+/// 【DESK-42 #604】开机自启登记对账（App 启动时跑一次，独立线程）。
+///
+/// 缺陷现场：`~/Library/LaunchAgents/com.p-pass.daemon.plist` 被钉在
+/// `~/P-Pass-Backups/<日期>/old-app/P-Pass.app/...` 里的旧 App 上，而实际安装
+/// 在 `/Applications`——开机/登录/KeepAlive 拉起的是那份旧服务。成因是登记
+/// 路径只在「用户主动启动服务」或「daemon 接管」两个时机写入，此后换目录、
+/// 更新覆盖、从备份副本启动过，都没有任何东西去校验它。
+///
+/// 现在每次启动对一次账：登记存在但指向别处 → 用**当前 App 内**的 daemon 路径
+/// 重写（幂等）；未登记 → 不动（纯新启动不许顺手装，DAE-03 ②）；一致 → 不动。
+fn reconcile_autostart_registration() {
+    use platform::PlatformAdapter as _;
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else { return };
+    let sidecar = dir.join(platform::adapter().daemon_executable_name());
+    // 开发运行（target/ 里没有 sidecar）等情况：没有可对账的目标，直接跳过。
+    if !sidecar.is_file() {
+        return;
+    }
+    match platform::adapter().reconcile_autostart(&sidecar) {
+        Ok(platform::AutostartReconcile::Rewritten) => {
+            // 走 stderr：与 daemon_logs 收集的日志同一去处，排障时看得到。
+            eprintln!(
+                "#604: 开机自启登记与当前安装不一致——已重写为 {}",
+                sidecar.display()
+            );
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("#604: 开机自启登记对账失败: {e}"),
+    }
+}
+
 /// Install the bundled daemon as a resident service (T-040 autostart:
 /// launchd/registry — starts now, at every boot, and restarts on
 /// crash). Falls back to a one-shot spawn if registration fails, so
@@ -1099,6 +1133,10 @@ pub fn run() {
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
             // 备份落地即时刷新），不依赖前端渲染时序。
             start_event_stream(app.handle().clone());
+            // #604 [DESK-42]：开机自启登记对账——注册条目必须指向**当前安装
+            // App 内**的 daemon。放独立线程：不一致时它会动 launchctl
+            // （bootout + bootstrap），不该堵启动。
+            std::thread::spawn(reconcile_autostart_registration);
             // I18N-03 (#492)：文案取自 assets/i18n（见 TRAY_ITEMS）；前端
             // 报上语言后 set_tray_locale 会再改一次字。
             let locale = tray_locale(&std::env::var("LANG").unwrap_or_default());
