@@ -35,7 +35,7 @@ android {
         applicationId = "com.hawkeyexb.ppass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 40
+        versionCode = 41
         // DESK-02①: 构建期注入完整版本串（release tag = "v0.3.2-test.2"，
         // 去前导 v）——Android 端靠它推导更新通道（含 -test. → test）并
         // 让连续 test tag 能自动升级（isNewer 预发布段比较）。本地/非 tag
@@ -44,7 +44,7 @@ android {
             System.getenv("PPF_BUILD_VERSION")
                 ?.takeIf { it.isNotBlank() }
                 ?.removePrefix("v")
-                ?: "0.6.2-test.2"
+                ?: "0.7.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -145,9 +145,7 @@ dependencies {
     // MOB-47: 成熟播放器替代 VideoView——Media3 ExoPlayer（官方标准）。
     // PlayerView 自带播放/暂停/进度条/seek/错误态；Compose 用 AndroidView
     // 桥接 + DisposableEffect 释放。media3-ui 提供 PlayerView，media3-exoplayer
-    // 提供 ExoPlayer 本体（media3-common 由其传递）。
-    // 版本钉 1.9.4：1.10+ 要求 compileSdk 36，而本仓钉 compileSdk 35
-    // （AGP 8.7.3 上限 35）——升 compileSdk 是独立卡的范围，不在本卡动。
+    // compileSdk 是独立卡的范围，不在本卡动。
     implementation("androidx.media3:media3-exoplayer:1.9.4")
     implementation("androidx.media3:media3-ui:1.9.4")
 
