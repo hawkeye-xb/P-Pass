@@ -1811,18 +1811,12 @@
             </Card>
             <div class="flex flex-1 flex-col gap-[22px]">
               <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
-                <!-- #557: 界面语言——跟随系统 / 中文 / English，当前项用主按钮。 -->
-                <div class="flex flex-wrap items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0" data-testid="settings-language">
-                  <span>{t("ui.language")}</span>
-                  <div class="flex flex-wrap gap-[10px]">
-                    {#each LANG_OPTIONS as opt}
-                      <Button
-                        variant={opt.pref === langPref ? "primary" : "secondary"}
-                        aria-pressed={opt.pref === langPref}
-                        onclick={() => changeLanguage(opt.pref)}>{t(opt.label)}</Button>
-                    {/each}
-                  </div>
-                </div>
+                <!-- UI-19（2026-10-01 验收人拍板）：语言切换入口**暂时隐藏**——
+                     观感不佳，先不露面。i18n 机制与文案一律未删：LANG_OPTIONS /
+                     langPref / changeLanguage 原样保留，字典键也在。
+                     恢复方式：把 issue #608 卡面里保存的那段标记放回本位置即可
+                     （源码契约测试见 languageSetting.test.js
+                     「入口已隐藏 + 能力未损坏」两条）。 -->
                 <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
                      test），旧 REL-02 通道选择行已删。 -->
                 <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">

@@ -111,18 +111,26 @@ describe("#557 切换语言", () => {
   });
 });
 
-describe("#557 设置页接线（源码契约）", () => {
+describe("UI-19 设置页语言入口已隐藏（源码契约）", () => {
   const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
-  it("三个选项的文案走字典 key", () => {
+  it("入口确实不在了：渲染标记与点击接线都不在源码里", () => {
+    // 反证：把入口那段标记放回去，本条立刻复红。
+    expect(app).not.toContain('data-testid="settings-language"');
+    expect(app).not.toContain("onclick={() => changeLanguage(opt.pref)}");
+  });
+
+  it("能力未损坏：选项文案 key、语言偏好读取、applyLangPref 接线都还在", () => {
     for (const key of ["ui.language_system", "ui.language_zh", "ui.language_en"]) {
       expect(app).toContain(`"${key}"`);
     }
-    expect(app).toContain('t("ui.language")');
+    expect(app).toContain("const langPref = readLangPref();");
+    expect(app).toContain("await applyLangPref(pref, { invoke, reload: () => location.reload() });");
   });
 
-  it("点选项调 changeLanguage → applyLangPref（带 invoke 与 reload）", () => {
-    expect(app).toContain("onclick={() => changeLanguage(opt.pref)}");
-    expect(app).toContain("await applyLangPref(pref, { invoke, reload: () => location.reload() });");
+  it("字典文案仍在（隐藏入口 ≠ 删文案）", () => {
+    const zh = readFileSync(new URL("../../../assets/i18n/zh.json", import.meta.url), "utf8");
+    expect(zh).toContain('"ui.language"');
+    expect(zh).toContain('"ui.language_system"');
   });
 });
