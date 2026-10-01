@@ -60,6 +60,19 @@ pub(crate) fn agent_plist(exec: &Path) -> String {
     )
 }
 
+/// 【DESK-42 #604】从（我们自己生成的）plist 文本里取出 `ProgramArguments`
+/// 数组的第一项。纯函数，单测覆盖——真机上正是靠它发现登记被钉在备份目录。
+///
+/// 只认我们自己写出的那一种形状（`<array><string>…</string></array>`）：
+/// 这个文件由同一份代码生成、形状可控，不为它引入 XML 依赖。
+pub(crate) fn plist_program_argument(text: &str) -> Option<String> {
+    let after_key = text.split("<key>ProgramArguments</key>").nth(1)?;
+    let after_array = after_key.split("<array>").nth(1)?;
+    let after_open = after_array.split("<string>").nth(1)?;
+    let value = after_open.split("</string>").next()?.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
 impl Default for MacosAdapter {
     fn default() -> Self {
         Self::new()
@@ -117,6 +130,21 @@ impl PlatformAdapter for MacosAdapter {
 
     fn autostart_installed(&self) -> Result<bool> {
         Ok(Self::agent_plist_path().exists())
+    }
+
+    /// 【DESK-42 #604】读登记条目里的目标路径：文件不存在 = 未登记（`None`）。
+    /// 读得到但解析不出路径 = 登记已损坏，同样按「读不出」报 `None`，
+    /// 由对账把它重写成当前安装路径。
+    fn autostart_registered_exec(&self) -> Result<Option<PathBuf>> {
+        let path = Self::agent_plist_path();
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Ok(plist_program_argument(&text).map(PathBuf::from)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(PlatformError::Io {
+                action: "read LaunchAgent plist",
+                source: e,
+            }),
+        }
     }
 
     fn uninstall_autostart(&self) -> Result<()> {

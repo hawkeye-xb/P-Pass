@@ -183,6 +183,37 @@ pub enum Applied {
     NotApplicable,
 }
 
+/// 【DESK-42 #604】开机自启登记的对账结果。
+///
+/// 为什么不能只用 `bool`：`false` 会把「本来就没登记」和「登记正确、不用动」
+/// 混成一件事——这正是本卡要修的缺陷形状（登记路径漂移后没人发现）。三个
+/// 变体各自可断言，日志也能说清到底发生了什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutostartReconcile {
+    /// 本来就没有登记：**不动**（纯新启动不得篡改用户的开机自启配置，DAE-03 ②）。
+    NotRegistered,
+    /// 已登记且指向期望路径：不动。
+    Unchanged,
+    /// 已登记但指向别处（换目录 / 更新 / 从临时或备份副本注册过）：已用期望路径重写。
+    Rewritten,
+}
+
+/// 【DESK-42 #604】对账决策（纯函数——三条分支由单测钉死）。
+///
+/// 缺陷现场：登记被钉在 `~/P-Pass-Backups/<日期>/old-app/P-Pass.app/...`，
+/// 而实际安装的 App 在 `/Applications`——`None`/指向自己/指向别处三种情形
+/// 必须能被分开判定，否则「漂移」永远只是静默的旧值。
+pub fn reconcile_decision(
+    registered: Option<&std::path::Path>,
+    expected: &std::path::Path,
+) -> AutostartReconcile {
+    match registered {
+        None => AutostartReconcile::NotRegistered,
+        Some(p) if p == expected => AutostartReconcile::Unchanged,
+        Some(_) => AutostartReconcile::Rewritten,
+    }
+}
+
 /// 架构 §4 trait —— 签名原样实施（updater/notify 的完整实现随
 /// T-041/T-062 落地，此处为可用的最小形态）.
 pub trait PlatformAdapter: Send + Sync {
@@ -190,6 +221,28 @@ pub trait PlatformAdapter: Send + Sync {
     fn install_autostart(&self, exec: &std::path::Path) -> Result<()>;
     fn autostart_installed(&self) -> Result<bool>;
     fn uninstall_autostart(&self) -> Result<()>;
+
+    /// 【DESK-42 #604】已登记的开机自启**目标可执行路径**。
+    ///
+    /// `None` = 没有登记（或本平台读不出，如 Windows 的 Run key 未实现读取）——
+    /// 注意这与「登记正确」不是一回事，调用方必须自己能分开（见 `AutostartReconcile`）。
+    fn autostart_registered_exec(&self) -> Result<Option<std::path::PathBuf>> {
+        Ok(None)
+    }
+
+    /// 【DESK-42 #604】开机自启登记对账：登记存在但指向别处 → 用 `expected`
+    /// 重写（幂等）；未登记 → 不动；一致 → 不动。
+    ///
+    /// 由启动路径调用一次即可自愈「换目录 / 更新后路径漂移」的历史登记。
+    fn reconcile_autostart(&self, expected: &std::path::Path) -> Result<AutostartReconcile> {
+        let registered = self.autostart_registered_exec()?;
+        let action = reconcile_decision(registered.as_deref(), expected);
+        if action == AutostartReconcile::Rewritten {
+            self.install_autostart(expected)?;
+        }
+        Ok(action)
+    }
+
     fn service_mode(&self) -> ServiceMode;
     // 安全
     fn key_store(&self) -> Box<dyn KeyStore>;
@@ -645,5 +698,51 @@ mod tests {
             plist.contains("<key>RunAtLoad</key><true/>"),
             "RunAtLoad must stay"
         );
+    }
+
+    /// 【DESK-42 #604】对账决策的三条分支——每条都是真机上真实出现过的形状：
+    /// 未登记（不许多手去装）、登记正确（不许动它）、登记漂移（必须重写）。
+    #[test]
+    fn reconcile_decision_covers_all_three_shapes() {
+        let expected = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        // 真机实测值（#604 挂号现象）：登记被钉在备份目录里的旧 App 上。
+        let stale = std::path::Path::new(
+            "/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/MacOS/ppf-daemon",
+        );
+
+        assert_eq!(
+            reconcile_decision(None, expected),
+            AutostartReconcile::NotRegistered,
+            "没登记就不许顺手装（DAE-03 ②：纯新启动不得改用户的开机自启）"
+        );
+        assert_eq!(
+            reconcile_decision(Some(expected), expected),
+            AutostartReconcile::Unchanged,
+            "登记正确时不许反复重写（否则每次启动都 bootout/bootstrap 一次）"
+        );
+        assert_eq!(
+            reconcile_decision(Some(stale), expected),
+            AutostartReconcile::Rewritten,
+            "指向别处（换目录/更新/备份副本）必须判要重写——这就是本卡的现象"
+        );
+    }
+
+    /// 【DESK-42 #604】读得出登记路径，是对账的前提；读不出来就永远发现不了漂移。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_plist_round_trips_its_program_argument() {
+        let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let text = macos::agent_plist(exec);
+        assert_eq!(
+            macos::plist_program_argument(&text).as_deref(),
+            Some("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            "生成的 plist 必须能被自己的解析器读回同一个路径"
+        );
+        // 反证：把 ProgramArguments 段换掉，必须读不出——否则「读到了」可能只是巧合。
+        let broken = text.replace(
+            "<key>ProgramArguments</key>",
+            "<key>NotProgramArguments</key>",
+        );
+        assert_eq!(macos::plist_program_argument(&broken), None);
     }
 }
