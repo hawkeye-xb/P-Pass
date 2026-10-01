@@ -289,6 +289,19 @@ jobs:
           xcrun stapler validate "$DMG"
           echo "notarized=yes" >> "$GITHUB_OUTPUT"
 
+      # UPD-03: 桌面 updater 包——必须从「嵌 lib/ + 重签」之后的最终 .app
+      # 现打。不能用 `pnpm tauri bundle` 自己产的那份 tar.gz：它在塞 lib/
+      # 之前就生成，内容缺 lib/，打出去就是 BUILD-09 的复发（用户一更新
+      # 就 dyld 起不来）。签名不在本 job 做——统一收在 finalize-manifest，
+      # 三平台同一处、同一把钥匙，口径不漂移。
+      - name: Pack updater artifact (.app.tar.gz)
+        run: |
+          set -euo pipefail
+          APP=apps/desktop/src-tauri/target/release/bundle/macos/P-Pass.app
+          [ -d "$APP" ] || { echo "FATAL: $APP 不存在——bundle 步骤必先行"; exit 1; }
+          tar czf /tmp/rel/P-Pass.app.tar.gz -C "$(dirname "$APP")" P-Pass.app
+          ls -la /tmp/rel/P-Pass.app.tar.gz
+
       - name: Signing status tag
         id: signtag
         run: |
@@ -306,6 +319,7 @@ jobs:
             /tmp/rel/ppass-macos-arm64.zip
             /tmp/rel/SHA256SUMS-macos-arm64
             /tmp/rel/P-Pass-macos-arm64.dmg
+            /tmp/rel/P-Pass.app.tar.gz
 
   windows-x64:
     name: "Windows x64 (未签名)"
@@ -564,11 +578,12 @@ jobs:
   #    因此下沉到独立的 upload job：它只做 download-artifact + gh upload，
   #    没有任何第三方构建 action。
   #
-  # ③ **manifest 组装/签名 + test 自动发布跟着 android 走。** 不是图省事：
-  #    `make-update-manifest.mjs` 的调用**结构上只吃 android 的 APK**（见
-  #    upload-android 里的 APK_ARGS——没 APK 就整个跳过，darwin/windows 条目
-  #    至今挂账）。它本来就不需要等桌面端。搬过来的直接效果是手机端约 6
-  #    分钟拿到包、自动更新立刻可验，不必等 win。
+  # ③ **android 先行 manifest + test 自动发布跟着 android 走。** 它本来就
+  #    不需要等桌面端，直接效果是手机端约 6 分钟拿到包、自动更新立刻可验。
+  #    这份先行 manifest 只含 android；darwin/windows 条目由末端
+  #    finalize-manifest 在三 lane 齐后重写进同一资产（UPD-03，2026-10-01
+  #    补齐——此前 darwin 缺「塞 lib/ 后的 .app.tar.gz」、windows 缺条目，
+  #    桌面 updater 因此永远答「无更新」）。
   #
   # ## notes 的写者只有两个（并发写竞争的处置）
   #
@@ -849,6 +864,7 @@ jobs:
           for f in \
             macos-arm64/ppass-macos-arm64.zip \
             macos-arm64/SHA256SUMS-macos-arm64 \
+            macos-arm64/P-Pass.app.tar.gz \
             macos-arm64/P-Pass-macos-arm64.dmg; do
             if [[ -e $f ]]; then ASSETS="$ASSETS $f"; fi
           done
@@ -921,6 +937,122 @@ jobs:
             -F "file=@$EXE" https://www.virustotal.com/api/v3/files \
             | jq -r .data.id)
           echo "vt_id=$ID" >> "$GITHUB_OUTPUT"
+
+  # ── 收口①: 全平台更新 manifest（UPD-03，2026-10-01）────────────────
+  # upload-android lane 早就传过一份**只有 android** 的 manifest（CI-04②③，
+  # 手机端不等桌面）。本 job 在三 lane 齐后把它**重写**成三平台全量版
+  #（gh --clobber 覆盖同名资产）。窗口期内桌面客户端查到的仍是
+  # android-only 清单、答「无更新」——发布不是瞬时闭包，窗口可接受，
+  # 桌面下一轮轮询即拿到全量清单。
+  # 签名统一在这里做（三平台同一处、同一把 UPDATE_SIGNING_KEY）——
+  # android lane 那份先行 manifest 的签名口径与此完全一致（同一个
+  # signer、同一个 key、同一个 --sig-dir 约定），重写不引入新口径。
+  finalize-manifest:
+    name: "组装全平台更新 manifest（UPD-03）"
+    needs: [create-draft, upload-android, upload-macos, upload-windows]
+    # DESK-05 同款容错：dispatch 单平台时其余 lane skipped，`needs` 里有
+    # skipped 且无 !cancelled() → 本 job 连带跳过（与 finalize-notes 同
+    # 一模式）。每步按 needs.*.result 门控，缺哪个平台就少哪个条目。
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.create-draft.outputs.tag }}
+      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
+    steps:
+      # checkout 是为了 tools/make-update-manifest.mjs。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download android artifact
+        if: needs.upload-android.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android
+          path: artifacts/android
+
+      - name: Download macos artifact
+        if: needs.upload-macos.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-arm64
+          path: artifacts/macos-arm64
+
+      - name: Download windows installer
+        if: needs.upload-windows.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-x64-installer
+          path: artifacts/windows-x64-installer
+
+      - name: Fetch release notes (manifest 的更新说明取自 release 正文)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$TAG" --json body -q .body > NOTES.md
+
+      - name: Compose full manifest (android + darwin + windows)
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [ -f artifacts/android/app-release.apk ]; then
+            ARGS+=(--asset android-arm64=artifacts/android/app-release.apk)
+          elif [ -f artifacts/android/app-release-unsigned.apk ]; then
+            ARGS+=(--asset android-arm64=artifacts/android/app-release-unsigned.apk)
+          fi
+          if [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ]; then
+            ARGS+=(--asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz)
+          fi
+          # shellcheck disable=SC2012 # glob 只匹配 ASCII 固定名，ls 足够
+          EXE=$(ls artifacts/windows-x64-installer/*-setup.exe 2>/dev/null | head -1 || true)
+          if [ -n "$EXE" ]; then
+            ARGS+=(--asset "windows-x86_64=$EXE")
+          fi
+          if [ "${#ARGS[@]}" -eq 0 ]; then
+            echo "无任何平台产物——跳过 manifest 组装"
+            exit 0
+          fi
+          # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板，
+          # 见 upload-android 里的完整注释）。
+          ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+          node tools/make-update-manifest.mjs \
+            --tag "$TAG" --notes NOTES.md \
+            --asset-base "$ASSET_BASE" \
+            "${ARGS[@]}"
+          mv manifest.json artifacts/manifest.json
+
+      - name: Sign manifest entries (gated)
+        if: env.HAS_UPDATE_KEY == 'true' && hashFiles('artifacts/manifest.json') != ''
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          # printf '%s' 逐字节还原（echo 的尾换行会让 tauri signer 报
+          # Invalid symbol——v0.2.1-test.1 实测踩坑，见 upload-android）。
+          printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
+          chmod 600 /tmp/ppass-update.key
+          mkdir -p /tmp/sigs
+          for f in \
+            artifacts/android/app-release.apk \
+            artifacts/android/app-release-unsigned.apk \
+            artifacts/macos-arm64/P-Pass.app.tar.gz \
+            artifacts/windows-x64-installer/*-setup.exe; do
+            [ -f "$f" ] || continue
+            # pin 版本，与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4 一致
+            npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" "$f"
+            cp "$f.sig" /tmp/sigs/
+          done
+          node tools/make-update-manifest.mjs \
+            --sign artifacts/manifest.json --sig-dir /tmp/sigs
+
+      - name: Upload manifest (覆盖 android-only 先行版)
+        if: hashFiles('artifacts/manifest.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          gh release upload "$TAG" manifest.json --clobber
+          echo "全平台 manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest.json"
 
   # ── 收口：补签名状态 + 资产 sha256（晚到不拖任何资产） ──
   finalize-notes:
