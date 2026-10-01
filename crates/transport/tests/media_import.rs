@@ -685,3 +685,82 @@ fn park_is_refused_while_a_peer_is_connected() {
         assert_eq!(puller.join().unwrap().unwrap(), bytes);
     });
 }
+
+/// #584: park must RELEASE the endpoint's UDP sockets, not just stop using
+/// them. iroh frees the sockets only once every `Endpoint` clone is dropped,
+/// and a retired endpoint whose shutdown pends on the peer's close ack leaks
+/// them (observed on Mate60 / Samsung: one v4+v6 pair per transfer round).
+/// Guard: after park, the retirement settles and the previously bound ports
+/// disappear from /proc/net/udp{,6}. Both are polled: the retire task runs on
+/// the provider's runtime, and iroh's own internal tasks drop their endpoint
+/// clones a beat after `Endpoint::close` resolves — a one-shot read would
+/// race that teardown.
+#[test]
+fn park_releases_the_endpoints_udp_sockets() {
+    let dir = tempdir().unwrap();
+    let bytes = photo_bytes(64 * 1024, 584);
+    let provider = AndroidBlobsProvider::new_loopback_with_gc(dir.path(), GC).unwrap();
+    let import = provider
+        .import_media(
+            None,
+            File::open(write_photo(dir.path(), "a.jpg", &bytes)).unwrap(),
+        )
+        .unwrap();
+    let ticket = provider.serve(import.hash).unwrap();
+    assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
+    let ports = provider.bound_socket_ports();
+    assert!(!ports.is_empty(), "a bound endpoint must hold UDP sockets");
+
+    assert!(provider.park(), "a finished pull must not block park");
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    while provider.pending_retirements() > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(
+        provider.pending_retirements(),
+        0,
+        "retire did not settle: the endpoint shutdown is stuck"
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let in_use = udp_ports_in_use();
+        let leaked: Vec<u16> = ports
+            .iter()
+            .copied()
+            .filter(|port| in_use.contains(port))
+            .collect();
+        if leaked.is_empty() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "ports {leaked:?} still bound after park: the endpoint's socket leaked"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// #584: UDP ports currently bound on this host, read from
+/// /proc/net/udp{,6} (hex `local_address` column).
+fn udp_ports_in_use() -> std::collections::HashSet<u16> {
+    let mut ports = std::collections::HashSet::new();
+    for path in ["/proc/net/udp", "/proc/net/udp6"] {
+        let Ok(table) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in table.lines().skip(1) {
+            let Some(local) = line.split_whitespace().nth(1) else {
+                continue;
+            };
+            let Some((_, port)) = local.rsplit_once(':') else {
+                continue;
+            };
+            if let Ok(port) = u16::from_str_radix(port, 16) {
+                ports.insert(port);
+            }
+        }
+    }
+    ports
+}

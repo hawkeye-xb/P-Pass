@@ -93,6 +93,9 @@ pub struct AndroidBlobsProvider {
     /// desktop's NodeId, set by the app from its pairing record. `None`
     /// (the initial state, and after unpair) refuses everyone.
     allowed_peer: AllowedPeer,
+    /// #584: retire tasks that have not finished shutting the old endpoint
+    /// down — a park only counts as settled once this drains back to zero.
+    retire_pending: Arc<AtomicU64>,
 }
 
 /// #547: shared by every endpoint generation's dispatch (NET-29 replacement
@@ -113,6 +116,12 @@ type EndpointConfigFactory = Box<dyn Fn(u64) -> TransportConfig + Send + Sync>;
 /// ticket is handed out (iroh recommends a timeout close to its net report
 /// timeout, so at least one net report has been attempted).
 pub const PROVIDER_ONLINE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// #584: upper bound on a retired endpoint's graceful router shutdown. iroh's
+/// own close-wait is bounded (~3 s worst case by QUIC config), but a
+/// backgrounded peer may never ack close frames — after this we close the
+/// endpoint directly and drop every reference so its UDP sockets are freed.
+const ENDPOINT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One bound provider endpoint and the router accepting `ALPN_BLOBS` on it.
 struct ProviderEndpoint {
@@ -549,6 +558,24 @@ impl StopAwareBlobsProtocol {
         }
     }
 
+    /// #584: close every currently open peer connection WITHOUT revoking the
+    /// handler (unlike [`Self::stop_active_fetch`], `accepting` stays as it
+    /// is). Used when the endpoint is parked: an idle desktop connection
+    /// holds a `Connection` clone, and iroh only frees the endpoint's UDP
+    /// sockets once every such handle is gone.
+    fn close_idle_connections(&self) {
+        let connections = {
+            let mut active = self
+                .active
+                .lock()
+                .expect("active provider connections lock");
+            std::mem::take(&mut *active)
+        };
+        for (_, connection) in connections {
+            connection.close(0u32.into(), b"provider endpoint parked");
+        }
+    }
+
     /// #547: close every live connection whose peer is not `allowed` (the
     /// paired desktop changed or was cleared).
     fn close_foreign(&self, allowed: Option<crate::NodeId>) {
@@ -798,6 +825,7 @@ impl AndroidBlobsProvider {
             stored: Mutex::default(),
             import_lock: Mutex::default(),
             allowed_peer,
+            retire_pending: Arc::default(),
         })
     }
 
@@ -930,6 +958,29 @@ impl AndroidBlobsProvider {
         self.current_endpoint().is_some()
     }
 
+    /// #584 test hook: retire tasks still shutting old endpoints down.
+    #[doc(hidden)]
+    pub fn pending_retirements(&self) -> u64 {
+        self.retire_pending.load(Ordering::SeqCst)
+    }
+
+    /// #584 test hook: the UDP ports the current endpoint is bound to
+    /// (empty while parked).
+    #[doc(hidden)]
+    pub fn bound_socket_ports(&self) -> Vec<u16> {
+        self.current_endpoint()
+            .map(|endpoint| {
+                endpoint
+                    .transport
+                    .endpoint()
+                    .bound_sockets()
+                    .iter()
+                    .map(|addr| addr.port())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// #434: close the endpoint while nothing is being served, so an idle
     /// process stops pinging relays. The store, held imports and the lease
     /// handler stay as they are; the next serve/register binds a fresh
@@ -1013,11 +1064,49 @@ impl AndroidBlobsProvider {
     /// Mark [endpoint] retired and shut its router down. Retired: the dispatch
     /// shutdown is a no-op, so this only closes that endpoint — never the
     /// shared store.
+    ///
+    /// #584: iroh releases the endpoint's UDP sockets only once EVERY clone
+    /// of the `Endpoint` is dropped, and `Router::shutdown` waits for the
+    /// peer's close acks — which a backgrounded desktop may never send
+    /// (observed on Mate60 / Samsung: one leaked v4+v6 socket pair per
+    /// transfer round). So: close idle peer connections up front (they hold
+    /// `Connection` handles that keep the endpoint alive), bound the
+    /// shutdown wait, close the endpoint directly on timeout, and drop the
+    /// last references inside the task. Any other lingering holder shows up
+    /// in the strong-count warning instead of leaking silently.
     fn retire(&self, endpoint: Arc<ProviderEndpoint>) {
         endpoint.retired.store(true, Ordering::SeqCst);
+        if let Some(handler) = self
+            .dispatch
+            .lock()
+            .expect("Android provider dispatch lock")
+            .clone()
+        {
+            handler.close_idle_connections();
+        }
         let router = endpoint.router.clone();
+        self.retire_pending.fetch_add(1, Ordering::SeqCst);
+        let pending = Arc::clone(&self.retire_pending);
         self.runtime.spawn(async move {
-            let _ = router.shutdown().await;
+            if tokio::time::timeout(ENDPOINT_SHUTDOWN_TIMEOUT, router.shutdown())
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    "#584: provider endpoint shutdown exceeded {ENDPOINT_SHUTDOWN_TIMEOUT:?}; closing it directly"
+                );
+            }
+            // Idempotent after Router::shutdown; covers the timed-out case.
+            endpoint.transport.close().await;
+            let holders = Arc::strong_count(&endpoint);
+            if holders > 1 {
+                tracing::warn!(
+                    "#584: retired provider endpoint still has {} other holder(s) at drop",
+                    holders - 1
+                );
+            }
+            drop(endpoint);
+            pending.fetch_sub(1, Ordering::SeqCst);
         });
     }
 

@@ -7,6 +7,8 @@
 //! interface, at which point these concrete types become enums.
 
 mod android_blobs;
+#[cfg(feature = "android-jni")]
+mod android_logcat;
 mod blobs;
 mod conninfo;
 mod iroh_impl;
