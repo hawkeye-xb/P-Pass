@@ -325,8 +325,14 @@ jobs:
     name: "Windows x64 (未签名)"
     runs-on: windows-latest
     timeout-minutes: 60
-    # CI-01②: 平台门控（同 macos job 语义）。
-    if: github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'windows') || (inputs.platforms == '' || inputs.platforms == 'all')
+    # UPD-04（2026-10-01 验收人拍板）：**Windows 不再进 tag 触发的默认构建**。
+    # 理由：验收人不发布 Windows 资产，但每次发版都要陪它等 ~30 分钟的
+    # vcpkg/system 长杆（实测 v0.7.2：macOS 13 分钟 vs Windows 30 分钟），
+    # 而桌面端 manifest 的收口此前挂在三 lane 齐后，于是「不发布的平台」
+    # 反过来卡住了「要发布的平台」。现在 tag push 恒跳过本 job；要 Windows
+    # 产物的场合走 Actions → Release → Run workflow，platforms 留空或含
+    # windows（dispatch 语义一字未变）。
+    if: github.event_name == 'workflow_dispatch' && (inputs.platforms == '' || inputs.platforms == 'all' || contains(format('{0},', inputs.platforms || 'all'), 'windows'))
     permissions:
       contents: read
       id-token: write
@@ -580,10 +586,10 @@ jobs:
   #
   # ③ **android 先行 manifest + test 自动发布跟着 android 走。** 它本来就
   #    不需要等桌面端，直接效果是手机端约 6 分钟拿到包、自动更新立刻可验。
-  #    这份先行 manifest 只含 android；darwin/windows 条目由末端
-  #    finalize-manifest 在三 lane 齐后重写进同一资产（UPD-03，2026-10-01
-  #    补齐——此前 darwin 缺「塞 lib/ 后的 .app.tar.gz」、windows 缺条目，
-  #    桌面 updater 因此永远答「无更新」）。
+  #    这份先行 manifest 只含 android；darwin 条目由 finalize-manifest 在
+  #    android + macos 两 lane 齐后重写进同一资产（UPD-03），windows 条目
+  #    再由 finalize-manifest-windows 追加（UPD-04——Windows 不参与桌面端
+  #    的收口，见该 job 注释与 windows-x64 的 if）。
   #
   # ## notes 的写者只有两个（并发写竞争的处置）
   #
@@ -938,18 +944,23 @@ jobs:
             | jq -r .data.id)
           echo "vt_id=$ID" >> "$GITHUB_OUTPUT"
 
-  # ── 收口①: 全平台更新 manifest（UPD-03，2026-10-01）────────────────
+  # ── 收口①: 桌面更新 manifest（android + darwin，UPD-03/UPD-04）──────
   # upload-android lane 早就传过一份**只有 android** 的 manifest（CI-04②③，
-  # 手机端不等桌面）。本 job 在三 lane 齐后把它**重写**成三平台全量版
-  #（gh --clobber 覆盖同名资产）。窗口期内桌面客户端查到的仍是
-  # android-only 清单、答「无更新」——发布不是瞬时闭包，窗口可接受，
-  # 桌面下一轮轮询即拿到全量清单。
+  # 手机端不等桌面）。本 job 在 android + macos 两条 lane 齐后把它**重写**
+  # 成 android + darwin 版（gh --clobber 覆盖同名资产）。
+  #
+  # UPD-04（2026-10-01 验收人拍板）：**`needs` 里不再挂 upload-windows**。
+  # 此前是三 lane 齐才收口，于是 Windows（v0.7.2 实测 30 分钟，是 macOS 的
+  # 两倍多）拖着桌面端拿不到 darwin 条目——「不发布的平台」卡住了「要发布
+  # 的平台」。现在桌面收口只等自己那两条 lane：macOS 一完（~13 分钟）桌面
+  # 客户端就能查到新版本。Windows 条目（若有该 lane 产物）由后面的
+  # finalize-manifest-windows 追加，晚到只影响 Windows 客户端自己。
   # 签名统一在这里做（三平台同一处、同一把 UPDATE_SIGNING_KEY）——
   # android lane 那份先行 manifest 的签名口径与此完全一致（同一个
   # signer、同一个 key、同一个 --sig-dir 约定），重写不引入新口径。
   finalize-manifest:
-    name: "组装全平台更新 manifest（UPD-03）"
-    needs: [create-draft, upload-android, upload-macos, upload-windows]
+    name: "组装桌面更新 manifest（android + darwin）"
+    needs: [create-draft, upload-android, upload-macos]
     # DESK-05 同款容错：dispatch 单平台时其余 lane skipped，`needs` 里有
     # skipped 且无 !cancelled() → 本 job 连带跳过（与 finalize-notes 同
     # 一模式）。每步按 needs.*.result 门控，缺哪个平台就少哪个条目。
@@ -978,19 +989,12 @@ jobs:
           name: macos-arm64
           path: artifacts/macos-arm64
 
-      - name: Download windows installer
-        if: needs.upload-windows.result == 'success'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: windows-x64-installer
-          path: artifacts/windows-x64-installer
-
       - name: Fetch release notes (manifest 的更新说明取自 release 正文)
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release view "$TAG" --json body -q .body > NOTES.md
 
-      - name: Compose full manifest (android + darwin + windows)
+      - name: Compose desktop manifest (android + darwin)
         run: |
           set -euo pipefail
           ARGS=()
@@ -1001,11 +1005,6 @@ jobs:
           fi
           if [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ]; then
             ARGS+=(--asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz)
-          fi
-          # shellcheck disable=SC2012 # glob 只匹配 ASCII 固定名，ls 足够
-          EXE=$(ls artifacts/windows-x64-installer/*-setup.exe 2>/dev/null | head -1 || true)
-          if [ -n "$EXE" ]; then
-            ARGS+=(--asset "windows-x86_64=$EXE")
           fi
           if [ "${#ARGS[@]}" -eq 0 ]; then
             echo "无任何平台产物——跳过 manifest 组装"
@@ -1034,8 +1033,7 @@ jobs:
           for f in \
             artifacts/android/app-release.apk \
             artifacts/android/app-release-unsigned.apk \
-            artifacts/macos-arm64/P-Pass.app.tar.gz \
-            artifacts/windows-x64-installer/*-setup.exe; do
+            artifacts/macos-arm64/P-Pass.app.tar.gz; do
             [ -f "$f" ] || continue
             # pin 版本，与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4 一致
             npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" "$f"
@@ -1046,6 +1044,119 @@ jobs:
 
       - name: Upload manifest (覆盖 android-only 先行版)
         if: hashFiles('artifacts/manifest.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd artifacts
+          gh release upload "$TAG" manifest.json --clobber
+          echo "桌面 manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest.json"
+
+  # ── 收口①b: 追加 Windows 条目（UPD-04，2026-10-01）──────────────────
+  # 桌面收口（finalize-manifest）只等 android + macos；Windows 条目在这里
+  # **追加**：本 job 只在 Windows lane 真跑出来时才生效，把三平台产物重新
+  # 汇总、统一签名，再 --clobber 覆盖同一份 manifest.json。
+  # 于是 Windows 晚到只推迟「Windows 客户端自己」看到更新，不再拖桌面端。
+  # 口径与 finalize-manifest 逐字同源（同一个 make-update-manifest.mjs、
+  # 同一把 UPDATE_SIGNING_KEY、同一个 pin 住的 signer），不是第二套标准。
+  #
+  # 不变量（防「静默降级」）：某个 lane 明明成功、产物却不在，则本 job 报红，
+  # 绝不用一份缺条目的清单覆盖桌面版已经写好的清单。
+  finalize-manifest-windows:
+    name: "追加 Windows 更新条目（UPD-04）"
+    needs: [create-draft, finalize-manifest, upload-android, upload-macos, upload-windows]
+    # Windows lane 没跑（tag push 恒跳过，见 windows-x64 的 if）或没成功 →
+    # 本条无意义，直接跳过；桌面端已经拿到自己要的那份清单。
+    if: ${{ !cancelled() && needs.upload-windows.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.create-draft.outputs.tag }}
+      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
+      ANDROID_OK: ${{ needs.upload-android.result == 'success' }}
+      MACOS_OK: ${{ needs.upload-macos.result == 'success' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download android artifact
+        if: needs.upload-android.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android
+          path: artifacts/android
+
+      - name: Download macos artifact
+        if: needs.upload-macos.result == 'success'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-arm64
+          path: artifacts/macos-arm64
+
+      - name: Download windows installer
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-x64-installer
+          path: artifacts/windows-x64-installer
+
+      - name: Fetch release notes (manifest 的更新说明取自 release 正文)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$TAG" --json body -q .body > NOTES.md
+
+      - name: Compose full manifest (android + darwin + windows)
+        run: |
+          set -euo pipefail
+          ARGS=()
+          if [ "$ANDROID_OK" = "true" ]; then
+            if [ -f artifacts/android/app-release.apk ]; then
+              ARGS+=(--asset android-arm64=artifacts/android/app-release.apk)
+            elif [ -f artifacts/android/app-release-unsigned.apk ]; then
+              ARGS+=(--asset android-arm64=artifacts/android/app-release-unsigned.apk)
+            else
+              echo "::error::Android lane 成功但 APK 不在——拒绝用缺条目的清单覆盖桌面版"; exit 1
+            fi
+          fi
+          if [ "$MACOS_OK" = "true" ]; then
+            [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ] \
+              || { echo "::error::macOS lane 成功但 .app.tar.gz 不在——拒绝用缺条目的清单覆盖桌面版"; exit 1; }
+            ARGS+=(--asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz)
+          fi
+          # shellcheck disable=SC2012 # glob 只匹配 ASCII 固定名，ls 足够
+          EXE=$(ls artifacts/windows-x64-installer/*-setup.exe 2>/dev/null | head -1 || true)
+          [ -n "$EXE" ] || { echo "::error::Windows lane 成功但 setup.exe 不在——拒绝写半份清单"; exit 1; }
+          ARGS+=(--asset "windows-x86_64=$EXE")
+          # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板）。
+          ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+          node tools/make-update-manifest.mjs \
+            --tag "$TAG" --notes NOTES.md \
+            --asset-base "$ASSET_BASE" \
+            "${ARGS[@]}"
+          mv manifest.json artifacts/manifest.json
+
+      - name: Sign manifest entries (gated)
+        if: env.HAS_UPDATE_KEY == 'true' && hashFiles('artifacts/manifest.json') != ''
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
+          chmod 600 /tmp/ppass-update.key
+          mkdir -p /tmp/sigs
+          for f in \
+            artifacts/android/app-release.apk \
+            artifacts/android/app-release-unsigned.apk \
+            artifacts/macos-arm64/P-Pass.app.tar.gz \
+            artifacts/windows-x64-installer/*-setup.exe; do
+            [ -f "$f" ] || continue
+            # pin 版本，与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4 一致
+            npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" "$f"
+            cp "$f.sig" /tmp/sigs/
+          done
+          node tools/make-update-manifest.mjs \
+            --sign artifacts/manifest.json --sig-dir /tmp/sigs
+
+      - name: Upload manifest (覆盖桌面版，补上 windows 条目)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
