@@ -785,6 +785,30 @@ fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// UPD-06 (#616)：把壳登记成**登录项**（幂等：只写 plist，不 bootstrap——见
+/// `platform::register_shell_agent` 的注释）。
+///
+/// **为什么必须在这里（启动时）做**，而不是"要换壳了再登记"：登录时 launchd 只加载
+/// **当时已经存在**的 plist。若只在换壳那一刻才写，这台机器永远等不到 launchd 接管
+/// 壳（`kickstart` 也就永远走不到），"壳是登录项"这条决定等于落空。启动时写一次，
+/// **下一次登录**起壳就归 launchd 管——从那时起 `kickstart` 才是可用的常态路径。
+///
+/// 只写文件、绝不 `bootout`/`bootstrap`：`RunAtLoad=true` 的 job 一被 bootstrap，
+/// launchd 会立刻再拉起一个实例（被 single-instance 顶掉），是一次无意义的起停。
+fn register_shell_login_item() {
+    use platform::PlatformAdapter as _;
+    if platform::adapter().shell_agent_label().is_none() {
+        return; // 本平台没有服务管理器
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    if let Err(e) = platform::adapter().register_shell_agent(&exe) {
+        // 开发构建 / 从 dmg 直跑（非稳定安装位置）被拒是**预期**的——不当错误刷屏。
+        eprintln!("#616: 壳登录项未登记（{e}）——非 /Applications 安装时属预期");
+    }
+}
+
 /// UPD-07 (#617)：把自己的身份（版本 + pid）报给 daemon —— owner 对账的**唯一**来源。
 ///
 /// 为什么必须由壳自己报：更新装完"磁盘已是新版、运行中的壳还是旧版"时，只有 daemon
@@ -1262,6 +1286,9 @@ pub fn run() {
             // App 内**的 daemon。放独立线程：不一致时它会动 launchctl
             // （bootout + bootstrap），不该堵启动。
             std::thread::spawn(reconcile_autostart_registration);
+            // UPD-06 (#616)：把壳登记成登录项（写 plist；下一次登录起由 launchd 接管，
+            // 从那时起 kickstart 才是可用路径）。独立线程：只做一次文件读写。
+            std::thread::spawn(register_shell_login_item);
             // UPD-07 (#617)：把自己（版本 + pid）报给 daemon —— owner 判断"壳旧不旧"
             // 的唯一来源。独立线程 + 重试，不阻塞启动，也不拖慢首屏。
             std::thread::spawn(announce_shell_identity);
@@ -2687,7 +2714,33 @@ mod tests {
         );
     }
 
-    /// UPD-06 (#616)：换壳的**闸门**测试。
+    /// UPD-06 (#616)：壳的**登录项**必须在**启动时**写（幂等）。不能等到"要换壳了"
+    /// 才写——登录时 launchd 只加载**当时已存在**的 plist，否则这台机器永远等不到
+    /// launchd 接管壳，`kickstart` 那条系统路径等于落空。
+    ///
+    /// 反证：把 setup 里那句 `std::thread::spawn(register_shell_login_item);` 删掉 → 红。
+    #[test]
+    fn setup_registers_the_shell_login_item() {
+        let src = include_str!("lib.rs");
+        assert!(
+            src.contains("std::thread::spawn(register_shell_login_item);"),
+            "启动时必须登记壳的登录项（否则 launchd 永远接管不到壳）"
+        );
+        let f = src
+            .find("fn register_shell_login_item()")
+            .expect("register_shell_login_item 缺失");
+        let body: String = src[f..].chars().take(1200).collect();
+        assert!(
+            body.contains("shell_agent_label()"),
+            "没有服务管理器的平台要直接跳过"
+        );
+        assert!(
+            !body.contains("bootstrap"),
+            "登记只写 plist、不 bootstrap（RunAtLoad 的 job 一 bootstrap 会立刻再拉一个实例）"
+        );
+    }
+
+    /// UPD-07 (#617)：换壳的**闸门**测试。
     ///
     /// 两条判据必须同时成立，少一条就会出事故：
     /// ① kickstart 之前必须比对"壳登记指向的可执行文件 == 我自己"——否则会把
