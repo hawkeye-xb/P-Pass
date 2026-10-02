@@ -154,6 +154,27 @@ pub(crate) fn shell_agent_plist(exec: &Path) -> String {
     )
 }
 
+/// 从 `launchctl print gui/<uid>/<label>` 的输出里取**正在跑的那个实例的 pid**。
+///
+/// 真机输出形状（2026-10-02 在本机 `ai.hermes.gateway` 上取的样本）：
+/// ```text
+/// gui/501/ai.hermes.gateway = {
+/// 	active count = 1
+/// 	state = running
+/// 	...
+/// 	pid = 992
+/// ```
+/// 没在跑时 launchd 打的是 `state = not running` **且不打 `pid =` 这一行**
+/// ⇒ 因此"取不到 pid"与"没在跑"是同一件事，`None` 就够了。
+///
+/// 纯函数：单测直接喂真机形状的样本，不依赖本机有没有装 P-Pass。
+pub(crate) fn launchd_job_pid(text: &str) -> Option<u32> {
+    text.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("pid = "))
+        .and_then(|v| v.trim().parse::<u32>().ok())
+}
+
 /// 从可执行文件路径推出它所属的 `.app`。
 ///
 /// `…/P-Pass.app/Contents/MacOS/p-pass-desktop` → `…/P-Pass.app`。
@@ -471,6 +492,20 @@ impl PlatformAdapter for MacosAdapter {
                 source: e,
             }),
         }
+    }
+
+    /// `launchctl print` 的输出里只有"正在跑"的实例会带 `pid = N`（见 `launchd_job_pid`
+    /// 的注释）。命令本身失败（没登记 / 域不对）也是 `None`——对调用方来说都是"不知道"。
+    fn shell_agent_running_pid(&self) -> Option<u32> {
+        let uid = current_uid().ok()?;
+        let out = Command::new("launchctl")
+            .args(["print", &format!("gui/{uid}/{SHELL_AGENT_LABEL}")])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        launchd_job_pid(&String::from_utf8_lossy(&out.stdout))
     }
 
     /// 磁盘上**安装包**的版本（`Contents/Info.plist` 的 `CFBundleShortVersionString`）。
