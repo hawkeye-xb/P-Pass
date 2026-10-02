@@ -140,6 +140,17 @@ msg_keys! {
     /// UPD-05 (#605): the update installed but `restart_app` itself failed —
     /// the user must quit and reopen the app by hand to finish.
     UI_UPDATE_RELAUNCH_FAILED => "ui.update_relaunch_failed",
+    /// UPD-06 (#616)：更新状态机/版本真相源的界面文案。
+    UI_UPDATE_CHECKING => "ui.update_checking",
+    UI_UPDATE_UP_TO_DATE => "ui.update_up_to_date",
+    UI_UPDATE_AVAILABLE_SHORT => "ui.update_available_short",
+    UI_UPDATE_DOWNLOADING => "ui.update_downloading",
+    UI_UPDATE_INSTALLING => "ui.update_installing",
+    UI_UPDATE_INSTALLED_STATE => "ui.update_installed_state",
+    UI_UPDATE_RETRY => "ui.update_retry",
+    UI_SHELL_RESTART_NEEDED => "ui.shell_restart_needed",
+    UI_RESTART_APP_NOW => "ui.restart_app_now",
+    UI_VERSION_MISMATCH => "ui.version_mismatch",
     // ── Desktop daemon restart after shell update (DAE-04) ───────────
     UI_RESTART_SERVICE => "ui.restart_service",
     UI_RESTART_SERVICE_BTN => "ui.restart_service_btn",
@@ -466,6 +477,16 @@ mod tests {
             UI_UPDATE_CHECK_FAILED,
             UI_UPDATE_FAILED_FILE_LOCKED,
             UI_UPDATE_RELAUNCH_FAILED,
+            UI_UPDATE_CHECKING,
+            UI_UPDATE_UP_TO_DATE,
+            UI_UPDATE_AVAILABLE_SHORT,
+            UI_UPDATE_DOWNLOADING,
+            UI_UPDATE_INSTALLING,
+            UI_UPDATE_INSTALLED_STATE,
+            UI_UPDATE_RETRY,
+            UI_SHELL_RESTART_NEEDED,
+            UI_RESTART_APP_NOW,
+            UI_VERSION_MISMATCH,
             UI_RESTART_SERVICE,
             UI_RESTART_SERVICE_BTN,
             UI_RESTARTING_SERVICE,
@@ -681,7 +702,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 286);
+        assert_eq!(ALL.len(), 296);
     }
 
     #[test]

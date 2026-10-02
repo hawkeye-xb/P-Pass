@@ -831,26 +831,37 @@ fn installed_app_version() -> Option<String> {
 #[tauri::command]
 fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
     use platform::PlatformAdapter as _;
+    // ⚠️ 闸门一：只有**launchd 自己拉起来的**这一份壳才走系统路径。
+    // `kickstart -k` 的 "kill the running instance" 只能杀服务管理器启动的进程；
+    // 从访达/Dock 打开的壳，launchd 手里没有它的 pid ⇒ `-k` 无物可杀 ⇒ kickstart
+    // 只会再拉一个实例，而 single-instance 会让新实例把焦点交回旧壳后自杀 ⇒
+    // 用户点"重启"什么都没发生（比不重启更糟）。所以非 launchd 实例直接走退化路径。
     if let Some(label) = platform::adapter().shell_agent_label() {
-        match std::env::current_exe() {
-            Ok(exe) => match platform::adapter().register_shell_agent(&exe) {
-                Ok(()) => match platform::adapter().shell_agent_registered_exec() {
-                    Ok(Some(registered)) if registered == exe => {
-                        match platform::adapter().kickstart_shell_agent() {
-                            Ok(pid) => {
-                                eprintln!("#616: kickstart {label} 拉起新壳 pid={pid}");
-                                return Ok(());
+        if !platform::adapter().shell_agent_started_us() {
+            eprintln!(
+                "#616: 本进程不是 {label} 拉起的（用户直接打开），kickstart 无物可杀，走壳自己重启"
+            );
+        } else {
+            match std::env::current_exe() {
+                Ok(exe) => match platform::adapter().register_shell_agent(&exe) {
+                    Ok(()) => match platform::adapter().shell_agent_registered_exec() {
+                        Ok(Some(registered)) if registered == exe => {
+                            match platform::adapter().kickstart_shell_agent() {
+                                Ok(pid) => {
+                                    eprintln!("#616: kickstart {label} 拉起新壳 pid={pid}");
+                                    return Ok(());
+                                }
+                                Err(e) => eprintln!("#616: kickstart 失败，退化 restart：{e}"),
                             }
-                            Err(e) => eprintln!("#616: kickstart 失败，退化 restart：{e}"),
                         }
-                    }
-                    other => eprintln!(
-                        "#616: 壳登记未指向当前可执行文件（{other:?}），不用 kickstart（会拉起另一份副本）"
-                    ),
+                        other => eprintln!(
+                            "#616: 壳登记未指向当前可执行文件（{other:?}），不用 kickstart（会拉起另一份副本）"
+                        ),
+                    },
+                    Err(e) => eprintln!("#616: 登记壳 LaunchAgent 失败，退化 restart：{e}"),
                 },
-                Err(e) => eprintln!("#616: 登记壳 LaunchAgent 失败，退化 restart：{e}"),
-            },
-            Err(e) => eprintln!("#616: 读不出当前可执行文件，退化 restart：{e}"),
+                Err(e) => eprintln!("#616: 读不出当前可执行文件，退化 restart：{e}"),
+            }
         }
     }
     tauri::process::restart(&app.env());
@@ -2622,14 +2633,19 @@ mod tests {
         );
         let app = include_str!("../../src/App.svelte");
         let install = app
-            .find("await update.downloadAndInstall();")
+            .find("await update.downloadAndInstall(")
             .expect("App.svelte 缺 downloadAndInstall");
-        let restart = app
-            .find("await invoke(\"restart_app\");")
-            .expect("App.svelte 缺 restart_app 调用");
+        // UPD-06 (#616)：换壳走 relaunch_shell（系统路径 kickstart 优先、壳自己
+        // 重启兜底），不再是裸的 restart_app——restart_app 现在只是它的退化分支。
+        // ⚠️ 比的是**调用点**：`relaunchShellNow` 的定义体在文件里更靠前，比定义
+        // 位置会得出反向结论（本测试第一版就是这么红的）。
+        let call = app
+            .find("await relaunchShellNow();")
+            .expect("App.svelte 缺换壳调用点");
+        assert!(call > install, "换壳必须在 downloadAndInstall 之后调用");
         assert!(
-            restart > install,
-            "restart_app 必须在 downloadAndInstall 之后调用"
+            app.contains("await invoke(\"relaunch_shell\");"),
+            "换壳必须调 relaunch_shell 命令"
         );
     }
 
@@ -2648,10 +2664,15 @@ mod tests {
         let start = src
             .find("fn relaunch_shell(app: tauri::AppHandle)")
             .expect("relaunch_shell 命令缺失");
-        let body = &src[start..(start + 2400).min(src.len())];
+        // 取函数体前 2000 个**字符**：按字节切会踩 UTF-8 边界（注释是中文）。
+        let body: String = src[start..].chars().take(2000).collect();
         assert!(
             body.contains("shell_agent_registered_exec"),
             "换壳前必须先读登记路径（闸门）"
+        );
+        assert!(
+            body.contains("shell_agent_started_us"),
+            "闸门：只有 launchd 自己拉起的壳才走 kickstart（否则 -k 无物可杀，只会再拉一个实例）"
         );
         assert!(
             body.contains("Ok(Some(registered)) if registered == exe"),

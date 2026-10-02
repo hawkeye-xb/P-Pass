@@ -480,6 +480,24 @@ pub trait PlatformAdapter: Send + Sync {
         None
     }
 
+    /// **本进程是不是服务管理器自己拉起来的那一份**（macOS = launchd 设的
+    /// `XPC_SERVICE_NAME` 等于我们的壳 label）。
+    ///
+    /// 为什么这条判据不可省（2026-10-02 读手册 + 推演所得）：
+    /// `kickstart -k` 的 "kill the running instance" 只能杀掉**服务管理器自己
+    /// 启动的**那个进程。用户从访达/Dock 直接打开的壳，launchd 手里没有它的
+    /// pid ⇒ `-k` 无物可杀 ⇒ kickstart 只会**再拉起第二个实例**；而壳装了
+    /// single-instance，第二个实例会把焦点交回旧壳后自杀 ⇒ 用户点"重启"什么
+    /// 都没发生（比不重启更糟：看起来像坏掉）。
+    ///
+    /// 所以：只有"我确实是 launchd 的那一份"时才走系统路径；否则走壳自己重启
+    /// （`tauri::process::restart`，0.7.5 起就在用、已在真机跑过）。
+    /// 让系统路径成为常态需要产品决定"壳是否由 launchd 拉起（登录项）"——
+    /// 已挂在 #616 的 PR 描述里等拍板，不在本卡悄悄改。
+    fn shell_agent_started_us(&self) -> bool {
+        false
+    }
+
     /// 把**当前壳**登记成"按需可启动"的服务（幂等）。
     ///
     /// 只在需要换壳前调用；**绝不 bootout 正在运行的实例**（那会当场把壳

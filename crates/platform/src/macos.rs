@@ -408,6 +408,14 @@ impl PlatformAdapter for MacosAdapter {
         Some(SHELL_AGENT_LABEL)
     }
 
+    /// launchd 拉起的进程会被设上 `XPC_SERVICE_NAME`（= job 的 Label）；从访达/
+    /// Dock 打开的不带这个值 ⇒ 只能走壳自己重启（见 trait 注释里的推演）。
+    fn shell_agent_started_us(&self) -> bool {
+        std::env::var("XPC_SERVICE_NAME")
+            .map(|v| v == SHELL_AGENT_LABEL)
+            .unwrap_or(false)
+    }
+
     /// 幂等登记。三条纪律：
     ///
     /// ① **绝不 `bootout`**：本函数会在壳**正在运行**时被调用，bootout 会当场
