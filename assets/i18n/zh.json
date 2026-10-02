@@ -227,7 +227,6 @@
   "ui.add_device_body": "点击后会放大显示一个配对二维码，用家人手机上的 P-Pass 扫一下；扫到后二维码自动收起，回到这里确认「允许加入」。",
   "ui.recent_activity": "最近动静",
   "ui.no_activity": "还没有活动记录。",
-  "ui.all_activity": "全部活动记录 ›",
   "ui.all_activity": "全部活动记录",
   "ui.removed_devices": "已移除设备 {n} 台",
   "ui.devices_footnote": "「经中继」= 直连不通时走加密中转，中继看不到照片内容，速度可能慢一些。移除设备会让它立刻失去访问权限——危险操作只放在电脑上。",
