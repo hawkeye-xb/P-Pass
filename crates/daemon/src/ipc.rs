@@ -659,6 +659,35 @@ impl IpcServer {
                 Ok(v) => Resp::ok(id, v),
                 Err(_) => internal(id),
             },
+            // UPD-07 (#617)：壳启动时自报身份（版本 + pid）——owner 对账的**唯一**来源。
+            // 老壳不来这一条 ⇒ 记录保持为空 ⇒ owner 一律不动（fail-safe，见
+            // `owner::decide` 的第一条）。
+            "shell.announce" => {
+                let Some(version) = req.params.get("version").and_then(|v| v.as_str()) else {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                let Some(pid) = req.params.get("pid").and_then(|v| v.as_u64()) else {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                let version = version.trim();
+                if version.is_empty() || pid == 0 || pid > u32::MAX as u64 {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                }
+                crate::owner::record_announce(crate::owner::ShellAnnounce {
+                    version: version.to_string(),
+                    pid: pid as u32,
+                });
+                Resp::ok(id, serde_json::json!({ "recorded": true }))
+            }
             // DAE-01: newest-wins takeover — the newer instance asks the
             // older one to exit; launchd (KeepAlive) relaunches it from
             // the new plist, which now points at the stable path.

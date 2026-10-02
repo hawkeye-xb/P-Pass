@@ -518,6 +518,17 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// **服务管理器眼里正在跑的壳**的 pid（`None` = 没在跑 / 没登记 / 本平台没有）。
+    ///
+    /// 为什么需要它（UPD-07 #617）：owner（daemon）在动手换壳前，必须先确认
+    /// "壳登记里的那个实例**就是用户现在用的这一把**" —— `kickstart -k` 只杀得到
+    /// 服务管理器自己启动的进程；pid 对不上（壳是用户手动打开的、或登记里的实例
+    /// 已经死了）⇒ kickstart 只会再拉起一个实例、被 single-instance 顶掉 ⇒
+    /// 用户点"重启"看起来什么都没发生。**宁可不动，也不要制造这种假动作。**
+    fn shell_agent_running_pid(&self) -> Option<u32> {
+        None
+    }
+
     /// 让服务管理器**杀掉并重启**壳，返回新实例 pid。
     /// 调用方：`shell_agent_label().is_some()` 且登记路径 == 当前可执行文件时才用。
     fn kickstart_shell_agent(&self) -> Result<u32> {
@@ -909,6 +920,24 @@ mod tests {
             bundle_root(Path::new("/Applications/P-Pass.app/Contents/MacOS")),
             None
         );
+    }
+
+    /// UPD-07 (#617)：owner 换壳前必须先确认"登记里的实例就是用户现在这把壳"。
+    /// 判据取自 `launchctl print` 的真实输出形状（样本来自本机 `ai.hermes.gateway`）。
+    /// 反证：把解析改成"取任意含数字的行"→ 下面「没在跑」那条会读到别的数字而红。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launchd_job_pid_only_reads_the_running_instances_pid_line() {
+        use macos::launchd_job_pid;
+        // 正在跑（真机样本，pid 换成了假数）
+        let running = "gui/501/ai.hermes.gateway = {\n\tactive count = 1\n\tpath = /Users/x/Library/LaunchAgents/ai.hermes.gateway.plist\n\ttype = LaunchAgent\n\tstate = running\n\n\tprogram = /usr/bin/python\n\tlast exit code = 0\n\tpid = 992\n}\n";
+        assert_eq!(launchd_job_pid(running), Some(992));
+        // 没在跑：launchd 不打 pid 行（真机样本）
+        let not_running = "gui/501/com.apple.SafariHistoryServiceAgent = {\n\tactive count = 0\n\tstate = not running\n\n\tprogram = /usr/libexec/SafariHistoryServiceAgent\n\tlast exit code = 78\n}\n";
+        assert_eq!(launchd_job_pid(not_running), None);
+        // 别的行里出现的数字不许被当成 pid
+        assert_eq!(launchd_job_pid("\tactive count = 123\n"), None);
+        assert_eq!(launchd_job_pid(""), None);
     }
 
     /// 【DESK-42 #604】闸门判据：只放行稳定安装位置。

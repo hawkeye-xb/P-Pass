@@ -666,7 +666,8 @@ fn self_heal_daemon() -> Result<bool, String> {
     if !self_heal_allowed(&platform::adapter().data_dir()) {
         return Ok(false);
     }
-    spawn_bundled_daemon_oneshot().map(|()| true)
+    // UPD-07 (#617)：自愈与"更新"无关 ⇒ **不带** `--post-update`（不带 = owner 不开火）。
+    spawn_bundled_daemon_oneshot(false).map(|()| true)
 }
 
 /// Stop the resident service the way a user means it: unregister the
@@ -751,12 +752,16 @@ fn resume_daemon_after_update() -> Result<bool, String> {
     if !update_resume_allowed(&platform::adapter().data_dir()) {
         return Ok(false);
     }
-    spawn_bundled_daemon_oneshot().map(|()| true)
+    spawn_bundled_daemon_oneshot(true).map(|()| true)
 }
 
 /// 一次性 spawn 同目录下的内置 daemon（不注册 autostart）。更新后恢复和
 /// 崩溃自愈共用；各自的判据在调用方。
-fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
+///
+/// `post_update`（UPD-07 #617）：这一份是**被更新流程拉起的**吗？只有它会带上
+/// `--post-update`，从而允许 daemon 在更新窗口内换掉旧壳（见 `crates/daemon/src/owner.rs`）。
+/// 自愈/用户点「启动服务」绝不带——那两件事与"更新"无关，不该让 owner 开火。
+fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sidecar = exe
         .parent()
@@ -768,13 +773,40 @@ fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
             &[("path", &sidecar.display())],
         ));
     }
-    std::process::Command::new(&sidecar)
-        .stdout(std::process::Stdio::null())
+    let mut cmd = std::process::Command::new(&sidecar);
+    if post_update {
+        cmd.arg("--post-update");
+    }
+    cmd.stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null())
         .spawn()
         .map_err(|e| ipc::ui_err("ui.err_respawn", &[("err", &e)]))?;
     Ok(())
+}
+
+/// UPD-07 (#617)：把自己的身份（版本 + pid）报给 daemon —— owner 对账的**唯一**来源。
+///
+/// 为什么必须由壳自己报：更新装完"磁盘已是新版、运行中的壳还是旧版"时，只有 daemon
+/// （每跳必被换新）能当 owner；而它要判断"壳旧不旧"，必须有**编译进这只壳的版本**——
+/// 去读磁盘上的 `Info.plist` 只会读到新版，读不出壳自己的版本。
+///
+/// 老壳不来这一条 ⇒ daemon 记录为空 ⇒ 它什么都不做（fail-safe）。重试几轮是因为
+/// 启动时序：登录项拉起的壳可能比常驻服务先就绪。
+fn announce_shell_identity() {
+    let params = serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "pid": std::process::id(),
+    });
+    for _ in 0..30 {
+        if let Ok(handle) = ipc::DaemonHandle::discover() {
+            if handle.call("shell.announce", params.clone()).is_ok() {
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    eprintln!("#617: 壳身份自报失败（daemon 一直不可达）——owner 那条换壳路会按 fail-safe 不动");
 }
 
 /// UPD-05 (#605)：更新装完后重启桌面壳自己。
@@ -1230,6 +1262,9 @@ pub fn run() {
             // App 内**的 daemon。放独立线程：不一致时它会动 launchctl
             // （bootout + bootstrap），不该堵启动。
             std::thread::spawn(reconcile_autostart_registration);
+            // UPD-07 (#617)：把自己（版本 + pid）报给 daemon —— owner 判断"壳旧不旧"
+            // 的唯一来源。独立线程 + 重试，不阻塞启动，也不拖慢首屏。
+            std::thread::spawn(announce_shell_identity);
             // I18N-03 (#492)：文案取自 assets/i18n（见 TRAY_ITEMS）；前端
             // 报上语言后 set_tray_locale 会再改一次字。
             let locale = tray_locale(&std::env::var("LANG").unwrap_or_default());
@@ -2607,12 +2642,15 @@ mod tests {
             .find("if !update_resume_allowed(&platform::adapter().data_dir()) {")
             .expect("resume_daemon_after_update 必须先读盘上的「用户主动停止」标记");
         let spawn = resume
-            .find("spawn_bundled_daemon_oneshot()")
-            .expect("resume_daemon_after_update 走共用 spawn");
+            .find("spawn_bundled_daemon_oneshot(true)")
+            .expect("resume_daemon_after_update 走共用 spawn 且必须带 post_update=true（UPD-07 #617：只有更新拉起的 daemon 才允许换壳）");
         assert!(gate < spawn, "判据必须在 spawn 之前");
         let heal = body("self_heal_daemon");
         assert!(heal.contains("self_heal_allowed(&platform::adapter().data_dir())"));
-        assert!(heal.contains("spawn_bundled_daemon_oneshot()"));
+        assert!(
+            heal.contains("spawn_bundled_daemon_oneshot(false)"),
+            "自愈与更新无关，不许带 post_update（否则 owner 会在非更新场合去换壳）"
+        );
         assert!(
             !heal.contains("resume_daemon_after_update()"),
             "自愈不该绕进更新路径的判据"

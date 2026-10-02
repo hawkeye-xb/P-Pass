@@ -16,6 +16,7 @@ pub mod flow_delivery;
 pub mod inbox;
 pub mod ipc;
 pub mod log_guard;
+pub mod owner;
 pub mod pairing;
 pub mod presence;
 pub mod query;
