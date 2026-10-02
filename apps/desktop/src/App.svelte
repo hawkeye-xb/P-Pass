@@ -1165,7 +1165,7 @@
           photosNext = r.next ?? null;
         })
         .catch(() => {
-          if (gen === photosGen) photosNext = null;
+          if (gen !== photosGen) photosNext = null;
         })
         .finally(() => {
           photosLoading = false;
@@ -1486,7 +1486,7 @@
                       <li class="flex items-center gap-[10px] border-b border-divider py-[10px] last:border-b-0">
                         <!-- T-091: 右侧接 device.watermarks 真数据（设计稿总览
                              水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
-                             连接态（direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
+                             连接态（direct=safe / relay=wait / offline·unknown=idle）。 -->
                         <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
                         <span class="flex-1 text-[15px] font-semibold">{d.name}</span>
                         <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
@@ -1648,7 +1648,7 @@
                       ><FolderOpenIcon size={16} /></Button>
                       <Button
                         variant="link"
-                        class="h-auto min-h-0 rounded-none border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
+                        class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
                         onclick={() => revoke(d.node_id, d.name)}
                       >{t("ui.remove")}</Button>
                     </li>
@@ -1958,7 +1958,7 @@
       <footer class="version-footer">
         <span>P-Pass v{displayVersion}</span>
         <!-- DESK-02①: 环境显式徽标——prerelease 构建琥珀小徽标（「测试版」），
-             环境在 UI 上一眼可辨，不靠用户读懂 -test 后缀；正式构建只显示版本号。 -->
+             环境在 UI 上一眼可辨；正式构建只显示版本号。 -->
         {#if isTestBuild}
           <span class="env-badge">{t("ui.env_badge_test")}</span>
         {/if}
@@ -2102,6 +2102,7 @@
 
 
 
+
   h3 {
     font-size: 15px;
     font-weight: 600;
@@ -2112,13 +2113,22 @@
 
 
   
+
+
+
+
+
+
+  
   
 
 
 
 
+
   
-  
+
+
 
   /* 2026-08-13：列表本身内部滚动，不是靠整个右边内容区变高再滚动
      （用户实测反馈：应该是表格内滚动，游标加载，不是整个右边区域
@@ -2139,17 +2149,18 @@
 
 
 
-  
 
 
   
-  
+
+
 
   
-  
+
+
 
   
-  
+
 
 
   /* DESK-15：原生 button/.primary/.link-more 视觉规则已删——全部收编进
@@ -2290,7 +2301,7 @@
 
 
 
-  
+
 
   /* 大图 modal：图片区域限高、object-contain 保完整（大图看全貌优先）；
      弹窗本身加宽已经在调用处用 Dialog 的 class="w-[min(88vw,880px)]" 传入。 */
