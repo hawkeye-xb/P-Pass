@@ -1045,7 +1045,19 @@
       } catch (e) {
         console.warn("[updater] resume_daemon_after_update failed after a successful install:", e);
       }
-      flashMessage(t("ui.update_installed"));
+      // UPD-05 (#605)：装完由用户点「好」后立刻重启外壳——旧版只 toast
+      // 「请重启应用」，用户不重启就一直跑旧外壳：resume 已从新版包拉起
+      // daemon → 页脚（显示 daemon 版本）先跳新版，外壳仍是旧版 →
+      // 「后台版本不对」+ 下次检查再弹同一更新（0.7.3↔0.7.4 真机现场）。
+      // 重启后新外壳启动即跑 #604 的自启对账，daemon 已是新版，版本闭环。
+      // restart_app 不返回（进程被替换）；invoke 报错才退回手动重启指引。
+      await messageDialog(t("ui.update_installed"), { title: "P-Pass", kind: "info" });
+      try {
+        await invoke("restart_app");
+      } catch (restartErr) {
+        console.warn("[updater] restart_app failed after a successful install:", restartErr);
+        flashMessage(t("ui.update_relaunch_failed"), "warning");
+      }
     } catch (e) {
       // The daemon we paused above is still down — bring it back so a
       // failed update doesn't also leave backups silently stopped.

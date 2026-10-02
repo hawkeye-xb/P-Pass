@@ -777,6 +777,32 @@ fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
     Ok(())
 }
 
+/// UPD-05 (#605)：更新装完后重启桌面壳自己。
+///
+/// 为什么必须重启：tauri-plugin-updater 的 downloadAndInstall() 只替换
+/// 磁盘上的 .app，**正在运行的外壳进程仍是旧版**——0.7.3→0.7.4 真机现场：
+/// 装完后 resume_daemon_after_update 从新版包拉起新 daemon，页脚
+/// displayVersion = status?.version || version 先跳 0.7.4（显示的是
+/// daemon 版本），外壳二进制还是 0.7.3，于是设置页再弹同一个更新，
+/// 用户以为「版本不对」去重启后台，又跳回 0.7.3——鬼打墙。装完重启
+/// 外壳后，新外壳启动即跑 #604 的自启对账，daemon 已是新版，版本闭环。
+///
+/// 为什么不用 `app.restart()`：它走事件循环（ExitRequested +
+/// RESTART_EXIT_CODE 约定），在 macOS 上有两个与我们配置雷同
+/// （tray 常驻 + 关窗 prevent_close + single-instance）的未结上游
+/// issue——tauri#11392、tauri#13923（tauri 2.5.1 仍复现：只关不拉）。
+/// `tauri::process::restart` 不走事件循环：直接 spawn 当前二进制 +
+/// 立即 exit(0)，与官方 plugin-process 的 relaunch() 是同一底层调用，
+/// 零新依赖（不为这一个命令引入 plugin-process 整 crate）。
+///
+/// Windows 说明：NSIS 静默安装在 downloadAndInstall() 中途就杀掉调用
+/// 进程（见 App.svelte 的 W1 注释），本命令在 Windows 实际走不到——
+/// 装完由安装器自己拉起新外壳。本命令服务 macOS（#605 的事发平台）。
+#[tauri::command]
+fn restart_app(app: tauri::AppHandle) {
+    tauri::process::restart(&app.env());
+}
+
 /// DAE-04: 桌面壳更新后手动重启后台服务——杀掉当前运行的旧 daemon 进程，
 /// 靠 launchd KeepAlive（SuccessfulExit=false，crates/platform/src/macos.rs
 /// 注释：崩溃/被杀照样复活）自动拉起磁盘上已是新版本的同一个文件。
@@ -1122,6 +1148,7 @@ pub fn run() {
             stop_daemon,
             pause_daemon_for_update,
             resume_daemon_after_update,
+            restart_app,
             self_heal_daemon,
             restart_daemon_process,
             export_logs_bundle,
@@ -2523,6 +2550,31 @@ mod tests {
         assert!(
             !heal.contains("resume_daemon_after_update()"),
             "自愈不该绕进更新路径的判据"
+        );
+    }
+    /// UPD-05 (#605)：restart_app 命令已注册，且 App.svelte 在
+    /// downloadAndInstall 成功路径里调用它（装完重启外壳）。
+    #[test]
+    fn restart_app_is_registered_and_called_after_install() {
+        let src = include_str!("lib.rs");
+        assert!(
+            src.contains("fn restart_app(app: tauri::AppHandle)"),
+            "restart_app 命令缺失"
+        );
+        assert!(
+            src.contains("restart_app,"),
+            "restart_app 未注册进 invoke_handler"
+        );
+        let app = include_str!("../../src/App.svelte");
+        let install = app
+            .find("await update.downloadAndInstall();")
+            .expect("App.svelte 缺 downloadAndInstall");
+        let restart = app
+            .find("await invoke(\"restart_app\");")
+            .expect("App.svelte 缺 restart_app 调用");
+        assert!(
+            restart > install,
+            "restart_app 必须在 downloadAndInstall 之后调用"
         );
     }
 }
