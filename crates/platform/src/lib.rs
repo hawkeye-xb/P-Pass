@@ -458,6 +458,54 @@ pub trait PlatformAdapter: Send + Sync {
     /// 「进程本来就没在跑」返回 [`KillOutcome::NotRunning`]，**不是 `Err`**。
     /// 真失败（权限不足、被杀软拦、参数错）才是 `Err`——判据见各平台实现。
     fn kill_daemon_process(&self) -> Result<KillOutcome>;
+
+    // ── UPD-06 (#616)：让**系统**负责"重启桌面壳" ─────────────────────
+    //
+    // 背景：更新装完磁盘上已是新版，但正在跑的壳仍是旧版，而**壳不能原地
+    // 换代码**。0.7.5 的解法是壳自己 `restart_app`（spawn 自己 + exit），
+    // 那要在被替换的进程里自证没竞态（托盘常驻 + single-instance）。
+    //
+    // 更好的一层：把"杀 + 拉"交给系统的服务管理器（macOS = launchd），
+    // **杀和拉都不在壳里发生**，single-instance 竞态在架构上消失，而且
+    // 系统会告诉我们新实例的 pid（可验证）。
+    //
+    // ⚠️ 登记 ≠ 守卫：壳的登记**只解决"系统知道怎么启动它"**，因此
+    // 绝不挂 KeepAlive、`RunAtLoad=false` —— 挂上 KeepAlive 用户就再也
+    // 退不掉 App（托盘「退出 App」会被立刻复活）。守卫（崩溃自恢复）是
+    // daemon 那一侧的事。
+
+    /// 本平台给"桌面壳"用的服务标签（`None` = 本平台没有这个能力，调用方
+    /// 降级回壳自己重启 / 显式重启）。
+    fn shell_agent_label(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// 把**当前壳**登记成"按需可启动"的服务（幂等）。
+    ///
+    /// 只在需要换壳前调用；**绝不 bootout 正在运行的实例**（那会当场把壳
+    /// 杀掉，而不是"等需要时再重启"）。已登记且指向同一个可执行文件 = 无操作。
+    fn register_shell_agent(&self, exec: &std::path::Path) -> Result<()> {
+        let _ = exec;
+        Err(PlatformError::Failed {
+            action: "register_shell_agent",
+            detail: "此平台没有服务管理器，壳由调用方自行重启".into(),
+        })
+    }
+
+    /// 已登记的壳服务指向哪个可执行文件（`None` = 没登记）。
+    /// 调用方**必须先比对这个路径**再 kickstart，否则可能拉起另一份副本。
+    fn shell_agent_registered_exec(&self) -> Result<Option<std::path::PathBuf>> {
+        Ok(None)
+    }
+
+    /// 让服务管理器**杀掉并重启**壳，返回新实例 pid。
+    /// 调用方：`shell_agent_label().is_some()` 且登记路径 == 当前可执行文件时才用。
+    fn kickstart_shell_agent(&self) -> Result<u32> {
+        Err(PlatformError::Failed {
+            action: "kickstart_shell_agent",
+            detail: "此平台没有服务管理器".into(),
+        })
+    }
 }
 
 /// The adapter for the current platform.
@@ -766,6 +814,39 @@ mod tests {
             "<key>NotProgramArguments</key>",
         );
         assert_eq!(macos::plist_program_argument(&broken), None);
+    }
+
+    /// UPD-06 (#616)：壳的登记**不是**守卫。
+    ///
+    /// 把壳登记进 launchd 的唯一目的，是让 `kickstart -k` 有东西可控（由**系统**
+    /// 杀掉并按磁盘上的新文件重新拉起）。因此 plist 里**不许出现 `KeepAlive`**——
+    /// 挂上它用户就再也退不掉 App（托盘「退出 App」会被立刻复活）；`RunAtLoad`
+    /// 也必须是 `false`（登记 ≠ 开机自启）。
+    ///
+    /// 反证：把 `KeepAlive` 段加回去、或把 `RunAtLoad` 改成 `<true/>` → 本测试必须红。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn shell_agent_is_registrable_but_never_guarded() {
+        let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/p-pass-desktop");
+        let plist = macos::shell_agent_plist(exec);
+        assert!(
+            !plist.contains("KeepAlive"),
+            "壳的登记不许挂 KeepAlive（用户会退不掉 App）: {plist}"
+        );
+        assert!(
+            plist.contains("<key>RunAtLoad</key><false/>"),
+            "登记不等于开机自启: {plist}"
+        );
+        assert_eq!(
+            macos::plist_program_argument(&plist),
+            Some(exec.display().to_string()),
+            "ProgramArguments 必须指向壳自己的可执行文件，kickstart 才有意义"
+        );
+        // 能力要真的暴露出来：调用方靠它决定走"系统重启"还是退化到自己重启。
+        assert_eq!(
+            PlatformAdapter::shell_agent_label(&macos::MacosAdapter::new()),
+            Some("com.p-pass.shell")
+        );
     }
 
     /// 【DESK-42 #604】闸门判据：只放行稳定安装位置。
