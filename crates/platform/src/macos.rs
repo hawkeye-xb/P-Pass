@@ -123,8 +123,13 @@ fn current_uid() -> Result<String> {
 ///
 /// ⚠️ **不许出现 `KeepAlive`**：那是 daemon 的语义（崩溃/被杀复活）。壳挂上它
 /// 就等于**用户再也退不掉 App**——托盘「退出 App」会被 launchd 立刻复活。
-/// `RunAtLoad=false` 同理：登记不代表开机自启（要不要开机自启 GUI 是另一个
-/// 产品决定，不许被这次改动顺手带上）。
+///
+/// `RunAtLoad=true`（2026-10-02 验收人拍板）：壳是**登录项**——开机/登录后自己起来
+/// 常驻托盘。这么定的理由（第一性原理）：让"启动壳"归系统的服务管理器管，而不是
+/// 让进程自己换自己（后者要在被替换的进程里自证无竞态，且 `kickstart -k` 只能杀
+/// 服务管理器启动的进程——用户手动打开的壳它杀不动）。没有 `KeepAlive` ⇒ 用户
+/// 仍然可以完全退出，只是下次登录会再起来；macOS 13+ 也会在「登录项」里显示它、
+/// 允许用户自己关掉。
 ///
 /// 日志落到 `~/Library/Logs`：由 launchd 拉起的壳看不到终端，出问题时只能靠
 /// 这两个文件（"launchd 拉起的 GUI 观感是否正常"这条风险就是靠它们取证）。
@@ -137,7 +142,7 @@ pub(crate) fn shell_agent_plist(exec: &Path) -> String {
     <key>Label</key><string>{SHELL_AGENT_LABEL}</string>
     <key>ProgramArguments</key>
     <array><string>{}</string></array>
-    <key>RunAtLoad</key><false/>
+    <key>RunAtLoad</key><true/>
     <key>StandardOutPath</key><string>{}/Library/Logs/p-pass-shell.log</string>
     <key>StandardErrorPath</key><string>{}/Library/Logs/p-pass-shell.err</string>
 </dict>
@@ -416,14 +421,21 @@ impl PlatformAdapter for MacosAdapter {
             .unwrap_or(false)
     }
 
-    /// 幂等登记。三条纪律：
+    /// 幂等写登录项（**只写文件，不 bootstrap**）。
     ///
+    /// 为什么不在登记时顺手 `bootstrap`：`RunAtLoad=true` 的 job 一旦被 bootstrap，
+    /// launchd 会**立刻**再拉起一个实例，而壳装了 single-instance ⇒ 新实例把焦点
+    /// 交回当前这把壳后自杀（一次无意义的起停，还可能闪一下）。所以这里只写文件：
+    /// 登录时 launchd 自己会加载 `~/Library/LaunchAgents` 下的 plist 并按
+    /// `RunAtLoad` 启动。于是"这把壳归 launchd 管"从**下一次登录**起成立，
+    /// `kickstart` 也从那时起可用；当前这一次（用户手动打开的）由调用方的闸门
+    /// 判定并退化到壳自重启。
+    ///
+    /// 三条纪律：
     /// ① **绝不 `bootout`**：本函数会在壳**正在运行**时被调用，bootout 会当场
-    ///    把壳杀掉——那是"换壳"该做的事，不是"确保登记"该做的。因此"改了内容
-    ///    要重新加载"这件事对壳不成立：壳的可执行文件在 `/Applications` 下跨
-    ///    更新**路径不变**，plist 内容天然稳定，写一次就够。
+    ///    把壳杀掉——那是"换壳"该做的事，不是"写登录项"该做的。
     /// ② 路径纪律同 daemon（`/target/`、`/tmp/`、非稳定安装位置一律拒绝）。
-    /// ③ 只在 `launchctl print` 说**没加载**时才 `bootstrap`；已加载直接返回。
+    /// ③ 内容一致就一个字都不写（幂等）。
     fn register_shell_agent(&self, exec: &Path) -> Result<()> {
         let exec_str = exec.display().to_string();
         if exec_str.contains("/target/") || exec_str.contains("/tmp/") {
@@ -445,26 +457,6 @@ impl PlatformAdapter for MacosAdapter {
                 std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
             }
             std::fs::write(&path, want).map_err(io_err("write shell LaunchAgent plist"))?;
-        }
-        let uid = current_uid()?;
-        let loaded = Command::new("launchctl")
-            .args(["print", &format!("gui/{uid}/{SHELL_AGENT_LABEL}")])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if loaded {
-            return Ok(());
-        }
-        let out = Command::new("launchctl")
-            .args(["bootstrap", &format!("gui/{uid}")])
-            .arg(&path)
-            .output()
-            .map_err(io_err("launchctl bootstrap (shell)"))?;
-        if !out.status.success() {
-            return Err(PlatformError::Failed {
-                action: "launchctl bootstrap (shell)",
-                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
         }
         Ok(())
     }

@@ -469,10 +469,12 @@ pub trait PlatformAdapter: Send + Sync {
     // **杀和拉都不在壳里发生**，single-instance 竞态在架构上消失，而且
     // 系统会告诉我们新实例的 pid（可验证）。
     //
-    // ⚠️ 登记 ≠ 守卫：壳的登记**只解决"系统知道怎么启动它"**，因此
-    // 绝不挂 KeepAlive、`RunAtLoad=false` —— 挂上 KeepAlive 用户就再也
-    // 退不掉 App（托盘「退出 App」会被立刻复活）。守卫（崩溃自恢复）是
-    // daemon 那一侧的事。
+    // ⚠️ 登记 ≠ 守卫：壳的登记**只解决"系统知道怎么启动它"**，因此**绝不挂
+    // KeepAlive** —— 挂上 KeepAlive 用户就再也退不掉 App（托盘「退出 App」
+    // 会被立刻复活）。守卫（崩溃自恢复）是 daemon 那一侧的事。
+    // 壳是**登录项**（`RunAtLoad=true`，2026-10-02 验收人拍板）：登录时由 launchd
+    // 拉起常驻托盘 —— 目的就是让"启动/重启壳"归系统管，而不是让进程自己换自己。
+    // 没有 KeepAlive ⇒ 用户仍可完全退出，只是下次登录会再起来。
 
     /// 本平台给"桌面壳"用的服务标签（`None` = 本平台没有这个能力，调用方
     /// 降级回壳自己重启 / 显式重启）。
@@ -849,17 +851,18 @@ mod tests {
         assert_eq!(macos::plist_program_argument(&broken), None);
     }
 
-    /// UPD-06 (#616)：壳的登记**不是**守卫。
+    /// UPD-06 (#616)：壳是**登录项**，但**不是守卫**。
     ///
-    /// 把壳登记进 launchd 的唯一目的，是让 `kickstart -k` 有东西可控（由**系统**
-    /// 杀掉并按磁盘上的新文件重新拉起）。因此 plist 里**不许出现 `KeepAlive`**——
-    /// 挂上它用户就再也退不掉 App（托盘「退出 App」会被立刻复活）；`RunAtLoad`
-    /// 也必须是 `false`（登记 ≠ 开机自启）。
+    /// 两件事必须同时成立：
+    /// ① `RunAtLoad=true` —— 登录时由 launchd 拉起（"启动壳"归系统管；也正因为
+    ///    如此 `kickstart -k` 才有东西可杀，见 `shell_agent_started_us`）；
+    /// ② **不许出现 `KeepAlive`** —— 挂上它用户就再也退不掉 App（托盘「退出 App」
+    ///    会被立刻复活）。用户可以完全退出，只是下次登录会再起来。
     ///
-    /// 反证：把 `KeepAlive` 段加回去、或把 `RunAtLoad` 改成 `<true/>` → 本测试必须红。
+    /// 反证：把 `KeepAlive` 段加回去、或把 `RunAtLoad` 改成 `<false/>` → 本测试必须红。
     #[cfg(target_os = "macos")]
     #[test]
-    fn shell_agent_is_registrable_but_never_guarded() {
+    fn shell_agent_is_a_login_item_but_never_guarded() {
         let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/p-pass-desktop");
         let plist = macos::shell_agent_plist(exec);
         assert!(
@@ -867,8 +870,8 @@ mod tests {
             "壳的登记不许挂 KeepAlive（用户会退不掉 App）: {plist}"
         );
         assert!(
-            plist.contains("<key>RunAtLoad</key><false/>"),
-            "登记不等于开机自启: {plist}"
+            plist.contains("<key>RunAtLoad</key><true/>"),
+            "壳是登录项：登录时由 launchd 拉起，kickstart 才有东西可杀: {plist}"
         );
         assert_eq!(
             macos::plist_program_argument(&plist),
