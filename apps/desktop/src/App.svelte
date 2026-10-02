@@ -1,1 +1,2388 @@
-FULL_CONTENT_BELOW
+<script>
+  import { reconcilePhotoWall } from "./photoWall.js";
+  import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
+  import { shouldShowWizard, serviceCameBack } from "./serviceGate.js";
+  import { testManifestOutcome } from "./lib/updateCheck.js";
+  import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+  import { getVersion } from "@tauri-apps/api/app";
+  import { listen } from "@tauri-apps/api/event";
+  import {
+    open as openDialog,
+    confirm as confirmDialog,
+    message as messageDialog,
+  } from "@tauri-apps/plugin-dialog";
+  import { check as checkUpdate } from "@tauri-apps/plugin-updater";
+  import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
+  import QRCode from "qrcode";
+  import { onMount, onDestroy } from "svelte";
+  import Wizard from "./Wizard.svelte";
+  import WizardWindows from "./WizardWindows.svelte";
+  import PhotoThumb from "./lib/PhotoThumb.svelte";
+  // DESK-07: shadcn-svelte 组件（组件代码进仓库 src/lib/components/ui/，
+  // 不是 node_modules 黑箱；Tailwind 工具类全局可用）
+  import { Button } from "$lib/components/ui/button";
+  import { Card } from "$lib/components/ui/card";
+  import { Dialog } from "$lib/components/ui/dialog";
+  import { Toaster } from "$lib/components/ui/sonner";
+  import { NavItem } from "$lib/components/ui/nav-item";
+  import { toast } from "svelte-sonner";
+  // ICON-02: 功能小图标走开源图标库（lucide），不再手抄设计稿的 SVG
+  // path。深路径 import（`@lucide/svelte/icons/<name>`）是官方推荐用法，
+  // 只打包用到的图标，不拉整个 barrel。
+  import HouseIcon from "@lucide/svelte/icons/house";
+  import ImageIcon from "@lucide/svelte/icons/image";
+  import SmartphoneIcon from "@lucide/svelte/icons/smartphone";
+  import ClockIcon from "@lucide/svelte/icons/clock";
+  import SettingsIcon from "@lucide/svelte/icons/settings";
+  import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
+  // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
+  import { humanTime, needsAttention, daysSince, relativeTime } from "./lib/humanTime.js";
+  // T-092: connection 四态 → 文案/点色；字节 → 人读容量（纯函数，
+  // apps/desktop/scripts/check-wire-fns.mjs 断言）
+  // PRES-01: presence 三档 → 文案/点色（connection 路径事实优先展示）
+  import { presenceText, flowConnectionText } from "./lib/connection.js";
+  // DEV-03: 「自己断开」与「业主移除」的判据 + 已断开行文案（纯函数，
+  // disconnected.test.js 钉边界）。
+  import { isOwnerRemoved, disconnectedRow } from "./lib/disconnected.js";
+  import {
+    pendingDialogText,
+    pendingSubText,
+    pendingAllowKey,
+    pairResultName,
+  } from "./lib/pending.js";
+  import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
+  // #413 §7：照片库卷低于 5 GiB 发一次系统通知（判定规则见 lowSpace.js）。
+  import { nextLowSpace } from "./lowSpace.js";
+  // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
+  // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
+  import { externalDeleteNotice } from "./lib/externalDelete.js";
+  import { auditText, auditWho, isVisibleAudit } from "./auditProjection.js";
+  // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
+  // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
+  import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./lib/viewerVideo.js";
+  // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
+  // assets/i18n/*.json，Rust 测试保证双语文案齐全）。
+  // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
+  // T-081 暂写死在组件里的导航/页面文案已全部收编进字典。errText 负责
+  // 把 Rust 壳回来的错误（key + 参数 / 裸 msg_key / 原串）渲染成人话。
+  import { t, errText, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
+
+  // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
+  // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
+  // DESK-03: 新增「照片」页（照片墙）——侧边栏第五项，文案走 i18n。
+  // 2026-08-13: icon 字段供 <1080px 收起态的 64px 图标轨使用（设计稿
+  // 离线版 v2「第 3 轮响应式」新增）。
+  // ICON-02（2026-08-19）：icon 从「手抄设计稿 SVG path 字符串 +
+  // {@html} 注入」改成 @lucide/svelte 图标组件——标准图标库用法，形状
+  // 不再逐个手绘（功能驱动阶段：语义清楚、视觉不违和即可，不要求像素
+  // 复刻）。尺寸 20 + strokeWidth 2（lucide 默认）跟旧的内联 svg 一致。
+  // ≥1080px 展开态不画图标，跟设计稿交互原型一致（原型的 nav 只有
+  // label，没有 icon——图标是收起态专属，不是随时都显示的装饰）。
+  const NAV = [
+    { id: "overview", label: t("ui.nav_overview"), icon: HouseIcon },
+    { id: "photos", label: t("ui.nav_photos"), icon: ImageIcon },
+    { id: "devices", label: t("ui.nav_devices"), icon: SmartphoneIcon },
+    { id: "log", label: t("ui.nav_log"), icon: ClockIcon },
+    { id: "settings", label: t("ui.settings"), icon: SettingsIcon },
+  ];
+  const pageFromHash = () => {
+    const m = (location.hash || "").match(/^#\/(overview|photos|devices|log|settings)$/);
+    return m ? m[1] : "overview";
+  };
+  let page = $state(pageFromHash());
+  function go(id) {
+    page = id;
+    location.hash = `#/${id}`;
+  }
+  function onHashChange() {
+    page = pageFromHash();
+  }
+
+  let wizard = $state(null); // null=检测中, {configured, default_dir}
+  let starting = $state(false);
+  // W1 (2026-08-26 real-box run): the update flow pauses ppf-daemon.exe
+  // before downloadAndInstall() (see checkForUpdate() below) so the
+  // Windows installer can overwrite its file — but NSIS's silent
+  // installer terminates the calling process itself (CheckIfAppIsRunning
+  // macro) partway through, so the resume call queued right after
+  // downloadAndInstall() may never run: the shell that would call it is
+  // dead. Rather than depend on that one line of JS surviving, refresh()
+  // below self-heals on every tick — if the daemon is unreachable but a
+  // config already exists (post-wizard steady state, not "user hasn't
+  // finished onboarding yet"), try resuming it once per cooldown window.
+  // Silent: this must never surface a dialog on every 60s poll for a
+  // machine that's genuinely offline for another reason (resume_daemon_
+  // after_update itself no-ops safely if the daemon is already up,
+  // thanks to the single-instance claim protocol).
+  let lastSelfHealAttempt = 0;
+  const SELF_HEAL_COOLDOWN_MS = 30000;
+
+  // #557: Settings → language. Options render their own labels via t();
+  // the switch persists, re-tells the tray and reloads (t() is not reactive;
+  // the #/settings hash survives the reload, so the user stays here).
+  const LANG_OPTIONS = [
+    { pref: "system", label: "ui.language_system" },
+    { pref: "zh", label: "ui.language_zh" },
+    { pref: "en", label: "ui.language_en" },
+  ];
+  const langPref = readLangPref();
+  async function changeLanguage(pref) {
+    if (pref === langPref) return;
+    try {
+      await applyLangPref(pref, { invoke, reload: () => location.reload() });
+    } catch (e) {
+      flashMessage(t("ui.save_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  async function checkWizard() {
+    wizard = await invoke("wizard_state");
+  }
+
+  async function stopService() {
+    const yes = await confirmDialog(t("ui.stop_confirm_body"), {
+      title: t("ui.stop_confirm_title"),
+      kind: "warning",
+    });
+    if (!yes) return;
+    try {
+      await invoke("stop_daemon");
+      flashMessage(t("ui.service_stopped"), "warning");
+    } catch (e) {
+      flashMessage(t("ui.stop_failed", { err: errText(e) }), "error");
+    }
+    // DESK-36 (#456)：停完立刻对账——状态点变「未运行」不用等 60s 兜底轮询；
+    // wizard_state 也要重读（user_stopped 刚落盘，向导门靠它不把人打回 onboard）。
+    await syncServiceState();
+  }
+
+  // DESK-36 (#456)：托盘里点「停止后台服务」时 Rust 发来的通知（payload =
+  // 失败原因，成功为 null）。和窗口里的按钮同一个 stop_daemon、同一份标记。
+  async function onServiceStopped(ev) {
+    const err = ev?.payload;
+    if (err) flashMessage(t("ui.stop_failed", { err: errText(err) }), "error");
+    else flashMessage(t("ui.service_stopped"), "warning");
+    await syncServiceState();
+  }
+
+  async function syncServiceState() {
+    try {
+      await checkWizard();
+    } catch (_) {}
+    await refresh();
+  }
+
+  async function startDaemonNow() {
+    starting = true;
+    try {
+      await invoke("start_daemon");
+    } catch (e) {
+      flashMessage(t("ui.start_failed", { err: errText(e) }), "error");
+    } finally {
+      setTimeout(() => (starting = false), 3000);
+    }
+    // DESK-36 (#456)：start_daemon 清掉了「用户主动停止」——重读 wizard_state，
+    // 然后按 ui.refresh_hint 说的每 3 秒刷新一次，服务起来就停（最多 30s，
+    // 之后交还给 60s 兜底轮询）。
+    try {
+      await checkWizard();
+    } catch (_) {}
+    for (let i = 0; i < 10 && !online; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      await refresh();
+    }
+  }
+
+  let online = $state(false);
+  // DESK-38 (#475)：上一次 refresh 的探活结果（null = 本进程还没探过）。
+  // 不是 $state：只给 serviceCameBack 判「离线 → 可达」这一跳用，不驱动渲染。
+  let lastReachable = null;
+  let status = $state(null);
+  // #413 §7：低空间通知的布防状态——每个进程最多在跌破时报一次，回升到
+  // 6 GiB 以上才重新布防。不是 $state：它不驱动任何渲染。
+  let lowSpaceArmed = true;
+  function checkLowSpace(freeBytes) {
+    const next = nextLowSpace(lowSpaceArmed, freeBytes);
+    lowSpaceArmed = next.armed;
+    if (!next.notify) return;
+    // 尽力而为：系统通知失败不影响任何界面状态。
+    invoke("notify_system", {
+      title: t("ui.low_space_title"),
+      body: t("ui.low_space_body", { free: formatBytes(freeBytes) }),
+    }).catch(() => {});
+  }
+  let devices = $state([]);
+  let qrDataUrl = $state("");
+  let qrText = $state("");
+  let pendingCount = $state(0);
+  // UX-08: 待确认配对请求全量列表（pairing.pending）——一屏一行，逐行
+  // 允许/拒绝；处理完该行消失，全清后模态关闭，无残留状态。
+  let pendingList = $state([]);
+
+  // T4 (H-10b): 配对状态机——二维码是弹窗模块，不是常驻卡片。有人扫码
+  // （pending 出现）→ 关二维码弹窗 → 切「允许/拒绝」模态 → 处理完关闭，
+  // 状态消失（不再一直占空间）。审计记录在 T5。
+  let showPairModal = $state(false);
+  let showConfirmModal = $state(false);
+  // T-091: node_id -> {last_backup_at, asset_count}（device.watermarks，毫秒）
+  let watermarks = $state({});
+  // T-092: activity.list 批次（{node_id,name,at,asset_count}，at=unix 毫秒，
+  // name 可能 null）——活动记录页数据源
+  let activity = $state([]);
+  // AUDIT-01: 审计事件流 v2（{ts, kind, actor, roundId, payload}）——
+  // 配对请求/允许/拒绝、吊销、外部删除、Flow 用户操作/终态，活动页的
+  // 主数据源。v1 的 action/detail 自由文本已随 audit_log 一并移除。
+  let auditEvents = $state([]);
+  // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
+  let version = $state("");
+  getVersion().then((v) => (version = v)).catch(() => {});
+  // DESK-02①: 更新通道由构建推导——daemon status.version 带完整 tag
+  // （release 构建 = PPF_BUILD_VERSION 注入 "v0.3.2-test.2"），含 `-test.`
+  // → test 通道，否则 stable。零 UI、零持久化（旧 REL-02 显式切换已删）。
+  // 壳版本（tauri.conf.json）无 tag 后缀，daemon 不可达时回退壳版本（stable）。
+  const displayVersion = $derived(status?.version || version);
+  const updateChannel = $derived(
+    displayVersion.includes("-test.") ? "test" : "stable"
+  );
+  const isTestBuild = $derived(displayVersion.includes("-test."));
+  // DAE-04: daemon 版本落后于桌面壳（更新装好了但旧 daemon 进程还在跑）——
+  // 设置页「重启后台服务」按钮的唯一显示条件。版本一致/读不到时不显示，
+  // 避免用户瞎点误杀正常运行的服务。
+  const daemonStale = $derived(
+    !!version && !!status?.version && !sameRelease(version, status.version)
+  );
+  // DEV-01b: 重装识别/「替换旧的」入口先隐藏（用户拍板 2026-08-12）——
+  // 现阶段统一走「重新扫码 = 全新授权」，不给用户多一个要理解的概念。
+  // 编译期 flag 默认关；打开 = DEV-01 行为原样回来（反证路径）。
+  // 底层不拆：pair.request 的 device_hint 照发照存（数据继续积累），
+  // 未来打开入口即用。关闭时对话框与 DEV-01 之前完全一致。
+  // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
+  let nowMs = $state(Date.now());
+
+  async function call(method, params = {}) {
+    return await invoke("daemon_call", { method, params });
+  }
+
+  // UI-04b：所有短反馈统一委托官方 Sonner；成功/等待/错误分别走三种含义色。
+  function flashMessage(msg, tone = "success") {
+    if (tone === "error") toast.error(msg);
+    else if (tone === "warning") toast.warning(msg);
+    else toast.success(msg);
+  }
+
+  async function refresh() {
+    try {
+      status = await call("status");
+      online = true;
+      checkLowSpace(status.disk_free_bytes ?? null);
+      // DESK-38 (#475)：服务刚从不可达变可达（「启动后台服务」、自愈拉起、
+      // 更新后恢复都走到这里）——只拉一次的视图要重拉，见 onServiceBackOnline。
+      if (serviceCameBack(lastReachable, true)) onServiceBackOnline();
+      lastReachable = true;
+      pendingCount = status.pending_pairs ?? 0;
+      // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
+      // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
+      // 每项可能是 {name}（新 daemon）或纯字符串（老 daemon）——
+      // 统一 normalize 成对象。
+      try {
+        const p = await call("pairing.pending", {});
+        pendingList = (p.pending ?? []).map((x) =>
+          typeof x === "string" ? { name: x } : x
+        );
+      } catch (_) {
+        pendingList = [];
+      }
+      // T4: pending 从无到有 = 有人扫了码——关二维码弹窗、打开允许/拒绝。
+      // UX-08: 一屏列全部 pending，逐行处理；全清后关闭，无残留。
+      if (pendingList.length > 0 && showPairModal) {
+        showPairModal = false;
+        showConfirmModal = true;
+      } else if (pendingList.length === 0 && showConfirmModal) {
+        // 已处理完（confirmPair 清空 pending）——状态消失，不残留。
+        showConfirmModal = false;
+      }
+      // DEV-03: 这一屏要同时渲染「在用/已断开」和折叠的「已移除」，所以要
+      // 全量。此前不传参 ⇒ daemon 默认 `WHERE revoked = 0` ⇒ 下面那个
+      // 「已移除设备 N 台」折叠区**永远是空的、渲染不出来**（同一个默认
+      // 过滤，也让手机一断开设备就从列表里凭空消失——本卡要修的主症状）。
+      const d = await call("devices.list", { include_revoked: true });
+      devices = d.devices ?? [];
+      nowMs = Date.now();
+      // T-091: 水位数据单独容错——拿不到不拖垮整页（保留上次值）
+      try {
+        const w = await call("device.watermarks");
+        watermarks = Object.fromEntries((w.watermarks ?? []).map((x) => [x.node_id, x]));
+      } catch (_) {}
+      // T-092: 活动记录同样单独容错——倒序（新的在上）由 UI 兜底保证
+      try {
+        const a = await call("activity.list", { limit: 100 });
+        activity = (a.batches ?? []).slice().sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
+      } catch (_) {}
+      // AUDIT-01: 审计事件流 v2（配对/吊销/外部删除/Flow 事实）——活动页
+      // 主数据源。2026-08-18（用户反馈④）：limit 200 → 500。ingest.*
+      // 逐文件行占绝大多数（每张照片一行），但展示层把它们过滤掉——
+      // 200 条上限下，一次几百张的备份就能把全部设备级事件挤出窗口，
+      // 活动记录页看着"没几条"其实是被饿死的。IPC 侧 clamp 上限 1000
+      // （ipc.rs audit.list），500 在上限内。
+      try {
+        const au = await call("audit.list", { limit: 500 });
+        auditEvents = (au.events ?? []).slice().sort((x, y) => (y.ts ?? 0) - (x.ts ?? 0));
+      } catch (_) {}
+    } catch (e) {
+      online = false;
+      lastReachable = false;
+      status = null;
+      // Self-heal: only if onboarding already completed (wizard===null
+      // means "not checked yet", still fine to skip — checkWizard() runs
+      // on mount before the first refresh() anyway) — never try to
+      // resume a daemon on a machine that hasn't finished the wizard,
+      // that's a different, expected "not configured yet" offline state
+      // the overview page's "启动后台服务" button already handles.
+      //
+      // DESK-36 (#456)：「是不是用户自己停的」只能由 Rust 在调用这一刻判——
+      // self_heal_daemon 读盘上的停止标记，用户停的就不拉（托盘停止时这里的
+      // wizard 缓存可能还是旧的）。更新流程的 resume_daemon_after_update
+      // 是另一条路径，不经过这里（它在 Rust 侧同样读这份标记）。
+      const now = Date.now();
+      if (wizard?.configured && now - lastSelfHealAttempt > SELF_HEAL_COOLDOWN_MS) {
+        lastSelfHealAttempt = now;
+        try {
+          await invoke("self_heal_daemon");
+        } catch (_) {
+          // Best-effort — if this fails too, the existing offline banner
+          // + manual "启动后台服务" button on the overview page is still
+          // there as the fallback path; no need to surface a second error.
+        }
+      }
+    }
+  }
+
+  // AUDIT-02：操作结果、身份和诊断噪音过滤由 auditProjection.js 统一
+  // 处理，页面只传当前设备索引，避免各页面重新实现审计合同。
+
+  // 2026-08-18（用户反馈④）：精确时刻——humanTime 的相对说法（"昨天
+  // 14:32"/"周三"/"08-11"）读起来舒服，但超过 7 天就只剩日期没有钟点，
+  // 排查"到底几点传的"时不够用。活动记录页给每行补一条精确时间小字，
+  // 只在这一页用（总览"最近动静"迷你卡仍然只要一行相对时间）。
+  function exactTime(tsMs) {
+    if (typeof tsMs !== "number" || !Number.isFinite(tsMs) || tsMs <= 0) return null;
+    const d = new Date(tsMs);
+    const p = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  // AUDIT-01: 批次备份的 backup.started/backup.finished 会话审计已经
+  // 随本卡移除（card 决定：旧 batch backup.* 不再作为任何活动页或统计
+  // 来源）——耗时统计随之一起下线，不用 activity.list 的批次时间伪造
+  // 一个「耗时」出来（那张表只有到达时间，没有会话起止）。
+
+  // MOB-29: 用户点过「知道了」的时刻——**只压住这一刻及之前的删除**，
+  // 之后再删又会出来（一次 dismiss 不换来永久静默）。刻意只存在内存里：
+  // 落盘就得管迁移和过期，而警告本身只有 24h 寿命，重开 App 再看到一次
+  // 是可接受的（而漏掉一次删除警告不可接受）。
+  let deleteWarnDismissedAt = $state(0);
+  const deleteWarning = $derived(
+    externalDeleteNotice(auditEvents, nowMs, { dismissedAt: deleteWarnDismissedAt })
+  );
+
+  // AUDIT-02：活动表只展示用户结果、数据风险和安全事实。连接、控制、
+  // 路径/逐项 ingest 噪音仍留在诊断层，不伪装成用户历史。
+  const visibleAudit = $derived(
+    auditEvents.filter(isVisibleAudit)
+  );
+  // AUDIT-01: 本周「新备份/去重跳过」统计原本读 backup.finished 的
+  // ingested=/duplicates= 汇总；该审计事件已随本卡移除（card 决定：
+  // 旧 batch backup.* 不再作为任何活动页或统计来源），且 Flow 路径的
+  // `flow.round.finished` payload 口径尚未约定同名字段——不编造数字，
+  // 这张统计条本身随之下线（模板同步移除，见 log 页头部）。
+
+  // PRES-01: sub 槽接 devices.list[].presence 三档（online 优先展示连接
+  // 路径事实：已直连/经中继；心跳新鲜无活连接 → 「在线」；recent →
+  // 「x 分钟前在线」；offline → 「离线，最后在线 <时间>」/「等待下次备份
+  // 上报」）。哨兵红优先级高于 presence——一台设备两个真相时先说要紧的。
+  // DESK-07: 设备行状态点色 map（语义色仅 safe/wait/idle/act 四种，
+  // 颜色值全来自 tokens.css，见其注释）
+  const DOT_BG = { idle: "bg-idle", act: "bg-act", safe: "bg-safe", wait: "bg-waiting" };
+
+  function deviceRow(d, now) {
+    // DEV-03: 已断开的设备先于一切分支返回——它不该参与「几天没备份了」
+    // 告警（授权都没了，催用户去开 App 是错的），也不该借用「离线」话术。
+    const disconnected = disconnectedRow(d, humanTime(d.revoked_at, now));
+    if (disconnected) return disconnected;
+    const wm = watermarks[d.node_id];
+    const lastBackupAt = wm?.last_backup_at ?? null;
+    const backupTime = humanTime(lastBackupAt, now);
+    const alert = needsAttention(lastBackupAt, now);
+    if (alert) {
+      return {
+        alert: true,
+        dot: "act",
+        sub: t("ui.device_no_backup_days", { n: daysSince(lastBackupAt, now) }),
+        right: t("ui.device_needs_attention"),
+      };
+    }
+    // NET-05 has priority over generic presence only while this exact device
+    // owns an active Flow fetch. On every terminal path flow_connection=null,
+    // so the established presence display immediately resumes.
+    const flow = flowConnectionText(d.flow_connection);
+    if (flow) {
+      return {
+        alert: false,
+        dot: flow.dot,
+        sub: flow.sub,
+        right: backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up"),
+      };
+    }
+    const pres = presenceText(
+      d.presence,
+      d.connection,
+      relativeTime(d.last_seen, now),
+      humanTime(d.last_seen, now)
+    );
+    return {
+      alert: false,
+      dot: pres.dot,
+      sub: pres.sub,
+      right: backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up"),
+    };
+  }
+
+  // 设计稿离线版：总览标题副标题是"全家 N 张照片…"+"最近一次备份：
+  // <时间> · 来自 <设备>"，不是"已配对设备 N 台 · 照片库 M 张"——
+  // 取所有设备水位里 last_backup_at 最大的那条，真实数据，没有就
+  // 优雅退回旧文案（没备份过/watermarks 还没加载完时不假装有数据）。
+  const lastBackupOverall = $derived.by(() => {
+    let best = null;
+    for (const d of devices) {
+      if (d.revoked) continue;
+      const wm = watermarks[d.node_id];
+      if (!wm?.last_backup_at) continue;
+      if (!best || wm.last_backup_at > best.at) best = { at: wm.last_backup_at, name: d.name };
+    }
+    return best;
+  });
+  // 设计稿离线版：总览水位卡只放"需要留意的 + 最近动过的"，不是全量
+  // 平铺——告警设备（alert）永远全show，正常设备只show 前 OK_CAP 个，
+  // 剩下的收进"一切正常的还有 N 台"链接（点进「家人与设备」看全部，
+  // 那边才是全量真相，这里只是总览摘要）。
+  // 2026-08-18（用户反馈①）：卡里展示 3 行、按「最新活跃」排。活跃度
+  // 取 max(last_seen, last_backup_at)——两者都是"这台设备最近有动静"的
+  // 真实证据，只看其中一个都会漏（刚连上还没备份 / 备份完就锁屏离线）。
+  // 告警设备（needsAttention）仍然全部置顶且不受 3 行上限挤出：这张卡的
+  // 使命是"一眼确认备份没坏"，而告警设备按定义就是最不活跃的那批，纯
+  // 活跃排序恰好会把最该看见的行排到最后。
+  const OVERVIEW_ROWS = 3;
+  function lastActivityAt(d) {
+    const wm = watermarks[d.node_id];
+    return Math.max(d.last_seen ?? 0, wm?.last_backup_at ?? 0);
+  }
+  const waterRows = $derived.by(() => {
+    // 水位卡问的是「在用设备的备份健康度」——已断开/已移除的都不该算进来，
+    // 所以这里是 `!d.revoked`（比「家人与设备」列表的口径更窄），不是 DEV-03
+    // 那个 isOwnerRemoved。已断开的设备催用户「去开 App 备份」是错的。
+    const active = devices.filter((d) => !d.revoked);
+    const withRow = active
+      .map((d) => ({ d, row: deviceRow(d, nowMs) }))
+      .sort((a, b) => lastActivityAt(b.d) - lastActivityAt(a.d));
+    const alerts = withRow.filter((x) => x.row.alert);
+    const ok = withRow.filter((x) => !x.row.alert);
+    const shown = [...alerts, ...ok.slice(0, Math.max(0, OVERVIEW_ROWS - alerts.length))];
+    return { shown, moreOk: Math.max(0, active.length - shown.length) };
+  });
+
+  async function startPairing() {
+    showPairModal = true; // T4: 二维码是弹窗模块，不是常驻卡片
+    try {
+      const r = await call("pairing.start");
+      qrText = r.qr;
+      // T4: 弹窗内大尺寸——显示 360px，生成 2x（720）保高分屏清晰；
+      // 配对码已瘦身（H-10b T3），低纠错 L 在内容较长时更好扫。
+      qrDataUrl = await QRCode.toDataURL(r.qr, {
+        width: 720,
+        margin: 2,
+        errorCorrectionLevel: "L",
+      });
+    } catch (e) {
+      flashMessage(t("ui.pair_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  function closePairModal() {
+    showPairModal = false;
+    // 关弹窗即弃当前码（token 仍在 TTL 内有效，但下次打开重新生成更干净）。
+    qrDataUrl = "";
+    qrText = "";
+  }
+
+  /* 扫码有困难的退路：复制配对串本文，用户自己找办法传给手机（隔空
+   * 投送/微信自己发自己）。剪贴板失败静默不打扰——这是个次要退路，
+   * 不是关键路径。 */
+  async function copyPairString() {
+    if (!qrText) return;
+    try {
+      await navigator.clipboard.writeText(qrText);
+      flashMessage(t("ui.pair_string_copied"));
+    } catch {
+      // 静默——剪贴板权限问题不值得打断用户，主路径还是扫码。
+    }
+  }
+
+  /* 设计稿 v2 对齐：卡片级「无法扫码？复制配对串」——不打开弹窗，静默
+   * 取一次配对串（pairing.start 每次调用即轮换，与弹窗「刷新二维码」
+   * 同一语义）复制；失败静默。主路径仍是扫码，这是退路。 */
+  async function copyPairQuiet() {
+    try {
+      const r = qrText || (await call("pairing.start")).qr;
+      qrText = r;
+      await navigator.clipboard.writeText(r);
+      flashMessage(t("ui.pair_string_copied"));
+    } catch {
+      // 静默
+    }
+  }
+
+  async function confirmPair(accept, item) {
+    try {
+      // UX-08: 逐行处理——pairing.confirm 精确确认该台；不带定位参数则
+      // 默认队首（老调用方兼容，语义不动）。
+      //
+      // DEV-04: 定位必须按 node_id。老设备改过名之后，弹窗上显示的是
+      // 桌面的名字，而队列里存的是手机自报名——继续按名字找就是
+      // NOT_FOUND，业主再也批不了这台设备（正是本卡要保的那个场景）。
+      const r = await call("pairing.confirm", {
+        accept,
+        node_id: item?.node_id,
+        device_name: item?.name,
+      });
+      // DEV-06: 结果提示的名字以设备表为准。`r.device` 是队列里的自报名
+      // （SM-S9210），弹窗标题用的却是 pending 行里 daemon 解析过的名字
+      // （客厅的手机）——同一次操作两个名字。
+      //
+      // 横幅那两个按钮不带 item（走 daemon 队首语义），但队首前端也知道：
+      // `confirm()` 在 node_id/device_name 都缺时取 `queue` 的 0 号
+      // （ipc.rs:1142），而 `pending_summary` 遍历的就是同一个 `queue`、
+      // 同一个顺序（ipc.rs:1178-1183）——所以 `pendingList[0]` 正是要被
+      // 决定的那台，也正是横幅上已经显示着的那个名字（:1259）。
+      // `r.device` 留作最后兜底（老 daemon / 列表取不到）。
+      const shown = pairResultName(item ?? pendingList[0], r);
+      flashMessage(
+        accept ? t("ui.pair_allowed", { name: shown }) : t("ui.pair_denied", { name: shown }),
+        accept ? "success" : "warning"
+      );
+      // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
+      await refresh();
+    } catch (e) {
+      flashMessage(t("ui.confirm_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  async function revoke(nodeId, name) {
+    const yes = await confirmDialog(t("ui.revoke_confirm_body", { name }), {
+      title: t("ui.revoke_confirm_title"),
+      kind: "warning",
+    });
+    if (!yes) return;
+    try {
+      await call("device.revoke", { node_id: nodeId });
+      flashMessage(t("ui.revoked", { name }), "warning");
+      await refresh();
+    } catch (e) {
+      flashMessage(t("ui.revoke_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  // ── NAME-01: 设备改名（decisions ② ID 与显示名分离）──────────────
+  // 点设备名 → 变输入框；回车/失焦保存（空名/未改动不提交）；Esc 取消。
+  let renameTarget = $state(null); // { nodeId, name }
+  let renameValue = $state("");
+
+  function startRename(d) {
+    renameTarget = { nodeId: d.node_id, name: d.name };
+    renameValue = d.name;
+  }
+
+  async function commitRename() {
+    const target = renameTarget;
+    if (!target) return;
+    const trimmed = renameValue.trim();
+    renameTarget = null;
+    if (!trimmed || trimmed === target.name) return; // 空名/未改动 = 不提交
+    try {
+      const r = await call("device.rename", {
+        node_id: target.nodeId,
+        name: trimmed,
+      });
+      toast.success(t("ui.rename_saved", { name: r.name ?? trimmed }));
+      await refresh();
+    } catch (e) {
+      toast.error(t("ui.rename_failed", { err: errText(e) }));
+    }
+  }
+
+  async function openLibrary() {
+    try {
+      const s = await call("status");
+      const dir = s.library_dir;
+      if (!dir) throw new Error(t("ui.library_dir_unknown"));
+      // originals/ 是照片所在；库刚建还没照片时打开库根目录。
+      try {
+        await revealItemInDir(`${dir}/originals`);
+      } catch (_) {
+        await revealItemInDir(dir);
+      }
+    } catch (e) {
+      flashMessage(t("ui.open_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  // NET-13: 打开某台设备自己的存储目录——`originals/<node_id 全量 hex>/`
+  // 与 ingest 落位口径完全一致（crates/core-index/src/ingest.rs
+  // device_dir()：node_id 字节逐位 hex，devices.list 返回的 node_id 已经是
+  // 同一份 hex 字符串，不需要额外转换）。该设备还没备份过时目录不存在，
+  // 退回打开 originals/ 根目录，不假装有内容。
+  async function openDeviceFolder(nodeId) {
+    try {
+      const s = await call("status");
+      const dir = s.library_dir;
+      if (!dir) throw new Error(t("ui.library_dir_unknown"));
+      try {
+        await revealItemInDir(`${dir}/originals/${nodeId}`);
+      } catch (_) {
+        await revealItemInDir(`${dir}/originals`);
+      }
+    } catch (e) {
+      flashMessage(t("ui.device_open_folder_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  async function chooseFolder() {
+    const dir = await openDialog({ directory: true, title: t("ui.change_title") });
+    if (!dir) return;
+    const yes = await confirmDialog(t("ui.change_body", { dir }), {
+      title: t("ui.change_title"),
+      kind: "warning",
+    });
+    if (!yes) return;
+    try {
+      await call("folder.set", { path: dir });
+      flashMessage(t("ui.change_saved", { dir }));
+    } catch (e) {
+      flashMessage(t("ui.save_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  // DESK-10: 导出走桌面壳本地组装的 export_logs_bundle（不是 daemon 的
+  // logs.export IPC）——daemon 起不来时这个入口必须照样出包，那正是最
+  // 需要日志的场景。daemon 活着时壳会把它那三份（diag/devices/audit）
+  // 附进同一个包。
+  // #550：入口在托盘菜单——Rust 先把窗口拉到前台，再发
+  // `export-logs-requested`，这里收到后照旧导出、照旧 toast + 在 Finder 里展示。
+  async function exportLogs() {
+    try {
+      const r = await invoke("export_logs_bundle");
+      flashMessage(t("ui.logs_exported", { path: r.zip }));
+      try {
+        await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示
+      } catch (_) {}
+    } catch (e) {
+      flashMessage(t("ui.export_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  // DESK-23 (#172)：Rust 侧每次关窗都会发 `hidden-to-tray`，要不要弹在这里判。
+  // 判定规则本身抽在 trayHint.js 里单测（macOS 那条没 Mac 验不了端到端，
+  // 但规则可以测）；这里只负责读写标记和真正把话说出来。
+  // 平台取自 wizard_state 已有的 platform 字段——不为这一处新加命令，也不
+  // 在 Rust 里加 cfg（#211 正在往外搬平台分叉，别一边搬一边添）。
+  async function onHiddenToTray() {
+    let shown = null;
+    try {
+      shown = localStorage.getItem(TRAY_HINT_SHOWN_KEY);
+    } catch {
+      // 隐私模式/存储被禁时 localStorage 会抛。当成"没提示过"继续走：
+      // 多提示一次可以忍，静默不行。
+    }
+    if (!shouldShowTrayHint(wizard?.platform, shown)) return;
+    try {
+      localStorage.setItem(TRAY_HINT_SHOWN_KEY, "1");
+    } catch {
+      // 同上，置不上就下次还会提示——不影响这次把话说清楚。
+    }
+    await messageDialog(
+      t("ui.tray_hint_body"),
+      { title: t("ui.tray_hint_title"), kind: "info" },
+    );
+  }
+
+  let timer;
+  let unlisten;
+  let unlistenTray;
+  let unlistenStopped;
+  let unlistenExportLogs;
+  onMount(() => {
+    // I18N-03 (#492)：托盘菜单跟窗口同一种语言——把这里判出来的语言报给
+    // Rust 壳，它从同一份 assets/i18n 取托盘文案。失败只影响托盘语言，静默。
+    invoke("set_tray_locale", { lang: getLocale() }).catch(() => {});
+    checkWizard();
+    // DESK-02①: 更新检查放首次 status 落地后——updateChannel 由
+    // status.version（完整 tag）推导，避免启动竞态按壳版本误判 stable。
+    refresh().then(() => checkForUpdate(false));
+    // IPC-02: 事件驱动为主——daemon 事件（扫码/配对落定/备份落地/设备
+    // 变化）即时刷新；轮询降级为 60s 兜底对账（防漏事件，不再是主通道）。
+    timer = setInterval(refresh, 60000); // 契约: 兜底对账 60s
+    // 订阅线程在 src-tauri setup 启动（start_event_stream），事件经
+    // `daemon-event` 转发——这里只负责收。
+    listen("daemon-event", onDaemonEvent).then((f) => (unlisten = f));
+    // DESK-23 (#172): 关窗藏到托盘时 Rust 发来的通知。
+    listen("hidden-to-tray", onHiddenToTray).then((f) => (unlistenTray = f));
+    // DESK-36 (#456): 托盘停止服务后 Rust 发来的通知。
+    listen("service-stopped", onServiceStopped).then((f) => (unlistenStopped = f));
+    // #550: 托盘「导出诊断包」——窗口已被 Rust 拉到前台，结果走 toast。
+    listen("export-logs-requested", exportLogs).then((f) => (unlistenExportLogs = f));
+    window.addEventListener("hashchange", onHashChange);
+  });
+  onDestroy(() => {
+    clearInterval(timer);
+    unlisten?.();
+    unlistenTray?.();
+    unlistenStopped?.();
+    unlistenExportLogs?.();
+    window.removeEventListener("hashchange", onHashChange);
+  });
+
+  // IPC-02: daemon 事件 → 即时刷新。事件是加速器，丢了也有 60s 兜底
+  // 对账——全量 refresh() 简单可靠（本地 IPC 快、事件频率低）。
+  function onDaemonEvent(ev) {
+    const name = ev?.payload?.event;
+    if (!name) return;
+    // DESK-05 + 照片墙同步: activity.appended（备份审计落地）/
+    // device.changed（水位推进）/ timeline.invalidated（WATCH-01 秒级
+    // 监听 + SYNC-01 对账：Finder 删除/新增）任一发生都要让照片墙感知
+    // 到——但 2026-08-17 改成增量合并，不再整墙清空重拉（见
+    // syncPhotosWallIncremental 注释：清空重拉会让已经渲染好的缩略图
+    // 全部销毁重建，来一次事件卡一下，照片多的库尤其明显）。
+    if (
+      name === "activity.appended" ||
+      name === "device.changed" ||
+      name === "timeline.invalidated"
+    ) {
+      syncPhotosWallIncremental();
+    }
+    // 事件帧 {event, data}——data 是占位/增量提示，具体状态一律全量拉。
+    refresh();
+  }
+
+  // 照片墙硬重置——手动"刷新"按钮专用，用户主动要求"就要最新真相"时
+  // 才整墙清空重拉，代价（缩略图重新请求+滚动位置归零）用户自己选的，
+  // 不是背着用户在后台悄悄发生。唯一的后台调用是 DESK-38 的「服务恢复、
+  // 墙是空的」（onServiceBackOnline）——空墙没有缩略图和滚动位置可丢。
+  function resetPhotosWall() {
+    photosGen++;
+    photosLoaded = false;
+    photos = [];
+    photosNext = null;
+  }
+
+  // DESK-38 (#475)：服务从不可达变可达。设备/活动/审计每次 refresh() 都全量
+  // 重拉，自己会跟上；照片墙不会——停服时进过照片页，首拉失败后
+  // photosLoaded 照样置 true、墙留空，之后只有 daemon 事件才会同步它，服务
+  // 刚起来又没有新照片就永远空着（要重开 App）。
+  //
+  // 墙是空的 → 打回「未加载」，在照片页上时 $effect 立刻重拉，不在照片页
+  // 则进页时拉。墙上已经有照片 → 只做增量对账：一次 IPC 超时也会让 refresh
+  // 记成「离线」，下一轮成功时不许把满墙缩略图清掉、滚动位置打回顶部。
+  function onServiceBackOnline() {
+    if (photos.length > 0) syncPhotosWallIncremental();
+    else resetPhotosWall();
+    // #551：停服期间进视口的缩略图 thumb.get 失败成了灰块；墙不重建 DOM，
+    // 就由这个代际让失败态格子（且只有它们）在可见时重取一次。
+    thumbServiceEpoch++;
+  }
+  let thumbServiceEpoch = $state(0);
+
+  // 照片墙窗口对账 —— 判据全部在 src/photoWall.js（纯函数 + 单测）。
+  //
+  // 墙持有的是「按拍摄时间降序的前 K 条」这个**前缀窗口**。对账 = 重取同一个
+  // 窗口，按 hash 三向合并：新增插入 / 已有原地更新 / 窗口内消失的移除。
+  //
+  // 为什么不是"只拉第一页 + 只插新 hash"（2026-08-17 那版）：墙按拍摄时间排，
+  // 而到达顺序与拍摄时间无关（手机按 MediaStore 修改代号升序扫）。第一页被
+  // 较新的占满之后，后到的老照片永远不出现；已有条目的缩略图/尺寸到齐也刷
+  // 不出来；外部删除更是永不消失（DESK-06 修过的问题悄悄回来了）。用户
+  // 2026-08-20 用 186 张、拍摄时间跨 7 个月的库全撞上了。
+  //
+  // 为什么不卡：卡顿来自 `photos = []` 销毁全部缩略图 DOM，**不来自重取几十
+  // 条元数据**。reconcilePhotoWall 对没变的条目保持同一个对象引用，Svelte 的
+  // keyed each 不会重建 DOM，缩略图（按 hash 独立请求 + 缓存）也不会重发。
+  let photosSyncing = false;
+
+  async function syncPhotosWallIncremental() {
+    if (!photosLoaded || photosSyncing) return; // 首拉交给进页时的 $effect
+    photosSyncing = true;
+    const gen = photosGen;
+    try {
+      // 重取**当前已加载的整个窗口**，不是只取第一页。
+      const held = photos.length;
+      const fresh = [];
+      let cursor = null;
+      let reachedEnd = false;
+      // 上限 = 窗口 + 一页：给"同步中新到达"留出空间，同时防止用户滚很深时
+      // 每次事件都把整库拉一遍。超出上限就不 reachedEnd，移除判据自动收紧到
+      // "只删覆盖区间内缺席的"，不会误删深层分页的条目。
+      const cap = held + PHOTOS_PAGE_SIZE;
+      while (fresh.length < cap) {
+        const r = await call("timeline.page", { cursor, limit: PHOTOS_PAGE_SIZE });
+        const items = r.items ?? [];
+        fresh.push(...items);
+        cursor = r.next ?? null;
+        if (!cursor) {
+          reachedEnd = true;
+          break;
+        }
+        if (items.length === 0) break; // 防御：有 cursor 却空页，别转圈
+      }
+      if (gen !== photosGen) return; // 同步途中墙被重置了（DESK-38），交给首拉
+      const merged = reconcilePhotoWall(photos, fresh, reachedEnd);
+      if (merged.added || merged.updated || merged.removed) {
+        photos = merged.items;
+        // 窗口末尾可能因为新增/移除而移动——游标跟着走，否则往下滚会跳条或重条。
+        if (reachedEnd) photosNext = null;
+      }
+    } catch (_) {
+      // 静默失败——不影响墙上已有内容，下次事件/60s 兜底再试。
+    } finally {
+      photosSyncing = false;
+    }
+  }
+
+  // UPD-01: 启动时检查一次更新（tauri-plugin-updater；manifest 在
+  // tauri.conf.json endpoints，release 资产直链——draft/无 release 时
+  // 404 = 无更新，静默）。失败静默，绝不打扰用户。
+  // UPD-01 返工：check 阶段任何错误（404=无正式 release、网络不可达）
+  // 一律静默返回——tauri 的 check() 只有 204 才当「无更新」，404 会
+  // reject，原实现把 404 也显示成「更新失败」，无 release 时每次启动
+  // 都弹错。只有用户点了「下载安装」后的下载/安装失败才上文案。
+  // T-081: 设置页「检查更新」手动入口复用同一函数（manual=true 时
+  // 「已是最新」也给一句反馈，不再沉默）。
+  // REL-02: test 通道的 manifest 源——Cloudflare Worker 代理
+  // （infra/workers/update，命中 300s 缓存）。REL-07：Worker 现在只读
+  // 滚动 prerelease `test-channel` 的静态文件，不再调 GitHub API。桌面壳
+  // 不像 Android 那样直读 GitHub 下载链接：webview 的 fetch 受 CORS 约束，
+  // GitHub 下载链接（302 → release-assets）不带 Access-Control-Allow-Origin，
+  // Worker 带。
+  const WORKER_TEST_URL = "https://update.p-pass.hawkeye-xb.com/manifest?channel=test";
+
+  // SemVer 三段比较（与 Android UpdateChecker.isNewer 同语义）。
+  // DESK-02①: 同核心预发布按数字段比较（0.3.2-test.2 > 0.3.2-test.1）——
+  // test 通道连续 tag 自动升级的判据；正式 > 预发布（同核心）。
+  function isNewerVersion(candidate, current) {
+    const parse = (s) => {
+      const parts = String(s).split("-");
+      const nums = parts[0].split(".").map((x) => parseInt(x, 10) || 0);
+      return { nums, pre: parts[1] ?? null };
+    };
+    const c = parse(candidate);
+    const cur = parse(current);
+    for (let i = 0; i < 3; i++) {
+      const d = (c.nums[i] ?? 0) - (cur.nums[i] ?? 0);
+      if (d !== 0) return d > 0;
+    }
+    if (c.pre === null && cur.pre !== null) return true;
+    if (c.pre !== null && cur.pre === null) return false;
+    if (c.pre !== null && cur.pre !== null) {
+      const a = parseInt(c.pre.replace(/\D/g, "") || "0", 10);
+      const b = parseInt(cur.pre.replace(/\D/g, "") || "0", 10);
+      return a > b;
+    }
+    return false;
+  }
+
+  // DAE-04: 「桌面壳自己的版本」与「daemon 版本」是否同一次发布——只比
+  // 核心三段数字，忽略 v 前缀和 -test.N 后缀：release 里 daemon 报
+  // "v0.3.3-test.1"、壳报 "0.3.3"（tauri.conf.json），是同一份；更新
+  // 装好后壳变 0.3.4、daemon 还是 v0.3.3-test.1 → 核心不同 → 真不一致。
+  function sameRelease(a, b) {
+    const core = (s) =>
+      String(s)
+        .replace(/^v/i, "")
+        .split("-")[0]
+        .split(".")
+        .map((x) => parseInt(x, 10) || 0);
+    const ca = core(a);
+    const cb = core(b);
+    return (
+      ca.length === 3 &&
+      cb.length === 3 &&
+      ca[0] === cb[0] &&
+      ca[1] === cb[1] &&
+      ca[2] === cb[2]
+    );
+  }
+
+  // DAE-04: 桌面壳更新后手动重启后台服务——杀旧 daemon，靠 launchd 拉起
+  // 磁盘上的新版本（Windows 无 KeepAlive 语义，Rust 命令内显式重拉）。
+  // 成功/失败都明说：版本真变了才报成功；没变 = 服务文件没更新，提示重装。
+  let restartingService = $state(false);
+  async function restartDaemonProcess() {
+    const yes = await confirmDialog(t("ui.restart_service_confirm_body"), {
+      title: t("ui.restart_service_confirm_title"),
+      kind: "warning",
+    });
+    if (!yes) return;
+    restartingService = true;
+    try {
+      const r = await invoke("restart_daemon_process");
+      if (r?.changed) {
+        flashMessage(
+          r.old_version
+            ? t("ui.restart_service_ok", { from: r.old_version, to: r.new_version })
+            : t("ui.restart_service_started", { version: r.new_version })
+        );
+      } else {
+        flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }), "warning");
+      }
+    } catch (e) {
+      flashMessage(t("ui.restart_service_failed", { err: errText(e) }), "error");
+    } finally {
+      restartingService = false;
+    }
+  }
+
+  // REL-02: test 通道检查——壳内 fetch Worker manifest，弹窗后打开
+  // 下载页。安装路径说明：tauri updater 的 endpoint 构建期写死、Update
+  // 无公开构造器，运行时无法指向任意 manifest URL（2.10.1 源码确认）；
+  // 且当前 release manifest 只含 android-arm64（桌面壳待建）——test
+  // 通道「检查到更新 + 一键打开下载页」是当前平台约束下的诚实形态。
+  async function checkTestChannel(manual) {
+    try {
+      const resp = await fetch(WORKER_TEST_URL);
+      const outcome = testManifestOutcome(resp.status);
+      if (outcome === "none") {
+        if (manual) flashMessage(t("ui.no_update"), "warning");
+        return;
+      }
+      if (outcome === "failed") {
+        // REL-07: 上游故障 ≠ 已是最新——日志里留状态码，手动检查如实说失败。
+        const body = await resp.text().catch(() => "");
+        console.warn(`[updater] test channel check failed: HTTP ${resp.status} ${body.slice(0, 200)}`);
+        if (manual) flashMessage(t("ui.update_check_failed", { err: `HTTP ${resp.status}` }), "error");
+        return;
+      }
+      const m = await resp.json();
+      if (!m?.version || !isNewerVersion(m.version, version)) {
+        if (manual) flashMessage(t("ui.no_update"), "warning");
+        return;
+      }
+      const ok = await confirmDialog(t("ui.update_available", { version: m.version }), {
+        title: "P-Pass",
+      });
+      if (!ok) return;
+      // 优先资产直链（manifest 里 darwin 条目），没有则落到 release 页。
+      const entry =
+        m.platforms?.["darwin-aarch64"] ??
+        m.platforms?.["macos-arm64"] ??
+        m.platforms?.["macos-x64"];
+      const url =
+        entry?.url || `https://github.com/hawkeye-xb/P-Pass/releases/tag/v${m.version}`;
+      await openUrl(url);
+    } catch (e) {
+      console.warn("[updater] test channel check failed:", e);
+      if (manual) flashMessage(t("ui.update_check_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  async function checkForUpdate(manual = true) {
+    // REL-02: test 通道走壳内检查（Worker 源）；stable 保持原 tauri
+    // updater 路径（语义不动）。
+    if (updateChannel === "test") {
+      await checkTestChannel(manual);
+      return;
+    }
+    let update;
+    try {
+      update = await checkUpdate();
+    } catch (e) {
+      console.warn("[updater] check failed (silent — 404/draft/network = no update):", e);
+      if (manual) flashMessage(t("ui.no_update"), "warning");
+      return;
+    }
+    if (!update) {
+      if (manual) flashMessage(t("ui.no_update"), "warning");
+      return;
+    }
+    const ok = await confirmDialog(t("ui.update_available", { version: update.version }), {
+      title: "P-Pass",
+    });
+    if (!ok) return;
+    // W1 (2026-08-26 real-box run): downloadAndInstall() was failing on
+    // Windows because the resident ppf-daemon.exe (never stopped just
+    // by closing the window — it lives on in the tray by design) holds
+    // its own exe file open, so the installer can't overwrite it.
+    // Normal users shouldn't have to know "go stop the background
+    // service in the tray first" — pause it ourselves, then resume it
+    // after a successful install. Best-effort on both ends: pause/resume
+    // failures are logged but never block the update attempt or hide a
+    // real downloadAndInstall error behind a pause/resume error.
+    try {
+      await invoke("pause_daemon_for_update");
+    } catch (e) {
+      console.warn("[updater] pause_daemon_for_update failed (continuing anyway):", e);
+    }
+    try {
+      await update.downloadAndInstall();
+      // Bring the daemon back — on macOS launchd's KeepAlive would
+      // eventually do this on its own, but Windows has no such
+      // self-healing (plain Run key), so this must be explicit on
+      // every platform rather than relying on macOS's safety net to
+      // mask a Windows gap. Daemon's single-instance claim protocol
+      // makes a redundant spawn harmless if something already revived
+      // it first.
+      // #456 后续：用户主动停了服务就不拉——Rust 在调用这一刻读盘上的
+      // 停止标记（和 self_heal_daemon 同一来源），返回 false = 按规则跳过，
+      // 服务保持停止，界面照旧给「启动后台服务」。
+      try {
+        const resumed = await invoke("resume_daemon_after_update");
+        if (resumed === false) console.info("[updater] service was stopped by the user; keeping it stopped after the update");
+      } catch (e) {
+        console.warn("[updater] resume_daemon_after_update failed after a successful install:", e);
+      }
+      // UPD-05 (#605)：装完由用户点「好」后立刻重启外壳——旧版只 toast
+      // 「请重启应用」，用户不重启就一直跑旧外壳：resume 已从新版包拉起
+      // daemon → 页脚（显示 daemon 版本）先跳新版，外壳仍是旧版 →
+      // 「后台版本不对」+ 下次检查再弹同一更新（0.7.3↔0.7.4 真机现场）。
+      // 重启后新外壳启动即跑 #604 的自启对账，daemon 已是新版，版本闭环。
+      // restart_app 不返回（进程被替换）；invoke 报错才退回手动重启指引。
+      await messageDialog(t("ui.update_installed"), { title: "P-Pass", kind: "info" });
+      try {
+        await invoke("restart_app");
+      } catch (restartErr) {
+        console.warn("[updater] restart_app failed after a successful install:", restartErr);
+        flashMessage(t("ui.update_relaunch_failed"), "warning");
+      }
+    } catch (e) {
+      // The daemon we paused above is still down — bring it back so a
+      // failed update doesn't also leave backups silently stopped.
+      // （用户主动停过的不拉，判据同上，在 Rust 侧。）
+      try {
+        await invoke("resume_daemon_after_update");
+      } catch (_) {}
+      const msg = String(e);
+      // Heuristic for the Windows file-in-use class of failure (the one
+      // this pause/resume dance is meant to prevent) — if pause/resume
+      // itself couldn't clear it (third-party lock, AV scan holding the
+      // handle, etc.), tell the user the one concrete thing they can do
+      // instead of surfacing a raw OS error string.
+      // The \u escapes are the zh-CN Windows wording of the same two OS errors
+      // (拒绝访问 / 正被另一个进程使用) — OS text we match, not our copy.
+      if (/being used by another process|access is denied|\u62d2\u7edd\u8bbf\u95ee|\u6b63\u88ab\u53e6\u4e00\u4e2a\u8fdb\u7a0b\u4f7f\u7528/i.test(msg)) {
+        flashMessage(t("ui.update_failed_file_locked"), "error");
+      } else {
+        flashMessage(t("ui.update_failed", { err: msg }), "error");
+      }
+    }
+  }
+
+  // UX-04: 徽章 = 服务态二元（运行中 / 后台服务未运行），不再展示连接
+  // 状态（直连/中继是连接路径事实，不属于服务态；现状 ONLINE_DIRECT 是
+  // 状态机默认值，当作徽章文案是假话）。T-081: 徽章落位侧栏底部胶囊，
+  // 只说服务状态；连接状态归属每台设备行（daemon 尚未暴露 per-device
+  // 连接事实，行内先留结构：状态点 + 右侧槽位）。
+  const pairedCount = $derived(status ? status.devices - status.revoked : 0);
+  // T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes 可能 null——
+  // 拿不到时三个值都是 null，设置页整行隐藏，绝不渲染 undefined/NaN）
+  const diskFree = $derived(formatBytes(status?.disk_free_bytes ?? null));
+  const diskTotal = $derived(formatBytes(status?.disk_total_bytes ?? null));
+  const diskPct = $derived(
+    diskUsedPercent(status?.disk_free_bytes ?? null, status?.disk_total_bytes ?? null)
+  );
+  // T-092: 总览副标题「照片库 M 张」——photo_count 缺失时整段隐藏
+  const photoCount = $derived(
+    typeof status?.photo_count === "number" && Number.isFinite(status.photo_count)
+      ? status.photo_count
+      : null
+  );
+
+  // ---- DESK-03: 照片墙（与手机同一数据源 query.timeline / thumb） ----
+  // 缩略图墙分页懒加载；点开 = 原图内存展示（asset.original，不落盘）+
+  // 「在 Finder 中显示」（asset.path → originals 原文件）。被外删的照片
+  // 由 SYNC-01 对账从墙上自然消失（两卡独立可验）。
+  const photoSources = $derived(
+    typeof status?.photo_sources === "number" && Number.isFinite(status.photo_sources)
+      ? status.photo_sources
+      : null
+  );
+  const PHOTOS_PAGE_SIZE = 60;
+  let photos = $state([]); // AssetMeta[]，timeline 顺序（新→旧）
+  let photosNext = $state(null); // 分页游标
+  let photosLoading = $state(false);
+  let photosLoaded = $state(false); // 首次加载完成（区分空库与未加载）
+  // DESK-38 (#475)：墙的代际——每次 resetPhotosWall 递增。重置前发出、重置后
+  // 才回来的请求（比如停服时发出的首拉，失败回来时服务刚好恢复）不许把旧
+  // 结果写回墙、更不许把 photosLoaded 置 true 挡住重拉。非响应式，只做比较。
+  let photosGen = 0;
+  let sentinelEl = $state(null); // 墙底哨兵 → 触发下一页
+  let photoViewer = $state(null); // {hash, taken_at, media_type} 大图目标
+  let viewerSrc = $state(null); // 大图 data URL（原图或 1024 降级）
+  let viewerPath = $state(null); // 原文件绝对路径（Finder 揭示）
+  // MOB-47: 视频走 asset 协议磁盘 streaming 的 src；video 资产打开时设置，
+  // 图片资产永远为 null（图片仍走 viewerSrc 的 <img> data URL 路径）。
+  let viewerVideoSrc = $state(null);
+  let viewerFailed = $state(false); // 取原图/原片都失败 → 显示降级提示
+  // MOB-47: 视频 viewer 的「代际」标记——每次打开/重开 viewer 单调递增，
+  // 随 <video> 元素一起渲染为不可变身份。`<video>` onerror 异步兜底时
+  // 据此判断错误是否仍属于「发起它的那一次渲染」，而不是读可变全局
+  // viewer 状态（旧 A 的迟到错误不能覆盖已换人的 B；关闭重开同 hash
+  // 也不能威胁新代）。
+  let viewerVideoGen = 0; // 非响应式计数器，只在打开 viewer 时 +1 并快照
+  let viewerVideoToken = $state(null); // {gen, hash} 当前活跃 video 的身份
+
+  async function loadPhotosPage() {
+    if (photosLoading || !photosNext) return;
+    photosLoading = true;
+    const gen = photosGen;
+    try {
+      const r = await call("timeline.page", { cursor: photosNext, limit: PHOTOS_PAGE_SIZE });
+      if (gen !== photosGen) return;
+      photos = photos.concat(r.items ?? []);
+      photosNext = r.next ?? null;
+    } catch (_) {
+      if (gen === photosGen) photosNext = null; // 下一页拿不到就停，不循环报错
+    } finally {
+      photosLoading = false;
+      if (gen === photosGen) photosLoaded = true;
+    }
+  }
+
+  // 进照片页拉第一页；哨兵可见 → 拉下一页（滚动流畅的关键：按需加载）。
+  $effect(() => {
+    if (page !== "photos") return;
+    if (!photosLoaded && !photosLoading) {
+      photosLoading = true;
+      const gen = photosGen;
+      call("timeline.page", { cursor: null, limit: PHOTOS_PAGE_SIZE })
+        .then((r) => {
+          if (gen !== photosGen) return;
+          photos = r.items ?? [];
+          photosNext = r.next ?? null;
+        })
+        .catch(() => {
+          if (gen === photosGen) photosNext = null;
+        })
+        .finally(() => {
+          photosLoading = false;
+          // 过期的这一拉不算「已加载」——photosLoading 落下会让本 $effect
+          // 重跑，按新代际重新拉。
+          if (gen === photosGen) photosLoaded = true;
+        });
+    }
+    if (sentinelEl) {
+      const io = new IntersectionObserver(
+        (entries) => {
+          if (entries[0].isIntersecting) loadPhotosPage();
+        },
+        { rootMargin: "400px" }
+      );
+      io.observe(sentinelEl);
+      return () => io.disconnect();
+    }
+  });
+
+  // taken_at 是秒（proto AssetMeta）——2026-08-18（用户反馈②）分组从三档
+  // 细化到五档：今天 / 昨天 / 本周 / 本月 / 更早。边界用「本地时区当天
+  // 0 点」的时间戳算，不用 toDateString 字符串比对（跨月/跨年的本周同样
+  // 落对档：本周一 0 点是唯一判据，与月份无关）。判定顺序即档位优先级，
+  // 昨天先于本周命中，所以周一~周日的"昨天"不会被本周吞掉。
+  function photoDayBounds(now) {
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const DAY = 86400000;
+    // 周一为一周之首：getDay() 周日=0 → (day + 6) % 7 天前是本周一。
+    const weekStart = startOfToday - (((now.getDay() + 6) % 7) * DAY);
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    return { today: startOfToday, yesterday: startOfToday - DAY, week: weekStart, month: monthStart };
+  }
+  function photoGroupKey(tsSec, b) {
+    const ms = tsSec * 1000;
+    if (ms >= b.today) return "today";
+    if (ms >= b.yesterday) return "yesterday";
+    if (ms >= b.week) return "week";
+    if (ms >= b.month) return "month";
+    return "earlier";
+  }
+  const photoGroups = $derived.by(() => {
+    // nowMs 随刷新推进 → 跨零点时分组自动重算，不会停在昨天的"今天"。
+    const bounds = photoDayBounds(new Date(nowMs));
+    const groups = [
+      { key: "today", label: t("ui.photos_today"), items: [] },
+      { key: "yesterday", label: t("ui.photos_yesterday"), items: [] },
+      { key: "week", label: t("ui.photos_week"), items: [] },
+      { key: "month", label: t("ui.photos_month"), items: [] },
+      { key: "earlier", label: t("ui.photos_earlier"), items: [] },
+    ];
+    for (const item of photos) {
+      groups.find((g) => g.key === photoGroupKey(item.taken_at, bounds)).items.push(item);
+    }
+    return groups.filter((g) => g.items.length > 0);
+  });
+
+  // 大图：原图内存展示（asset.original）；>12MiB/视频/失败 → 1024 缩略图
+  // 降级。关闭即清引用——「不长期落盘」由不写任何临时文件天然满足。
+  // MOB-47: 视频资产不走 base64（会把整段视频拉进内存），改走 asset
+  // 协议 streaming 播放（后端只收 hash，见 allow_media_scope）。
+  // 编排逻辑在 lib/viewerVideo.js（可单测），这里只做接线。
+  $effect(() => {
+    const v = photoViewer;
+    viewerSrc = null;
+    viewerPath = null;
+    viewerVideoSrc = null;
+    viewerVideoToken = null;
+    viewerFailed = false;
+    if (!v) return;
+    let cancelled = false;
+    // 每次打开设一个本代 viewer 的闸；异步加载每步都要过闸，防止旧
+    // 请求回来覆盖已关闭/已换人的 viewer。
+    const isCancelled = () => cancelled;
+    const isVideo = String(v.media_type || "").startsWith("video");
+    if (isVideo) {
+      // 本代 viewer 的身份快照：gen 单调递增（关闭重开同 hash 也不同代），
+      // hash 是本代目标 asset。这个 token 要和 <video> 元素一起渲染，
+      // 让 onerror 拿到的是「元素自己那代」的 gen/hash，而不是全局。
+      viewerVideoGen += 1;
+      viewerVideoToken = { gen: viewerVideoGen, hash: v.hash };
+    }
+
+    if (isVideo) {
+      // 视频：asset 协议（hash 授权 + 单文件 scope）→ 失败走 thumb.get。
+      (async () => {
+        const r = await loadVideoViewer(
+          { invoke, call, convertFileSrc, isCancelled },
+          { hash: v.hash }
+        );
+        if (isCancelled()) return;
+        if (r.kind === "video") {
+          viewerPath = r.path;
+          viewerVideoSrc = r.src;
+        } else if (r.kind === "thumb") {
+          viewerSrc = r.src; // 缩略图走 <img>（图片路径不变）
+        } else {
+          viewerFailed = true; // 缩略图也失败 → 才真正降级提示
+        }
+      })();
+    } else {
+      // 图片：原图 data URL，失败 → 1024 缩略图（与改动前完全一致）。
+      (async () => {
+        try {
+          const o = await call("asset.original", { hash: v.hash });
+          if (!cancelled) viewerSrc = `data:image/jpeg;base64,${o.data_base64}`;
+        } catch (_) {
+          try {
+            const t = await call("thumb.get", { hash: v.hash, size: 1024 });
+            if (!cancelled) viewerSrc = `data:image/jpeg;base64,${t.jpeg_base64}`;
+          } catch (_) {}
+        }
+        try {
+          const p = await call("asset.path", { hash: v.hash });
+          if (!cancelled) viewerPath = p.path;
+        } catch (_) {}
+      })();
+    }
+    // The request can finish after the user closes the viewer or opens a
+    // different asset.  Cancel this generation just like the image path;
+    // otherwise a late video response can overwrite the next viewer state.
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  async function revealPhotoInFinder() {
+    if (!viewerPath) return;
+    try {
+      await revealItemInDir(viewerPath);
+    } catch (e) {
+      flashMessage(t("ui.reveal_failed", { err: errText(e) }), "error");
+    }
+  }
+
+  // MOB-47: `<video>` 元素级错误（源不被支持 / 解码失败 / 文件在授权后被
+  // 外删）——按文档化回退落到 thumb.get 缩略图，缩略图也失败才亮降级提示。
+  // 错误事件必须归属于「发起它的那一次渲染」：从事件元素的 data-* 读出该
+  // 元素自己渲染时的 gen/hash（不可变快照），而不是读可变全局；这样旧 A
+  // 的迟到错误（即使 hash 与 B 不同、或关闭重开同 hash）都不会覆盖新 viewer。
+  async function onVideoError(event) {
+    const el = event?.currentTarget;
+    const rawGen = el?.dataset?.videoGen;
+    const gen = rawGen != null ? Number(rawGen) : NaN;
+    const hash = el?.dataset?.videoHash;
+    if (!Number.isInteger(gen) || !hash) return;
+    const token = { gen, hash };
+    const isActive = () => viewerVideoToken?.gen === gen && viewerVideoToken?.hash === hash;
+    const out = await handleVideoError({
+      token,
+      isActive,
+      loadThumb: (h) => loadVideoThumbnail({ call, isCancelled: () => false }, { hash: h }),
+    });
+    if (out === "ignored" || out.kind !== "applied") return;
+    const r = out.result;
+    if (r.kind === "thumb") {
+      viewerVideoSrc = null;
+      viewerSrc = r.src;
+    } else {
+      viewerFailed = true;
+    }
+  }
+</script>
+
+<Toaster position="top-right" />
+
+{#if shouldShowWizard(wizard, online)}
+  <!-- T-042: onboarding 进行中不展示"后台服务未运行"终态——服务本来
+       就要在这一步才被拉起，提前暴露只有困惑（xixi 实测反馈 1）。
+       配置写了但服务没注册 = wizard 中途退出，重进继续走 wizard
+       （xixi 实测反馈 3），而不是丢到"启动后台服务"裸界面。
+       DESK-36 (#456)：用户自己点了停止（user_stopped）不算中途退出——
+       留在主界面给「启动服务」，判定见 serviceGate.js。 -->
+  <div class="titlebar-drag-region wizard-titlebar-drag-region" aria-hidden="true"></div>
+  <main class="wizard-shell">
+    <header>
+      <h1>P-Pass</h1>
+    </header>
+
+    <!-- W1 (2026-08-26): 整块按平台选择组件渲染，不在单个 Wizard 内部
+         塞 if isWindows —— macOS/Windows 的 onboarding 是两条完全独立的
+         文案+流程分支，拆成两个组件更好维护、也不会互相牵连回归。 -->
+    {#if wizard.platform === "windows"}
+      <WizardWindows
+        defaultDir={wizard.default_dir}
+        configuredLibraryDir={wizard.configured_library_dir}
+        onDone={() => { checkWizard(); refresh(); }}
+      />
+    {:else}
+      <Wizard
+        defaultDir={wizard.default_dir}
+        configuredLibraryDir={wizard.configured_library_dir}
+        onDone={() => { checkWizard(); refresh(); }}
+      />
+    {/if}
+  </main>
+{:else}
+  <div class="titlebar-drag-region shell-titlebar-drag-region" aria-hidden="true"></div>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">P-Pass</div>
+      <nav>
+        {#each NAV as n}
+          <NavItem icon={n.icon} label={n.label} active={page === n.id} onclick={() => go(n.id)} />
+        {/each}
+      </nav>
+      <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊；<1080px
+           收起态缩成纯色点（设计稿：服务状态缩成底部绿点）。 -->
+      <div class="service-pill" class:ok={online} class:bad={!online} title={online ? t("ui.service_running_long") : t("ui.offline_banner")}>
+        <span class="dot"></span>
+        <span class="service-label">{online ? t("ui.service_running_long") : t("ui.offline_banner")}</span>
+      </div>
+    </aside>
+
+    <main class="content" data-page={page}>
+
+      {#if page === "overview"}
+        <section class="page" data-testid="page-overview">
+          <div>
+            <!-- 2026-08-13：设计稿离线版标题带真实照片数——"全家的照片"
+                 换成"全家 N 张照片"，photoCount 没拿到时退回原句（不写
+                 假数字）。 -->
+            <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3] text-ink">
+              {#if photoCount !== null}{t("ui.overview_title_count", { n: photoCount })}{:else}{t("ui.overview_title")}{/if}
+            </h2>
+            <!-- 副标题：有真实"最近一次备份"数据就用设计稿的格式，没有
+                 （比如还没配对过/一次都没备份过）就退回旧的配对数摘要，
+                 不硬凑一句假话。 -->
+            <p class="mt-[6px] text-[14px] text-ink-40">
+              {#if lastBackupOverall}
+                {t("ui.overview_last_backup", { time: humanTime(lastBackupOverall.at, nowMs), name: lastBackupOverall.name })}
+              {:else}
+                {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · ${t("ui.overview_library_count", { n: photoCount })}`}{/if}
+              {/if}
+              {#if status && status.revoked > 0}{t("ui.revoked_count", { n: status.revoked })}{/if}
+            </p>
+          </div>
+
+          {#if !online}
+            <Card class="text-[16px]">
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.offline_action")}</p>
+              <Button class="mt-[12px] self-start" disabled={starting} onclick={startDaemonNow}>
+                {starting ? t("ui.starting") : t("ui.start_service")}
+              </Button>
+              <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
+            </Card>
+          {:else}
+            {#if pendingCount > 0 && !showConfirmModal}
+              <div class="flex items-center gap-[16px] rounded-xl border border-border bg-waiting-bg px-[22px] py-[18px]">
+                <div class="flex flex-1 flex-col gap-[3px]">
+                  <strong class="text-[16px]">{t("diag.desktop.pairing")}</strong>
+                  <!-- 设计稿 v2：横幅直接点名刚扫码的设备（pendingList 里
+                       有真实名字）；列表为空时退回数量摘要（老 daemon 过渡）。 -->
+                  {#if pendingList.length > 0}
+                    <span class="text-[14px] text-ink-60">{t("ui.pending_banner_text", { name: pendingList[0].name })}</span>
+                  {:else}
+                    <span class="text-[14px] text-ink-60">{t("ui.pending_pairs", { n: pendingCount })}</span>
+                  {/if}
+                </div>
+                <div class="flex flex-none flex-wrap gap-[10px]">
+                  <Button variant="secondary" onclick={() => confirmPair(false)}>{t("ui.deny")}</Button>
+                  <Button onclick={() => confirmPair(true)}>{t("ui.allow")}</Button>
+                </div>
+              </div>
+            {/if}
+
+            <!-- MOB-29: 删除发生在这台电脑上，所以警告出在这里。告诉用户
+                 删了几张、还在手机上的那些会被传回来、想真删该先删手机上
+                 的原图。**只针对 delete**——add/move 对我们影响为零
+                 （收录 / 按 hash 重新认领），警告一旦对"挪个位置"也响，
+                 用户就会开始无视它。判据在 lib/externalDelete.js。 -->
+            {#if deleteWarning}
+              <div class="flex items-center gap-[16px] rounded-xl border border-border bg-act-bg px-[22px] py-[18px]">
+                <div class="flex flex-1 flex-col gap-[3px]">
+                  <span class="text-[14px] leading-[1.6] text-ink-60"
+                    >{t("ui.library_delete_warn", { n: deleteWarning.count })}</span
+                  >
+                </div>
+                <div class="flex flex-none">
+                  <Button
+                    variant="secondary"
+                    onclick={() => (deleteWarnDismissedAt = deleteWarning.latestAt)}
+                    >{t("ui.library_delete_warn_dismiss")}</Button
+                  >
+                </div>
+              </div>
+            {/if}
+
+            <!-- 2026-08-17：总览卡片区改功能驱动布局（用户拍板：桌面端
+                 不再逐屏对设计稿，按功能优先级+屏幕尺寸各自最优排布）。
+                 内容优先级（非"操作优先展示其次"的二元对立——总览的核心
+                 功能就是「一眼确认备份没坏」，这才是大多数人打开这个
+                 页面的原因，比"加设备"这种低频动作更该占主位）：
+                 ①水位卡=核心状态，永远第一、永远最大；②添加设备=常驻
+                 但低频的动作，次要位置；③最近动静=锦上添花的补充信息，
+                 之前 <1440px 直接整卡消失是"設計稿驱动"年代的遗留（凑
+                 三栏才加的卡，容不下就砍掉）——现在改成"任何尺寸都在，
+                 只是密度/位置跟着可用空间变"：用 grid 而不是 flex+hidden，
+                 大屏三栏并排，中屏两栏+第三卡沉到下面占满宽度，小屏单栏
+                 全部竖排，没有哪个尺寸会突然"少一块内容"。 -->
+            <!-- 2026-08-17：items-start 改等高（不设 align-items，grid 默认
+                 stretch）——功能驱动阶段不用再守"卡片不等高"的旧设计规则
+                 （T-082 反转过一次是为了贴设计稿，现在不追设计稿了）；
+                 中屏两栏并排时"添加设备"卡内容天然比"备份状态"空
+                 状态多，不等高会让水位卡下面露出一大块空白背景。 -->
+            <div class="grid grid-cols-1 gap-[22px] min-[1080px]:grid-cols-2 min-[1440px]:grid-cols-3">
+              <Card class="text-[16px]">
+                <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.backup_status")}</h3>
+                {#if devices.filter((d) => !d.revoked).length === 0}
+                  <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
+                       卡片顶部，下面一截空白显得像没做完。 -->
+                  <div class="flex flex-1 items-center justify-center">
+                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
+                  </div>
+                {:else}
+                  <ul class="m-0 list-none p-0">
+                    {#each waterRows.shown as { d, row }}
+                      <li class="flex items-center gap-[10px] border-b border-divider py-[10px] last:border-b-0">
+                        <!-- T-091: 右侧接 device.watermarks 真数据（设计稿总览
+                             水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
+                             连接态（direct=safe / relay=wait / offline·unknown=idle）。 -->
+                        <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
+                        <span class="flex-1 text-[15px] font-semibold">{d.name}</span>
+                        <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                  {#if waterRows.moreOk > 0}
+                    <Button variant="link" tone="safe" class="mt-px self-start" onclick={() => go("devices")}
+                      >{t("ui.water_more_ok", { n: waterRows.moreOk })} ›</Button
+                    >
+                  {/if}
+                {/if}
+              </Card>
+
+              <!-- 卡片本身不居中——标题、说明文字都是左对齐的普通文本；
+                   只有按钮内文字（Button 基类自带 justify-center）和底部
+                   「无法扫码」退路是居中的。 -->
+              <!-- T4 (H-10b): 二维码不再是常驻卡片——点按钮弹窗出码，配对完
+                   状态消失；扫码后的允许/拒绝也走模态。 -->
+              <Card class="gap-[12px] text-[16px]">
+                <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
+                <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">{t("ui.add_device_body")}</p>
+                <Button class="w-full" onclick={startPairing}>{t("ui.generate_qr")}</Button>
+                <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
+                     能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
+                <Button variant="link" tone="safe" class="w-full" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</Button>
+              </Card>
+
+              <!-- 「最近动静」摘要卡——不再靠 hidden+断点整卡消失。中屏
+                   （1080-1439px）沉到第二行占满两栏宽度；大屏（≥1440px）
+                   回到第三栏；小屏（<1080px）跟其它卡一样单栏竖排。数据
+                   是活动记录前 3 条，复用同一套 auditWho/auditText，不是
+                   另开一套数据源。 -->
+              <Card class="gap-[12px] text-[16px] min-[1080px]:col-span-2 min-[1440px]:col-span-1">
+                <h3 class="mb-0 text-[15px] font-semibold">{t("ui.recent_activity")}</h3>
+                <!-- 2026-08-17：内容包一层 flex-1——大屏三栏等高时这张卡
+                     内容天然比左边两张少（最多 3 行），没有这层撑底的话
+                     链接会紧贴在短内容下面、卡片下半段留一截空白，看起来
+                     跟左边两张卡"高度不一样"（其实外框是等高的，只是内容
+                     没撑满，视觉上像矮了一截）。 -->
+                <div class="flex-1">
+                  {#if visibleAudit.length === 0}
+                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_activity")}</p>
+                  {:else}
+                    <!-- 单行紧凑文案（设备+事件+相对时间连成一行，不分列、
+                         行间不加分隔线），跟主活动记录页的双列卡片行是两种
+                         密度，故意不共用 .log-rows。 -->
+                    <ul class="m-0 flex list-none flex-col gap-[10px] p-0 text-[14px] text-ink">
+                      <!-- DESK-08: key = 审计主键 e.id。原本是 `e.ts + ":" + e.action`
+                           ——WATCH-02 一次删 N 张会在同一毫秒写 N 条
+                           asset.removed_external，key 撞了 Svelte 直接抛
+                           each_key_duplicate。时间戳不是身份。 -->
+                      {#each visibleAudit.slice(0, 3) as e (e.id)}
+                        {@const at = humanTime(e.ts, nowMs)}
+                        <li><b class="font-semibold">{auditWho(e, devices)}</b> {auditText(e)}{#if at} · {at}{/if}</li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+                <Button variant="link" tone="safe" class="self-start" onclick={() => go("log")}>{t("ui.all_activity")} ›</Button>
+              </Card>
+            </div>
+          {/if}
+        </section>
+      {:else if page === "devices"}
+        <!-- DESK-07: 本页已迁到 Tailwind CSS + shadcn-svelte（Button/Card）。
+             样式一律工具类，不再吃 App.svelte 手写 CSS；数据流与交互逻辑
+             （改名/移除/状态推导）一字未动。像素基准（列表贴边 18px 22px、
+             移除=纯文字链接、标题 28px/副标题 14px/提示 13px）验收见卡记录。 -->
+        <section class="page" data-testid="page-devices">
+          <div class="lede">
+            <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.nav_devices")}</h2>
+            <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.devices_paired_line", { n: pairedCount })}</p>
+          </div>
+          <!-- 2026-08-18（用户反馈③）：设备列表在卡内自己滚，标题/副标题和
+               底部说明不跟着长——与活动记录页/照片页同一套 min-h-0 flex-1
+               overflow-y-auto 处理（那两页踩过"整个右侧内容区跟着长高"的坑）。 -->
+          <Card size="flush" class="min-h-0 flex-1 overflow-y-auto">
+            {#if devices.length === 0}
+              <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
+            {:else}
+              <!-- T-082: 设计稿两行结构——首行设备名加粗，次行「机型 · 连接状态」
+                   槽位；daemon 尚未暴露机型/连接事实，数据未接前显示中性占位，
+                   不捏造「已直连」。不再渲染原始 role 字串。 -->
+              <!-- 2026-08-18（用户反馈③）：按最近一次有动静倒序（新的在上）
+                   ——与总览水位卡同一个 lastActivityAt 口径（last_seen 与
+                   last_backup_at 取大者），不是 daemon 返回的入库顺序。 -->
+              <!-- DEV-03: 两种「离开」要分开。手机点「断开与这台电脑的连接」
+                   不是业主的决定，那台设备必须留在主列表里标「已断开」——
+                   业主有权知道它什么时候断的、到底是哪一台（可能被改过名）。
+                   业主自己点「移除设备」才收进下面的折叠区。
+                   判据是 daemon 给的 revoked_by，不是 revoked 这个布尔位。
+                   来源未知的历史行（DEV-03 之前留下的）按「已移除」处理。 -->
+              {@const activeDevices = devices
+                .filter((d) => !isOwnerRemoved(d))
+                .sort((a, b) => lastActivityAt(b) - lastActivityAt(a))}
+              {@const removedDevices = devices.filter(isOwnerRemoved)}
+              {#if activeDevices.length === 0}
+                <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
+              {:else}
+                <ul>
+                  {#each activeDevices as d}
+                    {@const row = deviceRow(d, nowMs)}
+                    <li class="flex items-center gap-[14px] border-b border-divider px-[22px] py-[18px] last:border-b-0">
+                      <!-- T-091: 哨兵行 ACT 色 + 「需要看看」；T-092: 连接态点色
+                           （direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
+                      <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
+                      <span class="flex flex-1 flex-col items-start gap-[2px] min-w-0">
+                        {#if renameTarget?.nodeId === d.node_id}
+                          <!-- NAME-01: 改名输入框——回车保存 / Esc 取消 /
+                               失焦保存（空名与未改动不提交）。 -->
+                          <input
+                            class="max-w-[260px] flex-none self-start rounded-sm border-[1.5px] border-border-strong bg-paper px-[6px] py-[2px] font-sans text-[16px] font-semibold text-ink focus:border-safe focus:outline-none"
+                            value={renameValue}
+                            oninput={(e) => (renameValue = e.currentTarget.value)}
+                            onkeydown={(e) => {
+                              if (e.key === "Enter") commitRename();
+                              else if (e.key === "Escape") renameTarget = null;
+                            }}
+                            onblur={commitRename}
+                            autofocus
+                          />
+                        {:else}
+                          <!-- NAME-01: 设备名可点击编辑——Button link 变体保持
+                               纸底墨字（hover 提亮 + 下划线），与移除按钮同族但低调。
+                               2026-08-17：shadcn Button 基类自带
+                               justify-center，父容器 flex-col 默认拉伸满宽会把
+                               名字挤到行中间（design v2 对齐轮实测发现）——
+                               self-start + justify-start 双保险钉死左对齐。 -->
+                          <Button
+                            variant="link"
+                            class="-ml-[6px] h-auto min-h-0 flex-none self-start justify-start rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] leading-[1.38] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
+                            title={t("ui.rename")}
+                            onclick={() => startRename(d)}
+                          >{d.name}</Button>
+                        {/if}
+                      </span>
+                      <!-- NET-13: 设备 ID 独立列——8 位短指纹，与活动记录页
+                           auditProjection.js 的 #xxxxxxx 风格一致；title 原生
+                           tooltip 悬停看 64 位全量（devices.list 返回的
+                           node_id 已经是全量 hex，不需要额外转换）。 -->
+                      <span
+                        class="w-[76px] flex-none truncate font-mono text-[12.5px] text-ink-40"
+                        title={d.node_id}
+                      >#{d.node_id.slice(0, 8)}</span>
+                      <!-- NET-13: 在线状态从名字下面的行内文案挪成独立固定
+                           位置的一列（用户反馈：混在标题里不好扫）。 -->
+                      <span class="w-[168px] flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.sub}</span>
+                      <span class="w-[140px] flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
+                      <!-- NET-13: 打开该设备存储目录（originals/<node_id>/），
+                           与照片页「在文件管理器中打开」同一 revealItemInDir
+                           机制；该设备还没落过任何照片时目录不存在，退回
+                           打开 originals/ 根目录（openDeviceFolder 内部处理）。 -->
+                      <Button
+                        variant="link"
+                        class="h-auto min-h-0 flex-none rounded-sm border-0 border-none px-[4px] py-[8px] text-ink-40 no-underline hover:bg-linen hover:text-ink"
+                        title={t("ui.device_open_folder")}
+                        onclick={() => openDeviceFolder(d.node_id)}
+                      ><FolderOpenIcon size={16} /></Button>
+                      <Button
+                        variant="link"
+                        class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
+                        onclick={() => revoke(d.node_id, d.name)}
+                      >{t("ui.remove")}</Button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+              {#if removedDevices.length > 0}
+                <!-- T-082: 已移除设备折叠为展开器，展开后用 ink-40 弱化，
+                     不再划线平铺。 -->
+                <details class="mt-[12px] border-t border-divider px-[22px] pt-[12px]">
+                  <summary class="cursor-pointer text-[14px] font-semibold text-ink-40">{t("ui.removed_devices", { n: removedDevices.length })}</summary>
+                  <ul>
+                    {#each removedDevices as d}
+                      <li class="flex items-center gap-[14px] py-[14px]">
+                        <span class="h-[9px] w-[9px] flex-none rounded-full bg-idle"></span>
+                        <span class="flex-1 text-[15px] font-normal text-ink-40">{d.name}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                </details>
+              {/if}
+            {/if}
+          </Card>
+          <!-- 设计稿 v2：区块间距靠 .page 的 flex gap(22px)统一撑开，
+               这里不再叠加 mt——叠加会让卡片到提示文字的间距变成 32px，
+               跟标题到卡片的 22px 不一致（design v2 是整段 20px 等距）。 -->
+          <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.devices_footnote")}</p>
+        </section>
+      {:else if page === "photos"}
+        <!-- DESK-03: 照片墙——与手机时间线同一数据源（query.timeline +
+             thumb.get），本机直连 daemon 拉取；分组 今天/本月/更早；
+             点开 = 原图内存查看（不落盘）+「在 Finder 中显示」原文件。 -->
+        <section class="page" data-testid="page-photos">
+          <!-- DESK-08: 照片页已迁 Tailwind + 组件库（Card + Button）；数据流
+               （timeline 拉取/分组/查看大图/哨兵加载）一字未动。 -->
+          <div class="flex items-start justify-between gap-[12px]">
+            <div class="min-w-0">
+              <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.nav_photos")}</h2>
+              <p class="mt-[6px] text-[14px] text-ink-40">
+                {#if status?.library_dir}
+                  <!-- 设计稿 v2：照片页副标题 = 张数 + 「按原始文件存在 <库路径>」
+                       （真实 library_dir，不写死路径） -->
+                  {t("ui.photos_count_path", {
+                    n: photoCount !== null ? photoCount : 0,
+                    path: status.library_dir,
+                  })}
+                {:else}
+                  {t("ui.photos_count", {
+                    n: photoCount !== null ? photoCount : 0,
+                    m: photoSources !== null ? photoSources : 0,
+                  })}
+                {/if}
+              </p>
+            </div>
+            <!-- 设计稿 v2：lede 右侧「在 Finder 中打开」（openLibrary 揭示
+                 originals/）；「刷新」是 DESK-06 的事件驱动失效兜底，保留。 -->
+            <div class="flex flex-none items-center gap-[10px]">
+              <Button variant="secondary" class="mt-[2px] flex-none" onclick={openLibrary}>{t("ui.photos_open_library")}</Button>
+              <Button variant="secondary" class="mt-[2px] flex-none" onclick={resetPhotosWall}>
+                {photosLoading ? t("ui.photos_refreshing") : t("ui.photos_refresh")}
+              </Button>
+            </div>
+          </div>
+          <!-- 2026-08-17：DESK-08 迁 Tailwind 时把这张卡的 flex-1/min-h-0/
+               overflow-y-auto 弄丢了，变回整个右侧内容区跟着长高再滚动
+               （回归到 2026-08-13 已经修过一次的老问题）——照活动记录页
+               同款处理补回来，照片格子在卡内自己滚，标题/工具栏不跟着走。 -->
+          <Card class="min-h-0 flex-1 overflow-y-auto text-[16px]">
+            {#if photosLoaded && photos.length === 0}
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_empty")}</p>
+            {:else if !photosLoaded}
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_loading")}</p>
+            {:else}
+              {#each photoGroups as g (g.key)}
+                <h4 class="mt-[14px] mb-[8px] text-[13px] font-semibold text-ink-60 first:mt-0">{g.label}</h4>
+                <div class="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-[6px]">
+                  {#each g.items as item (item.hash)}
+                    <button
+                      class="relative aspect-square cursor-zoom-in overflow-hidden rounded-sm border-0 border-none bg-border p-0 hover:outline-2 hover:outline-ink hover:outline-offset-2"
+                      onclick={() => (photoViewer = item)}
+                      aria-label={t("ui.photo_view_large")}
+                    >
+                      <PhotoThumb hash={item.hash} serviceEpoch={thumbServiceEpoch} />
+                      {#if item.media_type === "video"}
+                        <span class="pointer-events-none absolute bottom-[5px] right-[5px] rounded-[4px] bg-black/55 px-[5px] py-[1px] text-[11px] text-white">▶</span>
+                      {/if}
+                    </button>
+                  {/each}
+                </div>
+              {/each}
+              {#if photosNext}
+                <div class="h-6 text-center text-[12px] text-ink-60" bind:this={sentinelEl}>
+                  {photosLoading ? t("ui.loading") : ""}
+                </div>
+              {/if}
+            {/if}
+          </Card>
+          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.photos_footnote")}</p>
+        </section>
+      {:else if page === "log"}
+        <section class="page" data-testid="page-log">
+          <!-- AUDIT-01: 活动记录页数据源改读 audit_event v2（kind/payload）；
+               本周统计条（新备份/去重跳过）随旧 batch backup.* 审计一并
+               下线，Flow 侧尚无同口径汇总字段，不编造数字。 -->
+          <div class="flex flex-wrap items-end justify-between gap-[20px]">
+            <div>
+              <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.nav_log")}</h2>
+              <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.log_subtitle")}</p>
+            </div>
+          </div>
+          <!-- AUDIT-01: 活动记录页展示审计事件流 v2——配对请求/允许/拒绝、
+               设备吊销/断开/改名、外部删除、Flow 用户操作与终态，全部带
+               时间倒序。ingest.* 逐文件行过滤不展示（全路径噪音）。 -->
+          <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
+            {#if visibleAudit.length === 0}
+              <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_empty")}</p>
+            {:else}
+              <ul class="m-0 list-none p-0">
+                <!-- DESK-08: 同上——key 必须是审计主键，不是 ts+kind。 -->
+                {#each visibleAudit as e (e.id)}
+                  {@const at = humanTime(e.ts, nowMs)}
+                  {@const exact = exactTime(e.ts)}
+                  <li class="flex items-baseline gap-[14px] border-b border-divider px-[22px] py-[16px] last:border-b-0">
+                    <span class="flex-1 text-[15px] text-ink"
+                      ><b class="font-semibold">{auditWho(e, devices)}</b> {auditText(e)}</span
+                    >
+                    <!-- 2026-08-20（用户反馈）：右侧原来堆两行——相对时间
+                         「3 分钟前」+ 精确时刻「2026-08-20 16:15」。两行指同一
+                         个瞬间，是重复表达；而左侧是 items-baseline 对齐第一行
+                         基线，第二行往下撑，左边就空出一块。
+                         改成只留相对时间，精确时刻进 title（悬停可见）——
+                         空白消失，信息一个不少。 -->
+                    <span
+                      class="ml-auto flex-none whitespace-nowrap text-[13px] text-ink-40"
+                      title={exact ?? ""}>{at ?? ""}</span
+                    >
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </Card>
+          <p class="mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_footnote")}</p>
+        </section>
+      {:else if page === "settings"}
+        <section class="page" data-testid="page-settings">
+          <!-- DESK-08: 设置页已迁 Tailwind + Card/Button；所有 IPC 调用与
+               条件渲染（daemonStale 重启行/磁盘水位行）一字未动。 -->
+          <div>
+            <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.settings")}</h2>
+          </div>
+          <div class="flex items-start gap-[22px] max-[1079px]:flex-col">
+            <Card class="flex-[1.2_1_0%] text-[16px]">
+              <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.library")}</h3>
+              {#if status?.library_dir}
+                <code class="block rounded-sm bg-linen px-[16px] py-[12px] text-[14px] break-all">{status.library_dir}</code>
+              {/if}
+              <div class="mt-[12px] flex flex-wrap gap-[10px]">
+                <Button onclick={openLibrary}>{t("ui.open_library")}</Button>
+                <Button variant="secondary" onclick={chooseFolder}>{t("ui.change_library")}</Button>
+              </div>
+              <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
+                   「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
+                   null（磁盘统计拿不到）整行连进度条一起隐藏。 -->
+              {#if diskFree !== null && diskTotal !== null && diskPct !== null}
+                <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold">
+                  <span>{t("ui.disk_space")}</span>
+                  <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_free_of_total", { free: diskFree, total: diskTotal })}</span>
+                </div>
+                <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
+              {/if}
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
+            </Card>
+            <div class="flex flex-1 flex-col gap-[22px]">
+              <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
+                <!-- UI-19（2026-10-01 验收人拍板）：语言切换入口**暂时隐藏**——
+                     观感不佳，先不露面。i18n 机制与文案一律未删：LANG_OPTIONS /
+                     langPref / changeLanguage 原样保留，字典键也在。
+                     恢复方式：把 issue #608 卡面里保存的那段标记放回本位置即可
+                     （源码契约测试见 languageSetting.test.js
+                     「入口已隐藏 + 能力未损坏」两条）。 -->
+                <!-- DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. →
+                     test），旧 REL-02 通道选择行已删。 -->
+                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
+                  <span>{t("ui.software_update")}</span>
+                  <Button variant="secondary" onclick={() => checkForUpdate(true)}>{t("ui.check_update")}</Button>
+                </div>
+                <!-- DAE-04: 桌面壳更新后 daemon 还是旧版（版本不一致）才
+                     显示——一致时不出现，避免误杀正常运行的服务。 -->
+                {#if daemonStale}
+                  <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
+                    <span>{t("ui.restart_service")}</span>
+                    <Button variant="secondary" onclick={restartDaemonProcess} disabled={restartingService}>
+                      {restartingService ? t("ui.restarting_service") : t("ui.restart_service_btn")}
+                    </Button>
+                  </div>
+                  <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.restart_service_hint")}</p>
+                {/if}
+                <!-- #550：诊断包入口已收进托盘菜单（「导出诊断包」），设置页不再展示。 -->
+              </Card>
+              <Card variant="danger" class="text-[16px]">
+                <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
+                <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.stop_hint")}</p>
+                <Button variant="danger" class="self-start" onclick={stopService}>{t("ui.stop_service")}</Button>
+              </Card>
+            </div>
+          </div>
+        </section>
+      {/if}
+    </main>
+    <!-- T4 (H-10b): 配对状态机模态——二维码弹窗 + 允许/拒绝弹窗。 -->
+    <Dialog open={showPairModal} onClose={closePairModal}>
+      <!-- 设计稿 v2：弹窗标题「配对二维码 · 放大版」——亮码用途一目了然 -->
+      <h3>{t("ui.pair_qr_title")}</h3>
+      {#if qrDataUrl}
+        <img class="qr-lg" src={qrDataUrl} alt={t("ui.pair_qr_title")} />
+        <!-- FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，
+             新码只带 r=，旧手机扫新码静默失败。把话说清：先升手机 App。 -->
+        <p class="hint modal-hint modal-upgrade-note">
+          {t("ui.qr_phone_version")}
+        </p>
+        <p class="hint modal-hint">
+          {t("ui.pair_qr_body")}
+        </p>
+        <div class="modal-actions">
+          <Button variant="secondary" onclick={startPairing}>{t("ui.refresh_qr")}</Button>
+          <Button onclick={closePairModal}>{t("ui.close")}</Button>
+        </div>
+        <!-- 设计稿离线版 v2：扫码有困难的退路——复制配对串手动传给
+             手机（比如隔空投送/微信发给家人自己粘）。 -->
+        <Button variant="link" tone="safe" onclick={copyPairString}>{t("ui.qr_fallback")}</Button>
+      {:else}
+        <p class="hint modal-hint">{t("ui.pair_generating")}</p>
+      {/if}
+    </Dialog>
+
+    <!-- UX-08: 待确认加入列表——不传 onClose，必须显式允许/拒绝，
+         不能靠点背景遮罩误关。 -->
+    <Dialog open={showConfirmModal && pendingList.length > 0}>
+      <!-- UX-08: 多台同时扫码 → 一屏全列，逐行允许/拒绝，处理完该行
+           消失，全清后列表关闭——不挤牙膏式顺序弹窗。 -->
+      <!-- DEV-04: 老设备重连 ≠ 陌生设备加入。判据是 node_id（daemon 查
+           device 表，不看 revoked），所以改过名的设备照样认得出来，
+           且用桌面上那个名字称呼它。措辞逻辑在 lib/pending.js，有测试。 -->
+      {@const dialogText = pendingDialogText(pendingList)}
+      <h3>{dialogText.title}</h3>
+      <p class="hint modal-hint">{dialogText.hint}</p>
+      <div class="pending-list">
+        {#each pendingList as item}
+          <!-- DEV-02: 设备与身份 1:1——确认框只有「允许」/「拒绝」。
+               DEV-01 的「替换旧的」连同它依据的指纹匹配一起删掉了：那个
+               提示是手机自报的指纹算出来的，桌面端无法验证，等于让确认框
+               替对方声称「这台手机重装过」。 -->
+          {@const sub = pendingSubText(item, humanTime(item.paired_at, nowMs))}
+          <div class="pending-row">
+            <span class="pending-name">{item.name}</span>
+            <div class="pending-actions">
+              <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
+              <!-- DEV-04: 按钮跟标题走。标题说「请求重新连接」而按钮说
+                   「允许加入」，正是本卡要拦的串台。 -->
+              <Button class="min-w-[64px]" onclick={() => confirmPair(true, item)}>{t(pendingAllowKey(item))}</Button>
+            </div>
+            <!-- DEV-04: 实证副行占满整行。挤在名字那一列里会被按钮压到
+                 「首次配对 今天 10:26 · 已...」——摆出来的事实被截掉了，
+                 等于没摆（2026-09-20 验收人截图）。 -->
+            {#if sub}<span class="pending-sub">{sub}</span>{/if}
+          </div>
+        {/each}
+      </div>
+    </Dialog>
+    <!-- DESK-03: 大图查看——原图内存展示（不落盘），关闭即弃；
+         「在 Finder 中显示」揭示 originals 里的原文件。 -->
+    <Dialog open={!!photoViewer} onClose={() => (photoViewer = null)} class="w-[min(88vw,880px)]">
+      <div class="photo-viewer-wrap">
+            {#if viewerVideoSrc}
+              <!-- MOB-47: 视频走原生 <video>（磁盘 streaming），平台默认控件
+                   即带播放/暂停/进度/seek。src 由 convertFileSrc 生成。
+                   {#key viewerVideoToken.gen} 让每次打开/重开 viewer 都换一块
+                   全新 <video> DOM：旧元素的媒体错误事件仍归旧代（其 data-*
+                   快照不变），不会借新 viewer 的 onerror 误伤新代。 -->
+              {#key viewerVideoToken.gen}
+                <video
+                  class="photo-viewer-video"
+                  src={viewerVideoSrc}
+                  controls
+                  muted
+                  data-video-gen={viewerVideoToken.gen}
+                  data-video-hash={viewerVideoToken.hash}
+                  onerror={onVideoError}></video>
+              {/key}
+            {:else if viewerSrc}
+              <img class="photo-viewer-img" src={viewerSrc} alt="" />
+            {:else if viewerFailed}
+              <div class="photo-viewer-loading">{t("ui.video_load_failed")}</div>
+            {:else}
+              <div class="photo-viewer-loading">{t("ui.loading")}</div>
+            {/if}
+          </div>
+      <div class="modal-actions">
+        <Button variant="secondary" onclick={revealPhotoInFinder} disabled={!viewerPath}>
+          {t("ui.photos_open_in_finder")}
+        </Button>
+        <Button onclick={() => (photoViewer = null)}>{t("ui.close")}</Button>
+      </div>
+    </Dialog>
+    <!-- T1: 版本号——报问题/排查时先知道装的是什么版本。 -->
+    {#if displayVersion}
+      <footer class="version-footer">
+        <span>P-Pass v{displayVersion}</span>
+        <!-- DESK-02①: 环境显式徽标——prerelease 构建琥珀小徽标（「测试版」），
+             环境在 UI 上一眼可辨，不靠用户读懂 -test 后缀；正式构建只显示版本号。 -->
+        {#if isTestBuild}
+          <span class="env-badge">{t("ui.env_badge_test")}</span>
+        {/if}
+      </footer>
+    {/if}
+  </div>
+{/if}
+
+<style>
+  /* DESK-08: 整个组件样式包进 @layer components——Tailwind v4 的
+     utilities 层声明在 components 之后，工具类才能压过手写规则
+     （Svelte 会把 button 等元素选择器加作用域类提升特异性，
+     不包 layer 的话 44px min-height 这类基类永远赢）。 */
+  @layer components {
+  /* All colours/typography come from assets/design/tokens.css (single
+     source of truth). Meaning colours: green=safe, amber=waiting,
+     red=act — nothing else carries meaning. */
+  :global(body) {
+    margin: 0;
+    font-family: var(--pp-font-sans);
+    background: var(--pp-paper);
+    color: var(--pp-ink);
+    font-size: var(--pp-body-min);
+  }
+  :global(html), :global(body), :global(#app) {
+    height: 100%;
+  }
+  /* T-082: 键盘焦点统一用 token 色 outline，消灭系统默认蓝色焦点圈。
+     :global 覆盖本窗口全部可聚焦元素（含 Wizard）。 */
+  :global(:focus-visible) {
+    outline: 2px solid var(--pp-ink);
+    outline-offset: 2px;
+  }
+
+  /* ---- shell：侧栏 + 内容区（布局 v1） ---- */
+  .shell {
+    display: flex;
+    height: 100vh;
+    overflow: hidden;
+  }
+  .sidebar {
+    width: 216px;
+    flex: none;
+    background: var(--pp-linen);
+    border-right: 1px solid var(--pp-border);
+    display: flex;
+    flex-direction: column;
+    padding: 16px 12px;
+    box-sizing: border-box;
+  }
+  .brand {
+    font-family: var(--pp-font-serif);
+    font-size: 22px;
+    font-weight: 500;
+    padding: 4px 12px 16px;
+  }
+  nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  /* DESK-15：.nav-item/.nav-icon/.nav-label（含 <1080px 收起覆盖）已收进
+     NavItem 组件（lib/components/ui/nav-item/nav-item.svelte）。 */
+  .service-pill {
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border-radius: var(--pp-radius-pill);
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--pp-idle-bg);
+    color: var(--pp-ink-60);
+  }
+  .service-pill .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--pp-idle);
+    flex: none;
+  }
+  .service-pill.ok {
+    background: var(--pp-safe-bg);
+    color: var(--pp-safe);
+  }
+  .service-pill.ok .dot {
+    background: var(--pp-safe);
+  }
+  .service-pill.bad {
+    background: var(--pp-act-bg);
+    color: var(--pp-act);
+  }
+  .service-pill.bad .dot {
+    background: var(--pp-act);
+  }
+  .content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 34px 38px;
+    box-sizing: border-box;
+  }
+  .page {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    /* 设计稿基准档（16 寸/1080-1439）内容区就是填满侧栏之外的可用宽度，
+     * 不设人为上限——之前写死 880px，任何比 880+侧栏宽的窗口右边全是
+     * 死区（用户实测反馈）。max-width 只在 ≥1440px 才需要（见文件尾
+     * 的响应式媒体查询），防真的超宽屏内容无限拉伸。 */
+  }
+
+
+
+  
+
+
+  
+
+  /* wizard 全窗（首启向导独占，无侧栏） */
+  .wizard-shell {
+    max-width: 680px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  h1 {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    margin: 0;
+  }
+
+  
+
+
+
+
+
+  h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+
+
+
+
+  
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+  
+
+
+
+  /* 2026-08-13：列表本身内部滚动，不是靠整个右边内容区变高再滚动
+     （用户实测反馈：应该是表格内滚动，游标加载，不是整个右边区域
+     滚动）。真正的游标分页（滚到底再补一批，而不是一次性 limit=100
+     取全量）需要 activity.list 后端加 cursor 参数——现状后端只有
+     limit，没有 before_ts/cursor，这部分先留白不假装做了，只把
+     "列表内部滚动"这一半先落地。 */
+  main[data-page="log"] .page,
+  main[data-page="photos"] .page,
+  /* 2026-08-18（用户反馈③）：设备列表卡内滚——.page 撑满内容区高度是
+     卡片 flex-1 + overflow-y-auto 生效的前提（log/photos 同款）。 */
+  main[data-page="devices"] .page {
+    height: 100%;
+    box-sizing: border-box;
+  }
+
+
+
+
+
+
+
+  
+
+
+
+  
+
+
+
+  
+
+
+
+  /* DESK-15：原生 button/.primary/.link-more 视觉规则已删——全部收编进
+     Button 组件（variant=primary/secondary/danger/link，tone=safe），
+     不再有第二套按钮视觉实现。 */
+  .qr-fallback {
+    align-self: stretch;
+    text-align: center;
+  }
+  .qr-fallback summary {
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--pp-safe);
+    list-style: none;
+  }
+  .qr-fallback summary::-webkit-details-marker {
+    display: none;
+  }
+  .qr-fallback .qrtext {
+    text-align: left;
+  }
+  .qrtext {
+    display: block;
+    word-break: break-all;
+    font-size: 12px;
+    background: var(--pp-linen);
+    padding: 10px;
+    border-radius: var(--pp-radius-control-sm);
+    margin-top: 6px;
+  }
+  .version-footer {
+    position: fixed;
+    right: 14px;
+    bottom: 8px;
+    font-size: 11px;
+    color: var(--pp-ink-40);
+    opacity: 0.8;
+    user-select: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  /* DESK-02①: 环境徽标——prerelease 构建琥珀小徽标（测试版），
+     环境在 UI 上一眼可辨；正式构建不渲染。 */
+  .env-badge {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: var(--pp-act-bg);
+    color: var(--pp-act);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+  /* DESK-15：弹窗外壳（遮罩+面板）已收进 Dialog 组件，这里只留内容级
+     class（qr-lg / modal-hint / modal-actions / pending-row 等 / photo-viewer-wrap 等）。 */
+  .qr-lg {
+    width: 360px;
+    max-width: 100%;
+    image-rendering: pixelated;
+    border-radius: var(--pp-radius-control-sm);
+    margin: 14px 0 4px;
+  }
+  .modal-hint {
+    margin: 12px 0 16px;
+  }
+  .modal-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 4px;
+  }
+  /* UX-08: pending 全量列表——一屏一行，逐行允许/拒绝 */
+  .pending-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 4px;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+  /* DEV-04: 两行网格——名字与按钮同行，实证副行独占整行。副行若跟名字
+     共用那一列，会被右侧按钮挤到只剩半句（验收截图里就是「已...」）。 */
+  .pending-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: 10px;
+    row-gap: 4px;
+    background: var(--pp-linen);
+    border-radius: var(--pp-radius-control-sm);
+    padding: 10px 12px;
+  }
+  .pending-name {
+    grid-column: 1;
+    grid-row: 1;
+    min-width: 0;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* DEV-04: 老设备重连时的实证副行（首次配对时刻 · 已存 N 张）。
+     新设备这一行不存在——没有可说的事实就不占位。 */
+  .pending-sub {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--pp-ink-60);
+  }
+  .pending-actions {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    gap: 8px;
+  }
+  .hint {
+    color: var(--pp-ink-40);
+    font-size: 13px;
+    margin: 10px 0 0;
+    line-height: 1.6;
+  }
+
+
+
+  /* UI-04b: 提示条脱离文档流——fixed 浮层，出现/消失不顶动下方内容。
+     改名成功/失败、复制成功等瞬时反馈都走这里；错误反馈同样可见
+     （5s 自动消失 + 手动 ×），只是不再占布局空间。 */
+  /* DESK-15：提示条（.message/.message-close）已收进 Notice 组件
+     （lib/components/ui/notice/notice.svelte），这里不再重复定义。 */
+
+  
+
+
+
+
+
+
+
+  /* 大图 modal：图片区域限高、object-contain 保完整（大图看全貌优先）；
+     弹窗本身加宽已经在调用处用 Dialog 的 class="w-[min(88vw,880px)]" 传入。 */
+  .photo-viewer-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 260px;
+    max-height: 70vh;
+    overflow: hidden;
+    background: #14100c;
+    border-radius: var(--pp-radius-control-sm, 6px);
+  }
+  .photo-viewer-img {
+    max-width: 100%;
+    max-height: 70vh;
+    object-fit: contain;
+  }
+  /* MOB-47: 视频元素与图片同框约束——填满弹窗可用宽度、限高、保持比例。 */
+  .photo-viewer-video {
+    max-width: 100%;
+    max-height: 70vh;
+    width: 100%;
+    outline: none;
+  }
+  .photo-viewer-loading {
+    color: #cbbfa8;
+    padding: 40px;
+    font-size: 13px;
+  }
+
+  /* ============================================================
+   * 三档响应式（离线版设计稿 v2「第 3 轮」），断点数值是设计稿原文。
+   * 2026-08-13 二次修复：这几条媒体查询之前写在文件中段，被后面的
+   * 无条件 .page/.cols 规则（同优先级、后出现）盖掉，等于白写——
+   * CSS 层叠顺序下同优先级选择器谁在后面谁赢。媒体查询必须放在
+   * 所有同选择器的无条件规则之后，这里统一挪到 <style> 最末尾。
+   * ============================================================ */
+  @media (max-width: 1079px) {
+    .sidebar {
+      width: 64px;
+      padding: 14px 0;
+      align-items: center;
+    }
+    .brand {
+      display: none;
+    }
+    nav {
+      align-items: center;
+      gap: 4px;
+    }
+    /* 服务状态缩成一个纯色点（设计稿原文），不再是文字胶囊。 */
+    .service-pill {
+      background: transparent !important;
+      padding: 0;
+      gap: 0;
+    }
+    .service-pill .dot {
+      width: 12px;
+      height: 12px;
+    }
+    .service-label {
+      display: none;
+    }
+  }
+  /* ≥1440：三栏，内容区居中不无限拉伸。总览卡片区（水位/添加设备/
+     最近动静）改用 grid（见模板内联类），断点行为不靠这里的 @media，
+     小屏单栏竖排是 grid-cols-1 默认值自然得到的，不需要额外规则。
+     照片墙是缩略图网格不是读文字，没有"一行多少字读得舒服"的考量，
+     豁免这条居中限宽，让墙铺满可用宽度（用户实测反馈：右边留白）。 */
+  @media (min-width: 1440px) {
+    .page {
+      max-width: 1180px;
+      /* 2026-08-13 二次走查：只限宽不居中 = 右侧死区（1920px 下实测
+         486px）——"内容区居中不无限拉伸"要两个都做，margin auto 居中。 */
+      margin: 0 auto;
+    }
+    main[data-page="photos"] .page {
+      max-width: none;
+    }
+
+  }
+  }
+</style>
