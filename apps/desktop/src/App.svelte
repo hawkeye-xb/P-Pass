@@ -1045,7 +1045,19 @@
       } catch (e) {
         console.warn("[updater] resume_daemon_after_update failed after a successful install:", e);
       }
-      flashMessage(t("ui.update_installed"));
+      // UPD-05 (#605)：装完由用户点「好」后立刻重启外壳——旧版只 toast
+      // 「请重启应用」，用户不重启就一直跑旧外壳：resume 已从新版包拉起
+      // daemon → 页脚（显示 daemon 版本）先跳新版，外壳仍是旧版 →
+      // 「后台版本不对」+ 下次检查再弹同一更新（0.7.3↔0.7.4 真机现场）。
+      // 重启后新外壳启动即跑 #604 的自启对账，daemon 已是新版，版本闭环。
+      // restart_app 不返回（进程被替换）；invoke 报错才退回手动重启指引。
+      await messageDialog(t("ui.update_installed"), { title: "P-Pass", kind: "info" });
+      try {
+        await invoke("restart_app");
+      } catch (restartErr) {
+        console.warn("[updater] restart_app failed after a successful install:", restartErr);
+        flashMessage(t("ui.update_relaunch_failed"), "warning");
+      }
     } catch (e) {
       // The daemon we paused above is still down — bring it back so a
       // failed update doesn't also leave backups silently stopped.
@@ -1474,7 +1486,7 @@
                       <li class="flex items-center gap-[10px] border-b border-divider py-[10px] last:border-b-0">
                         <!-- T-091: 右侧接 device.watermarks 真数据（设计稿总览
                              水位卡为单行结构）。T-092: 行点变四色——哨兵 act >
-                             连接态（direct=safe / relay=wait / offline·unknown=idle）。 -->
+                             连接态（direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
                         <span class="h-[9px] w-[9px] flex-none rounded-full {DOT_BG[row.dot]}"></span>
                         <span class="flex-1 text-[15px] font-semibold">{d.name}</span>
                         <span class="flex-none text-[13.5px] {row.alert ? 'text-act' : 'text-ink-40'}">{row.right}</span>
@@ -1636,7 +1648,7 @@
                       ><FolderOpenIcon size={16} /></Button>
                       <Button
                         variant="link"
-                        class="h-auto min-h-0 rounded-sm border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
+                        class="h-auto min-h-0 rounded-none border-0 border-none px-[4px] py-[8px] text-[14px] font-semibold text-act no-underline hover:bg-act-bg hover:underline hover:underline-offset-[3px]"
                         onclick={() => revoke(d.node_id, d.name)}
                       >{t("ui.remove")}</Button>
                     </li>
@@ -2090,7 +2102,6 @@
 
 
 
-
   h3 {
     font-size: 15px;
     font-weight: 600;
@@ -2101,22 +2112,13 @@
 
 
   
-
-
+  
 
 
 
 
   
   
-
-
-
-
-
-  
-
-
 
   /* 2026-08-13：列表本身内部滚动，不是靠整个右边内容区变高再滚动
      （用户实测反馈：应该是表格内滚动，游标加载，不是整个右边区域
@@ -2137,18 +2139,17 @@
 
 
 
-
-
   
 
 
-
+  
   
 
-
-
+  
   
 
+  
+  
 
 
   /* DESK-15：原生 button/.primary/.link-more 视觉规则已删——全部收编进
@@ -2289,7 +2290,7 @@
 
 
 
-
+  
 
   /* 大图 modal：图片区域限高、object-contain 保完整（大图看全貌优先）；
      弹窗本身加宽已经在调用处用 Dialog 的 class="w-[min(88vw,880px)]" 传入。 */
