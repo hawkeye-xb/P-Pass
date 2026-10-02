@@ -803,6 +803,70 @@ fn restart_app(app: tauri::AppHandle) {
     tauri::process::restart(&app.env());
 }
 
+/// UPD-06 (#616)：磁盘上**安装包**的版本（`Contents/Info.plist`）。
+///
+/// 与 `getVersion()`（**编译进这只壳**的版本）比对就是"更新装完了、但运行中的
+/// 这只壳还是旧的"的**确定性判据**：壳的可执行文件在 `/Applications` 下跨更新
+/// 路径不变，包在它下面被换掉，于是"读到的包版本 ≠ 我的编译版本"只有一种解释。
+/// 读不到 = `None` = 不知道（前端必须按"什么都不做"处理）。
+#[tauri::command]
+fn installed_app_version() -> Option<String> {
+    use platform::PlatformAdapter as _;
+    platform::adapter().installed_bundle_version()
+}
+
+/// UPD-06 (#616)：换壳——让**运行中的这只壳**变成磁盘上已经是新版的那一份。
+///
+/// 两层，每层失败都往下退化，绝不静默：
+/// ① **系统路径**：登记壳的 LaunchAgent（幂等）+ **仅在"登记指向我自己"时**
+///    `launchctl kickstart -kp` —— 由 launchd 杀 + 按磁盘上的新文件拉，
+///    "进程自己换自己"的 single-instance 竞态在架构上消失，且 `-p` 给新 pid 可验证。
+///    闸门不可省：登记指向别处时 kickstart 会把**另一份副本**（旧路径/备份目录里的
+///    App）拉起来，比不重启更糟。
+/// ② **退化路径**：`tauri::process::restart`（0.7.5 起在用：spawn 当前二进制 +
+///    立即 exit(0)）。开发构建、从 dmg 直跑等"没有稳定安装位置"的场合只走这条。
+///
+/// 正常路径**不返回**（本进程被替换/被杀）；只有两层都没走成才 Err，
+/// 前端据此给"手动完全退出再打开"的兜底提示。
+#[tauri::command]
+fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
+    use platform::PlatformAdapter as _;
+    // ⚠️ 闸门一：只有**launchd 自己拉起来的**这一份壳才走系统路径。
+    // `kickstart -k` 的 "kill the running instance" 只能杀服务管理器启动的进程；
+    // 从访达/Dock 打开的壳，launchd 手里没有它的 pid ⇒ `-k` 无物可杀 ⇒ kickstart
+    // 只会再拉一个实例，而 single-instance 会让新实例把焦点交回旧壳后自杀 ⇒
+    // 用户点"重启"什么都没发生（比不重启更糟）。所以非 launchd 实例直接走退化路径。
+    if let Some(label) = platform::adapter().shell_agent_label() {
+        if !platform::adapter().shell_agent_started_us() {
+            eprintln!(
+                "#616: 本进程不是 {label} 拉起的（用户直接打开），kickstart 无物可杀，走壳自己重启"
+            );
+        } else {
+            match std::env::current_exe() {
+                Ok(exe) => match platform::adapter().register_shell_agent(&exe) {
+                    Ok(()) => match platform::adapter().shell_agent_registered_exec() {
+                        Ok(Some(registered)) if registered == exe => {
+                            match platform::adapter().kickstart_shell_agent() {
+                                Ok(pid) => {
+                                    eprintln!("#616: kickstart {label} 拉起新壳 pid={pid}");
+                                    return Ok(());
+                                }
+                                Err(e) => eprintln!("#616: kickstart 失败，退化 restart：{e}"),
+                            }
+                        }
+                        other => eprintln!(
+                            "#616: 壳登记未指向当前可执行文件（{other:?}），不用 kickstart（会拉起另一份副本）"
+                        ),
+                    },
+                    Err(e) => eprintln!("#616: 登记壳 LaunchAgent 失败，退化 restart：{e}"),
+                },
+                Err(e) => eprintln!("#616: 读不出当前可执行文件，退化 restart：{e}"),
+            }
+        }
+    }
+    tauri::process::restart(&app.env());
+}
+
 /// DAE-04: 桌面壳更新后手动重启后台服务——杀掉当前运行的旧 daemon 进程，
 /// 靠 launchd KeepAlive（SuccessfulExit=false，crates/platform/src/macos.rs
 /// 注释：崩溃/被杀照样复活）自动拉起磁盘上已是新版本的同一个文件。
@@ -1149,6 +1213,8 @@ pub fn run() {
             pause_daemon_for_update,
             resume_daemon_after_update,
             restart_app,
+            installed_app_version,
+            relaunch_shell,
             self_heal_daemon,
             restart_daemon_process,
             export_logs_bundle,
@@ -2567,14 +2633,66 @@ mod tests {
         );
         let app = include_str!("../../src/App.svelte");
         let install = app
-            .find("await update.downloadAndInstall();")
+            .find("await update.downloadAndInstall(")
             .expect("App.svelte 缺 downloadAndInstall");
-        let restart = app
-            .find("await invoke(\"restart_app\");")
-            .expect("App.svelte 缺 restart_app 调用");
+        // UPD-06 (#616)：换壳走 relaunch_shell（系统路径 kickstart 优先、壳自己
+        // 重启兜底），不再是裸的 restart_app——restart_app 现在只是它的退化分支。
+        // ⚠️ 比的是**调用点**：`relaunchShellNow` 的定义体在文件里更靠前，比定义
+        // 位置会得出反向结论（本测试第一版就是这么红的）。
+        let call = app
+            .find("await relaunchShellNow();")
+            .expect("App.svelte 缺换壳调用点");
+        assert!(call > install, "换壳必须在 downloadAndInstall 之后调用");
         assert!(
-            restart > install,
-            "restart_app 必须在 downloadAndInstall 之后调用"
+            app.contains("await invoke(\"relaunch_shell\");"),
+            "换壳必须调 relaunch_shell 命令"
+        );
+    }
+
+    /// UPD-06 (#616)：换壳的**闸门**测试。
+    ///
+    /// 两条判据必须同时成立，少一条就会出事故：
+    /// ① kickstart 之前必须比对"壳登记指向的可执行文件 == 我自己"——否则会把
+    ///    **另一份副本**（旧路径 / 备份目录里的 App）拉起来，比不重启更糟；
+    /// ② 必须有退化路径（`tauri::process::restart`），否则开发构建、从 dmg 直跑的
+    ///    机器就完全没有换壳能力。
+    /// 反证：删掉 `shell_agent_registered_exec` 那句比对，或删掉末尾的
+    /// `tauri::process::restart` → 本测试必须红。
+    #[test]
+    fn relaunch_shell_gates_kickstart_on_registration_pointing_at_us() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("fn relaunch_shell(app: tauri::AppHandle)")
+            .expect("relaunch_shell 命令缺失");
+        // 取函数体前 2000 个**字符**：按字节切会踩 UTF-8 边界（注释是中文）。
+        let body: String = src[start..].chars().take(2000).collect();
+        assert!(
+            body.contains("shell_agent_registered_exec"),
+            "换壳前必须先读登记路径（闸门）"
+        );
+        assert!(
+            body.contains("shell_agent_started_us"),
+            "闸门：只有 launchd 自己拉起的壳才走 kickstart（否则 -k 无物可杀，只会再拉一个实例）"
+        );
+        assert!(
+            body.contains("Ok(Some(registered)) if registered == exe"),
+            "闸门判据必须是『登记路径 == 我自己』"
+        );
+        assert!(
+            body.contains("kickstart_shell_agent"),
+            "系统路径要走 kickstart（由 launchd 杀 + 拉）"
+        );
+        assert!(
+            body.contains("tauri::process::restart"),
+            "必须有退化路径，否则没有稳定安装位置的机器无法换壳"
+        );
+        assert!(
+            src.contains("relaunch_shell,"),
+            "relaunch_shell 未注册进 invoke_handler"
+        );
+        assert!(
+            src.contains("installed_app_version,"),
+            "installed_app_version 未注册进 invoke_handler"
         );
     }
 }

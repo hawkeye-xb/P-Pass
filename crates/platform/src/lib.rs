@@ -458,6 +458,89 @@ pub trait PlatformAdapter: Send + Sync {
     /// 「进程本来就没在跑」返回 [`KillOutcome::NotRunning`]，**不是 `Err`**。
     /// 真失败（权限不足、被杀软拦、参数错）才是 `Err`——判据见各平台实现。
     fn kill_daemon_process(&self) -> Result<KillOutcome>;
+
+    // ── UPD-06 (#616)：让**系统**负责"重启桌面壳" ─────────────────────
+    //
+    // 背景：更新装完磁盘上已是新版，但正在跑的壳仍是旧版，而**壳不能原地
+    // 换代码**。0.7.5 的解法是壳自己 `restart_app`（spawn 自己 + exit），
+    // 那要在被替换的进程里自证没竞态（托盘常驻 + single-instance）。
+    //
+    // 更好的一层：把"杀 + 拉"交给系统的服务管理器（macOS = launchd），
+    // **杀和拉都不在壳里发生**，single-instance 竞态在架构上消失，而且
+    // 系统会告诉我们新实例的 pid（可验证）。
+    //
+    // ⚠️ 登记 ≠ 守卫：壳的登记**只解决"系统知道怎么启动它"**，因此**绝不挂
+    // KeepAlive** —— 挂上 KeepAlive 用户就再也退不掉 App（托盘「退出 App」
+    // 会被立刻复活）。守卫（崩溃自恢复）是 daemon 那一侧的事。
+    // 壳是**登录项**（`RunAtLoad=true`，2026-10-02 验收人拍板）：登录时由 launchd
+    // 拉起常驻托盘 —— 目的就是让"启动/重启壳"归系统管，而不是让进程自己换自己。
+    // 没有 KeepAlive ⇒ 用户仍可完全退出，只是下次登录会再起来。
+
+    /// 本平台给"桌面壳"用的服务标签（`None` = 本平台没有这个能力，调用方
+    /// 降级回壳自己重启 / 显式重启）。
+    fn shell_agent_label(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// **本进程是不是服务管理器自己拉起来的那一份**（macOS = launchd 设的
+    /// `XPC_SERVICE_NAME` 等于我们的壳 label）。
+    ///
+    /// 为什么这条判据不可省（2026-10-02 读手册 + 推演所得）：
+    /// `kickstart -k` 的 "kill the running instance" 只能杀掉**服务管理器自己
+    /// 启动的**那个进程。用户从访达/Dock 直接打开的壳，launchd 手里没有它的
+    /// pid ⇒ `-k` 无物可杀 ⇒ kickstart 只会**再拉起第二个实例**；而壳装了
+    /// single-instance，第二个实例会把焦点交回旧壳后自杀 ⇒ 用户点"重启"什么
+    /// 都没发生（比不重启更糟：看起来像坏掉）。
+    ///
+    /// 所以：只有"我确实是 launchd 的那一份"时才走系统路径；否则走壳自己重启
+    /// （`tauri::process::restart`，0.7.5 起就在用、已在真机跑过）。
+    /// 让系统路径成为常态需要产品决定"壳是否由 launchd 拉起（登录项）"——
+    /// 已挂在 #616 的 PR 描述里等拍板，不在本卡悄悄改。
+    fn shell_agent_started_us(&self) -> bool {
+        false
+    }
+
+    /// 把**当前壳**登记成"按需可启动"的服务（幂等）。
+    ///
+    /// 只在需要换壳前调用；**绝不 bootout 正在运行的实例**（那会当场把壳
+    /// 杀掉，而不是"等需要时再重启"）。已登记且指向同一个可执行文件 = 无操作。
+    fn register_shell_agent(&self, exec: &std::path::Path) -> Result<()> {
+        let _ = exec;
+        Err(PlatformError::Failed {
+            action: "register_shell_agent",
+            detail: "此平台没有服务管理器，壳由调用方自行重启".into(),
+        })
+    }
+
+    /// 已登记的壳服务指向哪个可执行文件（`None` = 没登记）。
+    /// 调用方**必须先比对这个路径**再 kickstart，否则可能拉起另一份副本。
+    fn shell_agent_registered_exec(&self) -> Result<Option<std::path::PathBuf>> {
+        Ok(None)
+    }
+
+    /// 让服务管理器**杀掉并重启**壳，返回新实例 pid。
+    /// 调用方：`shell_agent_label().is_some()` 且登记路径 == 当前可执行文件时才用。
+    fn kickstart_shell_agent(&self) -> Result<u32> {
+        Err(PlatformError::Failed {
+            action: "kickstart_shell_agent",
+            detail: "此平台没有服务管理器".into(),
+        })
+    }
+
+    /// 磁盘上**安装包**的版本（macOS = `defaults read <bundle>/Contents/Info.plist
+    /// CFBundleShortVersionString`；`None` = 读不到或本平台没实现）。
+    ///
+    /// 用途（UPD-06 #616）：与"进程自己编译进去的版本"比对，就是"更新装完了、
+    /// 但**运行中的这只壳/这个 daemon 还是旧版**"的**确定性判据**——可执行文件
+    /// 在 `/Applications` 下跨更新路径不变，包在它下面被换掉，于是"读到的包版本
+    /// ≠ 我的编译版本"只有一种解释：我是旧进程、磁盘已是新版。
+    ///
+    /// ⚠️ 读不到必须返回 `None`（= 不知道），**绝不许**降级成"版本不一致"：
+    /// 那会让一切正常的机器也去做一次没必要的换壳/重启（读不到＝无从判断，
+    /// fail-safe 的方向永远是"什么都不做"）。
+    fn installed_bundle_version(&self) -> Option<String> {
+        None
+    }
 }
 
 /// The adapter for the current platform.
@@ -766,6 +849,66 @@ mod tests {
             "<key>NotProgramArguments</key>",
         );
         assert_eq!(macos::plist_program_argument(&broken), None);
+    }
+
+    /// UPD-06 (#616)：壳是**登录项**，但**不是守卫**。
+    ///
+    /// 两件事必须同时成立：
+    /// ① `RunAtLoad=true` —— 登录时由 launchd 拉起（"启动壳"归系统管；也正因为
+    ///    如此 `kickstart -k` 才有东西可杀，见 `shell_agent_started_us`）；
+    /// ② **不许出现 `KeepAlive`** —— 挂上它用户就再也退不掉 App（托盘「退出 App」
+    ///    会被立刻复活）。用户可以完全退出，只是下次登录会再起来。
+    ///
+    /// 反证：把 `KeepAlive` 段加回去、或把 `RunAtLoad` 改成 `<false/>` → 本测试必须红。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn shell_agent_is_a_login_item_but_never_guarded() {
+        let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/p-pass-desktop");
+        let plist = macos::shell_agent_plist(exec);
+        assert!(
+            !plist.contains("KeepAlive"),
+            "壳的登记不许挂 KeepAlive（用户会退不掉 App）: {plist}"
+        );
+        assert!(
+            plist.contains("<key>RunAtLoad</key><true/>"),
+            "壳是登录项：登录时由 launchd 拉起，kickstart 才有东西可杀: {plist}"
+        );
+        assert_eq!(
+            macos::plist_program_argument(&plist),
+            Some(exec.display().to_string()),
+            "ProgramArguments 必须指向壳自己的可执行文件，kickstart 才有意义"
+        );
+        // 能力要真的暴露出来：调用方靠它决定走"系统重启"还是退化到自己重启。
+        assert_eq!(
+            PlatformAdapter::shell_agent_label(&macos::MacosAdapter::new()),
+            Some("com.p-pass.shell")
+        );
+    }
+
+    /// UPD-06 (#616)：安装包版本的判据建立在"从可执行文件推出它所属的 `.app`"上，
+    /// 形状不对必须返回 `None`（= **不知道**）——猜错方向的代价是"一切正常的机器
+    /// 也去做一次没必要的换壳/重启"。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_root_only_accepts_the_app_bundle_shape() {
+        use macos::bundle_root;
+        use std::path::{Path, PathBuf};
+        assert_eq!(
+            bundle_root(Path::new(
+                "/Applications/P-Pass.app/Contents/MacOS/p-pass-desktop"
+            )),
+            Some(PathBuf::from("/Applications/P-Pass.app"))
+        );
+        // 不是 .app 布局的一律 None：开发构建、裸二进制、少一层目录
+        assert_eq!(bundle_root(Path::new("/usr/local/bin/ppf-daemon")), None);
+        assert_eq!(
+            bundle_root(Path::new("/Applications/P-Pass.app/p-pass-desktop")),
+            None
+        );
+        assert_eq!(
+            bundle_root(Path::new("/Applications/P-Pass.app/Contents/MacOS")),
+            None
+        );
     }
 
     /// 【DESK-42 #604】闸门判据：只放行稳定安装位置。

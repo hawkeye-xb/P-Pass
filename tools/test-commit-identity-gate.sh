@@ -53,9 +53,9 @@ assert() { # assert <名称> <期望退出码>
     local name="$1" want="$2" got=0
     run_check || got=$?
     if [ "$got" -eq "$want" ]; then
-        echo "  ✅ $name（退出码 $got，符合期望）"
+        echo "  ✅ ${name}（退出码 ${got}，符合期望）"
     else
-        echo "  ❌ $name：期望退出码 $want，实际 $got" >&2
+        echo "  ❌ ${name}：期望退出码 ${want}，实际 ${got}" >&2
         fail=1
     fi
 }

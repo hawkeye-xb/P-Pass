@@ -92,6 +92,89 @@ pub(crate) fn is_stable_install_location(exec: &Path) -> bool {
     s.starts_with("/Applications/") || s.starts_with(&format!("{}/Applications/", home().display()))
 }
 
+/// UPD-06 (#616)：**桌面壳**的 LaunchAgent 标签。
+///
+/// 与 daemon 那条（`AGENT_LABEL`）刻意分开：壳的这一条**只管启动、不管守卫**，
+/// 存在的唯一目的是让 `kickstart -k` 有东西可控——由系统杀掉旧壳、按磁盘上
+/// 已是新版本的同一个文件重新拉起来。
+const SHELL_AGENT_LABEL: &str = "com.p-pass.shell";
+
+fn shell_agent_plist_path() -> PathBuf {
+    home().join(format!("Library/LaunchAgents/{SHELL_AGENT_LABEL}.plist"))
+}
+
+/// 当前用户的 uid（`launchctl` 的 `gui/<uid>` 域）。
+fn current_uid() -> Result<String> {
+    let out = Command::new("id")
+        .arg("-u")
+        .output()
+        .map_err(io_err("id -u"))?;
+    let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if uid.is_empty() {
+        return Err(PlatformError::Failed {
+            action: "id -u",
+            detail: "读不出 uid".into(),
+        });
+    }
+    Ok(uid)
+}
+
+/// 壳的 LaunchAgent 文本（纯函数——测试断言"登记 ≠ 守卫"）。
+///
+/// ⚠️ **不许出现 `KeepAlive`**：那是 daemon 的语义（崩溃/被杀复活）。壳挂上它
+/// 就等于**用户再也退不掉 App**——托盘「退出 App」会被 launchd 立刻复活。
+///
+/// `RunAtLoad=true`（2026-10-02 验收人拍板）：壳是**登录项**——开机/登录后自己起来
+/// 常驻托盘。这么定的理由（第一性原理）：让"启动壳"归系统的服务管理器管，而不是
+/// 让进程自己换自己（后者要在被替换的进程里自证无竞态，且 `kickstart -k` 只能杀
+/// 服务管理器启动的进程——用户手动打开的壳它杀不动）。没有 `KeepAlive` ⇒ 用户
+/// 仍然可以完全退出，只是下次登录会再起来；macOS 13+ 也会在「登录项」里显示它、
+/// 允许用户自己关掉。
+///
+/// 日志落到 `~/Library/Logs`：由 launchd 拉起的壳看不到终端，出问题时只能靠
+/// 这两个文件（"launchd 拉起的 GUI 观感是否正常"这条风险就是靠它们取证）。
+pub(crate) fn shell_agent_plist(exec: &Path) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>{SHELL_AGENT_LABEL}</string>
+    <key>ProgramArguments</key>
+    <array><string>{}</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>StandardOutPath</key><string>{}/Library/Logs/p-pass-shell.log</string>
+    <key>StandardErrorPath</key><string>{}/Library/Logs/p-pass-shell.err</string>
+</dict>
+</plist>
+"#,
+        exec.display(),
+        home().display(),
+        home().display(),
+    )
+}
+
+/// 从可执行文件路径推出它所属的 `.app`。
+///
+/// `…/P-Pass.app/Contents/MacOS/p-pass-desktop` → `…/P-Pass.app`。
+/// 纯函数、无 IO：形状不对（不是 `.app/Contents/MacOS/x`）一律 `None`——
+/// 调用方按"不知道"处理，绝不当成"版本不一致"。
+pub(crate) fn bundle_root(exec: &Path) -> Option<PathBuf> {
+    let macos_dir = exec.parent()?;
+    if macos_dir.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents = macos_dir.parent()?;
+    if contents.file_name()? != "Contents" {
+        return None;
+    }
+    let bundle = contents.parent()?;
+    if bundle.extension()? != "app" {
+        return None;
+    }
+    Some(bundle.to_path_buf())
+}
+
 impl Default for MacosAdapter {
     fn default() -> Self {
         Self::new()
@@ -322,6 +405,130 @@ impl PlatformAdapter for MacosAdapter {
 
     fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
         crate::unix::kill_daemon_process()
+    }
+
+    // ── UPD-06 (#616)：壳的"按需启动"登记 + kickstart ─────────────────
+
+    fn shell_agent_label(&self) -> Option<&'static str> {
+        Some(SHELL_AGENT_LABEL)
+    }
+
+    /// launchd 拉起的进程会被设上 `XPC_SERVICE_NAME`（= job 的 Label）；从访达/
+    /// Dock 打开的不带这个值 ⇒ 只能走壳自己重启（见 trait 注释里的推演）。
+    fn shell_agent_started_us(&self) -> bool {
+        std::env::var("XPC_SERVICE_NAME")
+            .map(|v| v == SHELL_AGENT_LABEL)
+            .unwrap_or(false)
+    }
+
+    /// 幂等写登录项（**只写文件，不 bootstrap**）。
+    ///
+    /// 为什么不在登记时顺手 `bootstrap`：`RunAtLoad=true` 的 job 一旦被 bootstrap，
+    /// launchd 会**立刻**再拉起一个实例，而壳装了 single-instance ⇒ 新实例把焦点
+    /// 交回当前这把壳后自杀（一次无意义的起停，还可能闪一下）。所以这里只写文件：
+    /// 登录时 launchd 自己会加载 `~/Library/LaunchAgents` 下的 plist 并按
+    /// `RunAtLoad` 启动。于是"这把壳归 launchd 管"从**下一次登录**起成立，
+    /// `kickstart` 也从那时起可用；当前这一次（用户手动打开的）由调用方的闸门
+    /// 判定并退化到壳自重启。
+    ///
+    /// 三条纪律：
+    /// ① **绝不 `bootout`**：本函数会在壳**正在运行**时被调用，bootout 会当场
+    ///    把壳杀掉——那是"换壳"该做的事，不是"写登录项"该做的。
+    /// ② 路径纪律同 daemon（`/target/`、`/tmp/`、非稳定安装位置一律拒绝）。
+    /// ③ 内容一致就一个字都不写（幂等）。
+    fn register_shell_agent(&self, exec: &Path) -> Result<()> {
+        let exec_str = exec.display().to_string();
+        if exec_str.contains("/target/") || exec_str.contains("/tmp/") {
+            return Err(PlatformError::Failed {
+                action: "register_shell_agent rejects unstable path",
+                detail: exec_str,
+            });
+        }
+        if !is_stable_install_location(exec) {
+            return Err(PlatformError::Failed {
+                action: "register_shell_agent outside a stable install location",
+                detail: exec_str,
+            });
+        }
+        let path = shell_agent_plist_path();
+        let want = shell_agent_plist(exec);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(want.as_str()) {
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
+            }
+            std::fs::write(&path, want).map_err(io_err("write shell LaunchAgent plist"))?;
+        }
+        Ok(())
+    }
+
+    fn shell_agent_registered_exec(&self) -> Result<Option<PathBuf>> {
+        let path = shell_agent_plist_path();
+        match std::fs::read_to_string(&path) {
+            Ok(text) => Ok(plist_program_argument(&text).map(PathBuf::from)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(PlatformError::Io {
+                action: "read shell LaunchAgent plist",
+                source: e,
+            }),
+        }
+    }
+
+    /// 磁盘上**安装包**的版本（`Contents/Info.plist` 的 `CFBundleShortVersionString`）。
+    ///
+    /// 用 `defaults read` 而不是自己解 plist：真实 `.app` 里的 `Info.plist` 是
+    /// **二进制** plist，手写文本解析会在真机上静默读空；`defaults` 是系统自带、
+    /// 二进制/XML 都吃，而且与验收 SOP 用的是同一条命令（排查口径一致）。
+    ///
+    /// 读不到（不是 .app 布局、`defaults` 失败）= `None` = **不知道**，
+    /// 由调用方按"什么都不做"处理。
+    fn installed_bundle_version(&self) -> Option<String> {
+        let exe = std::env::current_exe().ok()?;
+        let bundle = bundle_root(&exe)?;
+        let plist = bundle.join("Contents").join("Info.plist");
+        let out = Command::new("defaults")
+            .arg("read")
+            .arg(&plist)
+            .arg("CFBundleShortVersionString")
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!v.is_empty()).then_some(v)
+    }
+
+    /// `kickstart -kp`：launchd **杀掉正在跑的实例、立刻用磁盘上的文件重新拉起**，
+    /// `-p` 把新实例的 pid 打到 stdout——这就是"重启成功了没有"的**可验证判据**
+    /// （不用时间猜；对照 Clash Verge 那条"报告升级成功但实际没换好"的教训）。
+    ///
+    /// ⚠️ 调用方通常就是被重启的那个壳：命令把它杀掉之后，stdout 很可能拿不到，
+    /// 这是**正常路径**，不是失败。
+    fn kickstart_shell_agent(&self) -> Result<u32> {
+        let uid = current_uid()?;
+        let out = Command::new("launchctl")
+            .args([
+                "kickstart",
+                "-kp",
+                &format!("gui/{uid}/{SHELL_AGENT_LABEL}"),
+            ])
+            .output()
+            .map_err(io_err("launchctl kickstart"))?;
+        if !out.status.success() {
+            return Err(PlatformError::Failed {
+                action: "launchctl kickstart",
+                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        stdout
+            .split_whitespace()
+            .last()
+            .and_then(|s| s.parse::<u32>().ok())
+            .ok_or_else(|| PlatformError::Failed {
+                action: "launchctl kickstart -p",
+                detail: format!("读不出新 pid: {}", stdout.trim()),
+            })
     }
 }
 

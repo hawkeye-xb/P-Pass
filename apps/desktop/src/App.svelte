@@ -236,20 +236,37 @@
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
-  // DESK-02①: 更新通道由构建推导——daemon status.version 带完整 tag
-  // （release 构建 = PPF_BUILD_VERSION 注入 "v0.3.2-test.2"），含 `-test.`
-  // → test 通道，否则 stable。零 UI、零持久化（旧 REL-02 显式切换已删）。
-  // 壳版本（tauri.conf.json）无 tag 后缀，daemon 不可达时回退壳版本（stable）。
-  const displayVersion = $derived(status?.version || version);
+  // UPD-06 (#616): **磁盘上装的那个版本**（读安装包的 Info.plist）。它与上面
+  // 那个"编译进这只壳的版本"一旦不同，就是"更新装完了、但运行中的壳还是旧的"
+  // ——这是"要不要换壳"的确定性判据。读不到就空着（不判，什么都不做）。
+  let installedVersion = $state("");
+  invoke("installed_app_version")
+    .then((v) => (installedVersion = v || ""))
+    .catch(() => {});
+  // UPD-06 (#616): **版本真相源**——壳版本与服务版本分开，不再互相冒充。
+  // 旧实现 displayVersion = status?.version || version（服务优先）会让"装完壳没换"
+  // 显示成新版本号（看着像升级成功），再点检查更新又提示同一个更新（0.7.4↔0.7.5
+  // 真机鬼打墙）。现在：页脚显示真实运行版本，混版本时两个都摆出来。
+  const shellVersion = $derived(version);
+  const serviceVersion = $derived(status?.version || "");
+  const displayVersion = $derived(serviceVersion || shellVersion);
+  const versionsDiffer = $derived(
+    !!shellVersion && !!serviceVersion && !sameRelease(shellVersion, serviceVersion)
+  );
+  const shellIsStale = $derived(
+    !!installedVersion && !!shellVersion && !sameRelease(installedVersion, shellVersion)
+  );
+  // DESK-02①: 更新通道由**壳的构建**推导（含 `-test.` → test 通道）。用壳版本而
+  // 不是服务版本：通道是壳的属性，混版本时不能跟着服务漂。
   const updateChannel = $derived(
-    displayVersion.includes("-test.") ? "test" : "stable"
+    (shellVersion || "").includes("-test.") ? "test" : "stable"
   );
   const isTestBuild = $derived(displayVersion.includes("-test."));
-  // DAE-04: daemon 版本落后于桌面壳（更新装好了但旧 daemon 进程还在跑）——
-  // 设置页「重启后台服务」按钮的唯一显示条件。版本一致/读不到时不显示，
-  // 避免用户瞎点误杀正常运行的服务。
-  const daemonStale = $derived(
-    !!version && !!status?.version && !sameRelease(version, status.version)
+  // DAE-04 + UPD-06 (#616)：**分向**。服务旧（且壳不旧）才是「重启后台服务」的
+  // 场合；旧实现只判"不一致"、不判方向，于是在"壳旧/服务新"方向按了永不收敛
+  // ——杀 daemon 拉起来的还是同版本，按钮永远不消失（0.7.5 真机现场）。
+  const serviceIsStale = $derived(
+    versionsDiffer && !shellIsStale && isOlder(serviceVersion, shellVersion)
   );
   // DEV-01b: 重装识别/「替换旧的」入口先隐藏（用户拍板 2026-08-12）——
   // 现阶段统一走「重新扫码 = 全新授权」，不给用户多一个要理解的概念。
@@ -918,6 +935,52 @@
     );
   }
 
+  // UPD-06 (#616)：版本高低判据（只比核心三段，忽略 v 前缀与 -test.N 后缀）。
+  // 用来**分向**：服务版本低于壳版本才是 DAE-04「重启后台服务」的场合。
+  function isOlder(a, b) {
+    const core = (s) =>
+      String(s)
+        .replace(/^v/i, "")
+        .split("-")[0]
+        .split(".")
+        .map((x) => parseInt(x, 10) || 0);
+    const ca = core(a);
+    const cb = core(b);
+    if (ca.length !== 3 || cb.length !== 3) return false;
+    for (let i = 0; i < 3; i += 1) {
+      if (ca[i] !== cb[i]) return ca[i] < cb[i];
+    }
+    return false;
+  }
+
+  // UPD-06 (#616)：更新流程 = **显式状态机**。界面只呈现，不靠用户猜。
+  // idle → checking → (up-to-date | available → downloading → installing → installed → relaunching) | failed
+  let updatePhase = $state("idle");
+  let updateProgress = $state(null); // 0..100；null = 总长未知（不画百分比）
+  let updateError = $state("");
+  let pendingVersion = $state("");
+  // 忙的时候按钮必须禁用：既防重复点击（同一份更新被下两遍），也让"过程就在眼前"。
+  const updateBusy = $derived(
+    updatePhase === "checking" ||
+      updatePhase === "downloading" ||
+      updatePhase === "installing" ||
+      updatePhase === "relaunching"
+  );
+
+  // 换壳（UPD-06）：壳旧时点「立即重启 App」。Rust 侧先试系统路径（launchd
+  // kickstart：杀 + 拉都不在壳里发生），不行退化到壳自己重启；都走不到才报错。
+  async function relaunchShellNow() {
+    updateError = "";
+    try {
+      await invoke("relaunch_shell");
+      updatePhase = "relaunching";
+    } catch (e) {
+      updatePhase = "installed";
+      flashMessage(t("ui.update_relaunch_failed"), "warning");
+      console.warn("[updater] relaunch_shell failed:", e);
+    }
+  }
+
   // DAE-04: 桌面壳更新后手动重启后台服务——杀旧 daemon，靠 launchd 拉起
   // 磁盘上的新版本（Windows 无 KeepAlive 语义，Rust 命令内显式重拉）。
   // 成功/失败都明说：版本真变了才报成功；没变 = 服务文件没更新，提示重装。
@@ -991,28 +1054,43 @@
   }
 
   async function checkForUpdate(manual = true) {
+    // UPD-06 (#616)：防重复点击（按钮同时禁用，双保险）。旧实现两个都没有，
+    // 同一份更新会被下两遍。
+    if (updateBusy) return;
+    updateError = "";
+    updateProgress = null;
     // REL-02: test 通道走壳内检查（Worker 源）；stable 保持原 tauri
     // updater 路径（语义不动）。
     if (updateChannel === "test") {
       await checkTestChannel(manual);
       return;
     }
+    updatePhase = "checking";
     let update;
     try {
       update = await checkUpdate();
     } catch (e) {
-      console.warn("[updater] check failed (silent — 404/draft/network = no update):", e);
-      if (manual) flashMessage(t("ui.no_update"), "warning");
+      // ⚠️ #616：**检查失败 ≠ 没有新版本**。旧实现把两者都显示成
+      // 「没有发现新版本」，于是网络/代理问题会伪装成"已是最新"
+      // （10-01 真机就是被这句误导的）。
+      console.warn("[updater] check failed:", e);
+      updatePhase = "failed";
+      updateError = errText(e);
       return;
     }
     if (!update) {
-      if (manual) flashMessage(t("ui.no_update"), "warning");
+      updatePhase = "up-to-date";
       return;
     }
+    pendingVersion = update.version;
+    updatePhase = "available";
     const ok = await confirmDialog(t("ui.update_available", { version: update.version }), {
       title: "P-Pass",
     });
-    if (!ok) return;
+    if (!ok) {
+      updatePhase = "idle";
+      return;
+    }
     // W1 (2026-08-26 real-box run): downloadAndInstall() was failing on
     // Windows because the resident ppf-daemon.exe (never stopped just
     // by closing the window — it lives on in the tray by design) holds
@@ -1028,7 +1106,26 @@
       console.warn("[updater] pause_daemon_for_update failed (continuing anyway):", e);
     }
     try {
-      await update.downloadAndInstall();
+      updatePhase = "downloading";
+      let total = 0;
+      let done = 0;
+      // UPD-06 (#616)：官方进度回调（Started / Progress / Finished）——"过程可见"
+      // 的唯一来源。旧实现是裸调用 downloadAndInstall()，用户只能干等几分钟，
+      // 期间还能重复点。总长拿不到时 updateProgress 保持 null（只画不确定态，
+      // 绝不编一个假百分比）。
+      await update.downloadAndInstall((ev) => {
+        if (ev.event === "Started") {
+          total = ev.data?.contentLength || 0;
+          done = 0;
+          updateProgress = total ? 0 : null;
+        } else if (ev.event === "Progress") {
+          done += ev.data?.chunkLength || 0;
+          updateProgress = total ? Math.min(100, Math.round((done / total) * 100)) : null;
+        } else if (ev.event === "Finished") {
+          updatePhase = "installing";
+          updateProgress = 100;
+        }
+      });
       // Bring the daemon back — on macOS launchd's KeepAlive would
       // eventually do this on its own, but Windows has no such
       // self-healing (plain Run key), so this must be explicit on
@@ -1045,19 +1142,14 @@
       } catch (e) {
         console.warn("[updater] resume_daemon_after_update failed after a successful install:", e);
       }
-      // UPD-05 (#605)：装完由用户点「好」后立刻重启外壳——旧版只 toast
-      // 「请重启应用」，用户不重启就一直跑旧外壳：resume 已从新版包拉起
-      // daemon → 页脚（显示 daemon 版本）先跳新版，外壳仍是旧版 →
-      // 「后台版本不对」+ 下次检查再弹同一更新（0.7.3↔0.7.4 真机现场）。
-      // 重启后新外壳启动即跑 #604 的自启对账，daemon 已是新版，版本闭环。
-      // restart_app 不返回（进程被替换）；invoke 报错才退回手动重启指引。
+      // UPD-05 (#605) + UPD-06 (#616)：装完由用户点「好」后换壳——这一跳跑的是
+      // **旧壳的代码**，所以"新对话框"只对装过这一版之后的机器生效；旧壳仍会走到
+      // 这里（它自己的老文案 + 老动作），这也是"存量壳只能靠 daemon owner 兜"的原因。
+      // relaunch_shell：先系统路径（launchd kickstart，杀+拉都不在壳里发生），
+      // 不行退化到壳自己重启；两处都走不到才提示手动完全退出重开。
       await messageDialog(t("ui.update_installed"), { title: "P-Pass", kind: "info" });
-      try {
-        await invoke("restart_app");
-      } catch (restartErr) {
-        console.warn("[updater] restart_app failed after a successful install:", restartErr);
-        flashMessage(t("ui.update_relaunch_failed"), "warning");
-      }
+      updatePhase = "installed";
+      await relaunchShellNow();
     } catch (e) {
       // The daemon we paused above is still down — bring it back so a
       // failed update doesn't also leave backups silently stopped.
@@ -1066,6 +1158,10 @@
         await invoke("resume_daemon_after_update");
       } catch (_) {}
       const msg = String(e);
+      // UPD-06 (#616)：失败也是一个**显式状态**（原因留在界面上，可重试），
+      // 不再只靠一闪而过的 toast。
+      updatePhase = "failed";
+      updateError = msg;
       // Heuristic for the Windows file-in-use class of failure (the one
       // this pause/resume dance is meant to prevent) — if pause/resume
       // itself couldn't clear it (third-party lock, AV scan holding the
@@ -1833,11 +1929,53 @@
                      test），旧 REL-02 通道选择行已删。 -->
                 <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                   <span>{t("ui.software_update")}</span>
-                  <Button variant="secondary" onclick={() => checkForUpdate(true)}>{t("ui.check_update")}</Button>
+                  <Button variant="secondary" onclick={() => checkForUpdate(true)} disabled={updateBusy}>
+                    {t("ui.check_update")}
+                  </Button>
                 </div>
+                <!-- UPD-06 (#616)：状态机的显式状态行——过程可见、失败可重试，
+                     不再只靠一闪而过的 toast（旧实现连按钮都不禁用）。 -->
+                {#if updatePhase !== "idle"}
+                  <div class="border-b border-divider px-[22px] py-[14px] text-[13px] leading-[1.6] text-ink-40">
+                    {#if updatePhase === "checking"}
+                      <span>{t("ui.update_checking")}</span>
+                    {:else if updatePhase === "up-to-date"}
+                      <span>{t("ui.update_up_to_date")}</span>
+                    {:else if updatePhase === "available"}
+                      <span>{t("ui.update_available_short", { version: pendingVersion })}</span>
+                    {:else if updatePhase === "downloading"}
+                      <span>{t("ui.update_downloading")}{updateProgress === null ? "" : ` ${updateProgress}%`}</span>
+                      {#if updateProgress !== null}
+                        <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline">
+                          <div class="h-full rounded-full bg-ink" style="width:{updateProgress}%"></div>
+                        </div>
+                      {/if}
+                    {:else if updatePhase === "installing"}
+                      <span>{t("ui.update_installing")}</span>
+                    {:else if updatePhase === "installed" || updatePhase === "relaunching"}
+                      <span>{t("ui.update_installed_state")}</span>
+                    {:else if updatePhase === "failed"}
+                      <span class="text-act">{t("ui.update_failed", { err: updateError })}</span>
+                      <Button variant="secondary" class="ml-[10px]" onclick={() => checkForUpdate(true)}>
+                        {t("ui.update_retry")}
+                      </Button>
+                    {/if}
+                  </div>
+                {/if}
+                <!-- UPD-06 (#616)：**壳旧** ⇒ 换壳。磁盘上已经是新版、运行中的壳还是旧的
+                     ——这一行是「更新装完没换壳」的唯一出路（旧实现这里给的是方向相反的
+                     「重启后台服务」，按了永远不收敛）。 -->
+                {#if shellIsStale}
+                  <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
+                    <span>{t("ui.shell_restart_needed", { version: installedVersion })}</span>
+                    <Button variant="secondary" onclick={relaunchShellNow} disabled={updateBusy}>
+                      {t("ui.restart_app_now")}
+                    </Button>
+                  </div>
+                {/if}
                 <!-- DAE-04: 桌面壳更新后 daemon 还是旧版（版本不一致）才
                      显示——一致时不出现，避免误杀正常运行的服务。 -->
-                {#if daemonStale}
+                {#if serviceIsStale}
                   <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                     <span>{t("ui.restart_service")}</span>
                     <Button variant="secondary" onclick={restartDaemonProcess} disabled={restartingService}>
@@ -1956,7 +2094,13 @@
     <!-- T1: 版本号——报问题/排查时先知道装的是什么版本。 -->
     {#if displayVersion}
       <footer class="version-footer">
-        <span>P-Pass v{displayVersion}</span>
+        <!-- UPD-06 (#616)：页脚显示**壳**版本（这个二进制自己的版本）。旧实现优先
+             显示服务版本（displayVersion = status?.version || version），混版本时
+             会让人以为"已经升级好了"；服务版本不一致时在旁边**明说**，不再冒充。 -->
+        <span>P-Pass v{shellVersion || displayVersion}</span>
+        {#if versionsDiffer}
+          <span class="env-badge">{t("ui.version_mismatch", { shell: shellVersion, service: serviceVersion })}</span>
+        {/if}
         <!-- DESK-02①: 环境显式徽标——prerelease 构建琥珀小徽标（「测试版」），
              环境在 UI 上一眼可辨，不靠用户读懂 -test 后缀；正式构建只显示版本号。 -->
         {#if isTestBuild}
