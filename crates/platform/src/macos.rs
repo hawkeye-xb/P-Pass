@@ -149,6 +149,27 @@ pub(crate) fn shell_agent_plist(exec: &Path) -> String {
     )
 }
 
+/// 从可执行文件路径推出它所属的 `.app`。
+///
+/// `…/P-Pass.app/Contents/MacOS/p-pass-desktop` → `…/P-Pass.app`。
+/// 纯函数、无 IO：形状不对（不是 `.app/Contents/MacOS/x`）一律 `None`——
+/// 调用方按"不知道"处理，绝不当成"版本不一致"。
+pub(crate) fn bundle_root(exec: &Path) -> Option<PathBuf> {
+    let macos_dir = exec.parent()?;
+    if macos_dir.file_name()? != "MacOS" {
+        return None;
+    }
+    let contents = macos_dir.parent()?;
+    if contents.file_name()? != "Contents" {
+        return None;
+    }
+    let bundle = contents.parent()?;
+    if bundle.extension()? != "app" {
+        return None;
+    }
+    Some(bundle.to_path_buf())
+}
+
 impl Default for MacosAdapter {
     fn default() -> Self {
         Self::new()
@@ -450,6 +471,31 @@ impl PlatformAdapter for MacosAdapter {
                 source: e,
             }),
         }
+    }
+
+    /// 磁盘上**安装包**的版本（`Contents/Info.plist` 的 `CFBundleShortVersionString`）。
+    ///
+    /// 用 `defaults read` 而不是自己解 plist：真实 `.app` 里的 `Info.plist` 是
+    /// **二进制** plist，手写文本解析会在真机上静默读空；`defaults` 是系统自带、
+    /// 二进制/XML 都吃，而且与验收 SOP 用的是同一条命令（排查口径一致）。
+    ///
+    /// 读不到（不是 .app 布局、`defaults` 失败）= `None` = **不知道**，
+    /// 由调用方按"什么都不做"处理。
+    fn installed_bundle_version(&self) -> Option<String> {
+        let exe = std::env::current_exe().ok()?;
+        let bundle = bundle_root(&exe)?;
+        let plist = bundle.join("Contents").join("Info.plist");
+        let out = Command::new("defaults")
+            .arg("read")
+            .arg(&plist)
+            .arg("CFBundleShortVersionString")
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        (!v.is_empty()).then_some(v)
     }
 
     /// `kickstart -kp`：launchd **杀掉正在跑的实例、立刻用磁盘上的文件重新拉起**，

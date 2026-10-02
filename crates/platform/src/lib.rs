@@ -506,6 +506,21 @@ pub trait PlatformAdapter: Send + Sync {
             detail: "此平台没有服务管理器".into(),
         })
     }
+
+    /// 磁盘上**安装包**的版本（macOS = `defaults read <bundle>/Contents/Info.plist
+    /// CFBundleShortVersionString`；`None` = 读不到或本平台没实现）。
+    ///
+    /// 用途（UPD-06 #616）：与"进程自己编译进去的版本"比对，就是"更新装完了、
+    /// 但**运行中的这只壳/这个 daemon 还是旧版**"的**确定性判据**——可执行文件
+    /// 在 `/Applications` 下跨更新路径不变，包在它下面被换掉，于是"读到的包版本
+    /// ≠ 我的编译版本"只有一种解释：我是旧进程、磁盘已是新版。
+    ///
+    /// ⚠️ 读不到必须返回 `None`（= 不知道），**绝不许**降级成"版本不一致"：
+    /// 那会让一切正常的机器也去做一次没必要的换壳/重启（读不到＝无从判断，
+    /// fail-safe 的方向永远是"什么都不做"）。
+    fn installed_bundle_version(&self) -> Option<String> {
+        None
+    }
 }
 
 /// The adapter for the current platform.
@@ -846,6 +861,32 @@ mod tests {
         assert_eq!(
             PlatformAdapter::shell_agent_label(&macos::MacosAdapter::new()),
             Some("com.p-pass.shell")
+        );
+    }
+
+    /// UPD-06 (#616)：安装包版本的判据建立在"从可执行文件推出它所属的 `.app`"上，
+    /// 形状不对必须返回 `None`（= **不知道**）——猜错方向的代价是"一切正常的机器
+    /// 也去做一次没必要的换壳/重启"。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn bundle_root_only_accepts_the_app_bundle_shape() {
+        use macos::bundle_root;
+        use std::path::{Path, PathBuf};
+        assert_eq!(
+            bundle_root(Path::new(
+                "/Applications/P-Pass.app/Contents/MacOS/p-pass-desktop"
+            )),
+            Some(PathBuf::from("/Applications/P-Pass.app"))
+        );
+        // 不是 .app 布局的一律 None：开发构建、裸二进制、少一层目录
+        assert_eq!(bundle_root(Path::new("/usr/local/bin/ppf-daemon")), None);
+        assert_eq!(
+            bundle_root(Path::new("/Applications/P-Pass.app/p-pass-desktop")),
+            None
+        );
+        assert_eq!(
+            bundle_root(Path::new("/Applications/P-Pass.app/Contents/MacOS")),
+            None
         );
     }
 
