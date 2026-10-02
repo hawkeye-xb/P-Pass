@@ -20,7 +20,7 @@ async fn main() -> anyhow::Result<()> {
     // （日志/配置/数据库/身份/claim/bind）之前短路退出。8/6 事故：daemon
     // 无解析，--help 被当普通启动一路走到单实例 claim 触发误接管、常驻
     // 停机数分钟。未知参数报错退出（exit 2），绝不静默忽略。
-    let ephemeral = match daemon::cli::parse_cli(std::env::args().skip(1)) {
+    let (ephemeral, post_update) = match daemon::cli::parse_cli(std::env::args().skip(1)) {
         Ok(daemon::cli::Cli::Help) => {
             print!("{}", daemon::cli::USAGE);
             return Ok(());
@@ -29,7 +29,10 @@ async fn main() -> anyhow::Result<()> {
             println!("P-Pass daemon {}", daemon::daemon_version());
             return Ok(());
         }
-        Ok(daemon::cli::Cli::Run { ephemeral }) => ephemeral,
+        Ok(daemon::cli::Cli::Run {
+            ephemeral,
+            post_update,
+        }) => (ephemeral, post_update),
         Err(e) => {
             eprintln!("{e}");
             eprint!("{}", daemon::cli::USAGE);
@@ -395,6 +398,27 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+    // UPD-07 (#617)：**版本一致性的 owner**。只有被更新流程拉起的这一份 daemon
+    // （`--post-update`）才开火——平时绝不碰用户正在用的壳。
+    //
+    // 为什么等：壳在更新成功后紧接着被拉起（resume），它的自报（`shell.announce`）
+    // 可能比我们晚到几十毫秒到几秒。等不到就什么都不做（老壳/壳没起来 ⇒ 不知道
+    // 它的版本 ⇒ fail-safe，见 `owner::decide`）。
+    if post_update {
+        tokio::spawn(async move {
+            for _ in 0..20 {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                if daemon::owner::recorded_announce().is_some() {
+                    break;
+                }
+            }
+            let announced = daemon::owner::recorded_announce();
+            // 判定里要起 launchctl/defaults 子进程：放到阻塞线程上，别占住执行器。
+            let _ =
+                tokio::task::spawn_blocking(move || daemon::owner::check_and_act(true, announced))
+                    .await;
+        });
+    }
     // Interim console confirmer (until the tray, T-041): y = 允许队首.
     // stdin EOF（后台运行）⇒ 退出这个循环，确认只走 IPC——绝不把
     // "没有输入" 当成任何决定（狗粮冒烟抓到的真 bug：EOF 曾被当 n 秒拒）.

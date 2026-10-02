@@ -21,6 +21,10 @@ pub enum Cli {
     /// 正常启动。`ephemeral` = UX-07 测试/脚本模式（stdin EOF 即退出）。
     Run {
         ephemeral: bool,
+        /// UPD-07 (#617)：本实例是**被更新流程拉起的**（桌面壳 `resume_daemon_after_update`
+        /// 那次 spawn）。只有带这个标记的实例会开火去换掉旧壳；launchd 常驻拉起、
+        /// 崩溃自愈拉起都不带它——平时绝不碰用户正在用的壳。
+        post_update: bool,
     },
     Help,
     Version,
@@ -35,6 +39,9 @@ P-Pass 存储端 daemon
 选项:
   --ephemeral  测试/脚本模式：stdin 关闭（写入端 EOF）即整体退出，3 秒内
                （UX-07，杜绝 A 类孤儿）。生产/launchd 不带此 flag。
+  --post-update
+               标记「我是被更新流程拉起的」：允许 owner 在更新窗口内换掉旧壳
+               （UPD-07。桌面壳更新后 resume 时带；launchd/自愈不带）。
   --version    打印版本号并退出（不启动任何 daemon 机制）
   --help       显示本帮助并退出（不启动任何 daemon 机制）
 ";
@@ -47,15 +54,20 @@ P-Pass 存储端 daemon
 ///  - 无参数 = 普通启动。
 pub fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
     let mut ephemeral = false;
+    let mut post_update = false;
     for a in args {
         match a.as_str() {
             "--ephemeral" => ephemeral = true,
+            "--post-update" => post_update = true,
             "--help" | "-h" => return Ok(Cli::Help),
             "--version" | "-V" => return Ok(Cli::Version),
             other => return Err(format!("未知参数：{other}")),
         }
     }
-    Ok(Cli::Run { ephemeral })
+    Ok(Cli::Run {
+        ephemeral,
+        post_update,
+    })
 }
 
 /// DAE-03 ②：autostart 只在升级接管（TookOver）时（重）安装——纯新启动
@@ -143,19 +155,51 @@ mod tests {
 
     #[test]
     fn no_args_is_a_normal_run() {
-        assert_eq!(parse_cli(args(&[])), Ok(Cli::Run { ephemeral: false }));
+        assert_eq!(
+            parse_cli(args(&[])),
+            Ok(Cli::Run {
+                ephemeral: false,
+                post_update: false
+            })
+        );
+    }
+
+    /// UPD-07 (#617)：`--post-update` = "我是被更新流程拉起的"，只有它会开火换壳；
+    /// 默认（launchd 常驻 / 自愈拉起的机器）必须是 false。
+    #[test]
+    fn post_update_flag_parses_and_defaults_to_false() {
+        assert_eq!(
+            parse_cli(args(&["--post-update"])),
+            Ok(Cli::Run {
+                ephemeral: false,
+                post_update: true
+            })
+        );
+        assert_eq!(
+            parse_cli(args(&["--ephemeral", "--post-update"])),
+            Ok(Cli::Run {
+                ephemeral: true,
+                post_update: true
+            })
+        );
     }
 
     #[test]
     fn ephemeral_flag_parses() {
         assert_eq!(
             parse_cli(args(&["--ephemeral"])),
-            Ok(Cli::Run { ephemeral: true })
+            Ok(Cli::Run {
+                ephemeral: true,
+                post_update: false
+            })
         );
         // --ephemeral 与普通启动共存
         assert_eq!(
             parse_cli(args(&["--ephemeral", "--ephemeral"])),
-            Ok(Cli::Run { ephemeral: true })
+            Ok(Cli::Run {
+                ephemeral: true,
+                post_update: false
+            })
         );
     }
 

@@ -156,13 +156,14 @@ pub(crate) fn shell_agent_plist(exec: &Path) -> String {
 
 /// 从 `launchctl print gui/<uid>/<label>` 的输出里取**正在跑的那个实例的 pid**。
 ///
-/// 真机输出形状（2026-10-02 在本机 `ai.hermes.gateway` 上取的样本）：
+/// 真机输出形状（2026-10-02 在本机 `ai.hermes.gateway` 上取的样本，行首是**制表符**，
+/// 下面示例里画成四个空格）：
 /// ```text
 /// gui/501/ai.hermes.gateway = {
-/// 	active count = 1
-/// 	state = running
-/// 	...
-/// 	pid = 992
+///     active count = 1
+///     state = running
+///     ...
+///     pid = 992
 /// ```
 /// 没在跑时 launchd 打的是 `state = not running` **且不打 `pid =` 这一行**
 /// ⇒ 因此"取不到 pid"与"没在跑"是同一件事，`None` 就够了。
