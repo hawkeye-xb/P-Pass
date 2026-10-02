@@ -137,6 +137,9 @@ msg_keys! {
     // checkForUpdate()'s pause_daemon_for_update/resume_daemon_after_update
     // dance and its file-locked heuristic.
     UI_UPDATE_FAILED_FILE_LOCKED => "ui.update_failed_file_locked",
+    /// UPD-05 (#605): the update installed but `restart_app` itself failed —
+    /// the user must quit and reopen the app by hand to finish.
+    UI_UPDATE_RELAUNCH_FAILED => "ui.update_relaunch_failed",
     // ── Desktop daemon restart after shell update (DAE-04) ───────────
     UI_RESTART_SERVICE => "ui.restart_service",
     UI_RESTART_SERVICE_BTN => "ui.restart_service_btn",
@@ -462,6 +465,7 @@ mod tests {
             UI_UPDATE_FAILED,
             UI_UPDATE_CHECK_FAILED,
             UI_UPDATE_FAILED_FILE_LOCKED,
+            UI_UPDATE_RELAUNCH_FAILED,
             UI_RESTART_SERVICE,
             UI_RESTART_SERVICE_BTN,
             UI_RESTARTING_SERVICE,
@@ -677,7 +681,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 285);
+        assert_eq!(ALL.len(), 286);
     }
 
     #[test]
