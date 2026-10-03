@@ -3,8 +3,7 @@
     <string name="app_name">P-Pass</string>
 
     <!-- Welcome -->
-    <string name="welcome_headline">Photos,
-finding their way home.</string>
+    <string name="welcome_headline">Photos,\nfinding their way home.</string>
     <string name="welcome_sub">Phone photos back up to your own computer at home. No cloud, no account — backing up at home is free, forever.</string>
     <string name="welcome_scan">Scan to connect the home computer</string>
     <!-- T-080 layout v1: welcome three steps -->
@@ -14,8 +13,7 @@ finding their way home.</string>
 
     <!-- Scan (M2/M3, full-page-states doc) -->
     <string name="scan_header_title">Scan to connect</string>
-    <string name="scan_hint">Point at the P-Pass pairing QR
-on your home computer\'s screen</string>
+    <string name="scan_hint">Point at the P-Pass pairing QR\non your home computer\'s screen</string>
     <string name="scan_manual_link">Can\'t scan? Enter the pairing string instead</string>
 
     <string name="scan_manual_title">Enter pairing string</string>

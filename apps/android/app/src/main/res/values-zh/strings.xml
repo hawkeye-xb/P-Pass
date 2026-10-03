@@ -2,8 +2,7 @@
 <resources>
     <string name="app_name">P-Pass</string>
 
-    <string name="welcome_headline">照片，
-自动回家。</string>
+    <string name="welcome_headline">照片，\n自动回家。</string>
     <string name="welcome_sub">手机照片自动备份到你家里的电脑。没有云端、没有账号——回家备份永远免费。</string>
     <string name="welcome_scan">扫码连接家里的电脑</string>
     <!-- T-080 layout v1: 首屏三步说明 -->
@@ -13,8 +12,7 @@
 
     <!-- M2 全页面状态稿：暗底顶部窄标题栏，X 关闭代替「取消」按钮。 -->
     <string name="scan_header_title">扫码连接</string>
-    <string name="scan_hint">对准家里电脑屏幕上的
-P-Pass 配对二维码</string>
+    <string name="scan_hint">对准家里电脑屏幕上的\nP-Pass 配对二维码</string>
     <string name="scan_manual_link">无法扫码？手动输入配对串</string>
 
     <!-- M3 全页面状态稿：独立子页，不是内联展开。 -->
