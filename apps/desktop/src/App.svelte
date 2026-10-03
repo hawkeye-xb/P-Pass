@@ -1000,6 +1000,12 @@
             ? t("ui.restart_service_ok", { from: r.old_version, to: r.new_version })
             : t("ui.restart_service_started", { version: r.new_version })
         );
+      } else if (r?.still_starting) {
+        // DESK-44 (#606)：宽限期内 daemon **还没答上** ⇒ **不说失败**。
+        // 2026-10-03 真机现场就是"假失败真成功"（12s 固定预算 vs launchd ~10s
+        // 重拉节流 + 启动）。这里如实说"还在启动中"，3 秒状态轮询会在版本一致
+        // 后自己把这一行收掉。
+        flashMessage(t("ui.restart_service_still_starting"), "warning");
       } else {
         flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }), "warning");
       }

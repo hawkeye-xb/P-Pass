@@ -932,11 +932,36 @@ fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
 /// 版本协商。Windows 的 autostart 是普通 Run key、没有 KeepAlive 复活
 /// 语义——杀掉后显式重新拉起一次（start_daemon 的一次性 spawn 分支，
 /// 不注册 autostart）。
-/// 杀完轮询 status 确认进程复活且版本号确实变了（12s 超时，超时报错，
-/// 不能无限等）——这是 Clash Verge Rev #5451「报告升级成功但实际没换好」
-/// 的教训：验证失败必须明说，不能沉默假装成功。
+///
+/// **DESK-44 (#606) 两处修正**（2026-10-03 真机现场）：
+/// ① **判据从"固定时钟"改成"可观察进度"**：旧实现"12 秒内版本必须变，否则报错"
+///    在真机上必然偶发假失败——壳杀掉旧 daemon 后是 **launchd** 按 KeepAlive 重拉，
+///    而 launchd 对反复退出的 job 有**重拉节流（默认 10s 量级）**；10s 节流 + 启动
+///    ≈ 11–13s，正好骑在 12s 上。2026-10-03 验收人机器第一次点按钮就报了
+///    「重启失败」，而 1~2 个轮询周期后 daemon 起来了、版本也确实变了。
+///    ⇒ 现在只在**宽限期**（`RESTART_GRACE`，90s——它不是"多久算失败"，而是
+///    "多久算彻底没救"）内等 daemon **答上 status**；答上了就算有结论，没答上就
+///    如实返回 `still_starting=true`，由前端说"正在启动中"而不是"失败"。
+/// ② **改 async**（照抄 stop_daemon 的决定）：同步命令跑在主线程上，等待期间
+///    窗口会**整段卡住**（验收人 10-02 原话"点击立即重启，进入卡顿状态"就是这个）。
 #[tauri::command]
-fn restart_daemon_process() -> Result<Value, String> {
+async fn restart_daemon_process() -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(restart_daemon_process_blocking)
+        .await
+        .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?
+}
+
+/// 等它起来的**宽限期**：不是"多久算失败"，而是"多久算彻底没救"。
+///
+/// 现场数据（2026-10-03 真机，验收人机器 + 诊断包）：
+/// - 壳杀掉旧 daemon 后由 launchd 重拉；launchd 对反复退出的 job 有重拉节流
+///   （本仓 plist 没设 `ThrottleInterval` ⇒ 吃默认值，10s 量级）
+/// - 新实例的 **socket 在 spawn 后 ~0.7s 就起来**（`status` 立刻可答）；其后
+///   启动对账（SYNC-01/IDX-01）还要 ~18s，但**不挡 `status`**
+///   ⇒ 需要的是"10s 量级 + 一点余量"，而**不是**把它当失败阈值用。
+const RESTART_GRACE: std::time::Duration = std::time::Duration::from_secs(90);
+
+fn restart_daemon_process_blocking() -> Result<Value, String> {
     // 1) 杀前读当前 daemon 版本——复活后拿它跟新版本对比。
     let old_version = ipc::DaemonHandle::discover()
         .and_then(|d| d.call("status", json!({})))
@@ -963,9 +988,9 @@ fn restart_daemon_process() -> Result<Value, String> {
     //    注册，注册从头到尾没动过，这正是本命令的设计要点）。
     //
     //    ⚠️ 这一句在 Linux 上是**行为改变**，已在 PR 里登记：迁移前
-    //    Linux 走的是原来那个 unix 分支、杀完不拉起，然后下面那个 12 秒
-    //    轮询必然超时报错（Linux 没有任何东西会复活它）。桌面壳在 Linux
-    //    上不是发布形态，但既然改了就写明，不混在"纯搬家"里带过去。
+    //    Linux 走的是原来那个 unix 分支、杀完不拉起，然后下面那段等待必然
+    //    超时报错（Linux 没有任何东西会复活它）。桌面壳在 Linux 上不是发布
+    //    形态，但既然改了就写明，不混在"纯搬家"里带过去。
     if platform::adapter().service_mode() == platform::ServiceMode::UserAutostart {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let sidecar = exe
@@ -985,40 +1010,53 @@ fn restart_daemon_process() -> Result<Value, String> {
             .spawn()
             .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
     }
-    // 4) 轮询 status 直到复活（每 500ms，最长 12s——实测信号杀 4~5s
-    //    复活，12s 预算充裕；超时报错，绝不无限等）。
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(12);
-    let new_version = loop {
+    // 4) 等它**答上** `status`（每 500ms，最长 RESTART_GRACE）。
+    //    答上 = 有结论（版本变了 or 没变）；一直没答上 = `still_starting`，
+    //    **不谎报失败**——前端按"正在启动中"呈现，靠 3 秒状态轮询自然收口。
+    let deadline = std::time::Instant::now() + RESTART_GRACE;
+    let mut answered = false;
+    let mut new_version = None;
+    loop {
         if let Ok(v) = ipc::DaemonHandle::discover().and_then(|d| d.call("status", json!({}))) {
-            break v
+            answered = true;
+            new_version = v
                 .get("version")
                 .and_then(|x| x.as_str())
                 .map(str::to_string);
+            break;
         }
         if std::time::Instant::now() >= deadline {
-            return Err(ipc::ui_err("ui.err_not_revived", &[]));
+            break;
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
-    };
+    }
     Ok(restart_outcome(
         old_version.as_deref(),
         new_version.as_deref(),
+        answered,
     ))
 }
 
-/// DAE-04: 组装重启结果（纯函数，单测覆盖）。`changed=true` 才是真成功
-/// （进程复活且版本号真的变了）；版本没变 = 磁盘上的服务文件其实没更新，
-/// 前端必须明说失败，不能假装成功。
-fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>) -> Value {
+/// DAE-04 + DESK-44 (#606)：组装重启结果（纯函数，单测覆盖）。
+///
+/// 三个事实分开说，前端才有机会**不撒谎**：
+/// - `changed=true`：答上了且版本确实变了 ⇒ 真成功
+/// - `still_starting=true`：宽限期内 daemon **还没答上** ⇒ **不说失败**（现场就是
+///   "假失败真成功"），界面显示"正在启动中"并靠 3 秒轮询收口
+/// - 两者都 false：答上了但版本没变 ⇒ 磁盘上的服务文件没更新（一种**事实**，
+///   不是猜测）
+fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>, answered: bool) -> Value {
     json!({
         "old_version": old_version,
         "new_version": new_version,
-        "changed": match (old_version, new_version) {
-            // 复活了但版本没变 → 文件没更新，不算成功。
-            (Some(old), Some(new)) => old != new,
-            // 杀前没读到（服务本来就没在跑）或杀后读到——重启本身有进展。
-            _ => new_version.is_some(),
-        },
+        "changed": answered
+            && match (old_version, new_version) {
+                // 复活了但版本没变 → 文件没更新，不算成功。
+                (Some(old), Some(new)) => old != new,
+                // 杀前没读到（服务本来就没在跑）或杀后读到——重启本身有进展。
+                _ => new_version.is_some(),
+            },
+        "still_starting": !answered,
     })
 }
 
@@ -2315,36 +2353,59 @@ mod tests {
     // DAE-04: 版本真的变了 → changed=true（真成功，前端报「已重启」）。
     #[test]
     fn restart_outcome_marks_version_change() {
-        let v = restart_outcome(Some("v0.3.3-test.1"), Some("0.3.4"));
+        let v = restart_outcome(Some("v0.3.3-test.1"), Some("0.3.4"), true);
         assert_eq!(v["changed"], true);
+        assert_eq!(v["still_starting"], false);
         assert_eq!(v["old_version"], "v0.3.3-test.1");
         assert_eq!(v["new_version"], "0.3.4");
     }
 
     // DAE-04: 复活但版本没变 = 磁盘上的服务文件其实没更新——必须报为
-    // 未变更，前端明说失败（Clash Verge Rev #5451 的教训），不假装成功。
+    // 未变更，前端明说（Clash Verge Rev #5451 的教训），不假装成功。
     #[test]
     fn restart_outcome_same_version_is_not_a_change() {
-        let v = restart_outcome(Some("0.3.3"), Some("0.3.3"));
+        let v = restart_outcome(Some("0.3.3"), Some("0.3.3"), true);
         assert_eq!(v["changed"], false);
+        assert_eq!(v["still_starting"], false, "答上了就不是「还在启动」");
     }
 
-    // DAE-04: 杀前 daemon 没在跑（读到不到版本）、杀后起来了 → 也算
+    // DAE-04: 杀前 daemon 没在跑（读不到版本）、杀后起来了 → 也算
     // 有进展（前端报「已启动」）。
     #[test]
     fn restart_outcome_starts_an_offline_daemon() {
-        let v = restart_outcome(None, Some("0.3.3"));
+        let v = restart_outcome(None, Some("0.3.3"), true);
         assert_eq!(v["changed"], true);
         assert_eq!(v["old_version"], Value::Null);
     }
 
     // DAE-04: 杀后没读到版本 = 无法验证，不算成功（防御分支——轮询
-    // 超时已在上游拦掉，这里兜底语义）。
+    // 结束已在上游拦掉，这里兜底语义）。
     #[test]
     fn restart_outcome_without_new_version_is_not_verified() {
-        let v = restart_outcome(Some("0.3.3"), None);
+        let v = restart_outcome(Some("0.3.3"), None, true);
         assert_eq!(v["changed"], false);
         assert_eq!(v["new_version"], Value::Null);
+    }
+
+    /// DESK-44 (#606) 的核心判据：**宽限期内 daemon 还没答上**时，
+    /// 不许把它报成"失败"——2026-10-03 真机现场就是"假失败真成功"
+    /// （12s 固定预算 vs launchd ~10s 重拉节流 + 启动）。必须分开成
+    /// `still_starting=true`，让前端说"正在启动中"。
+    ///
+    /// 反证：把 `still_starting: !answered` 改成 `false`（或把 changed 写成
+    /// `!answered → not changed`）→ 本测试必须红。
+    #[test]
+    fn restart_outcome_not_answered_yet_is_still_starting_not_a_failure() {
+        let v = restart_outcome(Some("0.7.5"), None, false);
+        assert_eq!(v["changed"], false);
+        assert_eq!(
+            v["still_starting"], true,
+            "没答上 = 还在启动中，不是失败（#606 现场：假失败真成功）"
+        );
+        // 杀前也没读到、且始终没答上——同样只是"还在启动中"。
+        let v2 = restart_outcome(None, None, false);
+        assert_eq!(v2["changed"], false);
+        assert_eq!(v2["still_starting"], true);
     }
 
     // MOB-47 安全契约（L2 审查）：授权前校验只认「真实存在的普通文件」。

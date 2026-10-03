@@ -69,6 +69,7 @@
   "ui.restart_service_confirm_title": "Restart background service",
   "ui.restart_service_confirm_body": "Ongoing backups/transfers will be interrupted and resume automatically after the restart. Restart anyway?",
   "ui.restart_service_ok": "Background service restarted: {from} → {to}",
+  "ui.restart_service_still_starting": "The background service is still starting up (a large library can take ten-plus seconds on first launch). This notice disappears once the versions match — no need to click again.",
   "ui.restart_service_no_change": "The service restarted but the version is still {version} — the service file doesn't seem to have updated. Please reinstall the app.",
   "ui.restart_service_started": "Background service started, version {version}",
   "ui.restart_service_failed": "Failed to restart the background service: {err}",
