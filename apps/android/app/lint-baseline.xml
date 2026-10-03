@@ -137,7 +137,7 @@
         id="GradleDependency"
         message="A newer version of androidx.media3:media3-exoplayer than 1.9.4 is available: 1.11.0"
         errorLine1="    implementation(&quot;androidx.media3:media3-exoplayer:1.9.4&quot;)"
-        errorLine2="                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
             line="147"
@@ -148,7 +148,7 @@
         id="GradleDependency"
         message="A newer version of androidx.media3:media3-ui than 1.9.4 is available: 1.11.0"
         errorLine1="    implementation(&quot;androidx.media3:media3-ui:1.9.4&quot;)"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
             line="148"
@@ -159,7 +159,7 @@
         id="GradleDependency"
         message="A newer version of androidx.camera:camera-camera2 than 1.4.1 is available: 1.6.2"
         errorLine1="    implementation(&quot;androidx.camera:camera-camera2:1.4.1&quot;)"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
             line="158"
@@ -170,7 +170,7 @@
         id="GradleDependency"
         message="A newer version of androidx.camera:camera-lifecycle than 1.4.1 is available: 1.6.2"
         errorLine1="    implementation(&quot;androidx.camera:camera-lifecycle:1.4.1&quot;)"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
             line="159"
@@ -181,7 +181,7 @@
         id="GradleDependency"
         message="A newer version of androidx.camera:camera-view than 1.4.1 is available: 1.6.2"
         errorLine1="    implementation(&quot;androidx.camera:camera-view:1.4.1&quot;)"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
             line="160"
@@ -192,7 +192,7 @@
         id="GradleDependency"
         message="A newer version of org.jetbrains.kotlinx:kotlinx-serialization-json than 1.7.3 is available: 1.11.0"
         errorLine1="    implementation(&quot;org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3&quot;)"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
             line="164"
@@ -203,7 +203,7 @@
         id="GradleDependency"
         message="A newer version of org.jetbrains.kotlinx:kotlinx-coroutines-android than 1.9.0 is available: 1.11.0"
         errorLine1="    implementation(&quot;org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0&quot;)"
-        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
             line="176"
@@ -236,7 +236,7 @@
         id="GradleDependency"
         message="A newer version of androidx.test:rules than 1.6.1 is available: 1.7.0"
         errorLine1="    androidTestImplementation(&quot;androidx.test:rules:1.6.1&quot;)"
-        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
             line="185"
@@ -247,7 +247,7 @@
         id="GradleDependency"
         message="A newer version of androidx.test.ext:junit than 1.2.1 is available: 1.3.0"
         errorLine1="    androidTestImplementation(&quot;androidx.test.ext:junit:1.2.1&quot;)"
-        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="build.gradle.kts"
             line="186"
@@ -280,7 +280,7 @@
         id="PluralsCandidate"
         message="Formatting %d followed by words (&quot;home&quot;): This should probably be a plural rather than a string"
         errorLine1="    &lt;string name=&quot;state_sending&quot;>Sending %1$d/%2$d home&lt;/string>"
-        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
         <location
             file="src/main/res/values/strings.xml"
             line="60"
@@ -467,7 +467,7 @@
         id="Recycle"
         message="This `Cursor` should be freed up after use with `#close()`"
         errorLine1="            requireResolver().query("
-        errorLine2="                     ~~~~~">
+        errorLine2="                              ~~~~~">
         <location
             file="src/main/java/com/hawkeyexb/ppass/backup/MediaScanner.kt"
             line="141"
@@ -478,7 +478,7 @@
         id="Recycle"
         message="This `Cursor` should be freed up after use with `#close()`"
         errorLine1="            requireResolver().query("
-        errorLine2="                     ~~~~~">
+        errorLine2="                              ~~~~~">
         <location
             file="src/main/java/com/hawkeyexb/ppass/backup/MediaScanner.kt"
             line="220"
@@ -489,7 +489,7 @@
         id="Recycle"
         message="This `Cursor` should be freed up after use with `#close()`"
         errorLine1="            requireResolver().query("
-        errorLine2="                     ~~~~~">
+        errorLine2="                              ~~~~~">
         <location
             file="src/main/java/com/hawkeyexb/ppass/backup/MediaScanner.kt"
             line="270"
@@ -499,8 +499,8 @@
     <issue
         id="Recycle"
         message="This `Cursor` should be freed up after use with `#close()`"
-        errorLine1="            requireResolver().query(collection, projection, where, null, null)?.use { cur ->"
-        errorLine2="                            ~~~~~">
+        errorLine1="            requireResolver().query("
+        errorLine2="                              ~~~~~">
         <location
             file="src/main/java/com/hawkeyexb/ppass/backup/MediaScanner.kt"
             line="290"
@@ -511,7 +511,7 @@
         id="Recycle"
         message="This `Cursor` should be freed up after use with `#close()`"
         errorLine1="            requireResolver().query(collection, projection, where, null, null)?.use { cur ->"
-        errorLine2="                            ~~~~~">
+        errorLine2="                              ~~~~~">
         <location
             file="src/main/java/com/hawkeyexb/ppass/backup/MediaScanner.kt"
             line="346"
@@ -522,7 +522,7 @@
         id="Recycle"
         message="This `InputStream` should be freed up after use with `#close()`"
         errorLine1="            resolver.openInputStream(Uri.parse(sourceRef)).use { input ->"
-        errorLine2="                     ~~~~~">
+        errorLine2="                     ~~~~~~~~~~~~~~~">
         <location
             file="src/main/java/com/hawkeyexb/ppass/backup/flow/NativeFlowDeliveryPort.kt"
             line="229"
