@@ -142,14 +142,19 @@ class MOB122ResumeAfterWhitelistRestoredTest {
     fun the_hero_line_only_promises_automatic_backup_when_it_is_armed() {
         // 原症状里的「插电 + Wi-Fi 时自动进行」就是这一句；挂起期间与设置行 hint 说同一句话。
         val auto = com.hawkeyexb.ppass.R.string.idle_auto_hint
-        assertEquals(auto, com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.Armed))
+        assertEquals(auto, com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.Armed, wifiOnly = true))
         assertEquals(
             com.hawkeyexb.ppass.R.string.background_backup_system_stopped,
-            com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.SystemStoppedWatcher),
+            com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.SystemStoppedWatcher, wifiOnly = true),
         )
         assertEquals(
             com.hawkeyexb.ppass.R.string.background_backup_needs_authorization,
-            com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.NeedsSystemAuthorization),
+            com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.NeedsSystemAuthorization, wifiOnly = true),
+        )
+        // #581：关掉「仅 Wi-Fi」后这一句不再承诺 Wi-Fi——去掉 wifiOnly 分支，本断言即红（反证）。
+        assertEquals(
+            com.hawkeyexb.ppass.R.string.idle_auto_hint_any_network,
+            com.hawkeyexb.ppass.ui.idleHintRes(BackgroundBackupState.Armed, wifiOnly = false),
         )
     }
 
@@ -192,8 +197,8 @@ class MOB122ResumeAfterWhitelistRestoredTest {
     fun the_hero_idle_line_is_wired_to_the_background_state() {
         val s = code("ui/HomeScreen.kt")
         assertTrue(
-            "空闲态那一句必须经 idleHintRes 看后台状态",
-            s.contains("is StatusLine.Ready -> stringResource(idleHintRes(backgroundBackupState))"),
+            "空闲态那一句必须经 idleHintRes 看后台状态与「仅 Wi-Fi」开关（#581）",
+            s.contains("is StatusLine.Ready -> stringResource(idleHintRes(backgroundBackupState, wifiOnly))"),
         )
     }
 
