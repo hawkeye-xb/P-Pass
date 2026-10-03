@@ -266,7 +266,7 @@ fun HomeScreen(
     cancelRemainingCount: Long? = null,
     onRequestCancelRemaining: () -> Unit = {},
     // #418：设置卡「已跳过的照片 N 张 · 点击恢复」。null = 没有用户取消过的照片，不渲染。
-    // 恢复 = 清空跳过名单，对账扫描把它们重新放回待传。
+    // 恢复 = 清空跳过名单，对账扫描把这些照片重新放回待传。
     skippedCount: Long? = null,
     onRestoreSkipped: () -> Unit = {},
     // 确认框里写明的 N（点那一行时现算）；null = 没有确认框。
@@ -852,7 +852,7 @@ fun HomeScreen(
 /** "存储电脑"详情子页（M11/M12，全页面状态稿）——信息卡是状态点+
  *  设备名+"已连接·最近同步 X\n配对日期·存了 N 张照片"富文本，不是
  *  简单的"存储电脑｜名字"重复行（上一轮的真实差距，用户实机反馈
- *  "M11/12 也都需要对齐"）；断开连接三层防误触：入口藏在这个详情页最底部 →
+ *  "M11/12 也都需要对齐"）；断开连接三层防误触：入口藏在这个详情页 →
  *  红色描边按钮 → 点了展开一张"确定断开吗？"说明卡，卡里再点一次
  *  "确认断开"才真的触发。 */
 @Composable
@@ -1148,3 +1148,4 @@ private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)?
         if (onClick != null) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
     }
 }
+
