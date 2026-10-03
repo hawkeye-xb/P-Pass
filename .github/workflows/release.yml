@@ -527,13 +527,36 @@ jobs:
       - name: Detect signing
         id: signdetect
         working-directory: apps/android
+        # REL-09 (#631)：判据**不看文件名、真跑 apksigner**。
+        # 旧实现只要 `app-release.apk` 这个文件存在就报 signed=yes —— 文件名叫 signed
+        # 不等于它真的签好了（未签 / 签名方案不满足 minSdk / 用错 key 都算），
+        # 而 manifest 的 `Android=yes` 与用户侧的「该安装包未包含任何证书」（#599）
+        # 都建立在这条判据上。**不许加 `|| true` 或 `continue-on-error`。**
         run: |
           set -euo pipefail
-          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
-            echo "signed=yes" >> "$GITHUB_OUTPUT"
-          else
+          APK=app/build/outputs/apk/release/app-release.apk
+          if [ ! -f "$APK" ]; then
+            echo "只有 unsigned 产物（keystore secrets 未设置）→ signed=no"
             echo "signed=no" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          APKSIGNER="$(find "$SDK/build-tools" -maxdepth 2 -name apksigner 2>/dev/null | sort -V | tail -1)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::找不到 apksigner（SDK=$SDK）——判据无法成立，按红处理"
+            exit 1
+          fi
+          echo "apksigner: $APKSIGNER"
+          # minSdk 26 ⇒ v2 方案必需（v1 可缺，AGP 默认就不启 v1）。verify 失败 = 用户装不上。
+          "$APKSIGNER" verify --min-sdk-version 26 --print-certs "$APK"
+          # 用错 key 签 = 用户无法原地升级，和没签一样严重。DN 已记录在 docs/NEXT.md / ROADMAP.md。
+          CERTS="$("$APKSIGNER" verify --min-sdk-version 26 --print-certs "$APK" 2>/dev/null)"
+          if ! printf '%s\n' "$CERTS" | grep -q "CN=HawkeyeXbOrg"; then
+            echo "::error::APK 签名者不是 CN=HawkeyeXbOrg（用错 key 会让老用户装不上）"
+            printf '%s\n' "$CERTS"
+            exit 1
+          fi
+          echo "signed=yes" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
