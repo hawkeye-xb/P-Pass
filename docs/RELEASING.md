@@ -35,12 +35,17 @@
    Refuses already-tagged versions and non-increasing versions.
 2. **Changelog**: move `[Unreleased]` → new version section in
    `CHANGELOG.md` (keep-a-changelog format, user-visible changes only).
+   **This section becomes the opening of the release body** (see step 5) —
+   maintain it during commit/PR, not the night before tagging.
 3. **PR** → merge to main (main must be green: PR Checks).
 4. **Tag**: `git tag v<version>` + push. Tag pushes run the Release
    workflow (release.yml) → draft Release with platform assets.
-5. **Human publish**: review the draft (signing status, asset list,
-   E2E live scenarios result if the tag ran one), then publish it from the
-   GitHub web UI (Releases → the draft → Publish release).
+5. **Human publish**: review the draft, then publish it from the
+   GitHub web UI (Releases → the draft → Publish release). Two checks:
+   - **the body must open with this version's user-visible changelog**;
+     signing status / SHA-256 / asset list belong in later sections (§3.5)
+   - the signing status + asset list + E2E live scenarios result (if the
+     tag ran one) are consistent with the commit you tagged
    > **Do not use the local `gh` CLI for this repo** — it is not bound to
    > this repo's account. Triggering workflows, reading CI results and
    > publishing releases all happen in the browser; git goes over the
@@ -53,6 +58,11 @@
   (`tools/make-update-manifest.mjs`; tauri-plugin-updater style, sha256
   per platform + Ed25519 signature gated on `UPDATE_SIGNING_KEY`).
   Clients resolve it via `releases/latest/download/manifest.json`.
+- **`notes` is the release body — and its first 200 characters are what users see.**
+  The Android in-app update dialog renders `notes.take(200)`, so the release body
+  must **open with the version's user-visible changelog** (REL-08/`#626`);
+  signing status, SHA-256 sums and asset lists belong in later sections.
+  Do not let the machine report become the user's first impression.
 - **404 semantics**: while the latest release is a *draft* (or none
   exists), that URL 404s — clients must treat it as "no update",
   **silently** (no error banner; a test tag you forgot to publish must
@@ -203,13 +213,19 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    Android 版本（versionCode 单调 +1）。拒绝已打过 tag 的版本号和
    不递增的版本号。
 2. **changelog**：`CHANGELOG.md` 里 `[Unreleased]` 段挪成新版本段
-   （keep-a-changelog 格式，只记用户可见变更）。
+   （keep-a-changelog 格式，只记用户可见变更）。**这一段就是 release 正文的开头**
+   （见第 5 步）——在 commit/PR 阶段就维护它，别等打 tag 前一晚才补。
 3. **PR** → 合入 main（main 必须绿：PR Checks）。
 4. **打 tag**：`git tag v<版本>` + push。tag 触发 Release workflow →
    draft Release（三平台资产）。
-5. **人工 publish**：核对 draft（签名状态、资产清单、e2e 结果若本次
-   tag 跑了），然后在 GitHub 网页上发布（Releases → 该 draft → Publish
-   release）。
+5. **人工 publish**：核对 draft，然后在 GitHub 网页上发布（Releases → 该 draft →
+   Publish release）。两项核对：
+   - **正文必须以本版本的用户可见 changelog 开头**；签名状态 / SHA-256 / 资产清单
+     放后面的段落
+   - 签名状态 + 资产清单 + e2e 结果（若本次 tag 跑了）与你打的那个 commit 一致
+   > **`manifest.json` 的 `notes` 就是 release 正文**——Android 应用内更新弹窗直接
+   > 展示它的**前 200 字**（`notes.take(200)`），所以正文必须以便用户看的 changelog
+   > 开头；构建元信息放后面，别让机器台账当用户的第一次观感。
    > **本仓不用本机 `gh` CLI**（未绑定本仓账号）：触发 workflow、看 CI
    > 结论、发 Release 一律在浏览器里做，git 只走个人 SSH remote。
    > （`.github/workflows/` 里的 `gh` 跑在 runner 上用 `GITHUB_TOKEN`，
