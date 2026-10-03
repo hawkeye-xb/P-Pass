@@ -266,7 +266,7 @@ fun HomeScreen(
     cancelRemainingCount: Long? = null,
     onRequestCancelRemaining: () -> Unit = {},
     // #418：设置卡「已跳过的照片 N 张 · 点击恢复」。null = 没有用户取消过的照片，不渲染。
-    // 恢复 = 清空跳过名单，对账扫描把这些照片重新放回待传。
+    // 恢复 = 清空跳过名单，对账扫描把它们重新放回待传。
     skippedCount: Long? = null,
     onRestoreSkipped: () -> Unit = {},
     // 确认框里写明的 N（点那一行时现算）；null = 没有确认框。
