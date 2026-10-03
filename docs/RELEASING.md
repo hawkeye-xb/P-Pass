@@ -35,12 +35,19 @@
    Refuses already-tagged versions and non-increasing versions.
 2. **Changelog**: move `[Unreleased]` → new version section in
    `CHANGELOG.md` (keep-a-changelog format, user-visible changes only).
+   Entries are written into `[Unreleased]` at commit/PR time, not
+   reconstructed at release time.
 3. **PR** → merge to main (main must be green: PR Checks).
 4. **Tag**: `git tag v<version>` + push. Tag pushes run the Release
    workflow (release.yml) → draft Release with platform assets.
 5. **Human publish**: review the draft (signing status, asset list,
    E2E live scenarios result if the tag ran one), then publish it from the
    GitHub web UI (Releases → the draft → Publish release).
+   **The release body is user-facing**: release.yml copies it into the
+   update manifest's `notes`, and Android shows its first ~200 chars in the
+   in-app update dialog. Before publishing, edit the draft so the body
+   opens with the version's CHANGELOG section (what changed for users);
+   build metadata (commit, signing status, asset SHA-256) goes below it.
    > **Do not use the local `gh` CLI for this repo** — it is not bound to
    > this repo's account. Triggering workflows, reading CI results and
    > publishing releases all happen in the browser; git goes over the
@@ -53,6 +60,10 @@
   (`tools/make-update-manifest.mjs`; tauri-plugin-updater style, sha256
   per platform + Ed25519 signature gated on `UPDATE_SIGNING_KEY`).
   Clients resolve it via `releases/latest/download/manifest.json`.
+- **`notes` is user-facing**: it is copied verbatim from the release body
+  (`gh release view … > NOTES.md` → `--notes`), and Android renders its
+  first ~200 chars in the update dialog — it must read as a changelog
+  (what changed for users), not a build ledger.
 - **404 semantics**: while the latest release is a *draft* (or none
   exists), that URL 404s — clients must treat it as "no update",
   **silently** (no error banner; a test tag you forgot to publish must
@@ -183,13 +194,17 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    Android 版本（versionCode 单调 +1）。拒绝已打过 tag 的版本号和
    不递增的版本号。
 2. **changelog**：`CHANGELOG.md` 里 `[Unreleased]` 段挪成新版本段
-   （keep-a-changelog 格式，只记用户可见变更）。
+   （keep-a-changelog 格式，只记用户可见变更）。条目在 commit/PR 时就
+   写进 `[Unreleased]`，不是发版时倒查补写。
 3. **PR** → 合入 main（main 必须绿：PR Checks）。
 4. **打 tag**：`git tag v<版本>` + push。tag 触发 Release workflow →
    draft Release（三平台资产）。
 5. **人工 publish**：核对 draft（签名状态、资产清单、e2e 结果若本次
    tag 跑了），然后在 GitHub 网页上发布（Releases → 该 draft → Publish
-   release）。
+   release）。**release 正文面向用户**：release.yml 会把它写进更新
+   manifest 的 `notes`，Android 应用内更新弹窗展示前约 200 字。publish
+   前先把 draft 正文改成以该版本 CHANGELOG 段开头（用户可见变更），
+   构建元信息（commit、签名状态、资产 SHA-256）放在其后。
    > **本仓不用本机 `gh` CLI**（未绑定本仓账号）：触发 workflow、看 CI
    > 结论、发 Release 一律在浏览器里做，git 只走个人 SSH remote。
    > （`.github/workflows/` 里的 `gh` 跑在 runner 上用 `GITHUB_TOKEN`，
@@ -204,6 +219,9 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   `releases/latest/download/manifest.json`——URL 与语义原样不动（单测
   锁死，不许碰）。GitHub latest 只认已发布的正式 release，**人工
   publish 就是验收后的发布动作**。
+- **`notes` 面向用户**：manifest 的 `notes` 原样取自 release 正文
+  （`gh release view … > NOTES.md` → `--notes`），Android 更新弹窗直接
+  展示前约 200 字——必须是 changelog（用户可见变更），不是构建台账。
 - **test**（开发/狗粮设备）：CI 把含 `-test.` 的 tag 自动 publish 为
   **GitHub prerelease**（release.yml；GitHub latest 设计上忽略
   prerelease，绝不会漏进 stable）。
