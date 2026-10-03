@@ -113,6 +113,26 @@ default** (family devices are never touched by test builds):
   updater install logic (dmg mount/NSIS silent) — deferred until the
   desktop updater artifact (3.5 gaps) lands.
 
+## 3.7 Desktop auto-update regression (UPD-06/07, 2026-10-03)
+
+**Bootstrap property**: an update fix is only exercised by the *next* hop — `N → N+1` runs N's
+code. So ship two builds: the **fix carrier** (all changes) and a **stub carrier** (bump-only,
+its sole purpose is to offer an update). The starting version is installed **manually** from the dmg.
+
+Publish order matters: publish the start version **first** (while the target is still a draft,
+`releases/latest/download/manifest.json` 404s and clients correctly answer "no update"), then publish the target.
+
+1. Publish the start version → install its dmg into `/Applications` → quit fully and reopen →
+   `defaults read /Applications/P-Pass.app/Contents/Info.plist CFBundleShortVersionString` = start version
+2. **Log out and back in (or reboot)** — so launchd owns the shell. Without this, `kickstart -k`
+   has nothing to kill and you only exercise the fallback path.
+3. Publish the target version.
+4. In the app: Check for updates → progress → install → the app restarts itself.
+5. **Pass** = Info.plist shows the target version, footer/settings show shell == service (no
+   mismatch), and a second check answers "up to date". **Allowed degradation** = falling back to
+   the in-process relaunch (the `#616:` log line says why) — record which path ran.
+   **Blocking** = a manual Cmd+Q is required, the version stays old, or a mismatched state never clears.
+
 ## 4. Release flow (pipeline acceptance / test tags)
 
 - Acceptance tags: `v<X.Y.Z>-test.N` (increment N, never reuse).
@@ -232,6 +252,25 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   fetch Worker manifest + plugin-opener）。test 通道全自动安装需要重写
   updater 安装逻辑（dmg 挂载/NSIS 静默）——等桌面更新产物（3.5 挂账）
   落地后再议。
+
+## 3.7 桌面自动更新回归（UPD-06/07，2026-10-03）
+
+**自举性质**：更新类修复只能被**下一跳**用到——`N → N+1` 跑的是 N 的代码。所以要出**两个包**：
+**修复载体**（功能全在这一版）+ **stub 载体**（纯 bump，唯一用途是"提供一个可更新到的新版本"）。
+起点版本由验收人**手动**从 dmg 装。
+
+**发布顺序不能反**：先发布起点版（目标版还是 draft 时 `releases/latest/download/manifest.json`
+是 404，客户端答"没有更新"是**正确行为**），再发布目标版。
+
+1. 发布起点版 → dmg 装进 `/Applications` → 完全退出重开 → 确认
+   `defaults read /Applications/P-Pass.app/Contents/Info.plist CFBundleShortVersionString` = 起点版
+2. **登出再登录（或重启）** —— 让 launchd 接管壳。不做这步，`kickstart -k` 无物可杀，
+   只会验到退化路径
+3. 发布目标版
+4. App 内点「检查更新」→ 看进度 → 安装 → **App 应自动重启**
+5. **通过** = Info.plist 是目标版 ＋ 页脚/设置页显示壳 == 服务（无"版本不一致"）＋ 再检查更新答"已是最新"。
+   **允许的降级** = 退化成壳内自重启（日志 `#616:` 会写明原因）——记录走的是哪条路。
+   **阻断** = 需要手动 Cmd+Q / 版本停在旧版 / "混版本"状态永不收敛
 
 ## 4. 发布流程（流水线验收 / 测试 tag）
 
