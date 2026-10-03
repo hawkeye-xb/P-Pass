@@ -55,8 +55,8 @@ object MinisignVerifier {
 
     /** 测试可注入公钥（JVM 测试用独立测试密钥对，不动生产常量）。 */
     internal fun verify(file: File, signatureBase64: String, publicKeyB64: String): Result = try {
-        val pub = parseKey(Base64.getDecoder().decode(publicKeyB64))
-        val sig = parseSig(Base64.getDecoder().decode(signatureBase64.trim()))
+        val pub = decodeBlob(publicKeyB64, 2 + 8 + 32)?.let(::parseKey)
+        val sig = decodeBlob(signatureBase64, 2 + 8 + 64)?.let(::parseSig)
         when {
             pub == null || sig == null -> Result.MalformedSignature
             !sig.keynum.contentEquals(pub.keynum) -> Result.UnknownSigner
@@ -67,6 +67,36 @@ object MinisignVerifier {
         Result.MalformedSignature // bad base64
     } catch (e: Exception) {
         Result.Error(e)
+    }
+
+    /**
+     * UPD-11 (#641)：manifest 的 `signature` 字段装的是 **base64(整个 `.minisig` 文本盒)**，
+     * 不是裸结构 —— 与桌面端 tauri updater 消费的是同一个字段、同一种形状，也与
+     * `tauri.conf.json` 的 pubkey（base64(.pub 文本盒)）同构。旧实现直接把字段当裸
+     * 结构解，`blob.size != 74` 一律 null ⇒ **每次更新都必然「校验未通过」**。
+     *
+     * 这里两种形状都收：先按裸结构试（老向量/未来格式），尺寸不对再按文本盒逐行找
+     * 内层 base64。`expectedSize` 由调用方给定，避免「认出一个不是我们要的东西」。
+     */
+    internal fun decodeBlob(field: String, expectedSize: Int): ByteArray? {
+        val decoded = try {
+            Base64.getDecoder().decode(field.trim())
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        if (decoded.size == expectedSize) return decoded
+        // 文本盒：`untrusted comment: …` / <base64 blob> / [`trusted comment: …` / <base64 global sig>]
+        for (line in decoded.toString(Charsets.UTF_8).lineSequence()) {
+            val t = line.trim()
+            if (t.isEmpty() || t.startsWith("untrusted comment") || t.startsWith("trusted comment")) continue
+            val inner = try {
+                Base64.getDecoder().decode(t)
+            } catch (_: IllegalArgumentException) {
+                continue
+            }
+            if (inner.size == expectedSize) return inner
+        }
+        return null
     }
 
     internal fun parseKey(blob: ByteArray): ParsedKey? {
