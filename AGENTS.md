@@ -85,6 +85,12 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
 - PR 合并后清本地：`just cleanup-local`（默认预览，删除要 `--apply`）。
   本仓走 squash 合并，判断分支能否删看上游 `: gone]`，用 `-D` 不用 `-d`。
 - tag 只给真发版本。调管线不发版走 Actions → Release → Run workflow。
+- **release/tag 正文 = 面向用户的 changelog（红线级）**：正文以该版本的**用户可见变更**开头
+  （对应 `CHANGELOG.md` 该版本段），**签名状态 / SHA-256 / 资产清单等构建元信息一律往后放**。
+  为什么：release 正文会进 `manifest.json` 的 `notes`，而 **Android 应用内更新弹窗直接展示
+  前 200 字**——那 200 字就是用户在手机上看到的更新说明（0.7.4–0.7.7 全是「构建自…签名状态…」，
+  用户看不懂）。changelog 内容在 **commit/PR 阶段**维护进 `CHANGELOG.md` 的 `[Unreleased]`，
+  publish 前落成正文；细则见 `docs/RELEASING.md` §3 / §3.5。
 - 构建产物、日志不进 main。
 
 ## 机器兜底（`just ci` 会挡，不用背）
