@@ -1,23 +1,19 @@
 // UPD-01: 自更新轻实现（脱店 App 无标准库；第三方多失修——自研）。
+// UPD-02: 标准化返工——依赖倒置更新源 / Range 断点续传 / 下载进度回调 /
+//         手动检查的诚实结果分类。
 //
 // 设计要点：
-//  - manifest 从 GitHub release 资产直链拉取（latest/download 自动指向
-//    最新非 draft release；draft/无 release 时 404 → 视为无更新，静默）。
-//  - 不嵌入公钥：APK 安装由系统 PackageInstaller 强制同签名校验兜底
-//    （与已装 App 签名不一致直接拒装）——manifest 被篡改指向恶意包也
-//    装不上（UPD-01 卡面反证由系统侧保证）。
+//  - 更新源经 [UpdateSource] 依赖倒置：stable/test 的 URL 语义不动
+//    （URL-lock 测试钉死），将来切 R2 只改 [defaultUpdateSource] 一处。
 //  - 版本比较：SemVer 三段数字（预发布后缀只影响同主版本内的优先级，
 //    跨版本升级只看数字段）。
+//  - 下载完整性由 [ApkVerifier] 在下载后、安装前把关（sha256 + minisign），
+//    本文件只负责「把字节正确搬下来」。
 package com.hawkeyexb.ppass.update
 
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import androidx.core.content.FileProvider
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -33,23 +29,17 @@ data class UpdateManifest(
 data class PlatformEntry(
     val url: String,
     val signature: String = "",
+    /** UPD-02: APK 的 sha256（hex）。旧工具产出的 manifest 无此字段 → 空串过渡。 */
+    val sha256: String = "",
 )
 
 data class UpdateInfo(
     val version: String,
     val notes: String,
     val url: String,
+    val sha256: String = "",
+    val signature: String = "",
 )
-
-private const val MANIFEST_URL =
-    "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json"
-
-// REL-07 test 通道：固定的滚动 prerelease `test-channel` 里的 manifest.json
-// ——release.yml 每次 test 发布后用已签名的 manifest 覆盖它。静态文件下载，
-// 不调 GitHub API（没有匿名限流）。REL-02 时代的 Worker
-// （update.p-pass.hawkeye-xb.com/manifest?channel=test）留作旧构建兼容层。
-private const val TEST_CHANNEL_URL =
-    "https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest.json"
 
 private val json = Json { ignoreUnknownKeys = true }
 
@@ -57,11 +47,14 @@ private val json = Json { ignoreUnknownKeys = true }
  * REL-02: 通道 → manifest URL（纯函数，JVM 可测）。
  * 反证红线：stable 必须恒等于 GitHub latest 原 URL（卡面「不准动」——
  * 改动此 URL 本测试必红）；test 走滚动 prerelease 的静态文件（REL-07）。
+ * UPD-02: URL 不再硬编码在本文件，由 [UpdateSource] 供给；默认源
+ * [GitHubUpdateSource] 持有与原来完全相同的两个 URL。
  */
-fun channelManifestUrl(channel: UpdateChannel): String = when (channel) {
-    UpdateChannel.Stable -> MANIFEST_URL
-    UpdateChannel.Test -> TEST_CHANNEL_URL
-}
+fun channelManifestUrl(channel: UpdateChannel): String =
+    channelManifestUrl(channel, defaultUpdateSource())
+
+fun channelManifestUrl(channel: UpdateChannel, source: UpdateSource): String =
+    source.manifestUrl(channel)
 
 /** SemVer 三段数字比较：candidate 严格大于 current 才算更新。 */
 fun isNewer(candidate: String, current: String): Boolean {
@@ -109,26 +102,72 @@ fun parseUpdateManifest(body: String, currentVersion: String): UpdateInfo? {
         val manifest = json.decodeFromString(UpdateManifest.serializer(), body)
         val entry = manifest.platforms["android-arm64"] ?: return null
         if (!isNewer(manifest.version, currentVersion)) return null
-        UpdateInfo(version = manifest.version, notes = manifest.notes, url = entry.url)
+        UpdateInfo(
+            version = manifest.version,
+            notes = manifest.notes,
+            url = entry.url,
+            sha256 = entry.sha256,
+            signature = entry.signature,
+        )
     } catch (_: Exception) {
         null
     }
 }
 
 /**
- * 拉取并解析 manifest；无更新/不可达返回 null（静默，绝不打断启动）。
- * REL-02: 按通道取源——stable = GitHub latest（原 URL 语义不动）；
- * test = 滚动 prerelease `test-channel` 的 manifest 资产（REL-07）。
+ * UPD-02: 更新检查的诚实结果分类。自动检查照旧静默（失败不打断启动）；
+ * 手动检查（设置页「检查更新」）必须把「已是最新」与「检查失败」分开告诉
+ * 用户——REL-07 已在日志层分开，这里把它抬到 UI 层。
  */
-suspend fun fetchUpdate(currentVersion: String, channel: UpdateChannel = UpdateChannel.Stable): UpdateInfo? =
-    withContext(Dispatchers.IO) {
-        try {
-            val body = httpGet(channelManifestUrl(channel)) ?: return@withContext null
-            parseUpdateManifest(body, currentVersion)
-        } catch (_: Exception) {
-            null // 网络/解析失败一律静默——更新检查绝不能崩启动
+sealed interface UpdateCheckOutcome {
+    data class Available(val info: UpdateInfo) : UpdateCheckOutcome
+    /** manifest 可达，但没有更新的版本（含 404 无 release、版本不更新）。 */
+    data object UpToDate : UpdateCheckOutcome
+    /** 检查本身失败（网络不通 / 限流 403·429 / 5xx / body 解析失败）。 */
+    data object Failed : UpdateCheckOutcome
+}
+
+/**
+ * 拉取并解析 manifest，返回分类结果。绝不抛异常——更新检查不能崩启动。
+ */
+suspend fun checkUpdate(
+    currentVersion: String,
+    channel: UpdateChannel = channelFromVersion(currentVersion),
+    source: UpdateSource = defaultUpdateSource(),
+): UpdateCheckOutcome = withContext(Dispatchers.IO) {
+    try {
+        when (val reply = httpGet(channelManifestUrl(channel, source))) {
+            is ManifestReply.Body -> {
+                val info = parseUpdateManifest(reply.text, currentVersion)
+                if (info != null) {
+                    UpdateCheckOutcome.Available(info)
+                } else {
+                    // 能解析但「不更新」与「解析失败」要分开：前者 UpToDate，后者 Failed。
+                    val parsed = runCatching {
+                        json.decodeFromString(UpdateManifest.serializer(), reply.text)
+                    }.getOrNull()
+                    if (parsed != null) UpdateCheckOutcome.UpToDate else UpdateCheckOutcome.Failed
+                }
+            }
+            ManifestReply.NoRelease -> UpdateCheckOutcome.UpToDate
+            ManifestReply.Failed -> UpdateCheckOutcome.Failed
         }
+    } catch (_: Exception) {
+        UpdateCheckOutcome.Failed
     }
+}
+
+/**
+ * 拉取并解析 manifest；无更新/不可达返回 null（静默，绝不打断启动）。
+ * UPD-02: 保留为 [checkUpdate] 的静默包装，供不需要区分类型的调用方使用。
+ */
+suspend fun fetchUpdate(
+    currentVersion: String,
+    channel: UpdateChannel = UpdateChannel.Stable,
+): UpdateInfo? = when (val outcome = checkUpdate(currentVersion, channel)) {
+    is UpdateCheckOutcome.Available -> outcome.info
+    else -> null
+}
 
 /**
  * REL-07: manifest 拉取的 HTTP 结果分类（纯函数，JVM 可测）。
@@ -144,11 +183,20 @@ fun classifyManifestStatus(code: Int): ManifestFetchOutcome = when (code) {
     else -> ManifestFetchOutcome.CheckFailed
 }
 
+/** UPD-02: httpGet 的三分返回，让 [checkUpdate] 能把失败如实上报。 */
+internal sealed interface ManifestReply {
+    data class Body(val text: String) : ManifestReply
+    data object NoRelease : ManifestReply
+    data object Failed : ManifestReply
+}
+
 // 诊断：`adb logcat -s PPassUpdate`（鸿蒙真机需先 `adb shell setprop log.tag.PPassUpdate V`）。
 private const val LOG_TAG = "PPassUpdate"
 
-/** GET 文本；非 200 / 网络失败返回 null（REL-07：按 classifyManifestStatus 分级打日志）。 */
-private fun httpGet(url: String): String? = try {
+internal const val UPDATE_LOG_TAG = LOG_TAG
+
+/** GET 文本，按 classifyManifestStatus 分类返回（日志分级同 REL-07）。 */
+private fun httpGet(url: String): ManifestReply = try {
     val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
     conn.connectTimeout = 8_000
     conn.readTimeout = 8_000
@@ -157,10 +205,11 @@ private fun httpGet(url: String): String? = try {
     conn.setRequestProperty("User-Agent", "P-Pass-UpdateChecker")
     val code = conn.responseCode
     when (classifyManifestStatus(code)) {
-        ManifestFetchOutcome.Ok -> conn.inputStream.bufferedReader().use { it.readText() }
+        ManifestFetchOutcome.Ok ->
+            ManifestReply.Body(conn.inputStream.bufferedReader().use { it.readText() })
         ManifestFetchOutcome.NoRelease -> {
             android.util.Log.i(LOG_TAG, "no release at $url (HTTP 404) — no update")
-            null
+            ManifestReply.NoRelease
         }
         ManifestFetchOutcome.CheckFailed -> {
             val detail = runCatching {
@@ -171,12 +220,12 @@ private fun httpGet(url: String): String? = try {
                 LOG_TAG,
                 "update check FAILED at $url: HTTP $code retry-after=$retryAfter body=$detail",
             )
-            null
+            ManifestReply.Failed
         }
     }
 } catch (e: Exception) {
     android.util.Log.w(LOG_TAG, "update check FAILED at $url: $e")
-    null
+    ManifestReply.Failed
 }
 
 /**
@@ -187,7 +236,7 @@ private fun httpGet(url: String): String? = try {
  * 等响应头 / 读 body 阶段是 readTimeout（字节停滞）——同一个异常类，两种事实。
  */
 sealed interface ApkDownloadResult {
-    /** 下载完整落盘（[downloadApk] 的成功值；[downloadAndInstall] 成功时也返回它）。 */
+    /** 下载完整落盘（[downloadApk] 的成功值）。 */
     data class Ok(val bytes: Long) : ApkDownloadResult
 
     /** 已建立连接，但连续 [readTimeoutMs] 毫秒没有新字节（readTimeout 触发）。 */
@@ -197,7 +246,7 @@ sealed interface ApkDownloadResult {
         val readTimeoutMs: Int,
     ) : ApkDownloadResult
 
-    /** 服务器回了响应，但最终（逐跳跟随重定向后）的状态码不是 200。 */
+    /** 服务器回了响应，但最终（逐跳跟随重定向后）的状态码不是 200/206。 */
     data class HttpStatus(val code: Int) : ApkDownloadResult
 
     /**
@@ -220,9 +269,6 @@ sealed interface ApkDownloadResult {
      */
     data class Unexpected(val phase: Phase, val cause: String) : ApkDownloadResult
 
-    /** 下载成功，但交给系统安装器这一步失败（FileProvider / startActivity）。 */
-    data class InstallLaunchFailed(val bytes: Long, val cause: String) : ApkDownloadResult
-
     enum class Phase { Connect, Headers, Body }
 }
 
@@ -240,8 +286,6 @@ fun ApkDownloadResult.logLine(url: String): String = when (this) {
         "apk download LOCAL WRITE FAILED for $url (received $receivedBytes bytes): $cause"
     is ApkDownloadResult.Unexpected ->
         "apk download UNEXPECTED ERROR at $url during ${phase.name.lowercase()}: $cause"
-    is ApkDownloadResult.InstallLaunchFailed ->
-        "apk downloaded ($bytes bytes) but installer launch FAILED for $url: $cause"
 }
 
 // APK 走 HTTPS（GitHub release 资产 → 302 → CDN），不经 iroh relay，没有
@@ -253,10 +297,26 @@ private const val APK_COPY_BUFFER = 64 * 1024
 internal const val APK_MAX_REDIRECTS = 5
 
 /**
- * NET-09: 下载 [url] 到 [dest] 并分类失败（不含安装；JVM 用假连接可测）。
+ * UPD-02: HTTP Range 断点续传计划（纯函数，JVM 可测）。
+ * 本地已有 [existingBytes] 字节时，请求头 `Range: bytes=N-` 只取剩余部分：
+ *  - 206 → 追加写入；
+ *  - 200 → 服务器不理会 Range → 从头重下（截断）；
+ *  - 416 → 本地残包比远端还大/错位 → 删残包从头重下（[downloadApk] 内处理）。
+ */
+internal data class ResumePlan(val existingBytes: Long) {
+    val rangeHeader: String? get() = if (existingBytes > 0) "bytes=$existingBytes-" else null
+}
+
+internal fun resumePlanFor(existingBytes: Long): ResumePlan =
+    ResumePlan(existingBytes.coerceAtLeast(0L))
+
+/**
+ * NET-09: 下载 [url] 到 [dest] 并分类失败（JVM 用假连接可测）。
  * [open] 只负责造出未连接的 HttpURLConnection；超时由本函数设置
  * （[readTimeoutMs] 只为测试缩短，生产恒用默认值）。
- * 任何失败都会删掉 [dest] 的残包，不留半个 APK 给下次误装。
+ * UPD-02: [resumeFromBytes] > 0 时按 [ResumePlan] 发 Range 请求追加下载；
+ * [onProgress] 以「含断点的总已收 / 总大小（未知为 -1）」回调，供 UI 进度条。
+ * 除 416 自恢复外的任何失败都会删掉 [dest] 的残包，不留半个 APK 给下次误装。
  */
 fun downloadApk(
     url: String,
@@ -265,11 +325,39 @@ fun downloadApk(
         java.net.URL(it).openConnection() as java.net.HttpURLConnection
     },
     readTimeoutMs: Int = APK_READ_TIMEOUT_MS,
+    resumeFromBytes: Long = 0L,
+    onProgress: (received: Long, total: Long) -> Unit = { _, _ -> },
+): ApkDownloadResult {
+    var resume = resumePlanFor(resumeFromBytes)
+    var rangeRetried = false
+    while (true) {
+        val result = downloadOnce(url, dest, open, readTimeoutMs, resume, onProgress)
+        // 416 = 本地残包与远端对不上：删残包、摘掉 Range 头，完整重试一次。
+        if (result is ApkDownloadResult.HttpStatus && result.code == 416 &&
+            resume.rangeHeader != null && !rangeRetried
+        ) {
+            rangeRetried = true
+            dest.delete()
+            resume = resumePlanFor(0)
+            continue
+        }
+        if (result !is ApkDownloadResult.Ok) dest.delete()
+        return result
+    }
+}
+
+private fun downloadOnce(
+    url: String,
+    dest: File,
+    open: (String) -> java.net.HttpURLConnection,
+    readTimeoutMs: Int,
+    resume: ResumePlan,
+    onProgress: (received: Long, total: Long) -> Unit,
 ): ApkDownloadResult {
     var current = url
     var redirects = 0
     var phase = ApkDownloadResult.Phase.Connect
-    var received = 0L
+    var received = resume.existingBytes
     var conn: java.net.HttpURLConnection? = null
     var result: ApkDownloadResult? = null
     try {
@@ -284,6 +372,7 @@ fun downloadApk(
             c.instanceFollowRedirects = false
             c.connectTimeout = APK_CONNECT_TIMEOUT_MS
             c.readTimeout = readTimeoutMs
+            resume.rangeHeader?.let { c.setRequestProperty("Range", it) }
             // 显式 connect：DNS / 拒绝 / TLS 握手 / connectTimeout 都在这一步抛，
             // 与之后的 readTimeout 分开。
             c.connect()
@@ -297,20 +386,32 @@ fun downloadApk(
                 redirects++
                 runCatching { c.disconnect() }
                 conn = null
-            } else if (code != 200) {
+            } else if (code == 416 && resume.rangeHeader != null) {
+                result = ApkDownloadResult.HttpStatus(416) // 交给外层删残包重试
+            } else if (code != 200 && code != 206) {
                 // 含：3xx 没带 Location、重定向超过上限——都如实报最后那个状态码。
                 result = ApkDownloadResult.HttpStatus(code)
             } else {
                 phase = ApkDownloadResult.Phase.Body
-                val expected = c.contentLengthLong
-                result = copyBody(c.inputStream, dest) { received = it }
-                    ?: if (expected >= 0 && received != expected) {
-                        ApkDownloadResult.ConnectionFailed(
-                            phase, received, "body ended early: $received of $expected bytes",
-                        )
-                    } else {
-                        ApkDownloadResult.Ok(received)
-                    }
+                // 206 = 服务端接受 Range → 追加；200 = 忽略 Range → 从头重来。
+                val appending = code == 206 && resume.rangeHeader != null
+                if (!appending) received = 0L
+                val base = if (appending) resume.existingBytes else 0L
+                val expected = c.contentLengthLong.let { if (it >= 0) it + base else -1L }
+                var bodyReceived = 0L
+                result = copyBody(
+                    c.inputStream, dest, appending,
+                    { n -> bodyReceived = n; received = base + n },
+                ) { done ->
+                    onProgress(base + done, expected)
+                } ?: if (expected >= 0 && base + bodyReceived != expected) {
+                    ApkDownloadResult.ConnectionFailed(
+                        phase, base + bodyReceived,
+                        "body ended early: ${base + bodyReceived} of $expected bytes",
+                    )
+                } else {
+                    ApkDownloadResult.Ok(base + bodyReceived)
+                }
             }
         }
     } catch (e: java.net.SocketTimeoutException) {
@@ -326,23 +427,25 @@ fun downloadApk(
     } finally {
         conn?.let { runCatching { it.disconnect() } }
     }
-    val final = result!!
-    if (final !is ApkDownloadResult.Ok) dest.delete()
-    return final
+    return result!!
 }
 
 /**
- * 把 body 抄进 [dest]。网络读的异常原样抛给 [downloadApk] 分类；写盘失败在这里
- * 就地转成 [ApkDownloadResult.LocalWriteFailed]（返回非 null）。正常读完返回 null。
+ * 把 body 抄进 [dest]（[append] = true 时追加在已有残包后面）。
+ * 网络读的异常原样抛给 [downloadOnce] 分类；写盘失败在这里就地转成
+ * [ApkDownloadResult.LocalWriteFailed]（返回非 null）。正常读完返回 null。
+ * [onBodyBytes] 汇报本次 body 已收字节数（不含断点基数）；[onProgress] 用于 UI。
  */
 private fun copyBody(
     input: java.io.InputStream,
     dest: File,
+    append: Boolean,
+    onBodyBytes: (Long) -> Unit,
     onProgress: (Long) -> Unit,
 ): ApkDownloadResult? {
     var received = 0L
     val output = try {
-        dest.outputStream()
+        if (append) java.io.FileOutputStream(dest, true) else dest.outputStream()
     } catch (e: java.io.IOException) {
         input.close()
         return ApkDownloadResult.LocalWriteFailed(0, e.toString())
@@ -356,9 +459,11 @@ private fun copyBody(
                 try {
                     out.write(buf, 0, n)
                 } catch (e: java.io.IOException) {
+                    onBodyBytes(received)
                     return ApkDownloadResult.LocalWriteFailed(received, e.toString())
                 }
                 received += n
+                onBodyBytes(received)
                 onProgress(received)
             }
         }
@@ -366,46 +471,5 @@ private fun copyBody(
     return null
 }
 
-/**
- * 下载 APK → FileProvider → 系统安装器（PackageInstaller 强制同签名校验
- * 兜底）。UPD-01 返工：原实现是普通 fun 在主线程同步下载——Android 直接
- * 抛 NetworkOnMainThreadException，异常被 catch 吞掉，「下载安装」点了
- * 没反应。改为 suspend + Dispatchers.IO。
- *
- * NET-09: 返回分类后的结果，并在 `PPassUpdate` 如实记一行类别与关键数字。
- * 调用方目前不向用户展示失败（对话框照旧关闭），这一点没有变。
- */
 /** 更新 APK 的落盘位置：必须在 file_paths.xml 的 `update/` 目录下（见 UpdateApkFileProviderPathTest）。 */
 internal fun updateApkFile(cacheDir: File): File = File(File(cacheDir, "update"), "ppass-update.apk")
-
-suspend fun downloadAndInstall(context: Context, url: String): ApkDownloadResult =
-    withContext(Dispatchers.IO) {
-        val apk = updateApkFile(context.cacheDir).apply { parentFile?.mkdirs() }
-        val downloaded = downloadApk(url, apk)
-        val result = if (downloaded !is ApkDownloadResult.Ok) {
-            downloaded
-        } else {
-            try {
-                val uri: Uri = FileProvider.getUriForFile(
-                    context,
-                    "${context.packageName}.fileprovider",
-                    apk,
-                )
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(intent)
-                downloaded
-            } catch (e: Exception) {
-                ApkDownloadResult.InstallLaunchFailed(downloaded.bytes, e.toString())
-            }
-        }
-        if (result is ApkDownloadResult.Ok) {
-            android.util.Log.i(LOG_TAG, result.logLine(url))
-        } else {
-            android.util.Log.w(LOG_TAG, result.logLine(url))
-        }
-        result
-    }

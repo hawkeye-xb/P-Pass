@@ -171,6 +171,12 @@ dependencies {
     // Rust-generated vectors (tests/blake3-vectors.json) in unit tests.
     implementation("io.github.rctcwyvrn:blake3:1.3")
 
+
+    // UPD-02: 更新包 minisign 验签的 Ed25519/Ed25519ph——纯 Java、CC0、
+    // 几十 KB（APK 体积纪律：BouncyCastle 整个塞进来太大，BLAKE2b 因此
+    // 也是本仓手写 RFC 7693，见 Blake2b.kt 与其测试向量）。
+    implementation("net.i2p.crypto:eddsa:0.3.0")
+
     // iroh-ffi Kotlin bindings — same artifact the S-03 spike proved
     // on-device (T-051 wires it up).
     implementation("computer.iroh:iroh:1.1.0") {

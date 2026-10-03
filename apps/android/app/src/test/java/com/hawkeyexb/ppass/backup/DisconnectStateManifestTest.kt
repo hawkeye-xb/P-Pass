@@ -15,6 +15,7 @@ import com.hawkeyexb.ppass.backup.flow.FlowControlStore
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
+import com.hawkeyexb.ppass.update.UpdatePrefs
 import java.io.DataInputStream
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -86,6 +87,7 @@ class DisconnectStateManifestTest {
             DisconnectState.WORK_MANAGER_DB -> fake("databases/androidx.work.workdb")
             DisconnectState.FLOW_CONTROL -> FlowControlStore(filesDir).setPaused(true)
             DisconnectState.NOTIFY_ON_FAILURE_PREFS -> NotifyOnFailurePrefs(filesDir).setEnabled(false)
+            DisconnectState.UPDATE_PREFS -> UpdatePrefs(filesDir).markChecked(now = 1L)
             DisconnectState.BACKUP_HEALTH -> BackupHealthPrefs(filesDir).recordInterrupted(now = 1L)
             DisconnectState.SENTINEL -> SentinelStore(filesDir).recordReachable(now = 1L)
             DisconnectState.DEFINITIVE_NOTICES ->

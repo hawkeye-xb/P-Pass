@@ -70,8 +70,11 @@ if (args[0] === "--sign") {
     platforms[target] = {
       url: `${base}/${basename(path)}`,
       signature: "", // filled by --sign when UPDATE_SIGNING_KEY is present
+      // UPD-02: Android 端下载后先对 sha256（传输完整性），再验 minisign
+      // （真实性）。tauri 桌面端忽略未知字段，桌面验签链零变化。
+      sha256: createHash("sha256").update(data).digest("hex"),
     };
-    console.log(`composed ${target}: ${basename(path)} sha256=${createHash("sha256").update(data).digest("hex").slice(0, 16)}…`);
+    console.log(`composed ${target}: ${basename(path)} sha256=${platforms[target].sha256.slice(0, 16)}…`);
   }
 
   const manifest = {
