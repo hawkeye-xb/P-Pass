@@ -283,6 +283,10 @@ fun HomeScreen(
     // 规则 P（#413：每个等待原因一句）：为什么在等。null = 不在等 / 不在状态行说 ⇒ 不渲染任何理由。
     // 由 BackupUiStateHolder 从投影算出；HomeScreen 自己不碰数据源。出场闸门见 [visibleWaitReasonRes]。
     waitReasonRes: Int? = null,
+    // UPD-02：「检查更新」行。value 跟随更新状态机（下载中 % / 待安装「可安装」）；
+    // onCheckUpdate 非 null 才渲染该行——行为判定全在 UpdateUiController。
+    updateRowValue: String? = null,
+    onCheckUpdate: (() -> Unit)? = null,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -823,6 +827,16 @@ fun HomeScreen(
                     Text(
                         "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
                         fontSize = 14.sp, color = PPColor.Ink40,
+                    )
+                }
+                // UPD-02：手动检查入口（不受 6h 节流门限）；下载/校验中点击
+                // 重新打开被「后台下载」收起的对话框。
+                if (onCheckUpdate != null) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.update_check_now),
+                        value = updateRowValue,
+                        onClick = onCheckUpdate,
                     )
                 }
             }

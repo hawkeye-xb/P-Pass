@@ -48,6 +48,36 @@
     <string name="update_available_body">Download and install it?</string>
     <string name="update_download_install">Download and install</string>
     <string name="update_later">Later</string>
+    <!-- UPD-02: 更新状态机的用户可见文案——检查行 / 下载 / 校验 / 失败分类 / 安装 / 回执。 -->
+    <string name="update_check_now">Check for updates</string>
+    <string name="update_checking">Checking…</string>
+    <string name="update_up_to_date">You\'re on the latest version</string>
+    <string name="update_check_failed">Update check failed — try again later</string>
+    <string name="update_downloading_title">Downloading update</string>
+    <string name="update_downloading_progress">%1$d%% downloaded</string>
+    <string name="update_downloading_unknown_total">Downloading…</string>
+    <string name="update_row_downloading">Downloading %1$d%%</string>
+    <string name="update_row_ready">Downloaded · tap to install</string>
+    <string name="update_verifying">Verifying the package…</string>
+    <string name="update_background">Continue in background</string>
+    <string name="update_failed_title">Update didn\'t finish</string>
+    <string name="update_failed_network">Couldn\'t reach the update server. Check the network and try again.</string>
+    <string name="update_failed_server">The update server returned an error. Try again later.</string>
+    <string name="update_failed_stalled">The download stalled. Check the network and try again.</string>
+    <string name="update_failed_write">Couldn\'t save the update package. Check available storage.</string>
+    <string name="update_failed_verify">The downloaded package failed verification and was deleted. Try again later.</string>
+    <string name="update_failed_install">The installation didn\'t complete. Try again.</string>
+    <string name="update_failed_unexpected">Something went wrong. Try again later.</string>
+    <string name="update_retry">Retry</string>
+    <string name="update_ready_install">v%1$s is ready to install</string>
+    <string name="update_ready_body">Downloaded and verified. Install it now?</string>
+    <string name="update_install_now">Install now</string>
+    <string name="update_installing_title">Installing…</string>
+    <string name="update_installing_body">Confirm in the system prompt to finish the update.</string>
+    <string name="update_installed_snackbar">Updated to v%1$s</string>
+    <string name="update_close">Close</string>
+    <string name="notif_channel_update">App updates</string>
+    <string name="notif_update_download_title">Downloading P-Pass update</string>
     <!-- Nudge card for the notification permission when not granted, same style as the battery whitelist card. -->
     <string name="notif_nudge_body">Tip: allow notifications so P-Pass can tell you if a backup fails.</string>
     <string name="notif_nudge_action">Open settings</string>

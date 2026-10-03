@@ -47,6 +47,36 @@
     <string name="update_available_body">是否下载并安装？</string>
     <string name="update_download_install">下载安装</string>
     <string name="update_later">以后再说</string>
+    <!-- UPD-02: 更新状态机的用户可见文案——检查行 / 下载 / 校验 / 失败分类 / 安装 / 回执。 -->
+    <string name="update_check_now">检查更新</string>
+    <string name="update_checking">正在检查…</string>
+    <string name="update_up_to_date">已是最新版本</string>
+    <string name="update_check_failed">检查更新失败，请稍后再试</string>
+    <string name="update_downloading_title">正在下载更新</string>
+    <string name="update_downloading_progress">已下载 %1$d%%</string>
+    <string name="update_downloading_unknown_total">正在下载…</string>
+    <string name="update_row_downloading">正在下载 %1$d%%</string>
+    <string name="update_row_ready">已下载 · 点击安装</string>
+    <string name="update_verifying">正在校验安装包…</string>
+    <string name="update_background">后台下载</string>
+    <string name="update_failed_title">更新没有完成</string>
+    <string name="update_failed_network">连不上更新服务器，请检查网络后重试。</string>
+    <string name="update_failed_server">更新服务器暂时出错，请稍后再试。</string>
+    <string name="update_failed_stalled">下载停滞了，请检查网络后重试。</string>
+    <string name="update_failed_write">安装包保存失败，请检查手机剩余存储空间。</string>
+    <string name="update_failed_verify">下载的安装包校验未通过，已删除。请稍后再试。</string>
+    <string name="update_failed_install">安装没有完成，请重试。</string>
+    <string name="update_failed_unexpected">出现未知错误，请稍后再试。</string>
+    <string name="update_retry">重试</string>
+    <string name="update_ready_install">新版本 v%1$s 可以安装了</string>
+    <string name="update_ready_body">已下载并校验完成，现在安装吗？</string>
+    <string name="update_install_now">立即安装</string>
+    <string name="update_installing_title">正在安装…</string>
+    <string name="update_installing_body">请在系统弹窗中确认，完成更新。</string>
+    <string name="update_installed_snackbar">已更新到 v%1$s</string>
+    <string name="update_close">关闭</string>
+    <string name="notif_channel_update">应用更新</string>
+    <string name="notif_update_download_title">正在下载 P-Pass 更新</string>
     <!-- 通知权限未授予的引导卡，跟电池白名单卡同款样式。 -->
     <string name="notif_nudge_body">提示：允许通知，这样备份失败时 P-Pass 才能提醒你。</string>
     <string name="notif_nudge_action">去设置</string>

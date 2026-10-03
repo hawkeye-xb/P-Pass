@@ -98,7 +98,19 @@
             </intent-filter>
         </receiver>
 
-        <!-- UPD-01: update APK 安装走 FileProvider（cacheDir 临时文件） -->
+        <!-- UPD-02: 安装回执接收器——PackageInstaller 会话 commit 的
+             PendingIntent 以本 App 身份发送，所以非导出也能收到；
+             系统安装确认页（STATUS_PENDING_USER_ACTION）也由它拉起。 -->
+        <receiver
+            android:name=".update.UpdateInstallReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.hawkeyexb.ppass.update.INSTALL_RESULT" />
+            </intent-filter>
+        </receiver>
+
+        <!-- UPD-01: update APK 曾走 FileProvider 安装；UPD-02 起安装改走
+             PackageInstaller 会话，FileProvider 保留给分享/打开原图等用途。 -->
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

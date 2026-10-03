@@ -114,11 +114,9 @@ import com.hawkeyexb.ppass.ui.PPColor
 import com.hawkeyexb.ppass.ui.PPSize
 import com.hawkeyexb.ppass.ui.ScanScreen
 import com.hawkeyexb.ppass.ui.WelcomeScreen
-import com.hawkeyexb.ppass.update.UpdateInfo
-import com.hawkeyexb.ppass.update.UpdateChannel
-import com.hawkeyexb.ppass.update.channelFromVersion
-import com.hawkeyexb.ppass.update.downloadAndInstall
-import com.hawkeyexb.ppass.update.fetchUpdate
+import com.hawkeyexb.ppass.ui.UpdateDialog
+import com.hawkeyexb.ppass.update.UpdateUiController
+import com.hawkeyexb.ppass.update.UpdateUiState
 
 internal sealed class Screen {
     data object Welcome : Screen()
@@ -290,41 +288,42 @@ fun PPassApp() {
         }
     }
 
-    // UPD-01: 启动时检查一次更新（静默失败；draft/无 release = 无更新；
-    // 对话框覆盖所有 screen，不打断当前流程）。REL-02: 按通道取源
-    // （stable 默认 / test 最新 prerelease），切换通道后立即重查。
-    // DESK-02①: 更新通道由构建推导——版本含 `-test.`（构建期 PPF_BUILD_VERSION
-    // 注入）→ test，否则 stable。零 UI、零持久化；正式构建永远 stable。
-    val updateChannel = channelFromVersion(BuildConfig.VERSION_NAME)
-    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
-    LaunchedEffect(updateChannel) {
-        updateInfo = fetchUpdate(BuildConfig.VERSION_NAME, updateChannel)
+
+    // UPD-02: 更新状态机——检查/下载/校验/安装/回执全链状态在
+    // UpdateUiController 一处汇合，这里只接线：触发节点 1（冷启动，下方
+    // LaunchedEffect）+ 节点 2（ON_RESUME，挂进既有生命周期观察器），
+    // 两个节点共用 6h 节流门（GitHub 匿名限流下的硬约束）；手动检查走
+    // 设置行「检查更新」（onCheckRowClick），不受门限。
+    val updateController = remember {
+        UpdateUiController(context, scope, BuildConfig.VERSION_NAME)
+    }
+    val updateState by updateController.state.collectAsState()
+    val updateDialogSuppressed by updateController.dialogSuppressed.collectAsState()
+    LaunchedEffect(Unit) { updateController.onColdStart() }
+    // Snackbar 级一过性反馈（已是最新 / 检查失败 / 已更新到 vX）——
+    // 与 UI-12 的「只报能诚实上报的信号」同一条规矩。
+    LaunchedEffect(Unit) {
+        updateController.notices.collect { notice ->
+            snackbarHostState.showSnackbar(
+                if (notice.arg != null) {
+                    context.getString(notice.textRes, notice.arg)
+                } else {
+                    context.getString(notice.textRes)
+                },
+            )
+        }
     }
     // 首次选完相册后的两项系统授权必须串行独占屏幕；更新可以等用户完成
-    // onboarding 后再说，绝不压在系统权限框上。
-    if (screen !is Screen.Started) updateInfo?.let { info ->
-        AlertDialog(
-            onDismissRequest = { updateInfo = null },
-            title = { Text(stringResource(R.string.update_available_title, info.version)) },
-            text = {
-                Text(
-                    if (info.notes.isBlank()) stringResource(R.string.update_available_body)
-                    else info.notes.take(200)
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch {
-                        downloadAndInstall(context, info.url)
-                        updateInfo = null
-                    }
-                }) { Text(stringResource(R.string.update_download_install)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { updateInfo = null }) {
-                    Text(stringResource(R.string.update_later))
-                }
-            },
+    // onboarding 后再说，绝不压在系统权限框上。「后台下载」收起的对话框
+    // （dialogSuppressed）不渲染，设置行点击可重新打开。
+    if (screen !is Screen.Started && !updateDialogSuppressed) {
+        UpdateDialog(
+            state = updateState,
+            onConfirmDownload = updateController::onUserConfirmDownload,
+            onLater = updateController::onUserLater,
+            onRetry = updateController::onUserRetry,
+            onDismissFailed = updateController::onUserDismissFailed,
+            onInstall = updateController::onUserInstall,
         )
     }
 
@@ -437,6 +436,9 @@ fun PPassApp() {
                     // 早退）。在 MOB-33 之前这么做会造出一串并行备份——那正是
                     // MOB-33 的原症状。
                     foregroundCatchup()
+                    // UPD-02 节点 2：回到前台顺手查一次更新（6h 节流门在
+                    // controller 内，未过门直接早退，成本一次时间比较）。
+                    updateController.onResume()
                 }
                 Lifecycle.Event.ON_STOP -> {
                     heartbeat.stop()
@@ -942,6 +944,27 @@ fun PPassApp() {
                         // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
                         mediaAccess = mediaAccess,
                         onOpenAppSettings = { openAppDetailsSettings(context) },
+                        // UPD-02: 设置行「检查更新」——value 跟随状态机
+                        // （下载中显示百分比 / 待安装显示「可安装」），
+                        // 点击行为按当前状态分流（重新打开已收起的对话框 /
+                        // 手动检查），全部在 controller 一处判定。
+                        updateRowValue = when (val us = updateState) {
+                            is UpdateUiState.Downloading ->
+                                if (us.total > 0) {
+                                    context.getString(
+                                        R.string.update_row_downloading,
+                                        (us.received * 100 / us.total).toInt(),
+                                    )
+                                } else {
+                                    context.getString(R.string.update_downloading_unknown_total)
+                                }
+                            is UpdateUiState.Verifying ->
+                                context.getString(R.string.update_verifying)
+                            is UpdateUiState.ReadyToInstall ->
+                                context.getString(R.string.update_row_ready)
+                            else -> null
+                        },
+                        onCheckUpdate = { updateController.onCheckRowClick() },
                     )
                 },
             )
