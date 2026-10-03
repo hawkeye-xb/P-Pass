@@ -176,7 +176,6 @@ private fun UpdateProgressBar(progress: Float?) {
             color = PPColor.Safe,
             trackColor = PPColor.Safe.copy(alpha = 0.18f),
             gapSize = 0.dp,
-            drawStopIndicator = {},
         )
     }
 }

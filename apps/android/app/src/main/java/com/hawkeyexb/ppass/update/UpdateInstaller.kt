@@ -37,11 +37,11 @@ class UpdateInstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                @Suppress("DEPRECATION")
+                @Suppress("DEPRECATION") // else 分支用的是 33 以下的旧 API
                 val confirm = if (Build.VERSION.SDK_INT >= 33) {
-                    intent.getParcelableExtra(PackageInstaller.EXTRA_INTENT, Intent::class.java)
+                    intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
                 } else {
-                    intent.getParcelableExtra(PackageInstaller.EXTRA_INTENT)
+                    intent.getParcelableExtra(Intent.EXTRA_INTENT)
                 }
                 if (confirm != null) {
                     context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))

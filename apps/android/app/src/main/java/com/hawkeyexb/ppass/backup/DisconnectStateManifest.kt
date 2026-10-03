@@ -160,6 +160,12 @@ enum class DisconnectState(
         "$UNDECIDED：设置页「需要处理时通知我」开关（M10/#130），断开从来没碰过",
         owners = listOf("com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs"),
     ),
+    UPDATE_PREFS(
+        StateLocation.FILES, "update_prefs.json", DisconnectDisposition.KEEP,
+        "$UNDECIDED：更新节流门（6h）/ 升级回执 / 待办更新（UPD-02 #624 新引入，卡面无断开语义）；" +
+            "它是 App 自身更新的记账，与配对无关，断开从来没碰过",
+        owners = listOf("com.hawkeyexb.ppass.update.UpdatePrefs"),
+    ),
     BACKUP_HEALTH(
         StateLocation.FILES, "backup_health.json", DisconnectDisposition.KEEP,
         "$UNDECIDED：监听中断待确认（MOB-28），断开从来没碰过",
