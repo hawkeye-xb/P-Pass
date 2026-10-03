@@ -19,6 +19,8 @@
 #   的 job 红了不该连带镜像不更新（v0.5.0-test.1/2/3 就是 Windows 红、
 #   dmg/apk 都在）。真缺资产由下面的「两个都要有」检查报红。
 #   仍是 draft 的（非 test tag，如 -beta.N / 正式版）跳过。
+#   正式版 tag 在 Release 跑完时 release 还没建（人工发布在那之后），
+#   同样跳过、等 release published 兜底——不跳过就是 #21~#29 那种必红。
 # - release published：非 test tag 人工点发布那一刻（prerelease 或 latest
 #   都算 published）。人工发布时资产还没传齐 → 这次红；Release 跑完后
 #   workflow_run 那条会再镜像一次，谁晚到谁兜底。
@@ -78,7 +80,12 @@ jobs:
             echo "::notice::'$TAG' 不是 v* tag，跳过"
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          DRAFT=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft)
+          # release 可能还没建：正式版 tag 是 Release 跑完（workflow_run 触发）之后
+          # 人工才发 release，这之前查必然 not found——跳过即可，等 release published 兜底。
+          if ! DRAFT=$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft -q .isDraft 2>/dev/null); then
+            echo "::notice::$TAG 的 release 还没建（Release 跑完→人工发布前的空窗），跳过，等 release published 触发"
+            echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           if [ "$DRAFT" = "true" ]; then
             echo "::notice::$TAG 仍是 draft，等人工发布后由 release published 触发"
             echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
