@@ -137,6 +137,8 @@
     <string name="missing_source_archive_value">%1$d 张 · 无法恢复</string>
     <!-- T-083: hero 空闲态（设计稿未画，卡内裁决的最小延伸） -->
     <string name="idle_auto_hint">连接 Wi-Fi 且电量不低时自动进行</string>
+    <!-- #581：关掉「仅 Wi-Fi」后首页空闲行改用这句——不提 Wi-Fi，只承诺电量。 -->
+    <string name="idle_auto_hint_any_network">电量不低时自动进行</string>
     <string name="state_no_albums">没有可备份的相册（一个都没选）</string>
     <!-- T-083: 失败红卡——正文只有人话，原始错误只住折叠区 -->
     <string name="try_again">再试一次</string>
@@ -226,8 +228,8 @@
     </plurals>
     <string name="storage_computer">存储电脑</string>
     <!-- UX-03: 后台规则一行 + 极简设置。MOB-10 起后台条件为「Wi-Fi（可在设置关闭）+ 电量不低」，
-         不再要求充电；文案须与 TriggerPolicy.constraintsFor 一致（#513，MOB513BackupConditionCopyTest）。 -->
-    <string name="auto_backup_rule">连接 Wi-Fi 且电量不低时自动备份，无需打开 App</string>
+         不再要求充电；文案须与 TriggerPolicy.constraintsFor 一致（#513，MOB513BackupConditionCopyTest）。
+         #581：auto_backup_rule / auto_backup_pause_hint 是无引用死文案，已删（lint-baseline 同步除名）。 -->
     <!-- M10 全页面状态稿原文——"仅...时备份"，不是"需要..."。 -->
     <string name="setting_wifi_only">仅 Wi-Fi 时备份</string>
     <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
@@ -271,7 +273,6 @@
     <string name="photos_lost_action">重新扫码连接</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">后台备份</string>
-    <string name="auto_backup_pause_hint">连接 Wi-Fi 且电量不低时，新照片自动到家</string>
     <string name="background_backup_needs_authorization">允许系统后台运行</string>
     <string name="background_backup_system_stopped">系统已停止后台监听 · 检查并重新开启</string>
     <!-- UI-12（2026-09-15，二次修正）："去处理"点击后的 Snackbar 反馈——

@@ -725,17 +725,6 @@
 
     <issue
         id="UnusedResources"
-        message="The resource `R.string.auto_backup_rule` appears to be unused"
-        errorLine1="    &lt;string name=&quot;auto_backup_rule&quot;>Auto-backup runs while charging and on WiFi — no need to open the app.&lt;/string>"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/values/strings.xml"
-            line="142"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
         message="The resource `R.string.manual_backup_entry` appears to be unused"
         errorLine1="    &lt;string name=&quot;manual_backup_entry&quot;>Back up now&lt;/string>"
         errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~">
@@ -753,17 +742,6 @@
         <location
             file="src/main/res/values/strings.xml"
             line="163"
-            column="13"/>
-    </issue>
-
-    <issue
-        id="UnusedResources"
-        message="The resource `R.string.auto_backup_pause_hint` appears to be unused"
-        errorLine1="    &lt;string name=&quot;auto_backup_pause_hint&quot;>Charge + WiFi: new photos go home on their own&lt;/string>"
-        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/res/values/strings.xml"
-            line="176"
             column="13"/>
     </issue>
 
