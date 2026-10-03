@@ -130,4 +130,67 @@ class MinisignVerifierTest {
         val r = MinisignVerifier.verify(File(dir, "nope.apk"), sig1, pub1)
         assertTrue("$r", r is MinisignVerifier.Result.Error)
     }
+
+    // ── UPD-11 (#641)：生产形状 = base64(整个 `.minisig` 文本盒) ──────────
+    // 线上 manifest 的 `signature` 字段就是这一形状（与桌面端 tauri updater 消费的同一个
+    // 字段、同一种形状）。旧实现把它当裸 74 字节结构解 ⇒ 每次更新必然「校验未通过」。
+
+    /** 线上 v0.8.2 `manifest.json` → `platforms["android-arm64"].signature` 的**原文**。 */
+    private val productionSignatureBox =
+        "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUSXZHU2ZZRGNkSlFaUUFpQ05TcGVuamtTSS8ybV" +
+            "g0eDhwQlpBeTNmcElBRU91eHRMNHptOHZSZjd5WEtBUzZzb3VCNlJOcGtjYzlBY3RuVmFFM1NYei93SWxIZmdCNXdjPQp0cnVzdGVkIGN" +
+            "vbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMDM3OTU1CWZpbGU6YXBwLXJlbGVhc2UuYXBrCjVsT0d4QU1VYkU2TnVVU1RXU1F3aUJvKzRGVkNX" +
+            "aGJCY01KeUc1Wm05a1huTjdadm9PRmd2cTZ0RFZTVWpFY0F5a290SHcvR3FGeERyelpTWTVQaUJBPT0K"
+
+    /** 这一形状就是生产字段的样子：文本盒，四行。 */
+    private fun textBox(sigBareB64: String): String =
+        "untrusted comment: signature from tauri secret key\n" +
+            "$sigBareB64\n" +
+            "trusted comment: timestamp:1791037955\tfile:app-release.apk\n" +
+            Base64.getEncoder().encodeToString(ByteArray(64)) + "\n"
+
+    @Test
+    fun productionSignatureBoxIsParsed() {
+        // 反证锚：旧实现就是死在这一步——整盒解码是 300 字节文本，不是 74 字节结构。
+        assertEquals(300, Base64.getDecoder().decode(productionSignatureBox).size)
+        val blob = MinisignVerifier.decodeBlob(productionSignatureBox, 2 + 8 + 64)
+        assertTrue("生产签名字段必须能解出 74 字节结构", blob != null)
+        val parsed = MinisignVerifier.parseSig(blob!!)!!
+        assertEquals("ED", parsed.algorithm)
+        assertEquals("c8bc649f60371d25", parsed.keynum.joinToString("") { "%02x".format(it) })
+    }
+
+    @Test
+    fun signatureBoxVerifiesEndToEnd() {
+        // 把组 1 的签名包成生产形状的文本框：端到端必须 Valid。
+        val boxed = Base64.getEncoder().encodeToString(textBox(sig1).toByteArray())
+        assertEquals(MinisignVerifier.Result.Valid, MinisignVerifier.verify(writeApk(), boxed, pub1))
+    }
+
+    @Test
+    fun tamperedSignatureBoxMustBeInvalid() {
+        // 反证：只动签名**本体**（keynum 之后的第 20 字节），keynum 不变 ⇒ 必须 Invalid。
+        val bare = Base64.getDecoder().decode(sig1)
+        val tampered = bare.copyOf().apply { this[20] = (this[20] + 1).toByte() }
+        val boxed = Base64.getEncoder()
+            .encodeToString(textBox(Base64.getEncoder().encodeToString(tampered)).toByteArray())
+        assertEquals(MinisignVerifier.Result.Invalid, MinisignVerifier.verify(writeApk(), boxed, pub1))
+    }
+
+    @Test
+    fun boxedSignatureFromAnotherKeynumIsUnknownSigner() {
+        // 盒子形状下也要保留「签名者身份对不上」与「签名无效」的区分：改 keynum ⇒ UnknownSigner。
+        val boxed = Base64.getEncoder()
+            .encodeToString(textBox(sig2).toByteArray())
+        assertEquals(MinisignVerifier.Result.UnknownSigner, MinisignVerifier.verify(writeApk(), boxed, pub1))
+    }
+
+    @Test
+    fun boxWithoutSignatureBlobIsMalformed() {
+        val boxed = Base64.getEncoder().encodeToString("untrusted comment: tauri\n".toByteArray())
+        assertEquals(
+            MinisignVerifier.Result.MalformedSignature,
+            MinisignVerifier.verify(writeApk(), boxed, pub1),
+        )
+    }
 }
