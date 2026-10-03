@@ -69,6 +69,7 @@
   "ui.restart_service_confirm_title": "重启后台服务",
   "ui.restart_service_confirm_body": "正在进行的备份/传输会被中断，重启后自动恢复。确定重启？",
   "ui.restart_service_ok": "后台服务已重启：{from} → {to}",
+  "ui.restart_service_still_starting": "后台服务正在启动中——大照片库首次启动要十几秒。版本一致后这条提示会自动消失，不用重复点。",
   "ui.restart_service_no_change": "后台服务已重启，但版本没变（{version}）——服务文件似乎没有更新，请重新安装应用。",
   "ui.restart_service_started": "后台服务已启动，版本 {version}",
   "ui.restart_service_failed": "重启后台服务失败：{err}",

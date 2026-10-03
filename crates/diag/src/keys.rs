@@ -161,6 +161,8 @@ msg_keys! {
     UI_RESTART_SERVICE_OK => "ui.restart_service_ok",
     UI_RESTART_SERVICE_NO_CHANGE => "ui.restart_service_no_change",
     UI_RESTART_SERVICE_STARTED => "ui.restart_service_started",
+    /// DESK-44 (#606)：宽限期内 daemon 还没答上——说"正在启动中"，不说失败。
+    UI_RESTART_SERVICE_STILL_STARTING => "ui.restart_service_still_starting",
     UI_RESTART_SERVICE_FAILED => "ui.restart_service_failed",
     // ── Desktop photos page (DESK-03) + env badge (DESK-02 收编债) ────
     UI_ENV_BADGE_TEST => "ui.env_badge_test",
@@ -496,6 +498,7 @@ mod tests {
             UI_RESTART_SERVICE_OK,
             UI_RESTART_SERVICE_NO_CHANGE,
             UI_RESTART_SERVICE_STARTED,
+            UI_RESTART_SERVICE_STILL_STARTING,
             UI_RESTART_SERVICE_FAILED,
             UI_ENV_BADGE_TEST,
             UI_NAV_PHOTOS,
@@ -702,7 +705,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 296);
+        assert_eq!(ALL.len(), 297);
     }
 
     #[test]
