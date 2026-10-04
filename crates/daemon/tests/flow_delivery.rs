@@ -934,18 +934,51 @@ async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
         Err(DeliveryError::Fetch(_))
     ));
 
-    assert_eq!(telemetry.flush_now().await, 2, "one conn + one error");
-    let batch = bodies.lock().unwrap()[0].clone();
-    let events: Vec<&str> = batch
-        .as_array()
-        .unwrap()
+    // #620: 事件**条数不是不变量**。`fetch()` 无条件调 `spawn_fetch_task`，
+    // 而它的幂等只成立于「上一个尝试仍在登记」（`try_register`）——所以当
+    // `offer()` 起的那次尝试**已经失败退场**时，这次 `fetch()` 会合法地再起
+    // 一次尝试，遥测里就多出**第二条 conn**（conn 不去重；error 按
+    // `(code, stage)` 去重，仍然只有 1 条）。
+    //
+    // 实测复现（本机，2026-10-04）：让第一个尝试彻底退场后再 fetch →
+    //   flush_now = 3，events = ["conn", "conn", "error"]，
+    //   两条 conn 的 ms ≈ 30005 / 30008（各是一次完整尝试的时长）。
+    // 因此这里断言**语义**：error 恰好一条且标注 fetch/fetch_failed；其余
+    // 每条都是 conn，且每个 conn 都是 fetch 阶段的失败。不钉条数、不钉顺序
+    // ——顺序由「哪次尝试先退场」决定，不是契约。
+    telemetry.flush_now().await;
+    let batches = bodies.lock().unwrap().clone();
+    let events: Vec<serde_json::Value> = batches
         .iter()
-        .map(|e| e["event"].as_str().unwrap())
+        .flat_map(|b| b.as_array().cloned().unwrap_or_default())
         .collect();
-    assert_eq!(events, ["conn", "error"]);
-    let error_event = &batch.as_array().unwrap()[1];
-    assert_eq!(error_event["code"], "fetch_failed");
-    assert_eq!(error_event["stage"], "fetch");
+    let conns: Vec<&serde_json::Value> =
+        events.iter().filter(|e| e["event"] == "conn").collect();
+    let errors: Vec<&serde_json::Value> = events
+        .iter()
+        .filter(|e| e["event"] == "error")
+        .collect();
+
+    assert!(
+        !conns.is_empty(),
+        "至少一次后台尝试要留下 conn：{events:?}"
+    );
+    assert!(
+        conns.iter().all(|c| c["fail_stage"] == "fetch"),
+        "每个 conn 都必须是 fetch 阶段的失败（不是一个成功的 conn）：{conns:?}"
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "错误事件恰好一条（同 (code, stage) 被 TEL-03 去重）：{errors:?}"
+    );
+    assert_eq!(errors[0]["code"], "fetch_failed");
+    assert_eq!(errors[0]["stage"], "fetch");
+    assert_eq!(
+        events.len(),
+        conns.len() + 1,
+        "除了那条 error，其余事件只能是对应的 conn：{events:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
