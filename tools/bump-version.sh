@@ -1,39 +1,55 @@
 #!/usr/bin/env bash
-# REL-01: bump workspace + Android + desktop (Tauri) versions in one shot.
-# Usage: tools/bump-version.sh <new-version>    e.g. tools/bump-version.sh 0.3.0
+# REL-01 / UPD-13: bump 版本号（两条线）。
+#
+#   两条线（#660 起，2026-10-04 拍板）：
+#     - **desktop 线**：根 workspace（Cargo.toml + Cargo.lock）+ 桌面壳四件套
+#       （tauri.conf.json / package.json / src-tauri/Cargo.toml / src-tauri/Cargo.lock）
+#     - **android 线**：build.gradle.kts（versionName 回退串 + versionCode 单调 +1）
+#   真相源 = `release/versions.json`：CI（tools/release-version.sh）从这里取
+#   「本次发布该用哪个版本号」，所以本脚本改完文件必须同步写它。
+#
+#   不加 --platform 时两条线一起走（等价旧行为）。只改一端时，另一端
+#   的文件**一个字节都不动** —— 它的版本号代表「该端最后一次真变更」。
+#
+# 用法：tools/bump-version.sh [--platform desktop|android|both] <new-version>
+#   e.g. tools/bump-version.sh --platform android 0.9.2
 #
 # 防版本覆盖（2026-08-04 用户裁决：绝不挪/覆盖旧版本）：
 #   - 已打过精确 tag（v<ver>）的版本号拒绝使用
-#   - 新版本必须高于当前 Cargo.toml version
-#   - 只改版本号行——验收：跑完 git diff 恰好只碰 Cargo.toml version 行、
-#     build.gradle.kts 的 versionCode/versionName 行、桌面四件套
-#     （tauri.conf.json / package.json / src-tauri/Cargo.toml /
-#     src-tauri/Cargo.lock——独立 workspace，主仓 cargo update 够不着）
+#   - 新版本必须严格高于该线当前版本
+#   - 只改版本号行——验收：跑完 git diff 恰好只碰本线的文件 + versions.json
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+PLATFORM=both
+if [ "${1:-}" = "--platform" ]; then
+  PLATFORM="${2:-}"
+  shift 2
+fi
+case "$PLATFORM" in
+  desktop|android|both) ;;
+  *) echo "error: --platform 只接受 desktop|android|both（收到 '$PLATFORM'）" >&2; exit 1 ;;
+esac
+
 NEW="${1:-}"
 if [ -z "$NEW" ]; then
-  echo "usage: tools/bump-version.sh <new-version>" >&2
+  echo "usage: tools/bump-version.sh [--platform desktop|android|both] <new-version>" >&2
   exit 1
 fi
 
 # SemVer 校验（3 段数字 + 可选预发布/构建后缀）
 if ! [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
-  echo "error: 非法版本号 '$NEW'（期望 SemVer，如 0.3.0 或 0.3.0-beta.1）" >&2
+  echo "error: 非法版本号 '$NEW'（期望 SemVer，如 0.9.1 或 0.9.1-beta.1）" >&2
   exit 1
 fi
 
-CUR=$(awk '/^version = /{gsub(/"/,"",$3); print $3; exit}' Cargo.toml)
-if [ -z "$CUR" ]; then
-  echo "error: 读不到 Cargo.toml workspace version" >&2
+VJSON=release/versions.json
+if [ ! -f "$VJSON" ]; then
+  echo "error: 缺 $VJSON（版本真相源，UPD-13）" >&2
   exit 1
 fi
 
-# Every version target is read independently. Do not reuse a value from one
-# file as another file's sed pattern: a drift would turn that edit into a
-# silent no-op.
 read_json_version() {
   awk -F'"' '/"version"/{print $4; exit}' "$1"
 }
@@ -54,32 +70,38 @@ read_lock_package_version() {
 }
 
 assert_version() {
-  local path="$1"
-  local actual="$2"
-  local expected="$3"
-  if [ -z "$actual" ]; then
-    echo "error: 读不到 ${path} 的 version" >&2
-    exit 1
-  fi
+  local path="$1" actual="$2" expected="$3"
+  if [ -z "$actual" ]; then echo "error: 读不到 ${path} 的 version" >&2; exit 1; fi
   if [ "$actual" != "$expected" ]; then
     echo "error: ${path} version drift: ${actual} != ${expected}; 先对齐再 bump。" >&2
     exit 1
   fi
 }
 
-# ── Version-drift preflight ────────────────────────────────────────
-# The standalone desktop workspace has its own Cargo.lock. Android local
-# builds use the versionName fallback when no release tag is injected.
+# ── 版本真相源 ────────────────────────────────────────────────────
+DESKTOP_CUR=$(jq -r '.desktop' "$VJSON")
+ANDROID_CUR=$(jq -r '.android' "$VJSON")
+VCODE_CUR=$(jq -r '.androidVersionCode' "$VJSON")
+for v in "$DESKTOP_CUR" "$ANDROID_CUR" "$VCODE_CUR"; do
+  [ -n "$v" ] && [ "$v" != "null" ] || { echo "error: $VJSON 字段缺失" >&2; exit 1; }
+done
+
+# ── Version-drift preflight：真相源 vs 各文件（每处独立读，不借用别处的值）──
 TCUR=$(read_json_version apps/desktop/src-tauri/tauri.conf.json)
 PCUR=$(read_json_version apps/desktop/package.json)
 DCCUR=$(read_toml_version apps/desktop/src-tauri/Cargo.toml)
 ALCUR=$(read_android_fallback_version apps/android/app/build.gradle.kts)
 DLLOCKCUR=$(read_lock_package_version apps/desktop/src-tauri/Cargo.lock)
+ROOTCUR=$(read_toml_version Cargo.toml)
+VCODE=$(awk '/versionCode/{gsub(/.*= */,""); print; exit}' apps/android/app/build.gradle.kts)
 
-assert_version apps/desktop/src-tauri/tauri.conf.json "$TCUR" "$CUR"
-assert_version apps/desktop/package.json "$PCUR" "$CUR"
-assert_version apps/desktop/src-tauri/Cargo.toml "$DCCUR" "$CUR"
-assert_version 'apps/desktop/src-tauri/Cargo.lock (p-pass-desktop)' "$DLLOCKCUR" "$CUR"
+assert_version Cargo.toml "$ROOTCUR" "$DESKTOP_CUR"
+assert_version apps/desktop/src-tauri/tauri.conf.json "$TCUR" "$DESKTOP_CUR"
+assert_version apps/desktop/package.json "$PCUR" "$DESKTOP_CUR"
+assert_version apps/desktop/src-tauri/Cargo.toml "$DCCUR" "$DESKTOP_CUR"
+assert_version 'apps/desktop/src-tauri/Cargo.lock (p-pass-desktop)' "$DLLOCKCUR" "$DESKTOP_CUR"
+assert_version apps/android/app/build.gradle.kts "$ALCUR" "$ANDROID_CUR"
+assert_version 'apps/android/app/build.gradle.kts (versionCode)' "$VCODE" "$VCODE_CUR"
 
 # 防覆盖 1：已打过精确 tag 的版本号绝不复用
 if git tag -l "v${NEW}" | grep -q .; then
@@ -88,77 +110,87 @@ if git tag -l "v${NEW}" | grep -q .; then
   exit 1
 fi
 
-# 防覆盖 2：新版本必须严格高于当前代码版本（显式相等检查 + sort -V
-# 语义比较——相等时 sort -V 两行相同，head/tail 双端判断仍会放过，
-# 必须先判 [ "$NEW" = "$CUR" ]）
-if [ "$NEW" = "$CUR" ] \
-  || [ "$(printf '%s\n%s\n' "$CUR" "$NEW" | sort -V | head -1)" != "$CUR" ]; then
-  echo "error: 新版本 $NEW 必须严格高于当前版本 $CUR" >&2
-  exit 1
-fi
+# 防覆盖 2：新版本必须严格高于**该线**当前版本
+bump_ok() { # <cur> <new> <label>
+  if [ "$2" = "$1" ] \
+    || [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" != "$1" ]; then
+    echo "error: $3 新版本 $2 必须严格高于当前版本 $1" >&2
+    exit 1
+  fi
+}
+if [ "$PLATFORM" = desktop ] || [ "$PLATFORM" = both ]; then bump_ok "$DESKTOP_CUR" "$NEW" desktop; fi
+if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then bump_ok "$ANDROID_CUR" "$NEW" android; fi
 
-# 改 Cargo.toml（workspace 级第一处 version）
 # ⚠️ 便携 sed：`-i ''` 是 macOS（BSD）专属，Linux（GNU）必炸——统一用
 # `-i.bak … && rm …bak`（GNU/BSD 均接受带后缀的 -i）。
-sed -i.bak "s/^version = \"$CUR\"/version = \"$NEW\"/" Cargo.toml && rm Cargo.toml.bak
-# 改 Android versionName + versionCode（versionCode 单调 +1，Android 强制）
-# ⚠️ BSD awk 把行首缩进当第一个分隔符，-F'[= ]+' 下 $2 是 "versionCode"——
-# 用 gsub 去掉 "= " 前缀拿纯数字
-VCODE=$(awk '/versionCode/{gsub(/.*= */,""); print; exit}' apps/android/app/build.gradle.kts)
-if [ -z "$VCODE" ]; then
-  echo "error: 读不到 build.gradle.kts versionCode" >&2
-  exit 1
+sedi() { # <pattern> <file>
+  sed -i.bak "$1" "$2" && rm "$2.bak"
+}
+
+NCODE="$VCODE"
+if [ "$PLATFORM" = desktop ] || [ "$PLATFORM" = both ]; then
+  # 根 workspace（daemon 那套只随桌面端交付）
+  sedi "s/^version = \"$ROOTCUR\"/version = \"$NEW\"/" Cargo.toml
+  # 桌面四件套（JSON 引号 + TOML 裸值两种写法）
+  sedi "s/\"version\": \"$TCUR\"/\"version\": \"$NEW\"/" apps/desktop/src-tauri/tauri.conf.json
+  sedi "s/\"version\": \"$PCUR\"/\"version\": \"$NEW\"/" apps/desktop/package.json
+  sedi "s/^version = \"$DCCUR\"/version = \"$NEW\"/" apps/desktop/src-tauri/Cargo.toml
+  # 两个独立 workspace 的 lock 同步（BUMP-01：只有 workspace 成员版本会变）
+  ( cd apps/desktop/src-tauri && cargo update -w -q )
+  cargo update -w -q
 fi
-NCODE=$((VCODE + 1))
-sed -i.bak "s/versionCode = $VCODE/versionCode = $NCODE/" apps/android/app/build.gradle.kts && rm apps/android/app/build.gradle.kts.bak
-sed -i.bak "s/?: \"$ALCUR\"/?: \"$NEW\"/" apps/android/app/build.gradle.kts && rm apps/android/app/build.gradle.kts.bak
 
-# ── Desktop (Tauri standalone workspace) 四件套同步 ──────────────
-# 桌面四件套同步（JSON 引号 + TOML 裸值两种写法）
-sed -i.bak "s/\"version\": \"$TCUR\"/\"version\": \"$NEW\"/" apps/desktop/src-tauri/tauri.conf.json && rm apps/desktop/src-tauri/tauri.conf.json.bak
-sed -i.bak "s/\"version\": \"$PCUR\"/\"version\": \"$NEW\"/" apps/desktop/package.json && rm apps/desktop/package.json.bak
-sed -i.bak "s/^version = \"$DCCUR\"/version = \"$NEW\"/" apps/desktop/src-tauri/Cargo.toml && rm apps/desktop/src-tauri/Cargo.toml.bak
-# 独立 workspace 的 lock 同步（与主仓 BUMP-01 同款：cargo update -w）
-( cd apps/desktop/src-tauri && cargo update -w -q )
+if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then
+  # versionCode 单调 +1（Android 强制）；BSD awk 把行首缩进当第一个分隔符，
+  # -F'[= ]+' 下 $2 是 "versionCode"——用 gsub 去掉 "= " 前缀拿纯数字。
+  NCODE=$((VCODE + 1))
+  sedi "s/versionCode = $VCODE/versionCode = $NCODE/" apps/android/app/build.gradle.kts
+  sedi "s/?: \"$ALCUR\"/?: \"$NEW\"/" apps/android/app/build.gradle.kts
+fi
 
-# BUMP-01 (2026-08-06): sync workspace-member versions into Cargo.lock.
-# bump-version.sh only edits Cargo.toml / build.gradle.kts / desktop files,
-# so the first build after a bump used to dirty the lock (TAG-01 0.2.1,
-# fixed by hand in 6bb3239) — this makes it automatic: `cargo update -w`
-# refreshes just the workspace members, leaving their dependency tree
-# untouched. Desktop is its own workspace: `cargo update -w` runs inside
-# apps/desktop/src-tauri for its lock.
-cargo update -w -q
+# ── 写回真相源 ────────────────────────────────────────────────────
+NEW_DESKTOP="$DESKTOP_CUR"
+NEW_ANDROID="$ANDROID_CUR"
+if [ "$PLATFORM" = desktop ] || [ "$PLATFORM" = both ]; then NEW_DESKTOP="$NEW"; fi
+if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then NEW_ANDROID="$NEW"; fi
+tmp=$(mktemp)
+jq --arg d "$NEW_DESKTOP" --arg a "$NEW_ANDROID" --argjson c "$NCODE" \
+  '{desktop:$d, android:$a, androidVersionCode:$c}' "$VJSON" > "$tmp"
+mv "$tmp" "$VJSON"
 
-# The whitelist below only proves that no unrelated file changed. Verify that
-# every target actually reached NEW, including the generated desktop lock entry.
-assert_version Cargo.toml "$(read_toml_version Cargo.toml)" "$NEW"
-assert_version apps/android/app/build.gradle.kts "$(read_android_fallback_version apps/android/app/build.gradle.kts)" "$NEW"
-assert_version apps/desktop/src-tauri/tauri.conf.json "$(read_json_version apps/desktop/src-tauri/tauri.conf.json)" "$NEW"
-assert_version apps/desktop/package.json "$(read_json_version apps/desktop/package.json)" "$NEW"
-assert_version apps/desktop/src-tauri/Cargo.toml "$(read_toml_version apps/desktop/src-tauri/Cargo.toml)" "$NEW"
-assert_version 'apps/desktop/src-tauri/Cargo.lock (p-pass-desktop)' "$(read_lock_package_version apps/desktop/src-tauri/Cargo.lock)" "$NEW"
+# ── 收尾断言：每个目标都必须到达 NEW（不借用别处读到的值）──────────
+if [ "$PLATFORM" = desktop ] || [ "$PLATFORM" = both ]; then
+  assert_version Cargo.toml "$(read_toml_version Cargo.toml)" "$NEW"
+  assert_version apps/desktop/src-tauri/tauri.conf.json "$(read_json_version apps/desktop/src-tauri/tauri.conf.json)" "$NEW"
+  assert_version apps/desktop/package.json "$(read_json_version apps/desktop/package.json)" "$NEW"
+  assert_version apps/desktop/src-tauri/Cargo.toml "$(read_toml_version apps/desktop/src-tauri/Cargo.toml)" "$NEW"
+  assert_version 'apps/desktop/src-tauri/Cargo.lock (p-pass-desktop)' "$(read_lock_package_version apps/desktop/src-tauri/Cargo.lock)" "$NEW"
+fi
+if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then
+  assert_version apps/android/app/build.gradle.kts "$(read_android_fallback_version apps/android/app/build.gradle.kts)" "$NEW"
+  assert_version 'apps/android/app/build.gradle.kts (versionCode)' \
+    "$(awk '/versionCode/{gsub(/.*= */,""); print; exit}' apps/android/app/build.gradle.kts)" "$NCODE"
+fi
+assert_version "release/versions.json (desktop)" "$(jq -r '.desktop' "$VJSON")" "$NEW_DESKTOP"
+assert_version "release/versions.json (android)" "$(jq -r '.android' "$VJSON")" "$NEW_ANDROID"
 
-echo "bumped: $CUR -> $NEW (android versionCode $VCODE -> $NCODE, desktop $TCUR -> $NEW)"
-echo "--- git diff（应只含版本号行）---"
-git diff --stat Cargo.toml Cargo.lock apps/android/app/build.gradle.kts \
-  apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json \
-  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock
-git diff Cargo.toml Cargo.lock apps/android/app/build.gradle.kts \
-  apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json \
-  apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock \
-  | grep -E "^[+-]" | grep -vE "^(\+\+\+|---)" || true
+echo "bumped[$PLATFORM]: desktop ${DESKTOP_CUR} -> ${NEW_DESKTOP}, android ${ANDROID_CUR} -> ${NEW_ANDROID} (versionCode ${VCODE} -> ${NCODE})"
+echo "--- git diff（应只含本线的版本号行 + release/versions.json）---"
+TARGETS="release/versions.json"
+[ "$NEW_DESKTOP" != "$DESKTOP_CUR" ] && TARGETS="$TARGETS Cargo.toml Cargo.lock apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock"
+[ "$NEW_ANDROID" != "$ANDROID_CUR" ] && TARGETS="$TARGETS apps/android/app/build.gradle.kts"
+# shellcheck disable=SC2086 # TARGETS 是刻意拆分
+git diff --stat $TARGETS
+# shellcheck disable=SC2086
+git diff $TARGETS | grep -E "^[+-]" | grep -vE "^(\+\+\+|---)" || true
 
 # BUMP-01: assert the tree is clean except the version files themselves.
-# Anything else dirty (stray build artifacts, accidental edits) fails the
-# bump instead of silently riding along into the commit. The script itself
-# is whitelisted: a developer may run it while it has uncommitted edits.
-# Rework (2026-08-06 07:47 round): use --porcelain -uno - untracked files
-# (e.g. a stray .claude/ dir on the reviewer's machine) are never added by
-# an explicit `git add`, so they must not fail the bump.
-DIRTY=$(git status --porcelain -uno | sed 's/^...//' | grep -v -E '^(Cargo\.toml|apps/android/app/build\.gradle\.kts|Cargo\.lock|tools/bump-version\.sh|apps/desktop/src-tauri/tauri\.conf\.json|apps/desktop/package\.json|apps/desktop/src-tauri/Cargo\.toml|apps/desktop/src-tauri/Cargo\.lock)$' || true)
+# Untracked files (-uno) are never added by an explicit `git add`, so they must
+# not fail the bump. The bump script itself is whitelisted (it may be edited while
+# running); `tools/release-version.sh` is whitelisted for the same reason.
+DIRTY=$(git status --porcelain -uno | sed 's/^...//' | grep -v -E '^(Cargo\.toml|apps/android/app/build\.gradle\.kts|Cargo\.lock|tools/bump-version\.sh|tools/release-version\.sh|release/versions\.json|apps/desktop/src-tauri/tauri\.conf\.json|apps/desktop/package\.json|apps/desktop/src-tauri/Cargo\.toml|apps/desktop/src-tauri/Cargo\.lock)$' || true)
 if [ -n "$DIRTY" ]; then
   echo "error: unexpected dirty files after bump: $DIRTY" >&2
   exit 1
 fi
-echo "ok: Cargo.lock workspace members synced; tree clean (version files only)"
+echo "ok: versions.json + Cargo.lock workspace members synced; tree clean (version files only)"

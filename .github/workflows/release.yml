@@ -136,13 +136,20 @@ jobs:
       - name: System codecs (libheif via brew)
         run: brew install libheif
 
+      # UPD-13（#660）：daemon 版本戳不再等于 tag —— 正式 tag 用**桌面线自己的
+      # 版本号**（release/versions.json），test tag 仍用 tag 名（test.8 必须能
+      # 接管 test.7）。
+      - name: Resolve desktop version (UPD-13)
+        id: ppf_ver
+        run: echo "name=$(tools/release-version.sh desktop)" >> "$GITHUB_OUTPUT"
+
       - name: Build release binaries
         env:
-          # DAE-01b blocker②: bake the FULL tag into the daemon
+          # DAE-01b blocker②: bake the resolved version into the daemon
           # (CARGO_PKG_VERSION has no -test.N suffix; test.8 must be able
-          # to take over from test.7 during dogfood week). Empty on
-          # non-tag runs — build.rs then falls back to CARGO_PKG_VERSION.
-          PPF_BUILD_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          # to take over from test.7 during dogfood week). 非 tag 运行取
+          # release/versions.json 里的平台版本。
+          PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
         run: cargo build --release -p daemon -p testclient
 
       - name: Bundle self-contained (dylibs + rpath rewrite)
@@ -390,12 +397,16 @@ jobs:
         run: |
           /c/vcpkg/vcpkg.exe install "libheif:x64-windows-static-md" --clean-after-build
 
+      - name: Resolve desktop version (UPD-13)
+        id: ppf_ver
+        run: echo "name=$(tools/release-version.sh desktop)" >> "$GITHUB_OUTPUT"
+
       - name: Build release binaries
         shell: bash
         env:
           VCPKG_ROOT: "C:\\vcpkg"
-          # DAE-01b blocker②: same tag injection as the macOS job.
-          PPF_BUILD_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          # DAE-01b blocker②: same version injection as the macOS job（UPD-13）.
+          PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
         run: cargo build --release -p daemon -p testclient
 
       # T7 (H-09): Windows 图形界面——桌面壳 NSIS 安装包（未签名，
@@ -500,6 +511,13 @@ jobs:
           # 不打印 keystore 内容；只确认解码后是有效 PKCS12（非空 + 头部魔数）
           head -c 4 "$RUNNER_TEMP/release.keystore" | od -c | head -1
 
+      # UPD-13（#660）：versionName 不再等于 tag —— 正式 tag 用**安卓线自己的
+      # 版本号**（release/versions.json），test tag 仍用 tag 名（`-test.` 是
+      # test 通道判据 + 连续 test tag 必须能互相升级）。
+      - name: Resolve android versionName (UPD-13)
+        id: ppf_ver
+        run: echo "name=$(tools/release-version.sh android)" >> "$GITHUB_OUTPUT"
+
       - name: Assemble release APK
         working-directory: apps/android
         env:
@@ -508,9 +526,8 @@ jobs:
           ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
-          # DESK-02①: 完整 tag 注入 versionName（versionName 由它推导更新
-          # 通道 + 连续 test tag 自动升级）；非 tag 运行回退固定版本号。
-          PPF_BUILD_VERSION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+          # DESK-02① 语义不变：注入的串由它推导更新通道；非 tag 运行回退文件版本。
+          PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
         run: ./gradlew :app:assembleRelease
 
       # Packaging-completeness guard (same as pr.yml): a release APK without
@@ -768,6 +785,7 @@ jobs:
               --tag "$TAG" --notes NOTES.md \
               --asset-base "$ASSET_BASE" \
               "${APK_ARGS[@]}" \
+              --version "$(tools/release-version.sh android)" \
               --only android-arm64 --out artifacts/manifest-android.json
           else
             echo "无 APK 产物——跳过 manifest 组装"
@@ -1064,6 +1082,7 @@ jobs:
               --tag "$TAG" --notes NOTES.md \
               --asset-base "$ASSET_BASE" \
               --asset android-arm64="$APK" \
+              --version "$(tools/release-version.sh android)" \
               --only android-arm64 --out artifacts/manifest-android.json
           fi
           # UPD-13：同时产出一份**只含 darwin** 的分端清单（macOS 客户端的源）。
@@ -1072,6 +1091,7 @@ jobs:
               --tag "$TAG" --notes NOTES.md \
               --asset-base "$ASSET_BASE" \
               --asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz \
+              --version "$(tools/release-version.sh desktop)" \
               --only darwin-aarch64 --out artifacts/manifest-macos.json
           fi
 
