@@ -10,6 +10,7 @@ export type Lang = (typeof LANGS)[number];
 export const ui = {
   en: {
     'nav.blog': 'Blog',
+    'nav.faq': 'FAQ',
     'nav.lang': '中文',
     'hero.overline': "",
     'hero.h1': "Your family's photos, kept at home.",
@@ -50,6 +51,7 @@ export const ui = {
   },
   zh: {
     'nav.blog': '博客',
+    'nav.faq': '常见问题',
     'nav.lang': 'English',
     'hero.overline': '',
     'hero.h1': '全家的照片，存在自己家里。',
