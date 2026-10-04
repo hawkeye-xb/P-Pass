@@ -459,10 +459,16 @@ fn library_target_verdict(
     target_writable: bool,
 ) -> Result<(), String> {
     if target.trim().is_empty() || !target_is_dir {
-        return Err(ipc::ui_err("ui.err_library_target_missing", &[("dir", &target)]));
+        return Err(ipc::ui_err(
+            "ui.err_library_target_missing",
+            &[("dir", &target)],
+        ));
     }
     if !target_writable {
-        return Err(ipc::ui_err("ui.err_library_target_readonly", &[("dir", &target)]));
+        return Err(ipc::ui_err(
+            "ui.err_library_target_readonly",
+            &[("dir", &target)],
+        ));
     }
     if let Some(cur) = current {
         if paths_overlap(cur, target) {
