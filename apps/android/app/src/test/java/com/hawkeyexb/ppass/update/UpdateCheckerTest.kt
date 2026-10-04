@@ -96,26 +96,144 @@ class UpdateCheckerTest {
         assertNull(parseUpdateManifest("", "0.1.0"))
     }
 
-    // ── REL-02: 通道 → manifest URL（反证红线：stable 原 URL 不准动） ──
+    // ── REL-02 / UPD-12 (#650): 通道 → manifest 候选列表（反证红线：顺序与每一项都不准动） ──
 
     @Test
-    fun channelManifestUrl_stableLockedToGitHubLatest() {
-        // 卡面「不准动」：stable 通道 URL 与语义必须原样——
-        // 改了这个 URL，本测试必红（家人设备的更新源）。
+    fun channelManifestUrls_stableLockedToOrderedChain() {
+        // 红线（#650 改写为更强形式）：不是「锁一个 URL」，而是「锁**有序候选列表** +
+        // 每一项的确切 URL」——增删、重排、换域名都必须同时改本测试，不允许静默漂移。
+        // 1st = R2（国内可达，与官网下载同链路）；2nd = GitHub（兜底，旧客户端一直打的它）。
         assertEquals(
-            "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json",
+            listOf(
+                "https://p-pass-dl.hawkeye-xb.com/manifest.json",
+                "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json",
+            ),
+            channelManifestUrls(UpdateChannel.Stable),
+        )
+        // 首选项（兼容旧调用方：`channelManifestUrl` 返回第一项）。
+        assertEquals(
+            "https://p-pass-dl.hawkeye-xb.com/manifest.json",
             channelManifestUrl(UpdateChannel.Stable),
         )
     }
 
     @Test
-    fun channelManifestUrl_testReadsRollingPrereleaseFile() {
-        // REL-07: test 通道直读滚动 prerelease `test-channel` 的静态文件——
-        // 不调 GitHub API（匿名限流 60/h/IP 曾把 test 通道整段打瞎）。
+    fun channelManifestUrls_testIsGitHubOnly() {
+        // REL-07 + #650：test 通道的对象只在 GitHub 上（滚动 prerelease）⇒ 候选里**不许**
+        // 出现 R2，否则每次检查都白打一次 404。
         assertEquals(
-            "https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest.json",
-            channelManifestUrl(UpdateChannel.Test),
+            listOf("https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest.json"),
+            channelManifestUrls(UpdateChannel.Test),
         )
+    }
+
+    // ── #650 链式决策（纯函数，fetch 注入 ⇒ 确定性，且不碰 android.util.Log） ──
+
+    private val newerManifest =
+        """{"version":"0.9.0","notes":"n","platforms":{"android-arm64":{"url":"https://example/apk","signature":"s","sha256":"h"}}}"""
+    private val currentManifest = """{"version":"0.8.4","notes":"n","platforms":{}}"""
+
+    private class FakeFetch(private val byUrl: Map<String, ManifestReply>) {
+        val calls = mutableListOf<String>()
+        fun fetch(url: String): ManifestReply {
+            calls += url
+            return byUrl[url] ?: ManifestReply.Failed
+        }
+    }
+
+    @Test
+    fun chain_firstSourceWinsWhenItHasAnAnswer() {
+        val f = FakeFetch(
+            mapOf(
+                "r2" to ManifestReply.Body(newerManifest),
+                "gh" to ManifestReply.Body(newerManifest),
+            ),
+        )
+        val out = checkUpdateWith(listOf("r2", "gh"), f::fetch, "0.8.4")
+        assertTrue("$out", out is UpdateCheckOutcome.Available)
+        assertEquals(listOf("r2"), f.calls) // 第一项给出答案就停，不再打第二项
+    }
+
+    @Test
+    fun chain_fallsBackWhenFirstSourceIs404() {
+        // 镜像还没跟上（R2 404）≠ 官方没有新版本 ⇒ 必须继续落到 GitHub 那一项。
+        val f = FakeFetch(
+            mapOf(
+                "r2" to ManifestReply.NoRelease,
+                "gh" to ManifestReply.Body(newerManifest),
+            ),
+        )
+        val out = checkUpdateWith(listOf("r2", "gh"), f::fetch, "0.8.4")
+        assertTrue("$out", out is UpdateCheckOutcome.Available)
+        assertEquals(listOf("r2", "gh"), f.calls)
+    }
+
+    @Test
+    fun chain_fallsBackWhenFirstSourceFails() {
+        val f = FakeFetch(mapOf("gh" to ManifestReply.Body(newerManifest)))
+        val out = checkUpdateWith(listOf("r2", "gh"), f::fetch, "0.8.4")
+        assertTrue("$out", out is UpdateCheckOutcome.Available)
+        assertEquals(listOf("r2", "gh"), f.calls)
+    }
+
+    @Test
+    fun chain_fallsBackWhenFirstSourceThrows() {
+        val calls = mutableListOf<String>()
+        val out = checkUpdateWith(listOf("r2", "gh"), { url ->
+            calls += url
+            if (url == "r2") throw java.io.IOException("boom") else ManifestReply.Body(newerManifest)
+        }, "0.8.4")
+        assertTrue("$out", out is UpdateCheckOutcome.Available)
+        assertEquals(listOf("r2", "gh"), calls)
+    }
+
+    @Test
+    fun chain_upToDateFromFirstSourceStopsThere() {
+        // 第一项能解析、但版本不比当前新 = 它给出了**确定答案**（已是最新）⇒ 不该再打第二项
+        // （否则每次自动检查都白打一遍所有源）。
+        val f = FakeFetch(
+            mapOf(
+                "r2" to ManifestReply.Body(currentManifest),
+                "gh" to ManifestReply.Body(newerManifest),
+            ),
+        )
+        assertEquals(UpdateCheckOutcome.UpToDate, checkUpdateWith(listOf("r2", "gh"), f::fetch, "0.8.4"))
+        assertEquals(listOf("r2"), f.calls)
+    }
+
+    @Test
+    fun chain_corruptBodyContinuesToNextSource() {
+        val f = FakeFetch(
+            mapOf(
+                "r2" to ManifestReply.Body("{\"half\":"), // 镜像上写了一半的对象
+                "gh" to ManifestReply.Body(newerManifest),
+            ),
+        )
+        val out = checkUpdateWith(listOf("r2", "gh"), f::fetch, "0.8.4")
+        assertTrue("$out", out is UpdateCheckOutcome.Available)
+        assertEquals(listOf("r2", "gh"), f.calls)
+    }
+
+    @Test
+    fun chain_allSources404IsUpToDate() {
+        val f = FakeFetch(mapOf("r2" to ManifestReply.NoRelease, "gh" to ManifestReply.NoRelease))
+        assertEquals(UpdateCheckOutcome.UpToDate, checkUpdateWith(listOf("r2", "gh"), f::fetch, "0.8.4"))
+    }
+
+    @Test
+    fun chain_failureWithoutAnyAnswerIsHonestFailure() {
+        // 一个 404 + 一个失败 = 我们**没法确认**有没有新版本 ⇒ 如实报「检查失败」，
+        // 不许装成「已是最新」（REL-07 的抬到 UI 的那条）。
+        val f = FakeFetch(mapOf("r2" to ManifestReply.NoRelease)) // gh 默认 Failed
+        assertEquals(UpdateCheckOutcome.Failed, checkUpdateWith(listOf("r2", "gh"), f::fetch, "0.8.4"))
+    }
+
+    @Test
+    fun chain_emptyCandidateListIsFailureNotUpToDate() {
+        // 空候选 = 配置错误（该源不服务这个通道），不是「已是最新」。
+        val f = FakeFetch(emptyMap())
+        assertEquals(UpdateCheckOutcome.Failed, checkUpdateWith(emptyList(), f::fetch, "0.8.4"))
+        assertEquals(emptyList<String>(), f.calls)
     }
 
     // ── REL-07: 404 = 无 release；5xx（Worker 上游故障/限流）= 检查失败，不是「已是最新」 ──
