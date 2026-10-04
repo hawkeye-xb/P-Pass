@@ -21,8 +21,16 @@ data class DesktopHealth(
 ) {
     val lowSpace: Boolean get() = freeBytes != null && freeBytes < LOW_SPACE_BYTES
 
+    /** #555：盘满线。「文件夹打不开」与「盘满了」曾共用 `libraryWritable=false`
+     *  一个信号（盘满时 daemon 的写入探针以 ENOSPC 失败），靠这条线分开。 */
+    val criticallyLow: Boolean get() = freeBytes != null && freeBytes < CRITICALLY_LOW_BYTES
+
     companion object {
         const val LOW_SPACE_BYTES: Long = 5L * 1024 * 1024 * 1024
+
+        /** 与 daemon 的 `SPACE_RESERVE_BYTES`（crates/daemon/src/flow_delivery.rs）
+         *  同值；改一边要同步另一边（Flow555 测试钉住）。 */
+        const val CRITICALLY_LOW_BYTES: Long = 256L * 1024 * 1024
     }
 }
 

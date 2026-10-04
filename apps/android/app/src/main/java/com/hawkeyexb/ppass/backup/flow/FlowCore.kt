@@ -119,6 +119,10 @@ fun waitReasonOf(kind: PeerFailureKind): WaitReason = when (kind) {
 /** 探测带回的桌面健康 → 不健康时的等待原因；null = 健康（旧桌面不报 health 也算健康）。低空间只是预警，不挡。 */
 fun waitReasonOf(health: DesktopHealth?): WaitReason? = when {
     health == null -> null
+    // #555：盘满时 daemon 的写入探针以 ENOSPC 失败，健康报告里同样是
+    // libraryWritable=false——「文件夹打不开」与「盘满了」曾因此共用一个
+    // 等待原因。空间事实在 freeBytes 里：低于保留余量归为空间不足。
+    !health.libraryWritable && health.criticallyLow -> WaitReason.DESKTOP_STORAGE_FULL
     !health.libraryWritable -> WaitReason.DESKTOP_LIBRARY_UNAVAILABLE
     !health.indexOk -> WaitReason.DESKTOP_STORAGE_ERROR
     else -> null
