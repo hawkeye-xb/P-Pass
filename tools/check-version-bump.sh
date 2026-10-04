@@ -45,8 +45,12 @@ cur_a=$(jq -r '.android' release/versions.json)
 
 # ── 改动面 ────────────────────────────────────────────────────────
 CHANGED=$(git diff --name-only "$PREV" "$HEAD_REF" || true)
-desk_hit=$(grep -Ec '^(crates/|apps/desktop/|assets/|Cargo\.(toml|lock)$|rust-toolchain\.toml)' <<<"$CHANGED" || true)
-andr_hit=$(grep -Ec '^apps/android/' <<<"$CHANGED" || true)
+# 测试目录不算「产品改动」：`crates/**/tests/**`、`**/benches/**` 改了不需要涨号
+# （否则一个只改测试的 PR 会逼着发一个内容相同的版本，正是 UPD-13 要消灭的东西）。
+# 保守边界：src 文件里 `#[cfg(test)]` 块改动仍算产品改动——宁可多涨，不漏涨。
+PRODUCT=$(grep -Ev '(^|/)(tests?|benches)/' <<<"$CHANGED" || true)
+desk_hit=$(grep -Ec '^(crates/|apps/desktop/|assets/|Cargo\.(toml|lock)$|rust-toolchain\.toml)' <<<"$PRODUCT" || true)
+andr_hit=$(grep -Ec '^apps/android/' <<<"$PRODUCT" || true)
 
 newer() { # <prev> <cur> → 0 表示 cur 严格更新
   [ "$1" != "$2" ] || return 1
