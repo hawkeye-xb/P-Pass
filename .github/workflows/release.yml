@@ -1054,6 +1054,18 @@ jobs:
             --asset-base "$ASSET_BASE" \
             "${ARGS[@]}"
           mv manifest.json artifacts/manifest.json
+          # UPD-13 补丁：android 分端清单在 upload-android 里是**用骨架正文**先组装
+          # 的（那一步为了让手机尽早拿到更新）。这里用同一批资产 + 收口时的正文
+          # 重新组装一次，否则安卓更新弹窗会停在「各平台产物正在陆续上传」的骨架文案。
+          APK=artifacts/android/app-release.apk
+          [ -f "$APK" ] || APK=artifacts/android/app-release-unsigned.apk
+          if [ -f "$APK" ]; then
+            node tools/make-update-manifest.mjs \
+              --tag "$TAG" --notes NOTES.md \
+              --asset-base "$ASSET_BASE" \
+              --asset android-arm64="$APK" \
+              --only android-arm64 --out artifacts/manifest-android.json
+          fi
           # UPD-13：同时产出一份**只含 darwin** 的分端清单（macOS 客户端的源）。
           if [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ]; then
             node tools/make-update-manifest.mjs \
@@ -1086,6 +1098,10 @@ jobs:
           node tools/make-update-manifest.mjs \
             --sign artifacts/manifest.json --sig-dir /tmp/sigs
           # UPD-13：分端清单同样要签（同一把密钥、同一批 .sig）。
+          if [ -f artifacts/manifest-android.json ]; then
+            node tools/make-update-manifest.mjs \
+              --sign artifacts/manifest-android.json --sig-dir /tmp/sigs
+          fi
           if [ -f artifacts/manifest-macos.json ]; then
             node tools/make-update-manifest.mjs \
               --sign artifacts/manifest-macos.json --sig-dir /tmp/sigs
@@ -1104,6 +1120,11 @@ jobs:
           if [ -f manifest-macos.json ]; then
             gh release upload "$TAG" manifest-macos.json --clobber
             echo "macOS manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest-macos.json"
+          fi
+          # UPD-13：android 分端清单在这里被**覆盖**成收口版（正文已定稿）。
+          if [ -f manifest-android.json ]; then
+            gh release upload "$TAG" manifest-android.json --clobber
+            echo "android manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest-android.json"
           fi
 
   # ── 收口①b: 追加 Windows 条目（UPD-04，2026-10-01）──────────────────
