@@ -1,10 +1,18 @@
 ---
 /**
- * FAQ page body: grouped questions → answer paragraphs → optional links.
+ * FAQ page body: index → grouped questions → answer paragraphs → optional links.
  * Content lives in src/i18n/faq.ts; this component only renders it, so both
  * language pages stay one-liners.
+ *
+ * Shape (#671): `a[0]` is the one-line answer and renders as .verdict (full
+ * strength); the rest renders as .detail (secondary), so a visitor can read
+ * just the first lines and still get an answer.
+ *
+ * The index is a plain anchor list. No accordion and no search box on purpose:
+ * everything stays in the DOM, so Ctrl+F and in-page search still find an
+ * answer that is not on screen, and nobody has to guess which headings open.
  */
-import { FAQ, FAQ_LEDE, FAQ_TITLE } from '../i18n/faq';
+import { FAQ, FAQ_LEDE, FAQ_TITLE, FAQ_TOC_LABEL } from '../i18n/faq';
 import type { Lang } from '../i18n/ui';
 
 interface Props {
@@ -21,17 +29,38 @@ const groups = FAQ[lang];
     <p class="lede">{FAQ_LEDE[lang]}</p>
   </header>
 
+  <nav class="toc" aria-label={FAQ_TOC_LABEL[lang]}>
+    {
+      groups.map((group) => (
+        <div class="toc-group">
+          <a class="toc-group-title" href={`#${group.id}`}>
+            {group.title}
+          </a>
+          <ul>
+            {group.items.map((item) => (
+              <li>
+                <a href={`#${item.id}`}>{item.q}</a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))
+    }
+  </nav>
+
   {
     groups.map((group) => (
-      <section>
+      <section id={group.id}>
         <h2>{group.title}</h2>
         {group.items.map((item) => {
           const more = item.more ?? [];
+          const [verdict, ...detail] = item.a;
           return (
-            <div class="qa">
+            <div class="qa" id={item.id}>
               <h3>{item.q}</h3>
-              {item.a.map((paragraph) => (
-                <p>{paragraph}</p>
+              <p class="verdict">{verdict}</p>
+              {detail.map((paragraph) => (
+                <p class="detail">{paragraph}</p>
               ))}
               {more.length > 0 && (
                 <p class="more">
@@ -67,6 +96,50 @@ const groups = FAQ[lang];
     margin: 0 0 1rem;
     color: var(--text-secondary);
   }
+  /* Index: the whole map of the page on one screen, so nobody has to scroll
+     through 13 answers to find the one they came for. */
+  .toc {
+    margin: 1.75rem 0 0;
+    padding: 1.1rem 1.25rem 0.6rem;
+    background: var(--canvas);
+    border-radius: var(--radius-card);
+  }
+  .toc-group + .toc-group {
+    margin-top: 0.9rem;
+  }
+  .toc-group-title {
+    display: inline-block;
+    font-weight: 600;
+    font-size: 0.95rem;
+    padding: 0.35rem 0;
+    text-decoration: none;
+  }
+  .toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .toc li a {
+    /* Same tap height as the site nav links: 44px, the desktop token. */
+    display: block;
+    box-sizing: border-box;
+    min-height: var(--size-desktop-tap-min);
+    padding: 0.55rem 0;
+    font-size: 0.95rem;
+    line-height: 1.4;
+    color: var(--text-secondary);
+    text-decoration: none;
+  }
+  .toc li a:hover {
+    color: var(--text);
+    text-decoration: underline;
+  }
+  /* Sticky header is ~45px tall; leave room so an anchored question does not
+     land underneath it. */
+  section[id],
+  .qa[id] {
+    scroll-margin-top: 4.5rem;
+  }
   h2 {
     font-size: 1.35rem;
     margin: 3rem 0 1.25rem;
@@ -82,8 +155,15 @@ const groups = FAQ[lang];
   }
   .qa p {
     margin: 0 0 0.9rem;
-    color: var(--text-secondary);
     line-height: 1.75;
+  }
+  /* One-line answer, then the detail. Full-strength text for the answer,
+     secondary for everything else. */
+  .qa .verdict {
+    color: var(--text);
+  }
+  .qa .detail {
+    color: var(--text-secondary);
   }
   .qa p:last-child {
     margin-bottom: 0;
