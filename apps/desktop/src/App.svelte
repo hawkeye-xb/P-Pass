@@ -680,7 +680,10 @@
     });
     if (!yes) return;
     try {
-      await call("folder.set", { path: dir });
+      // DESK-46 (#638)：改库位置由壳侧 set_library_dir 一手包办（校验 +
+      // 平台 config read-modify-write + 孤儿清理）——daemon 的 folder.set
+      // 写的是当前库目录的孤儿 config.toml（零读者），已删除。
+      await invoke("set_library_dir", { libraryDir: dir });
       flashMessage(t("ui.change_saved", { dir }));
     } catch (e) {
       flashMessage(t("ui.save_failed", { err: errText(e) }), "error");
