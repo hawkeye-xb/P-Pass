@@ -192,8 +192,7 @@ class C413DeliveryPortTest {
     fun `the offer carries the item size`() = runTest {
         val h = Harness(this)
         h.offerReply = { FlowStatusReply(state = "completed", receipt = h.receipt(it.queueSequence)) }
-        assertTrue(h.port.deliver(h.request(1)) {} is DeliveryOutcome.Con
-firmed)
+        assertTrue(h.port.deliver(h.request(1)) {} is DeliveryOutcome.Confirmed)
         assertEquals(4_321L, h.offers.single().sizeBytes)
         assertEquals(4_321L, ProtoJson.encodeToJsonElement(FlowFetchRequest.serializer(), h.offers.single()).let { (it as JsonObject)["size_bytes"].toString().toLong() })
     }
