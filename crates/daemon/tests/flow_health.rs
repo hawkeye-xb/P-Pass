@@ -258,7 +258,8 @@ async fn offer_that_cannot_fit_is_refused_with_the_storage_full_msg_key() {
     )
     .await;
     assert!(!resp.ok);
-    let error = resp.error.unwrap();
+    let error = res
+p.error.unwrap();
     assert_eq!(error.msg_key, "storage_full");
     assert_eq!(error.code, proto::codes::STORAGE_FULL);
 }
@@ -424,6 +425,40 @@ fn failure_classification_trusts_the_io_error_first_then_the_environment() {
     assert_eq!(PeerFailure::StorageFailed.code(), "storage_failed");
 }
 
+// ── #555：盘满 ≠ 文件夹打不开 ───────────────────────────────────────────
+
+/// 磁盘满时写入探针以 ENOSPC 失败——此前与「文件夹不存在/不可写」共享同一个
+/// false，手机据此报「存储电脑照片库文件夹无法打开」（2026-09-30 真机实录，
+/// Mac 剩约 200MB 时 261KB 截图被误报）。探针失败必须先按错误种类归队。
+#[test]
+fn probe_failure_on_a_full_disk_is_full_not_unavailable() {
+    use daemon::flow_delivery::{probe_failure_verdict, LibraryProbe};
+    use std::io::ErrorKind;
+
+    // 空间耗尽的两支 → Full（撤掉这一支、退回一律 Unavailable → 本测试红）。
+    assert_eq!(
+        probe_failure_verdict(ErrorKind::StorageFull),
+        LibraryProbe::Full
+    );
+    assert_eq!(
+        probe_failure_verdict(ErrorKind::QuotaExceeded),
+        LibraryProbe::Full
+    );
+    // 其余失败仍归不可用（权限 / 只读 / 不存在 / 未知）。
+    for kind in [
+        ErrorKind::PermissionDenied,
+        ErrorKind::ReadOnlyFilesystem,
+        ErrorKind::NotFound,
+        ErrorKind::Other,
+    ] {
+        assert_eq!(
+            probe_failure_verdict(kind),
+            LibraryProbe::Unavailable,
+            "{kind:?}"
+        );
+    }
+}
+
 /// End to end: a materialize failure (the staging folder cannot be created
 /// because a regular file sits where it belongs) is pushed with a public
 /// code — never the internal `materialize_*` telemetry code.
@@ -446,7 +481,8 @@ async fn pushed_failure_code(free: Option<u64>) -> String {
     let ticket = provider_blobs.push(hash, &source).await.unwrap();
     let provider_node = provider_transport.node_id();
 
-    let (_t, blobs) = receiver_blobs(root.path()).await;
+    let (_t, blobs) = receiver_blo
+bs(root.path()).await;
     let db = paired_db(provider_node).await;
     let (event_bus, mut event_rx) = events::bus();
     let delivery = FlowDelivery::new(db, blobs, &library)
