@@ -218,7 +218,7 @@ impl FlowPathRegistry {
     /// A request has been admitted but its data-plane connection is not ready.
     /// `Unknown` means exactly that; it never guesses a route.
     pub fn begin(&self, peer: NodeId, queue_sequence: i64, lease_token: &str) -> bool {
-        self.replace_if_changed(
+   self.replace_if_changed(
             peer,
             ActiveFlowPath {
                 queue_sequence,
@@ -618,9 +618,11 @@ impl FlowDelivery {
 
     /// Classify a storage-side failure against the environment right now.
     fn classify(&self, io_kind: Option<ErrorKind>) -> PeerFailure {
+        // #555：Full（盘满）不算「不可用」——否则 classify_peer_failure 的
+        // !writable → LibraryUnavailable 分支会先抢走，free 检查永远轮不到。
         classify_peer_failure(
             io_kind,
-            library_writable(&self.library_root),
+            library_probe(&self.library_root) != LibraryProbe::Unavailable,
             (self.free_space)(&self.library_root),
         )
     }
@@ -642,10 +644,22 @@ impl FlowDelivery {
     /// export (one full copy) with [`SPACE_RESERVE_BYTES`] to spare. A
     /// resumed partial already on disk is not counted twice.
     async fn admit(&self, hash: &[u8; 32], size_bytes: i64) -> Result<(), DeliveryError> {
-        if !library_writable(&self.library_root) {
-            return Err(DeliveryError::LibraryUnavailable(
-                "library folder missing or not writable".into(),
-            ));
+        match library_probe(&self.library_root) {
+            LibraryProbe::Unavailable => {
+                return Err(DeliveryError::LibraryUnavailable(
+                    "library folder missing or not writable".into(),
+                ));
+            }
+            // #555：探针 ENOSPC = 空间不足，与下面的容量预检同一公开语义
+            // （storage_full）。free 探测答不上来时按 0 记——探针连一个空文件
+            // 都建不了已是铁证；这行措辞只进日志，wire code 不变。
+            LibraryProbe::Full => {
+                return Err(DeliveryError::InsufficientSpace {
+                    needed: SPACE_RESERVE_BYTES,
+                    free: (self.free_space)(&self.library_root).unwrap_or(0),
+                });
+            }
+            LibraryProbe::Writable => {}
         }
         let Ok(size) = u64::try_from(size_bytes) else {
             return Ok(());
@@ -848,7 +862,8 @@ impl FlowDelivery {
         if !durable {
             self.admit(&hash, request.size_bytes).await?;
         }
-        // #413 §6: an offer is the phone (re)starting this tuple — it stamps
+        // #413 §6: an offer is the phone (re)starting this tuple
+— it stamps
         // the resume clock `expire_stale_grants` measures from.
         self.db
             .upsert_flow_grant_at(&grant, (self.now)())
@@ -1037,7 +1052,7 @@ impl FlowDelivery {
         receipt: &FlowCompletionReceipt,
     ) {
         let Some(events) = &self.events else { return };
-        // NET-25: 推送发出的那一刻，这台手机在不在订阅表里。broadcast 无订阅
+// NET-25: 推送发出的那一刻，这台手机在不在订阅表里。broadcast 无订阅
         // 者时 send 直接丢弃，所以 subscribed=false 就是"这条推送被丢掉了"的
         // 直接证据。带上 seq——DedupGuard 会折叠完全相同的行。
         tracing::info!(
@@ -1241,7 +1256,8 @@ impl FlowDelivery {
             .map_err(storage_error)?
         {
             // NET-06: cancel interrupts the in-progress fetch task, if any —
-            // the durable state above already moved to `cancelled` before
+            // the durable state above already moved to `cancelled` befo
+re
             // this, so it doesn't matter whether the task was mid-flight or
             // already finished: the grant is already out of GC protection
             // either way, and any partial bytes are now reclaimable.
@@ -1463,7 +1479,7 @@ impl FlowDelivery {
 
     async fn matching_grant(&self, grant: &FlowGrant) -> Result<FlowGrant, DeliveryError> {
         let Some(stored) = self
-            .db
+.db
             .flow_grant(&grant.node_id, &grant.pairing_epoch, grant.queue_sequence)
             .await
             .map_err(storage_error)?
@@ -1678,7 +1694,8 @@ fn resume_request(grant: &FlowGrant) -> FlowFetchRequest {
         media_type: grant.media_type.clone(),
         provider: grant.provider.clone(),
         capture_at_ms: 0,
-        // Only the offer-time precheck reads it; a respawn is past that.
+        // Only the offer-time prec
+heck reads it; a respawn is past that.
         size_bytes: 0,
     }
 }
@@ -1729,10 +1746,31 @@ fn receipt_id() -> Result<String, DeliveryError> {
 /// library root — never under `originals/`, the only tree the watcher and
 /// reconcile scan — and is removed at once. Nothing is ever created here
 /// except that one probe file.
+///
+/// 盘满时探针建不了文件——bool 视图如实报 false（此时确实建不了）；
+/// 「这是盘满还是文件夹坏了」的三态裁决在 [`library_probe`]。
 fn library_writable(root: &Path) -> bool {
+    library_probe(root) == LibraryProbe::Writable
+}
+
+/// #555：库目录写入探针的三态裁决。「文件夹打不开」与「盘满了」不是一回事——
+/// 磁盘满时探针以 ENOSPC / 配额失败，此前一律归 false（不可用），手机据此报
+/// 「存储电脑照片库文件夹无法打开」（错误归因；2026-09-30 真机实录：Mac 剩
+/// 约 200MB，261KB 截图被报成文件夹打不开）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LibraryProbe {
+    /// 文件夹存在且能建文件。
+    Writable,
+    /// 文件夹在，但探针因空间耗尽失败——归为空间不足，不是不可用。
+    Full,
+    /// 文件夹不存在或不可写。
+    Unavailable,
+}
+
+fn library_probe(root: &Path) -> LibraryProbe {
     static PROBE_SEQ: AtomicU64 = AtomicU64::new(0);
     if !root.is_dir() {
-        return false;
+        return LibraryProbe::Unavailable;
     }
     let internal = root.join(".ppf");
     let dir = if internal.is_dir() {
@@ -1753,9 +1791,18 @@ fn library_writable(root: &Path) -> bool {
         Ok(file) => {
             drop(file);
             let _ = std::fs::remove_file(&probe);
-            true
+            LibraryProbe::Writable
         }
-        Err(_) => false,
+        Err(e) => probe_failure_verdict(e.kind()),
+    }
+}
+
+/// #555：探针失败的归类（纯函数）：ENOSPC / 配额 = 盘满，其余 = 不可用。
+/// 反证：去掉 StorageFull|QuotaExceeded 那一支，#555 的两条断言变红。
+pub fn probe_failure_verdict(kind: ErrorKind) -> LibraryProbe {
+    match kind {
+        ErrorKind::StorageFull | ErrorKind::QuotaExceeded => LibraryProbe::Full,
+        _ => LibraryProbe::Unavailable,
     }
 }
 
