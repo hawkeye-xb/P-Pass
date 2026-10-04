@@ -1,0 +1,17 @@
+{
+  "version": "0.9.0",
+  "notes": "## 更新内容\n\n- 磁盘写满时不再被误报成「照片库文件夹无法打开」，现在会如实告诉你是空间问题。\n- 自定义照片库下，切换备份目录不再静默失效。\n- 应用内更新改为「国内镜像优先、GitHub 兜底」，国内网络下更稳。\n",
+  "pub_date": "2026-10-04T11:13:00Z",
+  "platforms": {
+    "android-arm64": {
+      "url": "https://p-pass-dl.hawkeye-xb.com/releases/v0.9.0/app-release.apk",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUSXZHU2ZZRGNkSlM2WFIyQmZLRVNMQWpBdWpZVktjdDlNQmczYlJhN2hyVTNTa1NOR0RucVNRVitWbEZXOVUzb1grZ21GRjVsWXBFbU1CVEV0Z2UwbE1acUZEdzY1S3dFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMTEyMDk4CWZpbGU6YXBwLXJlbGVhc2UuYXBrCkRTWmswdXRpRmdOSWdqR0VGdS9LNkFmdXc3Qll1dDFkSmI1NjZjZzk1RkJvVEt1UVJlUW5LaEVlRk5TaGViRVhkZXRvY0pSVnU1aWNITmxmeU1zeEJRPT0K",
+      "sha256": "934e6100def1b7b5ed9a9e0fc65d0120ca77dd4a3b88363a0b49af8a7e24aa9b"
+    },
+    "darwin-aarch64": {
+      "url": "https://p-pass-dl.hawkeye-xb.com/releases/v0.9.0/P-Pass.app.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUSXZHU2ZZRGNkSmJBRWRBZHFVSUpmUkJVb2FFR1dzSkZYZzlhaG9yMHBDK0pKMW9ncFdOVm4vS2l6SWRtMDFacnpuTDhXRS9JZ0VzejN4NGQ0SGY2WHdUc1Z5cXMzWlFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkxMTEyMDk5CWZpbGU6UC1QYXNzLmFwcC50YXIuZ3oKYi9PejEwekFYVHpSQmhZdXlhMzFZVUI4SFJTa3FlNmQrME9PYWowcHFRSnA4RXcvNTVsc01LMDNTR2Myc0lSbVpEL0FKbDhwdHZkRncxbm9idTVFQlE9PQo=",
+      "sha256": "afbb5001e89b9452342c8d98c3e4a62fddef93843ea7ed1ddf15468ed01230b2"
+    }
+  }
+}

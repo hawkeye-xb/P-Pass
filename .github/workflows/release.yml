@@ -757,11 +757,17 @@ jobs:
             # 耦合（REL-04）：先镜像 → 据结果定 base → 签名 → 单独镜像
             # manifest；镜像失败必须回落 GitHub 直链，不许带坏 manifest 出门。
             ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
-            node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes NOTES.md \
-              --asset-base "$ASSET_BASE" \
-              "${APK_ARGS[@]}"
-            mv manifest.json artifacts/manifest.json
+            # UPD-13（#660）：动态 manifest.json 只给 test 通道用（它是
+            # test-channel 指针）。正式版的老格式清单是收口阶段搬进来的**冻结件**
+            # ——绝不能是 tag 版本的动态清单（分端号分化后会高于某端包内版本，
+            # 把未升级的老客户端打进「提示更新→装上还是旧号」的死循环）。
+            if [[ "$TAG" == *-test.* ]]; then
+              node tools/make-update-manifest.mjs \
+                --tag "$TAG" --notes NOTES.md \
+                --asset-base "$ASSET_BASE" \
+                "${APK_ARGS[@]}"
+              mv manifest.json artifacts/manifest.json
+            fi
             # UPD-13：同时产出一份**只含 android** 的分端清单。
             # 本批只产出文件、不上任何客户端 ⇒ 零行为变化；客户端切源在下一批。
             node tools/make-update-manifest.mjs \
@@ -1042,18 +1048,27 @@ jobs:
           if [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ]; then
             ARGS+=(--asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz)
           fi
-          if [ "${#ARGS[@]}" -eq 0 ]; then
-            echo "无任何平台产物——跳过 manifest 组装"
-            exit 0
+          if [[ "$TAG" != *-test.* ]]; then
+            # UPD-13（#660）：**正式版的老格式兼容清单 = 冻结件**
+            # （release/legacy-manifest.json：version 固定 0.9.0、URL 指向 R2 上
+            # 不可变的版本化副本）。分端号一旦分化，tag 版本的动态清单会高于某端
+            # 包内版本 ⇒ 未升级的老客户端死循环。冻结件是那次「两端同号」发布的
+            # 快照，永远自洽。
+            cp release/legacy-manifest.json artifacts/manifest.json
+          else
+            if [ "${#ARGS[@]}" -eq 0 ]; then
+              echo "无任何平台产物——跳过 manifest 组装"
+              exit 0
+            fi
+            # test 通道：dynamic manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像
+            # 的拍板，见 upload-android 里的完整注释）。
+            ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+            node tools/make-update-manifest.mjs \
+              --tag "$TAG" --notes NOTES.md \
+              --asset-base "$ASSET_BASE" \
+              "${ARGS[@]}"
+            mv manifest.json artifacts/manifest.json
           fi
-          # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板，
-          # 见 upload-android 里的完整注释）。
-          ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
-          node tools/make-update-manifest.mjs \
-            --tag "$TAG" --notes NOTES.md \
-            --asset-base "$ASSET_BASE" \
-            "${ARGS[@]}"
-          mv manifest.json artifacts/manifest.json
           # UPD-13 补丁：android 分端清单在 upload-android 里是**用骨架正文**先组装
           # 的（那一步为了让手机尽早拿到更新）。这里用同一批资产 + 收口时的正文
           # 重新组装一次，否则安卓更新弹窗会停在「各平台产物正在陆续上传」的骨架文案。
@@ -1095,8 +1110,12 @@ jobs:
             npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" "$f"
             cp "$f.sig" /tmp/sigs/
           done
-          node tools/make-update-manifest.mjs \
-            --sign artifacts/manifest.json --sig-dir /tmp/sigs
+          # UPD-13（#660）：**正式版跳过**——那份是冻结件，签名已随文件冻结；
+          # 用本次资产的 .sig 去重签会把 0.9.0 的签名覆盖成对不上字节的新签名。
+          if [[ "$TAG" == *-test.* ]]; then
+            node tools/make-update-manifest.mjs \
+              --sign artifacts/manifest.json --sig-dir /tmp/sigs
+          fi
           # UPD-13：分端清单同样要签（同一把密钥、同一批 .sig）。
           if [ -f artifacts/manifest-android.json ]; then
             node tools/make-update-manifest.mjs \
