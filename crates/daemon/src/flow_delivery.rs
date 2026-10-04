@@ -218,7 +218,7 @@ impl FlowPathRegistry {
     /// A request has been admitted but its data-plane connection is not ready.
     /// `Unknown` means exactly that; it never guesses a route.
     pub fn begin(&self, peer: NodeId, queue_sequence: i64, lease_token: &str) -> bool {
-   self.replace_if_changed(
+        self.replace_if_changed(
             peer,
             ActiveFlowPath {
                 queue_sequence,
@@ -862,8 +862,7 @@ impl FlowDelivery {
         if !durable {
             self.admit(&hash, request.size_bytes).await?;
         }
-        // #413 §6: an offer is the phone (re)starting this tuple
-— it stamps
+        // #413 §6: an offer is the phone (re)starting this tuple — it stamps
         // the resume clock `expire_stale_grants` measures from.
         self.db
             .upsert_flow_grant_at(&grant, (self.now)())
@@ -1052,7 +1051,7 @@ impl FlowDelivery {
         receipt: &FlowCompletionReceipt,
     ) {
         let Some(events) = &self.events else { return };
-// NET-25: 推送发出的那一刻，这台手机在不在订阅表里。broadcast 无订阅
+        // NET-25: 推送发出的那一刻，这台手机在不在订阅表里。broadcast 无订阅
         // 者时 send 直接丢弃，所以 subscribed=false 就是"这条推送被丢掉了"的
         // 直接证据。带上 seq——DedupGuard 会折叠完全相同的行。
         tracing::info!(
@@ -1256,8 +1255,7 @@ impl FlowDelivery {
             .map_err(storage_error)?
         {
             // NET-06: cancel interrupts the in-progress fetch task, if any —
-            // the durable state above already moved to `cancelled` befo
-re
+            // the durable state above already moved to `cancelled` before
             // this, so it doesn't matter whether the task was mid-flight or
             // already finished: the grant is already out of GC protection
             // either way, and any partial bytes are now reclaimable.
@@ -1479,7 +1477,7 @@ re
 
     async fn matching_grant(&self, grant: &FlowGrant) -> Result<FlowGrant, DeliveryError> {
         let Some(stored) = self
-.db
+            .db
             .flow_grant(&grant.node_id, &grant.pairing_epoch, grant.queue_sequence)
             .await
             .map_err(storage_error)?
@@ -1694,8 +1692,7 @@ fn resume_request(grant: &FlowGrant) -> FlowFetchRequest {
         media_type: grant.media_type.clone(),
         provider: grant.provider.clone(),
         capture_at_ms: 0,
-        // Only the offer-time prec
-heck reads it; a respawn is past that.
+        // Only the offer-time precheck reads it; a respawn is past that.
         size_bytes: 0,
     }
 }
