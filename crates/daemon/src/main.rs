@@ -162,6 +162,22 @@ async fn main() -> anyhow::Result<()> {
     let default_config = platform_dir.join("config.toml");
     let config = Config::load(Some(&default_config))?;
     let data_dir = config.data_dir.clone().unwrap_or(platform_dir);
+    // DESK-46 (#638)：config.toml 显式配置的库目录不存在 ⇒ 大声报错退出，
+    // 绝不 create_dir_all 静默造——外置盘未挂载时会在 /Volumes 下造出同名
+    // 真目录，照片写进内置盘（挂载点阴影）。默认平台目录（首启向导前）与
+    // PPF_DATA_DIR 指定的目录（场景脚本/tools 依赖自动建一次性临时库）
+    // 保持旧行为。
+    if let Err(msg) = library_root_check(
+        config.data_dir.is_some() && std::env::var_os("PPF_DATA_DIR").is_none(),
+        data_dir.is_dir(),
+        &data_dir,
+    ) {
+        // 文件日志此刻还没初始化（init_file_logging 在更后面）——走 stderr：
+        // launchd 的 StandardErrorPath 会接住，DESK-09 诊断链（壳读 plist
+        // stderr 尾行）照样能看到这句话。KeepAlive 节流重拉，盘插回即自愈。
+        eprintln!("{msg}");
+        std::process::exit(1);
+    }
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
 
     let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
@@ -798,6 +814,28 @@ fn load_or_mint_identity_with(
     Ok(k)
 }
 
+/// DESK-46 (#638)：库目录的启动判据（纯函数——文件系统与 env 探测都在
+/// 调用点完成，判据只由传入的事实决定，好做单测与反证）。
+///
+/// `configured_in_file` = data_dir 来自 config.toml 显式配置（PPF_DATA_DIR
+/// 环境变量指定的不算——场景脚本/tools 依赖自动建一次性临时库）。
+/// 显式配置的库目录不存在 ⇒ Err（人话，给 stderr / launchd 诊断链）；
+/// 默认平台目录或目录已存在 ⇒ Ok。
+fn library_root_check(
+    configured_in_file: bool,
+    exists: bool,
+    data_dir: &std::path::Path,
+) -> Result<(), String> {
+    if configured_in_file && !exists {
+        return Err(format!(
+            "库目录不存在：{}——外置盘未挂载，或文件夹被移动/删除了。\
+             请挂载/恢复后重试，或修正 config.toml 里的 data_dir。",
+            data_dir.display()
+        ));
+    }
+    Ok(())
+}
+
 /// QA-09 迁移（#211）：原先是一处 unix 专属的 0o600。失败不阻止启动（与
 /// 迁移前的 `let _ =` 一致），但 `Err` 记一条 WARN——SEC-10：收紧失败不能
 /// 又是一件看不见的事。`Unsupported` 是契约写明的「本平台没收紧」，不算失败。
@@ -894,5 +932,32 @@ mod tests {
         })
         .unwrap();
         assert_eq!(k, [9u8; 32]);
+    }
+
+    // DESK-46 (#638)：显式配置的库目录不存在 ⇒ 拒绝启动（人话消息），
+    // 不再 create_dir_all 造假目录。反证：把 library_root_check 改成永远
+    // Ok，本测试必须变红。
+    #[test]
+    fn desk46_configured_library_missing_is_refused() {
+        let err = library_root_check(true, false, Path::new("/Volumes/My Passport"))
+            .expect_err("显式配置的库目录不存在时必须拒绝启动");
+        assert!(err.contains("库目录不存在"), "消息要有人话：{err}");
+        assert!(
+            err.contains("/Volumes/My Passport"),
+            "消息要带具体路径，用户才知道挂哪块盘：{err}"
+        );
+    }
+
+    // DESK-46 (#638)：默认平台目录（首启向导前）与 PPF_DATA_DIR 场景目录
+    // 不在守卫范围内——configured_in_file=false 时即使目录不存在也放行，
+    // 由后面的 create_dir_all 自动建（tools/ 脚本契约）。
+    #[test]
+    fn desk46_default_or_env_library_may_be_created() {
+        assert!(library_root_check(false, false, Path::new("/tmp/ppf-scene/library")).is_ok());
+    }
+
+    #[test]
+    fn desk46_existing_configured_library_passes() {
+        assert!(library_root_check(true, true, Path::new("/anywhere")).is_ok());
     }
 }
