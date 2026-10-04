@@ -952,17 +952,10 @@ async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
         .iter()
         .flat_map(|b| b.as_array().cloned().unwrap_or_default())
         .collect();
-    let conns: Vec<&serde_json::Value> =
-        events.iter().filter(|e| e["event"] == "conn").collect();
-    let errors: Vec<&serde_json::Value> = events
-        .iter()
-        .filter(|e| e["event"] == "error")
-        .collect();
+    let conns: Vec<&serde_json::Value> = events.iter().filter(|e| e["event"] == "conn").collect();
+    let errors: Vec<&serde_json::Value> = events.iter().filter(|e| e["event"] == "error").collect();
 
-    assert!(
-        !conns.is_empty(),
-        "至少一次后台尝试要留下 conn：{events:?}"
-    );
+    assert!(!conns.is_empty(), "至少一次后台尝试要留下 conn：{events:?}");
     assert!(
         conns.iter().all(|c| c["fail_stage"] == "fetch"),
         "每个 conn 都必须是 fetch 阶段的失败（不是一个成功的 conn）：{conns:?}"
