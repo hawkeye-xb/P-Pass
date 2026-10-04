@@ -25,6 +25,7 @@ const {
 
 const home = lang === 'zh' ? '/zh/' : '/';
 const blogHome = lang === 'zh' ? '/zh/blog/' : '/blog/';
+const faqHome = lang === 'zh' ? '/zh/faq/' : '/faq/';
 const otherLang: Lang = lang === 'zh' ? 'en' : 'zh';
 
 const canonical = new URL(Astro.url.pathname, SITE_URL).toString();
@@ -76,6 +77,7 @@ const zhUrl = lang === 'zh' ? canonical : mirrorUrl;
           <span>P-Pass</span>
         </a>
         <a href={blogHome}>{t(lang, 'nav.blog')}</a>
+        <a href={faqHome}>{t(lang, 'nav.faq')}</a>
         <a href={GITHUB_URL} rel="external">GitHub</a>
         <a href="/rss.xml" class="rss-link">RSS</a>
         {
@@ -139,12 +141,14 @@ const zhUrl = lang === 'zh' ? canonical : mirrorUrl;
   .brand img { display: block; }
   /* Language switcher: same level as every other nav item, never a footnote. */
   .lang-switch { color: var(--text); }
+  /* Phones: five nav items (brand, Blog, FAQ, GitHub, language) share one row.
+     Tighten the spacing and the brand mark instead of dropping an entry.
+     RSS stays discoverable via the <link> tag and the desktop nav. */
   @media (max-width: 640px) {
-    .site-nav { gap: 0.1rem 0.15rem; font-size: 0.9rem; }
-    .site-nav a { padding: 0.7rem 0.45rem; }
-    .site-nav .brand { gap: 0.4rem; }
-    /* Keep the nav to one row on phones: RSS stays discoverable via the
-       <link> tag and desktop nav. */
+    .site-nav { gap: 0.1rem 0.05rem; font-size: 0.85rem; padding: 0.4rem 0.6rem; }
+    .site-nav a { padding: 0.7rem 0.25rem; }
+    .site-nav .brand { gap: 0.3rem; }
+    .site-nav .brand img { width: 28px; height: 28px; }
     .site-nav .rss-link { display: none; }
   }
   .site-footer {

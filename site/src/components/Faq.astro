@@ -1,0 +1,95 @@
+---
+/**
+ * FAQ page body: grouped questions → answer paragraphs → optional links.
+ * Content lives in src/i18n/faq.ts; this component only renders it, so both
+ * language pages stay one-liners.
+ */
+import { FAQ, FAQ_LEDE, FAQ_TITLE } from '../i18n/faq';
+import type { Lang } from '../i18n/ui';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+const groups = FAQ[lang];
+---
+
+<article class="faq">
+  <header>
+    <h1>{FAQ_TITLE[lang]}</h1>
+    <p class="lede">{FAQ_LEDE[lang]}</p>
+  </header>
+
+  {
+    groups.map((group) => (
+      <section>
+        <h2>{group.title}</h2>
+        {group.items.map((item) => {
+          const more = item.more ?? [];
+          return (
+            <div class="qa">
+              <h3>{item.q}</h3>
+              {item.a.map((paragraph) => (
+                <p>{paragraph}</p>
+              ))}
+              {more.length > 0 && (
+                <p class="more">
+                  {more.map((link, index) => (
+                    <>
+                      <a href={link.href} rel="external">
+                        {link.label}
+                      </a>
+                      {index < more.length - 1 && <span aria-hidden="true"> · </span>}
+                    </>
+                  ))}
+                </p>
+              )}
+            </div>
+          );
+        })}
+      </section>
+    ))
+  }
+</article>
+
+<style>
+  .faq {
+    max-width: 40em;
+    margin: 0 auto;
+    padding: 3.5rem 1.25rem 4rem;
+  }
+  h1 {
+    font-size: clamp(1.8rem, 5vw, 2.4rem);
+    margin: 0 0 0.5rem;
+  }
+  .lede {
+    margin: 0 0 1rem;
+    color: var(--text-secondary);
+  }
+  h2 {
+    font-size: 1.35rem;
+    margin: 3rem 0 1.25rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .qa {
+    margin: 0 0 2rem;
+  }
+  .qa h3 {
+    font-size: 1.1rem;
+    margin: 0 0 0.5rem;
+  }
+  .qa p {
+    margin: 0 0 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.75;
+  }
+  .qa p:last-child {
+    margin-bottom: 0;
+  }
+  .more {
+    font-size: 0.95rem;
+    color: var(--text-meta);
+  }
+</style>
