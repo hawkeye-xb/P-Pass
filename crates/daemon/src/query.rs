@@ -852,6 +852,31 @@ mod tests {
         assert_eq!(thumb_state(&f, &VIDEO_A).await, 1);
     }
 
+    /// #613: a generator that cannot finish until the test says so — the
+    /// test's own sync point. Without it the poll loop below raced the
+    /// request: on a loaded machine the whole generation could run inside
+    /// the very poll that reserved the gate slot (`watch` `wait_for`
+    /// resolves inline once the value is `true`), so the future came back
+    /// `Ready` before the loop ever looked at `slots` — and the case judged
+    /// itself "inconclusive" instead of testing anything.
+    fn gated_gen(calls: Arc<AtomicUsize>, release: std::sync::mpsc::Receiver<()>) -> ThumbGen {
+        let release = std::sync::Mutex::new(release);
+        Arc::new(move |hash: &[u8; 32], _src: &Path, root: &Path| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            // Runs on a blocking-pool thread (`spawn_blocking`), so blocking
+            // here is fine. `Err` = already released: a second call must not
+            // hang the suite, it just proceeds.
+            let _ = release.lock().unwrap().recv();
+            let paths = media_codec::thumb_paths(root, hash);
+            std::fs::create_dir_all(paths.t256.parent().unwrap()).unwrap();
+            std::fs::write(&paths.t256, b"REAL-256").unwrap();
+            media_codec::ThumbResult {
+                paths,
+                outcome: media_codec::ThumbOutcome::Generated,
+            }
+        })
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_request_dropped_mid_flight_never_wedges_the_hash() {
         // A connection closing mid-request drops the `thumb()` future at
@@ -860,19 +885,9 @@ mod tests {
         // would stay InFlight forever and the hash would answer the
         // placeholder until restart, with no generation ever run.
         let calls = Arc::new(AtomicUsize::new(0));
-        let c = Arc::clone(&calls);
-        let generator: ThumbGen = Arc::new(move |hash: &[u8; 32], _src: &Path, root: &Path| {
-            c.fetch_add(1, Ordering::SeqCst);
-            let paths = media_codec::thumb_paths(root, hash);
-            std::fs::create_dir_all(paths.t256.parent().unwrap()).unwrap();
-            std::fs::write(&paths.t256, b"REAL-256").unwrap();
-            media_codec::ThumbResult {
-                paths,
-                outcome: media_codec::ThumbOutcome::Generated,
-            }
-        });
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
         let f = fixture(
-            generator,
+            gated_gen(Arc::clone(&calls), release_rx),
             Duration::from_millis(200),
             Duration::from_secs(3600),
             &[VIDEO_A],
@@ -880,15 +895,21 @@ mod tests {
         .await;
         // Poll by hand and drop the future the moment the gate holds a slot
         // for the hash — the narrowest point a real disconnect could hit.
+        // #613: with the generation held by `release_rx`, "finished" can no
+        // longer race this observation. A future that answers before the
+        // slot was seen now means the gate stopped keeping in-flight
+        // requests — a real regression, never an inconclusive run.
         {
             let req = get(&VIDEO_A);
             let mut fut = std::pin::pin!(f.engine.thumb(&req));
             let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
             let deadline = Instant::now() + Duration::from_secs(5);
             loop {
-                if std::future::Future::poll(fut.as_mut(), &mut cx).is_ready() {
-                    panic!("request finished before the gate was observed; test inconclusive");
-                }
+                assert!(
+                    std::future::Future::poll(fut.as_mut(), &mut cx).is_pending(),
+                    "request completed before the gate slot was observed — \
+                     the gate must hold in-flight requests"
+                );
                 if f.engine.gate.slots.lock().unwrap().contains_key(&VIDEO_A) {
                     break; // drop `fut` here
                 }
@@ -896,6 +917,12 @@ mod tests {
                 tokio::task::yield_now().await;
             }
         }
+        // The dropped request must not take the generation with it: release
+        // it, let the detached owner settle, then a later request must get
+        // the real thumbnail. A slot left InFlight answers the placeholder
+        // here — that is the wedge this case exists to catch.
+        release_tx.send(()).unwrap();
+        f.engine.gate.foreground_idle().await;
         tokio::time::sleep(Duration::from_millis(300)).await; // past the budget
         let bytes = f.engine.thumb(&get(&VIDEO_A)).await.unwrap();
         assert!(
