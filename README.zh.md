@@ -27,21 +27,20 @@
 2. 打开下载的文件，把 **P-Pass** 拖进「应用程序」文件夹。
    Open the downloaded file, drag **P-Pass** into Applications.
 
-   > **Windows 呢？** Windows 桌面版开发中——当前 Windows 发布只有命令行
-   > 工具（daemon.exe / testclient.exe），没有图形安装包，暂时无可安装
-   > 内容，请过段时间再来。
-   > **Windows?** The Windows desktop app is in development — current
-   > Windows releases contain command-line tools only (daemon.exe /
-   > testclient.exe), not a GUI installer, so there is nothing to install
-   > yet. Please check back later.
+   > **Windows 呢？** Windows 桌面版还在开发中，暂时没有发布——当前
+   > Release 里不含任何 Windows 文件，请过段时间再来。
+   > **Windows?** The Windows desktop app is in development and is not
+   > published yet — current releases contain no Windows files. Please
+   > check back later.
 
-   > **Release 页面看不到文件？** 目前是测试阶段——发布可能还是草稿（仅
-   > 维护者可见）。如果页面没有可下载文件，说明正式版尚未发布：过段时间
-   > 再来，或到 GitHub 提 issue。
-   > **Can't see any files on the release page?** We're in the testing
-   > phase — releases may be marked as drafts (visible to maintainers
-   > only). If the page shows no downloads, the stable release is not out
-   > yet: check back later, or open an issue on GitHub.
+   > **该下哪个文件？** Release 页面上还会列出 `dogfood`、`test-channel`
+   > 两个滚动测试通道——那是开发用的，日常使用请从最新正式版本里下
+   > **P-Pass-macos-arm64.dmg**（电脑）和 **app-release.apk**（手机）。
+   > **Which file should I download?** The releases page also lists two
+   > rolling test channels (`dogfood`, `test-channel`); those are for
+   > development, not for everyday use. For normal use, download
+   > **P-Pass-macos-arm64.dmg** (computer) and **app-release.apk** (phone)
+   > from the newest versioned release.
 3. 双击 **P-Pass** 打开。macOS 首次：右键点 App → 打开（一次性；Gatekeeper
    拦截见上面的拦截指南）。
    Double-click **P-Pass**. macOS first time: right-click → Open.
