@@ -762,6 +762,13 @@ jobs:
               --asset-base "$ASSET_BASE" \
               "${APK_ARGS[@]}"
             mv manifest.json artifacts/manifest.json
+            # UPD-13：同时产出一份**只含 android** 的分端清单。
+            # 本批只产出文件、不上任何客户端 ⇒ 零行为变化；客户端切源在下一批。
+            node tools/make-update-manifest.mjs \
+              --tag "$TAG" --notes NOTES.md \
+              --asset-base "$ASSET_BASE" \
+              "${APK_ARGS[@]}" \
+              --only android-arm64 --out artifacts/manifest-android.json
           else
             echo "无 APK 产物——跳过 manifest 组装"
           fi
@@ -790,6 +797,11 @@ jobs:
           cp artifacts/android/*.sig /tmp/sigs/
           node tools/make-update-manifest.mjs \
             --sign artifacts/manifest.json --sig-dir /tmp/sigs
+          # UPD-13：分端清单同样要签（同一把密钥、同一批 .sig）。
+          if [ -f artifacts/manifest-android.json ]; then
+            node tools/make-update-manifest.mjs \
+              --sign artifacts/manifest-android.json --sig-dir /tmp/sigs
+          fi
 
       - name: Upload android assets
         env:
@@ -805,6 +817,7 @@ jobs:
             ASSETS="$ASSETS android/app-release-unsigned.apk"
           fi
           [ -f manifest.json ] && ASSETS="$ASSETS manifest.json"
+          [ -f manifest-android.json ] && ASSETS="$ASSETS manifest-android.json"
           # --clobber：重跑 workflow 时资产已存在，裸 upload 会失败。
           # shellcheck disable=SC2086 # ASSETS 是刻意拆分
           gh release upload "$TAG" $ASSETS --clobber
@@ -1041,6 +1054,14 @@ jobs:
             --asset-base "$ASSET_BASE" \
             "${ARGS[@]}"
           mv manifest.json artifacts/manifest.json
+          # UPD-13：同时产出一份**只含 darwin** 的分端清单（macOS 客户端的源）。
+          if [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ]; then
+            node tools/make-update-manifest.mjs \
+              --tag "$TAG" --notes NOTES.md \
+              --asset-base "$ASSET_BASE" \
+              --asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz \
+              --only darwin-aarch64 --out artifacts/manifest-macos.json
+          fi
 
       - name: Sign manifest entries (gated)
         if: env.HAS_UPDATE_KEY == 'true' && hashFiles('artifacts/manifest.json') != ''
@@ -1064,6 +1085,11 @@ jobs:
           done
           node tools/make-update-manifest.mjs \
             --sign artifacts/manifest.json --sig-dir /tmp/sigs
+          # UPD-13：分端清单同样要签（同一把密钥、同一批 .sig）。
+          if [ -f artifacts/manifest-macos.json ]; then
+            node tools/make-update-manifest.mjs \
+              --sign artifacts/manifest-macos.json --sig-dir /tmp/sigs
+          fi
 
       - name: Upload manifest (覆盖 android-only 先行版)
         if: hashFiles('artifacts/manifest.json') != ''
@@ -1074,6 +1100,11 @@ jobs:
           cd artifacts
           gh release upload "$TAG" manifest.json --clobber
           echo "桌面 manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest.json"
+          # UPD-13：分端清单（darwin 只有这一份）——无 mac 产物时不报红。
+          if [ -f manifest-macos.json ]; then
+            gh release upload "$TAG" manifest-macos.json --clobber
+            echo "macOS manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest-macos.json"
+          fi
 
   # ── 收口①b: 追加 Windows 条目（UPD-04，2026-10-01）──────────────────
   # 桌面收口（finalize-manifest）只等 android + macos；Windows 条目在这里
