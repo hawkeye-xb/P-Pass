@@ -258,8 +258,7 @@ async fn offer_that_cannot_fit_is_refused_with_the_storage_full_msg_key() {
     )
     .await;
     assert!(!resp.ok);
-    let error = res
-p.error.unwrap();
+    let error = resp.error.unwrap();
     assert_eq!(error.msg_key, "storage_full");
     assert_eq!(error.code, proto::codes::STORAGE_FULL);
 }
@@ -481,8 +480,7 @@ async fn pushed_failure_code(free: Option<u64>) -> String {
     let ticket = provider_blobs.push(hash, &source).await.unwrap();
     let provider_node = provider_transport.node_id();
 
-    let (_t, blobs) = receiver_blo
-bs(root.path()).await;
+    let (_t, blobs) = receiver_blobs(root.path()).await;
     let db = paired_db(provider_node).await;
     let (event_bus, mut event_rx) = events::bus();
     let delivery = FlowDelivery::new(db, blobs, &library)
