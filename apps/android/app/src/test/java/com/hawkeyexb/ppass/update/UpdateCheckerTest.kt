@@ -105,14 +105,14 @@ class UpdateCheckerTest {
         // 1st = R2（国内可达，与官网下载同链路）；2nd = GitHub（兜底，旧客户端一直打的它）。
         assertEquals(
             listOf(
-                "https://p-pass-dl.hawkeye-xb.com/manifest.json",
-                "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json",
+                "https://p-pass-dl.hawkeye-xb.com/manifest-android.json",
+                "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest-android.json",
             ),
             channelManifestUrls(UpdateChannel.Stable),
         )
         // 首选项（兼容旧调用方：`channelManifestUrl` 返回第一项）。
         assertEquals(
-            "https://p-pass-dl.hawkeye-xb.com/manifest.json",
+            "https://p-pass-dl.hawkeye-xb.com/manifest-android.json",
             channelManifestUrl(UpdateChannel.Stable),
         )
     }
