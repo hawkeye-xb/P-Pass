@@ -56,6 +56,15 @@ fun channelManifestUrl(channel: UpdateChannel): String =
 fun channelManifestUrl(channel: UpdateChannel, source: UpdateSource): String =
     source.manifestUrl(channel)
 
+/**
+ * #650：有序候选列表（链式的载体）。逐项尝试，前一项不给出结论才落到下一项。
+ * 单项源退化成单元素列表，行为与 #624 时完全一致。
+ */
+fun channelManifestUrls(
+    channel: UpdateChannel,
+    source: UpdateSource = defaultUpdateSource(),
+): List<String> = source.manifestUrls(channel)
+
 /** SemVer 三段数字比较：candidate 严格大于 current 才算更新。 */
 fun isNewer(candidate: String, current: String): Boolean {
     val c = parseSemVer(candidate)
@@ -135,26 +144,56 @@ suspend fun checkUpdate(
     channel: UpdateChannel = channelFromVersion(currentVersion),
     source: UpdateSource = defaultUpdateSource(),
 ): UpdateCheckOutcome = withContext(Dispatchers.IO) {
-    try {
-        when (val reply = httpGet(channelManifestUrl(channel, source))) {
+    checkUpdateWith(source.manifestUrls(channel), ::httpGet, currentVersion)
+}
+
+/**
+ * #650 链式决策（纯函数，JVM 可测）——`checkUpdate` 的网络壳只负责把 [httpGet] 传进来。
+ *
+ * 逐项尝试候选 URL，**前一项给出确定答案就停**：
+ *  - 200 + 能解析出新版本 ⇒ [UpdateCheckOutcome.Available]
+ *  - 200 + 能解析但版本不比当前新 ⇒ [UpdateCheckOutcome.UpToDate]（这个源说了算，不再往下试）
+ *  - 404 =「**这个源**没有」⇒ 继续试下一项（镜像没跟上 ≠ 官方没有新版本）
+ *  - 其他失败 / 拿到 body 却解析不了 ⇒ 记下失败、继续试下一项
+ *
+ * 全部走完：出现过任何失败 ⇒ [UpdateCheckOutcome.Failed]（诚实报「检查失败」）；
+ * 全是 404 ⇒ [UpdateCheckOutcome.UpToDate]。**空候选列表是配置错误，不是「已是最新」。**
+ */
+internal fun checkUpdateWith(
+    urls: List<String>,
+    fetch: (String) -> ManifestReply,
+    currentVersion: String,
+): UpdateCheckOutcome {
+    if (urls.isEmpty()) return UpdateCheckOutcome.Failed
+
+    var sawFailure = false
+    for (url in urls) {
+        val reply = try {
+            fetch(url)
+        } catch (_: Exception) {
+            sawFailure = true
+            continue
+        }
+        when (reply) {
             is ManifestReply.Body -> {
                 val info = parseUpdateManifest(reply.text, currentVersion)
-                if (info != null) {
-                    UpdateCheckOutcome.Available(info)
+                if (info != null) return UpdateCheckOutcome.Available(info)
+                val parsed = runCatching {
+                    json.decodeFromString(UpdateManifest.serializer(), reply.text)
+                }.getOrNull()
+                return if (parsed != null) {
+                    UpdateCheckOutcome.UpToDate
                 } else {
-                    // 能解析但「不更新」与「解析失败」要分开：前者 UpToDate，后者 Failed。
-                    val parsed = runCatching {
-                        json.decodeFromString(UpdateManifest.serializer(), reply.text)
-                    }.getOrNull()
-                    if (parsed != null) UpdateCheckOutcome.UpToDate else UpdateCheckOutcome.Failed
+                    // 拿到 body 却解析不了：可能是镜像上写了一半的对象 ⇒ 继续试下一项。
+                    sawFailure = true
+                    continue
                 }
             }
-            ManifestReply.NoRelease -> UpdateCheckOutcome.UpToDate
-            ManifestReply.Failed -> UpdateCheckOutcome.Failed
+            ManifestReply.NoRelease -> Unit
+            ManifestReply.Failed -> sawFailure = true
         }
-    } catch (_: Exception) {
-        UpdateCheckOutcome.Failed
     }
+    return if (sawFailure) UpdateCheckOutcome.Failed else UpdateCheckOutcome.UpToDate
 }
 
 /**

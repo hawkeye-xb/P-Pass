@@ -113,9 +113,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dl && cd dl
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p 'P-Pass-macos-arm64.dmg' -p 'app-release.apk'
-          # 两个都要有才镜像：只覆盖一个会让 dmg 和 apk 版本错开。
-          for f in P-Pass-macos-arm64.dmg app-release.apk; do
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p 'P-Pass-macos-arm64.dmg' -p 'app-release.apk' -p 'manifest.json'
+          # 三个都要有才镜像：只覆盖一个会让 dmg 和 apk 版本错开；#650 起 manifest 也要镜像。
+          for f in P-Pass-macos-arm64.dmg app-release.apk manifest.json; do
             [ -s "$f" ] || { echo "::error::$TAG 缺少 $f"; exit 1; }
           done
           ls -l
@@ -154,6 +154,14 @@ jobs:
           cat latest.json
           put P-Pass-latest.json latest.json application/json "public, max-age=60"
 
+          # #650：**更新 manifest 也镜像到 R2**（android 条目 URL 改写成 R2 直链）。
+          # 客户端更新源的候选列表是 [R2, GitHub]，第一项就是这份文件——R2 上没有它，
+          # 链式兜底就永远只能靠 GitHub（= 国内慢的根因没解决）。
+          # 只动 url：signature / sha256 都是对资产字节的，换下载域名不影响校验。
+          node "$GITHUB_WORKSPACE/tools/make-update-manifest.mjs" --rebase manifest.json \
+            --asset-base "$PUBLIC_BASE" --mirror android-arm64=P-Pass-latest.apk --out manifest-r2.json
+          put manifest.json manifest-r2.json application/json "public, max-age=60"
+
       - name: Verify via public domain
         if: steps.tag.outputs.skip != 'true'
         env:
@@ -169,9 +177,18 @@ jobs:
             [ "$got" = "$want" ] || { echo "::error::$key sha256 不符：公网 $got / 本地 $want"; exit 1; }
             echo "$key OK $got"
           done
+          # #650：R2 上的 manifest 必须版本一致、且 android 条目指向镜像直链
+          #（客户端候选列表第一项就是它——错了会让链式兜底白跑一趟 R2）。
+          curl -fsSL --retry 3 "$PUBLIC_BASE/manifest.json?v=$TAG" > manifest-r2.json
+          got_ver=$(jq -r .version manifest-r2.json)
+          [ "$got_ver" = "${TAG#v}" ] || { echo "::error::R2 manifest 版本不符：公网 $got_ver / 期望 ${TAG#v}"; exit 1; }
+          got_url=$(jq -r '.platforms["android-arm64"].url' manifest-r2.json)
+          [ "$got_url" = "$PUBLIC_BASE/P-Pass-latest.apk" ] || { echo "::error::R2 manifest 的 android url 不对：$got_url"; exit 1; }
+          echo "R2 manifest OK version=$got_ver url=$got_url"
           {
             echo "### 国内镜像已更新：$TAG"
             echo "- $PUBLIC_BASE/P-Pass-latest.dmg"
             echo "- $PUBLIC_BASE/P-Pass-latest.apk"
+            echo "- $PUBLIC_BASE/manifest.json（应用内更新的第一候选源，版本 $got_ver）"
             echo "- 边缘缓存最多 5 分钟后生效"
           } >> "$GITHUB_STEP_SUMMARY"

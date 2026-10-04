@@ -57,7 +57,16 @@
 - Every release emits **`manifest.json`** as a release asset
   (`tools/make-update-manifest.mjs`; tauri-plugin-updater style, sha256
   per platform + Ed25519 signature gated on `UPDATE_SIGNING_KEY`).
-  Clients resolve it via `releases/latest/download/manifest.json`.
+  Clients resolve it through an **ordered candidate list** (UPD-12/`#650`):
+  1. `https://p-pass-dl.hawkeye-xb.com/manifest.json` — the R2 mirror. The
+     mirror workflow rebases the android entry to the mirror's own download
+     path, so mainland devices never touch GitHub for check *or* download.
+  2. `releases/latest/download/manifest.json` — GitHub, kept as the fallback
+     (every already-installed client points here).
+  A source is skipped only when it answers 404 (that source has nothing) or
+  fails; the first source returning a parseable manifest decides. Both URLs
+  are pinned by `UpdateCheckerTest` — changing order or URLs requires touching
+  that test.
 - **`notes` is the release body — and its first 200 characters are what users see.**
   The Android in-app update dialog renders `notes.take(200)`, so the release body
   must **open with the version's user-visible changelog** (REL-08/`#626`);
@@ -236,10 +245,14 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 两条通道，设置页显式切换，**默认永远 stable**（家人设备绝不被 test
 构建波及）：
 
-- **stable**（家人设备）：客户端保持直连 GitHub
-  `releases/latest/download/manifest.json`——URL 与语义原样不动（单测
-  锁死，不许碰）。GitHub latest 只认已发布的正式 release，**人工
-  publish 就是验收后的发布动作**。
+- **stable**（家人设备）：客户端按**有序候选列表**解析（UPD-12 #650）——
+  ① R2 镜像 `https://p-pass-dl.hawkeye-xb.com/manifest.json`（镜像侧已把
+  android 条目的下载 URL 改写成本域直链，国内设备**检查与下载都不走
+  GitHub**）② GitHub `releases/latest/download/manifest.json`（兜底；
+  老客户端一直打的就是它）。只有 404（该源没有）或失败才落到下一项，
+  **第一个能解析出 manifest 的源说了算**；两个 URL 与顺序都由
+  `UpdateCheckerTest` 锁死，改它必须同时改测试。
+  GitHub latest 只认已发布的正式 release，**人工 publish 就是验收后的发布动作**。
 - **test**（开发/狗粮设备）：CI 把含 `-test.` 的 tag 自动 publish 为
   **GitHub prerelease**（release.yml；GitHub latest 设计上忽略
   prerelease，绝不会漏进 stable）。

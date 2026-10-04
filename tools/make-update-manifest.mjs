@@ -8,11 +8,15 @@
 //     read <dir>/<basename>.sig (produced by `tauri signer sign`), fill the
 //     base64 signature into the manifest. Signing itself stays in the tauri
 //     signer (minisign/rsign format); this script only wires files in.
+//   rebase (#650): --rebase manifest.json --asset-base <base>
+//     --mirror <target>=<object> [--out <path>] — 把指定条目的下载 URL
+//     改写成镜像域直链（给 R2 上的 manifest.json 用；只动 url，
+//     signature/sha256 是对资产字节的，换下载域名不影响校验）。
 //
 // Manifest shape (tauri-plugin-updater compatible):
 //   { version, notes, pub_date, platforms: { <target>: { url, signature } } }
 //   url points at the GitHub release asset download link for TAG, unless
-//   --asset-base overrides it (CI-01: R2 mirror domain dl.p-pass.hawkeye-xb.com
+//   --asset-base overrides it (CI-01: R2 mirror domain p-pass-dl.hawkeye-xb.com
 //   for mainland download reachability — signature is over the asset bytes,
 //   so changing the download URL never invalidates verification).
 import { createHash } from "node:crypto";
@@ -42,6 +46,32 @@ if (args[0] === "--sign") {
   }
   writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
   console.log(`manifest signed: ${manifestPath}`);
+} else if (args[0] === "--rebase") {
+  // ── rebase mode (#650): 把已签名 manifest 里指定条目的下载 URL 改写成镜像域直链 ──
+  // 用法：--rebase <manifest> --asset-base <base> --mirror <target>=<object> [--out <path>]
+  // 只动 url 字段：signature 与 sha256 都是对**资产字节**的，换下载域名不影响校验
+  // （R2 只是搬运工，被篡改的包照样在校验闸被拒）。
+  const manifestPath = need("--rebase");
+  const base = need("--asset-base").replace(/\/+$/, "");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const mirrors = {};
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--mirror") {
+      const [target, object] = args[i + 1].split("=");
+      if (!target || !object) throw new Error(`bad --mirror: ${args[i + 1]}`);
+      mirrors[target] = object;
+    }
+  }
+  if (Object.keys(mirrors).length === 0) throw new Error("no --mirror target=object pairs");
+  for (const [target, object] of Object.entries(mirrors)) {
+    const entry = manifest.platforms?.[target];
+    if (!entry) throw new Error(`manifest has no platform ${target}`);
+    entry.url = `${base}/${object}`;
+    console.log(`rebased ${target} -> ${entry.url}`);
+  }
+  const out = args.indexOf("--out") >= 0 ? need("--out") : manifestPath;
+  writeFileSync(out, JSON.stringify(manifest, null, 2) + "\n");
+  console.log(`manifest rebased: ${out}`);
 } else {
   // ── compose mode ──
   const tag = need("--tag");
