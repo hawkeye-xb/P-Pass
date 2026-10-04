@@ -2991,7 +2991,7 @@ mod tests {
         assert_eq!(parsed["data_dir"].as_str().unwrap(), "/Volumes/My Passport");
         assert_eq!(parsed["bind_addr"].as_str().unwrap(), "0.0.0.0:41145");
         assert_eq!(parsed["relay_urls"].as_array().unwrap().len(), 0);
-        assert_eq!(parsed["telemetry"]["enabled"].as_bool().unwrap(), false);
+        assert!(!parsed["telemetry"]["enabled"].as_bool().unwrap());
         // 注释逐字节还在——其余内容不许被重写（E4）。
         assert!(out.contains("# 固定端口"));
         // 顶层键必须落在首个 [section] 之前。
