@@ -403,15 +403,17 @@ class C413EngineTest {
     }
 
     // 桌面不健康（探测带回 library_writable=false）→ 不申请 FGS，等待中（具体原因）。
+    // #555：自由空间给足——本例钉的是「文件夹打不开」这一路；「不可写 + 低于保留余量」
+    // 已改归 DESKTOP_STORAGE_FULL（盘满归因，C413DeliveryPortTest 钉）。
     @Test
     fun `an unhealthy desktop keeps the loop waiting without the foreground service`() = runTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
-        rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = 1L, libraryWritable = false))
+        rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = 100L * 1024 * 1024 * 1024, libraryWritable = false))
         rig.trigger()
         assertEquals(0, rig.foreground.acquires)
         assertEquals(WaitReason.DESKTOP_LIBRARY_UNAVAILABLE, rig.engine.view.value.waitReason)
-        assertEquals(DesktopHealth(1L, libraryWritable = false), rig.engine.view.value.desktopHealth)
+        assertEquals(DesktopHealth(100L * 1024 * 1024 * 1024, libraryWritable = false), rig.engine.view.value.desktopHealth)
         rig.close()
     }
 
