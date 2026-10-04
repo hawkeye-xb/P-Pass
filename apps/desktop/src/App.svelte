@@ -1912,7 +1912,15 @@
               {/if}
               <div class="mt-[12px] flex flex-wrap gap-[10px]">
                 <Button onclick={openLibrary}>{t("ui.open_library")}</Button>
+                <!-- DESK-48（2026-10-04 验收人拍板）：**暂时隐藏**「更改照片库位置」入口。
+                     换库的正确形态是整库搬迁（#639 [DESK-47] relocation：手机零重扫码、
+                     零重传），排在下个 milestone；在那之前用户可自行手动完成——先用
+                     Finder 把整个库目录（含 .ppf/）搬走，再把应用指向新位置。
+                     能力一律未删：chooseFolder()、壳侧 invoke("set_library_dir")、四个
+                     i18n 键原样保留（Rust 侧契约 desk46_library_dir_writer_is_shell_only
+                     仍要求它们存在）。恢复方式：把下面那行 Button 放回本 div。
                 <Button variant="secondary" onclick={chooseFolder}>{t("ui.change_library")}</Button>
+                -->
               </div>
               <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
                    「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
@@ -1924,7 +1932,9 @@
                 </div>
                 <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
               {/if}
+              <!-- DESK-48：后果说明随入口一起隐藏（键 ui.library_change_hint 保留）。
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
+              -->
             </Card>
             <div class="flex flex-1 flex-col gap-[22px]">
               <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
