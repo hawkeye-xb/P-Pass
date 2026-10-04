@@ -5,6 +5,75 @@ All notable changes to P-Pass are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.8.3] - 2026-10-03
+
+### Fixed
+- Android 应用内更新的签名校验修复：此前把签名文件按错误的格式解析，每次更新校验都失败、新版装不上。(#641)
+
+## [0.8.2] - 2026-10-03
+
+无用户可见变更：仅推进版本号，作为真机验证新更新链路的靶子。(#640)
+
+## [0.8.1] - 2026-10-03
+
+### Fixed
+- Android 应用内自动更新重做：更新来源可替换、下载进度与各阶段状态可见、安装前校验签名、安装结果有回执。(#624)
+- 发布流水线：Android 安装包改为真跑验签工具（不再只看文件名）；release 正文规范为面向用户的更新说明。(#631, #626)
+
+### Security
+- 官网撤下一张产品截图：缩略图里的窗外景观可定位拍摄地点。(#634)
+
+## [0.8.0] - 2026-10-03
+
+### Fixed
+- 桌面「重启后台服务」不再谎报失败，也不会卡住窗口。(#606)
+
+## [0.7.7] - 2026-10-03
+
+无用户可见变更（占位版本）。
+
+## [0.7.6] - 2026-10-03
+
+### Fixed
+- 桌面更新流程补全状态：显示下载进度、防止重复点击、装完自动换成新版，不再新旧混跑。(#616)
+- 界面与后台服务版本不一致时由服务主动对账纠正；登录启动项改为启动即登记，重启后不再接管失败。(#617, #616)
+
+## [0.7.5] - 2026-10-02
+
+### Fixed
+- 桌面装完更新后自动重启界面——此前装完仍停留在旧界面，看起来像没装上。(#605)
+
+## [0.7.4] - 2026-10-01
+
+### Changed
+- 桌面设置页暂时收起语言切换入口（界面语言仍跟随系统）。(#608)
+
+### Fixed
+- 开机自启重新指向当前安装 App 内的服务——此前可能指向备份目录里的旧版本，开机跑的是旧服务。(#604)
+
+## [0.7.3] - 2026-10-01
+
+### Fixed
+- 桌面应用内更新的清单补齐三个平台条目；Windows 不再随每次发版默认构建。(#602, #603)
+
+## [0.7.2] - 2026-10-01
+
+### Changed
+- 官网补充脱敏后的产品截图。(#596)
+
+## [0.7.1] - 2026-10-01
+
+无用户可见变更（发版清单修正）。
+
+## [0.7.0] - 2026-10-01
+
+### Fixed
+- Android 备份条件说明改实话：自动备份要求「Wi-Fi + 电量不低」，不要求插电。(#513)
+- Android 后台任务结束后正确释放网络连接，不再挂着空 socket。(#584)
+- 国内下载镜像不再被发布流水线其他步骤的失败连累停更，旧包也不会覆盖新包。(#579)
+
 ## [0.6.2-test.2] - 2026-09-30
 
 ### Changed
@@ -105,27 +174,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - 配对 token 熵 256→96-bit（一次性 + 10 分钟 TTL 场景下足够，换取
   二维码可扫性）。
-
-## [Unreleased]
-
-### Fixed
-- 配对升级顺序地雷：旧版手机 App（≤0.3.0-test.2）只认旧式配对码
-  （`a=` 段），扫新版电脑生成的码（只带 `r=`）会静默失败——桌面配对
-  弹窗新增提示「手机 App 需 v0.3.1 或更新」，手机端对无法解析的码给出
-  人话错误。**升级顺序：先升级手机 App，再扫新码。**
-
-### Added
-- Cross-ecosystem family photo center: Android → home computer encrypted
-  auto-backup over iroh 1.0 P2P (direct connection with relay fallback).
-- Desktop shell (macOS dmg): pairing QR, devices, resident daemon
-  one-click hosting.
-- Android app: camera-scan pairing, MediaStore backup pipeline, timeline
-  browsing, video playback.
-- Release pipeline: multi-platform assets (daemon self-contained zips,
-  macOS dmg, signed Android APK) + SLSA attestation.
-- i18n (en/zh), failure scenario automation, telemetry (self-hostable
-  Analytics Engine intake).
-- E2E live scenarios in CI (android hello/pair/backup, nightly + on
-  release tags).
-- Version/release norms (RELEASING.md) + one-shot version bump tool
-  (tools/bump-version.sh, overwrite-guarded).
