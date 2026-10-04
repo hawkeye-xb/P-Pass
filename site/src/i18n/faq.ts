@@ -57,7 +57,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: 'What do I need to run it?',
           a: [
             'Computer: a Mac with Apple silicon. Phone: Android 8.0 or newer.',
-            'The iPhone app is not out yet — iOS restricts background work differently, so it gets built and explained on its own rather than shipped as a worse Android clone. The Windows desktop app is in development; current Windows releases contain command-line tools only, no installer.',
+            'The iPhone app is not out yet — iOS restricts background work differently, so it gets built and explained on its own rather than shipped as a worse Android clone. The Windows desktop app is in development and not published yet.',
           ],
         },
         {
@@ -198,7 +198,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: '需要什么设备？',
           a: [
             '电脑端目前是 Apple 芯片的 Mac；手机端是 Android 8.0 及以上。',
-            'iPhone 版还没出——iOS 对后台任务的限制不一样，会单独做、单独说清楚，而不是拿 Android 版硬顶一个更差的体验。Windows 桌面版开发中，当前 Windows 发布里只有命令行工具，还没有安装包。',
+            'iPhone 版还没出——iOS 对后台任务的限制不一样，会单独做、单独说清楚，而不是拿 Android 版硬顶一个更差的体验。Windows 桌面版还在开发中，暂时没有发布。',
           ],
         },
         {
