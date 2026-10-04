@@ -105,6 +105,18 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
+      # 2026-10-04 事故：本 job 从不 checkout 仓库 ⇒ 下面那条 node 调用必然
+      # MODULE_NOT_FOUND，dmg/apk 传完就整条挂、manifest 一个都没镜像
+      #（v0.9.0 首次暴露：#650 加的 rebase 步骤过去只在「tag 指向的旧 workflow」
+      # 里存在，从来没真执行过）。checkout 到 repo/ 子目录，避开下载目录 dl/。
+      - name: Checkout repo (给 manifest 脚本用)
+        if: steps.tag.outputs.skip != 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag != '' && steps.tag.outputs.tag || 'main' }}
+          fetch-depth: 1
+          path: repo
+
       - name: Download release assets
         if: steps.tag.outputs.skip != 'true'
         env:
@@ -164,7 +176,7 @@ jobs:
           # 客户端更新源的候选列表是 [R2, GitHub]，第一项就是这份文件——R2 上没有它，
           # 链式兜底就永远只能靠 GitHub（= 国内慢的根因没解决）。
           # 只动 url：signature / sha256 都是对资产字节的，换下载域名不影响校验。
-          node "$GITHUB_WORKSPACE/tools/make-update-manifest.mjs" --rebase manifest.json \
+          node "$GITHUB_WORKSPACE/repo/tools/make-update-manifest.mjs" --rebase manifest.json \
             --asset-base "$PUBLIC_BASE" --mirror android-arm64=P-Pass-latest.apk --out manifest-r2.json
           put manifest.json manifest-r2.json application/json "public, max-age=60"
 
@@ -175,12 +187,12 @@ jobs:
             put P-Pass-latest.app.tar.gz P-Pass.app.tar.gz application/gzip "public, max-age=300" "P-Pass-$VERSION.app.tar.gz"
           fi
           if [ -s manifest-android.json ]; then
-            node "$GITHUB_WORKSPACE/tools/make-update-manifest.mjs" --rebase manifest-android.json \
+            node "$GITHUB_WORKSPACE/repo/tools/make-update-manifest.mjs" --rebase manifest-android.json \
               --asset-base "$PUBLIC_BASE" --mirror android-arm64=P-Pass-latest.apk --out manifest-android-r2.json
             put manifest-android.json manifest-android-r2.json application/json "public, max-age=60"
           fi
           if [ -s manifest-macos.json ]; then
-            node "$GITHUB_WORKSPACE/tools/make-update-manifest.mjs" --rebase manifest-macos.json \
+            node "$GITHUB_WORKSPACE/repo/tools/make-update-manifest.mjs" --rebase manifest-macos.json \
               --asset-base "$PUBLIC_BASE" --mirror darwin-aarch64=P-Pass-latest.app.tar.gz --out manifest-macos-r2.json
             put manifest-macos.json manifest-macos-r2.json application/json "public, max-age=60"
           fi
