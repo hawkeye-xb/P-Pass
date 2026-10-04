@@ -405,6 +405,129 @@ fn write_config(library_dir: String) -> Result<(), String> {
     std::fs::write(dir.join("config.toml"), render_config(&library_dir)).map_err(|e| e.to_string())
 }
 
+/// DESK-46 (#638)：更改照片库位置——平台 config.toml 的 read-modify-write。
+///
+/// 为什么在壳、不在 daemon：daemon 的 folder.set 是 MVP 残留的第二写者，
+/// 写的是 `self.data_dir.join("config.toml")`（**当前库目录**）——一个
+/// 没有任何读者的孤儿文件，自定义库下切换静默无效（本卡根因，真机
+/// 取证：旧库目录里躺着只含一行 data_dir 的孤儿 config.toml）。平台
+/// config 的写者只有壳这一个：write_config 管首启向导，本命令管事后更改。
+///
+/// 顺序：先校验（不碰盘），再写入，最后清理旧库里的孤儿 config.toml。
+/// 生效时机不变——daemon 只在启动时读一次 config，重启后台服务后生效
+/// （确认弹窗与保存提示的文案都这么说）。
+#[tauri::command]
+fn set_library_dir(library_dir: String) -> Result<(), String> {
+    let dir = platform::adapter().data_dir();
+    let cfg_path = dir.join("config.toml");
+    let current = configured_library_dir(&dir);
+    let target = std::path::Path::new(&library_dir);
+    library_target_verdict(
+        &library_dir,
+        current.as_deref(),
+        target.is_dir(),
+        dir_writable(target),
+    )?;
+    let doc = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+    let merged = merge_library_dir(&doc, &library_dir);
+    std::fs::write(&cfg_path, merged)
+        .map_err(|e| ipc::ui_err("ui.err_set_library", &[("err", &e)]))?;
+    // ⑤ 孤儿清理：folder.set 时代留在旧库目录里的 config.toml 没有任何
+    // 读者，留着只会误导排查。防误伤：与平台 config 是同一个文件
+    // （库 == 平台目录，含大小写/拼写差异）则跳过——canonicalize 两边
+    // 都落到磁盘真实路径再比。
+    if let Some(old) = current {
+        let orphan = std::path::Path::new(&old).join("config.toml");
+        let same_file = match (orphan.canonicalize(), cfg_path.canonicalize()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+        if !same_file && orphan.is_file() {
+            let _ = std::fs::remove_file(&orphan);
+        }
+    }
+    Ok(())
+}
+
+/// DESK-46 (#638)：换库目标的判据（纯函数——文件系统事实由调用点探测后
+/// 传入，判据本身不碰盘，好做单测与反证）。错误走 keyed ui_err（前端
+/// errText 渲染成 i18n 人话）。
+fn library_target_verdict(
+    target: &str,
+    current: Option<&str>,
+    target_is_dir: bool,
+    target_writable: bool,
+) -> Result<(), String> {
+    if target.trim().is_empty() || !target_is_dir {
+        return Err(ipc::ui_err("ui.err_library_target_missing", &[("dir", &target)]));
+    }
+    if !target_writable {
+        return Err(ipc::ui_err("ui.err_library_target_readonly", &[("dir", &target)]));
+    }
+    if let Some(cur) = current {
+        if paths_overlap(cur, target) {
+            return Err(ipc::ui_err("ui.err_library_nested", &[]));
+        }
+    }
+    Ok(())
+}
+
+/// DESK-46 (#638)：可写探测——真建一个临时文件再删掉。只看权限位不够：
+/// ACL、只读挂载、沙箱限制都不体现在 mode 里，只有真写一次才知道。
+fn dir_writable(p: &std::path::Path) -> bool {
+    if !p.is_dir() {
+        return false;
+    }
+    let probe = p.join(format!(".ppf-write-probe-{}", std::process::id()));
+    match std::fs::File::create(&probe) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// DESK-46 (#638)：把 data_dir 换进既有 config 文本（read-modify-write）。
+///
+/// 与 render_config（首启向导的整份模板）不同：这里**只改 data_dir 一行，
+/// 其余逐字节保留**——bind_addr / relay_urls / [telemetry] / 注释都是
+/// 用户与发版流程的既有事实，不能因为换个库位置被重写。
+///
+/// 两条老规矩照守（与被删的 daemon write_folder_config 同一教训）：
+/// ① 顶层键必须落在第一个 [section] 之前（2026-07-31 crash-loop）——
+///    所以新 data_dir 永远插在文首；
+/// ② 路径值先归一、再用真 TOML 序列化（DESK-27 同款），不拿 `{:?}` 冒充。
+fn merge_library_dir(doc: &str, library_dir: &str) -> String {
+    let data_dir_value = toml::Value::String(normalize_separators(library_dir)).to_string();
+    let body: String = doc
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("data_dir"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("data_dir = {data_dir_value}\n{body}\n")
+}
+
+/// DESK-46 (#638)：两个路径是否相同或一方包含另一方（纯字符串判据，
+/// 不碰盘）。嵌套库是灾难配方：新库在旧库里面 ⇒ 索引/收编会互相看见
+/// 对方的文件；旧库在新库里面 ⇒ 换完库「旧照片」出现在新库眼皮底下。
+/// 分隔符两种都认（Windows 用户可能混输 / 与 \），结尾分隔符先剥掉，
+/// 大小写不敏感（macOS 默认与 Windows 的文件系统都不分大小写）。
+fn paths_overlap(a: &str, b: &str) -> bool {
+    let norm = |p: &str| p.trim_end_matches(['/', '\\']).to_lowercase();
+    let (a, b) = (norm(a), norm(b));
+    if a == b {
+        return true;
+    }
+    // 前缀必须断在分隔符边界上：/old/lib2 不是 /old/lib 的子目录。
+    let contains = |outer: &str, inner: &str| {
+        outer.len() > inner.len()
+            && outer.starts_with(inner)
+            && matches!(outer.as_bytes()[inner.len()], b'/' | b'\\')
+    };
+    contains(&a, &b) || contains(&b, &a)
+}
+
 /// DESK-29 (#268)：`--version` 输出里那个"这确实是我们的 daemon"的记号。
 ///
 /// 取的是 `crates/daemon/src/main.rs` 打印的固定前缀，**刻意不比对版本号**：
@@ -1301,6 +1424,7 @@ pub fn run() {
             open_power_settings,
             disable_auto_sleep,
             write_config,
+            set_library_dir,
             start_daemon,
             daemon_startup_error,
             stop_daemon,
@@ -2845,6 +2969,121 @@ mod tests {
         assert!(
             src.contains("installed_app_version,"),
             "installed_app_version 未注册进 invoke_handler"
+        );
+    }
+
+    // ══ DESK-46 (#638)：set_library_dir —— 换库写职责归壳 ═════════════
+
+    // merge 是纯函数：只换 data_dir，其余逐字节保留；新键落在首个
+    // [section] 之前（2026-07-31 crash-loop 教训）；值是真 TOML。
+    // 反证：merge 若改成整份重写（丢掉 bind_addr 等），本测试必须红。
+    #[test]
+    fn desk46_merge_replaces_data_dir_and_keeps_everything_else() {
+        let doc = "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n";
+        let out = merge_library_dir(doc, "/Volumes/My Passport");
+        let parsed: toml::Value = toml::from_str(&out).expect("merge 产物必须是合法 TOML");
+        assert_eq!(parsed["data_dir"].as_str().unwrap(), "/Volumes/My Passport");
+        assert_eq!(parsed["bind_addr"].as_str().unwrap(), "0.0.0.0:41145");
+        assert_eq!(parsed["relay_urls"].as_array().unwrap().len(), 0);
+        assert_eq!(parsed["telemetry"]["enabled"].as_bool().unwrap(), false);
+        // 注释逐字节还在——其余内容不许被重写（E4）。
+        assert!(out.contains("# 固定端口"));
+        // 顶层键必须落在首个 [section] 之前。
+        let key_pos = out.find("data_dir").unwrap();
+        let section_pos = out.find('[').expect("原文有 [telemetry]");
+        assert!(key_pos < section_pos, "顶层键必须落在首个 [section] 之前");
+    }
+
+    // DESK-46 + DESK-27 同款：Windows 路径先归一、再走真 TOML 序列化，
+    // 写→读→再写必须逐字节幂等。反证：换回 `{:?}` 或去掉归一必须红。
+    #[test]
+    fn desk46_merge_windows_path_roundtrip_is_idempotent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = "C:\\Users\\ethan\\P-Pass 家庭照片库";
+        let once = merge_library_dir("", path);
+        std::fs::write(dir.path().join("config.toml"), &once).unwrap();
+        let back = configured_library_dir(dir.path()).expect("写出去必须读得回");
+        assert_eq!(back, path, "写→读不得变形（反斜杠不许翻倍）");
+        let twice = merge_library_dir(&once, &back);
+        assert_eq!(once, twice, "写→读→再写必须逐字节幂等");
+    }
+
+    // 校验判据（纯函数，文件系统事实由调用点注入）。
+    // 反证：把任一 arm 摘掉，对应断言必须红。
+    #[test]
+    fn desk46_target_verdicts() {
+        // 正常：存在 + 可写 + 不嵌套。
+        assert!(library_target_verdict("/new/lib", Some("/old/lib"), true, true).is_ok());
+        // 不存在（或不是目录）⇒ keyed missing。
+        let e = library_target_verdict("/nope", Some("/old/lib"), false, true).unwrap_err();
+        assert!(e.contains("ui.err_library_target_missing"), "{e}");
+        // 不可写 ⇒ keyed readonly。
+        let e = library_target_verdict("/ro", None, true, false).unwrap_err();
+        assert!(e.contains("ui.err_library_target_readonly"), "{e}");
+        // 相同 / 嵌套 ⇒ keyed nested（三个方向都要拦）。
+        for (cur, new) in [
+            ("/old/lib", "/old/lib"),
+            ("/old/lib", "/old/lib/sub"),
+            ("/old/lib/photos", "/old/lib"),
+        ] {
+            let e = library_target_verdict(new, Some(cur), true, true).unwrap_err();
+            assert!(e.contains("ui.err_library_nested"), "{cur} vs {new}: {e}");
+        }
+        // 兄弟目录不算嵌套（分隔符边界：/old/lib2 ⊄ /old/lib）。
+        assert!(library_target_verdict("/old/lib2", Some("/old/lib"), true, true).is_ok());
+        // 没配过库（current=None）不做嵌套检查。
+        assert!(library_target_verdict("/anywhere", None, true, true).is_ok());
+    }
+
+    #[test]
+    fn desk46_paths_overlap_boundaries() {
+        assert!(paths_overlap("/a/b", "/a/b/"));
+        assert!(paths_overlap("/a/b", "/a/b/c"));
+        assert!(paths_overlap("/a/b/c", "/a/b"));
+        assert!(!paths_overlap("/a/b", "/a/bc"));
+        assert!(!paths_overlap("/a/b", "/a/c"));
+        // Windows：混输分隔符与大小写。
+        assert!(paths_overlap("C:\\Lib", "c:\\lib\\sub"));
+        assert!(!paths_overlap("C:\\Lib", "C:\\Lib2"));
+        assert!(paths_overlap("C:/Lib/sub", "C:\\Lib"));
+    }
+
+    // DESK-46 (#638) 契约门禁（源码扫描）：
+    // ① 写入目标必须是平台目录的 config.toml（孤儿文件不得复活）；
+    // ② 前端只调壳侧 set_library_dir，folder.set 永远退役；
+    // ③ 命令注册进 invoke_handler；
+    // ④ daemon 侧的 folder.set 写者已删除（跨 crate 扫描）。
+    #[test]
+    fn desk46_library_dir_writer_is_shell_only() {
+        let src = include_str!("lib.rs");
+        assert!(src.contains("fn set_library_dir(library_dir: String)"));
+        assert!(
+            src.contains("set_library_dir,"),
+            "set_library_dir 未注册进 invoke_handler"
+        );
+        let f = src.find("fn set_library_dir").expect("命令必须存在");
+        let body: String = src[f..].chars().take(1200).collect();
+        assert!(
+            body.contains("platform::adapter().data_dir()"),
+            "写入目标必须是平台目录（DESK-46 根因就是写去了库目录）"
+        );
+        let app = include_str!("../../src/App.svelte");
+        assert!(
+            app.contains("invoke(\"set_library_dir\""),
+            "前端 chooseFolder 必须改调壳侧 set_library_dir"
+        );
+        assert!(
+            !app.contains("\"folder.set\""),
+            "folder.set 已退役（DESK-46），前端不得再调"
+        );
+        let daemon_ipc = include_str!("../../../../crates/daemon/src/ipc.rs");
+        assert!(
+            !daemon_ipc.contains("\"folder.set\" =>"),
+            "daemon 侧的 folder.set 写者必须删除（DESK-46：写职责归壳）"
+        );
+        assert!(
+            !daemon_ipc.contains("write_folder_config"),
+            "write_folder_config 必须随 folder.set 一起删除"
         );
     }
 }
