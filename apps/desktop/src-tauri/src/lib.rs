@@ -520,7 +520,14 @@ fn merge_library_dir(doc: &str, library_dir: &str) -> String {
 /// 分隔符两种都认（Windows 用户可能混输 / 与 \），结尾分隔符先剥掉，
 /// 大小写不敏感（macOS 默认与 Windows 的文件系统都不分大小写）。
 fn paths_overlap(a: &str, b: &str) -> bool {
-    let norm = |p: &str| p.trim_end_matches(['/', '\\']).to_lowercase();
+    // DESK-46 落地修正：分隔符必须整体归一（不只尾部分隔符）——Windows 下
+    // `C:/Lib/sub` 与 `C:\Lib` 是同一路径的两种写法，只归一尾部会把它们
+    // 判成不重叠（正是 `desk46_paths_overlap_boundaries` 抓到的）。
+    let norm = |p: &str| {
+        p.trim_end_matches(['/', '\\'])
+            .replace('\\', "/")
+            .to_lowercase()
+    };
     let (a, b) = (norm(a), norm(b));
     if a == b {
         return true;
@@ -529,7 +536,7 @@ fn paths_overlap(a: &str, b: &str) -> bool {
     let contains = |outer: &str, inner: &str| {
         outer.len() > inner.len()
             && outer.starts_with(inner)
-            && matches!(outer.as_bytes()[inner.len()], b'/' | b'\\')
+            && outer.as_bytes()[inner.len()] == b'/'
     };
     contains(&a, &b) || contains(&b, &a)
 }
