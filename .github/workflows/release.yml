@@ -655,7 +655,10 @@ jobs:
       # `gh release` resolves the repository from the checked-out remote; this
       # job intentionally has no build dependency, but it still needs that
       # context before creating the skeleton release.
+      # UPD-13（#660）：fetch-depth 0 —— 下面的版本门禁要能解析上一个 v* tag。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Resolve tag
         id: tag
@@ -668,6 +671,22 @@ jobs:
           fi
           [ -n "$TAG" ] || { echo "TAG 缺失（dispatch 需 tag 输入）"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # UPD-13（#660）漏判门禁：改了某端的构建输入却没涨该端的版本号 → 直接红。
+      # 只在正式 tag 上判定（test tag 的版本号就是 tag 名，不适用两条线模型）。
+      - name: Version bump gate (UPD-13)
+        if: ${{ !contains(steps.tag.outputs.tag, '-test.') }}
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --quiet
+          PREV=$(git tag -l 'v*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
+          if [ -z "$PREV" ]; then
+            echo "::notice::没有上一个 v* tag，跳出版本门禁"
+            exit 0
+          fi
+          tools/check-version-bump.sh "$PREV" "$TAG"
 
       - name: Compose skeleton notes
         env:

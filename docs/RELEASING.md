@@ -61,6 +61,10 @@
 3. **PR** → merge to main (main must be green: PR Checks).
 4. **Tag**: `git tag v<version>` + push. Tag pushes run the Release
    workflow (release.yml) → draft Release with platform assets.
+   > **UPD-13 门禁**：`create-draft` 第一步跑 `tools/check-version-bump.sh` ——
+   > 改了 `crates/**` / `apps/desktop/**` / `assets/**` / `Cargo.*` 却没涨
+   > `desktop` 号，或改了 `apps/android/**` 却没涨 `android` 号，**直接红**
+   > （漏判门禁，只对正式 tag 生效；test tag 的版本号就是 tag 名）。
 5. **Human publish**: review the draft, then publish it from the
    GitHub web UI (Releases → the draft → Publish release). Two checks:
    - **the body must open with this version's user-visible changelog**;
