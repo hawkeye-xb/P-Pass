@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.10.1] - 2026-10-04
+
+**macOS 0.9.1 · Android 0.9.0（本版未变更）** —— 用于验证分端更新机制。
+
+### Internal
+- 只推进 macOS 的版本号：验证「只有一端变更时，另一端不会被提示更新」（UPD-13 的验收动作）。
+- 无用户可见变更。
+
+
 ## [0.9.0] - 2026-10-04
 
 ### Fixed
