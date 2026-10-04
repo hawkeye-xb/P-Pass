@@ -18,6 +18,24 @@
   "每个版本的问题都是独一无二的"). A failed acceptance tag stays in history
   as its own record; bump to `-test.N+1` and re-run. `bump-version.sh`
   refuses to reuse a tag that already exists.
+- **UPD-13（#660，2026-10-04 起）：批次号与「每端版本号」是两条线。**
+  - **批次号 = tag**，用日期形式 `vYYYY.MM.N`（年.月.当月第几版，如
+    `v2026.10.1`）。⚠️ **不要**写 `v2026.10.1-2`：在 SemVer 里 `-2` 是预发布
+    后缀、比 `2026.10.1` **小**，客户端的版本比较会判错。
+  - **每端版本号**存在 `release/versions.json`（`desktop` / `android` /
+    `androidVersionCode`）：只有该端**真的改了**才涨，另一端的文件一个字节都
+    不动。`tools/bump-version.sh --platform desktop|android|both <ver>` 维护它；
+    `tools/release-version.sh <platform>` 是 CI 读取它的唯一入口（正式 tag 取
+    该端号；`-test.` tag 仍取 tag 名 —— 那是 test 通道判据，且连续的 test tag
+    必须能互相升级）。
+  - 后果：同一个 tag 下两端可以印不同的版本号（tag `v2026.10.3` 里 macOS
+    0.9.1 / Android 0.9.4 是正常的）。用户报版本号时要带上平台。
+- **老格式 `manifest.json` 冻结在 0.9.0**（`release/legacy-manifest.json`）：
+  正式版发布时把它**原样**作为 release 资产上传，其 URL 指向 R2 上
+  `releases/<tag>/…` 的**不可变副本**（mirror-latest 每次发布都会写这些副本）。
+  它只服务「还装着 0.9.0 之前版本」的客户端、给它们一次性升级。**不要**把它改成
+  动态清单：两端版本线分化后，动态清单的 version 会高于某端包内版本，客户端会
+  陷入「提示更新 → 装上还是旧号 → 再提示」的死循环。
 
 ## 2. Branching
 
@@ -30,9 +48,12 @@
 
 ## 3. Release flow (normal)
 
-1. **Bump**: `tools/bump-version.sh <new-version>` — updates Cargo.toml +
-   Android versionName/versionCode in one shot (versionCode monotonic +1).
-   Refuses already-tagged versions and non-increasing versions.
+1. **Bump（只涨本端）**: `tools/bump-version.sh --platform android 0.9.4`
+   （两条线一起走时省略 `--platform`）。它维护真相源
+   `release/versions.json`，并同步该端的文件（desktop 线 = 根 workspace +
+   桌面四件套；android 线 = `build.gradle.kts` 的 versionName 回退串 +
+   versionCode 单调 +1）。拒绝已打过 tag 的版本号、非递增版本，以及
+   「真相源与文件不一致」（drift）。
 2. **Changelog**: move `[Unreleased]` → new version section in
    `CHANGELOG.md` (keep-a-changelog format, user-visible changes only).
    **This section becomes the opening of the release body** (see step 5) —
@@ -57,6 +78,11 @@
 - Every release emits **`manifest.json`** as a release asset
   (`tools/make-update-manifest.mjs`; tauri-plugin-updater style, sha256
   per platform + Ed25519 signature gated on `UPDATE_SIGNING_KEY`).
+- **UPD-13（#660）起，正式版同时产出分端清单** `manifest-android.json` /
+  `manifest-macos.json`（顶层 `version` = **该端自己的**版本号，只含该端条目）：
+  两端客户端各读自己那份（R2 优先、GitHub 兜底），所以「只有一端变更」的版本
+  不会去打扰另一端。老格式 `manifest.json` 只服务旧客户端（已冻结，见 §1）；
+  test tag 不走冻结件，`manifest.json` 仍是 tag 版本的动态清单（test-channel 指针）。
   Clients resolve it through an **ordered candidate list** (UPD-12/`#650`):
   1. `https://p-pass-dl.hawkeye-xb.com/manifest.json` — the R2 mirror. The
      mirror workflow rebases the android entry to the mirror's own download

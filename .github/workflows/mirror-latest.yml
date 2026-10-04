@@ -172,13 +172,37 @@ jobs:
           cat latest.json
           put P-Pass-latest.json latest.json application/json "public, max-age=60"
 
+          # UPD-13（#660）：**版本化不可变副本**。老格式兼容清单
+          # （release/legacy-manifest.json，冻结在 0.9.0）指向的就是这些 key ——
+          # 固定 key 会被下一版覆盖、签名就对不上字节，所以旧客户端必须有一个
+          # 永不改写的地址。immutable 长缓存，代价可忽略。
+          put "releases/$TAG/P-Pass-macos-arm64.dmg" P-Pass-macos-arm64.dmg \
+            application/x-apple-diskimage "public, max-age=31536000, immutable"
+          put "releases/$TAG/app-release.apk" app-release.apk \
+            application/vnd.android.package-archive "public, max-age=31536000, immutable"
+          if [ -s P-Pass.app.tar.gz ]; then
+            put "releases/$TAG/P-Pass.app.tar.gz" P-Pass.app.tar.gz \
+              application/gzip "public, max-age=31536000, immutable"
+          fi
+
           # #650：**更新 manifest 也镜像到 R2**（android 条目 URL 改写成 R2 直链）。
           # 客户端更新源的候选列表是 [R2, GitHub]，第一项就是这份文件——R2 上没有它，
           # 链式兜底就永远只能靠 GitHub（= 国内慢的根因没解决）。
           # 只动 url：signature / sha256 都是对资产字节的，换下载域名不影响校验。
-          node "$GITHUB_WORKSPACE/repo/tools/make-update-manifest.mjs" --rebase manifest.json \
-            --asset-base "$PUBLIC_BASE" --mirror android-arm64=P-Pass-latest.apk --out manifest-r2.json
-          put manifest.json manifest-r2.json application/json "public, max-age=60"
+          #
+          # UPD-13（#660）起按**内容**分两种情况（比看 tag 更稳，v0.9.0 这种
+          # 过渡期的正式版仍是动态清单）：
+          #   - URL 已经指向本域（冻结的老格式兼容件，见 release/legacy-manifest.json）
+          #     ⇒ **原样搬运**。绝不能 rebase 到 P-Pass-latest.*：那些固定 key 会被
+          #     下一版覆盖 ⇒ 签名与字节对不上 ⇒ 旧客户端升不上去。
+          #   - 其它（test tag 指针、过渡期正式版）⇒ 照旧 rebase 到镜像固定直链。
+          if jq -e --arg base "$PUBLIC_BASE"               '(.platforms["android-arm64"].url // "") | startswith($base)' manifest.json >/dev/null; then
+            put manifest.json manifest.json application/json "public, max-age=60"
+          else
+            node "$GITHUB_WORKSPACE/repo/tools/make-update-manifest.mjs" --rebase manifest.json \
+              --asset-base "$PUBLIC_BASE" --mirror android-arm64=P-Pass-latest.apk --out manifest-r2.json
+            put manifest.json manifest-r2.json application/json "public, max-age=60"
+          fi
 
           # UPD-13（#660）：**分端清单**也镜像。各自只含本端条目，顶层 version 是
           # 本端版本号；URL 改写成 R2 固定直链（macOS 更新产物先用下面的固定 key
@@ -215,10 +239,14 @@ jobs:
           # #650：R2 上的 manifest 必须版本一致、且 android 条目指向镜像直链
           #（客户端候选列表第一项就是它——错了会让链式兜底白跑一趟 R2）。
           curl -fsSL --retry 3 "$PUBLIC_BASE/manifest.json?v=$TAG" > manifest-r2.json
-          got_ver=$(jq -r .version manifest-r2.json)
-          [ "$got_ver" = "${TAG#v}" ] || { echo "::error::R2 manifest 版本不符：公网 $got_ver / 期望 ${TAG#v}"; exit 1; }
+          want_ver=$(jq -r .version manifest.json); got_ver=$(jq -r .version manifest-r2.json)
+          [ "$got_ver" = "$want_ver" ] || { echo "::error::R2 manifest 版本不符：公网 $got_ver / 本地 $want_ver"; exit 1; }
           got_url=$(jq -r '.platforms["android-arm64"].url' manifest-r2.json)
-          [ "$got_url" = "$PUBLIC_BASE/P-Pass-latest.apk" ] || { echo "::error::R2 manifest 的 android url 不对：$got_url"; exit 1; }
+          case "$got_url" in
+            "$PUBLIC_BASE/releases/"*) ;;   # 冻结件：指向版本化不可变副本
+            "$PUBLIC_BASE/P-Pass-latest.apk") ;;  # 动态清单：已 rebase 到镜像直链
+            *) echo "::error::R2 manifest 的 android url 不对：$got_url"; exit 1 ;;
+          esac
           echo "R2 manifest OK version=$got_ver url=$got_url"
           # UPD-13：分端清单——**只动过 url**，所以公网版本必须与本地 release 文件逐字相同。
           if [ -s manifest-android.json ]; then
