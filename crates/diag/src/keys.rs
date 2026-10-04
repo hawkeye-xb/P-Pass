@@ -392,6 +392,13 @@ msg_keys! {
     UI_ERR_KILL_OLD => "ui.err_kill_old",
     UI_ERR_RESTART => "ui.err_restart",
     UI_ERR_NOT_REVIVED => "ui.err_not_revived",
+    /// DESK-46 (#638)：set_library_dir 换库目标的校验与写入错误（壳侧
+    /// 对平台 config.toml 做 read-modify-write；key + 参数返回，前端
+    /// errText 渲染）。
+    UI_ERR_LIBRARY_TARGET_MISSING => "ui.err_library_target_missing",
+    UI_ERR_LIBRARY_TARGET_READONLY => "ui.err_library_target_readonly",
+    UI_ERR_LIBRARY_NESTED => "ui.err_library_nested",
+    UI_ERR_SET_LIBRARY => "ui.err_set_library",
     UI_WIZARD_NOTICE_ONLY_LABEL => "ui.wizard_notice_only_label",
     UI_WIZARD_AUTOSTART_NOTICE_MAC => "ui.wizard_autostart_notice_mac",
     UI_WIZARD_ALLOW_LABEL => "ui.wizard_allow_label",
@@ -698,6 +705,10 @@ mod tests {
             UI_ERR_KILL_OLD,
             UI_ERR_RESTART,
             UI_ERR_NOT_REVIVED,
+            UI_ERR_LIBRARY_TARGET_MISSING,
+            UI_ERR_LIBRARY_TARGET_READONLY,
+            UI_ERR_LIBRARY_NESTED,
+            UI_ERR_SET_LIBRARY,
             UI_WIZARD_NOTICE_ONLY_LABEL,
             UI_WIZARD_AUTOSTART_NOTICE_MAC,
             UI_WIZARD_ALLOW_LABEL,
@@ -705,7 +716,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 297);
+        assert_eq!(ALL.len(), 301);
     }
 
     #[test]

@@ -7,10 +7,14 @@
 //! `proto::Resp` line. Wrong token = connection dropped, one diag event.
 //!
 //! Methods (契约): `status` `pairing.start` `pairing.confirm`
-//! `devices.list` `device.revoke` `device.watermarks` `folder.set`
+//! `devices.list` `device.revoke` `device.watermarks`
 //! `logs.export` `activity.list` (T-090) — plus DAE-01
 //! `daemon.step_down` (newest-wins takeover, added 2026-08-04) and
 //! NAME-01 `device.rename` (display-name only, ID 不变, added 2026-08-12).
+//!
+//! DESK-46 (#638): `folder.set` 已移除。它把新库路径写进**当前库目录**
+//! 的孤儿 config.toml（读写不对称，自定义库下静默无效）；库位置现在由
+//! 桌面壳 set_library_dir 直接读写平台目录的 config.toml（唯一真相源）。
 
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -1076,23 +1080,6 @@ impl IpcServer {
                     Err(_) => internal(id),
                 }
             }
-            "folder.set" => {
-                // MVP: record the choice; the daemon applies it on next
-                // launch (config.toml is the single source, T-004).
-                let Some(path) = req.params.get("path").and_then(|v| v.as_str()) else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
-                };
-                match self.write_folder_config(path) {
-                    Ok(()) => Resp::ok(
-                        id,
-                        serde_json::json!({ "saved": true, "applies": "on-restart" }),
-                    ),
-                    Err(_) => internal(id),
-                }
-            }
             "logs.export" => match self.export_logs().await {
                 Ok(zip_path) => {
                     Resp::ok(id, serde_json::json!({ "zip": zip_path.to_string_lossy() }))
@@ -1427,23 +1414,6 @@ impl IpcServer {
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
         }))
-    }
-
-    fn write_folder_config(&self, path: &str) -> anyhow::Result<()> {
-        let config_path = self.data_dir.join("config.toml");
-        let doc = std::fs::read_to_string(&config_path).unwrap_or_default();
-        // Top-level TOML keys MUST sit before the first [section] header —
-        // a bare append lands inside [telemetry] and the daemon refuses
-        // to start (real crash-loop, 2026-07-31). Rebuild: strip any old
-        // data_dir line, then insert the new one at the very top.
-        let body: String = doc
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("data_dir"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let updated = format!("data_dir = {path:?}\n{body}\n");
-        std::fs::write(&config_path, updated)?;
-        Ok(())
     }
 
     /// Export diagnostics as a zip beside the data dir. Every path-like
