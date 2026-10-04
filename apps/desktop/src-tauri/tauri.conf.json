@@ -54,7 +54,8 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI1MUQzNzYwOUY2NEJDQzgKUldUSXZHU2ZZRGNkSlJvRlVacGMyZk12VjBsS0hpbzZCOFVYQ0toTjhESjR2ekNlNDQ5NXpQcnAK",
       "endpoints": [
-        "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json"
+        "https://p-pass-dl.hawkeye-xb.com/manifest-macos.json",
+        "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest-macos.json"
       ]
     }
   }

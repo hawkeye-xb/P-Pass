@@ -113,10 +113,16 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dl && cd dl
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p 'P-Pass-macos-arm64.dmg' -p 'app-release.apk' -p 'manifest.json'
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p 'P-Pass-macos-arm64.dmg' -p 'app-release.apk' -p 'manifest.json' \
+            -p 'P-Pass.app.tar.gz' -p 'manifest-android.json' -p 'manifest-macos.json'
           # 三个都要有才镜像：只覆盖一个会让 dmg 和 apk 版本错开；#650 起 manifest 也要镜像。
           for f in P-Pass-macos-arm64.dmg app-release.apk manifest.json; do
             [ -s "$f" ] || { echo "::error::$TAG 缺少 $f"; exit 1; }
+          done
+          # UPD-13（#660）：分端清单 + macOS 更新产物存在才镜像。缺了不报红——
+          # 客户端对每一项都有 GitHub 兜底；这里只如实提示，免得旧 tag 补跑时误红。
+          for f in P-Pass.app.tar.gz manifest-android.json manifest-macos.json; do
+            [ -s "$f" ] || echo "::notice::$f 不在本次 release 里，跳过镜像"
           done
           ls -l
 
@@ -162,6 +168,23 @@ jobs:
             --asset-base "$PUBLIC_BASE" --mirror android-arm64=P-Pass-latest.apk --out manifest-r2.json
           put manifest.json manifest-r2.json application/json "public, max-age=60"
 
+          # UPD-13（#660）：**分端清单**也镜像。各自只含本端条目，顶层 version 是
+          # 本端版本号；URL 改写成 R2 固定直链（macOS 更新产物先用下面的固定 key
+          # 落盘，再改 URL——顺序反了会指向还不存在的对象）。
+          if [ -s P-Pass.app.tar.gz ]; then
+            put P-Pass-latest.app.tar.gz P-Pass.app.tar.gz application/gzip "public, max-age=300" "P-Pass-$VERSION.app.tar.gz"
+          fi
+          if [ -s manifest-android.json ]; then
+            node "$GITHUB_WORKSPACE/tools/make-update-manifest.mjs" --rebase manifest-android.json \
+              --asset-base "$PUBLIC_BASE" --mirror android-arm64=P-Pass-latest.apk --out manifest-android-r2.json
+            put manifest-android.json manifest-android-r2.json application/json "public, max-age=60"
+          fi
+          if [ -s manifest-macos.json ]; then
+            node "$GITHUB_WORKSPACE/tools/make-update-manifest.mjs" --rebase manifest-macos.json \
+              --asset-base "$PUBLIC_BASE" --mirror darwin-aarch64=P-Pass-latest.app.tar.gz --out manifest-macos-r2.json
+            put manifest-macos.json manifest-macos-r2.json application/json "public, max-age=60"
+          fi
+
       - name: Verify via public domain
         if: steps.tag.outputs.skip != 'true'
         env:
@@ -185,10 +208,29 @@ jobs:
           got_url=$(jq -r '.platforms["android-arm64"].url' manifest-r2.json)
           [ "$got_url" = "$PUBLIC_BASE/P-Pass-latest.apk" ] || { echo "::error::R2 manifest 的 android url 不对：$got_url"; exit 1; }
           echo "R2 manifest OK version=$got_ver url=$got_url"
+          # UPD-13：分端清单——**只动过 url**，所以公网版本必须与本地 release 文件逐字相同。
+          if [ -s manifest-android.json ]; then
+            curl -fsSL --retry 3 "$PUBLIC_BASE/manifest-android.json?v=$TAG" > m-android-r2.json
+            want=$(jq -r .version manifest-android.json); got=$(jq -r .version m-android-r2.json)
+            [ "$got" = "$want" ] || { echo "::error::R2 manifest-android 版本不符：公网 $got / 本地 $want"; exit 1; }
+            u=$(jq -r '.platforms["android-arm64"].url' m-android-r2.json)
+            [ "$u" = "$PUBLIC_BASE/P-Pass-latest.apk" ] || { echo "::error::R2 manifest-android url 不对：$u"; exit 1; }
+            echo "R2 manifest-android OK version=$got url=$u"
+          fi
+          if [ -s manifest-macos.json ]; then
+            curl -fsSL --retry 3 "$PUBLIC_BASE/manifest-macos.json?v=$TAG" > m-macos-r2.json
+            want=$(jq -r .version manifest-macos.json); got=$(jq -r .version m-macos-r2.json)
+            [ "$got" = "$want" ] || { echo "::error::R2 manifest-macos 版本不符：公网 $got / 本地 $want"; exit 1; }
+            u=$(jq -r '.platforms["darwin-aarch64"].url' m-macos-r2.json)
+            [ "$u" = "$PUBLIC_BASE/P-Pass-latest.app.tar.gz" ] || { echo "::error::R2 manifest-macos url 不对：$u"; exit 1; }
+            echo "R2 manifest-macos OK version=$got url=$u"
+          fi
           {
             echo "### 国内镜像已更新：$TAG"
             echo "- $PUBLIC_BASE/P-Pass-latest.dmg"
             echo "- $PUBLIC_BASE/P-Pass-latest.apk"
-            echo "- $PUBLIC_BASE/manifest.json（应用内更新的第一候选源，版本 $got_ver）"
+            echo "- $PUBLIC_BASE/manifest.json（老格式兼容件；旧客户端升级用）"
+            echo "- $PUBLIC_BASE/manifest-android.json / manifest-macos.json（分端更新源，UPD-13）"
+            echo "- $PUBLIC_BASE/P-Pass-latest.app.tar.gz（macOS 自动更新产物）"
             echo "- 边缘缓存最多 5 分钟后生效"
           } >> "$GITHUB_STEP_SUMMARY"

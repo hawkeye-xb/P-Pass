@@ -7,6 +7,10 @@
 //   1st  R2（https://p-pass-dl.hawkeye-xb.com）—— 国内可达，与官网下载同一条链路
 //   2nd  GitHub —— 原 URL 原样保留，作为兜底（R2 被墙/故障时自动落回来）
 //
+// UPD-13 (#660)：stable 读的是**分端清单** `manifest-android.json`（只含 android
+// 条目、顶层 version 是**本端**版本号）——这样「只有 macOS 变更」的那批不会把
+// 安卓用户叫去更新。test 通道仍是 `manifest.json`（滚动 prerelease，单一来源）。
+//
 // 为什么不是单点：单点源只是把「可达性」从一个单点换成另一个单点；链式让**源本身
 // 可替换**，且切换不需要任何运维动作（R2 挂了客户端自己会试 GitHub）。
 // 为什么保留 GitHub 那一项：旧客户端一直打的就是它，它必须继续有效。
@@ -51,7 +55,7 @@ object GitHubUpdateSource : UpdateSource {
     override fun manifestUrls(channel: UpdateChannel): List<String> = listOf(
         when (channel) {
             UpdateChannel.Stable ->
-                "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest.json"
+                "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest-android.json"
             UpdateChannel.Test ->
                 "https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest.json"
         },
@@ -67,7 +71,7 @@ object R2UpdateSource : UpdateSource {
     override val id: String = "r2"
 
     override fun manifestUrls(channel: UpdateChannel): List<String> =
-        if (channel == UpdateChannel.Stable) listOf("$R2_PUBLIC_BASE/manifest.json") else emptyList()
+        if (channel == UpdateChannel.Stable) listOf("$R2_PUBLIC_BASE/manifest-android.json") else emptyList()
 }
 
 /** 链式源：把若干源拼成一个有序候选列表。 */
