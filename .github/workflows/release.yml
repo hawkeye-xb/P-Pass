@@ -1085,6 +1085,12 @@ jobs:
           if [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ]; then
             ARGS+=(--asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz)
           fi
+          # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板）：下面几条
+          # 分支（冻结件搬运 / test 动态清单 / 两个分端清单）都要用它。
+          # ⚠️ 2026-10-04 事故：它曾被写在 test 分支里，正式 tag 走到 android
+          # 分端清单时 `set -u` 直接 `ASSET_BASE: unbound variable` —— 变量定义
+          # 必须在所有分支之外。
+          ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
           if [[ "$TAG" != *-test.* ]]; then
             # UPD-13（#660）：**正式版的老格式兼容清单 = 冻结件**
             # （release/legacy-manifest.json：version 固定 0.9.0、URL 指向 R2 上
@@ -1097,9 +1103,6 @@ jobs:
               echo "无任何平台产物——跳过 manifest 组装"
               exit 0
             fi
-            # test 通道：dynamic manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像
-            # 的拍板，见 upload-android 里的完整注释）。
-            ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
             node tools/make-update-manifest.mjs \
               --tag "$TAG" --notes NOTES.md \
               --asset-base "$ASSET_BASE" \
