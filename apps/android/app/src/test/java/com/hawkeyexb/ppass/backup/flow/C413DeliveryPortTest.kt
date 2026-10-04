@@ -12,6 +12,7 @@ import com.hawkeyexb.ppass.proto.FlowTupleRef
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.ProtoJson
 import com.hawkeyexb.ppass.transport.Pairing
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -24,6 +25,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -245,12 +247,36 @@ class C413DeliveryPortTest {
         val health = desktopHealthOf(hello.health)!!
         assertEquals(DesktopHealth(123L, libraryWritable = false, indexOk = true), health)
         assertTrue(health.lowSpace)
-        assertEquals(WaitReason.DESKTOP_LIBRARY_UNAVAILABLE, waitReasonOf(health))
+        // #555：123 字节自由空间 = 盘满——「不可写 + 低于保留余量」归为空间不足，
+        // 不再报「文件夹无法打开」（反证：去掉 criticallyLow 分支 → 这里变红）。
+        assertEquals(WaitReason.DESKTOP_STORAGE_FULL, waitReasonOf(health))
         assertEquals(WaitReason.DESKTOP_STORAGE_ERROR, waitReasonOf(DesktopHealth(null, indexOk = false)))
         assertNull(waitReasonOf(DesktopHealth(1L)))
         val old = ProtoJson.decodeFromString(Hello.serializer(), """{"proto_ver":1,"pairing_epoch":"e1"}""")
         assertNull(desktopHealthOf(old.health))
         assertNull(waitReasonOf(desktopHealthOf(old.health)))
+    }
+
+    // #555（2026-09-30 真机：Mac 剩约 200MB 时手机被报「文件夹无法打开」）——
+    // 不可写 + 盘满证据 → 空间不足；不可写 + 空间充足/未知 → 仍是文件夹不可用。
+    @Test
+    fun `an unwritable library on a full disk reads as storage full, not library unavailable`() {
+        val full = DesktopHealth.CRITICALLY_LOW_BYTES - 1
+        assertEquals(
+            WaitReason.DESKTOP_STORAGE_FULL,
+            waitReasonOf(DesktopHealth(full, libraryWritable = false)),
+        )
+        assertEquals(
+            WaitReason.DESKTOP_LIBRARY_UNAVAILABLE,
+            waitReasonOf(DesktopHealth(100L * 1024 * 1024 * 1024, libraryWritable = false)),
+        )
+        // 空间答不上来（旧桌面/平台不支持）时不得编造成「盘满」。
+        assertEquals(
+            WaitReason.DESKTOP_LIBRARY_UNAVAILABLE,
+            waitReasonOf(DesktopHealth(null, libraryWritable = false)),
+        )
+        // 可写但只剩一丁点：预警语义不变（不挡），不写等待原因。
+        assertNull(waitReasonOf(DesktopHealth(full, libraryWritable = true)))
     }
 
     // 真机（S9210）：传大视频时桌面后台服务被停。本地 Aborted（非源文件问题）→ 立即短超时问一次桌面；
@@ -308,5 +334,23 @@ class C413DeliveryPortTest {
         runCurrent()
         assertTrue(job.isCompleted)
         assertEquals(DeliveryOutcome.PathFailure("desktop_unreachable:subscription_lost"), job.await())
+    }
+
+    // 常量对账：CRITICALLY_LOW_BYTES 与 daemon 的 SPACE_RESERVE_BYTES 同值，
+    // 改一边另一边必须跟上（FlowContract.kt 上的注释互相指认）。
+    @Test
+    fun `the critically-low line matches the daemon space reserve`() {
+        val src = File(repoRoot(), "crates/daemon/src/flow_delivery.rs").readText()
+        val m = Regex("SPACE_RESERVE_BYTES: u64 = (\\d+) \\* 1024 \\* 1024").find(src)
+        assertNotNull("daemon 的 SPACE_RESERVE_BYTES 没找到（形状变了就更新本断言）", m)
+        assertEquals(DesktopHealth.CRITICALLY_LOW_BYTES, m!!.groupValues[1].toLong() * 1024 * 1024)
+    }
+
+    private fun repoRoot(): File {
+        var dir = File(System.getProperty("user.dir"))
+        while (!File(dir, "apps/android").isDirectory) {
+            dir = dir.parentFile ?: error("apps/android not found")
+        }
+        return dir
     }
 }
