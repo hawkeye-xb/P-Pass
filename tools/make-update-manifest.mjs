@@ -74,17 +74,36 @@ if (args[0] === "--sign") {
   console.log(`manifest rebased: ${out}`);
 } else {
   // ── compose mode ──
+  // UPD-13: --only <target> 可重复，只收这些平台条目；--out 指定输出文件名；
+  // --version 覆盖顶层 version（分端 manifest 用它填**该端自己的版本号**，
+  // 默认仍是 tag 去 v 前缀）。
   const tag = need("--tag");
   const notesFile = need("--notes");
+  const only = new Set();
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--only") {
+      const t = args[i + 1];
+      if (!t) throw new Error("bad --only: missing target");
+      only.add(t);
+    }
+  }
+  const outPath = args.indexOf("--out") >= 0 ? need("--out") : "manifest.json";
+  const version = args.indexOf("--version") >= 0 ? need("--version") : tag.replace(/^v/, "");
   const assets = {};
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--asset") {
       const [target, path] = args[i + 1].split("=");
       if (!target || !path || !existsSync(path)) throw new Error(`bad --asset: ${args[i + 1]}`);
+      if (only.size > 0 && !only.has(target)) {
+        console.log(`skipped ${target} (not in --only)`);
+        continue;
+      }
       assets[target] = path;
     }
   }
-  if (Object.keys(assets).length === 0) throw new Error("no --asset target=path pairs");
+  if (Object.keys(assets).length === 0) {
+    throw new Error(only.size > 0 ? `no assets matched --only ${[...only].join(",")}` : "no --asset target=path pairs");
+  }
   const notes = readFileSync(notesFile, "utf8");
   // CI-01③a: --asset-base 覆盖下载前缀（默认 GitHub release 直链）。
   // R2 镜像域（dl.p-pass.hawkeye-xb.com/releases/<tag>）给国内下载可达性；
@@ -108,11 +127,11 @@ if (args[0] === "--sign") {
   }
 
   const manifest = {
-    version: tag.replace(/^v/, ""),
+    version,
     notes,
     pub_date: new Date().toISOString(),
     platforms,
   };
-  writeFileSync("manifest.json", JSON.stringify(manifest, null, 2) + "\n");
-  console.log("manifest.json written (signatures empty — sign with UPDATE_SIGNING_KEY)");
+  writeFileSync(outPath, JSON.stringify(manifest, null, 2) + "\n");
+  console.log(`${outPath} written (version=${version}; signatures empty — sign with UPDATE_SIGNING_KEY)`);
 }
