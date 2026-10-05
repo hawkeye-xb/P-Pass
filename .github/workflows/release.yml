@@ -841,8 +841,13 @@ jobs:
             "artifacts/android/$APK"
           mkdir -p /tmp/sigs
           cp artifacts/android/*.sig /tmp/sigs/
-          node tools/make-update-manifest.mjs \
-            --sign artifacts/manifest.json --sig-dir /tmp/sigs
+          # UPD-15：正式 tag 下本 job **不产出** artifacts/manifest.json（动态清单只给
+          # test 通道）——文件不在就跳过签名，否则 --sign 直接 ENOENT 把整步判红
+          # （2026-10-05 v2026.10.2 实测：签名步因此红，APK/manifest 都上传不了）。
+          if [ -f artifacts/manifest.json ]; then
+            node tools/make-update-manifest.mjs \
+              --sign artifacts/manifest.json --sig-dir /tmp/sigs
+          fi
           # UPD-13：分端清单同样要签（同一把密钥、同一批 .sig）。
           if [ -f artifacts/manifest-android.json ]; then
             node tools/make-update-manifest.mjs \
