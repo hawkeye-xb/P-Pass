@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.10.2] - 2026-10-05
+
+**Android 0.9.2 · macOS 0.9.1（本版未变更）** —— 分端更新机制第 2 轮验证。
+
+### Internal
+- 只推进 Android 的版本号：验证「只有 Android 变更时，macOS 不会被提示更新」（UPD-13 第 2 轮）。
+- 同时验收产物命名（UPD-15）：APK 资产名 = `P-Pass_0.9.2_android.apk`。
+- 无用户可见变更。
+
+
 ## [2026.10.1] - 2026-10-04
 
 **macOS 0.9.1 · Android 0.9.0（本版未变更）** —— 用于验证分端更新机制。
