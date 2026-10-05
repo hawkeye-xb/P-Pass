@@ -84,7 +84,13 @@ jobs:
           # other external origin in built assets means a tracker / CDN / font
           # leak — fail.
           ALLOW='^(https://p-pass\.hawkeye-xb\.com|https://github\.com|https://p-pass-dl\.hawkeye-xb\.com)'
-          BAD=$(grep -rEoh 'https?://[^"'"'"' )]+' dist --include='*.html' --include='*.css' --include='*.js' | grep -vE "$ALLOW" || true)
+          # JSON-LD blocks are data, not requests: their @context and license
+          # identifiers (schema.org, gnu.org) are names, not origins the page
+          # contacts. Strip those blocks first so this check stays about what
+          # the page actually fetches.
+          BAD=$(find dist -type f \( -name '*.html' -o -name '*.css' -o -name '*.js' \) -print0 \
+            | xargs -0 perl -0pe 's{<script type="application/ld\+json">.*?</script>}{}gs' \
+            | grep -oE 'https?://[^"'"'"' )]+' | grep -vE "$ALLOW" || true)
           if [ -n "$BAD" ]; then
             echo "third-party origin found in dist:"; echo "$BAD"; exit 1
           fi
