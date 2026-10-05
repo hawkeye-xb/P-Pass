@@ -37,10 +37,10 @@ jobs:
           set -euo pipefail
           mkdir -p dl && cd dl
           # 缺哪个就报错——本工具的职责是重算清单，不负责补产物。
-          for f in app-release.apk P-Pass.app.tar.gz; do
-            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$f" --clobber \
-              || { echo "::error::release $TAG 里没有 $f —— 先重跑对应 lane 再修清单"; exit 1; }
-          done
+          # UPD-15：产物名带该端版本号 ⇒ glob 下载 + 定位实际文件名。
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" \
+            -p 'P-Pass_*_android*.apk' -p 'P-Pass_*_macos-arm64.app.tar.gz' --clobber \
+            || { echo "::error::release $TAG 缺少 APK / .app.tar.gz —— 先重跑对应 lane 再修清单"; exit 1; }
           ls -l
 
       - name: Compose + sign manifests
@@ -61,7 +61,10 @@ jobs:
           chmod 600 /tmp/key
           mkdir -p /tmp/sigs
           cd dl
-          for f in app-release.apk P-Pass.app.tar.gz; do
+          APK_L=$(find . -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+          UPD_L=$(find . -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
+          [ -n "$APK_L" ] && [ -n "$UPD_L" ] || { echo "::error::定位不到 APK 或 .app.tar.gz"; exit 1; }
+          for f in "$APK_L" "$UPD_L"; do
             npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/key -p "" "$f"
             cp "$f.sig" /tmp/sigs/
           done
@@ -72,11 +75,11 @@ jobs:
 
           # ① macOS 分端清单（桌面客户端的源）
           node ../tools/make-update-manifest.mjs --tag "$TAG" --notes ../NOTES.md \
-            --asset-base "$BASE" --asset darwin-aarch64=P-Pass.app.tar.gz \
+            --asset-base "$BASE" --asset "darwin-aarch64=$UPD_L" \
             --version "$D" --only darwin-aarch64 --out manifest-macos.json
           # ② Android 分端清单（安卓客户端的源）
           node ../tools/make-update-manifest.mjs --tag "$TAG" --notes ../NOTES.md \
-            --asset-base "$BASE" --asset android-arm64=app-release.apk \
+            --asset-base "$BASE" --asset "android-arm64=$APK_L" \
             --version "$A" --only android-arm64 --out manifest-android.json
           # ③ 老格式冻结件（旧客户端一次性升级用；仓库里的 release/legacy-manifest.json）
           cp ../release/legacy-manifest.json manifest.json
