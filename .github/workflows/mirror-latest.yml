@@ -111,7 +111,7 @@ jobs:
       # 里存在，从来没真执行过）。checkout 到 repo/ 子目录，避开下载目录 dl/。
       - name: Checkout repo (给 manifest 脚本用)
         if: steps.tag.outputs.skip != 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ steps.tag.outputs.tag != '' && steps.tag.outputs.tag || 'main' }}
           fetch-depth: 1
