@@ -1,10 +1,29 @@
 ---
 /**
- * FAQ page body: grouped questions → answer paragraphs → optional links.
- * Content lives in src/i18n/faq.ts; this component only renders it, so both
- * language pages stay one-liners.
+ * FAQ page body: section nav → grouped questions → answer paragraphs → links.
+ * Content lives in src/i18n/faq.ts; this component only renders it.
+ *
+ * Shape (#671): `a[0]` answers the question and renders as .verdict, the rest
+ * as .detail.
+ *
+ * Finding a question (#671 review): the heading is the question, and there is
+ * a standing list of all sixteen on the right at desktop width — the same
+ * "On this page" pattern the docs sites use. Below that width the list is
+ * hidden and the four section pills stay, so the questions themselves have to
+ * read as sub-headings: they are larger, heavier, and separated by a hairline.
+ * No accordion and no search box: everything stays in the DOM so Ctrl+F and
+ * in-page search still work.
+ *
+ * The h1 is hidden on purpose. The nav already says 常见问题, and the page opens
+ * with the section list; the heading stays in the DOM for screen readers and
+ * for search engines.
+ *
+ * The `.detail` colour is set twice on purpose. The site's --text-secondary is
+ * a near-white in dark mode (#F1ECE3 against --text #FBF8F2), so on a dark
+ * display the two levels looked identical and the page read as one flat block.
+ * Dark mode gets --idle here.
  */
-import { FAQ, FAQ_LEDE, FAQ_TITLE } from '../i18n/faq';
+import { FAQ, FAQ_LEDE, FAQ_NAV_LABEL, FAQ_TITLE, FAQ_TOP, FAQ_TOP_LABEL } from '../i18n/faq';
 import type { Lang } from '../i18n/ui';
 
 interface Props {
@@ -13,77 +32,281 @@ interface Props {
 
 const { lang } = Astro.props;
 const groups = FAQ[lang];
+const byId = new Map(groups.flatMap((group) => group.items.map((item) => [item.id, item] as const)));
+const top = FAQ_TOP.map((id) => byId.get(id)).filter((item) => item !== undefined);
 ---
 
 <article class="faq">
-  <header>
-    <h1>{FAQ_TITLE[lang]}</h1>
-    <p class="lede">{FAQ_LEDE[lang]}</p>
-  </header>
+  <h1 class="sr-only">{FAQ_TITLE[lang]}</h1>
+  <p class="sr-only">{FAQ_LEDE[lang]}</p>
 
-  {
-    groups.map((group) => (
-      <section>
-        <h2>{group.title}</h2>
-        {group.items.map((item) => {
-          const more = item.more ?? [];
-          return (
-            <div class="qa">
-              <h3>{item.q}</h3>
-              {item.a.map((paragraph) => (
-                <p>{paragraph}</p>
+  <section class="top">
+    <h2 class="top-title">{FAQ_TOP_LABEL[lang]}</h2>
+    <ul>
+      {
+        top.map((item) => (
+          <li>
+            <a href={`#${item.id}`}>{item.q}</a>
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  <nav class="sections" aria-label={FAQ_NAV_LABEL[lang]}>
+    {groups.map((group) => <a href={`#${group.id}`}>{group.title}</a>)}
+  </nav>
+
+  <div class="layout">
+    <div class="body">
+      {
+        groups.map((group) => (
+          <section id={group.id}>
+            <h2>{group.title}</h2>
+            {group.items.map((item) => {
+              const more = item.more ?? [];
+              const [verdict, ...detail] = item.a;
+              return (
+                <div class="qa" id={item.id}>
+                  <h3>{item.q}</h3>
+                  {typeof verdict === 'string' && <p class="verdict">{verdict}</p>}
+                  {detail.map((block) =>
+                    typeof block === 'string' ? (
+                      <p class="detail">{block}</p>
+                    ) : (
+                      <ul class="detail list">
+                        {block.list.map((line) => (
+                          <li>{line}</li>
+                        ))}
+                      </ul>
+                    ),
+                  )}
+                  {more.length > 0 && (
+                    <p class="more">
+                      {more.map((link, index) => (
+                        <>
+                          <a href={link.href} rel="external">
+                            {link.label}
+                          </a>
+                          {index < more.length - 1 && <span aria-hidden="true"> · </span>}
+                        </>
+                      ))}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </section>
+        ))
+      }
+    </div>
+
+    <aside class="index" aria-label={FAQ_NAV_LABEL[lang]}>
+      {
+        groups.map((group) => (
+          <div class="index-group">
+            <a class="index-section" href={`#${group.id}`}>
+              {group.title}
+            </a>
+            <ul>
+              {group.items.map((item) => (
+                <li>
+                  <a href={`#${item.id}`}>{item.q}</a>
+                </li>
               ))}
-              {more.length > 0 && (
-                <p class="more">
-                  {more.map((link, index) => (
-                    <>
-                      <a href={link.href} rel="external">
-                        {link.label}
-                      </a>
-                      {index < more.length - 1 && <span aria-hidden="true"> · </span>}
-                    </>
-                  ))}
-                </p>
-              )}
-            </div>
-          );
-        })}
-      </section>
-    ))
-  }
+            </ul>
+          </div>
+        ))
+      }
+    </aside>
+  </div>
 </article>
 
 <style>
   .faq {
-    max-width: 40em;
+    max-width: 64em;
     margin: 0 auto;
     padding: 3.5rem 1.25rem 4rem;
   }
-  h1 {
-    font-size: clamp(1.8rem, 5vw, 2.4rem);
-    margin: 0 0 0.5rem;
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
   }
-  .lede {
+  /* Start here: the four that decide whether someone installs at all. */
+  .top {
+    margin: 0 0 2.5rem;
+    padding: 1.1rem 1.25rem 1.2rem;
+    background: var(--canvas);
+    border-radius: var(--radius-card);
+  }
+  .top-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin: 0 0 0.5rem;
+    padding: 0;
+    border: 0;
+  }
+  .top ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .top li a {
+    display: block;
+    box-sizing: border-box;
+    min-height: var(--size-desktop-tap-min);
+    padding: 0.5rem 0;
+    line-height: 1.5;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .top li a:hover {
+    text-decoration: underline;
+  }
+  @media (min-width: 1080px) {
+    .top li a {
+      min-height: 0;
+      padding: 0.3rem 0;
+    }
+  }
+  /* Below the width where the standing index fits: four section pills. */
+  .sections {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
     margin: 0 0 1rem;
+  }
+  .sections a {
+    display: inline-block;
+    box-sizing: border-box;
+    min-height: var(--size-desktop-tap-min);
+    padding: 0.55rem 0.9rem;
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-pill);
+    font-size: 0.95rem;
+    line-height: 1.6;
     color: var(--text-secondary);
+    text-decoration: none;
+  }
+  .sections a:hover {
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3rem;
+  }
+  .body {
+    max-width: 40em;
+  }
+  .index {
+    display: none;
+  }
+  @media (min-width: 1080px) {
+    .layout {
+      grid-template-columns: minmax(0, 40em) 15em;
+      justify-content: center;
+    }
+    .sections {
+      display: none;
+    }
+    .index {
+      display: block;
+      align-self: start;
+      position: sticky;
+      top: 4.5rem;
+      max-height: calc(100vh - 6rem);
+      overflow-y: auto;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+    .index-group + .index-group {
+      margin-top: 1.1rem;
+    }
+    .index-section {
+      font-weight: 600;
+      text-decoration: none;
+    }
+    .index ul {
+      list-style: none;
+      margin: 0.3rem 0 0;
+      padding: 0;
+    }
+    .index li a {
+      display: block;
+      padding: 0.15rem 0;
+      color: var(--text-secondary);
+      text-decoration: none;
+    }
+    .index li a:hover,
+    .index-section:hover {
+      color: var(--text);
+      text-decoration: underline;
+    }
+  }
+  /* Sticky header is ~45px tall; leave room so an anchored question does not
+     land underneath it. */
+  section[id],
+  .qa[id] {
+    scroll-margin-top: 4.5rem;
   }
   h2 {
     font-size: 1.35rem;
-    margin: 3rem 0 1.25rem;
+    margin: 3rem 0 1.5rem;
     padding-bottom: 0.4rem;
     border-bottom: 1px solid var(--hairline);
   }
-  .qa {
-    margin: 0 0 2rem;
+  section:first-child h2 {
+    margin-top: 0;
+  }
+  .body section + section h2 {
+    margin-top: 3.5rem;
+  }
+  /* The question is the sub-heading: heavier and larger than its answer. */
+  .qa + .qa {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--hairline);
   }
   .qa h3 {
-    font-size: 1.1rem;
-    margin: 0 0 0.5rem;
+    font-size: 1.15rem;
+    font-weight: 600;
+    margin: 0 0 0.7rem;
   }
   .qa p {
-    margin: 0 0 0.9rem;
-    color: var(--text-secondary);
+    margin: 0 0 0.8rem;
     line-height: 1.75;
+  }
+  .qa .verdict {
+    color: var(--text);
+  }
+  .qa .detail {
+    font-size: 0.95em;
+    color: var(--text-secondary);
+  }
+  /* Lists keep the same secondary treatment as detail paragraphs. */
+  .qa .list {
+    margin: 0 0 0.8rem;
+    padding-left: 1.15rem;
+  }
+  .qa .list li {
+    margin: 0 0 0.3rem;
+    line-height: 1.7;
+  }
+  /* Dark mode: --text-secondary is --linen there, the same near-white as
+     --text. Use the muted grey so the two levels stay apart. */
+  @media (prefers-color-scheme: dark) {
+    .qa .detail {
+      color: var(--idle);
+    }
   }
   .qa p:last-child {
     margin-bottom: 0;
