@@ -1,0 +1,108 @@
+# UPD-13（#660）运维工具：给**已发布**的 release 重算并重传三份更新清单 —— 不做任何重建。
+#
+# 用途：清单缺失 / 被错误覆盖时快速恢复（例如某条 lane 被取消、收口 job 被跳过、
+# 或 Windows 收口把冻结件冲掉）。典型场景：2026-10-05 v2026.10.1 的 macOS lane 被
+# 取消 → release 里没有 manifest-macos.json → R2 保留旧版 → 桌面端检测不到更新。
+#
+# 它只做「搬运 + 组装 + 签名」：产物字节取自 release 现有资产，签名用 UPDATE_SIGNING_KEY，
+# 所以不需要重跑 10~90 分钟的平台构建。
+#
+# 用法：Actions → Repair update manifests → Run workflow → tag=v2026.10.1
+name: Repair update manifests
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "目标 release tag（如 v2026.10.1）"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download released assets
+        run: |
+          set -euo pipefail
+          mkdir -p dl && cd dl
+          # 缺哪个就报错——本工具的职责是重算清单，不负责补产物。
+          for f in app-release.apk P-Pass.app.tar.gz; do
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$f" --clobber \
+              || { echo "::error::release $TAG 里没有 $f —— 先重跑对应 lane 再修清单"; exit 1; }
+          done
+          ls -l
+
+      - name: Compose + sign manifests
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          : "${UPDATE_SIGNING_KEY:?UPDATE_SIGNING_KEY 缺失——无法签名，拒绝产出无签名清单}"
+          # 顶层版本号与发布时同源：读 release/versions.json（该端自己的号）。
+          D=$(jq -r .desktop release/versions.json)
+          A=$(jq -r .android release/versions.json)
+          echo "desktop=$D android=$A"
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body -q .body > NOTES.md
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
+
+          # 签名密钥还原（printf '%s' 逐字节，echo 的尾换行会让 signer 报 Invalid symbol）
+          printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/key
+          chmod 600 /tmp/key
+          mkdir -p /tmp/sigs
+          cd dl
+          for f in app-release.apk P-Pass.app.tar.gz; do
+            npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/key -p "" "$f"
+            cp "$f.sig" /tmp/sigs/
+          done
+
+          if [ "$TAG" = "$(echo "$TAG" | grep -- '-test\.')" ] 2>/dev/null; then
+            echo "::error::本工具只服务正式 tag（test 通道的 manifest.json 是动态指针，另行处理）"; exit 1
+          fi
+
+          # ① macOS 分端清单（桌面客户端的源）
+          node ../tools/make-update-manifest.mjs --tag "$TAG" --notes ../NOTES.md \
+            --asset-base "$BASE" --asset darwin-aarch64=P-Pass.app.tar.gz \
+            --version "$D" --only darwin-aarch64 --out manifest-macos.json
+          # ② Android 分端清单（安卓客户端的源）
+          node ../tools/make-update-manifest.mjs --tag "$TAG" --notes ../NOTES.md \
+            --asset-base "$BASE" --asset android-arm64=app-release.apk \
+            --version "$A" --only android-arm64 --out manifest-android.json
+          # ③ 老格式冻结件（旧客户端一次性升级用；仓库里的 release/legacy-manifest.json）
+          cp ../release/legacy-manifest.json manifest.json
+
+          node ../tools/make-update-manifest.mjs --sign manifest-macos.json --sig-dir /tmp/sigs
+          node ../tools/make-update-manifest.mjs --sign manifest-android.json --sig-dir /tmp/sigs
+          # 冻结件的签名随文件冻结，不重签（重签会把 0.9.0 的签名覆盖成对不上字节的新签名）
+
+          for f in manifest.json manifest-android.json manifest-macos.json; do
+            echo "$f: version=$(jq -r .version "$f") targets=$(jq -r '.platforms|keys|join(",")' "$f") sig=$(jq -r '[.platforms[].signature|length]|join(",")' "$f")"
+          done
+
+      - name: Upload manifests
+        run: |
+          set -euo pipefail
+          cd dl
+          gh release upload "$TAG" manifest.json manifest-android.json manifest-macos.json --clobber
+          echo "已重传：https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      - name: Verify via public download links
+        run: |
+          set -euo pipefail
+          cd dl
+          for f in manifest.json manifest-android.json manifest-macos.json; do
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$f" -O "/tmp/$f.chk" --clobber
+            want=$(jq -r .version "/tmp/$f.chk"); got=$(jq -r .version "$f")
+            [ "$want" = "$got" ] || { echo "::error::$f 上传后版本不一致：远端 $want / 本地 $got"; exit 1; }
+            echo "$f OK version=$got"
+          done
