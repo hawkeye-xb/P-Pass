@@ -1,3 +1,4 @@
+import com.android.build.api.variant.impl.VariantOutputImpl
 import org.gradle.api.tasks.Exec
 
 plugins {
@@ -114,6 +115,25 @@ android {
     // 冻结存量，新增的同类违规仍会让 CI 变红。
     lint {
         baseline = file("lint-baseline.xml")
+    }
+}
+
+// UPD-15（#685）：**产物名 = P-Pass_<该端版本号>_android.apk**（与 tools/artifact-names.sh 同规则）。
+// 版本号取自上面同一个 `versionName`（PPF_BUILD_VERSION → tools/release-version.sh →
+// release/versions.json）⇒ 单一来源派生，不是 CI 里手工改名；本地构建同样得到正确名字。
+// 无凭据路径（keystore secrets 未设置）保持 `-unsigned` 后缀：CI 的
+// Detect signing 靠文件名区分「有签名产物」与「只有 unsigned」，去掉后缀会让
+// 它去验一个未签的包（REL-09 #631 的红线）。
+val androidSigned = !System.getenv("ANDROID_KEYSTORE_BASE64").isNullOrEmpty()
+androidComponents {
+    onVariants { variant ->
+        variant.outputs.forEach { output ->
+            // AGP 8.x 的新 VariantOutput 接口不暴露 outputFileName，改名要走 impl
+            // （Android 生态里公认的做法；AGP 大版本升级时这里是第一个要看的地方）。
+            val impl = output as? VariantOutputImpl ?: return@forEach
+            val suffix = if (androidSigned) "" else "-unsigned"
+            impl.outputFileName.set("P-Pass_${output.versionName.get()}_android$suffix.apk")
+        }
     }
 }
 
