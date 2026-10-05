@@ -70,6 +70,12 @@ jobs:
       - name: Build (regenerates tokens + icons, then astro build)
         run: npm run build
 
+      - name: Assert sitemap covers every built page
+        # The sitemap is derived from the route table at build time (#691).
+        # This guard fails if a page ends up outside it, or a listed URL is
+        # not built — the two used to drift apart silently.
+        run: npm run verify:sitemap
+
       - name: Zero third-party requests
         run: |
           set -euo pipefail

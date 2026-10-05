@@ -2,6 +2,7 @@
 import Base from '../../layouts/Base.astro';
 import { getCollection, render } from 'astro:content';
 import { t } from '../../i18n/ui';
+import { breadcrumb } from '../../schema';
 
 export async function getStaticPaths() {
   const visible = (data: { draft?: boolean; lang: string }) =>
@@ -24,9 +25,15 @@ export async function getStaticPaths() {
 const { post, mirror } = Astro.props;
 const { title, date, tags } = post.data;
 const { Content } = await render(post);
+
+const jsonLd = breadcrumb([
+  { name: 'P-Pass', path: '/' },
+  { name: t('en', 'nav.blog'), path: '/blog/' },
+  { name: title, path: Astro.url.pathname },
+]);
 ---
 
-<Base lang="en" title={`${title} — P-Pass`} mirror={mirror}>
+<Base lang="en" title={`${title} — P-Pass`} mirror={mirror} jsonLd={jsonLd}>
   <article class="post">
     <header>
       <p class="meta">
