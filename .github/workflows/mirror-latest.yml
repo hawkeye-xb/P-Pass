@@ -138,8 +138,18 @@ jobs:
           done
           # UPD-13（#660）：分端清单 + macOS 更新产物存在才镜像。缺了不报红——
           # 客户端对每一项都有 GitHub 兜底；这里只如实提示，免得旧 tag 补跑时误红。
+          # UPD-14（#672）：**稳定版不许缺件**——缺分端清单 / macOS 更新产物就红。
+          # 2026-10-05 v2026.10.1 事故：这两类缺件原先只打 notice ⇒ R2 上保留上一版的
+          # 分端清单 ⇒ 客户端读到「陈旧但明确」的答案就不再问下一个源 ⇒ 被钉在旧版。
+          # test 通道仍只提示（test 指针不依赖分端清单）。
           for f in "$UPD" manifest-android.json manifest-macos.json; do
-            [ -s "$f" ] || echo "::notice::$(basename "$f") 不在本次 release 里，跳过镜像"
+            if [ -s "$f" ]; then continue; fi
+            if [[ "$TAG" == *-test.* ]]; then
+              echo "::notice::$(basename "$f") 不在本次 release 里，跳过镜像（test 通道）"
+            else
+              echo "::error::$TAG 缺 $(basename "$f")——稳定版不许缺分端清单/更新产物，拒绝半份镜像"
+              exit 1
+            fi
           done
           ls -l
 
