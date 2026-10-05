@@ -104,6 +104,16 @@ jobs:
         shell: bash
         run: tools/setup-rust-toolchain.sh
 
+      # UPD-16（#695）：缓存 key 只跟**依赖集合**走 —— 版本 bump 会改 lock 里我们自己
+      # 的 version 行，直接 hash 整个 lock 会让每次发版必然冷编译（实测 276s → 90min+）。
+      - name: Compute dep cache keys (UPD-16)
+        id: depkeys
+        run: |
+          {
+            echo "root=$(tools/dep-cache-key.sh Cargo.lock)"
+            echo "desktop=$(tools/dep-cache-key.sh apps/desktop/src-tauri/Cargo.lock)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Cache cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -113,7 +123,8 @@ jobs:
             target/
           # CI-18 (#382)：本 job 只 `cargo build -p daemon -p testclient`（主
           # workspace），不跑 `pnpm tauri build`，所以 key 只跟根 lock 走。
-          key: macos-arm64-release-${{ hashFiles('Cargo.lock') }}
+          # UPD-16：key 来自 dep-cache-key.sh（归一化掉我们自己的 version 行）。
+          key: macos-arm64-release-${{ steps.depkeys.outputs.root }}
 
       # H-10c: desktop shell is a standalone workspace — cache its target too
       # (Tauri dep tree ~5min cold compile; key on the desktop Cargo.lock).
@@ -131,7 +142,7 @@ jobs:
           # 常量、而注释还在说会失效 —— 属于自己骗自己」是同一个失败形态。
           # 具体后果：src-tauri 改依赖（含 SEC-09 #376 那个 rustls 安全更新）
           # 不会让这条缓存失效。
-          key: macos-arm64-desktop-release-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          key: macos-arm64-desktop-release-${{ steps.depkeys.outputs.desktop }}
 
       - name: System codecs (libheif via brew)
         run: brew install libheif
@@ -354,6 +365,15 @@ jobs:
         shell: bash
         run: tools/setup-rust-toolchain.sh
 
+      # UPD-16（#695）：同上 —— key 只跟依赖集合走。
+      - name: Compute dep cache keys (UPD-16)
+        id: depkeys
+        run: |
+          {
+            echo "root=$(tools/dep-cache-key.sh Cargo.lock)"
+            echo "desktop=$(tools/dep-cache-key.sh apps/desktop/src-tauri/Cargo.lock)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Cache cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -367,7 +387,7 @@ jobs:
           # 与上面 macos 那条的差别正来自这个：那条不跑 pnpm tauri build。
           # 仍然不用 `**/Cargo.lock`：那个 glob 会把 spikes/ 两个 lock 也算进来，
           # 而本 job 不编译它们。
-          key: win-x64-release-${{ hashFiles('Cargo.lock', 'apps/desktop/src-tauri/Cargo.lock') }}
+          key: win-x64-release-${{ steps.depkeys.outputs.root }}-${{ steps.depkeys.outputs.desktop }}
 
       # CI-04: 缓存 vcpkg 的 installed 树。libheif + 依赖（libde265 等）从源码
       # 编要 10-20 分钟，是整条 release 管线的**长杆**——三平台并行时其余两个
