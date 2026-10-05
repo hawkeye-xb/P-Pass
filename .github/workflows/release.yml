@@ -212,11 +212,12 @@ jobs:
         run: |
           set -euo pipefail
           cd /tmp && rm -rf P-Pass && cp -R rel P-Pass
-          ditto -c -k --keepParent P-Pass ppass-macos-arm64.zip
+          ZIP="$(tools/artifact-names.sh macos-zip)"   # UPD-15：名字单源派生
+          ditto -c -k --keepParent P-Pass "$ZIP"
           # zip 挪进 rel/：让 upload-artifact 的两个 path 共享同一根目录，
           # 下载解包后是平铺的 macos-arm64/<file>（否则公共祖先是 /tmp，
           # SHA256SUMS 会带上 rel/ 前缀，release 上传步路径对不上）。
-          mv ppass-macos-arm64.zip rel/
+          mv "$ZIP" rel/
 
       # ── H-10c: 面向人类的 .app + dmg（复用 /tmp/rel 的自包含 daemon）──
       # sidecar = bundle 后 daemon（rpath @executable_path/lib），lib/ 必须
@@ -288,7 +289,7 @@ jobs:
           else
             NOTARY_ARGS="--apple-id $APPLE_ID --password $APPLE_APP_SPECIFIC_PASSWORD --team-id $APPLE_TEAM_ID"
           fi
-          DMG=/tmp/rel/P-Pass-macos-arm64.dmg
+          DMG="/tmp/rel/$(tools/artifact-names.sh macos-dmg)"   # UPD-15
           [ -f "$DMG" ] || { echo "FATAL: $DMG missing (bundle step must run first)" >&2; exit 1; }
           # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
           xcrun notarytool submit "$DMG" $NOTARY_ARGS --wait --timeout 15m
@@ -306,8 +307,9 @@ jobs:
           set -euo pipefail
           APP=apps/desktop/src-tauri/target/release/bundle/macos/P-Pass.app
           [ -d "$APP" ] || { echo "FATAL: $APP 不存在——bundle 步骤必先行"; exit 1; }
-          tar czf /tmp/rel/P-Pass.app.tar.gz -C "$(dirname "$APP")" P-Pass.app
-          ls -la /tmp/rel/P-Pass.app.tar.gz
+          UPD="$(tools/artifact-names.sh macos-updater)"   # UPD-15
+          tar czf "/tmp/rel/$UPD" -C "$(dirname "$APP")" P-Pass.app
+          ls -la "/tmp/rel/$UPD"
 
       - name: Signing status tag
         id: signtag
@@ -323,10 +325,10 @@ jobs:
         with:
           name: macos-arm64
           path: |
-            /tmp/rel/ppass-macos-arm64.zip
+            /tmp/rel/P-Pass_*_macos-arm64.zip
             /tmp/rel/SHA256SUMS-macos-arm64
-            /tmp/rel/P-Pass-macos-arm64.dmg
-            /tmp/rel/P-Pass.app.tar.gz
+            /tmp/rel/P-Pass_*_macos-arm64.dmg
+            /tmp/rel/P-Pass_*_macos-arm64.app.tar.gz
 
   windows-x64:
     name: "Windows x64 (未签名)"
@@ -469,7 +471,7 @@ jobs:
           path: apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
 
   # H-10c: Android release APK（人类可装）。keystore secrets 注入 → 已签名
-  # app-release.apk；无凭据路径（secrets 未设置）→ app-release-unsigned.apk。
+  # P-Pass_<android 端版本>_android.apk；无凭据路径 → …_android-unsigned.apk（UPD-15）。
   # lintVital 用 JDK 17 跑（AGP 8.7.3 内置 Kotlin 编译器不认识 JDK 26——
   # 本机实测 IllegalArgumentException）。
   android:
@@ -537,7 +539,8 @@ jobs:
         working-directory: apps/android
         run: |
           set -euo pipefail
-          APK=$(find app/build/outputs/apk/release -name 'app-release*.apk' | head -1)
+          # UPD-15：产物名 = P-Pass_<android 端版本>_android[-unsigned].apk
+          APK=$(find app/build/outputs/apk/release -name 'P-Pass_*_android*.apk' | head -1)
           unzip -l "$APK" | grep -q "lib/arm64-v8a/libiroh_ffi.so"
           unzip -l "$APK" | grep -q "lib/arm64-v8a/libtransport.so"
 
@@ -545,14 +548,14 @@ jobs:
         id: signdetect
         working-directory: apps/android
         # REL-09 (#631)：判据**不看文件名、真跑 apksigner**。
-        # 旧实现只要 `app-release.apk` 这个文件存在就报 signed=yes —— 文件名叫 signed
+        # 旧实现只要「签过名的那份」文件存在就报 signed=yes —— 文件名叫 signed
         # 不等于它真的签好了（未签 / 签名方案不满足 minSdk / 用错 key 都算），
         # 而 manifest 的 `Android=yes` 与用户侧的「该安装包未包含任何证书」（#599）
         # 都建立在这条判据上。**不许加 `|| true` 或 `continue-on-error`。**
         run: |
           set -euo pipefail
-          APK=app/build/outputs/apk/release/app-release.apk
-          if [ ! -f "$APK" ]; then
+          APK=$(find app/build/outputs/apk/release -name 'P-Pass_*_android.apk' | head -1)
+          if [ -z "$APK" ]; then
             echo "只有 unsigned 产物（keystore secrets 未设置）→ signed=no"
             echo "signed=no" >> "$GITHUB_OUTPUT"
             exit 0
@@ -579,11 +582,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android
-          # 有凭据 → app-release.apk；无凭据 → 只有 unsigned。缺失文件忽略。
+          # UPD-15：名字为 P-Pass_<版本>_android[-unsigned].apk；缺失文件忽略。
           if-no-files-found: ignore
-          path: |
-            apps/android/app/build/outputs/apk/release/app-release.apk
-            apps/android/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: apps/android/app/build/outputs/apk/release/P-Pass_*.apk
 
   # ══════════════════════════════════════════════════════════════════
   # CI-04②（2026-08-26 验收人拍板「全拆」）：发布解耦
@@ -704,11 +705,11 @@ jobs:
           > 各平台产物正在陆续上传（Android 最快，Windows 最慢——vcpkg 首次
           > 从源码编 libheif）。签名状态与资产 SHA-256 在全部平台就绪后补齐。
 
-          ### 面向人类的资产（H-10c）
-          - **P-Pass-macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
-          - **app-release.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
-          - **P-Pass_*-setup.exe** — Windows 安装包（NSIS）
-          - daemon 层自包含 zip（ppass-macos-arm64.zip）继续提供，向后兼容
+          ### 面向人类的资产（H-10c · UPD-15：文件名带该端版本号）
+          - **P-Pass_\<macOS 版本\>_macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
+          - **P-Pass_\<Android 版本\>_android.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
+          - **P-Pass_\<桌面版本\>_x64-setup.exe** — Windows 安装包（NSIS）
+          - daemon 层自包含 zip（**P-Pass_\<macOS 版本\>_macos-arm64.zip**）继续提供
 
           ### 验证（被拦截/不信任时先做这三步）
           - 下载每平台的 SHA256SUMS-\<platform\> 资产（certutil/shasum 对照）
@@ -779,11 +780,10 @@ jobs:
         run: |
           set -euo pipefail
           APK_ARGS=()
-          if [ -f artifacts/android/app-release.apk ]; then
-            APK_ARGS=(--asset android-arm64=artifacts/android/app-release.apk)
-          elif [ -f artifacts/android/app-release-unsigned.apk ]; then
-            APK_ARGS=(--asset android-arm64=artifacts/android/app-release-unsigned.apk)
-          fi
+          # UPD-15：产物名带该端版本号，用 glob 定位（不猜名字）
+          APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+          APK_ARGS=()
+          [ -n "$APK_PATH" ] && APK_ARGS=(--asset android-arm64="$APK_PATH")
           if [ "${#APK_ARGS[@]}" -gt 0 ]; then
             # 2026-08-25 用户拍板撤掉 R2 镜像：manifest 恒指 GitHub 直链。
             # 撤的原因不是「镜像没用」，是**耦合方向错**——原实现在镜像
@@ -822,7 +822,7 @@ jobs:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          APK=$( [ -f artifacts/android/app-release.apk ] && echo app-release.apk || echo app-release-unsigned.apk )
+          APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' -exec basename {} \; | head -1)
           # rsign 私钥（base64 文本，tauri signer 格式）还原成文件；CI
           # 非交互 → 空密码。签名走 tauri 官方 signer（minisign 格式，
           # 与 tauri-plugin-updater 验证端同源）。
@@ -853,12 +853,10 @@ jobs:
           set -euo pipefail
           cd artifacts
           ASSETS=""
-          # 无凭据路径只产出 unsigned；有凭据路径产出 signed（unsigned 无）。
-          if [ -f android/app-release.apk ]; then
-            ASSETS="$ASSETS android/app-release.apk"
-          elif [ -f android/app-release-unsigned.apk ]; then
-            ASSETS="$ASSETS android/app-release-unsigned.apk"
-          fi
+          # UPD-15：产物名带该端版本号（signed / unsigned 两个名字都由构建派生）
+          for f in android/P-Pass_*_android*.apk; do
+            [ -f "$f" ] && ASSETS="$ASSETS $f"
+          done
           [ -f manifest.json ] && ASSETS="$ASSETS manifest.json"
           [ -f manifest-android.json ] && ASSETS="$ASSETS manifest-android.json"
           # --clobber：重跑 workflow 时资产已存在，裸 upload 会失败。
@@ -946,11 +944,9 @@ jobs:
           set -euo pipefail
           cd artifacts
           ASSETS=""
-          for f in \
-            macos-arm64/ppass-macos-arm64.zip \
-            macos-arm64/SHA256SUMS-macos-arm64 \
-            macos-arm64/P-Pass.app.tar.gz \
-            macos-arm64/P-Pass-macos-arm64.dmg; do
+          # UPD-15：产物名 = P-Pass_<该端版本>_macos-arm64.<ext>
+          for f in macos-arm64/P-Pass_*.zip macos-arm64/SHA256SUMS-macos-arm64 \
+                   macos-arm64/P-Pass_*.app.tar.gz macos-arm64/P-Pass_*.dmg; do
             if [[ -e $f ]]; then ASSETS="$ASSETS $f"; fi
           done
           # shellcheck disable=SC2086 # ASSETS 是刻意拆分
@@ -1077,14 +1073,11 @@ jobs:
         run: |
           set -euo pipefail
           ARGS=()
-          if [ -f artifacts/android/app-release.apk ]; then
-            ARGS+=(--asset android-arm64=artifacts/android/app-release.apk)
-          elif [ -f artifacts/android/app-release-unsigned.apk ]; then
-            ARGS+=(--asset android-arm64=artifacts/android/app-release-unsigned.apk)
-          fi
-          if [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ]; then
-            ARGS+=(--asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz)
-          fi
+          # UPD-15：产物名带该端版本号，用 glob 定位
+          APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+          MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
+          [ -n "$APK_PATH" ] && ARGS+=(--asset android-arm64="$APK_PATH")
+          [ -n "$MAC_UPD" ] && ARGS+=(--asset darwin-aarch64="$MAC_UPD")
           # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板）：下面几条
           # 分支（冻结件搬运 / test 动态清单 / 两个分端清单）都要用它。
           # ⚠️ 2026-10-04 事故：它曾被写在 test 分支里，正式 tag 走到 android
@@ -1112,8 +1105,7 @@ jobs:
           # UPD-13 补丁：android 分端清单在 upload-android 里是**用骨架正文**先组装
           # 的（那一步为了让手机尽早拿到更新）。这里用同一批资产 + 收口时的正文
           # 重新组装一次，否则安卓更新弹窗会停在「各平台产物正在陆续上传」的骨架文案。
-          APK=artifacts/android/app-release.apk
-          [ -f "$APK" ] || APK=artifacts/android/app-release-unsigned.apk
+          APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
           if [ -f "$APK" ]; then
             node tools/make-update-manifest.mjs \
               --tag "$TAG" --notes NOTES.md \
@@ -1128,17 +1120,17 @@ jobs:
           # 上看不出任何异常。绝不静默降级。
           case "${PLATFORMS:-all}" in
             *macos*|*all*|"")
-              [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ] || {
-                echo "::error::本次应产出 macOS 产物但 artifacts/macos-arm64/P-Pass.app.tar.gz 不在——拒绝发布「没有 mac 更新源」的清单"
+              [ -n "$MAC_UPD" ] || {
+                echo "::error::本次应产出 macOS 产物但 P-Pass_*_macos-arm64.app.tar.gz 不在——拒绝发布「没有 mac 更新源」的清单"
                 exit 1
               } ;;
           esac
           # UPD-13：同时产出一份**只含 darwin** 的分端清单（macOS 客户端的源）。
-          if [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ]; then
+          if [ -n "$MAC_UPD" ]; then
             node tools/make-update-manifest.mjs \
               --tag "$TAG" --notes NOTES.md \
               --asset-base "$ASSET_BASE" \
-              --asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz \
+              --asset darwin-aarch64="$MAC_UPD" \
               --version "$(tools/release-version.sh desktop)" \
               --only darwin-aarch64 --out artifacts/manifest-macos.json
           fi
@@ -1155,9 +1147,8 @@ jobs:
           chmod 600 /tmp/ppass-update.key
           mkdir -p /tmp/sigs
           for f in \
-            artifacts/android/app-release.apk \
-            artifacts/android/app-release-unsigned.apk \
-            artifacts/macos-arm64/P-Pass.app.tar.gz; do
+            $APK_PATH \
+            $MAC_UPD; do
             [ -f "$f" ] || continue
             # pin 版本，与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4 一致
             npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" "$f"
@@ -1265,18 +1256,18 @@ jobs:
           fi
           ARGS=()
           if [ "$ANDROID_OK" = "true" ]; then
-            if [ -f artifacts/android/app-release.apk ]; then
-              ARGS+=(--asset android-arm64=artifacts/android/app-release.apk)
-            elif [ -f artifacts/android/app-release-unsigned.apk ]; then
-              ARGS+=(--asset android-arm64=artifacts/android/app-release-unsigned.apk)
+            APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+            if [ -n "$APK_PATH" ]; then
+              ARGS+=(--asset android-arm64="$APK_PATH")
             else
               echo "::error::Android lane 成功但 APK 不在——拒绝用缺条目的清单覆盖桌面版"; exit 1
             fi
           fi
           if [ "$MACOS_OK" = "true" ]; then
-            [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ] \
+            MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
+            [ -n "$MAC_UPD" ] \
               || { echo "::error::macOS lane 成功但 .app.tar.gz 不在——拒绝用缺条目的清单覆盖桌面版"; exit 1; }
-            ARGS+=(--asset darwin-aarch64=artifacts/macos-arm64/P-Pass.app.tar.gz)
+            ARGS+=(--asset darwin-aarch64="$MAC_UPD")
           fi
           # shellcheck disable=SC2012 # glob 只匹配 ASCII 固定名，ls 足够
           EXE=$(ls artifacts/windows-x64-installer/*-setup.exe 2>/dev/null | head -1 || true)
@@ -1300,9 +1291,8 @@ jobs:
           chmod 600 /tmp/ppass-update.key
           mkdir -p /tmp/sigs
           for f in \
-            artifacts/android/app-release.apk \
-            artifacts/android/app-release-unsigned.apk \
-            artifacts/macos-arm64/P-Pass.app.tar.gz \
+            artifacts/android/P-Pass_*_android*.apk \
+            artifacts/macos-arm64/P-Pass_*_macos-arm64.app.tar.gz \
             artifacts/windows-x64-installer/*-setup.exe; do
             [ -f "$f" ] || continue
             # pin 版本，与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4 一致
@@ -1378,11 +1368,11 @@ jobs:
           **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed || 'n/a' }}（${{ needs.macos-arm64.outputs.signed == 'yes' && 'Developer ID 签名 + 公证 + staple' || '无凭据路径跳过' }})/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || 'n/a' }}（keystore 签名）
           **更新 manifest**：${{ secrets.UPDATE_SIGNING_KEY != '' && 'UPDATE_SIGNING_KEY 在位 → manifest.json 已签名（tauri signer）' || 'UPDATE_SIGNING_KEY 未设置 → manifest.json 未签名（signature 空，客户端系统签名校验兜底——Android PackageInstaller 强制同签名）' }}
 
-          ### 面向人类的资产（H-10c）
-          - **P-Pass-macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
-          - **app-release.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
-          - **P-Pass_*-setup.exe** — Windows 安装包（NSIS）
-          - daemon 层自包含 zip（ppass-macos-arm64.zip）继续提供，向后兼容
+          ### 面向人类的资产（H-10c · UPD-15：文件名带该端版本号）
+          - **P-Pass_\<macOS 版本\>_macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
+          - **P-Pass_\<Android 版本\>_android.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
+          - **P-Pass_\<桌面版本\>_x64-setup.exe** — Windows 安装包（NSIS）
+          - daemon 层自包含 zip（**P-Pass_\<macOS 版本\>_macos-arm64.zip**）继续提供
 
           ### 验证（被拦截/不信任时先做这三步）
           - 下载每平台的 SHA256SUMS-\<platform\> 资产（certutil/shasum 对照）
@@ -1411,18 +1401,16 @@ jobs:
             echo ""
             echo "### H-10c 资产 SHA-256"
             if [ "$MACOS_OK" = "true" ]; then
-              [ -f artifacts/macos-arm64/P-Pass-macos-arm64.dmg ] \
-                || { echo "::error::macOS lane 成功但 artifacts/macos-arm64/P-Pass-macos-arm64.dmg 不存在——下载布局或产物异常，拒绝静默"; exit 1; }
-              sha256sum artifacts/macos-arm64/P-Pass-macos-arm64.dmg
+              DMG=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.dmg' | head -1)
+              [ -n "$DMG" ] \
+                || { echo "::error::macOS lane 成功但 dmg 不存在——下载布局或产物异常，拒绝静默"; exit 1; }
+              sha256sum "$DMG"
             fi
             if [ "$ANDROID_OK" = "true" ]; then
-              if [ -f artifacts/android/app-release.apk ]; then
-                sha256sum artifacts/android/app-release.apk
-              elif [ -f artifacts/android/app-release-unsigned.apk ]; then
-                sha256sum artifacts/android/app-release-unsigned.apk
-              else
-                echo "::error::Android lane 成功但 app-release*.apk 不存在——下载布局或产物异常，拒绝静默"; exit 1
-              fi
+              APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+              [ -n "$APK" ] \
+                || { echo "::error::Android lane 成功但 APK 不存在——下载布局或产物异常，拒绝静默"; exit 1; }
+              sha256sum "$APK"
             fi
           } >> NOTES.md
 

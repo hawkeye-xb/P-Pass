@@ -22,12 +22,12 @@ can be rebuilt from them at any time.
 ### 1. Download & install on your computer / 电脑上装
 
 1. Go to the latest [release page](https://github.com/hawkeye-xb/P-Pass/releases)
-   and download **P-Pass-macos-arm64.dmg** (macOS). If a security popup
+   and download **P-Pass_<版本>_macos-arm64.dmg** (macOS). If a security popup
    blocks you, follow
    [Blocked by AV / SmartScreen](docs/troubleshooting/blocked-by-av.md) — it
    tells you exactly how to verify the file and let it run.
    打开最新 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)，
-   下载 **P-Pass-macos-arm64.dmg**（macOS）。如果安全弹窗拦截，按
+   下载 **P-Pass_<版本>_macos-arm64.dmg**（macOS）。如果安全弹窗拦截，按
    [被拦截了怎么办](docs/troubleshooting/blocked-by-av.md)处理——里面有
    验证和放行的具体步骤。
 2. Open the downloaded file and drag **P-Pass** into your Applications
@@ -43,11 +43,11 @@ can be rebuilt from them at any time.
    > **Which file should I download?** The releases page also lists two
    > rolling test channels (`dogfood`, `test-channel`); those are for
    > development, not for everyday use. For normal use, download
-   > **P-Pass-macos-arm64.dmg** (computer) and **app-release.apk** (phone)
+   > **P-Pass_<版本>_macos-arm64.dmg** (computer) and **P-Pass_<版本>_android.apk** (phone)
    > from the newest versioned release.
    > **该下哪个文件？** Release 页面上还会列出 `dogfood`、`test-channel`
    > 两个滚动测试通道——那是开发用的，日常使用请从最新正式版本里下
-   > **P-Pass-macos-arm64.dmg**（电脑）和 **app-release.apk**（手机）。
+   > **P-Pass_<版本>_macos-arm64.dmg**（电脑）和 **P-Pass_<版本>_android.apk**（手机）。
 3. Double-click **P-Pass** to open it. macOS first time: right-click the
    app → Open (one-time; see the AV guide above if Gatekeeper complains).
    双击 **P-Pass** 打开。macOS 首次：右键点 App → 打开（一次性；Gatekeeper
@@ -70,13 +70,13 @@ The app walks you through it — just click through:
 ### 3. Install the app on your phone and scan / 手机装 App 并扫码
 
 1. On the same [release page](https://github.com/hawkeye-xb/P-Pass/releases),
-   download the phone app (**app-release.apk**, Android). Android may warn
+   download the phone app (**P-Pass_<版本>_android.apk**, Android). Android may warn
    about installing from an unknown source — that's normal for a direct
    download; allow it. (iPhone version is coming later; iOS limits
    background backup, so its experience will differ — we'll spell that
    out when it ships.)
    在同一个 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)
-   下载手机 App（**app-release.apk**，Android）。Android 会提示"未知来源
+   下载手机 App（**P-Pass_<版本>_android.apk**，Android）。Android 会提示"未知来源
    安装"——直接下载的正常提示，允许即可。（iPhone 版后续推出。）
 2. Open the P-Pass app on your phone and scan the QR code on your computer
    screen. Your computer will ask you to approve the pairing — tap

@@ -5,7 +5,8 @@
 # Usage: tools/bundle-desktop-macos.sh <rel_dir> <dmg_out>
 #   <rel_dir>  — output of bundle-macos.sh (contains daemon + lib/, rpath
 #                already rewritten to @executable_path/lib)
-#   <dmg_out>  — destination dir for P-Pass-macos-arm64.dmg (kept OUTSIDE
+#   <dmg_out>  — destination dir for the dmg (name from tools/artifact-names.sh:
+#                P-Pass_<desktop 端版本>_macos-arm64.dmg; kept OUTSIDE
 #                rel_dir so the self-contained zip never picks it up)
 #
 # Steps:
@@ -15,7 +16,8 @@
 #   4. copy lib/ INTO the .app at Contents/MacOS/lib — the daemon's rpath is
 #      @executable_path/lib, so it must sit next to the sidecar binary
 #   5. re-sign the .app (mandatory after changing bundle contents on arm64)
-#   6. hdiutil → P-Pass-macos-arm64.dmg
+#   6. hdiutil → P-Pass_<版本>_macos-arm64.dmg（UPD-15 #685：名字由
+#      tools/artifact-names.sh 单源派生，不再硬编码）
 #
 # Signing: ad-hoc by default (no-credential path, matches release.yml gating).
 # Pass a second arg (codesign identity) for the signed path — caller gates it.
@@ -24,6 +26,8 @@ set -euo pipefail
 REL="$1"; DMG_OUT="$2"
 IDENTITY="${3:--}"
 DESKTOP="$(cd "$(dirname "$0")/../apps/desktop" && pwd)"
+# UPD-15：dmg 名 = P-Pass_<desktop 端版本>_macos-arm64.dmg（唯一真相在 artifact-names.sh）
+DMG_NAME="$("$(dirname "$0")/artifact-names.sh" macos-dmg)"
 
 [ -d "$REL/lib" ] || { echo "FATAL: $REL/lib missing — run bundle-macos.sh first" >&2; exit 1; }
 [ -f "$REL/daemon" ] || { echo "FATAL: $REL/daemon missing" >&2; exit 1; }
@@ -118,7 +122,7 @@ if [ "$IDENTITY" = "-" ] && [ "${PPF_BUNDLE_DMG:-0}" != "1" ]; then
   exit 0
 fi
 
-echo "── 6. dmg → $DMG_OUT/P-Pass-macos-arm64.dmg"
+echo "── 6. dmg → $DMG_OUT/$DMG_NAME"
 mkdir -p "$DMG_OUT"
 rm -rf /tmp/pp-dmg-stage && mkdir -p /tmp/pp-dmg-stage
 cp -R "$APP" /tmp/pp-dmg-stage/
@@ -171,7 +175,7 @@ APPLESCRIPT
 # TCC 拦 Apple Events 就会连带炸掉整个打包步骤（2026-08-25 发现）。
 # 布局确实不致命：Applications 链接已在，拖拽路径仍然成立。
 hdiutil detach /Volumes/P-Pass -quiet
-hdiutil convert /tmp/pp-dmg-rw.dmg -format UDZO -o "$DMG_OUT/P-Pass-macos-arm64.dmg"
+hdiutil convert /tmp/pp-dmg-rw.dmg -format UDZO -o "$DMG_OUT/$DMG_NAME"
 rm -f /tmp/pp-dmg-rw.dmg
 
-echo "── done: $(du -sh "$DMG_OUT/P-Pass-macos-arm64.dmg" | cut -f1) dmg"
+echo "── done: $(du -sh "$DMG_OUT/$DMG_NAME" | cut -f1) dmg"

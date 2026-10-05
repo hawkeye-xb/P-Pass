@@ -18,11 +18,11 @@
 ### 1. 电脑上装 / Install on your computer
 
 1. 打开最新 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)，
-   下载 **P-Pass-macos-arm64.dmg**（macOS）。如果安全弹窗拦截，按
+   下载 **P-Pass_<版本>_macos-arm64.dmg**（macOS）。如果安全弹窗拦截，按
    [被拦截了怎么办](docs/troubleshooting/blocked-by-av.md)处理——里面有
    验证和放行的具体步骤。
    Go to the latest [release page](https://github.com/hawkeye-xb/P-Pass/releases)
-   and download **P-Pass-macos-arm64.dmg** (macOS). Security popup? See
+   and download **P-Pass_<版本>_macos-arm64.dmg** (macOS). Security popup? See
    [Blocked by AV / SmartScreen](docs/troubleshooting/blocked-by-av.md).
 2. 打开下载的文件，把 **P-Pass** 拖进「应用程序」文件夹。
    Open the downloaded file, drag **P-Pass** into Applications.
@@ -35,11 +35,11 @@
 
    > **该下哪个文件？** Release 页面上还会列出 `dogfood`、`test-channel`
    > 两个滚动测试通道——那是开发用的，日常使用请从最新正式版本里下
-   > **P-Pass-macos-arm64.dmg**（电脑）和 **app-release.apk**（手机）。
+   > **P-Pass_<版本>_macos-arm64.dmg**（电脑）和 **P-Pass_<版本>_android.apk**（手机）。
    > **Which file should I download?** The releases page also lists two
    > rolling test channels (`dogfood`, `test-channel`); those are for
    > development, not for everyday use. For normal use, download
-   > **P-Pass-macos-arm64.dmg** (computer) and **app-release.apk** (phone)
+   > **P-Pass_<版本>_macos-arm64.dmg** (computer) and **P-Pass_<版本>_android.apk** (phone)
    > from the newest versioned release.
 3. 双击 **P-Pass** 打开。macOS 首次：右键点 App → 打开（一次性；Gatekeeper
    拦截见上面的拦截指南）。
@@ -60,10 +60,10 @@
 ### 3. 手机装 App 并扫码 / Install on your phone and scan
 
 1. 在同一个 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)
-   下载手机 App（**app-release.apk**，Android）。Android 会提示"未知来源
+   下载手机 App（**P-Pass_<版本>_android.apk**，Android）。Android 会提示"未知来源
    安装"——直接下载的正常提示，允许即可。（iPhone 版后续推出；受 iOS
    系统限制，后台自动备份的体验会不同，发布时会说清楚。）
-   Download the phone app on the same release page (**app-release.apk**,
+   Download the phone app on the same release page (**P-Pass_<版本>_android.apk**,
    Android). Android's "unknown source" warning is normal for a direct
    download; allow it. (iPhone version later.)
 2. 打开手机上的 P-Pass，扫电脑屏幕上的二维码。电脑会弹出配对确认——点

@@ -125,16 +125,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dl && cd dl
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p 'P-Pass-macos-arm64.dmg' -p 'app-release.apk' -p 'manifest.json' \
-            -p 'P-Pass.app.tar.gz' -p 'manifest-android.json' -p 'manifest-macos.json'
+          # UPD-15（#685）：产物名带该端版本号 ⇒ 用 glob 下载、再定位实际文件名。
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" \
+            -p 'P-Pass_*_macos-arm64.dmg' -p 'P-Pass_*_android*.apk' -p 'manifest.json' \
+            -p 'P-Pass_*_macos-arm64.app.tar.gz' -p 'manifest-android.json' -p 'manifest-macos.json'
+          DMG=$(find . -maxdepth 1 -name 'P-Pass_*_macos-arm64.dmg' | head -1)
+          APK=$(find . -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+          UPD=$(find . -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
           # 三个都要有才镜像：只覆盖一个会让 dmg 和 apk 版本错开；#650 起 manifest 也要镜像。
-          for f in P-Pass-macos-arm64.dmg app-release.apk manifest.json; do
+          for f in "$DMG" "$APK" manifest.json; do
             [ -s "$f" ] || { echo "::error::$TAG 缺少 $f"; exit 1; }
           done
           # UPD-13（#660）：分端清单 + macOS 更新产物存在才镜像。缺了不报红——
           # 客户端对每一项都有 GitHub 兜底；这里只如实提示，免得旧 tag 补跑时误红。
-          for f in P-Pass.app.tar.gz manifest-android.json manifest-macos.json; do
-            [ -s "$f" ] || echo "::notice::$f 不在本次 release 里，跳过镜像"
+          for f in "$UPD" manifest-android.json manifest-macos.json; do
+            [ -s "$f" ] || echo "::notice::$(basename "$f") 不在本次 release 里，跳过镜像"
           done
           ls -l
 
@@ -157,18 +162,36 @@ jobs:
           set -euo pipefail
           : "${AWS_ACCESS_KEY_ID:?R2_ACCESS_KEY_ID secret missing}"
           cd dl
+          DMG=$(find . -maxdepth 1 -name 'P-Pass_*_macos-arm64.dmg' | head -1)
+          APK=$(find . -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+          UPD=$(find . -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
+          # 该端版本号 = 分端清单里的顶层 version（就是这次发布给该端的号）；
+          # 清单不在（老 tag 补跑）时回退 release/versions.json。
+          if [ -s manifest-macos.json ]; then
+            D_VER=$(jq -r .version manifest-macos.json)
+          else
+            D_VER=$(jq -r .desktop repo/release/versions.json)
+          fi
+          if [ -s manifest-android.json ]; then
+            A_VER=$(jq -r .version manifest-android.json)
+          else
+            A_VER=$(jq -r .android repo/release/versions.json)
+          fi
+          echo "desktop=$D_VER android=$A_VER"
           put() { # key file content-type cache-control [download-name]
             args=(--endpoint-url "$ENDPOINT" --no-progress --content-type "$3" --cache-control "$4")
             [ -n "${5:-}" ] && args+=(--content-disposition "attachment; filename=\"$5\"")
             aws s3 cp "$2" "s3://$BUCKET/$1" "${args[@]}"
           }
           # 固定文件名每次覆盖；边缘缓存 5 分钟，覆盖后最多 5 分钟生效。
-          put P-Pass-latest.dmg P-Pass-macos-arm64.dmg application/x-apple-diskimage "public, max-age=300" "P-Pass-$VERSION.dmg"
-          put P-Pass-latest.apk app-release.apk application/vnd.android.package-archive "public, max-age=300" "P-Pass-$VERSION.apk"
-          jq -n --arg tag "$TAG" --arg version "$VERSION" \
-            --arg dmg "$(sha256sum P-Pass-macos-arm64.dmg | cut -d' ' -f1)" \
-            --arg apk "$(sha256sum app-release.apk | cut -d' ' -f1)" \
-            '{tag:$tag, version:$version, sha256:{dmg:$dmg, apk:$apk}}' > latest.json
+          # 下载文件名 = 产物名本身（UPD-15：P-Pass_<该端版本>_…），用户下完与 App 里的号一致。
+          put P-Pass-latest.dmg "$DMG" application/x-apple-diskimage "public, max-age=300" "$(basename "$DMG")"
+          put P-Pass-latest.apk "$APK" application/vnd.android.package-archive "public, max-age=300" "$(basename "$APK")"
+          # UPD-15：批次号（tag）与两端版本号各自成字段，不再拿批次号冒充版本号。
+          jq -n --arg tag "$TAG" --arg desktop "$D_VER" --arg android "$A_VER" \
+            --arg dmg "$(sha256sum "$DMG" | cut -d' ' -f1)" \
+            --arg apk "$(sha256sum "$APK" | cut -d' ' -f1)" \
+            '{tag:$tag, desktop:$desktop, android:$android, sha256:{dmg:$dmg, apk:$apk}}' > latest.json
           cat latest.json
           put P-Pass-latest.json latest.json application/json "public, max-age=60"
 
@@ -176,12 +199,14 @@ jobs:
           # （release/legacy-manifest.json，冻结在 0.9.0）指向的就是这些 key ——
           # 固定 key 会被下一版覆盖、签名就对不上字节，所以旧客户端必须有一个
           # 永不改写的地址。immutable 长缓存，代价可忽略。
-          put "releases/$TAG/P-Pass-macos-arm64.dmg" P-Pass-macos-arm64.dmg \
+          # ⚠️ 冻结件（release/legacy-manifest.json）指向的是 v0.9.0 那批**旧名字**的
+          # 副本 —— 那些对象不删不覆盖，永远有效；新发布的副本用新名字，两者并存。
+          put "releases/$TAG/$(basename "$DMG")" "$DMG" \
             application/x-apple-diskimage "public, max-age=31536000, immutable"
-          put "releases/$TAG/app-release.apk" app-release.apk \
+          put "releases/$TAG/$(basename "$APK")" "$APK" \
             application/vnd.android.package-archive "public, max-age=31536000, immutable"
-          if [ -s P-Pass.app.tar.gz ]; then
-            put "releases/$TAG/P-Pass.app.tar.gz" P-Pass.app.tar.gz \
+          if [ -s "$UPD" ]; then
+            put "releases/$TAG/$(basename "$UPD")" "$UPD" \
               application/gzip "public, max-age=31536000, immutable"
           fi
 
@@ -207,8 +232,8 @@ jobs:
           # UPD-13（#660）：**分端清单**也镜像。各自只含本端条目，顶层 version 是
           # 本端版本号；URL 改写成 R2 固定直链（macOS 更新产物先用下面的固定 key
           # 落盘，再改 URL——顺序反了会指向还不存在的对象）。
-          if [ -s P-Pass.app.tar.gz ]; then
-            put P-Pass-latest.app.tar.gz P-Pass.app.tar.gz application/gzip "public, max-age=300" "P-Pass-$VERSION.app.tar.gz"
+          if [ -s "$UPD" ]; then
+            put P-Pass-latest.app.tar.gz "$UPD" application/gzip "public, max-age=300" "$(basename "$UPD")"
           fi
           if [ -s manifest-android.json ]; then
             node "$GITHUB_WORKSPACE/repo/tools/make-update-manifest.mjs" --rebase manifest-android.json \
@@ -229,7 +254,10 @@ jobs:
           set -euo pipefail
           cd dl
           # 带 tag 查询串绕过边缘缓存，确认公网拿到的就是刚传的字节。
-          for pair in "P-Pass-latest.dmg:P-Pass-macos-arm64.dmg" "P-Pass-latest.apk:app-release.apk"; do
+          cd dl
+          DMG=$(find . -maxdepth 1 -name 'P-Pass_*_macos-arm64.dmg' | head -1)
+          APK=$(find . -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+          for pair in "P-Pass-latest.dmg:$(basename "$DMG")" "P-Pass-latest.apk:$(basename "$APK")"; do
             key=${pair%%:*}; src=${pair#*:}
             got=$(curl -fsSL --retry 3 "$PUBLIC_BASE/$key?v=$TAG" | sha256sum | cut -d' ' -f1)
             want=$(sha256sum "$src" | cut -d' ' -f1)

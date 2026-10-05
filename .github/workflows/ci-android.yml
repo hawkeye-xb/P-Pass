@@ -81,5 +81,8 @@ jobs:
       - name: Assert APK contains iroh native libraries
         working-directory: apps/android
         run: |
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q "lib/arm64-v8a/libiroh_ffi.so"
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep -q "lib/arm64-v8a/libtransport.so"
+          # UPD-15（#685）：产物名由构建系统派生（P-Pass_<版本>_android-debug.apk）
+          APK=$(find app/build/outputs/apk/debug -name 'P-Pass_*.apk' | head -1)
+          [ -n "$APK" ] || { echo "::error::debug APK 不在——产物名或构建异常"; exit 1; }
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libiroh_ffi.so"
+          unzip -l "$APK" | grep -q "lib/arm64-v8a/libtransport.so"
