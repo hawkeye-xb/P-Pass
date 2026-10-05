@@ -131,7 +131,13 @@ androidComponents {
             // AGP 8.x 的新 VariantOutput 接口不暴露 outputFileName，改名要走 impl
             // （Android 生态里公认的做法；AGP 大版本升级时这里是第一个要看的地方）。
             val impl = output as? VariantOutputImpl ?: return@forEach
-            val suffix = if (androidSigned) "" else "-unsigned"
+            // release 走发布名（无凭据加 -unsigned）；debug 等其它 variant 带上自己的
+            // buildType 后缀，避免与 release 名字撞车（ci 的 debug 产物断言也按 glob 找）。
+            val suffix = if (variant.buildType == "release") {
+                if (androidSigned) "" else "-unsigned"
+            } else {
+                "-${variant.buildType}"
+            }
             impl.outputFileName.set("P-Pass_${output.versionName.get()}_android$suffix.apk")
         }
     }
