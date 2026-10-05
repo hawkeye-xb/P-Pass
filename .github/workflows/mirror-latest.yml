@@ -262,7 +262,6 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          cd dl
           # 带 tag 查询串绕过边缘缓存，确认公网拿到的就是刚传的字节。
           cd dl
           DMG=$(find . -maxdepth 1 -name 'P-Pass_*_macos-arm64.dmg' | head -1)
