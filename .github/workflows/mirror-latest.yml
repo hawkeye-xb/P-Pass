@@ -170,12 +170,12 @@ jobs:
           if [ -s manifest-macos.json ]; then
             D_VER=$(jq -r .version manifest-macos.json)
           else
-            D_VER=$(jq -r .desktop repo/release/versions.json)
+            D_VER=$(jq -r .desktop ../repo/release/versions.json)
           fi
           if [ -s manifest-android.json ]; then
             A_VER=$(jq -r .version manifest-android.json)
           else
-            A_VER=$(jq -r .android repo/release/versions.json)
+            A_VER=$(jq -r .android ../repo/release/versions.json)
           fi
           echo "desktop=$D_VER android=$A_VER"
           put() { # key file content-type cache-control [download-name]

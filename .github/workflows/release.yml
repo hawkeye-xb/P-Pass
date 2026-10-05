@@ -212,7 +212,8 @@ jobs:
         run: |
           set -euo pipefail
           cd /tmp && rm -rf P-Pass && cp -R rel P-Pass
-          ZIP="$(tools/artifact-names.sh macos-zip)"   # UPD-15：名字单源派生
+          # UPD-15：名字单源派生；本步前面已 `cd /tmp`，必须用绝对路径调脚本
+          ZIP="$("$GITHUB_WORKSPACE/tools/artifact-names.sh" macos-zip)"
           ditto -c -k --keepParent P-Pass "$ZIP"
           # zip 挪进 rel/：让 upload-artifact 的两个 path 共享同一根目录，
           # 下载解包后是平铺的 macos-arm64/<file>（否则公共祖先是 /tmp，
@@ -817,7 +818,9 @@ jobs:
           fi
 
       - name: Sign update manifest (UPD-01, gated)
-        if: env.HAS_UPDATE_KEY == 'true' && hashFiles('artifacts/manifest.json') != ''
+        # UPD-15 修正：正式 tag 下 upload-android **不再**产出 artifacts/manifest.json
+        # （动态清单只给 test 通道），旧条件会让本步被跳过 ⇒ 分端清单带着空签名上传。
+        if: env.HAS_UPDATE_KEY == 'true' && (hashFiles('artifacts/manifest.json') != '' || hashFiles('artifacts/manifest-android.json') != '')
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
         run: |
@@ -857,6 +860,16 @@ jobs:
           for f in android/P-Pass_*_android*.apk; do
             [ -f "$f" ] && ASSETS="$ASSETS $f"
           done
+          # UPD-15 门禁：UPDATE_SIGNING_KEY 在位时，清单的签名必须非空——否则
+          # 就是在发一份「没签名的更新清单」（客户端会判定不可信）。签名步被
+          # 误跳过过（2026-10-05 v2026.10.2 实测），所以在这里把口径钉死。
+          if [ "${HAS_UPDATE_KEY}" = "true" ]; then
+            for f in manifest.json manifest-android.json; do
+              [ -f "$f" ] || continue
+              minsig=$(jq -r '[.platforms[].signature | length] | min' "$f")
+              [ "$minsig" -gt 0 ] || { echo "::error::$f 的签名为空（HAS_UPDATE_KEY 在位时必须签上）"; exit 1; }
+            done
+          fi
           [ -f manifest.json ] && ASSETS="$ASSETS manifest.json"
           [ -f manifest-android.json ] && ASSETS="$ASSETS manifest-android.json"
           # --clobber：重跑 workflow 时资产已存在，裸 upload 会失败。
