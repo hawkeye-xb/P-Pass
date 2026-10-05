@@ -1,8 +1,9 @@
 ---
 import Base from '../../layouts/Base.astro';
 import Landing from '../../components/Landing.astro';
+import { softwareApplication } from '../../schema';
 ---
 
-<Base lang="zh" mirror="/">
+<Base lang="zh" mirror="/" jsonLd={softwareApplication('zh')}>
   <Landing lang="zh" />
 </Base>

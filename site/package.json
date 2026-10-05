@@ -10,12 +10,14 @@
     "icons": "node scripts/sync-icons.mjs",
     "icons:check": "node scripts/sync-icons.mjs --check",
     "prebuild": "npm run tokens && npm run icons",
+    "verify:sitemap": "node scripts/verify-sitemap.mjs",
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview"
   },
   "dependencies": {
     "@astrojs/rss": "^4.0.19",
+    "@astrojs/sitemap": "^3.7.4",
     "astro": "^5.18.2"
   }
 }

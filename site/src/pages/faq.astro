@@ -2,6 +2,7 @@
 import Base from '../layouts/Base.astro';
 import Faq from '../components/Faq.astro';
 import { FAQ_LEDE, FAQ_TITLE } from '../i18n/faq';
+import { faqPage } from '../schema';
 ---
 
 <Base
@@ -9,6 +10,7 @@ import { FAQ_LEDE, FAQ_TITLE } from '../i18n/faq';
   title={`${FAQ_TITLE.en} — P-Pass`}
   description={FAQ_LEDE.en}
   mirror="/zh/faq/"
+  jsonLd={faqPage('en')}
 >
   <Faq lang="en" />
 </Base>

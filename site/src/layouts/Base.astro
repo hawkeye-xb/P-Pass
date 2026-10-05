@@ -2,6 +2,7 @@
 import '../styles/tokens.css';
 import '../styles/global.css';
 import { SITE_URL, GITHUB_URL, SITE_TITLE, SITE_DESCRIPTION } from '../consts';
+import type { JsonLd } from '../schema';
 import { t, type Lang } from '../i18n/ui';
 
 interface Props {
@@ -13,6 +14,8 @@ interface Props {
   mirror?: string;
   /** For 404 and friends: no canonical, no og, noindex. */
   noindex?: boolean;
+  /** Structured data for this page, rendered as JSON-LD. See src/schema.ts. */
+  jsonLd?: JsonLd | JsonLd[];
 }
 
 const {
@@ -21,6 +24,7 @@ const {
   description = SITE_DESCRIPTION[lang],
   mirror,
   noindex = false,
+  jsonLd,
 } = Astro.props;
 
 const home = lang === 'zh' ? '/zh/' : '/';
@@ -62,6 +66,9 @@ const zhUrl = lang === 'zh' ? canonical : mirrorUrl;
         </>
       )
     }
+    {jsonLd && !noindex && (
+      <script type="application/ld+json" is:inline set:html={JSON.stringify(jsonLd)} />
+    )}
     <link rel="icon" type="image/svg+xml" href="/icons/icon-carbon.svg" />
     <link rel="alternate" type="application/rss+xml" title="P-Pass blog" href="/rss.xml" />
     <title>{title}</title>
