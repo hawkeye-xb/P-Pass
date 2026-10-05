@@ -1122,6 +1122,17 @@ jobs:
               --version "$(tools/release-version.sh android)" \
               --only android-arm64 --out artifacts/manifest-android.json
           fi
+          # UPD-13（#660）：本次**本该**有 macOS 产物却没有 → 直接红。
+          # 2026-10-05 事故：macOS lane 被取消 → 这里静默跳过 → 发布出去的版本
+          # 没有 manifest-macos.json → R2 保留旧版 → 桌面端检测不到更新，而页面
+          # 上看不出任何异常。绝不静默降级。
+          case "${PLATFORMS:-all}" in
+            *macos*|*all*|"")
+              [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ] || {
+                echo "::error::本次应产出 macOS 产物但 artifacts/macos-arm64/P-Pass.app.tar.gz 不在——拒绝发布「没有 mac 更新源」的清单"
+                exit 1
+              } ;;
+          esac
           # UPD-13：同时产出一份**只含 darwin** 的分端清单（macOS 客户端的源）。
           if [ -f artifacts/macos-arm64/P-Pass.app.tar.gz ]; then
             node tools/make-update-manifest.mjs \
@@ -1243,6 +1254,15 @@ jobs:
       - name: Compose full manifest (android + darwin + windows)
         run: |
           set -euo pipefail
+          # UPD-13（#660）：正式 tag 的 manifest.json 是**冻结件**，本 job 不再覆盖它。
+          # 2026-10-05 事故：v2026.10.1 的 Windows 收口把冻结件冲成了 tag 版本的动态
+          # 清单（version=2026.10.1、含 windows 条目、没有 darwin）⇒ 老客户端会看到
+          # 一个高于自身包内版本的版本号，正是冻结件要防的死循环。Windows 未发布，
+          # 冻结件本来也不含 windows 条目，这里直接跳过。
+          if [[ "$TAG" != *-test.* ]]; then
+            echo "::notice::正式 tag：manifest.json 是冻结件（UPD-13），跳过 Windows 收口覆盖"
+            exit 0
+          fi
           ARGS=()
           if [ "$ANDROID_OK" = "true" ]; then
             if [ -f artifacts/android/app-release.apk ]; then
@@ -1298,6 +1318,8 @@ jobs:
         run: |
           set -euo pipefail
           cd artifacts
+          # UPD-13：正式 tag 走冻结件、本 job 不覆盖（见 compose 步骤的说明）。
+          [ -f manifest.json ] || { echo "::notice::正式 tag 不覆盖冻结件（UPD-13），跳过"; exit 0; }
           gh release upload "$TAG" manifest.json --clobber
           echo "全平台 manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest.json"
 
