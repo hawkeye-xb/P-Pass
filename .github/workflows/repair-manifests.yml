@@ -63,7 +63,9 @@ jobs:
           cd dl
           APK_L=$(find . -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
           UPD_L=$(find . -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
-          [ -n "$APK_L" ] && [ -n "$UPD_L" ] || { echo "::error::定位不到 APK 或 .app.tar.gz"; exit 1; }
+          if [ -z "$APK_L" ] || [ -z "$UPD_L" ]; then
+            echo "::error::定位不到 APK 或 .app.tar.gz"; exit 1
+          fi
           for f in "$APK_L" "$UPD_L"; do
             npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/key -p "" "$f"
             cp "$f.sig" /tmp/sigs/

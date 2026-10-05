@@ -781,9 +781,9 @@ jobs:
           set -euo pipefail
           APK_ARGS=()
           # UPD-15：产物名带该端版本号，用 glob 定位（不猜名字）
-          ANDROID_APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+          APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
           APK_ARGS=()
-          [ -n "$ANDROID_APK" ] && APK_ARGS=(--asset android-arm64="$ANDROID_APK")
+          [ -n "$APK_PATH" ] && APK_ARGS=(--asset android-arm64="$APK_PATH")
           if [ "${#APK_ARGS[@]}" -gt 0 ]; then
             # 2026-08-25 用户拍板撤掉 R2 镜像：manifest 恒指 GitHub 直链。
             # 撤的原因不是「镜像没用」，是**耦合方向错**——原实现在镜像
@@ -1074,10 +1074,10 @@ jobs:
           set -euo pipefail
           ARGS=()
           # UPD-15：产物名带该端版本号，用 glob 定位
-          ANDROID_APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
-          MACOS_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
-          [ -n "$ANDROID_APK" ] && ARGS+=(--asset android-arm64="$ANDROID_APK")
-          [ -n "$MACOS_UPD" ] && ARGS+=(--asset darwin-aarch64="$MACOS_UPD")
+          APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+          MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
+          [ -n "$APK_PATH" ] && ARGS+=(--asset android-arm64="$APK_PATH")
+          [ -n "$MAC_UPD" ] && ARGS+=(--asset darwin-aarch64="$MAC_UPD")
           # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板）：下面几条
           # 分支（冻结件搬运 / test 动态清单 / 两个分端清单）都要用它。
           # ⚠️ 2026-10-04 事故：它曾被写在 test 分支里，正式 tag 走到 android
@@ -1120,17 +1120,17 @@ jobs:
           # 上看不出任何异常。绝不静默降级。
           case "${PLATFORMS:-all}" in
             *macos*|*all*|"")
-              [ -n "$MACOS_UPD" ] || {
+              [ -n "$MAC_UPD" ] || {
                 echo "::error::本次应产出 macOS 产物但 P-Pass_*_macos-arm64.app.tar.gz 不在——拒绝发布「没有 mac 更新源」的清单"
                 exit 1
               } ;;
           esac
           # UPD-13：同时产出一份**只含 darwin** 的分端清单（macOS 客户端的源）。
-          if [ -n "$MACOS_UPD" ]; then
+          if [ -n "$MAC_UPD" ]; then
             node tools/make-update-manifest.mjs \
               --tag "$TAG" --notes NOTES.md \
               --asset-base "$ASSET_BASE" \
-              --asset darwin-aarch64="$MACOS_UPD" \
+              --asset darwin-aarch64="$MAC_UPD" \
               --version "$(tools/release-version.sh desktop)" \
               --only darwin-aarch64 --out artifacts/manifest-macos.json
           fi
@@ -1147,8 +1147,8 @@ jobs:
           chmod 600 /tmp/ppass-update.key
           mkdir -p /tmp/sigs
           for f in \
-            $ANDROID_APK \
-            $MACOS_UPD; do
+            $APK_PATH \
+            $MAC_UPD; do
             [ -f "$f" ] || continue
             # pin 版本，与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4 一致
             npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" "$f"
@@ -1256,18 +1256,18 @@ jobs:
           fi
           ARGS=()
           if [ "$ANDROID_OK" = "true" ]; then
-            ANDROID_APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
-            if [ -n "$ANDROID_APK" ]; then
-              ARGS+=(--asset android-arm64="$ANDROID_APK")
+            APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
+            if [ -n "$APK_PATH" ]; then
+              ARGS+=(--asset android-arm64="$APK_PATH")
             else
               echo "::error::Android lane 成功但 APK 不在——拒绝用缺条目的清单覆盖桌面版"; exit 1
             fi
           fi
           if [ "$MACOS_OK" = "true" ]; then
-            MACOS_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
-            [ -n "$MACOS_UPD" ] \
+            MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
+            [ -n "$MAC_UPD" ] \
               || { echo "::error::macOS lane 成功但 .app.tar.gz 不在——拒绝用缺条目的清单覆盖桌面版"; exit 1; }
-            ARGS+=(--asset darwin-aarch64="$MACOS_UPD")
+            ARGS+=(--asset darwin-aarch64="$MAC_UPD")
           fi
           # shellcheck disable=SC2012 # glob 只匹配 ASCII 固定名，ls 足够
           EXE=$(ls artifacts/windows-x64-installer/*-setup.exe 2>/dev/null | head -1 || true)
