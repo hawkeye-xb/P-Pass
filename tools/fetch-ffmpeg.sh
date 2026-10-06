@@ -29,26 +29,34 @@
 #
 # 👉 升级版本时：改 tag/版本号/文件名/SHA256，**每条改动的分支都要重跑
 #    一次反证**（把 SHA256 改错一位 → 本脚本必须非零退出）。
+#    换 BtbN tag 前先确认新 tag 还在（`gh api
+#    repos/BtbN/FFmpeg-Builds/releases/tags/<tag>`）；macOS 那条的 evermeet
+#    版本与 BtbN 的 `n9.0.x` 保持对齐（现在两边都是 9.0.2），别单独动一边。
 set -euo pipefail
 
 # ── Windows + Linux：BtbN/FFmpeg-Builds ───────────────────────────────
-# `autobuild-*` 是打完就不再变的 tag（**`latest` 是滚动的，不许用**）。
+# ⚠️ **不可变 ≠ 一直存在（#700）**：BtbN 只保留最近若干条 autobuild，旧 tag 会在
+# 某次清理里被**删除**。2026-10-05 我们钉的 `autobuild-2026-09-20-13-11` 就是这
+# 么消失的（活了约 15 天，见 #700），`test (windows)` 当场每次都红在 404 上。
+# 所以「换 tag」是**周期性动作**，不是一次性动作；选当前最新还活着的那条。
+# `latest` 是滚动的，不许用。
+#
 # asset 由 GitHub Releases 托管，对 CI runner 出口 IP 不限流 —— gyan.dev
 # 当初正是对 runner 返 503 才暴露出这条 lane 的脆弱（#252）。
 # 选 `lgpl` 而非 `gpl`：该构建 `--disable-libx264 --disable-libx265
 # --disable-libxvid`，不含 GPL 组件，与 BUILD-08 给 libheif 选 `[core]`
 # 摘掉 x265 是同一个取舍。
-FFMPEG_BTBN_TAG="autobuild-2026-09-20-13-11"
-FFMPEG_BTBN_VER="n9.0.2-3-ga5923073bf"
+FFMPEG_BTBN_TAG="autobuild-2026-10-05-13-07"
+FFMPEG_BTBN_VER="n9.0.2-22-g46d8f462ee"
 
 FFMPEG_WIN_ZIP="ffmpeg-${FFMPEG_BTBN_VER}-win64-lgpl-9.0.zip"
-FFMPEG_WIN_SHA256="ec1706ea5c63a73030e485ec6954f0d6a672508c9548a1c5ed07c85c90ee4ef3"
+FFMPEG_WIN_SHA256="1c73d2256f0198805daf0f765feab8d3f21d3ab85e8dda0c2bb44ce1e3a126c7"
 
 FFMPEG_LINUX_AMD64_TAR="ffmpeg-${FFMPEG_BTBN_VER}-linux64-lgpl-9.0.tar.xz"
-FFMPEG_LINUX_AMD64_SHA256="f22b97b959e529204d82c72815d6889bba083da11b145ea1d1ee65ade88302b1"
+FFMPEG_LINUX_AMD64_SHA256="ff734ab191469a1ffca4bd32bd098b62f50e6a50cb024f9b45b694015530a8f6"
 
 FFMPEG_LINUX_ARM64_TAR="ffmpeg-${FFMPEG_BTBN_VER}-linuxarm64-lgpl-9.0.tar.xz"
-FFMPEG_LINUX_ARM64_SHA256="108386e50fab205abf341f87d532df3edbf4a9b56e69befc6b68401be4567701"
+FFMPEG_LINUX_ARM64_SHA256="0529a3a7bf460836c9b6ce67b5d9c18aa7e90d5bff501038a01e1573d2cba3fd"
 
 # ── macOS：evermeet.cx ────────────────────────────────────────────────
 # BtbN **不出 macOS 构建**（该 release 只有 win64/winarm64/linux64/
