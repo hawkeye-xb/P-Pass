@@ -1,0 +1,113 @@
+---
+/**
+ * Download block, shared by the landing hero and the zh entry page.
+ *
+ * One component = one set of download URLs. `consts.ts` stays the single place
+ * where those URLs are defined, so the landing page and any other page that
+ * offers a download can never drift apart.
+ *
+ * zh gets the Cloudflare mirror buttons plus the GitHub link (GitHub release
+ * assets are often unreachable from mainland China); en gets the single GitHub
+ * button. Markup and classes moved here verbatim from Landing.astro — the
+ * landing page must look exactly as it did before.
+ */
+import { MIRROR_ANDROID, MIRROR_MAC, RELEASES_URL } from '../consts';
+import { t, type Lang } from '../i18n/ui';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+---
+
+{
+  lang === 'zh' ? (
+    <>
+      <div class="cta-row">
+        <a class="cta" href={MIRROR_MAC} rel="external">
+          <span class="cta-main">
+            {t(lang, 'hero.cta.mac')}
+            <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
+          </span>
+          <span class="cta-sub">{t(lang, 'hero.cta.mac.sub')}</span>
+        </a>
+        <a class="cta" href={MIRROR_ANDROID} rel="external">
+          <span class="cta-main">
+            {t(lang, 'hero.cta.android')}
+            <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
+          </span>
+          <span class="cta-sub">{t(lang, 'hero.cta.android.sub')}</span>
+        </a>
+      </div>
+      <p class="cta-alt">
+        <a href={RELEASES_URL} rel="external">{t(lang, 'hero.cta.alt')}</a>
+      </p>
+    </>
+  ) : (
+    <a class="cta" href={RELEASES_URL} rel="external">
+      <span class="cta-main">
+        {t(lang, 'hero.cta')}
+        <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
+      </span>
+      <span class="cta-sub">{t(lang, 'hero.cta.sub')}</span>
+    </a>
+  )
+}
+
+<style>
+  .cta {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.25rem;
+    min-height: 56px;
+    box-sizing: border-box;
+    background: var(--ink);
+    color: var(--paper);
+    padding: 0.9rem 2.2rem;
+    border-radius: var(--radius-control);
+    text-decoration: none;
+    font-weight: 600;
+    transition: background 0.15s ease;
+  }
+  .cta:hover { background: var(--ink-hover); color: var(--paper); }
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+  }
+  .cta-alt {
+    margin: 0.9rem 0 0;
+    font-size: 0.85rem;
+  }
+  .cta-alt a { color: var(--text-meta); }
+  .cta-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  /* Beta badge: amber = waiting (token meaning color). Green is reserved
+     for "photos safely stored" and never appears on this page. */
+  .cta-badge {
+    padding: 0.1rem 0.5rem;
+    border-radius: var(--radius-pill);
+    background: var(--waiting-bg);
+    color: var(--waiting);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
+  }
+  .cta-sub {
+    font-size: 0.8rem;
+    font-weight: 400;
+    opacity: 0.75;
+  }
+  @media (prefers-color-scheme: dark) {
+    .cta { background: var(--paper); color: var(--ink); }
+    .cta:hover { background: var(--linen); color: var(--ink); }
+  }
+</style>

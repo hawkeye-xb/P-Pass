@@ -85,7 +85,7 @@ const top = FAQ_TOP.map((id) => byId.get(id)).filter((item) => item !== undefine
                     <p class="more">
                       {more.map((link, index) => (
                         <>
-                          <a href={link.href} rel="external">
+                          <a href={link.href} rel={/^https?:/.test(link.href) ? 'external' : undefined}>
                             {link.label}
                           </a>
                           {index < more.length - 1 && <span aria-hidden="true"> · </span>}

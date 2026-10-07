@@ -66,9 +66,13 @@ const zhUrl = lang === 'zh' ? canonical : mirrorUrl;
         </>
       )
     }
-    {jsonLd && !noindex && (
-      <script type="application/ld+json" is:inline set:html={JSON.stringify(jsonLd)} />
-    )}
+    {
+      jsonLd &&
+        !noindex &&
+        (Array.isArray(jsonLd) ? jsonLd : [jsonLd]).map((block) => (
+          <script type="application/ld+json" is:inline set:html={JSON.stringify(block)} />
+        ))
+    }
     <link rel="icon" type="image/svg+xml" href="/icons/icon-carbon.svg" />
     <link rel="alternate" type="application/rss+xml" title="P-Pass blog" href="/rss.xml" />
     <title>{title}</title>

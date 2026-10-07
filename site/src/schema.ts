@@ -54,6 +54,29 @@ export function faqPage(lang: Lang): JsonLd {
   };
 }
 
+/**
+ * HowTo for pages that walk through a setup in order. The steps live next to
+ * the prose they describe (see src/i18n/guide.ts), so screen copy and markup
+ * stay in sync. Google retired HowTo rich results in 2023: this is here for
+ * machine readers, not for a visual treatment.
+ */
+export function howTo(input: {
+  name: string;
+  steps: readonly { name: string; text: string }[];
+}): JsonLd {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'HowTo',
+    name: input.name,
+    step: input.steps.map((step, index) => ({
+      '@type': 'HowToStep',
+      position: index + 1,
+      name: step.name,
+      text: step.text,
+    })),
+  };
+}
+
 export function breadcrumb(trail: { name: string; path: string }[]): JsonLd {
   return {
     '@context': 'https://schema.org',

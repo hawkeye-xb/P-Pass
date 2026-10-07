@@ -1,0 +1,102 @@
+---
+/**
+ * /zh/backup-without-nas/ — one page, one search intent: "back up phone photos
+ * to a computer at home, without NAS / without Docker".
+ *
+ * Shape: answer first, then the path a reader actually walks — install, what
+ * it looks like afterwards, whether their computer qualifies (boundaries),
+ * cost and where the photos live, and three links into the FAQ for detail
+ * instead of repeating the FAQ's answers here.
+ *
+ * Structure follows src/pages/zh/faq.astro: a thin page that renders copy from
+ * src/i18n/guide.ts. Single language on purpose, so no `mirror` and no hreflang
+ * alternates until the English page exists.
+ *
+ * Structured data: two blocks, one per <script> (Base renders an array that
+ * way). The HowTo steps and the visible steps come from the same file, so the
+ * screen and the markup cannot drift apart. Note that Google retired HowTo rich
+ * results in 2023 — this is for machine readers, not for a visual treatment.
+ */
+import Base from '../../layouts/Base.astro';
+import Download from '../../components/Download.astro';
+import { GUIDE } from '../../i18n/guide';
+import { breadcrumb, howTo } from '../../schema';
+
+const copy = GUIDE.zh;
+const path = '/zh/backup-without-nas/';
+const sections = [copy.steps, copy.after, copy.fit, copy.money];
+const jsonLd = [
+  breadcrumb([
+    { name: 'P-Pass', path: '/zh/' },
+    { name: copy.h1, path },
+  ]),
+  howTo({ name: copy.steps.title, steps: copy.howToSteps }),
+];
+---
+
+<Base lang="zh" title={copy.title} description={copy.metaDescription} jsonLd={jsonLd}>
+  <article class="guide">
+    <h1>{copy.h1}</h1>
+    {copy.lead.map((line) => <p class="lead">{line}</p>)}
+
+    <div class="download">
+      <Download lang="zh" />
+    </div>
+
+    {
+      sections.map((section) => (
+        <>
+          <h2>{section.title}</h2>
+          {section.paras.map((line) => (
+            <p>{line}</p>
+          ))}
+        </>
+      ))
+    }
+
+    <h2>{copy.more.title}</h2>
+    <ul class="more">
+      {
+        copy.more.links.map((link) => (
+          <li>
+            <a href={link.href}>{link.label}</a>
+          </li>
+        ))
+      }
+    </ul>
+  </article>
+</Base>
+
+<style>
+  .guide {
+    max-width: 40em;
+    margin: 0 auto;
+    padding: 3.5rem 1.25rem 4rem;
+  }
+  h1 {
+    font-size: clamp(1.7rem, 5vw, 2.3rem);
+    margin: 0 0 1.25rem;
+    text-wrap: balance;
+  }
+  .lead {
+    color: var(--text-secondary);
+    font-size: 1.05rem;
+  }
+  h2 {
+    font-size: 1.35rem;
+    margin: 2.75rem 0 1rem;
+  }
+  p {
+    margin: 0 0 1.1rem;
+  }
+  .more {
+    margin: 0 0 1.1rem;
+    padding-left: 1.25rem;
+  }
+  .more li {
+    margin-bottom: 0.4rem;
+  }
+  .download {
+    margin: 1.5rem 0 1rem;
+  }
+</style>
