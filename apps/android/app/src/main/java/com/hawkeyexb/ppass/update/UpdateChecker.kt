@@ -340,7 +340,9 @@ internal const val APK_MAX_REDIRECTS = 5
  * 本地已有 [existingBytes] 字节时，请求头 `Range: bytes=N-` 只取剩余部分：
  *  - 206 → 追加写入；
  *  - 200 → 服务器不理会 Range → 从头重下（截断）；
- *  - 416 → 本地残包比远端还大/错位 → 删残包从头重下（[downloadApk] 内处理）。
+ *  - 416 → 本地残包比远端还大/错位 → 删残包从头重下（[downloadApk] 内处理）；
+ *  - 206 但 Content-Range 起点 ≠ N → 服务端给的不是我们要的那段，拼上去必坏，
+ *    与 416 同样处理（UPD-19）。没带 Content-Range 的 206 照旧接受。
  */
 internal data class ResumePlan(val existingBytes: Long) {
     val rangeHeader: String? get() = if (existingBytes > 0) "bytes=$existingBytes-" else null
@@ -350,12 +352,35 @@ internal fun resumePlanFor(existingBytes: Long): ResumePlan =
     ResumePlan(existingBytes.coerceAtLeast(0L))
 
 /**
+ * UPD-19: 206 响应的 Content-Range 起点（`bytes START-END/TOTAL`）。
+ * 头缺失或格式不认识 = null（调用方按「不校验」放行）。纯函数，JVM 可测。
+ */
+internal fun contentRangeStartOf(header: String?): Long? {
+    val spec = header?.trim()?.removePrefix("bytes")?.trim() ?: return null
+    return spec.substringBefore('-', missingDelimiterValue = "").trim().toLongOrNull()
+}
+
+/**
+ * UPD-19: 失败后残包还值不值得留给下一跑续传（纯函数，JVM 可测）。
+ * 停滞 / 断连 / 5xx / 429 = 瞬时故障，已落盘的前缀字节仍是对的，下一跑带
+ * `Range: bytes=N-` 接着要；其余（4xx、写盘失败、未知异常）重试也是同样结果，
+ * 残包没有续传价值，删掉。[retryVerdictOf] 用同一个判定，两边不会说法不一。
+ * 注意：残包不会被误装——只有完成标记在且校验通过才进安装（见 UpdateDownloadWorker）。
+ */
+internal fun isTransientDownloadFailure(result: ApkDownloadResult): Boolean = when (result) {
+    is ApkDownloadResult.Stalled, is ApkDownloadResult.ConnectionFailed -> true
+    is ApkDownloadResult.HttpStatus -> result.code >= 500 || result.code == 429
+    else -> false
+}
+
+/**
  * NET-09: 下载 [url] 到 [dest] 并分类失败（JVM 用假连接可测）。
  * [open] 只负责造出未连接的 HttpURLConnection；超时由本函数设置
  * （[readTimeoutMs] 只为测试缩短，生产恒用默认值）。
  * UPD-02: [resumeFromBytes] > 0 时按 [ResumePlan] 发 Range 请求追加下载；
  * [onProgress] 以「含断点的总已收 / 总大小（未知为 -1）」回调，供 UI 进度条。
- * 除 416 自恢复外的任何失败都会删掉 [dest] 的残包，不留半个 APK 给下次误装。
+ * UPD-19: 瞬时失败（[isTransientDownloadFailure]）保留 [dest] 的残包给下一跑续传——
+ * 原先任何失败都删，WorkManager 的退避重试于是次次从 0 字节重下；其余失败照旧删。
  */
 fun downloadApk(
     url: String,
@@ -371,7 +396,8 @@ fun downloadApk(
     var rangeRetried = false
     while (true) {
         val result = downloadOnce(url, dest, open, readTimeoutMs, resume, onProgress)
-        // 416 = 本地残包与远端对不上：删残包、摘掉 Range 头，完整重试一次。
+        // 416 = 本地残包与远端对不上（含 206 起点错位，见 downloadOnce）：
+        // 删残包、摘掉 Range 头，完整重试一次。
         if (result is ApkDownloadResult.HttpStatus && result.code == 416 &&
             resume.rangeHeader != null && !rangeRetried
         ) {
@@ -380,7 +406,7 @@ fun downloadApk(
             resume = resumePlanFor(0)
             continue
         }
-        if (result !is ApkDownloadResult.Ok) dest.delete()
+        if (result !is ApkDownloadResult.Ok && !isTransientDownloadFailure(result)) dest.delete()
         return result
     }
 }
@@ -427,6 +453,13 @@ private fun downloadOnce(
                 conn = null
             } else if (code == 416 && resume.rangeHeader != null) {
                 result = ApkDownloadResult.HttpStatus(416) // 交给外层删残包重试
+            } else if (code == 206 && resume.rangeHeader != null &&
+                contentRangeStartOf(c.getHeaderField("Content-Range"))
+                    .let { it != null && it != resume.existingBytes }
+            ) {
+                // 206 但给的不是从残包末尾开始的那段：追加就是把错位字节拼进包里。
+                // 当 416 处理（外层删残包、不带 Range 完整重下一次）。
+                result = ApkDownloadResult.HttpStatus(416)
             } else if (code != 200 && code != 206) {
                 // 含：3xx 没带 Location、重定向超过上限——都如实报最后那个状态码。
                 result = ApkDownloadResult.HttpStatus(code)
