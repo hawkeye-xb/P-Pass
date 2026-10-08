@@ -1,7 +1,7 @@
 # P-Pass
 
 > P-Pass backs up the photos on your phone to a computer you already own at
-> home. No account, no cloud storage, no NAS, no Docker. Free and open source
+> home. No account, no cloud storage, no NAS, no Docker. Open source
 > (AGPL-3.0). Photos move encrypted and directly between your phone and your
 > computer, and what lands on the computer are the original files in a folder
 > you picked.
@@ -20,7 +20,7 @@
   folder you chose: open them straight from Finder.
 - Backups are one-way, phone to computer. Deleting a photo on the phone does
   not delete the copy on the computer.
-- Free: no account, no subscription, no storage fee. How much you can keep is
+- No account, no subscription, no storage fee. How much you can keep is
   how much free space that drive has.
 
 ## Boundaries
