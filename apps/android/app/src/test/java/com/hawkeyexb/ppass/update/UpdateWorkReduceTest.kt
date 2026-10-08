@@ -2,7 +2,8 @@
 //  - reduceWorkSignal：worker 信号 → UI 状态真值表（None/Cancelled 不出状态，
 //    防「pending 已写、work 未可见」的竞态把进行中打回 Idle）；
 //  - retryVerdictOf：失败该不该让 WorkManager 退避重试（有次数上限）；
-//  - failureKindOf：下载结果 → 失败类（UI 文案按类分句）。
+//  - failureKindOf：下载结果 → 失败类（UI 文案按类分句）；
+//  - pendingAutoCheckAction：待办在但 work 记录被剪 ⇒ 不许永久跳过自动检查（UPD-21）。
 package com.hawkeyexb.ppass.update
 
 import org.junit.Assert.assertEquals
@@ -113,5 +114,36 @@ class UpdateWorkReduceTest {
         )
         // Ok 不可达（worker 只在失败路径调用），防御性归 Unexpected。
         assertEquals(UpdateFailureKind.Unexpected, failureKindOf(ApkDownloadResult.Ok(1)))
+    }
+
+    // ── UPD-21: pendingAutoCheckAction 真值表 ──
+
+    @Test
+    fun noPendingChecksAsUsual() {
+        for (signal in WorkSignal.values()) {
+            assertEquals(PendingAutoCheckAction.Check, pendingAutoCheckAction(null, signal))
+        }
+    }
+
+    @Test
+    fun pendingWithPrunedWorkRecordIsClearedNotSkippedForever() {
+        // WorkManager 剪掉终态记录后 getWorkInfosForUniqueWork 返回空 ⇒ None。
+        assertEquals(
+            PendingAutoCheckAction.ClearStaleThenCheck,
+            pendingAutoCheckAction(pending, WorkSignal.None),
+        )
+        assertEquals(
+            PendingAutoCheckAction.ClearStaleThenCheck,
+            pendingAutoCheckAction(pending, WorkSignal.Cancelled),
+        )
+    }
+
+    @Test
+    fun pendingWithLiveWorkRecordSkips() {
+        for (signal in listOf(
+            WorkSignal.Enqueued, WorkSignal.Running, WorkSignal.Succeeded, WorkSignal.Failed,
+        )) {
+            assertEquals(PendingAutoCheckAction.Skip, pendingAutoCheckAction(pending, signal))
+        }
     }
 }
