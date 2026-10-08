@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 /** 更新 UI 的互斥状态——任一时刻只会是其中一个。 */
@@ -63,6 +64,77 @@ internal fun reduceWorkSignal(
     WorkSignal.Failed ->
         UpdateUiState.Failed(failureKind ?: UpdateFailureKind.Unexpected, pending.version)
     WorkSignal.None, WorkSignal.Cancelled -> null
+}
+
+/** 自动检查遇到落盘待办时该怎么走（[pendingAutoCheckAction] 的结果）。 */
+internal enum class PendingAutoCheckAction {
+    /** 没有待办：照常检查。 */
+    Check,
+
+    /** 待办在、work 记录也在：更新线还活着，交给 observeWorker 驱动，不再查。 */
+    Skip,
+
+    /** 待办在、work 记录已没了：待办是孤儿，清掉后照常检查。 */
+    ClearStaleThenCheck,
+}
+
+/**
+ * UPD-21: 自动检查前对落盘待办的判定（纯函数，UpdateWorkReduceTest 锁真值表）。
+ * WorkManager 在每次打开内部库时剪掉「终态且入队已满 1 天」的记录
+ * （CleanupCallback，PRUNE_THRESHOLD_MILLIS = 1 天；我们没设 keepResultsForAtLeast）。
+ * 用户对「待安装 / 下载失败」点了稍后或直接划掉进程、隔天再冷启动，记录就没了，
+ * 而 pending 只在安装回执 / 失败关闭 / 取消时清——只看 pending 就会永久跳过。
+ * 记录不在（None）或已取消（Cancelled）= 这条更新线已没有人驱动，按孤儿处理。
+ */
+internal fun pendingAutoCheckAction(
+    pending: PendingUpdate?,
+    signal: WorkSignal,
+): PendingAutoCheckAction = when {
+    pending == null -> PendingAutoCheckAction.Check
+    signal == WorkSignal.None || signal == WorkSignal.Cancelled ->
+        PendingAutoCheckAction.ClearStaleThenCheck
+    else -> PendingAutoCheckAction.Skip
+}
+
+/**
+ * 自动检查的完整门序（UPD-21 抽出，JVM 可测——controller 只注入 work 记录读取
+ * 与真正的检查动作）：6h 节流门 → 非空闲不查 → 待办判定 → [check] → 记账。
+ * 返回是否真的发起了检查。
+ */
+internal suspend fun runAutoCheck(
+    prefs: UpdatePrefs,
+    now: () -> Long,
+    isIdle: () -> Boolean,
+    readWorkSignal: suspend () -> WorkSignal,
+    check: suspend () -> Unit,
+    onOrphanCleared: (version: String) -> Unit = {},
+): Boolean {
+    if (!shouldAutoCheck(prefs.lastCheckAt(), now())) return false
+    if (!isIdle()) return false
+    val pending = prefs.pendingUpdate()
+    if (pending != null) {
+        // 已有一条更新线在走（下载中/待安装/待用户决策）就别再查——但要以
+        // work 记录为准，而不是只看 pending：记录被 WorkManager 剪掉后
+        // pending 成了孤儿，只看它会让自动检查永久停摆。
+        when (pendingAutoCheckAction(pending, readWorkSignal())) {
+            PendingAutoCheckAction.Skip -> return false
+            PendingAutoCheckAction.ClearStaleThenCheck -> {
+                // 只清待办、回到可检查状态，不按 pending 重新入队：pending 记的
+                // 可能是旧版本（隔了至少一天，新版可能已发），也可能是用户已
+                // 放着不管的失败线；重新检查拿最新 manifest，让用户再决定。
+                // cache 里的已验包不删：同一份更新再次确认下载时，Worker 按
+                // 产物身份（UPD-19）直接复用，不重下；不同的会被认领时清掉。
+                if (!isIdle()) return false
+                prefs.clearPending()
+                onOrphanCleared(pending.version)
+            }
+            PendingAutoCheckAction.Check -> Unit
+        }
+    }
+    check()
+    // 无论成败都记账——限流环境下失败也是一次检查，不能每次 resume 都打。
+    prefs.markChecked(now())
+    return true
 }
 
 class UpdateUiController(
@@ -164,20 +236,34 @@ class UpdateUiController(
     fun onResume() = autoCheck()
 
     private fun autoCheck() {
-        if (!shouldAutoCheck(prefs.lastCheckAt(), now())) return
-        // 已有一条更新线在走（下载中/待安装/待用户决策）就别再查。
-        if (prefs.pendingUpdate() != null) return
-        if (_state.value !is UpdateUiState.Idle) return
         scope.launch {
-            val outcome = checkUpdate(versionName, channelFromVersion(versionName), source)
-            // 无论成败都记账——限流环境下失败也是一次检查，不能每次 resume 都打。
-            prefs.markChecked(now())
-            if (outcome is UpdateCheckOutcome.Available &&
-                _state.value is UpdateUiState.Idle
-            ) {
-                dialogSuppressed.value = false
-                _state.value = UpdateUiState.Available(outcome.info, manual = false)
-            }
+            runAutoCheck(
+                prefs = prefs,
+                now = now,
+                isIdle = { _state.value is UpdateUiState.Idle },
+                // 直接读库而不用 lastSignal：冷启动时 observeWorker 可能还没收到
+                // 第一帧，lastSignal 的默认 None 会把活着的更新线误判成孤儿。
+                readWorkSignal = {
+                    signalOf(
+                        workManager
+                            .getWorkInfosForUniqueWorkFlow(UpdateDownloadWorker.UNIQUE_WORK_NAME)
+                            .first()
+                            .firstOrNull(),
+                    )
+                },
+                onOrphanCleared = { version ->
+                    android.util.Log.i(UPDATE_LOG_TAG, "orphan pending $version cleared: work record gone")
+                },
+                check = {
+                    val outcome = checkUpdate(versionName, channelFromVersion(versionName), source)
+                    if (outcome is UpdateCheckOutcome.Available &&
+                        _state.value is UpdateUiState.Idle
+                    ) {
+                        dialogSuppressed.value = false
+                        _state.value = UpdateUiState.Available(outcome.info, manual = false)
+                    }
+                },
+            )
         }
     }
 
