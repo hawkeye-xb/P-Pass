@@ -9,6 +9,8 @@
 # dispatch 触发，挂在那边拦不住合并前的回归，所以放在 PR 必过的这条秒级 lane。
 # UPD-18 (#706) 起兼收 mirror-resolve：R2 镜像的 tag 判定（test 不许覆盖 stable）
 # 同理——mirror-latest.yml 只在发布后触发，拦不住合并前的回归。
+# REL-13 (#716) 起兼收 release-version-source：补跑 / 修复清单路径的版本来源与
+# release.yml 每个 checkout 都检出被补跑的 tag（tools/test-release-version-source.sh）。
 name: CI Docs
 
 on:
@@ -30,6 +32,10 @@ on:
       - ".github/workflows/mirror-latest.yml"
       - "tools/mirror-resolve-tag.sh"
       - "tools/test-mirror-resolve-tag.sh"
+      - ".github/workflows/repair-manifests.yml"
+      - "tools/release-version.sh"
+      - "tools/check-version-bump.sh"
+      - "tools/test-release-version-source.sh"
   push:
     branches: [main]
     paths:
@@ -48,6 +54,10 @@ on:
       - ".github/workflows/mirror-latest.yml"
       - "tools/mirror-resolve-tag.sh"
       - "tools/test-mirror-resolve-tag.sh"
+      - ".github/workflows/repair-manifests.yml"
+      - "tools/release-version.sh"
+      - "tools/check-version-bump.sh"
+      - "tools/test-release-version-source.sh"
   workflow_dispatch:
 
 permissions:
@@ -90,3 +100,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: 判定测试（stub gh，三种事件 × test/stable）
         run: bash tools/test-mirror-resolve-tag.sh
+
+  release-version-source:
+    name: release-version-source（REL-11/13：补跑路径的代码与版本号取自被补跑的 tag）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 依赖（PyYAML：测试按 step 名从 workflow 里抽 run 块）
+        run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+      - name: 补跑口径测试
+        run: bash tools/test-release-version-source.sh
