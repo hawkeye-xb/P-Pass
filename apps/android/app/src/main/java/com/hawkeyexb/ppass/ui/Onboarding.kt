@@ -4,6 +4,7 @@
 // buttons >=56dp.
 package com.hawkeyexb.ppass.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -43,7 +44,7 @@ private fun PrimaryButton(text: String, onClick: () -> Unit) {
 
 /** Screen 1: one promise, one big button. */
 @Composable
-fun WelcomeScreen(onScan: () -> Unit) {
+fun WelcomeScreen(onScan: () -> Unit, onManual: () -> Unit) {
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
@@ -83,7 +84,16 @@ fun WelcomeScreen(onScan: () -> Unit) {
             )
             Spacer(Modifier.height(40.dp))
             PrimaryButton(stringResource(R.string.welcome_scan), onScan)
-            Spacer(Modifier.height(24.dp))
+            // #421：扫不了码的人（不给摄像头 / 摄像头坏了）在这一屏就有退路，
+            // 与扫码页底部同一行文字链接、同一句文案。
+            Text(
+                stringResource(R.string.scan_manual_link),
+                fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink60,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(onClick = onManual)
+                    .padding(26.dp, 16.dp, 26.dp, 8.dp),
+            )
         }
         }
     }
