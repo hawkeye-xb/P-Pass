@@ -428,10 +428,7 @@ fn set_library_dir(library_dir: String) -> Result<(), String> {
         target.is_dir(),
         dir_writable(target),
     )?;
-    let doc = std::fs::read_to_string(&cfg_path).unwrap_or_default();
-    let merged = merge_library_dir(&doc, &library_dir);
-    std::fs::write(&cfg_path, merged)
-        .map_err(|e| ipc::ui_err("ui.err_set_library", &[("err", &e)]))?;
+    rewrite_library_dir(&cfg_path, &library_dir)?;
     // ⑤ 孤儿清理：folder.set 时代留在旧库目录里的 config.toml 没有任何
     // 读者，留着只会误导排查。防误伤：与平台 config 是同一个文件
     // （库 == 平台目录，含大小写/拼写差异）则跳过——canonicalize 两边
@@ -447,6 +444,22 @@ fn set_library_dir(library_dir: String) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// DESK-49 (#710)：平台 config.toml 的 read-modify-write 本体。
+///
+/// 读失败必须分两档：文件不存在 ⇒ 当空配置（首次写入，正常创建）；
+/// 其它读错误（权限 / 非 UTF-8 / IO）⇒ 如实报错、**不写文件**。
+/// 曾经的 `unwrap_or_default()` 把后者也读成空串，写回只剩 data_dir，
+/// bind_addr / relay_urls / [telemetry] 被抹掉，界面却报成功。
+fn rewrite_library_dir(cfg_path: &std::path::Path, library_dir: &str) -> Result<(), String> {
+    let doc = match std::fs::read_to_string(cfg_path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(ipc::ui_err("ui.err_set_library", &[("err", &e)])),
+    };
+    let merged = merge_library_dir(&doc, library_dir);
+    std::fs::write(cfg_path, merged).map_err(|e| ipc::ui_err("ui.err_set_library", &[("err", &e)]))
 }
 
 /// DESK-46 (#638)：换库目标的判据（纯函数——文件系统事实由调用点探测后
@@ -3059,6 +3072,51 @@ mod tests {
         assert!(paths_overlap("C:\\Lib", "c:\\lib\\sub"));
         assert!(!paths_overlap("C:\\Lib", "C:\\Lib2"));
         assert!(paths_overlap("C:/Lib/sub", "C:\\Lib"));
+    }
+
+    // ══ DESK-49 (#710)：换库读 config 失败不得被吞 ═══════════════════
+
+    const DESK49_FULL_CFG: &str = "data_dir = \"/old/library\"\n\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n";
+
+    // 读失败但写能成功 ⇒ 返回 keyed 错误、文件内容逐字节不变（E2 反证主测）。
+    // 用非 UTF-8 造读失败：跨平台、不需要平台分叉（B.2）。
+    // 为什么不用「权限 000」：000 连写都失败，旧实现会因「写失败」同样返回
+    // Err，测试假绿（反证实测如此）；可写不可读（0o200）需要按平台设权限，
+    // 该能力应进 crates/platform 的 test-support，不在本卡范围。
+    // 反证：换回 `read_to_string(..).unwrap_or_default()`，本测试必须红。
+    #[test]
+    fn desk49_non_utf8_config_errors_and_keeps_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        let bytes: &[u8] = b"data_dir = \"/old\"\nbind_addr = \"\xff\xfe\"\n";
+        std::fs::write(&cfg, bytes).unwrap();
+        let e = rewrite_library_dir(&cfg, "/new/library").unwrap_err();
+        assert!(e.contains("ui.err_set_library"), "{e}");
+        assert_eq!(std::fs::read(&cfg).unwrap(), bytes, "读失败时不得写文件");
+    }
+
+    // 不存在 ⇒ 当空配置，正常创建，只含新 data_dir。
+    #[test]
+    fn desk49_missing_config_is_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        rewrite_library_dir(&cfg, "/new/library").expect("不存在应正常创建");
+        let parsed: toml::Value = toml::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(parsed["data_dir"].as_str().unwrap(), "/new/library");
+    }
+
+    // 正常可读 ⇒ 只换 data_dir，其它字段保留。
+    #[test]
+    fn desk49_readable_config_keeps_other_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, DESK49_FULL_CFG).unwrap();
+        rewrite_library_dir(&cfg, "/new/library").unwrap();
+        let parsed: toml::Value = toml::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+        assert_eq!(parsed["data_dir"].as_str().unwrap(), "/new/library");
+        assert_eq!(parsed["bind_addr"].as_str().unwrap(), "0.0.0.0:41145");
+        assert_eq!(parsed["relay_urls"].as_array().unwrap().len(), 0);
+        assert!(!parsed["telemetry"]["enabled"].as_bool().unwrap());
     }
 
     // DESK-46 (#638) 契约门禁（源码扫描）：
