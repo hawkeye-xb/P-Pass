@@ -156,6 +156,10 @@ msg_keys! {
     UI_RESTART_SERVICE_BTN => "ui.restart_service_btn",
     UI_RESTARTING_SERVICE => "ui.restarting_service",
     UI_RESTART_SERVICE_HINT => "ui.restart_service_hint",
+    /// #667：正在传输时自动换内核被推迟——事实句，不是失败。
+    UI_KERNEL_CONVERGE_DEFERRED => "ui.kernel_converge_deferred",
+    /// #667：壳启动时正在自动换内核。
+    UI_KERNEL_CONVERGE_RESTARTING => "ui.kernel_converge_restarting",
     UI_RESTART_SERVICE_CONFIRM_TITLE => "ui.restart_service_confirm_title",
     UI_RESTART_SERVICE_CONFIRM_BODY => "ui.restart_service_confirm_body",
     UI_RESTART_SERVICE_OK => "ui.restart_service_ok",
@@ -500,6 +504,8 @@ mod tests {
             UI_RESTART_SERVICE_BTN,
             UI_RESTARTING_SERVICE,
             UI_RESTART_SERVICE_HINT,
+            UI_KERNEL_CONVERGE_DEFERRED,
+            UI_KERNEL_CONVERGE_RESTARTING,
             UI_RESTART_SERVICE_CONFIRM_TITLE,
             UI_RESTART_SERVICE_CONFIRM_BODY,
             UI_RESTART_SERVICE_OK,
@@ -716,7 +722,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 301);
+        assert_eq!(ALL.len(), 303);
     }
 
     #[test]

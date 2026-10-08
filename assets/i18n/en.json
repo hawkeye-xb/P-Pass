@@ -66,6 +66,8 @@
   "ui.restart_service_btn": "Restart now",
   "ui.restarting_service": "Restarting…",
   "ui.restart_service_hint": "The background service is still running the old version. Restart it to switch to the new one — no reinstall needed.",
+  "ui.kernel_converge_deferred": "Photos are transferring. The background service will switch to the new version automatically once this transfer finishes. Click “Restart now” to switch right away.",
+  "ui.kernel_converge_restarting": "Switching the background service to the new version automatically — this takes a few seconds.",
   "ui.restart_service_confirm_title": "Restart background service",
   "ui.restart_service_confirm_body": "Ongoing backups/transfers will be interrupted and resume automatically after the restart. Restart anyway?",
   "ui.restart_service_ok": "Background service restarted: {from} → {to}",

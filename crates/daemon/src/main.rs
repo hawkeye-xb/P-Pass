@@ -299,20 +299,31 @@ async fn main() -> anyhow::Result<()> {
             if daemon::cli::autostart_install_required(&daemon::Claim::TookOver) {
                 use platform::PlatformAdapter as _;
                 if let Ok(exe) = std::env::current_exe() {
-                    // #604 [DESK-42]：**只在本实例有权写登记时**才重装。
-                    // 真机事故：登记被钉在 `~/P-Pass-Backups/<日期>/old-app/…`
-                    // 里的旧 App 上——那正是「某个从备份副本起来的实例按自己的
-                    // 路径改了登记」。现在：已有登记指向别处 → 一个字节都不动，
-                    // 只留痕；未登记 / 本来就指向自己 → 照旧写（幂等）。
-                    match platform::adapter().autostart_registered_exec() {
-                        Ok(Some(registered)) if registered != exe => {
+                    let registered = platform::adapter().autostart_registered_exec();
+                    match takeover_autostart(
+                        registered.as_ref().ok().and_then(|r| r.as_deref()),
+                        &exe,
+                    ) {
+                        TakeoverAutostart::Foreign => {
+                            // #604 [DESK-42]：**只在本实例有权写登记时**才重装。
+                            // 真机事故：登记被钉在 `~/P-Pass-Backups/<日期>/old-app/…`
+                            // 里的旧 App 上——那正是「某个从备份副本起来的实例按自己的
+                            // 路径改了登记」。已有登记指向别处 → 一个字节都不动，只留痕。
                             tracing::warn!(
-                                "#604: 已有开机自启登记指向 {}（本实例 {}）——不覆盖，避免从备份/临时副本启动的实例篡改用户登记",
-                                registered.display(),
+                                "#604: 已有开机自启登记指向 {:?}（本实例 {}）——不覆盖，避免从备份/临时副本启动的实例篡改用户登记",
+                                registered.ok().flatten(),
                                 exe.display()
                             );
                         }
-                        _ => {
+                        TakeoverAutostart::AlreadyOurs => {
+                            // #732 ②：登记本来就指向自己 ⇒ 不重装。重装 = bootout +
+                            // bootstrap，而 plist 是 RunAtLoad ⇒ launchd **当场**再拉一个
+                            // 实例，它在我们 bind transport 之前看不到 IPC socket ⇒
+                            // Proceed ⇒ 撞上我们刚绑的端口报 `bind endpoint: Failed to
+                            // bind sockets`（2026-10-08 本机日志：step_down 后 70ms）。
+                            tracing::info!("#732: 开机自启登记已指向本实例，不重装（避免 RunAtLoad 多拉一个实例抢端口）");
+                        }
+                        TakeoverAutostart::Install => {
                             if let Err(e) = platform::adapter().install_autostart(&exe) {
                                 tracing::warn!("DAE-01: autostart re-install skipped: {e}");
                             }
@@ -864,6 +875,30 @@ fn rand_pair_token() -> anyhow::Result<[u8; 12]> {
     Ok(token)
 }
 
+/// 升级接管（TookOver）之后，开机自启登记怎么处理。
+#[derive(Debug, PartialEq, Eq)]
+enum TakeoverAutostart {
+    /// 未登记 / 读不出：照旧安装（DAE-01 原行为）。
+    Install,
+    /// 已登记且就指向本实例：什么都不做（#732 ②）。
+    AlreadyOurs,
+    /// 已登记但指向别处：不覆盖（#604）。
+    Foreign,
+}
+
+/// 纯函数，单测钉死三条分支。`registered` = `autostart_registered_exec()` 的
+/// `Ok(Some(_))`；`Ok(None)` 与 `Err` 都传 `None`（与改前一致：照旧安装）。
+fn takeover_autostart(
+    registered: Option<&std::path::Path>,
+    exe: &std::path::Path,
+) -> TakeoverAutostart {
+    match registered {
+        None => TakeoverAutostart::Install,
+        Some(r) if r == exe => TakeoverAutostart::AlreadyOurs,
+        Some(_) => TakeoverAutostart::Foreign,
+    }
+}
+
 fn unix_ms_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -954,6 +989,31 @@ mod tests {
     #[test]
     fn desk46_default_or_env_library_may_be_created() {
         assert!(library_root_check(false, false, Path::new("/tmp/ppf-scene/library")).is_ok());
+    }
+
+    // #732 ②：接管者的登记已经指向自己时**不许**重装 autostart——重装是
+    // bootout + bootstrap，RunAtLoad 会当场多拉一个实例跟接管者抢端口
+    // （2026-10-08 本机：step_down 后 70ms 出 `bind endpoint: Failed to bind
+    // sockets`）。反证：把 AlreadyOurs 分支并回 Install，本测试必红。
+    #[test]
+    fn takeover_does_not_reinstall_an_autostart_that_already_points_at_us() {
+        let exe = Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        assert_eq!(
+            takeover_autostart(Some(exe), exe),
+            TakeoverAutostart::AlreadyOurs
+        );
+        // #604：指向别处 → 不覆盖
+        assert_eq!(
+            takeover_autostart(
+                Some(Path::new(
+                    "/Users/x/P-Pass-Backups/old-app/P-Pass.app/Contents/MacOS/ppf-daemon"
+                )),
+                exe
+            ),
+            TakeoverAutostart::Foreign
+        );
+        // 未登记 → 照旧安装（DAE-01 原行为不变）
+        assert_eq!(takeover_autostart(None, exe), TakeoverAutostart::Install);
     }
 
     #[test]

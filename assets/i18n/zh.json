@@ -66,6 +66,8 @@
   "ui.restart_service_btn": "立即重启",
   "ui.restarting_service": "正在重启…",
   "ui.restart_service_hint": "后台服务还在跑旧版本。重启后自动换上新版本，不用重新安装。",
+  "ui.kernel_converge_deferred": "正在传输照片，后台服务会在本轮传输结束后自动换上新版本。想现在就换，可以点「立即重启」。",
+  "ui.kernel_converge_restarting": "正在自动换上新版本的后台服务，几秒后完成。",
   "ui.restart_service_confirm_title": "重启后台服务",
   "ui.restart_service_confirm_body": "正在进行的备份/传输会被中断，重启后自动恢复。确定重启？",
   "ui.restart_service_ok": "后台服务已重启：{from} → {to}",
