@@ -1,5 +1,6 @@
 ---
 title: How we designed the P-Pass app icon, from first sketch to a size-specific icon set
+description: "How the P-Pass roof-guardian icon was designed: two facing Ps as a face, nine rounds of drafts lettered A to P, and the trade-offs forced by small sizes."
 date: 2026-08-10
 tags: [design, icons]
 lang: en

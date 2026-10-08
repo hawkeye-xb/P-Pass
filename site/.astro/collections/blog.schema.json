@@ -7,6 +7,9 @@
         "title": {
           "type": "string"
         },
+        "description": {
+          "type": "string"
+        },
         "date": {
           "anyOf": [
             {
@@ -41,9 +44,6 @@
         "draft": {
           "type": "boolean",
           "default": false
-        },
-        "$schema": {
-          "type": "string"
         }
       },
       "required": [

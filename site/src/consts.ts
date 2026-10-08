@@ -13,8 +13,8 @@ export const MIRROR_ANDROID = `${MIRROR_BASE}/P-Pass-latest.apk`;
 
 // Canon copy (Brief §3) — one entry per language, same level.
 export const SITE_TITLE: Record<Lang, string> = {
-  en: "P-Pass — Your family's photos, kept at home",
-  zh: 'P-Pass — 全家的照片，存在自己家里',
+  en: 'P-Pass — Automatic family photo backup to your home computer',
+  zh: 'P-Pass — 手机照片自动备份到家里的电脑',
 };
 
 export const SITE_DESCRIPTION: Record<Lang, string> = {

@@ -27,6 +27,11 @@ if ! git rev-parse -q --verify "${PREV}^{commit}" >/dev/null; then
   echo "error: 找不到 $PREV（需要 fetch tag）" >&2
   exit 1
 fi
+# REL-11（#708）：head-ref 同样必须存在——否则下面的 diff 会失败，门禁不能静默放行。
+if ! git rev-parse -q --verify "${HEAD_REF}^{commit}" >/dev/null; then
+  echo "::error::找不到 head-ref $HEAD_REF——版本门禁无法计算改动面" >&2
+  exit 1
+fi
 
 # ── 上一版的号 ────────────────────────────────────────────────────
 if git cat-file -e "$PREV:release/versions.json" 2>/dev/null; then
@@ -44,7 +49,12 @@ cur_d=$(jq -r '.desktop' release/versions.json)
 cur_a=$(jq -r '.android' release/versions.json)
 
 # ── 改动面 ────────────────────────────────────────────────────────
-CHANGED=$(git diff --name-only "$PREV" "$HEAD_REF" || true)
+# REL-11（#708）：diff 失败必须红。原先 `|| true` 让失败时改动面为空 ⇒ 门禁静默放行。
+# `--` 防止 head-ref 恰好是一个目录名时被 git 当成路径（那样会 diff 工作区且退出 0）。
+if ! CHANGED=$(git diff --name-only "$PREV" "$HEAD_REF" --); then
+  echo "::error::git diff $PREV $HEAD_REF 失败——版本门禁无法计算改动面" >&2
+  exit 1
+fi
 # 测试目录不算「产品改动」：`crates/**/tests/**`、`**/benches/**` 改了不需要涨号
 # （否则一个只改测试的 PR 会逼着发一个内容相同的版本，正是 UPD-13 要消灭的东西）。
 # 保守边界：src 文件里 `#[cfg(test)]` 块改动仍算产品改动——宁可多涨，不漏涨。

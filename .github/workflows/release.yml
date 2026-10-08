@@ -60,6 +60,9 @@ env:
   # ⚠️ 表达式在 job 级 if 里用 ${{ }} 求值，env 里不能引用 github ——
   # 平台门控在每 job 的 if 里直接写表达式（见下）。
   PLATFORMS: ${{ inputs.platforms || 'all' }}
+  # REL-11（#708）：本次发布的 tag。dispatch 补跑时 GITHUB_REF_NAME=main，
+  # tools/release-version.sh 优先读它来判 test / 正式线。
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   macos-arm64:
@@ -1184,9 +1187,14 @@ jobs:
           printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
           chmod 600 /tmp/ppass-update.key
           mkdir -p /tmp/sigs
-          for f in \
-            $APK_PATH \
-            $MAC_UPD; do
+          # REL-10（#707）：要签的文件在**本 step 内**定位。每个 step 是独立 shell，
+          # 上一步（Compose desktop manifest）里的 APK_PATH / MAC_UPD 到这里是未定义——
+          # set -u 下直接 unbound variable，正式版分端清单因此签不了、传不上去。
+          # 目录可能不在（dispatch 只选了部分平台）：find 失败在 pipefail 下会杀掉整步，
+          # 这里按「没有这一端」处理——该不该有，已由上一步的 mac 门禁判过。
+          APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' 2>/dev/null | head -1 || true)
+          MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' 2>/dev/null | head -1 || true)
+          for f in "$APK_PATH" "$MAC_UPD"; do
             [ -f "$f" ] || continue
             # pin 版本，与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4 一致
             npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" "$f"

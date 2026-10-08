@@ -1,5 +1,6 @@
 ---
 title: 一个本该报错的 Rust 程序为什么直接卡死：iroh-blobs FsStore::load 的自死锁
+description: "iroh-blobs 的 FsStore::load 打开失败时不报错而是卡死：从 CI 偶发超时一路查到错误路径上的 tokio runtime 自死锁。"
 date: 2026-08-12
 tags: [Rust, 工程, 调试]
 lang: zh

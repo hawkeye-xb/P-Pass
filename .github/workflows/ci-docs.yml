@@ -7,6 +7,8 @@
 # REL-08 (#510) 起兼收 dogfood-assets：release 资产里的 .sh 在只含资产的
 # 干净目录里必须自足。artifacts.yml / release.yml 只在 push main / tag /
 # dispatch 触发，挂在那边拦不住合并前的回归，所以放在 PR 必过的这条秒级 lane。
+# UPD-18 (#706) 起兼收 mirror-resolve：R2 镜像的 tag 判定（test 不许覆盖 stable）
+# 同理——mirror-latest.yml 只在发布后触发，拦不住合并前的回归。
 name: CI Docs
 
 on:
@@ -25,6 +27,9 @@ on:
       - ".github/workflows/artifacts.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/ci-docs.yml"
+      - ".github/workflows/mirror-latest.yml"
+      - "tools/mirror-resolve-tag.sh"
+      - "tools/test-mirror-resolve-tag.sh"
   push:
     branches: [main]
     paths:
@@ -40,6 +45,9 @@ on:
       - ".github/workflows/artifacts.yml"
       - ".github/workflows/release.yml"
       - ".github/workflows/ci-docs.yml"
+      - ".github/workflows/mirror-latest.yml"
+      - "tools/mirror-resolve-tag.sh"
+      - "tools/test-mirror-resolve-tag.sh"
   workflow_dispatch:
 
 permissions:
@@ -73,3 +81,12 @@ jobs:
         run: bash tools/test-dogfood-assets.sh --self-test
       - name: 门禁
         run: bash tools/test-dogfood-assets.sh
+
+  mirror-resolve:
+    name: mirror-resolve（UPD-18：test tag 不许镜像到 R2）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 判定测试（stub gh，三种事件 × test/stable）
+        run: bash tools/test-mirror-resolve-tag.sh

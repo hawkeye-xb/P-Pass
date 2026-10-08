@@ -1,5 +1,6 @@
 ---
 title: macOS FSEvents 实测：在访达里移动、删除照片时，系统到底报了什么
+description: "在访达里移动、删除、重命名照片时，macOS FSEvents 实际报出哪些事件：11 种文件操作的逐条实测，以及它如何改变了监听与入库规则。"
 date: 2026-08-27
 tags: [macOS, 工程, 文件监听]
 lang: zh

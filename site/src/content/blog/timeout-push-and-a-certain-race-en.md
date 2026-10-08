@@ -1,5 +1,6 @@
 ---
 title: RPC timeouts, 202-style polling, and a tokio broadcast race in phone-to-desktop backup
+description: "A phone-to-desktop request that both submitted a photo and waited for it timed out over relays. Moving to 202-style polling exposed a tokio broadcast race."
 date: 2026-09-17
 tags: [networking, engineering]
 lang: en

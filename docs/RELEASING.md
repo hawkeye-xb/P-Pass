@@ -97,6 +97,12 @@
   fails; the first source returning a parseable manifest decides. Both URLs
   are pinned by `UpdateCheckerTest` — changing order or URLs requires touching
   that test.
+  **R2 carries stable only (UPD-18 `#706`)**: `mirror-latest.yml` never
+  mirrors a `-test.` tag, whatever triggered it (dispatch included), and
+  judges "newest" among non-test releases only. Test builds reach devices
+  solely through the GitHub `test-channel` pointer. The decision lives in
+  `tools/mirror-resolve-tag.sh` and is tested by
+  `tools/test-mirror-resolve-tag.sh` (CI Docs lane).
 - **`notes` is the release body — and its first 200 characters are what users see.**
   The Android in-app update dialog renders `notes.take(200)`, so the release body
   must **open with the version's user-visible changelog** (REL-08/`#626`);
@@ -283,6 +289,10 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   **第一个能解析出 manifest 的源说了算**；两个 URL 与顺序都由
   `UpdateCheckerTest` 锁死，改它必须同时改测试。
   GitHub latest 只认已发布的正式 release，**人工 publish 就是验收后的发布动作**。
+  **R2 只承载 stable**（UPD-18 #706）：`mirror-latest.yml` 不镜像任何
+  `-test.` tag（含手动 dispatch），「最新」也只在非 test 的 release 里比。
+  test 构建只经 GitHub `test-channel` 指针到达设备。判定在
+  `tools/mirror-resolve-tag.sh`，测试是 `tools/test-mirror-resolve-tag.sh`（CI Docs lane）。
 - **test**（开发/狗粮设备）：CI 把含 `-test.` 的 tag 自动 publish 为
   **GitHub prerelease**（release.yml；GitHub latest 设计上忽略
   prerelease，绝不会漏进 stable）。

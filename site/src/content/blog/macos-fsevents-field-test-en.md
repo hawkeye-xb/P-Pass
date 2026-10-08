@@ -1,5 +1,6 @@
 ---
 title: What macOS FSEvents actually reports when you move and delete files in Finder
+description: "What macOS FSEvents really reports when files are moved, deleted and renamed in Finder: a field test of 11 operations and how it changed our watcher rules."
 date: 2026-08-27
 tags: [macos, engineering, file-watching]
 lang: en

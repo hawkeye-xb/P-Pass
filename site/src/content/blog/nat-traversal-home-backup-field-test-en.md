@@ -1,5 +1,6 @@
 ---
 title: "NAT traversal field test: sending photos from a 5G phone to a computer at home"
+description: "Can a phone on 4G/5G send photos to a computer behind a home router? A NAT traversal field test with iroh and QUIC, comparing direct and relayed paths."
 date: 2026-09-16
 tags: [networking, engineering]
 lang: en

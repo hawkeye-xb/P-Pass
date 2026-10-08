@@ -124,7 +124,7 @@ class NET09ApkDownloadFailureKindsTest {
     }
 
     @Test
-    fun bodyStopsAfterTwoChunksIsStallWithReceivedBytesAndNoLeftover() {
+    fun bodyStopsAfterTwoChunksIsStallWithReceivedBytesAndKeepsPartial() {
         val conn = FakeConn(
             body = { chunkedThen(2, 16 * 1024, SocketTimeoutException("Read timed out")) },
             length = 10L * 1024 * 1024,
@@ -134,7 +134,8 @@ class NET09ApkDownloadFailureKindsTest {
             ApkDownloadResult.Stalled(ApkDownloadResult.Phase.Body, 32L * 1024, APK_READ_TIMEOUT_MS),
             r,
         )
-        assertFalse("半个 APK 不能留在 cache 里", dest.exists())
+        // UPD-19: 停滞是瞬时故障，残包留给下一跑续传（不会误装：没有完成标记）。
+        assertEquals(32L * 1024, dest.length())
     }
 
     // ── HTTP 非 200：看状态码，不碰 inputStream ──
@@ -165,7 +166,7 @@ class NET09ApkDownloadFailureKindsTest {
         val r = run(FakeConn(body = { chunkedThen(3, 1000, null) }, length = 5000))
         assertTrue("$r", r is ApkDownloadResult.ConnectionFailed)
         assertEquals(3000L, (r as ApkDownloadResult.ConnectionFailed).receivedBytes)
-        assertFalse(dest.exists())
+        assertEquals("UPD-19: 断流的已收前缀留给续传", 3000L, dest.length())
     }
 
     @Test
@@ -278,7 +279,7 @@ class NET09ApkDownloadFailureKindsTest {
     }) { port ->
         val r = downloadApk("http://127.0.0.1:$port/ppass.apk", dest, ::realOpen, readTimeoutMs = 500)
         assertEquals(ApkDownloadResult.Stalled(ApkDownloadResult.Phase.Body, 2048, 500), r)
-        assertFalse(dest.exists())
+        assertEquals("UPD-19: 停滞的已收前缀留给续传", 2048L, dest.length())
     }
 
     @Test
