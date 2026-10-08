@@ -75,7 +75,13 @@ private fun decodeQr(image: ImageProxy, reader: MultiFormatReader): String? {
 }
 
 @Composable
-fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
+fun ScanScreen(
+    onQr: (String) -> Unit,
+    onCancel: () -> Unit,
+    // #421：直接以手动输入子页起步（没有摄像头权限 / 欢迎页点「无法扫码？」）。
+    // 此时手动页返回 = 离开扫码流程（onCancel），不退回会开相机的取景页。
+    startManual: Boolean = false,
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val delivered = remember { AtomicBoolean(false) }
@@ -87,17 +93,24 @@ fun ScanScreen(onQr: (String) -> Unit, onCancel: () -> Unit) {
     }
     // H-10b/M3: 手动输入配对串（扫码扫不出的退路——二维码太密/摄像头差
     // 时），M3 是独立子页，不是内联展开。
-    var manual by remember { mutableStateOf(false) }
+    var manual by remember { mutableStateOf(startManual) }
     var input by remember { mutableStateOf("") }
     var inputError by remember { mutableStateOf(false) }
 
     if (manual) {
-        BackHandler { manual = false }
+        val leaveManual: () -> Unit = {
+            if (startManual) {
+                onCancel()
+            } else {
+                manual = false
+            }
+        }
+        BackHandler { leaveManual() }
         ManualPairScreen(
             input = input,
             onInputChange = { input = it; inputError = false },
             error = inputError,
-            onBack = { manual = false },
+            onBack = leaveManual,
             onSubmit = {
                 if (input.trim().startsWith("ppf://pair")) {
                     onQr(input.trim())

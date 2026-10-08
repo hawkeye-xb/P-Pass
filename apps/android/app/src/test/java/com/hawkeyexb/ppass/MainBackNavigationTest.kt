@@ -17,6 +17,7 @@ class MainBackNavigationTest {
     @Test
     fun systemBackUsesTheActualScreenHistoryForEverySecondaryScreen() {
         assertEquals(Screen.Welcome, systemBackTarget(Screen.Scan))
+        assertEquals(Screen.Welcome, systemBackTarget(Screen.ManualPair))
         assertEquals(Screen.Scan, systemBackTarget(Screen.Waiting("ppf://pair/test")))
         assertEquals(Screen.Scan, systemBackTarget(Screen.Trouble(1, 2)))
         assertEquals(Screen.Home(pairing), systemBackTarget(Screen.Buckets(pairing, emptySet(), firstTime = false)))

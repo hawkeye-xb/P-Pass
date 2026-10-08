@@ -121,6 +121,9 @@ import com.hawkeyexb.ppass.update.UpdateUiState
 internal sealed class Screen {
     data object Welcome : Screen()
     data object Scan : Screen()
+    // #421：手动输入配对串（不开相机）。拒绝摄像头权限、或欢迎页直接点
+    // 「无法扫码？」都落到这里；返回回 Welcome，不经过会再弹权限的路径。
+    data object ManualPair : Screen()
     data class Waiting(val qr: String) : Screen()
     data class Trouble(val titleRes: Int, val bodyRes: Int, val detail: String = "") : Screen()
     data class Home(val pairing: Pairing) : Screen()
@@ -138,15 +141,23 @@ internal sealed class Screen {
 /**
  * UI-18（#355）：配对失效红卡「重新扫码连接」的落点——直达扫码，中间零多余屏。
  * 相机权限被系统收回时先垫 Welcome（系统授权框盖在上面，授权回调落到 Scan；
- * 拒绝则停在 Welcome，可以再点扫码）。
+ * 拒绝则落到手动输入配对串，见 [cameraPermissionResultTarget]）。
  */
 internal fun repairScanTarget(cameraGranted: Boolean): Screen =
     if (cameraGranted) Screen.Scan else Screen.Welcome
 
+/**
+ * #421：摄像头权限请求的落点。拒绝（含「不再询问」后 launch 立即回 false）
+ * 直接进手动输入配对串——那条退路本来就是给扫不了码的人的，不能被摄像头
+ * 权限挡在后面；也不再追弹一次权限。
+ */
+internal fun cameraPermissionResultTarget(granted: Boolean): Screen =
+    if (granted) Screen.Scan else Screen.ManualPair
+
 /** System back for secondary app screens; null leaves the root gesture to Android. */
 internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
     Screen.Welcome, is Screen.Home -> null
-    Screen.Scan -> Screen.Welcome
+    Screen.Scan, Screen.ManualPair -> Screen.Welcome
     is Screen.Waiting, is Screen.Trouble -> Screen.Scan
     is Screen.Buckets -> Screen.Home(screen.pairing)
     is Screen.Started -> Screen.Home(screen.pairing)
@@ -260,7 +271,7 @@ fun PPassApp() {
 
     val cameraPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> if (granted) screen = Screen.Scan }
+    ) { granted -> screen = cameraPermissionResultTarget(granted) }
 
     // MOB-03: 相册选择页权限链——未授权先弹系统权限，完整授权后才进列表；
     // 部分授权 → Home 引导卡（MOB-02 §二，不显示假 0/0）；拒绝 → 人话对话框。
@@ -505,19 +516,32 @@ fun PPassApp() {
 
     Box(Modifier.fillMaxSize()) {
     when (val s = screen) {
-        is Screen.Welcome -> WelcomeScreen(onScan = {
-            if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
-                == PackageManager.PERMISSION_GRANTED
-            ) {
-                screen = Screen.Scan
-            } else {
-                cameraPermission.launch(Manifest.permission.CAMERA)
-            }
-        })
+        is Screen.Welcome -> WelcomeScreen(
+            onScan = {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                    == PackageManager.PERMISSION_GRANTED
+                ) {
+                    screen = Screen.Scan
+                } else {
+                    cameraPermission.launch(Manifest.permission.CAMERA)
+                }
+            },
+            onManual = { screen = Screen.ManualPair },
+        )
 
+        // #421：Waiting / Trouble 返回或「重新扫码」都回 Scan；没有摄像头权限
+        // （走手动串过来的）就以手动页起步，不开相机、也不弹权限。
         is Screen.Scan -> ScanScreen(
             onQr = { qr -> screen = Screen.Waiting(qr) },
             onCancel = { screen = Screen.Welcome },
+            startManual = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED,
+        )
+
+        is Screen.ManualPair -> ScanScreen(
+            onQr = { qr -> screen = Screen.Waiting(qr) },
+            onCancel = { screen = Screen.Welcome },
+            startManual = true,
         )
 
         is Screen.Waiting -> {
