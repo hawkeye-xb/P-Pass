@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- 升级传输组件 iroh-blobs 到 0.103.1，修复上游一处权限缺陷：旧版本未正确拒绝「向本机写入文件」的网络请求。macOS 端此前已有额外拦截，不受影响；Android 端仅已配对的电脑能连上手机，暴露面限于已配对设备，本次升级后该类请求一律拒绝。
+
 ## [2026.10.2] - 2026-10-05
 
 **Android 0.9.2 · macOS 0.9.1（本版未变更）** —— 分端更新机制第 2 轮验证。
