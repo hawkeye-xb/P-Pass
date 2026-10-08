@@ -58,6 +58,18 @@
    `CHANGELOG.md` (keep-a-changelog format, user-visible changes only).
    **This section becomes the opening of the release body** (see step 5) —
    maintain it during commit/PR, not the night before tagging.
+   **Platform prefixes (`#741`)**: each update manifest's `notes` is filtered
+   per platform (`tools/changelog-notes.mjs`). Start an entry with
+   `Android 端：` / `macOS 端：` / `Windows 端：` / `桌面端：` when it concerns
+   one platform; **an entry without a prefix counts as all platforms**.
+   android keeps `Android 端` + unprefixed; macOS keeps `macOS 端` + `桌面端` +
+   unprefixed; Windows keeps `Windows 端` + `桌面端` + unprefixed. The prefix
+   is stripped before display. Only a prefix at the very start of a top-level
+   entry counts (mentioning a platform mid-sentence does not); an entry that
+   concerns two platforms but not all goes in once per platform. A bold
+   batch-summary line at the top of a section (`**Android 0.9.2 · macOS …**`)
+   is for developers and never reaches the dialog; nothing left after
+   filtering ⇒ empty `notes` ⇒ the client shows its default text.
 3. **PR** → merge to main (main must be green: PR Checks).
 4. **Tag**: `git tag v<version>` + push. Tag pushes run the Release
    workflow (release.yml) → draft Release with platform assets.
@@ -260,6 +272,14 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 2. **changelog**：`CHANGELOG.md` 里 `[Unreleased]` 段挪成新版本段
    （keep-a-changelog 格式，只记用户可见变更）。**这一段就是 release 正文的开头**
    （见第 5 步）——在 commit/PR 阶段就维护它，别等打 tag 前一晚才补。
+   **条目要带端前缀，不带视为全平台**（#741）：更新清单的 `notes` 按端过滤
+   （`tools/changelog-notes.mjs`）。只涉及一端的条目以「Android 端：」「macOS 端：」
+   「Windows 端：」「桌面端：」开头；android 清单保留「Android 端」+ 无前缀，
+   macOS 保留「macOS 端」「桌面端」+ 无前缀，Windows 保留「Windows 端」「桌面端」
+   + 无前缀；前缀展示前去掉。只认顶层条目**开头**的前缀（句中提到某端不算）；
+   涉及两端但非全平台的，按端各写一条。小节开头的加粗批次摘要行
+   （「**Android 0.9.2 · macOS …**」）是给开发者看的，不进弹窗；过滤后什么都不剩
+   ⇒ notes 为空，客户端显示默认文案。
 3. **PR** → 合入 main（main 必须绿：PR Checks）。
 4. **打 tag**：`git tag v<版本>` + push。tag 触发 Release workflow →
    draft Release（三平台资产）。
