@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.update.UpdateUiState
 import com.hawkeyexb.ppass.update.failureTextRes
+import com.hawkeyexb.ppass.update.userFacingNotes
 
 @Composable
 fun UpdateDialog(
@@ -36,10 +37,9 @@ fun UpdateDialog(
             onDismissRequest = onLater,
             title = { Text(stringResource(R.string.update_available_title, state.info.version)) },
             text = {
-                Text(
-                    if (state.info.notes.isBlank()) stringResource(R.string.update_available_body)
-                    else state.info.notes.take(200)
-                )
+                // UPD-03（#580）：notes 先清洗成纯文本、截在句/词边界；清洗后为空回落默认文案。
+                val notes = userFacingNotes(state.info.notes)
+                Text(notes.ifBlank { stringResource(R.string.update_available_body) })
             },
             confirmButton = {
                 TextButton(onClick = onConfirmDownload) {

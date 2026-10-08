@@ -4,6 +4,9 @@
 // Modes:
 //   compose (default): scan --asset <target>=<path> pairs, emit manifest.json
 //     with sha256 per platform and empty signatures (untrusted until signed).
+//     notes 二选一：--notes <file>（原样读入）或 --notes-from-changelog
+//     <CHANGELOG.md>（UPD-03 #580：取 tag 版本号对应小节、清洗成纯文本，没有该
+//     小节就是 ""——客户端空 notes 显示默认文案。release.yml 用这个）。
 //   sign:   --sign manifest.json --sig-dir <dir>  — for each platform entry,
 //     read <dir>/<basename>.sig (produced by `tauri signer sign`), fill the
 //     base64 signature into the manifest. Signing itself stays in the tauri
@@ -22,6 +25,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
+import { changelogNotes } from "./changelog-notes.mjs";
 
 const args = process.argv.slice(2);
 
@@ -78,7 +82,11 @@ if (args[0] === "--sign") {
   // --version 覆盖顶层 version（分端 manifest 用它填**该端自己的版本号**，
   // 默认仍是 tag 去 v 前缀）。
   const tag = need("--tag");
-  const notesFile = need("--notes");
+  const hasNotes = args.indexOf("--notes") >= 0;
+  const hasChangelog = args.indexOf("--notes-from-changelog") >= 0;
+  if (hasNotes === hasChangelog) {
+    throw new Error("exactly one of --notes <file> / --notes-from-changelog <CHANGELOG.md> is required");
+  }
   const only = new Set();
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--only") {
@@ -104,7 +112,20 @@ if (args[0] === "--sign") {
   if (Object.keys(assets).length === 0) {
     throw new Error(only.size > 0 ? `no assets matched --only ${[...only].join(",")}` : "no --asset target=path pairs");
   }
-  const notes = readFileSync(notesFile, "utf8");
+  let notes;
+  if (hasChangelog) {
+    // UPD-03（#580）：notes = CHANGELOG 里**批次号**（tag 去 v）那一节的用户可见内容。
+    // 不用 --version：分端号（如 android 0.9.7）不是 CHANGELOG 的小节键。
+    const key = tag.replace(/^v/, "");
+    notes = changelogNotes(readFileSync(need("--notes-from-changelog"), "utf8"), key);
+    console.log(
+      notes
+        ? `notes <- CHANGELOG [${key}] (${notes.length} chars)`
+        : `notes empty: CHANGELOG has no user-facing [${key}] section (client shows its default text)`,
+    );
+  } else {
+    notes = readFileSync(need("--notes"), "utf8");
+  }
   // CI-01③a: --asset-base 覆盖下载前缀（默认 GitHub release 直链）。
   // R2 镜像域（dl.p-pass.hawkeye-xb.com/releases/<tag>）给国内下载可达性；
   // url 只是下载地址，签名是对资产字节的，换域名验签零变化。

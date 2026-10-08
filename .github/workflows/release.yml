@@ -671,8 +671,13 @@ jobs:
   # `create-draft` 写骨架，`finalize-notes` 覆盖终版。三条 upload lane
   # **一律不碰 notes**。骨架里因此**不能**引用 `needs.*.outputs.signed`
   # ——那时候构建还没跑完。签名状态、H-10c 资产 sha256、VT 分析 ID 全部
-  # 由 finalize 收口。代价是 manifest 里带的是骨架 notes（客户端更新说明
-  # 少了签名状态那行）；换来的是资产不必等 notes 齐。
+  # 由 finalize 收口。
+  #
+  # **manifest 的 notes 与 release 正文无关**（UPD-03 #580）：正文是给开发者
+  # 看的构建台账，客户端更新弹窗却直接展示 notes。所有 compose 一律
+  # `--notes-from-changelog CHANGELOG.md`——取 CHANGELOG 里与 tag 批次号同名
+  # 的小节、清洗成纯文本（tools/changelog-notes.mjs）；没有该小节（test tag、
+  # 忘了写 changelog）就是空串，客户端显示默认文案。资产因此也不必等 notes。
   #
   # finalize 晚到不拖任何资产——它只 `gh release edit --notes-file`，对已
   # publish 的 release 同样合法。
@@ -804,11 +809,6 @@ jobs:
           name: android
           path: artifacts/android
 
-      - name: Fetch skeleton notes (manifest 的更新说明取自 release 正文)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release view "$TAG" --json body -q .body > NOTES.md
-
       # ── UPD-01: tauri-style update manifest (compose → optional sign) ──
       # 客户端（desktop updater / android 自研流）读 release 资产直链
       # manifest.json；UPDATE_SIGNING_KEY 到位后签名（tauri signer,
@@ -840,7 +840,7 @@ jobs:
             # 把未升级的老客户端打进「提示更新→装上还是旧号」的死循环）。
             if [[ "$TAG" == *-test.* ]]; then
               node tools/make-update-manifest.mjs \
-                --tag "$TAG" --notes NOTES.md \
+                --tag "$TAG" --notes-from-changelog CHANGELOG.md \
                 --asset-base "$ASSET_BASE" \
                 "${APK_ARGS[@]}"
               mv manifest.json artifacts/manifest.json
@@ -848,7 +848,7 @@ jobs:
             # UPD-13：同时产出一份**只含 android** 的分端清单。
             # 本批只产出文件、不上任何客户端 ⇒ 零行为变化；客户端切源在下一批。
             node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes NOTES.md \
+              --tag "$TAG" --notes-from-changelog CHANGELOG.md \
               --asset-base "$ASSET_BASE" \
               "${APK_ARGS[@]}" \
               --version "$(tools/release-version.sh android)" \
@@ -1124,11 +1124,6 @@ jobs:
           name: macos-arm64
           path: artifacts/macos-arm64
 
-      - name: Fetch release notes (manifest 的更新说明取自 release 正文)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release view "$TAG" --json body -q .body > NOTES.md
-
       - name: Compose desktop manifest (android + darwin)
         run: |
           set -euo pipefail
@@ -1157,18 +1152,18 @@ jobs:
               exit 0
             fi
             node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes NOTES.md \
+              --tag "$TAG" --notes-from-changelog CHANGELOG.md \
               --asset-base "$ASSET_BASE" \
               "${ARGS[@]}"
             mv manifest.json artifacts/manifest.json
           fi
-          # UPD-13 补丁：android 分端清单在 upload-android 里是**用骨架正文**先组装
-          # 的（那一步为了让手机尽早拿到更新）。这里用同一批资产 + 收口时的正文
-          # 重新组装一次，否则安卓更新弹窗会停在「各平台产物正在陆续上传」的骨架文案。
+          # UPD-13 补丁：android 分端清单在 upload-android 里已先组装过一次（为了让
+          # 手机尽早拿到更新）。这里用同一批资产重新组装、与桌面清单同批签名上传。
+          # notes 两处同源（CHANGELOG 本版小节，UPD-03 #580），不再随 release 正文变化。
           APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
           if [ -f "$APK" ]; then
             node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes NOTES.md \
+              --tag "$TAG" --notes-from-changelog CHANGELOG.md \
               --asset-base "$ASSET_BASE" \
               --asset android-arm64="$APK" \
               --version "$(tools/release-version.sh android)" \
@@ -1188,7 +1183,7 @@ jobs:
           # UPD-13：同时产出一份**只含 darwin** 的分端清单（macOS 客户端的源）。
           if [ -n "$MAC_UPD" ]; then
             node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes NOTES.md \
+              --tag "$TAG" --notes-from-changelog CHANGELOG.md \
               --asset-base "$ASSET_BASE" \
               --asset darwin-aarch64="$MAC_UPD" \
               --version "$(tools/release-version.sh desktop)" \
@@ -1304,11 +1299,6 @@ jobs:
           name: windows-x64-installer
           path: artifacts/windows-x64-installer
 
-      - name: Fetch release notes (manifest 的更新说明取自 release 正文)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release view "$TAG" --json body -q .body > NOTES.md
-
       - name: Compose full manifest (android + darwin + windows)
         run: |
           set -euo pipefail
@@ -1343,7 +1333,7 @@ jobs:
           # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板）。
           ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
           node tools/make-update-manifest.mjs \
-            --tag "$TAG" --notes NOTES.md \
+            --tag "$TAG" --notes-from-changelog CHANGELOG.md \
             --asset-base "$ASSET_BASE" \
             "${ARGS[@]}"
           mv manifest.json artifacts/manifest.json
