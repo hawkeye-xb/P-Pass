@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 桌面端：更改照片库位置时，若读取现有配置文件失败（如权限不足、编码损坏），现在会如实报错并保留原配置，不再静默抹掉其它设置（#710）。
+
 ## [2026.10.2] - 2026-10-05
 
 **Android 0.9.2 · macOS 0.9.1（本版未变更）** —— 分端更新机制第 2 轮验证。
