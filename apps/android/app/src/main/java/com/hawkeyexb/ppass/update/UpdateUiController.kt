@@ -96,6 +96,47 @@ internal fun pendingAutoCheckAction(
     else -> PendingAutoCheckAction.Skip
 }
 
+/**
+ * 自动检查的完整门序（UPD-21 抽出，JVM 可测——controller 只注入 work 记录读取
+ * 与真正的检查动作）：6h 节流门 → 非空闲不查 → 待办判定 → [check] → 记账。
+ * 返回是否真的发起了检查。
+ */
+internal suspend fun runAutoCheck(
+    prefs: UpdatePrefs,
+    now: () -> Long,
+    isIdle: () -> Boolean,
+    readWorkSignal: suspend () -> WorkSignal,
+    check: suspend () -> Unit,
+    onOrphanCleared: (version: String) -> Unit = {},
+): Boolean {
+    if (!shouldAutoCheck(prefs.lastCheckAt(), now())) return false
+    if (!isIdle()) return false
+    val pending = prefs.pendingUpdate()
+    if (pending != null) {
+        // 已有一条更新线在走（下载中/待安装/待用户决策）就别再查——但要以
+        // work 记录为准，而不是只看 pending：记录被 WorkManager 剪掉后
+        // pending 成了孤儿，只看它会让自动检查永久停摆。
+        when (pendingAutoCheckAction(pending, readWorkSignal())) {
+            PendingAutoCheckAction.Skip -> return false
+            PendingAutoCheckAction.ClearStaleThenCheck -> {
+                // 只清待办、回到可检查状态，不按 pending 重新入队：pending 记的
+                // 可能是旧版本（隔了至少一天，新版可能已发），也可能是用户已
+                // 放着不管的失败线；重新检查拿最新 manifest，让用户再决定。
+                // cache 里的已验包不删：同一份更新再次确认下载时，Worker 按
+                // 产物身份（UPD-19）直接复用，不重下；不同的会被认领时清掉。
+                if (!isIdle()) return false
+                prefs.clearPending()
+                onOrphanCleared(pending.version)
+            }
+            PendingAutoCheckAction.Check -> Unit
+        }
+    }
+    check()
+    // 无论成败都记账——限流环境下失败也是一次检查，不能每次 resume 都打。
+    prefs.markChecked(now())
+    return true
+}
+
 class UpdateUiController(
     private val context: Context,
     private val scope: CoroutineScope,
@@ -195,46 +236,34 @@ class UpdateUiController(
     fun onResume() = autoCheck()
 
     private fun autoCheck() {
-        if (!shouldAutoCheck(prefs.lastCheckAt(), now())) return
-        if (_state.value !is UpdateUiState.Idle) return
         scope.launch {
-            val pending = prefs.pendingUpdate()
-            if (pending != null) {
-                // 已有一条更新线在走（下载中/待安装/待用户决策）就别再查——但要以
-                // work 记录为准，而不是只看 pending：记录被 WorkManager 剪掉后
-                // pending 成了孤儿，只看它会让自动检查永久停摆（UPD-21）。
+            runAutoCheck(
+                prefs = prefs,
+                now = now,
+                isIdle = { _state.value is UpdateUiState.Idle },
                 // 直接读库而不用 lastSignal：冷启动时 observeWorker 可能还没收到
                 // 第一帧，lastSignal 的默认 None 会把活着的更新线误判成孤儿。
-                val infos = workManager
-                    .getWorkInfosForUniqueWorkFlow(UpdateDownloadWorker.UNIQUE_WORK_NAME)
-                    .first()
-                when (pendingAutoCheckAction(pending, signalOf(infos.firstOrNull()))) {
-                    PendingAutoCheckAction.Skip -> return@launch
-                    PendingAutoCheckAction.ClearStaleThenCheck -> {
-                        // 只清待办、回到可检查状态，不按 pending 重新入队：pending 记的
-                        // 可能是旧版本（隔了至少一天，新版可能已发），也可能是用户已
-                        // 放着不管的失败线；重新检查拿最新 manifest，让用户再决定。
-                        // cache 里的已验包不删：同一份更新再次确认下载时，Worker 按
-                        // 产物身份（UPD-19）直接复用，不重下；不同的会被认领时清掉。
-                        if (_state.value !is UpdateUiState.Idle) return@launch
-                        prefs.clearPending()
-                        android.util.Log.i(
-                            UPDATE_LOG_TAG,
-                            "orphan pending ${pending.version} cleared: work record gone",
-                        )
+                readWorkSignal = {
+                    signalOf(
+                        workManager
+                            .getWorkInfosForUniqueWorkFlow(UpdateDownloadWorker.UNIQUE_WORK_NAME)
+                            .first()
+                            .firstOrNull(),
+                    )
+                },
+                onOrphanCleared = { version ->
+                    android.util.Log.i(UPDATE_LOG_TAG, "orphan pending $version cleared: work record gone")
+                },
+                check = {
+                    val outcome = checkUpdate(versionName, channelFromVersion(versionName), source)
+                    if (outcome is UpdateCheckOutcome.Available &&
+                        _state.value is UpdateUiState.Idle
+                    ) {
+                        dialogSuppressed.value = false
+                        _state.value = UpdateUiState.Available(outcome.info, manual = false)
                     }
-                    PendingAutoCheckAction.Check -> Unit
-                }
-            }
-            val outcome = checkUpdate(versionName, channelFromVersion(versionName), source)
-            // 无论成败都记账——限流环境下失败也是一次检查，不能每次 resume 都打。
-            prefs.markChecked(now())
-            if (outcome is UpdateCheckOutcome.Available &&
-                _state.value is UpdateUiState.Idle
-            ) {
-                dialogSuppressed.value = false
-                _state.value = UpdateUiState.Available(outcome.info, manual = false)
-            }
+                },
+            )
         }
     }
 
