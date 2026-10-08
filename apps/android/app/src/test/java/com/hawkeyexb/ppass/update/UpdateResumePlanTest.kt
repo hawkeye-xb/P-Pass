@@ -3,6 +3,7 @@
 //  - 206 = 服务端接受断点 → 追加在残包后面；
 //  - 200 = 服务端不理会 Range → 截断从头来（不许把残包当前缀）；
 //  - 416 = 残包与远端对不上 → 删残包、摘 Range、完整重试一次，再 416 就如实报。
+//  - UPD-19: 206 的 Content-Range 起点 ≠ 残包长度 → 同 416 处理（不许错位拼接）。
 package com.hawkeyexb.ppass.update
 
 import java.io.ByteArrayInputStream
@@ -33,6 +34,7 @@ class UpdateResumePlanTest {
     private class FakeConn(
         private val code: Int,
         body: ByteArray = ByteArray(0),
+        private val headers: Map<String, String> = emptyMap(),
         at: String = "https://example.invalid/ppass.apk",
     ) : HttpURLConnection(URL(at)) {
         private val body = body
@@ -42,6 +44,7 @@ class UpdateResumePlanTest {
         }
         override fun connect() {}
         override fun getResponseCode(): Int = code
+        override fun getHeaderField(name: String): String? = headers[name]
         override fun getInputStream(): InputStream {
             if (code >= 400) throw FileNotFoundException(url.toString())
             return ByteArrayInputStream(body)
@@ -78,6 +81,57 @@ class UpdateResumePlanTest {
         assertTrue(dest.readBytes().contentEquals(prefix + rest))
         // 进度以「含断点的总已收 / 总大小」汇报。
         assertEquals(150L to 150L, progress.last())
+    }
+
+    @Test
+    fun http206WithMatchingContentRangeAppends() {
+        val prefix = ByteArray(100) { 1 }
+        dest.writeBytes(prefix)
+        val rest = ByteArray(50) { 2 }
+        val conn = FakeConn(206, rest, headers = mapOf("Content-Range" to "bytes 100-149/150"))
+
+        val r = downloadApk(
+            "https://example.invalid/ppass.apk", dest,
+            open = { conn },
+            resumeFromBytes = 100,
+        )
+
+        assertEquals(ApkDownloadResult.Ok(150), r)
+        assertTrue(dest.readBytes().contentEquals(prefix + rest))
+    }
+
+    @Test
+    fun http206WithMisalignedContentRangeRestartsFreshInsteadOfSplicing() {
+        dest.writeBytes(ByteArray(100) { 1 }) // 残包 100 字节
+        val wrongSlice = ByteArray(50) { 9 }
+        val full = ByteArray(120) { 5 }
+        val conns = ArrayDeque(
+            listOf(
+                // 服务端回 206，但给的是从 0 开始的那段——追加就是错位拼接。
+                FakeConn(206, wrongSlice, headers = mapOf("Content-Range" to "bytes 0-49/120")),
+                FakeConn(200, full),
+            )
+        )
+        val opened = mutableListOf<FakeConn>()
+
+        val r = downloadApk(
+            "https://example.invalid/ppass.apk", dest,
+            open = { conns.removeFirst().also { opened += it } },
+            resumeFromBytes = 100,
+        )
+
+        assertEquals(ApkDownloadResult.Ok(120), r)
+        assertEquals(2, opened.size)
+        assertNull("错位后必须摘掉 Range 完整重下", opened[1].requestHeaders["Range"])
+        assertTrue("不许把错位片段拼进残包", dest.readBytes().contentEquals(full))
+    }
+
+    @Test
+    fun contentRangeStartParsing() {
+        assertEquals(100L, contentRangeStartOf("bytes 100-149/150"))
+        assertEquals(0L, contentRangeStartOf("bytes 0-49/*"))
+        assertNull(contentRangeStartOf(null))
+        assertNull(contentRangeStartOf("bytes */150")) // 416 形态，没有起点
     }
 
     @Test
