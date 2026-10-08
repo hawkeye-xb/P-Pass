@@ -1,5 +1,6 @@
 ---
 title: "Why a failed iroh-blobs FsStore::load hangs instead of returning an error: a tokio runtime self-deadlock"
+description: "A failed iroh-blobs FsStore::load hangs instead of returning an error. We traced an intermittent CI timeout to a tokio runtime dropped on the error path."
 date: 2026-08-12
 tags: [rust, engineering, debugging]
 lang: en
