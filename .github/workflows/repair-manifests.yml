@@ -28,9 +28,33 @@ jobs:
       TAG: ${{ inputs.tag }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # checkout 的是 main：只用它的**工具脚本**（make-update-manifest.mjs）。
+      # 版本号必须取自被修复的那个 tag（见下一步），不能读 main 的 versions.json。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
+
+      # REL-11（#708）：分端版本号从**被修复的 tag** 读，而不是 main。
+      # main 已 bump 之后再修旧 tag，若读 main 的号，清单 version 会高于包内版本 ⇒
+      # 客户端「提示更新 → 装上还是旧号 → 再提示」死循环。
+      # 放在下载 / 签名之前：取不到就尽早红，不浪费下载也不碰签名密钥。
+      - name: Resolve per-platform versions from tag
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          if ! git cat-file -e "$TAG:release/versions.json" 2>/dev/null; then
+            echo "::error::$TAG 里没有 release/versions.json（UPD-13 之前的 tag）——本工具只服务 UPD-13 之后的正式 tag"
+            exit 1
+          fi
+          D=$(git show "$TAG:release/versions.json" | jq -er '.desktop | select(type == "string" and . != "")') \
+            || { echo "::error::$TAG:release/versions.json 缺 desktop 版本号"; exit 1; }
+          A=$(git show "$TAG:release/versions.json" | jq -er '.android | select(type == "string" and . != "")') \
+            || { echo "::error::$TAG:release/versions.json 缺 android 版本号"; exit 1; }
+          echo "from $TAG: desktop=$D android=$A"
+          {
+            echo "DESKTOP_VERSION=$D"
+            echo "ANDROID_VERSION=$A"
+          } >> "$GITHUB_ENV"
 
       - name: Download released assets
         run: |
@@ -49,9 +73,9 @@ jobs:
         run: |
           set -euo pipefail
           : "${UPDATE_SIGNING_KEY:?UPDATE_SIGNING_KEY 缺失——无法签名，拒绝产出无签名清单}"
-          # 顶层版本号与发布时同源：读 release/versions.json（该端自己的号）。
-          D=$(jq -r .desktop release/versions.json)
-          A=$(jq -r .android release/versions.json)
+          # 顶层版本号与发布时同源：被修复 tag 里的 release/versions.json（上一步写入 env）。
+          D="${DESKTOP_VERSION:?}"
+          A="${ANDROID_VERSION:?}"
           echo "desktop=$D android=$A"
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body -q .body > NOTES.md
           BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
