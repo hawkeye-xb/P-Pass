@@ -1,0 +1,58 @@
+# P-Pass
+
+> P-Pass backs up the photos on your phone to a computer you already own at
+> home. No account, no cloud storage, no NAS, no Docker. Free and open source
+> (AGPL-3.0). Photos move encrypted and directly between your phone and your
+> computer, and what lands on the computer are the original files in a folder
+> you picked.
+
+## What it does
+
+- You install an app on the computer and an app on the phone, and scan a code
+  once to pair them.
+- While both are on the same Wi-Fi, new photos from the phone are backed up
+  automatically. No manual step, no cable.
+- Photos travel directly between the phone and the computer, end-to-end
+  encrypted. They do not pass through a server of ours. When a direct
+  connection is not possible, already-encrypted data is handed over by a relay
+  that cannot read it and does not keep it.
+- What lands on the computer are the original files, uncompressed, in the
+  folder you chose: open them straight from Finder.
+- Backups are one-way, phone to computer. Deleting a photo on the phone does
+  not delete the copy on the computer.
+- Free: no account, no subscription, no storage fee. How much you can keep is
+  how much free space that drive has.
+
+## Boundaries
+
+- Published platforms: macOS (Apple silicon) and Android 8.0+. The iPhone and
+  Windows apps are not released, and no release date is promised.
+- Backups run on Wi-Fi by default; the mobile-data switch is off by default.
+- The computer has to be awake while a backup is running. With the computer
+  off, photos stay on the phone and the transfer resumes where it stopped.
+- This is not a sync service and not cloud storage. It is one backup target:
+  the computer you chose.
+
+## Pages
+
+- Home (English): https://p-pass.hawkeye-xb.com/
+- 首页（中文）: https://p-pass.hawkeye-xb.com/zh/
+- Back up phone photos to your own computer, without NAS or Docker (Chinese):
+  https://p-pass.hawkeye-xb.com/zh/backup-without-nas/
+- FAQ: https://p-pass.hawkeye-xb.com/faq/
+- 常见问题: https://p-pass.hawkeye-xb.com/zh/faq/
+- Privacy: https://p-pass.hawkeye-xb.com/privacy/
+- 隐私政策: https://p-pass.hawkeye-xb.com/zh/privacy/
+- Terms: https://p-pass.hawkeye-xb.com/terms/
+- 使用条款: https://p-pass.hawkeye-xb.com/zh/terms/
+- Blog: https://p-pass.hawkeye-xb.com/blog/
+- 博客: https://p-pass.hawkeye-xb.com/zh/blog/
+
+## Downloads
+
+- macOS and Android, latest release:
+  https://github.com/hawkeye-xb/P-Pass/releases/latest
+
+## Languages
+
+- English is served at the root; Chinese is mirrored under /zh/.
