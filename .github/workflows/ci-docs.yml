@@ -11,6 +11,8 @@
 # 同理——mirror-latest.yml 只在发布后触发，拦不住合并前的回归。
 # REL-13 (#716) 起兼收 release-version-source：补跑 / 修复清单路径的版本来源与
 # release.yml 每个 checkout 都检出被补跑的 tag（tools/test-release-version-source.sh）。
+# UPD-03 (#580) 起兼收 update-notes：更新 manifest 的 notes 取自 CHANGELOG 本版小节
+# （tools/changelog-notes.mjs），release.yml 只在 tag 上跑，拦不住合并前的回归。
 name: CI Docs
 
 on:
@@ -36,6 +38,10 @@ on:
       - "tools/release-version.sh"
       - "tools/check-version-bump.sh"
       - "tools/test-release-version-source.sh"
+      - "tools/make-update-manifest.mjs"
+      - "tools/changelog-notes.mjs"
+      - "tools/changelog-notes.test.mjs"
+      - "CHANGELOG.md"
   push:
     branches: [main]
     paths:
@@ -58,6 +64,10 @@ on:
       - "tools/release-version.sh"
       - "tools/check-version-bump.sh"
       - "tools/test-release-version-source.sh"
+      - "tools/make-update-manifest.mjs"
+      - "tools/changelog-notes.mjs"
+      - "tools/changelog-notes.test.mjs"
+      - "CHANGELOG.md"
   workflow_dispatch:
 
 permissions:
@@ -111,3 +121,12 @@ jobs:
         run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
       - name: 补跑口径测试
         run: bash tools/test-release-version-source.sh
+
+  update-notes:
+    name: update-notes（UPD-03：更新弹窗 notes 取自 CHANGELOG 本版小节）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 抽取 + 清洗 + release.yml 口径
+        run: node --test tools/changelog-notes.test.mjs
