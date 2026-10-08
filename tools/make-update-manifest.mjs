@@ -7,6 +7,10 @@
 //     notes 二选一：--notes <file>（原样读入）或 --notes-from-changelog
 //     <CHANGELOG.md>（UPD-03 #580：取 tag 版本号对应小节、清洗成纯文本，没有该
 //     小节就是 ""——客户端空 notes 显示默认文案。release.yml 用这个）。
+//     #741：按端过滤——端由 --only 的目标推出（android-* → android，darwin-* →
+//     macos，windows-* → windows），或用 --notes-platform <android|macos|windows>
+//     显式指定（无 --only 的 test 通道 manifest.json 用它）。两者都推不出端 ⇒ 报错
+//     （参数错误，不是数据问题）；过滤后为空 ⇒ notes 为 ""、照常退出 0。
 //   sign:   --sign manifest.json --sig-dir <dir>  — for each platform entry,
 //     read <dir>/<basename>.sig (produced by `tauri signer sign`), fill the
 //     base64 signature into the manifest. Signing itself stays in the tauri
@@ -25,9 +29,35 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import { changelogNotes } from "./changelog-notes.mjs";
+import { changelogNotes, PLATFORM_PREFIXES } from "./changelog-notes.mjs";
 
 const args = process.argv.slice(2);
+
+/** #741：notes 按哪一端过滤。--notes-platform 优先，否则由 --only 的目标推出。 */
+function notesPlatform(only) {
+  if (args.indexOf("--notes-platform") >= 0) {
+    const p = need("--notes-platform");
+    if (!Object.hasOwn(PLATFORM_PREFIXES, p)) {
+      throw new Error(`bad --notes-platform ${p} (expected ${Object.keys(PLATFORM_PREFIXES).join("/")})`);
+    }
+    return p;
+  }
+  const ofTarget = (t) =>
+    /^android-/.test(t) ? "android" : /^(darwin|macos)-/.test(t) ? "macos" : /^windows-/.test(t) ? "windows" : null;
+  const ps = new Set([...only].map((t) => {
+    const p = ofTarget(t);
+    if (!p) throw new Error(`cannot tell platform of --only ${t}; pass --notes-platform`);
+    return p;
+  }));
+  if (ps.size !== 1) {
+    throw new Error(
+      ps.size === 0
+        ? "--notes-from-changelog needs a platform: give --only <target> or --notes-platform <android|macos|windows>"
+        : `--only spans several platforms (${[...ps].join(",")}); pass --notes-platform`,
+    );
+  }
+  return [...ps][0];
+}
 
 function need(name) {
   const i = args.indexOf(name);
@@ -117,12 +147,16 @@ if (args[0] === "--sign") {
     // UPD-03（#580）：notes = CHANGELOG 里**批次号**（tag 去 v）那一节的用户可见内容。
     // 不用 --version：分端号（如 android 0.9.7）不是 CHANGELOG 的小节键。
     const key = tag.replace(/^v/, "");
-    notes = changelogNotes(readFileSync(need("--notes-from-changelog"), "utf8"), key);
-    console.log(
-      notes
-        ? `notes <- CHANGELOG [${key}] (${notes.length} chars)`
-        : `notes empty: CHANGELOG has no user-facing [${key}] section (client shows its default text)`,
-    );
+    const platform = notesPlatform(only);
+    const changelog = readFileSync(need("--notes-from-changelog"), "utf8");
+    notes = changelogNotes(changelog, key, platform);
+    if (notes) {
+      console.log(`notes <- CHANGELOG [${key}] for ${platform} (${notes.length} chars)`);
+    } else if (changelogNotes(changelog, key)) {
+      console.log(`notes empty: CHANGELOG [${key}] has nothing for ${platform} (client shows its default text)`);
+    } else {
+      console.log(`notes empty: CHANGELOG has no user-facing [${key}] section (client shows its default text)`);
+    }
   } else {
     notes = readFileSync(need("--notes"), "utf8");
   }

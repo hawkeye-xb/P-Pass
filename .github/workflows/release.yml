@@ -678,6 +678,10 @@ jobs:
   # `--notes-from-changelog CHANGELOG.md`——取 CHANGELOG 里与 tag 批次号同名
   # 的小节、清洗成纯文本（tools/changelog-notes.mjs）；没有该小节（test tag、
   # 忘了写 changelog）就是空串，客户端显示默认文案。资产因此也不必等 notes。
+  # 按端过滤（#741）：分端清单的端由 `--only` 推出；无 `--only` 的三处只产出
+  # test 通道的 manifest.json——它只有 Android 展示 notes（桌面 test 通道只读
+  # version/platforms），所以显式 `--notes-platform android`。正式 tag 的
+  # manifest.json 是冻结件（cp，不经 compose），不受影响。
   #
   # finalize 晚到不拖任何资产——它只 `gh release edit --notes-file`，对已
   # publish 的 release 同样合法。
@@ -840,7 +844,7 @@ jobs:
             # 把未升级的老客户端打进「提示更新→装上还是旧号」的死循环）。
             if [[ "$TAG" == *-test.* ]]; then
               node tools/make-update-manifest.mjs \
-                --tag "$TAG" --notes-from-changelog CHANGELOG.md \
+                --tag "$TAG" --notes-from-changelog CHANGELOG.md --notes-platform android \
                 --asset-base "$ASSET_BASE" \
                 "${APK_ARGS[@]}"
               mv manifest.json artifacts/manifest.json
@@ -1152,7 +1156,7 @@ jobs:
               exit 0
             fi
             node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes-from-changelog CHANGELOG.md \
+              --tag "$TAG" --notes-from-changelog CHANGELOG.md --notes-platform android \
               --asset-base "$ASSET_BASE" \
               "${ARGS[@]}"
             mv manifest.json artifacts/manifest.json
@@ -1333,7 +1337,7 @@ jobs:
           # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板）。
           ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
           node tools/make-update-manifest.mjs \
-            --tag "$TAG" --notes-from-changelog CHANGELOG.md \
+            --tag "$TAG" --notes-from-changelog CHANGELOG.md --notes-platform android \
             --asset-base "$ASSET_BASE" \
             "${ARGS[@]}"
           mv manifest.json artifacts/manifest.json
