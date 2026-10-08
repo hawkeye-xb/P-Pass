@@ -60,6 +60,9 @@ env:
   # ⚠️ 表达式在 job 级 if 里用 ${{ }} 求值，env 里不能引用 github ——
   # 平台门控在每 job 的 if 里直接写表达式（见下）。
   PLATFORMS: ${{ inputs.platforms || 'all' }}
+  # REL-11（#708）：本次发布的 tag。dispatch 补跑时 GITHUB_REF_NAME=main，
+  # tools/release-version.sh 优先读它来判 test / 正式线。
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   macos-arm64:
