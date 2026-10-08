@@ -176,6 +176,12 @@ pub(crate) fn launchd_job_pid(text: &str) -> Option<u32> {
         .and_then(|v| v.trim().parse::<u32>().ok())
 }
 
+/// `launchctl kickstart -p` 的 stdout 是新实例的 pid（真机样本：`35736\n`）。
+/// 取最后一个空白分隔的 token；读不出 = `None`（调用方再用 `print` 兜一次）。
+pub(crate) fn kickstart_reported_pid(stdout: &str) -> Option<u32> {
+    stdout.split_whitespace().last()?.parse::<u32>().ok()
+}
+
 /// 从可执行文件路径推出它所属的 `.app`。
 ///
 /// `…/P-Pass.app/Contents/MacOS/p-pass-desktop` → `…/P-Pass.app`。
@@ -557,14 +563,91 @@ impl PlatformAdapter for MacosAdapter {
             });
         }
         let stdout = String::from_utf8_lossy(&out.stdout);
-        stdout
-            .split_whitespace()
-            .last()
-            .and_then(|s| s.parse::<u32>().ok())
-            .ok_or_else(|| PlatformError::Failed {
+        kickstart_reported_pid(&stdout).ok_or_else(|| PlatformError::Failed {
+            action: "launchctl kickstart -p",
+            detail: format!("读不出新 pid: {}", stdout.trim()),
+        })
+    }
+
+    // ── #667 / #732：常驻 daemon 归 launchd ─────────────────────────────
+
+    fn resident_daemon_pid(&self) -> Option<u32> {
+        let uid = current_uid().ok()?;
+        let out = Command::new("launchctl")
+            .args(["print", &format!("gui/{uid}/{AGENT_LABEL}")])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        launchd_job_pid(&String::from_utf8_lossy(&out.stdout))
+    }
+
+    /// `launchctl kickstart [-k]p gui/<uid>/com.p-pass.daemon`。
+    ///
+    /// 为什么不再"pkill 然后等 KeepAlive 拉回来"（DAE-04 原做法）：
+    /// ① 被杀 = 非成功退出，launchd 的重拉吃节流（10s 量级，DESK-44 的假失败
+    ///    就骑在这上面）；kickstart 是**立刻**按磁盘上的文件拉，且 `-p` 报新 pid。
+    /// ② 一次性 spawn（更新后恢复的旧做法）出来的实例 launchd 不认，崩了不拉，
+    ///    stdio 也不进 LaunchAgent 的日志（#732 ①③）。
+    ///
+    /// 登记文件在、但 job 没被 launchd 加载（`kickstart` 报找不到服务）⇒
+    /// `bootstrap`：plist 是 `RunAtLoad=true`，加载即启动。
+    fn restart_resident_daemon(&self, kill_running: bool) -> Result<crate::ResidentRestart> {
+        let plist = Self::agent_plist_path();
+        if !plist.exists() {
+            return Ok(crate::ResidentRestart::NotRegistered);
+        }
+        if !kill_running {
+            if let Some(pid) = self.resident_daemon_pid() {
+                return Ok(crate::ResidentRestart::AlreadyRunning { pid });
+            }
+        }
+        let uid = current_uid()?;
+        let flags = if kill_running { "-kp" } else { "-p" };
+        let out = Command::new("launchctl")
+            .args(["kickstart", flags, &format!("gui/{uid}/{AGENT_LABEL}")])
+            .output()
+            .map_err(io_err("launchctl kickstart"))?;
+        if out.status.success() {
+            if let Some(pid) = kickstart_reported_pid(&String::from_utf8_lossy(&out.stdout))
+                .or_else(|| self.resident_daemon_pid())
+            {
+                return Ok(crate::ResidentRestart::Started { pid });
+            }
+            return Err(PlatformError::Failed {
                 action: "launchctl kickstart -p",
-                detail: format!("读不出新 pid: {}", stdout.trim()),
-            })
+                detail: format!(
+                    "读不出新 pid: {}",
+                    String::from_utf8_lossy(&out.stdout).trim()
+                ),
+            });
+        }
+        let kick_err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        let boot = Command::new("launchctl")
+            .args(["bootstrap", &format!("gui/{uid}")])
+            .arg(&plist)
+            .output()
+            .map_err(io_err("launchctl bootstrap"))?;
+        if !boot.status.success() {
+            return Err(PlatformError::Failed {
+                action: "launchctl kickstart / bootstrap",
+                detail: format!(
+                    "kickstart: {kick_err}; bootstrap: {}",
+                    String::from_utf8_lossy(&boot.stderr).trim()
+                ),
+            });
+        }
+        for _ in 0..50 {
+            if let Some(pid) = self.resident_daemon_pid() {
+                return Ok(crate::ResidentRestart::Started { pid });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        Err(PlatformError::Failed {
+            action: "launchctl bootstrap",
+            detail: format!("已加载但 5s 内 launchd 没报出在跑的 pid（kickstart: {kick_err}）"),
+        })
     }
 }
 

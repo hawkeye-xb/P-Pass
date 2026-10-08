@@ -738,6 +738,15 @@
   let unlistenTray;
   let unlistenStopped;
   let unlistenExportLogs;
+  let unlistenKernel;
+  // #667：壳启动时 Rust 侧自动换内核的阶段（idle / deferred / restarting / done / failed）。
+  // deferred = 正在传输、推迟换版（界面说事实句，不是失败）；restarting 时不给手动按钮，
+  // 免得和自动那次叠成两次重启。done 之后靠状态刷新让「重启后台服务」行自然消失。
+  let kernelPhase = $state("idle");
+  function onKernelPhase(ev) {
+    kernelPhase = ev?.payload || "idle";
+    if (kernelPhase === "done" || kernelPhase === "failed") refresh();
+  }
   onMount(() => {
     // I18N-03 (#492)：托盘菜单跟窗口同一种语言——把这里判出来的语言报给
     // Rust 壳，它从同一份 assets/i18n 取托盘文案。失败只影响托盘语言，静默。
@@ -758,6 +767,11 @@
     listen("service-stopped", onServiceStopped).then((f) => (unlistenStopped = f));
     // #550: 托盘「导出诊断包」——窗口已被 Rust 拉到前台，结果走 toast。
     listen("export-logs-requested", exportLogs).then((f) => (unlistenExportLogs = f));
+    // #667：自动换内核的阶段——先挂监听，再读一次当前值（事件可能早于监听发出）。
+    listen("kernel-convergence", onKernelPhase).then((f) => (unlistenKernel = f));
+    invoke("kernel_convergence_phase")
+      .then((p) => (kernelPhase = p || "idle"))
+      .catch(() => {});
     window.addEventListener("hashchange", onHashChange);
   });
   onDestroy(() => {
@@ -766,6 +780,7 @@
     unlistenTray?.();
     unlistenStopped?.();
     unlistenExportLogs?.();
+    unlistenKernel?.();
     window.removeEventListener("hashchange", onHashChange);
   });
 
@@ -1994,14 +2009,18 @@
                 {/if}
                 <!-- DAE-04: 桌面壳更新后 daemon 还是旧版（版本不一致）才
                      显示——一致时不出现，避免误杀正常运行的服务。 -->
-                {#if serviceIsStale}
+                {#if serviceIsStale && kernelPhase === "restarting"}
+                  <!-- #667：壳启动时已在自动换内核——给事实句，不给按钮（避免叠两次重启）。 -->
+                  <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.kernel_converge_restarting")}</p>
+                {:else if serviceIsStale}
                   <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                     <span>{t("ui.restart_service")}</span>
                     <Button variant="secondary" onclick={restartDaemonProcess} disabled={restartingService}>
                       {restartingService ? t("ui.restarting_service") : t("ui.restart_service_btn")}
                     </Button>
                   </div>
-                  <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.restart_service_hint")}</p>
+                  <!-- #667：正在传输时自动换版被推迟——说事实（传完自动换），按钮留给想立刻换的人。 -->
+                  <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{kernelPhase === "deferred" ? t("ui.kernel_converge_deferred") : t("ui.restart_service_hint")}</p>
                 {/if}
                 <!-- #550：诊断包入口已收进托盘菜单（「导出诊断包」），设置页不再展示。 -->
               </Card>

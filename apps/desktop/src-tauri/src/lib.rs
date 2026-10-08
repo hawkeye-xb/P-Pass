@@ -816,7 +816,8 @@ fn self_heal_daemon() -> Result<bool, String> {
         return Ok(false);
     }
     // UPD-07 (#617)：自愈与"更新"无关 ⇒ **不带** `--post-update`（不带 = owner 不开火）。
-    spawn_bundled_daemon_oneshot(false).map(|()| true)
+    // #732：有 LaunchAgent 时交给 launchd 拉（不杀在跑的——自愈只补"没在跑"）。
+    bring_up_daemon(false, false).map(|_| true)
 }
 
 /// Stop the resident service the way a user means it: unregister the
@@ -883,9 +884,11 @@ fn pause_daemon_for_update() -> Result<(), String> {
     Ok(())
 }
 
-/// Counterpart to pause_daemon_for_update(): re-spawn the (now updated
-/// on disk) daemon after the installer finishes, one-shot (no
-/// autostart touch — it was never unregistered). Best-effort; the
+/// Counterpart to pause_daemon_for_update(): bring the (now updated on
+/// disk) daemon back after the installer finishes (no autostart touch —
+/// it was never unregistered). #732：有 LaunchAgent 就交给 launchd
+/// `kickstart -k`，内核从此归 launchd 托管、日志进 LaunchAgent 的 `.err`；
+/// 没有（Windows Run key / 未登记）才退回一次性 spawn。Best-effort; the
 /// frontend degrades to "restart the app" guidance if this fails,
 /// rather than silently leaving the daemon down after an update the
 /// user believes succeeded.
@@ -901,15 +904,122 @@ fn resume_daemon_after_update() -> Result<bool, String> {
     if !update_resume_allowed(&platform::adapter().data_dir()) {
         return Ok(false);
     }
-    spawn_bundled_daemon_oneshot(true).map(|()| true)
+    bring_up_daemon(true, true).map(|_| true)
 }
 
-/// 一次性 spawn 同目录下的内置 daemon（不注册 autostart）。更新后恢复和
-/// 崩溃自愈共用；各自的判据在调用方。
+/// #732：内核是怎么被拉起来的。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BroughtUp {
+    /// 服务管理器（launchd）拉起 / 本来就在跑，pid 由它报出。
+    Resident { pid: u32 },
+    /// 退回了一次性 spawn（没有服务管理器语义，或它失败了）。
+    OneShot,
+}
+
+/// 常驻服务登记在、且是 launchd 那种"服务管理器拉起"语义吗？
+/// （Windows Run key 是 `UserAutostart`，走老路，行为不变。）
+fn resident_service_available() -> bool {
+    let a = platform::adapter();
+    a.service_mode() == platform::ServiceMode::LaunchAgent
+        && a.autostart_installed().unwrap_or(false)
+}
+
+/// #667 / #732：把内核拉起来，**优先交给服务管理器**。
+///
+/// `kill_running = true`（更新后恢复 / 换版本）：
+/// 1. 先让**野生实例**（在跑、但 pid ≠ launchd 的 job pid——典型是旧壳更新时
+///    一次性 spawn 的那只）经 IPC `daemon.step_down` 体面退位，等 socket 断开；
+///    不先退位的话，launchd 新拉的实例与它同版本时会按 DAE-01 退位（exit 0，
+///    launchd 不再拉），结果仍是野生实例在岗（2026-10-08 本机实测）。
+/// 2. `launchctl kickstart -k`：杀掉 launchd 自己那份、按磁盘上的文件立刻拉新的。
+///
+/// `kill_running = false`（自愈）：launchd 在跑就不动，没在跑才拉。
+///
+/// 服务管理器那条走不通（未登记 / 本平台没有 / 命令失败）⇒ 退回一次性 spawn，
+/// 与改前一致；`post_update` 只对这条退路有意义（见 `spawn_bundled_daemon_oneshot`）。
+fn bring_up_daemon(kill_running: bool, post_update: bool) -> Result<BroughtUp, String> {
+    if resident_service_available() {
+        if kill_running {
+            retire_unmanaged_daemon(platform::adapter().resident_daemon_pid());
+        }
+        match platform::adapter().restart_resident_daemon(kill_running) {
+            Ok(platform::ResidentRestart::Started { pid })
+            | Ok(platform::ResidentRestart::AlreadyRunning { pid }) => {
+                eprintln!("#732: 内核交由服务管理器拉起 pid={pid}");
+                return Ok(BroughtUp::Resident { pid });
+            }
+            Ok(other) => eprintln!("#732: 服务管理器没接手（{other:?}），退回一次性 spawn"),
+            Err(e) => eprintln!("#732: 服务管理器拉起失败，退回一次性 spawn：{e}"),
+        }
+    }
+    spawn_bundled_daemon_oneshot(post_update).map(|()| BroughtUp::OneShot)
+}
+
+/// 在跑的 daemon 不是服务管理器那份（pid 对不上）⇒ 请它体面退位并等它退干净
+/// （最长 5s）。读不到 status = 没有可退位的，直接返回。
+fn retire_unmanaged_daemon(resident_pid: Option<u32>) {
+    let Ok(handle) = ipc::DaemonHandle::discover() else {
+        return;
+    };
+    let Some(pid) = handle
+        .call("status", json!({}))
+        .ok()
+        .and_then(|v| v.get("pid").and_then(|p| p.as_u64()))
+    else {
+        return;
+    };
+    if !daemon_is_unmanaged(Some(pid as u32), resident_pid) {
+        return;
+    }
+    eprintln!("#732: 在跑的内核 pid={pid} 不归服务管理器（job pid={resident_pid:?}），请它退位");
+    let _ = handle.call("daemon.step_down", json!({}));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while daemon_online() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
+/// 纯函数：在跑的内核（自报 pid）是不是"野生"的——服务管理器手里的 job pid
+/// 与它对不上。读不到自报 pid = 不知道 = 不算（fail-safe：不去动它）。
+fn daemon_is_unmanaged(running_pid: Option<u32>, resident_pid: Option<u32>) -> bool {
+    match running_pid {
+        Some(p) => resident_pid != Some(p),
+        None => false,
+    }
+}
+
+/// 一次性 spawn 时把 daemon 的 stdout/stderr 接到哪儿（#732 ③）。
+///
+/// LaunchAgent plist 登记了日志路径就**追加**进同一对文件——与 launchd 托管时
+/// 同一去处，排障只看一处；读不到 plist（Windows / 未登记）= 接 null，与改前
+/// 一致（Windows 的 daemon 自己有落盘日志，DIAG-B1）。打不开文件也退回 null，
+/// 不能因为日志让内核起不来。
+fn oneshot_stdio() -> (std::process::Stdio, std::process::Stdio) {
+    let paths = std::fs::read_to_string(daemon_logs::plist_path())
+        .map(|t| daemon_logs::parse_plist_log_paths(&t))
+        .unwrap_or((None, None));
+    let open = |p: Option<String>| -> std::process::Stdio {
+        p.and_then(|p| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+                .ok()
+        })
+        .map(std::process::Stdio::from)
+        .unwrap_or_else(std::process::Stdio::null)
+    };
+    (open(paths.0), open(paths.1))
+}
+
+/// 一次性 spawn 同目录下的内置 daemon（不注册 autostart）。#732 起只是
+/// `bring_up_daemon` 的退路（服务管理器接不了手时）。
 ///
 /// `post_update`（UPD-07 #617）：这一份是**被更新流程拉起的**吗？只有它会带上
 /// `--post-update`，从而允许 daemon 在更新窗口内换掉旧壳（见 `crates/daemon/src/owner.rs`）。
 /// 自愈/用户点「启动服务」绝不带——那两件事与"更新"无关，不该让 owner 开火。
+/// ⚠️ 走 launchd 那条（`kickstart` 不能带参数）时 owner 不开火——见 PR 登记：
+/// owner 这条路在新旧壳上都走不通（#667 评论），新壳装完会自己换壳。
 fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sidecar = exe
@@ -926,8 +1036,9 @@ fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
     if post_update {
         cmd.arg("--post-update");
     }
-    cmd.stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+    let (out, err) = oneshot_stdio();
+    cmd.stdout(out)
+        .stderr(err)
         .stdin(std::process::Stdio::null())
         .spawn()
         .map_err(|e| ipc::ui_err("ui.err_respawn", &[("err", &e)]))?;
@@ -1127,6 +1238,45 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
     // （unix 的 pkill 退出码 1 / Windows 的 taskkill 128）。DESK-25 (#208)
     // 就是因为这条判据被抄散、其中一处没判，把「没杀掉」当成杀成功、
     // 紧接着去 spawn 第二个 daemon 才出的事。
+    //
+    // #667 / #732：有 LaunchAgent 时**不再 pkill 等 KeepAlive 复活**——那条路吃
+    // launchd 的重拉节流（10s 量级，DESK-44 假失败的根），而且杀不到一次性 spawn
+    // 的野生实例。改为：野生实例先退位 + `kickstart -k`（launchd 立刻按磁盘上的
+    // 文件拉新的），内核从此归 launchd 托管。走不通才退回下面的老路。
+    if resident_service_available() {
+        bring_up_daemon(true, false).map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
+    } else {
+        restart_by_kill_and_respawn()?;
+    }
+    // 4) 等它**答上** `status`（每 500ms，最长 RESTART_GRACE）。
+    //    答上 = 有结论（版本变了 or 没变）；一直没答上 = `still_starting`，
+    //    **不谎报失败**——前端按"正在启动中"呈现，靠 3 秒状态轮询自然收口。
+    let deadline = std::time::Instant::now() + RESTART_GRACE;
+    let mut answered = false;
+    let mut new_version = None;
+    loop {
+        if let Ok(v) = ipc::DaemonHandle::discover().and_then(|d| d.call("status", json!({}))) {
+            answered = true;
+            new_version = v
+                .get("version")
+                .and_then(|x| x.as_str())
+                .map(str::to_string);
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    Ok(restart_outcome(
+        old_version.as_deref(),
+        new_version.as_deref(),
+        answered,
+    ))
+}
+
+/// DAE-04 原路径（没有 LaunchAgent 语义时）：杀进程，Run key 平台再显式拉一次。
+fn restart_by_kill_and_respawn() -> Result<(), String> {
     platform::adapter()
         .kill_daemon_process()
         .map_err(|e| ipc::ui_err("ui.err_kill_old", &[("err", &e)]))?;
@@ -1159,31 +1309,7 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
             .spawn()
             .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
     }
-    // 4) 等它**答上** `status`（每 500ms，最长 RESTART_GRACE）。
-    //    答上 = 有结论（版本变了 or 没变）；一直没答上 = `still_starting`，
-    //    **不谎报失败**——前端按"正在启动中"呈现，靠 3 秒状态轮询自然收口。
-    let deadline = std::time::Instant::now() + RESTART_GRACE;
-    let mut answered = false;
-    let mut new_version = None;
-    loop {
-        if let Ok(v) = ipc::DaemonHandle::discover().and_then(|d| d.call("status", json!({}))) {
-            answered = true;
-            new_version = v
-                .get("version")
-                .and_then(|x| x.as_str())
-                .map(str::to_string);
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(500));
-    }
-    Ok(restart_outcome(
-        old_version.as_deref(),
-        new_version.as_deref(),
-        answered,
-    ))
+    Ok(())
 }
 
 /// DAE-04 + DESK-44 (#606)：组装重启结果（纯函数，单测覆盖）。
@@ -1387,6 +1513,246 @@ fn sidecar_daemon_version() -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+// ── #667：壳启动时自动换内核 ─────────────────────────────────────────
+//
+// 现场（2026-10-08 取证）：dmg 覆盖安装（替换 /Applications/P-Pass.app）后重开，
+// 壳是新的、内核仍是覆盖前就在跑的旧进程——launchd 不会因为磁盘上文件换了就
+// 重拉它，用户只能点「重启后台服务」。新壳启动时自己对一次账：内核比磁盘上
+// 的 sidecar 旧（或不归 launchd 管，#732 ①）就自动换，不需要按钮。
+//
+// 两个既有语义先于"换"：
+// ① 用户主动停过服务（`desktop-user-stopped`）⇒ 一律不动；
+// ② 正在传输（任何设备 `devices.list` 报出非空 `flow_connection`——与设备行
+//    「传输中」同一信号，NET-05）⇒ 推迟，传输停下来连续两次（~20s）才换；
+//    推迟期间界面给事实句（`ui.kernel_converge_deferred`），不是失败。
+
+/// 自动换内核的阶段（给前端呈现；`kernel-convergence` 事件 + 同名查询命令）。
+static KERNEL_CONVERGENCE: std::sync::Mutex<&'static str> = std::sync::Mutex::new("idle");
+const EVENT_KERNEL_CONVERGENCE: &str = "kernel-convergence";
+const KERNEL_CONVERGE_POLL: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn set_kernel_phase(app: &tauri::AppHandle, phase: &'static str) {
+    if let Ok(mut p) = KERNEL_CONVERGENCE.lock() {
+        *p = phase;
+    }
+    let _ = app.emit(EVENT_KERNEL_CONVERGENCE, phase);
+}
+
+/// 前端挂载时读一次（事件可能在监听挂上之前就发过了）。
+#[tauri::command]
+fn kernel_convergence_phase() -> &'static str {
+    KERNEL_CONVERGENCE.lock().map(|p| *p).unwrap_or("idle")
+}
+
+/// 与 daemon 的 DAE-01 `version_cmp`（crates/daemon/src/ipc.rs）**同一语义**：
+/// 数字段逐段比；同核心时正式版 > 预发布；预发布按数字段比（test.10 > test.9）。
+/// 桌面壳是独立 workspace、不依赖 daemon crate，所以抄一份，单测用同一组样例钉住。
+fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let nums = |seg: &str| -> Vec<u64> {
+        seg.split(|c: char| !c.is_ascii_digit())
+            .filter(|p| !p.is_empty())
+            .map(|p| p.parse().unwrap_or(0))
+            .collect()
+    };
+    let parse = |s: &str| -> (Vec<u64>, Vec<u64>, bool) {
+        let (core, pre) = match s.split_once('-') {
+            Some((c, p)) => (c, Some(p)),
+            None => (s, None),
+        };
+        (nums(core), pre.map(nums).unwrap_or_default(), pre.is_some())
+    };
+    let (na, npa, pa) = parse(a);
+    let (nb, npb, pb) = parse(b);
+    for i in 0..na.len().max(nb.len()) {
+        let (x, y) = (
+            na.get(i).copied().unwrap_or(0),
+            nb.get(i).copied().unwrap_or(0),
+        );
+        if x != y {
+            return x.cmp(&y);
+        }
+    }
+    match (pa, pb) {
+        (false, true) => Ordering::Greater,
+        (true, false) => Ordering::Less,
+        (true, true) => {
+            for i in 0..npa.len().max(npb.len()) {
+                let (x, y) = (
+                    npa.get(i).copied().unwrap_or(0),
+                    npb.get(i).copied().unwrap_or(0),
+                );
+                if x != y {
+                    return x.cmp(&y);
+                }
+            }
+            Ordering::Equal
+        }
+        (false, false) => Ordering::Equal,
+    }
+}
+
+/// 对账用的事实（全部现取，不信缓存）。
+#[derive(Debug, Clone, Default)]
+struct KernelFacts {
+    /// 在跑的内核自报（`status.version` / `status.pid`）。
+    running_version: Option<String>,
+    running_pid: Option<u32>,
+    /// 磁盘上 sidecar 的版本（`ppf-daemon --version`）——换完会是它。
+    on_disk_version: Option<String>,
+    /// 常驻服务登记在吗（launchd 语义），以及 launchd 眼里在跑的 pid。
+    resident_registered: bool,
+    resident_pid: Option<u32>,
+    user_stopped: bool,
+    transfer_active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KernelVerdict {
+    /// 内核 = 磁盘版本，且（有 launchd 时）归 launchd 管：无事可做。
+    InSync,
+    /// 按规则不动（理由写日志）。
+    Skip(&'static str),
+    /// 该换，但正在传输 ⇒ 推迟。
+    Defer,
+    /// 现在就换。
+    Converge(&'static str),
+}
+
+/// #667 判据（纯函数，单测覆盖每条分支）。
+fn kernel_convergence_verdict(f: &KernelFacts) -> KernelVerdict {
+    use std::cmp::Ordering;
+    if f.user_stopped {
+        return KernelVerdict::Skip("用户主动停了服务");
+    }
+    let (Some(running), Some(on_disk)) =
+        (f.running_version.as_deref(), f.on_disk_version.as_deref())
+    else {
+        // 读不到 = 不知道 = 什么都不做（fail-safe）。
+        return KernelVerdict::Skip("读不到内核或磁盘版本");
+    };
+    let reason = match version_cmp(running, on_disk) {
+        // 只在"内核比磁盘旧"时换：dmg 降级安装不许把内核也降下去。
+        Ordering::Greater => return KernelVerdict::Skip("内核比磁盘上的新，不降级"),
+        Ordering::Less => "内核比磁盘上的旧",
+        Ordering::Equal => {
+            if f.resident_registered && daemon_is_unmanaged(f.running_pid, f.resident_pid) {
+                "内核不归服务管理器管"
+            } else {
+                return KernelVerdict::InSync;
+            }
+        }
+    };
+    if f.transfer_active {
+        return KernelVerdict::Defer;
+    }
+    KernelVerdict::Converge(reason)
+}
+
+/// `ppf-daemon --version` 的输出是 `P-Pass daemon <ver>`；取版本号。
+fn parse_sidecar_version(text: &str) -> Option<String> {
+    text.trim()
+        .strip_prefix("P-Pass daemon ")
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+/// 任何设备报出非空 `flow_connection` = 正在传输（与设备行「传输中」同一信号）。
+fn any_transfer_active(devices: &Value) -> bool {
+    devices
+        .get("devices")
+        .and_then(|d| d.as_array())
+        .map(|list| list.iter().any(|d| !d["flow_connection"].is_null()))
+        .unwrap_or(false)
+}
+
+fn gather_kernel_facts() -> KernelFacts {
+    let handle = ipc::DaemonHandle::discover().ok();
+    let status = handle
+        .as_ref()
+        .and_then(|h| h.call("status", json!({})).ok());
+    let devices = handle
+        .as_ref()
+        .and_then(|h| h.call("devices.list", json!({})).ok());
+    KernelFacts {
+        running_version: status
+            .as_ref()
+            .and_then(|s| s["version"].as_str().map(str::to_string)),
+        running_pid: status
+            .as_ref()
+            .and_then(|s| s["pid"].as_u64())
+            .map(|p| p as u32),
+        on_disk_version: sidecar_daemon_version().and_then(|t| parse_sidecar_version(&t)),
+        resident_registered: resident_service_available(),
+        resident_pid: platform::adapter().resident_daemon_pid(),
+        user_stopped: is_user_stopped(&platform::adapter().data_dir()),
+        transfer_active: devices.as_ref().map(any_transfer_active).unwrap_or(false),
+    }
+}
+
+/// 壳启动时跑一次（独立线程）。等内核答上 status，再按判据换。
+fn converge_kernel_on_startup(app: tauri::AppHandle) {
+    // 内核可能还没起来（登录时壳比内核先就绪）——最多等 90s；一直不答上
+    // 就交给既有的自愈，不在这里拉。
+    let deadline = std::time::Instant::now() + RESTART_GRACE;
+    while !daemon_online() {
+        if std::time::Instant::now() >= deadline {
+            eprintln!("#667: 内核一直不可达，跳过启动对账（交给自愈）");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+    let mut was_deferred = false;
+    let mut idle_after_defer = 0u32;
+    loop {
+        let facts = gather_kernel_facts();
+        match kernel_convergence_verdict(&facts) {
+            KernelVerdict::InSync => {
+                eprintln!("#667: 内核与磁盘一致（{:?}），不动", facts.running_version);
+                if was_deferred {
+                    set_kernel_phase(&app, "idle");
+                }
+                return;
+            }
+            KernelVerdict::Skip(why) => {
+                eprintln!("#667: 不换内核：{why}（{facts:?}）");
+                if was_deferred {
+                    set_kernel_phase(&app, "idle");
+                }
+                return;
+            }
+            KernelVerdict::Defer => {
+                eprintln!("#667: 正在传输，推迟换内核");
+                was_deferred = true;
+                idle_after_defer = 0;
+                set_kernel_phase(&app, "deferred");
+            }
+            KernelVerdict::Converge(why) => {
+                // 推迟过的：传输停下来要连续确认两次，避免在两张照片的间隙里下手。
+                if was_deferred && idle_after_defer < 1 {
+                    idle_after_defer += 1;
+                } else {
+                    eprintln!(
+                        "#667: 自动换内核：{why}（{:?} → {:?}）",
+                        facts.running_version, facts.on_disk_version
+                    );
+                    set_kernel_phase(&app, "restarting");
+                    let outcome = restart_daemon_process_blocking();
+                    let after = gather_kernel_facts();
+                    let ok = kernel_convergence_verdict(&after) == KernelVerdict::InSync;
+                    eprintln!(
+                        "#667: 换完：{outcome:?}；对账 {}（{after:?}）",
+                        if ok { "一致" } else { "仍不一致" }
+                    );
+                    set_kernel_phase(&app, if ok { "done" } else { "failed" });
+                    return;
+                }
+            }
+        }
+        std::thread::sleep(KERNEL_CONVERGE_POLL);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // DESK-24 (#173)：数据目录搬家，排在**一切**读 data dir 的动作之前——
@@ -1461,6 +1827,7 @@ pub fn run() {
             relaunch_shell,
             self_heal_daemon,
             restart_daemon_process,
+            kernel_convergence_phase,
             export_logs_bundle,
             allow_media_scope,
             notify_system,
@@ -1480,6 +1847,11 @@ pub fn run() {
             // UPD-07 (#617)：把自己（版本 + pid）报给 daemon —— owner 判断"壳旧不旧"
             // 的唯一来源。独立线程 + 重试，不阻塞启动，也不拖慢首屏。
             std::thread::spawn(announce_shell_identity);
+            // #667：内核比磁盘上的旧 / 不归 launchd 管 ⇒ 自动换（尊重用户停止与传输中）。
+            {
+                let app = app.handle().clone();
+                std::thread::spawn(move || converge_kernel_on_startup(app));
+            }
             // I18N-03 (#492)：文案取自 assets/i18n（见 TRAY_ITEMS）；前端
             // 报上语言后 set_tray_locale 会再改一次字。
             let locale = tray_locale(&std::env::var("LANG").unwrap_or_default());
@@ -2500,6 +2872,217 @@ mod tests {
         assert_eq!(entries[0].0, "audit.json");
     }
 
+    // ── #667 / #732：自动换内核判据 ───────────────────────────────────
+
+    fn facts(running: &str, on_disk: &str) -> KernelFacts {
+        KernelFacts {
+            running_version: Some(running.into()),
+            running_pid: Some(100),
+            on_disk_version: Some(on_disk.into()),
+            resident_registered: true,
+            resident_pid: Some(100),
+            user_stopped: false,
+            transfer_active: false,
+        }
+    }
+
+    /// #667 验收 1 的判据：dmg 覆盖安装后内核比磁盘旧 ⇒ 现在就换。
+    /// 反证：把 `Ordering::Less` 分支改成 InSync（= 去掉自动收敛），本测试必红。
+    #[test]
+    fn kernel_older_than_disk_converges() {
+        assert!(matches!(
+            kernel_convergence_verdict(&facts("0.9.1", "0.9.5")),
+            KernelVerdict::Converge(_)
+        ));
+        assert!(matches!(
+            kernel_convergence_verdict(&facts("0.9.5-test.1", "0.9.5")),
+            KernelVerdict::Converge(_)
+        ));
+    }
+
+    #[test]
+    fn kernel_in_sync_and_managed_is_left_alone() {
+        assert_eq!(
+            kernel_convergence_verdict(&facts("0.9.5", "0.9.5")),
+            KernelVerdict::InSync
+        );
+    }
+
+    /// #732 ①：同版本但在跑的不是 launchd 那份（旧壳更新时一次性 spawn 的）⇒ 收编。
+    #[test]
+    fn kernel_same_version_but_unmanaged_converges() {
+        let mut f = facts("0.9.5", "0.9.5");
+        f.resident_pid = None; // launchd: not running
+        assert!(matches!(
+            kernel_convergence_verdict(&f),
+            KernelVerdict::Converge(_)
+        ));
+        f.resident_pid = Some(999); // launchd 手里是另一个 pid
+        assert!(matches!(
+            kernel_convergence_verdict(&f),
+            KernelVerdict::Converge(_)
+        ));
+        // 没有常驻登记（Windows Run key / 未登记）：没有"归谁管"可言 ⇒ 不动。
+        f.resident_registered = false;
+        assert_eq!(kernel_convergence_verdict(&f), KernelVerdict::InSync);
+    }
+
+    /// dmg 降级安装：内核比磁盘新 ⇒ 绝不把内核也降下去。
+    #[test]
+    fn kernel_newer_than_disk_is_never_downgraded() {
+        assert!(matches!(
+            kernel_convergence_verdict(&facts("0.9.5", "0.9.4")),
+            KernelVerdict::Skip(_)
+        ));
+        let mut f = facts("0.9.5", "0.9.4");
+        f.resident_pid = None; // 即使不归 launchd 管
+        assert!(matches!(
+            kernel_convergence_verdict(&f),
+            KernelVerdict::Skip(_)
+        ));
+    }
+
+    /// #667 验收 2 ①：用户主动停过服务 ⇒ 一律不动（哪怕内核旧）。
+    #[test]
+    fn user_stop_beats_kernel_convergence() {
+        let mut f = facts("0.9.1", "0.9.5");
+        f.user_stopped = true;
+        assert!(matches!(
+            kernel_convergence_verdict(&f),
+            KernelVerdict::Skip(_)
+        ));
+    }
+
+    /// #667 验收 2 ②：正在传输 ⇒ 推迟（不是失败、也不是放弃）。
+    #[test]
+    fn transfer_in_progress_defers_kernel_convergence() {
+        let mut f = facts("0.9.1", "0.9.5");
+        f.transfer_active = true;
+        assert_eq!(kernel_convergence_verdict(&f), KernelVerdict::Defer);
+        // 一致时传输与否都不动
+        let mut g = facts("0.9.5", "0.9.5");
+        g.transfer_active = true;
+        assert_eq!(kernel_convergence_verdict(&g), KernelVerdict::InSync);
+    }
+
+    /// 读不到 = 不知道 = 不动（fail-safe）。
+    #[test]
+    fn unknown_versions_never_trigger_a_restart() {
+        let mut f = facts("0.9.1", "0.9.5");
+        f.on_disk_version = None;
+        assert!(matches!(
+            kernel_convergence_verdict(&f),
+            KernelVerdict::Skip(_)
+        ));
+        let mut g = facts("0.9.1", "0.9.5");
+        g.running_version = None;
+        assert!(matches!(
+            kernel_convergence_verdict(&g),
+            KernelVerdict::Skip(_)
+        ));
+    }
+
+    #[test]
+    fn unmanaged_needs_a_known_running_pid() {
+        assert!(daemon_is_unmanaged(Some(1), None));
+        assert!(daemon_is_unmanaged(Some(1), Some(2)));
+        assert!(!daemon_is_unmanaged(Some(1), Some(1)));
+        assert!(
+            !daemon_is_unmanaged(None, None),
+            "读不到自报 pid 不许当野生实例去请它退位"
+        );
+    }
+
+    #[test]
+    fn sidecar_version_line_is_parsed() {
+        assert_eq!(
+            parse_sidecar_version("P-Pass daemon 0.9.5\n").as_deref(),
+            Some("0.9.5")
+        );
+        assert_eq!(
+            parse_sidecar_version("P-Pass daemon 0.9.5-test.2").as_deref(),
+            Some("0.9.5-test.2")
+        );
+        assert_eq!(parse_sidecar_version("something else"), None);
+        assert_eq!(parse_sidecar_version("P-Pass daemon "), None);
+    }
+
+    /// 「传输中」= 任何设备 `flow_connection` 非空——与设备行「传输中」同一信号（NET-05）。
+    #[test]
+    fn transfer_signal_is_the_flow_connection_field() {
+        let idle = json!({"devices": [{"flow_connection": null}, {"name": "x"}]});
+        assert!(!any_transfer_active(&idle));
+        let busy = json!({"devices": [{"flow_connection": null}, {"flow_connection": "direct"}]});
+        assert!(any_transfer_active(&busy));
+        assert!(!any_transfer_active(&json!({})));
+    }
+
+    /// 与 daemon DAE-01 `version_cmp`（crates/daemon/src/ipc.rs）同一组样例——两份
+    /// 实现若漂移，这里先红。
+    #[test]
+    fn version_cmp_matches_the_daemon_handshake() {
+        use std::cmp::Ordering;
+        assert_eq!(version_cmp("0.1.0", "0.1.0"), Ordering::Equal);
+        assert_eq!(version_cmp("0.2.0", "0.1.0"), Ordering::Greater);
+        assert_eq!(version_cmp("0.1.0", "0.2.0"), Ordering::Less);
+        assert_eq!(version_cmp("1.0.0", "0.9.9"), Ordering::Greater);
+        assert_eq!(version_cmp("0.10.0", "0.9.0"), Ordering::Greater);
+        assert_eq!(version_cmp("0.2.0-test.7", "0.1.0"), Ordering::Greater);
+        assert_eq!(version_cmp("0.1.0", "0.2.0-test.7"), Ordering::Less);
+        assert_eq!(
+            version_cmp("0.2.0-test.8", "0.2.0-test.7"),
+            Ordering::Greater
+        );
+        assert_eq!(version_cmp("0.2.0-test.7", "0.2.0-test.8"), Ordering::Less);
+        assert_eq!(
+            version_cmp("0.2.0-test.10", "0.2.0-test.9"),
+            Ordering::Greater
+        );
+        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0-test.8"), Ordering::Equal);
+        assert_eq!(version_cmp("0.2.0", "0.2.0-test.8"), Ordering::Greater);
+        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0"), Ordering::Less);
+        assert_eq!(version_cmp("0.1.0", "0.1.0-test.3"), Ordering::Greater);
+        assert_eq!(version_cmp("0.1.0-test.3", "0.1.0"), Ordering::Less);
+        assert_eq!(version_cmp("", "0.0.0"), Ordering::Equal);
+        assert_eq!(version_cmp("alpha", "0.1.0"), Ordering::Less);
+    }
+
+    /// 接线：启动时跑对账；换内核先让野生实例退位、再交给服务管理器；手动「立即重启」
+    /// 有 LaunchAgent 时也走同一条；一次性 spawn 的日志不再接 null（#732 ③）。
+    #[test]
+    fn kernel_convergence_is_wired() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let body = |name: &str| {
+            let start = product
+                .find(&format!("fn {name}("))
+                .unwrap_or_else(|| panic!("找不到 fn {name}"));
+            let rest = &product[start..];
+            rest[..rest.find("\n}\n").expect("函数结尾")].to_string()
+        };
+        assert!(product.contains("std::thread::spawn(move || converge_kernel_on_startup(app));"));
+        assert!(
+            product.contains("kernel_convergence_phase,"),
+            "查询命令要注册"
+        );
+        let up = body("bring_up_daemon");
+        let retire = up.find("retire_unmanaged_daemon(").expect("先退位野生实例");
+        let restart = up
+            .find("restart_resident_daemon(kill_running)")
+            .expect("再交给服务管理器");
+        assert!(retire < restart);
+        let manual = body("restart_daemon_process_blocking");
+        assert!(manual.contains("if resident_service_available() {"));
+        assert!(manual.contains("bring_up_daemon(true, false)"));
+        let oneshot = body("spawn_bundled_daemon_oneshot");
+        assert!(oneshot.contains("oneshot_stdio()"));
+        assert!(
+            !oneshot.contains(".stdout(std::process::Stdio::null())")
+                && !oneshot.contains(".stderr(std::process::Stdio::null())"),
+            "#732 ③：一次性 spawn 的 stdout/stderr 不许再直接接 null"
+        );
+    }
+
     // DAE-04: 版本真的变了 → changed=true（真成功，前端报「已重启」）。
     #[test]
     fn restart_outcome_marks_version_change() {
@@ -2879,16 +3462,22 @@ mod tests {
         let gate = resume
             .find("if !update_resume_allowed(&platform::adapter().data_dir()) {")
             .expect("resume_daemon_after_update 必须先读盘上的「用户主动停止」标记");
+        // #732：更新后恢复 = 换版本（kill_running=true），走共用的 bring_up_daemon
+        // （先交给 launchd，退路才一次性 spawn），退路必须带 post_update=true
+        // （UPD-07 #617：只有更新拉起的 daemon 才允许换壳）。
         let spawn = resume
-            .find("spawn_bundled_daemon_oneshot(true)")
-            .expect("resume_daemon_after_update 走共用 spawn 且必须带 post_update=true（UPD-07 #617：只有更新拉起的 daemon 才允许换壳）");
+            .find("bring_up_daemon(true, true)")
+            .expect("resume_daemon_after_update 走共用 bring_up_daemon(kill_running=true, post_update=true)");
         assert!(gate < spawn, "判据必须在 spawn 之前");
         let heal = body("self_heal_daemon");
         assert!(heal.contains("self_heal_allowed(&platform::adapter().data_dir())"));
         assert!(
-            heal.contains("spawn_bundled_daemon_oneshot(false)"),
-            "自愈与更新无关，不许带 post_update（否则 owner 会在非更新场合去换壳）"
+            heal.contains("bring_up_daemon(false, false)"),
+            "自愈与更新无关：不许带 post_update（否则 owner 会在非更新场合去换壳），也不许杀在跑的内核"
         );
+        // 退路的一次性 spawn 仍按 post_update 带参数。
+        let up = body("bring_up_daemon");
+        assert!(up.contains("spawn_bundled_daemon_oneshot(post_update)"));
         assert!(
             !heal.contains("resume_daemon_after_update()"),
             "自愈不该绕进更新路径的判据"

@@ -552,6 +552,50 @@ pub trait PlatformAdapter: Send + Sync {
     fn installed_bundle_version(&self) -> Option<String> {
         None
     }
+
+    // ── #667 / #732：常驻 daemon 必须始终归服务管理器托管 ───────────────
+    //
+    // 2026-10-08 取证（#667 评论）：更新后在跑的内核是旧壳一次性 spawn 的，
+    // launchd 手里没有它（`state = not running`）⇒ 它崩了 KeepAlive 不会拉；
+    // 一次性 spawn 的 stdio 接 null，LaunchAgent 的 `.err` 里也没有它的记录。
+    // 解法同 UPD-06 的思路：**杀和拉都交给服务管理器**，壳只发一句
+    // "按磁盘上的文件（重新）拉起来"。
+
+    /// 服务管理器眼里正在跑的常驻 daemon 的 pid（`None` = 没在跑 / 没登记 /
+    /// 本平台没有服务管理器）。与 daemon 自报的 `status.pid` 比对，就是
+    /// "在跑的这个内核归不归服务管理器管"的确定性判据。
+    fn resident_daemon_pid(&self) -> Option<u32> {
+        None
+    }
+
+    /// 让服务管理器按**磁盘上的文件**拉起常驻 daemon。
+    ///
+    /// `kill_running = true`：在跑的那个（服务管理器自己启动的）先被杀掉再拉
+    /// ——换版本用；`false`：没在跑才拉、在跑就不动——自愈用。
+    ///
+    /// ⚠️ 只管得到**服务管理器自己启动的**实例。一次性 spawn 出来的野生实例
+    /// 它杀不到；新拉起来的实例若与它同版本会按 DAE-01 退位（exit 0 不重拉）
+    /// ⇒ 结果仍是野生实例在岗。所以调用方要先让野生实例退位，再调本方法。
+    ///
+    /// 返回 `NotRegistered` / `Unsupported` 时**什么都没做**，调用方退回
+    /// 一次性 spawn（Windows 的 Run key 没有服务管理器语义，行为不变）。
+    fn restart_resident_daemon(&self, kill_running: bool) -> Result<ResidentRestart> {
+        let _ = kill_running;
+        Ok(ResidentRestart::Unsupported)
+    }
+}
+
+/// [`PlatformAdapter::restart_resident_daemon`] 的结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResidentRestart {
+    /// 服务管理器已（重新）拉起，新实例 pid（`-p` 报出来的，可验证）。
+    Started { pid: u32 },
+    /// 没杀也没拉：`kill_running=false` 且它本来就在跑。
+    AlreadyRunning { pid: u32 },
+    /// 本机没有登记常驻服务（用户停过服务 / 首启向导没走完）——什么都没做。
+    NotRegistered,
+    /// 本平台没有服务管理器语义——什么都没做。
+    Unsupported,
 }
 
 /// The adapter for the current platform.
@@ -938,6 +982,29 @@ mod tests {
         // 别的行里出现的数字不许被当成 pid
         assert_eq!(launchd_job_pid("\tactive count = 123\n"), None);
         assert_eq!(launchd_job_pid(""), None);
+    }
+
+    /// #667/#732：`kickstart -p` 的 stdout 就是新 pid（本机 2026-10-08 实测输出 `35736\n`）。
+    /// 读不出必须是 `None`（调用方再用 `print` 兜），不许编一个 0。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn kickstart_reported_pid_reads_the_bare_pid_line() {
+        use macos::kickstart_reported_pid;
+        assert_eq!(kickstart_reported_pid("35736\n"), Some(35736));
+        assert_eq!(kickstart_reported_pid(""), None);
+        assert_eq!(kickstart_reported_pid("service already running\n"), None);
+    }
+
+    /// #667/#732：非 macOS 平台（Windows Run key / headless）**什么都不做**，
+    /// 调用方据此退回原来的一次性 spawn —— Windows 行为不许因本卡改变。
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn resident_restart_is_a_no_op_off_macos() {
+        assert_eq!(
+            adapter().restart_resident_daemon(true).unwrap(),
+            ResidentRestart::Unsupported
+        );
+        assert_eq!(adapter().resident_daemon_pid(), None);
     }
 
     /// 【DESK-42 #604】闸门判据：只放行稳定安装位置。
