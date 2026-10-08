@@ -141,6 +141,34 @@ echo c > "$SRC/apps/android/a.txt"
 g -C "$SRC" add apps/android/a.txt && g -C "$SRC" commit -qm c4
 expect_cv "改 android 不涨号 ⇒ 非零（门禁本身没被改坏）" nonzero "android 版本没涨" HEAD~1 HEAD
 
+# ── ④ release.yml：dispatch 补跑必须检出被补跑的 tag（REL-13 #716）──────
+# dispatch 时 actions/checkout 默认检出 main ⇒ 构建出的代码与 versions.json 都不是那个
+# tag。判据：每个 checkout 的 with 块里都有 `ref: ${{ inputs.tag || github.ref }}`；
+# 全文不再出现 GITHUB_SHA / github.sha（dispatch 时它们指向 main）。
+# RELEASE_YML 可指向另一份文件做反证（例如 origin/main 上修复前的版本）。
+REL_YML="${RELEASE_YML:-$ROOT/.github/workflows/release.yml}"
+# shellcheck disable=SC2016  # 字面量：要匹配 YAML 里的 ${{ }} 原文，不是展开
+want_ref='ref: ${{ inputs.tag || github.ref }}'
+total=0; missing=0
+while IFS= read -r ln; do
+  total=$((total + 1))
+  # 取该 checkout 行之后、缩进更深的连续行（它的 with 块）
+  ind=$(sed -n "${ln}p" "$REL_YML" | sed -E 's/^( *).*/\1/' | wc -c)
+  block=$(awk -v s="$ln" -v ind="$ind" 'NR>s { match($0,/^ */); if (RLENGTH < ind || $0 ~ /^ *- /) exit; print }' "$REL_YML")
+  grep -qF "$want_ref" <<<"$block" || { missing=$((missing + 1)); printf '  checkout @%s 行缺 ref\n' "$ln" >&2; }
+done < <(grep -n 'uses: actions/checkout@' "$REL_YML" | cut -d: -f1)
+if [ "$total" -gt 0 ] && [ "$missing" -eq 0 ]; then
+  pass "④ release.yml 全部 $total 个 checkout 都检出被补跑的 tag"
+else
+  fail "④ release.yml checkout 共 $total 个，缺 ref 的 $missing 个"
+fi
+# 只看代码行：注释里提到 GITHUB_SHA（解释为什么不用它）不算。
+if grep -n -E 'GITHUB_SHA|github\.sha' "$REL_YML" | grep -v -E '^[0-9]+: *#' >&2; then
+  fail "④ release.yml 仍引用 GITHUB_SHA / github.sha（dispatch 时是 main 的提交）"
+else
+  pass "④ release.yml 不再引用 GITHUB_SHA / github.sha"
+fi
+
 if [ "$fails" -ne 0 ]; then
   printf '\n%d 项失败\n' "$fails" >&2
   exit 1
