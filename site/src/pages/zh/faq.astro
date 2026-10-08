@@ -1,14 +1,14 @@
 ---
 import Base from '../../layouts/Base.astro';
 import Faq from '../../components/Faq.astro';
-import { FAQ_LEDE, FAQ_TITLE } from '../../i18n/faq';
+import { FAQ_DESCRIPTION, FAQ_TITLE } from '../../i18n/faq';
 import { faqPage } from '../../schema';
 ---
 
 <Base
   lang="zh"
   title={`${FAQ_TITLE.zh} — P-Pass`}
-  description={FAQ_LEDE.zh}
+  description={FAQ_DESCRIPTION.zh}
   mirror="/faq/"
   jsonLd={faqPage('zh')}
 >

@@ -23,7 +23,7 @@ export async function getStaticPaths() {
 }
 
 const { post, mirror } = Astro.props;
-const { title, date, tags } = post.data;
+const { title, description, date, tags } = post.data;
 const { Content } = await render(post);
 
 const jsonLd = breadcrumb([
@@ -33,7 +33,7 @@ const jsonLd = breadcrumb([
 ]);
 ---
 
-<Base lang="en" title={`${title} — P-Pass`} mirror={mirror} jsonLd={jsonLd}>
+<Base lang="en" title={`${title} — P-Pass`} description={description} mirror={mirror} jsonLd={jsonLd}>
   <article class="post">
     <header>
       <p class="meta">

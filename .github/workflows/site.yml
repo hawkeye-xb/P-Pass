@@ -114,3 +114,25 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      - name: Notify search engines of updated URLs (IndexNow)
+        # IndexNow (Bing, Yandex, ...) re-crawls the URLs we list instead of
+        # waiting for its next scheduled visit. The key must match the file
+        # site/public/<key>.txt; the first check fails loudly if they drift.
+        # A non-2xx answer fails this step — the site is already live by then,
+        # but a red job is the only place a broken notification would show.
+        env:
+          SITE: https://p-pass.hawkeye-xb.com
+          INDEXNOW_KEY: fc70b5bd491b298ae9e8d06a4d7f43e8
+        run: |
+          set -euo pipefail
+          served=$(curl -fsS "$SITE/$INDEXNOW_KEY.txt")
+          [ "$served" = "$INDEXNOW_KEY" ] || { echo "key file mismatch: '$served'"; exit 1; }
+          urls=$(curl -fsS "$SITE/sitemap-0.xml" | grep -oE '<loc>[^<]+' | sed 's/<loc>//' | jq -R . | jq -sc .)
+          [ "$(echo "$urls" | jq length)" -gt 0 ] || { echo "no URLs in sitemap"; exit 1; }
+          body=$(jq -nc --arg key "$INDEXNOW_KEY" --arg loc "$SITE/$INDEXNOW_KEY.txt" --argjson urls "$urls" \
+            '{host: "p-pass.hawkeye-xb.com", key: $key, keyLocation: $loc, urlList: $urls}')
+          code=$(curl -sS -o resp.txt -w '%{http_code}' -X POST https://api.indexnow.org/indexnow \
+            -H 'Content-Type: application/json; charset=utf-8' --data "$body")
+          echo "IndexNow HTTP $code, $(echo "$urls" | jq length) URLs"; cat resp.txt
+          case "$code" in 200|202) ;; *) exit 1 ;; esac

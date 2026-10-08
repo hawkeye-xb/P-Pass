@@ -1,5 +1,6 @@
 ---
 title: 我们自己造了个队列，而系统本来就有一个
+description: "Android 连拍时只备份了前几张：content trigger 是一次性的。我们自己造的队列漏掉了照片，而 JobScheduler 本身就能不漏地排队。"
 date: 2026-08-19
 tags: [工程, Android, 调试]
 lang: zh

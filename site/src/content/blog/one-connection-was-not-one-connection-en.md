@@ -1,5 +1,6 @@
 ---
 title: Why our QUIC connection cache still did five handshakes for five photos
+description: "We cached one QUIC connection per (NodeId, ALPN), yet five photos still caused five handshakes on a real device. Why reuse failed and how we fixed it."
 date: 2026-09-08
 tags: [engineering, networking, backup]
 lang: en

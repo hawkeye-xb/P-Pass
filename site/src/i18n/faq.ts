@@ -81,6 +81,12 @@ export const FAQ_LEDE: Record<Lang, string> = {
   zh: '四条最常被问到的，其余按用途分组。',
 };
 
+/** Search-result snippet for the FAQ page; the on-page lede above is too terse for that. */
+export const FAQ_DESCRIPTION: Record<Lang, string> = {
+  en: 'Answers to common questions about P-Pass: where your photos are stored, which phones and computers are supported, what permissions it needs, and whether the computer has to stay on.',
+  zh: 'P-Pass 常见问题：照片存在哪里、支持哪些手机和电脑、需要哪些权限、电脑要不要一直开着、换手机或硬盘坏了怎么办。',
+};
+
 export const FAQ_TOP_LABEL: Record<Lang, string> = {
   en: 'You might want to know these first',
   zh: '也许你想先了解这几条',

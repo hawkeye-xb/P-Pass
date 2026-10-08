@@ -1,5 +1,6 @@
 ---
 title: Android content triggers without gaps, using JobScheduler instead of WorkManager
+description: "Burst shots were only partly backed up because Android content triggers fire once. Why our own queue dropped photos and JobScheduler did not."
 date: 2026-08-19
 tags: [engineering, android, debugging]
 lang: en

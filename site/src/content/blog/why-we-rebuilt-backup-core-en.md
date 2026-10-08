@@ -1,5 +1,6 @@
 ---
 title: Why we rebuilt our photo backup core around a per-photo ledger
+description: "After a pause, a dropped network or a cancel, what state is a photo in? Our old backup core could not say, so we replaced it. This is the new state model."
 date: 2026-09-07
 tags: [engineering, architecture, backup]
 lang: en

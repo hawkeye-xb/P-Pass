@@ -1,5 +1,6 @@
 ---
 title: Why we're building photo backup for families
+description: "Why we built P-Pass: most families already own an always-on computer. Phone photos should land on it automatically, with no technical setup and one QR scan."
 date: 2026-07-31
 tags: [product, design]
 lang: en
