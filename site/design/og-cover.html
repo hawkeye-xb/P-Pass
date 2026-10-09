@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- Source for site/public/og-cover.png (1200x630). Render:
+     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu \
+       --hide-scrollbars --force-device-scale-factor=1 --window-size=1200,630 \
+       --user-data-dir="$(mktemp -d)" --screenshot=site/public/og-cover.png site/design/og-cover.html
+     Copy matches the landing page hero (site/src/i18n/ui.ts hero.h1, en + zh). -->
+<html><head><meta charset="utf-8"><style>
+  html,body{margin:0;width:1200px;height:630px;overflow:hidden}
+  body{background:#FBF8F2;color:#171512;font-family:-apple-system,'PingFang SC','Segoe UI',sans-serif;
+       display:flex;align-items:center;gap:72px;padding:0 96px;box-sizing:border-box}
+  .icon{width:260px;height:260px;flex:none;border-radius:58px;background:#F1ECE3 url(../../apps/desktop/src-tauri/icons/app-icon.png) center/360px no-repeat;
+        box-shadow:0 0 0 1px rgba(23,21,18,.10)}
+  .brand{font-size:28px;font-weight:600;letter-spacing:.02em;color:#4A453E;margin:0 0 22px}
+  h1{font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:64px;line-height:1.12;letter-spacing:-.01em;margin:0}
+  .zh{font-size:40px;line-height:1.3;margin:20px 0 0;color:#171512}
+  .url{font-size:24px;color:#6B655C;margin:36px 0 0}
+</style></head><body>
+  <div class="icon" role="img" aria-label="P-Pass icon"></div>
+  <div>
+    <p class="brand">P-Pass</p>
+    <h1>Your family's photos, kept at home.</h1>
+    <p class="zh">全家的照片，存在自己家里。</p>
+    <p class="url">p-pass.hawkeye-xb.com</p>
+  </div>
+</body></html>
