@@ -102,7 +102,10 @@ enum class WaitReason {
     DISABLED,
     WIFI,
     BATTERY,
-    /** 后台申请 FGS 被拒或被系统收走：下一次触发照常重试（不再卡到回前台）。 */
+    /**
+     * 后台申请 FGS 被拒或被系统收走：下一次触发照常重试（不再卡到回前台）。
+     * #409：同时登记一个唤醒（被收走 → 额度复位点之后；被拒 → 探测梯），见 [fgsBlockedWakePlan]。
+     */
     FGS_BLOCKED,
     /** 桌面不可达（探测失败 / 路径失败）：挂网络回调 + 3 次间隔 10 分钟的探测。 */
     DESKTOP_UNREACHABLE,
@@ -242,9 +245,12 @@ interface ForegroundLease {
     fun release()
 }
 
-/** 条件不满足时登记的唤醒。 */
+/** 条件不满足时登记的唤醒。引擎只经 [wakePlanOf] 决定登记哪一种（#409 / #652）。 */
 interface WakeScheduler {
-    /** 桌面不可达：3 个一次性任务，间隔 10 分钟。 */
+    /**
+     * 探测梯（桌面不可达 / 不健康 / FGS 被拒）：3 个一次性任务，间隔 10 分钟。梯子没走完时再登记什么都不做——
+     * 一条梯子最多 3 拍，走完就停（之后由 5h 周期兜底与网络回调接力），反复进入等待不会累加。
+     */
     fun scheduleUnreachableProbes()
 
     fun cancelUnreachableProbes()
@@ -264,6 +270,73 @@ interface WakeScheduler {
 
 /** FGS 受阻的原因。 */
 enum class FgsBlockReason { BUDGET_EXHAUSTED, START_REFUSED }
+
+/**
+ * #409：[WaitReason.FGS_BLOCKED] 是怎么来的——两种来由要的唤醒不同，由进入等待的调用点显式给出
+ * （不从 [FlowControl.fgsBlock] 反推：那是给 UI 的、只记第一次、可能是旧的）。
+ */
+enum class FgsStall {
+    /** 在跑时被系统收走：`onTimeout`，或每张开始前发现服务已不在前台。 */
+    LOST,
+
+    /** 这一轮没拿到：申请被拒（含系统明确说额度耗尽），或 #522 确定耗尽期间跳过了申请。 */
+    NOT_GRANTED,
+}
+
+/**
+ * 进入「等待中」时登记哪种唤醒（#409 / #652 的不变式）：**队列里有没传完的、当前又没在传 ⇒ 至少登记着一个会触发的唤醒**。
+ * 例外只有需要用户动作的（[AwaitsUser]）。
+ */
+sealed interface WakePlan {
+    /** 例外：未配对 / 后台备份关着——要等用户动手，不登记。 */
+    data object AwaitsUser : WakePlan
+
+    /** 一个带相应约束（Wi‑Fi / 电量）的一次性任务。 */
+    data class WhenConditionsMet(val reason: WaitReason) : WakePlan
+
+    /** 探测梯：3 个一次性任务，间隔 10 分钟（之后由 5h 周期兜底与网络回调接力）。 */
+    data object RetryProbes : WakePlan
+
+    /** 一次性唤醒，[delayMs] 之后（额度复位点之后）。 */
+    data class BudgetReset(val delayMs: Long) : WakePlan
+}
+
+/**
+ * #409 / #652：等待原因 → 唤醒种类。**穷举、没有 else**：新增 [WaitReason] 不写映射就编译不过。
+ * [fgsBlocked] 只在 [WaitReason.FGS_BLOCKED] 时求值（它要读额度事实与系统时钟）。
+ */
+internal fun wakePlanOf(reason: WaitReason, fgsBlocked: () -> WakePlan): WakePlan = when (reason) {
+    WaitReason.NOT_PAIRED, WaitReason.DISABLED -> WakePlan.AwaitsUser
+    WaitReason.WIFI, WaitReason.BATTERY -> WakePlan.WhenConditionsMet(reason)
+    WaitReason.FGS_BLOCKED -> fgsBlocked()
+    WaitReason.DESKTOP_UNREACHABLE -> WakePlan.RetryProbes
+    // #652：桌面不健康（空间不足 / 文件夹打不开 / 写失败）同样要周期重探，恢复后自己续传、等待原因随之清掉。
+    WaitReason.DESKTOP_STORAGE_FULL,
+    WaitReason.DESKTOP_LIBRARY_UNAVAILABLE,
+    WaitReason.DESKTOP_STORAGE_ERROR,
+    -> WakePlan.RetryProbes
+}
+
+/**
+ * #409：FGS 受阻时的唤醒。
+ * - [FgsStall.LOST]（被 onTimeout 收走）：一次性唤醒定在「最近一次成功授予 + 24h + 余量」——系统额度窗口的复位点之后。
+ *   拿不到授予时刻 / 系统时钟、或授予不是这次开机的（时长不可比）时，保守地从现在起 24h + 余量。
+ *   这只是**保底**：onTimeout 不记「确定被拒」（见 [fgsBudgetDecision] 第 1 条），其它触发照常更早去申请。
+ * - [FgsStall.NOT_GRANTED]：系统明确说额度耗尽且仍在窗口内（#522 [fgsBudgetDecision] 判跳过）→ 唤醒定在复位点之后；
+ *   否则（说不清原因的拒绝、等结论超时）→ 探测梯重试。
+ */
+internal fun fgsBlockedWakePlan(
+    stall: FgsStall,
+    facts: FgsBudgetFacts,
+    now: BootInstant?,
+    lastForegroundAt: BootInstant? = null,
+): WakePlan = when (stall) {
+    FgsStall.LOST -> WakePlan.BudgetReset(foregroundLostWakeDelayMs(facts.lastGrantAt, now))
+    FgsStall.NOT_GRANTED -> {
+        val wakeAt = fgsBudgetDecision(facts, now, lastForegroundAt)?.takeIf { it.skip }?.wakeAtElapsedMs
+        if (wakeAt != null && now != null) WakePlan.BudgetReset((wakeAt - now.elapsedMs).coerceAtLeast(0L)) else WakePlan.RetryProbes
+    }
+}
 
 /**
  * #522：一个「系统时钟上的时刻」——开机序号（`Settings.Global.BOOT_COUNT`）+ 开机以来的时长
@@ -328,6 +401,16 @@ internal fun fgsBudgetDecision(facts: FgsBudgetFacts, now: BootInstant?, lastFor
 /** [fgsBudgetDecision] 的简写：跳过时返回原因，否则 null。 */
 internal fun fgsBudgetSkipReason(facts: FgsBudgetFacts, now: BootInstant?, lastForegroundAt: BootInstant? = null): String? =
     fgsBudgetDecision(facts, now, lastForegroundAt)?.takeIf { it.skip }?.why
+
+/** 拿不到窗口起点时的保底延迟：从现在起一个完整窗口 + 余量。 */
+internal const val FGS_LOST_FALLBACK_WAKE_MS = FGS_BUDGET_RESET_WINDOW_MS + FGS_BUDGET_RESET_MARGIN_MS
+
+/** #409：onTimeout 之后的保底唤醒延迟（见 [fgsBlockedWakePlan]）。 */
+internal fun foregroundLostWakeDelayMs(lastGrantAt: BootInstant?, now: BootInstant?): Long {
+    if (now == null || lastGrantAt == null) return FGS_LOST_FALLBACK_WAKE_MS
+    if (lastGrantAt.bootCount != now.bootCount || lastGrantAt.elapsedMs > now.elapsedMs) return FGS_LOST_FALLBACK_WAKE_MS
+    return (lastGrantAt.elapsedMs + FGS_BUDGET_RESET_WINDOW_MS + FGS_BUDGET_RESET_MARGIN_MS - now.elapsedMs).coerceAtLeast(0L)
+}
 
 /** 意图（暂停标志）与等待原因的持久存储。 */
 interface FlowControl {

@@ -152,8 +152,10 @@ class C522FgsBudgetSkipTest {
 
     // ---------------------------------------------------------------- 额度复位唤醒
 
-    // 耗尽后 App 自己登记一个一次性唤醒，定在「最近一次授予 + 24h + 余量」；跳过的触发不再登记（一次耗尽只登记一次）。
-    // 反证：去掉登记 → 0 次，红；在跳过路径也登记 → 4 次，红；延迟少了余量 → 值不等，红。
+    // 耗尽后 App 自己登记一个一次性唤醒，定在「最近一次授予 + 24h + 余量」。
+    // #409：跳过的触发也进「等待中」，按「必有唤醒」不变式同样登记——唯一名 + REPLACE，算出的是**同一个绝对时刻**，
+    // 所以重登记不会把唤醒往后推（原意「一次耗尽只对应一个复位唤醒」由「绝对时刻不变」守住）。
+    // 反证：去掉登记 → 0 次，红；跳过路径按「现在 + 24h」登记（往后推）→ 绝对时刻不等，红；延迟少了余量 → 值不等，红。
     @Test
     fun `a certain exhaustion registers exactly one reset wake just past the system reset point`() = runTest {
         val rig = Rig(this)
@@ -165,7 +167,13 @@ class C522FgsBudgetSkipTest {
         rig.trigger(TriggerReason.MEDIA_CHANGE)
         rig.trigger(TriggerReason.PERIODIC)
         rig.trigger(TriggerReason.NETWORK_CHANGE)
-        assertEquals("跳过的触发不得重复登记", 1, rig.scheduler.budgetResetWakes.size)
+        val wakeAt = grant.elapsedMs + FGS_BUDGET_RESET_WINDOW_MS + FGS_BUDGET_RESET_MARGIN_MS
+        assertEquals("跳过的三次触发各自重登记（必有唤醒）", 4, rig.scheduler.budgetResetWakes.size)
+        assertEquals(
+            "重登记指向同一个复位点，不往后推",
+            listOf(wakeAt, wakeAt, wakeAt),
+            rig.scheduler.budgetResetWakes.drop(1).map { 30_000L + it },
+        )
         rig.close()
     }
 
