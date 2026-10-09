@@ -112,14 +112,46 @@ internal class FlowEngine(
     private val pending = LinkedHashSet<TriggerReason>()
     private var started = false
 
+    /**
+     * AUDIT-07（#499）：这一轮已经发出的、会挂到本轮证据上的逐张事实计数（键 == 桌面
+     * `audit_item_evidence.outcome`）。轮开始时清空、轮结束时随终态事实一起发出去。它是**手机自报**的
+     * 最终计数；桌面展示一律用它自己按已落库证据重算的 evidence_summary。
+     */
+    private val roundOutcomes = LinkedHashMap<String, Int>()
+
     private fun msSince(startedNanos: Long): Long = (System.nanoTime() - startedNanos) / 1_000_000
 
     private fun bump() {
         _revision.update { it + 1 }
     }
 
-    private fun audit(kind: String, payload: Map<String, String>) =
-        AuditRecord(UUID.randomUUID().toString(), kind, null, clock(), payload)
+    /**
+     * 写一条审计事实。AUDIT-07（#499）：`round_id` 一律取**当前未闭合的那一轮**——它是本轮逐张证据与
+     * 决策事实挂到桌面的同一次操作上的唯一依据。轮的身份只存在一处（order store 的未闭合轮标记），
+     * 内存里不再另存副本，免得两边漂移。不在任何一轮里的事实（例如空闲时点「取消剩余」/「恢复已跳过」）
+     * `round_id` 为 null：它不对应任何一次备份操作，不造假引用。
+     */
+    private fun audit(
+        kind: String,
+        payload: Map<String, String>,
+        roundId: String? = store.openRoundId(),
+    ): AuditRecord {
+        evidenceOutcomeOf(kind, payload)?.let { roundOutcomes[it] = (roundOutcomes[it] ?: 0) + 1 }
+        return AuditRecord(UUID.randomUUID().toString(), kind, roundId, clock(), payload)
+    }
+
+    /**
+     * 这条事实会以哪个 outcome 落到桌面的逐张证据表上（`audit_item_evidence.outcome`，口径见
+     * crates/daemon/src/audit_route.rs）。不会挂到本轮证据上的返回 null：决策类事实，以及只落
+     * tombstone 的 `UNRECOVERABLE`——它们不进这一轮的最终计数。
+     */
+    private fun evidenceOutcomeOf(kind: String, payload: Map<String, String>): String? = when (kind) {
+        AuditKinds.ITEM_CONFIRMED -> "confirmed"
+        AuditKinds.ITEM_SOURCE_MISSING -> "source_missing"
+        AuditKinds.ITEM_ATTENTION -> "failed"
+        AuditKinds.RECONCILIATION_RESOLVED -> if (payload["disposition"] == "UNRECOVERABLE") null else "remote_missing"
+        else -> null
+    }
 
     /**
      * AUDIT-06（#460）：逐张审计（flow.item.*）的 payload 一律带 `itemRef`（这张照片的稳定身份
@@ -151,6 +183,13 @@ internal class FlowEngine(
     fun start(): Job = scope.launch {
         if (started) return@launch
         started = true
+        // AUDIT-07（#499）：上一次进程被系统杀掉时留下未闭合的一轮——那个传输段已经不可能再继续了，
+        // 先替它补上终态再开新轮。手机自报的计数随那个进程一起消失，所以这条终态不带计数：
+        // 桌面按已落库的逐张证据自己重算（这正是 evidence_summary 由桌面重算、不信手机自报的原因）。
+        store.openRoundId()?.let { abandoned ->
+            log.log("round $abandoned: closing the round a killed process left open")
+            store.closeRound(finishedAudit(abandoned, emptyMap()))
+        }
         refreshPending()
         bump()
     }
@@ -209,10 +248,13 @@ internal class FlowEngine(
             log.log("pause ignored: not running (${globalState()})")
             return@async false
         }
+        // AUDIT-07（#499）：先记下被打断的那一轮——它的终态要等 cancelAndJoin 之后才发得出来，
+        // 而这条「暂停」决策要挂到它身上（case matrix §2：pause intent 带 operation id）。
+        val interrupted = store.openRoundId()
         setPausedFlag(true)
         pending.clear()
         cycleJob?.cancelAndJoin()
-        store.appendAudit(audit(AuditKinds.ROUND_CONTROLLED, mapOf("action" to "pause")))
+        store.appendAudit(audit(AuditKinds.ROUND_CONTROLLED, mapOf("action" to "pause"), roundId = interrupted))
         _status.value = LoopStatus(phase = LoopPhase.IDLE)
         bump()
         true
@@ -493,6 +535,13 @@ internal class FlowEngine(
         setWait(null)
         facts.update { it.copy(doneThisRound = 0) }
         checksDone.update { it + 1 }
+        // AUDIT-07（#499）：FGS 到手 = 这一轮真的开始跑。先给这一轮一个身份并落库，之后这一轮发出的
+        // 每条逐张/决策事实都带上它；轮结束时（正常跑完、被暂停/断网/FGS 被收打断）补发终态并清掉标记。
+        // 先落库再开跑：进程被杀在中间时它仍在，下一次进程启动会替这一轮补上终态（见 [start]）。
+        val roundId = UUID.randomUUID().toString()
+        store.openRound(roundId)
+        roundOutcomes.clear()
+        log.log("cycle $reasons: round $roundId open")
         var exit: WaitReason? = null
         try {
             // 一轮一条推送订阅（契约 §5），随 FGS 一起释放。
@@ -500,11 +549,26 @@ internal class FlowEngine(
         } finally {
             withContext(NonCancellable) {
                 foreground.release()
+                closeRound(roundId)
                 bump()
                 if (!control.paused()) settle(exit) else _status.value = LoopStatus(phase = LoopPhase.IDLE)
             }
         }
     }
+
+    /**
+     * AUDIT-07（#499）：关掉这一轮——逐张事实都已经写进同一条 outbox（seq 在终态之前），这里补上终态。
+     * 一轮一张照片都没碰过（没有任何逐张证据）就不发：没有对象、没有证据，不构成「一次备份操作」。
+     */
+    private fun closeRound(roundId: String) {
+        val counts = roundOutcomes.mapValues { it.value.toString() }
+        roundOutcomes.clear()
+        store.closeRound(if (counts.isEmpty()) null else finishedAudit(roundId, counts))
+    }
+
+    /** 一轮的终态事实。`counts` 是手机自报的最终计数（键 == 桌面的 evidence outcome 名）。 */
+    private fun finishedAudit(roundId: String, counts: Map<String, String>) =
+        AuditRecord(UUID.randomUUID().toString(), AuditKinds.ROUND_FINISHED, roundId, clock(), counts)
 
     /**
      * 入口：游标就位。G 缺失（新装、新卷、换桌面清库）或 getVersion 变了（MediaStore 重建）→ G 从当前最大

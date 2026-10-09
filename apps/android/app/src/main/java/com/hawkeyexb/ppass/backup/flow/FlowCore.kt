@@ -39,6 +39,11 @@ internal fun leaseTokenFor(orderId: Long): String = "lease-$orderId"
  * （[com.hawkeyexb.ppass.backup.order.OrderStore.transition] 的 audit 参数）。
  */
 object AuditKinds {
+    /**
+     * AUDIT-07（#499）：一轮（一次持有 FGS 的传输段）的终态。`round_id` 就是这一次操作的
+     * `operation_id`——逐张证据按同一个 id 挂上来，桌面据此重算 evidence_summary。
+     */
+    const val ROUND_FINISHED = "flow.round.finished"
     const val ROUND_CONTROLLED = "flow.round.controlled"
     const val ITEM_CONFIRMED = "flow.item.confirmed"
     const val ITEM_ATTENTION = "flow.item.attention"

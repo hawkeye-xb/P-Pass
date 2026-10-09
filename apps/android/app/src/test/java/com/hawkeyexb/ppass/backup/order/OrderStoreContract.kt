@@ -221,6 +221,40 @@ abstract class OrderStoreContract {
         assertTrue(store.appendAuditOnce("unrecoverable:1:e2", first.copy(eventId = "ev-4")))
         assertEquals(listOf("ev-4"), store.pendingAudit(10).map { it.eventId })
     }
+
+    // AUDIT-07 (#499)：未闭合那一轮的身份（round_id）是落库的账本事实——开了就在，关了就清，
+    // 关轮时终态事实与清标记同一步生效。
+    // 反证：closeRound 只清标记不写终态（或反过来）→ 下面的断言成对地红。
+    @Test
+    fun `the open round marker lives from round start until its terminal fact is appended`() {
+        val store = newStore(clock)
+        assertNull(store.openRoundId())
+        store.openRound("round-1")
+        assertEquals("round-1", store.openRoundId())
+        // 逐张事实带的就是它（每一张都挂同一次操作）。
+        val item = AuditRecord("ev-item", "flow.item.confirmed", store.openRoundId(), 1_500L, mapOf("itemRef" to "media:1"))
+        store.appendAudit(item)
+        assertEquals(listOf("round-1"), store.pendingAudit(10).map { it.roundId })
+        val finished = AuditRecord("ev-round", "flow.round.finished", "round-1", 2_000L, mapOf("confirmed" to "1"))
+        store.closeRound(finished)
+        assertNull("关轮 = 标记清掉", store.openRoundId())
+        assertEquals("终态与逐张事实在同一条 outbox、终态在后", listOf("ev-item", "ev-round"), store.pendingAudit(10).map { it.eventId })
+        // 一轮什么都没碰过：关轮不发终态，只清标记。
+        store.openRound("round-2")
+        store.closeRound(null)
+        assertNull(store.openRoundId())
+        assertEquals(2, store.pendingAudit(10).size)
+    }
+
+    // AUDIT-07 (#499)：换桌面那套账一起作废——旧桌面的未闭合轮不能在新桌面上补终态。
+    @Test
+    fun `changing desktops drops the open round marker`() {
+        val store = newStore(clock)
+        store.claimOwner("desk-a", 0L)
+        store.openRound("round-1")
+        assertTrue(store.claimOwner("desk-b", 0L))
+        assertNull(store.openRoundId())
+    }
 }
 
 class InMemoryOrderStoreContractTest : OrderStoreContract() {

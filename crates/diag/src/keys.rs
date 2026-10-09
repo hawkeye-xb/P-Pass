@@ -348,6 +348,9 @@ msg_keys! {
     UI_LOG_SUBTITLE => "ui.log_subtitle",
     UI_LOG_EMPTY => "ui.log_empty",
     UI_LOG_FOOTNOTE => "ui.log_footnote",
+    /// AUDIT-07 (#499): the audit.list read failed — the activity page says so
+    /// instead of rendering as "nothing here yet".
+    UI_LOG_LOAD_FAILED => "ui.log_load_failed",
     UI_LIBRARY => "ui.library",
     UI_DISK_SPACE => "ui.disk_space",
     UI_DISK_FREE_OF_TOTAL => "ui.disk_free_of_total",
@@ -665,6 +668,7 @@ mod tests {
             UI_LOG_SUBTITLE,
             UI_LOG_EMPTY,
             UI_LOG_FOOTNOTE,
+            UI_LOG_LOAD_FAILED,
             UI_LIBRARY,
             UI_DISK_SPACE,
             UI_DISK_FREE_OF_TOTAL,
@@ -722,7 +726,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 303);
+        assert_eq!(ALL.len(), 304);
     }
 
     #[test]

@@ -252,6 +252,7 @@
   "ui.log_subtitle": "Who backed up what, at a glance — no need to cross-check in the file manager.",
   "ui.log_empty": "Nothing here yet. Pairing, backups and device removals will appear here in time order.",
   "ui.log_footnote": "Records come from this computer's photo library and audit log, and are never uploaded.",
+  "ui.log_load_failed": "Couldn't read the activity log: {err}",
   "ui.library": "Photo library",
   "ui.disk_space": "Disk space",
   "ui.disk_free_of_total": "{free} free of {total}",

@@ -224,7 +224,7 @@ internal class FakeImporter(private val media: FakeMedia) : MediaImporter {
  * 一套装好的引擎。[media] 默认范围是 bucket 7；照片内容即 hash 源（FakeMedia）。
  * [cursors] 为 true（默认）时预置 G = (0, 0)、getVersion 不变——视为「装好之后一直在跑」，只有显式置脏才扫描。
  */
-internal class Rig(test: TestScope, cursors: Boolean = true) {
+internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? = null) {
     val dispatcher = StandardTestDispatcher(test.testScheduler)
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val testScope = test
@@ -259,6 +259,8 @@ internal class Rig(test: TestScope, cursors: Boolean = true) {
     init {
         foreground.bootNow = { boot }
         if (cursors) store.saveVolumeState(VolumeState(LEGACY_VOLUME, 0L, 0L, "v1"))
+        // AUDIT-07（#499）：预置「上一次进程被系统杀掉、留下未闭合的一轮」——引擎 start() 之前就有它。
+        openRound?.let { store.openRound(it) }
     }
 
     val engine = FlowEngine(
