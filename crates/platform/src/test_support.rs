@@ -123,12 +123,15 @@ fn windows_junction(target: &Path, link: &Path) -> io::Result<()> {
 
 /// #763：让目录拒绝在其中新建文件 / 子目录，守卫析构时恢复。
 ///
-/// 「怎么让一个目录不可写」每个系统不一样：unix 去掉写位（0o555）；Windows
-/// 的只读属性对目录不生效，要改 DACL：断开继承、只给 Everyone 读和列目录
-/// （RX），不留任何写入授权。没用「加一条拒绝 ACE」：Windows CI 实测
-/// （PR #776）`/deny Everyone:(AD,WD)` 挡住了新建文件，却没挡住新建子目录。
-/// 调用方拿到守卫后应先自己验一次「确实建不了」——以 root 运行时 unix 的写位
-/// 挡不住，那时测试证明不了任何东西，必须判红而不是静默通过。
+/// unix：去掉写位（0o555）。调用方拿到守卫后应先自己验一次「确实建不了」——
+/// 以 root 运行时写位挡不住，那时测试证明不了任何东西，必须判红而不是静默通过。
+///
+/// Windows：返回 [`io::ErrorKind::Unsupported`]，调用方**跳过并打印原因**。
+/// Windows CI（PR #776）两种做法都没能让测试进程在自己的临时目录里建不了东西：
+/// `icacls /deny Everyone:(AD,WD)` 挡住了新建文件、没挡住新建子目录；
+/// `/inheritance:r /grant:r Everyone:(RX)`（不留任何写入授权）连新建文件都没挡住。
+/// 造不出「不可写目录」就不假装造得出——产品探针本身不分平台（真去建文件），
+/// Windows 上那时该报什么由系统说了算。
 pub fn deny_file_creation(dir: &Path) -> io::Result<CreationDenied> {
     #[cfg(unix)]
     {
@@ -142,15 +145,17 @@ pub fn deny_file_creation(dir: &Path) -> io::Result<CreationDenied> {
     }
     #[cfg(windows)]
     {
-        icacls(dir, &["/inheritance:r", "/grant:r", "*S-1-1-0:(RX)"])?;
-        Ok(CreationDenied {
-            dir: dir.to_path_buf(),
-        })
+        let _ = dir;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Windows: no ACL setup made the test process unable to create entries in its own temp folder (PR #776)",
+        ))
     }
 }
 
 /// [`deny_file_creation`] 的守卫：析构时恢复原权限。
 pub struct CreationDenied {
+    #[cfg(unix)]
     dir: std::path::PathBuf,
     #[cfg(unix)]
     original: std::fs::Permissions,
@@ -162,30 +167,6 @@ impl Drop for CreationDenied {
         {
             let _ = std::fs::set_permissions(&self.dir, self.original.clone());
         }
-        #[cfg(windows)]
-        {
-            // 所有者对自己的目录始终有 WRITE_DAC，能把 ACL 复原成继承来的那份。
-            let _ = icacls(&self.dir, &["/reset"]);
-        }
-    }
-}
-
-/// 起 `icacls`（同 [`windows_junction`]：只在 `test-support` 里，不进产品）。
-#[cfg(windows)]
-fn icacls(dir: &Path, args: &[&str]) -> io::Result<()> {
-    let out = std::process::Command::new("icacls")
-        .arg(dir)
-        .args(args)
-        .output()?;
-    if out.status.success() {
-        Ok(())
-    } else {
-        Err(io::Error::other(format!(
-            "icacls {args:?} 失败: status={:?} stdout={} stderr={}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stdout).trim(),
-            String::from_utf8_lossy(&out.stderr).trim()
-        )))
     }
 }
 
@@ -226,12 +207,19 @@ mod tests {
         }
     }
 
-    /// 守卫在手时目录里确实建不了文件；守卫释放后又能建。
+    /// 守卫在手时目录里确实建不了文件；守卫释放后又能建。Windows 上明确报不支持（见函数注释）。
     #[test]
     fn denied_dir_refuses_new_files_until_the_guard_drops() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("locked");
         std::fs::create_dir(&dir).unwrap();
+        if cfg!(windows) {
+            let err = deny_file_creation(&dir)
+                .err()
+                .expect("Windows reports unsupported");
+            assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+            return;
+        }
         {
             let _guard = deny_file_creation(&dir).unwrap();
             assert!(
