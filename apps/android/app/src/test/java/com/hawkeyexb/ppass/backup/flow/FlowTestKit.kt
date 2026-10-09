@@ -184,6 +184,11 @@ class FakeControl : FlowControl {
         budget = budget.copy(exhaustedRefusalAt = null)
         return had
     }
+    var ladderSpent = false
+    override fun retryLadderSpent() = ladderSpent
+    override fun setRetryLadderSpent(spent: Boolean) {
+        ladderSpent = spent
+    }
     override fun missingSourceAckAt() = ack
     override fun setMissingSourceAckAt(atMs: Long) {
         ack = atMs
@@ -244,6 +249,9 @@ internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? 
     var missingOnDesktop: Set<String> = emptySet()
     var presenceCalls = 0
     var conditions = Conditions()
+
+    /** #762：非 null 时由它给条件（可以在第 N 次读取时抛异常，模拟一轮跑到一半的意外错误）。 */
+    var conditionsHook: (() -> Conditions)? = null
     var epoch: PairingEpoch? = PairingEpoch("e1")
 
     /** #459：完整相册权限（false = 部分授权 / 没授权：「查不到」不能当「被删了」）。 */
@@ -277,7 +285,7 @@ internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? 
         foreground = foreground,
         scheduler = wakes ?: scheduler,
         control = control,
-        conditions = { conditions },
+        conditions = { conditionsHook?.invoke() ?: conditions },
         inScope = media::inScope,
         mediaAbsenceTrusted = { fullMediaAccess },
         pairingEpoch = { epoch },

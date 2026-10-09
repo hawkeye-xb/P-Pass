@@ -258,6 +258,7 @@ internal fun waitReasonTextRes(reason: WaitReason, fgsBlock: FgsBlockReason?): I
     WaitReason.DESKTOP_STORAGE_FULL -> R.string.state_waiting_desktop_full
     WaitReason.DESKTOP_LIBRARY_UNAVAILABLE -> R.string.state_waiting_desktop_library
     WaitReason.DESKTOP_STORAGE_ERROR -> R.string.state_waiting_desktop_error
+    WaitReason.UNEXPECTED_ERROR -> R.string.state_waiting_unexpected_error
 }
 
 /**

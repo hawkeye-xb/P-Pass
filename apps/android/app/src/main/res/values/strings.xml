@@ -119,6 +119,7 @@
     <string name="state_waiting_desktop_full">The storage computer is full. Free up disk space or move the photo library to a bigger drive.</string>
     <string name="state_waiting_desktop_library">Can\'t open the photo library folder on the storage computer</string>
     <string name="state_waiting_desktop_error">The storage computer hit an error saving photos — check P-Pass on the computer</string>
+    <string name="state_waiting_unexpected_error">Backup hit an unexpected error — will retry later</string>
     <string name="desktop_low_space_hint">The storage computer has less than 5 GB free</string>
     <!-- 2026-09-07 real-device feedback: disable the button while a command
          is in flight so repeated taps don't queue behind it. -->
