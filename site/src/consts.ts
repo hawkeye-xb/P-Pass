@@ -4,6 +4,11 @@ export const SITE_URL = 'https://p-pass.hawkeye-xb.com';
 export const GITHUB_URL = 'https://github.com/hawkeye-xb/P-Pass';
 export const RELEASES_URL = `${GITHUB_URL}/releases/latest`;
 
+// Project social accounts. English pages only: both are unreachable from
+// mainland China, so the zh pages do not link them.
+export const BLUESKY_URL = 'https://bsky.app/profile/p-pass.hawkeye-xb.com';
+export const YOUTUBE_URL = 'https://www.youtube.com/@p-pass-photos';
+
 // Download mirror for the zh page: GitHub release assets are often unreachable
 // from mainland China. Fixed file names, overwritten on every release (manual
 // upload to Cloudflare R2, see the release checklist in the business repo).

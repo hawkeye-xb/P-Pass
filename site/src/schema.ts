@@ -7,7 +7,7 @@
  * Windows and iOS are still in progress, and saying otherwise in structured
  * data would be a claim about the product that the product cannot back up.
  */
-import { GITHUB_URL, RELEASES_URL, SITE_DESCRIPTION, SITE_URL } from './consts';
+import { BLUESKY_URL, GITHUB_URL, RELEASES_URL, SITE_DESCRIPTION, SITE_URL, YOUTUBE_URL } from './consts';
 import { FAQ, FAQ_TITLE } from './i18n/faq';
 import type { FaqBlock } from './i18n/faq';
 import type { Lang } from './i18n/ui';
@@ -30,7 +30,7 @@ export function softwareApplication(lang: Lang): JsonLd {
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
     license: 'https://www.gnu.org/licenses/agpl-3.0.html',
     downloadUrl: RELEASES_URL,
-    sameAs: [GITHUB_URL],
+    sameAs: lang === 'zh' ? [GITHUB_URL] : [GITHUB_URL, BLUESKY_URL, YOUTUBE_URL],
   };
 }
 
