@@ -20,8 +20,8 @@
   folder you chose: open them straight from Finder.
 - Backups are one-way, phone to computer. Deleting a photo on the phone does
   not delete the copy on the computer.
-- No account, no subscription, no storage fee. How much you can keep is
-  how much free space that drive has.
+- No account, no cloud storage. How much you can keep is how much free
+  space that drive has.
 
 ## Boundaries
 

@@ -110,7 +110,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           id: 'cost',
           q: 'Does it cost anything?',
           a: [
-            'Nothing. No subscription, no storage fee.',
+            'Backing up at home costs nothing.',
             'Your photos sit on your own computer, so the only limit is the free space on that disk. The code is open source on GitHub under AGPL-3.0.',
           ],
         },
@@ -350,7 +350,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           id: 'cost',
           q: '需要付费吗？',
           a: [
-            '不用。没有订阅，也没有容量费。',
+            '开源的，可以自建，不收钱。',
             '照片存在你自己电脑的硬盘上，能存多少取决于那块硬盘还剩多少空间。代码开源在 GitHub 上（AGPL-3.0）。',
           ],
         },

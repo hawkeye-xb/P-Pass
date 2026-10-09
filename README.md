@@ -2,11 +2,10 @@
 
 [中文版 / Chinese version](README.zh.md)
 
-Peer-to-peer photo backup for families: phones back up automatically to
-a computer in your own home; everyone in the family browses across
-devices. No cloud storage, no accounts — and backing up at home is
-free, forever. Original files are the source of truth and the index
-can be rebuilt from them at any time.
+Photo backup for families: phones back up automatically to a computer
+in your own home; everyone in the family browses across devices. No
+cloud storage, no accounts. Original files are the source of truth and
+the index can be rebuilt from them at any time.
 
 **Roadmap & status: [docs/ROADMAP.md](docs/ROADMAP.md)**
 
