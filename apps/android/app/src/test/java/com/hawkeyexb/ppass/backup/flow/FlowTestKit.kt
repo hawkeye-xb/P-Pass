@@ -224,7 +224,7 @@ internal class FakeImporter(private val media: FakeMedia) : MediaImporter {
  * 一套装好的引擎。[media] 默认范围是 bucket 7；照片内容即 hash 源（FakeMedia）。
  * [cursors] 为 true（默认）时预置 G = (0, 0)、getVersion 不变——视为「装好之后一直在跑」，只有显式置脏才扫描。
  */
-internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? = null) {
+internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? = null, wakes: WakeScheduler? = null) {
     val dispatcher = StandardTestDispatcher(test.testScheduler)
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val testScope = test
@@ -275,7 +275,7 @@ internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? 
         },
         presence = RemotePresence { hashes -> presenceCalls++; hashes.filter { it in missingOnDesktop }.toSet() },
         foreground = foreground,
-        scheduler = scheduler,
+        scheduler = wakes ?: scheduler,
         control = control,
         conditions = { conditions },
         inScope = media::inScope,

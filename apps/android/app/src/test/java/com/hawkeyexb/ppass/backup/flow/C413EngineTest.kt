@@ -387,12 +387,13 @@ class C413EngineTest {
         assertEquals(0, rig.store.currentForMedia(1)!!.attempts)
         assertEquals(WaitReason.DESKTOP_STORAGE_FULL, rig.engine.view.value.waitReason)
         assertEquals(GlobalState.WAITING, rig.engine.view.value.state)
+        assertEquals("#652：对端失败（桌面不健康）同样登记探测梯", 1, rig.scheduler.unreachableProbes)
 
         rig.delivery.script += { DeliveryOutcome.PathFailure("fetch_failed") }
         rig.trigger()
         assertEquals(OrderState.TRANSFERRING, rig.state(1))
         assertEquals(WaitReason.DESKTOP_UNREACHABLE, rig.engine.view.value.waitReason)
-        assertEquals(1, rig.scheduler.unreachableProbes)
+        assertEquals("路径失败挂探测（每次进入等待只登记一次）", 2, rig.scheduler.unreachableProbes)
 
         rig.delivery.script += { DeliveryOutcome.SourceMissing }
         rig.trigger()
