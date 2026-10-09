@@ -295,11 +295,14 @@ internal class FlowEngine(
         n
     }
 
-    /** FGS 被系统收走（onTimeout）：记原因、停循环（端口发 flow.suspend）、等待中。下一次触发照常再申请（#413）。 */
+    /**
+     * FGS 被系统收走（onTimeout）：记原因、停循环（端口发 flow.suspend）、等待中。下一次触发照常再申请（#413）。
+     * #409：同时在额度复位点之后登记一次性保底唤醒（[FgsStall.LOST]）；不记「确定被拒」，不挡更早的触发。
+     */
     fun onForegroundLost(reason: FgsBlockReason = FgsBlockReason.BUDGET_EXHAUSTED): Job = scope.launch {
         control.recordFgsBlock(reason)
         log.log("foreground lost ($reason): stopping the loop; the next trigger may request it again")
-        stopCycle(WaitReason.FGS_BLOCKED)
+        stopCycle(WaitReason.FGS_BLOCKED, FgsStall.LOST)
     }
 
     /** App 回到前台：一次触发（含对账）。#522：回过前台 = 系统下一次 startForeground 会复位额度，先把「确定被拒」清掉。 */
@@ -315,25 +318,60 @@ internal class FlowEngine(
     }
 
     /**
-     * #522：这次申请刚被系统明确以额度耗尽拒绝——登记一次性唤醒，定在系统复位点之后。只在这里登记（跳过的触发不登记），
-     * 一次耗尽只登记一次；否则耗尽后没有任何唤醒，只能等外部触发（最坏 24h + 5h 兜底）。
+     * #409 / #652：进入「等待中」后登记唤醒——**所有**进入等待的路径（[settle] / [stopCycle]）都只经过这里，
+     * 唤醒种类只由 [wakePlanOf] 对 [WaitReason] 的穷举决定。不变式：有没传完的、当前又没在传 ⇒ 至少登记着一个会触发的唤醒，
+     * 例外只有要用户动手的（未配对、后台备份关着）。[stall] 只对 [WaitReason.FGS_BLOCKED] 有意义。
      */
-    private fun scheduleBudgetResetWakeIfExhausted(reasons: Set<TriggerReason>) {
-        val now = bootClock() ?: return
-        val decision = fgsBudgetDecision(control.fgsBudgetFacts(), now, appForegroundAt())?.takeIf { it.skip } ?: return
-        val wakeAt = decision.wakeAtElapsedMs ?: return
-        val delayMs = (wakeAt - now.elapsedMs).coerceAtLeast(0L)
-        scheduler.scheduleBudgetResetWake(delayMs)
-        log.log("cycle $reasons: foreground budget exhausted; one-off wake registered in ${delayMs / 60_000}min (system reset + margin)")
+    private fun registerWake(reason: WaitReason, stall: FgsStall) {
+        val plan = wakePlanOf(reason) {
+            fgsBlockedWakePlan(stall, control.fgsBudgetFacts(), bootClock(), appForegroundAt())
+        }
+        when (plan) {
+            WakePlan.AwaitsUser -> log.log("waiting for $reason: needs the user, no wake registered")
+            is WakePlan.WhenConditionsMet -> scheduler.scheduleWhenConditionsMet(plan.reason)
+            WakePlan.RetryProbes -> {
+                scheduler.scheduleUnreachableProbes()
+                log.log("waiting for $reason: retry probes registered (every ${UNREACHABLE_PROBE_INTERVAL_LOG})")
+            }
+            is WakePlan.BudgetReset -> {
+                // 唯一名、REPLACE：同一次耗尽算出的是同一个绝对时刻（最近一次授予 + 24h + 余量），重登记不会把它往后推。
+                scheduler.scheduleBudgetResetWake(plan.delayMs)
+                val why = when (stall) {
+                    FgsStall.LOST -> "foreground lost; fallback wake past the system reset (last grant + 24h + margin)"
+                    FgsStall.NOT_GRANTED -> "foreground budget exhausted (system reset + margin)"
+                }
+                log.log("waiting for $reason: one-off wake registered in ${plan.delayMs / 60_000}min; $why")
+            }
+        }
     }
 
     /**
-     * #439：前台心跳确认桌面可达。只在「等待中（桌面不可达）」时叫醒循环——否则桌面回来之后，
+     * #439：前台心跳确认桌面可达。只在「等待中（桌面不可达 / 桌面不健康）」时叫醒循环——否则桌面回来之后，
      * 人就在 App 里看着，也要等下一次 10 分钟的探测。其他状态一律不动（心跳每 30 秒一拍，不能变成触发源）。
+     * #652：不健康时心跳只说明「连得上」，健康要这一轮的探测去看：恢复了就续传、提示随等待原因一起消失；
+     * 没恢复就在探测这一步停下、回到同一个等待（不申请 FGS、不传）。代价是 App 在前台、桌面不健康期间每 30 秒
+     * 一次检查（读计数 + hello），只在前台。
+     * 闸门：只有**最近一次探测本身就报不健康**时才叫醒。等待原因来自传输时的对端失败、而探测报健康
+     * （健康探针只看 `.ppf/` 能不能建文件，看不到 originals 写不进）时，叫醒的那一轮会一路走到申请 FGS 再整张重传、
+     * 再失败——每 30 秒一次。那种情况交给探测梯（10 分钟一拍）。进程重启后没有健康快照，同样交给探测梯（失败关闭）。
      */
     fun onDesktopReachable(): Job = scope.launch {
-        if (control.waitReason() != WaitReason.DESKTOP_UNREACHABLE) return@launch
-        log.log("desktop reachable again (foreground heartbeat): waking the loop")
+        val waiting = control.waitReason() ?: return@launch
+        val wake = when (waiting) {
+            WaitReason.DESKTOP_UNREACHABLE -> true
+            WaitReason.DESKTOP_STORAGE_FULL,
+            WaitReason.DESKTOP_LIBRARY_UNAVAILABLE,
+            WaitReason.DESKTOP_STORAGE_ERROR,
+            -> waitReasonOf(facts.value.desktopHealth) != null
+            WaitReason.NOT_PAIRED,
+            WaitReason.DISABLED,
+            WaitReason.WIFI,
+            WaitReason.BATTERY,
+            WaitReason.FGS_BLOCKED,
+            -> false
+        }
+        if (!wake) return@launch
+        log.log("desktop reachable (foreground heartbeat) while waiting for $waiting: waking the loop")
         onTrigger(TriggerReason.DESKTOP_REACHABLE)
     }
 
@@ -347,7 +385,6 @@ internal class FlowEngine(
         if (running && reason == WaitReason.WIFI) {
             log.log("network changed: $reason no longer satisfied, stopping the loop")
             stopCycle(reason)
-            scheduler.scheduleWhenConditionsMet(reason)
             return@launch
         }
         onTrigger(TriggerReason.NETWORK_CHANGE)
@@ -361,15 +398,23 @@ internal class FlowEngine(
         if (cycleJob?.isActive != true) return@launch
         log.log("network lost: path failure for the in-flight item; waiting for the network to come back")
         stopCycle(WaitReason.DESKTOP_UNREACHABLE)
-        scheduler.scheduleUnreachableProbes()
     }
 
-    /** 写者上执行：停掉这一轮，进「等待中」。 */
-    private suspend fun stopCycle(reason: WaitReason) {
+    /**
+     * 写者上执行：停掉这一轮，进「等待中」并登记唤醒。必须在 cancelAndJoin **之后**登记：被取消的那一轮在 finally 里
+     * 先 settle(null)，这里再把等待原因与唤醒落下。
+     */
+    private suspend fun stopCycle(reason: WaitReason, stall: FgsStall = FgsStall.NOT_GRANTED) {
         pending.clear()
         cycleJob?.cancelAndJoin()
+        enterWait(reason, stall)
+    }
+
+    /** 进「等待中」：运行态、持久化的等待原因、唤醒——三件事一起，唤醒只经 [registerWake]。 */
+    private fun enterWait(reason: WaitReason, stall: FgsStall) {
         _status.value = LoopStatus(phase = LoopPhase.IDLE, waitReason = reason)
         setWait(reason)
+        registerWake(reason, stall)
     }
 
     fun acknowledgeAudit(eventIds: Set<String>): Job = scope.launch {
@@ -413,9 +458,17 @@ internal class FlowEngine(
         }
     }
 
-    private fun settle(wait: WaitReason?) {
-        _status.value = LoopStatus(phase = LoopPhase.IDLE, waitReason = wait)
-        setWait(wait)
+    /**
+     * 一轮的检查 / 传输结束。[wait] 非 null = 进「等待中」（唤醒经 [enterWait] 登记，先于 checksDone：唤醒它的那个
+     * worker 此刻还在跑，探测梯的 KEEP 不会把它当成「已完成」重排）。[stall] 只对 [WaitReason.FGS_BLOCKED] 有意义。
+     */
+    private fun settle(wait: WaitReason?, stall: FgsStall = FgsStall.NOT_GRANTED) {
+        if (wait != null) {
+            enterWait(wait, stall)
+        } else {
+            _status.value = LoopStatus(phase = LoopPhase.IDLE)
+            setWait(null)
+        }
         checksDone.update { it + 1 }
     }
 
@@ -442,7 +495,6 @@ internal class FlowEngine(
         log.log("cycle $reasons: check count took ${msSince(cycleStarted)}ms pending=$todo")
         waitReasonOf(conditions(), userPresent)?.let { reason ->
             log.log("cycle $reasons: waiting for $reason (no foreground service requested)")
-            if (reason == WaitReason.WIFI || reason == WaitReason.BATTERY) scheduler.scheduleWhenConditionsMet(reason)
             return settle(reason)
         }
         if (!hasWork(reconcile, askPresence = TriggerReason.PERIODIC in reasons)) {
@@ -455,12 +507,11 @@ internal class FlowEngine(
         when (reach) {
             ProbeResult.Unreachable -> {
                 log.log("cycle $reasons: desktop unreachable, scheduling probes; no foreground service, no attempt counted")
-                scheduler.scheduleUnreachableProbes()
                 return settle(WaitReason.DESKTOP_UNREACHABLE)
             }
             ProbeResult.PairingLost -> return settle(WaitReason.NOT_PAIRED)
             is ProbeResult.Reachable -> {
-                scheduler.cancelUnreachableProbes()
+                // #652：探测梯在这里还不能撤——桌面可能可达但不健康，那时它正是唤醒；拿到 FGS 才撤（见下）。
                 reach.advertisedEpoch?.takeIf { it.isNotBlank() && it != epoch.value }?.let(onEpochAdvertised)
                 facts.update { it.copy(desktopHealth = reach.health) }
                 // 契约 §7：桌面不健康 → 不申请 FGS，等待中（具体原因）。
@@ -478,17 +529,18 @@ internal class FlowEngine(
             fgsBudgetDecision(control.fgsBudgetFacts(), bootClock(), appForegroundAt())?.let { decision ->
                 if (decision.skip) {
                     log.log("cycle $reasons: skipping startForegroundService: ${decision.why}")
-                    return settle(WaitReason.FGS_BLOCKED)
+                    return settle(WaitReason.FGS_BLOCKED, FgsStall.NOT_GRANTED)
                 }
                 log.log("cycle $reasons: the system refused for budget earlier, requesting anyway: ${decision.why}")
             }
         }
         if (!foreground.acquire()) {
             control.recordFgsBlock(FgsBlockReason.START_REFUSED)
-            log.log("foreground service refused: waiting; the next trigger requests it again")
-            scheduleBudgetResetWakeIfExhausted(reasons)
-            return settle(WaitReason.FGS_BLOCKED)
+            log.log("cycle $reasons: foreground service refused: waiting; the next trigger requests it again")
+            return settle(WaitReason.FGS_BLOCKED, FgsStall.NOT_GRANTED)
         }
+        // 真要开始传了：探测梯（不可达 / 不健康 / 被拒时登记的）不再需要。
+        scheduler.cancelUnreachableProbes()
         _status.value = LoopStatus(phase = LoopPhase.RUNNING)
         setWait(null)
         facts.update { it.copy(doneThisRound = 0) }
@@ -501,7 +553,8 @@ internal class FlowEngine(
             withContext(NonCancellable) {
                 foreground.release()
                 bump()
-                if (!control.paused()) settle(exit) else _status.value = LoopStatus(phase = LoopPhase.IDLE)
+                // 循环里以 FGS_BLOCKED 退出只有一种可能：每张开始前发现服务已不在前台（被系统收走）。
+                if (!control.paused()) settle(exit, FgsStall.LOST) else _status.value = LoopStatus(phase = LoopPhase.IDLE)
             }
         }
     }
@@ -556,10 +609,7 @@ internal class FlowEngine(
         while (true) {
             // C-07：每张开始前重检条件，并确认 FGS 仍然有效。
             if (control.paused()) return null
-            waitReasonOf(conditions(), round.userPresent)?.let { reason ->
-                if (reason == WaitReason.WIFI || reason == WaitReason.BATTERY) scheduler.scheduleWhenConditionsMet(reason)
-                return reason
-            }
+            waitReasonOf(conditions(), round.userPresent)?.let { return it }
             if (!foreground.isHeld()) return WaitReason.FGS_BLOCKED
             val epoch = pairingEpoch() ?: return WaitReason.NOT_PAIRED
             val item = pickNext(round) ?: return null
@@ -887,7 +937,6 @@ internal class FlowEngine(
             is DeliveryOutcome.PathFailure -> {
                 // C-05 / C-10：路径失败——order 保持「传输中」可续传，不计次数，退出循环、登记探测。
                 log.log("order ${order.id}: path failure (${outcome.reason}); leaving it resumable")
-                scheduler.scheduleUnreachableProbes()
                 StepResult.Exit(WaitReason.DESKTOP_UNREACHABLE)
             }
             is DeliveryOutcome.PeerFailure -> {
@@ -1128,6 +1177,8 @@ internal class FlowEngine(
         private val OPEN = OrderState.entries.filter { it.isOpen }.toSet()
 
         /** 在跑时合并进来的这些触发意味着待办可能变了：当场重算（只读元数据），不等这一轮结束。 */
+        private const val UNREACHABLE_PROBE_INTERVAL_LOG = "10min, 3 times"
+
         private val RECOUNT_WHILE_RUNNING = setOf(
             TriggerReason.MEDIA_CHANGE,
             TriggerReason.FOREGROUND_MEDIA_CHANGE,

@@ -158,7 +158,7 @@ internal fun onFlowAppForeground(context: Context) {
     }
 }
 
-/** #439：前台心跳确认桌面可达（引擎只在「等待中（桌面不可达）」时据此叫醒循环）。 */
+/** #439：前台心跳确认桌面可达（引擎只在「等待中（桌面不可达 / #652 桌面不健康）」时据此叫醒循环）。 */
 internal fun onFlowDesktopReachable(context: Context) {
     val app = context.applicationContext
     thread(name = "ppass-flow-reachable") {
