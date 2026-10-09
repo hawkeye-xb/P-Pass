@@ -21,6 +21,8 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         val auditSeqs: Map<String, Long> = emptyMap(),
         val lastAuditSeq: Long = 0L,
         val onceKeys: Set<String> = emptySet(),
+        /** AUDIT-07（#499）：未闭合那一轮的 round_id（与 SQLite meta 表同语义）。 */
+        val openRound: String? = null,
     )
 
     /** 故障注入：非 null 时，下一次事务在提交前抛出它（测试「崩在写入中途」）。 */
@@ -45,11 +47,12 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         val auditSeqs = LinkedHashMap(s.auditSeqs)
         val onceKeys = s.onceKeys.toMutableSet()
         var lastAuditSeq = s.lastAuditSeq
+        var openRound = s.openRound
 
         fun freeze(): State {
             for (a in audits) if (a.eventId !in auditSeqs) auditSeqs[a.eventId] = ++lastAuditSeq
             auditSeqs.keys.retainAll(audits.mapTo(HashSet()) { it.eventId })
-            return State(rows, lastId, volumes, scan, skips, audits, owner, auditSeqs, lastAuditSeq, onceKeys)
+            return State(rows, lastId, volumes, scan, skips, audits, owner, auditSeqs, lastAuditSeq, onceKeys, openRound)
         }
     }
 
@@ -243,6 +246,15 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         inTransaction { audits.removeAll { it.eventId in eventIds } }
     }
 
+    override fun openRoundId(): String? = state.openRound
+
+    override fun openRound(roundId: String) = inTransaction { openRound = roundId }
+
+    override fun closeRound(audit: AuditRecord?) = inTransaction {
+        audit?.let { audits += it }
+        openRound = null
+    }
+
     override fun claimOwner(ownerKey: String, idFloor: Long): Boolean = inTransaction {
         if (owner == ownerKey) return@inTransaction false
         val cleared = owner != null
@@ -250,6 +262,8 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
             rows.clear()
             volumes.clear()
             audits.clear()
+            // AUDIT-07（#499）：未闭合的那一轮属于旧桌面那套账，一起作废。
+            openRound = null
             scan = ScanState(dirty = true, cursor = 0L)
         }
         lastId = maxOf(idFloor, rows.keys.maxOrNull() ?: 0L)

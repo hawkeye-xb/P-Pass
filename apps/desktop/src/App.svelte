@@ -233,6 +233,10 @@
   // 配对请求/允许/拒绝、吊销、外部删除、Flow 用户操作/终态，活动页的
   // 主数据源。v1 的 action/detail 自由文本已随 audit_log 一并移除。
   let auditEvents = $state([]);
+  // AUDIT-07（#499）：audit.list 读失败的原因。这个列表是活动记录页的唯一数据源，
+  // 读不到时页面会渲染成空——空列表看起来就是「还没有任何记录」，用户会以为备份
+  // 从未发生过。所以失败必须显示出来（成功一次就清掉）。
+  let auditError = $state("");
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
@@ -344,7 +348,13 @@
       try {
         const au = await call("audit.list", { limit: 500 });
         auditEvents = (au.events ?? []).slice().sort((x, y) => (y.ts ?? 0) - (x.ts ?? 0));
-      } catch (_) {}
+        auditError = "";
+      } catch (e) {
+        // AUDIT-07（#499）：这里原来是 `catch (_) {}`——失败被吞掉，活动记录页
+        // 只是变空（跟「确实还没有记录」长得一模一样）。改成把错误显示在那一页上。
+        auditEvents = [];
+        auditError = errText(e);
+      }
     } catch (e) {
       online = false;
       lastReachable = false;
@@ -1883,7 +1893,14 @@
                设备吊销/断开/改名、外部删除、Flow 用户操作与终态，全部带
                时间倒序。ingest.* 逐文件行过滤不展示（全路径噪音）。 -->
           <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
-            {#if visibleAudit.length === 0}
+            {#if auditError}
+              <!-- AUDIT-07（#499）：audit.list 失败必须说出来。原先失败被静默
+                   吞掉，这一页只是变空——和「确实还没有任何记录」长得一模一样，
+                   用户会以为备份从没发生过。 -->
+              <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="audit-error"
+                >{t("ui.log_load_failed", { err: auditError })}</p
+              >
+            {:else if visibleAudit.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_empty")}</p>
             {:else}
               <ul class="m-0 list-none p-0">

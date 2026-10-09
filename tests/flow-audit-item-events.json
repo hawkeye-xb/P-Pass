@@ -1,5 +1,5 @@
 {
-  "_about": "AUDIT-06 (#460) cross-end contract anchor: every item-level Flow audit payload shape the phone (apps/android FlowEngine) emits into audit_outbox and submits over flow.audit.submit. Read by crates/daemon/src/audit_route.rs tests (every event must be accepted and persisted with expect.item_ref / expect.outcome) and by apps/android AUDIT06ItemAuditContractTest (every item fact the phone emits today must have the key set of a phone-current event of its kind). phone-legacy = shapes emitted from #424 up to #460 (no itemRef, round_id NULL) that may still sit in an upgraded phone's outbox; legacy_confirmed is the card's real outbox row, with the two values the card truncated filled in. Changing a phone payload means changing this file, which re-runs the daemon contract.",
+  "_about": "AUDIT-06 (#460) cross-end contract anchor: every item-level Flow audit payload shape the phone (apps/android FlowEngine) emits into audit_outbox and submits over flow.audit.submit. Read by crates/daemon/src/audit_route.rs tests (every event must be accepted and persisted with expect.item_ref / expect.outcome) and by apps/android AUDIT06ItemAuditContractTest (every item fact the phone emits today must have the key set of a phone-current event of its kind). AUDIT-07 (#499): phone-current facts carry the round_id of the transfer segment they happened in (the round IS the operation on the daemon side); phone-legacy = shapes emitted from #424 up to #460 (no itemRef, round_id NULL) that may still sit in an upgraded phone's outbox; legacy_confirmed is the card's real outbox row, with the two values the card truncated filled in. Changing a phone payload means changing this file, which re-runs the daemon contract.",
   "events": [
     {
       "name": "legacy_confirmed",
@@ -81,7 +81,7 @@
       "emitter": "phone-current",
       "site": "FlowEngine.deliverAndCommit (Confirmed)",
       "kind": "flow.item.confirmed",
-      "round_id": null,
+      "round_id": "round-audit07",
       "payload": {
         "queueSequence": "1790574682018",
         "sourceVersion": "1790569136:30333",
@@ -99,7 +99,7 @@
       "emitter": "phone-current",
       "site": "FlowEngine.processFresh (SourceMissing)",
       "kind": "flow.item.source_missing",
-      "round_id": null,
+      "round_id": "round-audit07",
       "payload": {
         "mediaId": "30333",
         "itemRef": "media:30333"
@@ -114,7 +114,7 @@
       "emitter": "phone-current",
       "site": "FlowEngine.settleSourceMissing",
       "kind": "flow.item.source_missing",
-      "round_id": null,
+      "round_id": "round-audit07",
       "payload": {
         "queueSequence": "1790574682019",
         "reason": "gone",
@@ -130,7 +130,7 @@
       "emitter": "phone-current",
       "site": "FlowEngine.deliverAndCommit (SourceMissing)",
       "kind": "flow.item.source_missing",
-      "round_id": null,
+      "round_id": "round-audit07",
       "payload": {
         "queueSequence": "1790574682020",
         "itemRef": "media:30333"
@@ -145,7 +145,7 @@
       "emitter": "phone-current",
       "site": "FlowEngine.fail",
       "kind": "flow.item.attention",
-      "round_id": null,
+      "round_id": "round-audit07",
       "payload": {
         "reason": "receipt_mismatch",
         "queueSequence": "1790574682021",

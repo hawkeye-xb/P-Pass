@@ -280,6 +280,23 @@ interface OrderStore {
     fun acknowledgeAudit(eventIds: Set<String>)
 
     /**
+     * AUDIT-07（#499）：当前**未闭合的那一轮**的 round_id（没有在跑的轮时 null）。
+     *
+     * 一轮 = 一次持有 FGS 的传输段。轮的身份只存这一处（meta 表），逐张事实与决策事实都按它挂到
+     * 桌面的同一次操作上；进程被杀之后它还在，所以下一次进程启动能替死去的那一轮补上终态。
+     */
+    fun openRoundId(): String?
+
+    /** 开轮：先把这一轮的 round_id 落库，再让任何逐张事实写进 outbox。 */
+    fun openRound(roundId: String)
+
+    /**
+     * 关轮：**同一个事务**里补发终态事实并清掉未闭合标记（[audit] = null 表示这一轮没有任何逐张事实，
+     * 只清标记、不发终态）——不会出现「终态已发、标记还在」或反过来。
+     */
+    fun closeRound(audit: AuditRecord?)
+
+    /**
      * 换桌面（#415 裁决 6）：[ownerKey]（daemonNodeId）与库里记着的不一样时，清空 order、卷游标、扫描游标与
      * 审计 outbox，并把新 id 的起点抬到 [idFloor] 之上。返回是否清了。
      * **跳过名单保留**：它是用户意图，与哪台桌面无关（#413 裁定 9，待用户最终确认）。清库后扫描置脏。

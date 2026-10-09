@@ -102,6 +102,9 @@ class SqliteOrderStore private constructor(
         private const val OWNER_KEY = "owner"
         private const val SCAN_DIRTY_KEY = "scan_dirty"
         private const val SCAN_CURSOR_KEY = "scan_cursor"
+
+        /** AUDIT-07（#499）：未闭合那一轮的 round_id（见 [OrderStore.openRoundId]）。 */
+        private const val OPEN_ROUND_KEY = "open_round_id"
     }
 
     private class Helper(context: Context?, name: String?) : SQLiteOpenHelper(context, name, null, SCHEMA_VERSION) {
@@ -202,6 +205,9 @@ class SqliteOrderStore private constructor(
 
     private fun SQLiteDatabase.metaPut(key: String, value: String) =
         execSQL("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", arrayOf(key, value))
+
+    private fun SQLiteDatabase.metaDelete(key: String) =
+        execSQL("DELETE FROM meta WHERE key = ?", arrayOf(key))
 
     private fun SQLiteDatabase.readScan(): ScanState =
         ScanState(dirty = metaGet(SCAN_DIRTY_KEY) == "1", cursor = metaGet(SCAN_CURSOR_KEY)?.toLongOrNull() ?: 0L)
@@ -535,6 +541,15 @@ class SqliteOrderStore private constructor(
         }
     }
 
+    override fun openRoundId(): String? = db.metaGet(OPEN_ROUND_KEY)
+
+    override fun openRound(roundId: String) = inTransaction { metaPut(OPEN_ROUND_KEY, roundId) }
+
+    override fun closeRound(audit: AuditRecord?) = inTransaction {
+        writeAudit(audit)
+        metaDelete(OPEN_ROUND_KEY)
+    }
+
     override fun claimOwner(ownerKey: String, idFloor: Long): Boolean = inTransaction {
         val previous = metaGet(OWNER_KEY)
         if (previous == ownerKey) return@inTransaction false
@@ -544,6 +559,9 @@ class SqliteOrderStore private constructor(
             execSQL("DELETE FROM orders")
             execSQL("DELETE FROM volume_state")
             execSQL("DELETE FROM audit_outbox")
+            // AUDIT-07（#499）：未闭合的那一轮属于旧桌面那套账，一起作废——不然下一次进程启动会拿它
+            // 给新桌面补一条没有证据的终态。
+            metaDelete(OPEN_ROUND_KEY)
             writeScan(ScanState(dirty = true, cursor = 0L))
         }
         // sqlite_sequence 由 AUTOINCREMENT 表自动建出；手写一行把起点抬上去。

@@ -520,6 +520,11 @@ mod tests {
     // sitting in upgraded phones' outboxes — is accepted and persisted. The
     // shapes come from the fixture the Android tests also read, so the two
     // ends can no longer each test a shape the other never produces.
+    //
+    // AUDIT-07 (#499): phone-current shapes now carry the phone's persistent
+    // round_id, and the daemon must hang the evidence on exactly that round
+    // (`operation_id` == `round_id`) — the legacy NULL shapes keep landing
+    // with no operation link, which is what #460 had to work around.
     #[tokio::test]
     async fn every_real_phone_item_fact_shape_is_accepted_and_persisted() {
         let fixture: serde_json::Value =
@@ -540,15 +545,22 @@ mod tests {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
                 .collect();
-            assert!(
-                e["round_id"].is_null(),
-                "{name}: phone item facts carry no round_id"
-            );
+            let round_id = e["round_id"].as_str().map(str::to_string);
+            match e["emitter"].as_str().unwrap() {
+                "phone-legacy" => assert_eq!(
+                    round_id, None,
+                    "{name}: facts from the pre-#499 phone carry no round_id"
+                ),
+                current => assert!(
+                    round_id.is_some(),
+                    "{name}: a {current} item fact must carry the round it happened in"
+                ),
+            }
             let event_id = format!("fixture-{i}");
             let fact = FlowAuditFact {
                 event_id: &event_id,
                 kind: e["kind"].as_str().unwrap(),
-                round_id: None,
+                round_id: round_id.as_deref(),
                 occurred_at_ms: 1_000 + i as i64,
                 payload: &p,
             };
@@ -575,7 +587,7 @@ mod tests {
                 e["expect"]["outcome"].as_str().unwrap(),
                 "{name}"
             );
-            assert_eq!(row.entry.operation_id, None, "{name}");
+            assert_eq!(row.entry.operation_id, round_id, "{name}");
             if let Some(h) = p.get("contentHash") {
                 assert_eq!(
                     row.entry.content_hash.as_deref().map(hex::encode),
@@ -583,6 +595,73 @@ mod tests {
                     "{name}"
                 );
             }
+        }
+    }
+
+    // AUDIT-07 (#499) acceptance: the phone's real item facts (same fixture,
+    // phone-current half) hang on the round, and `route_round_finished`
+    // recomputes the operation's evidence_summary from exactly those rows —
+    // the daemon half of "audit_item_evidence.operation_id is no longer NULL
+    // and the activity line can say 已备份 N 张".
+    #[tokio::test]
+    async fn a_round_summary_is_recomputed_from_the_rounds_real_phone_item_facts() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/flow-audit-item-events.json"))
+                .unwrap();
+        let db = Db::open_in_memory().await.unwrap();
+        let mut routed = 0usize;
+        for (i, e) in fixture["events"].as_array().unwrap().iter().enumerate() {
+            let Some(round_id) = e["round_id"].as_str() else {
+                continue; // phone-legacy rows carry no round — covered above.
+            };
+            let p: BTreeMap<String, String> = e["payload"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string()))
+                .collect();
+            let fact = FlowAuditFact {
+                event_id: &format!("round-item-{i}"),
+                kind: e["kind"].as_str().unwrap(),
+                round_id: Some(round_id),
+                occurred_at_ms: 1_000 + i as i64,
+                payload: &p,
+            };
+            assert!(route(&db, &ACTOR, &fact).await, "{}", e["name"]);
+            routed += 1;
+        }
+        assert!(routed >= 5, "the fixture lost its phone-current cases");
+
+        // The phone's own final_counts are advisory: make them lie and check
+        // the operation reports the persisted evidence instead.
+        let lying = payload(&[("confirmed", "99")]);
+        let fact = FlowAuditFact {
+            event_id: "round-finished-1",
+            kind: "flow.round.finished",
+            round_id: Some("round-audit07"),
+            occurred_at_ms: 9_000,
+            payload: &lying,
+        };
+        assert!(route(&db, &ACTOR, &fact).await);
+
+        let op = db.get_operation("round-audit07").await.unwrap().unwrap();
+        let summary = op.entry.evidence_summary.as_deref().unwrap_or("");
+        assert_eq!(
+            summary, "{\"confirmed\":1,\"failed\":1,\"source_missing\":3}",
+            "evidence_summary must be the daemon's recount of the round's persisted evidence"
+        );
+        assert_eq!(
+            op.entry.final_counts.as_deref(),
+            Some("{\"confirmed\":\"99\"}")
+        );
+        assert_eq!(op.entry.round_id.as_deref(), Some("round-audit07"));
+        let evidence = db
+            .list_item_evidence_for_operation("round-audit07")
+            .await
+            .unwrap();
+        assert_eq!(evidence.len(), routed, "every item fact hangs on the round");
+        for e in &evidence {
+            assert_eq!(e.entry.operation_id.as_deref(), Some("round-audit07"));
         }
     }
 

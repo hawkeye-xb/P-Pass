@@ -252,6 +252,7 @@
   "ui.log_subtitle": "谁备份了什么，一目了然——不用去文件管理器里对账。",
   "ui.log_empty": "这里还没有内容。配对、备份、移除设备的记录会按时间出现在这里。",
   "ui.log_footnote": "记录来自本机照片库与审计日志，不上传。",
+  "ui.log_load_failed": "读不到活动记录：{err}",
   "ui.library": "照片库",
   "ui.disk_space": "磁盘空间",
   "ui.disk_free_of_total": "可用 {free} / 共 {total}",
