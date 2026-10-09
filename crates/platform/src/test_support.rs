@@ -124,9 +124,11 @@ fn windows_junction(target: &Path, link: &Path) -> io::Result<()> {
 /// #763：让目录拒绝在其中新建文件 / 子目录，守卫析构时恢复。
 ///
 /// 「怎么让一个目录不可写」每个系统不一样：unix 去掉写位（0o555）；Windows
-/// 的只读属性对目录不生效，要加一条拒绝 ACE（Everyone 的 AD+WD：新建子目录 /
-/// 新建文件）。调用方拿到守卫后应先自己验一次「确实建不了」——以 root 运行时
-/// unix 的写位挡不住，那时测试证明不了任何东西，必须判红而不是静默通过。
+/// 的只读属性对目录不生效，要改 DACL：断开继承、只给 Everyone 读和列目录
+/// （RX），不留任何写入授权。没用「加一条拒绝 ACE」：Windows CI 实测
+/// （PR #776）`/deny Everyone:(AD,WD)` 挡住了新建文件，却没挡住新建子目录。
+/// 调用方拿到守卫后应先自己验一次「确实建不了」——以 root 运行时 unix 的写位
+/// 挡不住，那时测试证明不了任何东西，必须判红而不是静默通过。
 pub fn deny_file_creation(dir: &Path) -> io::Result<CreationDenied> {
     #[cfg(unix)]
     {
@@ -140,7 +142,7 @@ pub fn deny_file_creation(dir: &Path) -> io::Result<CreationDenied> {
     }
     #[cfg(windows)]
     {
-        icacls(dir, &["/deny", "*S-1-1-0:(AD,WD)"])?;
+        icacls(dir, &["/inheritance:r", "/grant:r", "*S-1-1-0:(RX)"])?;
         Ok(CreationDenied {
             dir: dir.to_path_buf(),
         })
@@ -162,7 +164,8 @@ impl Drop for CreationDenied {
         }
         #[cfg(windows)]
         {
-            let _ = icacls(&self.dir, &["/remove:d", "*S-1-1-0"]);
+            // 所有者对自己的目录始终有 WRITE_DAC，能把 ACL 复原成继承来的那份。
+            let _ = icacls(&self.dir, &["/reset"]);
         }
     }
 }
