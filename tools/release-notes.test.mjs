@@ -276,8 +276,19 @@ test("CLI warn-missing：set -euo pipefail 下恒退出 0（缺文件 / 参数�
 });
 
 // ── release.yml 口径（原 #580 的 release.yml 源文本门禁迁移至此，意图不变） ──
-test("release.yml：compose 全部走 --notes-dir release/notes，不再喂 release 正文 / CHANGELOG", () => {
+// REL-12（#711）起，组装清单的 bash 从 release.yml 抽到了 tools/release/*.sh，release.yml 只调用它们——
+// 所以口径检查的对象是「release.yml + 它调用的这些脚本」，并先确认 release.yml 真的在调它们。
+const RELEASE_STEP_SCRIPTS = ["compose-android.sh", "compose-desktop.sh"];
+function releaseSources() {
   const wf = readFileSync(join(HERE, "..", ".github", "workflows", "release.yml"), "utf8");
+  for (const s of RELEASE_STEP_SCRIPTS) {
+    assert.match(wf, new RegExp(`run: tools/release/${s.replace(".", "\\.")}\\b`), `release.yml 不再调用 tools/release/${s}`);
+  }
+  return [wf, ...RELEASE_STEP_SCRIPTS.map((s) => readFileSync(join(HERE, "release", s), "utf8"))].join("\n");
+}
+
+test("release.yml：compose 全部走 --notes-dir release/notes，不再喂 release 正文 / CHANGELOG", () => {
+  const wf = releaseSources();
   const calls = wf.match(/make-update-manifest\.mjs[^\n]*\n(?:[^\n]*\\\n)*[^\n]*/g) ?? [];
   const composeCalls = calls.filter((c) => c.includes("--tag"));
   assert.ok(composeCalls.length >= 6, `compose 调用点应 ≥6，实际 ${composeCalls.length}`);
@@ -358,5 +369,8 @@ test("release.yml：正式 tag 有缺失说明告警步骤，且不阻断（cont
   const step = wf.slice(i, wf.indexOf("\n      - ", i + 1));
   assert.match(step, /continue-on-error: true/);
   assert.match(step, /!contains\(steps\.tag\.outputs\.tag, '-test\.'\)/);
-  assert.match(step, /release-notes\.mjs warn-missing/);
+  // REL-12（#711）：步骤体在 tools/release/notes-presence.sh
+  assert.match(step, /run: tools\/release\/notes-presence\.sh\b/);
+  const script = readFileSync(join(HERE, "release", "notes-presence.sh"), "utf8");
+  assert.match(script, /release-notes\.mjs warn-missing/);
 });
