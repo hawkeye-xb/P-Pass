@@ -674,14 +674,16 @@ jobs:
   # 由 finalize 收口。
   #
   # **manifest 的 notes 与 release 正文无关**（UPD-03 #580）：正文是给开发者
-  # 看的构建台账，客户端更新弹窗却直接展示 notes。所有 compose 一律
-  # `--notes-from-changelog CHANGELOG.md`——取 CHANGELOG 里与 tag 批次号同名
-  # 的小节、清洗成纯文本（tools/changelog-notes.mjs）；没有该小节（test tag、
-  # 忘了写 changelog）就是空串，客户端显示默认文案。资产因此也不必等 notes。
-  # 按端过滤（#741）：分端清单的端由 `--only` 推出；无 `--only` 的三处只产出
-  # test 通道的 manifest.json——它只有 Android 展示 notes（桌面 test 通道只读
-  # version/platforms），所以显式 `--notes-platform android`。正式 tag 的
-  # manifest.json 是冻结件（cp，不经 compose），不受影响。
+  # 看的构建台账，客户端更新弹窗却直接展示 notes。#741 起 notes 改为**手写的
+  # 用户更新说明**：所有 compose 一律 `--notes-dir release/notes`——按端与清单
+  # 版本号读 `release/notes/<platform>/<version>.<zh|en>.txt`，产出 notes（中文，
+  # 给旧客户端）与 notes_i18n（规则见 docs/release-notes-rules.md）。没有文件
+  # （test tag 的版本号是 tag 名，天然没有；或本版无用户可见变更）就是空串，
+  # 客户端显示默认文案。资产因此也不必等 notes。端：分端清单由 `--only` 推出；
+  # 无 `--only` 的三处只产出 test 通道的 manifest.json——它只有 Android 展示
+  # notes（桌面 test 通道只读 version/platforms），所以显式 `--notes-platform
+  # android`。正式 tag 的 manifest.json 是冻结件（cp，不经 compose），不受影响。
+  # 正式 tag 某端版本号涨了却没有说明文件 ⇒ create-draft 里告警、不阻断。
   #
   # finalize 晚到不拖任何资产——它只 `gh release edit --notes-file`，对已
   # publish 的 release 同样合法。
@@ -736,6 +738,26 @@ jobs:
             exit 0
           fi
           tools/check-version-bump.sh "$PREV" "$TAG"
+
+      # #741：正式 tag 某端版本号涨了、却没有该版本的手写更新说明 ⇒ 告警，**不阻断**
+      # （允许「无用户可见变更」——弹窗显示默认文案）。比较口径与上面的版本门禁相同
+      # （上一个 v* tag 的 release/versions.json）。脚本本身恒退出 0，
+      # continue-on-error 再兜一层：这一步无论如何不许拦发布。
+      - name: Release notes presence (#741, warn only)
+        if: ${{ !contains(steps.tag.outputs.tag, '-test.') }}
+        continue-on-error: true
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          PREV=$(git tag -l 'v*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
+          if [ -n "$PREV" ] && git cat-file -e "$PREV:release/versions.json" 2>/dev/null; then
+            git show "$PREV:release/versions.json" > "$RUNNER_TEMP/prev-versions.json"
+          else
+            echo '{}' > "$RUNNER_TEMP/prev-versions.json"
+          fi
+          node tools/release-notes.mjs warn-missing \
+            --prev-versions "$RUNNER_TEMP/prev-versions.json" --versions release/versions.json
 
       - name: Compose skeleton notes
         env:
@@ -844,7 +866,7 @@ jobs:
             # 把未升级的老客户端打进「提示更新→装上还是旧号」的死循环）。
             if [[ "$TAG" == *-test.* ]]; then
               node tools/make-update-manifest.mjs \
-                --tag "$TAG" --notes-from-changelog CHANGELOG.md --notes-platform android \
+                --tag "$TAG" --notes-dir release/notes --notes-platform android \
                 --asset-base "$ASSET_BASE" \
                 "${APK_ARGS[@]}"
               mv manifest.json artifacts/manifest.json
@@ -852,7 +874,7 @@ jobs:
             # UPD-13：同时产出一份**只含 android** 的分端清单。
             # 本批只产出文件、不上任何客户端 ⇒ 零行为变化；客户端切源在下一批。
             node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes-from-changelog CHANGELOG.md \
+              --tag "$TAG" --notes-dir release/notes \
               --asset-base "$ASSET_BASE" \
               "${APK_ARGS[@]}" \
               --version "$(tools/release-version.sh android)" \
@@ -1156,18 +1178,18 @@ jobs:
               exit 0
             fi
             node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes-from-changelog CHANGELOG.md --notes-platform android \
+              --tag "$TAG" --notes-dir release/notes --notes-platform android \
               --asset-base "$ASSET_BASE" \
               "${ARGS[@]}"
             mv manifest.json artifacts/manifest.json
           fi
           # UPD-13 补丁：android 分端清单在 upload-android 里已先组装过一次（为了让
           # 手机尽早拿到更新）。这里用同一批资产重新组装、与桌面清单同批签名上传。
-          # notes 两处同源（CHANGELOG 本版小节，UPD-03 #580），不再随 release 正文变化。
+          # notes 两处同源（release/notes 下该端该版本的手写说明，#741），不随 release 正文变化。
           APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
           if [ -f "$APK" ]; then
             node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes-from-changelog CHANGELOG.md \
+              --tag "$TAG" --notes-dir release/notes \
               --asset-base "$ASSET_BASE" \
               --asset android-arm64="$APK" \
               --version "$(tools/release-version.sh android)" \
@@ -1187,7 +1209,7 @@ jobs:
           # UPD-13：同时产出一份**只含 darwin** 的分端清单（macOS 客户端的源）。
           if [ -n "$MAC_UPD" ]; then
             node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes-from-changelog CHANGELOG.md \
+              --tag "$TAG" --notes-dir release/notes \
               --asset-base "$ASSET_BASE" \
               --asset darwin-aarch64="$MAC_UPD" \
               --version "$(tools/release-version.sh desktop)" \
@@ -1337,7 +1359,7 @@ jobs:
           # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板）。
           ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
           node tools/make-update-manifest.mjs \
-            --tag "$TAG" --notes-from-changelog CHANGELOG.md --notes-platform android \
+            --tag "$TAG" --notes-dir release/notes --notes-platform android \
             --asset-base "$ASSET_BASE" \
             "${ARGS[@]}"
           mv manifest.json artifacts/manifest.json

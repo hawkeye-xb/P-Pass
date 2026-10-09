@@ -14,16 +14,34 @@ package com.hawkeyexb.ppass.update
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /** tauri 风格 manifest 的 android 子集（release.yml 由 tools/make-update-manifest.mjs 产出）。 */
 @Serializable
 data class UpdateManifest(
     val version: String,
+    /** 中文说明（#741 起取自手写说明文件）；旧客户端只读这一个字段。 */
     val notes: String = "",
+    /**
+     * #741：按语言的说明 `{"zh": "...", "en": "..."}`。旧清单没有这个键。
+     * 宽松读成 [JsonElement]：形状不对（null / 数组 / 值不是字符串）只当它不存在，
+     * 绝不让整份清单解析失败——那样更新弹窗就不出了。
+     */
+    @SerialName("notes_i18n")
+    val notesI18n: JsonElement? = null,
     val platforms: Map<String, PlatformEntry> = emptyMap(),
 )
+
+/** notes_i18n → 语言到文本的映射；只收字符串值，其余形状一律忽略。 */
+internal fun notesI18nMap(element: JsonElement?): Map<String, String> =
+    (element as? JsonObject)?.mapNotNull { (lang, v) ->
+        (v as? JsonPrimitive)?.takeIf { it.isString }?.let { lang to it.content }
+    }?.toMap() ?: emptyMap()
 
 @Serializable
 data class PlatformEntry(
@@ -39,6 +57,8 @@ data class UpdateInfo(
     val url: String,
     val sha256: String = "",
     val signature: String = "",
+    /** #741：按语言的说明；显示时按 App 当前语言选取（[displayUpdateNotes]）。 */
+    val notesI18n: Map<String, String> = emptyMap(),
 )
 
 private val json = Json { ignoreUnknownKeys = true }
@@ -117,6 +137,7 @@ fun parseUpdateManifest(body: String, currentVersion: String): UpdateInfo? {
             url = entry.url,
             sha256 = entry.sha256,
             signature = entry.signature,
+            notesI18n = notesI18nMap(manifest.notesI18n),
         )
     } catch (_: Exception) {
         null

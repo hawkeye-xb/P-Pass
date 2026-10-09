@@ -4,13 +4,15 @@
 // Modes:
 //   compose (default): scan --asset <target>=<path> pairs, emit manifest.json
 //     with sha256 per platform and empty signatures (untrusted until signed).
-//     notes 二选一：--notes <file>（原样读入）或 --notes-from-changelog
-//     <CHANGELOG.md>（UPD-03 #580：取 tag 版本号对应小节、清洗成纯文本，没有该
-//     小节就是 ""——客户端空 notes 显示默认文案。release.yml 用这个）。
-//     #741：按端过滤——端由 --only 的目标推出（android-* → android，darwin-* →
-//     macos，windows-* → windows），或用 --notes-platform <android|macos|windows>
-//     显式指定（无 --only 的 test 通道 manifest.json 用它）。两者都推不出端 ⇒ 报错
-//     （参数错误，不是数据问题）；过滤后为空 ⇒ notes 为 ""、照常退出 0。
+//     notes 二选一：--notes <file>（原样读入，只填 notes；repair-manifests.yml 用）或
+//     --notes-dir <dir>（#741：手写的用户更新说明，release.yml 用）。后者按端与清单版本号
+//     读 <dir>/<platform>/<version>.<zh|en>.txt（tools/release-notes.mjs，规则见
+//     docs/release-notes-rules.md），产出 notes（中文，给只读 notes 的旧客户端）与
+//     notes_i18n {zh,en}。端由 --only 的目标推出（android-* → android，darwin-* → macos，
+//     windows-* → windows），或用 --notes-platform <android|macos|windows> 显式指定
+//     （无 --only 的 test 通道 manifest.json 用它）；推不出端 ⇒ 报错（参数错误）。
+//     没有说明文件（test tag 天然如此）⇒ notes 为 ""、notes_i18n 为 {}、照常退出 0；
+//     只有一种语言 / 内容不合规 ⇒ 报错退出（只有绕过 CI lint 才会走到，不带病发布）。
 //   sign:   --sign manifest.json --sig-dir <dir>  — for each platform entry,
 //     read <dir>/<basename>.sig (produced by `tauri signer sign`), fill the
 //     base64 signature into the manifest. Signing itself stays in the tauri
@@ -21,7 +23,7 @@
 //     signature/sha256 是对资产字节的，换下载域名不影响校验）。
 //
 // Manifest shape (tauri-plugin-updater compatible):
-//   { version, notes, pub_date, platforms: { <target>: { url, signature } } }
+//   { version, notes, notes_i18n?, pub_date, platforms: { <target>: { url, signature } } }
 //   url points at the GitHub release asset download link for TAG, unless
 //   --asset-base overrides it (CI-01: R2 mirror domain p-pass-dl.hawkeye-xb.com
 //   for mainland download reachability — signature is over the asset bytes,
@@ -29,16 +31,16 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import { changelogNotes, PLATFORM_PREFIXES } from "./changelog-notes.mjs";
+import { PLATFORMS, readNotes } from "./release-notes.mjs";
 
 const args = process.argv.slice(2);
 
-/** #741：notes 按哪一端过滤。--notes-platform 优先，否则由 --only 的目标推出。 */
+/** #741：读哪一端的说明。--notes-platform 优先，否则由 --only 的目标推出。 */
 function notesPlatform(only) {
   if (args.indexOf("--notes-platform") >= 0) {
     const p = need("--notes-platform");
-    if (!Object.hasOwn(PLATFORM_PREFIXES, p)) {
-      throw new Error(`bad --notes-platform ${p} (expected ${Object.keys(PLATFORM_PREFIXES).join("/")})`);
+    if (!PLATFORMS.includes(p)) {
+      throw new Error(`bad --notes-platform ${p} (expected ${PLATFORMS.join("/")})`);
     }
     return p;
   }
@@ -52,7 +54,7 @@ function notesPlatform(only) {
   if (ps.size !== 1) {
     throw new Error(
       ps.size === 0
-        ? "--notes-from-changelog needs a platform: give --only <target> or --notes-platform <android|macos|windows>"
+        ? "--notes-dir needs a platform: give --only <target> or --notes-platform <android|macos|windows>"
         : `--only spans several platforms (${[...ps].join(",")}); pass --notes-platform`,
     );
   }
@@ -113,9 +115,9 @@ if (args[0] === "--sign") {
   // 默认仍是 tag 去 v 前缀）。
   const tag = need("--tag");
   const hasNotes = args.indexOf("--notes") >= 0;
-  const hasChangelog = args.indexOf("--notes-from-changelog") >= 0;
-  if (hasNotes === hasChangelog) {
-    throw new Error("exactly one of --notes <file> / --notes-from-changelog <CHANGELOG.md> is required");
+  const hasNotesDir = args.indexOf("--notes-dir") >= 0;
+  if (hasNotes === hasNotesDir) {
+    throw new Error("exactly one of --notes <file> / --notes-dir <release/notes> is required");
   }
   const only = new Set();
   for (let i = 0; i < args.length; i++) {
@@ -143,19 +145,20 @@ if (args[0] === "--sign") {
     throw new Error(only.size > 0 ? `no assets matched --only ${[...only].join(",")}` : "no --asset target=path pairs");
   }
   let notes;
-  if (hasChangelog) {
-    // UPD-03（#580）：notes = CHANGELOG 里**批次号**（tag 去 v）那一节的用户可见内容。
-    // 不用 --version：分端号（如 android 0.9.7）不是 CHANGELOG 的小节键。
-    const key = tag.replace(/^v/, "");
+  let notesI18n; // undefined ⇒ 不写这个键（--notes 原样模式）
+  if (hasNotesDir) {
+    // #741：键是**清单版本号**（分端清单 = 该端自己的版本号；test 通道 = tag 版本，
+    // 形如 0.9.9-test.1，天然没有文件）。
     const platform = notesPlatform(only);
-    const changelog = readFileSync(need("--notes-from-changelog"), "utf8");
-    notes = changelogNotes(changelog, key, platform);
-    if (notes) {
-      console.log(`notes <- CHANGELOG [${key}] for ${platform} (${notes.length} chars)`);
-    } else if (changelogNotes(changelog, key)) {
-      console.log(`notes empty: CHANGELOG [${key}] has nothing for ${platform} (client shows its default text)`);
+    const found = readNotes(need("--notes-dir"), platform, version);
+    if (found) {
+      notes = found.zh;
+      notesI18n = { zh: found.zh, en: found.en };
+      console.log(`notes <- release notes ${platform} ${version} (zh ${found.zh.length} / en ${found.en.length} chars)`);
     } else {
-      console.log(`notes empty: CHANGELOG has no user-facing [${key}] section (client shows its default text)`);
+      notes = "";
+      notesI18n = {};
+      console.log(`notes empty: no release notes for ${platform} ${version} (client shows its default text)`);
     }
   } else {
     notes = readFileSync(need("--notes"), "utf8");
@@ -184,6 +187,7 @@ if (args[0] === "--sign") {
   const manifest = {
     version,
     notes,
+    ...(notesI18n === undefined ? {} : { notes_i18n: notesI18n }),
     pub_date: new Date().toISOString(),
     platforms,
   };
