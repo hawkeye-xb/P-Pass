@@ -371,7 +371,7 @@ pub(crate) fn taken_at_ms(path: &Path, capture_at_ms_hint: Option<i64>) -> Resul
 /// Layout dir for a device: the full NodeId as hex (§4.2 `<deviceId>`).
 /// The tree alone must reproduce every index field on rebuild (ADR-006) —
 /// a truncated prefix would lose `src_device` when the index is wiped.
-pub(crate) fn device_dir(node_id: &[u8]) -> String {
+pub fn device_dir(node_id: &[u8]) -> String {
     node_id.iter().map(|b| format!("{b:02x}")).collect()
 }
 

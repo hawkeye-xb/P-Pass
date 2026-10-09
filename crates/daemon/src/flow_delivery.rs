@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-use core_index::{IncomingFile, IndexError, IngestOutcome, Ingestor};
+use core_index::{device_dir, IncomingFile, IndexError, IngestOutcome, Ingestor};
 use proto::{
     DesktopHealth, FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowTupleRef,
 };
@@ -531,7 +531,18 @@ pub struct FlowDelivery {
     /// NET-29 (#467): how long one native fetch may go without receiving a
     /// payload byte before it fails as `fetch_failed`. Tests inject one.
     fetch_byte_stall: std::time::Duration,
+    /// #763: landing folders (`originals/<device>/<yyyy>/<mm>`) where a real
+    /// ingest failed. `hello.health` re-probes each one and reports the
+    /// library unwritable for that phone until the folder takes a file
+    /// again. Process-local: a daemon restart forgets them (one more failed
+    /// item re-learns the folder).
+    landing_failures: Arc<Mutex<std::collections::HashSet<PathBuf>>>,
 }
+
+/// #763: bound on remembered failing landing folders. Each is one month of
+/// one phone; past the cap a new failure is simply not remembered (the phone
+/// side still stops on its own retry cap).
+const MAX_LANDING_FAILURES: usize = 64;
 
 /// NET-29 (#467) capture 1: the daemon's fetch sent its request and then
 /// waited forever — no bytes, no error — while the phone kept polling an
@@ -568,6 +579,7 @@ impl FlowDelivery {
             free_space: Arc::new(platform_free_bytes),
             thumbs: None,
             fetch_byte_stall: FETCH_BYTE_STALL_LIMIT,
+            landing_failures: Arc::default(),
         }
     }
 
@@ -599,16 +611,21 @@ impl FlowDelivery {
         self
     }
 
-    /// #413 §7 / contract §5: the `hello.health` answer. Filesystem probes
-    /// run off the async workers: a sleeping external drive can stall
+    /// #413 §7 / contract §5: the `hello.health` answer for `peer`. Filesystem
+    /// probes run off the async workers: a sleeping external drive can stall
     /// `statvfs`, and hello is on the control path.
-    pub async fn health(&self) -> DesktopHealth {
+    ///
+    /// #763: `library_writable` answers "can this phone's next photo land",
+    /// not only "is `.ppf/` writable": see [`landing_writable`].
+    pub async fn health(&self, peer: NodeId) -> DesktopHealth {
         let root = self.library_root.clone();
         let probe = self.free_space.clone();
-        let (free, writable) =
-            tokio::task::spawn_blocking(move || (probe(&root), library_writable(&root)))
-                .await
-                .unwrap_or((None, false));
+        let failures = self.landing_failures.clone();
+        let (free, writable) = tokio::task::spawn_blocking(move || {
+            (probe(&root), landing_writable(&root, &peer, &failures))
+        })
+        .await
+        .unwrap_or((None, false));
         DesktopHealth {
             free_bytes: free.map(|bytes| i64::try_from(bytes).unwrap_or(i64::MAX)),
             library_writable: writable,
@@ -629,12 +646,33 @@ impl FlowDelivery {
 
     fn ingest_failure(&self, error: &IndexError) -> DeliveryError {
         let io_kind = match error {
-            IndexError::Io { source, .. } => Some(source.kind()),
+            IndexError::Io { source, path } => {
+                self.remember_landing_failure(path);
+                Some(source.kind())
+            }
             _ => None,
         };
         DeliveryError::MaterializeIngest {
             failure: self.classify(io_kind),
             detail: error.to_string(),
+        }
+    }
+
+    /// #763: an ingest failed at `path`; remember the landing folder it
+    /// belongs to so `hello.health` stops reporting this phone's library as
+    /// writable until that folder takes a file again. Paths outside
+    /// `originals/` (staging, the source file) say nothing about landing.
+    fn remember_landing_failure(&self, path: &Path) {
+        let Some(dir) = landing_dir_of(&self.library_root, path) else {
+            return;
+        };
+        let mut failures = self
+            .landing_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if failures.len() < MAX_LANDING_FAILURES || failures.contains(&dir) {
+            tracing::warn!(dir = %dir.display(), "flow: landing folder refused a photo; health reports it until it accepts one");
+            failures.insert(dir);
         }
     }
 
@@ -1738,16 +1776,88 @@ fn receipt_id() -> Result<String, DeliveryError> {
     Ok(hex::encode(bytes))
 }
 
-/// #413 §7 `library_writable`: the library folder exists and a file can be
-/// created in it. The probe file goes into `.ppf/` when present, else the
-/// library root — never under `originals/`, the only tree the watcher and
-/// reconcile scan — and is removed at once. Nothing is ever created here
-/// except that one probe file.
+/// #413 §7 / #763 `library_writable` for `peer`: every folder this phone's
+/// next photo depends on accepts a file.
+///
+/// 1. The library itself ([`library_probe`]: `.ppf/` or the root).
+/// 2. The phone's device folder `originals/<device>` — the parent of every
+///    month folder a new photo may need to create ([`dir_accepts`]).
+/// 3. Every landing folder of this phone where a real ingest failed
+///    (`failures`); one that accepts a file again is forgotten.
+///
+/// A month folder that refuses writes while its parent does not is only
+/// learned from the first failed photo — which month the next photo needs is
+/// not known here.
+///
+/// Probe files under `originals/` are dot-files, created and removed at once:
+/// the watcher and the reconcile scan skip hidden paths
+/// (`watcher.rs` `affected_dirs` / `walk_media`, `rebuild.rs`), so a probe
+/// on every hello (as often as every 30 s while the phone app is open) costs
+/// no sync work. Nothing else is ever created: a missing folder is probed at
+/// its nearest existing ancestor, never made.
 ///
 /// 盘满时探针建不了文件——bool 视图如实报 false（此时确实建不了）；
 /// 「这是盘满还是文件夹坏了」的三态裁决在 [`library_probe`]。
-fn library_writable(root: &Path) -> bool {
-    library_probe(root) == LibraryProbe::Writable
+fn landing_writable(
+    root: &Path,
+    peer: &NodeId,
+    failures: &Mutex<std::collections::HashSet<PathBuf>>,
+) -> bool {
+    if library_probe(root) != LibraryProbe::Writable {
+        return false;
+    }
+    let device = root.join("originals").join(device_dir(&peer.0));
+    if dir_accepts(root, &device) != LibraryProbe::Writable {
+        return false;
+    }
+    let mut failures = failures.lock().unwrap_or_else(|e| e.into_inner());
+    let mine: Vec<PathBuf> = failures
+        .iter()
+        .filter(|dir| dir.starts_with(&device))
+        .cloned()
+        .collect();
+    let mut writable = true;
+    for dir in mine {
+        if dir_accepts(root, &dir) == LibraryProbe::Writable {
+            tracing::info!(dir = %dir.display(), "flow: landing folder accepts files again");
+            failures.remove(&dir);
+        } else {
+            writable = false;
+        }
+    }
+    writable
+}
+
+/// #763: the landing folder (`originals/<device>/<yyyy>/<mm>`, the layout
+/// `Ingestor::place` writes) a failed ingest path belongs to. `None` for a
+/// path outside `originals/` or shallower than a month folder.
+fn landing_dir_of(root: &Path, path: &Path) -> Option<PathBuf> {
+    let originals = root.join("originals");
+    let rel = path.strip_prefix(&originals).ok()?;
+    let parts: Vec<_> = rel.components().take(3).collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    Some(parts.iter().fold(originals, |dir, part| dir.join(part)))
+}
+
+/// #763: could a file be created in `dir` (inside `root`) the way
+/// `Ingestor::place` does — `create_dir_all` then create a file? Probed
+/// without creating any folder: walk up to the nearest existing ancestor; it
+/// must be a folder that accepts a file. A plain file in the way is
+/// [`LibraryProbe::Unavailable`].
+fn dir_accepts(root: &Path, dir: &Path) -> LibraryProbe {
+    let mut nearest = dir;
+    while !nearest.exists() {
+        match nearest.parent() {
+            Some(parent) if parent.starts_with(root) => nearest = parent,
+            _ => return LibraryProbe::Unavailable,
+        }
+    }
+    if !nearest.is_dir() {
+        return LibraryProbe::Unavailable;
+    }
+    write_probe(nearest)
 }
 
 /// #555：库目录写入探针的三态裁决。「文件夹打不开」与「盘满了」不是一回事——
@@ -1765,7 +1875,6 @@ pub enum LibraryProbe {
 }
 
 fn library_probe(root: &Path) -> LibraryProbe {
-    static PROBE_SEQ: AtomicU64 = AtomicU64::new(0);
     if !root.is_dir() {
         return LibraryProbe::Unavailable;
     }
@@ -1775,6 +1884,12 @@ fn library_probe(root: &Path) -> LibraryProbe {
     } else {
         root.to_path_buf()
     };
+    write_probe(&dir)
+}
+
+/// Create and remove one hidden probe file in `dir`.
+fn write_probe(dir: &Path) -> LibraryProbe {
+    static PROBE_SEQ: AtomicU64 = AtomicU64::new(0);
     let probe = dir.join(format!(
         ".write-probe-{}-{}",
         std::process::id(),

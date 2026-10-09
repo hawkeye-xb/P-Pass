@@ -48,5 +48,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3"
+# #763：让目录拒绝新建文件（平台分叉只许在 platform crate，测试脚手架同理）。
+platform = { path = "../platform", features = ["test-support"] }
 blake3 = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg"] }

@@ -440,7 +440,7 @@ impl Router {
                 // #413 §7: Desktop health rides on hello for a paired member
                 // only — same zero-data rule as `pairing_epoch`.
                 let health = match (&pairing_epoch, &self.flow_delivery) {
-                    (Some(_), Some(delivery)) => Some(delivery.health().await),
+                    (Some(_), Some(delivery)) => Some(delivery.health(peer).await),
                     _ => None,
                 };
                 let ours = Hello {
