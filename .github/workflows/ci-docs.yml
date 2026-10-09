@@ -15,6 +15,9 @@
 # lint（长度/条数/成对/禁止模式/双向控制符与零宽字符）与清单工具测试都放这里——
 # release.yml 只在 tag 上跑，拦不住合并前的回归。（原 UPD-03 的 update-notes job
 # 随 CHANGELOG 推导路线一起退役。）
+# REL-12 (#711) 起兼收 release-dry-run：release.yml 的组装清单 / 签名 / 校验 / 镜像判定
+# 抽进 tools/release/，用假产物 + stub gh + 临时密钥把正式 / test tag 两条路径各跑一遍——
+# 同理，release.yml 只在 tag 上跑，正式版路径过去只能在真 tag 上发现问题。不进必需检查。
 name: CI Docs
 
 on:
@@ -43,7 +46,8 @@ on:
       - "tools/make-update-manifest.mjs"
       - "tools/release-notes.mjs"
       - "tools/release-notes.test.mjs"
-      - "release/notes/**"
+      - "release/**"
+      - "tools/release/**"
   push:
     branches: [main]
     paths:
@@ -69,7 +73,8 @@ on:
       - "tools/make-update-manifest.mjs"
       - "tools/release-notes.mjs"
       - "tools/release-notes.test.mjs"
-      - "release/notes/**"
+      - "release/**"
+      - "tools/release/**"
   workflow_dispatch:
 
 permissions:
@@ -135,3 +140,16 @@ jobs:
         run: node --test tools/release-notes.test.mjs
       - name: lint release/notes/**
         run: node tools/release-notes.mjs lint
+
+  release-dry-run:
+    name: release-dry-run（REL-12：发布链正式 / test tag 两条路径预演）
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 依赖（PyYAML：执行器按 step 从 workflow 里抽 run 块）
+        run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+      # 假产物 + stub gh（不访问 GitHub）+ 运行时现生成的临时签名密钥（tauri signer 与
+      # release.yml 同版本，首次从 npm 拉取）；不碰任何 secret。
+      - name: dry-run（release.yml / mirror-latest.yml 原样逐步执行）
+        run: tools/release/dry-run.sh

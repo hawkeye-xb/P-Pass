@@ -297,6 +297,12 @@ sync:
 test-cleanup-local:
     bash tools/test-clean-local-builds.sh
 
+# REL-12 (#711): 发布链 dry-run——不花真 tag，用假产物 + stub gh + 临时签名密钥，把
+# release.yml 的「正式 tag」与「test tag」两条路径（组装清单 → 说明 / 缺失告警 → 签名 →
+# 校验 → 镜像判定）按 runner 语义各跑一遍。--keep 保留临时目录排查。
+release-dry-run *args:
+    tools/release/dry-run.sh {{args}}
+
 # 先跑变异反证，再跑门禁本身；PPF_SMOKE_BIN_DIR=<bundle 目录> 时加跑完整冒烟。
 # REL-08 (#510): release 资产里的 .sh 在只含资产的干净目录里必须自足
 test-dogfood-assets:

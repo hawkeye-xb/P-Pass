@@ -743,21 +743,13 @@ jobs:
       # （允许「无用户可见变更」——弹窗显示默认文案）。比较口径与上面的版本门禁相同
       # （上一个 v* tag 的 release/versions.json）。脚本本身恒退出 0，
       # continue-on-error 再兜一层：这一步无论如何不许拦发布。
+      # REL-12（#711）：逻辑在 tools/release/notes-presence.sh，`just release-dry-run` 跑同一份。
       - name: Release notes presence (#741, warn only)
         if: ${{ !contains(steps.tag.outputs.tag, '-test.') }}
         continue-on-error: true
         env:
           TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          PREV=$(git tag -l 'v*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
-          if [ -n "$PREV" ] && git cat-file -e "$PREV:release/versions.json" 2>/dev/null; then
-            git show "$PREV:release/versions.json" > "$RUNNER_TEMP/prev-versions.json"
-          else
-            echo '{}' > "$RUNNER_TEMP/prev-versions.json"
-          fi
-          node tools/release-notes.mjs warn-missing \
-            --prev-versions "$RUNNER_TEMP/prev-versions.json" --versions release/versions.json
+        run: tools/release/notes-presence.sh
 
       - name: Compose skeleton notes
         env:
@@ -843,45 +835,10 @@ jobs:
       # createUpdaterArtifacts 的 tar.gz 须在塞 lib/ 后产出，挂账）；windows
       # 桌面壳待建。**正是这个「只吃 android」的事实让 manifest 能搬进本
       # lane**（CI-04② 决定③）。签名密钥由用户生成（已 2026-08-04 完成）。
+      # REL-12（#711）：逻辑在 tools/release/compose-android.sh（输入 TAG / RELEASE_TAG，
+      # 产出 artifacts/manifest-android.json，test tag 另出 artifacts/manifest.json）。
       - name: Compose update manifest (UPD-01)
-        run: |
-          set -euo pipefail
-          APK_ARGS=()
-          # UPD-15：产物名带该端版本号，用 glob 定位（不猜名字）
-          APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
-          APK_ARGS=()
-          [ -n "$APK_PATH" ] && APK_ARGS=(--asset android-arm64="$APK_PATH")
-          if [ "${#APK_ARGS[@]}" -gt 0 ]; then
-            # 2026-08-25 用户拍板撤掉 R2 镜像：manifest 恒指 GitHub 直链。
-            # 撤的原因不是「镜像没用」，是**耦合方向错**——原实现在镜像
-            # 发生**之前**就把 URL 写成镜像地址，镜像 403 挂掉时 manifest
-            # 已经签名上传进 release，指向不存在的文件 → 自动更新拿到一个
-            # 坏 manifest 且无法手改（签名会破）。要重开镜像必须先修这个
-            # 耦合（REL-04）：先镜像 → 据结果定 base → 签名 → 单独镜像
-            # manifest；镜像失败必须回落 GitHub 直链，不许带坏 manifest 出门。
-            ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
-            # UPD-13（#660）：动态 manifest.json 只给 test 通道用（它是
-            # test-channel 指针）。正式版的老格式清单是收口阶段搬进来的**冻结件**
-            # ——绝不能是 tag 版本的动态清单（分端号分化后会高于某端包内版本，
-            # 把未升级的老客户端打进「提示更新→装上还是旧号」的死循环）。
-            if [[ "$TAG" == *-test.* ]]; then
-              node tools/make-update-manifest.mjs \
-                --tag "$TAG" --notes-dir release/notes --notes-platform android \
-                --asset-base "$ASSET_BASE" \
-                "${APK_ARGS[@]}"
-              mv manifest.json artifacts/manifest.json
-            fi
-            # UPD-13：同时产出一份**只含 android** 的分端清单。
-            # 本批只产出文件、不上任何客户端 ⇒ 零行为变化；客户端切源在下一批。
-            node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes-dir release/notes \
-              --asset-base "$ASSET_BASE" \
-              "${APK_ARGS[@]}" \
-              --version "$(tools/release-version.sh android)" \
-              --only android-arm64 --out artifacts/manifest-android.json
-          else
-            echo "无 APK 产物——跳过 manifest 组装"
-          fi
+        run: tools/release/compose-android.sh
 
       - name: Sign update manifest (UPD-01, gated)
         # UPD-15 修正：正式 tag 下 upload-android **不再**产出 artifacts/manifest.json
@@ -889,58 +846,23 @@ jobs:
         if: env.HAS_UPDATE_KEY == 'true' && (hashFiles('artifacts/manifest.json') != '' || hashFiles('artifacts/manifest-android.json') != '')
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' -exec basename {} \; | head -1)
-          # rsign 私钥（base64 文本，tauri signer 格式）还原成文件；CI
-          # 非交互 → 空密码。签名走 tauri 官方 signer（minisign 格式，
-          # 与 tauri-plugin-updater 验证端同源）。
-          # ⚠️ echo 会追加尾换行，tauri signer 的 base64 解码不 trim →
-          #   Invalid symbol 10 at offset N（N=key 字节数）；必须 printf '%s'
-          #   逐字节还原（v0.2.1-test.1 实测踩坑）。
-          printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
-          chmod 600 /tmp/ppass-update.key
-          # UPD-01 返工：pin 版本（与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4
-          # 一致）——裸 npx @tauri-apps/cli 每次拉最新，signer 格式漂移会静默
-          # 产出坏签名。
-          npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" \
-            "artifacts/android/$APK"
-          mkdir -p /tmp/sigs
-          cp artifacts/android/*.sig /tmp/sigs/
-          # UPD-15：正式 tag 下本 job **不产出** artifacts/manifest.json（动态清单只给
-          # test 通道）——文件不在就跳过签名，否则 --sign 直接 ENOENT 把整步判红
-          # （2026-10-05 v2026.10.2 实测：签名步因此红，APK/manifest 都上传不了）。
-          if [ -f artifacts/manifest.json ]; then
-            node tools/make-update-manifest.mjs \
-              --sign artifacts/manifest.json --sig-dir /tmp/sigs
-          fi
-          # UPD-13：分端清单同样要签（同一把密钥、同一批 .sig）。
-          if [ -f artifacts/manifest-android.json ]; then
-            node tools/make-update-manifest.mjs \
-              --sign artifacts/manifest-android.json --sig-dir /tmp/sigs
-          fi
+        # REL-12（#711）：逻辑在 tools/release/sign-android.sh（密钥与 .sig 落在 $RUNNER_TEMP）。
+        run: tools/release/sign-android.sh
 
       - name: Upload android assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # UPD-15 门禁：UPDATE_SIGNING_KEY 在位时，清单的签名必须非空（REL-12 #711：
+          # 逻辑在 tools/release/check-manifests-signed.sh，上传前先过这道门）。
+          tools/release/check-manifests-signed.sh artifacts/manifest.json artifacts/manifest-android.json
           cd artifacts
           ASSETS=""
           # UPD-15：产物名带该端版本号（signed / unsigned 两个名字都由构建派生）
           for f in android/P-Pass_*_android*.apk; do
             [ -f "$f" ] && ASSETS="$ASSETS $f"
           done
-          # UPD-15 门禁：UPDATE_SIGNING_KEY 在位时，清单的签名必须非空——否则
-          # 就是在发一份「没签名的更新清单」（客户端会判定不可信）。签名步被
-          # 误跳过过（2026-10-05 v2026.10.2 实测），所以在这里把口径钉死。
-          if [ "${HAS_UPDATE_KEY}" = "true" ]; then
-            for f in manifest.json manifest-android.json; do
-              [ -f "$f" ] || continue
-              minsig=$(jq -r '[.platforms[].signature | length] | min' "$f")
-              [ "$minsig" -gt 0 ] || { echo "::error::$f 的签名为空（HAS_UPDATE_KEY 在位时必须签上）"; exit 1; }
-            done
-          fi
           [ -f manifest.json ] && ASSETS="$ASSETS manifest.json"
           [ -f manifest-android.json ] && ASSETS="$ASSETS manifest-android.json"
           # --clobber：重跑 workflow 时资产已存在，裸 upload 会失败。
@@ -1150,111 +1072,17 @@ jobs:
           name: macos-arm64
           path: artifacts/macos-arm64
 
+      # REL-12（#711）：逻辑在 tools/release/compose-desktop.sh（正式 tag：manifest.json =
+      # 冻结件原样拷贝；test tag：动态清单；两份分端清单；本该有 mac 产物却没有 ⇒ 红）。
       - name: Compose desktop manifest (android + darwin)
-        run: |
-          set -euo pipefail
-          ARGS=()
-          # UPD-15：产物名带该端版本号，用 glob 定位
-          APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
-          MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' | head -1)
-          [ -n "$APK_PATH" ] && ARGS+=(--asset android-arm64="$APK_PATH")
-          [ -n "$MAC_UPD" ] && ARGS+=(--asset darwin-aarch64="$MAC_UPD")
-          # manifest 恒指 GitHub 直链（2026-08-25 撤 R2 镜像的拍板）：下面几条
-          # 分支（冻结件搬运 / test 动态清单 / 两个分端清单）都要用它。
-          # ⚠️ 2026-10-04 事故：它曾被写在 test 分支里，正式 tag 走到 android
-          # 分端清单时 `set -u` 直接 `ASSET_BASE: unbound variable` —— 变量定义
-          # 必须在所有分支之外。
-          ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
-          if [[ "$TAG" != *-test.* ]]; then
-            # UPD-13（#660）：**正式版的老格式兼容清单 = 冻结件**
-            # （release/legacy-manifest.json：version 固定 0.9.0、URL 指向 R2 上
-            # 不可变的版本化副本）。分端号一旦分化，tag 版本的动态清单会高于某端
-            # 包内版本 ⇒ 未升级的老客户端死循环。冻结件是那次「两端同号」发布的
-            # 快照，永远自洽。
-            cp release/legacy-manifest.json artifacts/manifest.json
-          else
-            if [ "${#ARGS[@]}" -eq 0 ]; then
-              echo "无任何平台产物——跳过 manifest 组装"
-              exit 0
-            fi
-            node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes-dir release/notes --notes-platform android \
-              --asset-base "$ASSET_BASE" \
-              "${ARGS[@]}"
-            mv manifest.json artifacts/manifest.json
-          fi
-          # UPD-13 补丁：android 分端清单在 upload-android 里已先组装过一次（为了让
-          # 手机尽早拿到更新）。这里用同一批资产重新组装、与桌面清单同批签名上传。
-          # notes 两处同源（release/notes 下该端该版本的手写说明，#741），不随 release 正文变化。
-          APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
-          if [ -f "$APK" ]; then
-            node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes-dir release/notes \
-              --asset-base "$ASSET_BASE" \
-              --asset android-arm64="$APK" \
-              --version "$(tools/release-version.sh android)" \
-              --only android-arm64 --out artifacts/manifest-android.json
-          fi
-          # UPD-13（#660）：本次**本该**有 macOS 产物却没有 → 直接红。
-          # 2026-10-05 事故：macOS lane 被取消 → 这里静默跳过 → 发布出去的版本
-          # 没有 manifest-macos.json → R2 保留旧版 → 桌面端检测不到更新，而页面
-          # 上看不出任何异常。绝不静默降级。
-          case "${PLATFORMS:-all}" in
-            *macos*|*all*|"")
-              [ -n "$MAC_UPD" ] || {
-                echo "::error::本次应产出 macOS 产物但 P-Pass_*_macos-arm64.app.tar.gz 不在——拒绝发布「没有 mac 更新源」的清单"
-                exit 1
-              } ;;
-          esac
-          # UPD-13：同时产出一份**只含 darwin** 的分端清单（macOS 客户端的源）。
-          if [ -n "$MAC_UPD" ]; then
-            node tools/make-update-manifest.mjs \
-              --tag "$TAG" --notes-dir release/notes \
-              --asset-base "$ASSET_BASE" \
-              --asset darwin-aarch64="$MAC_UPD" \
-              --version "$(tools/release-version.sh desktop)" \
-              --only darwin-aarch64 --out artifacts/manifest-macos.json
-          fi
+        run: tools/release/compose-desktop.sh
 
       - name: Sign manifest entries (gated)
         if: env.HAS_UPDATE_KEY == 'true' && hashFiles('artifacts/manifest.json') != ''
         env:
           UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-        run: |
-          set -euo pipefail
-          # printf '%s' 逐字节还原（echo 的尾换行会让 tauri signer 报
-          # Invalid symbol——v0.2.1-test.1 实测踩坑，见 upload-android）。
-          printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/ppass-update.key
-          chmod 600 /tmp/ppass-update.key
-          mkdir -p /tmp/sigs
-          # REL-10（#707）：要签的文件在**本 step 内**定位。每个 step 是独立 shell，
-          # 上一步（Compose desktop manifest）里的 APK_PATH / MAC_UPD 到这里是未定义——
-          # set -u 下直接 unbound variable，正式版分端清单因此签不了、传不上去。
-          # 目录可能不在（dispatch 只选了部分平台）：find 失败在 pipefail 下会杀掉整步，
-          # 这里按「没有这一端」处理——该不该有，已由上一步的 mac 门禁判过。
-          APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' 2>/dev/null | head -1 || true)
-          MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' 2>/dev/null | head -1 || true)
-          for f in "$APK_PATH" "$MAC_UPD"; do
-            [ -f "$f" ] || continue
-            # pin 版本，与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4 一致
-            npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/ppass-update.key -p "" "$f"
-            cp "$f.sig" /tmp/sigs/
-          done
-          # UPD-13（#660）：**正式版跳过**——那份是冻结件，签名已随文件冻结；
-          # 用本次资产的 .sig 去重签会把 0.9.0 的签名覆盖成对不上字节的新签名。
-          if [[ "$TAG" == *-test.* ]]; then
-            node tools/make-update-manifest.mjs \
-              --sign artifacts/manifest.json --sig-dir /tmp/sigs
-          fi
-          # UPD-13：分端清单同样要签（同一把密钥、同一批 .sig）。
-          if [ -f artifacts/manifest-android.json ]; then
-            node tools/make-update-manifest.mjs \
-              --sign artifacts/manifest-android.json --sig-dir /tmp/sigs
-          fi
-          if [ -f artifacts/manifest-macos.json ]; then
-            node tools/make-update-manifest.mjs \
-              --sign artifacts/manifest-macos.json --sig-dir /tmp/sigs
-          fi
+        # REL-12（#711）：逻辑在 tools/release/sign-desktop.sh（REL-10：要签的文件在本步内定位）。
+        run: tools/release/sign-desktop.sh
 
       - name: Upload manifest (覆盖 android-only 先行版)
         if: hashFiles('artifacts/manifest.json') != ''
