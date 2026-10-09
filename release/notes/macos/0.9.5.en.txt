@@ -1,0 +1,3 @@
+The background service now switches to the new version after an update.
+It restarts automatically if it stops unexpectedly.
+The activity log shows load errors instead of an empty page.
