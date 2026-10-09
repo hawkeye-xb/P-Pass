@@ -1,7 +1,7 @@
 ---
 import '../styles/tokens.css';
 import '../styles/global.css';
-import { SITE_URL, GITHUB_URL, SITE_TITLE, SITE_DESCRIPTION } from '../consts';
+import { SITE_URL, GITHUB_URL, SITE_TITLE, SITE_DESCRIPTION, BLUESKY_URL, YOUTUBE_URL } from '../consts';
 import type { JsonLd } from '../schema';
 import { t, type Lang } from '../i18n/ui';
 
@@ -111,6 +111,15 @@ const zhUrl = lang === 'zh' ? canonical : mirrorUrl;
         <span aria-hidden="true"> · </span>
         <a href={lang === 'zh' ? '/zh/terms/' : '/terms/'}>{t(lang, 'footer.terms')}</a>
       </p>
+      {
+        lang === 'en' && (
+          <p>
+            <a href={BLUESKY_URL} rel="external me">Bluesky</a>
+            <span aria-hidden="true"> · </span>
+            <a href={YOUTUBE_URL} rel="external me">YouTube</a>
+          </p>
+        )
+      }
     </footer>
   </body>
 </html>

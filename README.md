@@ -9,6 +9,8 @@ the index can be rebuilt from them at any time.
 
 **Roadmap & status: [docs/ROADMAP.md](docs/ROADMAP.md)**
 
+Follow the project: [Bluesky](https://bsky.app/profile/p-pass.hawkeye-xb.com) · [YouTube](https://www.youtube.com/@p-pass-photos)
+
 ## Get started in 10 minutes (no technical knowledge needed)
 
 > **Who this is for**: you are not a developer, you don't care about any of

@@ -80,10 +80,13 @@ jobs:
         run: |
           set -euo pipefail
           # Allowlist: our own domain (self) + github.com and our download
-          # mirror p-pass-dl.hawkeye-xb.com (deliberate outbound download links). Any
-          # other external origin in built assets means a tracker / CDN / font
-          # leak — fail.
-          ALLOW='^(https://p-pass\.hawkeye-xb\.com|https://github\.com|https://p-pass-dl\.hawkeye-xb\.com)'
+          # mirror p-pass-dl.hawkeye-xb.com (deliberate outbound download links),
+          # plus the project's own Bluesky / YouTube profile pages (plain <a>
+          # links in the English footer; nothing is fetched). Those two are
+          # pinned to the exact profile URLs, not the whole domain, so an embed
+          # or widget from either site still fails. Any other external origin
+          # in built assets means a tracker / CDN / font leak — fail.
+          ALLOW='^(https://p-pass\.hawkeye-xb\.com|https://github\.com|https://p-pass-dl\.hawkeye-xb\.com|https://bsky\.app/profile/p-pass\.hawkeye-xb\.com$|https://www\.youtube\.com/@p-pass-photos$)'
           # JSON-LD blocks are data, not requests: their @context and license
           # identifiers (schema.org, gnu.org) are names, not origins the page
           # contacts. Strip those blocks first so this check stays about what
