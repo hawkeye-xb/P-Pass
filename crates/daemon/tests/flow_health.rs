@@ -101,7 +101,7 @@ async fn health_reports_free_bytes_a_writable_library_and_a_working_index() {
     let delivery =
         FlowDelivery::new(db, blobs, &library).with_free_space_probe(free_space(Some(6 * GIB)));
 
-    let health = delivery.health().await;
+    let health = delivery.health(NodeId([0x11; 32])).await;
     assert_eq!(health.free_bytes, Some((6 * GIB) as i64));
     assert!(health.library_writable);
     assert!(health.index_ok);
@@ -126,7 +126,7 @@ async fn health_reports_a_missing_library_and_an_unknown_free_space_honestly() {
     let delivery = FlowDelivery::new(db, blobs, &library).with_free_space_probe(free_space(None));
 
     std::fs::remove_dir_all(&library).unwrap();
-    let health = delivery.health().await;
+    let health = delivery.health(NodeId([0x11; 32])).await;
     assert_eq!(health.free_bytes, None, "unknown must stay null, not 0");
     assert!(!health.library_writable);
     assert!(
@@ -136,7 +136,175 @@ async fn health_reports_a_missing_library_and_an_unknown_free_space_honestly() {
 
     // A library path that is a plain file is not a writable library either.
     std::fs::write(&library, b"not a folder").unwrap();
-    assert!(!delivery.health().await.library_writable);
+    assert!(!delivery.health(NodeId([0x11; 32])).await.library_writable);
+}
+
+// ── #763: health answers "can this phone's next photo land" ──────────────
+
+fn device_folder(library: &Path, peer: NodeId) -> PathBuf {
+    library
+        .join("originals")
+        .join(core_index::device_dir(&peer.0))
+}
+
+/// Everything under `dir`, hidden entries included: a leftover probe file
+/// or a folder the probe created would both show up here.
+fn visible_tree(dir: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            out.push(path.clone());
+            if path.is_dir() {
+                walk(&path, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, &mut out);
+    out.sort();
+    out
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn health_reports_unwritable_when_this_phones_device_folder_refuses_files() {
+    let root = tempdir().unwrap();
+    let library = library(root.path());
+    let phone = NodeId([0x11; 32]);
+    let other = NodeId([0x22; 32]);
+    let db = paired_db(phone).await;
+    let (_t, blobs) = receiver_blobs(root.path()).await;
+    let delivery =
+        FlowDelivery::new(db, blobs, &library).with_free_space_probe(free_space(Some(6 * GIB)));
+    let device = device_folder(&library, phone);
+    std::fs::create_dir_all(device.join("2026/10")).unwrap();
+    std::fs::create_dir_all(device_folder(&library, other)).unwrap();
+    let before = visible_tree(&library.join("originals"));
+
+    assert!(delivery.health(phone).await.library_writable);
+    {
+        let _denied = platform::test_support::deny_file_creation(&device).unwrap();
+        assert!(
+            std::fs::create_dir(device.join("2027")).is_err(),
+            "precondition: the device folder must refuse a new month (running as root?)"
+        );
+        assert!(
+            !delivery.health(phone).await.library_writable,
+            "a device folder that cannot take a new year/month folder is not writable"
+        );
+        assert!(
+            delivery.health(other).await.library_writable,
+            "another phone's folder is unaffected"
+        );
+    }
+    assert!(delivery.health(phone).await.library_writable);
+    assert_eq!(
+        visible_tree(&library.join("originals")),
+        before,
+        "health probes leave nothing the watcher or reconcile scan would see"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn health_never_creates_a_missing_device_folder_and_probes_its_parent() {
+    let root = tempdir().unwrap();
+    let library = library(root.path());
+    let phone = NodeId([0x11; 32]);
+    let db = paired_db(phone).await;
+    let (_t, blobs) = receiver_blobs(root.path()).await;
+    let delivery =
+        FlowDelivery::new(db, blobs, &library).with_free_space_probe(free_space(Some(6 * GIB)));
+    let originals = library.join("originals");
+    std::fs::create_dir_all(&originals).unwrap();
+
+    assert!(delivery.health(phone).await.library_writable);
+    assert!(
+        !device_folder(&library, phone).exists(),
+        "health must never create the folder it probes"
+    );
+    let _denied = platform::test_support::deny_file_creation(&originals).unwrap();
+    assert!(
+        !delivery.health(phone).await.library_writable,
+        "a first photo needs originals/ to take the device folder"
+    );
+}
+
+/// End to end: a photo whose month folder cannot be created fails to land
+/// (the first item is spent learning it), and from then on `hello.health`
+/// tells this phone the library is not writable — so it stops before
+/// starting a transfer — until the folder takes files again.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_landing_folder_keeps_health_unwritable_until_it_accepts_files() {
+    let root = tempdir().unwrap();
+    let library = library(root.path());
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let bytes = b"landing failure fixture";
+    let source = root.path().join("source.jpg");
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+    let phone = provider_transport.node_id();
+    let other = NodeId([0x22; 32]);
+
+    // 2001-01-15T00:00:00Z: lands in originals/<device>/2001/01. A plain
+    // file sits where that month folder belongs — the cross-platform way to
+    // make exactly one month refuse while its parents accept files.
+    let mut item = request("lease-1", hash, ticket, 0);
+    item.capture_at_ms = 979_516_800_000;
+    let month = device_folder(&library, phone).join("2001/01");
+    std::fs::create_dir_all(month.parent().unwrap()).unwrap();
+    std::fs::write(&month, b"blocks the month folder").unwrap();
+
+    let (_t, blobs) = receiver_blobs(root.path()).await;
+    let db = paired_db(phone).await;
+    let (event_bus, mut event_rx) = events::bus();
+    let delivery = FlowDelivery::new(db, blobs, &library)
+        .with_events_and_window(event_bus, std::time::Duration::from_millis(20))
+        .with_free_space_probe(free_space(Some(100 * GIB)));
+    assert!(
+        delivery.health(phone).await.library_writable,
+        "before any failure the month folder is unknown to health"
+    );
+    delivery.offer(phone, &item).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let event = event_rx.recv().await.unwrap();
+            if event["event"].as_str() == Some(events::FLOW_FAILED) {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("the blocked month folder must fail the item");
+
+    assert!(
+        !delivery.health(phone).await.library_writable,
+        "after a real landing failure, health must not claim this phone's library is writable"
+    );
+    assert!(
+        !delivery.health(phone).await.library_writable,
+        "and it keeps saying so while the folder still refuses"
+    );
+    assert!(
+        delivery.health(other).await.library_writable,
+        "another phone's photos land elsewhere"
+    );
+
+    std::fs::remove_file(&month).unwrap();
+    assert!(
+        delivery.health(phone).await.library_writable,
+        "once the folder can take files again, health recovers on its own"
+    );
+    drop(provider_blobs);
 }
 
 #[test]

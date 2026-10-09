@@ -121,6 +121,71 @@ fn windows_junction(target: &Path, link: &Path) -> io::Result<()> {
     }
 }
 
+/// #763：让目录拒绝在其中新建文件 / 子目录，守卫析构时恢复。
+///
+/// 「怎么让一个目录不可写」每个系统不一样：unix 去掉写位（0o555）；Windows
+/// 的只读属性对目录不生效，要加一条拒绝 ACE（Everyone 的 AD+WD：新建子目录 /
+/// 新建文件）。调用方拿到守卫后应先自己验一次「确实建不了」——以 root 运行时
+/// unix 的写位挡不住，那时测试证明不了任何东西，必须判红而不是静默通过。
+pub fn deny_file_creation(dir: &Path) -> io::Result<CreationDenied> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let original = std::fs::metadata(dir)?.permissions();
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o555))?;
+        Ok(CreationDenied {
+            dir: dir.to_path_buf(),
+            original,
+        })
+    }
+    #[cfg(windows)]
+    {
+        icacls(dir, &["/deny", "*S-1-1-0:(AD,WD)"])?;
+        Ok(CreationDenied {
+            dir: dir.to_path_buf(),
+        })
+    }
+}
+
+/// [`deny_file_creation`] 的守卫：析构时恢复原权限。
+pub struct CreationDenied {
+    dir: std::path::PathBuf,
+    #[cfg(unix)]
+    original: std::fs::Permissions,
+}
+
+impl Drop for CreationDenied {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            let _ = std::fs::set_permissions(&self.dir, self.original.clone());
+        }
+        #[cfg(windows)]
+        {
+            let _ = icacls(&self.dir, &["/remove:d", "*S-1-1-0"]);
+        }
+    }
+}
+
+/// 起 `icacls`（同 [`windows_junction`]：只在 `test-support` 里，不进产品）。
+#[cfg(windows)]
+fn icacls(dir: &Path, args: &[&str]) -> io::Result<()> {
+    let out = std::process::Command::new("icacls")
+        .arg(dir)
+        .args(args)
+        .output()?;
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "icacls {args:?} 失败: status={:?} stdout={} stderr={}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +221,22 @@ mod tests {
                 kind.name
             );
         }
+    }
+
+    /// 守卫在手时目录里确实建不了文件；守卫释放后又能建。
+    #[test]
+    fn denied_dir_refuses_new_files_until_the_guard_drops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("locked");
+        std::fs::create_dir(&dir).unwrap();
+        {
+            let _guard = deny_file_creation(&dir).unwrap();
+            assert!(
+                std::fs::File::create(dir.join("probe")).is_err(),
+                "a denied folder must refuse a new file (running as root?)"
+            );
+            assert!(std::fs::create_dir(dir.join("sub")).is_err());
+        }
+        std::fs::File::create(dir.join("probe")).unwrap();
     }
 }

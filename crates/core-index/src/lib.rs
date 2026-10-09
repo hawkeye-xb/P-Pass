@@ -14,7 +14,7 @@ mod rebuild;
 mod timeline;
 
 pub use dedup::hash_file;
-pub use ingest::{IncomingFile, IngestOutcome, Ingestor};
+pub use ingest::{device_dir, IncomingFile, IngestOutcome, Ingestor};
 pub use rebuild::{adopt_orphans, rebuild, AdoptReport, RebuildReport};
 pub use timeline::timeline_page;
 
