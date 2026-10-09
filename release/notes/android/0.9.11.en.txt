@@ -1,0 +1,3 @@
+Backups now resume on their own after a pause or a storage problem on the computer.
+You can connect without camera access by typing the pairing string.
+Fixed a security issue. Please update soon.
