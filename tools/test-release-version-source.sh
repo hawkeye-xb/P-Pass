@@ -27,14 +27,20 @@ g() { git -c core.hooksPath=/dev/null -c user.name=rel11-test -c user.email=rel1
 #   v0.1.0：UPD-13 之前，没有 release/versions.json
 #   v1.0.0：versions.json = 1.0.0 / 1.1.0
 #   main  ：已 bump 到 2.0.0 / 2.1.0（模拟「main 已 bump 之后再修旧 tag」）
+#   #740：v1.0.0 与 main 各有一份不同的 android 1.1.0 说明，main 另有 2.1.0 的说明——
+#   repair 必须用 tag 那份 release/（说明、冻结件随 tag），并经 main 的 release-version.sh 读号。
 SRC="$SANDBOX/src"
 g init -q -b main "$SRC"
-mkdir -p "$SRC/apps/android" "$SRC/docs" "$SRC/release" "$SRC/tools"
+mkdir -p "$SRC/apps/android" "$SRC/docs" "$SRC/release/notes/android" "$SRC/tools"
 echo a > "$SRC/apps/android/a.txt"
 g -C "$SRC" add -A && g -C "$SRC" commit -qm c1 && g -C "$SRC" tag v0.1.0
 printf '{"desktop":"1.0.0","android":"1.1.0"}\n' > "$SRC/release/versions.json"
+echo 'tag 上的说明' > "$SRC/release/notes/android/1.1.0.zh.txt"
 g -C "$SRC" add -A && g -C "$SRC" commit -qm c2 && g -C "$SRC" tag v1.0.0
 printf '{"desktop":"2.0.0","android":"2.1.0"}\n' > "$SRC/release/versions.json"
+echo 'main 上改过的说明' > "$SRC/release/notes/android/1.1.0.zh.txt"
+echo 'main 才有的说明' > "$SRC/release/notes/android/2.1.0.zh.txt"
+cp "$ROOT/tools/release-version.sh" "$SRC/tools/release-version.sh"
 echo b > "$SRC/apps/android/a.txt"
 g -C "$SRC" add -A && g -C "$SRC" commit -qm c3
 BARE="$SANDBOX/origin.git"
@@ -70,6 +76,24 @@ else
     pass "① 旧 tag v1.0.0 取到 tag 里的版本号（1.0.0/1.1.0），不是 main 的 2.0.0/2.1.0"
   else
     fail "① 旧 tag 版本号取错：$out / env=$(cat "$SANDBOX/env-v1.0.0" 2>/dev/null)"
+  fi
+
+  # #740：说明文件随 tag——工作区 release/ 整目录换成 v1.0.0 的版本
+  W="$SANDBOX/work-v1.0.0"
+  if [ "$(cat "$W/release/notes/android/1.1.0.zh.txt" 2>/dev/null)" = 'tag 上的说明' ] \
+     && [ ! -e "$W/release/notes/android/2.1.0.zh.txt" ] \
+     && g -C "$W" diff --quiet v1.0.0 -- release; then
+    pass "① 工作区 release/ 换成被修复 tag 的版本（说明取 tag 那份，main 才有的文件不残留）"
+  else
+    fail "① 工作区 release/ 不是被修复 tag 的版本：$(g -C "$W" status --short -- release 2>&1)"
+  fi
+
+  if out=$(run_step v1.0.0-test.1 2>&1); then
+    fail "① test tag 应在 Resolve 步就报错退出，却成功了：$out"
+  elif grep -q '只服务正式 tag' <<<"$out"; then
+    pass "① test tag 在 Resolve 步（下载 / 签名之前）明确报错退出"
+  else
+    fail "① test tag 报错信息不对：$out"
   fi
 
   if out=$(run_step v0.1.0 2>&1); then

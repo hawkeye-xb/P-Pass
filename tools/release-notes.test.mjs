@@ -5,7 +5,7 @@
 // 夹具一律在临时目录现场生成；不可见字符用 \u 转义拼出来，仓库里不提交任何不可见字符。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -232,7 +232,7 @@ test("CLI 推不出端 / 端名非法 ⇒ 报错退出", () => {
   assert.notEqual(bad.r.status, 0);
 });
 
-test("CLI --notes 仍原样读入、不写 notes_i18n（repair-manifests.yml 兼容）", () => {
+test("CLI --notes 仍原样读入、不写 notes_i18n（工具兼容；workflow 已全部改走 --notes-dir，见下方口径门禁）", () => {
   const { r, manifest } = compose({}, (d) => ["--tag", "v2026.10.3", "--notes", join(d, "NOTES.md")]);
   assert.equal(r.status, 0, r.stderr);
   assert.match(manifest().notes, /^## P-Pass 2026\.10\.3/);
@@ -290,6 +290,65 @@ test("release.yml：compose 全部走 --notes-dir release/notes，不再喂 rele
     if (!/--only /.test(c)) assert.match(c, /--notes-platform android\b/, c);
   }
   assert.doesNotMatch(wf, /gh release view "\$TAG" --json body -q \.body > NOTES\.md/);
+});
+
+// ── 全部 workflow 的口径（#740）：所有生成清单的路径 notes 同源，release 正文进不了清单 ──
+// 扫 .github/workflows/*.yml 与 .github/actions/**/action.yml 里**每一处** compose 调用
+// （make-update-manifest.mjs + --tag；--sign / --rebase 不产出 notes，不在此列）。
+/** 收集仓库内全部 workflow / composite action 文件，或用 overrides 替换某些文件的内容（反证用）。 */
+function workflowSources() {
+  const root = join(HERE, "..", ".github");
+  const out = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.ya?ml$/.test(name)) out.push([p.slice(root.length + 1), readFileSync(p, "utf8")]);
+    }
+  };
+  walk(join(root, "workflows"));
+  if (existsSync(join(root, "actions"))) walk(join(root, "actions"));
+  return out;
+}
+
+/** 某份 workflow 源文本里违反口径的地方（空数组 = 合规）。 */
+function manifestNotesViolations(src) {
+  const bad = [];
+  // 调用 = make-update-manifest.mjs 那一行 + 反斜杠续行
+  const calls = src.match(/make-update-manifest\.mjs[^\n]*\n(?:[^\n]*\\\n)*[^\n]*/g) ?? [];
+  for (const c of calls.filter((x) => /--tag\b/.test(x))) {
+    if (!/--notes-dir\s+(?:\.\.\/)*release\/notes\b/.test(c)) bad.push(`compose 调用没带 --notes-dir release/notes：${c}`);
+    if (/--notes(?![-\w])/.test(c)) bad.push(`compose 调用仍用 --notes <file>（原样读入，会把 release 正文 / 任意文件喂进清单）：${c}`);
+    if (/CHANGELOG/.test(c)) bad.push(`compose 调用仍从 CHANGELOG 推导：${c}`);
+  }
+  // release 正文被读出来（gh release view … --json body）就是往清单里喂正文的前奏
+  if (/gh release view[^\n]*--json\s+body/.test(src)) bad.push("读取了 release 正文（gh release view --json body）");
+  return bad;
+}
+
+test("全部 workflow：make-update-manifest 的 compose 一律 --notes-dir release/notes，不读 release 正文（#740）", () => {
+  const files = workflowSources();
+  const composing = files.filter(([, s]) => /make-update-manifest\.mjs[^\n]*--tag|make-update-manifest\.mjs[^\n]*\\\n(?:[^\n]*\\\n)*[^\n]*--tag/.test(s));
+  // 至少 release.yml 与 repair-manifests.yml 两处生成清单——少了说明扫描本身失效
+  const names = composing.map(([n]) => n);
+  assert.ok(names.includes("workflows/release.yml") && names.includes("workflows/repair-manifests.yml"), `生成清单的 workflow：${names}`);
+  for (const [name, src] of files) assert.deepEqual(manifestNotesViolations(src), [], name);
+});
+
+test("口径检查本身会抓：--notes 旧写法 / 缺 --notes-dir / 读 release 正文 ⇒ 判违规", () => {
+  const old = [
+    '          gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json body -q .body > NOTES.md',
+    '          node ../tools/make-update-manifest.mjs --tag "$TAG" --notes ../NOTES.md \\',
+    '            --asset-base "$BASE" --asset "android-arm64=$APK_L" \\',
+    '            --version "$A" --only android-arm64 --out manifest-android.json',
+  ].join("\n");
+  const v = manifestNotesViolations(old);
+  assert.ok(v.some((e) => /没带 --notes-dir/.test(e)), v.join("\n"));
+  assert.ok(v.some((e) => /--notes <file>/.test(e)), v.join("\n"));
+  assert.ok(v.some((e) => /release 正文/.test(e)), v.join("\n"));
+  // 合规写法不误报（--notes-dir / --notes-platform 不算 --notes）
+  const ok = 'node tools/make-update-manifest.mjs \\\n  --tag "$TAG" --notes-dir release/notes --notes-platform android \\\n  --asset x=y';
+  assert.deepEqual(manifestNotesViolations(ok), []);
 });
 
 test("release.yml：正式 tag 有缺失说明告警步骤，且不阻断（continue-on-error + 只在非 test tag）", () => {

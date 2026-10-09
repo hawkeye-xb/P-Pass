@@ -127,8 +127,12 @@
   to its default text. The release body still **opens with the version's
   user-visible changelog** (REL-08/`#626`) for people reading the Release page;
   signing status, SHA-256 sums and asset lists belong in later sections.
-  Exception: the manual `repair-manifests.yml` still writes the release body
-  into `notes` (not changed by `#741`).
+  Every path that produces a manifest uses the same source (`#740`): the manual
+  `repair-manifests.yml` also composes with `--notes-dir release/notes`, taking
+  `release/` (versions, notes, frozen legacy manifest) from the tag it repairs,
+  so a repaired manifest carries the same notes the release run produced. No
+  workflow feeds the release body into `notes`; `tools/release-notes.test.mjs`
+  scans all workflows and fails if one does.
 - **404 semantics**: while the latest release is a *draft* (or none
   exists), that URL 404s — clients must treat it as "no update",
   **silently** (no error banner; a test tag you forgot to publish must
@@ -302,7 +306,10 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    - 签名状态 + 资产清单 + e2e 结果（若本次 tag 跑了）与你打的那个 commit 一致
    > 更新清单的说明**不取自 release 正文**（UPD-03 #580 起），#741 起取自第 2b 步的
    > 手写说明文件；正文仍以用户可见 changelog 开头，是给在网页上看 Release 的人读的。
-   > 例外：手动补跑的 `repair-manifests.yml` 仍把 release 正文写进 `notes`（未随 #741 改）。
+   > 所有生成清单的路径同一口径（#740）：手动补跑的 `repair-manifests.yml` 同样用
+   > `--notes-dir release/notes`，且 `release/`（版本号、说明、冻结件）取自被修复的 tag，
+   > 修出来的清单与当次发布产出的说明一致。没有任何 workflow 把 release 正文写进 `notes`，
+   > `tools/release-notes.test.mjs` 扫全部 workflow 把关。
    > **本仓不用本机 `gh` CLI**（未绑定本仓账号）：触发 workflow、看 CI
    > 结论、发 Release 一律在浏览器里做，git 只走个人 SSH remote。
    > （`.github/workflows/` 里的 `gh` 跑在 runner 上用 `GITHUB_TOKEN`，
