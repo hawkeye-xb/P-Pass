@@ -11,8 +11,10 @@
 # 同理——mirror-latest.yml 只在发布后触发，拦不住合并前的回归。
 # REL-13 (#716) 起兼收 release-version-source：补跑 / 修复清单路径的版本来源与
 # release.yml 每个 checkout 都检出被补跑的 tag（tools/test-release-version-source.sh）。
-# UPD-03 (#580) 起兼收 update-notes：更新 manifest 的 notes 取自 CHANGELOG 本版小节
-# （tools/changelog-notes.mjs），release.yml 只在 tag 上跑，拦不住合并前的回归。
+# #741 起兼收 release-notes：更新 manifest 的说明改为手写文件 release/notes/**，
+# lint（长度/条数/成对/禁止模式/双向控制符与零宽字符）与清单工具测试都放这里——
+# release.yml 只在 tag 上跑，拦不住合并前的回归。（原 UPD-03 的 update-notes job
+# 随 CHANGELOG 推导路线一起退役。）
 name: CI Docs
 
 on:
@@ -39,9 +41,9 @@ on:
       - "tools/check-version-bump.sh"
       - "tools/test-release-version-source.sh"
       - "tools/make-update-manifest.mjs"
-      - "tools/changelog-notes.mjs"
-      - "tools/changelog-notes.test.mjs"
-      - "CHANGELOG.md"
+      - "tools/release-notes.mjs"
+      - "tools/release-notes.test.mjs"
+      - "release/notes/**"
   push:
     branches: [main]
     paths:
@@ -65,9 +67,9 @@ on:
       - "tools/check-version-bump.sh"
       - "tools/test-release-version-source.sh"
       - "tools/make-update-manifest.mjs"
-      - "tools/changelog-notes.mjs"
-      - "tools/changelog-notes.test.mjs"
-      - "CHANGELOG.md"
+      - "tools/release-notes.mjs"
+      - "tools/release-notes.test.mjs"
+      - "release/notes/**"
   workflow_dispatch:
 
 permissions:
@@ -122,11 +124,14 @@ jobs:
       - name: 补跑口径测试
         run: bash tools/test-release-version-source.sh
 
-  update-notes:
-    name: update-notes（UPD-03：更新弹窗 notes 取自 CHANGELOG 本版小节）
+  release-notes:
+    name: release-notes（#741：手写更新说明 lint + 清单工具）
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: 抽取 + 清洗 + release.yml 口径
-        run: node --test tools/changelog-notes.test.mjs
+      # 先跑测试：每条禁止规则各有一个反例，lint 规则被削弱时这里先红。
+      - name: 工具与 lint 测试（含 release.yml 口径）
+        run: node --test tools/release-notes.test.mjs
+      - name: lint release/notes/**
+        run: node tools/release-notes.mjs lint

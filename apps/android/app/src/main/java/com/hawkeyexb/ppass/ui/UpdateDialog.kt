@@ -15,13 +15,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.update.UpdateUiState
 import com.hawkeyexb.ppass.update.failureTextRes
-import com.hawkeyexb.ppass.update.userFacingNotes
+import com.hawkeyexb.ppass.update.displayUpdateNotes
 
 @Composable
 fun UpdateDialog(
@@ -37,8 +38,12 @@ fun UpdateDialog(
             onDismissRequest = onLater,
             title = { Text(stringResource(R.string.update_available_title, state.info.version)) },
             text = {
-                // UPD-03（#580）：notes 先清洗成纯文本、截在句/词边界；清洗后为空回落默认文案。
-                val notes = userFacingNotes(state.info.notes)
+                // #741：按 App 当前语言选 notes_i18n（取不到回落 notes）→ 含网址/控制字符等
+                // 整段拒收 → 清洗截断（UPD-03 #580）；结果为空回落默认文案。
+                // 语言取自与 stringResource 同一份 Configuration（per-app 语言 / 系统语言都
+                // 反映在这里），保证说明与弹窗其余文字同一种语言。
+                val languageTag = LocalConfiguration.current.locales[0].toLanguageTag()
+                val notes = displayUpdateNotes(state.info.notesI18n, state.info.notes, languageTag)
                 Text(notes.ifBlank { stringResource(R.string.update_available_body) })
             },
             confirmButton = {

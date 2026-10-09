@@ -58,18 +58,21 @@
    `CHANGELOG.md` (keep-a-changelog format, user-visible changes only).
    **This section becomes the opening of the release body** (see step 5) —
    maintain it during commit/PR, not the night before tagging.
-   **Platform prefixes (`#741`)**: each update manifest's `notes` is filtered
-   per platform (`tools/changelog-notes.mjs`). Start an entry with
-   `Android 端：` / `macOS 端：` / `Windows 端：` / `桌面端：` when it concerns
-   one platform; **an entry without a prefix counts as all platforms**.
-   android keeps `Android 端` + unprefixed; macOS keeps `macOS 端` + `桌面端` +
-   unprefixed; Windows keeps `Windows 端` + `桌面端` + unprefixed. The prefix
-   is stripped before display. Only a prefix at the very start of a top-level
-   entry counts (mentioning a platform mid-sentence does not); an entry that
-   concerns two platforms but not all goes in once per platform. A bold
-   batch-summary line at the top of a section (`**Android 0.9.2 · macOS …**`)
-   is for developers and never reaches the dialog; nothing left after
-   filtering ⇒ empty `notes` ⇒ the client shows its default text.
+   Keep the platform prefixes (`Android 端：` / `macOS 端：` / `Windows 端：` /
+   `桌面端：`) on entries that concern one platform — they are the input for
+   step 2b. **CHANGELOG no longer feeds the in-app update dialog** (`#741`;
+   the old per-platform filtering `#737` / `#743` was removed).
+2b. **User update notes (`#741`)**: for every platform whose version went up,
+   write `release/notes/<platform>/<version>.zh.txt` + `.en.txt` (plain text,
+   one item per line, ≤ 3 items / ≤ 200 chars each language). The release
+   pipeline copies them verbatim into that platform's manifest (`notes` = zh
+   for old clients, `notes_i18n` = {zh, en}); no file ⇒ empty notes ⇒ the
+   client shows its default text. An agent drafts them **only from merged PR
+   titles and CHANGELOG entries of that platform**, submits them as a PR, and
+   they count only after the reviewer approves and merges. Rules, CI lint and
+   drafting flow: [`docs/release-notes-rules.md`](release-notes-rules.md).
+   A formal tag whose platform version went up without a notes file gets a
+   `::warning::` in `create-draft` (not blocking).
 3. **PR** → merge to main (main must be green: PR Checks).
 4. **Tag**: `git tag v<version>` + push. Tag pushes run the Release
    workflow (release.yml) → draft Release with platform assets.
@@ -115,11 +118,17 @@
   solely through the GitHub `test-channel` pointer. The decision lives in
   `tools/mirror-resolve-tag.sh` and is tested by
   `tools/test-mirror-resolve-tag.sh` (CI Docs lane).
-- **`notes` is the release body — and its first 200 characters are what users see.**
-  The Android in-app update dialog renders `notes.take(200)`, so the release body
-  must **open with the version's user-visible changelog** (REL-08/`#626`);
+- **`notes` / `notes_i18n` are the hand-written user notes (`#741`)**, not the
+  release body: `release/notes/<platform>/<version>.<zh|en>.txt`, copied
+  verbatim by `make-update-manifest.mjs --notes-dir release/notes` (§3 step 2b,
+  rules in [`docs/release-notes-rules.md`](release-notes-rules.md)). The Android
+  dialog picks the app's language, rejects text containing links / emails /
+  phone-like numbers / bidi or zero-width characters, and otherwise falls back
+  to its default text. The release body still **opens with the version's
+  user-visible changelog** (REL-08/`#626`) for people reading the Release page;
   signing status, SHA-256 sums and asset lists belong in later sections.
-  Do not let the machine report become the user's first impression.
+  Exception: the manual `repair-manifests.yml` still writes the release body
+  into `notes` (not changed by `#741`).
 - **404 semantics**: while the latest release is a *draft* (or none
   exists), that URL 404s — clients must treat it as "no update",
   **silently** (no error banner; a test tag you forgot to publish must
@@ -272,14 +281,17 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 2. **changelog**：`CHANGELOG.md` 里 `[Unreleased]` 段挪成新版本段
    （keep-a-changelog 格式，只记用户可见变更）。**这一段就是 release 正文的开头**
    （见第 5 步）——在 commit/PR 阶段就维护它，别等打 tag 前一晚才补。
-   **条目要带端前缀，不带视为全平台**（#741）：更新清单的 `notes` 按端过滤
-   （`tools/changelog-notes.mjs`）。只涉及一端的条目以「Android 端：」「macOS 端：」
-   「Windows 端：」「桌面端：」开头；android 清单保留「Android 端」+ 无前缀，
-   macOS 保留「macOS 端」「桌面端」+ 无前缀，Windows 保留「Windows 端」「桌面端」
-   + 无前缀；前缀展示前去掉。只认顶层条目**开头**的前缀（句中提到某端不算）；
-   涉及两端但非全平台的，按端各写一条。小节开头的加粗批次摘要行
-   （「**Android 0.9.2 · macOS …**」）是给开发者看的，不进弹窗；过滤后什么都不剩
-   ⇒ notes 为空，客户端显示默认文案。
+   只涉及一端的条目继续以「Android 端：」「macOS 端：」「Windows 端：」「桌面端：」
+   开头——它们是 2b 起草说明的输入。**CHANGELOG 不再进入应用内更新弹窗**（#741；
+   原 #737 / #743 的按端过滤推导已删除）。
+2b. **用户更新说明**（#741）：本次版本号涨了的每一端，写
+   `release/notes/<platform>/<version>.zh.txt` 与 `.en.txt`（纯文本、每行一条、
+   每种语言 ≤ 3 条 / ≤ 200 字）。发版流水线把它们原样放进该端清单（`notes` = 中文，
+   给旧客户端；`notes_i18n` = {zh, en}）；没有文件 ⇒ 说明为空 ⇒ 客户端显示默认文案。
+   agent 起草，输入**只限本端已合入 PR 的标题与 CHANGELOG 条目**，草稿以 PR 提交，
+   验收人审过合入才算数。规则、CI lint 与起草流程见
+   [`docs/release-notes-rules.md`](release-notes-rules.md)。正式 tag 某端版本号涨了
+   却没有说明文件 ⇒ `create-draft` 告警（不阻断）。
 3. **PR** → 合入 main（main 必须绿：PR Checks）。
 4. **打 tag**：`git tag v<版本>` + push。tag 触发 Release workflow →
    draft Release（三平台资产）。
@@ -288,9 +300,9 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    - **正文必须以本版本的用户可见 changelog 开头**；签名状态 / SHA-256 / 资产清单
      放后面的段落
    - 签名状态 + 资产清单 + e2e 结果（若本次 tag 跑了）与你打的那个 commit 一致
-   > **`manifest.json` 的 `notes` 就是 release 正文**——Android 应用内更新弹窗直接
-   > 展示它的**前 200 字**（`notes.take(200)`），所以正文必须以便用户看的 changelog
-   > 开头；构建元信息放后面，别让机器台账当用户的第一次观感。
+   > 更新清单的说明**不取自 release 正文**（UPD-03 #580 起），#741 起取自第 2b 步的
+   > 手写说明文件；正文仍以用户可见 changelog 开头，是给在网页上看 Release 的人读的。
+   > 例外：手动补跑的 `repair-manifests.yml` 仍把 release 正文写进 `notes`（未随 #741 改）。
    > **本仓不用本机 `gh` CLI**（未绑定本仓账号）：触发 workflow、看 CI
    > 结论、发 Release 一律在浏览器里做，git 只走个人 SSH remote。
    > （`.github/workflows/` 里的 `gh` 跑在 runner 上用 `GITHUB_TOKEN`，
