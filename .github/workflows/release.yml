@@ -134,7 +134,7 @@ jobs:
             ~/.cargo/registry/
             ~/.cargo/git/
             target/
-          # CI-18 (#382)：本 job 只 `cargo build -p daemon -p testclient`（主
+          # CI-18 (#382)：本 job 只 `cargo build -p daemon`（#539 起不再编 testclient；主
           # workspace），不跑 `pnpm tauri build`，所以 key 只跟根 lock 走。
           # UPD-16：key 来自 dep-cache-key.sh（归一化掉我们自己的 version 行）。
           key: macos-arm64-release-${{ steps.depkeys.outputs.root }}
@@ -174,17 +174,19 @@ jobs:
           # to take over from test.7 during dogfood week). 非 tag 运行取
           # release/versions.json 里的平台版本。
           PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
-        run: cargo build --release -p daemon -p testclient
+        run: cargo build --release -p daemon
 
+      # /tmp/rel/{daemon,lib/} 是下面 Bundle desktop 的 sidecar 输入（.app 里的
+      # ppf-daemon 及其 lib/），不单独作为 release 资产发布。
+      # #539：正式发布不再附带 daemon 层自包含 zip（里头的 lib/*.dylib 没有
+      # Developer ID 签名，hardened runtime 拒载，一直跑不起来，且无使用方——
+      # 用户装 dmg，团队自用走 artifacts.yml → dogfood release）。于是 testclient、
+      # dogfood 冒烟脚本、BUILD_INFO 这些只为 zip 存在的东西一并不再构建/暂存。
       - name: Bundle self-contained (dylibs + rpath rewrite)
         run: |
           set -euo pipefail
           rm -rf /tmp/rel && mkdir -p /tmp/rel
-          tools/bundle-macos.sh /tmp/rel target/release/daemon target/release/testclient
-          # REL-08 (#510)：随资产的 .sh（smoke + 它 source 的 ipc-lib.sh）只从
-          # 暂存脚本的单一清单出，缺文件直接红（原先 `cp … || true` 静默）。
-          tools/stage-dogfood-scripts.sh /tmp/rel
-          echo "built from $(git rev-parse HEAD) on $(date -u +%FT%TZ)" > /tmp/rel/BUILD_INFO
+          tools/bundle-macos.sh /tmp/rel target/release/daemon
 
       # ── 签名门控：无凭据 → 跳过（卡面验收路径）。secret 只在此 step env ──
       - name: Codesign (gated)
@@ -206,10 +208,12 @@ jobs:
           # find-identity -v 第 1 行是身份（"1) <hash> \"...\""），第 2 行是
           # "N valid identities found" 汇总——取 NR==1 才是证书哈希。
           # #772：--timestamp 要请求 Apple 时间戳服务，可能挂住——限时并重试一次。
-          tools/release/with-timeout.sh "codesign daemon/testclient（Apple 时间戳服务）" 300 2 -- \
+          # 签的是 sidecar 的来源 /tmp/rel/daemon（Bundle desktop 把它拷进 .app 再整体重签）；
+          # 本步的 signed=yes 也是下面 Signing status tag 的输入，不能删。
+          tools/release/with-timeout.sh "codesign daemon（Apple 时间戳服务）" 300 2 -- \
             /usr/bin/codesign --force --options runtime --timestamp \
             --sign "$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')" \
-            /tmp/rel/daemon /tmp/rel/testclient
+            /tmp/rel/daemon
           echo "signed=yes" >> "$GITHUB_OUTPUT"
 
       # ── 公证/装订（H-02 凭据路径，对象 = dmg）──
@@ -219,37 +223,10 @@ jobs:
       # 公证对象改为 bundle 步骤产出的 dmg（含 Developer ID 签名的
       # .app），staple 装订进 dmg。步骤移到 Bundle desktop 之后。
 
-      - name: SHA256 + notes
-        run: |
-          cd /tmp/rel
-          shasum -a 256 daemon testclient > SHA256SUMS-macos-arm64
-          cat SHA256SUMS-macos-arm64
-
-      - name: SLSA attestation
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: /tmp/rel/daemon, /tmp/rel/testclient
-
-      # 整包 zip：daemon 的 rpath 已被 bundle-macos.sh 改写到
-      # @executable_path/lib——裸二进制离开 lib/ 跑不起来，release 资产
-      # 必须是带 lib/ 的自包含包（review 抓到的功能回退）。zip 同时解决
-      # 双平台 SHA256SUMS/BUILD_INFO 资产 basename 冲突（gh 上传 422）。
-      - name: Pack self-contained zip
-        run: |
-          set -euo pipefail
-          cd /tmp && rm -rf P-Pass && cp -R rel P-Pass
-          # UPD-15：名字单源派生；本步前面已 `cd /tmp`，必须用绝对路径调脚本
-          ZIP="$("$GITHUB_WORKSPACE/tools/artifact-names.sh" macos-zip)"
-          ditto -c -k --keepParent P-Pass "$ZIP"
-          # zip 挪进 rel/：让 upload-artifact 的两个 path 共享同一根目录，
-          # 下载解包后是平铺的 macos-arm64/<file>（否则公共祖先是 /tmp，
-          # SHA256SUMS 会带上 rel/ 前缀，release 上传步路径对不上）。
-          mv "$ZIP" rel/
-
       # ── H-10c: 面向人类的 .app + dmg（复用 /tmp/rel 的自包含 daemon）──
       # sidecar = bundle 后 daemon（rpath @executable_path/lib），lib/ 必须
-      # 一起进 .app/Contents/MacOS/lib。无凭据路径 ad-hoc 重签（与 zip 资产
-      # 一致）；凭据到位后此步的 codesign identity 由门控环境提供。
+      # 一起进 .app/Contents/MacOS/lib。无凭据路径 ad-hoc 重签；凭据到位后
+      # 此步的 codesign identity 由门控环境提供。
       - name: Install Node + pnpm (desktop build)
         run: |
           set -euo pipefail
@@ -265,7 +242,7 @@ jobs:
         # secret 只进本 step env（T-071b 模式）。
         # H-02: 凭据到位后，把 p12 导进临时钥匙串取 Developer ID identity
         # 传 bundle 脚本（.app 用真证书签名，供后续 dmg 公证/staple）；
-        # 无凭据路径保持 ad-hoc（-），与 zip 资产一致。
+        # 无凭据路径保持 ad-hoc（-）。
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
@@ -288,12 +265,8 @@ jobs:
           # ⚠️ dmg 输出到 /tmp/rel/：upload-artifact@v4 按多个 path 的公共
           # 祖先目录存储，若 dmg 放 /tmp/dmg/ 会让 artifact 内出现 rel/、
           # dmg/ 前缀（T-071 只传 /tmp/rel 时是根级平铺），release job 的
-          # artifacts/macos-arm64/<file> 引用会全挂。zip 打包步骤在此之前
-          # 已完成，dmg 落入 /tmp/rel 不会被收进 zip。
+          # artifacts/macos-arm64/<file> 引用会全挂。
           tools/bundle-desktop-macos.sh /tmp/rel /tmp/rel "$IDENTITY"
-          # ⚠️ 不追加 dmg 到 SHA256SUMS-macos-arm64：zip 内 SUMS 与 release
-          # 资产 SUMS 必须逐字节一致（T-071 三重核对①）。dmg 的 sha256
-          # 由 release job 下载后计算写进 notes。
 
       - name: Notarize + staple dmg (gated, H-02)
         id: notarize
@@ -339,6 +312,27 @@ jobs:
           tar czf "/tmp/rel/$UPD" -C "$(dirname "$APP")" P-Pass.app
           ls -la "/tmp/rel/$UPD"
 
+      # #539：SUMS 与 SLSA 证明的对象 = 实际发布的 macOS 资产（dmg + updater 包），
+      # 所以必须排在 Notarize + staple 之后——staple 会改写 dmg 字节，先算就对不上。
+      # dmg 只在有签名身份时产出（bundle-desktop-macos.sh 第 6 步），按存在与否收。
+      - name: SHA256SUMS (dmg + updater)
+        run: |
+          set -euo pipefail
+          cd /tmp/rel
+          # UPD-15：名字单源派生；本步已 `cd /tmp/rel`，必须用绝对路径调脚本
+          DMG="$("$GITHUB_WORKSPACE/tools/artifact-names.sh" macos-dmg)"
+          UPD="$("$GITHUB_WORKSPACE/tools/artifact-names.sh" macos-updater)"
+          [ -f "$UPD" ] || { echo "FATAL: $UPD missing (Pack updater must run first)" >&2; exit 1; }
+          FILES=("$UPD")
+          if [ -f "$DMG" ]; then FILES=("$DMG" "$UPD"); fi
+          shasum -a 256 "${FILES[@]}" > SHA256SUMS-macos-arm64
+          cat SHA256SUMS-macos-arm64
+
+      - name: SLSA attestation
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: /tmp/rel/P-Pass_*_macos-arm64.dmg, /tmp/rel/P-Pass_*_macos-arm64.app.tar.gz
+
       - name: Signing status tag
         id: signtag
         run: |
@@ -353,7 +347,6 @@ jobs:
         with:
           name: macos-arm64
           path: |
-            /tmp/rel/P-Pass_*_macos-arm64.zip
             /tmp/rel/SHA256SUMS-macos-arm64
             /tmp/rel/P-Pass_*_macos-arm64.dmg
             /tmp/rel/P-Pass_*_macos-arm64.app.tar.gz
@@ -780,16 +773,12 @@ jobs:
           - **P-Pass_\<macOS 版本\>_macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
           - **P-Pass_\<Android 版本\>_android.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
           - **P-Pass_\<桌面版本\>_x64-setup.exe** — Windows 安装包（NSIS）
-          - daemon 层自包含 zip（**P-Pass_\<macOS 版本\>_macos-arm64.zip**）继续提供
 
           ### 验证（被拦截/不信任时先做这三步）
           - 下载每平台的 SHA256SUMS-\<platform\> 资产（certutil/shasum 对照）
           - \`gh attestation verify <下载的文件> -R ${GITHUB_REPOSITORY}\`
-            （SLSA provenance，macOS 对 zip 解出的 daemon/testclient 执行）
+            （SLSA provenance，macOS 对 dmg / .app.tar.gz 执行）
           - 源码可查：构建流程 .github/workflows/release.yml
-
-          macOS 包为自包含 zip（含 lib/ 依赖库）——解压后整个 P-Pass
-          目录一起用，勿单独拷出二进制。
 
           被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md
           EOF
@@ -968,7 +957,7 @@ jobs:
           cd artifacts
           ASSETS=""
           # UPD-15：产物名 = P-Pass_<该端版本>_macos-arm64.<ext>
-          for f in macos-arm64/P-Pass_*.zip macos-arm64/SHA256SUMS-macos-arm64 \
+          for f in macos-arm64/SHA256SUMS-macos-arm64 \
                    macos-arm64/P-Pass_*.app.tar.gz macos-arm64/P-Pass_*.dmg; do
             if [[ -e $f ]]; then ASSETS="$ASSETS $f"; fi
           done
@@ -1315,16 +1304,12 @@ jobs:
           - **P-Pass_\<macOS 版本\>_macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）
           - **P-Pass_\<Android 版本\>_android.apk** — Android APK（keystore 签名，可直接安装；允许"未知来源"即可）
           - **P-Pass_\<桌面版本\>_x64-setup.exe** — Windows 安装包（NSIS）
-          - daemon 层自包含 zip（**P-Pass_\<macOS 版本\>_macos-arm64.zip**）继续提供
 
           ### 验证（被拦截/不信任时先做这三步）
           - 下载每平台的 SHA256SUMS-\<platform\> 资产（certutil/shasum 对照）
           - \`gh attestation verify <下载的文件> -R ${GITHUB_REPOSITORY}\`
-            （SLSA provenance，macOS 对 zip 解出的 daemon/testclient 执行）
+            （SLSA provenance，macOS 对 dmg / .app.tar.gz 执行）
           - 源码可查：构建流程 .github/workflows/release.yml
-
-          macOS 包为自包含 zip（含 lib/ 依赖库）——解压后整个 P-Pass
-          目录一起用，勿单独拷出二进制。
 
           被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md
           EOF
@@ -1333,8 +1318,8 @@ jobs:
           tools/release/changelog-section.sh "$TAG" CHANGELOG-SECTION.md
           cat CHANGELOG-SECTION.md LEDGER.md > NOTES.md
 
-      # H-10c: dmg/apk 的 sha256（不进平台 SUMS——保持 zip 内 SUMS 与 release
-      # 资产逐字节一致，T-071 三重核对①；人类资产哈希单独列在 notes）
+      # H-10c: dmg/apk 的 sha256 直接列在 notes（人类资产哈希一眼可见；
+      # macOS 的 SHA256SUMS 资产另含 dmg + updater 包，#539）
       # DESK-05: 单平台 dispatch 容错——lane 未跑（skipped）则其文件本就不存在。
       # CI-09: 但 lane 成功而文件落空 = 下载布局或产物有问题，必须红——
       # 静默跳过会让正文缺 SHA-256 段且无人发现（#236 的失效方向）。

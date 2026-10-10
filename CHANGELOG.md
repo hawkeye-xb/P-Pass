@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- macOS 端：发布页不再附带 daemon 层自包含压缩包（`P-Pass_<版本>_macos-arm64.zip`）。它在 macOS 上一直无法运行；安装请使用 dmg（#539）。
+
 ## [2026.10.3] - 2026-10-09
 
 **Android 0.9.11 · macOS 0.9.5**

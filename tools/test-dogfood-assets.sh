@@ -82,7 +82,6 @@ check_workflows() {
   [[ -z "$hits" ]] || fail "workflow 绕过暂存脚本直接 cp tools/*.sh:
 $hits" || return 1
   grep -q 'tools/stage-dogfood-scripts.sh' "$wf/artifacts.yml" || fail "artifacts.yml 没调暂存脚本" || return 1
-  grep -q 'tools/stage-dogfood-scripts.sh' "$wf/release.yml" || fail "release.yml 没调暂存脚本" || return 1
   for f in stage-dogfood-scripts.sh $(sed -n '/^SCRIPTS=(/,/^)/p' "$tools/stage-dogfood-scripts.sh" | grep -oE '[A-Za-z0-9_.-]+\.sh'); do
     grep -qF "\"tools/$f\"" "$wf/artifacts.yml" || fail "artifacts.yml paths 过滤缺 tools/$f" || return 1
   done
@@ -129,8 +128,10 @@ self_test() {
   printf '\n# shellcheck source=./extra.sh\nsource "$HERE/extra.sh"\n' >> "$w/tools/ipc-lib.sh"
   expect red "helper 新增 source 了清单外文件" "$w/tools" "$w/wf"
 
-  w="$(mut)"; sed -i.bak 's#tools/stage-dogfood-scripts.sh /tmp/rel#tools/stage-dogfood-scripts.sh /tmp/rel; cp tools/dogfood-smoke.sh /tmp/rel/#' "$w/wf/release.yml"
-  expect red "release.yml 绕过暂存脚本直接 cp" "$w/tools" "$w/wf"
+  # #539 起 release.yml 不再暂存这些脚本（macOS zip 已从正式发布去掉），资产只经 artifacts.yml 出。
+  w="$(mut)"; sed -i.bak 's#tools/stage-dogfood-scripts.sh /tmp/bin#tools/stage-dogfood-scripts.sh /tmp/bin; cp tools/dogfood-smoke.sh /tmp/bin/#' "$w/wf/artifacts.yml"
+  grep -q 'cp tools/dogfood-smoke.sh /tmp/bin/' "$w/wf/artifacts.yml" || { echo "BAD 变异没打上"; rc=1; }
+  expect red "artifacts.yml 绕过暂存脚本直接 cp" "$w/tools" "$w/wf"
 
   w="$(mut)"
   sed -i.bak 's#^echo "DOGFOOD SMOKE: ALL GREEN"#! grep -q leak /dev/null\n&#' "$w/tools/dogfood-smoke.sh"
