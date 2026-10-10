@@ -336,6 +336,8 @@ fun PPassApp() {
             onRetry = updateController::onUserRetry,
             onDismissFailed = updateController::onUserDismissFailed,
             onInstall = updateController::onUserInstall,
+            onReopenInstall = updateController::onReopenInstall,
+            onGiveUpInstall = updateController::onGiveUpInstall,
         )
     }
 
