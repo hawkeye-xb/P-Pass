@@ -15,7 +15,7 @@
 |---|---|---|
 | G1 | 照片完整：已选范围内的照片全部到电脑，逐字节一致，原图不被改动 | 用户丢照片（不可逆） |
 | G2 | 升级不丢：从上一个正式版直接升到候选版，配对、范围、照片库、续传都保留 | 用户升级后要重配，或库打不开 |
-| G3 | 无人值守：杀 App、重启手机、电脑重启、服务被杀后，自动备份能自己恢复 | 备份静默停摆 |
+| G3 | 无人值守：App 进程崩溃、Doze、服务被杀或停止后，自动备份能自己恢复 | 备份静默停摆 |
 | G4 | 配对可信：断开后旧身份被拒，重新配对可用，断开通知可靠送达 | 安全边界失效或设备列表失真 |
 | G5 | 隐私：日志里没有地址、完整编号、令牌 | 诊断包泄露用户信息 |
 
@@ -26,7 +26,8 @@
 - **时机**：候选 test tag 发布后、打正式 tag 之前；每个正式版跑一轮。
 - **执行标记**：每条用例标 `agent`（adb / IPC / shell 能独立完成）或 `user`（必须人在设备上操作）。
 - **`user` 步骤只有三类**：系统授权弹窗（照片、通知、摄像头、安装未知应用、电池优化白名单）、需要密码的操作、只能用眼睛判断的界面观感。agent 不代点系统授权、不输密码、不改系统设置。
-- **人工批次**：`user` 步骤按 §5 集中成两批（开局一批、收尾一批）。到批次时 agent 发推送通知，人一次做完，平时不打断。
+- **不做重启类用例**：手机重启后停在首次解锁前，USB 调试不可用，agent 无法继续，只能等人来解锁。重启后的自动备份由 CI 与狗粮期自然运行覆盖。
+- **人工批次**：`user` 步骤按 §5 集中成几批。到批次时 agent 发推送通知，人一次做完，平时不打断。
 
 ## 2. 入口条件
 
@@ -86,20 +87,21 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 | R0.1 | agent | 手机：`adb uninstall com.hawkeyexb.ppass`（仅限测试机）→ `adb install` 正式版 APK | 安装成功；`dumpsys package` 的 versionName 等于正式版 | 命令输出 |
 | R0.2 | agent | 桌面：退出 P-Pass → 挂载正式版 dmg → `ditto` 覆盖 `/Applications/P-Pass.app` → 打开 | daemon 起来，`ipc status` 的 `result.version` 等于正式版桌面版本号 | IPC 输出 |
 | R0.3 | user | 专用测试机首次安装时走一遍桌面向导（选库目录） | 三步走完，进入主界面 | 截图 |
-| R0.4 | agent+user | 生成 40 张带唯一内容的 JPEG push 到 `DCIM/PPassRegression/` 并触发媒体扫描；手机打开 App → 扫码页 → 「手动输入配对串」，串由 `ipc_pair_qr` 现取，`adb shell input text` 填入；`ipc pairing.confirm` 批准。授权弹窗在开局批次里由人点 | 配对成功；桌面设备列表出现该机型 | IPC 输出 + 设备行 |
+| R0.4 | agent+user | 生成 40 张带唯一内容的 JPEG push 到 `DCIM/PPassRegression/` 并触发媒体扫描；手机打开 App → 首页「无法扫码？手动输入配对串」，串由 `ipc_pair_qr` 现取，`adb shell input text` 填入；`ipc pairing.pending` 取到手机的 `node_id` 后 `ipc pairing.confirm {"accept":true,"node_id":"<它>"}` 批准（不带 `node_id` 返回 `NOT_FOUND`；`device_name` 不生效，设备名取手机型号）。授权弹窗在开局批次里由人点 | 配对成功；桌面设备列表出现该机型 | IPC 输出 + 设备行 |
 | R0.5 | agent | 范围只选 `PPassRegression`，立即备份，等完成 | 40/40；每张 `sha256` 在 `originals/` 里能找到同值文件 | 哈希对账表 |
 
 ### R1 升级（G2，对应 upgrade-compat A、B 格）
 
 | ID | 执行 | 步骤 | 预期 | 证据 |
 |---|---|---|---|---|
-| R1.1 | agent | 升级前快照：手机 `run-as` 读 `files/pairing.json`、`shared_prefs/backup_scope-*.xml` 的哈希；桌面 `identity.key` 哈希、`_sqlx_migrations` 最大版本、各表行数、`originals/` 全量哈希 | 快照落盘 | `pre-upgrade.json` |
+| R1.1 | agent | 升级前快照。手机：发布签名包不可 `run-as`，改记桌面 `device` 表里该机的 `node_id` 与 `pairing_epoch`（升级后不变即证明 `identity.key` 与配对保留）、设置页的相册范围。桌面 `identity.key` 哈希、`_sqlx_migrations` 最大版本、各表行数、`originals/` 全量哈希 | 快照落盘 | `pre-upgrade.json` |
 | R1.2 | agent | 桌面覆盖安装候选 dmg（同 R0.2 手法；日常机见 §3 第 5 条） | daemon 起来；迁移只前进；NodeId、原图哈希、行数不减 | 前后对比 |
-| R1.3 | agent+user | 手机切到测试通道 → App 内检查更新 → 下载 → 系统安装器确认（人点「安装」，首次需在开局批次授权「安装未知应用」） | 装上候选版；不需要重新配对；范围保留 | 前后对比 + 版本号 |
+| R1.3 | agent | `adb install -r` 候选 APK 覆盖安装（更新通道由版本号推导，没有切换开关；正式版只认正式通道，收不到 test 包） | 装上候选版；不需要重新配对；范围保留；后续一轮零重复 | 前后对比 + 版本号 |
 | R1.4 | agent | 版本一致性：手机 `dumpsys package` 的 versionName、`ipc status` 的 `result.version`、`/Applications/P-Pass.app` 的 `CFBundleShortVersionString`（桌面壳界面上的版本号即读它） | 三者都等于候选版本号 | 三行输出 |
 | R1.5 | agent | 升级后再 push 8 张 → 自动或立即备份 | 恰好 +8，无重复入库 | 对账表 |
+| R1.6 | agent+user | 应用内更新一跳：从候选版 App 内更新到下一个 test tag（对外动作，先问人；两个 tag 钉在同一个 SHA，不要取打 tag 那一刻的 `origin/main`）。抓 `adb logcat` 的 `PPassUpdate` 与 `PackageInstallerSession` | 点一次系统安装器的「更新」即装上；没有 `Session was abandoned`；配对与范围保留 | 日志摘录 + 版本号 |
 
-本次改动了 Android 更新流程本身时，R1.3 跑的是旧版的更新代码，证明不了新代码。此时加跑一跳：先发下一个 test tag（对外动作，先问人），再从候选版 App 内更新到它。
+更新代码只在「下一跳」生效：R1.6 跑的是候选版自己的更新代码。候选版改了更新流程时 R1.6 必跑；修更新流程的修复版要先 `adb install -r` 装上，再更新到下一个 test tag。
 
 ### R2 备份正确性（G1）
 
@@ -107,7 +109,7 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 |---|---|---|---|---|
 | R2.1 | agent | 大批次：push 300 张 → 立即备份 | 全部完成，App 不 ANR，前台服务通知在跑完后消失 | 对账 + `dumpsys activity services` |
 | R2.2 | agent | 备份中断网：开始备份后 `adb shell svc wifi disable`，30 秒后恢复 | 自动续传收敛，不重不漏 | 对账 |
-| R2.3 | agent | 备份中杀 App：`am force-stop` 后不打开 App | 后台任务接续完成 | 对账 + WorkManager 状态 |
+| R2.3 | agent | 备份中让进程崩溃：`am crash com.hawkeyexb.ppass`，不打开 App（`am kill` 杀不掉跑着前台服务的进程；`force-stop` 按平台规则会清掉全部后台任务直到用户打开 App，不代表真实场景） | 后台任务接续完成；不接续时记 #827 并看重新打开 App 后是否零重复补齐 | 对账 + `dumpsys jobscheduler` |
 | R2.4 | agent | 取回：从桌面库随机抽 5 张，经手机「保存到相册」取回 | 取回文件与原图字节一致 | 哈希对比 |
 | R2.5 | agent | 手机删除 5 张已备份照片 | 桌面保留，不重传 | 对账 |
 
@@ -115,9 +117,8 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 
 | ID | 执行 | 步骤 | 预期 | 证据 |
 |---|---|---|---|---|
-| R3.1 | agent | `adb reboot`，开机后不打开 App，push 5 张，插电连 Wi-Fi 熄屏等待（上限 30 分钟） | 自动备份触发并完成 | 对账 + 时间戳 |
 | R3.2 | agent | `kill -9` daemon | launchd 拉起；壳自动重连；手机下一轮备份成功 | `pgrep` + IPC + 对账 |
-| R3.3 | agent | `launchctl bootout gui/$(id -u)/com.p-pass.daemon` 停服务，`pgrep` 确认确实停了，手机立即备份；再 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.p-pass.daemon.plist` 恢复 | 手机给出明确提示；恢复后收敛 | logcat 摘录 + 对账 |
+| R3.3 | agent | 照桌面「停止服务」的做法：先写标记 `~/Library/Application Support/P-Pass/desktop-user-stopped`，再 `launchctl bootout gui/$(id -u)/com.p-pass.daemon`，45 秒后 `pgrep` 确认仍停着（只 bootout 不写标记，壳的自愈会在 30 秒内拉回），手机立即备份；恢复时删标记再 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.p-pass.daemon.plist` | 手机给出明确提示；恢复后收敛 | logcat 摘录 + 对账 |
 | R3.4 | agent | `dumpsys deviceidle force-idle` 进 Doze，再 `unforce` | Doze 期间不跑且文案平静；退出后补跑 | logcat 摘录 |
 
 磁盘满（T-070 `tools/scenarios/disk_full.sh`）和崩溃恢复（`crash_recovery.sh`）由 CI 在 Linux 上覆盖，真机不重跑。
@@ -134,8 +135,8 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 
 | ID | 执行 | 步骤 | 预期 | 证据 |
 |---|---|---|---|---|
-| R5.1 | agent | 收集本轮 `adb logcat -d --pid=$(adb shell pidof com.hawkeyexb.ppass)` 和 `$DAEMON_LOG`。第一遍按本轮自己的秘密原文检索：电脑 NodeId 全长（配对串的 `node=`）、手机 NodeId 全长（`ipc devices.list`）、配对串里的 `t=` 令牌、`ipc.token` 第二行。第二遍按形状检索：任意 64 位十六进制串、公网 IPv4/IPv6（私网、链路本地、回环按 `redact-vectors.json` 的 `keep` 规则放行） | 两遍都零命中 | 检索命令与输出 |
-| R5.2 | agent | `ipc logs.export` 导出桌面诊断包并解开，同 R5.1 两遍检索，另查用户主目录名与本轮测试图片文件名 | 零命中 | 检索命令与输出 |
+| R5.1 | agent | 收集本轮 `adb logcat -d --uid=<App 的 uid>`（按 uid，跨进程重启也不漏）和 `$DAEMON_LOG` 里本轮时间窗的行（文件里可能留着脱敏上线前的历史行，不算本轮）。第一遍按本轮自己的秘密原文检索：电脑 NodeId 全长（配对串的 `node=`）、手机 NodeId 全长（`ipc devices.list`）、配对串里的 `t=` 令牌、`ipc.token` 第二行。第二遍按形状检索：任意 64 位十六进制串、公网 IPv4/IPv6（私网、链路本地、回环按 `redact-vectors.json` 的 `keep` 规则放行） | 两遍都零命中 | 检索命令与输出 |
+| R5.2 | agent+user | `ipc logs.export` 只导出 audit / diag_events / devices 三份 JSON；带 `daemon.log` 的完整诊断包由人在桌面界面导出（收尾批次）。两份都解开，同 R5.1 两遍检索，另查用户主目录名与本轮测试图片文件名 | 零命中 | 检索命令与输出 |
 
 ### R6 界面观感（`user`，收尾批次）
 
@@ -151,8 +152,8 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 | 批次 | 时机 | 内容 | 预计 |
 |---|---|---|---|
 | 开局 | R0.4 之前 | 手机：照片权限（选「允许全部」）、通知、摄像头「仅此一次」、电池优化白名单、「安装未知应用」授权给 P-Pass；专用测试机走 R0.3 | 3 分钟 |
-| 升级 | R1.3 | 系统安装器点「安装」 | 30 秒 |
-| 收尾 | §4 跑完 | R6 全部 | 10 分钟 |
+| 升级 | R1.6 | 系统安装器点「更新」（人不在场时，经人在对话里授权，agent 可用 adb 代点） | 30 秒 |
+| 收尾 | §4 跑完 | R6 全部 + 界面导出诊断包 | 10 分钟 |
 
 ## 6. 通过标准
 
