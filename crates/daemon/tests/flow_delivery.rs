@@ -417,8 +417,20 @@ async fn authenticated_control_peer_may_offer_a_distinct_native_provider_ticket(
     assert!(db.get_asset(&hash).await.unwrap().is_some());
 }
 
+/// #744（验收人 2026-10-10 拍板的规则）：取消只保证「**取消那一刻**不交付、
+/// 不发回执」。取消前已经传过来的字节不算错——传完了就是传完了。手机下次
+/// 继续（同一 tuple 再 offer）时：本地已有就直接完成，没有就重新传。
+///
+/// 所以这里断言的是这条端到端规则，**不再断言**「取消后本地字节为 0」：
+/// offer 一返回后台下载就开始了，30 字节的小文件可能在 cancel 生效前就下完，
+/// 那句断言是在和后台下载赛跑（#744 在 Windows runner 上红过）。
+/// cancel 与完成谁先到都合法：
+/// - cancel 先到：当下 fetch 报 Cancelled、没有回执；
+/// - 完成先到：cancel 打不中 active 行（GuardMismatch），回执已经在了。
+///
+/// 两种情况下，继续之后都必须收敛到「完成 + 恰好一份回执」。
 #[tokio::test(flavor = "multi_thread")]
-async fn cancelled_active_item_never_receives_a_receipt() {
+async fn cancel_is_honored_now_and_a_later_offer_completes_the_item() {
     let root = tempdir().unwrap();
     let provider_transport =
         IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
@@ -445,39 +457,108 @@ async fn cancelled_active_item_never_receives_a_receipt() {
     );
     let db = paired_db("epoch-current", provider_transport.node_id()).await;
     let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+    let peer = provider_transport.node_id();
     let offer = request(
         "epoch-current",
         "lease-current",
         hash,
         provider_transport.local_addr().to_string(),
     );
-    delivery
-        .offer(provider_transport.node_id(), &offer)
-        .await
-        .unwrap();
-    delivery
-        .cancel(provider_transport.node_id(), &offer)
-        .await
-        .unwrap();
+    let receipt_row = || async {
+        db.flow_receipt(peer.0.as_slice(), "epoch-current", 7)
+            .await
+            .unwrap()
+    };
 
-    assert!(matches!(
-        delivery.fetch(provider_transport.node_id(), &offer).await,
-        Err(DeliveryError::Cancelled)
-    ));
+    delivery.offer(peer, &offer).await.unwrap();
+    match delivery.cancel(peer, &offer).await {
+        Ok(()) => {
+            assert!(matches!(
+                delivery.fetch(peer, &offer).await,
+                Err(DeliveryError::Cancelled)
+            ));
+            assert!(
+                receipt_row().await.is_none(),
+                "a cancelled item must not receive a receipt at cancel time"
+            );
+        }
+        // 完成先到：传完了就是传完了。
+        Err(DeliveryError::GuardMismatch) => assert!(
+            receipt_row().await.is_some(),
+            "cancel only misses the active row when the item already completed"
+        ),
+        Err(other) => panic!("unexpected cancel outcome: {other:?}"),
+    }
+
+    // 手机继续：同一 tuple 再 offer，必须收敛到完成。
+    delivery.offer(peer, &offer).await.unwrap();
+    let receipt = delivery
+        .fetch(peer, &offer)
+        .await
+        .expect("continuing a cancelled item must complete it");
+    assert_eq!(receipt.content_hash, hex::encode(hash));
+    assert!(receipt_row().await.is_some());
+    assert!(db.get_asset(&hash).await.unwrap().is_some());
+}
+
+/// #744 规则的另一半：取消前字节**已经在本地**时，继续不需要再传。
+///
+/// 现实里「继续」是手机重新发起 offer，发起时手机必然在线，所以发送端是在线
+/// 的；但这里让它的存储里**根本没有这份内容**，再把内容直接放进接收端的 blob
+/// 存储，模拟「取消前已经传完」。发送端给不出任何字节，只要最后完成了，就证明
+/// 用的是本地那份。
+#[tokio::test(flavor = "multi_thread")]
+async fn bytes_already_local_complete_a_cancelled_item_without_refetching() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let peer = provider_transport.node_id();
+    let provider_addr = provider_transport.local_addr().to_string();
+    // 在线、在服务，但存储里没有这份内容。
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+
+    let source = root.path().join("source.jpg");
+    let bytes = b"bytes that arrived before the cancel";
+    std::fs::write(&source, bytes).unwrap();
+    let hash = *blake3::hash(bytes).as_bytes();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    receiver_blobs.import(hash, &source).await.unwrap();
     assert_eq!(
         receiver_blobs.local_bytes(hash).await.unwrap(),
-        0,
-        "cancelled work must not fetch"
+        bytes.len() as u64
     );
-    assert!(db
-        .flow_receipt(
-            provider_transport.node_id().0.as_slice(),
-            "epoch-current",
-            7
-        )
-        .await
-        .unwrap()
-        .is_none());
+
+    let db = paired_db("epoch-current", peer).await;
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
+    let offer = request("epoch-current", "lease-current", hash, provider_addr);
+
+    delivery.offer(peer, &offer).await.unwrap();
+    // 谁先到都行（见上一条）；这里只关心继续之后的结果。
+    let _ = delivery.cancel(peer, &offer).await;
+    delivery.offer(peer, &offer).await.unwrap();
+    let receipt = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        delivery.fetch(peer, &offer),
+    )
+    .await
+    .expect("must not hang when the bytes are already local")
+    .expect("bytes already local must complete the item even though the sender has none");
+    assert_eq!(receipt.content_hash, hex::encode(hash));
+    assert!(db.get_asset(&hash).await.unwrap().is_some());
 }
 
 // DESK-11 RED: a successful Flow fetch materializes and receipts a phone's
