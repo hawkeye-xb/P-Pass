@@ -126,12 +126,11 @@ fn windows_junction(target: &Path, link: &Path) -> io::Result<()> {
 /// unix：去掉写位（0o555）。调用方拿到守卫后应先自己验一次「确实建不了」——
 /// 以 root 运行时写位挡不住，那时测试证明不了任何东西，必须判红而不是静默通过。
 ///
-/// Windows：返回 [`io::ErrorKind::Unsupported`]，调用方**跳过并打印原因**。
-/// Windows CI（PR #776）两种做法都没能让测试进程在自己的临时目录里建不了东西：
-/// `icacls /deny Everyone:(AD,WD)` 挡住了新建文件、没挡住新建子目录；
-/// `/inheritance:r /grant:r Everyone:(RX)`（不留任何写入授权）连新建文件都没挡住。
-/// 造不出「不可写目录」就不假装造得出——产品探针本身不分平台（真去建文件），
-/// Windows 上那时该报什么由系统说了算。
+/// Windows（#778）：给目录加一条拒绝**当前用户**新建文件 / 子文件夹的 ACE，守卫
+/// 析构时写回原 DACL。拒绝 ACE 先于一切允许生效，提权的管理员进程（CI runner）也
+/// 拦得住。PR #776 用 `icacls` 命令行试过两种写法都没拦住，所以改为直接调 Win32
+/// 安全 API（与 SEC-07 `restrict_to_owner` 同一套），机制见
+/// `windows::deny_entry_creation`。
 pub fn deny_file_creation(dir: &Path) -> io::Result<CreationDenied> {
     #[cfg(unix)]
     {
@@ -145,20 +144,44 @@ pub fn deny_file_creation(dir: &Path) -> io::Result<CreationDenied> {
     }
     #[cfg(windows)]
     {
-        let _ = dir;
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Windows: no ACL setup made the test process unable to create entries in its own temp folder (PR #776)",
-        ))
+        let original_dacl = crate::windows::deny_entry_creation(dir)?;
+        Ok(CreationDenied {
+            dir: dir.to_path_buf(),
+            original_dacl,
+        })
     }
+}
+
+/// #778：`dir` 里还能不能落下一个文件——直接放，或先建一层子文件夹再放（照片
+/// 落地就是 `create_dir_all` 再建文件）。都落不下才算 `true`。
+///
+/// 为什么不直接断言「建不了子文件夹」：Windows 上持有备份 / 还原特权的进程（提权
+/// 的 CI runner）建文件夹会绕过 ACL（见 `windows::deny_entry_creation`），但继承
+/// 了拒绝的新子文件夹里照样建不了文件。真正要问的是「照片能不能落进来」。
+/// 探测中途建成的子文件夹会删掉，不留痕迹。
+pub fn nothing_can_land_in(dir: &Path) -> bool {
+    if std::fs::File::create(dir.join(".land-probe")).is_ok() {
+        let _ = std::fs::remove_file(dir.join(".land-probe"));
+        return false;
+    }
+    let sub = dir.join(".land-probe-dir");
+    if std::fs::create_dir(&sub).is_err() {
+        return true;
+    }
+    let landed = std::fs::File::create(sub.join("probe")).is_ok();
+    let _ = std::fs::remove_file(sub.join("probe"));
+    let _ = std::fs::remove_dir(&sub);
+    !landed
 }
 
 /// [`deny_file_creation`] 的守卫：析构时恢复原权限。
 pub struct CreationDenied {
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     dir: std::path::PathBuf,
     #[cfg(unix)]
     original: std::fs::Permissions,
+    #[cfg(windows)]
+    original_dacl: Vec<u8>,
 }
 
 impl Drop for CreationDenied {
@@ -166,6 +189,10 @@ impl Drop for CreationDenied {
         #[cfg(unix)]
         {
             let _ = std::fs::set_permissions(&self.dir, self.original.clone());
+        }
+        #[cfg(windows)]
+        {
+            crate::windows::restore_dacl(&self.dir, &self.original_dacl);
         }
     }
 }
@@ -207,27 +234,29 @@ mod tests {
         }
     }
 
-    /// 守卫在手时目录里确实建不了文件；守卫释放后又能建。Windows 上明确报不支持（见函数注释）。
+    /// 守卫在手时目录里落不下任何文件（直接放、或先建子文件夹再放）；守卫释放后又能
+    /// 落下。三个平台都跑（#778 之前 Windows 在这里报不支持）。
     #[test]
     fn denied_dir_refuses_new_files_until_the_guard_drops() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("locked");
         std::fs::create_dir(&dir).unwrap();
-        if cfg!(windows) {
-            let err = deny_file_creation(&dir)
-                .err()
-                .expect("Windows reports unsupported");
-            assert_eq!(err.kind(), io::ErrorKind::Unsupported);
-            return;
-        }
         {
             let _guard = deny_file_creation(&dir).unwrap();
             assert!(
                 std::fs::File::create(dir.join("probe")).is_err(),
                 "a denied folder must refuse a new file (running as root?)"
             );
-            assert!(std::fs::create_dir(dir.join("sub")).is_err());
+            assert!(
+                nothing_can_land_in(&dir),
+                "nothing may land under a denied folder, not even via a new sub-folder"
+            );
         }
+        assert!(
+            !nothing_can_land_in(&dir),
+            "released folder takes files again"
+        );
         std::fs::File::create(dir.join("probe")).unwrap();
+        std::fs::create_dir(dir.join("sub")).unwrap();
     }
 }
