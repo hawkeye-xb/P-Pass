@@ -5,6 +5,10 @@
 //! claim 触发误接管、常驻停机数分钟。这里直接 spawn 二进制验证退出码与
 //! 输出，并断言**没有**任何启动期副作用（IPC 行 / 身份铸造 / 已启动）。
 
+// DESK-33 (#325)：这是开发者手动 / 测试框架跑的集成测试，不是产品进程，
+// clippy.toml 的「禁止直接 Command::new」不适用。
+#![allow(clippy::disallowed_methods)]
+
 use std::process::Command;
 
 fn daemon_bin() -> Command {

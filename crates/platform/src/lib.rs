@@ -8,6 +8,10 @@
 //! platform-independent functions so both are unit-tested everywhere;
 //! only the syscall/process wrappers live behind cfg.
 
+// DESK-33 (#325)：clippy.toml 禁止产品代码直接 `Command::new`；单元测试
+// 里的子进程（拉起测试二进制自身等）不面向用户，统一放行。
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 use std::path::PathBuf;
 
 // DESK-24 (#173)：数据目录搬家。整个模块**不在 cfg 里**——里面全是
@@ -628,6 +632,29 @@ pub enum ResidentRestart {
     NotRegistered,
     /// 本平台没有服务管理器语义——什么都没做。
     Unsupported,
+}
+
+/// DESK-33 (#325) / DESK-54 (#814)：产品代码启动子进程的**唯一入口**。
+///
+/// 等价于 `std::process::Command::new(program)`，只多一件事：在 Windows 上
+/// 带 `CREATE_NO_WINDOW`。桌面壳与 daemon 的 release 构建都是 GUI 子系统，
+/// 直接拉起 console 子系统程序（cmd / taskkill / ffmpeg …）时 Windows 会新
+/// 分配一个控制台——用户看到黑窗一闪（#168 / #787 / #814）。对 GUI 子系统的
+/// 子进程（比如 ppf-daemon sidecar）这个标志没有效果，所以一律带上即可。
+///
+/// 直接写 `Command::new` 会被 clippy 的 `disallowed-methods` 拦下（见仓根
+/// `clippy.toml`）。调用方不用、也不许关心平台差异。
+pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    #[allow(clippy::disallowed_methods)] // 唯一被批准的构造点。
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let mut cmd = std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
 }
 
 /// The adapter for the current platform.

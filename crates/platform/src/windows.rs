@@ -14,7 +14,6 @@
 //! x86_64-pc-windows-msvc`); live smoke runs on the H-09 Windows box.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::{AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Result, ServiceMode};
 
@@ -468,10 +467,8 @@ impl PlatformAdapter for WindowsAdapter {
 /// of waiting for the next login). CREATE_NO_WINDOW keeps a bare console
 /// app from flashing a black window when spawned from the desktop shell.
 fn spawn_windowless(exec: &Path) -> std::io::Result<()> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    Command::new(exec)
-        .creation_flags(CREATE_NO_WINDOW)
+    // DESK-33 (#325)：CREATE_NO_WINDOW 由 crate::command 统一带上。
+    crate::command(exec)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null())

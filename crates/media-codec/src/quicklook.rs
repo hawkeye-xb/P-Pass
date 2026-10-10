@@ -14,7 +14,6 @@
 //! reported as such rather than passed downstream as success.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::{CodecError, Result};
 
@@ -50,7 +49,8 @@ pub fn extract_frame(qlmanage: &Path, video: &Path, out_dir: &Path) -> Result<Pa
             .unwrap_or_else(|| "frame".into())
     ));
     // qlmanage prints its own banner to stdout; keep the pipes quiet.
-    let mut child = Command::new(qlmanage)
+    // DESK-33 (#325)：子进程统一走 platform::command（macOS 上即 Command::new）。
+    let mut child = platform::command(qlmanage)
         .args(["-t", "-s", "1024"])
         .arg("-o")
         .arg(out_dir)
