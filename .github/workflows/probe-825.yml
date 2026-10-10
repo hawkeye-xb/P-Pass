@@ -1,0 +1,78 @@
+# 一次性探针（#825），只在 probe/825-* 分支的 PR 上跑，观察完关闭 PR、删分支，不合入。
+name: probe-825
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: startsWith(github.head_ref, 'probe/825')
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Set Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: tools/setup-rust-toolchain.sh
+      - name: Compute vcpkg cache key
+        id: vkey
+        shell: bash
+        run: echo "key=vcpkg-libheif-core-x64-windows-static-md-${ImageVersion:-unknown}-v1" >> "$GITHUB_OUTPUT"
+      - name: Cache vcpkg (static libheif)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: C:\vcpkg\installed
+          key: ${{ steps.vkey.outputs.key }}
+      - name: Install libheif
+        shell: bash
+        run: /c/vcpkg/vcpkg.exe install "libheif[core]:x64-windows-static-md" --clean-after-build
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+          key: test-windows-cargo-deps-${{ hashFiles('Cargo.lock') }}
+      - name: Fetch ffmpeg
+        shell: bash
+        env:
+          PPF_FFMPEG_FORCE_FETCH: "1"
+        run: |
+          tools/fetch-ffmpeg.sh
+          echo "PPF_FFMPEG=$PWD/tools/ffmpeg/ffmpeg.exe" >> "$GITHUB_ENV"
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+      - name: Build tests once
+        shell: bash
+        env:
+          VCPKG_ROOT: "C:\vcpkg"
+        run: cargo nextest run --no-run
+      - name: Hammer the #825 test under full-suite load
+        shell: bash
+        env:
+          VCPKG_ROOT: "C:\vcpkg"
+        run: |
+          set +e
+          hits=0; runs=0
+          for round in $(seq 1 6); do
+            # 背景负载：整套 workspace 测试（与 test (windows) 同样的并发形态）
+            cargo nextest run --no-fail-fast > load-$round.log 2>&1 &
+            load=$!
+            for i in $(seq 1 12); do
+              runs=$((runs+1))
+              cargo nextest run -p daemon --test flow_delivery --no-fail-fast \
+                -E 'test(cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection)' \
+                > t-$round-$i.log 2>&1
+              if grep -q "#825 evidence" t-$round-$i.log; then
+                hits=$((hits+1))
+                echo "::warning::HIT round=$round i=$i"
+                grep -o "#825 evidence[^)]*)" t-$round-$i.log
+              fi
+            done
+            wait $load
+            grep -o "#825 evidence[^)]*)" load-$round.log && hits=$((hits+1)) && echo "::warning::HIT in load run $round"
+          done
+          echo "SUMMARY: #825 failures $hits over $runs targeted runs + 6 full-suite runs"
