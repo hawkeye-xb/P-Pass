@@ -813,10 +813,14 @@ fn restrict_to_current_user(path: &Path) -> Result<()> {
 /// DACL（按字节拷出），供 [`restore_dacl`] 还原。只给 `test_support` 用。
 ///
 /// 为什么是「拒绝当前用户」：Windows 先按顺序看拒绝 ACE，命中就拒绝，后面的允许
-/// （含 Administrators 组、所有者）都救不回来。只要不带备份语义打开
-/// （`CreateFile` / `CreateDirectory` 都不带），提权的管理员进程也会被拦住——CI
-/// runner 就是这种进程。
-/// 此前（PR #776）用 `icacls` 命令行试过两种写法都没拦住，那条路不经过这里。
+/// （含 Administrators 组、所有者）都救不回来。
+///
+/// ⚠️ **新建子文件夹可能拦不住**（PR #822 的 CI 实测，与 PR #776 的 icacls 现象
+/// 一致）：`CreateDirectoryW` 内部以备份意图打开，持有备份 / 还原特权的进程（提权
+/// 的 CI runner）建文件夹时绕过 ACL；建文件不带这个意图，照样被拦。所以这条 ACE
+/// **可继承**（`SUB_CONTAINERS_AND_OBJECTS_INHERIT`）：就算子文件夹建成了，它也
+/// 继承这条拒绝，里面照样落不下文件——这正是「照片落不进来」的含义，也贴近现实里
+/// 权限向下继承的不可写文件夹。判据见 `test_support::nothing_can_land_in`。
 #[cfg(feature = "test-support")]
 pub(crate) fn deny_entry_creation(dir: &Path) -> std::io::Result<Vec<u8>> {
     use std::os::windows::ffi::OsStrExt as _;
@@ -826,7 +830,9 @@ pub(crate) fn deny_entry_creation(dir: &Path) -> std::io::Result<Vec<u8>> {
         EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER,
         TRUSTEE_W,
     };
-    use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE};
+    use windows_sys::Win32::Security::{
+        ACL, DACL_SECURITY_INFORMATION, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+    };
     use windows_sys::Win32::Storage::FileSystem::{FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY};
 
     let os = |rc: u32| std::io::Error::from_raw_os_error(rc as i32);
@@ -868,7 +874,7 @@ pub(crate) fn deny_entry_creation(dir: &Path) -> std::io::Result<Vec<u8>> {
     let deny = EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY,
         grfAccessMode: DENY_ACCESS,
-        grfInheritance: NO_INHERITANCE,
+        grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
         Trustee: TRUSTEE_W {
             pMultipleTrustee: std::ptr::null_mut(),
             MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,

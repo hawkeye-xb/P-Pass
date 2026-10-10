@@ -193,9 +193,11 @@ async fn health_reports_unwritable_when_this_phones_device_folder_refuses_files(
     assert!(delivery.health(phone).await.library_writable);
     {
         let _denied = deny(&device);
+        // #778：问的是「新的一张照片能不能落进来」，不是「能不能建子文件夹」——
+        // 提权的 Windows runner 建文件夹会绕过 ACL，但新文件夹里照样落不下文件。
         assert!(
-            std::fs::create_dir(device.join("2027")).is_err(),
-            "precondition: the device folder must refuse a new month (running as root?)"
+            platform::test_support::nothing_can_land_in(&device),
+            "precondition: no new photo may land under the device folder (running as root?)"
         );
         assert!(
             !delivery.health(phone).await.library_writable,

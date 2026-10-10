@@ -152,6 +152,28 @@ pub fn deny_file_creation(dir: &Path) -> io::Result<CreationDenied> {
     }
 }
 
+/// #778：`dir` 里还能不能落下一个文件——直接放，或先建一层子文件夹再放（照片
+/// 落地就是 `create_dir_all` 再建文件）。都落不下才算 `true`。
+///
+/// 为什么不直接断言「建不了子文件夹」：Windows 上持有备份 / 还原特权的进程（提权
+/// 的 CI runner）建文件夹会绕过 ACL（见 `windows::deny_entry_creation`），但继承
+/// 了拒绝的新子文件夹里照样建不了文件。真正要问的是「照片能不能落进来」。
+/// 探测中途建成的子文件夹会删掉，不留痕迹。
+pub fn nothing_can_land_in(dir: &Path) -> bool {
+    if std::fs::File::create(dir.join(".land-probe")).is_ok() {
+        let _ = std::fs::remove_file(dir.join(".land-probe"));
+        return false;
+    }
+    let sub = dir.join(".land-probe-dir");
+    if std::fs::create_dir(&sub).is_err() {
+        return true;
+    }
+    let landed = std::fs::File::create(sub.join("probe")).is_ok();
+    let _ = std::fs::remove_file(sub.join("probe"));
+    let _ = std::fs::remove_dir(&sub);
+    !landed
+}
+
 /// [`deny_file_creation`] 的守卫：析构时恢复原权限。
 pub struct CreationDenied {
     #[cfg(any(unix, windows))]
@@ -212,8 +234,8 @@ mod tests {
         }
     }
 
-    /// 守卫在手时目录里确实建不了文件、也建不了子文件夹；守卫释放后两样都又能建。
-    /// 三个平台都跑（#778 之前 Windows 在这里报不支持）。
+    /// 守卫在手时目录里落不下任何文件（直接放、或先建子文件夹再放）；守卫释放后又能
+    /// 落下。三个平台都跑（#778 之前 Windows 在这里报不支持）。
     #[test]
     fn denied_dir_refuses_new_files_until_the_guard_drops() {
         let tmp = tempfile::tempdir().unwrap();
@@ -226,10 +248,14 @@ mod tests {
                 "a denied folder must refuse a new file (running as root?)"
             );
             assert!(
-                std::fs::create_dir(dir.join("sub")).is_err(),
-                "a denied folder must refuse a new sub-folder"
+                nothing_can_land_in(&dir),
+                "nothing may land under a denied folder, not even via a new sub-folder"
             );
         }
+        assert!(
+            !nothing_can_land_in(&dir),
+            "released folder takes files again"
+        );
         std::fs::File::create(dir.join("probe")).unwrap();
         std::fs::create_dir(dir.join("sub")).unwrap();
     }
