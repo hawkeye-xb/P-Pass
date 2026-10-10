@@ -22,7 +22,6 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Bundle
 import android.os.SystemClock
-import android.util.Log
 import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.backup.flow.onFlowAppForeground
 import com.hawkeyexb.ppass.backup.flow.onFlowNetworkChanged
@@ -31,6 +30,7 @@ import com.hawkeyexb.ppass.backup.evaluateDefinitiveEvents
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.reconcileWatchOnProcessStart
 import com.hawkeyexb.ppass.backup.flow.parkFlowNetwork
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.NetworkIdleReaper
@@ -43,7 +43,7 @@ import kotlinx.coroutines.launch
 class PPassApplication : Application() {
     /** One iroh Endpoint for every foreground and Flow delivery connection in this process. */
     val daemonClient = DaemonClient(
-        bindLog = { Log.i("PPassBind", it) },
+        bindLog = { PLog.i("PPassBind", it) },
         // #434：带上持久身份，调用方不必先 bind；空闲关掉之后下次用到自己再绑。
         secretKey = { IdentityStore(filesDir).secretKey() },
     )
@@ -53,7 +53,7 @@ class PPassApplication : Application() {
         NetworkIdleReaper(
             scope = noticeScope,
             park = { daemonClient.closeIfIdle() and parkFlowNetwork() },
-            log = { Log.i("PPassFlow", it) },
+            log = { PLog.i("PPassFlow", it) },
         ).also { reaper -> daemonClient.onBound = reaper::onBound }
     }
 
@@ -68,7 +68,7 @@ class PPassApplication : Application() {
                     this, System.currentTimeMillis(), SystemClock.elapsedRealtime(),
                 )
             }.onFailure { error ->
-                Log.w("PPassLegacyWatch", "legacy watch reconciliation failed; Flow continues", error)
+                PLog.w("PPassLegacyWatch", "legacy watch reconciliation failed; Flow continues", error)
             }
             // #130 第 1 层：进程因任何原因起来（含 Worker 唤醒）都查一次确定事件；排在 MOB-28 对账之后，
             // 这样刚记下的中断这一轮就能看到。
@@ -100,7 +100,7 @@ class PPassApplication : Application() {
                     override fun onLost(network: Network) = changed("lost:$network", lost = true)
                 },
             )
-        }.onFailure { Log.w("PPassFlow", "network callback registration failed", it) }
+        }.onFailure { PLog.w("PPassFlow", "network callback registration failed", it) }
     }
 
     private fun changed(signature: String, lost: Boolean = false) {

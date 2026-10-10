@@ -18,6 +18,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
+import com.hawkeyexb.ppass.log.PLog
 import kotlin.concurrent.thread
 
 class BootWatchReceiver : BroadcastReceiver() {
@@ -36,7 +37,7 @@ class BootWatchReceiver : BroadcastReceiver() {
                     app, System.currentTimeMillis(), SystemClock.elapsedRealtime(),
                 )
             } catch (t: Throwable) {
-                android.util.Log.w("PPassWatch", "boot rearm failed", t)
+                PLog.w("PPassWatch", "boot rearm failed", t)
             } finally {
                 pending.finish()
             }

@@ -12,6 +12,8 @@ mod android_logcat;
 mod blobs;
 mod conninfo;
 mod iroh_impl;
+/// #548：Rust → logcat 出口的脱敏（daemon `redact()` 的日志口径拷贝，跑共用向量）。
+pub mod redact;
 
 pub use android_blobs::{
     ActiveTransferStatus, AndroidBlobsProvider, ImportFallback, MediaImport, ServeError,

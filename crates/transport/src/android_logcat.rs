@@ -14,6 +14,10 @@
 //!
 //! 隐私红线沿用 #544（与桌面端 `crate::QUIET_LOG_DIRECTIVES` 同口径）：iroh 的
 //! net_report 在 WARN 级别直接打印本机公网地址，这里在源头压到 ERROR。
+//!
+//! #548：每一行写进 logcat 前统一过 [`crate::redact::logcat_line`]（与 daemon 日志写入器
+//! 同一套规则、同一份共用向量）——iroh 事件字段里的对端地址、自建 relay 域名、NodeId 在这里
+//! 打码。上面的源头压级是第一道，这里是兜底。
 
 use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -137,14 +141,8 @@ impl Subscriber for LogcatSubscriber {
         let metadata = event.metadata();
         let mut fields = FieldVisitor(String::with_capacity(128));
         event.record(&mut fields);
-        let mut line = format!("{}:{}", metadata.target(), fields.0);
-        if line.len() > MAX_LINE_BYTES {
-            let mut end = MAX_LINE_BYTES;
-            while !line.is_char_boundary(end) {
-                end -= 1;
-            }
-            line.truncate(end);
-        }
+        // #548：唯一写出点——先脱敏再截断（见 `crate::redact::logcat_line`）。
+        let line = crate::redact::logcat_line(metadata.target(), &fields.0, MAX_LINE_BYTES);
         write_log(priority_of(metadata.level()), &line);
     }
 

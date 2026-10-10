@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Android 端：系统日志里不再出现电脑和手机的公网地址、自建中继服务器的域名、照片内容的完整校验值，只记录连接方式等类别信息；与电脑端日志采用同一套脱敏规则（#548）。
+
 ## [2026.10.3] - 2026-10-09
 
 **Android 0.9.11 · macOS 0.9.5**

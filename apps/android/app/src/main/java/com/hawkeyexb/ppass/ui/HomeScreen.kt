@@ -580,7 +580,7 @@ fun HomeScreen(
         // ── 失败才说话（T-083 目标 3 红线）：红卡正文只有人话（当前语言
         // 单语，先说「照片没丢」）；原始错误串（IrohError/异常 dump）绝不
         // 进主文案，只住在默认收起的「查看技术详情」里——troubleTextOf
-        // 是唯一渲染闸门（有单测）；完整原文另走 Log.e(PPassBackup) 的
+        // 是唯一渲染闸门（有单测）；完整原文另走 PLog.e(PPassBackup) 的
         // logcat/bugreport 诊断导出路径（BackupUiStateHolder catch）。
         // 目标 4：普通失败主按钮 = 「再试一次」（重跑即从断点续传）。
         if (state is BackupUiState.Trouble && !pairingLost) {

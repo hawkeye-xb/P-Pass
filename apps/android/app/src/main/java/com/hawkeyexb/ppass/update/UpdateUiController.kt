@@ -12,6 +12,7 @@ import android.content.Context
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.log.PLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -252,7 +253,7 @@ class UpdateUiController(
                     )
                 },
                 onOrphanCleared = { version ->
-                    android.util.Log.i(UPDATE_LOG_TAG, "orphan pending $version cleared: work record gone")
+                    PLog.i(UPDATE_LOG_TAG, "orphan pending $version cleared: work record gone")
                 },
                 check = {
                     val outcome = checkUpdate(versionName, channelFromVersion(versionName), source)

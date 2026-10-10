@@ -35,6 +35,7 @@ import androidx.core.content.ContextCompat
 import com.hawkeyexb.ppass.backup.flow.PairingEpoch
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.PairingStore
 import java.io.File
 import kotlinx.serialization.Serializable
@@ -234,5 +235,5 @@ fun evaluateDefinitiveEvents(context: Context) {
             DefinitiveNoticeStore(app.filesDir),
             SystemDefinitiveEventNotifier(app, NotifyOnFailurePrefs(app.filesDir)),
         ).evaluate(definitiveFactsOf(app))
-    }.onFailure { android.util.Log.w("PPassNotice", "definitive event evaluation failed", it) }
+    }.onFailure { PLog.w("PPassNotice", "definitive event evaluation failed", it) }
 }

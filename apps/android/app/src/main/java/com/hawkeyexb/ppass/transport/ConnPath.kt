@@ -53,12 +53,46 @@ private fun parseV4(host: String): Pair<Int, Int>? {
     return nums[0] to nums[1]
 }
 
+/** 失败时 iroh 手里对端的地址（`Endpoint.remoteAddr`）。只进 [CallTrace.render]，按类别输出。 */
+data class KnownAddr(val relay: String?, val direct: List<String>)
+
+/**
+ * #548：地址 → 类别，不含原文。`v4:lan` / `v4:public` / `v6:lan` / `v6:public`；不是 IP 字面量 → `other`。
+ * lan / public 与 [isLanAddr] 同口径（私网 / 回环 / 链路本地 / ULA 为 lan）。
+ */
+fun addrClass(addr: String): String {
+    val host = hostOf(addr) ?: return "other"
+    val family = when {
+        parseV4(host) != null -> "v4"
+        host.contains(':') && host.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' || it == ':' || it == '.' } -> "v6"
+        else -> return "other"
+    }
+    return family + if (isLanAddr(addr)) ":lan" else ":public"
+}
+
+/** 一组地址 → `[v4:lan,v6:public]`（顺序保留，个数即直连候选数）。 */
+fun addrClasses(addrs: List<String>): String = addrs.joinToString(",", "[", "]") { addrClass(it) }
+
+/**
+ * #548：relay URL → `n0`（n0 的公共 relay，`*.iroh.link`，地域码只到大洲级）/ `custom`（自建 relay，
+ * 域名能识别人）/ `-`（没有）。白名单与桌面脱敏规则（redact-vectors.json）一致。
+ */
+fun relayClass(url: String?): String {
+    if (url.isNullOrBlank()) return "-"
+    val host = url.substringAfter("://").takeWhile { it !in "/:?#[]" }.trimEnd('.').lowercase()
+    return if (host == "iroh.link" || host.endsWith(".iroh.link")) "n0" else "custom"
+}
+
 /**
  * 一次 `callTraced` 的逐阶段记录。时间都是从调用开始算的毫秒；没走到那一步就是 null。
  * - [homeRelayAtStart]：开始时本端 endpoint 地址里的 relay（null = 还没有 home relay）。
  * - [onlineAfterMs]：本端 `online()`（home relay 连上）在这次调用期间何时返回；0 附近 = 开始时已 online。
  * - [connectMs]：`connect()` 返回（QUIC 握手完成）；[roundTripMs]：收到回复。
  * - [peerKnownAddr]：失败时 iroh 手里对端的地址（relay + 直连地址）——看直连地址是不是过期了。
+ *
+ * #548：[render] 进 logcat，只输出类别，不输出原文——地址只给「v4 / v6 × lan / public」，relay 只给
+ * 「n0（公共 relay）/ custom（自建，域名能识别人）」。排障要的是「有没有直连地址、是不是公网、走哪类
+ * relay」，不是具体的 IP 和域名。原生层异常文本（[errorMessage]）原样交出，由日志出口 PLog 统一脱敏。
  */
 data class CallTrace(
     val method: String,
@@ -74,7 +108,7 @@ data class CallTrace(
     val errorClass: String?,
     val errorKind: String?,
     val errorMessage: String?,
-    val peerKnownAddr: String?,
+    val peerKnownAddr: KnownAddr?,
 ) {
     fun render(): String = buildString {
         append("method=").append(method)
@@ -82,18 +116,23 @@ data class CallTrace(
         append(" connectMs=").append(connectMs ?: "-")
         append(" rpcMs=").append(if (connectMs != null && roundTripMs != null) roundTripMs - connectMs else "-")
         append(" online=").append(if (homeRelayAtStart != null) "yes" else "no")
-        append(" homeRelay=").append(homeRelayAtStart ?: "-")
+        append(" homeRelay=").append(relayClass(homeRelayAtStart))
         append(" onlineAfterMs=").append(onlineAfterMs ?: "never")
         append(" path=").append(path?.kind?.wire ?: "-")
-        path?.let { append(" remote=").append(it.remoteAddr ?: "-").append(" rttMs=").append(it.rttMs) }
+        path?.let {
+            val remote = it.remoteAddr?.let { a -> if (it.kind == PathKind.RELAY) relayClass(a) else addrClass(a) }
+            append(" remote=").append(remote ?: "-").append(" rttMs=").append(it.rttMs)
+        }
         append(" paths=").append(pathCount)
-        append(" tokenRelay=").append(tokenRelay ?: "-")
-        append(" tokenDirect=").append(tokenDirectAddrs.joinToString(",", "[", "]") { a -> if (isLanAddr(a)) "$a(lan)" else a })
+        append(" tokenRelay=").append(relayClass(tokenRelay))
+        append(" tokenDirect=").append(addrClasses(tokenDirectAddrs))
         if (errorClass != null) {
             append(" error=").append(errorClass)
             append(" kind=").append(errorKind ?: "-")
             append(" msg=").append(errorMessage ?: "-")
-            append(" peerKnown=").append(peerKnownAddr ?: "-")
+            append(" peerKnown=").append(
+                peerKnownAddr?.let { "relay:${relayClass(it.relay)} direct:${addrClasses(it.direct)}" } ?: "-",
+            )
         }
     }
 }

@@ -26,6 +26,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.log.PLog
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -53,7 +54,7 @@ class UpdateDownloadWorker(
             identity = downloadIdentityOf(version, url, sha256),
             runAttemptCount = runAttemptCount,
             onStaleCleared = {
-                android.util.Log.i(UPDATE_LOG_TAG, "stale update artifacts cleared before downloading $version")
+                PLog.i(UPDATE_LOG_TAG, "stale update artifacts cleared before downloading $version")
             },
             fetch = { resumeFromBytes ->
                 downloadApk(
@@ -77,16 +78,16 @@ class UpdateDownloadWorker(
             },
             onDownloaded = { download ->
                 if (download is ApkDownloadResult.Ok) {
-                    android.util.Log.i(UPDATE_LOG_TAG, download.logLine(url))
+                    PLog.i(UPDATE_LOG_TAG, download.logLine(url))
                     setProgressAsync(workDataOf(PROGRESS_VERIFYING to true))
                 } else {
-                    android.util.Log.w(UPDATE_LOG_TAG, download.logLine(url))
+                    PLog.w(UPDATE_LOG_TAG, download.logLine(url))
                 }
             },
             verify = { file ->
                 ApkVerifier.verifyDownloadedApk(file, sha256, signature).also {
                     if (it != ApkVerifier.Result.Ok) {
-                        android.util.Log.w(UPDATE_LOG_TAG, "apk verify FAILED for $version: $it")
+                        PLog.w(UPDATE_LOG_TAG, "apk verify FAILED for $version: $it")
                     }
                 }
             },
