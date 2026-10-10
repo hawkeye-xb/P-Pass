@@ -371,9 +371,13 @@ internal class FlowEngine(
         when (plan) {
             WakePlan.AwaitsUser -> log.log("waiting for $reason: needs the user, no wake registered")
             is WakePlan.WhenConditionsMet -> scheduler.scheduleWhenConditionsMet(plan.reason)
-            WakePlan.RetryProbes -> {
+            WakePlan.RetryProbes -> if (control.retryLadderSpent()) {
+                // #762：这次故障已经排过一组。不再加排——否则「开始传之后才出错」会每轮重排、无界循环。
+                log.log("waiting for $reason: retry probes already used for this outage; the 5h fallback and events carry on until a success")
+            } else {
                 scheduler.scheduleUnreachableProbes()
-                log.log("waiting for $reason: retry probes registered (every ${UNREACHABLE_PROBE_INTERVAL_LOG})")
+                control.setRetryLadderSpent(true)
+                log.log("waiting for $reason: retry probes registered ($RETRY_PROBES_LOG)")
             }
             is WakePlan.BudgetReset -> {
                 // 唯一名、REPLACE：同一次耗尽算出的是同一个绝对时刻（最近一次授予 + 24h + 余量），重登记不会把它往后推。
@@ -394,8 +398,10 @@ internal class FlowEngine(
      * 没恢复就在探测这一步停下、回到同一个等待（不申请 FGS、不传）。代价是 App 在前台、桌面不健康期间每 30 秒
      * 一次检查（读计数 + hello），只在前台。
      * 闸门：只有**最近一次探测本身就报不健康**时才叫醒。等待原因来自传输时的对端失败、而探测报健康
-     * （健康探针只看 `.ppf/` 能不能建文件，看不到 originals 写不进）时，叫醒的那一轮会一路走到申请 FGS 再整张重传、
-     * 再失败——每 30 秒一次。那种情况交给探测梯（10 分钟一拍）。进程重启后没有健康快照，同样交给探测梯（失败关闭）。
+     * （#763 之后健康探针看得到这台手机的设备目录与失败过的月份文件夹，但还没失败过的某个月份文件夹看不到）时，
+     * 叫醒的那一轮会一路走到申请 FGS 再整张重传、再失败——每 30 秒一次。那种情况交给退避探测。
+     * 进程重启后没有健康快照，同样交给退避探测（失败关闭）。手机这边的意外错误（[WaitReason.UNEXPECTED_ERROR]）
+     * 与桌面无关，心跳不叫醒。
      */
     fun onDesktopReachable(): Job = scope.launch {
         val waiting = control.waitReason() ?: return@launch
@@ -410,6 +416,7 @@ internal class FlowEngine(
             WaitReason.WIFI,
             WaitReason.BATTERY,
             WaitReason.FGS_BLOCKED,
+            WaitReason.UNEXPECTED_ERROR,
             -> false
         }
         if (!wake) return@launch
@@ -434,7 +441,7 @@ internal class FlowEngine(
 
     /**
      * #413：onLost（手机此刻没有任何可用网络）→ 在飞的这张立即判路径失败：停循环（端口尽力发 flow.suspend），
-     * order 保持「传输中」可续传，等待中（桌面不可达）+ 3 次间隔 10 分钟的探测；网络回来时网络回调就是下一次触发。
+     * order 保持「传输中」可续传，等待中（桌面不可达）+ 退避探测（这次故障还没排过的话）；网络回来时网络回调就是下一次触发。
      */
     fun onNetworkLost(): Job = scope.launch {
         if (cycleJob?.isActive != true) return@launch
@@ -450,6 +457,17 @@ internal class FlowEngine(
         pending.clear()
         cycleJob?.cancelAndJoin()
         enterWait(reason, stall)
+    }
+
+    /**
+     * #762：成功了（传成一张 / 一轮正常跑完 / 没东西要传）——这次故障结束：清掉「退避已用」，撤掉这组还没跑的探测。
+     * 下一次出问题算新的一次，重新排一组。
+     */
+    private fun recovered(why: String) {
+        if (!control.retryLadderSpent()) return
+        control.setRetryLadderSpent(false)
+        scheduler.cancelUnreachableProbes()
+        log.log("recovered ($why): retry probes reset and the remaining ones cancelled")
     }
 
     /** 进「等待中」：运行态、持久化的等待原因、唤醒——三件事一起，唤醒只经 [registerWake]。 */
@@ -485,9 +503,10 @@ internal class FlowEngine(
                 } catch (cancelled: CancellationException) {
                     throw cancelled
                 } catch (failure: Exception) {
-                    // 一轮失败（例如存储写入抛错）不能让引擎死掉——下一次触发照常来。但绝不静默：留痕。
+                    // 一轮失败（例如本地数据库写入抛错）不能让引擎死掉。#762：进「等待中」（原因可见）并按退避登记唤醒，
+                    // 不能只清成空闲——那样既不显示原因，也没有任何唤醒，只能等下一次外部触发。
                     log.log("cycle $reasons failed: ${failure.javaClass.simpleName}: ${failure.message}")
-                    settle(null)
+                    settle(WaitReason.UNEXPECTED_ERROR)
                 }
             }
         } finally {
@@ -541,6 +560,7 @@ internal class FlowEngine(
         }
         if (!hasWork(reconcile, askPresence = TriggerReason.PERIODIC in reasons)) {
             log.log("cycle $reasons: nothing to transfer")
+            recovered("nothing left to transfer")
             return settle(null)
         }
         val probeStarted = System.nanoTime()
@@ -581,8 +601,7 @@ internal class FlowEngine(
             log.log("cycle $reasons: foreground service refused: waiting; the next trigger requests it again")
             return settle(WaitReason.FGS_BLOCKED, FgsStall.NOT_GRANTED)
         }
-        // 真要开始传了：探测梯（不可达 / 不健康 / 被拒时登记的）不再需要。
-        scheduler.cancelUnreachableProbes()
+        // #762：拿到 FGS 不等于恢复（开始传之后照样可能失败），退避探测在这里不撤，成功了才撤（[recovered]）。
         _status.value = LoopStatus(phase = LoopPhase.RUNNING)
         setWait(null)
         facts.update { it.copy(doneThisRound = 0) }
@@ -598,6 +617,7 @@ internal class FlowEngine(
         try {
             // 一轮一条推送订阅（契约 §5），随 FGS 一起释放。
             exit = delivery.session { loop(Round(reconcile, userPresent)) }
+            if (exit == null && !control.paused()) recovered("round finished")
         } finally {
             withContext(NonCancellable) {
                 foreground.release()
@@ -971,6 +991,7 @@ internal class FlowEngine(
                 ) {
                     facts.update { it.copy(doneThisRound = it.doneThisRound + 1) }
                     onSettled()
+                    recovered("a photo was confirmed")
                 }
                 bump()
                 StepResult.Next
@@ -1241,7 +1262,7 @@ internal class FlowEngine(
         private val OPEN = OrderState.entries.filter { it.isOpen }.toSet()
 
         /** 在跑时合并进来的这些触发意味着待办可能变了：当场重算（只读元数据），不等这一轮结束。 */
-        private const val UNREACHABLE_PROBE_INTERVAL_LOG = "10min, 3 times"
+        private const val RETRY_PROBES_LOG = "4 probes after 10/20/40/80 min"
 
         private val RECOUNT_WHILE_RUNNING = setOf(
             TriggerReason.MEDIA_CHANGE,

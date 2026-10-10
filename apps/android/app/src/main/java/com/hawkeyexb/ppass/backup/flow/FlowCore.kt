@@ -107,7 +107,7 @@ enum class WaitReason {
      * #409：同时登记一个唤醒（被收走 → 额度复位点之后；被拒 → 探测梯），见 [fgsBlockedWakePlan]。
      */
     FGS_BLOCKED,
-    /** 桌面不可达（探测失败 / 路径失败）：挂网络回调 + 3 次间隔 10 分钟的探测。 */
+    /** 桌面不可达（探测失败 / 路径失败）：挂网络回调 + 退避探测（见 [WakePlan.RetryProbes]）。 */
     DESKTOP_UNREACHABLE,
     /** 桌面存不下（`storage_full`）。 */
     DESKTOP_STORAGE_FULL,
@@ -115,6 +115,11 @@ enum class WaitReason {
     DESKTOP_LIBRARY_UNAVAILABLE,
     /** 桌面索引库等其他写失败（`storage_failed` / 健康检查 `index_ok=false`）。 */
     DESKTOP_STORAGE_ERROR,
+    /**
+     * #762：手机这边一轮跑到一半抛了没分类的异常（本地数据库写失败、相册卷被拔走、代码缺陷……）。
+     * 原因说不清，按偶发处理：退避探测重试，用完不再加排。
+     */
+    UNEXPECTED_ERROR,
 }
 
 /** 对端失败 → 等待原因。 */
@@ -248,8 +253,9 @@ interface ForegroundLease {
 /** 条件不满足时登记的唤醒。引擎只经 [wakePlanOf] 决定登记哪一种（#409 / #652）。 */
 interface WakeScheduler {
     /**
-     * 探测梯（桌面不可达 / 不健康 / FGS 被拒）：3 个一次性任务，间隔 10 分钟。梯子没走完时再登记什么都不做——
-     * 一条梯子最多 3 拍，走完就停（之后由 5h 周期兜底与网络回调接力），反复进入等待不会累加。
+     * 探测梯（桌面不可达 / 不健康 / FGS 被拒 / 手机侧意外错误）：4 个一次性任务，退避 10 / 20 / 40 / 80 分钟。
+     * 梯子没走完时再登记什么都不做——一条梯子最多 4 拍，走完就停（之后由 5h 周期兜底与事件接力）。
+     * #762：一次故障只登记一组由引擎的「退避已用」标记保证，成功时经 [cancelUnreachableProbes] 撤掉剩余。
      */
     fun scheduleUnreachableProbes()
 
@@ -294,7 +300,10 @@ sealed interface WakePlan {
     /** 一个带相应约束（Wi‑Fi / 电量）的一次性任务。 */
     data class WhenConditionsMet(val reason: WaitReason) : WakePlan
 
-    /** 探测梯：3 个一次性任务，间隔 10 分钟（之后由 5h 周期兜底与网络回调接力）。 */
+    /**
+     * 退避探测：一条 4 拍的链，间隔 10 / 20 / 40 / 80 分钟（累计 2.5h），之后由 5h 周期兜底与事件接力。
+     * #762：一次故障只排一组——引擎用持久化标记 [FlowControl.retryLadderSpent] 记着，成功才清。
+     */
     data object RetryProbes : WakePlan
 
     /** 一次性唤醒，[delayMs] 之后（额度复位点之后）。 */
@@ -315,6 +324,7 @@ internal fun wakePlanOf(reason: WaitReason, fgsBlocked: () -> WakePlan): WakePla
     WaitReason.DESKTOP_LIBRARY_UNAVAILABLE,
     WaitReason.DESKTOP_STORAGE_ERROR,
     -> WakePlan.RetryProbes
+    WaitReason.UNEXPECTED_ERROR -> WakePlan.RetryProbes
 }
 
 /**
@@ -444,6 +454,14 @@ interface FlowControl {
 
     /** App 回过前台（系统会在下一次 startForeground 时复位额度）：不再跳过。返回之前是否记着。 */
     fun clearBudgetRefusal(): Boolean = false
+
+    /**
+     * #762：这次故障的退避探测已经排过（**落盘**，独立于 [waitReason]——拿到 FGS 时等待原因会被清掉，
+     * 拿它判断会在「开始传之后才出错」时每轮重排一组，形成无界循环）。只在成功时清。
+     */
+    fun retryLadderSpent(): Boolean
+
+    fun setRetryLadderSpent(spent: Boolean)
 
     /** MOB-100：「已跳过 N 张…不会再重传」横幅的确认水位（ms）。 */
     fun missingSourceAckAt(): Long

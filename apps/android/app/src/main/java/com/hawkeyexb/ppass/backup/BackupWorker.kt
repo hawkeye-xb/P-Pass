@@ -36,19 +36,20 @@ private const val KEY_REASON = "trigger_reason"
 
 /** 0.9.10 及更早：探测梯是 3 条各自独立的 unique work（前缀 + 1..3）。只为撤掉升级前留下的而保留。 */
 const val UNREACHABLE_PROBE_WORK_PREFIX = "ppass-unreachable-probe-"
+private const val LEGACY_UNREACHABLE_PROBE_COUNT = 3
 
 /**
- * #409 / #652：探测梯 = **一条** unique work 链（3 个一次性任务，前一个结束 10 分钟后跑下一个），KEEP。
- * 链上还有没跑完的就不重排——包括正在跑的那一拍自己登记的时候，所以一条梯子最多 3 拍、约 30 分钟，之后由
- * 5h 周期兜底与网络回调接力。旧的三条独立 KEEP 会在某一拍跑完后被下一拍重新插入，梯子自我续期、不会停。
+ * #409 / #652：探测梯 = **一条** unique work 链，KEEP。链上还有没跑完的就不重排——包括正在跑的那一拍自己登记的时候。
+ * 旧的三条独立 KEEP 会在某一拍跑完后被下一拍重新插入，梯子自我续期、不会停。
+ * #762：退避——4 拍，每拍在前一拍结束后 10 / 20 / 40 / 80 分钟跑（累计约 2.5h），之后由 5h 周期兜底与事件接力。
+ * 「一次故障只排一组」不靠 KEEP（拿到 FGS 后出错时梯子已走完或已被撤），靠引擎的持久化标记。
  */
 const val UNREACHABLE_PROBE_LADDER_WORK_NAME = "ppass-unreachable-probe-ladder"
 const val CONSTRAINT_WAKE_WORK_NAME = "ppass-constraint-wake"
 
 /** #522：额度复位唤醒的唯一名。独立的一次性任务——不复用周期任务（WorkManager 会推迟提前强跑的周期任务）。 */
 const val BUDGET_RESET_WAKE_WORK_NAME = "ppass-fgs-budget-reset-wake"
-const val UNREACHABLE_PROBE_COUNT = 3
-const val UNREACHABLE_PROBE_INTERVAL_MINUTES = 10L
+val UNREACHABLE_PROBE_DELAYS_MINUTES = listOf(10L, 20L, 40L, 80L)
 
 /** The switch owns these producers, and deliberately does not own Manual. */
 internal fun autoBackupWorkNames(): List<String> = listOf(
@@ -80,20 +81,20 @@ internal fun backupWorkRequest(
 
 /**
  * #417 的唤醒登记：
- * - 探测梯（桌面不可达；#409 / #652 起也用于桌面不健康、FGS 申请被拒）：一条 unique 链，3 个一次性任务，
- *   每个在前一个结束 10 分钟后跑（≈ 10 / 20 / 30 分钟）。KEEP：梯子没走完就不重排，反复失败既不会把探测往后推，
- *   也不会让梯子自我续期（见 [UNREACHABLE_PROBE_LADDER_WORK_NAME]）。登记与否只由引擎的 `wakePlanOf` 决定。
+ * - 探测梯（桌面不可达；#409 / #652 起也用于桌面不健康、FGS 申请被拒；#762 起也用于手机侧意外错误）：一条 unique 链，
+ *   4 个一次性任务，间隔见 [UNREACHABLE_PROBE_DELAYS_MINUTES]。KEEP：梯子没走完就不重排，反复失败既不会把探测往后推，
+ *   也不会让梯子自我续期（见 [UNREACHABLE_PROBE_LADDER_WORK_NAME]）。登记与否由引擎的 `wakePlanOf` 与「退避已用」标记决定。
  * - 条件不满足：一个带相应约束的一次性任务（Wi‑Fi → UNMETERED，电量 → batteryNotLow）。
  */
 class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
     override fun scheduleUnreachableProbes() {
         val settings = BackupSettings(context.filesDir).load()
-        val probes = List(UNREACHABLE_PROBE_COUNT) {
+        val probes = UNREACHABLE_PROBE_DELAYS_MINUTES.map { delayMinutes ->
             backupWorkRequest(
                 constraintsFor(BackupTier.USER_PRESENT, settings),
                 automatic = false,
                 reason = TriggerReason.UNREACHABLE_PROBE,
-                initialDelayMinutes = UNREACHABLE_PROBE_INTERVAL_MINUTES,
+                initialDelayMinutes = delayMinutes,
             )
         }
         WorkManager.getInstance(context)
@@ -105,7 +106,7 @@ class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
     override fun cancelUnreachableProbes() {
         val wm = WorkManager.getInstance(context)
         wm.cancelUniqueWork(UNREACHABLE_PROBE_LADDER_WORK_NAME)
-        for (i in 1..UNREACHABLE_PROBE_COUNT) wm.cancelUniqueWork("$UNREACHABLE_PROBE_WORK_PREFIX$i")
+        for (i in 1..LEGACY_UNREACHABLE_PROBE_COUNT) wm.cancelUniqueWork("$UNREACHABLE_PROBE_WORK_PREFIX$i")
     }
 
     override fun scheduleWhenConditionsMet(reason: WaitReason) {

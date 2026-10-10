@@ -393,7 +393,7 @@ class C413EngineTest {
         rig.trigger()
         assertEquals(OrderState.TRANSFERRING, rig.state(1))
         assertEquals(WaitReason.DESKTOP_UNREACHABLE, rig.engine.view.value.waitReason)
-        assertEquals("路径失败挂探测（每次进入等待只登记一次）", 2, rig.scheduler.unreachableProbes)
+        assertEquals("#762：同一次故障（中间没成功过）不再加排探测", 1, rig.scheduler.unreachableProbes)
 
         rig.delivery.script += { DeliveryOutcome.SourceMissing }
         rig.trigger()

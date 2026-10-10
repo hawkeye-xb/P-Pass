@@ -1,5 +1,7 @@
 // #409 / #652 追加验收：新增的唤醒必须有界、不形成频繁唤醒。同一等待原因反复进入等待（连续多轮桌面不健康 /
-// FGS 被拒 / 确定耗尽期间的跳过），登记的唤醒不累加：探测梯一条最多 3 拍 × 10 分钟、走完就停；额度复位唤醒 24h 内只有一个。
+// FGS 被拒 / 确定耗尽期间的跳过），登记的唤醒不累加：探测梯一条最多 4 拍（#762 退避：10 / 20 / 40 / 80 分钟）、走完就停；
+// 额度复位唤醒 24h 内只有一个。
+// #762：「开始传之后才出错」也不能重排——一次故障只排一组，成功才清；之后只剩 5h 兜底与事件。
 //
 // JVM 里没有 WorkManager，这里用 [UniqueWorkModel] 按 WorkManager 文档的 unique work 语义建模
 // （KEEP：同名还有没结束的——排着的或正在跑的——就什么都不做，否则插入新的；REPLACE：取消旧的、插入新的；
@@ -17,9 +19,13 @@ import org.junit.Test
 private const val MINUTE = 60_000L
 private const val HOUR = 60 * MINUTE
 
+/** #762：与生产的 UNREACHABLE_PROBE_DELAYS_MINUTES 同值（源文本门禁钉住生产那份）。 */
+private val LADDER_DELAYS = listOf(10L, 20L, 40L, 80L).map { it * MINUTE }
+
 /**
  * WorkManager unique work 的模型（只建本测试用到的三类）：
- * - 探测梯：[ladderAsChain] = true 时是生产写法——一条名叫 ladder 的 KEEP 链（3 步、每步前一步结束后 10 分钟）；
+ * - 探测梯：[ladderAsChain] = true 时是生产写法——一条名叫 ladder 的 KEEP 链（4 步，每步在前一步结束后
+ *   [LADDER_DELAYS] 里对应的时长）；
  *   false 时是 0.9.10 及更早的写法——三条各自独立的 KEEP（`-1/-2/-3`，登记时起 10 / 20 / 30 分钟），留作反证。
  * - 额度复位唤醒：单槽 REPLACE。
  * - 约束唤醒：单槽 REPLACE（这里不让它到点，只数槽位）。
@@ -27,7 +33,7 @@ private const val HOUR = 60 * MINUTE
 private class UniqueWorkModel(private val ladderAsChain: Boolean = true) : WakeScheduler {
     var now = 0L
 
-    private class Work(val name: String, var dueAt: Long?, val reason: TriggerReason) {
+    private class Work(val name: String, var dueAt: Long?, val reason: TriggerReason, val delay: Long = 10 * MINUTE) {
         var running = false
         var finished = false
         val active get() = !finished
@@ -53,7 +59,7 @@ private class UniqueWorkModel(private val ladderAsChain: Boolean = true) : WakeS
 
     override fun scheduleUnreachableProbes() {
         if (ladderAsChain) {
-            keep(LADDER, List(3) { i -> Work(LADDER, if (i == 0) now + 10 * MINUTE else null, TriggerReason.UNREACHABLE_PROBE) })
+            keep(LADDER, LADDER_DELAYS.mapIndexed { i, delay -> Work(LADDER, if (i == 0) now + delay else null, TriggerReason.UNREACHABLE_PROBE, delay) })
         } else {
             for (i in 1..3) keep("$LEGACY$i", listOf(Work("$LEGACY$i", now + 10 * MINUTE * i, TriggerReason.UNREACHABLE_PROBE)))
         }
@@ -86,7 +92,7 @@ private class UniqueWorkModel(private val ladderAsChain: Boolean = true) : WakeS
             run(next.reason)
             next.running = false
             next.finished = true
-            chains[next.name]?.firstOrNull { it.active && it.dueAt == null }?.dueAt = now + 10 * MINUTE
+            chains[next.name]?.firstOrNull { it.active && it.dueAt == null }?.let { it.dueAt = now + it.delay }
         }
         now = until
     }
@@ -107,11 +113,11 @@ class C409WakeBoundedTest {
         trigger(reason)
     }
 
-    // 桌面一直不健康（盘满），App 在后台：进入等待一次之后推 6 小时。探测梯只响 3 拍、都在头 30 分钟内，之后再不自己醒。
+    // 桌面一直不健康（盘满），App 在后台：进入等待一次之后推 6 小时。探测梯只响 4 拍、都在头 2.5 小时内，之后再不自己醒。
     // 期间每 2 分钟一次相册变化（同一个等待原因反复进入）也不会累加：同一时刻排着的探测最多 1 条梯子。
     // 反证：模型换成旧写法（三条独立 KEEP）→ 每拍跑完被下一拍重新插入，6 小时里响几十拍，红。
     @Test
-    fun `a desktop that stays unhealthy gets one ladder of at most three probes, not a stream`() = runTest {
+    fun `a desktop that stays unhealthy gets one ladder of at most four probes, not a stream`() = runTest {
         val model = UniqueWorkModel()
         val rig = rigOn(model)
         rig.photo(1, generation = 1)
@@ -126,22 +132,22 @@ class C409WakeBoundedTest {
             model.advanceTo(t) { rig.runWake(it) }
             rig.trigger(TriggerReason.MEDIA_CHANGE)
             assertEquals(WaitReason.DESKTOP_STORAGE_FULL, rig.control.wait)
-            assertTrue("同一时刻排着的探测最多一条梯子（3 步）：${model.pending("ladder")}", model.pending("ladder").size <= 3)
+            assertTrue("同一时刻排着的探测最多一条梯子（4 步）：${model.pending("ladder")}", model.pending("ladder").size <= 4)
         }
         model.advanceTo(6 * HOUR) { rig.runWake(it) }
 
         val probes = model.fired.filter { it.second == TriggerReason.UNREACHABLE_PROBE }
-        assertEquals("一条梯子最多 3 拍：$probes", 3, probes.size)
-        assertTrue("都在登记后约 30 分钟内：$probes", probes.all { it.first <= 32 * MINUTE })
+        assertEquals("一条梯子最多 4 拍：$probes", 4, probes.size)
+        assertEquals("10 / 30 / 70 / 150 分钟（累计）", listOf(10L, 30L, 70L, 150L).map { it * MINUTE }, probes.map { it.first })
         assertEquals("走完就停，没有排着的", emptyList<Long>(), model.pending("ladder"))
         assertEquals(WaitReason.DESKTOP_STORAGE_FULL, rig.control.wait)
         assertEquals(0, rig.foreground.startForegroundServiceCalls)
         rig.close()
     }
 
-    // 连续多轮 FGS 被拒（说不清原因）：同上，一条梯子最多 3 拍。
+    // 连续多轮 FGS 被拒（说不清原因）：同上，一条梯子最多 4 拍。
     @Test
-    fun `repeated unexplained refusals get one ladder of at most three probes`() = runTest {
+    fun `repeated unexplained refusals get one ladder of at most four probes`() = runTest {
         val model = UniqueWorkModel()
         val rig = rigOn(model)
         rig.photo(1, generation = 1)
@@ -152,8 +158,8 @@ class C409WakeBoundedTest {
         assertEquals(WaitReason.FGS_BLOCKED, rig.control.wait)
         model.advanceTo(6 * HOUR) { rig.runWake(it) }
         val probes = model.fired.filter { it.second == TriggerReason.UNREACHABLE_PROBE }
-        assertEquals("一条梯子最多 3 拍：$probes", 3, probes.size)
-        assertEquals("3 次初始 + 3 拍探测各申请一次，没有更多", 6, rig.foreground.startForegroundServiceCalls)
+        assertEquals("一条梯子最多 4 拍：$probes", 4, probes.size)
+        assertEquals("3 次初始 + 4 拍探测各申请一次，没有更多", 7, rig.foreground.startForegroundServiceCalls)
         assertEquals(emptyList<Long>(), model.pending("ladder"))
         rig.close()
     }
@@ -218,6 +224,90 @@ class C409WakeBoundedTest {
         rig.close()
     }
 
+    // ---------------------------------------------------------------- #762：开始传之后才出错
+
+    // 探测每次都说健康，但每张都在传输中被桌面拒收（#763 修复前「originals 写不进」的样子；修复后仍可能出现在还没失败过的
+    // 月份文件夹上）。App 在后台推 12 小时，期间 5h 兜底照常来两次：
+    // 一次故障只排一组 4 拍，兜底再失败也不重排；FGS 只在「初次 + 4 拍 + 2 次兜底」时申请。
+    // 反证：去掉「退避已用」标记（每次进入等待都登记）→ 拿到 FGS 时梯子已走完、KEEP 拦不住，每拍跑完又排一整组，
+    // 12 小时里响几十拍，红。
+    @Test
+    fun `a transfer that keeps failing after the foreground service gets one ladder, not a loop`() = runTest {
+        val model = UniqueWorkModel()
+        val rig = rigOn(model)
+        rig.photo(1, generation = 1)
+        repeat(100) { rig.delivery.script.addLast { DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, "library_unavailable") } }
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
+        assertEquals(WaitReason.DESKTOP_LIBRARY_UNAVAILABLE, rig.control.wait)
+
+        model.advanceTo(5 * HOUR) { rig.runWake(it) }
+        rig.trigger(TriggerReason.PERIODIC)
+        model.advanceTo(10 * HOUR) { rig.runWake(it) }
+        rig.trigger(TriggerReason.PERIODIC)
+        model.advanceTo(12 * HOUR) { rig.runWake(it) }
+
+        val probes = model.fired.filter { it.second == TriggerReason.UNREACHABLE_PROBE }
+        assertEquals("一次故障只有一组 4 拍：$probes", 4, probes.size)
+        assertEquals("兜底再失败也不重排", emptyList<Long>(), model.pending("ladder"))
+        assertEquals("初次 + 4 拍 + 2 次兜底", 7, rig.foreground.startForegroundServiceCalls)
+        assertEquals(WaitReason.DESKTOP_LIBRARY_UNAVAILABLE, rig.control.wait)
+        assertTrue(rig.logs.any { it.contains("retry probes already used for this outage") })
+        rig.close()
+    }
+
+    // 成功一次 = 这次故障结束：标记清掉、这组还没跑的撤掉；之后再出问题是新的一次，重新排一组。
+    // 反证：去掉 recovered()（不清标记）→ 第二次故障不排梯子，pending 为空，红。
+    @Test
+    fun `a success ends the outage, cancels what is left of the ladder, and the next outage gets a fresh one`() = runTest {
+        val model = UniqueWorkModel()
+        val rig = rigOn(model)
+        rig.photo(1, generation = 1)
+        rig.probeResult = ProbeResult.Unreachable
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
+        assertEquals(4, model.pending("ladder").size)
+        assertTrue(rig.control.ladderSpent)
+
+        // 第一拍（10 分钟）时桌面回来了：传成，标记清掉，后 3 拍撤掉。
+        rig.probeResult = ProbeResult.Reachable("e1")
+        model.advanceTo(15 * MINUTE) { rig.runWake(it) }
+        assertEquals(OrderState.CONFIRMED, rig.state(1))
+        assertEquals(false, rig.control.ladderSpent)
+        assertEquals(emptyList<Long>(), model.pending("ladder"))
+
+        // 一小时后桌面又不在了：新的一次故障，重新排一组。
+        model.advanceTo(75 * MINUTE) { rig.runWake(it) }
+        rig.photo(2, generation = 2)
+        rig.probeResult = ProbeResult.Unreachable
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
+        assertEquals(4, model.pending("ladder").size)
+        rig.close()
+    }
+
+    // #762 原题：一轮跑到一半（已拿到 FGS）抛了没分类的异常，队列里仍有待办 ⇒ 进「等待中」（原因可见）并登记退避探测。
+    // 反证：catch 里改回 settle(null) → 等待原因为 null、没有登记任何唤醒，红。
+    @Test
+    fun `an unexpected error mid-round waits visibly with the ladder registered`() = runTest {
+        val model = UniqueWorkModel()
+        val rig = rigOn(model)
+        rig.photo(1, generation = 1)
+        var reads = 0
+        // 第 1 次读条件在入口（检查阶段），第 2 次在逐张循环里（已拿到 FGS）：这次抛。
+        rig.conditionsHook = { if (++reads == 2) throw IllegalStateException("database or disk is full") else Conditions() }
+        rig.trigger(TriggerReason.MEDIA_CHANGE)
+        assertEquals(1, rig.foreground.startForegroundServiceCalls)
+        assertEquals(WaitReason.UNEXPECTED_ERROR, rig.control.wait)
+        assertEquals(GlobalState.WAITING, rig.engine.view.value.state)
+        assertEquals(4, model.pending("ladder").size)
+        assertEquals(1, rig.pending())
+
+        // 偶发的：下一拍就好了，照常续传、等待原因清掉。
+        rig.conditionsHook = null
+        model.advanceTo(15 * MINUTE) { rig.runWake(it) }
+        assertEquals(OrderState.CONFIRMED, rig.state(1))
+        assertEquals(null, rig.control.wait)
+        rig.close()
+    }
+
     // ---------------------------------------------------------------- 生产写法门禁（源文本）
 
     private fun source(path: String): String {
@@ -235,10 +325,10 @@ class C409WakeBoundedTest {
         val worker = source("backup/BackupWorker.kt")
         val ladder = worker.substringAfter("override fun scheduleUnreachableProbes()").substringBefore("override fun cancelUnreachableProbes()")
         assertTrue(ladder, ladder.contains("beginUniqueWork(UNREACHABLE_PROBE_LADDER_WORK_NAME, ExistingWorkPolicy.KEEP"))
-        assertTrue(ladder, ladder.contains(".then(") && ladder.contains("List(UNREACHABLE_PROBE_COUNT)"))
+        assertTrue(ladder, ladder.contains(".then(") && ladder.contains("UNREACHABLE_PROBE_DELAYS_MINUTES.map"))
+        assertTrue(ladder, ladder.contains("initialDelayMinutes = delayMinutes"))
         assertTrue(ladder, !ladder.contains("enqueueUniqueWork(") && !ladder.contains("REPLACE"))
-        assertTrue(worker.contains("const val UNREACHABLE_PROBE_COUNT = 3"))
-        assertTrue(worker.contains("const val UNREACHABLE_PROBE_INTERVAL_MINUTES = 10L"))
+        assertTrue(worker.contains("val UNREACHABLE_PROBE_DELAYS_MINUTES = listOf(10L, 20L, 40L, 80L)"))
         val cancel = worker.substringAfter("override fun cancelUnreachableProbes()").substringBefore("override fun scheduleWhenConditionsMet(")
         assertTrue("撤梯子；升级前留下的三条也一并撤", cancel.contains("cancelUniqueWork(UNREACHABLE_PROBE_LADDER_WORK_NAME)") && cancel.contains("UNREACHABLE_PROBE_WORK_PREFIX"))
         val budget = worker.substringAfter("override fun scheduleBudgetResetWake(").substringBefore("override fun cancelBudgetResetWake(")

@@ -24,6 +24,8 @@ internal data class FlowControlState(
     /** #522：系统明确说额度耗尽的时刻；-1 = 没有（或之后成功过 / 回过前台）。 */
     val budgetRefusalBoot: Int = -1,
     val budgetRefusalElapsedMs: Long = -1L,
+    /** #762：这次故障的退避探测已经排过；成功才清。 */
+    val retryLadderSpent: Boolean = false,
 )
 
 private fun instantOf(boot: Int, elapsedMs: Long): BootInstant? =
@@ -110,6 +112,12 @@ class FlowControlStore(private val dir: File, private val clock: () -> Long = Sy
         if (load().budgetRefusalElapsedMs < 0) return false
         update { it.copy(budgetRefusalBoot = -1, budgetRefusalElapsedMs = -1L) }
         return true
+    }
+
+    override fun retryLadderSpent(): Boolean = load().retryLadderSpent
+
+    override fun setRetryLadderSpent(spent: Boolean) {
+        if (load().retryLadderSpent != spent) update { it.copy(retryLadderSpent = spent) }
     }
 
     override fun missingSourceAckAt(): Long = load().missingSourceAckAtMs

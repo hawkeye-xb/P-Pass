@@ -47,6 +47,7 @@ class C409WakeInvariantTest {
         WaitReason.DESKTOP_STORAGE_FULL to WakePlan.RetryProbes,
         WaitReason.DESKTOP_LIBRARY_UNAVAILABLE to WakePlan.RetryProbes,
         WaitReason.DESKTOP_STORAGE_ERROR to WakePlan.RetryProbes,
+        WaitReason.UNEXPECTED_ERROR to WakePlan.RetryProbes,
     )
 
     // 反证：把任一个不健康原因映射成 AwaitsUser（#652 的旧行为：settle 后无唤醒）→ 值不等，红；
@@ -110,6 +111,7 @@ class C409WakeInvariantTest {
             WaitReason.DESKTOP_STORAGE_FULL -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = 0L, libraryWritable = false))
             WaitReason.DESKTOP_LIBRARY_UNAVAILABLE -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = null, libraryWritable = false))
             WaitReason.DESKTOP_STORAGE_ERROR -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = null, indexOk = false))
+            WaitReason.UNEXPECTED_ERROR -> rig.probeHook = { throw IllegalStateException("unclassified failure in the cycle") }
         }
         rig.trigger(TriggerReason.MEDIA_CHANGE)
         assertEquals("$reason: 引擎应停在这个等待上", reason, rig.control.wait)
@@ -127,6 +129,7 @@ class C409WakeInvariantTest {
         WaitReason.DESKTOP_STORAGE_FULL to setOf(Wake.PROBES),
         WaitReason.DESKTOP_LIBRARY_UNAVAILABLE to setOf(Wake.PROBES),
         WaitReason.DESKTOP_STORAGE_ERROR to setOf(Wake.PROBES),
+        WaitReason.UNEXPECTED_ERROR to setOf(Wake.PROBES),
     )
 
     // 反证（修复前的 main 上实测红）：FGS_BLOCKED（说不清原因的拒绝）与三个不健康原因登记到的是 NONE。
@@ -229,7 +232,7 @@ class C409WakeInvariantTest {
         rig.trigger(TriggerReason.UNREACHABLE_PROBE)
         assertEquals(OrderState.CONFIRMED, rig.state(1))
         assertNull(rig.control.wait)
-        assertEquals("拿到 FGS 才撤探测梯", 1, rig.scheduler.probesCancelled)
+        assertEquals("#762：传成功才撤探测梯（拿到 FGS 不算恢复）", 1, rig.scheduler.probesCancelled)
         rig.close()
     }
 
@@ -391,7 +394,7 @@ class C409WakeInvariantTest {
     // 心跳在其它等待里仍然不是触发源（FGS 受阻、Wi‑Fi、未配对……）。反证：去掉判断 → probes 增加，红。
     @Test
     fun `the heartbeat stays inert in waits that are not about the desktop`() = runTest {
-        for (reason in listOf(WaitReason.FGS_BLOCKED, WaitReason.WIFI, WaitReason.NOT_PAIRED)) {
+        for (reason in listOf(WaitReason.FGS_BLOCKED, WaitReason.WIFI, WaitReason.NOT_PAIRED, WaitReason.UNEXPECTED_ERROR)) {
             val (rig, _) = waitFor(reason)
             val probes = rig.probes
             val acquires = rig.foreground.acquires
