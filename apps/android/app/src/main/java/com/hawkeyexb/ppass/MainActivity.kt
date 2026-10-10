@@ -51,7 +51,6 @@ import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.work.WorkManager
@@ -107,6 +106,7 @@ import com.hawkeyexb.ppass.ui.PhotosScreen
 import com.hawkeyexb.ppass.ui.TimelineLoader
 import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
 import com.hawkeyexb.ppass.ui.TwoTabs
+import com.hawkeyexb.ppass.transport.UnpairNotice
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.BucketScreen
@@ -574,6 +574,9 @@ fun PPassApp() {
                 when (outcome) {
                     is PairOutcome.Joined -> {
                         pairings.save(outcome.pairing)
+                        // #565：重新配上这台电脑——之前断开时还没送到的旧通知不必再发
+                        // （daemon 按纪元判，送到也不会吊销新配对；这里是不再白跑）。
+                        UnpairNotice.cancel(context, outcome.pairing.daemonNodeId)
                         // MOB-87: 配对成功这个状态跃迁，此前**没有任何人接**。
                         // 补捞只挂在 `LaunchedEffect(backupInterrupted)`（键里
                         // 没有配对状态）和 `ON_RESUME`（会话内重新扫码用户一直
@@ -919,20 +922,11 @@ fun PPassApp() {
                         // 不可达同理。unpair 失败不再阻塞断开，否则本地
                         // pairing 永远清不掉，重新扫码入口（Welcome）永久
                         // 消失（存储端移除设备后的死锁）。
+                        // #565：通知电脑走发件箱——先把「我断开了这次配对」登记成持久任务
+                        // （自带地址与纪元），再清本地；电脑此刻不在线也会在它回来后送到。
                         onDisconnect = {
                             scope.launch {
-                                val peer = try {
-                                    parsePeerAddrToken(s.pairing.daemonAddrToken)
-                                } catch (t: Throwable) {
-                                    null
-                                }
-                                if (peer != null) {
-                                    try {
-                                        withTimeout(5_000) { client.unpair(peer) }
-                                    } catch (_: Throwable) {
-                                        // 尽力而为——本地照断，重扫用新 token 重建。
-                                    }
-                                }
+                                UnpairNotice.enqueue(context, s.pairing)
                                 withContext(Dispatchers.IO) { clearLocalPairing(context, s.pairing) }
                                 screen = Screen.Welcome
                             }
