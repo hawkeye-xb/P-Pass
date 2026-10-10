@@ -292,6 +292,13 @@ fn retiring_a_replaced_endpoint_keeps_the_shared_store_serving() {
 /// NET-29: an endpoint that stays offline is replaced on EVERY failed serve —
 /// every attempt gets a fresh endpoint instead of the same stuck one, and the
 /// deadline stays the same (no widened wait inside one serve).
+///
+/// QA-20 (#570)：「只等一个 deadline」原先用墙钟量整次 serve（`took < timeout * 3`），
+/// 而那段耗时里还混着换新 endpoint 的 bind——没有上限，Windows runner 争用时
+/// 1.57s 超了 1.2s 的预算。现在分开量：
+/// - 内部重试会让 endpoint 多换几代 ⇒ `endpoint_generation() == attempt` 抓得住；
+/// - 等待本身：错误里带着**实际**等待毫秒数（bind 之前取值），要求落在
+///   [deadline, 2×deadline)。bind 不再计入，余量是整整一个 deadline 的定时器迟到。
 #[test]
 fn a_persistently_offline_provider_replaces_its_endpoint_on_each_failed_serve() {
     let dir = tempdir().unwrap();
@@ -309,13 +316,22 @@ fn a_persistently_offline_provider_replaces_its_endpoint_on_each_failed_serve() 
 
     let mut seen = vec![provider.endpoint_node_id().expect("bind provider endpoint")];
     for attempt in 1..=3u64 {
-        let started = std::time::Instant::now();
         let error = provider.serve(import.hash).unwrap_err().to_string();
-        let took = started.elapsed();
         assert!(error.contains("did not become online"), "{error}");
+        let deadline_ms = NET29_ONLINE_TIMEOUT.as_millis();
         assert!(
-            took < NET29_ONLINE_TIMEOUT * 3,
-            "one serve waits one deadline, took {took:?}"
+            error.contains(&format!("ms of {deadline_ms}ms deadline")),
+            "the configured deadline must be the one used: {error}"
+        );
+        let waited_ms: u128 = error
+            .split("waited ")
+            .nth(1)
+            .and_then(|rest| rest.split("ms").next())
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no waited duration in: {error}"));
+        assert!(
+            waited_ms >= deadline_ms && waited_ms < deadline_ms * 2,
+            "one serve waits one deadline ({deadline_ms}ms), waited {waited_ms}ms"
         );
         assert_eq!(provider.endpoint_generation(), attempt);
         let id = provider.endpoint_node_id().expect("bind provider endpoint");
