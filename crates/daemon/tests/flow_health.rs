@@ -147,18 +147,11 @@ fn device_folder(library: &Path, peer: NodeId) -> PathBuf {
         .join(core_index::device_dir(&peer.0))
 }
 
-/// Make `dir` refuse new entries, or `None` (printed, never a silent pass) on
-/// a platform where the test scaffolding cannot do that — see
-/// `platform::test_support::deny_file_creation`.
-fn deny_or_skip(dir: &Path) -> Option<platform::test_support::CreationDenied> {
-    match platform::test_support::deny_file_creation(dir) {
-        Ok(guard) => Some(guard),
-        Err(e) if e.kind() == std::io::ErrorKind::Unsupported => {
-            eprintln!("SKIPPED on this platform: {e}");
-            None
-        }
-        Err(e) => panic!("could not make {} read-only: {e}", dir.display()),
-    }
+/// Make `dir` refuse new entries — see `platform::test_support::deny_file_creation`.
+/// #778：Windows 也造得出来了，不再有「跳过」这条路；造不出来就是红。
+fn deny(dir: &Path) -> platform::test_support::CreationDenied {
+    platform::test_support::deny_file_creation(dir)
+        .unwrap_or_else(|e| panic!("could not make {} refuse new entries: {e}", dir.display()))
 }
 
 /// Everything under `dir`, hidden entries included: a leftover probe file
@@ -199,9 +192,7 @@ async fn health_reports_unwritable_when_this_phones_device_folder_refuses_files(
 
     assert!(delivery.health(phone).await.library_writable);
     {
-        let Some(_denied) = deny_or_skip(&device) else {
-            return;
-        };
+        let _denied = deny(&device);
         assert!(
             std::fs::create_dir(device.join("2027")).is_err(),
             "precondition: the device folder must refuse a new month (running as root?)"
@@ -240,9 +231,7 @@ async fn health_never_creates_a_missing_device_folder_and_probes_its_parent() {
         !device_folder(&library, phone).exists(),
         "health must never create the folder it probes"
     );
-    let Some(_denied) = deny_or_skip(&originals) else {
-        return;
-    };
+    let _denied = deny(&originals);
     assert!(
         !delivery.health(phone).await.library_writable,
         "a first photo needs originals/ to take the device folder"

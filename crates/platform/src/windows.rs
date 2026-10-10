@@ -809,6 +809,135 @@ fn restrict_to_current_user(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// #778：给 `dir` 加一条**拒绝当前用户新建文件 / 子文件夹**的 ACE，返回原来的
+/// DACL（按字节拷出），供 [`restore_dacl`] 还原。只给 `test_support` 用。
+///
+/// 为什么是「拒绝当前用户」：Windows 先按顺序看拒绝 ACE，命中就拒绝，后面的允许
+/// （含 Administrators 组、所有者）都救不回来。只要不带备份语义打开
+/// （`CreateFile` / `CreateDirectory` 都不带），提权的管理员进程也会被拦住——CI
+/// runner 就是这种进程。
+/// 此前（PR #776）用 `icacls` 命令行试过两种写法都没拦住，那条路不经过这里。
+#[cfg(feature = "test-support")]
+pub(crate) fn deny_entry_creation(dir: &Path) -> std::io::Result<Vec<u8>> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
+    use windows_sys::Win32::Security::Authorization::{
+        GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, DENY_ACCESS,
+        EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER,
+        TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE};
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ADD_FILE, FILE_ADD_SUBDIRECTORY};
+
+    let os = |rc: u32| std::io::Error::from_raw_os_error(rc as i32);
+    let wide: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let mut old: *mut ACL = std::ptr::null_mut();
+    let mut sd = std::ptr::null_mut();
+    // SAFETY: wide 是 NUL 结尾的宽字符串；只要 DACL；sd 由系统 LocalAlloc，下面释放，
+    // old 指向 sd 内部。
+    let rc = unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut old,
+            std::ptr::null_mut(),
+            &mut sd,
+        )
+    };
+    if rc != ERROR_SUCCESS {
+        return Err(os(rc));
+    }
+    let original = if old.is_null() {
+        Vec::new()
+    } else {
+        // SAFETY: old 指向 sd 里一个合法 ACL，AclSize 是它的总字节数。
+        let size = unsafe { (*old).AclSize } as usize;
+        // SAFETY: 同上。
+        unsafe { std::slice::from_raw_parts(old.cast::<u8>(), size) }.to_vec()
+    };
+
+    let mut sid = current_user_sid().map_err(std::io::Error::other)?;
+    let deny = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY,
+        grfAccessMode: DENY_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_USER,
+            ptstrName: sid.as_mut_ptr().cast(),
+        },
+    };
+    let mut new: *mut ACL = std::ptr::null_mut();
+    // SAFETY: deny 与它指向的 sid 在调用期间存活；old 仍在 sd 里有效；
+    // SetEntriesInAclW 把拒绝 ACE 按规范顺序排在前面，new 由它 LocalAlloc。
+    let rc = unsafe { SetEntriesInAclW(1, &deny, old, &mut new) };
+    // SAFETY: sd 来自 GetNamedSecurityInfoW，old 此后不再使用。
+    unsafe { LocalFree(sd) };
+    if rc != ERROR_SUCCESS {
+        return Err(os(rc));
+    }
+    // SAFETY: 只改 DACL；new 是上面建好的合法 ACL。
+    let rc = unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            new,
+            std::ptr::null(),
+        )
+    };
+    // SAFETY: new 由 SetEntriesInAclW 分配，此后不再使用。
+    unsafe { LocalFree(new.cast()) };
+    if rc != ERROR_SUCCESS {
+        return Err(os(rc));
+    }
+    Ok(original)
+}
+
+/// #778：把 [`deny_entry_creation`] 返回的原 DACL 写回 `dir`。
+#[cfg(feature = "test-support")]
+pub(crate) fn restore_dacl(dir: &Path, original: &[u8]) {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Security::Authorization::{SetNamedSecurityInfoW, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION};
+
+    let wide: Vec<u16> = dir
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let acl: *const ACL = if original.is_empty() {
+        std::ptr::null()
+    } else {
+        original.as_ptr().cast()
+    };
+    // SAFETY: original 是一个完整 ACL 的字节拷贝（或空 = 原本就没有 DACL），
+    // 调用期间存活；只改 DACL。尽力而为：失败时测试的 tempdir 清理会报出来。
+    unsafe {
+        SetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            acl,
+            std::ptr::null(),
+        )
+    };
+}
+
 fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>> {
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
