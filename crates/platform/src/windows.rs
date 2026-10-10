@@ -295,19 +295,12 @@ impl PlatformAdapter for WindowsAdapter {
         Some("ms-settings:powersleep")
     }
 
+    /// DESK-52 (#787)：直接调系统 API 结束进程，**不再拉起 `taskkill.exe`**。
+    /// taskkill 是 console 子系统程序，从 GUI 子系统的桌面壳里拉起它会闪黑窗
+    /// （DESK-19 #168 那一类）；不启动外部程序，这一类问题就不存在。实现与
+    /// 理由见 [`kill_processes_named`]。
     fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
-        let out = Command::new("taskkill")
-            .args(["/F", "/IM", "ppf-daemon.exe"])
-            .output()
-            .map_err(|e| PlatformError::Io {
-                action: "kill_daemon_process",
-                source: e,
-            })?;
-        taskkill_verdict(
-            out.status.success(),
-            out.status.code(),
-            &String::from_utf8_lossy(&out.stderr),
-        )
+        kill_processes_named(self.daemon_executable_name())
     }
 
     /// DESK-17 (#166)：Windows toast（WinRT `ToastNotificationManager`）。
@@ -1304,37 +1297,180 @@ mod desk22_disable_auto_sleep_tests {
     }
 }
 
-/// DESK-25 (#208)：`taskkill` 用退出码区分「目标进程不存在」和真失败。
-///
-/// 实测（2026-09-18，Windows 11 26200）：进程在 → 0；进程不存在 → 128
-/// `ERROR: The process "x" not found.`；非法参数 → 1。
-///
-/// 128 与 unix 侧 `pkill` 的 1 同义（[`crate::unix::PKILL_NO_MATCH`]）。
-pub const TASKKILL_NOT_FOUND: i32 = 128;
+/// DESK-52 (#787)：TerminateProcess 给被杀进程的退出码。与 `taskkill /F`
+/// 一致用 1——非零，表示「不是自己正常退出的」。
+const KILLED_EXIT_CODE: u32 = 1;
 
-/// 把 `taskkill` 的退出码翻译成结论。
+/// 等被杀进程真正退出的上限。TerminateProcess 只是**发起**终止、立即返回；
+/// 调用方紧接着可能就去拉新的 daemon（DESK-25 #208 的事故形状），所以必须
+/// 等句柄变成 signaled 才算杀掉。
+const KILL_WAIT_MS: u32 = 5_000;
+
+/// 一个匹配进程的处置结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessKill {
+    /// 进程在，已终止并确认退出。
+    Terminated,
+    /// 快照里有它，但动手时已经不在了（快照与 OpenProcess 之间自己退了）。
+    AlreadyGone,
+    /// 没杀掉：权限不足、被安全软件拦、超时未退出。
+    Failed(String),
+}
+
+/// 把每个匹配进程的处置结果汇总成 [`crate::KillOutcome`]。
 ///
-/// 抽成纯函数是刻意的，而且这条判据是**有过事故的**：DESK-25 之前它被
-/// 内联成一个裸 if、没人守着，于是「没杀掉」（权限不足 / 被杀软拦 /
-/// 参数错）被当成杀成功，紧接着就去 spawn 第二个 daemon。
-///
-/// `code == None` 只在被信号终止时出现（Windows 上不会），保守算失败——
-/// 「没法确认」不等于「成功」。
-pub fn taskkill_verdict(
-    success: bool,
-    code: Option<i32>,
-    stderr: &str,
-) -> Result<crate::KillOutcome> {
-    if success {
-        Ok(crate::KillOutcome::Killed)
-    } else if code == Some(TASKKILL_NOT_FOUND) {
-        Ok(crate::KillOutcome::NotRunning)
-    } else {
-        Err(PlatformError::Failed {
-            action: "kill_daemon_process",
-            detail: format!("taskkill 退出码 {:?}（{}）", code, stderr.trim()),
+/// 抽成纯函数，因为这条判据**有过事故**：DESK-25 (#208) 之前「没杀掉」被
+/// 当成杀成功，紧接着就去 spawn 第二个 daemon。所以：
+/// - 一个都没有 / 全都已经不在 ⇒ `NotRunning`（正常结果，不是错误）；
+/// - **任何一个没杀掉 ⇒ `Err`**，哪怕别的杀掉了——还有活着的就不能报成功；
+/// - 其余 ⇒ `Killed`。
+pub fn kill_verdict(results: &[ProcessKill]) -> Result<crate::KillOutcome> {
+    let failures: Vec<&str> = results
+        .iter()
+        .filter_map(|r| match r {
+            ProcessKill::Failed(why) => Some(why.as_str()),
+            _ => None,
         })
+        .collect();
+    if !failures.is_empty() {
+        return Err(PlatformError::Failed {
+            action: "kill_daemon_process",
+            detail: failures.join("; "),
+        });
     }
+    if results.contains(&ProcessKill::Terminated) {
+        Ok(crate::KillOutcome::Killed)
+    } else {
+        Ok(crate::KillOutcome::NotRunning)
+    }
+}
+
+/// DESK-52 (#787)：结束**当前登录会话里**所有映像名为 `exe_name` 的进程。
+///
+/// 为什么不再用 `taskkill /F /IM`：
+/// 1. 它是 console 程序，从桌面壳拉起会闪黑窗——这是 #787 的症状；
+/// 2. 结论要靠解析它的退出码（128 = 没找到），判据依赖一个外部程序的约定；
+/// 3. `/IM` 按名字杀**整台机器**上能杀的同名进程，不分会话。
+///
+/// 现在：进程快照 → 按映像名（不区分大小写）匹配 → 只留与本进程同一
+/// 会话（session）的 → `OpenProcess` + `TerminateProcess` → 等它真的退出。
+/// 只杀本会话的，是因为 daemon 由本用户的 Run key 拉起、跑在本会话里；
+/// 别的会话（快速用户切换的另一个用户）的 daemon 不归我们管。
+fn kill_processes_named(exe_name: &str) -> Result<crate::KillOutcome> {
+    let results: Vec<ProcessKill> = processes_named_in_this_session(exe_name)?
+        .into_iter()
+        .map(terminate_and_wait)
+        .collect();
+    kill_verdict(&results)
+}
+
+/// 本会话里映像名为 `exe_name` 的进程 pid（不含本进程自己）。
+fn processes_named_in_this_session(exe_name: &str) -> Result<Vec<u32>> {
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+
+    fn session_of(pid: u32) -> Option<u32> {
+        let mut session = 0u32;
+        // SAFETY: session 是本栈上的 u32，调用期间有效。
+        (unsafe { ProcessIdToSessionId(pid, &mut session) } != 0).then_some(session)
+    }
+
+    // SAFETY: 无前置条件；失败时返回 INVALID_HANDLE_VALUE。
+    let me = unsafe { GetCurrentProcessId() };
+    let my_session = session_of(me).ok_or_else(|| PlatformError::Failed {
+        action: "kill_daemon_process",
+        // SAFETY: 紧跟失败调用之后读取本线程的错误码。
+        detail: format!("读不到本进程的会话号（Win32 错误 {}）", unsafe {
+            GetLastError()
+        }),
+    })?;
+
+    // SAFETY: 参数是常量；返回值在下面判空并在函数末尾关闭。
+    let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+    if snap == INVALID_HANDLE_VALUE {
+        return Err(PlatformError::Failed {
+            action: "kill_daemon_process",
+            // SAFETY: 紧跟失败调用之后读取本线程的错误码。
+            detail: format!("进程快照失败（Win32 错误 {}）", unsafe {
+                GetLastError()
+            }),
+        });
+    }
+
+    let mut pids = Vec::new();
+    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+    entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+    // SAFETY: snap 是有效快照句柄；entry 已零初始化并填好 dwSize。
+    let mut more = unsafe { Process32FirstW(snap, &mut entry) } != 0;
+    while more {
+        let len = entry
+            .szExeFile
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(entry.szExeFile.len());
+        let name = String::from_utf16_lossy(&entry.szExeFile[..len]);
+        let pid = entry.th32ProcessID;
+        // 读不到会话号的（别的用户的进程常见）不是我们的，跳过。
+        if pid != me && name.eq_ignore_ascii_case(exe_name) && session_of(pid) == Some(my_session) {
+            pids.push(pid);
+        }
+        // SAFETY: 同上。
+        more = unsafe { Process32NextW(snap, &mut entry) } != 0;
+    }
+    // SAFETY: snap 是本函数打开的有效句柄，只关一次。
+    unsafe { CloseHandle(snap) };
+    Ok(pids)
+}
+
+/// 终止一个进程并等它真正退出（最长 [`KILL_WAIT_MS`]）。
+fn terminate_and_wait(pid: u32) -> ProcessKill {
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, ERROR_INVALID_PARAMETER, WAIT_OBJECT_0,
+    };
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    };
+
+    // SAFETY: 参数都是值；返回空句柄表示失败，下面判空。
+    let h = unsafe { OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid) };
+    if h.is_null() {
+        // SAFETY: 紧跟失败调用之后读取本线程的错误码。
+        let code = unsafe { GetLastError() };
+        // pid 已经不存在：快照之后它自己退了。
+        if code == ERROR_INVALID_PARAMETER {
+            return ProcessKill::AlreadyGone;
+        }
+        return ProcessKill::Failed(format!("pid {pid}：打不开进程（Win32 错误 {code}）"));
+    }
+
+    // SAFETY: h 是刚打开的有效句柄，带 PROCESS_TERMINATE。
+    let result = if unsafe { TerminateProcess(h, KILLED_EXIT_CODE) } == 0 {
+        // SAFETY: 紧跟失败调用之后读取本线程的错误码。
+        let code = unsafe { GetLastError() };
+        // 正在退出的进程会让 TerminateProcess 报拒绝访问——它已经在走了，
+        // 看句柄是否已 signaled 来判断。
+        // SAFETY: h 有效，带 PROCESS_SYNCHRONIZE。
+        if unsafe { WaitForSingleObject(h, 0) } == WAIT_OBJECT_0 {
+            ProcessKill::AlreadyGone
+        } else {
+            ProcessKill::Failed(format!(
+                "pid {pid}：TerminateProcess 失败（Win32 错误 {code}）"
+            ))
+        }
+    // SAFETY: 同上。
+    } else if unsafe { WaitForSingleObject(h, KILL_WAIT_MS) } == WAIT_OBJECT_0 {
+        ProcessKill::Terminated
+    } else {
+        ProcessKill::Failed(format!("pid {pid}：{KILL_WAIT_MS}ms 内没有退出"))
+    };
+    // SAFETY: h 是本函数打开的有效句柄，只关一次。
+    unsafe { CloseHandle(h) };
+    result
 }
 
 /// QA-09 迁移（#211）：这组用例原来住在
@@ -1447,64 +1583,109 @@ mod desk24_data_dir_tests {
     }
 }
 
+/// DESK-52 (#787)：结束 daemon 不再拉起外部程序。判据沿用 DESK-25 (#208)
+/// 的口径：没在跑不是错误，没杀掉一定是错误。
 #[cfg(test)]
-mod desk25_taskkill_tests {
+mod desk52_kill_tests {
     use super::*;
     use crate::KillOutcome;
 
+    /// 子进程模式：被 `kills_a_running_process_and_waits_for_it` 以改名后的
+    /// 测试二进制拉起，挂着等被杀。正常跑测试时这个环境变量不存在，立刻返回。
+    const PROBE_ENV: &str = "PPF_DESK52_PROBE";
+
     #[test]
-    fn taskkill_success_is_not_a_failure() {
-        assert_eq!(
-            taskkill_verdict(true, Some(0), "").unwrap(),
-            KillOutcome::Killed
-        );
+    fn kill_probe_child() {
+        if std::env::var_os(PROBE_ENV).is_some() {
+            std::thread::sleep(std::time::Duration::from_secs(60));
+        }
     }
 
-    /// 128 = 进程本来就没在跑 ⇒ 正常结果，不是错误。
     #[test]
-    fn taskkill_not_found_is_not_a_failure() {
+    fn nothing_matched_is_not_running() {
+        assert_eq!(kill_verdict(&[]).unwrap(), KillOutcome::NotRunning);
+    }
+
+    /// 快照里有、动手时已经自己退了 ⇒ 也是没在跑，不是错误。
+    #[test]
+    fn already_gone_is_not_running() {
         assert_eq!(
-            taskkill_verdict(
-                false,
-                Some(TASKKILL_NOT_FOUND),
-                "ERROR: The process \"x\" not found."
-            )
-            .unwrap(),
+            kill_verdict(&[ProcessKill::AlreadyGone]).unwrap(),
             KillOutcome::NotRunning
         );
     }
 
-    /// 1 = 参数 / 权限问题 ⇒ 真失败。放松这条就回到 DESK-25 的原病。
     #[test]
-    fn taskkill_other_nonzero_is_a_failure() {
-        let e = taskkill_verdict(false, Some(1), "拒绝访问").unwrap_err();
-        assert!(e.to_string().contains("退出码 Some(1)"), "{e}");
-    }
-
-    /// 拿不到退出码 ⇒ 保守算失败。
-    #[test]
-    fn taskkill_unknown_exit_status_is_a_failure() {
-        assert!(taskkill_verdict(false, None, "").is_err());
-    }
-
-    /// 真机验一次「128 确实代表进程不存在」——判据的前提是**实测事实**，
-    /// 不是文档。这条挂在一个必然不存在的进程名上。
-    #[test]
-    fn real_taskkill_reports_128_for_a_missing_process() {
-        let out = Command::new("taskkill")
-            .args(["/F", "/IM", "p-pass-no-such-process-zzz.exe"])
-            .output()
-            .expect("taskkill 必须存在于 Windows");
+    fn terminated_is_killed() {
         assert_eq!(
-            out.status.code(),
-            Some(TASKKILL_NOT_FOUND),
-            "stdout={} stderr={}",
-            String::from_utf8_lossy(&out.stdout).trim(),
-            String::from_utf8_lossy(&out.stderr).trim()
+            kill_verdict(&[ProcessKill::AlreadyGone, ProcessKill::Terminated]).unwrap(),
+            KillOutcome::Killed
         );
     }
 
-    /// Windows 的文件名就是基名加 `.exe`——两者漂开会让 taskkill 打空。
+    /// 杀掉一个、另一个没杀掉 ⇒ 必须是 Err。放松这条就回到 DESK-25 的原病：
+    /// 还有活着的却报成功，调用方接着去拉第二个 daemon。
+    #[test]
+    fn any_failure_is_a_failure_even_if_others_were_killed() {
+        let e = kill_verdict(&[
+            ProcessKill::Terminated,
+            ProcessKill::Failed("pid 42：拒绝访问".into()),
+        ])
+        .unwrap_err();
+        assert!(e.to_string().contains("pid 42"), "{e}");
+    }
+
+    /// 真机：一个必然不存在的映像名 ⇒ NotRunning。
+    #[test]
+    fn real_missing_process_is_not_running() {
+        assert_eq!(
+            kill_processes_named("p-pass-no-such-process-zzz.exe").unwrap(),
+            KillOutcome::NotRunning
+        );
+    }
+
+    /// 真机：把测试二进制复制成一个独一无二的名字拉起来，按名字杀掉它。
+    /// 验三件事：报 Killed；返回时它**已经**退出（不是还在退）；再杀一次
+    /// 报 NotRunning。
+    #[test]
+    fn kills_a_running_process_and_waits_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = format!("ppf-desk52-probe-{}.exe", std::process::id());
+        let exe = dir.path().join(&name);
+        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
+        let mut child = std::process::Command::new(&exe)
+            .args([
+                "--exact",
+                "windows::desk52_kill_tests::kill_probe_child",
+                "--nocapture",
+            ])
+            .env(PROBE_ENV, "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        // 等它出现在快照里，免得把「还没起来」测成 NotRunning。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while processes_named_in_this_session(&name).unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "探针进程没起来");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+
+        assert_eq!(kill_processes_named(&name).unwrap(), KillOutcome::Killed);
+        let status = child
+            .try_wait()
+            .unwrap()
+            .expect("kill 返回时进程必须已经退出");
+        assert_eq!(status.code(), Some(KILLED_EXIT_CODE as i32));
+        assert_eq!(
+            kill_processes_named(&name).unwrap(),
+            KillOutcome::NotRunning
+        );
+    }
+
+    /// Windows 的文件名就是基名加 `.exe`——两者漂开会让按名字杀进程打空。
     #[test]
     fn executable_name_is_the_stem_plus_exe() {
         use crate::PlatformAdapter as _;

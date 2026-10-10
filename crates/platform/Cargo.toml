@@ -44,6 +44,10 @@ windows-sys = { version = "0.61", features = [
   "Win32_UI_WindowsAndMessaging",
   # 同上：等提权进程结束并取退出码。
   "Win32_System_Threading",
+  # DESK-52 (#787): 结束 daemon 改走系统 API，不再拉起 taskkill.exe——
+  # CreateToolhelp32Snapshot 列进程，ProcessIdToSessionId 只认本会话的。
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_RemoteDesktop",
 ] }
 
 # DESK-16 (#165)：Windows 的系统缩略图走 COM（IShellItemImageFactory），
