@@ -238,6 +238,8 @@ class DisconnectStateManifestTest {
     /** 构造参数带 File、但不是持久状态的类。新增一行要写明理由。 */
     private val notPersistentState = mapOf(
         "com.hawkeyexb.ppass.ui.VideoState" to "播放器状态（cacheDir 里的临时视频文件），不是持久状态",
+        "com.hawkeyexb.ppass.update.UpdateArtifacts" to
+            "#719 更新下载产物（cacheDir/update/<身份>/），系统可随时清，不是持久状态；生命周期由更新线自己管",
     )
 
     private data class ClassInfo(val name: String, val superName: String?, val initDescriptors: List<String>, val utf8: Set<String>)
