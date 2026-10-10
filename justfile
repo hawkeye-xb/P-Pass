@@ -230,7 +230,8 @@ verify-m1:
     cd "{{ justfile_directory() }}"
     cargo nextest run
     tools/dogfood-smoke.sh /tmp/ppf-verify-m1
-    cargo build --release -p daemon -p testclient
+    # #809：daemon 与外壳版本同源（bundle-desktop-macos.sh 第 5c 步核对）
+    PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" cargo build --release -p daemon -p testclient
     rm -rf /tmp/ppf-rel && mkdir -p /tmp/ppf-rel
     tools/bundle-macos.sh /tmp/ppf-rel target/release/daemon target/release/testclient
     tools/bundle-desktop-macos.sh /tmp/ppf-rel /tmp/ppf-rel

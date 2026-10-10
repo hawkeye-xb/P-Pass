@@ -45,6 +45,7 @@ PREV_TAG, FORMAL_TAG, TEST_TAG, BAD_TAG = "v2099.1.0", "v2099.1.1", "v0.0.1-test
 PREV_VERSIONS = {"desktop": "9.8.0", "android": "9.8.1", "androidVersionCode": 1}
 CUR_VERSIONS = {"desktop": "9.8.1", "android": "9.8.2", "androidVersionCode": 2}  # 两端都涨：android 有说明、macOS 没有
 BAD_VERSIONS = {"desktop": "9.8.1", "android": "9.8.3", "androidVersionCode": 3}  # android 说明不合规（含网址）
+STALE_TAURI_CONF_VERSION = "9.7.0"  # #809：apps/desktop/src-tauri/tauri.conf.json 里那个不随发布改的号
 
 # 构建 job 不在 dry-run 里跑：结果按 tag push 的真实情形给（Windows 在 tag push 上恒跳过）。
 BUILD_RESULTS = {"android": "success", "macos-arm64": "success", "windows-x64": "skipped"}
@@ -128,6 +129,10 @@ def make_origin(d: Path, name: str, commits: list, changelog: str = CHANGELOG) -
     shutil.copytree(ROOT / "tools", src / "tools", ignore=shutil.ignore_patterns("__pycache__", "fixtures"))
     (src / "release").mkdir()
     shutil.copy2(ROOT / "release/legacy-manifest.json", src / "release/legacy-manifest.json")
+    # #809：桌面外壳的 tauri 配置——version 故意是个过期号，构建版本若还从这里来，断言立刻红。
+    conf = src / "apps/desktop/src-tauri/tauri.conf.json"
+    conf.parent.mkdir(parents=True)
+    conf.write_text(json.dumps({"productName": "P-Pass", "version": STALE_TAURI_CONF_VERSION}, indent=2) + "\n")
     (src / "CHANGELOG.md").write_text(changelog)
 
     def commit(versions: dict, notes: dict[str, str], msg: str, *tags: str):
@@ -200,6 +205,129 @@ def check_macos_assets(ck: Check, sc: "Scenario", tag: str, desktop_ver: str):
     got = sorted(p.name for p in d.iterdir() if "macos-arm64" in p.name) if d.exists() else []
     want = sorted(n.format(v=desktop_ver) for n in MACOS_RELEASE_ASSETS)
     ck(got == want, f"#539：release {tag} 的 macOS 资产恰为 {want}（不含 zip）", f"实际 {got}")
+
+
+# ── #809：桌面构建 job 里外壳与 daemon 的版本号同源 ──────────────────────
+#
+# 构建 job 的其余部分（工具链、依赖缓存、签名、公证）不在 dry-run 范围内，只跑与版本号
+# 有关的几步——release.yml 里的**原文**：Resolve desktop version → Build release binaries
+# （daemon 吃 PPF_BUILD_VERSION）→ 外壳那一步（macOS = bundle-desktop-macos.sh 全脚本，
+# Windows = NSIS 那步）。cargo / pnpm / codesign / npm 是 PATH 前置的桩：
+#   - cargo：按 crates/daemon/build.rs 的规则把 PPF_BUILD_VERSION 烤进假 daemon
+#     （`--version` 打印 `P-Pass daemon <号>`；没注入就是 CARGO_PKG_VERSION 的占位号）；
+#   - pnpm tauri build|bundle：按 tauri CLI 的规则把 `--config` 合并到 tauri.conf.json 上，
+#     记下外壳拿到的 version（= 编进壳的 package_info / Info.plist 的 CFBundleShortVersionString）。
+# 判据：外壳（build 与 bundle 两次调用）== daemon == tools/release-version.sh desktop。
+
+CARGO_PKG_PLACEHOLDER = "0.0.0-cargo-pkg-version"
+
+BUILD_STUB_CARGO = r"""#!/usr/bin/env bash
+# dry-run 桩：cargo build → 假 daemon（版本规则同 crates/daemon/build.rs + ipc::daemon_version）
+set -euo pipefail
+v="${PPF_BUILD_VERSION:-}"; v="$(printf '%s' "$v" | tr -d '[:space:]')"; v="${v#v}"
+[ -n "$v" ] || v="__PLACEHOLDER__"
+mkdir -p target/release
+for f in daemon daemon.exe testclient.exe; do
+  printf '#!/bin/sh\necho "P-Pass daemon %s"\n' "$v" > "target/release/$f"; chmod +x "target/release/$f"
+done
+echo "$v" >> "$DRYRUN_REC/daemon"
+""".replace("__PLACEHOLDER__", CARGO_PKG_PLACEHOLDER)
+
+BUILD_STUB_PNPM = r'''#!/usr/bin/env python3
+# dry-run 桩：pnpm install（无操作）/ pnpm tauri build|bundle（记录外壳拿到的 version，造假产物）
+import json, os, plistlib, shutil, sys
+from pathlib import Path
+a = sys.argv[1:]
+if not a or a[0] != "tauri":
+    sys.exit(0)
+sub, rest = a[1], a[2:]
+conf = json.loads(Path("src-tauri/tauri.conf.json").read_text())
+def merge(dst, src):  # json merge patch（tauri CLI 的 --config 语义）
+    for k, v in src.items():
+        if isinstance(v, dict) and isinstance(dst.get(k), dict):
+            merge(dst[k], v)
+        elif v is None:
+            dst.pop(k, None)
+        else:
+            dst[k] = v
+i = 0
+while i < len(rest):
+    if rest[i] in ("-c", "--config"):
+        val = rest[i + 1]
+        merge(conf, json.loads(Path(val).read_text() if os.path.isfile(val) else val))
+        i += 2
+    else:
+        i += 1
+ver = conf.get("version", "")
+rec = Path(os.environ["DRYRUN_REC"])
+with open(rec / f"shell-{sub}", "a") as f:
+    f.write(ver + "\n")
+bundle_dir = Path("src-tauri/target/release/bundle")
+if sub == "bundle":
+    app = bundle_dir / "macos/P-Pass.app"
+    (app / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
+    (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": ver}))
+    shutil.copy2("src-tauri/binaries/ppf-daemon-aarch64-apple-darwin", app / "Contents/MacOS/ppf-daemon")
+elif sub == "build" and "--no-bundle" not in rest:
+    (bundle_dir / "nsis").mkdir(parents=True, exist_ok=True)
+    (bundle_dir / "nsis" / f"P-Pass_{ver}_x64-setup.exe").write_bytes(b"fake")
+'''
+
+# job → 外壳那一步（release.yml 里的 step 名）。改名时这里跟着改，否则 dry-run 直接报错。
+SHELL_STEPS = {"macos-arm64": "Bundle desktop .app + dmg (H-10c)", "windows-x64": "Build desktop shell installer (NSIS, T7)"}
+BUILD_VERSION_STEPS = ["Resolve desktop version (UPD-13)", "Build release binaries"]
+
+
+def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
+    """在 sc 的临时仓库上跑两个桌面构建 job 的版本相关步骤，断言外壳 == daemon == want。"""
+    stub = sc.dir / "build-bin"
+    stub.mkdir(exist_ok=True)
+    for name, body in (("cargo", BUILD_STUB_CARGO), ("pnpm", BUILD_STUB_PNPM),
+                       ("npm", "#!/bin/sh\nexit 0\n"), ("codesign", "#!/bin/sh\nexit 0\n")):
+        (stub / name).write_text(body)
+        (stub / name).chmod(0o755)
+    runner = Runner(sc.dir / "build-jobs", origin=sc.runner.origin, artifacts=sc.artifacts, stub_bin=stub,
+                    repository=REPO, base_path=os.environ["PATH"])
+    github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
+              "token": "dry-run-token", "workflow_sha": sc.sha, "event": {}}
+    for job_id, shell_step in SHELL_STEPS.items():
+        rec = sc.dir / f"build-rec-{job_id}"
+        rec.mkdir()
+        rel = sc.dir / f"build-rel-{job_id}"
+        steps = wf["jobs"][job_id]["steps"]
+        by_name = {s.get("name"): s for s in steps}
+        missing = [n for n in BUILD_VERSION_STEPS + [shell_step] if n not in by_name]
+        if missing:
+            raise SimError(f"{job_id} 找不到步骤 {missing}（#809 dry-run 跟着 release.yml 的 step 名走）")
+        checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+        picked = [checkout] + [by_name[n] for n in BUILD_VERSION_STEPS]
+        if job_id == "macos-arm64":
+            # 代替 bundle-macos.sh（dylib 收集 / rpath 改写不在范围内）：daemon + lib/ 摆进 rel 目录
+            picked.append({"name": "(dry-run) stage sidecar", "run": f"mkdir -p {rel}/lib && cp target/release/daemon {rel}/daemon"})
+            s = dict(by_name[shell_step])
+            s["run"] = s["run"].replace("/tmp/rel", str(rel))  # release.yml 写死 /tmp/rel；沙箱里换成临时目录
+            picked.append(s)
+        else:
+            picked.append(by_name[shell_step])
+        mini = {"env": {**(wf.get("env") or {}), "DRYRUN_REC": str(rec)},
+                "jobs": {job_id: {"steps": picked}}}
+        r = runner.run_job(mini, job_id, github=github, inputs={}, secrets={}, needs={})
+        resolved = r.steps[1].outputs.get("name", "") if len(r.steps) > 1 else ""
+
+        def read(name: str) -> list[str]:
+            p = rec / name
+            return p.read_text().split() if p.exists() else []
+
+        daemon, shell_build, shell_bundle = read("daemon"), read("shell-build"), read("shell-bundle")
+        ck(r.result == "success", f"#809 {job_id} @ {tag}：版本相关构建步骤全部成功", r.log)
+        ck(resolved == want, f"#809 {job_id} @ {tag}：release-version.sh desktop = {want}", f"实际 {resolved!r}")
+        ck(daemon == [want], f"#809 {job_id} @ {tag}：daemon 版本 = {want}", f"实际 {daemon}")
+        # build（编进壳的 package_info，shell.announce / getVersion() 报的就是它）每一次都得是 want
+        ck(shell_build != [] and set(shell_build) == {want}, f"#809 {job_id} @ {tag}：外壳二进制版本（tauri build）= {want}",
+           f"实际 {shell_build}（tauri.conf.json 里是 {STALE_TAURI_CONF_VERSION}）")
+        if job_id == "macos-arm64":
+            ck(shell_bundle == [want], f"#809 {job_id} @ {tag}：外壳 Info.plist 版本（tauri bundle）= {want}",
+               f"实际 {shell_bundle}（tauri.conf.json 里是 {STALE_TAURI_CONF_VERSION}）")
 
 
 # ── 跑 workflow ────────────────────────────────────────────────────────
@@ -348,6 +476,7 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
     for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest"):
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, FORMAL_TAG, dv)
+    build_versions(ck, sc, rel, FORMAL_TAG, dv)
     job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
     step_is(ck, jobs, "create-draft", "Version bump gate (UPD-13)", "success")
     s = step_is(ck, jobs, "create-draft", "Release notes presence (#741, warn only)", "success")
@@ -402,6 +531,7 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
     for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest"):
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, TEST_TAG, v)
+    build_versions(ck, sc, rel, TEST_TAG, v)
     job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
     step_is(ck, jobs, "create-draft", "Version bump gate (UPD-13)", "skipped")
     step_is(ck, jobs, "create-draft", "Release notes presence (#741, warn only)", "skipped")
