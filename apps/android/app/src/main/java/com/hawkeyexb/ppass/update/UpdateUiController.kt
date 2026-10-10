@@ -167,7 +167,7 @@ class UpdateUiController(
     private val _state = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
     val state: StateFlow<UpdateUiState> = _state.asStateFlow()
 
-    /** 一过性反馈（已是最新 / 检查失败 / 已更新到 vX）——Snackbar 渲染。 */
+    /** 一过性反馈（已是最新 / 检查失败）——Snackbar 渲染。 */
     val notices = MutableSharedFlow<UpdateNotice>(extraBufferCapacity = 4)
 
     private val workManager = WorkManager.getInstance(context)
@@ -196,7 +196,7 @@ class UpdateUiController(
 
     /**
      * 升级回执：上次退出前的版本 ≠ 当前版本 = APK 真的换上来了——
-     * 给用户一句确认，并清掉上个版本留下的下载产物与待办。
+     * 清掉上个版本留下的下载产物与待办（#808 起不再弹提示）。
      */
     private fun receiptCheck() {
         val seen = prefs.lastSeenVersion()
@@ -208,7 +208,7 @@ class UpdateUiController(
             currentWorkId.value = null
             UpdateDownloadWorker.cancel(context)
             discardUpdateArtifacts(context.cacheDir)
-            notices.tryEmit(UpdateNotice(R.string.update_installed_snackbar, versionName))
+            // #808：不再弹「已更新到 vX」——少打扰；要确认时设置里看版本号。
         }
     }
 

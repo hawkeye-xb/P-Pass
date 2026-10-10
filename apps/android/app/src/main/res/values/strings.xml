@@ -75,7 +75,6 @@
     <string name="update_install_now">Install now</string>
     <string name="update_installing_title">Installing…</string>
     <string name="update_installing_body">Confirm in the system prompt to finish the update.</string>
-    <string name="update_installed_snackbar">Updated to v%1$s</string>
     <string name="update_close">Close</string>
     <string name="notif_channel_update">App updates</string>
     <string name="notif_update_download_title">Downloading P-Pass update</string>
