@@ -1,5 +1,8 @@
 # DOG-03 半自动 Case 操作单
 
+> **已并入 [full-regression-sop.md](full-regression-sop.md)**：正式发版前的回归按那份执行，本文只作历史用例出处。
+
+
 > 配 `tools/dogfood/night{1,2,3}.sh` 使用。全自动 case 由 night 脚本注入、
 > morning-report.sh 对账；下列 case 需要人手（10–30 秒/个）。
 
