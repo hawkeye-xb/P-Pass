@@ -1010,14 +1010,32 @@ impl Router {
     /// stop — no owner action needed (product file §二双端共通). The
     /// device row is marked revoked; hello is denied from then on, and
     /// a fresh owner-issued token can rejoin (T-041 rejoin door).
+    ///
+    /// #565：可选参数 `pairing_epoch` = 手机要结束的**那一次**配对。带了就做
+    /// 条件吊销（纪元不一致 = 那次配对已被新配对取代或早已结束，什么都不动，
+    /// 照样答 ok——手机要的「这次配对已结束」已经成立）；不带 = 旧手机，保持
+    /// 原来的无条件吊销。
     async fn handle_unpair(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        let epoch = req.params.get("pairing_epoch").and_then(|v| v.as_str());
         // DEV-03：记下是**设备自己**断的。业主没做过这个决定，所以这台设备
         // 要留在「家人与设备」里标「已断开」，而不是凭空消失。
-        match self
-            .db
-            .revoke(&peer.0, storage::RevokedBy::Device, unix_ms_now())
-            .await
-        {
+        let revoked = match epoch {
+            Some(epoch) => {
+                self.db
+                    .revoke_pairing(&peer.0, epoch, storage::RevokedBy::Device, unix_ms_now())
+                    .await
+            }
+            None => {
+                self.db
+                    .revoke(&peer.0, storage::RevokedBy::Device, unix_ms_now())
+                    .await
+            }
+        };
+        match revoked {
+            Ok(false) if epoch.is_some() => {
+                tracing::info!("#565: device.unpair for a pairing epoch that is no longer current; nothing revoked");
+                Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": false }))
+            }
             Ok(_) => {
                 let _ = self
                     .db

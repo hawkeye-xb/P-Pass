@@ -188,6 +188,31 @@ impl Db {
         Ok(res.rows_affected() > 0)
     }
 
+    /// #565：只结束**指定的那一次配对**——纪元一致且尚未吊销时才吊销。
+    ///
+    /// 设备身份在手机断开后保留，同一台手机可能已经重新配对；此时迟到的
+    /// 「我断开了」通知带的是旧纪元，不许把新配对一起吊销（条件更新）。
+    /// 返回是否真的吊销了一行。
+    pub async fn revoke_pairing(
+        &self,
+        node_id: &[u8],
+        pairing_epoch: &str,
+        by: RevokedBy,
+        at_ms: i64,
+    ) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE device SET revoked = 1, revoked_at = ?, revoked_by = ?
+             WHERE node_id = ? AND revoked = 0 AND pairing_epoch = ?",
+        )
+        .bind(at_ms)
+        .bind(by.as_str())
+        .bind(node_id)
+        .bind(pairing_epoch)
+        .execute(self.pool())
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// DEV-03：从审计流回填历史吊销行的来源。
     ///
     /// 与 migration `0008` 里那段 SQL 是同一份判据——提成方法是为了能被
