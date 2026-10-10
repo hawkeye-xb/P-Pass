@@ -339,6 +339,18 @@ impl PlatformAdapter for WindowsAdapter {
     /// 路径要先转成 UTF-16 + NUL 结尾的宽字符串（Win32 W 系列 API 的要求）。
     /// 目录不存在或无权限时 API 返回 0，此处回 `None`——调用方序列化成 null，
     /// 绝不编造数字。
+    /// DAE-11 (#804)：`GetSystemPowerStatus` 的 `ACLineStatus`。不需要权限、
+    /// 不起进程、与系统语言无关。判据见 [`ac_line_verdict`]。
+    fn on_external_power(&self) -> Option<bool> {
+        use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+        let mut status: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+        // SAFETY: status 是本栈上零初始化的结构体，调用期间有效。
+        if unsafe { GetSystemPowerStatus(&mut status) } == 0 {
+            return None;
+        }
+        ac_line_verdict(status.ACLineStatus)
+    }
+
     fn volume_stats(&self, path: &Path) -> Option<crate::VolumeStats> {
         use std::os::windows::ffi::OsStrExt as _;
         use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
@@ -474,6 +486,19 @@ fn spawn_windowless(exec: &Path) -> std::io::Result<()> {
         .stdin(std::process::Stdio::null())
         .spawn()?;
     Ok(())
+}
+
+/// DAE-11 (#804)：`SYSTEM_POWER_STATUS.ACLineStatus` → 是否插电。
+///
+/// 文档值：0 = 用电池，1 = 接着外部电源，255 = 未知。没有电池的台式机报 1。
+/// 文档外的值一律当未知——**不知道就说不知道**，交给调用方定策略。
+/// 纯函数：真实读数在 CI 的虚拟机上不可控，判据本身可以在任何地方锁住。
+pub fn ac_line_verdict(ac_line_status: u8) -> Option<bool> {
+    match ac_line_status {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
 }
 
 /// Registry value names of the plugged-in / on-battery standby timeout.
@@ -1717,6 +1742,38 @@ mod desk24_data_dir_tests {
 
 /// DESK-52 (#787)：结束 daemon 不再拉起外部程序。判据沿用 DESK-25 (#208)
 /// 的口径：没在跑不是错误，没杀掉一定是错误。
+/// DAE-11 (#804)：插电判据。
+#[cfg(test)]
+mod dae11_external_power_tests {
+    use super::*;
+
+    #[test]
+    fn documented_ac_line_values_map_to_plugged_unplugged_unknown() {
+        assert_eq!(ac_line_verdict(1), Some(true));
+        assert_eq!(ac_line_verdict(0), Some(false));
+        assert_eq!(ac_line_verdict(255), None);
+    }
+
+    /// 文档外的值不许被猜成插电或用电池。
+    #[test]
+    fn undocumented_values_are_unknown() {
+        for v in 2..=254u8 {
+            assert_eq!(ac_line_verdict(v), None, "ACLineStatus={v}");
+        }
+    }
+
+    /// 真调一次系统 API：不许 panic。CI 虚拟机上读数不可控（可能报 255），
+    /// 所以只打印、不断言具体值；真机插拔的证据在 PR 里。
+    #[test]
+    fn real_call_does_not_panic() {
+        use crate::PlatformAdapter as _;
+        println!(
+            "on_external_power = {:?}",
+            WindowsAdapter::new().on_external_power()
+        );
+    }
+}
+
 #[cfg(test)]
 mod desk52_kill_tests {
     use super::*;

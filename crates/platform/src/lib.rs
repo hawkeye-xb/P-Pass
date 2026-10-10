@@ -351,6 +351,19 @@ pub trait PlatformAdapter: Send + Sync {
         None
     }
 
+    /// DAE-11 (#804)：电脑此刻是否接着外部电源（插电）。
+    ///
+    /// 用途：daemon 运行且插电时一直持有「别因空闲而睡」的声明，拔电就释放、
+    /// 照常睡（验收人 2026-10-10 拍板，只管插电）。没有电池的台式机算插电。
+    ///
+    /// `None` = 不知道（本平台没实现，或系统答不出来）。**不许**把不知道编成
+    /// `Some(..)`：插电与否决定要不要阻止睡眠，猜错哪边都是用户可见的后果，
+    /// 怎么处理「不知道」由调用方（daemon）定。默认实现是 `None`，与
+    /// [`Self::installed_bundle_version`] 同一口径。
+    fn on_external_power(&self) -> Option<bool> {
+        None
+    }
+
     /// 入参是**生效的** data dir（由调用方解析 env / 平台约定后给出），
     /// 因为一次性 daemon 靠 `PPF_DATA_DIR` 做隔离，日志不跟着走就会污染
     /// 真实日志文件。默认实现返回 `None`——既无 launchd 托管也无 Run 键的
