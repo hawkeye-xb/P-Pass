@@ -211,8 +211,19 @@ async fn moving_a_file_inside_originals_keeps_it_indexed() {
     let dest = album.join("IMG_E.jpg");
     std::fs::rename(&start, &dest).unwrap();
 
-    // 给 watcher 两个防抖窗口收敛，然后断言：文件还在盘上，索引也还在。
-    tokio::time::sleep(Duration::from_millis(1600)).await;
+    // #823：等索引**收敛**到新位置，而不是固定睡 1.6s 再赌它已经收敛——
+    // runner 争用时 watcher 事件、防抖、入库会多走一会儿，固定睡眠就先到了。
+    // 上限仍是 wait_until 的 10s；收敛之后再逐条断言最终状态。
+    wait_until(
+        || async {
+            f.db.list_asset_paths()
+                .await
+                .map(|p| p.len() == 1 && p[0].1 == "originals/我的婚礼/IMG_E.jpg")
+                .unwrap_or(false)
+        },
+        "index follows the in-library move",
+    )
+    .await;
     assert!(dest.exists(), "用户放的位置不该被我们动");
     assert_eq!(
         asset_count(&f).await,
