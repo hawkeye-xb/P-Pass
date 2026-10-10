@@ -17,12 +17,13 @@
     <string name="scan_manual_link">Can\'t scan? Enter the pairing string instead</string>
 
     <string name="scan_manual_title">Enter pairing string</string>
-    <string name="scan_manual_body">On the computer\'s "Add device" screen, tap "Can\'t scan? Copy pairing string", send it to this phone, and paste it below.</string>
-    <string name="scan_manual_placeholder">PP-XXXX-XXXX-XXXX-XXXX</string>
+    <string name="scan_manual_body">On the computer\'s \"Add a device\" card, click \"Can\'t scan? Copy the pairing string\", send it to this phone, and paste it below.</string>
+    <!-- #739：示意真实配对串的开头（PeerAddrToken 只认 ppf://pair?），中英一致。 -->
+    <string name="scan_manual_placeholder">ppf://pair?node=…</string>
     <string name="scan_manual_paste">Paste</string>
     <string name="scan_manual_note">The pairing string is valid for 10 minutes, same as the QR code.</string>
     <string name="scan_manual_submit">Connect</string>
-    <string name="scan_manual_invalid">That doesn\'t look like a P-Pass pairing code</string>
+    <string name="scan_manual_invalid">That doesn\'t look like a P-Pass pairing string</string>
     <string name="cancel">Cancel</string>
 
     <!-- Pairing -->
