@@ -6,57 +6,55 @@
 #
 # Usage: tools/fetch-ffmpeg.sh [dest_dir]   (default: tools/ffmpeg)
 #   PPF_FFMPEG_FORCE_FETCH=1  ignore any ffmpeg already on PATH and fetch the
-#                             pinned build anyway (CI uses this — see below).
+#                             verified build anyway (CI uses this — see below).
 #
-# ── 供应链口径：三条分支全部钉死版本 + 校验和 ─────────────────────────
-# SEC-06 (#252) 钉了 Windows，SEC-08 (#363) 补上 macOS 与 Linux。
-# 在此之前三条分支都是**滚动地址**（gyan.dev / evermeet getrelease /
-# johnvansickle release-*-static）：没有版本号、没有校验和，每次都拉一个
-# 「当时最新」的可执行文件下来并执行它。与本仓「action 全 pin 40 位 SHA、
-# actionlint 下载都要 sha256sum -c」的口径直接冲突。
+# ── 供应链口径 ──────────────────────────────────────────────────────────
+# SEC-06 (#252) 之前三条分支都是**无版本、无校验**的滚动地址（gyan.dev /
+# evermeet getrelease / johnvansickle release-*-static），每次拉一个「当时
+# 最新」的可执行文件下来就执行。SEC-06 / SEC-08 (#363) 把三条都改成「钉死
+# 不可变 tag + 本仓写死的 SHA256」。
 #
-# 现在的口径，三条分支一致：
-#   1. URL 必须**带版本号且不可变**（滚动地址一律不许用）；
-#   2. 下载后比对写死的 SHA256，不符即删文件并非零退出（verify_sha256）；
-#   3. 写进本仓的每个 SHA256 都是**本地真下载实算核对过**再抄进来的 ——
-#      发布方自报的校验和只证明「和发布方说的一致」，钉进本仓才是真正的
-#      冻结点（和 pin action SHA 是同一个道理）。
+# #700 起 Windows / Linux 改了口径，macOS 不变：
+#   Windows / Linux → BtbN 的**固定地址** `releases/download/latest/
+#                     ffmpeg-n9.0-latest-*-lgpl-9.0.*`：锁死 9.0 这条
+#                     release 分支（只进 bug 修复，不跳大版本），校验用
+#                     **同一个 release 里官方的 checksums.sha256**。
+#   macOS           → evermeet.cx 带版本号的固定地址 + 本仓写死的 SHA256
+#                     （BtbN 不出 macOS 构建；evermeet 的版本地址不会过期）。
 #
-# 三条分支的来源不同，原因见各分支注释：
-#   Windows / Linux → BtbN/FFmpeg-Builds，同一个不可变 tag、同一个
-#                     checksums.sha256、同一个 ffmpeg 版本，LGPL 构建。
-#   macOS           → evermeet.cx，因为 **BtbN 不出 macOS 构建**。
+# 为什么 Windows / Linux 不再钉 autobuild tag（#700）：BtbN 的 autobuild
+# tag 只保留约 14 天，旧 tag 会被**删除**。钉死 tag 等于给 CI 埋一个两周
+# 一次的定时炸弹——2026-09-20 那个 tag 在 10-05 被删，`test (windows)`
+# 当场每次都红在 404 上；换上去的 10-05 tag 预计 10-19 前后同样消失。
 #
-# 👉 升级版本时：改 tag/版本号/文件名/SHA256，**每条改动的分支都要重跑
-#    一次反证**（把 SHA256 改错一位 → 本脚本必须非零退出）。
-#    换 BtbN tag 前先确认新 tag 还在（`gh api
-#    repos/BtbN/FFmpeg-Builds/releases/tags/<tag>`）；macOS 那条的 evermeet
-#    版本与 BtbN 的 `n9.0.x` 保持对齐（现在两边都是 9.0.2），别单独动一边。
+# 这个口径**放松了什么、没放松什么**（验收人 2026-10-10 拍板接受）：
+#   - 仍然 fail-closed：拿不到官方校验和、或文件与之不符，一律删文件 +
+#     非零退出，绝不「校验不了就先用着」。能挡住传输损坏、截断、CDN 投毒。
+#   - 放松的是「冻结点」：校验和来自发布方而不是本仓，所以挡不住 BtbN 本身
+#     被攻破后连同 checksums 一起换包；内容也会随 9.0 分支的修复版更新。
+#     这里只在 CI 上把 ffmpeg 当外部工具跑缩略图测试，产品从不捆绑它，
+#     接受这个取舍。
+#
+# 👉 升级大版本时：改 FFMPEG_BTBN_BRANCH（n9.0 → nX.Y）和文件名里的
+#    lgpl-X.Y；macOS 那条 evermeet 版本与之保持同一大版本。改完把官方
+#    checksum 那一行改错一位跑一次反证 → 本脚本必须非零退出。
 set -euo pipefail
 
 # ── Windows + Linux：BtbN/FFmpeg-Builds ───────────────────────────────
-# ⚠️ **不可变 ≠ 一直存在（#700）**：BtbN 只保留最近若干条 autobuild，旧 tag 会在
-# 某次清理里被**删除**。2026-10-05 我们钉的 `autobuild-2026-09-20-13-11` 就是这
-# 么消失的（活了约 15 天，见 #700），`test (windows)` 当场每次都红在 404 上。
-# 所以「换 tag」是**周期性动作**，不是一次性动作；选当前最新还活着的那条。
-# `latest` 是滚动的，不许用。
+# `latest` 这个 release 每天重建，但其中 `ffmpeg-<分支>-latest-*` 的文件名
+# **永远存在**——这就是 BtbN 给 CI 用的固定地址（口径见文件头）。
 #
 # asset 由 GitHub Releases 托管，对 CI runner 出口 IP 不限流 —— gyan.dev
 # 当初正是对 runner 返 503 才暴露出这条 lane 的脆弱（#252）。
 # 选 `lgpl` 而非 `gpl`：该构建 `--disable-libx264 --disable-libx265
 # --disable-libxvid`，不含 GPL 组件，与 BUILD-08 给 libheif 选 `[core]`
 # 摘掉 x265 是同一个取舍。
-FFMPEG_BTBN_TAG="autobuild-2026-10-05-13-07"
-FFMPEG_BTBN_VER="n9.0.2-22-g46d8f462ee"
+FFMPEG_BTBN_BASE="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
+FFMPEG_BTBN_BRANCH="n9.0"
 
-FFMPEG_WIN_ZIP="ffmpeg-${FFMPEG_BTBN_VER}-win64-lgpl-9.0.zip"
-FFMPEG_WIN_SHA256="1c73d2256f0198805daf0f765feab8d3f21d3ab85e8dda0c2bb44ce1e3a126c7"
-
-FFMPEG_LINUX_AMD64_TAR="ffmpeg-${FFMPEG_BTBN_VER}-linux64-lgpl-9.0.tar.xz"
-FFMPEG_LINUX_AMD64_SHA256="ff734ab191469a1ffca4bd32bd098b62f50e6a50cb024f9b45b694015530a8f6"
-
-FFMPEG_LINUX_ARM64_TAR="ffmpeg-${FFMPEG_BTBN_VER}-linuxarm64-lgpl-9.0.tar.xz"
-FFMPEG_LINUX_ARM64_SHA256="0529a3a7bf460836c9b6ce67b5d9c18aa7e90d5bff501038a01e1573d2cba3fd"
+FFMPEG_WIN_ZIP="ffmpeg-${FFMPEG_BTBN_BRANCH}-latest-win64-lgpl-9.0.zip"
+FFMPEG_LINUX_AMD64_TAR="ffmpeg-${FFMPEG_BTBN_BRANCH}-latest-linux64-lgpl-9.0.tar.xz"
+FFMPEG_LINUX_ARM64_TAR="ffmpeg-${FFMPEG_BTBN_BRANCH}-latest-linuxarm64-lgpl-9.0.tar.xz"
 
 # ── macOS：evermeet.cx ────────────────────────────────────────────────
 # BtbN **不出 macOS 构建**（该 release 只有 win64/winarm64/linux64/
@@ -64,7 +62,7 @@ FFMPEG_LINUX_ARM64_SHA256="0529a3a7bf460836c9b6ce67b5d9c18aa7e90d5bff501038a01e1
 # evermeet 的 `getrelease/zip` 是滚动地址，**但它同时提供带版本号的固定
 # 地址** `https://evermeet.cx/ffmpeg/ffmpeg-<ver>.zip`（由
 # `https://evermeet.cx/ffmpeg/info/ffmpeg/release` 这个 JSON 接口给出），
-# 钉的就是后者。版本 9.0.2 与上面 BtbN 的 n9.0.2 对齐，非巧合而是刻意选的。
+# 钉的就是后者。大版本 9.0 与上面 BtbN 的 n9.0 分支对齐，是刻意选的。
 #
 # ⚠️ **许可不对称，必须知情**：evermeet 的构建是 **GPL** 的
 # （二进制里实测含 `--enable-gpl --enable-libx264 --enable-libx265`），
@@ -85,19 +83,24 @@ mkdir -p "$DEST"
 
 # 校验和比对。**fail-closed**：算不出、对不上，一律删文件 + 非零退出，
 # 绝不「校验不了就先用着」。
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
 verify_sha256() {
   local file="$1" expected="$2" actual=""
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "$file" | cut -d' ' -f1)"
-  elif command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "$file" | cut -d' ' -f1)"
-  else
+  actual="$(sha256_of "$file")"
+  if [ -z "$actual" ]; then
     echo "no sha256 tool (sha256sum/shasum) available —— 拒绝使用未校验的下载" >&2
     rm -f "$file"
     exit 1
   fi
   if [ "$actual" != "$expected" ]; then
-    echo "SHA256 MISMATCH —— 下载物与钉死的校验和不符，已删除并中止：" >&2
+    echo "SHA256 MISMATCH —— 下载物与期望的校验和不符，已删除并中止：" >&2
     echo "  file:     $file" >&2
     echo "  expected: $expected" >&2
     echo "  actual:   $actual" >&2
@@ -112,13 +115,39 @@ fetch() {
   curl -fL --retry 3 --retry-delay 5 --retry-all-errors "$1" -o "$2"
 }
 
+# BtbN：下载 asset + 同一个 release 的官方 checksums.sha256，按文件名取期望值
+# 再走 verify_sha256（fail-closed）。
+# `latest` 每天重建一次：重建窗口里可能拿到「新文件 + 旧 checksums」（或反过来），
+# 所以**两样一起重取一次**再判；第二次仍不符才算真不符。只重试这一种情况——
+# 拿不到 checksums 或里面没有这个文件名，直接失败。
+fetch_btbn() {
+  local asset="$1" out="$2" sums="$DEST/checksums.sha256" expected="" attempt
+  for attempt in 1 2; do
+    fetch "$FFMPEG_BTBN_BASE/$asset" "$out"
+    fetch "$FFMPEG_BTBN_BASE/checksums.sha256" "$sums"
+    expected="$(awk -v f="$asset" '$2 == f { print $1 }' "$sums")"
+    rm -f "$sums"
+    if [ -z "$expected" ]; then
+      echo "官方 checksums.sha256 里没有 $asset —— 拒绝使用未校验的下载" >&2
+      rm -f "$out"
+      exit 1
+    fi
+    if [ "$attempt" = 1 ] && [ "$(sha256_of "$out")" != "$expected" ]; then
+      echo "sha256 与官方 checksums 不符，可能撞上 latest 重建窗口，整组重取一次" >&2
+      continue
+    fi
+    break
+  done
+  verify_sha256 "$out" "$expected"
+}
+
 # PATH 上已有 ffmpeg 就不折腾 —— 但 CI 必须绕开这条。
 # 理由：这条早退意味着「runner 镜像哪天自带了 ffmpeg，CI 就会静默改用那个
 # 未经本仓校验的二进制」，钉版本+校验和的努力当场归零（而且没人会发现）。
-# 所以 ci-rust.yml 里设 PPF_FFMPEG_FORCE_FETCH=1，CI 永远用钉死的那一个。
+# 所以 ci-rust.yml 里设 PPF_FFMPEG_FORCE_FETCH=1，CI 永远用本脚本校验过的那一个。
 if [ -z "${PPF_FFMPEG_FORCE_FETCH:-}" ] && command -v ffmpeg >/dev/null 2>&1; then
   echo "ffmpeg already on PATH ($(command -v ffmpeg)) — nothing to do."
-  echo "Set PPF_FFMPEG_FORCE_FETCH=1 to fetch the pinned build anyway."
+  echo "Set PPF_FFMPEG_FORCE_FETCH=1 to fetch the verified build anyway."
   exit 0
 fi
 
@@ -142,24 +171,20 @@ case "$OS" in
     ;;
   Linux)
     case "$ARCH" in
-      x86_64)  TAR="$FFMPEG_LINUX_AMD64_TAR"; SHA="$FFMPEG_LINUX_AMD64_SHA256" ;;
-      aarch64) TAR="$FFMPEG_LINUX_ARM64_TAR"; SHA="$FFMPEG_LINUX_ARM64_SHA256" ;;
+      x86_64)  TAR="$FFMPEG_LINUX_AMD64_TAR" ;;
+      aarch64) TAR="$FFMPEG_LINUX_ARM64_TAR" ;;
       *) echo "unsupported Linux arch: $ARCH" >&2; exit 1 ;;
     esac
-    URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_BTBN_TAG}/${TAR}"
-    echo "fetching pinned ffmpeg: $TAR (tag $FFMPEG_BTBN_TAG)"
-    fetch "$URL" "$DEST/ffmpeg.tar.xz"
-    verify_sha256 "$DEST/ffmpeg.tar.xz" "$SHA"
+    echo "fetching ffmpeg: $TAR (BtbN latest, branch $FFMPEG_BTBN_BRANCH)"
+    fetch_btbn "$TAR" "$DEST/ffmpeg.tar.xz"
     # ⚠️ BtbN 的布局是 `<dir>/bin/ffmpeg`，**不是** johnvansickle 的
     # `<dir>/ffmpeg` —— 所以 strip 2 层且路径含 bin/。换源时最容易漏这条。
     tar -xJf "$DEST/ffmpeg.tar.xz" --strip-components=2 -C "$DEST" --wildcards '*/bin/ffmpeg'
     rm "$DEST/ffmpeg.tar.xz"
     ;;
   MINGW*|MSYS*|CYGWIN*)
-    URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/${FFMPEG_BTBN_TAG}/${FFMPEG_WIN_ZIP}"
-    echo "fetching pinned ffmpeg: $FFMPEG_WIN_ZIP (tag $FFMPEG_BTBN_TAG)"
-    fetch "$URL" "$DEST/ffmpeg.zip"
-    verify_sha256 "$DEST/ffmpeg.zip" "$FFMPEG_WIN_SHA256"
+    echo "fetching ffmpeg: $FFMPEG_WIN_ZIP (BtbN latest, branch $FFMPEG_BTBN_BRANCH)"
+    fetch_btbn "$FFMPEG_WIN_ZIP" "$DEST/ffmpeg.zip"
     unzip -jo "$DEST/ffmpeg.zip" '*/bin/ffmpeg.exe' -d "$DEST"
     rm "$DEST/ffmpeg.zip"
     ;;
