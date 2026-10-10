@@ -461,8 +461,9 @@ jobs:
       # video_thumbs_survive_a_machine_without_ffmpeg 守着，那条在 Windows 上
       # 本来就通过。所以装 ffmpeg 不丢任何覆盖。
       # SEC-06 (#252, 2026-09-21)：上面那句「不带版本钉死与校验和」已经修掉。
-      # 脚本的 Windows 分支现在钉在 BtbN/FFmpeg-Builds 的**不可变 tag** 上，
-      # 下载后对一个写死的 SHA256 做校验，不符就删文件并非零退出。
+      # 脚本的 Windows 分支现在走 BtbN/FFmpeg-Builds，下载后校验 SHA256，不符就
+      # 删文件并非零退出。#700 起改用 BtbN 的固定地址（9.0 分支 latest）+ 同一
+      # release 的官方 checksums.sha256——钉 autobuild tag 约两周就被上游删掉一次。
       # 换源同时也是修故障：gyan.dev 对 runner 出口 IP 返 503，本 lane 在
       # `main` 与 #358 上连续三次全红在这一行（详见 #252）。
       #
