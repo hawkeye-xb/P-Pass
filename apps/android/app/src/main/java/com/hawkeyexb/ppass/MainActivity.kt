@@ -312,7 +312,7 @@ fun PPassApp() {
     val updateState by updateController.state.collectAsState()
     val updateDialogSuppressed by updateController.dialogSuppressed.collectAsState()
     LaunchedEffect(Unit) { updateController.onColdStart() }
-    // Snackbar 级一过性反馈（已是最新 / 检查失败 / 已更新到 vX）——
+    // Snackbar 级一过性反馈（已是最新 / 检查失败）——
     // 与 UI-12 的「只报能诚实上报的信号」同一条规矩。
     LaunchedEffect(Unit) {
         updateController.notices.collect { notice ->

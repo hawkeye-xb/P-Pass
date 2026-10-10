@@ -6,7 +6,7 @@
 //     但闸门必须立在「距上次满 6h」上，否则每次切回前台都打一次更新源。
 //  2. lastSeenVersion——升级回执。PackageInstaller 的 SUCCESS 只告诉我们
 //     「系统收了」，进程随即被替换；下次启动比对 BuildConfig 版本才发现
-//     「真的换过来了」，给用户一句确认（已更新到 vX）。
+//     「真的换过来了」，据此清掉上个版本的下载产物与待办（#808 起不弹提示）。
 //  3. pending——用户点了「下载安装」的那一次更新。WorkManager 进程死亡后
 //     UI 靠它把「下载中 / 待安装」状态恢复出来，不靠内存。
 package com.hawkeyexb.ppass.update

@@ -73,7 +73,6 @@
     <string name="update_install_now">立即安装</string>
     <string name="update_installing_title">正在安装…</string>
     <string name="update_installing_body">请在系统弹窗中确认，完成更新。</string>
-    <string name="update_installed_snackbar">已更新到 v%1$s</string>
     <string name="update_close">关闭</string>
     <string name="notif_channel_update">应用更新</string>
     <string name="notif_update_download_title">正在下载 P-Pass 更新</string>
