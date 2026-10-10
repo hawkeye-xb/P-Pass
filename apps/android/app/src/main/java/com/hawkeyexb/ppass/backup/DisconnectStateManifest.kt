@@ -94,6 +94,11 @@ enum class DisconnectState(
         "$UNDECIDED：断开从来没取消过这两条 unique work（约束唤醒、相册变更触发的单次备份）",
         workNames = listOf(CONSTRAINT_WAKE_WORK_NAME, MEDIA_WATCH_BACKUP_WORK_NAME),
     ),
+    UNPAIR_NOTICE_WORKS(
+        StateLocation.RUNTIME, "work", DisconnectDisposition.KEEP,
+        "#565：断开通知的投递任务（每台电脑一条 unique work，名字 = ppass.unpair-notice.<daemonNodeId>）——" +
+            "它就是断开要发给电脑的那件事，断开时入队、绝不能被断开取消",
+    ),
     MEDIA_WATCH_JOB(
         StateLocation.RUNTIME, "media-watch-job", DisconnectDisposition.STOP,
         "MOB-27/MOB-93：相册变更监听（JobScheduler）是生产者，断开停掉",

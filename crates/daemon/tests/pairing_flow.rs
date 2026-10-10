@@ -312,6 +312,69 @@ async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
     assert!(audit.iter().any(|r| r.entry.kind == "device.unpaired"));
 }
 
+/// #565：断开通知带着它要结束的配对纪元。同一台手机重新配对后，迟到的旧通知
+/// 不许把新配对吊销（条件更新）；带当前纪元的通知照常吊销。
+/// 反证：handler 忽略 `pairing_epoch`、总是无条件吊销 ⇒ 第一段的 `!revoked` 红。
+#[tokio::test(flavor = "multi_thread")]
+async fn unpair_only_ends_the_pairing_epoch_it_names() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+
+    let qr = pairing.start([0x62; 12], now());
+    assert!(
+        send_pair(&ctp, dtp.node_id(), &token_of(&qr), "重新配对的手机")
+            .await
+            .ok
+    );
+    let current = db
+        .pairing_epoch(&ctp.node_id().0)
+        .await
+        .unwrap()
+        .expect("an approved pairing has an epoch");
+
+    // 迟到的旧通知（上一次配对的纪元）：答 ok，但什么都不吊销。
+    let stale = send_method(
+        &ctp,
+        dtp.node_id(),
+        methods::DEVICE_UNPAIR,
+        serde_json::json!({ "pairing_epoch": "an-earlier-pairing" }),
+    )
+    .await;
+    assert!(
+        stale.ok,
+        "a stale notice is answered (that pairing is already over): {stale:?}"
+    );
+    assert_eq!(stale.result.unwrap()["unpaired"], false);
+    assert!(
+        !db.get_device(&ctp.node_id().0)
+            .await
+            .unwrap()
+            .unwrap()
+            .revoked,
+        "a stale unpair notice must not revoke the current pairing"
+    );
+
+    // 带当前纪元：照常吊销。
+    let resp = send_method(
+        &ctp,
+        dtp.node_id(),
+        methods::DEVICE_UNPAIR,
+        serde_json::json!({ "pairing_epoch": current }),
+    )
+    .await;
+    assert!(resp.ok, "{resp:?}");
+    assert_eq!(resp.result.unwrap()["unpaired"], true);
+    assert!(
+        db.get_device(&ctp.node_id().0)
+            .await
+            .unwrap()
+            .unwrap()
+            .revoked
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn unpair_by_unpaired_device_is_denied() {
     let db = Db::open_in_memory().await.unwrap();
