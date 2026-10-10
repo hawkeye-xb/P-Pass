@@ -8,7 +8,8 @@
   分端清单、签名、上传）→ finalize-manifest-windows（应被跳过）→ mirror-latest 的镜像判定。
 
 假的部分（只有这些）：
-  - 构建产物：临时目录里的随机字节当 APK / .app.tar.gz（构建、公证不在范围内）；
+  - 构建产物：临时目录里的随机字节当 APK / .app.tar.gz（构建、公证不在范围内）；macOS 那份的
+    文件清单取自 release.yml 里 macOS job 的 upload-artifact `path:`（#539：资产集合有断言）；
   - 仓库：临时 git 仓库（当前工作区的 tools/ + 临时 versions.json / 说明文件），tag 现打；
   - gh：PATH 前置的 stub（tools/release/gha_sim.py 里的 GH_STUB），记录调用、本地存 release，不访问网络；
   - 签名密钥：运行时用 tauri signer 现生成的临时密钥（不碰 UPDATE_SIGNING_KEY），
@@ -159,30 +160,60 @@ def fake_bytes(seed: str, n: int) -> bytes:
     return out[:n]
 
 
-def make_artifacts(d: Path, android_ver: str, desktop_ver: str) -> Path:
+# #539：release 上 macOS 资产的完整集合（{v} = 该端版本号）。正式发布不再附带 daemon 层
+# 自包含 zip——多出来或少一个都判红。
+MACOS_RELEASE_ASSETS = ("P-Pass_{v}_macos-arm64.dmg", "P-Pass_{v}_macos-arm64.app.tar.gz", "SHA256SUMS-macos-arm64")
+MACOS_SUMS = "SHA256SUMS-macos-arm64"
+
+
+def macos_upload_names(wf: dict, desktop_ver: str) -> list[str]:
+    """macOS 构建 job 的 upload-artifact `path:` 列表 → 文件名（`*` 代入版本号）。
+
+    构建 job 本身不在 dry-run 里跑，但它往 artifact 里放什么由 release.yml 决定——fixture 从这里
+    派生，而不是另写一份清单：workflow 把某个产物加回上传列表，dry-run 立刻看得见。
+    """
+    steps = [s for s in wf["jobs"]["macos-arm64"]["steps"] if "actions/upload-artifact@" in str(s.get("uses", ""))]
+    if len(steps) != 1:
+        raise SimError(f"macos-arm64 job 应恰有 1 个 upload-artifact 步骤，实际 {len(steps)}")
+    paths = [ln.strip() for ln in str(steps[0]["with"]["path"]).splitlines() if ln.strip()]
+    return [Path(p).name.replace("*", desktop_ver) for p in paths]
+
+
+def make_artifacts(d: Path, wf: dict, android_ver: str, desktop_ver: str) -> Path:
     """假构建产物，按 build job 上传 artifact 的布局放（artifact 名 → 文件）。"""
     a = d / "artifacts"
     (a / "android").mkdir(parents=True)
     (a / "android" / f"P-Pass_{android_ver}_android.apk").write_bytes(fake_bytes(f"apk {android_ver}", 4096))
     m = a / "macos-arm64"
     m.mkdir()
-    for ext in ("app.tar.gz", "dmg", "zip"):
-        (m / f"P-Pass_{desktop_ver}_macos-arm64.{ext}").write_bytes(fake_bytes(f"{ext} {desktop_ver}", 2048))
-    (m / "SHA256SUMS-macos-arm64").write_text("".join(f"{sha256(p)}  {p.name}\n" for p in sorted(m.iterdir())))
+    names = macos_upload_names(wf, desktop_ver)
+    for name in names:
+        if name != MACOS_SUMS:
+            (m / name).write_bytes(fake_bytes(f"{name}", 2048))
+    if MACOS_SUMS in names:
+        (m / MACOS_SUMS).write_text("".join(f"{sha256(p)}  {p.name}\n" for p in sorted(m.iterdir())))
     return a
+
+
+def check_macos_assets(ck: Check, sc: "Scenario", tag: str, desktop_ver: str):
+    d = sc.state / "releases" / tag / "assets"
+    got = sorted(p.name for p in d.iterdir() if "macos-arm64" in p.name) if d.exists() else []
+    want = sorted(n.format(v=desktop_ver) for n in MACOS_RELEASE_ASSETS)
+    ck(got == want, f"#539：release {tag} 的 macOS 资产恰为 {want}（不含 zip）", f"实际 {got}")
 
 
 # ── 跑 workflow ────────────────────────────────────────────────────────
 
 
 class Scenario:
-    def __init__(self, base: Path, name: str, origin: Path, sha: str, key: str, android_ver: str, desktop_ver: str):
+    def __init__(self, base: Path, name: str, origin: Path, sha: str, key: str, android_ver: str, desktop_ver: str,
+                 wf: dict):
         self.dir = base / name
         self.dir.mkdir()
         self.state = self.dir / "gh-state"
         self.bin = self.dir / "bin"
         write_gh_stub(self.bin, self.state)
-        self.artifacts = make_artifacts(self.dir, android_ver, desktop_ver)
+        self.artifacts = make_artifacts(self.dir, wf, android_ver, desktop_ver)
         self.runner = Runner(self.dir / "jobs", origin=origin, artifacts=self.artifacts, stub_bin=self.bin,
                              repository=REPO, base_path=os.environ["PATH"])
         self.sha, self.key = sha, key
@@ -312,10 +343,11 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
     print(f"\n== 正式 tag {FORMAL_TAG}（desktop {CUR_VERSIONS['desktop']} 无说明 / android {CUR_VERSIONS['android']} 有说明）")
     av, dv = CUR_VERSIONS["android"], CUR_VERSIONS["desktop"]
     origin, sha = make_origin(base, "formal", [(PREV_VERSIONS, {}, [PREV_TAG]), (CUR_VERSIONS, good_notes(), [FORMAL_TAG])])
-    sc = Scenario(base, "formal", origin, sha, key, av, dv)
+    sc = Scenario(base, "formal", origin, sha, key, av, dv, rel)
     jobs = sc.release(rel, FORMAL_TAG)
     for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest"):
         job_ok(ck, jobs, j)
+    check_macos_assets(ck, sc, FORMAL_TAG, dv)
     job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
     step_is(ck, jobs, "create-draft", "Version bump gate (UPD-13)", "success")
     s = step_is(ck, jobs, "create-draft", "Release notes presence (#741, warn only)", "success")
@@ -365,10 +397,11 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
     v = TEST_TAG[1:]
     print(f"\n== test tag {TEST_TAG}（各端版本号 = tag 名，天然没有说明文件）")
     origin, sha = make_origin(base, "test", [(PREV_VERSIONS, {}, [PREV_TAG]), (CUR_VERSIONS, good_notes(), [TEST_TAG])])
-    sc = Scenario(base, "test", origin, sha, key, v, v)
+    sc = Scenario(base, "test", origin, sha, key, v, v, rel)
     jobs = sc.release(rel, TEST_TAG)
     for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest"):
         job_ok(ck, jobs, j)
+    check_macos_assets(ck, sc, TEST_TAG, v)
     job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
     step_is(ck, jobs, "create-draft", "Version bump gate (UPD-13)", "skipped")
     step_is(ck, jobs, "create-draft", "Release notes presence (#741, warn only)", "skipped")
@@ -406,7 +439,7 @@ def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
     av = BAD_VERSIONS["android"]
     print(f"\n== 正式 tag {BAD_TAG}：说明文件不合规（含网址）⇒ 组装清单必须失败，不带病发布")
     origin, sha = make_origin(base, "bad", [(PREV_VERSIONS, {}, [PREV_TAG]), (BAD_VERSIONS, BAD_NOTES, [BAD_TAG])])  # CHANGELOG 没有 [2099.1.2]
-    sc = Scenario(base, "bad-notes", origin, sha, key, av, BAD_VERSIONS["desktop"])
+    sc = Scenario(base, "bad-notes", origin, sha, key, av, BAD_VERSIONS["desktop"], rel)
     jobs = sc.release(rel, BAD_TAG, jobs=["create-draft", "upload-android"])
     job_ok(ck, jobs, "upload-android", "failure")
     s = step_is(ck, jobs, "upload-android", "Compose update manifest (UPD-01)", "failure")

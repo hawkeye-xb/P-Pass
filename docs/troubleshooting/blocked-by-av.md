@@ -26,7 +26,7 @@ P-Pass 是开源软件：源码在 GitHub，构建可复现，每个发布产物
    of the file you downloaded:
    对照 SHA-256：下载页给出的哈希，与本地文件算出的哈希一致：
    ```powershell
-   # Windows — replace <file> with the artifact you downloaded (e.g. the .dmg/.zip/.exe)
+   # Windows — replace <file> with the artifact you downloaded (e.g. the .dmg/.apk/.exe)
    certutil -hashfile <file> SHA256
    ```
    ```bash

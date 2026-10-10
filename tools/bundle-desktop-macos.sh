@@ -6,8 +6,8 @@
 #   <rel_dir>  — output of bundle-macos.sh (contains daemon + lib/, rpath
 #                already rewritten to @executable_path/lib)
 #   <dmg_out>  — destination dir for the dmg (name from tools/artifact-names.sh:
-#                P-Pass_<desktop 端版本>_macos-arm64.dmg; kept OUTSIDE
-#                rel_dir so the self-contained zip never picks it up)
+#                P-Pass_<desktop 端版本>_macos-arm64.dmg; release.yml passes
+#                rel_dir itself so the dmg lands next to the other assets)
 #
 # Steps:
 #   1. sidecar = bundled daemon (Tauri externalBin wants the -<triple> name)
