@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 使用问题 / Questions
+    url: https://github.com/hawkeye-xb/P-Pass/discussions/categories/q-a
+    about: 不确定是不是 bug，先在这里问 / Not sure it's a bug? Ask here first
+  - name: 机型报告 / Device report
+    url: https://github.com/hawkeye-xb/P-Pass/discussions/categories/show-and-tell
+    about: 告诉我们你的手机能不能用 / Tell us whether P-Pass works on your phone

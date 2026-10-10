@@ -1,0 +1,26 @@
+name: 功能建议 / Feature request
+description: 想让 P-Pass 多做一件事 / Something you'd like P-Pass to do
+title: "[Idea] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        iPhone 和 Windows 版正在开发中，不用再提。进度见 [ROADMAP](https://github.com/hawkeye-xb/P-Pass/blob/main/docs/ROADMAP.md)。
+        The iPhone and Windows apps are in development, no need to request them. See the [ROADMAP](https://github.com/hawkeye-xb/P-Pass/blob/main/docs/ROADMAP.md) for progress.
+  - type: textarea
+    id: goal
+    attributes:
+      label: 你想做成什么事 / What you are trying to do
+      description: 讲场景，不用讲实现 / Describe the situation, not the implementation
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: 现在怎么做的 / How you do it today
+      description: 用别的工具、手动操作，或者做不到 / Another tool, by hand, or not possible at all
+  - type: textarea
+    id: more
+    attributes:
+      label: 其他补充 / Anything else
