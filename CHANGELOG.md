@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- macOS 端：发布页不再附带 daemon 层自包含压缩包（`P-Pass_<版本>_macos-arm64.zip`）。它在 macOS 上一直无法运行；安装请使用 dmg（#539）。
+
 ### Security
 - Android 端：系统日志里不再出现电脑和手机的公网地址、自建中继服务器的域名、照片内容的完整校验值，只记录连接方式等类别信息；与电脑端日志采用同一套脱敏规则（#548）。
 
