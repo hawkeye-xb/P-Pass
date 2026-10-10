@@ -13,12 +13,16 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.log.PLog
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 
 /** 更新 UI 的互斥状态——任一时刻只会是其中一个。 */
@@ -98,6 +102,20 @@ internal fun pendingAutoCheckAction(
 }
 
 /**
+ * #719: 用户确认下载时，这份更新是否已经有请求在跑——是则什么都不做（同一请求
+ * 重复提交 = 幂等），否则发新请求顶替旧的。只认待办绑定的那个请求的信号。
+ */
+internal fun downloadAlreadyInFlight(
+    pending: PendingUpdate?,
+    info: UpdateInfo,
+    signal: WorkSignal,
+): Boolean =
+    pending != null &&
+        downloadIdentityOf(pending.version, pending.url, pending.sha256) ==
+        downloadIdentityOf(info.version, info.url, info.sha256) &&
+        (signal == WorkSignal.Enqueued || signal == WorkSignal.Running)
+
+/**
  * 自动检查的完整门序（UPD-21 抽出，JVM 可测——controller 只注入 work 记录读取
  * 与真正的检查动作）：6h 节流门 → 非空闲不查 → 待办判定 → [check] → 记账。
  * 返回是否真的发起了检查。
@@ -123,8 +141,8 @@ internal suspend fun runAutoCheck(
                 // 只清待办、回到可检查状态，不按 pending 重新入队：pending 记的
                 // 可能是旧版本（隔了至少一天，新版可能已发），也可能是用户已
                 // 放着不管的失败线；重新检查拿最新 manifest，让用户再决定。
-                // cache 里的已验包不删：同一份更新再次确认下载时，Worker 按
-                // 产物身份（UPD-19）直接复用，不重下；不同的会被认领时清掉。
+                // cache 里的已验包不删：产物按身份分目录（#719），同一份更新再次
+                // 确认下载时直接复用，不重下；别的身份由下一跑的 Worker 清掉。
                 if (!isIdle()) return false
                 prefs.clearPending()
                 onOrphanCleared(pending.version)
@@ -154,6 +172,12 @@ class UpdateUiController(
 
     private val workManager = WorkManager.getInstance(context)
 
+    /**
+     * #719: 当前这条更新线的请求 id（来自落盘待办）。界面只观察它：被 REPLACE
+     * 顶替的旧请求发出的 CANCELLED 不会被当成「这条线作废」。
+     */
+    private val currentWorkId = MutableStateFlow(prefs.pendingUpdate()?.workUuid())
+
     /** 用户点了「稍后」的待安装版本——本次会话内不再自动顶出来，冷启动复位。 */
     private var suppressedReadyVersion: String? = null
     private var lastSignal: WorkSignal = WorkSignal.None
@@ -181,20 +205,21 @@ class UpdateUiController(
         } else if (seen != versionName) {
             prefs.markSeenVersion(versionName)
             prefs.clearPending()
+            currentWorkId.value = null
             UpdateDownloadWorker.cancel(context)
-            updateApkFile(context.cacheDir).delete()
-            completeMarkerFile(context.cacheDir).delete()
+            discardUpdateArtifacts(context.cacheDir)
             notices.tryEmit(UpdateNotice(R.string.update_installed_snackbar, versionName))
         }
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     private fun observeWorker() {
         scope.launch {
-            workManager.getWorkInfosForUniqueWorkFlow(UpdateDownloadWorker.UNIQUE_WORK_NAME)
-                .collect { infos ->
+            currentWorkId
+                .flatMapLatest { id -> if (id == null) flowOf(null) else workManager.getWorkInfoByIdFlow(id) }
+                .collect { info ->
                     val pending = prefs.pendingUpdate() ?: return@collect
-                    val info = infos.firstOrNull()
-                    val signal = signalOf(info)
+                    val signal = lineSignalOf(info, pending) ?: return@collect
                     lastSignal = signal
                     if (signal == WorkSignal.Cancelled) {
                         // 取消 = 这条更新线作废（含升级回执里的清理），落盘一起清。
@@ -244,13 +269,11 @@ class UpdateUiController(
                 isIdle = { _state.value is UpdateUiState.Idle },
                 // 直接读库而不用 lastSignal：冷启动时 observeWorker 可能还没收到
                 // 第一帧，lastSignal 的默认 None 会把活着的更新线误判成孤儿。
+                // #719: 按待办绑定的请求 id 读；没有 id（#719 之前的待办）= 没有能驱动
+                // 它的请求，读作 None，走孤儿清理。
                 readWorkSignal = {
-                    signalOf(
-                        workManager
-                            .getWorkInfosForUniqueWorkFlow(UpdateDownloadWorker.UNIQUE_WORK_NAME)
-                            .first()
-                            .firstOrNull(),
-                    )
+                    val id = prefs.pendingUpdate()?.workUuid()
+                    if (id == null) WorkSignal.None else signalOf(workManager.getWorkInfoByIdFlow(id).first())
                 },
                 onOrphanCleared = { version ->
                     PLog.i(UPDATE_LOG_TAG, "orphan pending $version cleared: work record gone")
@@ -322,18 +345,33 @@ class UpdateUiController(
     /** 「下载安装」：落盘待办 + 入队后台下载，状态由 worker 信号接管。 */
     fun onUserConfirmDownload() {
         val s = _state.value as? UpdateUiState.Available ?: return
-        prefs.markPending(
-            PendingUpdate(
-                version = s.info.version,
-                notes = s.info.notes,
-                url = s.info.url,
-                sha256 = s.info.sha256,
-                signature = s.info.signature,
-            )
-        )
-        UpdateDownloadWorker.enqueue(context, s.info)
+        startDownload(s.info)
         dialogSuppressed.value = false
         _state.value = UpdateUiState.Downloading(0L, -1L, s.info.version)
+    }
+
+    /**
+     * #719: 发起（或沿用）一条更新线。同一份更新已有请求在跑 ⇒ 什么都不做；否则
+     * 先把新请求的 id 写进待办、切换观察对象，再入队（REPLACE 顶替旧请求）。
+     * 先落盘后入队：两步之间进程死亡，留下的是「id 从未入队」的待办，由 UPD-21
+     * 的孤儿清理接住。
+     */
+    private fun startDownload(info: UpdateInfo) {
+        if (downloadAlreadyInFlight(prefs.pendingUpdate(), info, lastSignal)) return
+        val request = UpdateDownloadWorker.request(info)
+        prefs.markPending(
+            PendingUpdate(
+                version = info.version,
+                notes = info.notes,
+                url = info.url,
+                sha256 = info.sha256,
+                signature = info.signature,
+                workId = request.id.toString(),
+            )
+        )
+        lastSignal = WorkSignal.None
+        currentWorkId.value = request.id
+        UpdateDownloadWorker.enqueue(context, request)
     }
 
     /**
@@ -365,8 +403,7 @@ class UpdateUiController(
             _state.value = UpdateUiState.ReadyToInstall(pending.version)
             return
         }
-        UpdateDownloadWorker.enqueue(
-            context,
+        startDownload(
             UpdateInfo(
                 version = pending.version,
                 notes = pending.notes,
@@ -382,24 +419,29 @@ class UpdateUiController(
     fun onUserDismissFailed() {
         dialogSuppressed.value = false
         prefs.clearPending()
+        currentWorkId.value = null
         UpdateDownloadWorker.cancel(context)
-        updateApkFile(context.cacheDir).delete()
-        completeMarkerFile(context.cacheDir).delete()
+        discardUpdateArtifacts(context.cacheDir)
         _state.value = UpdateUiState.Idle
     }
 
     /** 「立即安装」：把已校验的包交给系统安装器，等待真实回执。 */
     fun onUserInstall() {
         val s = _state.value as? UpdateUiState.ReadyToInstall ?: return
+        // 装的是待办这条线自己目录里的包（#719：产物按身份分目录）。
+        val apk = prefs.pendingUpdate()?.artifacts(context.cacheDir)?.apk ?: run {
+            _state.value = UpdateUiState.Failed(UpdateFailureKind.Install, s.version)
+            return
+        }
         scope.launch {
             _state.value = UpdateUiState.Installing(s.version)
-            when (UpdateInstaller.install(context, updateApkFile(context.cacheDir))) {
+            when (UpdateInstaller.install(context, apk)) {
                 UpdateInstaller.Outcome.Success -> {
                     // 真升级时进程随即被替换，多半走不到这里；同版本重装等
                     // 边缘情形就把现场收拾干净。
                     prefs.clearPending()
-                    updateApkFile(context.cacheDir).delete()
-                    completeMarkerFile(context.cacheDir).delete()
+                    currentWorkId.value = null
+                    discardUpdateArtifacts(context.cacheDir)
                     _state.value = UpdateUiState.Idle
                 }
                 UpdateInstaller.Outcome.AbortedByUser ->
@@ -411,7 +453,15 @@ class UpdateUiController(
     }
 }
 
-private fun signalOf(info: WorkInfo?): WorkSignal = when (info?.state) {
+/**
+ * #719: 这条更新线的信号——只认待办绑定的那个请求。别的请求（被 REPLACE 顶替的
+ * 旧请求）的 WorkInfo 返回 null（与这条线无关，忽略），绝不能把它的 CANCELLED
+ * 读成「这条线作废」去清待办。
+ */
+internal fun lineSignalOf(info: WorkInfo?, pending: PendingUpdate): WorkSignal? =
+    if (info != null && info.id != pending.workUuid()) null else signalOf(info)
+
+internal fun signalOf(info: WorkInfo?): WorkSignal = when (info?.state) {
     null -> WorkSignal.None
     WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> WorkSignal.Enqueued
     WorkInfo.State.RUNNING -> WorkSignal.Running

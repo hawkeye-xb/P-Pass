@@ -34,7 +34,17 @@ data class PendingUpdate(
     val url: String,
     val sha256: String = "",
     val signature: String = "",
+    /**
+     * #719: 承载这条更新线的 WorkRequest id。界面只观察这一个 id——被顶替的旧请求
+     * 发出的 CANCELLED 与这条线无关。#719 之前写下的待办没有它（null）：没有
+     * 能驱动它的请求，按孤儿处理（UPD-21）。
+     */
+    val workId: String? = null,
 )
+
+/** 待办绑定的请求 id；缺失或读不出 = 没有能驱动这条线的请求。 */
+internal fun PendingUpdate.workUuid(): java.util.UUID? =
+    workId?.let { runCatching { java.util.UUID.fromString(it) }.getOrNull() }
 
 @Serializable
 private data class UpdatePrefsData(
