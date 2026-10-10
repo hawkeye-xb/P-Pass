@@ -26,6 +26,12 @@ set -euo pipefail
 REL="$1"; DMG_OUT="$2"
 IDENTITY="${3:--}"
 DESKTOP="$(cd "$(dirname "$0")/../apps/desktop" && pwd)"
+# #772：codesign / hdiutil / osascript 都可能挂住（v2026.10.3 实发：codesign --timestamp
+# 卡 14 分钟），一律经墙钟上限执行，超时打印是哪一步。只有依赖外部网络服务的那一步
+# （Developer ID 签名要请求 Apple 时间戳服务）自动重试一次；本地命令挂住时立即失败——
+# 挂载到一半的卷不适合原地重试，留给人 rerun failed jobs。上限取值：这些命令平时都在
+# 数秒内结束（整个第 5-6 步以往 4.6 分钟，大头是 hdiutil convert）。
+WT="$(cd "$(dirname "$0")/release" && pwd)/with-timeout.sh"
 # UPD-15：dmg 名 = P-Pass_<desktop 端版本>_macos-arm64.dmg（唯一真相在 artifact-names.sh）
 DMG_NAME="$("$(dirname "$0")/artifact-names.sh" macos-dmg)"
 
@@ -80,11 +86,12 @@ echo "── 5. re-sign .app ($IDENTITY)"
 # supplies that identity before notarization. Local dogfood must stay ad-hoc
 # and must not claim to be notarization-ready.
 if [ "$IDENTITY" = "-" ]; then
-  codesign --force --deep --sign - "$APP"
+  "$WT" "codesign 重签 .app（ad-hoc）" 300 1 -- codesign --force --deep --sign - "$APP"
 else
-  codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp "$APP"
+  "$WT" "codesign 重签 .app（Developer ID + Apple 时间戳服务）" 300 2 -- \
+    codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp "$APP"
 fi
-codesign --verify --deep --strict "$APP"
+"$WT" "codesign 校验 .app" 120 1 -- codesign --verify --deep --strict "$APP"
 
 # ── 5b. BUILD-09 产物自检：真的把 sidecar 跑一遍 ──────────────────────
 # 这是这条链路上**唯一执行产物**的一步。在它之前，所有检查看的都是「文件
@@ -130,9 +137,9 @@ cp -R "$APP" /tmp/pp-dmg-stage/
 # 挂载后放 Applications 链接 + Finder 布局（图标位置/视图选项），
 # 再转 UDZO。缺布局时 dmg 里"孤零零一个程序"，用户不知道拖到
 # Applications（真机实测反馈）。
-hdiutil create -volname "P-Pass" -srcfolder /tmp/pp-dmg-stage \
+"$WT" "hdiutil create（可写 dmg）" 600 1 -- hdiutil create -volname "P-Pass" -srcfolder /tmp/pp-dmg-stage \
   -ov -format UDRW /tmp/pp-dmg-rw.dmg
-hdiutil attach /tmp/pp-dmg-rw.dmg -mountpoint /Volumes/P-Pass -nobrowse
+"$WT" "hdiutil attach" 120 1 -- hdiutil attach /tmp/pp-dmg-rw.dmg -mountpoint /Volumes/P-Pass -nobrowse
 ln -s /Applications /Volumes/P-Pass/Applications
 # 几何（2026-08-25 修）：窗口必须装得下两个图标 + 文字标签。
 # 旧值 bounds {100,100,520,400} = 420 宽，而 Applications 图标位置
@@ -152,7 +159,8 @@ if [ $((ICON_X_APP - LABEL_HALF)) -lt 0 ] || [ $((ICON_X_APPS + LABEL_HALF)) -gt
        "Applications 横跨 $((ICON_X_APPS - LABEL_HALF))..$((ICON_X_APPS + LABEL_HALF))" >&2
   exit 1
 fi
-osascript <<'APPLESCRIPT' || echo "warning: Finder layout skipped (headless/TCC) — Applications link still present"
+# #772：Finder 布局不致命（见下方 ⚠️），挂住同样按「跳过布局」处理。
+"$WT" "osascript Finder 布局" 60 1 -- osascript <<'APPLESCRIPT' || echo "warning: Finder layout skipped (headless/TCC/timeout) — Applications link still present"
 tell application "Finder"
   tell disk "P-Pass"
     open
@@ -174,8 +182,8 @@ APPLESCRIPT
 # 执行不到——注释里写的「布局失败不致命」在旧写法下是假的，无头 CI 的
 # TCC 拦 Apple Events 就会连带炸掉整个打包步骤（2026-08-25 发现）。
 # 布局确实不致命：Applications 链接已在，拖拽路径仍然成立。
-hdiutil detach /Volumes/P-Pass -quiet
-hdiutil convert /tmp/pp-dmg-rw.dmg -format UDZO -o "$DMG_OUT/$DMG_NAME"
+"$WT" "hdiutil detach" 120 1 -- hdiutil detach /Volumes/P-Pass -quiet
+"$WT" "hdiutil convert（压缩 dmg）" 600 1 -- hdiutil convert /tmp/pp-dmg-rw.dmg -format UDZO -o "$DMG_OUT/$DMG_NAME"
 rm -f /tmp/pp-dmg-rw.dmg
 
 echo "── done: $(du -sh "$DMG_OUT/$DMG_NAME" | cut -f1) dmg"
