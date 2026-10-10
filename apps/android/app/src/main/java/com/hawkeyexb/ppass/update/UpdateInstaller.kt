@@ -34,6 +34,9 @@ object InstallResultBus {
     }
 
     val events = MutableSharedFlow<Event>(extraBufferCapacity = 4)
+
+    /** #828：最近一次系统确认页的 Intent——确认页被 Home 盖到后台时，用它重新拉到前面。 */
+    @Volatile var pendingConfirm: Intent? = null
 }
 
 class UpdateInstallReceiver : BroadcastReceiver() {
@@ -47,6 +50,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
                     intent.getParcelableExtra(Intent.EXTRA_INTENT)
                 }
                 if (confirm != null) {
+                    InstallResultBus.pendingConfirm = confirm
                     context.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                     InstallResultBus.events.tryEmit(InstallResultBus.Event.UserActionRequested)
                 } else {
@@ -58,6 +62,7 @@ class UpdateInstallReceiver : BroadcastReceiver() {
                 }
             }
             else -> {
+                InstallResultBus.pendingConfirm = null
                 InstallResultBus.events.tryEmit(
                     InstallResultBus.Event.Finished(
                         intent.getIntExtra(PackageInstaller.EXTRA_STATUS, -999),
@@ -96,20 +101,43 @@ object UpdateInstaller {
         Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
+    /**
+     * #828：这次安装的会话在系统里是否还存在（等用户确认或正在装）。安装结果以它为准：
+     * 会话还在，App 就不能替系统下「没装」的结论。
+     */
+    fun sessionAlive(context: Context, sessionId: Int): Boolean =
+        context.packageManager.packageInstaller.getSessionInfo(sessionId) != null
+
+    /** #828：显式放弃一个会话（用户点了「以后再说」，或新一次安装顶替它）。会话已不在时什么都不做。 */
+    fun abandonSession(context: Context, sessionId: Int) {
+        runCatching { context.packageManager.packageInstaller.abandonSession(sessionId) }
+        InstallResultBus.pendingConfirm = null
+    }
+
+    /** #828：把被盖到后台的系统确认页重新拉到前面；没有待确认的页面时返回 false。 */
+    fun reopenConfirm(context: Context): Boolean {
+        val confirm = InstallResultBus.pendingConfirm ?: return false
+        context.startActivity(Intent(confirm).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        return true
+    }
+
     /** 等待系统回执的上限：含用户看确认页的时间，给足 10 分钟。 */
     private const val INSTALL_RESULT_TIMEOUT_MS = 10L * 60 * 1000
 
     /**
      * 把 [apk] 交给系统安装器并等待回执。调用前必须已过 [ApkVerifier]——
      * 本函数不验签，只负责安装（同签名校验由系统 PackageInstaller 兜底）。
+     * [onSession] 在会话建好时拿到它的 id（#828：回到前台对账以这个会话是否还在为准）。
      */
-    suspend fun install(context: Context, apk: File): Outcome {
+    suspend fun install(context: Context, apk: File, onSession: (Int) -> Unit = {}): Outcome {
         val installer = context.packageManager.packageInstaller
         val session = try {
             val params = PackageInstaller.SessionParams(
                 PackageInstaller.SessionParams.MODE_FULL_INSTALL,
             )
-            installer.openSession(installer.createSession(params))
+            val id = installer.createSession(params)
+            onSession(id)
+            installer.openSession(id)
         } catch (e: Exception) {
             return Outcome.Error("open session: $e")
         }
@@ -143,7 +171,7 @@ object UpdateInstaller {
                 }
             }
         } catch (e: CancellationException) {
-            // #793：等待回执时被取消（回到前台对账判定「这次没装」）——放掉会话，并照协程约定
+            // #793：等待回执时被取消（用户显式放弃、新一次安装顶替，或 #828 对账确认会话已不在）——放掉会话，并照协程约定
             // 把取消抛回去；不许当成「安装失败」吞掉（那会把界面打成「更新没有完成」）。
             runCatching { session.abandon() }
             throw e

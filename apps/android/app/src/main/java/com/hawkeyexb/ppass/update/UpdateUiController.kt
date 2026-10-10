@@ -170,24 +170,28 @@ internal enum class ResumeInstallAction {
     StayReady,
 
     /**
-     * 停在「正在安装」却回到了前台：系统确认页已经关掉。若稍后仍没有回执（用户在某一层
-     * 取消、回执没来），退回「可以安装」，不让界面卡住。
+     * #828：停在「正在安装」、回到前台，且系统里**已经没有**这次的安装会话：稍等迟到的回执，
+     * 仍没有就退回「可以安装」，不让界面卡住。会话还活着时绝不走这里（见 [resumeInstallAction]）。
      */
     ReconcileInstalling,
 }
 
 /**
- * #793：回到前台时的判定（纯函数，单测锁真值表）。系统弹窗的结果 App 必须如实反映：
- * 无论用户在哪一层（授权页 / 「不允许此来源」门 / 安装确认页）离开，都不能停在「正在安装」。
+ * #793：回到前台时的判定（纯函数，单测锁真值表）。系统弹窗的结果 App 必须如实反映。
+ *
+ * #828：安装结果以系统安装会话为准。会话还活着（等用户确认，或系统正在装）= 安装还在进行，
+ * 回到前台也只能继续等——系统安装流程本身就会让 App 短暂回到前台。只有会话已不存在、
+ * 又没等到回执时，才对账回「可以安装」。
  */
 internal fun resumeInstallAction(
     state: UpdateUiState,
     awaitingInstallPermission: Boolean,
     canInstall: Boolean,
+    sessionAlive: Boolean,
 ): ResumeInstallAction = when {
     awaitingInstallPermission && state is UpdateUiState.ReadyToInstall ->
         if (canInstall) ResumeInstallAction.ContinueInstall else ResumeInstallAction.StayReady
-    state is UpdateUiState.Installing -> ResumeInstallAction.ReconcileInstalling
+    state is UpdateUiState.Installing && !sessionAlive -> ResumeInstallAction.ReconcileInstalling
     else -> ResumeInstallAction.None
 }
 
@@ -306,10 +310,27 @@ class UpdateUiController(
     private var awaitingInstallPermission = false
     private var installJob: Job? = null
 
+    /** #828：这次安装的系统会话 id；会话还没建好（APK 还在写入）时为 null。 */
+    @Volatile private var installSessionId: Int? = null
+
+    /** #828：会话还没建好算「还活着」——安装协程正在写 APK，结果只会来自它自己。 */
+    private fun installSessionAlive(): Boolean =
+        installSessionId?.let { UpdateInstaller.sessionAlive(context, it) } ?: true
+
+    /** #828：放掉上一次仍存活的会话（新一次安装顶替它，或用户显式放弃）。 */
+    private fun abandonInstallSession() {
+        installSessionId?.let { UpdateInstaller.abandonSession(context, it) }
+        installSessionId = null
+    }
+
     private fun reconcileInstallOnResume() {
-        val action = resumeInstallAction(_state.value, awaitingInstallPermission, UpdateInstaller.canInstall(context))
+        val alive = installSessionAlive()
+        val action = resumeInstallAction(_state.value, awaitingInstallPermission, UpdateInstaller.canInstall(context), alive)
         if (action == ResumeInstallAction.ContinueInstall || action == ResumeInstallAction.StayReady) {
             awaitingInstallPermission = false
+        }
+        if (_state.value is UpdateUiState.Installing && alive) {
+            PLog.i(UPDATE_LOG_TAG, "#828: back in foreground, install session still alive; waiting")
         }
         when (action) {
             ResumeInstallAction.ContinueInstall -> onUserInstall()
@@ -318,15 +339,32 @@ class UpdateUiController(
                 scope.launch {
                     delay(INSTALL_RECONCILE_GRACE_MS)
                     val s = _state.value
-                    if (s is UpdateUiState.Installing && installJob === job) {
+                    // 到点再查一次会话：只有它确实不在了才下结论。
+                    if (s is UpdateUiState.Installing && installJob === job && !installSessionAlive()) {
                         job?.cancel()
-                        PLog.i(UPDATE_LOG_TAG, "#793: back in foreground with no install result; back to ready")
+                        installSessionId = null
+                        PLog.i(UPDATE_LOG_TAG, "#793: back in foreground, session gone, no install result; back to ready")
                         _state.value = UpdateUiState.ReadyToInstall(s.version)
                     }
                 }
             }
             ResumeInstallAction.StayReady, ResumeInstallAction.None -> Unit
         }
+    }
+
+    /** #828：「正在安装」弹窗的「立即安装」——系统确认页被 Home 盖到后台时，把它重新拉到前面。 */
+    fun onReopenInstall() {
+        if (!UpdateInstaller.reopenConfirm(context)) {
+            PLog.i(UPDATE_LOG_TAG, "#828: no pending confirm page to reopen")
+        }
+    }
+
+    /** #828：「正在安装」弹窗的「以后再说」——用户显式放弃这次安装。 */
+    fun onGiveUpInstall() {
+        val s = _state.value as? UpdateUiState.Installing ?: return
+        installJob?.cancel()
+        abandonInstallSession()
+        _state.value = UpdateUiState.ReadyToInstall(s.version)
     }
 
     private fun autoCheck() {
@@ -507,9 +545,14 @@ class UpdateUiController(
             context.startActivity(UpdateInstaller.installPermissionIntent(context))
             return
         }
+        installJob?.cancel()
+        abandonInstallSession()
         installJob = scope.launch {
             _state.value = UpdateUiState.Installing(s.version)
-            when (UpdateInstaller.install(context, apk)) {
+            val outcome = UpdateInstaller.install(context, apk, onSession = { installSessionId = it })
+            // 会话有了终态（成功 / 用户取消 / 失败），系统那边已了结。
+            installSessionId = null
+            when (outcome) {
                 UpdateInstaller.Outcome.Success -> {
                     // 真升级时进程随即被替换，多半走不到这里；同版本重装等
                     // 边缘情形就把现场收拾干净。

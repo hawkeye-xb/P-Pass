@@ -3,7 +3,8 @@
 //
 // 本质：系统弹窗的结果 App 必须如实反映。标准做法（Android 官方）：
 //  1. 提交安装会话前先查 canRequestPackageInstalls()，没有授权先带去授权页；
-//  2. 回到前台时对账「正在安装」：确认页已关、仍无回执 = 这次没装。
+//  2. 回到前台时对账「正在安装」：以系统安装会话为准——会话已不存在、仍无回执 = 这次没装；
+//     会话还在就继续等（#828，见 UPD828InstallSessionTruthTest）。
 package com.hawkeyexb.ppass.update
 
 import java.io.File
@@ -18,20 +19,20 @@ class UPD793InstallReturnTest {
 
     /**
      * 反证：去掉 ReconcileInstalling 分支（= 回到前台不对账）→ 第一条红：
-     * 这正是 #793 的现场——授权门上取消后回执不来，界面一直「正在安装」。
+     * 这正是 #793 的现场——会话没了、回执不来，界面一直「正在安装」。
      */
     @Test
-    fun comingBackWhileInstallingIsReconciled() {
-        assertEquals(ResumeInstallAction.ReconcileInstalling, resumeInstallAction(installing, false, true))
-        assertEquals(ResumeInstallAction.ReconcileInstalling, resumeInstallAction(installing, false, false))
+    fun comingBackWhileInstallingWithTheSessionGoneIsReconciled() {
+        assertEquals(ResumeInstallAction.ReconcileInstalling, resumeInstallAction(installing, false, true, false))
+        assertEquals(ResumeInstallAction.ReconcileInstalling, resumeInstallAction(installing, false, false, false))
     }
 
     @Test
     fun comingBackFromThePermissionPageContinuesOnlyWhenGranted() {
-        assertEquals("授权了：接着装（用户本来就是要装）", ResumeInstallAction.ContinueInstall, resumeInstallAction(ready, true, true))
-        assertEquals("没授权：停在可以安装", ResumeInstallAction.StayReady, resumeInstallAction(ready, true, false))
-        assertEquals("没去过授权页：不自作主张去装", ResumeInstallAction.None, resumeInstallAction(ready, false, true))
-        assertEquals(ResumeInstallAction.None, resumeInstallAction(UpdateUiState.Idle, false, true))
+        assertEquals("授权了：接着装（用户本来就是要装）", ResumeInstallAction.ContinueInstall, resumeInstallAction(ready, true, true, false))
+        assertEquals("没授权：停在可以安装", ResumeInstallAction.StayReady, resumeInstallAction(ready, true, false, false))
+        assertEquals("没去过授权页：不自作主张去装", ResumeInstallAction.None, resumeInstallAction(ready, false, true, false))
+        assertEquals(ResumeInstallAction.None, resumeInstallAction(UpdateUiState.Idle, false, true, false))
     }
 
     /** 反证：把授权预检挪到 installJob 之后（或删掉）→ 红。 */
@@ -40,7 +41,7 @@ class UPD793InstallReturnTest {
         val src = File("src/main/java/com/hawkeyexb/ppass/update/UpdateUiController.kt").readText()
         val body = src.substringAfter("fun onUserInstall()").substringBefore("\n    }\n")
         val check = body.indexOf("UpdateInstaller.canInstall(context)")
-        val commit = body.indexOf("UpdateInstaller.install(context, apk)")
+        val commit = body.indexOf("UpdateInstaller.install(context, apk")
         assertTrue("onUserInstall 必须先查授权: $body", check >= 0)
         assertTrue("授权预检必须在提交安装会话之前", check < commit)
         assertTrue("没授权时带用户去授权页", body.contains("UpdateInstaller.installPermissionIntent(context)"))

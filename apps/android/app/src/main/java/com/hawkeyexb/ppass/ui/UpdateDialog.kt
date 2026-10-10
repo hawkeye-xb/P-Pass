@@ -32,6 +32,8 @@ fun UpdateDialog(
     onRetry: () -> Unit,
     onDismissFailed: () -> Unit,
     onInstall: () -> Unit,
+    onReopenInstall: () -> Unit,
+    onGiveUpInstall: () -> Unit,
 ) {
     when (state) {
         is UpdateUiState.Available -> AlertDialog(
@@ -143,8 +145,9 @@ fun UpdateDialog(
             },
         )
 
+        // #828：系统确认页可能被 Home 盖到后台（会话还在、没有终态）——给两个显式出口，不把人卡住。
         is UpdateUiState.Installing -> AlertDialog(
-            onDismissRequest = {}, // 系统确认页在前，这里不许关
+            onDismissRequest = {}, // 系统确认页在前，点外面不关；要走用下面的按钮
             title = { Text(stringResource(R.string.update_installing_title)) },
             text = {
                 Column {
@@ -156,7 +159,16 @@ fun UpdateDialog(
                     )
                 }
             },
-            confirmButton = {},
+            confirmButton = {
+                TextButton(onClick = onReopenInstall) {
+                    Text(stringResource(R.string.update_install_now), color = PPColor.Act)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onGiveUpInstall) {
+                    Text(stringResource(R.string.update_later), color = PPColor.Ink)
+                }
+            },
         )
 
         UpdateUiState.Idle, UpdateUiState.Checking -> Unit // 无弹窗态
