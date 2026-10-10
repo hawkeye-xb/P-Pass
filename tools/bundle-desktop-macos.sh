@@ -76,7 +76,7 @@ BUNDLE_RC=$?
 set -e
 if [ "$BUNDLE_RC" -ne 0 ]; then
   if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ "$IDENTITY" != "-" ]; then
-    echo "FATAL: tauri bundle 失败（退出码 $BUNDLE_RC），且本次是带凭据的" \
+    echo "FATAL: tauri bundle 失败（退出码 ${BUNDLE_RC}），且本次是带凭据的" \
          "构建——不容忍，这是真失败。" >&2
     exit "$BUNDLE_RC"
   fi

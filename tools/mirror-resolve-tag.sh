@@ -51,7 +51,7 @@ if [ "$EVENT" != workflow_dispatch ]; then
   if [ -z "$NEWEST" ]; then
     echo "::error::查不到已发布的非 test v* release，无法判断 $TAG 是否最新"; exit 1
   fi
-  [ "$NEWEST" = "$TAG" ] || skip "$TAG 不是最新发布的 release（最新是 $NEWEST），跳过，免得旧包覆盖新包"
+  [ "$NEWEST" = "$TAG" ] || skip "$TAG 不是最新发布的 release（最新是 ${NEWEST}），跳过，免得旧包覆盖新包"
 fi
 
 echo "tag=$TAG" >> "$OUT"

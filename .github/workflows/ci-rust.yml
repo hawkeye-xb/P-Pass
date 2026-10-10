@@ -138,7 +138,7 @@ jobs:
           # 包含关系自检：宽 lane 判要跑，窄 lane 不可能判不跑。
           # 真出现就是判据被改坏了 —— 当场两个都判要跑，不许放行。
           if [ "$heavy" = "true" ] && [ "$arch" != "true" ]; then
-            echo "::error::包含关系被破坏（run_heavy=true 而 run_arch=$arch）——判据有问题，全部改判要跑"
+            echo "::error::包含关系被破坏（run_heavy=true 而 run_arch=${arch}）——判据有问题，全部改判要跑"
             arch=true
             heavy=true
           fi

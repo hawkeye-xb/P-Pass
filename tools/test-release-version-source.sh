@@ -127,7 +127,7 @@ expect_rv() { # <desc> <want> <platform> [env...]
   local desc="$1" want="$2" plat="$3"; shift 3
   local got
   got=$(env -u RELEASE_TAG -u GITHUB_REF_NAME "$@" "$RV" "$plat" 2>&1) || got="exit=$? $got"
-  if [ "$got" = "$want" ]; then pass "② $desc → $got"; else fail "② $desc：期望 $want，实际 $got"; fi
+  if [ "$got" = "$want" ]; then pass "② $desc → $got"; else fail "② ${desc}：期望 ${want}，实际 $got"; fi
 }
 expect_rv "RELEASE_TAG=v0.9.3-test.1 GITHUB_REF_NAME=main android" "0.9.3-test.1" android \
   RELEASE_TAG=v0.9.3-test.1 GITHUB_REF_NAME=main
@@ -151,11 +151,11 @@ expect_cv() { # <desc> <want-exit: 0|nonzero> <grep-pattern> args...
   out=$("$CV" "$@" 2>&1) || rc=$?
   if { [ "$want" = 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" = nonzero ] && [ "$rc" -ne 0 ]; }; then
     if grep -q -- "$pat" <<<"$out"; then
-      pass "③ $desc（exit=$rc）"
+      pass "③ ${desc}（exit=${rc}）"
       return
     fi
   fi
-  fail "③ $desc：期望 exit $want 且含「$pat」，实际 exit=$rc：$out"
+  fail "③ ${desc}：期望 exit $want 且含「${pat}」，实际 exit=${rc}：$out"
 }
 expect_cv "head-ref 不存在 ⇒ 非零" nonzero "head-ref" v1.0.0 refs/tags/does-not-exist
 expect_cv "head-ref 恰好是目录名（tools）⇒ 非零，不被当成路径" nonzero "head-ref" v1.0.0 tools

@@ -24,12 +24,12 @@ if [ -z "$PREV" ]; then
   exit 1
 fi
 if ! git rev-parse -q --verify "${PREV}^{commit}" >/dev/null; then
-  echo "error: 找不到 $PREV（需要 fetch tag）" >&2
+  echo "error: 找不到 ${PREV}（需要 fetch tag）" >&2
   exit 1
 fi
 # REL-11（#708）：head-ref 同样必须存在——否则下面的 diff 会失败，门禁不能静默放行。
 if ! git rev-parse -q --verify "${HEAD_REF}^{commit}" >/dev/null; then
-  echo "::error::找不到 head-ref $HEAD_REF——版本门禁无法计算改动面" >&2
+  echo "::error::找不到 head-ref ${HEAD_REF}——版本门禁无法计算改动面" >&2
   exit 1
 fi
 

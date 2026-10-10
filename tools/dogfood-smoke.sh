@@ -118,7 +118,7 @@ if [ -z "$DIAG" ]; then echo "logs.export 里 diag_events.json 为空" >&2; exit
 # 提前关管道之类时序影响（第 3 步注释里那类坑）。
 case "$DIAG" in
   *"$HOME"*)
-    echo "脱敏失败：diag_events.json 泄漏了 \$HOME（$HOME）" >&2
+    echo "脱敏失败：diag_events.json 泄漏了 \$HOME（${HOME}）" >&2
     exit 1 ;;
 esac
 

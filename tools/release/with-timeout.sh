@@ -49,16 +49,16 @@ while :; do
     waited=$((waited + 1))
   done
   if [ "$timed_out" -eq 1 ]; then
-    echo "TIMEOUT: 「$name」超过 ${limit}s 没有返回（第 $attempt/$attempts 次）" >&2
+    echo "TIMEOUT: 「${name}」超过 ${limit}s 没有返回（第 $attempt/$attempts 次）" >&2
     if [ "$attempt" -lt "$attempts" ]; then
       attempt=$((attempt + 1))
-      echo "         重试「$name」" >&2
+      echo "         重试「${name}」" >&2
       continue
     fi
     exit 124
   fi
   wait "$pid"
   rc=$?
-  [ "$rc" -eq 0 ] || echo "FAILED: 「$name」退出码 $rc" >&2
+  [ "$rc" -eq 0 ] || echo "FAILED: 「${name}」退出码 $rc" >&2
   exit "$rc"
 done

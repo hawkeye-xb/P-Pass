@@ -46,7 +46,7 @@ fi
 
 VJSON=release/versions.json
 if [ ! -f "$VJSON" ]; then
-  echo "error: 缺 $VJSON（版本真相源，UPD-13）" >&2
+  echo "error: 缺 ${VJSON}（版本真相源，UPD-13）" >&2
   exit 1
 fi
 
