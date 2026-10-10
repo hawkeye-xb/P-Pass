@@ -18,11 +18,11 @@
     <!-- M3 全页面状态稿：独立子页，不是内联展开。 -->
     <string name="scan_manual_title">输入配对串</string>
     <string name="scan_manual_body">在电脑的「添加设备」里点「无法扫码？复制配对串」，把它发到这台手机上，粘贴到下面。</string>
-    <string name="scan_manual_placeholder">PP-XXXX-XXXX-XXXX-XXXX</string>
+    <string name="scan_manual_placeholder">ppf://pair?node=…</string>
     <string name="scan_manual_paste">粘贴</string>
     <string name="scan_manual_note">配对串和二维码一样，10 分钟内有效。</string>
     <string name="scan_manual_submit">连接</string>
-    <string name="scan_manual_invalid">这不是 P-Pass 配对码</string>
+    <string name="scan_manual_invalid">这不是 P-Pass 配对串</string>
     <string name="cancel">取消</string>
 
     <string name="pair_waiting_title">正在请求加入</string>
