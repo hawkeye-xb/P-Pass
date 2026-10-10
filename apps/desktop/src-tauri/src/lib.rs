@@ -676,6 +676,12 @@ fn reconcile_autostart_registration() {
                 sidecar.display()
             );
         }
+        Ok(platform::AutostartReconcile::Repaired) => {
+            eprintln!(
+                "#726: 开机自启登记文件读不出（已损坏）——已重写为 {}",
+                sidecar.display()
+            );
+        }
         Ok(_) => {}
         Err(e) => eprintln!("#604: 开机自启登记对账失败: {e}"),
     }

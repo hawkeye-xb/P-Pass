@@ -196,6 +196,10 @@ pub enum AutostartReconcile {
     Unchanged,
     /// 已登记但指向别处（换目录 / 更新 / 从临时或备份副本注册过）：已用期望路径重写。
     Rewritten,
+    /// 【#726】登记条目在，但读不出目标路径（写了一半 / 被改坏）：已用期望路径重写。
+    ///
+    /// 与 `Rewritten` 分开：日志要能说清是「修好了一个坏文件」还是「改了一个旧路径」。
+    Repaired,
     /// **闸门拦下**：当前可执行文件不在「稳定安装位置」（dmg 挂载点 / 下载目录 /
     /// App Translocation 随机路径 / 备份副本 …），一律不碰登记。
     ///
@@ -205,19 +209,34 @@ pub enum AutostartReconcile {
     SkippedUnstableLocation,
 }
 
-/// 【DESK-42 #604】对账决策（纯函数——三条分支由单测钉死）。
+/// 【#726】登记条目的三种状态。
+///
+/// 为什么不用 `Option<PathBuf>`：`None` 会把「没登记」和「登记文件坏了」混成一件事——
+/// 前者不许动（DAE-03 ②），后者必须重写，否则每次开机服务都起不来、且不会自己好。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutostartRegistration {
+    /// 没有登记条目（用户没开自启，或已关掉）。
+    Absent,
+    /// 有登记条目，但读不出目标路径。
+    Unreadable,
+    /// 登记指向这个可执行文件。
+    At(std::path::PathBuf),
+}
+
+/// 【DESK-42 #604】对账决策（纯函数——各分支由单测钉死）。
 ///
 /// 缺陷现场：登记被钉在 `~/P-Pass-Backups/<日期>/old-app/P-Pass.app/...`，
-/// 而实际安装的 App 在 `/Applications`——`None`/指向自己/指向别处三种情形
+/// 而实际安装的 App 在 `/Applications`——没登记/指向自己/指向别处/读不出四种情形
 /// 必须能被分开判定，否则「漂移」永远只是静默的旧值。
 pub fn reconcile_decision(
-    registered: Option<&std::path::Path>,
+    registered: &AutostartRegistration,
     expected: &std::path::Path,
 ) -> AutostartReconcile {
     match registered {
-        None => AutostartReconcile::NotRegistered,
-        Some(p) if p == expected => AutostartReconcile::Unchanged,
-        Some(_) => AutostartReconcile::Rewritten,
+        AutostartRegistration::Absent => AutostartReconcile::NotRegistered,
+        AutostartRegistration::Unreadable => AutostartReconcile::Repaired,
+        AutostartRegistration::At(p) if p == expected => AutostartReconcile::Unchanged,
+        AutostartRegistration::At(_) => AutostartReconcile::Rewritten,
     }
 }
 
@@ -237,6 +256,16 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(None)
     }
 
+    /// 【#726】登记条目的状态：比 [`Self::autostart_registered_exec`] 多分出「读不出」。
+    ///
+    /// 默认实现只能分出两种（读不出的平台没有「坏文件」这个概念）；能分的平台覆盖它。
+    fn autostart_registration(&self) -> Result<AutostartRegistration> {
+        Ok(match self.autostart_registered_exec()? {
+            Some(p) => AutostartRegistration::At(p),
+            None => AutostartRegistration::Absent,
+        })
+    }
+
     /// 【DESK-42 #604】对账**闸门**：本平台是否允许用 `expected` 改写开机自启登记。
     ///
     /// 默认 `false` = **保守拒绝**：平台必须显式声明哪些位置算「稳定安装位置」，
@@ -247,7 +276,7 @@ pub trait PlatformAdapter: Send + Sync {
         false
     }
 
-    /// 【DESK-42 #604】开机自启登记对账：登记存在但指向别处 → 用 `expected`
+    /// 【DESK-42 #604】开机自启登记对账：登记存在但指向别处或读不出 → 用 `expected`
     /// 重写（幂等）；未登记 → 不动；一致 → 不动；**位置不稳定 → 闸门拦下，不碰**。
     ///
     /// 由启动路径调用一次即可自愈「换目录 / 更新后路径漂移」的历史登记。
@@ -257,9 +286,12 @@ pub trait PlatformAdapter: Send + Sync {
         if !self.autostart_reconcile_allowed(expected) {
             return Ok(AutostartReconcile::SkippedUnstableLocation);
         }
-        let registered = self.autostart_registered_exec()?;
-        let action = reconcile_decision(registered.as_deref(), expected);
-        if action == AutostartReconcile::Rewritten {
+        let registered = self.autostart_registration()?;
+        let action = reconcile_decision(&registered, expected);
+        if matches!(
+            action,
+            AutostartReconcile::Rewritten | AutostartReconcile::Repaired
+        ) {
             self.install_autostart(expected)?;
         }
         Ok(action)
@@ -860,10 +892,11 @@ mod tests {
         );
     }
 
-    /// 【DESK-42 #604】对账决策的三条分支——每条都是真机上真实出现过的形状：
-    /// 未登记（不许多手去装）、登记正确（不许动它）、登记漂移（必须重写）。
+    /// 【DESK-42 #604】对账决策的四条分支：
+    /// 未登记（不许多手去装）、登记正确（不许动它）、登记漂移（必须重写）、登记损坏（#726，必须重写）。
     #[test]
-    fn reconcile_decision_covers_all_three_shapes() {
+    fn reconcile_decision_covers_all_four_shapes() {
+        use AutostartRegistration::{Absent, At, Unreadable};
         let expected = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
         // 真机实测值（#604 挂号现象）：登记被钉在备份目录里的旧 App 上。
         let stale = std::path::Path::new(
@@ -871,19 +904,25 @@ mod tests {
         );
 
         assert_eq!(
-            reconcile_decision(None, expected),
+            reconcile_decision(&Absent, expected),
             AutostartReconcile::NotRegistered,
             "没登记就不许顺手装（DAE-03 ②：纯新启动不得改用户的开机自启）"
         );
         assert_eq!(
-            reconcile_decision(Some(expected), expected),
+            reconcile_decision(&At(expected.into()), expected),
             AutostartReconcile::Unchanged,
             "登记正确时不许反复重写（否则每次启动都 bootout/bootstrap 一次）"
         );
         assert_eq!(
-            reconcile_decision(Some(stale), expected),
+            reconcile_decision(&At(stale.into()), expected),
             AutostartReconcile::Rewritten,
             "指向别处（换目录/更新/备份副本）必须判要重写——这就是本卡的现象"
+        );
+        // #726：登记文件在但读不出 ⇒ 必须修。当成「没登记」⇒ 每次开机服务都起不来、不会自己好。
+        assert_eq!(
+            reconcile_decision(&Unreadable, expected),
+            AutostartReconcile::Repaired,
+            "登记文件损坏必须判要重写，不许当成没登记"
         );
     }
 
@@ -904,6 +943,56 @@ mod tests {
             "<key>NotProgramArguments</key>",
         );
         assert_eq!(macos::plist_program_argument(&broken), None);
+    }
+
+    /// #726：登记文件「在但读不出」必须归成 `Unreadable`，不许混进「没登记」。
+    /// 每种坏法都是真实会出现的形状：写到一半断电、被截成空文件、被改坏。
+    /// 反证：把 `registration_from_read` 里的 `Unreadable` 换回 `Absent` → 本测试必须红。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_unreadable_registration_is_not_mistaken_for_absent() {
+        use macos::registration_from_read as classify;
+        use AutostartRegistration::{Absent, At, Unreadable};
+        let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let good = macos::agent_plist(exec);
+
+        assert_eq!(classify(Ok(good.clone())).unwrap(), At(exec.into()));
+        let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(classify(Err(not_found)).unwrap(), Absent);
+
+        let half = good[..good.find("<key>ProgramArguments</key>").unwrap() + 10].to_string();
+        for (shape, text) in [
+            ("写到一半", half),
+            ("空文件", String::new()),
+            ("被改坏", "not a plist at all".to_string()),
+        ] {
+            assert_eq!(
+                classify(Ok(text)).unwrap(),
+                Unreadable,
+                "{shape}：登记文件在但读不出，必须判损坏（由对账重写）"
+            );
+        }
+        // 读文件本身出错（权限等）照旧报错，不许静默归类
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert!(classify(Err(denied)).is_err());
+    }
+
+    /// #726：原子写入——写完内容完整、临时文件不残留、已有文件被整体替换。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_write_atomic_replaces_whole_file_and_leaves_no_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("com.p-pass.daemon.plist");
+        std::fs::write(&path, "half a plist <key>Progr").unwrap();
+
+        macos::write_atomic(&path, "complete").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "complete");
+        let names: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["com.p-pass.daemon.plist"], "临时文件不许残留");
     }
 
     /// UPD-06 (#616)：壳是**登录项**，但**不是守卫**。

@@ -11,7 +11,10 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::{AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Result, ServiceMode};
+use crate::{
+    AutostartRegistration, AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Result,
+    ServiceMode,
+};
 
 const AGENT_LABEL: &str = "com.p-pass.daemon";
 const KEYCHAIN_SERVICE: &str = "P-Pass";
@@ -213,6 +216,49 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
 }
 
+/// 【#726】把读登记文件的结果归成三种状态（纯函数，单测钉死）。
+///
+/// 读不出（空文件 / 写了一半 / 被改坏）必须是 `Unreadable` 而不是 `Absent`：
+/// 当成「没登记」⇒ 对账不动它 ⇒ 每次开机 launchd 都加载失败，服务起不来也不会自己好。
+pub(crate) fn registration_from_read(
+    read: std::io::Result<String>,
+) -> Result<AutostartRegistration> {
+    match read {
+        Ok(text) => Ok(match plist_program_argument(&text) {
+            Some(p) => AutostartRegistration::At(PathBuf::from(p)),
+            None => AutostartRegistration::Unreadable,
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(AutostartRegistration::Absent),
+        Err(e) => Err(PlatformError::Io {
+            action: "read LaunchAgent plist",
+            source: e,
+        }),
+    }
+}
+
+/// 【#726】登记文件原子写入：先写同目录的临时文件并落盘，再一步改名换过去。
+///
+/// 直接 `fs::write` 写到一半断电 / 被杀 ⇒ 留下半个 plist ⇒ 开机加载失败。
+/// 改名在同一卷上是原子的：中途出事只会留下旧的完整文件。写失败时删掉临时文件；
+/// 进程被杀留下的临时文件，下次写入时被 `File::create` 截断覆盖。
+pub(crate) fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "no file name"))?;
+    let tmp = path.with_file_name(format!(".{}.tmp", name.to_string_lossy()));
+    let result = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
     move |source| PlatformError::Io { action, source }
 }
@@ -246,7 +292,7 @@ impl PlatformAdapter for MacosAdapter {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
         }
-        std::fs::write(&path, plist).map_err(io_err("write LaunchAgent plist"))?;
+        write_atomic(&path, &plist).map_err(io_err("write LaunchAgent plist"))?;
         // Load now (idempotent-ish: bootout first, ignore its failure).
         let uid = Command::new("id")
             .arg("-u")
@@ -274,19 +320,18 @@ impl PlatformAdapter for MacosAdapter {
         Ok(Self::agent_plist_path().exists())
     }
 
-    /// 【DESK-42 #604】读登记条目里的目标路径：文件不存在 = 未登记（`None`）。
-    /// 读得到但解析不出路径 = 登记已损坏，同样按「读不出」报 `None`，
-    /// 由对账把它重写成当前安装路径。
+    /// 【DESK-42 #604】读登记条目里的目标路径：文件不存在或读不出路径都是 `None`。
+    /// 对账要分开这两种，用 [`Self::autostart_registration`]。
     fn autostart_registered_exec(&self) -> Result<Option<PathBuf>> {
-        let path = Self::agent_plist_path();
-        match std::fs::read_to_string(&path) {
-            Ok(text) => Ok(plist_program_argument(&text).map(PathBuf::from)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(PlatformError::Io {
-                action: "read LaunchAgent plist",
-                source: e,
-            }),
-        }
+        Ok(match self.autostart_registration()? {
+            AutostartRegistration::At(p) => Some(p),
+            AutostartRegistration::Absent | AutostartRegistration::Unreadable => None,
+        })
+    }
+
+    /// 【#726】文件不存在 = 没登记；读得到但解析不出路径 = 损坏，由对账重写。
+    fn autostart_registration(&self) -> Result<AutostartRegistration> {
+        registration_from_read(std::fs::read_to_string(Self::agent_plist_path()))
     }
 
     fn uninstall_autostart(&self) -> Result<()> {
@@ -484,7 +529,7 @@ impl PlatformAdapter for MacosAdapter {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
             }
-            std::fs::write(&path, want).map_err(io_err("write shell LaunchAgent plist"))?;
+            write_atomic(&path, &want).map_err(io_err("write shell LaunchAgent plist"))?;
         }
         Ok(())
     }
