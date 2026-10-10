@@ -1075,6 +1075,17 @@ fn register_shell_login_item() {
     }
 }
 
+/// #809：外壳自报的版本 = 编进这只壳的 tauri `package_info().version`。
+///
+/// 不用 Cargo 的 `CARGO_PKG_VERSION` 宏变量：那是 Cargo.toml 里的号，发布构建不改它，test tag
+/// 时与 daemon（`PPF_BUILD_VERSION` = tag 名）错开。`package_info` 取的是 tauri 配置
+/// 合并后的 `version`——发布构建由 `tools/bundle-desktop-macos.sh` / release.yml 经
+/// `--config` 注入 `tools/release-version.sh desktop` 的输出，与 daemon 同源；也是
+/// 前端 `getVersion()`、Info.plist、updater 当前版本用的同一个值。
+fn shell_version<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
+    app.package_info().version.to_string()
+}
+
 /// UPD-07 (#617)：把自己的身份（版本 + pid）报给 daemon —— owner 对账的**唯一**来源。
 ///
 /// 为什么必须由壳自己报：更新装完"磁盘已是新版、运行中的壳还是旧版"时，只有 daemon
@@ -1083,9 +1094,9 @@ fn register_shell_login_item() {
 ///
 /// 老壳不来这一条 ⇒ daemon 记录为空 ⇒ 它什么都不做（fail-safe）。重试几轮是因为
 /// 启动时序：登录项拉起的壳可能比常驻服务先就绪。
-fn announce_shell_identity() {
+fn announce_shell_identity(version: String) {
     let params = serde_json::json!({
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": version,
         "pid": std::process::id(),
     });
     for _ in 0..30 {
@@ -1348,11 +1359,12 @@ fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>, answere
 /// 落盘位置与文件名沿用 daemon 原来的 `<库目录>/ppf-logs.zip`（验收人
 /// 已经习惯了，不动）。
 #[tauri::command]
-fn export_logs_bundle() -> Result<Value, String> {
+fn export_logs_bundle(app: tauri::AppHandle) -> Result<Value, String> {
     let env = ExportEnv {
         platform_dir: platform::adapter().data_dir(),
         home: daemon_logs::home_dir(),
         plist: daemon_logs::plist_path(),
+        app_version: shell_version(&app),
     };
     // daemon 可达就把它那三份要过来（它写出来的 zip 先整份读进内存，
     // 之后才允许覆盖同名文件）；不可达只记原因，收集继续。
@@ -1391,6 +1403,8 @@ struct ExportEnv {
     home: std::path::PathBuf,
     /// LaunchAgent plist（日志路径的唯一真相）。
     plist: std::path::PathBuf,
+    /// 外壳版本（#809：取 [`shell_version`]，与 daemon 同源）。
+    app_version: String,
 }
 
 /// daemon 活着时它能给的那部分。
@@ -1454,7 +1468,7 @@ fn assemble_export(
 
     let mut inputs = daemon_logs::BundleInputs {
         home: home.clone(),
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        app_version: env.app_version.clone(),
         plist_found: plist.is_some(),
         config_toml: std::fs::read_to_string(env.platform_dir.join("config.toml")).ok(),
         stdout_tail: out_path
@@ -1852,7 +1866,10 @@ pub fn run() {
             std::thread::spawn(register_shell_login_item);
             // UPD-07 (#617)：把自己（版本 + pid）报给 daemon —— owner 判断"壳旧不旧"
             // 的唯一来源。独立线程 + 重试，不阻塞启动，也不拖慢首屏。
-            std::thread::spawn(announce_shell_identity);
+            {
+                let version = shell_version(app.handle());
+                std::thread::spawn(move || announce_shell_identity(version));
+            }
             // #667：内核比磁盘上的旧 / 不归 launchd 管 ⇒ 自动换（尊重用户停止与传输中）。
             {
                 let app = app.handle().clone();
@@ -2002,6 +2019,27 @@ fn tray_left_click_opens_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 诊断包测试注入的外壳版本（#809：生产里来自 [`shell_version`]）。
+    const TEST_APP_VERSION: &str = "9.9.9-test.1";
+
+    /// #809：外壳自报版本（shell.announce / 诊断包）只认 tauri `package_info`——
+    /// 它是发布构建经 `--config` 注入、与 daemon 同源的那个号。`CARGO_PKG_VERSION`
+    /// 是 Cargo.toml 里的号，发布构建不改它，test tag 时与 daemon 错开。
+    #[test]
+    fn shell_reports_tauri_package_version_not_cargo_pkg_version() {
+        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let banned = concat!("env!(\"CARGO_PKG", "_VERSION\")");
+        assert!(
+            !product.contains(banned),
+            "外壳生产代码不许再用 {banned} 自报版本——改用 shell_version(app)"
+        );
+        assert!(product.contains("app.package_info().version.to_string()"));
+        assert!(
+            product.contains("\"version\": version,"),
+            "shell.announce 报的是传入的 shell_version"
+        );
+    }
 
     // ── I18N-03 (#492)：托盘文案 + keyed 错误 ─────────────────────────
 
@@ -2616,6 +2654,7 @@ mod tests {
             platform_dir,
             home: home.clone(),
             plist,
+            app_version: TEST_APP_VERSION.to_string(),
         };
         let res = assemble_export(
             &env,
@@ -2654,7 +2693,7 @@ mod tests {
             "{text}"
         );
         // 版本号（App + daemon）都在。
-        assert!(text.contains(env!("CARGO_PKG_VERSION")), "{text}");
+        assert!(text.contains(TEST_APP_VERSION), "{text}");
         assert!(text.contains("daemon_version = 0.3.0"), "{text}");
         // 脱敏不回退：家目录不出现在包里。
         assert!(!text.contains(&home.display().to_string()), "{text}");
@@ -2672,6 +2711,7 @@ mod tests {
             home: tmp.path().join("home"),
             // plist 不存在 → 如实记"未注册"，不猜 ~/Library/Logs。
             plist: tmp.path().join("missing.plist"),
+            app_version: TEST_APP_VERSION.to_string(),
         };
         let parts = DaemonParts {
             version: Some("0.4.0".into()),
@@ -2712,6 +2752,7 @@ mod tests {
             platform_dir,
             home: tmp.path().join("home"),
             plist: tmp.path().join("missing.plist"),
+            app_version: TEST_APP_VERSION.to_string(),
         };
         let collection = DaemonCollection::LogsUnavailable {
             version: Some("9.9.9-fake".into()),
@@ -2774,6 +2815,7 @@ mod tests {
             platform_dir,
             home: tmp.path().join("home"),
             plist: tmp.path().join("missing.plist"),
+            app_version: TEST_APP_VERSION.to_string(),
         };
         let res = assemble_export(
             &env,
@@ -2810,6 +2852,7 @@ mod tests {
             platform_dir,
             home: home.clone(),
             plist: tmp.path().join("missing.plist"),
+            app_version: TEST_APP_VERSION.to_string(),
         };
         let weird_version = format!("9.9.9-fake+{}", home.display());
         let res = assemble_export(

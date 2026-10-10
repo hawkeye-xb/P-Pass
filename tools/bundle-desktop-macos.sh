@@ -19,6 +19,13 @@
 #   6. hdiutil → P-Pass_<版本>_macos-arm64.dmg（UPD-15 #685：名字由
 #      tools/artifact-names.sh 单源派生，不再硬编码）
 #
+# 版本号（#809）：外壳与 daemon 是同一次构建的两个产物，版本号只有一个来源——
+# `tools/release-version.sh desktop`（正式 tag 取 release/versions.json，test tag
+# 取 tag 名）。daemon 由 release.yml 经 PPF_BUILD_VERSION 注入同一个值；外壳在
+# 第 2、3 步经 tauri 官方的 `--config` 合并注入（编进二进制的 package_info /
+# getVersion()、Info.plist、updater 的当前版本都取它）。tauri.conf.json 里的
+# "version" 不再是产物版本的来源。第 5c 步实读产物核对三者一致，不一致不许出门。
+#
 # Signing: ad-hoc by default (no-credential path, matches release.yml gating).
 # Pass a second arg (codesign identity) for the signed path — caller gates it.
 set -euo pipefail
@@ -34,6 +41,12 @@ DESKTOP="$(cd "$(dirname "$0")/../apps/desktop" && pwd)"
 WT="$(cd "$(dirname "$0")/release" && pwd)/with-timeout.sh"
 # UPD-15：dmg 名 = P-Pass_<desktop 端版本>_macos-arm64.dmg（唯一真相在 artifact-names.sh）
 DMG_NAME="$("$(dirname "$0")/artifact-names.sh" macos-dmg)"
+# #809：本次构建的版本号（与 dmg 名、daemon 的 PPF_BUILD_VERSION 同源）。
+VERSION="$("$(dirname "$0")/release-version.sh" desktop)"
+[ -n "$VERSION" ] || { echo "FATAL: tools/release-version.sh desktop 没给出版本号" >&2; exit 1; }
+# 两次 tauri 调用（build / bundle）读同一份合并配置；不改动入库的 tauri.conf.json。
+# tauri CLI 的 --config 接受 JSON 字符串（官方用法）。
+VERSION_CONFIG="{\"version\":\"$VERSION\"}"
 
 [ -d "$REL/lib" ] || { echo "FATAL: $REL/lib missing — run bundle-macos.sh first" >&2; exit 1; }
 [ -f "$REL/daemon" ] || { echo "FATAL: $REL/daemon missing" >&2; exit 1; }
@@ -42,10 +55,10 @@ echo "── 1. sidecar = bundled daemon"
 mkdir -p "$DESKTOP/src-tauri/binaries"
 cp "$REL/daemon" "$DESKTOP/src-tauri/binaries/ppf-daemon-aarch64-apple-darwin"
 
-echo "── 2. pnpm install + tauri build --no-bundle"
+echo "── 2. pnpm install + tauri build --no-bundle（版本 ${VERSION}）"
 cd "$DESKTOP"
 pnpm install --frozen-lockfile
-pnpm tauri build --no-bundle
+pnpm tauri build --no-bundle --config "$VERSION_CONFIG"
 
 echo "── 3. tauri bundle (.app)"
 # BUILD-05: tauri.conf.json 有 `createUpdaterArtifacts: true`，所以这一步
@@ -58,7 +71,7 @@ echo "── 3. tauri bundle (.app)"
 # 只在于它不该连累后面三步。所以：本地容忍，**CI 照旧严格**——有签名密钥
 # 却失败，那是真失败。无论哪条路径，`.app` 不存在一律显式失败。
 set +e
-pnpm tauri bundle
+pnpm tauri bundle --config "$VERSION_CONFIG"
 BUNDLE_RC=$?
 set -e
 if [ "$BUNDLE_RC" -ne 0 ]; then
@@ -118,6 +131,24 @@ if ! SELFCHECK_OUT="$("$SIDECAR" --version 2>&1)"; then
   exit 1
 fi
 echo "   ✓ $SELFCHECK_OUT"
+
+# ── 5c. #809 版本同源自检：外壳（Info.plist）== daemon == 本次构建版本 ─────
+# 同一次构建的两个产物，版本号必须来自同一个源。以前外壳取 tauri.conf.json、
+# daemon 取 tag：正式 tag 恰好一致，test tag 就错开（壳 0.9.5 / 服务
+# 0.9.12-test.1）。这里只问结果：产物里写的是不是同一个号。
+# 反证锚点：去掉第 2/3 步的 `--config` 后，test tag 构建必须在本步失败。
+# 用 python3 标准库 plistlib 读：dry-run 在 Linux runner 上跑，那里没有 PlistBuddy。
+PLIST_VERSION="$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb")).get("CFBundleShortVersionString",""))' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+DAEMON_VERSION="${SELFCHECK_OUT#P-Pass daemon }"
+echo "── 5c. 版本同源：构建 $VERSION / 外壳 Info.plist $PLIST_VERSION / daemon $DAEMON_VERSION"
+if [ "$PLIST_VERSION" != "$VERSION" ] || [ "$DAEMON_VERSION" != "$VERSION" ]; then
+  echo "FATAL: 外壳与 daemon 的版本号不同源（#809）——" >&2
+  echo "       tools/release-version.sh desktop = $VERSION" >&2
+  echo "       Info.plist CFBundleShortVersionString = ${PLIST_VERSION:-<读不到>}" >&2
+  echo "       ppf-daemon --version = $SELFCHECK_OUT" >&2
+  echo "       daemon 须以 PPF_BUILD_VERSION=<上面这个号> 构建；外壳由本脚本 --config 注入。" >&2
+  exit 1
+fi
 
 # BUILD-05（验收人 2026-09-17 定调：本地先讲究快）：dmg 那套
 # hdiutil + 挂载 + AppleScript 布局对狗粮验证零价值，只拖慢每一轮。

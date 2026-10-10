@@ -453,6 +453,10 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+          # #809：外壳版本与 daemon（上一步的 PPF_BUILD_VERSION）同源——同一个
+          # steps.ppf_ver，经 tauri 官方 --config 合并注入；tauri.conf.json 的
+          # "version" 不再是产物版本的来源。NSIS 的 VIProductVersion 只取数字三段。
+          PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
         run: |
           set -euo pipefail
           npm install -g pnpm@11
@@ -464,7 +468,7 @@ jobs:
             apps/desktop/src-tauri/binaries/ppf-daemon-x86_64-pc-windows-msvc.exe
           cd apps/desktop
           pnpm install --frozen-lockfile
-          pnpm tauri build --bundles nsis
+          pnpm tauri build --bundles nsis --config "{\"version\":\"$PPF_BUILD_VERSION\"}"
           cd ../..
           ls -la apps/desktop/src-tauri/target/release/bundle/nsis/
 
