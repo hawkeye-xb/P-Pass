@@ -21,7 +21,7 @@ import javax.xml.parsers.DocumentBuilderFactory
  * 必须严格位于某个 `<cache-path>` 声明的目录**之下**（不能等于它）。
  *
  * 反证：把 file_paths.xml 的 update 条目改回 `path="ppass-update.apk"`，或把
- * [updateApkFile] 改回直接放在 cacheDir 根下，本测试红。
+ * 把 [updateRootDir] 改回直接放在 cacheDir 根下，本测试红。
  */
 class UpdateApkFileProviderPathTest {
 
@@ -44,7 +44,8 @@ class UpdateApkFileProviderPathTest {
     @Test
     fun update_apk_sits_strictly_inside_a_declared_cache_path_directory() {
         val cacheDir = File("/data/user/0/com.hawkeyexb.ppass/cache")
-        val apk = updateApkFile(cacheDir).path
+        // #719: 包在按身份分的子目录里（update/<key>/ppass-update.apk），同样必须落在声明的根下。
+        val apk = updateArtifactsOf(cacheDir, downloadIdentityOf("0.9.12", "https://x.invalid/a.apk", "ab".repeat(32))).apk.path
         val roots = cachePathRoots().map { File(cacheDir, it).path.trimEnd('/') }
         assertTrue(
             "更新 APK $apk 不在任何 <cache-path> 目录之下（声明的根：$roots）；" +

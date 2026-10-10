@@ -329,6 +329,13 @@ sealed interface ApkDownloadResult {
      */
     data class Unexpected(val phase: Phase, val cause: String) : ApkDownloadResult
 
+    /**
+     * #719: Worker 已被停止（取消 / 被新的下载顶替）——按 WorkManager 的约定停手。
+     * 不是失败：不重试、不清理、不写标记，产物原样留给它的主人处置。
+     * [receivedBytes] = 本跑 body 已收字节（不含断点基数，只用于日志）。
+     */
+    data class Stopped(val receivedBytes: Long) : ApkDownloadResult
+
     enum class Phase { Connect, Headers, Body }
 }
 
@@ -346,6 +353,8 @@ fun ApkDownloadResult.logLine(url: String): String = when (this) {
         "apk download LOCAL WRITE FAILED for $url (received $receivedBytes bytes): $cause"
     is ApkDownloadResult.Unexpected ->
         "apk download UNEXPECTED ERROR at $url during ${phase.name.lowercase()}: $cause"
+    is ApkDownloadResult.Stopped ->
+        "apk download STOPPED at $url: work was stopped (received $receivedBytes bytes this run)"
 }
 
 // APK 走 HTTPS（GitHub release 资产 → 302 → CDN），不经 iroh relay，没有
@@ -402,6 +411,9 @@ internal fun isTransientDownloadFailure(result: ApkDownloadResult): Boolean = wh
  * [onProgress] 以「含断点的总已收 / 总大小（未知为 -1）」回调，供 UI 进度条。
  * UPD-19: 瞬时失败（[isTransientDownloadFailure]）保留 [dest] 的残包给下一跑续传——
  * 原先任何失败都删，WorkManager 的退避重试于是次次从 0 字节重下；其余失败照旧删。
+ * #719: [isStopped] 为真时（Worker 被取消或被新下载顶替）每跳连接前、每块写盘前
+ * 都会停手，返回 [ApkDownloadResult.Stopped]，不碰 [dest]——WorkManager 对被停
+ * 的 Worker 的约定就是尽快自行退出；阻塞中的那一次 read 返回后即停。
  */
 fun downloadApk(
     url: String,
@@ -411,12 +423,13 @@ fun downloadApk(
     },
     readTimeoutMs: Int = APK_READ_TIMEOUT_MS,
     resumeFromBytes: Long = 0L,
+    isStopped: () -> Boolean = { false },
     onProgress: (received: Long, total: Long) -> Unit = { _, _ -> },
 ): ApkDownloadResult {
     var resume = resumePlanFor(resumeFromBytes)
     var rangeRetried = false
     while (true) {
-        val result = downloadOnce(url, dest, open, readTimeoutMs, resume, onProgress)
+        val result = downloadOnce(url, dest, open, readTimeoutMs, resume, isStopped, onProgress)
         // 416 = 本地残包与远端对不上（含 206 起点错位，见 downloadOnce）：
         // 删残包、摘掉 Range 头，完整重试一次。
         if (result is ApkDownloadResult.HttpStatus && result.code == 416 &&
@@ -427,7 +440,11 @@ fun downloadApk(
             resume = resumePlanFor(0)
             continue
         }
-        if (result !is ApkDownloadResult.Ok && !isTransientDownloadFailure(result)) dest.delete()
+        if (result !is ApkDownloadResult.Ok && result !is ApkDownloadResult.Stopped &&
+            !isTransientDownloadFailure(result)
+        ) {
+            dest.delete()
+        }
         return result
     }
 }
@@ -438,6 +455,7 @@ private fun downloadOnce(
     open: (String) -> java.net.HttpURLConnection,
     readTimeoutMs: Int,
     resume: ResumePlan,
+    isStopped: () -> Boolean,
     onProgress: (received: Long, total: Long) -> Unit,
 ): ApkDownloadResult {
     var current = url
@@ -452,6 +470,10 @@ private fun downloadOnce(
         // TLS / connectTimeout 都发生在 responseCode 里——阶段已是 Headers，
         // CDN 连不上会被错记成「字节停滞」。逐跳显式 connect 才能把阶段分对。
         while (result == null) {
+            if (isStopped()) {
+                result = ApkDownloadResult.Stopped(0)
+                break
+            }
             phase = ApkDownloadResult.Phase.Connect
             val c = open(current)
             conn = c
@@ -493,7 +515,7 @@ private fun downloadOnce(
                 val expected = c.contentLengthLong.let { if (it >= 0) it + base else -1L }
                 var bodyReceived = 0L
                 result = copyBody(
-                    c.inputStream, dest, appending,
+                    c.inputStream, dest, appending, isStopped,
                     { n -> bodyReceived = n; received = base + n },
                 ) { done ->
                     onProgress(base + done, expected)
@@ -533,6 +555,7 @@ private fun copyBody(
     input: java.io.InputStream,
     dest: File,
     append: Boolean,
+    isStopped: () -> Boolean,
     onBodyBytes: (Long) -> Unit,
     onProgress: (Long) -> Unit,
 ): ApkDownloadResult? {
@@ -549,6 +572,7 @@ private fun copyBody(
             while (true) {
                 val n = input.read(buf) // 网络：异常交给调用方分类
                 if (n < 0) break
+                if (isStopped()) return ApkDownloadResult.Stopped(received)
                 try {
                     out.write(buf, 0, n)
                 } catch (e: java.io.IOException) {
@@ -564,5 +588,4 @@ private fun copyBody(
     return null
 }
 
-/** 更新 APK 的落盘位置：必须在 file_paths.xml 的 `update/` 目录下（见 UpdateApkFileProviderPathTest）。 */
-internal fun updateApkFile(cacheDir: File): File = File(File(cacheDir, "update"), "ppass-update.apk")
+

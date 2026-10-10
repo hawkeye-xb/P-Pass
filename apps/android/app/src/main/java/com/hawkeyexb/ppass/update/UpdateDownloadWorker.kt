@@ -21,6 +21,7 @@ import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -40,17 +41,17 @@ class UpdateDownloadWorker(
         val sha256 = inputData.getString(KEY_SHA256).orEmpty()
         val signature = inputData.getString(KEY_SIGNATURE).orEmpty()
 
-        val apk = updateApkFile(applicationContext.cacheDir).apply { parentFile?.mkdirs() }
-        val marker = completeMarkerFile(applicationContext.cacheDir)
+        // #719: 产物按身份分目录——不同版本的两个 Worker 永远不碰同一个文件。
+        val artifacts = updateArtifactsOf(
+            applicationContext.cacheDir,
+            downloadIdentityOf(version, url, sha256),
+        )
 
         runCatching { setForeground(downloadNotification(received = 0, total = -1)) }
 
         var lastNotified = 0L
         val settled = runUpdateDownload(
-            apk = apk,
-            marker = marker,
-            idFile = artifactIdentityFile(applicationContext.cacheDir),
-            identity = downloadIdentityOf(version, url, sha256),
+            artifacts = artifacts,
             runAttemptCount = runAttemptCount,
             onStaleCleared = {
                 android.util.Log.i(UPDATE_LOG_TAG, "stale update artifacts cleared before downloading $version")
@@ -58,8 +59,9 @@ class UpdateDownloadWorker(
             fetch = { resumeFromBytes ->
                 downloadApk(
                     url,
-                    apk,
+                    artifacts.apk,
                     resumeFromBytes = resumeFromBytes,
+                    isStopped = { isStopped },
                     onProgress = { received, total ->
                         setProgressAsync(
                             workDataOf(PROGRESS_RECEIVED to received, PROGRESS_TOTAL to total)
@@ -96,6 +98,8 @@ class UpdateDownloadWorker(
                 Result.success(workDataOf(KEY_VERSION to version, KEY_BYTES to settled.bytes))
             DownloadSettlement.RetryKeepingPartial -> Result.retry()
             is DownloadSettlement.Failed -> Result.failure(failureData(settled.kind))
+            // 被停的 Worker 的返回值 WorkManager 不采用（状态已是 CANCELLED）；照约定退出即可。
+            DownloadSettlement.Stopped -> Result.failure()
         }
     }
 
@@ -144,9 +148,12 @@ class UpdateDownloadWorker(
         /** 下载类失败最多补 2 次（共 3 跑）——指数退避，仍失败就如实报给用户。 */
         internal const val MAX_RUN_ATTEMPTS = 3
 
-        /** 用户确认后入队。REPLACE：重复确认 = 放弃旧的、按最新 manifest 重来。 */
-        fun enqueue(context: Context, info: UpdateInfo) {
-            val request = OneTimeWorkRequestBuilder<UpdateDownloadWorker>()
+        /**
+         * #719: 造一个下载请求。入队与「待办绑定哪个请求」由 [UpdateUiController] 决定：
+         * 它先把 `request.id` 写进待办、再 [enqueue]，界面只观察这一个 id。
+         */
+        fun request(info: UpdateInfo): OneTimeWorkRequest =
+            OneTimeWorkRequestBuilder<UpdateDownloadWorker>()
                 .setInputData(
                     Data.Builder()
                         .putString(KEY_URL, info.url)
@@ -160,6 +167,13 @@ class UpdateDownloadWorker(
                 )
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
                 .build()
+
+        /**
+         * REPLACE：同一时刻只有一条更新线。被顶替的旧 Worker 按约定停手（[downloadApk]
+         * 的 isStopped），它的产物在自己的目录里，碰不到新 Worker 的文件。
+         * 「同一份更新再点一次」不会走到这里（controller 判定为无事可做）。
+         */
+        fun enqueue(context: Context, request: OneTimeWorkRequest) {
             WorkManager.getInstance(context)
                 .enqueueUniqueWork(UNIQUE_WORK_NAME, ExistingWorkPolicy.REPLACE, request)
         }
@@ -173,13 +187,48 @@ class UpdateDownloadWorker(
 internal const val UPDATE_CHANNEL_ID = "ppass.update"
 internal const val UPDATE_NOTIFICATION_ID = 2031
 
-/** 整包落盘标记：区分「残包可续」与「整包待验」，进程死亡恢复靠它。 */
-internal fun completeMarkerFile(cacheDir: File): File =
-    File(File(cacheDir, "update"), "ppass-update.apk.complete")
+/** 所有更新产物的根目录：必须在 file_paths.xml 的 `update/` 下（见 UpdateApkFileProviderPathTest）。 */
+internal fun updateRootDir(cacheDir: File): File = File(cacheDir, "update")
 
-/** UPD-19: 产物身份旁路文件——记下 cache 里的残包 / 完成标记属于哪一份更新。 */
-internal fun artifactIdentityFile(cacheDir: File): File =
-    File(File(cacheDir, "update"), "ppass-update.apk.id")
+/**
+ * #719: 一份更新的产物——放在以其身份（[downloadIdentityOf]）命名的目录里。
+ * 身份就是路径：同一份更新的残包天然可续（UPD-19），不同的天然互不相干，
+ * 不再需要身份旁路文件与「认领」。
+ */
+internal class UpdateArtifacts(val dir: File) {
+    val apk: File get() = File(dir, "ppass-update.apk")
+
+    /** 整包落盘标记：区分「残包可续」与「整包待验」，进程死亡恢复靠它。 */
+    val marker: File get() = File(dir, "ppass-update.apk.complete")
+}
+
+internal fun updateArtifactsOf(cacheDir: File, identity: String): UpdateArtifacts =
+    UpdateArtifacts(File(updateRootDir(cacheDir), artifactKeyOf(identity)))
+
+/** 身份 → 目录名：SHA-256 前 16 个十六进制字符（身份里有 URL，不能直接当文件名）。 */
+internal fun artifactKeyOf(identity: String): String =
+    java.security.MessageDigest.getInstance("SHA-256")
+        .digest(identity.toByteArray())
+        .joinToString("") { "%02x".format(it) }
+        .take(16)
+
+internal fun PendingUpdate.artifacts(cacheDir: File): UpdateArtifacts =
+    updateArtifactsOf(cacheDir, downloadIdentityOf(version, url, sha256))
+
+/**
+ * 删掉 [keep] 以外的所有更新产物（含 #719 之前平铺在 `update/` 下的旧文件）。
+ * 由当前这条更新线的 Worker 开跑时调用：别的身份都是过期的更新线。返回是否删了东西。
+ */
+internal fun clearOtherUpdateArtifacts(keep: UpdateArtifacts): Boolean {
+    val others = keep.dir.parentFile?.listFiles()?.filter { it != keep.dir }.orEmpty()
+    others.forEach { it.deleteRecursively() }
+    return others.isNotEmpty()
+}
+
+/** 放弃全部更新产物（安装完成 / 升级回执 / 用户放弃这条更新线）——唯一的整体清理入口。 */
+internal fun discardUpdateArtifacts(cacheDir: File) {
+    updateRootDir(cacheDir).deleteRecursively()
+}
 
 /**
  * 一份更新包的身份：version + url + sha256。只用 version 不够——同版本号重发
@@ -189,41 +238,25 @@ internal fun downloadIdentityOf(version: String, url: String, sha256: String): S
     "$version\n$url\n$sha256"
 
 /**
- * UPD-19: Worker 开跑时认领下载产物（JVM 可测）。[idFile] 记的身份 ≠ [identity]
- * （含旁路文件缺失 / 读不出——旧版本留下的产物一律当作不认识）⇒ 删 [apk] 与
- * [marker] 再写入新身份，返回 true；身份一致 ⇒ 不动，返回 false，残包照常续传。
- * 先删后写：中途进程死亡，下次身份仍不符，再删一遍是无害的。
- */
-internal fun claimUpdateArtifacts(apk: File, marker: File, idFile: File, identity: String): Boolean {
-    val recorded = runCatching { idFile.takeIf { it.isFile }?.readText() }.getOrNull()
-    if (recorded == identity) return false
-    apk.delete()
-    marker.delete()
-    idFile.parentFile?.mkdirs()
-    idFile.writeText(identity)
-    return true
-}
-
-/**
  * 一跑下载的完整流程（Worker 的 doWork 只负责把 Android 侧的副作用——日志、
  * 进度、通知——以回调接进来；文件与判定全在这里，JVM 可测）：
- *  1. [claimUpdateArtifacts]：产物不属于这份更新就先清掉（UPD-19）；
+ *  1. [clearOtherUpdateArtifacts]：别的身份的产物是过期更新线，清掉（#719）；
  *  2. 完成标记在 = 上次已整包落盘（worker 重跑 / 进程死亡恢复），直接进校验；
  *     否则以残包长度为断点调 [fetch]（残包不在 = 0，即完整下载）；
  *  3. [settleDownload]：校验 / 重试 / 清理。
  */
 internal fun runUpdateDownload(
-    apk: File,
-    marker: File,
-    idFile: File,
-    identity: String,
+    artifacts: UpdateArtifacts,
     runAttemptCount: Int,
     fetch: (resumeFromBytes: Long) -> ApkDownloadResult,
     verify: (File) -> ApkVerifier.Result,
     onStaleCleared: () -> Unit = {},
     onDownloaded: (ApkDownloadResult) -> Unit = {},
 ): DownloadSettlement {
-    if (claimUpdateArtifacts(apk, marker, idFile, identity)) onStaleCleared()
+    val apk = artifacts.apk
+    val marker = artifacts.marker
+    if (clearOtherUpdateArtifacts(artifacts)) onStaleCleared()
+    artifacts.dir.mkdirs()
     val download = if (marker.isFile && apk.isFile && apk.length() > 0) {
         ApkDownloadResult.Ok(apk.length())
     } else {
@@ -242,6 +275,8 @@ internal sealed interface DownloadSettlement {
     data object RetryKeepingPartial : DownloadSettlement
     /** 不再重试：残包与标记已删，[kind] 交给 UI 选文案。 */
     data class Failed(val kind: UpdateFailureKind) : DownloadSettlement
+    /** #719: Worker 已被停止：什么都不动，产物留给它的主人（下一跑或清理入口）。 */
+    data object Stopped : DownloadSettlement
 }
 
 /**
@@ -257,6 +292,7 @@ internal fun settleDownload(
     runAttemptCount: Int,
     verify: (File) -> ApkVerifier.Result,
 ): DownloadSettlement = when (download) {
+    is ApkDownloadResult.Stopped -> DownloadSettlement.Stopped
     is ApkDownloadResult.Ok ->
         if (verify(apk) == ApkVerifier.Result.Ok) {
             marker.writeText("ok")
@@ -301,7 +337,8 @@ internal fun failureKindOf(result: ApkDownloadResult): UpdateFailureKind = when 
     is ApkDownloadResult.HttpStatus -> UpdateFailureKind.Server
     is ApkDownloadResult.ConnectionFailed -> UpdateFailureKind.Network
     is ApkDownloadResult.LocalWriteFailed -> UpdateFailureKind.Write
-    is ApkDownloadResult.Unexpected, is ApkDownloadResult.Ok -> UpdateFailureKind.Unexpected
+    is ApkDownloadResult.Unexpected, is ApkDownloadResult.Ok,
+    is ApkDownloadResult.Stopped -> UpdateFailureKind.Unexpected
 }
 
 internal enum class DownloadVerdict { Retry, GiveUp }
