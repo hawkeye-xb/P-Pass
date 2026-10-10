@@ -132,6 +132,68 @@ struct ProviderEndpoint {
     /// then not reach the shared handler: `BlobsProtocol::shutdown` shuts the
     /// provider store down, which the replacement endpoint still serves from.
     retired: Arc<AtomicBool>,
+    /// #729: the peer connections THIS endpoint accepted — and only those.
+    /// A connection belongs to the endpoint that accepted it, so retiring
+    /// this endpoint closes exactly this table; a replacement endpoint's
+    /// connections live in its own table and are never touched. (The lease
+    /// handler's own table stays lease-wide on purpose: revoke, #547
+    /// close_foreign and `status().connected` span every endpoint.)
+    connections: Arc<EndpointConnections>,
+}
+
+/// #729: one endpoint's accepted connections, keyed by a per-endpoint id.
+#[derive(Debug, Default)]
+struct EndpointConnections {
+    next: AtomicU64,
+    open: Mutex<HashMap<u64, Connection>>,
+}
+
+impl EndpointConnections {
+    fn insert(&self, connection: Connection) -> u64 {
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        self.open
+            .lock()
+            .expect("endpoint connections lock")
+            .insert(id, connection);
+        id
+    }
+
+    fn remove(&self, id: u64) {
+        self.open
+            .lock()
+            .expect("endpoint connections lock")
+            .remove(&id);
+    }
+
+    /// #584 + #729: close every connection this endpoint accepted and drop
+    /// its handles, so they no longer keep the retired endpoint (and its UDP
+    /// sockets) alive.
+    fn close_all(&self, reason: &[u8]) {
+        let connections =
+            std::mem::take(&mut *self.open.lock().expect("endpoint connections lock"));
+        for (_, connection) in connections {
+            connection.close(0u32.into(), reason);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.open.lock().expect("endpoint connections lock").len()
+    }
+}
+
+/// #729: drops the connection from its endpoint's table on every exit path of
+/// [`ActiveBlobsDispatch::accept`] (a missed removal would hold the handle —
+/// and with it the endpoint — the #584 way).
+struct EndpointConnectionGuard<'a> {
+    connections: &'a EndpointConnections,
+    id: u64,
+}
+
+impl Drop for EndpointConnectionGuard<'_> {
+    fn drop(&mut self) {
+        self.connections.remove(self.id);
+    }
 }
 
 impl ProviderEndpoint {
@@ -142,6 +204,7 @@ impl ProviderEndpoint {
     ) -> Result<Self> {
         let transport = IrohTransport::bind(config.clone()).await?;
         let retired = Arc::new(AtomicBool::new(false));
+        let connections = Arc::new(EndpointConnections::default());
         let router = Router::builder(transport.endpoint().clone())
             .accept(
                 ALPN_BLOBS.as_bytes(),
@@ -149,6 +212,7 @@ impl ProviderEndpoint {
                     handler: Arc::clone(dispatch),
                     retired: Arc::clone(&retired),
                     allowed_peer: Arc::clone(allowed_peer),
+                    connections: Arc::clone(&connections),
                 },
             )
             .spawn();
@@ -157,6 +221,7 @@ impl ProviderEndpoint {
             config,
             router,
             retired,
+            connections,
         })
     }
 
@@ -230,6 +295,8 @@ struct ActiveBlobsDispatch {
     retired: Arc<AtomicBool>,
     /// #547: see [`AndroidBlobsProvider::allowed_peer`].
     allowed_peer: AllowedPeer,
+    /// #729: see [`ProviderEndpoint::connections`] (the same table).
+    connections: Arc<EndpointConnections>,
 }
 
 impl ProtocolHandler for ActiveBlobsDispatch {
@@ -252,6 +319,18 @@ impl ProtocolHandler for ActiveBlobsDispatch {
                 peer_prefix(&peer)
             );
             connection.close(NOT_PAIRED_CLOSE_CODE.into(), b"not paired");
+            return Ok(());
+        }
+        // #729: register with this endpoint before serving, then re-check
+        // `retired` — the same register-then-recheck as the handler's
+        // `accepting`: a retire landing between the first check and the
+        // insert has already emptied the table, so close it here instead.
+        let _registered = EndpointConnectionGuard {
+            connections: &self.connections,
+            id: self.connections.insert(connection.clone()),
+        };
+        if self.retired.load(Ordering::SeqCst) {
+            connection.close(0u32.into(), b"provider endpoint replaced");
             return Ok(());
         }
         let handler = self
@@ -555,24 +634,6 @@ impl StopAwareBlobsProtocol {
         };
         for (_, connection) in connections {
             connection.close(0u32.into(), b"provider revoked");
-        }
-    }
-
-    /// #584: close every currently open peer connection WITHOUT revoking the
-    /// handler (unlike [`Self::stop_active_fetch`], `accepting` stays as it
-    /// is). Used when the endpoint is parked: an idle desktop connection
-    /// holds a `Connection` clone, and iroh only frees the endpoint's UDP
-    /// sockets once every such handle is gone.
-    fn close_idle_connections(&self) {
-        let connections = {
-            let mut active = self
-                .active
-                .lock()
-                .expect("active provider connections lock");
-            std::mem::take(&mut *active)
-        };
-        for (_, connection) in connections {
-            connection.close(0u32.into(), b"provider endpoint parked");
         }
     }
 
@@ -1069,21 +1130,15 @@ impl AndroidBlobsProvider {
     /// of the `Endpoint` is dropped, and `Router::shutdown` waits for the
     /// peer's close acks — which a backgrounded desktop may never send
     /// (observed on Mate60 / Samsung: one leaked v4+v6 socket pair per
-    /// transfer round). So: close idle peer connections up front (they hold
-    /// `Connection` handles that keep the endpoint alive), bound the
+    /// transfer round). So: close this endpoint's peer connections up front
+    /// (they hold `Connection` handles that keep the endpoint alive) — #729:
+    /// only the ones IT accepted, never a replacement endpoint's — bound the
     /// shutdown wait, close the endpoint directly on timeout, and drop the
     /// last references inside the task. Any other lingering holder shows up
     /// in the strong-count warning instead of leaking silently.
     fn retire(&self, endpoint: Arc<ProviderEndpoint>) {
         endpoint.retired.store(true, Ordering::SeqCst);
-        if let Some(handler) = self
-            .dispatch
-            .lock()
-            .expect("Android provider dispatch lock")
-            .clone()
-        {
-            handler.close_idle_connections();
-        }
+        endpoint.connections.close_all(b"provider endpoint retired");
         let router = endpoint.router.clone();
         self.retire_pending.fetch_add(1, Ordering::SeqCst);
         let pending = Arc::clone(&self.retire_pending);
@@ -1284,6 +1339,111 @@ impl AndroidBlobsProvider {
             BlobFormat::Raw,
         )
         .to_string())
+    }
+}
+
+#[cfg(test)]
+mod endpoint_ownership_tests {
+    use super::*;
+
+    const WAIT: Duration = Duration::from_secs(10);
+
+    fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + WAIT;
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// #729: two endpoint generations each hold an accepted connection from
+    /// the paired peer (constructed deterministically — in production the
+    /// replacement's window is tiny: its ticket must reach the desktop
+    /// before `retire` runs). Retiring the old generation closes and drops
+    /// exactly its own connections (#584: no handle keeps it alive); the new
+    /// generation's connection stays open and still counts for the lease.
+    #[test]
+    fn retiring_an_endpoint_closes_only_the_connections_it_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+        // A lease handler must be installed, or dispatch closes every
+        // connection as "provider revoked" and the test proves nothing.
+        provider
+            .runtime
+            .block_on(async { provider.ensure_active_handler() });
+        let old = provider
+            .runtime
+            .block_on(provider.bound_endpoint())
+            .unwrap();
+        let fresh = Arc::new(
+            provider
+                .runtime
+                .block_on(ProviderEndpoint::bind(
+                    TransportConfig::loopback(vec![ALPN_BLOBS.to_owned()]),
+                    &provider.dispatch,
+                    &provider.allowed_peer,
+                ))
+                .unwrap(),
+        );
+
+        let peer_runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let peer = peer_runtime
+            .block_on(IrohTransport::bind(TransportConfig::loopback(vec![
+                ALPN_BLOBS.to_owned(),
+            ])))
+            .unwrap();
+        provider.set_allowed_peer(Some(peer.node_id()));
+        let dial = |endpoint: &ProviderEndpoint| {
+            peer_runtime
+                .block_on(
+                    peer.endpoint()
+                        .connect(endpoint.transport.endpoint().addr(), ALPN_BLOBS.as_bytes()),
+                )
+                .unwrap()
+        };
+        let to_old = dial(&old);
+        let to_fresh = dial(&fresh);
+        wait_until("both endpoints to register their connection", || {
+            old.connections.len() == 1 && fresh.connections.len() == 1
+        });
+
+        provider.retire(Arc::clone(&old));
+        // Snapshot right after retire, asserted last so the behavioural checks
+        // below report first.
+        let old_handles_after_retire = old.connections.len();
+
+        let closed =
+            peer_runtime.block_on(async { tokio::time::timeout(WAIT, to_old.closed()).await });
+        assert!(
+            closed.is_ok(),
+            "the retired endpoint's own connection was not closed"
+        );
+
+        // Give a wrongly sent close frame time to arrive before judging.
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            to_fresh.close_reason(),
+            None,
+            "#729: retiring the old endpoint closed the replacement's connection"
+        );
+        assert_eq!(fresh.connections.len(), 1);
+        assert!(matches!(
+            provider.transfer_status(),
+            ActiveTransferStatus::InProgress {
+                connected: true,
+                ..
+            }
+        ));
+        assert_eq!(
+            old_handles_after_retire, 0,
+            "#584: retire must drop the retired endpoint's connection handles"
+        );
+
+        to_fresh.close(0u32.into(), b"test done");
+        peer_runtime.block_on(peer.close());
     }
 }
 
