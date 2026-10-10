@@ -47,7 +47,16 @@ BAD_VERSIONS = {"desktop": "9.8.1", "android": "9.8.3", "androidVersionCode": 3}
 
 # 构建 job 不在 dry-run 里跑：结果按 tag push 的真实情形给（Windows 在 tag push 上恒跳过）。
 BUILD_RESULTS = {"android": "success", "macos-arm64": "success", "windows-x64": "skipped"}
-RELEASE_JOBS = ["create-draft", "upload-android", "upload-macos", "upload-windows", "finalize-manifest", "finalize-manifest-windows"]
+RELEASE_JOBS = ["create-draft", "upload-android", "upload-macos", "upload-windows", "finalize-manifest", "finalize-manifest-windows",
+                "finalize-notes"]
+
+# #773：假 CHANGELOG——正式场景只该取 [2099.1.1] 那一节（不带 Unreleased、不带上一版）。
+FORMAL_SECTION = "**Android 9.8.2 · macOS 9.8.2**\n\n### Fixed\n- 演练条目：只该出现在 2099.1.1 的正文开头。"
+CHANGELOG = (
+    "# Changelog\n\n## [Unreleased]\n\n- 未发布的条目不许进正文\n\n"
+    f"## [2099.1.1] - 2099-01-02\n\n{FORMAL_SECTION}\n\n\n"
+    "## [2099.1.0] - 2099-01-01\n\n- 上一版的条目不许进正文\n"
+)
 
 
 class Check:
@@ -106,7 +115,7 @@ def good_notes() -> dict[str, str]:
 BAD_NOTES = {"android/9.8.3.zh.txt": "详情见 https://example.invalid/notes\n", "android/9.8.3.en.txt": "See the notes page.\n"}
 
 
-def make_origin(d: Path, name: str, commits: list) -> tuple[Path, str]:
+def make_origin(d: Path, name: str, commits: list, changelog: str = CHANGELOG) -> tuple[Path, str]:
     """临时仓库：按 commits（versions, notes, tags）依次提交打 tag。返回 (bare origin, 最后一个提交的 sha)。
 
     每个场景一个独立仓库：create-draft 的「上一个 v* tag」取的是版本序最高的那个，
@@ -118,6 +127,7 @@ def make_origin(d: Path, name: str, commits: list) -> tuple[Path, str]:
     shutil.copytree(ROOT / "tools", src / "tools", ignore=shutil.ignore_patterns("__pycache__", "fixtures"))
     (src / "release").mkdir()
     shutil.copy2(ROOT / "release/legacy-manifest.json", src / "release/legacy-manifest.json")
+    (src / "CHANGELOG.md").write_text(changelog)
 
     def commit(versions: dict, notes: dict[str, str], msg: str, *tags: str):
         (src / "release/versions.json").write_text(json.dumps(versions, indent=2) + "\n")
@@ -332,6 +342,15 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
     check_manifest(ck, sc, pub, FORMAL_TAG, "manifest-macos.json", version=dv, targets={"darwin-aarch64": mac},
                    notes="", notes_i18n={})
     ck(not any("test-channel" in a for c in sc.calls() for a in c), "没有任何 gh 调用碰 test-channel")
+    # #773：草稿正文（finalize-notes 补齐之后）以 CHANGELOG 本版小节开头，台账在后。
+    job_ok(ck, jobs, "finalize-notes")
+    body = (sc.meta(FORMAL_TAG) or {}).get("body", "")
+    head = f"## 本版更新（{FORMAL_TAG[1:]}）\n\n{FORMAL_SECTION}\n\n---\n\n## P-Pass {FORMAL_TAG[1:]}\n"
+    ck(body.startswith(head), "正式 tag 正文：以「本版更新」+ CHANGELOG 该节全文开头，台账在后", body[:600])
+    ck("未发布的条目" not in body and "上一版的条目" not in body, "只取本版那一节（不带 Unreleased / 上一版）", body[:600])
+    ck("### H-10c 资产 SHA-256" in body, "台账的后续段落（SHA-256）照常追加在后面", body[-400:])
+    log = jobs["create-draft"].step("Compose skeleton notes").log
+    ck("::warning::" not in log, "有该节时不告警", log)
 
     # 镜像判定：人工 publish 之后，正式 tag 应被镜像
     sc.publish(FORMAL_TAG)
@@ -357,6 +376,9 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
     step_is(ck, jobs, "upload-android", "Point test-channel at this manifest (REL-07)", "success")
     meta = sc.meta(TEST_TAG) or {}
     ck(meta.get("draft") is False and meta.get("prerelease") is True, "test tag 自动发布为 prerelease", json.dumps(meta))
+    job_ok(ck, jobs, "finalize-notes")
+    body = meta.get("body", "")
+    ck(body.startswith(f"## P-Pass {v}\n") and "本版更新" not in body, "#773：test tag 正文不变（不加 CHANGELOG 小节）", body[:300])
     apk, mac = f"P-Pass_{v}_android.apk", f"P-Pass_{v}_macos-arm64.app.tar.gz"
     # test-channel 指针 = upload-android 那份只含 android 的动态清单
     ch = sc.asset("test-channel", "manifest.json")
@@ -383,7 +405,7 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
 def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
     av = BAD_VERSIONS["android"]
     print(f"\n== 正式 tag {BAD_TAG}：说明文件不合规（含网址）⇒ 组装清单必须失败，不带病发布")
-    origin, sha = make_origin(base, "bad", [(PREV_VERSIONS, {}, [PREV_TAG]), (BAD_VERSIONS, BAD_NOTES, [BAD_TAG])])
+    origin, sha = make_origin(base, "bad", [(PREV_VERSIONS, {}, [PREV_TAG]), (BAD_VERSIONS, BAD_NOTES, [BAD_TAG])])  # CHANGELOG 没有 [2099.1.2]
     sc = Scenario(base, "bad-notes", origin, sha, key, av, BAD_VERSIONS["desktop"])
     jobs = sc.release(rel, BAD_TAG, jobs=["create-draft", "upload-android"])
     job_ok(ck, jobs, "upload-android", "failure")
@@ -392,6 +414,12 @@ def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
         log = jobs["upload-android"].step("Compose update manifest (UPD-01)").log
         ck("failed lint" in log, "失败原因是说明文件 lint 不过", log)
     ck(not sc.asset(BAD_TAG, "manifest-android.json").exists(), "不合规时没有任何清单被上传")
+    # #773：CHANGELOG 缺本版小节 ⇒ 告警、不阻断，正文只有台账。
+    step_is(ck, jobs, "create-draft", "Compose skeleton notes", "success")
+    log = jobs["create-draft"].step("Compose skeleton notes").log
+    ck(f"::warning::CHANGELOG 里没有 [{BAD_TAG[1:]}] 小节" in log, "CHANGELOG 缺本版小节：::warning::，不阻断", log)
+    body = (sc.meta(BAD_TAG) or {}).get("body", "")
+    ck(body.startswith(f"## P-Pass {BAD_TAG[1:]}\n"), "缺小节时正文只有台账", body[:300])
     SUMMARY["bad-notes"] = sc.summary()
 
 
