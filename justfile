@@ -84,6 +84,24 @@ fmt:
 lint:
   cargo clippy --all-targets -- -D warnings
 
+# CI-16 (#369)：把「只在别的平台上成立」的 lint 拉到本地。
+#
+# `lint` 只检查本机这个平台编译进来的代码：Windows 上跑全绿，推上去 Linux 的
+# clippy 却可能红（PR #368：data_migration 在非 Windows 上没有调用方 ⇒
+# dead_code），Mac 上的人也看不到 Windows 的问题。
+#
+# 为什么只查 `platform` 一个 crate 就够：arch-check B.2 规定平台 cfg **只许**
+# 出现在 crates/platform/，所以「换个目标结论不同」只可能发生在这里。它是纯
+# Rust，clippy 只做检查不链接，不需要各平台的 SDK 或 libheif，哪台机器上都能
+# 跑三个目标。`--features test-support` 把只给测试用的那块也一起查到。
+#
+# 编译目标按需安装，已装过时 `rustup target add` 立即返回。刻意不写进
+# rust-toolchain.toml：CI 不跑 just，写进去会让每个 CI job 多下两套标准库。
+#
+# platform crate 按 Windows / Linux / macOS 三个目标各跑一遍 clippy
+lint-cross:
+  for t in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu x86_64-apple-darwin; do rustup target add "$t" >/dev/null 2>&1 && echo "==> clippy -p platform --target $t" && cargo clippy -p platform --all-targets --features test-support --target "$t" -- -D warnings || exit 1; done
+
 # BUILD-06: android-jni 的专项 lint。**只能在 unix 上跑**——该 feature 的代码
 # 用 `std::os::fd`，Windows 上必然 E0432。所以刻意没挂进 `ci`：挂进去等于让
 # Windows 的 `just ci` 永远红。
@@ -194,7 +212,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint test arch-check md-check token-check identity-check
+ci: fmt lint lint-cross test arch-check md-check token-check identity-check
   @echo "==> CI pipeline: all green ✅"
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
