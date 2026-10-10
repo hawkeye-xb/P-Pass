@@ -1,0 +1,17 @@
+# DESK-33 (#325) / DESK-54 (#814)：产品代码启动子进程只许走 `platform::command`。
+#
+# 为什么：桌面壳与 daemon 的 release 构建都是 GUI 子系统，手上没有控制台。从
+# 它们里面直接 `Command::new` 一个 console 子系统程序（cmd / taskkill / ffmpeg
+# ……），Windows 会给它新分配一个控制台——用户看到黑窗一闪（#168 / #787 / #814）。
+# `platform::command` 在 Windows 上自动带 CREATE_NO_WINDOW，其它平台原样不变。
+#
+# 原先这条约束是桌面壳 lib.rs 里的一条源码扫描测试：只扫那一个文件、只拦
+# cmd / powershell 两个名字，于是 taskkill（#787）和 ffmpeg（#814）都漏了。
+# 交给 clippy：分得清代码和注释，新文件、新 crate 自动覆盖，不用维护名单。
+#
+# 豁免：单元测试由各 crate 根的 `#![cfg_attr(test, allow(...))]` 统一放行；
+# 其余（集成测试、example、非 Windows 专属文件、test-support）在原地
+# `#[allow(clippy::disallowed_methods)]` 并写明理由。
+disallowed-methods = [
+  { path = "std::process::Command::new", reason = "产品代码启动子进程请用 platform::command（Windows 上带 CREATE_NO_WINDOW，否则从 GUI 进程拉起 console 程序会闪黑窗，#325 / #814）" },
+]

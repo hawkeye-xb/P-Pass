@@ -6,6 +6,10 @@
 //! thumb paths (DESK-35 #441); the caller serves `placeholder_jpeg` from
 //! memory and records thumb_state=2.
 
+// DESK-33 (#325)：clippy.toml 禁止产品代码直接 `Command::new`；单元测试
+// 里的子进程（拉起测试二进制自身等）不面向用户，统一放行。
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 use std::path::PathBuf;
 
 mod decode;

@@ -2,6 +2,10 @@
 //! 自启注册→查询→注销；防睡眠断言可见→释放后消失；Keychain/DPAPI 往返。
 //! Exits non-zero on any failed step. H-09 runs this on both platforms.
 
+// DESK-33 (#325)：这是开发者手动 / 测试框架跑的冒烟 example，不是产品进程，
+// clippy.toml 的「禁止直接 Command::new」不适用。
+#![allow(clippy::disallowed_methods)]
+
 #[cfg(not(any(target_os = "macos", windows)))]
 fn main() {
     eprintln!("platform smoke is only meaningful on macOS/Windows");

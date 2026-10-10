@@ -6,7 +6,6 @@
 //! this crate.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::{CodecError, Result};
 
@@ -29,7 +28,10 @@ pub fn ffmpeg_path() -> Option<PathBuf> {
         }
     }
     // PATH probe: cheap -version run; success means "ffmpeg" resolves.
-    let on_path = Command::new("ffmpeg")
+    // DESK-54 (#814)：daemon release 是 GUI 子系统，直接 Command::new 拉起
+    // console 子系统的 ffmpeg 会闪黑窗；platform::command 在 Windows 上带
+    // CREATE_NO_WINDOW。下面抽帧那处同理。
+    let on_path = platform::command("ffmpeg")
         .arg("-version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -41,7 +43,7 @@ pub fn ffmpeg_path() -> Option<PathBuf> {
 
 /// Extract the first video frame as a JPEG at `dst_jpg`.
 pub fn extract_frame(ffmpeg: &Path, src: &Path, dst_jpg: &Path) -> Result<()> {
-    let out = Command::new(ffmpeg)
+    let out = platform::command(ffmpeg)
         .args(["-y", "-loglevel", "error", "-i"])
         .arg(src)
         .args(["-frames:v", "1", "-q:v", "3"])

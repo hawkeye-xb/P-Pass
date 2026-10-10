@@ -8,6 +8,11 @@
 //! - Keys: the login Keychain via the `security` CLI (generic password).
 //! - Power hint: `pmset -g custom` through the shared pure parser.
 
+// DESK-33 (#325)：clippy.toml 禁止直接 `Command::new`，那条约束只为 Windows
+// 的「GUI 进程拉起 console 程序会闪黑窗」而设。本文件只在 macOS 上编译，
+// 没有这个问题，整文件放行；Windows 代码请走 `crate::command`。
+#![allow(clippy::disallowed_methods)]
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

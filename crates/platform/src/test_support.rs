@@ -95,10 +95,10 @@ pub fn dir_link_kinds() -> &'static [DirLinkKind] {
 /// 一个控制台，用户看到黑窗一闪。**这里可以，因为本模块在 `test-support`
 /// feature 之内、根本不进产品二进制，也不面向用户。**
 ///
-/// 但那道门禁今天扫的是桌面壳的 `lib.rs` 单个文件，看不到本文件——也就是说
-/// 它**不是**因为判断出这里安全才放行的，它压根没看。这个覆盖面缺口另记
-/// 在 #325，本卡不顺手修。
+/// DESK-33 (#325)：clippy 的 `disallowed-methods` 现在看得到本文件；这里是
+/// **有意**放行（下面的 `allow`），理由就是上面那句：不进产品、不面向用户。
 #[cfg(windows)]
+#[allow(clippy::disallowed_methods)]
 fn windows_junction(target: &Path, link: &Path) -> io::Result<()> {
     let out = std::process::Command::new("cmd")
         .args([

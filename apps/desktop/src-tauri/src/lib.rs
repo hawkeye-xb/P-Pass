@@ -1,6 +1,10 @@
 //! P-Pass tray shell (T-041, ADR-012): zero business logic — every
 //! command is a thin forward to the daemon's local IPC.
 
+// DESK-33 (#325)：clippy.toml 禁止产品代码直接 `Command::new`；单元测试
+// 里的子进程（拉起测试二进制自身等）不面向用户，统一放行。
+#![cfg_attr(test, allow(clippy::disallowed_methods))]
+
 mod daemon_logs;
 mod ipc;
 mod redact;
@@ -610,7 +614,7 @@ fn sidecar_probe_verdict(code: Option<i32>, stdout: &str) -> Result<(), String> 
 /// console 子系统，可能闪一下**。要彻底消掉得用 `CREATE_NO_WINDOW`，那是
 /// 平台专属 API，会往本文件再加一处 cfg——而 #211 正在往外搬这些，不加。
 fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
-    let mut child = std::process::Command::new(sidecar)
+    let mut child = platform::command(sidecar)
         .arg("--version")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -720,7 +724,7 @@ fn start_daemon() -> Result<String, String> {
         Ok(()) => Ok("resident".into()),
         Err(e) => {
             // Fall back to a one-shot spawn — still usable this session.
-            std::process::Command::new(&sidecar)
+            platform::command(&sidecar)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .stdin(std::process::Stdio::null())
@@ -1038,7 +1042,7 @@ fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
             &[("path", &sidecar.display())],
         ));
     }
-    let mut cmd = std::process::Command::new(&sidecar);
+    let mut cmd = platform::command(&sidecar);
     if post_update {
         cmd.arg("--post-update");
     }
@@ -1308,7 +1312,7 @@ fn restart_by_kill_and_respawn() -> Result<(), String> {
                 &[("path", &sidecar.display())],
             ));
         }
-        std::process::Command::new(&sidecar)
+        platform::command(&sidecar)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .stdin(std::process::Stdio::null())
@@ -1511,10 +1515,7 @@ fn sidecar_daemon_version() -> Option<String> {
     if !sidecar.is_file() {
         return None;
     }
-    let out = std::process::Command::new(&sidecar)
-        .arg("--version")
-        .output()
-        .ok()?;
+    let out = platform::command(&sidecar).arg("--version").output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (!text.is_empty()).then_some(text)
 }
@@ -2409,39 +2410,12 @@ mod tests {
         );
     }
 
-    /// DESK-19 回归锁：桌面壳不得再用 **console 子系统程序**去拉起系统 UI。
-    ///
-    /// `cmd.exe` 的 PE Subsystem 是 3（console，本机实测）。桌面壳自己是 GUI
-    /// 子系统、手上没有控制台，所以从它里面 spawn 一个 console 程序时 Windows
-    /// 会新分配一个控制台——那就是用户看到的黑窗一闪。同理 `powershell.exe`。
-    ///
-    /// 为什么是源码扫描而不是行为断言：闪窗只在真实的无控制台 GUI 进程里发生，
-    /// `cargo test` 自己就跑在有控制台的进程里，行为上复现不出来。而"别再写
-    /// console 启动器"这条约束可以在**任何平台**上锁住——包括 ci-desktop 的
-    /// Linux lane，那是本仓今天唯一会跑的 lane（见 #164）。
-    ///
-    /// 要拉起系统 UI 就走 `tauri_plugin_opener`：它的候选命令条条带
-    /// `CREATE_NO_WINDOW`，构造上不分配控制台。
-    #[test]
-    fn shell_never_launches_a_console_subsystem_program() {
-        let src = include_str!("lib.rs");
-        // QA-12 (#212)：只扫**产品代码**，在第一个 test 属性处截断。
-        // 这道门禁要防的是「用户看到黑窗一闪」，而测试脚手架里用 console
-        // 程序（比如建 junction 来验证软链提权契约）不面向用户、不在产品
-        // 路径上。原判据比它自己的意图粗，这里把它对齐意图。
-        let product = src.split("#[cfg(test)]").next().unwrap_or(src);
-        // 判据字符串**必须在运行时拼**：直接写成字面量的话，这段源码自己就
-        // 含有被禁的子串，扫描必然命中自己（第一版就是这么自己把自己判红的）。
-        for prog in ["cmd", "cmd.exe", "powershell", "powershell.exe"] {
-            let bad = format!("Command::new(\"{prog}\")");
-            let bad = bad.as_str();
-            assert!(
-                !product.contains(bad),
-                "{bad} 是 console 子系统程序，从 GUI 进程拉起它会闪黑窗（DESK-19 / #168）。
-                 要打开系统页面/URL 请用 tauri_plugin_opener::open_url，它带 CREATE_NO_WINDOW。"
-            );
-        }
-    }
+    // DESK-19 (#168) 的回归锁「桌面壳不得用 console 子系统程序拉起系统 UI」
+    // 原先是这里的一条源码扫描测试，只扫本文件、只拦 cmd / powershell。
+    // DESK-33 (#325) 起改由 clippy 的 `disallowed-methods`（clippy.toml）
+    // 守住：产品代码启动子进程一律走 `platform::command`，Windows 上带
+    // CREATE_NO_WINDOW。要拉起系统 UI 仍走 `tauri_plugin_opener`（ShellExecuteExW，
+    // 根本不起子进程，见 open_power_settings 的注释）。
 
     /// DESK-18 契约：左键抬起才开窗口，且 macOS 不开（那边左键出菜单）。
     /// 这四条在任何平台上都跑——托盘点击本身模拟不了，但判定可以。

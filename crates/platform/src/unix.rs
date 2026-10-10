@@ -8,6 +8,11 @@
 //! 本模块只提供自由函数，谁用由各自的适配器 impl 决定
 //! （`MacosAdapter` 与 `HeadlessAdapter` 都用）。
 
+// DESK-33 (#325)：clippy.toml 禁止直接 `Command::new`，那条约束只为 Windows
+// 的「GUI 进程拉起 console 程序会闪黑窗」而设。本文件只在 unix（macOS / Linux） 上编译，
+// 没有这个问题，整文件放行；Windows 代码请走 `crate::command`。
+#![allow(clippy::disallowed_methods)]
+
 use crate::{Applied, KillOutcome, PlatformError, VolumeStats};
 use std::path::Path;
 
