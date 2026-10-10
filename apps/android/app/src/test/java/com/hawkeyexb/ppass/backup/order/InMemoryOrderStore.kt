@@ -96,7 +96,15 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
 
     private fun currentRows(): List<Order> = state.rows.values.groupBy { it.mediaId }.map { (_, v) -> v.maxBy { it.id } }
 
-    override fun insert(order: NewOrder, advance: GenerationAdvance?, scanTo: Long?, audit: AuditRecord?): Order = inTransaction {
+    /** 测试注入：下一次 [insert] 抛这个异常（模拟存储满时的 SQLiteFullException）。 */
+    var failNextInsert: Exception? = null
+
+    override fun insert(order: NewOrder, advance: GenerationAdvance?, scanTo: Long?, audit: AuditRecord?): Order = run {
+        failNextInsert?.let { failNextInsert = null; throw it }
+        insertUnchecked(order, advance, scanTo, audit)
+    }
+
+    private fun insertUnchecked(order: NewOrder, advance: GenerationAdvance?, scanTo: Long?, audit: AuditRecord?): Order = inTransaction {
         val row = insertRow(order, clock())
         advance(advance)
         scanTo(scanTo)

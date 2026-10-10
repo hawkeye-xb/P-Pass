@@ -614,8 +614,21 @@ class C413EngineTest {
         rig.close()
     }
 
+    // #775：导入成功后建 order 失败（存储满时 SQLiteFullException）：这次导入同样要放掉——失败与取消是同一件事。
+    // 反证：releasingOnAbort 只接 CancellationException（改回 releasingOnCancel 的语义），或把 insert 移出作用域 → released 为空，红。
+    @Test
+    fun `an import is released when recording its order fails`() = runTest {
+        val rig = Rig(this)
+        val p = rig.photo(1, generation = 1)
+        rig.store.failNextInsert = IllegalStateException("database or disk is full")
+        rig.trigger()
+        assertEquals(listOf(p.hash), rig.importer.released)
+        assertEquals("这一轮走不完，按意外错误等待重试", WaitReason.UNEXPECTED_ERROR, rig.engine.view.value.waitReason)
+        rig.close()
+    }
+
     // 导入了、还没传完这一轮就被取消（暂停）：放掉这次导入（没 serve 的导入必须 release）。
-    // 反证：去掉 releasingOnCancel → released 为空，红。
+    // 反证：去掉 releasingOnAbort → released 为空，红。
     @Test
     fun `an import is released when the round is cancelled before it is delivered`() = runTest {
         val rig = Rig(this)

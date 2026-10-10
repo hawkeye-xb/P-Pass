@@ -874,9 +874,12 @@ internal class FlowEngine(
             }
             is ImportResult.Imported -> {
                 // 引用导入算出 hash → 建 order（传输中，带 hash）→ 传输。G / S 在结局落库时一起推进（#415 裁决 8）。
-                val row = store.insert(NewOrder(snapshot.mediaId, version, bucket, imported.contentHash, OrderState.TRANSFERRING, epoch.value))
-                bump()
-                return releasingOnCancel(imported.contentHash) { deliverAndCommit(row, imported.contentHash, details, progress, epoch) }
+                // #775：导入一拿到手就进作用域——建 order 本身也可能失败（存储满时的 SQLiteFullException）。
+                return releasingOnAbort(imported.contentHash) {
+                    val row = store.insert(NewOrder(snapshot.mediaId, version, bucket, imported.contentHash, OrderState.TRANSFERRING, epoch.value))
+                    bump()
+                    deliverAndCommit(row, imported.contentHash, details, progress, epoch)
+                }
             }
         }
     }
@@ -913,30 +916,35 @@ internal class FlowEngine(
             }
             is ImportResult.Imported -> imported.contentHash
         }
-        if (order.contentHash != null && order.contentHash != hash) {
-            // 旧版本停在传输中（中断期间被编辑、MediaStore 版本没跟上）：直接舍弃——源已删 + cancel_tuple。
-            importer.release(hash)
-            settleSourceMissing(order, "content_changed", discard = true)
-            return StepResult.Next
+        // #775：从拿到导入起就在作用域里——下面每一步落库都可能抛。
+        return releasingOnAbort(hash) {
+            if (order.contentHash != null && order.contentHash != hash) {
+                // 旧版本停在传输中（中断期间被编辑、MediaStore 版本没跟上）：直接舍弃——源已删 + cancel_tuple。
+                importer.release(hash)
+                settleSourceMissing(order, "content_changed", discard = true)
+                return@releasingOnAbort StepResult.Next
+            }
+            if (!store.transition(order.id, OPEN, OrderState.TRANSFERRING, contentHash = hash)) {
+                importer.release(hash)
+                return@releasingOnAbort StepResult.Next
+            }
+            val row = store.get(order.id)!!.copy(contentHash = hash)
+            deliverAndCommit(row, hash, details, Progress(), epoch)
         }
-        if (!store.transition(order.id, OPEN, OrderState.TRANSFERRING, contentHash = hash)) {
-            importer.release(hash)
-            return StepResult.Next
-        }
-        val row = store.get(order.id)!!.copy(contentHash = hash)
-        return releasingOnCancel(hash) { deliverAndCommit(row, hash, details, Progress(), epoch) }
     }
 
     /**
-     * 导入了、还没交给端口（或端口还没 serve）时这一轮被取消（暂停 / FGS 被收 / 断网）：放掉这次导入——
-     * 没 serve 的导入必须 release，复制回退时它占着一整份文件大小的空间（W3 的规矩）。release 幂等，已 serve 的也无害。
+     * 一次导入是一份资源：复制回退时它占着一整份文件大小的空间（W3 的规矩）。[block] 正常返回 = 它自己对每种
+     * 结局作了交代（确认 / 交给端口 / 留作续传 / 已显式 release）；**异常退出一律放掉**——取消（暂停 / FGS 被收 /
+     * 断网）和失败（#775：存储满时建 order 抛 SQLiteFullException）是同一件事：这条路走不完了。
+     * release 幂等，已 serve 的、已显式放过的再放一次都无害。
      */
-    private suspend fun <T> releasingOnCancel(hash: String, block: suspend () -> T): T =
+    private suspend fun <T> releasingOnAbort(hash: String, block: suspend () -> T): T =
         try {
             block()
-        } catch (cancelled: CancellationException) {
+        } catch (aborted: Throwable) {
             withContext(NonCancellable) { runCatching { importer.release(hash) } }
-            throw cancelled
+            throw aborted
         }
 
     private suspend fun settleSourceMissing(order: Order, reason: String, discard: Boolean) {
