@@ -1176,6 +1176,21 @@ impl AndroidBlobsProvider {
             .unwrap_or(false)
     }
 
+    /// #703 test hook: wait until the store's current metadata write batch has
+    /// committed — and with it, the file deletes that batch scheduled.
+    ///
+    /// `has_blob` can already answer "gone" while the GC delete sits in a write
+    /// batch that has not committed yet (iroh-blobs serves reads inside the
+    /// open batch, and only removes `.data`/`.obao4` files after the commit).
+    /// `sync_db` is a top-level command, so the store's actor handles it only
+    /// after that batch has committed and its deletes have run. Call this after
+    /// `has_blob` turns false and before asserting anything about the disk.
+    pub fn sync_store(&self) -> Result<()> {
+        self.runtime
+            .block_on(self.store.sync_db())
+            .map_err(|error| TransportError::Io(format!("sync Android provider store: {error}")))
+    }
+
     /// Async variant of [`Self::has_blob`], callable from inside a tokio test
     /// runtime (where `has_blob`'s nested `block_on` would panic).
     pub async fn has_blob_async(&self, hash: [u8; 32]) -> bool {

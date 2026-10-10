@@ -67,8 +67,10 @@ fn pull(provider: &AndroidBlobsProvider, dir: &Path, ticket: &str) -> Result<Vec
     })
 }
 
+/// Wait until the store reports `hash` gone. The 15 s cap only matters when GC
+/// really never reclaims it; on a healthy run this returns within a few GC ticks.
 fn wait_until_gone(provider: &AndroidBlobsProvider, hash: [u8; 32]) {
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
     while provider.has_blob(hash) {
         assert!(
             std::time::Instant::now() < deadline,
@@ -76,6 +78,15 @@ fn wait_until_gone(provider: &AndroidBlobsProvider, hash: [u8; 32]) {
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// #703: `has_blob` going false is the store's bookkeeping; the payload files are
+/// removed only when the batch holding the GC delete commits. Sync the store so
+/// the disk assertion that follows measures the committed state, not a race.
+#[cfg(feature = "android-jni")]
+fn wait_until_gone_on_disk(provider: &AndroidBlobsProvider, hash: [u8; 32]) {
+    wait_until_gone(provider, hash);
+    provider.sync_store().expect("sync provider store");
 }
 
 #[test]
@@ -554,7 +565,7 @@ mod reference {
             .unwrap();
         assert!(has_extension(&store_files(dir.path()), "data"));
         provider.release(import.hash);
-        wait_until_gone(&provider, import.hash);
+        wait_until_gone_on_disk(&provider, import.hash);
         let files = store_files(dir.path());
         assert!(
             !has_extension(&files, "data") && !has_extension(&files, "obao4"),
@@ -576,7 +587,7 @@ mod reference {
         assert_eq!(pull(&provider, dir.path(), &ticket).unwrap(), bytes);
 
         provider.release(import.hash);
-        wait_until_gone(&provider, import.hash);
+        wait_until_gone_on_disk(&provider, import.hash);
         let files = store_files(dir.path());
         assert!(
             !has_extension(&files, "data") && !has_extension(&files, "obao4"),
