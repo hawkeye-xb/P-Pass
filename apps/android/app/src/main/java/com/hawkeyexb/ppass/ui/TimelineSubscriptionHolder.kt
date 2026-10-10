@@ -149,7 +149,7 @@ internal class TimelineSubscriptionHolder(
     private val currentPairing: () -> Pairing?,
     /** 给配对建 timeline 通道（生产 = LoaderTimelineChannel(TimelineLoader(...))）。 */
     private val channelFor: (Pairing) -> TimelineChannel,
-    /** #474: 订阅生命周期日志（建立/断开/放弃/自动恢复各一行）——生产 = Log.i("PPassTimeline", …)。 */
+    /** #474: 订阅生命周期日志（建立/断开/放弃/自动恢复各一行）——生产 = PLog.i("PPassTimeline", …)。 */
     private val log: (String) -> Unit = {},
 ) {
     var state by mutableStateOf(SubscriptionSessionState())

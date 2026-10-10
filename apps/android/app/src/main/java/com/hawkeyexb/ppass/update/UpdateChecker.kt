@@ -11,6 +11,7 @@
 //    本文件只负责「把字节正确搬下来」。
 package com.hawkeyexb.ppass.update
 
+import com.hawkeyexb.ppass.log.PLog
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -268,7 +269,7 @@ private fun httpGet(url: String): ManifestReply = try {
         ManifestFetchOutcome.Ok ->
             ManifestReply.Body(conn.inputStream.bufferedReader().use { it.readText() })
         ManifestFetchOutcome.NoRelease -> {
-            android.util.Log.i(LOG_TAG, "no release at $url (HTTP 404) — no update")
+            PLog.i(LOG_TAG, "no release at $url (HTTP 404) — no update")
             ManifestReply.NoRelease
         }
         ManifestFetchOutcome.CheckFailed -> {
@@ -276,7 +277,7 @@ private fun httpGet(url: String): ManifestReply = try {
                 conn.errorStream?.bufferedReader()?.use { it.readText().take(200) }
             }.getOrNull()
             val retryAfter = conn.getHeaderField("Retry-After")
-            android.util.Log.w(
+            PLog.w(
                 LOG_TAG,
                 "update check FAILED at $url: HTTP $code retry-after=$retryAfter body=$detail",
             )
@@ -284,7 +285,7 @@ private fun httpGet(url: String): ManifestReply = try {
         }
     }
 } catch (e: Exception) {
-    android.util.Log.w(LOG_TAG, "update check FAILED at $url: $e")
+    PLog.w(LOG_TAG, "update check FAILED at $url: $e")
     ManifestReply.Failed
 }
 

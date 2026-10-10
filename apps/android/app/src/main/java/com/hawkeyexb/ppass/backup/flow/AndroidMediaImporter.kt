@@ -42,7 +42,7 @@ internal class AndroidMediaImporter(
         try {
             bridge.release(contentHash)
         } catch (failure: Exception) {
-            log.log("release $contentHash failed; ignoring: $failure")
+            log.log("release ${contentHash.take(8)} failed; ignoring: $failure")
         }
     }
 

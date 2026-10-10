@@ -6,6 +6,7 @@ import com.hawkeyexb.ppass.proto.FlowStatusReply
 import com.hawkeyexb.ppass.proto.FlowTupleRef
 import com.hawkeyexb.ppass.transport.CallTrace
 import com.hawkeyexb.ppass.transport.DaemonUnreachableException
+import com.hawkeyexb.ppass.transport.KnownAddr
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PathFacts
 import com.hawkeyexb.ppass.transport.PathKind
@@ -60,7 +61,7 @@ class DIAGConnectivityLogTest {
     private fun trace(error: String?) = CallTrace(
         method = "hello", tokenRelay = "https://aps1-1.relay.n0.iroh.link./", tokenDirectAddrs = listOf("192.168.1.5:7000"),
         homeRelayAtStart = null, onlineAfterMs = null, connectMs = null, roundTripMs = null, totalMs = 15_000,
-        path = null, pathCount = 0, errorClass = error, errorKind = null, errorMessage = "no response", peerKnownAddr = "relay=- direct=[]",
+        path = null, pathCount = 0, errorClass = error, errorKind = null, errorMessage = "no response", peerKnownAddr = KnownAddr(null, emptyList()),
     )
 
     // 反证：probe() 的 catch 分支不打日志（改动前的样子）→ 找不到 `Flow probe result=unreachable`，红。
@@ -75,7 +76,7 @@ class DIAGConnectivityLogTest {
         assertEquals(ProbeResult.Unreachable, probe.probe())
         val line = logs.single()
         assertTrue(line, line.startsWith("Flow probe result=unreachable "))
-        for (part in listOf("bindMs=", "online=no", "onlineAfterMs=never", "connectMs=-", "tokenDirect=[192.168.1.5:7000(lan)]", "error=DaemonUnreachableException")) {
+        for (part in listOf("bindMs=", "online=no", "onlineAfterMs=never", "connectMs=-", "tokenDirect=[v4:lan]", "error=DaemonUnreachableException")) {
             assertTrue("$part in $line", line.contains(part))
         }
     }

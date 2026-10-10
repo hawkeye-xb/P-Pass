@@ -9,7 +9,6 @@
 package com.hawkeyexb.ppass.ui
 
 import android.net.Uri
-import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +40,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.proto.AssetMeta
 import java.io.File
 import kotlinx.coroutines.launch
@@ -81,7 +81,7 @@ fun VideoScreen(
         } catch (e: kotlin.coroutines.cancellation.CancellationException) {
             throw e
         } catch (e: Throwable) {
-            Log.w("PPassVideo", "video ${asset.hash.take(16)} fetch failed", e)
+            PLog.w("PPassVideo", "video ${asset.hash.take(16)} fetch failed", e)
             cache.delete()
             VideoState.Failed
         }

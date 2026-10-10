@@ -48,6 +48,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.hawkeyexb.ppass.log.PLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -388,7 +389,7 @@ fun PPassApp() {
                     }
                 )
             },
-            log = { android.util.Log.i("PPassTimeline", it) },
+            log = { PLog.i("PPassTimeline", it) },
         )
     }
     // PRES-01: 前台轻心跳——ON_RESUME 起、ON_STOP 停（退后台绝不心跳，
@@ -776,7 +777,7 @@ fun PPassApp() {
             // real use binds again and reports its own failure.
             LaunchedEffect(Unit) {
                 runCatching { client.bind(identity.secretKey()) }
-                    .onFailure { android.util.Log.w("PPassBind", "home warm-up bind failed: $it") }
+                    .onFailure { PLog.w("PPassBind", "home warm-up bind failed: $it") }
             }
             val mediaPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
@@ -1248,7 +1249,7 @@ private fun clearLocalPairing(
     // 登记门禁的真机一半：断开后私有目录里出现清单之外的东西，留一行日志（不拦断开）。
     context.filesDir.parentFile?.let { dataDir ->
         unregisteredStatePaths(dataDir).takeIf { it.isNotEmpty() }?.let {
-            android.util.Log.w("PPassDisconnect", "unregistered app state (register in DisconnectState): $it")
+            PLog.w("PPassDisconnect", "unregistered app state (register in DisconnectState): $it")
         }
     }
 }

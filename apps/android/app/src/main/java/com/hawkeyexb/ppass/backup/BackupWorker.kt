@@ -17,6 +17,7 @@ import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.backup.flow.WaitReason
 import com.hawkeyexb.ppass.backup.flow.WakeScheduler
 import com.hawkeyexb.ppass.backup.flow.runFlowWake
+import com.hawkeyexb.ppass.log.PLog
 import java.util.concurrent.TimeUnit
 
 const val BACKUP_WORK_NAME = "ppass-auto-backup"
@@ -342,12 +343,12 @@ fun restoreAutoBackupAfterAuthorizationReturned(
         awaitingUserConsent = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged,
     ) { scheduleAutoBackup(context) }
     when (outcome) {
-        AuthorizationRestore.RESUMED -> android.util.Log.i(
+        AuthorizationRestore.RESUMED -> PLog.i(
             "PPassAutoBackup",
             "background backup resumed source=$source: battery optimization exemption is back and the " +
                 "user still wants background backup; periodic work and media watch rescheduled",
         )
-        AuthorizationRestore.RESUMED_AWAITING_CONSENT -> android.util.Log.i(
+        AuthorizationRestore.RESUMED_AWAITING_CONSENT -> PLog.i(
             "PPassAutoBackup",
             "background backup re-enabled source=$source: exemption is back, but the watcher was " +
                 "stopped earlier and the user has not tapped resume yet; not rescheduling (MOB-28)",
@@ -421,7 +422,7 @@ class BackupWorker(
         }
         Result.success()
     } catch (t: Throwable) {
-        android.util.Log.w("PPassFlowWake", "Flow wake failed", t)
+        PLog.w("PPassFlowWake", "Flow wake failed", t)
         Result.retry()
     }
 }

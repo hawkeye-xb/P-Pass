@@ -54,6 +54,7 @@ import android.provider.MediaStore
 import androidx.work.ExistingWorkPolicy
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import kotlin.concurrent.thread
@@ -151,13 +152,13 @@ fun ensureMediaWatch(context: Context) {
 internal fun scheduleMediaWatchNow(context: Context) {
     val result = runCatching { jobScheduler(context).schedule(buildMediaWatchJobInfo(context)) }
         .getOrElse {
-            android.util.Log.w(TAG, "media watch schedule threw", it)
+            PLog.w(TAG, "media watch schedule threw", it)
             return
         }
     // OEM 上 schedule 会**返回失败而不抛异常**（配额/限制），静默失败等于
     // 监听没挂上。必须留痕，否则排查时看不出"挂了但没挂上"。
     if (result != JobScheduler.RESULT_SUCCESS) {
-        android.util.Log.w(TAG, "media watch schedule refused by system, result=$result")
+        PLog.w(TAG, "media watch schedule refused by system, result=$result")
     }
 }
 
@@ -268,7 +269,7 @@ class MediaWatchJob : JobService() {
                     requestFlowWake(ctx, com.hawkeyexb.ppass.backup.flow.TriggerReason.MEDIA_CHANGE)
                 }
             } catch (t: Throwable) {
-                android.util.Log.w(TAG, "dispatch failed", t)
+                PLog.w(TAG, "dispatch failed", t)
             } finally {
                 // 释放。**无论派活成败都要重挂**——派活失败最多丢一轮
                 // （水位没动，下个事件捞得回来），重挂失败是监听永久消失。

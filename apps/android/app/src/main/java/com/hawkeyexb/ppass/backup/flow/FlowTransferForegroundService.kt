@@ -25,11 +25,11 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.hawkeyexb.ppass.MainActivity
 import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.log.PLog
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.withTimeoutOrNull
@@ -125,7 +125,7 @@ class AndroidForegroundLease(
         } catch (refusal: IllegalStateException) {
             if (!isForegroundStartRefusal(refusal)) throw refusal
             val reason = noteFgsRefusal(control, refusal, androidBootInstant(app))
-            Log.w(TAG, "foreground: startForegroundService refused ($reason: ${refusal.message}); waiting for the next trigger")
+            PLog.w(TAG, "foreground: startForegroundService refused ($reason: ${refusal.message}); waiting for the next trigger")
             FlowForegroundHandoff.verdict = null
             return false
         }
@@ -134,14 +134,14 @@ class AndroidForegroundLease(
             // 不在这里 stopService：服务可能还没走到 startForeground，这时把它带下去正是 #414 的崩溃
             // （Bringing down service while still waiting for start foreground）。迟到的 onStartCommand
             // 看到没人在等，会自己 startForeground + 立刻 stopSelf 了结义务。
-            Log.w(TAG, fgsNotGrantedLog(outcome, verdictTimeoutMs))
+            PLog.w(TAG, fgsNotGrantedLog(outcome, verdictTimeoutMs))
             FlowForegroundHandoff.verdict = null
             return false
         }
         wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
         lastRenewAt = System.currentTimeMillis()
         control.clearFgsBlock()
-        Log.i(TAG, "foreground: held (FGS + PARTIAL_WAKE_LOCK ${WAKE_LOCK_TIMEOUT_MS}ms)")
+        PLog.i(TAG, "foreground: held (FGS + PARTIAL_WAKE_LOCK ${WAKE_LOCK_TIMEOUT_MS}ms)")
         return true
     }
 
@@ -172,7 +172,7 @@ class AndroidForegroundLease(
             FlowForegroundHandoff.held = false
             app.stopService(Intent(app, FlowTransferForegroundService::class.java))
         }
-        Log.i(TAG, "foreground: released")
+        PLog.i(TAG, "foreground: released")
     }
 
     companion object {
@@ -242,7 +242,7 @@ class FlowTransferForegroundService : Service() {
         } catch (refusal: IllegalStateException) {
             if (!isForegroundStartRefusal(refusal)) throw refusal
             val reason = noteFgsRefusal(FlowForegroundHandoff.control, refusal, androidBootInstant(this))
-            Log.w("PPassFlow", "foreground: startForeground refused ($reason: ${refusal.message}); recorded")
+            PLog.w("PPassFlow", "foreground: startForeground refused ($reason: ${refusal.message}); recorded")
             FlowForegroundHandoff.held = false
             waiting?.complete(FgsVerdict.Refused(reason, refusal.message.orEmpty()))
             stopSelf()
@@ -270,7 +270,7 @@ class FlowTransferForegroundService : Service() {
      */
     @androidx.annotation.RequiresApi(35)
     override fun onTimeout(startId: Int, fgsType: Int) {
-        Log.w("PPassFlow", "foreground: onTimeout (dataSync budget); stopping this round, the next trigger may try again")
+        PLog.w("PPassFlow", "foreground: onTimeout (dataSync budget); stopping this round, the next trigger may try again")
         FlowForegroundHandoff.held = false
         FlowForegroundHandoff.control?.recordFgsBlock(FgsBlockReason.BUDGET_EXHAUSTED)
         runCatching { FlowForegroundHandoff.onLost?.invoke(FgsBlockReason.BUDGET_EXHAUSTED) }

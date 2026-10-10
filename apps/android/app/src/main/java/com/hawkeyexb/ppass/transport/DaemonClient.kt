@@ -331,7 +331,7 @@ class DaemonClient internal constructor(
             } else {
                 runCatching {
                     withTimeoutOrNull(1_000) { ep.remoteAddr(EndpointId.fromString(peer.idHex)) }
-                        ?.let { known -> "relay=${known.relayUrl() ?: "-"} direct=${known.directAddresses()}" }
+                        ?.let { known -> KnownAddr(known.relayUrl(), known.directAddresses().map { it.toString() }) }
                 }.getOrNull()
             }
             report(

@@ -11,7 +11,6 @@ import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import androidx.core.content.ContextCompat
 import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
@@ -22,6 +21,7 @@ import com.hawkeyexb.ppass.backup.mediaAbsenceTrusted
 import com.hawkeyexb.ppass.backup.order.OrderStore
 import com.hawkeyexb.ppass.backup.order.ContentResolverMediaSnapshotSource
 import com.hawkeyexb.ppass.backup.order.SqliteOrderStore
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
@@ -41,7 +41,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
 private const val TAG = "PPassFlow"
-private val androidLog = FlowLogger { Log.i(TAG, it) }
+private val androidLog = FlowLogger { PLog.i(TAG, it) }
 
 /**
  * MOB-76: the live delivery gate —「仅 Wi-Fi 时备份」× current network. Separate from the WorkManager
@@ -87,7 +87,7 @@ internal fun requestFlowWake(context: Context, reason: TriggerReason) {
     val app = context.applicationContext
     thread(name = "ppass-flow-wake") {
         runCatching { runtimeFor(app)?.engine?.trigger(reason) }
-            .onFailure { Log.e(TAG, "wake $reason failed", it) }
+            .onFailure { PLog.e(TAG, "wake $reason failed", it) }
     }
 }
 
@@ -95,7 +95,7 @@ internal fun requestFlowWake(context: Context, reason: TriggerReason) {
 internal suspend fun runFlowWake(context: Context, reason: TriggerReason) {
     val runtime = runtimeFor(context.applicationContext) ?: return
     withTimeoutOrNull(WORKER_CHECK_BUDGET_MS) { runtime.engine.triggerAndAwaitChecks(reason) }
-        ?: Log.w(TAG, "wake $reason: checks did not finish within ${WORKER_CHECK_BUDGET_MS}ms; the cycle continues on its own")
+        ?: PLog.w(TAG, "wake $reason: checks did not finish within ${WORKER_CHECK_BUDGET_MS}ms; the cycle continues on its own")
 }
 
 /** 新增相册：立刻叫醒循环并对账（新相册的历史照片在 G 以下，只有对账扫得到）。减少相册不需要调用任何东西。 */
@@ -120,7 +120,7 @@ internal fun continueFlow(context: Context) {
 internal fun retryFailedFlow(context: Context) {
     val app = context.applicationContext
     thread(name = "ppass-flow-retry") {
-        runCatching { runtimeFor(app)?.engine?.retryFailed() }.onFailure { Log.e(TAG, "retry failed", it) }
+        runCatching { runtimeFor(app)?.engine?.retryFailed() }.onFailure { PLog.e(TAG, "retry failed", it) }
     }
 }
 
@@ -154,7 +154,7 @@ internal fun onFlowAppForeground(context: Context) {
     // #522：先同步记下「回过前台」——就算下面拿运行时超时 / 失败，额度闸门也看得到这个事实。
     FlowForegroundHandoff.lastAppForegroundAt = androidBootInstant(app)
     thread(name = "ppass-flow-foreground") {
-        runCatching { runtimeFor(app)?.engine?.onAppForeground() }.onFailure { Log.e(TAG, "foreground trigger failed", it) }
+        runCatching { runtimeFor(app)?.engine?.onAppForeground() }.onFailure { PLog.e(TAG, "foreground trigger failed", it) }
     }
 }
 
@@ -162,7 +162,7 @@ internal fun onFlowAppForeground(context: Context) {
 internal fun onFlowDesktopReachable(context: Context) {
     val app = context.applicationContext
     thread(name = "ppass-flow-reachable") {
-        runCatching { runtimeFor(app)?.engine?.onDesktopReachable() }.onFailure { Log.e(TAG, "reachable trigger failed", it) }
+        runCatching { runtimeFor(app)?.engine?.onDesktopReachable() }.onFailure { PLog.e(TAG, "reachable trigger failed", it) }
     }
 }
 
@@ -176,9 +176,9 @@ internal fun onFlowNetworkChanged(context: Context, lost: Boolean = false) {
     thread(name = "ppass-flow-network") {
         runCatching {
             val runtime = runtimeFor(app) ?: return@runCatching
-            runCatching { runtime.bridge.networkChange() }.onFailure { Log.w(TAG, "network_change failed", it) }
+            runCatching { runtime.bridge.networkChange() }.onFailure { PLog.w(TAG, "network_change failed", it) }
             if (lost && !hasDefaultNetwork(app)) runtime.engine.onNetworkLost() else runtime.engine.onNetworkChanged()
-        }.onFailure { Log.e(TAG, "network trigger failed", it) }
+        }.onFailure { PLog.e(TAG, "network trigger failed", it) }
     }
 }
 
@@ -229,8 +229,8 @@ internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
     }
     stale?.shutdown()
     // #547：解配后旧桌面不许再拉（在飞的连接也在原生侧关掉）。
-    runCatching { sharedNativeProvider?.setAllowedPeer(null) }.onFailure { Log.w(TAG, "clearFlowRuntime: clearing allowed peer failed; ignoring", it) }
-    runCatching { sharedNativeProvider?.revoke("") }.onFailure { Log.w(TAG, "clearFlowRuntime: revoke failed; ignoring", it) }
+    runCatching { sharedNativeProvider?.setAllowedPeer(null) }.onFailure { PLog.w(TAG, "clearFlowRuntime: clearing allowed peer failed; ignoring", it) }
+    runCatching { sharedNativeProvider?.revoke("") }.onFailure { PLog.w(TAG, "clearFlowRuntime: revoke failed; ignoring", it) }
 }
 
 /**
@@ -240,8 +240,8 @@ internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
  */
 internal fun runtimeFor(context: Context): AndroidFlowRuntime? {
     val app = context.applicationContext
-    val pairing = PairingStore(app.filesDir).load() ?: return null.also { Log.i(TAG, "runtimeFor: not paired") }
-    if (pairing.pairingEpoch.isBlank()) return null.also { Log.w(TAG, "runtimeFor: blank pairing epoch; refusing to build") }
+    val pairing = PairingStore(app.filesDir).load() ?: return null.also { PLog.i(TAG, "runtimeFor: not paired") }
+    if (pairing.pairingEpoch.isBlank()) return null.also { PLog.w(TAG, "runtimeFor: blank pairing epoch; refusing to build") }
     val key = pairing.daemonNodeId
     val task = synchronized(runtimeLock) {
         runtime?.let { live ->
@@ -258,28 +258,28 @@ internal fun runtimeFor(context: Context): AndroidFlowRuntime? {
     return try {
         task.get(INIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
     } catch (_: TimeoutException) {
-        Log.e(TAG, "runtimeFor: initialization still running after ${INIT_TIMEOUT_MS}ms; giving up this call")
+        PLog.e(TAG, "runtimeFor: initialization still running after ${INIT_TIMEOUT_MS}ms; giving up this call")
         null
     } catch (failure: Exception) {
-        Log.e(TAG, "runtimeFor: initialization failed", failure)
+        PLog.e(TAG, "runtimeFor: initialization failed", failure)
         synchronized(runtimeLock) { if (building?.second === task) building = null }
         null
-    }.also { Log.i(TAG, "runtimeFor: ready=${it != null} in ${SystemClock.elapsedRealtime() - started}ms") }
+    }.also { PLog.i(TAG, "runtimeFor: ready=${it != null} in ${SystemClock.elapsedRealtime() - started}ms") }
 }
 
 private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
-    Log.i(TAG, "buildRuntime: start")
+    PLog.i(TAG, "buildRuntime: start")
     migrateLegacyFlowState(app.filesDir)
     val application = app as PPassApplication
     val writer = FlowWriter.start("ppass-flow-writer")
     val sqlite = SqliteOrderStore.open(app)
     val store = WriterGuardedOrderStore(sqlite, SingleThreadWrites(writer.thread))
     val cleared = runBlocking(writer.dispatcher) { store.claimOwner(key, idFloor = System.currentTimeMillis()) }
-    Log.i(TAG, "buildRuntime: order store ready (cleared for a different desktop=$cleared)")
+    PLog.i(TAG, "buildRuntime: order store ready (cleared for a different desktop=$cleared)")
     val native = sharedNativeProvider(app)
     // #547：原生 provider 只给这台已配对桌面供数（运行时按桌面 NodeId 建，换桌面会重建再设一次）。
     native.setAllowedPeer(key)
-    Log.i(TAG, "buildRuntime: native blobs provider ready")
+    PLog.i(TAG, "buildRuntime: native blobs provider ready")
     // 旧的 register 路径（打开原图、原生导入并出 ticket）仍保留在桥上；#413 的循环只走 importer → serve。
     val bridge = IrohBlobsProviderBridge(native) { source ->
         try {
@@ -341,7 +341,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         // relay；空闲时它被关掉了，等到第一次 serve 才从零开始会把 15 s 上线预算整个耗在这上面。
         probe = DaemonDesktopProbe(pairing, desktopFor, log = androidLog, clock = SystemClock::elapsedRealtime).let { hello ->
             DesktopProbe {
-                runCatching { native.prewarm() }.onFailure { Log.w(TAG, "provider prewarm failed; serve binds instead", it) }
+                runCatching { native.prewarm() }.onFailure { PLog.w(TAG, "provider prewarm failed; serve binds instead", it) }
                 hello.probe()
             }
         },
@@ -389,7 +389,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     synchronized(runtimeLock) {
         val current = PairingStore(app.filesDir).load()
         if (current?.daemonNodeId != key) {
-            Log.w(TAG, "buildRuntime: pairing moved during construction; discarding")
+            PLog.w(TAG, "buildRuntime: pairing moved during construction; discarding")
             built.shutdown()
             building = null
             error("pairing moved during construction")
@@ -397,7 +397,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         runtime = built
         building = null
     }
-    Log.i(TAG, "buildRuntime: published")
+    PLog.i(TAG, "buildRuntime: published")
     return built
 }
 
@@ -429,12 +429,12 @@ private var sharedNativeProvider: AndroidNativeIrohBlobsProvider? = null
  * false = 桌面还连着这一张，稍后再试。下一次 serve 自己重新绑。
  */
 internal fun parkFlowNetwork(): Boolean =
-    sharedNativeProvider?.let { runCatching { it.park() }.getOrElse { failure -> Log.w(TAG, "park failed", failure); false } } ?: true
+    sharedNativeProvider?.let { runCatching { it.park() }.getOrElse { failure -> PLog.w(TAG, "park failed", failure); false } } ?: true
 
 private fun sharedNativeProvider(context: Context): AndroidNativeIrohBlobsProvider =
     sharedNativeProvider ?: synchronized(nativeProviderLock) {
         sharedNativeProvider ?: run {
-            Log.i(TAG, "native blobs provider: opening (once per process)")
+            PLog.i(TAG, "native blobs provider: opening (once per process)")
             AndroidNativeIrohBlobsProvider.open(context.filesDir).also { sharedNativeProvider = it }
         }
     }
