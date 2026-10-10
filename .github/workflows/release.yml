@@ -601,7 +601,7 @@ jobs:
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           APKSIGNER="$(find "$SDK/build-tools" -maxdepth 2 -name apksigner 2>/dev/null | sort -V | tail -1)"
           if [ -z "$APKSIGNER" ]; then
-            echo "::error::找不到 apksigner（SDK=$SDK）——判据无法成立，按红处理"
+            echo "::error::找不到 apksigner（SDK=${SDK}）——判据无法成立，按红处理"
             exit 1
           fi
           echo "apksigner: $APKSIGNER"
@@ -927,7 +927,7 @@ jobs:
           fi
           if [ -n "$CUR" ] && [ "$CUR" != "$NEW" ] && \
              [ "$(printf '%s\n%s\n' "$CUR" "$NEW" | sort -V | tail -n1)" = "$CUR" ]; then
-            echo "test-channel 已指向更新的 $CUR（本次 $NEW）——不回拨"
+            echo "test-channel 已指向更新的 ${CUR}（本次 ${NEW}）——不回拨"
             exit 0
           fi
           gh release upload "$CH" artifacts/manifest.json --clobber

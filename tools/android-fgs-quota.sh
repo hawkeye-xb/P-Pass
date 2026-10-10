@@ -100,15 +100,15 @@ cmd_set() {
   fi
   sh_ device_config set_sync_disabled_for_tests until_reboot >/dev/null
   [[ "$(sync_mode)" == "until_reboot" ]] || fail "sync 模式没变成 until_reboot：$(sync_mode)"
-  say "sync: until_reboot（原模式 $prev 已记到 $STATE）"
+  say "sync: until_reboot（原模式 $prev 已记到 ${STATE}）"
 
   # 3) 写配额并双重读回。
   sh_ device_config put "$NS" "$KEY" "$ms" >/dev/null
   local got eff
   got=$(config_ms)
-  [[ "$got" == "$ms" ]] || fail "device_config 读回 $got，期望 $ms"
+  [[ "$got" == "$ms" ]] || fail "device_config 读回 ${got}，期望 $ms"
   eff=$(effective_ms)
-  [[ "$eff" == "$ms" ]] || fail "AMS 生效值 $eff，期望 $ms（device_config 已写但系统没吃进去）"
+  [[ "$eff" == "$ms" ]] || fail "AMS 生效值 ${eff}，期望 ${ms}（device_config 已写但系统没吃进去）"
   say "set: $KEY=$ms ms（${secs}s），AMS 已生效"
   say "提示：前台不计时、切回前台清零（#411）——要让它到点，App 必须在后台跑满 ${secs}s"
 }
@@ -119,7 +119,7 @@ cmd_reset() {
   got=$(config_ms)
   [[ "$got" == "null" ]] || fail "device_config 仍有值：$got"
   eff=$(effective_ms)
-  [[ "$eff" == "$DEFAULT_MS" ]] || fail "AMS 生效值 $eff，期望系统默认 $DEFAULT_MS"
+  [[ "$eff" == "$DEFAULT_MS" ]] || fail "AMS 生效值 ${eff}，期望系统默认 $DEFAULT_MS"
   say "reset: $KEY 已删除，AMS 生效值 $eff ms"
 
   if [[ "$TARGET" -ge 35 ]]; then
@@ -134,7 +134,7 @@ cmd_reset() {
   prev=$(sh_ "cat $STATE 2>/dev/null" || true)
   [[ -n "$prev" ]] || prev=none
   sh_ device_config set_sync_disabled_for_tests "$prev" >/dev/null
-  [[ "$(sync_mode)" == "$prev" ]] || fail "sync 模式没恢复成 $prev：$(sync_mode)"
+  [[ "$(sync_mode)" == "$prev" ]] || fail "sync 模式没恢复成 ${prev}：$(sync_mode)"
   sh_ "rm -f $STATE"
   say "sync: 已恢复为 $prev"
 }

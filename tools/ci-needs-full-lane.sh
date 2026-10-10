@@ -110,7 +110,7 @@ main() {
   case "$LANE" in
     default | rust-workspace) : ;;
     *)
-      say "未知 lane「$LANE」→ 不猜，保守判定：要跑"
+      say "未知 lane「${LANE}」→ 不猜，保守判定：要跑"
       printf 'true
 '
       return 0
@@ -141,7 +141,7 @@ main() {
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     if ! is_inert "$f"; then
-      say "「$f」不在无害清单里（lane=$LANE）→ 要跑"
+      say "「${f}」不在无害清单里（lane=${LANE}）→ 要跑"
       printf 'true\n'
       return 0
     fi
@@ -149,7 +149,7 @@ main() {
 $files
 EOF
 
-  say "全部改动都落在无害清单里（lane=$LANE）→ 可跳过"
+  say "全部改动都落在无害清单里（lane=${LANE}）→ 可跳过"
   printf 'false\n'
   return 0
 }

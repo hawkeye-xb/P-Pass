@@ -24,6 +24,10 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "**.sh"
+      - ".github/workflows/**"
+      - "justfile"
+      - "tools/check-shell-vars.py"
       - "docs/**"
       - "cards/**"
       - "assets/design/tokens.json"
@@ -53,6 +57,10 @@ on:
   push:
     branches: [main]
     paths:
+      - "**.sh"
+      - ".github/workflows/**"
+      - "justfile"
+      - "tools/check-shell-vars.py"
       - "docs/**"
       - "cards/**"
       - "assets/design/tokens.json"
@@ -99,6 +107,10 @@ jobs:
         run: python3 tools/check-markdown-tables.py
       - name: token-check（DESK-15：tokens.css 不许与 tokens.json 漂移）
         run: python3 tools/check-token-drift.py
+      - name: shell-vars-check（变量紧挨非 ASCII 字符必须写 ${name}：macOS bash 3.2 会读错变量名）
+        run: |
+          python3 tools/check-shell-vars.py --self-test
+          python3 tools/check-shell-vars.py
 
   dogfood-assets:
     name: dogfood-assets（REL-08：资产里的 .sh 在干净目录自足）

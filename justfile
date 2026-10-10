@@ -199,6 +199,12 @@ workers-update-test:
 # SEC-02: 提交身份必须在 .github/allowed-identities.txt 白名单内。
 # 第二行是反证（证明门禁在该红时真的红），跟门禁同生共死。
 # 本地跑的是 origin/main..HEAD；远端 ci-identity.yml 按 PR/push 各自算区间。
+# shell 变量紧挨非 ASCII 字符必须写成 ${name}：macOS /bin/bash 3.2 会把多字节字符的首字节读进变量名
+# （v0.9.12-test.5 的 macOS 构建因此没能重试 codesign）。先跑自测，再扫全仓。
+shell-vars-check:
+  @python3 tools/check-shell-vars.py --self-test
+  @python3 tools/check-shell-vars.py
+
 identity-check:
   @./tools/test-commit-identity-gate.sh
   @./tools/check-commit-identity.sh
@@ -212,7 +218,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint lint-cross test arch-check md-check token-check identity-check
+ci: fmt lint lint-cross test arch-check md-check token-check shell-vars-check identity-check
   @echo "==> CI pipeline: all green ✅"
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
@@ -223,7 +229,7 @@ ci: fmt lint lint-cross test arch-check md-check token-check identity-check
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check identity-check
+ci-docs: md-check token-check shell-vars-check identity-check
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）

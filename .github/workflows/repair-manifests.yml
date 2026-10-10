@@ -68,9 +68,9 @@ jobs:
           A=$(RELEASE_TAG="$TAG" tools/release-version.sh android)
           # release-version.sh 用 jq -r：缺键时打印 "null"，所以按 x.y.z 形状校验
           [[ "$D" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-            || { echo "::error::$TAG:release/versions.json 缺 desktop 版本号（读到「$D」）"; exit 1; }
+            || { echo "::error::$TAG:release/versions.json 缺 desktop 版本号（读到「${D}」）"; exit 1; }
           [[ "$A" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-            || { echo "::error::$TAG:release/versions.json 缺 android 版本号（读到「$A」）"; exit 1; }
+            || { echo "::error::$TAG:release/versions.json 缺 android 版本号（读到「${A}」）"; exit 1; }
           echo "from $TAG: desktop=$D android=$A"
           {
             echo "DESKTOP_VERSION=$D"

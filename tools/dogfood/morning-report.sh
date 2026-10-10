@@ -30,7 +30,7 @@ while [ $# -gt 0 ]; do
 done
 
 DB="$DATA_DIR/.ppf/index.sqlite"
-[ -f "$DB" ] || { echo "❌ 无 index.sqlite: $DB（daemon 未初始化？）"; exit 1; }
+[ -f "$DB" ] || { echo "❌ 无 index.sqlite: ${DB}（daemon 未初始化？）"; exit 1; }
 
 if [ -n "$SERIAL" ]; then ADB=(adb -s "$SERIAL"); else ADB=(adb); fi
 if "${ADB[@]}" get-state >/dev/null 2>&1; then

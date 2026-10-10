@@ -53,7 +53,7 @@ check_scripts() {
     while IFS= read -r line; do
       target="$(printf '%s\n' "$line" | sed -E 's/^[[:space:]]*(source|\.)[[:space:]]+//; s/[[:space:]].*$//; s/"//g')"
       if ! printf '%s\n' "$target" | grep -qE '^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/[^/]+$'; then
-        fail "$(basename "$f") source 了非同目录路径: $target（资产是平铺的，只能 source 同目录文件）" || return 1
+        fail "$(basename "$f") source 了非同目录路径: ${target}（资产是平铺的，只能 source 同目录文件）" || return 1
       fi
       [[ -f "$dest/${target##*/}" ]] \
         || fail "$(basename "$f") source 的 ${target##*/} 不在资产清单里（tools/stage-dogfood-scripts.sh）" || return 1
