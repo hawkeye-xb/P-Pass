@@ -341,8 +341,13 @@ jobs:
       #
       # ⚠️ 覆盖不到的仍有一处：桌面壳（apps/desktop/src-tauri）里的 macOS 分支。
       # 交叉 check 它要跑 tauri-build 与 macOS 系统框架，不是加一行能解决的。
+      #
+      # CI-16 (#369)：由 `cargo check` 升级为 `cargo clippy -D warnings`。check 只证明
+      # 编得过；只在 macOS 上成立的 lint（比如非 macOS 调用方都被 cfg 掉之后的
+      # dead_code）此前本地、远端都没有任何地方会报。clippy 同样不链接，runner 上
+      # 照样不需要 macOS SDK。step 名字不改（不是必需检查，但别平白改动）。
       - name: macOS cross-check (platform crate compiles for darwin)
-        run: rustup target add x86_64-apple-darwin && cargo check -p platform --all-targets --target x86_64-apple-darwin
+        run: rustup target add x86_64-apple-darwin && cargo clippy -p platform --all-targets --features test-support --target x86_64-apple-darwin -- -D warnings
 
   # CI-06 后半（#164，2026-09-20）：daemon 侧的测试第一次在**真 Windows** 上跑。
   #
