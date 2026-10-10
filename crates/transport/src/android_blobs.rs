@@ -1175,18 +1175,29 @@ impl AndroidBlobsProvider {
     /// `provider_offline`, and carries the stuck endpoint's diagnostics.
     async fn online_endpoint(&self, stage: &str) -> Result<Arc<ProviderEndpoint>> {
         let endpoint = self.bound_endpoint().await?;
+        let wait_started = std::time::Instant::now();
         if !endpoint.waits_for_online() || endpoint.transport.wait_online(self.online_timeout).await
         {
             return Ok(endpoint);
         }
+        // QA-20 (#570)：记下**实际**等了多久，在换 endpoint（bind 没有上限）之前取值，
+        // 写进日志和返回的错误。原先日志里只有配置的 deadline，证明不了「真的只等了一个
+        // deadline」；放进错误里，调用方（手机端诊断、测试）每次都拿得到，不依赖日志。
+        let waited = wait_started.elapsed();
+        let waited_note = format!(
+            "waited {}ms of {}ms deadline",
+            waited.as_millis(),
+            self.online_timeout.as_millis()
+        );
         let diagnostics = endpoint.online_diagnostics();
         let replaced = self.replace_endpoint(&endpoint).await;
         tracing::warn!(
-            "NET-29: Android provider endpoint not online after {:?} before {stage} ({diagnostics}); {replaced}",
-            self.online_timeout
+            "NET-29: Android provider endpoint not online before {stage} ({waited_note}; {diagnostics}); {replaced}"
         );
+        // 前缀「did not become online before {stage}」保持不变：Android 端按它归类为
+        // provider_offline（NativeFlowDeliveryPort.kt 用 contains 匹配）。
         Err(TransportError::Io(format!(
-            "Android provider endpoint did not become online before {stage} ({diagnostics}; {replaced})"
+            "Android provider endpoint did not become online before {stage} ({waited_note}; {diagnostics}; {replaced})"
         )))
     }
 
