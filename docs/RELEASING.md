@@ -83,7 +83,12 @@
 5. **Human publish**: review the draft, then publish it from the
    GitHub web UI (Releases → the draft → Publish release). Two checks:
    - **the body must open with this version's user-visible changelog**;
-     signing status / SHA-256 / asset list belong in later sections (§3.5)
+     signing status / SHA-256 / asset list belong in later sections (§3.5).
+     Since `#773` the workflow does this itself: on a formal tag the draft
+     body opens with `## 本版更新（<batch>）` + the CHANGELOG `[<batch>]` section
+     in full (`tools/release/changelog-section.sh`), the build ledger follows;
+     test tags are unchanged. If CHANGELOG has no such section the step only
+     warns — check the body opens with it before publishing
    - the signing status + asset list + E2E live scenarios result (if the
      tag ran one) are consistent with the commit you tagged
    > **Do not use the local `gh` CLI for this repo** — it is not bound to
@@ -302,7 +307,10 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 5. **人工 publish**：核对 draft，然后在 GitHub 网页上发布（Releases → 该 draft →
    Publish release）。两项核对：
    - **正文必须以本版本的用户可见 changelog 开头**；签名状态 / SHA-256 / 资产清单
-     放后面的段落
+     放后面的段落。#773 起由流水线自动完成：正式 tag 的草稿正文以
+     `## 本版更新（<批次号>）` + CHANGELOG `[<批次号>]` 小节全文开头
+     （`tools/release/changelog-section.sh`），构建台账在后；test tag 不变。
+     CHANGELOG 缺这一节时只告警——发布前看一眼正文开头
    - 签名状态 + 资产清单 + e2e 结果（若本次 tag 跑了）与你打的那个 commit 一致
    > 更新清单的说明**不取自 release 正文**（UPD-03 #580 起），#741 起取自第 2b 步的
    > 手写说明文件；正文仍以用户可见 changelog 开头，是给在网页上看 Release 的人读的。

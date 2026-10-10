@@ -759,7 +759,7 @@ jobs:
           # ⚠️ 骨架里不许出现 needs.*.outputs.signed——本 job 不 needs 构建
           # job，那时候签名结果还不存在（见上「notes 的写者只有两个」）。
           # 签名状态由 finalize-notes 补。
-          cat > NOTES.md <<EOF
+          cat > LEDGER.md <<EOF
           ## P-Pass ${TAG#v}
 
           构建自 \`$(git rev-parse --short=7 HEAD)\` · $(date -u +%FT%TZ)
@@ -784,6 +784,10 @@ jobs:
 
           被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md
           EOF
+          # #773：正式 tag 的正文以 CHANGELOG 本版小节开头、台账在后（RELEASING.md §3 第 5 步）；
+          # test tag 原样；CHANGELOG 缺这一节只告警。逻辑在 tools/release/changelog-section.sh。
+          tools/release/changelog-section.sh "$TAG" CHANGELOG-SECTION.md
+          cat CHANGELOG-SECTION.md LEDGER.md > NOTES.md
 
       - name: Create draft release (幂等)
         env:
@@ -1238,6 +1242,11 @@ jobs:
       TAG: ${{ needs.create-draft.outputs.tag }}
       BUILD_SHA: ${{ needs.create-draft.outputs.sha }}
     steps:
+      # #773：正文开头要读本次构建那个提交里的 CHANGELOG.md（与 create-draft 同一份）。
+      # 必须是第一步：checkout 会清空工作目录，下面的 artifact 下载要在它之后。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.create-draft.outputs.sha }}
       # CI-09: 逐 lane 具名下载，不再用「无 name 全量下载」——v5+ 在该模式下
       # 只有 1 个 artifact 时会平铺到 path、不建 <name>/ 子目录（README 未记载，
       # 源码 src/download-artifact.ts 比对确认），下游按 artifacts/<name>/ 的
@@ -1272,7 +1281,7 @@ jobs:
       - name: Compose final notes
         run: |
           set -euo pipefail
-          cat > NOTES.md <<EOF
+          cat > LEDGER.md <<EOF
           ## P-Pass ${TAG#v}
 
           构建自 \`${BUILD_SHA::7}\` · $(date -u +%FT%TZ)
@@ -1297,6 +1306,10 @@ jobs:
 
           被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md
           EOF
+          # #773：正式 tag 的正文以 CHANGELOG 本版小节开头、台账在后（RELEASING.md §3 第 5 步）；
+          # test tag 原样；CHANGELOG 缺这一节只告警。逻辑在 tools/release/changelog-section.sh。
+          tools/release/changelog-section.sh "$TAG" CHANGELOG-SECTION.md
+          cat CHANGELOG-SECTION.md LEDGER.md > NOTES.md
 
       # H-10c: dmg/apk 的 sha256（不进平台 SUMS——保持 zip 内 SUMS 与 release
       # 资产逐字节一致，T-071 三重核对①；人类资产哈希单独列在 notes）
