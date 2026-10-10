@@ -48,6 +48,8 @@ on:
       - "tools/release-notes.test.mjs"
       - "release/**"
       - "tools/release/**"
+      - "tools/bundle-desktop-macos.sh"
+      - "tools/test-release-timeouts.sh"
   push:
     branches: [main]
     paths:
@@ -75,6 +77,8 @@ on:
       - "tools/release-notes.test.mjs"
       - "release/**"
       - "tools/release/**"
+      - "tools/bundle-desktop-macos.sh"
+      - "tools/test-release-timeouts.sh"
   workflow_dispatch:
 
 permissions:
@@ -153,3 +157,14 @@ jobs:
       # release.yml 同版本，首次从 npm 拉取）；不碰任何 secret。
       - name: dry-run（release.yml / mirror-latest.yml 原样逐步执行）
         run: tools/release/dry-run.sh
+
+  release-timeouts:
+    name: release-timeouts（#772：发布链外部命令限时 + 每个 job 有 timeout-minutes）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 依赖（PyYAML：门禁读 release.yml 的 job 表）
+        run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+      - name: with-timeout.sh 行为 + 门禁
+        run: bash tools/test-release-timeouts.sh

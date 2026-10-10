@@ -72,6 +72,10 @@ jobs:
   macos-arm64:
     name: "macOS arm64 (签名门控)"
     runs-on: macos-14
+    # #772：22 次成功发版里本 job 平均 11.4 分钟、最长 13 分钟（含缓存）；冷缓存的整套
+    # release 构建 + notarytool 自身的 15 分钟上限都要装得下，取 45。没有这一行时挂住要等
+    # GitHub 默认 360 分钟（v2026.10.3 的 codesign 就挂了 14 分钟才被人工取消）。
+    timeout-minutes: 45
     # CI-04②（2026-08-26）：删掉了 `environment: release-signing`。
     #
     # 它一直被当成「发布前的人工审批门」向验收人描述，验收人被反复要求
@@ -201,7 +205,9 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k pp "$KEYCHAIN" >/dev/null
           # find-identity -v 第 1 行是身份（"1) <hash> \"...\""），第 2 行是
           # "N valid identities found" 汇总——取 NR==1 才是证书哈希。
-          /usr/bin/codesign --force --options runtime --timestamp \
+          # #772：--timestamp 要请求 Apple 时间戳服务，可能挂住——限时并重试一次。
+          tools/release/with-timeout.sh "codesign daemon/testclient（Apple 时间戳服务）" 300 2 -- \
+            /usr/bin/codesign --force --options runtime --timestamp \
             --sign "$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')" \
             /tmp/rel/daemon /tmp/rel/testclient
           echo "signed=yes" >> "$GITHUB_OUTPUT"
@@ -314,8 +320,9 @@ jobs:
           [ -f "$DMG" ] || { echo "FATAL: $DMG missing (bundle step must run first)" >&2; exit 1; }
           # shellcheck disable=SC2086 # NOTARY_ARGS 是 flag 组，需刻意拆分
           xcrun notarytool submit "$DMG" $NOTARY_ARGS --wait --timeout 15m
-          xcrun stapler staple "$DMG"
-          xcrun stapler validate "$DMG"
+          # #772：stapler 要从 Apple 取公证票据，限时并重试一次（notarytool 自带 --timeout）。
+          tools/release/with-timeout.sh "stapler staple（Apple 公证票据）" 300 2 -- xcrun stapler staple "$DMG"
+          tools/release/with-timeout.sh "stapler validate" 120 1 -- xcrun stapler validate "$DMG"
           echo "notarized=yes" >> "$GITHUB_OUTPUT"
 
       # UPD-03: 桌面 updater 包——必须从「嵌 lib/ + 重签」之后的最终 .app
@@ -693,6 +700,8 @@ jobs:
     name: "建 Release 草稿（骨架）"
     # 不 needs 任何构建 job（见上 ①）——秒级跑完，三条 lane 之后只管上传。
     runs-on: ubuntu-latest
+    # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
+    timeout-minutes: 10
     permissions:
       contents: write
     outputs:
@@ -809,6 +818,8 @@ jobs:
     needs: [create-draft, android]
     if: ${{ !cancelled() && needs.android.result == 'success' }}
     runs-on: ubuntu-latest
+    # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
+    timeout-minutes: 10
     permissions:
       contents: write
     env:
@@ -931,6 +942,8 @@ jobs:
     needs: [create-draft, macos-arm64]
     if: ${{ !cancelled() && needs.macos-arm64.result == 'success' }}
     runs-on: ubuntu-latest
+    # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
+    timeout-minutes: 10
     permissions:
       contents: write
     env:
@@ -965,6 +978,8 @@ jobs:
     needs: [create-draft, windows-x64]
     if: ${{ !cancelled() && needs.windows-x64.result == 'success' }}
     runs-on: ubuntu-latest
+    # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
+    timeout-minutes: 10
     permissions:
       contents: write
     env:
@@ -1047,6 +1062,8 @@ jobs:
     # 一模式）。每步按 needs.*.result 门控，缺哪个平台就少哪个条目。
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
+    timeout-minutes: 10
     permissions:
       contents: write
     env:
@@ -1121,6 +1138,8 @@ jobs:
     # 本条无意义，直接跳过；桌面端已经拿到自己要的那份清单。
     if: ${{ !cancelled() && needs.upload-windows.result == 'success' }}
     runs-on: ubuntu-latest
+    # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
+    timeout-minutes: 10
     permissions:
       contents: write
     env:
@@ -1232,6 +1251,8 @@ jobs:
     # skipped 且无 !cancelled() → 本 job 连带跳过，正文永远补不齐。
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
+    timeout-minutes: 10
     permissions:
       contents: write
     env:
