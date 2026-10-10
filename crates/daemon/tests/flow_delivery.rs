@@ -2440,6 +2440,12 @@ async fn cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection() {
 
     const KILL_THRESHOLD: u64 = 2 * 1024 * 1024;
     let mut cancelled_and_reclaimed = false;
+    // #825：失败时要能说清是哪一种——GC 没跑（H1）、跑了但这份内容仍在保护名单里，
+    // 或者 GC 跑了、没被保护却仍没删掉（H2 / H3）。保护名单回调是本测试自己的闭包，
+    // 在这里计数。
+    let gc_runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let gc_query_errors = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let gc_runs_protecting_it = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     for attempt in 0..8 {
         let _ = std::fs::remove_dir_all(&receiver_store);
         let receiver_transport =
@@ -2447,6 +2453,11 @@ async fn cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection() {
                 .await
                 .unwrap();
         let gc_db = callback_db.clone();
+        let (runs, errors, protecting) = (
+            gc_runs.clone(),
+            gc_query_errors.clone(),
+            gc_runs_protecting_it.clone(),
+        );
         let receiver_blobs = Arc::new(
             Blobs::open_with_periodic_gc(
                 &receiver_transport,
@@ -2454,8 +2465,19 @@ async fn cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection() {
                 std::time::Duration::from_millis(20),
                 move || {
                     let db = gc_db.clone();
+                    let (runs, errors, protecting) =
+                        (runs.clone(), errors.clone(), protecting.clone());
                     Box::pin(async move {
-                        db.active_flow_content_hashes().await.map_err(|error| {
+                        runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let result = db.active_flow_content_hashes().await;
+                        match &result {
+                            Ok(set) if set.contains(&hash) => {
+                                protecting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            }
+                            Ok(_) => {}
+                            Err(error) => errors.lock().unwrap().push(error.to_string()),
+                        }
+                        result.map_err(|error| {
                             transport::TransportError::Io(format!(
                                 "query active Flow hashes for GC protection: {error}"
                             ))
@@ -2509,12 +2531,29 @@ async fn cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection() {
             "cancel must mark the grant cancelled, unlike suspend"
         );
 
+        let (runs_at_cancel, protecting_at_cancel) = (
+            gc_runs.load(std::sync::atomic::Ordering::SeqCst),
+            gc_runs_protecting_it.load(std::sync::atomic::Ordering::SeqCst),
+        );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while receiver_blobs.local_bytes(hash).await.unwrap() != 0 {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "cancelled partial was not reclaimed by periodic GC within the window"
-            );
+            if std::time::Instant::now() >= deadline {
+                let runs = gc_runs.load(std::sync::atomic::Ordering::SeqCst) - runs_at_cancel;
+                let protecting = gc_runs_protecting_it.load(std::sync::atomic::Ordering::SeqCst)
+                    - protecting_at_cancel;
+                panic!(
+                    "cancelled partial was not reclaimed by periodic GC within the window \
+                     (#825 evidence: attempt={attempt}, local_bytes={}, GC runs since cancel={runs}, \
+                     of which still listed it as protected={protecting}, active grant hashes now \
+                     contain it={}, protected-hash query errors={:?})",
+                    receiver_blobs.local_bytes(hash).await.unwrap(),
+                    db.active_flow_content_hashes()
+                        .await
+                        .map(|set| set.contains(&hash))
+                        .unwrap_or(false),
+                    gc_query_errors.lock().unwrap(),
+                );
+            }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
