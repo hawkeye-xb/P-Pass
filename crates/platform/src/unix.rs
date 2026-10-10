@@ -144,7 +144,7 @@ pub fn kill_daemon_process() -> crate::Result<KillOutcome> {
 ///
 /// 抽成纯函数是刻意的：真的杀进程只能在有 daemon 在跑的机器上验，但
 /// **「什么退出码算没跑」这条判据**可以在任何地方单测。Windows 侧有同款
-/// （`windows::taskkill_verdict`）——DESK-25 (#208) 的教训是这条判据一旦
+/// （`windows::kill_verdict`）——DESK-25 (#208) 的教训是这条判据一旦
 /// 内联成裸 if 就没人守着，然后「没杀掉」被当成杀成功。
 pub fn pkill_verdict(success: bool, code: Option<i32>) -> crate::Result<KillOutcome> {
     if success {
