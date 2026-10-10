@@ -48,12 +48,12 @@ jobs:
       - name: Build tests once
         shell: bash
         env:
-          VCPKG_ROOT: "C:\vcpkg"
+          VCPKG_ROOT: 'C:\vcpkg'
         run: cargo nextest run --no-run
       - name: Hammer the #825 test under full-suite load
         shell: bash
         env:
-          VCPKG_ROOT: "C:\vcpkg"
+          VCPKG_ROOT: 'C:\vcpkg'
         run: |
           set +e
           hits=0; runs=0
