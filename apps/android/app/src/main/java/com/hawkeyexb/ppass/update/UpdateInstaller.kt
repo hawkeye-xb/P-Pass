@@ -16,8 +16,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
@@ -81,6 +84,18 @@ object UpdateInstaller {
         data class Error(val cause: String) : Outcome
     }
 
+    /**
+     * #793：本 App 是否已获准安装应用（「安装未知应用」逐来源授权，Android 8+）。
+     * 没有授权时直接提交会话，系统会在确认页之前插一道「不允许安装此来源」的门；
+     * 用户在那道门上取消时会话**收不到终态**——所以按官方做法先查、先请求授权。
+     */
+    fun canInstall(context: Context): Boolean = context.packageManager.canRequestPackageInstalls()
+
+    /** #793：系统的「安装未知应用」授权页，直接定位到本 App。 */
+    fun installPermissionIntent(context: Context): Intent =
+        Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
     /** 等待系统回执的上限：含用户看确认页的时间，给足 10 分钟。 */
     private const val INSTALL_RESULT_TIMEOUT_MS = 10L * 60 * 1000
 
@@ -127,6 +142,11 @@ object UpdateInstaller {
                     else -> Outcome.Failed(finished.status, finished.message)
                 }
             }
+        } catch (e: CancellationException) {
+            // #793：等待回执时被取消（回到前台对账判定「这次没装」）——放掉会话，并照协程约定
+            // 把取消抛回去；不许当成「安装失败」吞掉（那会把界面打成「更新没有完成」）。
+            runCatching { session.abandon() }
+            throw e
         } catch (e: Exception) {
             runCatching { session.abandon() }
             Outcome.Error("commit: $e")
