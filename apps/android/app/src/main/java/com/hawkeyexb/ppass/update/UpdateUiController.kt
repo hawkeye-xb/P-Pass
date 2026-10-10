@@ -16,6 +16,8 @@ import com.hawkeyexb.ppass.log.PLog
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -156,6 +158,42 @@ internal suspend fun runAutoCheck(
     return true
 }
 
+/** #793：App 回到前台时，安装这一步该怎么收尾（[resumeInstallAction] 的结果）。 */
+internal enum class ResumeInstallAction {
+    /** 与安装无关，什么都不做。 */
+    None,
+
+    /** 刚从「安装未知应用」授权页回来且已授权：接着装（用户的意图本来就是安装）。 */
+    ContinueInstall,
+
+    /** 刚从授权页回来但没授权：停在「可以安装」，什么都不改。 */
+    StayReady,
+
+    /**
+     * 停在「正在安装」却回到了前台：系统确认页已经关掉。若稍后仍没有回执（用户在某一层
+     * 取消、回执没来），退回「可以安装」，不让界面卡住。
+     */
+    ReconcileInstalling,
+}
+
+/**
+ * #793：回到前台时的判定（纯函数，单测锁真值表）。系统弹窗的结果 App 必须如实反映：
+ * 无论用户在哪一层（授权页 / 「不允许此来源」门 / 安装确认页）离开，都不能停在「正在安装」。
+ */
+internal fun resumeInstallAction(
+    state: UpdateUiState,
+    awaitingInstallPermission: Boolean,
+    canInstall: Boolean,
+): ResumeInstallAction = when {
+    awaitingInstallPermission && state is UpdateUiState.ReadyToInstall ->
+        if (canInstall) ResumeInstallAction.ContinueInstall else ResumeInstallAction.StayReady
+    state is UpdateUiState.Installing -> ResumeInstallAction.ReconcileInstalling
+    else -> ResumeInstallAction.None
+}
+
+/** #793：回到前台后再等多久仍无回执，才判定「这次没装」（给迟到的取消回执留余地）。 */
+internal const val INSTALL_RECONCILE_GRACE_MS = 1_500L
+
 class UpdateUiController(
     private val context: Context,
     private val scope: CoroutineScope,
@@ -259,7 +297,37 @@ class UpdateUiController(
 
     fun onColdStart() = autoCheck()
 
-    fun onResume() = autoCheck()
+    fun onResume() {
+        reconcileInstallOnResume()
+        autoCheck()
+    }
+
+    /** #793：用户从「安装未知应用」授权页回来时要接着装（见 [resumeInstallAction]）。 */
+    private var awaitingInstallPermission = false
+    private var installJob: Job? = null
+
+    private fun reconcileInstallOnResume() {
+        val action = resumeInstallAction(_state.value, awaitingInstallPermission, UpdateInstaller.canInstall(context))
+        if (action == ResumeInstallAction.ContinueInstall || action == ResumeInstallAction.StayReady) {
+            awaitingInstallPermission = false
+        }
+        when (action) {
+            ResumeInstallAction.ContinueInstall -> onUserInstall()
+            ResumeInstallAction.ReconcileInstalling -> {
+                val job = installJob
+                scope.launch {
+                    delay(INSTALL_RECONCILE_GRACE_MS)
+                    val s = _state.value
+                    if (s is UpdateUiState.Installing && installJob === job) {
+                        job?.cancel()
+                        PLog.i(UPDATE_LOG_TAG, "#793: back in foreground with no install result; back to ready")
+                        _state.value = UpdateUiState.ReadyToInstall(s.version)
+                    }
+                }
+            }
+            ResumeInstallAction.StayReady, ResumeInstallAction.None -> Unit
+        }
+    }
 
     private fun autoCheck() {
         scope.launch {
@@ -433,7 +501,13 @@ class UpdateUiController(
             _state.value = UpdateUiState.Failed(UpdateFailureKind.Install, s.version)
             return
         }
-        scope.launch {
+        // #793：按官方做法先查「安装未知应用」授权；没有就先带用户去授权页，回来再接着装。
+        if (!UpdateInstaller.canInstall(context)) {
+            awaitingInstallPermission = true
+            context.startActivity(UpdateInstaller.installPermissionIntent(context))
+            return
+        }
+        installJob = scope.launch {
             _state.value = UpdateUiState.Installing(s.version)
             when (UpdateInstaller.install(context, apk)) {
                 UpdateInstaller.Outcome.Success -> {
