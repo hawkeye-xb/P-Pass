@@ -137,7 +137,8 @@ echo "   ✓ $SELFCHECK_OUT"
 # daemon 取 tag：正式 tag 恰好一致，test tag 就错开（壳 0.9.5 / 服务
 # 0.9.12-test.1）。这里只问结果：产物里写的是不是同一个号。
 # 反证锚点：去掉第 2/3 步的 `--config` 后，test tag 构建必须在本步失败。
-PLIST_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+# 用 python3 标准库 plistlib 读：dry-run 在 Linux runner 上跑，那里没有 PlistBuddy。
+PLIST_VERSION="$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb")).get("CFBundleShortVersionString",""))' "$APP/Contents/Info.plist" 2>/dev/null || true)"
 DAEMON_VERSION="${SELFCHECK_OUT#P-Pass daemon }"
 echo "── 5c. 版本同源：构建 $VERSION / 外壳 Info.plist $PLIST_VERSION / daemon $DAEMON_VERSION"
 if [ "$PLIST_VERSION" != "$VERSION" ] || [ "$DAEMON_VERSION" != "$VERSION" ]; then
