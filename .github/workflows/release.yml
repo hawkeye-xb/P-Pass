@@ -1242,11 +1242,12 @@ jobs:
       TAG: ${{ needs.create-draft.outputs.tag }}
       BUILD_SHA: ${{ needs.create-draft.outputs.sha }}
     steps:
-      # #773：正文开头要读本次构建那个提交里的 CHANGELOG.md（与 create-draft 同一份）。
+      # #773：正文开头要读被发布的那个 tag 里的 CHANGELOG.md（与 create-draft 同一份；
+      # REL-11/13：ref 与全文件其它 checkout 同一口径，dispatch 补跑也取被补跑的 tag）。
       # 必须是第一步：checkout 会清空工作目录，下面的 artifact 下载要在它之后。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.create-draft.outputs.sha }}
+          ref: ${{ inputs.tag || github.ref }}
       # CI-09: 逐 lane 具名下载，不再用「无 name 全量下载」——v5+ 在该模式下
       # 只有 1 个 artifact 时会平铺到 path、不建 <name>/ 子目录（README 未记载，
       # 源码 src/download-artifact.ts 比对确认），下游按 artifacts/<name>/ 的
