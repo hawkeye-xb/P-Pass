@@ -13,6 +13,7 @@ iOS 媒体层（Swift 本地包，最低 iOS 16）：PhotoKit 相册枚举、变
 | `Sources/PPassMedia/Library` | `PhotoLibraryReading`（只读相册库的协议）与 PhotoKit 实现 `PhotoKitLibrary` |
 | `Sources/PPassMedia/Albums` | `AlbumCatalog`（可选相册列表）、`AlbumScope`（范围并集与计数） |
 | `Sources/PPassMedia/Originals` | `OriginalFetcher`（原图 → 临时文件，流式、可取消、所有退出路径清理）、`PhotoKitOriginalSource`（`requestData`，允许走网络）、`OriginalFetchFailure`（D4 分类） |
+| `Sources/PPassMedia/Access` | `PhotoAccessLevel`（授权档位）、`PhotoAccessPresentation`（首页表达：数字/章/告示 key/动作）、`BackgroundUploadGate`（建后台上传 job 的闸门） |
 | `Sources/PPassMedia/Changes` | `ChangeHistoryReading` + `PhotoKitChangeHistory`（`PHPersistentChangeToken`）、`ChangeDiscovery` / `ChangeWindow`（G 的取法与推进）、`ChangeTokenStore`（G 落盘） |
 | `Tests/PPassMediaTests` | 纯逻辑单测，跑在 fake 上，不需要授权 |
 | `IntegrationHost/` | 真 PhotoKit 集成测试：XcodeGen 生成的最小宿主 App + 宿主式测试 bundle |
@@ -151,6 +152,41 @@ erase 之后所有 localIdentifier 都变了，所以这个结果只能靠内容
   会被图库改写（本地实测多出约 60 字节）。所以「原始字节」指的是图库里此刻存的那一份。对去重来说，要紧的是同一资源反复读出的字节
   稳定（已实测），这样哈希才稳定。
 
+## 相册授权三档（IOS-10）
+
+沿用 MOB-02 / MOB-94 的结论，不重新讨论：部分授权**不是要支持的形态**，UI 只把用户引导到完整授权；拿不到完整权限时，首页不显示备份数字（不出假 0/0），也不盖「都存好了」的章。
+
+| 档位（`authorizationStatus(for: .readWrite)`） | 数字 / 章 | 后台上传通道 | 告示 | 按钮 |
+|---|---|---|---|---|
+| `.authorized` → `full` | 显示 | 可能可用（还要看闸门） | 无 | — |
+| `.limited` → `limited` | 不显示 | 不可用 | `photo_access.limited.*`：要说「现在只能前台备份」 | 去设置 |
+| `.denied` → `denied` | 不显示 | 不可用 | `photo_access.denied.*` | 去设置 |
+| `.restricted` → `restricted` | 不显示 | 不可用 | `photo_access.restricted.*`：设备管理限制，用户自己改不了 | 无 |
+| `.notDetermined` → `notDetermined` | 不显示 | 不可用 | `photo_access.request.*` | 弹系统授权框 |
+
+- **只认 `authorizationStatus(for: .readWrite)`**。模拟器实测：部分授权时它返回 `.limited`(4)，旧 API `authorizationStatus()` 返回
+  `.authorized`(3)。用旧 API 会把部分授权当成完整授权，首页就会出现假数字和「都存好了」的章。反证跑过：换成旧 API 后，limited 档的集成测试读到 `full`。
+- 「去设置」的跳转由 App 线用 `UIApplication.openSettingsURLString` 执行，本包不依赖 UIKit。
+- **后台上传闸门** `BackgroundUploadGate`：系统版本 ≥ iOS 26.1、完整授权、`PHPhotoLibrary.uploadJobExtensionEnabled` 为真，三个条件全满足才允许建
+  `PHAssetResourceUploadJob`；任一不满足，调用方不得尝试建 job。后台上传本轮挂起（IOS-15），闸门先立住。模拟器上这个开关读出来是 false。
+- 与 Android 的差异：Android 部分授权只是可见范围变小，后台照跑；iOS 部分授权下后台上传通道整个不可用（`PHPhotoLibrary.h` 要求完整相册权限），
+  所以告示必须说「只能前台备份」，不能只说范围变小。
+
+**建议文案**（本包只出 key；文案要由 i18n 线落进 `assets/i18n`，改之前先给用户确认）：
+
+| key | 中文 | English |
+|---|---|---|
+| `photo_access.limited.title` | 只授权了部分照片 | Only some photos are accessible |
+| `photo_access.limited.body` | 现在只能在打开 App 时备份，而且只备份你选中的那些照片。允许访问全部照片，才能完整备份。 | Backup only runs while the app is open, and only for the photos you selected. Allow access to all photos for a complete backup. |
+| `photo_access.denied.title` | 拿不到相册权限 | No photo access |
+| `photo_access.denied.body` | 备份需要访问相册。现在一张照片都读不到，所以什么都没在备份。去设置里允许访问全部照片。 | Backup needs access to your photos. Right now it can't read any, so nothing is being backed up. Allow access to all photos in Settings. |
+| `photo_access.restricted.title` | 相册访问受限 | Photo access is restricted |
+| `photo_access.restricted.body` | 这台 iPhone 的设置（如屏幕使用时间或设备管理）不允许访问相册，备份无法进行。 | This iPhone's settings (such as Screen Time or device management) don't allow photo access, so backup can't run. |
+| `photo_access.request.title` | 需要照片权限 | Photo access needed |
+| `photo_access.request.body` | 备份需要访问你的照片和视频。请在接下来的系统提示里选择「允许访问所有照片」。 | Backup needs access to your photos and videos. Choose "Allow Full Access" in the next prompt. |
+| `photo_access.request.action` | 继续 | Continue |
+| `photo_access.open_settings` | 去设置 | Open Settings |
+
 ## 验证覆盖
 
 | 内容 | 测试 | 证据等级 |
@@ -166,6 +202,9 @@ erase 之后所有 localIdentifier 都变了，所以这个结果只能靠内容
 | JPEG/HEIC/MP4 取出字节与原文件逐字节一致；照片不存在 → `sourceMissing`；同一资源反复读字节稳定 | `IntegrationHost/Tests/OriginalBytesIT.swift` | E3（模拟器） |
 | iCloud 优化存储下的真下载（进度回调与最终哈希）、断网中断 | — | 真机待补（模拟器没有 iCloud 照片） |
 | BLAKE3 与 Desktop 一致 | — | 待 #313（XCFramework）接上后补 |
+| 档位映射、只有完整授权显示数字和章、部分授权的告示与去设置、各档按钮、key 清单自洽、上传闸门四种情况 | `Tests/PPassMediaTests/PhotoAccessTests.swift`（fake） | E2 |
+| 模拟器上依次设成 full / limited / denied / 未决定，读到的档位与首页表达逐档对上；limited 下旧 API 返回 authorized 的事实也钉住 | `IntegrationHost/Tests/AccessLevelIT.swift` | E3（模拟器） |
+| 首页三档真机截图、去设置一键跳转 | — | 真机待补（UI 由 App 线做） |
 
 限制：模拟器上没法用 API 造隐藏照片。建好后再隐藏，系统会弹「允许 xx 隐藏这张照片？」确认框，测试会卡住；在创建请求里直接设
 `isHidden`，请求不报错，但照片根本没有建出来。所以「隐藏项不计数」由 fake 测试覆盖，真库上只核实「已隐藏」集合本身不可选。
