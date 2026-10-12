@@ -48,6 +48,9 @@ windows-sys = { version = "0.61", features = [
   # CreateToolhelp32Snapshot 列进程，ProcessIdToSessionId 只认本会话的。
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_RemoteDesktop",
+  # DESK-58 (#875): GetStdHandle/SetStdHandle/GetConsoleMode——没人接的
+  # stderr 改接到 logs\daemon.err。
+  "Win32_System_Console",
 ] }
 
 # DESK-16 (#165)：Windows 的系统缩略图走 COM（IShellItemImageFactory），

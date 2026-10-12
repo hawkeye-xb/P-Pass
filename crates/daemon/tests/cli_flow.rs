@@ -275,3 +275,53 @@ fn pair_link_never_printed_when_stdout_is_not_a_terminal() {
     scan(dir.path(), &mut hits);
     assert!(hits.is_empty(), "数据目录里的文件含配对链接: {hits:?}");
 }
+
+/// DESK-58 (#875)：Windows 上 stderr 没人接（壳的一次性 spawn 给的是 `NUL`，
+/// Run 键登录拉起时干脆没有句柄）⇒ daemon 自己把它接到 `logs\daemon.err`，
+/// 文件日志初始化之前的报错原话落在那里，向导和诊断包读的就是它。
+///
+/// 触发器选 `PPF_LOG_FILE` 指向一个目录：打不开 ⇒ `eprintln!` + exit(2)，
+/// 正好发生在文件日志就位之前——与 #871 的「库目录不存在」同一段。
+///
+/// 反证：去掉 main.rs 里那次 `capture_unattached_stderr` → 文件不存在，红。
+#[cfg(windows)]
+#[test]
+fn desk58_early_error_lands_in_daemon_err_when_stderr_is_null() {
+    use std::process::Stdio;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let status = daemon_bin()
+        .env("PPF_DATA_DIR", dir.path())
+        .env("PPF_LOG_FILE", dir.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("spawn daemon");
+    assert_eq!(status.code(), Some(2), "PPF_LOG_FILE 打不开应 exit 2");
+    let err_file = dir.path().join("logs").join("daemon.err");
+    let text = std::fs::read_to_string(&err_file)
+        .unwrap_or_else(|e| panic!("{} 读不到：{e}", err_file.display()));
+    assert!(
+        text.contains("PPF_LOG_FILE="),
+        "daemon.err 里没有原话：{text:?}"
+    );
+}
+
+/// DESK-58 (#875)：有人刻意接的 stderr（这里是测试框架的管道）不许被改接——
+/// 原话照旧出现在管道里，也不生成 `daemon.err`。
+#[cfg(windows)]
+#[test]
+fn desk58_a_piped_stderr_is_left_alone() {
+    use std::process::Stdio;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = daemon_bin()
+        .env("PPF_DATA_DIR", dir.path())
+        .env("PPF_LOG_FILE", dir.path())
+        .stdin(Stdio::null())
+        .output()
+        .expect("spawn daemon");
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("PPF_LOG_FILE="), "stderr: {stderr}");
+    assert!(!dir.path().join("logs").join("daemon.err").exists());
+}

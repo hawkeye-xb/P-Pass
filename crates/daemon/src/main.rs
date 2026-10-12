@@ -63,6 +63,18 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // DESK-58 (#875)：stderr 没人接（Windows 的 Run 键 / 壳一次性 spawn）时改接
+    // 到 `logs\daemon.err`。必须排在搬家**之后**（文件在 data dir 里，开着句柄
+    // 目录就搬不动）、日志初始化与库目录检查**之前**（那几处的报错只走 stderr，
+    // 向导读的就是它们）。目录与平台默认日志同源：`PPF_DATA_DIR` 优先。
+    {
+        use platform::PlatformAdapter as _;
+        let base = pinned_data_dir
+            .clone()
+            .unwrap_or_else(|| platform::adapter().data_dir());
+        let _ = platform::adapter().capture_unattached_stderr(&base);
+    }
+
     // Log to stderr; level via RUST_LOG (default info). 狗粮机排障的眼睛.
     // NET-02: DedupGuard 折叠重复行 + 给这次运行的写入量设上限——
     // 8/26 真机实锤 relay 握手失败 7 分钟写了 92211 行/73MB，见
@@ -174,7 +186,7 @@ async fn main() -> anyhow::Result<()> {
     ) {
         // 文件日志此刻还没初始化（init_file_logging 在更后面）——走 stderr：
         // launchd 的 StandardErrorPath 会接住，DESK-09 诊断链（壳读 plist
-        // stderr 尾行）照样能看到这句话。KeepAlive 节流重拉，盘插回即自愈。
+        // stderr 尾行）照样能看到这句话；Windows 上落 logs\daemon.err（DESK-58）。KeepAlive 节流重拉，盘插回即自愈。
         eprintln!("{msg}");
         std::process::exit(1);
     }

@@ -392,6 +392,55 @@ impl PlatformAdapter for WindowsAdapter {
         Some(data_dir.join("logs").join("daemon.log"))
     }
 
+    /// DESK-58 (#875)：与 `daemon.log` 同目录、分开放——`daemon.log` 是
+    /// tracing 的完整运行日志，这份只装 tracing 接不住的东西（文件日志之前的
+    /// 报错、`main` 返回的 `Err`、panic），尾行就是「为什么没起来」。
+    fn startup_stderr_file(&self, data_dir: &Path) -> Option<PathBuf> {
+        Some(data_dir.join("logs").join("daemon.err"))
+    }
+
+    /// DESK-58 (#875)：Run 键（登录时 explorer 拉起）和壳的一次性 spawn 都把
+    /// stderr 给成空——前者是 GUI 子系统进程没有句柄，后者是 `Stdio::null()`
+    /// 的 `NUL`。两条路都由 daemon 自己接住，不靠各个拉起方分别重定向
+    /// （拉起方有好几个，登录那条我们根本插不上手）。
+    ///
+    /// Rust 的 `eprintln!` 与 panic 输出每次写都现取 `GetStdHandle`，所以
+    /// `SetStdHandle` 之后的所有 stderr 都进文件。
+    ///
+    /// 先截断、再以**追加**方式持有：同时有第二个实例起来（自愈与登录撞车）
+    /// 把文件截断时，本进程之后的写入落在新文件尾，而不是旧偏移处留一段空洞。
+    fn capture_unattached_stderr(&self, data_dir: &Path) -> crate::Applied {
+        use std::os::windows::io::{FromRawHandle as _, IntoRawHandle as _};
+        use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE};
+
+        if !stderr_needs_capture(classify_own_stderr()) {
+            return crate::Applied::NotApplicable;
+        }
+        let Some(path) = self.startup_stderr_file(data_dir) else {
+            return crate::Applied::NotApplicable;
+        };
+        if let Some(dir) = path.parent() {
+            if std::fs::create_dir_all(dir).is_err() {
+                return crate::Applied::Unsupported;
+            }
+        }
+        if std::fs::File::create(&path).is_err() {
+            return crate::Applied::Unsupported;
+        }
+        let Ok(file) = std::fs::OpenOptions::new().append(true).open(&path) else {
+            return crate::Applied::Unsupported;
+        };
+        let handle = file.into_raw_handle();
+        // SAFETY: handle 是刚打开、所有权已交出的文件句柄；交给 SetStdHandle
+        // 后由进程标准错误持有，进程退出时由系统回收。
+        if unsafe { SetStdHandle(STD_ERROR_HANDLE, handle as _) } == 0 {
+            // SAFETY: 没交出去，收回所有权关掉。
+            drop(unsafe { std::fs::File::from_raw_handle(handle) });
+            return crate::Applied::Unsupported;
+        }
+        crate::Applied::Done
+    }
+
     /// SEC-07 (#289)：把文件的 DACL 重写成**只有当前用户一条 ACE**，并切断
     /// 从父目录的继承——与 unix 侧 `0o600` 同一个意思。
     ///
@@ -486,6 +535,54 @@ fn spawn_windowless(exec: &Path) -> std::io::Result<()> {
         .stdin(std::process::Stdio::null())
         .spawn()?;
     Ok(())
+}
+
+/// DESK-58 (#875)：本进程 stderr 此刻接在什么上。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StderrTarget {
+    /// 没有句柄（GUI 子系统进程被 Run 键拉起时就是这样）。
+    Missing,
+    /// 字符设备但不是控制台——实际就是 `NUL`（`Stdio::null()`）。
+    NullDevice,
+    Console,
+    Pipe,
+    Disk,
+    Unknown,
+}
+
+/// 只有「没人接」才改接。控制台 / 管道 / 磁盘文件都是有人刻意接的，
+/// 改掉它们等于把终端前台或测试框架的输出偷走。
+fn stderr_needs_capture(target: StderrTarget) -> bool {
+    matches!(target, StderrTarget::Missing | StderrTarget::NullDevice)
+}
+
+fn classify_own_stderr() -> StderrTarget {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileType, FILE_TYPE_CHAR, FILE_TYPE_DISK, FILE_TYPE_PIPE,
+    };
+    use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_ERROR_HANDLE};
+
+    // SAFETY: 只查询，不接管句柄所有权。
+    let handle = unsafe { GetStdHandle(STD_ERROR_HANDLE) };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return StderrTarget::Missing;
+    }
+    // SAFETY: 同上。
+    match unsafe { GetFileType(handle) } {
+        FILE_TYPE_DISK => StderrTarget::Disk,
+        FILE_TYPE_PIPE => StderrTarget::Pipe,
+        FILE_TYPE_CHAR => {
+            let mut mode = 0u32;
+            // SAFETY: 同上；mode 是本地出参。控制台句柄才会成功。
+            if unsafe { GetConsoleMode(handle, &mut mode) } != 0 {
+                StderrTarget::Console
+            } else {
+                StderrTarget::NullDevice
+            }
+        }
+        _ => StderrTarget::Unknown,
+    }
 }
 
 /// DAE-11 (#804)：`SYSTEM_POWER_STATUS.ACLineStatus` → 是否插电。
@@ -2035,5 +2132,41 @@ struct DcGuard(windows::Win32::Graphics::Gdi::HDC);
 impl Drop for DcGuard {
     fn drop(&mut self) {
         unsafe { windows::Win32::Graphics::Gdi::ReleaseDC(None, self.0) };
+    }
+}
+
+#[cfg(test)]
+mod desk58_stderr_capture_tests {
+    use super::*;
+
+    /// DESK-58 (#875)：只改接「没人接」的两种；有人刻意接的一律不动——
+    /// 改接控制台会让终端前台跑的 daemon 什么都不打，改接管道会偷走测试框架
+    /// 的输出。
+    #[test]
+    fn only_a_missing_or_null_stderr_is_captured() {
+        assert!(stderr_needs_capture(StderrTarget::Missing));
+        assert!(stderr_needs_capture(StderrTarget::NullDevice));
+        for kept in [
+            StderrTarget::Console,
+            StderrTarget::Pipe,
+            StderrTarget::Disk,
+            StderrTarget::Unknown,
+        ] {
+            assert!(!stderr_needs_capture(kept), "{kept:?} 不该被改接");
+        }
+    }
+
+    #[test]
+    fn the_startup_stderr_file_sits_next_to_the_daemon_log() {
+        let dir = Path::new(r"C:\data");
+        let a = WindowsAdapter::new();
+        assert_eq!(
+            a.startup_stderr_file(dir),
+            Some(dir.join("logs").join("daemon.err"))
+        );
+        assert_eq!(
+            a.startup_stderr_file(dir).unwrap().parent(),
+            a.default_log_file(dir).unwrap().parent()
+        );
     }
 }

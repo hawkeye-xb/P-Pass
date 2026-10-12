@@ -295,7 +295,7 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
     } else {
         src.push_str(
             "LaunchAgent plist: 未注册（后台服务没有设为常驻服务）——\
-             因此没有 stdout/stderr 日志路径可读，包里不会有 daemon-*.log\n",
+             因此没有 stdout 日志路径可读，包里不会有 daemon-stdout.log\n",
         );
     }
     src.push_str(&format!(
