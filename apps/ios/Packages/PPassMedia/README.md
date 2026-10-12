@@ -12,6 +12,7 @@ iOS 媒体层（Swift 本地包，最低 iOS 16）：PhotoKit 相册枚举、变
 |---|---|
 | `Sources/PPassMedia/Library` | `PhotoLibraryReading`（只读相册库的协议）与 PhotoKit 实现 `PhotoKitLibrary` |
 | `Sources/PPassMedia/Albums` | `AlbumCatalog`（可选相册列表）、`AlbumScope`（范围并集与计数） |
+| `Sources/PPassMedia/Originals` | `OriginalFetcher`（原图 → 临时文件，流式、可取消、所有退出路径清理）、`PhotoKitOriginalSource`（`requestData`，允许走网络）、`OriginalFetchFailure`（D4 分类） |
 | `Sources/PPassMedia/Changes` | `ChangeHistoryReading` + `PhotoKitChangeHistory`（`PHPersistentChangeToken`）、`ChangeDiscovery` / `ChangeWindow`（G 的取法与推进）、`ChangeTokenStore`（G 落盘） |
 | `Tests/PPassMediaTests` | 纯逻辑单测，跑在 fake 上，不需要授权 |
 | `IntegrationHost/` | 真 PhotoKit 集成测试：XcodeGen 生成的最小宿主 App + 宿主式测试 bundle |
@@ -122,6 +123,34 @@ erase 之后所有 localIdentifier 都变了，所以这个结果只能靠内容
 图库重建之后，App Group 里的 G 还留着。PhotoKit 没有公开的图库标识可供比对，所以兜底仍然是对账扫描（范围内全量，按内容哈希判重）。
 它必须定期跑，不能只在 3105 时才跑。这一条交给 PPassCore 的调度去落实。
 
+## 取原始字节（IOS-11）
+
+按 #311 D4（对齐 Immich）：备份轮里需要某张照片时，用 `PHAssetResourceManager.requestData` 读原图，并设
+`isNetworkAccessAllowed = true`。原图不在本机（iCloud「优化存储」）时由系统从 iCloud 拉取。字节边到边写进临时目录，
+用完就删。只在备份轮内调用，备份轮本身受 Wi-Fi 和电量约束，这里不另外判断蜂窝网络。
+
+- **取哪一份**：图片取 `.photo`，视频取 `.video`，都是未经编辑的原始文件。编辑后的渲染结果不取，实况照片的配对视频不取（MOB-79），
+  RAW+JPEG 取 JPEG。与 Android 的差异：Android 上编辑往往直接改写文件或另存一份，读到的是编辑后的字节；iOS 的编辑不改原图，
+  我们备份的是**未编辑的原图**，与 Immich 默认做法一致。要不要另外备份编辑后的版本，是产品决定，本包没有做。
+- **哈希**：本包不实现 BLAKE3。`fetchAndHash` 接收一个注入的 `hashFile: (URL) -> String`，生产上用 PPassCore
+  `ContentHasher.blake3Hex(ofFileAt:)`（来自 XCFramework，对文件流式计算）。
+- **失败分类**（`OriginalFetchFailure`，对接 PPassCore `ImportResult`）：
+
+  | 情况 | 分类 | 处置 |
+  |---|---|---|
+  | 照片已不在图库 | `sourceMissing` | 源已删，不计次 |
+  | `NSURLErrorDomain`（取消除外）、`PHPhotosError` 3169、断网或超时类 POSIX 错误（沿 `NSUnderlyingErrorKey` 链找） | `network` | 等待中（原图不可得），不计次 |
+  | `PHPhotosError` 3305、写盘空间不足（`NSFileWriteOutOfSpaceError` / `ENOSPC`） | `localStorageFull` | 不计次；PPassCore 需要补一个等待原因 |
+  | 3302 / 3303 / 3306 / 3164、没有原图资源、认不出来的错误 | `unavailable` | 失败，计次 |
+  | Task 被取消（PhotoKit 回 3072） | 抛 `CancellationError` | 停止下载、删除临时文件 |
+
+  认不出来的错误一律归 `unavailable`，不猜成网络问题。猜错了这张照片会一直卡在队头，既不计次也不推进 G。
+- **清理**：失败、取消、哈希出错都会在抛出前删掉本次目录；`FetchedOriginal` 被释放时也会删（兜底）；每轮开始调用
+  `purgeLeftovers()` 清掉崩溃残留。
+- **实测**：addmedia 进去的 JPEG、HEIC、MP4，取出的字节与原文件逐字节一致。但 App 用 `addResource(with:data:)` 写入的 JPEG
+  会被图库改写（本地实测多出约 60 字节）。所以「原始字节」指的是图库里此刻存的那一份。对去重来说，要紧的是同一资源反复读出的字节
+  稳定（已实测），这样哈希才稳定。
+
 ## 验证覆盖
 
 | 内容 | 测试 | 证据等级 |
@@ -133,6 +162,10 @@ erase 之后所有 localIdentifier 都变了，所以这个结果只能靠内容
 | token 归档、落盘、读回后直接喂 `fetchPersistentChanges`；新建一张后增量里只有它，提交后 G 前移、再读为空；进相册不算新照片；坏 token 走重扫后能接着增量 | `IntegrationHost/Tests/ChangeTokenIT.swift` | E3（模拟器） |
 | 真库 3105 + 全量重扫按内容收敛 | `IntegrationHost/Tests/TokenExpiryIT.swift`（两轮，中间 erase） | E3（模拟器） |
 | 真机上「新拍一张 → 水位前移 → 出现在待传列表」 | — | 真机待补（需 App 与 PPassCore 接上） |
+| 流式写入与扩展名、discard/释放兜底删除、哈希拿到完整文件、断网半截/不可得/空间不足/取消都不留文件、失败分类表、资源选择 | `Tests/PPassMediaTests/OriginalFetcherTests.swift`（fake） | E2 |
+| JPEG/HEIC/MP4 取出字节与原文件逐字节一致；照片不存在 → `sourceMissing`；同一资源反复读字节稳定 | `IntegrationHost/Tests/OriginalBytesIT.swift` | E3（模拟器） |
+| iCloud 优化存储下的真下载（进度回调与最终哈希）、断网中断 | — | 真机待补（模拟器没有 iCloud 照片） |
+| BLAKE3 与 Desktop 一致 | — | 待 #313（XCFramework）接上后补 |
 
 限制：模拟器上没法用 API 造隐藏照片。建好后再隐藏，系统会弹「允许 xx 隐藏这张照片？」确认框，测试会卡住；在创建请求里直接设
 `isHidden`，请求不报错，但照片根本没有建出来。所以「隐藏项不计数」由 fake 测试覆盖，真库上只核实「已隐藏」集合本身不可选。
