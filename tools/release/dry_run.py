@@ -24,7 +24,12 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
+import plistlib
+import tarfile
+import zipfile
 import json
 import os
 import shutil
@@ -49,7 +54,7 @@ STALE_TAURI_CONF_VERSION = "9.7.0"  # #809：apps/desktop/src-tauri/tauri.conf.j
 
 # 构建 job 不在 dry-run 里跑：结果按 tag push 的真实情形给（Windows 在 tag push 上恒跳过）。
 BUILD_RESULTS = {"android": "success", "macos-arm64": "success", "windows-x64": "skipped"}
-RELEASE_JOBS = ["create-draft", "upload-android", "upload-macos", "upload-windows", "finalize-manifest", "finalize-manifest-windows",
+RELEASE_JOBS = ["plan-builds", "android-reuse", "macos-reuse", "create-draft", "upload-android", "upload-macos", "upload-windows", "finalize-manifest", "finalize-manifest-windows",
                 "finalize-notes"]
 
 # #773：假 CHANGELOG——正式场景只该取 [2099.1.1] 那一节（不带 Unreleased、不带上一版）。
@@ -144,7 +149,7 @@ def make_origin(d: Path, name: str, commits: list, changelog: str = CHANGELOG) -
             (nd / rel).parent.mkdir(parents=True, exist_ok=True)
             (nd / rel).write_text(body)
         git(src, "add", "-A")
-        git(src, "commit", "-qm", msg)
+        git(src, "commit", "-q", "--allow-empty", "-m", msg)  # #838 none：两次提交版本相同
         for t in tags:
             git(src, "tag", t)
 
@@ -184,16 +189,45 @@ def macos_upload_names(wf: dict, desktop_ver: str) -> list[str]:
     return [Path(p).name.replace("*", desktop_ver) for p in paths]
 
 
+def fake_apk(p: Path, ver: str):
+    """假 APK：一个 zip，里面放 VERSION（dry-run 的 aapt2 桩从这里读 versionName）+ 可复现的填充字节。"""
+    with zipfile.ZipFile(p, "w") as z:
+        for name, data in (("VERSION", ver.encode()), ("classes.dex", fake_bytes(f"apk {ver}", 4096))):
+            info = zipfile.ZipInfo(name, date_time=(2099, 1, 1, 0, 0, 0))
+            z.writestr(info, data)
+
+
+def fake_app_tar(p: Path, ver: str):
+    """假 .app.tar.gz：真的 tar.gz，带 P-Pass.app/Contents/Info.plist（#838 复用时核对包内版本号）。"""
+    plist = plistlib.dumps({"CFBundleShortVersionString": ver})
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz, tarfile.open(fileobj=gz, mode="w") as t:
+        info = tarfile.TarInfo("P-Pass.app/Contents/Info.plist")
+        info.size, info.mtime = len(plist), 0
+        t.addfile(info, io.BytesIO(plist))
+    p.write_bytes(buf.getvalue())
+
+
+AAPT2_STUB = r"""#!/usr/bin/env python3
+# dry-run 桩：aapt2 dump badging <apk> → 从假 APK 的 VERSION 读 versionName
+import sys, zipfile
+v = zipfile.ZipFile(sys.argv[-1]).read("VERSION").decode()
+print(f"package: name='com.hawkeyexb.ppass' versionCode='1' versionName='{v}'")
+"""
+
+
 def make_artifacts(d: Path, wf: dict, android_ver: str, desktop_ver: str) -> Path:
     """假构建产物，按 build job 上传 artifact 的布局放（artifact 名 → 文件）。"""
     a = d / "artifacts"
     (a / "android").mkdir(parents=True)
-    (a / "android" / f"P-Pass_{android_ver}_android.apk").write_bytes(fake_bytes(f"apk {android_ver}", 4096))
+    fake_apk(a / "android" / f"P-Pass_{android_ver}_android.apk", android_ver)
     m = a / "macos-arm64"
     m.mkdir()
     names = macos_upload_names(wf, desktop_ver)
     for name in names:
-        if name != MACOS_SUMS:
+        if name.endswith(".app.tar.gz"):
+            fake_app_tar(m / name, desktop_ver)
+        elif name != MACOS_SUMS:
             (m / name).write_bytes(fake_bytes(f"{name}", 2048))
     if MACOS_SUMS in names:
         (m / MACOS_SUMS).write_text("".join(f"{sha256(p)}  {p.name}\n" for p in sorted(m.iterdir())))
@@ -341,6 +375,8 @@ class Scenario:
         self.state = self.dir / "gh-state"
         self.bin = self.dir / "bin"
         write_gh_stub(self.bin, self.state)
+        (self.bin / "aapt2").write_text(AAPT2_STUB)
+        (self.bin / "aapt2").chmod(0o755)
         self.artifacts = make_artifacts(self.dir, wf, android_ver, desktop_ver)
         self.runner = Runner(self.dir / "jobs", origin=origin, artifacts=self.artifacts, stub_bin=self.bin,
                              repository=REPO, base_path=os.environ["PATH"])
@@ -356,12 +392,28 @@ class Scenario:
                 if n in self.jobs:
                     needs[n] = {"result": self.jobs[n].result, "outputs": self.jobs[n].outputs}
                 elif n in BUILD_RESULTS:
-                    needs[n] = {"result": BUILD_RESULTS[n], "outputs": {}}
+                    needs[n] = {"result": self.build_result(n), "outputs": {}}
                 else:
                     raise SimError(f"{job_id} needs {n}，dry-run 没有它的结果")
             self.jobs[job_id] = self.runner.run_job(wf, job_id, github=github, inputs={},
                                                     secrets={"UPDATE_SIGNING_KEY": self.key}, needs=needs)
         return self.jobs
+
+    def build_result(self, job: str) -> str:
+        """构建 job 不在 dry-run 里跑：#838 之后它跑不跑取决于 plan-builds 的判定。"""
+        plan = self.jobs.get("plan-builds")
+        end = {"android": "android", "macos-arm64": "macos"}.get(job)
+        if end and plan is not None:
+            if plan.result != "success":
+                return "skipped"
+            return "success" if plan.outputs.get(end) == "build" else "skipped"
+        return BUILD_RESULTS[job]
+
+    def rebuild_artifacts(self, wf: dict, android_ver: str, desktop_ver: str):
+        """下一次发布的假构建产物（换版本号）；判定为复用的一端，artifact 由复用 job 产出，这里先删掉。"""
+        shutil.rmtree(self.artifacts)
+        self.artifacts = make_artifacts(self.dir / f"next-{android_ver}-{desktop_ver}", wf, android_ver, desktop_ver)
+        self.runner.artifacts = self.artifacts
 
     def mirror(self, wf: dict, event: str, tag: str) -> dict:
         ev = {"workflow_run": {"event": {"workflow_run": {"head_branch": tag}}},
@@ -570,7 +622,7 @@ def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
     print(f"\n== 正式 tag {BAD_TAG}：说明文件不合规（含网址）⇒ 组装清单必须失败，不带病发布")
     origin, sha = make_origin(base, "bad", [(PREV_VERSIONS, {}, [PREV_TAG]), (BAD_VERSIONS, BAD_NOTES, [BAD_TAG])])  # CHANGELOG 没有 [2099.1.2]
     sc = Scenario(base, "bad-notes", origin, sha, key, av, BAD_VERSIONS["desktop"], rel)
-    jobs = sc.release(rel, BAD_TAG, jobs=["create-draft", "upload-android"])
+    jobs = sc.release(rel, BAD_TAG, jobs=["plan-builds", "android-reuse", "create-draft", "upload-android"])
     job_ok(ck, jobs, "upload-android", "failure")
     s = step_is(ck, jobs, "upload-android", "Compose update manifest (UPD-01)", "failure")
     if s:
@@ -584,6 +636,66 @@ def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
     body = (sc.meta(BAD_TAG) or {}).get("body", "")
     ck(body.startswith(f"## P-Pass {BAD_TAG[1:]}\n"), "缺小节时正文只有台账", body[:300])
     SUMMARY["bad-notes"] = sc.summary()
+
+
+# ── #838：构建一次、到处复用 ────────────────────────────────────────────
+REUSE_TAG = "v2099.1.3"
+
+
+def reuse(ck: Check, base: Path, key: str, pub: Path, rel: dict, name: str, cur: dict, notes: dict, want: dict):
+    """先发布并 publish 上一个正式版（两端构建），再发本 tag：want = {"android": build|reuse, "macos": ...}；
+    两端都 reuse ⇒ plan-builds 必须红、不建草稿。"""
+    pa, pd = PREV_VERSIONS["android"], PREV_VERSIONS["desktop"]
+    ca, cd = cur["android"], cur["desktop"]
+    print(f"\n== #838 {name}：上一版 android {pa} / macOS {pd} → 本版 android {ca} / macOS {cd}（期望 {want}）")
+    origin, sha = make_origin(base, f"reuse-{name}", [(PREV_VERSIONS, {}, [PREV_TAG]), (cur, notes, [REUSE_TAG])])
+    sc = Scenario(base, f"reuse-{name}", origin, sha, key, pa, pd, rel)
+    first = sc.release(rel, PREV_TAG)
+    ck(first["plan-builds"].outputs.get("android") == "build" and first["plan-builds"].outputs.get("macos") == "build",
+       f"{name}：没有 Latest 时两端都构建", json.dumps(first["plan-builds"].outputs))
+    sc.publish(PREV_TAG)
+    sc.jobs = {}
+    sc.rebuild_artifacts(rel, ca, cd)
+    for end, art in (("android", "android"), ("macos", "macos-arm64")):
+        if want[end] == "reuse":
+            shutil.rmtree(sc.artifacts / art)  # 构建 job 不跑，artifact 只能来自复用 job
+    jobs = sc.release(rel, REUSE_TAG)
+    plan = jobs["plan-builds"]
+    if want["android"] == want["macos"] == "reuse":
+        job_ok(ck, jobs, "plan-builds", "failure")
+        ck("::error::两端版本号都与 Latest" in plan.log, f"{name}：两端都没涨号 ⇒ 明确报错", plan.log)
+        job_ok(ck, jobs, "create-draft", "skipped")
+        ck(sc.meta(REUSE_TAG) is None, f"{name}：不建空草稿")
+        SUMMARY[f"reuse-{name}"] = sc.summary()
+        return
+    job_ok(ck, jobs, "plan-builds")
+    for end in ("android", "macos"):
+        ck(plan.outputs.get(end) == want[end], f"{name}：plan-builds 判 {end} = {want[end]}", json.dumps(plan.outputs))
+        job_ok(ck, jobs, f"{end}-reuse", "success" if want[end] == "reuse" else "skipped")
+    for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest", "finalize-notes"):
+        job_ok(ck, jobs, j)
+    check_macos_assets(ck, sc, REUSE_TAG, cd)
+    pairs = {"android": [f"P-Pass_{ca}_android.apk"],
+             "macos": [f"P-Pass_{cd}_macos-arm64.dmg", f"P-Pass_{cd}_macos-arm64.app.tar.gz", MACOS_SUMS]}
+    for end, files in pairs.items():
+        if want[end] != "reuse":
+            continue
+        for f in files:
+            a, b = sc.asset(PREV_TAG, f), sc.asset(REUSE_TAG, f)
+            ck(a.exists() and b.exists() and a.read_bytes() == b.read_bytes(), f"{name}：{f} 与 {PREV_TAG} 的那份逐字节相同")
+    mver = {"android": ("manifest-android.json", ca), "macos": ("manifest-macos.json", cd)}
+    for end, (mf, v) in mver.items():
+        p = sc.asset(REUSE_TAG, mf)
+        m = json.loads(p.read_text()) if p.exists() else {}
+        ck(m.get("version") == v, f"{name}：{mf} 的 version = {v}", json.dumps(m)[:300])
+    body = (sc.meta(REUSE_TAG) or {}).get("body", "")
+    for end, label, v in (("android", "Android", ca), ("macos", "macOS", cd)):
+        line = f"**{label} {v} 产物复用自 {PREV_TAG}**"
+        if want[end] == "reuse":
+            ck(line in body, f"{name}：正文写明 {label} 产物复用自 {PREV_TAG}", body[:800])
+        else:
+            ck("复用自" not in body or line not in body, f"{name}：构建的一端（{label}）不写「复用自」")
+    SUMMARY[f"reuse-{name}"] = sc.summary()
 
 
 def main() -> int:
@@ -602,6 +714,13 @@ def main() -> int:
         formal(ck, base, key, pub, rel, mirror)
         test_tag(ck, base, key, pub, rel, mirror)
         bad_notes(ck, base, key, pub, rel)
+        # #838：只涨 android ⇒ macOS 复用；只涨桌面 ⇒ android 复用；都不涨 ⇒ 红。
+        reuse(ck, base, key, pub, rel, "android-only",
+              {**PREV_VERSIONS, "android": CUR_VERSIONS["android"], "androidVersionCode": 2}, good_notes(),
+              {"android": "build", "macos": "reuse"})
+        reuse(ck, base, key, pub, rel, "desktop-only", {**PREV_VERSIONS, "desktop": CUR_VERSIONS["desktop"]}, {},
+              {"android": "reuse", "macos": "build"})
+        reuse(ck, base, key, pub, rel, "none", dict(PREV_VERSIONS), {}, {"android": "reuse", "macos": "reuse"})
         if args.summary:
             args.summary.write_text(json.dumps(SUMMARY, ensure_ascii=False, indent=1, sort_keys=True) + "\n")
     except (SimError, subprocess.CalledProcessError) as e:
@@ -616,7 +735,7 @@ def main() -> int:
     if ck.fails:
         print(f"\nrelease dry-run: {ck.fails} 项失败 ❌")
         return 1
-    print("\nrelease dry-run: 正式 tag / test tag 两条路径全部通过 ✅")
+    print("\nrelease dry-run: 正式 tag / test tag / #838 复用三种情形全部通过 ✅")
     return 0
 
 

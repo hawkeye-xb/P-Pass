@@ -69,6 +69,102 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  # ══ #838：构建一次、到处复用 ══════════════════════════════════════════
+  # 正式 tag 上，某端版本号（release/versions.json）与 Latest 正式版该端清单的 version 相同
+  # ⇒ 该端不构建，复用 Latest 的产物（同一个版本号只能对应同一份产物）。判定在
+  # tools/release/plan-builds.sh（test tag 恒两端构建；拿不准一律构建；两端都复用 ⇒ 红）。
+  # 复用 job 产出与构建 job 同名、同布局的 artifact，下游 upload / finalize 不区分来源。
+  plan-builds:
+    name: "判定各端构建或复用（#838）"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      android: ${{ steps.plan.outputs.android }}
+      macos: ${{ steps.plan.outputs.macos }}
+      reuse_from: ${{ steps.plan.outputs.reuse_from }}
+      android_version: ${{ steps.plan.outputs.android_version }}
+      macos_version: ${{ steps.plan.outputs.macos_version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: Plan builds (#838)
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: tools/release/plan-builds.sh
+
+  android-reuse:
+    name: "Android（复用 Latest 产物，#838）"
+    needs: [plan-builds]
+    if: (github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'android') || (inputs.platforms == '' || inputs.platforms == 'all')) && needs.plan-builds.outputs.android == 'reuse'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      signed: ${{ steps.reuse.outputs.signed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Reuse android artifact from Latest (#838)
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FROM: ${{ needs.plan-builds.outputs.reuse_from }}
+          VER: ${{ needs.plan-builds.outputs.android_version }}
+        run: |
+          set -euo pipefail
+          tools/release/reuse-artifact.sh android "$FROM" "$VER" "$PWD/reused/android"
+          echo "signed=yes" >> "$GITHUB_OUTPUT"
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android
+          if-no-files-found: error
+          path: reused/android/P-Pass_*.apk
+
+  macos-reuse:
+    name: "macOS arm64（复用 Latest 产物，#838）"
+    needs: [plan-builds]
+    if: (github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'macos') || (inputs.platforms == '' || inputs.platforms == 'all')) && needs.plan-builds.outputs.macos == 'reuse'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      signed: ${{ steps.reuse.outputs.signed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Reuse macos artifact from Latest (#838)
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FROM: ${{ needs.plan-builds.outputs.reuse_from }}
+          VER: ${{ needs.plan-builds.outputs.macos_version }}
+        run: |
+          set -euo pipefail
+          tools/release/reuse-artifact.sh macos "$FROM" "$VER" "$PWD/reused/macos-arm64"
+          echo "signed=yes" >> "$GITHUB_OUTPUT"
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos-arm64
+          if-no-files-found: error
+          path: |
+            reused/macos-arm64/SHA256SUMS-macos-arm64
+            reused/macos-arm64/P-Pass_*_macos-arm64.dmg
+            reused/macos-arm64/P-Pass_*_macos-arm64.app.tar.gz
+
   macos-arm64:
     name: "macOS arm64 (签名门控)"
     runs-on: macos-14
@@ -96,7 +192,9 @@ jobs:
     # 不用任何人去翻 Settings：这个后果在每次 release 正文里自报。
     # CI-01②: 平台门控——tag push 恒跑；dispatch 按 platforms 输入。
     # 留空/all/含 macos 都跑。
-    if: github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'macos') || (inputs.platforms == '' || inputs.platforms == 'all')
+    # #838：版本号没变的一端不构建（复用 Latest 的产物，见 macos-reuse）。
+    needs: [plan-builds]
+    if: (github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'macos') || (inputs.platforms == '' || inputs.platforms == 'all')) && needs.plan-builds.outputs.macos == 'build'
     permissions:
       contents: read
       id-token: write
@@ -515,7 +613,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # CI-01②: 平台门控（同 macos job 语义）。
-    if: github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'android') || (inputs.platforms == '' || inputs.platforms == 'all')
+    # #838：版本号没变的一端不构建（复用 Latest 的产物，见 android-reuse）。
+    needs: [plan-builds]
+    if: (github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'android') || (inputs.platforms == '' || inputs.platforms == 'all')) && needs.plan-builds.outputs.android == 'build'
     permissions:
       contents: read
     env:
@@ -696,6 +796,8 @@ jobs:
   create-draft:
     name: "建 Release 草稿（骨架）"
     # 不 needs 任何构建 job（见上 ①）——秒级跑完，三条 lane 之后只管上传。
+    # #838：等 plan-builds 判完（秒级）：两端都没有新版本时判定失败，不建空草稿。
+    needs: [plan-builds]
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -812,8 +914,8 @@ jobs:
   # ── lane 1: Android（最快，且带着自动更新链路） ──
   upload-android:
     name: "上传 Android + 更新 manifest"
-    needs: [create-draft, android]
-    if: ${{ !cancelled() && needs.android.result == 'success' }}
+    needs: [create-draft, android, android-reuse]
+    if: ${{ !cancelled() && (needs.android.result == 'success' || needs.android-reuse.result == 'success') }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -936,8 +1038,8 @@ jobs:
   # ── lane 2: macOS ──
   upload-macos:
     name: "上传 macOS"
-    needs: [create-draft, macos-arm64]
-    if: ${{ !cancelled() && needs.macos-arm64.result == 'success' }}
+    needs: [create-draft, macos-arm64, macos-reuse]
+    if: ${{ !cancelled() && (needs.macos-arm64.result == 'success' || needs.macos-reuse.result == 'success') }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -1057,7 +1159,7 @@ jobs:
     # DESK-05 同款容错：dispatch 单平台时其余 lane skipped，`needs` 里有
     # skipped 且无 !cancelled() → 本 job 连带跳过（与 finalize-notes 同
     # 一模式）。每步按 needs.*.result 门控，缺哪个平台就少哪个条目。
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.create-draft.result == 'success' }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -1133,7 +1235,7 @@ jobs:
     needs: [create-draft, finalize-manifest, upload-android, upload-macos, upload-windows]
     # Windows lane 没跑（tag push 恒跳过，见 windows-x64 的 if）或没成功 →
     # 本条无意义，直接跳过；桌面端已经拿到自己要的那份清单。
-    if: ${{ !cancelled() && needs.upload-windows.result == 'success' }}
+    if: ${{ !cancelled() && needs.upload-windows.result == 'success' && needs.create-draft.result == 'success' }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -1243,10 +1345,10 @@ jobs:
   # ── 收口：补签名状态 + 资产 sha256（晚到不拖任何资产） ──
   finalize-notes:
     name: "补齐 Release 正文"
-    needs: [create-draft, macos-arm64, windows-x64, android, upload-windows]
+    needs: [create-draft, plan-builds, macos-arm64, macos-reuse, windows-x64, android, android-reuse, upload-windows]
     # DESK-05 同款容错：dispatch 单平台时其余 job skipped，`needs` 里有
     # skipped 且无 !cancelled() → 本 job 连带跳过，正文永远补不齐。
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.create-draft.result == 'success' }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -1269,7 +1371,7 @@ jobs:
       # upload-windows job 的先例一致。lane 被跳过时其 artifact 可能不存在，
       # 故每步用 needs.*.result 门控。
       - name: Download macos artifact
-        if: needs.macos-arm64.result == 'success'
+        if: needs.macos-arm64.result == 'success' || needs.macos-reuse.result == 'success'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: macos-arm64
@@ -1287,7 +1389,7 @@ jobs:
           name: windows-x64-installer
           path: artifacts/windows-x64-installer
       - name: Download android artifact
-        if: needs.android.result == 'success'
+        if: needs.android.result == 'success' || needs.android-reuse.result == 'success'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: android
@@ -1301,7 +1403,9 @@ jobs:
 
           构建自 \`${BUILD_SHA::7}\` · $(date -u +%FT%TZ)
 
-          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed || 'n/a' }}（${{ needs.macos-arm64.outputs.signed == 'yes' && 'Developer ID 签名 + 公证 + staple' || '无凭据路径跳过' }})/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || 'n/a' }}（keystore 签名）
+          **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed || needs.macos-reuse.outputs.signed || 'n/a' }}（${{ (needs.macos-arm64.outputs.signed || needs.macos-reuse.outputs.signed) == 'yes' && 'Developer ID 签名 + 公证 + staple' || '无凭据路径跳过' }})/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || needs.android-reuse.outputs.signed || 'n/a' }}（keystore 签名）
+          ${{ needs.android-reuse.result == 'success' && format('**Android {0} 产物复用自 {1}**（版本号未变，字节与该版一致，#838）', needs.plan-builds.outputs.android_version, needs.plan-builds.outputs.reuse_from) || '' }}
+          ${{ needs.macos-reuse.result == 'success' && format('**macOS {0} 产物复用自 {1}**（版本号未变，字节与该版一致，#838）', needs.plan-builds.outputs.macos_version, needs.plan-builds.outputs.reuse_from) || '' }}
           **更新 manifest**：${{ secrets.UPDATE_SIGNING_KEY != '' && 'UPDATE_SIGNING_KEY 在位 → manifest.json 已签名（tauri signer）' || 'UPDATE_SIGNING_KEY 未设置 → manifest.json 未签名（signature 空，客户端系统签名校验兜底——Android PackageInstaller 强制同签名）' }}
 
           ### 面向人类的资产（H-10c · UPD-15：文件名带该端版本号）
@@ -1329,8 +1433,8 @@ jobs:
       # 静默跳过会让正文缺 SHA-256 段且无人发现（#236 的失效方向）。
       - name: H-10c assets sha256 → notes
         env:
-          MACOS_OK: ${{ needs.macos-arm64.result == 'success' }}
-          ANDROID_OK: ${{ needs.android.result == 'success' }}
+          MACOS_OK: ${{ needs.macos-arm64.result == 'success' || needs.macos-reuse.result == 'success' }}
+          ANDROID_OK: ${{ needs.android.result == 'success' || needs.android-reuse.result == 'success' }}
         run: |
           set -euo pipefail
           {

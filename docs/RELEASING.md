@@ -80,6 +80,20 @@
    > 改了 `crates/**` / `apps/desktop/**` / `assets/**` / `Cargo.*` 却没涨
    > `desktop` 号，或改了 `apps/android/**` 却没涨 `android` 号，**直接红**
    > （漏判门禁，只对正式 tag 生效；test tag 的版本号就是 tag 名）。
+   > **Build once, promote (`#838`)**: on a formal tag, `plan-builds`
+   > (`tools/release/plan-builds.sh`) compares each platform's version in
+   > `release/versions.json` with that platform's manifest in the Latest formal
+   > release. Same version ⇒ that platform is **not rebuilt**: `android-reuse` /
+   > `macos-reuse` copy Latest's installers into this release after checking the
+   > bytes against Latest's own record (manifest sha256 / `SHA256SUMS-macos-arm64`)
+   > and the version the installer reports (APK `versionName`, `Info.plist`
+   > `CFBundleShortVersionString`); either check failing turns the run red. The
+   > release body says which platform was reused and from which tag. Anything
+   > uncertain (no Latest, missing manifest or installer, re-run of the Latest
+   > tag itself) ⇒ build. Neither version bumped ⇒ `plan-builds` fails and no
+   > draft is created. Test tags always build both. If artifact-shaping build
+   > scripts changed for a reused platform, `plan-builds` warns: the change ships
+   > only with that platform's next version bump.
 5. **Human publish**: review the draft, then publish it from the
    GitHub web UI (Releases → the draft → Publish release). Two checks:
    - **the body must open with this version's user-visible changelog**;
@@ -304,6 +318,16 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 3. **PR** → 合入 main（main 必须绿：PR Checks）。
 4. **打 tag**：`git tag v<版本>` + push。tag 触发 Release workflow →
    draft Release（三平台资产）。
+   > **构建一次、到处复用（#838）**：正式 tag 上，`plan-builds`
+   > （`tools/release/plan-builds.sh`）拿每一端在 `release/versions.json` 的版本号，
+   > 和 Latest 正式版该端清单的 version 比。号没变 ⇒ 该端**不重新构建**，
+   > `android-reuse` / `macos-reuse` 把 Latest 的安装包复制进本次 release，复制前核对两件事：
+   > 字节与 Latest 的记录一致（清单 sha256 / `SHA256SUMS-macos-arm64`），包内版本号
+   > （APK `versionName`、`Info.plist` `CFBundleShortVersionString`）等于本次该端版本号；
+   > 任一不符即红。正文写明哪一端复用自哪个 tag。拿不准（没有 Latest、缺清单或安装包、
+   > 补跑的就是 Latest 本身）一律构建；两端都没涨号 ⇒ `plan-builds` 报错、不建草稿；
+   > test tag 恒两端构建。被复用的一端若改过会影响产物的构建脚本，`plan-builds` 告警：
+   > 这些改动要等该端下次涨号才进安装包。
 5. **人工 publish**：核对 draft，然后在 GitHub 网页上发布（Releases → 该 draft →
    Publish release）。两项核对：
    - **正文必须以本版本的用户可见 changelog 开头**；签名状态 / SHA-256 / 资产清单

@@ -12,7 +12,7 @@
 - `${{ }}` 表达式按 GitHub 的规则求值（`||` 返回第一个真值、字符串比较不分大小写、
   缺失属性为 null），用于 env / with / if / run 模板 / job outputs；**不认识的表达式直接报错**，
   免得 workflow 改了而 dry-run 悄悄按旧口径放行；
-- `uses:` 只认发布链用到的 checkout / download-artifact，其余一律报错。
+- `uses:` 只认发布链用到的 checkout / download-artifact / upload-artifact，其余一律报错。
 
 `run` 块原文取自 workflow 文件本身——跑的是 runner 真正会执行的同一份代码。
 """
@@ -206,6 +206,9 @@ class Ctx:
             return render(args[0]).lower().startswith(render(args[1]).lower())
         if name == "endsWith":
             return render(args[0]).lower().endswith(render(args[1]).lower())
+        if name == "format":
+            fmt, rest = render(args[0]), [render(a) for a in args[1:]]
+            return re.sub(r"\{(\d+)\}", lambda m: rest[int(m.group(1))], fmt)
         if name == "cancelled":
             return False
         if name == "always":
@@ -356,6 +359,24 @@ class Runner:
             )
         subprocess.run(g + ["checkout", "-q", "--detach", name], **q)
 
+    def _upload_artifact(self, ws: Path, with_: dict):
+        """#838：复用 job 产出 artifact——按 path 的 glob 收集文件，放进 artifacts/<name>/（平铺，
+        与 dry-run 造的假构建产物同一布局），下游 download-artifact 照常取。"""
+        name = with_.get("name")
+        pats = [ln.strip() for ln in str(with_.get("path", "")).splitlines() if ln.strip()]
+        hits = []
+        for pat in pats:
+            full = pat if os.path.isabs(pat) else str(ws / pat)
+            hits += [p for p in glob.glob(full) if os.path.isfile(p)]
+        if not hits and with_.get("if-no-files-found") == "error":
+            raise SimError(f"upload-artifact {name!r}：path 没有匹配到任何文件（{pats}）")
+        dest = self.artifacts / name
+        if dest.exists():
+            shutil.rmtree(dest)
+        dest.mkdir(parents=True)
+        for p in hits:
+            shutil.copy2(p, dest / os.path.basename(p))
+
     def _download_artifact(self, ws: Path, with_: dict):
         name = with_.get("name")
         src = self.artifacts / name
@@ -408,6 +429,8 @@ class Runner:
                         self._checkout(ws, with_, ctx)
                     elif uses.startswith("actions/download-artifact@"):
                         self._download_artifact(ws, with_)
+                    elif uses.startswith("actions/upload-artifact@"):
+                        self._upload_artifact(ws, with_)
                     else:
                         raise SimError(f"dry-run 不认识的 action：{uses}")
                     rc, log = 0, f"(uses {uses})"
@@ -510,14 +533,24 @@ if args[:1] != ["release"]: fail(f"gh stub: unsupported {args}", 2)
 sub = args[1] if len(args) > 1 else ""
 pos = positional()
 if sub == "view":
-    m = meta(pos[0])
+    tag = pos[0] if pos else None
+    if tag is None:
+        # 不带 tag = Latest：已发布、非预发布里最新发布的那个（GitHub 的语义）
+        rels = os.path.join(STATE, "releases")
+        cands = [(meta(t)["publishedAt"], t) for t in (os.listdir(rels) if os.path.isdir(rels) else [])
+                 if meta(t) and not meta(t)["draft"] and not meta(t)["prerelease"] and meta(t)["publishedAt"]]
+        if not cands: fail("release not found")
+        tag = max(cands)[1]
+    m = meta(tag)
     if m is None: fail("release not found")
     if opt("--json"):
-        data = {"isDraft": m["draft"], "isPrerelease": m["prerelease"], "tagName": pos[0], "body": m.get("body", "")}
+        names = sorted(os.listdir(os.path.join(rel_dir(tag), "assets"))) if os.path.isdir(os.path.join(rel_dir(tag), "assets")) else []
+        data = {"isDraft": m["draft"], "isPrerelease": m["prerelease"], "tagName": tag, "body": m.get("body", ""),
+                "assets": [{"name": n} for n in names]}
         q = opt("-q") or opt("--jq") or "."
         r = subprocess.run(["jq", "-r", q], input=json.dumps(data), text=True, capture_output=True)
         sys.stdout.write(r.stdout); sys.exit(r.returncode)
-    print(f"title:\t{m['title']}\ntag:\t{pos[0]}\ndraft:\t{str(m['draft']).lower()}")
+    print(f"title:\t{m['title']}\ntag:\t{tag}\ndraft:\t{str(m['draft']).lower()}")
 elif sub == "create":
     tag = pos[0]
     if meta(tag) is not None: fail(f"release {tag} already exists")
@@ -552,7 +585,11 @@ elif sub == "download":
     hits = [n for n in sorted(os.listdir(assets)) if any(fnmatch.fnmatch(n, p) for p in pats)]
     if not hits: fail("no assets match the file pattern")
     out = opt("-O") or opt("--output")
-    for n in hits: shutil.copyfile(os.path.join(assets, n), out if out else n)
+    for n in hits:
+        if out == "-":
+            sys.stdout.buffer.write(open(os.path.join(assets, n), "rb").read()); sys.stdout.flush()
+        else:
+            shutil.copyfile(os.path.join(assets, n), out if out else n)
 elif sub == "list":
     rows = []
     for tag in sorted(os.listdir(os.path.join(STATE, "releases"))) if os.path.isdir(os.path.join(STATE, "releases")) else []:
