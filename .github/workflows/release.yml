@@ -453,6 +453,13 @@ jobs:
     name: "Windows x64 (未签名)"
     runs-on: windows-latest
     timeout-minutes: 60
+    # Windows runner 上 `run:` 默认是 pwsh，而本 job 的脚本全是 bash 语法：2026-10-12 v0.9.12-test.12
+    # 「Resolve desktop version」在 pwsh 里把 `$(tools/release-version.sh desktop)` 求成空串
+    # ⇒ 外壳版本为空、构建失败；「Compute dep cache keys」同理一直算出错的缓存 key。
+    # 整个 job 统一 bash（与 dry-run 的模拟口径一致，tools/release/dry_run.py 有门禁）。
+    defaults:
+      run:
+        shell: bash
     # UPD-04（2026-10-01 验收人拍板）：**Windows 不再进 tag 触发的默认构建**。
     # 理由：验收人不发布 Windows 资产，但每次发版都要陪它等 ~30 分钟的
     # vcpkg/system 长杆（实测 v0.7.2：macOS 13 分钟 vs Windows 30 分钟），
@@ -564,6 +571,8 @@ jobs:
           PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
         run: |
           set -euo pipefail
+          # 版本号为空绝不往下走（test.12 事故：空版本一路传到 tauri 才报错，离根因很远）。
+          : "${PPF_BUILD_VERSION:?PPF_BUILD_VERSION 为空——Resolve desktop version 没产出版本号}"
           npm install -g pnpm@11
           mkdir -p apps/desktop/src-tauri/binaries
           # Tauri externalBin 按 target-triple 后缀查找
