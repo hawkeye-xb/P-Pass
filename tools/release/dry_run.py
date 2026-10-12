@@ -53,8 +53,8 @@ CUR_VERSIONS = {"desktop": "9.8.1", "android": "9.8.2", "androidVersionCode": 2}
 BAD_VERSIONS = {"desktop": "9.8.1", "android": "9.8.3", "androidVersionCode": 3}  # android 说明不合规（含网址）
 STALE_TAURI_CONF_VERSION = "9.7.0"  # #809：apps/desktop/src-tauri/tauri.conf.json 里那个不随发布改的号
 
-# 构建 job 不在 dry-run 里跑：结果按 tag push 的真实情形给。Windows 只跟 test tag（#788②），
-# 由 Scenario.build_result 按 tag 判定；这里的值只是正式 tag 的情形。
+# 构建 job 不在 dry-run 里跑：结果按 tag push 的真实情形给。Windows 只在 dispatch 时构建
+# （#788② 起 test tag 曾自动构建，2026-10-12 改回只走 dispatch），由 Scenario.build_result 判定。
 BUILD_RESULTS = {"android": "success", "macos-arm64": "success", "windows-x64": "skipped"}
 WINDOWS_INSTALLER = "P-Pass_{v}_x64-setup.exe"
 TEST_CHANNEL_WINDOWS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-windows.json"
@@ -412,10 +412,18 @@ class Scenario:
         self.sha, self.key = sha, key
         self.jobs: dict = {}
 
-    def release(self, wf: dict, tag: str, jobs=RELEASE_JOBS):
+    def release(self, wf: dict, tag: str, jobs=RELEASE_JOBS, dispatch_platforms: str | None = None):
+        """tag push；给了 [dispatch_platforms] 就是对这个 tag 手动 dispatch（Actions → Run workflow）。"""
         self.tag = tag
-        github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
-                  "token": "dry-run-token", "workflow_sha": self.sha, "event": {}}
+        self.dispatch_platforms = dispatch_platforms
+        if dispatch_platforms is None:
+            github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
+                      "token": "dry-run-token", "workflow_sha": self.sha, "event": {}}
+            inputs = {}
+        else:
+            github = {"event_name": "workflow_dispatch", "ref": "refs/heads/main", "ref_name": "main", "repository": REPO,
+                      "token": "dry-run-token", "workflow_sha": self.sha, "event": {}}
+            inputs = {"tag": tag, "platforms": dispatch_platforms}
         for job_id in jobs:
             needs = {}
             for n in wf["jobs"][job_id].get("needs", []) or []:
@@ -426,15 +434,16 @@ class Scenario:
                 else:
                     raise SimError(f"{job_id} needs {n}，dry-run 没有它的结果")
             # 没配置的 secret 在 GitHub 上是空串（VT_API_KEY 未配置 ⇒ VirusTotal 步跳过）
-            self.jobs[job_id] = self.runner.run_job(wf, job_id, github=github, inputs={},
+            self.jobs[job_id] = self.runner.run_job(wf, job_id, github=github, inputs=inputs,
                                                     secrets={"UPDATE_SIGNING_KEY": self.key, "VT_API_KEY": ""},
                                                     needs=needs)
         return self.jobs
 
     def build_result(self, job: str) -> str:
         """构建 job 不在 dry-run 里跑：#838 之后它跑不跑取决于 plan-builds 的判定。"""
-        if job == "windows-x64":  # #788②：tag push 上只有 test tag 构建 Windows
-            return "success" if "-test." in self.tag else "skipped"
+        if job == "windows-x64":  # 只有 dispatch（platforms 含 windows 或留空）构建 Windows
+            p = getattr(self, "dispatch_platforms", None)
+            return "success" if p is not None and (p in ("", "all") or "windows" in p.split(",")) else "skipped"
         plan = self.jobs.get("plan-builds")
         end = {"android": "android", "macos-arm64": "macos"}.get(job)
         if end and plan is not None:
@@ -620,19 +629,11 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, TEST_TAG, v)
     build_versions(ck, sc, rel, TEST_TAG, v)
-    job_ok(ck, jobs, "upload-windows")
-    job_ok(ck, jobs, "finalize-manifest-windows")
-    exe = WINDOWS_INSTALLER.format(v=v)
-    # #788②：Windows 分端清单 = 只含 windows-x86_64、version = tag 名、签名可验
-    check_manifest(ck, sc, pub, TEST_TAG, "manifest-windows.json", version=v,
-                   targets={"windows-x86_64": exe}, notes="", notes_i18n={})
-    chw = sc.asset("test-channel", "manifest-windows.json")
-    if ck(chw.exists(), "#788② test-channel 指针已写入 manifest-windows.json"):
-        mw = json.loads(chw.read_text())
-        ck(mw.get("version") == v and sorted(mw["platforms"]) == ["windows-x86_64"],
-           "#788② test-channel/manifest-windows.json：version = tag、只含 windows", json.dumps(mw)[:400])
-        ok, why = verify_sig(pub, sc.asset(TEST_TAG, exe), mw["platforms"]["windows-x86_64"].get("signature", ""))
-        ck(ok, "#788② test-channel/manifest-windows.json 的签名校验通过", why)
+    # test tag 不自动构建 Windows（2026-10-12）：Windows 两个 job 跳过，不出 Windows 清单，test-channel 不写 Windows 指针。
+    job_ok(ck, jobs, "upload-windows", "skipped")
+    job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
+    ck(not sc.asset(TEST_TAG, "manifest-windows.json").exists(), "test tag push 不出 manifest-windows.json（Windows 只走 dispatch）")
+    ck(not sc.asset("test-channel", "manifest-windows.json").exists(), "test tag push 不写 test-channel/manifest-windows.json")
     step_is(ck, jobs, "create-draft", "Version bump gate (UPD-13)", "skipped")
     step_is(ck, jobs, "create-draft", "Release notes presence (#741, warn only)", "skipped")
     step_is(ck, jobs, "upload-android", "Auto-publish test tags as prerelease", "success")
@@ -663,6 +664,24 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
         ck(r["rc"] == 0 and r["outputs"].get("skip") == "true" and "tag" not in r["outputs"],
            f"mirror-resolve（{ev}）→ test tag 不镜像（skip=true）", f"{r['outputs']}\n{r['log']}")
     SUMMARY["test"] = sc.summary()
+
+    # 要验 Windows：对同一个 test tag 手动 dispatch（platforms=windows），Windows 照 #788② 出产物、分端清单与 test-channel 指针。
+    jobs = sc.release(rel, TEST_TAG, dispatch_platforms="windows")
+    job_ok(ck, jobs, "upload-windows")
+    job_ok(ck, jobs, "finalize-manifest-windows")
+    exe = WINDOWS_INSTALLER.format(v=v)
+    # #788②：Windows 分端清单 = 只含 windows-x86_64、version = tag 名、签名可验
+    check_manifest(ck, sc, pub, TEST_TAG, "manifest-windows.json", version=v,
+                   targets={"windows-x86_64": exe}, notes="", notes_i18n={})
+    chw = sc.asset("test-channel", "manifest-windows.json")
+    if ck(chw.exists(), "#788② test-channel 指针已写入 manifest-windows.json"):
+        mw = json.loads(chw.read_text())
+        ck(mw.get("version") == v and sorted(mw["platforms"]) == ["windows-x86_64"],
+           "#788② test-channel/manifest-windows.json：version = tag、只含 windows", json.dumps(mw)[:400])
+        ok, why = verify_sig(pub, sc.asset(TEST_TAG, exe), mw["platforms"]["windows-x86_64"].get("signature", ""))
+        ck(ok, "#788② test-channel/manifest-windows.json 的签名校验通过", why)
+    cha = sc.asset("test-channel", "manifest.json")
+    ck(cha.exists() and json.loads(cha.read_text()).get("version") == v, "只 dispatch Windows 不动安卓的 test-channel 指针")
 
 
 def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):

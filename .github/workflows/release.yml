@@ -465,9 +465,11 @@ jobs:
     # 理由已不成立：桌面收口不等 Windows（finalize-manifest 的 needs），Windows 的清单
     # 由它自己的 finalize-manifest-windows 出，晚到只影响 Windows 自己。
     # 正式 tag 仍不构建：是否正式发布 Windows 由验收人决定（届时还要接 #838 的复用判定）。
+    # 2026-10-12 验收人再定：**test tag 也不自动构建 Windows**——只改安卓 / macOS 的 test 包不该陪
+    # Windows 跑、更不该被它的红拖成整次发布失败。要验 Windows 时对那个 test tag 手动 dispatch
+    # （platforms=windows）：产物、分端清单、test-channel 指针都照 #788② 出，只是不再是默认。
     if: >-
-      (github.event_name == 'workflow_dispatch' && (inputs.platforms == '' || inputs.platforms == 'all' || contains(format('{0},', inputs.platforms || 'all'), 'windows')))
-      || (github.event_name == 'push' && contains(github.ref_name, '-test.'))
+      github.event_name == 'workflow_dispatch' && (inputs.platforms == '' || inputs.platforms == 'all' || contains(format('{0},', inputs.platforms || 'all'), 'windows'))
     permissions:
       contents: read
       id-token: write
