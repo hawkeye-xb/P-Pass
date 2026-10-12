@@ -16,6 +16,16 @@ TARGETED_DEVICE_FAMILY = 1
 
 SWIFT_VERSION = 5.0
 
-// 版本号的默认值（本地/非 tag 构建）。#346 会改成由 PPF_BUILD_VERSION 注入。
+// 版本号（#346）：构建期由 tools/ios/stamp-version.sh（project.yml 里的「Stamp version」构建阶段）
+// 写进构建产物的 Info.plist——CFBundleShortVersionString / CFBundleVersion / PPassFullVersion。
+// 来源与 Android 同：PPF_BUILD_VERSION（发布流水线注入）；为空时回退下面这个固定值（本地/非 tag 构建，
+// 对位 Android build.gradle.kts 的 `?: "x.y.z"`）。iOS 尚未发版，回退值待定。
+PPASS_FALLBACK_VERSION = 0.1.0
+
+// Info.plist 里的占位，构建阶段一定会被覆盖；VersionStampTests 断言产物里不是它。
 MARKETING_VERSION = 0.0.0
-CURRENT_PROJECT_VERSION = 1
+CURRENT_PROJECT_VERSION = 0
+
+// 「Stamp version」要改构建产物里的 Info.plist（该文件不是本阶段声明的输出），
+// 用户脚本沙盒会拦，所以关掉。只影响本工程的脚本阶段。
+ENABLE_USER_SCRIPT_SANDBOXING = NO

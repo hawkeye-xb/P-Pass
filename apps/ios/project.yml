@@ -28,6 +28,15 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID)
         INFOPLIST_FILE: PPass/Info.plist
+    # #346：把版本号写进构建产物的 Info.plist（规则与来源见 tools/ios/stamp-version.sh）。
+    # 每次都跑（不做依赖分析）：PPF_BUILD_VERSION 变了而源码没变时也必须重新盖章。
+    postBuildScripts:
+      - name: Stamp version
+        script: |
+          "${SRCROOT}/../../tools/ios/stamp-version.sh" "${TARGET_BUILD_DIR}/${INFOPLIST_PATH}"
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        basedOnDependencyAnalysis: false
   PPassTests:
     type: bundle.unit-test
     platform: iOS
