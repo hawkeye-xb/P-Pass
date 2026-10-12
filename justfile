@@ -290,6 +290,10 @@ ios-gen:
 ios-test:
   bash tools/ios/test.sh
 
+# iOS 本地 SwiftPM 包（apps/ios/Packages/*/Package.swift）逐个在模拟器上测（#345）。没有包时直接通过。
+ios-test-packages:
+  bash tools/ios/test-packages.sh
+
 # M2 total acceptance: Rust suite + Android suite + APK build +
 # live wire scripts (hello/pair/backup) against a throwaway daemon
 verify-m2:

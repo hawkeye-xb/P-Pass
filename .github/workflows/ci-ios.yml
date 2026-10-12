@@ -1,0 +1,108 @@
+# IOS-21（#345）：iOS 域——XcodeGen 生成工程 + 模拟器上 xcodebuild test。
+#
+# 跑什么（都在 GitHub macOS runner 的 iOS 模拟器上）：
+#   1. App 工程（apps/ios/project.yml → PPass.xcodeproj）的 XCTest：tools/ios/test.sh
+#      —— i18n 逐字节副本、设计 token 漂移、版本号注入等契约测试都挂在这里（#316 #344 #346）。
+#   2. 本地 SwiftPM 包 apps/ios/Packages/*/Package.swift：tools/ios/test-packages.sh
+#      逐个发现、逐个测（扩展点：新包合入后自动被测，不用改本文件）。
+#   3. 传输 XCFramework（#313，传输线负责）：构建脚本 tools/build-ios-transport-xcframework.sh
+#      合入后在「App 测试」之前加一步构建它（届时需要 `rustup target add aarch64-apple-ios
+#      aarch64-apple-ios-sim`）。本文件先只留 paths 与这段说明，不抢做。
+#
+# 不签名、不碰真机：模拟器只做 ad-hoc 签名，本 lane 没有任何凭据路径；分发签名属 IOS-24。
+#
+# 触发路径（依赖表，2026-10-12）：
+#   apps/ios/**                     —— iOS 工程本体与本地包
+#   tools/ios/**                    —— 本 lane 调用的脚本
+#   tools/build-ios-*               —— XCFramework 构建脚本（#313）
+#   crates/transport/**             —— XCFramework 的 Rust 源（#313 接上后才真正被构建）
+#   assets/i18n/**                  —— iOS bundle 逐字节捆绑副本的漂移测试消费（#316；对位 ci-android）
+#   assets/design/tokens.json       —— iOS 设计 token 的生成源，漂移测试消费（#344）
+#   Cargo.toml / Cargo.lock / rust-toolchain.toml —— 传输 crate 的依赖与工具链
+# **刻意不含本文件自身**（#345 验收 2）：本 lane 不进必需检查，被 paths 跳过无害；
+# 改本文件的 PR 由 ci-rust 的 actionlint 兜语法，下一次碰到上面任一路径时真跑。
+name: CI iOS
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/ios/**"
+      - "tools/ios/**"
+      - "tools/build-ios-*"
+      - "crates/transport/**"
+      - "assets/i18n/**"
+      - "assets/design/tokens.json"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+  push:
+    branches: [main]
+    paths:
+      - "apps/ios/**"
+      - "tools/ios/**"
+      - "tools/build-ios-*"
+      - "crates/transport/**"
+      - "assets/i18n/**"
+      - "assets/design/tokens.json"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # XcodeGen 钉版本 + 校验摘要（runner 镜像不带 xcodegen；brew 装的是「当天最新」，
+  # 版本会悄悄漂）。摘要取自 GitHub release 资产的 digest 字段。升级时两行一起改。
+  XCODEGEN_VERSION: "2.45.3"
+  XCODEGEN_SHA256: "0c90f4d28ca57335f9fa78cf5bf6dabfe20a232036dabe36de2eef79cb7c0878"
+
+jobs:
+  ios:
+    # ⚠️ 名字写死，不用 matrix 现算（CI-06：名字现算 + 被跳过 = 永久 Pending）。
+    name: ios (xcodegen + xcodebuild test)
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Toolchain versions
+        run: |
+          xcodebuild -version
+          xcrun simctl list runtimes available
+          jq --version
+
+      - name: Install XcodeGen ${{ env.XCODEGEN_VERSION }} (pinned + sha256)
+        run: |
+          set -euo pipefail
+          zip="$RUNNER_TEMP/xcodegen.zip"
+          curl -fsSL --retry 3 -o "$zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+          echo "${XCODEGEN_SHA256}  ${zip}" | shasum -a 256 -c -
+          unzip -q "$zip" -d "$RUNNER_TEMP/xcodegen-dist"
+          bin=$(find "$RUNNER_TEMP/xcodegen-dist" -type f -name xcodegen -perm -u+x | head -1)
+          [ -n "$bin" ] || { echo "::error::xcodegen.zip 里找不到可执行文件"; exit 1; }
+          dirname "$bin" >> "$GITHUB_PATH"
+          "$bin" --version
+
+      - name: App unit tests (iOS simulator)
+        run: tools/ios/test.sh
+
+      - name: Local SwiftPM packages (iOS simulator)
+        run: tools/ios/test-packages.sh
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### CI iOS"
+            echo "- Xcode: $(xcodebuild -version | head -1)"
+            echo "- 签名：本 lane 不签名、无凭据路径（模拟器 ad-hoc），分发签名见 IOS-24"
+            echo "- 传输 XCFramework：尚未接入（#313）"
+          } >> "$GITHUB_STEP_SUMMARY"

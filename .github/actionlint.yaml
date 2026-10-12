@@ -1,0 +1,10 @@
+# actionlint 配置。
+#
+# self-hosted-runner.labels：actionlint 内置的 GitHub 托管 runner 标签表跟不上 GitHub 新镜像。
+# ci-rust 钉的 actionlint 1.7.7 不认识 `macos-26`（GitHub 托管的 macOS 26 / Xcode 26 镜像，
+# ci-iOS 实跑确认：Image: macos-26-arm64），会报 runner-label 错误。actionlint 文档给的做法就是
+# 在这里登记额外标签（键名叫 self-hosted-runner，但只是「额外允许的标签」）。
+# 升级 actionlint 到认识该标签的版本后可删掉对应条目。
+self-hosted-runner:
+  labels:
+    - macos-26 # #345 ci-ios.yml
