@@ -67,6 +67,11 @@ data class Order(
      * 同一个 media_id 又出现了（例如从回收站恢复）清回 0。只有 CONFIRMED 行会被打标记。
      */
     val sourceMissing: Boolean = false,
+    /**
+     * #843：这一行导入时读到的字节里拍摄地点是否被系统抹掉（没有 `ACCESS_MEDIA_LOCATION` 时 Android 10+ 会抹）。
+     * 只记事实，本身不改变任何决策；schema v4 之前建的行全是抹过的（那时 App 没声明这个权限）。
+     */
+    val locationRedacted: Boolean = false,
 )
 
 /** 新建一行 order 的输入；id 与时间戳由存储分配。 */
@@ -77,6 +82,8 @@ data class NewOrder(
     val contentHash: String?,
     val state: OrderState,
     val pairingEpoch: String,
+    /** 见 [Order.locationRedacted]。 */
+    val locationRedacted: Boolean = false,
 ) {
     init {
         require(sourceVersion.isNotBlank()) { "sourceVersion must not be blank" }

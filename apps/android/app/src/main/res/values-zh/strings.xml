@@ -283,6 +283,9 @@
     <string name="background_backup_authorization_denied">未获得授权，后台备份暂时无法自动运行</string>
     <!-- UI-12: 琥珀通知条的"去处理"动作文案（与设置页 CellRow 共用同一
          判据，但这条现在也会出现在照片 tab，走 NoticeHost）。 -->
+    <!-- #843：没有位置权限时首页常驻提示。 -->
+    <string name="location_redacted_notice">备份的照片和视频不含拍摄地点</string>
+    <string name="location_redacted_notice_action">去开启</string>
     <string name="background_backup_notice_action">去处理</string>
     <!-- UI-12: "知道了"忽略动作——只是不再提醒，不等于问题已解决，也
          不等于把自动备份关掉。 -->

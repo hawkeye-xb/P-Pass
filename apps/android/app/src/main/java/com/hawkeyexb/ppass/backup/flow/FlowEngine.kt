@@ -876,7 +876,9 @@ internal class FlowEngine(
                 // 引用导入算出 hash → 建 order（传输中，带 hash）→ 传输。G / S 在结局落库时一起推进（#415 裁决 8）。
                 // #775：导入一拿到手就进作用域——建 order 本身也可能失败（存储满时的 SQLiteFullException）。
                 return releasingOnAbort(imported.contentHash) {
-                    val row = store.insert(NewOrder(snapshot.mediaId, version, bucket, imported.contentHash, OrderState.TRANSFERRING, epoch.value))
+                    val row = store.insert(
+                        NewOrder(snapshot.mediaId, version, bucket, imported.contentHash, OrderState.TRANSFERRING, epoch.value, imported.locationRedacted),
+                    )
                     bump()
                     deliverAndCommit(row, imported.contentHash, details, progress, epoch)
                 }
@@ -905,7 +907,7 @@ internal class FlowEngine(
             return StepResult.Next
         }
         val (imported, failure) = importWithRetry(details)
-        val hash = when (imported) {
+        val current = when (imported) {
             null -> {
                 if (store.transition(order.id, OPEN, OrderState.TRANSFERRING)) fail(order, Progress(), failure)
                 return StepResult.Next
@@ -914,15 +916,25 @@ internal class FlowEngine(
                 settleSourceMissing(order, "gone", discard = transferring)
                 return StepResult.Next
             }
-            is ImportResult.Imported -> imported.contentHash
+            is ImportResult.Imported -> imported
         }
+        val hash = current.contentHash
         // #775：从拿到导入起就在作用域里——下面每一步落库都可能抛。
         return releasingOnAbort(hash) {
             if (order.contentHash != null && order.contentHash != hash) {
-                // 旧版本停在传输中（中断期间被编辑、MediaStore 版本没跟上）：直接舍弃——源已删 + cancel_tuple。
-                importer.release(hash)
-                settleSourceMissing(order, "content_changed", discard = true)
-                return@releasingOnAbort StepResult.Next
+                // 同一版本读出了另一份字节（中断期间被原地改写、MediaStore 版本没跟上；或 #843 拿到位置权限后读到了原样
+                // 字节）：这一行的 lease 描述的那份内容已不存在——源已删 + cancel_tuple；**现在的字节另起一行传**。
+                // 不另起的话，版本没变，扫描不会再给它建行，这张照片就静默漏传了。
+                if (!settleSourceMissing(order, "content_changed", discard = true)) {
+                    // 这一行已被别处结掉（例如用户取消剩余）：不另起。
+                    importer.release(hash)
+                    return@releasingOnAbort StepResult.Next
+                }
+                val row = store.insert(
+                    NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.TRANSFERRING, epoch.value, current.locationRedacted),
+                )
+                bump()
+                return@releasingOnAbort deliverAndCommit(row, hash, details, Progress(), epoch)
             }
             if (!store.transition(order.id, OPEN, OrderState.TRANSFERRING, contentHash = hash)) {
                 importer.release(hash)
@@ -947,17 +959,19 @@ internal class FlowEngine(
             throw aborted
         }
 
-    private suspend fun settleSourceMissing(order: Order, reason: String, discard: Boolean) {
-        if (store.transition(
+    /** 返回这一行是否由本次结掉（不在 OPEN 状态里的行不动）。 */
+    private suspend fun settleSourceMissing(order: Order, reason: String, discard: Boolean): Boolean {
+        val settled = store.transition(
                 order.id,
                 OPEN,
                 OrderState.SKIPPED_SOURCE_MISSING,
                 audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString(), "reason" to reason)),
             )
-        ) {
+        if (settled) {
             if (discard) delivery.discardPartial(order.id, PairingEpoch(order.pairingEpoch))
             bump()
         }
+        return settled
     }
 
     private suspend fun deliverAndCommit(order: Order, hash: String, details: MediaDetails, progress: Progress, epoch: PairingEpoch): StepResult {
@@ -1116,7 +1130,7 @@ internal class FlowEngine(
                     continue
                 }
                 store.insert(
-                    NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.PENDING, order.pairingEpoch),
+                    NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.PENDING, order.pairingEpoch, order.locationRedacted),
                     audit = audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "REUPLOAD", "contentHash" to hash)),
                 )
                 requeued++

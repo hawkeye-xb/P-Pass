@@ -50,7 +50,13 @@ data class EngineView(
 
 /** 导入结果：流式读一次原图，得到 BLAKE3。 */
 internal sealed interface ImportResult {
-    data class Imported(val contentHash: String, val sizeBytes: Long, val byReference: Boolean) : ImportResult
+    /** [locationRedacted]：读到的字节里拍摄地点被系统抹掉了（#843，见 [AndroidMediaImporter]）。 */
+    data class Imported(
+        val contentHash: String,
+        val sizeBytes: Long,
+        val byReference: Boolean,
+        val locationRedacted: Boolean = false,
+    ) : ImportResult
     data object SourceMissing : ImportResult
 }
 

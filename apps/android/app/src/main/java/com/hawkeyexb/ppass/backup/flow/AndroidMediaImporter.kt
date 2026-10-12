@@ -1,8 +1,12 @@
 // #413 §3：原图 → 手机侧 iroh store。引用优先，条件不满足回退复制；导入与供数分两步。
 package com.hawkeyexb.ppass.backup.flow
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import android.provider.MediaStore
 import java.io.FileNotFoundException
 
 /**
@@ -12,16 +16,33 @@ import java.io.FileNotFoundException
  *
  * `dataPath` 由调用方传入（MediaStore `_data`；API 29 或查不到时传 null，直接复制）。原生侧会校验它与描述符
  * 是同一个文件，不一致就复制——传错路径只会慢，不会传错数据。
+ *
+ * #843 原样字节：Android 10+ 对没有 `ACCESS_MEDIA_LOCATION` 的 App，描述符和 `_data` 路径读出的照片 / 视频都抹掉了
+ * 拍摄地点。[locationReadable] 为真时按平台规定用 [openOriginal]（`MediaStore.setRequireOriginal`）打开，读到原样字节；
+ * 否则照常读抹过的字节，结果里如实记 [ImportResult.Imported.locationRedacted]，不静默。权限在检查与打开之间被收回时
+ * 系统抛 [UnsupportedOperationException]，同样按抹过的读。
  */
 internal class AndroidMediaImporter(
     private val bridge: IrohBlobsProviderBridge,
     private val open: (String) -> AutoCloseable?,
     private val log: FlowLogger = FlowLogger {},
+    private val openOriginal: (String) -> AutoCloseable? = open,
+    private val locationReadable: () -> Boolean = { true },
 ) : MediaImporter {
 
     override fun import(mediaId: Long, contentUri: String, dataPath: String?): ImportResult {
+        var original = locationReadable()
         val source = try {
-            open(contentUri)
+            if (original) {
+                try {
+                    openOriginal(contentUri)
+                } catch (_: UnsupportedOperationException) {
+                    original = false
+                    open(contentUri)
+                }
+            } else {
+                open(contentUri)
+            }
         } catch (_: FileNotFoundException) {
             null
         } catch (_: SourceMissingException) {
@@ -32,7 +53,7 @@ internal class AndroidMediaImporter(
             // 回退是正确的，但多读写一遍整张图；原因要看得见（#413：引用不满足条件不许静默）。
             log.log("import media=$mediaId copied: fallback=${imported.fallback} ${imported.detail.orEmpty()}")
         }
-        return ImportResult.Imported(imported.contentHash, imported.sizeBytes, imported.byReference)
+        return ImportResult.Imported(imported.contentHash, imported.sizeBytes, imported.byReference, locationRedacted = !original)
     }
 
     /** 原图已删 / 已变 → [SourceMissingException]；这份内容没导入过或已 release → IllegalStateException。 */
@@ -48,8 +69,24 @@ internal class AndroidMediaImporter(
 
     companion object {
         fun forContentResolver(context: Context, bridge: IrohBlobsProviderBridge, log: FlowLogger): AndroidMediaImporter {
-            val resolver = context.applicationContext.contentResolver
-            return AndroidMediaImporter(bridge, { uri -> resolver.openFileDescriptor(Uri.parse(uri), "r") }, log)
+            val app = context.applicationContext
+            val resolver = app.contentResolver
+            return AndroidMediaImporter(
+                bridge,
+                open = { uri -> resolver.openFileDescriptor(Uri.parse(uri), "r") },
+                log = log,
+                openOriginal = { uri ->
+                    val parsed = Uri.parse(uri)
+                    val target = if (Build.VERSION.SDK_INT >= 29) MediaStore.setRequireOriginal(parsed) else parsed
+                    resolver.openFileDescriptor(target, "r")
+                },
+                locationReadable = { canReadMediaLocation(app) },
+            )
         }
+
+        /** #843：读得到原样字节（含拍摄地点）吗。Android 10 以下系统不抹，恒为真。 */
+        fun canReadMediaLocation(context: Context): Boolean =
+            Build.VERSION.SDK_INT < 29 ||
+                context.checkSelfPermission(Manifest.permission.ACCESS_MEDIA_LOCATION) == PackageManager.PERMISSION_GRANTED
     }
 }

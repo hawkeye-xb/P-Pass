@@ -39,6 +39,15 @@ class HomeNoticesTest {
     }
 
     @Test
+    fun location_redacted_needs_a_grant_so_it_ranks_above_source_missing_and_below_blockers() {
+        // #843：照常备份、只缺地点——要用户授权，比只读告知急，比「备份停了」缓。
+        val p = HOME_NOTICE_PRIORITY
+        assertTrue(p.indexOf(HomeNoticeKind.LOCATION_REDACTED) < p.indexOf(HomeNoticeKind.SOURCE_MISSING))
+        assertTrue(p.indexOf(HomeNoticeKind.LOCATION_REDACTED) > p.indexOf(HomeNoticeKind.BACKUP_INTERRUPTED))
+        assertEquals(HomeNoticeKind.BACKUP_INTERRUPTED, topNotice(listOf(notice(HomeNoticeKind.LOCATION_REDACTED), notice(HomeNoticeKind.BACKUP_INTERRUPTED)))?.kind)
+    }
+
+    @Test
     fun every_kind_is_ranked_exactly_once() {
         // 漏登记一个类别 = 它悄悄排到末位。新增提示时这条立刻红。
         assertEquals(HomeNoticeKind.entries.size, HOME_NOTICE_PRIORITY.size)
