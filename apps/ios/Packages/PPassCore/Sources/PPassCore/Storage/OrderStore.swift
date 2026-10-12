@@ -333,9 +333,16 @@ public final class SQLiteOrderStore: OrderStore, @unchecked Sendable {
 
     // MARK: order
 
+    /// 测试接缝（对位 Android InMemoryOrderStore.failNextInsert）：下一次 insert 在事务里抛这个错（例如存储满）。
+    var failNextInsert: Error?
+
     @discardableResult
     public func insert(_ order: NewOrder, advance: DiscoveryPosition?, scanTo: String?, audit: AuditRecord?) throws -> Order {
         let id: Int64 = try inTransaction {
+            if let injected = failNextInsert {
+                failNextInsert = nil
+                throw injected
+            }
             let now = clock()
             try db.run(
                 "INSERT INTO orders (media_id, source_version, bucket_id, content_hash, state, attempts, pairing_epoch, created_at_ms, updated_at_ms, source_missing) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 0)",

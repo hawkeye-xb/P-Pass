@@ -18,11 +18,14 @@ final class ScriptedTransport: CtrlTransport, @unchecked Sendable {
         return _calls
     }
 
+    private func record(_ method: String, _ params: JSONValue, _ timeoutMs: UInt64?) {
+        lock.lock(); defer { lock.unlock() }
+        _calls.append((method, params, timeoutMs))
+    }
+
     func call(method: String, paramsJSON: Data, timeoutMs: UInt64?) async throws -> Data {
         let params = try JSONValue.parse(paramsJSON)
-        lock.lock()
-        _calls.append((method, params, timeoutMs))
-        lock.unlock()
+        record(method, params, timeoutMs)
         return try ProtoJSON.encode(reply(method, params))
     }
 }
