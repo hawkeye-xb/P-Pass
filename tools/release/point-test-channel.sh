@@ -23,6 +23,7 @@
 #   3. 再覆盖清单。
 #   4. 最后清理：删掉 test-channel 里**没有任何清单指向的版本**的安装包。按「被引用的版本」而不是
 #      「被引用的文件」判，dmg 这类不进清单、但与当前版本配套的包才留得住；不带版本号的文件不动。
+#   5. 删掉比被指向的最新版本还旧、且没被指向的 test 草稿（连同 tag）。
 set -euo pipefail
 : "${TAG:?TAG 未设置（job env）}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY 未设置}"
@@ -98,4 +99,18 @@ for n in $(ch_assets | grep -E '^P-Pass_' || true); do
     *" $v "*) ;;
     *) gh release delete-asset "$CH" "$n" --yes; echo "test-channel：删除没有清单指向的旧包 ${n}" ;;
   esac
+done
+
+# 5. 清理旧的 test 草稿（#872）：test tag 自己的 release 只是构建记录。版本没有被任何清单指向、
+#    且比被指向的最新版本还旧的 test 草稿连同它的 tag 一起删——它既不是谁的下载来源，也不是
+#    plan-builds 的基线。比最新被指向版本新的不动：那可能是正在跑、还没写指针的 test tag。
+# shellcheck disable=SC2086 # KEEP 是空格分隔的版本列表，刻意拆分
+NEWEST=$(printf '%s\n' $KEEP | sort -V | tail -n1)
+for t in $(gh release list --limit 200 --json tagName,isDraft \
+             -q '.[] | select(.isDraft and (.tagName | contains("-test."))) | .tagName'); do
+  v=${t#v}
+  case " $KEEP " in *" $v "*) continue ;; esac
+  [ "$v" != "$NEWEST" ] && [ "$(printf '%s\n%s\n' "$v" "$NEWEST" | sort -V | tail -n1)" = "$NEWEST" ] || continue
+  gh release delete "$t" --yes --cleanup-tag
+  echo "删除旧的 test 草稿与 tag：${t}"
 done

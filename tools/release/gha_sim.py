@@ -596,6 +596,10 @@ elif sub == "delete-asset":
     p = os.path.join(rel_dir(tag), "assets", name)
     if not os.path.isfile(p): fail(f"asset {name} not found in {tag}")
     os.remove(p)
+elif sub == "delete":
+    tag = pos[0]
+    if meta(tag) is None: fail("release not found")
+    shutil.rmtree(rel_dir(tag))
 elif sub == "list":
     rows = []
     for tag in sorted(os.listdir(os.path.join(STATE, "releases"))) if os.path.isdir(os.path.join(STATE, "releases")) else []:
