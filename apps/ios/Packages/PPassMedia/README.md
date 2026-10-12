@@ -12,6 +12,7 @@ iOS 媒体层（Swift 本地包，最低 iOS 16）：PhotoKit 相册枚举、变
 |---|---|
 | `Sources/PPassMedia/Library` | `PhotoLibraryReading`（只读相册库的协议）与 PhotoKit 实现 `PhotoKitLibrary` |
 | `Sources/PPassMedia/Albums` | `AlbumCatalog`（可选相册列表）、`AlbumScope`（范围并集与计数） |
+| `Sources/PPassMedia/Changes` | `ChangeHistoryReading` + `PhotoKitChangeHistory`（`PHPersistentChangeToken`）、`ChangeDiscovery` / `ChangeWindow`（G 的取法与推进）、`ChangeTokenStore`（G 落盘） |
 | `Tests/PPassMediaTests` | 纯逻辑单测，跑在 fake 上，不需要授权 |
 | `IntegrationHost/` | 真 PhotoKit 集成测试：XcodeGen 生成的最小宿主 App + 宿主式测试 bundle |
 | `scripts/test.sh` | 一条命令跑完两套测试（建专用模拟器 → erase → 现造素材并 addmedia → 设授权 → 测） |
@@ -95,6 +96,32 @@ MediaStore 没有智能相册的概念。PhotoKit 的智能相册由系统按媒
 - **计数口径**：只算图片和视频，音频不算，隐藏项不算。用真实 fetch 的 `count`，不用 `estimatedAssetCount`
   （对智能相册会返回 `NSNotFound`）。
 
+## 发现游标 G（IOS-09）
+
+ARCH-01 的 G：「只服务新照片，只在新照片提交时推进；补传不推进」。Android 上 G 是 `GENERATION_MODIFIED`（一个可以比较大小的整数），
+iOS 上是归档后的 `PHPersistentChangeToken`。
+
+| | Android | iOS |
+|---|---|---|
+| G 的载体 | `Long`，可以比较大小 | 不透明字节（`NSKeyedArchiver` 安全编码），只能判断是否相等 |
+| 取新照片 | `generation > G`，`LIMIT 1` | `fetchPersistentChanges(since: G)`，只看 `insertedLocalIdentifiers` |
+| 推进 | 提交时把 G 设成这张照片的 generation | `ChangeWindow.advance(isSettled:)`：推进到最远的那次变更，要求它及之前插入的照片都已了结 |
+| 不倒退 | 整数单调 | G 只能是起点，或者系统返回序列里的某个 token，结构上无法倒退；删除和更新不挡 G |
+| G 缺失 | 从 `maxGeneration` 起步 | 从 `currentChangeToken` 起步；此前的照片交给对账扫描 |
+| 失效 | 无（MediaStore 重建另有处理） | 3105 token 过期 / 3210 明细缺失 / 存盘字节解不出 → `Discovery.rescan`：先把 G 设成重启点（失败之后、重扫之前取），再对范围全量重扫，按内容哈希判重收敛 |
+
+只看 inserted 的原因：照片入库后系统做分析，会再产生 updated 事件；把老照片加进相册也只产生 updated 事件（模拟器实测）。
+这两种都不是新照片。范围变化（老照片进了已选相册）由对账扫描负责，不归 G 管，这一点与 Android 相同。
+
+**模拟器上真的造出了 3105**：在旧图库里写入较长的历史，存下 token；erase 模拟器后重建一个历史较短的图库，拿旧 token 去读，
+系统返回 `PHPhotosErrorDomain 3105`。随后的全量重扫中，旧内容按字节判重全部跳过，只有 erase 之后新建的照片需要传。
+erase 之后所有 localIdentifier 都变了，所以这个结果只能靠内容判重得出，靠 id 或计数都得不出。
+
+**风险（实测发现，登记）**：token 不绑定是哪个图库。如果旧 token 的位置还落在新图库的历史范围内，`fetchPersistentChanges`
+**不报错**，会返回新图库「从那个位置之后」的变更，等于 G 静默错位，可能漏掉一段新照片。会出现这种情况的场景：设备恢复、
+图库重建之后，App Group 里的 G 还留着。PhotoKit 没有公开的图库标识可供比对，所以兜底仍然是对账扫描（范围内全量，按内容哈希判重）。
+它必须定期跑，不能只在 3105 时才跑。这一条交给 PPassCore 的调度去落实。
+
 ## 验证覆盖
 
 | 内容 | 测试 | 证据等级 |
@@ -102,6 +129,10 @@ MediaStore 没有智能相册的概念。PhotoKit 的智能相册由系统按媒
 | 空相册、无名相册、仅视频相册；封面；隐藏/最近删除不可选；智能相册取舍与顺序；并集计数；空范围不查询 | `Tests/PPassMediaTests/AlbumCatalogTests.swift`（fake） | E2 |
 | 灌入的 JPEG/HEIC/MP4 与建出的相册（重叠、空、仅视频、文件夹内）逐条对上；「已隐藏」不可选；并集计数；无名相册建不出来 | `IntegrationHost/Tests/AlbumEnumerationIT.swift`（模拟器真 PhotoKit） | E3（模拟器） |
 | 与「照片」App 并排截图、与 Android BucketScreen 对照 | — | 真机待补 |
+| G：起步、只看 inserted、推进规则、删改不倒退、拍了又删不挡、3105/3210/坏字节走重扫且重启点取在失败之后、其他错误不重扫、落盘原子替换、坏文件不当「没有 G」、按哈希而非计数收敛 | `Tests/PPassMediaTests/ChangeDiscoveryTests.swift`（fake） | E2 |
+| token 归档、落盘、读回后直接喂 `fetchPersistentChanges`；新建一张后增量里只有它，提交后 G 前移、再读为空；进相册不算新照片；坏 token 走重扫后能接着增量 | `IntegrationHost/Tests/ChangeTokenIT.swift` | E3（模拟器） |
+| 真库 3105 + 全量重扫按内容收敛 | `IntegrationHost/Tests/TokenExpiryIT.swift`（两轮，中间 erase） | E3（模拟器） |
+| 真机上「新拍一张 → 水位前移 → 出现在待传列表」 | — | 真机待补（需 App 与 PPassCore 接上） |
 
 限制：模拟器上没法用 API 造隐藏照片。建好后再隐藏，系统会弹「允许 xx 隐藏这张照片？」确认框，测试会卡住；在创建请求里直接设
 `isHidden`，请求不报错，但照片根本没有建出来。所以「隐藏项不计数」由 fake 测试覆盖，真库上只核实「已隐藏」集合本身不可选。
