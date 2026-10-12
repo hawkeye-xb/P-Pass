@@ -17,6 +17,7 @@ has to figure anything out.
 | `tokens.css` | desktop shell (`apps/desktop`, imported by the Svelte app) |
 | `token-reuse-checklist.md` | DESK-15 audit: what's already reused, what gaps are real, what was decided not to tokenize |
 | `Tokens.kt` (`apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/`) | Android app — hand-maintained from `tokens.json` (colours + PPFont brand fonts, MOB-66) |
+| `Tokens.generated.swift` (`apps/ios/PPass/Design/`) | iOS app — **generated** by `just ios-tokens` (`tools/ios/gen-tokens.py`); ci-ios fails if it drifts (`--check` byte compare + `DesignTokensTests`), #344 |
 
 Rules that are not colours (body ≥17px on phone, tap targets ≥56px,
 ≤40 words per screen, no jargon without a plain sentence, destructive
