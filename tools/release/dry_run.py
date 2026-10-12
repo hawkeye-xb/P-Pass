@@ -5,7 +5,8 @@
 经 tools/release/gha_sim.py 按 runner 语义逐步执行），覆盖：
   create-draft（版本门禁、说明缺失告警、建草稿）→ upload-android（组装清单 → 签名 → 校验 → 上传、
   test 自动发布、test-channel 指针）→ upload-macos → finalize-manifest（桌面收口：冻结件 / 动态清单、
-  分端清单、签名、上传）→ finalize-manifest-windows（应被跳过）→ mirror-latest 的镜像判定。
+  分端清单、签名、上传）→ upload-windows → finalize-manifest-windows（#788②：test tag 出 Windows
+  分端清单并写进 test-channel；正式 tag 跳过）→ mirror-latest 的镜像判定。
 
 假的部分（只有这些）：
   - 构建产物：临时目录里的随机字节当 APK / .app.tar.gz（构建、公证不在范围内）；macOS 那份的
@@ -52,8 +53,11 @@ CUR_VERSIONS = {"desktop": "9.8.1", "android": "9.8.2", "androidVersionCode": 2}
 BAD_VERSIONS = {"desktop": "9.8.1", "android": "9.8.3", "androidVersionCode": 3}  # android 说明不合规（含网址）
 STALE_TAURI_CONF_VERSION = "9.7.0"  # #809：apps/desktop/src-tauri/tauri.conf.json 里那个不随发布改的号
 
-# 构建 job 不在 dry-run 里跑：结果按 tag push 的真实情形给（Windows 在 tag push 上恒跳过）。
+# 构建 job 不在 dry-run 里跑：结果按 tag push 的真实情形给。Windows 只跟 test tag（#788②），
+# 由 Scenario.build_result 按 tag 判定；这里的值只是正式 tag 的情形。
 BUILD_RESULTS = {"android": "success", "macos-arm64": "success", "windows-x64": "skipped"}
+WINDOWS_INSTALLER = "P-Pass_{v}_x64-setup.exe"
+TEST_CHANNEL_WINDOWS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-windows.json"
 RELEASE_JOBS = ["plan-builds", "android-reuse", "macos-reuse", "create-draft", "upload-android", "upload-macos", "upload-windows", "finalize-manifest", "finalize-manifest-windows",
                 "finalize-notes"]
 
@@ -231,6 +235,15 @@ def make_artifacts(d: Path, wf: dict, android_ver: str, desktop_ver: str) -> Pat
             (m / name).write_bytes(fake_bytes(f"{name}", 2048))
     if MACOS_SUMS in names:
         (m / MACOS_SUMS).write_text("".join(f"{sha256(p)}  {p.name}\n" for p in sorted(m.iterdir())))
+    # #788②：Windows 两个 artifact（upload-windows / finalize-manifest-windows 下载的布局）
+    w = a / "windows-x64"
+    w.mkdir()
+    for name in ("daemon.exe", "testclient.exe", "BUILD_INFO-windows-x64"):
+        (w / name).write_bytes(fake_bytes(f"win {name} {desktop_ver}", 1024))
+    (w / "SHA256SUMS-windows-x64").write_text("".join(f"{sha256(p)}  {p.name}\n" for p in sorted(w.iterdir())))
+    wi = a / "windows-x64-installer"
+    wi.mkdir()
+    (wi / WINDOWS_INSTALLER.format(v=desktop_ver)).write_bytes(fake_bytes(f"nsis {desktop_ver}", 4096))
     return a
 
 
@@ -296,6 +309,11 @@ ver = conf.get("version", "")
 rec = Path(os.environ["DRYRUN_REC"])
 with open(rec / f"shell-{sub}", "a") as f:
     f.write(ver + "\n")
+# #788②：test 包的插件 endpoint 与前端开关必须同一处设（记下来给断言用）
+(rec / f"shell-{sub}-updater.json").write_text(json.dumps({
+    "endpoints": conf.get("plugins", {}).get("updater", {}).get("endpoints"),
+    "vite_test_in_app": os.environ.get("VITE_UPDATE_TEST_CHANNEL_IN_APP", ""),
+}))
 bundle_dir = Path("src-tauri/target/release/bundle")
 if sub == "bundle":
     app = bundle_dir / "macos/P-Pass.app"
@@ -362,6 +380,17 @@ def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
         if job_id == "macos-arm64":
             ck(shell_bundle == [want], f"#809 {job_id} @ {tag}：外壳 Info.plist 版本（tauri bundle）= {want}",
                f"实际 {shell_bundle}（tauri.conf.json 里是 {STALE_TAURI_CONF_VERSION}）")
+        else:
+            upd_file = rec / "shell-build-updater.json"
+            upd = json.loads(upd_file.read_text()) if upd_file.exists() else {}
+            if "-test." in tag:
+                ck(upd.get("endpoints") == [TEST_CHANNEL_WINDOWS_MANIFEST] and upd.get("vite_test_in_app") == "1",
+                   f"#788② {job_id} @ {tag}：test 包的更新 endpoint = test-channel/manifest-windows.json，前端开关同时打开",
+                   json.dumps(upd))
+            else:
+                ck(upd.get("endpoints") is None and upd.get("vite_test_in_app") == "",
+                   f"#788② {job_id} @ {tag}：正式包不覆盖 endpoint（用 tauri.windows.conf.json），前端开关不开",
+                   json.dumps(upd))
 
 
 # ── 跑 workflow ────────────────────────────────────────────────────────
@@ -384,6 +413,7 @@ class Scenario:
         self.jobs: dict = {}
 
     def release(self, wf: dict, tag: str, jobs=RELEASE_JOBS):
+        self.tag = tag
         github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
                   "token": "dry-run-token", "workflow_sha": self.sha, "event": {}}
         for job_id in jobs:
@@ -401,6 +431,8 @@ class Scenario:
 
     def build_result(self, job: str) -> str:
         """构建 job 不在 dry-run 里跑：#838 之后它跑不跑取决于 plan-builds 的判定。"""
+        if job == "windows-x64":  # #788②：tag push 上只有 test tag 构建 Windows
+            return "success" if "-test." in self.tag else "skipped"
         plan = self.jobs.get("plan-builds")
         end = {"android": "android", "macos-arm64": "macos"}.get(job)
         if end and plan is not None:
@@ -529,7 +561,9 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, FORMAL_TAG, dv)
     build_versions(ck, sc, rel, FORMAL_TAG, dv)
+    job_ok(ck, jobs, "upload-windows", "skipped")
     job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
+    ck(not sc.asset(FORMAL_TAG, "manifest-windows.json").exists(), "#788② 正式 tag 不出 manifest-windows.json（Windows 未正式发布）")
     step_is(ck, jobs, "create-draft", "Version bump gate (UPD-13)", "success")
     s = step_is(ck, jobs, "create-draft", "Release notes presence (#741, warn only)", "success")
     if s:
@@ -584,7 +618,19 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, TEST_TAG, v)
     build_versions(ck, sc, rel, TEST_TAG, v)
-    job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
+    job_ok(ck, jobs, "upload-windows")
+    job_ok(ck, jobs, "finalize-manifest-windows")
+    exe = WINDOWS_INSTALLER.format(v=v)
+    # #788②：Windows 分端清单 = 只含 windows-x86_64、version = tag 名、签名可验
+    check_manifest(ck, sc, pub, TEST_TAG, "manifest-windows.json", version=v,
+                   targets={"windows-x86_64": exe}, notes="", notes_i18n={})
+    chw = sc.asset("test-channel", "manifest-windows.json")
+    if ck(chw.exists(), "#788② test-channel 指针已写入 manifest-windows.json"):
+        mw = json.loads(chw.read_text())
+        ck(mw.get("version") == v and sorted(mw["platforms"]) == ["windows-x86_64"],
+           "#788② test-channel/manifest-windows.json：version = tag、只含 windows", json.dumps(mw)[:400])
+        ok, why = verify_sig(pub, sc.asset(TEST_TAG, exe), mw["platforms"]["windows-x86_64"].get("signature", ""))
+        ck(ok, "#788② test-channel/manifest-windows.json 的签名校验通过", why)
     step_is(ck, jobs, "create-draft", "Version bump gate (UPD-13)", "skipped")
     step_is(ck, jobs, "create-draft", "Release notes presence (#741, warn only)", "skipped")
     step_is(ck, jobs, "upload-android", "Auto-publish test tags as prerelease", "success")

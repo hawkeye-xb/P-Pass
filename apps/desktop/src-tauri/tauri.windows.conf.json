@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://p-pass-dl.hawkeye-xb.com/manifest-windows.json",
+        "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest-windows.json"
+      ]
+    }
+  }
+}

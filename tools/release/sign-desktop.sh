@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# REL-12（#711）：release.yml · finalize-manifest ·「Sign manifest entries (gated)」。
+# REL-12（#711）：release.yml · finalize-manifest / finalize-manifest-windows ·「Sign manifest entries (gated)」。
 # 原样抽自 workflow 内嵌 bash；门控（HAS_UPDATE_KEY + manifest.json 存在）仍写在 workflow 的 if: 里。
 #
 # 输入（显式）：
@@ -7,7 +7,9 @@
 #   UPDATE_SIGNING_KEY  tauri signer 私钥（只在本步 env 里出现）
 #   RUNNER_TEMP         runner 每 job 的临时目录
 #   artifacts/**（上一步 compose-desktop.sh 的产出 + 下载的产物）
-# 输出：产物旁的 .sig；test tag 的 manifest.json、两份分端清单的 signature 字段。
+# 输出：产物旁的 .sig；test tag 的 manifest.json、各分端清单的 signature 字段。
+# #788②：Windows 安装包与 manifest-windows.json 走同一把密钥、同一个 signer——哪个 job
+# 调用，就只签这个 job 里在场的产物与清单（不在场的端一律跳过）。
 set -euo pipefail
 : "${TAG:?TAG 未设置（job env）}"
 : "${UPDATE_SIGNING_KEY:?UPDATE_SIGNING_KEY 未设置（本步 env）}"
@@ -28,7 +30,8 @@ mkdir -p "$SIGS"
 # 这里按「没有这一端」处理——该不该有，已由上一步的 mac 门禁判过。
 APK_PATH=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' 2>/dev/null | head -1 || true)
 MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app.tar.gz' 2>/dev/null | head -1 || true)
-for f in "$APK_PATH" "$MAC_UPD"; do
+WIN_EXE=$(find artifacts/windows-x64-installer -maxdepth 1 -name 'P-Pass_*_x64-setup.exe' 2>/dev/null | head -1 || true)
+for f in "$APK_PATH" "$MAC_UPD" "$WIN_EXE"; do
   [ -f "$f" ] || continue
   # pin 版本，与 desktop pnpm-lock 的 @tauri-apps/cli@2.11.4 一致
   npx -y @tauri-apps/cli@2.11.4 signer sign -f "$KEY" -p "" "$f"
@@ -36,7 +39,7 @@ for f in "$APK_PATH" "$MAC_UPD"; do
 done
 # UPD-13（#660）：**正式版跳过**——那份是冻结件，签名已随文件冻结；
 # 用本次资产的 .sig 去重签会把 0.9.0 的签名覆盖成对不上字节的新签名。
-if [[ "$TAG" == *-test.* ]]; then
+if [[ "$TAG" == *-test.* ]] && [ -f artifacts/manifest.json ]; then
   node tools/make-update-manifest.mjs \
     --sign artifacts/manifest.json --sig-dir "$SIGS"
 fi
@@ -48,4 +51,8 @@ fi
 if [ -f artifacts/manifest-macos.json ]; then
   node tools/make-update-manifest.mjs \
     --sign artifacts/manifest-macos.json --sig-dir "$SIGS"
+fi
+if [ -f artifacts/manifest-windows.json ]; then
+  node tools/make-update-manifest.mjs \
+    --sign artifacts/manifest-windows.json --sig-dir "$SIGS"
 fi
