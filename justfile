@@ -285,6 +285,11 @@ android-fgs-quota *args:
 ios-gen:
   cd apps/ios && xcodegen generate
 
+# iOS i18n（#316）：assets/i18n/*.json 逐字节拷进 apps/ios/PPass/Resources/i18n/。
+# 改 i18n 要同步四个消费者（清单见 apps/ios/PPass/I18n/DiagText.swift）；--check 只比较不拷。
+ios-sync-i18n *args:
+  bash tools/ios/sync-i18n.sh {{args}}
+
 # iOS 设计 token（#344）：assets/design/tokens.json → apps/ios/PPass/Design/Tokens.generated.swift。
 # 改了 tokens.json 就跑一次并提交生成物；ci-ios 用 --check 逐字节比对，不同步就红。
 ios-tokens:

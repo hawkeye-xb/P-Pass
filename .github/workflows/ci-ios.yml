@@ -97,6 +97,11 @@ jobs:
       - name: Design tokens in sync with assets/design/tokens.json
         run: python3 tools/ios/gen-tokens.py --check
 
+      # #316：i18n 第四个消费者——iOS 逐字节副本。这里是不需要模拟器的快速比对；
+      # I18nDriftTests（App 测试里）比的是构建出来的 bundle，两道门互相独立。
+      - name: i18n bundled copy in sync with assets/i18n
+        run: tools/ios/sync-i18n.sh --check
+
       - name: No system default colours in app sources
         run: tools/ios/check-no-system-colors.sh
 
