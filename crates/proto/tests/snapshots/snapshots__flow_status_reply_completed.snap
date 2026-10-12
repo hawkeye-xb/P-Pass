@@ -1,0 +1,15 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "state": "completed",
+  "receipt": {
+    "queue_sequence": 1790574682018,
+    "receipt_id": "460400000000000000000000000000000000000000000000000000000000510f",
+    "pairing_epoch": "epoch-7",
+    "lease_token": "lease-1790574682018",
+    "content_hash": "e0635a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a398c"
+  },
+  "task_running": false
+}

@@ -1,0 +1,27 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "events": [
+    {
+      "event_id": "8f14e45f-ceea-467f-a8f0-6f2c3b5d9a10",
+      "kind": "flow.item.confirmed",
+      "round_id": "c9f0f895-fb98-4b91-8d6c-1f2e3d4c5b6a",
+      "occurred_at_ms": 1790574700000,
+      "payload": {
+        "itemRef": "media:30333",
+        "queueSequence": "1790574682018",
+        "sourceVersion": "1790569136:30333"
+      }
+    },
+    {
+      "event_id": "45c48cce-2e2d-4fbd-9d7a-3b2c1d0e9f8a",
+      "kind": "flow.round.controlled",
+      "occurred_at_ms": 1790574800000,
+      "payload": {
+        "action": "pause"
+      }
+    }
+  ]
+}
