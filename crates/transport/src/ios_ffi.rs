@@ -280,12 +280,12 @@ impl From<ActiveTransferStatus> for TransferStatus {
         let ms = |d: Option<Duration>| d.map(|d| d.as_millis() as u64);
         match status {
             ActiveTransferStatus::NoLease => TransferStatus::NoLease,
-            ActiveTransferStatus::Completed { hash } => TransferStatus::Completed {
-                hash: hex32(&hash),
-            },
-            ActiveTransferStatus::Aborted { hash } => TransferStatus::Aborted {
-                hash: hex32(&hash),
-            },
+            ActiveTransferStatus::Completed { hash } => {
+                TransferStatus::Completed { hash: hex32(&hash) }
+            }
+            ActiveTransferStatus::Aborted { hash } => {
+                TransferStatus::Aborted { hash: hex32(&hash) }
+            }
             ActiveTransferStatus::InProgress {
                 connected,
                 idle_for,
@@ -350,7 +350,10 @@ impl Provider {
             hash: hex32(&import.hash),
             size: import.size,
             by_reference: import.by_reference,
-            fallback: import.fallback.map(ImportFallback::as_str).map(str::to_owned),
+            fallback: import
+                .fallback
+                .map(ImportFallback::as_str)
+                .map(str::to_owned),
             detail: import.detail,
         })
     }
@@ -513,7 +516,8 @@ impl CtrlClient {
         let params: serde_json::Value = if params_json.trim().is_empty() {
             serde_json::json!({})
         } else {
-            serde_json::from_str(&params_json).map_err(|error| invalid(format!("params: {error}")))?
+            serde_json::from_str(&params_json)
+                .map_err(|error| invalid(format!("params: {error}")))?
         };
         let request = proto::Req {
             id: self.request_id(),
@@ -538,12 +542,18 @@ impl CtrlClient {
                 msg: format!("{} exceeded {} ms", request.method, deadline.as_millis()),
             })??
             .ok_or_else(|| FfiError::Transport {
-                msg: format!("{}: daemon closed the stream without a reply", request.method),
+                msg: format!(
+                    "{}: daemon closed the stream without a reply",
+                    request.method
+                ),
             })?;
         let resp: proto::Resp = proto::codec::decode(&reply)?;
         if resp.id != request.id {
             return Err(FfiError::Transport {
-                msg: format!("reply id {:?} does not match request {:?}", resp.id, request.id),
+                msg: format!(
+                    "reply id {:?} does not match request {:?}",
+                    resp.id, request.id
+                ),
             });
         }
         serde_json::to_string(&resp).map_err(|error| FfiError::Transport {
