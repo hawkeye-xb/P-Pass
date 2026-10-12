@@ -2,6 +2,7 @@
 
 > 正式发版前的回归唯一入口。执行者默认是 agent：拿到任意一台 macOS（Apple Silicon）
 > 和一台 USB 调试已授权的 Android 手机，照本文从 §2 走到 §7 即可产出一份回归报告。
+> 桌面端是 Windows 时，§2–§7 照走，凡是 macOS 专属的命令按 [§9](#9-windows-桌面变体) 替换，并加跑 §9 的 W 系列用例。
 > 用例细节的历史出处：[live-acceptance-checklist.md](live-acceptance-checklist.md)、
 > [dogfood-manual-cases.md](dogfood-manual-cases.md)、
 > [dogfood-week-cases.md](../product/dogfood-week-cases.md)、
@@ -175,3 +176,74 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 - [ ] `manifest-android.json` 的 `version` 等于该 tag 下 `release/versions.json` 的 `android`，`manifest-macos.json` 的 `version` 等于其 `desktop`（正式版两端版本号各自独立，不等于日期 tag 名）；URL 指向本次 Release。
 - [ ] stable manifest 不含任何 `-test.` 版本（upgrade-compat D 格）。
 - [ ] 一台停在上一个正式版的设备能在 App 内看到更新提示。
+
+## 9. Windows 桌面变体
+
+桌面端换成一台 Windows 10/11 x64 时，§0 的五项保证、§1 的分工、§4 的用例顺序和 §6 的通过标准都不变。本节只写**和 macOS 不一样的地方**：先给出要替换的命令，再列出 Windows 独有的 W 系列用例。
+
+agent 在 Git Bash 里执行；凡是要把 `/S`、`/F` 这类斜杠参数传给 Windows 原生程序的命令，都用 PowerShell 跑，MSYS 会把它们改写成路径。
+
+### 9.1 基线版本
+
+在 Windows 正式发布之前（#788），Latest 正式版里**没有** Windows 安装包。这时 R0 的「上一个正式版」改用**早于候选、且带 `_x64-setup.exe` 的最近一个 test tag**：
+
+```bash
+gh release list -R "$REPO" -L 30 --json tagName -q '.[].tagName' | grep -- '-test\.' |
+  while read -r t; do gh release view "$t" -R "$REPO" --json assets -q '.assets[].name' | grep -q '_x64-setup\.exe$' && echo "$t"; done
+```
+
+从输出里取排在候选之后的第一个。Windows 正式发布之后，就和 macOS 一样用 Latest。
+
+### 9.2 §3 预检的替换
+
+1. **工具链**：Windows 上的 `python3` 常是微软商店的占位程序（运行后退出码 49，没有任何输出）。准备一个 shim 放到 `PATH` 最前，内容是 `exec "/c/Program Files/Python39/python" "$@"`，按本机的 Python 路径改。注意 `PATH` 里的目录要写成 `/c/...` 这种形式，写成 `C:/...` 时冒号会把它切断。`sqlite3` 用 Android SDK `platform-tools` 里自带的那一份即可。
+2. **产物校验**：
+   - `sha256sum` 算出的候选 `P-Pass_<版本>_x64-setup.exe` 哈希，要同时等于 `SHA256SUMS-windows-x64` 里的值和 `manifest-windows.json` 里 `platforms."windows-x86_64".sha256` 的值。
+   - 在 PowerShell 里跑 `Get-AuthenticodeSignature <exe>`。签名接入（#846）之前，结果是 `NotSigned`，记进报告，**不阻塞**。接入之后必须是 `Valid`，签名者是 SignPath 签发的证书，否则阻塞。
+3. **daemon 发现**：
+
+   ```bash
+   APPDIR="$LOCALAPPDATA/com.p-pass.desktop"            # 平台数据目录（DESK-24 #173 之后）
+   CONF="$APPDIR/config.toml"
+   # data_dir 可能是 TOML 字面串 '…'（反斜杠原样），也可能是基本串 "…"（反斜杠成对转义）
+   DATA_DIR=$(cygpath -u "$(sed -n "s/^data_dir *= *[\"']\(.*\)[\"']\$/\1/p" "$CONF" | sed 's/\\\\/\\/g')")
+   DAEMON_LOG="$APPDIR/logs/daemon.log"
+   SOCK=$(sed -n 1p "$DATA_DIR/ipc.token"); TOKEN=$(sed -n 2p "$DATA_DIR/ipc.token")
+   source tools/ipc-lib.sh   # Windows 上走命名管道 \\.\pipe\<SOCK>
+   ipc status | jq '.result | {version, state, photo_count, pid, exe_path}'
+   ```
+
+4. **桌面机属性**：专用测试机可以用 `tools/windows/reset-ppass-env.ps1 -Uninstall` 清到出厂状态，先加 `-DryRun` 看一遍会删什么。日常机的约束和 §3 第 5 条相同。
+
+### 9.3 §4 用例的替换
+
+| 用例 | Windows 上的做法 | 预期 |
+|---|---|---|
+| R0.2 / R1.2 安装 | PowerShell：`Start-Process <setup.exe> -ArgumentList '/S' -Wait`。安装器的 PREINSTALL 钩子会先结束 `ppf-daemon.exe` 和 `p-pass-desktop.exe`。静默安装**不会**自动启动 App，装完要 `Start-Process "$env:LOCALAPPDATA\P-Pass\p-pass-desktop.exe"`，daemon 由桌面壳拉起（已经配置过的机器靠自愈拉起，最长约 60 秒） | `ipc status` 的 `version` 等于安装包版本，`exe_path` 位于 `%LOCALAPPDATA%\P-Pass\` 下 |
+| R0.3 向导 | 同 macOS，由人来点。默认库目录是 `图片\P-Pass 家庭照片库`，路径里带中文，正好覆盖非 ASCII 路径 | 三步走完 |
+| R1.4 桌面版本 | 读 `HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass` 的 `DisplayVersion`，或者 `p-pass-desktop.exe` 的 `VersionInfo.ProductVersion` | 和 `ipc status` 的 `version`、手机端版本号一致 |
+| R1.6 桌面应用内更新 | 打开候选版桌面端，会弹出系统对话框「发现新版本 …，是否下载并安装？」，人点「确定」即可。人在对话里授权后，agent 也可以给对话框里的「确定」按钮发 `BM_CLICK` 代点。同时跑 W1 盯窗口 | 安装器进度窗出现后桌面端自动重启；`DisplayVersion` 和 `ipc status` 的 `version` 都变成下一跳版本，`pid` 换新（更新后 daemon 换新版，#788 第 4 项） |
+| R3.2 崩溃恢复 | PowerShell：`Stop-Process -Id <ipc status 的 pid> -Force` | **桌面壳在跑（包括关到托盘）时**：60 秒左右的对账周期内自愈拉起。**桌面壳没在跑时**：Windows 没有 launchd 那样的服务管理器，要等到下次登录或者打开 App 才会恢复。这是已登记的架构缺口 #746，报告里标「已知限制」，不算失败 |
+| R3.3 / R4.1 停服务 | 先写标记 `"$APPDIR/desktop-user-stopped"`，再按 pid 执行 `Stop-Process -Force`。等 90 秒（比自愈周期长）后确认进程仍然停着。恢复时删掉标记，再打开 App 或等下一次自愈 | 同 macOS |
+| R5.1 日志 | `$DAEMON_LOG` 见 §9.2 | 同 macOS |
+| R6.1 照片墙 | 「在 Finder 中显示」换成「在资源管理器中显示」 | 资源管理器打开，并选中原文件 |
+| R6.4 首次打开 | 用浏览器下载候选安装包，双击运行 | 签名接入之前：SmartScreen 弹出「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」后能装上，记进报告。签名接入之后：发布者显示为签名证书的主体，不出现「未知发布者」 |
+| §7 清理 | 测试照片移到回收站，不做硬删除：PowerShell 里用 `[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile(<path>, 'OnlyErrorDialogs', 'SendToRecycleBin')`，先 `Add-Type -AssemblyName Microsoft.VisualBasic` | — |
+
+### 9.4 W 系列：Windows 独有的用例
+
+| ID | 执行 | 步骤 | 预期 | 证据 |
+|---|---|---|---|---|
+| W1 | agent | 先在另一个 PowerShell 里起 `tools/windows/watch-new-windows.ps1 -Seconds <N>`，再依次触发：静默安装、首次启动、R1.6 应用内更新、R3.2 自愈、R3.3 停止服务。脚本每 5 毫秒扫描一次新出现的可见顶层窗口。不要拿「有没有 conhost」当判据，带 `CREATE_NO_WINDOW` 启动的进程也有隐藏的 conhost | 脚本退出码 0，没有任何 `ConsoleWindowClass` / `CASCADIA_HOSTING_WINDOW_CLASS` 窗口（#168 / #787 / #814 的回归） | 脚本输出 |
+| W2 | agent | 查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下名为 `P-Pass` 的值 | 指向 `%LOCALAPPDATA%\P-Pass\ppf-daemon.exe`，就是当前安装的那一份 | `reg query` 输出 |
+| W3 | agent | 安装时 daemon 正在跑：不先停服务，直接静默覆盖安装候选包 | 安装成功，没有「文件被占用」；装完打开 App 后 daemon 是新版本 | 退出码 + `ipc status` |
+| W4 | agent | 备份进行中，用 `powercfg /requests` 查唤醒声明（要在管理员终端里跑，由人执行，或者在人授权后提权跑一次） | `SYSTEM` 一栏列出 `ppf-daemon.exe`；备份完成后消失（NET-26 #419 传输期间持有唤醒）。#804 落地之后改成：插着电时一直列出 | 命令输出 |
+| W5 | agent | 收尾时执行 `"%LOCALAPPDATA%\P-Pass\uninstall.exe" /S`，然后重新安装候选版 | 卸载后照片库目录和 `config.toml` 都还在；重装后不用重新配对，照片不重传 | 目录列表 + 对账 |
+| W6 | user | 收尾批次：断开手机（R4.1）时，桌面右下角弹出系统通知 | 弹出 toast，文案完整（DESK-17 #166） | 截图 |
+
+W3 和 W5 都会改动安装状态，放在 §4 全部跑完、§7 清理之前做。
+
+### 9.5 本节不覆盖的
+
+- **登录 / 注销周期**：开机自启依赖登录时 `explorer.exe` 读取 Run 键，agent 没法在同一个会话里完成注销再登录，交给狗粮期覆盖。
+- **点原生窗口**：Tauri 窗口里的按钮 agent 点不了；只有系统对话框（`#32770`）能用 `BM_CLICK` 代点。界面上的操作都归 `user`。
