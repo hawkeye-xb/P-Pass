@@ -44,6 +44,14 @@ public enum MediaOrder {
     public static func precedes(_ a: String, _ b: String) -> Bool {
         a.utf8.lexicographicallyPrecedes(b.utf8)
     }
+
+    /// 字节相等（`String ==` 认为 `"é"` 与 `"e\u{0301}"` 相等，SQLite 认为是两个 id）。
+    public static func same(_ a: String, _ b: String) -> Bool {
+        a.utf8.elementsEqual(b.utf8)
+    }
+
+    /// 放进 Set / Dictionary 的键：按字节判等（同上）。
+    public static func key(_ a: String) -> [UInt8] { Array(a.utf8) }
 }
 
 /// 一行 order。[id] 永不复用，填进协议的 `queue_sequence`（`lease_token` = `lease-<id>`）。
