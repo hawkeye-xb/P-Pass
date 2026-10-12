@@ -9,6 +9,11 @@
 #                                         Headers 里是 transportFFI.h + module.modulemap
 #   <输出目录>/swift/transport.swift       UniFFI 生成的 Swift 绑定（import transportFFI）
 #
+# 链接方（App target / SwiftPM target）必须额外链接的系统框架：
+#   Network.framework（必需：iroh 依赖的 netdev 用 nw_path_* / nw_interface_* 取网关与网卡，
+#   不链会报 Undefined symbols _nw_*）、SystemConfiguration、Security。
+#   参照 apps/ios/TransportFFITests/Package.swift 的 linkerSettings。
+#
 # - 最低系统 iOS 16（与 apps/ios/Config/Base.xcconfig 一致），用 IPHONEOS_DEPLOYMENT_TARGET
 #   传给 rustc 与 cc，两个切片同一个值。
 # - 平台选择只靠 `--features ios-ffi`，crates/ 里不写 target_os（arch-check B.2）。

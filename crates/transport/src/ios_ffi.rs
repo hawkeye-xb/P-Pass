@@ -7,7 +7,8 @@
 //!   JNI binding wraps ([`crate::provider::BlobsProvider`]).
 //! - BLAKE3: [`blake3_hex`], [`blake3_file_hex`], [`Blake3Hasher`].
 //! - `crates/proto` framing: [`encode_frame_json`] / [`decode_frame_json`]
-//!   (Swift only handles JSON), plus the typed [`FlowFetchRequest`] round trip.
+//!   (Swift only handles JSON), plus a typed `crates/proto` decode of `FlowFetchRequest`
+//!   ([`ProtoFlowFetchRequest`]) that tests use to check Swift's JSON field for field.
 //! - [`CtrlClient`]: a minimal control-plane client (`ppf/ctrl/1`), so the app
 //!   does not need iroh-ffi's own Swift XCFramework — two Rust static
 //!   libraries in one app means two copies of std and clashing symbols.
@@ -160,11 +161,13 @@ pub fn decode_frame_json(frame: Vec<u8>) -> Result<String, FfiError> {
     serde_json::to_string(&value).map_err(invalid)
 }
 
-/// Mirror of [`proto::FlowFetchRequest`] for the FFI boundary. Conversions
+/// Mirror of [`proto::FlowFetchRequest`] for the FFI boundary. Named
+/// `Proto…` so it never shadows the app's own Swift `FlowFetchRequest`
+/// (PPassCore's Codable type, #890) when both modules are imported. Conversions
 /// in both directions destructure every field, so a field added to the
 /// proto struct fails to compile here instead of silently dropping.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
-pub struct FlowFetchRequest {
+pub struct ProtoFlowFetchRequest {
     pub queue_sequence: u64,
     pub pairing_epoch: String,
     pub lease_token: String,
@@ -176,9 +179,9 @@ pub struct FlowFetchRequest {
     pub size_bytes: i64,
 }
 
-impl From<FlowFetchRequest> for proto::FlowFetchRequest {
-    fn from(value: FlowFetchRequest) -> Self {
-        let FlowFetchRequest {
+impl From<ProtoFlowFetchRequest> for proto::FlowFetchRequest {
+    fn from(value: ProtoFlowFetchRequest) -> Self {
+        let ProtoFlowFetchRequest {
             queue_sequence,
             pairing_epoch,
             lease_token,
@@ -203,7 +206,7 @@ impl From<FlowFetchRequest> for proto::FlowFetchRequest {
     }
 }
 
-impl From<proto::FlowFetchRequest> for FlowFetchRequest {
+impl From<proto::FlowFetchRequest> for ProtoFlowFetchRequest {
     fn from(value: proto::FlowFetchRequest) -> Self {
         let proto::FlowFetchRequest {
             queue_sequence,
@@ -216,7 +219,7 @@ impl From<proto::FlowFetchRequest> for FlowFetchRequest {
             capture_at_ms,
             size_bytes,
         } = value;
-        FlowFetchRequest {
+        ProtoFlowFetchRequest {
             queue_sequence,
             pairing_epoch,
             lease_token,
@@ -232,7 +235,7 @@ impl From<proto::FlowFetchRequest> for FlowFetchRequest {
 
 /// [request] as one `proto::codec` frame, serialized by `crates/proto`.
 #[uniffi::export]
-pub fn encode_flow_fetch_request(request: FlowFetchRequest) -> Result<Vec<u8>, FfiError> {
+pub fn encode_flow_fetch_request(request: ProtoFlowFetchRequest) -> Result<Vec<u8>, FfiError> {
     Ok(proto::codec::encode(&proto::FlowFetchRequest::from(
         request,
     ))?)
@@ -240,7 +243,7 @@ pub fn encode_flow_fetch_request(request: FlowFetchRequest) -> Result<Vec<u8>, F
 
 /// One frame decoded by `crates/proto` as a `FlowFetchRequest`.
 #[uniffi::export]
-pub fn decode_flow_fetch_request(frame: Vec<u8>) -> Result<FlowFetchRequest, FfiError> {
+pub fn decode_flow_fetch_request(frame: Vec<u8>) -> Result<ProtoFlowFetchRequest, FfiError> {
     Ok(proto::codec::decode::<proto::FlowFetchRequest>(&frame)?.into())
 }
 
@@ -610,8 +613,8 @@ mod tests {
         std::future::poll_fn(|cx| Pin::new(&mut *s).poll_next(cx)).await
     }
 
-    fn sample() -> FlowFetchRequest {
-        FlowFetchRequest {
+    fn sample() -> ProtoFlowFetchRequest {
+        ProtoFlowFetchRequest {
             queue_sequence: 42,
             pairing_epoch: "epoch-7".into(),
             lease_token: "lease-abc".into(),
@@ -628,7 +631,7 @@ mod tests {
     fn flow_fetch_request_round_trips_through_proto() {
         let frame = encode_flow_fetch_request(sample()).unwrap();
         let decoded: proto::FlowFetchRequest = proto::codec::decode(&frame).unwrap();
-        assert_eq!(FlowFetchRequest::from(decoded), sample());
+        assert_eq!(ProtoFlowFetchRequest::from(decoded), sample());
         assert_eq!(decode_flow_fetch_request(frame).unwrap(), sample());
     }
 

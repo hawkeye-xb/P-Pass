@@ -12,6 +12,10 @@ let package = Package(
     products: [
         .library(name: "PPassTransport", targets: ["PPassTransport"]),
     ],
+    dependencies: [
+        // 只给测试用：PPassCore（#890）的 Codable FlowFetchRequest 编出的 JSON 要能被 crates/proto 解码。
+        .package(path: "../Packages/PPassCore"),
+    ],
     targets: [
         .binaryTarget(name: "TransportFFI", path: "Generated/TransportFFI.xcframework"),
         // UniFFI 生成的 Swift 绑定（import transportFFI），不手写一行。
@@ -27,7 +31,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TransportFFITests",
-            dependencies: ["PPassTransport"],
+            dependencies: ["PPassTransport", .product(name: "PPassCore", package: "PPassCore")],
             path: "Tests/TransportFFITests"
         ),
     ]

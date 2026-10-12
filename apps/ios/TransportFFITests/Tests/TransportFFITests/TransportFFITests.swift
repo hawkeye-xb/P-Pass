@@ -1,6 +1,7 @@
 // IOS-06（#313）：Swift 经 XCFramework 调 Rust 导出的 BLAKE3 / proto 编解码 / provider /
 // 控制面客户端。本文件里没有任何 BLAKE3 或帧编解码的 Swift 实现——只有输入数据的生成与比对。
 import Foundation
+import PPassCore
 import PPassTransport
 import XCTest
 
@@ -76,7 +77,7 @@ final class TransportFFITests: XCTestCase {
     // MARK: - proto 编解码
 
     func testFlowFetchRequestEncodedThroughProtoDecodesFieldForField() throws {
-        let request = FlowFetchRequest(
+        let request = ProtoFlowFetchRequest(
             queueSequence: 9_007_199_254_740_993,  // > 2^53：确认 u64 不经过浮点
             pairingEpoch: "epoch-2026-10-12",
             leaseToken: "lease-7f3a",
@@ -116,6 +117,34 @@ final class TransportFFITests: XCTestCase {
              "media_type", "provider", "capture_at_ms", "size_bytes"])
         XCTAssertEqual(json["file_name"] as? String, request.fileName)
         print("FlowFetchRequest frame \(frame.count) bytes, fields equal ✓")
+    }
+
+    /// App 侧真正会走的路：PPassCore 的 Codable FlowFetchRequest → JSONEncoder → Rust 的
+    /// proto 帧编码 → crates/proto 按 FlowFetchRequest 类型解码，逐字段相等。
+    func testPPassCoreFlowFetchRequestJsonDecodesInCratesProto() throws {
+        let request = PPassCore.FlowFetchRequest(
+            queueSequence: 9_007_199_254_740_993,
+            pairingEpoch: "epoch-2026-10-12",
+            leaseToken: "lease-42",
+            contentHash: String(repeating: "cd", count: 32),
+            fileName: "IMG_0002 视频.MOV",
+            mediaType: "video/quicktime",
+            provider: "blob-ticket",
+            captureAtMs: -1,
+            sizeBytes: 4_294_967_297
+        )
+        let json = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
+        let decoded = try decodeFlowFetchRequest(frame: try encodeFrameJson(json: json))
+        XCTAssertEqual(decoded.queueSequence, request.queueSequence)
+        XCTAssertEqual(decoded.pairingEpoch, request.pairingEpoch)
+        XCTAssertEqual(decoded.leaseToken, request.leaseToken)
+        XCTAssertEqual(decoded.contentHash, request.contentHash)
+        XCTAssertEqual(decoded.fileName, request.fileName)
+        XCTAssertEqual(decoded.mediaType, request.mediaType)
+        XCTAssertEqual(decoded.provider, request.provider)
+        XCTAssertEqual(decoded.captureAtMs, request.captureAtMs)
+        XCTAssertEqual(decoded.sizeBytes, request.sizeBytes)
+        print("PPassCore.FlowFetchRequest JSON → crates/proto decode, fields equal ✓")
     }
 
     func testJsonFrameRoundTripAndRejectsTruncatedFrame() throws {
