@@ -278,7 +278,7 @@ test("CLI warn-missing：set -euo pipefail 下恒退出 0（缺文件 / 参数�
 // ── release.yml 口径（原 #580 的 release.yml 源文本门禁迁移至此，意图不变） ──
 // REL-12（#711）起，组装清单的 bash 从 release.yml 抽到了 tools/release/*.sh，release.yml 只调用它们——
 // 所以口径检查的对象是「release.yml + 它调用的这些脚本」，并先确认 release.yml 真的在调它们。
-const RELEASE_STEP_SCRIPTS = ["compose-android.sh", "compose-desktop.sh"];
+const RELEASE_STEP_SCRIPTS = ["compose-android.sh", "compose-desktop.sh", "compose-windows.sh"];
 function releaseSources() {
   const wf = readFileSync(join(HERE, "..", ".github", "workflows", "release.yml"), "utf8");
   for (const s of RELEASE_STEP_SCRIPTS) {
@@ -319,7 +319,8 @@ function workflowSources() {
   };
   walk(join(root, "workflows"));
   if (existsSync(join(root, "actions"))) walk(join(root, "actions"));
-  return out;
+  // release.yml 的清单组装步骤抽成了 tools/release/ 下的脚本（REL-12）：扫描时一并算进 release.yml。
+  return out.map(([n, s]) => (n === "workflows/release.yml" ? [n, releaseSources()] : [n, s]));
 }
 
 /** 某份 workflow 源文本里违反口径的地方（空数组 = 合规）。 */

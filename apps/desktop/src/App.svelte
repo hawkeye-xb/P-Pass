@@ -915,6 +915,11 @@
   // GitHub 下载链接（302 → release-assets）不带 Access-Control-Allow-Origin，
   // Worker 带。
   const WORKER_TEST_URL = "https://update.p-pass.hawkeye-xb.com/manifest?channel=test";
+  // #788②：test 通道也走插件的应用内更新（与 stable 同一条路径，只是清单地址不同）。
+  // 清单地址是构建期写进插件配置的——release.yml 的 Windows job 在 test tag 上用
+  // `--config` 把 endpoints 换成 test-channel 的 manifest-windows.json，并在**同一处**
+  // 打开这个开关。没打开的构建（macOS 的 test 包）照旧走下面的 checkTestChannel。
+  const TEST_CHANNEL_IN_APP = import.meta.env.VITE_UPDATE_TEST_CHANNEL_IN_APP === "1";
 
   // SemVer 三段比较（与 Android UpdateChecker.isNewer 同语义）。
   // DESK-02①: 同核心预发布按数字段比较（0.3.2-test.2 > 0.3.2-test.1）——
@@ -1094,8 +1099,9 @@
     updateError = "";
     updateProgress = null;
     // REL-02: test 通道走壳内检查（Worker 源）；stable 保持原 tauri
-    // updater 路径（语义不动）。
-    if (updateChannel === "test") {
+    // updater 路径（语义不动）。#788②：构建期已把 test 清单接进插件的，
+    // test 通道也走插件这条路。
+    if (updateChannel === "test" && !TEST_CHANNEL_IN_APP) {
       await checkTestChannel(manual);
       return;
     }
