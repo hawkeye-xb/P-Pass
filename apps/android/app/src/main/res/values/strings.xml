@@ -70,9 +70,9 @@
     <string name="update_failed_install">The installation didn\'t complete. Try again.</string>
     <string name="update_failed_unexpected">Something went wrong. Try again later.</string>
     <string name="update_retry">Retry</string>
-    <string name="update_ready_install">v%1$s is ready to install</string>
-    <string name="update_ready_body">Downloaded and verified. Install it now?</string>
-    <string name="update_install_now">Install now</string>
+    <string name="update_ready_install">v%1$s has been downloaded</string>
+    <string name="update_ready_body">P-Pass will close briefly to update. Open it again when it\'s done.</string>
+    <string name="update_install_now">Update now</string>
     <string name="update_installing_title">Installing…</string>
     <string name="update_installing_body">Confirm in the system prompt to finish the update.</string>
     <string name="update_close">Close</string>

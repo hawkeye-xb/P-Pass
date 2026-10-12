@@ -111,6 +111,7 @@ import com.hawkeyexb.ppass.transport.UnpairNotice
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.BucketScreen
+import com.hawkeyexb.ppass.ui.selectedExistingCount
 import com.hawkeyexb.ppass.ui.PPColor
 import com.hawkeyexb.ppass.ui.PPSize
 import com.hawkeyexb.ppass.ui.ScanScreen
@@ -216,6 +217,9 @@ fun PPassApp() {
     // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
     // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
     var mediaAccess by remember { mutableStateOf(mediaAccess(context)) }
+    // #836：每次回到前台 +1。App 外发生的变化（例如在相册 App 里删掉已选相册）要在用户切回来时重算，
+    // composition 存活期间只靠进入时算一次的 LaunchedEffect 接不住。
+    var resumeCount by remember { mutableStateOf(0) }
     // #413：「将在连上 Wi-Fi 后进行」由引擎的等待原因（WIFI）给出，这里不再另存一份排队状态。
     // Home 内 Photos/设置 tab——提到顶层是因为 Screen.Buckets 是独立的
     // 顶层 Screen，从相册选择页返回时 `is Screen.Home ->` 分支会整个
@@ -428,6 +432,7 @@ fun PPassApp() {
 
                     daysUnreachable = computeDaysUnreachable()
                     mediaAccess = mediaAccess(context)
+                    resumeCount++
                     heartbeat.start()
                     timeline.start()
                     // MOB-38（2026-08-26 真机）：**每次回到前台都补捞一次。**
@@ -776,6 +781,19 @@ fun PPassApp() {
                 }
                 Unit
             }
+            // #836：「已选相册」按已选且当前存在计数（与选相册页同源：MediaStore 里实际有的相册）。
+            // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化、每次回到前台都重算。
+            var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
+            LaunchedEffect(mediaAccess, resumeCount) {
+                selectedBucketCount = withContext(Dispatchers.IO) {
+                    val existing = if (mediaAccess == MediaAccess.FULL) {
+                        runCatching { MediaScanner(context.contentResolver).listBuckets().map { it.id }.toSet() }.getOrNull()
+                    } else {
+                        null
+                    }
+                    selectedExistingCount(BackupScopeStore(context).selectedBucketIds(), existing)
+                }
+            }
             val scope = rememberCoroutineScope()
             // NET-28: bind can now throw (timeout) — an uncaught throw in a
             // LaunchedEffect would crash Home. This is only a warm-up; every
@@ -942,9 +960,8 @@ fun PPassApp() {
                         onRepair = onRepairPairing,
                         onStorageDetailOpenChange = { storageDetailOpen = it },
                         // T6: 备份范围——「选择相册」与「发起备份」两个动作。
-                        selectedBucketCount = remember {
-                            BackupScopeStore(context).selectedBucketIds()?.size
-                        },
+                        // #836：按「已选且当前存在」计数，与选相册页同一口径。
+                        selectedBucketCount = selectedBucketCount,
                         // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
                         // 备份按钮时把挂在它身上的权限申请链一起删没了，
                         // 无权限直接进列表 = MediaStore 空查询 = 全白。
