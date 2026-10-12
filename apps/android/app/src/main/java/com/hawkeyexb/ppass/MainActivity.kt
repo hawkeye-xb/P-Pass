@@ -38,7 +38,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -778,6 +777,19 @@ fun PPassApp() {
                 }
                 Unit
             }
+            // #836：「已选相册」按已选且当前存在计数（与选相册页同源：MediaStore 里实际有的相册）。
+            // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化时重算。
+            var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
+            LaunchedEffect(mediaAccess) {
+                selectedBucketCount = withContext(Dispatchers.IO) {
+                    val existing = if (mediaAccess == MediaAccess.FULL) {
+                        runCatching { MediaScanner(context.contentResolver).listBuckets().map { it.id }.toSet() }.getOrNull()
+                    } else {
+                        null
+                    }
+                    selectedExistingCount(BackupScopeStore(context).selectedBucketIds(), existing)
+                }
+            }
             val scope = rememberCoroutineScope()
             // NET-28: bind can now throw (timeout) — an uncaught throw in a
             // LaunchedEffect would crash Home. This is only a warm-up; every
@@ -945,20 +957,7 @@ fun PPassApp() {
                         onStorageDetailOpenChange = { storageDetailOpen = it },
                         // T6: 备份范围——「选择相册」与「发起备份」两个动作。
                         // #836：按「已选且当前存在」计数，与选相册页同一口径。
-                        selectedBucketCount = produceState(
-                            initialValue = remember { BackupScopeStore(context).selectedBucketIds()?.size },
-                            mediaAccess,
-                        ) {
-                            value = withContext(Dispatchers.IO) {
-                                val existing = if (mediaAccess == MediaAccess.FULL) {
-                                    runCatching { MediaScanner(context.contentResolver).listBuckets().map { it.id }.toSet() }
-                                        .getOrNull()
-                                } else {
-                                    null
-                                }
-                                selectedExistingCount(BackupScopeStore(context).selectedBucketIds(), existing)
-                            }
-                        }.value,
+                        selectedBucketCount = selectedBucketCount,
                         // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
                         // 备份按钮时把挂在它身上的权限申请链一起删没了，
                         // 无权限直接进列表 = MediaStore 空查询 = 全白。
