@@ -48,6 +48,8 @@ on:
       - "tools/release-version.sh"
       - "tools/check-version-bump.sh"
       - "tools/test-release-version-source.sh"
+      # #894：上面的测试校验 gradle 原生库 inputs 与版本门禁安卓口径一致——gradle 改了也要跑。
+      - "apps/android/app/build.gradle.kts"
       - "tools/make-update-manifest.mjs"
       - "tools/release-notes.mjs"
       - "tools/release-notes.test.mjs"
@@ -82,6 +84,8 @@ on:
       - "tools/release-version.sh"
       - "tools/check-version-bump.sh"
       - "tools/test-release-version-source.sh"
+      # #894：上面的测试校验 gradle 原生库 inputs 与版本门禁安卓口径一致——gradle 改了也要跑。
+      - "apps/android/app/build.gradle.kts"
       - "tools/make-update-manifest.mjs"
       - "tools/release-notes.mjs"
       - "tools/release-notes.test.mjs"

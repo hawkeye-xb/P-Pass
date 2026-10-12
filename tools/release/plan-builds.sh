@@ -166,7 +166,9 @@ warn_tooling() {
     echo "::warning::${end} 本次复用 ${LATEST} 的产物，但它的构建脚本在那之后改过（$(echo "$changed" | tr '\n' ' ')）——这些改动要等 ${end} 下次涨号才会进安装包。"
   fi
 }
-[ "$ANDROID" = reuse ] && warn_tooling android tools/build-android-iroh-blobs-bridge.sh
+# #894：安卓原生库（libtransport.so）的输入也算——与 tools/check-version-bump.sh 的 ANDROID_INPUTS 同口径。
+[ "$ANDROID" = reuse ] && warn_tooling android tools/build-android-iroh-blobs-bridge.sh \
+  crates/transport Cargo.toml Cargo.lock rust-toolchain.toml
 [ "$MACOS" = reuse ] && warn_tooling macos tools/bundle-macos.sh tools/bundle-desktop-macos.sh tools/fetch-ffmpeg.sh
 
 emit android "$ANDROID"
