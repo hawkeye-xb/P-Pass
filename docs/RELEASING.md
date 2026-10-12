@@ -203,17 +203,11 @@ default** (family devices are never touched by test builds):
   `test-channel/manifest-android.json`; the desktop shell's updater plugin
   `test-channel/manifest-<platform>.json` (endpoint baked at build time by
   `tools/release/tauri-config.mjs` when the version contains `-test.`).
-  The Cloudflare Worker (`infra/workers/update`) is only read by test
-  builds from before #852; it goes away with #860.
-- **404 semantics unchanged**: a test tag left as draft (not published)
-  → no prerelease → Worker 404 → clients stay silent ("no update").
-  (A draft tag never reaches the pointer step.) Before the very first
-  test release after REL-07, `test-channel` does not exist → the file
-  404s → Worker 404 → same silent "no update". Worker 404 means *only*
-  that upstream said 404; any other upstream failure (5xx, 403/429,
-  network) → **502** (with `Retry-After` when upstream sent one),
-  `no-store`, never cached. Clients log 5xx as a *failed check*, not
-  "up to date".
+  Clients read GitHub directly; the former Cloudflare update Worker was
+  retired with #860.
+- **Drafts never reach devices**: a test tag left as draft (not published)
+  never reaches the pointer step, so the test-channel manifests keep
+  pointing at the previous test release.
 - Desktop note: since #852 a desktop test build updates in-app exactly
   like stable (updater plugin: check → download → verify → replace →
   restart); only the endpoint differs. Test builds from before #852 still
@@ -255,10 +249,6 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   nightly + tag gate.
 - `ci-android.yml` — `apps/android/** assets/i18n/**` → unit tests + APK.
 - `ci-desktop.yml` — `apps/desktop/** assets/**` → src-tauri lib tests + vite build.
-- `ci-workers.yml` — `infra/workers/**` → `test` job (update Worker
-  `node --test`, also on PRs) → wrangler deploy (push/dispatch only,
-  behind the `workers-prod` approval gate; gated on
-  `CLOUDFLARE_API_TOKEN`, skipped cleanly when absent).
 - Every workflow has `concurrency: cancel-in-progress`.
 - `release.yml` gained a `platforms` dispatch input (`android`/`macos`/
   `windows` comma list; empty = all). Tag pushes build per platform:
@@ -391,15 +381,9 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   API → 没有匿名限流，也没有 `GH_TOKEN` 要管。
   各端读自己那份：Android 读 `test-channel/manifest-android.json`；桌面壳的更新插件读
   `test-channel/manifest-<端>.json`（版本号含 `-test.` 时由 `tools/release/tauri-config.mjs`
-  在构建期写进 endpoint）。Cloudflare Worker（`infra/workers/update`）只剩 #852 之前的
-  test 包在读，随 #860 下线。
-- **404 语义不变**：test tag 留 draft 不 publish → 无 prerelease →
-  Worker 404 → 客户端静默（「无更新」）（draft 走不到指针那一步）。
-  REL-07 合入后、第一次 test 发布之前，`test-channel` 还不存在 → 文件
-  404 → Worker 404 → 同样静默无更新。Worker 的 404 **只**表示上游答
-  404；其它上游故障（5xx、403/429、网络异常）→ **502**（上游给了
-  `Retry-After` 就透传），`no-store`，绝不缓存。客户端把 5xx 记为「检查
-  失败」，不当「已是最新」。
+  在构建期写进 endpoint）。客户端直读 GitHub；原先的 Cloudflare 更新 Worker 已随 #860 下线。
+- **draft 不会到达设备**：test tag 留 draft 不 publish → 走不到指针那一步，test-channel
+  里的清单仍指向上一个 test 发布。
 - 桌面注：#852 起桌面 test 包与正式版同一条应用内更新路径（更新插件：检查 → 下载 →
   验签 → 替换 → 重启），只有清单地址不同。#852 之前的 test 包仍是打开下载页，要手动装
   一次新 test 包才能跨过来。
@@ -438,12 +422,10 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   nightly + tag 门禁。
 - `ci-android.yml`（apps/android/** assets/i18n/**）→ 单测 + APK。
 - `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + vite build。
-- `ci-workers.yml`（infra/workers/**）→ `test` job（update Worker
-  `node --test`，PR 上也跑）→ wrangler deploy（仅 push/dispatch，停在
-  `workers-prod` 审批门；CLOUDFLARE_API_TOKEN 门控，缺 secret 干净跳过）。
 - 每个 workflow 带 `concurrency: cancel-in-progress`（连续 push 取消旧 run）。
 - release.yml 加 `platforms` dispatch 输入（android/macos/windows 逗号
-  组合，留空=all）；tag push 恒全量（发布完整性不许分块）。
+  组合，留空=all）；tag push 按端构建：正式 tag 看版本号（#838；Windows 未上正式版、
+  不构建），test tag 看改动路径（#852）。
 - R2 镜像：**2026-08-25 已撤除**。资产只从 GitHub release 下载提供，
   update manifest 恒指 GitHub 直链。撤除原因是耦合方向错（manifest 在
   镜像之前就写死镜像地址，镜像失败则带着坏 manifest 出门且签名无法手改），
@@ -470,6 +452,4 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 - **触发节奏**：ci-rust/ci-android/ci-desktop/site build 随 push（paths 门控）；
   e2e 走 nightly 03:30 + tag + PR 标签，也可 dispatch；artifacts（dogfood
   裸二进制）仅 Linux 自动，macOS/Windows 只手动；release 走 tag `v*` 或
-  dispatch；ci-workers 随 infra/workers/** push 或 dispatch。
-- **ci-workers 审批门**：`environment: workers-prod` 让部署 job 停在
-  Waiting，不占 runner、不计费，挂 30 天自动作废。
+  dispatch。

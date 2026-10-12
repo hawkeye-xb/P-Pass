@@ -315,10 +315,9 @@ ver = conf.get("version", "")
 rec = Path(os.environ["DRYRUN_REC"])
 with open(rec / f"shell-{sub}", "a") as f:
     f.write(ver + "\n")
-# #788②：test 包的插件 endpoint 与前端开关必须同一处设（记下来给断言用）
+# 记下插件 endpoint（test 包读 test-channel 分端清单）给断言用
 (rec / f"shell-{sub}-updater.json").write_text(json.dumps({
     "endpoints": conf.get("plugins", {}).get("updater", {}).get("endpoints"),
-    "vite_test_in_app": os.environ.get("VITE_UPDATE_TEST_CHANNEL_IN_APP", ""),
 }))
 bundle_dir = Path("src-tauri/target/release/bundle")
 if sub == "bundle":
@@ -400,23 +399,23 @@ def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
                 upd_file = rec / f"shell-{sub}-updater.json"
                 upd = json.loads(upd_file.read_text()) if upd_file.exists() else {}
                 if "-test." in tag:
-                    ck(upd.get("endpoints") == [TEST_CHANNEL_MACOS_MANIFEST] and upd.get("vite_test_in_app") == "1",
-                       f"#852 {job_id} @ {tag}：test 包的更新 endpoint（tauri {sub}）= test-channel/manifest-macos.json，前端开关同时打开",
+                    ck(upd.get("endpoints") == [TEST_CHANNEL_MACOS_MANIFEST],
+                       f"#852 {job_id} @ {tag}：test 包的更新 endpoint（tauri {sub}）= test-channel/manifest-macos.json",
                        json.dumps(upd))
                 else:
-                    ck(upd_file.exists() and upd.get("endpoints") is None and upd.get("vite_test_in_app") == "",
-                       f"#852 {job_id} @ {tag}：正式包不覆盖 endpoint（tauri {sub}，用 tauri.conf.json），前端开关不开",
+                    ck(upd_file.exists() and upd.get("endpoints") is None,
+                       f"#852 {job_id} @ {tag}：正式包不覆盖 endpoint（tauri {sub}，用 tauri.conf.json）",
                        json.dumps(upd))
         else:
             upd_file = rec / "shell-build-updater.json"
             upd = json.loads(upd_file.read_text()) if upd_file.exists() else {}
             if "-test." in tag:
-                ck(upd.get("endpoints") == [TEST_CHANNEL_WINDOWS_MANIFEST] and upd.get("vite_test_in_app") == "1",
-                   f"#788② {job_id} @ {tag}：test 包的更新 endpoint = test-channel/manifest-windows.json，前端开关同时打开",
+                ck(upd.get("endpoints") == [TEST_CHANNEL_WINDOWS_MANIFEST],
+                   f"#788② {job_id} @ {tag}：test 包的更新 endpoint = test-channel/manifest-windows.json",
                    json.dumps(upd))
             else:
-                ck(upd.get("endpoints") is None and upd.get("vite_test_in_app") == "",
-                   f"#788② {job_id} @ {tag}：正式包不覆盖 endpoint（用 tauri.windows.conf.json），前端开关不开",
+                ck(upd.get("endpoints") is None,
+                   f"#788② {job_id} @ {tag}：正式包不覆盖 endpoint（用 tauri.windows.conf.json）",
                    json.dumps(upd))
 
 

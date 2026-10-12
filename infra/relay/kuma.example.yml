@@ -39,9 +39,3 @@ monitors:
     interval: 300
     retryInterval: 60
     maxretries: 3
-  - name: "update-manifest"
-    type: http
-    url: "https://update.p-pass.hawkeye-xb.com/manifest.json"
-    interval: 300
-    retryInterval: 60
-    maxretries: 3

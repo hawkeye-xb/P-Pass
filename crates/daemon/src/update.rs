@@ -1,8 +1,9 @@
 //! Update manifest parsing + verification (T-062).
 //!
-//! The manifest is a static file served at `<update-endpoint>/manifest.json`
-//! (Cloudflare Pages or a Worker). Format + signing convention: see
-//! `infra/workers/update/README.md`. In short:
+//! The manifest is a static file served from the GitHub release downloads
+//! (`manifest-<platform>.json`; the test channel reads the rolling
+//! `test-channel` prerelease). Produced and signed by
+//! `tools/make-update-manifest.mjs`; see `docs/RELEASING.md` §3.5–3.6. In short:
 //!
 //! - `manifest.json` — `{version, notes, pub_date, platforms: {<os>-<arch>: {url, sha256, signature}}}`
 //! - `manifest.json.sig` — detached Ed25519 signature over the EXACT bytes of

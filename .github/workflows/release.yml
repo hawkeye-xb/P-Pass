@@ -593,10 +593,6 @@ jobs:
           # #852：--config 由 macOS / Windows 共用的 tools/release/tauri-config.mjs 生成（macOS 在
           # tools/bundle-desktop-macos.sh 里调同一份）。
           CONFIG=$(node tools/release/tauri-config.mjs windows "$PPF_BUILD_VERSION")
-          # 前端开关照旧随 test 版本打开（#852 起前端已不读它，留待 update Worker 下线时一并清理）。
-          if [[ "$PPF_BUILD_VERSION" == *-test.* ]]; then
-            export VITE_UPDATE_TEST_CHANNEL_IN_APP=1
-          fi
           echo "tauri --config: $CONFIG"
           cd apps/desktop
           pnpm install --frozen-lockfile
