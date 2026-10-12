@@ -110,6 +110,18 @@ class GoldenDriftTest {
     @Test fun flowSupersedeReplaced() = check("snapshots__flow_supersede_reply_replaced", FlowSupersedeReply.serializer())
     @Test fun flowSupersedeRefused() = check("snapshots__flow_supersede_reply_refused", FlowSupersedeReply.serializer())
 
+    // #890：Flow 逐张交付补齐的 golden（iOS PPassCore 读同一批文件）。
+    @Test fun helloPairedWithHealth() = check("snapshots__hello_paired_with_health", Hello.serializer())
+    @Test fun helloHealthFreeBytesUnknown() = check("snapshots__hello_health_free_bytes_unknown", Hello.serializer())
+    @Test fun flowFetchRequest() = check("snapshots__flow_fetch_request", FlowFetchRequest.serializer())
+    @Test fun flowTupleRef() = check("snapshots__flow_tuple_ref", FlowTupleRef.serializer())
+    @Test fun flowCompletionReceipt() = check("snapshots__flow_completion_receipt", FlowCompletionReceipt.serializer())
+    @Test fun flowStatusCompleted() = check("snapshots__flow_status_reply_completed", FlowStatusReply.serializer())
+    @Test fun flowStatusActive() = check("snapshots__flow_status_reply_active", FlowStatusReply.serializer())
+    @Test fun flowAuditSubmit() = check("snapshots__flow_audit_submit", FlowAuditSubmit.serializer())
+    @Test fun flowAuditAccepted() = check("snapshots__flow_audit_accepted", FlowAuditAccepted.serializer())
+    @Test fun backupPresenceQuery() = check("snapshots__backup_presence_query", BackupPresenceQuery.serializer())
+
     /** Every JSON-shaped snapshot must be covered — a new Rust message
      *  without a Kotlin mirror fails here, not in the field. */
     @Test
@@ -133,6 +145,12 @@ class GoldenDriftTest {
             "snapshots__diag_status", "snapshots__upload_header",
             "snapshots__flow_supersede_request", "snapshots__flow_supersede_reply_replaced",
             "snapshots__flow_supersede_reply_refused",
+            "snapshots__hello_paired_with_health", "snapshots__hello_health_free_bytes_unknown",
+            "snapshots__flow_fetch_request", "snapshots__flow_tuple_ref",
+            "snapshots__flow_completion_receipt",
+            "snapshots__flow_status_reply_completed", "snapshots__flow_status_reply_active",
+            "snapshots__flow_audit_submit", "snapshots__flow_audit_accepted",
+            "snapshots__backup_presence_query",
         )
         val onDisk = snapshotsDir.listFiles()!!
             .map { it.name.removeSuffix(".snap") }

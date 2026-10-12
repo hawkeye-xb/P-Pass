@@ -339,6 +339,145 @@ fn snapshot_flow_supersede() {
     snapshot_message("flow_supersede_reply_refused", &refused);
 }
 
+// ── #890: Flow per-item delivery goldens ────────────
+//
+// The phone mirrors (Android `GoldenDriftTest`, iOS `PPassCore`
+// `GoldenContractTests`) decode these exact files. New samples only — every
+// sample above stays byte-identical.
+
+#[test]
+fn snapshot_hello_paired_with_health() {
+    // A paired Desktop's hello reply: pairing_epoch + health present.
+    let hello = Hello {
+        proto_ver: 1,
+        capabilities: vec!["thumbnail.v1".into(), "flow.supersede.v1".into()],
+        device_name: "Home PC".into(),
+        pairing_epoch: Some("epoch-7".into()),
+        health: Some(DesktopHealth {
+            free_bytes: Some(123_456_789_000),
+            library_writable: true,
+            index_ok: true,
+        }),
+    };
+    assert_roundtrip(&hello);
+    snapshot_message("hello_paired_with_health", &hello);
+
+    // `free_bytes: null` is a real answer ("this platform could not say"),
+    // serialised as an explicit null — not omitted.
+    let unknown = Hello {
+        health: Some(DesktopHealth {
+            free_bytes: None,
+            library_writable: false,
+            index_ok: true,
+        }),
+        ..hello
+    };
+    assert_roundtrip(&unknown);
+    snapshot_message("hello_health_free_bytes_unknown", &unknown);
+}
+
+#[test]
+fn snapshot_flow_delivery() {
+    let fetch = FlowFetchRequest {
+        queue_sequence: 1_790_574_682_018,
+        pairing_epoch: "epoch-7".into(),
+        lease_token: "lease-1790574682018".into(),
+        content_hash: "e0635a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a398c".into(),
+        file_name: "IMG_0042.HEIC".into(),
+        media_type: "image/heic".into(),
+        provider: "blobticket-example".into(),
+        capture_at_ms: 1_690_000_000_000,
+        size_bytes: 3_500_000,
+    };
+    assert_roundtrip(&fetch);
+    snapshot_message("flow_fetch_request", &fetch);
+
+    let tuple = FlowTupleRef {
+        queue_sequence: 1_790_574_682_018,
+        pairing_epoch: "epoch-7".into(),
+        lease_token: "lease-1790574682018".into(),
+    };
+    assert_roundtrip(&tuple);
+    snapshot_message("flow_tuple_ref", &tuple);
+
+    let receipt = FlowCompletionReceipt {
+        queue_sequence: 1_790_574_682_018,
+        receipt_id: "460400000000000000000000000000000000000000000000000000000000510f".into(),
+        pairing_epoch: "epoch-7".into(),
+        lease_token: "lease-1790574682018".into(),
+        content_hash: "e0635a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a398c".into(),
+    };
+    assert_roundtrip(&receipt);
+    snapshot_message("flow_completion_receipt", &receipt);
+
+    let completed = FlowStatusReply {
+        state: "completed".into(),
+        receipt: Some(receipt),
+        task_running: false,
+    };
+    assert_roundtrip(&completed);
+    snapshot_message("flow_status_reply_completed", &completed);
+
+    let active = FlowStatusReply {
+        state: "active".into(),
+        receipt: None,
+        task_running: true,
+    };
+    assert_roundtrip(&active);
+    snapshot_message("flow_status_reply_active", &active);
+}
+
+#[test]
+fn snapshot_flow_audit() {
+    let submit = FlowAuditSubmit {
+        events: vec![
+            FlowAuditEvent {
+                event_id: "8f14e45f-ceea-467f-a8f0-6f2c3b5d9a10".into(),
+                kind: "flow.item.confirmed".into(),
+                round_id: Some("c9f0f895-fb98-4b91-8d6c-1f2e3d4c5b6a".into()),
+                occurred_at_ms: 1_790_574_700_000,
+                payload: [
+                    ("itemRef", "media:30333"),
+                    ("queueSequence", "1790574682018"),
+                    ("sourceVersion", "1790569136:30333"),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            },
+            FlowAuditEvent {
+                event_id: "45c48cce-2e2d-4fbd-9d7a-3b2c1d0e9f8a".into(),
+                kind: "flow.round.controlled".into(),
+                round_id: None,
+                occurred_at_ms: 1_790_574_800_000,
+                payload: [("action".to_string(), "pause".to_string())]
+                    .into_iter()
+                    .collect(),
+            },
+        ],
+    };
+    assert_roundtrip(&submit);
+    snapshot_message("flow_audit_submit", &submit);
+
+    let accepted = FlowAuditAccepted {
+        event_ids: vec!["8f14e45f-ceea-467f-a8f0-6f2c3b5d9a10".into()],
+    };
+    assert_roundtrip(&accepted);
+    snapshot_message("flow_audit_accepted", &accepted);
+}
+
+#[test]
+fn snapshot_backup_presence_query() {
+    let q = BackupPresenceQuery {
+        hashes: vec![
+            "aaa0000000000000000000000000000000000000000000000000000000000000".into(),
+            "bbb1111111111111111111111111111111111111111111111111111111111111".into(),
+        ],
+    };
+    assert_roundtrip(&q);
+    snapshot_message("backup_presence_query", &q);
+}
+
 // ── Diagnostics ─────────────────────────────────────
 
 #[test]

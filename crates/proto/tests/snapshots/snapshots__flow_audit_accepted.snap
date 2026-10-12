@@ -1,0 +1,9 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "event_ids": [
+    "8f14e45f-ceea-467f-a8f0-6f2c3b5d9a10"
+  ]
+}
