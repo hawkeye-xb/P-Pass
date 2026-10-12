@@ -2,7 +2,6 @@
   import { reconcilePhotoWall } from "./photoWall.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
   import { shouldShowWizard, serviceCameBack } from "./serviceGate.js";
-  import { testManifestOutcome } from "./lib/updateCheck.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
@@ -12,7 +11,7 @@
     message as messageDialog,
   } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
-  import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
@@ -259,11 +258,6 @@
   );
   const shellIsStale = $derived(
     !!installedVersion && !!shellVersion && !sameRelease(installedVersion, shellVersion)
-  );
-  // DESK-02①: 更新通道由**壳的构建**推导（含 `-test.` → test 通道）。用壳版本而
-  // 不是服务版本：通道是壳的属性，混版本时不能跟着服务漂。
-  const updateChannel = $derived(
-    (shellVersion || "").includes("-test.") ? "test" : "stable"
   );
   const isTestBuild = $derived(displayVersion.includes("-test."));
   // DAE-04 + UPD-06 (#616)：**分向**。服务旧（且壳不旧）才是「重启后台服务」的
@@ -762,8 +756,8 @@
     // Rust 壳，它从同一份 assets/i18n 取托盘文案。失败只影响托盘语言，静默。
     invoke("set_tray_locale", { lang: getLocale() }).catch(() => {});
     checkWizard();
-    // DESK-02①: 更新检查放首次 status 落地后——updateChannel 由
-    // status.version（完整 tag）推导，避免启动竞态按壳版本误判 stable。
+    // DESK-02①: 更新检查放首次 status 落地后（#852 起 test / stable 同一条插件路径，
+    // 通道由构建期写进插件的清单地址决定，不再在前端推导）。
     refresh().then(() => checkForUpdate(false));
     // IPC-02: 事件驱动为主——daemon 事件（扫码/配对落定/备份落地/设备
     // 变化）即时刷新；轮询降级为 60s 兜底对账（防漏事件，不再是主通道）。
@@ -908,43 +902,10 @@
   // 都弹错。只有用户点了「下载安装」后的下载/安装失败才上文案。
   // T-081: 设置页「检查更新」手动入口复用同一函数（manual=true 时
   // 「已是最新」也给一句反馈，不再沉默）。
-  // REL-02: test 通道的 manifest 源——Cloudflare Worker 代理
-  // （infra/workers/update，命中 300s 缓存）。REL-07：Worker 现在只读
-  // 滚动 prerelease `test-channel` 的静态文件，不再调 GitHub API。桌面壳
-  // 不像 Android 那样直读 GitHub 下载链接：webview 的 fetch 受 CORS 约束，
-  // GitHub 下载链接（302 → release-assets）不带 Access-Control-Allow-Origin，
-  // Worker 带。
-  const WORKER_TEST_URL = "https://update.p-pass.hawkeye-xb.com/manifest?channel=test";
-  // #788②：test 通道也走插件的应用内更新（与 stable 同一条路径，只是清单地址不同）。
-  // 清单地址是构建期写进插件配置的——release.yml 的 Windows job 在 test tag 上用
-  // `--config` 把 endpoints 换成 test-channel 的 manifest-windows.json，并在**同一处**
-  // 打开这个开关。没打开的构建（macOS 的 test 包）照旧走下面的 checkTestChannel。
-  const TEST_CHANNEL_IN_APP = import.meta.env.VITE_UPDATE_TEST_CHANNEL_IN_APP === "1";
-
-  // SemVer 三段比较（与 Android UpdateChecker.isNewer 同语义）。
-  // DESK-02①: 同核心预发布按数字段比较（0.3.2-test.2 > 0.3.2-test.1）——
-  // test 通道连续 tag 自动升级的判据；正式 > 预发布（同核心）。
-  function isNewerVersion(candidate, current) {
-    const parse = (s) => {
-      const parts = String(s).split("-");
-      const nums = parts[0].split(".").map((x) => parseInt(x, 10) || 0);
-      return { nums, pre: parts[1] ?? null };
-    };
-    const c = parse(candidate);
-    const cur = parse(current);
-    for (let i = 0; i < 3; i++) {
-      const d = (c.nums[i] ?? 0) - (cur.nums[i] ?? 0);
-      if (d !== 0) return d > 0;
-    }
-    if (c.pre === null && cur.pre !== null) return true;
-    if (c.pre !== null && cur.pre === null) return false;
-    if (c.pre !== null && cur.pre !== null) {
-      const a = parseInt(c.pre.replace(/\D/g, "") || "0", 10);
-      const b = parseInt(cur.pre.replace(/\D/g, "") || "0", 10);
-      return a > b;
-    }
-    return false;
-  }
+  // #852：test 通道与 stable 走同一条插件应用内更新（检查 → 下载 → 验签 → 替换 → 重启），
+  // 只有清单地址不同。地址是构建期写进插件配置的：tools/release/tauri-config.mjs 在 test 版本上
+  // 把 endpoints 换成 test-channel 里本端的分端清单（macOS = manifest-macos.json，
+  // Windows = manifest-windows.json），这里不再区分通道。
 
   // DAE-04: 「桌面壳自己的版本」与「daemon 版本」是否同一次发布——只比
   // 核心三段数字，忽略 v 前缀和 -test.N 后缀：release 里 daemon 报
@@ -1049,62 +1010,12 @@
     }
   }
 
-  // REL-02: test 通道检查——壳内 fetch Worker manifest，弹窗后打开
-  // 下载页。安装路径说明：tauri updater 的 endpoint 构建期写死、Update
-  // 无公开构造器，运行时无法指向任意 manifest URL（2.10.1 源码确认）；
-  // 且当前 release manifest 只含 android-arm64（桌面壳待建）——test
-  // 通道「检查到更新 + 一键打开下载页」是当前平台约束下的诚实形态。
-  async function checkTestChannel(manual) {
-    try {
-      const resp = await fetch(WORKER_TEST_URL);
-      const outcome = testManifestOutcome(resp.status);
-      if (outcome === "none") {
-        if (manual) flashMessage(t("ui.no_update"), "warning");
-        return;
-      }
-      if (outcome === "failed") {
-        // REL-07: 上游故障 ≠ 已是最新——日志里留状态码，手动检查如实说失败。
-        const body = await resp.text().catch(() => "");
-        console.warn(`[updater] test channel check failed: HTTP ${resp.status} ${body.slice(0, 200)}`);
-        if (manual) flashMessage(t("ui.update_check_failed", { err: `HTTP ${resp.status}` }), "error");
-        return;
-      }
-      const m = await resp.json();
-      if (!m?.version || !isNewerVersion(m.version, version)) {
-        if (manual) flashMessage(t("ui.no_update"), "warning");
-        return;
-      }
-      const ok = await confirmDialog(t("ui.update_available", { version: m.version }), {
-        title: "P-Pass",
-      });
-      if (!ok) return;
-      // 优先资产直链（manifest 里 darwin 条目），没有则落到 release 页。
-      const entry =
-        m.platforms?.["darwin-aarch64"] ??
-        m.platforms?.["macos-arm64"] ??
-        m.platforms?.["macos-x64"];
-      const url =
-        entry?.url || `https://github.com/hawkeye-xb/P-Pass/releases/tag/v${m.version}`;
-      await openUrl(url);
-    } catch (e) {
-      console.warn("[updater] test channel check failed:", e);
-      if (manual) flashMessage(t("ui.update_check_failed", { err: errText(e) }), "error");
-    }
-  }
-
   async function checkForUpdate(manual = true) {
     // UPD-06 (#616)：防重复点击（按钮同时禁用，双保险）。旧实现两个都没有，
     // 同一份更新会被下两遍。
     if (updateBusy) return;
     updateError = "";
     updateProgress = null;
-    // REL-02: test 通道走壳内检查（Worker 源）；stable 保持原 tauri
-    // updater 路径（语义不动）。#788②：构建期已把 test 清单接进插件的，
-    // test 通道也走插件这条路。
-    if (updateChannel === "test" && !TEST_CHANNEL_IN_APP) {
-      await checkTestChannel(manual);
-      return;
-    }
     updatePhase = "checking";
     let update;
     try {

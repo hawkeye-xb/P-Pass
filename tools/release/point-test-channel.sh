@@ -4,10 +4,14 @@
 # 这一个静态文件：不调 GitHub API → 没有匿名限流、不需要 GH_TOKEN。清单里的下载链接仍指向
 # 版本化 release（${TAG}）的资产。
 #
-# 每一端一份清单（#788②，与正式版的分端清单一一对应）：
-#   manifest.json          Android（upload-android；老格式，Android 与 update Worker 读它）
+# 每一端一份清单（#788② / #852，与正式版的分端清单一一对应，test 包只有清单地址与正式包不同）：
+#   manifest-android.json  Android（upload-android；Android test 包读它）
+#   manifest-macos.json    macOS（finalize-manifest；macOS test 包的插件 endpoint）
 #   manifest-windows.json  Windows（finalize-manifest-windows；Windows test 包的插件 endpoint）
-# 各端只覆盖自己那份，互不等待。
+#   manifest.json          过渡期：老格式 Android 清单（upload-android），给 #852 之前装的 Android
+#                          test 包与 update Worker；测试机都升级过一次后另行删除
+# 各端只覆盖自己那份，互不等待。test tag 按端发布（#852）：本次没构建的一端不调用本脚本，
+# 它在通道里的清单保持原样（版本仍是上一次构建它的 test tag）。
 #
 # 用法：tools/release/point-test-channel.sh <本次清单文件>（通道里用同一个文件名）
 # 输入：TAG（job env）、GITHUB_REPOSITORY；gh 已登录（GH_TOKEN）。
