@@ -21,7 +21,13 @@ EXE=$(find artifacts/windows-x64-installer -maxdepth 1 -name 'P-Pass_*_x64-setup
 [ -n "$EXE" ] || { echo "::error::Windows lane 成功但 P-Pass_*_x64-setup.exe 不在——拒绝写半份清单"; exit 1; }
 
 # 与其它分端清单同口径：恒指 GitHub 直链（R2 的改写在 mirror-latest.yml 里做）。
-ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+# #872：test tag 的安装包放在滚动的 test-channel 里（tag 自己的 release 保持 draft、对客户端不可达），
+# 正式 tag 指向该 tag 的 release。
+if [[ "$TAG" == *-test.* ]]; then
+  ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel"
+else
+  ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+fi
 node tools/make-update-manifest.mjs \
   --tag "$TAG" --notes-dir release/notes \
   --asset-base "$ASSET_BASE" \

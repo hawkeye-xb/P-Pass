@@ -29,7 +29,13 @@ if [ "${#APK_ARGS[@]}" -gt 0 ]; then
   # 坏 manifest 且无法手改（签名会破）。要重开镜像必须先修这个
   # 耦合（REL-04）：先镜像 → 据结果定 base → 签名 → 单独镜像
   # manifest；镜像失败必须回落 GitHub 直链，不许带坏 manifest 出门。
-  ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+  # #872：test tag 的安装包放在滚动的 test-channel 里（tag 自己的 release 保持 draft、对客户端不可达），
+  # 正式 tag 指向该 tag 的 release。
+  if [[ "$TAG" == *-test.* ]]; then
+    ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel"
+  else
+    ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+  fi
   # UPD-13（#660）：动态 manifest.json 只给 test 通道用（它是
   # test-channel 指针）。正式版的老格式清单是收口阶段搬进来的**冻结件**
   # ——绝不能是 tag 版本的动态清单（分端号分化后会高于某端包内版本，
