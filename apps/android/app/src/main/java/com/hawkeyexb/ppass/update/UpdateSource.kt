@@ -47,7 +47,8 @@ interface UpdateSource {
  *    只认已发布的正式 release，**人工 publish 就是验收后的发布动作**
  *    （REL-02 卡面红线，UpdateCheckerTest 的 URL 锁测试继续看守）。
  *  - test 走滚动 prerelease `test-channel` 的静态资产——不调 GitHub API，
- *    没有匿名限流（REL-07）。
+ *    没有匿名限流（REL-07）。#852：读与 stable 同一种分端清单 `manifest-android.json`
+ *    （同一个生成/签名脚本、同一条解析路径），只有地址不同。
  */
 object GitHubUpdateSource : UpdateSource {
     override val id: String = "github"
@@ -57,7 +58,7 @@ object GitHubUpdateSource : UpdateSource {
             UpdateChannel.Stable ->
                 "https://github.com/hawkeye-xb/P-Pass/releases/latest/download/manifest-android.json"
             UpdateChannel.Test ->
-                "https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest.json"
+                "https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest-android.json"
         },
     )
 }

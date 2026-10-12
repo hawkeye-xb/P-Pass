@@ -3,6 +3,8 @@
 #
 # 用 stub gh 喂一个假的 Latest 正式版（资产放在临时目录），逐条验：
 #   plan-builds：test tag / 没有 Latest / Latest 就是本 tag / 版本号相同 / 缺清单 / 缺安装包 / 两端都相同。
+#   plan-builds（#852 test tag 按端发布）：基线 = test-channel 里该端清单的版本；只改 Android / 只改桌面 /
+#   改共享代码 / 只改文档 / 基线拿不到（无清单、坏清单、tag 不存在、不是祖先、就是本 tag）。
 #   reuse-artifact：字节与 Latest 记录不符 ⇒ 红；包内版本号与本次不符 ⇒ 红；都对 ⇒ 取回。
 # 核心断言一句话：**拿不准一律构建；复用必须字节与版本号都对得上**。
 #
@@ -98,7 +100,9 @@ expect_plan() { # 说明 android macos
 
 echo "plan-builds"
 latest v2026.1.1 1.0.0 2.0.0
-plan v1.2.3-test.4 1.0.0 2.0.0;  expect_plan "test tag：两端都构建（即使版本号与 Latest 相同）" build build
+# #852：原断言「test tag 恒两端构建」的意图是 test tag 绝不走 reuse。现在 test tag 按改动路径判定；
+# test-channel 里还没有分端清单时拿不准 ⇒ 两端都构建（细则见下方 #852 一节）。
+plan v1.2.3-test.4 1.0.0 2.0.0;  expect_plan "test tag：test-channel 无清单 ⇒ 两端都构建（即使版本号与 Latest 相同，也绝不 reuse）" build build
 plan v2026.1.1 1.0.0 2.0.0;      expect_plan "Latest 就是本 tag（补跑）：两端都构建" build build
 plan v2026.1.2 1.0.1 2.0.0;      expect_plan "只涨 android：android 构建、macOS 复用" build reuse
 [ "$(get reuse_from)" = v2026.1.1 ] && ok "复用来源 = Latest" || bad "复用来源 = Latest" "$OUT"
@@ -111,6 +115,56 @@ latest v2026.1.1 1.0.0 2.0.0; rm "$TMP/state/v2026.1.1/P-Pass_2.0.0_macos-arm64.
 plan v2026.1.2 1.0.1 2.0.0;      expect_plan "Latest 缺 dmg：macOS 构建（不猜）" build build
 rm -rf "$TMP/state"; mkdir -p "$TMP/state"
 plan v2026.1.2 1.0.1 2.0.0;      expect_plan "没有 Latest：两端都构建" build build
+
+echo "plan-builds（#852 test tag 按端发布）"
+# 假仓库里按顺序提交、打 test tag；test-channel 的清单放在 $STUB_STATE/test-channel/。
+G=(git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false)
+commit_tag() { # <tag> <路径...>：改这些路径并打 tag
+  local tag="$1" f; shift
+  for f in "$@"; do mkdir -p "$REPO/$(dirname "$f")"; echo "$tag" >> "$REPO/$f"; done
+  "${G[@]}" add -A && "${G[@]}" commit -q -m "$tag" && "${G[@]}" tag "$tag"
+}
+channel() { # <android 版本|-> <macOS 版本|->：设置 test-channel 里的分端清单（- = 没有）
+  rm -rf "$TMP/state/test-channel"; mkdir -p "$TMP/state/test-channel"
+  [ "$1" = - ] || printf '{"version":"%s","platforms":{"android-arm64":{}}}\n' "$1" > "$TMP/state/test-channel/manifest-android.json"
+  [ "$2" = - ] || printf '{"version":"%s","platforms":{"darwin-aarch64":{}}}\n' "$2" > "$TMP/state/test-channel/manifest-macos.json"
+}
+tplan() { # <tag>：在该 tag 的提交上跑 plan-builds（release/versions.json 各 tag 相同）
+  "${G[@]}" checkout -q "$1"
+  OUT=$(cd "$REPO" && TAG="$1" GITHUB_OUTPUT=/dev/stdout tools/release/plan-builds.sh 2>&1); RC=$?
+}
+rm -rf "$TMP/state"; mkdir -p "$TMP/state"
+printf '{"desktop":"2.0.0","android":"1.0.0"}\n' > "$REPO/release/versions.json"
+commit_tag v0.1.0-test.1 apps/android/a.kt apps/desktop/d.js crates/core/c.rs
+commit_tag v0.1.0-test.2 apps/android/a.kt
+commit_tag v0.1.0-test.3 apps/desktop/src/d.js
+commit_tag v0.1.0-test.4 crates/core/c.rs
+commit_tag v0.1.0-test.5 docs/x.md cards/y.md apps/desktop/README.md
+commit_tag v0.1.0-test.6 tools/build-android-iroh-blobs-bridge.sh
+commit_tag v0.1.0-test.7 tools/bundle-desktop-macos.sh
+commit_tag v0.1.0-test.8 release/notes/x.txt
+
+channel 0.1.0-test.1 0.1.0-test.1; tplan v0.1.0-test.2; expect_plan "只改 apps/android/ ⇒ Android 构建、桌面 skip" build skip
+[ "$(get reuse_from)" = "" ] && ok "test tag 不带复用来源" || bad "test tag 不带复用来源" "$OUT"
+channel 0.1.0-test.2 0.1.0-test.2; tplan v0.1.0-test.3; expect_plan "只改 apps/desktop/ ⇒ 桌面构建、Android skip" skip build
+channel 0.1.0-test.3 0.1.0-test.3; tplan v0.1.0-test.4; expect_plan "改 crates/（共享代码）⇒ 两端构建" build build
+channel 0.1.0-test.4 0.1.0-test.4; tplan v0.1.0-test.5
+if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::test tag v0.1.0-test.5"; then ok "只改 docs/ cards/ *.md ⇒ 两端都没变 ⇒ 明确报错"; else bad "只改 docs/ cards/ *.md ⇒ 两端都没变 ⇒ 明确报错" "$OUT"; fi
+channel 0.1.0-test.5 0.1.0-test.5; tplan v0.1.0-test.6; expect_plan "改 Android 构建脚本 ⇒ 只算 Android" build skip
+channel 0.1.0-test.6 0.1.0-test.6; tplan v0.1.0-test.7; expect_plan "改 macOS 打包脚本 ⇒ 只算桌面" skip build
+channel 0.1.0-test.7 0.1.0-test.7; tplan v0.1.0-test.8; expect_plan "改没列出的路径（release/）⇒ 拿不准 ⇒ 两端" build build
+channel 0.1.0-test.2 0.1.0-test.1; tplan v0.1.0-test.2
+if [ "$RC" = 0 ] && [ "$(get android)" = build ]; then ok "基线就是本 tag（补跑）⇒ 构建"; else bad "基线就是本 tag（补跑）⇒ 构建" "$OUT"; fi
+# 基线按端取：上次桌面没构建（test-channel 的 macOS 仍是 test.1）⇒ 那之后的桌面改动不会被漏掉
+channel 0.1.0-test.2 0.1.0-test.1; tplan v0.1.0-test.3; expect_plan "按端基线：Android 自 test.2 无改动 skip；macOS 自 test.1 起有桌面改动 ⇒ 构建" skip build
+channel 0.1.0-test.3 -; tplan v0.1.0-test.4; expect_plan "test-channel 没有 macOS 清单 ⇒ 拿不准 ⇒ 构建" build build
+channel - 0.1.0-test.4; printf '{"version":"0.1.0-test.4","platforms":{}}\n' > "$TMP/state/test-channel/manifest.json"; tplan v0.1.0-test.5
+if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "两端自上一次"; then ok "过渡期：没有 manifest-android.json 时用老格式 manifest.json 当 Android 基线"; else bad "过渡期：没有 manifest-android.json 时用老格式 manifest.json 当 Android 基线" "$OUT"; fi
+channel 0.0.9-test.1 0.1.0-test.4; tplan v0.1.0-test.5; expect_plan "基线 tag 在仓库里不存在 ⇒ 构建" build skip
+printf 'not json' > "$TMP/state/test-channel/manifest-android.json"; tplan v0.1.0-test.5; expect_plan "清单读不出（坏 JSON）⇒ 构建" build skip
+"${G[@]}" checkout -q v0.1.0-test.1 && "${G[@]}" checkout -q -b side && commit_tag v0.1.0-test.90 apps/desktop/side.js
+channel 0.1.0-test.90 0.1.0-test.90; tplan v0.1.0-test.5; expect_plan "基线不是本次提交的祖先 ⇒ 构建" build build
+"${G[@]}" checkout -q v0.1.0-test.8
 
 echo "reuse-artifact"
 reuse() { OUT=$(cd "$REPO" && tools/release/reuse-artifact.sh "$1" v2026.1.1 "$2" "$TMP/out-$3" 2>&1); RC=$?; }

@@ -7,6 +7,8 @@
   test 自动发布、test-channel 指针）→ upload-macos → finalize-manifest（桌面收口：冻结件 / 动态清单、
   分端清单、签名、上传）→ upload-windows → finalize-manifest-windows（#788②：test tag 出 Windows
   分端清单并写进 test-channel；正式 tag 跳过）→ mirror-latest 的镜像判定。
+  #852：test tag 按端发布——同一个场景里连发几个 test tag（只改 Android / 只改桌面 / 改共享代码 /
+  只改文档），断言没改动的一端零构建、它在 test-channel 里的清单逐字节不动。
 
 假的部分（只有这些）：
   - 构建产物：临时目录里的随机字节当 APK / .app.tar.gz（构建、公证不在范围内）；macOS 那份的
@@ -58,6 +60,7 @@ STALE_TAURI_CONF_VERSION = "9.7.0"  # #809：apps/desktop/src-tauri/tauri.conf.j
 BUILD_RESULTS = {"android": "success", "macos-arm64": "success", "windows-x64": "skipped"}
 WINDOWS_INSTALLER = "P-Pass_{v}_x64-setup.exe"
 TEST_CHANNEL_WINDOWS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-windows.json"
+TEST_CHANNEL_MACOS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-macos.json"  # #852
 RELEASE_JOBS = ["plan-builds", "android-reuse", "macos-reuse", "create-draft", "upload-android", "upload-macos", "upload-windows", "finalize-manifest", "finalize-manifest-windows",
                 "finalize-notes"]
 
@@ -144,8 +147,11 @@ def make_origin(d: Path, name: str, commits: list, changelog: str = CHANGELOG) -
     conf.write_text(json.dumps({"productName": "P-Pass", "version": STALE_TAURI_CONF_VERSION}, indent=2) + "\n")
     (src / "CHANGELOG.md").write_text(changelog)
 
-    def commit(versions: dict, notes: dict[str, str], msg: str, *tags: str):
+    def commit(versions: dict, notes: dict[str, str], files: dict[str, str], msg: str, *tags: str):
         (src / "release/versions.json").write_text(json.dumps(versions, indent=2) + "\n")
+        for rel, body in files.items():  # #852：test tag 按改动路径判定，场景要能改指定路径
+            (src / rel).parent.mkdir(parents=True, exist_ok=True)
+            (src / rel).write_text(body)
         nd = src / "release/notes"
         if nd.exists():
             shutil.rmtree(nd)
@@ -157,8 +163,8 @@ def make_origin(d: Path, name: str, commits: list, changelog: str = CHANGELOG) -
         for t in tags:
             git(src, "tag", t)
 
-    for i, (versions, notes, tags) in enumerate(commits):
-        commit(versions, notes, f"c{i}", *tags)
+    for i, (versions, notes, tags, *files) in enumerate(commits):
+        commit(versions, notes, files[0] if files else {}, f"c{i}", *tags)
     sha = subprocess.run(["git", "-C", str(src), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     origin = d / f"origin-{name}.git"
     sh(["git", "clone", "-q", "--bare", str(src), str(origin)], stderr=subprocess.PIPE)
@@ -380,6 +386,20 @@ def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
         if job_id == "macos-arm64":
             ck(shell_bundle == [want], f"#809 {job_id} @ {tag}：外壳 Info.plist 版本（tauri bundle）= {want}",
                f"实际 {shell_bundle}（tauri.conf.json 里是 {STALE_TAURI_CONF_VERSION}）")
+            # #852：macOS 与 Windows 同口径——插件 endpoint 由共用的 tools/release/tauri-config.mjs 生成，
+            # test 包指向 test-channel/manifest-macos.json，正式包不覆盖（用 tauri.conf.json）。
+            # build 与 bundle 两次调用都要拿到同一份（endpoint 在 build 那一步编进二进制）。
+            for sub in ("build", "bundle"):
+                upd_file = rec / f"shell-{sub}-updater.json"
+                upd = json.loads(upd_file.read_text()) if upd_file.exists() else {}
+                if "-test." in tag:
+                    ck(upd.get("endpoints") == [TEST_CHANNEL_MACOS_MANIFEST] and upd.get("vite_test_in_app") == "1",
+                       f"#852 {job_id} @ {tag}：test 包的更新 endpoint（tauri {sub}）= test-channel/manifest-macos.json，前端开关同时打开",
+                       json.dumps(upd))
+                else:
+                    ck(upd_file.exists() and upd.get("endpoints") is None and upd.get("vite_test_in_app") == "",
+                       f"#852 {job_id} @ {tag}：正式包不覆盖 endpoint（tauri {sub}，用 tauri.conf.json），前端开关不开",
+                       json.dumps(upd))
         else:
             upd_file = rec / "shell-build-updater.json"
             upd = json.loads(upd_file.read_text()) if upd_file.exists() else {}
@@ -416,6 +436,7 @@ class Scenario:
         self.tag = tag
         github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
                   "token": "dry-run-token", "workflow_sha": self.sha, "event": {}}
+        self.wf, self.github = wf, github
         for job_id in jobs:
             needs = {}
             for n in wf["jobs"][job_id].get("needs", []) or []:
@@ -436,11 +457,12 @@ class Scenario:
         if job == "windows-x64":  # #788②：tag push 上只有 test tag 构建 Windows
             return "success" if "-test." in self.tag else "skipped"
         plan = self.jobs.get("plan-builds")
-        end = {"android": "android", "macos-arm64": "macos"}.get(job)
-        if end and plan is not None:
-            if plan.result != "success":
-                return "skipped"
-            return "success" if plan.outputs.get(end) == "build" else "skipped"
+        if job in ("android", "macos-arm64") and plan is not None:
+            # #852：跑不跑由 release.yml 里该构建 job 自己的 if: 决定（按 plan-builds 的真实结果求值），
+            # 不在这里另写一份规则——job 的步骤换成空表，只看它被不被跳过。
+            stub = {**self.wf, "jobs": {job: {**self.wf["jobs"][job], "steps": []}}}
+            needs = {"plan-builds": {"result": plan.result, "outputs": plan.outputs}}
+            return self.runner.run_job(stub, job, github=self.github, inputs={}, secrets={}, needs=needs).result
         return BUILD_RESULTS[job]
 
     def rebuild_artifacts(self, wf: dict, android_ver: str, desktop_ver: str):
@@ -651,6 +673,17 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
            json.dumps(m)[:400])
         ok, why = verify_sig(pub, sc.asset(TEST_TAG, apk), m["platforms"]["android-arm64"].get("signature", ""))
         ck(ok, "test-channel 指针里的签名校验通过", why)
+    # #852：test-channel 里与正式版一一对应的分端清单（Android / macOS 都已签名、version = tag）
+    for name, target, asset_name in (("manifest-android.json", "android-arm64", apk),
+                                     ("manifest-macos.json", "darwin-aarch64", mac)):
+        chm = sc.asset("test-channel", name)
+        if ck(chm.exists(), f"#852 test-channel 指针已写入 {name}"):
+            mm = json.loads(chm.read_text())
+            ck(mm.get("version") == v and sorted(mm["platforms"]) == [target],
+               f"#852 test-channel/{name}：version = tag、只含 {target}", json.dumps(mm)[:400])
+            ok, why = verify_sig(pub, sc.asset(TEST_TAG, asset_name), mm["platforms"][target].get("signature", ""))
+            ck(ok, f"#852 test-channel/{name} 的签名校验通过", why)
+    step_is(ck, jobs, "finalize-manifest", "Point test-channel at the macOS manifest (#852)", "success")
     # 收口后的动态清单：android + darwin，说明为空（版本号是 tag 名，没有文件）
     check_manifest(ck, sc, pub, TEST_TAG, "manifest.json", version=v,
                    targets={"android-arm64": apk, "darwin-aarch64": mac}, notes="", notes_i18n={})
@@ -684,6 +717,119 @@ def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
     body = (sc.meta(BAD_TAG) or {}).get("body", "")
     ck(body.startswith(f"## P-Pass {BAD_TAG[1:]}\n"), "缺小节时正文只有台账", body[:300])
     SUMMARY["bad-notes"] = sc.summary()
+
+
+# ── #852：test tag 按端发布（test 通道镜像正式版）──────────────────────────
+# 同一个场景（同一个 gh 状态 = 同一个 test-channel）里依次发 test tag：
+#   test.1 首发（test-channel 里没有分端清单 ⇒ 拿不准 ⇒ 两端构建）
+#   test.2 只改 apps/android/   ⇒ Android 构建、桌面零构建，test-channel/manifest-macos.json 不动
+#   test.3 只改 apps/desktop/   ⇒ 桌面构建、Android 零构建，test-channel/manifest-android.json 不动；
+#                                  没有 Android lane 代为发布 ⇒ finalize-manifest 自动发布
+#   test.4 改 crates/（共享代码）⇒ 两端构建
+#   test.5 只改 docs/           ⇒ plan-builds 报错、不建草稿
+# versions.json / 说明文件每次提交都一样（release/** 变化会落进「两端」，掩盖判定）。
+PER_END_TAGS = ["v0.0.2-test.1", "v0.0.2-test.2", "v0.0.2-test.3", "v0.0.2-test.4", "v0.0.2-test.5"]
+PER_END_CHANNEL = ("manifest.json", "manifest-android.json", "manifest-macos.json")
+
+
+def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
+    print("\n== #852 test tag 按端发布：只改 Android / 只改桌面 / 改共享代码 / 只改文档")
+    t1, t2, t3, t4, t5 = PER_END_TAGS
+    notes = good_notes()
+    origin, sha = make_origin(base, "per-end", [
+        (PREV_VERSIONS, {}, [PREV_TAG]),
+        (CUR_VERSIONS, notes, [t1], {"apps/android/app/x.kt": "1\n", "apps/desktop/src/x.js": "1\n", "crates/core/x.rs": "1\n"}),
+        (CUR_VERSIONS, notes, [t2], {"apps/android/app/x.kt": "2\n"}),
+        (CUR_VERSIONS, notes, [t3], {"apps/desktop/src/x.js": "3\n"}),
+        (CUR_VERSIONS, notes, [t4], {"crates/core/x.rs": "4\n"}),
+        (CUR_VERSIONS, notes, [t5], {"docs/x.md": "5\n"}),
+    ])
+    v1 = t1[1:]
+    sc = Scenario(base, "per-end", origin, sha, key, v1, v1, rel)
+
+    def channel() -> dict:
+        return {n: (sc.asset("test-channel", n).read_bytes() if sc.asset("test-channel", n).exists() else None)
+                for n in PER_END_CHANNEL}
+
+    def chver(n: str):
+        b = channel()[n]
+        return json.loads(b)["version"] if b else None
+
+    def release(tag: str, want: dict):
+        v = tag[1:]
+        if tag != t1:
+            sc.jobs = {}
+            sc.rebuild_artifacts(rel, v, v)
+        for end, art in (("android", "android"), ("macos", "macos-arm64")):
+            if want.get(end) == "skip":
+                shutil.rmtree(sc.artifacts / art)  # 构建 job 不跑 ⇒ 没有这一端的 artifact
+        return sc.release(rel, tag)
+
+    # test.1：首发，两端构建
+    jobs = release(t1, {})
+    plan = jobs["plan-builds"]
+    ck(plan.outputs.get("android") == "build" and plan.outputs.get("macos") == "build",
+       f"{t1}：test-channel 里还没有分端清单 ⇒ 拿不准 ⇒ 两端都构建", json.dumps(plan.outputs) + "\n" + plan.log)
+    ck(all(chver(n) == v1 for n in PER_END_CHANNEL), f"{t1}：test-channel 三份清单都指向 {v1}",
+       json.dumps({n: chver(n) for n in PER_END_CHANNEL}))
+
+    # test.2 / test.3 / test.4：按改动路径判定
+    cases = [(t2, "只改 apps/android/", {"android": "build", "macos": "skip"}),
+             (t3, "只改 apps/desktop/", {"android": "skip", "macos": "build"}),
+             (t4, "改 crates/（共享代码）", {"android": "build", "macos": "build"})]
+    for tag, what, want in cases:
+        v = tag[1:]
+        before = channel()
+        jobs = release(tag, want)
+        plan = jobs["plan-builds"]
+        if not job_ok(ck, jobs, "plan-builds"):
+            continue
+        for end in ("android", "macos"):
+            ck(plan.outputs.get(end) == want[end], f"{tag}（{what}）：plan-builds 判 {end} = {want[end]}",
+               json.dumps(plan.outputs) + "\n" + plan.log)
+            job_ok(ck, jobs, f"{end}-reuse", "skipped")  # test tag 永不复用正式版产物
+        ck(sc.build_result("android") == ("success" if want["android"] == "build" else "skipped")
+           and sc.build_result("macos-arm64") == ("success" if want["macos"] == "build" else "skipped"),
+           f"{tag}：没改动的一端零构建（按 release.yml 构建 job 的 if: 求值被跳过）")
+        job_ok(ck, jobs, "upload-android", "success" if want["android"] == "build" else "skipped")
+        job_ok(ck, jobs, "upload-macos", "success" if want["macos"] == "build" else "skipped")
+        for j in ("create-draft", "finalize-manifest", "finalize-notes"):
+            job_ok(ck, jobs, j)
+        after = channel()
+        android_files = ("manifest.json", "manifest-android.json")
+        for n in PER_END_CHANNEL:
+            built = want["android"] == "build" if n in android_files else want["macos"] == "build"
+            if built:
+                m = json.loads(after[n]) if after[n] else {}
+                ck(m.get("version") == v, f"{tag}：test-channel/{n} → {v}", json.dumps(m)[:300])
+                target = "android-arm64" if n in android_files else "darwin-aarch64"
+                asset_name = f"P-Pass_{v}_android.apk" if target == "android-arm64" else f"P-Pass_{v}_macos-arm64.app.tar.gz"
+                ok, why = verify_sig(pub, sc.asset(tag, asset_name), m.get("platforms", {}).get(target, {}).get("signature", ""))
+                ck(ok, f"{tag}：test-channel/{n} 的签名校验通过", why)
+            else:
+                ck(after[n] is not None and after[n] == before[n],
+                   f"{tag}：没构建的一端，test-channel/{n} 逐字节不动（仍是 {chver(n)}）")
+        ck(sc.asset(tag, "manifest-macos.json").exists() == (want["macos"] == "build"),
+           f"{tag}：release 里{'有' if want['macos'] == 'build' else '没有'} manifest-macos.json")
+        ck(not any(sc.asset(tag, f).exists() for f in (f"P-Pass_{v}_macos-arm64.dmg",)) or want["macos"] == "build",
+           f"{tag}：没构建的桌面端不复制任何产物")
+        ck(not sc.asset(tag, f"P-Pass_{v}_android.apk").exists() or want["android"] == "build",
+           f"{tag}：没构建的 Android 端不复制任何产物")
+        meta = sc.meta(tag) or {}
+        ck(meta.get("draft") is False and meta.get("prerelease") is True, f"{tag}：自动发布为 prerelease", json.dumps(meta))
+        if want["android"] == "skip":
+            step_is(ck, jobs, "finalize-manifest", "Auto-publish test tags as prerelease", "success")
+        if want["macos"] == "skip":
+            step_is(ck, jobs, "finalize-manifest", "Point test-channel at the macOS manifest (#852)", "skipped")
+
+    # test.5：只改文档 ⇒ 两端都没变 ⇒ 报错、不建草稿
+    jobs = release(t5, {"android": "skip", "macos": "skip"})
+    plan = jobs["plan-builds"]
+    job_ok(ck, jobs, "plan-builds", "failure")
+    ck("::error::test tag" in plan.log and "两端" in plan.log, f"{t5}（只改 docs/）：两端都没变 ⇒ 明确报错", plan.log)
+    job_ok(ck, jobs, "create-draft", "skipped")
+    ck(sc.meta(t5) is None, f"{t5}：不建空草稿")
+    SUMMARY["test-per-end"] = sc.summary()
 
 
 # ── #838：构建一次、到处复用 ────────────────────────────────────────────
@@ -762,6 +908,7 @@ def main() -> int:
         formal(ck, base, key, pub, rel, mirror)
         test_tag(ck, base, key, pub, rel, mirror)
         bad_notes(ck, base, key, pub, rel)
+        test_per_end(ck, base, key, pub, rel)
         # #838：只涨 android ⇒ macOS 复用；只涨桌面 ⇒ android 复用；都不涨 ⇒ 红。
         reuse(ck, base, key, pub, rel, "android-only",
               {**PREV_VERSIONS, "android": CUR_VERSIONS["android"], "androidVersionCode": 2}, good_notes(),
@@ -783,7 +930,7 @@ def main() -> int:
     if ck.fails:
         print(f"\nrelease dry-run: {ck.fails} 项失败 ❌")
         return 1
-    print("\nrelease dry-run: 正式 tag / test tag / #838 复用三种情形全部通过 ✅")
+    print("\nrelease dry-run: 正式 tag / test tag（含 #852 按端发布）/ #838 复用全部通过 ✅")
     return 0
 
 

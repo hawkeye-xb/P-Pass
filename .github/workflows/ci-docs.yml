@@ -167,6 +167,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: 判定与校验测试（stub gh）
         run: bash tools/test-release-plan.sh
+      # #852：桌面构建的 tauri --config（macOS / Windows 共用）——test 版本指向 test-channel 的
+      # 分端清单，正式版本只有 version（与此前的内联写法逐字节相同）。
+      - name: tauri --config 生成脚本（#852）
+        run: node --test tools/release/tauri-config.test.mjs
 
   release-dry-run:
     name: release-dry-run（REL-12：发布链正式 / test tag 两条路径预演）

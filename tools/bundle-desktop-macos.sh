@@ -46,7 +46,16 @@ VERSION="$("$(dirname "$0")/release-version.sh" desktop)"
 [ -n "$VERSION" ] || { echo "FATAL: tools/release-version.sh desktop 没给出版本号" >&2; exit 1; }
 # 两次 tauri 调用（build / bundle）读同一份合并配置；不改动入库的 tauri.conf.json。
 # tauri CLI 的 --config 接受 JSON 字符串（官方用法）。
-VERSION_CONFIG="{\"version\":\"$VERSION\"}"
+# #852：配置由 macOS / Windows 共用的 tools/release/tauri-config.mjs 生成——version，外加 test
+# 版本时把 updater 插件的 endpoint 换成 test-channel/manifest-macos.json（test 包与正式包走同一条
+# 插件应用内更新，只有清单地址不同）。endpoint 在 build 那一步编进二进制，两次调用必须同一份。
+VERSION_CONFIG="$(node "$(dirname "$0")/release/tauri-config.mjs" macos "$VERSION")"
+echo "tauri --config: $VERSION_CONFIG"
+# 与 Windows job 同口径：test 版本打开前端的 test 通道开关（vite 在 tauri build 里跑，须在它之前
+# export）。#852 起前端已不读它，留待 update Worker 下线时一并清理。
+if [[ "$VERSION" == *-test.* ]]; then
+  export VITE_UPDATE_TEST_CHANNEL_IN_APP=1
+fi
 
 [ -d "$REL/lib" ] || { echo "FATAL: $REL/lib missing — run bundle-macos.sh first" >&2; exit 1; }
 [ -f "$REL/daemon" ] || { echo "FATAL: $REL/daemon missing" >&2; exit 1; }

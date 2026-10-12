@@ -121,8 +121,9 @@ class UpdateCheckerTest {
     fun channelManifestUrls_testIsGitHubOnly() {
         // REL-07 + #650：test 通道的对象只在 GitHub 上（滚动 prerelease）⇒ 候选里**不许**
         // 出现 R2，否则每次检查都白打一次 404。
+        // #852：test 读与 stable 同一种分端清单（manifest-android.json），只有地址不同。
         assertEquals(
-            listOf("https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest.json"),
+            listOf("https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel/manifest-android.json"),
             channelManifestUrls(UpdateChannel.Test),
         )
     }

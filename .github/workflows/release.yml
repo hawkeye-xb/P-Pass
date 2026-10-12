@@ -72,8 +72,10 @@ jobs:
   # ══ #838：构建一次、到处复用 ══════════════════════════════════════════
   # 正式 tag 上，某端版本号（release/versions.json）与 Latest 正式版该端清单的 version 相同
   # ⇒ 该端不构建，复用 Latest 的产物（同一个版本号只能对应同一份产物）。判定在
-  # tools/release/plan-builds.sh（test tag 恒两端构建；拿不准一律构建；两端都复用 ⇒ 红）。
+  # tools/release/plan-builds.sh（拿不准一律构建；两端都复用 ⇒ 红）。
   # 复用 job 产出与构建 job 同名、同布局的 artifact，下游 upload / finalize 不区分来源。
+  # #852：test tag 按端发布——某端自上一次 test 发布（test-channel 里该端清单的版本）以来没有
+  # 影响产物的改动 ⇒ 判 skip：不构建也不复用，下游该端 lane 跳过，test-channel 里它的清单不动。
   plan-builds:
     name: "判定各端构建或复用（#838）"
     runs-on: ubuntu-latest
@@ -573,18 +575,10 @@ jobs:
             apps/desktop/src-tauri/binaries/ppf-daemon-x86_64-pc-windows-msvc.exe
           # #788②：test 包的应用内更新读 test-channel 里的 Windows 分端清单（正式版读
           # manifest-windows.json，地址在 tauri.windows.conf.json），同一套插件、同一把公钥。
-          # 插件 endpoint 与前端开关在**这一处**一起设——只设一个，test 包要么查不到更新，
-          # 要么退回「打开下载页」。
-          CONFIG=$(node -e '
-            const [version, repo] = process.argv.slice(1);
-            const c = { version };
-            if (version.includes("-test.")) {
-              c.plugins = { updater: { endpoints: [
-                "https://github.com/" + repo + "/releases/download/test-channel/manifest-windows.json",
-              ] } };
-            }
-            console.log(JSON.stringify(c));
-          ' "$PPF_BUILD_VERSION" "$GITHUB_REPOSITORY")
+          # #852：--config 由 macOS / Windows 共用的 tools/release/tauri-config.mjs 生成（macOS 在
+          # tools/bundle-desktop-macos.sh 里调同一份）。
+          CONFIG=$(node tools/release/tauri-config.mjs windows "$PPF_BUILD_VERSION")
+          # 前端开关照旧随 test 版本打开（#852 起前端已不读它，留待 update Worker 下线时一并清理）。
           if [[ "$PPF_BUILD_VERSION" == *-test.* ]]; then
             export VITE_UPDATE_TEST_CHANNEL_IN_APP=1
           fi
@@ -1033,6 +1027,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: tools/release/point-test-channel.sh artifacts/manifest.json
 
+      # #852：test 通道镜像正式版——Android test 包与正式包读同一种分端清单（manifest-android.json），
+      # 只有地址不同（test-channel vs Latest）。上面那份老格式 manifest.json 是过渡期给已装的旧
+      # test 包的，测试机都升级过一次后另行删除。
+      - name: Point test-channel at the Android manifest (#852)
+        if: contains(env.TAG, '-test.') && hashFiles('artifacts/manifest-android.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/release/point-test-channel.sh artifacts/manifest-android.json
+
   # ── lane 2: macOS ──
   upload-macos:
     name: "上传 macOS"
@@ -1153,7 +1156,8 @@ jobs:
   # signer、同一个 key、同一个 --sig-dir 约定），重写不引入新口径。
   finalize-manifest:
     name: "组装桌面更新 manifest（android + darwin）"
-    needs: [create-draft, upload-android, upload-macos]
+    # #852：needs plan-builds——test tag 上没改动的桌面端判 skip，compose 据此不要求 mac 产物。
+    needs: [plan-builds, create-draft, upload-android, upload-macos]
     # DESK-05 同款容错：dispatch 单平台时其余 lane skipped，`needs` 里有
     # skipped 且无 !cancelled() → 本 job 连带跳过（与 finalize-notes 同
     # 一模式）。每步按 needs.*.result 门控，缺哪个平台就少哪个条目。
@@ -1189,6 +1193,8 @@ jobs:
       # REL-12（#711）：逻辑在 tools/release/compose-desktop.sh（正式 tag：manifest.json =
       # 冻结件原样拷贝；test tag：动态清单；两份分端清单；本该有 mac 产物却没有 ⇒ 红）。
       - name: Compose desktop manifest (android + darwin)
+        env:
+          MACOS_PLAN: ${{ needs.plan-builds.outputs.macos }}
         run: tools/release/compose-desktop.sh
 
       - name: Sign manifest entries (gated)
@@ -1217,6 +1223,25 @@ jobs:
             gh release upload "$TAG" manifest-android.json --clobber
             echo "android manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest-android.json"
           fi
+
+      # #852：test 通道镜像正式版——macOS test 包的插件 endpoint 是 test-channel/manifest-macos.json
+      # （构建期由 tools/release/tauri-config.mjs 写进），与正式包同一条插件应用内更新。
+      # 只改桌面的 test tag 没有 Android lane 代为发布：同 finalize-manifest-windows，这里先按
+      # REL-02 自动发布为 prerelease（幂等），再验签名、写指针。没有 mac 清单（本次桌面判 skip）⇒ 都跳过。
+      - name: Auto-publish test tags as prerelease
+        if: contains(env.TAG, '-test.') && hashFiles('artifacts/manifest-macos.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$TAG" --draft=false --prerelease
+
+      - name: Point test-channel at the macOS manifest (#852)
+        if: contains(env.TAG, '-test.') && hashFiles('artifacts/manifest-macos.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tools/release/check-manifests-signed.sh artifacts/manifest-macos.json
+          tools/release/point-test-channel.sh artifacts/manifest-macos.json
 
   # ── 收口①b: Windows 分端清单（#788②，2026-10-12）──────────────────
   # Windows 与 macOS 同一套标准 Tauri 更新：只含本端条目的 manifest-windows.json
