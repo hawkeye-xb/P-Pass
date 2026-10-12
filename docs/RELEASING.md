@@ -91,7 +91,8 @@
    > release body says which platform was reused and from which tag. Anything
    > uncertain (no Latest, missing manifest or installer, re-run of the Latest
    > tag itself) ⇒ build. Neither version bumped ⇒ `plan-builds` fails and no
-   > draft is created. Test tags always build both. If artifact-shaping build
+   > draft is created. Test tags never reuse; they build per platform by changed
+   > paths (see §3.6). If artifact-shaping build
    > scripts changed for a reused platform, `plan-builds` warns: the change ships
    > only with that platform's next version bump.
 5. **Human publish**: review the draft, then publish it from the
@@ -180,21 +181,30 @@ default** (family devices are never touched by test builds):
 - **test** (dev/dogfood devices): CI auto-publishes any tag containing
   `-test.` as a **GitHub prerelease** (release.yml; GitHub `latest`
   ignores prereleases by design, so it can never leak into stable).
+  **Per-platform test builds (#852):** a test tag builds only the platforms
+  whose inputs changed since the version that platform's test-channel
+  manifest points at (`tools/release/plan-builds.sh`): `apps/android/` →
+  Android; `apps/desktop/` → macOS + Windows; macOS packaging scripts →
+  macOS; `tauri.windows.conf.json` → Windows; docs → none; anything else
+  (`crates/`, `tools/`, `.github/`, …) or anything uncertain → all. An
+  unchanged platform is not built and its test-channel manifest is left as
+  is. Nothing changed anywhere ⇒ `plan-builds` fails, no draft.
   **Test-channel pointer (REL-07):** after a test release is
-  auto-published, release.yml overwrites
-  `releases/download/test-channel/manifest.json` — a fixed, rolling
-  prerelease tagged `test-channel` (created on the first test release,
-  marked prerelease, never latest; do not delete it) — with that
-  release's signed manifest. Download URLs inside still point at the
-  versioned release. Re-running an older tag's workflow never moves the
-  pointer backwards. Nothing calls the GitHub API, so there is no
-  anonymous rate limit and no `GH_TOKEN` to manage.
-  Android reads that file directly. The desktop shell and older Android
-  builds read `https://update.p-pass.hawkeye-xb.com/manifest?channel=test`
-  — the Cloudflare Worker (`infra/workers/update`), now a thin proxy of
-  the same file (300s cache, adds `Access-Control-Allow-Origin`, which the
-  desktop webview needs and GitHub downloads lack). Worker deployment
-  config lives in ppf-ops; DNS: `update.p-pass.hawkeye-xb.com`.
+  auto-published, release.yml writes that release's signed per-platform
+  manifests (`manifest-android.json`, `manifest-macos.json`,
+  `manifest-windows.json`, plus the legacy `manifest.json` for older
+  Android test builds) into `releases/download/test-channel/` — a fixed,
+  rolling prerelease tagged `test-channel` (created on the first test
+  release, marked prerelease, never latest; do not delete it). Download
+  URLs inside still point at the versioned release. Re-running an older
+  tag's workflow never moves a pointer backwards. Nothing calls the GitHub
+  API, so there is no anonymous rate limit and no `GH_TOKEN` to manage.
+  Each client reads its own manifest: Android
+  `test-channel/manifest-android.json`; the desktop shell's updater plugin
+  `test-channel/manifest-<platform>.json` (endpoint baked at build time by
+  `tools/release/tauri-config.mjs` when the version contains `-test.`).
+  The Cloudflare Worker (`infra/workers/update`) is only read by test
+  builds from before #852; it goes away with #860.
 - **404 semantics unchanged**: a test tag left as draft (not published)
   → no prerelease → Worker 404 → clients stay silent ("no update").
   (A draft tag never reaches the pointer step.) Before the very first
@@ -204,13 +214,10 @@ default** (family devices are never touched by test builds):
   network) → **502** (with `Retry-After` when upstream sent one),
   `no-store`, never cached. Clients log 5xx as a *failed check*, not
   "up to date".
-- Desktop note: tauri updater's endpoint is baked at build time and
-  `Update` has no public constructor, so the test-channel **install**
-  path on desktop is currently "check → dialog → open download page"
-  (in-shell fetch of the Worker manifest + `plugin-opener`). Full
-  auto-install on the test channel would require reimplementing the
-  updater install logic (dmg mount/NSIS silent) — deferred until the
-  desktop updater artifact (3.5 gaps) lands.
+- Desktop note: since #852 a desktop test build updates in-app exactly
+  like stable (updater plugin: check → download → verify → replace →
+  restart); only the endpoint differs. Test builds from before #852 still
+  open the download page and need one manual install to cross over.
 
 ## 3.7 Desktop auto-update regression (UPD-06/07, 2026-10-03)
 
@@ -254,7 +261,9 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   `CLOUDFLARE_API_TOKEN`, skipped cleanly when absent).
 - Every workflow has `concurrency: cancel-in-progress`.
 - `release.yml` gained a `platforms` dispatch input (`android`/`macos`/
-  `windows` comma list; empty = all). Tag pushes always build everything.
+  `windows` comma list; empty = all). Tag pushes build per platform:
+  formal tags by version bump (#838; Windows not built until it ships),
+  test tags by changed paths (#852).
 - R2 mirror: **removed 2026-08-25**. Assets are served from GitHub
   release downloads only; the update manifest always points there.
   Re-enabling it requires fixing the coupling first (see `REL-04`).
@@ -326,7 +335,7 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    > （APK `versionName`、`Info.plist` `CFBundleShortVersionString`）等于本次该端版本号；
    > 任一不符即红。正文写明哪一端复用自哪个 tag。拿不准（没有 Latest、缺清单或安装包、
    > 补跑的就是 Latest 本身）一律构建；两端都没涨号 ⇒ `plan-builds` 报错、不建草稿；
-   > test tag 恒两端构建。被复用的一端若改过会影响产物的构建脚本，`plan-builds` 告警：
+   > test tag 从不复用，按改动路径逐端判定是否构建（见 §3.6）。被复用的一端若改过会影响产物的构建脚本，`plan-builds` 告警：
    > 这些改动要等该端下次涨号才进安装包。
 5. **人工 publish**：核对 draft，然后在 GitHub 网页上发布（Releases → 该 draft →
    Publish release）。两项核对：
@@ -367,19 +376,23 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 - **test**（开发/狗粮设备）：CI 把含 `-test.` 的 tag 自动 publish 为
   **GitHub prerelease**（release.yml；GitHub latest 设计上忽略
   prerelease，绝不会漏进 stable）。
-  **test 通道指针（REL-07）**：test release 自动 publish 之后，
-  release.yml 把该版本已签名的 manifest 覆盖进
-  `releases/download/test-channel/manifest.json`——固定的滚动
-  prerelease（tag `test-channel`，首次 test 发布时自动创建，标记
-  prerelease、永不是 latest，勿删）。manifest 里的下载链接仍指向版本化
-  release。重跑旧 tag 的 workflow 不会把指针往回拨。全程不调 GitHub
+  **test 按端构建（#852）**：test tag 只构建自「该端 test-channel 清单所指版本」以来
+  输入有改动的那几端（`tools/release/plan-builds.sh`）：`apps/android/` → Android；
+  `apps/desktop/` → macOS + Windows；macOS 打包脚本 → macOS；`tauri.windows.conf.json`
+  → Windows；文档 → 都不算；其余（`crates/`、`tools/`、`.github/` …）或拿不准 → 所有端。
+  没改动的一端不构建，它在 test-channel 里的清单不动；所有端都没改动 ⇒ `plan-builds`
+  报错、不建草稿。
+  **test 通道指针（REL-07）**：test release 自动 publish 之后，release.yml 把该版本
+  已签名的分端清单（`manifest-android.json`、`manifest-macos.json`、
+  `manifest-windows.json`，外加给旧版 Android test 包读的老格式 `manifest.json`）写进
+  `releases/download/test-channel/`——固定的滚动 prerelease（tag `test-channel`，
+  首次 test 发布时自动创建，标记 prerelease、永不是 latest，勿删）。清单里的下载链接
+  仍指向版本化 release。重跑旧 tag 的 workflow 不会把指针往回拨。全程不调 GitHub
   API → 没有匿名限流，也没有 `GH_TOKEN` 要管。
-  Android 直读这个文件；桌面壳和旧版 Android 读
-  `https://update.p-pass.hawkeye-xb.com/manifest?channel=test`——Cloudflare
-  Worker（`infra/workers/update`），现在只是同一文件的薄代理（缓存 300s，
-  补上桌面 webview 需要、GitHub 下载链接没有的
-  `Access-Control-Allow-Origin`）。Worker 生产配置在 ppf-ops；DNS：
-  `update.p-pass.hawkeye-xb.com`。
+  各端读自己那份：Android 读 `test-channel/manifest-android.json`；桌面壳的更新插件读
+  `test-channel/manifest-<端>.json`（版本号含 `-test.` 时由 `tools/release/tauri-config.mjs`
+  在构建期写进 endpoint）。Cloudflare Worker（`infra/workers/update`）只剩 #852 之前的
+  test 包在读，随 #860 下线。
 - **404 语义不变**：test tag 留 draft 不 publish → 无 prerelease →
   Worker 404 → 客户端静默（「无更新」）（draft 走不到指针那一步）。
   REL-07 合入后、第一次 test 发布之前，`test-channel` 还不存在 → 文件
@@ -387,11 +400,9 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   404；其它上游故障（5xx、403/429、网络异常）→ **502**（上游给了
   `Retry-After` 就透传），`no-store`，绝不缓存。客户端把 5xx 记为「检查
   失败」，不当「已是最新」。
-- 桌面注：tauri updater endpoint 构建期写死、`Update` 无公开构造器，
-  test 通道**安装**路径当前形态是「检查 → 弹窗 → 打开下载页」（壳内
-  fetch Worker manifest + plugin-opener）。test 通道全自动安装需要重写
-  updater 安装逻辑（dmg 挂载/NSIS 静默）——等桌面更新产物（3.5 挂账）
-  落地后再议。
+- 桌面注：#852 起桌面 test 包与正式版同一条应用内更新路径（更新插件：检查 → 下载 →
+  验签 → 替换 → 重启），只有清单地址不同。#852 之前的 test 包仍是打开下载页，要手动装
+  一次新 test 包才能跨过来。
 
 ## 3.7 桌面自动更新回归（UPD-06/07，2026-10-03）
 
