@@ -2600,10 +2600,12 @@ mod tests {
     /// 将来谁加一条**断言到 HOME 那一项**的测试，必须跟本条一起串行化
     /// （在 tests mod 里加个共享 Mutex，别退回 `--test-threads=1`）。
     ///
-    /// DESK-58 (#875)：Windows 上 stderr 不经 plist，见下面那条 Windows 版。
-    #[cfg(not(windows))]
+    /// DESK-58 (#875)：stderr 有固定落点的平台（Windows）不经 plist，见下面那条。
     #[test]
     fn the_startup_error_command_itself_surfaces_the_daemon_stderr() {
+        if platform_owns_startup_stderr() {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
 
@@ -2638,30 +2640,37 @@ mod tests {
         assert_eq!(got.as_deref(), Some(daemon_error));
     }
 
-    /// DESK-58 (#875)：Windows 版的命令层测试。daemon 把没人接的 stderr 落在
-    /// `<data dir>\logs\daemon.err`，向导无参调用命令，要拿到 daemon 那句原话
-    /// （#871 现场就是「库目录不存在：…」，原先永远是 None，界面只能说「请检查日志」）。
+    /// DESK-58 (#875)：stderr 有没有平台固定落点。按能力分支、不写 `#[cfg]`
+    /// （arch-check B.2：平台分叉只在 crates/platform）。
+    fn platform_owns_startup_stderr() -> bool {
+        use platform::PlatformAdapter as _;
+        platform::adapter()
+            .startup_stderr_file(std::path::Path::new("probe"))
+            .is_some()
+    }
+
+    /// DESK-58 (#875)：有固定落点的平台（Windows）的命令层测试。daemon 把没人接
+    /// 的 stderr 落在 `<data dir>\logs\daemon.err`，向导无参调用命令，要拿到
+    /// daemon 那句原话（#871 现场就是「库目录不存在：…」，原先永远是 None，界面
+    /// 只能说「请检查日志」）。
     ///
-    /// data dir 从 `%LOCALAPPDATA%` 算（`%APPDATA%\P-Pass` 还在时用老位置），
-    /// 两个都指到 tempdir，用完还原；与上面 HOME 那条同理，全 crate 没有别的
-    /// 测试读这两个变量。
+    /// Windows 的 data dir 从 `%LOCALAPPDATA%` 算（`%APPDATA%\P-Pass` 还在时用
+    /// 老位置），两个都指到 tempdir，用完还原；与上面 HOME 那条同理，全 crate
+    /// 没有别的测试读这两个变量。文件位置向适配器要，不在测试里写死。
     ///
     /// 反证：命令体改回只读 plist（或 `None`）→ 本测试红。
-    #[cfg(windows)]
     #[test]
-    fn the_startup_error_command_reads_the_windows_stderr_file() {
+    fn the_startup_error_command_reads_the_platform_stderr_file() {
+        use platform::PlatformAdapter as _;
+        if !platform_owns_startup_stderr() {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let local = tmp.path().join("Local");
         let roaming = tmp.path().join("Roaming");
-        let logs = local.join("com.p-pass.desktop").join("logs");
-        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::create_dir_all(&local).unwrap();
         std::fs::create_dir_all(&roaming).unwrap();
-        let daemon_error = "库目录不存在：C:\\Users\\x\\Pictures\\P-Pass 家庭照片库——外置盘未挂载";
-        std::fs::write(
-            logs.join("daemon.err"),
-            format!("panic noise\n{daemon_error}\r\n\r\n"),
-        )
-        .unwrap();
+        let daemon_error = r"库目录不存在：C:\Users\x\Pictures\P-Pass 家庭照片库——外置盘未挂载";
 
         let saved: Vec<_> = ["LOCALAPPDATA", "APPDATA"]
             .iter()
@@ -2669,6 +2678,10 @@ mod tests {
             .collect();
         std::env::set_var("LOCALAPPDATA", &local);
         std::env::set_var("APPDATA", &roaming);
+        let a = platform::adapter();
+        let err_file = a.startup_stderr_file(&a.data_dir()).unwrap();
+        std::fs::create_dir_all(err_file.parent().unwrap()).unwrap();
+        std::fs::write(&err_file, format!("panic noise\n{daemon_error}\r\n\r\n")).unwrap();
         let got = daemon_startup_error();
         for (k, v) in saved {
             match v {
@@ -2677,6 +2690,7 @@ mod tests {
             }
         }
 
+        assert!(err_file.starts_with(tmp.path()), "{}", err_file.display());
         assert_eq!(got.as_deref(), Some(daemon_error));
     }
 
