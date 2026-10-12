@@ -58,6 +58,9 @@ enum class HomeNoticeKind {
 
     /** A phone-deleted source cannot be sent again; informational only. */
     SOURCE_MISSING,
+
+    /** #843：没有位置权限，备份照常进行，但读到的字节里拍摄地点被系统抹掉了。 */
+    LOCATION_REDACTED,
 }
 
 /** 优先级（越靠前越要紧）。UI-04c 口径：阻塞备份的 > 需要授权的 >
@@ -66,6 +69,8 @@ val HOME_NOTICE_PRIORITY: List<HomeNoticeKind> = listOf(
     HomeNoticeKind.PAIRING_LOST,
     HomeNoticeKind.BACKUP_INTERRUPTED,
     HomeNoticeKind.PARTIAL_ACCESS,
+    // #843：需要授权的（照常备份，但缺拍摄地点）——排在只读告知之前。
+    HomeNoticeKind.LOCATION_REDACTED,
 
     HomeNoticeKind.SOURCE_MISSING,
 )
@@ -167,6 +172,8 @@ fun NoticeCard(notice: HomeNotice) {
 fun NoticeHost(
     backgroundBackupState: BackgroundBackupState = BackgroundBackupState.OffByUser,
     onResolveBackgroundBackup: () -> Unit = {},
+    locationRedacted: Boolean = false,
+    onAllowLocation: () -> Unit = {},
 ) {
     val candidates = buildList {
         val bodyRes = when (backgroundBackupState) {
@@ -182,6 +189,15 @@ fun NoticeHost(
                 body = stringResource(bodyRes),
                 actionLabel = stringResource(R.string.background_backup_notice_action),
                 onAction = onResolveBackgroundBackup,
+            )
+        )
+        // #843：不给「知道了」——事实还在就一直说（同 UI-12 的口径），退出路径是给权限。
+        if (locationRedacted) add(
+            HomeNotice(
+                kind = HomeNoticeKind.LOCATION_REDACTED,
+                body = stringResource(R.string.location_redacted_notice),
+                actionLabel = stringResource(R.string.location_redacted_notice_action),
+                onAction = onAllowLocation,
             )
         )
     }

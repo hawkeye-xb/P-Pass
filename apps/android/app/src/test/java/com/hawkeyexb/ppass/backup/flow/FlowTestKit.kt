@@ -210,12 +210,15 @@ internal class FakeImporter(private val media: FakeMedia) : MediaImporter {
     /** 覆盖某张照片导入出来的 hash（模拟「中断期间被编辑、MediaStore 版本没跟上」）。 */
     val hashOverride = mutableMapOf<Long, String>()
 
+    /** 为真时导入结果记「拍摄地点被抹掉」（#843：没有位置权限）。 */
+    var locationRedacted = false
+
     override fun import(mediaId: Long, contentUri: String, dataPath: String?): ImportResult {
         imported += mediaId
         failures.removeFirstOrNull()?.let { throw it }
         if (mediaId in unreadable) return ImportResult.SourceMissing
         val photo = media.photos.singleOrNull { it.mediaId == mediaId } ?: return ImportResult.SourceMissing
-        return ImportResult.Imported(hashOverride[mediaId] ?: photo.hash, photo.size, byReference = true)
+        return ImportResult.Imported(hashOverride[mediaId] ?: photo.hash, photo.size, byReference = true, locationRedacted = locationRedacted)
     }
 
     override fun serve(lease: ProviderLease): String = "ticket-${lease.orderId}"

@@ -96,6 +96,7 @@ import com.hawkeyexb.ppass.backup.flow.requestFlowScopeBackfillAndWake
 import com.hawkeyexb.ppass.backup.flow.requestFlowWakeAfterRepair
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.flow.TriggerReason
+import com.hawkeyexb.ppass.backup.flow.AndroidMediaImporter
 import com.hawkeyexb.ppass.backup.flow.isOnUnmetered
 import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
 import com.hawkeyexb.ppass.ui.BackupStartedScreen
@@ -217,6 +218,18 @@ fun PPassApp() {
     // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
     // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
     var mediaAccess by remember { mutableStateOf(mediaAccess(context)) }
+    // #843：读得到照片的拍摄地点吗（ACCESS_MEDIA_LOCATION）。读不到时照常备份，首页挂提示；回到前台重读。
+    var mediaLocation by remember { mutableStateOf(AndroidMediaImporter.canReadMediaLocation(context)) }
+    val locationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        // 系统不再弹窗（之前拒过且不让再问）时请求直接返回拒绝：只剩应用详情页能开。
+        val activity = context as? android.app.Activity
+        if (!granted && activity != null &&
+            !activity.shouldShowRequestPermissionRationale(Manifest.permission.ACCESS_MEDIA_LOCATION)
+        ) openAppDetailsSettings(context)
+    }
     // #836：每次回到前台 +1。App 外发生的变化（例如在相册 App 里删掉已选相册）要在用户切回来时重算，
     // composition 存活期间只靠进入时算一次的 LaunchedEffect 接不住。
     var resumeCount by remember { mutableStateOf(0) }
@@ -288,6 +301,7 @@ fun PPassApp() {
             pendingBucketsPairing = null
             // 系统弹窗关闭后状态已落定，直接重读（比 ON_RESUME 刷新更及时）。
             mediaAccess = mediaAccess(context)
+            mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
             val stillNeeded = requiredMediaPermissions().filter {
                 ContextCompat.checkSelfPermission(context, it) !=
                     PackageManager.PERMISSION_GRANTED
@@ -432,6 +446,7 @@ fun PPassApp() {
 
                     daysUnreachable = computeDaysUnreachable()
                     mediaAccess = mediaAccess(context)
+                    mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
                     resumeCount++
                     heartbeat.start()
                     timeline.start()
@@ -507,7 +522,7 @@ fun PPassApp() {
             needed.isNotEmpty() -> {
                 pendingBucketsPairing = pairing
                 pendingBucketsFirstTime = firstTime
-                bucketMediaPermission.launch(needed.toTypedArray())
+                bucketMediaPermission.launch(withMediaLocation(needed))
             }
             hasPartialMediaAccess(context) -> screen = Screen.Home(pairing)
             else -> screen = Screen.Buckets(
@@ -804,7 +819,10 @@ fun PPassApp() {
             }
             val mediaPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
-            ) { grants -> if (grants.values.any { it }) holder.backupNow() }
+            ) { grants ->
+                mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+                if (requiredMediaPermissions().any { grants[it] == true }) holder.backupNow()
+            }
             // 存储端移除/吊销本设备后：本地照清（无需 unpair，daemon 端
             // 本就不认本设备），直达扫码，新 token 走 rejoin 门
             // 重建——备份页、照片页的失联红卡按同一个动作走。
@@ -844,6 +862,8 @@ fun PPassApp() {
                         NoticeHost(
                             backgroundBackupState = backgroundBackupState,
                             onResolveBackgroundBackup = resolveBackgroundBackup,
+                            locationRedacted = mediaAccess != MediaAccess.NONE && !mediaLocation,
+                            onAllowLocation = { locationPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION) },
                         )
                     }
                 } else null,
@@ -976,7 +996,7 @@ fun PPassApp() {
                                     PackageManager.PERMISSION_GRANTED
                             }
                             if (needed.isEmpty()) holder.backupNow()
-                            else mediaPermission.launch(needed.toTypedArray())
+                            else mediaPermission.launch(withMediaLocation(needed))
                         },
                         // MOB-02 §二: 部分授权引导（只授权了部分照片 →
                         // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
@@ -1187,6 +1207,13 @@ private fun requiredMediaPermissions(): List<String> =
     } else {
         listOf(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
+
+/**
+ * #843：申请相册权限时顺带申请 `ACCESS_MEDIA_LOCATION`（Android 10+），读到含拍摄地点的原样字节。
+ * 只加在**申请**里，不进 [requiredMediaPermissions] 的放行判断——拒绝它照常备份，只是不含地点（首页有提示）。
+ */
+private fun withMediaLocation(needed: List<String>): Array<String> =
+    (if (Build.VERSION.SDK_INT >= 29) needed + Manifest.permission.ACCESS_MEDIA_LOCATION else needed).toTypedArray()
 
 // MOB-02 §四事件④: App 进前台且距上次成功 >24h → 用户在场档补跑。
 

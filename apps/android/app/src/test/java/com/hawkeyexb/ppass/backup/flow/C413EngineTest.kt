@@ -324,10 +324,11 @@ class C413EngineTest {
         rig.close()
     }
 
-    // 版本没跟上但内容变了（导入出来的 hash 与行里记的不符）：同样源已删 + cancel_tuple，放掉这次导入。
-    // 反证：去掉 hash 比对 → 旧 tuple 带着新内容续传，requests 非空，红。
+    // 版本没跟上但内容变了（导入出来的 hash 与行里记的不符）：旧行源已删 + cancel_tuple；**现在的字节另起一行传**（#843）。
+    // 反证一：去掉 hash 比对 → 旧 tuple 带着新内容续传（requests 里出现旧 id），红。
+    // 反证二：只结旧行不另起（#843 之前）→ 版本没变、扫描不再建行，这张照片漏传：requests 为空，红。
     @Test
-    fun `a legacy order whose imported hash no longer matches is dropped, discarded and released`() = runTest {
+    fun `a legacy order whose imported hash no longer matches is replaced by a new row carrying the current bytes`() = runTest {
         val rig = Rig(this)
         val p = rig.photo(1, generation = 1)
         val old = rig.order(p, OrderState.TRANSFERRING)
@@ -338,8 +339,12 @@ class C413EngineTest {
 
         assertEquals(OrderState.SKIPPED_SOURCE_MISSING, rig.store.get(old.id)!!.state)
         assertEquals(listOf(old.id), rig.delivery.discarded)
-        assertEquals(listOf("blake3:edited"), rig.importer.released)
-        assertEquals(0, rig.delivery.requests.size)
+        val fresh = rig.store.currentForMedia(1)!!
+        assertNotEquals(old.id, fresh.id)
+        assertEquals(OrderState.CONFIRMED, fresh.state)
+        assertEquals("blake3:edited", fresh.contentHash)
+        assertEquals(p.snapshot.sourceVersion, fresh.sourceVersion)
+        assertEquals(listOf(fresh.id), rig.delivery.requests.map { it.orderId })
         rig.close()
     }
 

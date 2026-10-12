@@ -296,6 +296,9 @@
     <!-- UI-12: shared amber-banner action label for both background-backup
          states above (distinct from the CellRow-only wording, since this one
          now also appears on the Photos tab via NoticeHost). -->
+    <!-- #843：没有位置权限时首页常驻提示。 -->
+    <string name="location_redacted_notice">Backups don\'t include where photos and videos were taken</string>
+    <string name="location_redacted_notice_action">Allow</string>
     <string name="background_backup_notice_action">Fix it</string>
     <!-- UI-12: dismiss action — "I know, don\'t ask again for this state",
          distinct from turning auto-backup off entirely. -->

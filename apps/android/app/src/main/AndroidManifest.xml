@@ -18,6 +18,9 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <!-- #843：不持有它时，系统读出的照片/视频字节里位置信息被抹掉（Android 10+）；
+         持有它并对 URI 调用 MediaStore.setRequireOriginal 才拿得到原样字节。 -->
+    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
     <!-- RET-01: 保存到相册的 API 26-28 分支需要写权限（29+ Scoped
          Storage 免权限走 RELATIVE_PATH）。 -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"

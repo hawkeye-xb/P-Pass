@@ -1,6 +1,7 @@
 package com.hawkeyexb.ppass.backup.flow
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -91,6 +92,48 @@ class AndroidMediaImporterTest {
     fun `transfer status carries the source fault`() {
         assertEquals(TransferStatus.Aborted(hash, SourceFault.MISSING), parseTransferStatus("""{"state":"aborted","hash":"$hash","source":"missing"}"""))
         assertEquals(TransferStatus.Aborted(hash), parseTransferStatus("""{"state":"aborted","hash":"$hash"}"""))
+    }
+
+    // ---------------------------------------------------------------- #843 原样字节
+
+    private val importJson843 = """{"hash":"$hash","size":42,"by_reference":true,"fallback":null,"detail":null}"""
+
+    private fun importer(readable: Boolean, opened: MutableList<String>, original: (String) -> AutoCloseable? = { opened += "original"; Source() }) =
+        AndroidMediaImporter(
+            IrohBlobsProviderBridge(FakeNative(importJson = importJson843)) { error("unused") },
+            open = { opened += "plain"; Source() },
+            openOriginal = original,
+            locationReadable = { readable },
+        )
+
+    // 有位置权限：按平台规定走 setRequireOriginal 那条打开路径，结果记「未抹」。
+    // 反证：仍用普通打开 → opened == [plain]，红。
+    @Test
+    fun `with the location grant the importer opens the original and records it unredacted`() {
+        val opened = mutableListOf<String>()
+        val result = importer(readable = true, opened).import(1L, "content://media/1", "/p") as ImportResult.Imported
+        assertEquals(listOf("original"), opened)
+        assertFalse(result.locationRedacted)
+    }
+
+    // 没有位置权限：照常读（不打断备份），结果如实记「已抹」，不静默。
+    // 反证：没权限也去开原图 → 系统抛 UnsupportedOperationException，或 locationRedacted 记 false，红。
+    @Test
+    fun `without the grant it reads the redacted bytes and says so`() {
+        val opened = mutableListOf<String>()
+        val result = importer(readable = false, opened).import(1L, "content://media/1", "/p") as ImportResult.Imported
+        assertEquals(listOf("plain"), opened)
+        assertTrue(result.locationRedacted)
+    }
+
+    // 检查时有权限、打开时被收回：系统抛 UnsupportedOperationException（三星 Android 15 实测）→ 按抹过的读，不失败。
+    @Test
+    fun `a grant revoked between check and open falls back to the redacted read`() {
+        val opened = mutableListOf<String>()
+        val result = importer(readable = true, opened, original = { throw UnsupportedOperationException("Caller must hold ACCESS_MEDIA_LOCATION") })
+            .import(1L, "content://media/1", "/p") as ImportResult.Imported
+        assertEquals(listOf("plain"), opened)
+        assertTrue(result.locationRedacted)
     }
 
     private class Source : AutoCloseable {
