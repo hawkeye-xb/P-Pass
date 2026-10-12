@@ -20,6 +20,52 @@ use crate::{AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Res
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "P-Pass";
 
+/// DESK-60 (#877)：NSIS（Tauri 模板，currentUser 模式）的卸载登记。
+/// `InstallLocation` 是带引号的安装目录。
+const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass";
+
+/// Run 值的写法：可执行路径**加引号**。用户名带空格时
+/// （`C:\Users\John Smith\…`）不加引号的命令行会先被当成 `C:\Users\John.exe`
+/// 去找——Windows 上「未加引号的服务路径」的标准坑。
+fn run_value_for(exec: &Path) -> String {
+    format!("\"{}\"", exec.display())
+}
+
+/// Run 值 → 可执行路径。带不带引号都认（老版本写的是不带引号的）；
+/// 引号后面跟的参数不算路径。空值 = 读不出。
+fn exec_from_run_value(value: &str) -> Option<PathBuf> {
+    let v = value.trim();
+    let path = match v.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(""),
+        None => v,
+    };
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
+fn installed_location() -> Option<PathBuf> {
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey(UNINSTALL_KEY)
+        .ok()?;
+    let raw: String = key.get_value("InstallLocation").ok()?;
+    exec_from_run_value(&raw)
+}
+
+/// `exec` 是否就在 `install_dir` 里（直接子文件）。Windows 路径不分大小写，
+/// 结尾的分隔符不算数。
+fn is_in_install_dir(exec: &Path, install_dir: &Path) -> bool {
+    fn norm(p: &Path) -> String {
+        p.display()
+            .to_string()
+            .replace('/', "\\")
+            .trim_end_matches('\\')
+            .to_lowercase()
+    }
+    match exec.parent() {
+        Some(parent) => !norm(install_dir).is_empty() && norm(parent) == norm(install_dir),
+        None => false,
+    }
+}
+
 /// DESK-24 (#173)：数据目录在 `%LOCALAPPDATA%` 下的名字。
 ///
 /// 取自 `apps/desktop/src-tauri/tauri.conf.json` 的 `identifier`，不是随手
@@ -134,7 +180,7 @@ impl PlatformAdapter for WindowsAdapter {
         let (key, _) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
             .create_subkey(RUN_KEY)
             .map_err(io_err("open HKCU Run key"))?;
-        key.set_value(RUN_VALUE, &exec.display().to_string())
+        key.set_value(RUN_VALUE, &run_value_for(exec))
             .map_err(io_err("set Run value"))?;
         // The Run key only takes effect on the NEXT login/boot — unlike
         // macOS's `launchctl bootstrap` (RunAtLoad), writing the registry
@@ -154,6 +200,58 @@ impl PlatformAdapter for WindowsAdapter {
             .open_subkey(RUN_KEY)
             .map_err(io_err("open HKCU Run key"))?;
         Ok(key.get_value::<String, _>(RUN_VALUE).is_ok())
+    }
+
+    /// DESK-60 (#877)：Run 值指向哪个可执行文件。原先没实现（默认 `None`），
+    /// 对账和 daemon 接管都把「登记着别的路径」当成「没登记」。
+    fn autostart_registered_exec(&self) -> Result<Option<PathBuf>> {
+        Ok(match self.autostart_registration()? {
+            crate::AutostartRegistration::At(p) => Some(p),
+            _ => None,
+        })
+    }
+
+    fn autostart_registration(&self) -> Result<crate::AutostartRegistration> {
+        let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+        let key = match hkcu.open_subkey(RUN_KEY) {
+            Ok(k) => k,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(crate::AutostartRegistration::Absent)
+            }
+            Err(e) => return Err(io_err("open HKCU Run key")(e)),
+        };
+        Ok(match key.get_value::<String, _>(RUN_VALUE) {
+            Ok(v) => match exec_from_run_value(&v) {
+                Some(p) => crate::AutostartRegistration::At(p),
+                None => crate::AutostartRegistration::Unreadable,
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                crate::AutostartRegistration::Absent
+            }
+            // 值在、但不是字符串（被别的工具写坏）——与 macOS 读不出的 plist 同类。
+            Err(_) => crate::AutostartRegistration::Unreadable,
+        })
+    }
+
+    /// DESK-60 (#877)：对账闸门——只认**安装程序登记的安装目录**里的 daemon。
+    ///
+    /// 依据是 NSIS 写的 `HKCU\…\Uninstall\P-Pass` 的 `InstallLocation`，而不是
+    /// 硬编码 `%LOCALAPPDATA%\P-Pass`：用户在安装向导里改过目录也认得出；
+    /// 解压到「下载」目录直接跑的、开发构建 `target\` 里的，都不在那里，
+    /// 照旧拒绝（#604 的同一条风险：把登记改指向一次性路径）。
+    fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
+        match installed_location() {
+            Some(dir) => is_in_install_dir(expected, &dir),
+            None => false,
+        }
+    }
+
+    /// DESK-60 (#877)：Tauri 的 NSIS 卸载模板按产品名删 Run 值（与我们的
+    /// `RUN_VALUE` 同名），配置和照片库却保留——重装后「服务该在、登记没了」
+    /// 是这个平台上的常规路径，壳要补登记。macOS 卸载就是拖进废纸篓，plist
+    /// 不会被删，没有这条路径。
+    fn autostart_restore_when_missing(&self) -> bool {
+        true
     }
 
     fn uninstall_autostart(&self) -> Result<()> {
@@ -2168,5 +2266,69 @@ mod desk58_stderr_capture_tests {
             a.startup_stderr_file(dir).unwrap().parent(),
             a.default_log_file(dir).unwrap().parent()
         );
+    }
+}
+
+#[cfg(test)]
+mod desk60_autostart_tests {
+    use super::*;
+
+    /// 写出去的带引号，读回来的是原路径——往返一致，对账才不会每次都判「指向别处」。
+    #[test]
+    fn the_run_value_round_trips_and_is_quoted() {
+        let exe = Path::new(r"C:\Users\John Smith\AppData\Local\P-Pass\ppf-daemon.exe");
+        let v = run_value_for(exe);
+        assert!(v.starts_with('"') && v.ends_with('"'), "{v}");
+        assert_eq!(exec_from_run_value(&v).as_deref(), Some(exe));
+    }
+
+    /// 老版本写的是不带引号的；带参数的引号形式只取路径；空值算读不出。
+    #[test]
+    fn run_values_written_by_older_versions_still_parse() {
+        assert_eq!(
+            exec_from_run_value(r"C:\a\ppf-daemon.exe").as_deref(),
+            Some(Path::new(r"C:\a\ppf-daemon.exe"))
+        );
+        assert_eq!(
+            exec_from_run_value(r#""C:\a b\ppf-daemon.exe" --flag"#).as_deref(),
+            Some(Path::new(r"C:\a b\ppf-daemon.exe"))
+        );
+        assert_eq!(exec_from_run_value("  "), None);
+        assert_eq!(exec_from_run_value("\"\""), None);
+    }
+
+    /// 闸门：只认安装目录里的直接子文件；大小写、结尾分隔符不算差别；
+    /// 「下载」目录、开发构建、安装目录的子目录一律拒绝。
+    #[test]
+    fn only_the_installed_daemon_passes_the_gate() {
+        let install = Path::new(r"C:\Users\x\AppData\Local\P-Pass");
+        assert!(is_in_install_dir(
+            Path::new(r"C:\Users\x\AppData\Local\P-Pass\ppf-daemon.exe"),
+            install
+        ));
+        assert!(is_in_install_dir(
+            Path::new(r"c:\users\X\appdata\local\p-pass\ppf-daemon.exe"),
+            Path::new(r"C:\Users\x\AppData\Local\P-Pass\")
+        ));
+        for elsewhere in [
+            r"C:\Users\x\Downloads\P-Pass\ppf-daemon.exe",
+            r"C:\Users\x\personal\P-Pass\target\release\ppf-daemon.exe",
+            r"C:\Users\x\AppData\Local\P-Pass\old\ppf-daemon.exe",
+            r"C:\Users\x\AppData\Local\P-Pass-copy\ppf-daemon.exe",
+        ] {
+            assert!(
+                !is_in_install_dir(Path::new(elsewhere), install),
+                "{elsewhere}"
+            );
+        }
+        assert!(!is_in_install_dir(
+            Path::new(r"C:\ppf-daemon.exe"),
+            Path::new("")
+        ));
+    }
+
+    #[test]
+    fn windows_restores_a_missing_registration() {
+        assert!(WindowsAdapter::new().autostart_restore_when_missing());
     }
 }
