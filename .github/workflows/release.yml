@@ -85,6 +85,7 @@ jobs:
     outputs:
       android: ${{ steps.plan.outputs.android }}
       macos: ${{ steps.plan.outputs.macos }}
+      windows: ${{ steps.plan.outputs.windows }}
       reuse_from: ${{ steps.plan.outputs.reuse_from }}
       android_version: ${{ steps.plan.outputs.android_version }}
       macos_version: ${{ steps.plan.outputs.macos_version }}
@@ -474,9 +475,14 @@ jobs:
     # 理由已不成立：桌面收口不等 Windows（finalize-manifest 的 needs），Windows 的清单
     # 由它自己的 finalize-manifest-windows 出，晚到只影响 Windows 自己。
     # 正式 tag 仍不构建：是否正式发布 Windows 由验收人决定（届时还要接 #838 的复用判定）。
+    # 2026-10-12 验收人：test tag 也按端判（plan-builds 的 windows 输出），只改别的端时不陪跑 Windows。
+    # 手动 dispatch 明确点名 Windows 时照建，不看 plan；!cancelled()：plan 判错退出也不吞掉这个点名。
+    needs: [plan-builds]
     if: >-
-      (github.event_name == 'workflow_dispatch' && (inputs.platforms == '' || inputs.platforms == 'all' || contains(format('{0},', inputs.platforms || 'all'), 'windows')))
-      || (github.event_name == 'push' && contains(github.ref_name, '-test.'))
+      !cancelled() && (
+        (github.event_name == 'workflow_dispatch' && (inputs.platforms == '' || inputs.platforms == 'all' || contains(format('{0},', inputs.platforms || 'all'), 'windows')))
+        || (github.event_name == 'push' && contains(github.ref_name, '-test.') && needs.plan-builds.outputs.windows == 'build')
+      )
     permissions:
       contents: read
       id-token: write
