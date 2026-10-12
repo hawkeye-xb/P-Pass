@@ -758,7 +758,11 @@ fn start_daemon() -> Result<String, String> {
 fn daemon_startup_stderr_from(plist: &std::path::Path) -> Option<String> {
     let plist = std::fs::read_to_string(plist).ok()?;
     let (_, stderr_path) = daemon_logs::parse_plist_log_paths(&plist);
-    let stderr = daemon_logs::tail(std::path::Path::new(stderr_path.as_deref()?), 64 * 1024)?;
+    last_stderr_line(std::path::Path::new(stderr_path.as_deref()?))
+}
+
+fn last_stderr_line(path: &std::path::Path) -> Option<String> {
+    let stderr = daemon_logs::tail(path, 64 * 1024)?;
     stderr
         .lines()
         .rev()
@@ -766,12 +770,27 @@ fn daemon_startup_stderr_from(plist: &std::path::Path) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// DESK-58 (#875)：stderr 的去处。平台给了固定落点（Windows 的
+/// `logs\daemon.err`，daemon 自己接上的）就读它；否则照旧从 LaunchAgent
+/// plist 里读（macOS，由 launchd 接）。
+fn daemon_startup_error_in(
+    platform_dir: &std::path::Path,
+    plist: &std::path::Path,
+) -> Option<String> {
+    use platform::PlatformAdapter as _;
+    match platform::adapter().startup_stderr_file(platform_dir) {
+        Some(file) => last_stderr_line(&file),
+        None => daemon_startup_stderr_from(plist),
+    }
+}
+
 /// The wizard asks only after its existing readiness wait has elapsed. This
 /// exposes the daemon's own stderr unchanged, so the UI can explain known
 /// failures without replacing actionable diagnostic text.
 #[tauri::command]
 fn daemon_startup_error() -> Option<String> {
-    daemon_startup_stderr_from(&daemon_logs::plist_path())
+    use platform::PlatformAdapter as _;
+    daemon_startup_error_in(&platform::adapter().data_dir(), &daemon_logs::plist_path())
 }
 
 /// DESK-36 (#456)：「用户主动停止了后台服务」的持久标记。
@@ -1476,6 +1495,13 @@ fn assemble_export(
         .as_deref()
         .map(daemon_logs::parse_plist_log_paths)
         .unwrap_or((None, None));
+    // DESK-58 (#875)：没有 plist 的平台（Windows）stderr 有固定落点，收进
+    // daemon-stderr.log——「起不来的原因」就在这份里。
+    let err_path = err_path.or_else(|| {
+        platform::adapter()
+            .startup_stderr_file(&env.platform_dir)
+            .map(|p| p.display().to_string())
+    });
     // DIAG-B1：daemon 自己的固定位置日志，不依赖 plist。DESK-32 (#367)：没读到
     // 也要把原因和本该在的位置带进包里。
     let log_path = platform::adapter().default_log_file(&env.platform_dir);
@@ -2577,8 +2603,13 @@ mod tests {
     /// config 的 data_dir 和注入的 cfg_dir，跟 HOME 无关。
     /// 将来谁加一条**断言到 HOME 那一项**的测试，必须跟本条一起串行化
     /// （在 tests mod 里加个共享 Mutex，别退回 `--test-threads=1`）。
+    ///
+    /// DESK-58 (#875)：stderr 有固定落点的平台（Windows）不经 plist，见下面那条。
     #[test]
     fn the_startup_error_command_itself_surfaces_the_daemon_stderr() {
+        if platform_owns_startup_stderr() {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path();
 
@@ -2610,6 +2641,60 @@ mod tests {
             None => std::env::remove_var("HOME"),
         }
 
+        assert_eq!(got.as_deref(), Some(daemon_error));
+    }
+
+    /// DESK-58 (#875)：stderr 有没有平台固定落点。按能力分支、不写 `#[cfg]`
+    /// （arch-check B.2：平台分叉只在 crates/platform）。
+    fn platform_owns_startup_stderr() -> bool {
+        use platform::PlatformAdapter as _;
+        platform::adapter()
+            .startup_stderr_file(std::path::Path::new("probe"))
+            .is_some()
+    }
+
+    /// DESK-58 (#875)：有固定落点的平台（Windows）的命令层测试。daemon 把没人接
+    /// 的 stderr 落在 `<data dir>\logs\daemon.err`，向导无参调用命令，要拿到
+    /// daemon 那句原话（#871 现场就是「库目录不存在：…」，原先永远是 None，界面
+    /// 只能说「请检查日志」）。
+    ///
+    /// Windows 的 data dir 从 `%LOCALAPPDATA%` 算（`%APPDATA%\P-Pass` 还在时用
+    /// 老位置），两个都指到 tempdir，用完还原；与上面 HOME 那条同理，全 crate
+    /// 没有别的测试读这两个变量。文件位置向适配器要，不在测试里写死。
+    ///
+    /// 反证：命令体改回只读 plist（或 `None`）→ 本测试红。
+    #[test]
+    fn the_startup_error_command_reads_the_platform_stderr_file() {
+        use platform::PlatformAdapter as _;
+        if !platform_owns_startup_stderr() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tmp.path().join("Local");
+        let roaming = tmp.path().join("Roaming");
+        std::fs::create_dir_all(&local).unwrap();
+        std::fs::create_dir_all(&roaming).unwrap();
+        let daemon_error = r"库目录不存在：C:\Users\x\Pictures\P-Pass 家庭照片库——外置盘未挂载";
+
+        let saved: Vec<_> = ["LOCALAPPDATA", "APPDATA"]
+            .iter()
+            .map(|k| (*k, std::env::var_os(k)))
+            .collect();
+        std::env::set_var("LOCALAPPDATA", &local);
+        std::env::set_var("APPDATA", &roaming);
+        let a = platform::adapter();
+        let err_file = a.startup_stderr_file(&a.data_dir()).unwrap();
+        std::fs::create_dir_all(err_file.parent().unwrap()).unwrap();
+        std::fs::write(&err_file, format!("panic noise\n{daemon_error}\r\n\r\n")).unwrap();
+        let got = daemon_startup_error();
+        for (k, v) in saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+
+        assert!(err_file.starts_with(tmp.path()), "{}", err_file.display());
         assert_eq!(got.as_deref(), Some(daemon_error));
     }
 

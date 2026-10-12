@@ -380,6 +380,30 @@ pub trait PlatformAdapter: Send + Sync {
         false
     }
 
+    /// DESK-58 (#875)：daemon 启动早期报错（文件日志之前的 `eprintln!`、`main`
+    /// 返回的 `Err`、panic）的**固定落点**。`None` = 由托管方接 stderr（macOS 的
+    /// launchd `StandardErrorPath`，壳从 plist 里读路径）。
+    ///
+    /// Windows 必须返回 `Some`：Run 键和壳的一次性 spawn 都不给 stderr 去处，
+    /// 不落盘的话「库目录不存在」这类原话谁都看不到，向导只能说「请检查日志」。
+    /// daemon 写（[`Self::capture_unattached_stderr`]）、壳读（向导 + 诊断包）
+    /// 用的是这同一个函数，路径只有一份。
+    fn startup_stderr_file(&self, data_dir: &std::path::Path) -> Option<PathBuf> {
+        let _ = data_dir;
+        None
+    }
+
+    /// DESK-58 (#875)：本进程的 stderr **没人接**时，把它改接到
+    /// [`Self::startup_stderr_file`]（每次启动截断重写）。
+    ///
+    /// 「没人接」只指：没有 stderr 句柄，或者接的是空设备（`NUL`）。控制台、
+    /// 管道、磁盘文件都是有人**刻意**接的（终端前台、测试框架、手工重定向），
+    /// 一律不动。默认实现 `NotApplicable`：别的平台由托管方负责 stderr。
+    fn capture_unattached_stderr(&self, data_dir: &std::path::Path) -> Applied {
+        let _ = data_dir;
+        Applied::NotApplicable
+    }
+
     /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。
     ///
     /// 用在身份密钥这类文件上。默认实现返回 [`Applied::Unsupported`] 而
