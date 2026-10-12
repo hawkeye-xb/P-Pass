@@ -448,11 +448,15 @@ class UpdateUiController(
 
     // ── 对话框动作 ──
 
-    /** 「下载安装」：落盘待办 + 入队后台下载，状态由 worker 信号接管。 */
+    /**
+     * 「下载安装」：落盘待办 + 入队后台下载，状态由 worker 信号接管。
+     * #835（Play 灵活更新）：用户的意思表示到此为止——下载直接在后台进行，不再弹进度框；
+     * 下完或失败时由 [observeWorker] 解除压制，把结果送到用户面前。
+     */
     fun onUserConfirmDownload() {
         val s = _state.value as? UpdateUiState.Available ?: return
         startDownload(s.info)
-        dialogSuppressed.value = false
+        dialogSuppressed.value = true
         _state.value = UpdateUiState.Downloading(0L, -1L, s.info.version)
     }
 
@@ -518,6 +522,8 @@ class UpdateUiController(
                 signature = pending.signature,
             ),
         )
+        // #835：重试同样后台进行，不弹进度框。
+        dialogSuppressed.value = true
         _state.value = UpdateUiState.Downloading(0L, -1L, pending.version)
     }
 
