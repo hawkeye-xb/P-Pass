@@ -1,4 +1,8 @@
-//! Android JNI bridge for a one-lease iroh-blobs provider.
+//! Platform-neutral one-lease iroh-blobs provider kernel (IOS-05 #312).
+//!
+//! No binding lives here: the Android JNI binding is `android_jni.rs` (and its
+//! JSON wire shapes `android_wire.rs`); a second binding (iOS, IOS-06) sits on
+//! the same public API. Everything a binding needs is `pub` on [`BlobsProvider`].
 //!
 //! A provider keeps one endpoint across Flow items. Registrations add their
 //! current source to the same private store; revocation only stops the active
@@ -15,12 +19,8 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{File, Metadata};
 use std::io::{Read, Seek, SeekFrom};
-#[cfg(feature = "android-jni")]
-use std::os::fd::{FromRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-#[cfg(feature = "android-jni")]
-use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -37,12 +37,6 @@ use iroh_blobs::store::fs::FsStore;
 use iroh_blobs::store::GcConfig;
 use iroh_blobs::ticket::BlobTicket;
 use iroh_blobs::{BlobFormat, BlobsProtocol, Hash};
-#[cfg(feature = "android-jni")]
-use jni::objects::{JClass, JString};
-#[cfg(feature = "android-jni")]
-use jni::sys::{jint, jlong, jstring};
-#[cfg(feature = "android-jni")]
-use jni::JNIEnv;
 
 use crate::{IrohTransport, Result, TransportConfig, TransportError, ALPN_BLOBS};
 
@@ -56,7 +50,7 @@ use crate::{IrohTransport, Result, TransportConfig, TransportError, ALPN_BLOBS};
 /// tag is dropped when the lease is revoked, so a validated completion receipt
 /// (or a pause/cancel) releases the blob to the next 60s GC pass while a
 /// still-active lease stays protected through any number of GC cycles.
-pub struct AndroidBlobsProvider {
+pub struct BlobsProvider {
     runtime: tokio::runtime::Runtime,
     store: FsStore,
     /// NET-29: the current endpoint. Replaced (never mutated) when it did not
@@ -274,7 +268,7 @@ struct ActiveProvider {
     /// Legacy `register_*` path: the tag of the blob served by this lease.
     retained: Option<TempTag>,
     /// #413: the imported hash this lease serves (its tag lives in
-    /// `AndroidBlobsProvider::imports`).
+    /// `BlobsProvider::imports`).
     served: Option<Hash>,
 }
 
@@ -293,7 +287,7 @@ struct ActiveBlobsDispatch {
     handler: Arc<Mutex<Option<StopAwareBlobsProtocol>>>,
     /// See [`ProviderEndpoint::retired`].
     retired: Arc<AtomicBool>,
-    /// #547: see [`AndroidBlobsProvider::allowed_peer`].
+    /// #547: see [`BlobsProvider::allowed_peer`].
     allowed_peer: AllowedPeer,
     /// #729: see [`ProviderEndpoint::connections`] (the same table).
     connections: Arc<EndpointConnections>,
@@ -466,7 +460,7 @@ impl TransferActivity {
 }
 
 /// The caller-facing summary of [`TransferActivity`] + the connection table,
-/// read together under `AndroidBlobsProvider::active`'s lock so the two
+/// read together under `BlobsProvider::active`'s lock so the two
 /// never observe inconsistent halves of the same instant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActiveTransferStatus {
@@ -493,107 +487,6 @@ pub enum ActiveTransferStatus {
         /// connection events never reset it. `None` before any byte moved.
         byte_idle_for: Option<Duration>,
     },
-}
-
-/// Wire shape for [`ActiveTransferStatus`] over the JNI boundary — the
-/// same `state`/`hash`/`connected`/`idle_for_ms` field vocabulary the
-/// daemon's own `FlowStatusReply` uses for the analogous cross-process
-/// concept. Built directly as a `serde_json::Value` (this crate depends
-/// on `serde_json` alone, not `serde` — adding it just for one derive
-/// pulled in a dependency-tree reresolution that broke iroh-blobs'
-/// pinned `irpc` version; see NET-14 card notes).
-///
-/// BUILD-06: 闸门写成「存在即被使用」。唯一的非测试调用方是
-/// `nativeTransferStatus` 那个 JNI 导出（`#[cfg(feature = "android-jni")]`），
-/// 所以 feature 关闭时 lib target 里它没有调用方 ⇒ `-D warnings` 下的
-/// `dead_code` 直接变 error（`--all-targets` 里的 test target 算不上调用方，
-/// 两个 target 是分开编的）。加 `test` 是为了让 `wire_status_tests` 在默认
-/// feature 下仍然跑得到——不用 `#[allow(dead_code)]` 把问题盖住。
-#[cfg(any(feature = "android-jni", test))]
-impl ActiveTransferStatus {
-    fn to_wire(&self) -> serde_json::Value {
-        match self {
-            ActiveTransferStatus::NoLease => serde_json::json!({ "state": "no_lease" }),
-            ActiveTransferStatus::Completed { hash } => serde_json::json!({
-                "state": "completed",
-                "hash": hex_of(hash),
-            }),
-            ActiveTransferStatus::Aborted { hash } => serde_json::json!({
-                "state": "aborted",
-                "hash": hex_of(hash),
-            }),
-            ActiveTransferStatus::InProgress {
-                connected,
-                idle_for,
-                bytes_sent,
-                byte_idle_for,
-            } => serde_json::json!({
-                "state": "in_progress",
-                "connected": connected,
-                "idle_for_ms": idle_for.map(|d| d.as_millis() as u64),
-                "bytes_sent": bytes_sent,
-                "byte_idle_for_ms": byte_idle_for.map(|d| d.as_millis() as u64),
-            }),
-        }
-    }
-}
-
-// BUILD-06: 闸门同 to_wire——它只被 to_wire 调用，跟着一起存在或一起消失。
-#[cfg(any(feature = "android-jni", test))]
-fn hex_of(bytes: &[u8; 32]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-#[cfg(test)]
-mod wire_status_tests {
-    use super::*;
-
-    #[test]
-    fn no_lease_has_only_a_state_field() {
-        assert_eq!(
-            ActiveTransferStatus::NoLease.to_wire(),
-            serde_json::json!({ "state": "no_lease" }),
-        );
-    }
-
-    #[test]
-    fn completed_carries_lowercase_hex_hash() {
-        let hash = [0xabu8; 32];
-        let wire = ActiveTransferStatus::Completed { hash }.to_wire();
-        assert_eq!(wire["state"], "completed");
-        assert_eq!(wire["hash"], "ab".repeat(32));
-    }
-
-    #[test]
-    fn in_progress_reports_connected_and_idle_ms() {
-        let wire = ActiveTransferStatus::InProgress {
-            connected: true,
-            idle_for: Some(Duration::from_millis(1234)),
-            bytes_sent: Some(4096),
-            byte_idle_for: Some(Duration::from_millis(180_000)),
-        }
-        .to_wire();
-        assert_eq!(wire["state"], "in_progress");
-        assert_eq!(wire["connected"], true);
-        assert_eq!(wire["idle_for_ms"], 1234);
-        assert_eq!(wire["bytes_sent"], 4096);
-        assert_eq!(wire["byte_idle_for_ms"], 180_000);
-    }
-
-    #[test]
-    fn in_progress_with_no_activity_yet_reports_null_idle() {
-        let wire = ActiveTransferStatus::InProgress {
-            connected: false,
-            idle_for: None,
-            bytes_sent: None,
-            byte_idle_for: None,
-        }
-        .to_wire();
-        assert_eq!(wire["connected"], false);
-        assert!(wire["idle_for_ms"].is_null());
-        assert!(wire["bytes_sent"].is_null());
-        assert!(wire["byte_idle_for_ms"].is_null());
-    }
 }
 
 /// Wraps iroh-blobs' protocol handler to retain/close active QUIC
@@ -774,7 +667,7 @@ impl ProtocolHandler for StopAwareBlobsProtocol {
     }
 }
 
-impl AndroidBlobsProvider {
+impl BlobsProvider {
     pub fn new(root: impl AsRef<Path>) -> Result<Self> {
         Self::with_config(
             root,
@@ -910,12 +803,11 @@ impl AndroidBlobsProvider {
             .block_on(self.register_path_async(declared_hash, path))
     }
 
-    /// Imports an Android ParcelFileDescriptor without relying on a filesystem
-    /// path. The caller retains ownership of [fd]; this method duplicates it and
-    /// completes the import before returning.
-    #[cfg(feature = "android-jni")]
-    fn register_fd(&self, declared_hash: [u8; 32], fd: RawFd) -> Result<String> {
-        let source = duplicate_fd(fd)?;
+    /// Imports an already-open [source] (the caller hands over ownership)
+    /// under [declared_hash] and returns a ticket for the long-lived endpoint.
+    /// The import completes before returning. Bindings that receive a raw
+    /// descriptor (Android's ParcelFileDescriptor) duplicate it first.
+    pub fn register_file(&self, declared_hash: [u8; 32], source: File) -> Result<String> {
         self.runtime
             .block_on(self.register_file_async(declared_hash, source))
     }
@@ -1284,7 +1176,6 @@ impl AndroidBlobsProvider {
         self.activate(declared_hash, tag).await
     }
 
-    #[cfg(feature = "android-jni")]
     async fn register_file_async(&self, declared_hash: [u8; 32], source: File) -> Result<String> {
         // #413 §3: 1 MiB reads (the 4 KiB default was ~2.5x slower).
         let stream = tokio_util::io::ReaderStream::with_capacity(
@@ -1376,7 +1267,7 @@ mod endpoint_ownership_tests {
     #[test]
     fn retiring_an_endpoint_closes_only_the_connections_it_accepted() {
         let dir = tempfile::tempdir().unwrap();
-        let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+        let provider = BlobsProvider::new_loopback(dir.path()).unwrap();
         // A lease handler must be installed, or dispatch closes every
         // connection as "provider revoked" and the test proves nothing.
         provider
@@ -1512,8 +1403,8 @@ impl ImportFallback {
     }
 }
 
-/// Result of [`AndroidBlobsProvider::import_media`]. The import is held
-/// (kept alive against GC) until [`AndroidBlobsProvider::release`].
+/// Result of [`BlobsProvider::import_media`]. The import is held
+/// (kept alive against GC) until [`BlobsProvider::release`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaImport {
     pub hash: [u8; 32],
@@ -1670,7 +1561,7 @@ fn read_head(file: &mut File, len: usize) -> std::io::Result<Vec<u8>> {
     Ok(head)
 }
 
-impl AndroidBlobsProvider {
+impl BlobsProvider {
     /// #413 §3: import one original, referencing it in place when [data_path]
     /// provably names the same file as [source] (the opened descriptor), and
     /// copying from [source] otherwise. Returns its BLAKE3 hash; the content
@@ -1984,35 +1875,8 @@ fn reference_plan(
     }
 }
 
-/// Wire shape of [`MediaImport`] over the JNI boundary.
-#[cfg(any(feature = "android-jni", test))]
-fn import_wire(import: &MediaImport) -> serde_json::Value {
-    serde_json::json!({
-        "hash": hex_of(&import.hash),
-        "size": import.size,
-        "by_reference": import.by_reference,
-        "fallback": import.fallback.map(ImportFallback::as_str),
-        "detail": import.detail,
-    })
-}
-
-/// [`ActiveTransferStatus::to_wire`] plus `"source"` when the lease's
-/// referenced original is gone or changed. A completed pull already has
-/// every byte, so no fault is attached to it.
-#[cfg(any(feature = "android-jni", test))]
-fn status_wire(status: &ActiveTransferStatus, fault: Option<SourceFault>) -> serde_json::Value {
-    let mut wire = status.to_wire();
-    if let (Some(fault), false) = (
-        fault,
-        matches!(status, ActiveTransferStatus::Completed { .. }),
-    ) {
-        wire["source"] = serde_json::Value::from(fault.as_str());
-    }
-    wire
-}
-
 #[cfg(test)]
-mod media_wire_tests {
+mod file_identity_tests {
     use super::*;
 
     const FD: FileIdentity = FileIdentity {
@@ -2056,427 +1920,5 @@ mod media_wire_tests {
                 ..FD
             }
         ));
-    }
-
-    #[test]
-    fn import_wire_reports_fallback_reason() {
-        let wire = import_wire(&MediaImport {
-            hash: [0x01; 32],
-            size: 7,
-            by_reference: false,
-            fallback: Some(ImportFallback::NoPath),
-            detail: None,
-        });
-        assert_eq!(wire["hash"], "01".repeat(32));
-        assert_eq!(wire["size"], 7);
-        assert_eq!(wire["by_reference"], false);
-        assert_eq!(wire["fallback"], "no_path");
-        assert!(wire["detail"].is_null());
-    }
-
-    #[test]
-    fn status_wire_attaches_source_fault_except_to_completed() {
-        let aborted = ActiveTransferStatus::Aborted { hash: [2; 32] };
-        assert_eq!(
-            status_wire(&aborted, Some(SourceFault::Changed))["source"],
-            "changed"
-        );
-        assert!(status_wire(&aborted, None).get("source").is_none());
-        let completed = ActiveTransferStatus::Completed { hash: [2; 32] };
-        assert!(status_wire(&completed, Some(SourceFault::Missing))
-            .get("source")
-            .is_none());
-    }
-}
-
-#[cfg(feature = "android-jni")]
-static PROVIDERS: OnceLock<Mutex<HashMap<jlong, Arc<AndroidBlobsProvider>>>> = OnceLock::new();
-#[cfg(feature = "android-jni")]
-static NEXT_PROVIDER_HANDLE: AtomicU64 = AtomicU64::new(1);
-
-#[cfg(feature = "android-jni")]
-fn providers() -> &'static Mutex<HashMap<jlong, Arc<AndroidBlobsProvider>>> {
-    PROVIDERS.get_or_init(Mutex::default)
-}
-
-#[cfg(feature = "android-jni")]
-fn provider(handle: jlong) -> Result<Arc<AndroidBlobsProvider>> {
-    providers()
-        .lock()
-        .expect("Android provider registry lock")
-        .get(&handle)
-        .cloned()
-        .ok_or_else(|| TransportError::Io("unknown Android provider handle".into()))
-}
-
-#[cfg(feature = "android-jni")]
-fn throw(env: &mut JNIEnv<'_>, error: impl std::fmt::Display) {
-    let _ = env.throw_new("java/lang/IllegalStateException", error.to_string());
-}
-
-/// Owned duplicate of a caller-owned descriptor (the caller closes its own).
-#[cfg(feature = "android-jni")]
-fn duplicate_fd(fd: RawFd) -> Result<File> {
-    let duplicated = unsafe { libc::dup(fd) };
-    if duplicated < 0 {
-        return Err(TransportError::Io(format!(
-            "duplicate Android source descriptor: {}",
-            std::io::Error::last_os_error()
-        )));
-    }
-    // SAFETY: dup returned a distinct owned descriptor above.
-    Ok(unsafe { File::from_raw_fd(duplicated) })
-}
-
-#[cfg(feature = "android-jni")]
-fn jni_hash(env: &mut JNIEnv<'_>, hash: &JString<'_>) -> Result<[u8; 32]> {
-    let hash: String = env
-        .get_string(hash)
-        .map_err(|error| TransportError::Io(error.to_string()))?
-        .into();
-    let hash: Hash = hash
-        .parse()
-        .map_err(|error| TransportError::Io(format!("invalid content hash: {error}")))?;
-    Ok(*hash.as_bytes())
-}
-
-#[cfg(feature = "android-jni")]
-fn return_string(env: &mut JNIEnv<'_>, value: Result<String>) -> jstring {
-    match value.and_then(|value| {
-        env.new_string(value)
-            .map_err(|error| TransportError::Io(error.to_string()))
-    }) {
-        Ok(value) => value.into_raw(),
-        Err(error) => {
-            throw(env, error);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-/// #413: import one original (reference first, copy fallback). [path] may be
-/// null. Returns the JSON of [`import_wire`]; the caller may close [fd] on
-/// return.
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeImportMedia(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-    path: JString<'_>,
-    fd: jint,
-) -> jstring {
-    let path: Option<PathBuf> = if path.is_null() {
-        None
-    } else {
-        match env.get_string(&path) {
-            Ok(path) => Some(PathBuf::from(String::from(path))),
-            Err(error) => {
-                throw(&mut env, error);
-                return std::ptr::null_mut();
-            }
-        }
-    };
-    let result = provider(handle).and_then(|provider| {
-        let source = duplicate_fd(fd)?;
-        let import = provider.import_media(path.as_deref(), source)?;
-        serde_json::to_string(&import_wire(&import))
-            .map_err(|error| TransportError::Io(error.to_string()))
-    });
-    return_string(&mut env, result)
-}
-
-/// #413: serve a held import as the current lease, returning its ticket. A
-/// referenced original that is gone or changed throws
-/// `java.io.FileNotFoundException` (the Kotlin side's source-missing signal);
-/// every other failure throws `IllegalStateException`.
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeServe(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-    hash: JString<'_>,
-) -> jstring {
-    let hash = match jni_hash(&mut env, &hash) {
-        Ok(hash) => hash,
-        Err(error) => {
-            throw(&mut env, error);
-            return std::ptr::null_mut();
-        }
-    };
-    let provider = match provider(handle) {
-        Ok(provider) => provider,
-        Err(error) => {
-            throw(&mut env, error);
-            return std::ptr::null_mut();
-        }
-    };
-    match provider.serve(hash) {
-        Ok(ticket) => return_string(&mut env, Ok(ticket)),
-        Err(error @ ServeError::Source(_)) => {
-            let _ = env.throw_new("java/io/FileNotFoundException", error.to_string());
-            std::ptr::null_mut()
-        }
-        Err(error) => {
-            throw(&mut env, error);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-/// #413: drop the hold on an imported content. Idempotent.
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeRelease(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-    hash: JString<'_>,
-) {
-    match jni_hash(&mut env, &hash).and_then(|hash| Ok((provider(handle)?, hash))) {
-        Ok((provider, hash)) => provider.release(hash),
-        Err(error) => throw(&mut env, error),
-    }
-}
-
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeOpen(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    root: JString<'_>,
-) -> jlong {
-    let root: String = match env.get_string(&root) {
-        Ok(root) => root.into(),
-        Err(error) => {
-            throw(&mut env, error);
-            return 0;
-        }
-    };
-    match AndroidBlobsProvider::new(root) {
-        Ok(provider) => {
-            let handle = NEXT_PROVIDER_HANDLE.fetch_add(1, Ordering::Relaxed) as jlong;
-            providers()
-                .lock()
-                .expect("Android provider registry lock")
-                .insert(handle, Arc::new(provider));
-            handle
-        }
-        Err(error) => {
-            throw(&mut env, error);
-            0
-        }
-    }
-}
-
-/// #547: set the paired desktop's NodeId (64 hex) as the only peer allowed
-/// to pull; `null` / empty refuses everyone. A malformed id refuses everyone
-/// and throws.
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeSetAllowedPeer(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-    node_id: JString<'_>,
-) {
-    let provider = match provider(handle) {
-        Ok(provider) => provider,
-        Err(error) => {
-            throw(&mut env, error);
-            return;
-        }
-    };
-    if node_id.is_null() {
-        provider.set_allowed_peer(None);
-        return;
-    }
-    let text: String = match env.get_string(&node_id) {
-        Ok(text) => text.into(),
-        Err(error) => {
-            provider.set_allowed_peer(None);
-            throw(&mut env, error);
-            return;
-        }
-    };
-    if text.trim().is_empty() {
-        provider.set_allowed_peer(None);
-        return;
-    }
-    match text.parse::<crate::NodeId>() {
-        Ok(peer) => provider.set_allowed_peer(Some(peer)),
-        Err(error) => {
-            provider.set_allowed_peer(None);
-            throw(&mut env, format!("invalid paired desktop node id: {error}"));
-        }
-    }
-}
-
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeRegister(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-    hash: JString<'_>,
-    fd: jint,
-) -> jstring {
-    let hash: String = match env.get_string(&hash) {
-        Ok(hash) => hash.into(),
-        Err(error) => {
-            throw(&mut env, error);
-            return std::ptr::null_mut();
-        }
-    };
-    let declared_hash: Hash = match hash.parse() {
-        Ok(hash) => hash,
-        Err(error) => {
-            throw(&mut env, format!("invalid declared content hash: {error}"));
-            return std::ptr::null_mut();
-        }
-    };
-    let result =
-        provider(handle).and_then(|provider| provider.register_fd(*declared_hash.as_bytes(), fd));
-    match result.and_then(|ticket| {
-        env.new_string(ticket)
-            .map_err(|error| TransportError::Io(error.to_string()))
-    }) {
-        Ok(ticket) => ticket.into_raw(),
-        Err(error) => {
-            throw(&mut env, error);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeStopActiveFetch(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) {
-    match provider(handle) {
-        Ok(provider) => provider.stop_active_fetch(),
-        Err(error) => throw(&mut env, error),
-    }
-}
-
-/// BLOB-03: release the current lease's provider retention (drop its
-/// `TempTag`) so the served blob is reclaimable by the periodic GC, while
-/// keeping the endpoint + ALPN handler alive for the next item.
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeReleaseRetention(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) {
-    match provider(handle) {
-        Ok(provider) => provider.release_retention(),
-        Err(error) => throw(&mut env, error),
-    }
-}
-
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeRevoke(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) {
-    match provider(handle) {
-        Ok(provider) => provider.revoke(),
-        Err(error) => throw(&mut env, error),
-    }
-}
-
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeTransferStatus(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) -> jstring {
-    let result =
-        provider(handle).map(|provider| (provider.transfer_status(), provider.source_fault()));
-    match result.and_then(|(status, fault)| {
-        serde_json::to_string(&status_wire(&status, fault))
-            .map_err(|error| TransportError::Io(error.to_string()))
-    }) {
-        Ok(json) => match env.new_string(json) {
-            Ok(s) => s.into_raw(),
-            Err(error) => {
-                throw(&mut env, error);
-                std::ptr::null_mut()
-            }
-        },
-        Err(error) => {
-            throw(&mut env, error);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-/// #417: forward an Android network-change callback to the provider endpoint.
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeNetworkChange(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) {
-    match provider(handle) {
-        Ok(provider) => provider.network_change(),
-        Err(error) => throw(&mut env, error),
-    }
-}
-
-/// #434: bind the provider endpoint ahead of the first serve of a round.
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativePrewarm(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) {
-    if let Err(error) = provider(handle).and_then(|provider| provider.prewarm()) {
-        throw(&mut env, error);
-    }
-}
-
-/// #434: close the provider endpoint while idle; `false` = refused (a peer
-/// is connected), try again later.
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativePark(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) -> jni::sys::jboolean {
-    match provider(handle) {
-        Ok(provider) => provider.park() as jni::sys::jboolean,
-        Err(error) => {
-            throw(&mut env, error);
-            0
-        }
-    }
-}
-
-#[cfg(feature = "android-jni")]
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeClose(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    handle: jlong,
-) {
-    let provider = providers()
-        .lock()
-        .expect("Android provider registry lock")
-        .remove(&handle);
-    match provider {
-        Some(provider) => provider.revoke(),
-        None => throw(&mut env, "unknown Android provider handle"),
     }
 }
