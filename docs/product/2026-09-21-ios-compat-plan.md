@@ -169,12 +169,14 @@ PHAssetResourceUploadJob.h:39   @property NSURLRequest *destination;   // 我们
 
 | # | 事项 | 不定它会怎样 |
 |---|---|---|
-| D1 | **设备与会员** —— **已答（2026-09-21）：有 iPhone，无 Apple Developer Program 会员**。剩余待补：机型与系统版本（是否 ≥ 26.1 决定 F2/F5 能不能验）。带出两个新的待验风险，见下方 D1-a / D1-b | 真机在手，L3 不再整体阻塞；但免费个人团队的能力集比付费窄，哪些卡因此受限必须先测出来，不能等写完才发现签不上 |
-| D2 | **最低系统版本**：后台通道的地板是 iOS 26.1（`creationRequestForJob`/`cancel`/响应头要 26.4，`Process` action 要 26.5）；`PHPersistentChangeToken` 只要 16 | 决定老系统是「降级为前台备份」还是「不支持」，这是产品决策不是工程决策 |
-| D3 | **许可证**：仓库是 AGPL-3.0，第三方 App Store 分发与 GPL 家族条款历来冲突（VLC 先例）。授权由仓库所有者一人决定，不需要征求第三方 | 代码写完才发现不能上架。TestFlight 同受 Apple ToS 约束，不是绕开手段 |
-| D4 | **iCloud 瘦身原图的账本语义**：不在本地算 `WAITING_FOR_CONSTRAINTS` 还是单独一态？允许走蜂窝吗？下载失败消耗失败预算吗？ | ARCH-01 没有这个状态。最容易在后期浮现并作废一批已完成卡的就是它 |
+| D1 | **设备与会员** —— **已答（2026-09-21）：有 iPhone；2026-10-12 更正：有 Apple Developer Program 付费会员**（macOS 已在 `release.yml` 里 Developer ID 签名 + 公证），TestFlight 不受会员阻塞，D1-a 不再是风险。剩余待补：机型与系统版本（是否 ≥ 26.1 决定 F2/F5 能不能验）。带出两个新的待验风险，见下方 D1-a / D1-b | 真机在手，L3 不再整体阻塞；但免费个人团队的能力集比付费窄，哪些卡因此受限必须先测出来，不能等写完才发现签不上 |
+| D2 | **最低系统版本** —— **已定（2026-10-12）：iOS 16**。原则是兼容到成本陡增之前的最后一档：用户群含老人、系统偏低，iOS 16 覆盖 iPhone 8/X 起；`PHPersistentChangeToken` 与 `NavigationStack` 都从 16 起，降到 15 要同时放弃增量水位与现代导航。不用 iOS 17 才有的 API。背景：后台通道的地板是 iOS 26.1（`creationRequestForJob`/`cancel`/响应头要 26.4，`Process` action 要 26.5）；`PHPersistentChangeToken` 只要 16 | 决定老系统是「降级为前台备份」还是「不支持」，这是产品决策不是工程决策 |
+| D3 | **许可证** —— **已定（2026-10-12）：上 App Store**。提交商店前由版权方给 AGPL 加 App Store 例外条款，不换授权；开发期不受影响。背景：仓库是 AGPL-3.0，第三方 App Store 分发与 GPL 家族条款历来冲突（VLC 先例）。授权由仓库所有者一人决定，不需要征求第三方 | 代码写完才发现不能上架。TestFlight 同受 Apple ToS 约束，不是绕开手段 |
+| D4 | **iCloud 瘦身原图的账本语义** —— **已定（2026-10-12）：对齐 Immich**。备份轮内需要该资源时经 `PHAssetResourceManager`（`isNetworkAccessAllowed = true`）拉原图到临时目录，算哈希、传输，完成即删；拉取只发生在备份轮内，天然受 Wi-Fi/电量约束，不单独走蜂窝；网络原因的拉取失败按暂时性等待、不消耗失败预算，资源确实不可得才计失败。账本状态定义由 `IOS-11`/`IOS-13` 落成 case matrix 条目。原问题：不在本地算 `WAITING_FOR_CONSTRAINTS` 还是单独一态？允许走蜂窝吗？下载失败消耗失败预算吗？ | ARCH-01 没有这个状态。最容易在后期浮现并作废一批已完成卡的就是它 |
 | D5 | **新绑定的平台 `cfg` 归属**：QA-09 把 daemon 的平台分叉收进 `crates/platform/`，而 `android_blobs.rs` 以 feature 形式留在 `crates/transport/`。iOS 绑定按哪条规则放 | 让 reviewer 在 PR 里才发现，等于返工一张传输卡 |
 | D6 | **Desktop 端 HTTP ingest 形态** —— **2026-09-21 定为「暂缓」**。它的全部输入（请求体形状、能否自定义方法与请求头、回执头能不能回、体积上限）都压在 `IOS-03` 第 2/5/7 问上，全是未实测项；中转形态又已否决。现在能拍的诚实结论只有暂缓 + 重开条件：**`IOS-03` 第 2 问答「能通」时重开**，届时形态收窄为「只服务同一 Wi-Fi 网段的直连」 | 输入全是未知时硬拍一个形态，等于让执行 agent 编一个出来 |
+
+**Bundle ID（2026-10-12 定）**：`com.hawkeyexb.ppass`，与 Android 相同。
 
 **D1 的两个派生风险（`IOS-01` 必须实测，不许推断）**
 
