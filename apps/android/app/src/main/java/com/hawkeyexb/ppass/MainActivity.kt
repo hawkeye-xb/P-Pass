@@ -863,7 +863,11 @@ fun PPassApp() {
                             backgroundBackupState = backgroundBackupState,
                             onResolveBackgroundBackup = resolveBackgroundBackup,
                             locationRedacted = mediaAccess != MediaAccess.NONE && !mediaLocation,
-                            onAllowLocation = { locationPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION) },
+                            // 提示只在 Android 10+ 出现（更低版本系统不抹地点，canReadMediaLocation 恒真）；守卫让这一点
+                            // 在代码里成立，而不是靠调用方推理（lint InlinedApi）。
+                            onAllowLocation = {
+                                if (Build.VERSION.SDK_INT >= 29) locationPermission.launch(Manifest.permission.ACCESS_MEDIA_LOCATION)
+                            },
                         )
                     }
                 } else null,
