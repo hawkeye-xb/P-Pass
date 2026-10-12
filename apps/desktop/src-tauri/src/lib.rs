@@ -673,6 +673,9 @@ fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
 ///
 /// 现在每次启动对一次账：登记存在但指向别处 → 用**当前 App 内**的 daemon 路径
 /// 重写（幂等）；未登记 → 不动（纯新启动不许顺手装，DAE-03 ②）；一致 → 不动。
+///
+/// DESK-60 (#877)：例外是「平台声明登记会被系统流程删掉」（Windows 卸载）——
+/// 配置在、用户没停过 ⇒ 补登记，见 `restore_missing_autostart_allowed`。
 fn reconcile_autostart_registration() {
     use platform::PlatformAdapter as _;
     let Ok(exe) = std::env::current_exe() else {
@@ -697,6 +700,20 @@ fn reconcile_autostart_registration() {
                 "#726: 开机自启登记文件读不出（已损坏）——已重写为 {}",
                 sidecar.display()
             );
+        }
+        Ok(platform::AutostartReconcile::NotRegistered)
+            if restore_missing_autostart_allowed(
+                platform::adapter().autostart_restore_when_missing(),
+                &platform::adapter().data_dir(),
+            ) =>
+        {
+            // DESK-60 (#877)：卸载删了登记、配置还在、用户没停过 ⇒ 补回来，
+            // 否则下次开机不再自动备份，界面却显示一切正常。闸门（稳定安装
+            // 位置）已在 reconcile_autostart 里判过，走到这里的 sidecar 可信。
+            match platform::adapter().install_autostart(&sidecar) {
+                Ok(()) => eprintln!("#877: 开机自启登记缺失——已补登记为 {}", sidecar.display()),
+                Err(e) => eprintln!("#877: 开机自启登记缺失，补登记失败: {e}"),
+            }
         }
         Ok(_) => {}
         Err(e) => eprintln!("#604: 开机自启登记对账失败: {e}"),
@@ -836,6 +853,13 @@ fn set_user_stopped(data_dir: &std::path::Path, stopped: bool) -> Result<(), Str
 /// 「没配置过」是首启向导的事；「用户停的」要等用户自己点「启动服务」。
 fn self_heal_allowed(data_dir: &std::path::Path) -> bool {
     data_dir.join("config.toml").exists() && !is_user_stopped(data_dir)
+}
+
+/// DESK-60 (#877)：登记缺失时要不要补。与自愈同一条判据——配置过（不是首启，
+/// DAE-03 ②）、且不是用户主动停的（DESK-36 的停止标记）——再加上平台声明
+/// 「登记会被系统流程删掉」。
+fn restore_missing_autostart_allowed(platform_restores: bool, data_dir: &std::path::Path) -> bool {
+    platform_restores && self_heal_allowed(data_dir)
 }
 
 /// #456 后续：更新流程装完（或装失败）之后要不要把 daemon 拉回来。
@@ -3535,6 +3559,30 @@ mod tests {
         );
     }
 
+    /// DESK-60 (#877)：登记缺失时补不补——#877 卡面要求的三种状态 + 平台开关。
+    /// 反证：判据去掉停止标记那条 → 第二条断言红；去掉配置那条 → 第三条红。
+    #[test]
+    fn a_missing_autostart_is_restored_only_for_a_configured_unstopped_install() {
+        let dir = configured_data_dir();
+        assert!(
+            restore_missing_autostart_allowed(true, dir.path()),
+            "配置在、没停过、登记丢了：应补登记（#877 现场）"
+        );
+        assert!(
+            !restore_missing_autostart_allowed(false, dir.path()),
+            "平台没声明会被系统删登记：保持「未登记 → 不动」"
+        );
+        set_user_stopped(dir.path(), true).unwrap();
+        assert!(
+            !restore_missing_autostart_allowed(true, dir.path()),
+            "用户主动停过服务：重装后也不许补（尊重停止）"
+        );
+        let fresh = tempfile::tempdir().unwrap();
+        assert!(
+            !restore_missing_autostart_allowed(true, fresh.path()),
+            "没配置过（首启）：不许顺手登记（DAE-03 ②）"
+        );
+    }
     #[test]
     fn user_stop_survives_an_app_restart() {
         // 持久化语义：标记在盘上，换一个「进程」（重新读同一目录）仍然在。
