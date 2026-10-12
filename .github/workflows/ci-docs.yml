@@ -24,6 +24,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - "tools/test-release-plan.sh"
       - "**.sh"
       - ".github/workflows/**"
       - "justfile"
@@ -57,6 +58,7 @@ on:
   push:
     branches: [main]
     paths:
+      - "tools/test-release-plan.sh"
       - "**.sh"
       - ".github/workflows/**"
       - "justfile"
@@ -156,6 +158,15 @@ jobs:
         run: node --test tools/release-notes.test.mjs
       - name: lint release/notes/**
         run: node tools/release-notes.mjs lint
+
+  release-plan:
+    name: release-plan（#838：各端构建还是复用 + 复用时的字节 / 版本号校验）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 判定与校验测试（stub gh）
+        run: bash tools/test-release-plan.sh
 
   release-dry-run:
     name: release-dry-run（REL-12：发布链正式 / test tag 两条路径预演）

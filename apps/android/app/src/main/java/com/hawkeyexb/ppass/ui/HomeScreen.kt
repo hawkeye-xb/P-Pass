@@ -117,17 +117,6 @@ enum class HeroRender {
  */
 internal fun backupScopeRowCount(selectedBucketCount: Int?): Int? = selectedBucketCount?.takeIf { it > 0 }
 
-/**
- * #836：「已选相册」只有一个口径——已选且当前存在（与选相册页同源：MediaStore 里实际有的相册）。
- * 被选的相册文件夹删掉后，存储里的 id 保留（同路径重建后 bucket id 相同，可继续备份），但不再计数。
- * [existing] 为 null = 读不到相册（如没有照片权限），无从判断哪些还在：沿用已选个数。
- */
-internal fun selectedExistingCount(selected: Set<Long>?, existing: Set<Long>?): Int? = when {
-    selected == null -> null
-    existing == null -> selected.size
-    else -> selected.count { it in existing }
-}
-
 fun heroRenderOf(mediaAccess: MediaAccess, triplet: BackupTriplet?): HeroRender = when {
     mediaAccess != MediaAccess.FULL -> HeroRender.AccessBlocked
     triplet == null -> HeroRender.Unreadable
