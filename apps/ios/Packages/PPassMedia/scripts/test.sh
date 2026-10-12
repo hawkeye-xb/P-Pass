@@ -11,6 +11,8 @@
 #   3. 宿主 App 的相册授权设成完整（scripts/sim-photos-auth.sh，见其中关于 auth_version 的说明）。
 #   4. 包内单测：xcodebuild test -scheme PPassMedia（SwiftPM 包直接在模拟器上跑）。
 #   5. 集成测试：xcodegen 生成 IntegrationHost 工程，xcodebuild test，素材目录经 TEST_RUNNER_ 前缀传给测试进程。
+#      分两轮，为的是在真库上造出 3105（IOS-09）：第一轮只跑 TokenExpiryIT/testPhase1，把当时的图库内容与 token 存到
+#      临时目录；然后 erase、重新灌同一批素材；第二轮跑全部集成测试，TokenExpiryIT/testPhase2 拿旧 token 读历史。
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -44,41 +46,59 @@ if [[ -z "${udid}" ]]; then
   echo "created simulator ${sim_name} (${udid}) on ${runtime}"
 fi
 
-echo "==> simulator ${sim_name} ${udid} (${runtime}): erase + boot"
-xcrun simctl shutdown "${udid}" >/dev/null 2>&1 || true
-xcrun simctl erase "${udid}"
-xcrun simctl boot "${udid}"
-xcrun simctl bootstatus "${udid}" -b >/dev/null
-cleanup_sim() {
-  if [[ "${keep}" == 0 ]]; then xcrun simctl shutdown "${udid}" >/dev/null 2>&1 || true; fi
-  rm -rf "${work}"
-}
-trap cleanup_sim EXIT
-
-echo "==> fixtures"
+dest="platform=iOS Simulator,id=${udid}"
 fixtures="${work}/fixtures"
 mkdir -p "${fixtures}"
 ffmpeg -loglevel error -y -f lavfi -i "testsrc=size=640x480:rate=1" -frames:v 1 "${fixtures}/a1.jpg"
 sips -s format heic "${fixtures}/a1.jpg" --out "${fixtures}/h1.heic" >/dev/null
 ffmpeg -loglevel error -y -f lavfi -i "testsrc=size=640x480:rate=1" -f lavfi -i "sine=frequency=440:duration=2" \
   -t 2 -c:v libx264 -pix_fmt yuv420p -c:a aac "${fixtures}/v1.mp4"
-xcrun simctl addmedia "${udid}" "${fixtures}/a1.jpg" "${fixtures}/h1.heic" "${fixtures}/v1.mp4"
 ls -l "${fixtures}"
 
-"${here}/scripts/sim-photos-auth.sh" "${udid}" "${host_bundle}" full
+cleanup_sim() {
+  if [[ "${keep}" == 0 ]]; then xcrun simctl shutdown "${udid}" >/dev/null 2>&1 || true; fi
+  rm -rf "${work}"
+}
+trap cleanup_sim EXIT
 
-dest="platform=iOS Simulator,id=${udid}"
+# erase → boot → 灌素材 → 宿主完整授权
+fresh_library() {
+  echo "==> simulator ${sim_name} ${udid} (${runtime}): erase + boot + addmedia"
+  xcrun simctl shutdown "${udid}" >/dev/null 2>&1 || true
+  xcrun simctl erase "${udid}"
+  xcrun simctl boot "${udid}"
+  xcrun simctl bootstatus "${udid}" -b >/dev/null
+  xcrun simctl addmedia "${udid}" "${fixtures}/a1.jpg" "${fixtures}/h1.heic" "${fixtures}/v1.mp4"
+  "${here}/scripts/sim-photos-auth.sh" "${udid}" "${host_bundle}" full
+}
+
+run_it() {
+  local log="$1"; shift
+  (cd "${here}/IntegrationHost" && TEST_RUNNER_PPASS_MEDIA_FIXTURE_DIR="${fixtures}" \
+    TEST_RUNNER_PPASS_MEDIA_DESKTOP_DIR="${work}/desktop" \
+    xcodebuild test -project PPassMediaIntegrationHost.xcodeproj -scheme PPassMediaIntegration \
+    -destination "${dest}" -derivedDataPath "${work}/dd-it" "$@" >"${log}" 2>&1) || {
+    grep -E "IT-|error:|failed|Test Case" "${log}" | tail -80; exit 1; }
+}
+
+(cd "${here}/IntegrationHost" && xcodegen generate --spec project.yml >/dev/null)
+
+echo "==> integration phase 1: snapshot library content + change token (before erase)"
+fresh_library
+TEST_RUNNER_PPASS_MEDIA_TOKEN_DUMP="${work}/stale.token" \
+  run_it "${work}/it-phase1.log" -only-testing:PPassMediaIntegrationTests/TokenExpiryIT/testPhase1_BackUpLibraryAndKeepToken
+grep -E "IT-|Executed [0-9]+ tests?" "${work}/it-phase1.log" | head -3
+
+fresh_library
+
 
 echo "==> unit tests (SwiftPM package, fakes)"
 (cd "${here}" && xcodebuild test -scheme PPassMedia -destination "${dest}" \
   -derivedDataPath "${work}/dd-unit" >"${work}/unit.log" 2>&1) || { tail -60 "${work}/unit.log"; exit 1; }
 grep -E "Executed [0-9]+ tests?|\*\* TEST" "${work}/unit.log" | tail -3
 
-echo "==> integration tests (real PhotoKit, hosted)"
-(cd "${here}/IntegrationHost" && xcodegen generate --spec project.yml >/dev/null)
-(cd "${here}/IntegrationHost" && TEST_RUNNER_PPASS_MEDIA_FIXTURE_DIR="${fixtures}" \
-  xcodebuild test -project PPassMediaIntegrationHost.xcodeproj -scheme PPassMediaIntegration \
-  -destination "${dest}" -derivedDataPath "${work}/dd-it" >"${work}/it.log" 2>&1) || {
-  grep -E "IT-|error:|failed|Test Case" "${work}/it.log" | tail -80; exit 1; }
+echo "==> integration phase 2: all integration tests (real PhotoKit, hosted)"
+TEST_RUNNER_PPASS_MEDIA_FOREIGN_TOKEN="${work}/stale.token" \
+  run_it "${work}/it.log" -skip-testing:PPassMediaIntegrationTests/TokenExpiryIT/testPhase1_BackUpLibraryAndKeepToken
 grep -E "IT-" "${work}/it.log" || true
-grep -E "Test Case .*(passed|failed)|Executed [0-9]+ tests?|\*\* TEST" "${work}/it.log" | tail -40
+grep -E "Test Case .*(passed|failed|skipped)|Executed [0-9]+ tests?|\*\* TEST" "${work}/it.log" | tail -40

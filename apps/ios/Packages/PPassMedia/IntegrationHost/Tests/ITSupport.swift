@@ -93,4 +93,23 @@ enum IT {
         guard let assetId, let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil).firstObject else { return "-" }
         return PHAssetResource.assetResources(for: asset).first?.originalFilename ?? "?"
     }
+
+    /// 原图资源的完整字节（测试用的直接读法；产品路径见 IOS-11 的资源读取模块）。
+    static func originalBytes(of asset: PHAsset) throws -> Data {
+        let resources = PHAssetResource.assetResources(for: asset)
+        let wanted: PHAssetResourceType = asset.mediaType == .video ? .video : .photo
+        let resource = try XCTUnwrap(resources.first { $0.type == wanted } ?? resources.first)
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = false
+        var data = Data()
+        var failure: Error?
+        let done = DispatchSemaphore(value: 0)
+        PHAssetResourceManager.default().requestData(for: resource, options: options, dataReceivedHandler: { data.append($0) }) {
+            failure = $0
+            done.signal()
+        }
+        done.wait()
+        if let failure { throw failure }
+        return data
+    }
 }
