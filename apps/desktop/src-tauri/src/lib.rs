@@ -1911,6 +1911,10 @@ pub fn run() {
             TrayIconBuilder::with_id("main")
                 .icon(tray_icon)
                 .icon_as_template(platform::adapter().tray_icon_is_template())
+                // DESK-59 (#876)：Windows 上就是 NOTIFYICONDATA 的 szTip——悬停
+                // 提示，也是读屏 / UI Automation 读到的名字。不设的话 Win11
+                // 「隐藏的图标」折叠区里是一个没名字的图标。
+                .tooltip("P-Pass")
                 .menu(&menu)
                 // DESK-18: 左键出菜单是 macOS 的习惯；Windows 上左键该打开
                 // 主窗口（下面的 on_tray_icon_event 负责），右键才出菜单。
@@ -3426,6 +3430,23 @@ mod tests {
         assert!(
             !self_heal_allowed(dir.path()),
             "用户主动停止了服务，自愈却仍然判定要拉起它（#456）"
+        );
+    }
+
+    /// DESK-59 (#876)：托盘必须有名字——Windows 折叠区里认图标、读屏、回归
+    /// SOP 用 UI Automation 找托盘，靠的都是它。
+    #[test]
+    fn the_tray_icon_has_a_tooltip_name() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap_or(&src);
+        let builder = product
+            .split("TrayIconBuilder::with_id(\"main\")")
+            .nth(1)
+            .expect("托盘构建处");
+        let chain = builder.split(".build(").next().unwrap();
+        assert!(
+            chain.contains(".tooltip(\"P-Pass\")"),
+            "托盘没设 tooltip（#876）"
         );
     }
 
