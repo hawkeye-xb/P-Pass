@@ -27,6 +27,7 @@
 
 - [失败 Case Matrix（中文）](04-case-matrix.zh-CN.md)
 - [Failure Case Matrix（English）](04-case-matrix.md)
+- [Case Matrix 的 iOS 落地与变体登记](06-ios-variants.zh-CN.md)
 
 矩阵把每条业务规则映射为自动合同测试、反证和验收人可执行的真机步骤；实现前先 review 矩阵，不先写生产代码。
 

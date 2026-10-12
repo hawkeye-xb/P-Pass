@@ -134,6 +134,21 @@ O orders and the three-layer model
 | P-01 | Wi-Fi / battery / album settings exist, plus in-flight orders and Desktop partials | pair with a different Desktop | Settings are kept; partials and runtime ownership are cleared; changing Desktop clears the order table (the `pairing_epoch` column stays as a guard) and new order ids start above the timestamp. Whether the skip list is kept is to be confirmed | Clearing settings or carrying old partials to the new Desktop must fail | After changing Desktop, settings remain and old transfer progress is not carried over |
 | P-02 | Already switched to a new Desktop | a receipt from the old Desktop arrives | The old receipt cannot change the new backup history | An old receipt confirming a new-history item must fail | Mostly automated |
 
+## iOS only: iCloud originals, expired discovery cursors, and media identity (#311 D4 / F3)
+
+Android has no counterpart (MediaStore originals are always local; generations never expire; `_id` is an integer). The iOS mapping, per-row tests, and every other iOS variant are registered in [`06-ios-variants.zh-CN.md`](06-ios-variants.zh-CN.md).
+
+| ID | Given | When | Then | Negative proof | Device acceptance |
+|---|---|---|---|---|---|
+| I-01 | New photo #N's original lives in iCloud (Optimize Storage); no network | The loop picks #N and fetches the original while preparing | No row, G does not move, no failure counted; the loop exits, global = Waiting (`ORIGINAL_UNAVAILABLE`) with probes registered; once the network is back #N completes | Counting the network fetch failure as an item failure (#N FAILED, attempt counted) must fail | With Optimize Storage on, take a photo in airplane mode and open the app: it shows it is waiting for the network, no failure count; leave airplane mode and it completes on its own |
+| I-02 | Legacy-resume #L's original was evicted; no network | Resume #L | #L stays Transferring with 0 attempts, the Desktop partial is kept; Waiting (`ORIGINAL_UNAVAILABLE`) | Failing #L or sending `cancel_tuple` must fail | Automated tests first |
+| I-03 | #N's original is genuinely unavailable (corrupt / gone, not a network problem) | Prepare | Retry once on the spot; still failing records FAILED and counts an attempt (the C-09 budget) | Treating it as a transient wait too (head-of-line stuck forever) must fail | Automated tests first |
+| I-04 | Todo photos whose originals are in iCloud | Entry count / conditions not met / Desktop unreachable / lease refused | No iCloud download happens at all (imports only run while the execution lease is held) | Importing or downloading an original during the entry count must fail | Automated tests first |
+| I-05 | #N's original is being downloaded from iCloud | Network lost / pause | The import is cancelled; no row, no attempt; the importer removes its temp file | Writing a row or counting an attempt after cancellation must fail | Automated tests first |
+| I-06 | The discovery cursor (`PHPersistentChangeToken`) has expired (3105) | Look for new photos | G resets to the current position and the reconcile scan is marked dirty; confirmed same-version photos are not resent, only genuinely missing ones are | Resetting G without marking the scan dirty (photos taken while expired are never picked) must fail | Automated tests first (constructing 3105 on a device: #335) |
+| I-07 | The cursor expired while a round is suspended in discovery | A trigger-driven recount hits the expiry | The count uses the full diff and is exact, and **does not write G**; only the round itself resets | The count path writing G (it and the suspended round overwrite each other) must fail | Automated tests first |
+| I-08 | Two photo ids are Unicode-equivalent but byte-different | Count / merge / pick | Ids compare and sort by bytes; they are two photos | Merging with Swift `String ==` / `<` (one photo taken as the other's current row) must fail | Automated tests first |
+
 ## Required observable evidence
 
 Tests and device diagnostics record state facts only, never photo names, paths, or content:
