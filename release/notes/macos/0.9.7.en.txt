@@ -1,0 +1,1 @@
+Fixed setup failing to start when using the default library location.
