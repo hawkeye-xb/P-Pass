@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.10.5] - 2026-10-12
+
+**macOS 0.9.7 · Android 0.9.12（本版未变更）**
+
 ### Fixed
 - macOS 端：首次设置时使用默认照片库位置（「图片」里的「P-Pass 家庭照片库」），会自动建出这个文件夹，不再出现「启动失败」。此前新装用户只有选一个已存在的文件夹才能完成设置（#871）。
 
