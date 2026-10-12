@@ -12,8 +12,9 @@
 #   3. The photo library directory and its .ppf/ sidecar (identity.key, blobs,
 #      staging, thumbs, index.db) - ONLY if --LibraryDir is given or the
 #      default "<Pictures>\P-Pass 家庭照片库" exists; never guesses beyond that.
-#   4. Any resident daemon.exe process still running (killed before deleting
-#      its data dir, otherwise files stay locked).
+#   4. Any resident daemon process still running - ppf-daemon.exe (the
+#      installed build) or daemon.exe (raw dogfood binary) - killed before
+#      deleting its data dir, otherwise files stay locked.
 #   5. Optionally uninstalls the NSIS-installed program (Programs and
 #      Features entry) with -Uninstall.
 #
@@ -67,7 +68,7 @@ if ($DryRun) { Say '(DRY RUN - nothing will actually be deleted)' }
 Say ''
 
 # --- 1. Kill any running daemon / desktop shell so files aren't locked ---
-$procNames = @('daemon', 'p-pass-desktop', 'testclient')
+$procNames = @('ppf-daemon', 'daemon', 'p-pass-desktop', 'testclient')
 foreach ($name in $procNames) {
     $procs = Get-Process -Name $name -ErrorAction SilentlyContinue
     if ($procs) {

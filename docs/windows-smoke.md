@@ -1,5 +1,12 @@
 # H-09 Windows real-box smoke — runbook / Windows 真机冒烟执行说明书
 
+> **Superseded / 已被取代**: pre-release regression on Windows now follows
+> [runbook/full-regression-sop.md §9](runbook/full-regression-sop.md#9-windows-桌面变体).
+> This file only smoke-tests the raw CLI binaries from the `dogfood` release and
+> is kept for its §5 empirical findings (named pipe, IPC contract, PS 5.1 encoding).
+> Windows 发版前回归改按 full-regression-sop.md §9 执行；本文只冒烟 `dogfood` 的裸 CLI 二进制，
+> 保留它是因为 §5 的实证结论（命名管道、IPC 契约、PS 5.1 编码）仍然有效。
+
 > Target: the Windows test machine (x64). The local agent runs the smoke per
 > this file and reports results to Discord. Paste **raw output** (log lines,
 > exit codes) for every step — conclusions alone are not enough.
