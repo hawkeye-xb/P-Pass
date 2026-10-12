@@ -1,0 +1,54 @@
+# PPassMedia 真 PhotoKit 集成测试的最小宿主。
+#
+# 为什么要宿主：SwiftPM 包的测试在模拟器里跑在 xctest 工具进程里，它没有 bundle 身份，
+# TCC 直接拒绝（kTCCErrorDomain Code=2 "Unable to construct an identity to kTCCServicePhotos"），
+# `simctl privacy grant` 也无从授予。标准做法是给测试 bundle 配一个宿主 App——测试注入宿主进程，
+# 以宿主的 bundle id 拿相册授权。宿主只此一用，不是产品 App（产品 App 在 apps/ios/project.yml）。
+#
+# 生成：xcodegen generate --spec project.yml（.xcodeproj 不入库，与 apps/ios 一致）。
+name: PPassMediaIntegrationHost
+options:
+  bundleIdPrefix: com.hawkeyexb.ppass.mediatest
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  PPassMedia:
+    path: ..
+targets:
+  PPassMediaHost:
+    type: application
+    platform: iOS
+    sources: [Host]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hawkeyexb.ppass.mediatest.host
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "PPassMedia integration tests read the simulator photo library."
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        SWIFT_VERSION: "5.0"
+  PPassMediaIntegrationTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: PPassMediaHost
+      - package: PPassMedia
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.hawkeyexb.ppass.mediatest.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        SWIFT_VERSION: "5.0"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/PPassMediaHost.app/PPassMediaHost"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+schemes:
+  PPassMediaIntegration:
+    build:
+      targets:
+        PPassMediaHost: all
+        PPassMediaIntegrationTests: [test]
+    test:
+      targets: [PPassMediaIntegrationTests]
