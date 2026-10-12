@@ -762,6 +762,11 @@ def check_channel(ck: Check, sc: Scenario, tag: str):
                f"{tag}：test-channel/{n} 的 {target} 下载链接在 test-channel 里", url)
     stale = [n for n in names if n.startswith("P-Pass_") and n[len("P-Pass_"):].split("_")[0] not in refs]
     ck(not stale, f"{tag}：test-channel 里没有清单不指向的旧安装包（引用版本 {sorted(refs)}）", " ".join(stale))
+    rels = sc.state / "releases"
+    drafts = sorted(t for t in os.listdir(rels) if "-test." in t and (sc.meta(t) or {}).get("draft"))
+    ck(tag in drafts, f"{tag}：本次的 test 草稿还在", " ".join(drafts))
+    orphans = [t for t in drafts if t[1:] not in refs]
+    ck(not orphans, f"{tag}：旧的 test 草稿只留被清单指向的（引用版本 {sorted(refs)}）", " ".join(orphans))
 
 
 def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
