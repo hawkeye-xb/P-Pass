@@ -217,6 +217,9 @@ fun PPassApp() {
     // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
     // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
     var mediaAccess by remember { mutableStateOf(mediaAccess(context)) }
+    // #836：每次回到前台 +1。App 外发生的变化（例如在相册 App 里删掉已选相册）要在用户切回来时重算，
+    // composition 存活期间只靠进入时算一次的 LaunchedEffect 接不住。
+    var resumeCount by remember { mutableStateOf(0) }
     // #413：「将在连上 Wi-Fi 后进行」由引擎的等待原因（WIFI）给出，这里不再另存一份排队状态。
     // Home 内 Photos/设置 tab——提到顶层是因为 Screen.Buckets 是独立的
     // 顶层 Screen，从相册选择页返回时 `is Screen.Home ->` 分支会整个
@@ -429,6 +432,7 @@ fun PPassApp() {
 
                     daysUnreachable = computeDaysUnreachable()
                     mediaAccess = mediaAccess(context)
+                    resumeCount++
                     heartbeat.start()
                     timeline.start()
                     // MOB-38（2026-08-26 真机）：**每次回到前台都补捞一次。**
@@ -778,9 +782,9 @@ fun PPassApp() {
                 Unit
             }
             // #836：「已选相册」按已选且当前存在计数（与选相册页同源：MediaStore 里实际有的相册）。
-            // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化时重算。
+            // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化、每次回到前台都重算。
             var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
-            LaunchedEffect(mediaAccess) {
+            LaunchedEffect(mediaAccess, resumeCount) {
                 selectedBucketCount = withContext(Dispatchers.IO) {
                     val existing = if (mediaAccess == MediaAccess.FULL) {
                         runCatching { MediaScanner(context.contentResolver).listBuckets().map { it.id }.toSet() }.getOrNull()

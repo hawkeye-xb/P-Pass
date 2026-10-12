@@ -4,6 +4,7 @@ package com.hawkeyexb.ppass.ui
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SCOPE836SelectedExistingCountTest {
@@ -29,5 +30,22 @@ class SCOPE836SelectedExistingCountTest {
     @Test
     fun unknownExistingFallsBackToTheSavedCount() {
         assertEquals(3, selectedExistingCount(selected = setOf(1L, 2L, 42L), existing = null))
+    }
+}
+
+class SCOPE836RecountOnResumeTest {
+    private val main = java.io.File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText()
+
+    /**
+     * 相册是在 App 外面删的（相册 App / 文件管理器），用户切回来时 composition 还活着——只在进入首页
+     * 时算一次，计数就停在旧值（三星 test.9 实测：删掉已选相册后切回仍显示「2 个相册」，冷启动才变 1）。
+     * 反证：计数的 LaunchedEffect 不以「回到前台」为键，或 ON_RESUME 不推进它 → 红。
+     */
+    @Test
+    fun theCountIsRecomputedEveryTimeTheAppComesBack() {
+        val effect = main.substringAfter("selectedBucketCount by remember").substringBefore("selectedExistingCount(")
+        assertTrue("计数要以回到前台为键: $effect", effect.contains("LaunchedEffect(mediaAccess, resumeCount)"))
+        val onResume = main.substringAfter("Lifecycle.Event.ON_RESUME ->").substringBefore("Lifecycle.Event.ON_STOP")
+        assertTrue("ON_RESUME 要推进 resumeCount", onResume.contains("resumeCount++"))
     }
 }
