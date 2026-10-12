@@ -11,7 +11,10 @@ crate-type = ["rlib", "cdylib"]
 [features]
 # Enabled only by the Android bridge build. This keeps JNI descriptor APIs out
 # of non-Android release targets without platform cfg outside crates/platform/.
-android-jni = []
+# IOS-05 (#312): jni/libc are only reachable through this feature, so the
+# platform-neutral provider kernel (src/provider.rs) cannot name `jni::` —
+# the default build has no such crate to import.
+android-jni = ["dep:jni", "dep:libc"]
 
 [dependencies]
 # ADR-001 / §B.1: iroh is allowed in this crate ONLY. Declared here (not in
@@ -19,8 +22,8 @@ android-jni = []
 iroh = "1"
 tokio = { workspace = true, features = ["rt-multi-thread", "fs", "time"] }
 tokio-util = { version = "0.7", features = ["io"] }
-jni = "0.21"
-libc = "0.2"
+jni = { version = "0.21", optional = true }
+libc = { version = "0.2", optional = true }
 futures-core.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

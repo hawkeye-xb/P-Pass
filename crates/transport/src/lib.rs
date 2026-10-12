@@ -6,23 +6,31 @@
 //! (ADR-001); the Phase-2 WebRTC read-only subset hangs off the same
 //! interface, at which point these concrete types become enums.
 
-mod android_blobs;
+// IOS-05 (#312)：provider 内核与绑定分离。`provider` 平台中立、不含任何
+// `jni::` 符号；JNI 是绑定 #1，只在 `android-jni` feature 下编进来。
+#[cfg(feature = "android-jni")]
+mod android_jni;
 #[cfg(feature = "android-jni")]
 mod android_logcat;
+#[cfg(any(feature = "android-jni", test))]
+mod android_wire;
 mod blobs;
 mod conninfo;
 mod iroh_impl;
+mod provider;
 /// #548：Rust → logcat 出口的脱敏（daemon `redact()` 的日志口径拷贝，跑共用向量）。
 pub mod redact;
 
-pub use android_blobs::{
-    ActiveTransferStatus, AndroidBlobsProvider, ImportFallback, MediaImport, ServeError,
-    SourceFault,
-};
 pub use blobs::{Blobs, PeerGate};
 pub use conninfo::{ConnInfo, ConnectionStatus, PathKind};
 pub use iroh_impl::{
     node_id_from_secret_key, BiStream, Incoming, IrohTransport, PeerAddr, TransportConfig,
+};
+/// IOS-05 (#312)：内核改名为平台中立的 [`BlobsProvider`] 之前的名字。现有
+/// 调用方（本 crate 与 daemon 的集成测试）照旧可用；新代码用 `BlobsProvider`。
+pub use provider::BlobsProvider as AndroidBlobsProvider;
+pub use provider::{
+    ActiveTransferStatus, BlobsProvider, ImportFallback, MediaImport, ServeError, SourceFault,
 };
 
 use std::fmt;
