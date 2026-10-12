@@ -359,6 +359,13 @@ def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
             raise SimError(f"{job_id} 找不到步骤 {missing}（#809 dry-run 跟着 release.yml 的 step 名走）")
         checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
         picked = [checkout] + [by_name[n] for n in BUILD_VERSION_STEPS]
+        # 模拟器一律用 bash 跑 run 块；Windows runner 默认是 pwsh——实际 shell 不是 bash 的步骤，
+        # 这里跑通也不代表 CI 上能跑通（v0.9.12-test.12：版本号在 pwsh 里求成空串）。
+        job_shell = ((wf["jobs"][job_id].get("defaults") or {}).get("run") or {}).get("shell")
+        if "windows" in str(wf["jobs"][job_id].get("runs-on", "")):
+            pwsh = [s.get("name") for s in steps if "run" in s and (s.get("shell") or job_shell) != "bash"]
+            ck(not pwsh, f"{job_id}：Windows runner 上每个 run 步骤实际都用 bash（默认 pwsh 会让 bash 语法静默失效）",
+               f"没指定 bash 的步骤：{pwsh}")
         if job_id == "macos-arm64":
             # 代替 bundle-macos.sh（dylib 收集 / rpath 改写不在范围内）：daemon + lib/ 摆进 rel 目录
             picked.append({"name": "(dry-run) stage sidecar", "run": f"mkdir -p {rel}/lib && cp target/release/daemon {rel}/daemon"})
