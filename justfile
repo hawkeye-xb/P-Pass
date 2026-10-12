@@ -285,6 +285,11 @@ android-fgs-quota *args:
 ios-gen:
   cd apps/ios && xcodegen generate
 
+# iOS 设计 token（#344）：assets/design/tokens.json → apps/ios/PPass/Design/Tokens.generated.swift。
+# 改了 tokens.json 就跑一次并提交生成物；ci-ios 用 --check 逐字节比对，不同步就红。
+ios-tokens:
+  python3 tools/ios/gen-tokens.py
+
 # iOS 单元测试：生成工程 → 模拟器上 xcodebuild test。模拟器选法见 tools/ios/sim.sh
 # （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。本配方启动的模拟器跑完即关。
 ios-test:

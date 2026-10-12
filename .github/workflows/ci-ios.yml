@@ -17,7 +17,8 @@
 #   tools/build-ios-*               —— XCFramework 构建脚本（#313）
 #   crates/transport/**             —— XCFramework 的 Rust 源（#313 接上后才真正被构建）
 #   assets/i18n/**                  —— iOS bundle 逐字节捆绑副本的漂移测试消费（#316；对位 ci-android）
-#   assets/design/tokens.json       —— iOS 设计 token 的生成源，漂移测试消费（#344）
+#   assets/design/tokens.json       —— iOS 设计 token 的生成源：gen-tokens.py --check 与
+#                                      DesignTokensTests 两道漂移门禁都消费它（#344）
 #   Cargo.toml / Cargo.lock / rust-toolchain.toml —— 传输 crate 的依赖与工具链
 # **刻意不含本文件自身**（#345 验收 2）：本 lane 不进必需检查，被 paths 跳过无害；
 # 改本文件的 PR 由 ci-rust 的 actionlint 兜语法，下一次碰到上面任一路径时真跑。
@@ -90,6 +91,14 @@ jobs:
           [ -n "$bin" ] || { echo "::error::xcodegen.zip 里找不到可执行文件"; exit 1; }
           dirname "$bin" >> "$GITHUB_PATH"
           "$bin" --version
+
+      # #344：设计 token 是生成物——逐字节比对生成器输出，改了 tokens.json 没重新生成就红。
+      # 另有 DesignTokensTests（下一步的 XCTest）逐键对照源文件，两道门互相独立。
+      - name: Design tokens in sync with assets/design/tokens.json
+        run: python3 tools/ios/gen-tokens.py --check
+
+      - name: No system default colours in app sources
+        run: tools/ios/check-no-system-colors.sh
 
       - name: App unit tests (iOS simulator)
         run: tools/ios/test.sh
