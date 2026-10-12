@@ -15,7 +15,18 @@ req = json.dumps({"id": "x", "method": sys.argv[3], "params": json.loads(sys.arg
 if platform.system() == "Windows":
     # Windows: 命名管道 \\.\pipe\<名>（H-09 实证，见 docs/windows-smoke.md §5）。
     # 字节模式双工管道，按文件打开即可；回包按 \n 切行。
-    f = open("\\\\.\\pipe\\" + p, "r+b", buffering=0)
+    # 所有管道实例都在服务别人时 open 失败（ERROR_PIPE_BUSY；Python 3.9 实测报成
+    # errno 22 EINVAL、winerror 为空）。标准做法是稍等重试（等价于 WaitNamedPipe）。
+    import time
+    for attempt in range(50):
+        try:
+            f = open("\\\\.\\pipe\\" + p, "r+b", buffering=0)
+            break
+        except OSError as e:
+            # 管道不存在（daemon 没起来，errno 2）等其它错误直接抛
+            if e.errno != 22 or attempt == 49:
+                raise
+            time.sleep(0.1)
     f.write((token + "\n" + req + "\n").encode())
     buf = b""
     while not buf.endswith(b"\n"):
