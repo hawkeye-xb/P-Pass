@@ -772,7 +772,7 @@ jobs:
   #
   # ## 拆成什么
   #
-  #   create-draft ──┬─→ upload-android  (+ manifest 签名 + test 自动发布)
+  #   create-draft ──┬─→ upload-android  (+ manifest 签名 + 写 test-channel)
   #      (秒级)      ├─→ upload-macos
   #                  └─→ upload-windows  (+ VT 提交)
   #                              ↓
@@ -793,7 +793,7 @@ jobs:
   #    因此下沉到独立的 upload job：它只做 download-artifact + gh upload，
   #    没有任何第三方构建 action。
   #
-  # ③ **android 先行 manifest + test 自动发布跟着 android 走。** 它本来就
+  # ③ **android 先行 manifest + 写 test-channel 跟着 android 走。** 它本来就
   #    不需要等桌面端，直接效果是手机端约 6 分钟拿到包、自动更新立刻可验。
   #    这份先行 manifest 只含 android；darwin 条目由 finalize-manifest 在
   #    android + macos 两 lane 齐后重写进同一资产（UPD-03）。Windows 不进这份
@@ -929,9 +929,8 @@ jobs:
         run: |
           set -euo pipefail
           # 幂等：重跑 workflow 时 release 已存在，裸 create 会失败。已存在
-          # 就只更新骨架 notes，不动 draft/prerelease 标志——那两个标志可能
-          # 已经被 upload-android 的自动发布步清掉了，这里重设会把已发布的
-          # test 版打回草稿，手机端立刻 404。
+          # 就只更新骨架 notes，不动 draft/prerelease 标志——发布与否只由人工
+          # publish 决定（#872 起 test tag 也一直是 draft，客户端读 test-channel）。
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "release 已存在 → 只刷新骨架 notes"
             gh release edit "$TAG" --notes-file NOTES.md
@@ -1009,34 +1008,18 @@ jobs:
           gh release upload "$TAG" $ASSETS --clobber
           echo "android assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
-      # REL-02: test tag → 自动 publish 为 prerelease（GitHub latest 天然
-      # 忽略 prerelease，绝不会漏进 stable 通道）——开发/狗粮设备 test
-      # 通道自动更新，无需手动传包；正式 tag 保持 draft 等人工 publish
-      #（人工 publish 就是验收后的发布动作，零新基建）。
-      #
-      # CI-04②：这一步搬进 android lane 是本卡的主要收益——手机端约 6 分钟
-      # 就能收到自动更新，不再等 Windows。后到的桌面端资产继续 upload 进这个
-      # **已 publish** 的 release，GitHub 允许（发布不是终态封印）。
-      - name: Auto-publish test tags as prerelease
-        if: contains(env.TAG, '-test.')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # REL-02 补丁（2026-08-11）：gh release edit --prerelease 只设
-          # prerelease 标志、不清 draft——release 仍是 draft，下一步的
-          # test-channel 指针也不该指向它 → test 通道收不到。必须显式清 draft。
-          gh release edit "$TAG" --draft=false --prerelease
-          echo "test 通道已发布（prerelease，stable 不受影响）: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
-
+      # #872：test tag 的 release 保持 draft（只当构建记录）——客户端从滚动的 test-channel
+      # 下载，安装包随清单一起进 test-channel（point-test-channel.sh：先传包、再写清单、后清旧包）。
+      # 正式 tag 同样保持 draft，等人工 publish。
       # REL-07: test 通道指针——把本次**已组装/签名**的 manifest.json 原样
       # 覆盖进固定的滚动 prerelease `test-channel`（逻辑在 tools/release/point-test-channel.sh，
       # Windows 的 manifest-windows.json 走同一个脚本）。只在 test tag 且 manifest 存在时执行；
-      # stable 流程不经过这里。放在 auto-publish 之后：没 publish 的 test tag 不移动指针。
+      # stable 流程不经过这里。
       - name: Point test-channel at this manifest (REL-07)
         if: contains(env.TAG, '-test.') && hashFiles('artifacts/manifest.json') != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: tools/release/point-test-channel.sh artifacts/manifest.json
+        run: tools/release/point-test-channel.sh artifacts/manifest.json artifacts/android/P-Pass_*_android*.apk
 
       # #852：test 通道镜像正式版——Android test 包与正式包读同一种分端清单（manifest-android.json），
       # 只有地址不同（test-channel vs Latest）。上面那份老格式 manifest.json 是过渡期给已装的旧
@@ -1045,7 +1028,7 @@ jobs:
         if: contains(env.TAG, '-test.') && hashFiles('artifacts/manifest-android.json') != ''
         env:
           GH_TOKEN: ${{ github.token }}
-        run: tools/release/point-test-channel.sh artifacts/manifest-android.json
+        run: tools/release/point-test-channel.sh artifacts/manifest-android.json artifacts/android/P-Pass_*_android*.apk
 
   # ── lane 2: macOS ──
   upload-macos:
@@ -1237,14 +1220,8 @@ jobs:
 
       # #852：test 通道镜像正式版——macOS test 包的插件 endpoint 是 test-channel/manifest-macos.json
       # （构建期由 tools/release/tauri-config.mjs 写进），与正式包同一条插件应用内更新。
-      # 只改桌面的 test tag 没有 Android lane 代为发布：同 finalize-manifest-windows，这里先按
-      # REL-02 自动发布为 prerelease（幂等），再验签名、写指针。没有 mac 清单（本次桌面判 skip）⇒ 都跳过。
-      - name: Auto-publish test tags as prerelease
-        if: contains(env.TAG, '-test.') && hashFiles('artifacts/manifest-macos.json') != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$TAG" --draft=false --prerelease
-
+      # #872：先验签名，再把 .app.tar.gz（插件更新用）与 dmg（手动安装用）连同清单写进 test-channel。
+      # 没有 mac 清单（本次桌面判 skip）⇒ 跳过。
       - name: Point test-channel at the macOS manifest (#852)
         if: contains(env.TAG, '-test.') && hashFiles('artifacts/manifest-macos.json') != ''
         env:
@@ -1252,14 +1229,14 @@ jobs:
         run: |
           set -euo pipefail
           tools/release/check-manifests-signed.sh artifacts/manifest-macos.json
-          tools/release/point-test-channel.sh artifacts/manifest-macos.json
+          tools/release/point-test-channel.sh artifacts/manifest-macos.json \
+            artifacts/macos-arm64/P-Pass_*.app.tar.gz artifacts/macos-arm64/P-Pass_*.dmg
 
   # ── 收口①b: Windows 分端清单（#788②，2026-10-12）──────────────────
   # Windows 与 macOS 同一套标准 Tauri 更新：只含本端条目的 manifest-windows.json
   # （version = 本端版本号），同一个 make-update-manifest.mjs、同一把 UPDATE_SIGNING_KEY、
   # 同一个 pin 住的 signer（tools/release/sign-desktop.sh）。只等 Windows 自己那条 lane。
-  # test tag：本 job 也按 REL-02 自动发布为 prerelease（Windows 单独 dispatch 时没有
-  # Android lane 来做这件事），再把清单写进 test-channel——Windows test 包的插件 endpoint。
+  # test tag：把安装包与清单写进 test-channel（#872）——Windows test 包的插件 endpoint。
   #
   # 此前（UPD-04）是往老格式 manifest.json 里追加 windows 条目：Windows 客户端从来不读
   # 那份（它读 manifest-macos.json，#788②），正式 tag 上还冲掉过冻结件（2026-10-05 事故）。
@@ -1305,17 +1282,11 @@ jobs:
           gh release upload "$TAG" artifacts/manifest-windows.json --clobber
           echo "Windows manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest-windows.json"
 
-      - name: Auto-publish test tags as prerelease
-        if: contains(env.TAG, '-test.')
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh release edit "$TAG" --draft=false --prerelease
-
       - name: Point test-channel at the Windows manifest (#788②)
         if: contains(env.TAG, '-test.')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: tools/release/point-test-channel.sh artifacts/manifest-windows.json
+        run: tools/release/point-test-channel.sh artifacts/manifest-windows.json artifacts/windows-x64-installer/P-Pass_*-setup.exe
 
   # ── 收口：补签名状态 + 资产 sha256（晚到不拖任何资产） ──
   finalize-notes:
@@ -1440,7 +1411,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # 只改正文，不动 draft/prerelease——test tag 可能已被 upload-android
-          # 发布出去了，这里重设标志会把它打回草稿，手机端立刻 404。
+          # 只改正文，不动 draft/prerelease——发布与否只由人工 publish 决定。
           gh release edit "$TAG" --notes-file NOTES.md
           echo "正文已补齐: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

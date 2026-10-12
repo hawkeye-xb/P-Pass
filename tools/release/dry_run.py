@@ -551,11 +551,17 @@ def check_manifest(ck: Check, sc: Scenario, pub: Path, tag: str, name: str, *, v
         ck("notes_i18n" not in m, f"{name}: 没有 notes_i18n")
     else:
         ck(m.get("notes_i18n") == notes_i18n, f"{name}: notes_i18n = {notes_i18n}", f"实际 {m.get('notes_i18n')!r}")
+    # #872：test tag 的下载链接指向滚动的 test-channel（tag 自己的 release 保持 draft）。
+    home = "test-channel" if "-test." in tag else tag
     for target, asset_name in targets.items():
         e = m.get("platforms", {}).get(target, {})
         asset = sc.asset(tag, asset_name)
-        want_url = f"https://github.com/{REPO}/releases/download/{tag}/{asset_name}"
-        ck(e.get("url") == want_url, f"{name}: {target} url → 本 release 的 {asset_name}", f"实际 {e.get('url')!r}")
+        want_url = f"https://github.com/{REPO}/releases/download/{home}/{asset_name}"
+        ck(e.get("url") == want_url, f"{name}: {target} url → {home} 的 {asset_name}", f"实际 {e.get('url')!r}")
+        if home != tag:
+            served = sc.asset(home, asset_name)
+            ck(served.exists() and served.read_bytes() == asset.read_bytes(),
+               f"{name}: {target} 的 {asset_name} 已在 {home} 里，且与本 tag 构建的字节一致")
         ck(asset.exists() and e.get("sha256") == sha256(asset), f"{name}: {target} sha256 与上传的资产一致")
         ok, why = verify_sig(pub, asset, e.get("signature", ""))
         ck(ok, f"{name}: {target} 签名可用临时公钥校验通过", why)
@@ -602,7 +608,6 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
        json.dumps(sc.meta(FORMAL_TAG)))
     step_is(ck, jobs, "upload-android", "Compose update manifest (UPD-01)", "success")
     step_is(ck, jobs, "upload-android", "Sign update manifest (UPD-01, gated)", "success")
-    step_is(ck, jobs, "upload-android", "Auto-publish test tags as prerelease", "skipped")
     step_is(ck, jobs, "upload-android", "Point test-channel at this manifest (REL-07)", "skipped")
     ws = jobs["upload-android"].workspace
     ck(not (ws / "artifacts/manifest.json").exists(), "upload-android 不产出动态 manifest.json（只给 test 通道）")
@@ -661,10 +666,10 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
         ck(ok, "#788② test-channel/manifest-windows.json 的签名校验通过", why)
     step_is(ck, jobs, "create-draft", "Version bump gate (UPD-13)", "skipped")
     step_is(ck, jobs, "create-draft", "Release notes presence (#741, warn only)", "skipped")
-    step_is(ck, jobs, "upload-android", "Auto-publish test tags as prerelease", "success")
     step_is(ck, jobs, "upload-android", "Point test-channel at this manifest (REL-07)", "success")
     meta = sc.meta(TEST_TAG) or {}
-    ck(meta.get("draft") is False and meta.get("prerelease") is True, "test tag 自动发布为 prerelease", json.dumps(meta))
+    ck(meta.get("draft") is True, "#872：test tag 的 release 保持 draft（客户端读 test-channel）", json.dumps(meta))
+    check_channel(ck, sc, TEST_TAG)
     job_ok(ck, jobs, "finalize-notes")
     body = meta.get("body", "")
     ck(body.startswith(f"## P-Pass {v}\n") and "本版更新" not in body, "#773：test tag 正文不变（不加 CHANGELOG 小节）", body[:300])
@@ -728,12 +733,35 @@ def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
 #   test.1 首发（test-channel 里没有分端清单 ⇒ 拿不准 ⇒ 两端构建）
 #   test.2 只改 apps/android/   ⇒ Android 构建、桌面零构建，test-channel/manifest-macos.json 不动
 #   test.3 只改 apps/desktop/   ⇒ 桌面构建、Android 零构建，test-channel/manifest-android.json 不动；
-#                                  没有 Android lane 代为发布 ⇒ finalize-manifest 自动发布
 #   test.4 改 crates/（共享代码）⇒ 两端构建
 #   test.5 只改 docs/           ⇒ plan-builds 报错、不建草稿
 # versions.json / 说明文件每次提交都一样（release/** 变化会落进「两端」，掩盖判定）。
 PER_END_TAGS = ["v0.0.2-test.1", "v0.0.2-test.2", "v0.0.2-test.3", "v0.0.2-test.4", "v0.0.2-test.5"]
 PER_END_CHANNEL = ("manifest.json", "manifest-android.json", "manifest-macos.json")
+
+
+def before_ver(before: dict, end: str):
+    b = before.get("manifest-android.json" if end == "android" else "manifest-macos.json")
+    return json.loads(b)["version"] if b else None
+
+
+def check_channel(ck: Check, sc: Scenario, tag: str):
+    """#872：test-channel 里每份清单的下载链接都指向 test-channel 里在的文件；安装包只剩被清单指向的版本。"""
+    d = sc.asset("test-channel", "x").parent
+    names = sorted(os.listdir(d)) if d.is_dir() else []
+    base = f"https://github.com/{REPO}/releases/download/test-channel/"
+    refs = set()
+    for n in names:
+        if not (n.startswith("manifest") and n.endswith(".json")):
+            continue
+        m = json.loads((d / n).read_text())
+        refs.add(m.get("version"))
+        for target, e in m.get("platforms", {}).items():
+            url = e.get("url", "")
+            ck(url.startswith(base) and url[len(base):] in names,
+               f"{tag}：test-channel/{n} 的 {target} 下载链接在 test-channel 里", url)
+    stale = [n for n in names if n.startswith("P-Pass_") and n[len("P-Pass_"):].split("_")[0] not in refs]
+    ck(not stale, f"{tag}：test-channel 里没有清单不指向的旧安装包（引用版本 {sorted(refs)}）", " ".join(stale))
 
 
 def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
@@ -824,9 +852,12 @@ def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
         ck(not sc.asset(tag, f"P-Pass_{v}_android.apk").exists() or want["android"] == "build",
            f"{tag}：没构建的 Android 端不复制任何产物")
         meta = sc.meta(tag) or {}
-        ck(meta.get("draft") is False and meta.get("prerelease") is True, f"{tag}：自动发布为 prerelease", json.dumps(meta))
-        if want["android"] == "skip":
-            step_is(ck, jobs, "finalize-manifest", "Auto-publish test tags as prerelease", "success")
+        ck(meta.get("draft") is True, f"{tag}：release 保持 draft（#872）", json.dumps(meta))
+        check_channel(ck, sc, tag)
+        for end, name in (("android", "P-Pass_{v}_android.apk"), ("macos", "P-Pass_{v}_macos-arm64.dmg")):
+            keep = v if want[end] == "build" else before_ver(before, end)
+            ck(sc.asset("test-channel", name.format(v=keep)).exists(),
+               f"{tag}：test-channel 里 {end} 的包是 {keep}（{'本次构建' if keep == v else '没构建，保持原样'}）")
         if want["macos"] == "skip":
             step_is(ck, jobs, "finalize-manifest", "Point test-channel at the macOS manifest (#852)", "skipped")
 

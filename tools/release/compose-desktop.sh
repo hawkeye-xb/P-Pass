@@ -35,7 +35,13 @@ MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app
 # ⚠️ 2026-10-04 事故：它曾被写在 test 分支里，正式 tag 走到 android
 # 分端清单时 `set -u` 直接 `ASSET_BASE: unbound variable` —— 变量定义
 # 必须在所有分支之外。
-ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+# #872：test tag 的安装包放在滚动的 test-channel 里（tag 自己的 release 保持 draft、对客户端不可达），
+# 正式 tag 指向该 tag 的 release。
+if [[ "$TAG" == *-test.* ]]; then
+  ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel"
+else
+  ASSET_BASE="https://github.com/hawkeye-xb/P-Pass/releases/download/${TAG}"
+fi
 if [[ "$TAG" != *-test.* ]]; then
   # UPD-13（#660）：**正式版的老格式兼容清单 = 冻结件**
   # （release/legacy-manifest.json：version 固定 0.9.0、URL 指向 R2 上

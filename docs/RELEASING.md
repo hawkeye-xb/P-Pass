@@ -178,9 +178,9 @@ default** (family devices are never touched by test builds):
   unchanged (locked by a unit test; do not touch). GitHub `latest` only
   ever points at a *published* release, so **publishing manually IS the
   release action** after acceptance.
-- **test** (dev/dogfood devices): CI auto-publishes any tag containing
-  `-test.` as a **GitHub prerelease** (release.yml; GitHub `latest`
-  ignores prereleases by design, so it can never leak into stable).
+- **test** (dev/dogfood devices): a tag containing `-test.` keeps its own
+  release as a **draft** — a private build record only; nothing reads it, and
+  deleting it breaks nothing (#872). Devices are served from `test-channel`.
   **Per-platform test builds (#852):** a test tag builds only the platforms
   whose inputs changed since the version that platform's test-channel
   manifest points at (`tools/release/plan-builds.sh`): `apps/android/` →
@@ -189,15 +189,19 @@ default** (family devices are never touched by test builds):
   (`crates/`, `tools/`, `.github/`, …) or anything uncertain → all. An
   unchanged platform is not built and its test-channel manifest is left as
   is. Nothing changed anywhere ⇒ `plan-builds` fails, no draft.
-  **Test-channel pointer (REL-07):** after a test release is
-  auto-published, release.yml writes that release's signed per-platform
-  manifests (`manifest-android.json`, `manifest-macos.json`,
-  `manifest-windows.json`, plus the legacy `manifest.json` for older
-  Android test builds) into `releases/download/test-channel/` — a fixed,
-  rolling prerelease tagged `test-channel` (created on the first test
-  release, marked prerelease, never latest; do not delete it). Download
-  URLs inside still point at the versioned release. Re-running an older
-  tag's workflow never moves a pointer backwards. Nothing calls the GitHub
+  **Test channel (REL-07 / #872):** `test-channel` is a fixed, rolling
+  prerelease (created on the first test release, never latest; do not
+  delete it) holding both the per-platform manifests (`manifest-android.json`,
+  `manifest-macos.json`, `manifest-windows.json`, plus the legacy
+  `manifest.json` for older Android test builds) and the installers they
+  point at. For each platform it built, `tools/release/point-test-channel.sh`
+  (1) uploads the installers (plus the macOS dmg for manual installs),
+  (2) refuses unless every download URL in the manifest is already in
+  `test-channel`, (3) overwrites that platform's manifest, (4) deletes
+  installers whose version no manifest points at. So `test-channel` always
+  holds exactly the current package per platform, and the Releases page
+  carries no `-test.N`. Re-running an older tag's workflow never moves a
+  pointer backwards. Nothing calls the GitHub
   API, so there is no anonymous rate limit and no `GH_TOKEN` to manage.
   Each client reads its own manifest: Android
   `test-channel/manifest-android.json`; the desktop shell's updater plugin
@@ -205,9 +209,9 @@ default** (family devices are never touched by test builds):
   `tools/release/tauri-config.mjs` when the version contains `-test.`).
   Clients read GitHub directly; the former Cloudflare update Worker was
   retired with #860.
-- **Drafts never reach devices**: a test tag left as draft (not published)
-  never reaches the pointer step, so the test-channel manifests keep
-  pointing at the previous test release.
+- **Tags stay**: the tag triggers the build and is each platform's
+  per-platform baseline (`plan-builds.sh`); keep the tags the test-channel
+  manifests point at.
 - Desktop note: since #852 a desktop test build updates in-app exactly
   like stable (updater plugin: check → download → verify → replace →
   restart); only the endpoint differs. Test builds from before #852 still
@@ -363,27 +367,28 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   `-test.` tag（含手动 dispatch），「最新」也只在非 test 的 release 里比。
   test 构建只经 GitHub `test-channel` 指针到达设备。判定在
   `tools/mirror-resolve-tag.sh`，测试是 `tools/test-mirror-resolve-tag.sh`（CI Docs lane）。
-- **test**（开发/狗粮设备）：CI 把含 `-test.` 的 tag 自动 publish 为
-  **GitHub prerelease**（release.yml；GitHub latest 设计上忽略
-  prerelease，绝不会漏进 stable）。
+- **test**（开发/狗粮设备）：含 `-test.` 的 tag 自己的 release 一直是 **draft**——只当
+  不公开的构建记录，没有任何东西读它，删了也不影响（#872）。设备一律从 `test-channel` 取。
   **test 按端构建（#852）**：test tag 只构建自「该端 test-channel 清单所指版本」以来
   输入有改动的那几端（`tools/release/plan-builds.sh`）：`apps/android/` → Android；
   `apps/desktop/` → macOS + Windows；macOS 打包脚本 → macOS；`tauri.windows.conf.json`
   → Windows；文档 → 都不算；其余（`crates/`、`tools/`、`.github/` …）或拿不准 → 所有端。
   没改动的一端不构建，它在 test-channel 里的清单不动；所有端都没改动 ⇒ `plan-builds`
   报错、不建草稿。
-  **test 通道指针（REL-07）**：test release 自动 publish 之后，release.yml 把该版本
-  已签名的分端清单（`manifest-android.json`、`manifest-macos.json`、
-  `manifest-windows.json`，外加给旧版 Android test 包读的老格式 `manifest.json`）写进
-  `releases/download/test-channel/`——固定的滚动 prerelease（tag `test-channel`，
-  首次 test 发布时自动创建，标记 prerelease、永不是 latest，勿删）。清单里的下载链接
-  仍指向版本化 release。重跑旧 tag 的 workflow 不会把指针往回拨。全程不调 GitHub
+  **test 通道（REL-07 / #872）**：`test-channel` 是固定的滚动 prerelease（首次 test 发布时
+  自动创建，永不是 latest，勿删），同时放分端清单（`manifest-android.json`、
+  `manifest-macos.json`、`manifest-windows.json`，外加给旧版 Android test 包读的老格式
+  `manifest.json`）和清单指向的安装包。每构建一端，`tools/release/point-test-channel.sh`
+  ① 上传安装包（macOS 另带手动安装用的 dmg）② 清单里每个下载链接都已在 `test-channel`
+  才继续，否则拒绝 ③ 覆盖该端清单 ④ 删掉没有任何清单指向的版本的安装包。所以
+  `test-channel` 里永远只有各端当前那一个包，Releases 页面不出现 `-test.N`。
+  重跑旧 tag 的 workflow 不会把指针往回拨。全程不调 GitHub
   API → 没有匿名限流，也没有 `GH_TOKEN` 要管。
   各端读自己那份：Android 读 `test-channel/manifest-android.json`；桌面壳的更新插件读
   `test-channel/manifest-<端>.json`（版本号含 `-test.` 时由 `tools/release/tauri-config.mjs`
   在构建期写进 endpoint）。客户端直读 GitHub；原先的 Cloudflare 更新 Worker 已随 #860 下线。
-- **draft 不会到达设备**：test tag 留 draft 不 publish → 走不到指针那一步，test-channel
-  里的清单仍指向上一个 test 发布。
+- **tag 照打**：tag 负责触发构建，也是各端按端判定的基线（`plan-builds.sh`）；
+  test-channel 清单所指的那几个 tag 要留着。
 - 桌面注：#852 起桌面 test 包与正式版同一条应用内更新路径（更新插件：检查 → 下载 →
   验签 → 替换 → 重启），只有清单地址不同。#852 之前的 test 包仍是打开下载页，要手动装
   一次新 test 包才能跨过来。
