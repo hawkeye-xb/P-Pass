@@ -1,0 +1,3 @@
+Once the phone allows photo location, backed-up photos get it back without re-sending.
+Fixed the background service quitting unexpectedly.
+A broken launch-at-login setting now repairs itself.
