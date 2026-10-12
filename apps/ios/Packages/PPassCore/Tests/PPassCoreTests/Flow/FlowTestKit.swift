@@ -366,7 +366,11 @@ final class Rig: @unchecked Sendable {
     let conditionsHook = Locked<(() throws -> Conditions)?>(nil)
     private(set) var engine: FlowEngine!
 
-    init(_ name: String = #function, cursors: Bool = true, openRound: String? = nil, control: FlowControl? = nil, directory: TempDir? = nil) throws {
+    /// 非 nil 时引擎用它（真实的 FlowDeliveryPort）而不是 [delivery] 这个假端口。
+    let portOverride: ItemDelivery?
+
+    init(_ name: String = #function, cursors: Bool = true, openRound: String? = nil, control: FlowControl? = nil, directory: TempDir? = nil, port: ItemDelivery? = nil) throws {
+        portOverride = port
         dir = directory ?? TempDir(name)
         store = try SQLiteOrderStore(directory: dir.url, logger: logger, clock: clock.function)
         importer = FakeImporter(media: media)
@@ -387,7 +391,7 @@ final class Rig: @unchecked Sendable {
 
     func makeEngine() -> FlowEngine {
         FlowEngine(
-            store: store, media: media, importer: importer, delivery: delivery, probe: probe, presence: presence,
+            store: store, media: media, importer: importer, delivery: portOverride ?? delivery, probe: probe, presence: presence,
             lease: lease, scheduler: scheduler, control: control,
             conditions: { [conditions, conditionsHook] in (try? conditionsHook.get()?()) ?? conditions.get() },
             inScope: { [media] in media.isInScope($0) },
