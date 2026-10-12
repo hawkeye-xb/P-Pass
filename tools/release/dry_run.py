@@ -425,8 +425,10 @@ class Scenario:
                     needs[n] = {"result": self.build_result(n), "outputs": {}}
                 else:
                     raise SimError(f"{job_id} needs {n}，dry-run 没有它的结果")
+            # 没配置的 secret 在 GitHub 上是空串（VT_API_KEY 未配置 ⇒ VirusTotal 步跳过）
             self.jobs[job_id] = self.runner.run_job(wf, job_id, github=github, inputs={},
-                                                    secrets={"UPDATE_SIGNING_KEY": self.key}, needs=needs)
+                                                    secrets={"UPDATE_SIGNING_KEY": self.key, "VT_API_KEY": ""},
+                                                    needs=needs)
         return self.jobs
 
     def build_result(self, job: str) -> str:

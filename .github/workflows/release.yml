@@ -580,7 +580,7 @@ jobs:
             const c = { version };
             if (version.includes("-test.")) {
               c.plugins = { updater: { endpoints: [
-                `https://github.com/${repo}/releases/download/test-channel/manifest-windows.json`,
+                "https://github.com/" + repo + "/releases/download/test-channel/manifest-windows.json",
               ] } };
             }
             console.log(JSON.stringify(c));
