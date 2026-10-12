@@ -218,6 +218,23 @@ data class FlowFetchRequest(
     @SerialName("size_bytes") val sizeBytes: Long = 0L,
 )
 
+/** #851：Kotlin mirror of proto::FlowSupersedeRequest——用原图原地替换桌面上抹过地点的旧副本。 */
+@Serializable
+data class FlowSupersedeRequest(
+    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("old_hash") val oldHash: String = "",
+    @SerialName("new_hash") val newHash: String = "",
+    /** 原图（new_hash）的 iroh-blobs ticket。 */
+    val provider: String = "",
+)
+
+/** #851：Kotlin mirror of proto::FlowSupersedeReply。`outcome` = `replaced` / `refused`。 */
+@Serializable
+data class FlowSupersedeReply(
+    val outcome: String = "",
+    val reason: String = "",
+)
+
 /** Kotlin mirror of proto::FlowCompletionReceipt. */
 @Serializable
 data class FlowCompletionReceipt(
@@ -359,6 +376,8 @@ object Methods {
     const val FLOW_CANCEL_TUPLE = "flow.cancel_tuple"
     /** AUDIT-01: phone-side durable outbox events -> daemon v2 audit repo. */
     const val FLOW_AUDIT_SUBMIT = "flow.audit.submit"
+    /** #851：用原图原地替换抹过地点的旧副本；只在 hello 宣告 [FLOW_SUPERSEDE_CAPABILITY] 时调用。 */
+    const val FLOW_SUPERSEDE = "flow.supersede"
     const val BACKUP_BEGIN = "backup.begin"
     const val BACKUP_MANIFEST = "backup.manifest"
     const val BACKUP_PRESENCE = "backup.presence"
@@ -368,6 +387,9 @@ object Methods {
     /** SYNC-04: 前台常驻订阅——见 DaemonClient.subscribeTimeline。 */
     const val TIMELINE_SUBSCRIBE = "timeline.subscribe"
 }
+
+/** #851：桌面支持 `flow.supersede`。旧桌面没有它——手机就不重读已备份的照片（否则原图会成为第二张）。 */
+const val FLOW_SUPERSEDE_CAPABILITY = "flow.supersede.v1"
 
 object Codes {
     const val NOT_AUTHORIZED = "NOT_AUTHORIZED"

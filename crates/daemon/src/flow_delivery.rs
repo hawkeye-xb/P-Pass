@@ -25,9 +25,12 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-use core_index::{device_dir, IncomingFile, IndexError, IngestOutcome, Ingestor};
+use core_index::{
+    device_dir, IncomingFile, IndexError, IngestOutcome, Ingestor, SupersedeApplied, SupersedeCheck,
+};
 use proto::{
-    DesktopHealth, FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowTupleRef,
+    DesktopHealth, FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowSupersedeReply,
+    FlowSupersedeRequest, FlowTupleRef,
 };
 use storage::{Db, FlowGrant, FlowGrantState};
 use transport::{Blobs, ConnectionStatus, NodeId};
@@ -1265,6 +1268,142 @@ impl FlowDelivery {
         // work, not silently invented here.
         self.record_flow_item(item_bytes, item_started.elapsed().as_secs(), false);
         Ok(receipt_from(grant, receipt_id))
+    }
+
+    /// #851 `flow.supersede`: replace this phone's location-redacted copy with the original, in
+    /// place. Only the metadata byte ranges of the original travel (verified against its hash by
+    /// iroh-blobs); the spliced file must hash to `new_hash` and differ from the old copy only where
+    /// the old copy has zeros. Every refusal leaves the library untouched.
+    ///
+    /// The network fetch is bounded by the byte-stall watchdog; the local splice and swap are never
+    /// cut short (a half-applied swap is what `finish_pending_swaps` exists for, not a timeout).
+    /// Serialized with this phone's fetches through the same per-phone lock.
+    pub async fn supersede(
+        &self,
+        peer: NodeId,
+        request: &FlowSupersedeRequest,
+    ) -> Result<FlowSupersedeReply, DeliveryError> {
+        let refused = |reason: &str| FlowSupersedeReply {
+            outcome: "refused".into(),
+            reason: reason.into(),
+        };
+        let (Some(old), Some(new)) = (parse_hash(&request.old_hash), parse_hash(&request.new_hash))
+        else {
+            return Ok(refused("bad_request"));
+        };
+        let epoch = self
+            .db
+            .pairing_epoch(&peer.0)
+            .await
+            .map_err(storage_error)?;
+        if request.pairing_epoch.is_empty()
+            || epoch.as_deref() != Some(request.pairing_epoch.as_str())
+        {
+            return Ok(refused("epoch_mismatch"));
+        }
+        let Ok((provider, ticket_hash)) = self.blobs.register_blob_ticket(&request.provider) else {
+            return Ok(refused("bad_request"));
+        };
+        // 提供方是手机的 blobs 端点（独立于控制面身份，与 flow.offer 一样不比对）；取到的每个字节都按
+        // new_hash 校验，票据指向别的内容就拒绝。
+        if ticket_hash != new {
+            return Ok(refused("bad_request"));
+        }
+        let fetch_lock = self.fetch_lock(peer);
+        let _guard = fetch_lock.lock().await;
+
+        let plan = match self
+            .ingestor
+            .plan_supersede(&old, &new, &peer.0)
+            .await
+            .map_err(|e| self.ingest_failure(&e))?
+        {
+            SupersedeCheck::AlreadyDone => {
+                return Ok(FlowSupersedeReply {
+                    outcome: "replaced".into(),
+                    reason: String::new(),
+                })
+            }
+            SupersedeCheck::Refused(reason) => {
+                tracing::info!(
+                    "#851 supersede {} → {} refused: {reason}",
+                    &request.old_hash[..8],
+                    &request.new_hash[..8]
+                );
+                return Ok(refused(reason));
+            }
+            SupersedeCheck::Ready(plan) => plan,
+        };
+        let (size, pieces) = match self
+            .blobs
+            .fetch_byte_ranges(provider, new, &plan.ranges, self.fetch_byte_stall)
+            .await
+        {
+            Ok(got) => got,
+            Err(e) => {
+                tracing::warn!(
+                    "#851 supersede {}: ranged fetch failed: {e}",
+                    &request.new_hash[..8]
+                );
+                return Ok(refused("fetch_failed"));
+            }
+        };
+        let fetched: u64 = pieces.iter().map(|(_, b)| b.len() as u64).sum();
+        let applied = self
+            .ingestor
+            .apply_supersede(&plan, &new, size, &pieces, (self.now)())
+            .await
+            .map_err(|e| self.ingest_failure(&e))?;
+        match applied {
+            SupersedeApplied::Refused(reason) => {
+                tracing::info!(
+                    "#851 supersede {} → {} refused after fetch: {reason}",
+                    &request.old_hash[..8],
+                    &request.new_hash[..8]
+                );
+                Ok(refused(reason))
+            }
+            SupersedeApplied::Replaced {
+                rel_path,
+                quarantined,
+            } => {
+                // 旧指纹的缩略图没人再引用：删掉（不留孤儿）；新指纹的照常预生成。
+                let thumbs_root = self.library_root.join(".ppf/thumbs");
+                let stale = media_codec::thumb_paths(&thumbs_root, &old);
+                let _ = std::fs::remove_file(stale.t256);
+                let _ = std::fs::remove_file(stale.t1024);
+                if let Some(thumbs) = &self.thumbs {
+                    thumbs.ingested(&rel_path);
+                }
+                if let Some(throttle) = &self.throttle {
+                    throttle.signal();
+                }
+                let _ = self
+                    .db
+                    .append_audit(&storage::AuditEntry::local(
+                        (self.now)(),
+                        Some(peer.0.to_vec()),
+                        "asset.superseded",
+                        Some(new.to_vec()),
+                        Some(
+                            serde_json::json!({
+                                "old_hash": request.old_hash,
+                                "rel_path": rel_path,
+                                "quarantined": quarantined,
+                                "fetched_bytes": fetched,
+                                "size": size,
+                            })
+                            .to_string(),
+                        ),
+                    ))
+                    .await;
+                tracing::info!("#851 supersede {} → {} replaced at {rel_path} ({fetched} of {size} bytes fetched)", &request.old_hash[..8], &request.new_hash[..8]);
+                Ok(FlowSupersedeReply {
+                    outcome: "replaced".into(),
+                    reason: String::new(),
+                })
+            }
+        }
     }
 
     /// Cancel only the exact active tuple. This has no success receipt path.

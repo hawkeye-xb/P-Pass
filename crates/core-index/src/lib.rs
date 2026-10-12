@@ -11,11 +11,15 @@ use std::path::PathBuf;
 mod dedup;
 mod ingest;
 mod rebuild;
+mod supersede;
 mod timeline;
 
 pub use dedup::hash_file;
 pub use ingest::{device_dir, IncomingFile, IngestOutcome, Ingestor};
 pub use rebuild::{adopt_orphans, rebuild, AdoptReport, RebuildReport};
+pub use supersede::{
+    SupersedeApplied, SupersedeCheck, SupersedePlan, MAX_REGION_BYTES, QUARANTINE_DIR,
+};
 pub use timeline::timeline_page;
 
 /// Index-layer errors. Every I/O failure names the path it happened on —

@@ -6,5 +6,7 @@
 //! still a photo (missing fields, never errors).
 
 mod exif_meta;
+mod metadata_ranges;
 
 pub use exif_meta::{read_meta, read_meta_with_local_offset, MediaMeta};
+pub use metadata_ranges::{metadata_ranges, metadata_ranges_from};

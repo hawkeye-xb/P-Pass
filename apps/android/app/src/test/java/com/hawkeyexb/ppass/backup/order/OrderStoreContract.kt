@@ -20,6 +20,31 @@ abstract class OrderStoreContract {
     private fun newOrder(mediaId: Long, state: OrderState = OrderState.TRANSFERRING, hash: String? = "h$mediaId", version: String = "v1") =
         NewOrder(mediaId = mediaId, sourceVersion = version, bucketId = 7, contentHash = hash, state = state, pairingEpoch = "e3")
 
+    // #851：「用原图替换旧副本」的待办只取当前行、已确认、抹过地点、原图还在、还没有结论的。
+    @Test
+    fun `location-redacted backlog lists only current confirmed redacted rows without a verdict`() {
+        val store = newStore(clock)
+        val redacted = store.insert(newOrder(1, OrderState.CONFIRMED).copy(locationRedacted = true))
+        store.insert(newOrder(2, OrderState.CONFIRMED)) // 原样字节
+        store.insert(newOrder(3, OrderState.FAILED).copy(locationRedacted = true)) // 还没传完
+        val superseded = store.insert(newOrder(4, OrderState.CONFIRMED).copy(locationRedacted = true))
+        store.insert(newOrder(4, OrderState.CONFIRMED, hash = "original4")) // 已换成原图：旧行不再是当前行
+        val gone = store.insert(newOrder(5, OrderState.CONFIRMED).copy(locationRedacted = true))
+        store.setSourceMissing(gone.id, true)
+        val refused = store.insert(newOrder(6, OrderState.CONFIRMED).copy(locationRedacted = true))
+        val same = store.insert(newOrder(7, OrderState.CONFIRMED).copy(locationRedacted = true))
+
+        assertEquals(listOf(redacted.id, refused.id, same.id), store.locationRedactedAfter(0L, 10).map { it.id })
+        assertEquals(listOf(refused.id), store.locationRedactedAfter(redacted.id, 1).map { it.id })
+
+        store.resolveLocationRedaction(refused.id, refused = true)
+        store.resolveLocationRedaction(same.id, refused = false)
+        assertEquals(listOf(redacted.id), store.locationRedactedAfter(0L, 10).map { it.id })
+        assertTrue("拒绝替换：桌面那份仍是抹过的", store.get(refused.id)!!.locationRedacted)
+        assertEquals(false, store.get(same.id)!!.locationRedacted)
+        assertEquals(superseded.mediaId, 4L)
+    }
+
     @Test
     fun `insert assigns strictly increasing ids and the current row is the newest one per photo`() {
         val store = newStore(clock)

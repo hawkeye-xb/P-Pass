@@ -396,6 +396,41 @@ pub struct FlowFetchRequest {
     pub size_bytes: i64,
 }
 
+/// #851 `flow.supersede`: replace the Desktop's location-redacted copy of a photo (`old_hash`,
+/// uploaded by this phone before it held `ACCESS_MEDIA_LOCATION`) with the original bytes
+/// (`new_hash`) the phone can read now — in place, so the library still holds one photo.
+///
+/// The Desktop fetches only the metadata byte ranges of `new_hash` from `provider` (the phone's
+/// blob ticket for it), splices them into its copy of `old_hash`, and replaces only if the result
+/// hashes to `new_hash` and every changed byte was zero in the old copy (Android's redaction zeroes
+/// the location bytes and keeps the length). A phone sends this only when hello advertises
+/// `flow.supersede.v1`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct FlowSupersedeRequest {
+    pub pairing_epoch: String,
+    /// BLAKE3 hex of the copy the Desktop holds (location-redacted).
+    pub old_hash: String,
+    /// BLAKE3 hex of the original the phone holds now.
+    pub new_hash: String,
+    /// The phone's iroh-blobs ticket for `new_hash`.
+    pub provider: String,
+}
+
+/// Reply to [`FlowSupersedeRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct FlowSupersedeReply {
+    /// `"replaced"` (now holds `new_hash`, including a replay of a finished request) or
+    /// `"refused"` (nothing changed; the old copy stays).
+    pub outcome: String,
+    /// Why it was refused: `old_missing` / `not_uploader` / `old_changed` / `unknown_format` /
+    /// `region_too_large` / `size_mismatch` / `incomplete_ranges` / `not_a_redaction` /
+    /// `hash_mismatch` / `epoch_mismatch` / `bad_request` / `fetch_failed`. Empty when replaced.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub reason: String,
+}
+
 /// A durable Desktop acknowledgement for exactly one materialized item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -644,6 +679,10 @@ pub mod methods {
     /// event via its existing event_id idempotency key and returns which
     /// ids landed so the phone can safely drop them from its outbox.
     pub const FLOW_AUDIT_SUBMIT: &str = "flow.audit.submit";
+    /// #851: replace a location-redacted copy with its original, in place
+    /// ([`super::FlowSupersedeRequest`] → [`super::FlowSupersedeReply`]). Member+ like every
+    /// `flow.*` method. Gated on the `flow.supersede.v1` capability.
+    pub const FLOW_SUPERSEDE: &str = "flow.supersede";
     pub const BACKUP_BEGIN: &str = "backup.begin";
     pub const BACKUP_MANIFEST: &str = "backup.manifest";
     pub const BACKUP_PRESENCE: &str = "backup.presence";

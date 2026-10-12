@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import com.hawkeyexb.ppass.proto.FlowSupersedeRequest
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
@@ -371,6 +372,16 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         log = androidLog,
         bootClock = { androidBootInstant(app) },
         appForegroundAt = { FlowForegroundHandoff.lastAppForegroundAt },
+        // #851：有位置权限、桌面宣告 flow.supersede.v1 时，把当年抹过地点的已备份照片原地换成原图。
+        locationReadable = { AndroidMediaImporter.canReadMediaLocation(app) },
+        supersede = SupersedeClient { epoch, oldHash, newHash, provider ->
+            val p = pairing() ?: error("not paired")
+            client.bind(IdentityStore(app.filesDir).secretKey())
+            RemoteSupersede(client).supersede(
+                parsePeerAddrToken(p.daemonAddrToken),
+                FlowSupersedeRequest(epoch.value, oldHash, newHash, provider),
+            )
+        },
         afterCycle = { auditScope.launch { dispatcher.flush() } },
         onEpochAdvertised = { advertised ->
             // 同一台桌面换了配对代号：order 表保留（内容寻址，CONFIRMED 跨代号成立），只更新凭证。

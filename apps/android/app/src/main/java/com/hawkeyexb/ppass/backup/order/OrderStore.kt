@@ -69,7 +69,8 @@ data class Order(
     val sourceMissing: Boolean = false,
     /**
      * #843：这一行导入时读到的字节里拍摄地点是否被系统抹掉（没有 `ACCESS_MEDIA_LOCATION` 时 Android 10+ 会抹）。
-     * 只记事实，本身不改变任何决策；schema v4 之前建的行全是抹过的（那时 App 没声明这个权限）。
+     * schema v4 之前建的行全是抹过的（那时 App 没声明这个权限）。#851 拿它找「用原图替换旧副本」的待办
+     * （见 [OrderStore.locationRedactedAfter]）。
      */
     val locationRedacted: Boolean = false,
 )
@@ -172,6 +173,18 @@ interface OrderStore {
 
     /** 当前行里 CONFIRMED、有 hash、id > [afterId] 的，按 id 升序（分页问桌面用）。 */
     fun confirmedWithHashAfter(afterId: Long, limit: Int): List<Order>
+
+    /**
+     * #851：「用原图替换旧副本」的待办——当前行里 CONFIRMED、有 hash、原图还在（未标 source_missing）、
+     * 当时读到的字节抹掉了地点且还没有结论的，id > [afterId]，按 id 升序。
+     */
+    fun locationRedactedAfter(afterId: Long, limit: Int): List<Order>
+
+    /**
+     * #851：这一行的「地点被抹」有了结论，不再是待办。[refused] = 桌面拒绝替换（它手里仍是抹过的副本，
+     * [Order.locationRedacted] 仍为 true）；否则 = 重读出的原样字节与传过的一样（照片本来就没有地点）。
+     */
+    fun resolveLocationRedaction(id: Long, refused: Boolean)
 
     /**
      * 比较并转换：只有当前状态在 [expected] 里时才改成 [to]，单事务。
