@@ -1,0 +1,3 @@
+Backups keep photo locations. Allow photo location to restore it for earlier backups.
+Updates download in the background and notify you once.
+Fewer retries when your computer is offline.
