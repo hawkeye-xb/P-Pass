@@ -13,6 +13,7 @@
 #   5. 集成测试：xcodegen 生成 IntegrationHost 工程，xcodebuild test，素材目录经 TEST_RUNNER_ 前缀传给测试进程。
 #      分两轮，为的是在真库上造出 3105（IOS-09）：第一轮只跑 TokenExpiryIT/testPhase1，把当时的图库内容与 token 存到
 #      临时目录；然后 erase、重新灌同一批素材；第二轮跑全部集成测试，TokenExpiryIT/testPhase2 拿旧 token 读历史。
+#   6. 授权三档（IOS-10）：把宿主授权依次设成 full / limited / denied / 未决定，每档单跑 AccessLevelIT。
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
@@ -99,6 +100,19 @@ grep -E "Executed [0-9]+ tests?|\*\* TEST" "${work}/unit.log" | tail -3
 
 echo "==> integration phase 2: all integration tests (real PhotoKit, hosted)"
 TEST_RUNNER_PPASS_MEDIA_FOREIGN_TOKEN="${work}/stale.token" \
+  TEST_RUNNER_PPASS_MEDIA_EXPECTED_ACCESS=full \
   run_it "${work}/it.log" -skip-testing:PPassMediaIntegrationTests/TokenExpiryIT/testPhase1_BackUpLibraryAndKeepToken
 grep -E "IT-" "${work}/it.log" || true
 grep -E "Test Case .*(passed|failed|skipped)|Executed [0-9]+ tests?|\*\* TEST" "${work}/it.log" | tail -40
+
+echo "==> integration phase 3: photo access levels (limited / denied / notDetermined)"
+for level in limited denied notDetermined; do
+  if [[ "${level}" == notDetermined ]]; then
+    "${here}/scripts/sim-photos-auth.sh" "${udid}" "${host_bundle}" reset
+  else
+    "${here}/scripts/sim-photos-auth.sh" "${udid}" "${host_bundle}" "${level}"
+  fi
+  TEST_RUNNER_PPASS_MEDIA_EXPECTED_ACCESS="${level}" \
+    run_it "${work}/it-access-${level}.log" -only-testing:PPassMediaIntegrationTests/AccessLevelIT
+  grep -E "IT-ACCESS|Executed [0-9]+ tests?" "${work}/it-access-${level}.log" | head -2
+done
