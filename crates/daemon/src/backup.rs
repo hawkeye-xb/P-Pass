@@ -250,7 +250,17 @@ impl BackupEngine {
         let mut missing = Vec::new();
         for hash in hashes {
             let parsed = parse_hash(hash).expect("presence validation already parsed hash");
-            if self.db.get_asset(&parsed).await?.is_none() {
+            if self.db.get_asset(&parsed).await?.is_some() {
+                continue;
+            }
+            // #851: a superseded hash (location-redacted copy replaced by its original) is present
+            // as its replacement — answering "missing" would make the phone re-upload the
+            // redacted copy next to the original.
+            let replaced = match self.db.alias_target(&parsed).await? {
+                Some(target) => self.db.get_asset(&target).await?.is_some(),
+                None => false,
+            };
+            if !replaced {
                 missing.push(hash.clone());
             }
         }

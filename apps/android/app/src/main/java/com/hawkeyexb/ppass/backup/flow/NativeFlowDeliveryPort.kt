@@ -704,7 +704,7 @@ internal class DaemonDesktopProbe(
                 val client = desktopFor(current)
                 bindMs = clock() - started
                 val hello = client.probeHello { trace = it }
-                ProbeResult.Reachable(hello.pairingEpoch, desktopHealthOf(hello.health))
+                ProbeResult.Reachable(hello.pairingEpoch, desktopHealthOf(hello.health), hello.capabilities.toSet())
             }.also { report("reachable", null) }
         } catch (rejected: DesktopRejectedException) {
             report("rejected:${rejected.msgKey}", rejected)

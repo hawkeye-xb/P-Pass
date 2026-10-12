@@ -57,8 +57,8 @@ pub enum IngestOutcome {
 /// Ingest façade over one library directory + its index.
 #[derive(Clone)]
 pub struct Ingestor {
-    db: Db,
-    library_root: PathBuf,
+    pub(crate) db: Db,
+    pub(crate) library_root: PathBuf,
 }
 
 impl Ingestor {
@@ -94,9 +94,21 @@ impl Ingestor {
     /// not a durable copy; `ingest_inner`'s own duplicate check makes this
     /// exact distinction (`existing.rel_path` must still resolve), and this
     /// method mirrors it so the two duplicate judgements never diverge.
+    ///
+    /// #851: a hash that was superseded (a location-redacted copy replaced by its original) counts
+    /// as durable when its replacement is — otherwise a phone re-reporting the old hash (presence
+    /// reconcile, a second device, a revoked location grant) would upload the redacted copy again
+    /// next to the original.
     pub async fn has_durable_copy(&self, hash: &[u8; 32]) -> Result<bool> {
-        let Some(existing) = self.db.get_asset(hash).await? else {
-            return Ok(false);
+        let existing = match self.db.get_asset(hash).await? {
+            Some(existing) => existing,
+            None => match self.db.alias_target(hash).await? {
+                Some(target) => match self.db.get_asset(&target).await? {
+                    Some(existing) => existing,
+                    None => return Ok(false),
+                },
+                None => return Ok(false),
+            },
         };
         Ok(self.library_root.join(&existing.rel_path).exists())
     }

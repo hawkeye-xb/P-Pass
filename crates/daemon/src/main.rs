@@ -646,6 +646,16 @@ async fn main() -> anyhow::Result<()> {
     // 模块注释（收敛延迟最多 1 小时 vs FSEvents/inotify 双平台复杂度）。
     // IDX-01: `with_local_node_id` 是「收孤儿」方向的开关——不接就只剩
     // SYNC-01 的删幽灵那一半，索引一丢照片就永远回不来。
+    // #851: 补完上次崩溃时停在「索引已改指原图、文件还没换过去」的替换——必须在启动对账之前，
+    // 否则对账会拿磁盘上的旧副本去比索引里的新指纹。
+    match core_index::Ingestor::new(db.clone(), &data_dir)
+        .finish_pending_swaps()
+        .await
+    {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("#851: 补完 {n} 条未换完的原图替换"),
+        Err(e) => tracing::warn!("#851: 补完原图替换失败，下次启动再试: {e}"),
+    }
     let reconcile = daemon::Reconcile::new(db.clone(), &data_dir)
         .with_events(event_bus.clone())
         .with_local_node_id(node_id.0);

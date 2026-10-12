@@ -28,7 +28,13 @@ pub const SERVER_CAPABILITIES: &[&str] = &[
     "thumbnail.v1",
     PAIR_STATUS_CAPABILITY,
     PAIR_CANCEL_CAPABILITY,
+    FLOW_SUPERSEDE_CAPABILITY,
 ];
+
+/// #851: `flow.supersede.v1` = this daemon replaces a location-redacted copy with its original in
+/// place (`flow.supersede`). A phone only re-reads its already-backed-up photos for this when hello
+/// advertises it — against an older desktop the original would land as a second photo.
+pub const FLOW_SUPERSEDE_CAPABILITY: &str = "flow.supersede.v1";
 
 /// NET-10 (#128): see [`SERVER_CAPABILITIES`].
 pub const PAIR_STATUS_CAPABILITY: &str = "pair.status.v1";
@@ -418,6 +424,7 @@ impl Router {
                 self.handle_flow_control(peer, req).await
             }
             methods::FLOW_AUDIT_SUBMIT => self.handle_flow_audit_submit(peer, req).await,
+            methods::FLOW_SUPERSEDE => self.handle_flow_supersede(peer, req).await,
             methods::BACKUP_BEGIN
             | methods::BACKUP_MANIFEST
             | methods::BACKUP_PRESENCE
@@ -692,6 +699,36 @@ impl Router {
     /// exactly the ids that are now durably present (freshly inserted or
     /// already there from an earlier delivery) so the phone acknowledges
     /// only those and keeps anything else queued for the next flush.
+    /// #851: see [`crate::flow_delivery::FlowDelivery::supersede`]. Refusals are an ordinary
+    /// reply (`outcome = "refused"`), not an error — the phone just leaves that photo as it is.
+    async fn handle_flow_supersede(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        let (Some(delivery), Ok(request)) = (
+            &self.flow_delivery,
+            serde_json::from_value::<proto::FlowSupersedeRequest>(req.params.clone()),
+        ) else {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        };
+        match delivery.supersede(peer, &request).await {
+            Ok(reply) => match serde_json::to_value(reply) {
+                Ok(value) => Resp::ok(req.id.clone(), value),
+                Err(_) => Resp::err(
+                    req.id.clone(),
+                    RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
+                ),
+            },
+            Err(error) => {
+                tracing::warn!("flow supersede from {peer:?} failed: {error}");
+                Resp::err(
+                    req.id.clone(),
+                    RespError::new(codes::INTERNAL, error.wire_code()),
+                )
+            }
+        }
+    }
+
     async fn handle_flow_audit_submit(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Ok(submit) = serde_json::from_value::<proto::FlowAuditSubmit>(req.params.clone())
         else {

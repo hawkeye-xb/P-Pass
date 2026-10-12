@@ -24,6 +24,7 @@ import com.hawkeyexb.ppass.backup.order.OrderStore
 import com.hawkeyexb.ppass.backup.order.SkipTarget
 import com.hawkeyexb.ppass.backup.order.VolumeState
 import java.util.UUID
+import com.hawkeyexb.ppass.proto.FLOW_SUPERSEDE_CAPABILITY
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -78,6 +79,10 @@ internal class FlowEngine(
     private val bootClock: () -> BootInstant? = { null },
     /** #522：App 最近一次进入前台的时刻（进程内事实，不依赖引擎当时是否已起来）。 */
     private val appForegroundAt: () -> BootInstant? = { null },
+    /** #851：现在读得到原样字节（有 `ACCESS_MEDIA_LOCATION`）吗。 */
+    private val locationReadable: () -> Boolean = { false },
+    /** #851：请桌面用原图原地替换抹过地点的旧副本。null = 不做这件事。 */
+    private val supersede: SupersedeClient? = null,
 ) {
     // 写 `_status` 就是写原始运行态；要不要刷新通知 / 首页由 [LoopStatusCell] 按「值变了 + 节流」决定。
     private val _status = LoopStatusCell(scope, publish = { foreground.update(it) }, now = monotonicClock)
@@ -118,6 +123,9 @@ internal class FlowEngine(
      * 最终计数；桌面展示一律用它自己按已落库证据重算的 evidence_summary。
      */
     private val roundOutcomes = LinkedHashMap<String, Int>()
+
+    /** #851：最近一次探测时桌面宣告了 `flow.supersede.v1`。旧桌面上不重读已备份的照片（原图会成为第二张）。 */
+    private var desktopCanSupersede = false
 
     private fun msSince(startedNanos: Long): Long = (System.nanoTime() - startedNanos) / 1_000_000
 
@@ -558,7 +566,10 @@ internal class FlowEngine(
             log.log("cycle $reasons: waiting for $reason (no foreground service requested)")
             return settle(reason)
         }
-        if (!hasWork(reconcile, askPresence = TriggerReason.PERIODIC in reasons)) {
+        val transferWork = hasWork(reconcile, askPresence = TriggerReason.PERIODIC in reasons)
+        // #851：只有「用原图替换旧副本」可做时也要探测一次——桌面支不支持只有 hello 说得清。
+        val upgradeWork = !transferWork && upgradeEnabled() && hasUpgradeCandidate()
+        if (!transferWork && !upgradeWork) {
             log.log("cycle $reasons: nothing to transfer")
             recovered("nothing left to transfer")
             return settle(null)
@@ -576,6 +587,12 @@ internal class FlowEngine(
                 // #652：探测梯在这里还不能撤——桌面可能可达但不健康，那时它正是唤醒；拿到 FGS 才撤（见下）。
                 reach.advertisedEpoch?.takeIf { it.isNotBlank() && it != epoch.value }?.let(onEpochAdvertised)
                 facts.update { it.copy(desktopHealth = reach.health) }
+                desktopCanSupersede = FLOW_SUPERSEDE_CAPABILITY in reach.capabilities
+                if (!transferWork && !desktopCanSupersede) {
+                    log.log("cycle $reasons: only location upgrades pending, but the desktop cannot supersede; no foreground service")
+                    recovered("nothing the desktop can take")
+                    return settle(null)
+                }
                 // 契约 §7：桌面不健康 → 不申请 FGS，等待中（具体原因）。
                 waitReasonOf(reach.health)?.let { unhealthy ->
                     log.log("cycle $reasons: desktop unhealthy (${reach.health}); waiting for $unhealthy")
@@ -684,6 +701,7 @@ internal class FlowEngine(
     private class Round(val reconcile: Boolean, val userPresent: Boolean) {
         var legacyAfter = 0L
         var retryAfter = 0L
+        var upgradeAfter = 0L
         var presenceDone = !reconcile
         val handled = HashSet<Long>()
     }
@@ -717,6 +735,9 @@ internal class FlowEngine(
     private sealed interface WorkItem {
         data class Existing(val order: Order, val origin: Origin) : WorkItem
         data class Fresh(val snapshot: MediaSnapshot, val origin: Origin) : WorkItem
+
+        /** #851：已确认、当时地点被抹的一张——重读原样字节，请桌面原地替换。 */
+        data class Upgrade(val order: Order) : WorkItem
     }
 
     private sealed interface StepResult {
@@ -747,7 +768,32 @@ internal class FlowEngine(
                 round.presenceDone = true
                 if (runRemotePresence() > 0) continue
             }
+            // #851：最低优先级——该传的都传完了，才补地点。
+            if (desktopCanSupersede && upgradeEnabled()) upgradeStep(round)?.let { return it }
             return null
+        }
+    }
+
+    private fun upgradeEnabled(): Boolean = supersede != null && locationReadable()
+
+    private fun hasUpgradeCandidate(): Boolean {
+        var after = 0L
+        while (true) {
+            val page = store.locationRedactedAfter(after, RETRY_BATCH)
+            if (page.isEmpty()) return false
+            if (page.any { inScope(it.bucketId) }) return true
+            after = page.last().id
+        }
+    }
+
+    private fun upgradeStep(round: Round): WorkItem? {
+        while (true) {
+            val page = store.locationRedactedAfter(round.upgradeAfter, RETRY_BATCH)
+            if (page.isEmpty()) return null
+            for (order in page) {
+                round.upgradeAfter = order.id
+                if (inScope(order.bucketId)) return WorkItem.Upgrade(order)
+            }
         }
     }
 
@@ -825,6 +871,69 @@ internal class FlowEngine(
     private suspend fun process(item: WorkItem, epoch: PairingEpoch): StepResult = when (item) {
         is WorkItem.Existing -> processExisting(item.order, epoch)
         is WorkItem.Fresh -> processFresh(item.snapshot, item.origin, epoch)
+        is WorkItem.Upgrade -> processUpgrade(item.order, epoch)
+    }
+
+    /**
+     * #851：重读这张已确认照片的原样字节。和传过的一样（本来就没有地点）→ 只记结论；不一样 → 请桌面把它手里
+     * 抹过的副本原地换成原图，成功后记一行 CONFIRMED（原图的 hash，当前行随之换成它）。
+     *
+     * 全程**不建传输中的行**：进程在中途被杀，下一轮从同一张重来（桌面对重放回成功），绝不会被当成一次普通
+     * 传输把原图当第二张交付。桌面不可达 / 暂时拉不到 → 留待下一轮；桌面拒绝 → 记结论，不再尝试。
+     */
+    private suspend fun processUpgrade(order: Order, epoch: PairingEpoch): StepResult {
+        val client = supersede ?: return StepResult.Next
+        val old = order.contentHash ?: return StepResult.Next
+        val details = withContext(io) { media.lookup(order.mediaId) }
+        if (details == null || details.snapshot.sourceVersion != order.sourceVersion || !inScope(details.snapshot.bucketId)) {
+            // 原图没了 / 已被编辑成新版本（新版本照常另传）/ 移出范围：这一行不是替换的对象。
+            return StepResult.Next
+        }
+        val imported = importWithRetry(details).first as? ImportResult.Imported ?: return StepResult.Next
+        val hash = imported.contentHash
+        return releasingOnAbort(hash) {
+            when {
+                imported.locationRedacted -> {
+                    // 检查与打开之间权限被收回：读到的仍是抹过的，什么都不做。
+                    importer.release(hash)
+                }
+                hash == old -> {
+                    importer.release(hash)
+                    store.resolveLocationRedaction(order.id, refused = false)
+                    bump()
+                }
+                else -> {
+                    val outcome = try {
+                        val ticket = importer.serve(ProviderLease(order.id, "supersede-${order.id}", hash))
+                        client.supersede(epoch, old, hash, ticket)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        log.log("media ${order.mediaId}: supersede ${old.take(8)} → ${hash.take(8)} not reached (${failure.javaClass.simpleName}: ${failure.message}); next round")
+                        null
+                    }
+                    importer.release(hash)
+                    when (outcome) {
+                        null -> Unit
+                        SupersedeOutcome.Replaced -> {
+                            store.insert(
+                                NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.CONFIRMED, epoch.value, locationRedacted = false),
+                            )
+                            bump()
+                            log.log("media ${order.mediaId}: desktop copy ${old.take(8)} replaced by the original ${hash.take(8)}")
+                        }
+                        is SupersedeOutcome.Refused -> {
+                            log.log("media ${order.mediaId}: desktop refused to supersede ${old.take(8)} → ${hash.take(8)}: ${outcome.reason}")
+                            if (outcome.reason !in TRANSIENT_SUPERSEDE_REFUSALS) {
+                                store.resolveLocationRedaction(order.id, refused = true)
+                                bump()
+                            }
+                        }
+                    }
+                }
+            }
+            StepResult.Next
+        }
     }
 
     /** 导入（准备这一步唯一读文件的地方），单张失败当场重试 1 次。first = null 表示两次都抛了，second 是原因。 */
@@ -1281,6 +1390,12 @@ internal class FlowEngine(
     companion object {
         private const val SOURCE_BATCH = 64
         private const val RETRY_BATCH = 32
+
+        /**
+         * #851：桌面这样拒绝是暂时的，下一轮再试——`fetch_failed`（拉原图的块失败）、`epoch_mismatch`（配对代号
+         * 正在更新）。其余拒绝是对这张照片的结论（不是本机传的、格式不认识、不只是抹地点……），记下不再试。
+         */
+        private val TRANSIENT_SUPERSEDE_REFUSALS = setOf("fetch_failed", "epoch_mismatch")
         private val OPEN = OrderState.entries.filter { it.isOpen }.toSet()
 
         /** 在跑时合并进来的这些触发意味着待办可能变了：当场重算（只读元数据），不等这一轮结束。 */

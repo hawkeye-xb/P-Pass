@@ -295,6 +295,20 @@ class SqliteOrderStore private constructor(
             afterId.toString(),
         )
 
+    // location_redacted：0 = 原样字节；1 = 抹过、待替换；2 = 抹过、桌面拒绝替换（#851，不再是待办）。
+    override fun locationRedactedAfter(afterId: Long, limit: Int): List<Order> =
+        queryOrders(
+            "SELECT $COLUMNS FROM orders o WHERE o.state = '${OrderState.CONFIRMED.name}' AND o.content_hash IS NOT NULL " +
+                "AND o.location_redacted = 1 AND o.source_missing = 0 AND o.id > ? AND $IS_CURRENT ORDER BY o.id ASC LIMIT $limit",
+            afterId.toString(),
+        )
+
+    override fun resolveLocationRedaction(id: Long, refused: Boolean) {
+        inTransaction {
+            execSQL("UPDATE orders SET location_redacted = ? WHERE id = ?", arrayOf(if (refused) 2 else 0, id))
+        }
+    }
+
     override fun transition(
         id: Long,
         expected: Set<OrderState>,

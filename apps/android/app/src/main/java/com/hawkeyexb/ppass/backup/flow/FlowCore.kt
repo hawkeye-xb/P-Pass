@@ -212,13 +212,32 @@ interface ItemDelivery {
 
 /** 桌面可达探测（`hello`，有超时）。顺带拿到桌面现在的配对代号与健康状况。 */
 sealed interface ProbeResult {
-    data class Reachable(val advertisedEpoch: String?, val health: DesktopHealth? = null) : ProbeResult
+    /** [capabilities]：hello 里桌面宣告的能力（#851 用它判断能不能「用原图替换旧副本」）。 */
+    data class Reachable(
+        val advertisedEpoch: String?,
+        val health: DesktopHealth? = null,
+        val capabilities: Set<String> = emptySet(),
+    ) : ProbeResult
     data object Unreachable : ProbeResult
     data object PairingLost : ProbeResult
 }
 
 fun interface DesktopProbe {
     suspend fun probe(): ProbeResult
+}
+
+/** #851：桌面对「用原图替换旧副本」的回答。 */
+sealed interface SupersedeOutcome {
+    data object Replaced : SupersedeOutcome
+    data class Refused(val reason: String) : SupersedeOutcome
+}
+
+/**
+ * #851：请桌面把它手里抹过地点的旧副本 [oldHash] 原地换成原图 [newHash]（[provider] 是原图的 ticket）。
+ * 不可达 / 超时时抛——那是暂时的，下一轮再试；[SupersedeOutcome.Refused] 是桌面的结论。
+ */
+fun interface SupersedeClient {
+    suspend fun supersede(epoch: PairingEpoch, oldHash: String, newHash: String, provider: String): SupersedeOutcome
 }
 
 /** 对账：分页问桌面「这些 hash 你还在吗」，返回缺的那些。不可达时抛。 */

@@ -267,6 +267,13 @@ internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? 
     /** #522：进程内「App 最近一次进入前台」（生产由 ForegroundWatcher 同步写入）。 */
     var appForegroundAt: BootInstant? = null
 
+    /** #851：有位置权限（读得到原样字节）。 */
+    var locationReadable = false
+
+    /** #851：桌面对 flow.supersede 的回答（可抛异常模拟不可达）；每次调用记进 [supersedeCalls]。 */
+    var supersedeReply: suspend (oldHash: String, newHash: String) -> SupersedeOutcome = { _, _ -> SupersedeOutcome.Replaced }
+    val supersedeCalls = mutableListOf<Triple<String, String, String>>()
+
     init {
         foreground.bootNow = { boot }
         if (cursors) store.saveVolumeState(VolumeState(LEGACY_VOLUME, 0L, 0L, "v1"))
@@ -298,6 +305,11 @@ internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? 
         clock = { now },
         monotonicClock = { test.testScheduler.currentTime },
         bootClock = { boot },
+        locationReadable = { locationReadable },
+        supersede = SupersedeClient { _, oldHash, newHash, provider ->
+            supersedeCalls += Triple(oldHash, newHash, provider)
+            supersedeReply(oldHash, newHash)
+        },
         appForegroundAt = { appForegroundAt },
     ).also { it.start() }
 

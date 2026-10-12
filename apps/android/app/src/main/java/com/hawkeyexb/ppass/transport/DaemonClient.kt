@@ -214,7 +214,8 @@ class DaemonClient internal constructor(
      * One request/response round trip on a fresh bi stream.
      * The peer address must carry enough to dial (relay and/or direct).
      */
-    suspend fun call(peer: PeerAddrParts, method: String, params: JsonElement): Resp =
+    /** [timeoutMs]：整个往返的上限。默认 15 s；#851 `flow.supersede` 要等桌面拉块、拼接、算指纹，单独放宽。 */
+    suspend fun call(peer: PeerAddrParts, method: String, params: JsonElement, timeoutMs: Long = CONNECT_TIMEOUT_MS): Resp =
         withContext(Dispatchers.IO) { using { ep ->
             // relayUrl is nullable in the ffi — an empty string fails
             // URL parsing ("Failed to parse relay URL", found live).
@@ -227,7 +228,7 @@ class DaemonClient internal constructor(
             // peer that accepts the connection but never answers must
             // also time out, not just one that's fully unreachable.
             try {
-                withTimeout(CONNECT_TIMEOUT_MS) {
+                withTimeout(timeoutMs) {
                     val conn = ep.connect(addr, ALPN_CTRL.toByteArray())
                     try {
                         val bi = conn.openBi()

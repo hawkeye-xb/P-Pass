@@ -411,9 +411,6 @@ impl Blobs {
     where
         F: FnOnce(crate::ConnectionStatus),
     {
-        use futures_core::Stream;
-        use iroh_blobs::api::remote::GetProgressItem;
-
         let conn = self
             .transport
             .connect_raw(peer, crate::ALPN_BLOBS)
@@ -424,32 +421,98 @@ impl Blobs {
             .store
             .remote()
             .fetch(conn.clone(), Hash::from_bytes(hash));
-        let mut items = std::pin::pin!(progress.stream());
-        loop {
-            let next = tokio::time::timeout(
-                byte_stall,
-                std::future::poll_fn(|cx| items.as_mut().poll_next(cx)),
-            )
-            .await;
-            match next {
-                Ok(Some(GetProgressItem::Progress(_))) => continue,
-                Ok(Some(GetProgressItem::Done(_))) => return Ok(()),
-                Ok(Some(GetProgressItem::Error(e))) => {
-                    return Err(TransportError::Io(format!("fetch from {peer:?}: {e}")))
-                }
-                Ok(None) => {
-                    return Err(TransportError::Io(format!(
-                        "fetch from {peer:?}: progress stream closed without a result"
-                    )))
-                }
-                Err(_) => {
-                    conn.close(0u32.into(), b"fetch stalled");
-                    return Err(TransportError::Io(format!(
-                        "fetch from {peer:?}: stalled, no payload bytes for {byte_stall:?}"
-                    )));
+        drive_with_stall(progress, &conn, peer, byte_stall).await
+    }
+
+    /// #851: fetch only the byte `ranges` of `hash` from `peer`, plus the blob's last chunk so its
+    /// total size is verified too. Every byte that arrives is verified against `hash` by iroh-blobs'
+    /// bao streaming; ranges are widened to whole 16 KiB chunk groups (the store's verification
+    /// unit). Returns the verified total size and the verified bytes that cover `ranges`, as
+    /// `(offset, bytes)` pieces in ascending order.
+    ///
+    /// The partial blob is held by a temp tag for the duration, so the store's periodic GC (which
+    /// only protects active Flow grants) cannot collect it between the get and the export.
+    pub async fn fetch_byte_ranges(
+        &self,
+        peer: crate::NodeId,
+        hash: [u8; 32],
+        ranges: &[std::ops::Range<u64>],
+        byte_stall: Duration,
+    ) -> Result<(u64, Vec<(u64, Vec<u8>)>)> {
+        use futures_core::Stream;
+        use iroh_blobs::api::proto::ExportRangesItem;
+        use iroh_blobs::protocol::{ChunkRanges, ChunkRangesExt, GetRequest};
+        use iroh_blobs::{BlobFormat, HashAndFormat};
+
+        let h = Hash::from_bytes(hash);
+        let _hold = self
+            .store
+            .tags()
+            .temp_tag(HashAndFormat {
+                hash: h,
+                format: BlobFormat::Raw,
+            })
+            .await
+            .map_err(|e| TransportError::Io(format!("temp tag {h}: {e}")))?;
+        let mut wanted = ChunkRanges::last_chunk();
+        let mut groups: Vec<std::ops::Range<u64>> = Vec::new();
+        for r in ranges.iter().filter(|r| r.start < r.end) {
+            let start = r.start / GROUP_BYTES * GROUP_BYTES;
+            let end = r.end.div_ceil(GROUP_BYTES) * GROUP_BYTES;
+            wanted |= ChunkRanges::bytes(start..end);
+            groups.push(start..end);
+        }
+        groups.sort_by_key(|g| g.start);
+        groups.dedup();
+        let conn = self
+            .transport
+            .connect_raw(peer, crate::ALPN_BLOBS)
+            .await
+            .map_err(|e| TransportError::Io(format!("connect for ranged fetch: {e}")))?;
+        let request = GetRequest::builder().root(wanted).build(h);
+        let progress = self.store.remote().execute_get(conn.clone(), request);
+        drive_with_stall(progress, &conn, peer, byte_stall).await?;
+
+        // The size comes from the store's status: the last chunk was part of the request, so it is
+        // the verified size (a partial export emits no `Size` item).
+        let size = match self
+            .store
+            .blobs()
+            .status(h)
+            .await
+            .map_err(|e| TransportError::Io(format!("status of {h}: {e}")))?
+        {
+            iroh_blobs::api::proto::BlobStatus::Complete { size } => size,
+            iroh_blobs::api::proto::BlobStatus::Partial { size: Some(size) } => size,
+            other => {
+                return Err(TransportError::Io(format!(
+                    "ranged fetch of {h}: size not verified ({other:?})"
+                )))
+            }
+        };
+        let mut pieces: Vec<(u64, Vec<u8>)> = Vec::new();
+        for group in groups {
+            let export = self.store.blobs().export_ranges(h, group);
+            let mut items = std::pin::pin!(export.stream());
+            while let Some(item) = std::future::poll_fn(|cx| items.as_mut().poll_next(cx)).await {
+                match item {
+                    ExportRangesItem::Size(_) => {}
+                    ExportRangesItem::Data(leaf) => match pieces.last_mut() {
+                        Some((off, buf)) if *off + buf.len() as u64 == leaf.offset => {
+                            buf.extend_from_slice(&leaf.data)
+                        }
+                        Some((off, buf)) if leaf.offset < *off + buf.len() as u64 => {
+                            // Overlapping groups (two ranges in the same group): keep the first copy.
+                        }
+                        _ => pieces.push((leaf.offset, leaf.data.to_vec())),
+                    },
+                    ExportRangesItem::Error(e) => {
+                        return Err(TransportError::Io(format!("export ranges of {h}: {e}")))
+                    }
                 }
             }
         }
+        Ok((size, pieces))
     }
 
     /// Export a (complete) blob from the store to a file.
@@ -523,5 +586,49 @@ impl Blobs {
             let _ = router.shutdown().await;
         }
         let _ = self.store.shutdown().await;
+    }
+}
+
+/// #851: iroh-blobs verifies in 16 KiB chunk groups (`IROH_BLOCK_SIZE`); ranged requests are
+/// widened to whole groups so every piece we export is a complete, verified group.
+const GROUP_BYTES: u64 = 16 * 1024;
+
+/// NET-29 (#467) byte-stall watchdog shared by the full and the ranged fetch: fails once
+/// `byte_stall` passes without a single payload-byte progress event, and closes the blobs
+/// connection so the next attempt redials.
+async fn drive_with_stall(
+    progress: iroh_blobs::api::remote::GetProgress,
+    conn: &Connection,
+    peer: crate::NodeId,
+    byte_stall: Duration,
+) -> Result<()> {
+    use futures_core::Stream;
+    use iroh_blobs::api::remote::GetProgressItem;
+
+    let mut items = std::pin::pin!(progress.stream());
+    loop {
+        let next = tokio::time::timeout(
+            byte_stall,
+            std::future::poll_fn(|cx| items.as_mut().poll_next(cx)),
+        )
+        .await;
+        match next {
+            Ok(Some(GetProgressItem::Progress(_))) => continue,
+            Ok(Some(GetProgressItem::Done(_))) => return Ok(()),
+            Ok(Some(GetProgressItem::Error(e))) => {
+                return Err(TransportError::Io(format!("fetch from {peer:?}: {e}")))
+            }
+            Ok(None) => {
+                return Err(TransportError::Io(format!(
+                    "fetch from {peer:?}: progress stream closed without a result"
+                )))
+            }
+            Err(_) => {
+                conn.close(0u32.into(), b"fetch stalled");
+                return Err(TransportError::Io(format!(
+                    "fetch from {peer:?}: stalled, no payload bytes for {byte_stall:?}"
+                )));
+            }
+        }
     }
 }

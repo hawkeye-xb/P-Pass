@@ -311,6 +311,34 @@ fn snapshot_backup() {
     snapshot_message("upload_header", &uh);
 }
 
+// ── #851 flow.supersede ─────────────────────────────
+
+#[test]
+fn snapshot_flow_supersede() {
+    let req = FlowSupersedeRequest {
+        pairing_epoch: "epoch-7".into(),
+        old_hash: "aaa1111111111111111111111111111111111111111111111111111111111111".into(),
+        new_hash: "bbb2222222222222222222222222222222222222222222222222222222222222".into(),
+        provider: "blobticket-example".into(),
+    };
+    assert_roundtrip(&req);
+    snapshot_message("flow_supersede_request", &req);
+
+    let replaced = FlowSupersedeReply {
+        outcome: "replaced".into(),
+        reason: String::new(),
+    };
+    assert_roundtrip(&replaced);
+    snapshot_message("flow_supersede_reply_replaced", &replaced);
+
+    let refused = FlowSupersedeReply {
+        outcome: "refused".into(),
+        reason: "not_a_redaction".into(),
+    };
+    assert_roundtrip(&refused);
+    snapshot_message("flow_supersede_reply_refused", &refused);
+}
+
 // ── Diagnostics ─────────────────────────────────────
 
 #[test]
