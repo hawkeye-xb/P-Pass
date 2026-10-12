@@ -164,6 +164,12 @@ expect_cv "正常路径不受影响：v1.0.0→HEAD 改了 android 且涨了号 
 echo c > "$SRC/apps/android/a.txt"
 g -C "$SRC" add apps/android/a.txt && g -C "$SRC" commit -qm c4
 expect_cv "改 android 不涨号 ⇒ 非零（门禁本身没被改坏）" nonzero "android 版本没涨" HEAD~1 HEAD
+# #887：apps/ios/ 不属于桌面线也不属于 android 线——只改它不要求任何一端涨号。
+# （iOS 还没有发版 lane；有了之后应在 check-version-bump.sh 里给它单独一条线。）
+mkdir -p "$SRC/apps/ios"
+echo i > "$SRC/apps/ios/project.yml"
+g -C "$SRC" add apps/ios/project.yml && g -C "$SRC" commit -qm c5
+expect_cv "只改 apps/ios/ ⇒ 0，不要求 desktop/android 涨号" 0 "命中 0 个文件；android .* 命中 0 个文件" HEAD~1 HEAD
 
 # ── ④ release.yml：dispatch 补跑必须检出被补跑的 tag（REL-13 #716）──────
 # dispatch 时 actions/checkout 默认检出 main ⇒ 构建出的代码与 versions.json 都不是那个

@@ -1,0 +1,21 @@
+// P-Pass iOS 的工程级常量——**唯一一处**（#887）。
+//
+// project.yml 只引用本文件，不再重复写这些值：XcodeGen 里 target 级设置会盖掉
+// xcconfig，两处都写就又成了两个真相源。改下面任何一项只改这里。
+
+// bundle id：与 Android applicationId 相同（用户 2026-10-12 确认）。
+// 测试 target 在它后面拼 `.tests`。
+PPASS_BUNDLE_ID = com.hawkeyexb.ppass
+
+// 最低系统版本（规划 D2，用户 2026-10-12 拍板）：iOS 16——照顾家人手里的老 iPhone 8/X。
+// 因此不许用 iOS 17 才有的 API（Observation/@Observable 等），状态用 ObservableObject。
+IPHONEOS_DEPLOYMENT_TARGET = 16.0
+
+// 只做 iPhone（规划「明确跳过」iPad/macCatalyst/visionOS 形态）。
+TARGETED_DEVICE_FAMILY = 1
+
+SWIFT_VERSION = 5.0
+
+// 版本号的默认值（本地/非 tag 构建）。#346 会改成由 PPF_BUILD_VERSION 注入。
+MARKETING_VERSION = 0.0.0
+CURRENT_PROJECT_VERSION = 1

@@ -150,6 +150,9 @@ commit_tag v0.1.0-test.6 tools/build-android-iroh-blobs-bridge.sh
 commit_tag v0.1.0-test.7 tools/bundle-desktop-macos.sh
 commit_tag v0.1.0-test.8 release/notes/x.txt
 commit_tag v0.1.0-test.9 apps/desktop/src-tauri/tauri.windows.conf.json
+# #887：iOS 工程与它专用的脚本。必须在第一次 tplan（会 checkout 到 tag、HEAD 分离）之前提交。
+commit_tag v0.1.0-test.10 apps/ios/project.yml tools/ios/test.sh tools/build-ios-transport-xcframework.sh
+commit_tag v0.1.0-test.11 apps/ios/PPass/x.swift apps/android/a.kt
 
 channel 0.1.0-test.1 0.1.0-test.1; tplan v0.1.0-test.2; expect_plan "只改 apps/android/ ⇒ Android 构建、桌面 skip" build skip
 expect_win "只改 apps/android/ ⇒ Windows 也不陪跑" skip
@@ -167,6 +170,10 @@ channel 0.1.0-test.7 0.1.0-test.7; tplan v0.1.0-test.8; expect_plan "改没列�
 expect_win "改没列出的路径（release/）⇒ Windows 也构建" build
 channel 0.1.0-test.8 0.1.0-test.8; tplan v0.1.0-test.9; expect_plan "只改 tauri.windows.conf.json ⇒ Android、macOS 都 skip" skip skip
 expect_win "只改 tauri.windows.conf.json ⇒ 只构建 Windows（不报「没东西可发」）" build
+channel 0.1.0-test.9 0.1.0-test.9; tplan v0.1.0-test.10
+if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::test tag v0.1.0-test.10"; then ok "只改 apps/ios/ tools/ios/ tools/build-ios-*（#887）⇒ 三端都 skip ⇒ 明确报错（没有 iOS 发版 lane）"; else bad "只改 apps/ios/ tools/ios/ tools/build-ios-*（#887）⇒ 三端都 skip ⇒ 明确报错" "$OUT"; fi
+channel 0.1.0-test.10 0.1.0-test.10; tplan v0.1.0-test.11; expect_plan "apps/ios/ 与 apps/android/ 混改（#887）⇒ 只构建 Android" build skip
+expect_win "apps/ios/ 与 apps/android/ 混改（#887）⇒ Windows 不陪跑" skip
 channel 0.1.0-test.8 0.1.0-test.8 -; tplan v0.1.0-test.9; expect_win "test-channel 没有 Windows 清单 ⇒ 拿不准 ⇒ Windows 构建" build
 channel 0.1.0-test.2 0.1.0-test.1; tplan v0.1.0-test.2
 if [ "$RC" = 0 ] && [ "$(get android)" = build ]; then ok "基线就是本 tag（补跑）⇒ 构建"; else bad "基线就是本 tag（补跑）⇒ 构建" "$OUT"; fi
@@ -179,7 +186,7 @@ channel 0.0.9-test.1 0.1.0-test.4; tplan v0.1.0-test.5; expect_plan "基线 tag 
 printf 'not json' > "$TMP/state/test-channel/manifest-android.json"; tplan v0.1.0-test.5; expect_plan "清单读不出（坏 JSON）⇒ 构建" build skip
 "${G[@]}" checkout -q v0.1.0-test.1 && "${G[@]}" checkout -q -b side && commit_tag v0.1.0-test.90 apps/desktop/side.js
 channel 0.1.0-test.90 0.1.0-test.90; tplan v0.1.0-test.5; expect_plan "基线不是本次提交的祖先 ⇒ 构建" build build
-"${G[@]}" checkout -q v0.1.0-test.9
+"${G[@]}" checkout -q v0.1.0-test.11
 
 echo "reuse-artifact"
 reuse() { OUT=$(cd "$REPO" && tools/release/reuse-artifact.sh "$1" v2026.1.1 "$2" "$TMP/out-$3" 2>&1); RC=$?; }
