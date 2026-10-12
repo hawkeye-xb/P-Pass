@@ -404,9 +404,21 @@ enabled = false
 /// Write the initial config.toml (T-042 step 1) into the platform dir.
 #[tauri::command]
 fn write_config(library_dir: String) -> Result<(), String> {
-    let dir = platform::adapter().data_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join("config.toml"), render_config(&library_dir)).map_err(|e| e.to_string())
+    write_first_run_config(&platform::adapter().data_dir(), &library_dir)
+}
+
+/// DESK-57 (#871)：首启向导确认库位置的这一刻，就是用户表达「库在这里」意图
+/// 的时刻——库目录在这里建，建不出来就如实报错、**不写配置**。
+///
+/// 为什么不在 daemon 建：DESK-46 (#638) 让 daemon 对「显式配置却不存在」的
+/// 库目录拒绝启动（防外置盘未挂载时在 /Volumes 下造影子目录），这条保持不变。
+/// #638 之前首启一直靠 daemon 启动时顺手 create_dir_all，那个副作用删掉后，
+/// 默认库位置（`<图片>/P-Pass 家庭照片库`，新机器上不存在）的首启必失败。
+fn write_first_run_config(platform_dir: &std::path::Path, library_dir: &str) -> Result<(), String> {
+    std::fs::create_dir_all(library_dir).map_err(|e| format!("{library_dir}: {e}"))?;
+    std::fs::create_dir_all(platform_dir).map_err(|e| e.to_string())?;
+    std::fs::write(platform_dir.join("config.toml"), render_config(library_dir))
+        .map_err(|e| e.to_string())
 }
 
 /// DESK-46 (#638)：更改照片库位置——平台 config.toml 的 read-modify-write。
@@ -2298,6 +2310,50 @@ mod tests {
     /// 起点刻意用真机上观测到的**损坏形状**（每个分隔符四个反斜杠，卡面
     /// 2026-09-18 记的 309 字节 / 16 个 0x5C 就是这个形状），所以这条测试
     /// 同时覆盖了验收标准 2（存量修复）。
+    /// DESK-57 (#871)：新机器上默认库位置不存在——向导写配置时必须把它建出来，
+    /// 否则 daemon 按 DESK-46 拒绝启动，首启必失败。反证：去掉
+    /// `write_first_run_config` 里建库目录那一行，本测试变红。
+    #[test]
+    fn desk57_first_run_creates_missing_library_then_writes_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("platform");
+        let library = tmp.path().join("Pictures").join("P-Pass 家庭照片库");
+        assert!(!library.exists());
+
+        write_first_run_config(&platform_dir, library.to_str().unwrap()).unwrap();
+
+        assert!(library.is_dir(), "库目录应在写配置时被建出来");
+        let cfg = std::fs::read_to_string(platform_dir.join("config.toml")).unwrap();
+        assert_eq!(
+            configured_library_dir(&platform_dir).as_deref(),
+            library.to_str(),
+            "{cfg}"
+        );
+    }
+
+    /// DESK-57 (#871)：库目录建不出来（这里用「父路径是个普通文件」造，三平台
+    /// CI 都成立，不依赖权限）⇒ 报错，且**不写配置**——不能留下一份指向不存在
+    /// 目录的配置，让 daemon 下次启动再失败一次。
+    #[test]
+    fn desk57_uncreatable_library_errors_without_writing_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("platform");
+        let blocker = tmp.path().join("not-a-dir");
+        std::fs::write(&blocker, b"file").unwrap();
+        let library = blocker.join("P-Pass 家庭照片库");
+
+        let err = write_first_run_config(&platform_dir, library.to_str().unwrap()).unwrap_err();
+
+        assert!(
+            err.contains("P-Pass 家庭照片库"),
+            "错误要点名是哪个目录：{err}"
+        );
+        assert!(
+            !platform_dir.join("config.toml").exists(),
+            "建库失败时不得写配置"
+        );
+    }
+
     #[test]
     fn desk27_three_wizard_rounds_are_byte_identical_and_repair_legacy() {
         let dir = tempfile::tempdir().unwrap();
