@@ -22,6 +22,8 @@
 #       tools/bundle-macos.sh、tools/bundle-desktop-macos.sh、tools/fetch-ffmpeg.sh
 #                                                                   只算 macOS
 #       apps/desktop/（其余）                                       两个桌面端（macOS + Windows）
+#       apps/ios/、tools/ios/、tools/build-ios-*                    只算 iOS（#887）——目前没有 iOS 发版
+#                                                                   lane，不归属任何现有端，所以不触发构建
 #       其余（crates/、Cargo.*、assets/、release/、tools/、.github/ …） 所有端
 #   - 没改动的一端判 skip：不构建、也不复用（不复制任何产物），test-channel 里它的清单不动。
 #   - Windows（2026-10-12 验收人：只改别的端时不陪跑 Windows）按同一规则判，基线是
@@ -57,7 +59,7 @@ if [[ "$TAG" == *-test.* ]]; then
       if [ -n "$v" ]; then echo "v${v#v}"; return; fi
     done
   }
-  # 改动路径 → 影响哪一端：android / macos / windows / desktop（两个桌面端）/ all / none（分类见文件头）。
+  # 改动路径 → 影响哪一端：android / macos / windows / desktop（两个桌面端）/ ios / all / none（分类见文件头）。
   classify() {
     case "$1" in
       docs/* | cards/* | .claude/* | *.md) echo none ;;
@@ -65,6 +67,9 @@ if [[ "$TAG" == *-test.* ]]; then
       apps/desktop/src-tauri/tauri.windows.conf.json) echo windows ;;
       tools/bundle-macos.sh | tools/bundle-desktop-macos.sh | tools/fetch-ffmpeg.sh) echo macos ;;
       apps/desktop/*) echo desktop ;;
+      # #887：iOS 工程与它专用的脚本不进 Android/macOS/Windows 的产物。`ios` 不在任何
+      # decide_test 的 kinds 里 ⇒ 只改 iOS 时三端都 skip。iOS 有发版 lane 后在这里接上。
+      apps/ios/* | tools/ios/* | tools/build-ios-*) echo ios ;;
       *) echo all ;;
     esac
   }

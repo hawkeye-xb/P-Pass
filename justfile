@@ -280,6 +280,16 @@ android-backup:
 android-fgs-quota *args:
   bash tools/android-fgs-quota.sh {{args}}
 
+# iOS（#887）：apps/ios/project.yml → XcodeGen 生成 PPass.xcodeproj（不入库）。
+# 需要 macOS + Xcode + xcodegen（brew install xcodegen）+ jq。
+ios-gen:
+  cd apps/ios && xcodegen generate
+
+# iOS 单元测试：生成工程 → 模拟器上 xcodebuild test。模拟器选法见 tools/ios/sim.sh
+# （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。本配方启动的模拟器跑完即关。
+ios-test:
+  bash tools/ios/test.sh
+
 # M2 total acceptance: Rust suite + Android suite + APK build +
 # live wire scripts (hello/pair/backup) against a throwaway daemon
 verify-m2:

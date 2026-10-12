@@ -1,0 +1,42 @@
+# P-Pass iOS 工程定义（#887）。`PPass.xcodeproj` 由本文件生成、不入库：
+#   just ios-gen     # 或 cd apps/ios && xcodegen generate
+#
+# 常量（bundle id、最低系统、Swift 版本、版本号默认值）只在 Config/Base.xcconfig，
+# 本文件里**不要**再写 deploymentTarget / PRODUCT_BUNDLE_IDENTIFIER 的字面值——
+# target 级设置会盖掉 xcconfig，写两处就会漂移。
+name: PPass
+options:
+  createIntermediateGroups: true
+  developmentLanguage: en
+configFiles:
+  Debug: Config/Base.xcconfig
+  Release: Config/Base.xcconfig
+targets:
+  PPass:
+    type: application
+    platform: iOS
+    sources:
+      - path: PPass
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID)
+        INFOPLIST_FILE: PPass/Info.plist
+  PPassTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PPassTests
+    dependencies:
+      - target: PPass
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID).tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  PPass:
+    build:
+      targets:
+        PPass: all
+    test:
+      targets:
+        - PPassTests
