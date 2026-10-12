@@ -135,6 +135,12 @@ object UpdateInstaller {
             val params = PackageInstaller.SessionParams(
                 PackageInstaller.SessionParams.MODE_FULL_INSTALL,
             )
+            // #835：用户已在 App 里点过「更新」——按平台标准请求免确认安装（Android 12+，更新自己、
+            // 目标 SDK 达标、声明 UPDATE_PACKAGES_WITHOUT_USER_ACTION）。条件不满足时系统照旧回
+            // STATUS_PENDING_USER_ACTION，由 [UpdateInstallReceiver] 拉起确认页，行为与以前一致。
+            if (Build.VERSION.SDK_INT >= 31) {
+                params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_NOT_REQUIRED)
+            }
             val id = installer.createSession(params)
             onSession(id)
             installer.openSession(id)
