@@ -461,10 +461,8 @@ class Scenario:
 
     def build_result(self, job: str) -> str:
         """构建 job 不在 dry-run 里跑：#838 之后它跑不跑取决于 plan-builds 的判定。"""
-        if job == "windows-x64":  # #788②：tag push 上只有 test tag 构建 Windows
-            return "success" if "-test." in self.tag else "skipped"
         plan = self.jobs.get("plan-builds")
-        if job in ("android", "macos-arm64") and plan is not None:
+        if job in ("android", "macos-arm64", "windows-x64") and plan is not None:
             # #852：跑不跑由 release.yml 里该构建 job 自己的 if: 决定（按 plan-builds 的真实结果求值），
             # 不在这里另写一份规则——job 的步骤换成空表，只看它被不被跳过。
             stub = {**self.wf, "jobs": {job: {**self.wf["jobs"][job], "steps": []}}}
@@ -781,9 +779,9 @@ def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
        json.dumps({n: chver(n) for n in PER_END_CHANNEL}))
 
     # test.2 / test.3 / test.4：按改动路径判定
-    cases = [(t2, "只改 apps/android/", {"android": "build", "macos": "skip"}),
-             (t3, "只改 apps/desktop/", {"android": "skip", "macos": "build"}),
-             (t4, "改 crates/（共享代码）", {"android": "build", "macos": "build"})]
+    cases = [(t2, "只改 apps/android/", {"android": "build", "macos": "skip", "windows": "skip"}),
+             (t3, "只改 apps/desktop/", {"android": "skip", "macos": "build", "windows": "build"}),
+             (t4, "改 crates/（共享代码）", {"android": "build", "macos": "build", "windows": "build"})]
     for tag, what, want in cases:
         v = tag[1:]
         before = channel()
@@ -798,6 +796,10 @@ def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
         ck(sc.build_result("android") == ("success" if want["android"] == "build" else "skipped")
            and sc.build_result("macos-arm64") == ("success" if want["macos"] == "build" else "skipped"),
            f"{tag}：没改动的一端零构建（按 release.yml 构建 job 的 if: 求值被跳过）")
+        # 2026-10-12：Windows 同样按端判——只改 Android 时不陪跑 Windows。
+        ck(plan.outputs.get("windows") == want["windows"]
+           and sc.build_result("windows-x64") == ("success" if want["windows"] == "build" else "skipped"),
+           f"{tag}（{what}）：Windows 判 {want['windows']}，构建 job 按 if: 求值一致", json.dumps(plan.outputs))
         job_ok(ck, jobs, "upload-android", "success" if want["android"] == "build" else "skipped")
         job_ok(ck, jobs, "upload-macos", "success" if want["macos"] == "build" else "skipped")
         for j in ("create-draft", "finalize-manifest", "finalize-notes"):
@@ -833,7 +835,7 @@ def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
     jobs = release(t5, {"android": "skip", "macos": "skip"})
     plan = jobs["plan-builds"]
     job_ok(ck, jobs, "plan-builds", "failure")
-    ck("::error::test tag" in plan.log and "两端" in plan.log, f"{t5}（只改 docs/）：两端都没变 ⇒ 明确报错", plan.log)
+    ck("::error::test tag" in plan.log and "各端" in plan.log, f"{t5}（只改 docs/）：各端都没变 ⇒ 明确报错", plan.log)
     job_ok(ck, jobs, "create-draft", "skipped")
     ck(sc.meta(t5) is None, f"{t5}：不建空草稿")
     SUMMARY["test-per-end"] = sc.summary()

@@ -15,19 +15,23 @@
 #   - 基线 = test-channel 里该端分端清单的 version 对应的 tag（= 该端测试机上正装着的那一版；
 #     正常就是上一个 test tag；上次该端构建失败时是更早那个——那段改动不会被漏掉）。
 #   - 基线拿不到（清单不在 / 读不出 / tag 不存在 / 不是 HEAD 的祖先 / 就是本 tag）或 diff 失败：构建。
-#   - 改动路径分类（反向 allowlist，同 tools/ci-needs-full-lane.sh：没列出的一律算两端）：
+#   - 改动路径分类（反向 allowlist，同 tools/ci-needs-full-lane.sh：没列出的一律算所有端）：
 #       docs/ cards/ .claude/ *.md                                  不影响产物
 #       apps/android/、tools/build-android-iroh-blobs-bridge.sh      只算 Android
-#       apps/desktop/、tools/bundle-macos.sh、tools/bundle-desktop-macos.sh、tools/fetch-ffmpeg.sh
-#                                                                   只算桌面
-#       其余（crates/、Cargo.*、assets/、release/、tools/、.github/ …） 两端
+#       apps/desktop/src-tauri/tauri.windows.conf.json              只算 Windows
+#       tools/bundle-macos.sh、tools/bundle-desktop-macos.sh、tools/fetch-ffmpeg.sh
+#                                                                   只算 macOS
+#       apps/desktop/（其余）                                       两个桌面端（macOS + Windows）
+#       其余（crates/、Cargo.*、assets/、release/、tools/、.github/ …） 所有端
 #   - 没改动的一端判 skip：不构建、也不复用（不复制任何产物），test-channel 里它的清单不动。
-#   - 两端都是 skip：报错退出——这次 test tag 没有可发布的东西。
+#   - Windows（2026-10-12 验收人：只改别的端时不陪跑 Windows）按同一规则判，基线是
+#     test-channel/manifest-windows.json。正式 tag 不构建 Windows（windows=skip），手动 dispatch 不看这里。
+#   - 所有端都是 skip：报错退出——这次 test tag 没有可发布的东西。
 #
 # 输入：TAG；当前目录 = 检出的仓库（读 release/versions.json；test tag 要完整历史与 tag）；
 #   gh 已登录（GH_TOKEN）。
 # 输出（追加到 $GITHUB_OUTPUT，未设置时打印到 stdout）：
-#   android=build|reuse|skip  macos=build|reuse|skip  reuse_from=<Latest tag 或空>
+#   android=build|reuse|skip  macos=build|reuse|skip  windows=build|skip  reuse_from=<Latest tag 或空>
 #   android_version=<号>  macos_version=<号>
 #   （reuse 只出现在正式 tag，skip 只出现在 test tag。）
 # 被复用的一端若在 Latest 之后改过会影响产物的构建脚本，打 ::warning::（不阻断：
@@ -53,18 +57,20 @@ if [[ "$TAG" == *-test.* ]]; then
       if [ -n "$v" ]; then echo "v${v#v}"; return; fi
     done
   }
-  # 改动路径 → 影响哪一端：android / desktop / both / none（分类见文件头）。
+  # 改动路径 → 影响哪一端：android / macos / windows / desktop（两个桌面端）/ all / none（分类见文件头）。
   classify() {
     case "$1" in
       docs/* | cards/* | .claude/* | *.md) echo none ;;
       apps/android/* | tools/build-android-iroh-blobs-bridge.sh) echo android ;;
-      apps/desktop/* | tools/bundle-macos.sh | tools/bundle-desktop-macos.sh | tools/fetch-ffmpeg.sh) echo desktop ;;
-      *) echo both ;;
+      apps/desktop/src-tauri/tauri.windows.conf.json) echo windows ;;
+      tools/bundle-macos.sh | tools/bundle-desktop-macos.sh | tools/fetch-ffmpeg.sh) echo macos ;;
+      apps/desktop/*) echo desktop ;;
+      *) echo all ;;
     esac
   }
-  # decide_test <端> <android|desktop> <清单名...>
+  # decide_test <端> <受哪些分类影响（空格分隔）> <清单名...>
   decide_test() {
-    local end="$1" kind="$2"; shift 2
+    local end="$1" kinds="$2"; shift 2
     local base changed f k
     base=$(test_base "$@")
     if [ -z "$base" ]; then
@@ -85,7 +91,7 @@ if [[ "$TAG" == *-test.* ]]; then
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       k=$(classify "$f")
-      if [ "$k" = both ] || [ "$k" = "$kind" ]; then
+      if [ "$k" = all ] || [[ " $kinds " == *" $k "* ]]; then
         echo "${end}：自 ${base} 起改了 ${f}（${k}）⇒ 构建" >&2; echo build; return
       fi
     done <<<"$changed"
@@ -94,14 +100,18 @@ if [[ "$TAG" == *-test.* ]]; then
   }
   # 过渡期：#852 之前 test-channel 只有老格式 manifest.json，它就是 Android 的清单。
   ANDROID=$(decide_test android android manifest-android.json manifest.json)
-  MACOS=$(decide_test macos desktop manifest-macos.json)
-  if [ "$ANDROID" = skip ] && [ "$MACOS" = skip ]; then
-    echo "::error::test tag ${TAG}：两端自上一次 test 发布以来都没有影响产物的改动——这次没有可发布的东西。"
+  MACOS=$(decide_test macos "macos desktop" manifest-macos.json)
+  WINDOWS=$(decide_test windows "windows desktop" manifest-windows.json)
+  if [ "$ANDROID" = skip ] && [ "$MACOS" = skip ] && [ "$WINDOWS" = skip ]; then
+    echo "::error::test tag ${TAG}：各端自上一次 test 发布以来都没有影响产物的改动——这次没有可发布的东西。"
     exit 1
   fi
-  emit android "$ANDROID"; emit macos "$MACOS"; emit reuse_from ""
+  emit android "$ANDROID"; emit macos "$MACOS"; emit windows "$WINDOWS"; emit reuse_from ""
   exit 0
 fi
+
+# 正式 tag 不构建 Windows（是否正式发布 Windows 由验收人决定，#788）。
+emit windows skip
 
 LATEST=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
 if [ -z "$LATEST" ] || [ "$LATEST" = "$TAG" ]; then
