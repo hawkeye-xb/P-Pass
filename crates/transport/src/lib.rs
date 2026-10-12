@@ -16,6 +16,8 @@ mod android_logcat;
 mod android_wire;
 mod blobs;
 mod conninfo;
+#[cfg(feature = "ios-ffi")]
+mod ios_ffi;
 mod iroh_impl;
 mod provider;
 /// #548：Rust → logcat 出口的脱敏（daemon `redact()` 的日志口径拷贝，跑共用向量）。
@@ -34,6 +36,11 @@ pub use provider::{
 };
 
 use std::fmt;
+
+// IOS-06 (#313): UniFFI scaffolding for binding #2. Feature-gated exactly like
+// the JNI binding — never a target_os cfg (arch-check B.2).
+#[cfg(feature = "ios-ffi")]
+uniffi::setup_scaffolding!();
 
 use futures_core::Stream;
 

@@ -61,3 +61,8 @@ apps/android/**/build/
 # iOS（#887）：工程由 apps/ios/project.yml 用 XcodeGen 生成，不入库；构建产物也不入库。
 apps/ios/*.xcodeproj/
 apps/ios/build/
+# IOS-06（#313）：tools/build-ios-transport-xcframework.sh 生成的 XCFramework 与 Swift 绑定，
+# 以及 SwiftPM 的本地状态，都不入库。
+apps/ios/TransportFFITests/Generated/
+apps/ios/TransportFFITests/.build/
+apps/ios/TransportFFITests/.swiftpm/
