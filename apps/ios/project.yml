@@ -17,6 +17,13 @@ targets:
     platform: iOS
     sources:
       - path: PPass
+        excludes:
+          - Resources/i18n
+      # #316：i18n 字典以**目录引用**进 bundle（落在 <App>/i18n/en.json），对位 Android 的 assets/i18n/。
+      # 内容是 assets/i18n/ 的逐字节副本，由 just ios-sync-i18n 同步，I18nDriftTests 守漂移。
+      - path: PPass/Resources/i18n
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID)
