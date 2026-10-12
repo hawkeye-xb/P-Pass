@@ -24,15 +24,21 @@
 //! 而不是"出问题时日志已经在"。`DedupGuard::for_file` 把同一套折叠 +
 //! 上限截断逻辑接到一个持久文件上，由 `PPF_LOG_FILE` 环境变量启用；
 //! 不设就是原来的行为（只写 stderr），不影响生产 launchd 路径。
+//!
+//! #789：写入器会在**任意线程**上被调用——谁打日志就在谁的线程上跑。
+//! sqlx 的 `sqlx-sqlite-worker` 是普通 std 线程，不在 tokio runtime 里；
+//! 旧实现在那里 `tokio::spawn` 一个计时任务，当场 panic 把 daemon 带走
+//! （SQLite 一慢，sqlx 打出「acquire 超过慢阈值」就会触发）。所以本模块
+//! 不依赖 tokio：汇总行由一条专用的 std 线程定期扫出来，与
+//! tracing-appender 用后台 worker 线程是同一个做法。
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use tokio::time::Instant;
 use tracing_subscriber::fmt::MakeWriter;
 
 /// 同一条消息安静这么久，才认为"这一轮折叠结束"并打汇总行。
@@ -213,13 +219,17 @@ pub struct DedupGuard {
 
 impl DedupGuard {
     pub fn new() -> Self {
-        Self::with_sink(BoundedSink::stderr(), IDLE_GAP)
+        Self::with_sink(BoundedSink::stderr(), IDLE_GAP).spawn_sweeper()
     }
 
     /// DEVLOG-01：同一套折叠 + 上限逻辑，写向一个持久文件而不是 stderr。
     /// 目录不存在就创建；文件以 append 模式打开（多次启动的 daemon 追加
     /// 而不是每次清空——真正的容量上限由 `SINK_CAP_BYTES` truncate 兜底）。
     pub fn for_file(path: &Path) -> io::Result<Self> {
+        Ok(Self::file_without_sweeper(path)?.spawn_sweeper())
+    }
+
+    fn file_without_sweeper(path: &Path) -> io::Result<Self> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -230,9 +240,9 @@ impl DedupGuard {
     /// 被 launchd 拉起（stderr → `.err`），也可能被桌面壳一次性 spawn
     /// （stdio 全是 `/dev/null`）——两种情况下日志都必须落在同一个固定文件里。
     pub fn for_file_and_stderr(path: &Path) -> io::Result<Self> {
-        let mut guard = Self::for_file(path)?;
+        let mut guard = Self::file_without_sweeper(path)?;
         guard.tee = Some(BoundedSink::stderr());
-        Ok(guard)
+        Ok(guard.spawn_sweeper())
     }
 
     fn with_sink(out: BoundedSink, idle_gap: Duration) -> Self {
@@ -244,11 +254,39 @@ impl DedupGuard {
         }
     }
 
-    fn emit(&self, buf: &[u8]) {
-        self.out.write_line(buf);
-        if let Some(tee) = &self.tee {
-            tee.write_line(buf);
+    /// 起一条专用线程，每隔 `idle_gap` 扫一次，把安静下来的 key 收尾。
+    /// 线程只持有 state 的弱引用：guard 的所有副本都没了，它下一轮就退出。
+    /// 一个 key 从最后一次出现到出汇总行，最多隔 2 × `idle_gap`。
+    fn spawn_sweeper(self) -> Self {
+        let state = Arc::downgrade(&self.state);
+        let out = self.out.clone();
+        let tee = self.tee.clone();
+        let idle_gap = self.idle_gap;
+        let spawned = std::thread::Builder::new()
+            .name("log-fold-sweeper".into())
+            .spawn(move || loop {
+                std::thread::sleep(idle_gap);
+                let Some(state) = state.upgrade() else {
+                    return;
+                };
+                for line in sweep(&state, idle_gap, Instant::now()) {
+                    emit_to(&out, tee.as_ref(), &line);
+                }
+            });
+        // 起不了线程只会少了汇总行；首条照样立即打印，不能因此不写日志。
+        if let Err(e) = spawned {
+            emit_to(
+                &self.out,
+                self.tee.as_ref(),
+                format!("--- p-pass: 日志折叠汇总线程起不来（{e}），重复行只打首条 ---\n")
+                    .as_bytes(),
+            );
         }
+        self
+    }
+
+    fn emit(&self, buf: &[u8]) {
+        emit_to(&self.out, self.tee.as_ref(), buf);
     }
 
     #[cfg(test)]
@@ -262,8 +300,11 @@ impl DedupGuard {
     }
 
     fn on_line(&self, buf: &[u8]) {
+        self.on_line_at(buf, Instant::now());
+    }
+
+    fn on_line_at(&self, buf: &[u8], now: Instant) {
         let key = fold_key(buf).to_vec();
-        let now = Instant::now();
         let mut state = self.state.lock().expect("dedup state lock");
         match state.get_mut(&key) {
             Some(entry) => {
@@ -272,7 +313,7 @@ impl DedupGuard {
             }
             None => {
                 state.insert(
-                    key.clone(),
+                    key,
                     KeyState {
                         first_seen: now,
                         last_seen: now,
@@ -281,7 +322,6 @@ impl DedupGuard {
                 );
                 drop(state);
                 self.emit(buf);
-                tokio::spawn(watch_key(self.clone(), key));
             }
         }
     }
@@ -293,33 +333,37 @@ impl Default for DedupGuard {
     }
 }
 
-/// 一个 key 从"第一条打印"到"安静下来"期间只有这一个任务在盯着它
-/// （由 [`DedupGuard::on_line`] 在插入新 key 时唯一地 spawn 一次）。
-async fn watch_key(guard: DedupGuard, key: Vec<u8>) {
-    let idle_gap = guard.idle_gap;
-    loop {
-        tokio::time::sleep(idle_gap).await;
-        let mut state_guard = guard.state.lock().expect("dedup state lock");
-        let Some(entry) = state_guard.get(&key) else {
-            return;
-        };
-        if Instant::now().duration_since(entry.last_seen) < idle_gap {
-            // 这一觉睡着的时候又来了新的——还在活跃期，继续等下一轮。
-            continue;
+fn emit_to(out: &BoundedSink, tee: Option<&BoundedSink>, buf: &[u8]) {
+    out.write_line(buf);
+    if let Some(tee) = tee {
+        tee.write_line(buf);
+    }
+}
+
+/// 把截至 `now` 已安静满 `idle_gap` 的 key 清掉，返回要补打的汇总行。
+/// 只出现过一次的 key 不出汇总（首条已经打过了）。纯函数，测试直接喂时间。
+fn sweep(
+    state: &Mutex<HashMap<Vec<u8>, KeyState>>,
+    idle_gap: Duration,
+    now: Instant,
+) -> Vec<Vec<u8>> {
+    let mut state = state.lock().expect("dedup state lock");
+    let mut summaries = Vec::new();
+    state.retain(|key, entry| {
+        if now.saturating_duration_since(entry.last_seen) < idle_gap {
+            return true;
         }
-        let count = entry.count;
-        let span = entry.last_seen.duration_since(entry.first_seen);
-        state_guard.remove(&key);
-        drop(state_guard);
-        if count > 1 {
+        if entry.count > 1 {
+            let span = entry.last_seen.duration_since(entry.first_seen);
             let mut line = key.clone();
             line.extend_from_slice(
-                format!(" (折叠 ×{count} over {})\n", human_duration(span)).as_bytes(),
+                format!(" (折叠 ×{} over {})\n", entry.count, human_duration(span)).as_bytes(),
             );
-            guard.emit(&line);
+            summaries.push(line);
         }
-        return;
-    }
+        false
+    });
+    summaries
 }
 
 pub struct DedupWriter {
@@ -381,14 +425,19 @@ mod tests {
         assert_eq!(fold_key(a), fold_key(b));
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn a_single_occurrence_prints_once_and_never_gets_a_summary() {
-        let guard = DedupGuard::with_idle_gap(Duration::from_millis(50));
-        let written = Arc::clone(&guard.out.written);
-        guard.on_line(b"2026-08-27T00:00:00.000000Z  WARN x: one-off\n");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+    #[test]
+    fn a_single_occurrence_prints_once_and_never_gets_a_summary() {
+        let gap = Duration::from_millis(50);
+        let guard = DedupGuard::with_idle_gap(gap);
+        let t0 = Instant::now();
+        guard.on_line_at(b"2026-08-27T00:00:00.000000Z  WARN x: one-off\n", t0);
         // 只有第一条打印本身，没有多余的折叠汇总。
-        let total = *written.lock().expect("counter lock");
+        assert!(sweep(&guard.state, gap, t0 + gap).is_empty());
+        assert!(
+            guard.state.lock().unwrap().is_empty(),
+            "key must be cleared"
+        );
+        let total = *guard.out.written.lock().expect("counter lock");
         let expected = b"2026-08-27T00:00:00.000000Z  WARN x: one-off\n".len();
         assert_eq!(
             total, expected,
@@ -396,21 +445,28 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
-    async fn a_burst_prints_first_line_then_exactly_one_summary() {
-        let guard = DedupGuard::with_idle_gap(Duration::from_millis(50));
+    #[test]
+    fn a_burst_prints_first_line_then_exactly_one_summary() {
+        let gap = Duration::from_millis(50);
+        let guard = DedupGuard::with_idle_gap(gap);
         let line = b"2026-08-27T00:00:00.000000Z  WARN x: tls handshake eof\n";
-        for _ in 0..92211 {
-            guard.on_line(line);
-            tokio::time::sleep(Duration::from_micros(500)).await;
+        let t0 = Instant::now();
+        let mut last = t0;
+        for i in 0..92211u32 {
+            last = t0 + Duration::from_micros(500) * i;
+            guard.on_line_at(line, last);
         }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        let state = guard.state.lock().expect("state lock");
+        // 还在活跃期：不出汇总、不清 key。
+        assert!(sweep(&guard.state, gap, last + gap / 2).is_empty());
+        assert_eq!(guard.state.lock().unwrap().len(), 1);
+        let summaries = sweep(&guard.state, gap, last + gap);
+        assert_eq!(summaries.len(), 1, "exactly one summary once idle");
+        let summary = String::from_utf8_lossy(&summaries[0]);
+        assert!(summary.contains("×92211"), "{summary}");
         assert!(
-            state.is_empty(),
-            "burst must be flushed and cleared once idle"
+            guard.state.lock().unwrap().is_empty(),
+            "burst must be cleared once idle"
         );
-        drop(state);
         let total_written = *guard.out.written.lock().expect("counter lock");
         // 首条 + 一条汇总，绝不是 92211 条——这正是本卡要修的洪水。
         assert!(
@@ -420,20 +476,19 @@ mod tests {
     }
 
     // DEVLOG-01: 文件 sink 走同一套折叠——持久化不是另一套逻辑。
-    #[tokio::test(start_paused = true)]
-    async fn file_sink_folds_and_persists_across_the_guard() {
+    #[test]
+    fn file_sink_folds_and_persists_across_the_guard() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon-dev.log");
         let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(50), &path);
         guard.on_line(b"2026-09-16T00:00:00.000000Z  INFO x: hello file\n");
-        tokio::time::sleep(Duration::from_millis(200)).await;
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("hello file"), "{content}");
     }
 
     // DEVLOG-01: 文件 sink 也吃同一个容量上限，不会无界增长。
-    #[tokio::test(start_paused = true)]
-    async fn file_sink_truncates_past_the_cap() {
+    #[test]
+    fn file_sink_truncates_past_the_cap() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon-dev.log");
         let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(10), &path);
@@ -466,8 +521,8 @@ mod tests {
 
     // DIAG-B1：上限必须跨运行生效。每次启动都 append、计数器却从 0 起算的话，
     // 反复重启的 daemon 会把同一个文件一路写大（8MB 只管得住单次运行）。
-    #[tokio::test(start_paused = true)]
-    async fn file_sink_cap_counts_bytes_left_by_previous_runs() {
+    #[test]
+    fn file_sink_cap_counts_bytes_left_by_previous_runs() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon.log");
         // 上一次运行留下的、离上限只差一点的文件。
@@ -502,8 +557,8 @@ mod tests {
     }
 
     // DIAG-B1：tee 模式两边都写——文件是固定位置，stderr 给向导读启动错误。
-    #[tokio::test(start_paused = true)]
-    async fn tee_mode_writes_the_file_and_counts_stderr_separately() {
+    #[test]
+    fn tee_mode_writes_the_file_and_counts_stderr_separately() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("logs").join("daemon.log");
         let guard = DedupGuard::for_file_and_stderr(&path).unwrap();
@@ -542,8 +597,8 @@ mod tests {
     }
 
     // #544：日志写入器落盘前即脱敏——第三方 crate 的行也走这里。
-    #[tokio::test]
-    async fn writer_redacts_before_the_line_reaches_disk() {
+    #[test]
+    fn writer_redacts_before_the_line_reaches_disk() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("daemon.log");
         let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(10), &path);
@@ -562,5 +617,39 @@ mod tests {
             written.contains("192.168.1.20:41145"),
             "private LAN kept: {written}"
         );
+    }
+
+    // #789 回归：sqlx 的 sqlite worker 这类不在 tokio runtime 里的普通线程
+    // 打日志，旧实现在写入器里 `tokio::spawn`，当场 panic 把 daemon 带走。
+    // 这里也走生产构造器，确认汇总线程真的会把重复行收尾。
+    #[test]
+    fn a_thread_outside_any_runtime_can_log_and_still_gets_a_summary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("daemon.log");
+        let guard =
+            DedupGuard::with_idle_gap_file(Duration::from_millis(20), &path).spawn_sweeper();
+        let line = b"2026-10-12T00:00:00.000000Z  WARN sqlx::pool::acquire: slow\n";
+        let writer_guard = guard.clone();
+        std::thread::spawn(move || {
+            assert!(tokio::runtime::Handle::try_current().is_err());
+            let mut w = writer_guard.make_writer();
+            w.write_all(line).unwrap();
+            w.write_all(line).unwrap();
+        })
+        .join()
+        .expect("logging from a non-runtime thread must not panic");
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let content = std::fs::read_to_string(&path).unwrap();
+            if content.contains("×2") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "sweeper never summarised the repeat: {content}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 }
