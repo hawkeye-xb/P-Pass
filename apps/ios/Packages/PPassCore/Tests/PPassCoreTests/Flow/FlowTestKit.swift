@@ -56,6 +56,9 @@ struct FakePosition: Codable, Equatable {
 final class FakeMedia: MediaSource, @unchecked Sendable {
     private let state = Locked<(photos: [FakePhoto], scope: Set<String>?, epoch: Int, identity: String?, duplicate: Set<String>, existingUnreadable: Bool)>(([], ["B7"], 1, "lib-1", [], false))
     let metadataReads = Locked(0)
+    /// 默认 true：大部分测试关心的是 G 本身的语义；#904 的测试显式置 false。
+    let precise = Locked(true)
+    var preciseDiscovery: Bool { precise.get() }
     let existingIdsCalls = Locked(0)
 
     var photos: [FakePhoto] { state.get().photos }
