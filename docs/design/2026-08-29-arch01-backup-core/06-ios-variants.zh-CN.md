@@ -123,8 +123,8 @@
 
 ### H-05｜桌面回收 3 天没续传的半截（桌面侧条目）
 
-- **手机侧的一半**：手机不残留垃圾 order——半截被桌面回收后，手机那一行仍是传输中，下一次续传时桌面重新开 grant（同一个 tuple），不需要手机侧额外清理。换桌面时 order 整表清空（P-01）。
-- **测试**：`EngineWithPortTests.testPauseSuspendsTheDesktopFetchAndResumeContinuesTheSameTuple`、`CaseMatrixTests.testP01_changingDesktopsDropsOldProgressButKeepsIntent`。
+- **手机侧的一半**：手机侧不为回收单独写任何东西——那一行保持传输中，下一次续传仍以同一个 tuple offer。能续上**依赖 daemon 对已取消 grant 的 upsert 复活**（Android `FlowEngine` 同一假设，见 #413 裁定 8），这一前提 iOS 侧**没有测**（它是桌面行为）。换桌面时 order 整表清空（P-01），不残留。
+- **测试（只覆盖手机侧：续传沿用同一个 tuple、换桌面清表）**：`EngineWithPortTests.testPauseSuspendsTheDesktopFetchAndResumeContinuesTheSameTuple`、`CaseMatrixTests.testP01_changingDesktopsDropsOldProgressButKeepsIntent`。
 
 ### X-10｜「取消剩余」在等待中是否可用（矩阵待确认）
 
