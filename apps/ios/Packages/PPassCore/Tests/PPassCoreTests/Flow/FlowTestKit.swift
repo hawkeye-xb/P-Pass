@@ -141,6 +141,8 @@ final class FakeImporter: MediaImporter, @unchecked Sendable {
     let unreadable = Locked<Set<String>>([])
     /// D4：原图在 iCloud、因网络拉不下来。
     let iCloudOffline = Locked<Set<String>>([])
+    /// #911：手机空间不足，临时文件写不下。
+    let phoneStorageFull = Locked(false)
     let hashOverride = Locked<[String: String]>([:])
     /// 导入期间挂起（模拟一次很长的 iCloud 下载），直到被放行。
     let hold = Locked(false)
@@ -157,6 +159,7 @@ final class FakeImporter: MediaImporter, @unchecked Sendable {
         if let failure = failures.update({ $0.isEmpty ? nil : $0.removeFirst() }) { throw failure }
         if unreadable.get().contains(id) { return .sourceMissing }
         if iCloudOffline.get().contains(id) { return .originalUnavailable(reason: "NSURLErrorNotConnectedToInternet") }
+        if phoneStorageFull.get() { return .localStorageFull(reason: "PHPhotosErrorDomain#3305") }
         guard let p = media.photos.first(where: { MediaOrder.same($0.mediaId, id) }) else { return .sourceMissing }
         return .imported(contentHash: hashOverride.get()[id] ?? p.hash, sizeBytes: p.size)
     }

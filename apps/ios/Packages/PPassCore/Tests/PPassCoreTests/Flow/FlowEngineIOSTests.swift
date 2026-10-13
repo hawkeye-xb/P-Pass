@@ -97,6 +97,50 @@ final class FlowEngineIOSTests: XCTestCase {
         rig.importer.releaseHold()
     }
 
+    // MARK: #911：手机本地空间不足
+
+    /// I-09：取原图时手机空间不足 → 不建行、不推进 G、不计失败；全局等待中（LOCAL_STORAGE_FULL）+ 探测梯；
+    /// 后面的照片也不去试（换一张照样写不下）；空间释放后照常传完。
+    /// 反证：把空间不足当单张失败 → 逐张记 FAILED、把整队的失败预算耗光，红。
+    func testPhoneStorageFullWaitsWithoutCountingAnyFailure() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        rig.photo(2, generation: 2)
+        rig.importer.phoneStorageFull.set(true)
+        await rig.start()
+        await rig.trigger()
+        XCTAssertNil(try rig.current(1))
+        XCTAssertNil(try rig.current(2))
+        XCTAssertEqual(rig.importer.imported.get(), [mid(1)], "队头写不下就停，不逐张去试")
+        XCTAssertEqual(try rig.generation(), 0)
+        var view = await rig.engine.view
+        XCTAssertEqual(view.state, .waiting)
+        XCTAssertEqual(view.waitReason, .localStorageFull)
+        XCTAssertEqual(view.pending, 2)
+        XCTAssertEqual(rig.scheduler.unreachableProbes.get(), 1)
+
+        rig.importer.phoneStorageFull.set(false)
+        await rig.trigger(.unreachableProbe)
+        XCTAssertEqual(rig.delivery.deliveredIds, [1, 2])
+        XCTAssertEqual(try rig.current(1)?.attempts, 0)
+        view = await rig.engine.view
+        XCTAssertEqual(view.state, .idle)
+    }
+
+    /// I-09（遗留续传）：在途的那张行原样不动（传输中、0 次）。
+    func testPhoneStorageFullLeavesALegacyOrderAsItIs() async throws {
+        let rig = try Rig()
+        let p = rig.photo(1, generation: 1)
+        let o = try rig.order(p, .transferring)
+        try rig.advanceG(1)
+        rig.importer.phoneStorageFull.set(true)
+        await rig.start()
+        await rig.trigger()
+        XCTAssertEqual(try rig.store.get(o.id)?.state, .transferring)
+        XCTAssertEqual(try rig.store.get(o.id)?.attempts, 0)
+        XCTAssertEqual(rig.fakeControl?.wait, .localStorageFull)
+    }
+
     // MARK: F3：发现游标失效（3105）
 
     /// token 过期 → G 重置到当前位置、扫描置脏；已确认的同版本照片不重传（needsNewOrder 看当前行），只传真正的新照片。

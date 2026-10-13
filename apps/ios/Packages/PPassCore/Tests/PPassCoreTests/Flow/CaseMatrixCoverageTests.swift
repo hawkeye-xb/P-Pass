@@ -111,6 +111,7 @@ enum MatrixRegistry {
         "I-05": .same(["FlowEngineIOSTests/testLosingTheNetworkDuringAnICloudDownloadCountsNothing"]),
         "I-06": .same(["FlowEngineIOSTests/testAnExpiredDiscoveryCursorRescansAndConvergesWithoutDuplicates"]),
         "I-07": .same(["FlowEngineIOSTests/testAnExpiredCursorWhileCountingGivesAnExactCountWithoutTouchingG"]),
+        "I-09": .same(["FlowEngineIOSTests/testPhoneStorageFullWaitsWithoutCountingAnyFailure", "FlowEngineIOSTests/testPhoneStorageFullLeavesALegacyOrderAsItIs"]),
         "I-08": .same(["FlowEngineIOSTests/testMediaIdsAreComparedByBytesNotByUnicodeEquivalence", "OrderStoreTests/testSQLiteOrderMatchesMediaOrder"]),
     ]
 }
@@ -173,7 +174,7 @@ final class CaseMatrixCoverageTests: XCTestCase {
 
     func testEveryMatrixRowIsCoveredOrRegistered() throws {
         let zh = MatrixDocs.matrixRows(try MatrixDocs.read("04-case-matrix.zh-CN.md"))
-        XCTAssertEqual(zh.count, 71, "63 行 ARCH-01 + 8 行仅 iOS")
+        XCTAssertEqual(zh.count, 72, "63 行 ARCH-01 + 9 行仅 iOS")
         XCTAssertEqual(Set(zh.keys), Set(MatrixRegistry.entries.keys), "矩阵与注册表的 ID 集合必须全等（新增行没登记 / 注册表有矩阵没有的 ID）")
         for (id, retired) in zh {
             guard let coverage = MatrixRegistry.entries[id] else { continue }

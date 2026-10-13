@@ -393,7 +393,7 @@ public actor FlowEngine {
         case .desktopUnreachable: wake = true
         case .desktopStorageFull, .desktopLibraryUnavailable, .desktopStorageError: wake = waitReasonOf(desktopHealth) != nil
         // iCloud 原图在等的是互联网，不是桌面——连得上桌面证明不了 iCloud 拉得到。
-        case .notPaired, .disabled, .wifi, .battery, .executionBlocked, .unexpectedError, .originalUnavailable: wake = false
+        case .notPaired, .disabled, .wifi, .battery, .executionBlocked, .unexpectedError, .originalUnavailable, .localStorageFull: wake = false
         }
         guard wake else { return }
         log("desktop reachable (foreground heartbeat) while waiting for \(waiting.rawValue): waking the loop")
@@ -871,6 +871,10 @@ public actor FlowEngine {
             // #311 D4：iCloud 原图因网络拉不下来——不建行、不推进游标、不计失败；退出循环等网络（下一轮从同一张重来）。
             log("media \(snapshot.mediaId): original not available (\(reason)); waiting, nothing counted")
             return .exit(.originalUnavailable)
+        case let .localStorageFull(reason):
+            // #911：手机空间不足——同 D4 的处置：不建行、不推进游标、不计失败，整体等待。
+            log("media \(snapshot.mediaId): phone storage full (\(reason)); waiting, nothing counted")
+            return .exit(.localStorageFull)
         case let .imported(hash, _):
             // 导入算出 hash → 建 order（传输中，带 hash）→ 传输。G / S 在结局落库时一起推进（#415 裁决 8）。
             // #775：导入一拿到手就进作用域——建 order 本身也可能失败。
@@ -912,6 +916,9 @@ public actor FlowEngine {
         case let .originalUnavailable(reason):
             log("order \(order.id): original not available (\(reason)); leaving the row as it is, nothing counted")
             return .exit(.originalUnavailable)
+        case let .localStorageFull(reason):
+            log("order \(order.id): phone storage full (\(reason)); leaving the row as it is, nothing counted")
+            return .exit(.localStorageFull)
         case let .imported(hash, _):
             return try await releasingOnAbort(hash) {
                 if let recorded = order.contentHash, recorded != hash {
