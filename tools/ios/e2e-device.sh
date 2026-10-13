@@ -85,7 +85,7 @@ OWNER_PID=$!
 
 ENVJSON=$(jq -cn --arg d container --arg l "$PAIR_QR" --arg t "$TIMEOUT" --arg r "$RUN" --arg m "${PPASS_E2E_MAX_ASSETS:-12}" \
   '{PPASS_E2E_DIR:$d, PPASS_E2E_PAIR_LINK:$l, PPASS_E2E_TIMEOUT:$t, PPASS_E2E_RUN:$r, PPASS_E2E_ALBUM:"smallest", PPASS_E2E_MAX_ASSETS:$m, PPASS_E2E_RESET:"1"}')
-echo "==> 启动真机 App（run=$RUN）。手机上若出现相册权限 / 本地网络权限弹窗，需要用户点「允许」。"
+echo "==> 启动真机 App（run=${RUN}）。手机上若出现相册权限 / 本地网络权限弹窗，需要用户点「允许」。"
 xcrun devicectl device process launch --device "$DEV" --terminate-existing --environment-variables "$ENVJSON" "$BUNDLE_ID" >"$OUT/launch.log" 2>&1 \
   || { cat "$OUT/launch.log"; exit 1; }
 
@@ -105,7 +105,7 @@ for _ in $(seq 1 $((TIMEOUT / 2 + 30))); do
 done
 echo "--- App 状态 ---"
 jq -c 'del(.timeline_ids)' "$OUT/status/status.json" 2>/dev/null || echo "(无 status.json)"
-[ "$DONE" = 1 ] || { echo "FAIL: App 没跑完（卡在 step=$LASTSTEP；弹窗没点？见 $OUT/daemon.err）" >&2; exit 1; }
+[ "$DONE" = 1 ] || { echo "FAIL: App 没跑完（卡在 step=${LASTSTEP}；弹窗没点？见 $OUT/daemon.err）" >&2; exit 1; }
 
 FAIL=0
 [ "$(jq -r '.ok' "$OUT/status/status.json")" = true ] || { echo "FAIL: App 报告未成功：$(jq -r '.error // .timeline_error' "$OUT/status/status.json")"; FAIL=1; }
