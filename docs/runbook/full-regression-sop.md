@@ -196,21 +196,22 @@ agent 如果跑在 MSIX 打包的宿主里（例如 Claude 桌面 App），它�
 Windows 上除系统安全提示外，界面操作都由 agent 做，不打断人：
 
 - **桌面窗口**：WebView2 把页面的无障碍树暴露给 UI Automation。`tools/windows/uia-drive.ps1 -Action dump` 列出元素，`-Action click -Name <按钮文字>` 按文字点击（中文参数从 PowerShell 传，Git Bash 会把编码弄乱）。页面切换后第一次点击偶尔返回「NOT FOUND」，重试一次即可。
-- **系统对话框**（`#32770`，如「发现新版本 …，是否下载并安装？」）：对按钮发 `BM_CLICK`。
-- **托盘菜单**：图标在「显示隐藏的图标」折叠区；用 UIA 调起折叠区，对图标发鼠标右键，菜单项用坐标点击。#876 修好之前图标没有名字，只能按位置认。
+- **系统对话框**（如「发现新版本 …，是否下载并安装？」）：是任务对话框（`#32770`），在 UIA 里挂在 P-Pass 主窗口下面，按钮的类名是 `CCPushButton`，没有 Invoke 模式。做法：用 UIA 按名字找到按钮，取它的 `NativeWindowHandle`，对这个句柄发 `BM_CLICK`（`0x00F5`）。
+- **托盘菜单**：图标在「显示隐藏的图标」折叠区，名字是 `P-Pass`（#876 之后），用 UIA 按名字找到，在它的中心发鼠标右键。菜单是原生 Win32 菜单（`#32768`），UIA 读不到菜单项，用键盘选：菜单项顺序见 `apps/desktop/src-tauri/src/lib.rs` 的 `TRAY_ITEMS`（打开 / 导出诊断包 / 停止后台服务 / 退出），例如「导出诊断包」是 ↓ ↓ 回车。
 - **手机授权**：测试机上用 `adb shell pm grant com.hawkeyexb.ppass android.permission.<权限>` 授予 `READ_MEDIA_IMAGES`、`READ_MEDIA_VIDEO`、`ACCESS_MEDIA_LOCATION`、`POST_NOTIFICATIONS`；电池白名单用 `dumpsys deviceidle whitelist +com.hawkeyexb.ppass`。App 内的点击用 `uiautomator dump` 找坐标再 `input tap`。
 - **仍然要人的**：UAC 提权（W4 的 `powercfg /requests`）、SmartScreen「仍要运行」（R6.4）。
 
 ### 9.1 基线版本
 
-在 Windows 正式发布之前（#788），Latest 正式版里**没有** Windows 安装包。这时 R0 的「上一个正式版」改用**早于候选、且带 `_x64-setup.exe` 的最近一个 test tag**：
+在 Windows 正式发布之前（#788），Latest 正式版里**没有** Windows 安装包。这时 R0 的「上一个正式版」改用**候选之前的那个 Windows test 包**。
+
+⚠️ 不能等候选出来再去找：test 通道只保留每端最新的一份安装包，候选 tag 一出包，旧的 Windows 包和旧 test 草稿、tag 就被自动删掉（#872）。所以要在**打候选 tag 之前**先把 test 通道当前的 Windows 安装包下载下来，留作基线：
 
 ```bash
-gh release list -R "$REPO" -L 30 --json tagName -q '.[].tagName' | grep -- '-test\.' |
-  while read -r t; do gh release view "$t" -R "$REPO" --json assets -q '.assets[].name' | grep -q '_x64-setup\.exe$' && echo "$t"; done
+gh release download test-channel -R "$REPO" -D "$WORK/base" -p '*_x64-setup.exe' -p 'manifest-windows.json'
 ```
 
-从输出里取排在候选之后的第一个。Windows 正式发布之后，就和 macOS 一样用 Latest。
+已经错过时，用本机以前回归留下的、核对过哈希的安装包（报告里写明来源和哈希）。基线的应用内更新会指向 test 通道，也就是候选，所以 R1.2 可以直接走 R1.6 的应用内更新一跳。Windows 正式发布之后，就和 macOS 一样用 Latest。
 
 ### 9.2 §3 预检的替换
 
