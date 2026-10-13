@@ -20,7 +20,7 @@ SWIFT_VERSION = 5.0
 // 写进构建产物的 Info.plist——CFBundleShortVersionString / CFBundleVersion / PPassFullVersion。
 // 来源与 Android 同：PPF_BUILD_VERSION（发布流水线注入）；为空时回退下面这个固定值（本地/非 tag 构建，
 // 对位 Android build.gradle.kts 的 `?: "x.y.z"`）。iOS 尚未发版，回退值待定。
-PPASS_FALLBACK_VERSION = 0.1.0
+PPASS_FALLBACK_VERSION = 0.10.0
 
 // Info.plist 里的占位，构建阶段一定会被覆盖；VersionStampTests 断言产物里不是它。
 MARKETING_VERSION = 0.0.0
