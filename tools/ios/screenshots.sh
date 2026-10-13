@@ -5,7 +5,9 @@
 #   IOS_SHOT_LANG=en tools/ios/screenshots.sh # 界面语言（默认 zh-Hans）
 #
 # 场景（PPASS_SCENARIO）与路由（PPASS_ROUTE）的取值见 FakeBackend.swift / RootView.swift。
-# 另截一张深色外观下的首页：App 锁定浅色（UIUserInterfaceStyle=Light），两张应当一样。
+# #943：外观与字号可选——IOS_SHOT_APPEARANCE=light|dark（默认 light）、
+#   IOS_SHOT_SIZE=默认 large，可取 extra-extra-extra-large / accessibility-extra-extra-extra-large 等
+#   （xcrun simctl ui <udid> content_size 的取值）。要全矩阵：tools/ios/screenshots.sh 跑四次，输出分目录。
 # 本脚本启动的模拟器结束时关掉。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -29,7 +31,8 @@ xcodebuild build -project "$IOS/PPass.xcodeproj" -scheme PPass -destination "id=
 APP="$DERIVED/Build/Products/Debug-iphonesimulator/PPass.app"
 xcrun simctl install "$UDID" "$APP"
 xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 --wifiBars 3 || true
-xcrun simctl ui "$UDID" appearance light
+xcrun simctl ui "$UDID" appearance "${IOS_SHOT_APPEARANCE:-light}"
+xcrun simctl ui "$UDID" content_size "${IOS_SHOT_SIZE:-large}"
 mkdir -p "$OUT"
 
 shot() { # <文件名> <场景> <路由> [等待秒数]
@@ -75,9 +78,7 @@ shot 34-pair-refused notPaired pairRefused
 shot 35-pair-lapsed notPaired pairLapsed
 shot 36-pair-failed notPaired pairFailed
 shot 37-backup-started normal backupStarted
-# 深色外观：App 锁浅色，应与 10 一致
-xcrun simctl ui "$UDID" appearance dark
-shot 40-home-system-dark normal settings
 xcrun simctl ui "$UDID" appearance light
+xcrun simctl ui "$UDID" content_size large
 xcrun simctl status_bar "$UDID" clear || true
 echo "完成：$(ls "$OUT" | wc -l | tr -d ' ') 张"

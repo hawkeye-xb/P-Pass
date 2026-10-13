@@ -130,8 +130,11 @@ jobs:
       - name: UI strings in sync with Android strings.xml
         run: python3 tools/ios/gen-strings.py --check
 
-      - name: No system default colours in app sources
-        run: tools/ios/check-no-system-colors.sh
+      # #943：iOS 视觉遵循系统规范，颜色只能来自系统语义色 / PPColor token；源码里不得写色值字面量。
+      - name: No colour literals in app sources
+        run: |
+          tools/ios/check-no-color-literals.sh --self-test
+          tools/ios/check-no-color-literals.sh
 
       # App 工程依赖传输 XCFramework（tools/ios/test.sh 缺就先生成），所以 Rust 工具链、iOS target、
       # 缓存、libheif 必须排在「App unit tests」之前。
