@@ -1,7 +1,7 @@
 ---
 title: "Auto-Updates Without an App Store: Tauri and Android APKs"
 description: "Five rules from shipping signed auto-updates for a Tauri macOS app and a self-updating Android APK through GitHub Releases, without an app store."
-date: 2026-10-13
+date: 2026-10-12
 tags: [engineering, release, auto-update, CI]
 lang: en
 draft: false

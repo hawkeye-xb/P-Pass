@@ -1,7 +1,7 @@
 ---
 title: 不上应用商店，macOS 和 Android 怎么做自动更新：Tauri updater 与 APK 自更新
 description: "五条规则：不走应用商店，用 GitHub Releases、Tauri updater 和 APK 自更新给 macOS 与 Android 做自动更新：按平台分版本号、清单兼容、多源回退、minisign 验签、发版门禁。"
-date: 2026-10-13
+date: 2026-10-12
 tags: [工程, 发布, 自动更新, CI]
 lang: zh
 draft: false
