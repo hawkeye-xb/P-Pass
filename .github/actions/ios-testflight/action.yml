@@ -1,7 +1,7 @@
 name: iOS TestFlight upload
 description: >-
   归档 iOS App → 云托管签名 → 上传 TestFlight，并到 App Store Connect 核对构建已到（#348）。
-  release.yml 的 ios job 与手动入口 ios-testflight.yml 共用这一份步骤——步骤只此一份，不许两处各抄。
+  release.yml 的 ios job 与手动入口（ci-ios.yml 的 testflight job）共用这一份步骤——步骤只此一份，不许两处各抄。
   调用方必须先 checkout（本地 action 要读仓库）、用 macOS runner。
 
 # 做法（苹果标准：App Store Connect API 密钥 + 云托管签名，不导出、不保管 p12）：
