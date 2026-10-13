@@ -4,11 +4,23 @@
 #   tools/ios/test-transport-ffi.sh          # 本机与 CI（ci-ios.yml）同一条命令
 #
 # 1. tools/build-ios-transport-xcframework.sh → apps/ios/TransportFFITests/Generated/
-# 2. 起一个隔离的本机 daemon 给控制面测试连：fake HOME + 临时 PPF_DATA_DIR + 127.0.0.1:0
-#    （OS 分配端口，绝不用 41145）+ 无 relay + --ephemeral（本脚本退出 ⇒ stdin 关 ⇒ daemon 退出）。
-#    端口用 lsof 从 daemon 进程上读，PeerAddr token = base64url(JSON{id, addrs:[{Ip}]})。
+# 2. 起一个隔离的本机 daemon 给控制面测试连：fake HOME + 临时 PPF_DATA_DIR + 0.0.0.0:0
+#    （OS 分配端口，绝不用 41145）+ --ephemeral（本脚本退出 ⇒ stdin 关 ⇒ daemon 退出）。
+#    PPF_RELAY_URLS="" 等于不覆盖，daemon 仍用默认 n0 relay（日志里有 home relay）。
+#    IPv4 端口用 lsof 从 daemon 进程上读，PeerAddr token = base64url(JSON{id, addrs:[{Ip 127.0.0.1:端口}]})。
+#
+#    为什么绑 0.0.0.0 而不是 127.0.0.1（#942 / #934）：iroh 的 bind_addr 把这个 v4 socket 当成
+#    所有 IPv4 目的地的默认路由。模拟器里的 provider 和 daemon 在同一台宿主上，ticket 只给出宿主
+#    局域网地址（如 10.1.151.23）；daemon 从 127.0.0.1 socket 发过去，provider 看到连接来自
+#    127.0.0.1，握手在 provider 端始终完不成，daemon 端 15 s 后 path idle、30 s 后 connection lost
+#    （fetch_failed）。产品 daemon 不显式绑地址（默认 0.0.0.0 + [::]），不走这条路。
+#    绑 0.0.0.0 也没有放大暴露面：以前 iroh 照样另绑 [::]:0 监听所有接口；隔离靠的是 fake HOME、
+#    临时库、临时身份与随机端口。
 # 3. xcodebuild test，token 经 TEST_RUNNER_ 前缀传进测试进程；PPASS_REQUIRE_DAEMON=1 让
 #    「没连上 daemon 就跳过」变成失败。
+#
+# PPASS_FFI_LOG_DIR=<目录>：退出前把 daemon.out / daemon.err 拷过去（临时目录随后删除），
+# 配合 RUST_LOG=info,iroh=debug,noq_proto=debug 取证。
 #
 # 模拟器选择、"Unable to find a destination" 的处理同 tools/ios/test.sh。
 set -euo pipefail
@@ -43,6 +55,7 @@ cleanup() {
     kill -CONT "$(cat "$E2E/suspend-request")" 2>/dev/null || true
   fi
   exec 4>&- 2>/dev/null || true
+  if [ -n "${PPASS_FFI_LOG_DIR:-}" ]; then cp "$WORK"/daemon.* "$PPASS_FFI_LOG_DIR"/ 2>/dev/null || true; fi
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
     wait "$DAEMON_PID" 2>/dev/null || true
@@ -58,7 +71,7 @@ mkdir -p "$WORK/home" "$WORK/data"
 mkfifo "$WORK/stdin"
 HOME="$WORK/home" \
   PPF_DATA_DIR="$WORK/data" \
-  PPF_BIND_ADDR="127.0.0.1:0" \
+  PPF_BIND_ADDR="0.0.0.0:0" \
   PPF_RELAY_URLS="" \
   PPF_TELEMETRY_ENABLED=false \
   "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
@@ -78,14 +91,16 @@ if [ -z "$NODE_ID" ]; then
   exit 1
 fi
 
-PORT=
+# daemon 只该有一个 IPv4 UDP socket（*:端口）。多于一个就说明假设不成立，宁可失败也不猜。
+PORTS=
 for _ in $(seq 1 50); do
-  PORT=$(lsof -nP -a -p "$DAEMON_PID" -iUDP@127.0.0.1 -Fn 2>/dev/null | sed -n 's/^n127\.0\.0\.1:\([0-9]*\)$/\1/p' | head -1)
-  [ -n "$PORT" ] && break
+  PORTS=$(lsof -nP -a -p "$DAEMON_PID" -i4UDP -Fn 2>/dev/null | sed -n 's/^n\*:\([0-9][0-9]*\)$/\1/p' | sort -u)
+  [ -n "$PORTS" ] && break
   sleep 0.2
 done
-if [ -z "$PORT" ] || [ "$PORT" = 41145 ]; then
-  echo "error: 没拿到 daemon 的 127.0.0.1 UDP 端口（得到「${PORT}」）" >&2
+PORT="$PORTS"
+if [ -z "$PORT" ] || [ "$(printf '%s\n' "$PORTS" | wc -l | tr -d ' ')" != 1 ] || [ "$PORT" = 41145 ]; then
+  echo "error: 没拿到 daemon 唯一的 IPv4 UDP 端口（得到「$(printf '%s' "$PORTS" | tr '\n' ' ')」）" >&2
   lsof -nP -a -p "$DAEMON_PID" -i >&2 || true
   exit 1
 fi

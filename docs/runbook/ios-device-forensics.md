@@ -43,7 +43,16 @@
   - 绑 0.0.0.0 后同一台模拟器上首张 0.07 秒送达；真机（局域网）首张不到 1 秒。
   - daemon 日志（`RUST_LOG=info,iroh=debug,noq_proto=debug`）里 `path::selected` 显示：两种绑法一开始都先走 n0 relay，随后切到直连 IP 路径
     （真机 `Ip(10.1.151.23->10.1.151.156:…)`，模拟器 `Ip(10.1.151.23->10.1.151.23:…)`）。绑回环时只有 `127.0.0.1->127.0.0.1` 这一条候选，切换前那次拉取就断了。
-    这是日志直接支持的现象；「为什么回环绑定会让第一次拉取断掉」的根因没有再往下查，在 iroh / transport 层，另开 issue 查。
+  - 根因（#942 / #934 已查清）：iroh 的 `bind_addr("127.0.0.1:0")` 把这个 v4 socket 当成**所有** IPv4 目的地的默认路由。
+    provider 的 ticket 只给宿主局域网地址（如 `10.1.151.23`），daemon 从 127.0.0.1 socket 发过去，内核照样投递（是本机地址），
+    provider 看到连接来自 `127.0.0.1`。双端日志：daemon 端 `Connection established` 后丢弃 provider 重传的 Initial，
+    15 秒 `failed closing path err=LastOpenPath`（path idle）、30 秒 `conn::closed reason=TimedOut`；provider 端
+    `PTO expired while unset path_id=0`，最后 `Accepting incoming connection ended with error: timed out`——provider 端握手始终没完成。
+    （推断：daemon 后续包的本端地址与首包不一致，provider 无法匹配到这条连接；未在 noq 源码里逐行证实。）
+    最小复现不需要模拟器：同机两个 `IrohTransport`，接收端 `bind_addr=127.0.0.1:0`、提供端默认绑定、无 relay，`Blobs::pull` 固定 30.0 秒 `io: connection lost`；
+    接收端改 `0.0.0.0:0` 或不设，0.09 秒完成。重试时成时败的原因没再细查（CI 上 G2 测试绿的两次各约 42 秒，推断是首拉 30 秒失败 + 重试成功；那两次 daemon 日志没保留），去掉触发条件后不再出现。
+  - 产品不受影响：daemon 默认不设 `bind_addr`（iroh 默认 `0.0.0.0` + `[::]`），手机 provider 也不设；只有显式把 daemon 绑回环、且 provider 与 daemon 在同一台宿主时才触发。
+    `tools/ios/test-transport-ffi.sh`（ci-ios）同样改绑 `0.0.0.0:0`。绑回环本来也不隔离：iroh 仍另绑 `[::]:0` 监听所有接口。
 - 真机端到端用 `PPASS_E2E_RESET=1`（脚本已带）在启动前清掉 App 存储根。否则上一轮的账本把「已确认」算给了旧的 daemon，新 daemon 的库是空的，却显示 4/4 已备份（实测复现过）。
 - 手机里是真照片：脚本只备份张数最少的非空相册（上限 `PPASS_E2E_MAX_ASSETS`，默认 12），只读；「原始字节」的 BLAKE3 由 App 内独立的 PHAssetResourceManager 读取路径算出，与 daemon 库文件用 Rust blake3 独立算出的值比对。
 - 首次装机时系统弹窗（相册权限、本地网络权限、信任开发者）要用户在手机上点；脚本不替点，状态卡在 `started` / `access` 就是在等弹窗。
