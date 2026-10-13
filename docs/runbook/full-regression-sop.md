@@ -265,4 +265,8 @@ W3 和 W5 都会改动安装状态，放在 §4 全部跑完、§7 清理之前�
 ### 9.5 本节不覆盖的
 
 - **登录 / 注销周期**：开机自启依赖登录时 `explorer.exe` 读取 Run 键，agent 没法在同一个会话里完成注销再登录，交给狗粮期覆盖。
-- **R3.4（Doze）在开着息屏显示（AOD）的三星机上做不了**：AOD 让系统认为屏幕仍亮着（`dumpsys deviceidle` 里 `mScreenOn=true`），`force-idle` 停在 INACTIVE。要测就换一台没有 AOD 的机器，或者经人同意临时关掉 AOD。
+- **熄屏相关的用例不做自动验收，归人工**（验收人 2026-10-13 定）：R3.4（Doze）和 R6.2 里「锁屏后在线态」这一半。原因：
+  - 三星机的息屏显示（AOD）让系统认为屏幕仍亮着（`dumpsys deviceidle` 里 `mScreenOn=true`），`force-idle` 停在 INACTIVE。
+  - 手机插着 USB 充电时，锁屏后后台心跳不停，在线态和真实使用不一样（2026-10-13 实测：锁屏 170 秒后仍显示「在线」）。
+
+  agent 跑的报告里，这两项一律标「人工验收」，不标通过或失败。人工跑法见 [manual-regression-windows.md](manual-regression-windows.md) 的 S19 和 S25。
