@@ -216,6 +216,7 @@ enum HomeProjection {
         case .desktopStorageError: return "state_waiting_desktop_error"
         case .unexpectedError: return "state_waiting_unexpected_error"
         case .originalUnavailable: return "state_waiting_original_unavailable"
+        case .localStorageFull: return "state_waiting_local_storage_full"
         }
     }
 }

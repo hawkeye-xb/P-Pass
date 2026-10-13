@@ -24,6 +24,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var access: MediaAccess = .full
     @Published private(set) var pairing: PairingStatus = .notPaired
     @Published private(set) var scope: Set<String>?
+    /// #343：首页常驻告示（已解析成当前语言的句子）。
+    @Published private(set) var promise: [String] = []
     @Published var commandInFlight = false
 
     init(backend: Backend) {
@@ -39,6 +41,7 @@ final class AppModel: ObservableObject {
         access = backend.media.access()
         pairing = backend.pairing.status()
         scope = backend.media.savedScope()
+        promise = backend.engine.promise().map { n in DiagText.resolve(n.key, vars: n.vars) ?? n.key }
     }
 
     var pairingLost: Bool { if case .lost = pairing { return true } else { return false } }

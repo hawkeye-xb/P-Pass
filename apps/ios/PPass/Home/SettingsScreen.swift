@@ -19,6 +19,15 @@ struct SettingsScreen: View {
                     if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
                         Text(L.s("desktop_low_space_hint")).font(PPFont.body).foregroundStyle(PPColor.waiting)
                     }
+                    // #343：iOS 能承诺什么、不能承诺什么（BackupPromise），常驻，不给「知道了」。
+                    if let title = app.promise.first {
+                        PPCard(fill: PPColor.paper, stroke: PPColor.borderStrong) {
+                            Text(title).font(PPFont.sans(17, .bold))
+                            ForEach(app.promise.dropFirst(), id: \.self) { line in
+                                Text(line).font(PPFont.sans(15)).foregroundStyle(PPColor.ink60)
+                            }
+                        }
+                    }
                     if app.pairingLost {
                         PPCard(fill: PPColor.actBg, stroke: PPColor.act.opacity(0.3)) {
                             Text(L.s("pairing_lost_title")).font(PPFont.serif(24)).foregroundStyle(PPColor.act)

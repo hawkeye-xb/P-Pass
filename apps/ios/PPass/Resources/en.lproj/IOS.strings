@@ -44,3 +44,5 @@
 
 "ok_got_it" = "OK";
 "bucket_summary" = "%1$@ photos will be backed up · automatically while P-Pass is open";
+
+"state_waiting_local_storage_full" = "This phone is out of storage. Free up some space and the backup carries on.";

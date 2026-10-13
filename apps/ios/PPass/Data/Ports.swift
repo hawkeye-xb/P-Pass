@@ -1,4 +1,5 @@
 import Foundation
+import PPassCore
 import UIKit
 
 // App 与业务之间的端口（#315）。界面只认这几个 protocol；壳阶段由 FakeBackend 实现，
@@ -85,6 +86,8 @@ protocol BackupEngine: AnyObject {
     /// 前台追赶：打开 App / 回到前台 / 选完相册时叫醒一轮。
     func wake() async
     func retryFailed() async
+    /// #343「iOS 不承诺什么」：首页常驻告示（PPassCore BackupPromise），文案 key 走 DiagText。
+    func promise() -> [PromiseNotice]
 }
 
 /// 一次运行用的全部端口。

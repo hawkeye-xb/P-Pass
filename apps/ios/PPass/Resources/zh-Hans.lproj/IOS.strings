@@ -46,3 +46,6 @@
 "ok_got_it" = "好的";
 /* Android 原句说「默认连 Wi-Fi 且电量不低时自动进行」，iOS 本轮是打开 App 时备份。 */
 "bucket_summary" = "将备份 %1$@ 张 · 打开 P-Pass 时自动备份";
+
+/* PPassCore WaitReason.localStorageFull：手机自己空间不够放临时原图。 */
+"state_waiting_local_storage_full" = "手机存储空间不够，腾出一些空间后接着备份。";

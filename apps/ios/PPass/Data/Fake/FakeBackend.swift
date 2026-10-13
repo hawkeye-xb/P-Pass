@@ -138,4 +138,10 @@ final class FakeEngine: BackupEngine {
 
     func wake() async {}
     func retryFailed() async {}
+
+    func promise() -> [PromiseNotice] {
+        var out = [PromiseNotice(BackupPromise.whileOpenTitle), PromiseNotice(BackupPromise.whileOpenBody)]
+        if scenario == .waiting { out.append(PromiseNotice(BackupPromise.waitOpenApp)) }
+        return out
+    }
 }
