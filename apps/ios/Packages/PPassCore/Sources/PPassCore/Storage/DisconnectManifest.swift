@@ -30,6 +30,7 @@ public enum DisconnectState: CaseIterable, Sendable {
     case flowRuntime
     case autoBackupPrefs
     case scheduledWakes
+    case backgroundWakePlan
     case mediaChangeObserver
     case identity
     case onboardedDesktops
@@ -45,6 +46,7 @@ public enum DisconnectState: CaseIterable, Sendable {
     public var path: String? {
         switch self {
         case .pairing: return "pairing.json"
+        case .backgroundWakePlan: return PlannedWakeScheduler.fileName
         case .flowRuntime, .scheduledWakes, .mediaChangeObserver: return nil
         case .autoBackupPrefs: return AutoBackupPrefs.fileName
         case .identity: return "identity.key"
@@ -62,7 +64,7 @@ public enum DisconnectState: CaseIterable, Sendable {
 
     public var disposition: DisconnectDisposition {
         switch self {
-        case .pairing: return .clear
+        case .pairing, .backgroundWakePlan: return .clear
         case .flowRuntime, .scheduledWakes, .mediaChangeObserver: return .stop
         case .autoBackupPrefs: return .reset
         default: return .keep
@@ -75,6 +77,7 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .pairing: return "UX-06/UX-06b：本地单方断开，令牌作废（#282）"
         case .flowRuntime: return "#264/MOB-91：同一 NodeId 重连不许复活旧的运行时"
         case .autoBackupPrefs: return "MOB-93：停生产者（autoEnabled=false），留意图（userRequested）"
+        case .backgroundWakePlan: return "MOB-93 的 iOS 对位（#340）：后台唤醒计划是生产者的一部分，断开清掉；挂着的系统请求由 scheduledWakes 撤"
         case .scheduledWakes: return "MOB-93 的 iOS 对位：BGTaskScheduler 登记的唤醒是生产者，断开撤掉"
         case .mediaChangeObserver: return "MOB-27/MOB-93 的 iOS 对位：PHPhotoLibrary 变更监听是生产者，断开停掉"
         case .identity: return "红线：密钥就是这台设备（#282）"
