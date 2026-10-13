@@ -7,23 +7,25 @@ import UIKit
 final class LiveTimeline: TimelineSource, @unchecked Sendable {
     private let client: () -> ProtoClient?
     private let myNodeId: () -> String?
-    private let fetchBlob: (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> Void
+    /// 返回取回内容的 BLAKE3（64 hex），调用方据此校验。
+    private let fetchBlob: (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String
     private let cache = NSCache<NSString, UIImage>()
 
     init(client: @escaping () -> ProtoClient?, myNodeId: @escaping () -> String?,
-         fetchBlob: @escaping (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> Void) {
+         fetchBlob: @escaping (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String) {
         self.client = client
         self.myNodeId = myNodeId
         self.fetchBlob = fetchBlob
     }
 
     enum Failure: Error, CustomStringConvertible {
-        case notPaired, placeholder, originalUnsupported
+        case notPaired, placeholder, originalUnsupported, hashMismatch
         var description: String {
             switch self {
             case .notPaired: return "not paired"
             case .placeholder: return "thumbnail not ready"
             case .originalUnsupported: return "original download is not available on iOS yet"
+            case .hashMismatch: return "fetched content does not match its BLAKE3 id"
             }
         }
     }
@@ -67,7 +69,7 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         let fm = FileManager.default
         let dir = item.isVideo
             ? fm.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("ppass-videos", isDirectory: true)
-            : fm.temporaryDirectory.appendingPathComponent("ppass-share", isDirectory: true)
+            : Self.shareDir
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         if item.isVideo, let hit = Self.completeCached(item, in: dir) { return hit }
 
@@ -77,9 +79,12 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         try? fm.removeItem(at: raw)
         let total = Double(max(item.bytes ?? 0, 1))
         do {
-            try await fetchBlob(ticket, raw) { bytes in progress(min(Double(bytes) / total, 1)) }
+            let got = try await fetchBlob(ticket, raw) { bytes in progress(min(Double(bytes) / total, 1)) }
+            // item.id 就是内容 BLAKE3 hex（asset.blob_ticket 以它为键）；取回内容不符按失败处理。
+            guard got.lowercased() == item.id.lowercased() else { throw Failure.hashMismatch }
+            try Task.checkCancellation()
         } catch {
-            try? fm.removeItem(at: raw) // 失败不留半截文件
+            try? fm.removeItem(at: raw) // 失败 / 取消 / 校验不符都不留文件
             throw error
         }
         // 线上只有内容哈希、没有文件名：按文件头认格式，补上扩展名（分享面板 / 存相册靠它识别）。
@@ -88,6 +93,15 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         try fm.moveItem(at: raw, to: named)
         return named
     }
+
+    /// 照片原图的即用即清目录（`tmp/ppass-share/`）。
+    static var shareDir: URL { FileManager.default.temporaryDirectory.appendingPathComponent("ppass-share", isDirectory: true) }
+
+    /// 分享面板关闭 / 存相册完成后删掉那份原图。
+    static func discardShared(_ url: URL) { try? FileManager.default.removeItem(at: url) }
+
+    /// App 启动时清一次上次崩溃 / 被杀留下的残留（视频缓存 `Caches/ppass-videos/` 不动）。
+    static func clearShareDir() { try? FileManager.default.removeItem(at: shareDir) }
 
     /// 缓存命中判据同 Android MOB-115：文件长度必须等于元数据里的字节数；不符或无从校验就删掉重下。
     private static func completeCached(_ item: TimelineItem, in dir: URL) -> URL? {

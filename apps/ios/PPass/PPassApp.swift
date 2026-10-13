@@ -44,6 +44,7 @@ enum AppBoot {
         }
         #endif
         do {
+            LiveTimeline.clearShareDir() // 上次被杀 / 崩溃留下的原图残留
             let live = try LiveBackend()
             BatteryState.shared.start()
             let model = AppModel(backend: live.ports())

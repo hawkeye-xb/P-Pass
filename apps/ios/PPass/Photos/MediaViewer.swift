@@ -15,6 +15,10 @@ struct MediaViewer: View {
     @State private var share: URL?
     @State private var dragY: CGFloat = 0
     @State private var busy = false
+    /// 保存 / 分享的取回任务：关掉大图时取消，FFI 取回随之中止（#953）。
+    @State private var work: Task<Void, Never>?
+    /// 当前分享面板里那份原图；面板关闭后立即删（手机不留原图副本）。
+    @State private var sharedFile: URL?
 
     init(session: ViewerSession, timeline: TimelineSource) {
         self.session = session
@@ -42,11 +46,11 @@ struct MediaViewer: View {
                     }
                 }
                 ToolbarItemGroup(placement: .bottomBar) {
-                    Button { Task { await save() } } label: { Label(L.s("save_to_gallery"), systemImage: "square.and.arrow.down") }
+                    Button { work = Task { await save() } } label: { Label(L.s("save_to_gallery"), systemImage: "square.and.arrow.down") }
                         .disabled(busy)
                     Spacer()
                     if busy { ProgressView().tint(PPColor.paper); Spacer() }
-                    Button { Task { await prepareShare() } } label: { Label(L.s("share"), systemImage: "square.and.arrow.up") }
+                    Button { work = Task { await prepareShare() } } label: { Label(L.s("share"), systemImage: "square.and.arrow.up") }
                         .disabled(busy)
                 }
             }
@@ -55,7 +59,11 @@ struct MediaViewer: View {
             .toolbarColorScheme(.dark, for: .navigationBar, .bottomBar)
             .tint(PPColor.paper)
             .ppToast($toast)
-            .sheet(item: $share) { url in ShareSheet(items: [url]) }
+            .sheet(item: $share, onDismiss: {
+                if let sharedFile { LiveTimeline.discardShared(sharedFile) }
+                sharedFile = nil
+            }) { url in ShareSheet(items: [url]) }
+            .onDisappear { work?.cancel() }
         }
     }
 
@@ -100,11 +108,14 @@ struct MediaViewer: View {
         }
         let url: URL
         do { url = try await timeline.original(item, progress: { _ in }) } catch {
+            if error is CancellationError || Task.isCancelled { return }
             NSLog("[PPass] viewer save: original failed: %@", String(describing: error))
-            toast = L.s("share_download_failed") + "\n" + String(String(describing: error).prefix(120))
+            toast = L.s("share_download_failed")
             Haptics.failure()
             return
         }
+        // 存相册完成（成功或失败）后原图即删：照片库已有自己的一份，不在 tmp 里再留。
+        defer { if !item.isVideo { LiveTimeline.discardShared(url) } }
         do {
             var placeholder: String?
             try await PHPhotoLibrary.shared().performChanges {
@@ -118,7 +129,7 @@ struct MediaViewer: View {
             Haptics.success()
         } catch {
             NSLog("[PPass] viewer save: photo library failed: %@", String(describing: error))
-            toast = L.s("share_download_failed") + "\n" + String(String(describing: error).prefix(120))
+            toast = L.s("share_download_failed")
             Haptics.failure()
         }
     }
@@ -127,9 +138,15 @@ struct MediaViewer: View {
         guard !busy else { return }
         busy = true
         defer { busy = false }
-        do { share = try await timeline.original(current, progress: { _ in }) } catch {
+        do {
+            let url = try await timeline.original(current, progress: { _ in })
+            if Task.isCancelled { if !current.isVideo { LiveTimeline.discardShared(url) }; return }
+            sharedFile = current.isVideo ? nil : url // 视频是缓存目录里的复用文件，不删
+            share = url
+        } catch {
+            if error is CancellationError || Task.isCancelled { return }
             NSLog("[PPass] viewer share: original failed: %@", String(describing: error))
-            toast = L.s("share_download_failed") + "\n" + String(String(describing: error).prefix(120))
+            toast = L.s("share_download_failed")
             Haptics.failure()
         }
     }
@@ -201,6 +218,8 @@ private struct ViewerPage: View {
             do {
                 let url = try await timeline.original(item) { p in Task { @MainActor in video = .fetching(p) } }
                 video = .ready(url)
+            } catch is CancellationError {
+                return // 划走 / 关闭：任务被取消，不当作失败
             } catch { video = .failed }
         } else {
             // 同 Android：1024 取不到时退回网格里已缓存的 256，都没有才报失败（并写明原因）。

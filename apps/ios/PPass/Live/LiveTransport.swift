@@ -38,13 +38,24 @@ final class ControlPlane: @unchecked Sendable {
 
     func nodeId() throws -> String { try bound().nodeId() }
 
-    /// 按票据把一个 blob 拉到 [dest]（控制端点出站连 blobs；临时仓库用完即删）。FFI 同步阻塞，放后台线程。
-    func fetchBlob(ticket: String, scratch: URL, dest: URL, progress: @escaping @Sendable (UInt64) -> Void) async throws {
-        try await Task.detached(priority: .userInitiated) { [self] in
-            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
-            _ = try bound().fetchBlob(ticket: ticket, scratchDir: scratch.path, destPath: dest.path, stallMs: 0,
-                                      progress: BytesProgress(progress))
-        }.value
+    /// 按票据把一个 blob 拉到 [dest]（控制端点出站连 blobs；临时仓库用完即删），返回内容 BLAKE3 hex。
+    /// FFI 同步阻塞，放后台线程；任务被取消时触发 FetchCancel 中止取回，并抛 CancellationError。
+    func fetchBlob(ticket: String, scratch: URL, dest: URL, progress: @escaping @Sendable (UInt64) -> Void) async throws -> String {
+        let cancel = FetchCancel()
+        do {
+            return try await withTaskCancellationHandler {
+                try await Task.detached(priority: .userInitiated) { [self] in
+                    try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+                    return try bound().fetchBlob(ticket: ticket, scratchDir: scratch.path, destPath: dest.path, stallMs: 0,
+                                                 progress: BytesProgress(progress), cancel: cancel)
+                }.value
+            } onCancel: {
+                cancel.cancel()
+            }
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            throw error
+        }
     }
 
     /// 一次请求一帧回复；返回完整 Resp 信封 JSON。
