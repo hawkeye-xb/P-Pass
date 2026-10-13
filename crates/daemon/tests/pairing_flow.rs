@@ -73,8 +73,14 @@ async fn full_flow_pairs_the_device() {
 
     let qr = pairing.start([0x42; 12], now());
     assert!(qr.starts_with(&format!("ppf://pair?node={}", dtp.node_id())));
+    // The daemon's own link parses with the shared parser the iOS binding and
+    // testclient use (IOS pairing, #313): same node, and its token pairs.
+    let link = transport::parse_pair_link(&qr).expect("daemon link parses");
+    assert_eq!(link.node_id, dtp.node_id());
+    assert_eq!(link.peer_addr.node_id(), dtp.node_id());
+    assert_eq!(link.token, token_of(&qr));
 
-    let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "妈妈的手机").await;
+    let resp = send_pair(&ctp, dtp.node_id(), &link.token, "妈妈的手机").await;
     assert!(resp.ok, "pairing must succeed: {resp:?}");
     let accepted: proto::PairAccepted = serde_json::from_value(resp.result.unwrap()).unwrap();
     assert_eq!(accepted.storage_device_name, "客厅的电脑");

@@ -2,13 +2,14 @@
 //! static library inside one XCFramework. Built only with the `ios-ffi`
 //! feature by `tools/build-ios-transport-xcframework.sh`.
 //!
-//! Four surfaces, none of which iOS re-implements:
+//! Five surfaces, none of which iOS re-implements:
 //! - [`Provider`]: the same one-lease iroh-blobs provider kernel the Android
 //!   JNI binding wraps ([`crate::provider::BlobsProvider`]).
 //! - BLAKE3: [`blake3_hex`], [`blake3_file_hex`], [`Blake3Hasher`].
 //! - `crates/proto` framing: [`encode_frame_json`] / [`decode_frame_json`]
 //!   (Swift only handles JSON), plus a typed `crates/proto` decode of `FlowFetchRequest`
 //!   ([`ProtoFlowFetchRequest`]) that tests use to check Swift's JSON field for field.
+//! - [`parse_pair_link`]: the `ppf://pair?...` link the desktop shows as a QR.
 //! - [`CtrlClient`]: a minimal control-plane client (`ppf/ctrl/1`), so the app
 //!   does not need iroh-ffi's own Swift XCFramework — two Rust static
 //!   libraries in one app means two copies of std and clashing symbols.
@@ -245,6 +246,36 @@ pub fn encode_flow_fetch_request(request: ProtoFlowFetchRequest) -> Result<Vec<u
 #[uniffi::export]
 pub fn decode_flow_fetch_request(frame: Vec<u8>) -> Result<ProtoFlowFetchRequest, FfiError> {
     Ok(proto::codec::decode::<proto::FlowFetchRequest>(&frame)?.into())
+}
+
+// ── Pairing link ────────────────────────────────────
+
+/// A `ppf://pair?...` link, parsed by [`crate::parse_pair_link`] (the same
+/// parser the dev testclient uses; the daemon pairing contract test parses
+/// the daemon own links with it).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct ParsedPairLink {
+    /// The storage end NodeId (64 hex).
+    pub node_id: String,
+    /// One-time token for `pair.request` (`PairRequest.token`).
+    pub token: String,
+    /// PeerAddr token for [`CtrlClient::call`]: node + relay (current
+    /// links), the full legacy address, or node only (address lookup).
+    pub peer_token: String,
+    /// Relay URL carried by the link, if any.
+    pub relay_url: Option<String>,
+}
+
+/// Parses a pairing link (QR content / pasted text).
+#[uniffi::export]
+pub fn parse_pair_link(link: String) -> Result<ParsedPairLink, FfiError> {
+    let link = crate::parse_pair_link(&link).map_err(invalid)?;
+    Ok(ParsedPairLink {
+        node_id: link.node_id.to_string(),
+        token: link.token,
+        relay_url: link.peer_addr.relay_url(),
+        peer_token: link.peer_addr.to_string(),
+    })
 }
 
 // ── Provider ────────────────────────────────────────
@@ -644,6 +675,27 @@ mod tests {
             serde_json::from_str(&decode_frame_json(frame).unwrap()).unwrap();
         assert_eq!(back, value);
         assert!(decode_frame_json(vec![1, 0]).is_err());
+    }
+
+    #[test]
+    fn pair_link_exports_a_dialable_peer_token() {
+        let node = crate::node_id_from_secret_key(&[7; 32]).to_string();
+        let parsed = parse_pair_link(format!(
+            "ppf://pair?node={node}&t=0123456789abcdef01234567&r=https://relay.example"
+        ))
+        .unwrap();
+        assert_eq!(parsed.node_id, node);
+        assert_eq!(parsed.token, "0123456789abcdef01234567");
+        let addr: PeerAddr = parsed.peer_token.parse().unwrap();
+        assert_eq!(addr.node_id().to_string(), node);
+        assert!(parsed
+            .relay_url
+            .unwrap()
+            .starts_with("https://relay.example"));
+        assert!(matches!(
+            parse_pair_link("ppf://pair?node=nope".into()),
+            Err(FfiError::InvalidArgument { .. })
+        ));
     }
 
     #[test]

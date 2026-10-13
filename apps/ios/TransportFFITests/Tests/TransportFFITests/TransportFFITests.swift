@@ -156,6 +156,33 @@ final class TransportFFITests: XCTestCase {
         XCTAssertEqual(protoVersion(), 1)
     }
 
+    // MARK: - 配对链接（Rust transport::parse_pair_link，Swift 不写第二份）
+
+    func testPairLinkParsedByRust() throws {
+        // 合法 NodeId 必须是曲线上的点：借一个 ephemeral 控制面端点的 NodeId。
+        let client = try CtrlClient.bind(
+            config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
+        defer { client.close() }
+        let node = try client.nodeId()
+
+        let link = try parsePairLink(
+            link: "ppf://pair?node=\(node)&t=0123456789abcdef01234567&r=https://relay.example\n")
+        XCTAssertEqual(link.nodeId, node)
+        XCTAssertEqual(link.token, "0123456789abcdef01234567")
+        XCTAssertEqual(link.relayUrl.map { $0.hasPrefix("https://relay.example") }, true)
+        XCTAssertFalse(link.peerToken.isEmpty)
+
+        let bare = try parsePairLink(link: "ppf://pair?node=\(node)&t=deadbeef")
+        XCTAssertNil(bare.relayUrl)
+        XCTAssertEqual(bare.token, "deadbeef")
+
+        XCTAssertThrowsError(try parsePairLink(link: "https://example.com/?node=x")) { error in
+            guard case FfiError.InvalidArgument = error else {
+                return XCTFail("expected InvalidArgument, got \(error)")
+            }
+        }
+    }
+
     // MARK: - provider
 
     func testProviderImportsAndHoldsAFile() throws {
