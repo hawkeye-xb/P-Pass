@@ -32,7 +32,16 @@ cargo build -q -p daemon ${RELEASE_FLAG:+"$RELEASE_FLAG"}
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-ios-ffi.XXXXXX")
 DAEMON_PID=
+OWNER_PID=
+SUSPENDER_PID=
 cleanup() {
+  for bg in "$OWNER_PID" "$SUSPENDER_PID"; do
+    if [ -n "$bg" ]; then kill "$bg" 2>/dev/null || true; fi
+  done
+  # 脚本中途失败时绝不把测试进程留在 SIGSTOP 里。
+  if [ -s "${E2E:-/nonexistent}/suspend-request" ]; then
+    kill -CONT "$(cat "$E2E/suspend-request")" 2>/dev/null || true
+  fi
   exec 4>&- 2>/dev/null || true
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
@@ -80,9 +89,61 @@ if [ -z "$PORT" ] || [ "$PORT" = 41145 ]; then
   lsof -nP -a -p "$DAEMON_PID" -i >&2 || true
   exit 1
 fi
-TOKEN=$(jq -cn --arg id "$NODE_ID" --arg ip "127.0.0.1:$PORT" '{id: $id, addrs: [{Ip: $ip}]}' \
+PEER_TOKEN=$(jq -cn --arg id "$NODE_ID" --arg ip "127.0.0.1:$PORT" '{id: $id, addrs: [{Ip: $ip}]}' \
   | base64 | tr -d '\n=' | tr '+/' '-_')
 echo "daemon pid=${DAEMON_PID} node=${NODE_ID:0:8}… udp=127.0.0.1:${PORT}"
+
+
+# ── G2 模拟器版（IOS-07 #334）：配对串 + 自动「业主同意」+ 挂起助手 ──────────
+# 配对串经 IPC pairing.start 现取（SEC-11：不落盘），给测试进程解析与配对。
+# shellcheck source=tools/ipc-lib.sh
+source "$ROOT/tools/ipc-lib.sh"
+ipc_pair_qr "$WORK/data/ipc.token"
+E2E="$WORK/e2e"
+mkdir -p "$E2E"
+# 挂起时长默认 5s（远大于测试里 1s 的 GC 周期）。实测冻 12s 时 xcodebuild 把测试进程当成卡死，
+# 重启模拟器并以 SIGKILL 结束它（xcresult 记为 Test crashed with signal kill）——那是测试框架的
+# 看门狗，不是被测代码；更长的挂起只能在真机上验（IOS-07 验收 2，E3）。
+SUSPEND_SECS="${PPASS_SUSPEND_SECS:-5}"
+
+# 业主：把队列里每一条待确认请求点「允许」（这台 daemon 只给本次测试用）。
+owner_loop() {
+  local resp ids n body
+  while kill -0 "$DAEMON_PID" 2>/dev/null; do
+    if resp=$(ipc pairing.pending 2>/dev/null); then
+      ids=$(printf '%s' "$resp" | jq -r '.result.pending[]?.node_id // empty')
+      for n in $ids; do
+        body=$(jq -cn --arg n "$n" '{accept: true, node_id: $n}')
+        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已允许 $n"; fi
+      done
+    fi
+    sleep 0.3
+  done
+}
+
+# 挂起助手：测试进程写下自己的 pid 请求挂起 ⇒ SIGSTOP 冻住整个进程（计时器、socket 都停，
+# 是 iOS 挂起的进程级模型）⇒ SUSPEND_SECS 秒后 SIGCONT ⇒ 写 resumed。
+suspend_loop() {
+  local pid state
+  while kill -0 "$DAEMON_PID" 2>/dev/null; do
+    if [ -s "$E2E/suspend-request" ]; then
+      pid=$(cat "$E2E/suspend-request")
+      kill -STOP "$pid"
+      state=$(ps -o stat= -p "$pid" | tr -d ' ')
+      echo "suspend: pid ${pid} 已 SIGSTOP（ps stat=${state}），${SUSPEND_SECS}s 后恢复"
+      sleep "$SUSPEND_SECS"
+      kill -CONT "$pid"
+      echo "suspend: pid ${pid} 已 SIGCONT"
+      printf '%s\n' "$SUSPEND_SECS" > "$E2E/resumed"
+      return
+    fi
+    sleep 0.1
+  done
+}
+owner_loop &
+OWNER_PID=$!
+suspend_loop &
+SUSPENDER_PID=$!
 
 UDID=$("$ROOT/tools/ios/sim.sh" udid)
 STATE=$(xcrun simctl list devices -j | jq -r --arg u "$UDID" '.devices[][] | select(.udid == $u) | .state')
@@ -90,8 +151,12 @@ STATE=$(xcrun simctl list devices -j | jq -r --arg u "$UDID" '.devices[][] | sel
 echo "模拟器：${UDID}（运行前状态 ${STATE}）"
 
 cd "$PKG"
-if ! TEST_RUNNER_PPASS_DAEMON_TOKEN="$TOKEN" \
+if ! TEST_RUNNER_PPASS_DAEMON_TOKEN="$PEER_TOKEN" \
   TEST_RUNNER_PPASS_REQUIRE_DAEMON=1 \
+  TEST_RUNNER_PPASS_PAIR_LINK="$PAIR_QR" \
+  TEST_RUNNER_PPASS_E2E_DIR="$E2E" \
+  TEST_RUNNER_PPASS_DAEMON_LIBRARY="$WORK/data" \
+  TEST_RUNNER_PPASS_SUSPEND_SECS="$SUSPEND_SECS" \
   xcodebuild test \
     -scheme TransportFFITests \
     -destination "id=${UDID}" \

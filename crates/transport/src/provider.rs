@@ -676,6 +676,18 @@ impl BlobsProvider {
         )
     }
 
+    /// Production endpoint shape with an injected GC interval. IOS-07 (#334):
+    /// the iOS suspension test needs GC passes inside a few seconds (the
+    /// production 60s would make it a multi-minute run); everything else is
+    /// exactly [`Self::new`].
+    pub fn with_gc_interval(root: impl AsRef<Path>, gc_interval: Duration) -> Result<Self> {
+        Self::with_config(
+            root,
+            TransportConfig::from_endpoints(Vec::new(), vec![ALPN_BLOBS.to_owned()]),
+            Some(gc_interval),
+        )
+    }
+
     /// NET-29 test constructor: generation `n`'s endpoint is bound with
     /// `config_for(n)` and gets `online_timeout` to come online, so a test
     /// can make the first endpoint never come online and observe the

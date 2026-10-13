@@ -352,6 +352,24 @@ impl Provider {
         }))
     }
 
+    /// Same as [`Self::new`] but with a GC pass every [gc_interval_ms]
+    /// instead of every 60s. For tests and diagnostics (IOS-07 #334).
+    #[uniffi::constructor]
+    pub fn with_gc_interval(root: String, gc_interval_ms: u64) -> Result<Arc<Self>, FfiError> {
+        if gc_interval_ms == 0 {
+            return Err(invalid("gc_interval_ms must be > 0"));
+        }
+        Ok(Arc::new(Self {
+            inner: BlobsProvider::with_gc_interval(root, Duration::from_millis(gc_interval_ms))?,
+        }))
+    }
+
+    /// Whether the store still holds [hash] completely (BLOB-03 / IOS-07:
+    /// observe what GC kept).
+    pub fn has_blob(&self, hash: String) -> Result<bool, FfiError> {
+        Ok(self.inner.has_blob(parse_hash(&hash)?))
+    }
+
     /// The paired desktop's NodeId (64 hex) as the only peer allowed to pull;
     /// `nil` / empty refuses everyone. A malformed id refuses everyone and
     /// errors (same contract as the Android binding, #547).
