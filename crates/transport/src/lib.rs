@@ -19,6 +19,7 @@ mod conninfo;
 #[cfg(feature = "ios-ffi")]
 mod ios_ffi;
 mod iroh_impl;
+mod pair_link;
 mod provider;
 /// #548：Rust → logcat 出口的脱敏（daemon `redact()` 的日志口径拷贝，跑共用向量）。
 pub mod redact;
@@ -28,6 +29,7 @@ pub use conninfo::{ConnInfo, ConnectionStatus, PathKind};
 pub use iroh_impl::{
     node_id_from_secret_key, BiStream, Incoming, IrohTransport, PeerAddr, TransportConfig,
 };
+pub use pair_link::{parse_pair_link, PairLink};
 /// IOS-05 (#312)：内核改名为平台中立的 [`BlobsProvider`] 之前的名字。现有
 /// 调用方（本 crate 与 daemon 的集成测试）照旧可用；新代码用 `BlobsProvider`。
 pub use provider::BlobsProvider as AndroidBlobsProvider;
@@ -140,6 +142,9 @@ pub enum TransportError {
 
     #[error("invalid node id")]
     InvalidNodeId,
+
+    #[error("invalid pairing link: {0}")]
+    InvalidPairLink(String),
 }
 
 pub type Result<T> = std::result::Result<T, TransportError>;

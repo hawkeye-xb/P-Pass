@@ -74,6 +74,20 @@ impl PeerAddr {
         Self(addr)
     }
 
+    /// Address of `node` reachable via `relay` (pairing link `r=`), or with no
+    /// address hints at all (`relay = None`: iroh resolves it through address
+    /// lookup when the endpoint has n0 services on).
+    pub fn from_node_relay(node: NodeId, relay: Option<&str>) -> Result<Self> {
+        let mut addr = EndpointAddr::from(endpoint_id(node)?);
+        if let Some(relay) = relay {
+            let url: RelayUrl = relay.parse().map_err(|e| {
+                TransportError::InvalidPairLink(format!("relay url {relay:?}: {e}"))
+            })?;
+            addr.addrs.insert(TransportAddr::Relay(url));
+        }
+        Ok(Self(addr))
+    }
+
     pub fn node_id(&self) -> NodeId {
         NodeId(*self.0.id.as_bytes())
     }
