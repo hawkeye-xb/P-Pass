@@ -730,7 +730,7 @@ mod pull_observed_tests {
         assert_eq!(exported.len(), data.len());
         assert_eq!(*blake3::hash(&exported).as_bytes(), hash);
 
-        let seen = seen.lock().unwrap();
+        let seen = seen.lock().unwrap().clone();
         assert!(!seen.is_empty(), "progress callback was never called");
         assert!(
             seen.windows(2).all(|w| w[0] <= w[1]),
