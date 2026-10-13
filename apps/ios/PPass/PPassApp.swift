@@ -38,6 +38,9 @@ enum AppBoot {
             BatteryState.shared.start()
             let model = AppModel(backend: live.ports())
             live.start()
+            #if DEBUG
+            if E2EDriver.requested { E2EDriver.run(model: model) }
+            #endif
             return .ready(model, LiveLifecycle(backend: live))
         } catch {
             return .failed(String(describing: error))

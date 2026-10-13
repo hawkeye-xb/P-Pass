@@ -27,6 +27,10 @@ struct PhotosScreen: View {
         .onAppear {
             if LaunchRoute.current == .viewer || LaunchRoute.current == .video { model.openOnLoad = LaunchRoute.current }
         }
+        // 备份确认数变了 = 电脑上有新照片入库：重取第一页（daemon 入库索引略晚于确认，等一拍）。
+        .onChange(of: app.facts.confirmed) { _ in
+            Task { try? await Task.sleep(nanoseconds: 1_500_000_000); await model.loadFirst() }
+        }
         .onChange(of: model.autoOpen) { item in if let item { open(item) } }
         .fullScreenCover(item: $viewer, onDismiss: { tabBarHidden = false }) { session in
             MediaViewer(session: session, timeline: app.backend.timeline)
