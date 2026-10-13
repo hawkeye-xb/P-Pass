@@ -100,6 +100,7 @@ private struct ViewerPage: View {
     let item: TimelineItem
     let timeline: TimelineSource
     @State private var image: UIImage?
+    @State private var photoError: String?
     @State private var video: VideoState = .fetching(0)
 
     enum VideoState: Equatable { case fetching(Double), ready(URL), failed }
@@ -114,7 +115,12 @@ private struct ViewerPage: View {
 
     @ViewBuilder private var photoBody: some View {
         if let image {
-            Image(uiImage: image).resizable().scaledToFit()
+            ZoomableImage(image: image)
+        } else if let photoError {
+            VStack(spacing: 10) {
+                Image(systemName: "photo").font(.largeTitle).foregroundStyle(PPColor.paperDim)
+                Text(photoError).font(PPFont.caption).foregroundStyle(PPColor.paperDim).padding(.horizontal, 24)
+            }
         } else {
             ProgressView().tint(PPColor.paperDim)
         }
@@ -144,7 +150,14 @@ private struct ViewerPage: View {
                 video = .ready(url)
             } catch { video = .failed }
         } else {
-            image = try? await timeline.thumbnail(item, large: true)
+            // 同 Android：1024 取不到时退回网格里已缓存的 256，都没有才报失败（并写明原因）。
+            do { image = try await timeline.thumbnail(item, large: true) } catch {
+                NSLog("[PPass] viewer 1024 thumb failed: %@", String(describing: error))
+                do { image = try await timeline.thumbnail(item, large: false) } catch {
+                    NSLog("[PPass] viewer 256 thumb failed: %@", String(describing: error))
+                    photoError = String(String(describing: error).prefix(160))
+                }
+            }
         }
     }
 }
@@ -171,4 +184,61 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+/// 捏合缩放 + 双击放大 / 还原（系统 `UIScrollView` 的缩放，和「照片」App 同一套手势）。
+private struct ZoomableImage: UIViewRepresentable {
+    let image: UIImage
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIScrollView {
+        let scroll = FitScrollView()
+        scroll.delegate = context.coordinator
+        scroll.minimumZoomScale = 1
+        scroll.maximumZoomScale = 5
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.showsVerticalScrollIndicator = false
+        scroll.backgroundColor = .clear
+        let view = UIImageView(image: image)
+        view.contentMode = .scaleAspectFit
+        view.isUserInteractionEnabled = true
+        scroll.addSubview(view)
+        context.coordinator.imageView = view
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTap(_:)))
+        tap.numberOfTapsRequired = 2
+        scroll.addGestureRecognizer(tap)
+        return scroll
+    }
+
+    func updateUIView(_ scroll: UIScrollView, context: Context) {
+        context.coordinator.imageView?.image = image
+        scroll.setNeedsLayout()
+    }
+
+    /// 未缩放时让图片视图始终等于可视区（首次布局 / 旋转后才有真实尺寸，不能在 make/update 里一次性设）。
+    final class FitScrollView: UIScrollView {
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            guard zoomScale == 1, let view = subviews.first else { return }
+            view.frame = CGRect(origin: .zero, size: bounds.size)
+            contentSize = bounds.size
+        }
+    }
+
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        var imageView: UIImageView?
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+        @objc func doubleTap(_ g: UITapGestureRecognizer) {
+            guard let scroll = g.view as? UIScrollView else { return }
+            if scroll.zoomScale > 1 {
+                scroll.setZoomScale(1, animated: true)
+            } else {
+                let p = g.location(in: imageView)
+                let size = CGSize(width: scroll.bounds.width / 2.5, height: scroll.bounds.height / 2.5)
+                scroll.zoom(to: CGRect(x: p.x - size.width / 2, y: p.y - size.height / 2, width: size.width, height: size.height), animated: true)
+            }
+        }
+    }
 }

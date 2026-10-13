@@ -11,23 +11,27 @@ struct HeroCard: View {
         let triplet = app.triplet
         let render = HomeProjection.heroRender(app.access, triplet)
         Section {
-            VStack(alignment: .leading, spacing: 8) {
-                switch render {
-                case .accessBlocked: accessCard
-                case .unreadable:
-                    Text(L.s("triplet_unavailable")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-                case .unreconciled:
-                    Text(L.s("hero_unreconciled_title")).font(PPFont.title2)
-                    Text(L.s("hero_unreconciled_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-                case .triplet:
-                    if let triplet { tripletView(triplet) }
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 8) {
+                    switch render {
+                    case .accessBlocked: accessCard
+                    case .unreadable:
+                        Text(L.s("triplet_unavailable")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                    case .unreconciled:
+                        Text(L.s("hero_unreconciled_title")).font(PPFont.title2)
+                        Text(L.s("hero_unreconciled_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                    case .triplet:
+                        if let triplet { tripletView(triplet) }
+                    }
+                }
+                if render != .accessBlocked {
+                    // 设计稿：hero 内分隔线 = safe 18%（绿系），与整卡 safe-bg 同色系，不再是系统行分隔线。
+                    Rectangle().fill(PPColor.safe.opacity(0.18)).frame(height: 1).padding(.vertical, 12)
+                    progressRow
                 }
             }
             .padding(.vertical, 6)
-            .ppTinted(render == .accessBlocked ? PPColor.actBg : nil)
-            if render != .accessBlocked {
-                progressRow.padding(.vertical, 4)
-            }
+            .ppTinted(render == .accessBlocked ? PPColor.actBg : PPColor.safeBg)
         }
     }
 
@@ -35,7 +39,7 @@ struct HeroCard: View {
     private var accessCard: some View {
         let partial = app.access == .partial
         return VStack(alignment: .leading, spacing: 10) {
-            Label(L.s(partial ? "partial_access_title" : "no_media_access_title"), systemImage: "photo.badge.exclamationmark")
+            Text(L.s(partial ? "partial_access_title" : "no_media_access_title"))
                 .font(PPFont.title3).foregroundStyle(PPColor.act)
             Text(L.s(partial ? "partial_access_body" : "no_media_access_body")).font(PPFont.body)
                 .foregroundStyle(PPColor.ink60)
@@ -85,19 +89,11 @@ struct HeroCard: View {
         let action = HomeProjection.heroAction(state, pairingLost: app.pairingLost)
         return VStack(alignment: .leading, spacing: 10) {
             if case .sending(let done, let total, let file) = state {
-                Label {
-                    Text(file).font(PPFont.bodyMedium).lineLimit(1).truncationMode(.middle)
-                } icon: {
-                    Image(systemName: "arrow.up.circle.fill").foregroundStyle(PPColor.waiting)
-                }
+                Text(file).font(PPFont.bodyMedium).lineLimit(1).truncationMode(.middle)
                 Text(L.f("state_sending", done, total)).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
                 PPProgressBar(value: Double(done - 1), total: Double(max(total, 1)))
             } else {
-                Label {
-                    Text(statusText(state)).font(PPFont.body).foregroundStyle(statusColor(state))
-                } icon: {
-                    Image(systemName: statusSymbol(state)).foregroundStyle(statusColor(state))
-                }
+                Text(statusText(state)).font(PPFont.body).foregroundStyle(statusColor(state))
             }
             if let action {
                 Button(L.s(app.commandInFlight ? "backup_command_processing" : (action == .pause ? "backup_pause" : "backup_resume"))) {
@@ -139,19 +135,5 @@ struct HeroCard: View {
             return true
         }
         return false
-    }
-
-    /// 状态图标（SF Symbols），与 Android 状态行的语义一一对应：存好 / 等待 / 暂停 / 出问题 / 其余。
-    private func statusSymbol(_ s: BackupUiState) -> String {
-        if case .waiting = s { return "clock" }
-        if s == .preparing { return "hourglass" }
-        switch HomeProjection.statusLine(s, pendingK: app.triplet?.k ?? 0) {
-        case .noAlbums: return "photo.on.rectangle.angled"
-        case .pending: return "arrow.triangle.2.circlepath"
-        case .paused: return "pause.circle"
-        case .trouble: return "exclamationmark.triangle"
-        case .allSafe: return isConfirmedSafe(s) ? "checkmark.circle.fill" : "clock"
-        case .ready, .working, .waiting: return "clock"
-        }
     }
 }

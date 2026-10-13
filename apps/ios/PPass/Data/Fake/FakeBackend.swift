@@ -141,6 +141,9 @@ final class FakeEngine: BackupEngine {
         listeners.forEach { $0() }
     }
 
+    private var auto = true
+    func autoBackup() -> Bool { auto }
+    func setAutoBackup(_ on: Bool) { auto = on; listeners.forEach { $0() } }
     private var wifi = true
     func wifiOnly() -> Bool { wifi }
     func setWifiOnly(_ on: Bool) { wifi = on; listeners.forEach { $0() } }

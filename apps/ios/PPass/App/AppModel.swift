@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var promise: [String] = []
     @Published var commandInFlight = false
     @Published private(set) var wifiOnly = true
+    @Published private(set) var autoBackup = true
 
     init(backend: Backend) {
         self.backend = backend
@@ -43,9 +44,11 @@ final class AppModel: ObservableObject {
         pairing = backend.pairing.status()
         scope = backend.media.savedScope()
         wifiOnly = backend.engine.wifiOnly()
+        autoBackup = backend.engine.autoBackup()
         promise = backend.engine.promise().map { n in DiagText.resolve(n.key, vars: n.vars) ?? n.key }
     }
 
+    func setAutoBackup(_ on: Bool) { backend.engine.setAutoBackup(on); autoBackup = on }
     func setWifiOnly(_ on: Bool) { backend.engine.setWifiOnly(on); wifiOnly = on }
 
     var pairingLost: Bool { if case .lost = pairing { return true } else { return false } }

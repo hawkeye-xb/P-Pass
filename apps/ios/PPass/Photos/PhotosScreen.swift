@@ -25,9 +25,8 @@ struct PhotosScreen: View {
                 content
             }
             .ppScreen()
-            .navigationTitle(L.s("tab_photos"))
-            .ppNavBar()
-            .safeAreaInset(edge: .top, spacing: 0) { if !app.pairingLost { chips } }
+            .toolbar(.hidden, for: .navigationBar) // Android 无页标题，底部 tab 已标明所在页
+            .safeAreaInset(edge: .top, spacing: 0) { if !app.pairingLost { VStack(spacing: 0) { chips; disconnected } } }
         }
         .task { model.bind(app.backend.timeline); await model.loadFirst() }
         .onAppear {
@@ -43,14 +42,37 @@ struct PhotosScreen: View {
         }
     }
 
-    /// 全部 / 本机 / 家人：系统分段控件（对位「照片」App 顶部的分段），放在材质条里随内容滚动时仍可读。
+    /// 全部 / 本机 / 家人：胶囊 chips（Android PhotoFilterChip）：高 36、linen 底 ink-60 字，选中 = ink 底 paper 字。
     private var chips: some View {
-        Picker("", selection: $model.filter) {
-            ForEach(TimelineFilter.allCases, id: \.self) { f in Text(L.s(f.key)).tag(f) }
+        HStack(spacing: 8) {
+            ForEach(TimelineFilter.allCases, id: \.self) { f in
+                let on = model.filter == f
+                Button { model.filter = f } label: {
+                    Text(L.s(f.key)).font(PPFont.sans(14, .semibold, relativeTo: .subheadline))
+                        .foregroundStyle(on ? PPColor.paper : PPColor.ink60)
+                        .padding(.horizontal, 16).frame(height: 36)
+                        .background(on ? PPColor.ink : PPColor.linen, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
         }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 16).padding(.vertical, 8)
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
         .background(PPColor.paper)
+    }
+
+    /// 已有照片时翻页 / 刷新失败：不挡住已加载的内容，只在上面提示「连不上」+ 重试（Android SYNC-04）。
+    @ViewBuilder private var disconnected: some View {
+        if model.error != nil, !model.items.isEmpty {
+            HStack {
+                Text(L.s("photos_live_disconnected")).font(PPFont.sans(13)).foregroundStyle(PPColor.ink40)
+                Spacer()
+                Button(L.s("photos_live_retry")) { Task { await model.loadMore(retry: true) } }
+                    .font(PPFont.sans(13, .semibold)).foregroundStyle(PPColor.ink).padding(6)
+            }
+            .padding(.horizontal, 20).padding(.bottom, 12)
+            .background(PPColor.paper)
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -71,11 +93,10 @@ struct PhotosScreen: View {
         }
     }
 
-    /// 网格对齐「照片」App：3 列、2pt 间隔、方形缩略图不加圆角；月份组头用材质底、吸顶。
+    /// 网格对齐 Android：3 列、4pt 间隔、左右 12pt 边距、缩略图圆角 10；月份组头 serif 18，不吸顶。
     private var grid: some View {
         ScrollView {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2,
-                      pinnedViews: [.sectionHeaders]) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 4) {
                 ForEach(model.sections, id: \.title) { section in
                     Section {
                         ForEach(section.items) { item in
@@ -84,14 +105,13 @@ struct PhotosScreen: View {
                                 .onAppear { if item == model.shown.last { Task { await model.loadMore() } } }
                         }
                     } header: {
-                        Text(section.title).font(PPFont.headline)
+                        Text(section.title).font(PPFont.serif(18, .regular, relativeTo: .title3))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.horizontal, 16).padding(.vertical, 8)
-                            .background(PPColor.paper)
+                            .padding(.init(top: 16, leading: 8, bottom: 2, trailing: 8))
                     }
                 }
             }
-            .padding(.bottom, 8)
+            .padding(.horizontal, 12).padding(.bottom, 8)
         }
     }
 
@@ -131,7 +151,7 @@ struct Thumb: View {
         PPColor.linen
             .aspectRatio(1, contentMode: .fit)
             .overlay { if let image { Image(uiImage: image).resizable().scaledToFill() } }
-            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(alignment: .bottomTrailing) {
                 if item.isVideo {
                     Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))

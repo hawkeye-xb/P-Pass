@@ -24,6 +24,7 @@ final class LiveBackend: @unchecked Sendable {
     let orders: SQLiteOrderStore
     let control: FlowControlStore
     let settings: BackupSettings
+    let autoPrefs: AutoBackupPrefs
     let pairingLoss = PairingLoss()
     let network = NetworkState()
     let engineModel: LiveEngineModel
@@ -45,6 +46,11 @@ final class LiveBackend: @unchecked Sendable {
         orders = try SQLiteOrderStore(directory: dir, logger: logger)
         control = FlowControlStore(directory: dir, logger: logger)
         settings = BackupSettings(directory: dir, logger: logger)
+        autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
+        // 全新安装默认开（此前引擎写死为开）；之后以用户在设置里的选择为准。
+        if !fm.fileExists(atPath: dir.appendingPathComponent(AutoBackupPrefs.fileName).path) {
+            try? autoPrefs.setEnabled(true); try? autoPrefs.setRequested(true)
+        }
         scheduler = PlannedWakeScheduler(directory: dir, submitter: BGTaskSubmitter(), logger: logger)
 
         let plane = self.plane
@@ -58,6 +64,7 @@ final class LiveBackend: @unchecked Sendable {
         let media = self.media
         let scope: @Sendable () -> Set<String> = { media.savedScope() ?? [] }
         let settings = self.settings
+        let autoPrefs = self.autoPrefs
         let network = self.network
         let model = LiveEngineModel()
         engineModel = model
@@ -68,7 +75,7 @@ final class LiveBackend: @unchecked Sendable {
             probe: ControlPlaneProbe(currentEpoch: epoch, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
             presence: ControlPlanePresence(desktop: desktop), lease: window, scheduler: scheduler, control: control,
             conditions: {
-                Conditions(paired: epoch() != nil, autoBackupEnabled: true, wifiOnly: settings.wifiOnly(),
+                Conditions(paired: epoch() != nil, autoBackupEnabled: autoPrefs.enabled(), wifiOnly: settings.wifiOnly(),
                            onUnmetered: !network.isExpensive, batteryLow: BatteryState.isLow)
             },
             inScope: { PhotoMediaSource.inScope(bucketId: $0, selected: scope()) },
@@ -100,6 +107,7 @@ final class LiveBackend: @unchecked Sendable {
     private func paired(_ record: PairingRecord) {
         try? provider.ffi.setAllowedPeer(nodeId: record.daemonNodeId)
         try? onboarded.markOnboarded(record.daemonNodeId)
+        if autoPrefs.requested() { try? autoPrefs.setEnabled(true) } // 断开时只停生产者、留意图（MOB-93）：重新配对按意图恢复
         Task { _ = await engine.trigger(.pairingRepaired) }
     }
 
@@ -228,6 +236,13 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
         let view = await backend.engine.view
         if view.state == .paused { _ = await backend.engine.resume() } else { _ = await backend.engine.pause() }
         await backend.refreshFacts()
+    }
+
+    func autoBackup() -> Bool { backend.autoPrefs.enabled() }
+    func setAutoBackup(_ on: Bool) {
+        try? backend.autoPrefs.setEnabled(on)
+        try? backend.autoPrefs.setRequested(on)
+        Task { _ = await backend.engine.trigger(.scopeAdded); await backend.refreshFacts() }
     }
 
     func wifiOnly() -> Bool { backend.settings.wifiOnly() }

@@ -91,6 +91,9 @@ protocol BackupEngine: AnyObject {
     /// 「仅 Wi-Fi 时备份」（引擎 Conditions.wifiOnly 的唯一来源，默认开）。
     func wifiOnly() -> Bool
     func setWifiOnly(_ on: Bool)
+    /// 「后台备份」：关 = 只在打开 App 时备份（Conditions.autoBackupEnabled）。
+    func autoBackup() -> Bool
+    func setAutoBackup(_ on: Bool)
     /// #343「iOS 不承诺什么」：首页常驻告示（PPassCore BackupPromise），文案 key 走 DiagText。
     func promise() -> [PromiseNotice]
 }

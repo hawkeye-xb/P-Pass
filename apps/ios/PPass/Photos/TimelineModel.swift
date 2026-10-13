@@ -47,8 +47,8 @@ final class TimelineModel: ObservableObject {
         }
     }
 
-    func loadMore() async {
-        guard !loading, !exhausted else { return }
+    func loadMore(retry: Bool = false) async {
+        guard !loading, !exhausted, retry || error == nil else { return } // 失败后只有用户点「重试」才再试，不在滚动里反复撞
         await load()
     }
 

@@ -16,26 +16,14 @@ struct SettingsScreen: View {
                 HeroCard()
                 if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
                     Section {
-                        Label(L.s("desktop_low_space_hint"), systemImage: "externaldrive.badge.exclamationmark")
+                        Text(L.s("desktop_low_space_hint"))
                             .font(PPFont.body).foregroundStyle(PPColor.waiting)
-                    }
-                }
-                // #343：iOS 能承诺什么、不能承诺什么（BackupPromise），常驻，不给「知道了」。
-                if let title = app.promise.first {
-                    Section {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Label(title, systemImage: "info.circle").font(PPFont.bodyBold)
-                            ForEach(app.promise.dropFirst(), id: \.self) { line in
-                                Text(line).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
-                            }
-                        }
-                        .padding(.vertical, 4)
                     }
                 }
                 if app.pairingLost {
                     Section {
                         VStack(alignment: .leading, spacing: 10) {
-                            Label(L.s("pairing_lost_title"), systemImage: "exclamationmark.triangle.fill")
+                            Text(L.s("pairing_lost_title"))
                                 .font(PPFont.title3).foregroundStyle(PPColor.act)
                             Text(L.s("pairing_lost_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                             PPButton(title: L.s("reconnect"), kind: .danger) { app.startOver() }
@@ -46,7 +34,7 @@ struct SettingsScreen: View {
                 } else if case .trouble(let detail) = app.uiState {
                     Section {
                         VStack(alignment: .leading, spacing: 10) {
-                            Label(L.s("state_trouble"), systemImage: "exclamationmark.triangle.fill")
+                            Text(L.s("state_trouble"))
                                 .font(PPFont.title3).foregroundStyle(PPColor.act)
                             Text(L.s("run_failed")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                             Button(L.s(showDetails ? "trouble_details_hide" : "trouble_details_show")) { showDetails.toggle() }
@@ -62,8 +50,7 @@ struct SettingsScreen: View {
             }
             .listStyle(.insetGrouped)
             .ppList()
-            .navigationTitle(L.s("tab_settings"))
-            .ppNavBar()
+            .toolbar(.hidden, for: .navigationBar) // 同 Android：无页标题
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .bucket:
@@ -86,11 +73,18 @@ struct SettingsScreen: View {
         }
     }
 
-    private var settingsSection: some View {
+    /// 同 Android 两组：备份规则（范围 + 开关）｜关于（存储电脑 + 版本）。无图标、无组标签。
+    @ViewBuilder private var settingsSection: some View {
         Section {
-            row(L.s("backup_scope"), value: scopeValue, symbol: "photo.stack", route: .bucket)
-            row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default"), symbol: "desktopcomputer", route: .storage)
-            row(L.s("setting_version"), value: AppVersion.current.displayLine, symbol: "info.circle", route: .diagnostics)
+            row(L.s("backup_scope"), value: scopeValue, route: .bucket)
+            Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
+                .font(PPFont.body).tint(PPColor.safe)
+            Toggle(L.s("setting_wifi_only"), isOn: Binding(get: { app.wifiOnly }, set: { app.setWifiOnly($0) }))
+                .font(PPFont.body).tint(PPColor.safe)
+        }
+        Section {
+            row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default"), route: .storage)
+            row(L.s("setting_version"), value: AppVersion.current.displayLine, route: .diagnostics)
         }
     }
 
@@ -101,12 +95,12 @@ struct SettingsScreen: View {
     }
 
     /// 系统导航行：图标 + 标题 + 次级值 + 系统 chevron（NavigationLink 自带）。
-    private func row(_ title: String, value: String, symbol: String, route: Route) -> some View {
+    private func row(_ title: String, value: String, route: Route) -> some View {
         NavigationLink(value: route) {
             HStack(spacing: 12) {
-                Label(title, systemImage: symbol).font(PPFont.body).foregroundStyle(PPColor.ink)
+                Text(title).font(PPFont.body).foregroundStyle(PPColor.ink)
                 Spacer(minLength: 8)
-                Text(value).font(PPFont.body).foregroundStyle(PPColor.ink60).lineLimit(2).multilineTextAlignment(.trailing)
+                Text(value).font(PPFont.subheadline).foregroundStyle(PPColor.ink40).lineLimit(2).multilineTextAlignment(.trailing)
             }
         }
     }
