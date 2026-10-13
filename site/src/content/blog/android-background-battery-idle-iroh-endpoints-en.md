@@ -9,7 +9,7 @@ draft: false
 
 P-Pass backs up the photos on your phone to a computer at home. Most of the time the phone app should sit in the background and do nothing, and wake only to upload new photos.
 
-In late September we noticed heavy battery use on one of our own phones, a Huawei Mate60 on HarmonyOS 4.2 (Android-compatible) running the Android app. On a normal day of use it synced 13 photos, and the system battery page in Settings showed P-Pass using about 300mAh. For an app that should be idle in the background, that is far too much.
+In late September we noticed heavy battery use on one of our own Android phones. On a normal day of use it synced 13 photos, and the system battery page in Settings showed P-Pass using about 300mAh. For an app that should be idle in the background, that is far too much.
 
 ## Why batterystats was empty
 
@@ -61,7 +61,7 @@ On the emulator, against the same test desktop, we recorded the app's traffic ev
 | Before | 695KB in, 562KB out, still climbing, about 12.6MB/hour | none |
 | After | 0KB | `network idle for 30000ms in background: endpoints parked` |
 
-Then on the same Mate60, with a release-signed test build on 5G, we swiped the app away from recents and locked the screen.
+Then on the same phone, with a release-signed test build on 5G, we swiped the app away from recents and locked the screen.
 
 - A background wake with no new photos logged `nothing to transfer`. Thirty seconds later both endpoints closed, and traffic stayed at 0 for the next several minutes.
 - After taking a photo, the app woke within a second, sent it to the Mac, and closed the endpoints again 30 seconds later.
@@ -70,6 +70,6 @@ In those 30 seconds before closing, there were still a few hundred KB of traffic
 
 ## Results: daily battery use under 30mAh
 
-Same Mate60, mobile data allowed, about ten new photos a day. The system battery page shows P-Pass using under 30mAh a day.
+Same phone, mobile data allowed, about ten new photos a day. The system battery page shows P-Pass using under 30mAh a day.
 
 That is the combined result of the changes above. We did not measure them one at a time, so we cannot say how much each one saved. With nothing to send, the phone now goes network-silent 30 seconds after each wake.
