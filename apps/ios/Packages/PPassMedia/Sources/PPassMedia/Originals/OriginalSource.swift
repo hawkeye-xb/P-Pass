@@ -23,20 +23,22 @@ public struct OriginalResourceInfo: Equatable, Sendable {
     }
 }
 
-/// 选哪一份资源当「原图」。
+/// 选哪一份资源来备份：相册里用户看到的那一张。
 ///
-/// 规则：图片取 `.photo`，视频取 `.video`，都是**未经编辑的原始文件**。编辑后的渲染结果（`.fullSizePhoto` / `.fullSizeVideo`）
-/// 和编辑参数（`.adjustmentData`）不取。实况照片只取静态图 `.photo`，配对视频 `.pairedVideo` 不取（沿用 MOB-79：跨端实况保真本轮不做）。
+/// 规则：资产编辑过（带 `.fullSizePhoto` / `.fullSizeVideo` 渲染结果）就取编辑后的渲染结果，否则图片取 `.photo`、视频取 `.video`。
+/// 编辑参数（`.adjustmentData`）不取。实况照片只取静态图（编辑过为 `.fullSizePhoto`，否则 `.photo`），配对视频
+/// （`.pairedVideo` / `.fullSizePairedVideo`）不取（沿用 MOB-79：跨端实况保真本轮不做）。
 /// RAW+JPEG 成对拍摄的照片取 `.photo`（JPEG），RAW 在 `.alternatePhoto` 里，不取。
 /// 找不到对应类型的资源时返回 nil，调用方按「资源确实不可得」计入失败。
 public func selectOriginalResource(types: [PHAssetResourceType], mediaType: PHAssetMediaType) -> Int? {
-    let wanted: PHAssetResourceType
+    let edited: PHAssetResourceType
+    let unedited: PHAssetResourceType
     switch mediaType {
-    case .image: wanted = .photo
-    case .video: wanted = .video
+    case .image: (edited, unedited) = (.fullSizePhoto, .photo)
+    case .video: (edited, unedited) = (.fullSizeVideo, .video)
     default: return nil
     }
-    return types.firstIndex(of: wanted)
+    return types.firstIndex(of: edited) ?? types.firstIndex(of: unedited)
 }
 
 /// 原图字节的来源。生产实现是 ``PhotoKitOriginalSource``，单测用 fake。

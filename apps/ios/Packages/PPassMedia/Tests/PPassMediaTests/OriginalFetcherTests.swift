@@ -219,11 +219,19 @@ final class OriginalFetcherTests: XCTestCase {
     // MARK: 资源选择
 
     func testOriginalResourceSelection() {
-        XCTAssertEqual(selectOriginalResource(types: [.adjustmentData, .fullSizePhoto, .photo], mediaType: .image), 2, "编辑过的照片取未编辑的原图")
+        // 未编辑 × 照片 / 视频
+        XCTAssertEqual(selectOriginalResource(types: [.photo], mediaType: .image), 0, "未编辑照片取 .photo")
+        XCTAssertEqual(selectOriginalResource(types: [.video], mediaType: .video), 0, "未编辑视频取 .video")
+        // 编辑过 × 照片 / 视频
+        XCTAssertEqual(selectOriginalResource(types: [.photo, .adjustmentData, .fullSizePhoto], mediaType: .image), 2, "编辑过的照片取 .fullSizePhoto")
+        XCTAssertEqual(selectOriginalResource(types: [.fullSizeVideo, .video, .adjustmentData], mediaType: .video), 0, "编辑过的视频取 .fullSizeVideo")
+        // 其他
         XCTAssertEqual(selectOriginalResource(types: [.photo, .pairedVideo], mediaType: .image), 0, "实况只取静态图")
+        XCTAssertEqual(selectOriginalResource(types: [.photo, .pairedVideo, .fullSizePhoto, .fullSizePairedVideo], mediaType: .image), 2, "编辑过的实况只取编辑后静态图")
         XCTAssertEqual(selectOriginalResource(types: [.photo, .alternatePhoto], mediaType: .image), 0, "RAW+JPEG 取 .photo")
-        XCTAssertEqual(selectOriginalResource(types: [.fullSizeVideo, .video], mediaType: .video), 1)
-        XCTAssertNil(selectOriginalResource(types: [.fullSizePhoto], mediaType: .image), "只有渲染结果没有原图：不可得")
+        XCTAssertEqual(selectOriginalResource(types: [.fullSizePhoto], mediaType: .image), 0, "只有渲染结果也取它")
+        XCTAssertNil(selectOriginalResource(types: [.adjustmentData], mediaType: .image), "没有任何图片资源：不可得")
+        XCTAssertNil(selectOriginalResource(types: [.photo], mediaType: .video), "类型不匹配：不可得")
         XCTAssertNil(selectOriginalResource(types: [.audio], mediaType: .audio))
     }
 }
