@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- macOS 端：程序里不再包含任何使用统计上报代码，运行统计只写在本机日志里，是否导出日志由你自己决定。已安装用户配置文件里的 `[telemetry]` 段会被直接忽略，不影响使用；数据目录里遗留的 `anon_id` 文件会在启动时自动清理（#949）。
+
 ## [2026.10.5] - 2026-10-12
 
 **macOS 0.9.7 · Android 0.9.12（本版未变更）**

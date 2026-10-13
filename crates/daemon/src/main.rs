@@ -191,6 +191,8 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
+    // #949：清掉旧版遥测遗留的 anon_id（尽力而为，失败只 warn）。
+    daemon::stats::purge_legacy_anon_id(&data_dir);
 
     let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
     // ── Persistent daemon identity (真机 P0: 每次重启换 NodeId 会把
