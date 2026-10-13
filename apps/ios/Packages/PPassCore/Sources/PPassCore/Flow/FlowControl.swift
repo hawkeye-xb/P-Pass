@@ -22,6 +22,9 @@ public enum WaitReason: String, CaseIterable, Codable, Sendable {
     case unexpectedError = "UNEXPECTED_ERROR"
     /// iOS 新增（#311 D4）：iCloud 优化存储下原图不在本机，拉取因网络失败——不计失败预算，等网络 / 探测梯。
     case originalUnavailable = "ORIGINAL_UNAVAILABLE"
+    /// iOS 新增（#911）：手机自己存储空间不足，取原图的临时文件写不下——不是这张照片的问题（换一张照样写不下），
+    /// 不计失败预算，整体等空间释放（与 D4 网络原因同一类处置）。
+    case localStorageFull = "LOCAL_STORAGE_FULL"
 }
 
 /// 执行租约受阻的原因（只给 UI 说人话，**不是闸门**）。

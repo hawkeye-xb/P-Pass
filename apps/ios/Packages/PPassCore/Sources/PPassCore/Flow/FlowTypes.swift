@@ -152,6 +152,8 @@ public func wakePlanOf(_ reason: WaitReason) -> WakePlan {
     case .desktopUnreachable, .desktopStorageFull, .desktopLibraryUnavailable, .desktopStorageError, .unexpectedError: return .retryProbes
     // D4：iCloud 原图因网络拉不下来——与桌面不可达同一类（网络回来时网络变化就是触发，探测梯兜底）。
     case .originalUnavailable: return .retryProbes
+    // #911：空间释放没有系统事件可等；探测梯 + 回前台 / 周期兜底接住。
+    case .localStorageFull: return .retryProbes
     }
 }
 
@@ -253,6 +255,9 @@ public enum ImportResult: Equatable, Sendable {
     /// #311 D4：iCloud 优化存储下原图不在本机，**因为网络**拉不下来——暂时性，不计失败预算。
     /// 资源确实不可得（不是网络问题）要抛错，由引擎当单张失败计次。
     case originalUnavailable(reason: String)
+    /// #911：手机本地空间不足，取原图的临时文件写不下（PhotoKit 3305 / 写盘 ENOSPC）。不是这张照片的问题，
+    /// 不计失败预算，整体等待。
+    case localStorageFull(reason: String)
 }
 
 /// 原图 → 手机侧 iroh store（FFI）。导入与供数分两步：先拿 hash 建 order，再用这张 order 的 lease 供数。

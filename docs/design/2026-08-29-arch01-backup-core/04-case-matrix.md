@@ -134,7 +134,7 @@ O orders and the three-layer model
 | P-01 | Wi-Fi / battery / album settings exist, plus in-flight orders and Desktop partials | pair with a different Desktop | Settings are kept; partials and runtime ownership are cleared; changing Desktop clears the order table (the `pairing_epoch` column stays as a guard) and new order ids start above the timestamp. Whether the skip list is kept is to be confirmed | Clearing settings or carrying old partials to the new Desktop must fail | After changing Desktop, settings remain and old transfer progress is not carried over |
 | P-02 | Already switched to a new Desktop | a receipt from the old Desktop arrives | The old receipt cannot change the new backup history | An old receipt confirming a new-history item must fail | Mostly automated |
 
-## iOS only: iCloud originals, expired discovery cursors, and media identity (#311 D4 / F3)
+## iOS only: iCloud originals, phone storage, expired discovery cursors, and media identity (#311 D4 / #911 / F3)
 
 Android has no counterpart (MediaStore originals are always local; generations never expire; `_id` is an integer). The iOS mapping, per-row tests, and every other iOS variant are registered in [`06-ios-variants.zh-CN.md`](06-ios-variants.zh-CN.md).
 
@@ -148,6 +148,7 @@ Android has no counterpart (MediaStore originals are always local; generations n
 | I-06 | The discovery cursor (`PHPersistentChangeToken`) has expired (3105) | Look for new photos | G resets to the current position and the reconcile scan is marked dirty; confirmed same-version photos are not resent, only genuinely missing ones are | Resetting G without marking the scan dirty (photos taken while expired are never picked) must fail | Automated tests first (constructing 3105 on a device: #335) |
 | I-07 | The cursor expired while a round is suspended in discovery | A trigger-driven recount hits the expiry | The count uses the full diff and is exact, and **does not write G**; only the round itself resets | The count path writing G (it and the suspended round overwrite each other) must fail | Automated tests first |
 | I-08 | Two photo ids are Unicode-equivalent but byte-different | Count / merge / pick | Ids compare and sort by bytes; they are two photos | Merging with Swift `String ==` / `<` (one photo taken as the other's current row) must fail | Automated tests first |
+| I-09 | The phone's own storage is full while fetching an original (PhotoKit 3305 / ENOSPC on write, #911) | Prepare | No row, G does not move, no failure counted; the loop exits, global = Waiting (`LOCAL_STORAGE_FULL`) with probes registered; later photos are not tried one by one; once space is freed it completes | Counting it as an item failure (every photo FAILED in turn, the whole queue's budget burnt) must fail | Fill the phone's storage and open the app: it waits for space with no failure count; free space and it continues on its own |
 
 ## Required observable evidence
 
