@@ -5,24 +5,29 @@ import SwiftUI
 /// 状态：加载中 / 连不上（+ 重试）/ 空库 / 筛选结果为空；失联时这些提示全部让位给红卡。
 struct PhotosScreen: View {
     @EnvironmentObject var app: AppModel
-    @Binding var tabBarHidden: Bool
     @StateObject private var model = TimelineModel()
     @State private var viewer: ViewerSession?
 
     var body: some View {
-        VStack(spacing: 0) {
-            if app.pairingLost {
-                PPCard(fill: PPColor.actBg, stroke: PPColor.act.opacity(0.3)) {
-                    Text(L.s("photos_lost_title")).font(PPFont.serif(24)).foregroundStyle(PPColor.act)
-                    Text(L.s("photos_lost_body_unknown")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-                    PPButton(title: L.s("photos_lost_action"), kind: .danger) { app.startOver() }
+        NavigationStack {
+            VStack(spacing: 0) {
+                if app.pairingLost {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(L.s("photos_lost_title"), systemImage: "exclamationmark.triangle.fill")
+                            .font(.title3.bold()).foregroundStyle(PPTone.act)
+                        Text(L.s("photos_lost_body_unknown")).font(.body).foregroundStyle(.secondary)
+                        PPButton(title: L.s("photos_lost_action"), kind: .danger) { app.startOver() }
+                    }
+                    .padding(16)
+                    .background(PPTone.act.opacity(0.12), in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
+                    .padding(16)
                 }
-                .padding(16)
+                content
             }
-            chips
-            content
+            .background(Color(uiColor: .systemBackground))
+            .navigationTitle(L.s("tab_photos"))
+            .safeAreaInset(edge: .top, spacing: 0) { if !app.pairingLost { chips } }
         }
-        .ppScreen()
         .task { model.bind(app.backend.timeline); await model.loadFirst() }
         .onAppear {
             if LaunchRoute.current == .viewer || LaunchRoute.current == .video { model.openOnLoad = LaunchRoute.current }
@@ -32,27 +37,19 @@ struct PhotosScreen: View {
             Task { try? await Task.sleep(nanoseconds: 1_500_000_000); await model.loadFirst() }
         }
         .onChange(of: model.autoOpen) { item in if let item { open(item) } }
-        .fullScreenCover(item: $viewer, onDismiss: { tabBarHidden = false }) { session in
+        .fullScreenCover(item: $viewer) { session in
             MediaViewer(session: session, timeline: app.backend.timeline)
-                .preferredColorScheme(.dark) // 深色看图底：状态栏用浅色字，否则时间看不见
         }
     }
 
+    /// 全部 / 本机 / 家人：系统分段控件（对位「照片」App 顶部的分段），放在材质条里随内容滚动时仍可读。
     private var chips: some View {
-        HStack(spacing: 8) {
-            ForEach(TimelineFilter.allCases, id: \.self) { f in
-                let on = model.filter == f
-                Button { model.filter = f } label: {
-                    Text(L.s(f.key)).font(PPFont.sans(16, on ? .bold : .regular))
-                        .padding(.horizontal, 16).frame(minHeight: 44)
-                        .foregroundStyle(on ? PPColor.paper : PPColor.ink60)
-                        .background(on ? PPColor.ink : PPColor.linen, in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-            Spacer()
+        Picker("", selection: $model.filter) {
+            ForEach(TimelineFilter.allCases, id: \.self) { f in Text(L.s(f.key)).tag(f) }
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(.regularMaterial)
     }
 
     @ViewBuilder private var content: some View {
@@ -62,20 +59,22 @@ struct PhotosScreen: View {
             PPStateMessage(text: L.s("photos_loading"), loading: true)
         } else if let error = model.error, model.items.isEmpty {
             PPStateMessage(text: L.s("photos_unreachable") + "\n" + String(error.prefix(100)),
+                           symbol: "wifi.exclamationmark",
                            actionTitle: L.s("photos_live_retry")) { Task { await model.loadFirst() } }
         } else if model.items.isEmpty {
-            PPStateMessage(text: L.s("photos_empty"))
+            PPStateMessage(text: L.s("photos_empty"), symbol: "photo.on.rectangle")
         } else if model.shown.isEmpty {
-            PPStateMessage(text: L.s("photos_filter_empty"))
+            PPStateMessage(text: L.s("photos_filter_empty"), symbol: "line.3.horizontal.decrease.circle")
         } else {
             grid
         }
     }
 
+    /// 网格对齐「照片」App：3 列、2pt 间隔、方形缩略图不加圆角；月份组头用材质底、吸顶。
     private var grid: some View {
         ScrollView {
-            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 4,
-                      pinnedViews: []) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 2), count: 3), spacing: 2,
+                      pinnedViews: [.sectionHeaders]) {
                 ForEach(model.sections, id: \.title) { section in
                     Section {
                         ForEach(section.items) { item in
@@ -84,19 +83,20 @@ struct PhotosScreen: View {
                                 .onAppear { if item == model.shown.last { Task { await model.loadMore() } } }
                         }
                     } header: {
-                        Text(section.title).font(PPFont.serif(22)).foregroundStyle(PPColor.ink)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 14).padding(.bottom, 4)
+                        Text(section.title).font(.headline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 16).padding(.vertical, 8)
+                            .background(.regularMaterial)
                     }
                 }
             }
-            .padding(.horizontal, 12).padding(.bottom, 16)
+            .padding(.bottom, 8)
         }
     }
 
     /// 以打开那一刻的筛选结果为页序快照（Android MediaViewerSession.open）；找不到被点项就不打开。
     private func open(_ item: TimelineItem) {
         guard let index = model.shown.firstIndex(of: item) else { return }
-        tabBarHidden = true
         viewer = ViewerSession(items: model.shown, start: index)
     }
 }
@@ -120,28 +120,31 @@ struct ViewerSession: Identifiable {
     let start: Int
 }
 
-/// 网格里的一格：缩略图 + 视频角标（22pt 深色半透明圆 + 纸色三角）。
+/// 网格里的一格：缩略图 + 视频角标（SF Symbol `play.fill` + 材质圆底）。
 struct Thumb: View {
     let item: TimelineItem
     let timeline: TimelineSource
     @State private var image: UIImage?
 
     var body: some View {
-        Color.clear
+        Color(uiColor: .secondarySystemFill)
             .aspectRatio(1, contentMode: .fit)
-            .background(PPColor.linen)
             .overlay { if let image { Image(uiImage: image).resizable().scaledToFill() } }
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .clipped()
             .overlay(alignment: .bottomTrailing) {
                 if item.isVideo {
-                    Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(PPColor.paper)
+                    Image(systemName: "play.fill").font(.caption2.weight(.bold))
+                        .foregroundStyle(.primary)
                         .frame(width: 22, height: 22)
-                        .background(PPColor.surfaceDark.opacity(0.62), in: Circle())
-                        .padding(6)
-                        .accessibilityLabel("video")
+                        .background(.regularMaterial, in: Circle())
+                        .padding(5)
+                        .accessibilityHidden(true)
                 }
             }
+            .contentShape(Rectangle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(item.isVideo ? "Video" : "Photo")
+            .accessibilityAddTraits(.isButton)
             .task(id: item.id) { image = try? await timeline.thumbnail(item, large: false) }
     }
 }

@@ -25,24 +25,34 @@ struct OnboardingFlow: View {
     }
 
     private var welcome: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Spacer()
-            Text(L.s("welcome_headline")).font(PPFont.serif(PPSize.headlineMax))
-            Text(L.s("welcome_sub")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(["welcome_step1", "welcome_step2", "welcome_step3"], id: \.self) {
-                    Text(L.s($0)).font(PPFont.body)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 44)).foregroundStyle(.tint)
+                    .accessibilityHidden(true)
+                Text(L.s("welcome_headline")).font(PPFont.brand(40)).fixedSize(horizontal: false, vertical: true)
+                Text(L.s("welcome_sub")).font(.body).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(["welcome_step1", "welcome_step2", "welcome_step3"].enumerated()), id: \.offset) { i, key in
+                        if i > 0 { Divider() }
+                        Text(L.s(key)).font(.body).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
+                .padding(.horizontal, 16)
+                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
             }
-            .padding(.vertical, 8)
-            Spacer()
-            PPButton(title: L.s("welcome_scan"), height: 60) { step = .scan }
-            Button(L.s("scan_manual_link")) { step = .manual }
-                .font(PPFont.sans(17, .medium)).foregroundStyle(PPColor.ink60)
-                .frame(maxWidth: .infinity, minHeight: 48)
+            .padding(24)
         }
-        .padding(24)
-        .ppScreen()
+        .background(Color(uiColor: .systemGroupedBackground))
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 6) {
+                PPButton(title: L.s("welcome_scan")) { step = .scan }
+                Button(L.s("scan_manual_link")) { step = .manual }
+                    .font(.body.weight(.medium))
+                    .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .padding(.horizontal, 24).padding(.vertical, 12)
+            .background(.regularMaterial)
+        }
     }
 
     private func submit(_ code: String) {
@@ -85,33 +95,47 @@ struct ManualPairScreen: View {
     @State private var invalid = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Button(action: onBack) { Label(L.s("back"), systemImage: "chevron.left").font(PPFont.sans(17, .medium)) }
-                .frame(minHeight: 44)
-            Text(L.s("scan_manual_title")).font(PPFont.serif(32))
-            Text(L.s("scan_manual_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-            TextField(L.s("scan_manual_placeholder"), text: $text, axis: .vertical)
-                .font(.system(size: 16, design: .monospaced))
-                .textInputAutocapitalization(.never).autocorrectionDisabled()
-                .padding(14)
-                .background(PPColor.linen, in: RoundedRectangle(cornerRadius: PPRadius.control))
-                .overlay(RoundedRectangle(cornerRadius: PPRadius.control).stroke(invalid ? PPColor.act : PPColor.borderStrong))
-                .accessibilityIdentifier("pairCodeField")
-            if invalid { Text(L.s("scan_manual_invalid")).font(PPFont.sans(15)).foregroundStyle(PPColor.act) }
-            Text(L.s("scan_manual_note")).font(PPFont.sans(15)).foregroundStyle(PPColor.ink40)
-            Spacer()
-            HStack(spacing: 12) {
-                PPButton(title: L.s("scan_manual_paste"), kind: .secondary) {
-                    if let s = UIPasteboard.general.string { text = s }
+        NavigationStack {
+            Form {
+                Section {
+                    TextField(L.s("scan_manual_placeholder"), text: $text, axis: .vertical)
+                        .font(.body.monospaced())
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .lineLimit(3...8)
+                        .accessibilityIdentifier("pairCodeField")
+                } header: {
+                    Text(L.s("scan_manual_body")).font(.subheadline).textCase(nil).foregroundStyle(.secondary)
+                        .padding(.bottom, 4)
+                } footer: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        if invalid {
+                            Label(L.s("scan_manual_invalid"), systemImage: "exclamationmark.circle.fill").foregroundStyle(PPTone.act)
+                        }
+                        Text(L.s("scan_manual_note"))
+                    }
                 }
-                PPButton(title: L.s("scan_manual_submit")) {
-                    if let code = PairCode.normalized(text) { onSubmit(code) } else { invalid = true }
+            }
+            .navigationTitle(L.s("scan_manual_title"))
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(action: onBack) { Label(L.s("back"), systemImage: "chevron.left") }
                 }
-                .accessibilityIdentifier("pairSubmit")
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                HStack(spacing: 12) {
+                    PPButton(title: L.s("scan_manual_paste"), kind: .secondary) {
+                        if let s = UIPasteboard.general.string { text = s }
+                    }
+                    PPButton(title: L.s("scan_manual_submit")) {
+                        if let code = PairCode.normalized(text) { onSubmit(code) } else { invalid = true; Haptics.failure() }
+                    }
+                    .accessibilityIdentifier("pairSubmit")
+                }
+                .padding(.horizontal, 16).padding(.vertical, 12)
+                .background(.regularMaterial)
             }
         }
-        .padding(24)
-        .ppScreen()
         .onAppear {
             // 自动化（模拟器端到端）：环境变量直接给配对串，等同于用户粘贴后点「连接」。
             if let code = ProcessInfo.processInfo.environment["PPASS_PAIR_CODE"], !code.isEmpty {
@@ -128,30 +152,47 @@ struct PairStatusScreen: View {
     let onRetry: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Spacer()
-            switch step {
-            case .waiting:
-                ProgressView().tint(PPColor.ink60)
-                Text(L.s("pair_waiting_title")).font(PPFont.serif(34))
-                Text(L.s("pair_waiting_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-                Spacer()
-                PPButton(title: L.s("cancel"), kind: .secondary, action: onCancel)
-            case .refused(let lapsed, let note):
-                Text(L.s(lapsed ? "pair_lapsed_title" : "pair_refused_title")).font(PPFont.serif(34)).foregroundStyle(PPColor.act)
-                Text(L.s("pair_refused_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-                if let note { Text(note).font(PPFont.sans(15)).foregroundStyle(PPColor.ink40) }
-                Spacer()
-                PPButton(title: L.s("scan_again"), action: onRetry)
-            case .failed(let reason):
-                Text(L.s("pair_failed_title")).font(PPFont.serif(34)).foregroundStyle(PPColor.act)
-                Text(L.s("pair_failed_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-                Text("(\(String(reason.prefix(160))))").font(PPFont.sans(13)).foregroundStyle(PPColor.ink40)
-                Spacer()
-                PPButton(title: L.s("scan_again"), action: onRetry)
+        ScrollView {
+            VStack(spacing: 14) {
+                switch step {
+                case .waiting:
+                    ProgressView().controlSize(.large).padding(.bottom, 6)
+                    message(title: L.s("pair_waiting_title"), body: L.s("pair_waiting_body"))
+                case .refused(let lapsed, let note):
+                    symbol("xmark.circle.fill", PPTone.act)
+                    message(title: L.s(lapsed ? "pair_lapsed_title" : "pair_refused_title"), body: L.s("pair_refused_body"),
+                            note: note)
+                case .failed(let reason):
+                    symbol("exclamationmark.triangle.fill", PPTone.act)
+                    message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"),
+                            note: "(\(String(reason.prefix(160))))")
+                }
             }
+            .padding(24)
+            .frame(maxWidth: .infinity)
         }
-        .padding(24)
-        .ppScreen()
+        .background(Color(uiColor: .systemBackground))
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Group {
+                if case .waiting = step {
+                    PPButton(title: L.s("cancel"), kind: .secondary, action: onCancel)
+                } else {
+                    PPButton(title: L.s("scan_again"), action: onRetry)
+                }
+            }
+            .padding(24)
+        }
+    }
+
+    private func symbol(_ name: String, _ tone: Color) -> some View {
+        Image(systemName: name).font(.system(size: 56)).foregroundStyle(tone).accessibilityHidden(true)
+    }
+
+    private func message(title: String, body: String, note: String? = nil) -> some View {
+        VStack(spacing: 10) {
+            Text(title).font(.title.bold()).multilineTextAlignment(.center)
+            Text(body).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            if let note { Text(note).font(.footnote).foregroundStyle(.tertiary).multilineTextAlignment(.center) }
+        }
     }
 }
