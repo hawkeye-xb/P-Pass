@@ -156,7 +156,7 @@ pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
 
 /// 详细设计 §3.1 —— trait 签名逐字实施（对冲 iroh 风险的瘦抽象）。
 ///
-/// `ConnInfo` feeds both telemetry and the self-diagnosis UI
+/// `ConnInfo` feeds the self-diagnosis UI
 /// ("直连中 ✓ / 中继中，速度受限").
 #[allow(async_fn_in_trait)] // MVP: single in-process implementation, no dyn/Send bounds needed yet
 pub trait Transport {

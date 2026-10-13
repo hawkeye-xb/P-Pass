@@ -56,7 +56,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-PPF_DATA_DIR="$WORK/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="${PPF_RELAY_URLS:-}" \
+PPF_DATA_DIR="$WORK/library" PPF_RELAY_URLS="${PPF_RELAY_URLS:-}" \
   "$DAEMON" --ephemeral < "$WORK/daemon-ctl" > daemon.log 2> daemon.err &
 DAEMON_PID=$!
 exec 3>"$WORK/daemon-ctl"   # 保持写端打开——daemon 不会立即 EOF

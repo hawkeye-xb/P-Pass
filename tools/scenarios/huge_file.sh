@@ -24,7 +24,7 @@ rm -rf "$WORK" && mkdir -p "$WORK/library" && cd "$WORK"
 cleanup() { kill "$DAEMON_PID" 2>/dev/null || true; }
 trap cleanup EXIT
 
-PPF_DATA_DIR="$WORK/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
+PPF_DATA_DIR="$WORK/library" PPF_RELAY_URLS="" \
   PPF_BIND_ADDR="0.0.0.0:0" \
   "$DAEMON" > daemon.log 2> daemon.err &
 DAEMON_PID=$!

@@ -435,6 +435,8 @@ mod tests {
         assert!(!out.contains(r"\\"), "TOML escapes leaked: {out}");
     }
 
+    // 输入里的 [telemetry] 段是旧版首启写入、已装用户 config 里仍在的真实
+    // 形态（#949 后 daemon 只接收并忽略）；摘要只取 data_dir / bind_addr。
     #[test]
     fn desk40_unix_config_summary_still_scrubbed() {
         let raw = "data_dir = \"/Users/alice/Pictures/lib\"\nbind_addr = \"0.0.0.0:41145\"\n\n[telemetry]\nenabled = false\n";

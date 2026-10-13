@@ -28,7 +28,7 @@ cleanup() {
 trap cleanup EXIT
 
 start_daemon() {
-  PPF_DATA_DIR="$TMPFS/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
+  PPF_DATA_DIR="$TMPFS/library" PPF_RELAY_URLS="" \
   PPF_BIND_ADDR="0.0.0.0:0" \
     "$DAEMON" > daemon.log 2> daemon.err &
   DAEMON_PID=$!

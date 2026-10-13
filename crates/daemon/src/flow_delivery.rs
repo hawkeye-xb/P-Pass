@@ -37,8 +37,8 @@ use transport::{Blobs, ConnectionStatus, NodeId};
 
 use crate::awake::AwakeHold;
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
+use crate::stats;
 use crate::subscriptions::SubscriptionRegistry;
-use crate::telemetry::{Event as TelemetryEvent, Telemetry};
 use crate::thumb_pregen::ThumbPregen;
 
 type PeerFetchLock = Arc<AsyncMutex<()>>;
@@ -121,7 +121,7 @@ pub enum DeliveryError {
     #[error("native iroh-blobs fetch: {0}")]
     Fetch(String),
     /// #413: each materialize failure carries its public classification
-    /// (`failure`) next to the fine-grained telemetry stage (the variant).
+    /// (`failure`) next to the fine-grained detail stage (the variant).
     #[error("create flow staging directory: {detail}")]
     MaterializeStaging {
         failure: PeerFailure,
@@ -148,14 +148,14 @@ pub enum DeliveryError {
 }
 
 impl DeliveryError {
-    /// TEL-03: fixed, anonymized telemetry code — one per distinct failure
-    /// class. Never the wrapped `String` (that text comes from
-    /// `e.to_string()` on third-party errors and may carry a path or other
-    /// unknown content); only this fixed vocabulary crosses into
-    /// telemetry. Materialize is split into staging/export/ingest instead
+    /// TEL-03: fixed fine-grained failure code — one per distinct failure
+    /// class (logged as `detail=` next to the public [`Self::wire_code`]).
+    /// Never the wrapped `String` (that text comes from `e.to_string()` on
+    /// third-party errors and may carry a path or other unknown content).
+    /// Materialize is split into staging/export/ingest instead
     /// of one generic code because those are three different subsystems
     /// (filesystem, blob store, index) with different fix-it implications.
-    fn telemetry_code(&self) -> &'static str {
+    fn detail_code(&self) -> &'static str {
         match self {
             DeliveryError::GuardMismatch => "guard_mismatch",
             DeliveryError::Cancelled => "cancelled",
@@ -173,8 +173,8 @@ impl DeliveryError {
     /// #413 contract §5: the code the phone sees — `flow.failed.code` and
     /// an offer rejection's `msg_key`. Storage-side failures collapse to the
     /// three [`PeerFailure`] codes; `fetch_failed` (path problem) and the
-    /// control-flow codes keep their names. Telemetry keeps the finer
-    /// [`Self::telemetry_code`].
+    /// control-flow codes keep their names. The log line keeps the finer
+    /// [`Self::detail_code`].
     pub fn wire_code(&self) -> &'static str {
         match self {
             DeliveryError::MaterializeStaging { failure, .. }
@@ -183,7 +183,7 @@ impl DeliveryError {
             DeliveryError::InsufficientSpace { .. } => PeerFailure::StorageFull.code(),
             DeliveryError::LibraryUnavailable(_) => PeerFailure::LibraryUnavailable.code(),
             DeliveryError::Storage(_) => PeerFailure::StorageFailed.code(),
-            other => other.telemetry_code(),
+            other => other.detail_code(),
         }
     }
 
@@ -500,12 +500,6 @@ pub struct FlowDelivery {
     /// Path mutations notify the desktop device rows independently of the
     /// ingestion throttle above.
     events: Option<EventBus>,
-    /// TEL-02: optional anonymized telemetry sink for `conn`/`flow_item`.
-    /// `None` (main.rs default before wiring) means no telemetry client
-    /// is attached; `Telemetry::record` itself is also a no-op when
-    /// disabled, so this is a second independent off switch, not a
-    /// replacement for it.
-    telemetry: Option<Telemetry>,
     /// Android can retry an item after its RPC times out while the daemon is
     /// still materializing that same fetch. One lock per paired phone prevents
     /// the retry from deleting or moving the first fetch's staging path.
@@ -572,7 +566,6 @@ impl FlowDelivery {
             throttle: None,
             paths: FlowPathRegistry::default(),
             events: None,
-            telemetry: None,
             fetch_locks: Arc::default(),
             tasks: FlowTaskRegistry::default(),
             subscriptions: None,
@@ -800,16 +793,6 @@ impl FlowDelivery {
         self.paths.clone()
     }
 
-    /// TEL-02: wire an anonymized telemetry sink so a background fetch task
-    /// records one `conn` (path/latency/failure stage) and, on success, one
-    /// `flow_item` (bytes/duration/resumed) per attempt. `Telemetry::record`
-    /// is already a no-op when the client itself is disabled — this builder
-    /// only controls whether `FlowDelivery` has a sink to call at all.
-    pub fn with_telemetry(mut self, telemetry: Telemetry) -> Self {
-        self.telemetry = Some(telemetry);
-        self
-    }
-
     /// Persist the current exact grant, then immediately start the native
     /// fetch in the background (idempotent: a no-op if one is already
     /// running for this exact tuple). This method itself never touches the
@@ -829,11 +812,7 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowFetchRequest,
     ) -> Result<FlowStatusReply, DeliveryError> {
-        let result = self.offer_inner(peer, request).await;
-        if let Err(error) = &result {
-            self.record_error("offer", error);
-        }
-        result
+        self.offer_inner(peer, request).await
     }
 
     async fn offer_inner(
@@ -980,11 +959,7 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowFetchRequest,
     ) -> Result<FlowCompletionReceipt, DeliveryError> {
-        let result = self.fetch_inner(peer, request).await;
-        if let Err(error) = &result {
-            self.record_error("fetch", error);
-        }
-        result
+        self.fetch_inner(peer, request).await
     }
 
     async fn fetch_inner(
@@ -1123,7 +1098,7 @@ impl FlowDelivery {
             "flow.failed push seq={} code={} detail={} peer_subscribed={} peer={peer:?}",
             grant.queue_sequence,
             error.wire_code(),
-            error.telemetry_code(),
+            error.detail_code(),
             self.subscriptions.as_ref().map_or_else(
                 || "unwired".to_string(),
                 |r| r.is_subscribed(peer).to_string()
@@ -1138,7 +1113,7 @@ impl FlowDelivery {
                 "pairing_epoch": grant.pairing_epoch,
                 "lease_token": grant.lease_token,
                 // #413 contract §5: public code only; the fine-grained
-                // telemetry code stays in the log line above.
+                // detail code stays in the log line above.
                 "code": error.wire_code(),
             }),
         );
@@ -1412,11 +1387,7 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowFetchRequest,
     ) -> Result<(), DeliveryError> {
-        let result = self.cancel_inner(peer, request).await;
-        if let Err(error) = &result {
-            self.record_error("cancel", error);
-        }
-        result
+        self.cancel_inner(peer, request).await
     }
 
     async fn cancel_inner(
@@ -1463,11 +1434,7 @@ impl FlowDelivery {
         peer: NodeId,
         tuple: &FlowTupleRef,
     ) -> Result<(), DeliveryError> {
-        let result = self.cancel_by_tuple_inner(peer, tuple).await;
-        if let Err(error) = &result {
-            self.record_error("cancel_tuple", error);
-        }
-        result
+        self.cancel_by_tuple_inner(peer, tuple).await
     }
 
     async fn cancel_by_tuple_inner(
@@ -1794,62 +1761,27 @@ impl FlowDelivery {
             .clone()
     }
 
-    /// TEL-02: `conn` — one per background fetch attempt, terminal state
-    /// only (success or the `fetch` failure stage). `path` is never a raw
-    /// error string, only `ConnectionStatus::as_str()`'s fixed vocabulary.
+    /// TEL-02 / #949: `conn` — one local stats line per background fetch
+    /// attempt, terminal state only (success or the `fetch` failure stage).
+    /// `path` is never a raw error string, only `ConnectionStatus::as_str()`'s
+    /// fixed vocabulary.
     fn record_conn(&self, path: &'static str, ms: u64, fail_stage: Option<&'static str>) {
-        if let Some(telemetry) = &self.telemetry {
-            telemetry.record(TelemetryEvent::Conn {
-                path,
-                ms,
-                fail_stage,
-            });
-        }
+        stats::record(stats::Event::Conn {
+            path,
+            ms,
+            fail_stage,
+        });
     }
 
-    /// TEL-02: `flow_item` — one per successful background fetch, after the
-    /// receipt is durable. Never called on a failed or cancelled request.
+    /// TEL-02 / #949: `flow_item` — one local stats line per successful
+    /// background fetch, after the receipt is durable. Never called on a
+    /// failed or cancelled request.
     fn record_flow_item(&self, bytes: u64, dur_s: u64, resumed: bool) {
-        if let Some(telemetry) = &self.telemetry {
-            telemetry.record(TelemetryEvent::FlowItem {
-                bytes,
-                dur_s,
-                resumed,
-            });
-        }
-    }
-
-    /// TEL-03: `error` — one per terminal failure returned to the caller,
-    /// tagged with which public method produced it (`offer`/`fetch`/
-    /// `cancel`) plus the fine-grained failure class from
-    /// `DeliveryError::telemetry_code`. `GuardMismatch`/`Cancelled` are
-    /// deliberately excluded: they are routine control-flow outcomes (a
-    /// stale retry after a superseding offer, an intentional user cancel),
-    /// not diagnosable problems — recording them as "errors" would dilute
-    /// the signal this event exists to carry, even with dedup capping
-    /// their volume. `Telemetry::record` itself deduplicates repeats of
-    /// the same `(code, stage)` within one flush window, so a persistent
-    /// real failure (e.g. an unreachable peer) reports once instead of
-    /// flooding the batch.
-    ///
-    /// Note: a background fetch task spawned from `offer` that fails
-    /// without any caller polling `fetch` is logged via `tracing::warn!`
-    /// inside `spawn_fetch_task`, not through this telemetry path — a known
-    /// gap versus the old synchronous shape, logged honestly rather than
-    /// silently accepted (see the card's implementation record).
-    fn record_error(&self, stage: &'static str, error: &DeliveryError) {
-        if matches!(
-            error,
-            DeliveryError::GuardMismatch | DeliveryError::Cancelled
-        ) {
-            return;
-        }
-        if let Some(telemetry) = &self.telemetry {
-            telemetry.record(TelemetryEvent::Error {
-                code: error.telemetry_code(),
-                stage,
-            });
-        }
+        stats::record(stats::Event::FlowItem {
+            bytes,
+            dur_s,
+            resumed,
+        });
     }
 }
 

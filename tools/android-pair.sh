@@ -7,7 +7,7 @@ D=$(mktemp -d /tmp/ppf-android-pair.XXXX)
 # 失败时保留 daemon 日志尾部；kill $DPID 精确杀（pkill -f 匹配不到环境变量）
 trap 'rc=$?; kill "$DPID" 2>/dev/null || true; if [ "$rc" -ne 0 ] && [ -f "$D/d.log" ]; then echo "=== daemon log (exit $rc) ==="; tail -30 "$D/d.log" || true; fi; rm -rf "$D"' EXIT
 mkdir -p "$D/library"
-PPF_DATA_DIR="$D/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
+PPF_DATA_DIR="$D/library" PPF_RELAY_URLS="" \
   PPF_BIND_ADDR="127.0.0.1:0" \
   "$ROOT/target/release/daemon" > "$D/d.log" 2>&1 &
 DPID=$!

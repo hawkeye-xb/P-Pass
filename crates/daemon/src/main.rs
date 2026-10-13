@@ -510,20 +510,12 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    // Telemetry (T-035): opt-out respected at the root — with the switch
-    // off the client never mints an id, never spawns a timer.
-    let telemetry = daemon::Telemetry::new(
-        config.telemetry.enabled,
-        config.telemetry.url.clone(),
-        &data_dir,
-    );
-    if telemetry.enabled() {
-        tokio::spawn(telemetry.clone().run());
-        let heartbeat = telemetry.clone();
+    // #949: 运行统计只写本地日志（不联网）。daemon_alive 每 24h 一行。
+    {
         let started = std::time::Instant::now();
         tokio::spawn(async move {
             loop {
-                heartbeat.record(daemon::TelemetryEvent::DaemonAlive {
+                daemon::stats::record(daemon::stats::Event::DaemonAlive {
                     uptime_h: started.elapsed().as_secs() / 3600,
                     os: std::env::consts::OS.to_string(),
                     ver: daemon::daemon_version(),
@@ -614,10 +606,7 @@ async fn main() -> anyhow::Result<()> {
         )
         .await?,
     );
-    let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir)
-        // TEL-04: same telemetry client as daemon_alive/conn/flow_item —
-        // `Telemetry::record` is already a no-op when disabled.
-        .with_telemetry(telemetry.clone());
+    let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir);
     // IDX-06 (#442): 入库后的缩略图预生成——低优先级线程池，与 thumb.get
     // 共用同一个 gate（同一 hash 只生成一次）。三条入库路径（Flow 交付、
     // 旧备份管线的 upload/commit、目录监听）都接同一个句柄；adopt 收编的
@@ -630,10 +619,6 @@ async fn main() -> anyhow::Result<()> {
         // NET-25: 同一张按 NodeId 登记的订阅表（Router 也拿同一份）——
         // 只读，只为推送日志里那句 peer_subscribed= 服务。
         .with_subscriptions(subscriptions.clone())
-        // TEL-02: same telemetry client as the daemon_alive heartbeat —
-        // `Telemetry::record` is already a no-op when disabled, so this
-        // wiring is unconditional regardless of the config switch.
-        .with_telemetry(telemetry.clone())
         // NET-26 (#419): keep the machine awake while any fetch runs.
         .with_awake(daemon::awake::AwakeHold::platform());
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)

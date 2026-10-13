@@ -60,7 +60,6 @@ cd ppf-bin && shasum -c SHA256SUMS-* && chmod +x daemon testclient dogfood-smoke
 ```bash
 mkdir -p ~/ppf-library
 PPF_DATA_DIR=~/ppf-library \
-PPF_TELEMETRY_ENABLED=false \
 PPF_RELAY_URLS="" \
   nohup ./daemon > ~/ppf-daemon.log 2> ~/ppf-daemon.err &
 sleep 3 && cat ~/ppf-daemon.log

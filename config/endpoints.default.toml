@@ -1,6 +1,6 @@
 # Official endpoint defaults — compiled into the daemon binary.
 # 隔离方案 §2：官方端点是公开常量，不是秘密；自建者在 config.toml 或
-# PPF_* 环境变量里覆盖这三类端点即可指向自己的基础设施。
+# PPF_* 环境变量里覆盖这些端点即可指向自己的基础设施。
 # 域名按 H-01 决策（p-pass.hawkeye-xb.com）展开。
 #
 # ⚠️ relay_urls 默认空列表（2026-07-31 用户裁决）：
@@ -14,9 +14,3 @@
 relay_urls = []
 rendezvous_url = "https://rendezvous.p-pass.hawkeye-xb.com"
 
-[telemetry]
-enabled = true
-# T-061b-fix: the telemetry Worker only accepts POSTs on /ingest (any other
-# path 404s). This default must carry the /ingest suffix or a daemon running
-# on stock defaults silently loses every batch to a 404.
-url = "https://telemetry.p-pass.hawkeye-xb.com/ingest"

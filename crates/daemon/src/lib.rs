@@ -1,4 +1,4 @@
-//! Daemon — service lifecycle, ALPN routing, IPC, telemetry client.
+//! Daemon — service lifecycle, ALPN routing, IPC, local stats logging.
 //!
 //! No `unwrap`/`expect` allowed in production code (CI-enforced).
 
@@ -23,8 +23,8 @@ pub mod query;
 pub mod reconcile;
 pub mod redact;
 pub mod router;
+pub mod stats;
 pub mod subscriptions;
-pub mod telemetry;
 pub mod thumb_pregen;
 pub mod update;
 pub mod upload;
@@ -32,7 +32,7 @@ pub mod watcher;
 
 pub use authz::Decision;
 pub use backup::{BackupEngine, CommitOutcome, SESSION_IDLE_TTL, STAGING_ORPHAN_GRACE};
-pub use config::{Config, TelemetryConfig};
+pub use config::Config;
 pub use diag_agg::DiagAgg;
 pub use inbox::{reclaim_inbox, sweep_flow_staging_orphans};
 pub use ipc::daemon_version;
@@ -46,6 +46,5 @@ pub use pairing::{
 pub use query::QueryEngine;
 pub use reconcile::Reconcile;
 pub use router::Router;
-pub use telemetry::{Event as TelemetryEvent, Telemetry};
 pub use thumb_pregen::{ThumbPregen, PREGEN_WORKERS};
 pub use watcher::LibraryWatcher;

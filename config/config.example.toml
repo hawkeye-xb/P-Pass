@@ -17,10 +17,3 @@
 # 日志级别：trace | debug | info | warn | error
 # env: PPF_LOG_LEVEL
 #log_level = "info"
-
-#[telemetry]
-# 匿名遥测开关（一键关闭，隐私说明见文档）。
-# env: PPF_TELEMETRY_ENABLED
-#enabled = true
-# env: PPF_TELEMETRY_URL
-#url = "https://telemetry.example.com"

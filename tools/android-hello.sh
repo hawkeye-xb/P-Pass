@@ -9,7 +9,7 @@ D=$(mktemp -d /tmp/ppf-android-hello.XXXX)
 # 环境变量不在命令行里，会残留孤儿 daemon）。
 trap 'rc=$?; kill "$DPID" 2>/dev/null || true; if [ "$rc" -ne 0 ] && [ -f "$D/d.log" ]; then echo "=== daemon log (exit $rc) ==="; tail -30 "$D/d.log" || true; fi; rm -rf "$D"' EXIT
 mkdir -p "$D/library"
-PPF_DATA_DIR="$D/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
+PPF_DATA_DIR="$D/library" PPF_RELAY_URLS="" \
   PPF_BIND_ADDR="127.0.0.1:0" \
   "$ROOT/target/release/daemon" > "$D/d.log" 2>&1 &
 DPID=$!

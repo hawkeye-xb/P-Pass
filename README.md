@@ -110,13 +110,13 @@ crates/       Rust core (Cargo workspace, 9 crates)
   media-codec/    HEIC/JPEG decode, thumbnails, ffmpeg frame extraction
   platform/       Platform adapter trait (the ONLY crate with platform #[cfg])
   daemon/         Assembly: authz router, pairing, backup intake, queries,
-                  local IPC, telemetry
+                  local IPC, local stats logging
   diag/           Diagnostic state machine + msg_key dictionary + i18n
 apps/         Per-platform applications (thin skins; logic lives in crates)
   desktop/        Tauri tray shell (talks to the daemon over local IPC only)
   android/        Android app (iroh-ffi + generated proto types)
 infra/        Cloud & self-hosting (everything self-hostable)
-  workers/        rendezvous / telemetry / update (Cloudflare Workers)
+  workers/        rendezvous / update (Cloudflare Workers)
   relay/          Official relay deployment templates (placeholders only)
   selfhost/       One-command compose for self-hosters
   website/        One-page site
