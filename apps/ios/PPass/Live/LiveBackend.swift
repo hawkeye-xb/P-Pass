@@ -97,7 +97,7 @@ final class LiveBackend: @unchecked Sendable {
 
     private func paired(_ record: PairingRecord) {
         try? provider.ffi.setAllowedPeer(nodeId: record.daemonNodeId)
-        onboarded.markOnboarded(record.daemonNodeId)
+        try? onboarded.markOnboarded(record.daemonNodeId)
         Task { _ = await engine.trigger(.pairingRepaired) }
     }
 

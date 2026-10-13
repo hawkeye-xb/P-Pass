@@ -86,8 +86,9 @@ struct FfiBlobProvider: BlobProvider {
         case .completed(let hash): return .completed(hash: hash)
         case .aborted(let hash): return .aborted(hash: hash, source: source)
         case .inProgress(let connected, let idle, let sent, let byteIdle):
-            return .inProgress(connected: connected, idleForMs: Int64(idle), bytesSent: Int64(sent),
-                               byteIdleForMs: Int64(byteIdle), source: source)
+            return .inProgress(connected: connected, idleForMs: idle.map(Int64.init(clamping:)),
+                               bytesSent: sent.map(Int64.init(clamping:)),
+                               byteIdleForMs: byteIdle.map(Int64.init(clamping:)), source: source)
         }
     }
 
