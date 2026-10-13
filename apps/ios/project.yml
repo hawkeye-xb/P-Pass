@@ -52,6 +52,10 @@ targets:
         INFOPLIST_FILE: PPass/Info.plist
         # 传输 XCFramework 的模拟器切片只有 arm64（Apple Silicon 模拟器）；不编 x86_64 模拟器。
         EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+        # 真机签名团队（唯一一处）：只用个人团队 2WJUWVUJBN，自动签名（xcodebuild 加 -allowProvisioningUpdates）。
+        # 仅对真机 SDK 生效，模拟器 / CI 构建不签名到任何团队。
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM[sdk=iphoneos*]: 2WJUWVUJBN
     # #346：把版本号写进构建产物的 Info.plist（规则与来源见 tools/ios/stamp-version.sh）。
     # 每次都跑（不做依赖分析）：PPF_BUILD_VERSION 变了而源码没变时也必须重新盖章。
     postBuildScripts:
