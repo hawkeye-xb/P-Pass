@@ -5,7 +5,7 @@
 #   tools/ios/e2e-sim.sh            # 输出与截图在 apps/ios/build/e2e/
 #
 # 隔离（与 tools/ios/test-transport-ffi.sh 同一套）：
-#   - daemon：fake HOME + 临时 PPF_DATA_DIR + 127.0.0.1:0（OS 分配端口，绝不用 41145）+ 无 relay +
+#   - daemon：fake HOME + 临时 PPF_DATA_DIR + 0.0.0.0:0（OS 分配端口，绝不用 41145；不能绑 127.0.0.1——实测绑回环时首次拉取固定卡约 30 秒后失败，绑 0.0.0.0 则 0.07 秒，见 docs/runbook/ios-device-forensics.md）+ 无 relay +
 #     --ephemeral（脚本退出 ⇒ stdin 关 ⇒ daemon 退出）。不碰本机已装的 P-Pass。
 #   - 模拟器：专用设备 PPassE2E（不存在就建，每轮先 erase），不碰别的模拟器；结束时关掉（本脚本启动的才关）。
 #   - 照片：ffmpeg / sips 现造（jpg / heic / mp4），simctl addmedia 灌进图库；相册授权用
@@ -87,8 +87,8 @@ trap cleanup EXIT
 
 mkdir -p "$WORK/home" "$WORK/data"
 mkfifo "$WORK/stdin"
-HOME="$WORK/home" PPF_DATA_DIR="$WORK/data" PPF_BIND_ADDR="127.0.0.1:0" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
-  "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
+HOME="$WORK/home" PPF_DATA_DIR="$WORK/data" PPF_BIND_ADDR="${PPASS_E2E_BIND:-0.0.0.0:0}" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
+  RUST_LOG="${PPASS_E2E_RUST_LOG:-info}" "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
 DAEMON_PID=$!
 exec 4>"$WORK/stdin"
 
@@ -102,7 +102,7 @@ done
 [ -n "$NODE_ID" ] || { echo "error: daemon 没打出 NodeId" >&2; cat "$WORK/daemon.out" "$WORK/daemon.err" >&2; exit 1; }
 PORT=
 for _ in $(seq 1 50); do
-  PORT=$(lsof -nP -a -p "$DAEMON_PID" -iUDP@127.0.0.1 -Fn 2>/dev/null | sed -n 's/^n127\.0\.0\.1:\([0-9]*\)$/\1/p' | head -1)
+  PORT=$(lsof -nP -a -p "$DAEMON_PID" -iUDP -Fn 2>/dev/null | sed -n "s/^n[^:]*:\([0-9][0-9]*\)$/\1/p" | head -1)
   [ -n "$PORT" ] && break
   sleep 0.2
 done
