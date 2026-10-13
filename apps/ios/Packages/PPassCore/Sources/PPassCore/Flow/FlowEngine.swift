@@ -307,6 +307,15 @@ public actor FlowEngine {
         return true
     }
 
+    /// 断开（UX-06）：停掉当前这一轮并清空待触发，回到空闲。不动暂停意图（flowControl 在断开清单里是 keep）。
+    public func stopForDisconnect() async {
+        pendingTriggers.removeAll()
+        await cancelAndJoinCycle()
+        setStatus(LoopStatus(phase: .idle))
+        setWait(nil)
+        bump()
+    }
+
     /// 继续只在「已暂停」有效；回到入口（续传 + 对账：暂停期间只改了意图，待办现算）。
     @discardableResult
     public func resume() async -> Bool {
@@ -516,7 +525,7 @@ public actor FlowEngine {
         guard pairingEpoch() != nil else { return settle(.notPaired) }
 
         // ---- 入口：不持有执行租约，只读元数据 ----
-        try await prepareCursors()
+        try await prepareCursors(reconcile: reconcile)
         if reconcile { await reconcileSourcePresence() }
         let todo = try await countTodo()
         try Task.checkCancellation()
@@ -596,12 +605,20 @@ public actor FlowEngine {
     }
 
     /// 入口：游标就位。G 缺失（新装、换桌面清库）或照片库身份变了 → G 从当前位置起步、扫描置脏。只读元数据。
-    private func prepareCursors() async throws {
+    ///
+    /// #904：G 不精确（媒体源说不出 G 是不是还指着这个库——PHPersistentChangeToken 跨图库可能静默错位）时，
+    /// **每个对账轮都把扫描置脏**：G 以下漏掉的照片由扫描按 id 找回、按内容哈希判重收敛。
+    /// 对位 Android `prepareCursors` 里的 `if (reconcile && !media.preciseGeneration) store.markScanDirty()`（API < 30）。
+    private func prepareCursors(reconcile: Bool) async throws {
         let identity = try await media.libraryIdentity()
         try Task.checkCancellation()
         let state = try store.discoveryState()
         if state == nil || (identity != nil && state?.libraryIdentity != identity) {
             try await resetDiscovery(state == nil ? "no cursor yet" : "photo library identity changed", identity: identity)
+        }
+        if reconcile && !media.preciseDiscovery {
+            try store.markScanDirty()
+            log("discovery: G may be misplaced (not precise); reconcile round marks the scan dirty")
         }
     }
 
@@ -833,7 +850,7 @@ public actor FlowEngine {
             } catch {
                 if Task.isCancelled { throw CancellationError() }
                 reason = "import:\(type(of: error))"
-                log("media \(details.snapshot.mediaId): import failed (\(error))\(attempt == 0 ? "; retrying once" : "")")
+                log("media \(LogRedact.id(details.snapshot.mediaId)): import failed (\(error))\(attempt == 0 ? "; retrying once" : "")")
             }
         }
         return (nil, reason)
@@ -869,11 +886,11 @@ public actor FlowEngine {
             return .next
         case let .originalUnavailable(reason):
             // #311 D4：iCloud 原图因网络拉不下来——不建行、不推进游标、不计失败；退出循环等网络（下一轮从同一张重来）。
-            log("media \(snapshot.mediaId): original not available (\(reason)); waiting, nothing counted")
+            log("media \(LogRedact.id(snapshot.mediaId)): original not available (\(reason)); waiting, nothing counted")
             return .exit(.originalUnavailable)
         case let .localStorageFull(reason):
             // #911：手机空间不足——同 D4 的处置：不建行、不推进游标、不计失败，整体等待。
-            log("media \(snapshot.mediaId): phone storage full (\(reason)); waiting, nothing counted")
+            log("media \(LogRedact.id(snapshot.mediaId)): phone storage full (\(reason)); waiting, nothing counted")
             return .exit(.localStorageFull)
         case let .imported(hash, _):
             // 导入算出 hash → 建 order（传输中，带 hash）→ 传输。G / S 在结局落库时一起推进（#415 裁决 8）。

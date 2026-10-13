@@ -3,6 +3,11 @@ import Foundation
 import XCTest
 @testable import PPassCore
 
+private struct NullSubmitter: BackgroundTaskSubmitter {
+    func submit(_ spec: BackgroundTaskRequestSpec) throws {}
+    func cancelAll() {}
+}
+
 private final class RecordingRuntime: DisconnectRuntime {
     var calls: [String] = []
     func stopFlowRuntime() { calls.append("flow") }
@@ -29,6 +34,7 @@ final class DisconnectManifestTests: XCTestCase {
         try orders.claimOwner("node-a", idFloor: 0)
         try orders.insert(NewOrder(mediaId: "m1", sourceVersion: "v", bucketId: "a", contentHash: "h", state: .confirmed, pairingEpoch: "e"))
         try Data("{}".utf8).write(to: root.appendingPathComponent("pairing.json"))
+        PlannedWakeScheduler(directory: root, submitter: NullSubmitter(), logger: NoopLogger()).scheduleUnreachableProbes()
         try Data([1, 2, 3]).write(to: root.appendingPathComponent("identity.key"))
         try FileManager.default.createDirectory(at: root.appendingPathComponent("iroh-blobs-provider/data"), withIntermediateDirectories: true)
         try Data([0]).write(to: root.appendingPathComponent("iroh-blobs-provider/data/blob"))
@@ -51,6 +57,7 @@ final class DisconnectManifestTests: XCTestCase {
         let runtime = RecordingRuntime()
         try applyDisconnectManifest(root: tmp.url, runtime: runtime)
         XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.file("pairing.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.file(PlannedWakeScheduler.fileName).path), "唤醒计划随断开清掉")
         XCTAssertEqual(runtime.calls, ["flow", "wakes", "media"], "清单顺序就是执行顺序")
         XCTAssertFalse(AutoBackupPrefs(directory: tmp.url).enabled())
         XCTAssertTrue(AutoBackupPrefs(directory: tmp.url).requested())

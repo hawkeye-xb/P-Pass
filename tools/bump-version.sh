@@ -8,10 +8,14 @@
 #   真相源 = `release/versions.json`：CI（tools/release-version.sh）从这里取
 #   「本次发布该用哪个版本号」，所以本脚本改完文件必须同步写它。
 #
-#   不加 --platform 时两条线一起走（等价旧行为）。只改一端时，另一端
+#     - **ios 线**（#348）：`release/versions.json.ios` + `apps/ios/Config/Base.xcconfig` 的
+#       PPASS_FALLBACK_VERSION（对位 Android build.gradle.kts 的回退值）。只在 `--platform ios`
+#       时动；`both` 仍只含 desktop + android（旧行为不变）。
+#
+#   不加 --platform 时 desktop + android 两条线一起走（等价旧行为）。只改一端时，另一端
 #   的文件**一个字节都不动** —— 它的版本号代表「该端最后一次真变更」。
 #
-# 用法：tools/bump-version.sh [--platform desktop|android|both] <new-version>
+# 用法：tools/bump-version.sh [--platform desktop|android|ios|both] <new-version>
 #   e.g. tools/bump-version.sh --platform android 0.9.2
 #
 # 防版本覆盖（2026-08-04 用户裁决：绝不挪/覆盖旧版本）：
@@ -28,13 +32,13 @@ if [ "${1:-}" = "--platform" ]; then
   shift 2
 fi
 case "$PLATFORM" in
-  desktop|android|both) ;;
-  *) echo "error: --platform 只接受 desktop|android|both（收到 '$PLATFORM'）" >&2; exit 1 ;;
+  desktop|android|ios|both) ;;
+  *) echo "error: --platform 只接受 desktop|android|ios|both（收到 '$PLATFORM'）" >&2; exit 1 ;;
 esac
 
 NEW="${1:-}"
 if [ -z "$NEW" ]; then
-  echo "usage: tools/bump-version.sh [--platform desktop|android|both] <new-version>" >&2
+  echo "usage: tools/bump-version.sh [--platform desktop|android|ios|both] <new-version>" >&2
   exit 1
 fi
 
@@ -62,6 +66,10 @@ read_android_fallback_version() {
   awk -F'"' '/\?: "/{print $2; exit}' "$1"
 }
 
+read_ios_fallback_version() {
+  awk -F' *= *' '/^PPASS_FALLBACK_VERSION/{print $2; exit}' "$1"
+}
+
 read_lock_package_version() {
   awk '
     $0 == "name = \"p-pass-desktop\"" { package = 1; next }
@@ -82,7 +90,8 @@ assert_version() {
 DESKTOP_CUR=$(jq -r '.desktop' "$VJSON")
 ANDROID_CUR=$(jq -r '.android' "$VJSON")
 VCODE_CUR=$(jq -r '.androidVersionCode' "$VJSON")
-for v in "$DESKTOP_CUR" "$ANDROID_CUR" "$VCODE_CUR"; do
+IOS_CUR=$(jq -r '.ios' "$VJSON")
+for v in "$DESKTOP_CUR" "$ANDROID_CUR" "$VCODE_CUR" "$IOS_CUR"; do
   [ -n "$v" ] && [ "$v" != "null" ] || { echo "error: $VJSON 字段缺失" >&2; exit 1; }
 done
 
@@ -93,6 +102,8 @@ DCCUR=$(read_toml_version apps/desktop/src-tauri/Cargo.toml)
 ALCUR=$(read_android_fallback_version apps/android/app/build.gradle.kts)
 DLLOCKCUR=$(read_lock_package_version apps/desktop/src-tauri/Cargo.lock)
 ROOTCUR=$(read_toml_version Cargo.toml)
+IOSXC=apps/ios/Config/Base.xcconfig
+ICUR=$(read_ios_fallback_version "$IOSXC")
 VCODE=$(awk '/versionCode/{gsub(/.*= */,""); print; exit}' apps/android/app/build.gradle.kts)
 
 assert_version Cargo.toml "$ROOTCUR" "$DESKTOP_CUR"
@@ -101,6 +112,7 @@ assert_version apps/desktop/package.json "$PCUR" "$DESKTOP_CUR"
 assert_version apps/desktop/src-tauri/Cargo.toml "$DCCUR" "$DESKTOP_CUR"
 assert_version 'apps/desktop/src-tauri/Cargo.lock (p-pass-desktop)' "$DLLOCKCUR" "$DESKTOP_CUR"
 assert_version apps/android/app/build.gradle.kts "$ALCUR" "$ANDROID_CUR"
+assert_version "$IOSXC (PPASS_FALLBACK_VERSION)" "$ICUR" "$IOS_CUR"
 assert_version 'apps/android/app/build.gradle.kts (versionCode)' "$VCODE" "$VCODE_CUR"
 
 # 防覆盖 1：已打过精确 tag 的版本号绝不复用
@@ -120,6 +132,7 @@ bump_ok() { # <cur> <new> <label>
 }
 if [ "$PLATFORM" = desktop ] || [ "$PLATFORM" = both ]; then bump_ok "$DESKTOP_CUR" "$NEW" desktop; fi
 if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then bump_ok "$ANDROID_CUR" "$NEW" android; fi
+if [ "$PLATFORM" = ios ]; then bump_ok "$IOS_CUR" "$NEW" ios; fi
 
 # ⚠️ 便携 sed：`-i ''` 是 macOS（BSD）专属，Linux（GNU）必炸——统一用
 # `-i.bak … && rm …bak`（GNU/BSD 均接受带后缀的 -i）。
@@ -148,14 +161,20 @@ if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then
   sedi "s/?: \"$ALCUR\"/?: \"$NEW\"/" apps/android/app/build.gradle.kts
 fi
 
+if [ "$PLATFORM" = ios ]; then
+  sedi "s/^PPASS_FALLBACK_VERSION = $ICUR\$/PPASS_FALLBACK_VERSION = $NEW/" "$IOSXC"
+fi
+
 # ── 写回真相源 ────────────────────────────────────────────────────
 NEW_DESKTOP="$DESKTOP_CUR"
 NEW_ANDROID="$ANDROID_CUR"
+NEW_IOS="$IOS_CUR"
 if [ "$PLATFORM" = desktop ] || [ "$PLATFORM" = both ]; then NEW_DESKTOP="$NEW"; fi
 if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then NEW_ANDROID="$NEW"; fi
+if [ "$PLATFORM" = ios ]; then NEW_IOS="$NEW"; fi
 tmp=$(mktemp)
-jq --arg d "$NEW_DESKTOP" --arg a "$NEW_ANDROID" --argjson c "$NCODE" \
-  '{desktop:$d, android:$a, androidVersionCode:$c}' "$VJSON" > "$tmp"
+jq --arg d "$NEW_DESKTOP" --arg a "$NEW_ANDROID" --argjson c "$NCODE" --arg i "$NEW_IOS" \
+  '{desktop:$d, android:$a, androidVersionCode:$c, ios:$i}' "$VJSON" > "$tmp"
 mv "$tmp" "$VJSON"
 
 # ── 收尾断言：每个目标都必须到达 NEW（不借用别处读到的值）──────────
@@ -171,14 +190,19 @@ if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then
   assert_version 'apps/android/app/build.gradle.kts (versionCode)' \
     "$(awk '/versionCode/{gsub(/.*= */,""); print; exit}' apps/android/app/build.gradle.kts)" "$NCODE"
 fi
+if [ "$PLATFORM" = ios ]; then
+  assert_version "$IOSXC (PPASS_FALLBACK_VERSION)" "$(read_ios_fallback_version "$IOSXC")" "$NEW"
+fi
+assert_version "release/versions.json (ios)" "$(jq -r '.ios' "$VJSON")" "$NEW_IOS"
 assert_version "release/versions.json (desktop)" "$(jq -r '.desktop' "$VJSON")" "$NEW_DESKTOP"
 assert_version "release/versions.json (android)" "$(jq -r '.android' "$VJSON")" "$NEW_ANDROID"
 
-echo "bumped[$PLATFORM]: desktop ${DESKTOP_CUR} -> ${NEW_DESKTOP}, android ${ANDROID_CUR} -> ${NEW_ANDROID} (versionCode ${VCODE} -> ${NCODE})"
+echo "bumped[$PLATFORM]: desktop ${DESKTOP_CUR} -> ${NEW_DESKTOP}, android ${ANDROID_CUR} -> ${NEW_ANDROID} (versionCode ${VCODE} -> ${NCODE}), ios ${IOS_CUR} -> ${NEW_IOS}"
 echo "--- git diff（应只含本线的版本号行 + release/versions.json）---"
 TARGETS="release/versions.json"
 [ "$NEW_DESKTOP" != "$DESKTOP_CUR" ] && TARGETS="$TARGETS Cargo.toml Cargo.lock apps/desktop/src-tauri/tauri.conf.json apps/desktop/package.json apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock"
 [ "$NEW_ANDROID" != "$ANDROID_CUR" ] && TARGETS="$TARGETS apps/android/app/build.gradle.kts"
+[ "$NEW_IOS" != "$IOS_CUR" ] && TARGETS="$TARGETS $IOSXC"
 # shellcheck disable=SC2086 # TARGETS 是刻意拆分
 git diff --stat $TARGETS
 # shellcheck disable=SC2086
@@ -188,7 +212,7 @@ git diff $TARGETS | grep -E "^[+-]" | grep -vE "^(\+\+\+|---)" || true
 # Untracked files (-uno) are never added by an explicit `git add`, so they must
 # not fail the bump. The bump script itself is whitelisted (it may be edited while
 # running); `tools/release-version.sh` is whitelisted for the same reason.
-DIRTY=$(git status --porcelain -uno | sed 's/^...//' | grep -v -E '^(Cargo\.toml|apps/android/app/build\.gradle\.kts|Cargo\.lock|tools/bump-version\.sh|tools/release-version\.sh|release/versions\.json|apps/desktop/src-tauri/tauri\.conf\.json|apps/desktop/package\.json|apps/desktop/src-tauri/Cargo\.toml|apps/desktop/src-tauri/Cargo\.lock)$' || true)
+DIRTY=$(git status --porcelain -uno | sed 's/^...//' | grep -v -E '^(Cargo\.toml|apps/android/app/build\.gradle\.kts|apps/ios/Config/Base\.xcconfig|Cargo\.lock|tools/bump-version\.sh|tools/release-version\.sh|release/versions\.json|apps/desktop/src-tauri/tauri\.conf\.json|apps/desktop/package\.json|apps/desktop/src-tauri/Cargo\.toml|apps/desktop/src-tauri/Cargo\.lock)$' || true)
 if [ -n "$DIRTY" ]; then
   echo "error: unexpected dirty files after bump: $DIRTY" >&2
   exit 1

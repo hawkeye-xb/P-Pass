@@ -89,9 +89,15 @@ echo "test-channel/${NAME} → ${NEW}: ${CH_BASE}/${NAME}"
 KEEP_DIR="${RUNNER_TEMP:-/tmp}/ch-keep"
 rm -rf "$KEEP_DIR"; mkdir -p "$KEEP_DIR"
 KEEP=""
+# #348：manifest-ios.json 只是 plan-builds 的基线（iOS 包在 TestFlight，不在 test-channel）。
+# 它指向的版本要保住 test 草稿与 tag（基线 tag 被删 ⇒ 下次判不了改动 ⇒ 白白构建），
+# 但不该把那个版本的 Android / macOS / Windows 安装包也留住：只进 KEEP_DRAFTS，不进 KEEP。
+KEEP_DRAFTS=""
 for m in $(ch_assets | grep -E '^manifest(-[a-z]+)?\.json$' || true); do
   gh release download "$CH" -p "$m" -O "$KEEP_DIR/$m" --clobber
-  KEEP="$KEEP $(version_of "$KEEP_DIR/$m")"
+  mv_=$(version_of "$KEEP_DIR/$m")
+  KEEP_DRAFTS="$KEEP_DRAFTS $mv_"
+  [ "$m" = manifest-ios.json ] || KEEP="$KEEP $mv_"
 done
 for n in $(ch_assets | grep -E '^P-Pass_' || true); do
   v=${n#P-Pass_}; v=${v%%_*}
@@ -105,11 +111,11 @@ done
 #    且比被指向的最新版本还旧的 test 草稿连同它的 tag 一起删——它既不是谁的下载来源，也不是
 #    plan-builds 的基线。比最新被指向版本新的不动：那可能是正在跑、还没写指针的 test tag。
 # shellcheck disable=SC2086 # KEEP 是空格分隔的版本列表，刻意拆分
-NEWEST=$(printf '%s\n' $KEEP | sort -V | tail -n1)
+NEWEST=$(printf '%s\n' $KEEP_DRAFTS | sort -V | tail -n1)
 for t in $(gh release list --limit 200 --json tagName,isDraft \
              -q '.[] | select(.isDraft and (.tagName | contains("-test."))) | .tagName'); do
   v=${t#v}
-  case " $KEEP " in *" $v "*) continue ;; esac
+  case " $KEEP_DRAFTS " in *" $v "*) continue ;; esac
   [ "$v" != "$NEWEST" ] && [ "$(printf '%s\n%s\n' "$v" "$NEWEST" | sort -V | tail -n1)" = "$NEWEST" ] || continue
   gh release delete "$t" --yes --cleanup-tag
   echo "删除旧的 test 草稿与 tag：${t}"

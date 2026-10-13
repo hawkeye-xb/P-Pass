@@ -11,6 +11,17 @@ options:
 configFiles:
   Debug: Config/Base.xcconfig
   Release: Config/Base.xcconfig
+# 本地 SwiftPM 包：PPassCore（Flow 引擎 / 账本 / 后台任务薄层）、PPassMedia（PhotoKit）、
+# PPassTransport（传输 XCFramework 的 Swift 绑定，包定义在 TransportFFITests/，产物由
+# tools/build-ios-transport-xcframework.sh 在构建前生成到 TransportFFITests/Generated/，不入库）。
+# 系统框架 Network / SystemConfiguration / Security 由 PPassTransport 包的 linkerSettings 带上。
+packages:
+  PPassCore:
+    path: Packages/PPassCore
+  PPassMedia:
+    path: Packages/PPassMedia
+  PPassTransport:
+    path: TransportFFITests
 targets:
   PPass:
     type: application
@@ -24,10 +35,36 @@ targets:
       - path: PPass/Resources/i18n
         type: folder
         buildPhase: resources
+    # App Group：LiveBackend 的存储根（账本 / provider 库 / 身份）放在 group.com.hawkeyexb.ppass 容器里，
+    # 后台扩展才读得到；不声明就退回 App 私有目录（降级）。自动签名会在团队下登记显式 App ID 与该 App Group。
+    entitlements:
+      path: PPass/PPass.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.hawkeyexb.ppass
+    dependencies:
+      - package: PPassCore
+        product: PPassCore
+      - package: PPassCore
+        product: PPassBackgroundTasks
+      - package: PPassMedia
+      - package: PPassTransport
+      # 兜底：显式链接，不依赖包的传递 linkerSettings（缺 Network 会报 Undefined symbols _nw_*）。
+      - sdk: Network.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: Security.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID)
         INFOPLIST_FILE: PPass/Info.plist
+        # 传输 XCFramework 的模拟器切片只有 arm64（Apple Silicon 模拟器）；不编 x86_64 模拟器。
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+        # 真机签名团队（唯一一处）：只用个人团队 2WJUWVUJBN，自动签名（xcodebuild 加 -allowProvisioningUpdates）。
+        # 仅对真机 SDK 生效，模拟器 / CI 构建不签名到任何团队。
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM[sdk=iphoneos*]: 2WJUWVUJBN
+        # App 图标（TestFlight / App Store 校验要求 1024 图标；PPass/Resources/Assets.xcassets）。
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # #346：把版本号写进构建产物的 Info.plist（规则与来源见 tools/ios/stamp-version.sh）。
     # 每次都跑（不做依赖分析）：PPF_BUILD_VERSION 变了而源码没变时也必须重新盖章。
     postBuildScripts:
@@ -44,6 +81,9 @@ targets:
       - path: PPassTests
     dependencies:
       - target: PPass
+      # 只为 import PPassCore 的值类型；代码已链进宿主 App，测试 bundle 不再链一份。
+      - package: PPassCore
+        link: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID).tests

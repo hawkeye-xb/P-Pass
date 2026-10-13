@@ -240,6 +240,53 @@ final class FlowEngineIOSTests: XCTestCase {
         XCTAssertEqual(end.generation, 50, "最后发现链走过了 #1 所在的第 50 代（它已有行，被跳过推进）")
     }
 
+    // MARK: #904：G 跨图库静默错位
+
+    /// I-10：G 不精确时，G 以下漏掉的照片在下一个对账轮被扫描找回；非对账触发不扫（不为每次相册变化都全量扫）；
+    /// 已确认的照片不重传（按当前行判重）。
+    /// 反证：对账轮不按 preciseDiscovery 置脏（只在 3105 时扫）→ 错位漏掉的 #3 永远取不到，红。
+    func testAMisplacedCursorIsCaughtByTheNextReconcileRound() async throws {
+        let rig = try Rig()
+        rig.media.precise.set(false)
+        let one = rig.photo(1, generation: 1)
+        try rig.order(one, .confirmed)
+        rig.photo(3, generation: 3) // 错位：G 已经在它后面，系统也不报 3105
+        try rig.advanceG(5)
+        await rig.start()
+        await rig.trigger(.mediaChange)
+        XCTAssertEqual(rig.delivery.requests.get().count, 0, "非对账轮不扫")
+        await rig.trigger(.appForeground)
+        XCTAssertEqual(rig.delivery.deliveredIds, [3], "对账轮把漏掉的找回来，已确认的 #1 不重传")
+        XCTAssertFalse(try rig.store.scanState().dirty)
+        await rig.trigger(.periodic)
+        XCTAssertEqual(rig.delivery.deliveredIds, [3], "再扫一遍也不重复传")
+    }
+
+    /// 对照：G 精确时对账轮不额外扫（错位的那张不会被找回——这正是 PPassMedia 必须报不精确的理由）。
+    func testAPreciseCursorIsNotRescannedOnReconcileRounds() async throws {
+        let rig = try Rig()
+        rig.photo(3, generation: 3)
+        try rig.advanceG(5)
+        await rig.start()
+        await rig.trigger(.appForeground)
+        XCTAssertEqual(rig.delivery.requests.get().count, 0)
+        XCTAssertEqual(rig.lease.acquires.get(), 0)
+    }
+
+    /// 不精确 + 没有漏网的：对账轮的全量差集为 0，入口当场收掉扫描，不申请租约、不探测。
+    func testAnImpreciseCursorWithNothingMissingCostsNoLease() async throws {
+        let rig = try Rig()
+        rig.media.precise.set(false)
+        let one = rig.photo(1, generation: 1)
+        try rig.order(one, .confirmed)
+        try rig.advanceG(1)
+        await rig.start()
+        await rig.trigger(.appForeground)
+        XCTAssertEqual(rig.lease.acquires.get(), 0)
+        XCTAssertEqual(rig.probe.calls.get(), 0)
+        XCTAssertFalse(try rig.store.scanState().dirty)
+    }
+
     // MARK: 执行租约（iOS 对位 FGS）
 
     /// 后台时间到期（onLeaseExpired）：停循环、在飞的保持传输中、等待中（EXECUTION_BLOCKED）、受阻原因记「到期」。
