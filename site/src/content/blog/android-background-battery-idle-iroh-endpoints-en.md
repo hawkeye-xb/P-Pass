@@ -1,7 +1,7 @@
 ---
 title: "Android Battery Drain from Idle QUIC (iroh) Endpoints: 300mAh to 30mAh"
 description: "Debugging background battery drain in an Android photo backup app: battery stats were empty, so we reconciled netstats traffic instead and found two idle iroh/QUIC endpoints. Closing them after 30 idle seconds, plus a backoff fix, cut daily battery use from about 300mAh to under 30mAh."
-date: 2026-10-13
+date: 2026-10-10
 tags: [engineering, Android, battery, iroh, QUIC]
 lang: en
 draft: false

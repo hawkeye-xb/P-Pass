@@ -1,7 +1,7 @@
 ---
 title: Android 后台耗电排查：两个没关的 iroh 连接，一天 300mAh 降到不到 30mAh
 description: "Android 后台耗电排查：电量数据查不下去，改用 netstats 流量对账，找到两个被唤醒后一直不关的 iroh/QUIC endpoint。空闲 30 秒关掉它们，再加上退避修复，一天耗电从约 300mAh 降到不到 30mAh。"
-date: 2026-10-13
+date: 2026-10-10
 tags: [工程, Android, 耗电, iroh, QUIC]
 lang: zh
 draft: false
