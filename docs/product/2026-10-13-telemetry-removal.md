@@ -132,7 +132,7 @@ config，daemon 下次启动就会回到默认开启。仓库里有两处这样�
   读到后忽略，不会因为 unknown field 拒绝启动（`crates/daemon/src/config.rs` 的
   `_legacy_telemetry` 字段和 `legacy_telemetry_section_is_accepted_and_ignored` 测试）。
   桌面端换库时会逐字节保留这一段，不会主动删除。
-- 老用户 data_dir 里可能还留着 `anon_id` 文件，现在没有任何代码读取它。
+- 老用户 data_dir 里可能还留着 `anon_id` 文件，现在没有任何代码读取它；daemon 启动时会尽力把它删掉（`crates/daemon/src/stats.rs` 的 `purge_legacy_anon_id`，文件不存在静默，删除失败只记 warn、不影响启动）。
 
 ## 6. 以后的规则
 

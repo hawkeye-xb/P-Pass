@@ -17,6 +17,21 @@
 //! `spawn_fetch_task` / `emit_flow_failed` 也各有日志行（含细分码
 //! `detail=`）。再写一条 `error` 统计行只是重复。
 
+/// 旧版遥测写在 data_dir 下的匿名 ID 文件名。
+const LEGACY_ANON_ID_FILE: &str = "anon_id";
+
+/// 尽力删除老用户 data_dir 里遗留的 `anon_id`（遥测已下线，没有任何代码再读它；
+/// 见 `docs/product/2026-10-13-telemetry-removal.md` §5）。文件不存在静默；
+/// 删除失败只打 warn，绝不影响启动。
+pub fn purge_legacy_anon_id(data_dir: &std::path::Path) {
+    let path = data_dir.join(LEGACY_ANON_ID_FILE);
+    match std::fs::remove_file(&path) {
+        Ok(()) => tracing::info!("已清理遗留的 anon_id 文件: {}", path.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!("清理遗留 anon_id 失败（忽略）: {}: {e}", path.display()),
+    }
+}
+
 /// 统计事件的 tracing target。过滤 / grep 日志时用它，例如
 /// `RUST_LOG=ppf::stats=info`。
 pub const TARGET: &str = "ppf::stats";
@@ -92,6 +107,31 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn purge_legacy_anon_id_removes_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join(LEGACY_ANON_ID_FILE);
+        std::fs::write(&f, "0123456789abcdef").unwrap();
+        purge_legacy_anon_id(dir.path());
+        assert!(!f.exists(), "anon_id 应被删除");
+    }
+
+    #[test]
+    fn purge_legacy_anon_id_is_silent_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = capture_with_production_filter(|| purge_legacy_anon_id(dir.path()));
+        assert!(out.is_empty(), "文件不存在时不应有任何日志: {out}");
+    }
+
+    /// 删除失败（这里用同名目录制造 remove_file 失败）只 warn，不 panic。
+    #[test]
+    fn purge_legacy_anon_id_failure_only_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(LEGACY_ANON_ID_FILE)).unwrap();
+        let out = capture_with_production_filter(|| purge_legacy_anon_id(dir.path()));
+        assert!(out.contains("WARN"), "{out}");
+    }
 
     /// 把 fmt 层的输出收进内存，供断言读取。
     #[derive(Clone, Default)]
