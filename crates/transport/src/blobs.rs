@@ -668,3 +668,75 @@ async fn drive_with_stall(
         }
     }
 }
+
+#[cfg(test)]
+mod pull_observed_tests {
+    use super::*;
+    use crate::{IrohTransport, TransportConfig};
+    use std::sync::{Arc, Mutex};
+
+    /// 提供方 + 一个 2 MiB 的确定性载荷；返回 (传输端点, blobs, 内容哈希, ticket, 载荷)。
+    async fn provider(dir: &Path) -> (IrohTransport, Blobs, [u8; 32], String, Vec<u8>) {
+        let tp = IrohTransport::bind(TransportConfig::loopback(
+            vec![crate::ALPN_BLOBS.to_owned()],
+        ))
+        .await
+        .unwrap();
+        let mut data = Vec::with_capacity(2 * 1024 * 1024);
+        let mut s: u64 = 0x5EED_0953_0000_0001;
+        while data.len() < 2 * 1024 * 1024 {
+            s ^= s << 13;
+            s ^= s >> 7;
+            s ^= s << 17;
+            data.extend_from_slice(&s.to_le_bytes());
+        }
+        let src = dir.join("original.bin");
+        std::fs::write(&src, &data).unwrap();
+        let hash = *blake3::hash(&data).as_bytes();
+        let mut blobs = Blobs::open(&tp, &dir.join("provider-store")).await.unwrap();
+        blobs.serve();
+        let ticket = blobs.push(hash, &src).await.unwrap();
+        (tp, blobs, hash, ticket, data)
+    }
+
+    /// 进度回调被调用（单调不减、末值 = 载荷长度），成功后导出内容与哈希一致。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pull_observed_reports_progress_and_exports_verified_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_tp, _provider, hash, ticket, data) = provider(dir.path()).await;
+
+        let rx_tp =
+            IrohTransport::bind(TransportConfig::loopback(
+                vec![crate::ALPN_BLOBS.to_owned()],
+            ))
+            .await
+            .unwrap();
+        let rx = Blobs::open(&rx_tp, &dir.path().join("receiver-store"))
+            .await
+            .unwrap();
+        let dest = dir.path().join("out.bin");
+
+        let seen = Arc::new(Mutex::new(Vec::<u64>::new()));
+        let sink = seen.clone();
+        let got = rx
+            .pull_observed(&ticket, &dest, Duration::from_secs(20), move |b| {
+                sink.lock().unwrap().push(b)
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(got, hash, "returned hash is the content BLAKE3");
+        let exported = std::fs::read(&dest).unwrap();
+        assert_eq!(exported.len(), data.len());
+        assert_eq!(*blake3::hash(&exported).as_bytes(), hash);
+
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty(), "progress callback was never called");
+        assert!(
+            seen.windows(2).all(|w| w[0] <= w[1]),
+            "progress went backwards: {seen:?}"
+        );
+        assert_eq!(*seen.last().unwrap(), data.len() as u64);
+        rx.close().await;
+    }
+}
