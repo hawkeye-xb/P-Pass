@@ -133,12 +133,8 @@ jobs:
       - name: No system default colours in app sources
         run: tools/ios/check-no-system-colors.sh
 
-      - name: App unit tests (iOS simulator)
-        run: tools/ios/test.sh
-
-      - name: Local SwiftPM packages (iOS simulator)
-        run: tools/ios/test-packages.sh
-
+      # App 工程依赖传输 XCFramework（tools/ios/test.sh 缺就先生成），所以 Rust 工具链、iOS target、
+      # 缓存、libheif 必须排在「App unit tests」之前。
       # ── #313 传输 XCFramework + Swift FFI 测试 ─────────────────────────
       - name: Set Rust toolchain from rust-toolchain.toml
         run: tools/setup-rust-toolchain.sh
@@ -158,6 +154,12 @@ jobs:
 
       - name: System codecs (libheif via brew, for the local daemon)
         run: brew install libheif
+
+      - name: App unit tests (iOS simulator)
+        run: tools/ios/test.sh
+
+      - name: Local SwiftPM packages (iOS simulator)
+        run: tools/ios/test-packages.sh
 
       - name: Transport XCFramework + Swift FFI tests (iOS simulator + local daemon)
         env:
