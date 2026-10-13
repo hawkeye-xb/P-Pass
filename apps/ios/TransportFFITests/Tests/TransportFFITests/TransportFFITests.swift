@@ -246,4 +246,155 @@ final class TransportFFITests: XCTestCase {
         XCTAssertEqual(deniedResp["ok"] as? Bool, false, denied)
         print("ctrl diag.status (unpaired) reply: \(denied)")
     }
+
+    // MARK: - G2 模拟器版（IOS-07 #334）：provider 挂起前后 → 本机隔离 daemon 拉走一张 → 凭据回来
+
+    private struct PrintLogger: CoreLogger {
+        func log(_ message: String) { print("core-log: \(message)") }
+    }
+
+    /// 一次控制面调用，返回 `Resp` 信封（JSON 对象）。
+    private func ctrl(_ client: CtrlClient, _ peer: String, _ method: String,
+                      _ params: [String: Any], timeoutMs: UInt64 = 0) throws -> [String: Any] {
+        let body = String(decoding: try JSONSerialization.data(withJSONObject: params), as: UTF8.self)
+        let reply = try client.call(peerToken: peer, method: method, paramsJson: body, timeoutMs: timeoutMs)
+        return try JSONSerialization.jsonObject(with: Data(reply.utf8)) as! [String: Any]
+    }
+
+    /// [dir] 下所有普通文件（相对路径 → 字节数），用来贴「store 目录列表」。
+    private func listing(_ dir: URL) -> [String: Int] {
+        // 宿主的 /var 是 /private/var 的软链：两边都过一遍 resolvingSymlinksInPath 再切前缀。
+        let dir = dir.resolvingSymlinksInPath()
+        var out: [String: Int] = [:]
+        guard let it = FileManager.default.enumerator(
+            at: dir, includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]) else { return out }
+        for case let url as URL in it {
+            let v = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+            if v?.isRegularFile == true {
+                let full = url.resolvingSymlinksInPath().path
+                out[String(full.dropFirst(dir.path.count + 1))] = v?.fileSize ?? 0
+            }
+        }
+        return out
+    }
+
+    private func waitFor(_ seconds: Double, _ what: String, _ cond: () throws -> Bool) throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if try cond() { return }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        XCTFail("timed out after \(seconds)s waiting for \(what)")
+        throw XCTSkip("aborting after timeout: \(what)")
+    }
+
+    func testG2ProviderServesOnePhotoToLocalDaemonAcrossSuspension() throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let linkText = env["PPASS_PAIR_LINK"], let directToken = env["PPASS_DAEMON_TOKEN"],
+              let e2e = env["PPASS_E2E_DIR"].map(URL.init(fileURLWithPath:)),
+              let library = env["PPASS_DAEMON_LIBRARY"].map(URL.init(fileURLWithPath:)) else {
+            if env["PPASS_REQUIRE_DAEMON"] == "1" { return XCTFail("G2 env missing (tools/ios/test-transport-ffi.sh)") }
+            throw XCTSkip("no local daemon (run tools/ios/test-transport-ffi.sh)")
+        }
+        let suspendSecs = Double(env["PPASS_SUSPEND_SECS"] ?? "5") ?? 5
+
+        // ① 配对链接由 Rust 解析；用旧格式 &a= 把宿主给的直连地址并进来——
+        //    parsePairLink 会核对地址里的 node 与链接一致（不一致就抛）。
+        let link = try parsePairLink(link: linkText)
+        let peer = try parsePairLink(link: "ppf://pair?node=\(link.nodeId)&t=\(link.token)&a=\(directToken)").peerToken
+
+        // ② 配对：pair.request（阻塞到业主点允许；宿主脚本的 owner_loop 代点）。
+        let client = try CtrlClient.bind(
+            config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
+        defer { client.close() }
+        let paired = try ctrl(client, peer, "pair.request",
+                              ["token": link.token, "device_name": "iOS 模拟器 G2", "role": "member"],
+                              timeoutMs: 60_000)
+        XCTAssertEqual(paired["ok"] as? Bool, true, "\(paired)")
+        let epoch = try XCTUnwrap((paired["result"] as? [String: Any])?["pairing_epoch"] as? String, "\(paired)")
+        print("G2 paired: epoch=\(epoch.prefix(8))… phone=\(try client.nodeId().prefix(8))…")
+
+        // ③ provider 的 FsStore 落在存储根下（模拟一个 App Group 容器；真 entitlement 是 App 线的事）。
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("g2-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let root = try StorageRoot.resolve(
+            appGroupContainer: tmp.appendingPathComponent("group-container"),
+            groupIdentifier: "group.test.ppass", appPrivateDirectory: tmp.appendingPathComponent("private"),
+            logger: PrintLogger())
+        XCTAssertEqual(root.kind, .appGroup)
+        let store = root.url.appendingPathComponent("blobs", isDirectory: true)
+        let provider = try Provider.withGcInterval(root: store.path, gcIntervalMs: 1_000)
+        defer { provider.close() }
+        try provider.setAllowedPeer(nodeId: link.nodeId)
+
+        let photo = tmp.appendingPathComponent("IMG_G2.HEIC")
+        try FileManager.default.copyItem(at: try repoFile("crates/core-media/tests/fixtures/redaction/heic.original.heic"), to: photo)
+        let imported = try provider.importFile(path: photo.path)
+        XCTAssertEqual(imported.hash, try blake3FileHex(path: photo.path))
+        let ticket = try provider.serve(hash: imported.hash)
+        let leased = listing(store)
+        XCTAssertTrue(leased.keys.allSatisfy { !$0.hasPrefix("..") }, "store files stay under the root")
+        XCTAssertTrue(leased.values.contains(Int(imported.size)), "the blob is a data file inside \(store.path): \(leased)")
+        print("G2 store (lease held) \(store.path): \(leased.sorted { $0.key < $1.key })")
+
+        // ④ 挂起：请宿主 SIGSTOP 本进程 suspendSecs 秒（≫ 1s 的 GC 周期），恢复后再给 GC 跑几轮。
+        if suspendSecs > 0 {
+        let resumed = e2e.appendingPathComponent("resumed")
+        let askedAt = Date()
+        try "\(getpid())".write(to: e2e.appendingPathComponent("suspend-request"), atomically: true, encoding: .utf8)
+        try waitFor(suspendSecs + 60, "host SIGSTOP/SIGCONT") { FileManager.default.fileExists(atPath: resumed.path) }
+        let frozen = Date().timeIntervalSince(askedAt)
+        XCTAssertGreaterThanOrEqual(frozen, suspendSecs - 0.5, "the process really was frozen")
+        Thread.sleep(forTimeInterval: 3.5)  // 恢复后 ≥3 个 GC 周期
+        XCTAssertTrue(try provider.hasBlob(hash: imported.hash),
+                      "lease TempTag must keep the blob through suspension + post-resume GC")
+        print("G2 suspended ~\(Int(frozen))s, blob still present after resume + 3.5s of GC ✓")
+        } else {
+            print("G2 suspension step skipped (PPASS_SUSPEND_SECS=0)")
+        }
+
+        // ⑤ 交付：PPassCore 的 Codable FlowFetchRequest → flow.offer → 轮询 flow.status 到 completed。
+        let request = PPassCore.FlowFetchRequest(
+            queueSequence: 1, pairingEpoch: epoch, leaseToken: "lease-1", contentHash: imported.hash,
+            fileName: "IMG_G2.HEIC", mediaType: "image/heic", provider: ticket,
+            captureAtMs: Int64(Date().timeIntervalSince1970 * 1000), sizeBytes: Int64(imported.size))
+        let offerParams = try JSONSerialization.jsonObject(with: try JSONEncoder().encode(request)) as! [String: Any]
+        let offer = try ctrl(client, peer, "flow.offer", offerParams, timeoutMs: 30_000)
+        XCTAssertEqual(offer["ok"] as? Bool, true, "\(offer)")
+        let tuple: [String: Any] = ["queue_sequence": 1, "pairing_epoch": epoch, "lease_token": "lease-1"]
+        var receipt: [String: Any]?
+        try waitFor(90, "flow.status completed") {
+            let status = try ctrl(client, peer, "flow.status", tuple)
+            let result = status["result"] as? [String: Any]
+            if let state = result?["state"] as? String, state != "active" {
+                XCTAssertEqual(state, "completed", "\(status)")
+                receipt = result?["receipt"] as? [String: Any]
+                return true
+            }
+            return false
+        }
+        let r = try XCTUnwrap(receipt)
+        XCTAssertEqual(r["content_hash"] as? String, imported.hash)
+        XCTAssertEqual(r["lease_token"] as? String, "lease-1")
+        XCTAssertEqual(r["pairing_epoch"] as? String, epoch)
+        XCTAssertFalse((r["receipt_id"] as? String ?? "").isEmpty)
+        print("G2 receipt: \(r)")
+
+        // ⑥ 落盘：daemon 库目录（非 .ppf/）里有一个文件字节与原图相同（BLAKE3 相等）。
+        var landed: String?
+        // 只认库里的成品（originals/…），不认 daemon 自己的 .ppf/ 内部存储（flow-blobs 等）。
+        for (rel, size) in listing(library) where size == Int(imported.size) && rel.hasPrefix(".ppf/") == false {
+            let url = library.resolvingSymlinksInPath().appendingPathComponent(rel)
+            if (try? blake3FileHex(path: url.path)) == imported.hash { landed = rel; break }
+        }
+        XCTAssertNotNil(landed, "the photo must be materialized under the daemon library \(library.path)")
+        print("G2 landed on desktop: \(landed ?? "-")")
+
+        // ⑦ 反证（IOS-07 验收 3）：放掉 lease 的 TempTag ⇒ 下一个 GC 周期后 blob 消失。
+        provider.releaseRetention()
+        try waitFor(15, "GC reclaims the released blob") { try !provider.hasBlob(hash: imported.hash) }
+        let released = listing(store)
+        XCTAssertFalse(released.values.contains(Int(imported.size)), "data file gone: \(released)")
+        print("G2 store (retention released, after GC): \(released.sorted { $0.key < $1.key })")
+    }
 }
