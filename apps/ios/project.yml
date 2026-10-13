@@ -63,6 +63,8 @@ targets:
         # 仅对真机 SDK 生效，模拟器 / CI 构建不签名到任何团队。
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM[sdk=iphoneos*]: 2WJUWVUJBN
+        # App 图标（TestFlight / App Store 校验要求 1024 图标；PPass/Resources/Assets.xcassets）。
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     # #346：把版本号写进构建产物的 Info.plist（规则与来源见 tools/ios/stamp-version.sh）。
     # 每次都跑（不做依赖分析）：PPF_BUILD_VERSION 变了而源码没变时也必须重新盖章。
     postBuildScripts:

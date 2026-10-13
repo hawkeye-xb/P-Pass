@@ -1,5 +1,6 @@
 {
   "desktop": "0.9.7",
   "android": "0.9.12",
-  "androidVersionCode": 65
+  "androidVersionCode": 65,
+  "ios": "0.1.0"
 }
