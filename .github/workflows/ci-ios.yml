@@ -102,6 +102,10 @@ jobs:
       - name: i18n bundled copy in sync with assets/i18n
         run: tools/ios/sync-i18n.sh --check
 
+      # #346：版本号换算规则（不需要模拟器）。产物里的值由 App 测试里的 VersionStampTests 核对。
+      - name: Version stamp rule
+        run: tools/ios/test-stamp-version.sh
+
       - name: No system default colours in app sources
         run: tools/ios/check-no-system-colors.sh
 
