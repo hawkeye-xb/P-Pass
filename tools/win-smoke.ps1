@@ -47,7 +47,6 @@ if (-not (Test-Path $TC)) { Write-Error "testclient.exe 不在 $Bin"; exit 1 }
 New-Item -ItemType Directory -Force -Path $Work | Out-Null
 $env:PPF_DATA_DIR = Join-Path $Work "library"
 $env:PPF_RELAY_URLS = ""
-$env:PPF_TELEMETRY_ENABLED = "false"
 
 $script:DAEMON_PID = $null
 $daemonLog = Join-Path $Work "daemon.log"

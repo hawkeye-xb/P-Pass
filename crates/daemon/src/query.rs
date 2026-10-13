@@ -25,7 +25,7 @@ use proto::{AssetMeta, BlobTicketResponse, ThumbGet, ThumbSize, TimelineQuery};
 use storage::Db;
 use transport::Blobs;
 
-use crate::telemetry::{Event as TelemetryEvent, Telemetry};
+use crate::stats;
 
 /// The 5 s thumb-generation budget (契约).
 const THUMB_BUDGET: Duration = Duration::from_secs(5);
@@ -71,8 +71,6 @@ pub struct QueryEngine {
     blobs: Arc<Blobs>,
     pub(crate) library_root: PathBuf,
     pub(crate) thumbs_root: PathBuf,
-    /// TEL-04: optional anonymized telemetry sink for `first_byte`.
-    telemetry: Option<Telemetry>,
     /// DESK-34 (#428): in-flight dedup + negative cache, shared by every
     /// clone of this engine (the router clones it — a per-clone table
     /// would silently defeat the dedup).
@@ -315,7 +313,6 @@ impl QueryEngine {
             blobs,
             thumbs_root: root.join(".ppf/thumbs"),
             library_root: root,
-            telemetry: None,
             gate: Arc::default(),
             generator: Arc::new(|hash: &[u8; 32], src: &Path, root: &Path| {
                 media_codec::make_thumbs(hash, src, root)
@@ -325,23 +322,13 @@ impl QueryEngine {
         }
     }
 
-    /// TEL-04: wire an anonymized telemetry sink so `thumb()`/`original()`
-    /// each record one `first_byte` event (ms/kind) per request.
-    /// `Telemetry::record` is already a no-op when the client itself is
-    /// disabled — this builder only controls whether `QueryEngine` has a
-    /// sink to call at all.
-    pub fn with_telemetry(mut self, telemetry: Telemetry) -> Self {
-        self.telemetry = Some(telemetry);
-        self
-    }
-
+    /// TEL-04 / #949: `thumb()`/`original()` each write one local
+    /// `first_byte` stats line (ms/kind) per successful request.
     fn record_first_byte(&self, started: std::time::Instant, kind: &'static str) {
-        if let Some(telemetry) = &self.telemetry {
-            telemetry.record(TelemetryEvent::FirstByte {
-                ms: started.elapsed().as_millis() as u64,
-                kind,
-            });
-        }
+        stats::record(stats::Event::FirstByte {
+            ms: started.elapsed().as_millis() as u64,
+            kind,
+        });
     }
 
     /// `timeline.page`: keyset pagination straight off the repo.

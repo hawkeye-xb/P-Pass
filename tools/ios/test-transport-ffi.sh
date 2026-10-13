@@ -51,7 +51,6 @@ HOME="$WORK/home" \
   PPF_DATA_DIR="$WORK/data" \
   PPF_BIND_ADDR="127.0.0.1:0" \
   PPF_RELAY_URLS="" \
-  PPF_TELEMETRY_ENABLED=false \
   "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
 DAEMON_PID=$!
 exec 4>"$WORK/stdin"

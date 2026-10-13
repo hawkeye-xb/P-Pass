@@ -32,10 +32,3 @@ monitors:
     interval: 60
     retryInterval: 60
     maxretries: 3
-  - name: "telemetry"
-    type: http
-    url: "https://telemetry.p-pass.hawkeye-xb.com/"
-    expectedBody: '"ok":true'
-    interval: 300
-    retryInterval: 60
-    maxretries: 3

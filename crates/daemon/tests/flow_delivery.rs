@@ -3,11 +3,9 @@ use std::sync::Arc;
 
 use daemon::events;
 use daemon::flow_delivery::{DeliveryError, FlowDelivery, FlowPathRegistry};
-use daemon::Telemetry;
 use proto::FlowFetchRequest;
 use storage::{Asset, Db, Device, Role};
 use tempfile::tempdir;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use transport::{Blobs, ConnectionStatus, IrohTransport, TransportConfig, ALPN_BLOBS};
 
 fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFetchRequest {
@@ -748,71 +746,81 @@ fn old_flow_lease_cannot_clear_a_newer_data_plane_path() {
     assert_eq!(paths.get(peer), Some(ConnectionStatus::Relay));
 }
 
-// ── TEL-02: FlowDelivery.fetch() records anonymized telemetry ──
+// ── TEL-02 / #949: FlowDelivery writes conn/flow_item stats to the local log ──
 
-/// Minimal HTTP/1.1 server: counts requests, captures JSON bodies. Mirrors
-/// `crates/daemon/tests/telemetry_flow.rs`'s helper (kept local — that file
-/// is a different test binary, and the fixture is small enough not to be
-/// worth a shared dev-dependency crate for two call sites).
-async fn mock_telemetry_server() -> (
-    String,
-    Arc<std::sync::atomic::AtomicUsize>,
-    Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
-) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/telemetry", listener.local_addr().unwrap());
-    let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let bodies: Arc<std::sync::Mutex<Vec<serde_json::Value>>> = Arc::default();
-    let (h, b) = (Arc::clone(&hits), Arc::clone(&bodies));
-    tokio::spawn(async move {
-        loop {
-            let Ok((mut sock, _)) = listener.accept().await else {
-                return;
-            };
-            h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let b = Arc::clone(&b);
-            tokio::spawn(async move {
-                let mut buf = Vec::new();
-                let mut tmp = [0u8; 4096];
-                loop {
-                    let Ok(n) = sock.read(&mut tmp).await else {
-                        return;
-                    };
-                    if n == 0 {
-                        break;
-                    }
-                    buf.extend_from_slice(&tmp[..n]);
-                    if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n").map(|p| p + 4)
-                    {
-                        let headers = String::from_utf8_lossy(&buf[..pos]);
-                        let len = headers
-                            .lines()
-                            .find_map(|l| {
-                                l.to_lowercase()
-                                    .strip_prefix("content-length:")
-                                    .map(|v| v.trim().parse::<usize>().ok())
-                            })
-                            .flatten()
-                            .unwrap_or(0);
-                        if buf.len() >= pos + len {
-                            if let Ok(v) = serde_json::from_slice(&buf[pos..pos + len]) {
-                                b.lock().unwrap().push(v);
-                            }
-                            break;
-                        }
-                    }
-                }
-                let _ = sock
-                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\n\r\n")
-                    .await;
-            });
-        }
-    });
-    (url, hits, bodies)
+/// In-memory log sink for a thread-local test subscriber.
+#[derive(Clone, Default)]
+struct LogCapture(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for LogCapture {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn successful_fetch_records_one_conn_and_one_flow_item_event() {
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for LogCapture {
+    type Writer = LogCapture;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl LogCapture {
+    /// Stats lines captured so far (target `ppf::stats` only).
+    fn stats_lines(&self) -> Vec<String> {
+        String::from_utf8(self.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .filter(|l| l.contains(daemon::stats::TARGET))
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+/// A multi-thread runtime whose every worker / blocking thread (and the
+/// calling thread) logs into `cap` through the daemon's production default
+/// filter. Ingest uses `block_in_place`, so a current-thread runtime is not
+/// an option; a thread-local default per runtime thread keeps parallel tests
+/// in this binary from seeing each other's lines (a global subscriber would
+/// mix them).
+fn captured_runtime(
+    cap: &LogCapture,
+) -> (tokio::runtime::Runtime, tracing::subscriber::DefaultGuard) {
+    let dispatch = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(format!(
+                "info,{}",
+                transport::QUIET_LOG_DIRECTIVES
+            )))
+            .with_ansi(false)
+            .with_writer(cap.clone())
+            .finish(),
+    );
+    let for_threads = dispatch.clone();
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .on_thread_start(move || {
+            // The guard lives as long as the runtime thread itself.
+            std::mem::forget(tracing::dispatcher::set_default(&for_threads));
+        })
+        .build()
+        .unwrap();
+    let guard = tracing::dispatcher::set_default(&dispatch);
+    (rt, guard)
+}
+
+#[test]
+fn successful_fetch_logs_one_conn_and_one_flow_item_stats_line() {
+    let cap = LogCapture::default();
+    let (rt, _guard) = captured_runtime(&cap);
+    rt.block_on(successful_fetch_logs_one_conn_and_one_flow_item_stats_line_body(&cap));
+}
+
+async fn successful_fetch_logs_one_conn_and_one_flow_item_stats_line_body(cap: &LogCapture) {
     let root = tempdir().unwrap();
     let provider_transport =
         IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
@@ -822,7 +830,7 @@ async fn successful_fetch_records_one_conn_and_one_flow_item_event() {
         .await
         .unwrap();
     provider_blobs.serve();
-    let bytes = b"TEL-02 telemetry fixture bytes";
+    let bytes = b"TEL-02 stats fixture bytes";
     let source = root.path().join("source.jpg");
     std::fs::write(&source, bytes).unwrap();
     let hash = *blake3::hash(bytes).as_bytes();
@@ -839,11 +847,7 @@ async fn successful_fetch_records_one_conn_and_one_flow_item_event() {
     );
     let db = paired_db("epoch-current", provider_transport.node_id()).await;
 
-    let (telemetry_url, hits, bodies) = mock_telemetry_server().await;
-    let telemetry_dir = tempdir().unwrap();
-    let telemetry = Telemetry::new(true, telemetry_url, telemetry_dir.path());
-    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path())
-        .with_telemetry(telemetry.clone());
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
     let offer = request("epoch-current", "lease-current", hash, ticket);
     delivery
         .offer(provider_transport.node_id(), &offer)
@@ -854,120 +858,27 @@ async fn successful_fetch_records_one_conn_and_one_flow_item_event() {
         .await
         .unwrap();
 
-    assert_eq!(telemetry.flush_now().await, 2, "one conn + one flow_item");
-    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
-    let batch = bodies.lock().unwrap()[0].clone();
-    let events: Vec<&str> = batch
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|e| e["event"].as_str().unwrap())
-        .collect();
-    assert_eq!(events, ["conn", "flow_item"]);
-    assert_eq!(batch[0]["fail_stage"], serde_json::Value::Null);
-    assert_eq!(batch[1]["bytes"], bytes.len() as u64);
-    assert_eq!(batch[1]["resumed"], false);
+    let lines = cap.stats_lines();
+    assert_eq!(lines.len(), 2, "one conn + one flow_item: {lines:?}");
+    assert!(lines[0].contains("event=\"conn\""), "{}", lines[0]);
+    assert!(lines[0].contains("fail_stage=\"none\""), "{}", lines[0]);
+    assert!(lines[1].contains("event=\"flow_item\""), "{}", lines[1]);
+    assert!(
+        lines[1].contains(&format!("bytes={}", bytes.len())),
+        "{}",
+        lines[1]
+    );
+    assert!(lines[1].contains("resumed=false"), "{}", lines[1]);
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn disabled_telemetry_means_zero_network_calls_from_flow_delivery() {
-    let root = tempdir().unwrap();
-    let provider_transport =
-        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
-            .await
-            .unwrap();
-    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
-        .await
-        .unwrap();
-    provider_blobs.serve();
-    let bytes = b"TEL-02 disabled telemetry fixture";
-    let source = root.path().join("source.jpg");
-    std::fs::write(&source, bytes).unwrap();
-    let hash = *blake3::hash(bytes).as_bytes();
-    let ticket = provider_blobs.push(hash, &source).await.unwrap();
-
-    let receiver_transport =
-        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
-            .await
-            .unwrap();
-    let receiver_blobs = Arc::new(
-        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
-            .await
-            .unwrap(),
-    );
-    let db = paired_db("epoch-current", provider_transport.node_id()).await;
-
-    let (telemetry_url, hits, _bodies) = mock_telemetry_server().await;
-    let telemetry_dir = tempdir().unwrap();
-    let telemetry = Telemetry::new(false, telemetry_url, telemetry_dir.path());
-    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path())
-        .with_telemetry(telemetry.clone());
-    let offer = request("epoch-current", "lease-current", hash, ticket);
-    delivery
-        .offer(provider_transport.node_id(), &offer)
-        .await
-        .unwrap();
-    delivery
-        .fetch(provider_transport.node_id(), &offer)
-        .await
-        .unwrap();
-
-    assert_eq!(telemetry.flush_now().await, 0);
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    assert_eq!(
-        hits.load(std::sync::atomic::Ordering::SeqCst),
-        0,
-        "disabled telemetry must mean ZERO network calls even through FlowDelivery"
-    );
+#[test]
+fn network_fetch_failure_logs_conn_lines_at_the_fetch_stage() {
+    let cap = LogCapture::default();
+    let (rt, _guard) = captured_runtime(&cap);
+    rt.block_on(network_fetch_failure_logs_conn_lines_at_the_fetch_stage_body(&cap));
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn invalid_request_records_an_error_event_tagged_with_its_stage() {
-    let root = tempdir().unwrap();
-    let provider_transport =
-        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
-            .await
-            .unwrap();
-    let receiver_blobs = Arc::new(
-        Blobs::open(&provider_transport, &root.path().join("receiver-store"))
-            .await
-            .unwrap(),
-    );
-    let db = paired_db("epoch-current", provider_transport.node_id()).await;
-
-    let (telemetry_url, _hits, bodies) = mock_telemetry_server().await;
-    let telemetry_dir = tempdir().unwrap();
-    let telemetry = Telemetry::new(true, telemetry_url, telemetry_dir.path());
-    let delivery =
-        FlowDelivery::new(db, receiver_blobs, root.path()).with_telemetry(telemetry.clone());
-
-    // Empty file_name trips checked_request's field presence guard —
-    // InvalidRequest, no network involved at all.
-    let mut bad = request(
-        "epoch-current",
-        "lease-current",
-        [0x11; 32],
-        "unused".into(),
-    );
-    bad.file_name = String::new();
-    assert!(matches!(
-        delivery.offer(provider_transport.node_id(), &bad).await,
-        Err(DeliveryError::InvalidRequest(_))
-    ));
-
-    assert_eq!(telemetry.flush_now().await, 1, "one error event");
-    let batch = bodies.lock().unwrap()[0].clone();
-    let event = &batch.as_array().unwrap()[0];
-    assert_eq!(event["event"], "error");
-    assert_eq!(event["code"], "invalid_request");
-    assert_eq!(event["stage"], "offer");
-    // 隐私红线：code/stage 只能是固定词汇，绝不能带原始错误文本/路径。
-    let raw = event.to_string();
-    assert!(!raw.contains("missing required item field"));
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
+async fn network_fetch_failure_logs_conn_lines_at_the_fetch_stage_body(cap: &LogCapture) {
     let root = tempdir().unwrap();
     let provider_transport =
         IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
@@ -995,11 +906,7 @@ async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
     );
     let db = paired_db("epoch-current", provider_node).await;
 
-    let (telemetry_url, _hits, bodies) = mock_telemetry_server().await;
-    let telemetry_dir = tempdir().unwrap();
-    let telemetry = Telemetry::new(true, telemetry_url, telemetry_dir.path());
-    let delivery =
-        FlowDelivery::new(db, receiver_blobs, root.path()).with_telemetry(telemetry.clone());
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
     let offer = request("epoch-current", "lease-current", hash, ticket);
     delivery.offer(provider_node, &offer).await.unwrap();
 
@@ -1015,87 +922,17 @@ async fn network_fetch_failure_records_a_fetch_failed_error_at_fetch_stage() {
         Err(DeliveryError::Fetch(_))
     ));
 
-    // #620: 事件**条数不是不变量**。`fetch()` 无条件调 `spawn_fetch_task`，
-    // 而它的幂等只成立于「上一个尝试仍在登记」（`try_register`）——所以当
-    // `offer()` 起的那次尝试**已经失败退场**时，这次 `fetch()` 会合法地再起
-    // 一次尝试，遥测里就多出**第二条 conn**（conn 不去重；error 按
-    // `(code, stage)` 去重，仍然只有 1 条）。
-    //
-    // 实测复现（本机，2026-10-04）：让第一个尝试彻底退场后再 fetch →
-    //   flush_now = 3，events = ["conn", "conn", "error"]，
-    //   两条 conn 的 ms ≈ 30005 / 30008（各是一次完整尝试的时长）。
-    // 因此这里断言**语义**：error 恰好一条且标注 fetch/fetch_failed；其余
-    // 每条都是 conn，且每个 conn 都是 fetch 阶段的失败。不钉条数、不钉顺序
-    // ——顺序由「哪次尝试先退场」决定，不是契约。
-    telemetry.flush_now().await;
-    let batches = bodies.lock().unwrap().clone();
-    let events: Vec<serde_json::Value> = batches
-        .iter()
-        .flat_map(|b| b.as_array().cloned().unwrap_or_default())
-        .collect();
-    let conns: Vec<&serde_json::Value> = events.iter().filter(|e| e["event"] == "conn").collect();
-    let errors: Vec<&serde_json::Value> = events.iter().filter(|e| e["event"] == "error").collect();
-
-    assert!(!conns.is_empty(), "至少一次后台尝试要留下 conn：{events:?}");
+    // #620: 条数不是不变量——`offer()` 起的那次尝试已失败退场时，`fetch()`
+    // 会合法地再起一次尝试，多出第二条 conn。这里断言语义：至少一条，且每条
+    // 都是 fetch 阶段失败的 conn；成功路径的 flow_item 一条都不能有。
+    let lines = cap.stats_lines();
+    assert!(!lines.is_empty(), "至少一次后台尝试要留下 conn");
     assert!(
-        conns.iter().all(|c| c["fail_stage"] == "fetch"),
-        "每个 conn 都必须是 fetch 阶段的失败（不是一个成功的 conn）：{conns:?}"
+        lines
+            .iter()
+            .all(|l| l.contains("event=\"conn\"") && l.contains("fail_stage=\"fetch\"")),
+        "每行都必须是 fetch 阶段失败的 conn：{lines:?}"
     );
-    assert_eq!(
-        errors.len(),
-        1,
-        "错误事件恰好一条（同 (code, stage) 被 TEL-03 去重）：{errors:?}"
-    );
-    assert_eq!(errors[0]["code"], "fetch_failed");
-    assert_eq!(errors[0]["stage"], "fetch");
-    assert_eq!(
-        events.len(),
-        conns.len() + 1,
-        "除了那条 error，其余事件只能是对应的 conn：{events:?}"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn repeated_same_error_is_deduped_within_the_flush_window() {
-    let root = tempdir().unwrap();
-    let provider_transport =
-        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
-            .await
-            .unwrap();
-    let receiver_blobs = Arc::new(
-        Blobs::open(&provider_transport, &root.path().join("receiver-store"))
-            .await
-            .unwrap(),
-    );
-    let db = paired_db("epoch-current", provider_transport.node_id()).await;
-
-    let (telemetry_url, _hits, bodies) = mock_telemetry_server().await;
-    let telemetry_dir = tempdir().unwrap();
-    let telemetry = Telemetry::new(true, telemetry_url, telemetry_dir.path());
-    let delivery =
-        FlowDelivery::new(db, receiver_blobs, root.path()).with_telemetry(telemetry.clone());
-
-    let mut bad = request(
-        "epoch-current",
-        "lease-current",
-        [0x22; 32],
-        "unused".into(),
-    );
-    bad.file_name = String::new();
-    for _ in 0..5 {
-        assert!(matches!(
-            delivery.offer(provider_transport.node_id(), &bad).await,
-            Err(DeliveryError::InvalidRequest(_))
-        ));
-    }
-
-    assert_eq!(
-        telemetry.flush_now().await,
-        1,
-        "5 identical (code, stage) failures must collapse to 1 event within the dedup window"
-    );
-    let batch = bodies.lock().unwrap()[0].clone();
-    assert_eq!(batch.as_array().unwrap().len(), 1);
 }
 
 // ── NET-06: flow.status / flow.suspend (control-plane, async 202 model) ──

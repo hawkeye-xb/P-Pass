@@ -637,7 +637,7 @@ fn probe_failure_on_a_full_disk_is_full_not_unavailable() {
 
 /// End to end: a materialize failure (the staging folder cannot be created
 /// because a regular file sits where it belongs) is pushed with a public
-/// code — never the internal `materialize_*` telemetry code.
+/// code — never the internal `materialize_*` detail code.
 async fn pushed_failure_code(free: Option<u64>) -> String {
     let root = tempdir().unwrap();
     let library = library(root.path());

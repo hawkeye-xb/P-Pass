@@ -30,7 +30,7 @@ trap cleanup EXIT
 start_daemon() {
   # PPF_BIND_ADDR=0.0.0.0:0：开发机上用户 config 固定 41145，临时 daemon
   # 不显式覆盖会与常驻 daemon 撞端口（bind 失败），CI 无用户配置不炸。
-  PPF_DATA_DIR="$WORK/library" PPF_TELEMETRY_ENABLED=false PPF_RELAY_URLS="" \
+  PPF_DATA_DIR="$WORK/library" PPF_RELAY_URLS="" \
     PPF_BIND_ADDR="0.0.0.0:0" \
     "$DAEMON" > daemon.log 2> daemon.err &
   DAEMON_PID=$!

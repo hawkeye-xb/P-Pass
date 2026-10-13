@@ -96,13 +96,13 @@ crates/       Rust 核心（Cargo workspace，9 个 crate）
   core-media/     EXIF 元数据（纯解析）
   media-codec/    HEIC/JPEG 解码、缩略图、ffmpeg 抽帧
   platform/       平台适配 trait（唯一允许平台 #[cfg] 的 crate）
-  daemon/         组装：authz 路由、配对、备份接收、查询、本地 IPC、遥测
+  daemon/         组装：authz 路由、配对、备份接收、查询、本地 IPC、本地运行统计日志
   diag/           诊断状态机 + msg_key 字典 + i18n
 apps/         各端应用（皮肤层，业务都在 crates）
   desktop/        Tauri 托盘壳（只经本地 IPC 调 daemon）
   android/        Android App（iroh-ffi + 生成的 proto 类型）
 infra/        云端与自建（全部可自托管）
-  workers/        rendezvous / telemetry / update（Cloudflare Workers）
+  workers/        rendezvous / update（Cloudflare Workers）
   relay/          官方 relay 部署模板（只含占位符）
   selfhost/       自建者一键 compose
   website/        官网一页

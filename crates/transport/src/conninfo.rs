@@ -1,4 +1,4 @@
-//! ConnInfo — path classification for telemetry and the diag UI.
+//! ConnInfo — path classification for the diag UI.
 //!
 //! Classification is a pure function over iroh-independent [`PathFacts`],
 //! so the mapping logic is unit-testable without touching the network.
@@ -19,7 +19,7 @@ pub enum PathKind {
     Relay,
 }
 
-/// Connection facts for telemetry and the self-diagnosis UI.
+/// Connection facts for the self-diagnosis UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnInfo {
     /// `None` = no live connection to this peer. §3.1 declares `conn_info`
@@ -113,7 +113,7 @@ pub(crate) fn classify(paths: &[PathFacts]) -> ConnInfo {
 /// LAN = the remote address is non-routable (private/loopback/link-local).
 /// Deliberately address-based, not RTT-based: deterministic and testable.
 /// Known gap: two machines on the same LAN reaching each other via public
-/// IPv6 classify as Direct — acceptable for MVP telemetry.
+/// IPv6 classify as Direct — acceptable for the MVP diag UI.
 fn is_lan_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),

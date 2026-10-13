@@ -28,14 +28,7 @@ pub struct Config {
     pub bind_addr: Option<std::net::SocketAddr>,
     pub relay_urls: Vec<String>,
     pub rendezvous_url: String,
-    pub telemetry: TelemetryConfig,
     pub log_level: String,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TelemetryConfig {
-    pub enabled: bool,
-    pub url: String,
 }
 
 /// Partial overlay as read from `config.toml` — every field optional.
@@ -46,15 +39,14 @@ struct Overlay {
     bind_addr: Option<std::net::SocketAddr>,
     relay_urls: Option<Vec<String>>,
     rendezvous_url: Option<String>,
-    telemetry: Option<TelemetryOverlay>,
     log_level: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct TelemetryOverlay {
-    enabled: Option<bool>,
-    url: Option<String>,
+    /// #949 兼容字段：遥测上报已下线，但已装桌面用户的 config.toml 里都有
+    /// 首启写入的 `[telemetry]` 段（`enabled = false`，个别还带 `url`）。
+    /// `deny_unknown_fields` 会把它当未知字段拒掉、daemon 起不来，所以这里
+    /// **接收并忽略**整段内容（`IgnoredAny`：任何形状都吃下、不读取）。
+    /// 不要删——删了旧用户升级后 config 加载失败。
+    #[serde(rename = "telemetry")]
+    _legacy_telemetry: Option<serde::de::IgnoredAny>,
 }
 
 impl Config {
@@ -62,16 +54,11 @@ impl Config {
     pub fn default_config() -> anyhow::Result<Config> {
         let overlay: Overlay = toml::from_str(ENDPOINTS_DEFAULT)
             .context("built-in endpoints.default.toml is invalid")?;
-        let telemetry = overlay.telemetry.unwrap_or_default();
         Ok(Config {
             data_dir: None,
             bind_addr: None,
             relay_urls: overlay.relay_urls.unwrap_or_default(),
             rendezvous_url: overlay.rendezvous_url.unwrap_or_default(),
-            telemetry: TelemetryConfig {
-                enabled: telemetry.enabled.unwrap_or(true),
-                url: telemetry.url.unwrap_or_default(),
-            },
             log_level: overlay.log_level.unwrap_or_else(|| "info".to_string()),
         })
     }
@@ -112,14 +99,6 @@ impl Config {
             if let Some(v) = overlay.rendezvous_url {
                 cfg.rendezvous_url = v;
             }
-            if let Some(t) = overlay.telemetry {
-                if let Some(v) = t.enabled {
-                    cfg.telemetry.enabled = v;
-                }
-                if let Some(v) = t.url {
-                    cfg.telemetry.url = v;
-                }
-            }
             if let Some(v) = overlay.log_level {
                 cfg.log_level = v;
             }
@@ -145,25 +124,11 @@ impl Config {
         if let Some(v) = env.get("PPF_RENDEZVOUS_URL") {
             cfg.rendezvous_url = v.clone();
         }
-        if let Some(v) = env.get("PPF_TELEMETRY_ENABLED") {
-            cfg.telemetry.enabled = parse_bool("PPF_TELEMETRY_ENABLED", v)?;
-        }
-        if let Some(v) = env.get("PPF_TELEMETRY_URL") {
-            cfg.telemetry.url = v.clone();
-        }
         if let Some(v) = env.get("PPF_LOG_LEVEL") {
             cfg.log_level = v.clone();
         }
 
         Ok(cfg)
-    }
-}
-
-fn parse_bool(var: &str, raw: &str) -> anyhow::Result<bool> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" | "yes" | "on" => Ok(true),
-        "false" | "0" | "no" | "off" => Ok(false),
-        other => anyhow::bail!("{var} must be a boolean, got {other:?}"),
     }
 }
 
@@ -186,15 +151,6 @@ mod tests {
         // （见 config/endpoints.default.toml 注释）。
         assert!(cfg.relay_urls.is_empty());
         assert!(cfg.rendezvous_url.contains("rendezvous"));
-        assert!(cfg.telemetry.enabled);
-        // T-061b-fix: the telemetry Worker only accepts POSTs on /ingest —
-        // the compiled-in default URL must carry the suffix or a stock
-        // daemon 404s every batch silently.
-        assert!(
-            cfg.telemetry.url.ends_with("/ingest"),
-            "默认 telemetry url 必须带 /ingest，实际: {}",
-            cfg.telemetry.url
-        );
         assert_eq!(cfg.log_level, "info");
         assert_eq!(cfg.data_dir, None);
     }
@@ -204,16 +160,12 @@ mod tests {
         let file = r#"
             data_dir = "/tmp/lib"
             relay_urls = ["https://relay.self-host.example"]
-            [telemetry]
-            enabled = false
         "#;
         let cfg = Config::resolve(Some(file), &env(&[])).unwrap();
         assert_eq!(cfg.data_dir, Some(PathBuf::from("/tmp/lib")));
         assert_eq!(cfg.relay_urls, vec!["https://relay.self-host.example"]);
-        assert!(!cfg.telemetry.enabled);
         // Untouched fields keep defaults.
         assert!(cfg.rendezvous_url.contains("p-pass.hawkeye-xb.com"));
-        assert!(cfg.telemetry.url.contains("telemetry"));
         assert_eq!(cfg.log_level, "info");
     }
 
@@ -221,21 +173,14 @@ mod tests {
     fn layer3_env_overrides_file_and_defaults() {
         let file = r#"
             log_level = "debug"
-            [telemetry]
-            enabled = true
         "#;
         let e = env(&[
             ("PPF_BIND_ADDR", "0.0.0.0:41145"),
-            ("PPF_TELEMETRY_ENABLED", "false"),
             ("PPF_LOG_LEVEL", "warn"),
             ("PPF_RELAY_URLS", "https://a.example, https://b.example"),
             ("PPF_DATA_DIR", "/env/dir"),
         ]);
         let cfg = Config::resolve(Some(file), &e).unwrap();
-        assert!(
-            !cfg.telemetry.enabled,
-            "PPF_TELEMETRY_ENABLED=false 必须生效"
-        );
         assert_eq!(cfg.log_level, "warn");
         assert_eq!(
             cfg.relay_urls,
@@ -249,11 +194,33 @@ mod tests {
         );
     }
 
+    /// #949 E2：遥测已下线，但旧版 config.toml 里的 `[telemetry]` 段（桌面
+    /// 首启写入的 `enabled = false`，或手工改过的 `enabled = true` + `url`）
+    /// 必须照常加载、不报 unknown field，且不影响其它字段。
+    /// 反证：从 `Overlay` 删掉 `_legacy_telemetry`，本测试必须红。
     #[test]
-    fn invalid_bool_env_is_an_error_not_a_default() {
-        let e = env(&[("PPF_TELEMETRY_ENABLED", "maybe")]);
-        let err = Config::resolve(None, &e).unwrap_err();
-        assert!(err.to_string().contains("PPF_TELEMETRY_ENABLED"));
+    fn legacy_telemetry_section_is_accepted_and_ignored() {
+        for legacy in [
+            "[telemetry]\nenabled = false\n",
+            "[telemetry]\nenabled = true\nurl = \"https://telemetry.example.com/ingest\"\n",
+            "[telemetry]\nenabled = false\nurl = \"https://telemetry.example.com\"\n",
+        ] {
+            let file = format!(
+                "data_dir = \"/old/library\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n\n{legacy}"
+            );
+            let cfg = Config::resolve(Some(&file), &env(&[]))
+                .unwrap_or_else(|e| panic!("旧 config 必须能加载：{e:#}\n{file}"));
+            assert_eq!(cfg.data_dir, Some(PathBuf::from("/old/library")));
+            assert_eq!(cfg.bind_addr, Some("0.0.0.0:41145".parse().unwrap()));
+            assert!(cfg.relay_urls.is_empty());
+        }
+    }
+
+    /// 内置默认值不再带 `[telemetry]` 段（#949）。
+    #[test]
+    fn builtin_defaults_carry_no_telemetry_section() {
+        let raw: toml::Value = toml::from_str(ENDPOINTS_DEFAULT).unwrap();
+        assert!(raw.get("telemetry").is_none(), "{ENDPOINTS_DEFAULT}");
     }
 
     #[test]

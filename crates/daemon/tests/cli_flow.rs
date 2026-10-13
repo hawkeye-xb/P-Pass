@@ -154,7 +154,6 @@ fn pair_link_never_printed_when_stdout_is_not_a_terminal() {
     let child = daemon_bin()
         .arg("--ephemeral")
         .env("PPF_DATA_DIR", dir.path())
-        .env("PPF_TELEMETRY_ENABLED", "false")
         .env("PPF_RELAY_URLS", "")
         .env("PPF_BIND_ADDR", "127.0.0.1:0")
         .env_remove("PPF_LOG_FILE")

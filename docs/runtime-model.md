@@ -6,7 +6,7 @@
 
 ## 0. 一句话结论
 
-单进程 + 单异步运行时。常驻循环只有 8 条，其余全是「来活才存在」的短任务。
+单进程 + 单异步运行时。常驻循环只有 7 条，其余全是「来活才存在」的短任务。
 **闲时≈0 开销，忙时被并发闸门封顶**；防卡的四道防线里三道已落地，
 第四道（跨网络等待全部死线化）是明确挂号的欠账，见 §6。
 
@@ -28,7 +28,7 @@ flowchart TB
             LOOP["事件循环<br/>只收、判断、派活"]
             BLOCK["blocking 池<br/>真等盘/吃 CPU 的活"]
         end
-        RES["8 条常驻任务<br/>IPC·stdin·清理·遥测·心跳·对账·监听·Router"]
+        RES["7 条常驻任务<br/>IPC·stdin·清理·心跳·对账·监听·Router"]
         EP["短命任务<br/>每连接/每拉取 spawn 一个，干完即灭"]
         GATES["闸门：Semaphore(4) · 有界chan(16) ·<br/>Throttle(1s) · 12MiB cap · 日志truncate"]
         LOOP --- RES
@@ -54,20 +54,19 @@ flowchart TB
 现存下放点 `query.rs:119`（缩略图生成）、`watcher.rs:184/301`（扫盘/批量 stat）、
 `main.rs:273`（读 stdin）。
 
-## 2. 八条常驻任务（全名单，一条不漏）
+## 2. 七条常驻任务（全名单，一条不漏）
 
 | # | 任务 | 出处 | 触发 | 闲时开销 |
 |---|---|---|---|---|
 | 1 | IPC 服务（桌面壳/testclient 询问） | `main.rs:255` → `ipc.serve` | 常驻 accept | 挂在 await，0 |
 | 2 | stdin 控制台确认器（配对 y/n） | `main.rs:268` | 常驻读行 | 挂在 blocking 池读，0；EOF 即退出 |
 | 3 | 诊断环清理 | `main.rs:299` | 每 6h | 一次 DB prune |
-| 4 | 遥测攒批 flush | `main.rs:317` | 每 300s | 开关关闭时**整条任务不启动**（opt-out 在根上） |
-| 5 | 心跳记录 DaemonAlive | `main.rs:320` | 每 24h | 写内存缓冲，随 #4 一起 flush |
-| 6 | 索引对账 Reconcile | `main.rs:461` | 启动一次 + 每 1h | 一次增量扫描（下放 blocking） |
-| 7 | 库目录监听 LibraryWatcher | `watcher.spawn()` | notify 事件驱动 + 防抖 | 挂在通道，0 |
-| 8 | Router（对端 QUIC：传输/订阅/配对） | `main.rs:538/552` | 常驻 accept（主循环本体） | 挂在 await，0 |
+| 4 | 心跳记录 daemon_alive | `main.rs` #949 | 每 24h | 写一行本地日志（`ppf::stats`，不联网） |
+| 5 | 索引对账 Reconcile | `main.rs:461` | 启动一次 + 每 1h | 一次增量扫描（下放 blocking） |
+| 6 | 库目录监听 LibraryWatcher | `watcher.spawn()` | notify 事件驱动 + 防抖 | 挂在通道，0 |
+| 7 | Router（对端 QUIC：传输/订阅/配对） | `main.rs:538/552` | 常驻 accept（主循环本体） | 挂在 await，0 |
 
-#7 启动失败时**降级而非崩溃**：改由 #6 每小时对账兜底（`main.rs:514` warn）。
+#6 启动失败时**降级而非崩溃**：改由 #5 每小时对账兜底（`main.rs:514` warn）。
 
 每条都是「循环 + sleep 到点」或「挂在通道/accept 上等」——没有忙轮询，没有定时器猜状态。
 
@@ -119,7 +118,7 @@ sequenceDiagram
 大文件走 iroh 流式分块。（iroh 库内部的缓冲策略未拆读——本文只担保我们这侧是流式管道。）
 
 磁盘卫生：构建/临时产物走 `just cleanup-local`；启动时清空 `.ppf/blobs` 收件箱（BLOB-01）；
-flow-staging 孤儿由 #6 每小时回收。
+flow-staging 孤儿由 #5 每小时回收。
 
 ## 5. 等待必须带死线（防「卡住」的最后一道）
 
@@ -128,7 +127,6 @@ flow-staging 孤儿由 #6 每小时回收。
 | daemon 探活对端 | 800ms | `ipc.rs:105` `peer_call` |
 | 桌面壳 → daemon 的每次 IPC 读 | **10s**（NET-11） | `apps/desktop/src-tauri/src/ipc.rs` `IPC_READ_TIMEOUT` |
 | 壳重启 daemon 后等就绪 | 12s | `lib.rs:439` |
-| 遥测 flush 一次上报 | 20s | `telemetry.rs:34` |
 | 事件订阅断线重连 | 2s 退避 | `lib.rs:81` `start_event_stream` |
 | ephemeral 退出协议关闭 | 2s，超时强退 | `main.rs` UX-07 |
 

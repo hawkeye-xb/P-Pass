@@ -394,9 +394,6 @@ bind_addr = \"0.0.0.0:41145\"
 
 # H-07 部署前必须为空（内置官方 relay 域名尚未上线）
 relay_urls = []
-
-[telemetry]
-enabled = false
 "
     )
 }
@@ -467,7 +464,7 @@ fn set_library_dir(library_dir: String) -> Result<(), String> {
 /// 读失败必须分两档：文件不存在 ⇒ 当空配置（首次写入，正常创建）；
 /// 其它读错误（权限 / 非 UTF-8 / IO）⇒ 如实报错、**不写文件**。
 /// 曾经的 `unwrap_or_default()` 把后者也读成空串，写回只剩 data_dir，
-/// bind_addr / relay_urls / [telemetry] 被抹掉，界面却报成功。
+/// bind_addr / relay_urls 等既有内容被抹掉，界面却报成功。
 fn rewrite_library_dir(cfg_path: &std::path::Path, library_dir: &str) -> Result<(), String> {
     let doc = match std::fs::read_to_string(cfg_path) {
         Ok(s) => s,
@@ -526,7 +523,7 @@ fn dir_writable(p: &std::path::Path) -> bool {
 /// DESK-46 (#638)：把 data_dir 换进既有 config 文本（read-modify-write）。
 ///
 /// 与 render_config（首启向导的整份模板）不同：这里**只改 data_dir 一行，
-/// 其余逐字节保留**——bind_addr / relay_urls / [telemetry] / 注释都是
+/// 其余逐字节保留**——bind_addr / relay_urls / 旧版留下的 section / 注释都是
 /// 用户与发版流程的既有事实，不能因为换个库位置被重写。
 ///
 /// 两条老规矩照守（与被删的 daemon write_folder_config 同一教训）：
@@ -3820,6 +3817,16 @@ mod tests {
         );
     }
 
+    // #949：首启 config 不再写 [telemetry] 段（遥测上报已下线）。
+    // 反证：把该段加回 render_config，本测试必须红。
+    #[test]
+    fn tel06_first_run_config_has_no_telemetry_section() {
+        let doc = render_config("/Users/alice/Pictures/lib");
+        let parsed: toml::Value = toml::from_str(&doc).expect("首启 config 必须是合法 TOML");
+        assert!(parsed.get("telemetry").is_none(), "{doc}");
+        assert!(!doc.contains("telemetry"), "{doc}");
+    }
+
     // ══ DESK-46 (#638)：set_library_dir —— 换库写职责归壳 ═════════════
 
     // merge 是纯函数：只换 data_dir，其余逐字节保留；新键落在首个
@@ -3833,12 +3840,13 @@ mod tests {
         assert_eq!(parsed["data_dir"].as_str().unwrap(), "/Volumes/My Passport");
         assert_eq!(parsed["bind_addr"].as_str().unwrap(), "0.0.0.0:41145");
         assert_eq!(parsed["relay_urls"].as_array().unwrap().len(), 0);
-        assert!(!parsed["telemetry"]["enabled"].as_bool().unwrap());
-        // 注释逐字节还在——其余内容不许被重写（E4）。
+        // 注释与旧版首启写入的 [telemetry] 段（#949 后 daemon 只接收并忽略）
+        // 都逐字节还在——其余内容不许被重写（E4）。
         assert!(out.contains("# 固定端口"));
+        assert!(out.ends_with("\n[telemetry]\nenabled = false\n"), "{out}");
         // 顶层键必须落在首个 [section] 之前。
         let key_pos = out.find("data_dir").unwrap();
-        let section_pos = out.find('[').expect("原文有 [telemetry]");
+        let section_pos = out.find("\n[").expect("原文有 [telemetry] section");
         assert!(key_pos < section_pos, "顶层键必须落在首个 [section] 之前");
     }
 
@@ -3898,6 +3906,8 @@ mod tests {
 
     // ══ DESK-49 (#710)：换库读 config 失败不得被吞 ═══════════════════
 
+    // 已装用户的真实形态：旧版首启写入了 [telemetry] 段（#949 后 daemon
+    // 只接收并忽略），换库时必须原样保留，不得被删。
     const DESK49_FULL_CFG: &str = "data_dir = \"/old/library\"\n\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n";
 
     // 读失败但写能成功 ⇒ 返回 keyed 错误、文件内容逐字节不变（E2 反证主测）。
@@ -3938,7 +3948,12 @@ mod tests {
         assert_eq!(parsed["data_dir"].as_str().unwrap(), "/new/library");
         assert_eq!(parsed["bind_addr"].as_str().unwrap(), "0.0.0.0:41145");
         assert_eq!(parsed["relay_urls"].as_array().unwrap().len(), 0);
-        assert!(!parsed["telemetry"]["enabled"].as_bool().unwrap());
+        assert!(
+            std::fs::read_to_string(&cfg)
+                .unwrap()
+                .ends_with("\n[telemetry]\nenabled = false\n"),
+            "旧版 [telemetry] 段必须逐字节保留"
+        );
     }
 
     // DESK-46 (#638) 契约门禁（源码扫描）：
