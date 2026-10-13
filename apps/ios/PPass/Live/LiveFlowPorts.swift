@@ -106,5 +106,5 @@ struct UnsupportedPush: FlowPushSource {
 }
 
 struct OSLogger: CoreLogger {
-    func log(_ message: String) { NSLog("[PPass] %@", message) }
+    func log(_ message: String) { AppLog.log(message) }
 }

@@ -109,7 +109,7 @@ struct MediaViewer: View {
         let url: URL
         do { url = try await timeline.original(item, progress: { _ in }) } catch {
             if error is CancellationError || Task.isCancelled { return }
-            NSLog("[PPass] viewer save: original failed: %@", String(describing: error))
+            AppLog.log("viewer save: original failed: \(error)")
             toast = L.s("share_download_failed")
             Haptics.failure()
             return
@@ -128,7 +128,7 @@ struct MediaViewer: View {
             toast = L.s("saved_to_gallery")
             Haptics.success()
         } catch {
-            NSLog("[PPass] viewer save: photo library failed: %@", String(describing: error))
+            AppLog.log("viewer save: photo library failed: \(error)")
             toast = L.s("share_download_failed")
             Haptics.failure()
         }
@@ -145,7 +145,7 @@ struct MediaViewer: View {
             share = url
         } catch {
             if error is CancellationError || Task.isCancelled { return }
-            NSLog("[PPass] viewer share: original failed: %@", String(describing: error))
+            AppLog.log("viewer share: original failed: \(error)")
             toast = L.s("share_download_failed")
             Haptics.failure()
         }
@@ -224,9 +224,9 @@ private struct ViewerPage: View {
         } else {
             // 同 Android：1024 取不到时退回网格里已缓存的 256，都没有才报失败（并写明原因）。
             do { image = try await timeline.thumbnail(item, large: true) } catch {
-                NSLog("[PPass] viewer 1024 thumb failed: %@", String(describing: error))
+                AppLog.log("viewer 1024 thumb failed: \(error)")
                 do { image = try await timeline.thumbnail(item, large: false) } catch {
-                    NSLog("[PPass] viewer 256 thumb failed: %@", String(describing: error))
+                    AppLog.log("viewer 256 thumb failed: \(error)")
                     photoError = String(String(describing: error).prefix(160))
                 }
             }

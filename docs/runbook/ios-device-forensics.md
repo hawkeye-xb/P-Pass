@@ -23,6 +23,18 @@
 - 不可用：`/usr/bin/log collect --device-udid <硬件 UDID> --last 5m` 要 root（`Must be root to collect logs from attached device`），agent 不用 sudo；
   取日志改用上面的 `--console` 启动，或让用户在终端里用 sudo 跑。zsh 里 `log` 是内建命令，要写 `/usr/bin/log`。
 
+## 后台日志（#955）
+
+- App 把每一行 `[PPass]` 日志同时写进容器内 `Library/Logs/ppass.log`（`AppLog`，前台、BGTask / 静默唤醒拉起都写）。单文件约 1 MB，满了换成 `ppass.log.1`，只保留这 2 份；每行带 ISO8601 毫秒时间戳。写失败不影响业务。
+- 每次进程启动第一行是 `process start: origin=foreground|background (BGTask / silent wake) pid=… version=…`；后台任务被系统拉起时还有 `background task launched (<reason>)`。
+- 取回：`tools/ios/pull-logs.sh [设备标识] [尾部行数]`（不给设备就取第一台 connected 的 iPhone），文件落在 `apps/ios/build/device-logs/<时间戳>/`，并打印尾部。
+  等价的手工命令：`xcrun devicectl device copy from --device <id> --domain-type appDataContainer --domain-identifier com.hawkeyexb.ppass --source Library/Logs/ppass.log --destination <本机路径>`。
+- 隐私：不写照片文件名、相册名、配对票据 / peerToken；照片标识只写 8 位 hash 前缀（`LogRedact.id`），落盘前 `LogRedact.scrub` 再兜底抹掉媒体文件名与 ≥32 字符的 ticket / token 串。新增日志行照此口径，不拼文件名与凭据。
+- 在真机上触发一次 BGTask：App 已装并启动过、且已配对并开了自动备份（这样才有任务被提交）→ 用 Xcode 附加调试器运行（Debug），暂停后在 LLDB 里执行
+  `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.hawkeyexb.ppass.backup"]` 再继续；
+  再 `pull-logs.sh`，应看到 `background task launched`。此命令只在调试器里可用，命令行 / devicectl 触发不了。要看「进程本身被后台拉起」的 `origin=background`，
+  需让系统真实调度（锁屏、接电源、等待）；调试器模拟是在已运行进程内触发回调，`origin` 仍是前台。
+
 ## 本机隔离 daemon 与端到端
 
 - 脚本：`tools/ios/e2e-device.sh`（真机）、`tools/ios/e2e-sim.sh`（模拟器）。两者都用 fake HOME + 临时库 + OS 分配端口（不碰 41145、不碰已装 P-Pass）。

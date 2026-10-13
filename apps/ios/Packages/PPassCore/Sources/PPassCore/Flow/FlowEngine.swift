@@ -850,7 +850,7 @@ public actor FlowEngine {
             } catch {
                 if Task.isCancelled { throw CancellationError() }
                 reason = "import:\(type(of: error))"
-                log("media \(details.snapshot.mediaId): import failed (\(error))\(attempt == 0 ? "; retrying once" : "")")
+                log("media \(LogRedact.id(details.snapshot.mediaId)): import failed (\(error))\(attempt == 0 ? "; retrying once" : "")")
             }
         }
         return (nil, reason)
@@ -886,11 +886,11 @@ public actor FlowEngine {
             return .next
         case let .originalUnavailable(reason):
             // #311 D4：iCloud 原图因网络拉不下来——不建行、不推进游标、不计失败；退出循环等网络（下一轮从同一张重来）。
-            log("media \(snapshot.mediaId): original not available (\(reason)); waiting, nothing counted")
+            log("media \(LogRedact.id(snapshot.mediaId)): original not available (\(reason)); waiting, nothing counted")
             return .exit(.originalUnavailable)
         case let .localStorageFull(reason):
             // #911：手机空间不足——同 D4 的处置：不建行、不推进游标、不计失败，整体等待。
-            log("media \(snapshot.mediaId): phone storage full (\(reason)); waiting, nothing counted")
+            log("media \(LogRedact.id(snapshot.mediaId)): phone storage full (\(reason)); waiting, nothing counted")
             return .exit(.localStorageFull)
         case let .imported(hash, _):
             // 导入算出 hash → 建 order（传输中，带 hash）→ 传输。G / S 在结局落库时一起推进（#415 裁决 8）。
