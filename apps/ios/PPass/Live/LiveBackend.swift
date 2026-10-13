@@ -86,6 +86,8 @@ final class LiveBackend: @unchecked Sendable {
     func ports() -> Backend {
         let pairing = LivePairing(plane: plane, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) }) { [weak self] record in
             self?.paired(record)
+        } onDisconnect: { [weak self] in
+            await self?.disconnect()
         }
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
             guard let r = pairingStore.load() else { return nil }
@@ -99,6 +101,17 @@ final class LiveBackend: @unchecked Sendable {
         try? provider.ffi.setAllowedPeer(nodeId: record.daemonNodeId)
         try? onboarded.markOnboarded(record.daemonNodeId)
         Task { _ = await engine.trigger(.pairingRepaired) }
+    }
+
+    /// 本地断开：先停引擎这一轮，再按断开清单清存储根（配对凭据、唤醒计划、自动备份生产者）。
+    /// 身份、相册范围、账本、「连过哪些电脑」都保留——重新扫码后不会重传已备份的。
+    func disconnect() async {
+        await engine.stopForDisconnect()
+        do { try applyDisconnectManifest(root: root.url, runtime: DisconnectActions(scheduler: scheduler), logger: logger) } catch {
+            logger.log("disconnect manifest failed: \(error)")
+        }
+        try? provider.ffi.setAllowedPeer(nodeId: nil)
+        await refreshFacts()
     }
 
     func start() {
@@ -217,6 +230,12 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
         await backend.refreshFacts()
     }
 
+    func wifiOnly() -> Bool { backend.settings.wifiOnly() }
+    func setWifiOnly(_ on: Bool) {
+        try? backend.settings.save(wifiOnly: on)
+        Task { _ = await backend.engine.trigger(.scopeAdded); await backend.refreshFacts() } // 放宽条件后立即重评一轮
+    }
+
     func wake() async {
         _ = await backend.engine.trigger(.scopeAdded)
         await backend.refreshFacts()
@@ -267,4 +286,12 @@ final class BatteryState: @unchecked Sendable {
         let value = level >= 0 && level < 0.2 && UIDevice.current.batteryState == .unplugged
         lock.lock(); low = value; lock.unlock()
     }
+}
+
+/// 断开清单里的运行时生产者。引擎这一轮由 `LiveBackend.disconnect` 在清单之前就停好；iOS 目前没有注册 PHPhotoLibrary 变更监听。
+struct DisconnectActions: DisconnectRuntime {
+    let scheduler: PlannedWakeScheduler
+    func stopFlowRuntime() {}
+    func cancelScheduledWakes() { scheduler.stop() }
+    func stopMediaChangeObserver() {}
 }

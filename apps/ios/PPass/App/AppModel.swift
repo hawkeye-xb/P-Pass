@@ -27,6 +27,7 @@ final class AppModel: ObservableObject {
     /// #343：首页常驻告示（已解析成当前语言的句子）。
     @Published private(set) var promise: [String] = []
     @Published var commandInFlight = false
+    @Published private(set) var wifiOnly = true
 
     init(backend: Backend) {
         self.backend = backend
@@ -41,8 +42,11 @@ final class AppModel: ObservableObject {
         access = backend.media.access()
         pairing = backend.pairing.status()
         scope = backend.media.savedScope()
+        wifiOnly = backend.engine.wifiOnly()
         promise = backend.engine.promise().map { n in DiagText.resolve(n.key, vars: n.vars) ?? n.key }
     }
+
+    func setWifiOnly(_ on: Bool) { backend.engine.setWifiOnly(on); wifiOnly = on }
 
     var pairingLost: Bool { if case .lost = pairing { return true } else { return false } }
     var desktopName: String? {
@@ -84,6 +88,14 @@ final class AppModel: ObservableObject {
             await backend.engine.wake()
             refresh()
         }
+    }
+
+    /// 主动断开：成功后回到欢迎页，可以重新扫码。
+    func disconnect() async {
+        await backend.pairing.disconnect()
+        refresh()
+        tab = .photos
+        phase = .onboarding
     }
 
     func startOver() {

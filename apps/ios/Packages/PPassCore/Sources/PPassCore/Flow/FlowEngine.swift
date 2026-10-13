@@ -307,6 +307,15 @@ public actor FlowEngine {
         return true
     }
 
+    /// 断开（UX-06）：停掉当前这一轮并清空待触发，回到空闲。不动暂停意图（flowControl 在断开清单里是 keep）。
+    public func stopForDisconnect() async {
+        pendingTriggers.removeAll()
+        await cancelAndJoinCycle()
+        setStatus(LoopStatus(phase: .idle))
+        setWait(nil)
+        bump()
+    }
+
     /// 继续只在「已暂停」有效；回到入口（续传 + 对账：暂停期间只改了意图，待办现算）。
     @discardableResult
     public func resume() async -> Bool {

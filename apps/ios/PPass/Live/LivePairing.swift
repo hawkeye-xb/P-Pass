@@ -107,14 +107,16 @@ final class LivePairing: PairingService, @unchecked Sendable {
     private let store: PairingStore
     private let onboarded: (String) -> Bool
     private let onPaired: (PairingRecord) -> Void
+    private let onDisconnect: () async -> Void
     private var current: Task<PairVerdict, Error>?
 
     init(plane: ControlPlane, store: PairingStore, onboarded: @escaping (String) -> Bool,
-         onPaired: @escaping (PairingRecord) -> Void) {
+         onPaired: @escaping (PairingRecord) -> Void, onDisconnect: @escaping () async -> Void) {
         self.plane = plane
         self.store = store
         self.onboarded = onboarded
         self.onPaired = onPaired
+        self.onDisconnect = onDisconnect
     }
 
     func status() -> PairingStatus {
@@ -151,6 +153,16 @@ final class LivePairing: PairingService, @unchecked Sendable {
     }
 
     func cancel() async { current?.cancel() }
+
+    /// 对位 Android：unpair 只是尽力通知（电脑关机 / 已吊销都不能卡住本地断开），本地清理永远执行。
+    func disconnect() async {
+        if let r = store.load(), !r.lost {
+            let client = ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: r.peerToken))
+            let params = r.pairingEpoch.isEmpty ? [String: String]() : ["pairing_epoch": r.pairingEpoch]
+            _ = try? await client.callRaw(Methods.deviceUnpair, AnyEncodable(params), timeoutMs: 5_000)
+        }
+        await onDisconnect()
+    }
 
     private func save(_ code: ParsedPairLink, name: String, epoch: String) {
         let record = PairingRecord(daemonNodeId: code.nodeId, peerToken: code.peerToken, storageDeviceName: name,

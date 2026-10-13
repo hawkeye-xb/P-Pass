@@ -74,6 +74,8 @@ protocol PairingService: AnyObject {
     /// code 是二维码内容或手动粘贴的配对串（同一个字符串，`ppf://pair?...`）。
     func pair(code: String) async -> PairOutcome
     func cancel() async
+    /// 本地断开（UX-06）：先尽力通知电脑撤销本机（5 秒、失败不阻塞），再按断开清单清本地。成功后状态变 `.notPaired`。
+    func disconnect() async
 }
 
 /// 备份引擎：首页的全部事实 + 唯一的那个按钮。
@@ -86,6 +88,9 @@ protocol BackupEngine: AnyObject {
     /// 前台追赶：打开 App / 回到前台 / 选完相册时叫醒一轮。
     func wake() async
     func retryFailed() async
+    /// 「仅 Wi-Fi 时备份」（引擎 Conditions.wifiOnly 的唯一来源，默认开）。
+    func wifiOnly() -> Bool
+    func setWifiOnly(_ on: Bool)
     /// #343「iOS 不承诺什么」：首页常驻告示（PPassCore BackupPromise），文案 key 走 DiagText。
     func promise() -> [PromiseNotice]
 }

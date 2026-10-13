@@ -91,6 +91,11 @@ final class FakePairing: PairingService {
     }
 
     func cancel() async {}
+
+    func disconnect() async {
+        try? await Task.sleep(nanoseconds: 600_000_000)
+        current = .notPaired
+    }
 }
 
 final class FakeEngine: BackupEngine {
@@ -136,6 +141,9 @@ final class FakeEngine: BackupEngine {
         listeners.forEach { $0() }
     }
 
+    private var wifi = true
+    func wifiOnly() -> Bool { wifi }
+    func setWifiOnly(_ on: Bool) { wifi = on; listeners.forEach { $0() } }
     func wake() async {}
     func retryFailed() async {}
 

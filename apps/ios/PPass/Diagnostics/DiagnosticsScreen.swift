@@ -77,10 +77,11 @@ struct DiagnosticsScreen: View {
     }
 }
 
-/// 存储电脑详情（对位 Android 的详情子页）：状态图标 + 名称 + 配对状态。断开连接放在集成步骤
-/// （要走真实控制面 `device.unpair` 与断开清单），壳阶段不放一个点了没用的按钮。
+/// 存储电脑详情（对位 Android 的详情子页）：状态图标 + 名称 + 配对状态 + 断开连接（`device.unpair` + 断开清单）。
 struct StorageDetailScreen: View {
     @EnvironmentObject var app: AppModel
+    @State private var confirming = false
+    @State private var working = false
 
     var body: some View {
         List {
@@ -93,6 +94,23 @@ struct StorageDetailScreen: View {
                         .foregroundStyle(app.pairingLost ? PPColor.act : PPColor.safe)
                 }
             }
+            Section {
+                Button(role: .destructive) { confirming = true } label: {
+                    HStack {
+                        Text(L.s("disconnect"))
+                        if working { Spacer(); ProgressView() }
+                    }
+                }
+                .disabled(working)
+            }
+        }
+        .confirmationDialog(L.s("disconnect_armed_title"), isPresented: $confirming, titleVisibility: .visible) {
+            Button(L.s("disconnect_confirm"), role: .destructive) {
+                working = true
+                Task { await app.disconnect(); working = false }
+            }
+        } message: {
+            Text(L.s("disconnect_armed_body"))
         }
         .listStyle(.insetGrouped)
         .ppList()
