@@ -295,6 +295,10 @@ ios-sync-i18n *args:
 ios-tokens:
   python3 tools/ios/gen-tokens.py
 
+# iOS App 图标三态 + 启动屏图标（#941）：docs/design/2026-08-11-icon-v1 的定稿 SVG → Assets.xcassets。需要 rsvg-convert + Pillow。
+ios-icons:
+  python3 tools/ios/gen-app-icon.py
+
 # iOS 界面文案（#315）：Android strings.xml → apps/ios/PPass/Resources/{en,zh-Hans}.lproj/Localizable.*。
 # Android 改了文案就跑一次并提交；ci-ios 用 --check 逐字节比对。iOS 独有说法写在同目录的 IOS.strings。
 ios-strings *args:

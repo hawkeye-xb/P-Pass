@@ -34,8 +34,15 @@
 	<array>
 		<string>processing</string>
 	</array>
+	<!-- #941：冷启动画面 = paper 底色 + 居中图标（对齐 Android 的 paper 底 + 启动图标）。
+	     LaunchBackground 是 tokens.json 的 paper，由 tools/ios/gen-tokens.py 生成；不要手写色值。 -->
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+		<key>UIImageName</key>
+		<string>LaunchLogo</string>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
