@@ -1,0 +1,48 @@
+/* iOS 独有或 Android 说法在 iOS 上不成立的文案（#315）。手写；同名 key 盖过 Localizable.strings（由 Android strings.xml 生成）。
+   每条都要说清为什么 iOS 不同——见行尾注释。 */
+
+/* iOS 本轮只做前台备份（规划第一节、IOS-17）：Android 的「自动进行」在 iOS 上不成立。 */
+"idle_auto_hint" = "打开 P-Pass 时自动备份";
+"idle_auto_hint_any_network" = "打开 P-Pass 时自动备份";
+
+/* iOS 的部分授权：指路要写 iOS 的设置项名字。 */
+"partial_access_body" = "备份需要完整相册权限。到「设置 › P-Pass › 照片」选「完整访问」，才能备份全部照片。";
+"no_media_access_body" = "备份需要访问相册。现在一张照片都读不到，所以什么都没在备份——到「设置 › P-Pass › 照片」允许访问。";
+
+/* 模拟器与没有相机的设备。 */
+"scan_camera_unavailable" = "这台设备用不了相机。请改用配对串连接。";
+
+/* 诊断页（Android 没有这一屏；iOS 为可取证而加，入口在「版本」那一行）。 */
+"setting_diagnostics" = "诊断信息";
+"diag_title" = "诊断信息";
+"diag_section_build" = "这个安装包";
+"diag_version_full" = "完整版本";
+"diag_version_short" = "版本 · 构建号";
+"diag_version_source" = "版本来源";
+"diag_bundle_id" = "包名";
+"diag_min_os" = "最低系统";
+"diag_section_state" = "现在的状态";
+"diag_data_source" = "数据来源";
+"diag_data_source_fake" = "演示数据（界面壳，未连接真实相册与电脑）";
+"diag_data_source_live" = "真实数据";
+"diag_media_access" = "相册权限";
+"diag_media_full" = "完整";
+"diag_media_partial" = "部分";
+"diag_media_none" = "无";
+"diag_pairing" = "配对";
+"diag_pairing_paired" = "已配对";
+"diag_pairing_lost" = "已失效";
+"diag_pairing_none" = "未配对";
+"diag_engine" = "备份引擎";
+"diag_language" = "界面语言";
+"diag_copy" = "复制全部";
+"diag_copied" = "已复制";
+
+/* iOS 新增的两个等待原因（PPassCore WaitReason：executionBlocked 对位 Android FGS_BLOCKED；originalUnavailable 是 iCloud 原图，#311 D4）。 */
+"state_waiting_execution_blocked" = "离开 P-Pass 后系统暂停了备份。回到 P-Pass 就会接着传。";
+"state_waiting_original_unavailable" = "有的照片原图在 iCloud 里，联网后会先下载再备份。";
+
+/* 首次选完相册的确认按钮（Android 这里是「开启后台备份 / 不开启」，iOS 本轮无后台）。 */
+"ok_got_it" = "好的";
+/* Android 原句说「默认连 Wi-Fi 且电量不低时自动进行」，iOS 本轮是打开 App 时备份。 */
+"bucket_summary" = "将备份 %1$@ 张 · 打开 P-Pass 时自动备份";

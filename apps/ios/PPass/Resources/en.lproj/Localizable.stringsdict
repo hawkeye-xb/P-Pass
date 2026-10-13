@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 由 tools/ios/gen-strings.py 从 apps/android/app/src/main/res/values/strings.xml 生成——不要手改。 -->
+<plist version="1.0">
+<dict>
+	<key>state_pending</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@n@</string>
+		<key>n</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>ld</string>
+			<key>one</key>
+			<string>%1$ld photo still to back up</string>
+			<key>other</key>
+			<string>%1$ld photos still to back up</string>
+		</dict>
+	</dict>
+	<key>cancel_remaining_label</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@n@</string>
+		<key>n</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>ld</string>
+			<key>one</key>
+			<string>Cancel remaining %1$ld photo</string>
+			<key>other</key>
+			<string>Cancel remaining %1$ld photos</string>
+		</dict>
+	</dict>
+	<key>cancel_remaining_confirm_title</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@n@</string>
+		<key>n</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>ld</string>
+			<key>one</key>
+			<string>Cancel the remaining %1$ld photo?</string>
+			<key>other</key>
+			<string>Cancel the remaining %1$ld photos?</string>
+		</dict>
+	</dict>
+	<key>missing_source_notice_body</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@n@</string>
+		<key>n</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>ld</string>
+			<key>one</key>
+			<string>Cannot be recovered: %1$ld photo was deleted from this phone, so it will not be sent again.</string>
+			<key>other</key>
+			<string>Cannot be recovered: %1$ld photos were deleted from this phone, so they will not be sent again.</string>
+		</dict>
+	</dict>
+	<key>notif_backup_failed_body</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@n@</string>
+		<key>n</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>ld</string>
+			<key>one</key>
+			<string>%1$ld photo didn't make it home — open to see</string>
+			<key>other</key>
+			<string>%1$ld photos didn't make it home — open to see</string>
+		</dict>
+	</dict>
+	<key>backup_scope_n</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@n@</string>
+		<key>n</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>ld</string>
+			<key>one</key>
+			<string>%1$ld album</string>
+			<key>other</key>
+			<string>%1$ld albums</string>
+		</dict>
+	</dict>
+	<key>photos_lost_body_days</key>
+	<dict>
+		<key>NSStringLocalizedFormatKey</key>
+		<string>%#@n@</string>
+		<key>n</key>
+		<dict>
+			<key>NSStringFormatSpecTypeKey</key>
+			<string>NSStringPluralRuleType</string>
+			<key>NSStringFormatValueTypeKey</key>
+			<string>ld</string>
+			<key>one</key>
+			<string>Backups have been paused for %1$ld day. Your photos are all still on this phone — reconnect and they'll catch up automatically.</string>
+			<key>other</key>
+			<string>Backups have been paused for %1$ld days. Your photos are all still on this phone — reconnect and they'll catch up automatically.</string>
+		</dict>
+	</dict>
+</dict>
+</plist>
