@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var wifiOnly = true
     @Published private(set) var autoBackup = true
     @Published private(set) var notifyOnFailure = true
+    /// 当前这张字节上一次前进的时刻（用来判「N 秒没有新数据」）。
+    private(set) var transferMark: (orderId: Int64, bytes: Int64, at: Date)?
 
     init(backend: Backend) {
         self.backend = backend
@@ -41,6 +43,9 @@ final class AppModel: ObservableObject {
 
     func refresh() {
         facts = backend.engine.facts()
+        if let v = facts.view, let id = v.currentOrderId {
+            if transferMark?.orderId != id || transferMark?.bytes != v.currentBytesSent { transferMark = (id, v.currentBytesSent, Date()) }
+        } else { transferMark = nil }
         access = backend.media.access()
         pairing = backend.pairing.status()
         scope = backend.media.savedScope()

@@ -73,17 +73,18 @@ struct HeroCard: View {
         return t.k > 0 ? when + " · " + L.f("pending_count", Int(t.k)) : when
     }
 
+    /// 进度区（Android 同构）：左 = 文字列，右 = 唯一的次级按钮（进行中「暂停」/ 已暂停「继续」，其余不出现）。
+    /// 进行中是固定三格——文件名 / 字节行 / 进度条槽——各单行，换文件、准备 ↔ 备份都不改变高度。
     private var progressRow: some View {
         let state = app.uiState
         let action = HomeProjection.heroAction(state, pairingLost: app.pairingLost)
-        return VStack(alignment: .leading, spacing: 10) {
-            if case .sending(let done, let total, let file) = state {
-                Text(file).font(PPFont.bodyMedium).lineLimit(1).truncationMode(.middle)
-                Text(L.f("state_sending", done, total)).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
-                PPProgressBar(value: Double(done - 1), total: Double(max(total, 1)))
-            } else {
-                Text(statusText(state)).font(PPFont.body).foregroundStyle(statusColor(state))
+        return HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 0) {
+                if state.isRunning { transferSlots(state) } else {
+                    Text(statusText(state)).font(PPFont.sans(13.5, .regular)).foregroundStyle(statusColor(state))
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             if let action {
                 Button(L.s(app.commandInFlight ? "backup_command_processing" : (action == .pause ? "backup_pause" : "backup_resume"))) {
                     app.pauseOrResume()
@@ -92,6 +93,41 @@ struct HeroCard: View {
                 .disabled(app.commandInFlight)
             }
         }
+    }
+
+    @ViewBuilder private func transferSlots(_ state: BackupUiState) -> some View {
+        let v = app.facts.view
+        TimelineView(.periodic(from: .now, by: 1)) { ctx in
+            let quiet = quietSeconds(now: ctx.date)
+            let slow = quiet >= TransferText.slowAfterSeconds
+            VStack(alignment: .leading, spacing: 0) {
+                if case .sending(let done, let total, let file) = state {
+                    Text(file).font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60)
+                        .lineLimit(1).truncationMode(.middle)
+                    Text(slow ? L.f("state_sending_slow", quiet)
+                         : TransferText.bytes(v?.currentBytesSent ?? 0, v?.currentTotalBytes ?? 0)
+                            .map { L.f("state_sending_detail", $0, done, total) } ?? L.f("state_sending", done, total))
+                        .font(PPFont.sans(13)).foregroundStyle(slow ? PPColor.waiting : PPColor.ink60).lineLimit(1)
+                } else {
+                    Text(statusText(state)).font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60).lineLimit(1)
+                    Text(" ").font(PPFont.sans(13))
+                }
+                Spacer().frame(height: 8)
+                if let v, v.currentTotalBytes > 0, case .sending = state {
+                    let tint = slow ? PPColor.waiting : PPColor.safe
+                    PPProgressBar(value: Double(v.currentBytesSent), total: Double(v.currentTotalBytes),
+                                  tint: tint, track: tint.opacity(0.18))
+                } else {
+                    Color.clear.frame(height: 6)
+                }
+            }
+        }
+    }
+
+    private func quietSeconds(now: Date) -> Int {
+        guard let m = app.transferMark, m.orderId == app.facts.view?.currentOrderId,
+              m.bytes == app.facts.view?.currentBytesSent else { return 0 }
+        return max(Int(now.timeIntervalSince(m.at)), 0)
     }
 
     private func statusText(_ s: BackupUiState) -> String {

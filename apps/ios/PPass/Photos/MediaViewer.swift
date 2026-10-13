@@ -143,9 +143,18 @@ private struct ViewerPage: View {
     var onZoom: (Bool) -> Void = { _ in }
     @State private var image: UIImage?
     @State private var photoError: String?
-    @State private var video: VideoState = .fetching(0)
+    @State private var video: VideoState
 
     enum VideoState: Equatable { case fetching(Double), ready(URL), failed }
+
+    init(item: TimelineItem, timeline: TimelineSource, active: Bool = true, onZoom: @escaping (Bool) -> Void = { _ in }) {
+        self.item = item
+        self.timeline = timeline
+        self.active = active
+        self.onZoom = onZoom
+        // 已缓存的视频直接就绪：滑回来不再从 0 开始、进度条不会再跳。
+        _video = State(initialValue: timeline.cachedOriginal(item).map(VideoState.ready) ?? .fetching(0))
+    }
 
     var body: some View {
         Group {
@@ -188,6 +197,7 @@ private struct ViewerPage: View {
     private func load() async {
         if item.isVideo {
             guard active else { return }
+            if case .ready = video { return }
             do {
                 let url = try await timeline.original(item) { p in Task { @MainActor in video = .fetching(p) } }
                 video = .ready(url)
@@ -346,13 +356,21 @@ private struct PageViewer: UIViewControllerRepresentable {
     final class Coordinator: NSObject, UIPageViewControllerDataSource, UIPageViewControllerDelegate {
         var parent: PageViewer
         weak var pager: UIPageViewController?
+        /// 页控制器按序号复用：每次滑动都新建会丢掉页内状态（视频进度 / 缩放），表现为「滑回来又从头加载」。
+        private var hosts: [Int: IndexedHost] = [:]
         init(_ parent: PageViewer) { self.parent = parent }
 
         func controller(_ i: Int) -> UIViewController {
+            if let hit = hosts[i] { return hit }
             let host = IndexedHost(rootView: parent.page(i))
             host.pageIndex = i
             host.view.backgroundColor = .clear
+            hosts[i] = host
             return host
+        }
+
+        func trim(around i: Int) {
+            for key in hosts.keys where abs(key - i) > 2 { hosts[key] = nil }
         }
 
         func pageViewController(_ pvc: UIPageViewController, viewControllerBefore vc: UIViewController) -> UIViewController? {
@@ -370,6 +388,7 @@ private struct PageViewer: UIViewControllerRepresentable {
             guard completed, let i = (pvc.viewControllers?.first as? IndexedHost)?.pageIndex else { return }
             parent.state.zoomed = false
             parent.state.index = i
+            trim(around: i)
         }
     }
 }

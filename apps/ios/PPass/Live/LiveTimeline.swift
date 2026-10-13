@@ -54,6 +54,12 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         return image
     }
 
+    func cachedOriginal(_ item: TimelineItem) -> URL? {
+        guard item.isVideo else { return nil }
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("ppass-videos", isDirectory: true)
+        return Self.completeCached(item, in: dir)
+    }
+
     /// 取原图（RET-01：取回 = 使用动作）：问电脑要 `asset.blob_ticket`，再走 iroh-blobs 拉回来。
     /// 照片即用即清（`tmp/ppass-share/`，不建长期原图缓存）；视频与 Android 一样进缓存目录，按字节数校验后复用——
     /// 滑过再滑回来不会重下（系统在空间紧张时会清 Caches，手机是减负端不是第二存储端）。

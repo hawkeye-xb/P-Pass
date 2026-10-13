@@ -29,6 +29,8 @@ protocol TimelineSource: AnyObject {
     func page(cursor: String?) async throws -> TimelinePage
     func thumbnail(_ item: TimelineItem, large: Bool) async throws -> UIImage
     /// 取原图到本地临时文件（保存到相册 / 分享 / 播放视频用）。
+    /// 视频原图的本地缓存命中（字节数校验过）；没有 = nil。照片不缓存。
+    func cachedOriginal(_ item: TimelineItem) -> URL?
     func original(_ item: TimelineItem, progress: @escaping (Double) -> Void) async throws -> URL
 }
 

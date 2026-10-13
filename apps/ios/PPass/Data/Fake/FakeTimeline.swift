@@ -41,6 +41,7 @@ final class FakeTimeline: TimelineSource {
         return FakeImages.tile(seed: item.id.hashValue, size: CGSize(width: side, height: side * 0.75))
     }
 
+    func cachedOriginal(_ item: TimelineItem) -> URL? { nil }
     func original(_ item: TimelineItem, progress: @escaping (Double) -> Void) async throws -> URL {
         for step in 1...5 {
             try await Task.sleep(nanoseconds: 150_000_000)

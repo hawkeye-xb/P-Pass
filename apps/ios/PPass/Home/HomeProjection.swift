@@ -21,9 +21,17 @@ struct EngineSnapshot: Equatable {
     var doneThisRound: Int = 0
     var currentFileName: String?
     var desktopFreeBytes: Int64?
+    /// 正在传的这一张的字节进度（引擎 CurrentItem）；没有当前项 = nil。
+    var currentOrderId: Int64?
+    var currentBytesSent: Int64 = 0
+    var currentTotalBytes: Int64 = 0
 
     init(state: GlobalState = .idle, waitReason: WaitReason? = nil, pending: Int = 0, doneThisRound: Int = 0,
-         currentFileName: String? = nil, desktopFreeBytes: Int64? = nil) {
+         currentFileName: String? = nil, desktopFreeBytes: Int64? = nil,
+         currentOrderId: Int64? = nil, currentBytesSent: Int64 = 0, currentTotalBytes: Int64 = 0) {
+        self.currentOrderId = currentOrderId
+        self.currentBytesSent = currentBytesSent
+        self.currentTotalBytes = currentTotalBytes
         self.state = state
         self.waitReason = waitReason
         self.pending = pending
@@ -35,7 +43,9 @@ struct EngineSnapshot: Equatable {
     init(_ view: EngineView) {
         self.init(state: view.state, waitReason: view.waitReason, pending: view.pending,
                   doneThisRound: view.doneThisRound, currentFileName: view.current?.fileName,
-                  desktopFreeBytes: view.desktopHealth?.freeBytes)
+                  desktopFreeBytes: view.desktopHealth?.freeBytes,
+                  currentOrderId: view.current?.orderId, currentBytesSent: view.current?.bytesSent ?? 0,
+                  currentTotalBytes: view.current?.totalBytes ?? 0)
     }
 }
 
@@ -221,4 +231,22 @@ enum HomeProjection {
         case .localStorageFull: return "state_waiting_local_storage_full"
         }
     }
+}
+
+/// 传输行（Android `transferRowOf` / `bytesProgressText` / `transferPaceOf`）。
+enum TransferText {
+    /// 十进制单位；<100 保留一位小数，否则取整；总大小未知 → nil。
+    static func bytes(_ sent: Int64, _ total: Int64) -> String? {
+        guard total > 0 else { return nil }
+        let (div, unit): (Double, String) = total >= 1_000_000_000 ? (1e9, "GB") : total >= 1_000_000 ? (1e6, "MB") : (1e3, "KB")
+        func fmt(_ v: Int64) -> String {
+            if v <= 0 { return "0" }
+            let x = Double(v) / div
+            return String(format: x >= 100 ? "%.0f" : "%.1f", x)
+        }
+        return "\(fmt(min(max(sent, 0), total))) / \(fmt(total)) \(unit)"
+    }
+
+    /// 字节这么久没动就算「慢」（Android TRANSFER_SLOW_AFTER_MS）。
+    static let slowAfterSeconds = 15
 }

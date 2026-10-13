@@ -259,7 +259,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     func setAutoBackup(_ on: Bool) {
         try? backend.autoPrefs.setEnabled(on)
         try? backend.autoPrefs.setRequested(on)
-        Task { _ = await backend.engine.trigger(.scopeAdded); await backend.refreshFacts() }
+        Task { await backend.refreshFacts() } // 只改策略，不凭空起一轮（Android 同：开关只存偏好）
     }
 
     func remainingSnapshot() async -> RemainingSnapshot? { try? await backend.engine.remainingSnapshot() }
@@ -288,7 +288,11 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     func wifiOnly() -> Bool { backend.settings.wifiOnly() }
     func setWifiOnly(_ on: Bool) {
         try? backend.settings.save(wifiOnly: on)
-        Task { _ = await backend.engine.trigger(.scopeAdded); await backend.refreshFacts() } // 放宽条件后立即重评一轮
+        Task {
+            // 只有「正因为 Wi-Fi 在等」时放宽条件才有事可做：叫醒一轮接着传；其余情况不起轮。
+            if !on, await backend.engine.view.waitReason == .wifi { _ = await backend.engine.trigger(.manual) }
+            await backend.refreshFacts()
+        }
     }
 
     func wake() async {
