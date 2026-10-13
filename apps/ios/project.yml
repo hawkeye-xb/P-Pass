@@ -11,6 +11,11 @@ options:
 configFiles:
   Debug: Config/Base.xcconfig
   Release: Config/Base.xcconfig
+# 本地 SwiftPM 包。App 只用 PPassCore 的值类型（GlobalState / WaitReason / EngineView）与端口；
+# 真实现的接入见集成步骤。
+packages:
+  PPassCore:
+    path: Packages/PPassCore
 targets:
   PPass:
     type: application
@@ -24,6 +29,8 @@ targets:
       - path: PPass/Resources/i18n
         type: folder
         buildPhase: resources
+    dependencies:
+      - package: PPassCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID)
@@ -44,6 +51,9 @@ targets:
       - path: PPassTests
     dependencies:
       - target: PPass
+      # 只为 import PPassCore 的值类型；代码已链进宿主 App，测试 bundle 不再链一份。
+      - package: PPassCore
+        link: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID).tests

@@ -295,6 +295,15 @@ ios-sync-i18n *args:
 ios-tokens:
   python3 tools/ios/gen-tokens.py
 
+# iOS 界面文案（#315）：Android strings.xml → apps/ios/PPass/Resources/{en,zh-Hans}.lproj/Localizable.*。
+# Android 改了文案就跑一次并提交；ci-ios 用 --check 逐字节比对。iOS 独有说法写在同目录的 IOS.strings。
+ios-strings *args:
+  python3 tools/ios/gen-strings.py {{args}}
+
+# iOS 逐屏截图（#315）：演示数据，按「场景 × 路由」冷启动截图，输出 apps/ios/build/screenshots（不入库）。
+ios-screenshots *args:
+  bash tools/ios/screenshots.sh {{args}}
+
 # iOS 单元测试：生成工程 → 模拟器上 xcodebuild test。模拟器选法见 tools/ios/sim.sh
 # （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。本配方启动的模拟器跑完即关。
 ios-test:

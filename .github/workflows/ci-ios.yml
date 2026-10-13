@@ -21,6 +21,8 @@
 #   assets/i18n/**                  —— iOS bundle 逐字节捆绑副本的漂移测试消费（#316；对位 ci-android）
 #   assets/design/tokens.json       —— iOS 设计 token 的生成源：gen-tokens.py --check 与
 #                                      DesignTokensTests 两道漂移门禁都消费它（#344）
+#   apps/android/.../values{,-zh}/strings.xml —— iOS 界面文案由它生成（tools/ios/gen-strings.py，#315）：
+#                                      Android 改文案没重新生成 ⇒ 本 lane 红
 #   Cargo.toml / Cargo.lock / rust-toolchain.toml —— 传输 crate 的依赖与工具链
 # **刻意不含本文件自身**（#345 验收 2）：本 lane 不进必需检查，被 paths 跳过无害；
 # 改本文件的 PR 由 ci-rust 的 actionlint 兜语法，下一次碰到上面任一路径时真跑。
@@ -36,6 +38,8 @@ on:
       - "crates/transport/**"
       - "assets/i18n/**"
       - "assets/design/tokens.json"
+      - "apps/android/app/src/main/res/values/strings.xml"
+      - "apps/android/app/src/main/res/values-zh/strings.xml"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -48,6 +52,8 @@ on:
       - "crates/transport/**"
       - "assets/i18n/**"
       - "assets/design/tokens.json"
+      - "apps/android/app/src/main/res/values/strings.xml"
+      - "apps/android/app/src/main/res/values-zh/strings.xml"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -108,6 +114,10 @@ jobs:
       # #346：版本号换算规则（不需要模拟器）。产物里的值由 App 测试里的 VersionStampTests 核对。
       - name: Version stamp rule
         run: tools/ios/test-stamp-version.sh
+
+      # #315：iOS 界面文案由 Android strings.xml 生成（同 key、同一句话），逐字节比对。
+      - name: UI strings in sync with Android strings.xml
+        run: python3 tools/ios/gen-strings.py --check
 
       - name: No system default colours in app sources
         run: tools/ios/check-no-system-colors.sh

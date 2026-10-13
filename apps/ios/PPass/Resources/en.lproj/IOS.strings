@@ -1,0 +1,46 @@
+/* iOS-only copy, or Android wording that is not true on iOS (#315). Hand-written; a key here
+   overrides the same key in Localizable.strings (generated from Android strings.xml). */
+
+/* iOS backs up in the foreground only in this round (plan §1, IOS-17). */
+"idle_auto_hint" = "Backs up automatically while P-Pass is open";
+"idle_auto_hint_any_network" = "Backs up automatically while P-Pass is open";
+
+/* iOS partial access: point at the iOS setting by name. */
+"partial_access_body" = "Backup needs full photo access. Go to Settings › P-Pass › Photos and choose Full Access to back up every photo.";
+"no_media_access_body" = "Backup needs access to your photos. Right now not a single photo can be read, so nothing is being backed up — allow access in Settings › P-Pass › Photos.";
+
+/* Simulator and devices without a camera. */
+"scan_camera_unavailable" = "The camera isn't available on this device. Connect with the pairing string instead.";
+
+/* Diagnostics (no Android counterpart; added on iOS for forensics, reached from the Version row). */
+"setting_diagnostics" = "Diagnostics";
+"diag_title" = "Diagnostics";
+"diag_section_build" = "This build";
+"diag_version_full" = "Full version";
+"diag_version_short" = "Version · build";
+"diag_version_source" = "Version source";
+"diag_bundle_id" = "Bundle ID";
+"diag_min_os" = "Minimum iOS";
+"diag_section_state" = "Current state";
+"diag_data_source" = "Data source";
+"diag_data_source_fake" = "Demo data (UI shell, not connected to real photos or a computer)";
+"diag_data_source_live" = "Live";
+"diag_media_access" = "Photo access";
+"diag_media_full" = "Full";
+"diag_media_partial" = "Partial";
+"diag_media_none" = "None";
+"diag_pairing" = "Pairing";
+"diag_pairing_paired" = "Paired";
+"diag_pairing_lost" = "No longer valid";
+"diag_pairing_none" = "Not paired";
+"diag_engine" = "Backup engine";
+"diag_language" = "Language";
+"diag_copy" = "Copy all";
+"diag_copied" = "Copied";
+
+/* Two iOS-only wait reasons (PPassCore WaitReason). */
+"state_waiting_execution_blocked" = "iOS paused the backup when you left P-Pass. Come back to P-Pass and it carries on.";
+"state_waiting_original_unavailable" = "Some originals are in iCloud; they will be downloaded and backed up once you are online.";
+
+"ok_got_it" = "OK";
+"bucket_summary" = "%1$@ photos will be backed up · automatically while P-Pass is open";
