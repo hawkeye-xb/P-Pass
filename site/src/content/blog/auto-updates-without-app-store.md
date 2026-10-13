@@ -132,7 +132,7 @@ esac
 
 我们还加了一个修复用的工作流。它拿已发布 tag 现有的产物，重算、重签全部清单，不重新构建，也不挪 tag，几分钟就能补好一个发坏的版本。
 
-这类问题几乎都要真打一次 tag 才暴露。GitHub Actions 的 release 事件，跑的是 tag 所指那个 commit 里的 workflow 文件。本地 dry-run 和 PR 上的 CI，都走不到只有发版才会走的分支。流水线自己的 bug，也没法靠重跑旧 tag 修好。
+这类问题几乎都要真打一次 tag 才暴露。GitHub Actions 的 release 事件，用的是 tag 那个 commit 里的 workflow。本地 dry-run 和 PR 上的 CI，都走不到只有发版才会走的分支。流水线自己的 bug，也没法靠重跑旧 tag 修好。
 
 最后一步，我们让 test 通道和正式版走同一条路。test 版同样按端判断要不要构建，同样写分端清单，Mac 的 test 版也用正式版的插件做应用内更新。我们试发了一个只改安卓的 test 版。流水线判定安卓构建、macOS 跳过。Mac 没收到提示，测试手机在应用内升了上去。
 
