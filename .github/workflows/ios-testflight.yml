@@ -1,0 +1,55 @@
+# iOS TestFlight 手动上传入口（#348）：只做「归档 → 上传 TestFlight」，不建 Release、不动 test-channel。
+#
+# 用途：从任意分支（如 feat/ios）手动验证 / 补传 iOS 构建，不必打 tag：
+#   gh workflow run ios-testflight.yml --ref feat/ios -f version=v0.9.13-test.1
+#
+# 版本必须是 X.Y.Z-test.N 或 X.Y.Z-beta.N（--require-prerelease）：App Store Connect 不接受重复的构建号，
+# 留空 / 正式版号会回退或占掉将来正式版要用的号，所以手动入口一律拒绝。每次重试把 N 加一
+# （同一个号已上传过则脚本幂等跳过、不报错，但也不会产出新构建）。
+#
+# 正式流程（tag → release.yml 的 ios job）与本文件共用 .github/actions/ios-testflight 的同一份步骤。
+# 注意：GitHub 只允许 dispatch 默认分支上已存在的 workflow 文件——本文件合入 main 之前，
+# 手动验证请改用 release.yml（dispatch 时 platforms=ios），见 docs/RELEASING.md「iOS / TestFlight」。
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "完整版本串，必须是 X.Y.Z-test.N 或 X.Y.Z-beta.N（如 v0.9.13-test.1）"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  testflight:
+    name: "iOS TestFlight upload (manual)"
+    runs-on: macos-26
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Upload
+        id: up
+        uses: ./.github/actions/ios-testflight
+        with:
+          version: ${{ inputs.version }}
+          require-prerelease: "true"
+          key-id: ${{ secrets.ASC_KEY_ID }}
+          issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+          key-p8: ${{ secrets.ASC_KEY_P8 }}
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### iOS TestFlight (manual)"
+            echo "- 版本：${{ inputs.version }}"
+            echo "- build：${{ steps.up.outputs.build }}（short ${{ steps.up.outputs.short }}）"
+            echo "- Xcode：$(xcodebuild -version | head -1)"
+          } >> "$GITHUB_STEP_SUMMARY"

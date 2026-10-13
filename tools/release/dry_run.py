@@ -57,7 +57,7 @@ STALE_TAURI_CONF_VERSION = "9.7.0"  # #809：apps/desktop/src-tauri/tauri.conf.j
 
 # 构建 job 不在 dry-run 里跑：结果按 tag push 的真实情形给。Windows 只跟 test tag（#788②），
 # 由 Scenario.build_result 按 tag 判定；这里的值只是正式 tag 的情形。
-BUILD_RESULTS = {"android": "success", "macos-arm64": "success", "windows-x64": "skipped"}
+BUILD_RESULTS = {"android": "success", "macos-arm64": "success", "windows-x64": "skipped", "ios": "skipped"}
 WINDOWS_INSTALLER = "P-Pass_{v}_x64-setup.exe"
 TEST_CHANNEL_WINDOWS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-windows.json"
 TEST_CHANNEL_MACOS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-macos.json"  # #852
@@ -461,7 +461,7 @@ class Scenario:
     def build_result(self, job: str) -> str:
         """构建 job 不在 dry-run 里跑：#838 之后它跑不跑取决于 plan-builds 的判定。"""
         plan = self.jobs.get("plan-builds")
-        if job in ("android", "macos-arm64", "windows-x64") and plan is not None:
+        if job in ("android", "macos-arm64", "windows-x64", "ios") and plan is not None:
             # #852：跑不跑由 release.yml 里该构建 job 自己的 if: 决定（按 plan-builds 的真实结果求值），
             # 不在这里另写一份规则——job 的步骤换成空表，只看它被不被跳过。
             stub = {**self.wf, "jobs": {job: {**self.wf["jobs"][job], "steps": []}}}
@@ -750,12 +750,14 @@ def check_channel(ck: Check, sc: Scenario, tag: str):
     d = sc.asset("test-channel", "x").parent
     names = sorted(os.listdir(d)) if d.is_dir() else []
     base = f"https://github.com/{REPO}/releases/download/test-channel/"
-    refs = set()
+    refs, draft_refs = set(), set()
     for n in names:
         if not (n.startswith("manifest") and n.endswith(".json")):
             continue
         m = json.loads((d / n).read_text())
-        refs.add(m.get("version"))
+        draft_refs.add(m.get("version"))
+        if n != "manifest-ios.json":  # #348：iOS 清单只是 plan-builds 基线，不指向任何安装包
+            refs.add(m.get("version"))
         for target, e in m.get("platforms", {}).items():
             url = e.get("url", "")
             ck(url.startswith(base) and url[len(base):] in names,
@@ -765,8 +767,8 @@ def check_channel(ck: Check, sc: Scenario, tag: str):
     rels = sc.state / "releases"
     drafts = sorted(t for t in os.listdir(rels) if "-test." in t and (sc.meta(t) or {}).get("draft"))
     ck(tag in drafts, f"{tag}：本次的 test 草稿还在", " ".join(drafts))
-    orphans = [t for t in drafts if t[1:] not in refs]
-    ck(not orphans, f"{tag}：旧的 test 草稿只留被清单指向的（引用版本 {sorted(refs)}）", " ".join(orphans))
+    orphans = [t for t in drafts if t[1:] not in draft_refs]
+    ck(not orphans, f"{tag}：旧的 test 草稿只留被清单指向的（引用版本 {sorted(draft_refs)}）", " ".join(orphans))
 
 
 def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
@@ -800,7 +802,15 @@ def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
         for end, art in (("android", "android"), ("macos", "macos-arm64")):
             if want.get(end) == "skip":
                 shutil.rmtree(sc.artifacts / art)  # 构建 job 不跑 ⇒ 没有这一端的 artifact
-        return sc.release(rel, tag)
+        jobs = sc.release(rel, tag)
+        # iOS job 不在 dry-run 里跑（要 macOS + ASC 密钥）；它成功后的 finalize-ios 照 release.yml 真跑
+        # （写 test-channel/manifest-ios.json），本次判 build 才有（#348）。
+        if jobs["plan-builds"].outputs.get("ios") == "build":
+            needs = {"ios": {"result": "success", "outputs": {"uploaded": "yes", "version": v, "build": "1"}}}
+            r = sc.runner.run_job(sc.wf, "finalize-ios", github=sc.github, inputs={}, secrets={}, needs=needs)
+            jobs["finalize-ios"] = r
+            job_ok(ck, jobs, "finalize-ios")
+        return jobs
 
     # test.1：首发，两端构建
     jobs = release(t1, {})
@@ -901,7 +911,7 @@ def reuse(ck: Check, base: Path, key: str, pub: Path, rel: dict, name: str, cur:
     plan = jobs["plan-builds"]
     if want["android"] == want["macos"] == "reuse":
         job_ok(ck, jobs, "plan-builds", "failure")
-        ck("::error::两端版本号都与 Latest" in plan.log, f"{name}：两端都没涨号 ⇒ 明确报错", plan.log)
+        ck("::error::各端版本号都与 Latest" in plan.log, f"{name}：各端都没涨号 ⇒ 明确报错", plan.log)
         job_ok(ck, jobs, "create-draft", "skipped")
         ck(sc.meta(REUSE_TAG) is None, f"{name}：不建空草稿")
         SUMMARY[f"reuse-{name}"] = sc.summary()

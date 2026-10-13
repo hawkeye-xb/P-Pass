@@ -5,8 +5,8 @@
       tools/ios/asc-builds.py --short 0.9.13 --build 9013000001 [--wait 900]
 
 按 bundle id（Base.xcconfig 的 PPASS_BUNDLE_ID）找 App，再按 预发布版本号 + 构建号 找 build，
-打印 processingState（PROCESSING / VALID / INVALID / FAILED）。找到（任何状态，除 INVALID/FAILED）退出 0；
---wait 秒内没出现退出 1。密钥只在内存里用，不落盘、不打印。
+打印 processingState（PROCESSING / VALID / INVALID / FAILED）。找到（PROCESSING / VALID）退出 0；
+--wait 秒内没出现退出 2；其余错误（鉴权失败、没有该 App、构建 INVALID/FAILED）退出 1。密钥只在内存里用，不落盘、不打印。
 依赖：python3 + cryptography（pip install cryptography）。
 """
 import argparse
@@ -95,7 +95,8 @@ def main() -> None:
                   f"processingState={state} uploadedDate={attrs.get('uploadedDate')} expired={attrs.get('expired')}")
             sys.exit(0 if state in ("PROCESSING", "VALID") else 1)
         if time.time() >= deadline:
-            sys.exit(f"asc-builds: 在 {a.wait}s 内没查到 version={a.short} build={a.build}")
+            print(f"asc-builds: 在 {a.wait}s 内没查到 version={a.short} build={a.build}")
+            sys.exit(2)
         time.sleep(30)
 
 

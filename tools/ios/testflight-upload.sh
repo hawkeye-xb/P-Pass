@@ -29,6 +29,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IOS="$ROOT/apps/ios"
 OUT="$IOS/build/testflight"
+rm -rf "$OUT"; mkdir -p "$OUT"
 
 REQUIRE_PRERELEASE=0
 ARCHIVE_ONLY=0
@@ -86,8 +87,23 @@ if [ ! -d "$IOS/TransportFFITests/Generated/TransportFFI.xcframework" ] || [ ! -
 fi
 (cd "$IOS" && xcodegen generate --quiet)
 
+# ── 2.5 幂等：该构建号已在 App Store Connect ⇒ 不重复归档上传（补跑 / 重跑安全）──────────
+# 同时是密钥的预检：鉴权失败 / 没有该 App 记录会在这里就红，不必等到十几分钟的归档之后。
+if [ "$ARCHIVE_ONLY" = 0 ]; then
+  rc=0
+  ASC_KEY_P8="$(cat "$KEY_FILE")" python3 "$ROOT/tools/ios/asc-builds.py" --short "$SHORT" --build "$BUILD" || rc=$?
+  if [ "$rc" = 0 ]; then
+    echo "构建 ${FULL}（build ${BUILD}）已在 App Store Connect ⇒ 不重复上传"
+    echo "short=${SHORT}"$'\n'"build=${BUILD}"$'\n'"full=${FULL}" > "$OUT/version.env"
+    exit 0
+  elif [ "$rc" != 2 ]; then
+    echo "testflight-upload: 查 App Store Connect 失败（asc-builds.py 退出 ${rc}）——密钥 / 角色 / App 记录有问题" >&2
+    exit 1
+  fi
+fi
+
 # ── 3. 归档 ──────────────────────────────────────────────────────────
-rm -rf "$OUT"; mkdir -p "$OUT"
+rm -rf "$OUT/PPass.xcarchive" "$OUT/export"
 ARCHIVE="$OUT/PPass.xcarchive"
 echo "==> xcodebuild archive（Release / generic iOS，团队 ${TEAM}）"
 xcodebuild archive \

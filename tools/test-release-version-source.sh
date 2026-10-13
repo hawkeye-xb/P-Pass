@@ -165,7 +165,7 @@ echo c > "$SRC/apps/android/a.txt"
 g -C "$SRC" add apps/android/a.txt && g -C "$SRC" commit -qm c4
 expect_cv "改 android 不涨号 ⇒ 非零（门禁本身没被改坏）" nonzero "android 版本没涨" HEAD~1 HEAD
 # #887：apps/ios/ 不属于桌面线也不属于 android 线——只改它不要求任何一端涨号。
-# （iOS 还没有发版 lane；有了之后应在 check-version-bump.sh 里给它单独一条线。）
+# （iOS 线见下方 #348 一节：上一个 tag 没有 ios 号时跳过 iOS 门禁。）
 mkdir -p "$SRC/apps/ios"
 echo i > "$SRC/apps/ios/project.yml"
 g -C "$SRC" add apps/ios/project.yml && g -C "$SRC" commit -qm c5
@@ -202,6 +202,29 @@ commit_only t7 crates/transport/src/provider.rs
 printf '{"desktop":"2.0.1","android":"2.1.1"}\n' > "$SRC/release/versions.json"
 g -C "$SRC" add -A && g -C "$SRC" commit -qm t7-bump
 expect_cv "改 crates/transport 且两端都涨号 ⇒ 0" 0 "^ok:" HEAD~2 HEAD
+
+# #348：iOS 线。上一个 tag 里没有 ios 号时跳过门禁（上面所有用例都在这种情形下，照常通过）；
+# 有了 ios 号之后：改 iOS 输入不涨 ios 号 ⇒ 红；只改测试/e2e 脚本不算；涨了号 ⇒ 过。
+expect_ios() { # <desc> <want: red|clean> args...
+  local desc="$1" want="$2" out; shift 2
+  out=$("$CV" "$@" 2>&1) || true
+  if [ "$want" = red ] && grep -q "ios 版本没涨" <<<"$out"; then pass "③ ${desc}"; return; fi
+  if [ "$want" = clean ] && ! grep -q "ios 版本没涨" <<<"$out"; then pass "③ ${desc}"; return; fi
+  fail "③ ${desc}：期望 iOS 线 ${want}，实际：$out"
+}
+printf '{"desktop":"2.0.1","android":"2.1.1","ios":"0.1.0"}\n' > "$SRC/release/versions.json"
+g -C "$SRC" add -A && g -C "$SRC" commit -qm i0-versions
+commit_only i1 apps/ios/PPass/x.swift
+expect_ios "上一版有 ios 号：只改 apps/ios/ 不涨号 ⇒ iOS 线红" red HEAD~1 HEAD
+commit_only i2 tools/ios/e2e-sim.sh
+expect_ios "只改 tools/ios/e2e-sim.sh（测试脚本）⇒ iOS 线不受影响" clean HEAD~1 HEAD
+commit_only i3 apps/android/app/src/main/res/values/strings.xml
+expect_ios "只改 Android strings.xml（iOS 文案由它生成）⇒ iOS 线红" red HEAD~1 HEAD
+commit_only i4 crates/transport/src/lib.rs
+expect_ios "改 crates/transport ⇒ iOS 线红（XCFramework 的 Rust 源）" red HEAD~1 HEAD
+printf '{"desktop":"2.0.1","android":"2.1.1","ios":"0.1.1"}\n' > "$SRC/release/versions.json"
+g -C "$SRC" add -A && g -C "$SRC" commit -qm i5-bump
+expect_ios "改了 iOS 输入且涨了 ios 号 ⇒ iOS 线过" clean HEAD~2 HEAD
 
 # 口径一致性：gradle `buildIrohBlobsProviderBridge` 的每个 inputs include 都必须被
 # check-version-bump.sh 的 ANDROID_INPUTS 覆盖——gradle 加了输入、门禁没跟上 ⇒ 红。

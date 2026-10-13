@@ -1,0 +1,126 @@
+name: iOS TestFlight upload
+description: >-
+  归档 iOS App → 云托管签名 → 上传 TestFlight，并到 App Store Connect 核对构建已到（#348）。
+  release.yml 的 ios job 与手动入口 ios-testflight.yml 共用这一份步骤——步骤只此一份，不许两处各抄。
+  调用方必须先 checkout（本地 action 要读仓库）、用 macOS runner。
+
+# 做法（苹果标准：App Store Connect API 密钥 + 云托管签名，不导出、不保管 p12）：
+#   - 签名与上传全在 tools/ios/testflight-upload.sh 里（archive → 校验归档内版本号 → exportArchive 直传）。
+#   - p8 只经 input → 步骤 env → 脚本里 umask 077 的临时文件，脚本退出即删；不回显。
+#   - 同一构建号 App Store Connect 不接受重传：脚本在归档前先查 ASC，已在则幂等跳过（补跑 / 重跑安全）。
+#
+# ⚠️ 本文件里每个 `run` 步骤都必须写 `shell:`；actionlint 默认不扫本文件，语法错误要到真跑才暴露。
+
+inputs:
+  version:
+    description: "完整版本串，如 v0.9.13-test.1 或 0.1.0（换算规则见 tools/ios/stamp-version.sh）"
+    required: true
+  require-prerelease:
+    description: "true = 版本必须是 X.Y.Z-test.N / -beta.N（手动入口用，防止误占正式版的构建号）"
+    required: false
+    default: "false"
+  key-id:
+    description: "ASC API 密钥 ID（secrets.ASC_KEY_ID）"
+    required: true
+  issuer-id:
+    description: "ASC Issuer ID（secrets.ASC_ISSUER_ID）"
+    required: true
+  key-p8:
+    description: "ASC .p8 私钥文本（secrets.ASC_KEY_P8）"
+    required: true
+
+outputs:
+  build:
+    description: "CFBundleVersion（构建号）"
+    value: ${{ steps.upload.outputs.build }}
+  short:
+    description: "CFBundleShortVersionString"
+    value: ${{ steps.upload.outputs.short }}
+
+runs:
+  using: composite
+  steps:
+    - name: Toolchain versions
+      shell: bash
+      run: |
+        xcodebuild -version
+        jq --version
+
+    # runner 镜像不带 xcodegen；钉版本 + 校验摘要（与 ci-ios.yml 同一对值，升级时两处一起改）。
+    - name: Install XcodeGen (pinned + sha256)
+      shell: bash
+      env:
+        XCODEGEN_VERSION: "2.45.3"
+        XCODEGEN_SHA256: "0c90f4d28ca57335f9fa78cf5bf6dabfe20a232036dabe36de2eef79cb7c0878"
+      run: |
+        set -euo pipefail
+        zip="$RUNNER_TEMP/xcodegen.zip"
+        curl -fsSL --retry 3 -o "$zip" \
+          "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
+        echo "${XCODEGEN_SHA256}  ${zip}" | shasum -a 256 -c -
+        unzip -q "$zip" -d "$RUNNER_TEMP/xcodegen-dist"
+        bin=$(find "$RUNNER_TEMP/xcodegen-dist" -type f -name xcodegen -perm -u+x | head -1)
+        [ -n "$bin" ] || { echo "::error::xcodegen.zip 里找不到可执行文件"; exit 1; }
+        dirname "$bin" >> "$GITHUB_PATH"
+        "$bin" --version
+
+    - name: Set Rust toolchain from rust-toolchain.toml
+      shell: bash
+      run: tools/setup-rust-toolchain.sh
+
+    - name: Rust iOS targets
+      shell: bash
+      run: rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+
+    - name: Cache cargo
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ~/.cargo/registry/
+          ~/.cargo/git/
+          target/
+        # 与 ci-ios 的传输 FFI 步骤同一份缓存键（同样只跟主 workspace 的 Cargo.lock）。
+        key: ios-transport-ffi-${{ hashFiles('Cargo.lock') }}
+
+    # asc-builds.py 用 cryptography 签 ES256 JWT；系统 python 在 runner 上不让全局 pip，用一次性 venv。
+    - name: Python venv for ASC API (cryptography)
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 -m venv "$RUNNER_TEMP/asc-venv"
+        "$RUNNER_TEMP/asc-venv/bin/pip" install --quiet cryptography
+        echo "$RUNNER_TEMP/asc-venv/bin" >> "$GITHUB_PATH"
+
+    - name: Archive + upload to TestFlight
+      id: upload
+      shell: bash
+      env:
+        PPF_BUILD_VERSION: ${{ inputs.version }}
+        REQUIRE_PRERELEASE: ${{ inputs.require-prerelease }}
+        ASC_KEY_ID: ${{ inputs.key-id }}
+        ASC_ISSUER_ID: ${{ inputs.issuer-id }}
+        ASC_KEY_P8: ${{ inputs.key-p8 }}
+      run: |
+        set -euo pipefail
+        args=()
+        [ "$REQUIRE_PRERELEASE" = "true" ] && args+=(--require-prerelease)
+        tools/ios/testflight-upload.sh "${args[@]}"
+        cat apps/ios/build/testflight/version.env >> "$GITHUB_OUTPUT"
+
+    # 上传成功的 App Store Connect 侧证据：构建出现在 ASC 里（PROCESSING / VALID）。
+    - name: Confirm the build is on App Store Connect
+      shell: bash
+      env:
+        ASC_KEY_ID: ${{ inputs.key-id }}
+        ASC_ISSUER_ID: ${{ inputs.issuer-id }}
+        ASC_KEY_P8: ${{ inputs.key-p8 }}
+        SHORT: ${{ steps.upload.outputs.short }}
+        BUILD: ${{ steps.upload.outputs.build }}
+      run: |
+        set -euo pipefail
+        python3 tools/ios/asc-builds.py --short "$SHORT" --build "$BUILD" --wait 900
+
+    - name: Remove build products
+      if: always()
+      shell: bash
+      run: rm -rf apps/ios/build/testflight
