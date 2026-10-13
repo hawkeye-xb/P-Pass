@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # IOS-06（#313）：在 iOS 模拟器上跑 apps/ios/TransportFFITests。
 #
-#   tools/ios/test-transport-ffi.sh
+#   tools/ios/test-transport-ffi.sh          # 本机与 CI（ci-ios.yml）同一条命令
 #
 # 1. tools/build-ios-transport-xcframework.sh → apps/ios/TransportFFITests/Generated/
 # 2. 起一个隔离的本机 daemon 给控制面测试连：fake HOME + 临时 PPF_DATA_DIR + 127.0.0.1:0
@@ -20,9 +20,15 @@ command -v jq >/dev/null || { echo "error: 缺 jq（brew install jq）" >&2; exi
 
 "$ROOT/tools/build-ios-transport-xcframework.sh" "$PKG/Generated"
 
-echo "==> daemon（release，宿主机）"
-cargo build -q -p daemon --release
-DAEMON="$ROOT/target/release/daemon"
+# PPASS_DAEMON_PROFILE=dev：CI 用 debug 构建省时间（这里只要一个能答 hello 的 daemon，
+# 与发行优化无关）；默认 release 与本机常用产物一致。
+case "${PPASS_DAEMON_PROFILE:-release}" in
+  release) RELEASE_FLAG=--release; DAEMON="$ROOT/target/release/daemon" ;;
+  dev) RELEASE_FLAG=; DAEMON="$ROOT/target/debug/daemon" ;;
+  *) echo "error: PPASS_DAEMON_PROFILE 只能是 release / dev" >&2; exit 1 ;;
+esac
+echo "==> daemon（${PPASS_DAEMON_PROFILE:-release}，宿主机）"
+cargo build -q -p daemon ${RELEASE_FLAG:+"$RELEASE_FLAG"}
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-ios-ffi.XXXXXX")
 DAEMON_PID=
