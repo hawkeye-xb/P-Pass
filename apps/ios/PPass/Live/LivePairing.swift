@@ -108,11 +108,16 @@ final class LivePairing: PairingService, @unchecked Sendable {
     private let onboarded: (String) -> Bool
     private let onPaired: (PairingRecord) -> Void
     private let onDisconnect: () async -> Void
+    private let pending: PendingUnpairStore
+    private let flusher: PendingUnpairFlusher
     private var current: Task<PairVerdict, Error>?
 
     init(plane: ControlPlane, store: PairingStore, onboarded: @escaping (String) -> Bool,
-         onPaired: @escaping (PairingRecord) -> Void, onDisconnect: @escaping () async -> Void) {
+         onPaired: @escaping (PairingRecord) -> Void, onDisconnect: @escaping () async -> Void,
+         pending: PendingUnpairStore, flusher: PendingUnpairFlusher) {
         self.plane = plane
+        self.pending = pending
+        self.flusher = flusher
         self.store = store
         self.onboarded = onboarded
         self.onPaired = onPaired
@@ -156,12 +161,19 @@ final class LivePairing: PairingService, @unchecked Sendable {
 
     func cancel() async { current?.cancel() }
 
-    /// 对位 Android：unpair 只是尽力通知（电脑关机 / 已吊销都不能卡住本地断开），本地清理永远执行。
+    /// unpair 只是尽力通知（电脑关机 / 已吊销都不能卡住本地断开），本地清理永远执行。
+    /// #956：先把「待撤销」条目落盘，再试发一次，最后才清配对——发不出去的由前台 / 网络恢复 / 启动时的重试接手。
     func disconnect() async {
         if let r = store.load(), !r.lost {
-            let client = ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: r.peerToken))
-            let params = r.pairingEpoch.isEmpty ? [String: String]() : ["pairing_epoch": r.pairingEpoch]
-            _ = try? await client.callRaw(Methods.deviceUnpair, AnyEncodable(params), timeoutMs: 5_000)
+            let entry = PendingUnpair(daemonNodeId: r.daemonNodeId, peerToken: r.peerToken, pairingEpoch: r.pairingEpoch,
+                                      createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
+            do {
+                try pending.enqueue(entry)
+                await flusher.flush()
+            } catch {
+                AppLog.log("unpair-outbox: enqueue failed (\(error)); sending once without persistence")
+                await flusher.attempt(entry)
+            }
         }
         await onDisconnect()
     }

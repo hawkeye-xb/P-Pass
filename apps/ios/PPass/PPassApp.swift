@@ -82,6 +82,7 @@ final class LiveLifecycle {
         case .active:
             endFinishing(expired: false)
             backend.setActive(true)
+            backend.flushPendingUnpairs()
         case .background:
             backend.setActive(false)
             guard finishing == .invalid else { return }

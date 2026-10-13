@@ -28,6 +28,8 @@ final class LiveBackend: @unchecked Sendable {
     let notifyPrefs: NotifyOnFailurePrefs
     let pairingLoss = PairingLoss()
     let network = NetworkState()
+    let pendingUnpair: PendingUnpairStore
+    let unpairFlusher: PendingUnpairFlusher
     let engineModel: LiveEngineModel
 
     init() throws {
@@ -41,6 +43,11 @@ final class LiveBackend: @unchecked Sendable {
         pairingStore = PairingStore(root: dir)
         onboarded = OnboardedDesktopsStore(directory: dir, logger: logger)
         let pairingStore = self.pairingStore
+        pendingUnpair = PendingUnpairStore(directory: dir, logger: logger)
+        let planeForUnpair = plane
+        unpairFlusher = PendingUnpairFlusher(store: pendingUnpair, now: { Int64(Date().timeIntervalSince1970 * 1000) }, logger: logger) {
+            PeerCtrlTransport(plane: planeForUnpair, peerToken: $0)
+        }
         media = LiveMediaLibrary { BackupScopeStore(directory: dir, daemonNodeId: pairingStore.load()?.daemonNodeId, logger: logger) }
         provider = try NativeProvider(root: dir)
         try? provider.ffi.setAllowedPeer(nodeId: pairingStore.load()?.daemonNodeId)
@@ -89,15 +96,22 @@ final class LiveBackend: @unchecked Sendable {
         PPassBackgroundTasks.register(engine: engine, window: window, scheduler: scheduler, logger: logger)
         scheduler.ensureScheduled()
         if root.isDegraded { logger.log("storage root degraded: \(root.kind)") }
+        // #956：网络恢复时补发待撤销的 unpair（回前台与启动的触发点在 LiveLifecycle / start）。
+        network.onRecovered = { [weak self] in self?.flushPendingUnpairs() }
+    }
+
+    /// 重试待撤销的 `device.unpair`（#956）。后台协程，失败只写日志，不碰 UI。
+    func flushPendingUnpairs() {
+        let flusher = unpairFlusher
+        Task { await flusher.flush() }
     }
 
     /// 对外的端口集合（界面只认这几个 protocol）。
     func ports() -> Backend {
-        let pairing = LivePairing(plane: plane, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) }) { [weak self] record in
-            self?.paired(record)
-        } onDisconnect: { [weak self] in
-            await self?.disconnect()
-        }
+        let pairing = LivePairing(plane: plane, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
+                                  onPaired: { [weak self] record in self?.paired(record) },
+                                  onDisconnect: { [weak self] in await self?.disconnect() },
+                                  pending: pendingUnpair, flusher: unpairFlusher)
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
             guard let r = pairingStore.load() else { return nil }
             return ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: r.peerToken))
@@ -111,6 +125,9 @@ final class LiveBackend: @unchecked Sendable {
     }
 
     private func paired(_ record: PairingRecord) {
+        // #956：重新配对同一台电脑，先删它的待撤销条目，否则后台重试会把刚建立的新配对撤掉。
+        do { try pendingUnpair.remove(daemonNodeId: record.daemonNodeId) }
+        catch { logger.log("unpair-outbox: remove on re-pair failed: \(error)") }
         try? provider.ffi.setAllowedPeer(nodeId: record.daemonNodeId)
         // #935：换了一台电脑就清旧账（已确认计数不能算给新电脑）；同一台重新配对不动。失败要暴露，不静默沿用旧账。
         do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
@@ -132,6 +149,7 @@ final class LiveBackend: @unchecked Sendable {
     }
 
     func start() {
+        flushPendingUnpairs() // 启动
         Task {
             await engine.start()
             await refreshFacts()
@@ -314,10 +332,20 @@ final class NetworkState: @unchecked Sendable {
     private let monitor = NWPathMonitor()
     private let lock = NSLock()
     private var expensive = false
+    private var satisfied: Bool?
+    /// 网络从不可用变回可用时调用（首次回调不算：启动由 `LiveBackend.start` 管）。
+    var onRecovered: (() -> Void)?
 
     init() {
         monitor.pathUpdateHandler = { [weak self] path in
-            self?.lock.lock(); self?.expensive = path.isExpensive; self?.lock.unlock()
+            guard let self else { return }
+            let now = path.status == .satisfied
+            self.lock.lock()
+            self.expensive = path.isExpensive
+            let recovered = self.satisfied == false && now
+            self.satisfied = now
+            self.lock.unlock()
+            if recovered { self.onRecovered?() }
         }
         monitor.start(queue: DispatchQueue(label: "ppass.network"))
     }
