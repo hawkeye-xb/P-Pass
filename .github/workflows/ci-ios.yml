@@ -126,10 +126,6 @@ jobs:
       - name: Version stamp rule
         run: tools/ios/test-stamp-version.sh
 
-      # #940：TestFlight 防过期守护的判定规则（天数、去重）。
-      - name: ASC expiry guard rules
-        run: python3 tools/ios/test_asc_builds.py
-
       # #315：iOS 界面文案由 Android strings.xml 生成（同 key、同一句话），逐字节比对。
       - name: UI strings in sync with Android strings.xml
         run: python3 tools/ios/gen-strings.py --check

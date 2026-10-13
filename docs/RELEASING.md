@@ -282,7 +282,6 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   (must be a test/beta version; bump N on every retry). Local: `PPF_BUILD_VERSION=... tools/ios/testflight-upload.sh --archive-only`.
 - `ITSAppUsesNonExemptEncryption=NO` in Info.plist: the app only uses standard transport encryption (TLS/QUIC), which is exempt.
 - Environment setup for a new machine: [ios-dev-setup.md](ios-dev-setup.md).
-- External TestFlight testing (public link, Beta App Review notes, 90-day expiry guard): [runbook/ios-testflight-external.md](runbook/ios-testflight-external.md).
 
 ## 5. Version-overwrite guards (remember)
 
@@ -476,7 +475,6 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   （必须是 test / beta 版本；每次重试 N 加一）。本机：`PPF_BUILD_VERSION=… tools/ios/testflight-upload.sh --archive-only`。
 - Info.plist 声明 `ITSAppUsesNonExemptEncryption=NO`：只用系统标准传输加密（TLS / QUIC），属出口合规豁免。
 - 新机器环境搭建：[ios-dev-setup.md](ios-dev-setup.md)。
-- 外部 TestFlight 内测（公开链接、Beta App Review 审核说明、90 天过期守护）：[runbook/ios-testflight-external.md](runbook/ios-testflight-external.md)。
 
 ## 5. 版本覆盖禁令（记住）
 
