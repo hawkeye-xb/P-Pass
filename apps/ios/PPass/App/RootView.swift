@@ -32,7 +32,9 @@ struct RootView: View {
                 MainTabs()
             }
         }
-        .tint(PPTone.accent)
+        .tint(PPColor.ink)
+        .font(PPFont.body)
+        .ppScreen()
         .onAppear(perform: applyLaunchRoute)
     }
 
@@ -55,9 +57,11 @@ struct MainTabs: View {
     var body: some View {
         TabView(selection: $app.tab) {
             PhotosScreen()
+                .toolbarBackground(PPColor.paper, for: .tabBar).toolbarBackground(.visible, for: .tabBar)
                 .tabItem { Label(L.s("tab_photos"), systemImage: "photo.on.rectangle") }
                 .tag(AppModel.Tab.photos)
             SettingsScreen()
+                .toolbarBackground(PPColor.paper, for: .tabBar).toolbarBackground(.visible, for: .tabBar)
                 .tabItem { Label(L.s("tab_settings"), systemImage: "gearshape") }
                 .badge(settingsAlert ? "!" : nil)
                 .tag(AppModel.Tab.settings)

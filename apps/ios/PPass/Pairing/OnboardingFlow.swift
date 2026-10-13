@@ -27,31 +27,33 @@ struct OnboardingFlow: View {
     private var welcome: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 44)).foregroundStyle(.tint)
+                Image(systemName: "photo.on.rectangle.angled").font(.system(size: 44)).foregroundStyle(PPColor.ink)
                     .accessibilityHidden(true)
                 Text(L.s("welcome_headline")).font(PPFont.brand(40)).fixedSize(horizontal: false, vertical: true)
-                Text(L.s("welcome_sub")).font(.body).foregroundStyle(.secondary)
+                Text(L.s("welcome_sub")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(["welcome_step1", "welcome_step2", "welcome_step3"].enumerated()), id: \.offset) { i, key in
-                        if i > 0 { Divider() }
-                        Text(L.s(key)).font(.body).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
+                        if i > 0 { PPDivider() }
+                        Text(L.s(key)).font(PPFont.body).padding(.vertical, 12).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .padding(.horizontal, 16)
-                .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
+                .background(PPColor.linen, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous).stroke(PPColor.border, lineWidth: 1))
             }
             .padding(24)
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .ppScreen()
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 6) {
                 PPButton(title: L.s("welcome_scan")) { step = .scan }
                 Button(L.s("scan_manual_link")) { step = .manual }
-                    .font(.body.weight(.medium))
+                    .font(PPFont.bodyMedium)
                     .frame(maxWidth: .infinity, minHeight: 44)
             }
             .padding(.horizontal, 24).padding(.vertical, 12)
-            .background(.regularMaterial)
+            .background(PPColor.paper.ignoresSafeArea(edges: .bottom))
+            .overlay(alignment: .top) { PPDivider() }
         }
     }
 
@@ -98,24 +100,26 @@ struct ManualPairScreen: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField(L.s("scan_manual_placeholder"), text: $text, axis: .vertical)
-                        .font(.body.monospaced())
+                    TextField("", text: $text, prompt: Text(L.s("scan_manual_placeholder")).foregroundColor(PPColor.ink40), axis: .vertical)
+                        .font(PPFont.mono)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .lineLimit(3...8)
                         .accessibilityIdentifier("pairCodeField")
                 } header: {
-                    Text(L.s("scan_manual_body")).font(.subheadline).textCase(nil).foregroundStyle(.secondary)
+                    Text(L.s("scan_manual_body")).font(PPFont.subheadline).textCase(nil).foregroundStyle(PPColor.ink60)
                         .padding(.bottom, 4)
                 } footer: {
                     VStack(alignment: .leading, spacing: 6) {
                         if invalid {
-                            Label(L.s("scan_manual_invalid"), systemImage: "exclamationmark.circle.fill").foregroundStyle(PPTone.act)
+                            Label(L.s("scan_manual_invalid"), systemImage: "exclamationmark.circle.fill").font(PPFont.footnote).foregroundStyle(PPColor.act)
                         }
-                        Text(L.s("scan_manual_note"))
+                        Text(L.s("scan_manual_note")).font(PPFont.footnote).foregroundStyle(PPColor.ink40)
                     }
                 }
             }
+            .ppList()
             .navigationTitle(L.s("scan_manual_title"))
+            .ppNavBar()
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -124,7 +128,7 @@ struct ManualPairScreen: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 HStack(spacing: 12) {
-                    PPButton(title: L.s("scan_manual_paste"), kind: .secondary) {
+                    PPButton(title: L.s("scan_manual_paste"), kind: .quiet) {
                         if let s = UIPasteboard.general.string { text = s }
                     }
                     PPButton(title: L.s("scan_manual_submit")) {
@@ -133,7 +137,8 @@ struct ManualPairScreen: View {
                     .accessibilityIdentifier("pairSubmit")
                 }
                 .padding(.horizontal, 16).padding(.vertical, 12)
-                .background(.regularMaterial)
+                .background(PPColor.paper.ignoresSafeArea(edges: .bottom))
+                .overlay(alignment: .top) { PPDivider() }
             }
         }
         .onAppear {
@@ -159,11 +164,11 @@ struct PairStatusScreen: View {
                     ProgressView().controlSize(.large).padding(.bottom, 6)
                     message(title: L.s("pair_waiting_title"), body: L.s("pair_waiting_body"))
                 case .refused(let lapsed, let note):
-                    symbol("xmark.circle.fill", PPTone.act)
+                    symbol("xmark.circle.fill", PPColor.act)
                     message(title: L.s(lapsed ? "pair_lapsed_title" : "pair_refused_title"), body: L.s("pair_refused_body"),
                             note: note)
                 case .failed(let reason):
-                    symbol("exclamationmark.triangle.fill", PPTone.act)
+                    symbol("exclamationmark.triangle.fill", PPColor.act)
                     message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"),
                             note: "(\(String(reason.prefix(160))))")
                 }
@@ -171,11 +176,11 @@ struct PairStatusScreen: View {
             .padding(24)
             .frame(maxWidth: .infinity)
         }
-        .background(Color(uiColor: .systemBackground))
+        .ppScreen()
         .safeAreaInset(edge: .bottom, spacing: 0) {
             Group {
                 if case .waiting = step {
-                    PPButton(title: L.s("cancel"), kind: .secondary, action: onCancel)
+                    PPButton(title: L.s("cancel"), kind: .quiet, action: onCancel)
                 } else {
                     PPButton(title: L.s("scan_again"), action: onRetry)
                 }
@@ -190,9 +195,9 @@ struct PairStatusScreen: View {
 
     private func message(title: String, body: String, note: String? = nil) -> some View {
         VStack(spacing: 10) {
-            Text(title).font(.title.bold()).multilineTextAlignment(.center)
-            Text(body).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            if let note { Text(note).font(.footnote).foregroundStyle(.tertiary).multilineTextAlignment(.center) }
+            Text(title).font(PPFont.title2).multilineTextAlignment(.center)
+            Text(body).font(PPFont.body).foregroundStyle(PPColor.ink60).multilineTextAlignment(.center)
+            if let note { Text(note).font(PPFont.footnote).foregroundStyle(PPColor.ink40).multilineTextAlignment(.center) }
         }
     }
 }

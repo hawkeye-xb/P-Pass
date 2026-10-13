@@ -15,38 +15,38 @@ struct ScanScreen: View {
         VStack(spacing: 20) {
             HStack {
                 Button(action: onClose) {
-                    Image(systemName: "xmark").font(.body.weight(.semibold))
+                    Image(systemName: "xmark").font(PPFont.bodyBold).foregroundStyle(PPColor.paper)
                         .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: Circle())
+                        .background(PPColor.paper.opacity(0.15), in: Circle())
                 }
                 .accessibilityLabel(L.s("back"))
-                Text(L.s("scan_header_title")).font(.headline)
+                Text(L.s("scan_header_title")).font(PPFont.headline).foregroundStyle(PPColor.paper)
                 Spacer()
             }
             Spacer()
             ZStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.7), lineWidth: 2)
+                RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(PPColor.paper.opacity(0.7), lineWidth: 2)
                 switch cameraState {
                 case .ready: QRScannerView { code in if let c = PairCode.normalized(code) { Haptics.success(); onCode(c) } }
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-                case .checking: ProgressView()
+                case .checking: ProgressView().tint(PPColor.paperDim)
                 case .unavailable:
-                    Text(L.s("scan_camera_unavailable")).font(.body).multilineTextAlignment(.center).padding(20)
+                    Text(L.s("scan_camera_unavailable")).font(PPFont.body).foregroundStyle(PPColor.paperDim).multilineTextAlignment(.center).padding(20)
                 }
             }
             .frame(width: 260, height: 260)
-            Text(L.s("scan_hint")).font(.body).multilineTextAlignment(.center).foregroundStyle(.secondary)
+            Text(L.s("scan_hint")).font(PPFont.body).multilineTextAlignment(.center).foregroundStyle(PPColor.paperDim)
             Spacer()
             Button(L.s("scan_manual_link"), action: onManual)
-                .font(.body.weight(.medium)).frame(minHeight: 48)
+                .font(PPFont.bodyMedium).frame(minHeight: 48)
                 .accessibilityIdentifier("manualLink")
         }
         .padding(20)
         // 相机取景天然是深色界面：固定深色外观 + 黑底，不跟随系统浅色。
         .preferredColorScheme(.dark)
-        .foregroundStyle(.primary)
-        .tint(.white)
-        .background(Color(uiColor: .black).ignoresSafeArea())
+        .foregroundStyle(PPColor.paper)
+        .tint(PPColor.paper)
+        .background(PPColor.surfaceDark.ignoresSafeArea())
         .task { cameraState = await Self.cameraAvailable() ? .ready : .unavailable }
     }
 

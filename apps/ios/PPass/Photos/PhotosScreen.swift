@@ -14,18 +14,19 @@ struct PhotosScreen: View {
                 if app.pairingLost {
                     VStack(alignment: .leading, spacing: 10) {
                         Label(L.s("photos_lost_title"), systemImage: "exclamationmark.triangle.fill")
-                            .font(.title3.bold()).foregroundStyle(PPTone.act)
-                        Text(L.s("photos_lost_body_unknown")).font(.body).foregroundStyle(.secondary)
+                            .font(PPFont.title3).foregroundStyle(PPColor.act)
+                        Text(L.s("photos_lost_body_unknown")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                         PPButton(title: L.s("photos_lost_action"), kind: .danger) { app.startOver() }
                     }
                     .padding(16)
-                    .background(PPTone.act.opacity(0.12), in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
+                    .background(PPColor.actBg, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
                     .padding(16)
                 }
                 content
             }
-            .background(Color(uiColor: .systemBackground))
+            .ppScreen()
             .navigationTitle(L.s("tab_photos"))
+            .ppNavBar()
             .safeAreaInset(edge: .top, spacing: 0) { if !app.pairingLost { chips } }
         }
         .task { model.bind(app.backend.timeline); await model.loadFirst() }
@@ -49,7 +50,7 @@ struct PhotosScreen: View {
         }
         .pickerStyle(.segmented)
         .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(.regularMaterial)
+        .background(PPColor.paper)
     }
 
     @ViewBuilder private var content: some View {
@@ -83,10 +84,10 @@ struct PhotosScreen: View {
                                 .onAppear { if item == model.shown.last { Task { await model.loadMore() } } }
                         }
                     } header: {
-                        Text(section.title).font(.headline)
+                        Text(section.title).font(PPFont.headline)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 16).padding(.vertical, 8)
-                            .background(.regularMaterial)
+                            .background(PPColor.paper)
                     }
                 }
             }
@@ -127,16 +128,16 @@ struct Thumb: View {
     @State private var image: UIImage?
 
     var body: some View {
-        Color(uiColor: .secondarySystemFill)
+        PPColor.linen
             .aspectRatio(1, contentMode: .fit)
             .overlay { if let image { Image(uiImage: image).resizable().scaledToFill() } }
             .clipped()
             .overlay(alignment: .bottomTrailing) {
                 if item.isVideo {
-                    Image(systemName: "play.fill").font(.caption2.weight(.bold))
-                        .foregroundStyle(.primary)
+                    Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(PPColor.paper)
                         .frame(width: 22, height: 22)
-                        .background(.regularMaterial, in: Circle())
+                        .background(PPColor.surfaceDark.opacity(0.62), in: Circle())
                         .padding(5)
                         .accessibilityHidden(true)
                 }

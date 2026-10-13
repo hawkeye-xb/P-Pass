@@ -15,16 +15,16 @@ struct HeroCard: View {
                 switch render {
                 case .accessBlocked: accessCard
                 case .unreadable:
-                    Text(L.s("triplet_unavailable")).font(.body).foregroundStyle(.secondary)
+                    Text(L.s("triplet_unavailable")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                 case .unreconciled:
-                    Text(L.s("hero_unreconciled_title")).font(.title2.bold())
-                    Text(L.s("hero_unreconciled_body")).font(.body).foregroundStyle(.secondary)
+                    Text(L.s("hero_unreconciled_title")).font(PPFont.title2)
+                    Text(L.s("hero_unreconciled_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                 case .triplet:
                     if let triplet { tripletView(triplet) }
                 }
             }
             .padding(.vertical, 6)
-            .ppTinted(render == .accessBlocked ? PPTone.act : nil)
+            .ppTinted(render == .accessBlocked ? PPColor.actBg : nil)
             if render != .accessBlocked {
                 progressRow.padding(.vertical, 4)
             }
@@ -36,9 +36,9 @@ struct HeroCard: View {
         let partial = app.access == .partial
         return VStack(alignment: .leading, spacing: 10) {
             Label(L.s(partial ? "partial_access_title" : "no_media_access_title"), systemImage: "photo.badge.exclamationmark")
-                .font(.title3.bold()).foregroundStyle(PPTone.act)
-            Text(L.s(partial ? "partial_access_body" : "no_media_access_body")).font(.body)
-                .foregroundStyle(.secondary)
+                .font(PPFont.title3).foregroundStyle(PPColor.act)
+            Text(L.s(partial ? "partial_access_body" : "no_media_access_body")).font(PPFont.body)
+                .foregroundStyle(PPColor.ink60)
             PPButton(title: L.s("partial_access_action"), kind: .danger) {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
@@ -47,20 +47,20 @@ struct HeroCard: View {
 
     private func tripletView(_ t: BackupTriplet) -> some View {
         let safe = HomeProjection.heroNumberIsSafe(app.access, t, pairingLost: app.pairingLost)
-        let color = safe ? PPTone.safe : Color.primary
+        let color = safe ? PPColor.safe : PPColor.ink
         return VStack(alignment: .leading, spacing: 6) {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(t.m.formatted()).font(.system(size: 48, weight: .bold, design: .rounded)).lineLimit(1)
-                    Text(L.f("hero_of_n", t.n.formatted())).font(.headline).lineLimit(1)
+                    Text(t.m.formatted()).font(PPFont.heroNumber).lineLimit(1)
+                    Text(L.f("hero_of_n", t.n.formatted())).font(PPFont.headline).lineLimit(1)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(t.m.formatted()).font(.system(size: 48, weight: .bold, design: .rounded)).lineLimit(1).minimumScaleFactor(0.5)
-                    Text(L.f("hero_of_n", t.n.formatted())).font(.headline)
+                    Text(t.m.formatted()).font(PPFont.heroNumber).lineLimit(1).minimumScaleFactor(0.5)
+                    Text(L.f("hero_of_n", t.n.formatted())).font(PPFont.headline)
                 }
             }
             .foregroundStyle(color)
-            Text(lastLine(t)).font(.subheadline).foregroundStyle(.secondary)
+            Text(lastLine(t)).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
         }
     }
 
@@ -86,15 +86,15 @@ struct HeroCard: View {
         return VStack(alignment: .leading, spacing: 10) {
             if case .sending(let done, let total, let file) = state {
                 Label {
-                    Text(file).font(.body.weight(.medium)).lineLimit(1).truncationMode(.middle)
+                    Text(file).font(PPFont.bodyMedium).lineLimit(1).truncationMode(.middle)
                 } icon: {
-                    Image(systemName: "arrow.up.circle.fill").foregroundStyle(PPTone.waiting)
+                    Image(systemName: "arrow.up.circle.fill").foregroundStyle(PPColor.waiting)
                 }
-                Text(L.f("state_sending", done, total)).font(.subheadline).foregroundStyle(.secondary)
-                ProgressView(value: Double(done - 1), total: Double(max(total, 1))).tint(PPTone.waiting)
+                Text(L.f("state_sending", done, total)).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                PPProgressBar(value: Double(done - 1), total: Double(max(total, 1)))
             } else {
                 Label {
-                    Text(statusText(state)).font(.body).foregroundStyle(statusColor(state))
+                    Text(statusText(state)).font(PPFont.body).foregroundStyle(statusColor(state))
                 } icon: {
                     Image(systemName: statusSymbol(state)).foregroundStyle(statusColor(state))
                 }
@@ -103,7 +103,7 @@ struct HeroCard: View {
                 Button(L.s(app.commandInFlight ? "backup_command_processing" : (action == .pause ? "backup_pause" : "backup_resume"))) {
                     app.pauseOrResume()
                 }
-                .buttonStyle(.bordered).controlSize(.regular)
+                .buttonStyle(PPChipButtonStyle())
                 .disabled(app.commandInFlight)
             }
         }
@@ -127,9 +127,9 @@ struct HeroCard: View {
 
     /// 绿色只给「已确认的安全」——状态行说「都存好了」且闸门放行时才绿；等待用琥珀；其余用系统次级色。
     private func statusColor(_ s: BackupUiState) -> Color {
-        if case .waiting = s { return PPTone.waiting }
-        if isConfirmedSafe(s) { return PPTone.safe }
-        return .secondary
+        if case .waiting = s { return PPColor.waiting }
+        if isConfirmedSafe(s) { return PPColor.safe }
+        return PPColor.ink60
     }
 
     private func isConfirmedSafe(_ s: BackupUiState) -> Bool {

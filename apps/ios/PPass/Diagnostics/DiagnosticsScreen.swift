@@ -21,7 +21,9 @@ struct DiagnosticsScreen: View {
             }
         }
         .listStyle(.insetGrouped)
+        .ppList()
         .navigationTitle(L.s("diag_title"))
+        .ppNavBar()
         .navigationBarTitleDisplayMode(.large)
     }
 
@@ -61,14 +63,16 @@ struct DiagnosticsScreen: View {
     }
 
     private func section(_ title: String, rows: [(String, String)]) -> some View {
-        Section(title) {
+        Section {
             ForEach(rows, id: \.0) { row in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(row.0).font(.subheadline).foregroundStyle(.secondary)
-                    Text(row.1).font(.body).textSelection(.enabled)
+                    Text(row.0).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                    Text(row.1).font(PPFont.body).textSelection(.enabled)
                 }
                 .padding(.vertical, 2)
             }
+        } header: {
+            Text(title).font(PPFont.subheadlineBold).textCase(nil).foregroundStyle(PPColor.ink40)
         }
     }
 }
@@ -83,14 +87,15 @@ struct StorageDetailScreen: View {
             Section {
                 Label {
                     Text(app.pairingLost ? L.s("storage_detail_lost") : L.f("storage_detail_connected", L.s("last_just_now")))
-                        .font(.body)
+                        .font(PPFont.body)
                 } icon: {
                     Image(systemName: app.pairingLost ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(app.pairingLost ? PPTone.act : PPTone.safe)
+                        .foregroundStyle(app.pairingLost ? PPColor.act : PPColor.safe)
                 }
             }
         }
         .listStyle(.insetGrouped)
+        .ppList()
         .navigationTitle(app.desktopName ?? L.s("storage_device_default"))
         .navigationBarTitleDisplayMode(.large)
     }

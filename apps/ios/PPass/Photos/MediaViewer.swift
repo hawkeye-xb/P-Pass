@@ -30,7 +30,7 @@ struct MediaViewer: View {
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
-            .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+            .background(PPColor.surfaceDark.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -38,9 +38,9 @@ struct MediaViewer: View {
                 }
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 0) {
-                        Text(attribution(current)).font(.subheadline.weight(.semibold))
+                        Text(attribution(current)).font(PPFont.subheadlineBold).foregroundStyle(PPColor.paper)
                         if let w = current.width, let h = current.height {
-                            Text("\(w)×\(h)").font(.caption).foregroundStyle(.secondary)
+                            Text("\(w)×\(h)").font(PPFont.caption).foregroundStyle(PPColor.paperDim)
                         }
                     }
                 }
@@ -50,7 +50,10 @@ struct MediaViewer: View {
                     Button { Task { await prepareShare() } } label: { Label(L.s("share"), systemImage: "square.and.arrow.up") }
                 }
             }
-            .toolbarBackground(.regularMaterial, for: .navigationBar, .bottomBar)
+            .toolbarBackground(PPColor.surfaceDark, for: .navigationBar, .bottomBar)
+            .toolbarBackground(.visible, for: .navigationBar, .bottomBar)
+            .toolbarColorScheme(.dark, for: .navigationBar, .bottomBar)
+            .tint(PPColor.paper)
             .ppToast($toast)
             .sheet(item: $share) { url in ShareSheet(items: [url]) }
         }
@@ -113,7 +116,7 @@ private struct ViewerPage: View {
         if let image {
             Image(uiImage: image).resizable().scaledToFit()
         } else {
-            ProgressView()
+            ProgressView().tint(PPColor.paperDim)
         }
     }
 
@@ -121,15 +124,15 @@ private struct ViewerPage: View {
         switch video {
         case .fetching(let p):
             VStack(spacing: 12) {
-                ProgressView(value: p).frame(maxWidth: 220)
-                Text(L.s("video_loading")).font(.body).foregroundStyle(.secondary)
+                PPProgressBar(value: p, total: 1, tint: PPColor.paper, track: PPColor.paperDim.opacity(0.3)).frame(maxWidth: 220)
+                Text(L.s("video_loading")).font(PPFont.body).foregroundStyle(PPColor.paperDim)
             }
         case .ready(let url):
             InlineVideo(url: url)
         case .failed:
             VStack(spacing: 10) {
-                Image(systemName: "video.slash").font(.largeTitle).foregroundStyle(.secondary)
-                Text(L.s("video_failed")).font(.body).foregroundStyle(.secondary)
+                Image(systemName: "video.slash").font(.largeTitle).foregroundStyle(PPColor.paperDim)
+                Text(L.s("video_failed")).font(PPFont.body).foregroundStyle(PPColor.paperDim)
             }
         }
     }

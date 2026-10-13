@@ -17,16 +17,16 @@ struct SettingsScreen: View {
                 if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
                     Section {
                         Label(L.s("desktop_low_space_hint"), systemImage: "externaldrive.badge.exclamationmark")
-                            .font(.body).foregroundStyle(PPTone.waiting)
+                            .font(PPFont.body).foregroundStyle(PPColor.waiting)
                     }
                 }
                 // #343：iOS 能承诺什么、不能承诺什么（BackupPromise），常驻，不给「知道了」。
                 if let title = app.promise.first {
                     Section {
                         VStack(alignment: .leading, spacing: 6) {
-                            Label(title, systemImage: "info.circle").font(.body.weight(.semibold))
+                            Label(title, systemImage: "info.circle").font(PPFont.bodyBold)
                             ForEach(app.promise.dropFirst(), id: \.self) { line in
-                                Text(line).font(.subheadline).foregroundStyle(.secondary)
+                                Text(line).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
                             }
                         }
                         .padding(.vertical, 4)
@@ -36,32 +36,34 @@ struct SettingsScreen: View {
                     Section {
                         VStack(alignment: .leading, spacing: 10) {
                             Label(L.s("pairing_lost_title"), systemImage: "exclamationmark.triangle.fill")
-                                .font(.title3.bold()).foregroundStyle(PPTone.act)
-                            Text(L.s("pairing_lost_body")).font(.body).foregroundStyle(.secondary)
+                                .font(PPFont.title3).foregroundStyle(PPColor.act)
+                            Text(L.s("pairing_lost_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                             PPButton(title: L.s("reconnect"), kind: .danger) { app.startOver() }
                         }
                         .padding(.vertical, 6)
-                        .ppTinted(PPTone.act)
+                        .ppTinted(PPColor.actBg)
                     }
                 } else if case .trouble(let detail) = app.uiState {
                     Section {
                         VStack(alignment: .leading, spacing: 10) {
                             Label(L.s("state_trouble"), systemImage: "exclamationmark.triangle.fill")
-                                .font(.title3.bold()).foregroundStyle(PPTone.act)
-                            Text(L.s("run_failed")).font(.body).foregroundStyle(.secondary)
+                                .font(PPFont.title3).foregroundStyle(PPColor.act)
+                            Text(L.s("run_failed")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                             Button(L.s(showDetails ? "trouble_details_hide" : "trouble_details_show")) { showDetails.toggle() }
-                                .font(.subheadline).buttonStyle(.borderless)
-                            if showDetails { Text(detail).font(.footnote.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled) }
+                                .font(PPFont.subheadline).buttonStyle(.borderless)
+                            if showDetails { Text(detail).font(PPFont.monoSmall).foregroundStyle(PPColor.ink40).textSelection(.enabled) }
                             PPButton(title: L.s("try_again"), kind: .danger) { app.retry() }
                         }
                         .padding(.vertical, 6)
-                        .ppTinted(PPTone.act)
+                        .ppTinted(PPColor.actBg)
                     }
                 }
                 settingsSection
             }
             .listStyle(.insetGrouped)
+            .ppList()
             .navigationTitle(L.s("tab_settings"))
+            .ppNavBar()
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .bucket:
@@ -102,9 +104,9 @@ struct SettingsScreen: View {
     private func row(_ title: String, value: String, symbol: String, route: Route) -> some View {
         NavigationLink(value: route) {
             HStack(spacing: 12) {
-                Label(title, systemImage: symbol).foregroundStyle(.primary)
+                Label(title, systemImage: symbol).font(PPFont.body).foregroundStyle(PPColor.ink)
                 Spacer(minLength: 8)
-                Text(value).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.trailing)
+                Text(value).font(PPFont.body).foregroundStyle(PPColor.ink60).lineLimit(2).multilineTextAlignment(.trailing)
             }
         }
     }

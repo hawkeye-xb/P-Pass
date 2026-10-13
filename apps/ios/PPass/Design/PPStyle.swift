@@ -1,14 +1,16 @@
 import SwiftUI
 import UIKit
 
-/// iOS 原生化后的语义层（#943）。
+/// 品牌语义层（#943）。
 ///
-/// 原则：界面走系统语义——系统字体（Dynamic Type）、`.primary`/`.secondary`、`systemGroupedBackground`、
-/// 材质、SF Symbols、系统 List / TabView / NavigationStack。品牌 token（tokens.json → PPColor）只用于
-/// 两件事：accent（`PPTone.accent`，全局 `.tint`）与含义色（safe / waiting / act，只在表达含义时用）。
-/// 这里不写任何色值字面量（tools/ios/check-no-color-literals.sh 守门）。
+/// 组件用 SwiftUI 原生的（TabView / NavigationStack / List / SF Symbols / 系统转场），**设计语言是品牌基础、
+/// 与 Android 一致**：颜色只用 tokens.json 生成的 `PPColor`、字体只用 Manrope（正文 / UI）+ Newsreader（标题 / 结论句）、
+/// 界面只有浅色（Info.plist `UIUserInterfaceStyle=Light`，对位 Android `Theme.Material.Light`；扫码 / 看图 / 视频
+/// 这类 Android 用 `surface-dark` 的屏才是深色）。不使用系统语义色（tools/ios/check-no-color-literals.sh 守门）。
+/// 这里不写任何色值字面量（同一个脚本）。
 
-/// 品牌字体：只有欢迎页标题这类品牌元素用 Newsreader；正文一律系统字体。
+/// 品牌字体。全部 `Font.custom(_, size:, relativeTo:)`，随 Dynamic Type 缩放。
+/// 字重对位 Android `PPFont`：Manrope Regular / Medium / Bold，Newsreader Regular / Medium / SemiBold。
 enum PPFont {
     /// 品牌字体的 PostScript 名（tools/ios/prepare-fonts.py 生成的字体文件，Info.plist UIAppFonts 注册）。
     static let faces = [
@@ -16,27 +18,84 @@ enum PPFont {
         "Manrope-Regular", "Manrope-Medium", "Manrope-Bold",
     ]
 
-    /// 随 Dynamic Type 缩放的品牌衬线字（`relativeTo` 决定缩放曲线）。
-    static func brand(_ size: CGFloat, relativeTo style: Font.TextStyle = .largeTitle) -> Font {
-        .custom("\(PPFontFamily.serif)-SemiBold", size: size, relativeTo: style)
+    static func sansFace(_ weight: Font.Weight) -> String {
+        "\(PPFontFamily.sans)-" + (weight == .bold || weight == .semibold || weight == .heavy ? "Bold" : (weight == .medium ? "Medium" : "Regular"))
     }
+
+    static func serifFace(_ weight: Font.Weight) -> String {
+        "\(PPFontFamily.serif)-" + (weight == .bold || weight == .semibold || weight == .heavy ? "SemiBold" : (weight == .medium ? "Medium" : "Regular"))
+    }
+
+    static func sans(_ size: CGFloat, _ weight: Font.Weight = .regular, relativeTo style: Font.TextStyle = .body) -> Font {
+        .custom(sansFace(weight), size: size, relativeTo: style)
+    }
+
+    static func serif(_ size: CGFloat, _ weight: Font.Weight = .semibold, relativeTo style: Font.TextStyle = .title) -> Font {
+        .custom(serifFace(weight), size: size, relativeTo: style)
+    }
+
+    // 语义字号（手机正文 ≥17，tokens.json rules）。标题 / 结论句走衬线，其余走无衬线。
+    static var body: Font { sans(PPSize.bodyMin) }
+    static var bodyMedium: Font { sans(PPSize.bodyMin, .medium) }
+    static var bodyBold: Font { sans(PPSize.bodyMin, .bold) }
+    static var subheadline: Font { sans(15, relativeTo: .subheadline) }
+    static var subheadlineBold: Font { sans(15, .bold, relativeTo: .subheadline) }
+    static var footnote: Font { sans(13, relativeTo: .footnote) }
+    static var caption: Font { sans(12, relativeTo: .caption) }
+    static var captionBold: Font { sans(12, .bold, relativeTo: .caption) }
+    /// 等宽（诊断细节 / 配对串）：Manrope 没有等宽，退到系统等宽，只用于代码样的文本。
+    static var mono: Font { .system(.body, design: .monospaced) }
+    static var monoSmall: Font { .system(.footnote, design: .monospaced) }
+    static var headline: Font { serif(18, relativeTo: .headline) }
+    static var title3: Font { serif(24, relativeTo: .title3) }
+    static var title2: Font { serif(30, relativeTo: .title2) }
+    static var largeTitle: Font { serif(36, relativeTo: .largeTitle) }
+    /// 首页英雄数字（Android HomeScreen 40sp Newsreader）。
+    static var heroNumber: Font { serif(40, relativeTo: .largeTitle) }
+    static func brand(_ size: CGFloat, relativeTo style: Font.TextStyle = .largeTitle) -> Font { serif(size, relativeTo: style) }
 }
 
-/// 品牌 accent 与含义色。深浅色各给一个值：浅色用 token，深色换成系统对应色，保证对比度。
-enum PPTone {
-    /// 品牌强调色：浅色 = 墨，深色 = 纸（反相），用于 `.tint`、主按钮底。
-    static var accent: Color { adaptive(light: PPColor.ink, dark: PPColor.paper) }
-    /// 压在 accent 上的文字色。
-    static var onAccent: Color { adaptive(light: PPColor.paper, dark: PPColor.ink) }
-    /// 含义：确认成功 / 已存好。
-    static var safe: Color { adaptive(light: PPColor.safe, dark: Color(uiColor: .systemGreen)) }
-    /// 含义：传输中 / 等待。
-    static var waiting: Color { adaptive(light: PPColor.waiting, dark: Color(uiColor: .systemOrange)) }
-    /// 含义：需要人处理。
-    static var act: Color { adaptive(light: PPColor.act, dark: Color(uiColor: .systemRed)) }
+/// 压在深色面（surface-dark）上的次级文字：paper 62%（Android `PPColor.PaperDim`，与 tokens.json 同源的 paper 叠透明度）。
+extension PPColor {
+    static let paperDim = PPColor.paper.opacity(0.62)
+}
 
-    private static func adaptive(light: Color, dark: Color) -> Color {
-        Color(uiColor: UIColor { $0.userInterfaceStyle == .dark ? UIColor(dark) : UIColor(light) })
+/// 全局 UIKit 外观：导航栏 / Tab 栏 / 分段控件的颜色与字体取 token（SwiftUI 的 `toolbarBackground` 管背景，
+/// 字体与分段控件只有 UIKit appearance 能管）。在 App 启动时调一次。
+enum PPAppearance {
+    static func install() {
+        let paper = UIColor(PPColor.paper), ink = UIColor(PPColor.ink)
+        let hairline = UIColor(PPColor.hairline), ink40 = UIColor(PPColor.ink40)
+        func ui(_ name: String, _ size: CGFloat) -> UIFont { UIFont(name: name, size: size) ?? .systemFont(ofSize: size) }
+
+        let nav = UINavigationBarAppearance()
+        nav.configureWithOpaqueBackground()
+        nav.backgroundColor = paper
+        nav.shadowColor = hairline
+        nav.titleTextAttributes = [.foregroundColor: ink, .font: ui(PPFont.sansFace(.bold), 17)]
+        nav.largeTitleTextAttributes = [.foregroundColor: ink, .font: ui(PPFont.serifFace(.semibold), 34)]
+        UINavigationBar.appearance().standardAppearance = nav
+        UINavigationBar.appearance().scrollEdgeAppearance = nav
+        UINavigationBar.appearance().compactAppearance = nav
+
+        let tab = UITabBarAppearance()
+        tab.configureWithOpaqueBackground()
+        tab.backgroundColor = paper
+        tab.shadowColor = hairline
+        for item in [tab.stackedLayoutAppearance, tab.inlineLayoutAppearance, tab.compactInlineLayoutAppearance] {
+            item.normal.iconColor = ink40
+            item.normal.titleTextAttributes = [.foregroundColor: ink40, .font: ui(PPFont.sansFace(.medium), 11)]
+            item.selected.iconColor = ink
+            item.selected.titleTextAttributes = [.foregroundColor: ink, .font: ui(PPFont.sansFace(.bold), 11)]
+        }
+        UITabBar.appearance().standardAppearance = tab
+        UITabBar.appearance().scrollEdgeAppearance = tab
+
+        let seg = UISegmentedControl.appearance()
+        seg.backgroundColor = UIColor(PPColor.linen)
+        seg.selectedSegmentTintColor = ink
+        seg.setTitleTextAttributes([.foregroundColor: UIColor(PPColor.ink60), .font: ui(PPFont.sansFace(.medium), 15)], for: .normal)
+        seg.setTitleTextAttributes([.foregroundColor: paper, .font: ui(PPFont.sansFace(.bold), 15)], for: .selected)
     }
 }
 
@@ -47,21 +106,21 @@ enum Haptics {
     static func failure() { UINotificationFeedbackGenerator().notificationOccurred(.error) }
 }
 
-/// 主 / 次 / 危险按钮。二选一的两个按钮用同一个组件、同一高度、等宽（tokens.json：二元选择同尺寸）。
-/// 高度取系统 large 控件的 50pt，并随 Dynamic Type 增高（不再用旧 token 的 56）。
+/// 主 / 次 / 危险按钮（Android `PPButton`）：高 56、圆角 20、Manrope Bold；主 = ink 底 paper 字，
+/// 次 = paper 底 + border-strong 描边 + ink-60 字，危险 = act 底。二选一的两个按钮同组件、同高、等宽（tokens.json）。
 struct PPButton: View {
-    enum Kind { case primary, secondary, danger }
+    enum Kind { case main, quiet, danger }
     let title: String
-    var kind: Kind = .primary
+    var kind: Kind = .main
     var enabled = true
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .fontWeight(.semibold)
+                .font(PPFont.bodyBold)
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, minHeight: 50)
+                .frame(maxWidth: .infinity, minHeight: PPSize.tapMin)
         }
         .buttonStyle(PPButtonStyle(kind: kind))
         .disabled(!enabled)
@@ -74,25 +133,36 @@ struct PPButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .foregroundStyle(foreground)
-            .background(background, in: RoundedRectangle(cornerRadius: PPRadius.control, style: .continuous))
-            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.4)
+            .foregroundStyle(kind == .quiet ? PPColor.ink60 : PPColor.paper)
+            .background(background(configuration.isPressed), in: RoundedRectangle(cornerRadius: PPRadius.controlMobile, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: PPRadius.controlMobile, style: .continuous)
+                    .stroke(kind == .quiet ? PPColor.borderStrong : Color.clear, lineWidth: 1)
+            )
+            .opacity(isEnabled ? 1 : 0.5)
     }
 
-    private var foreground: Color {
+    private func background(_ pressed: Bool) -> Color {
         switch kind {
-        case .primary: return PPTone.onAccent
-        case .danger: return Color(uiColor: .white)
-        case .secondary: return PPTone.accent
+        case .main: return pressed ? PPColor.inkHover : PPColor.ink
+        case .danger: return PPColor.act
+        case .quiet: return PPColor.paper
         }
     }
+}
 
-    private var background: Color {
-        switch kind {
-        case .primary: return PPTone.accent
-        case .danger: return PPTone.act
-        case .secondary: return Color(uiColor: .secondarySystemFill)
-        }
+/// 行内的次级小按钮（暂停 / 继续、重试）：paper 底 + border-strong 描边 + ink-60 字，高度随字。
+struct PPChipButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(PPFont.sans(15, .bold, relativeTo: .subheadline))
+            .foregroundStyle(PPColor.ink60)
+            .padding(.horizontal, 16).frame(minHeight: 44)
+            .background(PPColor.paper, in: RoundedRectangle(cornerRadius: PPRadius.control, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: PPRadius.control, style: .continuous).stroke(PPColor.borderStrong, lineWidth: 1))
+            .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.5)
     }
 }
 
@@ -103,17 +173,19 @@ struct PPStateMessage: View {
     var loading = false
     var actionTitle: String?
     var action: (() -> Void)?
+    /// 深色面（扫码 / 看图）上用 paper 系文字。
+    var onDark = false
 
     var body: some View {
         VStack(spacing: 14) {
             if loading {
-                ProgressView()
+                ProgressView().tint(onDark ? PPColor.paperDim : PPColor.ink60)
             } else if let symbol {
-                Image(systemName: symbol).font(.largeTitle).foregroundStyle(.secondary)
+                Image(systemName: symbol).font(.largeTitle).foregroundStyle(onDark ? PPColor.paperDim : PPColor.ink40)
             }
-            Text(text).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            Text(text).font(PPFont.body).foregroundStyle(onDark ? PPColor.paperDim : PPColor.ink60).multilineTextAlignment(.center)
             if let actionTitle, let action {
-                Button(actionTitle, action: action).buttonStyle(.bordered).controlSize(.large)
+                Button(actionTitle, action: action).buttonStyle(PPChipButtonStyle())
             }
         }
         .padding(32)
@@ -121,7 +193,7 @@ struct PPStateMessage: View {
     }
 }
 
-/// 屏内浮出的短提示（保存成功 / 失败）：材质胶囊，约 2 秒自动消失。
+/// 屏内浮出的短提示（保存成功 / 失败）：ink 胶囊 + paper 字，约 2 秒自动消失。
 struct PPToast: ViewModifier {
     @Binding var text: String?
 
@@ -129,9 +201,11 @@ struct PPToast: ViewModifier {
         content.overlay(alignment: .bottom) {
             if let text {
                 Text(text)
-                    .font(.subheadline.weight(.medium))
+                    .font(PPFont.sans(15, .medium, relativeTo: .subheadline))
+                    .foregroundStyle(PPColor.paper)
                     .padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(.regularMaterial, in: Capsule())
+                    .background(PPColor.ink, in: Capsule())
+                    .overlay(Capsule().stroke(PPColor.paper.opacity(0.3), lineWidth: 1))
                     .padding(.bottom, 72)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
                     .task(id: text) {
@@ -144,9 +218,57 @@ struct PPToast: ViewModifier {
     }
 }
 
+/// 进度条：hairline 轨道 + 含义色填充（Android 同款，不用系统 ProgressView 的灰轨）。
+struct PPProgressBar: View {
+    let value: Double
+    let total: Double
+    var tint: Color = PPColor.waiting
+    var track: Color = PPColor.hairline
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(track)
+                Capsule().fill(tint).frame(width: geo.size.width * CGFloat(min(max(value / max(total, 1), 0), 1)))
+            }
+        }
+        .frame(height: 6)
+        .accessibilityElement()
+        .accessibilityValue("\(Int(min(max(value / max(total, 1), 0), 1) * 100))%")
+    }
+}
+
+/// 行内分隔线（token divider）。
+struct PPDivider: View {
+    var body: some View { Rectangle().fill(PPColor.divider).frame(height: 1) }
+}
+
 extension View {
     func ppToast(_ text: Binding<String?>) -> some View { modifier(PPToast(text: text)) }
 
-    /// 列表行的含义色淡底（深浅色都成立），文字仍走系统语义色。
-    func ppTinted(_ tone: Color?) -> some View { listRowBackground(tone.map { $0.opacity(0.12) }) }
+    /// 原生 `List` / `Form` 套品牌：paper 底、行底 linen、分隔线 hairline、文字 ink。
+    func ppList() -> some View {
+        self.font(PPFont.body)
+            .scrollContentBackground(.hidden)
+            .background(PPColor.paper.ignoresSafeArea())
+            .listRowBackground(PPColor.linen)
+            .listRowSeparatorTint(PPColor.hairline)
+            .foregroundStyle(PPColor.ink)
+            .tint(PPColor.ink)
+    }
+
+    /// 导航栏（与 Tab 栏）底色取 paper；字体 / 分隔线在 `PPAppearance`。
+    func ppNavBar() -> some View {
+        self.toolbarBackground(PPColor.paper, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+    }
+
+    /// 整页 paper 底 + 默认前景 ink（不让系统 label 色漏进来）。
+    func ppScreen(_ fill: Color = PPColor.paper) -> some View {
+        self.foregroundStyle(PPColor.ink)
+            .background(fill.ignoresSafeArea())
+    }
+
+    /// 列表行的含义色淡底（token 的 *-bg）。
+    func ppTinted(_ bg: Color?) -> some View { listRowBackground(bg ?? PPColor.linen) }
 }

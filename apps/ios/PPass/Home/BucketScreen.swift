@@ -15,6 +15,8 @@ struct BucketScreen: View {
     var body: some View {
         content
             .navigationTitle(L.s("bucket_title"))
+            .ppNavBar()
+            .ppScreen()
             .navigationBarTitleDisplayMode(.large)
             .safeAreaInset(edge: .bottom, spacing: 0) { if albums != nil, error == nil { footer } }
             .toolbar(firstTime ? .automatic : .hidden, for: .tabBar) // 选相册是一次完整任务，底部主按钮占位
@@ -33,11 +35,12 @@ struct BucketScreen: View {
                     Section {
                         ForEach(albums) { album in row(album) }
                     } header: {
-                        Text(L.s("bucket_hint")).font(.subheadline).textCase(nil).foregroundStyle(.secondary)
+                        Text(L.s("bucket_hint")).font(PPFont.subheadline).textCase(nil).foregroundStyle(PPColor.ink60)
                             .padding(.bottom, 4)
                     }
                 }
                 .listStyle(.insetGrouped)
+                .ppList()
             }
         } else {
             PPStateMessage(text: L.s("bucket_loading"), loading: true)
@@ -54,17 +57,17 @@ struct BucketScreen: View {
                 AlbumCover(album: album)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(album.name ?? L.s("bucket_unnamed")).font(.body).foregroundStyle(.primary)
+                        Text(album.name ?? L.s("bucket_unnamed")).font(PPFont.body).foregroundStyle(PPColor.ink)
                         if !known.isEmpty, !known.contains(album.id) {
-                            Text(L.s("bucket_new")).font(.caption.bold()).foregroundStyle(PPTone.waiting)
+                            Text(L.s("bucket_new")).font(PPFont.captionBold).foregroundStyle(PPColor.waiting)
                         }
                     }
-                    Text(L.f("bucket_count", album.count)).font(.subheadline).foregroundStyle(.secondary)
+                    Text(L.f("bucket_count", album.count)).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
                 }
                 Spacer(minLength: 8)
                 Image(systemName: on ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
-                    .foregroundStyle(on ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+                    .foregroundStyle(on ? PPColor.ink : PPColor.ink40)
             }
             .contentShape(Rectangle())
         }
@@ -76,13 +79,14 @@ struct BucketScreen: View {
     private var footer: some View {
         let total = (albums ?? []).filter { checked.contains($0.id) }.reduce(0) { $0 + $1.count }
         return VStack(spacing: 10) {
-            Text(L.f("bucket_summary", total.formatted())).font(.subheadline).foregroundStyle(.secondary)
+            Text(L.f("bucket_summary", total.formatted())).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
             PPButton(title: L.s("bucket_start")) {
                 onDone(checked, Set((albums ?? []).map(\.id)))
             }
         }
         .padding(16)
-        .background(.regularMaterial)
+        .background(PPColor.paper.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) { PPDivider() }
     }
 
     private func load() async {
@@ -106,7 +110,7 @@ private struct AlbumCover: View {
     @State private var image: UIImage?
 
     var body: some View {
-        Color(uiColor: .secondarySystemFill)
+        PPColor.linen
             .frame(width: 56, height: 56)
             .overlay { if let image { Image(uiImage: image).resizable().scaledToFill() } }
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -123,16 +127,16 @@ struct BackupStartedScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Image(systemName: "checkmark.circle.fill").font(.system(size: 56)).foregroundStyle(PPTone.safe)
+                Image(systemName: "checkmark.circle.fill").font(.system(size: 56)).foregroundStyle(PPColor.safe)
                     .accessibilityHidden(true)
-                Text(L.f("backup_started_title", count.formatted())).font(.largeTitle.bold())
-                Text(L.s("backup_started_body")).font(.body).foregroundStyle(.secondary)
-                Text(L.s("idle_auto_hint")).font(.body).foregroundStyle(.secondary)
+                Text(L.f("backup_started_title", count.formatted())).font(PPFont.largeTitle)
+                Text(L.s("backup_started_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                Text(L.s("idle_auto_hint")).font(PPFont.body).foregroundStyle(PPColor.ink60)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)
         }
-        .background(Color(uiColor: .systemBackground))
+        .ppScreen()
         .safeAreaInset(edge: .bottom, spacing: 0) {
             PPButton(title: L.s("ok_got_it"), action: onDone).padding(24)
         }
