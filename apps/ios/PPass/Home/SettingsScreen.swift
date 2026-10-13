@@ -5,7 +5,6 @@ import SwiftUI
 /// 所有「说什么、什么颜色」都由 HomeProjection 的纯函数裁决，这里只做映射。
 struct SettingsScreen: View {
     @EnvironmentObject var app: AppModel
-    @Binding var tabBarHidden: Bool
     @State private var path: [Route] = []
     @State private var showDetails = false
 
@@ -13,42 +12,56 @@ struct SettingsScreen: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    HeroCard()
-                    if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
-                        Text(L.s("desktop_low_space_hint")).font(PPFont.body).foregroundStyle(PPColor.waiting)
+            List {
+                HeroCard()
+                if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
+                    Section {
+                        Label(L.s("desktop_low_space_hint"), systemImage: "externaldrive.badge.exclamationmark")
+                            .font(.body).foregroundStyle(PPTone.waiting)
                     }
-                    // #343：iOS 能承诺什么、不能承诺什么（BackupPromise），常驻，不给「知道了」。
-                    if let title = app.promise.first {
-                        PPCard(fill: PPColor.paper, stroke: PPColor.borderStrong) {
-                            Text(title).font(PPFont.sans(17, .bold))
+                }
+                // #343：iOS 能承诺什么、不能承诺什么（BackupPromise），常驻，不给「知道了」。
+                if let title = app.promise.first {
+                    Section {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label(title, systemImage: "info.circle").font(.body.weight(.semibold))
                             ForEach(app.promise.dropFirst(), id: \.self) { line in
-                                Text(line).font(PPFont.sans(15)).foregroundStyle(PPColor.ink60)
+                                Text(line).font(.subheadline).foregroundStyle(.secondary)
                             }
                         }
+                        .padding(.vertical, 4)
                     }
-                    if app.pairingLost {
-                        PPCard(fill: PPColor.actBg, stroke: PPColor.act.opacity(0.3)) {
-                            Text(L.s("pairing_lost_title")).font(PPFont.serif(24)).foregroundStyle(PPColor.act)
-                            Text(L.s("pairing_lost_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                }
+                if app.pairingLost {
+                    Section {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label(L.s("pairing_lost_title"), systemImage: "exclamationmark.triangle.fill")
+                                .font(.title3.bold()).foregroundStyle(PPTone.act)
+                            Text(L.s("pairing_lost_body")).font(.body).foregroundStyle(.secondary)
                             PPButton(title: L.s("reconnect"), kind: .danger) { app.startOver() }
                         }
-                    } else if case .trouble(let detail) = app.uiState {
-                        PPCard(fill: PPColor.actBg, stroke: PPColor.act.opacity(0.3)) {
-                            Text(L.s("state_trouble")).font(PPFont.serif(24)).foregroundStyle(PPColor.act)
-                            Text(L.s("run_failed")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                        .padding(.vertical, 6)
+                        .ppTinted(PPTone.act)
+                    }
+                } else if case .trouble(let detail) = app.uiState {
+                    Section {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label(L.s("state_trouble"), systemImage: "exclamationmark.triangle.fill")
+                                .font(.title3.bold()).foregroundStyle(PPTone.act)
+                            Text(L.s("run_failed")).font(.body).foregroundStyle(.secondary)
                             Button(L.s(showDetails ? "trouble_details_hide" : "trouble_details_show")) { showDetails.toggle() }
-                                .font(PPFont.sans(15)).foregroundStyle(PPColor.ink60)
-                            if showDetails { Text(detail).font(.system(size: 13, design: .monospaced)).foregroundStyle(PPColor.ink40) }
+                                .font(.subheadline).buttonStyle(.borderless)
+                            if showDetails { Text(detail).font(.footnote.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled) }
                             PPButton(title: L.s("try_again"), kind: .danger) { app.retry() }
                         }
+                        .padding(.vertical, 6)
+                        .ppTinted(PPTone.act)
                     }
-                    settingsCard
                 }
-                .padding(16)
+                settingsSection
             }
-            .ppScreen()
+            .listStyle(.insetGrouped)
+            .navigationTitle(L.s("tab_settings"))
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .bucket:
@@ -71,16 +84,12 @@ struct SettingsScreen: View {
         }
     }
 
-    private var settingsCard: some View {
-        VStack(spacing: 0) {
-            row(L.s("backup_scope"), value: scopeValue) { path.append(.bucket) }
-            Divider().overlay(PPColor.divider)
-            row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default")) { path.append(.storage) }
-            Divider().overlay(PPColor.divider)
-            row(L.s("setting_version"), value: AppVersion.current.displayLine) { path.append(.diagnostics) }
+    private var settingsSection: some View {
+        Section {
+            row(L.s("backup_scope"), value: scopeValue, symbol: "photo.stack", route: .bucket)
+            row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default"), symbol: "desktopcomputer", route: .storage)
+            row(L.s("setting_version"), value: AppVersion.current.displayLine, symbol: "info.circle", route: .diagnostics)
         }
-        .background(PPColor.linen, in: RoundedRectangle(cornerRadius: PPRadius.card))
-        .overlay(RoundedRectangle(cornerRadius: PPRadius.card).stroke(PPColor.border, lineWidth: 1))
     }
 
     /// 「备份哪些相册」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」。
@@ -89,18 +98,14 @@ struct SettingsScreen: View {
         return n > 0 ? L.p("backup_scope_n", n) : L.s("backup_scope_none")
     }
 
-    private func row(_ title: String, value: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    /// 系统导航行：图标 + 标题 + 次级值 + 系统 chevron（NavigationLink 自带）。
+    private func row(_ title: String, value: String, symbol: String, route: Route) -> some View {
+        NavigationLink(value: route) {
             HStack(spacing: 12) {
-                Text(title).font(PPFont.body).foregroundStyle(PPColor.ink)
-                Spacer()
-                Text(value).font(PPFont.sans(15)).foregroundStyle(PPColor.ink40).lineLimit(1)
-                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(PPColor.ink40)
+                Label(title, systemImage: symbol).foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                Text(value).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.trailing)
             }
-            .padding(.horizontal, 18)
-            .frame(minHeight: PPSize.tapMin)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
     }
 }

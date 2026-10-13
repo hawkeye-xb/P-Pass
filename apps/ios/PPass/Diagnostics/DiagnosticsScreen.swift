@@ -7,20 +7,22 @@ struct DiagnosticsScreen: View {
     @State private var copied = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(L.s("diag_title")).font(PPFont.serif(32))
-                section(L.s("diag_section_build"), rows: buildRows)
-                section(L.s("diag_section_state"), rows: stateRows)
-                PPButton(title: L.s(copied ? "diag_copied" : "diag_copy"), kind: .secondary) {
+        List {
+            section(L.s("diag_section_build"), rows: buildRows)
+            section(L.s("diag_section_state"), rows: stateRows)
+            Section {
+                Button {
                     UIPasteboard.general.string = (buildRows + stateRows).map { "\($0.0): \($0.1)" }.joined(separator: "\n")
                     copied = true
+                    Haptics.success()
+                } label: {
+                    Label(L.s(copied ? "diag_copied" : "diag_copy"), systemImage: copied ? "checkmark" : "doc.on.doc")
                 }
             }
-            .padding(16)
         }
-        .ppScreen()
-        .navigationBarTitleDisplayMode(.inline)
+        .listStyle(.insetGrouped)
+        .navigationTitle(L.s("diag_title"))
+        .navigationBarTitleDisplayMode(.large)
     }
 
     private var buildRows: [(String, String)] {
@@ -59,35 +61,37 @@ struct DiagnosticsScreen: View {
     }
 
     private func section(_ title: String, rows: [(String, String)]) -> some View {
-        PPCard {
-            Text(title).font(PPFont.sans(13, .bold)).foregroundStyle(PPColor.ink40).textCase(.uppercase).tracking(1.5)
+        Section(title) {
             ForEach(rows, id: \.0) { row in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(row.0).font(PPFont.sans(15)).foregroundStyle(PPColor.ink40)
-                    Text(row.1).font(PPFont.sans(17, .medium)).textSelection(.enabled)
+                    Text(row.0).font(.subheadline).foregroundStyle(.secondary)
+                    Text(row.1).font(.body).textSelection(.enabled)
                 }
+                .padding(.vertical, 2)
             }
         }
     }
 }
 
-/// 存储电脑详情（对位 Android 的详情子页）：状态点 + 名称 + 配对状态。断开连接放在集成步骤
+/// 存储电脑详情（对位 Android 的详情子页）：状态图标 + 名称 + 配对状态。断开连接放在集成步骤
 /// （要走真实控制面 `device.unpair` 与断开清单），壳阶段不放一个点了没用的按钮。
 struct StorageDetailScreen: View {
     @EnvironmentObject var app: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 10) {
-                Circle().fill(app.pairingLost ? PPColor.act : PPColor.safe).frame(width: 12, height: 12)
-                Text(app.desktopName ?? L.s("storage_device_default")).font(PPFont.serif(30))
+        List {
+            Section {
+                Label {
+                    Text(app.pairingLost ? L.s("storage_detail_lost") : L.f("storage_detail_connected", L.s("last_just_now")))
+                        .font(.body)
+                } icon: {
+                    Image(systemName: app.pairingLost ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(app.pairingLost ? PPTone.act : PPTone.safe)
+                }
             }
-            Text(app.pairingLost ? L.s("storage_detail_lost") : L.f("storage_detail_connected", L.s("last_just_now")))
-                .font(PPFont.body).foregroundStyle(PPColor.ink60)
-            Spacer()
         }
-        .padding(16)
-        .ppScreen()
-        .navigationBarTitleDisplayMode(.inline)
+        .listStyle(.insetGrouped)
+        .navigationTitle(app.desktopName ?? L.s("storage_device_default"))
+        .navigationBarTitleDisplayMode(.large)
     }
 }

@@ -55,8 +55,6 @@
 		<string>Newsreader-Medium.ttf</string>
 		<string>Newsreader-SemiBold.ttf</string>
 	</array>
-	<key>UIUserInterfaceStyle</key>
-	<string>Light</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the pairing QR code shown on your home computer.</string>
 	<key>NSLocalNetworkUsageDescription</key>

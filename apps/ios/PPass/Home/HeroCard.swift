@@ -3,27 +3,30 @@ import SwiftUI
 import UIKit
 
 /// 英雄卡（规则 H：主位四选一）+ 分隔线下的进度区 / 状态行 + 右侧唯一的次级按钮。
+/// 是 `List(.insetGrouped)` 里的第一个分组：一行放数字 / 引导，一行放进度与状态。
 struct HeroCard: View {
     @EnvironmentObject var app: AppModel
 
     var body: some View {
         let triplet = app.triplet
         let render = HomeProjection.heroRender(app.access, triplet)
-        PPCard(fill: render == .accessBlocked ? PPColor.actBg : PPColor.linen,
-               stroke: render == .accessBlocked ? PPColor.act.opacity(0.3) : PPColor.border) {
-            switch render {
-            case .accessBlocked: accessCard
-            case .unreadable:
-                Text(L.s("triplet_unavailable")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-            case .unreconciled:
-                Text(L.s("hero_unreconciled_title")).font(PPFont.serif(26))
-                Text(L.s("hero_unreconciled_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-            case .triplet:
-                if let triplet { tripletView(triplet) }
+        Section {
+            VStack(alignment: .leading, spacing: 8) {
+                switch render {
+                case .accessBlocked: accessCard
+                case .unreadable:
+                    Text(L.s("triplet_unavailable")).font(.body).foregroundStyle(.secondary)
+                case .unreconciled:
+                    Text(L.s("hero_unreconciled_title")).font(.title2.bold())
+                    Text(L.s("hero_unreconciled_body")).font(.body).foregroundStyle(.secondary)
+                case .triplet:
+                    if let triplet { tripletView(triplet) }
+                }
             }
+            .padding(.vertical, 6)
+            .ppTinted(render == .accessBlocked ? PPTone.act : nil)
             if render != .accessBlocked {
-                Rectangle().fill(PPColor.hairline).frame(height: 1).padding(.vertical, 4)
-                progressRow
+                progressRow.padding(.vertical, 4)
             }
         }
     }
@@ -32,10 +35,10 @@ struct HeroCard: View {
     private var accessCard: some View {
         let partial = app.access == .partial
         return VStack(alignment: .leading, spacing: 10) {
-            Text(L.s(partial ? "partial_access_title" : "no_media_access_title")).font(PPFont.serif(26))
-                .foregroundStyle(PPColor.act)
-            Text(L.s(partial ? "partial_access_body" : "no_media_access_body")).font(PPFont.body)
-                .foregroundStyle(PPColor.ink60)
+            Label(L.s(partial ? "partial_access_title" : "no_media_access_title"), systemImage: "photo.badge.exclamationmark")
+                .font(.title3.bold()).foregroundStyle(PPTone.act)
+            Text(L.s(partial ? "partial_access_body" : "no_media_access_body")).font(.body)
+                .foregroundStyle(.secondary)
             PPButton(title: L.s("partial_access_action"), kind: .danger) {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
@@ -44,13 +47,20 @@ struct HeroCard: View {
 
     private func tripletView(_ t: BackupTriplet) -> some View {
         let safe = HomeProjection.heroNumberIsSafe(app.access, t, pairingLost: app.pairingLost)
-        let color = safe ? PPColor.safe : PPColor.ink
+        let color = safe ? PPTone.safe : Color.primary
         return VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(t.m.formatted()).font(PPFont.serif(PPSize.headlineMax)).foregroundStyle(color)
-                Text(L.f("hero_of_n", t.n.formatted())).font(PPFont.sans(17, .medium)).foregroundStyle(color)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(t.m.formatted()).font(.system(size: 48, weight: .bold, design: .rounded)).lineLimit(1)
+                    Text(L.f("hero_of_n", t.n.formatted())).font(.headline).lineLimit(1)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(t.m.formatted()).font(.system(size: 48, weight: .bold, design: .rounded)).lineLimit(1).minimumScaleFactor(0.5)
+                    Text(L.f("hero_of_n", t.n.formatted())).font(.headline)
+                }
             }
-            Text(lastLine(t)).font(PPFont.sans(15)).foregroundStyle(PPColor.ink40)
+            .foregroundStyle(color)
+            Text(lastLine(t)).font(.subheadline).foregroundStyle(.secondary)
         }
     }
 
@@ -73,20 +83,28 @@ struct HeroCard: View {
     private var progressRow: some View {
         let state = app.uiState
         let action = HomeProjection.heroAction(state, pairingLost: app.pairingLost)
-        return HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                if case .sending(let done, let total, let file) = state {
-                    Text(file).font(PPFont.sans(17, .medium)).lineLimit(1).truncationMode(.middle)
-                    Text(L.f("state_sending", done, total)).font(PPFont.sans(15)).foregroundStyle(PPColor.ink60)
-                    ProgressView(value: Double(done - 1), total: Double(max(total, 1))).tint(PPColor.waiting)
-                } else {
-                    Text(statusText(state)).font(PPFont.body).foregroundStyle(statusColor(state))
+        return VStack(alignment: .leading, spacing: 10) {
+            if case .sending(let done, let total, let file) = state {
+                Label {
+                    Text(file).font(.body.weight(.medium)).lineLimit(1).truncationMode(.middle)
+                } icon: {
+                    Image(systemName: "arrow.up.circle.fill").foregroundStyle(PPTone.waiting)
+                }
+                Text(L.f("state_sending", done, total)).font(.subheadline).foregroundStyle(.secondary)
+                ProgressView(value: Double(done - 1), total: Double(max(total, 1))).tint(PPTone.waiting)
+            } else {
+                Label {
+                    Text(statusText(state)).font(.body).foregroundStyle(statusColor(state))
+                } icon: {
+                    Image(systemName: statusSymbol(state)).foregroundStyle(statusColor(state))
                 }
             }
             if let action {
-                PPButton(title: L.s(app.commandInFlight ? "backup_command_processing" : (action == .pause ? "backup_pause" : "backup_resume")),
-                         kind: .secondary, height: 48, enabled: !app.commandInFlight) { app.pauseOrResume() }
-                    .frame(width: 112)
+                Button(L.s(app.commandInFlight ? "backup_command_processing" : (action == .pause ? "backup_pause" : "backup_resume"))) {
+                    app.pauseOrResume()
+                }
+                .buttonStyle(.bordered).controlSize(.regular)
+                .disabled(app.commandInFlight)
             }
         }
     }
@@ -107,14 +125,33 @@ struct HeroCard: View {
         }
     }
 
-    /// 绿色只给「已确认的安全」——状态行说「都存好了」且闸门放行时才绿；等待用琥珀；其余墨色。
+    /// 绿色只给「已确认的安全」——状态行说「都存好了」且闸门放行时才绿；等待用琥珀；其余用系统次级色。
     private func statusColor(_ s: BackupUiState) -> Color {
-        if case .waiting = s { return PPColor.waiting }
+        if case .waiting = s { return PPTone.waiting }
+        if isConfirmedSafe(s) { return PPTone.safe }
+        return .secondary
+    }
+
+    private func isConfirmedSafe(_ s: BackupUiState) -> Bool {
         if case .allSafe = HomeProjection.statusLine(s, pendingK: app.triplet?.k ?? 0),
            HomeProjection.allSafeTextAllowed(app.access, app.triplet, pairingLost: app.pairingLost,
                                              missingSource: app.facts.missingSourceUnacknowledged) {
-            return PPColor.safe
+            return true
         }
-        return PPColor.ink60
+        return false
+    }
+
+    /// 状态图标（SF Symbols），与 Android 状态行的语义一一对应：存好 / 等待 / 暂停 / 出问题 / 其余。
+    private func statusSymbol(_ s: BackupUiState) -> String {
+        if case .waiting = s { return "clock" }
+        if s == .preparing { return "hourglass" }
+        switch HomeProjection.statusLine(s, pendingK: app.triplet?.k ?? 0) {
+        case .noAlbums: return "photo.on.rectangle.angled"
+        case .pending: return "arrow.triangle.2.circlepath"
+        case .paused: return "pause.circle"
+        case .trouble: return "exclamationmark.triangle"
+        case .allSafe: return isConfirmedSafe(s) ? "checkmark.circle.fill" : "clock"
+        case .ready, .working, .waiting: return "clock"
+        }
     }
 }

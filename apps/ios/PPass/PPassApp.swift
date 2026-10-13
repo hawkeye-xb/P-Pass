@@ -14,8 +14,8 @@ struct PPassApp: App {
                 case .failed(let message): StartupFailureView(message: message)
                 }
             }
-            // 系统默认 tint 是蓝色：根上统一换成墨色，按钮 / 开关 / 进度条不会冒出库色（#344）。
-            .tint(PPColor.ink)
+            // 系统默认 tint 是蓝色：根上统一换成品牌 accent（墨 / 深色下为纸），控件不会冒出库色（#344 / #943）。
+            .tint(PPTone.accent)
         }
         .onChange(of: scenePhase) { phase in
             guard case .ready(let model, let live) = boot else { return }
@@ -103,13 +103,16 @@ struct StartupFailureView: View {
     let message: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(L.s("state_trouble")).font(PPFont.serif(32)).foregroundStyle(PPColor.act)
-            Text(L.s("run_failed")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-            Text(message).font(.system(size: 13, design: .monospaced)).foregroundStyle(PPColor.ink40).textSelection(.enabled)
-            Spacer()
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill").font(.largeTitle).foregroundStyle(PPTone.act)
+                Text(L.s("state_trouble")).font(.largeTitle.bold()).foregroundStyle(PPTone.act)
+                Text(L.s("run_failed")).font(.body).foregroundStyle(.secondary)
+                Text(message).font(.footnote.monospaced()).foregroundStyle(.tertiary).textSelection(.enabled)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(24)
-        .ppScreen()
+        .background(Color(uiColor: .systemBackground))
     }
 }
