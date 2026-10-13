@@ -4,8 +4,13 @@
 # 判据（两条线）：
 #   - `crates/**`、`apps/desktop/**`、`assets/**`、`Cargo.*`、`rust-toolchain.toml`
 #     ⇒ 桌面端（含共享内核）被改到 ⇒ `versions.json.desktop` 必须前进
-#   - `apps/android/**`
+#   - `apps/android/**`，以及安卓 APK 里那份 Rust 原生库（libtransport.so）的构建输入
 #     ⇒ 安卓端被改到 ⇒ `versions.json.android` 必须前进
+#     #894：原生库输入 = gradle 任务 `buildIrohBlobsProviderBridge` 的 inputs
+#     （`Cargo.toml`、`Cargo.lock`、`crates/transport/**`）+ 它实际调用的
+#     `tools/build-android-iroh-blobs-bridge.sh` + 钉工具链的 `rust-toolchain.toml`。
+#     transport 在 `android-jni` 下没有别的本仓 path 依赖（proto 只在 ios-ffi / dev 下）。
+#     这份清单与 gradle inputs 的一致性由 tools/test-release-version-source.sh 校验。
 #   - 只改 docs/site/.github/tools ⇒ 两端的号都不该动（动了只 warning，不判红：
 #     可能是刻意重发）
 #
@@ -60,7 +65,8 @@ fi
 # 保守边界：src 文件里 `#[cfg(test)]` 块改动仍算产品改动——宁可多涨，不漏涨。
 PRODUCT=$(grep -Ev '(^|/)(tests?|benches)/' <<<"$CHANGED" || true)
 desk_hit=$(grep -Ec '^(crates/|apps/desktop/|assets/|Cargo\.(toml|lock)$|rust-toolchain\.toml)' <<<"$PRODUCT" || true)
-andr_hit=$(grep -Ec '^apps/android/' <<<"$PRODUCT" || true)
+ANDROID_INPUTS='^(apps/android/|crates/transport/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-android-iroh-blobs-bridge\.sh$)'
+andr_hit=$(grep -Ec "$ANDROID_INPUTS" <<<"$PRODUCT" || true)
 
 newer() { # <prev> <cur> → 0 表示 cur 严格更新
   [ "$1" != "$2" ] || return 1
@@ -73,14 +79,14 @@ if [ "$desk_hit" -gt 0 ] && ! newer "$prev_d" "$cur_d"; then
   fail=1
 fi
 if [ "$andr_hit" -gt 0 ] && ! newer "$prev_a" "$cur_a"; then
-  echo "::error::改了 apps/android（${andr_hit} 个文件）但 android 版本没涨：${prev_a} → ${cur_a}"
+  echo "::error::改了安卓端构建输入（apps/android 或原生库 libtransport.so 的输入，${andr_hit} 个文件）但 android 版本没涨：${prev_a} → ${cur_a}"
   fail=1
 fi
 if [ "$desk_hit" -eq 0 ] && newer "$prev_d" "$cur_d"; then
   echo "::warning::desktop 版本涨了（${prev_d} → ${cur_d}）但没有任何桌面/共享内核改动——确认是有意的吗？"
 fi
 if [ "$andr_hit" -eq 0 ] && newer "$prev_a" "$cur_a"; then
-  echo "::warning::android 版本涨了（${prev_a} → ${cur_a}）但没改 apps/android——确认是有意的吗？"
+  echo "::warning::android 版本涨了（${prev_a} → ${cur_a}）但没改安卓端构建输入——确认是有意的吗？"
 fi
 
 if [ "$fail" -eq 0 ]; then

@@ -171,6 +171,60 @@ echo i > "$SRC/apps/ios/project.yml"
 g -C "$SRC" add apps/ios/project.yml && g -C "$SRC" commit -qm c5
 expect_cv "只改 apps/ios/ ⇒ 0，不要求 desktop/android 涨号" 0 "命中 0 个文件；android .* 命中 0 个文件" HEAD~1 HEAD
 
+# #894：安卓 APK 里的 libtransport.so 由 crates/transport（+ Cargo.toml/lock 等）构建，
+# 只改它们不涨 android 号 ⇒ 正式 tag 会复用旧 apk。门禁必须把它们算进安卓线。
+commit_only() { # <msg> <path>... 改这些文件并提交（不动 versions.json）
+  local msg="$1" f; shift
+  for f in "$@"; do mkdir -p "$SRC/$(dirname "$f")"; echo "$msg" >> "$SRC/$f"; done
+  g -C "$SRC" add -A && g -C "$SRC" commit -qm "$msg"
+}
+expect_android() { # <desc> <want: red|clean> args...
+  local desc="$1" want="$2" out; shift 2
+  out=$("$CV" "$@" 2>&1) || true
+  if [ "$want" = red ] && grep -q "android 版本没涨" <<<"$out"; then pass "③ ${desc}"; return; fi
+  if [ "$want" = clean ] && ! grep -q "android 版本没涨" <<<"$out"; then pass "③ ${desc}"; return; fi
+  fail "③ ${desc}：期望安卓线 ${want}，实际：$out"
+}
+commit_only t1 crates/transport/src/lib.rs
+expect_android "只改 crates/transport/src ⇒ 安卓线红（#894）" red HEAD~1 HEAD
+commit_only t2 Cargo.lock
+expect_android "只改 Cargo.lock ⇒ 安卓线红（gradle inputs 含它）" red HEAD~1 HEAD
+commit_only t3 tools/build-android-iroh-blobs-bridge.sh
+expect_android "只改安卓原生库构建脚本 ⇒ 安卓线红" red HEAD~1 HEAD
+commit_only t4 rust-toolchain.toml
+expect_android "只改 rust-toolchain.toml ⇒ 安卓线红" red HEAD~1 HEAD
+commit_only t5 crates/daemon/src/main.rs
+expect_android "只改 crates/daemon ⇒ 安卓线不受影响" clean HEAD~1 HEAD
+expect_cv "只改 crates/daemon ⇒ 桌面线照常红" nonzero "desktop 版本没涨" HEAD~1 HEAD
+commit_only t6 crates/transport/tests/loopback.rs
+expect_android "只改 crates/transport/tests ⇒ 不算产品改动" clean HEAD~1 HEAD
+commit_only t7 crates/transport/src/provider.rs
+printf '{"desktop":"2.0.1","android":"2.1.1"}\n' > "$SRC/release/versions.json"
+g -C "$SRC" add -A && g -C "$SRC" commit -qm t7-bump
+expect_cv "改 crates/transport 且两端都涨号 ⇒ 0" 0 "^ok:" HEAD~2 HEAD
+
+# 口径一致性：gradle `buildIrohBlobsProviderBridge` 的每个 inputs include 都必须被
+# check-version-bump.sh 的 ANDROID_INPUTS 覆盖——gradle 加了输入、门禁没跟上 ⇒ 红。
+# GRADLE_KTS 可指向另一份文件做反证。
+GRADLE_KTS="${GRADLE_KTS:-$ROOT/apps/android/app/build.gradle.kts}"
+re=$(sed -n "s/^ANDROID_INPUTS='\(.*\)'$/\1/p" "$ROOT/tools/check-version-bump.sh")
+incs=$(sed -n 's/.*include(\(.*\)).*/\1/p' "$GRADLE_KTS" | tr ',' '\n' | tr -d ' "')
+if [ -z "$re" ] || [ -z "$incs" ]; then
+  fail "③ 口径一致性：没抽到 ANDROID_INPUTS（${re:-空}）或 gradle include（${incs:-空}）"
+else
+  miss=0
+  while IFS= read -r inc; do
+    sample=${inc//\*\*/src/x.rs}
+    sample=${sample//\*/x}
+    grep -Eq "$re" <<<"$sample" || { miss=1; printf '  gradle input %s 不在 ANDROID_INPUTS 里\n' "$inc" >&2; }
+  done <<<"$incs"
+  if [ "$miss" -eq 0 ]; then
+    pass "③ gradle inputs（$(tr '\n' ' ' <<<"$incs")）全部在安卓门禁口径内"
+  else
+    fail "③ gradle inputs 与 check-version-bump.sh 的安卓口径不一致"
+  fi
+fi
+
 # ── ④ release.yml：dispatch 补跑必须检出被补跑的 tag（REL-13 #716）──────
 # dispatch 时 actions/checkout 默认检出 main ⇒ 构建出的代码与 versions.json 都不是那个
 # tag。判据：每个 checkout 的 with 块里都有 `ref: ${{ inputs.tag || github.ref }}`；
