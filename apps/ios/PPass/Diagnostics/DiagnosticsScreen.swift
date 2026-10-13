@@ -83,16 +83,29 @@ struct StorageDetailScreen: View {
     @State private var confirming = false
     @State private var working = false
 
+    /// 只陈述有出处的事实：最近成功取引擎账目，配对日期取配对记录，张数取已确认数；不编数据。
+    private var detailBody: String {
+        if app.pairingLost { return L.s("storage_detail_lost") }
+        let line1 = L.f("storage_detail_connected", LastSuccessText.fragment(app.triplet?.lastSuccessAt))
+        guard let ms = app.pairedAtMs else { return line1 }
+        let f = DateFormatter()
+        f.dateFormat = "yyyy年M月d日"
+        let line2 = L.f("storage_detail_paired", f.string(from: Date(timeIntervalSince1970: Double(ms) / 1000)),
+                        (app.triplet?.m ?? 0).formatted())
+        return line1 + "\n" + line2
+    }
+
     var body: some View {
         List {
             Section {
-                Label {
-                    Text(app.pairingLost ? L.s("storage_detail_lost") : L.f("storage_detail_connected", L.s("last_just_now")))
-                        .font(PPFont.body)
-                } icon: {
-                    Image(systemName: app.pairingLost ? "exclamationmark.circle.fill" : "checkmark.circle.fill")
-                        .foregroundStyle(app.pairingLost ? PPColor.act : PPColor.safe)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Circle().fill(app.pairingLost ? PPColor.act : PPColor.safe).frame(width: 10, height: 10)
+                        Text(app.desktopName ?? L.s("storage_device_default")).font(PPFont.bodyBold)
+                    }
+                    Text(detailBody).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
                 }
+                .padding(.vertical, 4)
             }
             Section {
                 Button(role: .destructive) { confirming = true } label: {
@@ -114,7 +127,7 @@ struct StorageDetailScreen: View {
         }
         .listStyle(.insetGrouped)
         .ppList()
-        .navigationTitle(app.desktopName ?? L.s("storage_device_default"))
-        .navigationBarTitleDisplayMode(.large)
+        .navigationTitle(L.s("storage_computer"))
+        .navigationBarTitleDisplayMode(.inline)
     }
 }

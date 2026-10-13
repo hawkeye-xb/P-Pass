@@ -15,7 +15,7 @@ struct PhotosScreen: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Label(L.s("photos_lost_title"), systemImage: "exclamationmark.triangle.fill")
                             .font(PPFont.title3).foregroundStyle(PPColor.act)
-                        Text(L.s("photos_lost_body_unknown")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                        Text(app.daysSinceLastBackup.map { L.p("photos_lost_body_days", $0) } ?? L.s("photos_lost_body_unknown")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                         PPButton(title: L.s("photos_lost_action"), kind: .danger) { app.startOver() }
                     }
                     .padding(16)
@@ -113,6 +113,7 @@ struct PhotosScreen: View {
             }
             .padding(.horizontal, 12).padding(.bottom, 8)
         }
+        .refreshable { await model.loadFirst() }
     }
 
     /// 以打开那一刻的筛选结果为页序快照（Android MediaViewerSession.open）；找不到被点项就不打开。

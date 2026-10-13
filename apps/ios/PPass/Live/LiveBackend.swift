@@ -25,6 +25,7 @@ final class LiveBackend: @unchecked Sendable {
     let control: FlowControlStore
     let settings: BackupSettings
     let autoPrefs: AutoBackupPrefs
+    let notifyPrefs: NotifyOnFailurePrefs
     let pairingLoss = PairingLoss()
     let network = NetworkState()
     let engineModel: LiveEngineModel
@@ -47,6 +48,7 @@ final class LiveBackend: @unchecked Sendable {
         control = FlowControlStore(directory: dir, logger: logger)
         settings = BackupSettings(directory: dir, logger: logger)
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
+        notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
         // 全新安装默认开（此前引擎写死为开）；之后以用户在设置里的选择为准。
         if !fm.fileExists(atPath: dir.appendingPathComponent(AutoBackupPrefs.fileName).path) {
             try? autoPrefs.setEnabled(true); try? autoPrefs.setRequested(true)
@@ -99,7 +101,11 @@ final class LiveBackend: @unchecked Sendable {
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
             guard let r = pairingStore.load() else { return nil }
             return ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: r.peerToken))
-        }, myNodeId: { [plane] in try? plane.nodeId() })
+        }, myNodeId: { [plane] in try? plane.nodeId() },
+        fetchBlob: { [plane] ticket, dest, progress in
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("ppass-blobstore")
+            try await plane.fetchBlob(ticket: ticket, scratch: scratch, dest: dest, progress: progress)
+        })
         return Backend(isDemo: false, timeline: timeline, media: media, pairing: pairing,
                        engine: LiveEngineAdapter(backend: self))
     }
@@ -142,6 +148,10 @@ final class LiveBackend: @unchecked Sendable {
         let known = await engine.pendingKnown
         let view = await engine.view
         let all = (try? orders.countCurrentByState(bucketIds: nil)) ?? [:]
+        let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let ackAt = control.missingSourceAckAt()
+        let unackMissing = (try? orders.countSourceMissingSkipped(afterMs: ackAt, upToMs: nowMs)) ?? 0
+        let ackedMissing = ackAt > 0 ? ((try? orders.countSourceMissingSkipped(afterMs: 0, upToMs: ackAt)) ?? 0) : 0
         let facts = FlowFacts(
             view: known ? EngineSnapshot(view) : nil,
             confirmed: (try? orders.countConfirmedPresent(bucketIds: nil)) ?? 0,
@@ -149,8 +159,9 @@ final class LiveBackend: @unchecked Sendable {
             failed: all[.failed] ?? 0,
             unfinished: (all[.pending] ?? 0) + (all[.transferring] ?? 0) + (all[.failed] ?? 0),
             lastSuccessAt: (try? orders.lastConfirmedAtMs()) ?? 0,
-            missingSourceUnacknowledged: 0,
-            skippedByUser: all[.skippedByUser] ?? 0)
+            missingSourceUnacknowledged: unackMissing,
+            skippedByUser: all[.skippedByUser] ?? 0,
+            missingSourceAcknowledged: ackedMissing)
         if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingEpoch, pairingLoss.isLost(epoch: e) {
             pairingStore.markLost()
         }
@@ -166,6 +177,12 @@ final class LiveBackend: @unchecked Sendable {
         f.dateFormat = "MM-dd HH:mm"
         let notices = BackupPromise.notices(view: view, backgroundRefresh: refresh, lastConfirmedAt: last, formatTime: { f.string(from: $0) })
         await engineModel.publish(facts, notices)
+        // 失败通知：配对失效 / 备份出问题时提醒一次（同一次状况不重复）；开关关着不发。
+        if notifyPrefs.enabled() {
+            let lost = pairingStore.load()?.lost == true
+            let trouble: Bool = { if case .trouble = HomeProjection.backupUiState(facts, noAlbums: false) { return true } else { return false } }()
+            FailureNotifier.update(pairingLost: lost, trouble: trouble)
+        }
     }
 }
 
@@ -243,6 +260,29 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
         try? backend.autoPrefs.setEnabled(on)
         try? backend.autoPrefs.setRequested(on)
         Task { _ = await backend.engine.trigger(.scopeAdded); await backend.refreshFacts() }
+    }
+
+    func remainingSnapshot() async -> RemainingSnapshot? { try? await backend.engine.remainingSnapshot() }
+
+    func cancelRemaining(_ snapshot: RemainingSnapshot) async -> Int? {
+        let n = try? await backend.engine.cancelRemaining(snapshot)
+        await backend.refreshFacts()
+        return n ?? nil
+    }
+
+    func restoreSkipped() async {
+        _ = try? await backend.engine.restoreSkipped()
+        await backend.refreshFacts()
+    }
+
+    func acknowledgeMissingSource() {
+        Task { await backend.engine.acknowledgeMissingSource(); await backend.refreshFacts() }
+    }
+
+    func notifyOnFailure() -> Bool { backend.notifyPrefs.enabled() }
+    func setNotifyOnFailure(_ on: Bool) {
+        try? backend.notifyPrefs.setEnabled(on)
+        if on { FailureNotifier.requestAuthorization() }
     }
 
     func wifiOnly() -> Bool { backend.settings.wifiOnly() }

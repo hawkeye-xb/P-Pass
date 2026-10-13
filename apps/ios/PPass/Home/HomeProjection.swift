@@ -50,6 +50,8 @@ struct FlowFacts: Equatable {
     var lastSuccessAt: Int64 = 0
     var missingSourceUnacknowledged: Int64 = 0
     var skippedByUser: Int64 = 0
+    /// 已「知道了」的源已删除张数（设置卡里的账目行）；未确认的在 missingSourceUnacknowledged。
+    var missingSourceAcknowledged: Int64 = 0
 
     var state: GlobalState { view?.state ?? .idle }
     var waitReason: WaitReason? { state == .waiting ? view?.waitReason : nil }

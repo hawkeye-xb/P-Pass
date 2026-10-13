@@ -7,6 +7,8 @@ struct SettingsScreen: View {
     @EnvironmentObject var app: AppModel
     @State private var path: [Route] = []
     @State private var showDetails = false
+    @State private var cancelSnapshot: RemainingSnapshot?
+    @State private var asking = false
 
     enum Route: Hashable { case bucket, storage, diagnostics }
 
@@ -18,6 +20,19 @@ struct SettingsScreen: View {
                     Section {
                         Text(L.s("desktop_low_space_hint"))
                             .font(PPFont.body).foregroundStyle(PPColor.waiting)
+                    }
+                }
+                if app.facts.missingSourceUnacknowledged > 0 {
+                    Section {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(L.p("missing_source_notice_body", Int(app.facts.missingSourceUnacknowledged)))
+                                .font(PPFont.body).foregroundStyle(PPColor.ink60)
+                            // 出路是「知道了」，不是重传：源已经不在手机上，没有任何动作能把它变回来。
+                            Button(L.s("missing_source_notice_dismiss")) { app.acknowledgeMissingSource() }
+                                .font(PPFont.subheadlineBold).buttonStyle(.borderless)
+                        }
+                        .padding(.vertical, 4)
+                        .ppTinted(PPColor.waitingBg)
                     }
                 }
                 if app.pairingLost {
@@ -51,7 +66,13 @@ struct SettingsScreen: View {
             .listStyle(.insetGrouped)
             .ppList()
             .toolbar(.hidden, for: .navigationBar) // 同 Android：无页标题
-            .navigationDestination(for: Route.self) { route in
+            .confirmationDialog(cancelSnapshot.map { L.p("cancel_remaining_confirm_title", $0.count) } ?? "",
+                                isPresented: $asking, titleVisibility: .visible) {
+                if let snap = cancelSnapshot {
+                    Button(L.p("cancel_remaining_label", snap.count), role: .destructive) { app.cancelRemaining(snap) }
+                }
+                Button(L.s("back"), role: .cancel) {}
+            } message: { Text(L.s("cancel_remaining_confirm_body")) }            .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .bucket:
                     BucketScreen(firstTime: false) { selected, known in
@@ -77,10 +98,43 @@ struct SettingsScreen: View {
     @ViewBuilder private var settingsSection: some View {
         Section {
             row(L.s("backup_scope"), value: scopeValue, route: .bucket)
+            if let n = app.cancelRemainingCount {
+                Button {
+                    Task {
+                        // 弹窗里的 N 用点击这一刻的快照，不用行上的数（两者可能已差几张）。
+                        if let snap = await app.backend.engine.remainingSnapshot() { cancelSnapshot = snap; asking = true }
+                    }
+                } label: {
+                    Text(L.p("cancel_remaining_label", Int(n))).font(PPFont.body).foregroundStyle(PPColor.ink)
+                }
+                .disabled(app.commandInFlight)
+            }
+            if app.facts.skippedByUser > 0 {
+                Button { app.restoreSkipped() } label: {
+                    HStack {
+                        Text(L.s("cancelled_round_cell_label")).font(PPFont.body).foregroundStyle(PPColor.ink)
+                        Spacer(minLength: 8)
+                        Text(L.p("cancelled_round_cell_value", Int(app.facts.skippedByUser))).font(PPFont.subheadline).foregroundStyle(PPColor.ink40)
+                    }
+                }
+                .disabled(app.commandInFlight)
+            }
+            if app.facts.missingSourceAcknowledged > 0 {
+                HStack {
+                    Text(L.s("missing_source_archive_label")).font(PPFont.body)
+                    Spacer(minLength: 8)
+                    Text(L.p("missing_source_archive_value", Int(app.facts.missingSourceAcknowledged))).font(PPFont.subheadline).foregroundStyle(PPColor.ink40)
+                }
+            }
             Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
                 .font(PPFont.body).tint(PPColor.safe)
             Toggle(L.s("setting_wifi_only"), isOn: Binding(get: { app.wifiOnly }, set: { app.setWifiOnly($0) }))
                 .font(PPFont.body).tint(PPColor.safe)
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle(L.s("rule_notify"), isOn: Binding(get: { app.notifyOnFailure }, set: { app.setNotifyOnFailure($0) }))
+                    .font(PPFont.body).tint(PPColor.safe)
+                Text(L.s("rule_notify_hint")).font(PPFont.footnote).foregroundStyle(PPColor.ink40)
+            }
         }
         Section {
             row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default"), route: .storage)

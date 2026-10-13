@@ -69,18 +69,7 @@ struct HeroCard: View {
     }
 
     private func lastLine(_ t: BackupTriplet) -> String {
-        let now = Int64(Date().timeIntervalSince1970 * 1000)
-        let when: String
-        switch HomeProjection.lastSuccess(ts: t.lastSuccessAt, now: now) {
-        case .never: when = L.s("last_success_never")
-        case .justNow: when = L.f("dog_last_success", L.s("last_just_now"))
-        case .minutesAgo(let m): when = L.f("dog_last_success", L.f("last_mins_ago", Int(m)))
-        case .hoursAgo(let h): when = L.f("dog_last_success", L.f("last_hours_ago", Int(h)))
-        case .at(let ts):
-            let f = DateFormatter()
-            f.dateFormat = "MM-dd HH:mm"
-            when = L.f("dog_last_success", f.string(from: Date(timeIntervalSince1970: Double(ts) / 1000)))
-        }
+        let when = LastSuccessText.line(t.lastSuccessAt)
         return t.k > 0 ? when + " · " + L.f("pending_count", Int(t.k)) : when
     }
 

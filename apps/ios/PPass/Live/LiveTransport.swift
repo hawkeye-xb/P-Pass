@@ -38,6 +38,15 @@ final class ControlPlane: @unchecked Sendable {
 
     func nodeId() throws -> String { try bound().nodeId() }
 
+    /// 按票据把一个 blob 拉到 [dest]（控制端点出站连 blobs；临时仓库用完即删）。FFI 同步阻塞，放后台线程。
+    func fetchBlob(ticket: String, scratch: URL, dest: URL, progress: @escaping @Sendable (UInt64) -> Void) async throws {
+        try await Task.detached(priority: .userInitiated) { [self] in
+            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            _ = try bound().fetchBlob(ticket: ticket, scratchDir: scratch.path, destPath: dest.path, stallMs: 0,
+                                      progress: BytesProgress(progress))
+        }.value
+    }
+
     /// 一次请求一帧回复；返回完整 Resp 信封 JSON。
     func call(peerToken: String, method: String, paramsJSON: Data, timeoutMs: UInt64?) async throws -> Data {
         let params = String(decoding: paramsJSON, as: UTF8.self)
@@ -62,4 +71,11 @@ struct PeerCtrlTransport: CtrlTransport {
 struct FfiHasher: ContentHasher {
     func blake3Hex(of data: Data) throws -> String { PPassTransport.blake3Hex(data: data) }
     func blake3Hex(ofFileAt url: URL) throws -> String { try blake3FileHex(path: url.path) }
+}
+
+/// FFI 取回进度回调（数据字节数，可能来自任意线程）。
+private final class BytesProgress: FetchProgress, @unchecked Sendable {
+    private let handler: @Sendable (UInt64) -> Void
+    init(_ handler: @escaping @Sendable (UInt64) -> Void) { self.handler = handler }
+    func onBytes(bytes: UInt64) { handler(bytes) }
 }

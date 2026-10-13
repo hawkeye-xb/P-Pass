@@ -119,6 +119,8 @@ final class LivePairing: PairingService, @unchecked Sendable {
         self.onDisconnect = onDisconnect
     }
 
+    func pairedAtMs() -> Int64? { store.load().map(\.pairedAt).flatMap { $0 > 0 ? $0 : nil } }
+
     func status() -> PairingStatus {
         guard let r = store.load() else { return .notPaired }
         let name = r.storageDeviceName.isEmpty ? L.s("storage_device_default") : r.storageDeviceName

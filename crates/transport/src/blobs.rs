@@ -358,6 +358,38 @@ impl Blobs {
         Ok(*hash.as_bytes())
     }
 
+    /// [`Self::pull`] with live byte progress and the NET-29 stall watchdog instead of no
+    /// deadline of its own: `on_bytes` gets the payload bytes received so far; the fetch fails
+    /// once `byte_stall` passes without a single payload byte (a slow but moving transfer is
+    /// never cut). Used by the phone's "get the original" action.
+    pub async fn pull_observed(
+        &self,
+        ticket: &str,
+        dest: &Path,
+        byte_stall: Duration,
+        on_bytes: impl FnMut(u64),
+    ) -> Result<[u8; 32]> {
+        let ticket: BlobTicket = ticket
+            .parse()
+            .map_err(|e| TransportError::Io(format!("invalid blob ticket: {e}")))?;
+        let (addr, hash, _format) = ticket.into_parts();
+        let peer = crate::NodeId(*addr.id.as_bytes());
+        let conn = self
+            .transport
+            .endpoint()
+            .connect(addr, crate::ALPN_BLOBS.as_bytes())
+            .await
+            .map_err(|e| TransportError::Io(format!("connect for pull: {e}")))?;
+        let progress = self.store.remote().fetch(conn.clone(), hash);
+        drive_with_stall(progress, &conn, peer, byte_stall, on_bytes).await?;
+        self.store
+            .blobs()
+            .export(hash, dest)
+            .await
+            .map_err(|e| TransportError::Io(format!("export to {dest:?}: {e}")))?;
+        Ok(*hash.as_bytes())
+    }
+
     /// Fetch one blob straight from a known peer (no ticket): the backup
     /// receive path (T-032) — the storage side pulls exactly the hashes
     /// it decided are missing, from the device that announced them.
@@ -421,7 +453,7 @@ impl Blobs {
             .store
             .remote()
             .fetch(conn.clone(), Hash::from_bytes(hash));
-        drive_with_stall(progress, &conn, peer, byte_stall).await
+        drive_with_stall(progress, &conn, peer, byte_stall, |_| {}).await
     }
 
     /// #851: fetch only the byte `ranges` of `hash` from `peer`, plus the blob's last chunk so its
@@ -471,7 +503,7 @@ impl Blobs {
             .map_err(|e| TransportError::Io(format!("connect for ranged fetch: {e}")))?;
         let request = GetRequest::builder().root(wanted).build(h);
         let progress = self.store.remote().execute_get(conn.clone(), request);
-        drive_with_stall(progress, &conn, peer, byte_stall).await?;
+        drive_with_stall(progress, &conn, peer, byte_stall, |_| {}).await?;
 
         // The size comes from the store's status: the last chunk was part of the request, so it is
         // the verified size (a partial export emits no `Size` item).
@@ -601,6 +633,7 @@ async fn drive_with_stall(
     conn: &Connection,
     peer: crate::NodeId,
     byte_stall: Duration,
+    mut on_bytes: impl FnMut(u64),
 ) -> Result<()> {
     use futures_core::Stream;
     use iroh_blobs::api::remote::GetProgressItem;
@@ -613,7 +646,10 @@ async fn drive_with_stall(
         )
         .await;
         match next {
-            Ok(Some(GetProgressItem::Progress(_))) => continue,
+            Ok(Some(GetProgressItem::Progress(bytes))) => {
+                on_bytes(bytes);
+                continue;
+            }
             Ok(Some(GetProgressItem::Done(_))) => return Ok(()),
             Ok(Some(GetProgressItem::Error(e))) => {
                 return Err(TransportError::Io(format!("fetch from {peer:?}: {e}")))

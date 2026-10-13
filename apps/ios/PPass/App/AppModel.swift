@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
     @Published var commandInFlight = false
     @Published private(set) var wifiOnly = true
     @Published private(set) var autoBackup = true
+    @Published private(set) var notifyOnFailure = true
 
     init(backend: Backend) {
         self.backend = backend
@@ -45,11 +46,36 @@ final class AppModel: ObservableObject {
         scope = backend.media.savedScope()
         wifiOnly = backend.engine.wifiOnly()
         autoBackup = backend.engine.autoBackup()
+        notifyOnFailure = backend.engine.notifyOnFailure()
         promise = backend.engine.promise().map { n in DiagText.resolve(n.key, vars: n.vars) ?? n.key }
     }
 
+    func setNotifyOnFailure(_ on: Bool) { backend.engine.setNotifyOnFailure(on); notifyOnFailure = on }
+
+    /// 「取消剩余 N 张」行的 N（Android cancelRemainingRowCount）：只在已暂停 / 等待中、配对没失效、确有剩余时出现。
+    var cancelRemainingCount: Int64? {
+        guard !pairingLost, facts.state == .paused || facts.state == .waiting else { return nil }
+        return facts.remaining.flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    func cancelRemaining(_ snapshot: RemainingSnapshot) {
+        Task { _ = await backend.engine.cancelRemaining(snapshot); refresh() }
+    }
+
+    func restoreSkipped() { Task { await backend.engine.restoreSkipped(); refresh() } }
+    func acknowledgeMissingSource() { backend.engine.acknowledgeMissingSource(); refresh() }
+
     func setAutoBackup(_ on: Bool) { backend.engine.setAutoBackup(on); autoBackup = on }
     func setWifiOnly(_ on: Bool) { backend.engine.setWifiOnly(on); wifiOnly = on }
+
+    /// 距上次确认可达的整天数；从未成功过 = nil（不编造天数，走兜底文案）。取引擎账目里最近一次「电脑确认收到」。
+    var daysSinceLastBackup: Int? {
+        let t = facts.lastSuccessAt
+        guard t > 0 else { return nil }
+        return Int((Int64(Date().timeIntervalSince1970 * 1000) - t) / 86_400_000)
+    }
+
+    var pairedAtMs: Int64? { backend.pairing.pairedAtMs() }
 
     var pairingLost: Bool { if case .lost = pairing { return true } else { return false } }
     var desktopName: String? {

@@ -79,6 +79,7 @@ final class FakePairing: PairingService {
     }
 
     func status() -> PairingStatus { current }
+    func pairedAtMs() -> Int64? { Int64(Date().addingTimeInterval(-86_400 * 12).timeIntervalSince1970 * 1000) }
 
     /// 演示规则：串里带 `t=deny` → 电脑拒绝；`t=expired` → 过期；`t=fail` → 连不上；其余 → 加入成功。
     func pair(code: String) async -> PairOutcome {
@@ -149,6 +150,13 @@ final class FakeEngine: BackupEngine {
     func setWifiOnly(_ on: Bool) { wifi = on; listeners.forEach { $0() } }
     func wake() async {}
     func retryFailed() async {}
+    func remainingSnapshot() async -> RemainingSnapshot? { nil }
+    func cancelRemaining(_ snapshot: RemainingSnapshot) async -> Int? { nil }
+    func restoreSkipped() async {}
+    func acknowledgeMissingSource() {}
+    private var notify = true
+    func notifyOnFailure() -> Bool { notify }
+    func setNotifyOnFailure(_ on: Bool) { notify = on; listeners.forEach { $0() } }
 
     func promise() -> [PromiseNotice] {
         var out = [PromiseNotice(BackupPromise.whileOpenTitle), PromiseNotice(BackupPromise.whileOpenBody)]

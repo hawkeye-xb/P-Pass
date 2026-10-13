@@ -495,6 +495,12 @@ pub struct CtrlConfig {
     pub bind_timeout_ms: u64,
 }
 
+/// Receives the payload bytes that have arrived so far during [`CtrlClient::fetch_blob`].
+#[uniffi::export(with_foreign)]
+pub trait FetchProgress: Send + Sync {
+    fn on_bytes(&self, bytes: u64);
+}
+
 /// Minimal `ppf/ctrl/1` client: one request frame, one reply frame per call,
 /// `crates/proto` framing, JSON in and out.
 #[derive(uniffi::Object)]
@@ -548,6 +554,40 @@ impl CtrlClient {
     /// This endpoint's NodeId (64 hex).
     pub fn node_id(&self) -> Result<String, FfiError> {
         Ok(self.live()?.node_id().to_string())
+    }
+
+    /// 取回原图：按 `asset.blob_ticket` 返回的 iroh-blobs [ticket] 从配对电脑拉一个 blob，
+    /// 校验后导出到 [dest_path]（目录须已存在）。用控制端点（配对身份）出站连 blobs ALPN，
+    /// 电脑侧的 PeerGate 只放行已配对节点。blob 仓库建在 [scratch_dir] 下一个临时子目录里，
+    /// 用完即删——手机是减负端，不留长期原图缓存（Android 同一红线）。
+    /// [stall_ms]：连续这么久没收到任何数据字节就判失败（0 = 20s），慢但在动的传输不会被掐；
+    /// [progress] 收到已到达的数据字节数。返回内容 BLAKE3（64 hex）。
+    pub fn fetch_blob(
+        &self,
+        ticket: String,
+        scratch_dir: String,
+        dest_path: String,
+        stall_ms: u64,
+        progress: Option<Arc<dyn FetchProgress>>,
+    ) -> Result<String, FfiError> {
+        let transport = self.live()?;
+        let stall = ms_or(stall_ms, 20_000);
+        let store_dir = PathBuf::from(&scratch_dir).join(format!("fetch-{}", self.request_id()));
+        let dest = PathBuf::from(&dest_path);
+        let result = self.runtime.block_on(async {
+            let blobs = crate::Blobs::open(&transport, &store_dir).await?;
+            let pulled = blobs
+                .pull_observed(ticket.trim(), &dest, stall, |bytes| {
+                    if let Some(cb) = &progress {
+                        cb.on_bytes(bytes);
+                    }
+                })
+                .await;
+            blobs.close().await;
+            pulled
+        });
+        let _ = std::fs::remove_dir_all(&store_dir);
+        Ok(hex32(&result?))
     }
 
     /// Sends `{id, method, params}` to the daemon named by [peer_token] (the

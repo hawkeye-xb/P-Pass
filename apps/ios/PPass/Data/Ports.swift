@@ -71,6 +71,8 @@ enum PairOutcome: Equatable {
 
 protocol PairingService: AnyObject {
     func status() -> PairingStatus
+    /// 配对时间（毫秒）；未配对 / 未知 = nil。
+    func pairedAtMs() -> Int64?
     /// code 是二维码内容或手动粘贴的配对串（同一个字符串，`ppf://pair?...`）。
     func pair(code: String) async -> PairOutcome
     func cancel() async
@@ -88,6 +90,16 @@ protocol BackupEngine: AnyObject {
     /// 前台追赶：打开 App / 回到前台 / 选完相册时叫醒一轮。
     func wake() async
     func retryFailed() async
+    /// 「取消剩余 N 张」：点击那一刻的快照（N 与取消边界是同一个差集）。
+    func remainingSnapshot() async -> RemainingSnapshot?
+    func cancelRemaining(_ snapshot: RemainingSnapshot) async -> Int?
+    /// 「已跳过的照片 · 点击恢复」。
+    func restoreSkipped() async
+    /// 源已删除那批的「知道了」。
+    func acknowledgeMissingSource()
+    /// 失败通知开关（本地通知；默认开）。
+    func notifyOnFailure() -> Bool
+    func setNotifyOnFailure(_ on: Bool)
     /// 「仅 Wi-Fi 时备份」（引擎 Conditions.wifiOnly 的唯一来源，默认开）。
     func wifiOnly() -> Bool
     func setWifiOnly(_ on: Bool)
