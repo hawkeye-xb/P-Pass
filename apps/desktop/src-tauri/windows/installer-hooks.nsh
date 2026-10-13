@@ -1,7 +1,7 @@
 ; P-Pass NSIS installer hooks (W1 follow-up, 2026-08-26)
 ;
 ; Problem: ppf-daemon.exe is a resident background process (registered
-; via HKCU Run key, started immediately on install per
+; as the per-user scheduled task "P-Pass", run immediately on install per
 ; crates/platform/src/windows.rs install_autostart()). It stays running
 ; even after the user closes the main window (tray-hide by design —
 ; backups keep working). If the user re-runs the installer (manual
@@ -22,8 +22,17 @@
 ; touched. taskkill exiting non-zero (process not found — nothing was
 ; running, which is the common case) must not abort the installer, so
 ; every call is wrapped to swallow its exit code.
+;
+; DESK-65 (#957): the service is now a per-user Task Scheduler task with a
+; once-a-minute watchdog. Disable it first, otherwise the watchdog may start
+; ppf-daemon.exe again while its file is being replaced. Disabling does not
+; end the running instance, so taskkill below is still needed. No task
+; (fresh install, or the user stopped the service) = schtasks fails, which
+; is swallowed like taskkill's.
 !macro NSIS_HOOK_PREINSTALL
   DetailPrint "Stopping P-Pass background service if it's running..."
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Change /TN "P-Pass" /DISABLE'
+  Pop $0
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM ppf-daemon.exe'
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'
@@ -34,23 +43,31 @@
   Sleep 500
 !macroend
 
-; POSTINSTALL: the daemon was stopped above (if it was running) but
-; never explicitly restarted here. main.rs registers autostart via the
-; HKCU Run key, which only takes effect on next login — matching the
-; same-class fix already made in install_autostart() (crates/platform/
-; src/windows.rs spawn_windowless call). We don't duplicate that spawn
-; logic in NSIS; instead the freshly-installed app's own first-run flow
-; (wizard finishSetup(), or App.svelte's refresh() self-heal for an
-; already-configured install) brings the daemon back up. This keeps
-; "how the daemon gets started" in exactly one place (the Rust code)
-; instead of forking that logic into NSIS script as well.
+; POSTINSTALL (DESK-65 #957): hand the service back to the system — enable
+; the task and run it, the counterpart of launchd's kickstart after an
+; update. The new daemon is up without waiting for the desktop shell to be
+; relaunched. "How the daemon is started" stays in one place: the task
+; definition written by crates/platform/src/windows.rs; NSIS only flips it.
+; No task (fresh install, or the user stopped the service) = both calls
+; fail harmlessly, so a stopped service stays stopped across updates.
 !macro NSIS_HOOK_POSTINSTALL
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Change /TN "P-Pass" /ENABLE'
+  Pop $0
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Run /TN "P-Pass"'
+  Pop $0
 !macroend
 
 ; PREUNINSTALL: same reasoning as PREINSTALL — an uninstall must be able
 ; to delete the exe files too.
+;
+; DESK-65 (#957): also delete the scheduled task, otherwise its watchdog
+; keeps trying to start a daemon that no longer exists. Config and the
+; photo library are kept, so a reinstall restores the task (#877) unless
+; the user had stopped the service.
 !macro NSIS_HOOK_PREUNINSTALL
   DetailPrint "Stopping P-Pass background service before uninstall..."
+  nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "P-Pass" /F'
+  Pop $0
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM ppf-daemon.exe'
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'

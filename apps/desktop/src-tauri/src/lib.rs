@@ -684,6 +684,17 @@ fn reconcile_autostart_registration() {
     if !sidecar.is_file() {
         return;
     }
+    // DESK-65 (#957)：用户主动停过服务 ⇒ 唯一正确的状态是「没有登记」。对账
+    // 只往这个方向收敛：残留的登记（上次停止时没撤掉、或老版本留下的）撤掉，
+    // 绝不改写、更不拉起——改写登记在 Windows 上会顺带把服务跑起来。
+    if is_user_stopped(&platform::adapter().data_dir()) {
+        if platform::adapter().autostart_installed().unwrap_or(false) {
+            if let Err(e) = platform::adapter().uninstall_autostart() {
+                eprintln!("#957: 用户停过服务，但撤销残留的开机自启登记失败: {e}");
+            }
+        }
+        return;
+    }
     match platform::adapter().reconcile_autostart(&sidecar) {
         Ok(platform::AutostartReconcile::Rewritten) => {
             // 走 stderr：与 daemon_logs 收集的日志同一去处，排障时看得到。
@@ -901,8 +912,11 @@ fn stop_daemon_now() -> Result<(), String> {
     //    恰好来一次自愈 tick，它也得看见标记。落不下就不停：停了也会被
     //    自愈拉回来，不如直接告诉用户停止失败。
     set_user_stopped(&platform::adapter().data_dir(), true)?;
-    // 1) Unregister first — otherwise KeepAlive revives it immediately.
-    let _ = platform::adapter().uninstall_autostart();
+    // 1) Unregister first — otherwise the service manager revives it
+    //    (launchd KeepAlive / the Task Scheduler watchdog).
+    //    DESK-65 (#957)：结果不许丢——撤不掉登记，下次开机服务照样起来，
+    //    「停止」就是假的。照样把进程停掉，但最后如实报错。
+    let unregistered = platform::adapter().uninstall_autostart();
     // 2) Best-effort: kill the bundled daemon process. launchctl bootout
     //    (inside uninstall_autostart) already stopped the managed one;
     //    this also covers a one-shot fallback spawn.
@@ -917,7 +931,7 @@ fn stop_daemon_now() -> Result<(), String> {
     while daemon_online() && std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
-    Ok(())
+    unregistered.map_err(|e| e.to_string())
 }
 
 /// W1 (2026-08-26 real-box run): the updater's downloadAndInstall() was
@@ -978,12 +992,14 @@ enum BroughtUp {
     OneShot,
 }
 
-/// 常驻服务登记在、且是 launchd 那种"服务管理器拉起"语义吗？
-/// （Windows Run key 是 `UserAutostart`，走老路，行为不变。）
+/// 常驻服务登记在、且本平台由系统的服务管理器托管吗？
+///
+/// DESK-65 (#957)：只问平台的能力（`has_service_manager`），不认具体机制——
+/// macOS 是 launchd，Windows 是任务计划程序。业务流程（自愈、更新后恢复、
+/// 重启服务）因此在两个平台上走同一条路。
 fn resident_service_available() -> bool {
     let a = platform::adapter();
-    a.service_mode() == platform::ServiceMode::LaunchAgent
-        && a.autostart_installed().unwrap_or(false)
+    a.service_mode().has_service_manager() && a.autostart_installed().unwrap_or(false)
 }
 
 /// #667 / #732：把内核拉起来，**优先交给服务管理器**。
@@ -3630,6 +3646,20 @@ mod tests {
         let unregister = stop.find("uninstall_autostart()").expect("卸 autostart");
         let kill = stop.find("kill_daemon_process()").expect("杀进程");
         assert!(mark < unregister && mark < kill, "标记必须先于停进程落下");
+        // DESK-65 (#957)：撤登记的结果不许丢——真机上 Run 值没删掉、下次开机服务又起来了。
+        assert!(
+            !stop.contains("let _ = platform::adapter().uninstall_autostart()"),
+            "撤销开机自启失败必须报给用户"
+        );
+        // DESK-65 (#957)：启动对账先看停止标记，停过就只撤不写。
+        let reconcile = body("reconcile_autostart_registration");
+        let guard = reconcile
+            .find("is_user_stopped(")
+            .expect("对账必须先看停止标记");
+        let rewrite = reconcile
+            .find("reconcile_autostart(&sidecar)")
+            .expect("对账");
+        assert!(guard < rewrite, "停止标记必须在改写登记之前判定");
         assert!(body("start_daemon")
             .contains("set_user_stopped(&platform::adapter().data_dir(), false)?;"));
         // 托盘停止与窗口按钮必须是同一个实现（同一份标记）。

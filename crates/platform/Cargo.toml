@@ -73,6 +73,11 @@ windows = { version = "0.62", features = [
   "UI_Notifications",
   "Data_Xml_Dom",
   "Win32_System_WinRT",
+  # DESK-65 (#957)：常驻服务交给任务计划程序——ITaskService / IRegisteredTask，
+  # 参数里的 VARIANT / BSTR 在后两个 feature 下。
+  "Win32_System_TaskScheduler",
+  "Win32_System_Ole",
+  "Win32_System_Variant",
 ] }
 
 [dev-dependencies]
