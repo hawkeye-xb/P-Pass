@@ -101,7 +101,7 @@ enum MatrixRegistry {
         "X-09": .same(["FlowEngineTests/testWhilePausedOnlyIntentChangesAndResumingPicksUpRestoredPhotosAndANewAlbum", "FlowEngineTests/testRestoreKeepsWorkingWhenTheMediaSourceRepeatsARow"]),
         "X-10": .variant(["FlowEngineTests/testCancelWorksOnlyWhilePausedOrWaitingAndLeavesTheEngineIdle"]),
         // P：换 Desktop
-        "P-01": .variant(["CaseMatrixTests/testP01_changingDesktopsDropsOldProgressButKeepsIntent", "OrderStoreTests/testChangingDesktopsClearsFactsKeepsSkipListAndLiftsIdFloor", "DisconnectManifestTests/testDisconnectAppliesEveryRow"]),
+        "P-01": .variant(["CaseMatrixTests/testP01_changingDesktopsDropsOldProgressButKeepsIntent", "OrderStoreTests/testChangingDesktopsClearsFactsKeepsSkipListAndLiftsIdFloor", "OrderStoreTests/testPairingANewDesktopDoesNotInheritTheOldDesktopsConfirmedCount", "OrderStoreTests/testRepairingTheSameDesktopKeepsConfirmedOrders", "DisconnectManifestTests/testDisconnectAppliesEveryRow"]),
         "P-02": .same(["CaseMatrixTests/testP02_aReceiptFromTheOldPairingNeverConfirms"]),
         // I：仅 iOS（#311 D4 / F3）
         "I-01": .same(["FlowEngineIOSTests/testANewPhotoWhoseICloudOriginalCannotBeFetchedWaitsWithoutCountingAFailure"]),

@@ -112,6 +112,9 @@ final class LiveBackend: @unchecked Sendable {
 
     private func paired(_ record: PairingRecord) {
         try? provider.ffi.setAllowedPeer(nodeId: record.daemonNodeId)
+        // #935：换了一台电脑就清旧账（已确认计数不能算给新电脑）；同一台重新配对不动。失败要暴露，不静默沿用旧账。
+        do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
+        catch { logger.log("adoptDesktop failed: \(error)") }
         try? onboarded.markOnboarded(record.daemonNodeId)
         if autoPrefs.requested() { try? autoPrefs.setEnabled(true) } // 断开时只停生产者、留意图（MOB-93）：重新配对按意图恢复
         Task { _ = await engine.trigger(.pairingRepaired) }
