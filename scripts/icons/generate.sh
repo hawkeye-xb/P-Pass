@@ -8,7 +8,8 @@
 #   - macOS 托盘 = 模板图标（纯黑 + alpha，beast 重描）
 #
 # 幂等：连续跑两次产物字节一致（同输入 SVG → 同 PNG → 同 icns/ico）。
-# 依赖：rsvg-convert (librsvg)、iconutil (macOS 自带)、python3。
+# 依赖：rsvg-convert (librsvg)、iconutil (macOS 自带)、python3；Windows ico 另需 resvg
+#（cargo install resvg，见 scripts/icons/windows-ico.py）。
 
 set -euo pipefail
 
@@ -91,33 +92,10 @@ for size in 16 32 64 128 256 512; do
   rsvg-convert -w "$px" -h "$px" "$SAFE_CARBON" -o "$OUT/${size}x${size}@2x.png"
 done
 
-# ── 2. Windows .ico（多尺寸合成；≤32px 用 beast，≥48px 碳纹）─
-# ico 无 1024 档（Vista+ 最大 256）。小尺寸档碳纹会糊 → beast 覆盖。
-# 2026-08-13：统一用安全区缩排版（与 macOS/PNG 各档构图一致）。
-python3 - "$OUT" "$DESIGN" "$SAFE_CARBON" "$SAFE_BEAST" <<'PYEOF'
-import subprocess, sys, struct, os
-out, design, safe_carbon, safe_beast = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-def render(s, svg):
-    p = f"{out}/gen-{s}-{'beast' if 'beast' in svg else 'carbon'}.png"
-    subprocess.run(["rsvg-convert", "-w", str(s), "-h", str(s), svg, "-o", p], check=True)
-    return p
-sizes = [16, 32, 48, 64, 128, 256]
-pngs = []
-for s in sizes:
-    svg = safe_beast if s <= 32 else safe_carbon
-    p = render(s, svg)
-    pngs.append((s, open(p, "rb").read()))
-header = struct.pack("<HHH", 0, 1, len(pngs))
-entries = b""
-offset = 6 + 16 * len(pngs)
-for s, data in pngs:
-    w = 0 if s == 256 else s
-    entries += struct.pack("<BBBBHHII", w, w, 0, 0, 1, 32, len(data), offset)
-    offset += len(data)
-with open(f"{out}/icon.ico", "wb") as f:
-    f.write(header + entries + b"".join(d for _, d in pngs))
-print("ico written (beast ≤32px, carbon ≥48px)")
-PYEOF
+# ── 2. Windows .ico（DESK-66：独立脚本，铺满画布、10 档逐档矢量渲染）─
+# macOS 安全区留白不适用于 Windows（系统不套遮罩，留白只会让任务栏图标变小）；
+# 档位与构图的理由写在 windows-ico.py 文件头。
+python3 "$ROOT/scripts/icons/windows-ico.py" "$OUT/icon.ico"
 
 # ── 3. macOS .icns（iconutil，碳纹版大层 + beast 小层）────────
 # ICON-01 分工：icns 内 ≤32px 层用 beast（碳纹小尺寸会糊），大层碳纹。
