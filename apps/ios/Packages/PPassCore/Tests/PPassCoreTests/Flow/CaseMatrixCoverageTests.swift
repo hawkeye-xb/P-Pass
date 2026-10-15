@@ -109,7 +109,8 @@ enum MatrixRegistry {
         "I-03": .same(["FlowEngineIOSTests/testAnOriginalThatIsGenuinelyUnavailableCountsAsAFailure"]),
         "I-04": .same(["FlowEngineIOSTests/testTheEntryNeverTriggersAnICloudDownload", "CaseMatrixTests/testD08_theEntryCountIsExactAndReadsNoFile"]),
         "I-05": .same(["FlowEngineIOSTests/testLosingTheNetworkDuringAnICloudDownloadCountsNothing"]),
-        "I-06": .same(["FlowEngineIOSTests/testAnExpiredDiscoveryCursorRescansAndConvergesWithoutDuplicates"]),
+        // #958：PhotoKit 媒体源的令牌失效由收件箱自己处理（重置令牌、G 不动、缺口交给对账），见 06-ios-variants O-01 / I-06。
+        "I-06": .variant(["InboxDiscoveryTests/testS6_9_anExpiredTokenLeavesGAloneAndTheGapIsReconciled", "FlowEngineIOSTests/testAMisplacedCursorIsCaughtByTheNextReconcileRound", "FlowEngineIOSTests/testAnExpiredDiscoveryCursorRescansAndConvergesWithoutDuplicates"]),
         "I-07": .same(["FlowEngineIOSTests/testAnExpiredCursorWhileCountingGivesAnExactCountWithoutTouchingG"]),
         "I-09": .same(["FlowEngineIOSTests/testPhoneStorageFullWaitsWithoutCountingAnyFailure", "FlowEngineIOSTests/testPhoneStorageFullLeavesALegacyOrderAsItIs"]),
         "I-10": .same(["FlowEngineIOSTests/testAMisplacedCursorIsCaughtByTheNextReconcileRound", "FlowEngineIOSTests/testAnImpreciseCursorWithNothingMissingCostsNoLease"]),
@@ -158,7 +159,7 @@ final class CaseMatrixCoverageTests: XCTestCase {
     static var existingTests: Set<String> {
         let classes: [XCTestCase.Type] = [
             FlowEngineTests.self, FlowEngineIOSTests.self, CaseMatrixTests.self, DeliveryPortTests.self, EngineWithPortTests.self,
-            OrderStoreTests.self, FlowControlStoreTests.self, PrefsTests.self, DisconnectManifestTests.self, StorageRootTests.self,
+            OrderStoreTests.self, FlowControlStoreTests.self, PrefsTests.self, DisconnectManifestTests.self, StorageRootTests.self, InboxDiscoveryTests.self,
         ]
         var out = Set<String>()
         for cls in classes {

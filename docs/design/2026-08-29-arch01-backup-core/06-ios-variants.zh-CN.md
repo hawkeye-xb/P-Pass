@@ -145,6 +145,13 @@
 - **处置**：跟 Android 现行实现（#413 裁定 9）——跳过名单是用户意图，与哪台桌面无关，保留。
 - **测试**：`CaseMatrixTests.testP01_changingDesktopsDropsOldProgressButKeepsIntent`、`OrderStoreTests.testChangingDesktopsClearsFactsKeepsSkipListAndLiftsIdFloor`、`DisconnectManifestTests.testDisconnectAppliesEveryRow`。
 
+### I-06｜发现游标已过期（3105）
+
+- **原条目**：发现游标（`PHPersistentChangeToken`）过期 → G 重置到当前位置、对账扫描置脏。
+- **为什么在 iOS 上不成立**：收件箱（#958，见 O-01）之后，G 不再是令牌，而是收件箱序号；令牌只是收件箱读变更历史的位置。令牌过期不影响 G：已经进箱的行照常往下取，重置 G 反而会把它们白白推给对账。
+- **替代不变量**：令牌失效（3105 / 3210 / 存盘字节解不出）时，收件箱不抛错、G 不动，只把自己的令牌重置为当前令牌并记一行日志；之后的新照片照常进箱。缺口里没进箱的照片由对账兜底：PhotoKit 媒体源报 `preciseDiscovery = false`，每个对账轮都把扫描置脏（I-10），按内容哈希判重，已确认的同版本照片不重传。引擎处理 `DiscoveryCursorExpired` 的那条路（重置 G、置脏，O-03 / I-07）保留，PhotoKit 媒体源不再走到它。
+- **测试**：`InboxDiscoveryTests.testS6_9_anExpiredTokenLeavesGAloneAndTheGapIsReconciled`、`FlowEngineIOSTests.testAMisplacedCursorIsCaughtByTheNextReconcileRound`、`FlowEngineIOSTests.testAnExpiredDiscoveryCursorRescansAndConvergesWithoutDuplicates`；收件箱本身：PPassMedia 包的 `InboxTests`（令牌失效那一条，在模拟器上跑，不在本注册表的运行时枚举里），模拟器真 3105：`TokenExpiryIT`。
+
 ## 矩阵之外的 iOS 登记
 
 这些不是矩阵的某一行，但同样属于「在 iOS 上不成立 / 不移植」，写在这里以免被当成遗漏。

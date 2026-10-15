@@ -302,6 +302,32 @@ final class InboxDiscoveryTests: XCTestCase {
 
     private func state(_ rig: Rig, after index: Int) -> [Int] { Array(rig.delivery.deliveredIds.dropFirst(index)).sorted() }
 
+    // MARK: §6-9 令牌过期（I-06 的 iOS 变体）
+
+    /// §6-9 / I-06（iOS 变体）：令牌失效时收件箱只重置自己的令牌，不抛错、G 不动；已进箱的照片照常往下取，
+    /// 之后的新照片照常进箱；缺口里没进箱的照片由下一个对账轮补回（`preciseDiscovery = false`，每个对账轮都置脏扫描），不重传。
+    func testS6_9_anExpiredTokenLeavesGAloneAndTheGapIsReconciled() async throws {
+        let (rig, inbox) = try await makeRig()
+        rig.media.precise.set(false)
+        shoot(rig, inbox, [1, 2])
+        _ = try await inbox.changes(after: SeqInboxMedia.position(0), limit: 64) // #1 #2 已进箱
+        shoot(rig, inbox, [3])
+        inbox.expireToken() // #3 落在缺口里：没进箱
+        shoot(rig, inbox, [4]) // 令牌重置之后的新照片
+        await rig.start()
+
+        await rig.trigger(.mediaChange)
+        XCTAssertEqual(rig.delivery.deliveredIds, [1, 2, 4], "不抛错：已进箱的与之后的新照片照常走收件箱")
+        XCTAssertEqual(try g(rig), 3, "G 不重置：只沿收件箱序号前进")
+        XCTAssertNil(try rig.current(3))
+        XCTAssertFalse(try rig.store.scanState().dirty, "非对账轮不扫")
+
+        await rig.trigger(.appForeground)
+        XCTAssertEqual(rig.delivery.deliveredIds, [1, 2, 4, 3], "对账轮把缺口里的 #3 补回，已确认的不重传")
+        XCTAssertEqual(try rig.state(3), .confirmed)
+        XCTAssertEqual(try g(rig), 3)
+    }
+
     // MARK: §6-10 同一个 id 重复进箱
 
     /// §6-10：同一个 id 两次进箱（例如删除后恢复、id 不变）：只送达一次，G 越过两行。
