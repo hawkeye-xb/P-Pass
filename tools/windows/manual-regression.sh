@@ -81,10 +81,11 @@ cmd_snap() {
     echo "-- desktop processes"; powershell -NoProfile -Command \
       "Get-Process p-pass-desktop,ppf-daemon -ErrorAction SilentlyContinue | ForEach-Object { \"\$(\$_.Name) pid=\$(\$_.Id) start=\$(\$_.StartTime.ToString('HH:mm:ss')) \$(\$_.Path)\" }"
     # 注册表必须在 MSIX 沙盒外读：沙盒里看到的是包私有的虚拟残留（SOP §9.0）。
-    echo "-- installed version / Run value (real registry)"
+    # 常驻服务是计划任务 P-Pass（#957）；Run 值只应在老版本上出现，迁移后消失。
+    echo "-- installed version / scheduled task / legacy Run value (real registry)"
     powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w "$REPO_ROOT/tools/windows/run-outside-package.ps1")" \
-      -Cmd 'reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass /v DisplayVersion 2>nul & reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v P-Pass 2>nul' \
-      | grep -E 'DisplayVersion|P-Pass +REG_SZ' || echo "not installed / no Run value"
+      -Cmd 'reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass /v DisplayVersion 2>nul & schtasks /query /tn P-Pass /fo csv /nh 2>nul & reg query HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v P-Pass 2>nul' \
+      | grep -E 'DisplayVersion|P-Pass +REG_SZ|"\\P-Pass"' || echo "not installed / no task / no Run value"
     echo "-- data dir"; find "$APPDIR" -maxdepth 1 -mindepth 1 -printf '%f ' 2>/dev/null; echo
     if ipc_ready; then
       echo "-- ipc status"; ipc status | "$PY" -c "import json,sys;r=json.load(sys.stdin).get('result',{});print({k:r.get(k) for k in ('version','state','photo_count','pid','exe_path')})"

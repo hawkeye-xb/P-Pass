@@ -51,10 +51,30 @@ pub use windows::WindowsAdapter;
 /// How the daemon stays resident on this platform (§4 对照表).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServiceMode {
-    /// User-level autostart process (registry Run key + watchdog).
+    /// User-level autostart only: started at login, nothing restarts it
+    /// after a crash, and nothing can be asked to (re)start it now.
     UserAutostart,
     /// LaunchAgent with KeepAlive (crash-restart built in).
     LaunchAgent,
+    /// DESK-65 (#957)：每用户计划任务——登录触发 + 每分钟看门狗（已在跑就
+    /// 跳过）。和 LaunchAgent 一样由系统托管：开机启动、崩溃拉起、按需
+    /// 立即拉起、撤销登记后不再拉起。
+    ScheduledTask,
+}
+
+impl ServiceMode {
+    /// 常驻 daemon 是否由**系统的服务管理器**托管（launchd / 任务计划程序）。
+    ///
+    /// 桌面壳的业务流程（启动、停止、自愈、更新后恢复、重启服务）只看这一位，
+    /// 不认具体是哪种机制——机制是平台的事（依赖倒置）。为 `true` 时平台必须
+    /// 实现 [`PlatformAdapter::resident_daemon_pid`] 与
+    /// [`PlatformAdapter::restart_resident_daemon`]。
+    pub fn has_service_manager(self) -> bool {
+        match self {
+            ServiceMode::UserAutostart => false,
+            ServiceMode::LaunchAgent | ServiceMode::ScheduledTask => true,
+        }
+    }
 }
 
 /// Current sleep policy, for the first-run wizard's diagnosis (T-042).
@@ -1158,11 +1178,11 @@ mod tests {
         assert_eq!(kickstart_reported_pid("service already running\n"), None);
     }
 
-    /// #667/#732：非 macOS 平台（Windows Run key / headless）**什么都不做**，
-    /// 调用方据此退回原来的一次性 spawn —— Windows 行为不许因本卡改变。
-    #[cfg(not(target_os = "macos"))]
+    /// #667/#732：没有服务管理器的平台（headless）**什么都不做**，调用方据此
+    /// 退回一次性 spawn。Windows 自 DESK-65 (#957) 起由任务计划程序托管，不在此列。
+    #[cfg(not(any(target_os = "macos", windows)))]
     #[test]
-    fn resident_restart_is_a_no_op_off_macos() {
+    fn resident_restart_is_a_no_op_without_a_service_manager() {
         assert_eq!(
             adapter().restart_resident_daemon(true).unwrap(),
             ResidentRestart::Unsupported

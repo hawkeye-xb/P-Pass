@@ -1,7 +1,10 @@
 //! Windows adapter (§4 对照表左列).
 //!
-//! - Autostart: HKCU `Software\Microsoft\Windows\CurrentVersion\Run`
-//!   value (user-level, no admin, no SCM service — §4: 免权限地狱).
+//! - Autostart: a per-user Task Scheduler task (DESK-65 #957) — logon
+//!   trigger + a once-a-minute watchdog trigger, the Windows counterpart
+//!   of launchd's RunAtLoad + KeepAlive. User-level, no admin, no SCM
+//!   service (§4: 免权限地狱). Older versions used the HKCU `Run` value;
+//!   it is migrated away and still recognised.
 //! - Awake: `SetThreadExecutionState(ES_SYSTEM_REQUIRED|ES_CONTINUOUS)`
 //!   held RAII-style; drop restores `ES_CONTINUOUS`.
 //! - Keys: DPAPI (`CryptProtectData`/`CryptUnprotectData`), blob stored
@@ -17,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Result, ServiceMode};
 
+/// 老版本（#957 之前）的登记方式：HKCU Run 值。现在只读它、删它（迁移），不再写。
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "P-Pass";
 
@@ -24,15 +28,8 @@ const RUN_VALUE: &str = "P-Pass";
 /// `InstallLocation` 是带引号的安装目录。
 const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass";
 
-/// Run 值的写法：可执行路径**加引号**。用户名带空格时
-/// （`C:\Users\John Smith\…`）不加引号的命令行会先被当成 `C:\Users\John.exe`
-/// 去找——Windows 上「未加引号的服务路径」的标准坑。
-fn run_value_for(exec: &Path) -> String {
-    format!("\"{}\"", exec.display())
-}
-
-/// Run 值 → 可执行路径。带不带引号都认（老版本写的是不带引号的）；
-/// 引号后面跟的参数不算路径。空值 = 读不出。
+/// 带引号或不带引号的命令行 → 可执行路径（Run 值、`InstallLocation` 都是这种
+/// 写法）。引号后面跟的参数不算路径。空值 = 读不出。
 fn exec_from_run_value(value: &str) -> Option<PathBuf> {
     let v = value.trim();
     let path = match v.strip_prefix('"') {
@@ -63,6 +60,219 @@ fn is_in_install_dir(exec: &Path, install_dir: &Path) -> bool {
     match exec.parent() {
         Some(parent) => !norm(install_dir).is_empty() && norm(parent) == norm(install_dir),
         None => false,
+    }
+}
+
+// ── DESK-65 (#957)：常驻服务交给任务计划程序 ───────────────────────────
+//
+// Run 值只管「登录时拉一次」：崩溃后没人拉、不能按需立即拉起，停止也只是删一个
+// 值。这些能力于是散落在桌面壳的补位逻辑里，与 macOS（launchd 一份登记全包）
+// 走两套流程。每用户计划任务与 launchd 一一对应，壳从此只依赖
+// `PlatformAdapter` 的常驻服务接口（依赖倒置），不再区分平台。
+
+/// 计划任务名（任务计划程序库的根目录下，用户能在「任务计划程序」里看到）。
+const TASK_NAME: &str = "P-Pass";
+
+/// 任务定义。
+///
+/// - 登录触发 = launchd 的 `RunAtLoad`。
+/// - 每分钟触发 + `IgnoreNew` = `KeepAlive`：任务计划自带的「失败后重启」只认
+///   **启动失败**，进程自己异常退出不算，靠不住；看门狗式的重复触发是标准
+///   做法，已在跑就跳过，不会多拉。实测（#957）：杀掉后下一个整分钟拉回。
+/// - 优先级 5（正常）：计划任务默认 7 = 低于正常，传输和转码会被拖慢。
+/// - 电池供电照常跑、没有执行时限：这是常驻服务，不是一次性任务。
+fn task_xml(exec: &Path, user: &str) -> String {
+    let exec = xml_escape(&exec.display().to_string());
+    let user = xml_escape(user);
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>P-Pass background service: starts at logon and is restarted within a minute if it exits. Stopping the service in P-Pass removes this task.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{user}</UserId>
+    </LogonTrigger>
+    <TimeTrigger>
+      <Enabled>true</Enabled>
+      <StartBoundary>2000-01-01T00:00:00</StartBoundary>
+      <Repetition>
+        <Interval>PT1M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{user}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>5</Priority>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{exec}</Command>
+    </Exec>
+  </Actions>
+</Task>"#
+    )
+}
+
+/// 任务的主体：`域\用户名`（登录触发和运行身份都是它）。
+fn current_user() -> Result<String> {
+    match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
+        (Ok(domain), Ok(user)) if !domain.is_empty() && !user.is_empty() => {
+            Ok(format!("{domain}\\{user}"))
+        }
+        _ => Err(PlatformError::Failed {
+            action: "register scheduled task",
+            detail: "读不到当前用户（USERDOMAIN / USERNAME 为空）".into(),
+        }),
+    }
+}
+
+/// 在一条专属线程上跑任务计划程序的 COM 调用。
+///
+/// 桌面壳的命令跑在任意线程上，有的线程已经初始化成 STA（WebView 所在的
+/// 主线程）。单开一条线程、自己初始化成 MTA，套间与调用方无关；所有 COM
+/// 对象都在闭包里用完、在反初始化之前释放。
+fn with_task_folder<T: Send + 'static>(
+    action: &'static str,
+    f: impl FnOnce(&windows::Win32::System::TaskScheduler::ITaskFolder) -> windows::core::Result<T>
+        + Send
+        + 'static,
+) -> Result<T> {
+    use windows::core::BSTR;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+        COINIT_MULTITHREADED,
+    };
+    use windows::Win32::System::TaskScheduler::{ITaskService, TaskScheduler};
+    use windows::Win32::System::Variant::VARIANT;
+
+    let run = move || -> windows::core::Result<T> {
+        // SAFETY: 本线程是自己起的，只初始化这一次，返回前配对反初始化。
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok()?;
+        let result = (|| {
+            // SAFETY: 标准的 COM 激活与调用；参数都是本栈上的有效值。
+            unsafe {
+                let service: ITaskService =
+                    CoCreateInstance(&TaskScheduler, None, CLSCTX_INPROC_SERVER)?;
+                let local = VARIANT::default();
+                service.Connect(&local, &local, &local, &local)?;
+                let folder = service.GetFolder(&BSTR::from("\\"))?;
+                f(&folder)
+            }
+        })();
+        // SAFETY: 与上面的 CoInitializeEx 配对；COM 对象已在上面的闭包里释放。
+        unsafe { CoUninitialize() };
+        result
+    };
+    std::thread::Builder::new()
+        .name("ppf-task".into())
+        .spawn(run)
+        .map_err(io_err(action))?
+        .join()
+        .map_err(|_| PlatformError::Failed {
+            action,
+            detail: "任务计划线程异常退出".into(),
+        })?
+        .map_err(|e| PlatformError::Failed {
+            action,
+            detail: e.to_string(),
+        })
+}
+
+/// 找不到任务（`HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND)`）不是错误，是「没登记」。
+fn get_task(
+    folder: &windows::Win32::System::TaskScheduler::ITaskFolder,
+) -> windows::core::Result<Option<windows::Win32::System::TaskScheduler::IRegisteredTask>> {
+    // SAFETY: folder 是有效的 COM 接口；BSTR 在调用期间有效。
+    match unsafe { folder.GetTask(&windows::core::BSTR::from(TASK_NAME)) } {
+        Ok(task) => Ok(Some(task)),
+        Err(e) if e.code() == windows::core::HRESULT::from_win32(2) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// 任务正在跑的那个实例的进程号（`None` = 没在跑）。执行类任务的「引擎进程」
+/// 就是被拉起的程序本身。
+fn task_running_pid(
+    task: &windows::Win32::System::TaskScheduler::IRegisteredTask,
+) -> windows::core::Result<Option<u32>> {
+    use windows::Win32::System::Variant::VARIANT;
+    // SAFETY: task 是有效的 COM 接口；集合下标从 1 开始。
+    unsafe {
+        let instances = task.GetInstances(0)?;
+        if instances.Count()? < 1 {
+            return Ok(None);
+        }
+        let pid = instances.get_Item(&VARIANT::from(1i32))?.EnginePID()?;
+        Ok((pid != 0).then_some(pid))
+    }
+}
+
+/// 结束任务正在跑的实例（= `launchctl bootout` / `kickstart -k` 里的「杀」）。
+/// 删除或禁用任务都**不会**结束已在跑的实例（#957 实测），所以要单独结束。
+fn stop_task_instances(
+    task: &windows::Win32::System::TaskScheduler::IRegisteredTask,
+) -> windows::core::Result<()> {
+    // SCHED_E_TASK_NOT_RUNNING：本来就没在跑。
+    const NOT_RUNNING: windows::core::HRESULT = windows::core::HRESULT(0x8004_130B_u32 as i32);
+    // SAFETY: task 是有效的 COM 接口。
+    match unsafe { task.Stop(0) } {
+        Err(e) if e.code() != NOT_RUNNING => return Err(e),
+        _ => {}
+    }
+    // 结束是异步的：等实例真的没了（最长 5s），调用方紧接着要拉新的或删任务。
+    for _ in 0..50 {
+        if task_running_pid(task)?.is_none() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(())
+}
+
+/// 老版本留下的 Run 值（原始字符串）。没有 Run 键或没有这个值 = `None`。
+fn legacy_run_value() -> Result<Option<String>> {
+    let key = match winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER).open_subkey(RUN_KEY) {
+        Ok(k) => k,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_err("open HKCU Run key")(e)),
+    };
+    match key.get_value::<String, _>(RUN_VALUE) {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        // 值在、但不是字符串（被别的工具写坏）——仍然是一条要清掉的老登记。
+        Err(_) => Ok(Some(String::new())),
+    }
+}
+
+/// 删掉老版本的 Run 值。留着它，下次登录会在任务之外再拉一个实例。
+fn delete_legacy_run_value() -> Result<()> {
+    let key = match winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
+        .open_subkey_with_flags(RUN_KEY, winreg::enums::KEY_SET_VALUE)
+    {
+        Ok(k) => k,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(io_err("open HKCU Run key")(e)),
+    };
+    match key.delete_value(RUN_VALUE) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(io_err("delete Run value")(e)),
     }
 }
 
@@ -176,30 +386,43 @@ fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
 }
 
 impl PlatformAdapter for WindowsAdapter {
+    /// DESK-65 (#957)：登记计划任务并立刻运行它（= `launchctl bootstrap` +
+    /// `RunAtLoad`）。向导紧接着就要连上 daemon，所以登记完就跑；已经在跑时
+    /// `IgnoreNew` 让这次运行什么都不多拉。顺手删掉老版本的 Run 值（迁移）。
     fn install_autostart(&self, exec: &Path) -> Result<()> {
-        let (key, _) = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-            .create_subkey(RUN_KEY)
-            .map_err(io_err("open HKCU Run key"))?;
-        key.set_value(RUN_VALUE, &run_value_for(exec))
-            .map_err(io_err("set Run value"))?;
-        // The Run key only takes effect on the NEXT login/boot — unlike
-        // macOS's `launchctl bootstrap` (RunAtLoad), writing the registry
-        // value alone does not start anything now. Without this, the
-        // wizard's finishSetup() polls daemon_call("status") for 10s,
-        // gets nothing, and reports "后台服务没有在 10 秒内就绪" — a real
-        // platform gap mis-surfaced as a generic timeout (found 2026-08-26
-        // W1 real-box run). Spawn once immediately, windowless, so the
-        // observable contract matches macOS: after install_autostart
-        // returns Ok, the daemon is already reachable.
-        spawn_windowless(exec).map_err(io_err("spawn daemon after registering autostart"))?;
-        Ok(())
+        use windows::core::BSTR;
+        use windows::Win32::System::TaskScheduler::{
+            TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
+        };
+        use windows::Win32::System::Variant::VARIANT;
+
+        let xml = task_xml(exec, &current_user()?);
+        with_task_folder("register scheduled task", move |folder| {
+            let none = VARIANT::default();
+            // SAFETY: folder 是有效的 COM 接口；参数都在调用期间有效。
+            unsafe {
+                let task = folder.RegisterTask(
+                    &BSTR::from(TASK_NAME),
+                    &BSTR::from(xml.as_str()),
+                    TASK_CREATE_OR_UPDATE.0,
+                    &none,
+                    &none,
+                    TASK_LOGON_INTERACTIVE_TOKEN,
+                    &none,
+                )?;
+                task.Run(&none)?;
+            }
+            Ok(())
+        })?;
+        delete_legacy_run_value()
     }
 
+    /// 计划任务在，或者老版本的 Run 值还在（还没迁移）。
     fn autostart_installed(&self) -> Result<bool> {
-        let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-            .open_subkey(RUN_KEY)
-            .map_err(io_err("open HKCU Run key"))?;
-        Ok(key.get_value::<String, _>(RUN_VALUE).is_ok())
+        let task = with_task_folder("query scheduled task", |folder| {
+            Ok(get_task(folder)?.is_some())
+        })?;
+        Ok(task || legacy_run_value()?.is_some())
     }
 
     /// DESK-60 (#877)：Run 值指向哪个可执行文件。原先没实现（默认 `None`），
@@ -211,25 +434,38 @@ impl PlatformAdapter for WindowsAdapter {
         })
     }
 
+    /// 计划任务的执行路径。老版本的 Run 值一律算「读不出」：对账因此走
+    /// `Repaired` ⇒ `install_autostart` 换成计划任务并删掉 Run 值（迁移只发生
+    /// 在壳的对账里，那里先判了用户有没有停过服务）。
     fn autostart_registration(&self) -> Result<crate::AutostartRegistration> {
-        let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
-        let key = match hkcu.open_subkey(RUN_KEY) {
-            Ok(k) => k,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(crate::AutostartRegistration::Absent)
+        use windows::core::{Interface as _, BSTR};
+        use windows::Win32::System::TaskScheduler::IExecAction;
+
+        let task = with_task_folder("read scheduled task", |folder| {
+            let Some(task) = get_task(folder)? else {
+                return Ok(None);
+            };
+            // SAFETY: task 是有效的 COM 接口；动作集合下标从 1 开始。
+            let path = unsafe {
+                task.Definition()?
+                    .Actions()?
+                    .get_Item(1)
+                    .and_then(|a| a.cast::<IExecAction>())
+                    .and_then(|exec| {
+                        let mut p = BSTR::new();
+                        exec.Path(&mut p).map(|()| p.to_string())
+                    })
+                    .ok()
+            };
+            Ok(Some(path))
+        })?;
+        Ok(match task {
+            Some(Some(p)) if !p.trim().is_empty() => {
+                crate::AutostartRegistration::At(PathBuf::from(p.trim()))
             }
-            Err(e) => return Err(io_err("open HKCU Run key")(e)),
-        };
-        Ok(match key.get_value::<String, _>(RUN_VALUE) {
-            Ok(v) => match exec_from_run_value(&v) {
-                Some(p) => crate::AutostartRegistration::At(p),
-                None => crate::AutostartRegistration::Unreadable,
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                crate::AutostartRegistration::Absent
-            }
-            // 值在、但不是字符串（被别的工具写坏）——与 macOS 读不出的 plist 同类。
-            Err(_) => crate::AutostartRegistration::Unreadable,
+            Some(_) => crate::AutostartRegistration::Unreadable,
+            None if legacy_run_value()?.is_some() => crate::AutostartRegistration::Unreadable,
+            None => crate::AutostartRegistration::Absent,
         })
     }
 
@@ -246,27 +482,75 @@ impl PlatformAdapter for WindowsAdapter {
         }
     }
 
-    /// DESK-60 (#877)：Tauri 的 NSIS 卸载模板按产品名删 Run 值（与我们的
-    /// `RUN_VALUE` 同名），配置和照片库却保留——重装后「服务该在、登记没了」
-    /// 是这个平台上的常规路径，壳要补登记。macOS 卸载就是拖进废纸篓，plist
-    /// 不会被删，没有这条路径。
+    /// DESK-60 (#877)：卸载程序删掉登记（现在是计划任务，见 NSIS 钩子），配置
+    /// 和照片库却保留——重装后「服务该在、登记没了」是这个平台上的常规路径，
+    /// 壳要补登记。macOS 卸载就是拖进废纸篓，plist 不会被删，没有这条路径。
     fn autostart_restore_when_missing(&self) -> bool {
         true
     }
 
+    /// DESK-65 (#957)：结束任务正在跑的实例，再删任务（= `launchctl bootout`），
+    /// 老版本的 Run 值一并删掉。之后登录不再拉起、看门狗也不再拉。
     fn uninstall_autostart(&self) -> Result<()> {
-        let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-            .open_subkey_with_flags(RUN_KEY, winreg::enums::KEY_ALL_ACCESS)
-            .map_err(io_err("open HKCU Run key"))?;
-        match key.delete_value(RUN_VALUE) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(io_err("delete Run value")(e)),
-        }
+        use windows::core::BSTR;
+        with_task_folder("delete scheduled task", |folder| {
+            let Some(task) = get_task(folder)? else {
+                return Ok(());
+            };
+            stop_task_instances(&task)?;
+            // SAFETY: folder 是有效的 COM 接口。
+            unsafe { folder.DeleteTask(&BSTR::from(TASK_NAME), 0) }
+        })?;
+        delete_legacy_run_value()
     }
 
     fn service_mode(&self) -> ServiceMode {
-        ServiceMode::UserAutostart
+        ServiceMode::ScheduledTask
+    }
+
+    /// 任务正在跑的实例的进程号。
+    fn resident_daemon_pid(&self) -> Option<u32> {
+        with_task_folder("query scheduled task", |folder| match get_task(folder)? {
+            Some(task) => task_running_pid(&task),
+            None => Ok(None),
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// DESK-65 (#957)：= `launchctl kickstart [-k]`。`kill_running` 时先结束在跑
+    /// 的实例再运行任务（换版本）；否则在跑就不动（自愈）。
+    fn restart_resident_daemon(&self, kill_running: bool) -> Result<crate::ResidentRestart> {
+        use windows::Win32::Foundation::{E_FAIL, VARIANT_TRUE};
+        use windows::Win32::System::Variant::VARIANT;
+
+        with_task_folder("run scheduled task", move |folder| {
+            let Some(task) = get_task(folder)? else {
+                return Ok(crate::ResidentRestart::NotRegistered);
+            };
+            if kill_running {
+                stop_task_instances(&task)?;
+            } else if let Some(pid) = task_running_pid(&task)? {
+                return Ok(crate::ResidentRestart::AlreadyRunning { pid });
+            }
+            // SAFETY: task 是有效的 COM 接口。
+            unsafe {
+                // NSIS 安装前会禁用任务（防止看门狗在复制文件时把服务拉起），
+                // 安装后的钩子再启用；那一步没跑到时由这里补上。
+                task.SetEnabled(VARIANT_TRUE)?;
+                task.Run(&VARIANT::default())?;
+            }
+            for _ in 0..50 {
+                if let Some(pid) = task_running_pid(&task)? {
+                    return Ok(crate::ResidentRestart::Started { pid });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(windows::core::Error::new(
+                E_FAIL,
+                "计划任务已运行，但 5 秒内没有出现在跑的实例",
+            ))
+        })
     }
 
     fn key_store(&self) -> Box<dyn KeyStore> {
@@ -625,16 +909,6 @@ impl PlatformAdapter for WindowsAdapter {
 /// `launchctl bootstrap` giving the daemon an immediate first run instead
 /// of waiting for the next login). CREATE_NO_WINDOW keeps a bare console
 /// app from flashing a black window when spawned from the desktop shell.
-fn spawn_windowless(exec: &Path) -> std::io::Result<()> {
-    // DESK-33 (#325)：CREATE_NO_WINDOW 由 crate::command 统一带上。
-    crate::command(exec)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .spawn()?;
-    Ok(())
-}
-
 /// DESK-58 (#875)：本进程 stderr 此刻接在什么上。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StderrTarget {
@@ -2273,16 +2547,7 @@ mod desk58_stderr_capture_tests {
 mod desk60_autostart_tests {
     use super::*;
 
-    /// 写出去的带引号，读回来的是原路径——往返一致，对账才不会每次都判「指向别处」。
-    #[test]
-    fn the_run_value_round_trips_and_is_quoted() {
-        let exe = Path::new(r"C:\Users\John Smith\AppData\Local\P-Pass\ppf-daemon.exe");
-        let v = run_value_for(exe);
-        assert!(v.starts_with('"') && v.ends_with('"'), "{v}");
-        assert_eq!(exec_from_run_value(&v).as_deref(), Some(exe));
-    }
-
-    /// 老版本写的是不带引号的；带参数的引号形式只取路径；空值算读不出。
+    /// 老版本写的 Run 值有带引号、不带引号两种；带参数的引号形式只取路径；空值算读不出。
     #[test]
     fn run_values_written_by_older_versions_still_parse() {
         assert_eq!(
@@ -2330,5 +2595,61 @@ mod desk60_autostart_tests {
     #[test]
     fn windows_restores_a_missing_registration() {
         assert!(WindowsAdapter::new().autostart_restore_when_missing());
+    }
+}
+
+#[cfg(test)]
+mod desk65_scheduled_task_tests {
+    use super::*;
+
+    fn element<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
+        let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
+        xml.split(open.as_str())
+            .skip(1)
+            .filter_map(|rest| rest.split(close.as_str()).next())
+            .collect()
+    }
+
+    /// 与 launchd 对齐的四件事都写在任务定义里：登录启动、每分钟看门狗（已在跑
+    /// 就跳过）、正常优先级、电池供电照常跑且不限时。
+    #[test]
+    fn the_task_starts_at_logon_and_is_watched_every_minute() {
+        let xml = task_xml(
+            Path::new(r"C:\Users\x\AppData\Local\P-Pass\ppf-daemon.exe"),
+            r"PC\x",
+        );
+        assert_eq!(element(&xml, "UserId"), [r"PC\x", r"PC\x"]);
+        assert!(xml.contains("<LogonTrigger>"), "{xml}");
+        assert_eq!(element(&xml, "Interval"), ["PT1M"]);
+        assert_eq!(element(&xml, "StopAtDurationEnd"), ["false"]);
+        assert_eq!(element(&xml, "MultipleInstancesPolicy"), ["IgnoreNew"]);
+        assert_eq!(element(&xml, "Priority"), ["5"]);
+        assert_eq!(element(&xml, "DisallowStartIfOnBatteries"), ["false"]);
+        assert_eq!(element(&xml, "StopIfGoingOnBatteries"), ["false"]);
+        assert_eq!(element(&xml, "ExecutionTimeLimit"), ["PT0S"]);
+        assert_eq!(element(&xml, "LogonType"), ["InteractiveToken"]);
+        assert_eq!(element(&xml, "RunLevel"), ["LeastPrivilege"]);
+        assert_eq!(
+            element(&xml, "Command"),
+            [r"C:\Users\x\AppData\Local\P-Pass\ppf-daemon.exe"]
+        );
+    }
+
+    /// 用户名、路径里的 XML 特殊字符要转义，否则任务定义注册不上。
+    #[test]
+    fn special_characters_in_the_user_and_path_are_escaped() {
+        let xml = task_xml(Path::new(r"C:\Users\A&B\P-Pass\ppf-daemon.exe"), r"PC\A&B");
+        assert_eq!(
+            element(&xml, "Command"),
+            [r"C:\Users\A&amp;B\P-Pass\ppf-daemon.exe"]
+        );
+        assert!(element(&xml, "UserId").iter().all(|u| *u == r"PC\A&amp;B"));
+    }
+
+    #[test]
+    fn windows_has_a_service_manager() {
+        let mode = WindowsAdapter::new().service_mode();
+        assert_eq!(mode, ServiceMode::ScheduledTask);
+        assert!(mode.has_service_manager());
     }
 }
