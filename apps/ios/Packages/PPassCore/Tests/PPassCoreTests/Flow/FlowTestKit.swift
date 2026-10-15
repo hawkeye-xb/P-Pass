@@ -380,8 +380,10 @@ final class Rig: @unchecked Sendable {
     let portOverride: ItemDelivery?
     let leaseOverride: ExecutionLease?
     let schedulerOverride: WakeScheduler?
+    /// 引擎看到的媒体源：默认就是 [media]；收件箱测试（#958）换成按 seq 取件的包装。
+    private(set) var source: MediaSource!
 
-    init(_ name: String = #function, cursors: Bool = true, openRound: String? = nil, control: FlowControl? = nil, directory: TempDir? = nil, port: ItemDelivery? = nil, lease: ExecutionLease? = nil, scheduler: WakeScheduler? = nil) throws {
+    init(_ name: String = #function, cursors: Bool = true, openRound: String? = nil, control: FlowControl? = nil, directory: TempDir? = nil, port: ItemDelivery? = nil, lease: ExecutionLease? = nil, scheduler: WakeScheduler? = nil, source: ((FakeMedia) -> MediaSource)? = nil) throws {
         portOverride = port
         leaseOverride = lease
         schedulerOverride = scheduler
@@ -400,12 +402,13 @@ final class Rig: @unchecked Sendable {
             try store.saveDiscoveryState(DiscoveryState(position: FakePosition(epoch: 1, generation: 0, id: "").encoded, libraryIdentity: "lib-1"))
         }
         if let openRound { try store.openRound(openRound) }
+        self.source = source?(media) ?? media
         engine = makeEngine()
     }
 
     func makeEngine() -> FlowEngine {
         FlowEngine(
-            store: store, media: media, importer: importer, delivery: portOverride ?? delivery, probe: probe, presence: presence,
+            store: store, media: source, importer: importer, delivery: portOverride ?? delivery, probe: probe, presence: presence,
             lease: leaseOverride ?? lease, scheduler: schedulerOverride ?? scheduler, control: control,
             conditions: { [conditions, conditionsHook] in (try? conditionsHook.get()?()) ?? conditions.get() },
             inScope: { [media] in media.isInScope($0) },

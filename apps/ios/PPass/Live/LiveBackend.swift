@@ -2,6 +2,7 @@ import Foundation
 import Network
 import PPassBackgroundTasks
 import PPassCore
+import PPassMedia
 import PPassTransport
 import UIKit
 
@@ -52,6 +53,8 @@ final class LiveBackend: @unchecked Sendable {
         provider = try NativeProvider(root: dir)
         try? provider.ffi.setAllowedPeer(nodeId: pairingStore.load()?.daemonNodeId)
         orders = try SQLiteOrderStore(directory: dir, logger: logger)
+        // 收件箱（#958）：与账本同一个文件、独立的表和连接。必须在账本之后打开——账本发现文件损坏会删掉整个文件重建。
+        let inbox = try Inbox(path: orders.path, history: PhotoKitChangeHistory(), log: { logger.log($0) })
         control = FlowControlStore(directory: dir, logger: logger)
         settings = BackupSettings(directory: dir, logger: logger)
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
@@ -78,7 +81,7 @@ final class LiveBackend: @unchecked Sendable {
         let model = LiveEngineModel()
         engineModel = model
         engine = FlowEngine(
-            store: orders, media: PhotoMediaSource(selected: scope),
+            store: orders, media: PhotoMediaSource(selected: scope, inbox: inbox),
             importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
             delivery: delivery,
             probe: ControlPlaneProbe(currentEpoch: epoch, desktop: desktop, logger: logger, pairingLoss: pairingLoss),

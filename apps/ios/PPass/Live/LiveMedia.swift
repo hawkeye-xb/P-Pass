@@ -60,12 +60,18 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
 ///
 /// 范围键（`MediaSnapshot.bucketId`）按 06-ios-variants 的登记：编码这张照片所属的**相册集合**（排序后用换行连接），
 /// `inScope` = 任一所属相册被选中。集合只在「可选相册」（AlbumCatalog）里算，同一张照片每次算出的键相同。
+///
+/// 发现走收件箱（PPassMedia `Inbox`，refs #958）：G 是收件箱序号的编码（`Inbox.position(of:)`），逐张推进，对齐 Android 的
+/// `(GENERATION_MODIFIED, _id)`。收件箱进箱不看范围；范围与「照片还在不在」在这里取件时过滤（MediaSource 契约：只返回范围内）。
 final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     private let selected: @Sendable () -> Set<String>
     private let library = PhotoKitLibrary()
-    private let history = PhotoKitChangeHistory()
+    private let inbox: Inbox
 
-    init(selected: @escaping @Sendable () -> Set<String>) { self.selected = selected }
+    init(selected: @escaping @Sendable () -> Set<String>, inbox: Inbox) {
+        self.selected = selected
+        self.inbox = inbox
+    }
 
     static func inScope(bucketId: String, selected: Set<String>) -> Bool {
         !selected.isDisjoint(with: bucketId.split(separator: "\n").map(String.init))
@@ -81,16 +87,18 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         return out
     }
 
-    private func snapshots(_ ids: [String], members: [String: [String]], position: DiscoveryPosition?) -> [MediaSnapshot] {
+    /// 照片库里还在的那些 id 的快照（按传入顺序；查不到的略过）。[positions] 给出每一项的发现位置（与 ids 一一对应）。
+    private func snapshots(_ ids: [String], members: [String: [String]], positions: [DiscoveryPosition?]? = nil) -> [MediaSnapshot] {
         guard !ids.isEmpty else { return [] }
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
         var byId: [String: PHAsset] = [:]
         assets.enumerateObjects { a, _, _ in byId[a.localIdentifier] = a }
-        return ids.compactMap { id in
+        return ids.indices.compactMap { i in
+            let id = ids[i]
             guard let a = byId[id] else { return nil }
             let modified = Int64((a.modificationDate ?? a.creationDate ?? .distantPast).timeIntervalSince1970 * 1000)
             return MediaSnapshot(mediaId: id, sourceVersion: sourceVersionOf(modifiedAtMs: modified, size: 0),
-                                 bucketId: (members[id] ?? []).joined(separator: "\n"), position: position)
+                                 bucketId: (members[id] ?? []).joined(separator: "\n"), position: positions?[i] ?? nil)
         }
     }
 
@@ -100,25 +108,32 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         let ids = members.filter { !chosen.isDisjoint(with: $0.value) }.keys
             .filter { id in after.map { Array($0.utf8).lexicographicallyPrecedes(Array(id.utf8)) } ?? true }
             .sorted { Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8)) }
-        return snapshots(Array(ids.prefix(limit)), members: members, position: nil)
+        return snapshots(Array(ids.prefix(limit)), members: members)
     }
 
+    /// 发现：收件箱里 `seq > G` 的行，按 seq；只留照片库里还在、且在范围内的，每张带自己的位置（它的 seq）。
+    /// 不够 [limit] 张就接着往后翻，直到凑够或读完——前一页全在范围外时不能返回空，否则后面的新照片会卡住。
+    /// G 解不出（长度不对）按 0 处理。令牌失效由收件箱自己处理（重置令牌、缺口交给对账），这里不会抛 DiscoveryCursorExpired。
     func changes(after position: DiscoveryPosition, limit: Int) async throws -> [MediaSnapshot] {
-        switch try ChangeDiscovery(history: history).discover(since: ChangeToken(archived: position.raw)) {
-        case .start:
-            return []
-        case .rescan:
-            throw DiscoveryCursorExpired()
-        case .changes(let window):
-            let members = membership()
-            let chosen = selected()
-            let end = DiscoveryPosition(raw: window.endToken.archived)
-            let ids = window.newAssetIds.filter { !chosen.isDisjoint(with: members[$0] ?? []) }
-            return snapshots(Array(ids.prefix(limit)), members: members, position: end)
+        var after = Inbox.seq(fromPosition: position.raw)
+        var out: [MediaSnapshot] = []
+        var members: [String: [String]]?
+        let chosen = selected()
+        while out.count < limit {
+            try Task.checkCancellation()
+            let rows = try inbox.entries(after: after, limit: limit)
+            guard let last = rows.last else { break }
+            after = last.seq
+            let m = members ?? membership()
+            members = m
+            let kept = rows.filter { !chosen.isDisjoint(with: m[$0.assetId] ?? []) }
+            out += snapshots(kept.map(\.assetId), members: m, positions: kept.map { DiscoveryPosition(raw: Inbox.position(of: $0.seq)) })
         }
+        return Array(out.prefix(limit))
     }
 
-    func currentPosition() async throws -> DiscoveryPosition { DiscoveryPosition(raw: try history.currentToken().archived) }
+    /// G 重置（首次、换电脑、照片库换了）：收件箱当前最大序号；收件箱顺带清掉 `seq <= 它` 的行。
+    func currentPosition() async throws -> DiscoveryPosition { DiscoveryPosition(raw: Inbox.position(of: try inbox.currentPosition())) }
 
     /// PhotoKit 没有对外的「照片库身份」——说不出来就返回 nil（不触发重置）。
     func libraryIdentity() async throws -> String? { nil }
@@ -126,7 +141,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     func lookup(_ mediaId: String) async throws -> MediaDetails? {
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [mediaId], options: nil).firstObject else { return nil }
         let members = membership()
-        guard let snap = snapshots([mediaId], members: members, position: nil).first else { return nil }
+        guard let snap = snapshots([mediaId], members: members).first else { return nil }
         let resources = PHAssetResource.assetResources(for: asset)
         let index = selectOriginalResource(types: resources.map(\.type), mediaType: asset.mediaType) ?? 0
         let res = resources.indices.contains(index) ? resources[index] : nil

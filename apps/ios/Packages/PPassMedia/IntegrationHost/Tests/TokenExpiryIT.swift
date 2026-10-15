@@ -2,13 +2,15 @@ import XCTest
 import Photos
 import PPassMedia
 
-/// IOS-09（#335）验收 3：在真库上**真的**造出 3105，并证明全量重扫按内容收敛、不重传。
+/// IOS-09（#335）验收 3 / 收件箱（#958）：在真库上**真的**造出 3105，证明收件箱不抛错、只把自己的令牌重置为当前令牌，
+/// 缺口交给对账；对账按内容收敛、不重传。
 ///
 /// 造法（scripts/test.sh 编排，两轮之间 erase 模拟器）：
 /// - 第一轮 `testPhase1_BackUpLibraryAndKeepToken`：先往图库里连续写 ``surplusChanges`` 次变更，把历史推长；
 ///   再把图库里每一项的原始字节存进一个目录，当作「桌面上已有的内容」；最后存下当时的 token，当作「已提交的 G」。
 /// - erase 模拟器，再用同一批素材 addmedia。图库换了一个，内容相同，但 localIdentifier 全变了，历史也短得多。
-/// - 第二轮 `testPhase2_ExpiredTokenRescanConvergesByContent`：拿旧 token 读历史，系统回 3105（实测）。
+/// - 第二轮 `testPhase2_ExpiredTokenRescanConvergesByContent`：拿旧 token 读历史，系统回 3105（实测）；
+///   把旧 token 塞进收件箱，收件箱照常返回、令牌重置为当前，之后的新照片照常进箱。
 ///
 /// 为什么要先把历史推长（实测得出）：token 看起来只记录历史里的位置，不绑定是哪个图库。旧 token 的位置如果还落在新图库的
 /// 历史范围内，系统**不报错**，会照常返回「从那个位置之后」的变更，而那其实是另一个图库的历史。只有位置超出新图库的历史时，
@@ -63,11 +65,14 @@ final class TokenExpiryIT: XCTestCase {
 
         let newId = try IT.createPhoto(label: "after-expiry-\(IT.nonce)")
 
-        let discovery = ChangeDiscovery(history: PhotoKitChangeHistory())
-        guard case .rescan(let reason, let restartAt) = try discovery.discover(since: staleG) else {
-            return XCTFail("expected rescan")
-        }
-        XCTAssertEqual(reason, .tokenExpired)
+        // 收件箱拿着旧 token：不抛错、令牌重置为当前、打日志；缺口里的照片（含 newId）不进箱，交给下面的对账。
+        let path = InboxIT.dbPath()
+        let logs = LogBox()
+        let inbox = try Inbox(path: path, history: PhotoKitChangeHistory(), log: logs.append)
+        try InboxIT.plantToken(staleG.archived, at: path)
+        XCTAssertEqual(try inbox.entries(after: 0, limit: 50), [], "令牌失效不抛错，缺口里的照片不进箱")
+        print("IT-EXPIRY inbox logs=\(logs.all)")
+        XCTAssertTrue(logs.all.contains { $0.contains("inbox: change token expired; reset to current") && $0.contains("tokenExpired") })
 
         // 全量重扫：范围 = 最近项目
         let albums = AlbumCatalog(library: PhotoKitLibrary()).listAlbums()
@@ -89,8 +94,8 @@ final class TokenExpiryIT: XCTestCase {
         XCTAssertTrue(transferred.allSatisfy { !IT.filename(of: $0).hasPrefix("ppit-history-") })
         XCTAssertEqual(baseline.count, 9, "6 张系统样例 + a1.jpg / h1.heic / v1.mp4")
 
-        // 重扫后 G = restartAt，增量能继续用
-        guard case .changes(let window) = try discovery.discover(since: restartAt) else { return XCTFail("restartAt 应可用于增量") }
-        XCTAssertEqual(window.newAssetIds, [], "restartAt 在新照片之后取，新照片已由重扫覆盖")
+        // 重置后的令牌能继续用：之后的新照片照常进箱
+        let later = try IT.createPhoto(label: "after-inbox-reset-\(IT.nonce)")
+        XCTAssertEqual(try inbox.entries(after: 0, limit: 50).map(\.assetId), [later])
     }
 }
