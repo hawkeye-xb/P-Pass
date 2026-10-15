@@ -1,5 +1,6 @@
 import XCTest
 import Photos
+import UIKit
 import PPassMedia
 
 /// IOS-11（#337）在模拟器真 PhotoKit 上的验收：取出的原始字节与灌进去的文件逐字节一致（JPEG / HEIC / MP4 各一例）。
@@ -90,6 +91,54 @@ final class OriginalBytesIT: XCTestCase {
         let b = try Data(contentsOf: second.fileURL)
         print("IT-ORIGINAL app-written jpeg: written=\(written.count) stored=\(a.count) identicalToWritten=\(a == written) stableAcrossReads=\(a == b)")
         XCTAssertEqual(a, b, "同一资源两次读出的字节一致")
+    }
+}
+
+extension OriginalBytesIT {
+    /// 编辑过的照片：取到的是编辑后的渲染结果，不是未编辑原图（#337 拍板：备份「相册里看到的那张」）。
+    /// 用 `PHContentEditingOutput` 在真库里造一次编辑，再确认资源集里出现 `.fullSizePhoto`、取到的字节与编辑前不同，
+    /// 且恰好等于写进渲染文件的那份字节。
+    func testEditedPhotoFetchesRenderedVersionNotOriginal() async throws {
+        try IT.requireFullAccess()
+        let label = "ppit-edited-\(IT.nonce)"
+        let id = try IT.createPhoto(label: label)
+        let asset = try XCTUnwrap(PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject)
+        let fetcher = OriginalFetcher(tempRoot: root)
+
+        let before = try await fetcher.fetch(assetId: id)
+        let originalBytes = try Data(contentsOf: before.fileURL)
+        XCTAssertEqual(before.info.resourceType, .photo, "未编辑：取 .photo")
+        before.discard()
+
+        // 造一次编辑：渲染成另一张不同内容的 JPEG。
+        let input: PHContentEditingInput = try {
+            var result: PHContentEditingInput?
+            let done = DispatchSemaphore(value: 0)
+            asset.requestContentEditingInput(with: nil) { input, _ in result = input; done.signal() }
+            XCTAssertEqual(done.wait(timeout: .now() + 30), .success, "requestContentEditingInput 超时")
+            return try XCTUnwrap(result)
+        }()
+        let output = PHContentEditingOutput(contentEditingInput: input)
+        output.adjustmentData = PHAdjustmentData(formatIdentifier: "com.hawkeyexb.ppass.mediatest", formatVersion: "1", data: Data("edit".utf8))
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 64))
+        let rendered = try XCTUnwrap(renderer.image { ctx in
+            UIColor.black.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+        }.jpegData(compressionQuality: 0.9))
+        try rendered.write(to: output.renderedContentURL)
+        try IT.perform {
+            PHAssetChangeRequest(for: asset).contentEditingOutput = output
+        }
+
+        let types = PHAssetResource.assetResources(for: asset).map { $0.type }
+        let after = try await fetcher.fetch(assetId: id)
+        defer { after.discard() }
+        let got = try Data(contentsOf: after.fileURL)
+        print("IT-EDITED resourceTypes=\(types.map { $0.rawValue }) fetchedType=\(after.info.resourceType.rawValue) originalBytes=\(originalBytes.count) fetchedBytes=\(got.count) differsFromOriginal=\(got != originalBytes)")
+        XCTAssertTrue(types.contains(.fullSizePhoto), "编辑后资源集里应有 .fullSizePhoto，实际 \(types.map { $0.rawValue })")
+        XCTAssertEqual(after.info.resourceType, .fullSizePhoto)
+        XCTAssertNotEqual(got, originalBytes, "取到的不是编辑前的字节")
+        XCTAssertFalse(got.isEmpty)
     }
 }
 

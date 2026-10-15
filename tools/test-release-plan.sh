@@ -88,9 +88,13 @@ latest() {
 }
 export STUB_STATE="$TMP/state"
 
-# plan <tag> <android 号> <macOS 号> ⇒ 设置 RC / OUT
+# plan <tag> <android 号> <macOS 号> [ios 号] ⇒ 设置 RC / OUT（不给 ios 号 = versions.json 里没有 ios 线）
 plan() {
-  printf '{"desktop":"%s","android":"%s"}\n' "$3" "$2" > "$REPO/release/versions.json"
+  if [ -n "${4:-}" ]; then
+    printf '{"desktop":"%s","android":"%s","ios":"%s"}\n' "$3" "$2" "$4" > "$REPO/release/versions.json"
+  else
+    printf '{"desktop":"%s","android":"%s"}\n' "$3" "$2" > "$REPO/release/versions.json"
+  fi
   OUT=$(cd "$REPO" && TAG="$1" GITHUB_OUTPUT=/dev/stdout tools/release/plan-builds.sh 2>&1); RC=$?
 }
 get() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | tail -1; }
@@ -109,13 +113,39 @@ plan v2026.1.2 1.0.1 2.0.0;      expect_plan "只涨 android：android 构建、
 [ "$(get reuse_from)" = v2026.1.1 ] && ok "复用来源 = Latest" || bad "复用来源 = Latest" "$OUT"
 plan v2026.1.2 1.0.0 2.0.1;      expect_plan "只涨桌面：android 复用、macOS 构建" reuse build
 plan v2026.1.2 1.0.0 2.0.0
-if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::两端版本号都与 Latest"; then ok "两端都没涨号：明确报错"; else bad "两端都没涨号：明确报错" "$OUT"; fi
+if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::各端版本号都与 Latest"; then ok "各端都没涨号：明确报错"; else bad "各端都没涨号：明确报错" "$OUT"; fi
 rm "$TMP/state/v2026.1.1/manifest-macos.json"
 plan v2026.1.2 1.0.1 2.0.0;      expect_plan "Latest 缺 macOS 清单：macOS 构建（不猜）" build build
 latest v2026.1.1 1.0.0 2.0.0; rm "$TMP/state/v2026.1.1/P-Pass_2.0.0_macos-arm64.dmg"
 plan v2026.1.2 1.0.1 2.0.0;      expect_plan "Latest 缺 dmg：macOS 构建（不猜）" build build
 rm -rf "$TMP/state"; mkdir -p "$TMP/state"
 plan v2026.1.2 1.0.1 2.0.0;      expect_plan "没有 Latest：两端都构建" build build
+
+echo "plan-builds（#348 正式 tag 的 iOS：只有 build / skip）"
+expect_ios() { # <说明> <ios 判定>
+  if [ "$RC" = 0 ] && [ "$(get ios)" = "$2" ]; then ok "$1"; else bad "$1（期望 ios=$2）" "$OUT"; fi
+}
+REPO_MAIN="$REPO"
+REPO="$TMP/repo-ios"
+mkdir -p "$REPO/tools/release" "$REPO/release"
+cp "$HERE/release/plan-builds.sh" "$REPO/tools/release/"
+git -C "$REPO" init -q
+GI=(git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false)
+printf '{"desktop":"2.0.0","android":"1.0.0","ios":"0.1.0"}\n' > "$REPO/release/versions.json"
+"${GI[@]}" add -A && "${GI[@]}" commit -q -m latest && "${GI[@]}" tag v2026.1.1
+latest v2026.1.1 1.0.0 2.0.0
+plan v2026.1.2 1.0.0 2.0.0 0.1.0
+if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::各端版本号都与 Latest"; then ok "iOS 号与 Latest 里的相同且另两端也复用 ⇒ 没东西可发 ⇒ 报错"; else bad "iOS 号相同且另两端也复用 ⇒ 报错" "$OUT"; fi
+plan v2026.1.2 1.0.1 2.0.0 0.1.0;  expect_ios "iOS 号未涨 ⇒ skip（TestFlight 不能重复上传同一构建号）" skip
+plan v2026.1.2 1.0.0 2.0.0 0.2.0;  expect_ios "iOS 号涨了 ⇒ build（另两端复用也不报错：只发 iOS）" build
+if [ "$(get android)" = reuse ] && [ "$(get macos)" = reuse ] && [ "$(get ios_version)" = 0.2.0 ]; then ok "只涨 iOS：android / macos 复用、ios_version 输出本次号"; else bad "只涨 iOS：android / macos 复用" "$OUT"; fi
+printf '{"desktop":"2.0.0","android":"1.0.0"}\n' > "$REPO/release/versions.json"
+"${GI[@]}" add -A && "${GI[@]}" commit -q -m latest2 && "${GI[@]}" tag -f v2026.1.1 >/dev/null
+plan v2026.1.2 1.0.1 2.0.0 0.1.0;  expect_ios "Latest 那一版没有 ios 线 ⇒ 拿不准 ⇒ build" build
+plan v2026.1.1 1.0.1 2.0.0 0.1.0;  expect_ios "Latest 就是本 tag（补跑）⇒ build（重复上传由 testflight-upload.sh 查重）" build
+rm -rf "$TMP/state"; mkdir -p "$TMP/state"
+plan v2026.1.2 1.0.1 2.0.0 0.1.0;  expect_ios "没有 Latest ⇒ build" build
+REPO="$REPO_MAIN"
 
 echo "plan-builds（#852 test tag 按端发布）"
 # 假仓库里按顺序提交、打 test tag；test-channel 的清单放在 $STUB_STATE/test-channel/。
@@ -125,12 +155,14 @@ commit_tag() { # <tag> <路径...>：改这些路径并打 tag
   for f in "$@"; do mkdir -p "$REPO/$(dirname "$f")"; echo "$tag" >> "$REPO/$f"; done
   "${G[@]}" add -A && "${G[@]}" commit -q -m "$tag" && "${G[@]}" tag "$tag"
 }
-channel() { # <android 版本|-> <macOS 版本|-> [Windows 版本|-]：设置 test-channel 里的分端清单（- = 没有；Windows 缺省同 macOS）
+channel() { # <android 版本|-> <macOS 版本|-> [Windows 版本|-] [iOS 版本|-]：设置 test-channel 里的分端清单（- = 没有；Windows、iOS 缺省同 macOS）
   rm -rf "$TMP/state/test-channel"; mkdir -p "$TMP/state/test-channel"
   [ "$1" = - ] || printf '{"version":"%s","platforms":{"android-arm64":{}}}\n' "$1" > "$TMP/state/test-channel/manifest-android.json"
   [ "$2" = - ] || printf '{"version":"%s","platforms":{"darwin-aarch64":{}}}\n' "$2" > "$TMP/state/test-channel/manifest-macos.json"
   local w="${3:-$2}"
   [ "$w" = - ] || printf '{"version":"%s","platforms":{"windows-x86_64":{}}}\n' "$w" > "$TMP/state/test-channel/manifest-windows.json"
+  local i="${4:-$2}"
+  [ "$i" = - ] || printf '{"version":"%s","platforms":{}}\n' "$i" > "$TMP/state/test-channel/manifest-ios.json"
 }
 expect_win() { # <说明> <windows 判定>
   if [ "$RC" = 0 ] && [ "$(get windows)" = "$2" ]; then ok "$1"; else bad "$1（期望 windows=$2）" "$OUT"; fi
@@ -153,6 +185,8 @@ commit_tag v0.1.0-test.9 apps/desktop/src-tauri/tauri.windows.conf.json
 # #887：iOS 工程与它专用的脚本。必须在第一次 tplan（会 checkout 到 tag、HEAD 分离）之前提交。
 commit_tag v0.1.0-test.10 apps/ios/project.yml tools/ios/test.sh tools/build-ios-transport-xcframework.sh
 commit_tag v0.1.0-test.11 apps/ios/PPass/x.swift apps/android/a.kt
+# #348：iOS 界面文案由 Android strings.xml 生成 ⇒ 改它要同时发 Android 与 iOS。
+commit_tag v0.1.0-test.12 apps/android/app/src/main/res/values-zh/strings.xml
 
 channel 0.1.0-test.1 0.1.0-test.1; tplan v0.1.0-test.2; expect_plan "只改 apps/android/ ⇒ Android 构建、桌面 skip" build skip
 expect_win "只改 apps/android/ ⇒ Windows 也不陪跑" skip
@@ -171,9 +205,15 @@ expect_win "改没列出的路径（release/）⇒ Windows 也构建" build
 channel 0.1.0-test.8 0.1.0-test.8; tplan v0.1.0-test.9; expect_plan "只改 tauri.windows.conf.json ⇒ Android、macOS 都 skip" skip skip
 expect_win "只改 tauri.windows.conf.json ⇒ 只构建 Windows（不报「没东西可发」）" build
 channel 0.1.0-test.9 0.1.0-test.9; tplan v0.1.0-test.10
-if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::test tag v0.1.0-test.10"; then ok "只改 apps/ios/ tools/ios/ tools/build-ios-*（#887）⇒ 三端都 skip ⇒ 明确报错（没有 iOS 发版 lane）"; else bad "只改 apps/ios/ tools/ios/ tools/build-ios-*（#887）⇒ 三端都 skip ⇒ 明确报错" "$OUT"; fi
-channel 0.1.0-test.10 0.1.0-test.10; tplan v0.1.0-test.11; expect_plan "apps/ios/ 与 apps/android/ 混改（#887）⇒ 只构建 Android" build skip
+expect_plan "只改 apps/ios/ tools/ios/ tools/build-ios-*（#887/#348）⇒ 另三端都 skip、只发 iOS（不报错）" skip skip
+expect_ios "只改 apps/ios/ tools/ios/ tools/build-ios-* ⇒ iOS 构建" build
+expect_win "只改 apps/ios/ ⇒ Windows 不陪跑" skip
+channel 0.1.0-test.10 0.1.0-test.10; tplan v0.1.0-test.11; expect_plan "apps/ios/ 与 apps/android/ 混改 ⇒ Android 构建、macOS skip" build skip
+expect_ios "apps/ios/ 与 apps/android/ 混改 ⇒ iOS 也构建" build
 expect_win "apps/ios/ 与 apps/android/ 混改（#887）⇒ Windows 不陪跑" skip
+channel 0.1.0-test.11 0.1.0-test.11; tplan v0.1.0-test.12; expect_plan "只改 Android strings.xml（#348）⇒ Android 构建、macOS skip" build skip
+expect_ios "只改 Android strings.xml（iOS 文案由它生成）⇒ iOS 也构建" build
+channel 0.1.0-test.11 0.1.0-test.11 0.1.0-test.11 -; tplan v0.1.0-test.12; expect_ios "test-channel 没有 iOS 清单 ⇒ 拿不准 ⇒ iOS 构建" build
 channel 0.1.0-test.8 0.1.0-test.8 -; tplan v0.1.0-test.9; expect_win "test-channel 没有 Windows 清单 ⇒ 拿不准 ⇒ Windows 构建" build
 channel 0.1.0-test.2 0.1.0-test.1; tplan v0.1.0-test.2
 if [ "$RC" = 0 ] && [ "$(get android)" = build ]; then ok "基线就是本 tag（补跑）⇒ 构建"; else bad "基线就是本 tag（补跑）⇒ 构建" "$OUT"; fi
@@ -186,7 +226,7 @@ channel 0.0.9-test.1 0.1.0-test.4; tplan v0.1.0-test.5; expect_plan "基线 tag 
 printf 'not json' > "$TMP/state/test-channel/manifest-android.json"; tplan v0.1.0-test.5; expect_plan "清单读不出（坏 JSON）⇒ 构建" build skip
 "${G[@]}" checkout -q v0.1.0-test.1 && "${G[@]}" checkout -q -b side && commit_tag v0.1.0-test.90 apps/desktop/side.js
 channel 0.1.0-test.90 0.1.0-test.90; tplan v0.1.0-test.5; expect_plan "基线不是本次提交的祖先 ⇒ 构建" build build
-"${G[@]}" checkout -q v0.1.0-test.11
+"${G[@]}" checkout -q v0.1.0-test.12
 
 echo "reuse-artifact"
 reuse() { OUT=$(cd "$REPO" && tools/release/reuse-artifact.sh "$1" v2026.1.1 "$2" "$TMP/out-$3" 2>&1); RC=$?; }

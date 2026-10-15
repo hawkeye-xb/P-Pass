@@ -264,6 +264,25 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   release downloads only; the update manifest always points there.
   Re-enabling it requires fixing the coupling first (see `REL-04`).
 
+## 4.2 iOS / TestFlight (#348)
+
+- iOS ships through TestFlight only (no sideload / self-update). The `ios` job in `release.yml` archives,
+  signs with App Store Connect **cloud-managed signing** (API key `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_P8`
+  in GitHub Secrets, App Manager role; no p12 anywhere) and uploads. Missing secrets => the job skips cleanly and the
+  release notes say so.
+- Version line: `release/versions.json` has an `ios` entry (formal tags); test tags use the tag name, same as the
+  other ends. Bump with `tools/bump-version.sh --platform ios <ver>` (also updates `PPASS_FALLBACK_VERSION`).
+  Build number (`CFBundleVersion`) is derived by `tools/ios/stamp-version.sh`; the same full version always yields the
+  same number, and App Store Connect rejects a duplicate (re-running an uploaded tag is a no-op: the script checks ASC first).
+- "Only build what changed": `plan-builds.sh` decides `ios=build|skip` (never reuse: TestFlight cannot take the same build
+  twice). Test tags compare against `test-channel/manifest-ios.json` (written after a successful upload); formal tags
+  compare `versions.json.ios` with the previous formal tag. iOS inputs (apps/ios, tools/build-ios-*, crates/transport,
+  Android `strings.xml`, ...) changed without an `ios` bump => `check-version-bump.sh` fails the formal tag.
+- Manual run without a tag (any branch): `gh workflow run ci-ios.yml --ref <branch> -f testflight_version=vX.Y.Z-test.N`
+  (must be a test/beta version; bump N on every retry). Local: `PPF_BUILD_VERSION=... tools/ios/testflight-upload.sh --archive-only`.
+- `ITSAppUsesNonExemptEncryption=NO` in Info.plist: the app only uses standard transport encryption (TLS/QUIC), which is exempt.
+- Environment setup for a new machine: [ios-dev-setup.md](ios-dev-setup.md).
+
 ## 5. Version-overwrite guards (remember)
 
 - `git tag -l "v<ver>"` exists → that version number is **taken**.
@@ -438,6 +457,24 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   update manifest 恒指 GitHub 直链。撤除原因是耦合方向错（manifest 在
   镜像之前就写死镜像地址，镜像失败则带着坏 manifest 出门且签名无法手改），
   要重开必须先修 `REL-04`。
+
+## 4.2 iOS / TestFlight（#348）
+
+- iOS 只走 TestFlight（没有侧载 / 自更新）。`release.yml` 的 `ios` job 归档、用 App Store Connect **云托管签名**签名并上传
+  （GitHub Secrets 里的 API 密钥 `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_P8`，App Manager 角色；全程没有 p12）。
+  缺任一 secret ⇒ 该 job 干净跳过，Release 正文标注「未上传 TestFlight」。
+- 版本线：`release/versions.json` 有 `ios` 项（正式 tag 用它）；test tag 与其它端一样用 tag 名。涨号用
+  `tools/bump-version.sh --platform ios <版本>`（同时改 `PPASS_FALLBACK_VERSION`）。构建号（`CFBundleVersion`）由
+  `tools/ios/stamp-version.sh` 换算：同一个完整版本串永远得到同一个号；App Store Connect 拒收重复构建号，
+  所以补跑已上传的 tag 是空操作（脚本先查 ASC，已在就跳过）。
+- 「谁改了才构建谁」：`plan-builds.sh` 判 `ios=build|skip`（没有 reuse：TestFlight 不能重复收同一构建）。
+  test tag 比对 `test-channel/manifest-ios.json`（上传成功后写入）；正式 tag 比对 `versions.json.ios` 与上一个正式 tag。
+  改了 iOS 输入（apps/ios、tools/build-ios-*、crates/transport、Android `strings.xml` 等）却没涨 `ios` 号 ⇒
+  `check-version-bump.sh` 让正式 tag 变红。上传失败想重发正式版：涨 `ios` 号再打 tag。
+- 不打 tag 手动跑（任意分支）：`gh workflow run ci-ios.yml --ref <分支> -f testflight_version=vX.Y.Z-test.N`
+  （必须是 test / beta 版本；每次重试 N 加一）。本机：`PPF_BUILD_VERSION=… tools/ios/testflight-upload.sh --archive-only`。
+- Info.plist 声明 `ITSAppUsesNonExemptEncryption=NO`：只用系统标准传输加密（TLS / QUIC），属出口合规豁免。
+- 新机器环境搭建：[ios-dev-setup.md](ios-dev-setup.md)。
 
 ## 5. 版本覆盖禁令（记住）
 

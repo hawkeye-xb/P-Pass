@@ -243,6 +243,16 @@ public protocol MediaSource: Sendable {
 
     /// [mediaIds] 里哪些此刻还在照片库里（**不看范围**）。nil = 读不出来（调用方当「不知道」，不许当「全都没了」）。
     func existingIds(_ mediaIds: [String]) async throws -> Set<String>?
+
+    /// G 是否可信到「G 以下不会漏照片」。false 时每个对账轮都扫一遍范围（#904）。
+    /// PhotoKit：`PHPersistentChangeToken` 不绑定图库，跨库可能不报错地错位，而 PhotoKit 没有公开的图库标识可比——
+    /// 所以 PPassMedia 应当报 false，直到找到可靠的图库标识接到 [libraryIdentity]。
+    var preciseDiscovery: Bool { get }
+}
+
+extension MediaSource {
+    /// 默认失败关闭：说不清就当不精确（多扫一遍只费元数据读，漏照片是丢备份）。
+    public var preciseDiscovery: Bool { false }
 }
 
 // MARK: - 导入（准备这一步唯一读文件的地方）

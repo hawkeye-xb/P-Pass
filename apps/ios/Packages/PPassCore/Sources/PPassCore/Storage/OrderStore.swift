@@ -655,3 +655,11 @@ public final class SQLiteOrderStore: OrderStore, @unchecked Sendable {
         }
     }
 }
+
+/// 配对成功后的账本归属（#935）：App 在每次配对成功时必须调用——账本是单表，靠「记着的桌面」判断要不要清。
+/// 同一台桌面（daemonNodeId 相同）重新配对不动账本，已备份的不重传；换了一台则清空 order / 游标 / 审计 outbox
+/// （跳过名单保留），新 id 起点抬到 [nowMs]（毫秒时间戳）之上。返回是否清了。
+@discardableResult
+public func adoptDesktop(_ store: OrderStore, daemonNodeId: String, nowMs: Int64) throws -> Bool {
+    try store.claimOwner(daemonNodeId, idFloor: nowMs)
+}

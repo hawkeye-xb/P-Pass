@@ -352,6 +352,24 @@ impl Provider {
         }))
     }
 
+    /// Same as [`Self::new`] but with a GC pass every [gc_interval_ms]
+    /// instead of every 60s. For tests and diagnostics (IOS-07 #334).
+    #[uniffi::constructor]
+    pub fn with_gc_interval(root: String, gc_interval_ms: u64) -> Result<Arc<Self>, FfiError> {
+        if gc_interval_ms == 0 {
+            return Err(invalid("gc_interval_ms must be > 0"));
+        }
+        Ok(Arc::new(Self {
+            inner: BlobsProvider::with_gc_interval(root, Duration::from_millis(gc_interval_ms))?,
+        }))
+    }
+
+    /// Whether the store still holds [hash] completely (BLOB-03 / IOS-07:
+    /// observe what GC kept).
+    pub fn has_blob(&self, hash: String) -> Result<bool, FfiError> {
+        Ok(self.inner.has_blob(parse_hash(&hash)?))
+    }
+
     /// The paired desktop's NodeId (64 hex) as the only peer allowed to pull;
     /// `nil` / empty refuses everyone. A malformed id refuses everyone and
     /// errors (same contract as the Android binding, #547).
@@ -477,6 +495,34 @@ pub struct CtrlConfig {
     pub bind_timeout_ms: u64,
 }
 
+/// Receives the payload bytes that have arrived so far during [`CtrlClient::fetch_blob`].
+#[uniffi::export(with_foreign)]
+pub trait FetchProgress: Send + Sync {
+    fn on_bytes(&self, bytes: u64);
+}
+
+/// 取回取消句柄：Swift 侧每次 [`CtrlClient::fetch_blob`] 新建一个，任务被取消时调 [`FetchCancel::cancel`]，
+/// 阻塞中的取回随即以 `Transport("cancelled")` 返回（临时仓库照常清理）。取消是粘性的：
+/// 先于 fetch 开始调用也生效。
+#[derive(uniffi::Object)]
+pub struct FetchCancel {
+    token: tokio_util::sync::CancellationToken,
+}
+
+#[uniffi::export]
+impl FetchCancel {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            token: tokio_util::sync::CancellationToken::new(),
+        })
+    }
+
+    pub fn cancel(&self) {
+        self.token.cancel();
+    }
+}
+
 /// Minimal `ppf/ctrl/1` client: one request frame, one reply frame per call,
 /// `crates/proto` framing, JSON in and out.
 #[derive(uniffi::Object)]
@@ -530,6 +576,51 @@ impl CtrlClient {
     /// This endpoint's NodeId (64 hex).
     pub fn node_id(&self) -> Result<String, FfiError> {
         Ok(self.live()?.node_id().to_string())
+    }
+
+    /// 取回原图：按 `asset.blob_ticket` 返回的 iroh-blobs [ticket] 从配对电脑拉一个 blob，
+    /// 校验后导出到 [dest_path]（目录须已存在）。用控制端点（配对身份）出站连 blobs ALPN，
+    /// 电脑侧的 PeerGate 只放行已配对节点。blob 仓库建在 [scratch_dir] 下一个临时子目录里，
+    /// 用完即删——手机是减负端，不留长期原图缓存（Android 同一红线）。
+    /// [stall_ms]：连续这么久没收到任何数据字节就判失败（0 = 20s），慢但在动的传输不会被掐；
+    /// [progress] 收到已到达的数据字节数。[cancel] 触发后取回立即中止并返回 `Transport("cancelled")`，
+    /// 半截的 [dest_path] 一并删除。返回内容 BLAKE3（64 hex）。
+    pub fn fetch_blob(
+        &self,
+        ticket: String,
+        scratch_dir: String,
+        dest_path: String,
+        stall_ms: u64,
+        progress: Option<Arc<dyn FetchProgress>>,
+        cancel: Option<Arc<FetchCancel>>,
+    ) -> Result<String, FfiError> {
+        let transport = self.live()?;
+        let stall = ms_or(stall_ms, 20_000);
+        let store_dir = PathBuf::from(&scratch_dir).join(format!("fetch-{}", self.request_id()));
+        let dest = PathBuf::from(&dest_path);
+        let result = self.runtime.block_on(async {
+            let blobs = crate::Blobs::open(&transport, &store_dir).await?;
+            let pull = blobs.pull_observed(ticket.trim(), &dest, stall, |bytes| {
+                if let Some(cb) = &progress {
+                    cb.on_bytes(bytes);
+                }
+            });
+            let pulled = match &cancel {
+                Some(c) => tokio::select! {
+                    biased;
+                    _ = c.token.cancelled() => Err(FfiError::Transport { msg: "cancelled".into() }),
+                    r = pull => r.map_err(FfiError::from),
+                },
+                None => pull.await.map_err(FfiError::from),
+            };
+            blobs.close().await;
+            pulled
+        });
+        let _ = std::fs::remove_dir_all(&store_dir);
+        if result.is_err() {
+            let _ = std::fs::remove_file(&dest); // 失败 / 取消不留半截文件
+        }
+        Ok(hex32(&result?))
     }
 
     /// Sends `{id, method, params}` to the daemon named by [peer_token] (the
@@ -765,5 +856,37 @@ mod tests {
         assert!(client
             .call(token, "hello".into(), String::new(), 1_000)
             .is_err());
+    }
+
+    /// #953：取消句柄先触发时 fetch_blob 以 cancelled 返回，并删掉 dest 上的半截文件。
+    #[test]
+    fn fetch_blob_cancelled_returns_cancelled_and_removes_partial() {
+        let client = CtrlClient::bind(CtrlConfig {
+            secret_key: None,
+            relay_urls: Vec::new(),
+            offline: true,
+            bind_timeout_ms: 0,
+        })
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("half.part");
+        std::fs::write(&dest, b"partial").unwrap();
+        let cancel = FetchCancel::new();
+        cancel.cancel();
+        let err = client
+            .fetch_blob(
+                "not-a-ticket".into(),
+                dir.path().to_string_lossy().into_owned(),
+                dest.to_string_lossy().into_owned(),
+                0,
+                None,
+                Some(cancel),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&err, FfiError::Transport { msg } if msg == "cancelled"),
+            "{err:?}"
+        );
+        assert!(!dest.exists(), "partial file must be removed");
     }
 }

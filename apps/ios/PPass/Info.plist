@@ -20,15 +20,58 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<!-- 只用系统标准加密（TLS / QUIC 传输加密；BLAKE3 只做哈希、不属加密），无自研或非标准加密：
+	     属出口合规豁免，声明 NO 后 TestFlight / App Store Connect 不再对每个构建追问加密问卷。 -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.hawkeyexb.ppass.backup</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
+	<!-- #941：冷启动画面 = paper 底色 + 居中图标（对齐 Android 的 paper 底 + 启动图标）。
+	     LaunchBackground 是 tokens.json 的 paper，由 tools/ios/gen-tokens.py 生成；不要手写色值。 -->
 	<key>UILaunchScreen</key>
-	<dict/>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+		<key>UIImageName</key>
+		<string>LaunchLogo</string>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>zh-Hans</string>
+	</array>
+	<key>UIAppFonts</key>
+	<array>
+		<string>Manrope-Regular.ttf</string>
+		<string>Manrope-Medium.ttf</string>
+		<string>Manrope-Bold.ttf</string>
+		<string>Newsreader-Regular.ttf</string>
+		<string>Newsreader-Medium.ttf</string>
+		<string>Newsreader-SemiBold.ttf</string>
+	</array>
+	<key>UIUserInterfaceStyle</key>
+	<string>Light</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Scan the pairing QR code shown on your home computer.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connect to your home computer on the local network to back up your photos.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Back up your photos to your own computer at home.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save a photo from your home library back to this phone.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

@@ -7,15 +7,15 @@
 #     - test tag（v<X.Y.Z>-test.N）→ 一律用 tag 名本身：`-test.` 是 test 通道的
 #       判据（channelFromVersion），且连续的 test tag 必须能互相升级。
 #
-# 用法：tools/release-version.sh android|desktop
+# 用法：tools/release-version.sh android|desktop|ios
 #   打印纯版本串（不带 v 前缀），供 release.yml 注入 PPF_BUILD_VERSION /
 #   分端 manifest 的顶层 version。
 set -euo pipefail
 
 PLATFORM="${1:-}"
 case "$PLATFORM" in
-  android|desktop) ;;
-  *) echo "usage: $0 <android|desktop>" >&2; exit 1 ;;
+  android|desktop|ios) ;;
+  *) echo "usage: $0 <android|desktop|ios>" >&2; exit 1 ;;
 esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,4 +30,6 @@ if [[ "$REF_NAME" == *-test.* ]]; then
   exit 0
 fi
 
-jq -r ".$PLATFORM" "$ROOT/release/versions.json"
+V=$(jq -r ".$PLATFORM // empty" "$ROOT/release/versions.json")
+[ -n "$V" ] || { echo "error: release/versions.json 里没有 ${PLATFORM} 的版本号" >&2; exit 1; }
+echo "$V"

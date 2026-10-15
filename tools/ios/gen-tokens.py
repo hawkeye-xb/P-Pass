@@ -28,6 +28,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "assets" / "design" / "tokens.json"
 OUT = ROOT / "apps" / "ios" / "PPass" / "Design" / "Tokens.generated.swift"
+# #941：启动屏背景色（Info.plist UILaunchScreen.UIColorName）。UILaunchScreen 只能引用 asset catalog 的 color set，
+# 所以把 token 同步生成成 color set，而不是手写。App 固定浅色外观（UIUserInterfaceStyle=Light），只有一个外观。
+LAUNCH_COLORSET = ROOT / "apps" / "ios" / "PPass" / "Resources" / "Assets.xcassets" / "LaunchBackground.colorset" / "Contents.json"
+LAUNCH_COLOR_TOKEN = "paper"
 
 HEX_RE = re.compile(r"^#([0-9A-Fa-f]{6})$")
 RGBA_RE = re.compile(r"^rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)$")
@@ -144,21 +148,44 @@ def render(tokens: dict) -> str:
     return "\n".join(L) + "\n"
 
 
+def render_colorset(tokens: dict) -> str:
+    value = tokens["color"][LAUNCH_COLOR_TOKEN]["value"]
+    m = HEX_RE.match(value)
+    if not m:
+        sys.exit(f"gen-tokens: color.{LAUNCH_COLOR_TOKEN} 必须是 #RRGGBB：{value!r}")
+    h = m.group(1)
+    comp = {k: f"0x{h[i : i + 2].upper()}" for k, i in (("red", 0), ("green", 2), ("blue", 4))}
+    doc = {
+        "colors": [
+            {
+                "color": {"color-space": "srgb", "components": {**comp, "alpha": "1.000"}},
+                "idiom": "universal",
+            }
+        ],
+        "info": {"author": "xcode", "version": 1},
+    }
+    return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+
+
 def main() -> int:
     check = "--check" in sys.argv[1:]
-    text = render(json.loads(SRC.read_text(encoding="utf-8")))
-    rel = OUT.relative_to(ROOT)
-    if check:
-        cur = OUT.read_text(encoding="utf-8") if OUT.exists() else None
-        if cur != text:
-            print(f"✗ {rel} 与 assets/design/tokens.json 不同步——跑 `just ios-tokens` 重新生成并提交。", file=sys.stderr)
-            return 1
-        print(f"ok: {rel} 与 tokens.json 同步")
-        return 0
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(text, encoding="utf-8")
-    print(f"wrote {rel}")
-    return 0
+    tokens = json.loads(SRC.read_text(encoding="utf-8"))
+    outputs = [(OUT, render(tokens)), (LAUNCH_COLORSET, render_colorset(tokens))]
+    bad = 0
+    for path, text in outputs:
+        rel = path.relative_to(ROOT)
+        if check:
+            cur = path.read_text(encoding="utf-8") if path.exists() else None
+            if cur != text:
+                print(f"✗ {rel} 与 assets/design/tokens.json 不同步——跑 `just ios-tokens` 重新生成并提交。", file=sys.stderr)
+                bad = 1
+            else:
+                print(f"ok: {rel} 与 tokens.json 同步")
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            print(f"wrote {rel}")
+    return bad
 
 
 if __name__ == "__main__":

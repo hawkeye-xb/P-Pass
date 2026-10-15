@@ -4,11 +4,23 @@
 #   tools/ios/test-transport-ffi.sh          # 本机与 CI（ci-ios.yml）同一条命令
 #
 # 1. tools/build-ios-transport-xcframework.sh → apps/ios/TransportFFITests/Generated/
-# 2. 起一个隔离的本机 daemon 给控制面测试连：fake HOME + 临时 PPF_DATA_DIR + 127.0.0.1:0
-#    （OS 分配端口，绝不用 41145）+ 无 relay + --ephemeral（本脚本退出 ⇒ stdin 关 ⇒ daemon 退出）。
-#    端口用 lsof 从 daemon 进程上读，PeerAddr token = base64url(JSON{id, addrs:[{Ip}]})。
+# 2. 起一个隔离的本机 daemon 给控制面测试连：fake HOME + 临时 PPF_DATA_DIR + 0.0.0.0:0
+#    （OS 分配端口，绝不用 41145）+ --ephemeral（本脚本退出 ⇒ stdin 关 ⇒ daemon 退出）。
+#    PPF_RELAY_URLS="" 等于不覆盖，daemon 仍用默认 n0 relay（日志里有 home relay）。
+#    IPv4 端口用 lsof 从 daemon 进程上读，PeerAddr token = base64url(JSON{id, addrs:[{Ip 127.0.0.1:端口}]})。
+#
+#    为什么绑 0.0.0.0 而不是 127.0.0.1（#942 / #934）：iroh 的 bind_addr 把这个 v4 socket 当成
+#    所有 IPv4 目的地的默认路由。模拟器里的 provider 和 daemon 在同一台宿主上，ticket 只给出宿主
+#    局域网地址（如 10.1.151.23）；daemon 从 127.0.0.1 socket 发过去，provider 看到连接来自
+#    127.0.0.1，握手在 provider 端始终完不成，daemon 端 15 s 后 path idle、30 s 后 connection lost
+#    （fetch_failed）。产品 daemon 不显式绑地址（默认 0.0.0.0 + [::]），不走这条路。
+#    绑 0.0.0.0 也没有放大暴露面：以前 iroh 照样另绑 [::]:0 监听所有接口；隔离靠的是 fake HOME、
+#    临时库、临时身份与随机端口。
 # 3. xcodebuild test，token 经 TEST_RUNNER_ 前缀传进测试进程；PPASS_REQUIRE_DAEMON=1 让
 #    「没连上 daemon 就跳过」变成失败。
+#
+# PPASS_FFI_LOG_DIR=<目录>：退出前把 daemon.out / daemon.err 拷过去（临时目录随后删除），
+# 配合 RUST_LOG=info,iroh=debug,noq_proto=debug 取证。
 #
 # 模拟器选择、"Unable to find a destination" 的处理同 tools/ios/test.sh。
 set -euo pipefail
@@ -32,8 +44,18 @@ cargo build -q -p daemon ${RELEASE_FLAG:+"$RELEASE_FLAG"}
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-ios-ffi.XXXXXX")
 DAEMON_PID=
+OWNER_PID=
+SUSPENDER_PID=
 cleanup() {
+  for bg in "$OWNER_PID" "$SUSPENDER_PID"; do
+    if [ -n "$bg" ]; then kill "$bg" 2>/dev/null || true; fi
+  done
+  # 脚本中途失败时绝不把测试进程留在 SIGSTOP 里。
+  if [ -s "${E2E:-/nonexistent}/suspend-request" ]; then
+    kill -CONT "$(cat "$E2E/suspend-request")" 2>/dev/null || true
+  fi
   exec 4>&- 2>/dev/null || true
+  if [ -n "${PPASS_FFI_LOG_DIR:-}" ]; then cp "$WORK"/daemon.* "$PPASS_FFI_LOG_DIR"/ 2>/dev/null || true; fi
   if [ -n "$DAEMON_PID" ]; then
     kill "$DAEMON_PID" 2>/dev/null || true
     wait "$DAEMON_PID" 2>/dev/null || true
@@ -49,7 +71,7 @@ mkdir -p "$WORK/home" "$WORK/data"
 mkfifo "$WORK/stdin"
 HOME="$WORK/home" \
   PPF_DATA_DIR="$WORK/data" \
-  PPF_BIND_ADDR="127.0.0.1:0" \
+  PPF_BIND_ADDR="0.0.0.0:0" \
   PPF_RELAY_URLS="" \
   "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
 DAEMON_PID=$!
@@ -68,20 +90,74 @@ if [ -z "$NODE_ID" ]; then
   exit 1
 fi
 
-PORT=
+# daemon 只该有一个 IPv4 UDP socket（*:端口）。多于一个就说明假设不成立，宁可失败也不猜。
+PORTS=
 for _ in $(seq 1 50); do
-  PORT=$(lsof -nP -a -p "$DAEMON_PID" -iUDP@127.0.0.1 -Fn 2>/dev/null | sed -n 's/^n127\.0\.0\.1:\([0-9]*\)$/\1/p' | head -1)
-  [ -n "$PORT" ] && break
+  PORTS=$(lsof -nP -a -p "$DAEMON_PID" -i4UDP -Fn 2>/dev/null | sed -n 's/^n\*:\([0-9][0-9]*\)$/\1/p' | sort -u)
+  [ -n "$PORTS" ] && break
   sleep 0.2
 done
-if [ -z "$PORT" ] || [ "$PORT" = 41145 ]; then
-  echo "error: 没拿到 daemon 的 127.0.0.1 UDP 端口（得到「${PORT}」）" >&2
+PORT="$PORTS"
+if [ -z "$PORT" ] || [ "$(printf '%s\n' "$PORTS" | wc -l | tr -d ' ')" != 1 ] || [ "$PORT" = 41145 ]; then
+  echo "error: 没拿到 daemon 唯一的 IPv4 UDP 端口（得到「$(printf '%s' "$PORTS" | tr '\n' ' ')」）" >&2
   lsof -nP -a -p "$DAEMON_PID" -i >&2 || true
   exit 1
 fi
-TOKEN=$(jq -cn --arg id "$NODE_ID" --arg ip "127.0.0.1:$PORT" '{id: $id, addrs: [{Ip: $ip}]}' \
+PEER_TOKEN=$(jq -cn --arg id "$NODE_ID" --arg ip "127.0.0.1:$PORT" '{id: $id, addrs: [{Ip: $ip}]}' \
   | base64 | tr -d '\n=' | tr '+/' '-_')
 echo "daemon pid=${DAEMON_PID} node=${NODE_ID:0:8}… udp=127.0.0.1:${PORT}"
+
+
+# ── G2 模拟器版（IOS-07 #334）：配对串 + 自动「业主同意」+ 挂起助手 ──────────
+# 配对串经 IPC pairing.start 现取（SEC-11：不落盘），给测试进程解析与配对。
+# shellcheck source=tools/ipc-lib.sh
+source "$ROOT/tools/ipc-lib.sh"
+ipc_pair_qr "$WORK/data/ipc.token"
+E2E="$WORK/e2e"
+mkdir -p "$E2E"
+# 挂起时长默认 5s（远大于测试里 1s 的 GC 周期）。实测冻 12s 时 xcodebuild 把测试进程当成卡死，
+# 重启模拟器并以 SIGKILL 结束它（xcresult 记为 Test crashed with signal kill）——那是测试框架的
+# 看门狗，不是被测代码；更长的挂起只能在真机上验（IOS-07 验收 2，E3）。
+SUSPEND_SECS="${PPASS_SUSPEND_SECS:-5}"
+
+# 业主：把队列里每一条待确认请求点「允许」（这台 daemon 只给本次测试用）。
+owner_loop() {
+  local resp ids n body
+  while kill -0 "$DAEMON_PID" 2>/dev/null; do
+    if resp=$(ipc pairing.pending 2>/dev/null); then
+      ids=$(printf '%s' "$resp" | jq -r '.result.pending[]?.node_id // empty')
+      for n in $ids; do
+        body=$(jq -cn --arg n "$n" '{accept: true, node_id: $n}')
+        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已允许 $n"; fi
+      done
+    fi
+    sleep 0.3
+  done
+}
+
+# 挂起助手：测试进程写下自己的 pid 请求挂起 ⇒ SIGSTOP 冻住整个进程（计时器、socket 都停，
+# 是 iOS 挂起的进程级模型）⇒ SUSPEND_SECS 秒后 SIGCONT ⇒ 写 resumed。
+suspend_loop() {
+  local pid state
+  while kill -0 "$DAEMON_PID" 2>/dev/null; do
+    if [ -s "$E2E/suspend-request" ]; then
+      pid=$(cat "$E2E/suspend-request")
+      kill -STOP "$pid"
+      state=$(ps -o stat= -p "$pid" | tr -d ' ')
+      echo "suspend: pid ${pid} 已 SIGSTOP（ps stat=${state}），${SUSPEND_SECS}s 后恢复"
+      sleep "$SUSPEND_SECS"
+      kill -CONT "$pid"
+      echo "suspend: pid ${pid} 已 SIGCONT"
+      printf '%s\n' "$SUSPEND_SECS" > "$E2E/resumed"
+      return
+    fi
+    sleep 0.1
+  done
+}
+owner_loop &
+OWNER_PID=$!
+suspend_loop &
+SUSPENDER_PID=$!
 
 UDID=$("$ROOT/tools/ios/sim.sh" udid)
 STATE=$(xcrun simctl list devices -j | jq -r --arg u "$UDID" '.devices[][] | select(.udid == $u) | .state')
@@ -89,8 +165,12 @@ STATE=$(xcrun simctl list devices -j | jq -r --arg u "$UDID" '.devices[][] | sel
 echo "模拟器：${UDID}（运行前状态 ${STATE}）"
 
 cd "$PKG"
-if ! TEST_RUNNER_PPASS_DAEMON_TOKEN="$TOKEN" \
+if ! TEST_RUNNER_PPASS_DAEMON_TOKEN="$PEER_TOKEN" \
   TEST_RUNNER_PPASS_REQUIRE_DAEMON=1 \
+  TEST_RUNNER_PPASS_PAIR_LINK="$PAIR_QR" \
+  TEST_RUNNER_PPASS_E2E_DIR="$E2E" \
+  TEST_RUNNER_PPASS_DAEMON_LIBRARY="$WORK/data" \
+  TEST_RUNNER_PPASS_SUSPEND_SECS="$SUSPEND_SECS" \
   xcodebuild test \
     -scheme TransportFFITests \
     -destination "id=${UDID}" \

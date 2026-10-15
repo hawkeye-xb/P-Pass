@@ -302,5 +302,12 @@
   "ui.wizard_notice_only_label": "Just a notification",
   "ui.wizard_autostart_notice_mac": "Start at login — macOS shows a one-time \"Background Items Added\" notification; nothing to do",
   "ui.wizard_allow_label": "Click \"Allow\"",
-  "ui.wizard_local_network_mac": "Local network — macOS will ask whether “ppf-daemon” (P-Pass's background service) may find local network devices. Click \"Allow\"."
+  "ui.wizard_local_network_mac": "Local network — macOS will ask whether “ppf-daemon” (P-Pass's background service) may find local network devices. Click \"Allow\".",
+  "ui.ios_backup_while_open_title": "Backs up while P-Pass is open",
+  "ui.ios_backup_while_open_body": "On iPhone, photos go to your computer while P-Pass is open. iOS may also run it in the background, but the system decides when, and it isn't guaranteed.",
+  "ui.ios_background_refresh_off": "Background App Refresh is off, so iOS won't run P-Pass in the background; it backs up only while open. You can turn it on in Settings › General › Background App Refresh.",
+  "ui.ios_background_refresh_restricted": "This iPhone doesn't allow Background App Refresh for P-Pass (Screen Time or device management may be limiting it), so it backs up only while open.",
+  "ui.ios_wait_open_app": "P-Pass is in the background. Backup continues when you return to it.",
+  "ui.ios_wait_icloud_original": "This photo's original is in iCloud. It will be fetched and backed up once you're online.",
+  "ui.ios_wait_phone_storage_full": "Your phone is out of storage. Backup continues once space is freed."
 }

@@ -241,6 +241,35 @@ final class OrderStoreTests: XCTestCase {
         XCTAssertNil(try store.openRoundId())
     }
 
+    /// #935：配对（App 侧的唯一入口）必须走「换桌面」清理——否则新电脑继承旧电脑的「已确认」，首页显示 4/4 已备份而新电脑一张都没有。
+    func testPairingANewDesktopDoesNotInheritTheOldDesktopsConfirmedCount() throws {
+        let store = try newStore()
+        try adoptDesktop(store, daemonNodeId: "node-a", nowMs: 1_000)
+        _ = try store.insert(newOrder("m1", .confirmed))
+        _ = try store.insert(newOrder("m2", .confirmed))
+        XCTAssertEqual(try store.countConfirmedPresent(bucketIds: nil), 2)
+        _ = try store.cancelRemaining([SkipTarget(mediaId: "m9", sourceVersion: "v1", bucketId: "B7")], audit: nil)
+
+        XCTAssertTrue(try adoptDesktop(store, daemonNodeId: "node-b", nowMs: 1_800_000_000_000))
+        XCTAssertEqual(try store.countConfirmedPresent(bucketIds: nil), 0, "换电脑后要重新备份")
+        XCTAssertTrue(try store.isSkipped("m9"), "跳过名单是用户意图，保留")
+        XCTAssertGreaterThan(try store.insert(newOrder("m1", .pending)).id, 1_800_000_000_000)
+    }
+
+    /// #935 守护：重新配对同一台电脑（断开 / 地址变了再扫码）不清账本，已备份的不重传。
+    func testRepairingTheSameDesktopKeepsConfirmedOrders() throws {
+        let store = try newStore()
+        try adoptDesktop(store, daemonNodeId: "node-a", nowMs: 1_000)
+        _ = try store.insert(newOrder("m1", .confirmed))
+        XCTAssertFalse(try adoptDesktop(store, daemonNodeId: "node-a", nowMs: 5_000))
+        XCTAssertEqual(try store.countConfirmedPresent(bucketIds: nil), 1)
+        // 断开再连回 A、重启 App 后也一样
+        store.close()
+        let reopened = try newStore()
+        XCTAssertFalse(try adoptDesktop(reopened, daemonNodeId: "node-a", nowMs: 9_000))
+        XCTAssertEqual(try reopened.countConfirmedPresent(bucketIds: nil), 1)
+    }
+
     // MARK: iOS 能真跑的额外几条
 
     /// 写入 → 关库（= 杀进程）→ 重开 → 读回：order、跳过名单、游标、未闭合轮、outbox 全在。

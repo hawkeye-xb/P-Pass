@@ -1,0 +1,11 @@
+[package]
+name = "ppass-b3sum"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# 独立小工具（不属于主 workspace）：端到端脚本用它独立核对文件的 BLAKE3，macOS 没自带 b3sum。
+[workspace]
+
+[dependencies]
+blake3 = "1"

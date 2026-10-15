@@ -1,0 +1,79 @@
+import XCTest
+@testable import PPassCore
+
+final class RollingFileLogTests: XCTestCase {
+    func testWritesTimestampedLines() {
+        let dir = TempDir()
+        let log = RollingFileLog(url: dir.file("Logs/ppass.log"))
+        log.write("hello")
+        log.write("multi\nline")
+        log.flush()
+        let lines = (dir.read("Logs/ppass.log") ?? "").split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertTrue(lines[0].hasSuffix(" hello"))
+        XCTAssertTrue(lines[0].range(of: #"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}"#, options: .regularExpression) != nil, lines[0])
+        XCTAssertTrue(lines[1].hasSuffix(" multi line"))
+    }
+
+    func testRollsAndKeepsOnlyTwoFilesWithinCap() {
+        let dir = TempDir()
+        let cap = 1_000
+        let log = RollingFileLog(url: dir.file("ppass.log"), maxBytes: cap)
+        for i in 0..<200 { log.write("line \(i) " + String(repeating: "x", count: 40)) }
+        log.flush()
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: dir.url.path)) ?? []).sorted()
+        XCTAssertEqual(names, ["ppass.log", "ppass.log.1"])
+        for n in names {
+            let size = (try? FileManager.default.attributesOfItem(atPath: dir.file(n).path)[.size] as? Int) ?? 0
+            XCTAssertLessThanOrEqual(size ?? 0, cap, n)
+        }
+        // 最新一行一定在，最老的已被滚掉。
+        let all = (dir.read("ppass.log.1") ?? "") + (dir.read("ppass.log") ?? "")
+        XCTAssertTrue(all.contains("line 199 "))
+        XCTAssertFalse(all.contains("line 0 "))
+    }
+
+    func testResumesSizeFromExistingFile() {
+        let dir = TempDir()
+        let url = dir.file("ppass.log")
+        let a = RollingFileLog(url: url, maxBytes: 500)
+        a.write(String(repeating: "a", count: 300)); a.flush()
+        let b = RollingFileLog(url: url, maxBytes: 500) // 进程重启后接着写
+        b.write(String(repeating: "b", count: 300)); b.flush()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dir.file("ppass.log.1").path))
+    }
+
+    func testWriteFailureDoesNotThrowOrCrashAndRecovers() throws {
+        let dir = TempDir()
+        // 目录位置被一个普通文件占住：创建目录必失败。
+        dir.write("Logs", "blocker")
+        let log = RollingFileLog(url: dir.file("Logs/ppass.log"))
+        log.write("lost")
+        log.flush() // 没崩、没抛
+        try FileManager.default.removeItem(at: dir.file("Logs"))
+        log.write("after")
+        log.flush()
+        XCTAssertTrue((dir.read("Logs/ppass.log") ?? "").hasSuffix(" after\n"))
+    }
+
+    func testConcurrentWritersKeepWholeLines() {
+        let dir = TempDir()
+        let log = RollingFileLog(url: dir.file("ppass.log"))
+        DispatchQueue.concurrentPerform(iterations: 200) { log.write("n=\($0)") }
+        log.flush()
+        let lines = (dir.read("ppass.log") ?? "").split(separator: "\n")
+        XCTAssertEqual(lines.count, 200)
+    }
+
+    func testRedaction() {
+        XCTAssertEqual(LogRedact.id("A1B2-C3").count, 8)
+        XCTAssertEqual(LogRedact.id("A1B2-C3"), LogRedact.id("A1B2-C3"))
+        XCTAssertNotEqual(LogRedact.id("A1B2-C3"), LogRedact.id("A1B2-C4"))
+        let ticket = "blobaaaaaaaabcdefghijklmnopqrstuvwxyz234567abcdefghij"
+        let s = LogRedact.scrub("import failed: /tmp/IMG_0042.HEIC (Foo) ticket=\(ticket)")
+        XCTAssertFalse(s.contains("IMG_0042"))
+        XCTAssertFalse(s.contains(ticket))
+        XCTAssertTrue(s.contains("<file>"))
+        XCTAssertEqual(LogRedact.scrub("cycle [launch] round 12 open"), "cycle [launch] round 12 open")
+    }
+}

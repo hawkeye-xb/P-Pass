@@ -10,9 +10,12 @@ let package = Package(
     platforms: [.iOS(.v16), .macOS(.v13)],
     products: [
         .library(name: "PPassCore", targets: ["PPassCore"]),
+        // #340：BGTaskScheduler 的薄层（只在 iOS 上有内容；macOS host 上编成空模块，便于 `swift test`）。
+        .library(name: "PPassBackgroundTasks", targets: ["PPassBackgroundTasks"]),
     ],
     targets: [
         .target(name: "PPassCore"),
+        .target(name: "PPassBackgroundTasks", dependencies: ["PPassCore"]),
         .testTarget(name: "PPassCoreTests", dependencies: ["PPassCore"]),
     ]
 )

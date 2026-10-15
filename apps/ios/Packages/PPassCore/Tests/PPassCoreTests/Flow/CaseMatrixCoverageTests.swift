@@ -101,7 +101,7 @@ enum MatrixRegistry {
         "X-09": .same(["FlowEngineTests/testWhilePausedOnlyIntentChangesAndResumingPicksUpRestoredPhotosAndANewAlbum", "FlowEngineTests/testRestoreKeepsWorkingWhenTheMediaSourceRepeatsARow"]),
         "X-10": .variant(["FlowEngineTests/testCancelWorksOnlyWhilePausedOrWaitingAndLeavesTheEngineIdle"]),
         // P：换 Desktop
-        "P-01": .variant(["CaseMatrixTests/testP01_changingDesktopsDropsOldProgressButKeepsIntent", "OrderStoreTests/testChangingDesktopsClearsFactsKeepsSkipListAndLiftsIdFloor", "DisconnectManifestTests/testDisconnectAppliesEveryRow"]),
+        "P-01": .variant(["CaseMatrixTests/testP01_changingDesktopsDropsOldProgressButKeepsIntent", "OrderStoreTests/testChangingDesktopsClearsFactsKeepsSkipListAndLiftsIdFloor", "OrderStoreTests/testPairingANewDesktopDoesNotInheritTheOldDesktopsConfirmedCount", "OrderStoreTests/testRepairingTheSameDesktopKeepsConfirmedOrders", "DisconnectManifestTests/testDisconnectAppliesEveryRow"]),
         "P-02": .same(["CaseMatrixTests/testP02_aReceiptFromTheOldPairingNeverConfirms"]),
         // I：仅 iOS（#311 D4 / F3）
         "I-01": .same(["FlowEngineIOSTests/testANewPhotoWhoseICloudOriginalCannotBeFetchedWaitsWithoutCountingAFailure"]),
@@ -112,6 +112,7 @@ enum MatrixRegistry {
         "I-06": .same(["FlowEngineIOSTests/testAnExpiredDiscoveryCursorRescansAndConvergesWithoutDuplicates"]),
         "I-07": .same(["FlowEngineIOSTests/testAnExpiredCursorWhileCountingGivesAnExactCountWithoutTouchingG"]),
         "I-09": .same(["FlowEngineIOSTests/testPhoneStorageFullWaitsWithoutCountingAnyFailure", "FlowEngineIOSTests/testPhoneStorageFullLeavesALegacyOrderAsItIs"]),
+        "I-10": .same(["FlowEngineIOSTests/testAMisplacedCursorIsCaughtByTheNextReconcileRound", "FlowEngineIOSTests/testAnImpreciseCursorWithNothingMissingCostsNoLease"]),
         "I-08": .same(["FlowEngineIOSTests/testMediaIdsAreComparedByBytesNotByUnicodeEquivalence", "OrderStoreTests/testSQLiteOrderMatchesMediaOrder"]),
     ]
 }
@@ -174,7 +175,7 @@ final class CaseMatrixCoverageTests: XCTestCase {
 
     func testEveryMatrixRowIsCoveredOrRegistered() throws {
         let zh = MatrixDocs.matrixRows(try MatrixDocs.read("04-case-matrix.zh-CN.md"))
-        XCTAssertEqual(zh.count, 72, "63 行 ARCH-01 + 9 行仅 iOS")
+        XCTAssertEqual(zh.count, 73, "63 行 ARCH-01 + 10 行仅 iOS")
         XCTAssertEqual(Set(zh.keys), Set(MatrixRegistry.entries.keys), "矩阵与注册表的 ID 集合必须全等（新增行没登记 / 注册表有矩阵没有的 ID）")
         for (id, retired) in zh {
             guard let coverage = MatrixRegistry.entries[id] else { continue }

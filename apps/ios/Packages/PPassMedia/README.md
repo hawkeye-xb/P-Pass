@@ -126,13 +126,13 @@ erase 之后所有 localIdentifier 都变了，所以这个结果只能靠内容
 
 ## 取原始字节（IOS-11）
 
-按 #311 D4（对齐 Immich）：备份轮里需要某张照片时，用 `PHAssetResourceManager.requestData` 读原图，并设
+按 #311 D4：备份轮里需要某张照片时，用 `PHAssetResourceManager.requestData` 读资源字节，并设
 `isNetworkAccessAllowed = true`。原图不在本机（iCloud「优化存储」）时由系统从 iCloud 拉取。字节边到边写进临时目录，
 用完就删。只在备份轮内调用，备份轮本身受 Wi-Fi 和电量约束，这里不另外判断蜂窝网络。
 
-- **取哪一份**：图片取 `.photo`，视频取 `.video`，都是未经编辑的原始文件。编辑后的渲染结果不取，实况照片的配对视频不取（MOB-79），
-  RAW+JPEG 取 JPEG。与 Android 的差异：Android 上编辑往往直接改写文件或另存一份，读到的是编辑后的字节；iOS 的编辑不改原图，
-  我们备份的是**未编辑的原图**，与 Immich 默认做法一致。要不要另外备份编辑后的版本，是产品决定，本包没有做。
+- **取哪一份**：备份相册里看到的那一张。编辑过的资产（有 `.fullSizePhoto` / `.fullSizeVideo` 渲染结果）取编辑后的版本，
+  没编辑过取 `.photo` / `.video`；字节原样，不重新编码。编辑参数（`.adjustmentData`）不取，实况照片只取静态图、配对视频不取（MOB-79），
+  RAW+JPEG 取 JPEG。这与 Android 实际行为（读到的是编辑后的字节）以及 Immich iOS 一致。选择规则是纯函数 `selectOriginalResource`。
 - **哈希**：本包不实现 BLAKE3。`fetchAndHash` 接收一个注入的 `hashFile: (URL) -> String`，生产上用 PPassCore
   `ContentHasher.blake3Hex(ofFileAt:)`（来自 XCFramework，对文件流式计算）。
 - **失败分类**（`OriginalFetchFailure`，对接 PPassCore `ImportResult`）：

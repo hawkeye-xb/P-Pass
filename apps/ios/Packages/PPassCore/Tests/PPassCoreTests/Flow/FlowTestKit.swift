@@ -56,6 +56,9 @@ struct FakePosition: Codable, Equatable {
 final class FakeMedia: MediaSource, @unchecked Sendable {
     private let state = Locked<(photos: [FakePhoto], scope: Set<String>?, epoch: Int, identity: String?, duplicate: Set<String>, existingUnreadable: Bool)>(([], ["B7"], 1, "lib-1", [], false))
     let metadataReads = Locked(0)
+    /// 默认 true：大部分测试关心的是 G 本身的语义；#904 的测试显式置 false。
+    let precise = Locked(true)
+    var preciseDiscovery: Bool { precise.get() }
     let existingIdsCalls = Locked(0)
 
     var photos: [FakePhoto] { state.get().photos }
@@ -371,9 +374,13 @@ final class Rig: @unchecked Sendable {
 
     /// 非 nil 时引擎用它（真实的 FlowDeliveryPort）而不是 [delivery] 这个假端口。
     let portOverride: ItemDelivery?
+    let leaseOverride: ExecutionLease?
+    let schedulerOverride: WakeScheduler?
 
-    init(_ name: String = #function, cursors: Bool = true, openRound: String? = nil, control: FlowControl? = nil, directory: TempDir? = nil, port: ItemDelivery? = nil) throws {
+    init(_ name: String = #function, cursors: Bool = true, openRound: String? = nil, control: FlowControl? = nil, directory: TempDir? = nil, port: ItemDelivery? = nil, lease: ExecutionLease? = nil, scheduler: WakeScheduler? = nil) throws {
         portOverride = port
+        leaseOverride = lease
+        schedulerOverride = scheduler
         dir = directory ?? TempDir(name)
         store = try SQLiteOrderStore(directory: dir.url, logger: logger, clock: clock.function)
         importer = FakeImporter(media: media)
@@ -395,7 +402,7 @@ final class Rig: @unchecked Sendable {
     func makeEngine() -> FlowEngine {
         FlowEngine(
             store: store, media: media, importer: importer, delivery: portOverride ?? delivery, probe: probe, presence: presence,
-            lease: lease, scheduler: scheduler, control: control,
+            lease: leaseOverride ?? lease, scheduler: schedulerOverride ?? scheduler, control: control,
             conditions: { [conditions, conditionsHook] in (try? conditionsHook.get()?()) ?? conditions.get() },
             inScope: { [media] in media.isInScope($0) },
             mediaAbsenceTrusted: { [fullMediaAccess] in fullMediaAccess.get() },

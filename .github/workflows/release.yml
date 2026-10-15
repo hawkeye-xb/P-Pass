@@ -48,7 +48,7 @@ on:
       # 现在只管**正式版的 publish 时机**：draft 等人工点发布，那一刻资产
       # 必然已经齐了。构建仍恒全量，分块的是上传，不是发布。
       platforms:
-        description: "构建平台（逗号组合：android / macos / windows；留空 = all）"
+        description: "构建平台（逗号组合：android / macos / windows / ios；留空 = all）"
         required: false
         default: "all"
 
@@ -87,8 +87,10 @@ jobs:
       macos: ${{ steps.plan.outputs.macos }}
       windows: ${{ steps.plan.outputs.windows }}
       reuse_from: ${{ steps.plan.outputs.reuse_from }}
+      ios: ${{ steps.plan.outputs.ios }}
       android_version: ${{ steps.plan.outputs.android_version }}
       macos_version: ${{ steps.plan.outputs.macos_version }}
+      ios_version: ${{ steps.plan.outputs.ios_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -824,6 +826,60 @@ jobs:
   # publish 的 release 同样合法。
   # ══════════════════════════════════════════════════════════════════
 
+  # ── iOS（#348）：归档 → 云托管签名 → 上传 TestFlight ──────────────────
+  # 与 Android / macOS 同一套「谁改了才构建谁」：判定在 plan-builds（ios = build | skip）。
+  # TestFlight 没有可复用的安装包、也不接受重复的构建号，所以 iOS 只有 build / skip，没有 reuse。
+  # 产物不进 GitHub Release（TestFlight 内测包由 App Store Connect 分发，不是下载文件），
+  # 所以也不挂 create-draft / upload-* 链；成败只体现在 finalize-notes 的一行与 finalize-ios 的 test-channel 基线上。
+  # 凭据：ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8（App Store Connect API 密钥，App Manager 角色；
+  # 云托管签名，不导出 p12）。任一缺失 ⇒ 干净跳过，notes 标注「iOS 未上传 TestFlight（无凭据）」。
+  # secret 值不进 job env（T-071b 模式）：只放布尔，值只在上传步骤的 env 里。
+  # 手动单独验证 iOS 上传见 ci-ios.yml 的 testflight job（共用 .github/actions/ios-testflight）。
+  ios:
+    name: "iOS (TestFlight)"
+    needs: [plan-builds]
+    if: (github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'ios') || (inputs.platforms == '' || inputs.platforms == 'all')) && needs.plan-builds.outputs.ios == 'build'
+    runs-on: macos-26
+    # 冷缓存要编两个 iOS 切片（release）+ 归档 + 上传 + 等 ASC 出现，同 ci-ios 放宽到 70。
+    timeout-minutes: 70
+    permissions:
+      contents: read
+    env:
+      HAS_ASC: ${{ secrets.ASC_KEY_ID != '' && secrets.ASC_ISSUER_ID != '' && secrets.ASC_KEY_P8 != '' }}
+    outputs:
+      uploaded: ${{ steps.flag.outputs.uploaded }}
+      version: ${{ steps.ver.outputs.name }}
+      build: ${{ steps.up.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # 正式 tag 用 iOS 线自己的版本号（release/versions.json.ios），test tag 用 tag 名。
+      - name: Resolve iOS version
+        id: ver
+        run: echo "name=$(tools/release-version.sh ios)" >> "$GITHUB_OUTPUT"
+
+      - name: Archive + upload to TestFlight (gated on ASC credentials)
+        id: up
+        if: env.HAS_ASC == 'true'
+        uses: ./.github/actions/ios-testflight
+        with:
+          version: ${{ steps.ver.outputs.name }}
+          key-id: ${{ secrets.ASC_KEY_ID }}
+          issuer-id: ${{ secrets.ASC_ISSUER_ID }}
+          key-p8: ${{ secrets.ASC_KEY_P8 }}
+
+      - name: Record outcome
+        id: flag
+        run: |
+          if [ "$HAS_ASC" = "true" ]; then
+            echo "uploaded=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "uploaded=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8 未全部设置——iOS 未上传 TestFlight（无凭据路径）"
+          fi
+
   create-draft:
     name: "建 Release 草稿（骨架）"
     # 不 needs 任何构建 job（见上 ①）——秒级跑完，三条 lane 之后只管上传。
@@ -1290,10 +1346,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: tools/release/point-test-channel.sh artifacts/manifest-windows.json artifacts/windows-x64-installer/P-Pass_*-setup.exe
 
+  # iOS 的 test-channel 基线（#348）：TestFlight 上传成功后，往 test-channel 写 manifest-ios.json
+  # （只有 version、没有安装包）——plan-builds 下一次 test tag 据此判 iOS「自上一次发布以来变没变」。
+  # 与其它端的清单同一条机制（point-test-channel.sh：不回拨、清理旧版本）。正式 tag 不写：
+  # 正式 tag 的 iOS 基线是 Latest 那个 tag 里的 release/versions.json.ios（见 plan-builds.sh）。
+  finalize-ios:
+    name: "记录 iOS test 基线（#348）"
+    needs: [ios]
+    if: ${{ !cancelled() && needs.ios.result == 'success' && needs.ios.outputs.uploaded == 'yes' && contains(needs.ios.outputs.version, '-test.') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Point test-channel at the iOS manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IOS_VERSION: ${{ needs.ios.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          jq -n --arg v "$IOS_VERSION" '{version: $v, platforms: {}}' > artifacts/manifest-ios.json
+          tools/release/point-test-channel.sh artifacts/manifest-ios.json
+
   # ── 收口：补签名状态 + 资产 sha256（晚到不拖任何资产） ──
   finalize-notes:
     name: "补齐 Release 正文"
-    needs: [create-draft, plan-builds, macos-arm64, macos-reuse, windows-x64, android, android-reuse, upload-windows]
+    needs: [create-draft, plan-builds, macos-arm64, macos-reuse, windows-x64, android, android-reuse, upload-windows, ios]
     # DESK-05 同款容错：dispatch 单平台时其余 job skipped，`needs` 里有
     # skipped 且无 !cancelled() → 本 job 连带跳过，正文永远补不齐。
     if: ${{ !cancelled() && needs.create-draft.result == 'success' }}
@@ -1354,6 +1438,9 @@ jobs:
           **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed || needs.macos-reuse.outputs.signed || 'n/a' }}（${{ (needs.macos-arm64.outputs.signed || needs.macos-reuse.outputs.signed) == 'yes' && 'Developer ID 签名 + 公证 + staple' || '无凭据路径跳过' }})/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || needs.android-reuse.outputs.signed || 'n/a' }}（keystore 签名）
           ${{ needs.android-reuse.result == 'success' && format('**Android {0} 产物复用自 {1}**（版本号未变，字节与该版一致，#838）', needs.plan-builds.outputs.android_version, needs.plan-builds.outputs.reuse_from) || '' }}
           ${{ needs.macos-reuse.result == 'success' && format('**macOS {0} 产物复用自 {1}**（版本号未变，字节与该版一致，#838）', needs.plan-builds.outputs.macos_version, needs.plan-builds.outputs.reuse_from) || '' }}
+          ${{ needs.ios.result == 'success' && needs.ios.outputs.uploaded == 'yes' && format('**iOS {0}（build {1}）已上传 TestFlight**（App Store Connect 签名，在 TestFlight 里装；不是本页的下载文件）', needs.ios.outputs.version, needs.ios.outputs.build) || '' }}
+          ${{ needs.ios.result == 'success' && needs.ios.outputs.uploaded != 'yes' && format('**iOS {0} 未上传 TestFlight（未配置 App Store Connect 密钥）**', needs.ios.outputs.version) || '' }}
+          ${{ needs.ios.result == 'failure' && '**iOS 上传 TestFlight 失败，见 iOS (TestFlight) job**' || '' }}
           **更新 manifest**：${{ secrets.UPDATE_SIGNING_KEY != '' && 'UPDATE_SIGNING_KEY 在位 → manifest.json 已签名（tauri signer）' || 'UPDATE_SIGNING_KEY 未设置 → manifest.json 未签名（signature 空，客户端系统签名校验兜底——Android PackageInstaller 强制同签名）' }}
 
           ### 面向人类的资产（H-10c · UPD-15：文件名带该端版本号）

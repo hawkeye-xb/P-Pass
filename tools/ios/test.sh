@@ -15,6 +15,12 @@ DERIVED="$IOS/build/DerivedData"
 command -v xcodegen >/dev/null || { echo "error: 缺 xcodegen（brew install xcodegen）" >&2; exit 1; }
 command -v jq >/dev/null || { echo "error: 缺 jq（brew install jq）" >&2; exit 1; }
 
+# App 依赖传输 XCFramework（TransportFFITests/Generated，不入库）：缺就先生成（增量编译，已有则跳过）。
+# 要强制重编：删 apps/ios/TransportFFITests/Generated。
+if [ ! -d "$IOS/TransportFFITests/Generated/TransportFFI.xcframework" ] || [ ! -f "$IOS/TransportFFITests/Generated/swift/transport.swift" ]; then
+  "$ROOT/tools/build-ios-transport-xcframework.sh" "$IOS/TransportFFITests/Generated"
+fi
+
 (cd "$IOS" && xcodegen generate --quiet)
 
 UDID=$("$ROOT/tools/ios/sim.sh" udid)

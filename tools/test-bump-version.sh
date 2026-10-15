@@ -105,6 +105,7 @@ expected = {
     'apps/desktop/package.json',
     'apps/desktop/src-tauri/Cargo.toml',
     'apps/desktop/src-tauri/Cargo.lock',
+    'release/versions.json',
     'tools/bump-version.sh',
 }
 unexpected = changed - expected
@@ -130,3 +131,32 @@ for line in subprocess.check_output(
 PY
 
 printf '%s\n' "PASS: all version targets and p-pass-desktop lock entry synchronize"
+
+# 默认（both）不碰 iOS 线（#348）：versions.json.ios 与 Base.xcconfig 都保持原样。
+git -C "$POSITIVE_SANDBOX" diff --quiet -- apps/ios/Config/Base.xcconfig \
+  || { echo "FAIL: both 改了 apps/ios/Config/Base.xcconfig" >&2; exit 1; }
+[ "$(jq -r .ios "$POSITIVE_SANDBOX/release/versions.json")" = "$(git -C "$ROOT" show HEAD:release/versions.json | jq -r .ios)" ] \
+  || { echo "FAIL: both 改了 versions.json.ios" >&2; exit 1; }
+printf '%s\n' "PASS: --platform both leaves the iOS line untouched"
+
+# ── iOS 线（#348）：--platform ios 只动 versions.json.ios + Base.xcconfig 的回退值 ──
+IOS_SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/p-pass-bump-version-ios.XXXXXX")"
+git -C "$ROOT" worktree add --detach "$IOS_SANDBOX" HEAD >/dev/null
+cp "$ROOT/tools/bump-version.sh" "$IOS_SANDBOX/tools/bump-version.sh"
+trap 'for w in "$SANDBOX" "$POSITIVE_SANDBOX" "$IOS_SANDBOX"; do git -C "$ROOT" worktree remove --force "$w" >/dev/null 2>&1 || true; rm -rf "$w"; done' EXIT
+if ! output="$("$IOS_SANDBOX/tools/bump-version.sh" --platform ios 99.0.0-ios 2>&1)"; then
+  printf '%s\n' "expected --platform ios to succeed, got:" >&2; printf '%s\n' "$output" >&2; exit 1
+fi
+changed="$(git -C "$IOS_SANDBOX" diff --name-only | grep -v "^tools/bump-version.sh$" | sort | tr '\n' ' ')"
+[ "$changed" = "apps/ios/Config/Base.xcconfig release/versions.json " ] \
+  || { echo "FAIL: --platform ios 改动面不对：$changed" >&2; exit 1; }
+v="$(jq -c . "$IOS_SANDBOX/release/versions.json")"
+base="$(git -C "$ROOT" show HEAD:release/versions.json | jq -c '.ios = "99.0.0-ios"')"
+[ "$v" = "$base" ] || { echo "FAIL: versions.json 除 ios 外有变化：$v vs $base" >&2; exit 1; }
+grep -q '^PPASS_FALLBACK_VERSION = 99.0.0-ios$' "$IOS_SANDBOX/apps/ios/Config/Base.xcconfig" \
+  || { echo "FAIL: Base.xcconfig 回退版本没跟上" >&2; exit 1; }
+printf '%s\n' "PASS: --platform ios bumps only versions.json.ios + Base.xcconfig fallback"
+if "$IOS_SANDBOX/tools/bump-version.sh" --platform ios 0.0.1 >/dev/null 2>&1; then
+  echo "FAIL: --platform ios 接受了低于当前的版本" >&2; exit 1
+fi
+printf '%s\n' "PASS: --platform ios rejects a non-increasing version"

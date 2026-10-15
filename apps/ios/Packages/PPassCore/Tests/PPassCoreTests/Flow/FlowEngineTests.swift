@@ -196,6 +196,24 @@ final class FlowEngineTests: XCTestCase {
         XCTAssertEqual(end, .idle)
     }
 
+    // 断开（UX-06）：正在传的这一轮被取消、回到空闲，且不写暂停标志（暂停意图属于断开清单里的 keep）。
+    // 反证：stopForDisconnect 不取消当前循环 → 状态仍是 running，红；误写暂停标志 → pausedFlag 为真，红。
+    func testStopForDisconnectCancelsTheRunningRoundAndLeavesNoPauseFlag() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        await rig.start()
+        rig.delivery.hold.set(true)
+        await rig.engine.trigger(.mediaChange)
+        await eventually("delivery started") { rig.delivery.requests.get().count == 1 }
+
+        await rig.engine.stopForDisconnect()
+
+        let view = await rig.engine.view
+        XCTAssertEqual(view.state, .idle)
+        XCTAssertFalse(rig.fakeControl!.pausedFlag)
+        XCTAssertEqual(rig.delivery.cancelled.get().count, 1, "the in-flight order was cancelled")
+    }
+
     // cancelRemaining 只在 PAUSED / WAITING；取消后清除暂停标志 → IDLE。反证：不清暂停标志 → 仍是 PAUSED，红。
     func testCancelWorksOnlyWhilePausedOrWaitingAndLeavesTheEngineIdle() async throws {
         let rig = try Rig()
