@@ -69,7 +69,7 @@ final class LiveBackend: @unchecked Sendable {
         }
         let desktop = ControlPlaneDesktop(client: ProtoClient(transport: CurrentPeerTransport(plane: plane, store: pairingStore)))
         let delivery = FlowDeliveryPort(provider: FfiBlobProvider(provider: provider), currentEpoch: epoch, desktop: desktop,
-                                        push: UnsupportedPush(), logger: logger, pairingLoss: pairingLoss)
+                                        push: ControlPlanePush(transport: CurrentPeerTransport(plane: plane, store: pairingStore)), logger: logger, pairingLoss: pairingLoss)
         let media = self.media
         let scope: @Sendable () -> Set<String> = { media.savedScope() ?? [] }
         let settings = self.settings
@@ -218,6 +218,13 @@ struct CurrentPeerTransport: CtrlTransport {
     func call(method: String, paramsJSON: Data, timeoutMs: UInt64?) async throws -> Data {
         guard let r = store.load() else { throw NotPaired() }
         return try await plane.call(peerToken: r.peerToken, method: method, paramsJSON: paramsJSON, timeoutMs: timeoutMs)
+    }
+}
+
+extension CurrentPeerTransport: CtrlStreamTransport {
+    func stream(method: String, paramsJSON: Data, onFrame: @escaping @Sendable (Data) throws -> Void) async throws {
+        guard let r = store.load() else { throw NotPaired() }
+        try await plane.stream(peerToken: r.peerToken, method: method, paramsJSON: paramsJSON, onFrame: onFrame)
     }
 }
 

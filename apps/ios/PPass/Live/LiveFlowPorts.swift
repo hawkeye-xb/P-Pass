@@ -96,15 +96,6 @@ struct FfiBlobProvider: BlobProvider {
     func releaseRetention(_ lease: ProviderLease) { provider.ffi.releaseRetention() }
 }
 
-/// `timeline.subscribe` 是流式的，FFI 控制面一次只收发一帧——不支持。按端口约定抛错：
-/// 订阅失败不致命，传输端口退回本地信号 + 有界 `flow.status` 兜底。
-struct UnsupportedPush: FlowPushSource {
-    struct Unsupported: Error {}
-    func subscribe(onConnected: @escaping @Sendable () -> Void, onEvent: @escaping @Sendable (String, JSONValue) -> Void) async throws {
-        throw Unsupported()
-    }
-}
-
 struct OSLogger: CoreLogger {
     func log(_ message: String) { AppLog.log(message) }
 }

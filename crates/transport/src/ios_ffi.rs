@@ -21,7 +21,9 @@
 //! schedule (NET-29 #467, #434). Android splits them the same way.
 //!
 //! All calls block the calling thread (each object owns a tokio runtime);
-//! call them off the main thread.
+//! call them off the main thread. The one exception is
+//! [`CtrlClient::open_stream`], which returns at once and reports through a
+//! listener.
 
 use std::fs::File;
 use std::path::PathBuf;
@@ -523,6 +525,58 @@ impl FetchCancel {
     }
 }
 
+/// Receives what [`CtrlClient::open_stream`] reads (#963). Called from a
+/// runtime thread; implementations must be thread-safe.
+#[uniffi::export(with_foreign)]
+pub trait StreamListener: Send + Sync {
+    /// One frame from the daemon, as JSON text.
+    fn on_frame(&self, json: String);
+    /// The stream is over (called exactly once): `None` = the daemon finished
+    /// it, otherwise why it ended.
+    fn on_closed(&self, error: Option<String>);
+}
+
+/// Stops one [`CtrlClient::open_stream`]; idempotent, sticky.
+#[derive(uniffi::Object)]
+pub struct StreamHandle {
+    token: tokio_util::sync::CancellationToken,
+}
+
+#[uniffi::export]
+impl StreamHandle {
+    pub fn cancel(&self) {
+        self.token.cancel();
+    }
+}
+
+/// Closes a stream's dedicated connection however the read loop ends
+/// (finished, failed, cancelled, dropped).
+struct CloseConn(iroh::endpoint::Connection);
+
+impl Drop for CloseConn {
+    fn drop(&mut self) {
+        self.0.close(0u32.into(), b"stream closed");
+    }
+}
+
+/// Guarantees `on_closed` fires once, even if the read task is dropped
+/// without finishing (runtime shut down with the client).
+struct CloseOnce(Option<Arc<dyn StreamListener>>);
+
+impl CloseOnce {
+    fn fire(&mut self, error: Option<String>) {
+        if let Some(listener) = self.0.take() {
+            listener.on_closed(error);
+        }
+    }
+}
+
+impl Drop for CloseOnce {
+    fn drop(&mut self) {
+        self.fire(Some("control client closed".to_owned()));
+    }
+}
+
 /// Minimal `ppf/ctrl/1` client: one request frame, one reply frame per call,
 /// `crates/proto` framing, JSON in and out.
 #[derive(uniffi::Object)]
@@ -684,6 +738,92 @@ impl CtrlClient {
         serde_json::to_string(&resp).map_err(|error| FfiError::Transport {
             msg: error.to_string(),
         })
+    }
+
+    /// Streaming call (`timeline.subscribe`, #963): sends one `{id, method, params}`
+    /// frame to the daemon named by [peer_token], half-closes the send side, then
+    /// hands every frame the daemon pushes to [listener] as JSON text — the first
+    /// one is the daemon's `Resp` (ack or rejection), the rest are pushed events.
+    /// Same shape as Android's `DaemonClient.subscribeTimeline`: it waits on the
+    /// stream, it never polls.
+    ///
+    /// Returns at once; the read loop runs on this client's runtime. The returned
+    /// handle's `cancel()` stops it. [`StreamListener::on_closed`] is called
+    /// exactly once whatever happens: `None` = the daemon finished the stream,
+    /// otherwise the reason (connect failure / timeout, broken stream,
+    /// `"cancelled"`, client closed). [connect_timeout_ms] bounds connect + send
+    /// only (0 = [`DEFAULT_CALL_TIMEOUT_MS`]); an open stream has no deadline.
+    pub fn open_stream(
+        &self,
+        peer_token: String,
+        method: String,
+        params_json: String,
+        connect_timeout_ms: u64,
+        listener: Arc<dyn StreamListener>,
+    ) -> Result<Arc<StreamHandle>, FfiError> {
+        let transport = self.live()?;
+        let addr = PeerAddr::from_str(peer_token.trim())
+            .map_err(|error| invalid(format!("peer token: {error}")))?;
+        let params: serde_json::Value = if params_json.trim().is_empty() {
+            serde_json::json!({})
+        } else {
+            serde_json::from_str(&params_json)
+                .map_err(|error| invalid(format!("params: {error}")))?
+        };
+        let request = proto::Req {
+            id: self.request_id(),
+            method,
+            params,
+            ..proto::Req::default()
+        };
+        let frame = proto::codec::encode(&request)?;
+        let deadline = ms_or(connect_timeout_ms, DEFAULT_CALL_TIMEOUT_MS);
+        let handle = Arc::new(StreamHandle {
+            token: tokio_util::sync::CancellationToken::new(),
+        });
+        let token = handle.token.clone();
+        let close = CloseOnce(Some(listener.clone()));
+        self.runtime.spawn(async move {
+            let mut close = close;
+            let run = async {
+                // 独占一条连接（不进连接缓存）：daemon 同一条连接上的流是排队处理的，
+                // 订阅挂在共享连接上会把之后的 offer / status 全堵住。
+                let (conn, mut stream) = tokio::time::timeout(deadline, async {
+                    let peer = transport.add_peer(addr);
+                    let (conn, mut stream) = transport.connect_dedicated(peer, ALPN_CTRL).await?;
+                    stream.send_frame(&frame).await?;
+                    stream.finish()?;
+                    Ok::<_, TransportError>((conn, stream))
+                })
+                .await
+                .map_err(|_| {
+                    format!(
+                        "{} connect exceeded {} ms",
+                        request.method,
+                        deadline.as_millis()
+                    )
+                })?
+                .map_err(|error| error.to_string())?;
+                let _close = CloseConn(conn);
+                loop {
+                    match stream.recv_frame().await.map_err(|e| e.to_string())? {
+                        None => return Ok(()),
+                        Some(frame) => {
+                            let json: serde_json::Value =
+                                proto::codec::decode(&frame).map_err(|e| e.to_string())?;
+                            listener.on_frame(json.to_string());
+                        }
+                    }
+                }
+            };
+            let outcome: Result<(), String> = tokio::select! {
+                biased;
+                _ = token.cancelled() => Err("cancelled".to_owned()),
+                r = run => r,
+            };
+            close.fire(outcome.err());
+        });
+        Ok(handle)
     }
 
     /// Closes the endpoint. Later calls fail; idempotent.
@@ -856,6 +996,176 @@ mod tests {
         assert!(client
             .call(token, "hello".into(), String::new(), 1_000)
             .is_err());
+    }
+
+    /// Records what a stream delivered; `closed` carries the single on_closed.
+    struct Recorder {
+        frames: Mutex<Vec<serde_json::Value>>,
+        closed: std::sync::mpsc::SyncSender<Option<String>>,
+    }
+
+    impl StreamListener for Recorder {
+        fn on_frame(&self, json: String) {
+            self.frames
+                .lock()
+                .unwrap()
+                .push(serde_json::from_str(&json).unwrap());
+        }
+        fn on_closed(&self, error: Option<String>) {
+            self.closed.send(error).unwrap();
+        }
+    }
+
+    /// #963：流式调用把 ack 与之后推来的每一帧原样交出；对端 finish = on_closed(None)；
+    /// 对端一直挂着时 cancel 能让读循环退出，on_closed 只来一次。
+    /// 服务端和 daemon 一样**按连接串行**处理流：订阅挂着期间普通 call 照样要通（订阅独占连接）。
+    #[test]
+    fn open_stream_delivers_every_pushed_frame_and_cancels() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = rt
+            .block_on(IrohTransport::bind(TransportConfig::loopback(vec![
+                ALPN_CTRL.to_owned(),
+            ])))
+            .unwrap();
+        let token = server.local_addr().to_string();
+        let server = Arc::new(server);
+        let accept = server.clone();
+        rt.spawn(async move {
+            let mut incoming = Box::pin(accept.listen().await);
+            while let Some(conn) = next(&mut incoming).await {
+                tokio::spawn(async move {
+                    // 同 daemon router：一条连接上的流一个接一个服务完。
+                    while let Ok(mut stream) = conn.accept_bi().await {
+                        let Ok(Some(frame)) = stream.recv_frame().await else {
+                            return;
+                        };
+                        let req: proto::Req = proto::codec::decode(&frame).unwrap();
+                        if req.method != "timeline.subscribe" {
+                            let resp =
+                                proto::Resp::ok(req.id, serde_json::json!({ "echo": req.method }));
+                            let _ = stream
+                                .send_frame(&proto::codec::encode(&resp).unwrap())
+                                .await;
+                            let _ = stream.finish();
+                            continue;
+                        }
+                        let hold = req.params["hold"].as_bool().unwrap_or(false);
+                        let ack =
+                            proto::Resp::ok(req.id, serde_json::json!({ "subscribed": true }));
+                        let push = |event: &str, seq: u64| {
+                            proto::codec::encode(&serde_json::json!({
+                                "event": event, "data": { "queue_sequence": seq }
+                            }))
+                            .unwrap()
+                        };
+                        let _ = stream
+                            .send_frame(&proto::codec::encode(&ack).unwrap())
+                            .await;
+                        let _ = stream.send_frame(&push("timeline.invalidated", 0)).await;
+                        let _ = stream.send_frame(&push("flow.delivered", 7)).await;
+                        if hold {
+                            // 挂到对端断开为止（连接关闭时 recv 出错返回）。
+                            let _ = stream.recv_frame().await;
+                            let _ = conn.accept_bi().await;
+                            return;
+                        }
+                        let _ = stream.finish();
+                    }
+                });
+            }
+        });
+
+        let client = CtrlClient::bind(CtrlConfig {
+            secret_key: None,
+            relay_urls: Vec::new(),
+            offline: true,
+            bind_timeout_ms: 0,
+        })
+        .unwrap();
+
+        // 对端读完就 finish：三帧齐、on_closed(None)。
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let rec = Arc::new(Recorder {
+            frames: Mutex::new(Vec::new()),
+            closed: tx,
+        });
+        let _handle = client
+            .open_stream(
+                token.clone(),
+                "timeline.subscribe".into(),
+                String::new(),
+                5_000,
+                rec.clone(),
+            )
+            .unwrap();
+        assert_eq!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), None);
+        {
+            let frames = rec.frames.lock().unwrap();
+            assert_eq!(frames.len(), 3, "{frames:?}");
+            assert_eq!(frames[0]["ok"], true);
+            assert_eq!(frames[0]["result"]["subscribed"], true);
+            assert_eq!(frames[1]["event"], "timeline.invalidated");
+            assert_eq!(frames[2]["event"], "flow.delivered");
+            assert_eq!(frames[2]["data"]["queue_sequence"], 7);
+        }
+
+        // 对端一直挂着：收到推送后 cancel，读循环以 "cancelled" 结束，且只结束一次。
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let rec = Arc::new(Recorder {
+            frames: Mutex::new(Vec::new()),
+            closed: tx,
+        });
+        let handle = client
+            .open_stream(
+                token.clone(),
+                "timeline.subscribe".into(),
+                r#"{"hold":true}"#.into(),
+                5_000,
+                rec.clone(),
+            )
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while rec.frames.lock().unwrap().len() < 3 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "pushed frames never arrived"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(rx.try_recv().is_err(), "a held stream must stay open");
+        // 订阅挂着时普通 call 不能被堵（daemon 按连接串行服务流）。
+        let reply = client
+            .call(token.clone(), "flow.offer".into(), "{}".into(), 5_000)
+            .expect("a call must not queue behind an open subscription");
+        let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+        assert_eq!(reply["result"]["echo"], "flow.offer");
+        handle.cancel();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(5)).unwrap().as_deref(),
+            Some("cancelled")
+        );
+        assert!(
+            rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "on_closed fired twice"
+        );
+
+        // 坏 token 同步报错，不起读循环。
+        let (tx, _rx) = std::sync::mpsc::sync_channel(4);
+        let rec = Arc::new(Recorder {
+            frames: Mutex::new(Vec::new()),
+            closed: tx,
+        });
+        assert!(matches!(
+            client.open_stream(
+                "not-a-token".into(),
+                "timeline.subscribe".into(),
+                String::new(),
+                1_000,
+                rec
+            ),
+            Err(FfiError::InvalidArgument { .. })
+        ));
+        client.close();
     }
 
     /// #953：取消句柄先触发时 fetch_blob 以 cancelled 返回，并删掉 dest 上的半截文件。

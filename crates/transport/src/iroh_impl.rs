@@ -472,19 +472,7 @@ impl IrohTransport {
             return Ok(conn);
         }
 
-        let known = self.peers.lock().expect("peers lock").get(&peer).cloned();
-        let addr = match known {
-            Some(addr) => addr,
-            None => EndpointAddr::from(endpoint_id(peer)?),
-        };
-        let conn =
-            self.ep
-                .connect(addr, alpn.as_bytes())
-                .await
-                .map_err(|e| TransportError::Connect {
-                    peer,
-                    reason: e.to_string(),
-                })?;
+        let conn = self.dial(peer, alpn).await?;
         let key = ConnectionKey::new(peer, alpn);
         self.connections
             .lock()
@@ -492,6 +480,43 @@ impl IrohTransport {
             .insert(peer, alpn, conn.clone());
         watch_connection_close(Arc::downgrade(&self.connections), key, conn.clone());
         Ok(conn)
+    }
+
+    /// Dials [peer] at its registered address (or by NodeId lookup).
+    async fn dial(&self, peer: NodeId, alpn: &str) -> Result<Connection> {
+        let known = self.peers.lock().expect("peers lock").get(&peer).cloned();
+        let addr = match known {
+            Some(addr) => addr,
+            None => EndpointAddr::from(endpoint_id(peer)?),
+        };
+        self.ep
+            .connect(addr, alpn.as_bytes())
+            .await
+            .map_err(|e| TransportError::Connect {
+                peer,
+                reason: e.to_string(),
+            })
+    }
+
+    /// A connection of its own, outside the per-peer cache, plus one stream
+    /// on it — for a stream that stays open (#963 `timeline.subscribe`).
+    /// The daemon serves one connection's streams one after another
+    /// (`router.rs` serve loop), so a subscription parked on the shared
+    /// cached connection would block every later call to that peer. Android
+    /// gets the same separation because iroh-ffi dials a fresh connection
+    /// per call. The caller owns the connection and closes it when done.
+    #[cfg(feature = "ios-ffi")]
+    pub(crate) async fn connect_dedicated(
+        &self,
+        peer: NodeId,
+        alpn: &str,
+    ) -> Result<(Connection, BiStream)> {
+        let conn = self.dial(peer, alpn).await?;
+        let (send, recv) = conn
+            .open_bi()
+            .await
+            .map_err(|e| TransportError::Io(e.to_string()))?;
+        Ok((conn, BiStream { send, recv }))
     }
 
     /// Crate-internal raw connection for the blobs fetch path.
