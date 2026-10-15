@@ -144,3 +144,121 @@ final class BackgroundRunTests: XCTestCase {
         XCTAssertEqual(view.waitReason, .executionBlocked)
     }
 }
+
+/// #958：短任务窗口（第 4 种执行窗口）：20 秒自收尾、只传照片。
+final class ShortTaskWindowTests: XCTestCase {
+    func testPhotosOnlyHoldsOnlyWhileTheShortTaskIsTheSoleWindow() {
+        let w = ExecutionWindow()
+        XCTAssertFalse(w.photosOnly)
+        w.setShortTask(true)
+        XCTAssertTrue(w.photosOnly)
+        XCTAssertTrue(w.hasExecutionTime)
+        for set in [{ w.setAppActive(true) }, { w.setFinishingTime(true) }, { w.setBackgroundTask(true) }] {
+            set()
+            XCTAssertFalse(w.photosOnly, "任一其他窗口开着就不是只传照片")
+            w.setAppActive(false); w.setFinishingTime(false); w.setBackgroundTask(false)
+            XCTAssertTrue(w.photosOnly)
+        }
+        w.setShortTask(false)
+        XCTAssertFalse(w.photosOnly)
+    }
+
+    private func makeRig(_ name: String = #function) throws -> (Rig, ExecutionWindow) {
+        let window = ExecutionWindow()
+        let rig = try Rig(name, lease: window)
+        return (rig, window)
+    }
+
+    /// 只开短任务窗口：照片照常处理；新视频建一行待传输（不带 hash、不计次数、不进跳过名单），游标越过它；不空转；
+    /// 之后长任务窗口来了照常把视频传完。
+    func testOnlyTheShortWindowSendsPhotosAndLeavesNewVideosPending() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1, video: true)
+        rig.photo(2, generation: 2)
+        rig.photo(3, generation: 3, video: true)
+        rig.photo(4, generation: 4)
+        await rig.start()
+        let ok = await BackgroundRun.runShort(engine: rig.engine, window: window, logger: rig.logger)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(rig.delivery.deliveredIds, [2, 4])
+        for n in [1, 3] {
+            XCTAssertEqual(try rig.state(n), .pending)
+            XCTAssertEqual(try rig.current(n)?.attempts, 0)
+            XCTAssertNil(try rig.current(n)?.contentHash)
+            XCTAssertFalse(try rig.store.isSkipped(mid(n)))
+        }
+        XCTAssertEqual(rig.importer.imported.get().count, 2, "视频一次都没读")
+        XCTAssertEqual(try rig.generation(), 4, "游标越过了视频，不挡后面的照片")
+        XCTAssertFalse(window.hasExecutionTime)
+
+        // 再来一次短任务：没有新东西，视频仍原样，不空转。
+        _ = await BackgroundRun.runShort(engine: rig.engine, window: window, logger: rig.logger)
+        XCTAssertEqual(rig.importer.imported.get().count, 2)
+
+        // 长任务窗口来了：视频照常处理。
+        window.setBackgroundTask(true)
+        await rig.trigger(.periodic)
+        window.setBackgroundTask(false)
+        XCTAssertEqual(Set(rig.delivery.deliveredIds), [1, 2, 3, 4])
+    }
+
+    /// 已有的待传输 / 传输中视频：只开短任务窗口时状态原样（不改状态、不加次数），照片照常；本轮不重复取同一张。
+    func testExistingVideoOrdersStayAsTheyAreUnderTheShortWindow() async throws {
+        let (rig, window) = try makeRig()
+        let v1 = rig.photo(1, generation: 1, video: true)
+        let v2 = rig.photo(2, generation: 2, video: true)
+        let p3 = rig.photo(3, generation: 3)
+        try rig.order(v1, .pending)
+        try rig.order(v2, .transferring)
+        try rig.order(p3, .pending)
+        try rig.advanceG(3)
+        await rig.start()
+        _ = await BackgroundRun.runShort(engine: rig.engine, window: window, logger: rig.logger)
+        XCTAssertEqual(rig.delivery.deliveredIds, [3])
+        XCTAssertEqual(try rig.state(1), .pending)
+        XCTAssertEqual(try rig.state(2), .transferring)
+        XCTAssertEqual(try rig.current(1)?.attempts, 0)
+        XCTAssertEqual(try rig.current(2)?.attempts, 0)
+        XCTAssertTrue(rig.importer.imported.get().allSatisfy { $0 == p3.mediaId })
+        XCTAssertFalse(try rig.store.isSkipped(v1.mediaId))
+    }
+
+    /// 前台 / 长任务窗口同时开着：视频照常处理；短任务入口发现其他窗口已开着，直接返回不跑。
+    func testVideosAreProcessedWhenAnotherWindowIsOpen() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1, video: true)
+        rig.photo(2, generation: 2)
+        await rig.start()
+        window.setAppActive(true)
+        window.setShortTask(true)
+        XCTAssertFalse(window.photosOnly)
+        await rig.trigger(.periodic)
+        XCTAssertEqual(Set(rig.delivery.deliveredIds), [1, 2])
+        window.setShortTask(false)
+
+        let (rig2, window2) = try makeRig("other")
+        rig2.photo(1, generation: 1, video: true)
+        await rig2.start()
+        window2.setBackgroundTask(true)
+        let ok = await BackgroundRun.runShort(engine: rig2.engine, window: window2, logger: rig2.logger)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(rig2.delivery.requests.get().count, 0, "已有其他窗口：不重复跑")
+        XCTAssertTrue(window2.hasExecutionTime, "不碰别人的窗口")
+    }
+
+    /// 计时到点走与系统到期相同的收尾：在飞的那张保持传输中、不计次数、等待中（EXECUTION_BLOCKED）。
+    func testTheBudgetExpiresTheShortTaskLikeASystemExpiry() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1)
+        await rig.start()
+        rig.delivery.hold.set(true)
+        let ok = await BackgroundRun.runShort(engine: rig.engine, window: window, logger: rig.logger, budget: 0.1)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(try rig.state(1), .transferring)
+        XCTAssertEqual(try rig.current(1)?.attempts, 0)
+        XCTAssertEqual(rig.delivery.cancelled.get().count, 1)
+        let view = await rig.engine.view
+        XCTAssertEqual(view.waitReason, .executionBlocked)
+        XCTAssertFalse(window.hasExecutionTime)
+    }
+}

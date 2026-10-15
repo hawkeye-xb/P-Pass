@@ -29,6 +29,8 @@ struct FakePhoto: Equatable {
     var bucket: String = "B7"
     /// 直接指定 id（字节序 / 规范等价测试用）；nil = mid(n)。
     var idOverride: String? = nil
+    /// true = 视频（mimeType video/quicktime）。
+    var video = false
 
     var mediaId: String { idOverride ?? mid(n) }
     var sourceVersion: String { sourceVersionOf(modifiedAtMs: modified, size: size) }
@@ -121,7 +123,7 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
 
     func lookup(_ mediaId: String) async throws -> MediaDetails? {
         guard let p = state.get().photos.first(where: { MediaOrder.same($0.mediaId, mediaId) }) else { return nil }
-        return MediaDetails(snapshot: snapshot(p), fileName: "IMG_\(p.n).HEIC", mimeType: "image/heic", sizeBytes: p.size, captureAtMs: 0)
+        return MediaDetails(snapshot: snapshot(p), fileName: "IMG_\(p.n).HEIC", mimeType: p.video ? "video/quicktime" : "image/heic", sizeBytes: p.size, captureAtMs: 0)
     }
 
     func existingIds(_ mediaIds: [String]) async throws -> Set<String>? {
@@ -263,6 +265,8 @@ final class FakeLease: ExecutionLease, @unchecked Sendable {
     let grant = Locked(true)
     let held = Locked(false)
     let updates = Locked<[LoopStatus]>([])
+    let photosOnlyFlag = Locked(false)
+    var photosOnly: Bool { photosOnlyFlag.get() }
 
     func acquire() async -> Bool {
         acquires.update { $0 += 1 }
@@ -420,8 +424,8 @@ final class Rig: @unchecked Sendable {
     }
 
     @discardableResult
-    func photo(_ n: Int, generation: Int64, content: String? = nil, bucket: String = "B7") -> FakePhoto {
-        let p = FakePhoto(n: n, modified: 100 + Int64(n), size: 10 + Int64(n), content: content ?? "c\(n)", generation: generation, bucket: bucket)
+    func photo(_ n: Int, generation: Int64, content: String? = nil, bucket: String = "B7", video: Bool = false) -> FakePhoto {
+        let p = FakePhoto(n: n, modified: 100 + Int64(n), size: 10 + Int64(n), content: content ?? "c\(n)", generation: generation, bucket: bucket, video: video)
         media.put(p)
         return p
     }

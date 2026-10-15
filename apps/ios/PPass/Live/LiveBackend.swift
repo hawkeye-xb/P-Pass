@@ -95,6 +95,7 @@ final class LiveBackend: @unchecked Sendable {
         catchup = ForegroundCatchup(engine: engine)
         PPassBackgroundTasks.register(engine: engine, window: window, scheduler: scheduler, logger: logger)
         scheduler.ensureScheduled()
+        PPassBackgroundTasks.ensureShortScheduled(logger: logger)
         if root.isDegraded { logger.log("storage root degraded: \(root.kind)") }
         // #956：网络恢复时补发待撤销的 unpair（回前台与启动的触发点在 LiveLifecycle / start）。
         network.onRecovered = { [weak self] in self?.flushPendingUnpairs() }
@@ -160,6 +161,7 @@ final class LiveBackend: @unchecked Sendable {
         window.setAppActive(active)
         if active {
             scheduler.ensureScheduled()
+            PPassBackgroundTasks.ensureShortScheduled(logger: logger)
             Task { _ = await catchup.appDidBecomeActive(); await refreshFacts() }
         }
     }

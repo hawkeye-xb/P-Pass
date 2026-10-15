@@ -1,3 +1,4 @@
+import PPassBackgroundTasks
 import SwiftUI
 import UIKit
 
@@ -85,6 +86,7 @@ final class LiveLifecycle {
             backend.flushPendingUnpairs()
         case .background:
             backend.setActive(false)
+            PPassBackgroundTasks.ensureShortScheduled(logger: backend.logger)
             guard finishing == .invalid else { return }
             backend.window.setFinishingTime(true)
             finishing = UIApplication.shared.beginBackgroundTask(withName: "ppass.finish") { [weak self] in

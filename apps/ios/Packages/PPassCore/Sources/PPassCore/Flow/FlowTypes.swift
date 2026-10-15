@@ -359,6 +359,13 @@ public protocol ExecutionLease: AnyObject, Sendable {
     func renew()
     func update(_ status: LoopStatus)
     func release()
+    /// #958：当前只有短任务窗口开着（前台 / 宽限期 / 长任务都没开）。引擎据此不处理视频（20 秒内读不完，被打断要从头重来）。
+    /// 每张开始前读取。默认 false（不改协议的线上格式，只是引擎本地的取件策略）。
+    var photosOnly: Bool { get }
+}
+
+extension ExecutionLease {
+    public var photosOnly: Bool { false }
 }
 
 /// 条件不满足时登记的唤醒。引擎只经 [wakePlanOf] 决定登记哪一种。

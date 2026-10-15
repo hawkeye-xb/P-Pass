@@ -43,6 +43,10 @@ public struct BackgroundWakePlan: Codable, Equatable, Sendable {
 public enum BackgroundWakePlanner {
     /// App 的 Info.plist `BGTaskSchedulerPermittedIdentifiers` 里必须有它。
     public static let identifier = "com.hawkeyexb.ppass.backup"
+    /// #958：短任务（BGAppRefreshTask）的 identifier，同样要写进 Info.plist。
+    public static let shortTaskIdentifier = "com.hawkeyexb.ppass.refresh"
+    /// 短任务最早 5 分钟后再被叫醒（系统实际时机自己定）。
+    public static let shortTaskEarliest: TimeInterval = 5 * 60
     /// 探测梯：与 Android `UNREACHABLE_PROBE_DELAYS_MINUTES` 同值（10 / 20 / 40 / 80 分钟）。
     public static let probeDelays: [TimeInterval] = [10, 20, 40, 80].map { $0 * 60 }
     /// 周期兜底：与 Android `PERIODIC_FALLBACK_HOURS` 同值（5 小时）。
