@@ -358,7 +358,6 @@ async fn main() -> anyhow::Result<()> {
         vec![
             transport::ALPN_CTRL.into(),
             transport::ALPN_BLOBS.into(),
-            transport::ALPN_UPLOAD.into(),
             transport::ALPN_DOWNLOAD.into(),
         ],
     );
@@ -631,10 +630,6 @@ async fn main() -> anyhow::Result<()> {
     ipc.set_query(query.clone());
     // #563: device.revoke cancels the removed device's in-flight fetches.
     ipc.set_flow_delivery(flow_delivery.clone());
-    // MOB-30：上传平面拿同一个 BackupEngine——收完一张就走它入库，
-    // 单条入库的实现只有一份（BackupEngine::ingest_one）。
-    let upload =
-        daemon::upload::UploadPlane::new(db.clone(), data_dir.join(".ppf/staging"), backup.clone());
     let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
     // ── SYNC-01 外部删除对账 ──────────────────────────────
@@ -765,7 +760,6 @@ async fn main() -> anyhow::Result<()> {
         .with_backup(backup)
         .with_flow_delivery(flow_delivery)
         .with_query(query)
-        .with_upload(upload)
         .with_download(download);
     // IPC-02: 启动就绪——订阅者（桌面壳）收到后即时刷新一次状态。
     daemon::events::emit(

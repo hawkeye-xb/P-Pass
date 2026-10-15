@@ -799,27 +799,6 @@ public struct BackupCommit: Codable, Equatable, Sendable {
     }
 }
 
-public struct UploadHeader: Codable, Equatable, Sendable {
-    public var hash: String
-    public var bytes: UInt64
-    public var fileName: String
-
-    public init(hash: String = "", bytes: UInt64 = 0, fileName: String = "") {
-        self.hash = hash
-        self.bytes = bytes
-        self.fileName = fileName
-    }
-
-    enum CodingKeys: String, CodingKey { case hash, bytes, fileName = "file_name" }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        hash = try c.value(.hash, default: "")
-        bytes = try c.value(.bytes, default: 0)
-        fileName = try c.value(.fileName, default: "")
-    }
-}
-
 // MARK: - Diagnostics
 
 public struct DiagStatusQuery: Codable, Equatable, Sendable {
@@ -875,7 +854,6 @@ public enum Methods {
     public static let backupPresence = "backup.presence"
     public static let backupCommit = "backup.commit"
     public static let diagStatus = "diag.status"
-    public static let backupUpload = "backup.upload"
     public static let assetDownload = "asset.download"
     public static let deviceUnpair = "device.unpair"
     public static let timelineSubscribe = "timeline.subscribe"

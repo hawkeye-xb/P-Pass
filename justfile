@@ -271,10 +271,6 @@ android-hello:
 android-pair:
   tools/android-pair.sh
 
-# T-054 live check: full phone backup pipeline vs a real daemon
-android-backup:
-  tools/android-backup.sh
-
 # Android 15 dataSync FGS 配额压缩（#409 #397 #414）：set <秒> / status / reset。
 # 多台设备时先 export ANDROID_SERIAL。用法与判据见 docs/runbook/android-fgs-quota.md。
 android-fgs-quota *args:
@@ -318,7 +314,7 @@ ios-test-packages:
   bash tools/ios/test-packages.sh
 
 # M2 total acceptance: Rust suite + Android suite + APK build +
-# live wire scripts (hello/pair/backup) against a throwaway daemon
+# live wire scripts (hello/pair) against a throwaway daemon
 verify-m2:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -330,7 +326,6 @@ verify-m2:
     cd ..
     tools/android-hello.sh
     tools/android-pair.sh
-    tools/android-backup.sh
 
 # Local disk recovery. No arguments only previews; deletion needs --apply plus a scope.
 cleanup-local *args:

@@ -54,7 +54,6 @@ pub struct Router {
     backup: Option<crate::backup::BackupEngine>,
     flow_delivery: Option<crate::flow_delivery::FlowDelivery>,
     query: Option<crate::query::QueryEngine>,
-    upload: Option<crate::upload::UploadPlane>,
     download: Option<crate::download::DownloadPlane>,
     /// IPC-02: 事件总线（可选——未注入时事件静默不发，测试/单组件
     /// 构造不受影响）。
@@ -77,7 +76,6 @@ impl Router {
             backup: None,
             flow_delivery: None,
             query: None,
-            upload: None,
             download: None,
             events: None,
             subscriptions: SubscriptionRegistry::new(),
@@ -110,13 +108,6 @@ impl Router {
     /// Attach the download plane (T-056).
     pub fn with_download(mut self, download: crate::download::DownloadPlane) -> Self {
         self.download = Some(download);
-        self
-    }
-
-    /// Attach the upload plane (T-054). Without it, `ppf/upload/1`
-    /// connections are dropped.
-    pub fn with_upload(mut self, upload: crate::upload::UploadPlane) -> Self {
-        self.upload = Some(upload);
         self
     }
 
@@ -178,13 +169,7 @@ impl Router {
     /// Serve one connection: streams arrive sequentially; each stream is
     /// one request/response exchange (MVP framing).
     pub async fn serve_conn(&self, conn: Incoming) {
-        // Data-plane dispatch: upload connections never speak ctrl.
-        if conn.alpn() == transport::ALPN_UPLOAD {
-            if let Some(upload) = &self.upload {
-                upload.serve_conn(conn).await;
-            }
-            return;
-        }
+        // Data-plane dispatch: download connections never speak ctrl.
         if conn.alpn() == transport::ALPN_DOWNLOAD {
             if let Some(download) = &self.download {
                 download.serve_conn(conn).await;

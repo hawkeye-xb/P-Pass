@@ -27,7 +27,6 @@ pub mod stats;
 pub mod subscriptions;
 pub mod thumb_pregen;
 pub mod update;
-pub mod upload;
 pub mod watcher;
 
 pub use authz::Decision;

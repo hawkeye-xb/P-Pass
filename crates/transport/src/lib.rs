@@ -60,12 +60,6 @@ pub const QUIET_LOG_DIRECTIVES: &str = "iroh::net_report=error";
 /// ALPN for the data plane: photo/video content via iroh-blobs (T-021).
 pub const ALPN_BLOBS: &str = "ppf/blobs/1";
 
-/// ALPN for the phone-push upload plane (T-054): one file per stream —
-/// an UploadHeader frame, then raw bytes. Gated by the same authz
-/// checkpoint as every ctrl method (the T-032 ruling rejected UNGATED
-/// push; this one is gated).
-pub const ALPN_UPLOAD: &str = "ppf/upload/1";
-
 /// ALPN for the download plane (T-056): original-file bytes for video
 /// playback — one asset per stream, authz-gated like everything else.
 pub const ALPN_DOWNLOAD: &str = "ppf/download/1";

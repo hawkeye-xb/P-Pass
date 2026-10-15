@@ -105,7 +105,6 @@ class GoldenDriftTest {
     @Test fun backupCommitGen() =
         check("snapshots__backup_commit_with_generation", BackupCommit.serializer())
     @Test fun diagStatus() = check("snapshots__diag_status", DiagStatus.serializer())
-    @Test fun uploadHeader() = check("snapshots__upload_header", UploadHeader.serializer())
     @Test fun flowSupersedeRequest() = check("snapshots__flow_supersede_request", FlowSupersedeRequest.serializer())
     @Test fun flowSupersedeReplaced() = check("snapshots__flow_supersede_reply_replaced", FlowSupersedeReply.serializer())
     @Test fun flowSupersedeRefused() = check("snapshots__flow_supersede_reply_refused", FlowSupersedeReply.serializer())
@@ -142,7 +141,7 @@ class GoldenDriftTest {
             "snapshots__backup_begin", "snapshots__backup_manifest",
             "snapshots__backup_manifest_with_items", "snapshots__backup_missing",
             "snapshots__backup_commit", "snapshots__backup_commit_with_generation",
-            "snapshots__diag_status", "snapshots__upload_header",
+            "snapshots__diag_status",
             "snapshots__flow_supersede_request", "snapshots__flow_supersede_reply_replaced",
             "snapshots__flow_supersede_reply_refused",
             "snapshots__hello_paired_with_health", "snapshots__hello_health_free_bytes_unknown",

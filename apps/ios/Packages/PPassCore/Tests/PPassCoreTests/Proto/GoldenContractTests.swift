@@ -43,7 +43,6 @@ final class GoldenContractTests: XCTestCase {
         "snapshots__backup_presence_query": roundtrip(BackupPresenceQuery.self),
         "snapshots__backup_commit": roundtrip(BackupCommit.self),
         "snapshots__backup_commit_with_generation": roundtrip(BackupCommit.self),
-        "snapshots__upload_header": roundtrip(UploadHeader.self),
         "snapshots__diag_status": roundtrip(DiagStatus.self),
         "snapshots__flow_supersede_request": roundtrip(FlowSupersedeRequest.self),
         "snapshots__flow_supersede_reply_replaced": roundtrip(FlowSupersedeReply.self),

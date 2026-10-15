@@ -1,6 +1,6 @@
 //! SYNC-01 acceptance: external deletion reconcile — disk ↔ index diff.
 //!
-//! 5 photos in via the real upload plane → 2 originals deleted on disk
+//! 5 photos in via begin/manifest/commit (bytes pre-staged) → 2 originals deleted on disk
 //! (Finder-style external deletion) → reconcile runs → timeline has 3,
 //! the deleted pair's thumb files are gone (not-found on request), and
 //! the audit log carries 2 `asset.removed_external` rows with actor=NULL.
@@ -12,7 +12,7 @@
 
 use daemon::reconcile::Reconcile;
 use daemon::{BackupEngine, QueryEngine, Router};
-use proto::msgs::{methods, BackupItem, BackupManifest, TimelineQuery, UploadHeader};
+use proto::msgs::{methods, BackupItem, BackupManifest, TimelineQuery};
 use proto::{Req, Resp};
 use storage::{Db, Device, Role};
 use transport::{Blobs, IrohTransport, Transport, TransportConfig};
@@ -45,33 +45,14 @@ async fn call(
     proto::codec::decode::<Resp>(&frame).unwrap()
 }
 
-/// Push one file over the upload plane, return the response.
-async fn upload(
-    tp: &IrohTransport,
-    daemon: transport::NodeId,
-    hash_hex: &str,
-    bytes: &[u8],
-) -> Resp {
-    let mut stream = tp.connect(daemon, transport::ALPN_UPLOAD).await.unwrap();
-    let header = Req {
-        id: "up".into(),
-        method: methods::BACKUP_UPLOAD.into(),
-        params: serde_json::to_value(UploadHeader {
-            hash: hash_hex.into(),
-            bytes: bytes.len() as u64,
-            file_name: "IMG_TEST.jpg".into(),
-        })
-        .unwrap(),
-        ..Default::default()
-    };
-    stream
-        .send_frame(&proto::codec::encode(&header).unwrap())
-        .await
-        .unwrap();
-    stream.send_frame(bytes).await.unwrap();
-    stream.finish().unwrap();
-    let frame = stream.recv_frame().await.unwrap().expect("a response");
-    proto::codec::decode::<Resp>(&frame).unwrap()
+/// 把已校验的字节放进 `.ppf/staging/<hash>`——commit 的主路径（staging 有现成的
+/// 就直接入库）。#988 移除手机上传通道之前，这一步由上传平面完成。
+fn stage(f: &Fixture, hashes: &[String], files: &[Vec<u8>]) {
+    let staging = f.library.path().join(".ppf/staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    for (h, data) in hashes.iter().zip(files) {
+        std::fs::write(staging.join(h), data).unwrap();
+    }
 }
 
 fn parse_hash(hex: &str) -> [u8; 32] {
@@ -105,7 +86,6 @@ async fn fixture() -> Fixture {
     let daemon_tp = bind(vec![
         transport::ALPN_CTRL.into(),
         transport::ALPN_BLOBS.into(),
-        transport::ALPN_UPLOAD.into(),
         transport::ALPN_DOWNLOAD.into(),
     ])
     .await;
@@ -117,17 +97,10 @@ async fn fixture() -> Fixture {
     blobs.attach_to_listener(daemon::blobs_gate::gate(db.clone()));
     let backup = BackupEngine::new(db.clone(), blobs.clone(), library.path());
     let query = QueryEngine::new(db.clone(), blobs.clone(), library.path());
-    // MOB-30: 上传平面拿同一个 engine——收完一张立刻入库。
-    let upload = daemon::upload::UploadPlane::new(
-        db.clone(),
-        library.path().join(".ppf/staging"),
-        backup.clone(),
-    );
     let download = daemon::download::DownloadPlane::new(db.clone(), library.path().to_path_buf());
     let router = Router::new(db.clone(), "test-daemon")
         .with_backup(backup)
         .with_query(query)
-        .with_upload(upload)
         .with_download(download);
     let tp2 = daemon_tp.clone();
     tokio::spawn(async move { router.serve(&tp2).await });
@@ -174,7 +147,9 @@ async fn external_deletion_reconciles_index_thumbs_and_audit() {
         .map(|d| blake3::hash(d).to_hex().to_string())
         .collect();
 
-    // begin + manifest + upload ×5 + commit — the real ingest path.
+    // begin + manifest + 5 files already verified in staging + commit.
+    // （#988：手机上传通道已移除；commit 的主路径就是「staging 里有现成的
+    // 就直接入库」，这里把校验过的字节直接放进 staging。）
     call(
         &f.phone_tp,
         daemon_id,
@@ -203,10 +178,7 @@ async fn external_deletion_reconciles_index_thumbs_and_audit() {
     )
     .await;
     assert!(resp.ok, "{:?}", resp.error);
-    for (h, data) in hashes.iter().zip(&files) {
-        let resp = upload(&f.phone_tp, daemon_id, h, data).await;
-        assert!(resp.ok, "upload {h}: {:?}", resp.error);
-    }
+    stage(&f, &hashes, &files);
     let resp = call(
         &f.phone_tp,
         daemon_id,
@@ -365,7 +337,7 @@ async fn deleted_asset_is_still_reported_missing_no_tombstone() {
         provider: None,
     };
 
-    // ── 一轮真备份：begin + manifest + upload ×3 + commit。
+    // ── 一轮真备份：begin + manifest + 3 张放进 staging + commit。
     call(
         &f.phone_tp,
         daemon_id,
@@ -381,9 +353,7 @@ async fn deleted_asset_is_still_reported_missing_no_tombstone() {
     )
     .await;
     assert!(resp.ok, "{:?}", resp.error);
-    for (h, data) in hashes.iter().zip(&files) {
-        assert!(upload(&f.phone_tp, daemon_id, h, data).await.ok);
-    }
+    stage(&f, &hashes, &files);
     let resp = call(
         &f.phone_tp,
         daemon_id,

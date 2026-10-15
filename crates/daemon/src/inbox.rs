@@ -45,9 +45,10 @@
 //!
 //! 两类东西：
 //!
-//! - `*.upload` —— 半成品。上传协议没有 offset/resume 字段
-//!   （`UploadHeader` 只有 hash/bytes/file_name），`File::create` 直接截断，
-//!   断了从来都是整个文件重传。所以半成品一律无用，见 `sweep_partial_uploads`。
+//! - `*.upload` —— 半成品。旧上传通道（`ppf/upload/1`，#988 已移除）的
+//!   协议头只有 hash/bytes/file_name，没有 offset/resume，断了从来都是整个
+//!   文件重传。所以半成品一律无用，升级上来的机器上可能还留着，见
+//!   `sweep_partial_uploads`。
 //! - 不带后缀的 `<hash>` —— 校验通过、等着 ingest 的。**有主的留，没主的收**，
 //!   见 `sweep_orphans`。
 //!
