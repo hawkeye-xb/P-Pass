@@ -118,9 +118,12 @@ public enum BackgroundRun {
     /// 结束条件是「这一轮结束」或「计时到点」，先到的那个：到点走 [expireShort]（只关短任务窗口；别的窗口还开着，这一轮不停），
     /// 然后就返回，不等前台 / 宽限期启动的那一轮跑完。系统任务的完成由调用方只调一次。
     /// 返回给系统的 success：恒为 true（收尾是我们自己定的，不需要系统重试）。
+    /// 触发原因默认 [.mediaChange]（对齐 Android 拍照后的 MediaWatchJob）：只做增量发现（沿 G 游标 / PHPersistentChangeToken），
+    /// 不做全量对账（不查源文件在不在、不置脏扫描、不问桌面）——那一步真机上 0 张待传也要约 3.6 秒，而预算只有 20 秒；
+    /// 全量对账留给长任务和前台。不算人在场，后台开关与电量检查照常。
     public static func runShort(
         engine: FlowEngine, window: ExecutionWindow, logger: CoreLogger = NoopLogger(),
-        budget: TimeInterval = 20, reason: TriggerReason = .periodic
+        budget: TimeInterval = 20, reason: TriggerReason = .mediaChange
     ) async -> Bool {
         let started = Date()
         func ms() -> Int { Int(Date().timeIntervalSince(started) * 1000) }

@@ -202,6 +202,31 @@ final class ShortTaskWindowTests: XCTestCase {
         XCTAssertEqual(Set(rig.delivery.deliveredIds), [1, 2, 3, 4])
     }
 
+    /// 短任务默认用 MEDIA_CHANGE：只做增量发现，不做全量对账（不查源文件、不置脏扫描、不调 reconcileSourcePresence），
+    /// 新照片仍经 G 游标被处理；对账留给 PERIODIC 等长任务 / 前台。
+    func testTheShortTaskDiscoversIncrementallyAndSkipsReconcile() async throws {
+        let (rig, window) = try makeRig()
+        let old = rig.photo(1, generation: 1)
+        let o1 = try rig.order(old, .confirmed)
+        try rig.advanceG(1)
+        await rig.start()
+        rig.media.remove(1) // 对账轮才会把它打成 source_missing
+        rig.photo(2, generation: 2)
+        let callsBefore = rig.media.existingIdsCalls.get()
+
+        let ok = await BackgroundRun.runShort(engine: rig.engine, window: window, logger: rig.logger)
+        XCTAssertTrue(ok)
+        XCTAssertEqual(rig.delivery.deliveredIds, [2], "新照片经增量发现被处理")
+        XCTAssertEqual(rig.media.existingIdsCalls.get(), callsBefore, "没有源文件存在性查询")
+        XCTAssertEqual(try rig.store.get(o1.id)?.sourceMissing, false, "没有对账：没打 source_missing")
+        XCTAssertFalse(try rig.store.scanState().dirty, "没有置脏扫描")
+        XCTAssertFalse(rig.logger.lines.contains { $0.contains("source_missing:") })
+
+        // 对照：同一个库里 PERIODIC 确实会对账，说明上面的断言能抓到对账。
+        await rig.trigger(.periodic)
+        XCTAssertEqual(try rig.store.get(o1.id)?.sourceMissing, true)
+    }
+
     /// 已有的待传输 / 传输中视频：只开短任务窗口时状态原样（不改状态、不加次数），照片照常；本轮不重复取同一张。
     func testExistingVideoOrdersStayAsTheyAreUnderTheShortWindow() async throws {
         let (rig, window) = try makeRig()
