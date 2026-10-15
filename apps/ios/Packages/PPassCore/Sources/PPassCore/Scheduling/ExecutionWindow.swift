@@ -44,6 +44,12 @@ public final class ExecutionWindow: ExecutionLease, @unchecked Sendable {
         shortTask = open
     }
 
+    /// 除短任务外还开着哪些窗口（只给日志用，如 `[finishing]`）。
+    public var openSourcesExceptShort: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return [appActive ? "foreground" : nil, finishingTime ? "finishing" : nil, backgroundTask ? "long" : nil].compactMap { $0 }
+    }
+
     /// 只有短任务窗口开着、其他三种都没开：引擎不处理视频。
     public var photosOnly: Bool {
         lock.lock(); defer { lock.unlock() }
@@ -107,8 +113,10 @@ public enum BackgroundRun {
         return view.waitReason != .executionBlocked
     }
 
-    /// 短任务的跑法（#958）：打开短任务窗口 → 触发一轮 → 并行一个 [budget] 计时，到点走与 [expire] 相同的收尾 → 等这一轮结束 → 关窗口。
-    /// 调用时若其他窗口已开着（前台 / 宽限期 / 长任务），已有人在跑，直接返回 true 不重复跑。
+    /// 短任务的跑法（#958）：打开短任务窗口 → 触发一轮 → 并行一个 [budget] 计时。窗口取并集：其他窗口已开着也照常叠加
+    /// （引擎在跑时会合并触发；photosOnly 按当前开着的窗口实时算；到期只关自己）。
+    /// 结束条件是「这一轮结束」或「计时到点」，先到的那个：到点走 [expireShort]（只关短任务窗口；别的窗口还开着，这一轮不停），
+    /// 然后就返回，不等前台 / 宽限期启动的那一轮跑完。系统任务的完成由调用方只调一次。
     /// 返回给系统的 success：恒为 true（收尾是我们自己定的，不需要系统重试）。
     public static func runShort(
         engine: FlowEngine, window: ExecutionWindow, logger: CoreLogger = NoopLogger(),
@@ -116,24 +124,25 @@ public enum BackgroundRun {
     ) async -> Bool {
         let started = Date()
         func ms() -> Int { Int(Date().timeIntervalSince(started) * 1000) }
-        if window.hasExecutionTime {
-            logger.log("short task: another window is open; nothing to do (finish=other_window elapsedMs=\(ms()))")
-            return true
-        }
-        logger.log("short task: woken (budget \(Int(budget))s)")
+        logger.log("short task: woken (budget \(Int(budget))s, others=\(window.openSourcesExceptShort))")
         window.setShortTask(true)
-        let timedOut = TimeoutFlag()
-        let timer = Task {
-            do { try await Task.sleep(nanoseconds: UInt64(budget * 1_000_000_000)) } catch { return }
-            timedOut.set()
-            logger.log("short task: budget reached; finishing")
-            await expireShort(engine: engine, window: window)
+        let budgetReached = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let once = ResumeOnce(cont)
+            let timer = Task {
+                do { try await Task.sleep(nanoseconds: UInt64(budget * 1_000_000_000)) } catch { return }
+                logger.log("short task: budget reached; finishing")
+                await expireShort(engine: engine, window: window)
+                once.resume(true)
+            }
+            Task {
+                await engine.trigger(reason)
+                await engine.awaitIdle()
+                timer.cancel()
+                once.resume(false)
+            }
         }
-        await engine.trigger(reason)
-        await engine.awaitIdle()
-        timer.cancel()
         window.setShortTask(false)
-        logger.log("short task: finished (finish=\(timedOut.isSet ? "budget" : "done") elapsedMs=\(ms()))")
+        logger.log("short task: finished (finish=\(budgetReached ? "budget" : "done") elapsedMs=\(ms()))")
         return true
     }
 
@@ -157,9 +166,17 @@ public enum BackgroundRun {
     }
 }
 
-private final class TimeoutFlag: @unchecked Sendable {
+private final class ResumeOnce: @unchecked Sendable {
     private let lock = NSLock()
-    private var value = false
-    func set() { lock.lock(); value = true; lock.unlock() }
-    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+    private var cont: CheckedContinuation<Bool, Never>?
+
+    init(_ cont: CheckedContinuation<Bool, Never>) { self.cont = cont }
+
+    func resume(_ value: Bool) {
+        lock.lock()
+        let c = cont
+        cont = nil
+        lock.unlock()
+        c?.resume(returning: value)
+    }
 }

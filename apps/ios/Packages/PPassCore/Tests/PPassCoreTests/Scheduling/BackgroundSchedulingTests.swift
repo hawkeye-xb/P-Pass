@@ -223,7 +223,7 @@ final class ShortTaskWindowTests: XCTestCase {
         XCTAssertFalse(try rig.store.isSkipped(v1.mediaId))
     }
 
-    /// 前台 / 长任务窗口同时开着：视频照常处理；短任务入口发现其他窗口已开着，直接返回不跑。
+    /// 前台窗口同时开着：视频照常处理（不是只传照片）。
     func testVideosAreProcessedWhenAnotherWindowIsOpen() async throws {
         let (rig, window) = try makeRig()
         rig.photo(1, generation: 1, video: true)
@@ -235,15 +235,6 @@ final class ShortTaskWindowTests: XCTestCase {
         await rig.trigger(.periodic)
         XCTAssertEqual(Set(rig.delivery.deliveredIds), [1, 2])
         window.setShortTask(false)
-
-        let (rig2, window2) = try makeRig("other")
-        rig2.photo(1, generation: 1, video: true)
-        await rig2.start()
-        window2.setBackgroundTask(true)
-        let ok = await BackgroundRun.runShort(engine: rig2.engine, window: window2, logger: rig2.logger)
-        XCTAssertTrue(ok)
-        XCTAssertEqual(rig2.delivery.requests.get().count, 0, "已有其他窗口：不重复跑")
-        XCTAssertTrue(window2.hasExecutionTime, "不碰别人的窗口")
     }
 
     /// 计时到点走与系统到期相同的收尾：在飞的那张保持传输中、不计次数、等待中（EXECUTION_BLOCKED）。
@@ -278,8 +269,9 @@ final class ShortTaskWindowTests: XCTestCase {
         XCTAssertTrue(window.hasExecutionTime, "前台窗口仍开着")
         XCTAssertEqual(rig.delivery.cancelled.get().count, 0, "在飞的那张没被取消")
         rig.delivery.release()
-        let ok = await run.value
+        let ok = await run.value // 到点就返回，不等这一轮
         XCTAssertTrue(ok)
+        await rig.engine.awaitIdle()
         XCTAssertEqual(Set(rig.delivery.deliveredIds), [1, 2, 3])
         let view = await rig.engine.view
         XCTAssertNotEqual(view.waitReason, .executionBlocked)
@@ -297,6 +289,60 @@ final class ShortTaskWindowTests: XCTestCase {
         await rig.engine.trigger(.periodic)
         await eventually("delivery started") { rig.delivery.requests.get().count == 1 }
         await BackgroundRun.expire(engine: rig.engine, window: window)
+        XCTAssertTrue(window.hasExecutionTime)
+        XCTAssertEqual(rig.delivery.cancelled.get().count, 0)
+        rig.delivery.release()
+        await rig.engine.awaitIdle()
+        XCTAssertEqual(Set(rig.delivery.deliveredIds), [1, 2])
+        let view = await rig.engine.view
+        XCTAssertNotEqual(view.waitReason, .executionBlocked)
+    }
+
+    /// 叠加：宽限期开着时启动短任务 → 宽限期先到期 → 只剩短任务窗口，photosOnly 变 true：视频保持原状、照片照常；
+    /// 计时到点收尾，在飞的那张保持传输中。
+    func testAGraceWindowExpiringLeavesTheShortWindowPhotosOnly() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1)
+        rig.photo(2, generation: 2, video: true)
+        rig.photo(3, generation: 3)
+        await rig.start()
+        let delivery = rig.delivery
+        delivery.onStart.set { r in if r.details.snapshot.mediaId == mid(3) { delivery.hold.set(true) } }
+        window.setFinishingTime(true)
+        delivery.hold.set(true)
+        let run = Task { await BackgroundRun.runShort(engine: rig.engine, window: window, logger: rig.logger, budget: 0.8) }
+        await eventually("first delivery started") { delivery.requests.get().count == 1 }
+        XCTAssertEqual(window.openSourcesExceptShort, ["finishing"])
+        await BackgroundRun.expireFinishingTime(engine: rig.engine, window: window)
+        XCTAssertTrue(window.photosOnly)
+        XCTAssertEqual(delivery.cancelled.get().count, 0, "短任务窗口还开着，这一轮不停")
+        delivery.release()
+        await eventually("photo 3 started") { delivery.requests.get().count == 2 }
+        XCTAssertEqual(delivery.deliveredIds, [1, 3])
+        XCTAssertEqual(try rig.state(2), .pending, "视频保持原状")
+        XCTAssertFalse(rig.importer.imported.get().contains(mid(2)))
+        let ok = await run.value
+        XCTAssertTrue(ok)
+        XCTAssertEqual(try rig.state(3), .transferring)
+        XCTAssertEqual(try rig.current(3)?.attempts, 0)
+        XCTAssertEqual(delivery.cancelled.get().count, 1)
+    }
+
+    /// 叠加：前台开着时启动短任务 → 计时到点 → runShort 返回（不等前台那一轮），这一轮没被停，前台继续跑。
+    func testTheShortTaskReturnsAtTheBudgetWhileTheForegroundRoundKeepsRunning() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1)
+        rig.photo(2, generation: 2)
+        await rig.start()
+        window.setAppActive(true)
+        rig.delivery.hold.set(true)
+        await rig.engine.trigger(.appForeground)
+        await eventually("foreground round in flight") { rig.delivery.requests.get().count == 1 }
+        let ok = await BackgroundRun.runShort(engine: rig.engine, window: window, logger: rig.logger, budget: 0.2)
+        XCTAssertTrue(ok, "到点就返回，不等前台那一轮")
+        XCTAssertTrue(rig.logger.lines.contains { $0.contains("others=[\"foreground\"]") }, "叠加运行，日志记下其他窗口")
+        XCTAssertTrue(rig.logger.lines.contains { $0.contains("finish=budget") })
+        XCTAssertFalse(window.photosOnly)
         XCTAssertTrue(window.hasExecutionTime)
         XCTAssertEqual(rig.delivery.cancelled.get().count, 0)
         rig.delivery.release()
