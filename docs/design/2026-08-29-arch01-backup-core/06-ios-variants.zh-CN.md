@@ -31,15 +31,22 @@
 ### O-01｜新照片按 G 取件、与 G 同一次写入
 
 - **原条目**：`GENERATION_MODIFIED > G LIMIT 1` 取到新照片；状态与 G 的推进同一次写入。
-- **为什么在 iOS 上不成立**：iOS 没有 MediaStore generation。新照片的来源是 `PHPersistentChangeToken` 之后的变化；token 是不透明字节，不能比大小，所以 Android 在 SQL 里做的 `G = max(G, …)` 没法照搬。
-- **替代不变量**：G 是媒体源给出的不透明位置（token + 批内进度，由 PPassMedia 编码），推进是覆盖写；**单调性由引擎保证**——G 只沿 `changes` 的返回顺序前进（跳过的推进到最后一张跳过的位置，需要动作的那张在结局落库时推进到它自己的位置）；已有 order（遗留续传 / 补传）的 lookup 结果不带位置，结构上推不动 G（O-12）；会被重入的计数路径不写 G（I-07）。结局与 G 仍在同一个 SQLite 事务里（O-07）。
-- **测试**：`FlowEngineIOSTests.testDiscoveryOnlyMovesForwardAlongTheSourceOrder`、`FlowEngineTests.testAReconcileScanCommitMovesSAndLeavesGToNewPhotos`、`OrderStoreTests.testAFailureInsideTheWriteRollsBackStateAndCursorTogether`。
+- **为什么在 iOS 上不成立**：iOS 没有 MediaStore generation。PhotoKit 只按**变更**给令牌（`PHPersistentChangeToken`），一次变更可能新增多张；令牌是不透明字节，不能比大小，还会过期（3105 / 3210）。直接拿令牌当 G，同一批里的每张照片只能共用整批末尾的令牌，提交第 1 张时 G 就越过了整批（#958 真机复现：一次写入 6 张只送达 1 张）。
+- **替代不变量：收件箱（取新系统，PPassMedia `Inbox`）**。
+  - **定位**：收件箱只服务「发现」这条快速通道，不是事实来源，只是一份「这些 id 按这个顺序出现过」的提示；取到的每一张都要再查相册现状。最终完整由对账保证（以相册真实状态加账本为准），对账不读收件箱。收件箱不认识账本、电脑、对账和引擎，只通过 `MediaSource.changes(after:)` / `currentPosition()` 对外。
+  - **存储**：与账本同一个 SQLite 文件，独立的表和连接：`inbox(seq INTEGER PRIMARY KEY AUTOINCREMENT, asset_id TEXT NOT NULL)` 加 `inbox_meta`（存归档后的 `inbox_token`）；不碰 `user_version`；连接在账本之后打开。序号 `AUTOINCREMENT`，删行之后也不复用。
+  - **G**：`discovery_state.position` 存收件箱序号（8 字节大端），和 Android 的 `(generation, _id)` 一样只增不减；解不出按 0 处理。
+  - **进箱**：`changes(after:)` 需要更多照片时，用 `inbox_token` 读变更历史，**每处理完一条变更提交一个事务**：按 id 排序追加这条变更新增的 id，同时把 `inbox_token` 更新为这条变更的令牌。读到一半被杀，下次从已提交的令牌继续，不重复、不漏。进箱不看备份范围；范围与「照片还在不在」由 App 层 `PhotoMediaSource` 取件时过滤，不够数就往后翻页。只收新增照片，编辑过的、从「最近删除」恢复的交给对账（#968）。
+  - **取件与推进**（引擎不改）：`seq > G`，按 seq 逐张取；查不到、范围外跳过并推进 G；只剩短任务窗口时视频建待传记录、G 前进（#958）。只有引擎推进 G，在每张出结局时与 order 状态写在同一个事务里（O-07）；收件箱自己不推进任何东西。单调性仍由引擎保证：G 只沿 `changes` 的返回顺序前进；已有 order 的 lookup 结果不带位置，推不动 G（O-12）；会被重入的计数路径不写 G（I-07）。
+  - **G 重置**（首次建立、换电脑、照片库身份变了；引擎 `resetDiscovery`，不改）：`currentPosition()` 没有令牌时取 PhotoKit 当前令牌，返回收件箱当前最大序号（AUTOINCREMENT 高水位，从未进箱为 0），并删掉 `seq <= 它` 的行——这是收件箱唯一删行的地方，取件时不删（计数翻页传进来的位置不是 G）。同时扫描置脏：G 以下的照片、收件箱里没处理的旧行，全部交给对账。首次选择相册时原有的照片走 SCOPE_ADDED 对账，不经过收件箱。
+  - **令牌失效**（3105 / 3210 / 存盘字节解不出）：收件箱**不抛错、不动 G**，只把自己的令牌重置为当前令牌并记一行日志（`inbox: change token expired; reset to current, gap left to reconcile`），已进箱的行照常往下取。缺口里没进箱的照片由对账兜底：iOS 的 `preciseDiscovery = false`，每个对账轮都把扫描置脏，长任务或前台会补上。其他错误（例如授权被收回）原样上抛。引擎处理 `DiscoveryCursorExpired` 的那条路（I-06 / I-07）保留，PhotoKit 媒体源不再走到它。
+- **测试**：`FlowEngineIOSTests.testDiscoveryOnlyMovesForwardAlongTheSourceOrder`、`FlowEngineTests.testAReconcileScanCommitMovesSAndLeavesGToNewPhotos`、`OrderStoreTests.testAFailureInsideTheWriteRollsBackStateAndCursorTogether`；收件箱语义在引擎下的端到端：`InboxDiscoveryTests`（逐张推进、断点续取、被杀后一致、查不到即跳过、范围、换电脑、重复 id、短任务视频）；收件箱本身：PPassMedia `InboxTests`（进箱顺序与序号、进箱途中被杀、序号不复用、首次初始化、令牌失效、重复 id），真 PhotoKit：`ChangeTokenIT`、`TokenExpiryIT`（模拟器上造出 3105）。
 
 ### O-03｜MediaStore 重建后 `_id` 变了、内容没变
 
 - **原条目**：新 `_id` 进入待办，导入算出同一个 hash，offer 时桌面按 hash 回「已有」，传输字节数为 0。
 - **为什么在 iOS 上不成立**：没有 MediaStore 重建。对应的 iOS 事件是照片库身份变化（换库 / 从备份恢复）或 `localIdentifier` 变化，以及 token 过期（3105）。
-- **替代不变量**：库身份变 / 3105 → G 重置、扫描置脏（与 Android「getVersion 变了」同一条路）；内容没变的照片在桌面按 hash 判重，offer 直接回终态，手机侧不等待、不供数。
+- **替代不变量**：库身份变 → G 重置、扫描置脏（与 Android「getVersion 变了」同一条路）；3105 由收件箱自己把令牌重置为当前令牌、不动 G，缺口交给对账（见 O-01）；内容没变的照片在桌面按 hash 判重，offer 直接回终态，手机侧不等待、不供数。
 - **测试**：`FlowEngineIOSTests.testAChangedLibraryIdentityResetsTheCursor`、`FlowEngineIOSTests.testAnExpiredDiscoveryCursorRescansAndConvergesWithoutDuplicates`、`DeliveryPortTests.testTheWireTupleIsTheOrderIdAndATerminalOfferReplyConfirmsWithoutWaiting`。
 
 ### D-07｜多个外部卷
