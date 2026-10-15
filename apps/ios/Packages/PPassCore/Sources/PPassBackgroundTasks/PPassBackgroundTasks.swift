@@ -66,7 +66,7 @@ public enum PPassBackgroundTasks {
                 logger.log("short task: expired by the system (finish=system_expired)")
                 work.cancel()
                 Task {
-                    await BackgroundRun.expire(engine: engine, window: window)
+                    await BackgroundRun.expireShort(engine: engine, window: window)
                     completed.complete(success: true)
                 }
             }

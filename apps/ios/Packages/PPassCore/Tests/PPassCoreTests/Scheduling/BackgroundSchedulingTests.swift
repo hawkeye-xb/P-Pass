@@ -261,4 +261,48 @@ final class ShortTaskWindowTests: XCTestCase {
         XCTAssertEqual(view.waitReason, .executionBlocked)
         XCTAssertFalse(window.hasExecutionTime)
     }
+
+    /// 评审 bug：短任务跑着、用户打开 App——计时到点只关短任务自己的窗口，前台还开着，这一轮不能被停；
+    /// 之后的照片和视频（此时不再只传照片）继续处理。
+    func testTheShortBudgetDoesNotStopARoundThatTheForegroundKeepsOpen() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1)
+        rig.photo(2, generation: 2, video: true)
+        rig.photo(3, generation: 3)
+        await rig.start()
+        rig.delivery.hold.set(true)
+        let run = Task { await BackgroundRun.runShort(engine: rig.engine, window: window, logger: rig.logger, budget: 0.3) }
+        await eventually("first delivery started") { rig.delivery.requests.get().count == 1 }
+        window.setAppActive(true)
+        try await Task.sleep(nanoseconds: 600_000_000) // 计时已到点
+        XCTAssertTrue(window.hasExecutionTime, "前台窗口仍开着")
+        XCTAssertEqual(rig.delivery.cancelled.get().count, 0, "在飞的那张没被取消")
+        rig.delivery.release()
+        let ok = await run.value
+        XCTAssertTrue(ok)
+        XCTAssertEqual(Set(rig.delivery.deliveredIds), [1, 2, 3])
+        let view = await rig.engine.view
+        XCTAssertNotEqual(view.waitReason, .executionBlocked)
+    }
+
+    /// 长任务到期、前台还开着：只关长任务自己，这一轮不停。
+    func testALongTaskExpiryDoesNotStopARoundThatTheForegroundKeepsOpen() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1)
+        rig.photo(2, generation: 2)
+        await rig.start()
+        window.setAppActive(true)
+        window.setBackgroundTask(true)
+        rig.delivery.hold.set(true)
+        await rig.engine.trigger(.periodic)
+        await eventually("delivery started") { rig.delivery.requests.get().count == 1 }
+        await BackgroundRun.expire(engine: rig.engine, window: window)
+        XCTAssertTrue(window.hasExecutionTime)
+        XCTAssertEqual(rig.delivery.cancelled.get().count, 0)
+        rig.delivery.release()
+        await rig.engine.awaitIdle()
+        XCTAssertEqual(Set(rig.delivery.deliveredIds), [1, 2])
+        let view = await rig.engine.view
+        XCTAssertNotEqual(view.waitReason, .executionBlocked)
+    }
 }

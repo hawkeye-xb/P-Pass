@@ -1,4 +1,5 @@
 import PPassBackgroundTasks
+import PPassCore
 import SwiftUI
 import UIKit
 
@@ -99,8 +100,13 @@ final class LiveLifecycle {
 
     private func endFinishing(expired: Bool) {
         guard finishing != .invalid else { return }
-        backend.window.setFinishingTime(false)
-        if expired { Task { await backend.engine.onLeaseExpired() } }
+        if expired {
+            // 只关宽限期自己；前台 / 长任务 / 短任务还开着就不停这一轮。
+            let engine = backend.engine, window = backend.window
+            Task { await BackgroundRun.expireFinishingTime(engine: engine, window: window) }
+        } else {
+            backend.window.setFinishingTime(false)
+        }
         UIApplication.shared.endBackgroundTask(finishing)
         finishing = .invalid
     }

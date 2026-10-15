@@ -127,7 +127,7 @@ public enum BackgroundRun {
             do { try await Task.sleep(nanoseconds: UInt64(budget * 1_000_000_000)) } catch { return }
             timedOut.set()
             logger.log("short task: budget reached; finishing")
-            await expire(engine: engine, window: window)
+            await expireShort(engine: engine, window: window)
         }
         await engine.trigger(reason)
         await engine.awaitIdle()
@@ -137,11 +137,23 @@ public enum BackgroundRun {
         return true
     }
 
-    /// 系统收回后台时间（expirationHandler）：先关窗口，再让引擎按「执行时间被收回」停下（在飞的那张保持传输中）。
+    /// 长任务（BGProcessingTask）到期：只关长任务自己这一个来源；关完之后若没有任何窗口还开着，才让引擎按「执行时间被收回」停下
+    /// （在飞的那张保持传输中）。前台 / 宽限期 / 短任务还开着，租约仍然持有，这一轮继续。
     public static func expire(engine: FlowEngine, window: ExecutionWindow) async {
         window.setBackgroundTask(false)
+        if !window.hasExecutionTime { await engine.onLeaseExpired() }
+    }
+
+    /// 短任务（BGAppRefreshTask）到期 / 20 秒到点：规则同 [expire]，只关短任务自己。
+    public static func expireShort(engine: FlowEngine, window: ExecutionWindow) async {
         window.setShortTask(false)
-        await engine.onLeaseExpired()
+        if !window.hasExecutionTime { await engine.onLeaseExpired() }
+    }
+
+    /// 宽限期（beginBackgroundTask）到期：规则同 [expire]，只关宽限期自己。
+    public static func expireFinishingTime(engine: FlowEngine, window: ExecutionWindow) async {
+        window.setFinishingTime(false)
+        if !window.hasExecutionTime { await engine.onLeaseExpired() }
     }
 }
 
