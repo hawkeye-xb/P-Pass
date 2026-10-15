@@ -32,6 +32,8 @@ enum E2EDriver {
         let timeoutSecs = Double(env["PPASS_E2E_TIMEOUT"] ?? "") ?? 120
         let pick = env["PPASS_E2E_ALBUM"] ?? ""
         let maxAssets = Int(env["PPASS_E2E_MAX_ASSETS"] ?? "") ?? 12
+        // 后台任务模拟（tools/ios/sim-bg-task.sh）的几种模式见 BGTestDriver。
+        if BGTestDriver.run(model: model, dir: URL(fileURLWithPath: dir), env: env) { return }
         Task { await drive(model: model, dir: URL(fileURLWithPath: dir), link: link, timeoutSecs: timeoutSecs, pick: pick, maxAssets: maxAssets) }
     }
 
