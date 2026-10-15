@@ -6,14 +6,14 @@ import XCTest
 final class BackgroundSchedulingTests: XCTestCase {
     let t0 = Date(timeIntervalSince1970: 1_800_000_000)
 
-    /// 没有任何等待时挂的是 5 小时周期兜底：要网、要插电（理由见 BackgroundWakePlanner 文件头）。
-    func testTheDefaultRequestIsTheFiveHourFallbackOnPower() {
+    /// 没有任何等待时挂的是 5 小时周期兜底：要网、不要求插电（理由见 BackgroundWakePlanner 文件头）。
+    func testTheDefaultRequestIsTheFiveHourFallbackWithoutPower() {
         let spec = BackgroundWakePlanner.next(BackgroundWakePlan(), now: t0)
         XCTAssertEqual(spec.identifier, "com.hawkeyexb.ppass.backup")
         XCTAssertEqual(spec.reason, .periodic)
         XCTAssertEqual(spec.earliestBeginDate, t0.addingTimeInterval(5 * 3600))
         XCTAssertTrue(spec.requiresNetworkConnectivity)
-        XCTAssertTrue(spec.requiresExternalPower)
+        XCTAssertFalse(spec.requiresExternalPower)
     }
 
     /// 约束唤醒优先：Wi‑Fi → 尽快、要网、不要求插电；电量 → 要插电（iOS 能表达的最接近「电量不低」的条件）。

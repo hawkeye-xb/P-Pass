@@ -8,8 +8,8 @@
 // 请求参数的取值与理由（卡面要求写清）：
 // - `requiresNetworkConnectivity = true`（全部）：一轮要连桌面；没网时系统本就不该叫醒我们，叫醒了也只会进「等待中」。
 //   注意 iOS 只能要求「有网」，不能要求「不计流量」——仅 Wi‑Fi 由引擎入口的 C-04 判据兜底，不靠系统。
-// - 周期兜底 `requiresExternalPower = true`：BGProcessingTask 在充电时才给得出长时间窗口（备份一轮可能几分钟到几十分钟），
-//   不插电的窗口多半不够传完一张大视频，还白耗电；这也对齐「多数晚上充电时同步」的对外口径（#340 评论里 Immich 的实测）。
+// - 周期兜底 `requiresExternalPower = false`：长任务只在设备闲置时运行，备份逐张提交、中断后桌面端续传，
+//   不插电的窗口同样有效；要求充电只会让系统少给运行机会（2026-10-13 定，见 #332、#959）。
 // - 探测梯 / Wi‑Fi 约束 `requiresExternalPower = false`：它们要的是「条件一恢复就尽快试一次」，加充电要求会把一次短探测拖到深夜。
 // - 电量约束 `requiresExternalPower = true`：Android 等的是「电量不低」，iOS 没有这个条件，插电是最接近的可表达条件。
 import Foundation
@@ -65,7 +65,7 @@ public enum BackgroundWakePlanner {
         }
         return BackgroundTaskRequestSpec(
             identifier: identifier, earliestBeginDate: now.addingTimeInterval(periodicFallback),
-            requiresNetworkConnectivity: true, requiresExternalPower: true, reason: .periodic
+            requiresNetworkConnectivity: true, requiresExternalPower: false, reason: .periodic
         )
     }
 
