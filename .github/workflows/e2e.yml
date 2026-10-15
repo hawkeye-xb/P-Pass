@@ -146,13 +146,13 @@ jobs:
           tar -xzf release-bins.tar.gz -C target/release
           test -x target/release/daemon
 
-      # 三剧本 = T-051/T-052/T-054 live 验收脚本：起临时 daemon（127.0.0.1
-      # 随机端口，无 relay），JVM 测试经真实 iroh-ffi 栈连它。
+      # 两剧本 = T-051/T-052 live 验收脚本：起临时 daemon（127.0.0.1
+      # 随机端口，无 relay），JVM 测试经真实 iroh-ffi 栈连它。T-054 旧上传
+      # 管线剧本随 ppf/upload/1 一起删除（#988）。
       - name: Run android live scenarios
         run: |
           bash tools/android-hello.sh
           bash tools/android-pair.sh
-          bash tools/android-backup.sh
 
   # CI-01: T-070 failure scenarios 从每推挪到 nightly + tag 前门禁——
   # 它抓真 bug 但不该每推都烧 release 构建（旧 pr.yml 每 push 全跑

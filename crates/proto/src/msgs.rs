@@ -587,20 +587,6 @@ pub struct BackupCommit {
     pub generation: Option<i64>,
 }
 
-/// Upload plane (T-054): the header frame that precedes one file's raw
-/// bytes on a `ppf/upload/1` stream. The storage side verifies the
-/// received bytes hash to `hash` before accepting.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(default)]
-pub struct UploadHeader {
-    /// BLAKE3 content hash, 64 hex chars.
-    pub hash: String,
-    /// Exact payload size in bytes (receiver caps reads at this).
-    pub bytes: u64,
-    /// Uploader-side file name, for diagnostics.
-    pub file_name: String,
-}
-
 // ── Diagnostics ─────────────────────────────────────
 
 /// Request a diagnostic status snapshot.
@@ -688,9 +674,6 @@ pub mod methods {
     pub const BACKUP_PRESENCE: &str = "backup.presence";
     pub const BACKUP_COMMIT: &str = "backup.commit";
     pub const DIAG_STATUS: &str = "diag.status";
-    /// Pseudo-method for the upload plane's authz check — role table
-    /// grants it via the `backup.` prefix (member+).
-    pub const BACKUP_UPLOAD: &str = "backup.upload";
     /// Download plane (T-056): original bytes for playback/export.
     pub const ASSET_DOWNLOAD: &str = "asset.download";
     /// UX-06: a paired device revokes ITSELF (unilateral stop, product
