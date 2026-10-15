@@ -33,7 +33,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::provider::{ActiveTransferStatus, BlobsProvider, ImportFallback, ServeError};
-use crate::{IrohTransport, PeerAddr, Transport, TransportConfig, TransportError, ALPN_CTRL};
+use crate::{IrohTransport, PeerAddr, TransportConfig, TransportError, ALPN_CTRL};
 
 /// NET-28: the Android control client gives an endpoint bind 15s before it
 /// reports a bind timeout (`DaemonClient.BIND_TIMEOUT_MS`).
@@ -578,7 +578,9 @@ impl Drop for CloseOnce {
 }
 
 /// Minimal `ppf/ctrl/1` client: one request frame, one reply frame per call,
-/// `crates/proto` framing, JSON in and out.
+/// `crates/proto` framing, JSON in and out. Every call and every stream gets a
+/// connection of its own (like HTTP without keep-alive), so requests never
+/// queue behind each other on the daemon's per-connection serial serve loop.
 #[derive(uniffi::Object)]
 pub struct CtrlClient {
     runtime: tokio::runtime::Runtime,
@@ -708,8 +710,11 @@ impl CtrlClient {
         let deadline = ms_or(timeout_ms, DEFAULT_CALL_TIMEOUT_MS);
         let reply = self.runtime.block_on(async {
             tokio::time::timeout(deadline, async {
+                // 一次请求一条连接，回复到手即关（同 Android `DaemonClient.call`）：daemon 在
+                // 同一条连接上串行服务流，共用连接会让请求互相排队，一个慢请求就堵住其余所有。
                 let peer = transport.add_peer(addr);
-                let mut stream = transport.connect(peer, ALPN_CTRL).await?;
+                let (conn, mut stream) = transport.connect_dedicated(peer, ALPN_CTRL).await?;
+                let _close = CloseConn(conn);
                 stream.send_frame(&frame).await?;
                 stream.finish()?;
                 stream.recv_frame().await
@@ -867,6 +872,7 @@ impl Drop for CtrlClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Transport;
     use futures_core::Stream;
     use std::pin::Pin;
 
@@ -996,6 +1002,74 @@ mod tests {
         assert!(client
             .call(token, "hello".into(), String::new(), 1_000)
             .is_err());
+    }
+
+    /// 2026-10-15 对齐：高频少字节的请求互不排队。服务端和 daemon 一样按连接串行服务流；
+    /// 一个慢请求挂着时，另一个线程发的请求必须照样很快回来（每次请求独立连接）。
+    #[test]
+    fn concurrent_calls_do_not_queue_behind_a_slow_one() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = rt
+            .block_on(IrohTransport::bind(TransportConfig::loopback(vec![
+                ALPN_CTRL.to_owned(),
+            ])))
+            .unwrap();
+        let token = server.local_addr().to_string();
+        let server = Arc::new(server);
+        let accept = server.clone();
+        rt.spawn(async move {
+            let mut incoming = Box::pin(accept.listen().await);
+            while let Some(conn) = next(&mut incoming).await {
+                tokio::spawn(async move {
+                    while let Ok(mut stream) = conn.accept_bi().await {
+                        let Ok(Some(frame)) = stream.recv_frame().await else {
+                            return;
+                        };
+                        let req: proto::Req = proto::codec::decode(&frame).unwrap();
+                        if req.method == "slow" {
+                            tokio::time::sleep(Duration::from_secs(3)).await;
+                        }
+                        let resp =
+                            proto::Resp::ok(req.id, serde_json::json!({ "echo": req.method }));
+                        let _ = stream
+                            .send_frame(&proto::codec::encode(&resp).unwrap())
+                            .await;
+                        let _ = stream.finish();
+                    }
+                });
+            }
+        });
+
+        let client = CtrlClient::bind(CtrlConfig {
+            secret_key: None,
+            relay_urls: Vec::new(),
+            offline: true,
+            bind_timeout_ms: 0,
+        })
+        .unwrap();
+        // 先打一次，让连接（若有缓存）建好。
+        client
+            .call(token.clone(), "hello".into(), String::new(), 5_000)
+            .unwrap();
+        std::thread::scope(|scope| {
+            let slow = scope.spawn(|| {
+                client
+                    .call(token.clone(), "slow".into(), String::new(), 10_000)
+                    .unwrap()
+            });
+            std::thread::sleep(Duration::from_millis(300)); // 慢请求已在服务端挂着
+            let started = std::time::Instant::now();
+            client
+                .call(token.clone(), "hello".into(), String::new(), 10_000)
+                .unwrap();
+            let waited = started.elapsed();
+            assert!(
+                waited < Duration::from_millis(1_500),
+                "a quick call queued behind a slow one for {waited:?}"
+            );
+            slow.join().unwrap();
+        });
+        client.close();
     }
 
     /// Records what a stream delivered; `closed` carries the single on_closed.

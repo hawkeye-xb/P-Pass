@@ -499,12 +499,14 @@ impl IrohTransport {
     }
 
     /// A connection of its own, outside the per-peer cache, plus one stream
-    /// on it — for a stream that stays open (#963 `timeline.subscribe`).
-    /// The daemon serves one connection's streams one after another
-    /// (`router.rs` serve loop), so a subscription parked on the shared
-    /// cached connection would block every later call to that peer. Android
-    /// gets the same separation because iroh-ffi dials a fresh connection
-    /// per call. The caller owns the connection and closes it when done.
+    /// on it — the iOS control client's request model (#963): one connection
+    /// per request or per push stream, like HTTP without keep-alive. The
+    /// daemon serves one connection's streams one after another (`router.rs`
+    /// serve loop), so requests sharing a cached connection queue behind
+    /// each other and a push stream would block them all. Android does the
+    /// same (`DaemonClient.call` dials per call). Path knowledge is still
+    /// shared through the one Endpoint, so this costs a handshake, not a
+    /// fresh hole-punch. The caller owns the connection and closes it.
     #[cfg(feature = "ios-ffi")]
     pub(crate) async fn connect_dedicated(
         &self,
