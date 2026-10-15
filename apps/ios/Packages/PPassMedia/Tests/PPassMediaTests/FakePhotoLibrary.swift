@@ -52,6 +52,26 @@ final class FakePhotoLibrary: PhotoLibraryReading {
         return visibleMembers(id)?.map(\.id)
     }
 
+    func assetIdentifiers(inCollection id: String, among assetIds: [String]) -> [String]? {
+        queried.append(id)
+        let wanted = Set(assetIds)
+        return visibleMembers(id)?.map(\.id).filter { wanted.contains($0) }
+    }
+
+    /// 模拟 PhotoKit 反查：只答用户相册（智能相册反查不到，与真库实测一致）。
+    private(set) var containingCalls = 0
+
+    func userAlbumIdentifiers(containing assetIds: [String]) -> [String: [String]] {
+        containingCalls += 1
+        var out: [String: [String]] = [:]
+        for id in assetIds {
+            guard let a = assets[id], !a.hidden, a.mediaType == .image || a.mediaType == .video else { continue }
+            out[id] = collectionList.filter { $0.info.type == .album && $0.assetIds.contains(id) }
+                .map(\.info.id)
+        }
+        return out
+    }
+
     private func visibleMembers(_ id: String) -> [Asset]? {
         guard let collection = collectionList.first(where: { $0.info.id == id }) else { return nil }
         return collection.assetIds.compactMap { assets[$0] }

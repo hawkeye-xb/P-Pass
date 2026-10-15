@@ -77,15 +77,9 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         !selected.isDisjoint(with: bucketId.split(separator: "\n").map(String.init))
     }
 
-    /// assetId → 所属可选相册（排序）。
-    private func membership() -> [String: [String]] {
-        var out: [String: [String]] = [:]
-        for album in AlbumCatalog(library: library).listAlbums() {
-            for id in library.assetIdentifiers(inCollection: album.id) ?? [] { out[id, default: []].append(album.id) }
-        }
-        for key in out.keys { out[key]?.sort() }
-        return out
-    }
+    /// 所属可选相册（每张排序）：全量对账用 `all()` 一次拼全表；取件与 lookup 用 `of(ids)` 只反查手里这几张。
+    /// 两条路对同一张照片算出同一个键（PPassMedia AlbumMembershipIT 在真 PhotoKit 上逐张核对）。
+    private var membership: AlbumMembership { AlbumMembership(library: library) }
 
     /// 照片库里还在的那些 id 的快照（按传入顺序；查不到的略过）。[positions] 给出每一项的发现位置（与 ids 一一对应）。
     private func snapshots(_ ids: [String], members: [String: [String]], positions: [DiscoveryPosition?]? = nil) -> [MediaSnapshot] {
@@ -98,12 +92,12 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
             guard let a = byId[id] else { return nil }
             let modified = Int64((a.modificationDate ?? a.creationDate ?? .distantPast).timeIntervalSince1970 * 1000)
             return MediaSnapshot(mediaId: id, sourceVersion: sourceVersionOf(modifiedAtMs: modified, size: 0),
-                                 bucketId: (members[id] ?? []).joined(separator: "\n"), position: positions?[i] ?? nil)
+                                 bucketId: AlbumMembership.key(members[id]), position: positions?[i] ?? nil)
         }
     }
 
     func inScope(after: String?, limit: Int) async throws -> [MediaSnapshot] {
-        let members = membership()
+        let members = membership.all()
         let chosen = selected()
         let ids = members.filter { !chosen.isDisjoint(with: $0.value) }.keys
             .filter { id in after.map { Array($0.utf8).lexicographicallyPrecedes(Array(id.utf8)) } ?? true }
@@ -117,15 +111,13 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     func changes(after position: DiscoveryPosition, limit: Int) async throws -> [MediaSnapshot] {
         var after = Inbox.seq(fromPosition: position.raw)
         var out: [MediaSnapshot] = []
-        var members: [String: [String]]?
         let chosen = selected()
         while out.count < limit {
             try Task.checkCancellation()
             let rows = try inbox.entries(after: after, limit: limit)
             guard let last = rows.last else { break }
             after = last.seq
-            let m = members ?? membership()
-            members = m
+            let m = membership.of(rows.map(\.assetId))
             let kept = rows.filter { !chosen.isDisjoint(with: m[$0.assetId] ?? []) }
             out += snapshots(kept.map(\.assetId), members: m, positions: kept.map { DiscoveryPosition(raw: Inbox.position(of: $0.seq)) })
         }
@@ -140,8 +132,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
 
     func lookup(_ mediaId: String) async throws -> MediaDetails? {
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [mediaId], options: nil).firstObject else { return nil }
-        let members = membership()
-        guard let snap = snapshots([mediaId], members: members).first else { return nil }
+        guard let snap = snapshots([mediaId], members: membership.of([mediaId])).first else { return nil }
         let resources = PHAssetResource.assetResources(for: asset)
         let index = selectOriginalResource(types: resources.map(\.type), mediaType: asset.mediaType) ?? 0
         let res = resources.indices.contains(index) ? resources[index] : nil

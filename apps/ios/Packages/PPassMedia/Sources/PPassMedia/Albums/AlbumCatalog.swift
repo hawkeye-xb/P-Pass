@@ -83,23 +83,39 @@ public struct AlbumCatalog {
         var smartBySubtype: [Int: [MediaAlbum]] = [:]
 
         for collection in self.library.collections() {
-            switch collection.type {
-            case .smartAlbum where collection.subtype == .smartAlbumUserLibrary:
-                guard let album = makeAlbum(collection, kind: .library) else { continue }
-                library.append(album)
-            case .smartAlbum where Self.selectableSmartSubtypes.contains(collection.subtype.rawValue):
-                guard let album = makeAlbum(collection, kind: .smartAlbum(collection.subtype)),
-                      album.count > 0 else { continue }
+            guard let kind = Self.selectableKind(of: collection),
+                  let album = makeAlbum(collection, kind: kind) else { continue }
+            switch kind {
+            case .library: library.append(album)
+            case .userAlbum: userAlbums.append(album)
+            case .smartAlbum:
+                guard album.count > 0 else { continue }
                 smartBySubtype[collection.subtype.rawValue, default: []].append(album)
-            case .album where Self.selectableAlbumSubtypes.contains(collection.subtype.rawValue):
-                guard let album = makeAlbum(collection, kind: .userAlbum) else { continue }
-                userAlbums.append(album)
-            default:
-                continue
             }
         }
         let smart = Self.selectableSmartSubtypes.flatMap { smartBySubtype[$0] ?? [] }
         return library + userAlbums + smart
+    }
+
+    /// 可选的集合（不算统计、不排序）。与 ``listAlbums()`` 用同一条取舍规则，只少了两件要逐个相册查库的事：
+    /// 「智能相册只列非空的」与「构造中途被删的跳过」。按张判断「照片属于哪些可选相册」时这两条自然成立
+    /// （照片在里面，相册就非空、就还在），所以 ``AlbumMembership`` 用它，免掉每个相册 3 次 fetch。
+    public func selectableCollections() -> [LibraryCollection] {
+        library.collections().filter { Self.selectableKind(of: $0) != nil }
+    }
+
+    /// 一个集合能不能进可选列表、以什么身份进；nil = 不可选。``listAlbums()`` 与 ``selectableCollections()`` 共用。
+    static func selectableKind(of collection: LibraryCollection) -> MediaAlbum.Kind? {
+        switch collection.type {
+        case .smartAlbum where collection.subtype == .smartAlbumUserLibrary:
+            return .library
+        case .smartAlbum where selectableSmartSubtypes.contains(collection.subtype.rawValue):
+            return .smartAlbum(collection.subtype)
+        case .album where selectableAlbumSubtypes.contains(collection.subtype.rawValue):
+            return .userAlbum
+        default:
+            return nil
+        }
     }
 
     private func makeAlbum(_ collection: LibraryCollection, kind: MediaAlbum.Kind) -> MediaAlbum? {

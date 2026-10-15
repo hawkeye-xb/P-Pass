@@ -50,4 +50,13 @@ public protocol PhotoLibraryReading {
 
     /// 某个集合里全部照片与视频的 `localIdentifier`；集合已不存在时返回 nil。
     func assetIdentifiers(inCollection id: String) -> [String]?
+
+    /// 同上，但只看 [assetIds] 这几张：返回其中在这个集合里的那些（口径相同，顺序不保证）；集合已不存在时返回 nil。
+    /// 按张判断所属相册用（``AlbumMembership/of(_:)``），查询量与集合大小无关。
+    func assetIdentifiers(inCollection id: String, among assetIds: [String]) -> [String]?
+
+    /// 反查：[assetIds] 里每张（只算图片与视频、非隐藏）所在的**用户相册**（`PHAssetCollectionType.album`，任意子类型、
+    /// 含文件夹里的）id。不含智能相册——PhotoKit 的反查对智能相册一律返回空（AlbumMembershipIT 实测）。
+    /// 口径外的照片（隐藏、音频、已不在图库）不出现在结果里。
+    func userAlbumIdentifiers(containing assetIds: [String]) -> [String: [String]]
 }
