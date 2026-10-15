@@ -188,7 +188,8 @@ agent 在 Git Bash 里执行；凡是要把 `/S`、`/F` 这类斜杠参数传给
 agent 如果跑在 MSIX 打包的宿主里（例如 Claude 桌面 App），它启动的所有子进程都继承包的**文件与 HKCU 虚拟化**：安装器写进 `%LOCALAPPDATA%` 的文件实际落在 `%LOCALAPPDATA%\Packages\<包名>\LocalCache\Local\` 下，Run 键、卸载项写进包私有的注册表。agent 自己看是正常的，但测到的不是用户机器上的真实状态（2026-10-12 首跑就因此重跑了一遍安装类用例）。
 
 - **判断**：安装后看 `%LOCALAPPDATA%\Packages\*\LocalCache\Local\P-Pass` 是否存在；或者备份进行中 `powercfg /requests` 里 daemon 的路径是否带 `Packages\…\LocalCache`。
-- **做法**：安装、卸载、启动 App、查 Run 键 / 卸载项这类步骤，一律经 `tools/windows/run-outside-package.ps1 -Cmd '<cmd 命令行>'` 执行。它用 WMI `Win32_Process.Create` 起进程，WmiPrvSE 没有包身份，子进程看到的是真实文件系统与注册表；输出写在 `%USERPROFILE%\ppcheck\`。启动 App 用 `Invoke-CimMethod Win32_Process Create` 直接起 `p-pass-desktop.exe`。
+- **做法**：安装、卸载、启动 App、查计划任务 / 卸载项这类步骤，一律经 `tools/windows/run-outside-package.ps1 -Cmd '<cmd 命令行>'` 执行。它用 WMI `Win32_Process.Create` 起进程，WmiPrvSE 没有包身份，子进程看到的是真实文件系统与注册表；输出写在 `%USERPROFILE%\ppcheck\`。启动 App 用 `Invoke-CimMethod Win32_Process Create` 直接起 `p-pass-desktop.exe`。
+- ⚠️ **不要经 `run-outside-package.ps1` 启动 App**：它把所有命令的输出都写进同一个 `out.txt`，App 一直开着就一直占着这个文件，之后每条经它执行的命令都写不进输出、实际上没有执行（2026-10-13 踩过）。启动 App 用 `cmd.exe /c start "" "<exe>"` 交给 `Invoke-CimMethod`，让 cmd 立即退出。
 - 照片库在「图片」下、`%TEMP%` 也不虚拟化，所以 IPC、哈希对账、日志检索不受影响。
 
 ### 9.0b 界面操作由 agent 完成
@@ -238,12 +239,12 @@ gh release download test-channel -R "$REPO" -D "$WORK/base" -p '*_x64-setup.exe'
 
 | 用例 | Windows 上的做法 | 预期 |
 |---|---|---|
-| R0.2 / R1.2 安装 | PowerShell：`Start-Process <setup.exe> -ArgumentList '/S' -Wait`。安装器的 PREINSTALL 钩子会先结束 `ppf-daemon.exe` 和 `p-pass-desktop.exe`。静默安装**不会**自动启动 App，装完要 `Start-Process "$env:LOCALAPPDATA\P-Pass\p-pass-desktop.exe"`，daemon 由桌面壳拉起（已经配置过的机器靠自愈拉起，最长约 60 秒） | `ipc status` 的 `version` 等于安装包版本，`exe_path` 位于 `%LOCALAPPDATA%\P-Pass\` 下 |
+| R0.2 / R1.2 安装 | PowerShell：`Start-Process <setup.exe> -ArgumentList '/S' -Wait`。安装器的 PREINSTALL 钩子会先结束 `ppf-daemon.exe` 和 `p-pass-desktop.exe`。静默安装**不会**自动启动 App，装完要 `Start-Process "$env:LOCALAPPDATA\P-Pass\p-pass-desktop.exe"`。已经配置过、没停过服务的机器，安装器的 POSTINSTALL 钩子装完就运行计划任务 `P-Pass`，daemon 不等 App 就起来（#957）；全新机器由向导登记任务并拉起 | `ipc status` 的 `version` 等于安装包版本，`exe_path` 位于 `%LOCALAPPDATA%\P-Pass\` 下 |
 | R0.3 向导 | agent 用 `uia-drive.ps1` 依次点「继续」「继续」「完成」。启动时若已有更新的 test 包，会先弹「发现新版本 …」，基线阶段对它点「取消」。默认库目录是 `图片\P-Pass 家庭照片库`，路径里带中文，正好覆盖非 ASCII 路径；全新机器上这个目录不存在，#871 修好之前首启必失败 | 三步走完，进入主界面 |
 | R1.4 桌面版本 | 读 `HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass` 的 `DisplayVersion`，或者 `p-pass-desktop.exe` 的 `VersionInfo.ProductVersion` | 和 `ipc status` 的 `version`、手机端版本号一致 |
 | R1.6 桌面应用内更新 | 打开候选版桌面端，会弹出系统对话框「发现新版本 …，是否下载并安装？」，人点「确定」即可。人在对话里授权后，agent 也可以给对话框里的「确定」按钮发 `BM_CLICK` 代点。同时跑 W1 盯窗口 | 安装器进度窗出现后桌面端自动重启；`DisplayVersion` 和 `ipc status` 的 `version` 都变成下一跳版本，`pid` 换新（更新后 daemon 换新版，#788 第 4 项） |
-| R3.2 崩溃恢复 | PowerShell：`Stop-Process -Id <ipc status 的 pid> -Force` | **桌面壳在跑（包括关到托盘）时**：60 秒左右的对账周期内自愈拉起。**桌面壳没在跑时**：Windows 没有 launchd 那样的服务管理器，要等到下次登录或者打开 App 才会恢复。这是已登记的架构缺口 #746，报告里标「已知限制」，不算失败 |
-| R3.3 / R4.1 停服务 | 先写标记 `"$APPDIR/desktop-user-stopped"`，再按 pid 执行 `Stop-Process -Force`。等 90 秒（比自愈周期长）后确认进程仍然停着。恢复时删掉标记，再打开 App 或等下一次自愈 | 同 macOS |
+| R3.2 崩溃恢复 | PowerShell：`Stop-Process -Id <ipc status 的 pid> -Force`，分别在桌面壳开着和退出 App 之后各做一次 | 两种情况都由计划任务 `P-Pass` 的每分钟看门狗在 1 分钟内拉起，新进程的父进程是 `svchost.exe`（#957；之前桌面壳没在跑时要等下次登录） |
+| R3.3 / R4.1 停服务 | 用托盘或设置页的「停止后台服务」（键盘操作见 §9.0b）。**不要**只写标记再杀进程：计划任务还在，看门狗一分钟内就会把 daemon 拉回来。等 2 分钟以上确认仍然停着；恢复时点「启动后台服务」 | 停止后计划任务 `P-Pass` 被删除、没有 daemon 进程，2 分钟以上不被拉起，重启电脑后也不起（#957）；启动后任务恢复、daemon 的父进程是 `svchost.exe` |
 | R5.1 日志 | `$DAEMON_LOG` 见 §9.2 | 同 macOS |
 | R6.1 照片墙 | 「在 Finder 中显示」换成「在资源管理器中显示」 | 资源管理器打开，并选中原文件 |
 | R6.4 首次打开 | 用浏览器下载候选安装包，双击运行 | 签名接入之前：SmartScreen 弹出「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」后能装上，记进报告。签名接入之后：发布者显示为签名证书的主体，不出现「未知发布者」 |
@@ -254,17 +255,17 @@ gh release download test-channel -R "$REPO" -D "$WORK/base" -p '*_x64-setup.exe'
 | ID | 执行 | 步骤 | 预期 | 证据 |
 |---|---|---|---|---|
 | W1 | agent | 先在另一个 PowerShell 里起 `tools/windows/watch-new-windows.ps1 -Seconds <N>`，再依次触发：静默安装、首次启动、R1.6 应用内更新、R3.2 自愈、R3.3 停止服务。脚本每 5 毫秒扫描一次新出现的可见顶层窗口。不要拿「有没有 conhost」当判据，带 `CREATE_NO_WINDOW` 启动的进程也有隐藏的 conhost | 脚本退出码 0，没有任何 `ConsoleWindowClass` / `CASCADIA_HOSTING_WINDOW_CLASS` 窗口（#168 / #787 / #814 的回归） | 脚本输出 |
-| W2 | agent | 经 §9.0 的沙盒外执行，查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下名为 `P-Pass` 的值 | 指向 `%LOCALAPPDATA%\P-Pass\ppf-daemon.exe`，就是当前安装的那一份 | `reg query` 输出 |
+| W2 | agent | 经 §9.0 的沙盒外执行，`Get-ScheduledTask -TaskName P-Pass` 看动作和状态；再查 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下没有 `P-Pass` 值 | 任务的执行路径是 `%LOCALAPPDATA%\P-Pass\ppf-daemon.exe`，状态 `Running`；Run 值不存在（老版本升级上来的，打开 App 后迁移掉，#957） | 命令输出 |
 | W3 | agent | 安装时 daemon 正在跑：不先停服务，直接静默覆盖安装候选包 | 安装成功，没有「文件被占用」；装完打开 App 后 daemon 是新版本 | 退出码 + `ipc status` |
 | W4 | agent | 备份进行中，用 `powercfg /requests` 查唤醒声明（要在管理员终端里跑，由人执行，或者在人授权后提权跑一次） | 传输期间 `SYSTEM` 一栏间歇列出 `ppf-daemon.exe`（按传输持有、传完即撤，2 秒采样会看到断续命中）；备份完成后不再出现（NET-26 #419 传输期间持有唤醒）。#804 落地之后改成：插着电时一直列出 | 命令输出 |
-| W5 | agent | 收尾时执行 `"%LOCALAPPDATA%\P-Pass\uninstall.exe" /S`，然后重新安装候选版并打开 App（都经 §9.0 的沙盒外执行） | 卸载后 Run 值被删、照片库目录和 `config.toml` 都还在；重装并打开 App 后不用重新配对，照片不重传，Run 值重新指向 `%LOCALAPPDATA%\P-Pass\ppf-daemon.exe`（#877 修好之前这一条失败） | 目录列表 + `reg query` + 对账 |
+| W5 | agent | 收尾时执行 `"%LOCALAPPDATA%\P-Pass\uninstall.exe" /S`，然后重新安装候选版并打开 App（都经 §9.0 的沙盒外执行） | 卸载后计划任务被删、70 秒内没有 daemon 被拉起，照片库目录和 `config.toml` 都还在；重装并打开 App 后不用重新配对，照片不重传，任务恢复并在运行（#877、#957） | 目录列表 + `Get-ScheduledTask` + 对账 |
 | W6 | agent | 桌面系统通知目前只在磁盘可用空间跌破阈值时发（`App.svelte` 的 `checkLowSpace`；断开设备不发通知）。只有在磁盘接近写满的测试机上才能触发；触发后查 `%LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db` 里 `NotificationHandler.PrimaryId = 'com.p-pass.desktop'` 的记录 | 有一条通知，文案完整（DESK-17 #166）。条件不具备时标「未覆盖」 | sqlite 查询输出 |
 
 W3 和 W5 都会改动安装状态，放在 §4 全部跑完、§7 清理之前做。
 
 ### 9.5 本节不覆盖的
 
-- **登录 / 注销周期**：开机自启依赖登录时 `explorer.exe` 读取 Run 键，agent 没法在同一个会话里完成注销再登录，交给狗粮期覆盖。
+- **登录 / 重启周期**：开机自启靠计划任务的登录触发，agent 没法在同一个会话里完成注销再登录，归人工：服务运行时重启，登录后 daemon 由 `svchost.exe` 拉起；停止服务后重启，登录后没有 daemon、没有计划任务（2026-10-15 人工验过，#957）。
 - **熄屏相关的用例不做自动验收，归人工**（验收人 2026-10-13 定）：R3.4（Doze）和 R6.2 里「锁屏后在线态」这一半。原因：
   - 三星机的息屏显示（AOD）让系统认为屏幕仍亮着（`dumpsys deviceidle` 里 `mScreenOn=true`），`force-idle` 停在 INACTIVE。
   - 手机插着 USB 充电时，锁屏后后台心跳不停，在线态和真实使用不一样（2026-10-13 实测：锁屏 170 秒后仍显示「在线」）。
