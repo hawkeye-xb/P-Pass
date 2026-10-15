@@ -56,6 +56,7 @@ public enum PPassBackgroundTasks {
     /// #958：短任务（BGAppRefreshTask）。每次被叫醒先挂下一次；已有其他窗口开着就直接完成；20 秒自收尾；`setTaskCompleted` 必调一次。
     private static func registerShortTask(engine: FlowEngine, window: ExecutionWindow, logger: CoreLogger) -> Bool {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundWakePlanner.shortTaskIdentifier, using: nil) { task in
+            LaunchOriginRecorder.shared.backgroundTaskReached(identifier: BackgroundWakePlanner.shortTaskIdentifier, logger: logger)
             ensureShortScheduled(logger: logger)
             let completed = CompletionOnce(task)
             let work = Task {
@@ -84,6 +85,7 @@ public enum PPassBackgroundTasks {
         engine: FlowEngine, window: ExecutionWindow, scheduler: PlannedWakeScheduler, logger: CoreLogger
     ) -> Bool {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundWakePlanner.identifier, using: nil) { task in
+            LaunchOriginRecorder.shared.backgroundTaskReached(identifier: BackgroundWakePlanner.identifier, logger: logger)
             let reason = BackgroundWakePlanner.next(scheduler.plan, now: Date()).reason
             logger.log("background task launched (\(reason.rawValue))")
             let work = Task {

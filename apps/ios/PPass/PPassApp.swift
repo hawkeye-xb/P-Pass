@@ -82,6 +82,7 @@ final class LiveLifecycle {
     func scenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            LaunchOriginRecorder.shared.foregroundReached(logger: backend.logger)
             endFinishing(expired: false)
             backend.setActive(true)
             backend.flushPendingUnpairs()
