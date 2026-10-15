@@ -170,7 +170,9 @@ def main():
         want = int(sys.argv[6])
         for wake in range(2, int(os.environ.get("PPASS_BGTEST_MAX_WAKES", "6")) + 1):
             text = proc_log()
-            delivered = text.count("result=next")
+            # 只数第一次短任务被叫醒之后的送达：配对后、写测试照片前，前台那一轮可能先传了原范围里的照片。
+            woken_at = text.find("short task: woken")
+            delivered = text[woken_at:].count("result=next") if woken_at >= 0 else 0
             log("已送达 %d / %d 张" % (delivered, want))
             if delivered >= want:
                 break
