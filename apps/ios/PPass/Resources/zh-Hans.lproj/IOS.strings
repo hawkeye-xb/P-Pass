@@ -9,6 +9,13 @@
 "partial_access_body" = "备份需要完整相册权限。到「设置 › P-Pass › 照片」选「完整访问」，才能备份全部照片。";
 "no_media_access_body" = "备份需要访问相册。现在一张照片都读不到，所以什么都没在备份——到「设置 › P-Pass › 照片」允许访问。";
 
+/* 失败通知（#981）：iOS 点通知只打开 App、不会直达系统设置，指路写 iOS 设置项名字；电池优化在 iOS 上不存在，对位的是「后台 App 刷新」。 */
+"notif_media_partial_body" = "相册权限从「完整访问」变成了「部分」，没选中的照片不会备份。到「设置 › P-Pass › 照片」改回「完整访问」。";
+"notif_media_none_body" = "相册权限被关掉了，P-Pass 现在一张照片都读不到，什么都没在备份。到「设置 › P-Pass › 照片」允许访问。";
+"notif_background_refresh_off_title" = "「后台 App 刷新」被关闭了";
+"notif_background_refresh_off_body" = "iOS 不会再在后台唤醒 P-Pass，只有打开 P-Pass 时才备份。可以在「设置 › 通用 › 后台 App 刷新」里重新打开。照片都还在手机上。";
+"notif_background_refresh_restricted_body" = "这台 iPhone 现在不允许 P-Pass 后台刷新（可能被屏幕使用时间或设备管理限制），只有打开 P-Pass 时才备份。照片都还在手机上。";
+
 /* 模拟器与没有相机的设备。 */
 "scan_camera_unavailable" = "这台设备用不了相机。请改用配对串连接。";
 

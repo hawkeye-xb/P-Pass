@@ -9,6 +9,13 @@
 "partial_access_body" = "Backup needs full photo access. Go to Settings › P-Pass › Photos and choose Full Access to back up every photo.";
 "no_media_access_body" = "Backup needs access to your photos. Right now not a single photo can be read, so nothing is being backed up — allow access in Settings › P-Pass › Photos.";
 
+/* Failure notifications (#981): tapping a notification on iOS only opens the app (no deep link into system settings), so point at the iOS setting by name; battery optimization doesn't exist on iOS — the counterpart is Background App Refresh. */
+"notif_media_partial_body" = "Photo access changed from Full Access to Limited, so photos outside your selection won't be backed up. Go to Settings › P-Pass › Photos and switch it back to Full Access.";
+"notif_media_none_body" = "Photo access is off, so P-Pass can't read any photos and nothing is being backed up. Go to Settings › P-Pass › Photos and allow access.";
+"notif_background_refresh_off_title" = "Background App Refresh was turned off";
+"notif_background_refresh_off_body" = "iOS won't wake P-Pass in the background any more; it backs up only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh. Your photos are all still on this phone.";
+"notif_background_refresh_restricted_body" = "This iPhone no longer allows Background App Refresh for P-Pass (Screen Time or device management may be limiting it), so it backs up only while P-Pass is open. Your photos are all still on this phone.";
+
 /* Simulator and devices without a camera. */
 "scan_camera_unavailable" = "The camera isn't available on this device. Connect with the pairing string instead.";
 

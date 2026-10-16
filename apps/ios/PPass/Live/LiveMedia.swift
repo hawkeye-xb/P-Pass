@@ -22,6 +22,15 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         return level == .limited ? .partial : .none
     }
 
+    /// 同一份映射给通知用（PPassCore 的三档）。
+    static func tier(_ level: PhotoAccessLevel) -> MediaAccessTier {
+        switch map(level) {
+        case .full: return .full
+        case .partial: return .partial
+        case .none: return .none
+        }
+    }
+
     func requestAccess() async -> MediaAccess { Self.map(await auth.requestFullAccess()) }
 
     func albums() async throws -> [AlbumBucket] {

@@ -27,6 +27,7 @@ final class LiveBackend: @unchecked Sendable {
     let settings: BackupSettings
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
+    let noticeStore: DefinitiveNoticeStore
     let notificationAsk: OnboardingNotificationAsk
     let pairingLoss = PairingLoss()
     let sentinel: SentinelStore
@@ -65,6 +66,7 @@ final class LiveBackend: @unchecked Sendable {
         settings = BackupSettings(directory: dir, logger: logger)
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
         notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
+        noticeStore = DefinitiveNoticeStore(directory: dir, logger: logger)
         // #975：必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding，写下 asked=false）。
         notificationAsk = OnboardingNotificationAsk(directory: dir, logger: logger)
         notificationAsk.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
@@ -143,7 +145,9 @@ final class LiveBackend: @unchecked Sendable {
                 return PhotoLibraryChangeSource.unavailableReason(level: PhotoKitAuthorization().currentLevel())
             },
             onChange: { Task { await change.handle() } }, logger: logger)
-        PPassBackgroundTasks.register(engine: engine, window: window, scheduler: scheduler, logger: logger)
+        // #981：后台任务跑完、交还系统之前评估一次通知（对位 Android BackupWorker 结束时的评估）。
+        PPassBackgroundTasks.register(engine: engine, window: window, scheduler: scheduler, logger: logger,
+                                      afterRun: { [weak self] in await self?.evaluateNotices() })
         scheduler.ensureScheduled()
         PPassBackgroundTasks.ensureShortScheduled(logger: logger)
         if root.isDegraded { logger.log("storage root degraded: \(root.kind)") }
@@ -258,24 +262,39 @@ final class LiveBackend: @unchecked Sendable {
         if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingEpoch, pairingLoss.isLost(epoch: e) {
             do { try pairingStore.markLost() } catch { logger.log("pairing lost: cannot persist (\(error))") }
         }
-        let refresh = await MainActor.run { () -> BackgroundRefreshAvailability in
-            switch UIApplication.shared.backgroundRefreshStatus {
-            case .available: return .available
-            case .denied: return .denied
-            default: return .restricted
-            }
-        }
+        let refresh = await Self.currentBackgroundRefresh()
         let last = facts.lastSuccessAt > 0 ? Date(timeIntervalSince1970: Double(facts.lastSuccessAt) / 1000) : nil
         let f = DateFormatter()
         f.dateFormat = "MM-dd HH:mm"
         let notices = BackupPromise.notices(view: view, backgroundRefresh: refresh, lastConfirmedAt: last, formatTime: { f.string(from: $0) })
         await engineModel.publish(facts, notices)
-        // 失败通知：配对失效 / 备份出问题时提醒一次（同一次状况不重复）；开关关着不发。
-        if notifyPrefs.enabled() {
-            let lost = pairingStore.load()?.lost == true
-            let trouble: Bool = { if case .trouble = HomeProjection.backupUiState(facts, noAlbums: false) { return true } else { return false } }()
-            await FailureNotifier.update(pairingLost: lost, trouble: trouble, logger: logger)
+        await evaluateNotices()
+    }
+
+    @MainActor private static func backgroundRefreshOnMain() -> BackgroundRefreshAvailability {
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .available: return .available
+        case .denied: return .denied
+        default: return .restricted
         }
+    }
+
+    static func currentBackgroundRefresh() async -> BackgroundRefreshAvailability {
+        await MainActor.run { backgroundRefreshOnMain() }
+    }
+
+    /// 失败通知（#981，对位 Android `evaluateDefinitiveEvents`）：进程启动 / 回前台 / 刷新首页事实 / 后台任务结束都走这里。
+    /// 只看确定事件（配对失效、相册权限变差、后台刷新被关），不看首页的 Trouble。
+    func evaluateNotices() async {
+        let record = pairingStore.load()
+        let epoch = record.map(\.pairingEpoch).flatMap { $0.isEmpty ? nil : $0 } // 空代号（待修复）当没有代号，不拿来去重
+        let facts = DefinitiveFacts(
+            pairingEpoch: epoch,
+            pairingLost: record?.lost == true,
+            mediaAccess: LiveMediaLibrary.tier(PhotoKitAuthorization().currentLevel()),
+            backgroundRequested: autoPrefs.requested(),
+            backgroundRefresh: await Self.currentBackgroundRefresh())
+        await FailureNotifier.evaluate(facts: facts, notifyEnabled: notifyPrefs.enabled(), store: noticeStore, logger: logger)
     }
 }
 

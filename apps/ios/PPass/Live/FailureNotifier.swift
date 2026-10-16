@@ -31,59 +31,63 @@ enum SystemNotifications {
     }
 }
 
-/// 发一条失败通知之前的裁决（纯函数，可测）。
-enum NotifyGate {
-    enum Decision: Equatable {
-        /// 状况解除：清掉「已提醒」记号，下次再出现才会再提醒。
-        case clear
-        /// 同一次状况已经提醒过。
-        case alreadyNotified
-        /// 系统没授权，发了也会被丢弃：不发、不记「已提醒」（授权之后这次状况仍要提醒），并留日志。
-        case undeliverable
-        case post
-    }
-
-    static func decide(active: Bool, alreadyNotified: Bool, authorization: NotificationAuthorization) -> Decision {
-        guard active else { return .clear }
-        guard !alreadyNotified else { return .alreadyNotified }
-        return NotifyToggle.canDeliver(authorization) ? .post : .undeliverable
-    }
-}
-
-/// 失败本地通知（Android `rule_notify`）：配对失效 / 备份出问题时提醒一次；状况解除后再出现才会再提醒。
-/// iOS 上通知只能在 App 有执行时间时发出（前台或后台唤醒那一轮），这是平台限制，不是遗漏。
-/// #975：发之前读系统真实授权；未授权不静默吞掉——每次状况只记一行日志（授权状态在设置页开关上可见）。
+/// 失败本地通知（Android `DefinitiveEventNotices`，#130 / #981）：只发三类确定事件——配对失效、相册权限变差、
+/// 「后台 App 刷新」被关；「备份出问题」不发（#418）。触发与去重是 PPassCore 的纯判定 + 落盘状态，这里只负责发 / 撤。
+/// iOS 上通知只能在 App 有执行时间时发出（前台，或后台任务拉起的那一轮），这是平台限制，不是遗漏。
+/// #975：发之前读系统真实授权；未授权不静默吞掉——不发、状态不推进，每类事件只记一行日志。
 enum FailureNotifier {
     private static let lock = NSLock()
-    nonisolated(unsafe) private static var notified: Set<String> = []
-    nonisolated(unsafe) private static var loggedUndeliverable: Set<String> = []
+    nonisolated(unsafe) private static var loggedUndeliverable: Set<NoticeEvent> = []
 
-    static func update(pairingLost: Bool, trouble: Bool, logger: CoreLogger) async {
+    /// 评估 → 先落盘 → 发 / 撤。幂等；落盘失败只记日志（App 内红卡 / 告示才是状态真相，通知是补充渠道）。
+    static func evaluate(facts: DefinitiveFacts, notifyEnabled: Bool, store: DefinitiveNoticeStore, logger: CoreLogger) async {
         let auth = await SystemNotifications.authorization()
-        post(key: "pairing_lost", active: pairingLost, auth: auth, logger: logger,
-             title: L.s("pairing_lost_title"), body: L.s("pairing_lost_body"))
-        post(key: "trouble", active: trouble, auth: auth, logger: logger,
-             title: L.s("state_trouble"), body: L.s("run_failed"))
+        let deliverable = notifyEnabled && NotifyToggle.canDeliver(auth)
+        let decision: DefinitiveDecision
+        do { decision = try DefinitiveEventMonitor.evaluate(store: store, facts: facts, deliverable: deliverable) }
+        catch { logger.log("notify: cannot persist definitive_notices.json (\(error)); not posting"); return }
+
+        lock.lock()
+        for event in decision.undeliverable where loggedUndeliverable.insert(event).inserted {
+            logger.log("notify: \(event.rawValue) not delivered, enabled=\(notifyEnabled) system authorization=\(auth)")
+        }
+        // 发出去了或已恢复的事件，下次再不可送达时重新记一行。
+        loggedUndeliverable.subtract(decision.post.map(\.event))
+        loggedUndeliverable.subtract(decision.cancel)
+        lock.unlock()
+
+        let center = UNUserNotificationCenter.current()
+        let cancelIds = decision.cancel.map(\.notificationIdentifier)
+        if !cancelIds.isEmpty {
+            center.removeDeliveredNotifications(withIdentifiers: cancelIds)
+            center.removePendingNotificationRequests(withIdentifiers: cancelIds)
+        }
+        for notice in decision.post {
+            let (title, body) = text(for: notice)
+            let content = UNMutableNotificationContent()
+            content.title = title
+            content.body = body
+            let id = notice.event.notificationIdentifier
+            center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { error in
+                guard let error else { return }
+                // 状态已落盘，这一条不会自动补发；留日志，真机才能判定。
+                logger.log("notify: \(id) add failed: \(error)")
+            }
+        }
     }
 
-    private static func post(key: String, active: Bool, auth: NotificationAuthorization, logger: CoreLogger, title: String, body: String) {
-        lock.lock()
-        let decision = NotifyGate.decide(active: active, alreadyNotified: notified.contains(key), authorization: auth)
-        switch decision {
-        case .clear: notified.remove(key); loggedUndeliverable.remove(key)
-        case .alreadyNotified: break
-        case .undeliverable: if loggedUndeliverable.insert(key).inserted { logger.log("notify: \(key) not delivered, system authorization=\(auth)") }
-        case .post: notified.insert(key)
-        }
-        lock.unlock()
-        guard decision == .post else { return }
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "ppass.\(key)", content: content, trigger: nil)) { error in
-            guard let error else { return }
-            logger.log("notify: \(key) add failed: \(error)")
-            lock.lock(); notified.remove(key); lock.unlock() // 没发出去就不算提醒过，下一轮再试
+    /// 文案：配对失效 / 相册标题复用 Android 的 key，正文用 Android 通知专用的 key；iOS 说法不同的在 IOS.strings 里覆盖。
+    private static func text(for notice: NoticeKind) -> (title: String, body: String) {
+        switch notice {
+        case .pairingLost:
+            return (L.s("pairing_lost_title"), L.s("notif_pairing_lost_body"))
+        case .mediaAccessRevoked(let now):
+            return now == .none
+                ? (L.s("no_media_access_title"), L.s("notif_media_none_body"))
+                : (L.s("partial_access_title"), L.s("notif_media_partial_body"))
+        case .backgroundRefreshOff(let restricted):
+            return (L.s("notif_background_refresh_off_title"),
+                    L.s(restricted ? "notif_background_refresh_restricted_body" : "notif_background_refresh_off_body"))
         }
     }
 }

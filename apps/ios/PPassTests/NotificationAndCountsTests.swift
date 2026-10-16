@@ -18,14 +18,6 @@ final class NotificationAndCountsTests: XCTestCase {
         XCTAssertEqual(NotificationAuthorization(.ephemeral), .authorized)
     }
 
-    func test_gate_never_posts_without_authorization_and_does_not_burn_the_notified_mark() {
-        XCTAssertEqual(NotifyGate.decide(active: true, alreadyNotified: false, authorization: .authorized), .post)
-        XCTAssertEqual(NotifyGate.decide(active: true, alreadyNotified: false, authorization: .notDetermined), .undeliverable)
-        XCTAssertEqual(NotifyGate.decide(active: true, alreadyNotified: false, authorization: .denied), .undeliverable)
-        XCTAssertEqual(NotifyGate.decide(active: true, alreadyNotified: true, authorization: .authorized), .alreadyNotified)
-        XCTAssertEqual(NotifyGate.decide(active: false, alreadyNotified: true, authorization: .denied), .clear)
-    }
-
     // MARK: #973
 
     private func readableFacts(pending: Int = 0) -> FlowFacts {
@@ -48,7 +40,7 @@ final class NotificationAndCountsTests: XCTestCase {
     }
 
     func test_unreadable_counts_do_not_raise_trouble_either() {
-        // 占位 0 也不能被当成「0 张失败」；更不能据此触发 FailureNotifier（trouble 才会发通知）。
+        // 占位 0 也不能被当成「0 张失败」，首页不能因此落进 trouble。
         let bad = readableFacts(pending: 3).applying(counts: .failure(Boom()))
         if case .trouble = P.backupUiState(bad, noAlbums: false) { XCTFail("读失败不是 trouble") }
     }

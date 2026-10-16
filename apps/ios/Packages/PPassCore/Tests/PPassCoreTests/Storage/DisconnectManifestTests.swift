@@ -27,6 +27,7 @@ final class DisconnectManifestTests: XCTestCase {
         let ask = OnboardingNotificationAsk(directory: root)
         ask.initIfAbsent(existingUser: false)
         try ask.markAsked()
+        try DefinitiveNoticeStore(directory: root).save(DefinitiveNoticeState(notifiedLostEpoch: "e"))
         try SentinelStore(directory: root).recordReachable(now: 1)
         try BackupScopeStore(directory: root, daemonNodeId: nil).saveScope(selected: ["x"], allCurrent: ["x"])
         try BackupScopeStore(directory: root, daemonNodeId: "node-a").saveScope(selected: ["a"], allCurrent: ["a"])
