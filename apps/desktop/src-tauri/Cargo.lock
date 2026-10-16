@@ -2510,6 +2510,7 @@ version = "0.9.7"
 dependencies = [
  "interprocess",
  "platform",
+ "rfd",
  "serde",
  "serde_json",
  "tauri",

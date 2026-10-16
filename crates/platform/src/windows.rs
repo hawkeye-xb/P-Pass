@@ -476,10 +476,18 @@ impl PlatformAdapter for WindowsAdapter {
     /// 解压到「下载」目录直接跑的、开发构建 `target\` 里的，都不在那里，
     /// 照旧拒绝（#604 的同一条风险：把登记改指向一次性路径）。
     fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
-        match installed_location() {
-            Some(dir) => is_in_install_dir(expected, &dir),
-            None => false,
-        }
+        // DESK-68 (#996)：与「能不能运行」同一条判据，规则只写一处。
+        self.is_install_location(expected)
+    }
+
+    /// DESK-68 (#996)：只认 NSIS 登记的安装目录里的那份（判据同上面的对账闸门）。
+    /// 注册表里没有安装记录 = 没装过 ⇒ 不是。
+    fn is_install_location(&self, exe: &Path) -> bool {
+        installed_location().is_some_and(|dir| is_in_install_dir(exe, &dir))
+    }
+
+    fn install_location_hint_key(&self) -> &'static str {
+        "ui.install_location_required_win"
     }
 
     /// DESK-60 (#877)：卸载程序删掉登记（现在是计划任务，见 NSIS 钩子），配置
@@ -2346,6 +2354,38 @@ mod desk24_data_dir_tests {
 
 /// DESK-52 (#787)：结束 daemon 不再拉起外部程序。判据沿用 DESK-25 (#208)
 /// 的口径：没在跑不是错误，没杀掉一定是错误。
+/// DESK-68 (#996)：正式安装位置判据。
+#[cfg(test)]
+mod desk68_install_location_tests {
+    use super::*;
+
+    /// 临时目录里的程序（解压副本的典型位置）永远不是正式安装位置——
+    /// 注册表有没有安装记录都成立，所以 CI 上也能跑。
+    #[test]
+    fn a_copy_in_the_temp_dir_is_never_the_install_location() {
+        let exe = std::env::temp_dir()
+            .join("P-Pass")
+            .join("p-pass-desktop.exe");
+        assert!(!WindowsAdapter.is_install_location(&exe));
+        assert!(
+            !WindowsAdapter.autostart_reconcile_allowed(&exe),
+            "两处同一判据"
+        );
+    }
+
+    /// 本机实证（E3）：装过 P-Pass 的机器上，安装目录里的那份就是正式位置。
+    /// CI 上没装过，所以默认忽略；本机 `cargo test -- --ignored` 跑。
+    #[test]
+    #[ignore = "needs a real NSIS install on this machine"]
+    fn the_installed_copy_is_the_install_location() {
+        let dir = installed_location().expect("本机应已装过 P-Pass");
+        let exe = dir.join("p-pass-desktop.exe");
+        assert!(exe.is_file(), "{}", exe.display());
+        assert!(WindowsAdapter.is_install_location(&exe));
+        assert!(!WindowsAdapter.is_install_location(&dir.join("sub").join("p-pass-desktop.exe")));
+    }
+}
+
 /// DAE-11 (#804)：插电判据。
 #[cfg(test)]
 mod dae11_external_power_tests {

@@ -317,6 +317,26 @@ pub trait PlatformAdapter: Send + Sync {
         false
     }
 
+    /// DESK-68 (#996)：这个程序文件是不是在本平台的**正式安装位置**。
+    ///
+    /// 发布版不在正式位置就不许运行（桌面壳启动时拦），也不许写开机自启登记
+    /// （daemon 升级接管时拦）——登记一旦指向解压副本、备份副本，以后每次开机
+    /// 都跑那个旧程序，新版接不了岗（#604 真机事故）。入口守住，所有写登记的
+    /// 地方自然只会写正式路径。
+    ///
+    /// 默认 `true`：没实现的平台保持现状，由各平台线自己覆盖（macOS 见 #998）。
+    fn is_install_location(&self, exe: &std::path::Path) -> bool {
+        let _ = exe;
+        true
+    }
+
+    /// DESK-68 (#996)：不在正式安装位置时，告诉用户该怎么办的文案 key
+    /// （`assets/i18n`）。怎么「正式安装」是平台知识：Windows 是跑安装程序，
+    /// macOS 是拖进「应用程序」。
+    fn install_location_hint_key(&self) -> &'static str {
+        "ui.install_location_required"
+    }
+
     /// DESK-60 (#877)：对账结果是「未登记」时，本平台是否允许壳**补登记**
     /// （壳另外还要确认：配置过、且用户没有主动停服务）。
     ///

@@ -338,7 +338,14 @@ async fn main() -> anyhow::Result<()> {
                             tracing::info!("#732: 开机自启登记已指向本实例，不重装（避免 RunAtLoad 多拉一个实例抢端口）");
                         }
                         TakeoverAutostart::Install => {
-                            if let Err(e) = platform::adapter().install_autostart(&exe) {
+                            // DESK-68 (#996)：不在正式安装位置的实例（开发构建、解压
+                            // 副本）不许写登记——各平台同一条判据。
+                            if !platform::adapter().is_install_location(&exe) {
+                                tracing::warn!(
+                                    "DESK-68: 本实例不在正式安装位置（{}）——不写开机自启登记",
+                                    exe.display()
+                                );
+                            } else if let Err(e) = platform::adapter().install_autostart(&exe) {
                                 tracing::warn!("DAE-01: autostart re-install skipped: {e}");
                             }
                         }
