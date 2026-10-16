@@ -144,7 +144,7 @@ struct SettingsScreen: View {
 
     /// 「备份哪些相册」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」。
     private var scopeValue: String {
-        let n = app.scope?.count ?? 0
+        let n = app.selectedAlbumCount ?? 0
         return n > 0 ? L.p("backup_scope_n", n) : L.s("backup_scope_none")
     }
 

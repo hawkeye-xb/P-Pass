@@ -45,6 +45,11 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     func savedScope() -> Set<String>? { try? scopeStore().selectedBucketIds() }
     func knownAlbums() -> Set<String> { (try? scopeStore().knownBucketIds()) ?? [] }
 
+    func existingAlbumIds() async -> Set<String>? {
+        guard access() == .full else { return nil }
+        return Set(catalog.listAlbums().map(\.id))
+    }
+
     func saveScope(_ selected: Set<String>, known: Set<String>) async {
         try? scopeStore().saveScope(selected: selected, allCurrent: known)
     }

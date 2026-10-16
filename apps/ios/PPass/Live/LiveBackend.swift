@@ -429,7 +429,7 @@ final class NetworkState: @unchecked Sendable {
     var isExpensive: Bool { lock.lock(); defer { lock.unlock() }; return expensive }
 }
 
-/// 电量低（<20% 且没插电）。UIDevice 只能在主线程读，所以在主线程上监听并缓存，引擎从任意线程读缓存。
+/// 电量低（≤15% 且没插电，阈值在 PPassCore `BatteryPolicy`，与 Android 同口径 #980）。UIDevice 只能在主线程读，所以在主线程上监听并缓存，引擎从任意线程读缓存。
 final class BatteryState: @unchecked Sendable {
     static let shared = BatteryState()
     private let lock = NSLock()
@@ -448,8 +448,7 @@ final class BatteryState: @unchecked Sendable {
     }
 
     @MainActor private func update() {
-        let level = UIDevice.current.batteryLevel
-        let value = level >= 0 && level < 0.2 && UIDevice.current.batteryState == .unplugged
+        let value = BatteryPolicy.isLow(level: UIDevice.current.batteryLevel, unplugged: UIDevice.current.batteryState == .unplugged)
         lock.lock(); low = value; lock.unlock()
     }
 }

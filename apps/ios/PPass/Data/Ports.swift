@@ -52,6 +52,8 @@ protocol MediaLibrary: AnyObject {
     func savedScope() -> Set<String>?
     /// 上次保存范围时已知的相册（新出现的相册标「新」、默认不勾）。
     func knownAlbums() -> Set<String>
+    /// 当前系统里实际存在的相册 id；没有完整授权（读不到相册）= nil。不弹授权。
+    func existingAlbumIds() async -> Set<String>?
     func saveScope(_ selected: Set<String>, known: Set<String>) async
 }
 

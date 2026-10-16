@@ -24,7 +24,7 @@ struct PPassApp: App {
         .onChange(of: scenePhase) { phase in
             guard case .ready(let model, let live) = boot else { return }
             live?.scenePhase(phase)
-            if phase == .active { model.refresh() }
+            if phase == .active { model.sceneBecameActive() }
         }
     }
 }

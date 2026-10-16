@@ -24,6 +24,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var access: MediaAccess = .full
     @Published private(set) var pairing: PairingStatus = .notPaired
     @Published private(set) var scope: Set<String>?
+    /// 系统里当前实际存在的相册（nil = 没有完整授权，读不到）。「已选相册」只数已选且现存的（#983，Android #836）。
+    @Published private(set) var existingAlbums: Set<String>?
     /// #343：首页常驻告示（已解析成当前语言的句子）。
     @Published private(set) var promise: [String] = []
     @Published var commandInFlight = false
@@ -38,7 +40,20 @@ final class AppModel: ObservableObject {
         let status = backend.pairing.status()
         phase = status == .notPaired ? .onboarding : .main
         refresh()
+        refreshExistingAlbums()
         backend.engine.observe { [weak self] in Task { @MainActor in self?.refresh() } }
+    }
+
+    /// 回到前台：照常刷新，并重读系统相册（相册可能在系统相册里被删了）。枚举 PhotoKit 有成本，不放进每次引擎回调的 refresh。
+    func sceneBecameActive() {
+        refresh()
+        refreshExistingAlbums()
+    }
+
+    func refreshExistingAlbums() {
+        Task {
+            existingAlbums = await backend.media.existingAlbumIds()
+        }
     }
 
     func refresh() {
@@ -91,8 +106,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 范围从未保存或保存了空集：一张都不在范围内（Android #541 同口径）。
-    var noAlbums: Bool { (scope ?? []).isEmpty }
+    /// 「已选相册」个数：已选且当前存在（#983）；从未保存 = nil。
+    var selectedAlbumCount: Int? { ScopePolicy.selectedExistingCount(selected: scope, existing: existingAlbums) }
+
+    /// 范围从未保存、保存了空集、或所选相册全被删：一张都不在范围内（Android #541 / #836 同口径）。
+    var noAlbums: Bool { (selectedAlbumCount ?? 0) == 0 }
     var uiState: BackupUiState { HomeProjection.backupUiState(facts, noAlbums: noAlbums) }
     var triplet: BackupTriplet? { HomeProjection.triplet(facts, scopeSaved: scope != nil) }
 
@@ -115,13 +133,19 @@ final class AppModel: ObservableObject {
 
     func albumsChosen(_ selected: Set<String>, known: Set<String>, firstTime: Bool) {
         Task {
+            // 必须在 saveScope 覆盖旧集合之前算差集（Android MOB-20）。
+            let added = ScopePolicy.added(previous: backend.media.savedScope(), selected: selected)
             await backend.media.saveScope(selected, known: known)
             refresh()
+            refreshExistingAlbums()
             if firstTime {
                 phase = .backupStarted(count: facts.inScopeTotal ?? 0)
             }
-            await backend.engine.wake()
-            refresh()
+            // 只在新增了相册时触发 SCOPE_ADDED；减少或原样保存不触发（Android 同口径，#983）。
+            if !added.isEmpty {
+                await backend.engine.wake()
+                refresh()
+            }
         }
     }
 
