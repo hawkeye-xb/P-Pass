@@ -203,7 +203,7 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 ### 通知授权（#975）
 
 - **Android**：Android 13+ 在 onboarding 完成页点任一按钮时问**一次** `POST_NOTIFICATIONS`（`OnboardingNotificationAsk`，#130）：问之前先落盘「已问过」，结果同步回开关（授予 → 开，拒绝 → 关）；老用户升级不问；设置页开关显示 = 偏好 **且** 已授权，拨开时没权限就再弹一次申请框。Android 没有任何「去系统设置」的引导。
-- **iOS 对位**：同一份语义——PPassCore `OnboardingNotificationAsk`（同文件名 `onboarding_notification_ask.json`、同字段、同「缺失不问 / 损坏当已问过 / 老用户不问」，断开清单登记为保留）；完成页点「好」时 `LiveEngineAdapter.askNotificationAtOnboarding` 先落盘再弹系统框，结果写回偏好；页面上先显示 `onboarding_notification_note` 一句用途说明。开关显示值 = `NotifyToggle.displayValue(偏好, 授权)`；发通知前读 `UNUserNotificationCenter.notificationSettings`，未授权**不发、不推进该事件的去重状态、记一行日志**（`notify: <事件> not delivered, enabled=… system authorization=<状态>`），授权之后这次状况仍会提醒（判定在 PPassCore `decideDefinitiveNotices(deliverable:)`，#981 起）。
+- **iOS 对位**：同一份语义——PPassCore `OnboardingNotificationAsk`（同文件名 `onboarding_notification_ask.json`、同字段、同「缺失不问 / 损坏当已问过 / 老用户不问」，断开清单登记为保留）；完成页点「好」时 `LiveEngineAdapter.askNotificationAtOnboarding` 先落盘再弹系统框，结果写回偏好；页面上先显示 `onboarding_notification_note` 一句用途说明。开关显示值 = `NotifyToggle.displayValue(偏好, 授权)`；发通知前读 `UNUserNotificationCenter.notificationSettings`，未授权 / 开关关着**不发、记一行日志**（`notify: <事件> not delivered, enabled=… system authorization=<状态>`），去重状态照常推进、之后打开也不补发（与 Android 一致，#981 起；判定在 PPassCore `decideDefinitiveNotices(deliverable:)`）。
 - **三态对照**：
 
 | 系统授权 | 开关显示 | 拨开时 | 通知 |
@@ -213,7 +213,7 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 | authorized（含 provisional / ephemeral） | 跟偏好 | 直接写偏好 | 发 |
 
 - **平台差异（有意不同，不是遗漏）**：iOS 系统授权框**只弹一次**（`requestAuthorization` 在 notDetermined 之后不再有界面），所以 `shouldAsk` 额外要求系统仍是 notDetermined，且 denied 时拨开改为**跳系统设置**——Android 在此会再弹申请框（被拒两次后同样没界面，却没有引导）；denied 时多一行 `rule_notify_denied_hint` 是为这条路径服务的 iOS 独有文案。用户从系统设置回来（`sceneBecameActive`）重读授权，开关即时反映。没有 Android 12 及以下「无运行时权限」那一档。
-- **测试**：`NotificationAskTests`（PPassCore：只问一次 / 先落盘 / 老用户 / 缺失与损坏 / 开关三态与拨开动作）、`DisconnectManifestTests.testDisconnectAppliesEveryRow`（新行登记）；PPassTests 的 NotificationAndCountsTests（系统状态映射；模拟器上跑）；「未授权不发、不烧去重状态」由 `DefinitiveNoticesTests.testUndeliverable*` 覆盖。
+- **测试**：`NotificationAskTests`（PPassCore：只问一次 / 先落盘 / 老用户 / 缺失与损坏 / 开关三态与拨开动作）、`DisconnectManifestTests.testDisconnectAppliesEveryRow`（新行登记）；PPassTests 的 NotificationAndCountsTests（系统状态映射；模拟器上跑）；「未授权不发、状态照常推进、之后不补发」由 `DefinitiveNoticesTests.testUndeliverable*` 覆盖。
 
 ### 失败通知的触发集合与去重（#981）
 
@@ -221,17 +221,16 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
   1. 配对失效：去重键 = 配对代号（epoch）；只有「没配对了」或「换了代号」才复位，`isLost` 变 false（进程重启）不算恢复。
   2. 相册权限变差（完整 → 部分 / 无，部分 → 无）：记上次档位，变差才发，回到完整复位；没有基线只记不发；没配对只记。
   3. 后台被停：MOB-28 的中断（同一次开机内监听凭空消失 = force-stop / OEM 清理，按 `detectedAt` 去重），或电池优化被重新打开（true → false，且用户要后台备份）；没有基线只记不发。
-  - 单张 / 整体备份失败**不发**（#418）。状态落盘 `definitive_notices.json`（tmp + rename，**没有过期**：靠上述复位条件清）；读坏回到默认基线。开关与系统权限只挡「发出去」，状态照常推进。评估入口：进程启动 / Worker 结束 / 回前台 / 配对失效变化。
+  - 单张 / 整体备份失败**不发**（#418）。状态落盘 `definitive_notices.json`（tmp + rename，**没有过期**：靠上述复位条件清）；读坏回到默认基线。开关与系统权限只挡「发出去」，状态照常推进（iOS 同）。评估入口：进程启动 / Worker 结束 / 回前台 / 配对失效变化。
 - **iOS 对位**：PPassCore `DefinitiveNotices.swift`（纯判定 + 落盘，文件名与字段同 Android，断开清单登记为保留）；发 / 撤在 `FailureNotifier`。评估入口：`refreshFacts`（启动、回前台、各类刷新）与**后台任务结束时**（短 / 长任务在 `setTaskCompleted` 之前，`PPassBackgroundTasks.register(afterRun:)`），后者对位 Android Worker 结束。不再发「备份出问题」（#981 前 iOS 与 Android 相反）。
   1. 配对失效：同 Android；空代号（待 #966 修复）当没有代号，不拿来去重。
   2. 相册权限：`PhotoAccessLevel` → 三档（full / limited → partial / denied、restricted、notDetermined → none，与首页同口径），规则同 Android。
   3. 后台被停：对位物 = **「后台 App 刷新」从可用变成不可用**（`UIApplication.backgroundRefreshStatus`），且 `AutoBackupPrefs.requested()`；denied / restricted 文案不同（restricted 用户自己改不了）。电池优化 iOS 不存在，故没有 `notif_battery_reenabled_*`。
 - **平台差异（有意不同，不是遗漏）**：
   - **MOB-28「后台中断」iOS 没有对位物，不移植**：iOS 上 App 被 force-quit / 被系统杀掉，进程内无从区分，也没有「同一次开机内监听消失」可比的信号（BGTask 由系统调度，不是我们注册的常驻监听）；系统在 force-quit 之后是否还拉起后台任务没有 Apple 文档的明确保证（论坛有相反的报告：[developer.apple.com/forums/thread/793189](https://developer.apple.com/forums/thread/793189)）。「后台执行时间到期」是 iOS 的常态（见 C-05），不是故障，不通知。没有检测手段就不硬凑；回前台时首页「打开 P-Pass 时备份」告示与「最近备份」时间是用户能自己发现的渠道。
-  - **未送达不推进状态**（#975 的语义，不回退）：开关关 / 系统未授权时，该发的事件不记「已提醒」，授权 / 开关打开后仍会提醒；Android 则状态照常推进、打开开关不补发。恢复（复位、撤通知）与基线两端一致，开关关着也照常推进。
   - 通知点开只打开 App（没有深链进系统设置），所以相册权限通知的正文写 iOS 设置项名字（`IOS.strings` 覆盖 `notif_media_*_body`）；后台刷新通知为 iOS 独有 key（`notif_background_refresh_*`）。
   - **前台展示**：App 没有 `UNUserNotificationCenterDelegate`，前台发出的通知不弹横幅、只进通知中心（iOS 默认）；Android 前台照常弹。未对齐，见 #1018。
-- **测试**：`DefinitiveNoticesTests`（PPassCore：触发集合只有三类 / 每类的发、不重发、复位、基线 / 未送达不推进 / 落盘重启不重发与反证 / 文件名字段 / 缺失静默、损坏留日志、写失败抛出）、`DisconnectManifestTests.testDisconnectAppliesEveryRow`（新状态文件登记）。
+- **测试**：`DefinitiveNoticesTests`（PPassCore：触发集合只有三类 / 每类的发、不重发、复位、基线 / 未送达只不发、状态照常推进且之后不补发 / 落盘重启不重发与反证 / 文件名字段 / 缺失静默、损坏留日志、写失败抛出）、`DisconnectManifestTests.testDisconnectAppliesEveryRow`（新状态文件登记）。
 
 ### 首页计数读库失败（#973）
 

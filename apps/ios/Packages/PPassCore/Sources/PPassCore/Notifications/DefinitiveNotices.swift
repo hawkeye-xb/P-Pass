@@ -12,8 +12,8 @@
 //
 // 去重状态落盘（`definitive_notices.json`，文件名与字段同 Android）：每次后台任务拉起的都是新进程，只放内存会每次重发。
 //
-// 开关 / 系统授权只挡「发出去」这一步（`deliverable`）。与 Android 的唯一差异（#975 定的 iOS 语义，不回退）：
-// 没发出去的那条**不推进**对应状态，授权 / 开关打开之后这次状况仍会提醒；恢复（复位、撤通知）与基线照常推进。
+// 开关 / 系统授权只挡「发出去」这一步（`deliverable`），状态照常往前走（与 Android 一致）：
+// 否则开关关着 / 未授权时发生过的事，会在用户打开开关或授权那一刻一起补发。
 import Foundation
 
 /// 三类确定事件；每类一个通知标识（后发的替换先发的，恢复时按它撤）。
@@ -96,7 +96,7 @@ public struct DefinitiveDecision: Equatable, Sendable {
     public var post: [NoticeKind]
     /// 已恢复的事件：撤掉还挂着的旧通知。
     public var cancel: Set<NoticeEvent>
-    /// 该发但此刻发不出去（开关关 / 系统未授权）的事件：不在 [post] 里，对应状态没推进。App 层据此记日志。
+    /// 该发但此刻发不出去（开关关 / 系统未授权）的事件：不在 [post] 里（状态仍已推进）。App 层据此记日志。
     public var undeliverable: [NoticeEvent]
 }
 
@@ -112,7 +112,6 @@ public func decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: Definiti
         notifiedLostEpoch = nil
         cancel.insert(.pairingLost)
     }
-    let lostEpochAfterReset = notifiedLostEpoch
     if paired, facts.pairingLost, notifiedLostEpoch != facts.pairingEpoch {
         post.append(.pairingLost)
         notifiedLostEpoch = facts.pairingEpoch
@@ -137,20 +136,13 @@ public func decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: Definiti
     let isStopped = !available && facts.backgroundRequested
     if wasStopped, !isStopped { cancel.insert(.backgroundStopped) }
 
-    var next = DefinitiveNoticeState(notifiedLostEpoch: notifiedLostEpoch, lastMediaAccess: facts.mediaAccess.rawValue,
+    let next = DefinitiveNoticeState(notifiedLostEpoch: notifiedLostEpoch, lastMediaAccess: facts.mediaAccess.rawValue,
                                      lastBackgroundRefreshAvailable: available)
 
-    // 发不出去的不推进自己的状态：开关 / 授权打开之后这次状况仍会提醒（#975）。
+    // 发不出去（开关关 / 系统未授权）：只是不发，状态照常推进，之后打开也不补发。
     var undeliverable: [NoticeEvent] = []
     if !deliverable {
-        for notice in post {
-            undeliverable.append(notice.event)
-            switch notice.event {
-            case .pairingLost: next.notifiedLostEpoch = lostEpochAfterReset
-            case .mediaAccessRevoked: next.lastMediaAccess = prev.lastMediaAccess
-            case .backgroundStopped: next.lastBackgroundRefreshAvailable = prev.lastBackgroundRefreshAvailable
-            }
-        }
+        undeliverable = post.map(\.event)
         post = []
     }
     return DefinitiveDecision(next: next, post: post, cancel: cancel, undeliverable: undeliverable)

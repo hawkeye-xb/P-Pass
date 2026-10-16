@@ -34,7 +34,7 @@ enum SystemNotifications {
 /// 失败本地通知（Android `DefinitiveEventNotices`，#130 / #981）：只发三类确定事件——配对失效、相册权限变差、
 /// 「后台 App 刷新」被关；「备份出问题」不发（#418）。触发与去重是 PPassCore 的纯判定 + 落盘状态，这里只负责发 / 撤。
 /// iOS 上通知只能在 App 有执行时间时发出（前台，或后台任务拉起的那一轮），这是平台限制，不是遗漏。
-/// #975：发之前读系统真实授权；未授权不静默吞掉——不发、状态不推进，每类事件只记一行日志。
+/// #975：发之前读系统真实授权；未授权 / 开关关着不静默吞掉——不发（状态照常推进，同 Android，之后打开也不补发），每类事件只记一行日志。
 enum FailureNotifier {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var loggedUndeliverable: Set<NoticeEvent> = []

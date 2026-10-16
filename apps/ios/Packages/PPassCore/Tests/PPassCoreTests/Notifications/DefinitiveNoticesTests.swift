@@ -122,20 +122,22 @@ final class DefinitiveNoticesTests: XCTestCase {
         XCTAssertEqual(d.next.lastBackgroundRefreshAvailable, false)
     }
 
-    // MARK: 开关 / 系统授权：挡的是「发出去」，没发出去的状况授权后仍要提醒（#975）
+    // MARK: 开关 / 系统授权：只挡「发出去」，状态照常推进，之后打开也不补发（同 Android）
 
-    func testUndeliverableKeepsEveryPostPendingUntilDeliverable() {
+    func testUndeliverableSuppressesPostButAdvancesState() {
         let prev = DefinitiveNoticeState(lastMediaAccess: "full", lastBackgroundRefreshAvailable: true)
-        let blocked = decide(prev, facts(lost: true, media: .none, refresh: .denied), deliverable: false)
+        let all = facts(lost: true, media: .none, refresh: .denied)
+        let blocked = decide(prev, all, deliverable: false)
         XCTAssertEqual(blocked.post, [])
         XCTAssertEqual(Set(blocked.undeliverable), [.pairingLost, .mediaAccessRevoked, .backgroundStopped])
-        XCTAssertEqual(blocked.next, prev, "没发出去：状态不推进")
-        let open = decide(blocked.next, facts(lost: true, media: .none, refresh: .denied), deliverable: true)
-        XCTAssertEqual(Set(open.post.map(\.event)), [.pairingLost, .mediaAccessRevoked, .backgroundStopped])
+        XCTAssertEqual(blocked.next, DefinitiveNoticeState(notifiedLostEpoch: "e1", lastMediaAccess: "none", lastBackgroundRefreshAvailable: false))
+        // 打开开关 / 授权之后：同一状况不补发。
+        let open = decide(blocked.next, all, deliverable: true)
+        XCTAssertEqual(open.post, [])
+        XCTAssertTrue(open.undeliverable.isEmpty)
     }
 
     func testUndeliverableStillAdvancesRecoveryAndBaselines() {
-        // 恢复（复位 / 撤通知）与基线不依赖送达：开关关着时也照常往前走。
         let d = decide(DefinitiveNoticeState(notifiedLostEpoch: "e1", lastMediaAccess: "partial"), facts(epoch: "e2", media: .full), deliverable: false)
         XCTAssertEqual(d.cancel, [.pairingLost, .mediaAccessRevoked])
         XCTAssertNil(d.next.notifiedLostEpoch)
