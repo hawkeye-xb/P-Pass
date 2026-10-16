@@ -632,6 +632,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # SEC-15 (#1003)：tools/ci-deny-advisories.sh 要和 HEAD^1 比 Cargo.lock。
+          fetch-depth: 2
 
       - name: Set Rust toolchain from rust-toolchain.toml
         shell: bash
@@ -652,5 +655,16 @@ jobs:
         with:
           tool: cargo-deny
 
-      - name: License and dependency audit
-        run: cargo deny check advisories licenses bans
+      # SEC-15 (#1003)：拆成两步。licenses / bans 只看 Cargo.lock，结果不会自己
+      # 变 ⇒ 每个 PR 照跑。advisories（含 yanked）读外部数据库、随时间变化 ⇒
+      # 只在本次改了 Cargo.lock / deny.toml 时跑；其余交给每日定时的
+      # audit-advisories.yml。job 名不改（它是 main 的必需检查）。
+      - name: License and bans audit
+        run: cargo deny check licenses bans
+
+      # 判据脚本先过它自己的变异测试再用（同 changes job 的做法）。约 1 秒。
+      - name: Advisory gate self-test
+        run: tools/test-ci-deny-advisories.sh
+
+      - name: Advisory audit (only when Cargo.lock / deny.toml changed)
+        run: tools/ci-deny-advisories.sh .

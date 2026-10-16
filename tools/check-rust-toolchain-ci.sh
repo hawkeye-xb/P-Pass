@@ -37,6 +37,8 @@ expected_jobs = {
         "clippy-windows",
         "deny",
     },
+    # SEC-15 (#1003)：advisories 的每日定时检查，从 deny job 拆出来的。
+    ".github/workflows/audit-advisories.yml": {"advisories"},
     # CI-11 (#255)：空集**不是**「这个文件不用查」。ci-desktop 的两个 job
     # 自己不跑 Cargo——Cargo 命令和工具链 setup 都在共享 composite action
     # 里（拆 job 去掉现算检查名时搬过去的）。文件仍然在这里列着，是为了继续

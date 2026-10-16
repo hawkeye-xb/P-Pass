@@ -106,13 +106,22 @@ runs:
       uses: taiki-e/install-action@4076c08d76dba979c11a7285295b0716c1d67908 # v2.87.15
       with:
         tool: cargo-deny
-    - name: License and dependency audit (src-tauri)
+    # SEC-15 (#1003)：拆成两步，口径同 ci-rust 的 `license + dependency audit`。
+    # licenses / bans 只看锁文件 ⇒ 每次照跑；advisories（含 yanked）随外部数据
+    # 变化 ⇒ 只在本次改了 src-tauri 的 Cargo.lock / deny.toml 时跑，其余交给
+    # 每日定时的 audit-advisories.yml。advisories 那步要 HEAD^1，所以
+    # ci-desktop 的 desktop-linux checkout 设了 fetch-depth: 2。
+    - name: License and bans audit (src-tauri)
       if: runner.os == 'Linux'
       shell: bash
       working-directory: apps/desktop/src-tauri
       # 用本目录下的 deny.toml（cargo-deny 默认就近取），**不是**根那份 ——
       # 两棵树的 ignore 清单刻意不共享，理由写在 src-tauri/deny.toml 头部。
-      run: cargo deny check advisories licenses bans
+      run: cargo deny check licenses bans
+    - name: Advisory audit (src-tauri, only when its Cargo.lock / deny.toml changed)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: tools/ci-deny-advisories.sh apps/desktop/src-tauri
     # UI 构建（vite）——Svelte 编译错误（如模板语法）只有 build 才炸
     # （lint 不报）。assets/** 改动（tokens）也触发本域，确保 UI 侧
     # 消费新 token 时构建仍绿。desktop 用 pnpm（pnpm-lock.yaml，
