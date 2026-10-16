@@ -21,9 +21,15 @@ if [ "${#manifests[@]}" -eq 0 ]; then
 fi
 
 UDID=$("$ROOT/tools/ios/sim.sh" udid)
+# 同一台模拟器上的测试排队执行，避免别的会话收尾关机打断本次运行（见 sim-lock.sh）。
+# shellcheck source=tools/ios/sim-lock.sh
+. "$ROOT/tools/ios/sim-lock.sh"
+sim_lock_acquire
 STATE=$(xcrun simctl list devices -j | jq -r --arg u "$UDID" '.devices[][] | select(.udid == $u) | .state')
 if [ "$STATE" != "Booted" ]; then
-  trap 'xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true' EXIT
+  trap 'xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true; sim_lock_release' EXIT
+else
+  trap 'sim_lock_release' EXIT
 fi
 
 fail=0

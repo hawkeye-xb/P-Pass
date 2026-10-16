@@ -118,7 +118,7 @@ STORAGE=$(grep -m1 'storage: using' "$OUT/forensics-process.log" || true)
 if [ -s "$OUT/device.txt" ] && grep -q 'Library/Logs/ppass.log' "$OUT/container-tree.txt" && [ -n "$STORAGE" ]; then
   verdict forensics PASS "pid=${FPID}: ${STORAGE#* }；容器 $(grep -c . "$OUT/container-tree.txt") 行"
 else
-  verdict forensics FAIL "设备信息 / 容器树 / 本进程 storage 行有缺（见 $OUT）"
+  verdict forensics FAIL "设备信息 / 容器树 / 本进程 storage 行有缺（见 ${OUT}）"
 fi
 
 # ---- 导出范围 + 开跑前账本 ----
@@ -155,7 +155,7 @@ cleanup() {
       tail -8 "$OUT/restore-final.log"; echo "WARN: 恢复失败，手动跑 tools/ios/restore-desktop-pairing.sh $OUT/scope-before.json"; rc=1
     fi
   fi
-  echo "--- summary（$SUMMARY）---"; cat "$SUMMARY"
+  echo "--- summary（${SUMMARY}）---"; cat "$SUMMARY"
   exit "$rc"
 }
 trap cleanup EXIT
