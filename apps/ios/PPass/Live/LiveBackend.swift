@@ -100,8 +100,23 @@ final class LiveBackend: @unchecked Sendable {
         scheduler.ensureScheduled()
         PPassBackgroundTasks.ensureShortScheduled(logger: logger)
         if root.isDegraded { logger.log("storage root degraded: \(root.kind)") }
-        // #956：网络恢复时补发待撤销的 unpair（回前台与启动的触发点在 LiveLifecycle / start）。
-        network.onRecovered = { [weak self] in self?.flushPendingUnpairs() }
+        network.onUpdate = { [weak self] update in self?.networkPathChanged(update) }
+    }
+
+    /// #976：路径更新 → 先让 iroh 重探路径，再交给引擎（对位 Android `onFlowNetworkChanged`）：
+    /// 整条路径不可用 → 在飞的这张判路径失败；否则当作一次网络变化（跑中切到蜂窝且仅 Wi‑Fi → 停轮等 WIFI）。
+    /// 网络从断到通时顺带补发待撤销的 unpair（#956；回前台与启动的触发点在 LiveLifecycle / start）。
+    func networkPathChanged(_ update: NetworkPathTracker.Update) {
+        guard let action = update.action else { return }
+        if update.recovered { flushPendingUnpairs() }
+        provider.ffi.networkChange()
+        let engine = self.engine
+        Task {
+            switch action {
+            case .lost: await engine.onNetworkLost()
+            case .changed: await engine.onNetworkChanged()
+            }
+        }
     }
 
     /// 重试待撤销的 `device.unpair`（#956）。后台协程，失败只写日志，不碰 UI。
@@ -339,25 +354,24 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
 }
 
-/// 当前网络是否「昂贵」（蜂窝 / 个人热点）——「仅 Wi‑Fi」的判据。
+/// 当前网络是否「昂贵」（蜂窝 / 个人热点）——「仅 Wi‑Fi」的判据；并把每次路径更新交给 `onUpdate`（对位 Android
+/// `registerNetworkCallback` → `onFlowNetworkChanged`）。进程活着就一直监听，前台、宽限期、后台任务窗口都算。
 final class NetworkState: @unchecked Sendable {
     private let monitor = NWPathMonitor()
     private let lock = NSLock()
     private var expensive = false
-    private var satisfied: Bool?
-    /// 网络从不可用变回可用时调用（首次回调不算：启动由 `LiveBackend.start` 管）。
-    var onRecovered: (() -> Void)?
+    private var tracker = NetworkPathTracker()
+    /// 每次路径更新一次；首次回调的 `action` 为 nil（启动由 `LiveBackend.start` 管）。在 monitor 队列上调用。
+    var onUpdate: ((NetworkPathTracker.Update) -> Void)?
 
     init() {
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            let now = path.status == .satisfied
             self.lock.lock()
             self.expensive = path.isExpensive
-            let recovered = self.satisfied == false && now
-            self.satisfied = now
+            let update = self.tracker.update(satisfied: path.status == .satisfied)
             self.lock.unlock()
-            if recovered { self.onRecovered?() }
+            self.onUpdate?(update)
         }
         monitor.start(queue: DispatchQueue(label: "ppass.network"))
     }
