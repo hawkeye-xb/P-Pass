@@ -35,6 +35,8 @@ public final class ForegroundHeartbeat: @unchecked Sendable {
     private let sleep: @Sendable (Int64) async throws -> Void
     private let lock = NSLock()
     private var task: Task<Void, Never>?
+    /// 上一拍是否可达（nil = 这次前台还没拍过）。只用来让日志在状态变化时说一句，不每 30 秒刷一行。
+    private var lastReachable: Bool?
 
     /// [currentEpoch] 为 nil = 没有有效配对（未配对 / 已记失效），这一拍直接跳过。
     public init(desktop: FlowDesktop,
@@ -63,6 +65,7 @@ public final class ForegroundHeartbeat: @unchecked Sendable {
     public func start() {
         lock.lock(); defer { lock.unlock() }
         guard task == nil else { return }
+        lastReachable = nil
         task = Task { [weak self] in
             await self?.beat()
             while !Task.isCancelled {
@@ -107,12 +110,20 @@ public final class ForegroundHeartbeat: @unchecked Sendable {
         }
     }
 
+    private func noteReachability(_ reachable: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        if lastReachable != reachable { logger.log("Heartbeat desktop \(reachable ? "reachable" : "unreachable") (was \(lastReachable.map { $0 ? "reachable" : "unreachable" } ?? "unknown"))") }
+        lastReachable = reachable
+    }
+
     private func markReachable() async {
+        noteReachability(true)
         do { try ledger.recordReachable(now: now()) } catch { logger.log("Heartbeat recordReachable failed: \(error)") }
         await onReachable()
     }
 
     private func markUnreachable() {
+        noteReachability(false)
         do { try ledger.recordUnreachable() } catch { logger.log("Heartbeat recordUnreachable failed: \(error)") }
     }
 }

@@ -134,6 +134,7 @@ final class ForegroundHeartbeatTests: XCTestCase {
         XCTAssertEqual(r.wakes.get(), 0)
         XCTAssertTrue(r.lost.get().isEmpty)
         XCTAssertTrue(r.logger.contains("Heartbeat hello failed"), "失败要留日志，不静默")
+        XCTAssertTrue(r.logger.contains("Heartbeat desktop unreachable (was unknown)"))
 
         // 桌面恢复：下一拍接上并叫醒。
         r.desktop.helloResult.set(.success(Hello(pairingEpoch: "e1")))
@@ -141,6 +142,7 @@ final class ForegroundHeartbeatTests: XCTestCase {
         r.clock.now = 6_000_000
         r.sleeper.advance(30_000)
         await eventually("恢复后叫醒") { r.wakes.get() == 1 }
+        XCTAssertTrue(r.logger.contains("Heartbeat desktop reachable (was unreachable)"), "状态变化留一行日志")
         XCTAssertEqual(r.sentinel.load(), SentinelState(lastReachableAt: 6_000_000, failedAttempts: 0, lastNotifiedAt: 0))
         r.heartbeat.stop()
     }
