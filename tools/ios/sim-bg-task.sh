@@ -4,6 +4,7 @@
 #   tools/ios/sim-bg-task.sh short-only [设备标识]   # A：只剩短任务窗口 → 照片逐张传、视频留下
 #   tools/ios/sim-bg-task.sh expire     [设备标识]   # B：短任务跑到一半系统喊停 → 在飞的那张保持传输中
 #   tools/ios/sim-bg-task.sh budget     [设备标识]   # C：待传照片多 → 20 秒预算到点收尾
+#   tools/ios/sim-bg-task.sh _judge <日志目录>        # 对已有一轮的日志重判（不碰真机）
 #
 # 环境变量：
 #   PPASS_DEVICE           devicectl 设备标识（默认 iPhone 16 测试机）
@@ -35,6 +36,71 @@ pull_log() { # $1 = 目标文件
   xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --source Library/Logs/ppass.log --destination "$1" >/dev/null 2>&1
 }
+judge() { # 只读 $OUT 下的 run.log / short.log / db/，按 $MODE、$N 判定
+  FAIL=0
+  must() { # $1 = 说明，$2 = ERE
+    local line; line=$(grep -E -m1 -- "$2" "$OUT/run.log" || true)
+    if [ -n "$line" ]; then echo "  ok   $1"; echo "       $line"; else echo "  FAIL $1（没找到 /$2/）"; FAIL=1; fi
+  }
+  must_not() { # 只看短任务窗口内的行
+    local line; line=$(grep -E -m1 -- "$2" "$OUT/short.log" || true)
+    if [ -z "$line" ]; then echo "  ok   $1"; else echo "  FAIL $1"; echo "       $line"; FAIL=1; fi
+  }
+  echo "==> 判定"
+  must "短任务被叫醒时没有其他窗口（others=[]）" 'short task: woken \(budget 20s, others=\[\]\)'
+  # 短任务不「发起」对账：不把扫描置脏、不做源缺失核对。接着做完上一轮遗留的脏扫描（reconcile scan finished）不算——
+  # 取件顺序固定是「遗留续传 → 脏扫描 → 新照片」（与 Android FlowEngine.kt pickNext 一致）。
+  must_not "短任务不发起对账（不把扫描置脏）" 'marks the scan dirty|scan marked dirty'
+  must_not "短任务不发起对账（不做 source_missing 核对）" 'source_missing:'
+  case "$MODE" in
+    short-only)
+      must "这一轮只传照片" 'round .* open \(desktop reachable; photos only\)'
+      must "照片逐张开始" 'item start: '
+      must "照片逐张送达" 'item end: .* result=next'
+      must "视频留给别的窗口" 'video\(s\) left for another window \(photos only\)'
+      must "自己跑完收尾" 'short task: finished \(finish=done '
+      DELIVERED=$(grep -c 'item end: .* result=next' "$OUT/run.log" || true)
+      if [ "$DELIVERED" -eq "$N" ]; then echo "  ok   ${N} 张照片全部送达"; else echo "  FAIL 送达张数 ${DELIVERED} ≠ ${N}"; FAIL=1; fi
+      ;;
+    expire)
+      must "系统喊停" 'short task: expired by the system'
+      must "在飞的那张被打断" 'item end: .* result=aborted'
+      must_not "没有被当成失败" 'result=failed'
+      # 「保持传输中」看账本：被打断那张的 order 行应仍是 TRANSFERRING（下一轮按遗留续传最先取）。
+      ORDER=$(sed -n 's/.*item end: order \([0-9]*\) .*result=aborted.*/\1/p' "$OUT/run.log" | head -1)
+      STATE=$( [ -n "$ORDER" ] && sqlite3 -readonly "$OUT/db/backup-orders.db" "SELECT state FROM orders WHERE id = $ORDER" 2>&1 || true)
+      if [ "$STATE" = TRANSFERRING ]; then echo "  ok   账本里 order $ORDER 仍是 TRANSFERRING"; else echo "  FAIL 账本里 order ${ORDER:-?} 的状态是 '${STATE}'，应为 TRANSFERRING"; FAIL=1; fi
+      ;;
+    budget)
+      must "照片逐张开始" 'item start: '
+      must "20 秒预算到点" 'short task: budget reached; finishing'
+      must "以预算收尾" 'short task: finished \(finish=budget '
+      WAKES=$(grep -c 'short task: woken' "$OUT/run.log" || true)
+      echo "  ..   共叫醒短任务 ${WAKES} 次"
+      # 下一次从断点接着传：预算到点时被打断（aborted）的那张，后面要以 result=next 送达。
+      ABORTED=$(sed -n 's/.*item end: order [0-9]* hash=\([0-9a-f]*\) .*result=aborted.*/\1/p' "$OUT/run.log" | sort -u)
+      for h in $ABORTED; do
+        if grep -qE "item end: order [0-9]+ hash=$h .*result=next" "$OUT/run.log"; then echo "  ok   预算到点时在飞的 $h 下一次接着送达"
+        else echo "  FAIL 预算到点时在飞的 $h 后来没有送达"; FAIL=1; fi
+      done
+      # 最终全部送达、不重复：送达行数 = 不同 hash 数 = N。
+      NEXT_LINES=$(grep -c 'item end: .* result=next' "$OUT/run.log" || true)
+      NEXT_DISTINCT=$(sed -n 's/.*item end: order [0-9]* hash=\([0-9a-f]*\) .*result=next.*/\1/p' "$OUT/run.log" | sort -u | wc -l | tr -d ' ')
+      if [ "$NEXT_DISTINCT" -eq "$N" ] && [ "$NEXT_LINES" -eq "$N" ]; then echo "  ok   ${N} 张全部送达、没有重复（${NEXT_LINES} 行 / ${NEXT_DISTINCT} 个 hash）"
+      else echo "  FAIL 送达 ${NEXT_LINES} 行 / ${NEXT_DISTINCT} 个不同 hash，应都是 ${N}"; FAIL=1; fi
+      must_not "没有被当成失败" 'result=failed'
+      ;;
+  esac
+  echo "（launch origin：调试器附加在已运行的前台进程上模拟，本进程的启动来源是 foreground，不判 background。）"
+  if [ "$FAIL" = 0 ]; then echo "PASS: ${MODE}（日志 $OUT）"; else echo "FAIL: ${MODE}（日志 $OUT）"; return 1; fi
+}
+if [ "$MODE" = _judge ]; then # 对已有日志目录重判：sim-bg-task.sh _judge apps/ios/build/sim-bg-task/<场景>-<时间>
+  OUT="${2:?要给日志目录}"; OUT="${OUT%/}"
+  MODE=$(basename "$OUT" | sed 's/-[0-9]\{8\}-[0-9]\{6\}$//')
+  N=$(sed -n 's/.*照片 \([0-9]*\) 张.*/\1/p' "$OUT/sim.log" | head -1)
+  echo "==> 重判 ${OUT}（${MODE}，N=${N}）"
+  judge; exit $?
+fi
 if [ "$MODE" = _log ]; then # 内部用：给 lldb 那一侧轮询日志
   T=$(mktemp "${TMPDIR:-/tmp}/ppass-log.XXXXXX"); pull_log "$T" && cat "$T"; rm -f "$T"; exit 0
 fi
@@ -242,70 +308,19 @@ echo "--- 本次短任务日志（$OUT/run.log）---"
 cat "$OUT/run.log"
 echo "---"
 
-FAIL=0
-must() { # $1 = 说明，$2 = ERE
-  local line; line=$(grep -E -m1 -- "$2" "$OUT/run.log" || true)
-  if [ -n "$line" ]; then echo "  ok   $1"; echo "       $line"; else echo "  FAIL $1（没找到 /$2/）"; FAIL=1; fi
-}
-must_not() { # 只看短任务窗口内的行
-  local line; line=$(grep -E -m1 -- "$2" "$OUT/short.log" || true)
-  if [ -z "$line" ]; then echo "  ok   $1"; else echo "  FAIL $1"; echo "       $line"; FAIL=1; fi
-}
-echo "==> 判定"
-must "短任务被叫醒时没有其他窗口（others=[]）" 'short task: woken \(budget 20s, others=\[\]\)'
-must_not "短任务里不跑全量对账（source_missing）" 'source_missing:'
-must_not "短任务里不跑全量对账（reconcile scan）" 'reconcile scan'
-case "$MODE" in
-  short-only)
-    must "这一轮只传照片" 'round .* open \(desktop reachable; photos only\)'
-    must "照片逐张开始" 'item start: '
-    must "照片逐张送达" 'item end: .* result=next'
-    must "视频留给别的窗口" 'video\(s\) left for another window \(photos only\)'
-    must "自己跑完收尾" 'short task: finished \(finish=done '
-    DELIVERED=$(grep -c 'item end: .* result=next' "$OUT/run.log" || true)
-    if [ "$DELIVERED" -eq "$N" ]; then echo "  ok   ${N} 张照片全部送达"; else echo "  FAIL 送达张数 ${DELIVERED} ≠ ${N}"; FAIL=1; fi
-    ;;
-  expire)
-    must "系统喊停" 'short task: expired by the system'
-    must "在飞的那张被打断" 'item end: .* result=aborted'
-    must_not "没有被当成失败" 'result=failed'
-    # 「保持传输中」看账本：被打断那张的 order 行应仍是 TRANSFERRING（下一轮按遗留续传最先取）。
-    ORDER=$(sed -n 's/.*item end: order \([0-9]*\) .*result=aborted.*/\1/p' "$OUT/run.log" | head -1)
-    # 账本在 App Group 容器里（devicectl 拉不到）：先停掉 daemon（下一次启动连不上桌面，不会接着传这张），
-    # 再用 DEBUG 驱动（PPASS_BGTEST_DUMP=1）把账本拷进 App 容器，拉回来查。
-    kill "$DAEMON_PID" 2>/dev/null || true; wait "$DAEMON_PID" 2>/dev/null || true; DAEMON_PID=
-    RUN="$RUN-dump"
-    xcrun devicectl device process launch --device "$DEV" --terminate-existing \
-      --environment-variables "$(jq -cn --arg r "$RUN" '{PPASS_E2E_DIR:"container", PPASS_E2E_RUN:$r, PPASS_BGTEST_DUMP:"1"}')" \
-      "$BUNDLE_ID" >"$OUT/launch-dump.log" 2>&1 || cat "$OUT/launch-dump.log"
-    wait_step dumped 30
-    mkdir -p "$OUT/db"
-    for f in backup-orders.db backup-orders.db-wal backup-orders.db-shm; do
-      xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
-        --source "Documents/e2e/db/$f" --destination "$OUT/db/$f" >/dev/null 2>&1 || true
-    done
-    STATE=$( [ -n "$ORDER" ] && sqlite3 -readonly "$OUT/db/backup-orders.db" "SELECT state FROM orders WHERE id = $ORDER" 2>&1 || true)
-    if [ "$STATE" = TRANSFERRING ]; then echo "  ok   账本里 order $ORDER 仍是 TRANSFERRING"; else echo "  FAIL 账本里 order ${ORDER:-?} 的状态是 '${STATE}'，应为 TRANSFERRING"; FAIL=1; fi
-    ;;
-  budget)
-    must "照片逐张开始" 'item start: '
-    must "20 秒预算到点" 'short task: budget reached; finishing'
-    must "以预算收尾" 'short task: finished \(finish=budget '
-    WAKES=$(grep -c 'short task: woken' "$OUT/run.log" || true)
-    echo "  ..   共叫醒短任务 ${WAKES} 次"
-    # 下一次从断点接着传：预算到点时被打断（aborted）的那张，后面要以 result=next 送达。
-    ABORTED=$(sed -n 's/.*item end: order [0-9]* hash=\([0-9a-f]*\) .*result=aborted.*/\1/p' "$OUT/run.log" | sort -u)
-    for h in $ABORTED; do
-      if grep -qE "item end: order [0-9]+ hash=$h .*result=next" "$OUT/run.log"; then echo "  ok   预算到点时在飞的 $h 下一次接着送达"
-      else echo "  FAIL 预算到点时在飞的 $h 后来没有送达"; FAIL=1; fi
-    done
-    # 最终全部送达、不重复：送达行数 = 不同 hash 数 = N。
-    NEXT_LINES=$(grep -c 'item end: .* result=next' "$OUT/run.log" || true)
-    NEXT_DISTINCT=$(sed -n 's/.*item end: order [0-9]* hash=\([0-9a-f]*\) .*result=next.*/\1/p' "$OUT/run.log" | sort -u | wc -l | tr -d ' ')
-    if [ "$NEXT_DISTINCT" -eq "$N" ] && [ "$NEXT_LINES" -eq "$N" ]; then echo "  ok   ${N} 张全部送达、没有重复（${NEXT_LINES} 行 / ${NEXT_DISTINCT} 个 hash）"
-    else echo "  FAIL 送达 ${NEXT_LINES} 行 / ${NEXT_DISTINCT} 个不同 hash，应都是 ${N}"; FAIL=1; fi
-    must_not "没有被当成失败" 'result=failed'
-    ;;
-esac
-echo "（launch origin：调试器附加在已运行的前台进程上模拟，本进程的启动来源是 foreground，不判 background。）"
-if [ "$FAIL" = 0 ]; then echo "PASS: ${MODE}（日志 $OUT）"; else echo "FAIL: ${MODE}（日志 $OUT）"; exit 1; fi
+# expire：账本在 App Group 容器里（devicectl 拉不到）：先停掉 daemon（下一次启动连不上桌面，不会接着传这张），
+# 再用 DEBUG 驱动（PPASS_BGTEST_DUMP=1）把账本拷进 App 容器，拉回 $OUT/db 给判定查。
+if [ "$MODE" = expire ]; then
+  kill "$DAEMON_PID" 2>/dev/null || true; wait "$DAEMON_PID" 2>/dev/null || true; DAEMON_PID=
+  RUN="$RUN-dump"
+  xcrun devicectl device process launch --device "$DEV" --terminate-existing \
+    --environment-variables "$(jq -cn --arg r "$RUN" '{PPASS_E2E_DIR:"container", PPASS_E2E_RUN:$r, PPASS_BGTEST_DUMP:"1"}')" \
+    "$BUNDLE_ID" >"$OUT/launch-dump.log" 2>&1 || cat "$OUT/launch-dump.log"
+  wait_step dumped 30
+  mkdir -p "$OUT/db"
+  for f in backup-orders.db backup-orders.db-wal backup-orders.db-shm; do
+    xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+      --source "Documents/e2e/db/$f" --destination "$OUT/db/$f" >/dev/null 2>&1 || true
+  done
+fi
+judge
