@@ -18,7 +18,7 @@ enum FakeScenario: String, CaseIterable {
 enum FakeBackend {
     static func make(_ s: FakeScenario = .current) -> Backend {
         let media = FakeMediaLibrary(scenario: s)
-        return Backend(isDemo: true, timeline: FakeTimeline(scenario: s), media: media,
+        return Backend(isDemo: true, timeline: FakeTimeline(scenario: s), live: FakeTimelineLive(), media: media,
                        pairing: FakePairing(scenario: s), engine: FakeEngine(scenario: s, media: media))
     }
 }
@@ -172,4 +172,11 @@ final class FakeEngine: BackupEngine {
         if scenario == .waiting { out.append(PromiseNotice(BackupPromise.waitOpenApp)) }
         return out
     }
+}
+
+/// 演示数据没有电脑可订阅：不产生任何信号（页面行为 = 演示数据本身），状态恒为初始。
+final class FakeTimelineLive: TimelineLiveFeed {
+    @MainActor func observe(_ handler: @escaping @MainActor (TimelineLiveEvent) -> Void) -> UUID { handler(.state(TimelineLiveState())); return UUID() }
+    @MainActor func remove(_ token: UUID) {}
+    @MainActor func retry() {}
 }

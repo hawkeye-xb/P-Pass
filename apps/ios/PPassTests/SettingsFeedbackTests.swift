@@ -57,7 +57,7 @@ final class SettingsFeedbackTests: XCTestCase {
     private func make() -> (AppModel, StubEngine, StubMedia) {
         let engine = StubEngine(), media = StubMedia()
         let fake = FakeBackend.make(.normal)
-        let backend = Backend(isDemo: true, timeline: fake.timeline, media: media, pairing: fake.pairing, engine: engine)
+        let backend = Backend(isDemo: true, timeline: fake.timeline, live: fake.live, media: media, pairing: fake.pairing, engine: engine)
         return (AppModel(backend: backend), engine, media)
     }
 

@@ -34,6 +34,24 @@ protocol TimelineSource: AnyObject {
     func original(_ item: TimelineItem, progress: @escaping (Double) -> Void) async throws -> URL
 }
 
+/// 照片页的实时更新通道（#963，对位 Android `TimelineSubscriptionHolder` 暴露给页面的那一面）。
+/// 订阅属于 App 前台，不属于某个页面；页面只在出现时注册观察者，离开时丢掉，不创建 / 销毁连接。
+enum TimelineLiveEvent: Equatable {
+    /// 桌面说时间线变了：整页覆盖刷新。
+    case invalidated
+    /// 60 秒兜底：只追加，不动已加载内容。
+    case fallbackTick
+    case state(TimelineLiveState)
+}
+
+protocol TimelineLiveFeed: AnyObject {
+    /// 注册观察者（主线程回调）。注册时立刻补发一次当前状态；返回的 token 释放 / 调 `remove` 即注销。
+    @MainActor func observe(_ handler: @escaping @MainActor (TimelineLiveEvent) -> Void) -> UUID
+    @MainActor func remove(_ token: UUID)
+    /// 「实时更新已断开 · 重试」。
+    @MainActor func retry()
+}
+
 /// 手机相册里的一个相册（对位 Android `MediaScanner.Bucket`）。
 struct AlbumBucket: Identifiable, Equatable {
     let id: String
@@ -133,6 +151,7 @@ struct Backend {
     /// 诊断页如实显示：现在是演示数据还是真数据。
     let isDemo: Bool
     let timeline: TimelineSource
+    let live: TimelineLiveFeed
     let media: MediaLibrary
     let pairing: PairingService
     let engine: BackupEngine

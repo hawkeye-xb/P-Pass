@@ -32,6 +32,8 @@ final class LiveBackend: @unchecked Sendable {
     let pairingLoss = PairingLoss()
     let sentinel: SentinelStore
     let heartbeat: ForegroundHeartbeat
+    /// 照片页实时更新（#963）：订阅跟前台心跳同一层，前台开、后台关。
+    let timelineLive: LiveTimelineFeed
     let network = NetworkState()
     let pendingUnpair: PendingUnpairStore
     let unpairFlusher: PendingUnpairFlusher
@@ -124,10 +126,14 @@ final class LiveBackend: @unchecked Sendable {
         // 可达 → 叫醒引擎（#439）；被拒为配对失效 → 记进 PairingLoss 并刷新首页事实（refreshFacts 据此标红卡，#466）。
         sentinel = SentinelStore(directory: dir, logger: logger)
         let loss = pairingLoss
+        let liveFeed = LiveTimelineFeed(transport: CurrentPeerTransport(plane: plane, store: pairingStore),
+                                        isPaired: { pairingStore.load() != nil }, logger: logger)
+        timelineLive = liveFeed
         heartbeat = ForegroundHeartbeat(
             desktop: desktop, currentEpoch: epoch, ledger: sentinel, now: { Int64(Date().timeIntervalSince1970 * 1000) },
             onReachable: { [engine = self.engine] in
                 await engine.onDesktopReachable()
+                liveFeed.session.onDesktopReachable() // 实时更新退避耗尽后桌面回来了：自动恢复，不等用户点「重试」（Android #474）
                 await model.refresh?()
             },
             onPairingLost: { epoch, failure in
@@ -190,7 +196,7 @@ final class LiveBackend: @unchecked Sendable {
             let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("ppass-blobstore")
             return try await plane.fetchBlob(ticket: ticket, scratch: scratch, dest: dest, progress: progress)
         })
-        return Backend(isDemo: false, timeline: timeline, media: media, pairing: pairing,
+        return Backend(isDemo: false, timeline: timeline, live: timelineLive, media: media, pairing: pairing,
                        engine: LiveEngineAdapter(backend: self))
     }
 
@@ -207,6 +213,7 @@ final class LiveBackend: @unchecked Sendable {
         // 换新电脑 = 新的信任关系，清意图，由完成页让用户重新选。写失败要暴露，不静默沿用旧意图。
         do { try autoPrefs.applyOnPairing(knownDesktop: knownDesktop) } catch { logger.log("auto-backup prefs: apply on pairing failed: \(error)") }
         mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）
+        timelineLive.session.pairingChanged() // 新配对：按新对端重建实时订阅（#963）
         Task { _ = await engine.trigger(.pairingRepaired) }
     }
 
@@ -221,6 +228,7 @@ final class LiveBackend: @unchecked Sendable {
         do { try applyDisconnectManifest(root: root.url, runtime: actions, logger: logger) } catch {
             logger.log("disconnect manifest failed: \(error)")
         }
+        timelineLive.session.pairingChanged() // 配对已清：旧订阅关掉，空闲等下次配对（#963）
         await refreshFacts()
     }
 
@@ -242,7 +250,7 @@ final class LiveBackend: @unchecked Sendable {
     func setActive(_ active: Bool) {
         window.setAppActive(active)
         // 心跳只在前台跑（两端一致，没有后台心跳）：回前台立即拍一次，退后台停。
-        if active { heartbeat.start() } else { heartbeat.stop() }
+        if active { heartbeat.start(); timelineLive.session.start() } else { heartbeat.stop(); timelineLive.session.stop() }
         if active {
             scheduler.ensureScheduled()
             PPassBackgroundTasks.ensureShortScheduled(logger: logger)
