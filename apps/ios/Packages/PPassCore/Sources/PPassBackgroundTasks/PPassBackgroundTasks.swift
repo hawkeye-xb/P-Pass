@@ -9,7 +9,8 @@
 //    `ExecutionWindow()` 作为 ExecutionLease 注入；进程启动、回前台时调一次 `scheduler.ensureScheduled()`。
 // 4. scenePhase：.active → `window.setAppActive(true)` + `ForegroundCatchup.appDidBecomeActive()`；
 //    .background → `window.setAppActive(false)`，并用 `UIApplication.beginBackgroundTask` 申请收尾时间
-//    （开始 `window.setFinishingTime(true)`；expiration / 结束 `window.setFinishingTime(false)` + `engine.onLeaseExpired()`）。
+//    （开始 `window.setFinishingTime(true)`；结束 `window.setFinishingTime(false)`；expiration 在 handler 里同步关窗口、
+//    同步 `endBackgroundTask`，再异步 `engine.onLeaseExpired()`——停不停由引擎按此刻的租约定，#1007）。
 // 5. 断开（DisconnectRuntime.cancelScheduledWakes）调 `scheduler.stop()`。
 // 短任务（#958）：identifier `BackgroundWakePlanner.shortTaskIdentifier`（com.hawkeyexb.ppass.refresh）也要进 Info.plist，
 //   `UIBackgroundModes` 再加 `fetch`；启动 / 回前台 / 进后台调 `ensureShortScheduled()`。

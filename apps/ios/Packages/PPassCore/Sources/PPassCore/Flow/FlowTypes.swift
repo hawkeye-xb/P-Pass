@@ -355,6 +355,9 @@ public protocol ExecutionLease: AnyObject, Sendable {
     func acquire() async -> Bool
     /// 租约仍有效（没被系统收回）。每张开始前检查。
     func isHeld() -> Bool
+    /// 此刻有没有执行时间（现在 [acquire] 会不会成功），与这一轮持没持有无关。#1007：执行时间被收回的信号
+    /// 送到引擎时用它重读——iOS 的租约是多个窗口的并集，「某个窗口到期」只说明一个来源关了。
+    var hasExecutionTime: Bool { get }
     /// 有进度就续期。
     func renew()
     func update(_ status: LoopStatus)

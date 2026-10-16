@@ -219,6 +219,8 @@ final class FakeDelivery: ItemDelivery, @unchecked Sendable {
     let onStart = Locked<(DeliveryRequest) -> Void>({ _ in })
     /// 结局之前的进度回调脚本。
     let progress = Locked<(DeliveryRequest, (Int64) -> Void) async -> Void>({ _, _ in })
+    /// 被取消、退出之前调（#1007：在「引擎停循环、等在飞的那张退出」这个窗口里插事件）。
+    let onCancel = Locked<(DeliveryRequest) async -> Void>({ _ in })
     private let gate = Gate()
 
     var deliveredIds: [Int] { requests.get().map { Int($0.details.snapshot.mediaId.dropFirst())! } }
@@ -241,6 +243,7 @@ final class FakeDelivery: ItemDelivery, @unchecked Sendable {
                 try await gate.wait()
             } catch {
                 cancelled.update { $0.append(request.orderId) }
+                await onCancel.get()(request)
                 throw error
             }
         }
@@ -276,6 +279,7 @@ final class FakeLease: ExecutionLease, @unchecked Sendable {
     }
 
     func isHeld() -> Bool { held.get() }
+    var hasExecutionTime: Bool { held.get() }
     func renew() {}
     func update(_ status: LoopStatus) { updates.update { $0.append(status) } }
 

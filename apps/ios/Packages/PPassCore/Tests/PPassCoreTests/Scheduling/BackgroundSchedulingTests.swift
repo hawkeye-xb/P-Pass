@@ -376,4 +376,70 @@ final class ShortTaskWindowTests: XCTestCase {
         let view = await rig.engine.view
         XCTAssertNotEqual(view.waitReason, .executionBlocked)
     }
+
+    // MARK: #1007 到期以引擎重读租约为准
+
+    /// 过时的到期：宽限期关掉、到期信号还在路上时用户回了前台、前台一轮已开跑——信号送到时还有执行时间，这一轮不停。
+    func testAStaleExpiryDoesNotStopTheForegroundRound() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1)
+        rig.photo(2, generation: 2)
+        await rig.start()
+        window.setFinishingTime(true)
+        window.setFinishingTime(false) // 宽限期到期：只关自己；到期信号异步送往引擎
+        window.setAppActive(true) // 信号送到之前：回前台
+        rig.delivery.hold.set(true)
+        await rig.engine.onAppForeground()
+        await eventually("foreground round in flight") { rig.delivery.requests.get().count == 1 }
+        await rig.engine.onLeaseExpired() // 过时的信号现在才送到
+        XCTAssertEqual(rig.delivery.cancelled.get().count, 0, "前台持有执行时间，在飞的那张不取消")
+        rig.delivery.release()
+        await rig.engine.awaitIdle()
+        XCTAssertEqual(Set(rig.delivery.deliveredIds), [1, 2])
+        let view = await rig.engine.view
+        XCTAssertNotEqual(view.waitReason, .executionBlocked)
+    }
+
+    /// 停的过程中回前台：确实没有执行时间、引擎开始停；等在飞那张退出时用户回前台并触发 APP_FOREGROUND——
+    /// 停完之后还有执行时间、有触发，接着跑，不卡在 EXECUTION_BLOCKED。
+    func testAForegroundArrivingWhileStoppingRunsAgain() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1)
+        await rig.start()
+        window.setFinishingTime(true)
+        rig.delivery.hold.set(true)
+        let engine: FlowEngine = rig.engine, delivery = rig.delivery
+        delivery.onCancel.set { _ in
+            delivery.onCancel.set { _ in }
+            delivery.hold.set(false)
+            window.setAppActive(true)
+            await engine.onAppForeground()
+        }
+        await engine.trigger(.networkChange)
+        await eventually("grace round in flight") { delivery.requests.get().count == 1 }
+        await BackgroundRun.expireFinishingTime(engine: engine, window: window)
+        XCTAssertEqual(delivery.cancelled.get().count, 1, "确实没有执行时间：停了")
+        await eventually("ran again after the stop") { delivery.requests.get().count == 2 }
+        await engine.awaitIdle()
+        XCTAssertEqual(try rig.state(1), .confirmed)
+        let view = await engine.view
+        XCTAssertNotEqual(view.waitReason, .executionBlocked)
+    }
+
+    /// 反证对照：真到期（没有任何窗口开着）仍然停、在飞的保持传输中、等待中。
+    func testAGenuineExpiryStillStops() async throws {
+        let (rig, window) = try makeRig()
+        rig.photo(1, generation: 1)
+        await rig.start()
+        window.setFinishingTime(true)
+        rig.delivery.hold.set(true)
+        await rig.engine.trigger(.networkChange)
+        await eventually("grace round in flight") { rig.delivery.requests.get().count == 1 }
+        await BackgroundRun.expireFinishingTime(engine: rig.engine, window: window)
+        XCTAssertFalse(window.hasExecutionTime)
+        XCTAssertEqual(try rig.state(1), .transferring)
+        XCTAssertEqual(rig.delivery.cancelled.get().count, 1)
+        let view = await rig.engine.view
+        XCTAssertEqual(view.waitReason, .executionBlocked)
+    }
 }

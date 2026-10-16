@@ -3,8 +3,8 @@
 // iOS 上能让循环跑的「执行时间」有四种来源：App 在前台；`beginBackgroundTask` 给的收尾时间（刚退到后台的几十秒）；
 // 系统按 BGProcessingTask 给的窗口（长任务）；BGAppRefreshTask 给的窗口（短任务，#958：20 秒自收尾、只传照片）。
 // [ExecutionWindow] 把它们合成一个租约：任一个开着就算持有。
-// 窗口全部关掉（App 退后台且收尾时间用完、后台任务到期）时，App 层调 `engine.onLeaseExpired()`——引擎停循环、
-// 传输端口有界地发 `flow.suspend`、在飞的那张保持传输中、等待中（EXECUTION_BLOCKED）。
+// 任一窗口到期，App 层只关它自己并调 `engine.onLeaseExpired()`；引擎按此刻的租约定停不停（#1007）——窗口全部关掉
+// （App 退后台且收尾时间用完、后台任务到期）才停循环、传输端口有界地发 `flow.suspend`、在飞的那张保持传输中、等待中（EXECUTION_BLOCKED）。
 import Foundation
 
 public final class ExecutionWindow: ExecutionLease, @unchecked Sendable {
@@ -62,7 +62,7 @@ public final class ExecutionWindow: ExecutionLease, @unchecked Sendable {
         return shortTask && !(appActive || finishingTime || backgroundTask)
     }
 
-    /// 是否有任何执行时间（给 App 层判断「退后台时要不要申请收尾时间」）。
+    /// 是否有任何执行时间（[ExecutionLease.hasExecutionTime]：引擎收到到期信号时重读）。
     public var hasExecutionTime: Bool {
         lock.lock(); defer { lock.unlock() }
         return open()
@@ -155,23 +155,24 @@ public enum BackgroundRun {
         return true
     }
 
-    /// 长任务（BGProcessingTask）到期：只关长任务自己这一个来源；关完之后若没有任何窗口还开着，才让引擎按「执行时间被收回」停下
-    /// （在飞的那张保持传输中）。前台 / 宽限期 / 短任务还开着，租约仍然持有，这一轮继续。
+    /// 长任务（BGProcessingTask）到期：只关长任务自己这一个来源，然后告诉引擎。停不停由引擎按此刻的租约定（#1007）：
+    /// 没有任何窗口还开着才停（在飞的那张保持传输中）；前台 / 宽限期 / 短任务还开着，这一轮继续。
+    /// 这里不先判断再通知——判断和引擎动手之间隔着一次异步投递，窗口可能已经重开。
     public static func expire(engine: FlowEngine, window: ExecutionWindow) async {
         window.setBackgroundTask(false)
-        if !window.hasExecutionTime { await engine.onLeaseExpired() }
+        await engine.onLeaseExpired()
     }
 
     /// 短任务（BGAppRefreshTask）到期 / 20 秒到点：规则同 [expire]，只关短任务自己。
     public static func expireShort(engine: FlowEngine, window: ExecutionWindow) async {
         window.setShortTask(false)
-        if !window.hasExecutionTime { await engine.onLeaseExpired() }
+        await engine.onLeaseExpired()
     }
 
     /// 宽限期（beginBackgroundTask）到期：规则同 [expire]，只关宽限期自己。
     public static func expireFinishingTime(engine: FlowEngine, window: ExecutionWindow) async {
         window.setFinishingTime(false)
-        if !window.hasExecutionTime { await engine.onLeaseExpired() }
+        await engine.onLeaseExpired()
     }
 }
 
