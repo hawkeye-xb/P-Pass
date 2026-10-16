@@ -366,7 +366,14 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
         do { try backend.notifyPrefs.setEnabled(on) } catch { backend.logger.log("notify-prefs: write failed: \(error)") }
     }
 
-    func notificationAuthorization() async -> NotificationAuthorization { await SystemNotifications.authorization() }
+    private let lastLoggedAuth = NSLock()
+    nonisolated(unsafe) private var loggedAuth: NotificationAuthorization?
+    func notificationAuthorization() async -> NotificationAuthorization {
+        let auth = await SystemNotifications.authorization()
+        lastLoggedAuth.lock(); defer { lastLoggedAuth.unlock() }
+        if loggedAuth != auth { loggedAuth = auth; backend.logger.log("notifications: system authorization=\(auth)") }
+        return auth
+    }
     func requestNotificationAuthorization() async -> NotificationAuthorization {
         let granted = await SystemNotifications.request()
         let now = await SystemNotifications.authorization()
@@ -376,13 +383,15 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     @MainActor func openNotificationSettings() { SystemNotifications.openSettings() }
 
     func shouldAskNotificationAtOnboarding() async -> Bool {
-        backend.notificationAsk.shouldAsk(authorization: await SystemNotifications.authorization())
+        await notificationAuthorization() == .notDetermined && backend.notificationAsk.shouldAsk(authorization: .notDetermined)
     }
 
     /// 完成页点「好」：该问就先落盘「问过」再弹，结果同步回开关（Android `thenContinue` + `onResult`）。
     func askNotificationAtOnboarding() async {
-        let auth = await SystemNotifications.authorization()
-        guard backend.notificationAsk.shouldAsk(authorization: auth) else { return }
+        let auth = await notificationAuthorization()
+        let ask = backend.notificationAsk.shouldAsk(authorization: auth)
+        backend.logger.log("notification-ask: onboarding done tapped, authorization=\(auth) shouldAsk=\(ask)")
+        guard ask else { return }
         do { try backend.notificationAsk.markAsked() } catch {
             // 落不了盘就不弹：宁可少问，不许因为没记住而下次又问。
             backend.logger.log("notification-ask: markAsked failed, skip prompt: \(error)"); return
