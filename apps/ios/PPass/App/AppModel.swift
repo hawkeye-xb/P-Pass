@@ -73,9 +73,10 @@ final class AppModel: ObservableObject {
     func setAutoBackup(_ on: Bool) { backend.engine.setAutoBackup(on); autoBackup = on }
     func setWifiOnly(_ on: Bool) { backend.engine.setWifiOnly(on); wifiOnly = on }
 
-    /// 距上次确认可达的整天数；从未成功过 = nil（不编造天数，走兜底文案）。取引擎账目里最近一次「电脑确认收到」。
-    var daysSinceLastBackup: Int? {
-        let t = facts.lastSuccessAt
+    /// 距上次确认可达的整天数；从未确认过 = nil（不编造天数，走兜底文案）。取前台心跳最近一次确认桌面可达的时间
+    /// （#977，Android `SentinelStore.lastReachableAt`）——不是最近一次收到照片：一直可达但没有新照片，天数不该增长。
+    var daysSinceLastReachable: Int? {
+        let t = facts.lastReachableAt
         guard t > 0 else { return nil }
         return Int((Int64(Date().timeIntervalSince1970 * 1000) - t) / 86_400_000)
     }

@@ -24,6 +24,19 @@ final class NativeProvider: @unchecked Sendable {
         return current
     }
 
+    /// 断开（#974，对位 Android `clearFlowRuntime`）：旧桌面不许再拉——清允许的对端（在飞的连接在原生侧关掉）、
+    /// 掐掉在飞传输并 revoke（拿掉当前 handler 与全部导入，同 `FfiBlobProvider.pause` 的 #958 语义：只 stop 不 revoke
+    /// 会让同进程里重新配对后所有取原图都被拒）。清不掉的只记日志、不中断后面的步骤。
+    /// 引擎这一轮在清单之前已由 `engine.stopForDisconnect` 停好；Android 在此还关 scope / writer / SQLite，
+    /// iOS 的账本与引擎活过断开（06-ios-variants：同一台重连账本仍有效），所以不关。
+    func teardownForDisconnect(logger: CoreLogger) {
+        setActive(nil)
+        do { try ffi.setAllowedPeer(nodeId: nil) } catch { logger.log("disconnect: clearing allowed peer failed: \(error)") }
+        ffi.stopActiveFetch()
+        ffi.revoke()
+        logger.log("disconnect: provider revoked, allowed peer cleared")
+    }
+
     init(root: URL) throws {
         let dir = root.appendingPathComponent("blobs", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

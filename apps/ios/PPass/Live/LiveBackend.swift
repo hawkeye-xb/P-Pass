@@ -28,10 +28,14 @@ final class LiveBackend: @unchecked Sendable {
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
     let pairingLoss = PairingLoss()
+    let sentinel: SentinelStore
+    let heartbeat: ForegroundHeartbeat
     let network = NetworkState()
     let pendingUnpair: PendingUnpairStore
     let unpairFlusher: PendingUnpairFlusher
     let engineModel: LiveEngineModel
+    /// 前台相册变化监听（#978，对位 Android BackupUiStateHolder 的 MediaStore ContentObserver）。
+    let mediaWatcher: MediaChangeWatcher
 
     init() throws {
         let fm = FileManager.default
@@ -96,12 +100,52 @@ final class LiveBackend: @unchecked Sendable {
             onView: { view in Task { await model.engineChanged(view) } }
         )
         catchup = ForegroundCatchup(engine: engine)
+        // #977：前台心跳（对位 Android ForegroundHeartbeat）。结果映射在 PPassCore，这里只接线：
+        // 可达 → 叫醒引擎（#439）；被拒为配对失效 → 记进 PairingLoss 并刷新首页事实（refreshFacts 据此标红卡，#466）。
+        sentinel = SentinelStore(directory: dir, logger: logger)
+        let loss = pairingLoss
+        heartbeat = ForegroundHeartbeat(
+            desktop: desktop, currentEpoch: epoch, ledger: sentinel, now: { Int64(Date().timeIntervalSince1970 * 1000) },
+            onReachable: { [engine = self.engine] in
+                await engine.onDesktopReachable()
+                await model.refresh?()
+            },
+            onPairingLost: { epoch, failure in
+                loss.record(epoch: epoch, failure: failure)
+                await model.refresh?()
+            },
+            logger: logger)
+        // #978：前台相册变化 → 重算首页计数 + FOREGROUND_MEDIA_CHANGE 叫醒引擎。生命周期：配对着且相册已授权（完整或部分）
+        // 才注册，断开清单注销，重新配对 / 授权后由 `mediaWatcher.start()`（paired / refreshFacts）恢复。
+        let window = self.window
+        let engine = self.engine
+        let change = ForegroundMediaChange(isForeground: { window.isAppActive }, recount: { await model.refresh?() },
+                                           trigger: { _ = await engine.trigger($0) }, logger: logger)
+        mediaWatcher = MediaChangeWatcher(
+            source: PhotoLibraryChangeSource(),
+            unavailableReason: {
+                guard pairingStore.load() != nil else { return "not paired" }
+                return PhotoLibraryChangeSource.unavailableReason(level: PhotoKitAuthorization().currentLevel())
+            },
+            onChange: { Task { await change.handle() } }, logger: logger)
         PPassBackgroundTasks.register(engine: engine, window: window, scheduler: scheduler, logger: logger)
         scheduler.ensureScheduled()
         PPassBackgroundTasks.ensureShortScheduled(logger: logger)
         if root.isDegraded { logger.log("storage root degraded: \(root.kind)") }
-        // #956：网络恢复时补发待撤销的 unpair（回前台与启动的触发点在 LiveLifecycle / start）。
-        network.onRecovered = { [weak self] in self?.flushPendingUnpairs() }
+        network.onUpdate = { [weak self] update in self?.networkPathChanged(update) }
+    }
+
+    /// #976：路径更新 → 先让 iroh 重探路径，再交给引擎（对位 Android `onFlowNetworkChanged`）：
+    /// 整条路径不可用 → 在飞的这张判路径失败；否则当作一次网络变化（跑中切到蜂窝且仅 Wi‑Fi → 停轮等 WIFI）。
+    /// 网络从断到通时顺带补发待撤销的 unpair（#956；回前台与启动的触发点在 LiveLifecycle / start）。
+    func networkPathChanged(_ update: NetworkPathTracker.Update) {
+        if update.recovered { flushPendingUnpairs() }
+        let provider = self.provider, engine = self.engine
+        Task {
+            await dispatchNetworkPath(update, providerNetworkChange: { provider.ffi.networkChange() },
+                                      engineLost: { await engine.onNetworkLost() },
+                                      engineChanged: { await engine.onNetworkChanged() })
+        }
     }
 
     /// 重试待撤销的 `device.unpair`（#956）。后台协程，失败只写日志，不碰 UI。
@@ -138,6 +182,7 @@ final class LiveBackend: @unchecked Sendable {
         catch { logger.log("adoptDesktop failed: \(error)") }
         try? onboarded.markOnboarded(record.daemonNodeId)
         if autoPrefs.requested() { try? autoPrefs.setEnabled(true) } // 断开时只停生产者、留意图（MOB-93）：重新配对按意图恢复
+        mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）
         Task { _ = await engine.trigger(.pairingRepaired) }
     }
 
@@ -145,10 +190,13 @@ final class LiveBackend: @unchecked Sendable {
     /// 身份、相册范围、账本、「连过哪些电脑」都保留——重新扫码后不会重传已备份的。
     func disconnect() async {
         await engine.stopForDisconnect()
-        do { try applyDisconnectManifest(root: root.url, runtime: DisconnectActions(scheduler: scheduler), logger: logger) } catch {
+        // provider 撤销（#974）、唤醒取消、相册监听注销都在清单的运行时三行里，清文件失败也不会跳过它们。
+        let provider = self.provider, scheduler = self.scheduler, watcher = mediaWatcher, logger = self.logger
+        let actions = DisconnectActions(stopFlow: { provider.teardownForDisconnect(logger: logger) },
+                                        cancelWakes: { scheduler.stop() }, stopMedia: { watcher.stop() })
+        do { try applyDisconnectManifest(root: root.url, runtime: actions, logger: logger) } catch {
             logger.log("disconnect manifest failed: \(error)")
         }
-        try? provider.ffi.setAllowedPeer(nodeId: nil)
         await refreshFacts()
     }
 
@@ -162,6 +210,8 @@ final class LiveBackend: @unchecked Sendable {
 
     func setActive(_ active: Bool) {
         window.setAppActive(active)
+        // 心跳只在前台跑（两端一致，没有后台心跳）：回前台立即拍一次，退后台停。
+        if active { heartbeat.start() } else { heartbeat.stop() }
         if active {
             scheduler.ensureScheduled()
             PPassBackgroundTasks.ensureShortScheduled(logger: logger)
@@ -171,6 +221,7 @@ final class LiveBackend: @unchecked Sendable {
 
     /// 首页事实：引擎视图在第一次精确计数（pendingKnown）之前不给（对位 Android visibleEngineView / UI21）。
     func refreshFacts() async {
+        mediaWatcher.start() // 幂等；相册授权晚于启动（首次授权）时在这里补注册（#978）
         let known = await engine.pendingKnown
         let view = await engine.view
         let all = (try? orders.countCurrentByState(bucketIds: nil)) ?? [:]
@@ -185,6 +236,7 @@ final class LiveBackend: @unchecked Sendable {
             failed: all[.failed] ?? 0,
             unfinished: (all[.pending] ?? 0) + (all[.transferring] ?? 0) + (all[.failed] ?? 0),
             lastSuccessAt: (try? orders.lastConfirmedAtMs()) ?? 0,
+            lastReachableAt: sentinel.load().lastReachableAt,
             missingSourceUnacknowledged: unackMissing,
             skippedByUser: all[.skippedByUser] ?? 0,
             missingSourceAcknowledged: ackedMissing)
@@ -339,27 +391,39 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
 }
 
-/// 当前网络是否「昂贵」（蜂窝 / 个人热点）——「仅 Wi‑Fi」的判据。
-final class NetworkState: @unchecked Sendable {
+/// 路径来源：生产是 `NWPathMonitor`，测试里换成假的，按需喂「可用 / 昂贵」。
+protocol NetworkPathSource: AnyObject {
+    func start(_ handler: @escaping @Sendable (_ satisfied: Bool, _ expensive: Bool, _ interfaces: [String]) -> Void)
+}
+
+final class NWPathSource: NetworkPathSource {
     private let monitor = NWPathMonitor()
+    func start(_ handler: @escaping @Sendable (Bool, Bool, [String]) -> Void) {
+        monitor.pathUpdateHandler = { handler($0.status == .satisfied, $0.isExpensive, $0.availableInterfaces.map(\.name)) }
+        monitor.start(queue: DispatchQueue(label: "ppass.network"))
+    }
+}
+
+/// 当前网络是否「昂贵」（蜂窝 / 个人热点）——「仅 Wi‑Fi」的判据；并把每次路径更新交给 `onUpdate`（对位 Android
+/// `registerNetworkCallback` → `onFlowNetworkChanged`）。进程活着就一直监听，前台、宽限期、后台任务窗口都算。
+final class NetworkState: @unchecked Sendable {
+    private let source: NetworkPathSource
     private let lock = NSLock()
     private var expensive = false
-    private var satisfied: Bool?
-    /// 网络从不可用变回可用时调用（首次回调不算：启动由 `LiveBackend.start` 管）。
-    var onRecovered: (() -> Void)?
+    private var tracker = NetworkPathTracker()
+    /// 每次路径更新一次；首次回调的 `action` 为 nil（启动由 `LiveBackend.start` 管）。在 monitor 队列上调用。
+    var onUpdate: ((NetworkPathTracker.Update) -> Void)?
 
-    init() {
-        monitor.pathUpdateHandler = { [weak self] path in
+    init(source: NetworkPathSource = NWPathSource()) {
+        self.source = source
+        source.start { [weak self] satisfied, expensive, interfaces in
             guard let self else { return }
-            let now = path.status == .satisfied
             self.lock.lock()
-            self.expensive = path.isExpensive
-            let recovered = self.satisfied == false && now
-            self.satisfied = now
+            self.expensive = expensive
+            let update = self.tracker.update(satisfied: satisfied, signature: "\(satisfied)|\(expensive)|\(interfaces.joined(separator: ","))")
             self.lock.unlock()
-            if recovered { self.onRecovered?() }
+            self.onUpdate?(update)
         }
-        monitor.start(queue: DispatchQueue(label: "ppass.network"))
     }
 
     var isExpensive: Bool { lock.lock(); defer { lock.unlock() }; return expensive }
@@ -390,10 +454,13 @@ final class BatteryState: @unchecked Sendable {
     }
 }
 
-/// 断开清单里的运行时生产者。引擎这一轮由 `LiveBackend.disconnect` 在清单之前就停好；iOS 目前没有注册 PHPhotoLibrary 变更监听。
+/// 断开清单里的运行时生产者（#974）。引擎这一轮由 `LiveBackend.disconnect` 在清单之前就停好；
+/// 三项各接真逻辑：provider 撤销、取消 BGTask 唤醒、注销相册监听。
 struct DisconnectActions: DisconnectRuntime {
-    let scheduler: PlannedWakeScheduler
-    func stopFlowRuntime() {}
-    func cancelScheduledWakes() { scheduler.stop() }
-    func stopMediaChangeObserver() {}
+    let stopFlow: () -> Void
+    let cancelWakes: () -> Void
+    let stopMedia: () -> Void
+    func stopFlowRuntime() { stopFlow() }
+    func cancelScheduledWakes() { cancelWakes() }
+    func stopMediaChangeObserver() { stopMedia() }
 }

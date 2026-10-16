@@ -427,6 +427,64 @@ final class FlowEngineIOSTests: XCTestCase {
         XCTAssertEqual(rig.scheduler.constraintWakes.get(), [.wifi])
     }
 
+    /// 空闲时网络变化 → 当作一次 NETWORK_CHANGE 触发，把积压的跑完（对位 Android onNetworkChanged 的非停轮分支）。
+    /// 反证：onNetworkChanged 空闲时直接返回 → 一张都没传，红。
+    func testANetworkChangeWhileIdleTriggersARound() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        await rig.start()
+        await rig.engine.onNetworkChanged()
+        await rig.engine.awaitIdle()
+        XCTAssertEqual(rig.delivery.deliveredIds, [1])
+        XCTAssertEqual(try rig.state(1), .confirmed)
+    }
+
+    /// 仅 Wi‑Fi 停轮后，网络换回 Wi‑Fi：条件满足，onNetworkChanged 把循环叫醒、续传同一张。
+    func testComingBackToWifiAfterAWifiStopResumesTheSameItem() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        rig.conditions.set(Conditions(wifiOnly: true))
+        await rig.start()
+        rig.delivery.hold.set(true)
+        await rig.engine.trigger(.mediaChange)
+        await eventually("delivery started") { rig.delivery.requests.get().count == 1 }
+        rig.conditions.set(Conditions(wifiOnly: true, onUnmetered: false))
+        await rig.engine.onNetworkChanged()
+        XCTAssertEqual(rig.fakeControl!.wait, .wifi)
+        rig.delivery.hold.set(false)
+        rig.conditions.set(Conditions(wifiOnly: true))
+        await rig.engine.onNetworkChanged()
+        await rig.engine.awaitIdle()
+        XCTAssertEqual(try rig.state(1), .confirmed)
+        XCTAssertEqual(try rig.current(1)?.attempts, 0, "停轮不算失败")
+    }
+
+    /// 断网后网络回来：order 仍可续传，onNetworkChanged 触发的一轮把它传完。
+    func testTheItemStoppedByNetworkLossResumesWhenTheNetworkReturns() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        await rig.start()
+        rig.delivery.hold.set(true)
+        await rig.engine.trigger(.mediaChange)
+        await eventually("delivery started") { rig.delivery.requests.get().count == 1 }
+        await rig.engine.onNetworkLost()
+        XCTAssertEqual(try rig.state(1), .transferring)
+        rig.delivery.hold.set(false)
+        await rig.engine.onNetworkChanged()
+        await rig.engine.awaitIdle()
+        XCTAssertEqual(try rig.state(1), .confirmed)
+        XCTAssertEqual(try rig.current(1)?.attempts, 0)
+    }
+
+    /// 没有在跑的循环时断网：什么都不做（对位 Android `cycleJob?.isActive != true → return`）。
+    func testLosingTheNetworkWhileIdleIsANoOp() async throws {
+        let rig = try Rig()
+        await rig.start()
+        await rig.engine.onNetworkLost()
+        XCTAssertNil(rig.fakeControl!.wait)
+        XCTAssertEqual(rig.scheduler.unreachableProbes.get(), 0)
+    }
+
     /// #439：前台心跳只在「桌面不可达」或「探测本身报不健康」的等待里叫醒循环；iCloud 原图的等待不叫醒。
     func testTheForegroundHeartbeatWakesOnlyDesktopWaits() async throws {
         let rig = try Rig()

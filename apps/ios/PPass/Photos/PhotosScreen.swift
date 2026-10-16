@@ -15,7 +15,7 @@ struct PhotosScreen: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Label(L.s("photos_lost_title"), systemImage: "exclamationmark.triangle.fill")
                             .font(PPFont.title3).foregroundStyle(PPColor.act)
-                        Text(app.daysSinceLastBackup.map { L.p("photos_lost_body_days", $0) } ?? L.s("photos_lost_body_unknown")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                        Text(app.daysSinceLastReachable.map { L.p("photos_lost_body_days", $0) } ?? L.s("photos_lost_body_unknown")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                         PPButton(title: L.s("photos_lost_action"), kind: .danger) { app.startOver() }
                     }
                     .padding(16)
