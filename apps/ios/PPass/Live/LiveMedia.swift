@@ -72,10 +72,12 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     private let selected: @Sendable () -> Set<String>
     private let library = PhotoKitLibrary()
     private let inbox: Inbox
+    private let log: @Sendable (String) -> Void
 
-    init(selected: @escaping @Sendable () -> Set<String>, inbox: Inbox) {
+    init(selected: @escaping @Sendable () -> Set<String>, inbox: Inbox, log: @escaping @Sendable (String) -> Void) {
         self.selected = selected
         self.inbox = inbox
+        self.log = log
     }
 
     static func inScope(bucketId: String, selected: Set<String>) -> Bool {
@@ -95,8 +97,9 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         return ids.indices.compactMap { i in
             let id = ids[i]
             guard let a = byId[id] else { return nil }
-            let modified = Int64((a.modificationDate ?? a.creationDate ?? .distantPast).timeIntervalSince1970 * 1000)
-            return MediaSnapshot(mediaId: id, sourceVersion: sourceVersionOf(modifiedAtMs: modified, size: 0),
+            let content = readOriginalContent(of: a, resources: PHAssetResource.assetResources(for: a))
+            if content.degraded { log("media: source version degraded for \(id) (original resource size unreadable); falls back to modification time") }
+            return MediaSnapshot(mediaId: id, sourceVersion: content.version,
                                  bucketId: AlbumMembership.key(members[id]), position: positions?[i] ?? nil)
         }
     }
@@ -132,16 +135,17 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     /// G 重置（首次、换电脑、照片库换了）：收件箱当前最大序号；收件箱顺带清掉 `seq <= 它` 的行。
     func currentPosition() async throws -> DiscoveryPosition { DiscoveryPosition(raw: Inbox.position(of: try inbox.currentPosition())) }
 
-    /// PhotoKit 没有对外的「照片库身份」——说不出来就返回 nil（不触发重置）。
+    /// nil 是契约里的「说不出」，不是占位：PhotoKit 没有对外的照片库身份（06-ios-variants O-03 / D-07 登记了查证过程：
+    /// 令牌里的 store UUID 在模拟器 erase 前后不变，认不出换库）。换库的兜底是 `preciseDiscovery = false`：每个对账轮都扫。
     func libraryIdentity() async throws -> String? { nil }
 
     func lookup(_ mediaId: String) async throws -> MediaDetails? {
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [mediaId], options: nil).firstObject else { return nil }
         guard let snap = snapshots([mediaId], members: membership.of([mediaId])).first else { return nil }
         let resources = PHAssetResource.assetResources(for: asset)
-        let index = selectOriginalResource(types: resources.map(\.type), mediaType: asset.mediaType) ?? 0
-        let res = resources.indices.contains(index) ? resources[index] : nil
-        let size = (res?.value(forKey: "fileSize") as? NSNumber)?.int64Value ?? 0
+        let content = readOriginalContent(of: asset, resources: resources)
+        let res = (content.resourceIndex ?? 0) < resources.count ? resources[content.resourceIndex ?? 0] : nil
+        let size = content.size ?? 0
         let mime = res.flatMap { UTType($0.uniformTypeIdentifier)?.preferredMIMEType } ?? "application/octet-stream"
         let captured = Int64((asset.creationDate ?? .distantPast).timeIntervalSince1970 * 1000)
         return MediaDetails(snapshot: snap, fileName: res?.originalFilename ?? mediaId, mimeType: mime,

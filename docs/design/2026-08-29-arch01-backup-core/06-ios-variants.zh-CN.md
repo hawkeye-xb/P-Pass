@@ -46,14 +46,17 @@
 
 - **原条目**：新 `_id` 进入待办，导入算出同一个 hash，offer 时桌面按 hash 回「已有」，传输字节数为 0。
 - **为什么在 iOS 上不成立**：没有 MediaStore 重建。对应的 iOS 事件是照片库身份变化（换库 / 从备份恢复）或 `localIdentifier` 变化，以及 token 过期（3105）。
-- **替代不变量**：库身份变 → G 重置、扫描置脏（与 Android「getVersion 变了」同一条路）；3105 由收件箱自己把令牌重置为当前令牌、不动 G，缺口交给对账（见 O-01）；内容没变的照片在桌面按 hash 判重，offer 直接回终态，手机侧不等待、不供数。
+- **真实生效的路径（#904 查证，2026-10-16）**：PhotoKit **没有可用的照片库身份**，`PhotoMediaSource.libraryIdentity()` 恒返回 nil 是契约里的「说不出」（不触发重置），不是待补的占位。「库身份变 → 重置 G」这条路径只在引擎单测里成立；真实起兜底作用的是 `preciseDiscovery = false`：**每个对账轮都把扫描置脏**（`FlowEngine.prepareCursors`），对位 Android API < 30 `preciseGeneration = false` 的同一条路。
+  - **查过的候选**：① `PHPhotoLibrary` 无公开标识；② `photoLibraryURL` 是私有 KVC，模拟器上是设备目录，不是库的身份；③ `PHPersistentChangeToken` 的归档里带 Core Data store UUID（`NSPersistentHistoryToken` 字典的键）。③ 实测（模拟器，iOS 26.4）：同一图库多次读取 UUID 不变，但 `simctl erase` 重建图库后 **UUID 仍是同一个**，旧令牌也不报错（TokenExpiryIT 已记录的「不绑定图库」）——认不出换库，且要解析私有归档格式，**否决**。
+  - **标准做法**：没有可靠身份时不猜，靠对账扫描（以相册真实状态加账本为准，按内容哈希判重）兜住 G 以下的漏网，代价是多扫一遍元数据，不是丢备份。若之后找到可靠标识（需真机验证设备恢复 / 换机恢复场景），再接到 `libraryIdentity()`。
+- **替代不变量**：库身份变 → G 重置、扫描置脏（与 Android「getVersion 变了」同一条路；iOS 上此路径恒不触发，见上）；3105 由收件箱自己把令牌重置为当前令牌、不动 G，缺口交给对账（见 O-01）；内容没变的照片在桌面按 hash 判重，offer 直接回终态，手机侧不等待、不供数。
 - **测试**：`FlowEngineIOSTests.testAChangedLibraryIdentityResetsTheCursor`、`FlowEngineIOSTests.testAnExpiredDiscoveryCursorRescansAndConvergesWithoutDuplicates`、`DeliveryPortTests.testTheWireTupleIsTheOrderIdAndATerminalOfferReplyConfirmsWithoutWaiting`。
 
 ### D-07｜多个外部卷
 
 - **原条目**：G 按卷分开存、按卷查询；API 26–29 的取件来源待确认。
 - **为什么在 iOS 上不成立**：iOS 只有一个系统照片库，没有卷，也没有 API 26–29 那种不精确的 generation。
-- **替代不变量**：单库单游标（`discovery_state` 表只有一行），库身份变化时整体重置。
+- **替代不变量**：单库单游标（`discovery_state` 表只有一行）；库身份变化时整体重置的路径在 iOS 上恒不触发（见 O-03），换库由每轮对账扫描兜底。
 - **测试**：`OrderStoreTests.testDiscoveryPositionIsOverwrittenAndKeepsLibraryIdentity`、`FlowEngineIOSTests.testAChangedLibraryIdentityResetsTheCursor`。
 
 ### R-01｜新照片、桌面没有：原图共读 2 次
@@ -155,6 +158,18 @@
 ## 矩阵之外的 iOS 登记
 
 这些不是矩阵的某一行，但同样属于「在 iOS 上不成立 / 不移植」，写在这里以免被当成遗漏。
+
+### 源版本（#968）
+
+- **Android**：版本 = `dateModified:size`，两个量都只随文件内容变；版本变了 → 新建一行，旧行记 `SKIPPED_SOURCE_MISSING`。
+- **iOS 不能照搬 `modificationDate:size`**（模拟器实测，`ContentVersionIT`）：收藏 / 取消收藏会推进 `PHAsset.modificationDate`（加进相册不会），内容没动。把 size 补成真实值也不够——只要还带修改时间，收藏照样判成新版本、重新取原图（iCloud 优化存储下等于整张重下）。
+- **口径**：版本 = 实际备份的那份资源（`selectOriginalResource`：编辑过取 `.fullSizePhoto` / `.fullSizeVideo`）的「资源类型:大小」，大小取 `PHAssetResource` 的 `fileSize`（KVC，**非公开 API**，lookup 早已在用；读库里的元数据，不读文件）。编辑 → 多出渲染资源、大小变；再编辑 → 大小变；还原编辑 → 回到 `.photo`，版本回到原值（桌面按内容哈希判重）；收藏等元数据 → 不变。快照与 lookup 走同一个函数（`readOriginalContent`），引擎按版本相等判定不会错位。
+- **与 Android 的差异**：① 两次编辑渲染出的字节数恰好相同时会漏掉新版本（Android 靠修改时间不会漏）；② 取不到 `fileSize`（KVC 失效 / 无资源）时版本降级为「类型:unknown@修改时间」，保守地多取、不漏改，并写日志 `media: source version degraded`，不退回 0。
+- **发现时机**：收件箱只收新增、忽略 updated（避开系统分析噪声），所以被编辑的照片由对账轮扫描发现（每轮都扫，见 O-03），不像 Android 随 generation 当场发现。换成内容版本后 updated 事件已无副作用，是否让收件箱收 updated 以对齐 Android 的当场发现，待拍板（另开 issue）。
+- **成本**：扫描每张多读一次资源列表与大小，模拟器实测 2.8 ms/张（307 张 849 ms，原先只读 `modificationDate`）；万张级图库每个对账轮约 28 s 的纯元数据读取，待真机复核。
+- **待真机**：iCloud 优化存储（原图不在本机）下 `fileSize` 的取值未验证；读不到会走上面的降级并留日志。
+- **升级代价**：版本格式变了，旧账本里 `修改时间:0` 的行都对不上，会被当作新版本重取一遍；iOS 尚未对外发版（`release/notes/ios` 不存在），只影响测试机。
+- **测试**：`ContentVersionTests`（PPassMedia，纯逻辑）、`ContentVersionIT`（真 PhotoKit：收藏不换版本、编辑换、再编辑再换）。成本数字来自一次性探针（造 300 张后逐张读，未入库：它会把图库历史推长，破坏 `TokenExpiryIT` 对「第二轮变更数少于 40」的前提）。
 
 ### 后台上传通道（F5，IOS-15 挂起）
 

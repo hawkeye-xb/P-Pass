@@ -89,7 +89,7 @@ final class LiveBackend: @unchecked Sendable {
         let model = LiveEngineModel()
         engineModel = model
         engine = FlowEngine(
-            store: orders, media: PhotoMediaSource(selected: scope, inbox: inbox),
+            store: orders, media: PhotoMediaSource(selected: scope, inbox: inbox, log: { logger.log($0) }),
             importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
             delivery: delivery,
             probe: ControlPlaneProbe(currentEpoch: epoch, desktop: desktop, logger: logger, pairingLoss: pairingLoss),

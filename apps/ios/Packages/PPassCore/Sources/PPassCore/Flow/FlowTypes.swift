@@ -245,8 +245,8 @@ public protocol MediaSource: Sendable {
     func existingIds(_ mediaIds: [String]) async throws -> Set<String>?
 
     /// G 是否可信到「G 以下不会漏照片」。false 时每个对账轮都扫一遍范围（#904）。
-    /// PhotoKit：`PHPersistentChangeToken` 不绑定图库，跨库可能不报错地错位，而 PhotoKit 没有公开的图库标识可比——
-    /// 所以 PPassMedia 应当报 false，直到找到可靠的图库标识接到 [libraryIdentity]。
+    /// PhotoKit：`PHPersistentChangeToken` 不绑定图库，跨库可能不报错地错位，而 PhotoKit 没有可用的图库标识可比
+    /// （查证见 06-ios-variants O-03）——所以 PPassMedia 报 false，这是常态，不是待办。
     var preciseDiscovery: Bool { get }
 }
 

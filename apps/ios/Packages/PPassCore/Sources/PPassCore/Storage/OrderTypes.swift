@@ -59,7 +59,7 @@ public enum MediaOrder {
 public struct Order: Equatable, Sendable {
     public let id: Int64
     public let mediaId: String
-    /// 内容版本（只看内容变没变：修改时间 + 大小，见 `sourceVersionOf`）。
+    /// 内容版本（只看内容变没变；Android：修改时间 + 大小，见 `sourceVersionOf`；iOS：备份那份资源的「类型:大小」，见 06-ios-variants 「源版本」一节）。
     public let sourceVersion: String
     public let bucketId: String
     /// BLAKE3 hex；导入之前为 nil。
@@ -176,5 +176,5 @@ public struct SequencedAudit: Equatable, Sendable {
     public let record: AuditRecord
 }
 
-/// MOB-98：一张照片的「版本」只由内容变没变决定（修改时间 + 大小）。
+/// MOB-98：一张照片的「版本」只由内容变没变决定（Android：修改时间 + 大小；iOS 版本由媒体源自己给，见 06-ios-variants 「源版本」一节）。
 public func sourceVersionOf(modifiedAtMs: Int64, size: Int64) -> String { "\(modifiedAtMs):\(size)" }
