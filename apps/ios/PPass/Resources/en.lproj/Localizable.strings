@@ -130,7 +130,7 @@
 "dog_triplet_line" = "%1$ld photos · %2$ld backed up · %3$ld to go";
 "hero_of_n" = "/ %1$@ photos home";
 "pending_count" = "%1$ld to back up";
-"triplet_unavailable" = "Cannot read the photo count on this phone — it retries next time the app opens.";
+"triplet_unavailable" = "Couldn't read album count. Will retry later.";
 "hero_unreconciled_title" = "Recounting your photos";
 "hero_unreconciled_body" = "The backup record lists more photos than the selected albums hold now, so this phone is recounting against the photos that are actually there. It does not need the computer or Wi-Fi; the result shows here as soon as the count finishes.";
 "dog_last_success" = "Last success %1$@";

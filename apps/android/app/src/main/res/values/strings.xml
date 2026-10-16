@@ -198,7 +198,7 @@
     <string name="dog_triplet_line">%1$d photos · %2$d backed up · %3$d to go</string>
     <string name="hero_of_n">/ %1$s photos home</string>
     <string name="pending_count">%1$d to back up</string>
-    <string name="triplet_unavailable">Cannot read the photo count on this phone — it retries next time the app opens.</string>
+    <string name="triplet_unavailable">Couldn\'t read album count. Will retry later.</string>
     <!-- UI-16 rule H-C: the two counts disagree, so no fraction may be shown.
          Deliberately NOT triplet_unavailable — that one means "cannot read the
          phone's album count", a different fact. -->

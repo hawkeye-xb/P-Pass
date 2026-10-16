@@ -97,7 +97,7 @@ enum BackupUiState: Equatable {
 
 enum StatusLine: Equatable { case ready, working, pending(Int64), allSafe, noAlbums, trouble, waiting, paused }
 enum HeroAction: Equatable { case pause, resume }
-enum HeroRender: Equatable { case accessBlocked, countsUnreadable, unreadable, unreconciled, triplet }
+enum HeroRender: Equatable { case accessBlocked, countsUnreadable, noAlbums, unreadable, unreconciled, triplet }
 
 enum LastSuccess: Equatable {
     case never, justNow
@@ -202,10 +202,11 @@ enum HomeProjection {
     }
 
     /// 规则 H：权限不全 → 引导卡顶替整块数字（MOB-02/MOB-94：不显示任何数，就不可能盖「都存好了」的章）。
-    static func heroRender(_ access: MediaAccess, _ t: BackupTriplet?, countsReadable: Bool = true) -> HeroRender {
+    static func heroRender(_ access: MediaAccess, _ t: BackupTriplet?, countsReadable: Bool = true, scopeSaved: Bool = true) -> HeroRender {
         if access != .full { return .accessBlocked }
         if !countsReadable { return .countsUnreadable } // #973：账本读失败 ≠ 相册读不到，单独说
-        guard let t else { return .unreadable }
+        // 范围从未保存时 triplet 必为 nil，但那不是「读不到」——别把没选相册说成读取失败。
+        guard let t else { return scopeSaved ? .unreadable : .noAlbums }
         if t.confirmedRaw > t.n { return .unreconciled }
         return .triplet
     }

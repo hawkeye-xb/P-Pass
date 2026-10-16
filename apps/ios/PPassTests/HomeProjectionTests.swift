@@ -69,6 +69,11 @@ final class HomeProjectionTests: XCTestCase {
         XCTAssertEqual(P.heroRender(.none, healthy), .accessBlocked)
         XCTAssertEqual(P.heroRender(.partial, healthy), .accessBlocked)
         XCTAssertEqual(P.heroRender(.full, nil), .unreadable)
+        // 范围从未保存（没选相册）≠ 相册数量读不到：前者说「未选相册」，后者才说读取失败。
+        XCTAssertEqual(P.heroRender(.full, nil, scopeSaved: false), .noAlbums)
+        XCTAssertEqual(P.heroRender(.full, nil, scopeSaved: true), .unreadable)
+        XCTAssertEqual(P.heroRender(.none, nil, scopeSaved: false), .accessBlocked, "权限不全仍压过一切")
+        XCTAssertEqual(P.heroRender(.full, nil, countsReadable: false, scopeSaved: false), .countsUnreadable)
         XCTAssertFalse(P.allSafeTextAllowed(.partial, healthy, pairingLost: false, missingSource: 0))
     }
 
