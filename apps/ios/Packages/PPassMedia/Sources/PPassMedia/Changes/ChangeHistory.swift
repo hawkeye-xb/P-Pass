@@ -1,11 +1,10 @@
 import Foundation
 import Photos
 
-/// 发现游标 G 在 iOS 上的载体：一个归档后的 `PHPersistentChangeToken`（对位 Android 的 `GENERATION_MODIFIED`）。
+/// 归档后的 `PHPersistentChangeToken`：收件箱（``Inbox``）读变更历史的位置，存在 `inbox_meta` 里。
 ///
-/// 对外只当不透明字节用。可以持久化（``ChangeTokenStore``），也可以比较是否相等，但**不能比较大小**：token 之间没有
-/// 公开的序关系。所以「水位不倒退」不靠比较，靠推进规则本身保证：G 只会沿着 `fetchPersistentChanges` 返回的序列往后走，
-/// 见 ``ChangeCursor``。
+/// 对外只当不透明字节用：可以持久化、可以比较是否相等，但**不能比较大小**（token 之间没有公开的序关系）。
+/// 引擎的发现游标 G 不是它，而是收件箱的序号。
 public struct ChangeToken: Equatable, Hashable, Codable, Sendable {
     public let archived: Data
 
@@ -30,7 +29,7 @@ public struct ChangeRecord: Equatable, Sendable {
     }
 }
 
-/// 读变更历史时必须改走全量重扫的三种情况。三者的处理方式相同，分开列出是为了日志里能看到具体原因。
+/// 读变更历史的错误。前三种表示令牌失效（处理方式相同，分开列出是为了日志里能看到具体原因），见 ``invalidatesToken``。
 public enum ChangeHistoryError: Error, Equatable {
     /// 3105 `PHPhotosErrorPersistentChangeTokenExpired`：token 指向的库状态早于系统保留的变更历史。
     case tokenExpired
@@ -38,8 +37,18 @@ public enum ChangeHistoryError: Error, Equatable {
     case detailsUnavailable
     /// 存下来的字节解不出 token（盘上数据损坏，或系统改了归档格式）。
     case undecodableToken
-    /// 其他错误（例如没有完整授权）。**不能**当作「需要重扫」：原样上抛，由调用方决定是等待还是报错。
+    /// 其他错误（例如没有完整授权）。**不能**当作令牌失效：原样上抛，由调用方决定是等待还是报错。
     case other(code: Int, domain: String)
+}
+
+extension ChangeHistoryError {
+    /// 令牌失效（3105 / 3210 / 解不出）：收件箱把令牌重置为当前令牌，缺口交给对账。其余错误原样上抛。
+    public var invalidatesToken: Bool {
+        switch self {
+        case .tokenExpired, .detailsUnavailable, .undecodableToken: return true
+        case .other: return false
+        }
+    }
 }
 
 /// 相册库的持久化变更历史。生产实现是 ``PhotoKitChangeHistory``，单测用 fake。

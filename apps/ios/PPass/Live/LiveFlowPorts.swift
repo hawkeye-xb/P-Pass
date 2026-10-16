@@ -7,6 +7,22 @@ import UIKit
 /// FFI 的原生 provider（一个进程一个；provider store 放在存储根目录下的 `blobs/`）。同步调用，放后台线程。
 final class NativeProvider: @unchecked Sendable {
     let ffi: Provider
+    /// 当前占用 provider 的 lease（对位 Android `IrohBlobsProviderBridge.active`）：serve 成功后记下，pause 时据此核对。
+    private let activeLock = NSLock()
+    private var activeLease: ProviderLease?
+
+    func setActive(_ lease: ProviderLease?) {
+        activeLock.lock(); defer { activeLock.unlock() }
+        activeLease = lease
+    }
+
+    /// 取出并清空 active；传入的 lease 与 active 不是同一份（orderId / leaseToken）时返回 nil、不动。
+    func takeActive(matching lease: ProviderLease) -> ProviderLease? {
+        activeLock.lock(); defer { activeLock.unlock() }
+        guard let current = activeLease, current.orderId == lease.orderId, current.leaseToken == lease.leaseToken else { return nil }
+        activeLease = nil
+        return current
+    }
 
     init(root: URL) throws {
         let dir = root.appendingPathComponent("blobs", isDirectory: true)
@@ -69,7 +85,9 @@ struct FfiBlobProvider: BlobProvider {
 
     func serve(_ lease: ProviderLease) async throws -> String {
         do {
-            return try await provider.run { try $0.serve(hash: lease.contentHash) }
+            let ticket = try await provider.run { try $0.serve(hash: lease.contentHash) }
+            provider.setActive(lease)
+            return ticket
         } catch let error as FfiError {
             switch error {
             case .SourceFault(let fault): throw fault == "changed" ? ProviderFailure.sourceChanged : ProviderFailure.sourceMissing
@@ -92,17 +110,15 @@ struct FfiBlobProvider: BlobProvider {
         }
     }
 
-    func pause(_ lease: ProviderLease) { provider.ffi.stopActiveFetch() }
-    func releaseRetention(_ lease: ProviderLease) { provider.ffi.releaseRetention() }
-}
-
-/// `timeline.subscribe` 是流式的，FFI 控制面一次只收发一帧——不支持。按端口约定抛错：
-/// 订阅失败不致命，传输端口退回本地信号 + 有界 `flow.status` 兜底。
-struct UnsupportedPush: FlowPushSource {
-    struct Unsupported: Error {}
-    func subscribe(onConnected: @escaping @Sendable () -> Void, onEvent: @escaping @Sendable (String, JSONValue) -> Void) async throws {
-        throw Unsupported()
+    /// 暂停 / 中止：先关掉在飞的原生连接，再 revoke（Rust 侧拿掉当前 handler 与全部导入，下次 serve 新建 handler）。
+    /// 只 stop 不 revoke 会让 handler 的 `accepting` 永远是 false：同进程里之后所有取原图连接都被立即关闭（#958）。
+    /// 接收端的半截文件不动，续传从缺的区间接着拉。与 Android 一致：lease 不是当前 active 的就不动。
+    func pause(_ lease: ProviderLease) {
+        guard provider.takeActive(matching: lease) != nil else { return }
+        provider.ffi.stopActiveFetch()
+        provider.ffi.revoke()
     }
+    func releaseRetention(_ lease: ProviderLease) { provider.ffi.releaseRetention() }
 }
 
 struct OSLogger: CoreLogger {

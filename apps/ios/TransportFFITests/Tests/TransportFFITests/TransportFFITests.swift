@@ -245,6 +245,16 @@ final class TransportFFITests: XCTestCase {
         let deniedResp = try JSONSerialization.jsonObject(with: Data(denied.utf8)) as! [String: Any]
         XCTAssertEqual(deniedResp["ok"] as? Bool, false, denied)
         print("ctrl diag.status (unpaired) reply: \(denied)")
+
+        // #963：未配对身份发 timeline.subscribe——流式调用收到的第一帧就是拒绝应答，随后流结束。
+        let rec = StreamRecorder()
+        let handle = try client.openStream(peerToken: token, method: "timeline.subscribe", paramsJson: "{}",
+                                           connectTimeoutMs: 0, listener: rec)
+        defer { handle.cancel() }
+        try waitFor(15, "unpaired subscription closes") { rec.closed != nil }
+        let first = try XCTUnwrap(rec.frames.first, "the rejection reply is the first frame")
+        XCTAssertEqual(first["ok"] as? Bool, false, "\(first)")
+        print("ctrl timeline.subscribe (unpaired): frames=\(rec.frames) closed=\(String(describing: rec.closed))")
     }
 
     // MARK: - G2 模拟器版（IOS-07 #334）：provider 挂起前后 → 本机隔离 daemon 拉走一张 → 凭据回来
@@ -353,6 +363,13 @@ final class TransportFFITests: XCTestCase {
             print("G2 suspension step skipped (PPASS_SUSPEND_SECS=0)")
         }
 
+        // #963：offer 之前订阅好推送，确认帧到了才 offer（桌面的 broadcast 不重放）。
+        let push = StreamRecorder()
+        let subscription = try client.openStream(peerToken: peer, method: "timeline.subscribe", paramsJson: "{}",
+                                                 connectTimeoutMs: 0, listener: push)
+        defer { subscription.cancel() }
+        try waitFor(15, "subscription ack") { push.frames.first?["ok"] as? Bool == true }
+
         // ⑤ 交付：PPassCore 的 Codable FlowFetchRequest → flow.offer → 轮询 flow.status 到 completed。
         let request = PPassCore.FlowFetchRequest(
             queueSequence: 1, pairingEpoch: epoch, leaseToken: "lease-1", contentHash: imported.hash,
@@ -380,6 +397,17 @@ final class TransportFFITests: XCTestCase {
         XCTAssertFalse((r["receipt_id"] as? String ?? "").isEmpty)
         print("G2 receipt: \(r)")
 
+        // #963：同一张的完成也经推送到达（flow.delivered，带这张的 queue_sequence 与同一份回执）。
+        try waitFor(15, "flow.delivered push") {
+            push.frames.contains { ($0["event"] as? String) == "flow.delivered"
+                && (($0["data"] as? [String: Any])?["queue_sequence"] as? Int) == 1 }
+        }
+        let delivered = push.frames.first { ($0["event"] as? String) == "flow.delivered" }
+        let pushedReceipt = (delivered?["data"] as? [String: Any])?["receipt"] as? [String: Any]
+        XCTAssertEqual(pushedReceipt?["receipt_id"] as? String, r["receipt_id"] as? String)
+        XCTAssertNil(push.closed, "the subscription stays open while nobody cancels it")
+        print("G2 push frames: \(push.frames.map { $0["event"] as? String ?? "ack" })")
+
         // ⑥ 落盘：daemon 库目录（非 .ppf/）里有一个文件字节与原图相同（BLAKE3 相等）。
         var landed: String?
         // 只认库里的成品（originals/…），不认 daemon 自己的 .ppf/ 内部存储（flow-blobs 等）。
@@ -396,5 +424,25 @@ final class TransportFFITests: XCTestCase {
         let released = listing(store)
         XCTAssertFalse(released.values.contains(Int(imported.size)), "data file gone: \(released)")
         print("G2 store (retention released, after GC): \(released.sorted { $0.key < $1.key })")
+    }
+}
+
+/// #963：记录流式调用收到的帧与结束原因（FFI 回调来自 Rust 的 runtime 线程）。
+private final class StreamRecorder: StreamListener, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _frames: [[String: Any]] = []
+    private var _closed: String??
+
+    var frames: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return _frames }
+    /// nil = 还没结束；.some(nil) = 对端正常结束；.some(原因)。
+    var closed: String?? { lock.lock(); defer { lock.unlock() }; return _closed }
+
+    func onFrame(json: String) {
+        let obj = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
+        lock.lock(); _frames.append(obj); lock.unlock()
+    }
+
+    func onClosed(error: String?) {
+        lock.lock(); _closed = .some(error); lock.unlock()
     }
 }

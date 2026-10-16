@@ -108,6 +108,17 @@ public final class PairingLoss: @unchecked Sendable {
     }
 }
 
+/// 默认的毫秒级 sleep（可被取消）。
+///
+/// #938：公共 API 的默认参数里**不写 async 闭包字面量**，默认值一律是 `nil`、在函数体内补上。
+/// 默认参数表达式会被序列化进调用方模块：-Onone 下调用方和本模块各生成一份同名 weak 的
+/// async 闭包，两份记录的 async context 大小不同（Swift 6.3.3 实测 64 vs 80 字节），链接器
+/// 可能把一份的函数体配上另一份的 context 大小，运行时越界写坏任务分配器，
+/// 报 `freed pointer was not the last allocation`。默认值留在函数体里，async 代码就只有本模块这一份。
+func taskSleepMs(_ ms: Int64) async throws {
+    try await Task.sleep(nanoseconds: UInt64(max(0, ms)) * 1_000_000)
+}
+
 /// 只有界地等一个异步操作：操作本身跑在不继承取消的非结构化 Task 里（调用方已被取消时也照样发出去），
 /// 超时就不等了（操作自己跑完或失败）。返回 nil = 超时。
 func boundedWait<T: Sendable>(_ timeoutMs: Int64, sleep: @escaping @Sendable (Int64) async throws -> Void, _ op: @escaping @Sendable () async throws -> T) async -> Result<T, Error>? {
@@ -148,7 +159,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
         push: FlowPushSource,
         logger: CoreLogger,
         clock: @escaping @Sendable () -> Int64 = { Int64(ProcessInfo.processInfo.systemUptime * 1000) },
-        sleep: @escaping @Sendable (Int64) async throws -> Void = { try await Task.sleep(nanoseconds: UInt64(max(0, $0)) * 1_000_000) },
+        sleep: (@Sendable (Int64) async throws -> Void)? = nil,
         timings: DeliveryTimings = DeliveryTimings(),
         pairingLoss: PairingLoss = PairingLoss()
     ) {
@@ -158,7 +169,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
         self.push = push
         self.logger = logger
         self.clock = clock
-        self.sleep = sleep
+        self.sleep = sleep ?? taskSleepMs
         self.timings = timings
         self.pairingLoss = pairingLoss
     }
@@ -554,13 +565,13 @@ public struct ControlPlaneProbe: DesktopProbe {
     let sleep: @Sendable (Int64) async throws -> Void
 
     public init(currentEpoch: @escaping @Sendable () -> String?, desktop: FlowDesktop, logger: CoreLogger, pairingLoss: PairingLoss, timeoutMs: Int64 = 20_000,
-                sleep: @escaping @Sendable (Int64) async throws -> Void = { try await Task.sleep(nanoseconds: UInt64(max(0, $0)) * 1_000_000) }) {
+                sleep: (@Sendable (Int64) async throws -> Void)? = nil) {
         self.currentEpoch = currentEpoch
         self.desktop = desktop
         self.timeoutMs = timeoutMs
         self.logger = logger
         self.pairingLoss = pairingLoss
-        self.sleep = sleep
+        self.sleep = sleep ?? taskSleepMs
     }
 
     public func probe() async -> ProbeResult {

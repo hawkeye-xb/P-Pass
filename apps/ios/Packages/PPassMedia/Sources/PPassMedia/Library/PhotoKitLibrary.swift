@@ -44,6 +44,35 @@ public struct PhotoKitLibrary: PhotoLibraryReading {
         return ids
     }
 
+    /// 与 ``assetIdentifiers(inCollection:)`` 同一套 options，谓词里再加 `localIdentifier IN`，PhotoKit 只取这几张。
+    /// 对智能相册同样有效（AlbumMembershipIT 实测）。
+    public func assetIdentifiers(inCollection id: String, among assetIds: [String]) -> [String]? {
+        guard let collection = Self.collection(id) else { return nil }
+        guard !assetIds.isEmpty else { return [] }
+        let options = Self.mediaOptions()
+        options.predicate = NSCompoundPredicate(andPredicateWithSubpredicates: [
+            options.predicate ?? NSPredicate(value: true), NSPredicate(format: "localIdentifier IN %@", assetIds),
+        ])
+        let result = PHAsset.fetchAssets(in: collection, options: options)
+        var ids: [String] = []
+        result.enumerateObjects { asset, _, _ in ids.append(asset.localIdentifier) }
+        return ids
+    }
+
+    /// `PHAssetCollection.fetchAssetCollectionsContaining(_:with: .album)`。先用同一套 options 筛出口径内的照片，
+    /// 隐藏项、音频不反查（它们所在的用户相册照样会被反查出来，但旧口径里它们不属于任何相册）。
+    public func userAlbumIdentifiers(containing assetIds: [String]) -> [String: [String]] {
+        guard !assetIds.isEmpty else { return [:] }
+        var out: [String: [String]] = [:]
+        PHAsset.fetchAssets(withLocalIdentifiers: assetIds, options: Self.mediaOptions()).enumerateObjects { asset, _, _ in
+            var ids: [String] = []
+            PHAssetCollection.fetchAssetCollectionsContaining(asset, with: .album, options: nil)
+                .enumerateObjects { c, _, _ in ids.append(c.localIdentifier) }
+            out[asset.localIdentifier] = ids
+        }
+        return out
+    }
+
     static func collection(_ id: String) -> PHAssetCollection? {
         PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject
     }

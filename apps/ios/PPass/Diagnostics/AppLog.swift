@@ -19,17 +19,18 @@ enum AppLog {
         sink?.write(line)
     }
 
-    /// 进程启动来源。BGTask / 静默唤醒拉起的进程在 App 初始化时 applicationState 是 background；用户点开是 inactive。
-    /// 取不到（极早期）就如实写 unknown，不猜。
+    /// 进程启动记录。App 初始化时场景与后台任务都还没分发，`applicationState` 多半是 inactive，所以这里只把原始值当证据记下，
+    /// 不据此下结论；真正的来源由 `LaunchOriginRecorder` 在第一个真实入口（场景 active / 后台任务回调）到达时记一行。
     @MainActor static func logLaunch() {
-        let origin: String
+        let state: String
         switch UIApplication.shared.applicationState {
-        case .background: origin = "background (BGTask / silent wake)"
-        case .inactive, .active: origin = "foreground"
-        @unknown default: origin = "unknown"
+        case .active: state = "active"
+        case .inactive: state = "inactive"
+        case .background: state = "background"
+        @unknown default: state = "unknown"
         }
         let info = Bundle.main.infoDictionary
         let version = "\(info?["CFBundleShortVersionString"] ?? "?")(\(info?["CFBundleVersion"] ?? "?"))"
-        log("process start: origin=\(origin) pid=\(ProcessInfo.processInfo.processIdentifier) version=\(version)")
+        log("process start: pid=\(ProcessInfo.processInfo.processIdentifier) version=\(version) appState=\(state)")
     }
 }

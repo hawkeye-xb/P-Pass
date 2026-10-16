@@ -29,10 +29,12 @@
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.hawkeyexb.ppass.backup</string>
+		<string>com.hawkeyexb.ppass.refresh</string>
 	</array>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>processing</string>
+		<string>fetch</string>
 	</array>
 	<!-- #941：冷启动画面 = paper 底色 + 居中图标（对齐 Android 的 paper 底 + 启动图标）。
 	     LaunchBackground 是 tokens.json 的 paper，由 tools/ios/gen-tokens.py 生成；不要手写色值。 -->

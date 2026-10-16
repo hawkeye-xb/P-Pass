@@ -1,6 +1,19 @@
 // #891：传输端口（对位 Android `C413DeliveryPortTest` / `ARCH13DeliveryPortTest` / `NET06` / `NET14` / `NET29` /
 // `MOB117` / `ARCH01RemotePresenceProbeTest` / `AuditOutboxDispatcherTest`）。
 // 真实的 FlowDeliveryPort 等待循环；原生 provider、桌面控制面、推送订阅是假的。时间参数整体缩小到毫秒级、真跑。
+//
+// 工具链缺陷登记（#938）：Swift 6.3.3（swiftlang-6.3.3.1.3）/ Xcode 26.6（17F113）/ ld-1267。
+// - 现象：只改本文件的测试代码（如把读 Rust 常量的测试改成 NSRegularExpression 写法），两条取消类测试
+//   （testCancellingADelivery… / testADesktopThatNeverAnswersFlowSuspend…）就稳定崩溃，
+//   运行时报 `freed pointer was not the last allocation`（swift_task_dealloc，栈在 waitForCompletion 的 sleep 处）。
+// - 机制：公共 init 的默认参数若是 async 闭包字面量，-Onone 下定义模块（PPassCore）和调用方模块（本测试 /
+//   App 的 LiveBackend）各生成一份同名 weak 符号，两份记录的 async context 大小不同（80 vs 64 字节）。
+//   链接器分别挑函数体和 async 函数指针，可能拼出「80 字节的函数体 + 64 字节的 context」，运行时越界写坏
+//   任务分配器。挑哪一份取决于目标文件布局，所以改一段无关的测试代码就能翻转结果。Release（-O）未见此问题。
+// - 规避：公共 API 的默认参数里不写 async 闭包字面量；默认值写 `nil`，在函数体里补上（见 DeliveryPort.swift
+//   的 `taskSleepMs`）。
+// - 复现对布局敏感：改完测试不崩不代表隐患消失。核对办法是在 .build/<config>/PPassCore.build 与
+//   PPassCoreTests.build 的全部 .o 上列出在两个以上目标文件里出现的 weak `…Tu` 符号，比较 context 大小，应当全部一致。
 import Foundation
 import XCTest
 @testable import PPassCore
@@ -530,10 +543,12 @@ final class DeliveryPortTests: XCTestCase {
     /// 盘满线与 daemon 的 SPACE_RESERVE_BYTES 同值（读 Rust 源里的常量，改一边另一边红）。
     func testTheCriticallyLowLineMatchesTheDaemonSpaceReserve() throws {
         let source = try String(contentsOf: RepoFixtures.repoRoot().appendingPathComponent("crates/daemon/src/flow_delivery.rs"), encoding: .utf8)
-        let line = try XCTUnwrap(source.split(separator: "\n").first { $0.contains("pub const SPACE_RESERVE_BYTES") })
-        let expr = line.split(separator: "=")[1].replacingOccurrences(of: ";", with: "").replacingOccurrences(of: "_", with: "")
-        let value = expr.split(separator: "*").map { Int64($0.trimmingCharacters(in: .whitespaces))! }.reduce(1, *)
-        XCTAssertEqual(DesktopHealth.criticallyLowBytes, value)
+        let regex = try NSRegularExpression(pattern: #"SPACE_RESERVE_BYTES: u64 = (\d+) \* 1024 \* 1024"#)
+        guard let m = regex.firstMatch(in: source, range: NSRange(source.startIndex..., in: source)),
+              let r = Range(m.range(at: 1), in: source), let mib = Int64(source[r]) else {
+            return XCTFail("daemon 的 SPACE_RESERVE_BYTES 没找到（形状变了就更新本断言）")
+        }
+        XCTAssertEqual(DesktopHealth.criticallyLowBytes, mib * 1024 * 1024)
     }
 
     // MARK: 探测与配对失效（MOB-117 / #466）

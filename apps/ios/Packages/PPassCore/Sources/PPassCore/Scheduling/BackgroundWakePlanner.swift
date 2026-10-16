@@ -8,8 +8,8 @@
 // 请求参数的取值与理由（卡面要求写清）：
 // - `requiresNetworkConnectivity = true`（全部）：一轮要连桌面；没网时系统本就不该叫醒我们，叫醒了也只会进「等待中」。
 //   注意 iOS 只能要求「有网」，不能要求「不计流量」——仅 Wi‑Fi 由引擎入口的 C-04 判据兜底，不靠系统。
-// - 周期兜底 `requiresExternalPower = true`：BGProcessingTask 在充电时才给得出长时间窗口（备份一轮可能几分钟到几十分钟），
-//   不插电的窗口多半不够传完一张大视频，还白耗电；这也对齐「多数晚上充电时同步」的对外口径（#340 评论里 Immich 的实测）。
+// - 周期兜底 `requiresExternalPower = false`：长任务只在设备闲置时运行，备份逐张提交、中断后桌面端续传，
+//   不插电的窗口同样有效；要求充电只会让系统少给运行机会（2026-10-13 定，见 #332、#959）。
 // - 探测梯 / Wi‑Fi 约束 `requiresExternalPower = false`：它们要的是「条件一恢复就尽快试一次」，加充电要求会把一次短探测拖到深夜。
 // - 电量约束 `requiresExternalPower = true`：Android 等的是「电量不低」，iOS 没有这个条件，插电是最接近的可表达条件。
 import Foundation
@@ -43,6 +43,10 @@ public struct BackgroundWakePlan: Codable, Equatable, Sendable {
 public enum BackgroundWakePlanner {
     /// App 的 Info.plist `BGTaskSchedulerPermittedIdentifiers` 里必须有它。
     public static let identifier = "com.hawkeyexb.ppass.backup"
+    /// #958：短任务（BGAppRefreshTask）的 identifier，同样要写进 Info.plist。
+    public static let shortTaskIdentifier = "com.hawkeyexb.ppass.refresh"
+    /// 短任务最早 5 分钟后再被叫醒（系统实际时机自己定）。
+    public static let shortTaskEarliest: TimeInterval = 5 * 60
     /// 探测梯：与 Android `UNREACHABLE_PROBE_DELAYS_MINUTES` 同值（10 / 20 / 40 / 80 分钟）。
     public static let probeDelays: [TimeInterval] = [10, 20, 40, 80].map { $0 * 60 }
     /// 周期兜底：与 Android `PERIODIC_FALLBACK_HOURS` 同值（5 小时）。
@@ -65,7 +69,7 @@ public enum BackgroundWakePlanner {
         }
         return BackgroundTaskRequestSpec(
             identifier: identifier, earliestBeginDate: now.addingTimeInterval(periodicFallback),
-            requiresNetworkConnectivity: true, requiresExternalPower: true, reason: .periodic
+            requiresNetworkConnectivity: true, requiresExternalPower: false, reason: .periodic
         )
     }
 

@@ -1,7 +1,8 @@
 // #340：iOS 的执行租约（Android FGS + wakelock 的对位）与一次后台任务的跑法。
 //
-// iOS 上能让循环跑的「执行时间」只有三种来源：App 在前台；`beginBackgroundTask` 给的收尾时间（刚退到后台的几十秒）；
-// 系统按 BGProcessingTask 给的窗口。[ExecutionWindow] 把它们合成一个租约：任一个开着就算持有。
+// iOS 上能让循环跑的「执行时间」有四种来源：App 在前台；`beginBackgroundTask` 给的收尾时间（刚退到后台的几十秒）；
+// 系统按 BGProcessingTask 给的窗口（长任务）；BGAppRefreshTask 给的窗口（短任务，#958：20 秒自收尾、只传照片）。
+// [ExecutionWindow] 把它们合成一个租约：任一个开着就算持有。
 // 窗口全部关掉（App 退后台且收尾时间用完、后台任务到期）时，App 层调 `engine.onLeaseExpired()`——引擎停循环、
 // 传输端口有界地发 `flow.suspend`、在飞的那张保持传输中、等待中（EXECUTION_BLOCKED）。
 import Foundation
@@ -11,12 +12,13 @@ public final class ExecutionWindow: ExecutionLease, @unchecked Sendable {
     private var appActive = false
     private var finishingTime = false
     private var backgroundTask = false
+    private var shortTask = false
     private var acquired = false
     private var lastStatus = LoopStatus()
 
     public init() {}
 
-    private func open() -> Bool { appActive || finishingTime || backgroundTask }
+    private func open() -> Bool { appActive || finishingTime || backgroundTask || shortTask }
 
     /// App 的 scenePhase 变化（.active = true；.background / .inactive = false）。
     public func setAppActive(_ active: Bool) {
@@ -34,6 +36,24 @@ public final class ExecutionWindow: ExecutionLease, @unchecked Sendable {
     public func setBackgroundTask(_ open: Bool) {
         lock.lock(); defer { lock.unlock() }
         backgroundTask = open
+    }
+
+    /// 系统给的 BGAppRefreshTask 窗口（短任务）开始 / 结束。
+    public func setShortTask(_ open: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        shortTask = open
+    }
+
+    /// 除短任务外还开着哪些窗口（只给日志用，如 `[finishing]`）。
+    public var openSourcesExceptShort: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return [appActive ? "foreground" : nil, finishingTime ? "finishing" : nil, backgroundTask ? "long" : nil].compactMap { $0 }
+    }
+
+    /// 只有短任务窗口开着、其他三种都没开：引擎不处理视频。
+    public var photosOnly: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return shortTask && !(appActive || finishingTime || backgroundTask)
     }
 
     /// 是否有任何执行时间（给 App 层判断「退后台时要不要申请收尾时间」）。
@@ -93,9 +113,73 @@ public enum BackgroundRun {
         return view.waitReason != .executionBlocked
     }
 
-    /// 系统收回后台时间（expirationHandler）：先关窗口，再让引擎按「执行时间被收回」停下（在飞的那张保持传输中）。
+    /// 短任务的跑法（#958）：打开短任务窗口 → 触发一轮 → 并行一个 [budget] 计时。窗口取并集：其他窗口已开着也照常叠加
+    /// （引擎在跑时会合并触发；photosOnly 按当前开着的窗口实时算；到期只关自己）。
+    /// 结束条件是「这一轮结束」或「计时到点」，先到的那个：到点走 [expireShort]（只关短任务窗口；别的窗口还开着，这一轮不停），
+    /// 然后就返回，不等前台 / 宽限期启动的那一轮跑完。系统任务的完成由调用方只调一次。
+    /// 返回给系统的 success：恒为 true（收尾是我们自己定的，不需要系统重试）。
+    /// 触发原因默认 [.mediaChange]（对齐 Android 拍照后的 MediaWatchJob）：只做增量发现（沿 G 游标 / PHPersistentChangeToken），
+    /// 不做全量对账（不查源文件在不在、不置脏扫描、不问桌面）——那一步真机上 0 张待传也要约 3.6 秒，而预算只有 20 秒；
+    /// 全量对账留给长任务和前台。不算人在场，后台开关与电量检查照常。
+    public static func runShort(
+        engine: FlowEngine, window: ExecutionWindow, logger: CoreLogger = NoopLogger(),
+        budget: TimeInterval = 20, reason: TriggerReason = .mediaChange
+    ) async -> Bool {
+        let started = Date()
+        func ms() -> Int { Int(Date().timeIntervalSince(started) * 1000) }
+        logger.log("short task: woken (budget \(Int(budget))s, others=\(window.openSourcesExceptShort))")
+        window.setShortTask(true)
+        let budgetReached = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let once = ResumeOnce(cont)
+            let timer = Task {
+                do { try await Task.sleep(nanoseconds: UInt64(budget * 1_000_000_000)) } catch { return }
+                logger.log("short task: budget reached; finishing")
+                await expireShort(engine: engine, window: window)
+                once.resume(true)
+            }
+            Task {
+                await engine.trigger(reason)
+                await engine.awaitIdle()
+                timer.cancel()
+                once.resume(false)
+            }
+        }
+        window.setShortTask(false)
+        logger.log("short task: finished (finish=\(budgetReached ? "budget" : "done") elapsedMs=\(ms()))")
+        return true
+    }
+
+    /// 长任务（BGProcessingTask）到期：只关长任务自己这一个来源；关完之后若没有任何窗口还开着，才让引擎按「执行时间被收回」停下
+    /// （在飞的那张保持传输中）。前台 / 宽限期 / 短任务还开着，租约仍然持有，这一轮继续。
     public static func expire(engine: FlowEngine, window: ExecutionWindow) async {
         window.setBackgroundTask(false)
-        await engine.onLeaseExpired()
+        if !window.hasExecutionTime { await engine.onLeaseExpired() }
+    }
+
+    /// 短任务（BGAppRefreshTask）到期 / 20 秒到点：规则同 [expire]，只关短任务自己。
+    public static func expireShort(engine: FlowEngine, window: ExecutionWindow) async {
+        window.setShortTask(false)
+        if !window.hasExecutionTime { await engine.onLeaseExpired() }
+    }
+
+    /// 宽限期（beginBackgroundTask）到期：规则同 [expire]，只关宽限期自己。
+    public static func expireFinishingTime(engine: FlowEngine, window: ExecutionWindow) async {
+        window.setFinishingTime(false)
+        if !window.hasExecutionTime { await engine.onLeaseExpired() }
+    }
+}
+
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cont: CheckedContinuation<Bool, Never>?
+
+    init(_ cont: CheckedContinuation<Bool, Never>) { self.cont = cont }
+
+    func resume(_ value: Bool) {
+        lock.lock()
+        let c = cont
+        cont = nil
+        lock.unlock()
+        c?.resume(returning: value)
     }
 }

@@ -9,6 +9,13 @@ public protocol CtrlTransport: Sendable {
     func call(method: String, paramsJSON: Data, timeoutMs: UInt64?) async throws -> Data
 }
 
+/// 控制面流式调用（#963，`timeline.subscribe`）：发一次请求，之后对端推来的每一帧（JSON）都交给 [onFrame]，
+/// 第一帧是应答本身。对端正常结束流时返回，连接出错时抛；[onFrame] 抛错 = 调用方不要这条流了，实现方要停流并把
+/// 这个错误原样抛出。必须响应取消。
+public protocol CtrlStreamTransport: Sendable {
+    func stream(method: String, paramsJSON: Data, onFrame: @escaping @Sendable (Data) throws -> Void) async throws
+}
+
 /// BLAKE3（hex，64 个小写十六进制字符）。来自 FFI，Swift 侧不实现第三份 BLAKE3。
 public protocol ContentHasher: Sendable {
     func blake3Hex(of data: Data) throws -> String

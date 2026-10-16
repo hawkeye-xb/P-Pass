@@ -14,7 +14,8 @@ iOS 媒体层（Swift 本地包，最低 iOS 16）：PhotoKit 相册枚举、变
 | `Sources/PPassMedia/Albums` | `AlbumCatalog`（可选相册列表）、`AlbumScope`（范围并集与计数） |
 | `Sources/PPassMedia/Originals` | `OriginalFetcher`（原图 → 临时文件，流式、可取消、所有退出路径清理）、`PhotoKitOriginalSource`（`requestData`，允许走网络）、`OriginalFetchFailure`（D4 分类） |
 | `Sources/PPassMedia/Access` | `PhotoAccessLevel`（授权档位）、`PhotoAccessPresentation`（首页表达：数字/章/告示 key/动作）、`BackgroundUploadGate`（建后台上传 job 的闸门） |
-| `Sources/PPassMedia/Changes` | `ChangeHistoryReading` + `PhotoKitChangeHistory`（`PHPersistentChangeToken`）、`ChangeDiscovery` / `ChangeWindow`（G 的取法与推进）、`ChangeTokenStore`（G 落盘） |
+| `Sources/PPassMedia/Changes` | `ChangeHistoryReading` + `PhotoKitChangeHistory`（`PHPersistentChangeToken`，错误分类） |
+| `Sources/PPassMedia/Inbox` | `Inbox`：收件箱（取新系统，#958）——变更进箱、按 seq 取件、G 重置时清理 |
 | `Tests/PPassMediaTests` | 纯逻辑单测，跑在 fake 上，不需要授权 |
 | `IntegrationHost/` | 真 PhotoKit 集成测试：XcodeGen 生成的最小宿主 App + 宿主式测试 bundle |
 | `scripts/test.sh` | 一条命令跑完两套测试（建专用模拟器 → erase → 现造素材并 addmedia → 设授权 → 测） |
@@ -98,31 +99,33 @@ MediaStore 没有智能相册的概念。PhotoKit 的智能相册由系统按媒
 - **计数口径**：只算图片和视频，音频不算，隐藏项不算。用真实 fetch 的 `count`，不用 `estimatedAssetCount`
   （对智能相册会返回 `NSNotFound`）。
 
-## 发现游标 G（IOS-09）
+## 发现游标 G 与收件箱（IOS-09 / #958）
 
-ARCH-01 的 G：「只服务新照片，只在新照片提交时推进；补传不推进」。Android 上 G 是 `GENERATION_MODIFIED`（一个可以比较大小的整数），
-iOS 上是归档后的 `PHPersistentChangeToken`。
+ARCH-01 的 G：「只服务新照片，只在新照片提交时推进；补传不推进」。Android 上 G 是 `(GENERATION_MODIFIED, _id)`，
+系统给每张照片一个只增不减的位置，引擎可以「取一张、推进一格」。PhotoKit 只按**变更**给令牌，一次变更可能新增多张，令牌还会过期，
+所以 iOS 由 `Inbox` 自己提供这个位置：系统变更只用来往收件箱**追加**照片 id，SQLite `AUTOINCREMENT` 分配序号，G 存序号。
 
-| | Android | iOS |
+| | Android | iOS（收件箱） |
 |---|---|---|
-| G 的载体 | `Long`，可以比较大小 | 不透明字节（`NSKeyedArchiver` 安全编码），只能判断是否相等 |
-| 取新照片 | `generation > G`，`LIMIT 1` | `fetchPersistentChanges(since: G)`，只看 `insertedLocalIdentifiers` |
-| 推进 | 提交时把 G 设成这张照片的 generation | `ChangeWindow.advance(isSettled:)`：推进到最远的那次变更，要求它及之前插入的照片都已了结 |
-| 不倒退 | 整数单调 | G 只能是起点，或者系统返回序列里的某个 token，结构上无法倒退；删除和更新不挡 G |
-| G 缺失 | 从 `maxGeneration` 起步 | 从 `currentChangeToken` 起步；此前的照片交给对账扫描 |
-| 失效 | 无（MediaStore 重建另有处理） | 3105 token 过期 / 3210 明细缺失 / 存盘字节解不出 → `Discovery.rescan`：先把 G 设成重启点（失败之后、重扫之前取），再对范围全量重扫，按内容哈希判重收敛 |
+| G 的载体 | `(generation, _id)` | 收件箱序号（8 字节大端），只增不减、删行后不复用 |
+| 取新照片 | `(generation, _id) > G` | `seq > G`，按 seq；范围与「照片还在」由 App 层取件时过滤 |
+| 进箱 | — | 每条变更一个事务：按 id 追加新增的 id + 更新 `inbox_token`；不看范围，只看 inserted |
+| 推进 | 引擎，结局与 G 同一事务 | 相同（引擎不改）；收件箱不推进任何东西 |
+| G 重置 | 从 `maxGeneration` 起步 | `currentPosition()`：没令牌时取当前令牌；返回最大序号并清掉 `seq <= 它` 的行 |
+| 令牌失效 | 无 | 3105 / 3210 / 解不出：不抛错、不动 G，只把令牌重置为当前并记日志；缺口交给对账 |
 
 只看 inserted 的原因：照片入库后系统做分析，会再产生 updated 事件；把老照片加进相册也只产生 updated 事件（模拟器实测）。
 这两种都不是新照片。范围变化（老照片进了已选相册）由对账扫描负责，不归 G 管，这一点与 Android 相同。
 
+存储：和账本（`backup-orders.db`）同一个文件，独立的表（`inbox` / `inbox_meta`）和连接，不碰 `user_version`；连接在账本之后打开。
+
 **模拟器上真的造出了 3105**：在旧图库里写入较长的历史，存下 token；erase 模拟器后重建一个历史较短的图库，拿旧 token 去读，
-系统返回 `PHPhotosErrorDomain 3105`。随后的全量重扫中，旧内容按字节判重全部跳过，只有 erase 之后新建的照片需要传。
-erase 之后所有 localIdentifier 都变了，所以这个结果只能靠内容判重得出，靠 id 或计数都得不出。
+系统返回 `PHPhotosErrorDomain 3105`。收件箱拿着这个旧 token 不抛错、把令牌重置为当前，之后的新照片照常进箱；
+缺口里的照片走对账，旧内容按字节判重全部跳过，只有 erase 之后新建的照片需要传。
 
 **风险（实测发现，登记）**：token 不绑定是哪个图库。如果旧 token 的位置还落在新图库的历史范围内，`fetchPersistentChanges`
-**不报错**，会返回新图库「从那个位置之后」的变更，等于 G 静默错位，可能漏掉一段新照片。会出现这种情况的场景：设备恢复、
-图库重建之后，App Group 里的 G 还留着。PhotoKit 没有公开的图库标识可供比对，所以兜底仍然是对账扫描（范围内全量，按内容哈希判重）。
-它必须定期跑，不能只在 3105 时才跑。这一条交给 PPassCore 的调度去落实。
+**不报错**，会返回新图库「从那个位置之后」的变更，等于收件箱静默错位，可能漏掉一段新照片。PhotoKit 没有公开的图库标识可供比对，
+所以兜底是对账扫描（范围内全量，按内容哈希判重），媒体源报 `preciseDiscovery = false`，每个对账轮都扫一遍。
 
 ## 取原始字节（IOS-11）
 
@@ -194,9 +197,9 @@ erase 之后所有 localIdentifier 都变了，所以这个结果只能靠内容
 | 空相册、无名相册、仅视频相册；封面；隐藏/最近删除不可选；智能相册取舍与顺序；并集计数；空范围不查询 | `Tests/PPassMediaTests/AlbumCatalogTests.swift`（fake） | E2 |
 | 灌入的 JPEG/HEIC/MP4 与建出的相册（重叠、空、仅视频、文件夹内）逐条对上；「已隐藏」不可选；并集计数；无名相册建不出来 | `IntegrationHost/Tests/AlbumEnumerationIT.swift`（模拟器真 PhotoKit） | E3（模拟器） |
 | 与「照片」App 并排截图、与 Android BucketScreen 对照 | — | 真机待补 |
-| G：起步、只看 inserted、推进规则、删改不倒退、拍了又删不挡、3105/3210/坏字节走重扫且重启点取在失败之后、其他错误不重扫、落盘原子替换、坏文件不当「没有 G」、按哈希而非计数收敛 | `Tests/PPassMediaTests/ChangeDiscoveryTests.swift`（fake） | E2 |
-| token 归档、落盘、读回后直接喂 `fetchPersistentChanges`；新建一张后增量里只有它，提交后 G 前移、再读为空；进相册不算新照片；坏 token 走重扫后能接着增量 | `IntegrationHost/Tests/ChangeTokenIT.swift` | E3（模拟器） |
-| 真库 3105 + 全量重扫按内容收敛 | `IntegrationHost/Tests/TokenExpiryIT.swift`（两轮，中间 erase） | E3（模拟器） |
+| 收件箱：首次初始化、一条变更多张各占一个序号、进箱顺序、进箱途中被杀续读不重不漏、序号不复用、取件不删行、令牌失效只重置令牌不抛错、其他错误原样上抛、重复 id、不碰 `user_version` 与账本的表、G 编码；错误分类 | `Tests/PPassMediaTests/InboxTests.swift`、`ChangeHistoryTests.swift`（fake） | E2 |
+| 令牌存进 `inbox_meta`、新连接读回后照常可用；新建一张后只进箱这一张、越过后再取为空；进相册不进箱；坏令牌重置后接着进箱 | `IntegrationHost/Tests/ChangeTokenIT.swift` | E3（模拟器） |
+| 真库 3105：收件箱不抛错、令牌重置为当前、之后照常进箱；缺口按内容对账收敛 | `IntegrationHost/Tests/TokenExpiryIT.swift`（两轮，中间 erase） | E3（模拟器） |
 | 真机上「新拍一张 → 水位前移 → 出现在待传列表」 | — | 真机待补（需 App 与 PPassCore 接上） |
 | 流式写入与扩展名、discard/释放兜底删除、哈希拿到完整文件、断网半截/不可得/空间不足/取消都不留文件、失败分类表、资源选择 | `Tests/PPassMediaTests/OriginalFetcherTests.swift`（fake） | E2 |
 | JPEG/HEIC/MP4 取出字节与原文件逐字节一致；照片不存在 → `sourceMissing`；同一资源反复读字节稳定 | `IntegrationHost/Tests/OriginalBytesIT.swift` | E3（模拟器） |

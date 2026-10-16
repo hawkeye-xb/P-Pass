@@ -11,6 +11,8 @@
 //    .background → `window.setAppActive(false)`，并用 `UIApplication.beginBackgroundTask` 申请收尾时间
 //    （开始 `window.setFinishingTime(true)`；expiration / 结束 `window.setFinishingTime(false)` + `engine.onLeaseExpired()`）。
 // 5. 断开（DisconnectRuntime.cancelScheduledWakes）调 `scheduler.stop()`。
+// 短任务（#958）：identifier `BackgroundWakePlanner.shortTaskIdentifier`（com.hawkeyexb.ppass.refresh）也要进 Info.plist，
+//   `UIBackgroundModes` 再加 `fetch`；启动 / 回前台 / 进后台调 `ensureShortScheduled()`。
 // 模拟器验证：在 launch 之后用 LLDB
 //   e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.hawkeyexb.ppass.backup"]
 // 触发一次（只在调试器里可用）。
@@ -33,6 +35,7 @@ public struct BGTaskSubmitter: BackgroundTaskSubmitter {
 
     public func cancelAll() {
         BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundWakePlanner.identifier)
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: BackgroundWakePlanner.shortTaskIdentifier)
     }
 }
 
@@ -46,7 +49,43 @@ public enum PPassBackgroundTasks {
         scheduler: PlannedWakeScheduler,
         logger: CoreLogger
     ) -> Bool {
+        let shortOK = registerShortTask(engine: engine, window: window, logger: logger)
+        return registerLongTask(engine: engine, window: window, scheduler: scheduler, logger: logger) && shortOK
+    }
+
+    /// #958：短任务（BGAppRefreshTask）。每次被叫醒先挂下一次；已有其他窗口开着就直接完成；20 秒自收尾；`setTaskCompleted` 必调一次。
+    private static func registerShortTask(engine: FlowEngine, window: ExecutionWindow, logger: CoreLogger) -> Bool {
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundWakePlanner.shortTaskIdentifier, using: nil) { task in
+            LaunchOriginRecorder.shared.backgroundTaskReached(identifier: BackgroundWakePlanner.shortTaskIdentifier, logger: logger)
+            ensureShortScheduled(logger: logger)
+            let completed = CompletionOnce(task)
+            let work = Task {
+                let ok = await BackgroundRun.runShort(engine: engine, window: window, logger: logger)
+                completed.complete(success: ok)
+            }
+            task.expirationHandler = {
+                logger.log("short task: expired by the system (finish=system_expired)")
+                work.cancel()
+                Task {
+                    await BackgroundRun.expireShort(engine: engine, window: window)
+                    completed.complete(success: true)
+                }
+            }
+        }
+    }
+
+    /// 确保挂着一条短任务请求（earliestBeginDate = 5 分钟）。同 identifier 再提交即替换。启动、回前台、进后台、被叫醒时都调。
+    public static func ensureShortScheduled(logger: CoreLogger? = nil) {
+        let request = BGAppRefreshTaskRequest(identifier: BackgroundWakePlanner.shortTaskIdentifier)
+        request.earliestBeginDate = Date().addingTimeInterval(BackgroundWakePlanner.shortTaskEarliest)
+        do { try BGTaskScheduler.shared.submit(request) } catch { logger?.log("short task: submit failed: \(error)") }
+    }
+
+    private static func registerLongTask(
+        engine: FlowEngine, window: ExecutionWindow, scheduler: PlannedWakeScheduler, logger: CoreLogger
+    ) -> Bool {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundWakePlanner.identifier, using: nil) { task in
+            LaunchOriginRecorder.shared.backgroundTaskReached(identifier: BackgroundWakePlanner.identifier, logger: logger)
             let reason = BackgroundWakePlanner.next(scheduler.plan, now: Date()).reason
             logger.log("background task launched (\(reason.rawValue))")
             let work = Task {
@@ -59,6 +98,23 @@ public enum PPassBackgroundTasks {
                 Task { await BackgroundRun.expire(engine: engine, window: window) }
             }
         }
+    }
+}
+
+/// `setTaskCompleted` 只能调一次（到期收尾与正常完成会竞争）。
+private final class CompletionOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    private let task: BGTask
+
+    init(_ task: BGTask) { self.task = task }
+
+    func complete(success: Bool) {
+        lock.lock()
+        let first = !done
+        done = true
+        lock.unlock()
+        if first { task.setTaskCompleted(success: success) }
     }
 }
 #endif

@@ -2,6 +2,7 @@ import Foundation
 import Network
 import PPassBackgroundTasks
 import PPassCore
+import PPassMedia
 import PPassTransport
 import UIKit
 
@@ -52,6 +53,8 @@ final class LiveBackend: @unchecked Sendable {
         provider = try NativeProvider(root: dir)
         try? provider.ffi.setAllowedPeer(nodeId: pairingStore.load()?.daemonNodeId)
         orders = try SQLiteOrderStore(directory: dir, logger: logger)
+        // 收件箱（#958）：与账本同一个文件、独立的表和连接。必须在账本之后打开——账本发现文件损坏会删掉整个文件重建。
+        let inbox = try Inbox(path: orders.path, history: PhotoKitChangeHistory(), log: { logger.log($0) })
         control = FlowControlStore(directory: dir, logger: logger)
         settings = BackupSettings(directory: dir, logger: logger)
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
@@ -69,7 +72,7 @@ final class LiveBackend: @unchecked Sendable {
         }
         let desktop = ControlPlaneDesktop(client: ProtoClient(transport: CurrentPeerTransport(plane: plane, store: pairingStore)))
         let delivery = FlowDeliveryPort(provider: FfiBlobProvider(provider: provider), currentEpoch: epoch, desktop: desktop,
-                                        push: UnsupportedPush(), logger: logger, pairingLoss: pairingLoss)
+                                        push: ControlPlanePush(transport: CurrentPeerTransport(plane: plane, store: pairingStore)), logger: logger, pairingLoss: pairingLoss)
         let media = self.media
         let scope: @Sendable () -> Set<String> = { media.savedScope() ?? [] }
         let settings = self.settings
@@ -78,7 +81,7 @@ final class LiveBackend: @unchecked Sendable {
         let model = LiveEngineModel()
         engineModel = model
         engine = FlowEngine(
-            store: orders, media: PhotoMediaSource(selected: scope),
+            store: orders, media: PhotoMediaSource(selected: scope, inbox: inbox),
             importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
             delivery: delivery,
             probe: ControlPlaneProbe(currentEpoch: epoch, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
@@ -95,6 +98,7 @@ final class LiveBackend: @unchecked Sendable {
         catchup = ForegroundCatchup(engine: engine)
         PPassBackgroundTasks.register(engine: engine, window: window, scheduler: scheduler, logger: logger)
         scheduler.ensureScheduled()
+        PPassBackgroundTasks.ensureShortScheduled(logger: logger)
         if root.isDegraded { logger.log("storage root degraded: \(root.kind)") }
         // #956：网络恢复时补发待撤销的 unpair（回前台与启动的触发点在 LiveLifecycle / start）。
         network.onRecovered = { [weak self] in self?.flushPendingUnpairs() }
@@ -160,6 +164,7 @@ final class LiveBackend: @unchecked Sendable {
         window.setAppActive(active)
         if active {
             scheduler.ensureScheduled()
+            PPassBackgroundTasks.ensureShortScheduled(logger: logger)
             Task { _ = await catchup.appDidBecomeActive(); await refreshFacts() }
         }
     }
@@ -216,6 +221,13 @@ struct CurrentPeerTransport: CtrlTransport {
     func call(method: String, paramsJSON: Data, timeoutMs: UInt64?) async throws -> Data {
         guard let r = store.load() else { throw NotPaired() }
         return try await plane.call(peerToken: r.peerToken, method: method, paramsJSON: paramsJSON, timeoutMs: timeoutMs)
+    }
+}
+
+extension CurrentPeerTransport: CtrlStreamTransport {
+    func stream(method: String, paramsJSON: Data, onFrame: @escaping @Sendable (Data) throws -> Void) async throws {
+        guard let r = store.load() else { throw NotPaired() }
+        try await plane.stream(peerToken: r.peerToken, method: method, paramsJSON: paramsJSON, onFrame: onFrame)
     }
 }
 
