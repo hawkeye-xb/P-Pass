@@ -124,15 +124,12 @@ final class LiveBackend: @unchecked Sendable {
     /// 整条路径不可用 → 在飞的这张判路径失败；否则当作一次网络变化（跑中切到蜂窝且仅 Wi‑Fi → 停轮等 WIFI）。
     /// 网络从断到通时顺带补发待撤销的 unpair（#956；回前台与启动的触发点在 LiveLifecycle / start）。
     func networkPathChanged(_ update: NetworkPathTracker.Update) {
-        guard let action = update.action else { return }
         if update.recovered { flushPendingUnpairs() }
-        provider.ffi.networkChange()
-        let engine = self.engine
+        let provider = self.provider, engine = self.engine
         Task {
-            switch action {
-            case .lost: await engine.onNetworkLost()
-            case .changed: await engine.onNetworkChanged()
-            }
+            await dispatchNetworkPath(update, providerNetworkChange: { provider.ffi.networkChange() },
+                                      engineLost: { await engine.onNetworkLost() },
+                                      engineChanged: { await engine.onNetworkChanged() })
         }
     }
 
@@ -374,26 +371,39 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
 }
 
+/// 路径来源：生产是 `NWPathMonitor`，测试里换成假的，按需喂「可用 / 昂贵」。
+protocol NetworkPathSource: AnyObject {
+    func start(_ handler: @escaping @Sendable (_ satisfied: Bool, _ expensive: Bool) -> Void)
+}
+
+final class NWPathSource: NetworkPathSource {
+    private let monitor = NWPathMonitor()
+    func start(_ handler: @escaping @Sendable (Bool, Bool) -> Void) {
+        monitor.pathUpdateHandler = { handler($0.status == .satisfied, $0.isExpensive) }
+        monitor.start(queue: DispatchQueue(label: "ppass.network"))
+    }
+}
+
 /// 当前网络是否「昂贵」（蜂窝 / 个人热点）——「仅 Wi‑Fi」的判据；并把每次路径更新交给 `onUpdate`（对位 Android
 /// `registerNetworkCallback` → `onFlowNetworkChanged`）。进程活着就一直监听，前台、宽限期、后台任务窗口都算。
 final class NetworkState: @unchecked Sendable {
-    private let monitor = NWPathMonitor()
+    private let source: NetworkPathSource
     private let lock = NSLock()
     private var expensive = false
     private var tracker = NetworkPathTracker()
     /// 每次路径更新一次；首次回调的 `action` 为 nil（启动由 `LiveBackend.start` 管）。在 monitor 队列上调用。
     var onUpdate: ((NetworkPathTracker.Update) -> Void)?
 
-    init() {
-        monitor.pathUpdateHandler = { [weak self] path in
+    init(source: NetworkPathSource = NWPathSource()) {
+        self.source = source
+        source.start { [weak self] satisfied, expensive in
             guard let self else { return }
             self.lock.lock()
-            self.expensive = path.isExpensive
-            let update = self.tracker.update(satisfied: path.status == .satisfied)
+            self.expensive = expensive
+            let update = self.tracker.update(satisfied: satisfied)
             self.lock.unlock()
             self.onUpdate?(update)
         }
-        monitor.start(queue: DispatchQueue(label: "ppass.network"))
     }
 
     var isExpensive: Bool { lock.lock(); defer { lock.unlock() }; return expensive }

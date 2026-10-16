@@ -28,3 +28,19 @@ public struct NetworkPathTracker: Sendable {
         return Update(action: now ? .changed : .lost, recovered: !before && now)
     }
 }
+
+/// 路径更新 → 副作用的固定顺序（对位 Android `onFlowNetworkChanged`）：先让 provider 重探路径，再交给引擎。
+/// 首次回调（`action == nil`）什么都不做。
+public func dispatchNetworkPath(
+    _ update: NetworkPathTracker.Update,
+    providerNetworkChange: () -> Void,
+    engineLost: () async -> Void,
+    engineChanged: () async -> Void
+) async {
+    guard let action = update.action else { return }
+    providerNetworkChange()
+    switch action {
+    case .lost: await engineLost()
+    case .changed: await engineChanged()
+    }
+}

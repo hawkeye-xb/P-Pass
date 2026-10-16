@@ -26,4 +26,18 @@ final class NetworkPathTrackerTests: XCTestCase {
         _ = t.update(satisfied: false)
         XCTAssertEqual(t.update(satisfied: true), .init(action: .changed, recovered: true))
     }
+
+    /// 分发顺序：provider.networkChange 先于引擎；首次回调什么都不做。
+    func testDispatchProbesTheProviderBeforeTheEngine() async {
+        final class Calls: @unchecked Sendable { var list: [String] = [] }
+        let calls = Calls()
+        var t = NetworkPathTracker()
+        for satisfied in [true, true, false, true] {
+            await dispatchNetworkPath(t.update(satisfied: satisfied),
+                                      providerNetworkChange: { calls.list.append("provider") },
+                                      engineLost: { calls.list.append("lost") },
+                                      engineChanged: { calls.list.append("changed") })
+        }
+        XCTAssertEqual(calls.list, ["provider", "changed", "provider", "lost", "provider", "changed"], "首次回调不分发")
+    }
 }
