@@ -145,9 +145,14 @@ internal class FlowEngine(
         kind: String,
         payload: Map<String, String>,
         roundId: String? = store.openRoundId(),
-    ): AuditRecord {
-        evidenceOutcomeOf(kind, payload)?.let { roundOutcomes[it] = (roundOutcomes[it] ?: 0) + 1 }
-        return AuditRecord(UUID.randomUUID().toString(), kind, roundId, clock(), payload)
+    ): AuditRecord = AuditRecord(UUID.randomUUID().toString(), kind, roundId, clock(), payload)
+
+    /**
+     * #902：把一条**已经落库**的事实计进本轮自报计数（`flow.round.finished` 的 payload）。构造时不计：
+     * 带审计的转换在行已被别处结掉时返回 false、审计不落库，这时计了就和桌面按证据重算的数对不上。
+     */
+    private fun countPersisted(record: AuditRecord) {
+        evidenceOutcomeOf(record.kind, record.payload)?.let { roundOutcomes[it] = (roundOutcomes[it] ?: 0) + 1 }
     }
 
     /**
@@ -979,12 +984,14 @@ internal class FlowEngine(
             }
             ImportResult.SourceMissing -> {
                 // MediaStore 还列着、文件读不到：记「源已删」（同版本即结局，不再算待办），游标推进。
+                val fact = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, snapshot.mediaId, mapOf("mediaId" to snapshot.mediaId.toString()))
                 store.insert(
                     NewOrder(snapshot.mediaId, version, bucket, null, OrderState.SKIPPED_SOURCE_MISSING, epoch.value),
                     advance = progress.advance,
                     scanTo = progress.scanTo,
-                    audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, snapshot.mediaId, mapOf("mediaId" to snapshot.mediaId.toString())),
+                    audit = fact,
                 )
+                countPersisted(fact)
                 onSettled()
                 bump()
                 return StepResult.Next
@@ -1078,13 +1085,10 @@ internal class FlowEngine(
 
     /** 返回这一行是否由本次结掉（不在 OPEN 状态里的行不动）。 */
     private suspend fun settleSourceMissing(order: Order, reason: String, discard: Boolean): Boolean {
-        val settled = store.transition(
-                order.id,
-                OPEN,
-                OrderState.SKIPPED_SOURCE_MISSING,
-                audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString(), "reason" to reason)),
-            )
+        val fact = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString(), "reason" to reason))
+        val settled = store.transition(order.id, OPEN, OrderState.SKIPPED_SOURCE_MISSING, audit = fact)
         if (settled) {
+            countPersisted(fact)
             if (discard) delivery.discardPartial(order.id, PairingEpoch(order.pairingEpoch))
             bump()
         }
@@ -1106,6 +1110,16 @@ internal class FlowEngine(
                 val valid = receipt.queueSequence == order.id &&
                     receipt.pairingEpoch == epoch &&
                     (receipt.contentHash == null || receipt.contentHash == hash)
+                val fact = itemAudit(
+                    AuditKinds.ITEM_CONFIRMED,
+                    order.mediaId,
+                    mapOf(
+                        "queueSequence" to order.id.toString(),
+                        "sourceVersion" to order.sourceVersion,
+                        "contentHash" to hash,
+                        "receiptRef" to receipt.receiptId,
+                    ),
+                )
                 if (!valid) {
                     log.log("order ${order.id}: receipt does not match the request; treating as item failure")
                     fail(order, progress, "receipt_mismatch")
@@ -1116,18 +1130,10 @@ internal class FlowEngine(
                         advance = progress.advance,
                         scanTo = progress.scanTo,
                         // E-01 / O-07：CONFIRMED、hash 映射（行本身）、游标推进、确认审计——同一次写入。
-                        audit = itemAudit(
-                            AuditKinds.ITEM_CONFIRMED,
-                            order.mediaId,
-                            mapOf(
-                                "queueSequence" to order.id.toString(),
-                                "sourceVersion" to order.sourceVersion,
-                                "contentHash" to hash,
-                                "receiptRef" to receipt.receiptId,
-                            ),
-                        ),
+                        audit = fact,
                     )
                 ) {
+                    countPersisted(fact)
                     facts.update { it.copy(doneThisRound = it.doneThisRound + 1) }
                     onSettled()
                     recovered("a photo was confirmed")
@@ -1138,15 +1144,17 @@ internal class FlowEngine(
             DeliveryOutcome.SourceMissing -> {
                 // 原图在供数期间被删 / 被改：源已删，不计失败；丢弃桌面半截、放掉导入。
                 importer.release(hash)
+                val fact = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString()))
                 if (store.transition(
                         order.id,
                         setOf(OrderState.TRANSFERRING),
                         OrderState.SKIPPED_SOURCE_MISSING,
                         advance = progress.advance,
                         scanTo = progress.scanTo,
-                        audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString())),
+                        audit = fact,
                     )
                 ) {
+                    countPersisted(fact)
                     delivery.discardPartial(order.id, epoch)
                     onSettled()
                 }
@@ -1194,15 +1202,19 @@ internal class FlowEngine(
         //     现在推给用户的「备份失败」多半是误报（待分类确认后再决定哪一类要通知）；
         //  2. 兜底对账会自动再试一次 FAILED——现在就推通知，大多数是会自愈的问题。
         // 结构测试 ARCH14UiWiringTest.the_failure_notification_is_kept_but_never_posted 锁住「main 里没有 postFailure 调用点」。
-        store.transition(
-            order.id,
-            setOf(OrderState.TRANSFERRING),
-            OrderState.FAILED,
-            countAttempt = true,
-            advance = progress.advance,
-            scanTo = progress.scanTo,
-            audit = itemAudit(AuditKinds.ITEM_ATTENTION, order.mediaId, mapOf("reason" to reason, "queueSequence" to order.id.toString())),
-        )
+        val fact = itemAudit(AuditKinds.ITEM_ATTENTION, order.mediaId, mapOf("reason" to reason, "queueSequence" to order.id.toString()))
+        if (store.transition(
+                order.id,
+                setOf(OrderState.TRANSFERRING),
+                OrderState.FAILED,
+                countAttempt = true,
+                advance = progress.advance,
+                scanTo = progress.scanTo,
+                audit = fact,
+            )
+        ) {
+            countPersisted(fact)
+        }
         bump()
     }
 
@@ -1246,10 +1258,12 @@ internal class FlowEngine(
                     )
                     continue
                 }
+                val fact = audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "REUPLOAD", "contentHash" to hash))
                 store.insert(
                     NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.PENDING, order.pairingEpoch, order.locationRedacted),
-                    audit = audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "REUPLOAD", "contentHash" to hash)),
+                    audit = fact,
                 )
+                countPersisted(fact)
                 requeued++
             }
             after = page.last().id
