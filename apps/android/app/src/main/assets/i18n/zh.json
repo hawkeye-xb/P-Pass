@@ -196,6 +196,7 @@
   "ui.wizard_continue": "继续",
   "ui.wizard_sleep_title": "让这台电脑保持醒着。",
   "ui.wizard_sleep_body": "家人手机会趁插电连 Wi-Fi 时把照片传回来——电脑得开着才收得到。",
+  "ui.wizard_sleep_auto_win": "P-Pass 后台服务在运行、电脑插着电时，系统不会因为没人操作而睡眠——屏幕照常熄灭、锁屏，不用改任何系统设置。用电池时按你自己的设置睡，免得耗电。",
   "ui.wizard_sleep_never": "这台电脑设置为不自动休眠",
   "ui.wizard_check_passed": "检查通过",
   "ui.wizard_sleep_on": "「自动睡眠」还开着",

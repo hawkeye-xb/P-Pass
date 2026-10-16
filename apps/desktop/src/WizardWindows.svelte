@@ -21,7 +21,6 @@
 
   let step = $state(1);
   let libraryDir = $state(configuredLibraryDir || defaultDir);
-  let power = $state(null); // {kind, minutes}
   let busy = $state(false);
   let error = $state("");
 
@@ -38,27 +37,11 @@
     libraryDir = defaultDir;
   }
 
-  let sleepFixBusy = $state(false);
-  let sleepFixError = $state("");
-  async function fixAutoSleep() {
-    sleepFixBusy = true;
-    sleepFixError = "";
-    try {
-      await invoke("disable_auto_sleep");
-      power = await invoke("power_hint");
-    } catch (e) {
-      sleepFixError = errText(e);
-    } finally {
-      sleepFixBusy = false;
-    }
-  }
-
   async function toStep2() {
     error = "";
     busy = true;
     try {
       await invoke("write_config", { libraryDir });
-      power = await invoke("power_hint");
       step = 2;
     } catch (e) {
       error = t("ui.wizard_save_failed", { err: errText(e) });
@@ -147,36 +130,13 @@
     <div class="flex flex-col gap-4">
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_sleep_body")}</p>
-      {#if power?.kind === "never"}
-        <div class="flex items-center gap-3 rounded-xl border border-border px-[18px] py-[14px]">
-          <span class="h-[9px] w-[9px] flex-none rounded-full bg-safe"></span>
-          <span class="flex-1 text-[15px] font-semibold">{t("ui.wizard_sleep_never")}</span>
-          <span class="text-[13px] text-safe">✓ {t("ui.wizard_check_passed")}</span>
-        </div>
-      {:else if power?.kind === "sleeps"}
-        <div class="flex flex-col gap-3 rounded-xl border border-border bg-waiting-bg px-[18px] py-[14px]">
-          <div class="flex items-center gap-3">
-            <span class="h-[9px] w-[9px] flex-none rounded-full bg-waiting"></span>
-            <div class="flex-1">
-              <p class="m-0 text-[15px] font-semibold">{t("ui.wizard_sleep_on")}</p>
-              <p class="m-0 mt-[3px] text-[13px] leading-[1.5] text-ink-60">
-                {t("ui.wizard_sleep_minutes", { n: power.minutes })}
-              </p>
-            </div>
-          </div>
-          <div class="flex items-center gap-[10px]">
-            <Button size="compact" disabled={sleepFixBusy} onclick={fixAutoSleep}>
-              {sleepFixBusy ? t("ui.wizard_sleep_fixing") : t("ui.wizard_sleep_fix")}
-            </Button>
-            <Button variant="secondary" size="compact" onclick={() => invoke("open_power_settings")}>{t("ui.wizard_open_power_settings")}</Button>
-          </div>
-          {#if sleepFixError}
-            <p class="m-0 text-[13px] text-act">{t("ui.wizard_sleep_fix_failed_win", { err: sleepFixError })}</p>
-          {/if}
-        </div>
-      {:else}
-        <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.wizard_power_unknown")}</p>
-      {/if}
+      <!-- DAE-11 (#804)：不再「一键关闭自动睡眠」（要 UAC、永久改用户的电源设置、
+           只设了插电）。改由 daemon 运行且插电时向系统声明别因空闲而睡——不用授权，
+           屏幕照常熄灭锁屏，服务一停声明就失效。所以这一步只需说明，不用检测也不用点。 -->
+      <div class="flex items-center gap-3 rounded-xl border border-border px-[18px] py-[14px]">
+        <span class="h-[9px] w-[9px] flex-none rounded-full bg-safe"></span>
+        <span class="flex-1 text-[14px] leading-[1.6]">{t("ui.wizard_sleep_auto_win")}</span>
+      </div>
     </div>
     <div class="mt-auto flex items-center justify-between">
       <Button variant="link" onclick={() => (step = 1)}>‹ {t("ui.wizard_back")}</Button>

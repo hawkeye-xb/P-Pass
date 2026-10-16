@@ -112,6 +112,22 @@ const _: fn() = || {
     assert_send::<AwakeGuard>();
 };
 
+/// DAE-11 (#804)：[`PlatformAdapter::watch_external_power`] 的订阅句柄，
+/// drop 即退订。和 [`AwakeGuard`] 一样只靠 `Drop` 起作用，可在任意线程 drop。
+pub struct PowerWatch {
+    #[allow(dead_code)] // the handle's Drop is the whole point
+    inner: Box<dyn Send>,
+}
+
+impl PowerWatch {
+    /// 各平台实现把自己的退订 guard 装进来。
+    pub(crate) fn new(inner: impl Send + 'static) -> Self {
+        Self {
+            inner: Box::new(inner),
+        }
+    }
+}
+
 /// Device private-key storage (DPAPI / Keychain).
 pub trait KeyStore {
     fn store(&self, name: &str, secret: &[u8]) -> Result<()>;
@@ -391,6 +407,22 @@ pub trait PlatformAdapter: Send + Sync {
     /// 怎么处理「不知道」由调用方（daemon）定。默认实现是 `None`，与
     /// [`Self::installed_bundle_version`] 同一口径。
     fn on_external_power(&self) -> Option<bool> {
+        None
+    }
+
+    /// DAE-11 (#804)：订阅「插电 / 用电池」的变化，**事件驱动，不轮询**。
+    ///
+    /// 登记成功后先以当前状态回调一次，之后每次电源切换再回调；入参口径同
+    /// [`Self::on_external_power`]（`None` = 不知道）。回调在系统线程上跑，
+    /// 必须快进快出。返回的 [`PowerWatch`] drop 即退订。
+    ///
+    /// 返回 `None` = 本平台不支持订阅（默认实现）。调用方据此**不做**常驻
+    /// 保持唤醒——只拿一次快照的话，拔电后没人知道，会一直挡着睡眠耗电池。
+    fn watch_external_power(
+        &self,
+        on_change: Box<dyn Fn(Option<bool>) + Send + Sync>,
+    ) -> Option<PowerWatch> {
+        let _ = on_change;
         None
     }
 

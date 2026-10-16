@@ -196,6 +196,7 @@
   "ui.wizard_continue": "Continue",
   "ui.wizard_sleep_title": "Keep this computer awake.",
   "ui.wizard_sleep_body": "Family phones send photos back while charging on Wi-Fi — the computer has to be on to receive them.",
+  "ui.wizard_sleep_auto_win": "While the P-Pass background service is running and the computer is plugged in, Windows won't go to sleep for being idle — the screen still turns off and locks as usual, and no system setting is changed. On battery it sleeps as you've set it, to save power.",
   "ui.wizard_sleep_never": "This computer is set to never sleep automatically",
   "ui.wizard_check_passed": "Check passed",
   "ui.wizard_sleep_on": "\"Auto sleep\" is still on",
