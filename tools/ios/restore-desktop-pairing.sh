@@ -52,7 +52,7 @@ fi
 SCOPE_FILE="$ARG"
 jq -e '.selected | type == "array"' "$SCOPE_FILE" >/dev/null \
   || { echo "error: $SCOPE_FILE 不是有效的范围备份（要有 selected 数组）" >&2; exit 1; }
-[ -s "$TOKEN_FILE" ] || { echo "error: 找不到正式桌面的 IPC token：$TOKEN_FILE（P-Pass 桌面没在跑？）" >&2; exit 1; }
+[ -s "$TOKEN_FILE" ] || { echo "error: 找不到正式桌面的 IPC token：${TOKEN_FILE}（P-Pass 桌面没在跑？）" >&2; exit 1; }
 
 # shellcheck source=tools/ipc-lib.sh
 source "$ROOT/tools/ipc-lib.sh"

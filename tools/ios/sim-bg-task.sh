@@ -36,7 +36,7 @@ pull_log() { # $1 = 目标文件
   xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --source Library/Logs/ppass.log --destination "$1" >/dev/null 2>&1
 }
-judge() { # 只读 $OUT 下的 run.log / short.log / db/，按 $MODE、$N 判定
+judge() { # 只读 ${OUT} 下的 run.log / short.log / db/，按 ${MODE}、$N 判定
   FAIL=0
   must() { # $1 = 说明，$2 = ERE
     local line; line=$(grep -E -m1 -- "$2" "$OUT/run.log" || true)
@@ -92,7 +92,7 @@ judge() { # 只读 $OUT 下的 run.log / short.log / db/，按 $MODE、$N 判定
       ;;
   esac
   echo "（launch origin：调试器附加在已运行的前台进程上模拟，本进程的启动来源是 foreground，不判 background。）"
-  if [ "$FAIL" = 0 ]; then echo "PASS: ${MODE}（日志 $OUT）"; else echo "FAIL: ${MODE}（日志 $OUT）"; return 1; fi
+  if [ "$FAIL" = 0 ]; then echo "PASS: ${MODE}（日志 ${OUT}）"; else echo "FAIL: ${MODE}（日志 ${OUT}）"; return 1; fi
 }
 if [ "$MODE" = _judge ]; then # 对已有日志目录重判：sim-bg-task.sh _judge apps/ios/build/sim-bg-task/<场景>-<时间>
   OUT="${2:?要给日志目录}"; OUT="${OUT%/}"
@@ -251,7 +251,7 @@ if [ "$(jq -r .selected_test_albums "$OUT/scope-before.json")" != 0 ]; then
   exit 1
 fi
 cp "$OUT/scope-before.json" "$SCOPE_BACKUP"
-echo "  已备份：$(jq -r '.selected | length' "$SCOPE_BACKUP") 个相册（$SCOPE_BACKUP）"
+echo "  已备份：$(jq -r '.selected | length' "$SCOPE_BACKUP") 个相册（${SCOPE_BACKUP}）"
 RUN="$REAL_RUN"
 
 ENVJSON=$(jq -cn --arg l "$PAIR_QR" --arg r "$RUN" \
