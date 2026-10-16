@@ -57,10 +57,12 @@ function pageText() {
   return document.body.textContent;
 }
 
+// DAE-11 (#804)：Windows 向导第 2 步不再有「一键关闭自动睡眠」，只剩一句说明；
+// macOS 那份等 #999 再改，仍走一键设置。
 describe.each([
-  ["Wizard.svelte", Wizard],
-  ["WizardWindows.svelte", WizardWindows],
-])("%s：英文系统下整页没有中文", (_name, Component) => {
+  ["Wizard.svelte", Wizard, true],
+  ["WizardWindows.svelte", WizardWindows, false],
+])("%s：英文系统下整页没有中文", (_name, Component, hasSleepFix) => {
   beforeEach(() => {
     vi.useFakeTimers();
     invokeMock.mockReset();
@@ -71,7 +73,7 @@ describe.each([
     vi.useRealTimers();
   });
 
-  it("三步走完（含一键设置失败、启动失败两条红条），每一屏都没有中文", async () => {
+  it("三步走完（含一键设置失败〔仅 macOS〕、启动失败两条红条），每一屏都没有中文", async () => {
     render(Component, {
       props: { defaultDir: "/Users/someone/Pictures/P-Pass", configuredLibraryDir: null, onDone: vi.fn() },
     });
@@ -79,10 +81,15 @@ describe.each([
     expect(pageText()).not.toMatch(HAN);
 
     await click("Continue");
-    expect(pageText()).toContain(t("ui.wizard_sleep_on"));
-    await click("Fix it for me");
-    // keyed 错误被渲染成英文句子，而不是 {"key":…} 原串。
-    expect(pageText()).toContain("Authorization cancelled — you can also click");
+    if (hasSleepFix) {
+      expect(pageText()).toContain(t("ui.wizard_sleep_on"));
+      await click("Fix it for me");
+      // keyed 错误被渲染成英文句子，而不是 {"key":…} 原串。
+      expect(pageText()).toContain("Authorization cancelled — you can also click");
+    } else {
+      expect(pageText()).toContain(t("ui.wizard_sleep_auto_win"));
+      expect(screen.queryByRole("button", { name: "Fix it for me" })).toBeNull();
+    }
     expect(pageText()).not.toMatch(HAN);
 
     await click("Continue");

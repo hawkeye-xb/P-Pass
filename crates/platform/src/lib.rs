@@ -120,8 +120,9 @@ pub struct PowerWatch {
 }
 
 impl PowerWatch {
-    /// 各平台实现把自己的退订 guard 装进来。
-    pub(crate) fn new(inner: impl Send + 'static) -> Self {
+    /// 各平台实现把自己的退订 guard 装进来。`pub` 而不是 `pub(crate)`：只有
+    /// 实现了订阅的平台才调它，`pub(crate)` 在其余平台上会被判成未使用代码。
+    pub fn new(inner: impl Send + 'static) -> Self {
         Self {
             inner: Box::new(inner),
         }
