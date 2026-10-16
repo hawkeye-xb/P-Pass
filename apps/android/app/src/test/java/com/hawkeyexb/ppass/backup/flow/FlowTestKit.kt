@@ -232,8 +232,20 @@ internal class FakeImporter(private val media: FakeMedia) : MediaImporter {
  * 一套装好的引擎。[media] 默认范围是 bucket 7；照片内容即 hash 源（FakeMedia）。
  * [cursors] 为 true（默认）时预置 G = (0, 0)、getVersion 不变——视为「装好之后一直在跑」，只有显式置脏才扫描。
  */
-internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? = null, wakes: WakeScheduler? = null) {
+internal class Rig(
+    test: TestScope,
+    cursors: Boolean = true,
+    openRound: String? = null,
+    wakes: WakeScheduler? = null,
+    separateIo: Boolean = false,
+) {
     val dispatcher = StandardTestDispatcher(test.testScheduler)
+
+    /**
+     * #900：[separateIo] 为 true 时 io 是另一个调度器——`withContext(io)` 真的让出写者（生产就是这样：
+     * 写者单线程、io 是 Dispatchers.IO），写者上排着的触发能插进来。默认与写者同一个，切换不挂起。
+     */
+    val io = if (separateIo) StandardTestDispatcher(test.testScheduler) else dispatcher
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val testScope = test
     var now = 1_000L
@@ -300,7 +312,7 @@ internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? 
         mediaAbsenceTrusted = { fullMediaAccess },
         pairingEpoch = { epoch },
         scope = scope,
-        io = dispatcher,
+        io = io,
         log = FlowLogger { logs += it },
         clock = { now },
         monotonicClock = { test.testScheduler.currentTime },

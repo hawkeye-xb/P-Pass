@@ -33,6 +33,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +42,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -502,28 +504,34 @@ internal class FlowEngine(
     // ---------------------------------------------------------------- 一轮
 
     private suspend fun drain() {
-        try {
-            while (pending.isNotEmpty()) {
-                val reasons = pending.toSet()
-                pending.clear()
-                try {
-                    runCycle(reasons)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (failure: Exception) {
-                    // 一轮失败（例如本地数据库写入抛错）不能让引擎死掉。#762：进「等待中」（原因可见）并按退避登记唤醒，
-                    // 不能只清成空闲——那样既不显示原因，也没有任何唤醒，只能等下一次外部触发。
-                    log.log("cycle $reasons failed: ${failure.javaClass.simpleName}: ${failure.message}")
-                    settle(WaitReason.UNEXPECTED_ERROR)
+        while (true) {
+            try {
+                while (pending.isNotEmpty()) {
+                    val reasons = pending.toSet()
+                    pending.clear()
+                    try {
+                        runCycle(reasons)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        // 一轮失败（例如本地数据库写入抛错）不能让引擎死掉。#762：进「等待中」（原因可见）并按退避登记唤醒，
+                        // 不能只清成空闲——那样既不显示原因，也没有任何唤醒，只能等下一次外部触发。
+                        log.log("cycle $reasons failed: ${failure.javaClass.simpleName}: ${failure.message}")
+                        settle(WaitReason.UNEXPECTED_ERROR)
+                    }
+                }
+            } finally {
+                if (_status.value.phase != LoopPhase.IDLE) _status.update { it.copy(phase = LoopPhase.IDLE, current = null) }
+                checksDone.update { it + 1 }
+                withContext(NonCancellable) {
+                    runCatching { refreshPending() }
+                    afterCycle()
                 }
             }
-        } finally {
-            if (_status.value.phase != LoopPhase.IDLE) _status.update { it.copy(phase = LoopPhase.IDLE, current = null) }
-            checksDone.update { it + 1 }
-            withContext(NonCancellable) {
-                runCatching { refreshPending() }
-                afterCycle()
-            }
+            // #900：收尾要在 io 上重算待办（会让出写者），这段时间 cycleJob 仍 active，到达的触发被合并进了 pending——
+            // 这里不再看一眼就丢了。看到空就结束：从这里到协程结束没有挂起点，之后的触发会自己起新一轮。
+            if (pending.isEmpty() || !currentCoroutineContext().isActive) break
+            log.log("triggers $pending arrived while the cycle was finishing; running again")
         }
     }
 
