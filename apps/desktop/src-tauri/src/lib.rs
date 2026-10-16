@@ -210,12 +210,8 @@ fn wizard_state() -> Value {
         // the wizard prefills this so re-running it never orphans the
         // existing library (T-042b).
         "configured_library_dir": configured_dir,
-        // W1 (2026-08-26): wizard copy hard-coded macOS-only wording
-        // (Finder, TCC-protected 桌面/文稿, "macOS 拦截时右键打开") on
-        // every platform — a Windows real-box run surfaced this as
-        // "onboarding 说明都是 macOS 的". Expose the platform so the
-        // frontend can branch copy instead of guessing from user agent.
-        "platform": platform::adapter().platform_name(),
+        // DESK-69 (#997)：平台不再从这里给——前端统一读 plugin-os 的
+        // platform()，一个来源。
     })
 }
 
@@ -1902,6 +1898,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // DESK-69 (#997)：前端按平台分支只认 plugin-os 的 platform()。
+        .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             daemon_call,

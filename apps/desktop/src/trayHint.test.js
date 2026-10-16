@@ -17,15 +17,18 @@ describe("DESK-23 关窗提示的判定规则", () => {
     expect(shouldShowTrayHint("macos", "1")).toBe(false);
   });
 
-  it("Linux 上也不提示", () => {
-    expect(shouldShowTrayHint("linux", null)).toBe(false);
+  // DESK-69 (#997)：Linux 同 Windows 的习惯；GNOME 默认没有托盘，不提示
+  // 的话关窗后 App 就像「消失」了。
+  it("Linux 上第一次关窗也要提示", () => {
+    expect(shouldShowTrayHint("linux", null)).toBe(true);
+    expect(shouldShowTrayHint("linux", "1")).toBe(false);
   });
 
-  // fail-closed：平台读不到时宁可少说一次，也不要在 macOS 上冒出来。
-  it("平台读不到时不提示", () => {
-    expect(shouldShowTrayHint(undefined, null)).toBe(false);
-    expect(shouldShowTrayHint(null, null)).toBe(false);
-    expect(shouldShowTrayHint("", null)).toBe(false);
+  // DESK-69 (#997)：平台来自 plugin-os，未覆盖的值是代码缺口，必须报错，
+  // 不许悄悄当成某个平台。
+  it("未覆盖的平台直接报错", () => {
+    expect(() => shouldShowTrayHint(undefined, null)).toThrow(/unsupported platform/);
+    expect(() => shouldShowTrayHint("", null)).toThrow(/unsupported platform/);
   });
 
   // localStorage 被禁/隐私模式下读取会抛，调用方吞掉异常后传 null

@@ -1,6 +1,7 @@
 <script>
   import { reconcilePhotoWall } from "./photoWall.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
+  import { currentPlatform, wizardVariant } from "./platformUx.js";
   import { shouldShowWizard, serviceCameBack } from "./serviceGate.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
@@ -715,8 +716,7 @@
   // DESK-23 (#172)：Rust 侧每次关窗都会发 `hidden-to-tray`，要不要弹在这里判。
   // 判定规则本身抽在 trayHint.js 里单测（macOS 那条没 Mac 验不了端到端，
   // 但规则可以测）；这里只负责读写标记和真正把话说出来。
-  // 平台取自 wizard_state 已有的 platform 字段——不为这一处新加命令，也不
-  // 在 Rust 里加 cfg（#211 正在往外搬平台分叉，别一边搬一边添）。
+  // DESK-69 (#997)：平台统一取 plugin-os 的 platform()（platformUx.js）。
   async function onHiddenToTray() {
     let shown = null;
     try {
@@ -725,7 +725,7 @@
       // 隐私模式/存储被禁时 localStorage 会抛。当成"没提示过"继续走：
       // 多提示一次可以忍，静默不行。
     }
-    if (!shouldShowTrayHint(wizard?.platform, shown)) return;
+    if (!shouldShowTrayHint(currentPlatform(), shown)) return;
     try {
       localStorage.setItem(TRAY_HINT_SHOWN_KEY, "1");
     } catch {
@@ -1395,7 +1395,9 @@
     <!-- W1 (2026-08-26): 整块按平台选择组件渲染，不在单个 Wizard 内部
          塞 if isWindows —— macOS/Windows 的 onboarding 是两条完全独立的
          文案+流程分支，拆成两个组件更好维护、也不会互相牵连回归。 -->
-    {#if wizard.platform === "windows"}
+    <!-- DESK-69 (#997)：按 platformUx 的显式分支选；Linux 等未覆盖的平台
+         直接报错，不再默认落到 macOS 那份。 -->
+    {#if wizardVariant(currentPlatform()) === "windows"}
       <WizardWindows
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
