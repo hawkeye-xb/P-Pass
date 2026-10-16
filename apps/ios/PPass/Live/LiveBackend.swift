@@ -34,6 +34,8 @@ final class LiveBackend: @unchecked Sendable {
     let pendingUnpair: PendingUnpairStore
     let unpairFlusher: PendingUnpairFlusher
     let engineModel: LiveEngineModel
+    /// 前台相册变化监听（#978，对位 Android BackupUiStateHolder 的 MediaStore ContentObserver）。
+    let mediaWatcher: MediaChangeWatcher
 
     init() throws {
         let fm = FileManager.default
@@ -113,6 +115,19 @@ final class LiveBackend: @unchecked Sendable {
                 await model.refresh?()
             },
             logger: logger)
+        // #978：前台相册变化 → 重算首页计数 + FOREGROUND_MEDIA_CHANGE 叫醒引擎。生命周期：配对着且相册已授权（完整或部分）
+        // 才注册，断开清单注销，重新配对 / 授权后由 `mediaWatcher.start()`（paired / refreshFacts）恢复。
+        let window = self.window
+        let engine = self.engine
+        let change = ForegroundMediaChange(isForeground: { window.isAppActive }, recount: { await model.refresh?() },
+                                           trigger: { _ = await engine.trigger($0) }, logger: logger)
+        mediaWatcher = MediaChangeWatcher(
+            source: PhotoLibraryChangeSource(),
+            unavailableReason: {
+                guard pairingStore.load() != nil else { return "not paired" }
+                return PhotoLibraryChangeSource.unavailableReason(level: PhotoKitAuthorization().currentLevel())
+            },
+            onChange: { Task { await change.handle() } }, logger: logger)
         PPassBackgroundTasks.register(engine: engine, window: window, scheduler: scheduler, logger: logger)
         scheduler.ensureScheduled()
         PPassBackgroundTasks.ensureShortScheduled(logger: logger)
@@ -167,6 +182,7 @@ final class LiveBackend: @unchecked Sendable {
         catch { logger.log("adoptDesktop failed: \(error)") }
         try? onboarded.markOnboarded(record.daemonNodeId)
         if autoPrefs.requested() { try? autoPrefs.setEnabled(true) } // 断开时只停生产者、留意图（MOB-93）：重新配对按意图恢复
+        mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）
         Task { _ = await engine.trigger(.pairingRepaired) }
     }
 
@@ -174,10 +190,13 @@ final class LiveBackend: @unchecked Sendable {
     /// 身份、相册范围、账本、「连过哪些电脑」都保留——重新扫码后不会重传已备份的。
     func disconnect() async {
         await engine.stopForDisconnect()
-        do { try applyDisconnectManifest(root: root.url, runtime: DisconnectActions(scheduler: scheduler), logger: logger) } catch {
+        // provider 撤销（#974）、唤醒取消、相册监听注销都在清单的运行时三行里，清文件失败也不会跳过它们。
+        let provider = self.provider, scheduler = self.scheduler, watcher = mediaWatcher, logger = self.logger
+        let actions = DisconnectActions(stopFlow: { provider.teardownForDisconnect(logger: logger) },
+                                        cancelWakes: { scheduler.stop() }, stopMedia: { watcher.stop() })
+        do { try applyDisconnectManifest(root: root.url, runtime: actions, logger: logger) } catch {
             logger.log("disconnect manifest failed: \(error)")
         }
-        try? provider.ffi.setAllowedPeer(nodeId: nil)
         await refreshFacts()
     }
 
@@ -202,6 +221,7 @@ final class LiveBackend: @unchecked Sendable {
 
     /// 首页事实：引擎视图在第一次精确计数（pendingKnown）之前不给（对位 Android visibleEngineView / UI21）。
     func refreshFacts() async {
+        mediaWatcher.start() // 幂等；相册授权晚于启动（首次授权）时在这里补注册（#978）
         let known = await engine.pendingKnown
         let view = await engine.view
         let all = (try? orders.countCurrentByState(bucketIds: nil)) ?? [:]
@@ -434,10 +454,13 @@ final class BatteryState: @unchecked Sendable {
     }
 }
 
-/// 断开清单里的运行时生产者。引擎这一轮由 `LiveBackend.disconnect` 在清单之前就停好；iOS 目前没有注册 PHPhotoLibrary 变更监听。
+/// 断开清单里的运行时生产者（#974）。引擎这一轮由 `LiveBackend.disconnect` 在清单之前就停好；
+/// 三项各接真逻辑：provider 撤销、取消 BGTask 唤醒、注销相册监听。
 struct DisconnectActions: DisconnectRuntime {
-    let scheduler: PlannedWakeScheduler
-    func stopFlowRuntime() {}
-    func cancelScheduledWakes() { scheduler.stop() }
-    func stopMediaChangeObserver() {}
+    let stopFlow: () -> Void
+    let cancelWakes: () -> Void
+    let stopMedia: () -> Void
+    func stopFlowRuntime() { stopFlow() }
+    func cancelScheduledWakes() { cancelWakes() }
+    func stopMediaChangeObserver() { stopMedia() }
 }

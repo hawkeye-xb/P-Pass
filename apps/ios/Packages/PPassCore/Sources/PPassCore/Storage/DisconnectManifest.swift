@@ -78,7 +78,7 @@ public enum DisconnectState: CaseIterable, Sendable {
         switch self {
         case .pairing: return "UX-06/UX-06b：本地单方断开，令牌作废（#282）"
         case .pendingUnpair: return "#956：断开之后才要做的事（通知电脑撤销这台手机），必须活过断开；成功 / 被拒 / 满 7 天自行删除"
-        case .flowRuntime: return "#264/MOB-91：同一 NodeId 重连不许复活旧的运行时"
+        case .flowRuntime: return "#264/MOB-91：同一 NodeId 重连不许复活旧的运行时；#974：provider 撤销（掐在飞传输 + revoke + 清允许对端），对位 Android clearFlowRuntime"
         case .autoBackupPrefs: return "MOB-93：停生产者（autoEnabled=false），留意图（userRequested）"
         case .backgroundWakePlan: return "MOB-93 的 iOS 对位（#340）：后台唤醒计划是生产者的一部分，断开清掉；挂着的系统请求由 scheduledWakes 撤"
         case .scheduledWakes: return "MOB-93 的 iOS 对位：BGTaskScheduler 登记的唤醒是生产者，断开撤掉"
@@ -112,27 +112,36 @@ public protocol DisconnectRuntime {
 }
 
 /// 断开（UX-06）与「配对失效重新扫码」共用的清理：按 [DisconnectState] 逐行执行，不依赖桌面是否可达。
+/// 某一行失败（清文件出错）不短路后面的行：运行时停止行（provider 撤销、唤醒、相册监听）必须照常执行，
+/// 否则「配对文件删不掉」会连带让旧桌面还能拉原图（#974）。所有行跑完后抛出第一个错误，不吞。
 public func applyDisconnectManifest(root: URL, runtime: DisconnectRuntime, logger: CoreLogger = NoopLogger(), manifest: [DisconnectState] = DisconnectState.allCases) throws {
+    var firstError: Error?
     for state in manifest {
-        switch state.disposition {
-        case .keep:
-            continue
-        case .clear:
-            try deleteMatching(root, state)
-        case .reset:
-            switch state {
-            case .autoBackupPrefs: try AutoBackupPrefs(directory: root, logger: logger).suspendForPairingChange()
-            default: preconditionFailure("\(state): no RESET action defined")
+        do {
+            switch state.disposition {
+            case .keep:
+                continue
+            case .clear:
+                try deleteMatching(root, state)
+            case .reset:
+                switch state {
+                case .autoBackupPrefs: try AutoBackupPrefs(directory: root, logger: logger).suspendForPairingChange()
+                default: preconditionFailure("\(state): no RESET action defined")
+                }
+            case .stop:
+                switch state {
+                case .flowRuntime: runtime.stopFlowRuntime()
+                case .scheduledWakes: runtime.cancelScheduledWakes()
+                case .mediaChangeObserver: runtime.stopMediaChangeObserver()
+                default: preconditionFailure("\(state): no STOP action defined")
+                }
             }
-        case .stop:
-            switch state {
-            case .flowRuntime: runtime.stopFlowRuntime()
-            case .scheduledWakes: runtime.cancelScheduledWakes()
-            case .mediaChangeObserver: runtime.stopMediaChangeObserver()
-            default: preconditionFailure("\(state): no STOP action defined")
-            }
+        } catch {
+            logger.log("disconnect: row \(state) failed: \(error)")
+            if firstError == nil { firstError = error }
         }
     }
+    if let firstError { throw firstError }
 }
 
 private func deleteMatching(_ root: URL, _ state: DisconnectState) throws {

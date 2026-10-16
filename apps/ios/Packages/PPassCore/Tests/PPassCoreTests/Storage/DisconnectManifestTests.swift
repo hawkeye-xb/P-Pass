@@ -40,6 +40,21 @@ final class DisconnectManifestTests: XCTestCase {
         try Data([0]).write(to: root.appendingPathComponent("iroh-blobs-provider/data/blob"))
     }
 
+    /// #974：某一行（这里是配对凭据）清不掉，后面的运行时停止行仍要执行；错误在最后抛出，不吞。
+    /// stopFlowRuntime 现在承担 provider 撤销（revoke + 清允许对端），不能被前一行的失败短路。
+    /// 反证：把 catch 改回原来的「首错即抛」，runtime.calls 为空，红。
+    func testARowThatFailsDoesNotSkipTheRuntimeStopsAfterIt() throws {
+        let tmp = TempDir()
+        let stuck = tmp.file("pairing.json")
+        try FileManager.default.createDirectory(at: stuck, withIntermediateDirectories: true)
+        try Data([1]).write(to: stuck.appendingPathComponent("inner"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: stuck.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stuck.path) }
+        let runtime = RecordingRuntime()
+        XCTAssertThrowsError(try applyDisconnectManifest(root: tmp.url, runtime: runtime))
+        XCTAssertEqual(Set(runtime.calls), ["flow", "wakes", "media"], "前面的行失败，三个运行时停止行照常执行")
+    }
+
     /// 门禁：每一样落盘的状态都在清单里（含 SQLite 的 -wal / -shm 伴生文件）。
     /// 反证：新增一个不登记的文件，这里列出它，红。
     func testEveryPersistedFileIsRegistered() throws {

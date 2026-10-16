@@ -160,6 +160,7 @@ final class CaseMatrixCoverageTests: XCTestCase {
         let classes: [XCTestCase.Type] = [
             FlowEngineTests.self, FlowEngineIOSTests.self, CaseMatrixTests.self, DeliveryPortTests.self, EngineWithPortTests.self,
             OrderStoreTests.self, FlowControlStoreTests.self, PrefsTests.self, DisconnectManifestTests.self, StorageRootTests.self, InboxDiscoveryTests.self,
+            MediaChangeWatcherTests.self, ForegroundMediaChangeTests.self,
         ]
         var out = Set<String>()
         for cls in classes {

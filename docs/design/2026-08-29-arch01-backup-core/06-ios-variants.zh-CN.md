@@ -168,6 +168,23 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 
 「照片库里查不到」只有在完整相册权限下才等于「被删了」。iOS 的 `.limited` 授权下看不见的照片同样查不到，所以 `source_missing` 对账在非完整权限时整步跳过（与 Android 部分授权同一判据，不是新语义）。测试：`FlowEngineIOSTests.testSourcePresenceIsReconciledOnlyWithFullAccess`。
 
+### 前台相册变化监听（#978）
+
+- **Android**：`BackupUiStateHolder` 在持有期间注册 MediaStore `ContentObserver`；变化 → `gateway.onMediaChanged()`（App 可见才触发 `FOREGROUND_MEDIA_CHANGE`，人在场，不查后台开关）+ 重算首页计数 n。后台另有 `MediaWatchJob`（JobScheduler 内容触发 → `MEDIA_CHANGE`）。
+- **iOS 对位**：PPassCore `MediaChangeWatcher` 管生命周期，App 层 `PhotoLibraryChangeSource`（`PHPhotoLibraryChangeObserver`）做来源；一次变化由 `ForegroundMediaChange` 处理：先重算首页计数，**在前台**再以 `FOREGROUND_MEDIA_CHANGE` 叫醒引擎（引擎入口 `userPresent`、在跑时合并并重算待办，见 `FlowEngine.recountWhileRunning`）。
+  - **生命周期**：配对着且相册授权为完整或部分（limited）才注册；没配对、没问过、拒绝、受限时**不注册并写日志**（`media-change: observer not registered: <原因>`，同一原因只记一次）。断开清单的 `mediaChangeObserver` 行注销；重新配对（`paired`）与每次刷新首页事实（授权晚于启动时补注册）时幂等地恢复。部分授权下系统只通知可见范围内的变化，监听照常工作。
+  - 日志特征行：`media-change: observer registered` / `media-change: trigger FOREGROUND_MEDIA_CHANGE` / `media-change: observer unregistered`。
+- **平台差异（有意不同，不是遗漏）**：iOS **不会因相册变化唤醒 App**（`BackgroundWakePlanner.swift` 头注释：BGTaskScheduler 只给系统挑的时机，不保证会跑，没有「内容变化触发」的入口），所以没有对位 Android `MediaWatchJob` 的后台路径。后台新增的照片靠回前台的 `APP_FOREGROUND` 追赶、BGProcessingTask 的周期兜底与探测梯发现；仅在前台持有 UI 期间才有「当场开始备份」的体验。
+- **测试**：`MediaChangeWatcherTests.testStartRegistersOnceAndIsIdempotent`、`MediaChangeWatcherTests.testUnavailableDoesNotRegisterLogsOnceAndRecovers`、`MediaChangeWatcherTests.testStopUnregistersAndRestartRegistersAgain`、`MediaChangeWatcherTests.testACallbackFromAStaleRegistrationIsIgnored`、`ForegroundMediaChangeTests.testForegroundRecountsThenTriggersTheForegroundReason`、`ForegroundMediaChangeTests.testNotForegroundOnlyRecounts`；App 层 PhotoKit 适配与授权档位判据在 PPassTests 的 PhotoLibraryChangeSourceTests（模拟器上跑，不在本注册表的运行时枚举里）。
+
+### 断开时运行时清理（#974）
+
+- **Android**：`clearFlowRuntime`——关 scope / writer / SQLite，`setAllowedPeer(null)`，`revoke("")`。
+- **iOS 对位**：断开清单 `flowRuntime` 行 = `NativeProvider.teardownForDisconnect`：清允许的对端（在飞连接在原生侧关掉）→ 掐在飞传输 → `revoke`（拿掉当前 handler 与全部导入）→ 清 active lease。与 #958 暂停（`FfiBlobProvider.pause`）同一套 stop + revoke 语义；只清对端不 revoke，旧 temp tag / 在飞状态会留到进程结束。断开之后同进程重新配对：`paired` 重新 `setAllowedPeer`，下一张照片重新导入 → 供数，handler 重建，取原图正常。
+- **有意不同**：Android 在此还关 scope / writer / SQLite，iOS **不关**——引擎（`FlowEngine`）、账本（`SQLiteOrderStore`）与收件箱是 `LiveBackend` 进程级单例，断开只由 `engine.stopForDisconnect()` 停掉这一轮，账本按「连回同一台桌面 CONFIRMED 仍有效、换一台由 `claimOwner` 清」（#415 裁决 6）保留，重配后不重传已备份的。关账本等于要在重新配对时重建整条引擎，iOS 没有这个需要。
+- **清单语义**：`applyDisconnectManifest` 某一行失败不再短路后面的行（所有行跑完后抛第一个错误）；`flowRuntime` 行承担 provider 撤销，不能被「配对文件清不掉」连带跳过。
+- **测试**：`DisconnectManifestTests.testARowThatFailsDoesNotSkipTheRuntimeStopsAfterIt`、`DisconnectManifestTests.testDisconnectAppliesEveryRow`；真实 provider 的断开与重新配对在 PPassTests 的 DisconnectProviderTests（模拟器上跑）。
+
 ### Android 专属、不移植
 
 | 来源 | 为什么 iOS 不需要 |

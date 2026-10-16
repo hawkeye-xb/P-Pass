@@ -26,6 +26,12 @@ public final class ExecutionWindow: ExecutionLease, @unchecked Sendable {
         appActive = active
     }
 
+    /// App 现在是否在前台（scenePhase == .active）。给「只在人在场时才做」的触发用（相册变化 → FOREGROUND_MEDIA_CHANGE，#978）。
+    public var isAppActive: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return appActive
+    }
+
     /// `UIApplication.beginBackgroundTask` 给的收尾时间开始 / 结束。
     public func setFinishingTime(_ open: Bool) {
         lock.lock(); defer { lock.unlock() }
