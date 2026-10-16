@@ -112,6 +112,23 @@ const _: fn() = || {
     assert_send::<AwakeGuard>();
 };
 
+/// DAE-11 (#804)：[`PlatformAdapter::watch_external_power`] 的订阅句柄，
+/// drop 即退订。和 [`AwakeGuard`] 一样只靠 `Drop` 起作用，可在任意线程 drop。
+pub struct PowerWatch {
+    #[allow(dead_code)] // the handle's Drop is the whole point
+    inner: Box<dyn Send>,
+}
+
+impl PowerWatch {
+    /// 各平台实现把自己的退订 guard 装进来。`pub` 而不是 `pub(crate)`：只有
+    /// 实现了订阅的平台才调它，`pub(crate)` 在其余平台上会被判成未使用代码。
+    pub fn new(inner: impl Send + 'static) -> Self {
+        Self {
+            inner: Box::new(inner),
+        }
+    }
+}
+
 /// Device private-key storage (DPAPI / Keychain).
 pub trait KeyStore {
     fn store(&self, name: &str, secret: &[u8]) -> Result<()>;
@@ -300,6 +317,26 @@ pub trait PlatformAdapter: Send + Sync {
         false
     }
 
+    /// DESK-68 (#996)：这个程序文件是不是在本平台的**正式安装位置**。
+    ///
+    /// 发布版不在正式位置就不许运行（桌面壳启动时拦），也不许写开机自启登记
+    /// （daemon 升级接管时拦）——登记一旦指向解压副本、备份副本，以后每次开机
+    /// 都跑那个旧程序，新版接不了岗（#604 真机事故）。入口守住，所有写登记的
+    /// 地方自然只会写正式路径。
+    ///
+    /// 默认 `true`：没实现的平台保持现状，由各平台线自己覆盖（macOS 见 #998）。
+    fn is_install_location(&self, exe: &std::path::Path) -> bool {
+        let _ = exe;
+        true
+    }
+
+    /// DESK-68 (#996)：不在正式安装位置时，告诉用户该怎么办的文案 key
+    /// （`assets/i18n`）。怎么「正式安装」是平台知识：Windows 是跑安装程序，
+    /// macOS 是拖进「应用程序」。
+    fn install_location_hint_key(&self) -> &'static str {
+        "ui.install_location_required"
+    }
+
     /// DESK-60 (#877)：对账结果是「未登记」时，本平台是否允许壳**补登记**
     /// （壳另外还要确认：配置过、且用户没有主动停服务）。
     ///
@@ -391,6 +428,22 @@ pub trait PlatformAdapter: Send + Sync {
     /// 怎么处理「不知道」由调用方（daemon）定。默认实现是 `None`，与
     /// [`Self::installed_bundle_version`] 同一口径。
     fn on_external_power(&self) -> Option<bool> {
+        None
+    }
+
+    /// DAE-11 (#804)：订阅「插电 / 用电池」的变化，**事件驱动，不轮询**。
+    ///
+    /// 登记成功后先以当前状态回调一次，之后每次电源切换再回调；入参口径同
+    /// [`Self::on_external_power`]（`None` = 不知道）。回调在系统线程上跑，
+    /// 必须快进快出。返回的 [`PowerWatch`] drop 即退订。
+    ///
+    /// 返回 `None` = 本平台不支持订阅（默认实现）。调用方据此**不做**常驻
+    /// 保持唤醒——只拿一次快照的话，拔电后没人知道，会一直挡着睡眠耗电池。
+    fn watch_external_power(
+        &self,
+        on_change: Box<dyn Fn(Option<bool>) + Send + Sync>,
+    ) -> Option<PowerWatch> {
+        let _ = on_change;
         None
     }
 

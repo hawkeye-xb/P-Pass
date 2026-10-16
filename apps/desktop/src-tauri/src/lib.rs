@@ -77,6 +77,30 @@ fn tray_text(locale: &str, key: &str) -> String {
         .unwrap_or_else(|| key.to_string())
 }
 
+/// DESK-68 (#996)：本进程是不是从正式安装位置启动的；不是就弹系统对话框说明
+/// 怎么办，返回 `false`。判据在平台层（`PlatformAdapter::is_install_location`）。
+///
+/// 用 rfd 直接弹（tauri-plugin-dialog 的底层，已在依赖树里）：这时 Tauri 还没
+/// 起来，也不该为一个提示把整个应用跑起来。读不到自身路径时放行——拦了用户
+/// 也无从照提示去做。
+fn running_from_install_location() -> bool {
+    let adapter = platform::adapter();
+    let Ok(exe) = std::env::current_exe() else {
+        return true;
+    };
+    if adapter.is_install_location(&exe) {
+        return true;
+    }
+    let locale = tray_locale(&std::env::var("LANG").unwrap_or_default());
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title(tray_text(locale, "ui.install_location_required_title"))
+        .set_description(tray_text(locale, adapter.install_location_hint_key()))
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+    false
+}
+
 /// 已建好的托盘菜单项（key, item），`set_tray_locale` 据此改字。
 struct TrayMenuItems(Vec<(&'static str, MenuItem<tauri::Wry>)>);
 
@@ -210,12 +234,8 @@ fn wizard_state() -> Value {
         // the wizard prefills this so re-running it never orphans the
         // existing library (T-042b).
         "configured_library_dir": configured_dir,
-        // W1 (2026-08-26): wizard copy hard-coded macOS-only wording
-        // (Finder, TCC-protected 桌面/文稿, "macOS 拦截时右键打开") on
-        // every platform — a Windows real-box run surfaced this as
-        // "onboarding 说明都是 macOS 的". Expose the platform so the
-        // frontend can branch copy instead of guessing from user agent.
-        "platform": platform::adapter().platform_name(),
+        // DESK-69 (#997)：平台不再从这里给——前端统一读 plugin-os 的
+        // platform()，一个来源。
     })
 }
 
@@ -1851,6 +1871,13 @@ fn converge_kernel_on_startup(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // DESK-68 (#996)：发布版只许从正式安装位置运行——排在**一切**之前（搬数据
+    // 目录、单实例、拉 daemon、写登记都在后面），不在位置就提示后退出，什么都
+    // 不碰。开发构建（debug）不拦。
+    if !cfg!(debug_assertions) && !running_from_install_location() {
+        return;
+    }
+
     // DESK-24 (#173)：数据目录搬家，排在**一切**读 data dir 的动作之前——
     // 包括 setup 里的 start_event_stream（它会走 token_candidates() →
     // data_dir()）。搬家是幂等的：daemon 那边多半已经在登录时搬过了，
@@ -1902,6 +1929,8 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // DESK-69 (#997)：前端按平台分支只认 plugin-os 的 platform()。
+        .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             daemon_call,
@@ -2160,6 +2189,41 @@ mod tests {
             ("ja-JP", "en"),
         ] {
             assert_eq!(tray_locale(lang), want, "{lang:?}");
+        }
+    }
+
+    /// DESK-68 (#996)：位置检查必须排在 run() 的最前面——搬数据目录、单实例、
+    /// 拉 daemon、写登记都得在它之后，不在正式位置时一样都不能碰。
+    #[test]
+    fn install_location_gate_runs_before_anything_else() {
+        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let run = &product[product.find("pub fn run() {").expect("run()")..];
+        let gate = run
+            .find("running_from_install_location()")
+            .expect("run() 调位置检查");
+        for later in ["migrate_legacy_data_dir()", "tauri::Builder::default()"] {
+            let at = run
+                .find(later)
+                .unwrap_or_else(|| panic!("run() 里应有 {later}"));
+            assert!(gate < at, "位置检查必须在 {later} 之前");
+        }
+        assert!(
+            run[..gate].contains("!cfg!(debug_assertions)"),
+            "只拦发布版，开发构建不拦"
+        );
+    }
+
+    /// DESK-68 (#996)：提示文案两种语言都在共享字典里（不是 key 本身）。
+    #[test]
+    fn install_location_copy_comes_from_the_shared_dictionary() {
+        for key in [
+            "ui.install_location_required_title",
+            "ui.install_location_required",
+            "ui.install_location_required_win",
+        ] {
+            for locale in ["en", "zh"] {
+                assert_ne!(tray_text(locale, key), key, "{locale}: {key}");
+            }
         }
     }
 

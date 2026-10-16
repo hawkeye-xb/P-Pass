@@ -476,10 +476,18 @@ impl PlatformAdapter for WindowsAdapter {
     /// 解压到「下载」目录直接跑的、开发构建 `target\` 里的，都不在那里，
     /// 照旧拒绝（#604 的同一条风险：把登记改指向一次性路径）。
     fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
-        match installed_location() {
-            Some(dir) => is_in_install_dir(expected, &dir),
-            None => false,
-        }
+        // DESK-68 (#996)：与「能不能运行」同一条判据，规则只写一处。
+        self.is_install_location(expected)
+    }
+
+    /// DESK-68 (#996)：只认 NSIS 登记的安装目录里的那份（判据同上面的对账闸门）。
+    /// 注册表里没有安装记录 = 没装过 ⇒ 不是。
+    fn is_install_location(&self, exe: &Path) -> bool {
+        installed_location().is_some_and(|dir| is_in_install_dir(exe, &dir))
+    }
+
+    fn install_location_hint_key(&self) -> &'static str {
+        "ui.install_location_required_win"
     }
 
     /// DESK-60 (#877)：卸载程序删掉登记（现在是计划任务，见 NSIS 钩子），配置
@@ -733,6 +741,61 @@ impl PlatformAdapter for WindowsAdapter {
         ac_line_verdict(status.ACLineStatus)
     }
 
+    /// DAE-11 (#804)：`PowerSettingRegisterNotification(GUID_ACDC_POWER_SOURCE)`
+    /// 回调式订阅——系统在登记时先推一次当前状态，之后每次插拔再推，**没有轮询**。
+    /// 用 `DEVICE_NOTIFY_CALLBACK` 而不是窗口消息：daemon 没有窗口。
+    ///
+    /// 回调存在进程级静态槽里，而不是把指针塞进 Context：退订之后系统还有没有
+    /// 在途回调，文档没担保；静态槽 + 锁保证退订后的迟到回调只会看到空槽，
+    /// 不会碰到已释放的内存。代价是同一时刻只能有一个订阅者（daemon 只要一个），
+    /// 第二个直接返回 `None`。
+    fn watch_external_power(
+        &self,
+        on_change: Box<dyn Fn(Option<bool>) + Send + Sync>,
+    ) -> Option<crate::PowerWatch> {
+        use windows_sys::Win32::System::Power::{
+            PowerSettingRegisterNotification, DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::DEVICE_NOTIFY_CALLBACK;
+
+        {
+            let mut slot = POWER_CALLBACK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if slot.is_some() {
+                return None;
+            }
+            // 先放回调再登记：登记那一刻系统就会推第一次。
+            *slot = Some(on_change);
+        }
+        // 放在堆上、随 guard 活着：文档没说系统会不会在登记后继续引用它。
+        let params = Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+            Callback: Some(power_source_changed),
+            Context: std::ptr::null_mut(),
+        });
+        let mut handle: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: GUID 是 'static 常量；params 在 guard 存活期间有效；handle 是
+        // 本栈上的出参。
+        let err = unsafe {
+            PowerSettingRegisterNotification(
+                &GUID_ACDC_POWER_SOURCE,
+                DEVICE_NOTIFY_CALLBACK,
+                std::ptr::from_ref(&*params).cast_mut().cast(),
+                &mut handle,
+            )
+        };
+        if err != 0 {
+            *POWER_CALLBACK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            return None;
+        }
+        Some(crate::PowerWatch::new(PowerNotifyGuard {
+            handle,
+            _params: params,
+        }))
+    }
+
     fn volume_stats(&self, path: &Path) -> Option<crate::VolumeStats> {
         use std::os::windows::ffi::OsStrExt as _;
         use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
@@ -954,6 +1017,86 @@ fn classify_own_stderr() -> StderrTarget {
             }
         }
         _ => StderrTarget::Unknown,
+    }
+}
+
+/// DAE-11 (#804)：`GUID_ACDC_POWER_SOURCE`（winnt.h），只订阅这一项，
+/// 免得为一个常量多开一个 windows-sys feature。
+const GUID_ACDC_POWER_SOURCE: windows_sys::core::GUID =
+    windows_sys::core::GUID::from_u128(0x5d3e9a59_e9d5_4b00_a6bd_ff34ff516548);
+
+type PowerCallback = Box<dyn Fn(Option<bool>) + Send + Sync>;
+
+/// [`WindowsAdapter::watch_external_power`] 的回调槽（为什么是静态的见那里）。
+static POWER_CALLBACK: std::sync::Mutex<Option<PowerCallback>> = std::sync::Mutex::new(None);
+
+/// 退订句柄：先退订，再清空回调槽。
+struct PowerNotifyGuard {
+    /// 登记函数给出的是指针，退订函数收的是 `isize`（windows-sys 的两处声明
+    /// 不一致，同一个值），退订时再转。
+    handle: *mut std::ffi::c_void,
+    _params: Box<windows_sys::Win32::System::Power::DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS>,
+}
+
+// SAFETY: handle 只是系统给的不透明句柄，退订可以在任意线程上做；params 只在
+// 登记时被系统读取，本进程不再访问。
+unsafe impl Send for PowerNotifyGuard {}
+
+impl Drop for PowerNotifyGuard {
+    fn drop(&mut self) {
+        // SAFETY: handle 来自成功的 PowerSettingRegisterNotification，只退订一次。
+        unsafe {
+            windows_sys::Win32::System::Power::PowerSettingUnregisterNotification(
+                self.handle as windows_sys::Win32::System::Power::HPOWERNOTIFY,
+            );
+        }
+        *POWER_CALLBACK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+}
+
+/// 系统线程上的回调：解析 `POWERBROADCAST_SETTING`，交给登记的闭包。
+unsafe extern "system" fn power_source_changed(
+    _context: *const std::ffi::c_void,
+    kind: u32,
+    setting: *const std::ffi::c_void,
+) -> u32 {
+    use windows_sys::Win32::System::Power::POWERBROADCAST_SETTING;
+    use windows_sys::Win32::UI::WindowsAndMessaging::PBT_POWERSETTINGCHANGE;
+    if kind != PBT_POWERSETTINGCHANGE || setting.is_null() {
+        return 0;
+    }
+    let setting = setting.cast::<POWERBROADCAST_SETTING>();
+    // SAFETY: 系统保证 setting 指向一个完整的 POWERBROADCAST_SETTING，Data 后面
+    // 跟着 DataLength 个字节；只订阅了 ACDC 一项，它的数据是一个 DWORD。
+    let raw = unsafe {
+        if (*setting).DataLength < 4 {
+            return 0;
+        }
+        std::ptr::read_unaligned(std::ptr::addr_of!((*setting).Data).cast::<u32>())
+    };
+    let verdict = acdc_verdict(raw);
+    let slot = POWER_CALLBACK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(f) = slot.as_ref() {
+        // panic 不能穿过 extern "system" 边界（会直接 abort 整个 daemon）。
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(verdict)));
+    }
+    0
+}
+
+/// DAE-11 (#804)：`GUID_ACDC_POWER_SOURCE` 推来的值 → 是否插电。
+///
+/// 文档值（`SYSTEM_POWER_CONDITION`）：0 = PoAc 插电，1 = PoDc 电池，
+/// 2 = PoHot 短时电源（UPS 之类）。UPS 顶着的时候按「没插电」算——要省着用。
+/// 其余值不知道。
+pub fn acdc_verdict(power_condition: u32) -> Option<bool> {
+    match power_condition {
+        0 => Some(true),
+        1 | 2 => Some(false),
+        _ => None,
     }
 }
 
@@ -2211,6 +2354,38 @@ mod desk24_data_dir_tests {
 
 /// DESK-52 (#787)：结束 daemon 不再拉起外部程序。判据沿用 DESK-25 (#208)
 /// 的口径：没在跑不是错误，没杀掉一定是错误。
+/// DESK-68 (#996)：正式安装位置判据。
+#[cfg(test)]
+mod desk68_install_location_tests {
+    use super::*;
+
+    /// 临时目录里的程序（解压副本的典型位置）永远不是正式安装位置——
+    /// 注册表有没有安装记录都成立，所以 CI 上也能跑。
+    #[test]
+    fn a_copy_in_the_temp_dir_is_never_the_install_location() {
+        let exe = std::env::temp_dir()
+            .join("P-Pass")
+            .join("p-pass-desktop.exe");
+        assert!(!WindowsAdapter.is_install_location(&exe));
+        assert!(
+            !WindowsAdapter.autostart_reconcile_allowed(&exe),
+            "两处同一判据"
+        );
+    }
+
+    /// 本机实证（E3）：装过 P-Pass 的机器上，安装目录里的那份就是正式位置。
+    /// CI 上没装过，所以默认忽略；本机 `cargo test -- --ignored` 跑。
+    #[test]
+    #[ignore = "needs a real NSIS install on this machine"]
+    fn the_installed_copy_is_the_install_location() {
+        let dir = installed_location().expect("本机应已装过 P-Pass");
+        let exe = dir.join("p-pass-desktop.exe");
+        assert!(exe.is_file(), "{}", exe.display());
+        assert!(WindowsAdapter.is_install_location(&exe));
+        assert!(!WindowsAdapter.is_install_location(&dir.join("sub").join("p-pass-desktop.exe")));
+    }
+}
+
 /// DAE-11 (#804)：插电判据。
 #[cfg(test)]
 mod dae11_external_power_tests {
@@ -2221,6 +2396,43 @@ mod dae11_external_power_tests {
         assert_eq!(ac_line_verdict(1), Some(true));
         assert_eq!(ac_line_verdict(0), Some(false));
         assert_eq!(ac_line_verdict(255), None);
+    }
+
+    /// 订阅推来的电源状态：插电 / 电池 / UPS / 文档外。
+    #[test]
+    fn acdc_power_conditions_map_to_plugged_unplugged_unknown() {
+        assert_eq!(acdc_verdict(0), Some(true), "PoAc");
+        assert_eq!(acdc_verdict(1), Some(false), "PoDc");
+        assert_eq!(acdc_verdict(2), Some(false), "PoHot（UPS）按没插电算");
+        assert_eq!(acdc_verdict(3), None);
+        assert_eq!(acdc_verdict(u32::MAX), None);
+    }
+
+    /// 真登记一次：系统登记时就推当前状态，回调必须在短时间内到达，且与
+    /// `GetSystemPowerStatus` 的快照一致；第二个订阅者被拒；退订后能重新登记。
+    #[test]
+    fn watch_reports_current_state_and_unsubscribes_on_drop() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let a = WindowsAdapter;
+        let (tx, rx) = mpsc::channel();
+        let tx = std::sync::Mutex::new(tx);
+        let watch = a
+            .watch_external_power(Box::new(move |v| {
+                let _ = tx.lock().unwrap().send(v);
+            }))
+            .expect("登记电源通知");
+        let first = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("登记后系统应立即推一次当前状态");
+        assert_eq!(first, a.on_external_power(), "订阅与快照口径一致");
+        assert!(
+            a.watch_external_power(Box::new(|_| {})).is_none(),
+            "同一时刻只允许一个订阅者"
+        );
+        drop(watch);
+        let again = a.watch_external_power(Box::new(|_| {}));
+        assert!(again.is_some(), "退订后可以重新登记");
     }
 
     /// 文档外的值不许被猜成插电或用电池。

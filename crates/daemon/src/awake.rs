@@ -57,11 +57,11 @@ impl AwakeHold {
             use platform::PlatformAdapter as _;
             match platform::adapter().assert_awake() {
                 Ok(guard) => {
-                    tracing::debug!("awake assertion acquired for active transfers");
+                    tracing::debug!("awake assertion acquired");
                     Some(Box::new(guard) as AwakeToken)
                 }
                 Err(e) => {
-                    tracing::warn!("assert_awake failed; transfer may be cut by idle sleep: {e}");
+                    tracing::warn!("assert_awake failed; idle sleep may cut phones off: {e}");
                     None
                 }
             }
@@ -83,6 +83,51 @@ impl AwakeHold {
     /// Number of live leases (diagnostics/tests).
     pub fn active_leases(&self) -> usize {
         self.state.lock().expect("awake hold lock").leases
+    }
+}
+
+/// DAE-11 (#804): while the daemon runs **and the machine is on external
+/// power**, hold one long-lived lease so idle sleep can't cut phones off;
+/// on battery (or when the power source is unknown) let the system sleep as
+/// the user configured it. Shares [`AwakeHold`]'s count with transfer
+/// leases, so the platform assertion is held exactly once either way.
+///
+/// Driven by the platform's power-source notifications
+/// (`PlatformAdapter::watch_external_power`) — no polling here.
+pub struct ExternalPowerHold {
+    hold: AwakeHold,
+    lease: Mutex<Option<AwakeLease>>,
+}
+
+impl ExternalPowerHold {
+    pub fn new(hold: AwakeHold) -> Self {
+        Self {
+            hold,
+            lease: Mutex::new(None),
+        }
+    }
+
+    /// Apply one power-source reading. Plugged in ⇒ hold; battery or
+    /// unknown ⇒ release (unknown must not keep a laptop awake on battery).
+    /// Returns the new state when it changed, `None` when nothing changed.
+    pub fn on_power(&self, on_external_power: Option<bool>) -> Option<bool> {
+        let want = on_external_power == Some(true);
+        let mut lease = self.lease.lock().expect("external power hold lock");
+        if lease.is_some() == want {
+            return None;
+        }
+        // Replacing drops the old lease under this lock. Nothing else takes
+        // it, so the brief platform release can't deadlock.
+        *lease = want.then(|| self.hold.lease());
+        Some(want)
+    }
+
+    /// Whether the long-lived lease is held (diagnostics/tests).
+    pub fn holding(&self) -> bool {
+        self.lease
+            .lock()
+            .expect("external power hold lock")
+            .is_some()
     }
 }
 
@@ -154,6 +199,46 @@ mod tests {
 
         let _again = hold.lease();
         assert_eq!(acquired.load(Ordering::SeqCst), 2, "idle→busy re-acquires");
+    }
+
+    /// DAE-11 (#804): plugged in ⇒ hold, battery / unknown ⇒ release,
+    /// repeated readings change nothing.
+    #[test]
+    fn external_power_holds_only_while_plugged_in() {
+        let (hold, acquired, released) = counting();
+        let power = ExternalPowerHold::new(hold.clone());
+        assert_eq!(power.on_power(Some(true)), Some(true));
+        assert_eq!(power.on_power(Some(true)), None, "same reading: no-op");
+        assert!(power.holding());
+        assert_eq!(acquired.load(Ordering::SeqCst), 1);
+
+        assert_eq!(power.on_power(Some(false)), Some(false), "unplugged");
+        assert!(!power.holding());
+        assert_eq!(released.load(Ordering::SeqCst), 1, "assertion released");
+
+        assert_eq!(
+            power.on_power(None),
+            None,
+            "unknown while released: stays released"
+        );
+        assert_eq!(power.on_power(Some(true)), Some(true), "re-plugged");
+        assert_eq!(power.on_power(None), Some(false), "unknown releases");
+        assert_eq!(hold.active_leases(), 0);
+    }
+
+    /// DAE-11 (#804): the power lease and transfer leases share one
+    /// assertion — unplugging mid-transfer keeps the transfer awake.
+    #[test]
+    fn external_power_and_transfers_share_one_assertion() {
+        let (hold, acquired, released) = counting();
+        let power = ExternalPowerHold::new(hold.clone());
+        power.on_power(Some(true));
+        let transfer = hold.lease();
+        assert_eq!(acquired.load(Ordering::SeqCst), 1, "one assertion for both");
+        power.on_power(Some(false));
+        assert_eq!(released.load(Ordering::SeqCst), 0, "transfer still running");
+        drop(transfer);
+        assert_eq!(released.load(Ordering::SeqCst), 1);
     }
 
     #[test]

@@ -4,6 +4,10 @@
 // 没有 Mac、PR CI 里也没有任何 job 会跑 macOS（#278）。端到端验不了，但
 // **判定规则本身**可以在任何平台上单测——真正会出错的是这条规则，不是
 // 它的调用处。
+//
+// DESK-69 (#997)：「哪个平台要提示」挪进 platformUx.js 的 closeToTrayHint，
+// 平台来源统一为 plugin-os；这里只剩「提示过就不再打扰」。
+import { closeToTrayHint } from "./platformUx.js";
 
 /**
  * localStorage 的键。
@@ -15,16 +19,11 @@
 export const TRAY_HINT_SHOWN_KEY = "ppf.trayHintShown";
 
 /**
- * @param {string|undefined|null} platform  `wizard_state` 给的平台标识
+ * @param {string} platform  plugin-os 的 `platform()`（未覆盖的平台会抛错）
  * @param {string|null} alreadyShown  localStorage 读到的值；读不到传 null
  * @returns {boolean} 要不要弹
  */
 export function shouldShowTrayHint(platform, alreadyShown) {
-  // macOS 上点红灯不退出是常态，用户不需要解释（卡面验收标准 3）。
-  //
-  // 平台读不到时也**不弹**：这个方向上宁可少说一次，也不要在 macOS 上
-  // 冒出一句对那儿的用户毫无意义、甚至误导的话。代价（Windows 用户偶尔
-  // 少收到一次提示）远小于反过来。
-  if (platform !== "windows") return false;
+  if (!closeToTrayHint(platform)) return false;
   return !alreadyShown;
 }

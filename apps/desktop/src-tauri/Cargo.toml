@@ -35,6 +35,12 @@ tauri-plugin-dialog = "2"
 # served as release asset; pubkey in tauri.conf.json, minisign format)
 tauri-plugin-updater = "2"
 tauri-plugin-opener = "2"
+# DESK-69 (#997)：前端唯一的平台来源（platform() 编译期确定）。与 JS 端
+# @tauri-apps/plugin-os 同为 2.3.x——tauri 构建要求两边 major.minor 一致。
+tauri-plugin-os = "~2.3"
+# DESK-68 (#996)：Tauri 起来之前弹「请正式安装」的系统对话框。不是新依赖：
+# tauri-plugin-dialog 已带进来，版本与特性照抄它（gtk3 等后端由它统一开）。
+rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 interprocess = "2"

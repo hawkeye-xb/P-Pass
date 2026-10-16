@@ -290,8 +290,14 @@ msg_keys! {
     UI_WIZARD_LIBRARY_TIP_MAC => "ui.wizard_library_tip_mac",
     UI_WIZARD_LIBRARY_TIP_WIN => "ui.wizard_library_tip_win",
     UI_WIZARD_CONTINUE => "ui.wizard_continue",
+    /// DESK-68 (#996): release build started outside the install location.
+    UI_INSTALL_LOCATION_REQUIRED_TITLE => "ui.install_location_required_title",
+    UI_INSTALL_LOCATION_REQUIRED => "ui.install_location_required",
+    UI_INSTALL_LOCATION_REQUIRED_WIN => "ui.install_location_required_win",
     UI_WIZARD_SLEEP_TITLE => "ui.wizard_sleep_title",
     UI_WIZARD_SLEEP_BODY => "ui.wizard_sleep_body",
+    /// DAE-11 (#804): Windows wizard step 2 — daemon keeps the PC awake on AC.
+    UI_WIZARD_SLEEP_AUTO_WIN => "ui.wizard_sleep_auto_win",
     UI_WIZARD_SLEEP_NEVER => "ui.wizard_sleep_never",
     UI_WIZARD_CHECK_PASSED => "ui.wizard_check_passed",
     UI_WIZARD_SLEEP_ON => "ui.wizard_sleep_on",
@@ -618,8 +624,12 @@ mod tests {
             UI_WIZARD_LIBRARY_TIP_MAC,
             UI_WIZARD_LIBRARY_TIP_WIN,
             UI_WIZARD_CONTINUE,
+            UI_INSTALL_LOCATION_REQUIRED_TITLE,
+            UI_INSTALL_LOCATION_REQUIRED,
+            UI_INSTALL_LOCATION_REQUIRED_WIN,
             UI_WIZARD_SLEEP_TITLE,
             UI_WIZARD_SLEEP_BODY,
+            UI_WIZARD_SLEEP_AUTO_WIN,
             UI_WIZARD_SLEEP_NEVER,
             UI_WIZARD_CHECK_PASSED,
             UI_WIZARD_SLEEP_ON,
@@ -741,7 +751,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 311);
+        assert_eq!(ALL.len(), 315);
     }
 
     #[test]

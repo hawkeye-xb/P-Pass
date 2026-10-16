@@ -338,7 +338,14 @@ async fn main() -> anyhow::Result<()> {
                             tracing::info!("#732: 开机自启登记已指向本实例，不重装（避免 RunAtLoad 多拉一个实例抢端口）");
                         }
                         TakeoverAutostart::Install => {
-                            if let Err(e) = platform::adapter().install_autostart(&exe) {
+                            // DESK-68 (#996)：不在正式安装位置的实例（开发构建、解压
+                            // 副本）不许写登记——各平台同一条判据。
+                            if !platform::adapter().is_install_location(&exe) {
+                                tracing::warn!(
+                                    "DESK-68: 本实例不在正式安装位置（{}）——不写开机自启登记",
+                                    exe.display()
+                                );
+                            } else if let Err(e) = platform::adapter().install_autostart(&exe) {
                                 tracing::warn!("DAE-01: autostart re-install skipped: {e}");
                             }
                         }
@@ -613,6 +620,28 @@ async fn main() -> anyhow::Result<()> {
     // 旧备份管线的 upload/commit、目录监听）都接同一个句柄；adopt 收编的
     // 行由下面的启动补齐 + 每小时对账后的补齐覆盖。
     let thumb_pregen = query.start_thumb_pregen(daemon::PREGEN_WORKERS);
+    // NET-26 (#419) + DAE-11 (#804)：传输期间与插电期间共用同一份「别睡」声明。
+    let awake = daemon::awake::AwakeHold::platform();
+    // DAE-11 (#804)：daemon 在跑且插着电 ⇒ 一直挡住空闲睡眠（屏幕照常熄灭、
+    // 锁屏）；用电池 / 不知道 ⇒ 释放，按用户自己的设置睡。电源变化由平台推送，
+    // 不轮询。句柄要活到 main 结束：drop 即退订。
+    let _power_watch = {
+        use platform::PlatformAdapter as _;
+        let power = std::sync::Arc::new(daemon::awake::ExternalPowerHold::new(awake.clone()));
+        let watch = platform::adapter().watch_external_power(Box::new(move |on_ac| {
+            match power.on_power(on_ac) {
+                Some(true) => tracing::info!("DAE-11: 插着电——保持唤醒（屏幕照常熄灭、锁屏）"),
+                Some(false) => {
+                    tracing::info!("DAE-11: 用电池或电源未知（{on_ac:?}）——不再阻止睡眠")
+                }
+                None => {}
+            }
+        }));
+        if watch.is_none() {
+            tracing::info!("DAE-11: 本平台不支持电源变化通知——只在传输期间保持唤醒");
+        }
+        watch
+    };
     let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir)
         .with_thumb_pregen(thumb_pregen.clone())
         .with_path_registry(flow_paths)
@@ -621,7 +650,7 @@ async fn main() -> anyhow::Result<()> {
         // 只读，只为推送日志里那句 peer_subscribed= 服务。
         .with_subscriptions(subscriptions.clone())
         // NET-26 (#419): keep the machine awake while any fetch runs.
-        .with_awake(daemon::awake::AwakeHold::platform());
+        .with_awake(awake.clone());
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
         .with_events(event_bus.clone())
         .with_thumb_pregen(thumb_pregen.clone());

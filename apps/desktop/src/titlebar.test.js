@@ -1,7 +1,6 @@
 // DESK-14: 保持透明 Overlay 的视觉连续性；拖拽只交给两个 32px 的空 hit area。
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { isMacOSUserAgent } from "./titlebar.js";
 
 /**
  * 读源码前先把 CRLF 归一成 LF（#297）。
@@ -45,9 +44,10 @@ describe("DESK-14 透明 Overlay 拖拽命中区", () => {
     expect(css).toContain("background: transparent;");
   });
 
-  it("平台门只在 macOS 打开透明 hit area", () => {
-    expect(isMacOSUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe(true);
-    expect(isMacOSUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe(false);
-    expect(isMacOSUserAgent("Mozilla/5.0 (X11; Linux x86_64)")).toBe(false);
+  // DESK-69 (#997)：平台门的判据在 platformUx.test.js（usesOverlayTitlebar）；
+  // 这里只锁住 titlebar.js 问的是它、而不是 UserAgent。
+  it("平台门问 platformUx，不嗅探 UserAgent", () => {
+    expect(titlebar).toContain("usesOverlayTitlebar(platform)");
+    expect(titlebar).not.toContain("userAgent");
   });
 });
