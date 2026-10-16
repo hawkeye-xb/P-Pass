@@ -49,3 +49,12 @@
 
 /* PPassCore WaitReason.localStorageFull：手机自己空间不够放临时原图。 */
 "state_waiting_local_storage_full" = "手机存储空间不够，腾出一些空间后接着备份。";
+
+/* #973：首页计数读库失败——不给任何完成度结论（Android 读失败不会变成 0）。 */
+"hero_counts_unreadable" = "账本暂时读不出来，所以现在不给出备份进度——打开 App 时会再试。";
+
+/* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */
+"rule_notify_denied_hint" = "通知已在系统设置里关闭。点开关前往系统设置打开。";
+
+/* 配对成功但 pairing.json 写不进去（#969）：不能让用户进入「已配对」却重启即丢。 */
+"pair_save_failed" = "配对信息没能保存到手机上，请检查存储空间后重新扫码。";

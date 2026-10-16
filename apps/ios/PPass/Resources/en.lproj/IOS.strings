@@ -46,3 +46,11 @@
 "bucket_summary" = "%1$@ photos will be backed up · automatically while P-Pass is open";
 
 "state_waiting_local_storage_full" = "This phone is out of storage. Free up some space and the backup carries on.";
+
+/* #973：首页计数读库失败——不给任何完成度结论（Android 读失败不会变成 0）。 */
+"hero_counts_unreadable" = "Can't read the backup ledger right now, so no progress is shown — it will retry when you open the app.";
+
+/* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */
+"rule_notify_denied_hint" = "Notifications are off in system Settings. Tap the switch to open Settings.";
+
+"pair_save_failed" = "Could not save the pairing on this phone. Check the free storage, then scan again.";

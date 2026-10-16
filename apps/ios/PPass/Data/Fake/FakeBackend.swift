@@ -158,6 +158,12 @@ final class FakeEngine: BackupEngine {
     private var notify = true
     func notifyOnFailure() -> Bool { notify }
     func setNotifyOnFailure(_ on: Bool) { notify = on; listeners.forEach { $0() } }
+    var fakeAuthorization: NotificationAuthorization = .authorized
+    func notificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }
+    func requestNotificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }
+    @MainActor func openNotificationSettings() {}
+    func shouldAskNotificationAtOnboarding() async -> Bool { false }
+    func askNotificationAtOnboarding() async {}
 
     func promise() -> [PromiseNotice] {
         var out = [PromiseNotice(BackupPromise.whileOpenTitle), PromiseNotice(BackupPromise.whileOpenBody)]

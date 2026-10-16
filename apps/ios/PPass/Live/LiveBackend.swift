@@ -27,6 +27,7 @@ final class LiveBackend: @unchecked Sendable {
     let settings: BackupSettings
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
+    let notificationAsk: OnboardingNotificationAsk
     let pairingLoss = PairingLoss()
     let sentinel: SentinelStore
     let heartbeat: ForegroundHeartbeat
@@ -36,6 +37,7 @@ final class LiveBackend: @unchecked Sendable {
     let engineModel: LiveEngineModel
     /// 前台相册变化监听（#978，对位 Android BackupUiStateHolder 的 MediaStore ContentObserver）。
     let mediaWatcher: MediaChangeWatcher
+    let epochRepairer: EpochRepairer
 
     init() throws {
         let fm = FileManager.default
@@ -63,6 +65,9 @@ final class LiveBackend: @unchecked Sendable {
         settings = BackupSettings(directory: dir, logger: logger)
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
         notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
+        // #975：必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding，写下 asked=false）。
+        notificationAsk = OnboardingNotificationAsk(directory: dir, logger: logger)
+        notificationAsk.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
         // 全新安装默认开（此前引擎写死为开）；之后以用户在设置里的选择为准。
         if !fm.fileExists(atPath: dir.appendingPathComponent(AutoBackupPrefs.fileName).path) {
             try? autoPrefs.setEnabled(true); try? autoPrefs.setRequested(true)
@@ -84,8 +89,13 @@ final class LiveBackend: @unchecked Sendable {
         let network = self.network
         let model = LiveEngineModel()
         engineModel = model
+        // #966：审计 outbox 冲刷（对位 Android `dispatcher`）。确认删除要回到引擎的单写者上，而引擎此刻还没建好——用盒子延后绑定。
+        let engineBox = EngineBox()
+        let audit = AuditOutboxDispatcher(
+            store: orders, desktop: FlowWiring.auditDesktop(store: pairingStore, desktop: desktop),
+            acknowledge: { ids in await engineBox.engine?.acknowledgeAudit(ids) })
         engine = FlowEngine(
-            store: orders, media: PhotoMediaSource(selected: scope, inbox: inbox),
+            store: orders, media: PhotoMediaSource(selected: scope, inbox: inbox, log: { logger.log($0) }),
             importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
             delivery: delivery,
             probe: ControlPlaneProbe(currentEpoch: epoch, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
@@ -97,8 +107,13 @@ final class LiveBackend: @unchecked Sendable {
             inScope: { PhotoMediaSource.inScope(bucketId: $0, selected: scope()) },
             mediaAbsenceTrusted: { media.access() == .full },
             pairingEpoch: epoch, logger: logger,
+            afterCycle: FlowWiring.afterCycle(dispatcher: audit),
+            onEpochAdvertised: FlowWiring.epochAdvertised(store: pairingStore, logger: logger),
             onView: { view in Task { await model.engineChanged(view) } }
         )
+        engineBox.engine = engine
+        // #970：空 epoch 的老配对（旧版本存下的）静默 hello 修一次，修不了才标失联；`start()` 里先于首页事实运行。
+        epochRepairer = EpochRepairer(store: pairingStore, hello: { [desktop] in try await desktop.hello().pairingEpoch }, logger: logger)
         catchup = ForegroundCatchup(engine: engine)
         // #977：前台心跳（对位 Android ForegroundHeartbeat）。结果映射在 PPassCore，这里只接线：
         // 可达 → 叫醒引擎（#439）；被拒为配对失效 → 记进 PairingLoss 并刷新首页事实（refreshFacts 据此标红卡，#466）。
@@ -156,7 +171,7 @@ final class LiveBackend: @unchecked Sendable {
 
     /// 对外的端口集合（界面只认这几个 protocol）。
     func ports() -> Backend {
-        let pairing = LivePairing(plane: plane, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
+        let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
                                   onPaired: { [weak self] record in self?.paired(record) },
                                   onDisconnect: { [weak self] in await self?.disconnect() },
                                   pending: pendingUnpair, flusher: unpairFlusher)
@@ -203,9 +218,16 @@ final class LiveBackend: @unchecked Sendable {
     func start() {
         flushPendingUnpairs() // 启动
         Task {
+            await repairEpochIfNeeded()
             await engine.start()
             await refreshFacts()
         }
+    }
+
+    /// 对位 Android `BackupUiStateHolder.repairEpochIfNeeded`：先修，再刷新首页事实；修好后叫醒引擎（它在 epoch 为空时判了未配对）。
+    private func repairEpochIfNeeded() async {
+        guard let result = await epochRepairer.repairIfNeeded() else { return }
+        if case .repaired = result { _ = await engine.trigger(.pairingRepaired) }
     }
 
     func setActive(_ active: Bool) {
@@ -224,24 +246,17 @@ final class LiveBackend: @unchecked Sendable {
         mediaWatcher.start() // 幂等；相册授权晚于启动（首次授权）时在这里补注册（#978）
         let known = await engine.pendingKnown
         let view = await engine.view
-        let all = (try? orders.countCurrentByState(bucketIds: nil)) ?? [:]
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let ackAt = control.missingSourceAckAt()
-        let unackMissing = (try? orders.countSourceMissingSkipped(afterMs: ackAt, upToMs: nowMs)) ?? 0
-        let ackedMissing = ackAt > 0 ? ((try? orders.countSourceMissingSkipped(afterMs: 0, upToMs: ackAt)) ?? 0) : 0
+        // #973：账本读失败不许落成 0（会被首页读成「都存好了」）——记日志，事实标「计数不可读」，投影层不给完成度结论。
+        let counts = Result { try OrderCounts.read(from: orders, missingSourceAckAt: control.missingSourceAckAt(), nowMs: nowMs) }
+        if case .failure(let error) = counts { logger.log("home-facts: order counts unreadable: \(error)") }
         let facts = FlowFacts(
             view: known ? EngineSnapshot(view) : nil,
-            confirmed: (try? orders.countConfirmedPresent(bucketIds: nil)) ?? 0,
             inScopeTotal: media.inScopeTotal(),
-            failed: all[.failed] ?? 0,
-            unfinished: (all[.pending] ?? 0) + (all[.transferring] ?? 0) + (all[.failed] ?? 0),
-            lastSuccessAt: (try? orders.lastConfirmedAtMs()) ?? 0,
-            lastReachableAt: sentinel.load().lastReachableAt,
-            missingSourceUnacknowledged: unackMissing,
-            skippedByUser: all[.skippedByUser] ?? 0,
-            missingSourceAcknowledged: ackedMissing)
+            lastReachableAt: sentinel.load().lastReachableAt
+        ).applying(counts: counts)
         if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingEpoch, pairingLoss.isLost(epoch: e) {
-            pairingStore.markLost()
+            do { try pairingStore.markLost() } catch { logger.log("pairing lost: cannot persist (\(error))") }
         }
         let refresh = await MainActor.run { () -> BackgroundRefreshAvailability in
             switch UIApplication.shared.backgroundRefreshStatus {
@@ -259,8 +274,18 @@ final class LiveBackend: @unchecked Sendable {
         if notifyPrefs.enabled() {
             let lost = pairingStore.load()?.lost == true
             let trouble: Bool = { if case .trouble = HomeProjection.backupUiState(facts, noAlbums: false) { return true } else { return false } }()
-            FailureNotifier.update(pairingLost: lost, trouble: trouble)
+            await FailureNotifier.update(pairingLost: lost, trouble: trouble, logger: logger)
         }
+    }
+}
+
+/// 构造期的引擎引用（审计冲刷的 acknowledge 在引擎建好之前就要成形）。
+final class EngineBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: FlowEngine?
+    var engine: FlowEngine? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); defer { lock.unlock() }; stored = newValue }
     }
 }
 
@@ -366,8 +391,42 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func notifyOnFailure() -> Bool { backend.notifyPrefs.enabled() }
     func setNotifyOnFailure(_ on: Bool) {
-        try? backend.notifyPrefs.setEnabled(on)
-        if on { FailureNotifier.requestAuthorization() }
+        do { try backend.notifyPrefs.setEnabled(on) } catch { backend.logger.log("notify-prefs: write failed: \(error)") }
+    }
+
+    private let lastLoggedAuth = NSLock()
+    nonisolated(unsafe) private var loggedAuth: NotificationAuthorization?
+    func notificationAuthorization() async -> NotificationAuthorization {
+        let auth = await SystemNotifications.authorization()
+        lastLoggedAuth.lock(); defer { lastLoggedAuth.unlock() }
+        if loggedAuth != auth { loggedAuth = auth; backend.logger.log("notifications: system authorization=\(auth)") }
+        return auth
+    }
+    func requestNotificationAuthorization() async -> NotificationAuthorization {
+        let granted = await SystemNotifications.request()
+        let now = await SystemNotifications.authorization()
+        backend.logger.log("notifications: system prompt result granted=\(granted) status=\(now)")
+        return now
+    }
+    @MainActor func openNotificationSettings() { SystemNotifications.openSettings() }
+
+    func shouldAskNotificationAtOnboarding() async -> Bool {
+        await notificationAuthorization() == .notDetermined && backend.notificationAsk.shouldAsk(authorization: .notDetermined)
+    }
+
+    /// 完成页点「好」：该问就先落盘「问过」再弹，结果同步回开关（Android `thenContinue` + `onResult`）。
+    func askNotificationAtOnboarding() async {
+        let auth = await notificationAuthorization()
+        let ask = backend.notificationAsk.shouldAsk(authorization: auth)
+        backend.logger.log("notification-ask: onboarding done tapped, authorization=\(auth) shouldAsk=\(ask)")
+        guard ask else { return }
+        do { try backend.notificationAsk.markAsked() } catch {
+            // 落不了盘就不弹：宁可少问，不许因为没记住而下次又问。
+            backend.logger.log("notification-ask: markAsked failed, skip prompt: \(error)"); return
+        }
+        let after = await requestNotificationAuthorization()
+        do { try backend.notificationAsk.onResult(granted: after == .authorized, prefs: backend.notifyPrefs) }
+        catch { backend.logger.log("notification-ask: sync toggle failed: \(error)") }
     }
 
     func wifiOnly() -> Bool { backend.settings.wifiOnly() }

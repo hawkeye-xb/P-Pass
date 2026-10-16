@@ -94,8 +94,8 @@ public actor FlowEngine {
         logger: CoreLogger,
         clock: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
         monotonic: @escaping @Sendable () -> Int64 = { Int64(ProcessInfo.processInfo.systemUptime * 1000) },
-        afterCycle: @escaping @Sendable () async -> Void = {},
-        onEpochAdvertised: @escaping @Sendable (String) -> Void = { _ in },
+        afterCycle: @escaping @Sendable () async -> Void,
+        onEpochAdvertised: @escaping @Sendable (String) -> Void,
         onView: @escaping @Sendable (EngineView) -> Void = { _ in }
     ) {
         self.store = store

@@ -27,7 +27,7 @@ struct RootView: View {
                     }
                 }
             case .backupStarted(let count):
-                BackupStartedScreen(count: count) { app.phase = .main }
+                BackupStartedScreen(count: count, asksNotification: app.asksNotificationAtOnboarding) { app.finishOnboardingStarted() }
             case .main:
                 MainTabs()
             }

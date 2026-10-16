@@ -184,7 +184,7 @@
     <string name="dog_triplet_line">手机 %1$d 张 · 已备份 %2$d · 待备份 %3$d</string>
     <string name="hero_of_n">/ %1$s 张已回家</string>
     <string name="pending_count">待备份 %1$d 张</string>
-    <string name="triplet_unavailable">读不到手机相册的数量——打开 App 时会再试。</string>
+    <string name="triplet_unavailable">相册数量读取失败，稍后重试</string>
     <!-- UI-16 规则 H-C：两个数对不上，一律不渲染分数。刻意不复用
          triplet_unavailable——那条说的是「读不到手机相册的数量」，是另一件事。 -->
     <string name="hero_unreconciled_title">正在重新清点照片</string>

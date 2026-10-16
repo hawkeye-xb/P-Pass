@@ -9,12 +9,16 @@ struct HeroCard: View {
 
     var body: some View {
         let triplet = app.triplet
-        let render = HomeProjection.heroRender(app.access, triplet)
+        let render = HomeProjection.heroRender(app.access, triplet, countsReadable: app.facts.countsReadable, scopeSaved: app.scope != nil)
         Section {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
                     switch render {
                     case .accessBlocked: accessCard
+                    case .countsUnreadable:
+                        Text(L.s("hero_counts_unreadable")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                    case .noAlbums:
+                        Text(L.s("backup_scope_none")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                     case .unreadable:
                         Text(L.s("triplet_unavailable")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                     case .unreconciled:

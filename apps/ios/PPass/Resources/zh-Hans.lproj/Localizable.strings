@@ -130,7 +130,7 @@
 "dog_triplet_line" = "手机 %1$ld 张 · 已备份 %2$ld · 待备份 %3$ld";
 "hero_of_n" = "/ %1$@ 张已回家";
 "pending_count" = "待备份 %1$ld 张";
-"triplet_unavailable" = "读不到手机相册的数量——打开 App 时会再试。";
+"triplet_unavailable" = "相册数量读取失败，稍后重试";
 "hero_unreconciled_title" = "正在重新清点照片";
 "hero_unreconciled_body" = "备份记录里的张数比选中相册现在的张数多，手机正在按相册里现有的照片重新清点。不用连电脑，也不用等 Wi-Fi，清点完这里会直接显示结果。";
 "dog_last_success" = "最近成功 %1$@";
