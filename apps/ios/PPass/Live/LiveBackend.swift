@@ -373,13 +373,13 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
 /// 路径来源：生产是 `NWPathMonitor`，测试里换成假的，按需喂「可用 / 昂贵」。
 protocol NetworkPathSource: AnyObject {
-    func start(_ handler: @escaping @Sendable (_ satisfied: Bool, _ expensive: Bool) -> Void)
+    func start(_ handler: @escaping @Sendable (_ satisfied: Bool, _ expensive: Bool, _ interfaces: [String]) -> Void)
 }
 
 final class NWPathSource: NetworkPathSource {
     private let monitor = NWPathMonitor()
-    func start(_ handler: @escaping @Sendable (Bool, Bool) -> Void) {
-        monitor.pathUpdateHandler = { handler($0.status == .satisfied, $0.isExpensive) }
+    func start(_ handler: @escaping @Sendable (Bool, Bool, [String]) -> Void) {
+        monitor.pathUpdateHandler = { handler($0.status == .satisfied, $0.isExpensive, $0.availableInterfaces.map(\.name)) }
         monitor.start(queue: DispatchQueue(label: "ppass.network"))
     }
 }
@@ -396,11 +396,11 @@ final class NetworkState: @unchecked Sendable {
 
     init(source: NetworkPathSource = NWPathSource()) {
         self.source = source
-        source.start { [weak self] satisfied, expensive in
+        source.start { [weak self] satisfied, expensive, interfaces in
             guard let self else { return }
             self.lock.lock()
             self.expensive = expensive
-            let update = self.tracker.update(satisfied: satisfied)
+            let update = self.tracker.update(satisfied: satisfied, signature: "\(satisfied)|\(expensive)|\(interfaces.joined(separator: ","))")
             self.lock.unlock()
             self.onUpdate?(update)
         }
