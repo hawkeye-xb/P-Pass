@@ -64,10 +64,16 @@
 ; keeps trying to start a daemon that no longer exists. Config and the
 ; photo library are kept, so a reinstall restores the task (#877) unless
 ; the user had stopped the service.
+;
+; DESK-72 (#1012): also delete the desktop shell's login item (HKCU Run
+; value "P-Pass Desktop", written by the shell at startup; see
+; crates/platform/src/windows.rs SHELL_RUN_VALUE). Tauri's template only
+; removes the value named after the product ("P-Pass").
 !macro NSIS_HOOK_PREUNINSTALL
   DetailPrint "Stopping P-Pass background service before uninstall..."
   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "P-Pass" /F'
   Pop $0
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "P-Pass Desktop"
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM ppf-daemon.exe'
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'
