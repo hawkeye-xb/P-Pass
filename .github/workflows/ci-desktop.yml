@@ -139,6 +139,9 @@ jobs:
       # checkout 必须留在 job 里：下一步引用的是仓库内的本地 action
       # （./.github/actions/...），没 checkout 就没有那个文件。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # SEC-15 (#1003)：src-tauri 的 advisories 步骤（tools/ci-deny-advisories.sh）要和 HEAD^1 比 Cargo.lock。
+          fetch-depth: 2
       - uses: ./.github/actions/desktop-checks
 
   # CI-06（#164，2026-09-20）：Windows 这条是这次里程碑新加的。

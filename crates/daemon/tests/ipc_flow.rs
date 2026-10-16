@@ -719,7 +719,7 @@ async fn logs_export_zip_carries_audit_events() {
     let file = std::fs::File::open(&zip_path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
     let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().to_string())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
         .collect();
     assert!(
         names.iter().any(|n| n == "audit.json"),

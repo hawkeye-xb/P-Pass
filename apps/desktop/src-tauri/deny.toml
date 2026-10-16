@@ -48,6 +48,15 @@ ignore = [
   # 两棵树各自独立命中，所以两份配置各记一次，不是重复。
   # 🔁 重估触发条件：升级 `tauri`（进而升级它依赖的 gtk 0.18 一线）时重试。
   "RUSTSEC-2024-0370", # proc-macro-error（经 gtk3-macros）
+  # SEC-15 (#1003)：`zip 4.6.1` 被上游 yank（2026-10-16 撤回了 9.0.3 以前全部
+  # 版本）。我们自己的直接依赖已升到 9.0.3；剩下这份是 Tauri 带进来的：
+  #   zip 4.6.1
+  #     └── tauri-plugin-updater 2.x（Windows 上解压更新包）
+  # 插件最新版 2.14.0 仍要求 `zip ^4`，我们无从升级。yank ≠ 删除：有锁文件
+  # 照样能下载、编译、发版。只豁免这一个精确版本，别的 yank 照样拦。
+  # 🔁 删除条件：升级 tauri-plugin-updater 后它不再依赖 zip 4（`cargo tree
+  #    -i zip@4.6.1` 报找不到），删掉这一条——cargo-deny 届时也会报未命中。
+  { crate = "zip@4.6.1", reason = "tauri-plugin-updater 仍要求 zip ^4，见 #1003" },
 ]
 
 [licenses]
@@ -67,17 +76,8 @@ allow = [
   "CC0-1.0",
   "0BSD",
   "Apache-2.0 WITH LLVM-exception",
-  # SEC-09 (#376) 新增，本树独有（主 workspace 没有 zip → bzip2 这条链）：
-  # `bzip2-1.0.6` 是 bzip2/libbzip2 自己的许可，BSD 风格的宽松许可 ——
-  # 允许再分发源码与二进制，只要保留版权声明与免责声明，**没有 copyleft
-  # 传染**，与本仓其它宽松许可同档。
-  #   libbz2-rs-sys 0.2.5
-  #     └── bzip2 0.6.1
-  #         └── zip 5.1.1
-  #             └── p-pass-desktop（直接依赖，DESK-10 的诊断包要 zip）
-  # 注：`zip` 在主 workspace 侧也有，但那边解析出的是不带 bzip2 的特性组合，
-  # 所以根 deny.toml 里没有这一条 —— 不是漏了。
-  "bzip2-1.0.6",
+  # SEC-15 (#1003)：原先这里放行过 `bzip2-1.0.6`（zip 5 默认特性带进来的
+  # bzip2 链，SEC-09 #376 加）。zip 升到 9 并只开 deflate 后这条链没了，删掉。
 ]
 confidence-threshold = 0.8
 # 自家 crate（p-pass-desktop、platform，都是 AGPL-3.0）不参与许可检查。

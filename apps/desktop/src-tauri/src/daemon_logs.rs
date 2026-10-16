@@ -407,7 +407,11 @@ pub fn read_zip_entries(path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
         let mut f = zip
             .by_index(idx)
             .map_err(|e| format!("读 daemon zip 条目失败：{e}"))?;
-        let name = f.name().to_string();
+        // zip 9 起文件名按需解码，可能失败（SEC-15 #1003 升级时的 API 变化）。
+        let name = f
+            .name()
+            .map_err(|e| format!("读 daemon zip 条目名失败：{e}"))?
+            .to_string();
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)
             .map_err(|e| format!("读 daemon zip 条目 {name} 失败：{e}"))?;

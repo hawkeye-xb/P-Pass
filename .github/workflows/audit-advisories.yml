@@ -1,0 +1,83 @@
+# SEC-15 (#1003)：依赖安全公告 / 撤回（advisories，含 yanked）的每日定时检查。
+#
+# 为什么单独一个 workflow：advisories 读的是**外部**的 RustSec 数据库和
+# crates.io 撤回状态，结果随时间变化——代码一行没改，昨天绿今天红。它原先
+# 和 licenses / bans 一起挂在每个 PR 的必需检查上，于是上游一个动作就把所有
+# 无关 PR 全部堵死。实测三次：#715（iroh-blobs yank）、#961（rustls 公告）、
+# #1003（zip yank）。
+#
+# 现在的分工（cargo-deny 官方 Action README 推荐的拆法）：
+#   - PR / push：licenses / bans 每次照跑；advisories 只在改了对应 Cargo.lock /
+#     deny.toml 时跑（tools/ci-deny-advisories.sh）——那是你自己引入的版本，归你。
+#   - 本 workflow：每天把两棵依赖树（主 workspace + src-tauri）的 advisories 全量
+#     跑一遍；红了开一个 issue（已有未关闭的同名 issue 就追加评论，不重复开）。
+#
+# ⚠️ 本 workflow **不是**必需检查，也不该加进去——加进去就又回到 #1003 之前。
+# ⚠️ 收到 issue 的处理方式见 #715 / #961 / #1003：能升就升（`cargo update -p`），
+#    升不了（上游还没跟）就在对应 deny.toml 里**精确到版本**地豁免，写明原因和
+#    删除条件。
+
+name: Audit advisories
+
+on:
+  schedule:
+    # 每天 UTC 01:17（北京 09:17）。避开整点：GitHub 定时任务整点最拥挤、最易延迟。
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-advisories
+  cancel-in-progress: false
+
+jobs:
+  advisories:
+    name: advisories (scheduled)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: tools/setup-rust-toolchain.sh
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-deny
+
+      - name: Advisory audit (main workspace)
+        run: cargo deny check advisories
+
+      # 前一步红了也要跑：两棵树互相独立，一次把问题看全。
+      - name: Advisory audit (src-tauri)
+        if: ${{ !cancelled() }}
+        working-directory: apps/desktop/src-tauri
+        run: cargo deny check advisories
+
+      - name: Open or update tracking issue
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="[audit-advisories] 依赖安全公告 / 撤回定时检查失败"
+          body="$(date -u +%F) 的定时检查红了：${RUN_URL}
+
+          看日志里 \`error[...]\` 那几行，处理方式参考 #715 / #961 / #1003：
+          能升就 \`cargo update -p <crate>\`；上游还没跟、升不了，就在对应 deny.toml 里精确到版本豁免，写明原因和删除条件。"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label SEC --body "$body"
+          fi
