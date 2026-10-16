@@ -52,3 +52,5 @@
 
 /* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */
 "rule_notify_denied_hint" = "Notifications are off in system Settings. Tap the switch to open Settings.";
+
+"pair_save_failed" = "Could not save the pairing on this phone. Check the free storage, then scan again.";

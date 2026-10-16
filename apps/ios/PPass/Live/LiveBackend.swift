@@ -37,6 +37,7 @@ final class LiveBackend: @unchecked Sendable {
     let engineModel: LiveEngineModel
     /// 前台相册变化监听（#978，对位 Android BackupUiStateHolder 的 MediaStore ContentObserver）。
     let mediaWatcher: MediaChangeWatcher
+    let epochRepairer: EpochRepairer
 
     init() throws {
         let fm = FileManager.default
@@ -88,6 +89,11 @@ final class LiveBackend: @unchecked Sendable {
         let network = self.network
         let model = LiveEngineModel()
         engineModel = model
+        // #966：审计 outbox 冲刷（对位 Android `dispatcher`）。确认删除要回到引擎的单写者上，而引擎此刻还没建好——用盒子延后绑定。
+        let engineBox = EngineBox()
+        let audit = AuditOutboxDispatcher(
+            store: orders, desktop: FlowWiring.auditDesktop(store: pairingStore, desktop: desktop),
+            acknowledge: { ids in await engineBox.engine?.acknowledgeAudit(ids) })
         engine = FlowEngine(
             store: orders, media: PhotoMediaSource(selected: scope, inbox: inbox, log: { logger.log($0) }),
             importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
@@ -101,8 +107,13 @@ final class LiveBackend: @unchecked Sendable {
             inScope: { PhotoMediaSource.inScope(bucketId: $0, selected: scope()) },
             mediaAbsenceTrusted: { media.access() == .full },
             pairingEpoch: epoch, logger: logger,
+            afterCycle: FlowWiring.afterCycle(dispatcher: audit),
+            onEpochAdvertised: FlowWiring.epochAdvertised(store: pairingStore, logger: logger),
             onView: { view in Task { await model.engineChanged(view) } }
         )
+        engineBox.engine = engine
+        // #970：空 epoch 的老配对（旧版本存下的）静默 hello 修一次，修不了才标失联；`start()` 里先于首页事实运行。
+        epochRepairer = EpochRepairer(store: pairingStore, hello: { [desktop] in try await desktop.hello().pairingEpoch }, logger: logger)
         catchup = ForegroundCatchup(engine: engine)
         // #977：前台心跳（对位 Android ForegroundHeartbeat）。结果映射在 PPassCore，这里只接线：
         // 可达 → 叫醒引擎（#439）；被拒为配对失效 → 记进 PairingLoss 并刷新首页事实（refreshFacts 据此标红卡，#466）。
@@ -160,7 +171,7 @@ final class LiveBackend: @unchecked Sendable {
 
     /// 对外的端口集合（界面只认这几个 protocol）。
     func ports() -> Backend {
-        let pairing = LivePairing(plane: plane, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
+        let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
                                   onPaired: { [weak self] record in self?.paired(record) },
                                   onDisconnect: { [weak self] in await self?.disconnect() },
                                   pending: pendingUnpair, flusher: unpairFlusher)
@@ -207,9 +218,16 @@ final class LiveBackend: @unchecked Sendable {
     func start() {
         flushPendingUnpairs() // 启动
         Task {
+            await repairEpochIfNeeded()
             await engine.start()
             await refreshFacts()
         }
+    }
+
+    /// 对位 Android `BackupUiStateHolder.repairEpochIfNeeded`：先修，再刷新首页事实；修好后叫醒引擎（它在 epoch 为空时判了未配对）。
+    private func repairEpochIfNeeded() async {
+        guard let result = await epochRepairer.repairIfNeeded() else { return }
+        if case .repaired = result { _ = await engine.trigger(.pairingRepaired) }
     }
 
     func setActive(_ active: Bool) {
@@ -238,7 +256,7 @@ final class LiveBackend: @unchecked Sendable {
             lastReachableAt: sentinel.load().lastReachableAt
         ).applying(counts: counts)
         if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingEpoch, pairingLoss.isLost(epoch: e) {
-            pairingStore.markLost()
+            do { try pairingStore.markLost() } catch { logger.log("pairing lost: cannot persist (\(error))") }
         }
         let refresh = await MainActor.run { () -> BackgroundRefreshAvailability in
             switch UIApplication.shared.backgroundRefreshStatus {
@@ -258,6 +276,16 @@ final class LiveBackend: @unchecked Sendable {
             let trouble: Bool = { if case .trouble = HomeProjection.backupUiState(facts, noAlbums: false) { return true } else { return false } }()
             await FailureNotifier.update(pairingLost: lost, trouble: trouble, logger: logger)
         }
+    }
+}
+
+/// 构造期的引擎引用（审计冲刷的 acknowledge 在引擎建好之前就要成形）。
+final class EngineBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: FlowEngine?
+    var engine: FlowEngine? {
+        get { lock.lock(); defer { lock.unlock() }; return stored }
+        set { lock.lock(); defer { lock.unlock() }; stored = newValue }
     }
 }
 

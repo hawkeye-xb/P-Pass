@@ -103,7 +103,7 @@ struct EmptyParams: Codable {}
 
 /// 真实配对服务：解析串 → 已是成员就直接回来（换了地址的老手机）→ 否则走等待循环 → 存配对记录。
 final class LivePairing: PairingService, @unchecked Sendable {
-    private let plane: ControlPlane
+    private let transportFor: (String) -> CtrlTransport
     private let store: PairingStore
     private let onboarded: (String) -> Bool
     private let onPaired: (PairingRecord) -> Void
@@ -112,10 +112,10 @@ final class LivePairing: PairingService, @unchecked Sendable {
     private let flusher: PendingUnpairFlusher
     private var current: Task<PairVerdict, Error>?
 
-    init(plane: ControlPlane, store: PairingStore, onboarded: @escaping (String) -> Bool,
+    init(transportFor: @escaping (String) -> CtrlTransport, store: PairingStore, onboarded: @escaping (String) -> Bool,
          onPaired: @escaping (PairingRecord) -> Void, onDisconnect: @escaping () async -> Void,
          pending: PendingUnpairStore, flusher: PendingUnpairFlusher) {
-        self.plane = plane
+        self.transportFor = transportFor
         self.pending = pending
         self.flusher = flusher
         self.store = store
@@ -138,22 +138,26 @@ final class LivePairing: PairingService, @unchecked Sendable {
             return .failed(reason: L.s("not_a_code") + " (\(error))")
         }
 
-        let client = ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: code.peerToken))
+        let client = ProtoClient(transport: transportFor(code.peerToken))
         let rpc: (String, Encodable) async throws -> Resp = { method, params in
             try await client.callRaw(method, AnyEncodable(params), timeoutMs: 15_000)
         }
         // 已是这台电脑的成员（电脑换了地址 / 身份）：backup.begin 只认成员，ok 就不必再申请。
+        // 取名字和 epoch 的 hello 失败就落回正常配对，不存空 epoch / 空电脑名（对位 Android PairFlow 的外层 catch，#970）。
         if let probe = try? await rpc(Methods.backupBegin, EmptyParams()), probe.ok {
-            let hello = try? await rpc(Methods.hello, EmptyParams()).result?.decode(Hello.self)
-            save(code, name: hello?.deviceName ?? "", epoch: hello?.pairingEpoch ?? "")
-            return .joined(firstTime: !onboarded(code.nodeId))
+            if let hello = await memberHello(rpc) {
+                do { try save(code, name: hello.deviceName, epoch: hello.pairingEpoch ?? "") } catch {
+                    return saveFailure(error)
+                }
+                return .joined(firstTime: !onboarded(code.nodeId))
+            }
         }
         let task = Task { try await PairVerdictLoop(rpc: rpc).run(token: code.token, deviceName: UIDevice.current.name) }
         current = task
         let verdict: PairVerdict
         do { verdict = try await task.value } catch { return .failed(reason: String(describing: error)) }
         if case .accepted(let a) = verdict {
-            save(code, name: a.storageDeviceName, epoch: a.pairingEpoch)
+            do { try save(code, name: a.storageDeviceName, epoch: a.pairingEpoch) } catch { return saveFailure(error) }
             return .joined(firstTime: !onboarded(code.nodeId))
         }
         return verdict.outcome
@@ -178,36 +182,83 @@ final class LivePairing: PairingService, @unchecked Sendable {
         await onDisconnect()
     }
 
-    private func save(_ code: ParsedPairLink, name: String, epoch: String) {
+    private func memberHello(_ rpc: (String, Encodable) async throws -> Resp) async -> Hello? {
+        do {
+            let reply = try await rpc(Methods.hello, EmptyParams())
+            guard reply.ok, let hello = try reply.result?.decode(Hello.self) else {
+                AppLog.log("pair: member fast path hello gave no usable result (ok=\(reply.ok)); falling back to pairing")
+                return nil
+            }
+            return hello
+        } catch {
+            AppLog.log("pair: member fast path hello failed (\(error)); falling back to pairing")
+            return nil
+        }
+    }
+
+    /// 写盘成功才算配对成功：失败不调 `onPaired`，让用户看到失败而不是进入重启即丢的「已配对」（#969）。
+    private func save(_ code: ParsedPairLink, name: String, epoch: String) throws {
         let record = PairingRecord(daemonNodeId: code.nodeId, peerToken: code.peerToken, storageDeviceName: name,
                                    pairedAt: Int64(Date().timeIntervalSince1970 * 1000), pairingEpoch: epoch)
-        store.save(record)
+        try store.save(record)
         onPaired(record)
+    }
+
+    private func saveFailure(_ error: Error) -> PairOutcome {
+        AppLog.log("pair: cannot persist pairing.json (\(error))")
+        return .failed(reason: L.s("pair_save_failed") + " (\(error))")
     }
 }
 
-/// `pairing.json`（存储根目录）。
+/// `pairing.json`（存储根目录）。写盘失败抛出（对位 Android `PairingStore.save` 的 `check(rename)`，#969）；
+/// 读到损坏文件记日志后按未配对处理，与「文件不存在」可区分。
 final class PairingStore: @unchecked Sendable {
     private let url: URL
     private let lock = NSLock()
+    private let log: @Sendable (String) -> Void
 
-    init(root: URL) { url = root.appendingPathComponent("pairing.json") }
+    init(root: URL, log: @escaping @Sendable (String) -> Void = { AppLog.log($0) }) {
+        url = root.appendingPathComponent("pairing.json")
+        self.log = log
+    }
 
     func load() -> PairingRecord? {
         lock.lock(); defer { lock.unlock() }
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(PairingRecord.self, from: data)
+        return loadLocked()
     }
 
-    func save(_ r: PairingRecord) {
+    func save(_ r: PairingRecord) throws {
         lock.lock(); defer { lock.unlock() }
-        if let data = try? JSONEncoder().encode(r) { try? data.write(to: url, options: .atomic) }
+        try saveLocked(r)
     }
 
-    func markLost() {
-        guard var r = load(), !r.lost else { return }
-        r.lost = true
-        save(r)
+    /// 同一把锁里读改写（引擎回调与 UI 线程会并发改配对记录）。没有配对记录时返回 false、什么都不写。
+    @discardableResult
+    func update(_ change: (inout PairingRecord) -> Void) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard var r = loadLocked() else { return false }
+        let before = r
+        change(&r)
+        if r != before { try saveLocked(r) }
+        return true
+    }
+
+    func markLost() throws {
+        try update { $0.lost = true }
+    }
+
+    private func loadLocked() -> PairingRecord? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        do {
+            return try JSONDecoder().decode(PairingRecord.self, from: try Data(contentsOf: url))
+        } catch {
+            log("pairing.json unreadable, treated as not paired: \(error)")
+            return nil
+        }
+    }
+
+    private func saveLocked(_ r: PairingRecord) throws {
+        try JSONEncoder().encode(r).write(to: url, options: .atomic)
     }
 }
 
