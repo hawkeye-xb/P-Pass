@@ -210,7 +210,7 @@
   "ui.wizard_service_title": "Last step: run it as a background service.",
   "ui.wizard_service_body": "P-Pass registers as a system background service: it starts at boot and keeps quietly receiving backups even after you close this window. You can stop it anytime in \"Settings\".",
   "ui.wizard_asks_label": "What it asks for",
-  "ui.wizard_asks_win": "Start at login (a registry startup entry — no admin rights needed, and no Windows service is created)",
+  "ui.wizard_asks_win": "Start at login (a logon task in Windows Task Scheduler — no administrator rights needed, and no Windows service is created)",
   "ui.wizard_wont_label": "What it won't do",
   "ui.wizard_wont": "No cloud uploads, no accounts — photos only travel between your family's devices",
   "ui.wizard_blocked_label": "If it's blocked",
