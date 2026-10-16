@@ -292,6 +292,8 @@ msg_keys! {
     UI_WIZARD_CONTINUE => "ui.wizard_continue",
     UI_WIZARD_SLEEP_TITLE => "ui.wizard_sleep_title",
     UI_WIZARD_SLEEP_BODY => "ui.wizard_sleep_body",
+    /// DAE-11 (#804): Windows wizard step 2 — daemon keeps the PC awake on AC.
+    UI_WIZARD_SLEEP_AUTO_WIN => "ui.wizard_sleep_auto_win",
     UI_WIZARD_SLEEP_NEVER => "ui.wizard_sleep_never",
     UI_WIZARD_CHECK_PASSED => "ui.wizard_check_passed",
     UI_WIZARD_SLEEP_ON => "ui.wizard_sleep_on",
@@ -620,6 +622,7 @@ mod tests {
             UI_WIZARD_CONTINUE,
             UI_WIZARD_SLEEP_TITLE,
             UI_WIZARD_SLEEP_BODY,
+            UI_WIZARD_SLEEP_AUTO_WIN,
             UI_WIZARD_SLEEP_NEVER,
             UI_WIZARD_CHECK_PASSED,
             UI_WIZARD_SLEEP_ON,
@@ -741,7 +744,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 311);
+        assert_eq!(ALL.len(), 312);
     }
 
     #[test]
