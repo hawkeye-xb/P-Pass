@@ -24,7 +24,7 @@ struct PPassApp: App {
         .onChange(of: scenePhase) { phase in
             guard case .ready(let model, let live) = boot else { return }
             live?.scenePhase(phase)
-            if phase == .active { model.refresh() }
+            if phase == .active { model.sceneBecameActive() }
         }
     }
 }
@@ -91,8 +91,10 @@ final class LiveLifecycle {
             PPassBackgroundTasks.ensureShortScheduled(logger: backend.logger)
             guard finishing == .invalid else { return }
             backend.window.setFinishingTime(true)
+            // 系统在主线程上调 expiration handler，到期前必须结束后台任务，否则进程被杀（#1007）：
+            // 在 handler 里同步关窗口、同步 endBackgroundTask，不排到 handler 返回之后。
             finishing = UIApplication.shared.beginBackgroundTask(withName: "ppass.finish") { [weak self] in
-                Task { @MainActor in self?.endFinishing(expired: true) }
+                MainActor.assumeIsolated { self?.endFinishing(expired: true) }
             }
         default:
             break
@@ -101,12 +103,11 @@ final class LiveLifecycle {
 
     private func endFinishing(expired: Bool) {
         guard finishing != .invalid else { return }
+        backend.window.setFinishingTime(false)
         if expired {
-            // 只关宽限期自己；前台 / 长任务 / 短任务还开着就不停这一轮。
+            // 只关宽限期自己；停不停由引擎按此刻的租约定（前台 / 长任务 / 短任务还开着就不停这一轮）。
             let engine = backend.engine, window = backend.window
             Task { await BackgroundRun.expireFinishingTime(engine: engine, window: window) }
-        } else {
-            backend.window.setFinishingTime(false)
         }
         UIApplication.shared.endBackgroundTask(finishing)
         finishing = .invalid

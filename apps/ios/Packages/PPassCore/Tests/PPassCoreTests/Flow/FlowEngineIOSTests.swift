@@ -297,6 +297,7 @@ final class FlowEngineIOSTests: XCTestCase {
         rig.delivery.hold.set(true)
         await rig.engine.trigger(.mediaChange)
         await eventually("delivery started") { rig.delivery.requests.get().count == 1 }
+        rig.lease.held.set(false) // 系统收回了执行时间
         await rig.engine.onLeaseExpired()
         XCTAssertEqual(try rig.state(1), .transferring)
         XCTAssertEqual(try rig.current(1)?.attempts, 0)

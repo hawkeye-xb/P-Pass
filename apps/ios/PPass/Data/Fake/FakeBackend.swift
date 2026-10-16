@@ -54,6 +54,7 @@ final class FakeMediaLibrary: MediaLibrary {
     func albums() async throws -> [AlbumBucket] { all }
     func savedScope() -> Set<String>? { scope }
     func knownAlbums() -> Set<String> { known }
+    func existingAlbumIds() async -> Set<String>? { access() == .full ? Set(all.map(\.id)) : nil }
 
     func saveScope(_ selected: Set<String>, known: Set<String>) async {
         scope = selected

@@ -384,11 +384,22 @@ public actor FlowEngine {
         return n
     }
 
-    /// 执行时间被系统收回（iOS 的后台时间到期，对位 Android onTimeout）：记原因、停循环、等待中。下一次触发照常再申请。
+    /// 执行时间可能被系统收回（iOS 的某个执行窗口到期，对位 Android onTimeout）：记原因、停循环、等待中。下一次触发照常再申请。
+    /// #1007：Android 的 FGS 是唯一来源，被收走就是事实；iOS 的租约是多个窗口的并集，到期信号又是在窗口外发出、异步送到的。
+    /// 所以停不停只在这里、按此刻的租约定：还有执行时间（例如信号在路上时用户回了前台）就不停；
+    /// 停的过程中（等在飞的那张退出）执行时间又回来了、还有触发进来，接着跑这些触发，不丢。
     public func onLeaseExpired() async {
+        guard !lease.hasExecutionTime else {
+            log("execution window closed, another one is still open: the loop keeps running")
+            return
+        }
         control.recordLeaseBlock(.expired)
         log("execution lease expired: stopping the loop; the next trigger may request it again")
         await stopCycle(.executionBlocked)
+        if lease.hasExecutionTime, !pendingTriggers.isEmpty, !cycleActive {
+            log("execution time came back while stopping: running \(pendingTriggers.map(\.rawValue)) again")
+            startCycle()
+        }
     }
 
     /// App 回到前台：一次触发（含对账）。
