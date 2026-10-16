@@ -27,7 +27,7 @@ struct RootView: View {
                     }
                 }
             case .backupStarted(let count):
-                BackupStartedScreen(count: count, asksNotification: app.asksNotificationAtOnboarding) { app.finishOnboardingStarted() }
+                BackupStartedScreen(count: count, asksNotification: app.asksNotificationAtOnboarding) { app.finishOnboardingStarted(enableBackgroundBackup: $0) }
             case .main:
                 MainTabs()
             }
@@ -36,6 +36,10 @@ struct RootView: View {
         .font(PPFont.body)
         .ppScreen()
         .onAppear(perform: applyLaunchRoute)
+        // 设置没存上 / 命令没执行成（#971 #972）：可见的失败反馈，点掉即清。
+        .alert(L.s("notice_title"), isPresented: Binding(get: { app.notice != nil }, set: { if !$0 { app.notice = nil } })) {
+            Button(L.s("ok_got_it")) {}
+        } message: { Text(app.notice?.message ?? "") }
     }
 
     private func applyLaunchRoute() {

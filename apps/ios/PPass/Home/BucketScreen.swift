@@ -94,7 +94,7 @@ struct BucketScreen: View {
         do {
             let list = try await app.backend.media.albums()
             known = app.backend.media.knownAlbums()
-            let saved = app.backend.media.savedScope()
+            let saved = try app.backend.media.savedScope() // 读失败走下面的 catch（显示错误 + 重试），不当成「从未保存」
             // 新相册默认不勾：已保存范围照旧，只勾当前还存在的。
             checked = (saved ?? []).intersection(Set(list.map(\.id)))
             albums = list
@@ -118,13 +118,14 @@ private struct AlbumCover: View {
     }
 }
 
-/// 首次选完相册：「N 张照片，正在回家」。Android 这里有「开启后台备份 / 不开启」两个等高按钮；
-/// iOS 本轮只做前台备份（IOS-17：不许用文案假装有后台），所以只留一个「好」。
+/// 首次选完相册：「N 张照片，正在回家」+「开启后台备份 / 不开启后台备份」两个等高按钮（对位 Android `BackupStartedScreen`，#982）。
+/// 后台备份默认关，由用户在这里选；iOS 的后台只能由系统挑时机，所以多一句不承诺的说明（#343：不写频率、不假装有后台）。
 struct BackupStartedScreen: View {
     let count: Int64
-    /// #975：点「好」时会先问一次通知授权——页面上先用一句话讲清用途（Android `notificationAskNote`）。
+    /// #975：点任一按钮时会先问一次通知授权——页面上先用一句话讲清用途（Android `notificationAskNote`）。
     var asksNotification = false
-    let onDone: () -> Void
+    /// 参数 = 用户是否选了「开启后台备份」。
+    let onDone: (_ enableBackgroundBackup: Bool) -> Void
 
     var body: some View {
         ScrollView {
@@ -134,6 +135,7 @@ struct BackupStartedScreen: View {
                 Text(L.f("backup_started_title", count.formatted())).font(PPFont.largeTitle)
                 Text(L.s("backup_started_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                 Text(L.s("idle_auto_hint")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                Text(L.s("background_backup_ios_note")).font(PPFont.subheadline).foregroundStyle(PPColor.ink40)
                 if asksNotification {
                     Text(L.s("onboarding_notification_note")).font(PPFont.subheadline).foregroundStyle(PPColor.ink40)
                 }
@@ -143,7 +145,11 @@ struct BackupStartedScreen: View {
         }
         .ppScreen()
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            PPButton(title: L.s("ok_got_it"), action: onDone).padding(24)
+            VStack(spacing: 12) {
+                PPButton(title: L.s("background_backup_enable")) { onDone(true) }
+                PPButton(title: L.s("background_backup_not_now"), kind: .quiet) { onDone(false) }
+            }
+            .padding(24)
         }
     }
 }

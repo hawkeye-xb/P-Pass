@@ -54,8 +54,9 @@ final class PairingWiringTests: XCTestCase {
     }
 
     private func makePairing(_ transport: ScriptedTransport, store: PairingStore,
-                             onPaired: @escaping (PairingRecord) -> Void = { _ in }) -> LivePairing {
-        LivePairing(transportFor: { _ in transport }, store: store, onboarded: { _ in false }, onPaired: onPaired,
+                             onboarded: @escaping (String) -> Bool = { _ in false },
+                             onPaired: @escaping (PairingRecord, Bool) -> Void = { _, _ in }) -> LivePairing {
+        LivePairing(transportFor: { _ in transport }, store: store, onboarded: onboarded, onPaired: onPaired,
                     onDisconnect: {}, pending: PendingUnpairStore(directory: dir, logger: LogSink()),
                     flusher: PendingUnpairFlusher(store: PendingUnpairStore(directory: dir, logger: LogSink()), now: { 0 }, logger: LogSink()) { _ in ScriptedTransport([:]) })
     }
@@ -100,7 +101,7 @@ final class PairingWiringTests: XCTestCase {
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
         ])
         var paired = 0
-        let outcome = await makePairing(transport, store: store) { _ in paired += 1 }.pair(code: link)
+        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1 }.pair(code: link)
         guard case .failed(let reason) = outcome else { return XCTFail("写盘失败应当配对失败，实际 \(outcome)") }
         XCTAssertTrue(reason.contains(L.s("pair_save_failed")), reason)
         XCTAssertEqual(paired, 0, "没落盘就不能触发 onPaired")
@@ -115,9 +116,41 @@ final class PairingWiringTests: XCTestCase {
             Methods.pairRequest: try .ok(PairAccepted(storageDeviceName: "Mac", pairingEpoch: "e9")),
         ])
         var paired = 0
-        let outcome = await makePairing(transport, store: store) { _ in paired += 1 }.pair(code: link)
+        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1 }.pair(code: link)
         guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
         XCTAssertEqual(paired, 0)
+    }
+
+    /// #982：「这台电脑以前连过吗」必须在 onPaired 把它标成连过**之前**定。之前顺序反了，firstTime 恒为 false，
+    /// 首次配对既进不了选相册、也进不了完成页（后台备份的选择因此不可达）。
+    /// 反证：把 `known` 改回在 save 之后求值，本条红。
+    func test_first_time_is_decided_before_onPaired_marks_the_desktop() async throws {
+        let store = PairingStore(root: dir)
+        var marked = Set<String>()
+        var knownSeenByOnPaired: Bool?
+        let transport = ScriptedTransport([
+            Methods.backupBegin: try .ok(EmptyParams()),
+            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
+        ])
+        let pairing = makePairing(transport, store: store, onboarded: { marked.contains($0) }) { record, known in
+            knownSeenByOnPaired = known
+            marked.insert(record.daemonNodeId) // 对位 LiveBackend.paired 里的 markOnboarded
+        }
+        let outcome = await pairing.pair(code: link)
+        XCTAssertEqual(outcome, .joined(firstTime: true), "新电脑：onPaired 标记之后也必须报 firstTime")
+        XCTAssertEqual(knownSeenByOnPaired, false)
+    }
+
+    func test_known_desktop_reports_not_first_time_and_tells_onPaired() async throws {
+        let store = PairingStore(root: dir)
+        var knownSeenByOnPaired: Bool?
+        let transport = ScriptedTransport([
+            Methods.backupBegin: try .ok(EmptyParams()),
+            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
+        ])
+        let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, known in knownSeenByOnPaired = known }.pair(code: link)
+        XCTAssertEqual(outcome, .joined(firstTime: false))
+        XCTAssertEqual(knownSeenByOnPaired, true)
     }
 
     func test_member_fast_path_saves_name_and_epoch_when_hello_succeeds() async throws {
@@ -127,7 +160,7 @@ final class PairingWiringTests: XCTestCase {
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
         ])
         var paired: PairingRecord?
-        let outcome = await makePairing(transport, store: store) { paired = $0 }.pair(code: link)
+        let outcome = await makePairing(transport, store: store) { r, _ in paired = r }.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: true))
         XCTAssertEqual(store.load()?.pairingEpoch, "e9")
         XCTAssertEqual(store.load()?.storageDeviceName, "Mac")
@@ -141,7 +174,7 @@ final class PairingWiringTests: XCTestCase {
         // backup.begin 通过、hello 连不上：落回正常配对（它自己的 hello 同样连不上 → unreachable），不能存空记录。
         let transport = ScriptedTransport([Methods.backupBegin: try .ok(EmptyParams()), Methods.hello: .fail])
         var paired = 0
-        let outcome = await makePairing(transport, store: store) { _ in paired += 1 }.pair(code: link)
+        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1 }.pair(code: link)
         guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
         XCTAssertNil(store.load(), "hello 失败不许存空 epoch / 空电脑名")
         XCTAssertEqual(paired, 0)

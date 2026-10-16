@@ -70,10 +70,7 @@ final class LiveBackend: @unchecked Sendable {
         // #975：必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding，写下 asked=false）。
         notificationAsk = OnboardingNotificationAsk(directory: dir, logger: logger)
         notificationAsk.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
-        // 全新安装默认开（此前引擎写死为开）；之后以用户在设置里的选择为准。
-        if !fm.fileExists(atPath: dir.appendingPathComponent(AutoBackupPrefs.fileName).path) {
-            try? autoPrefs.setEnabled(true); try? autoPrefs.setRequested(true)
-        }
+        // 全新安装后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）：首次配对完成页由用户选开不开。
         scheduler = PlannedWakeScheduler(directory: dir, submitter: BGTaskSubmitter(), logger: logger)
 
         let plane = self.plane
@@ -85,7 +82,13 @@ final class LiveBackend: @unchecked Sendable {
         let delivery = FlowDeliveryPort(provider: FfiBlobProvider(provider: provider), currentEpoch: epoch, desktop: desktop,
                                         push: ControlPlanePush(transport: CurrentPeerTransport(plane: plane, store: pairingStore)), logger: logger, pairingLoss: pairingLoss)
         let media = self.media
-        let scope: @Sendable () -> Set<String> = { media.savedScope() ?? [] }
+        // 读盘失败与「从未保存」都给引擎空范围（一张都不备份），但读失败要留日志，不能和从未保存混为一谈（#971）。
+        let scope: @Sendable () -> Set<String> = {
+            do { return try media.savedScope() ?? [] } catch {
+                logger.log("backup-scope: unreadable, engine sees an empty scope: \(error)")
+                return []
+            }
+        }
         let settings = self.settings
         let autoPrefs = self.autoPrefs
         let network = self.network
@@ -176,7 +179,7 @@ final class LiveBackend: @unchecked Sendable {
     /// 对外的端口集合（界面只认这几个 protocol）。
     func ports() -> Backend {
         let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
-                                  onPaired: { [weak self] record in self?.paired(record) },
+                                  onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) },
                                   onDisconnect: { [weak self] in await self?.disconnect() },
                                   pending: pendingUnpair, flusher: unpairFlusher)
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
@@ -191,7 +194,7 @@ final class LiveBackend: @unchecked Sendable {
                        engine: LiveEngineAdapter(backend: self))
     }
 
-    private func paired(_ record: PairingRecord) {
+    private func paired(_ record: PairingRecord, knownDesktop: Bool) {
         // #956：重新配对同一台电脑，先删它的待撤销条目，否则后台重试会把刚建立的新配对撤掉。
         do { try pendingUnpair.remove(daemonNodeId: record.daemonNodeId) }
         catch { logger.log("unpair-outbox: remove on re-pair failed: \(error)") }
@@ -199,8 +202,10 @@ final class LiveBackend: @unchecked Sendable {
         // #935：换了一台电脑就清旧账（已确认计数不能算给新电脑）；同一台重新配对不动。失败要暴露，不静默沿用旧账。
         do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
         catch { logger.log("adoptDesktop failed: \(error)") }
-        try? onboarded.markOnboarded(record.daemonNodeId)
-        if autoPrefs.requested() { try? autoPrefs.setEnabled(true) } // 断开时只停生产者、留意图（MOB-93）：重新配对按意图恢复
+        do { try onboarded.markOnboarded(record.daemonNodeId) } catch { logger.log("onboarded: mark failed: \(error)") }
+        // 后台备份意图（#982，对位 Android）：断开时只停生产者、留意图（MOB-93）——连回以前连过的电脑按意图恢复；
+        // 换新电脑 = 新的信任关系，清意图，由完成页让用户重新选。写失败要暴露，不静默沿用旧意图。
+        do { try autoPrefs.applyOnPairing(knownDesktop: knownDesktop) } catch { logger.log("auto-backup prefs: apply on pairing failed: \(error)") }
         mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）
         Task { _ = await engine.trigger(.pairingRepaired) }
     }
@@ -385,23 +390,40 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
 
     func autoBackup() -> Bool { backend.autoPrefs.enabled() }
-    func setAutoBackup(_ on: Bool) {
-        try? backend.autoPrefs.setEnabled(on)
-        try? backend.autoPrefs.setRequested(on)
+    func setAutoBackup(_ on: Bool) throws {
+        do {
+            try backend.autoPrefs.setEnabled(on)
+            try backend.autoPrefs.setRequested(on)
+        } catch {
+            backend.logger.log("auto-backup prefs: write failed (on=\(on)): \(error)")
+            throw error
+        }
         Task { await backend.refreshFacts() } // 只改策略，不凭空起一轮（Android 同：开关只存偏好）
     }
 
-    func remainingSnapshot() async -> RemainingSnapshot? { try? await backend.engine.remainingSnapshot() }
-
-    func cancelRemaining(_ snapshot: RemainingSnapshot) async -> Int? {
-        let n = try? await backend.engine.cancelRemaining(snapshot)
-        await backend.refreshFacts()
-        return n ?? nil
+    /// 用户命令（#972）：失败记日志后抛给界面；成功与否都先刷新首页事实再返回。「状态不允许」是返回值（nil），不是错误。
+    private func command<T>(_ name: String, _ body: () async throws -> T) async throws -> T {
+        do {
+            let result = try await body()
+            await backend.refreshFacts()
+            return result
+        } catch {
+            backend.logger.log("command \(name) failed: \(error)")
+            await backend.refreshFacts()
+            throw error
+        }
     }
 
-    func restoreSkipped() async {
-        _ = try? await backend.engine.restoreSkipped()
-        await backend.refreshFacts()
+    func remainingSnapshot() async throws -> RemainingSnapshot {
+        try await command("remainingSnapshot") { try await backend.engine.remainingSnapshot() }
+    }
+
+    func cancelRemaining(_ snapshot: RemainingSnapshot) async throws -> Int? {
+        try await command("cancelRemaining") { try await backend.engine.cancelRemaining(snapshot) }
+    }
+
+    func restoreSkipped() async throws {
+        _ = try await command("restoreSkipped") { try await backend.engine.restoreSkipped() }
     }
 
     func acknowledgeMissingSource() {
@@ -409,8 +431,11 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
 
     func notifyOnFailure() -> Bool { backend.notifyPrefs.enabled() }
-    func setNotifyOnFailure(_ on: Bool) {
-        do { try backend.notifyPrefs.setEnabled(on) } catch { backend.logger.log("notify-prefs: write failed: \(error)") }
+    func setNotifyOnFailure(_ on: Bool) throws {
+        do { try backend.notifyPrefs.setEnabled(on) } catch {
+            backend.logger.log("notify-prefs: write failed: \(error)")
+            throw error
+        }
     }
 
     private let lastLoggedAuth = NSLock()
@@ -449,8 +474,11 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
 
     func wifiOnly() -> Bool { backend.settings.wifiOnly() }
-    func setWifiOnly(_ on: Bool) {
-        try? backend.settings.save(wifiOnly: on)
+    func setWifiOnly(_ on: Bool) throws {
+        do { try backend.settings.save(wifiOnly: on) } catch {
+            backend.logger.log("backup-settings: write failed (wifiOnly=\(on)): \(error)")
+            throw error
+        }
         Task {
             // 只有「正因为 Wi-Fi 在等」时放宽条件才有事可做：叫醒一轮接着传；其余情况不起轮。
             if !on, await backend.engine.view.waitReason == .wifi { _ = await backend.engine.trigger(.manual) }
@@ -463,9 +491,8 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
         await backend.refreshFacts()
     }
 
-    func retryFailed() async {
-        _ = try? await backend.engine.retryFailed()
-        await backend.refreshFacts()
+    func retryFailed() async throws {
+        _ = try await command("retryFailed") { try await backend.engine.retryFailed() }
     }
 }
 

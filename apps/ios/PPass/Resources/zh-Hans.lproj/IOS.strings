@@ -49,7 +49,7 @@
 "state_waiting_execution_blocked" = "离开 P-Pass 后系统暂停了备份。回到 P-Pass 就会接着传。";
 "state_waiting_original_unavailable" = "有的照片原图在 iCloud 里，联网后会先下载再备份。";
 
-/* 首次选完相册的确认按钮（Android 这里是「开启后台备份 / 不开启」，iOS 本轮无后台）。 */
+/* 失败提示框的确认按钮（#971）。完成页现在用 Android 的「开启后台备份 / 不开启后台备份」（#982）。 */
 "ok_got_it" = "好的";
 /* Android 原句说「默认连 Wi-Fi 且电量不低时自动进行」，iOS 本轮是打开 App 时备份。 */
 "bucket_summary" = "将备份 %1$@ 张 · 打开 P-Pass 时自动备份";
@@ -65,3 +65,13 @@
 
 /* 配对成功但 pairing.json 写不进去（#969）：不能让用户进入「已配对」却重启即丢。 */
 "pair_save_failed" = "配对信息没能保存到手机上，请检查存储空间后重新扫码。";
+
+/* #971 / #972：设置没存上、命令没执行成时的可见反馈。Android 这些路径要么崩溃要么静默吞掉（Android 侧另开 issue），没有可对位的文案。 */
+"notice_title" = "没能完成";
+"setting_save_failed" = "设置没能保存到手机上，已恢复为原来的值。请检查存储空间后再试。";
+"scope_save_failed" = "相册选择没能保存到手机上，请检查存储空间后再试。";
+"command_failed" = "操作没能完成，请稍后再试。";
+"backup_scope_unreadable" = "读不到已保存的选择";
+
+/* #982：首次选完相册的完成页。Android 在这里申请电池白名单；iOS 没有对应物，后台只能由系统挑时机（#343：不写频率、不假装能保证）。 */
+"background_backup_ios_note" = "开启后，离开 P-Pass 时 iOS 可能会找机会接着备份；是否执行、何时执行由系统决定，不保证。";

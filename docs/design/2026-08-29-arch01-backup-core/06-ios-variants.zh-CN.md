@@ -239,6 +239,24 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 - **有意不同**：Android 读失败是「沿用旧值、用户看不到」，iOS 改为**明示读不到**（审计 #973 的方向：失败要暴露）；这条 Android 行为的差异另开 issue 跟踪，本批不改 Android。
 - **测试**：`OrderCountsTests`（读失败抛出而不是 0）、PPassTests 的 NotificationAndCountsTests（模拟器上跑；反证组合：引擎视图 pending=0、范围已知、计数不可读）。
 
+### 后台备份默认值、首次配对完成页与「仅 Wi‑Fi」确认（#982）
+
+- **Android**：`AutoBackupPrefs.autoEnabled` 默认 false；首次配对新电脑先 `setRequested(false)`，完成页给「开启后台备份 / 不开启后台备份」两个按钮由用户选；连回以前连过的电脑按留下的意图恢复；关闭「仅 Wi‑Fi」先弹确认框（移动网络会消耗流量），确认后才保存。
+- **iOS 对位**：全新安装后台备份默认**关**（删掉了 `LiveBackend.init` 里的默认置开）；`AutoBackupPrefs.applyOnPairing(knownDesktop:)`（PPassCore）——新电脑清意图、老电脑按意图恢复；完成页换成两个等高按钮，两个按钮都先走通知询问再继续；关「仅 Wi‑Fi」用 `.alert` 确认，点取消不写盘。「连没连过」改在 `onPaired` 标记**之前**判定（此前顺序反了，`firstTime` 恒为 false，首次配对进不了选相册与完成页）。
+- **平台差异（有意不同，不是遗漏）**：
+  1. **没有 App 内申请后台执行的系统框**。Android「开启」时要去申请电池白名单，被拒则挂起生产者、授权回来再恢复；iOS 的「后台 App 刷新」只能用户自己在系统设置里开，App 弹不出申请。所以 iOS「开启」直接写偏好、**不因后台刷新关着而挂起生产者**（否则还得补一条「授权回来再恢复」的路径）；关着的情况由首页告示说明（`BackupPromise.refreshOff` / `refreshRestricted`）。
+  2. **文案按 #343 只说能兑现的**：完成页多一句 `background_backup_ios_note`（iOS 可能找机会接着备份，是否执行、何时执行由系统决定，不保证），不写频率、不假装有后台。按钮文案沿用 Android 的 `background_backup_enable` / `background_backup_not_now`。
+  3. 前台备份不受这个开关影响：`Conditions.autoBackupEnabled` 为 false 时，`userPresent` 的触发（回前台 / 手动 / 选相册 / 前台相册变化）照常起轮（`FlowTypes.swift` `.disabled` 判定只拦非用户在场的触发）。
+- **未对齐、另开 issue（#1019）**：Android 在完成页（`finishOnboarding`）才 `markOnboarded`，iOS 仍在配对成功时（`LiveBackend.paired`）就标——配对后、选完相册前被杀进程，下次再配这台会被当成老电脑跳过选相册。
+- **测试**：PPassCore 的 `PrefsTests`（老 / 新电脑 / 写失败）；PPassTests 的 PairingWiringTests（firstTime 在 onPaired 之前判定，模拟器上跑）与 SettingsFeedbackTests（Wi‑Fi 确认、默认关、完成页选择）。
+
+### 设置写盘失败与用户命令出错的反馈（#971 / #972）
+
+- **Android**：`BackupSettings` / `AutoBackupPrefs` / `NotifyOnFailurePrefs` 写失败是 `check(rename)` 抛出，Wi‑Fi 确认框的回调没有 catch；`BackupUiStateHolder.command{}` 只有 try/finally，`requestCancelRemaining` 用 `runCatching{…}.getOrNull()` 吞掉。Android 没有可对位的「失败反馈」——要么崩溃要么静默。
+- **iOS**：端口 setter / 命令改为 `throws`，`AppModel` 只在写成功时更新显示值；失败 → 记日志、`refresh()` 回到盘上的真实值、弹 alert（`setting_save_failed` / `scope_save_failed` / `command_failed`，iOS 独有文案放 `IOS.strings`）。命令里「状态不允许」（`cancelRemaining` 返回 nil）与「执行出错」（抛出）分开：前者只刷新、那一行随状态收起（Android 同），后者弹提示。相册范围读失败与「从未保存」区分（`MediaLibrary.savedScope` 抛出，设置行显示 `backup_scope_unreadable`，引擎侧记日志后按空范围）。
+- **有意不同**：这是 iOS 比 Android 更严的一侧（审计方向「失败要暴露」）；Android 的崩溃 / 吞错另开 issue（#1020）跟踪，本批不改 Android。
+- **测试**：`SettingsFeedbackTests`（写失败回滚 + 提示、命令出错提示、状态不允许不报错、范围读失败 ≠ 从未保存）。
+
 ### Android 专属、不移植
 
 | 来源 | 为什么 iOS 不需要 |

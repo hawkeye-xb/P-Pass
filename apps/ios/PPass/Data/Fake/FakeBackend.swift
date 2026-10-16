@@ -52,11 +52,11 @@ final class FakeMediaLibrary: MediaLibrary {
 
     func requestAccess() async -> MediaAccess { access() }
     func albums() async throws -> [AlbumBucket] { all }
-    func savedScope() -> Set<String>? { scope }
+    func savedScope() throws -> Set<String>? { scope }
     func knownAlbums() -> Set<String> { known }
     func existingAlbumIds() async -> Set<String>? { access() == .full ? Set(all.map(\.id)) : nil }
 
-    func saveScope(_ selected: Set<String>, known: Set<String>) async {
+    func saveScope(_ selected: Set<String>, known: Set<String>) async throws {
         scope = selected
         self.known = known
     }
@@ -99,6 +99,8 @@ final class FakePairing: PairingService {
         current = .notPaired
     }
 }
+
+enum FakeBackendError: Error { case demoHasNoLedger }
 
 final class FakeEngine: BackupEngine {
     private let scenario: FakeScenario
@@ -145,19 +147,19 @@ final class FakeEngine: BackupEngine {
 
     private var auto = true
     func autoBackup() -> Bool { auto }
-    func setAutoBackup(_ on: Bool) { auto = on; listeners.forEach { $0() } }
+    func setAutoBackup(_ on: Bool) throws { auto = on; listeners.forEach { $0() } }
     private var wifi = true
     func wifiOnly() -> Bool { wifi }
-    func setWifiOnly(_ on: Bool) { wifi = on; listeners.forEach { $0() } }
+    func setWifiOnly(_ on: Bool) throws { wifi = on; listeners.forEach { $0() } }
     func wake() async {}
-    func retryFailed() async {}
-    func remainingSnapshot() async -> RemainingSnapshot? { nil }
-    func cancelRemaining(_ snapshot: RemainingSnapshot) async -> Int? { nil }
-    func restoreSkipped() async {}
+    func retryFailed() async throws {}
+    func remainingSnapshot() async throws -> RemainingSnapshot { throw FakeBackendError.demoHasNoLedger }
+    func cancelRemaining(_ snapshot: RemainingSnapshot) async throws -> Int? { nil }
+    func restoreSkipped() async throws {}
     func acknowledgeMissingSource() {}
     private var notify = true
     func notifyOnFailure() -> Bool { notify }
-    func setNotifyOnFailure(_ on: Bool) { notify = on; listeners.forEach { $0() } }
+    func setNotifyOnFailure(_ on: Bool) throws { notify = on; listeners.forEach { $0() } }
     var fakeAuthorization: NotificationAuthorization = .authorized
     func notificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }
     func requestNotificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }

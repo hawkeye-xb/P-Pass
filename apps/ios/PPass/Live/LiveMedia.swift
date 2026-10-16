@@ -51,21 +51,34 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         }
     }
 
-    func savedScope() -> Set<String>? { try? scopeStore().selectedBucketIds() }
-    func knownAlbums() -> Set<String> { (try? scopeStore().knownBucketIds()) ?? [] }
+    func savedScope() throws -> Set<String>? { try scopeStore().selectedBucketIds() }
+    func knownAlbums() -> Set<String> {
+        do { return try scopeStore().knownBucketIds() ?? [] } catch {
+            AppLog.log("backup-scope: known albums unreadable: \(error)")
+            return []
+        }
+    }
 
     func existingAlbumIds() async -> Set<String>? {
         guard access() == .full else { return nil }
         return Set(catalog.listAlbums().map(\.id))
     }
 
-    func saveScope(_ selected: Set<String>, known: Set<String>) async {
-        try? scopeStore().saveScope(selected: selected, allCurrent: known)
+    func saveScope(_ selected: Set<String>, known: Set<String>) async throws {
+        do { try scopeStore().saveScope(selected: selected, allCurrent: known) } catch {
+            AppLog.log("backup-scope: save failed: \(error)")
+            throw error
+        }
     }
 
     /// 范围内总数 = 所选相册的**并集**去重（一张照片可以在多个相册里，不能按相册相加）。
     func inScopeTotal() -> Int64? {
-        guard access() == .full, let selected = savedScope() else { return nil }
+        guard access() == .full else { return nil }
+        let selected: Set<String>
+        do { guard let saved = try savedScope() else { return nil }; selected = saved } catch {
+            AppLog.log("backup-scope: unreadable, in-scope total unknown: \(error)")
+            return nil
+        }
         return Int64(AlbumScope(library: PhotoKitLibrary()).count(inAlbums: selected))
     }
 }
