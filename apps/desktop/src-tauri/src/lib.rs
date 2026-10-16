@@ -1153,17 +1153,17 @@ fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
 ///
 /// 只写文件、绝不 `bootout`/`bootstrap`：`RunAtLoad=true` 的 job 一被 bootstrap，
 /// launchd 会立刻再拉起一个实例（被 single-instance 顶掉），是一次无意义的起停。
+///
+/// DESK-72 (#1012)：怎么登记是平台知识（macOS 写 LaunchAgent，Windows 写 HKCU
+/// `Run` 值，没有登录项的平台什么都不做），这里只调平台能力。
 fn register_shell_login_item() {
     use platform::PlatformAdapter as _;
-    if platform::adapter().shell_agent_label().is_none() {
-        return; // 本平台没有服务管理器
-    }
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    if let Err(e) = platform::adapter().register_shell_agent(&exe) {
-        // 开发构建 / 从 dmg 直跑（非稳定安装位置）被拒是**预期**的——不当错误刷屏。
-        eprintln!("#616: 壳登录项未登记（{e}）——非 /Applications 安装时属预期");
+    if let Err(e) = platform::adapter().register_shell_login_item(&exe) {
+        // 开发构建 / 从 dmg 或下载目录直跑（非正式安装位置）被拒是**预期**的——不当错误刷屏。
+        eprintln!("#616: 壳登录项未登记（{e}）——非正式安装位置时属预期");
     }
 }
 
@@ -3855,8 +3855,12 @@ mod tests {
             .expect("register_shell_login_item 缺失");
         let body: String = src[f..].chars().take(1200).collect();
         assert!(
-            body.contains("shell_agent_label()"),
-            "没有服务管理器的平台要直接跳过"
+            body.contains("platform::adapter().register_shell_login_item(&exe)"),
+            "DESK-72：怎么登记交给平台层（Windows 也要登记，不能借 launchd 专用的 shell_agent_label 判断）"
+        );
+        assert!(
+            !body.contains("shell_agent_label()"),
+            "DESK-72：shell_agent_label 是 launchd 换壳专用，用它当闸门会让 Windows 永远不登记"
         );
         assert!(
             !body.contains("bootstrap"),

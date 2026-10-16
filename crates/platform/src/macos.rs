@@ -539,6 +539,11 @@ impl PlatformAdapter for MacosAdapter {
         Ok(())
     }
 
+    /// DESK-72 (#1012)：登录项就是那份 `RunAtLoad=true` 的壳 LaunchAgent。
+    fn register_shell_login_item(&self, exec: &Path) -> Result<()> {
+        self.register_shell_agent(exec)
+    }
+
     fn shell_agent_registered_exec(&self) -> Result<Option<PathBuf>> {
         let path = shell_agent_plist_path();
         match std::fs::read_to_string(&path) {

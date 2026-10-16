@@ -20,9 +20,33 @@ use std::path::{Path, PathBuf};
 
 use crate::{AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Result, ServiceMode};
 
-/// 老版本（#957 之前）的登记方式：HKCU Run 值。现在只读它、删它（迁移），不再写。
+/// 老版本（#957 之前）daemon 的登记方式：HKCU Run 值。现在只读它、删它（迁移），不再写。
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "P-Pass";
+
+/// DESK-72 (#1012)：桌面壳的登录项，同一个 Run 键下的另一个值。
+/// 不能叫 `P-Pass`：那是上面 daemon 的老登记，迁移逻辑见到就删。
+/// 卸载时由 NSIS 钩子（`NSIS_HOOK_PREUNINSTALL`）删掉。
+const SHELL_RUN_VALUE: &str = "P-Pass Desktop";
+
+/// Run 值里的命令行：路径带引号（安装目录可能含空格）。
+fn shell_run_command(exec: &Path) -> String {
+    format!("\"{}\"", exec.display())
+}
+
+/// 幂等写 `HKCU\<key>` 下的字符串值：内容一致就不写。
+/// 只碰这一个值——用户在「启动应用」里的开关记在 `StartupApproved\Run`，不动它。
+fn write_run_value(key: &str, name: &str, command: &str) -> Result<()> {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE};
+    let (run, _) = winreg::RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey_with_flags(key, KEY_QUERY_VALUE | KEY_SET_VALUE)
+        .map_err(io_err("open HKCU Run key"))?;
+    if run.get_value::<String, _>(name).ok().as_deref() == Some(command) {
+        return Ok(());
+    }
+    run.set_value(name, &command)
+        .map_err(io_err("write Run value"))
+}
 
 /// DESK-60 (#877)：NSIS（Tauri 模板，currentUser 模式）的卸载登记。
 /// `InstallLocation` 是带引号的安装目录。
@@ -488,6 +512,19 @@ impl PlatformAdapter for WindowsAdapter {
 
     fn install_location_hint_key(&self) -> &'static str {
         "ui.install_location_required_win"
+    }
+
+    /// DESK-72 (#1012)：HKCU `Run` 值——Windows 上 GUI 程序登录自启的标准做法。
+    /// 免管理员；出现在任务管理器「启动应用」里，用户可以自己关；没有崩溃复活，
+    /// 托盘「退出」就是真退出（与 macOS 壳的 LaunchAgent 不挂 KeepAlive 同一语义）。
+    fn register_shell_login_item(&self, exec: &Path) -> Result<()> {
+        if !self.is_install_location(exec) {
+            return Err(PlatformError::Failed {
+                action: "register_shell_login_item outside the install location",
+                detail: exec.display().to_string(),
+            });
+        }
+        write_run_value(RUN_KEY, SHELL_RUN_VALUE, &shell_run_command(exec))
     }
 
     /// DESK-60 (#877)：卸载程序删掉登记（现在是计划任务，见 NSIS 钩子），配置
@@ -2383,6 +2420,61 @@ mod desk68_install_location_tests {
         assert!(exe.is_file(), "{}", exe.display());
         assert!(WindowsAdapter.is_install_location(&exe));
         assert!(!WindowsAdapter.is_install_location(&dir.join("sub").join("p-pass-desktop.exe")));
+    }
+}
+
+/// DESK-72 (#1012)：壳的登录项。
+#[cfg(test)]
+mod desk72_shell_login_item_tests {
+    use super::*;
+
+    /// 带空格的安装目录：命令行带引号，读回来还是原路径。
+    #[test]
+    fn the_run_command_quotes_the_path_and_reads_back() {
+        let exe = Path::new(r"C:\Users\A B\AppData\Local\P-Pass\p-pass-desktop.exe");
+        let cmd = shell_run_command(exe);
+        assert_eq!(
+            cmd,
+            r#""C:\Users\A B\AppData\Local\P-Pass\p-pass-desktop.exe""#
+        );
+        assert_eq!(exec_from_run_value(&cmd).as_deref(), Some(exe));
+    }
+
+    /// 不能和 daemon 的老登记同名：迁移逻辑见到 `P-Pass` 就删。
+    #[test]
+    fn the_shell_value_never_collides_with_the_legacy_daemon_value() {
+        assert_ne!(SHELL_RUN_VALUE, RUN_VALUE);
+    }
+
+    /// 解压副本不登记，也不碰 Run 键。
+    #[test]
+    fn a_copy_outside_the_install_location_is_refused() {
+        let exe = std::env::temp_dir()
+            .join("P-Pass")
+            .join("p-pass-desktop.exe");
+        assert!(WindowsAdapter.register_shell_login_item(&exe).is_err());
+    }
+
+    /// 幂等写：第二次内容一致不报错，内容变了跟着改。写在一次性的测试键下，
+    /// 不碰真实的 Run 键。
+    #[test]
+    fn writing_the_run_value_is_idempotent_and_follows_a_new_path() {
+        let key = format!(r"Software\P-Pass-test\desk72-{}", std::process::id());
+        let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+        let read = || -> String {
+            hkcu.open_subkey(&key)
+                .unwrap()
+                .get_value(SHELL_RUN_VALUE)
+                .unwrap()
+        };
+
+        write_run_value(&key, SHELL_RUN_VALUE, r#""C:\a\p-pass-desktop.exe""#).unwrap();
+        write_run_value(&key, SHELL_RUN_VALUE, r#""C:\a\p-pass-desktop.exe""#).unwrap();
+        assert_eq!(read(), r#""C:\a\p-pass-desktop.exe""#);
+        write_run_value(&key, SHELL_RUN_VALUE, r#""C:\b\p-pass-desktop.exe""#).unwrap();
+        assert_eq!(read(), r#""C:\b\p-pass-desktop.exe""#);
+
+        hkcu.delete_subkey_all(&key).unwrap();
     }
 }
 
