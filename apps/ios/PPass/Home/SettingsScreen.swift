@@ -131,9 +131,13 @@ struct SettingsScreen: View {
             Toggle(L.s("setting_wifi_only"), isOn: Binding(get: { app.wifiOnly }, set: { app.setWifiOnly($0) }))
                 .font(PPFont.body).tint(PPColor.safe)
             VStack(alignment: .leading, spacing: 2) {
-                Toggle(L.s("rule_notify"), isOn: Binding(get: { app.notifyOnFailure }, set: { app.setNotifyOnFailure($0) }))
+                Toggle(L.s("rule_notify"), isOn: Binding(get: { app.notifyToggleOn }, set: { app.setNotifyToggle($0) }))
                     .font(PPFont.body).tint(PPColor.safe)
                 Text(L.s("rule_notify_hint")).font(PPFont.footnote).foregroundStyle(PPColor.ink40)
+                if app.notificationAuthorization == .denied {
+                    // iOS 系统框只弹一次，被拒之后只能去系统设置打开（06-ios-variants）。
+                    Text(L.s("rule_notify_denied_hint")).font(PPFont.footnote).foregroundStyle(PPColor.ink40)
+                }
             }
         }
         Section {

@@ -32,6 +32,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var wifiOnly = true
     @Published private(set) var autoBackup = true
     @Published private(set) var notifyOnFailure = true
+    /// #975：系统通知授权的真实状态。开关显示 = 偏好 且 已授权（Android MainActivity 同口径）。
+    @Published private(set) var notificationAuthorization: NotificationAuthorization = .notDetermined
+    private var notificationRequestInFlight = false
+    /// onboarding 完成页要不要显示「接下来会问是否允许通知」。
+    @Published private(set) var asksNotificationAtOnboarding = false
     /// 当前这张字节上一次前进的时刻（用来判「N 秒没有新数据」）。
     private(set) var transferMark: (orderId: Int64, bytes: Int64, at: Date)?
 
@@ -41,6 +46,7 @@ final class AppModel: ObservableObject {
         phase = status == .notPaired ? .onboarding : .main
         refresh()
         refreshExistingAlbums()
+        refreshNotificationAuthorization()
         backend.engine.observe { [weak self] in Task { @MainActor in self?.refresh() } }
     }
 
@@ -48,6 +54,48 @@ final class AppModel: ObservableObject {
     func sceneBecameActive() {
         refresh()
         refreshExistingAlbums()
+        refreshNotificationAuthorization() // 用户可能刚从系统设置里改了通知授权回来
+    }
+
+    func refreshNotificationAuthorization() {
+        Task {
+            notificationAuthorization = await backend.engine.notificationAuthorization()
+            asksNotificationAtOnboarding = await backend.engine.shouldAskNotificationAtOnboarding()
+        }
+    }
+
+    var notifyToggleOn: Bool { NotifyToggle.displayValue(preference: notifyOnFailure, authorization: notificationAuthorization) }
+
+    /// 设置页开关。关：只写偏好。开：已授权直接写；没问过就弹系统框、结果写回偏好；已被拒绝（iOS 不会再弹）→ 跳系统设置。
+    func setNotifyToggle(_ on: Bool) {
+        guard on else { backend.engine.setNotifyOnFailure(false); notifyOnFailure = false; return }
+        Task {
+            let auth = await backend.engine.notificationAuthorization()
+            notificationAuthorization = auth
+            switch NotifyToggle.turnOnAction(authorization: auth) {
+            case .enable:
+                backend.engine.setNotifyOnFailure(true); notifyOnFailure = true
+            case .requestAuthorization:
+                guard !notificationRequestInFlight else { return }
+                notificationRequestInFlight = true
+                let after = await backend.engine.requestNotificationAuthorization()
+                notificationRequestInFlight = false
+                notificationAuthorization = after
+                backend.engine.setNotifyOnFailure(after == .authorized); notifyOnFailure = after == .authorized
+            case .openSystemSettings:
+                backend.engine.openNotificationSettings()
+            }
+        }
+    }
+
+    /// onboarding 完成页点「好」：该问通知就先问一次（结果同步回开关），再进首页。
+    func finishOnboardingStarted() {
+        Task {
+            await backend.engine.askNotificationAtOnboarding()
+            refresh()
+            refreshNotificationAuthorization()
+            phase = .main
+        }
     }
 
     func refreshExistingAlbums() {
@@ -70,7 +118,6 @@ final class AppModel: ObservableObject {
         promise = backend.engine.promise().map { n in DiagText.resolve(n.key, vars: n.vars) ?? n.key }
     }
 
-    func setNotifyOnFailure(_ on: Bool) { backend.engine.setNotifyOnFailure(on); notifyOnFailure = on }
 
     /// 「取消剩余 N 张」行的 N（Android cancelRemainingRowCount）：只在已暂停 / 等待中、配对没失效、确有剩余时出现。
     var cancelRemainingCount: Int64? {
@@ -128,6 +175,7 @@ final class AppModel: ObservableObject {
     /// 配对成功后的去向：以前连过这台电脑 → 首页；否则去选相册（Android 同语义）。
     func paired(firstTime: Bool) {
         refresh()
+        refreshNotificationAuthorization()
         phase = firstTime ? .chooseAlbums : .main
     }
 

@@ -122,6 +122,8 @@ private struct AlbumCover: View {
 /// iOS 本轮只做前台备份（IOS-17：不许用文案假装有后台），所以只留一个「好」。
 struct BackupStartedScreen: View {
     let count: Int64
+    /// #975：点「好」时会先问一次通知授权——页面上先用一句话讲清用途（Android `notificationAskNote`）。
+    var asksNotification = false
     let onDone: () -> Void
 
     var body: some View {
@@ -132,6 +134,9 @@ struct BackupStartedScreen: View {
                 Text(L.f("backup_started_title", count.formatted())).font(PPFont.largeTitle)
                 Text(L.s("backup_started_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
                 Text(L.s("idle_auto_hint")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                if asksNotification {
+                    Text(L.s("onboarding_notification_note")).font(PPFont.subheadline).foregroundStyle(PPColor.ink40)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)

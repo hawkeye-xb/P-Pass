@@ -6,6 +6,7 @@
 // | AutoBackupPrefs           | AutoBackupPrefs.kt          | auto_backup_prefs.json        | autoEnabled=false，userRequested=nil |
 // | BackupSettings            | BackupSettings.kt           | backup-settings.json          | wifiOnly=true            |
 // | NotifyOnFailurePrefs      | NotifyOnFailurePrefs.kt     | notify_on_failure_prefs.json  | enabled=true             |
+// | OnboardingNotificationAsk | OnboardingNotificationAsk.kt | onboarding_notification_ask.json | 缺失=不问，损坏=已问过 |
 // | OnboardedDesktopsStore    | OnboardedDesktopsStore.kt   | onboarded_desktops.json       | 空集（失败关闭：按新电脑走） |
 // | SentinelStore             | SentinelStore.kt            | sentinel.json                 | 全 0                     |
 // | BackupScopeStore          | BackupScopeStore.kt         | backup_scope[-<nodeId>].json  | nil（= 一张都不在范围内）  |

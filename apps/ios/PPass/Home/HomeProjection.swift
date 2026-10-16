@@ -64,6 +64,9 @@ struct FlowFacts: Equatable {
     var skippedByUser: Int64 = 0
     /// 已「知道了」的源已删除张数（设置卡里的账目行）；未确认的在 missingSourceUnacknowledged。
     var missingSourceAcknowledged: Int64 = 0
+    /// #973：账本计数是否读到了。false = 读库失败，上面的 confirmed / failed / unfinished / lastSuccessAt 等都是占位 0，
+    /// 不是真值——任何「都存好了」「还没成功过」的结论都不许基于它们（对位 Android：读库失败不会变成 0）。
+    var countsReadable = true
 
     var state: GlobalState { view?.state ?? .idle }
     var waitReason: WaitReason? { state == .waiting ? view?.waitReason : nil }
@@ -94,7 +97,7 @@ enum BackupUiState: Equatable {
 
 enum StatusLine: Equatable { case ready, working, pending(Int64), allSafe, noAlbums, trouble, waiting, paused }
 enum HeroAction: Equatable { case pause, resume }
-enum HeroRender: Equatable { case accessBlocked, unreadable, unreconciled, triplet }
+enum HeroRender: Equatable { case accessBlocked, countsUnreadable, unreadable, unreconciled, triplet }
 
 enum LastSuccess: Equatable {
     case never, justNow
@@ -124,7 +127,7 @@ enum HomeProjection {
 
     /// 范围从未保存或 n 读不到 → nil（英雄区说「读不到」）。
     static func triplet(_ f: FlowFacts, scopeSaved: Bool) -> BackupTriplet? {
-        guard scopeSaved, let n = f.inScopeTotal else { return nil }
+        guard f.countsReadable, scopeSaved, let n = f.inScopeTotal else { return nil }
         return tripletOf(n: n, confirmed: f.done, lastSuccessAt: f.lastSuccessAt, hasFailedNeedsUser: f.failed > 0,
                          pausedByUser: f.paused, remaining: f.remaining, skippedByUser: f.skippedByUser)
     }
@@ -146,12 +149,15 @@ enum HomeProjection {
 
     private static func idleState(_ f: FlowFacts, noAlbums: Bool) -> BackupUiState {
         if noAlbums { return .noAlbums }
+        // #973：计数读不到时既不能出 Trouble（那是据 0 判断的），更不能出 AllSafe；中性的 idle，由英雄区说「读不到」。
+        if !f.countsReadable { return .idle }
         if f.failed > 0 { return .trouble("flow.failed=\(f.failed)") }
         if allDone(f) { return .allSafe(ingested: Int(f.done)) }
         return .idle
     }
 
     static func allDone(_ f: FlowFacts) -> Bool {
+        guard f.countsReadable else { return false }
         if let k = f.remaining, f.inScopeTotal != nil { return k == 0 && f.done > 0 }
         if f.confirmed <= 0 || f.unfinished != 0 { return false }
         if let k = f.remaining { return k == 0 }
@@ -196,8 +202,9 @@ enum HomeProjection {
     }
 
     /// 规则 H：权限不全 → 引导卡顶替整块数字（MOB-02/MOB-94：不显示任何数，就不可能盖「都存好了」的章）。
-    static func heroRender(_ access: MediaAccess, _ t: BackupTriplet?) -> HeroRender {
+    static func heroRender(_ access: MediaAccess, _ t: BackupTriplet?, countsReadable: Bool = true) -> HeroRender {
         if access != .full { return .accessBlocked }
+        if !countsReadable { return .countsUnreadable } // #973：账本读失败 ≠ 相册读不到，单独说
         guard let t else { return .unreadable }
         if t.confirmedRaw > t.n { return .unreconciled }
         return .triplet
@@ -251,4 +258,29 @@ enum TransferText {
 
     /// 字节这么久没动就算「慢」（Android TRANSFER_SLOW_AFTER_MS）。
     static let slowAfterSeconds = 15
+}
+
+
+extension FlowFacts {
+    /// #973：把账本读取结果并进事实。读失败 = 全部占位 0 + `countsReadable = false`，由上面的投影一律不给完成度结论。
+    /// 成功时 failed / unfinished 的口径同 Android `FlowProjection.facts`（unfinished = pending + transferring + failed）。
+    func applying(counts: Result<OrderCounts, Error>) -> FlowFacts {
+        var f = self
+        switch counts {
+        case .success(let c):
+            f.countsReadable = true
+            f.confirmed = c.confirmed
+            f.failed = c.byState[.failed] ?? 0
+            f.unfinished = (c.byState[.pending] ?? 0) + (c.byState[.transferring] ?? 0) + (c.byState[.failed] ?? 0)
+            f.lastSuccessAt = c.lastSuccessAt
+            f.missingSourceUnacknowledged = c.missingSourceUnacknowledged
+            f.skippedByUser = c.byState[.skippedByUser] ?? 0
+            f.missingSourceAcknowledged = c.missingSourceAcknowledged
+        case .failure:
+            f.countsReadable = false
+            f.confirmed = 0; f.failed = 0; f.unfinished = 0; f.lastSuccessAt = 0
+            f.missingSourceUnacknowledged = 0; f.skippedByUser = 0; f.missingSourceAcknowledged = 0
+        }
+        return f
+    }
 }

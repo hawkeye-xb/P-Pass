@@ -104,6 +104,16 @@ protocol BackupEngine: AnyObject {
     /// 失败通知开关（本地通知；默认开）。
     func notifyOnFailure() -> Bool
     func setNotifyOnFailure(_ on: Bool)
+    /// #975：系统通知授权的真实状态（开关显示 = 偏好 且 已授权）。
+    func notificationAuthorization() async -> NotificationAuthorization
+    /// 弹系统授权框（只在 notDetermined 时有界面），返回弹窗之后的状态。
+    func requestNotificationAuthorization() async -> NotificationAuthorization
+    /// denied 之后唯一的出路：跳系统设置里本 App 的通知页。
+    @MainActor func openNotificationSettings()
+    /// onboarding 完成页：该不该先问一次通知（页面据此显示用途说明）。
+    func shouldAskNotificationAtOnboarding() async -> Bool
+    /// 完成页点「好」：该问就问（先落盘「问过」），结果同步回开关。
+    func askNotificationAtOnboarding() async
     /// 「仅 Wi-Fi 时备份」（引擎 Conditions.wifiOnly 的唯一来源，默认开）。
     func wifiOnly() -> Bool
     func setWifiOnly(_ on: Bool)

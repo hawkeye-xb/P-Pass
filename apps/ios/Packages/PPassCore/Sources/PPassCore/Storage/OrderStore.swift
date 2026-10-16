@@ -3,7 +3,7 @@
 import Foundation
 import SQLite3
 
-public protocol OrderStore: AnyObject, Sendable {
+public protocol OrderStore: AnyObject, Sendable, OrderCountReading {
     /// 插入一行，返回完整行。[advance] / [scanTo] / [audit] 与插入同一事务。
     @discardableResult
     func insert(_ order: NewOrder, advance: DiscoveryPosition?, scanTo: String?, audit: AuditRecord?) throws -> Order
@@ -47,10 +47,7 @@ public protocol OrderStore: AnyObject, Sendable {
     func retryFailed(audit: AuditRecord?) throws -> Int
 
     // UI 读口径
-    func countCurrentByState(bucketIds: Set<String>?) throws -> [OrderState: Int64]
-    func countConfirmedPresent(bucketIds: Set<String>?) throws -> Int64
-    func lastConfirmedAtMs() throws -> Int64
-    func countSourceMissingSkipped(afterMs: Int64, upToMs: Int64) throws -> Int64
+    // 四个读口（countCurrentByState / countConfirmedPresent / lastConfirmedAtMs / countSourceMissingSkipped）在 OrderCountReading。
 
     // 审计
     func appendAudit(_ audit: AuditRecord) throws

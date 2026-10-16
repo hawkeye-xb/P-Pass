@@ -27,6 +27,7 @@ final class LiveBackend: @unchecked Sendable {
     let settings: BackupSettings
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
+    let notificationAsk: OnboardingNotificationAsk
     let pairingLoss = PairingLoss()
     let sentinel: SentinelStore
     let heartbeat: ForegroundHeartbeat
@@ -63,6 +64,9 @@ final class LiveBackend: @unchecked Sendable {
         settings = BackupSettings(directory: dir, logger: logger)
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
         notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
+        // #975：必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding，写下 asked=false）。
+        notificationAsk = OnboardingNotificationAsk(directory: dir, logger: logger)
+        notificationAsk.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
         // 全新安装默认开（此前引擎写死为开）；之后以用户在设置里的选择为准。
         if !fm.fileExists(atPath: dir.appendingPathComponent(AutoBackupPrefs.fileName).path) {
             try? autoPrefs.setEnabled(true); try? autoPrefs.setRequested(true)
@@ -224,22 +228,15 @@ final class LiveBackend: @unchecked Sendable {
         mediaWatcher.start() // 幂等；相册授权晚于启动（首次授权）时在这里补注册（#978）
         let known = await engine.pendingKnown
         let view = await engine.view
-        let all = (try? orders.countCurrentByState(bucketIds: nil)) ?? [:]
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let ackAt = control.missingSourceAckAt()
-        let unackMissing = (try? orders.countSourceMissingSkipped(afterMs: ackAt, upToMs: nowMs)) ?? 0
-        let ackedMissing = ackAt > 0 ? ((try? orders.countSourceMissingSkipped(afterMs: 0, upToMs: ackAt)) ?? 0) : 0
+        // #973：账本读失败不许落成 0（会被首页读成「都存好了」）——记日志，事实标「计数不可读」，投影层不给完成度结论。
+        let counts = Result { try OrderCounts.read(from: orders, missingSourceAckAt: control.missingSourceAckAt(), nowMs: nowMs) }
+        if case .failure(let error) = counts { logger.log("home-facts: order counts unreadable: \(error)") }
         let facts = FlowFacts(
             view: known ? EngineSnapshot(view) : nil,
-            confirmed: (try? orders.countConfirmedPresent(bucketIds: nil)) ?? 0,
             inScopeTotal: media.inScopeTotal(),
-            failed: all[.failed] ?? 0,
-            unfinished: (all[.pending] ?? 0) + (all[.transferring] ?? 0) + (all[.failed] ?? 0),
-            lastSuccessAt: (try? orders.lastConfirmedAtMs()) ?? 0,
-            lastReachableAt: sentinel.load().lastReachableAt,
-            missingSourceUnacknowledged: unackMissing,
-            skippedByUser: all[.skippedByUser] ?? 0,
-            missingSourceAcknowledged: ackedMissing)
+            lastReachableAt: sentinel.load().lastReachableAt
+        ).applying(counts: counts)
         if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingEpoch, pairingLoss.isLost(epoch: e) {
             pairingStore.markLost()
         }
@@ -259,7 +256,7 @@ final class LiveBackend: @unchecked Sendable {
         if notifyPrefs.enabled() {
             let lost = pairingStore.load()?.lost == true
             let trouble: Bool = { if case .trouble = HomeProjection.backupUiState(facts, noAlbums: false) { return true } else { return false } }()
-            FailureNotifier.update(pairingLost: lost, trouble: trouble)
+            await FailureNotifier.update(pairingLost: lost, trouble: trouble, logger: logger)
         }
     }
 }
@@ -366,8 +363,33 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func notifyOnFailure() -> Bool { backend.notifyPrefs.enabled() }
     func setNotifyOnFailure(_ on: Bool) {
-        try? backend.notifyPrefs.setEnabled(on)
-        if on { FailureNotifier.requestAuthorization() }
+        do { try backend.notifyPrefs.setEnabled(on) } catch { backend.logger.log("notify-prefs: write failed: \(error)") }
+    }
+
+    func notificationAuthorization() async -> NotificationAuthorization { await SystemNotifications.authorization() }
+    func requestNotificationAuthorization() async -> NotificationAuthorization {
+        let granted = await SystemNotifications.request()
+        let now = await SystemNotifications.authorization()
+        backend.logger.log("notifications: system prompt result granted=\(granted) status=\(now)")
+        return now
+    }
+    @MainActor func openNotificationSettings() { SystemNotifications.openSettings() }
+
+    func shouldAskNotificationAtOnboarding() async -> Bool {
+        backend.notificationAsk.shouldAsk(authorization: await SystemNotifications.authorization())
+    }
+
+    /// 完成页点「好」：该问就先落盘「问过」再弹，结果同步回开关（Android `thenContinue` + `onResult`）。
+    func askNotificationAtOnboarding() async {
+        let auth = await SystemNotifications.authorization()
+        guard backend.notificationAsk.shouldAsk(authorization: auth) else { return }
+        do { try backend.notificationAsk.markAsked() } catch {
+            // 落不了盘就不弹：宁可少问，不许因为没记住而下次又问。
+            backend.logger.log("notification-ask: markAsked failed, skip prompt: \(error)"); return
+        }
+        let after = await requestNotificationAuthorization()
+        do { try backend.notificationAsk.onResult(granted: after == .authorized, prefs: backend.notifyPrefs) }
+        catch { backend.logger.log("notification-ask: sync toggle failed: \(error)") }
     }
 
     func wifiOnly() -> Bool { backend.settings.wifiOnly() }

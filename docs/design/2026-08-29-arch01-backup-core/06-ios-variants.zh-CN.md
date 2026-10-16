@@ -185,6 +185,28 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 - **清单语义**：`applyDisconnectManifest` 某一行失败不再短路后面的行（所有行跑完后抛第一个错误）；`flowRuntime` 行承担 provider 撤销，不能被「配对文件清不掉」连带跳过。
 - **测试**：`DisconnectManifestTests.testARowThatFailsDoesNotSkipTheRuntimeStopsAfterIt`、`DisconnectManifestTests.testDisconnectAppliesEveryRow`；真实 provider 的断开与重新配对在 PPassTests 的 DisconnectProviderTests（模拟器上跑）。
 
+### 通知授权（#975）
+
+- **Android**：Android 13+ 在 onboarding 完成页点任一按钮时问**一次** `POST_NOTIFICATIONS`（`OnboardingNotificationAsk`，#130）：问之前先落盘「已问过」，结果同步回开关（授予 → 开，拒绝 → 关）；老用户升级不问；设置页开关显示 = 偏好 **且** 已授权，拨开时没权限就再弹一次申请框。Android 没有任何「去系统设置」的引导。
+- **iOS 对位**：同一份语义——PPassCore `OnboardingNotificationAsk`（同文件名 `onboarding_notification_ask.json`、同字段、同「缺失不问 / 损坏当已问过 / 老用户不问」，断开清单登记为保留）；完成页点「好」时 `LiveEngineAdapter.askNotificationAtOnboarding` 先落盘再弹系统框，结果写回偏好；页面上先显示 `onboarding_notification_note` 一句用途说明。开关显示值 = `NotifyToggle.displayValue(偏好, 授权)`；发通知前读 `UNUserNotificationCenter.notificationSettings`（`NotifyGate`），未授权**不发、不记「已提醒」、记一行日志**（`notify: <key> not delivered, system authorization=<状态>`），授权之后这次状况仍会提醒。
+- **三态对照**：
+
+| 系统授权 | 开关显示 | 拨开时 | 通知 |
+|---|---|---|---|
+| notDetermined | 关（偏好开也显示关） | 弹系统框，结果写回偏好（同 Android 申请回调） | 不发 + 日志 |
+| denied | 关，下方多一行「在系统设置里打开」说明 | 跳系统设置里本 App 的通知页 | 不发 + 日志 |
+| authorized（含 provisional / ephemeral） | 跟偏好 | 直接写偏好 | 发 |
+
+- **平台差异（有意不同，不是遗漏）**：iOS 系统授权框**只弹一次**（`requestAuthorization` 在 notDetermined 之后不再有界面），所以 `shouldAsk` 额外要求系统仍是 notDetermined，且 denied 时拨开改为**跳系统设置**——Android 在此会再弹申请框（被拒两次后同样没界面，却没有引导）；denied 时多一行 `rule_notify_denied_hint` 是为这条路径服务的 iOS 独有文案。用户从系统设置回来（`sceneBecameActive`）重读授权，开关即时反映。没有 Android 12 及以下「无运行时权限」那一档。
+- **测试**：`NotificationAskTests`（PPassCore：只问一次 / 先落盘 / 老用户 / 缺失与损坏 / 开关三态与拨开动作）、`DisconnectManifestTests.testDisconnectAppliesEveryRow`（新行登记）；PPassTests 的 NotificationAndCountsTests（系统状态映射、`NotifyGate` 裁决；模拟器上跑）。
+
+### 首页计数读库失败（#973）
+
+- **Android**：`FlowProjection.facts` 直接读库、读失败抛出，不当 0；`BackupUiStateHolder.refresh` 在外层 `runCatching{…}.getOrNull() ?: return`，即**不发布、沿用上一次投影**（初始为空投影，三元组为 null）；该路径不打日志。
+- **iOS 对位**：`OrderCounts.read`（PPassCore）五个读口任一失败整体抛出；`refreshFacts` 记日志（`home-facts: order counts unreadable: …`）并把事实标为 `countsReadable = false`（计数全是占位 0）。投影层对它一律不给完成度结论：`triplet` 为 nil、`allDone` 为 false、状态行走中性 idle（不出 allSafe，也不据占位 0 出 trouble 红卡），英雄区显示 `hero_counts_unreadable`，「上次成功」不落成「还没成功过」。
+- **有意不同**：Android 读失败是「沿用旧值、用户看不到」，iOS 改为**明示读不到**（审计 #973 的方向：失败要暴露）；这条 Android 行为的差异另开 issue 跟踪，本批不改 Android。
+- **测试**：`OrderCountsTests`（读失败抛出而不是 0）、PPassTests 的 NotificationAndCountsTests（模拟器上跑；反证组合：引擎视图 pending=0、范围已知、计数不可读）。
+
 ### Android 专属、不移植
 
 | 来源 | 为什么 iOS 不需要 |

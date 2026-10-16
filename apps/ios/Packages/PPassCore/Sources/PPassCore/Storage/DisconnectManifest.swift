@@ -42,6 +42,7 @@ public enum DisconnectState: CaseIterable, Sendable {
     case nativeBlobStore
     case flowControl
     case notifyOnFailurePrefs
+    case onboardingNotificationAsk
     case sentinel
 
     public var path: String? {
@@ -60,6 +61,7 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .nativeBlobStore: return "iroh-blobs-provider"
         case .flowControl: return FlowControlStore.fileName
         case .notifyOnFailurePrefs: return NotifyOnFailurePrefs.fileName
+        case .onboardingNotificationAsk: return OnboardingNotificationAsk.fileName
         case .sentinel: return SentinelStore.fileName
         }
     }
@@ -92,6 +94,7 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .nativeBlobStore: return "MOB-91 / IOS-07：原生内容仓库断开只 revoke，仓库本身不动"
         case .flowControl: return "\(undecidedBasis)：暂停标志 / 等待原因（#413），Android 断开从来没碰过"
         case .notifyOnFailurePrefs: return "\(undecidedBasis)：设置页「需要处理时通知我」（#130），Android 断开从来没碰过"
+        case .onboardingNotificationAsk: return "#130（#515 后续）、#975：通知权限只问一次，之后任何路径（含再走一次 onboarding）都不再问；对位 Android ONBOARDING_NOTIFICATION_ASK"
         case .sentinel: return "\(undecidedBasis)：「3 天没连上电脑」哨兵（SENT-01），Android 断开从来没碰过"
         }
     }
