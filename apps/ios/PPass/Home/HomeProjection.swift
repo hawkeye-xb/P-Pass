@@ -58,6 +58,8 @@ struct FlowFacts: Equatable {
     var failed: Int64 = 0
     var unfinished: Int64 = 0
     var lastSuccessAt: Int64 = 0
+    /// 最近一次确认桌面可达（前台心跳写，Android `SentinelStore.lastReachableAt`）；0 = 从未确认。「失联 N 天」的口径。
+    var lastReachableAt: Int64 = 0
     var missingSourceUnacknowledged: Int64 = 0
     var skippedByUser: Int64 = 0
     /// 已「知道了」的源已删除张数（设置卡里的账目行）；未确认的在 missingSourceUnacknowledged。

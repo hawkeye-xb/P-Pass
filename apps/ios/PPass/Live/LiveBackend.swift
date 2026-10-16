@@ -28,6 +28,8 @@ final class LiveBackend: @unchecked Sendable {
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
     let pairingLoss = PairingLoss()
+    let sentinel: SentinelStore
+    let heartbeat: ForegroundHeartbeat
     let network = NetworkState()
     let pendingUnpair: PendingUnpairStore
     let unpairFlusher: PendingUnpairFlusher
@@ -96,6 +98,21 @@ final class LiveBackend: @unchecked Sendable {
             onView: { view in Task { await model.engineChanged(view) } }
         )
         catchup = ForegroundCatchup(engine: engine)
+        // #977：前台心跳（对位 Android ForegroundHeartbeat）。结果映射在 PPassCore，这里只接线：
+        // 可达 → 叫醒引擎（#439）；被拒为配对失效 → 记进 PairingLoss 并刷新首页事实（refreshFacts 据此标红卡，#466）。
+        sentinel = SentinelStore(directory: dir, logger: logger)
+        let loss = pairingLoss
+        heartbeat = ForegroundHeartbeat(
+            desktop: desktop, currentEpoch: epoch, ledger: sentinel, now: { Int64(Date().timeIntervalSince1970 * 1000) },
+            onReachable: { [engine = self.engine] in
+                await engine.onDesktopReachable()
+                await model.refresh?()
+            },
+            onPairingLost: { epoch, failure in
+                loss.record(epoch: epoch, failure: failure)
+                await model.refresh?()
+            },
+            logger: logger)
         PPassBackgroundTasks.register(engine: engine, window: window, scheduler: scheduler, logger: logger)
         scheduler.ensureScheduled()
         PPassBackgroundTasks.ensureShortScheduled(logger: logger)
@@ -177,6 +194,8 @@ final class LiveBackend: @unchecked Sendable {
 
     func setActive(_ active: Bool) {
         window.setAppActive(active)
+        // 心跳只在前台跑（两端一致，没有后台心跳）：回前台立即拍一次，退后台停。
+        if active { heartbeat.start() } else { heartbeat.stop() }
         if active {
             scheduler.ensureScheduled()
             PPassBackgroundTasks.ensureShortScheduled(logger: logger)
@@ -200,6 +219,7 @@ final class LiveBackend: @unchecked Sendable {
             failed: all[.failed] ?? 0,
             unfinished: (all[.pending] ?? 0) + (all[.transferring] ?? 0) + (all[.failed] ?? 0),
             lastSuccessAt: (try? orders.lastConfirmedAtMs()) ?? 0,
+            lastReachableAt: sentinel.load().lastReachableAt,
             missingSourceUnacknowledged: unackMissing,
             skippedByUser: all[.skippedByUser] ?? 0,
             missingSourceAcknowledged: ackedMissing)

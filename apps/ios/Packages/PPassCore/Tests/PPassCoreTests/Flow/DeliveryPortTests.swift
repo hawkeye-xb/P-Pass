@@ -53,9 +53,17 @@ final class FakeDesktop: FlowDesktop, @unchecked Sendable {
     let accept = Locked<(Set<String>) -> Set<String>>({ $0 })
     let submitFails = Locked(false)
     let missing = Locked<Set<String>>([])
+    let helloCalls = Locked(0)
+    let helloHang = Locked(false)
     private let never = Gate()
 
-    func hello() async throws -> Hello { try helloResult.get().get() }
+    func releaseHello() { never.open() }
+
+    func hello() async throws -> Hello {
+        helloCalls.update { $0 += 1 }
+        if helloHang.get() { try await never.wait() }
+        return try helloResult.get().get()
+    }
 
     func offer(_ request: FlowFetchRequest) async throws -> FlowStatusReply {
         offers.update { $0.append(request) }
