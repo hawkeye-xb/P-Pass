@@ -34,6 +34,24 @@ protocol TimelineSource: AnyObject {
     func original(_ item: TimelineItem, progress: @escaping (Double) -> Void) async throws -> URL
 }
 
+/// 照片页的实时更新通道（#963，对位 Android `TimelineSubscriptionHolder` 暴露给页面的那一面）。
+/// 订阅属于 App 前台，不属于某个页面；页面只在出现时注册观察者，离开时丢掉，不创建 / 销毁连接。
+enum TimelineLiveEvent: Equatable {
+    /// 桌面说时间线变了：整页覆盖刷新。
+    case invalidated
+    /// 60 秒兜底：只追加，不动已加载内容。
+    case fallbackTick
+    case state(TimelineLiveState)
+}
+
+protocol TimelineLiveFeed: AnyObject {
+    /// 注册观察者（主线程回调）。注册时立刻补发一次当前状态；返回的 token 释放 / 调 `remove` 即注销。
+    @MainActor func observe(_ handler: @escaping @MainActor (TimelineLiveEvent) -> Void) -> UUID
+    @MainActor func remove(_ token: UUID)
+    /// 「实时更新已断开 · 重试」。
+    @MainActor func retry()
+}
+
 /// 手机相册里的一个相册（对位 Android `MediaScanner.Bucket`）。
 struct AlbumBucket: Identifiable, Equatable {
     let id: String
@@ -48,13 +66,14 @@ protocol MediaLibrary: AnyObject {
     func requestAccess() async -> MediaAccess
     func albums() async throws -> [AlbumBucket]
     func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage?
-    /// nil = 从未保存过范围（与空集不同：空集 = 一个都不备份）。
-    func savedScope() -> Set<String>?
+    /// nil = 从未保存过范围（与空集不同：空集 = 一个都不备份）。读盘失败抛出，不当成「从未保存」（#971）。
+    func savedScope() throws -> Set<String>?
     /// 上次保存范围时已知的相册（新出现的相册标「新」、默认不勾）。
     func knownAlbums() -> Set<String>
     /// 当前系统里实际存在的相册 id；没有完整授权（读不到相册）= nil。不弹授权。
     func existingAlbumIds() async -> Set<String>?
-    func saveScope(_ selected: Set<String>, known: Set<String>) async
+    /// 写盘失败抛出（#971）：调用方不许当成已保存。
+    func saveScope(_ selected: Set<String>, known: Set<String>) async throws
 }
 
 enum PairingStatus: Equatable {
@@ -93,17 +112,20 @@ protocol BackupEngine: AnyObject {
     func pauseOrResume() async
     /// 前台追赶：打开 App / 回到前台 / 选完相册时叫醒一轮。
     func wake() async
-    func retryFailed() async
+    /// 命令的失败抛给调用方（#972）：「状态不允许」是返回值，「执行出错」是抛出，两者不混。
+    func retryFailed() async throws
     /// 「取消剩余 N 张」：点击那一刻的快照（N 与取消边界是同一个差集）。
-    func remainingSnapshot() async -> RemainingSnapshot?
-    func cancelRemaining(_ snapshot: RemainingSnapshot) async -> Int?
+    func remainingSnapshot() async throws -> RemainingSnapshot
+    /// nil = 当前状态不允许取消（已不在暂停 / 等待中）；抛出 = 执行出错（账本写失败等）。
+    func cancelRemaining(_ snapshot: RemainingSnapshot) async throws -> Int?
     /// 「已跳过的照片 · 点击恢复」。
-    func restoreSkipped() async
+    func restoreSkipped() async throws
     /// 源已删除那批的「知道了」。
     func acknowledgeMissingSource()
     /// 失败通知开关（本地通知；默认开）。
     func notifyOnFailure() -> Bool
-    func setNotifyOnFailure(_ on: Bool)
+    /// 偏好写盘失败抛出（#971）。
+    func setNotifyOnFailure(_ on: Bool) throws
     /// #975：系统通知授权的真实状态（开关显示 = 偏好 且 已授权）。
     func notificationAuthorization() async -> NotificationAuthorization
     /// 弹系统授权框（只在 notDetermined 时有界面），返回弹窗之后的状态。
@@ -116,10 +138,10 @@ protocol BackupEngine: AnyObject {
     func askNotificationAtOnboarding() async
     /// 「仅 Wi-Fi 时备份」（引擎 Conditions.wifiOnly 的唯一来源，默认开）。
     func wifiOnly() -> Bool
-    func setWifiOnly(_ on: Bool)
+    func setWifiOnly(_ on: Bool) throws
     /// 「后台备份」：关 = 只在打开 App 时备份（Conditions.autoBackupEnabled）。
     func autoBackup() -> Bool
-    func setAutoBackup(_ on: Bool)
+    func setAutoBackup(_ on: Bool) throws
     /// #343「iOS 不承诺什么」：首页常驻告示（PPassCore BackupPromise），文案 key 走 DiagText。
     func promise() -> [PromiseNotice]
 }
@@ -129,6 +151,7 @@ struct Backend {
     /// 诊断页如实显示：现在是演示数据还是真数据。
     let isDemo: Bool
     let timeline: TimelineSource
+    let live: TimelineLiveFeed
     let media: MediaLibrary
     let pairing: PairingService
     let engine: BackupEngine

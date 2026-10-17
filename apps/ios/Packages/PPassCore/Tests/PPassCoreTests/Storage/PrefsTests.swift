@@ -54,6 +54,43 @@ final class PrefsTests: XCTestCase {
         XCTAssertTrue(reopened.requested())
     }
 
+    /// #982（Android MOB-93 / MainActivity 配对完成两条路）：连回以前连过的电脑 → 按留下的意图恢复；换新电脑 → 清意图，要重新问。
+    /// 反证：把 `knownDesktop` 的两个分支对调，下面两条都红。
+    func testPairingKnownDesktopRestoresRequestedIntent() throws {
+        let tmp = TempDir()
+        let prefs = AutoBackupPrefs(directory: tmp.url)
+        try prefs.setRequested(true)
+        try prefs.applyOnPairing(knownDesktop: true)
+        XCTAssertTrue(AutoBackupPrefs(directory: tmp.url).enabled(), "老电脑、用户要过后台备份 → 恢复生产者")
+        XCTAssertTrue(AutoBackupPrefs(directory: tmp.url).requested())
+    }
+
+    func testPairingKnownDesktopWithoutIntentStaysOff() throws {
+        let tmp = TempDir()
+        let prefs = AutoBackupPrefs(directory: tmp.url)
+        try prefs.setRequested(false)
+        try prefs.applyOnPairing(knownDesktop: true)
+        XCTAssertFalse(AutoBackupPrefs(directory: tmp.url).enabled())
+    }
+
+    func testPairingNewDesktopClearsIntentAndDoesNotInheritIt() throws {
+        let tmp = TempDir()
+        let prefs = AutoBackupPrefs(directory: tmp.url)
+        try prefs.setRequested(true)   // 上一台电脑留下的意图（断开只停生产者、留意图）
+        try prefs.setEnabled(false)
+        try prefs.applyOnPairing(knownDesktop: false)
+        XCTAssertFalse(AutoBackupPrefs(directory: tmp.url).requested(), "新电脑 = 新的信任关系：意图清掉，等完成页让用户选")
+        XCTAssertFalse(AutoBackupPrefs(directory: tmp.url).enabled(), "新电脑不沿用上一台的后台意图")
+    }
+
+    func testPairingWriteFailureThrows() throws {
+        let tmp = TempDir()
+        tmp.write(AutoBackupPrefs.fileName, "{}")
+        try FileManager.default.setAttributes([.posixPermissions: 0o444], ofItemAtPath: tmp.url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmp.url.path) }
+        XCTAssertThrowsError(try AutoBackupPrefs(directory: tmp.url).applyOnPairing(knownDesktop: false), "写盘失败要抛给调用方，不吞")
+    }
+
     func testAutoBackupResumeDecision() {
         XCTAssertEqual(AutoBackupResume.decide(userRequested: false, backgroundAuthorized: true), .leaveOff)
         XCTAssertEqual(AutoBackupResume.decide(userRequested: true, backgroundAuthorized: true), .enable)

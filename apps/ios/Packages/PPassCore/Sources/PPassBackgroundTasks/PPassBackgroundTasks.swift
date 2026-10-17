@@ -48,20 +48,22 @@ public enum PPassBackgroundTasks {
         engine: FlowEngine,
         window: ExecutionWindow,
         scheduler: PlannedWakeScheduler,
-        logger: CoreLogger
+        logger: CoreLogger,
+        afterRun: @escaping @Sendable () async -> Void = {}
     ) -> Bool {
-        let shortOK = registerShortTask(engine: engine, window: window, logger: logger)
-        return registerLongTask(engine: engine, window: window, scheduler: scheduler, logger: logger) && shortOK
+        let shortOK = registerShortTask(engine: engine, window: window, logger: logger, afterRun: afterRun)
+        return registerLongTask(engine: engine, window: window, scheduler: scheduler, logger: logger, afterRun: afterRun) && shortOK
     }
 
     /// #958：短任务（BGAppRefreshTask）。每次被叫醒先挂下一次；已有其他窗口开着就直接完成；20 秒自收尾；`setTaskCompleted` 必调一次。
-    private static func registerShortTask(engine: FlowEngine, window: ExecutionWindow, logger: CoreLogger) -> Bool {
+    private static func registerShortTask(engine: FlowEngine, window: ExecutionWindow, logger: CoreLogger, afterRun: @escaping @Sendable () async -> Void) -> Bool {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundWakePlanner.shortTaskIdentifier, using: nil) { task in
             LaunchOriginRecorder.shared.backgroundTaskReached(identifier: BackgroundWakePlanner.shortTaskIdentifier, logger: logger)
             ensureShortScheduled(logger: logger)
             let completed = CompletionOnce(task)
             let work = Task {
                 let ok = await BackgroundRun.runShort(engine: engine, window: window, logger: logger)
+                await afterRun() // 先评估再交还系统：完成之后进程随时会被挂起
                 completed.complete(success: ok)
             }
             task.expirationHandler = {
@@ -83,7 +85,8 @@ public enum PPassBackgroundTasks {
     }
 
     private static func registerLongTask(
-        engine: FlowEngine, window: ExecutionWindow, scheduler: PlannedWakeScheduler, logger: CoreLogger
+        engine: FlowEngine, window: ExecutionWindow, scheduler: PlannedWakeScheduler, logger: CoreLogger,
+        afterRun: @escaping @Sendable () async -> Void
     ) -> Bool {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundWakePlanner.identifier, using: nil) { task in
             LaunchOriginRecorder.shared.backgroundTaskReached(identifier: BackgroundWakePlanner.identifier, logger: logger)
@@ -91,6 +94,7 @@ public enum PPassBackgroundTasks {
             logger.log("background task launched (\(reason.rawValue))")
             let work = Task {
                 let ok = await BackgroundRun.run(engine: engine, window: window, scheduler: scheduler, reason: reason)
+                await afterRun() // 先评估再交还系统：完成之后进程随时会被挂起
                 task.setTaskCompleted(success: ok)
             }
             task.expirationHandler = {

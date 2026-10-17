@@ -9,6 +9,13 @@
 "partial_access_body" = "Backup needs full photo access. Go to Settings › P-Pass › Photos and choose Full Access to back up every photo.";
 "no_media_access_body" = "Backup needs access to your photos. Right now not a single photo can be read, so nothing is being backed up — allow access in Settings › P-Pass › Photos.";
 
+/* Failure notifications (#981): tapping a notification on iOS only opens the app (no deep link into system settings), so point at the iOS setting by name; battery optimization doesn't exist on iOS — the counterpart is Background App Refresh. */
+"notif_media_partial_body" = "Photo access changed from Full Access to Limited, so photos outside your selection won't be backed up. Go to Settings › P-Pass › Photos and switch it back to Full Access.";
+"notif_media_none_body" = "Photo access is off, so P-Pass can't read any photos and nothing is being backed up. Go to Settings › P-Pass › Photos and allow access.";
+"notif_background_refresh_off_title" = "Background App Refresh was turned off";
+"notif_background_refresh_off_body" = "iOS won't wake P-Pass in the background any more; it backs up only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh. Your photos are all still on this phone.";
+"notif_background_refresh_restricted_body" = "This iPhone no longer allows Background App Refresh for P-Pass (Screen Time or device management may be limiting it), so it backs up only while P-Pass is open. Your photos are all still on this phone.";
+
 /* Simulator and devices without a camera. */
 "scan_camera_unavailable" = "The camera isn't available on this device. Connect with the pairing string instead.";
 
@@ -54,3 +61,13 @@
 "rule_notify_denied_hint" = "Notifications are off in system Settings. Tap the switch to open Settings.";
 
 "pair_save_failed" = "Could not save the pairing on this phone. Check the free storage, then scan again.";
+
+/* #971 / #972: visible feedback when a setting was not saved or a command did not run. */
+"notice_title" = "Couldn’t finish";
+"setting_save_failed" = "The setting could not be saved on this phone, so it was put back to its previous value. Check the free storage and try again.";
+"scope_save_failed" = "Your album selection could not be saved on this phone. Check the free storage and try again.";
+"command_failed" = "That didn’t go through. Please try again later.";
+"backup_scope_unreadable" = "Can’t read the saved selection";
+
+/* #982: completion page after the first album pick. iOS has no battery-whitelist equivalent; background runs only when the system picks a moment (#343: no frequency, no guarantee). */
+"background_backup_ios_note" = "If enabled, iOS may pick a moment to carry on backing up after you leave P-Pass. Whether and when is up to the system — it isn’t guaranteed.";

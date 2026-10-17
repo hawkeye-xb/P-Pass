@@ -45,9 +45,11 @@ enum BGTestDriver {
     private static func exportScope(model: AppModel, status: StatusFile) async {
         let media = model.backend.media
         let testAlbumIds = Set(testAlbums().map(\.localIdentifier))
-        status.write("scope", ["selected": scopeJSON(media.savedScope()),
+        let saved: Set<String>?
+        do { saved = try media.savedScope() } catch { status.write("failed", ["error": "scope unreadable: \(error)", "done": true]); return }
+        status.write("scope", ["selected": scopeJSON(saved),
                                "known": media.knownAlbums().sorted(),
-                               "selected_test_albums": (media.savedScope() ?? []).intersection(testAlbumIds).count,
+                               "selected_test_albums": (saved ?? []).intersection(testAlbumIds).count,
                                "test_assets": testAssetIds().count, "done": true])
     }
 
@@ -55,7 +57,9 @@ enum BGTestDriver {
         let media = model.backend.media
         // 先清空：范围里可能还是测试相册，一连上正式桌面就会把测试照片备份进用户的真实库。
         let all = Set(((try? await media.albums()) ?? []).map(\.id))
-        await media.saveScope([], known: all)
+        do { try await media.saveScope([], known: all) } catch {
+            status.write("failed", ["error": "clear scope: \(error)", "done": true]); return
+        }
         let outcome = await model.backend.pairing.pair(code: link)
         guard case .joined(let firstTime) = outcome else {
             status.write("failed", ["error": "pairing: \(outcome)", "done": true]); return
@@ -77,13 +81,18 @@ enum BGTestDriver {
             for id in selected { inSelected.formUnion(PhotoKitAlbums.assetIds(inCollection: id)) }
             let conflict = inSelected.intersection(test)
             if conflict.isEmpty {
-                await media.saveScope(selected, known: known)
-                extra["scope_restored"] = true
+                do {
+                    try await media.saveScope(selected, known: known)
+                    extra["scope_restored"] = true
+                } catch {
+                    extra["scope_restored"] = false
+                    extra["scope_error"] = "save scope: \(error)"
+                }
             } else {
                 extra["scope_restored"] = false
                 extra["scope_conflict"] = conflict.count
             }
-            extra["selected"] = scopeJSON(media.savedScope())
+            do { extra["selected"] = scopeJSON(try media.savedScope()) } catch { extra["selected_error"] = "\(error)" }
             extra["known"] = media.knownAlbums().sorted()
         }
         status.write("paired", extra)

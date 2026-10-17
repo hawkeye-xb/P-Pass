@@ -2,6 +2,12 @@ import Foundation
 import PPassCore
 import SwiftUI
 
+/// 一条需要用户看到的失败反馈（#971 / #972）：设置没存上、命令没执行成。界面用 alert 呈现，点掉即清。
+struct UserNotice: Identifiable, Equatable {
+    let id = UUID()
+    let message: String
+}
+
 /// 整个 App 的状态（iOS 16：ObservableObject，不用 Observation）。界面只读这里，动作经 Backend 端口下去。
 @MainActor
 final class AppModel: ObservableObject {
@@ -29,8 +35,15 @@ final class AppModel: ObservableObject {
     /// #343：首页常驻告示（已解析成当前语言的句子）。
     @Published private(set) var promise: [String] = []
     @Published var commandInFlight = false
+    /// 最近一次失败反馈（设置写盘失败 / 命令出错）。界面 alert 绑定它。
+    @Published var notice: UserNotice?
+    /// 「仅 Wi‑Fi」要关：等用户在确认框里点「仍然关闭」才写盘（Android MOB-02 §三：移动网络会消耗流量）。
+    @Published var pendingWifiOff = false
+    /// 范围文件读不出来（与「从未保存」不同，#971）；设置行据此显示「读不到」而不是「未选相册」。
+    @Published private(set) var scopeUnreadable = false
     @Published private(set) var wifiOnly = true
-    @Published private(set) var autoBackup = true
+    /// 后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）；真值由 `refresh()` 从盘上读。
+    @Published private(set) var autoBackup = false
     @Published private(set) var notifyOnFailure = true
     /// #975：系统通知授权的真实状态。开关显示 = 偏好 且 已授权（Android MainActivity 同口径）。
     @Published private(set) var notificationAuthorization: NotificationAuthorization = .notDetermined
@@ -68,30 +81,47 @@ final class AppModel: ObservableObject {
 
     /// 设置页开关。关：只写偏好。开：已授权直接写；没问过就弹系统框、结果写回偏好；已被拒绝（iOS 不会再弹）→ 跳系统设置。
     func setNotifyToggle(_ on: Bool) {
-        guard on else { backend.engine.setNotifyOnFailure(false); notifyOnFailure = false; return }
+        guard on else { writeNotifyOnFailure(false); return }
         Task {
             let auth = await backend.engine.notificationAuthorization()
             notificationAuthorization = auth
             switch NotifyToggle.turnOnAction(authorization: auth) {
             case .enable:
-                backend.engine.setNotifyOnFailure(true); notifyOnFailure = true
+                writeNotifyOnFailure(true)
             case .requestAuthorization:
                 guard !notificationRequestInFlight else { return }
                 notificationRequestInFlight = true
                 let after = await backend.engine.requestNotificationAuthorization()
                 notificationRequestInFlight = false
                 notificationAuthorization = after
-                backend.engine.setNotifyOnFailure(after == .authorized); notifyOnFailure = after == .authorized
+                writeNotifyOnFailure(after == .authorized)
             case .openSystemSettings:
                 backend.engine.openNotificationSettings()
             }
         }
     }
 
-    /// onboarding 完成页点「好」：该问通知就先问一次（结果同步回开关），再进首页。
-    func finishOnboardingStarted() {
+    /// 偏好写盘：成功才更新显示值；失败回到盘上的真实值并给出提示（#971）。
+    private func writeNotifyOnFailure(_ on: Bool) {
+        do { try backend.engine.setNotifyOnFailure(on); notifyOnFailure = on } catch { settingWriteFailed("notify-on-failure", error) }
+    }
+
+    private func settingWriteFailed(_ what: String, _ error: Error) {
+        AppLog.log("settings: write failed (\(what)): \(error)")
+        refresh() // 开关显示回到盘上的值
+        notice = UserNotice(message: L.s("setting_save_failed"))
+    }
+
+    private func commandFailed(_ what: String, _ error: Error) {
+        AppLog.log("command failed (\(what)): \(error)")
+        notice = UserNotice(message: L.s("command_failed"))
+    }
+
+    /// onboarding 完成页：该问通知就先问一次（结果同步回开关），再按用户的选择开 / 不开后台备份（Android `thenContinue` 包两个按钮），进首页。
+    func finishOnboardingStarted(enableBackgroundBackup: Bool) {
         Task {
             await backend.engine.askNotificationAtOnboarding()
+            if enableBackgroundBackup { setAutoBackup(true) }
             refresh()
             refreshNotificationAuthorization()
             phase = .main
@@ -111,7 +141,14 @@ final class AppModel: ObservableObject {
         } else { transferMark = nil }
         access = backend.media.access()
         pairing = backend.pairing.status()
-        scope = backend.media.savedScope()
+        do {
+            scope = try backend.media.savedScope()
+            scopeUnreadable = false
+        } catch {
+            if !scopeUnreadable { AppLog.log("backup-scope: unreadable: \(error)") }
+            scope = nil
+            scopeUnreadable = true
+        }
         wifiOnly = backend.engine.wifiOnly()
         autoBackup = backend.engine.autoBackup()
         notifyOnFailure = backend.engine.notifyOnFailure()
@@ -125,15 +162,48 @@ final class AppModel: ObservableObject {
         return facts.remaining.flatMap { $0 > 0 ? $0 : nil }
     }
 
-    func cancelRemaining(_ snapshot: RemainingSnapshot) {
-        Task { _ = await backend.engine.cancelRemaining(snapshot); refresh() }
+    /// 用户命令（重试 / 恢复已跳过 / 取消剩余）：出错 → 记日志 + 提示；「状态不允许」不是错误，只刷新（那一行随状态收起，Android 同）。
+    private func runCommand(_ what: String, _ op: @escaping () async throws -> Void) {
+        guard !commandInFlight else { return }
+        commandInFlight = true
+        Task {
+            do { try await op() } catch { commandFailed(what, error) }
+            commandInFlight = false
+            refresh()
+        }
     }
 
-    func restoreSkipped() { Task { await backend.engine.restoreSkipped(); refresh() } }
+    /// 点「取消剩余 N 张」那一刻的快照（弹确认框用）；读不出来 → 提示，不弹框。
+    func remainingSnapshot() async -> RemainingSnapshot? {
+        do { return try await backend.engine.remainingSnapshot() } catch { commandFailed("remaining-snapshot", error); return nil }
+    }
+
+    func cancelRemaining(_ snapshot: RemainingSnapshot) {
+        runCommand("cancel-remaining") { _ = try await self.backend.engine.cancelRemaining(snapshot) }
+    }
+
+    func restoreSkipped() { runCommand("restore-skipped") { try await self.backend.engine.restoreSkipped() } }
     func acknowledgeMissingSource() { backend.engine.acknowledgeMissingSource(); refresh() }
 
-    func setAutoBackup(_ on: Bool) { backend.engine.setAutoBackup(on); autoBackup = on }
-    func setWifiOnly(_ on: Bool) { backend.engine.setWifiOnly(on); wifiOnly = on }
+    func setAutoBackup(_ on: Bool) {
+        do { try backend.engine.setAutoBackup(on); autoBackup = on } catch { settingWriteFailed("auto-backup", error) }
+    }
+
+    /// 「仅 Wi‑Fi」开关：打开直接写；关闭先弹确认（不写盘），确认后才保存（Android MOB-02 §三 / MainActivity `pendingWifiOff`）。
+    func setWifiOnly(_ on: Bool) {
+        if on { writeWifiOnly(true) } else { pendingWifiOff = true }
+    }
+
+    func confirmWifiOff() {
+        pendingWifiOff = false
+        writeWifiOnly(false)
+    }
+
+    func cancelWifiOff() { pendingWifiOff = false }
+
+    private func writeWifiOnly(_ on: Bool) {
+        do { try backend.engine.setWifiOnly(on); wifiOnly = on } catch { settingWriteFailed("wifi-only", error) }
+    }
 
     /// 距上次确认可达的整天数；从未确认过 = nil（不编造天数，走兜底文案）。取前台心跳最近一次确认桌面可达的时间
     /// （#977，Android `SentinelStore.lastReachableAt`）——不是最近一次收到照片：一直可达但没有新照片，天数不该增长。
@@ -170,7 +240,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func retry() { Task { await backend.engine.retryFailed(); refresh() } }
+    func retry() { runCommand("retry-failed") { try await self.backend.engine.retryFailed() } }
 
     /// 配对成功后的去向：以前连过这台电脑 → 首页；否则去选相册（Android 同语义）。
     func paired(firstTime: Bool) {
@@ -182,8 +252,19 @@ final class AppModel: ObservableObject {
     func albumsChosen(_ selected: Set<String>, known: Set<String>, firstTime: Bool) {
         Task {
             // 必须在 saveScope 覆盖旧集合之前算差集（Android MOB-20）。
-            let added = ScopePolicy.added(previous: backend.media.savedScope(), selected: selected)
-            await backend.media.saveScope(selected, known: known)
+            let previous: Set<String>?
+            do { previous = try backend.media.savedScope() } catch {
+                AppLog.log("backup-scope: previous scope unreadable, treating every selected album as added: \(error)")
+                previous = nil
+            }
+            let added = ScopePolicy.added(previous: previous, selected: selected)
+            do { try await backend.media.saveScope(selected, known: known) } catch {
+                // 没存上就不往下走：不进「正在回家」、不叫醒引擎，让用户看到失败并能重试（#971）。
+                AppLog.log("backup-scope: save failed: \(error)")
+                refresh()
+                notice = UserNotice(message: L.s("scope_save_failed"))
+                return
+            }
             refresh()
             refreshExistingAlbums()
             if firstTime {

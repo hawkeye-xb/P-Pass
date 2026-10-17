@@ -203,7 +203,7 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 ### 通知授权（#975）
 
 - **Android**：Android 13+ 在 onboarding 完成页点任一按钮时问**一次** `POST_NOTIFICATIONS`（`OnboardingNotificationAsk`，#130）：问之前先落盘「已问过」，结果同步回开关（授予 → 开，拒绝 → 关）；老用户升级不问；设置页开关显示 = 偏好 **且** 已授权，拨开时没权限就再弹一次申请框。Android 没有任何「去系统设置」的引导。
-- **iOS 对位**：同一份语义——PPassCore `OnboardingNotificationAsk`（同文件名 `onboarding_notification_ask.json`、同字段、同「缺失不问 / 损坏当已问过 / 老用户不问」，断开清单登记为保留）；完成页点「好」时 `LiveEngineAdapter.askNotificationAtOnboarding` 先落盘再弹系统框，结果写回偏好；页面上先显示 `onboarding_notification_note` 一句用途说明。开关显示值 = `NotifyToggle.displayValue(偏好, 授权)`；发通知前读 `UNUserNotificationCenter.notificationSettings`（`NotifyGate`），未授权**不发、不记「已提醒」、记一行日志**（`notify: <key> not delivered, system authorization=<状态>`），授权之后这次状况仍会提醒。
+- **iOS 对位**：同一份语义——PPassCore `OnboardingNotificationAsk`（同文件名 `onboarding_notification_ask.json`、同字段、同「缺失不问 / 损坏当已问过 / 老用户不问」，断开清单登记为保留）；完成页点「好」时 `LiveEngineAdapter.askNotificationAtOnboarding` 先落盘再弹系统框，结果写回偏好；页面上先显示 `onboarding_notification_note` 一句用途说明。开关显示值 = `NotifyToggle.displayValue(偏好, 授权)`；发通知前读 `UNUserNotificationCenter.notificationSettings`，未授权 / 开关关着**不发、记一行日志**（`notify: <事件> not delivered, enabled=… system authorization=<状态>`），去重状态照常推进、之后打开也不补发（与 Android 一致，#981 起；判定在 PPassCore `decideDefinitiveNotices(deliverable:)`）。
 - **三态对照**：
 
 | 系统授权 | 开关显示 | 拨开时 | 通知 |
@@ -213,7 +213,24 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 | authorized（含 provisional / ephemeral） | 跟偏好 | 直接写偏好 | 发 |
 
 - **平台差异（有意不同，不是遗漏）**：iOS 系统授权框**只弹一次**（`requestAuthorization` 在 notDetermined 之后不再有界面），所以 `shouldAsk` 额外要求系统仍是 notDetermined，且 denied 时拨开改为**跳系统设置**——Android 在此会再弹申请框（被拒两次后同样没界面，却没有引导）；denied 时多一行 `rule_notify_denied_hint` 是为这条路径服务的 iOS 独有文案。用户从系统设置回来（`sceneBecameActive`）重读授权，开关即时反映。没有 Android 12 及以下「无运行时权限」那一档。
-- **测试**：`NotificationAskTests`（PPassCore：只问一次 / 先落盘 / 老用户 / 缺失与损坏 / 开关三态与拨开动作）、`DisconnectManifestTests.testDisconnectAppliesEveryRow`（新行登记）；PPassTests 的 NotificationAndCountsTests（系统状态映射、`NotifyGate` 裁决；模拟器上跑）。
+- **测试**：`NotificationAskTests`（PPassCore：只问一次 / 先落盘 / 老用户 / 缺失与损坏 / 开关三态与拨开动作）、`DisconnectManifestTests.testDisconnectAppliesEveryRow`（新行登记）；PPassTests 的 NotificationAndCountsTests（系统状态映射；模拟器上跑）；「未授权不发、状态照常推进、之后不补发」由 `DefinitiveNoticesTests.testUndeliverable*` 覆盖。
+
+### 失败通知的触发集合与去重（#981）
+
+- **Android**（`DefinitiveEventNotices.kt`，#130）：只发三类确定事件，每类一个通知 id、状态变化只发一次、恢复后复位并撤掉旧通知。
+  1. 配对失效：去重键 = 配对代号（epoch）；只有「没配对了」或「换了代号」才复位，`isLost` 变 false（进程重启）不算恢复。
+  2. 相册权限变差（完整 → 部分 / 无，部分 → 无）：记上次档位，变差才发，回到完整复位；没有基线只记不发；没配对只记。
+  3. 后台被停：MOB-28 的中断（同一次开机内监听凭空消失 = force-stop / OEM 清理，按 `detectedAt` 去重），或电池优化被重新打开（true → false，且用户要后台备份）；没有基线只记不发。
+  - 单张 / 整体备份失败**不发**（#418）。状态落盘 `definitive_notices.json`（tmp + rename，**没有过期**：靠上述复位条件清）；读坏回到默认基线。开关与系统权限只挡「发出去」，状态照常推进（iOS 同）。评估入口：进程启动 / Worker 结束 / 回前台 / 配对失效变化。
+- **iOS 对位**：PPassCore `DefinitiveNotices.swift`（纯判定 + 落盘，文件名与字段同 Android，断开清单登记为保留）；发 / 撤在 `FailureNotifier`。评估入口：`refreshFacts`（启动、回前台、各类刷新）与**后台任务结束时**（短 / 长任务在 `setTaskCompleted` 之前，`PPassBackgroundTasks.register(afterRun:)`），后者对位 Android Worker 结束。不再发「备份出问题」（#981 前 iOS 与 Android 相反）。
+  1. 配对失效：同 Android；空代号（待 #966 修复）当没有代号，不拿来去重。
+  2. 相册权限：`PhotoAccessLevel` → 三档（full / limited → partial / denied、restricted、notDetermined → none，与首页同口径），规则同 Android。
+  3. 后台被停：对位物 = **「后台 App 刷新」从可用变成不可用**（`UIApplication.backgroundRefreshStatus`），且 `AutoBackupPrefs.requested()`；denied / restricted 文案不同（restricted 用户自己改不了）。电池优化 iOS 不存在，故没有 `notif_battery_reenabled_*`。
+- **平台差异（有意不同，不是遗漏）**：
+  - **MOB-28「后台中断」iOS 没有对位物，不移植**：iOS 上 App 被 force-quit / 被系统杀掉，进程内无从区分，也没有「同一次开机内监听消失」可比的信号（BGTask 由系统调度，不是我们注册的常驻监听）；系统在 force-quit 之后是否还拉起后台任务没有 Apple 文档的明确保证（论坛有相反的报告：[developer.apple.com/forums/thread/793189](https://developer.apple.com/forums/thread/793189)）。「后台执行时间到期」是 iOS 的常态（见 C-05），不是故障，不通知。没有检测手段就不硬凑；回前台时首页「打开 P-Pass 时备份」告示与「最近备份」时间是用户能自己发现的渠道。
+  - 通知点开只打开 App（没有深链进系统设置），所以相册权限通知的正文写 iOS 设置项名字（`IOS.strings` 覆盖 `notif_media_*_body`）；后台刷新通知为 iOS 独有 key（`notif_background_refresh_*`）。
+  - **前台展示**：App 没有 `UNUserNotificationCenterDelegate`，前台发出的通知不弹横幅、只进通知中心（iOS 默认）；Android 前台照常弹。未对齐，见 #1018。
+- **测试**：`DefinitiveNoticesTests`（PPassCore：触发集合只有三类 / 每类的发、不重发、复位、基线 / 未送达只不发、状态照常推进且之后不补发 / 落盘重启不重发与反证 / 文件名字段 / 缺失静默、损坏留日志、写失败抛出）、`DisconnectManifestTests.testDisconnectAppliesEveryRow`（新状态文件登记）。
 
 ### 首页计数读库失败（#973）
 
@@ -221,6 +238,24 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 - **iOS 对位**：`OrderCounts.read`（PPassCore）五个读口任一失败整体抛出；`refreshFacts` 记日志（`home-facts: order counts unreadable: …`）并把事实标为 `countsReadable = false`（计数全是占位 0）。投影层对它一律不给完成度结论：`triplet` 为 nil、`allDone` 为 false、状态行走中性 idle（不出 allSafe，也不据占位 0 出 trouble 红卡），英雄区显示 `hero_counts_unreadable`，「上次成功」不落成「还没成功过」。
 - **有意不同**：Android 读失败是「沿用旧值、用户看不到」，iOS 改为**明示读不到**（审计 #973 的方向：失败要暴露）；这条 Android 行为的差异另开 issue 跟踪，本批不改 Android。
 - **测试**：`OrderCountsTests`（读失败抛出而不是 0）、PPassTests 的 NotificationAndCountsTests（模拟器上跑；反证组合：引擎视图 pending=0、范围已知、计数不可读）。
+
+### 后台备份默认值、首次配对完成页与「仅 Wi‑Fi」确认（#982）
+
+- **Android**：`AutoBackupPrefs.autoEnabled` 默认 false；首次配对新电脑先 `setRequested(false)`，完成页给「开启后台备份 / 不开启后台备份」两个按钮由用户选；连回以前连过的电脑按留下的意图恢复；关闭「仅 Wi‑Fi」先弹确认框（移动网络会消耗流量），确认后才保存。
+- **iOS 对位**：全新安装后台备份默认**关**（删掉了 `LiveBackend.init` 里的默认置开）；`AutoBackupPrefs.applyOnPairing(knownDesktop:)`（PPassCore）——新电脑清意图、老电脑按意图恢复；完成页换成两个等高按钮，两个按钮都先走通知询问再继续；关「仅 Wi‑Fi」用 `.alert` 确认，点取消不写盘。「连没连过」改在 `onPaired` 标记**之前**判定（此前顺序反了，`firstTime` 恒为 false，首次配对进不了选相册与完成页）。
+- **平台差异（有意不同，不是遗漏）**：
+  1. **没有 App 内申请后台执行的系统框**。Android「开启」时要去申请电池白名单，被拒则挂起生产者、授权回来再恢复；iOS 的「后台 App 刷新」只能用户自己在系统设置里开，App 弹不出申请。所以 iOS「开启」直接写偏好、**不因后台刷新关着而挂起生产者**（否则还得补一条「授权回来再恢复」的路径）；关着的情况由首页告示说明（`BackupPromise.refreshOff` / `refreshRestricted`）。
+  2. **文案按 #343 只说能兑现的**：完成页多一句 `background_backup_ios_note`（iOS 可能找机会接着备份，是否执行、何时执行由系统决定，不保证），不写频率、不假装有后台。按钮文案沿用 Android 的 `background_backup_enable` / `background_backup_not_now`。
+  3. 前台备份不受这个开关影响：`Conditions.autoBackupEnabled` 为 false 时，`userPresent` 的触发（回前台 / 手动 / 选相册 / 前台相册变化）照常起轮（`FlowTypes.swift` `.disabled` 判定只拦非用户在场的触发）。
+- **未对齐、另开 issue（#1019）**：Android 在完成页（`finishOnboarding`）才 `markOnboarded`，iOS 仍在配对成功时（`LiveBackend.paired`）就标——配对后、选完相册前被杀进程，下次再配这台会被当成老电脑跳过选相册。
+- **测试**：PPassCore 的 `PrefsTests`（老 / 新电脑 / 写失败）；PPassTests 的 PairingWiringTests（firstTime 在 onPaired 之前判定，模拟器上跑）与 SettingsFeedbackTests（Wi‑Fi 确认、默认关、完成页选择）。
+
+### 设置写盘失败与用户命令出错的反馈（#971 / #972）
+
+- **Android**：`BackupSettings` / `AutoBackupPrefs` / `NotifyOnFailurePrefs` 写失败是 `check(rename)` 抛出，Wi‑Fi 确认框的回调没有 catch；`BackupUiStateHolder.command{}` 只有 try/finally，`requestCancelRemaining` 用 `runCatching{…}.getOrNull()` 吞掉。Android 没有可对位的「失败反馈」——要么崩溃要么静默。
+- **iOS**：端口 setter / 命令改为 `throws`，`AppModel` 只在写成功时更新显示值；失败 → 记日志、`refresh()` 回到盘上的真实值、弹 alert（`setting_save_failed` / `scope_save_failed` / `command_failed`，iOS 独有文案放 `IOS.strings`）。命令里「状态不允许」（`cancelRemaining` 返回 nil）与「执行出错」（抛出）分开：前者只刷新、那一行随状态收起（Android 同），后者弹提示。相册范围读失败与「从未保存」区分（`MediaLibrary.savedScope` 抛出，设置行显示 `backup_scope_unreadable`，引擎侧记日志后按空范围）。
+- **有意不同**：这是 iOS 比 Android 更严的一侧（审计方向「失败要暴露」）；Android 的崩溃 / 吞错另开 issue（#1020）跟踪，本批不改 Android。
+- **测试**：`SettingsFeedbackTests`（写失败回滚 + 提示、命令出错提示、状态不允许不报错、范围读失败 ≠ 从未保存）。
 
 ### Android 专属、不移植
 

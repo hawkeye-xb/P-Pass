@@ -72,7 +72,13 @@ struct SettingsScreen: View {
                     Button(L.p("cancel_remaining_label", snap.count), role: .destructive) { app.cancelRemaining(snap) }
                 }
                 Button(L.s("back"), role: .cancel) {}
-            } message: { Text(L.s("cancel_remaining_confirm_body")) }            .navigationDestination(for: Route.self) { route in
+            } message: { Text(L.s("cancel_remaining_confirm_body")) }
+            // 关「仅 Wi‑Fi」先确认（移动网络会消耗流量）；点「取消」开关不动、不写盘（Android MOB-02 §三，#982）。
+            .alert(L.s("wifi_off_confirm_title"), isPresented: Binding(get: { app.pendingWifiOff }, set: { if !$0 { app.cancelWifiOff() } })) {
+                Button(L.s("wifi_off_confirm_ok"), role: .destructive) { app.confirmWifiOff() }
+                Button(L.s("cancel"), role: .cancel) {}
+            } message: { Text(L.s("wifi_off_confirm_body")) }
+            .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .bucket:
                     BucketScreen(firstTime: false) { selected, known in
@@ -102,7 +108,7 @@ struct SettingsScreen: View {
                 Button {
                     Task {
                         // 弹窗里的 N 用点击这一刻的快照，不用行上的数（两者可能已差几张）。
-                        if let snap = await app.backend.engine.remainingSnapshot() { cancelSnapshot = snap; asking = true }
+                        if let snap = await app.remainingSnapshot() { cancelSnapshot = snap; asking = true }
                     }
                 } label: {
                     Text(L.p("cancel_remaining_label", Int(n))).font(PPFont.body).foregroundStyle(PPColor.ink)
@@ -148,6 +154,7 @@ struct SettingsScreen: View {
 
     /// 「备份哪些相册」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」。
     private var scopeValue: String {
+        if app.scopeUnreadable { return L.s("backup_scope_unreadable") }
         let n = app.selectedAlbumCount ?? 0
         return n > 0 ? L.p("backup_scope_n", n) : L.s("backup_scope_none")
     }

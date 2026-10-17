@@ -1,4 +1,5 @@
 import SwiftUI
+import PPassCore
 
 /// 照片 tab（对位 Android PhotosScreen.kt）：失联红卡 → 筛选 chips → 3 列网格按月分组（组头 yyyy.MM、
 /// serif）→ 触底翻页。视频右下角播放角标，照片没有，**不显示时长**（MOB-79）。
@@ -28,13 +29,11 @@ struct PhotosScreen: View {
             .toolbar(.hidden, for: .navigationBar) // Android 无页标题，底部 tab 已标明所在页
             .safeAreaInset(edge: .top, spacing: 0) { if !app.pairingLost { VStack(spacing: 0) { chips; disconnected } } }
         }
-        .task { model.bind(app.backend.timeline); await model.loadFirst() }
+        .task { model.bind(app.backend.timeline); model.attach(app.backend.live); await model.loadFirst() }
+        .onDisappear { model.detach() }
+        .onAppear { model.attach(app.backend.live) }
         .onAppear {
             if LaunchRoute.current == .viewer || LaunchRoute.current == .video { model.openOnLoad = LaunchRoute.current }
-        }
-        // 备份确认数变了 = 电脑上有新照片入库：重取第一页（daemon 入库索引略晚于确认，等一拍）。
-        .onChange(of: app.facts.confirmed) { _ in
-            Task { try? await Task.sleep(nanoseconds: 1_500_000_000); await model.loadFirst() }
         }
         .onChange(of: model.autoOpen) { item in if let item { open(item) } }
         .fullScreenCover(item: $viewer) { session in
@@ -61,13 +60,20 @@ struct PhotosScreen: View {
         .background(PPColor.paper)
     }
 
-    /// 已有照片时翻页 / 刷新失败：不挡住已加载的内容，只在上面提示「连不上」+ 重试（Android SYNC-04）。
+    /// 实时更新的提示（Android `photosTimelineChrome`）：断线重连中给一行小字；退避用完停下来，提示 + 重试，不挡住已加载的照片。
     @ViewBuilder private var disconnected: some View {
-        if model.error != nil, !model.items.isEmpty {
+        let chrome = TimelineLiveChrome(state: model.live, pairingLost: app.pairingLost)
+        if chrome.showReconnecting {
+            Text(L.s("photos_live_reconnecting")).font(PPFont.sans(13)).foregroundStyle(PPColor.ink40)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20).padding(.bottom, 12)
+                .background(PPColor.paper)
+        }
+        if chrome.showExhaustedRetry {
             HStack {
                 Text(L.s("photos_live_disconnected")).font(PPFont.sans(13)).foregroundStyle(PPColor.ink40)
                 Spacer()
-                Button(L.s("photos_live_retry")) { Task { await model.loadMore(retry: true) } }
+                Button(L.s("photos_live_retry")) { model.retryLive() }
                     .font(PPFont.sans(13, .semibold)).foregroundStyle(PPColor.ink).padding(6)
             }
             .padding(.horizontal, 20).padding(.bottom, 12)
