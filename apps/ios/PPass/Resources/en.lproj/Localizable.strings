@@ -1,7 +1,7 @@
 /* 由 tools/ios/gen-strings.py 从 apps/android/app/src/main/res/values/strings.xml 生成——不要手改。 */
 "app_name" = "P-Pass";
 "welcome_headline" = "Photos,\nfinding their way home.";
-"welcome_sub" = "Phone photos back up to your own computer at home. No cloud, no account — backing up at home is free, forever.";
+"welcome_sub" = "Photos from your phone back up automatically to the computer at home. No account, no cloud storage.";
 "welcome_scan" = "Scan to connect the home computer";
 "welcome_step1" = "1 · Open P-Pass on the home computer";
 "welcome_step2" = "2 · Use the button below to scan the code on its screen";
