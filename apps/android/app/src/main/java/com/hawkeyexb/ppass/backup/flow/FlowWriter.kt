@@ -8,6 +8,7 @@ package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.backup.order.AuditRecord
 import com.hawkeyexb.ppass.backup.order.GenerationAdvance
+import com.hawkeyexb.ppass.backup.order.LocationVerdict
 import com.hawkeyexb.ppass.backup.order.NewOrder
 import com.hawkeyexb.ppass.backup.order.Order
 import com.hawkeyexb.ppass.backup.order.OrderState
@@ -75,7 +76,7 @@ class WriterGuardedOrderStore(private val delegate: OrderStore, private val guar
     ): Boolean = write { delegate.transition(id, expected, to, countAttempt, contentHash, advance, scanTo, audit) }
     override fun setSourceMissing(id: Long, missing: Boolean, audit: AuditRecord?): Boolean =
         write { delegate.setSourceMissing(id, missing, audit) }
-    override fun resolveLocationRedaction(id: Long, refused: Boolean) = write { delegate.resolveLocationRedaction(id, refused) }
+    override fun resolveLocationRedaction(id: Long, verdict: LocationVerdict) = write { delegate.resolveLocationRedaction(id, verdict) }
     override fun cancelRemaining(targets: List<SkipTarget>, audit: AuditRecord?): SkipResult =
         write { delegate.cancelRemaining(targets, audit) }
     override fun restoreSkipped(audit: AuditRecord?): Int = write { delegate.restoreSkipped(audit) }

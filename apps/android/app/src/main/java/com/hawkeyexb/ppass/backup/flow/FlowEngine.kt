@@ -14,6 +14,7 @@ package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.backup.order.AuditRecord
 import com.hawkeyexb.ppass.backup.order.GenerationAdvance
+import com.hawkeyexb.ppass.backup.order.LocationVerdict
 import com.hawkeyexb.ppass.backup.order.MediaDetails
 import com.hawkeyexb.ppass.backup.order.MediaSnapshot
 import com.hawkeyexb.ppass.backup.order.MediaSnapshotSource
@@ -71,7 +72,10 @@ internal class FlowEngine(
     private val io: CoroutineDispatcher,
     private val log: FlowLogger = FlowLogger { },
     private val clock: () -> Long = System::currentTimeMillis,
-    /** 每轮结束后（审计 outbox 冲刷等）。 */
+    /**
+     * 每轮结束后（审计 outbox 冲刷）。#1005：只在这一轮连上过桌面时调用——审计是给桌面看的历史、不急，搭已经建好的
+     * 连接走；没连桌面的一轮（没东西要传 / 桌面不可达）不为它单独建连接，积压的留到下一次连上。
+     */
     private val afterCycle: () -> Unit = {},
     /** 桌面宣布了新的配对代号（同一台桌面重新配对）：持久化它。 */
     private val onEpochAdvertised: (String) -> Unit = {},
@@ -116,6 +120,9 @@ internal class FlowEngine(
 
     // ---- 以下字段只在写者 scope 上读写 ----
     private var cycleJob: Job? = null
+
+    /** #1005：这一次 drain 里探测到过桌面（连接已建好）——[afterCycle] 只在此时搭车上报。 */
+    private var reachedDesktop = false
     private val pending = LinkedHashSet<TriggerReason>()
     private var started = false
 
@@ -549,6 +556,7 @@ internal class FlowEngine(
 
     private suspend fun drain() {
         while (true) {
+            reachedDesktop = false
             try {
                 while (pending.isNotEmpty()) {
                     val reasons = pending.toSet()
@@ -569,7 +577,7 @@ internal class FlowEngine(
                 checksDone.update { it + 1 }
                 withContext(NonCancellable) {
                     runCatching { refreshPending() }
-                    afterCycle()
+                    if (reachedDesktop) afterCycle()
                 }
             }
             // #900：收尾要在 io 上重算待办（会让出写者），这段时间 cycleJob 仍 active，到达的触发被合并进了 pending——
@@ -636,6 +644,7 @@ internal class FlowEngine(
             }
             ProbeResult.PairingLost -> return settle(WaitReason.NOT_PAIRED)
             is ProbeResult.Reachable -> {
+                reachedDesktop = true
                 // #652：探测梯在这里还不能撤——桌面可能可达但不健康，那时它正是唤醒；拿到 FGS 才撤（见下）。
                 reach.advertisedEpoch?.takeIf { it.isNotBlank() && it != epoch.value }?.let(onEpochAdvertised)
                 facts.update { it.copy(desktopHealth = reach.health) }
@@ -936,16 +945,24 @@ internal class FlowEngine(
      *
      * 全程**不建传输中的行**：进程在中途被杀，下一轮从同一张重来（桌面对重放回成功），绝不会被当成一次普通
      * 传输把原图当第二张交付。桌面不可达 / 暂时拉不到 → 留待下一轮；桌面拒绝 → 记结论，不再尝试。
+     *
+     * #1005：「以后也补不成」的每一种情况（原图查不到 / 被编辑成新版本 / 读不出来）都要落一个结论（[LocationVerdict]），
+     * 和主传输的 [processExisting] 一样推进状态。只跳过不记，这一行就永远是待办，每次触发都为它探测桌面、起一轮。
      */
     private suspend fun processUpgrade(order: Order, epoch: PairingEpoch): StepResult {
         val client = supersede ?: return StepResult.Next
         val old = order.contentHash ?: return StepResult.Next
         val details = withContext(io) { media.lookup(order.mediaId) }
-        if (details == null || details.snapshot.sourceVersion != order.sourceVersion || !inScope(details.snapshot.bucketId)) {
-            // 原图没了 / 已被编辑成新版本（新版本照常另传）/ 移出范围：这一行不是替换的对象。
-            return StepResult.Next
+            ?: return endUpgrade(order, LocationVerdict.SOURCE_GONE)
+        if (details.snapshot.sourceVersion != order.sourceVersion) return endUpgrade(order, LocationVerdict.VERSION_CHANGED)
+        // 范围是查询条件：移出范围的不是待办（[hasUpgradeCandidate] 不数它），相册加回来再补。
+        if (!inScope(details.snapshot.bucketId)) return StepResult.Next
+        val (result, failure) = importWithRetry(details)
+        val imported = when (result) {
+            is ImportResult.Imported -> result
+            ImportResult.SourceMissing -> return endUpgrade(order, LocationVerdict.SOURCE_GONE)
+            null -> return endUpgrade(order, LocationVerdict.UNREADABLE, failure)
         }
-        val imported = importWithRetry(details).first as? ImportResult.Imported ?: return StepResult.Next
         val hash = imported.contentHash
         return releasingOnAbort(hash) {
             when {
@@ -955,7 +972,7 @@ internal class FlowEngine(
                 }
                 hash == old -> {
                     importer.release(hash)
-                    store.resolveLocationRedaction(order.id, refused = false)
+                    store.resolveLocationRedaction(order.id, LocationVerdict.NO_LOCATION)
                     bump()
                 }
                 else -> {
@@ -981,7 +998,7 @@ internal class FlowEngine(
                         is SupersedeOutcome.Refused -> {
                             log.log("media ${order.mediaId}: desktop refused to supersede ${old.take(8)} → ${hash.take(8)}: ${outcome.reason}")
                             if (outcome.reason !in TRANSIENT_SUPERSEDE_REFUSALS) {
-                                store.resolveLocationRedaction(order.id, refused = true)
+                                store.resolveLocationRedaction(order.id, LocationVerdict.REFUSED)
                                 bump()
                             }
                         }
@@ -990,6 +1007,14 @@ internal class FlowEngine(
             }
             StepResult.Next
         }
+    }
+
+    /** #1005：这张的地点补不成了——记结论（原因），退出补地点的待办。 */
+    private fun endUpgrade(order: Order, verdict: LocationVerdict, detail: String? = null): StepResult {
+        store.resolveLocationRedaction(order.id, verdict)
+        bump()
+        log.log("media ${order.mediaId}: location upgrade ended: $verdict${detail?.let { " ($it)" }.orEmpty()}")
+        return StepResult.Next
     }
 
     /** 导入（准备这一步唯一读文件的地方），单张失败当场重试 1 次。first = null 表示两次都抛了，second 是原因。 */

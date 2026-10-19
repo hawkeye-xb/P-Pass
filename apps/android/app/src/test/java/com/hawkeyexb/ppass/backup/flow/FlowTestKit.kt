@@ -280,6 +280,9 @@ internal class Rig(
     var probeHook: suspend () -> Unit = {}
     var missingOnDesktop: Set<String> = emptySet()
     var presenceCalls = 0
+
+    /** #1005：引擎调 afterCycle（审计 outbox 冲刷）的次数。 */
+    var afterCycles = 0
     var conditions = Conditions()
 
     /** #762：非 null 时由它给条件（可以在第 N 次读取时抛异常，模拟一轮跑到一半的意外错误）。 */
@@ -340,6 +343,7 @@ internal class Rig(
             supersedeReply(oldHash, newHash)
         },
         appForegroundAt = { appForegroundAt },
+        afterCycle = { afterCycles++ },
     ).also { it.start() }
 
     fun photo(mediaId: Long, generation: Long, content: String = "c$mediaId", bucketId: Long = 7, volume: String = LEGACY_VOLUME): FakePhoto =
