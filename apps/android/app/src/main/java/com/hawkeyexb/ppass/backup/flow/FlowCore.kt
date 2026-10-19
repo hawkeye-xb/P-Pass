@@ -91,6 +91,13 @@ enum class TriggerReason(val userPresent: Boolean = false, val reconcile: Boolea
      * 后台触发、带对账：耗尽那一刻还没传完的照片（含对账才扫得到的）这一轮接着传。
      */
     BUDGET_RESET(reconcile = true),
+
+    /**
+     * #827：续传哨兵到点（见 [WakePlan.ResumeSentinel]）。一轮在传时登记、正常收尾时撤掉，所以它真跑起来只有两种情况：
+     * 进程在传的半路死了（这一次就是把进程拉起来续传——遗留的「传输中」不需要对账也取得到），或者一轮传得比延迟还久
+     * （在跑就合并，只把哨兵再往后排一次，不进 pending）。后台触发。
+     */
+    RESUME_SENTINEL,
 }
 
 /**
@@ -291,6 +298,15 @@ interface WakeScheduler {
 
     /** #522：回过前台（额度会在下一次 startForeground 时复位），撤掉那个唤醒。 */
     fun cancelBudgetResetWake() = Unit
+
+    /**
+     * #827：续传哨兵——[delayMs] 后一次性唤醒（[TriggerReason.RESUME_SENTINEL]）。唯一名、新的替换旧的：
+     * 再登记一次就是把它往后推。由系统持有，所以进程死了它还在。
+     */
+    fun armResumeSentinel(delayMs: Long) = Unit
+
+    /** #827：一轮收尾（进程还活着），撤掉哨兵。 */
+    fun cancelResumeSentinel() = Unit
 }
 
 /** FGS 受阻的原因。 */
@@ -309,8 +325,9 @@ enum class FgsStall {
 }
 
 /**
- * 进入「等待中」时登记哪种唤醒（#409 / #652 的不变式）：**队列里有没传完的、当前又没在传 ⇒ 至少登记着一个会触发的唤醒**。
- * 例外只有需要用户动作的（[AwaitsUser]）。
+ * 登记哪种唤醒（#409 / #652 / #827 的不变式）：**队列里有没传完的 ⇒ 至少登记着一个会触发的唤醒**，例外只有需要用户动作的
+ * （[AwaitsUser]）。等待中由 [wakePlanOf] 按等待原因穷举；在传时是 [ResumeSentinel]（#827：进程随时可能被杀，
+ * 「正在传」不能是例外——以前只有「当前没在传」才登记，进程死在半路就没有任何东西代表这一轮还没做完）。
  */
 sealed interface WakePlan {
     /** 例外：未配对 / 后台备份关着——要等用户动手，不登记。 */
@@ -327,7 +344,20 @@ sealed interface WakePlan {
 
     /** 一次性唤醒，[delayMs] 之后（额度复位点之后）。 */
     data class BudgetReset(val delayMs: Long) : WakePlan
+
+    /**
+     * #827：在传时的哨兵——[delayMs] 后一次性唤醒，一轮收尾时撤掉；进程死在半路时由它把进程拉起来续传。
+     * 有界：连续 [RESUME_SENTINEL_MAX_STRIKES] 轮开了却没处理完任何一张（每次都死在半路）就不再登记，交给 5h 周期兜底与事件，
+     * 否则一个必崩的缺陷会每 [delayMs] 重启一次、没有尽头（与 #762 同理）。计数落盘，见 [FlowControl.resumeStrikes]。
+     */
+    data class ResumeSentinel(val delayMs: Long) : WakePlan
 }
+
+/** #827：哨兵延迟。长于常见的一张照片的耗时；一轮传得更久时，到点只是在跑时合并、把它往后再排一次。 */
+const val RESUME_SENTINEL_DELAY_MS = 10 * 60 * 1000L
+
+/** #827：连续这么多轮开了就死在半路（没处理完任何一张），就不再登记哨兵。 */
+const val RESUME_SENTINEL_MAX_STRIKES = 3
 
 /**
  * #409 / #652：等待原因 → 唤醒种类。**穷举、没有 else**：新增 [WaitReason] 不写映射就编译不过。
@@ -481,6 +511,14 @@ interface FlowControl {
     fun retryLadderSpent(): Boolean
 
     fun setRetryLadderSpent(spent: Boolean)
+
+    /**
+     * #827：连续开了却没处理完任何一张的轮数（**落盘**——要数的正是「进程死在半路」，内存里的数随进程一起没了）。
+     * 每开一轮 +1；处理完一张、或一轮收尾（进程还活着）时清零。
+     */
+    fun resumeStrikes(): Int
+
+    fun setResumeStrikes(strikes: Int)
 
     /** MOB-100：「已跳过 N 张…不会再重传」横幅的确认水位（ms）。 */
     fun missingSourceAckAt(): Long

@@ -119,6 +119,9 @@ internal class FlowEngine(
     private val pending = LinkedHashSet<TriggerReason>()
     private var started = false
 
+    /** #827：这一轮登记过续传哨兵（在跑时哨兵到点才再排；放弃登记的那一轮不再排）。 */
+    private var sentinelArmed = false
+
     /**
      * AUDIT-07（#499）：这一轮已经发出的、会挂到本轮证据上的逐张事实计数（键 == 桌面
      * `audit_item_evidence.outcome`）。轮开始时清空、轮结束时随终态事实一起发出去。它是**手机自报**的
@@ -222,6 +225,11 @@ internal class FlowEngine(
         if (control.paused()) {
             log.log("trigger $reason: paused by user, only intent recorded")
             refreshPending()
+            return false
+        }
+        if (reason == TriggerReason.RESUME_SENTINEL && cycleJob?.isActive == true) {
+            // #827：哨兵到点而这一轮还在跑——进程活着，只把它往后再排一次。不进 pending：否则这一轮结束后会白跑一轮。
+            if (sentinelArmed) registerWake(WakePlan.ResumeSentinel(RESUME_SENTINEL_DELAY_MS), "round still running")
             return false
         }
         pending += reason
@@ -383,16 +391,21 @@ internal class FlowEngine(
         val plan = wakePlanOf(reason) {
             fgsBlockedWakePlan(stall, control.fgsBudgetFacts(), bootClock(), appForegroundAt())
         }
+        registerWake(plan, "waiting for $reason", stall)
+    }
+
+    /** 唤醒的唯一登记口（等待中与在传都经过这里），[context] 只用于日志。 */
+    private fun registerWake(plan: WakePlan, context: String, stall: FgsStall = FgsStall.NOT_GRANTED) {
         when (plan) {
-            WakePlan.AwaitsUser -> log.log("waiting for $reason: needs the user, no wake registered")
+            WakePlan.AwaitsUser -> log.log("$context: needs the user, no wake registered")
             is WakePlan.WhenConditionsMet -> scheduler.scheduleWhenConditionsMet(plan.reason)
             WakePlan.RetryProbes -> if (control.retryLadderSpent()) {
                 // #762：这次故障已经排过一组。不再加排——否则「开始传之后才出错」会每轮重排、无界循环。
-                log.log("waiting for $reason: retry probes already used for this outage; the 5h fallback and events carry on until a success")
+                log.log("$context: retry probes already used for this outage; the 5h fallback and events carry on until a success")
             } else {
                 scheduler.scheduleUnreachableProbes()
                 control.setRetryLadderSpent(true)
-                log.log("waiting for $reason: retry probes registered ($RETRY_PROBES_LOG)")
+                log.log("$context: retry probes registered ($RETRY_PROBES_LOG)")
             }
             is WakePlan.BudgetReset -> {
                 // 唯一名、REPLACE：同一次耗尽算出的是同一个绝对时刻（最近一次授予 + 24h + 余量），重登记不会把它往后推。
@@ -401,9 +414,35 @@ internal class FlowEngine(
                     FgsStall.LOST -> "foreground lost; fallback wake past the system reset (last grant + 24h + margin)"
                     FgsStall.NOT_GRANTED -> "foreground budget exhausted (system reset + margin)"
                 }
-                log.log("waiting for $reason: one-off wake registered in ${plan.delayMs / 60_000}min; $why")
+                log.log("$context: one-off wake registered in ${plan.delayMs / 60_000}min; $why")
+            }
+            is WakePlan.ResumeSentinel -> {
+                scheduler.armResumeSentinel(plan.delayMs)
+                sentinelArmed = true
+                log.log("$context: resume sentinel registered in ${plan.delayMs / 60_000}min; cancelled when the round ends")
             }
         }
+    }
+
+    /**
+     * #827：一轮开了（FGS 到手）——登记哨兵，进程死在半路时由它拉起来续传。有界：连续
+     * [RESUME_SENTINEL_MAX_STRIKES] 轮都死在半路（没处理完任何一张）就不再登记，见 [WakePlan.ResumeSentinel]。
+     */
+    private fun armResumeSentinel(roundId: String) {
+        val strikes = control.resumeStrikes()
+        if (strikes >= RESUME_SENTINEL_MAX_STRIKES) {
+            log.log("round $roundId: $strikes rounds in a row died before finishing a photo; no resume sentinel, the 5h fallback and events carry on")
+            return
+        }
+        control.setResumeStrikes(strikes + 1)
+        registerWake(WakePlan.ResumeSentinel(RESUME_SENTINEL_DELAY_MS), "round $roundId")
+    }
+
+    /** #827：一轮收尾（进程还活着）：撤掉哨兵、清零计数。 */
+    private fun disarmResumeSentinel() {
+        sentinelArmed = false
+        scheduler.cancelResumeSentinel()
+        control.setResumeStrikes(0)
     }
 
     /**
@@ -645,12 +684,14 @@ internal class FlowEngine(
         log.log("cycle $reasons: round $roundId open")
         var exit: WaitReason? = null
         try {
+            armResumeSentinel(roundId)
             // 一轮一条推送订阅（契约 §5），随 FGS 一起释放。
             exit = delivery.session { loop(Round(reconcile, userPresent)) }
             if (exit == null && !control.paused()) recovered("round finished")
         } finally {
             withContext(NonCancellable) {
                 foreground.release()
+                disarmResumeSentinel()
                 closeRound(roundId)
                 bump()
                 // 循环里以 FGS_BLOCKED 退出只有一种可能：每张开始前发现服务已不在前台（被系统收走）。
@@ -736,6 +777,8 @@ internal class FlowEngine(
                 StepResult.Next -> Unit
                 is StepResult.Exit -> return step.reason
             }
+            // #827：这一张处理完了（进程没死在它身上）：清零「连续死在半路」的计数。
+            control.setResumeStrikes(0)
             foreground.renew()
         }
     }

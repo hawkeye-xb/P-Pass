@@ -50,6 +50,9 @@ const val CONSTRAINT_WAKE_WORK_NAME = "ppass-constraint-wake"
 
 /** #522：额度复位唤醒的唯一名。独立的一次性任务——不复用周期任务（WorkManager 会推迟提前强跑的周期任务）。 */
 const val BUDGET_RESET_WAKE_WORK_NAME = "ppass-fgs-budget-reset-wake"
+
+/** #827：续传哨兵（一轮在传时登记、收尾时撤掉；进程死在半路时由它拉起来续传）。 */
+const val RESUME_SENTINEL_WORK_NAME = "ppass-resume-sentinel"
 val UNREACHABLE_PROBE_DELAYS_MINUTES = listOf(10L, 20L, 40L, 80L)
 
 /** The switch owns these producers, and deliberately does not own Manual. */
@@ -143,6 +146,25 @@ class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
 
     override fun cancelBudgetResetWake() {
         WorkManager.getInstance(context).cancelUniqueWork(BUDGET_RESET_WAKE_WORK_NAME)
+    }
+
+    // #827：约束与探测梯相同（只要网络；后台开关、电量由引擎这一轮自己查）。REPLACE：再登记一次就是往后推。
+    override fun armResumeSentinel(delayMs: Long) {
+        val settings = BackupSettings(context.filesDir).load()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            RESUME_SENTINEL_WORK_NAME,
+            ExistingWorkPolicy.REPLACE,
+            backupWorkRequest(
+                constraintsFor(BackupTier.USER_PRESENT, settings),
+                automatic = false,
+                reason = TriggerReason.RESUME_SENTINEL,
+                initialDelayMs = delayMs,
+            ),
+        )
+    }
+
+    override fun cancelResumeSentinel() {
+        WorkManager.getInstance(context).cancelUniqueWork(RESUME_SENTINEL_WORK_NAME)
     }
 }
 
