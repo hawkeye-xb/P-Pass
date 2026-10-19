@@ -19,6 +19,15 @@
 [graph]
 # 与根那份同口径：不开 all-features。src-tauri 的 feature 由 Cargo.toml 钉死。
 all-features = false
+# #1022：只审桌面端**真正发出去**的平台（release.yml：macos-arm64 + Windows
+# NSIS）。不设时 cargo-deny 把所有平台的 cfg 依赖都算进来——Linux 专属的
+# zbus 一线（tauri-plugin-opener / single-instance 的 D-Bus 实现）因此报了
+# RUSTSEC-2026-0370/0371/0372，而那些代码根本不在任何一个安装包里。
+# 🔁 桌面端开始发新平台（Linux / Intel Mac）时，先把它的三元组加到这里。
+targets = [
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
 
 [advisories]
 yanked = "deny"
@@ -39,24 +48,25 @@ ignore = [
   "RUSTSEC-2025-0081", # unic-char-property
   "RUSTSEC-2025-0098", # unic-ucd-version
   "RUSTSEC-2025-0100", # unic-ucd-ident
-  # `proc-macro-error` unmaintained（RUSTSEC-2024-0370）——同样是
-  # informational，不是漏洞。公告原文：维护者两年无提交、四年无发布、邮件与
-  # GitLab 均无回应。
-  # ⚠️ 根 `deny.toml` 里也有这一条，但**链路不同，不要以为是抄来的**：
-  #   根那边  proc-macro-error ← genawaiter ← bao-tree ← iroh-blobs（T-021）
-  #   这边    proc-macro-error ← gtk3-macros ← gtk 0.18（Tauri 的 Linux GTK 栈）
-  # 两棵树各自独立命中，所以两份配置各记一次，不是重复。
-  # 🔁 重估触发条件：升级 `tauri`（进而升级它依赖的 gtk 0.18 一线）时重试。
-  "RUSTSEC-2024-0370", # proc-macro-error（经 gtk3-macros）
-  # SEC-15 (#1003)：`zip 4.6.1` 被上游 yank（2026-10-16 撤回了 9.0.3 以前全部
-  # 版本）。我们自己的直接依赖已升到 9.0.3；剩下这份是 Tauri 带进来的：
+  # （#1022：原先这里豁免过 `proc-macro-error` RUSTSEC-2024-0370，链路是
+  # gtk3-macros ← gtk 0.18，Linux 专属。[graph] targets 收窄到发布平台后它
+  # 不再出现，删掉。桌面端开始发 Linux 时它会回来，届时再议。）
+  # #1022：`zip 4.6.1` 的三个解压漏洞（RUSTSEC-2026-0367/0368/0369，修复要
+  # zip >= 9）。我们自己的直接依赖已是 9.0.3（SEC-15 #1003）；剩下这份是：
   #   zip 4.6.1
-  #     └── tauri-plugin-updater 2.x（Windows 上解压更新包）
-  # 插件最新版 2.14.0 仍要求 `zip ^4`，我们无从升级。yank ≠ 删除：有锁文件
-  # 照样能下载、编译、发版。只豁免这一个精确版本，别的 yank 照样拦。
+  #     └── tauri-plugin-updater 2.x（仅 Windows：解压更新包）
+  # 插件最新版 2.14.0 / 3.0.0-alpha.3 仍要求 `zip ^4`，我们无从升级。
+  # 不受影响的理由（三条都是「解压攻击者构造的压缩包」）：
+  #   - updater 解压前先用 tauri.conf.json 里的 minisign `pubkey` 验签，
+  #     压缩包只可能是我们自己签发的；伪造它要先拿到签名私钥。
+  #   - 0367 是 Unix SUID/SGID 位，这条链只编进 Windows 包，不适用。
+  # （想加 `expiry` 到期复查：cargo-deny 0.20.2 还不支持，主干已合未发版。）
   # 🔁 删除条件：升级 tauri-plugin-updater 后它不再依赖 zip 4（`cargo tree
-  #    -i zip@4.6.1` 报找不到），删掉这一条——cargo-deny 届时也会报未命中。
-  { crate = "zip@4.6.1", reason = "tauri-plugin-updater 仍要求 zip ^4，见 #1003" },
+  #    -i zip@4.6.1` 报找不到），删掉这三条——cargo-deny 届时也会报未命中。
+  # （原先这里那条 `zip@4.6.1` yank 豁免已删：上游已撤销 yank，它成了未命中项。）
+  { id = "RUSTSEC-2026-0367", reason = "updater 包先验签再解压，且仅 Windows；见 #1022" },
+  { id = "RUSTSEC-2026-0368", reason = "updater 包先验签再解压，且仅 Windows；见 #1022" },
+  { id = "RUSTSEC-2026-0369", reason = "updater 包先验签再解压，且仅 Windows；见 #1022" },
 ]
 
 [licenses]
@@ -72,7 +82,8 @@ allow = [
   "Unicode-3.0",
   "Unlicense",
   "Zlib",
-  "CDLA-Permissive-2.0",
+  # （#1022：`CDLA-Permissive-2.0` 已删——只有 webpki-root-certs 用它，经
+  # rustls-platform-verifier 只编进 Android，不在 [graph] targets 里。）
   "CC0-1.0",
   "0BSD",
   "Apache-2.0 WITH LLVM-exception",
@@ -85,11 +96,11 @@ private = { ignore = true }
 
 [bans]
 # 与根那份同口径：重复版本记 warn 不记 deny。
-# 本树实测 31 条 `warning[duplicate]` —— Tauri 的依赖树横跨 gtk / objc2 /
+# 本树实测 26 条（#1022 收窄到发布平台后；全平台时是 31） `warning[duplicate]` —— Tauri 的依赖树横跨 gtk / objc2 /
 # windows-sys 三套平台绑定，同一个 crate 出现多个大版本是常态（例如
 # windows-sys 有 0.45/0.52/0.59/0.60/0.61 五个）。设 deny 会把这条门禁变成
 # 一条永远红的检查，而我们对上游的版本收敛毫无影响力。
-# ⚠️ 这是**刻意降级，不是默默放过**：31 条的数字记在这里，哪天它明显变大
+# ⚠️ 这是**刻意降级，不是默默放过**：26 条的数字记在这里，哪天它明显变大
 #    （比如翻倍），说明有人引入了新的重复源，值得去看一眼。
 multiple-versions = "warn"
 deny = []
