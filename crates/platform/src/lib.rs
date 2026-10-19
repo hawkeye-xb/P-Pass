@@ -384,6 +384,20 @@ pub trait PlatformAdapter: Send + Sync {
     /// 想真正换过去，调用方得先调 [`Self::migrate_legacy_data_dir`]。
     fn data_dir(&self) -> PathBuf;
 
+    /// IDX-08 (#1010)：入库落盘文件名的**平台策略**。
+    ///
+    /// core 先把手机传来的名字去掉路径、做路径穿越兜底（最后一段、`.`/`..`、
+    /// 空名），再把**那一段**交给这里。返回的名字只负责「在当前文件系统上合法」；
+    /// `None` = 本平台没有额外规则（macOS / Linux 保持现状）。
+    ///
+    /// 为什么是能力而不是 core 里的 `#[cfg]`：合法名字的规则是平台知识
+    /// （Windows 的非法字符、保留名、结尾点/空格），按架构红线只能住在
+    /// `crates/platform`。返回函数指针而不是 `String` 策略对象，是为了让
+    /// core 的 `Ingestor` 保持 `Clone`/轻量，且不需要把平台依赖传进核心层。
+    fn ingest_file_name_sanitizer(&self) -> Option<fn(&str) -> String> {
+        None
+    }
+
     /// DESK-24 (#173)：把遗留位置的数据搬到 [`Self::data_dir`] 现在该在的地方。
     ///
     /// **在任何人读 data dir 之前调一次**，进程生命周期里一次就够。daemon 那边

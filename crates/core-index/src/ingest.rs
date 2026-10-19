@@ -59,6 +59,11 @@ pub enum IngestOutcome {
 pub struct Ingestor {
     pub(crate) db: Db,
     pub(crate) library_root: PathBuf,
+    /// IDX-08 (#1010): the target OS's file-name policy, injected by the
+    /// daemon from `platform::adapter()`. `None` keeps the POSIX behaviour
+    /// (macOS/Linux). The function receives the name after core's traversal
+    /// cleanup and returns the name to create on disk.
+    pub(crate) file_name_sanitizer: Option<fn(&str) -> String>,
 }
 
 impl Ingestor {
@@ -66,7 +71,17 @@ impl Ingestor {
         Self {
             db,
             library_root: library_root.into(),
+            file_name_sanitizer: None,
         }
+    }
+
+    /// IDX-08 (#1010): inject the current OS's file-name policy. The daemon
+    /// passes `platform::adapter().ingest_file_name_sanitizer()`; tests can
+    /// pass a fake policy. `None` keeps the pre-#1010 behaviour.
+    #[must_use]
+    pub fn with_file_name_sanitizer(mut self, sanitizer: Option<fn(&str) -> String>) -> Self {
+        self.file_name_sanitizer = sanitizer;
+        self
     }
 
     /// WATCH-07：被 ingest 的文件就是索引记录里的同一个文件（同一路径）时，
@@ -295,7 +310,15 @@ impl Ingestor {
     }
 
     fn place_blocking(&self, f: &IncomingFile, taken_at_ms: i64) -> Result<String> {
-        let name = sanitize_file_name(&f.file_name);
+        // IDX-08 (#1010): traversal cleanup first (last component, `.`/`..`,
+        // empty → unnamed.bin), then the target OS's legality policy. The
+        // policy never sees a path; POSIX runs with no policy and keeps the
+        // old names byte-for-byte.
+        let cleaned = sanitize_file_name(&f.file_name);
+        let name = match self.file_name_sanitizer {
+            Some(sanitize) => sanitize(&cleaned),
+            None => cleaned,
+        };
         let (yyyy, mm) = year_month(taken_at_ms);
         let dir_rel = format!("originals/{}/{yyyy:04}/{mm:02}", device_dir(&f.src_device));
         let dir_abs = self.library_root.join(&dir_rel);

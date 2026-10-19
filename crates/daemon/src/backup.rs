@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use core_index::{IncomingFile, Ingestor};
+use platform::PlatformAdapter as _;
 use proto::{BackupItem, BackupManifest, BackupMissing};
 use storage::Db;
 use transport::Blobs;
@@ -139,7 +140,8 @@ impl BackupEngine {
     pub fn new(db: Db, blobs: Arc<Blobs>, library_root: impl Into<PathBuf>) -> Self {
         let root = library_root.into();
         Self {
-            ingestor: Ingestor::new(db.clone(), &root),
+            ingestor: Ingestor::new(db.clone(), &root)
+                .with_file_name_sanitizer(platform::adapter().ingest_file_name_sanitizer()),
             db,
             blobs,
             staging: root.join(".ppf/staging"),

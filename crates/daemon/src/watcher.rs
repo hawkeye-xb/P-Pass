@@ -28,6 +28,7 @@ use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::Semaphore;
 
 use core_index::{IncomingFile, IngestOutcome, Ingestor};
+use platform::PlatformAdapter as _;
 use storage::Db;
 
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
@@ -92,7 +93,8 @@ impl LibraryWatcher {
         };
         Self {
             inner: Arc::new(WatcherInner {
-                ingestor: Ingestor::new(db.clone(), &library_root),
+                ingestor: Ingestor::new(db.clone(), &library_root)
+                    .with_file_name_sanitizer(platform::adapter().ingest_file_name_sanitizer()),
                 db,
                 reconcile,
                 library_root: library_root.clone(),
