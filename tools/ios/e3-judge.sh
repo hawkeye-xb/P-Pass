@@ -87,7 +87,7 @@ case "${1:-}" in
       photos-log)
         expect "打开照片页取首页（#987）" 'timeline\.page reason=open cursor=first ok items=[0-9]+'
         expect "缩略图请求有日志（#987）" 'thumb\.get size=256 ok in [0-9]+ms'
-        expect "下拉刷新（#987）" 'timeline\.page reason=pull cursor=first ok'
+        expect "60 秒兜底刷新（#987）" 'timeline\.page reason=fallback cursor=first ok'
         expect "备份新照片后由订阅信号整页刷新（#987）" 'timeline\.page reason=signal cursor=first ok' ;;
       degraded-stats)
         # #1016：只统计不判对错——降级张数（按脱敏 id 去重）与总行数，交给人决定保留降级还是换判据。
