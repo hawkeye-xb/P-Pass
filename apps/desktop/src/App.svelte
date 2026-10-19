@@ -2,7 +2,15 @@
   import { reconcilePhotoWall } from "./photoWall.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
   import { currentPlatform, wizardVariant } from "./platformUx.js";
-  import { shouldShowWizard, serviceCameBack } from "./serviceGate.js";
+  import { shouldShowWizard } from "./serviceGate.js";
+  import {
+    canStartService,
+    canStopService,
+    isServiceRunning,
+    serviceStateActionKey,
+    serviceStateFromEvent,
+    serviceStateLabelKey,
+  } from "./serviceState.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
@@ -106,15 +114,14 @@
   // installer terminates the calling process itself (CheckIfAppIsRunning
   // macro) partway through, so the resume call queued right after
   // downloadAndInstall() may never run: the shell that would call it is
-  // dead. Rather than depend on that one line of JS surviving, refresh()
-  // below self-heals on every tick — if the daemon is unreachable but a
-  // config already exists (post-wizard steady state, not "user hasn't
-  // finished onboarding yet"), try resuming it once per cooldown window.
-  // Silent: this must never surface a dialog on every 60s poll for a
-  // machine that's genuinely offline for another reason (resume_daemon_
-  // after_update itself no-ops safely if the daemon is already up,
-  // thanks to the single-instance claim protocol).
+  // dead. Rather than depend on that one line of JS surviving, self-heal
+  // is triggered by the Rust-owned `unreachable` state (see
+  // maybeSelfHeal): if a config already exists and the user did not stop
+  // the service, try resuming it once per cooldown window. Silent: this
+  // must never surface a dialog on every reconnect for a machine that's
+  // genuinely offline for another reason.
   let lastSelfHealAttempt = 0;
+  let selfHealRetry;
   const SELF_HEAL_COOLDOWN_MS = 30000;
 
   // #557: Settings → language. Options render their own labels via t();
@@ -151,8 +158,9 @@
     } catch (e) {
       flashMessage(t("ui.stop_failed", { err: errText(e) }), "error");
     }
-    // DESK-36 (#456)：停完立刻对账——状态点变「未运行」不用等 60s 兜底轮询；
-    // wizard_state 也要重读（user_stopped 刚落盘，向导门靠它不把人打回 onboard）。
+    // DESK-63 (#946)：状态点由 Rust 的 service-state 事件立刻更新；这里只
+    // 重新对账数据与 wizard_state（user_stopped 刚落盘，向导门靠它不把人
+    // 打回 onboard）。
     await syncServiceState();
   }
 
@@ -187,17 +195,23 @@
     try {
       await checkWizard();
     } catch (_) {}
-    for (let i = 0; i < 10 && !online; i++) {
+    // Wait for the event-driven state, not for a data refresh to succeed.
+    // `refresh()` below is data reconciliation only.
+    for (let i = 0; i < 10 && !isServiceRunning(serviceState); i++) {
       await new Promise((r) => setTimeout(r, 3000));
       await refresh();
     }
   }
 
-  let online = $state(false);
-  // DESK-38 (#475)：上一次 refresh 的探活结果（null = 本进程还没探过）。
-  // 不是 $state：只给 serviceCameBack 判「离线 → 可达」这一跳用，不驱动渲染。
-  let lastReachable = null;
+  // DESK-63 (#946): the service state is owned by the Rust shell and pushed
+  // through the `service-state` event. `starting` is the honest initial
+  // value: the shell and the daemon are separate processes, and the daemon
+  // may still be booting. Data refreshes never write this.
+  let serviceState = $state("starting");
   let status = $state(null);
+  // DESK-63 (#946): a devices.list failure is a data error, not a service
+  // outage. It gets its own state and its own message.
+  let devicesError = $state("");
   // #413 §7：低空间通知的布防状态——每个进程最多在跌破时报一次，回升到
   // 6 GiB 以上才重新布防。不是 $state：它不驱动任何渲染。
   let lowSpaceArmed = true;
@@ -289,12 +303,7 @@
   async function refresh() {
     try {
       status = await call("status");
-      online = true;
       checkLowSpace(status.disk_free_bytes ?? null);
-      // DESK-38 (#475)：服务刚从不可达变可达（「启动后台服务」、自愈拉起、
-      // 更新后恢复都走到这里）——只拉一次的视图要重拉，见 onServiceBackOnline。
-      if (serviceCameBack(lastReachable, true)) onServiceBackOnline();
-      lastReachable = true;
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
@@ -321,8 +330,16 @@
       // 全量。此前不传参 ⇒ daemon 默认 `WHERE revoked = 0` ⇒ 下面那个
       // 「已移除设备 N 台」折叠区**永远是空的、渲染不出来**（同一个默认
       // 过滤，也让手机一断开设备就从列表里凭空消失——本卡要修的主症状）。
-      const d = await call("devices.list", { include_revoked: true });
-      devices = d.devices ?? [];
+      try {
+        const d = await call("devices.list", { include_revoked: true });
+        devices = d.devices ?? [];
+        devicesError = "";
+      } catch (e) {
+        // DESK-63 (#946): a data error stays in the data area. It must not
+        // flip the service state — that was the bug: any failure in this
+        // try-block used to make the overview say "not running".
+        devicesError = errText(e);
+      }
       nowMs = Date.now();
       // T-091: 水位数据单独容错——拿不到不拖垮整页（保留上次值）
       try {
@@ -351,31 +368,14 @@
         auditError = errText(e);
       }
     } catch (e) {
-      online = false;
-      lastReachable = false;
+      // DESK-63 (#946): only the `status` probe can reach here now
+      // (devices.list has its own catch below; watermarks / activity /
+      // audit were already individually guarded). This is a data failure
+      // for THIS refresh — not a service-state decision. The Rust event
+      // stream owns that, and the failure reason is in desktop.log.
+      // Clear stale counts, but leave the service state alone.
       status = null;
-      // Self-heal: only if onboarding already completed (wizard===null
-      // means "not checked yet", still fine to skip — checkWizard() runs
-      // on mount before the first refresh() anyway) — never try to
-      // resume a daemon on a machine that hasn't finished the wizard,
-      // that's a different, expected "not configured yet" offline state
-      // the overview page's "启动后台服务" button already handles.
-      //
-      // DESK-36 (#456)：「是不是用户自己停的」只能由 Rust 在调用这一刻判——
-      // self_heal_daemon 读盘上的停止标记，用户停的就不拉（托盘停止时这里的
-      // wizard 缓存可能还是旧的）。更新流程的 resume_daemon_after_update
-      // 是另一条路径，不经过这里（它在 Rust 侧同样读这份标记）。
-      const now = Date.now();
-      if (wizard?.configured && now - lastSelfHealAttempt > SELF_HEAL_COOLDOWN_MS) {
-        lastSelfHealAttempt = now;
-        try {
-          await invoke("self_heal_daemon");
-        } catch (_) {
-          // Best-effort — if this fails too, the existing offline banner
-          // + manual "启动后台服务" button on the overview page is still
-          // there as the fallback path; no need to surface a second error.
-        }
-      }
+      void e;
     }
   }
 
@@ -743,6 +743,7 @@
   let unlistenStopped;
   let unlistenExportLogs;
   let unlistenKernel;
+  let unlistenServiceState;
   // #667：壳启动时 Rust 侧自动换内核的阶段（idle / deferred / restarting / done / failed）。
   // deferred = 正在传输、推迟换版（界面说事实句，不是失败）；restarting 时不给手动按钮，
   // 免得和自动那次叠成两次重启。done 之后靠状态刷新让「重启后台服务」行自然消失。
@@ -776,15 +777,25 @@
     invoke("kernel_convergence_phase")
       .then((p) => (kernelPhase = p || "idle"))
       .catch(() => {});
+    // DESK-63 (#946): service state is event-driven. Subscribe first, then
+    // read the snapshot — the event may fire before the listener is ready.
+    listen("service-state", (ev) => applyServiceState(serviceStateFromEvent(ev?.payload))).then(
+      (f) => (unlistenServiceState = f),
+    );
+    invoke("service_state")
+      .then((s) => applyServiceState(s?.state))
+      .catch(() => {});
     window.addEventListener("hashchange", onHashChange);
   });
   onDestroy(() => {
     clearInterval(timer);
+    clearTimeout(selfHealRetry);
     unlisten?.();
     unlistenTray?.();
     unlistenStopped?.();
     unlistenExportLogs?.();
     unlistenKernel?.();
+    unlistenServiceState?.();
     window.removeEventListener("hashchange", onHashChange);
   });
 
@@ -837,6 +848,68 @@
     thumbServiceEpoch++;
   }
   let thumbServiceEpoch = $state(0);
+
+  // DESK-63 (#946): the Rust shell owns the service state and pushes every
+  // transition. This function only renders it; `refresh()` never writes it.
+  function applyServiceState(next) {
+    if (!next) return;
+    const previous = serviceState;
+    serviceState = next;
+    if (next === "running") {
+      clearTimeout(selfHealRetry);
+      if (previous !== "running") onServiceBackOnline();
+      refresh();
+    } else if (next === "unreachable") {
+      maybeSelfHeal();
+    } else if (next === "stopped") {
+      clearTimeout(selfHealRetry);
+      // Tray stop reaches here before the toast; re-read the wizard so a
+      // user-stopped service is not mistaken for an abandoned wizard.
+      checkWizard().catch(() => {});
+    }
+  }
+
+  // DESK-36 (#456): self-heal is now triggered by the state transition to
+  // `unreachable`, not by a failed data refresh. The Rust side re-reads the
+  // stop marker at call time, so a stale wizard cache cannot revive a service
+  // the user stopped.
+  async function maybeSelfHeal() {
+    // One retry chain per unreachable episode. The old code got this for
+    // free from the 60s refresh; now state is event-driven, so the retry
+    // has to live here.
+    if (serviceState !== "unreachable") {
+      clearTimeout(selfHealRetry);
+      return;
+    }
+    clearTimeout(selfHealRetry);
+    // The state event can arrive before the first wizard_state response.
+    // Load it now instead of silently skipping the one self-heal window.
+    if (!wizard) {
+      try {
+        await checkWizard();
+      } catch (_) {
+        return;
+      }
+    }
+    if (!wizard?.configured || wizard?.user_stopped) return;
+    const now = Date.now();
+    const wait = SELF_HEAL_COOLDOWN_MS - (now - lastSelfHealAttempt);
+    if (wait > 0) {
+      // Keep the retry chain alive; clearing the timer at the top must not
+      // drop a pending attempt.
+      selfHealRetry = setTimeout(maybeSelfHeal, wait);
+      return;
+    }
+    lastSelfHealAttempt = now;
+    try {
+      await invoke("self_heal_daemon");
+    } catch (_) {
+      // Best effort; the offline card's start button is the fallback.
+    }
+    if (serviceState === "unreachable") {
+      selfHealRetry = setTimeout(maybeSelfHeal, SELF_HEAL_COOLDOWN_MS);
+    }
+  }
 
   // 照片墙窗口对账 —— 判据全部在 src/photoWall.js（纯函数 + 单测）。
   //
@@ -1379,7 +1452,7 @@
 
 <Toaster position="top-right" />
 
-{#if shouldShowWizard(wizard, online)}
+{#if shouldShowWizard(wizard, isServiceRunning(serviceState))}
   <!-- T-042: onboarding 进行中不展示"后台服务未运行"终态——服务本来
        就要在这一步才被拉起，提前暴露只有困惑（xixi 实测反馈 1）。
        配置写了但服务没注册 = wizard 中途退出，重进继续走 wizard
@@ -1423,9 +1496,14 @@
       </nav>
       <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊；<1080px
            收起态缩成纯色点（设计稿：服务状态缩成底部绿点）。 -->
-      <div class="service-pill" class:ok={online} class:bad={!online} title={online ? t("ui.service_running_long") : t("ui.offline_banner")}>
+      <div
+        class="service-pill"
+        class:ok={isServiceRunning(serviceState)}
+        class:bad={!isServiceRunning(serviceState)}
+        title={t(serviceStateLabelKey(serviceState))}
+      >
         <span class="dot"></span>
-        <span class="service-label">{online ? t("ui.service_running_long") : t("ui.offline_banner")}</span>
+        <span class="service-label">{t(serviceStateLabelKey(serviceState))}</span>
       </div>
     </aside>
 
@@ -1453,12 +1531,20 @@
             </p>
           </div>
 
-          {#if !online}
+          {#if !isServiceRunning(serviceState)}
             <Card class="text-[16px]">
-              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.offline_action")}</p>
-              <Button class="mt-[12px] self-start" disabled={starting} onclick={startDaemonNow}>
-                {starting ? t("ui.starting") : t("ui.start_service")}
-              </Button>
+              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">
+                {#if serviceState === "starting"}
+                  {t("ui.starting")}
+                {:else}
+                  {t(serviceStateActionKey(serviceState))}
+                {/if}
+              </p>
+              {#if canStartService(serviceState)}
+                <Button class="mt-[12px] self-start" disabled={starting} onclick={startDaemonNow}>
+                  {starting ? t("ui.starting") : t("ui.start_service")}
+                </Button>
+              {/if}
               <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
             </Card>
           {:else}
@@ -1523,6 +1609,14 @@
             <div class="grid grid-cols-1 gap-[22px] min-[1080px]:grid-cols-2 min-[1440px]:grid-cols-3">
               <Card class="text-[16px]">
                 <h3 class="mb-[12px] text-[15px] font-semibold">{t("ui.backup_status")}</h3>
+                {#if devicesError}
+                  <!-- DESK-63 (#946): the service may be running fine while
+                       this one data call failed. Say it here, never turn the
+                       service badge red for it. -->
+                  <p class="m-0 mb-[10px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
+                    {devicesError}
+                  </p>
+                {/if}
                 {#if devices.filter((d) => !d.revoked).length === 0}
                   <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
                        卡片顶部，下面一截空白显得像没做完。 -->
@@ -1614,6 +1708,11 @@
                底部说明不跟着长——与活动记录页/照片页同一套 min-h-0 flex-1
                overflow-y-auto 处理（那两页踩过"整个右侧内容区跟着长高"的坑）。 -->
           <Card size="flush" class="min-h-0 flex-1 overflow-y-auto">
+            {#if devicesError}
+              <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
+                {devicesError}
+              </p>
+            {/if}
             {#if devices.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
             {:else}
@@ -1960,11 +2059,13 @@
                 {/if}
                 <!-- #550：诊断包入口已收进托盘菜单（「导出诊断包」），设置页不再展示。 -->
               </Card>
-              <Card variant="danger" class="text-[16px]">
-                <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
-                <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.stop_hint")}</p>
-                <Button variant="danger" class="self-start" onclick={stopService}>{t("ui.stop_service")}</Button>
-              </Card>
+              {#if canStopService(serviceState)}
+                <Card variant="danger" class="text-[16px]">
+                  <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
+                  <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.stop_hint")}</p>
+                  <Button variant="danger" class="self-start" onclick={stopService}>{t("ui.stop_service")}</Button>
+                </Card>
+              {/if}
             </div>
           </div>
         </section>

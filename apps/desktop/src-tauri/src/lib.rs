@@ -8,11 +8,13 @@
 mod daemon_logs;
 mod ipc;
 mod redact;
+mod service_state;
 
 // QA-09 迁移（#211）：桌面壳现在有 9 个地方要调 platform 的能力，
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
 use platform::PlatformAdapter as _;
 use serde_json::{json, Value};
+use service_state::{ServiceState, ServiceStateManager};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::Emitter;
@@ -169,8 +171,19 @@ fn notify_system(title: String, body: String) {
 }
 
 #[tauri::command]
-fn daemon_call(method: String, params: Value) -> Result<Value, String> {
-    ipc::DaemonHandle::discover()?.call(&method, params)
+fn daemon_call(app: tauri::AppHandle, method: String, params: Value) -> Result<Value, String> {
+    match ipc::DaemonHandle::discover().and_then(|d| d.call(&method, params)) {
+        Ok(value) => Ok(value),
+        Err(e) => {
+            // DESK-63 (#946): the shell used to send this straight to the
+            // webview console and keep nothing. A failed data call must not
+            // change the service state (see service_state), but it must be
+            // in the diagnostic bundle.
+            app.state::<ServiceStateManager>()
+                .log_call_failure(&method, &e);
+            Err(e)
+        }
+    }
 }
 
 /// Daemon reachable? (tray tooltip + frontend banner)
@@ -181,26 +194,126 @@ fn daemon_online() -> bool {
         .is_ok()
 }
 
+/// DESK-63 (#946): the shell's initial service state, derived from the same
+/// three facts `wizard_state` reads. Keeping it next to the marker helpers
+/// means "user stopped" cannot mean one thing to the wizard and another to
+/// the state machine.
+fn initial_service_state() -> ServiceState {
+    let dir = platform::adapter().data_dir();
+    let configured = dir.join("config.toml").exists();
+    let installed = platform::adapter().autostart_installed().unwrap_or(false);
+    ServiceState::initial(configured, installed, is_user_stopped(&dir))
+}
+
+/// DESK-63 (#946): snapshot for the frontend's first paint. The event stream
+/// also emits on every transition; this covers the window where the UI is
+/// not listening yet.
+#[tauri::command]
+fn service_state(app: tauri::AppHandle) -> Value {
+    app.state::<ServiceStateManager>().snapshot()
+}
+
 /// IPC-02: 长连接事件订阅——daemon 事件经 Tauri event `daemon-event`
 /// 转发给前端（前端 `listen("daemon-event", …)` 按事件类型即时刷新）。
-/// 断线 2s 退避自动重连；订阅握手失败（老 daemon）静默降级——前端
-/// 60s 兜底轮询仍在，功能不丢。
+/// 断线 2s 退避自动重连；订阅握手失败（老 daemon）降级为慢速 status 探针。
+///
+/// DESK-63 (#946): this thread is also the **only owner** of the service
+/// run state. `subscribe_events_with_open`'s handshake means "the daemon is
+/// ready to talk"; a dropped/failed connection means "not reachable"; the
+/// user's stop marker wins over both. The frontend no longer decides this
+/// from a single `status` call inside `refresh()`.
 #[tauri::command]
 fn start_event_stream(app: tauri::AppHandle) {
-    std::thread::spawn(move || loop {
-        match ipc::DaemonHandle::discover() {
-            Ok(handle) => {
-                let app = app.clone();
-                let _ = handle.subscribe_events(move |ev| {
-                    let _ = app.emit("daemon-event", ev);
-                });
-                // 连接断开（daemon 重启/退出）——退避后重连。
+    let manager = app.state::<ServiceStateManager>().inner().clone();
+    if !manager.mark_stream_started() {
+        return;
+    }
+    std::thread::spawn(move || {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+
+        let started = Instant::now();
+        // Long enough for a cold daemon start; after this a failure is a
+        // fact, not "still booting". The event stream keeps reconnecting,
+        // so recovering later still flips the UI to running.
+        let startup_grace = Duration::from_secs(15);
+        let mut had_connection = manager.current() == ServiceState::Running;
+
+        loop {
+            match ipc::DaemonHandle::discover() {
+                Ok(handle) => {
+                    let opened = Arc::new(AtomicBool::new(false));
+                    let opened_for_open = Arc::clone(&opened);
+                    let app_for_open = app.clone();
+                    let manager_for_open = manager.clone();
+                    let app_for_event = app.clone();
+                    let result = handle.subscribe_events_with_open(
+                        move || {
+                            opened_for_open.store(true, Ordering::SeqCst);
+                            manager_for_open.set(
+                                &app_for_open,
+                                ServiceState::Running,
+                                Some("event stream open"),
+                            );
+                        },
+                        move |ev| {
+                            let _ = app_for_event.emit("daemon-event", ev);
+                        },
+                    );
+                    if opened.load(Ordering::SeqCst) {
+                        had_connection = true;
+                    }
+                    match result {
+                        // subscribe_events_with_open only returns after the
+                        // stream ends; treat it as a lost connection.
+                        Ok(()) => {
+                            manager.note_connection_failure("event stream ended");
+                            let within_grace = !had_connection && started.elapsed() < startup_grace;
+                            let next = manager.next_after_failure(had_connection, within_grace);
+                            manager.set(&app, next, Some("event stream ended"));
+                        }
+                        // Old daemon without events.subscribe: discover() just
+                        // proved `status` answers, so it is running. There is
+                        // no event source, so fall back to a slow probe; this
+                        // is the only timed status probe that drives state.
+                        Err(e) if e == "err.unsupported" => {
+                            had_connection = true;
+                            manager.set(
+                                &app,
+                                ServiceState::Running,
+                                Some("events.subscribe unsupported; status probe ok"),
+                            );
+                            loop {
+                                std::thread::sleep(Duration::from_secs(30));
+                                match ipc::DaemonHandle::discover() {
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        manager.note_connection_failure(&e);
+                                        let next = manager.next_after_failure(true, false);
+                                        manager.set(&app, next, Some(&e));
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            manager.note_connection_failure(&e);
+                            let within_grace = !had_connection && started.elapsed() < startup_grace;
+                            let next = manager.next_after_failure(had_connection, within_grace);
+                            manager.set(&app, next, Some(&e));
+                        }
+                    }
+                }
+                Err(e) => {
+                    manager.note_connection_failure(&e);
+                    let within_grace = !had_connection && started.elapsed() < startup_grace;
+                    let next = manager.next_after_failure(had_connection, within_grace);
+                    manager.set(&app, next, Some(&e));
+                }
             }
-            Err(_) => {
-                // daemon 还没起——继续探测。
-            }
+            std::thread::sleep(std::time::Duration::from_secs(2));
         }
-        std::thread::sleep(std::time::Duration::from_secs(2));
     });
 }
 
@@ -753,7 +866,7 @@ fn reconcile_autostart_registration() {
 /// crash). Falls back to a one-shot spawn if registration fails, so
 /// the wizard never dead-ends. 基础服务不该手动启动、不该会停。
 #[tauri::command]
-fn start_daemon() -> Result<String, String> {
+fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sidecar = exe
         .parent()
@@ -775,24 +888,29 @@ fn start_daemon() -> Result<String, String> {
     // DESK-36 (#456)：用户点「启动服务」（或走完向导）= 撤销之前的主动停止，
     // 自愈恢复正常。放在探活之后：文件跑不起来就什么都没启动，仍算「停着」。
     set_user_stopped(&platform::adapter().data_dir(), false)?;
+    let manager = app.state::<ServiceStateManager>().inner().clone();
+    manager.set(&app, ServiceState::Starting, Some("user start"));
     match platform::adapter().install_autostart(&sidecar) {
         // LaunchAgent RunAtLoad+KeepAlive: starts immediately, survives
         // crashes and reboots.
         Ok(()) => Ok("resident".into()),
         Err(e) => {
             // Fall back to a one-shot spawn — still usable this session.
-            platform::command(&sidecar)
+            match platform::command(&sidecar)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .stdin(std::process::Stdio::null())
                 .spawn()
-                .map_err(|e2| {
-                    ipc::ui_err(
+            {
+                Ok(_) => Ok(format!("oneshot: {e}")),
+                Err(e2) => {
+                    manager.set(&app, ServiceState::Unreachable, Some("start failed"));
+                    Err(ipc::ui_err(
                         "ui.err_register_and_spawn",
                         &[("err", &e), ("spawn_err", &e2)],
-                    )
-                })?;
-            Ok(format!("oneshot: {e}"))
+                    ))
+                }
+            }
         }
     }
 }
@@ -904,13 +1022,21 @@ fn update_resume_allowed(data_dir: &std::path::Path) -> bool {
 /// 前端缓存的状态可能是旧的（比如刚在托盘里点了停止），只有这里读才没有竞态。
 /// 返回 true = 真的拉起了；false = 按判据跳过（不是错误）。
 #[tauri::command]
-fn self_heal_daemon() -> Result<bool, String> {
+fn self_heal_daemon(app: tauri::AppHandle) -> Result<bool, String> {
     if !self_heal_allowed(&platform::adapter().data_dir()) {
         return Ok(false);
     }
+    let manager = app.state::<ServiceStateManager>().inner().clone();
+    manager.set(&app, ServiceState::Starting, Some("self heal"));
     // UPD-07 (#617)：自愈与"更新"无关 ⇒ **不带** `--post-update`（不带 = owner 不开火）。
     // #732：有 LaunchAgent 时交给 launchd 拉（不杀在跑的——自愈只补"没在跑"）。
-    bring_up_daemon(false, false).map(|_| true)
+    match bring_up_daemon(false, false) {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            manager.set(&app, ServiceState::Unreachable, Some(&e));
+            Err(e)
+        }
+    }
 }
 
 /// Stop the resident service the way a user means it: unregister the
@@ -921,10 +1047,15 @@ fn self_heal_daemon() -> Result<bool, String> {
 /// DESK-36 (#456)：末尾要等进程真的退掉（最长 5s），所以命令是 async、
 /// 实际工作放到阻塞线程池——同步命令跑在主线程上，等待期间窗口会卡住。
 #[tauri::command]
-async fn stop_daemon() -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(stop_daemon_now)
+async fn stop_daemon(app: tauri::AppHandle) -> Result<(), String> {
+    let manager = app.state::<ServiceStateManager>().inner().clone();
+    let outcome = tauri::async_runtime::spawn_blocking(stop_daemon_now)
         .await
-        .map_err(|e| ipc::ui_err("ui.err_stop_thread", &[("err", &e)]))?
+        .map_err(|e| ipc::ui_err("ui.err_stop_thread", &[("err", &e)]))?;
+    if outcome.is_ok() {
+        manager.set(&app, ServiceState::Stopped, Some("user stopped"));
+    }
+    outcome
 }
 
 fn stop_daemon_now() -> Result<(), String> {
@@ -996,11 +1127,24 @@ fn pause_daemon_for_update() -> Result<(), String> {
 /// 都从 `current_exe()` 旁边现取 sidecar 并探活、重写 autostart，用的就是
 /// 更新后的新文件。返回 true = 拉起了；false = 按判据跳过（不是错误）。
 #[tauri::command]
-fn resume_daemon_after_update() -> Result<bool, String> {
+fn resume_daemon_after_update(app: tauri::AppHandle) -> Result<bool, String> {
+    let manager = app.state::<ServiceStateManager>().inner().clone();
     if !update_resume_allowed(&platform::adapter().data_dir()) {
+        manager.set(
+            &app,
+            ServiceState::Stopped,
+            Some("user stopped; update keeps it stopped"),
+        );
         return Ok(false);
     }
-    bring_up_daemon(true, true).map(|_| true)
+    manager.set(&app, ServiceState::Starting, Some("update resume"));
+    match bring_up_daemon(true, true) {
+        Ok(_) => Ok(true),
+        Err(e) => {
+            manager.set(&app, ServiceState::Unreachable, Some(&e));
+            Err(e)
+        }
+    }
 }
 
 /// #732：内核是怎么被拉起来的。
@@ -1314,10 +1458,16 @@ fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
 /// ② **改 async**（照抄 stop_daemon 的决定）：同步命令跑在主线程上，等待期间
 ///    窗口会**整段卡住**（验收人 10-02 原话"点击立即重启，进入卡顿状态"就是这个）。
 #[tauri::command]
-async fn restart_daemon_process() -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(restart_daemon_process_blocking)
+async fn restart_daemon_process(app: tauri::AppHandle) -> Result<Value, String> {
+    let manager = app.state::<ServiceStateManager>().inner().clone();
+    manager.set(&app, ServiceState::Starting, Some("restart requested"));
+    let outcome = tauri::async_runtime::spawn_blocking(restart_daemon_process_blocking)
         .await
-        .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?
+        .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
+    if outcome.is_err() {
+        manager.set(&app, ServiceState::Unreachable, Some("restart failed"));
+    }
+    outcome
 }
 
 /// 等它起来的**宽限期**：不是"多久算失败"，而是"多久算彻底没救"。
@@ -1583,6 +1733,16 @@ fn assemble_export(
         persistent_log_missing,
         ..Default::default()
     };
+    // DESK-63 (#946): the shell's own state/connection log. This is the file
+    // that used to not exist at all — support could see the daemon was fine
+    // but had nothing explaining why the UI called it unreachable.
+    let desktop_log_path = env.platform_dir.join("logs").join("desktop.log");
+    let desktop_log_tail = daemon_logs::tail(&desktop_log_path, 256 * 1024);
+    inputs.desktop_log_path = Some(desktop_log_path.display().to_string());
+    inputs.desktop_log_tail = desktop_log_tail;
+    if inputs.desktop_log_tail.is_none() {
+        inputs.desktop_log_missing = Some("文件不存在或读不出来（桌面壳还没写过日志）".into());
+    }
     match daemon {
         DaemonCollection::Complete(parts) => {
             inputs.daemon_version = parts.version;
@@ -1936,6 +2096,7 @@ pub fn run() {
             daemon_call,
             daemon_online,
             start_event_stream,
+            service_state,
             wizard_state,
             power_hint,
             open_power_settings,
@@ -1959,6 +2120,13 @@ pub fn run() {
             set_tray_locale
         ])
         .setup(|app| {
+            // DESK-63 (#946): register the state owner BEFORE the event
+            // stream starts. The stream's handshake and the stop/start
+            // commands all write through this one object.
+            let _ = app.manage(ServiceStateManager::new(
+                initial_service_state(),
+                service_state::desktop_log_path(&platform::adapter().data_dir()),
+            ));
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
             // 备份落地即时刷新），不依赖前端渲染时序。
             start_event_stream(app.handle().clone());
@@ -2064,6 +2232,10 @@ pub fn run() {
                         let app = app.clone();
                         std::thread::spawn(move || {
                             let result = stop_daemon_now();
+                            if result.is_ok() {
+                                let manager = app.state::<ServiceStateManager>().inner().clone();
+                                manager.set(&app, ServiceState::Stopped, Some("tray stop"));
+                            }
                             let _ = app.emit("service-stopped", result.err());
                         });
                     }

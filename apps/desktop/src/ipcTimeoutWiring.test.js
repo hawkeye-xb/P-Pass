@@ -1,5 +1,9 @@
-// NET-11: 壳报回 `ipc timeout: {method} > 10s` 后，前端呈现必须走既有
-// 「后台服务失联」横幅路径（online=false），不新开提示渠道。
+// NET-11: 壳报回 `ipc timeout: {method} > 10s` 后，前端呈现必须走既有的
+// 服务状态通道，不新开提示渠道。
+//
+// DESK-63 (#946): 超时的呈现不再是 refresh() 自己写 `online=false`——那正是
+// 「一次数据失败把服务判死」的旧病。超时由 Rust 的 daemon_call 记进
+// desktop.log，服务状态由事件流（service-state）拥有。前端只渲染状态。
 //
 // 反证：给 refresh() 的 catch 加一个 timeout 专属分支（toast/新 banner），
 // 或在 call 层对 timeout 特判吞掉——下面的断言会挂。
@@ -18,12 +22,14 @@ const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8").repla
 );
 
 describe("NET-11 ipc timeout 呈现接线", () => {
-  it("refresh 的失败路径统一置 online=false（失联横幅即呈现）", () => {
-    // refresh() 的外层 catch：所有 daemon_call 失败（含 ipc timeout）
-    // 收敛到同一个 online=false——既有 service-pill / 横幅状态。
-    expect(app).toMatch(
-      /async function refresh\(\) \{[\s\S]*?catch \(e\) \{\s*\n\s*online = false;/
-    );
+  const refreshBody = app.match(/async function refresh\(\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
+
+  it("refresh 的失败路径不再自己判失联（状态归 Rust 的 service-state）", () => {
+    // 数据刷新失败只清 status；服务状态由 Rust 事件流拥有。旧实现里
+    // `online = false` 会把一次超时/一次 devices.list 失败变成「服务没运行」。
+    expect(refreshBody).not.toMatch(/\bonline\s*=\s*false/);
+    expect(refreshBody).not.toMatch(/\bserviceState\s*=/);
+    expect(app).toContain('listen("service-state"');
   });
 
   it("不新开 timeout 专属提示渠道（前端不特判 ipc timeout）", () => {

@@ -298,7 +298,16 @@ impl DaemonHandle {
     /// 阻塞直到连接断开（daemon 退出/重启/网络错误），返回 Err 后由
     /// 调用方决定重连。握手失败（老 daemon 无 events.subscribe）也返回
     /// Err——上层据此降级（前端 60s 兜底轮询仍在）。
-    pub fn subscribe_events(&self, mut on_event: impl FnMut(Value)) -> Result<(), String> {
+    ///
+    /// DESK-63 (#946)：`on_open` 在**握手成功之后、读取第一条事件之前**
+    /// 调用。服务状态管理器用它把「订阅已建立」当成 daemon 就绪信号——
+    /// 这是壳能拿到的、最接近「服务已启动完成」的本地事实，不依赖
+    /// 定时 status 轮询。
+    pub fn subscribe_events_with_open(
+        &self,
+        mut on_open: impl FnMut(),
+        mut on_event: impl FnMut(Value),
+    ) -> Result<(), String> {
         let name = self
             .socket_name
             .clone()
@@ -326,6 +335,10 @@ impl DaemonHandle {
                 .unwrap_or("err.unsupported")
                 .to_string());
         }
+        // DESK-63 (#946): the handshake is the readiness signal. Call back
+        // before the first event read so a daemon that is alive but silent
+        // still counts as ready.
+        on_open();
 
         // 事件循环：newline JSON 事件帧，读到 EOF/错误即返回。
         loop {

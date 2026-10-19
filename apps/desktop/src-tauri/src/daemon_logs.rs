@@ -209,6 +209,13 @@ pub struct BundleInputs {
     /// DESK-32 (#367)：固定位置日志没收进来的原因。收进来了 = None。
     /// 不许静默省略——包看起来完整、却少了最该有的那份，正是这张卡的病。
     pub persistent_log_missing: Option<String>,
+    /// DESK-63 (#946)：桌面壳自己的状态/连接日志（`logs/desktop.log`）的
+    /// 尾部。它和 daemon.log 是两份不同的日志：daemon 说它在做什么，壳说
+    /// 它有没有连上、状态怎么迁的。
+    pub desktop_log_tail: Option<String>,
+    pub desktop_log_path: Option<String>,
+    /// 桌面壳日志没收进来的原因。收进来了 = None。
+    pub desktop_log_missing: Option<String>,
     /// daemon 活着时它自己给的那几份（diag_events.json / devices.json /
     /// audit.json），原样搬进来（daemon 侧已脱敏）。
     pub daemon_entries: Vec<(String, Vec<u8>)>,
@@ -232,6 +239,8 @@ P-Pass 诊断包（导出时间见各文件内容）
                               出现任一个时 5~7 会缺
   9. daemon-log-missing.txt
                               ← 0 那份没收进来，里面写了原因和它本该在的位置
+ 10. desktop.log         ← 桌面壳自己写的服务状态迁移 / 连接失败（#946）；
+                              没有时看 desktop-log-missing.txt
 
 脱敏（导出时自动做）：家目录 → <DATA>，库目录 → <LIBRARY>；路径里的文件夹
 名换成 <dir>，照片等文件名换成 <file>.扩展名；公网 IP 换成 <ipv4:public> /
@@ -309,6 +318,21 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
             .map(|p| scrub(p, home))
             .unwrap_or_else(|| "(读不到)".into()),
     ));
+    // DESK-63 (#946): say where the shell log would be, even when it is
+    // missing — a bundle that looks complete but silently lacks the file
+    // that explains a false "service not running" is the bug this fixes.
+    src.push_str(&format!(
+        "desktop.log（桌面壳）= {} —— {}\n",
+        i.desktop_log_path
+            .as_deref()
+            .map(|p| scrub(p, home))
+            .unwrap_or_else(|| "(没有记录)".into()),
+        match &i.desktop_log_missing {
+            None if i.desktop_log_tail.is_some() => "已收入包内".to_string(),
+            None => "未收入".to_string(),
+            Some(reason) => format!("未收入：{reason}"),
+        },
+    ));
     entries.push(("log-sources.txt".into(), src.into_bytes()));
 
     if let Some(t) = &i.persistent_log_tail {
@@ -325,6 +349,21 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
                 .unwrap_or_else(|| "(本平台没有)".into()),
         );
         entries.push(("daemon-log-missing.txt".into(), text.into_bytes()));
+    }
+    if let Some(t) = &i.desktop_log_tail {
+        entries.push(("desktop.log".into(), scrub(t, home).into_bytes()));
+    } else {
+        let text = format!(
+            "这个诊断包里没有 desktop.log（桌面壳自己写的服务状态 / 连接日志）。\n\n原因：{}\n本该在：{}\n",
+            i.desktop_log_missing
+                .as_deref()
+                .unwrap_or("(没有记录原因)"),
+            i.desktop_log_path
+                .as_deref()
+                .map(|p| scrub(p, home))
+                .unwrap_or_else(|| "(没有记录路径)".into()),
+        );
+        entries.push(("desktop-log-missing.txt".into(), text.into_bytes()));
     }
     if let Some(t) = &i.stderr_tail {
         entries.push(("daemon-stderr.log".into(), scrub(t, home).into_bytes()));
@@ -521,6 +560,9 @@ mod tests {
             persistent_log_tail: None,
             persistent_log_path: None,
             persistent_log_missing: None,
+            desktop_log_tail: None,
+            desktop_log_path: None,
+            desktop_log_missing: None,
             daemon_entries: Vec::new(),
         };
         let entries = build_bundle(&i);
@@ -911,6 +953,58 @@ mod tests {
         let text = all_text(&entries);
         assert!(!text.contains("/Users/someone"), "{text}");
         assert!(text.contains("<DATA>"), "{text}");
+    }
+
+    // DESK-63 (#946): the shell's own state/connection log is part of the
+    // bundle, scrubbed like every other file.
+    #[test]
+    fn desk63_bundle_carries_the_shell_state_log() {
+        let i = BundleInputs {
+            home: "/Users/someone".into(),
+            app_version: "0.10.0".into(),
+            desktop_log_path: Some(
+                "/Users/someone/Library/Application Support/P-Pass/logs/desktop.log".into(),
+            ),
+            desktop_log_tail: Some(
+                "at_ms=1 event=state from=starting to=running reason=event stream open\n".into(),
+            ),
+            ..Default::default()
+        };
+        let entries = build_bundle(&i);
+        let log = entry(&entries, "desktop.log").expect("desktop.log must be in the bundle");
+        assert!(log.contains("from=starting to=running"), "{log}");
+        assert!(
+            !log.contains("/Users/someone"),
+            "home must be scrubbed: {log}"
+        );
+        let src = entry(&entries, "log-sources.txt").unwrap();
+        assert!(src.contains("desktop.log（桌面壳）"), "{src}");
+        assert!(src.contains("已收入包内"), "{src}");
+        assert!(
+            src.contains("/logs/desktop.log"),
+            "the known file name must stay readable, not become <file>.log: {src}"
+        );
+    }
+
+    #[test]
+    fn desk63_missing_shell_log_is_reported() {
+        let i = BundleInputs {
+            home: "/Users/someone".into(),
+            app_version: "0.10.0".into(),
+            desktop_log_path: Some(
+                "/Users/someone/Library/Application Support/P-Pass/logs/desktop.log".into(),
+            ),
+            desktop_log_missing: Some("文件不存在".into()),
+            ..Default::default()
+        };
+        let entries = build_bundle(&i);
+        assert!(entry(&entries, "desktop.log").is_none());
+        let note = entry(&entries, "desktop-log-missing.txt")
+            .expect("a missing shell log must be explained");
+        assert!(note.contains("文件不存在"), "{note}");
+        assert!(!note.contains("someone"), "home must be scrubbed: {note}");
+        let src = entry(&entries, "log-sources.txt").unwrap();
+        assert!(src.contains("未收入：文件不存在"), "{src}");
     }
 
     fn all_text(entries: &[(String, Vec<u8>)]) -> String {

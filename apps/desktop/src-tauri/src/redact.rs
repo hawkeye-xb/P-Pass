@@ -356,6 +356,10 @@ const SAFE_SEGMENTS: &[&str] = &[
 const SAFE_FILES: &[&str] = &[
     "daemon.log",
     "daemon.log.1",
+    // DESK-63 (#946): the shell's own log is a known file name; masking it
+    // to <file>.log would make the diagnostic bundle harder to read.
+    "desktop.log",
+    "desktop.log.1",
     "p-pass-daemon.log",
     "p-pass-daemon.err",
     "config.toml",
