@@ -25,7 +25,7 @@ final class TimelineModelLiveTests: XCTestCase {
         init(_ steps: [Step]) { self.steps = steps }
 
         struct Boom: Error {}
-        func page(cursor: String?) async throws -> PPass.TimelinePage {
+        func page(cursor: String?, reason: PPass.TimelinePageReason) async throws -> PPass.TimelinePage {
             lock.lock()
             calls.append(cursor)
             let step = steps.isEmpty ? Step.fail : (steps.count > 1 ? steps.removeFirst() : steps[0])

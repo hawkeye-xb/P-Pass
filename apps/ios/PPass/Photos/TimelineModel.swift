@@ -61,7 +61,7 @@ final class TimelineModel: ObservableObject {
         repeat {
             refreshAgain = false
             do {
-                let page = try await source.page(cursor: nil)
+                let page = try await source.page(cursor: nil, reason: .signal)
                 items = page.items
                 cursor = page.nextCursor
                 exhausted = page.nextCursor == nil
@@ -76,7 +76,7 @@ final class TimelineModel: ObservableObject {
     /// 60 秒兜底：仅追加没见过的（不动已加载内容和翻页游标），防的是真实丢事件。
     func refreshFallback() async {
         guard let source, !refreshing else { return }
-        guard let page = try? await source.page(cursor: nil) else { return }
+        guard let page = try? await source.page(cursor: nil, reason: .fallback) else { return }
         let known = Set(items.map(\.id))
         let fresh = page.items.filter { !known.contains($0.id) }
         if !fresh.isEmpty { items = fresh + items }
@@ -99,12 +99,12 @@ final class TimelineModel: ObservableObject {
         return out
     }
 
-    func loadFirst() async {
+    func loadFirst(reason: TimelinePageReason = .open) async {
         cursor = nil
         exhausted = false
         snapshot += 1
         items = []
-        await load()
+        await load(reason)
         if let route = openOnLoad {
             openOnLoad = nil
             autoOpen = items.first { $0.isVideo == (route == .video) }
@@ -113,17 +113,17 @@ final class TimelineModel: ObservableObject {
 
     func loadMore(retry: Bool = false) async {
         guard !loading, !exhausted, retry || error == nil else { return } // 失败后只有用户点「重试」才再试，不在滚动里反复撞
-        await load()
+        await load(.more)
     }
 
-    private func load() async {
+    private func load(_ reason: TimelinePageReason) async {
         guard let source else { return }
         loading = true
         error = nil
         defer { loading = false }
         let mine = snapshot
         do {
-            let page = try await source.page(cursor: cursor)
+            let page = try await source.page(cursor: cursor, reason: reason)
             guard mine == snapshot else { return } // 这期间整页被换过：这一页属于旧快照
             items += page.items
             cursor = page.nextCursor

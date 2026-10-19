@@ -89,7 +89,7 @@ struct PhotosScreen: View {
         } else if let error = model.error, model.items.isEmpty {
             PPStateMessage(text: L.s("photos_unreachable") + "\n" + String(error.prefix(100)),
                            symbol: "wifi.exclamationmark",
-                           actionTitle: L.s("photos_live_retry")) { Task { await model.loadFirst() } }
+                           actionTitle: L.s("photos_live_retry")) { Task { await model.loadFirst(reason: .retry) } }
         } else if model.items.isEmpty {
             PPStateMessage(text: L.s("photos_empty"), symbol: "photo.on.rectangle")
         } else if model.shown.isEmpty {
@@ -119,7 +119,7 @@ struct PhotosScreen: View {
             }
             .padding(.horizontal, 12).padding(.bottom, 8)
         }
-        .refreshable { await model.loadFirst() }
+        .refreshable { await model.loadFirst(reason: .pull) }
     }
 
     /// 以打开那一刻的筛选结果为页序快照（Android MediaViewerSession.open）；找不到被点项就不打开。

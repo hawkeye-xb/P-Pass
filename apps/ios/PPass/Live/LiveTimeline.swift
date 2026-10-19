@@ -10,12 +10,36 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     /// 返回取回内容的 BLAKE3（64 hex），调用方据此校验。
     private let fetchBlob: (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String
     private let cache = NSCache<NSString, UIImage>()
+    private let logger: CoreLogger
 
     init(client: @escaping () -> ProtoClient?, myNodeId: @escaping () -> String?,
-         fetchBlob: @escaping (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String) {
+         fetchBlob: @escaping (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String,
+         logger: CoreLogger) {
         self.client = client
         self.myNodeId = myNodeId
         self.fetchBlob = fetchBlob
+        self.logger = logger
+    }
+
+    /// #987：照片页每次请求一行——方法、结果（成功或错误类别）、耗时；不记哈希、文件名、照片内容。
+    private func logged<T>(_ head: String, _ ok: (T) -> String, _ body: () async throws -> T) async throws -> T {
+        let start = ContinuousClock.now
+        func ms() -> Int64 { let d = ContinuousClock.now - start; return d.components.seconds * 1000 + d.components.attoseconds / 1_000_000_000_000_000 }
+        do {
+            let value = try await body()
+            let detail = ok(value)
+            logger.log("\(head) ok\(detail.isEmpty ? "" : " " + detail) in \(ms())ms")
+            return value
+        } catch {
+            logger.log("\(head) failed (\(Self.category(error))) in \(ms())ms")
+            throw error
+        }
+    }
+
+    static func category(_ error: Error) -> String {
+        if error is CancellationError { return "cancelled" }
+        if let failure = error as? Failure { return "\(failure)" }
+        return String(describing: type(of: error))
     }
 
     enum Failure: Error, CustomStringConvertible {
@@ -30,9 +54,12 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         }
     }
 
-    func page(cursor: String?) async throws -> TimelinePage {
-        guard let client = client() else { throw Failure.notPaired }
-        let page = try await client.call(Methods.timelinePage, TimelineQuery(cursor: cursor, limit: 60), as: PPassCore.TimelinePage.self)
+    func page(cursor: String?, reason: TimelinePageReason) async throws -> TimelinePage {
+        let page = try await logged("timeline.page reason=\(reason.rawValue) cursor=\(cursor == nil ? "first" : "next")",
+                                    { (p: PPassCore.TimelinePage) in "items=\(p.items.count) more=\(p.next != nil)" }) {
+            guard let client = client() else { throw Failure.notPaired }
+            return try await client.call(Methods.timelinePage, TimelineQuery(cursor: cursor, limit: 60), as: PPassCore.TimelinePage.self)
+        }
         let me = myNodeId()
         let items = page.items.map { m in
             TimelineItem(id: m.hash, takenAt: Date(timeIntervalSince1970: Double(m.takenAt)),
@@ -47,10 +74,13 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     func thumbnail(_ item: TimelineItem, large: Bool) async throws -> UIImage {
         let key = "\(item.id)-\(large ? 1024 : 256)" as NSString
         if let hit = cache.object(forKey: key) { return hit }
-        guard let client = client() else { throw Failure.notPaired }
-        let data = try await client.call(Methods.thumbGet, ThumbGet(hash: item.id, size: large ? .s1024 : .s256), as: ThumbData.self)
-        guard !data.placeholder, let bytes = Data(base64Encoded: data.jpegBase64), let image = UIImage(data: bytes) else {
-            throw Failure.placeholder
+        let image = try await logged("thumb.get size=\(large ? 1024 : 256)", { (_: UIImage) in "" }) {
+            guard let client = client() else { throw Failure.notPaired }
+            let data = try await client.call(Methods.thumbGet, ThumbGet(hash: item.id, size: large ? .s1024 : .s256), as: ThumbData.self)
+            guard !data.placeholder, let bytes = Data(base64Encoded: data.jpegBase64), let image = UIImage(data: bytes) else {
+                throw Failure.placeholder
+            }
+            return image
         }
         cache.setObject(image, forKey: key)
         return image

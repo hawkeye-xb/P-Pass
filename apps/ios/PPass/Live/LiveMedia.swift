@@ -120,7 +120,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
             let id = ids[i]
             guard let a = byId[id] else { return nil }
             let content = readOriginalContent(of: a, resources: PHAssetResource.assetResources(for: a))
-            if content.degraded { log("media: source version degraded for \(id) (original resource size unreadable); falls back to modification time") }
+            if content.degraded { log("media: source version degraded for \(LogRedact.id(id)) (original resource size unreadable); falls back to modification time") }
             return MediaSnapshot(mediaId: id, sourceVersion: content.version,
                                  bucketId: AlbumMembership.key(members[id]), position: positions?[i] ?? nil)
         }
