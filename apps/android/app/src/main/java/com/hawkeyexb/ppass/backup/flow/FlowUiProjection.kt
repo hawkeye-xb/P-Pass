@@ -41,6 +41,12 @@ data class FlowProjection(
     val fgsBlock: FgsBlockReason? = null,
     val skippedByUser: Long = 0L,
     val skippedByUserTotal: Long = 0L,
+    /**
+     * #1038（对位 iOS #973 `countsReadable`）：账本计数读到了没有。false = 读库失败，上面的 confirmed / failed /
+     * lastSuccessAt 等都是占位 0，不是真值——任何「都存好了」「有失败」「还没成功过」的结论都不许基于它们。
+     * 放在投影上而不是 holder 里：引擎视图变化时只 `copy(view = …)`，这一位随之带着走。
+     */
+    val countsReadable: Boolean = true,
 ) {
     val state: GlobalState get() = view?.state ?: GlobalState.IDLE
 
@@ -69,6 +75,15 @@ data class FlowProjection(
     val running: Boolean get() = state == GlobalState.RUNNING
 
     companion object {
+        /** #1038：读库失败时的投影——计数全是占位 0，[countsReadable] = false；n（MediaStore）与引擎视图照常带上。 */
+        fun unreadable(inScopeTotal: Long?, view: EngineView?): FlowProjection = FlowProjection(
+            view = view,
+            confirmed = 0L,
+            inScopeTotal = inScopeTotal,
+            failed = 0L,
+            countsReadable = false,
+        )
+
         /**
          * 账目部分（读 order 表与 FlowControl）。[view] 原样带上；引擎视图单独变化时调用方只 `copy(view = …)`，
          * 不必重读这几条计数。
@@ -128,7 +143,7 @@ data class FlowProjection(
  *
  * Sending 的「第 x / y 张」按本轮算：x = 本轮已完成 + 1，y = 本轮已完成 + 待备份（待备份含正在传的这一张）。
  */
-fun backupUiStateOf(p: FlowProjection): BackupUiState {
+fun backupUiStateOf(p: FlowProjection, noAlbums: Boolean = false): BackupUiState {
     val v = p.view
     return when (p.state) {
         GlobalState.PAUSED -> BackupUiState.Paused
@@ -138,12 +153,19 @@ fun backupUiStateOf(p: FlowProjection): BackupUiState {
             BackupUiState.Sending(done = done, total = total, currentFile = current.fileName)
         }
         GlobalState.WAITING -> p.waitReason?.takeIf { it != WaitReason.NOT_PAIRED }?.let { BackupUiState.Waiting(it) }
-            ?: idleUiStateOf(p)
-        GlobalState.IDLE -> idleUiStateOf(p)
+            ?: idleUiStateOf(p, noAlbums)
+        GlobalState.IDLE -> idleUiStateOf(p, noAlbums)
     }
 }
 
-private fun idleUiStateOf(p: FlowProjection): BackupUiState = when {
+/**
+ * 空闲时的结论。顺序同 iOS `HomeProjection.idleState`：
+ * 没选相册（#1038：范围从未保存 / 读不到 / 已选的相册都不存在了）先说「未选相册」；
+ * 账本读不到（#1038）只给中性的 Idle——既不据占位 0 出红卡，更不出「都存好了」，英雄区另说「读不到」。
+ */
+private fun idleUiStateOf(p: FlowProjection, noAlbums: Boolean): BackupUiState = when {
+    noAlbums -> BackupUiState.NoAlbums
+    !p.countsReadable -> BackupUiState.Idle
     // 技术标记，只进「查看技术详情」；主文案是 run_failed（troubleTextOf 是唯一渲染闸门）。
     p.failed > 0 -> BackupUiState.Trouble("flow.failed=${p.failed}")
     flowAllDone(p) -> BackupUiState.AllSafe(ingested = p.done.toInt(), duplicates = 0)
@@ -161,6 +183,7 @@ internal fun roundOrdinalOf(doneThisRound: Int, pending: Int): Pair<Int, Int> {
  * 无论哪条路，都要求至少确认过一张、且没有未完成的行。
  */
 internal fun flowAllDone(p: FlowProjection): Boolean {
+    if (!p.countsReadable) return false
     // 待办算出来了：它就是唯一口径（范围外的在途行、封顶的失败行已由待办自己决定算不算）。
     p.remaining?.let { k -> if (p.inScopeTotal != null) return k == 0L && p.done > 0 }
     if (p.confirmed <= 0 || p.unfinished != 0L) return false
@@ -179,10 +202,10 @@ fun visibleEngineView(view: EngineView, pendingKnown: Boolean): EngineView? = vi
 
 /**
  * 英雄区三元组。m = [FlowProjection.done]（n − 待办 − 范围内已跳过），n = 范围内总数，K = 待办（[EngineView.pending]；还没算出来时退回 n − m）。
- * bucketIds == null（还没选过范围）或 n 读不到 → null，英雄区说「读不到」。
+ * bucketIds == null（还没选过范围 / 范围读不到）、账本读不到（#1038）或 n 读不到 → null；英雄区按 [com.hawkeyexb.ppass.ui.heroRenderOf] 分别说。
  */
 fun flowTripletOf(p: FlowProjection, bucketIds: Set<Long>?): BackupTriplet? {
-    if (bucketIds == null) return null
+    if (bucketIds == null || !p.countsReadable) return null
     val n = p.inScopeTotal ?: return null
     return tripletOf(
         n = n,

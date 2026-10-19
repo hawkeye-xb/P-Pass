@@ -131,6 +131,7 @@
 "hero_of_n" = "/ %1$@ photos home";
 "pending_count" = "%1$ld to back up";
 "triplet_unavailable" = "Couldn't read album count. Will retry later.";
+"hero_counts_unreadable" = "Can't read the backup ledger right now, so no progress is shown — it will retry when you open the app.";
 "hero_unreconciled_title" = "Recounting your photos";
 "hero_unreconciled_body" = "The backup record lists more photos than the selected albums hold now, so this phone is recounting against the photos that are actually there. It does not need the computer or Wi-Fi; the result shows here as soon as the count finishes.";
 "dog_last_success" = "Last success %1$@";
@@ -153,6 +154,7 @@
 "bucket_new" = "New";
 "backup_scope" = "Albums to back up";
 "backup_scope_none" = "None selected";
+"backup_scope_unreadable" = "Can’t read the saved selection";
 "storage_computer" = "Storage computer";
 "setting_wifi_only" = "Back up only on Wi-Fi";
 "wifi_off_confirm_title" = "Turn off the Wi-Fi requirement?";
@@ -180,6 +182,9 @@
 "background_backup_needs_authorization" = "Allow background access";
 "background_backup_system_stopped" = "The system stopped background monitoring · check and restart";
 "background_backup_resuming" = "Reconnecting background monitoring…";
+"setting_save_failed" = "The setting could not be saved on this phone, so it was put back to its previous value. Check the free storage and try again.";
+"scope_save_failed" = "Your album selection could not be saved on this phone. Check the free storage and try again.";
+"command_failed" = "That didn’t go through. Please try again later.";
 "background_backup_authorized" = "Background access granted";
 "background_backup_authorization_denied" = "Authorization not granted — background backup stays paused";
 "location_redacted_notice" = "Backups don't include where photos and videos were taken";

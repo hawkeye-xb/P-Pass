@@ -36,7 +36,8 @@ class ARCH14UiWiringTest {
 
         assertTrue(holder.contains("cancelRemainingRowCount(p, pairingLostState.value.value)"))
         assertTrue(holder.contains("_skippedCount.value = skippedRowCount(p)"))
-        assertTrue(holder.contains("fun restoreSkipped() = command { gateway?.restoreSkipped() }"))
+        // #1020：命令带上名字（日志 `command restore-skipped ok` / 出错提示），仍是直接转发引擎。
+        assertTrue(holder.contains("fun restoreSkipped() = command(\"restore-skipped\") { gateway?.restoreSkipped() }"))
         assertTrue(holder.contains("_triplet.value = flowTripletOf(p, lastBucketIds)"))
         assertTrue(holder.contains("_waitReasonNotice.value = waitReasonTextRes(p)"))
         assertTrue(holder.contains("_desktopLowSpace.value = desktopLowSpaceWarning(p)"))

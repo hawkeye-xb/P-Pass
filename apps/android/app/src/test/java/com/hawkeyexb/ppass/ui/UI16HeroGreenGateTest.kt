@@ -197,7 +197,8 @@ class UI16HeroGreenGateTest {
         val source = homeScreen()
         assertTrue(
             "主位必须走规则 H 的裁决，而不是只判 triplet != null",
-            source.contains("val heroRender = heroRenderOf(mediaAccess, t)"),
+            // #1038：同一个裁决函数，多传账本读不读得到、范围存没存（缺了它们生产里就永远到不了那两种渲染）。
+            source.contains("val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved)"),
         )
         assertTrue(
             "H-C 分支必须在场（两个数对不上时的第三种渲染）",

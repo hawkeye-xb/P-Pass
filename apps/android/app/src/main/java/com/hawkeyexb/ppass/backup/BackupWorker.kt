@@ -382,10 +382,7 @@ fun restoreAutoBackupAfterAuthorizationReturned(
 
 /** Disables future automatic producers; it never mutates the current Flow round. */
 fun disableAutoBackup(context: Context) {
-    AutoBackupPrefs(context.filesDir).apply {
-        setRequested(false)
-        setEnabled(false)
-    }
+    AutoBackupPrefs(context.filesDir).set(requested = false, enabled = false)
     val workManager = WorkManager.getInstance(context)
     autoBackupWorkNames().forEach(workManager::cancelUniqueWork)
     cancelMediaWatch(context)
@@ -399,10 +396,7 @@ fun enableAutoBackup(context: Context) {
 
 /** [enableAutoBackup] 的落盘一半（#540 抽出，供 [restoreAutoBackupIfAuthorized] 复用同一份写法）。 */
 internal fun markAutoBackupEnabled(dir: java.io.File) {
-    AutoBackupPrefs(dir).apply {
-        setRequested(true)
-        setEnabled(true)
-    }
+    AutoBackupPrefs(dir).set(requested = true, enabled = true)
 }
 
 /** Keep the user's choice, but stop automatic producers until authorization returns. */
@@ -415,10 +409,7 @@ fun suspendAutoBackupUntilAuthorized(context: Context) {
 
 /** [suspendAutoBackupUntilAuthorized] 的落盘一半：留意图、停生产者（#540 抽出，测试走同一份写法）。 */
 internal fun markAutoBackupSuspended(dir: java.io.File) {
-    AutoBackupPrefs(dir).apply {
-        setRequested(true)
-        setEnabled(false)
-    }
+    AutoBackupPrefs(dir).set(requested = true, enabled = false)
 }
 
 /**
