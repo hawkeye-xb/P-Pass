@@ -42,7 +42,7 @@ const { invokeMock } = vi.hoisted(() => {
   });
   // App 按系统语言选字典；jsdom 默认 en-US，这里钉成中文，断言用中文按钮名。
   Object.defineProperty(navigator, "language", { configurable: true, value: "zh-CN" });
-  return { invokeMock: vi.fn() };
+  return { invokeMock: vi.fn(), handlers: new Map() };
 });
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -50,7 +50,12 @@ vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: (p) => p,
 }));
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: async () => "0.6.0" }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: async () => () => {} }));
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: async (name, fn) => {
+    handlers.set(name, fn);
+    return () => handlers.delete(name);
+  },
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
   confirm: vi.fn(async () => true),
@@ -80,9 +85,14 @@ function stoppedDesktop({ slowOfflineTimeline = 0 } = {}) {
         // 配过、用户主动停的 → 留在主界面（shouldShowWizard = false）；
         // 正常常驻时 autostart 在，偶尔探活失败也不回向导。
         return { configured: true, installed: !d.userStopped, user_stopped: d.userStopped };
+      case "service_state":
+        // DESK-63 (#946)：Rust 侧状态；测试按 d.up/d.userStopped 扮演它。
+        return { state: d.up ? "running" : d.userStopped ? "stopped" : "starting" };
       case "start_daemon":
         d.up = true;
         d.userStopped = false;
+        // start_daemon 在真实壳里会由事件流推出 running；测试里直接推。
+        handlers.get("service-state")?.({ payload: { state: "running" } });
         return "resident";
       case "self_heal_daemon":
         return null;
@@ -130,6 +140,12 @@ async function settle(ms = 0) {
   await vi.advanceTimersByTimeAsync(ms);
 }
 
+/** src-tauri 推一条 service-state（Rust 是服务状态的唯一所有者）。 */
+async function pushServiceState(state) {
+  handlers.get("service-state")?.({ payload: { state } });
+  await settle();
+}
+
 async function goto(page) {
   location.hash = `#/${page}`;
   window.dispatchEvent(new HashChangeEvent("hashchange"));
@@ -142,6 +158,7 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     invokeMock.mockReset();
+    handlers.clear();
     location.hash = "";
     globalThis.IntersectionObserver = class {
       observe() {}
@@ -188,9 +205,10 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     await goto("photos");
     expect(wallCount()).toBe(0);
 
-    // 服务在别处被拉起来（自愈、更新后恢复、托盘），窗口只靠 60s 兜底对账发现。
+    // 服务在别处被拉起来（自愈、更新后恢复、托盘）；Rust 事件流发现后推
+    // service-state=running，前端不用等 60s 数据对账。
     d.up = true;
-    await settle(60000);
+    await pushServiceState("running");
     await settle();
     expect(wallCount()).toBe(PHOTOS.length);
   });
@@ -202,8 +220,8 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     render(App);
     await settle();
     d.up = true;
-    await settle(60000); // refresh 发现恢复 → 重置墙（首拉还挂着）
-    await settle(5000); // 过期的首拉失败回来
+    await pushServiceState("running"); // 状态事件 → 重置墙（首拉还挂着）
+    await settle(65000); // 过期的首拉失败回来
     await settle();
     expect(wallCount()).toBe(PHOTOS.length);
   });
@@ -276,9 +294,9 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     expect(buttons[0].querySelector("img")).not.toBeNull();
     expect(thumbCalls("h1")).toBe(1);
 
-    // 用户停了服务，60s 兜底对账记成离线；这时 h2/h3 才进视口，thumb.get 失败 → 灰块。
+    // 用户停了服务：Rust 推 unreachable；这时 h2/h3 才进视口，thumb.get 失败 → 灰块。
     d.up = false;
-    await settle(60000);
+    await pushServiceState("unreachable");
     await fireVisible();
     expect(container.querySelectorAll(".thumb-fail").length).toBe(2);
     expect(thumbCalls("h2")).toBe(1);
@@ -287,10 +305,9 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     await settle(5000);
     expect(thumbCalls("h2"), "离线期间不许自己重试").toBe(1);
 
-    // 服务被拉起来，停在照片页上不切页；下一轮对账发现恢复。
+    // 服务被拉起来，停在照片页上不切页；Rust 推 running，代际让灰块重取。
     d.up = true;
-    await settle(60000);
-    await settle();
+    await pushServiceState("running");
     await fireVisible();
 
     expect(container.querySelectorAll(".thumb-fail").length, "灰块必须变回真图").toBe(0);
