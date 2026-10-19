@@ -61,10 +61,12 @@ struct MainTabs: View {
     var body: some View {
         TabView(selection: $app.tab) {
             PhotosScreen()
+                .safeAreaInset(edge: .top, spacing: 0) { GlobalNotice() }
                 .toolbarBackground(PPColor.paper, for: .tabBar).toolbarBackground(.visible, for: .tabBar)
                 .tabItem { Label(L.s("tab_photos"), systemImage: "photo.on.rectangle") }
                 .tag(AppModel.Tab.photos)
             SettingsScreen()
+                .safeAreaInset(edge: .top, spacing: 0) { GlobalNotice() }
                 .toolbarBackground(PPColor.paper, for: .tabBar).toolbarBackground(.visible, for: .tabBar)
                 .tabItem { Label(L.s("tab_settings"), systemImage: "gearshape") }
                 .badge(settingsAlert ? "!" : nil)
@@ -72,6 +74,30 @@ struct MainTabs: View {
         }
     }
 
-    /// 设置 tab 的角标：配对失效（Android 另有后台被停两项，iOS 本轮不做后台）。
-    private var settingsAlert: Bool { app.pairingLost }
+    /// 设置 tab 的角标：配对失效，或后台备份被系统挡住（对位 Android `settingsAlert`：pairingLost || 后台待授权 / 被停）。
+    private var settingsAlert: Bool { app.pairingLost || app.backgroundNotice != nil }
+}
+
+/// 全局告示（对位 Android `NoticeCard`）：琥珀底一行正文 + 下划线动作，两个 tab 顶部都显示。
+struct GlobalNotice: View {
+    @EnvironmentObject var app: AppModel
+
+    var body: some View {
+        if let n = app.backgroundNotice {
+            HStack(alignment: .center, spacing: 12) {
+                Text(n.body).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if n.canResolve {
+                    Button(L.s("background_backup_notice_action")) { app.openAppSettings() }
+                        .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("backgroundNoticeAction")
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 13)
+            .background(PPColor.waitingBg, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .padding(.horizontal, 16).padding(.top, 8)
+            .accessibilityIdentifier("backgroundNotice")
+        }
+    }
 }
