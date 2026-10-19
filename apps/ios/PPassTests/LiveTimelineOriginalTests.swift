@@ -21,7 +21,7 @@ final class LiveTimelineOriginalTests: XCTestCase {
     override func tearDown() { LiveTimeline.clearShareDir() }
 
     private func timeline(_ fetch: @escaping (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String) -> LiveTimeline {
-        LiveTimeline(client: { ProtoClient(transport: TicketTransport()) }, myNodeId: { nil }, fetchBlob: fetch)
+        LiveTimeline(client: { ProtoClient(transport: TicketTransport()) }, myNodeId: { nil }, fetchBlob: fetch, logger: OSLogger())
     }
 
     private func leftovers() -> [String] {

@@ -19,7 +19,7 @@ final class FakeTimeline: TimelineSource {
 
     init(scenario: FakeScenario) { self.scenario = scenario }
 
-    func page(cursor: String?) async throws -> TimelinePage {
+    func page(cursor: String?, reason: TimelinePageReason) async throws -> TimelinePage {
         switch scenario {
         case .timelineLoading:
             try await Task.sleep(nanoseconds: 3_600_000_000_000)

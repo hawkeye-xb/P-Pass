@@ -200,7 +200,7 @@ final class LiveBackend: @unchecked Sendable {
         fetchBlob: { [plane] ticket, dest, progress in
             let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("ppass-blobstore")
             return try await plane.fetchBlob(ticket: ticket, scratch: scratch, dest: dest, progress: progress)
-        })
+        }, logger: logger)
         return Backend(isDemo: false, timeline: timeline, live: timelineLive, media: media, pairing: pairing,
                        engine: LiveEngineAdapter(backend: self))
     }

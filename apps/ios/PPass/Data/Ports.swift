@@ -24,9 +24,14 @@ struct TimelinePage: Equatable {
     let nextCursor: String?
 }
 
+/// 为什么取这一页（只进日志，#987）：区分「订阅信号触发的刷新」「兜底」「打开页面 / 下拉 / 重试」「翻页」。
+enum TimelinePageReason: String {
+    case open, pull, retry, more, signal, fallback, e2e
+}
+
 /// 时间线（电脑上照片库里的照片）。
 protocol TimelineSource: AnyObject {
-    func page(cursor: String?) async throws -> TimelinePage
+    func page(cursor: String?, reason: TimelinePageReason) async throws -> TimelinePage
     func thumbnail(_ item: TimelineItem, large: Bool) async throws -> UIImage
     /// 取原图到本地临时文件（保存到相册 / 分享 / 播放视频用）。
     /// 视频原图的本地缓存命中（字节数校验过）；没有 = nil。照片不缓存。

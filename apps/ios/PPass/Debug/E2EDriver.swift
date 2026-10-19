@@ -99,7 +99,7 @@ enum E2EDriver {
         var timelineError: String?
         while Date() < deadline {
             do {
-                items = try await backend.timeline.page(cursor: nil).items
+                items = try await backend.timeline.page(cursor: nil, reason: .e2e).items
                 timelineError = nil
                 if Int64(items.count) >= total { break }
             } catch { timelineError = String(describing: error) }
