@@ -292,6 +292,9 @@ jobs:
       #   Windows-cargo-desktop    756    1m16s     3m35s        170    4.45
       #   vcpkg-libheif             71    3s        ~20min      1197    0.06  ← 千倍最优，别碰
       #
+      #   （#1034 起两条 desktop 改名 `<os>-cargo-desktop-deps-v2-*`、不再含
+      #    registry/index，见 .github/actions/desktop-checks；表中数字是改前实测。）
+      #
       # 也就是说：本条目每省 1 秒要占 21.6 MB，是次差那条的 4 倍。
       #
       # 为什么非动它不可：`cache/usage` 实测 `active_caches_size_in_bytes =

@@ -36,14 +36,50 @@ runs:
     - name: Set Rust toolchain from rust-toolchain.toml
       shell: bash
       run: tools/setup-rust-toolchain.sh
-    - name: Cache cargo (desktop workspace)
+    # CI-#1034：**刻意不缓存 `~/.cargo/registry/index/`**。
+    #
+    # 缓存的 key 只按 Cargo.lock 算，所以里面只能放「锁文件一定，内容就一定」
+    # 的东西：`registry/cache/`（.crate 包）、`registry/src/`（解出的源码）、
+    # `git/`、`target/` 都是。**index 不是**——它记的是 crates.io 上每个版本的
+    # 当前状态（含 yanked），随上游变化，跟锁文件无关。
+    #
+    # 而下面的 advisories 步骤读的恰恰是它：cargo-deny 0.20.x 判 yanked 只读本地
+    # `$CARGO_HOME/registry/index/*/.cache`（`Indices::load` → `cached_krate`，
+    # 不联网）；它先跑的 `cargo fetch` 在锁文件完整、.crate 都在时根本不碰 index。
+    # 于是缓存里存着哪天的 index，就按哪天判。#1025 实测：恢复的缓存建于
+    # 2026-10-16 撤回期内，上游撤销撤回之后照样连报两次 `zip 4.6.1` yanked。
+    #
+    # 不缓存 index ⇒ 每个 job 由第一条 cargo 命令现拉（sparse 协议，只拉锁文件
+    # 里那几百个条目），advisories 读到的必定是本 job 的新鲜数据。
+    # 官方 cargo-deny-action 就是这个效果：它是 docker action，每次在全新
+    # CARGO_HOME 的容器里跑。本仓 ci-rust 的 `license + dependency audit` 与
+    # audit-advisories.yml 本来就不挂缓存，同样成立。
+    # Cargo Book「Caching the Cargo home in CI」建议缓存 index，那是为构建提速；
+    # 构建不受 yank 影响（有锁文件照样下载），审计受——两者对新鲜度要求不同。
+    #
+    # key 里的 `deps-v2`：旧条目（`<os>-cargo-desktop-<hash>`）的包里带着
+    # index，同名 key 一命中就会原样解压回来，所以必须换 key 让它们失效。
+    # ⚠️ 别为图省事把 `~/.cargo/registry/` 整个加回来——下一步的断言会红。
+    - name: Cache cargo (desktop workspace，不含 registry/index — 见上方注释)
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
-          ~/.cargo/registry/
+          ~/.cargo/registry/cache/
+          ~/.cargo/registry/src/
           ~/.cargo/git/
           apps/desktop/src-tauri/target/
-        key: ${{ runner.os }}-cargo-desktop-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-desktop-deps-v2-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+    # 硬约束：缓存恢复之后、任何 cargo 命令之前，磁盘上不许有 index。
+    # 有 ⇒ 说明它来自缓存（或别的什么旧来源），advisories 读到的就不一定是现拉的。
+    - name: Assert no stale registry index
+      shell: bash
+      run: |
+        if [ -e ~/.cargo/registry/index ]; then
+          echo "::error::~/.cargo/registry/index 在任何 cargo 命令之前就已存在——它不是本 job 现拉的，cargo-deny 会按它判 yanked（#1034）"
+          ls -la ~/.cargo/registry/index
+          exit 1
+        fi
+        echo "ok：~/.cargo/registry/index 不存在，本 job 的 index 将由 cargo 现拉"
     # windows-latest 预装 WebView2 运行时与 MSVC 工具链，无需额外系统依赖。
     - name: System deps (tauri v2 on Linux)
       if: runner.os == 'Linux'
