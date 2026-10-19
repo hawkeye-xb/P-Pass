@@ -237,11 +237,11 @@ final class AppModel: ObservableObject {
     /// 只在用户要后台备份时才说（Android：OffByUser 不出告示）；关着后台备份时，后台刷新关不关与用户无关。
     static func backgroundNotice(_ notices: [PromiseNotice], backgroundRequested: Bool) -> BackgroundNotice? {
         guard backgroundRequested else { return nil }
-        if let n = notices.first(where: { $0.key == BackupPromise.refreshOff }) {
-            return BackgroundNotice(body: DiagText.resolve(n.key, vars: n.vars) ?? n.key, canResolve: true)
+        if notices.contains(where: { $0.key == BackupPromise.refreshOff }) {
+            return BackgroundNotice(body: L.s("background_refresh_off_notice"), canResolve: true)
         }
-        if let n = notices.first(where: { $0.key == BackupPromise.refreshRestricted }) {
-            return BackgroundNotice(body: DiagText.resolve(n.key, vars: n.vars) ?? n.key, canResolve: false)
+        if notices.contains(where: { $0.key == BackupPromise.refreshRestricted }) {
+            return BackgroundNotice(body: L.s("background_refresh_restricted_notice"), canResolve: false)
         }
         return nil
     }

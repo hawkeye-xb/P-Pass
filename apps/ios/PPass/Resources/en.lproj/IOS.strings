@@ -74,3 +74,7 @@
 
 /* #1013：本地网络权限是 iOS 独有的系统弹窗（Android 无对应），弹出前在扫码页先说明用途。 */
 "scan_local_network_note" = "After scanning, iPhone asks for Local Network access: it is used to find your computer on the same Wi‑Fi and transfer photos. Tap Allow.";
+
+/* 设置页后台刷新告示（对位 Android background_backup_system_stopped 的句式：事实 · 后果，配「去处理」）。iOS 的系统开关叫「后台 App 刷新」。 */
+"background_refresh_off_notice" = "Background App Refresh is off · backs up only when P-Pass is open";
+"background_refresh_restricted_notice" = "Background refresh is restricted · backs up only when P-Pass is open";

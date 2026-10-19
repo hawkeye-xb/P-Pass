@@ -20,11 +20,14 @@ struct SettingsScreen: View {
                 // 照片页只靠设置 tab 的角标提醒（照片页是浏览用的，顶部不占）。不给「知道了」：事实还在就一直说。
                 if let n = app.backgroundNotice {
                     Section {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(n.body).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                        // 布局对位 Android NoticeCard：一行正文 + 右侧加粗下划线的动作。
+                        HStack(alignment: .center, spacing: 12) {
+                            Text(n.body).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             if n.canResolve {
                                 Button(L.s("background_backup_notice_action")) { app.openAppSettings() }
-                                    .font(PPFont.subheadlineBold).buttonStyle(.borderless)
+                                    .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                                    .buttonStyle(.borderless)
                                     .accessibilityIdentifier("backgroundNoticeAction")
                             }
                         }

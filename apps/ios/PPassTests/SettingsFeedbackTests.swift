@@ -77,11 +77,12 @@ final class SettingsFeedbackTests: XCTestCase {
         engine.notices = [PromiseNotice(BackupPromise.whileOpenTitle), PromiseNotice(BackupPromise.refreshOff)]
         app.refresh()
         XCTAssertEqual(app.backgroundNotice?.canResolve, true)
-        XCTAssertEqual(app.backgroundNotice?.body, DiagText.resolve(BackupPromise.refreshOff, vars: [:]))
+        XCTAssertEqual(app.backgroundNotice?.body, L.s("background_refresh_off_notice"))
 
         engine.notices = [PromiseNotice(BackupPromise.refreshRestricted)]
         app.refresh()
         XCTAssertEqual(app.backgroundNotice?.canResolve, false, "被限制时用户改不了，不给按钮")
+        XCTAssertEqual(app.backgroundNotice?.body, L.s("background_refresh_restricted_notice"))
 
         engine.disk.auto = false
         app.refresh()

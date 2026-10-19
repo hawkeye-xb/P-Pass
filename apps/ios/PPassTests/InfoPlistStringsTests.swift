@@ -23,7 +23,9 @@ final class InfoPlistStringsTests: XCTestCase {
         for lang in ["en", "zh-Hans"] {
             let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"))
             let bundle = try XCTUnwrap(Bundle(path: path))
-            XCTAssertNotEqual(bundle.localizedString(forKey: "scan_local_network_note", value: "\u{0}", table: "IOS"), "\u{0}", lang)
+            for key in ["scan_local_network_note", "background_refresh_off_notice", "background_refresh_restricted_notice"] {
+                XCTAssertNotEqual(bundle.localizedString(forKey: key, value: "\u{0}", table: "IOS"), "\u{0}", "\(lang) 缺 \(key)")
+            }
         }
     }
 }
